@@ -1,53 +1,56 @@
-# BASE API — what's confirmed vs. what's a placeholder
+# BASE API — implementation notes
 
-This system talks to BASE through a single abstraction (`lib/base/`), specifically
-so that once the real API details below are confirmed, only `lib/base/client.real.ts`
-and `lib/base/oauth.ts` need to change — nothing else in the app imports BASE's
+This system talks to BASE through a single abstraction (`lib/base/`), so that
+if anything below turns out to be wrong, only `lib/base/client.real.ts` /
+`lib/base/oauth.ts` need to change — nothing else in the app touches BASE's
 wire format directly.
 
-**Current state: `BASE_USE_MOCK=true` by default.** The mock client
-(`lib/base/client.mock.ts`) serves fixture data so the full search → select →
-generate → preview → publish flow can be built, run, and demoed today. Do not
-set `BASE_USE_MOCK=false` in any real environment until every item below is
-checked off — the endpoint paths and field names currently in
-`client.real.ts` / `oauth.ts` are best-effort placeholders based on BASE's
-publicly known API host, not verified responses.
+## OAuth2 (`lib/base/oauth.ts`) — implemented
 
-Why this file exists: the assistant building this system could not reach
-`developer.thebase.in` or `api.thebase.in` from its environment (both are
-blocked by network egress policy there), so none of the items below could be
-confirmed against the live docs. Whoever has a working BASE API app should
-fill this in from real request/response pairs (Postman, curl, or the app's
-own logs) rather than the docs site if that's faster.
+- Authorize: `GET https://api.thebase.in/1/oauth/authorize` with
+  `response_type=code&client_id=...&redirect_uri=...&scope=...&state=...`
+- Token exchange: `POST https://api.thebase.in/1/oauth/token` with
+  `grant_type=authorization_code&client_id=...&client_secret=...&redirect_uri=...&code=...`
+- Refresh: same endpoint, `grant_type=refresh_token&client_id=...&client_secret=...&refresh_token=...`
+- Scope used: `read_items`
+- The token pair is persisted in Amplify Data (`BaseOAuthToken`, Admins-only,
+  no public rule) instead of a static env var, because a refresh can rotate
+  the refresh_token; `saveToken()` in `oauth.ts` handles both "BASE returned
+  a new refresh_token" and "BASE omitted it, meaning unchanged."
+- Admin-facing flow: `/admin/settings` → "BASEと接続する" → BASE's own
+  consent screen → `/api/base/oauth/callback` (register this exact path —
+  see README.md for the full URL) → token stored.
 
-## Checklist
+**If token exchange/refresh fails**, the error message from BASE's response
+body is surfaced as-is on `/admin/settings` and in server logs — check that
+first; it's usually a client_id/secret or redirect_uri mismatch.
 
-- [ ] **OAuth2 endpoints** — confirm the exact authorize + token URLs
-      (`lib/base/oauth.ts` currently assumes `https://api.thebase.in/1/oauth/token`)
-- [ ] **Scope name** — confirm `read_items` is the literal scope string BASE expects
-- [ ] **Refresh flow** — confirm `grant_type=refresh_token` param shape and the
-      response field names (`access_token` / `refresh_token` / `expires_in`?)
-- [ ] **Search/list endpoint** — path, whether it supports a free-text keyword
-      param, pagination shape (offset/limit vs. cursor)
-      - If BASE's search doesn't do free-text well: fall back to listing +
-        caching the full catalog and filtering server-side, exactly like
-        `MockBaseApiClient.search()` already does — this is a drop-in swap.
-- [ ] **Item detail endpoint** — path + exact response field names for:
-      item id, title, price, description, images (which resolution?),
-      stock, variations (color/size label field), item URL, publish/hidden
-      status field and its true/false values, brand/maker field (only if
-      BASE actually exposes one — see spec §8: never invent this)
-- [ ] **Batch fetch** — does BASE support fetching multiple items in one
-      call, or is per-id sequential fetching (current placeholder) the
-      only option?
-- [ ] **Rate limits** — requests/sec or /day, to size the Phase 2
-      `BaseItemCache` sync interval sensibly
+## Item search / detail (`lib/base/client.real.ts`) — best-effort, self-checking
 
-## Where each item plugs in once confirmed
+This environment could never reach `api.thebase.in` to see a live response
+(network egress to all `thebase.in` hosts is blocked here), so the exact
+field names in `mapItem()` are informed guesses, not verified ones:
 
-| Item | File |
+- `GET /1/items` (paginated with `offset`/`limit`) is treated as a shop
+  inventory list, not a full-text search API — `search()` pages through the
+  catalog (up to 1000 items, 60s in-memory cache) and filters by
+  title/description client-side, matching how the mock client behaves.
+  If BASE's `/1/items` *does* support a server-side keyword param, that's a
+  pure optimization to add later, not a correctness fix.
+- `GET /1/items/detail?item_id=...` for a single item.
+- `mapItem()` checks several plausible field-name variants per value
+  (e.g. `item_id`/`itemId`/`id`) and **logs a console warning** —
+  `[BASE mapItem] unexpected item shape` — whenever a required field (id,
+  price, or images) comes back empty. **If `/admin/search` shows blank
+  prices or missing images once BASE_USE_MOCK=false is live, check the
+  server logs for that warning first** — it prints the raw response's key
+  names, which is normally enough to fix `mapItem()` in one pass.
+
+## Where each item plugs in
+
+| Concern | File |
 |---|---|
-| OAuth endpoints, refresh shape | `lib/base/oauth.ts` |
-| Search/list path + params | `lib/base/client.real.ts` → `search()` |
-| Item detail path + field mapping | `lib/base/client.real.ts` → `mapItem()` |
-| Batch fetch | `lib/base/client.real.ts` → `getItems()` |
+| OAuth endpoints, token persistence/refresh | `lib/base/oauth.ts` |
+| OAuth start/callback routes | `app/api/base/oauth/start/route.ts`, `.../callback/route.ts` |
+| Search/list + field mapping | `lib/base/client.real.ts` |
+| Public-page BASE data (no token needed there) | `lib/features/baseSync.ts`, `app/features/[slug]/page.tsx` |

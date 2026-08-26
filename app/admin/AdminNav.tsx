@@ -8,6 +8,7 @@ import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
 const links = [
   { href: "/admin", label: "特集一覧" },
   { href: "/admin/search", label: "商品検索" },
+  { href: "/admin/settings", label: "BASE連携設定" },
 ];
 
 export function AdminNav() {

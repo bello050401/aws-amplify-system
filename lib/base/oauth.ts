@@ -1,68 +1,139 @@
-import type { BaseTokenSet } from "./types";
+import { serverDataClient } from "@/lib/amplify/dataClient";
 
 /**
- * BASE OAuth2 token refresh.
- *
- * ⚠️ UNCONFIRMED ENDPOINTS — see docs/NOTES_BASE_API.md
- * The URLs below are placeholders based on BASE's publicly known API host
- * (`api.thebase.in`) and standard OAuth2 `grant_type=refresh_token` shape.
- * They have NOT been verified against the live API from this environment
- * (network egress to thebase.in is blocked here). Do not point real
- * traffic at this file until someone with a working BASE API app has
- * confirmed:
- *   - the token endpoint path
- *   - the exact param names BASE expects
- *   - the response body shape (field names for access/refresh token + TTL)
+ * BASE OAuth2 — authorization-code flow + refresh, with the token
+ * persisted in Amplify Data (`BaseOAuthToken`, Admins-only) instead of a
+ * static env var, because a refresh can rotate the refresh_token itself;
+ * a value baked into `.env` at deploy time would silently go stale the
+ * first time that happens. See docs/NOTES_BASE_API.md for confidence
+ * level on the exact endpoint paths below.
  */
-const TOKEN_ENDPOINT = "https://api.thebase.in/1/oauth/token"; // TODO confirm
+const AUTHORIZE_ENDPOINT = "https://api.thebase.in/1/oauth/authorize";
+const TOKEN_ENDPOINT = "https://api.thebase.in/1/oauth/token";
+const TOKEN_ROW_ID = "singleton";
+const DEFAULT_SCOPE = "read_items";
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set.`);
+  return value;
+}
+
+/** Where BASE should redirect the shop owner back to after they approve the app. */
+export function getRedirectUri(): string {
+  return requireEnv("BASE_REDIRECT_URI");
+}
+
+/** Builds the URL to send the signed-in admin's browser to, to start the consent flow. */
+export function buildAuthorizeUrl(state: string): string {
+  const url = new URL(AUTHORIZE_ENDPOINT);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", requireEnv("BASE_CLIENT_ID"));
+  url.searchParams.set("redirect_uri", getRedirectUri());
+  url.searchParams.set("scope", process.env.BASE_SCOPES ?? DEFAULT_SCOPE);
+  url.searchParams.set("state", state);
+  return url.toString();
+}
 
 interface RawTokenResponse {
   access_token: string;
-  refresh_token: string;
+  refresh_token?: string; // some providers omit this on refresh to mean "unchanged"
   expires_in: number; // seconds
 }
 
-let cached: BaseTokenSet | null = null;
-
-export async function getAccessToken(): Promise<string> {
-  if (cached && cached.expiresAt > Date.now() + 60_000) {
-    return cached.accessToken;
-  }
-  cached = await refreshAccessToken();
-  return cached.accessToken;
-}
-
-async function refreshAccessToken(): Promise<BaseTokenSet> {
-  const clientId = process.env.BASE_CLIENT_ID;
-  const clientSecret = process.env.BASE_CLIENT_SECRET;
-  const refreshToken = process.env.BASE_REFRESH_TOKEN;
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error(
-      "BASE_CLIENT_ID / BASE_CLIENT_SECRET / BASE_REFRESH_TOKEN must be set to refresh a real BASE access token.",
-    );
-  }
-
+async function requestToken(params: Record<string, string>): Promise<RawTokenResponse> {
   const res = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-    }),
+    body: new URLSearchParams(params),
     cache: "no-store",
   });
-
   if (!res.ok) {
-    throw new Error(`BASE token refresh failed: ${res.status} ${await res.text()}`);
+    throw new Error(`BASE token endpoint returned ${res.status}: ${await res.text()}`);
+  }
+  return (await res.json()) as RawTokenResponse;
+}
+
+/** Called once, from the OAuth callback route, with the `code` BASE just handed back. */
+export async function exchangeCodeForToken(code: string): Promise<void> {
+  const body = await requestToken({
+    grant_type: "authorization_code",
+    client_id: requireEnv("BASE_CLIENT_ID"),
+    client_secret: requireEnv("BASE_CLIENT_SECRET"),
+    redirect_uri: getRedirectUri(),
+    code,
+  });
+  await saveToken(body.access_token, body.refresh_token, body.expires_in);
+}
+
+async function saveToken(accessToken: string, refreshToken: string | undefined, expiresIn: number) {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + expiresIn * 1000).toISOString();
+  const { data: existing } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID });
+
+  const finalRefreshToken = refreshToken ?? existing?.refreshToken;
+  if (!finalRefreshToken) {
+    throw new Error("BASE did not return a refresh_token and none was already stored.");
   }
 
-  const body = (await res.json()) as RawTokenResponse;
-  return {
-    accessToken: body.access_token,
-    refreshToken: body.refresh_token,
-    expiresAt: Date.now() + body.expires_in * 1000,
-  };
+  if (existing) {
+    await serverDataClient.models.BaseOAuthToken.update({
+      id: TOKEN_ROW_ID,
+      accessToken,
+      refreshToken: finalRefreshToken,
+      expiresAt,
+      updatedAt: now.toISOString(),
+    });
+  } else {
+    await serverDataClient.models.BaseOAuthToken.create({
+      id: TOKEN_ROW_ID,
+      accessToken,
+      refreshToken: finalRefreshToken,
+      expiresAt,
+      updatedAt: now.toISOString(),
+    });
+  }
+}
+
+export class BaseNotConnectedError extends Error {
+  constructor() {
+    super("BASEに接続されていません。/admin/settings から接続してください。");
+    this.name = "BaseNotConnectedError";
+  }
+}
+
+export async function isBaseConnected(): Promise<boolean> {
+  const { data } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID });
+  return Boolean(data);
+}
+
+/**
+ * Returns a valid access token, refreshing first if the stored one is
+ * expired (or about to be, within a 60s margin). Every caller of this
+ * runs inside an admin-authenticated request — see the BaseItemCache
+ * comment in amplify/data/resource.ts for why the public feature page
+ * never needs to call this at all.
+ */
+export async function getAccessToken(): Promise<string> {
+  const { data: token } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID });
+  if (!token) throw new BaseNotConnectedError();
+
+  const expiresAt = new Date(token.expiresAt).getTime();
+  if (expiresAt > Date.now() + 60_000) {
+    return token.accessToken;
+  }
+
+  const body = await requestToken({
+    grant_type: "refresh_token",
+    client_id: requireEnv("BASE_CLIENT_ID"),
+    client_secret: requireEnv("BASE_CLIENT_SECRET"),
+    refresh_token: token.refreshToken,
+  });
+  await saveToken(body.access_token, body.refresh_token, body.expires_in);
+  return body.access_token;
+}
+
+export async function disconnectBase(): Promise<void> {
+  const { data: existing } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID });
+  if (existing) await serverDataClient.models.BaseOAuthToken.delete({ id: TOKEN_ROW_ID });
 }

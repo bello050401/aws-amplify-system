@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { serverDataClient } from "@/lib/amplify/dataClient";
-import { getBaseClient } from "@/lib/base";
+import { fetchAndCacheItems } from "@/lib/features/baseSync";
 import { getAIProvider, suggestTemplateType, suggestSlug, type TemplateType } from "@/lib/ai";
 import type { FeatureCopy } from "@/lib/ai/types";
 
@@ -15,7 +15,7 @@ import type { FeatureCopy } from "@/lib/ai/types";
 export async function generateFeature(itemIds: string[], templateOverride?: TemplateType) {
   if (itemIds.length === 0) throw new Error("商品が選択されていません。");
 
-  const items = await getBaseClient().getItems(itemIds);
+  const items = await fetchAndCacheItems(itemIds);
   const templateType = templateOverride ?? suggestTemplateType(items);
   const copy = await getAIProvider().generateFeatureCopy({ items, templateType });
 
@@ -96,7 +96,7 @@ export async function regenerateWholeFeature(featureId: string) {
   const { data: rows } = await serverDataClient.models.FeatureItem.list({
     filter: { featureId: { eq: featureId } },
   });
-  const items = await getBaseClient().getItems(rows.map((r) => r.baseItemId));
+  const items = await fetchAndCacheItems(rows.map((r) => r.baseItemId));
   const copy = await getAIProvider().generateFeatureCopy({ items, templateType: feature.templateType });
 
   await serverDataClient.models.Feature.update({
@@ -124,6 +124,13 @@ export async function removeFeatureItem(featureItemRowId: string, featureId: str
 }
 
 export async function publishFeature(featureId: string) {
+  // Refresh the public-facing cache one more time right before this
+  // feature goes live, so the first visitor sees current price/stock/images.
+  const { data: rows } = await serverDataClient.models.FeatureItem.list({
+    filter: { featureId: { eq: featureId } },
+  });
+  await fetchAndCacheItems(rows.map((r) => r.baseItemId));
+
   await serverDataClient.models.Feature.update({
     id: featureId,
     status: "PUBLISHED",

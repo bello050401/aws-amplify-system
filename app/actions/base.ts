@@ -1,6 +1,8 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { getBaseClient, type BaseItem } from "@/lib/base";
+import { disconnectBase } from "@/lib/base/oauth";
 
 /** Powers the search box (spec §2/§3). Runs server-side so BASE credentials never reach the browser. */
 export async function searchBaseItems(query: string): Promise<BaseItem[]> {
@@ -18,4 +20,9 @@ export async function resolveBaseItemsFromUrls(text: string): Promise<BaseItem[]
   if (ids.length === 0) return [];
   const items = await getBaseClient().getItems(ids);
   return items;
+}
+
+export async function disconnectBaseAction() {
+  await disconnectBase();
+  revalidatePath("/admin/settings");
 }

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { serverDataClient } from "@/lib/amplify/dataClient";
-import { getBaseClient } from "@/lib/base";
+import type { BaseItem } from "@/lib/base";
 import { Hero } from "@/components/features/Hero";
 import { Introduction } from "@/components/features/Introduction";
 import { ColorVariation } from "@/components/features/ColorVariation";
@@ -26,14 +26,30 @@ async function loadPublishedFeature(slug: string) {
   });
   const sortedRefs = [...featureItems].sort((a, b) => a.sortOrder - b.sortOrder);
 
-  const baseClient = getBaseClient();
-  const items = await baseClient.getItems(sortedRefs.map((ref) => ref.baseItemId));
-  // Preserve the admin's chosen order — getItems doesn't guarantee it.
-  const orderedItems = sortedRefs
-    .map((ref) => items.find((item) => item.itemId === ref.baseItemId))
-    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  // Reads BaseItemCache, never the live BASE API — the public route has
+  // no BASE access token available to it by design (see the BaseItemCache
+  // comment in amplify/data/resource.ts). Cache rows are kept warm by
+  // every admin-authenticated touch (lib/features/baseSync.ts).
+  const cacheRows = await Promise.all(
+    sortedRefs.map((ref) => serverDataClient.models.BaseItemCache.get({ baseItemId: ref.baseItemId })),
+  );
+  const items: BaseItem[] = cacheRows
+    .map((row) => row.data)
+    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+    .map((row) => ({
+      itemId: row.baseItemId,
+      title: row.title ?? "",
+      price: row.price ?? 0,
+      description: "",
+      images: (row.imageUrls ?? []).filter((url): url is string => Boolean(url)).map((url) => ({ url })),
+      stock: row.stock ?? 0,
+      variations: [],
+      itemUrl: row.itemUrl ?? "",
+      isPublished: row.isPublished ?? true,
+      brand: row.brand ?? undefined,
+    }));
 
-  return { feature, items: orderedItems };
+  return { feature, items };
 }
 
 export async function generateMetadata({ params }: FeaturePageProps): Promise<Metadata> {

@@ -6,9 +6,10 @@ import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
  * Design rule (per spec §6): BASE is the system of record for price,
  * stock, title, images, and visibility. This schema never duplicates
  * that data onto a Feature — a FeatureItem is just an ordered pointer
- * (`baseItemId`) into BASE's catalog. `BaseItemCache` exists purely as a
- * short-lived read cache (Phase 2 sync job keeps it fresh) so page
- * renders don't need to call the BASE API on every request.
+ * (`baseItemId`) into BASE's catalog. `BaseItemCache` is a read-through
+ * cache kept warm by admin-authenticated actions (see its own comment
+ * below for why that's also an auth-boundary decision, not just a perf
+ * one), and `BaseOAuthToken` holds this shop's connected-app credentials.
  */
 const schema = a.schema({
   TemplateType: a.enum(["COLLECTION", "BRAND", "FEATURE"]),
@@ -65,9 +66,14 @@ const schema = a.schema({
       allow.publicApiKey().to(["read"]),
     ]),
 
-  // Read-through cache of BASE product data, refreshed by a Phase 2 sync
-  // job (see docs/NOTES_BASE_API.md). Never treat this as authoritative —
-  // it exists only to avoid calling the BASE API on every page view.
+  // Read-through cache of BASE product data. Written only by admin-authenticated
+  // code paths (search/generate/edit all fetch live BASE data already —
+  // see lib/features/baseSync.ts) and read by the PUBLIC feature page. This
+  // is deliberate, not just a perf optimization: it means the public route
+  // never needs a BASE access token, so that credential never has to be
+  // reachable from an unauthenticated request. A dedicated periodic sync
+  // job (Phase 2) can refresh this on a schedule instead of only on admin
+  // touch, but the auth boundary this creates is Phase 1.
   BaseItemCache: a
     .model({
       baseItemId: a.string().required(),
@@ -77,6 +83,7 @@ const schema = a.schema({
       isPublished: a.boolean(),
       imageUrls: a.string().array(),
       itemUrl: a.string(),
+      brand: a.string(),
       variationLabel: a.string(), // e.g. color name, only if BASE provides one
       cachedAt: a.datetime().required(),
     })
@@ -85,6 +92,22 @@ const schema = a.schema({
       allow.group("Admins"),
       allow.publicApiKey().to(["read"]),
     ]),
+
+  // BASE OAuth2 tokens for this shop's connected app. Admins-only, no
+  // public rule at all — unlike the models above, this is a credential,
+  // not display data. There is exactly one row (id: "singleton"). Written
+  // by the OAuth callback route (has the connecting admin's session) and
+  // refreshed by lib/base/oauth.ts, always from an admin-authenticated
+  // request context (see BaseItemCache comment above for why that's true
+  // of every caller of the BASE API client in this system).
+  BaseOAuthToken: a
+    .model({
+      accessToken: a.string().required(),
+      refreshToken: a.string().required(),
+      expiresAt: a.datetime().required(),
+      updatedAt: a.datetime().required(),
+    })
+    .authorization((allow) => [allow.group("Admins")]),
 });
 
 export type Schema = ClientSchema<typeof schema>;

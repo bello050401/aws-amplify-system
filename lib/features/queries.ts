@@ -1,6 +1,7 @@
 import "server-only";
 import { serverDataClient } from "@/lib/amplify/dataClient";
-import { getBaseClient, type BaseItem } from "@/lib/base";
+import type { BaseItem } from "@/lib/base";
+import { fetchAndCacheItems } from "./baseSync";
 import type { FeatureCopy } from "@/lib/ai/types";
 
 export interface FeatureDashboardRow {
@@ -60,7 +61,7 @@ export async function getFeatureWithItems(featureId: string): Promise<FeatureWit
   });
   const sortedRows = [...featureItemRows].sort((a, b) => a.sortOrder - b.sortOrder);
 
-  const items = await getBaseClient().getItems(sortedRows.map((r) => r.baseItemId));
+  const items = await fetchAndCacheItems(sortedRows.map((r) => r.baseItemId));
   const orderedItems = sortedRows
     .map((row) => items.find((item) => item.itemId === row.baseItemId))
     .filter((item): item is BaseItem => Boolean(item));
