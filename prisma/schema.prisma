@@ -66,6 +66,10 @@ model Product {
   shippingPayer       ShippingPayerCode @default(SELLER)
   shippingFromStateId String? // 都道府県コード等（自社マスタ or Mercari state id）
   shippingDurationCode String? // 内部コード。表示ラベルはmapperで変換
+  // [UNVERIFIED] Mercari Shops API `ShippingMethod` enum値をそのまま保持する。
+  // 指示書26項に基づき、値はハードコードせずAPIから動的取得した選択肢の中から
+  // 選ぶ構造にしている（ShippingService.getShippingMethods 参照）。
+  shippingMethodCode  String?
   shippingTemplateId  String?
   shippingTemplate    ShippingTemplate? @relation(fields: [shippingTemplateId], references: [id])
 

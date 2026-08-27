@@ -31,6 +31,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     shippingPayer: product.shippingPayer,
     shippingFromStateId: product.shippingFromStateId,
     shippingDurationCode: product.shippingDurationCode,
+    shippingMethodCode: product.shippingMethodCode,
     shippingTemplateId: product.shippingTemplateId,
     stockQuantity: product.variants[0]?.stockQuantity ?? 1,
     images: product.images,

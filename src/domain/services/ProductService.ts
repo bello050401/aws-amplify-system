@@ -61,6 +61,7 @@ export async function createProduct(input: ProductFormValues) {
       shippingPayer: input.shippingPayer as ShippingPayerCode,
       shippingFromStateId: input.shippingFromStateId || null,
       shippingDurationCode: input.shippingDurationCode || null,
+      shippingMethodCode: input.shippingMethodCode || null,
       shippingTemplateId: input.shippingTemplateId || null,
       variants: {
         create: {
@@ -91,6 +92,7 @@ export async function updateProduct(id: string, input: ProductFormValues) {
       shippingPayer: input.shippingPayer as ShippingPayerCode,
       shippingFromStateId: input.shippingFromStateId || null,
       shippingDurationCode: input.shippingDurationCode || null,
+      shippingMethodCode: input.shippingMethodCode || null,
       shippingTemplateId: input.shippingTemplateId || null,
     },
   });
@@ -136,6 +138,7 @@ export async function duplicateProduct(id: string, options: { copyImages: boolea
       shippingPayer: source.shippingPayer,
       shippingFromStateId: source.shippingFromStateId,
       shippingDurationCode: source.shippingDurationCode,
+      shippingMethodCode: source.shippingMethodCode,
       shippingTemplateId: source.shippingTemplateId,
       variants: { create: { skuCode: newSku, stockQuantity: 1 } },
       images: options.copyImages

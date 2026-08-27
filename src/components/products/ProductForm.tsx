@@ -10,6 +10,7 @@ import { PREFECTURES } from "@/lib/constants/prefectures";
 import { CategoryPicker } from "./CategoryPicker";
 import { BrandPicker } from "./BrandPicker";
 import { ShippingTemplateSelect } from "./ShippingTemplateSelect";
+import { ShippingMethodSelect } from "./ShippingMethodSelect";
 import { DescriptionTemplateSelect } from "./DescriptionTemplateSelect";
 import { ImageUploader, type ProductImageRow } from "./ImageUploader";
 
@@ -29,6 +30,7 @@ export interface ProductFormInitial {
   shippingPayer: string;
   shippingFromStateId: string | null;
   shippingDurationCode: string | null;
+  shippingMethodCode: string | null;
   shippingTemplateId: string | null;
   stockQuantity: number;
   images?: ProductImageRow[];
@@ -64,6 +66,7 @@ export function ProductForm({ mode, initial }: { mode: "create" | "edit"; initia
         shippingPayer: values.shippingPayer,
         shippingFromStateId: values.shippingFromStateId,
         shippingDurationCode: values.shippingDurationCode,
+        shippingMethodCode: values.shippingMethodCode,
         shippingTemplateId: values.shippingTemplateId,
         stockQuantity: values.stockQuantity,
       };
@@ -238,6 +241,12 @@ export function ProductForm({ mode, initial }: { mode: "create" | "edit"; initia
                 </option>
               ))}
             </select>
+          </Field>
+          <Field label="配送方法">
+            <ShippingMethodSelect
+              value={values.shippingMethodCode}
+              onChange={(code) => set("shippingMethodCode", code)}
+            />
           </Field>
           <Field label="配送テンプレート">
             <ShippingTemplateSelect

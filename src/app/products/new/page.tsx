@@ -24,6 +24,7 @@ export default async function NewProductPage() {
     shippingPayer: "SELLER",
     shippingFromStateId,
     shippingDurationCode: null,
+    shippingMethodCode: null,
     shippingTemplateId: null,
     stockQuantity: 1,
   };

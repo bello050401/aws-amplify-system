@@ -121,7 +121,13 @@ interface MarketplaceAdapter {
 `ShippingTemplate` は自社側マスタとして管理し、`mercariShippingConfigurationId`
 で Mercari 側の `createProductShippingConfiguration` 結果と紐付ける
 （指示書27〜30項）。商品登録画面ではテンプレートを選ぶだけで配送関連フィールドが
-自動反映される。
+自動反映される。`ShippingService.createShippingConfigurationForTemplate()` が
+実際にこのミューテーションを実行し、返却IDをテンプレートへ保存する
+（`/settings/shipping` の「Mercariへ配送設定を作成」ボタンから呼び出す）。
+
+配送方法（`ShippingMethod`）はハードコードせず、`ShippingService.getShippingMethods()`
+がAPIのSchemaから動的取得し、商品ごとに `Product.shippingMethodCode` として保存する
+（指示書26項。取得失敗時のみ `[UNVERIFIED]` フォールバックを表示）。
 
 ## 9. ジョブキュー（Phase 2以降で本格稼働）
 

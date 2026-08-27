@@ -155,3 +155,47 @@ interface CreateProductInput {
 
 この一覧が全てチェックできた時点で Phase 1 完了とし、Phase 2（Production切替・
 updateProduct等）に着手します（指示書55, 62, 63項）。
+
+**このチェックリストはClaude Codeの開発サンドボックス単独では完了できません**
+（2026-08-27に実機検証を試行し再確認）。具体的には:
+
+- `WebFetch` で `api.mercari-shops.com` / `api.mercari-shops-sandbox.com` に
+  アクセスすると `EGRESS_BLOCKED` を返す。
+- アプリケーションコードのNode.js `fetch()`（プロキシを経由しない直接接続）で
+  同ホストにアクセスすると `403 Host not in allowlist. Add this host to your
+  network egress settings to allow access.` という、ネットワークポリシー層が
+  生成した応答が返る（Mercari側のサーバーには到達していない）。
+- この状態でも `MercariShopsClient` → `MercariShopsAdapter` →
+  `ListingService` の一連のコードパス自体は正しく動作しており、
+  HTTPエラーを握り潰さず `IntegrationLog` に記録し、`/products/[id]` 画面へ
+  エラーメッセージとして表示することを確認済み（`createProduct` /
+  `createProductShippingConfiguration` の両方で同様に確認）。
+
+したがって、残る作業はコードの実装ではなく、**人間による以下の対応**です。
+
+1. メルカリShops側でAPI連携を申請し、Personal API Access Token（Sandbox用）を取得する
+   （本人確認・ショップ契約が必要なため、Claude Codeは代行できません）。
+2. `api.mercari-shops.com` / `api.mercari-shops-sandbox.com` への外部通信が
+   許可されたネットワーク環境（例: Windows PCのローカル開発環境、または
+   ネットワーク許可リストにこれらのホストを追加したClaude Code環境）で
+   このリポジトリを起動する。
+3. `/settings/mercari` にトークンを登録し、本チェックリストを実機で消化する。
+
+## 8. 追加実装メモ（2026-08-27）
+
+指示書26, 27, 29項に対応するため、以下をコード上で実装済み（いずれも上記と同じ
+ネットワーク制約により実接続は未検証、失敗時はエラーとしてログへ記録される構造）。
+
+- **配送方法の動的取得**: `ShippingService.getShippingMethods()` が
+  `SHIPPING_METHODS_QUERY`（`__type(name: "ShippingMethod")` introspection）を
+  実行し、取得できない場合のみ `[UNVERIFIED]` フォールバック候補
+  (`FALLBACK_SHIPPING_METHODS`) を返す。UIは `ShippingMethodSelect` から
+  `/api/mercari/shipping-methods` を呼び出す。選択結果は
+  `Product.shippingMethodCode` に保存し、`MercariShopsAdapter` が
+  `CreateProductInput.shippingMethod` へそのまま渡す。
+- **配送設定(ShippingConfiguration)の自動作成**: `/settings/shipping` で
+  都道府県別送料を登録したテンプレートに対して「Mercariへ配送設定を作成」を実行すると、
+  `ShippingService.createShippingConfigurationForTemplate()` が
+  `createProductShippingConfiguration` ミューテーションを実行し、返却された
+  IDを `ShippingTemplate.mercariShippingConfigurationId` へ自動保存する
+  （従来の手入力欄は、既にMercari側で作成済みのIDを持つ場合のために残してある）。

@@ -49,6 +49,7 @@ export const productFormSchema = z.object({
   shippingPayer: z.enum(shippingPayerCodes),
   shippingFromStateId: z.string().nullable().optional(),
   shippingDurationCode: z.string().nullable().optional(),
+  shippingMethodCode: z.string().nullable().optional(),
   shippingTemplateId: z.string().nullable().optional(),
   stockQuantity: z.number().int().min(0).max(9999).default(1),
 });

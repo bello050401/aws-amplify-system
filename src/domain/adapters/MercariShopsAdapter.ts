@@ -71,7 +71,10 @@ export class MercariShopsAdapter implements MarketplaceAdapter {
         sortOrder: img.isPrimary ? 0 : idx + 1,
       })),
       shippingPayer: shippingPayerToMercariValue(product.shippingPayer),
-      shippingMethod: FALLBACK_SHIPPING_METHOD,
+      // 指示書26項: 配送方法はAPIから動的取得した選択肢の中から商品ごとに選択する
+      // (ShippingMethodSelect / ShippingService.getShippingMethods)。未選択の商品のみ
+      // フォールバック値を使う。
+      shippingMethod: product.shippingMethodCode ?? FALLBACK_SHIPPING_METHOD,
       shippingDuration: product.shippingDurationCode
         ? shippingDurationToMercariValue(product.shippingDurationCode)
         : shippingDurationToMercariValue("FOUR_SEVEN_DAYS"),

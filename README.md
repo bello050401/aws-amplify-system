@@ -67,6 +67,7 @@ npm run dev
 npm run typecheck
 npm run lint
 npm run build
+npm test
 npx prisma validate
 ```
 
@@ -95,6 +96,9 @@ docs/
 ## 実装状況
 
 Phase 1（商品登録 → 画像登録 → メルカリShops設定 → Sandbox出品 → Product ID保存まで）の
-実装が完了しています。実機でのSandbox接続確認手順は `docs/mercari-api.md` 7節を参照
-してください。Phase 2（Production切替、`updateProduct`、商品同期、一括出品等）は
-Phase 1完了条件を満たした後に着手します（`docs/implementation-plan.md`）。
+実装は完了しており、ローカル環境（実PostgreSQL、Mercari APIクライアントの実際の
+ネットワーク呼び出しパス）で動作確認済みです。ただし**実際のMercari Shops Sandbox APIとの
+接続確認（Personal API Access Tokenの取得・登録、`createProduct`実成功）はまだ行われて
+いません**。理由と再現手順は `docs/implementation-plan.md` 9節・`docs/mercari-api.md` を
+参照してください。Phase 2（Production切替、`updateProduct`、商品同期、一括出品等）は
+Phase 1完了条件を満たした後に着手します。
