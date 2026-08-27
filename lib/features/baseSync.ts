@@ -1,5 +1,5 @@
 import "server-only";
-import { serverDataClient } from "@/lib/amplify/dataClient";
+import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getBaseClient, type BaseItem } from "@/lib/base";
 
 async function upsertCacheRow(item: BaseItem, cachedAt: string) {
@@ -15,14 +15,19 @@ async function upsertCacheRow(item: BaseItem, cachedAt: string) {
     cachedAt,
   };
 
-  const { data: existing } = await serverDataClient.models.BaseItemCache.get({
-    baseItemId: item.itemId,
-  });
+  // Writing the cache is an admin-only action (this function only ever runs
+  // from an authenticated admin flow — see the doc comment below); reading
+  // the cache back for the public feature page stays on the default apiKey
+  // mode and never touches this file.
+  const { data: existing } = await serverDataClient.models.BaseItemCache.get(
+    { baseItemId: item.itemId },
+    adminAuthMode,
+  );
 
   if (existing) {
-    await serverDataClient.models.BaseItemCache.update(fields);
+    await serverDataClient.models.BaseItemCache.update(fields, adminAuthMode);
   } else {
-    await serverDataClient.models.BaseItemCache.create(fields);
+    await serverDataClient.models.BaseItemCache.create(fields, adminAuthMode);
   }
 }
 

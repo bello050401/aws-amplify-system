@@ -1,4 +1,4 @@
-import { serverDataClient } from "@/lib/amplify/dataClient";
+import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 
 /**
  * BASE OAuth2 — authorization-code flow + refresh, with the token
@@ -69,7 +69,10 @@ export async function exchangeCodeForToken(code: string): Promise<void> {
 async function saveToken(accessToken: string, refreshToken: string | undefined, expiresIn: number) {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresIn * 1000).toISOString();
-  const { data: existing } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID });
+  const { data: existing } = await serverDataClient.models.BaseOAuthToken.get(
+    { id: TOKEN_ROW_ID },
+    adminAuthMode,
+  );
 
   const finalRefreshToken = refreshToken ?? existing?.refreshToken;
   if (!finalRefreshToken) {
@@ -77,21 +80,27 @@ async function saveToken(accessToken: string, refreshToken: string | undefined, 
   }
 
   if (existing) {
-    await serverDataClient.models.BaseOAuthToken.update({
-      id: TOKEN_ROW_ID,
-      accessToken,
-      refreshToken: finalRefreshToken,
-      expiresAt,
-      updatedAt: now.toISOString(),
-    });
+    await serverDataClient.models.BaseOAuthToken.update(
+      {
+        id: TOKEN_ROW_ID,
+        accessToken,
+        refreshToken: finalRefreshToken,
+        expiresAt,
+        updatedAt: now.toISOString(),
+      },
+      adminAuthMode,
+    );
   } else {
-    await serverDataClient.models.BaseOAuthToken.create({
-      id: TOKEN_ROW_ID,
-      accessToken,
-      refreshToken: finalRefreshToken,
-      expiresAt,
-      updatedAt: now.toISOString(),
-    });
+    await serverDataClient.models.BaseOAuthToken.create(
+      {
+        id: TOKEN_ROW_ID,
+        accessToken,
+        refreshToken: finalRefreshToken,
+        expiresAt,
+        updatedAt: now.toISOString(),
+      },
+      adminAuthMode,
+    );
   }
 }
 
@@ -103,7 +112,7 @@ export class BaseNotConnectedError extends Error {
 }
 
 export async function isBaseConnected(): Promise<boolean> {
-  const { data } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID });
+  const { data } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode);
   return Boolean(data);
 }
 
@@ -115,7 +124,7 @@ export async function isBaseConnected(): Promise<boolean> {
  * never needs to call this at all.
  */
 export async function getAccessToken(): Promise<string> {
-  const { data: token } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID });
+  const { data: token } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode);
   if (!token) throw new BaseNotConnectedError();
 
   const expiresAt = new Date(token.expiresAt).getTime();
@@ -134,6 +143,6 @@ export async function getAccessToken(): Promise<string> {
 }
 
 export async function disconnectBase(): Promise<void> {
-  const { data: existing } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID });
-  if (existing) await serverDataClient.models.BaseOAuthToken.delete({ id: TOKEN_ROW_ID });
+  const { data: existing } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode);
+  if (existing) await serverDataClient.models.BaseOAuthToken.delete({ id: TOKEN_ROW_ID }, adminAuthMode);
 }

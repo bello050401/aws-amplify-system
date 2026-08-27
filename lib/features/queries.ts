@@ -1,5 +1,5 @@
 import "server-only";
-import { serverDataClient } from "@/lib/amplify/dataClient";
+import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { BaseItem } from "@/lib/base";
 import { fetchAndCacheItems } from "./baseSync";
 import type { FeatureCopy } from "@/lib/ai/types";
@@ -22,8 +22,8 @@ export interface FeatureDashboardRow {
  * alongside the price/stock sync job (BaseItemCache), not here.
  */
 export async function listFeaturesForDashboard(): Promise<FeatureDashboardRow[]> {
-  const { data: features } = await serverDataClient.models.Feature.list();
-  const { data: allItems } = await serverDataClient.models.FeatureItem.list();
+  const { data: features } = await serverDataClient.models.Feature.list(adminAuthMode);
+  const { data: allItems } = await serverDataClient.models.FeatureItem.list(adminAuthMode);
 
   return features
     .map((f) => ({
@@ -53,11 +53,12 @@ export interface FeatureWithItems {
 }
 
 export async function getFeatureWithItems(featureId: string): Promise<FeatureWithItems | null> {
-  const { data: feature } = await serverDataClient.models.Feature.get({ id: featureId });
+  const { data: feature } = await serverDataClient.models.Feature.get({ id: featureId }, adminAuthMode);
   if (!feature) return null;
 
   const { data: featureItemRows } = await serverDataClient.models.FeatureItem.list({
     filter: { featureId: { eq: featureId } },
+    ...adminAuthMode,
   });
   const sortedRows = [...featureItemRows].sort((a, b) => a.sortOrder - b.sortOrder);
 
