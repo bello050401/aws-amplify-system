@@ -1,9 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { confirmSignIn, signIn } from "aws-amplify/auth";
+import { confirmSignIn, fetchAuthSession, signIn, signOut } from "aws-amplify/auth";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
+
+async function isAdminSession(): Promise<boolean> {
+  const session = await fetchAuthSession();
+  if (!session.tokens) return false;
+  const groups = (session.tokens.accessToken.payload["cognito:groups"] ?? []) as string[];
+  return groups.includes("Admins");
+}
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -18,6 +25,49 @@ export default function AdminLoginPage() {
   const [needsNewPassword, setNeedsNewPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Amplify Auth keeps its session client-side (in cookies, via the `ssr:
+  // true` config) independently of this page's own state, so a visitor can
+  // land here while already signed in — after a hard refresh, opening a
+  // second tab, or navigating back. Cognito's signIn() then throws
+  // `UserAlreadyAuthenticatedException` ("There is already a signed in
+  // user") rather than silently starting a new session. Rather than let
+  // that surface as a login error, check on mount and route around it:
+  // an already-signed-in admin skips straight to /admin, and any other
+  // (non-admin, or otherwise stale) session is cleared so the form behaves
+  // like a normal first visit.
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (await isAdminSession()) {
+          router.replace("/admin");
+          return; // stay in the checking state until navigation completes
+        }
+        // A session exists but isn't an admin (or fetchAuthSession found
+        // nothing to check) — either way, no valid admin session is being
+        // discarded here, so clear anything stale before showing the form.
+        await signOut();
+      } catch {
+        // No session at all — the normal case. Nothing to clean up.
+      } finally {
+        if (!cancelled) setCheckingSession(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  function afterSignedIn(nextStep: { signInStep: string }) {
+    if (nextStep.signInStep === "CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED") {
+      setNeedsNewPassword(true);
+      return;
+    }
+    router.push("/admin");
+    router.refresh();
+  }
 
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
@@ -25,13 +75,22 @@ export default function AdminLoginPage() {
     setSubmitting(true);
     try {
       const { nextStep } = await signIn({ username: email, password });
-      if (nextStep.signInStep === "CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED") {
-        setNeedsNewPassword(true);
-        return;
-      }
-      router.push("/admin");
-      router.refresh();
+      afterSignedIn(nextStep);
     } catch (err) {
+      if (err instanceof Error && err.name === "UserAlreadyAuthenticatedException") {
+        // Belt-and-braces for the mount-time check above: if a session
+        // still slipped through (e.g. this tab regained focus mid-check),
+        // clear it and retry once instead of showing a dead-end error.
+        try {
+          await signOut();
+          const { nextStep } = await signIn({ username: email, password });
+          afterSignedIn(nextStep);
+          return;
+        } catch (retryErr) {
+          setError(retryErr instanceof Error ? retryErr.message : "ログインに失敗しました。");
+          return;
+        }
+      }
       setError(err instanceof Error ? err.message : "ログインに失敗しました。");
     } finally {
       setSubmitting(false);
@@ -51,6 +110,17 @@ export default function AdminLoginPage() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (checkingSession) {
+    // Avoids a flash of the login form for an already-signed-in admin
+    // who's about to be redirected away from this page anyway.
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-stone px-6">
+        <ConfigureAmplifyClientSide />
+        <p className="text-xs uppercase tracking-label text-muted">確認中…</p>
+      </div>
+    );
   }
 
   return (
