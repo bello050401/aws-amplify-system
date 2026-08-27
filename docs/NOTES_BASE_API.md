@@ -37,14 +37,29 @@ field names in `mapItem()` are informed guesses, not verified ones:
   title/description client-side, matching how the mock client behaves.
   If BASE's `/1/items` *does* support a server-side keyword param, that's a
   pure optimization to add later, not a correctness fix.
-- `GET /1/items/detail?item_id=...` for a single item.
+- `GET /1/items/detail?item_id=...` for a single item — used only by flows
+  that need one full item (URL paste, generate/publish a feature). `search()`
+  never calls this: the list endpoint alone carries what `/admin/search`
+  needs, so hydrating every result via `/items/detail` would be pure N+1.
 - `mapItem()` checks several plausible field-name variants per value
   (e.g. `item_id`/`itemId`/`id`) and **logs a console warning** —
   `[BASE mapItem] unexpected item shape` — whenever a required field (id,
-  price, or images) comes back empty. **If `/admin/search` shows blank
-  prices or missing images once BASE_USE_MOCK=false is live, check the
-  server logs for that warning first** — it prints the raw response's key
-  names, which is normally enough to fix `mapItem()` in one pass.
+  price, or images) comes back empty. It dumps the full raw item as JSON
+  (not just key names), so **if `/admin/search` shows blank images (or
+  prices), grab that log line from the `npm run dev` terminal** — the
+  exact shape BASE actually returned is right there, which is normally
+  enough to fix `extractImageUrls()`/`mapItem()` in one pass without
+  further guessing.
+- `getItem()` treats a 400/403/404 from `/items/detail` as "this one item
+  isn't accessible right now" (sold-out/hidden/deleted items can plausibly
+  do this even though they were just in the list response) and returns
+  `null` for it — logged as a warning, not thrown. Any other error (401,
+  5xx, network) still throws, since that's a real problem worth surfacing.
+  `getItems()` uses `Promise.allSettled` over `getItem()`, so one bad
+  `item_id` in a batch (URL paste, generating a feature from a multi-item
+  selection) never erases every other item that fetched fine — check
+  `[BASE getItems] failed for item_id=...` in server logs if a selection
+  comes back smaller than expected.
 
 ## Where each item plugs in
 

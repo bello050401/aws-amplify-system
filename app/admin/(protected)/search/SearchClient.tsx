@@ -30,8 +30,12 @@ export function SearchClient() {
         const items = await searchBaseItems(query);
         setResults(items);
         setError(null);
-      } catch {
-        setError("検索に失敗しました。時間をおいて再度お試しください。");
+      } catch (err) {
+        // Surfaces the real reason (e.g. "BASEに接続されていません…", or the
+        // actual BASE API error) instead of a generic message that hides
+        // it — the server-side cause is also logged in the `npm run dev`
+        // terminal by searchBaseItems() itself.
+        setError(err instanceof Error ? err.message : "検索に失敗しました。時間をおいて再度お試しください。");
       } finally {
         setSearching(false);
       }
@@ -73,7 +77,13 @@ export function SearchClient() {
   }
 
   async function handleAddUrls() {
-    const items = await resolveBaseItemsFromUrls(urlText);
+    let items: BaseItem[];
+    try {
+      items = await resolveBaseItemsFromUrls(urlText);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "商品の取得に失敗しました。");
+      return;
+    }
     if (items.length === 0) {
       setError("有効な商品URLが見つかりませんでした。");
       return;

@@ -71,9 +71,15 @@ function mapItem(raw: RawBaseItem): BaseItem {
   const stock = Number(pick(raw, "stock", "item_stock") ?? 0);
 
   if (!itemId || images.length === 0 || !price) {
+    // Dumps the actual raw item, not just its key names — a key name alone
+    // ("images") doesn't tell you it's e.g. `{ photo: { origin: "..." } }`
+    // instead of an array. This is the fastest path to a correct
+    // extractImageUrls()/mapItem() field mapping: capture one of these log
+    // lines from the `npm run dev` terminal and the exact shape is right
+    // there, no more guessing at plausible field names. See docs/NOTES_BASE_API.md.
     console.warn(
-      "[BASE mapItem] unexpected item shape — check docs/NOTES_BASE_API.md and adjust field mapping. Raw keys:",
-      Object.keys(raw),
+      "[BASE mapItem] unexpected item shape — check docs/NOTES_BASE_API.md and adjust field mapping. Raw item:",
+      JSON.stringify(raw).slice(0, 2000),
     );
   }
 
@@ -131,6 +137,12 @@ async function fetchFullCatalog(): Promise<BaseItem[]> {
 }
 
 export class RealBaseApiClient implements BaseApiClient {
+  // Deliberately calls only the list endpoint — no per-item /items/detail
+  // enrichment here. The list response already carries everything the
+  // search screen needs (title/price/stock/images/url), so hydrating each
+  // result individually would be pure N+1 for zero benefit; if a `mapItem`
+  // warning shows blank images for list items, the fix is a field-mapping
+  // correction below, not adding detail calls to this path.
   async search({ query, offset = 0, limit = 30 }: BaseSearchParams): Promise<BaseSearchResult> {
     // BASE's /1/items endpoint is a shop-owner inventory list, not a
     // full-text search engine, so filtering happens here rather than via
@@ -147,6 +159,10 @@ export class RealBaseApiClient implements BaseApiClient {
     return { items: page, hasMore: offset + limit < matches.length, nextOffset: offset + limit };
   }
 
+  /**
+   * Only called for flows that genuinely need one full item (URL paste,
+   * generating/publishing a feature) — never from search() above.
+   */
   async getItem(itemId: string): Promise<BaseItem | null> {
     try {
       const data = await baseFetch<{ item: RawBaseItem } | RawBaseItem>("/items/detail", {
@@ -155,13 +171,38 @@ export class RealBaseApiClient implements BaseApiClient {
       const raw = "item" in data ? data.item : data;
       return mapItem(raw);
     } catch (err) {
-      if (err instanceof BaseApiError && err.status === 404) return null;
+      if (err instanceof BaseApiError && err.status !== undefined && [400, 403, 404].includes(err.status)) {
+        // Sold-out / hidden / deleted items can plausibly fail here even
+        // though they appeared in the list endpoint moments earlier —
+        // skip just this one item (getItems below keeps the rest) rather
+        // than treating it as a hard failure.
+        console.warn(`[BASE getItem] skipping item_id=${itemId} (status ${err.status}): ${err.message}`);
+        return null;
+      }
+      // Anything else (401 token problem, 5xx, network failure) is a real
+      // problem worth surfacing, not silently dropping — see getItems().
       throw err;
     }
   }
 
+  /**
+   * Never lets one bad item_id take down the whole batch. A single
+   * inaccessible item is expected (see getItem above); a single *broken*
+   * one (bad token, BASE outage) still shouldn't erase every other item
+   * that fetched fine — Promise.allSettled plus per-item logging means
+   * callers (generateFeature, fetchAndCacheItems, …) get everything that
+   * succeeded instead of an all-or-nothing failure.
+   */
   async getItems(itemIds: string[]): Promise<BaseItem[]> {
-    const results = await Promise.all(itemIds.map((id) => this.getItem(id)));
-    return results.filter((item): item is BaseItem => item !== null);
+    const settled = await Promise.allSettled(itemIds.map((id) => this.getItem(id)));
+    const items: BaseItem[] = [];
+    settled.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        if (result.value) items.push(result.value);
+      } else {
+        console.error(`[BASE getItems] failed for item_id=${itemIds[index]}:`, result.reason);
+      }
+    });
+    return items;
   }
 }
