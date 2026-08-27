@@ -1,15 +1,25 @@
 import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
 
 /**
- * Data model for the BASE feature-page generator.
+ * Data model for this Amplify app. Two independent systems share one
+ * AppSync API and one Cognito User Pool (see amplify/auth/resource.ts):
  *
- * Design rule (per spec §6): BASE is the system of record for price,
- * stock, title, images, and visibility. This schema never duplicates
- * that data onto a Feature — a FeatureItem is just an ordered pointer
- * (`baseItemId`) into BASE's catalog. `BaseItemCache` is a read-through
- * cache kept warm by admin-authenticated actions (see its own comment
- * below for why that's also an auth-boundary decision, not just a perf
- * one), and `BaseOAuthToken` holds this shop's connected-app credentials.
+ * 1. The BASE feature-page generator (Feature / FeatureItem /
+ *    BaseItemCache / BaseOAuthToken below) — unchanged from Phase 1,
+ *    still "Admins" group + public API-key read.
+ * 2. BELLO Inventory (Category / Location / StatusMaster /
+ *    CustomFieldDefinition / Inventory / InventoryHistory, added in
+ *    Phase 2, further down this file) — ADMIN/EDITOR/VIEWER groups only,
+ *    no public access at all. See that section's own comment for why.
+ *
+ * Design rule for the BASE side (per spec §6): BASE is the system of
+ * record for price, stock, title, images, and visibility. This schema
+ * never duplicates that data onto a Feature — a FeatureItem is just an
+ * ordered pointer (`baseItemId`) into BASE's catalog. `BaseItemCache` is
+ * a read-through cache kept warm by admin-authenticated actions (see its
+ * own comment below for why that's also an auth-boundary decision, not
+ * just a perf one), and `BaseOAuthToken` holds this shop's connected-app
+ * credentials.
  */
 const schema = a.schema({
   TemplateType: a.enum(["COLLECTION", "BRAND", "FEATURE"]),
@@ -108,6 +118,176 @@ const schema = a.schema({
       updatedAt: a.datetime().required(),
     })
     .authorization((allow) => [allow.group("Admins")]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Inventory (BELLO在庫管理システム, Phase 2: data model only, no UI yet)
+  //
+  // Design rule (mirrors the Feature/BASE separation above, and the
+  // MercariListing pattern from the separate mercari-shops-auto-listing
+  // branch): Inventory is BELLO's single source of truth for product/
+  // stock data. It carries no marketplace-specific fields — a future
+  // Mercari Shops / BASE listing integration gets its own table
+  // (e.g. InventoryMercariListing) that points back at `Inventory.id`
+  // (the immutable inventory_id), never the other way around.
+  //
+  // Auth: every Inventory-area model is Cognito User Pool group auth
+  // ONLY (ADMIN / EDITOR / VIEWER) — deliberately no `allow.publicApiKey()`
+  // anywhere below, so none of this is reachable with the schema's
+  // `defaultAuthorizationMode: "apiKey"`. Callers must pass
+  // `authMode: "userPool"` explicitly (see `inventoryAuthMode` in
+  // lib/amplify/dataClient.ts) or every call is rejected outright — this
+  // is intentional defense in depth, not just relying on there being no
+  // apiKey rule.
+  // ─────────────────────────────────────────────────────────────────────
+
+  CustomFieldType: a.enum(["TEXT", "TEXTAREA", "NUMBER", "SELECT", "DATE", "URL"]),
+
+  // Named custom type (not a model — no table of its own) for the images
+  // embedded on Inventory. Images are always read/written together with
+  // their parent Inventory record and never queried independently, so an
+  // embedded list keeps this to one DynamoDB item instead of a second
+  // table + relation just to hold a handful of S3 keys. `sortOrder`
+  // determines display order; index 0 is the main image (per spec §6 —
+  // no separate `isMain` flag needed, "set as main image" is just
+  // reordering to the front).
+  InventoryImage: a.customType({
+    storageKey: a.string().required(), // S3 key under the `inventory/` prefix — see amplify/storage/resource.ts
+    sortOrder: a.integer().required(),
+  }),
+
+  // Category / Location masters below are intentionally flat (`parentId`
+  // is a plain string field with a secondaryIndex, not a formal
+  // self-referential belongsTo/hasMany relation). Amplify Gen2
+  // self-referencing model relations are workable but add real
+  // complexity for no Phase 2 benefit — nothing yet needs GraphQL to
+  // resolve nested parent/child objects; "list children of X" is a
+  // straightforward `parentId`-indexed query. If a future phase needs
+  // nested traversal, this can still grow into a real relation without
+  // a breaking schema change (adding a relation alongside an existing
+  // scalar FK is additive).
+  Category: a
+    .model({
+      name: a.string().required(),
+      parentId: a.string(), // another Category's id, or absent for a top-level category
+      sortOrder: a.integer().default(0),
+      isActive: a.boolean().default(true),
+    })
+    .secondaryIndexes((index) => [index("parentId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  Location: a
+    .model({
+      name: a.string().required(),
+      parentId: a.string(), // another Location's id (拠点 → 保管場所), or absent for a top-level location
+      sortOrder: a.integer().default(0),
+      isActive: a.boolean().default(true),
+    })
+    .secondaryIndexes((index) => [index("parentId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  StatusMaster: a
+    .model({
+      code: a.string().required(),
+      label: a.string().required(),
+      sortOrder: a.integer().default(0),
+      isActive: a.boolean().default(true),
+    })
+    .secondaryIndexes((index) => [index("code")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  // Admin-defined extra fields (ZAICOの「追加項目」相当). Only the field
+  // *definitions* live here; the actual values for each Inventory item
+  // live in `Inventory.customFields` (AWSJSON), keyed by `fieldKey`. This
+  // is what lets an admin add a new field without a schema/DB migration.
+  CustomFieldDefinition: a
+    .model({
+      fieldKey: a.string().required(), // key used inside Inventory.customFields, e.g. "material"
+      label: a.string().required(),
+      fieldType: a.ref("CustomFieldType").required(),
+      required: a.boolean().default(false),
+      sortOrder: a.integer().default(0),
+      options: a.string().array(), // choices, only meaningful when fieldType === "SELECT"
+      isActive: a.boolean().default(true),
+    })
+    .secondaryIndexes((index) => [index("fieldKey")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  // The core record. `id` (auto-generated, immutable) IS `inventory_id` —
+  // the internal identifier referenced by the spec's basic design
+  // principle (§4): distinct from `sku`, which is the human-facing,
+  // editable, duplicate-checked code BELLO staff actually work with.
+  Inventory: a
+    .model({
+      sku: a.string().required(),
+      name: a.string().required(),
+      categoryId: a.string(), // → Category.id, application-level reference (see note above)
+      statusId: a.string(), // → StatusMaster.id
+      locationId: a.string(), // → Location.id
+      quantity: a.integer().default(0),
+      unit: a.string(),
+      purchasePrice: a.integer(), // 仕入単価, JPY
+      salePrice: a.integer(), // 販売価格, JPY
+      note: a.string(),
+      images: a.ref("InventoryImage").array(),
+      customFields: a.json(), // { [fieldKey: string]: string | number | null }, shape governed by CustomFieldDefinition
+      createdBy: a.string(),
+      updatedBy: a.string(),
+      // Soft delete (spec §15) — deliberately no hard-delete field. A
+      // "deleted" item is just one where deletedAt is set; the normal
+      // list screen filters `deletedAt` absent, the trash screen filters
+      // it present. This sparse pattern is why `deletedAt` gets its own
+      // secondaryIndex below instead of a redundant boolean flag.
+      deletedAt: a.datetime(),
+      deletedBy: a.string(),
+    })
+    .secondaryIndexes((index) => [
+      index("sku"), // search + pre-create duplicate-check (see §6 below on exact guarantees)
+      index("categoryId"),
+      index("statusId"),
+      index("locationId"),
+      index("deletedAt"),
+    ])
+    .authorization((allow) => [
+      allow.group("ADMIN"), // full CRUD, including hard delete (完全削除)
+      allow.group("EDITOR").to(["read", "create", "update"]), // no hard delete — logical delete is just an update setting deletedAt
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  // Audit trail (spec §16). Kept as its own table — unlike everything
+  // else here, this grows without bound and is never edited in place, so
+  // it doesn't belong embedded on Inventory. `inventoryId` + `changedAt`
+  // as a composite index supports "history for this item, in order".
+  InventoryHistory: a
+    .model({
+      inventoryId: a.string().required(),
+      changedAt: a.datetime().required(),
+      changedBy: a.string(),
+      fieldName: a.string().required(),
+      oldValue: a.string(),
+      newValue: a.string(),
+    })
+    .secondaryIndexes((index) => [index("inventoryId").sortKeys(["changedAt"])])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read", "create"]),
+      allow.group("VIEWER").to(["read"]), // VIEWER can already read every current field via Inventory itself, so no reason to hide its history
+    ]),
 });
 
 export type Schema = ClientSchema<typeof schema>;

@@ -29,3 +29,26 @@ export const serverDataClient = generateServerClientUsingCookies<Schema>({
 
 /** Spread/pass as the options argument on any admin-only Amplify Data call — see the note above. */
 export const adminAuthMode = { authMode: "userPool" } as const;
+
+/**
+ * Pass as the options argument on every Inventory-area Data call
+ * (Inventory / Category / Location / StatusMaster / CustomFieldDefinition
+ * / InventoryHistory) — never omit it and never fall back to the
+ * schema's `apiKey` default for these models.
+ *
+ * Unlike `adminAuthMode` above (which happens to also work for public
+ * Feature reads, since apiKey would too), Inventory models carry NO
+ * `allow.publicApiKey()` rule at all — a call without an explicit
+ * `authMode: "userPool"` doesn't silently fall back to a working apiKey
+ * path, it is simply rejected. This constant exists as the one
+ * call-site-visible spelling of that requirement, so a reviewer sees
+ * `inventoryAuthMode` at every Inventory call and never has to wonder
+ * whether it was left off by mistake.
+ *
+ * Same underlying value as `adminAuthMode` today — kept as a separate
+ * export because the two model groups' authorization rules (Cognito
+ * "Admins" vs. "ADMIN"/"EDITOR"/"VIEWER") are unrelated and evolving
+ * either one's auth design independently should never require touching
+ * call sites for the other.
+ */
+export const inventoryAuthMode = { authMode: "userPool" } as const;
