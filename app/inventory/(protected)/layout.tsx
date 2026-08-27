@@ -1,7 +1,17 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getInventorySessionStatus } from "@/lib/amplify/requireInventoryUser";
 import { InventoryNavRail } from "../InventoryNavRail";
 import { InventoryTopBar } from "../InventoryTopBar";
+
+// The root layout (app/layout.tsx) sets title: "特集ページ" for the
+// Feature system — there is only one <html>/<body> for the whole app, so
+// every /inventory/* page inherited that title until this override.
+// Per-segment metadata is the correct way to fix this without touching
+// the Feature system's root layout at all.
+export const metadata: Metadata = {
+  title: "BELLO 在庫管理",
+};
 
 /**
  * Route-group layout covering everything under /inventory except
