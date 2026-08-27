@@ -5,14 +5,23 @@ import { useRouter } from "next/navigation";
 import { confirmSignIn, fetchAuthSession, signIn, signOut } from "aws-amplify/auth";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
 
-async function isAdminSession(): Promise<boolean> {
+const NOT_ADMIN_MESSAGE =
+  "このアカウントはログインできますが、管理者(Admins グループ)には属していません。AWS側でこのユーザーを Admins グループに追加してください。";
+
+type ClientSessionStatus = "admin" | "signed-in-not-admin" | "signed-out";
+
+async function getClientSessionStatus(): Promise<ClientSessionStatus> {
   const session = await fetchAuthSession();
-  if (!session.tokens) return false;
+  if (!session.tokens) return "signed-out";
   const groups = (session.tokens.accessToken.payload["cognito:groups"] ?? []) as string[];
-  return groups.includes("Admins");
+  return groups.includes("Admins") ? "admin" : "signed-in-not-admin";
 }
 
-export default function AdminLoginPage() {
+interface AdminLoginPageProps {
+  searchParams: { error?: string };
+}
+
+export default function AdminLoginPage({ searchParams }: AdminLoginPageProps) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -23,7 +32,13 @@ export default function AdminLoginPage() {
   // is the normal, expected first-login path for an admin account, not an
   // error case, so it gets its own step in this form rather than a retry.
   const [needsNewPassword, setNeedsNewPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Seeded from ?error=not_admin, which the (protected) layout attaches when
+  // it bounces a signed-in-but-not-admin visitor back here (see
+  // lib/amplify/requireAdmin.ts) — otherwise that case looks identical to
+  // "not signed in at all" and just silently reshows this form.
+  const [error, setError] = useState<string | null>(
+    searchParams.error === "not_admin" ? NOT_ADMIN_MESSAGE : null,
+  );
   const [submitting, setSubmitting] = useState(false);
   // Amplify Auth keeps its session client-side (in cookies, via the `ssr:
   // true` config) independently of this page's own state, so a visitor can
@@ -34,26 +49,26 @@ export default function AdminLoginPage() {
   // that surface as a login error, check on mount and route around it:
   // an already-signed-in admin skips straight to /admin, and any other
   // (non-admin, or otherwise stale) session is cleared so the form behaves
-  // like a normal first visit.
+  // like a normal first visit — but with an explanation, not a silent reset,
+  // if the reason was "signed in, just not an admin".
   const [checkingSession, setCheckingSession] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        if (await isAdminSession()) {
-          router.replace("/admin");
-          return; // stay in the checking state until navigation completes
-        }
-        // A session exists but isn't an admin (or fetchAuthSession found
-        // nothing to check) — either way, no valid admin session is being
-        // discarded here, so clear anything stale before showing the form.
-        await signOut();
-      } catch {
-        // No session at all — the normal case. Nothing to clean up.
-      } finally {
-        if (!cancelled) setCheckingSession(false);
+      const status = await getClientSessionStatus();
+      if (cancelled) return;
+
+      if (status === "admin") {
+        router.replace("/admin");
+        return; // stay in the checking state until navigation completes
       }
+      if (status === "signed-in-not-admin") {
+        setError(NOT_ADMIN_MESSAGE);
+        await signOut();
+      }
+      // "signed-out": the normal case, nothing to clean up.
+      if (!cancelled) setCheckingSession(false);
     })();
     return () => {
       cancelled = true;
