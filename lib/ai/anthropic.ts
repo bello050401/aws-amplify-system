@@ -1,3 +1,4 @@
+import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { suggestSlug } from "./templateHeuristic";
 import { buildSystemPrompt, buildUserPrompt } from "./prompt";
@@ -38,7 +39,11 @@ const FEATURE_COPY_TOOL = {
 
 function client() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
+  if (!apiKey) {
+    throw new Error(
+      "ANTHROPIC_API_KEY is not set. ローカル開発では .env に設定してください(README参照)。本番(Amplify Hosting)では環境変数として設定します。",
+    );
+  }
   return new Anthropic({ apiKey });
 }
 

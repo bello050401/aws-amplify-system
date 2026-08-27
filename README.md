@@ -77,11 +77,15 @@ https://<あなたのAmplifyドメイン>/api/base/oauth/callback
 | `BASE_REDIRECT_URI` | `http://localhost:3000/api/base/oauth/callback` |
 | `BASE_SCOPES` | `read_items` |
 | `BASE_USE_MOCK` | `false` |
+| `AI_PROVIDER` | `anthropic`(既定値。特集の自動生成に使うAIプロバイダ) |
+| `ANTHROPIC_API_KEY` | [Anthropic Console](https://console.anthropic.com/settings/keys) で発行したAPIキー。「特集を生成」ボタンを押す機能(`lib/ai/anthropic.ts`)にのみ必要 — 検索やBASE連携そのものには不要です |
+
+`ANTHROPIC_API_KEY` が未設定のまま「特集を生成」を押すと、`ANTHROPIC_API_KEY is not set.`
+というエラーがそのまま管理画面に表示されます(隠さずそのまま出す設計です)。
 
 **Amplify Hosting(本番)**: AWSコンソール → Amplify → 対象アプリ →
-「Hosting」→「環境変数」で、同じキー名を追加してください(`BASE_REDIRECT_URI` は
-本番ドメインの値に変更)。加えて `AI_PROVIDER` / `ANTHROPIC_API_KEY` もここに設定します。
-これらはNext.jsのサーバー側でのみ読み込まれ、ブラウザに渡るバンドルには含まれません。
+「Hosting」→「環境変数」で、同じキー名(上表すべて)を追加してください(`BASE_REDIRECT_URI` は
+本番ドメインの値に変更)。これらはNext.jsのサーバー側でのみ読み込まれ、ブラウザに渡るバンドルには含まれません。
 (Amplify Gen2の `ampx sandbox secret set` はバックエンドのLambda関数向けの仕組みで、
 今回のようなNext.js SSRアプリの実行時環境変数は、上記のHosting環境変数の方で設定します。)
 

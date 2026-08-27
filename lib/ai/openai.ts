@@ -1,3 +1,4 @@
+import "server-only";
 import { suggestSlug } from "./templateHeuristic";
 import { buildSystemPrompt, buildUserPrompt } from "./prompt";
 import type { AIProvider, FeatureCopy, FeatureCopySection, FeatureGenerationInput } from "./types";
@@ -10,7 +11,11 @@ import type { AIProvider, FeatureCopy, FeatureCopySection, FeatureGenerationInpu
  */
 async function chat(messages: { role: string; content: string }[], jsonMode: boolean) {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not set.");
+  if (!apiKey) {
+    throw new Error(
+      "OPENAI_API_KEY is not set. ローカル開発では .env に設定してください(README参照)。本番(Amplify Hosting)では環境変数として設定します。",
+    );
+  }
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
