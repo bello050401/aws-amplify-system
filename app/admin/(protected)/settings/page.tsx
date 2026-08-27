@@ -1,6 +1,11 @@
 import { isBaseConnected } from "@/lib/base/oauth";
 import { disconnectBaseAction } from "@/app/actions/base";
 
+// Reads live connection state from Amplify Data on every request, and
+// depends on the query-string set by the OAuth callback redirect — never
+// attempt to statically prerender this at build time.
+export const dynamic = "force-dynamic";
+
 interface Props {
   searchParams: { connected?: string; error?: string };
 }

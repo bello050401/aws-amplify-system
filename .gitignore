@@ -20,3 +20,4 @@ amplify_outputs.d.ts
 .DS_Store
 *.log
 .vercel
+*.tsbuildinfo

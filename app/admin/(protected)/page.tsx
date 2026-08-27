@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { listFeaturesForDashboard } from "@/lib/features/queries";
 
+// Reads the signed-in admin's session + live Amplify Data on every request —
+// never attempt to statically prerender this at build time.
+export const dynamic = "force-dynamic";
+
 const STATUS_LABEL: Record<string, string> = {
   DRAFT: "下書き",
   PUBLISHED: "公開",
