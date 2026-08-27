@@ -35,6 +35,17 @@ npm run dev
 (Cognitoユーザープールに対して、AWSコンソールまたは `aws cognito-idp admin-create-user` /
 `admin-add-user-to-group` で実施)。`/admin` 配下は `Admins` グループのメンバーのみアクセスできます。
 
+### `amplify/package.json` を消さないでください
+
+`amplify/` 配下にだけ存在する `{"type": "module"}` のみの小さな `package.json` は、意図的に置いてあります。
+`ampx sandbox` は `amplify/backend.ts` を `tsx` の `tsImport()` というAPIで読み込みますが、
+プロジェクト全体がCommonJS前提(Next.jsの標準)のままだと、そのAPIが `amplify/auth/resource` や
+`amplify/data/resource` のような**同一ファイル内の他ファイルへの相対import**を解決できず、
+`Cannot find module .../amplify/auth/resource` のようなエラーでデプロイに失敗します
+(OS非依存の再現済みバグで、Windows固有の問題ではありません)。`amplify/` フォルダだけ
+ESM(`"type": "module"`)であることをNode.jsに伝えることで解決します。ルート側の `package.json` は
+Next.js側の都合でCommonJSのままにする必要があるため、このファイルは `amplify/` の中だけに置いています。
+
 ## BASEと接続する(実データでの動作に必須)
 
 ### 1. BASE DevelopersでコールバックURLを登録する
