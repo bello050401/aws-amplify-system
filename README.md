@@ -123,4 +123,5 @@ lib/base/                BASE APIクライアント抽象化(モック/実装を
 lib/features/baseSync.ts 管理画面操作のたびにBaseItemCacheを更新するヘルパー
 lib/ai/                  AIプロバイダ抽象化(Anthropic既定、OpenAIに切り替え可能)
 docs/NOTES_BASE_API.md   BASE API実装メモ(確認済み/要注意ポイント)
+docs/NOTES_AI.md         Anthropic API実装メモ(thinking/effort設定、エラー調査方法)
 ```
