@@ -1,0 +1,289 @@
+// Prisma schema — 自社商品管理システム (Phase 1)
+//
+// 設計方針:
+// - Product は自社商品マスター (Single Source of Truth)。Mercari固有の情報は
+//   持たせず、MercariListing に分離する (docs/architecture.md 3, 5節)。
+// - enum は「メルカリShopsのAPI enumをそのまま」ではなく、自社の内部コード。
+//   API enumとの対応表は src/integrations/mercari-shops/mapper/ に集約する。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 商品マスター
+// ─────────────────────────────────────────────────────────────
+
+enum ProductConditionCode {
+  NEW // 新品、未使用
+  LIKE_NEW // 未使用に近い
+  NO_NOTABLE_DAMAGE // 目立った傷や汚れなし
+  SLIGHT_DAMAGE // やや傷や汚れあり
+  DAMAGE // 傷や汚れあり
+  BAD // 全体的に状態が悪い
+}
+
+enum ProductInternalStatus {
+  DRAFT // 下書き
+  READY // 出品可能
+  PUBLISHED // 出品中
+  SOLD_OUT // 売り切れ
+  HIDDEN // 非公開
+  ERROR // APIエラー
+}
+
+enum ShippingPayerCode {
+  SELLER // 送料込み（出品者負担）
+  BUYER // 着払い（購入者負担）
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  sku         String   @unique
+  name        String
+  description String   @db.Text
+
+  price Int // 日本円、整数
+
+  condition       ProductConditionCode
+  internalStatus  ProductInternalStatus @default(DRAFT)
+
+  janCode   String?
+  catalogId String?
+
+  // カテゴリー・ブランド (Mercari側マスタのキャッシュを参照)
+  categoryMappingId String?
+  categoryMapping   CategoryMapping? @relation(fields: [categoryMappingId], references: [id])
+  brandMappingId    String?
+  brandMapping      BrandMapping?    @relation(fields: [brandMappingId], references: [id])
+
+  // 配送
+  shippingPayer       ShippingPayerCode @default(SELLER)
+  shippingFromStateId String? // 都道府県コード等（自社マスタ or Mercari state id）
+  shippingDurationCode String? // 内部コード。表示ラベルはmapperで変換
+  // [UNVERIFIED] Mercari Shops API `ShippingMethod` enum値をそのまま保持する。
+  // 指示書26項に基づき、値はハードコードせずAPIから動的取得した選択肢の中から
+  // 選ぶ構造にしている（ShippingService.getShippingMethods 参照）。
+  shippingMethodCode  String?
+  shippingTemplateId  String?
+  shippingTemplate    ShippingTemplate? @relation(fields: [shippingTemplateId], references: [id])
+
+  images   ProductImage[]
+  variants ProductVariant[]
+
+  mercariListing MercariListing?
+
+  integrationJobs IntegrationJob[]
+  integrationLogs IntegrationLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([internalStatus])
+  @@index([createdAt])
+}
+
+model ProductImage {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storageKey String
+  publicUrl  String
+  sortOrder  Int      @default(0)
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([productId, sortOrder])
+}
+
+model ProductVariant {
+  id            String  @id @default(cuid())
+  productId     String
+  product       Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  skuCode       String  @unique
+  stockQuantity Int     @default(1)
+  // 将来のバリエーション拡張用（サイズ・色・種類）。Phase 1では未使用でも可。
+  optionLabel   String?
+  optionValue   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([productId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Mercari Shops マスタキャッシュ (カテゴリー / ブランド)
+// ─────────────────────────────────────────────────────────────
+
+model CategoryMapping {
+  id                 String   @id @default(cuid())
+  mercariCategoryId  String   @unique
+  name               String
+  parentMercariId    String?
+  isLeaf             Boolean  @default(false)
+  path               String // 表示用パンくず "家具・インテリア > 椅子・チェア > ダイニングチェア"
+  syncedAt           DateTime @default(now())
+
+  products  Product[]
+  favorites CategoryFavorite[]
+
+  @@index([parentMercariId])
+}
+
+model CategoryFavorite {
+  id                String          @id @default(cuid())
+  categoryMappingId String
+  categoryMapping   CategoryMapping @relation(fields: [categoryMappingId], references: [id], onDelete: Cascade)
+  sortOrder         Int             @default(0)
+  createdAt         DateTime        @default(now())
+
+  @@unique([categoryMappingId])
+}
+
+model BrandMapping {
+  id             String   @id @default(cuid())
+  mercariBrandId String   @unique
+  name           String
+  syncedAt       DateTime @default(now())
+
+  products Product[]
+
+  @@index([name])
+}
+
+// ─────────────────────────────────────────────────────────────
+// 商品説明テンプレート
+// ─────────────────────────────────────────────────────────────
+
+model DescriptionTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  body      String   @db.Text
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
+// 配送テンプレート
+// ─────────────────────────────────────────────────────────────
+
+enum ShippingTemplateType {
+  KAZAIBIN // 家財便
+  TAKKYUBIN // 宅配便 (佐川/ヤマト等サイズ指定)
+  FREE_SHIPPING // 全国送料無料
+  PICKUP // 直接引取
+  OTHER
+}
+
+model ShippingTemplate {
+  id                            String               @id @default(cuid())
+  name                          String
+  type                          ShippingTemplateType
+  mercariShippingConfigurationId String?
+  isDefault                     Boolean              @default(false)
+  createdAt                     DateTime             @default(now())
+  updatedAt                     DateTime             @updatedAt
+
+  rates    ShippingTemplateRate[]
+  products Product[]
+
+  @@index([type])
+}
+
+model ShippingTemplateRate {
+  id                  String           @id @default(cuid())
+  shippingTemplateId  String
+  shippingTemplate    ShippingTemplate @relation(fields: [shippingTemplateId], references: [id], onDelete: Cascade)
+  destination         String // 都道府県 or 地域コード
+  fee                 Int // 円
+
+  @@unique([shippingTemplateId, destination])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Mercari Shops 出品情報 (Productと1:1)
+// ─────────────────────────────────────────────────────────────
+
+model MercariListing {
+  id                String    @id @default(cuid())
+  productId         String    @unique
+  product           Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  mercariProductId  String?   @unique
+  mercariStatus     String? // Mercari側の生ステータス文字列 (UNVERIFIED enum値をそのまま保持)
+  environment       String // "sandbox" | "production"
+  lastSyncedAt      DateTime?
+  lastError         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────
+// ジョブキュー / ログ
+// ─────────────────────────────────────────────────────────────
+
+enum IntegrationChannel {
+  MERCARI_SHOPS
+}
+
+enum IntegrationOperation {
+  CREATE
+  UPDATE
+  SYNC
+  CLOSE
+}
+
+enum IntegrationJobStatus {
+  WAITING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model IntegrationJob {
+  id           String               @id @default(cuid())
+  productId    String
+  product      Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  channel      IntegrationChannel   @default(MERCARI_SHOPS)
+  operation    IntegrationOperation
+  status       IntegrationJobStatus @default(WAITING)
+  attempts     Int                  @default(0)
+  errorMessage String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime             @default(now())
+
+  @@index([status])
+  @@index([productId])
+}
+
+model IntegrationLog {
+  id           String   @id @default(cuid())
+  productId    String?
+  product      Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  operation    String
+  level        String   @default("INFO") // INFO | ERROR
+  message      String
+  errorCode    String?
+  errorMessage String?
+  requestId    String?
+  createdAt    DateTime @default(now())
+
+  @@index([productId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// アプリ設定 (Mercariトークン(暗号化)・デフォルト値等)
+// ─────────────────────────────────────────────────────────────
+
+model AppSetting {
+  key       String   @id
+  value     String   @db.Text // 機密値は暗号化した文字列を保存 (lib/crypto.ts)
+  updatedAt DateTime @updatedAt
+}
