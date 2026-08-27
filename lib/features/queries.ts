@@ -2,7 +2,7 @@ import "server-only";
 import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { BaseItem } from "@/lib/base";
 import { fetchAndCacheItems } from "./baseSync";
-import type { FeatureCopy } from "@/lib/ai/types";
+import { parseFeatureContent, type FeatureContent } from "./contentCodec";
 
 export interface FeatureDashboardRow {
   id: string;
@@ -47,7 +47,7 @@ export interface FeatureWithItems {
   seoTitle: string | null;
   seoDescription: string | null;
   heroBaseItemId: string | null;
-  content: Omit<FeatureCopy, "title" | "slug" | "seoTitle" | "seoDescription"> | null;
+  content: FeatureContent | null;
   featureItemRows: { id: string; baseItemId: string; sortOrder: number; isVisible: boolean }[];
   items: BaseItem[];
 }
@@ -76,7 +76,7 @@ export async function getFeatureWithItems(featureId: string): Promise<FeatureWit
     seoTitle: feature.seoTitle ?? null,
     seoDescription: feature.seoDescription ?? null,
     heroBaseItemId: feature.heroBaseItemId ?? null,
-    content: (feature.content as FeatureWithItems["content"]) ?? null,
+    content: parseFeatureContent(feature.content),
     featureItemRows: sortedRows.map((r) => ({
       id: r.id,
       baseItemId: r.baseItemId,

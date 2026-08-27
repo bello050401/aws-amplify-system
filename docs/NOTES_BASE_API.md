@@ -40,11 +40,32 @@ testing, so the following is **confirmed, not guessed**:
 - `item_id`, `title`, `price`, `stock` come back as expected under those
   exact names.
 
+Also confirmed — this time against BASE's own published API reference
+(`docs.thebase.in/docs/api/items/detail`, mirrored at
+`gist.github.com/baseinc/9912650`; both blocked from this sandbox's egress
+proxy, reached via web search cache instead):
+
+- **`GET /1/items/detail/:item_id` — `item_id` is a URL *path* segment,
+  not a query string parameter.** The code originally sent
+  `GET /1/items/detail?item_id=...`, which BASE rejects with
+  `{"error":"no_item_id","error_description":"item_idは必須です"}` — the
+  literal error seen in testing — because the path segment BASE actually
+  reads is empty. Fixed in `getItem()` to build
+  `` `/items/detail/${encodeURIComponent(itemId)}` `` instead.
+- `visible` (1 = visible, 0 = hidden) is a real field on this response —
+  `mapItem()`'s `pick(raw, "visible", ...)` already checked this name
+  first, so no change needed there.
+- Variation stock comes back as **`variation_stock`**, not `stock` —
+  `mapItem()` now checks that name first (kept `stock` as a fallback).
+- Documented error codes for this endpoint: `access_denied`,
+  `invalid_request`, `invalid_scope`, `no_item_id`, `no_item` — the last
+  two are exactly the "item genuinely isn't accessible" cases `getItem()`
+  already treats as skippable (see below), not a request-shape bug.
+
 Still unverified (checked via `pick()`'s plausible-name fallback in
-`mapItem()`, same as before): `variations`, the visible/published field,
-`item_url`, and the description field. If any of those turn out wrong,
-`mapItem()`'s diagnostic warning (below) will show the real key on the
-next mismatch.
+`mapItem()`, same as before): `item_url` and the description field. If
+either turns out wrong, `mapItem()`'s diagnostic warning (below) will show
+the real key on the next mismatch.
 
 - `GET /1/items` (paginated with `offset`/`limit`) is treated as a shop
   inventory list, not a full-text search API — `search()` pages through the
@@ -52,7 +73,7 @@ next mismatch.
   title/description client-side, matching how the mock client behaves.
   If BASE's `/1/items` *does* support a server-side keyword param, that's a
   pure optimization to add later, not a correctness fix.
-- `GET /1/items/detail?item_id=...` for a single item — used only by flows
+- `GET /1/items/detail/:item_id` for a single item — used only by flows
   that need one full item (URL paste, generate/publish a feature). `search()`
   never calls this: the list endpoint alone carries what `/admin/search`
   needs, so hydrating every result via `/items/detail` would be pure N+1.

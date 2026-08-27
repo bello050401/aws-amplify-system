@@ -103,15 +103,20 @@ function mapItem(raw: RawBaseItem): BaseItem {
     );
   }
 
+  // Field names confirmed against BASE's published /items/detail reference
+  // (see docs/NOTES_BASE_API.md): variation stock comes back as
+  // `variation_stock`, not `stock` — kept `stock` as a fallback in case an
+  // older/different response shape ever uses it.
   const rawVariations = pick(raw, "variations", "item_variations");
   const variations = Array.isArray(rawVariations)
     ? rawVariations.map((v: RawBaseItem) => ({
         variationId: String(pick(v, "variation_id", "id") ?? ""),
         label: String(pick(v, "variation", "variation1", "label") ?? ""),
-        stock: Number(pick(v, "stock") ?? 0),
+        stock: Number(pick(v, "variation_stock", "stock") ?? 0),
       }))
     : [];
 
+  // Confirmed: `visible` is 1/0 (present) on /items/detail responses.
   const visibleRaw = pick(raw, "visible", "is_visible", "status");
   const isPublished = visibleRaw === undefined ? true : visibleRaw === 1 || visibleRaw === true || visibleRaw === "1";
 
@@ -185,9 +190,14 @@ export class RealBaseApiClient implements BaseApiClient {
    */
   async getItem(itemId: string): Promise<BaseItem | null> {
     try {
-      const data = await baseFetch<{ item: RawBaseItem } | RawBaseItem>("/items/detail", {
-        item_id: itemId,
-      });
+      // Confirmed against BASE's published API reference: item_id is a URL
+      // *path* segment here (`GET /1/items/detail/:item_id`), not a query
+      // string parameter — sending it as `?item_id=...` gets back exactly
+      // BASE's own "no_item_id" ("item_idは必須です") error, since the path
+      // segment BASE actually reads is simply missing. See docs/NOTES_BASE_API.md.
+      const data = await baseFetch<{ item: RawBaseItem } | RawBaseItem>(
+        `/items/detail/${encodeURIComponent(itemId)}`,
+      );
       const raw = "item" in data ? data.item : data;
       return mapItem(raw);
     } catch (err) {

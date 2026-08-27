@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { fetchAndCacheItems } from "@/lib/features/baseSync";
 import { getAIProvider, suggestTemplateType, suggestSlug, type TemplateType } from "@/lib/ai";
-import type { FeatureCopy } from "@/lib/ai/types";
+import { parseFeatureContent, stringifyFeatureContent, type FeatureContent } from "@/lib/features/contentCodec";
 
 /**
  * The "選択したN商品で特集を生成" CTA (spec §1 core flow, §7). Creates a
@@ -33,7 +33,7 @@ export async function generateFeature(itemIds: string[], templateOverride?: Temp
       seoTitle: copy.seoTitle,
       seoDescription: copy.seoDescription,
       heroBaseItemId: items[0]?.itemId,
-      content: {
+      content: stringifyFeatureContent({
         headline: copy.headline,
         intro: copy.intro,
         productGroupNotes: copy.productGroupNotes,
@@ -41,7 +41,7 @@ export async function generateFeature(itemIds: string[], templateOverride?: Temp
         colorVariationNotes: copy.colorVariationNotes ?? "",
         stylingSuggestion: copy.stylingSuggestion,
         ctaText: copy.ctaText,
-      } satisfies Omit<FeatureCopy, "title" | "slug" | "seoTitle" | "seoDescription">,
+      }),
     },
     adminAuthMode,
   );
@@ -75,7 +75,7 @@ export interface FeatureFieldPatch {
   seoTitle?: string;
   seoDescription?: string;
   heroBaseItemId?: string;
-  content?: Partial<Omit<FeatureCopy, "title" | "slug" | "seoTitle" | "seoDescription">>;
+  content?: Partial<FeatureContent>;
 }
 
 export async function updateFeature(featureId: string, patch: FeatureFieldPatch) {
@@ -92,7 +92,17 @@ export async function updateFeature(featureId: string, patch: FeatureFieldPatch)
       ...(patch.seoDescription !== undefined ? { seoDescription: patch.seoDescription } : {}),
       ...(patch.heroBaseItemId !== undefined ? { heroBaseItemId: patch.heroBaseItemId } : {}),
       ...(patch.content !== undefined
-        ? { content: { ...(existing.content as object), ...patch.content } }
+        ? {
+            // Same trust boundary as before this field became a stringified
+            // AWSJSON value (see contentCodec.ts): a partial patch merged
+            // onto whatever's already stored is assumed to add up to a
+            // complete FeatureContent, matching how the editor always
+            // submits every field together.
+            content: stringifyFeatureContent({
+              ...parseFeatureContent(existing.content),
+              ...patch.content,
+            } as FeatureContent),
+          }
         : {}),
     },
     adminAuthMode,
@@ -120,7 +130,7 @@ export async function regenerateWholeFeature(featureId: string) {
       title: copy.title,
       seoTitle: copy.seoTitle,
       seoDescription: copy.seoDescription,
-      content: {
+      content: stringifyFeatureContent({
         headline: copy.headline,
         intro: copy.intro,
         productGroupNotes: copy.productGroupNotes,
@@ -128,7 +138,7 @@ export async function regenerateWholeFeature(featureId: string) {
         colorVariationNotes: copy.colorVariationNotes ?? "",
         stylingSuggestion: copy.stylingSuggestion,
         ctaText: copy.ctaText,
-      },
+      }),
     },
     adminAuthMode,
   );

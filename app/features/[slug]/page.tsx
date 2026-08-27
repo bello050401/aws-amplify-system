@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { serverDataClient } from "@/lib/amplify/dataClient";
+import { parseFeatureContent } from "@/lib/features/contentCodec";
 import type { BaseItem } from "@/lib/base";
 import { Hero } from "@/components/features/Hero";
 import { Introduction } from "@/components/features/Introduction";
@@ -66,12 +67,14 @@ export default async function FeaturePage({ params }: FeaturePageProps) {
   if (!result) notFound();
   const { feature, items } = result;
 
-  const content = (feature.content ?? {}) as {
-    headline?: string;
-    intro?: string;
-    productGroupNotes?: string;
-    colorVariationNotes?: string;
-    ctaText?: string;
+  const content = parseFeatureContent(feature.content) ?? {
+    headline: "",
+    intro: "",
+    productGroupNotes: "",
+    differenceNotes: "",
+    colorVariationNotes: "",
+    stylingSuggestion: "",
+    ctaText: "",
   };
 
   const heroItem =
