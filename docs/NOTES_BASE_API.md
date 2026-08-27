@@ -25,11 +25,26 @@ wire format directly.
 body is surfaced as-is on `/admin/settings` and in server logs — check that
 first; it's usually a client_id/secret or redirect_uri mismatch.
 
-## Item search / detail (`lib/base/client.real.ts`) — best-effort, self-checking
+## Item search / detail (`lib/base/client.real.ts`)
 
-This environment could never reach `api.thebase.in` to see a live response
-(network egress to all `thebase.in` hosts is blocked here), so the exact
-field names in `mapItem()` are informed guesses, not verified ones:
+This environment could never reach `api.thebase.in` directly, but a real
+`/1/items` response has since been captured via server logs during Phase 1
+testing, so the following is **confirmed, not guessed**:
+
+- Images: flat, numbered fields — `img1_origin`, `img2_origin`, … up to
+  `img20_origin` — each a plain HTTPS URL string, **not** an array or a
+  nested object. Missing/null/empty slots are simply absent; `img1_origin`
+  is the thumbnail. Confirmed hosts so far: `base-ec2.akamaized.net` (the
+  API) and `baseec-img-mng.akamaized.net` (the public shop page) — both
+  are allowlisted in `next.config.mjs`'s `images.remotePatterns`.
+- `item_id`, `title`, `price`, `stock` come back as expected under those
+  exact names.
+
+Still unverified (checked via `pick()`'s plausible-name fallback in
+`mapItem()`, same as before): `variations`, the visible/published field,
+`item_url`, and the description field. If any of those turn out wrong,
+`mapItem()`'s diagnostic warning (below) will show the real key on the
+next mismatch.
 
 - `GET /1/items` (paginated with `offset`/`limit`) is treated as a shop
   inventory list, not a full-text search API — `search()` pages through the
@@ -41,15 +56,14 @@ field names in `mapItem()` are informed guesses, not verified ones:
   that need one full item (URL paste, generate/publish a feature). `search()`
   never calls this: the list endpoint alone carries what `/admin/search`
   needs, so hydrating every result via `/items/detail` would be pure N+1.
-- `mapItem()` checks several plausible field-name variants per value
-  (e.g. `item_id`/`itemId`/`id`) and **logs a console warning** —
+- `mapItem()` checks several plausible field-name variants for whatever's
+  still unverified above, and **logs a console warning** —
   `[BASE mapItem] unexpected item shape` — whenever a required field (id,
-  price, or images) comes back empty. It dumps the full raw item as JSON
-  (not just key names), so **if `/admin/search` shows blank images (or
-  prices), grab that log line from the `npm run dev` terminal** — the
-  exact shape BASE actually returned is right there, which is normally
-  enough to fix `extractImageUrls()`/`mapItem()` in one pass without
-  further guessing.
+  price, or images) still comes back empty after that. It dumps the full
+  raw item as JSON (not just key names). Now that images/title/price/stock
+  are confirmed, this should stay quiet for normally-shaped items — if it
+  fires, something is genuinely off (or BASE changed the shape), and the
+  dumped JSON shows exactly what to adjust.
 - `getItem()` treats a 400/403/404 from `/items/detail` as "this one item
   isn't accessible right now" (sold-out/hidden/deleted items can plausibly
   do this even though they were just in the list response) and returns

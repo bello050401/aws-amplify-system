@@ -6,14 +6,15 @@ import type { BaseItem, BaseSearchParams, BaseSearchResult } from "./types";
  * Real BASE API client.
  *
  * Endpoint paths and the OAuth flow follow BASE's known, stable public
- * API conventions. The one part this environment could never verify
- * against a live response (network egress to thebase.in is blocked here
- * — see docs/NOTES_BASE_API.md) is the exact response field names for
- * items, so `mapItem()` below checks several plausible field names per
- * value and logs a warning when it has to fall back to an empty default.
- * If search results come back with missing images/prices, check the
- * server logs for `[BASE mapItem]` warnings first — that will show the
- * true field names to plug in.
+ * API conventions. This environment could never reach api.thebase.in
+ * directly to confirm the exact response field names for items, but a
+ * real /1/items response has since been captured via server logs during
+ * Phase 1 testing — see docs/NOTES_BASE_API.md for what's confirmed
+ * (item_id, title, price, stock, imgN_origin) versus still-unverified
+ * (variations, the visible/published field, item_url). `mapItem()` below
+ * still checks several plausible field names per value and logs a
+ * warning when it has to fall back to an empty default, for whatever
+ * remains unconfirmed.
  */
 const API_BASE = "https://api.thebase.in/1";
 
@@ -47,7 +48,26 @@ function pick(raw: RawBaseItem, ...keys: string[]): unknown {
   return undefined;
 }
 
+// Confirmed against a real BASE /1/items response (server logs captured
+// during Phase 1 testing — see docs/NOTES_BASE_API.md): images come back
+// as flat, numbered fields (img1_origin, img2_origin, …), not an array or
+// a nested object. BASE allows up to 20 images per item, so that's the
+// upper bound checked; missing/null/empty slots are simply skipped, and
+// order is preserved (img1_origin is always the thumbnail used first).
+const MAX_ITEM_IMAGES = 20;
+
 function extractImageUrls(raw: RawBaseItem): string[] {
+  const numbered: string[] = [];
+  for (let i = 1; i <= MAX_ITEM_IMAGES; i++) {
+    const value = raw[`img${i}_origin`];
+    if (typeof value === "string" && value.trim()) numbered.push(value);
+  }
+  if (numbered.length > 0) return numbered;
+
+  // Fallback for a shape this environment never actually saw confirmed
+  // live (e.g. if a different endpoint/API version ever returns a nested
+  // array instead) — kept so mapItem() degrades gracefully rather than
+  // silently returning zero images if BASE's shape differs by endpoint.
   const candidate = pick(raw, "images", "img", "imgs", "photos");
   if (Array.isArray(candidate)) {
     return candidate
