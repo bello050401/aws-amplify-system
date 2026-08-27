@@ -209,13 +209,3 @@ export async function listCustomFieldDefinitions(): Promise<CustomFieldDefinitio
     }))
     .sort((a, b) => a.sortOrder - b.sortOrder);
 }
-
-/** SKU pre-create duplicate check (spec §7/§13) — a query, not a hard uniqueness guarantee; see createInventory in app/actions/inventory.ts for the accepted race-window tradeoff. */
-export async function findInventoryBySku(sku: string): Promise<{ id: string; name: string } | null> {
-  const { data } = await serverDataClient.models.Inventory.list({
-    filter: { sku: { eq: sku } },
-    ...inventoryAuthMode,
-  });
-  const match = data.find((i) => !i.deletedAt);
-  return match ? { id: match.id, name: match.name } : null;
-}

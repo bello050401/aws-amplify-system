@@ -32,7 +32,6 @@ interface ImageSlot {
  */
 export function NewInventoryForm({ categories, locations, statuses, customFieldDefs }: NewInventoryFormProps) {
   const router = useRouter();
-  const [sku, setSku] = useState("");
   const [name, setName] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [statusId, setStatusId] = useState("");
@@ -123,9 +122,17 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
     e.preventDefault();
     setError(null);
 
-    if (!sku.trim()) return setError("SKUを入力してください。");
     if (!name.trim()) return setError("商品名を入力してください。");
     if (anyImageUploading) return setError("画像のアップロード完了までお待ちください。");
+    // A failed upload must not be silently dropped from the submission —
+    // that previously let a registration "succeed" with zero images and
+    // no clear signal why, which is exactly the bug report this guards
+    // against. The failed thumbnail already shows its own error text;
+    // this just stops the whole form from proceeding until it's resolved
+    // (retry the file, or remove it) instead of quietly proceeding without it.
+    if (images.some((i) => i.error)) {
+      return setError("アップロードに失敗した画像があります。該当の画像を削除するか、再度選択し直してください。");
+    }
     for (const def of customFieldDefs) {
       if (def.required && !customFieldValues[def.fieldKey]?.trim()) {
         return setError(`「${def.label}」は必須項目です。`);
@@ -142,7 +149,6 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
       }
 
       await createInventory({
-        sku,
         name,
         categoryId: categoryId || undefined,
         statusId: statusId || undefined,
@@ -180,7 +186,12 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <LabeledInput label="SKU" required value={sku} onChange={setSku} />
+        <div>
+          <label className="block text-[12px] text-gray-600">SKU</label>
+          <p className="mt-0.5 border border-gray-200 bg-gray-50 px-2 py-1 text-[13px] text-gray-400">
+            登録時に自動採番されます(例: B000001)
+          </p>
+        </div>
         <LabeledInput label="商品名" required value={name} onChange={setName} />
 
         <LabeledSelect label="カテゴリ" value={categoryId} onChange={setCategoryId} options={categories.map((c) => ({ value: c.id, label: c.name }))} />

@@ -3,17 +3,17 @@ import Link from "next/link";
 /**
  * Thin fixed icon rail (spec §18) — the left-most of the three layers
  * (rail → filter sidebar → main area, spec §17). Only 在庫一覧 is wired
- * up in Phase 3; the rest are placeholders so the *structure* for future
- * modules exists without pretending they're built. A disabled item has
- * no href and a title tooltip explaining why, rather than a dead link.
+ * up so far; ツール・設定 stay as placeholders for genuinely near-term
+ * BELLO work (e.g. master-data management). 入庫/出庫/棚卸/受注管理/
+ * 発注管理 were deliberately removed rather than kept as placeholders —
+ * BELLO doesn't use them, and this system is meant to stay a focused
+ * "登録する→探す→見る→編集する" tool, not grow ERP/WMS-shaped scaffolding
+ * nobody's asked for. Re-adding any of them later is a one-line change
+ * here, not a structural one. A disabled item has no href and a title
+ * tooltip explaining why, rather than a dead link.
  */
 const NAV_ITEMS = [
   { key: "inventory", label: "在庫一覧", href: "/inventory", enabled: true },
-  { key: "receiving", label: "入庫", href: null, enabled: false },
-  { key: "shipping", label: "出庫", href: null, enabled: false },
-  { key: "stocktake", label: "棚卸", href: null, enabled: false },
-  { key: "orders", label: "受注管理", href: null, enabled: false },
-  { key: "purchasing", label: "発注管理", href: null, enabled: false },
   { key: "tools", label: "ツール", href: null, enabled: false },
   { key: "settings", label: "設定", href: null, enabled: false },
 ] as const;

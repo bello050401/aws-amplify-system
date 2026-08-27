@@ -1,4 +1,5 @@
 import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
+import { generateSku } from "../functions/generate-sku/resource";
 
 /**
  * Data model for this Amplify app. Two independent systems share one
@@ -11,6 +12,9 @@ import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
  *    CustomFieldDefinition / Inventory / InventoryHistory, added in
  *    Phase 2, further down this file) — ADMIN/EDITOR/VIEWER groups only,
  *    no public access at all. See that section's own comment for why.
+ *    `generateInventorySku` is a custom mutation in this same section,
+ *    backed by a Lambda (amplify/functions/generate-sku) for race-free
+ *    SKU auto-numbering.
  *
  * Design rule for the BASE side (per spec §6): BASE is the system of
  * record for price, stock, title, images, and visibility. This schema
@@ -288,6 +292,19 @@ const schema = a.schema({
       allow.group("EDITOR").to(["read", "create"]),
       allow.group("VIEWER").to(["read"]), // VIEWER can already read every current field via Inventory itself, so no reason to hide its history
     ]),
+
+  // Custom mutation backing SKU auto-numbering (spec §6 revision — SKU is
+  // no longer user-entered). Same ADMIN/EDITOR authorization as creating
+  // an Inventory itself; VIEWER cannot call this any more than it can
+  // create Inventory records. See amplify/functions/generate-sku for why
+  // this needs to be a Lambda (atomic DynamoDB counter) rather than
+  // application-level logic, and amplify/backend.ts for the counter table
+  // this function reads/writes.
+  generateInventorySku: a
+    .mutation()
+    .returns(a.string())
+    .authorization((allow) => [allow.group("ADMIN"), allow.group("EDITOR")])
+    .handler(a.handler.function(generateSku)),
 });
 
 export type Schema = ClientSchema<typeof schema>;

@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { findInventoryBySku } from "@/lib/inventory/queries";
 import { stringifyCustomFields } from "@/lib/inventory/customFieldsCodec";
 
 export interface InventoryImageInput {
@@ -13,7 +12,6 @@ export interface InventoryImageInput {
 }
 
 export interface CreateInventoryInput {
-  sku: string;
   name: string;
   categoryId?: string;
   statusId?: string;
@@ -40,19 +38,18 @@ export async function createInventory(input: CreateInventoryInput): Promise<neve
     throw new Error("在庫を登録する権限がありません（ADMIN または EDITOR のみ）。");
   }
 
-  const sku = input.sku.trim();
   const name = input.name.trim();
-  if (!sku) throw new Error("SKUを入力してください。");
   if (!name) throw new Error("商品名を入力してください。");
 
-  // Best-effort duplicate check, not an atomic guarantee (spec §6/§20
-  // deliberately leaves strict same-instant race handling for later —
-  // see the secondaryIndexes comment on Inventory in
-  // amplify/data/resource.ts). Fine for how this system is actually used:
-  // a handful of staff typing SKUs by hand, not concurrent automated writers.
-  const existing = await findInventoryBySku(sku);
-  if (existing) {
-    throw new Error(`SKU「${sku}」は既に「${existing.name}」で使用されています。別のSKUを入力してください。`);
+  // SKU is never user-entered (spec revision): a fresh, guaranteed-unique
+  // value comes from the generateInventorySku Lambda's atomic DynamoDB
+  // counter (see amplify/functions/generate-sku) — not "read the max SKU
+  // and +1", which races under concurrent registrations. See that
+  // function's own comment for why a plain conditional-write retry loop
+  // isn't needed either: a native `ADD` is already race-free.
+  const { data: sku, errors: skuErrors } = await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);
+  if (skuErrors || !sku) {
+    throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(skuErrors)}`);
   }
 
   const who = await getCurrentInventoryUserEmail();
