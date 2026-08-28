@@ -1,0 +1,15 @@
+# Environment / secrets — never commit tokens
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Verification script output (may reference internal image data)
+zaico-verification/output/
+
+# OS
+.DS_Store
+Thumbs.db
