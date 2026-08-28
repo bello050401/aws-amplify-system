@@ -128,11 +128,10 @@ export default function InventoryLoginPage({ searchParams }: InventoryLoginPageP
       <ConfigureAmplifyClientSide />
       {needsNewPassword ? (
         <form onSubmit={handleNewPassword} className="w-full max-w-sm border border-gray-300 bg-white p-8">
-          <div className="flex items-center gap-2">
+          <div className="flex justify-center">
             <BelloLogo variant="login" />
-            <h1 className="text-base font-bold text-gray-900">BELLO 在庫管理</h1>
           </div>
-          <p className="mt-1 text-xs text-gray-500">初回ログインのため、新しいパスワードを設定してください。</p>
+          <p className="mt-4 text-center text-xs text-gray-500">初回ログインのため、新しいパスワードを設定してください。</p>
           <div className="mt-6">
             <label className="block text-xs font-medium text-gray-600">新しいパスワード</label>
             <input
@@ -156,9 +155,8 @@ export default function InventoryLoginPage({ searchParams }: InventoryLoginPageP
         </form>
       ) : (
         <form onSubmit={handleSignIn} className="w-full max-w-sm border border-gray-300 bg-white p-8">
-          <div className="flex items-center gap-2">
+          <div className="flex justify-center">
             <BelloLogo variant="login" />
-            <h1 className="text-base font-bold text-gray-900">BELLO 在庫管理</h1>
           </div>
           <div className="mt-6 space-y-3">
             <div>

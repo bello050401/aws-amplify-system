@@ -23,12 +23,16 @@ export type BelloLogoVariant = "sidebar" | "login";
  *   real file's aspect ratio would otherwise render wider than the rail,
  *   it's cropped there rather than pushing the rail wider or shifting
  *   the nav items below it.
- * - "login": next to the "BELLO 在庫管理" heading on the login screen —
- *   unchanged by that follow-up request.
+ * - "login": the login screen's sole brand mark, centered above the
+ *   form — no adjacent "BELLO 在庫管理" text anymore (removed as
+ *   redundant with the wordmark already inside this icon; see
+ *   app/inventory/login/page.tsx). Enlarged from the original h-10 to
+ *   clearly read as the screen's brand moment, while staying well short
+ *   of the login form's own max-w-sm width so it never dominates it.
  */
 const VARIANT_CLASSES: Record<BelloLogoVariant, string> = {
   sidebar: "h-[72px] w-auto max-w-[84px]",
-  login: "h-10 w-auto max-w-[160px]",
+  login: "h-20 w-auto max-w-[220px]",
 };
 
 /**
