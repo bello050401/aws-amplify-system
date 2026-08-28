@@ -1,6 +1,7 @@
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
+import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { SettingsTabs } from "./SettingsTabs";
 
 /**
@@ -10,16 +11,20 @@ import { SettingsTabs } from "./SettingsTabs";
  * from Phase 2, so this page needed no backend/schema change at all —
  * see lib/inventory/masters.ts's file comment.
  *
- * Seeding runs on every load rather than as a one-off migration step —
- * seedInventoryMasters() only ever adds a name that's missing (by exact
- * match, active or inactive), so this is a no-op after the first real
- * visit and never overwrites an ADMIN's own edits.
+ * Dedupe-then-seed runs on every ADMIN load rather than as a one-off
+ * migration step — both are safe no-ops once there's nothing left to do
+ * (see masterDedupe.ts / masterSeed.ts), and running dedupe first means
+ * seeding's own duplicate check sees the already-cleaned-up state.
+ * Gated to ADMIN only: EDITOR/VIEWER's session can only read these
+ * models (see amplify/data/resource.ts's authorization), so attempting
+ * either write as one of them would just be a guaranteed-to-be-rejected
+ * GraphQL call on every page view for no benefit.
  *
- * EDITOR/VIEWER can reach this page (auth gate in the parent layout only
- * checks "is an Inventory user at all") but see a read-only list — the
- * schema already rejects their write attempts, this is just the matching
- * UI-side experience, same pattern as canEditInventory/canHardDeleteInventory
- * elsewhere in this app.
+ * EDITOR/VIEWER can still reach this page (auth gate in the parent
+ * layout only checks "is an Inventory user at all") but see a read-only
+ * list — the schema already rejects their write attempts, this is just
+ * the matching UI-side experience, same pattern as
+ * canEditInventory/canHardDeleteInventory elsewhere in this app.
  */
 export const metadata = { title: "設定 | BELLO 在庫管理" };
 
@@ -27,7 +32,10 @@ export default async function InventorySettingsPage() {
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects signed-out/unauthorized users
 
-  await seedInventoryMasters();
+  if (role === "ADMIN") {
+    await Promise.all([dedupeMasterEntries("Category"), dedupeMasterEntries("Location")]);
+    await seedInventoryMasters();
+  }
 
   const [categories, locations] = await Promise.all([listAllMasterEntries("Category"), listAllMasterEntries("Location")]);
 

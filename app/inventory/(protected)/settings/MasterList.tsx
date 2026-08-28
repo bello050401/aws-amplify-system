@@ -179,20 +179,30 @@ export function MasterList({ model, label, entries, readOnly }: MasterListProps)
                 )}
               </td>
               <td className="py-1.5">
-                <span className={`border px-1.5 py-0.5 text-[11px] ${entry.isActive ? "border-gray-300 text-gray-600" : "border-gray-200 text-gray-400"}`}>
-                  {entry.isActive ? "有効" : "無効"}
-                </span>
+                {/* One control, not a static badge plus a separate
+                    "無効化"/"有効化" action link — clicking this pill IS
+                    the toggle; its own label+dot already show the
+                    current state, so there's nothing else to show or
+                    click separately. Read-only viewers get the same pill
+                    minus the click (disabled, no hover affordance). */}
+                <button
+                  type="button"
+                  onClick={() => toggleActive(entry)}
+                  disabled={readOnly || pending}
+                  title={readOnly ? undefined : entry.isActive ? "クリックで無効化" : "クリックで有効化"}
+                  className={`inline-flex items-center gap-1 border px-1.5 py-0.5 text-[11px] ${
+                    entry.isActive ? "border-gray-300 text-gray-600" : "border-gray-200 text-gray-400"
+                  } ${readOnly ? "" : "hover:bg-gray-50"}`}
+                >
+                  <span>{entry.isActive ? "有効" : "無効"}</span>
+                  <span aria-hidden="true">{entry.isActive ? "●" : "○"}</span>
+                </button>
               </td>
               {!readOnly && (
                 <td className="py-1.5">
-                  <div className="flex gap-3 text-[12px]">
-                    <button type="button" onClick={() => toggleActive(entry)} disabled={pending} className="text-gray-500 hover:text-gray-900">
-                      {entry.isActive ? "無効化" : "有効化"}
-                    </button>
-                    <button type="button" onClick={() => handleDelete(entry)} disabled={pending} className="text-red-400 hover:text-red-600">
-                      削除
-                    </button>
-                  </div>
+                  <button type="button" onClick={() => handleDelete(entry)} disabled={pending} className="text-[12px] text-red-400 hover:text-red-600">
+                    削除
+                  </button>
                 </td>
               )}
             </tr>

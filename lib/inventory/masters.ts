@@ -27,6 +27,21 @@ export interface MasterEntry {
   isActive: boolean;
 }
 
+/**
+ * Canonical comparison key for a master name — used ONLY to detect
+ * duplicates/matches, never to overwrite what's actually stored or
+ * displayed. Collapses the表記ゆれ (spelling variants) that produced
+ * real duplicate categories in practice:
+ * - `NFKC` unifies full-width/half-width forms, including turning a
+ *   full-width space (U+3000) into an ordinary one.
+ * - `trim()` + collapsing internal whitespace (including stray
+ *   tabs/newlines pasted from elsewhere) removes padding differences.
+ * - `toLowerCase()` catches any ASCII-letter casing difference.
+ */
+export function normalizeMasterName(name: string): string {
+  return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 /** Every entry regardless of isActive — the settings screen needs to show (and let ADMIN re-enable) disabled ones too, unlike listCategories()/listLocations() in queries.ts which only ever return active entries for the registration/edit forms' dropdowns. */
 export async function listAllMasterEntries(model: MasterModelName): Promise<MasterEntry[]> {
   const { data } =
@@ -38,11 +53,23 @@ export async function listAllMasterEntries(model: MasterModelName): Promise<Mast
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
 }
 
-/** New entries go to the end of the current order. */
+/**
+ * New entries go to the end of the current order. Refuses a name that's
+ * already present — even under a different exact spelling (full-width
+ * space, trailing whitespace, casing) — via normalizeMasterName, rather
+ * than only rejecting a byte-for-byte match; this is what stops today's
+ * duplicate-category problem from recurring going forward (see
+ * lib/inventory/masterDedupe.ts for cleaning up what's already there).
+ */
 export async function createMasterEntry(model: MasterModelName, name: string): Promise<void> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("名称を入力してください。");
   const existing = await listAllMasterEntries(model);
+  const normalized = normalizeMasterName(trimmed);
+  const duplicate = existing.find((e) => normalizeMasterName(e.name) === normalized);
+  if (duplicate) {
+    throw new Error(`「${duplicate.name}」と同じ名称（表記ゆれ含む）が既に存在します。`);
+  }
   const nextSortOrder = existing.length === 0 ? 0 : Math.max(...existing.map((e) => e.sortOrder)) + 1;
   const { errors } =
     model === "Category"
@@ -57,6 +84,12 @@ export async function createMasterEntry(model: MasterModelName, name: string): P
 export async function renameMasterEntry(model: MasterModelName, id: string, name: string): Promise<void> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("名称を入力してください。");
+  const existing = await listAllMasterEntries(model);
+  const normalized = normalizeMasterName(trimmed);
+  const duplicate = existing.find((e) => e.id !== id && normalizeMasterName(e.name) === normalized);
+  if (duplicate) {
+    throw new Error(`「${duplicate.name}」と同じ名称（表記ゆれ含む）が既に存在します。`);
+  }
   const { errors } =
     model === "Category"
       ? await serverDataClient.models.Category.update({ id, name: trimmed }, inventoryAuthMode)

@@ -1,6 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { listAllMasterEntries, type MasterModelName } from "./masters";
+import { listAllMasterEntries, normalizeMasterName, type MasterModelName } from "./masters";
 
 /**
  * Initial values requested for BELLO's own operation (Phase B spec) —
@@ -36,8 +36,12 @@ const LOCATION_SEED = ["所沢事務所", "イエローテイル川越", "所沢
 
 async function seedModel(model: MasterModelName, names: readonly string[]): Promise<void> {
   const existing = await listAllMasterEntries(model);
-  const existingNames = new Set(existing.map((e) => e.name));
-  const missing = names.filter((n) => !existingNames.has(n));
+  // Matched by normalized name (see normalizeMasterName), not exact
+  // string equality — otherwise re-running this after someone manually
+  // entered "破棄　" (full-width trailing space) would seed a second,
+  // effectively-identical "破棄" right next to it.
+  const existingNormalized = new Set(existing.map((e) => normalizeMasterName(e.name)));
+  const missing = names.filter((n) => !existingNormalized.has(normalizeMasterName(n)));
   if (missing.length === 0) return;
 
   let nextSortOrder = existing.length === 0 ? 0 : Math.max(...existing.map((e) => e.sortOrder)) + 1;

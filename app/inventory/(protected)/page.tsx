@@ -45,9 +45,13 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
     ),
   ]);
 
-  const categoriesById = new Map(categories.map((c) => [c.id, c]));
-  const locationsById = new Map(locations.map((l) => [l.id, l]));
-  const statusesById = new Map(statuses.map((s) => [s.id, s]));
+  // Plain objects, not Maps — this now crosses into InventoryTable, a
+  // Client Component (it needs to read the column-visibility preference
+  // from localStorage), and a plain object is unambiguously serializable
+  // across that server/client boundary.
+  const categoriesById = Object.fromEntries(categories.map((c) => [c.id, c]));
+  const locationsById = Object.fromEntries(locations.map((l) => [l.id, l]));
+  const statusesById = Object.fromEntries(statuses.map((s) => [s.id, s]));
 
   const baseParams = {
     q: searchParams.q,

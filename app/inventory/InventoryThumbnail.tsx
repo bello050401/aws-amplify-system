@@ -36,7 +36,9 @@ export function InventoryThumbnail({
 
   if (!storageKey || failed) {
     return (
-      <div className={`flex ${SIZE_CLASSES[size]} shrink-0 items-center justify-center border border-gray-200 bg-gray-50 text-[9px] text-gray-400`}>
+      <div
+        className={`flex ${SIZE_CLASSES[size]} shrink-0 items-center justify-center overflow-hidden border border-gray-200 bg-gray-50 text-[9px] text-gray-400`}
+      >
         <ConfigureAmplifyClientSide />
         No Image
       </div>
@@ -44,6 +46,19 @@ export function InventoryThumbnail({
   }
 
   return (
+    // Fixed pixel height AND width (SIZE_CLASSES) plus object-cover means
+    // this never takes on the source photo's own aspect ratio — a
+    // portrait-oriented product photo gets cropped to this exact box,
+    // same as a landscape one, so it can never grow a table row taller
+    // than any other. `shrink-0` stops a flex/table layout from
+    // squeezing it narrower under pressure elsewhere in the row, and
+    // `overflow-hidden` is a second guarantee on top of object-cover
+    // that nothing paints outside this box regardless of the source
+    // image's intrinsic size. Every caller (the list table, both plain
+    // and 詳細検索-filtered, and the detail page's gallery thumbnails)
+    // renders through this exact same component/props — there is no
+    // second, differently-sized thumbnail implementation anywhere in
+    // this app for either of them to diverge from.
     // eslint-disable-next-line @next/next/no-img-element -- S3 URL, arbitrary/rotating host; next/image would need remotePatterns for a bucket domain that doesn't exist until deploy.
     <img
       src={url ?? undefined}
@@ -56,7 +71,7 @@ export function InventoryThumbnail({
         console.error(`[InventoryThumbnail] image failed to load for "${storageKey}":`, e);
         setLoadFailed(true);
       }}
-      className={`${SIZE_CLASSES[size]} shrink-0 border border-gray-200 object-cover bg-gray-50`}
+      className={`${SIZE_CLASSES[size]} shrink-0 overflow-hidden border border-gray-200 object-cover bg-gray-50`}
     />
   );
 }
