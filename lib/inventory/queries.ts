@@ -409,14 +409,23 @@ export async function listLocations(includeInactiveId?: string | null): Promise<
  * 側がidを必要とする理由がない)。
  */
 export async function listUnits(): Promise<string[]> {
-  const { data } = await serverDataClient.models.UnitMaster.list({
-    filter: { isActive: { eq: true } },
-    ...inventoryAuthMode,
-  });
-  return data
-    .map((u) => ({ name: u.name, sortOrder: u.sortOrder ?? 0 }))
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"))
-    .map((u) => u.name);
+  // UnitMasterはAWS側の再デプロイが済むまでバックエンドに存在しない
+  // 可能性がある(lib/inventory/masters.tsのlistAllMasterEntriesの同種
+  // コメント参照) — 失敗しても新規登録/編集フォーム自体は壊さず、単に
+  // 候補なし(自由入力のみ)として続行する。
+  try {
+    const { data } = await serverDataClient.models.UnitMaster.list({
+      filter: { isActive: { eq: true } },
+      ...inventoryAuthMode,
+    });
+    return (data ?? [])
+      .map((u) => ({ name: u.name, sortOrder: u.sortOrder ?? 0 }))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"))
+      .map((u) => u.name);
+  } catch (err) {
+    console.warn("[listUnits] UnitMasterの取得に失敗しました(AWS側の再デプロイが未実施の可能性があります):", err);
+    return [];
+  }
 }
 
 export interface StatusOption {

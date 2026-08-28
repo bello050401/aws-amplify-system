@@ -49,10 +49,24 @@ async function seedModel(model: MasterModelName, names: readonly string[]): Prom
 
   let nextSortOrder = existing.length === 0 ? 0 : Math.max(...existing.map((e) => e.sortOrder)) + 1;
   for (const name of missing) {
+    // バグ修正(夜間開発): この分岐が元々Category/Locationの2値のみを
+    // 想定したif/elseだったため、Unit追加時にelse側(Location.create)
+    // へ誤って落ちて、単位の種シードがLocationマスタへ紛れ込むバグが
+    // あった。3値それぞれ明示的に分岐する。
     if (model === "Category") {
       await serverDataClient.models.Category.create({ name, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
-    } else {
+    } else if (model === "Location") {
       await serverDataClient.models.Location.create({ name, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
+    } else {
+      try {
+        await serverDataClient.models.UnitMaster.create({ name, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
+      } catch (err) {
+        // UnitMasterがまだAWS側にデプロイされていない場合、ここで初め
+        // て失敗が起こり得る — Category/Locationのシードや設定画面全体
+        // を巻き込んで失敗させない(lib/inventory/masters.tsの
+        // listAllMasterEntriesの同種ガードと合わせる)。
+        console.warn("[seedModel] UnitMasterの作成に失敗しました(AWS側の再デプロイが未実施の可能性があります):", err);
+      }
     }
     nextSortOrder += 1;
   }

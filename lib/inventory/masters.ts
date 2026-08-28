@@ -55,12 +55,26 @@ export function normalizeMasterName(name: string): string {
 
 /** Every entry regardless of isActive — the settings screen needs to show (and let ADMIN re-enable) disabled ones too, unlike listCategories()/listLocations() in queries.ts which only ever return active entries for the registration/edit forms' dropdowns. */
 export async function listAllMasterEntries(model: MasterModelName): Promise<MasterEntry[]> {
-  const { data } =
-    model === "Category"
-      ? await serverDataClient.models.Category.list(inventoryAuthMode)
-      : model === "Location"
-        ? await serverDataClient.models.Location.list(inventoryAuthMode)
-        : await serverDataClient.models.UnitMaster.list(inventoryAuthMode);
+  if (model === "Unit") {
+    // UnitMasterは今回(夜間開発)追加したschemaで、AWS側の再デプロイ
+    // (ampx sandbox / hosting build)が済むまでは実際のバックエンドに
+    // まだ存在しない — その間にこのクエリを呼ぶとAppSync側が未知の型
+    // としてエラーを返す。Category/Locationタブを含む設定画面全体が
+    // それにつられて壊れることのないよう、Unitだけは例外を握りつぶし
+    // 「まだ何も登録されていない」として空配列を返す(再デプロイ後は
+    // 通常通り動く)。
+    try {
+      const { data } = await serverDataClient.models.UnitMaster.list(inventoryAuthMode);
+      return (data ?? [])
+        .map((d) => ({ id: d.id, name: d.name, sortOrder: d.sortOrder ?? 0, isActive: d.isActive ?? true }))
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
+    } catch (err) {
+      console.warn("[listAllMasterEntries] UnitMasterの取得に失敗しました(AWS側の再デプロイが未実施の可能性があります):", err);
+      return [];
+    }
+  }
+
+  const { data } = model === "Category" ? await serverDataClient.models.Category.list(inventoryAuthMode) : await serverDataClient.models.Location.list(inventoryAuthMode);
   return data
     .map((d) => ({ id: d.id, name: d.name, sortOrder: d.sortOrder ?? 0, isActive: d.isActive ?? true }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
