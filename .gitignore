@@ -21,3 +21,8 @@ amplify_outputs.d.ts
 *.log
 .vercel
 *.tsbuildinfo
+
+# ZAICO API reconnaissance output — real (if redacted) product data
+# fetched from a live account; never committed regardless of where the
+# script is run from. See zaico-verification/README.md.
+zaico-verification/output/
