@@ -1,5 +1,5 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { RemovalPolicy } from "aws-cdk-lib";
+import { RemovalPolicy, SecretValue } from "aws-cdk-lib";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { auth } from "./auth/resource";
@@ -58,25 +58,47 @@ backend.generateSku.addEnvironment("SKU_COUNTER_TABLE_NAME", skuCounterTable.tab
 // せる必要がある。RemovalPolicy.RETAINはskuCounterTableと同じ理由 —
 // スタック削除でADMINが設定したTOKENを失うのは事故として大きすぎる。
 //
+// ── IaCとアプリの責務分離(安全性レビューでの指摘を反映) ────────────
+// このSecretリソースの作成・削除はこのファイル(CDK/CloudFormation)
+// だけが行う。アプリ側(lib/zaico/secretStore.ts)はGetSecretValue /
+// PutSecretValueで値(バージョン)を読み書きするだけで、CreateSecret /
+// DeleteSecretは一切呼ばない — CloudFormationが所有するリソースを
+// アプリから物理的に作成・削除すると、次回のcdk diff/deployで
+// drift(定義と実体の不一致)が起こり得るため。
+//
+// `secretStringValue`で初期値を明示的に`{"configured":false}`という
+// 構造化JSONにしている(CDKの既定動作であるランダム文字列の自動生成
+// に任せない) — これが「未設定」の正式な状態の表現方法。設定画面から
+// 「ZAICO API設定を削除」した場合も、Secretそのものを消すのではなく
+// この同じJSON値へ書き戻すだけ(lib/zaico/secretStore.tsの
+// clearZaicoTokenInSecretsManager参照)。値の形はsecretStore.tsの
+// ZaicoTokenSecretPayload/UNCONFIGURED_SECRET_PAYLOADと必ず一致させる
+// こと。ここに書く値はダミーの初期値であり秘密情報ではないため、
+// SecretValue.unsafePlainTextを使ってよい。
+//
 // 重要な制約: このSecretへの読み書き権限を、Next.jsのSSRコード
 // (lib/zaico/client.ts / app/actions/zaicoSecret.ts)が実際に実行され
 // るAmplify Hostingのコンピュート実行ロールへ、この`defineBackend()`
 // からは付与できない — ここで管理しているのはAuth/Data/Storage/
 // generateSkuの各Amplifyリソースのみで、Next.js SSRを動かすコンピュー
 // ト(Amplify Hostingの管理下)のIAMロールはこの一覧に含まれない。
-// そのため、以下のいずれかをAmplify Console側でADMINが手動設定する
-// 必要がある(完了報告のBLOCKED_BY_USER参照):
+// そのため、以下をAmplify Console側でADMINが手動設定する必要がある
+// (完了報告のBLOCKED_BY_USER参照):
 //   1. Amplify Console → 該当アプリ → 「App settings」→「IAM roles」
 //      (または「Access to AWS resources」)で、SSRコンピュートに割り
-//      当てられている実行ロールに、このSecretのARNを対象とした
-//      secretsmanager:GetSecretValue / PutSecretValue / CreateSecret /
-//      DeleteSecretを許可するインラインポリシーを追加する。
+//      当てられている実行ロールに、このSecretのARNだけを対象とした
+//      secretsmanager:GetSecretValue と PutSecretValue の2つだけを
+//      許可するインラインポリシーを追加する(CreateSecret/DeleteSecret
+//      は不要 — 上記の責務分離のため、runtimeへは付与しないこと)。
 //   2. その許可が済むまでは、lib/zaico/client.tsのgetZaicoApiToken()
 //      が自動的に既存の環境変数ZAICO_API_TOKENへフォールバックする
 //      ため、システムは今まで通り動作し続ける(退行なし)。
 export const zaicoTokenSecretStack = backend.createStack("ZaicoTokenSecretStack");
 export const zaicoTokenSecret = new Secret(zaicoTokenSecretStack, "ZaicoApiTokenSecret", {
   secretName: "bello/zaico-api-token",
-  description: "BELLO在庫管理システム — ZAICO API TOKEN(ZAICO→BELLO一方向同期専用、GETのみ)。設定画面(ADMIN限定)から読み書きする。",
+  description: "BELLO在庫管理システム — ZAICO API TOKEN(ZAICO→BELLO一方向同期専用、GETのみ)。設定画面(ADMIN限定)から読み書きする。Secretリソース自体の作成/削除はこのCDK定義のみが行う(アプリ実行ロールにはGetSecretValue/PutSecretValueのみ付与)。",
   removalPolicy: RemovalPolicy.RETAIN,
+  // 秘密情報ではない、単なる「未設定」を表す既定値 — lib/zaico/secretStore.ts
+  // のUNCONFIGURED_SECRET_PAYLOADと必ず同じ形にすること。
+  secretStringValue: SecretValue.unsafePlainText(JSON.stringify({ configured: false })),
 });

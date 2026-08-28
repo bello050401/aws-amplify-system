@@ -82,6 +82,26 @@ Managerの読み書き権限を付与する作業は、`defineBackend()`から�
 Amplify Console側の手動操作が必要(`amplify/backend.ts`のコメント
 参照)。この権限が未設定でも②の環境変数だけで従来通り動作する。
 
+**Secretリソースのライフサイクルとアプリの責務分離**(安全性レビュー
+で確定した設計): `bello/zaico-api-token` というSecretリソース自体の
+作成・削除は `amplify/backend.ts`(CDK/CloudFormation)だけが行う。
+アプリ側(`lib/zaico/secretStore.ts`)は `GetSecretValue` /
+`PutSecretValue` で値(バージョン)を読み書きするだけで、
+`CreateSecret` / `DeleteSecret` は一切呼ばない — CloudFormationが
+所有するリソースをアプリから物理的に作成・削除すると、次回の
+`cdk diff`/deployでdrift(定義と実体の不一致)が起こり得るため。
+そのためSSR実行ロールに付与すべきIAM権限も
+`secretsmanager:GetSecretValue` と `PutSecretValue` の2つだけでよい。
+
+「未設定」はSecretの値を空文字列にするのではなく、構造化JSON
+`{ "configured": false }` として表現する(設定済みなら
+`{ "configured": true, "token": "..." }`)。設定画面から
+「ZAICO API設定を削除」した場合も、Secretの値をこの
+`{ "configured": false }` へ書き戻すだけ
+(`clearZaicoTokenInSecretsManager`)で、Secretリソース自体には
+一切触れない。CDK側もこの同じJSON形を初期値として設定している
+(`amplify/backend.ts` の `secretStringValue`)。
+
 ## Amplify Hosting / CI-CD
 
 - `amplify.yml`(リポジトリ直下) — backendフェーズで

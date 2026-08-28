@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { validateZaicoToken } from "@/lib/zaico/client";
-import { deleteZaicoTokenFromSecretsManager, setZaicoTokenInSecretsManager } from "@/lib/zaico/secretStore";
+import { clearZaicoTokenInSecretsManager, setZaicoTokenInSecretsManager } from "@/lib/zaico/secretStore";
 
 /**
  * ZAICO API TOKENの登録/削除 (夜間開発指示書 §14)。ADMIN限定 —
@@ -51,10 +51,16 @@ export async function setZaicoTokenAction(token: string): Promise<ZaicoTokenActi
   return { success: true, message: "ZAICO API TOKENを保存しました（接続確認済み）。" };
 }
 
+/**
+ * 「削除」— Secretリソース自体は物理削除しない(安全性レビューでの
+ * 指摘を反映)。値を「未設定」を表すJSONへ書き戻すだけ
+ * (lib/zaico/secretStore.tsのclearZaicoTokenInSecretsManager参照) —
+ * ADMIN操作としての見た目・結果("接続済み"→"未設定"に戻る)は変わらない。
+ */
 export async function deleteZaicoTokenAction(): Promise<ZaicoTokenActionResult> {
   await requireAdmin();
   try {
-    await deleteZaicoTokenFromSecretsManager();
+    await clearZaicoTokenInSecretsManager();
   } catch (err) {
     return { success: false, message: err instanceof Error ? err.message : "削除に失敗しました。" };
   }
