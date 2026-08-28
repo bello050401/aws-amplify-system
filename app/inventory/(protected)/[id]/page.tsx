@@ -76,14 +76,25 @@ function historyChangeSummary(h: { fieldName: string; oldValue: string | null; n
 }
 
 /**
- * 在庫詳細画面 = 全情報確認用・1列縦スクロール型 (spec A)。新規登録/
- * 編集画面で保存できる項目はすべてここで確認できることが要件 (A-2) —
- * この画面のデータ取得は編集画面と同じ full InventoryDetail (拡張
- * フィールド全項目・両方の画像タイプ・isPrimary・CustomFields)。
+ * 在庫詳細画面 = PC「左：商品画像／右：商品情報」の2列構成（2026-08-28
+ * 付の最新統合指示書 §15/§32で、直前の「画像を含めた全体1列縦スクロー
+ * ル」から明示的に変更・優先された仕様）。新規登録/編集画面で保存でき
+ * る項目はすべてここで確認できることが要件 —この画面のデータ取得は
+ * 編集画面と同じ full InventoryDetail (拡張フィールド全項目・両方の
+ * 画像タイプ・isPrimary・CustomFields)。
  *
- * ページ全体を左右カラムに分割しない (A-1)。商品画像はページ上部にま
- * とめ(B)、以降は基本情報→販売情報→サイズ情報→コンディション→古物
- * 台帳・仕入情報→管理情報→追加項目→更新履歴の順で縦に並べる(C)。
+ * 左カラム=商品画像1列、右カラム=基本情報→販売情報→サイズ情報→コン
+ * ディション→古物台帳・仕入情報→管理情報→追加項目の縦積み1列。
+ * 「画像＋情報＋右補助情報」の3列だったのが元の問題だったので、旧・
+ * 独立した保管場所/メタ情報カラムは作らず、管理情報として右カラムの
+ * 情報スタックに統合済み（前回のリライトから維持）。更新履歴だけは
+ * 左右カラムの外、ページ下部に全幅で配置しページ全体のスクロールで
+ * 読む。画像カラムの幅(380px)・画像サイズは、今回の2列化より前の
+ * 3カラム版(f3bb5ea)のInventoryImageGallery呼び出しと同じ値へ揃えて
+ * ある — 1列化の際に画像領域そのものを縮小した事実はなかったが
+ * (InventoryImageGallery自体は今回まで一度も変更していない)、
+ * グリッド列幅を明示的に380pxへ戻すことで指示書の「以前の画像領域を
+ * 基準に戻す」を数値としても満たす。
  */
 export default async function InventoryDetailPage({ params }: { params: { id: string } }) {
   const role = await getInventoryRole();
@@ -232,75 +243,78 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
         {role === "VIEWER" && <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>}
         {role === "EDITOR" && <p className="mt-1 text-[11px] text-gray-400">削除はADMIN権限が必要です。</p>}
 
-        {/* A-1: ページ全体を左右カラムに分けない、1列・縦スクロール。
-            max-w-4xl は「ラベル 値」の密な表を読みやすい幅に収めるため
-            の上限であって、複数カラムへの分割ではない。 */}
-        <div className="mt-6 max-w-4xl">
-          {/* B: 商品画像 — 上部にまとめる。画像自体はmax-w-mdで肥大化を
-              防ぐ（PC first）。NORMAL/DAMAGEは明確に分離。 */}
-          <DetailSection title="商品画像">
-            <div className="max-w-md">
-              <InventoryImageGallery images={orderedNormalImages} alt={item.name} />
-              <div className="mt-6">
-                <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
-              </div>
+        {/* PC「左：商品画像／右：商品情報」の2列。lg未満（モバイル/狭幅）
+            では1カラムへ積み上げる — DOM順(画像→情報)がそのままモバイ
+            ルでの上から下の並びになるので、別途reorderは不要。画像列は
+            2列化より前の3カラム版と同じ380px固定。 */}
+        <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-[380px_1fr]">
+          {/* 左カラム: 商品画像。NORMAL/DAMAGEは明確に分離。 */}
+          <div>
+            <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="商品画像" />
+            <div className="mt-6">
+              <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
             </div>
-          </DetailSection>
+          </div>
 
-          <DetailSection title="基本情報">
-            <DetailInfoTable rows={basicRows} />
-          </DetailSection>
+          {/* 右カラム: 商品情報を1列で縦積み。基本情報→販売情報→サイズ
+              情報→コンディション→古物台帳・仕入情報→管理情報→追加項目。 */}
+          <div>
+            <DetailSection title="基本情報">
+              <DetailInfoTable rows={basicRows} />
+            </DetailSection>
 
-          {/* 販売情報 / サイズ情報 / コンディション — レジストリ駆動、
-              並び順・ラベル・型・単位の定義はextendedFields.tsの1箇所
-              のみ (A-3)。 */}
-          <ExtendedFieldsSummary sections={generalExtendedSections} record={extendedRecord} extra={extendedExtra} />
+            {/* 販売情報 / サイズ情報 / コンディション — レジストリ駆動、
+                並び順・ラベル・型・単位の定義はextendedFields.tsの1箇所
+                のみ (Single Source of Truth)。 */}
+            <ExtendedFieldsSummary sections={generalExtendedSections} record={extendedRecord} extra={extendedExtra} />
 
-          <DetailSection title="古物台帳・仕入情報">
-            <DetailInfoTable rows={usedGoodsLedgerRows} />
-          </DetailSection>
+            <DetailSection title="古物台帳・仕入情報">
+              <DetailInfoTable rows={usedGoodsLedgerRows} />
+            </DetailSection>
 
-          <DetailSection title="管理情報">
-            <DetailInfoTable rows={managementRows} />
-          </DetailSection>
+            <DetailSection title="管理情報">
+              <DetailInfoTable rows={managementRows} />
+            </DetailSection>
 
-          <DetailSection title="追加項目">
-            {customFieldRows.length > 0 ? (
-              <DetailInfoTable rows={customFieldRows} />
-            ) : (
-              <p className="text-[12px] text-gray-400">追加項目は登録されていません。</p>
-            )}
-          </DetailSection>
+            <DetailSection title="追加項目">
+              {customFieldRows.length > 0 ? (
+                <DetailInfoTable rows={customFieldRows} />
+              ) : (
+                <p className="text-[12px] text-gray-400">追加項目は登録されていません。</p>
+              )}
+            </DetailSection>
+          </div>
+        </div>
 
-          {/* F: 更新履歴 — 独立した小さいスクロール領域を廃止し、ペー
-              ジ全体の縦スクロールで確認する。日時/操作/変更内容/実行者
-              の高密度テーブル。 */}
-          <DetailSection title="更新履歴">
-            {item.history.length === 0 ? (
-              <p className="text-[12px] text-gray-400">変更履歴はまだありません。</p>
-            ) : (
-              <table className="w-full border-collapse text-[12px]">
-                <thead className="text-left text-gray-400">
-                  <tr className="border-b border-gray-200">
-                    <th className="py-1 px-2 font-normal">日時</th>
-                    <th className="py-1 px-2 font-normal">操作</th>
-                    <th className="py-1 px-2 font-normal">変更内容</th>
-                    <th className="py-1 px-2 font-normal">実行者</th>
+        {/* 更新履歴 — 左右カラムの外、ページ下部に全幅で配置。独立した
+            小さいスクロール領域は持たず、ページ全体の縦スクロールで確
+            認する。日時/操作/変更内容/実行者の高密度テーブル。 */}
+        <div className="mt-8 max-w-4xl border-t border-gray-100 pt-3">
+          <p className="mb-1.5 text-[11px] font-bold text-gray-400">更新履歴</p>
+          {item.history.length === 0 ? (
+            <p className="text-[12px] text-gray-400">変更履歴はまだありません。</p>
+          ) : (
+            <table className="w-full border-collapse text-[12px]">
+              <thead className="text-left text-gray-400">
+                <tr className="border-b border-gray-200">
+                  <th className="py-1 px-2 font-normal">日時</th>
+                  <th className="py-1 px-2 font-normal">操作</th>
+                  <th className="py-1 px-2 font-normal">変更内容</th>
+                  <th className="py-1 px-2 font-normal">実行者</th>
+                </tr>
+              </thead>
+              <tbody>
+                {item.history.map((h) => (
+                  <tr key={h.id} className="border-b border-gray-100 text-gray-700">
+                    <td className="whitespace-nowrap py-1 px-2 align-top">{formatDateTime(h.changedAt)}</td>
+                    <td className="py-1 px-2 align-top">{historyOperationLabel(h.fieldName)}</td>
+                    <td className="py-1 px-2 align-top">{historyChangeSummary(h)}</td>
+                    <td className="py-1 px-2 align-top">{h.changedBy ?? "-"}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {item.history.map((h) => (
-                    <tr key={h.id} className="border-b border-gray-100 text-gray-700">
-                      <td className="whitespace-nowrap py-1 px-2 align-top">{formatDateTime(h.changedAt)}</td>
-                      <td className="py-1 px-2 align-top">{historyOperationLabel(h.fieldName)}</td>
-                      <td className="py-1 px-2 align-top">{historyChangeSummary(h)}</td>
-                      <td className="py-1 px-2 align-top">{h.changedBy ?? "-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </DetailSection>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>

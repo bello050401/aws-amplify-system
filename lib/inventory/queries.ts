@@ -9,7 +9,8 @@ type InventoryModel = Schema["Inventory"]["type"];
 
 export interface InventoryListFilters {
   q?: string; // matches name OR sku, partial
-  categoryId?: string;
+  /** OR across every selected category (spec: 複数選択時はOR条件) — an empty/absent array means no category filter at all, not "match nothing". */
+  categoryIds?: string[];
   locationId?: string;
   statusId?: string;
 }
@@ -33,6 +34,23 @@ export interface InventoryListRow {
   mainImageStorageKey: string | null;
   createdAt: string;
   updatedAt: string;
+  // Additional optional list columns (統合改善指示書 §10) — the same
+  // extendedFields already readable on the detail/edit screens, now also
+  // available as opt-in list columns. See lib/inventory/listColumns.ts
+  // for which ones actually show by default.
+  barcode: string | null;
+  saleCommission: number | null;
+  market: string | null;
+  saleStartDate: string | null;
+  saleEndDate: string | null;
+  width: string | null;
+  depth: string | null;
+  height: string | null;
+  conditionRating: string | null;
+  damageNotes: string | null;
+  transactionDate: string | null;
+  transactionType: string | null;
+  adminMemo: string | null;
 }
 
 /** Every image on the record, normalized (legacy rows with no `type` read as NORMAL — see lib/inventory/imageTypes.ts). Shared by toListRow (just needs the resolved top image) and getInventoryDetail (needs the full normal/damage breakdown). */
@@ -62,6 +80,19 @@ function toListRow(item: InventoryModel): InventoryListRow {
     mainImageStorageKey: resolveTopImage(images)?.storageKey ?? null,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
+    barcode: item.barcode ?? null,
+    saleCommission: item.saleCommission ?? null,
+    market: item.market ?? null,
+    saleStartDate: item.saleStartDate ?? null,
+    saleEndDate: item.saleEndDate ?? null,
+    width: item.width ?? null,
+    depth: item.depth ?? null,
+    height: item.height ?? null,
+    conditionRating: item.conditionRating ?? null,
+    damageNotes: item.damageNotes ?? null,
+    transactionDate: item.transactionDate ?? null,
+    transactionType: item.transactionType ?? null,
+    adminMemo: item.adminMemo ?? null,
   };
 }
 
@@ -118,7 +149,10 @@ export async function listInventory(
   const conditions: Record<string, unknown>[] = [
     { deletedAt: { attributeExists: Boolean(options.includeDeleted) } },
   ];
-  if (filters.categoryId) conditions.push({ categoryId: { eq: filters.categoryId } });
+  // 複数カテゴリはOR条件（いずれかに一致）、他の条件とはAND — spec §9。
+  if (filters.categoryIds && filters.categoryIds.length > 0) {
+    conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
+  }
   if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
   if (filters.q) {

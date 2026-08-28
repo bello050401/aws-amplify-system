@@ -48,10 +48,41 @@ export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
   { key: "salePrice", label: "販売価格（成約）", defaultVisible: false },
   { key: "note", label: "備考", defaultVisible: false },
   { key: "updatedAt", label: "更新日", defaultVisible: true },
+  // 統合改善指示書 §10で追加された列候補 — すべて既存のInventoryフィー
+  // ルド(extendedFields.ts経由)をそのまま列として公開するだけで、
+  // schema変更は伴わない。一覧を情報過多にしないため、既定は非表示。
+  { key: "barcode", label: "バーコード", defaultVisible: false },
+  { key: "saleCommission", label: "販売手数料", defaultVisible: false },
+  { key: "market", label: "市場", defaultVisible: false },
+  { key: "saleStartDate", label: "販売開始日", defaultVisible: false },
+  { key: "saleEndDate", label: "販売終了日", defaultVisible: false },
+  { key: "width", label: "幅", defaultVisible: false },
+  { key: "depth", label: "奥行", defaultVisible: false },
+  { key: "height", label: "高さ", defaultVisible: false },
+  { key: "conditionRating", label: "コンディション評価", defaultVisible: false },
+  { key: "damageNotes", label: "傷・汚れメモ", defaultVisible: false },
+  { key: "transactionDate", label: "取引年月日", defaultVisible: false },
+  { key: "transactionType", label: "取引区分", defaultVisible: false },
+  { key: "adminMemo", label: "管理メモ", defaultVisible: false },
 ];
 
 export function defaultColumnVisibility(): Record<string, boolean> {
   return Object.fromEntries(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c.defaultVisible]));
+}
+
+/** The registry's own array order — the default column order before any per-user reordering (統合改善指示書 §10: カラム順序). */
+export function defaultColumnOrder(): string[] {
+  return INVENTORY_LIST_COLUMNS.map((c) => c.key);
+}
+
+export interface ColumnPreferences {
+  visibility: Record<string, boolean>;
+  /** Every known column key, in display order. */
+  order: string[];
+}
+
+export function defaultColumnPreferences(): ColumnPreferences {
+  return { visibility: defaultColumnVisibility(), order: defaultColumnOrder() };
 }
 
 /**
@@ -59,6 +90,11 @@ export function defaultColumnVisibility(): Record<string, boolean> {
  * the intended way to force everyone back to the new defaults if the
  * column set ever changes in an incompatible way later — old browsers
  * just start fresh under a new key instead of trying to migrate
- * whatever they had stored under the old one.
+ * whatever they had stored under the old one. Bumped v1→v2 when column
+ * *order* (not just visibility) became a stored preference — v1's value
+ * was a flat visibility map with no order field at all, so reading it as
+ * v2's `{ visibility, order }` shape would need silent, fragile format
+ * sniffing; a clean version bump is simpler and matches this file's own
+ * documented migration strategy.
  */
-export const INVENTORY_LIST_COLUMNS_STORAGE_KEY = "bello-inventory-list-columns-v1";
+export const INVENTORY_LIST_COLUMNS_STORAGE_KEY = "bello-inventory-list-columns-v2";

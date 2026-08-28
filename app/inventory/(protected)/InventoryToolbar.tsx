@@ -1,10 +1,14 @@
+"use client";
+
 import Link from "next/link";
 import type { InventoryRole } from "@/lib/amplify/requireInventoryUser";
+import { useUnsavedChanges } from "../UnsavedChangesProvider";
+import { DirectEditControls } from "./DirectEditControls";
 
 interface InventoryToolbarProps {
   role: InventoryRole;
   q?: string;
-  categoryId?: string;
+  categoryIds: string[];
   locationId?: string;
   statusId?: string;
   advancedOpen: boolean;
@@ -12,71 +16,125 @@ interface InventoryToolbarProps {
 }
 
 /**
- * List-page controls (spec §23) — rendered as InventoryHeader's `center`
- * content (see that component's file comment), not as its own bordered
- * bar: this used to carry its own `border-b`/fixed padding, which is
- * exactly the second of the two misaligned horizontal lines the header
- * redesign (spec O) fixed, by making InventoryHeader itself the only
- * thing that owns a border/height in this row.
+ * List-page controls, rendered as InventoryHeader's `center` content
+ * (see that component's file comment) — this component supplies three
+ * visually distinct roles within that one row (統合改善指示書 §3-§5):
+ * 1. ページタイトル「在庫一覧」+ 件数バッジ — a clear page-title
+ *    hierarchy (larger/bolder than everything beside it), not just text
+ *    sitting next to a search box.
+ * 2. 商品検索 — one bordered "search tool" group (icon + input + a
+ *    tight-coupled 詳細検索 toggle), not a bare unlabeled `<input>`.
+ * 3. 主要操作（新規登録/直接編集/インポート/エクスポート） — kept
+ *    visually separate from both of the above via spacing/a divider.
  *
- * 新規登録 is the one high-frequency action and gets the one filled/dark
- * button; インポート・エクスポート・直接編集 are visually present (so
- * the structure doesn't need rework when they land — spec §26/§20) but
- * disabled with a tooltip, since none of them are implemented yet (spec
- * §34) and a dead button that looks clickable is worse than one that
- * visibly isn't.
+ * A Client Component (rather than the plain server component this used
+ * to be) because 商品検索/詳細検索/新規登録 now all need to go through
+ * the shared 未保存変更ガード when 一覧直接編集 has dirty rows pending
+ * (統合改善指示書 §13) — see each one's onClick/onSubmit below. When
+ * nothing is dirty these are functionally identical to a plain
+ * Link/native form GET submit; guardedNavigate degrades to a plain
+ * `router.push` in that case (see UnsavedChangesProvider).
  */
-export function InventoryToolbar({ role, q, categoryId, locationId, statusId, advancedOpen, totalLabel }: InventoryToolbarProps) {
+export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, advancedOpen, totalLabel }: InventoryToolbarProps) {
   const canEdit = role === "ADMIN" || role === "EDITOR";
-  const advancedHref = (() => {
+  const { isDirty, guardedNavigate } = useUnsavedChanges();
+
+  function buildHref(overrides: Partial<{ q: string; advanced: string }> = {}) {
     const sp = new URLSearchParams();
-    if (q) sp.set("q", q);
-    if (categoryId) sp.set("categoryId", categoryId);
+    const nextQ = overrides.q ?? q;
+    if (nextQ) sp.set("q", nextQ);
+    if (categoryIds.length > 0) sp.set("categoryIds", categoryIds.join(","));
     if (locationId) sp.set("locationId", locationId);
     if (statusId) sp.set("statusId", statusId);
-    if (!advancedOpen) sp.set("advanced", "1");
+    if (overrides.advanced) sp.set("advanced", overrides.advanced);
     const qs = sp.toString();
     return qs ? `/inventory?${qs}` : "/inventory";
-  })();
+  }
+
+  const advancedHref = buildHref({ advanced: advancedOpen ? undefined : "1" });
+
+  function handleGuardedLinkClick(e: React.MouseEvent, href: string) {
+    if (!isDirty) return; // let the plain <Link> navigate normally
+    e.preventDefault();
+    guardedNavigate(href);
+  }
+
+  function handleSearchSubmit(e: React.FormEvent<HTMLFormElement>) {
+    if (!isDirty) return; // let the native GET form submission proceed normally
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const sp = new URLSearchParams();
+    for (const [key, value] of fd.entries()) {
+      if (typeof value === "string" && value) sp.set(key, value);
+    }
+    const qs = sp.toString();
+    guardedNavigate(qs ? `/inventory?${qs}` : "/inventory");
+  }
 
   return (
     <div className="flex w-full flex-wrap items-center justify-between gap-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-base font-bold text-gray-900">在庫一覧</h1>
-        <span className="text-xs text-gray-400">{totalLabel}</span>
-        <form action="/inventory" method="get" className="flex items-center">
-          {categoryId && <input type="hidden" name="categoryId" value={categoryId} />}
-          {locationId && <input type="hidden" name="locationId" value={locationId} />}
-          {statusId && <input type="hidden" name="statusId" value={statusId} />}
-          <input
-            type="text"
-            name="q"
-            defaultValue={q}
-            placeholder="物品名 / SKU"
-            className="w-48 border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
-          />
-        </form>
-        <Link
-          href={advancedHref}
-          className={`border px-2 py-1 text-[12px] ${advancedOpen ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
-        >
-          詳細検索
-        </Link>
-      </div>
-      <div className="flex items-center gap-2">
-        {canEdit ? (
-          <Link href="/inventory/new" className="bg-gray-900 px-3 py-1.5 text-[13px] font-bold text-white hover:bg-gray-800">
-            + 新規登録
+      <div className="flex items-center gap-4">
+        {/* 1. ページタイトル — 件数は同じ強さにせず、subtleなbadge。 */}
+        <div className="flex items-baseline gap-2">
+          <h1 className="text-lg font-bold tracking-tight text-gray-900">在庫一覧</h1>
+          <span className="border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[11px] font-medium text-gray-500">{totalLabel}</span>
+        </div>
+
+        <div className="h-6 w-px bg-gray-200" aria-hidden />
+
+        {/* 2. 商品検索 — アイコン+input+詳細検索を1つの検索ツールとして
+            まとめる。検索対象・ロジックは既存のまま(name/skuのcontains)、
+            文言のみ利用者目線に変更。 */}
+        <div className="flex items-center gap-1.5">
+          <form action="/inventory" method="get" onSubmit={handleSearchSubmit} className="flex items-center border border-gray-300 bg-white focus-within:border-gray-500 focus-within:ring-1 focus-within:ring-gray-300">
+            {categoryIds.length > 0 && <input type="hidden" name="categoryIds" value={categoryIds.join(",")} />}
+            {locationId && <input type="hidden" name="locationId" value={locationId} />}
+            {statusId && <input type="hidden" name="statusId" value={statusId} />}
+            <svg viewBox="0 0 16 16" aria-hidden className="ml-1.5 h-3.5 w-3.5 shrink-0 text-gray-400">
+              <path
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                d="M11 11 L14.5 14.5 M12 7 A5 5 0 1 1 2 7 A5 5 0 0 1 12 7 Z"
+              />
+            </svg>
+            <label className="sr-only" htmlFor="inventory-search-q">
+              商品検索
+            </label>
+            <input
+              id="inventory-search-q"
+              type="text"
+              name="q"
+              defaultValue={q}
+              placeholder="商品名・SKUで検索"
+              className="w-48 border-none px-1.5 py-1 text-[13px] outline-none placeholder:text-gray-400"
+            />
+          </form>
+          <Link
+            href={advancedHref}
+            onClick={(e) => handleGuardedLinkClick(e, advancedHref)}
+            className={`border px-2 py-1 text-[12px] ${advancedOpen ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
+          >
+            詳細検索
           </Link>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        {/* 3. 主要操作 — 検索グループとは間隔で分ける。 */}
+        {canEdit ? (
+          <>
+            <Link
+              href="/inventory/new"
+              onClick={(e) => handleGuardedLinkClick(e, "/inventory/new")}
+              className="bg-gray-900 px-3 py-1.5 text-[13px] font-bold text-white hover:bg-gray-800"
+            >
+              + 新規登録
+            </Link>
+            <DirectEditControls />
+          </>
         ) : null}
-        <button
-          type="button"
-          disabled
-          title="次のPhaseで実装予定"
-          className="border border-gray-200 px-2 py-1.5 text-[12px] text-gray-300"
-        >
-          直接編集
-        </button>
         <button
           type="button"
           disabled
