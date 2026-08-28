@@ -34,9 +34,24 @@ interface DuplicateSource extends InventoryExtendedFields {
   damageImages: InventoryImageRecord[];
 }
 
-/** duplicateFrom's saved images (isPrimary already resolved server-side, see new/page.tsx) → this session's editable slot list. Shared by both the normal and damage seeding below. */
+/**
+ * duplicateFrom's saved images (isPrimary already resolved server-side,
+ * see new/page.tsx) → this session's editable slot list. Shared by both
+ * the normal and damage seeding below. `sourceSystem`/`sourceUrl` are
+ * deliberately forced to null here — even if the source image was ZAICO-
+ * imported, a duplicated record is a brand-new, non-ZAICO-managed
+ * Inventory (it has no sourceInventoryId of its own), so its copied image
+ * must not carry a ZAICO tag the sync engine would try to match against.
+ */
 function slotsFromImages(images: InventoryImageRecord[]): ImageEditorSlot[] {
-  return images.map((img) => ({ id: crypto.randomUUID(), kind: "copy" as const, sourceStorageKey: img.storageKey, isPrimary: img.isPrimary }));
+  return images.map((img) => ({
+    id: crypto.randomUUID(),
+    kind: "copy" as const,
+    sourceStorageKey: img.storageKey,
+    isPrimary: img.isPrimary,
+    sourceSystem: null,
+    sourceUrl: null,
+  }));
 }
 
 /**
@@ -53,8 +68,24 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
   return slots.map((slot, idx) => {
     const isPrimary = type === "NORMAL" && slot.isPrimary;
     return slot.kind === "copy"
-      ? { kind: "copy", sourceStorageKey: slot.sourceStorageKey, sortOrder: idx, type, isPrimary }
-      : { kind: "uploaded", storageKey: slot.storageKey as string, sortOrder: idx, type, isPrimary };
+      ? {
+          kind: "copy",
+          sourceStorageKey: slot.sourceStorageKey,
+          sortOrder: idx,
+          type,
+          isPrimary,
+          sourceSystem: slot.sourceSystem,
+          sourceUrl: slot.sourceUrl,
+        }
+      : {
+          kind: "uploaded",
+          storageKey: slot.storageKey as string,
+          sortOrder: idx,
+          type,
+          isPrimary,
+          sourceSystem: slot.sourceSystem,
+          sourceUrl: slot.sourceUrl,
+        };
   });
 }
 

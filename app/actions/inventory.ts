@@ -29,10 +29,34 @@ import type { InventoryImageRecord, InventoryImageType } from "@/lib/inventory/i
  * as two separate ImageEditor instances/lists and flattens them into one
  * array with these tagged on right before calling createInventory/
  * updateInventory; see those forms' submit handlers.
+ *
+ * `sourceSystem`/`sourceUrl` (ZAICO sync) ride along too, carried straight
+ * through from the ImageEditorSlot the client built — see
+ * ImageEditor.tsx's ImageEditorSlot comment and EditInventoryForm/
+ * NewInventoryForm's slotsToImageInputs for who sets these to non-null
+ * (only an untouched "existing" ZAICO-imported slot on an edit) versus
+ * always null ("new"/"copy" — a freshly picked file or a duplicated
+ * record are never ZAICO's).
  */
 export type ImageSlotInput =
-  | { kind: "uploaded"; storageKey: string; sortOrder: number; type: InventoryImageType; isPrimary: boolean }
-  | { kind: "copy"; sourceStorageKey: string; sortOrder: number; type: InventoryImageType; isPrimary: boolean };
+  | {
+      kind: "uploaded";
+      storageKey: string;
+      sortOrder: number;
+      type: InventoryImageType;
+      isPrimary: boolean;
+      sourceSystem: string | null;
+      sourceUrl: string | null;
+    }
+  | {
+      kind: "copy";
+      sourceStorageKey: string;
+      sortOrder: number;
+      type: InventoryImageType;
+      isPrimary: boolean;
+      sourceSystem: string | null;
+      sourceUrl: string | null;
+    };
 
 /**
  * Resolves every image slot to its final storageKey, copying "copy" slots
@@ -50,12 +74,26 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
   try {
     for (const img of images) {
       if (img.kind === "uploaded") {
-        resolved.push({ storageKey: img.storageKey, sortOrder: img.sortOrder, type: img.type, isPrimary: img.isPrimary });
+        resolved.push({
+          storageKey: img.storageKey,
+          sortOrder: img.sortOrder,
+          type: img.type,
+          isPrimary: img.isPrimary,
+          sourceSystem: img.sourceSystem,
+          sourceUrl: img.sourceUrl,
+        });
         continue;
       }
       const newKey = await copyInventoryImage(img.sourceStorageKey);
       copiedKeys.push(newKey);
-      resolved.push({ storageKey: newKey, sortOrder: img.sortOrder, type: img.type, isPrimary: img.isPrimary });
+      resolved.push({
+        storageKey: newKey,
+        sortOrder: img.sortOrder,
+        type: img.type,
+        isPrimary: img.isPrimary,
+        sourceSystem: img.sourceSystem,
+        sourceUrl: img.sourceUrl,
+      });
     }
     return resolved;
   } catch (err) {

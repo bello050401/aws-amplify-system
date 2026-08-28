@@ -165,6 +165,35 @@ export async function deleteMasterEntry(model: MasterModelName, id: string): Pro
   }
 }
 
+/**
+ * Sync-oriented upsert (ZAICO category/location sync — implementation
+ * instructions §8/§9): returns the id of an existing entry matching
+ * `name` (by the same normalizeMasterName comparison createMasterEntry
+ * uses, active or inactive), or creates a new one and returns its id.
+ * Unlike createMasterEntry, an existing match is the SUCCESS path here,
+ * not an error — a sync must never fail an item just because ZAICO's
+ * category/place already exists in BELLO.
+ */
+export async function findOrCreateMasterEntryByName(model: MasterModelName, name: string): Promise<{ id: string; created: boolean }> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("名称が空です。");
+  const existing = await listAllMasterEntries(model);
+  const normalized = normalizeMasterName(trimmed);
+  const match = existing.find((e) => normalizeMasterName(e.name) === normalized);
+  if (match) return { id: match.id, created: false };
+
+  const nextSortOrder = existing.length === 0 ? 0 : Math.max(...existing.map((e) => e.sortOrder)) + 1;
+  const { data, errors } =
+    model === "Category"
+      ? await serverDataClient.models.Category.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
+      : await serverDataClient.models.Location.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
+  if (errors || !data) {
+    console.error(`[findOrCreateMasterEntryByName] ${model} create failed:`, errors);
+    throw new Error(`${model === "Category" ? "カテゴリ" : "保管場所"}の作成に失敗しました: ${JSON.stringify(errors)}`);
+  }
+  return { id: data.id, created: true };
+}
+
 export interface BulkDeleteResult {
   /** ids that were unused and got physically deleted. */
   deletedIds: string[];

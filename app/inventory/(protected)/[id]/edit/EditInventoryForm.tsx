@@ -24,9 +24,25 @@ interface EditInventoryFormProps {
   customFieldDefs: CustomFieldDefinitionRow[];
 }
 
-/** item.images (both types mixed, as stored) → this session's editable "existing" slot list for one group. Mirrors NewInventoryForm's slotsFromImages, but "existing" kind (nothing to copy — this record already owns these S3 objects) rather than "copy". */
+/**
+ * item.images (both types mixed, as stored) → this session's editable
+ * "existing" slot list for one group. Mirrors NewInventoryForm's
+ * slotsFromImages, but "existing" kind (nothing to copy — this record
+ * already owns these S3 objects) rather than "copy". `sourceSystem`/
+ * `sourceUrl` are carried straight through from the stored record — an
+ * untouched ZAICO-imported image keeps its tag across a plain
+ * edit-and-save, which is what lets the next ZAICO sync still recognize
+ * it as "its" image (see lib/inventory/zaicoSync.ts).
+ */
 function slotsFromExistingImages(images: InventoryImageRecord[]): ImageEditorSlot[] {
-  return images.map((img) => ({ id: crypto.randomUUID(), kind: "existing" as const, storageKey: img.storageKey, isPrimary: img.isPrimary }));
+  return images.map((img) => ({
+    id: crypto.randomUUID(),
+    kind: "existing" as const,
+    storageKey: img.storageKey,
+    isPrimary: img.isPrimary,
+    sourceSystem: img.sourceSystem,
+    sourceUrl: img.sourceUrl,
+  }));
 }
 
 /** Same flattening NewInventoryForm uses at submit time — see that file's identical function for the full comment. */
@@ -34,8 +50,24 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
   return slots.map((slot, idx) => {
     const isPrimary = type === "NORMAL" && slot.isPrimary;
     return slot.kind === "copy"
-      ? { kind: "copy", sourceStorageKey: slot.sourceStorageKey, sortOrder: idx, type, isPrimary }
-      : { kind: "uploaded", storageKey: slot.storageKey as string, sortOrder: idx, type, isPrimary };
+      ? {
+          kind: "copy",
+          sourceStorageKey: slot.sourceStorageKey,
+          sortOrder: idx,
+          type,
+          isPrimary,
+          sourceSystem: slot.sourceSystem,
+          sourceUrl: slot.sourceUrl,
+        }
+      : {
+          kind: "uploaded",
+          storageKey: slot.storageKey as string,
+          sortOrder: idx,
+          type,
+          isPrimary,
+          sourceSystem: slot.sourceSystem,
+          sourceUrl: slot.sourceUrl,
+        };
   });
 }
 

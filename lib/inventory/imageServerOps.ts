@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { copy, remove } from "aws-amplify/storage/server";
+import { copy, remove, uploadData } from "aws-amplify/storage/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 
 /**
@@ -68,6 +68,42 @@ export async function copyInventoryImage(sourcePath: string): Promise<string> {
     throw new Error(
       `画像の複製に失敗しました(元画像: ${sourcePath})。ファイル名に日本語や特殊文字、空白が含まれる古い画像はコピーできない場合があります。詳細画面で該当の画像を一度削除し、再度アップロードしてから複製をお試しください。`,
     );
+  }
+}
+
+/**
+ * ZAICO image sync (implementation instructions §14-18): downloads
+ * ZAICO's `item_image.url` server-side and re-uploads it into BELLO's
+ * own S3 under the same safe `inventory/<uuid><ext>` key convention
+ * every other image uses — the ZAICO URL is NEVER stored as a hotlink
+ * anywhere the UI would render it directly (spec: ダウンロード後、
+ * BELLO自身のS3へ保存). The caller (lib/inventory/zaicoSync.ts) is
+ * responsible for deciding WHETHER to call this at all — it compares
+ * the new URL against the image's last-synced `sourceUrl` first and
+ * skips re-downloading when unchanged; this function itself always
+ * downloads unconditionally when called.
+ */
+export async function downloadAndImportInventoryImage(sourceUrl: string): Promise<string> {
+  let blob: Blob;
+  try {
+    const res = await fetch(sourceUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    blob = await res.blob();
+  } catch (err) {
+    console.error(`[downloadAndImportInventoryImage] fetch failed: "${sourceUrl}"`, err);
+    throw new Error(`ZAICOの画像の取得に失敗しました(URL: ${sourceUrl})。`);
+  }
+
+  const destinationPath = newInventoryImageKey(sourceUrl);
+  try {
+    await runWithAmplifyServerContext({
+      nextServerContext: { cookies },
+      operation: (contextSpec) => uploadData(contextSpec, { path: destinationPath, data: blob }).result,
+    });
+    return destinationPath;
+  } catch (err) {
+    console.error(`[downloadAndImportInventoryImage] upload failed: "${destinationPath}"`, err);
+    throw new Error(`ZAICOの画像のアップロードに失敗しました(URL: ${sourceUrl})。`);
   }
 }
 

@@ -193,6 +193,20 @@ const schema = a.schema({
     sortOrder: a.integer().required(),
     type: a.ref("ImageType"), // optional — absent on legacy rows, see comment above
     isPrimary: a.boolean(), // optional — meaningful only for a NORMAL image; see resolveTopImage
+    // ZAICO sync (added alongside Inventory.sourceSystem/sourceInventoryId
+    // below): which one NORMAL image, if any, is "the ZAICO image" — the
+    // sync must be able to tell that image apart from every other
+    // BELLO-added NORMAL/DAMAGE photo so it only ever replaces that one
+    // slot, never touching the rest (spec: 同期でBELLO追加画像を削除しな
+    // い). `sourceUrl` is ZAICO's `item_image.url` at the time this
+    // object was imported — compared against the current sync's URL so
+    // an unchanged ZAICO photo is never re-downloaded/re-uploaded (spec:
+    // 画像が変わっていなければ再アップロード不要). Both optional, so
+    // every image written before this Phase (sync or not) simply reads
+    // as sourceSystem: null — normalizeImageRecord treats that as "not
+    // ZAICO's", exactly the right default.
+    sourceSystem: a.string(),
+    sourceUrl: a.string(),
   }),
 
   // Category / Location masters below are intentionally flat (`parentId`

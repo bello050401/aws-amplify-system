@@ -17,14 +17,20 @@ export interface InventoryImageRecord {
   sortOrder: number;
   type: InventoryImageType;
   isPrimary: boolean;
+  /** "ZAICO" for a photo the sync imported; null for anything BELLO added itself. The one thing the ZAICO sync uses to find "its" image among possibly several NORMAL photos, so it only ever replaces that one — see lib/inventory/zaicoSync.ts. */
+  sourceSystem: string | null;
+  /** ZAICO's `item_image.url` at the time this object was imported — compared on the next sync to skip re-downloading an unchanged photo. Meaningless (and always null) for a non-ZAICO image. */
+  sourceUrl: string | null;
 }
 
-/** Shape as it actually comes back from Amplify Data — `type`/`isPrimary` absent (null/undefined) on any row written before Phase C.5. */
+/** Shape as it actually comes back from Amplify Data — `type`/`isPrimary`/`sourceSystem`/`sourceUrl` absent (null/undefined) on any row written before the field existed. */
 export interface RawInventoryImage {
   storageKey: string;
   sortOrder: number;
   type?: string | null;
   isPrimary?: boolean | null;
+  sourceSystem?: string | null;
+  sourceUrl?: string | null;
 }
 
 /** Legacy image (no `type`) → NORMAL; anything else → whatever it says. This is the one and only migration rule this Phase relies on — no data is ever rewritten to add it. */
@@ -34,6 +40,8 @@ export function normalizeImageRecord(img: RawInventoryImage): InventoryImageReco
     sortOrder: img.sortOrder,
     type: img.type === "DAMAGE" ? "DAMAGE" : "NORMAL",
     isPrimary: img.isPrimary === true,
+    sourceSystem: img.sourceSystem ?? null,
+    sourceUrl: img.sourceUrl ?? null,
   };
 }
 

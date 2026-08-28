@@ -23,6 +23,12 @@ const CUSTOM_FIELD_SEED: { fieldKey: string; label: string; fieldType: "TEXT" | 
   { fieldKey: "seatDimensions", label: "座面寸法", fieldType: "TEXT" },
   { fieldKey: "packageSize", label: "梱包サイズ", fieldType: "TEXT" },
   { fieldKey: "usedGoodsFeature", label: "古物の特徴", fieldType: "TEXTAREA" },
+  // ZAICO sync (implementation instructions §9): "●売却の優先度" has no
+  // existing BELLO field whose meaning matches it — see
+  // lib/inventory/zaicoMapping.ts's ZAICO_ATTRIBUTE_MAP comment for why
+  // this, rather than adminMemo or a new Inventory column, was judged
+  // the most faithful of the options offered.
+  { fieldKey: "salePriority", label: "売却の優先度", fieldType: "TEXT" },
 ];
 
 export async function seedCustomFieldDefinitions(): Promise<void> {

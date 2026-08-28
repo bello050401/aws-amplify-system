@@ -46,10 +46,33 @@ import { useInventoryImageUrl } from "./useInventoryImageUrl";
  * can compute anyUploading/anyError across both lists for its own submit
  * gating.
  */
+// `sourceSystem`/`sourceUrl` (ZAICO sync) ride along on every slot, not
+// just "existing" — a uniform shape means resolveTopSlot and the other
+// shared helpers below never need to know which kind they're looking at
+// to read these. Only "existing" (an image already on the record being
+// edited) ever has non-null values in practice: a freshly picked file
+// ("new") is never ZAICO's by construction, and a duplicated record
+// ("copy") is a brand-new, non-ZAICO-managed Inventory — see
+// NewInventoryForm's slotsFromImages for why that one deliberately drops
+// the tag rather than carrying it over. Preserving these through a plain
+// edit-and-save (an "existing" slot the user never touched) is what
+// keeps the ZAICO sync able to find "its" image on the next sync instead
+// of mistaking it for a BELLO photo and importing a duplicate — see
+// app/actions/inventory.ts's resolveImages.
 export type ImageEditorSlot =
-  | { id: string; kind: "new"; localPreviewUrl: string; storageKey: string | null; uploading: boolean; error: string | null; isPrimary: boolean }
-  | { id: string; kind: "existing"; storageKey: string; isPrimary: boolean }
-  | { id: string; kind: "copy"; sourceStorageKey: string; isPrimary: boolean };
+  | {
+      id: string;
+      kind: "new";
+      localPreviewUrl: string;
+      storageKey: string | null;
+      uploading: boolean;
+      error: string | null;
+      isPrimary: boolean;
+      sourceSystem: string | null;
+      sourceUrl: string | null;
+    }
+  | { id: string; kind: "existing"; storageKey: string; isPrimary: boolean; sourceSystem: string | null; sourceUrl: string | null }
+  | { id: string; kind: "copy"; sourceStorageKey: string; isPrimary: boolean; sourceSystem: string | null; sourceUrl: string | null };
 
 export function createNewImageSlot(file: File): ImageEditorSlot {
   return {
@@ -60,6 +83,8 @@ export function createNewImageSlot(file: File): ImageEditorSlot {
     uploading: true,
     error: null,
     isPrimary: false,
+    sourceSystem: null,
+    sourceUrl: null,
   };
 }
 
