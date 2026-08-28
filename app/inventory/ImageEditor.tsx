@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { uploadData, remove } from "aws-amplify/storage";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
-import { InventoryThumbnail } from "./InventoryThumbnail";
+import { useInventoryImageUrl } from "./useInventoryImageUrl";
 
 /**
  * Shared image editor for both new-registration and edit (spec: editing
@@ -64,16 +65,48 @@ interface ImageEditorProps {
 // but breaks S3 *copy* — see lib/inventory/imageServerOps.ts's
 // copyInventoryImage for why. Keeping upload and copy on the same safe
 // key scheme means nothing uploaded from here on can ever hit that.
+// Sizing/layout is the only thing that changed in this pass — this
+// function (and every upload/remove/reorder/setMain function below it)
+// is untouched.
 function safeUploadPath(file: File): string {
   const match = /\.([a-zA-Z0-9]{1,8})$/.exec(file.name);
   const ext = match ? `.${match[1].toLowerCase()}` : "";
   return `inventory/${crypto.randomUUID()}${ext}`;
 }
 
+/**
+ * Renders one slot's image at whatever size/fit the caller asks for.
+ * Split out from InventoryThumbnail (rather than reused) because that
+ * component always crops to fill (`object-cover`) for the list table's
+ * fixed-size cells, while this editor wants `object-contain` — the
+ * furniture's actual proportions matter when checking condition/color,
+ * spec explicitly calls for preserving aspect ratio here.
+ */
+function EditorImagePreview({ slot, className, alt }: { slot: ImageEditorSlot; className: string; alt: string }) {
+  const { url, failed } = useInventoryImageUrl(slot.kind === "new" ? null : slotPreviewKey(slot));
+
+  if (slot.kind === "new") {
+    // eslint-disable-next-line @next/next/no-img-element -- local blob: object URL preview, not a remote asset next/image can optimize
+    return <img src={slot.localPreviewUrl} alt={alt} className={className} />;
+  }
+  if (failed || !url) {
+    return (
+      <div className={`${className} flex items-center justify-center bg-gray-50 text-[10px] text-gray-400`}>
+        {failed ? "No Image" : "読み込み中…"}
+      </div>
+    );
+  }
+  // eslint-disable-next-line @next/next/no-img-element -- S3 URL; see InventoryThumbnail's identical note.
+  return <img src={url} alt={alt} className={className} />;
+}
+
 export function ImageEditor({ slots, onChange }: ImageEditorProps) {
+  const [dragOver, setDragOver] = useState(false);
+
   async function handleFilesSelected(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
-    const files = Array.from(fileList);
+    const files = Array.from(fileList).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) return;
     const newSlots = files.map((file) => ({ file, slot: createNewImageSlot(file) }));
     onChange([...slots, ...newSlots.map((n) => n.slot)]);
 
@@ -135,28 +168,61 @@ export function ImageEditor({ slots, onChange }: ImageEditorProps) {
     onChange(next);
   }
 
+  const mainSlot = slots[0];
+
   return (
     <div>
       <ConfigureAmplifyClientSide />
       <label className="block text-[12px] text-gray-600">画像（複数選択可・先頭が代表画像）</label>
-      <input type="file" accept="image/*" multiple onChange={(e) => handleFilesSelected(e.target.files)} className="mt-1 text-[12px]" />
+
+      {/* Add area: click to browse, or drag files in. Still a plain
+          <input type="file"> underneath — drag/drop just calls the same
+          handleFilesSelected with the dropped FileList. */}
+      <label
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          handleFilesSelected(e.dataTransfer.files);
+        }}
+        className={`mt-1 flex cursor-pointer items-center justify-center border border-dashed px-4 py-3 text-[12px] ${
+          dragOver ? "border-gray-500 bg-gray-50 text-gray-700" : "border-gray-300 text-gray-500 hover:bg-gray-50"
+        }`}
+      >
+        クリックして画像を選択、またはドラッグ＆ドロップ
+        <input type="file" accept="image/*" multiple onChange={(e) => handleFilesSelected(e.target.files)} className="hidden" />
+      </label>
+
       {slots.length > 0 && (
-        <ul className="mt-2 flex flex-wrap gap-2">
-          {slots.map((slot, index) => {
-            const previewKey = slotPreviewKey(slot);
-            return (
-              <li key={slot.id} className="w-24 border border-gray-200 p-1">
-                {slot.kind === "new" ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- local blob: object URL preview, not a remote asset next/image can optimize
-                  <img src={slot.localPreviewUrl} alt="" className="h-20 w-full object-cover" />
-                ) : (
-                  <InventoryThumbnail storageKey={previewKey} alt="" size="large" />
-                )}
+        <>
+          {/* Main preview — ~3x the old single-size thumbnail (spec):
+              width tracks the form's own layout (never wider than its
+              container) and is capped at max-w-sm so it can't blow out a
+              wide viewport either way; height is fixed so mixed
+              portrait/landscape photos don't jump the layout around as
+              the main slot changes. object-contain keeps the furniture's
+              real proportions intact rather than cropping to fill. */}
+          <div className="mt-3 w-full max-w-sm">
+            <EditorImagePreview slot={mainSlot} alt="メイン画像" className="h-64 w-full border border-gray-200 bg-gray-50 object-contain" />
+            <p className="mt-1 text-[11px] font-bold text-gray-700">メイン画像</p>
+          </div>
+
+          {/* Thumbnail strip — every slot including the main one
+              (highlighted), each still a full unit with its own
+              reorder/set-main/delete controls, same as before. */}
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {slots.map((slot, index) => (
+              <li key={slot.id} className={`w-32 border p-1 ${index === 0 ? "border-gray-900" : "border-gray-200"}`}>
+                <EditorImagePreview slot={slot} alt="" className="h-24 w-full bg-gray-50 object-cover" />
                 {index === 0 && <p className="mt-0.5 text-center text-[10px] font-bold text-gray-700">メイン</p>}
                 {slot.kind === "new" && slot.uploading && <p className="text-center text-[10px] text-gray-400">アップロード中…</p>}
                 {slot.kind === "new" && slot.error && <p className="text-center text-[10px] text-red-600">{slot.error}</p>}
                 {slot.kind === "copy" && <p className="text-center text-[10px] text-gray-400">複製元から引継ぎ</p>}
-                <div className="mt-1 flex justify-between text-[10px]">
+                <div className="mt-1 flex justify-between text-[11px]">
                   <button type="button" onClick={() => moveSlot(slot.id, -1)} disabled={index === 0} className="disabled:text-gray-200">
                     ↑
                   </button>
@@ -173,9 +239,9 @@ export function ImageEditor({ slots, onChange }: ImageEditorProps) {
                   </button>
                 </div>
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );

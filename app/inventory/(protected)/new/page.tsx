@@ -19,12 +19,17 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
     redirect("/inventory");
   }
 
-  const [categories, locations, statuses, customFieldDefs, duplicateSource] = await Promise.all([
-    listCategories(),
-    listLocations(),
+  const duplicateSource = searchParams.duplicateFrom ? await getInventoryDetail(searchParams.duplicateFrom) : null;
+
+  // Pass the duplicate source's categoryId/locationId through so a
+  // duplicate of a record whose master has since been deactivated still
+  // prefills correctly instead of silently dropping to 未選択 — same
+  // reasoning as the edit page (see listCategories'/listLocations' comment).
+  const [categories, locations, statuses, customFieldDefs] = await Promise.all([
+    listCategories(duplicateSource?.categoryId),
+    listLocations(duplicateSource?.locationId),
     listStatuses(),
     listCustomFieldDefinitions(),
-    searchParams.duplicateFrom ? getInventoryDetail(searchParams.duplicateFrom) : Promise.resolve(null),
   ]);
 
   // A missing/deleted source (bad link, or it was deleted between

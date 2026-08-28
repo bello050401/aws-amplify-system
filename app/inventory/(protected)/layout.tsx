@@ -27,7 +27,7 @@ export default async function ProtectedInventoryLayout({ children }: { children:
 
   return (
     <div className="flex h-screen bg-white text-gray-900">
-      <InventoryNavRail current="inventory" />
+      <InventoryNavRail />
       <div className="flex min-w-0 flex-1 flex-col">
         <InventoryTopBar role={status.role} />
         <div className="min-h-0 flex-1 overflow-hidden">{children}</div>

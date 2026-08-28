@@ -1,24 +1,35 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 /**
  * Thin fixed icon rail (spec §18) — the left-most of the three layers
- * (rail → filter sidebar → main area, spec §17). Only 在庫一覧 is wired
- * up so far; ツール・設定 stay as placeholders for genuinely near-term
- * BELLO work (e.g. master-data management). 入庫/出庫/棚卸/受注管理/
- * 発注管理 were deliberately removed rather than kept as placeholders —
- * BELLO doesn't use them, and this system is meant to stay a focused
- * "登録する→探す→見る→編集する" tool, not grow ERP/WMS-shaped scaffolding
- * nobody's asked for. Re-adding any of them later is a one-line change
- * here, not a structural one. A disabled item has no href and a title
- * tooltip explaining why, rather than a dead link.
+ * (rail → filter sidebar → main area, spec §17). 在庫一覧 and 設定 are
+ * wired up; ツール stays a placeholder for genuinely near-term BELLO work.
+ * 入庫/出庫/棚卸/受注管理/発注管理 were deliberately removed rather than
+ * kept as placeholders — BELLO doesn't use them, and this system is meant
+ * to stay a focused "登録する→探す→見る→編集する" tool, not grow
+ * ERP/WMS-shaped scaffolding nobody's asked for. Re-adding any of them
+ * later is a one-line change here, not a structural one. A disabled item
+ * has no href and a title tooltip explaining why, rather than a dead link.
+ *
+ * A Client Component (not the plain Server Component it used to be)
+ * because "which item is current" now needs the actual route
+ * (usePathname) — /inventory/settings is a sibling of /inventory itself
+ * under the same shared (protected) layout, so a single hardcoded
+ * `current="inventory"` passed down from that layout could never tell
+ * the two apart.
  */
 const NAV_ITEMS = [
   { key: "inventory", label: "在庫一覧", href: "/inventory", enabled: true },
   { key: "tools", label: "ツール", href: null, enabled: false },
-  { key: "settings", label: "設定", href: null, enabled: false },
+  { key: "settings", label: "設定", href: "/inventory/settings", enabled: true },
 ] as const;
 
-export function InventoryNavRail({ current = "inventory" }: { current?: string }) {
+export function InventoryNavRail() {
+  const pathname = usePathname();
+
   return (
     <nav className="flex w-16 shrink-0 flex-col border-r border-gray-200 bg-white">
       <div className="flex h-12 items-center justify-center border-b border-gray-200">
@@ -26,7 +37,12 @@ export function InventoryNavRail({ current = "inventory" }: { current?: string }
       </div>
       <ul className="flex flex-1 flex-col py-1">
         {NAV_ITEMS.map((item) => {
-          const isCurrent = item.key === current;
+          // /inventory itself must not read as "current" for every
+          // /inventory/* route (it would otherwise match /inventory/settings
+          // too, via a naive prefix check) — it's current only on an exact
+          // match; 設定 is current for /inventory/settings and anything
+          // nested under it.
+          const isCurrent = item.href != null && (item.href === "/inventory" ? pathname === "/inventory" : pathname?.startsWith(item.href));
           const className = [
             "flex flex-col items-center gap-0.5 px-1 py-2.5 text-center text-[10px] leading-tight",
             isCurrent

@@ -23,15 +23,18 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
   const role = await getInventoryRole();
   if (!role) return null;
 
-  const [item, categories, locations, statuses, fieldDefs] = await Promise.all([
-    getInventoryDetail(params.id),
-    listCategories(),
-    listLocations(),
+  const item = await getInventoryDetail(params.id);
+  if (!item) notFound();
+
+  // Same reasoning as the edit page: a deactivated category/location must
+  // still resolve to its name here rather than falling back to "-", since
+  // this record still legitimately references it.
+  const [categories, locations, statuses, fieldDefs] = await Promise.all([
+    listCategories(item.categoryId),
+    listLocations(item.locationId),
     listStatuses(),
     listCustomFieldDefinitions(),
   ]);
-
-  if (!item) notFound();
 
   const category = item.categoryId ? categories.find((c) => c.id === item.categoryId) : undefined;
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;

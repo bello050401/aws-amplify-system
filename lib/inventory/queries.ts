@@ -144,25 +144,55 @@ export interface MasterOption {
   sortOrder: number;
 }
 
-/** Master tables are small (admin-managed lists), so a plain full list — sorted client-side by sortOrder then name — is the natural fit here, unlike the cursor-paginated Inventory list above. */
-export async function listCategories(): Promise<MasterOption[]> {
+/**
+ * Master tables are small (admin-managed lists), so a plain full list —
+ * sorted client-side by sortOrder then name — is the natural fit here,
+ * unlike the cursor-paginated Inventory list above.
+ *
+ * `includeInactiveId`: a record that has since been deactivated in
+ * /inventory/settings must not vanish from a form that's currently
+ * displaying it — an Inventory row that already references it still
+ * needs to show/keep that value (spec: 無効化しても既存参照は壊さない).
+ * Only the one id already on the record being viewed/edited is ever
+ * added this way, never the full inactive set — this stays a small,
+ * targeted lookup, not a second full table scan. It's suffixed
+ * "（無効）" so it reads as a deactivated option, not an active choice
+ * a user could newly pick some other way.
+ */
+export async function listCategories(includeInactiveId?: string | null): Promise<MasterOption[]> {
   const { data } = await serverDataClient.models.Category.list({
     filter: { isActive: { eq: true } },
     ...inventoryAuthMode,
   });
-  return data
+  const options = data
     .map((c) => ({ id: c.id, name: c.name, parentId: c.parentId ?? null, sortOrder: c.sortOrder ?? 0 }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
+
+  if (includeInactiveId && !options.some((o) => o.id === includeInactiveId)) {
+    const { data: inactive } = await serverDataClient.models.Category.get({ id: includeInactiveId }, inventoryAuthMode);
+    if (inactive) {
+      options.push({ id: inactive.id, name: `${inactive.name}（無効）`, parentId: inactive.parentId ?? null, sortOrder: inactive.sortOrder ?? 0 });
+    }
+  }
+  return options;
 }
 
-export async function listLocations(): Promise<MasterOption[]> {
+export async function listLocations(includeInactiveId?: string | null): Promise<MasterOption[]> {
   const { data } = await serverDataClient.models.Location.list({
     filter: { isActive: { eq: true } },
     ...inventoryAuthMode,
   });
-  return data
+  const options = data
     .map((l) => ({ id: l.id, name: l.name, parentId: l.parentId ?? null, sortOrder: l.sortOrder ?? 0 }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
+
+  if (includeInactiveId && !options.some((o) => o.id === includeInactiveId)) {
+    const { data: inactive } = await serverDataClient.models.Location.get({ id: includeInactiveId }, inventoryAuthMode);
+    if (inactive) {
+      options.push({ id: inactive.id, name: `${inactive.name}（無効）`, parentId: inactive.parentId ?? null, sortOrder: inactive.sortOrder ?? 0 });
+    }
+  }
+  return options;
 }
 
 export interface StatusOption {
