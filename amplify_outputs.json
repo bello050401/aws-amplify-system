@@ -1,0 +1,4 @@
+{
+  "__PLACEHOLDER__": true,
+  "__NOTE__": "このファイルはAWSに未デプロイの状態のプレースホルダーです。ユーザー本人のAWS認証情報で `npx ampx sandbox` (開発用) または `npx ampx pipeline-deploy` (本番用) を実行すると、実際のCognito/AppSync/S3のエンドポイント情報でこのファイルが自動的に上書きされ、アプリは自動的に実AWSバックエンドを使用するようになります(lib/amplify/config.ts)。手動で編集しないでください。"
+}

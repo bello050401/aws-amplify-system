@@ -1,0 +1,18 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+.env
+.env*.local
+npm-debug.log*
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+
+# Amplify Gen2 local sandbox artifacts (generated per-developer)
+amplify/.amplify/
+# NOTE: amplify_outputs.json is intentionally NOT ignored. A placeholder
+# version (with "__PLACEHOLDER__": true) is committed so `next build` works
+# before any real AWS deploy. Running `npx ampx sandbox` / pipeline-deploy
+# overwrites it with real (non-secret) endpoint info - see lib/amplify/config.ts.

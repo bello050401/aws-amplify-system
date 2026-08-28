@@ -1,0 +1,17 @@
+{
+  "name": "BELLO 在庫管理",
+  "short_name": "BELLO在庫",
+  "description": "BELLO在庫管理システム - 倉庫・撮影現場・ショールームでの在庫検索/編集/入出庫/棚卸をiPhoneで。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#1f2c4d",
+  "lang": "ja",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

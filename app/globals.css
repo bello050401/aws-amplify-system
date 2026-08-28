@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  padding: 0;
+  margin: 0;
+  background: #f6f7fb;
+  color: #1f2c4d;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+input, textarea, select, button {
+  font-family: inherit;
+}
+
+/* iOS Safe Area対応 (指示書 §3, §4-2, §7-5) */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.pb-safe-nav {
+  /* 下部固定ナビ(高さ64px)+ Home Indicator分の余白を本文に確保 */
+  padding-bottom: calc(64px + env(safe-area-inset-bottom));
+}
+
+/* タップ領域44px以上を確保する共通クラス (指示書 §22) */
+.tap-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* スクロールバーを目立たせない(現場での視認性優先) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(31, 44, 77, 0.2);
+  border-radius: 4px;
+}
+
+@keyframes bello-spin {
+  to { transform: rotate(360deg); }
+}
+.bello-spinner {
+  animation: bello-spin 0.8s linear infinite;
+}
