@@ -75,6 +75,18 @@ export interface ExtendedFieldDef {
   /** Only meaningful for type "select". Kept short and explicit on purpose — spec explicitly says not to invent option lists for fields whose real choices aren't decided yet (mountType, transactionType, identityVerificationMethod, counterpartyOccupation all stay plain text for that reason, ready to become a `select` later with no data migration). */
   options?: { value: string; label: string }[];
   fullWidth?: boolean;
+  /**
+   * Detail-page-only display suffix (e.g. "円" for a money field) —
+   * never applied to the form inputs (the label already says "（送料
+   *別）"/"円" where relevant via its placeholder), only when the detail
+   * page formats a saved value for reading. Deliberately only used on
+   * `type: "number"` fields in this registry — a `type: "text"` field
+   * like width/depth (spec: 現時点では文字列入力) might already contain
+   * its own unit from whatever the user typed, so blindly appending one
+   * here could double it up ("120cm cm"); those stay unit-less and rely
+   * on their label ("幅（cm）") for context instead.
+   */
+  unit?: string;
 }
 
 export interface ExtendedSectionDef {
@@ -85,12 +97,27 @@ export interface ExtendedSectionDef {
 
 const UNSET_OPTION = { value: "", label: "未設定" };
 
+/**
+ * purchasePrice/salePrice are pre-existing core Inventory fields (not
+ * part of InventoryExtendedFields — they have their own dedicated,
+ * always-number-typed handling in createInventory/updateInventory), but
+ * visually belong inside these two sections (spec: 購入価格 is the
+ * 仕入・古物台帳's own line item, 販売価格 belongs with 販売情報,
+ * distinct from plannedSalePrice/「販売予定価格」). Naming the section
+ * ids here — rather than the string literals "sales"/"usedGoodsLedger"
+ * repeated in NewInventoryForm.tsx, EditInventoryForm.tsx, and the
+ * detail page — is what keeps those three from drifting apart on where
+ * each one is injected.
+ */
+export const SALES_SECTION_ID = "sales";
+export const USED_GOODS_LEDGER_SECTION_ID = "usedGoodsLedger";
+
 export const INVENTORY_EXTENDED_SECTIONS: ExtendedSectionDef[] = [
   {
-    id: "sales",
+    id: SALES_SECTION_ID,
     title: "販売情報",
     fields: [
-      { key: "plannedSalePrice", label: "販売予定価格（送料別）", type: "number" },
+      { key: "plannedSalePrice", label: "販売予定価格（送料別）", type: "number", unit: "円" },
       { key: "firstMarkdownPrice", label: "1回目値下げ金額（30日）", type: "text" },
       { key: "secondMarkdownPrice", label: "2回目値下げ金額（60日）", type: "text" },
       { key: "thirdMarkdownPrice", label: "3回目値下げ金額（90日）", type: "text" },
@@ -98,7 +125,7 @@ export const INVENTORY_EXTENDED_SECTIONS: ExtendedSectionDef[] = [
       { key: "saleEndDate", label: "販売終了日", type: "date" },
       { key: "market", label: "市場", type: "text" },
       { key: "externalProductId", label: "商品ID", type: "text" },
-      { key: "saleCommission", label: "販売手数料", type: "number" },
+      { key: "saleCommission", label: "販売手数料", type: "number", unit: "円" },
       { key: "listingNotes", label: "出品情報", type: "textarea", fullWidth: true },
     ],
   },
@@ -123,7 +150,7 @@ export const INVENTORY_EXTENDED_SECTIONS: ExtendedSectionDef[] = [
     ],
   },
   {
-    id: "usedGoodsLedger",
+    id: USED_GOODS_LEDGER_SECTION_ID,
     title: "仕入・古物台帳",
     fields: [
       { key: "usedGoodsItemType", label: "品目", type: "text" },
@@ -134,8 +161,8 @@ export const INVENTORY_EXTENDED_SECTIONS: ExtendedSectionDef[] = [
       { key: "counterpartyName", label: "相手氏名", type: "text" },
       { key: "counterpartyOccupation", label: "職業", type: "text" },
       { key: "counterpartyAddress", label: "住所", type: "text" },
-      { key: "shippingCost", label: "送料", type: "number" },
-      { key: "dailyPurchaseTotal", label: "その日の仕入れ合計金額（他商品含む）", type: "number" },
+      { key: "shippingCost", label: "送料", type: "number", unit: "円" },
+      { key: "dailyPurchaseTotal", label: "その日の仕入れ合計金額（他商品含む）", type: "number", unit: "円" },
     ],
   },
   {

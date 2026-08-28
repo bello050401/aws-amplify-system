@@ -6,7 +6,13 @@ import { updateInventory, type ImageSlotInput } from "@/app/actions/inventory";
 import { LabeledInput, LabeledSelect, CustomFieldInput } from "../../FormFields";
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../../ImageEditor";
 import { ExtendedFieldsSection } from "../../ExtendedFieldsSection";
-import { INVENTORY_EXTENDED_SECTIONS, extendedValuesFromRecord, parseExtendedValues } from "@/lib/inventory/extendedFields";
+import {
+  INVENTORY_EXTENDED_SECTIONS,
+  SALES_SECTION_ID,
+  USED_GOODS_LEDGER_SECTION_ID,
+  extendedValuesFromRecord,
+  parseExtendedValues,
+} from "@/lib/inventory/extendedFields";
 import { splitImagesByType, type InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import type { CustomFieldDefinitionRow, InventoryDetail, MasterOption, StatusOption } from "@/lib/inventory/queries";
 
@@ -201,8 +207,9 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
 
       {/* Phase C: 販売情報 / サイズ・商品仕様 / コンディション / 仕入・
           古物台帳 / 管理メモ — see NewInventoryForm's identical block for
-          why purchasePrice/salePrice are injected into 仕入・古物台帳
-          via `extra` rather than being part of the shared config. */}
+          why purchasePrice/salePrice are injected into their
+          spec-mandated sections via `extra` rather than being part of
+          the shared config. */}
       {INVENTORY_EXTENDED_SECTIONS.map((section) => (
         <ExtendedFieldsSection
           key={section.id}
@@ -210,11 +217,10 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
           values={extendedValues}
           onChange={handleExtendedFieldChange}
           extra={
-            section.id === "usedGoodsLedger" ? (
-              <>
-                <LabeledInput label="購入価格" type="number" value={purchasePrice} onChange={setPurchasePrice} placeholder="円" />
-                <LabeledInput label="販売価格（成約）" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
-              </>
+            section.id === SALES_SECTION_ID ? (
+              <LabeledInput label="販売価格（成約）" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
+            ) : section.id === USED_GOODS_LEDGER_SECTION_ID ? (
+              <LabeledInput label="購入価格" type="number" value={purchasePrice} onChange={setPurchasePrice} placeholder="円" />
             ) : undefined
           }
         />

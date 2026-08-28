@@ -6,7 +6,14 @@ import { createInventory, type ImageSlotInput } from "@/app/actions/inventory";
 import { LabeledInput, LabeledSelect, CustomFieldInput } from "../FormFields";
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../ImageEditor";
 import { ExtendedFieldsSection } from "../ExtendedFieldsSection";
-import { INVENTORY_EXTENDED_SECTIONS, extendedValuesFromRecord, parseExtendedValues, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
+import {
+  INVENTORY_EXTENDED_SECTIONS,
+  SALES_SECTION_ID,
+  USED_GOODS_LEDGER_SECTION_ID,
+  extendedValuesFromRecord,
+  parseExtendedValues,
+  type InventoryExtendedFields,
+} from "@/lib/inventory/extendedFields";
 import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import type { CustomFieldDefinitionRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 
@@ -255,12 +262,15 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
       {/* Phase C: 販売情報 / サイズ・商品仕様 / コンディション / 仕入・
           古物台帳 / 管理メモ, driven entirely by lib/inventory/
-          extendedFields.ts's shared config. 仕入単価(purchasePrice) and
-          販売価格(salePrice) — pre-existing fields with their own state
-          above — are injected into the 仕入・古物台帳 section via
-          `extra`, per spec: purchasePrice IS that ledger's「購入価格」,
-          not a duplicate field. See EditInventoryForm for the identical
-          layout. */}
+          extendedFields.ts's shared config. purchasePrice/salePrice —
+          pre-existing fields with their own state above — are injected
+          into their spec-mandated sections via `extra`: purchasePrice
+          into 仕入・古物台帳 (it IS that ledger's「購入価格」), salePrice
+          into 販売情報 (distinct from plannedSalePrice's「販売予定価
+          格」) — the same SALES_SECTION_ID/USED_GOODS_LEDGER_SECTION_ID
+          the detail page uses for the identical placement, so the two
+          can't drift apart on where each one shows up. See
+          EditInventoryForm for the identical layout. */}
       {INVENTORY_EXTENDED_SECTIONS.map((section) => (
         <ExtendedFieldsSection
           key={section.id}
@@ -268,11 +278,10 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
           values={extendedValues}
           onChange={handleExtendedFieldChange}
           extra={
-            section.id === "usedGoodsLedger" ? (
-              <>
-                <LabeledInput label="購入価格" type="number" value={purchasePrice} onChange={setPurchasePrice} placeholder="円" />
-                <LabeledInput label="販売価格（成約）" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
-              </>
+            section.id === SALES_SECTION_ID ? (
+              <LabeledInput label="販売価格（成約）" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
+            ) : section.id === USED_GOODS_LEDGER_SECTION_ID ? (
+              <LabeledInput label="購入価格" type="number" value={purchasePrice} onChange={setPurchasePrice} placeholder="円" />
             ) : undefined
           }
         />
