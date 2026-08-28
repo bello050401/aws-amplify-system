@@ -1,6 +1,6 @@
 "use client";
 
-import { INVENTORY_LIST_COLUMNS } from "@/lib/inventory/listColumns";
+import { INVENTORY_LIST_COLUMNS, defaultColumnWidths } from "@/lib/inventory/listColumns";
 import { useInventoryListColumns } from "../../useInventoryListColumns";
 
 /**
@@ -20,7 +20,7 @@ import { useInventoryListColumns } from "../../useInventoryListColumns";
  * idiom or a drag-and-drop library into the app for one settings list.
  */
 export function ListColumnSettings() {
-  const { visibility, order, setVisibility, setOrder, hydrated } = useInventoryListColumns();
+  const { visibility, order, setVisibility, setOrder, setWidths, hydrated } = useInventoryListColumns();
   const columnByKey = new Map(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c]));
   const orderedColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c));
 
@@ -40,6 +40,7 @@ export function ListColumnSettings() {
   function resetToDefaults() {
     setVisibility(Object.fromEntries(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c.defaultVisible])));
     setOrder(INVENTORY_LIST_COLUMNS.map((c) => c.key));
+    setWidths(defaultColumnWidths());
   }
 
   return (

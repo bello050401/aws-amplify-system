@@ -45,6 +45,18 @@ function readStored(): ColumnPreferences {
       merged.order = [...savedKnown, ...missing];
     }
 
+    // Widths (夜間開発指示書 §13) — 既存のv2形式にはこのキーが存在しな
+    // いブラウザがほとんどのはずで、その場合は単にdefaultColumnWidths()
+    // のままになる(visibilityと同じ後方互換の考え方)。0以下や非数値は
+    // 無視して既定値を維持する(壊れた/手編集されたlocalStorageで列が
+    // 潰れて操作不能になるのを防ぐ)。
+    if (parsed.widths && typeof parsed.widths === "object") {
+      for (const key of Object.keys(merged.widths)) {
+        const v = (parsed.widths as Record<string, unknown>)[key];
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) merged.widths[key] = v;
+      }
+    }
+
     return merged;
   } catch {
     return merged;
@@ -112,5 +124,29 @@ export function useInventoryListColumns() {
     [preferences],
   );
 
-  return { visibility: preferences.visibility, order: preferences.order, setVisibility, setOrder, hydrated };
+  const setWidths = useCallback(
+    (next: Record<string, number>) => {
+      persist({ ...preferences, widths: next });
+    },
+    [preferences],
+  );
+
+  /** 1列だけ幅を更新する — ドラッグ中に毎フレームpersist()の対象オブジェクト全体を組み直すのを避け、リサイズ操作用に用意した専用ヘルパー。 */
+  const setColumnWidth = useCallback(
+    (key: string, width: number) => {
+      persist({ ...preferences, widths: { ...preferences.widths, [key]: width } });
+    },
+    [preferences],
+  );
+
+  return {
+    visibility: preferences.visibility,
+    order: preferences.order,
+    widths: preferences.widths,
+    setVisibility,
+    setOrder,
+    setWidths,
+    setColumnWidth,
+    hydrated,
+  };
 }

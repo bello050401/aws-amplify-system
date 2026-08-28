@@ -20,6 +20,8 @@ export interface InventoryListColumnDef {
   key: string;
   label: string;
   defaultVisible: boolean;
+  /** 初期の列幅(px)。夜間開発指示書 §13: マウスドラッグでのリサイズに対応するための基準値 — InventoryTable.tsxのリサイズハンドルはこの値を下回れない(minWidth)。 */
+  defaultWidth: number;
 }
 
 /**
@@ -31,40 +33,43 @@ export interface InventoryListColumnDef {
  * can still turn on for themselves from /inventory/settings.
  */
 export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
-  { key: "image", label: "画像", defaultVisible: true },
-  { key: "status", label: "ステータス", defaultVisible: false },
-  { key: "sku", label: "在庫ID", defaultVisible: true },
-  { key: "name", label: "物品名", defaultVisible: true },
-  { key: "quantity", label: "数量", defaultVisible: true },
-  { key: "location", label: "保管場所", defaultVisible: true },
-  { key: "category", label: "カテゴリ", defaultVisible: true },
-  { key: "purchasePrice", label: "仕入原価", defaultVisible: false },
+  { key: "image", label: "画像", defaultVisible: true, defaultWidth: 106 },
+  { key: "status", label: "ステータス", defaultVisible: false, defaultWidth: 96 },
+  { key: "sku", label: "在庫ID", defaultVisible: true, defaultWidth: 128 },
+  { key: "name", label: "物品名", defaultVisible: true, defaultWidth: 240 },
+  { key: "quantity", label: "数量", defaultVisible: true, defaultWidth: 64 },
+  { key: "location", label: "保管場所", defaultVisible: true, defaultWidth: 112 },
+  { key: "category", label: "カテゴリ", defaultVisible: true, defaultWidth: 112 },
+  { key: "purchasePrice", label: "仕入原価", defaultVisible: false, defaultWidth: 96 },
   // Phase C added a real `plannedSalePrice` field distinct from
   // `salePrice` (the actual, post-sale price) — this column now shows
   // the former (spec §7/§8's "販売予定価格"); `salePrice` gets its own,
   // off-by-default column below rather than being repurposed, since it's
   // a different real value that existing records may already have set.
-  { key: "plannedSalePrice", label: "販売予定価格", defaultVisible: true },
-  { key: "salePrice", label: "販売価格（成約）", defaultVisible: false },
-  { key: "note", label: "備考", defaultVisible: false },
-  { key: "updatedAt", label: "更新日", defaultVisible: true },
+  { key: "plannedSalePrice", label: "販売予定価格", defaultVisible: true, defaultWidth: 100 },
+  { key: "salePrice", label: "販売価格（成約）", defaultVisible: false, defaultWidth: 100 },
+  { key: "note", label: "備考", defaultVisible: false, defaultWidth: 200 },
+  { key: "updatedAt", label: "更新日", defaultVisible: true, defaultWidth: 96 },
   // 統合改善指示書 §10で追加された列候補 — すべて既存のInventoryフィー
   // ルド(extendedFields.ts経由)をそのまま列として公開するだけで、
   // schema変更は伴わない。一覧を情報過多にしないため、既定は非表示。
-  { key: "barcode", label: "バーコード", defaultVisible: false },
-  { key: "saleCommission", label: "販売手数料", defaultVisible: false },
-  { key: "market", label: "市場", defaultVisible: false },
-  { key: "saleStartDate", label: "販売開始日", defaultVisible: false },
-  { key: "saleEndDate", label: "販売終了日", defaultVisible: false },
-  { key: "width", label: "幅", defaultVisible: false },
-  { key: "depth", label: "奥行", defaultVisible: false },
-  { key: "height", label: "高さ", defaultVisible: false },
-  { key: "conditionRating", label: "コンディション評価", defaultVisible: false },
-  { key: "damageNotes", label: "傷・汚れメモ", defaultVisible: false },
-  { key: "transactionDate", label: "取引年月日", defaultVisible: false },
-  { key: "transactionType", label: "取引区分", defaultVisible: false },
-  { key: "adminMemo", label: "管理メモ", defaultVisible: false },
+  { key: "barcode", label: "バーコード", defaultVisible: false, defaultWidth: 128 },
+  { key: "saleCommission", label: "販売手数料", defaultVisible: false, defaultWidth: 96 },
+  { key: "market", label: "市場", defaultVisible: false, defaultWidth: 96 },
+  { key: "saleStartDate", label: "販売開始日", defaultVisible: false, defaultWidth: 96 },
+  { key: "saleEndDate", label: "販売終了日", defaultVisible: false, defaultWidth: 96 },
+  { key: "width", label: "幅", defaultVisible: false, defaultWidth: 72 },
+  { key: "depth", label: "奥行", defaultVisible: false, defaultWidth: 72 },
+  { key: "height", label: "高さ", defaultVisible: false, defaultWidth: 72 },
+  { key: "conditionRating", label: "コンディション評価", defaultVisible: false, defaultWidth: 160 },
+  { key: "damageNotes", label: "傷・汚れメモ", defaultVisible: false, defaultWidth: 160 },
+  { key: "transactionDate", label: "取引年月日", defaultVisible: false, defaultWidth: 96 },
+  { key: "transactionType", label: "取引区分", defaultVisible: false, defaultWidth: 96 },
+  { key: "adminMemo", label: "管理メモ", defaultVisible: false, defaultWidth: 160 },
 ];
+
+/** リサイズ可能な列がここより小さくなることはない — テキストや操作可能領域が潰れて使い物にならなくなるのを防ぐ下限(spec §13: 適切なminWidthを設定)。 */
+export const MIN_COLUMN_WIDTH = 48;
 
 export function defaultColumnVisibility(): Record<string, boolean> {
   return Object.fromEntries(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c.defaultVisible]));
@@ -75,14 +80,21 @@ export function defaultColumnOrder(): string[] {
   return INVENTORY_LIST_COLUMNS.map((c) => c.key);
 }
 
+/** 夜間開発指示書 §13: 列幅(px)の初期値マップ。 */
+export function defaultColumnWidths(): Record<string, number> {
+  return Object.fromEntries(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c.defaultWidth]));
+}
+
 export interface ColumnPreferences {
   visibility: Record<string, boolean>;
   /** Every known column key, in display order. */
   order: string[];
+  /** 列ごとの表示幅(px) — 夜間開発指示書 §13。既存(v2)のlocalStorage値にはこのキー自体が存在しないため、読み込み時はdefaultColumnWidths()から始めて保存済みの値だけ上書きする(readStoredのvisibility/orderと同じ後方互換パターン) — ストレージキーのバージョンを上げる必要はない。 */
+  widths: Record<string, number>;
 }
 
 export function defaultColumnPreferences(): ColumnPreferences {
-  return { visibility: defaultColumnVisibility(), order: defaultColumnOrder() };
+  return { visibility: defaultColumnVisibility(), order: defaultColumnOrder(), widths: defaultColumnWidths() };
 }
 
 /**

@@ -1,8 +1,9 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
-import { INVENTORY_LIST_COLUMNS } from "@/lib/inventory/listColumns";
+import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH } from "@/lib/inventory/listColumns";
 import { isInlineEditableColumn, type InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
 import { useInventoryListColumns } from "../useInventoryListColumns";
 import { InventoryThumbnail } from "../InventoryThumbnail";
@@ -30,37 +31,14 @@ function formatAwsDate(value: string | null): string {
   return value ? value.replace(/-/g, "/") : "-";
 }
 
-const numCell = "px-2 py-1 text-right tabular-nums";
-const cell = "px-2 py-1";
+const numCell = "px-2 py-1 text-right tabular-nums overflow-hidden";
+const cell = "px-2 py-1 overflow-hidden";
 
-/** Header label + width for each optional column — kept next to the cell renderer below rather than folded into lib/inventory/listColumns.ts, since column width is a layout detail of this one table, not shared with the settings screen's toggle list. */
-const COLUMN_META: Record<string, { className: string; align?: "right" }> = {
-  image: { className: "w-[106px]" }, // fits the 90px-wide "list" thumbnail with a little breathing room either side
-  status: { className: "w-24" },
-  sku: { className: "w-32" },
-  name: { className: "min-w-[220px]" },
-  quantity: { className: "w-16", align: "right" },
-  location: { className: "w-28" },
-  category: { className: "w-28" },
-  purchasePrice: { className: "w-24", align: "right" },
-  plannedSalePrice: { className: "w-24", align: "right" },
-  salePrice: { className: "w-24", align: "right" },
-  note: { className: "min-w-[200px]" },
-  updatedAt: { className: "w-24" },
-  barcode: { className: "w-32" },
-  saleCommission: { className: "w-24", align: "right" },
-  market: { className: "w-24" },
-  saleStartDate: { className: "w-24" },
-  saleEndDate: { className: "w-24" },
-  width: { className: "w-16" },
-  depth: { className: "w-16" },
-  height: { className: "w-16" },
-  conditionRating: { className: "min-w-[160px]" },
-  damageNotes: { className: "min-w-[160px]" },
-  transactionDate: { className: "w-24" },
-  transactionType: { className: "w-24" },
-  adminMemo: { className: "min-w-[160px]" },
-};
+/** 右寄せ表示する列(数値系)。幅そのものはlib/inventory/listColumns.tsのdefaultWidth + ユーザーのドラッグ操作(useInventoryListColumns.widths)へ一本化した — 列幅の初期値・保存値を二重管理しない。 */
+const RIGHT_ALIGN_COLUMNS = new Set(["quantity", "purchasePrice", "plannedSalePrice", "salePrice", "saleCommission"]);
+
+/** チェックボックス列は固定幅でよい(spec §13)。 */
+const CHECKBOX_COLUMN_WIDTH = 32;
 
 function renderReadOnlyCell(
   key: string,
@@ -283,30 +261,105 @@ function renderEditableCell(
  * row.
  */
 export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById }: InventoryTableProps) {
-  const { visibility, order } = useInventoryListColumns();
+  const { visibility, order, widths, setColumnWidth } = useInventoryListColumns();
   const columnByKey = new Map(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c]));
   const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key]);
 
   const { enabled: directEditEnabled, getValue, setValue, isRowDirty } = useDirectEdit();
 
+  // ── 列幅ドラッグリサイズ(夜間開発指示書 §13) ──────────────────────
+  // draggingRef: ドラッグ中だけ意味を持つ値(どの列を・どこから・元の
+  // 幅は何pxだったか) — mousemoveのたびにReact stateへ積むとuseEffect
+  // の再購読(依存配列にdragState自体を積む形)が毎フレーム走ってしまう
+  // ため、refに逃がして実際に再レンダリングが必要な「今の見た目の幅」
+  // だけをliveWidth stateで持つ。mouseupで初めてuseInventoryListColumns
+  // (localStorage)へ確定保存する — 毎pxごとにJSON.stringifyされるのを
+  // 避けつつ、mousemoveでのリアルタイム表示は実現する。
+  const draggingRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
+  const [liveWidth, setLiveWidth] = useState<{ key: string; width: number } | null>(null);
+
+  const widthFor = useCallback(
+    (key: string): number => {
+      if (liveWidth && liveWidth.key === key) return liveWidth.width;
+      return widths[key] ?? columnByKey.get(key)?.defaultWidth ?? 100;
+    },
+    // columnByKey is rebuilt every render from a stable static registry — safe to omit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [liveWidth, widths],
+  );
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const d = draggingRef.current;
+      if (!d) return;
+      const next = Math.max(MIN_COLUMN_WIDTH, d.startWidth + (e.clientX - d.startX));
+      setLiveWidth({ key: d.key, width: next });
+    }
+    function onUp() {
+      const d = draggingRef.current;
+      if (!d) return;
+      setLiveWidth((prev) => {
+        if (prev && prev.key === d.key) setColumnWidth(prev.key, prev.width);
+        return null;
+      });
+      draggingRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [setColumnWidth]);
+
+  function startResize(e: React.MouseEvent, key: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startWidth = widths[key] ?? columnByKey.get(key)?.defaultWidth ?? 100;
+    draggingRef.current = { key, startX: e.clientX, startWidth };
+    setLiveWidth({ key, width: startWidth });
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
+
   if (rows.length === 0) {
     return <p className="p-6 text-sm text-gray-400">該当する在庫がありません。</p>;
   }
 
+  const totalWidth = CHECKBOX_COLUMN_WIDTH + visibleColumns.reduce((sum, col) => sum + widthFor(col.key), 0);
+
   return (
     <div className="h-full overflow-auto">
-      <table className="w-full min-w-[900px] border-collapse text-[13px]">
+      {/* table-layout: fixed + 明示的なtable幅(全可視列の合計) — これが
+          ないとブラウザは内容量に応じて列幅を自動調整し直してしまい、
+          ドラッグで設定した幅が反映されない。合計がビューポートを超え
+          た分は、外側のoverflow-autoコンテナが横スクロールで吸収する
+          (spec §13: 必要幅がviewportを超えたら横スクロール)。 */}
+      <table className="border-collapse text-[13px]" style={{ tableLayout: "fixed", width: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
-            <th className="w-8 px-2 py-1.5"></th>
-            {visibleColumns.map((col) => (
-              <th
-                key={col.key}
-                className={`${COLUMN_META[col.key]?.className ?? ""} px-2 py-1.5 ${COLUMN_META[col.key]?.align === "right" ? "text-right" : "text-left"}`}
-              >
-                {col.label}
-              </th>
-            ))}
+            <th style={{ width: CHECKBOX_COLUMN_WIDTH }} className="px-2 py-1.5"></th>
+            {visibleColumns.map((col) => {
+              const w = widthFor(col.key);
+              const align = RIGHT_ALIGN_COLUMNS.has(col.key) ? "text-right" : "text-left";
+              return (
+                <th key={col.key} style={{ width: w, minWidth: MIN_COLUMN_WIDTH }} className={`relative select-none px-2 py-1.5 ${align}`}>
+                  <span className="block truncate" title={col.label}>
+                    {col.label}
+                  </span>
+                  {/* リサイズハンドル — spec §13: ヘッダー境界にcursor: col-resize、mousedown→mousemove→リアルタイム幅変更→mouseupの一連 */}
+                  <div
+                    onMouseDown={(e) => startResize(e, col.key)}
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`${col.label}列の幅を変更`}
+                    className="absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none hover:bg-gray-300 active:bg-gray-400"
+                  />
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -315,13 +368,14 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
             const dirty = directEditEnabled && isRowDirty(row.id);
             return (
               <tr key={row.id} className={`border-b border-gray-100 ${dirty ? "bg-amber-50" : directEditEnabled ? "" : "hover:bg-gray-50"}`}>
-                <td className="px-2 py-1 text-center">
+                <td style={{ width: CHECKBOX_COLUMN_WIDTH }} className="px-2 py-1 text-center">
                   <input type="checkbox" className="align-middle" aria-label={`${row.name} を選択`} />
                 </td>
                 {visibleColumns.map((col) => {
                   const editable = directEditEnabled && isInlineEditableColumn(col.key);
+                  const w = widthFor(col.key);
                   return (
-                    <td key={col.key} className={COLUMN_META[col.key]?.align === "right" && !editable ? numCell : cell}>
+                    <td key={col.key} style={{ width: w, minWidth: MIN_COLUMN_WIDTH }} className={RIGHT_ALIGN_COLUMNS.has(col.key) && !editable ? numCell : cell}>
                       {editable ? (
                         // `editable` already confirmed col.key passes
                         // isInlineEditableColumn above — TS just can't
