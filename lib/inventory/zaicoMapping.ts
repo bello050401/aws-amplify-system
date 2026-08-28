@@ -32,9 +32,48 @@
 import type { ExtendedFieldKey, InventoryExtendedFields } from "./extendedFields";
 import type { ZaicoInventory, ZaicoOptionalAttribute } from "@/lib/zaico/client";
 
-/** NFKC (full/half-width unification) + trim + whitespace-collapse — deliberately NOT lowercased and NOT stripped of bullet glyphs (⚫︎/⚪︎/●/★ are meaningfully different markers in ZAICO's own field naming convention, not noise to normalize away). This is intentionally narrow: it fixes whitespace/width variants of the *same* name, it does not and must not make two different-looking names compare equal. */
+/**
+ * NFKC (full/half-width unification) + variation-selector stripping +
+ * wave-dash/tilde unification + trim + whitespace-collapse —
+ * deliberately NOT lowercased and NOT stripped of bullet glyphs
+ * (⚫︎/⚪︎/●/★ are meaningfully different markers in ZAICO's own field
+ * naming convention, not noise to normalize away). This is intentionally
+ * narrow: it fixes width/whitespace/presentation variants of the *same*
+ * name, it does not and must not make two different-looking names
+ * compare equal (NFKC never merges e.g. 販売価格/購入価格 — those share
+ * no characters to begin with).
+ *
+ * Root cause fixed here (real-machine test against ZAICO ID 68875572):
+ * NFKC decomposes FULLWIDTH PARENTHESIS （U+FF08）/）（U+FF09）to ASCII
+ * "(" / ")" — so ZAICO's "⚪︎幅（cm）" normalizes to "⚪︎幅(cm)". That's
+ * exactly right, but ZAICO_ATTRIBUTE_MAP's own keys below are plain
+ * string literals, typed with the same fullwidth parens for
+ * readability, and were never run through this function themselves — so
+ * a normalized *input* was being compared against an un-normalized
+ * *key*, and every field whose label contains parentheses (幅/奥行/高さ/
+ * コンディション評価) silently failed to match. Fixed structurally, not
+ * by hand-editing each key: NORMALIZED_ATTRIBUTE_MAP below builds its
+ * lookup keys by running ZAICO_ATTRIBUTE_MAP's own keys through this
+ * exact same function, so the two sides can never drift apart again —
+ * for any future entry added to ZAICO_ATTRIBUTE_MAP, not just today's.
+ *
+ * Variation selectors (U+FE00–U+FE0F) select emoji vs. text presentation
+ * for the character before them without changing its meaning — "⚪"
+ * typed on different systems may or may not carry one (e.g. "⚪︎" vs
+ * "⚪"), which would otherwise break an otherwise-identical match the
+ * same way the parenthesis issue did. Wave dash (U+301C, common in
+ * Japanese source text) and fullwidth tilde (U+FF5E) are visually
+ * indistinguishable and both render as "〜"/"～" depending on
+ * font/platform; NFKC only normalizes the latter to ASCII "~", so the
+ * former is unified explicitly too.
+ */
 export function normalizeZaicoAttributeName(name: string): string {
-  return name.normalize("NFKC").trim().replace(/\s+/g, " ");
+  return name
+    .normalize("NFKC")
+    .replace(/[︀-️]/g, "")
+    .replace(/[〜～]/g, "~")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 export type ZaicoValueType = "number" | "date" | "text";
@@ -79,17 +118,53 @@ export const ZAICO_ATTRIBUTE_MAP: Record<string, ZaicoAttributeTarget> = {
   "⚪︎高さ（cm）": { kind: "extendedField", field: "height", valueType: "text" },
   "⚪︎座面寸法": { kind: "customField", fieldKey: "seatDimensions", valueType: "text" },
   "⚪︎傷汚れ箇所等メモ": { kind: "extendedField", field: "damageNotes", valueType: "text" },
+  // Only one wave-dash spelling needs to appear here now — normalizeZaicoAttributeName
+  // unifies U+301C (〜) and U+FF5E (～) to the same "~" before either side
+  // is ever compared (see NORMALIZED_ATTRIBUTE_MAP below), so a second
+  // entry for the other spelling would be dead weight, not defense.
   "⚪︎コンディション評価(1〜5の5段階で)": { kind: "extendedField", field: "conditionRating", valueType: "text" },
-  "⚪︎コンディション評価(1～5の5段階で)": { kind: "extendedField", field: "conditionRating", valueType: "text" },
   "★市川メモ": { kind: "extendedField", field: "adminMemo", valueType: "text", createOnly: true },
   "⚫︎相手氏名": { kind: "extendedField", field: "counterpartyName", valueType: "text" },
   "●売却の優先度": { kind: "customField", fieldKey: "salePriority", valueType: "text" },
   "●販売日数": { kind: "unmapped" },
 };
 
+/**
+ * The actual lookup structure — keys run through normalizeZaicoAttributeName
+ * exactly once, at module load, from ZAICO_ATTRIBUTE_MAP's own (human-
+ * readable, un-normalized) keys above. This is what fixes the root cause
+ * documented on normalizeZaicoAttributeName's own comment: comparing a
+ * normalized *input* against un-normalized *keys* silently failed to
+ * match any label containing full-width parentheses. Building this once,
+ * structurally, means ZAICO_ATTRIBUTE_MAP can keep being typed with
+ * natural full-width Japanese punctuation (readable, matches ZAICO's own
+ * UI) without ever needing to be hand-normalized entry-by-entry, now or
+ * for any future addition.
+ */
+const NORMALIZED_ATTRIBUTE_MAP: Map<string, ZaicoAttributeTarget> = new Map(
+  Object.entries(ZAICO_ATTRIBUTE_MAP).map(([key, target]) => [normalizeZaicoAttributeName(key), target]),
+);
+
+/**
+ * ZAICO section-heading decorations look like "<<出品情報>>" — a label
+ * ZAICO's own UI renders as a group heading, not a real per-item field.
+ * Silently ignored ONLY when it also carries no value: a heading is
+ * never expected to have one, so an empty value is the signal this is
+ * decoration, not data. If a name matching this shape ever DOES carry a
+ * real value, it is deliberately NOT ignored — reported as unmapped like
+ * any other unrecognized field, since at that point it might be real
+ * data under an unexpected name (spec: 値を持つ未知項目まで一律ignore
+ * しない).
+ */
+const DECORATIVE_HEADING_PATTERN = /^<<.*>>$/;
+
+function isDecorativeHeading(name: string, value: string | null | undefined): boolean {
+  return DECORATIVE_HEADING_PATTERN.test(normalizeZaicoAttributeName(name)) && !value?.trim();
+}
+
 export function resolveZaicoAttributeTarget(rawName: string): ZaicoAttributeTarget {
   const normalized = normalizeZaicoAttributeName(rawName);
-  return ZAICO_ATTRIBUTE_MAP[normalized] ?? { kind: "unmapped" };
+  return NORMALIZED_ATTRIBUTE_MAP.get(normalized) ?? { kind: "unmapped" };
 }
 
 export interface ParsedValue<T> {
@@ -193,6 +268,11 @@ export function mapZaicoOptionalAttributes(attrs: ZaicoOptionalAttribute[] | nul
   for (const attr of attrs ?? []) {
     const target = resolveZaicoAttributeTarget(attr.name);
     if (target.kind === "unmapped") {
+      // "<<出品情報>>"-shaped, no value ⇒ ZAICO's own section-heading
+      // decoration, not real per-item data — silently skipped, no warning
+      // (see isDecorativeHeading's own comment for why an empty value is
+      // the deciding signal, not the name shape alone).
+      if (isDecorativeHeading(attr.name, attr.value)) continue;
       result.unmapped.push({ name: attr.name, value: attr.value ?? null });
       continue;
     }
