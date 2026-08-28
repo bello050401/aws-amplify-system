@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
+import { canEditInventory, canHardDeleteInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
   getInventoryDetail,
   listCategories,
@@ -9,6 +9,7 @@ import {
   listStatuses,
 } from "@/lib/inventory/queries";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
+import { DeleteInventoryButton } from "./DeleteInventoryButton";
 
 function formatYen(value: number | null): string {
   return value === null ? "-" : value.toLocaleString("ja-JP");
@@ -35,7 +36,8 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
   const category = item.categoryId ? categories.find((c) => c.id === item.categoryId) : undefined;
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;
   const status = item.statusId ? statuses.find((s) => s.id === item.statusId) : undefined;
-  const canEdit = role === "ADMIN" || role === "EDITOR";
+  const canEdit = canEditInventory(role);
+  const canDelete = canHardDeleteInventory(role);
 
   const customFieldEntries = Object.entries(item.customFields ?? {});
   const fieldLabelByKey = new Map(fieldDefs.map((f) => [f.fieldKey, f.label]));
@@ -56,26 +58,26 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
           </div>
           <h1 className="mt-1 text-lg font-bold text-gray-900">{item.name}</h1>
         </div>
-        <div className="flex gap-2">
-          <button type="button" disabled title="次のPhaseで実装予定" className="border border-gray-200 px-3 py-1.5 text-[12px] text-gray-300">
-            編集
-          </button>
-          <button type="button" disabled title="次のPhaseで実装予定" className="border border-gray-200 px-3 py-1.5 text-[12px] text-gray-300">
-            複製
-          </button>
-          <button
-            type="button"
-            disabled
-            title="次のPhaseで実装予定"
-            className="border border-gray-200 px-3 py-1.5 text-[12px] text-gray-300"
-          >
-            削除
-          </button>
+        <div className="flex items-center gap-3">
+          {canEdit && (
+            <div className="flex gap-2">
+              <Link href={`/inventory/${item.id}/edit`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                編集
+              </Link>
+              <Link href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                複製
+              </Link>
+            </div>
+          )}
+          {/* Deliberately separated from 編集/複製, not styled the same way
+              — spec asks for 削除 to be visually distinct so it isn't
+              mistaken for "just another action button". See
+              DeleteInventoryButton for the confirm-dialog gate itself. */}
+          {canDelete && <DeleteInventoryButton inventoryId={item.id} label={`${item.sku} ${item.name}`} />}
         </div>
       </div>
-      {!canEdit && (
-        <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>
-      )}
+      {role === "VIEWER" && <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>}
+      {role === "EDITOR" && <p className="mt-1 text-[11px] text-gray-400">削除はADMIN権限が必要です。</p>}
 
       <div className="mt-6 grid grid-cols-[240px_1fr] gap-8">
         <div>

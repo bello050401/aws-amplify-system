@@ -27,7 +27,20 @@ const RETRY_DELAYS_MS = [400, 1200]; // total ≤3 attempts
  * permission/missing-object problem still ends in "No Image" once
  * retries are exhausted — this only smooths over the startup race.
  */
-export function InventoryThumbnail({ storageKey, alt }: { storageKey: string | null; alt: string }) {
+const SIZE_CLASSES = {
+  small: "h-10 w-10", // list table thumbnail
+  large: "h-20 w-full", // detail page / image editor preview
+} as const;
+
+export function InventoryThumbnail({
+  storageKey,
+  alt,
+  size = "small",
+}: {
+  storageKey: string | null;
+  alt: string;
+  size?: keyof typeof SIZE_CLASSES;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -65,7 +78,7 @@ export function InventoryThumbnail({ storageKey, alt }: { storageKey: string | n
 
   if (!storageKey || failed) {
     return (
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-gray-200 bg-gray-50 text-[9px] text-gray-400">
+      <div className={`flex ${SIZE_CLASSES[size]} shrink-0 items-center justify-center border border-gray-200 bg-gray-50 text-[9px] text-gray-400`}>
         <ConfigureAmplifyClientSide />
         No Image
       </div>
@@ -85,7 +98,7 @@ export function InventoryThumbnail({ storageKey, alt }: { storageKey: string | n
         console.error(`[InventoryThumbnail] image failed to load for "${storageKey}":`, e);
         setFailed(true);
       }}
-      className="h-10 w-10 shrink-0 border border-gray-200 object-cover bg-gray-50"
+      className={`${SIZE_CLASSES[size]} shrink-0 border border-gray-200 object-cover bg-gray-50`}
     />
   );
 }

@@ -2,63 +2,43 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createInventory, type ImageSlotInput } from "@/app/actions/inventory";
-import { LabeledInput, LabeledSelect, CustomFieldInput } from "../FormFields";
-import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../ImageEditor";
-import type { CustomFieldDefinitionRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
+import { updateInventory, type ImageSlotInput } from "@/app/actions/inventory";
+import { LabeledInput, LabeledSelect, CustomFieldInput } from "../../FormFields";
+import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../../ImageEditor";
+import type { CustomFieldDefinitionRow, InventoryDetail, MasterOption, StatusOption } from "@/lib/inventory/queries";
 
-interface DuplicateSource {
-  sourceSku: string;
-  name: string;
-  categoryId?: string;
-  statusId?: string;
-  locationId?: string;
-  quantity?: number;
-  unit?: string;
-  purchasePrice?: number;
-  salePrice?: number;
-  note?: string;
-  customFields?: Record<string, unknown>;
-  images: { storageKey: string; sortOrder: number }[];
-}
-
-interface NewInventoryFormProps {
+interface EditInventoryFormProps {
+  item: InventoryDetail;
   categories: MasterOption[];
   locations: MasterOption[];
   statuses: StatusOption[];
   customFieldDefs: CustomFieldDefinitionRow[];
-  duplicateFrom?: DuplicateSource;
 }
 
 /**
- * Multi-image upload (spec §6/§30) is delegated to the shared ImageEditor
- * (app/inventory/ImageEditor.tsx) — see that file for slot kinds. Order
- * in the slot list IS the sortOrder; index 0 is the main image (matches
- * Inventory.images in amplify/data/resource.ts; no separate isMain flag).
- *
- * `duplicateFrom` (set by new/page.tsx from ?duplicateFrom=<id>) seeds
- * every field except SKU from the source record, per spec: SKU always
- * comes fresh from generateInventorySku on submit, same as any other
- * registration — never the source's. Its images become "copy" slots,
- * not "uploaded" ones, so submitting this form copies them to brand-new
- * S3 objects rather than pointing two Inventory records at the same key.
+ * Same fields as NewInventoryForm, minus SKU (shown read-only — it's the
+ * system-issued identifier, spec explicitly rules out editing it here).
+ * Shares LabeledInput/LabeledSelect/CustomFieldInput and ImageEditor with
+ * the registration form; see ImageEditor.tsx for why an edit's images
+ * start as "existing" slots rather than "new"/"copy" ones — nothing here
+ * re-uploads or copies an image the user just leaves alone.
  */
-export function NewInventoryForm({ categories, locations, statuses, customFieldDefs, duplicateFrom }: NewInventoryFormProps) {
+export function EditInventoryForm({ item, categories, locations, statuses, customFieldDefs }: EditInventoryFormProps) {
   const router = useRouter();
-  const [name, setName] = useState(duplicateFrom?.name ?? "");
-  const [categoryId, setCategoryId] = useState(duplicateFrom?.categoryId ?? "");
-  const [statusId, setStatusId] = useState(duplicateFrom?.statusId ?? "");
-  const [locationId, setLocationId] = useState(duplicateFrom?.locationId ?? "");
-  const [quantity, setQuantity] = useState(String(duplicateFrom?.quantity ?? 1));
-  const [unit, setUnit] = useState(duplicateFrom?.unit ?? "");
-  const [purchasePrice, setPurchasePrice] = useState(duplicateFrom?.purchasePrice != null ? String(duplicateFrom.purchasePrice) : "");
-  const [salePrice, setSalePrice] = useState(duplicateFrom?.salePrice != null ? String(duplicateFrom.salePrice) : "");
-  const [note, setNote] = useState(duplicateFrom?.note ?? "");
+  const [name, setName] = useState(item.name);
+  const [categoryId, setCategoryId] = useState(item.categoryId ?? "");
+  const [statusId, setStatusId] = useState(item.statusId ?? "");
+  const [locationId, setLocationId] = useState(item.locationId ?? "");
+  const [quantity, setQuantity] = useState(String(item.quantity));
+  const [unit, setUnit] = useState(item.unit ?? "");
+  const [purchasePrice, setPurchasePrice] = useState(item.purchasePrice != null ? String(item.purchasePrice) : "");
+  const [salePrice, setSalePrice] = useState(item.salePrice != null ? String(item.salePrice) : "");
+  const [note, setNote] = useState(item.note ?? "");
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>(
-    Object.fromEntries(Object.entries(duplicateFrom?.customFields ?? {}).map(([k, v]) => [k, String(v ?? "")])),
+    Object.fromEntries(Object.entries(item.customFields ?? {}).map(([k, v]) => [k, String(v ?? "")])),
   );
   const [imageSlots, setImageSlots] = useState<ImageEditorSlot[]>(
-    (duplicateFrom?.images ?? []).map((img) => ({ id: crypto.randomUUID(), kind: "copy" as const, sourceStorageKey: img.storageKey })),
+    item.images.map((img) => ({ id: crypto.randomUUID(), kind: "existing" as const, storageKey: img.storageKey })),
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,9 +53,6 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
     if (!name.trim()) return setError("商品名を入力してください。");
     if (imageEditorHasUploading(imageSlots)) return setError("画像のアップロード完了までお待ちください。");
-    // A failed upload must not be silently dropped from the submission —
-    // that previously let a registration "succeed" with zero images and
-    // no clear signal why.
     if (imageEditorHasError(imageSlots)) {
       return setError("アップロードに失敗した画像があります。該当の画像を削除するか、再度選択し直してください。");
     }
@@ -100,7 +77,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
           : { kind: "uploaded", storageKey: slot.storageKey as string, sortOrder: idx },
       );
 
-      await createInventory({
+      await updateInventory(item.id, {
         name,
         categoryId: categoryId || undefined,
         statusId: statusId || undefined,
@@ -113,16 +90,13 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
         images,
         customFields,
       });
-      // createInventory redirect()s on success — Next.js implements that
-      // as a thrown control-flow signal, so normal execution never
-      // actually reaches past the call above on the happy path.
+      // updateInventory redirect()s on success — see NewInventoryForm's
+      // identical comment for why normal execution never reaches past this.
     } catch (err) {
-      // A Next.js redirect() rethrow has digest "NEXT_REDIRECT" and must
-      // be allowed to keep propagating, not swallowed as a form error.
       if (err && typeof err === "object" && "digest" in err && String(err.digest).startsWith("NEXT_REDIRECT")) {
         throw err;
       }
-      setError(err instanceof Error ? err.message : "登録に失敗しました。");
+      setError(err instanceof Error ? err.message : "更新に失敗しました。");
       setSubmitting(false);
     }
   }
@@ -130,24 +104,16 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
   return (
     <form onSubmit={handleSubmit} className="max-w-3xl">
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-base font-bold text-gray-900">新規在庫登録</h1>
-        <button type="button" onClick={() => router.push("/inventory")} className="text-[12px] text-gray-500 hover:text-gray-900">
-          在庫一覧へ戻る
+        <h1 className="text-base font-bold text-gray-900">在庫編集</h1>
+        <button type="button" onClick={() => router.push(`/inventory/${item.id}`)} className="text-[12px] text-gray-500 hover:text-gray-900">
+          詳細へ戻る
         </button>
       </div>
-
-      {duplicateFrom && (
-        <p className="mb-4 border border-gray-200 bg-gray-50 px-3 py-2 text-[12px] text-gray-600">
-          「{duplicateFrom.sourceSku} {duplicateFrom.name}」の内容を引き継いでいます。SKUは登録時に新しく発番されます。内容を確認・修正してから登録してください。
-        </p>
-      )}
 
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-[12px] text-gray-600">SKU</label>
-          <p className="mt-0.5 border border-gray-200 bg-gray-50 px-2 py-1 text-[13px] text-gray-400">
-            登録時に自動採番されます(例: B000001)
-          </p>
+          <p className="mt-0.5 border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-[13px] text-gray-500">{item.sku}</p>
         </div>
         <LabeledInput label="商品名" required value={name} onChange={setName} />
 
@@ -201,9 +167,9 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
           disabled={submitting || imageEditorHasUploading(imageSlots)}
           className="bg-gray-900 px-4 py-2 text-[13px] font-bold text-white disabled:opacity-50"
         >
-          {submitting ? "登録中…" : "登録する"}
+          {submitting ? "保存中…" : "保存する"}
         </button>
-        <button type="button" onClick={() => router.push("/inventory")} className="border border-gray-300 px-4 py-2 text-[13px] text-gray-700">
+        <button type="button" onClick={() => router.push(`/inventory/${item.id}`)} className="border border-gray-300 px-4 py-2 text-[13px] text-gray-700">
           キャンセル
         </button>
       </div>
