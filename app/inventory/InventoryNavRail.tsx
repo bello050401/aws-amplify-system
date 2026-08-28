@@ -24,6 +24,8 @@ import { useUnsavedChanges } from "./UnsavedChangesProvider";
  */
 const NAV_ITEMS = [
   { key: "inventory", label: "在庫一覧", href: "/inventory", enabled: true },
+  // 夜間開発指示書 §12: 在庫一覧/売上/設定という主要構成。
+  { key: "sales", label: "売上", href: "/inventory/sales", enabled: true },
   { key: "tools", label: "ツール", href: null, enabled: false },
   { key: "settings", label: "設定", href: "/inventory/settings", enabled: true },
 ] as const;
