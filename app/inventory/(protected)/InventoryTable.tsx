@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import type { InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
-import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH } from "@/lib/inventory/listColumns";
+import type { CustomFieldDefinitionRow, InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
+import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
 import { isInlineEditableColumn, type InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
 import { useInventoryListColumns } from "../useInventoryListColumns";
 import { InventoryThumbnail } from "../InventoryThumbnail";
@@ -16,6 +16,15 @@ interface InventoryTableProps {
   categoriesById: Record<string, MasterOption>;
   locationsById: Record<string, MasterOption>;
   statusesById: Record<string, StatusOption>;
+  /** 追加項目(CustomFieldDefinition)を動的な一覧列として表示するため(夜間開発指示書 §11)。 */
+  customFieldDefs: CustomFieldDefinitionRow[];
+}
+
+/** `cf:<fieldKey>`列(動的なCustomField列)の値をrow.customFieldsから読む — 静的列と混在した同じレンダリングループから、どちらの種類の列かをkeyの接頭辞だけで判定できる。 */
+function customFieldValueFromRow(row: InventoryListRow, columnKey: string): string {
+  const fieldKey = columnKey.slice(3);
+  const v = row.customFields?.[fieldKey];
+  return v === null || v === undefined ? "" : String(v);
 }
 
 function formatYen(value: number | null): string {
@@ -47,6 +56,14 @@ function renderReadOnlyCell(
   locationsById: Record<string, MasterOption>,
   statusesById: Record<string, StatusOption>,
 ): React.ReactNode {
+  if (key.startsWith("cf:")) {
+    const value = customFieldValueFromRow(row, key);
+    return (
+      <span className="block truncate text-gray-600" title={value || undefined}>
+        {value || "-"}
+      </span>
+    );
+  }
   switch (key) {
     case "image":
       // "list" (3:2, object-contain) — see InventoryThumbnail's own
@@ -260,9 +277,13 @@ function renderEditableCell(
  * never visually diverge: this is the only place either one renders a
  * row.
  */
-export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById }: InventoryTableProps) {
-  const { visibility, order, widths, setColumnWidth } = useInventoryListColumns();
-  const columnByKey = new Map(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c]));
+export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById, customFieldDefs }: InventoryTableProps) {
+  // 追加項目(CustomFieldDefinition)を動的な一覧列として扱う(夜間開発
+  // 指示書 §11) — customFieldDefsが変わらない限りuseMemoで同じ配列参照
+  // を保つ(useInventoryListColumns内のuseEffectの依存に使われるため)。
+  const dynamicColumns: InventoryListColumnDef[] = useMemo(() => dynamicColumnDefsFrom(customFieldDefs), [customFieldDefs]);
+  const { visibility, order, widths, setColumnWidth } = useInventoryListColumns(dynamicColumns);
+  const columnByKey = new Map([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c]));
   const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key]);
 
   const { enabled: directEditEnabled, getValue, setValue, isRowDirty } = useDirectEdit();

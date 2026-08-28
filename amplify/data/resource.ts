@@ -247,6 +247,24 @@ const schema = a.schema({
       allow.group("VIEWER").to(["read"]),
     ]),
 
+  // 単位マスタ(夜間開発指示書 §10)。Category/Locationと違い、
+  // Inventory.unitはこのモデルのidを指す外部キーではなく、従来通りの
+  // 自由文字列のまま(既存レコード・既存の新規登録/編集フォームを一切
+  // 壊さないための設計判断) — このモデルは新規登録/編集フォームの
+  // 単位入力欄が候補として提示する「よく使う単位名」の一覧に過ぎな
+  // い。詳細はlib/inventory/masters.tsのファイル冒頭コメント参照。
+  UnitMaster: a
+    .model({
+      name: a.string().required(),
+      sortOrder: a.integer().default(0),
+      isActive: a.boolean().default(true),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
   StatusMaster: a
     .model({
       code: a.string().required(),

@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses } from "@/lib/inventory/queries";
+import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses, listUnits } from "@/lib/inventory/queries";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { EditInventoryForm } from "./EditInventoryForm";
 
@@ -23,18 +23,19 @@ export default async function EditInventoryPage({ params }: { params: { id: stri
   // selectable (labeled "（無効）") option — see listCategories'/
   // listLocations' own comment. Depends on `item`, so this can't join
   // the Promise.all above.
-  const [categories, locations, statuses, customFieldDefs] = await Promise.all([
+  const [categories, locations, statuses, customFieldDefs, units] = await Promise.all([
     listCategories(item.categoryId),
     listLocations(item.locationId),
     listStatuses(),
     listCustomFieldDefinitions(),
+    listUnits(),
   ]);
 
   return (
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫編集</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <EditInventoryForm item={item} categories={categories} locations={locations} statuses={statuses} customFieldDefs={customFieldDefs} />
+        <EditInventoryForm item={item} categories={categories} locations={locations} statuses={statuses} customFieldDefs={customFieldDefs} units={units} />
       </div>
     </div>
   );

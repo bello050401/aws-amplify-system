@@ -67,6 +67,15 @@ function pickRepresentative(group: MasterEntry[]): MasterEntry {
  * same as seedInventoryMasters().
  */
 export async function dedupeMasterEntries(model: MasterModelName): Promise<void> {
+  // Unit(夜間開発指示書 §10で追加)はここでは未対応 — 新規追加された
+  // マスタで過去の表記ゆれ重複が存在しないうえ、Inventory.unitは
+  // categoryId/locationIdのような外部キーではなく自由文字列のままな
+  // ので、reassignInventoryReferences/deactivateの「IDを付け替える」
+  // 仕組みがそのままでは通用しない(masters.tsのcountInventoryReferences
+  // のコメント参照)。createMasterEntry自体は今後もUnitの重複作成を
+  // normalizeMasterNameで防ぐため、実害はない。
+  if (model === "Unit") return;
+
   const entries = await listAllMasterEntries(model);
   const groups = new Map<string, MasterEntry[]>();
   for (const entry of entries) {

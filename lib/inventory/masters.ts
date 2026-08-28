@@ -2,23 +2,34 @@ import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 
 /**
- * Category and Location share an identical shape (name/parentId/
- * sortOrder/isActive — see amplify/data/resource.ts) and identical
- * ADMIN-write/EDITOR+VIEWER-read authorization already, from Phase 2 —
- * this Phase needed no backend change at all, just a UI for data that
- * was already there. One generic implementation here backs both rather
- * than duplicating the same CRUD twice.
+ * Category / Location / Unit share an identical shape (name/sortOrder/
+ * isActive — see amplify/data/resource.ts; Category/Locationはこれに
+ * parentIdも持つが、このファイルの`MasterEntry`自体はparentIdを扱わな
+ * い) と同一のADMIN-write/EDITOR+VIEWER-read権限を持つ。単位(Unit)は
+ * 夜間開発指示書 §10で追加 — Category/Locationと違い、Inventory.unit
+ * は`unitId`のような参照IDではなく従来通り自由文字列のまま(既存デー
+ * タ・既存の新規登録/編集フォームの入力を一切壊さないため、Inventory
+ * 側のスキーマ変更はしていない)。UnitMasterは「候補として提示する名
+ * 称の一覧」であり、Inventory.unitの値そのものへの外部キーではない —
+ * そのためUnitのリネームは既存Inventoryレコードのunit文字列を遡って
+ * 書き換えない(countInventoryReferencesのコメント参照)。
  *
  * Note: each operation below branches explicitly on `model` and calls
- * serverDataClient.models.Category.xxx / .Location.xxx directly, rather
- * than resolving "the model client" once into a shared variable — doing
- * that turned the client into a union of two structurally near-identical
- * but independently-generated generic types, and TypeScript blew its
- * comparison stack depth trying to check assignability
- * (`TS2321: Excessive stack depth`) on every call. Branching per call
- * keeps each branch's type fully concrete instead.
+ * serverDataClient.models.Category.xxx / .Location.xxx / .UnitMaster.xxx
+ * directly, rather than resolving "the model client" once into a shared
+ * variable — doing that turned the client into a union of structurally
+ * near-identical but independently-generated generic types, and
+ * TypeScript blew its comparison stack depth trying to check
+ * assignability (`TS2321: Excessive stack depth`) on every call.
+ * Branching per call keeps each branch's type fully concrete instead.
  */
-export type MasterModelName = "Category" | "Location";
+export type MasterModelName = "Category" | "Location" | "Unit";
+
+function masterLabel(model: MasterModelName): string {
+  if (model === "Category") return "カテゴリ";
+  if (model === "Location") return "保管場所";
+  return "単位";
+}
 
 export interface MasterEntry {
   id: string;
@@ -47,7 +58,9 @@ export async function listAllMasterEntries(model: MasterModelName): Promise<Mast
   const { data } =
     model === "Category"
       ? await serverDataClient.models.Category.list(inventoryAuthMode)
-      : await serverDataClient.models.Location.list(inventoryAuthMode);
+      : model === "Location"
+        ? await serverDataClient.models.Location.list(inventoryAuthMode)
+        : await serverDataClient.models.UnitMaster.list(inventoryAuthMode);
   return data
     .map((d) => ({ id: d.id, name: d.name, sortOrder: d.sortOrder ?? 0, isActive: d.isActive ?? true }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
@@ -74,7 +87,9 @@ export async function createMasterEntry(model: MasterModelName, name: string): P
   const { errors } =
     model === "Category"
       ? await serverDataClient.models.Category.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
-      : await serverDataClient.models.Location.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
+      : model === "Location"
+        ? await serverDataClient.models.Location.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
+        : await serverDataClient.models.UnitMaster.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
   if (errors) {
     console.error(`[createMasterEntry] ${model} create failed:`, errors);
     throw new Error(`追加に失敗しました: ${JSON.stringify(errors)}`);
@@ -93,7 +108,9 @@ export async function renameMasterEntry(model: MasterModelName, id: string, name
   const { errors } =
     model === "Category"
       ? await serverDataClient.models.Category.update({ id, name: trimmed }, inventoryAuthMode)
-      : await serverDataClient.models.Location.update({ id, name: trimmed }, inventoryAuthMode);
+      : model === "Location"
+        ? await serverDataClient.models.Location.update({ id, name: trimmed }, inventoryAuthMode)
+        : await serverDataClient.models.UnitMaster.update({ id, name: trimmed }, inventoryAuthMode);
   if (errors) {
     console.error(`[renameMasterEntry] ${model} update failed:`, errors);
     throw new Error(`名称の変更に失敗しました: ${JSON.stringify(errors)}`);
@@ -104,7 +121,9 @@ export async function setMasterEntryActive(model: MasterModelName, id: string, i
   const { errors } =
     model === "Category"
       ? await serverDataClient.models.Category.update({ id, isActive }, inventoryAuthMode)
-      : await serverDataClient.models.Location.update({ id, isActive }, inventoryAuthMode);
+      : model === "Location"
+        ? await serverDataClient.models.Location.update({ id, isActive }, inventoryAuthMode)
+        : await serverDataClient.models.UnitMaster.update({ id, isActive }, inventoryAuthMode);
   if (errors) {
     console.error(`[setMasterEntryActive] ${model} update failed:`, errors);
     throw new Error(`更新に失敗しました: ${JSON.stringify(errors)}`);
@@ -112,9 +131,9 @@ export async function setMasterEntryActive(model: MasterModelName, id: string, i
 }
 
 async function updateSortOrder(model: MasterModelName, id: string, sortOrder: number) {
-  return model === "Category"
-    ? serverDataClient.models.Category.update({ id, sortOrder }, inventoryAuthMode)
-    : serverDataClient.models.Location.update({ id, sortOrder }, inventoryAuthMode);
+  if (model === "Category") return serverDataClient.models.Category.update({ id, sortOrder }, inventoryAuthMode);
+  if (model === "Location") return serverDataClient.models.Location.update({ id, sortOrder }, inventoryAuthMode);
+  return serverDataClient.models.UnitMaster.update({ id, sortOrder }, inventoryAuthMode);
 }
 
 /** Persists a full reorder — `orderedIds` is the complete new top-to-bottom order, so sortOrder becomes each id's index. Only entries whose sortOrder actually changed are written. */
@@ -132,12 +151,35 @@ export async function reorderMasterEntries(model: MasterModelName, orderedIds: s
   }
 }
 
-/** How many Inventory records currently reference this id — the one check both deleteMasterEntry and bulkDeleteMasterEntries use to decide delete-vs-deactivate, kept in one place so the two can never disagree about what "in use" means. */
+/**
+ * How many Inventory records currently reference this id — the one check
+ * both deleteMasterEntry and bulkDeleteMasterEntries use to decide
+ * delete-vs-deactivate, kept in one place so the two can never disagree
+ * about what "in use" means.
+ *
+ * Category/Locationは`categoryId`/`locationId`という実際の外部キーで
+ * 参照されるが、Unitはそうではない — `Inventory.unit`は従来通りの自由
+ * 文字列のままで(spec: 既存データ・既存フォームを壊さない設計)、
+ * UnitMasterの`id`ではなく`name`と完全一致するかで「使用中」を数える。
+ * これは大文字小文字/全角半角の表記ゆれを吸収しない厳密一致(DynamoDB
+ * のeqそのもの)であるため、表記ゆれのある値は「未使用」に見えてしま
+ * う可能性がある点に注意 — Category/Locationのような表記ゆれ吸収付き
+ * の重複防止(normalizeMasterName)は今回Inventory.unit自体には及ばな
+ * い。将来Inventory.unitを本当の外部キーへ移行する場合は、既存レコー
+ * ドの移行方針を別途検討する必要がある(今回はそこまで踏み込まない)。
+ */
 async function countInventoryReferences(model: MasterModelName, id: string): Promise<number> {
-  const { data } =
-    model === "Category"
-      ? await serverDataClient.models.Inventory.list({ filter: { categoryId: { eq: id } }, ...inventoryAuthMode })
-      : await serverDataClient.models.Inventory.list({ filter: { locationId: { eq: id } }, ...inventoryAuthMode });
+  if (model === "Category") {
+    const { data } = await serverDataClient.models.Inventory.list({ filter: { categoryId: { eq: id } }, ...inventoryAuthMode });
+    return data.length;
+  }
+  if (model === "Location") {
+    const { data } = await serverDataClient.models.Inventory.list({ filter: { locationId: { eq: id } }, ...inventoryAuthMode });
+    return data.length;
+  }
+  const { data: unitEntry } = await serverDataClient.models.UnitMaster.get({ id }, inventoryAuthMode);
+  if (!unitEntry) return 0;
+  const { data } = await serverDataClient.models.Inventory.list({ filter: { unit: { eq: unitEntry.name } }, ...inventoryAuthMode });
   return data.length;
 }
 
@@ -153,12 +195,14 @@ async function countInventoryReferences(model: MasterModelName, id: string): Pro
 export async function deleteMasterEntry(model: MasterModelName, id: string): Promise<void> {
   const inUseCount = await countInventoryReferences(model, id);
   if (inUseCount > 0) {
-    throw new Error(`${inUseCount}件の在庫がこの${model === "Category" ? "カテゴリ" : "保管場所"}を使用しているため削除できません。無効化してください。`);
+    throw new Error(`${inUseCount}件の在庫がこの${masterLabel(model)}を使用しているため削除できません。無効化してください。`);
   }
   const { errors } =
     model === "Category"
       ? await serverDataClient.models.Category.delete({ id }, inventoryAuthMode)
-      : await serverDataClient.models.Location.delete({ id }, inventoryAuthMode);
+      : model === "Location"
+        ? await serverDataClient.models.Location.delete({ id }, inventoryAuthMode)
+        : await serverDataClient.models.UnitMaster.delete({ id }, inventoryAuthMode);
   if (errors) {
     console.error(`[deleteMasterEntry] ${model} delete failed:`, errors);
     throw new Error(`削除に失敗しました: ${JSON.stringify(errors)}`);
@@ -186,10 +230,12 @@ export async function findOrCreateMasterEntryByName(model: MasterModelName, name
   const { data, errors } =
     model === "Category"
       ? await serverDataClient.models.Category.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
-      : await serverDataClient.models.Location.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
+      : model === "Location"
+        ? await serverDataClient.models.Location.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
+        : await serverDataClient.models.UnitMaster.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
   if (errors || !data) {
     console.error(`[findOrCreateMasterEntryByName] ${model} create failed:`, errors);
-    throw new Error(`${model === "Category" ? "カテゴリ" : "保管場所"}の作成に失敗しました: ${JSON.stringify(errors)}`);
+    throw new Error(`${masterLabel(model)}の作成に失敗しました: ${JSON.stringify(errors)}`);
   }
   return { id: data.id, created: true };
 }

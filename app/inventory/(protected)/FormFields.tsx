@@ -17,6 +17,7 @@ export function LabeledInput({
   type = "text",
   required = false,
   placeholder,
+  list,
 }: {
   label: string;
   value: string;
@@ -24,6 +25,8 @@ export function LabeledInput({
   type?: string;
   required?: boolean;
   placeholder?: string;
+  /** ネイティブ<input list>属性 — 対応する<datalist id={list}>と組み合わせて、既存の自由入力を維持したまま候補を提示する(夜間開発指示書 §10: 単位マスタ)。 */
+  list?: string;
 }) {
   return (
     <div>
@@ -36,6 +39,7 @@ export function LabeledInput({
         value={value}
         required={required}
         placeholder={placeholder}
+        list={list}
         onChange={(e) => onChange(e.target.value)}
         className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
       />

@@ -57,6 +57,8 @@ export interface InventoryListRow {
   transactionDate: string | null;
   transactionType: string | null;
   adminMemo: string | null;
+  /** 追加項目(CustomFieldDefinition)の値 — 一覧の動的列(夜間開発指示書 §11、lib/inventory/listColumns.tsのdynamicColumnDefsFrom)がkeyで直接読む。 */
+  customFields: Record<string, unknown> | null;
 }
 
 /** Every image on the record, normalized (legacy rows with no `type` read as NORMAL — see lib/inventory/imageTypes.ts). Shared by toListRow (just needs the resolved top image) and getInventoryDetail (needs the full normal/damage breakdown). */
@@ -102,6 +104,7 @@ function toListRow(item: InventoryModel): InventoryListRow {
     transactionDate: item.transactionDate ?? null,
     transactionType: item.transactionType ?? null,
     adminMemo: item.adminMemo ?? null,
+    customFields: parseCustomFields(item.customFields),
   };
 }
 
@@ -398,6 +401,24 @@ export async function listLocations(includeInactiveId?: string | null): Promise<
   return options;
 }
 
+/**
+ * 単位マスタ(夜間開発指示書 §10)の有効な名称一覧 — 新規登録/編集フォー
+ * ムの「単位」入力欄のdatalist候補として使う。Category/Locationと違い
+ * Inventory.unitはこのidを参照する外部キーではなく従来通りの自由文字
+ * 列のままなので、ここでは`id`は返さず名称の配列だけを返す(呼び出し
+ * 側がidを必要とする理由がない)。
+ */
+export async function listUnits(): Promise<string[]> {
+  const { data } = await serverDataClient.models.UnitMaster.list({
+    filter: { isActive: { eq: true } },
+    ...inventoryAuthMode,
+  });
+  return data
+    .map((u) => ({ name: u.name, sortOrder: u.sortOrder ?? 0 }))
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"))
+    .map((u) => u.name);
+}
+
 export interface StatusOption {
   id: string;
   code: string;
@@ -423,22 +444,42 @@ export interface CustomFieldDefinitionRow {
   required: boolean;
   sortOrder: number;
   options: string[];
+  isActive: boolean;
 }
 
+function toCustomFieldDefinitionRow(f: {
+  id: string;
+  fieldKey: string;
+  label: string;
+  fieldType: Schema["CustomFieldType"]["type"];
+  required?: boolean | null;
+  sortOrder?: number | null;
+  options?: (string | null)[] | null;
+  isActive?: boolean | null;
+}): CustomFieldDefinitionRow {
+  return {
+    id: f.id,
+    fieldKey: f.fieldKey,
+    label: f.label,
+    fieldType: f.fieldType,
+    required: f.required ?? false,
+    sortOrder: f.sortOrder ?? 0,
+    options: (f.options ?? []).filter((o): o is string => Boolean(o)),
+    isActive: f.isActive ?? true,
+  };
+}
+
+/** 新規登録/編集フォーム・検索・Import/Export等、実際にユーザーへ入力・表示させる側が使う — 無効化された追加項目は含まない。 */
 export async function listCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
   const { data } = await serverDataClient.models.CustomFieldDefinition.list({
     filter: { isActive: { eq: true } },
     ...inventoryAuthMode,
   });
-  return data
-    .map((f) => ({
-      id: f.id,
-      fieldKey: f.fieldKey,
-      label: f.label,
-      fieldType: f.fieldType,
-      required: f.required ?? false,
-      sortOrder: f.sortOrder ?? 0,
-      options: (f.options ?? []).filter((o): o is string => Boolean(o)),
-    }))
-    .sort((a, b) => a.sortOrder - b.sortOrder);
+  return data.map(toCustomFieldDefinitionRow).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+/** 設定画面の追加項目管理タブ専用 — 無効化済みも含めた全件(ADMINが再度有効化できるように、lib/inventory/masters.tsのlistAllMasterEntriesと同じ考え方)。 */
+export async function listAllCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
+  const { data } = await serverDataClient.models.CustomFieldDefinition.list(inventoryAuthMode);
+  return data.map(toCustomFieldDefinitionRow).sort((a, b) => a.sortOrder - b.sortOrder);
 }

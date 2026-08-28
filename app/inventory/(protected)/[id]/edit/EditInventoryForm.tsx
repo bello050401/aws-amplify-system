@@ -25,6 +25,8 @@ interface EditInventoryFormProps {
   locations: MasterOption[];
   statuses: StatusOption[];
   customFieldDefs: CustomFieldDefinitionRow[];
+  /** 単位マスタ(夜間開発指示書 §10)の有効な名称一覧 — 単位欄のdatalist候補。 */
+  units: string[];
 }
 
 /**
@@ -92,7 +94,7 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
  * component and config NewInventoryForm uses, so those field
  * definitions exist in exactly one place (spec §5).
  */
-export function EditInventoryForm({ item, categories, locations, statuses, customFieldDefs }: EditInventoryFormProps) {
+export function EditInventoryForm({ item, categories, locations, statuses, customFieldDefs, units }: EditInventoryFormProps) {
   const router = useRouter();
   const [name, setName] = useState(item.name);
   const [categoryId, setCategoryId] = useState(item.categoryId ?? "");
@@ -238,6 +240,12 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
 
   return (
     <form onSubmit={handleSubmit} className="max-w-3xl">
+      {/* 単位欄のdatalist候補(夜間開発指示書 §10) — 自由入力のまま、単位マスタの値を候補として提示する。 */}
+      <datalist id="unit-options">
+        {units.map((u) => (
+          <option key={u} value={u} />
+        ))}
+      </datalist>
       {/* タイトルはInventoryHeader側(edit/page.tsx)に表示済み — ここでは
           未保存変更ガードを経由する「詳細へ戻る」だけを残す。 */}
       <div className="mb-4 flex items-center justify-end">
@@ -260,7 +268,7 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
 
         <div className="grid grid-cols-2 gap-2">
           <LabeledInput label="数量" type="number" value={quantity} onChange={setQuantity} />
-          <LabeledInput label="単位" value={unit} onChange={setUnit} placeholder="個" />
+          <LabeledInput label="単位" value={unit} onChange={setUnit} placeholder="個" list="unit-options" />
         </div>
         <LabeledInput label="QRコード・バーコード" value={barcode} onChange={setBarcode} />
 

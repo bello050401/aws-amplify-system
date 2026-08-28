@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses } from "@/lib/inventory/queries";
+import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses, listUnits } from "@/lib/inventory/queries";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import { splitImagesByType } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../InventoryHeader";
@@ -29,11 +29,12 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
   // duplicate of a record whose master has since been deactivated still
   // prefills correctly instead of silently dropping to 未選択 — same
   // reasoning as the edit page (see listCategories'/listLocations' comment).
-  const [categories, locations, statuses, customFieldDefs] = await Promise.all([
+  const [categories, locations, statuses, customFieldDefs, units] = await Promise.all([
     listCategories(duplicateSource?.categoryId),
     listLocations(duplicateSource?.locationId),
     listStatuses(),
     listCustomFieldDefinitions(),
+    listUnits(),
   ]);
 
   // A missing/deleted source (bad link, or it was deleted between
@@ -83,6 +84,7 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
           locations={locations}
           statuses={statuses}
           customFieldDefs={customFieldDefs}
+          units={units}
           duplicateFrom={duplicateFrom}
         />
       </div>

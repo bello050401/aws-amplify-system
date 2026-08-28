@@ -1,19 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   defaultColumnPreferences,
   INVENTORY_LIST_COLUMNS,
   INVENTORY_LIST_COLUMNS_STORAGE_KEY,
   type ColumnPreferences,
+  type InventoryListColumnDef,
 } from "@/lib/inventory/listColumns";
 
 export type ColumnVisibility = Record<string, boolean>;
 
-const KNOWN_KEYS = new Set(INVENTORY_LIST_COLUMNS.map((c) => c.key));
-
-function readStored(): ColumnPreferences {
-  const merged = defaultColumnPreferences();
+function readStored(dynamicColumns: InventoryListColumnDef[], knownKeys: Set<string>): ColumnPreferences {
+  const merged = defaultColumnPreferences(dynamicColumns);
   try {
     const raw = window.localStorage.getItem(INVENTORY_LIST_COLUMNS_STORAGE_KEY);
     if (!raw) return merged;
@@ -36,11 +35,12 @@ function readStored(): ColumnPreferences {
 
     // Order: keep only keys this app still knows about, in the saved
     // order, then append any known key the saved order is missing (a
-    // newly-added column, or a first-time-storing browser) at the end —
-    // never let a real column silently disappear from the table because
-    // an older saved order predates it.
+    // newly-added column — including a CustomFieldDefinition created
+    // after this browser last saved its order — or a first-time-storing
+    // browser) at the end — never let a real column silently disappear
+    // from the table because an older saved order predates it.
     if (Array.isArray(parsed.order)) {
-      const savedKnown = parsed.order.filter((k): k is string => typeof k === "string" && KNOWN_KEYS.has(k));
+      const savedKnown = parsed.order.filter((k): k is string => typeof k === "string" && knownKeys.has(k));
       const missing = merged.order.filter((k) => !savedKnown.includes(k));
       merged.order = [...savedKnown, ...missing];
     }
@@ -80,24 +80,37 @@ function readStored(): ColumnPreferences {
  * `hydrated` distinguishes those two states for a caller that wants to
  * hold off before rendering anything the flip itself would visibly
  * reflow.
+ *
+ * `dynamicColumns` (夜間開発指示書 §11): 追加項目(CustomFieldDefinition)
+ * をlib/inventory/listColumns.tsのdynamicColumnDefsFromで変換したもの
+ * — 呼び出し側(InventoryTable.tsx/ListColumnSettings.tsx)が現在の
+ * CustomFieldDefinition一覧から都度生成して渡す。静的列(INVENTORY_LIST_COLUMNS)
+ * とまったく同じ仕組み(表示/非表示・順序・幅)で管理されるため、この
+ * ファイル自体はCustomFieldの存在を特別扱いしない。
  */
-export function useInventoryListColumns() {
-  const [preferences, setPreferencesState] = useState<ColumnPreferences>(defaultColumnPreferences);
+export function useInventoryListColumns(dynamicColumns: InventoryListColumnDef[] = []) {
+  const knownKeys = useMemo(
+    () => new Set([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => c.key)),
+    [dynamicColumns],
+  );
+
+  const [preferences, setPreferencesState] = useState<ColumnPreferences>(() => defaultColumnPreferences(dynamicColumns));
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    setPreferencesState(readStored());
+    setPreferencesState(readStored(dynamicColumns, knownKeys));
     setHydrated(true);
 
     // Keeps multiple open tabs in sync — a column toggled/reordered from
     // the settings screen in one tab is reflected in a list already open
     // in another, next time it's interacted with, without a manual reload.
     function onStorage(e: StorageEvent) {
-      if (e.key === INVENTORY_LIST_COLUMNS_STORAGE_KEY) setPreferencesState(readStored());
+      if (e.key === INVENTORY_LIST_COLUMNS_STORAGE_KEY) setPreferencesState(readStored(dynamicColumns, knownKeys));
     }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [knownKeys]);
 
   function persist(next: ColumnPreferences) {
     setPreferencesState(next);

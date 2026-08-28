@@ -34,6 +34,9 @@ const CATEGORY_SEED = [
 
 const LOCATION_SEED = ["所沢事務所", "イエローテイル川越", "所沢プラス倉庫", "大原自宅", "市川自宅"] as const;
 
+/** 夜間開発指示書 §10で追加。家具・什器の在庫でよく使う単位の初期候補 — Category/Locationと同じ追加専用シード(既存値は変更/削除しない)。 */
+const UNIT_SEED = ["個", "点", "台", "脚", "客", "組"] as const;
+
 async function seedModel(model: MasterModelName, names: readonly string[]): Promise<void> {
   const existing = await listAllMasterEntries(model);
   // Matched by normalized name (see normalizeMasterName), not exact
@@ -57,5 +60,5 @@ async function seedModel(model: MasterModelName, names: readonly string[]): Prom
 
 /** Called once from the settings page (ADMIN view only — see app/actions/masters.ts) so first-time setup needs no separate migration step. A no-op on every call after the first. */
 export async function seedInventoryMasters(): Promise<void> {
-  await Promise.all([seedModel("Category", CATEGORY_SEED), seedModel("Location", LOCATION_SEED)]);
+  await Promise.all([seedModel("Category", CATEGORY_SEED), seedModel("Location", LOCATION_SEED), seedModel("Unit", UNIT_SEED)]);
 }

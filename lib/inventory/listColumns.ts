@@ -71,18 +71,39 @@ export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
 /** リサイズ可能な列がここより小さくなることはない — テキストや操作可能領域が潰れて使い物にならなくなるのを防ぐ下限(spec §13: 適切なminWidthを設定)。 */
 export const MIN_COLUMN_WIDTH = 48;
 
-export function defaultColumnVisibility(): Record<string, boolean> {
-  return Object.fromEntries(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c.defaultVisible]));
+/** 動的なCustomFieldDefinitionを列定義へ変換する際の初期幅(px)。長めの自由記述もある程度読める幅を確保しつつ、既定では表示しない(defaultVisible: false)ため一覧を情報過多にしない。 */
+const DYNAMIC_COLUMN_DEFAULT_WIDTH = 130;
+
+/**
+ * 追加項目(CustomFieldDefinition)を一覧の任意列として扱うための変換
+ * (夜間開発指示書 §11: 「追加したCustomFieldがコード変更なしで…一覧
+ * 表示設定…へ反映される」)。key は`cf:<fieldKey>`— lib/inventory/
+ * advancedSearch.tsの詳細検索と同じ接頭辞にして、静的列のキー(英語の
+ * 単語1つ)と衝突しないようにしている。呼び出し側(useInventoryListColumns
+ * /ListColumnSettings.tsx/InventoryTable.tsx)は、実行時に取得した
+ * CustomFieldDefinition一覧をこの関数に通すだけでよい。
+ */
+export function dynamicColumnDefsFrom(customFieldDefs: { fieldKey: string; label: string }[]): InventoryListColumnDef[] {
+  return customFieldDefs.map((def) => ({
+    key: `cf:${def.fieldKey}`,
+    label: def.label,
+    defaultVisible: false,
+    defaultWidth: DYNAMIC_COLUMN_DEFAULT_WIDTH,
+  }));
 }
 
-/** The registry's own array order — the default column order before any per-user reordering (統合改善指示書 §10: カラム順序). */
-export function defaultColumnOrder(): string[] {
-  return INVENTORY_LIST_COLUMNS.map((c) => c.key);
+export function defaultColumnVisibility(dynamicColumns: InventoryListColumnDef[] = []): Record<string, boolean> {
+  return Object.fromEntries([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c.defaultVisible]));
+}
+
+/** The registry's own array order — the default column order before any per-user reordering (統合改善指示書 §10: カラム順序)。動的列は末尾に追加される。 */
+export function defaultColumnOrder(dynamicColumns: InventoryListColumnDef[] = []): string[] {
+  return [...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => c.key);
 }
 
 /** 夜間開発指示書 §13: 列幅(px)の初期値マップ。 */
-export function defaultColumnWidths(): Record<string, number> {
-  return Object.fromEntries(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c.defaultWidth]));
+export function defaultColumnWidths(dynamicColumns: InventoryListColumnDef[] = []): Record<string, number> {
+  return Object.fromEntries([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c.defaultWidth]));
 }
 
 export interface ColumnPreferences {
@@ -93,8 +114,12 @@ export interface ColumnPreferences {
   widths: Record<string, number>;
 }
 
-export function defaultColumnPreferences(): ColumnPreferences {
-  return { visibility: defaultColumnVisibility(), order: defaultColumnOrder(), widths: defaultColumnWidths() };
+export function defaultColumnPreferences(dynamicColumns: InventoryListColumnDef[] = []): ColumnPreferences {
+  return {
+    visibility: defaultColumnVisibility(dynamicColumns),
+    order: defaultColumnOrder(dynamicColumns),
+    widths: defaultColumnWidths(dynamicColumns),
+  };
 }
 
 /**

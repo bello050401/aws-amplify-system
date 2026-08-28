@@ -97,6 +97,8 @@ interface NewInventoryFormProps {
   locations: MasterOption[];
   statuses: StatusOption[];
   customFieldDefs: CustomFieldDefinitionRow[];
+  /** 単位マスタ(夜間開発指示書 §10)の有効な名称一覧 — 単位欄のdatalist候補。既存の自由入力(Inventory.unitは今回もschema変更なしの文字列のまま)を壊さず、候補を提示するだけ。 */
+  units: string[];
   duplicateFrom?: DuplicateSource;
 }
 
@@ -128,7 +130,7 @@ interface NewInventoryFormProps {
  * EditInventoryForm uses, so the ~30 field definitions exist in exactly
  * one place (spec §5).
  */
-export function NewInventoryForm({ categories, locations, statuses, customFieldDefs, duplicateFrom }: NewInventoryFormProps) {
+export function NewInventoryForm({ categories, locations, statuses, customFieldDefs, units, duplicateFrom }: NewInventoryFormProps) {
   const router = useRouter();
   const [name, setName] = useState(duplicateFrom?.name ?? "");
   const [categoryId, setCategoryId] = useState(duplicateFrom?.categoryId ?? "");
@@ -296,6 +298,12 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
   return (
     <form onSubmit={handleSubmit} className="max-w-3xl">
+      {/* 単位欄のdatalist候補(夜間開発指示書 §10) — 自由入力のまま、単位マスタの値を候補として提示する。 */}
+      <datalist id="unit-options">
+        {units.map((u) => (
+          <option key={u} value={u} />
+        ))}
+      </datalist>
       {/* タイトルはInventoryHeader側(new/page.tsx)に表示済み — ここでは
           未保存変更ガードを経由する「一覧へ戻る」だけを残す。 */}
       <div className="mb-4 flex items-center justify-end">
@@ -326,7 +334,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
         <div className="grid grid-cols-2 gap-2">
           <LabeledInput label="数量" type="number" value={quantity} onChange={setQuantity} />
-          <LabeledInput label="単位" value={unit} onChange={setUnit} placeholder="個" />
+          <LabeledInput label="単位" value={unit} onChange={setUnit} placeholder="個" list="unit-options" />
         </div>
         <LabeledInput label="QRコード・バーコード" value={barcode} onChange={setBarcode} />
 

@@ -1,5 +1,6 @@
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
+import { listAllCustomFieldDefinitions } from "@/lib/inventory/queries";
 import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
 import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
@@ -13,6 +14,12 @@ import { SettingsTabs } from "./SettingsTabs";
  * sortOrder/isActive and ADMIN-write/EDITOR+VIEWER-read authorization
  * from Phase 2, so this page needed no backend/schema change at all —
  * see lib/inventory/masters.ts's file comment.
+ *
+ * 単位(UnitMaster)は夜間開発指示書 §10で追加 — amplify/data/resource.ts
+ * にモデルを新設したため、AWS側の再デプロイ(ampx sandbox / hosting
+ * build)を経るまでは実際には利用できない(完了報告のBLOCKED_BY_USER
+ * 参照)。コード自体はCategory/Locationと同じ経路(lib/inventory/masters.ts)
+ * を素通りするだけで動く。
  *
  * Dedupe-then-seed runs on every ADMIN load rather than as a one-off
  * migration step — both are safe no-ops once there's nothing left to do
@@ -36,23 +43,32 @@ export default async function InventorySettingsPage() {
   if (!role) return null; // parent layout already redirects signed-out/unauthorized users
 
   if (role === "ADMIN") {
+    // Unitはdedupe未対応(masterDedupe.tsのガード参照 — 新規追加のため
+    // 過去の重複が存在しない)。
     await Promise.all([dedupeMasterEntries("Category"), dedupeMasterEntries("Location")]);
-    // seedCustomFieldDefinitions (Phase C's low-frequency 口金/脚高/
-    // 座面寸法/梱包サイズ/古物の特徴 fields) doesn't interact with
-    // Category/Location at all, so it doesn't need to wait on the above.
+    // seedCustomFieldDefinitions (Phase Cの低頻度 口金/脚高/座面寸法/
+    // 梱包サイズ/古物の特徴 fields) doesn't interact with
+    // Category/Location/Unit at all, so it doesn't need to wait on the above.
     await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions()]);
   }
 
-  const [categories, locations] = await Promise.all([listAllMasterEntries("Category"), listAllMasterEntries("Location")]);
+  const [categories, locations, units, customFields] = await Promise.all([
+    listAllMasterEntries("Category"),
+    listAllMasterEntries("Location"),
+    listAllMasterEntries("Unit"),
+    listAllCustomFieldDefinitions(),
+  ]);
 
   return (
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">設定</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <p className="mb-4 text-[12px] text-gray-500">カテゴリ・保管場所の管理を行います。</p>
+        <p className="mb-4 text-[12px] text-gray-500">カテゴリ・単位・保管場所・追加項目等の管理を行います。</p>
         <SettingsTabs
           categories={categories}
           locations={locations}
+          units={units}
+          customFields={customFields}
           readOnly={role !== "ADMIN"}
           isAdmin={role === "ADMIN"}
           zaicoConnected={isZaicoTokenConfigured()}

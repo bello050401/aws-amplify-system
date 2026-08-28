@@ -1,7 +1,14 @@
 "use client";
 
-import { INVENTORY_LIST_COLUMNS, defaultColumnWidths } from "@/lib/inventory/listColumns";
+import { useMemo } from "react";
+import { INVENTORY_LIST_COLUMNS, defaultColumnWidths, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
+import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import { useInventoryListColumns } from "../../useInventoryListColumns";
+
+interface ListColumnSettingsProps {
+  /** 追加項目(CustomFieldDefinition)を動的な一覧列としてトグル対象へ含める(夜間開発指示書 §11)。 */
+  customFieldDefs: CustomFieldDefinitionRow[];
+}
 
 /**
  * Toggles which optional columns InventoryTable renders, and their
@@ -18,10 +25,17 @@ import { useInventoryListColumns } from "../../useInventoryListColumns";
  * either; ↑/↓ matches the exact pattern ImageEditor.tsx already uses for
  * reordering images, so this doesn't introduce a second reordering
  * idiom or a drag-and-drop library into the app for one settings list.
+ * (在庫一覧本体の列"幅"は代わりにヘッダー境界のマウスドラッグでリサイ
+ * ズする — InventoryTable.tsx参照。ここでは表示/非表示・順序だけ。)
+ *
+ * `customFieldDefs`(夜間開発指示書 §11) — 追加項目もInventoryTable.tsx
+ * と全く同じ仕組み(dynamicColumnDefsFrom)で列候補に混ざる。ADMINが追
+ *加項目を新設すればコード変更なしにここへも現れる。
  */
-export function ListColumnSettings() {
-  const { visibility, order, setVisibility, setOrder, setWidths, hydrated } = useInventoryListColumns();
-  const columnByKey = new Map(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c]));
+export function ListColumnSettings({ customFieldDefs }: ListColumnSettingsProps) {
+  const dynamicColumns: InventoryListColumnDef[] = useMemo(() => dynamicColumnDefsFrom(customFieldDefs), [customFieldDefs]);
+  const { visibility, order, setVisibility, setOrder, setWidths, hydrated } = useInventoryListColumns(dynamicColumns);
+  const columnByKey = new Map([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c]));
   const orderedColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c));
 
   function toggle(key: string) {
@@ -38,15 +52,16 @@ export function ListColumnSettings() {
   }
 
   function resetToDefaults() {
-    setVisibility(Object.fromEntries(INVENTORY_LIST_COLUMNS.map((c) => [c.key, c.defaultVisible])));
-    setOrder(INVENTORY_LIST_COLUMNS.map((c) => c.key));
-    setWidths(defaultColumnWidths());
+    const allColumns = [...INVENTORY_LIST_COLUMNS, ...dynamicColumns];
+    setVisibility(Object.fromEntries(allColumns.map((c) => [c.key, c.defaultVisible])));
+    setOrder(allColumns.map((c) => c.key));
+    setWidths(defaultColumnWidths(dynamicColumns));
   }
 
   return (
     <div>
       <p className="mb-3 max-w-md text-[12px] text-gray-500">
-        在庫一覧・詳細検索結果に表示する列と順序を選べます。この設定はお使いのブラウザに保存され、通常の一覧と検索結果の両方に同じ内容が反映されます。
+        在庫一覧・詳細検索結果に表示する列と順序を選べます。この設定はお使いのブラウザに保存され、通常の一覧と検索結果の両方に同じ内容が反映されます。列の幅は一覧画面でヘッダーの境界をドラッグして調整してください。
       </p>
       <ul className="max-w-md divide-y divide-gray-100 border-y border-gray-200">
         {orderedColumns.map((col, index) => (
@@ -71,7 +86,10 @@ export function ListColumnSettings() {
                 ↓
               </button>
             </div>
-            <span className="flex-1 text-gray-700">{col.label}</span>
+            <span className="flex-1 text-gray-700">
+              {col.label}
+              {col.key.startsWith("cf:") && <span className="ml-1 text-[10px] text-gray-400">（追加項目）</span>}
+            </span>
             <label className="inline-flex cursor-pointer items-center gap-1.5">
               <input
                 type="checkbox"

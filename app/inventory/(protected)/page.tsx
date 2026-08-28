@@ -157,6 +157,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
                 categoriesById={categoriesById}
                 locationsById={locationsById}
                 statusesById={statusesById}
+                customFieldDefs={customFieldDefs}
               />
             </div>
             {"total" in listResult ? (
