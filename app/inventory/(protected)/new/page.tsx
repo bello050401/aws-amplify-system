@@ -56,7 +56,7 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
 
   const duplicateFrom = duplicateSource
     ? {
-        sourceSku: duplicateSource.sku,
+        sourceDisplayId: duplicateSource.displayId,
         name: duplicateSource.name,
         categoryId: duplicateSource.categoryId ?? undefined,
         statusId: duplicateSource.statusId ?? undefined,

@@ -250,7 +250,7 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-[12px] text-gray-600">在庫ID</label>
-          <p className="mt-0.5 border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-[13px] text-gray-500">{item.sku}</p>
+          <p className="mt-0.5 border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-[13px] text-gray-500">{item.displayId}</p>
         </div>
         <LabeledInput label="物品名" required value={name} onChange={setName} />
 

@@ -21,7 +21,7 @@ import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import type { CustomFieldDefinitionRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 
 interface DuplicateSource extends InventoryExtendedFields {
-  sourceSku: string;
+  sourceDisplayId: string;
   name: string;
   categoryId?: string;
   statusId?: string;
@@ -306,7 +306,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
       {duplicateFrom && (
         <p className="mb-4 border border-gray-200 bg-gray-50 px-3 py-2 text-[12px] text-gray-600">
-          「{duplicateFrom.sourceSku} {duplicateFrom.name}」の内容を引き継いでいます。在庫IDは登録時に新しく発番されます。内容を確認・修正してから登録してください。
+          「{duplicateFrom.sourceDisplayId} {duplicateFrom.name}」の内容を引き継いでいます。在庫IDは登録時に新しく発番されます。内容を確認・修正してから登録してください。
         </p>
       )}
 

@@ -190,9 +190,13 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
     { label: "管理メモ", value: item.adminMemo || "-" },
   ];
 
-  // 基本情報 (C-1)
+  // 基本情報 (C-1)。「在庫ID」はZAICO由来商品ではZAICOの在庫IDを、
+  // BELLO作成商品ではSKUをそのまま表示する導出値(displayId) —
+  // 「SKU」自体は常にBELLO内部の管理番号として別行で確認できるように
+  // する(在庫ID/SKU設計の再整理、lib/inventory/inventoryId.ts参照)。
   const basicRows: DetailInfoRow[] = [
-    { label: "在庫ID", value: item.sku },
+    { label: "在庫ID", value: item.displayId },
+    { label: "SKU", value: item.sku },
     { label: "物品名", value: item.name },
     { label: "カテゴリ", value: category?.name ?? "-" },
     { label: "状態", value: status?.label ?? "-" },
@@ -220,7 +224,7 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
           <div>
             <div className="flex items-center gap-2">
               {status && <span className="border border-gray-300 px-1.5 py-0.5 text-[11px] text-gray-700">{status.label}</span>}
-              <span className="font-mono text-[13px] text-gray-500">{item.sku}</span>
+              <span className="font-mono text-[13px] text-gray-500">{item.displayId}</span>
             </div>
             <h2 className="mt-1 text-lg font-bold text-gray-900">{item.name}</h2>
           </div>
@@ -237,7 +241,7 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
                 </Link>
               </div>
             )}
-            {canDelete && <DeleteInventoryButton inventoryId={item.id} label={`${item.sku} ${item.name}`} />}
+            {canDelete && <DeleteInventoryButton inventoryId={item.id} label={`${item.displayId} ${item.name}`} />}
           </div>
         </div>
         {role === "VIEWER" && <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>}

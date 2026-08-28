@@ -169,7 +169,7 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
                             <option value="">対応なし（無視）</option>
                             {parsed.mappingTargets.map((t) => (
                               <option key={t.key} value={t.key}>
-                                {t.key === "sku" ? `${t.label}（既存商品との照合用）` : t.label}
+                                {t.key === "sku" || t.key === "displayId" ? `${t.label}（既存商品との照合用）` : t.label}
                               </option>
                             ))}
                           </select>

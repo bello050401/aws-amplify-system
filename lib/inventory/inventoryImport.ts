@@ -6,7 +6,7 @@ import { listAllMasterEntries, normalizeMasterName } from "./masters";
 import { listCustomFieldDefinitions, listStatuses } from "./queries";
 import { parseCustomFields, stringifyCustomFields } from "./customFieldsCodec";
 import { diffField, logInventoryHistory, type HistoryFieldChange } from "./history";
-import { CORE_EXPORT_FIELDS, EXTENDED_EXPORT_FIELDS, SKU_FIELD, type ExportFieldValueType } from "./exportFields";
+import { STATIC_EXPORT_FIELDS, EXTENDED_EXPORT_FIELDS, KNOWN_CUSTOM_FIELD_KEYS, type ExportFieldValueType } from "./exportFields";
 import { parseCsv } from "./csv";
 
 type InventoryModel = Schema["Inventory"]["type"];
@@ -49,20 +49,46 @@ export interface ParsedImportFile {
 /** 安全弁 — 想定規模(数百〜数千件)を大きく超えるファイルは、ブラウザ/Server Actionを詰まらせる前に断る(spec §18)。将来的にもっと大きな規模が必要になった場合は、chunk/バックグラウンド処理への切り替えが必要になる旨を完了報告で明記する。 */
 export const IMPORT_MAX_ROWS = 5000;
 
-/** エクスポート側のラベルと1:1で対応させる(spec §14: BELLO自身の出力をそのまま再インポートしやすく)。SKUも候補に含める — 書き込み対象ではなく照合キーとして選べるようにするため(inventoryImport.tsの他の箇所を参照)。 */
-const MAPPING_TARGETS: { key: string; label: string; valueType: ExportFieldValueType }[] = [
-  SKU_FIELD,
-  ...CORE_EXPORT_FIELDS,
-  ...EXTENDED_EXPORT_FIELDS,
-];
+/**
+ * エクスポート側の列（ZAICO互換ブロック→BELLO独自列の順、
+ * exportFields.tsのSTATIC_EXPORT_FIELDS）と1:1で対応させる(spec §14:
+ * BELLO自身の出力をそのまま再インポートしやすく)。「在庫ID」
+ * (displayId)・SKUも候補に含める — どちらも書き込み対象ではなく
+ * 既存レコードの照合キーとして選べるようにするため
+ * (resolveImportRows内のfindExistingMatchを参照、spec §7の
+ * 「1.ZAICO在庫ID/sourceInventoryId → 2.BELLO在庫ID →
+ * 3.SKU」優先順位はここで実装する)。
+ */
+const MAPPING_TARGETS: { key: string; label: string; valueType: ExportFieldValueType }[] = STATIC_EXPORT_FIELDS;
+
+/**
+ * ヘッダー文字列の自動対応付け専用の正規化。lib/inventory/masters.ts の
+ * normalizeMasterName(NFKC+trim+空白畳み込み+小文字化)はCategory/
+ * Location名の一致判定など他の用途にも使われているためそのままにし、
+ * ここではインポートのヘッダー対応付けだけに使うローカルな追加正規化
+ * (variation selector除去・波ダッシュ統一)を重ねる —
+ * lib/inventory/zaicoMapping.tsのnormalizeZaicoAttributeNameと着想は
+ * 同じだが、完全に独立した実装(import一切なし。ZAICO同期とCSV/Excel
+ * インポートは別経路、コード共有しないというspec §19の方針を維持)。
+ * ZAICO_COMPAT_FIELDSの列名(⚪︎/⚫︎等の記号を含む)を実際のZAICO
+ * エクスポートファイルのヘッダーと確実に対応付けるための備え。
+ */
+function normalizeImportHeaderLabel(text: string): string {
+  return normalizeMasterName(
+    text
+      .normalize("NFKC")
+      .replace(/[︀-️]/g, "") // variation selectors U+FE00–U+FE0F
+      .replace(/[〜～]/g, "~"),
+  );
+}
 
 function buildSuggestedMapping(headers: string[], mappingTargets: { key: string; label: string }[]): Record<string, string | null> {
   const byLabel = new Map<string, string>();
-  for (const t of mappingTargets) byLabel.set(normalizeMasterName(t.label), t.key);
+  for (const t of mappingTargets) byLabel.set(normalizeImportHeaderLabel(t.label), t.key);
 
   const mapping: Record<string, string | null> = {};
   for (const header of headers) {
-    mapping[header] = byLabel.get(normalizeMasterName(header)) ?? null;
+    mapping[header] = byLabel.get(normalizeImportHeaderLabel(header)) ?? null;
   }
   return mapping;
 }
@@ -125,9 +151,15 @@ export async function parseImportFile(filename: string, bytes: ArrayBuffer): Pro
   }
 
   const customFieldDefs = await listCustomFieldDefinitions();
+  // KNOWN_CUSTOM_FIELD_KEYS(脚高/座面寸法/口金/梱包サイズ/古物の特徴/
+  // 売却の優先度)はすでにMAPPING_TARGETS(STATIC_EXPORT_FIELDS)側に
+  // ZAICO互換ラベルで含まれている — ここでもう一度足すと同じ項目が
+  // 選択肢に重複表示されてしまうため除外する。管理者が今後追加した、
+  // それ以外のcustom fieldだけをここで末尾に足す。
+  const dynamicCustomFieldDefs = customFieldDefs.filter((def) => !KNOWN_CUSTOM_FIELD_KEYS.has(def.fieldKey));
   const mappingTargets = [
     ...MAPPING_TARGETS.map((t) => ({ key: t.key, label: t.label })),
-    ...customFieldDefs.map((def) => ({ key: def.fieldKey, label: def.label })),
+    ...dynamicCustomFieldDefs.map((def) => ({ key: def.fieldKey, label: def.label })),
   ];
 
   return { headers, rows, suggestedMapping: buildSuggestedMapping(headers, mappingTargets), mappingTargets };
@@ -185,7 +217,11 @@ interface FieldMeta {
 async function buildFieldMetaMap(): Promise<Record<string, FieldMeta>> {
   const customFieldDefs = await listCustomFieldDefinitions();
   const map: Record<string, FieldMeta> = {};
-  for (const f of CORE_EXPORT_FIELDS) map[f.key] = { valueType: f.valueType, label: f.label };
+  for (const f of STATIC_EXPORT_FIELDS) map[f.key] = { valueType: f.valueType, label: f.label };
+  // extendedFields.ts側のBELLO UI寄りのラベル(例:「コンディション評価」)
+  // で上書きする — 警告文はZAICO互換の記号付きラベルより読みやすい方を
+  // 優先する(exportFields.tsの冒頭コメント参照。keyは共通、labelだけ
+  // 用途によって意図的に別々)。
   for (const f of EXTENDED_EXPORT_FIELDS) map[f.key] = { valueType: f.valueType, label: f.label };
   for (const def of customFieldDefs) map[def.fieldKey] = { valueType: def.fieldType === "NUMBER" ? "number" : "string", label: def.label };
   return map;
@@ -212,10 +248,13 @@ export async function resolveImportRows(
   const locationByName = new Map(locations.map((l) => [normalizeMasterName(l.name), l]));
   const statusByLabel = new Map(statuses.map((s) => [normalizeMasterName(s.label), s]));
 
-  // 既存Inventoryを1回だけ全件走査してSKU→レコードのMapを作る — 行ごと
-  // にDB問い合わせしない(spec §18、lib/inventory/zaicoSync.tsの
-  // fetchAllZaicoManagedInventoryと同じ形のprefetch)。
+  // 既存Inventoryを1回だけ全件走査して、sourceInventoryId(ZAICO在庫ID)
+  // →レコードのMapと、SKU→レコードのMapを両方作る — 行ごとにDB問い合わせ
+  // しない(spec §18、lib/inventory/zaicoSync.tsのfetchAllZaicoManagedInventory
+  // と同じ形のprefetch)。spec §7の優先順位(1.ZAICO在庫ID/sourceInventoryId
+  // → 2.BELLO在庫ID → 3.SKU)をfindExistingMatchで実装するための下準備。
   const existingBySku = new Map<string, InventoryModel>();
+  const existingBySourceId = new Map<string, InventoryModel>();
   {
     let nextToken: string | null | undefined;
     do {
@@ -226,21 +265,50 @@ export async function resolveImportRows(
         ...inventoryAuthMode,
       });
       if (errors) throw new Error(`既存在庫の取得に失敗しました: ${JSON.stringify(errors)}`);
-      for (const item of data) existingBySku.set(item.sku, item);
+      for (const item of data) {
+        existingBySku.set(item.sku, item);
+        if (item.sourceSystem === "ZAICO" && item.sourceInventoryId) existingBySourceId.set(item.sourceInventoryId, item);
+      }
       nextToken = nt;
     } while (nextToken);
   }
 
+  // 「在庫ID」(displayId)列とSKU列は書き込み対象ではなく、既存レコード
+  // の照合キー専用 — 一般のfieldEntriesループには含めない。
+  const displayIdHeader = Object.entries(mapping).find(([, target]) => target === "displayId")?.[0];
   const skuHeader = Object.entries(mapping).find(([, target]) => target === "sku")?.[0];
-  const fieldEntries = Object.entries(mapping).filter(([, target]) => target && target !== "sku") as [string, string][];
+  const fieldEntries = Object.entries(mapping).filter(([, target]) => target && target !== "sku" && target !== "displayId") as [string, string][];
+
+  /**
+   * spec §7の照合優先順位: 1. ZAICO在庫ID(sourceInventoryId) → 2. BELLO
+   * 在庫ID(ZAICO由来でない行は displayId===sku なので実質SKU一致) →
+   * 3. 別途マッピングされたSKU列。「在庫ID」列の値は、ZAICO由来行なら
+   * sourceInventoryIdの値、BELLO発行行ならSKUの値がそのまま入っている
+   * (lib/inventory/inventoryId.tsのresolveDisplayInventoryIdと対称)
+   * ため、まずsourceInventoryIdのMapを、次にSKUのMapを順に引く。
+   */
+  function findExistingMatch(row: Record<string, string>): { existing: InventoryModel | undefined; matchedValue: string } {
+    const displayIdValue = displayIdHeader ? (row[displayIdHeader]?.trim() ?? "") : "";
+    if (displayIdValue) {
+      const bySource = existingBySourceId.get(displayIdValue);
+      if (bySource) return { existing: bySource, matchedValue: displayIdValue };
+      const bySku = existingBySku.get(displayIdValue);
+      if (bySku) return { existing: bySku, matchedValue: displayIdValue };
+    }
+    const skuValue = skuHeader ? (row[skuHeader]?.trim() ?? "") : "";
+    if (skuValue) {
+      const bySku = existingBySku.get(skuValue);
+      if (bySku) return { existing: bySku, matchedValue: skuValue };
+    }
+    return { existing: undefined, matchedValue: displayIdValue || skuValue };
+  }
 
   return rawRows.map((row, i): ImportRowOutcome => {
     const rowNumber = i + 2; // +1 for 1-based, +1 for the header row itself
     const warnings: string[] = [];
-    const skuValue = skuHeader ? row[skuHeader]?.trim() : "";
-    const existing = skuValue ? existingBySku.get(skuValue) : undefined;
-    if (skuValue && !existing) {
-      warnings.push(`指定されたSKU "${skuValue}" は既存の在庫と一致しないため、新規登録として扱います（SKUは自動採番されます）。`);
+    const { existing, matchedValue } = findExistingMatch(row);
+    if (matchedValue && !existing) {
+      warnings.push(`指定された在庫ID/SKU "${matchedValue}" は既存の在庫と一致しないため、新規登録として扱います（SKUは自動採番されます）。`);
     }
 
     const payload: Record<string, string | number | null> = {};

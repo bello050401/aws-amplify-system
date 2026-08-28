@@ -4,7 +4,8 @@ import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { Schema } from "@/amplify/data/resource";
 import { listCategories, listCustomFieldDefinitions, listLocations, listStatuses, type InventoryListFilters } from "./queries";
 import { parseCustomFields } from "./customFieldsCodec";
-import { STATIC_EXPORT_FIELDS, type ExportFieldDef } from "./exportFields";
+import { STATIC_EXPORT_FIELDS, KNOWN_CUSTOM_FIELD_KEYS, type ExportFieldDef } from "./exportFields";
+import { resolveDisplayInventoryId } from "./inventoryId";
 import { toCsv } from "./csv";
 
 type InventoryModel = Schema["Inventory"]["type"];
@@ -95,17 +96,27 @@ export async function buildInventoryExport(
   const locationsById = new Map(locations.map((l) => [l.id, l]));
   const statusesById = new Map(statuses.map((s) => [s.id, s]));
 
-  const customFieldColumns: ExportFieldDef[] = customFieldDefs.map((def) => ({
-    key: def.fieldKey,
-    label: def.label,
-    valueType: def.fieldType === "NUMBER" ? "number" : "string",
-    importable: true,
-  }));
+  // KNOWN_CUSTOM_FIELD_KEYS(脚高/座面寸法/口金/梱包サイズ/古物の特徴/
+  // 売却の優先度)はすでにSTATIC_EXPORT_FIELDS側にZAICO互換ラベルで
+  // 列挙済み(ZAICO列順内の正しい位置に配置するため) — ここでもう一度
+  // 列を足すと同じ項目が重複して出力されてしまうため除外する。管理者が
+  // 今後追加した、それ以外のcustom fieldだけをここで末尾に足す。
+  const customFieldColumns: ExportFieldDef[] = customFieldDefs
+    .filter((def) => !KNOWN_CUSTOM_FIELD_KEYS.has(def.fieldKey))
+    .map((def) => ({
+      key: def.fieldKey,
+      label: def.label,
+      valueType: def.fieldType === "NUMBER" ? "number" : "string",
+      importable: true,
+    }));
   const columns: ExportFieldDef[] = [...STATIC_EXPORT_FIELDS, ...customFieldColumns];
 
   const rows: Record<string, string | number>[] = items.map((item) => {
     const customFields = parseCustomFields(item.customFields) ?? {};
     const raw: Record<string, unknown> = {
+      // ZAICO互換ブロックの先頭列 — 表示用「在庫ID」(内部DB idでもSKU
+      // でもない第3の値。lib/inventory/inventoryId.ts参照)。
+      displayId: resolveDisplayInventoryId({ sourceSystem: item.sourceSystem ?? null, sourceInventoryId: item.sourceInventoryId ?? null, sku: item.sku }),
       sku: item.sku,
       name: item.name,
       categoryName: item.categoryId ? (categoriesById.get(item.categoryId)?.name ?? "") : "",
@@ -124,9 +135,18 @@ export async function buildInventoryExport(
       updatedAt: item.updatedAt,
       createdBy: item.createdBy ?? "",
       updatedBy: item.updatedBy ?? "",
+      // ZAICOにはあるがBELLOでは追跡していない列 — 列自体は互換性のため
+      // 出力するが値は常に空欄(exportFields.tsのコメント参照)。
+      stocktakeDate: "",
+      groupTag: "",
     };
     for (const col of STATIC_EXPORT_FIELDS) {
-      if (raw[col.key] === undefined) raw[col.key] = (item as unknown as Record<string, unknown>)[col.key] ?? "";
+      if (raw[col.key] !== undefined) continue;
+      // ⚪︎脚高/⚪︎座面寸法/⚪︎口金/⚪︎梱包サイズ/⚫︎古物の特徴/売却の優先度は
+      // CustomFieldDefinition由来 — Inventoryモデルの実カラムではないため
+      // item[col.key]ではなくcustomFields[col.key]から読む
+      // (exportFields.tsのKNOWN_CUSTOM_FIELD_KEYS参照)。
+      raw[col.key] = KNOWN_CUSTOM_FIELD_KEYS.has(col.key) ? (customFields[col.key] ?? "") : ((item as unknown as Record<string, unknown>)[col.key] ?? "");
     }
     for (const col of customFieldColumns) raw[col.key] = customFields[col.key] ?? "";
 

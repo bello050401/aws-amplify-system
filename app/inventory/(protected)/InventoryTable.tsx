@@ -85,7 +85,7 @@ function renderReadOnlyCell(
       );
     }
     case "sku":
-      return <span className="block truncate font-mono text-[12px] text-gray-700">{row.sku}</span>;
+      return <span className="block truncate font-mono text-[12px] text-gray-700">{row.displayId}</span>;
     case "name":
       return (
         <span className="block truncate font-medium text-gray-900" title={row.name}>

@@ -57,6 +57,19 @@ function getToken(): string {
   return token;
 }
 
+/**
+ * 設定画面の「ZAICO API接続設定」表示用 — サーバー環境変数
+ * `ZAICO_API_TOKEN`が設定されているかどうかの真偽値だけを返す。
+ * トークンの値そのものは一切返さない・伏字表示すら作らない設計
+ * (spec: 「伏字表示すら不要」) — この関数の戻り値をクライアント
+ * コンポーネントへpropsとして渡しても、渡っているのは真偽値1つだけで
+ * トークン本体は一度もJavaScriptの実行環境（サーバーどちらのプロセス
+ * 境界も含め）を越えない。
+ */
+export function isZaicoTokenConfigured(): boolean {
+  return Boolean(process.env.ZAICO_API_TOKEN);
+}
+
 function getBaseUrl(): string {
   return process.env.ZAICO_API_BASE_URL ?? DEFAULT_BASE_URL;
 }

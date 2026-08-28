@@ -18,7 +18,7 @@ import type { ZaicoSyncResult } from "@/lib/inventory/zaicoSync";
  * separate, explicitly-labeled action so it's never triggered by
  * accident while testing the single-item path.
  */
-export function ZaicoSyncPanel() {
+export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) {
   const [zaicoId, setZaicoId] = useState("");
   const [busy, setBusy] = useState<"idle" | "one" | "all">("idle");
   const [result, setResult] = useState<ZaicoSyncResult | null>(null);
@@ -60,6 +60,28 @@ export function ZaicoSyncPanel() {
       <p className="mb-4 text-[12px] text-gray-500">
         ZAICOの在庫データをBELLOへ取り込みます（ZAICO → BELLOの一方向のみ。BELLOからZAICOへは一切書き込みません）。
       </p>
+
+      {/* ZAICO API接続設定 — トークンの値は表示しない・伏字すら表示しない
+          (サーバー環境変数ZAICO_API_TOKENが設定されているかどうかの
+          真偽値のみをpage.tsx側で判定し、ここへ渡している。
+          lib/zaico/client.tsのisZaicoTokenConfigured参照)。 */}
+      <div className="mb-3 border border-gray-200 p-4">
+        <p className="mb-1 text-[12px] font-bold text-gray-700">ZAICO API接続設定</p>
+        <p className="text-[13px]">
+          {zaicoConnected ? (
+            <span className="font-bold text-green-700">● 接続済み</span>
+          ) : (
+            <span className="font-bold text-red-600">● 未設定</span>
+          )}
+        </p>
+        {!zaicoConnected && (
+          <p className="mt-1 text-[11px] text-gray-500">
+            サーバー環境変数 ZAICO_API_TOKEN が設定されていません。ローカル開発では
+            <code className="mx-1 bg-gray-100 px-1">.env.local</code>
+            に、本番環境ではAWS側の安全なsecret管理（詳細は開発チームへ確認してください）に設定してから、サーバーを再起動・再デプロイしてください。
+          </p>
+        )}
+      </div>
 
       <div className="border border-gray-200 p-4">
         <p className="mb-2 text-[12px] font-bold text-gray-700">1件同期（テスト用）</p>

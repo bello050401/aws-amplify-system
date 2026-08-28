@@ -4,6 +4,7 @@ import type { Schema } from "@/amplify/data/resource";
 import { parseCustomFields } from "./customFieldsCodec";
 import type { InventoryExtendedFields } from "./extendedFields";
 import { normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
+import { resolveDisplayInventoryId } from "./inventoryId";
 
 type InventoryModel = Schema["Inventory"]["type"];
 
@@ -18,6 +19,10 @@ export interface InventoryListFilters {
 export interface InventoryListRow {
   id: string;
   sku: string;
+  /** ユーザーに見せる「在庫ID」— sku('B000001'等)とは別概念。ZAICO由来の商品はZAICOの在庫IDをそのまま表示し、BELLO作成の商品はskuを表示する。See lib/inventory/inventoryId.ts。 */
+  displayId: string;
+  sourceSystem: string | null;
+  sourceInventoryId: string | null;
   name: string;
   categoryId: string | null;
   statusId: string | null;
@@ -63,6 +68,9 @@ function toListRow(item: InventoryModel): InventoryListRow {
   return {
     id: item.id,
     sku: item.sku,
+    displayId: resolveDisplayInventoryId({ sourceSystem: item.sourceSystem ?? null, sourceInventoryId: item.sourceInventoryId ?? null, sku: item.sku }),
+    sourceSystem: item.sourceSystem ?? null,
+    sourceInventoryId: item.sourceInventoryId ?? null,
     name: item.name,
     categoryId: item.categoryId ?? null,
     statusId: item.statusId ?? null,

@@ -3,6 +3,7 @@ import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
 import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
+import { isZaicoTokenConfigured } from "@/lib/zaico/client";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
 
@@ -49,7 +50,13 @@ export default async function InventorySettingsPage() {
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">設定</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <p className="mb-4 text-[12px] text-gray-500">カテゴリ・保管場所の管理を行います。</p>
-        <SettingsTabs categories={categories} locations={locations} readOnly={role !== "ADMIN"} isAdmin={role === "ADMIN"} />
+        <SettingsTabs
+          categories={categories}
+          locations={locations}
+          readOnly={role !== "ADMIN"}
+          isAdmin={role === "ADMIN"}
+          zaicoConnected={isZaicoTokenConfigured()}
+        />
       </div>
     </div>
   );
