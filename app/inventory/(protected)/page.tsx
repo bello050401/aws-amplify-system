@@ -1,5 +1,14 @@
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { listCategories, listInventory, listLocations, listStatuses } from "@/lib/inventory/queries";
+import {
+  listCategories,
+  listCustomFieldDefinitions,
+  listInventory,
+  listInventoryAdvanced,
+  listInventorySimpleSearch,
+  listLocations,
+  listStatuses,
+} from "@/lib/inventory/queries";
+import { buildSearchFieldDefs, completeConditions, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
 import { InventoryHeader } from "../InventoryHeader";
 import { DirectEditProvider } from "./DirectEditProvider";
 import { InventorySidebar } from "./InventorySidebar";
@@ -15,10 +24,25 @@ interface InventoryListPageProps {
     locationId?: string;
     statusId?: string;
     advanced?: string;
+    /** 詳細検索の実際の条件 — JSON文字列(lib/inventory/advancedSearch.tsのAdvancedSearchQuery)。存在し、有効な条件を1件以上含む場合のみ詳細検索モードになる。 */
+    adv?: string;
     cursor?: string;
     stack?: string;
     limit?: string;
+    /** 詳細検索/クイック検索(offsetページング)専用。cursorページングとは独立。 */
+    offset?: string;
   };
+}
+
+function parseAdvancedQuery(raw: string | undefined): AdvancedSearchQuery | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as AdvancedSearchQuery;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.conditions)) return null;
+    return { combinator: parsed.combinator === "OR" ? "OR" : "AND", conditions: parsed.conditions };
+  } catch {
+    return null; // 壊れた/手編集されたURLは「詳細検索なし」として無視する — エラー画面にしない
+  }
 }
 
 export default async function InventoryListPage({ searchParams }: InventoryListPageProps) {
@@ -32,21 +56,42 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   const advancedOpen = searchParams.advanced === "1";
   const cursorStack = searchParams.stack ? searchParams.stack.split(",") : [];
   const categoryIds = searchParams.categoryIds ? searchParams.categoryIds.split(",").filter(Boolean) : [];
+  const offset = Math.max(0, Number(searchParams.offset) || 0);
 
-  const [categories, locations, statuses, listResult] = await Promise.all([
+  const advancedQueryRaw = parseAdvancedQuery(searchParams.adv);
+  const advancedConditions = advancedQueryRaw ? completeConditions(advancedQueryRaw) : [];
+  // 有効な条件が1件も無いadvクエリ(全部空欄のまま送信した等)は詳細検索
+  // モードとして扱わない — 通常の一覧表示にフォールバックする。
+  const advancedQuery: AdvancedSearchQuery | null =
+    advancedQueryRaw && advancedConditions.length > 0 ? { ...advancedQueryRaw, conditions: advancedConditions } : null;
+  const hasQuickSearchText = Boolean(searchParams.q?.trim());
+  // 詳細検索が有効な間はサイドバー/クイック検索の単純条件を無視する
+  // (詳細検索は既存の単純フィルタを置き換える — 両方を同時に組み合わ
+  // せるUIは今回のスコープ外、混乱を避けるため)。
+  const searchMode: "advanced" | "quick" | "plain" = advancedQuery ? "advanced" : hasQuickSearchText ? "quick" : "plain";
+
+  const [categories, locations, statuses, customFieldDefs] = await Promise.all([
     listCategories(),
     listLocations(),
     listStatuses(),
-    listInventory(
-      {
-        q: searchParams.q,
-        categoryIds,
-        locationId: searchParams.locationId,
-        statusId: searchParams.statusId,
-      },
-      { cursor: searchParams.cursor, limit },
-    ),
+    listCustomFieldDefinitions(),
   ]);
+
+  const fieldDefs = buildSearchFieldDefs(customFieldDefs, { categories, locations, statuses });
+  const fieldsByKey = new Map(fieldDefs.map((f) => [f.key, f]));
+
+  const listResult =
+    searchMode === "advanced" && advancedQuery
+      ? await listInventoryAdvanced(advancedQuery, fieldsByKey, { offset, limit })
+      : searchMode === "quick"
+        ? await listInventorySimpleSearch(
+            { q: searchParams.q, categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId },
+            { offset, limit },
+          )
+        : await listInventory(
+            { categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId },
+            { cursor: searchParams.cursor, limit },
+          );
 
   // Plain objects, not Maps — this now crosses into InventoryTable, a
   // Client Component (it needs to read the column-visibility preference
@@ -62,7 +107,11 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
     locationId: searchParams.locationId,
     statusId: searchParams.statusId,
     advanced: searchParams.advanced,
+    adv: searchParams.adv,
   };
+
+  const totalLabel =
+    "total" in listResult ? `${listResult.total.toLocaleString("ja-JP")}件` : `${listResult.items.length}件`;
 
   return (
     // DirectEditProvider (一覧直接編集の状態) wraps both InventoryHeader's
@@ -82,7 +131,9 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
               locationId={searchParams.locationId}
               statusId={searchParams.statusId}
               advancedOpen={advancedOpen}
-              totalLabel={`${listResult.items.length}件`}
+              advancedActive={searchMode === "advanced"}
+              advRaw={searchParams.adv}
+              totalLabel={totalLabel}
             />
           }
         />
@@ -95,15 +146,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
             q={searchParams.q}
           />
           {advancedOpen ? (
-            <InventoryAdvancedSearchPanel
-              categories={categories}
-              locations={locations}
-              statuses={statuses}
-              q={searchParams.q}
-              categoryIds={categoryIds}
-              locationId={searchParams.locationId}
-              statusId={searchParams.statusId}
-            />
+            <InventoryAdvancedSearchPanel fieldDefs={fieldDefs} initialQuery={advancedQueryRaw} />
           ) : null}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1">
@@ -116,14 +159,26 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
                 statusesById={statusesById}
               />
             </div>
-            <InventoryPagination
-              baseParams={baseParams}
-              cursor={searchParams.cursor}
-              cursorStack={cursorStack}
-              nextToken={listResult.nextToken}
-              limit={limit}
-              currentCount={listResult.items.length}
-            />
+            {"total" in listResult ? (
+              <InventoryPagination
+                mode="offset"
+                baseParams={baseParams}
+                offset={listResult.offset}
+                total={listResult.total}
+                limit={limit}
+                currentCount={listResult.items.length}
+              />
+            ) : (
+              <InventoryPagination
+                mode="cursor"
+                baseParams={baseParams}
+                cursor={searchParams.cursor}
+                cursorStack={cursorStack}
+                nextToken={listResult.nextToken}
+                limit={limit}
+                currentCount={listResult.items.length}
+              />
+            )}
           </div>
         </div>
       </div>

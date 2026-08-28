@@ -15,6 +15,10 @@ interface InventoryToolbarProps {
   locationId?: string;
   statusId?: string;
   advancedOpen: boolean;
+  /** 詳細検索の条件が実際に適用されている(=一覧が詳細検索結果を表示している)かどうか。パネルを開いているだけ(advancedOpen)とは別 — スタイルの区別と「詳細検索の結果を表示中」の案内に使う。 */
+  advancedActive: boolean;
+  /** searchParams.advをそのまま — パネルの開閉トグルだけでは詳細検索条件を消さないため保持しておく。 */
+  advRaw?: string;
   totalLabel: string;
 }
 
@@ -38,7 +42,7 @@ interface InventoryToolbarProps {
  * Link/native form GET submit; guardedNavigate degrades to a plain
  * `router.push` in that case (see UnsavedChangesProvider).
  */
-export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, advancedOpen, totalLabel }: InventoryToolbarProps) {
+export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, advancedOpen, advancedActive, advRaw, totalLabel }: InventoryToolbarProps) {
   const canEdit = role === "ADMIN" || role === "EDITOR";
   const { isDirty, guardedNavigate } = useUnsavedChanges();
   const [importOpen, setImportOpen] = useState(false);
@@ -51,6 +55,9 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     if (locationId) sp.set("locationId", locationId);
     if (statusId) sp.set("statusId", statusId);
     if (overrides.advanced) sp.set("advanced", overrides.advanced);
+    // パネルの開閉トグル自体は検索条件を消さない — 既に適用中の詳細検索
+    // 条件(adv)があればそのまま引き継ぐ。
+    if (advRaw) sp.set("adv", advRaw);
     const qs = sp.toString();
     return qs ? `/inventory?${qs}` : "/inventory";
   }
@@ -85,6 +92,9 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
         <div className="flex items-center gap-2 border border-gray-200 px-2.5 py-1">
           <h1 className="text-[15px] font-bold tracking-tight text-gray-900">在庫一覧</h1>
           <span className="text-[11px] font-medium text-gray-400">{totalLabel}</span>
+          {advancedActive && (
+            <span className="border border-gray-900 bg-gray-900 px-1.5 py-0.5 text-[10px] font-bold text-white">詳細検索の結果</span>
+          )}
         </div>
 
         <div className="h-6 w-px bg-gray-200" aria-hidden />

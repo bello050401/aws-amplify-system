@@ -5,6 +5,7 @@ import { parseCustomFields } from "./customFieldsCodec";
 import type { InventoryExtendedFields } from "./extendedFields";
 import { normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
 import { resolveDisplayInventoryId } from "./inventoryId";
+import { evaluateQuery, matchesQuickSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 
 type InventoryModel = Schema["Inventory"]["type"];
 
@@ -182,6 +183,115 @@ export async function listInventory(
     items: data.map(toListRow),
     nextToken: nextToken ?? null,
   };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 詳細検索・クイック検索(case-insensitive)・売上集計 共通の全件取得
+// (夜間開発指示書 §6/§7/§12)。既存のlistInventory(上記、cursorページ
+// ング)は"サイドバーのカテゴリ/保管場所/状態のみ"の従来通り安価な経路
+// として無変更で残し、テキスト検索・詳細検索・売上集計だけがこちらの
+// 全件走査(chunked、lib/inventory/inventoryExport.tsのfetchAllForExport
+// と同じ形)を経由する。DynamoDBの`contains`はcase-sensitiveであり、
+// 保存値をlowercase化することも禁止されているため、文字列演算子の判定
+// はこの走査で取得した候補集合に対しapplication code側でcase-insensitive
+// に行う(lib/inventory/advancedSearch.ts参照) — フロントだけ
+// lowercaseにする見かけだけの実装ではない。
+// ────────────────────────────────────────────────────────────────────
+
+export interface InventorySearchRecord extends InventoryListRow, ExtendedFieldsAsNullable {
+  customFields: Record<string, unknown> | null;
+}
+
+function toSearchRecord(item: InventoryModel): InventorySearchRecord {
+  return { ...toListRow(item), ...toExtendedFields(item), customFields: parseCustomFields(item.customFields) };
+}
+
+/** 想定規模を大きく超える件数の走査を続けて詰まらせないための安全弁(lib/inventory/inventoryImport.tsのIMPORT_MAX_ROWSと同じ考え方)。将来的にもっと大きな規模が必要になった場合はOpenSearch等の全文検索基盤への切り替えが必要になる旨を完了報告に明記する。 */
+export const SEARCH_MAX_SCAN_ITEMS = 20000;
+
+/**
+ * 追加のAppSync filter条件(サイドバーのカテゴリ/保管場所/状態等、
+ * DynamoDBレベルで絞り込めるもの)を先に適用したうえで、非削除の全件
+ * をページングしながら取得する。
+ */
+async function fetchAllInventoryRecords(extraConditions: Record<string, unknown>[] = []): Promise<InventorySearchRecord[]> {
+  const items: InventorySearchRecord[] = [];
+  let nextToken: string | null | undefined;
+  do {
+    const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.list({
+      filter: { and: [{ deletedAt: { attributeExists: false } }, ...extraConditions] },
+      limit: 200,
+      nextToken: nextToken ?? undefined,
+      ...inventoryAuthMode,
+    });
+    if (errors) throw new Error(`在庫データの取得に失敗しました: ${JSON.stringify(errors)}`);
+    items.push(...data.map(toSearchRecord));
+    nextToken = nt;
+    if (items.length >= SEARCH_MAX_SCAN_ITEMS) break;
+  } while (nextToken);
+  return items;
+}
+
+/** 売上集計(統合改善指示書)等、フィルタなしで在庫全件が必要な呼び出し向け。 */
+export async function listAllInventory(): Promise<InventorySearchRecord[]> {
+  return fetchAllInventoryRecords();
+}
+
+export interface SearchPage<T> {
+  items: T[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+/**
+ * クイック検索(商品検索ボックスの`q`)専用 — 在庫ID/SKU/物品名への
+ * case-insensitive部分一致。カテゴリ/保管場所/状態はDynamoDBへ実際に
+ * 絞り込み条件として渡す(既存listInventoryと同じ条件組み立て)。
+ * `q`が空文字列の場合でもこの経路を通すのは、カテゴリ複数選択済み+
+ * 直近まで検索語があったURLの整合性のため呼び出し元(page.tsx)が判断
+ * する — この関数自体は空qなら絞り込みなしとして全件を返す。
+ */
+export async function listInventorySimpleSearch(
+  filters: InventoryListFilters,
+  options: { offset: number; limit: number },
+): Promise<SearchPage<InventoryListRow>> {
+  const conditions: Record<string, unknown>[] = [];
+  if (filters.categoryIds && filters.categoryIds.length > 0) {
+    conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
+  }
+  if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
+  if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
+
+  const all = await fetchAllInventoryRecords(conditions);
+  const q = filters.q?.trim();
+  const filtered = q ? all.filter((r) => matchesQuickSearch(r as unknown as SearchableRecord, q)) : all;
+
+  const total = filtered.length;
+  const page = filtered.slice(options.offset, options.offset + options.limit);
+  return { items: page, total, offset: options.offset, limit: options.limit };
+}
+
+/**
+ * 詳細検索(spec §7)— AND/OR・演算子つきの複数条件で在庫全件から絞り
+ * 込む。カテゴリ/保管場所/状態/日付/数値も含め、すべての判定を
+ * lib/inventory/advancedSearch.tsのevaluateQueryへ委譲する(AND/ORが
+ * 混在する条件をDynamoDB filter単体では正しく表現できないため、この
+ * 経路は非削除フィルタ以外をDynamoDBへ渡さず、全件走査後にアプリケー
+ * ションコード側で判定する — 既存のexport/import機能と同じ「全件を
+ * 一度読んで判定する」設計を踏襲)。
+ */
+export async function listInventoryAdvanced(
+  query: AdvancedSearchQuery,
+  fieldsByKey: Map<string, SearchFieldDef>,
+  options: { offset: number; limit: number },
+): Promise<SearchPage<InventoryListRow>> {
+  const all = await fetchAllInventoryRecords();
+  const filtered = all.filter((r) => evaluateQuery(r as unknown as SearchableRecord, query, fieldsByKey));
+
+  const total = filtered.length;
+  const page = filtered.slice(options.offset, options.offset + options.limit);
+  return { items: page, total, offset: options.offset, limit: options.limit };
 }
 
 export interface InventoryHistoryRow {

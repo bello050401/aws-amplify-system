@@ -6,6 +6,7 @@ import { listCategories, listCustomFieldDefinitions, listLocations, listStatuses
 import { parseCustomFields } from "./customFieldsCodec";
 import { STATIC_EXPORT_FIELDS, KNOWN_CUSTOM_FIELD_KEYS, type ExportFieldDef } from "./exportFields";
 import { resolveDisplayInventoryId } from "./inventoryId";
+import { matchesQuickSearch } from "./advancedSearch";
 import { toCsv } from "./csv";
 
 type InventoryModel = Schema["Inventory"]["type"];
@@ -20,7 +21,19 @@ type InventoryModel = Schema["Inventory"]["type"];
  * けを出力する。
  */
 
-/** 検索/絞り込み結果のエクスポート用に、lib/inventory/queries.tsのlistInventoryと同じフィルタ条件を再構築する — filterのビルドロジックそのものは重複させず、その関数と同じ形の`filters`をそのままAppSyncのfilter式へ変換する専用の軽量版(ページング不要、全件を集める点だけが違う)。 */
+/**
+ * 検索/絞り込み結果のエクスポート用に、lib/inventory/queries.tsの
+ * listInventoryと同じフィルタ条件を再構築する — filterのビルドロジッ
+ * クそのものは重複させず、その関数と同じ形の`filters`をそのまま
+ * AppSyncのfilter式へ変換する専用の軽量版(ページング不要、全件を集
+ * める点だけが違う)。
+ *
+ * `q`(自由文字列検索)はここに含めない — DynamoDBの`contains`は
+ * case-sensitiveで、保存値をlowercase化することも禁止されているため
+ * (夜間開発指示書 §6)、`q`はfetchAllForExportが全件取得した後、
+ * lib/inventory/advancedSearch.tsのmatchesQuickSearchでcase-insensitive
+ * に絞り込む(buildInventoryExport参照)。
+ */
 function buildFilterConditions(filters: InventoryListFilters): Record<string, unknown>[] {
   const conditions: Record<string, unknown>[] = [{ deletedAt: { attributeExists: false } }];
   if (filters.categoryIds && filters.categoryIds.length > 0) {
@@ -28,7 +41,6 @@ function buildFilterConditions(filters: InventoryListFilters): Record<string, un
   }
   if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
-  if (filters.q) conditions.push({ or: [{ name: { contains: filters.q } }, { sku: { contains: filters.q } }] });
   return conditions;
 }
 
@@ -96,6 +108,22 @@ export async function buildInventoryExport(
   const locationsById = new Map(locations.map((l) => [l.id, l]));
   const statusesById = new Map(statuses.map((s) => [s.id, s]));
 
+  // 自由文字列検索(q)はcase-insensitiveに、在庫ID/SKU/物品名へ後段で
+  // 絞り込む(理由は上のbuildFilterConditionsのコメント参照)。
+  const filteredItems = filters.q
+    ? items.filter((item) =>
+        matchesQuickSearch(
+          {
+            displayId: resolveDisplayInventoryId({ sourceSystem: item.sourceSystem ?? null, sourceInventoryId: item.sourceInventoryId ?? null, sku: item.sku }),
+            sku: item.sku,
+            name: item.name,
+            customFields: null,
+          },
+          filters.q!,
+        ),
+      )
+    : items;
+
   // KNOWN_CUSTOM_FIELD_KEYS(脚高/座面寸法/口金/梱包サイズ/古物の特徴/
   // 売却の優先度)はすでにSTATIC_EXPORT_FIELDS側にZAICO互換ラベルで
   // 列挙済み(ZAICO列順内の正しい位置に配置するため) — ここでもう一度
@@ -111,7 +139,7 @@ export async function buildInventoryExport(
     }));
   const columns: ExportFieldDef[] = [...STATIC_EXPORT_FIELDS, ...customFieldColumns];
 
-  const rows: Record<string, string | number>[] = items.map((item) => {
+  const rows: Record<string, string | number>[] = filteredItems.map((item) => {
     const customFields = parseCustomFields(item.customFields) ?? {};
     const raw: Record<string, unknown> = {
       // ZAICO互換ブロックの先頭列 — 表示用「在庫ID」(内部DB idでもSKU
