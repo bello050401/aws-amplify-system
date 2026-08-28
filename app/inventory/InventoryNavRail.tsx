@@ -33,9 +33,15 @@ export function InventoryNavRail() {
 
   return (
     <nav className="flex w-16 shrink-0 flex-col border-r border-gray-200 bg-white">
-      <div className="flex h-12 items-center justify-center gap-1.5 border-b border-gray-200">
-        <BelloLogo className="h-5 w-5" />
-        <span className="text-[11px] font-bold tracking-wide text-gray-700">BELLO</span>
+      {/* Brand area — the icon itself already carries the "BELLO SYSTEM"
+          wordmark, so it's the whole brand mark here now, not an icon
+          plus a separate redundant "BELLO" label beside it. Sized by
+          padding + BelloLogo's own "sidebar" variant (~48px tall, within
+          spec's 40–60px range) rather than a fixed height on this
+          container, so it can't clip a real logo file whose actual
+          proportions turn out taller than expected. */}
+      <div className="flex items-center justify-center border-b border-gray-200 px-2 py-3">
+        <BelloLogo variant="sidebar" />
       </div>
       <ul className="flex flex-1 flex-col py-1">
         {NAV_ITEMS.map((item) => {
