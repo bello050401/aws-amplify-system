@@ -17,13 +17,17 @@ export type BelloLogoVariant = "sidebar" | "login";
  *
  * - "sidebar": InventoryNavRail's brand area — this IS the brand mark up
  *   there now (spec: no more separate "BELLO" text beside a small icon);
- *   ~48px tall, within the spec's suggested 40–60px range.
+ *   72px tall (~1.5x the original 48px, per follow-up request) — the
+ *   nav rail itself (`w-16`, 64px) is never widened for this: InventoryNavRail
+ *   clips its brand container with `overflow-hidden`, so even if the
+ *   real file's aspect ratio would otherwise render wider than the rail,
+ *   it's cropped there rather than pushing the rail wider or shifting
+ *   the nav items below it.
  * - "login": next to the "BELLO 在庫管理" heading on the login screen —
- *   a little larger, since it has a full page width to sit in rather
- *   than a 64px rail.
+ *   unchanged by that follow-up request.
  */
 const VARIANT_CLASSES: Record<BelloLogoVariant, string> = {
-  sidebar: "h-12 w-auto max-w-[56px]",
+  sidebar: "h-[72px] w-auto max-w-[84px]",
   login: "h-10 w-auto max-w-[160px]",
 };
 

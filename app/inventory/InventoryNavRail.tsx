@@ -36,11 +36,15 @@ export function InventoryNavRail() {
       {/* Brand area — the icon itself already carries the "BELLO SYSTEM"
           wordmark, so it's the whole brand mark here now, not an icon
           plus a separate redundant "BELLO" label beside it. Sized by
-          padding + BelloLogo's own "sidebar" variant (~48px tall, within
-          spec's 40–60px range) rather than a fixed height on this
-          container, so it can't clip a real logo file whose actual
-          proportions turn out taller than expected. */}
-      <div className="flex items-center justify-center border-b border-gray-200 px-2 py-3">
+          padding + BelloLogo's own "sidebar" variant (72px tall) rather
+          than a fixed height on this container, so it can't clip a real
+          logo file whose actual proportions turn out taller than
+          expected. `overflow-hidden` is the guard for the opposite risk
+          — the rail itself stays exactly `w-16` no matter what: if the
+          real file's aspect ratio would render wider than that at 72px
+          tall, it's cropped right here rather than widening the rail or
+          shifting the nav items below. */}
+      <div className="flex items-center justify-center overflow-hidden border-b border-gray-200 px-2 py-3">
         <BelloLogo variant="sidebar" />
       </div>
       <ul className="flex flex-1 flex-col py-1">
