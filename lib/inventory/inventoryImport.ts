@@ -44,6 +44,8 @@ export interface ParsedImportFile {
   suggestedMapping: Record<string, string | null>;
   /** マッピングUIが選択肢として提示する対応先の全リスト（"sku"含む・CustomFieldDefinition分含む） — クライアント側は静的なexportFields.tsに加えて動的なcustom fieldsも知る必要があるため、ここでまとめて返す。 */
   mappingTargets: { key: string; label: string }[];
+  /** header → その列に実データがある行が1件でもあるか。「自動対応済み/確認が必要/対応なし」のUI上の分類(夜間開発指示書 §8)に使う — 空欄しかない列は対応なしのまま無視して問題ない可能性が高いことを示す目安。 */
+  columnHasData: Record<string, boolean>;
 }
 
 /** 安全弁 — 想定規模(数百〜数千件)を大きく超えるファイルは、ブラウザ/Server Actionを詰まらせる前に断る(spec §18)。将来的にもっと大きな規模が必要になった場合は、chunk/バックグラウンド処理への切り替えが必要になる旨を完了報告で明記する。 */
@@ -82,13 +84,83 @@ function normalizeImportHeaderLabel(text: string): string {
   );
 }
 
+/**
+ * 列名の先頭についた装飾記号(ZAICOのエクスポート列名によく現れる
+ * ⚪/⚫/○/●/◎/◉/☆/★/□/■/・等)を取り除く — spec §8の例示そのまま。
+ * "先頭"だけを対象にする(文字列中間・末尾は触らない)ことで、
+ * "<<出品情報>>"のような意味のある記号や、たまたま本文中に同じ文字を
+ * 含む値を無条件に壊さないようにしている。ZAICO_COMPAT_FIELDSの正式
+ * ラベル自体はこの記号を含めたままexactマッチする(normalizeImportHeaderLabel
+ * のみ)ので、この関数は「記号の有無・種類が実際のファイルによって揺れ
+ * ている」場合のフォールバック専用(buildSuggestedMappingの後段でのみ
+ * 使う)。
+ */
+function stripLeadingDecoration(text: string): string {
+  return text
+    .normalize("NFKC")
+    .trim()
+    .replace(/^[⚪⚫○●◎◉☆★□■・\s]+/u, "")
+    .trim();
+}
+
+/**
+ * BELLO/ZAICOでよく使われる別名(spec §8)。正式なマッピング対象ラベル
+ * (mappingTargets)とは表記が異なるが意味は一意に定まる、人手で確認済
+ * みの組だけを列挙する — あいまい一致(編集距離・部分一致等)は一切行
+ * わない。特に在庫ID/SKU/価格/カテゴリ/保管場所/日付/古物台帳のような
+ * 誤認識のリスクが高い項目は、ここに無い限り自動確定しない
+ * (buildSuggestedMappingの4段目「不明」へ回り、ユーザー確認が必要にな
+ * る)。
+ */
+const IMPORT_HEADER_ALIASES: { alias: string; key: string }[] = [
+  { alias: "商品名", key: "name" }, // ZAICOの正式列名は「物品名」
+  { alias: "バーコード", key: "barcode" }, // ZAICOの正式列名は「QRコード・バーコードの値」
+  { alias: "仕入原価", key: "purchasePrice" }, // 一覧列の表記(ZAICOの正式列名は「⚫︎購入価格」)
+  { alias: "仕入単価", key: "purchasePrice" },
+  { alias: "販売価格（成約）", key: "salePrice" }, // 一覧列の表記(ZAICOの正式列名は「⚫︎販売価格」)
+  { alias: "カテゴリー", key: "categoryName" }, // 長音有無の表記ゆれ
+  { alias: "ステータス", key: "statusLabel" },
+];
+
+/**
+ * ヘッダー→BELLO項目の自動対応付け(spec §8の優先順位):
+ * 1. 完全一致 / 2. normalizeHeader後完全一致 — この2つはどちらも
+ *    normalizeImportHeaderLabelで両辺を正規化してから比較するため、
+ *    実質1回のMap検索で両方を兼ねる(生の完全一致は正規化後も完全一致
+ *    のまま、normalizeが結果を変えることはない)。
+ * 3. 明示alias(IMPORT_HEADER_ALIASES) — 上記で一致しなかった場合のみ。
+ * 4. 先頭の装飾記号を外した上での再挑戦(フォールバック) — ZAICOの実
+ *    エクスポートで記号の有無・種類が揺れているケースを拾う。
+ * これでも一致しなければnull — フリー本推測(fuzzy matching)は一切行
+ * わず、ユーザー確認へ回す(spec: 「勝手に確定しない」)。
+ */
 function buildSuggestedMapping(headers: string[], mappingTargets: { key: string; label: string }[]): Record<string, string | null> {
+  const targetKeys = new Set(mappingTargets.map((t) => t.key));
+
   const byLabel = new Map<string, string>();
-  for (const t of mappingTargets) byLabel.set(normalizeImportHeaderLabel(t.label), t.key);
+  for (const t of mappingTargets) {
+    const norm = normalizeImportHeaderLabel(t.label);
+    if (!byLabel.has(norm)) byLabel.set(norm, t.key);
+  }
+
+  const byAlias = new Map<string, string>();
+  for (const { alias, key } of IMPORT_HEADER_ALIASES) {
+    if (!targetKeys.has(key)) continue; // マッピング候補に無いkey(理論上到達しない)は登録しない
+    const norm = normalizeImportHeaderLabel(alias);
+    if (!byAlias.has(norm)) byAlias.set(norm, key);
+  }
+
+  const byStrippedLabel = new Map<string, string>();
+  for (const t of mappingTargets) {
+    const stripped = normalizeImportHeaderLabel(stripLeadingDecoration(t.label));
+    if (stripped && !byStrippedLabel.has(stripped)) byStrippedLabel.set(stripped, t.key);
+  }
 
   const mapping: Record<string, string | null> = {};
   for (const header of headers) {
-    mapping[header] = byLabel.get(normalizeImportHeaderLabel(header)) ?? null;
+    const normalized = normalizeImportHeaderLabel(header);
+    const strippedNormalized = normalizeImportHeaderLabel(stripLeadingDecoration(header));
+    mapping[header] = byLabel.get(normalized) ?? byAlias.get(normalized) ?? byStrippedLabel.get(strippedNormalized) ?? byLabel.get(strippedNormalized) ?? null;
   }
   return mapping;
 }
@@ -162,7 +234,15 @@ export async function parseImportFile(filename: string, bytes: ArrayBuffer): Pro
     ...dynamicCustomFieldDefs.map((def) => ({ key: def.fieldKey, label: def.label })),
   ];
 
-  return { headers, rows, suggestedMapping: buildSuggestedMapping(headers, mappingTargets), mappingTargets };
+  // 「自動対応済み/確認が必要/対応なし」のUI表示用(spec §8) — 対応先が
+  // 見つからなかった列でも、実際に値が入っている行が1件でもあれば
+  // 「確認が必要」、全行空欄なら「対応なし」寄りとしてUI側が案内する。
+  const columnHasData: Record<string, boolean> = {};
+  for (const header of headers) {
+    columnHasData[header] = rows.some((row) => (row[header] ?? "").trim() !== "");
+  }
+
+  return { headers, rows, suggestedMapping: buildSuggestedMapping(headers, mappingTargets), mappingTargets, columnHasData };
 }
 
 // ────────────────────────────────────────────────────────────────────

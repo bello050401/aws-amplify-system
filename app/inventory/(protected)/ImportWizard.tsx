@@ -16,14 +16,16 @@ const STEP_LABELS: { key: WizardStep; label: string }[] = [
   { key: "result", label: "④結果" },
 ];
 
+const ACCEPTED_EXTENSIONS = /\.(csv|xlsx)$/i;
+
 /**
- * インポートウィザード (統合改善指示書 §12/§20) — ①ファイル→②内容確
- * 認(マッピング+プレビュー)→③実行→④結果、の一直線のフロー。「③実行」
- * は②の画面上のボタン一つ(実行中はスピナー表示)として扱う — 独立した
- * 画面を持たせるほどの内容がないため。ファイル解析・プレビュー・実行
- * の3回のServer Action呼び出しのうち、実際にDBを書き換えるのは最後の
- * 実行(executeInventoryImportAction)だけ — spec §16「最終確認前にDBを
- * 書き換えない」。
+ * インポートウィザード (統合改善指示書 §12/§20、夜間開発指示書 §8) —
+ * ①ファイル→②内容確認(マッピング+プレビュー)→③実行→④結果、の一直線
+ * のフロー。「③実行」は②の画面上のボタン一つ(実行中はスピナー表示)
+ * として扱う — 独立した画面を持たせるほどの内容がないため。ファイル解
+ * 析・プレビュー・実行の3回のServer Action呼び出しのうち、実際にDBを
+ * 書き換えるのは最後の実行(executeInventoryImportAction)だけ — spec
+ * §16「最終確認前にDBを書き換えない」。
  */
 export function ImportWizard({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<WizardStep>("file");
@@ -34,11 +36,15 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
   const [result, setResult] = useState<ImportExecuteResult | null>(null);
   const [busy, setBusy] = useState<"idle" | "parsing" | "previewing" | "executing">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [autoMappedCollapsed, setAutoMappedCollapsed] = useState(true);
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  async function handleFile(file: File) {
     setError(null);
+    if (!ACCEPTED_EXTENSIONS.test(file.name)) {
+      setError("CSV(.csv)またはExcel(.xlsx)ファイルを選択してください。");
+      return;
+    }
     setBusy("parsing");
     setSourceLabel(/\.xlsx$/i.test(file.name) ? "Excelインポート" : "CSVインポート");
     try {
@@ -48,13 +54,49 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
       setParsed(result);
       setMapping(Object.fromEntries(Object.entries(result.suggestedMapping).map(([h, k]) => [h, k ?? ""])));
       setPreview(null);
+      setAutoMappedCollapsed(true);
       setStep("mapping");
     } catch (err) {
       setError(err instanceof Error ? err.message : "ファイルの解析に失敗しました。");
     } finally {
       setBusy("idle");
-      e.target.value = ""; // 同じファイルを選び直しても再度onChangeが発火するように
     }
+  }
+
+  async function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // 同じファイルを選び直しても再度onChangeが発火するように
+    if (!file) return;
+    await handleFile(file);
+  }
+
+  // ── ドラッグ＆ドロップ(夜間開発指示書 §8) ─────────────────────────
+  // dragover/dropの両方でpreventDefault()しないと、ブラウザの既定動作
+  // (ドロップされたファイルをそのまま新しいタブで開く=ページ遷移)が
+  // 発生してしまう。子要素(input labelの中のテキスト等)の上にドロップ
+  // されてもこのハンドラへ伝播してくる(バブリング)ので、内側に個別の
+  // dropゾーンを用意する必要はない。dragActiveは見た目のフィードバッ
+  // ク用 — dragEnter/dragLeaveの出入りが子要素との間で細かく発火して
+  // ちらつかないよう、dragOver側でも常にtrueへ倒しておく。
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (busy !== "idle") return;
+    setDragActive(true);
+  }
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+  }
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (busy !== "idle") return;
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    await handleFile(file);
   }
 
   function mappingAsRecord(): Record<string, string> {
@@ -98,6 +140,50 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
     setError(null);
   }
 
+  // headerを「自動対応済み(mappingが値を持つ)/確認が必要(空欄・データあり)/対応なし(空欄・データなし)」の3分類へ振り分ける(spec §8)。
+  const autoMappedHeaders: string[] = [];
+  const needsReviewHeaders: string[] = [];
+  const noDataHeaders: string[] = [];
+  if (parsed) {
+    for (const header of parsed.headers) {
+      if (mapping[header]) autoMappedHeaders.push(header);
+      else if (parsed.columnHasData[header]) needsReviewHeaders.push(header);
+      else noDataHeaders.push(header);
+    }
+  }
+
+  function mappingSelect(header: string) {
+    return (
+      <select
+        value={mapping[header] ?? ""}
+        onChange={(e) => {
+          setMapping((prev) => ({ ...prev, [header]: e.target.value }));
+          setPreview(null);
+        }}
+        className="w-full border border-gray-300 bg-white px-1 py-0.5 text-[12px] focus:border-gray-500 focus:outline-none"
+      >
+        <option value="">対応なし（無視）</option>
+        {parsed?.mappingTargets.map((t) => (
+          <option key={t.key} value={t.key}>
+            {t.key === "sku" || t.key === "displayId" ? `${t.label}（既存商品との照合用）` : t.label}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  function mappingRow(header: string) {
+    return (
+      <tr key={header} className="border-b border-gray-100">
+        <td className="px-2 py-1 text-gray-700">{header}</td>
+        <td className="max-w-[140px] truncate px-2 py-1 text-gray-400" title={parsed?.rows[0]?.[header]}>
+          {parsed?.rows[0]?.[header] || "-"}
+        </td>
+        <td className="px-2 py-1">{mappingSelect(header)}</td>
+      </tr>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col border border-gray-300 bg-white shadow-sm">
@@ -129,9 +215,21 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
               <p className="mb-3 text-[12px] text-gray-500">
                 CSV(.csv)またはExcel(.xlsx)ファイルを選択してください。BELLOからエクスポートしたファイルであれば、列の対応は自動的に提案されます。
               </p>
-              <label className="flex cursor-pointer items-center justify-center border border-dashed border-gray-300 px-4 py-6 text-[13px] text-gray-500 hover:bg-gray-50">
-                {busy === "parsing" ? "解析中…" : "クリックしてファイルを選択"}
-                <input type="file" accept=".csv,.xlsx" onChange={handleFileChange} disabled={busy !== "idle"} className="hidden" />
+              {/* ドラッグ＆ドロップ本体 — クリックでのファイル選択と同じ
+                  handleFileを共有する。ラベル要素自身とその子要素どちら
+                  にドロップされてもこのハンドラへ伝播する。 */}
+              <label
+                onDragOver={handleDragOver}
+                onDragEnter={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`flex cursor-pointer flex-col items-center justify-center gap-1 border border-dashed px-4 py-8 text-[13px] transition-colors ${
+                  dragActive ? "border-gray-900 bg-gray-100 text-gray-700" : "border-gray-300 text-gray-500 hover:bg-gray-50"
+                }`}
+              >
+                <span>{busy === "parsing" ? "解析中…" : dragActive ? "ここにドロップ" : "クリックしてファイルを選択、またはここへドラッグ＆ドロップ"}</span>
+                <span className="text-[11px] text-gray-400">.csv / .xlsx</span>
+                <input type="file" accept=".csv,.xlsx" onChange={handleFileInputChange} disabled={busy !== "idle"} className="hidden" />
               </label>
             </div>
           )}
@@ -141,44 +239,57 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
               <p className="mb-2 text-[12px] text-gray-500">
                 {parsed.rows.length}行検出。各列がBELLOのどの項目に対応するか確認してください（「対応なし」の列は無視されます）。
               </p>
-              <div className="max-h-64 overflow-y-auto border border-gray-200">
-                <table className="w-full border-collapse text-[12px]">
-                  <thead className="sticky top-0 bg-gray-50 text-gray-500">
-                    <tr className="border-b border-gray-200">
-                      <th className="px-2 py-1 text-left font-normal">ファイルの列</th>
-                      <th className="px-2 py-1 text-left font-normal">サンプル値</th>
-                      <th className="px-2 py-1 text-left font-normal">BELLO項目</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parsed.headers.map((header) => (
-                      <tr key={header} className="border-b border-gray-100">
-                        <td className="px-2 py-1 text-gray-700">{header}</td>
-                        <td className="max-w-[140px] truncate px-2 py-1 text-gray-400" title={parsed.rows[0]?.[header]}>
-                          {parsed.rows[0]?.[header] || "-"}
-                        </td>
-                        <td className="px-2 py-1">
-                          <select
-                            value={mapping[header] ?? ""}
-                            onChange={(e) => {
-                              setMapping((prev) => ({ ...prev, [header]: e.target.value }));
-                              setPreview(null);
-                            }}
-                            className="w-full border border-gray-300 bg-white px-1 py-0.5 text-[12px] focus:border-gray-500 focus:outline-none"
-                          >
-                            <option value="">対応なし（無視）</option>
-                            {parsed.mappingTargets.map((t) => (
-                              <option key={t.key} value={t.key}>
-                                {t.key === "sku" || t.key === "displayId" ? `${t.label}（既存商品との照合用）` : t.label}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+
+              {/* 自動対応済み/確認が必要/対応なしの件数サマリー(spec §8) */}
+              <div className="mb-2 flex flex-wrap gap-3 border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-[11px] text-gray-600">
+                <span>
+                  自動対応済み: <span className="font-bold text-gray-900">{autoMappedHeaders.length}</span>列
+                </span>
+                <span>
+                  確認が必要: <span className="font-bold text-amber-700">{needsReviewHeaders.length}</span>列
+                </span>
+                <span>
+                  対応なし: <span className="font-bold text-gray-400">{noDataHeaders.length}</span>列
+                </span>
               </div>
+
+              {(needsReviewHeaders.length > 0 || noDataHeaders.length > 0) && (
+                <div className="mb-2 border border-gray-200">
+                  <table className="w-full border-collapse text-[12px]">
+                    <thead className="bg-gray-50 text-gray-500">
+                      <tr className="border-b border-gray-200">
+                        <th className="px-2 py-1 text-left font-normal">ファイルの列</th>
+                        <th className="px-2 py-1 text-left font-normal">サンプル値</th>
+                        <th className="px-2 py-1 text-left font-normal">BELLO項目</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {needsReviewHeaders.map(mappingRow)}
+                      {noDataHeaders.map(mappingRow)}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {autoMappedHeaders.length > 0 && (
+                <div className="border border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => setAutoMappedCollapsed((v) => !v)}
+                    className="flex w-full items-center justify-between bg-gray-50 px-2 py-1 text-[11px] text-gray-500 hover:bg-gray-100"
+                  >
+                    <span>自動対応済みの列（{autoMappedHeaders.length}列）</span>
+                    <span>{autoMappedCollapsed ? "展開する ▾" : "折りたたむ ▴"}</span>
+                  </button>
+                  {!autoMappedCollapsed && (
+                    <div className="max-h-56 overflow-y-auto">
+                      <table className="w-full border-collapse text-[12px]">
+                        <tbody>{autoMappedHeaders.map(mappingRow)}</tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {!preview ? (
                 <button
