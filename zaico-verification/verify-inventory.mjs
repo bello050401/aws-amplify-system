@@ -4,6 +4,8 @@
  * ---------------------------------------------------------------
  * 目的:
  *   ZAICO在庫ID → ZAICO API → 商品画像情報取得 が可能かどうかを検証する。
+ *   併せて GET /api/v1/inventory_attachments/{id} を呼び出し、複数画像・
+ *   画像以外の添付ファイルが取得できるか、item_image.url との同一性も確認する。
  *   実データの一括取得・BELLO側への書き込みは一切行わない（読み取り専用）。
  *
  * トークンの扱い:
@@ -27,6 +29,7 @@ import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -170,19 +173,48 @@ async function callEndpoint(label, url, token) {
 }
 
 async function tryDownloadImage(url, destPath) {
+  return downloadUrl(url, destPath, null);
+}
+
+/**
+ * URLの実ファイルダウンロードを試みる。
+ * まず認証ヘッダなしで取得を試み(=公開URLかどうかの確認)、失敗した場合のみ
+ * Bearer認証付きで再試行する(そのURLが認証必須かどうかを区別するため)。
+ */
+async function downloadUrl(url, destPath, token) {
   try {
-    const res = await fetch(url); // 認証ヘッダなしで取得できるか(=公開URLかどうか)を確認
-    if (!res.ok) {
-      return { attempted: true, unauthenticatedAccessOk: false, status: res.status };
+    const unauthRes = await fetch(url);
+    let res = unauthRes;
+    let requiredAuth = false;
+
+    if (!unauthRes.ok && token) {
+      const authRes = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (authRes.ok) {
+        res = authRes;
+        requiredAuth = true;
+      }
     }
+
+    if (!res.ok) {
+      return {
+        attempted: true,
+        unauthenticatedAccessOk: false,
+        requiredAuth: false,
+        status: res.status,
+      };
+    }
+
     const buf = Buffer.from(await res.arrayBuffer());
     await writeFile(destPath, buf);
+    const sha256 = createHash("sha256").update(buf).digest("hex");
     return {
       attempted: true,
-      unauthenticatedAccessOk: true,
+      unauthenticatedAccessOk: !requiredAuth,
+      requiredAuth,
       status: res.status,
       contentType: res.headers.get("content-type"),
       byteLength: buf.byteLength,
+      sha256,
       savedTo: destPath,
     };
   } catch (err) {
@@ -212,6 +244,8 @@ async function main() {
     v2: null,
     imageFields: [],
     imageDownload: null,
+    attachments: null,
+    itemImageVsAttachmentsComparison: null,
     timestamp: new Date().toISOString(),
   };
 
@@ -276,6 +310,89 @@ async function main() {
   } else {
     console.log(`\n[画像関連フィールド] 取得成功したレスポンスが無いため探索をスキップしました。`);
   }
+
+  // --- 添付ファイル一覧 (GET /api/v1/inventory_attachments/{id}) ---
+  // 複数画像・画像以外の添付ファイルがすべて取得できるかを確認する。
+  const MAX_ATTACHMENTS_TO_DOWNLOAD = 20; // 単一在庫の検証なので十分な上限
+  const attachmentsResp = await callEndpoint(
+    "v1 inventory_attachments",
+    `https://web.zaico.co.jp/api/v1/inventory_attachments/${INVENTORY_ID}`,
+    token
+  );
+  report.attachments = { response: attachmentsResp, items: [] };
+
+  console.log(`\n[attachments] ${attachmentsResp.url}`);
+  console.log(`[attachments] HTTP ${attachmentsResp.status ?? "N/A"} (${attachmentsResp.elapsedMs ?? "-"}ms) ok=${attachmentsResp.ok}`);
+  if (attachmentsResp.error) console.log(`[attachments] エラー: ${attachmentsResp.error}`);
+
+  let attachmentList = [];
+  if (attachmentsResp.ok && attachmentsResp.json) {
+    if (Array.isArray(attachmentsResp.json)) {
+      attachmentList = attachmentsResp.json;
+    } else if (typeof attachmentsResp.json === "object") {
+      // レスポンスが {inventory_attachments: [...]} 等でラップされている場合に対応
+      const arrayProp = Object.values(attachmentsResp.json).find((v) => Array.isArray(v));
+      attachmentList = arrayProp || [];
+    }
+  }
+  console.log(`[attachments] 添付件数: ${attachmentList.length}`);
+
+  for (const [idx, att] of attachmentList.entries()) {
+    const url = att.url || att.file_url || att.download_url || null;
+    const filename = att.original_filename || att.filename || att.name || null;
+    console.log(`\n  [attachment #${idx + 1}]`);
+    console.log(`    id: ${att.id ?? "(なし)"}`);
+    console.log(`    original_filename: ${filename ?? "(なし)"}`);
+    console.log(`    url: ${url ?? "(なし)"}`);
+    console.log(`    created_at: ${att.created_at ?? "(なし)"}`);
+    console.log(`    (レスポンスの全キー: ${Object.keys(att).join(", ")})`);
+
+    const entry = { index: idx, raw: att, download: null };
+
+    if (url && idx < MAX_ATTACHMENTS_TO_DOWNLOAD) {
+      const ext = (filename && filename.match(/\.[a-zA-Z0-9]+$/)?.[0]) ||
+        (url.match(/\.(png|jpe?g|gif|webp|bmp|pdf|zip|csv)(\?|$)/i)?.[0]?.replace(/\?.*$/, "")) ||
+        ".bin";
+      const destPath = path.join(OUTPUT_DIR, `inventory-${INVENTORY_ID}-attachment-${idx + 1}${ext}`);
+      entry.download = await downloadUrl(url, destPath, token);
+      console.log(`    ダウンロード結果:`, entry.download);
+    } else if (!url) {
+      console.log(`    -> urlフィールドが見つからないため、ダウンロードをスキップしました。`);
+    }
+
+    report.attachments.items.push(entry);
+  }
+
+  // item_image.url と inventory_attachments 先頭要素が同一画像かを比較
+  const itemImageUrl = primary?.json?.item_image?.url || null;
+  report.itemImageVsAttachmentsComparison = null;
+  if (itemImageUrl) {
+    const itemImageHashDl = report.imageDownload?.sha256 || null;
+    const firstAttachmentHash = report.attachments.items[0]?.download?.sha256 || null;
+    const firstAttachmentUrl = report.attachments.items[0]?.raw?.url || null;
+
+    const comparison = {
+      itemImageUrl,
+      firstAttachmentUrl,
+      urlsMatchExactly: firstAttachmentUrl === itemImageUrl,
+      itemImageSha256: itemImageHashDl,
+      firstAttachmentSha256: firstAttachmentHash,
+      sameImageBytes:
+        itemImageHashDl && firstAttachmentHash ? itemImageHashDl === firstAttachmentHash : null,
+    };
+    report.itemImageVsAttachmentsComparison = comparison;
+    console.log(`\n[item_image vs inventory_attachments[0]] 比較結果:`, comparison);
+  } else {
+    console.log(`\n[item_image vs inventory_attachments[0]] item_image.url が見つからないため比較をスキップしました。`);
+  }
+
+  // 添付ファイルの内訳(画像 / 非画像)
+  const contentTypes = report.attachments.items
+    .map((e) => e.download?.contentType)
+    .filter(Boolean);
+  const nonImageTypes = contentTypes.filter((ct) => !/^image\//i.test(ct));
+  console.log(`\n[添付ファイル内訳] 合計${report.attachments.items.length}件 / Content-Type取得できた${contentTypes.length}件中、画像以外: ${nonImageTypes.length}件`);
+  if (nonImageTypes.length) console.log(`  非画像Content-Type: ${[...new Set(nonImageTypes)].join(", ")}`);
 
   // --- 生データ保存(トークンは含まれない。business dataのため.gitignore対象) ---
   const outFile = path.join(OUTPUT_DIR, `inventory-${INVENTORY_ID}.json`);

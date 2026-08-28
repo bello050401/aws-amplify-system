@@ -68,6 +68,15 @@ node zaico-verification/verify-inventory.mjs 73638418
   `attachment`, `file` 等を含むキー、および画像拡張子を含むURL文字列)を再帰的に探索
 - 見つかった画像URLの1件目について、認証ヘッダーなしでダウンロードを試行し、
   成功可否・Content-Type・サイズを記録
+- **`GET /api/v1/inventory_attachments/{id}`(Bearer認証)を呼び出し、添付ファイル
+  (複数画像を含む)一覧を取得**
+  - 各添付の `id` / `original_filename` / `url` / `created_at` 等を表示
+  - 各添付URLについて、まず認証なしでダウンロードを試行し、失敗した場合のみ
+    Bearer認証付きで再試行(=認証が必須なURLかどうかを区別)
+  - ダウンロードできたファイルの Content-Type / サイズ / SHA-256ハッシュを記録
+  - `item_image.url` と `inventory_attachments` 先頭要素を、URL文字列の一致と
+    ダウンロードした画像のSHA-256ハッシュの両方で比較し、同一画像かどうかを判定
+  - 画像以外(Content-Typeが`image/`以外)の添付が含まれるかを集計
 - 結果一式を `zaico-verification/output/inventory-<ID>.json` に保存
   (`.gitignore`対象、Gitには含まれません)
 - 何も書き込み・更新・削除は行いません(GETのみ)
