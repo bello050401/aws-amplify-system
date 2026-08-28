@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { buildInventoryExport } from "@/lib/inventory/inventoryExport";
+import { buildSearchFieldDefs, completeConditions, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
+import { listCategories, listCustomFieldDefinitions, listLocations, listStatuses } from "@/lib/inventory/queries";
 
 /**
  * A plain Route Handler (not a Server Action) so the browser gets a real
@@ -21,6 +23,7 @@ export async function GET(request: NextRequest) {
   const format = sp.get("format") === "xlsx" ? "xlsx" : "csv";
   const scope = sp.get("scope") === "all" ? "all" : "filtered";
   const categoryIds = sp.get("categoryIds")?.split(",").filter(Boolean) ?? [];
+  const advRaw = sp.get("adv");
 
   const filters =
     scope === "all"
@@ -32,8 +35,31 @@ export async function GET(request: NextRequest) {
           statusId: sp.get("statusId") ?? undefined,
         };
 
+  // 詳細検索(adv)が有効な場合はfiltersを無視してこちらだけ使う —
+  // lib/inventory/inventoryExport.tsのbuildInventoryExportコメント参照。
+  let advanced: Parameters<typeof buildInventoryExport>[2];
+  if (scope === "filtered" && advRaw) {
+    try {
+      const parsed = JSON.parse(advRaw) as AdvancedSearchQuery;
+      const conditions = completeConditions(parsed);
+      if (conditions.length > 0) {
+        const [categories, locations, statuses, customFieldDefs] = await Promise.all([
+          listCategories(),
+          listLocations(),
+          listStatuses(),
+          listCustomFieldDefinitions(),
+        ]);
+        const fieldDefs = buildSearchFieldDefs(customFieldDefs, { categories, locations, statuses });
+        advanced = { query: { combinator: parsed.combinator === "OR" ? "OR" : "AND", conditions }, fieldsByKey: new Map(fieldDefs.map((f) => [f.key, f])) };
+      }
+    } catch {
+      // 壊れた/手編集されたadvパラメータは無視し、単純フィルタ(あれば)
+      // のままエクスポートする — 500エラーにはしない。
+    }
+  }
+
   try {
-    const { buffer, filename, contentType } = await buildInventoryExport(format, filters);
+    const { buffer, filename, contentType } = await buildInventoryExport(format, filters, advanced);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": contentType,

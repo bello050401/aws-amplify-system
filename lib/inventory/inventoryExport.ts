@@ -6,7 +6,7 @@ import { listCategories, listCustomFieldDefinitions, listLocations, listStatuses
 import { parseCustomFields } from "./customFieldsCodec";
 import { STATIC_EXPORT_FIELDS, KNOWN_CUSTOM_FIELD_KEYS, type ExportFieldDef } from "./exportFields";
 import { resolveDisplayInventoryId } from "./inventoryId";
-import { matchesQuickSearch } from "./advancedSearch";
+import { evaluateQuery, matchesQuickSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 import { toCsv } from "./csv";
 
 type InventoryModel = Schema["Inventory"]["type"];
@@ -87,42 +87,65 @@ export interface InventoryExportResult {
   contentType: string;
 }
 
+/** 生のInventoryModelをlib/inventory/advancedSearch.tsの判定関数が読める最小限の形へ変換する — フィールド名はInventoryModelとSearchableRecordで一致しているため、customFields(生JSON文字列→パース済みオブジェクト)とdisplayId(導出値)だけ補えばよい。行の組み立て(下のitems.map)には一切使わない、詳細検索の絞り込み専用のアダプタ。 */
+function toSearchableRecordFromRaw(item: InventoryModel): SearchableRecord {
+  return {
+    ...item,
+    customFields: parseCustomFields(item.customFields),
+    displayId: resolveDisplayInventoryId({ sourceSystem: item.sourceSystem ?? null, sourceInventoryId: item.sourceInventoryId ?? null, sku: item.sku }),
+  } as unknown as SearchableRecord;
+}
+
 /**
  * `scope`: "filtered" applies `filters` exactly like the list page's own
  * search/絞り込み (絞り込み結果のエクスポート); "all" ignores them
  * entirely (全在庫). Both go through the same fetchAllForExport/row
  * builder — scope is just which filters get passed in.
+ *
+ * `advanced`(夜間開発指示書のバグ修正): 詳細検索の結果を表示している
+ * 間に「現在の検索・絞り込み結果」をエクスポートすると、詳細検索の条
+ * 件(q/categoryIds/locationId/statusId経由では表現できないAND/OR・
+ * 演算子つきの条件)が無視され、意図しない全件エクスポートになってし
+ * まうバグがあった — 詳細検索が有効なときはこちらを渡し、`filters`は
+ * 無視してlib/inventory/advancedSearch.tsのevaluateQueryで絞り込む
+ * (queries.tsのlistInventoryAdvancedと同じ設計)。
  */
 export async function buildInventoryExport(
   format: "csv" | "xlsx",
   filters: InventoryListFilters,
+  advanced?: { query: AdvancedSearchQuery; fieldsByKey: Map<string, SearchFieldDef> },
 ): Promise<InventoryExportResult> {
   const [categories, locations, statuses, customFieldDefs, items] = await Promise.all([
     listCategories(),
     listLocations(),
     listStatuses(),
     listCustomFieldDefinitions(),
-    fetchAllForExport(filters),
+    fetchAllForExport(advanced ? {} : filters),
   ]);
   const categoriesById = new Map(categories.map((c) => [c.id, c]));
   const locationsById = new Map(locations.map((l) => [l.id, l]));
   const statusesById = new Map(statuses.map((s) => [s.id, s]));
 
   // 自由文字列検索(q)はcase-insensitiveに、在庫ID/SKU/物品名へ後段で
-  // 絞り込む(理由は上のbuildFilterConditionsのコメント参照)。
-  const filteredItems = filters.q
-    ? items.filter((item) =>
-        matchesQuickSearch(
-          {
-            displayId: resolveDisplayInventoryId({ sourceSystem: item.sourceSystem ?? null, sourceInventoryId: item.sourceInventoryId ?? null, sku: item.sku }),
-            sku: item.sku,
-            name: item.name,
-            customFields: null,
-          },
-          filters.q!,
-        ),
-      )
-    : items;
+  // 絞り込む(理由は上のbuildFilterConditionsのコメント参照)。詳細検索
+  // が有効な場合はそちらのevaluateQueryだけを使い、q/categoryIds等の
+  // 単純フィルタとは重ねない(一覧画面の詳細検索モードと同じ「置き換
+  // え」の考え方)。
+  const filteredItems = advanced
+    ? items.filter((item) => evaluateQuery(toSearchableRecordFromRaw(item), advanced.query, advanced.fieldsByKey))
+    : filters.q
+      ? items.filter((item) =>
+          matchesQuickSearch(
+            {
+              displayId: resolveDisplayInventoryId({ sourceSystem: item.sourceSystem ?? null, sourceInventoryId: item.sourceInventoryId ?? null, sku: item.sku }),
+              sku: item.sku,
+              name: item.name,
+              customFields: null,
+            },
+            filters.q!,
+          ),
+        )
+      : items;
 
   // KNOWN_CUSTOM_FIELD_KEYS(脚高/座面寸法/口金/梱包サイズ/古物の特徴/
   // 売却の優先度)はすでにSTATIC_EXPORT_FIELDS側にZAICO互換ラベルで

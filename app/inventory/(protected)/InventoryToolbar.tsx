@@ -161,7 +161,18 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
             インポート
           </button>
         )}
-        <ExportMenu currentFilterParams={{ q, categoryIds: categoryIds.length > 0 ? categoryIds.join(",") : undefined, locationId, statusId }} />
+        <ExportMenu
+          currentFilterParams={{
+            q,
+            categoryIds: categoryIds.length > 0 ? categoryIds.join(",") : undefined,
+            locationId,
+            statusId,
+            // 詳細検索の結果を表示中なら、そちらの条件でエクスポートする
+            // (単純フィルタとは無関係 — バグ修正、lib/inventory/inventoryExport.ts
+            // のbuildInventoryExportコメント参照)。
+            adv: advancedActive ? advRaw : undefined,
+          }}
+        />
       </div>
       {importOpen && <ImportWizard onClose={() => setImportOpen(false)} />}
     </div>
