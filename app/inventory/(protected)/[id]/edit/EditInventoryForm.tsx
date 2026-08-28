@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { remove } from "aws-amplify/storage";
 import { updateInventory, type ImageSlotInput } from "@/app/actions/inventory";
 import { LabeledInput, LabeledSelect, CustomFieldInput } from "../../FormFields";
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../../ImageEditor";
 import { ExtendedFieldsSection } from "../../ExtendedFieldsSection";
+import { useUnsavedChanges } from "../../../UnsavedChangesProvider";
+import { buildFormDirtySnapshot, discardUnsavedNewImages } from "../../../formDirtySnapshot";
 import {
   INVENTORY_EXTENDED_SECTIONS,
   SALES_SECTION_ID,
@@ -111,6 +114,34 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 未保存変更ガード (spec I-N) — NewInventoryFormと同一のロジック。
+  // buildFormDirtySnapshotが単一の比較対象としてすべてのフィールド
+  // (画像含む)をまとめる — 個別管理しない(spec J)。
+  const { setDirty, registerSaveHandler, registerDiscardHandler, guardedNavigate } = useUnsavedChanges();
+  const initialSnapshotRef = useRef<string | null>(null);
+  const currentSnapshot = buildFormDirtySnapshot({
+    name,
+    categoryId,
+    statusId,
+    locationId,
+    quantity,
+    unit,
+    purchasePrice,
+    salePrice,
+    barcode,
+    note,
+    customFieldValues,
+    extendedValues,
+    normalImageSlots,
+    damageImageSlots,
+  });
+  if (initialSnapshotRef.current === null) initialSnapshotRef.current = currentSnapshot;
+  const isDirty = currentSnapshot !== initialSnapshotRef.current;
+
+  useEffect(() => {
+    setDirty(isDirty);
+  }, [isDirty, setDirty]);
+
   function handleCustomFieldChange(fieldKey: string, value: string) {
     setCustomFieldValues((prev) => ({ ...prev, [fieldKey]: value }));
   }
@@ -119,20 +150,25 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
     setExtendedValues((prev) => ({ ...prev, [key]: value }));
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  /** Same role as NewInventoryForm's attemptSave — see that file's comment. */
+  async function attemptSave(): Promise<{ success: boolean }> {
     setError(null);
-
-    if (!name.trim()) return setError("商品名を入力してください。");
+    if (!name.trim()) {
+      setError("商品名を入力してください。");
+      return { success: false };
+    }
     if (imageEditorHasUploading(normalImageSlots) || imageEditorHasUploading(damageImageSlots)) {
-      return setError("画像のアップロード完了までお待ちください。");
+      setError("画像のアップロード完了までお待ちください。");
+      return { success: false };
     }
     if (imageEditorHasError(normalImageSlots) || imageEditorHasError(damageImageSlots)) {
-      return setError("アップロードに失敗した画像があります。該当の画像を削除するか、再度選択し直してください。");
+      setError("アップロードに失敗した画像があります。該当の画像を削除するか、再度選択し直してください。");
+      return { success: false };
     }
     for (const def of customFieldDefs) {
       if (def.required && !customFieldValues[def.fieldKey]?.trim()) {
-        return setError(`「${def.label}」は必須項目です。`);
+        setError(`「${def.label}」は必須項目です。`);
+        return { success: false };
       }
     }
 
@@ -147,37 +183,65 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
 
       const images: ImageSlotInput[] = [...slotsToImageInputs(normalImageSlots, "NORMAL"), ...slotsToImageInputs(damageImageSlots, "DAMAGE")];
 
-      await updateInventory(item.id, {
-        name,
-        categoryId: categoryId || undefined,
-        statusId: statusId || undefined,
-        locationId: locationId || undefined,
-        quantity: quantity ? Number(quantity) : 0,
-        unit: unit || undefined,
-        purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
-        salePrice: salePrice ? Number(salePrice) : undefined,
-        barcode: barcode || undefined,
-        note: note || undefined,
-        images,
-        customFields,
-        ...parseExtendedValues(extendedValues),
-      });
-      // updateInventory redirect()s on success — see NewInventoryForm's
-      // identical comment for why normal execution never reaches past this.
+      await updateInventory(
+        item.id,
+        {
+          name,
+          categoryId: categoryId || undefined,
+          statusId: statusId || undefined,
+          locationId: locationId || undefined,
+          quantity: quantity ? Number(quantity) : 0,
+          unit: unit || undefined,
+          purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
+          salePrice: salePrice ? Number(salePrice) : undefined,
+          barcode: barcode || undefined,
+          note: note || undefined,
+          images,
+          customFields,
+          ...parseExtendedValues(extendedValues),
+        },
+        { skipRedirect: true },
+      );
+      setDirty(false);
+      return { success: true };
     } catch (err) {
-      if (err && typeof err === "object" && "digest" in err && String(err.digest).startsWith("NEXT_REDIRECT")) {
-        throw err;
-      }
       setError(err instanceof Error ? err.message : "更新に失敗しました。");
+      return { success: false };
+    } finally {
       setSubmitting(false);
+    }
+  }
+
+  useEffect(() => {
+    registerSaveHandler(async () => attemptSave());
+    registerDiscardHandler(() => {
+      discardUnsavedNewImages(normalImageSlots, (path) => remove({ path }));
+      discardUnsavedNewImages(damageImageSlots, (path) => remove({ path }));
+    });
+  });
+  useEffect(() => {
+    return () => {
+      registerSaveHandler(null);
+      registerDiscardHandler(null);
+      setDirty(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const result = await attemptSave();
+    if (result.success) {
+      router.push(`/inventory/${item.id}`);
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="max-w-3xl">
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-base font-bold text-gray-900">在庫編集</h1>
-        <button type="button" onClick={() => router.push(`/inventory/${item.id}`)} className="text-[12px] text-gray-500 hover:text-gray-900">
+      {/* タイトルはInventoryHeader側(edit/page.tsx)に表示済み — ここでは
+          未保存変更ガードを経由する「詳細へ戻る」だけを残す。 */}
+      <div className="mb-4 flex items-center justify-end">
+        <button type="button" onClick={() => guardedNavigate(`/inventory/${item.id}`)} className="text-[12px] text-gray-500 hover:text-gray-900">
           詳細へ戻る
         </button>
       </div>
@@ -268,7 +332,7 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
         >
           {submitting ? "保存中…" : "保存する"}
         </button>
-        <button type="button" onClick={() => router.push(`/inventory/${item.id}`)} className="border border-gray-300 px-4 py-2 text-[13px] text-gray-700">
+        <button type="button" onClick={() => guardedNavigate(`/inventory/${item.id}`)} className="border border-gray-300 px-4 py-2 text-[13px] text-gray-700">
           キャンセル
         </button>
       </div>

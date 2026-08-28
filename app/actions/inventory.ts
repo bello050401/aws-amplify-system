@@ -143,7 +143,22 @@ export interface InventoryFieldsInput extends InventoryExtendedFields {
  * degraded path. See lib/amplify/dataClient.ts for why this constant is
  * kept separate from Feature's `adminAuthMode`.
  */
-export async function createInventory(input: InventoryFieldsInput): Promise<never> {
+/**
+ * Two call shapes:
+ * - `createInventory(input)` — the plain registration-form submit path,
+ *   unchanged from before: always redirects to the new record's page on
+ *   success, never returns.
+ * - `createInventory(input, { skipRedirect: true })` — used by the
+ *   未保存変更ガード (lib/inventory/unsavedChanges.tsx)'s "保存して移動"
+ *   flow, which needs to navigate to wherever the user was ACTUALLY
+ *   headed (e.g. `/inventory` from a logo click), not unconditionally to
+ *   the new record's own page — a server-side `redirect()` can only ever
+ *   go to one hardcoded destination, so this form just returns the new
+ *   id and lets the caller decide navigation client-side instead.
+ */
+export async function createInventory(input: InventoryFieldsInput): Promise<never>;
+export async function createInventory(input: InventoryFieldsInput, options: { skipRedirect: true }): Promise<{ id: string }>;
+export async function createInventory(input: InventoryFieldsInput, options?: { skipRedirect?: boolean }): Promise<{ id: string } | never> {
   const role = await getInventoryRole();
   if (!canEditInventory(role)) {
     throw new Error("在庫を登録する権限がありません（ADMIN または EDITOR のみ）。");
@@ -214,6 +229,7 @@ export async function createInventory(input: InventoryFieldsInput): Promise<neve
   await logInventoryHistory(created.id, who, [{ fieldName: "登録", oldValue: null, newValue: `SKU ${sku} を新規登録` }]);
 
   revalidatePath("/inventory");
+  if (options?.skipRedirect) return { id: created.id };
   redirect(`/inventory/${created.id}`);
 }
 
@@ -226,7 +242,13 @@ export async function createInventory(input: InventoryFieldsInput): Promise<neve
  * computed the same safe way, against the server's own view of what was
  * actually on the record before this edit.
  */
-export async function updateInventory(inventoryId: string, input: InventoryFieldsInput): Promise<never> {
+export async function updateInventory(inventoryId: string, input: InventoryFieldsInput): Promise<never>;
+export async function updateInventory(inventoryId: string, input: InventoryFieldsInput, options: { skipRedirect: true }): Promise<{ id: string }>;
+export async function updateInventory(
+  inventoryId: string,
+  input: InventoryFieldsInput,
+  options?: { skipRedirect?: boolean },
+): Promise<{ id: string } | never> {
   const role = await getInventoryRole();
   if (!canEditInventory(role)) {
     throw new Error("在庫を編集する権限がありません（ADMIN または EDITOR のみ）。");
@@ -307,6 +329,7 @@ export async function updateInventory(inventoryId: string, input: InventoryField
 
   revalidatePath("/inventory");
   revalidatePath(`/inventory/${inventoryId}`);
+  if (options?.skipRedirect) return { id: inventoryId };
   redirect(`/inventory/${inventoryId}`);
 }
 

@@ -1,5 +1,6 @@
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listCategories, listInventory, listLocations, listStatuses } from "@/lib/inventory/queries";
+import { InventoryHeader } from "../InventoryHeader";
 import { InventorySidebar } from "./InventorySidebar";
 import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryAdvancedSearchPanel } from "./InventoryAdvancedSearchPanel";
@@ -62,51 +63,58 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   };
 
   return (
-    <div className="flex h-full">
-      <InventorySidebar
-        categories={categories}
-        locations={locations}
-        activeCategoryId={searchParams.categoryId}
-        activeLocationId={searchParams.locationId}
-        q={searchParams.q}
+    <div className="flex h-full flex-col">
+      <InventoryHeader
+        role={role}
+        center={
+          <InventoryToolbar
+            role={role}
+            q={searchParams.q}
+            categoryId={searchParams.categoryId}
+            locationId={searchParams.locationId}
+            statusId={searchParams.statusId}
+            advancedOpen={advancedOpen}
+            totalLabel={`${listResult.items.length}件`}
+          />
+        }
       />
-      {advancedOpen ? (
-        <InventoryAdvancedSearchPanel
+      <div className="flex min-h-0 flex-1">
+        <InventorySidebar
           categories={categories}
           locations={locations}
-          statuses={statuses}
+          activeCategoryId={searchParams.categoryId}
+          activeLocationId={searchParams.locationId}
           q={searchParams.q}
-          categoryId={searchParams.categoryId}
-          locationId={searchParams.locationId}
-          statusId={searchParams.statusId}
         />
-      ) : null}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <InventoryToolbar
-          role={role}
-          q={searchParams.q}
-          categoryId={searchParams.categoryId}
-          locationId={searchParams.locationId}
-          statusId={searchParams.statusId}
-          advancedOpen={advancedOpen}
-          totalLabel={`${listResult.items.length}件`}
-        />
-        <div className="min-h-0 flex-1">
-          <InventoryTable
-            rows={listResult.items}
-            categoriesById={categoriesById}
-            locationsById={locationsById}
-            statusesById={statusesById}
+        {advancedOpen ? (
+          <InventoryAdvancedSearchPanel
+            categories={categories}
+            locations={locations}
+            statuses={statuses}
+            q={searchParams.q}
+            categoryId={searchParams.categoryId}
+            locationId={searchParams.locationId}
+            statusId={searchParams.statusId}
+          />
+        ) : null}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1">
+            <InventoryTable
+              rows={listResult.items}
+              categoriesById={categoriesById}
+              locationsById={locationsById}
+              statusesById={statusesById}
+            />
+          </div>
+          <InventoryPagination
+            baseParams={baseParams}
+            cursor={searchParams.cursor}
+            cursorStack={cursorStack}
+            nextToken={listResult.nextToken}
+            limit={limit}
+            currentCount={listResult.items.length}
           />
         </div>
-        <InventoryPagination
-          baseParams={baseParams}
-          cursor={searchParams.cursor}
-          cursorStack={cursorStack}
-          nextToken={listResult.nextToken}
-          limit={limit}
-          currentCount={listResult.items.length}
-        />
       </div>
     </div>
   );

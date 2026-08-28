@@ -9,36 +9,61 @@ import {
   listStatuses,
 } from "@/lib/inventory/queries";
 import { InventoryImageGallery } from "../../InventoryImageGallery";
+import { InventoryHeader } from "../../InventoryHeader";
 import { DeleteInventoryButton } from "./DeleteInventoryButton";
+import { DetailSection } from "./DetailSection";
 import { ExtendedFieldsSummary, type ExtraSectionField } from "./ExtendedFieldsSummary";
 import { DetailInfoTable, type DetailInfoRow } from "./DetailInfoTable";
-import { ALL_EXTENDED_FIELDS, INVENTORY_EXTENDED_SECTIONS, SALES_SECTION_ID, USED_GOODS_LEDGER_SECTION_ID } from "@/lib/inventory/extendedFields";
+import {
+  ALL_EXTENDED_FIELDS,
+  INVENTORY_EXTENDED_SECTIONS,
+  SALES_SECTION_ID,
+  USED_GOODS_LEDGER_SECTION_ID,
+} from "@/lib/inventory/extendedFields";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 
-/** "60000" → "60,000円" — every price on this page (spec §21: readable Japanese yen, not a bare number). */
+/** "60000" → "60,000円" — every price on this page (readable Japanese yen, not a bare number). */
 function formatYen(value: number | null): string {
   return value === null ? "-" : `${value.toLocaleString("ja-JP")}円`;
 }
 
-/** ISO datetime → "2026/08/28 17:40" — exact zero-padded format (spec §20); Intl's dateStyle/timeStyle shorthand drops the leading zero on month/day/hour, which doesn't match. */
+/** ISO datetime → "2026/08/28 17:40" — exact zero-padded format; Intl's dateStyle/timeStyle shorthand drops the leading zero on month/day/hour, which doesn't match. */
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** AWSDate "YYYY-MM-DD" → "YYYY/MM/DD"; plain string replace, never Date-parsed, so this can never shift a day from a timezone conversion. Empty/absent → "-" (spec A-4: 未入力も表示). */
+function formatAwsDate(value: string | null): string {
+  return value ? value.replace(/-/g, "/") : "-";
+}
+
+/**
+ * D. 古物台帳・仕入情報の「品目・数量」— 単独フィールドとして存在しな
+ * いため、既存の usedGoodsItemType（古物営業法台帳の「品目」に相当す
+ * る既存フィールド）と purchaseQuantity（仕入数量）を組み合わせて自然
+ * に構成する。spec原文は「商品名 + purchaseQuantity」を例示している
+ * が、Inventory.name は在庫そのものの商品名であって古物台帳の「品目」
+ * とは意味が異なる一方、usedGoodsItemType は既存スキーマ上すでに「品
+ * 目」として定義済み（amplify/data/resource.tsのコメント参照）なの
+ * で、そちらを再利用するのがA-3のSingle Source of Truthの趣旨に忠実。
+ */
+function formatItemTypeAndQuantity(itemType: string | null, quantity: number | null): string {
+  if (!itemType && quantity === null) return "-";
+  const typePart = itemType || "-";
+  const qtyPart = quantity === null ? "-" : quantity.toLocaleString("ja-JP");
+  return `${typePart}／数量: ${qtyPart}`;
+}
+
 /**
  * The history log (lib/inventory/history.ts) writes one row per changed
  * field, `fieldName` doing double duty as either an actual field label
  * ("商品名") or, for create/delete, the operation itself ("登録"/"削除")
- * — there's no separate stored "operation type" column. spec §18 wants
- * a ZAICO-style 日時/操作/作成者/変更内容 table, so these two helpers
+ * — there's no separate stored "operation type" column. spec F wants a
+ * ZAICO-style 日時/操作/変更内容/実行者 table, so these two helpers
  * derive that split from what's already stored rather than needing a
- * schema change: 登録/削除 rows show their own summary text as-is under
- * 変更内容 with 操作="登録"/"削除"; every other row is an 編集 with
- * 変更内容 = "フィールド名 旧→新", combining what were separate
- * 項目/変更前/変更後 columns into the one cell spec's own example shows
- * (e.g. "価格 60,000→55,000").
+ * schema change.
  */
 function historyOperationLabel(fieldName: string): string {
   if (fieldName === "登録" || fieldName === "削除") return fieldName;
@@ -51,11 +76,14 @@ function historyChangeSummary(h: { fieldName: string; oldValue: string | null; n
 }
 
 /**
- * "商品詳細画面 = 閲覧専用の編集画面" (spec §1): every field the New/
- * Edit forms can save must be readable here too, so this page's data
- * fetch mirrors those forms' — full InventoryDetail (all ~30 extended
- * fields, both image types with isPrimary, CustomFields) rather than a
- * trimmed-down projection.
+ * 在庫詳細画面 = 全情報確認用・1列縦スクロール型 (spec A)。新規登録/
+ * 編集画面で保存できる項目はすべてここで確認できることが要件 (A-2) —
+ * この画面のデータ取得は編集画面と同じ full InventoryDetail (拡張
+ * フィールド全項目・両方の画像タイプ・isPrimary・CustomFields)。
+ *
+ * ページ全体を左右カラムに分割しない (A-1)。商品画像はページ上部にま
+ * とめ(B)、以降は基本情報→販売情報→サイズ情報→コンディション→古物
+ * 台帳・仕入情報→管理情報→追加項目→更新履歴の順で縦に並べる(C)。
  */
 export default async function InventoryDetailPage({ params }: { params: { id: string } }) {
   const role = await getInventoryRole();
@@ -80,44 +108,78 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
   const canEdit = canEditInventory(role);
   const canDelete = canHardDeleteInventory(role);
 
-  const customFieldEntries = Object.entries(item.customFields ?? {});
+  // 追加項目 (CustomFieldDefinition) — 常に全項目表示、未入力は"-"
+  // (spec A-4)。socketType/legHeight/seatDimensions/packageSize/
+  // usedGoodsFeature/salePriority 等、管理者が/inventory/settingsで自
+  // 由に増減できる汎用フィールドなので、サイズ情報等の固定セクションへ
+  // 個別に振り分けず、ここに一括表示する — 既存の区分(構造化された
+  // extendedFields vs. 管理者定義のcustomFields)をそのまま維持する判
+  // 断。spec C-3の「脚高/座面寸法/梱包サイズ」例示はここに含まれる。
   const fieldLabelByKey = new Map(fieldDefs.map((f) => [f.fieldKey, f.label]));
+  const customFieldValues = (item.customFields ?? {}) as Record<string, unknown>;
+  const customFieldRows: DetailInfoRow[] = fieldDefs.map((def) => ({
+    label: def.label,
+    value: customFieldValues[def.fieldKey] === undefined || customFieldValues[def.fieldKey] === null || customFieldValues[def.fieldKey] === ""
+      ? "-"
+      : String(customFieldValues[def.fieldKey]),
+  }));
+  // A CustomFieldDefinitionが非アクティブ化された後でも、既にこの在庫
+  // へ値が入っている場合はfieldLabelByKeyに無いキーとして残る —
+  // listCustomFieldDefinitionsはisActiveのみ返すため、そのキーを
+  // フィールド定義名ではなくキー名で表示することでデータの消失を防ぐ
+  // (A-2の「編集画面にある項目が詳細で見えない状態をなくす」の裏返し
+  // として、"以前は存在した値"も隠さない)。
+  for (const [key, value] of Object.entries(customFieldValues)) {
+    if (fieldLabelByKey.has(key)) continue;
+    if (value === undefined || value === null || value === "") continue;
+    customFieldRows.push({ label: key, value: String(value) });
+  }
 
-  // Phase C's ~30 extended fields, projected down to the plain
-  // {key: value} shape ExtendedFieldsSummary expects — the exact same
-  // registry (lib/inventory/extendedFields.ts) the New/Edit forms render
-  // their inputs from, so a field can never exist in one place and not
-  // the other (spec §15/§16's single-source-of-truth requirement).
+  // 販売情報 / サイズ情報 / コンディション — レジストリの並び順どおり
+  // (A-3)。usedGoodsLedgerとadminMemoは、それぞれD/Eの固定要件により
+  // 個別に手組みするため、ここでは除外する。
+  const generalExtendedSections = INVENTORY_EXTENDED_SECTIONS.filter(
+    (s) => s.id !== USED_GOODS_LEDGER_SECTION_ID && s.id !== "adminMemo",
+  );
   const extendedRecord = Object.fromEntries(ALL_EXTENDED_FIELDS.map((f) => [f.key, item[f.key]]));
-
   // purchasePrice/salePrice are pre-existing core Inventory fields, not
   // part of the extendedFields registry — injected into their
-  // spec-mandated sections (仕入・古物台帳's「購入価格」, 販売情報's
-  // 「販売価格（成約）」, kept distinct from plannedSalePrice's
-  // 「販売予定価格」) via the same section-id keys the New/Edit forms
-  // use for the identical placement — see extendedFields.ts's
-  // SALES_SECTION_ID/USED_GOODS_LEDGER_SECTION_ID comment.
+  // spec-mandated section (販売情報's「販売価格」) via the same
+  // section-id key the New/Edit forms use for the identical placement.
   const extendedExtra: Partial<Record<string, ExtraSectionField[]>> = {
     [SALES_SECTION_ID]: [{ label: "販売価格（成約）", rawValue: item.salePrice, display: formatYen(item.salePrice) }],
-    [USED_GOODS_LEDGER_SECTION_ID]: [{ label: "購入価格", rawValue: item.purchasePrice, display: formatYen(item.purchasePrice) }],
   };
 
-  // Phase C.5: split once here rather than inside InventoryImageGallery,
-  // which has no opinion on normal-vs-damage — it just renders whatever
-  // array it's given. The resolved top image is moved to the front of
-  // the normal group so the gallery's existing "first image is the big
-  // one" behavior shows it, exactly like before an explicit isPrimary
-  // existed (see resolveTopImage's own comment).
-  const { normal: normalImages, damage: damageImages } = splitImagesByType(item.images);
-  const topImage = resolveTopImage(item.images);
-  const orderedNormalImages = topImage ? [topImage, ...normalImages.filter((i) => i.storageKey !== topImage.storageKey)] : normalImages;
+  // D. 古物台帳・仕入情報 — この9項目の順序は仕様上固定 (「必ずこの順
+  // 序を維持してください」)。extendedFields.tsのレジストリ順とは独立
+  // に、ここで明示的に順序を組む。送料(shippingCost)は指定9項目には
+  // 含まれていないが、編集画面には存在する既存フィールドなので
+  // (A-2)、9項目の後ろに追加で表示する。
+  const usedGoodsLedgerRows: DetailInfoRow[] = [
+    { label: "取引の年月日", value: formatAwsDate(item.transactionDate) },
+    { label: "購入価格", value: formatYen(item.purchasePrice) },
+    { label: "品目・数量", value: formatItemTypeAndQuantity(item.usedGoodsItemType, item.purchaseQuantity) },
+    { label: "取引区分", value: item.transactionType || "-" },
+    { label: "真偽確認のためにとった措置の区分および方法", value: item.identityVerificationMethod || "-" },
+    { label: "相手氏名", value: item.counterpartyName || "-" },
+    { label: "職業", value: item.counterpartyOccupation || "-" },
+    { label: "住所", value: item.counterpartyAddress || "-" },
+    { label: "その日の仕入れ合計金額（他商品含む）", value: formatYen(item.dailyPurchaseTotal) },
+    { label: "送料", value: formatYen(item.shippingCost) },
+  ];
 
-  // 基本情報 (spec §4/§12: always shown, in full, regardless of which
-  // fields are empty) — 在庫ID/物品名/状態 also appear in the header
-  // above for at-a-glance identification, but spec's ZAICO-style
-  // reference table lists them again here too; 保管場所/作成日/更新日/
-  // 作成者/更新者 are placed in the right column instead (spec §14/§19),
-  // not duplicated here.
+  // E. 管理情報 — 保管場所/作成日/更新日/作成者/更新者/管理メモを統合
+  // (旧「独立した保管場所カード」+「管理メモ」セクションは廃止)。
+  const managementRows: DetailInfoRow[] = [
+    { label: "保管場所", value: location?.name ?? "-" },
+    { label: "作成日", value: formatDateTime(item.createdAt) },
+    { label: "更新日", value: formatDateTime(item.updatedAt) },
+    { label: "作成者", value: item.createdBy ?? "-" },
+    { label: "更新者", value: item.updatedBy ?? "-" },
+    { label: "管理メモ", value: item.adminMemo || "-" },
+  ];
+
+  // 基本情報 (C-1)
   const basicRows: DetailInfoRow[] = [
     { label: "在庫ID", value: item.sku },
     { label: "物品名", value: item.name },
@@ -129,133 +191,116 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
     { label: "備考", value: item.note || "-" },
   ];
 
-  const metaRows: DetailInfoRow[] = [
-    { label: "作成日", value: formatDateTime(item.createdAt) },
-    { label: "更新日", value: formatDateTime(item.updatedAt) },
-    { label: "作成者", value: item.createdBy ?? "-" },
-    { label: "更新者", value: item.updatedBy ?? "-" },
-  ];
-
-  const customFieldRows: DetailInfoRow[] = customFieldEntries.map(([key, value]) => ({
-    label: fieldLabelByKey.get(key) ?? key,
-    value: String(value ?? "-"),
-  }));
+  // B: NORMAL/DAMAGEを明確に分離。トップ画像を先頭へ寄せる既存ロジッ
+  // クは維持。
+  const { normal: normalImages, damage: damageImages } = splitImagesByType(item.images);
+  const topImage = resolveTopImage(item.images);
+  const orderedNormalImages = topImage ? [topImage, ...normalImages.filter((i) => i.storageKey !== topImage.storageKey)] : normalImages;
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-4">
-      <Link href="/inventory" className="text-[12px] text-gray-500 hover:text-gray-900">
-        ← 在庫一覧へ戻る
-      </Link>
+    <div className="flex h-full flex-col">
+      <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫詳細</h1>} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <Link href="/inventory" className="text-[12px] text-gray-500 hover:text-gray-900">
+          ← 在庫一覧へ戻る
+        </Link>
 
-      <div className="mt-3 flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            {status && (
-              <span className="border border-gray-300 px-1.5 py-0.5 text-[11px] text-gray-700">{status.label}</span>
+        <div className="mt-3 flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              {status && <span className="border border-gray-300 px-1.5 py-0.5 text-[11px] text-gray-700">{status.label}</span>}
+              <span className="font-mono text-[13px] text-gray-500">{item.sku}</span>
+            </div>
+            <h2 className="mt-1 text-lg font-bold text-gray-900">{item.name}</h2>
+          </div>
+          {/* G: 編集/複製/削除 — spec自身が「今回は無理にsticky化しなく
+              ても構いません」としているため、単純に上部据え置き。 */}
+          <div className="flex items-center gap-3">
+            {canEdit && (
+              <div className="flex gap-2">
+                <Link href={`/inventory/${item.id}/edit`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                  編集
+                </Link>
+                <Link href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                  複製
+                </Link>
+              </div>
             )}
-            <span className="font-mono text-[13px] text-gray-500">{item.sku}</span>
+            {canDelete && <DeleteInventoryButton inventoryId={item.id} label={`${item.sku} ${item.name}`} />}
           </div>
-          <h1 className="mt-1 text-lg font-bold text-gray-900">{item.name}</h1>
         </div>
-        {/* spec §17: 編集/複製/削除 clearly placed near the top, close to
-            the image/identity block above — 削除 stays visually distinct
-            from 編集/複製 (unchanged from earlier phases). */}
-        <div className="flex items-center gap-3">
-          {canEdit && (
-            <div className="flex gap-2">
-              <Link href={`/inventory/${item.id}/edit`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
-                編集
-              </Link>
-              <Link href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
-                複製
-              </Link>
+        {role === "VIEWER" && <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>}
+        {role === "EDITOR" && <p className="mt-1 text-[11px] text-gray-400">削除はADMIN権限が必要です。</p>}
+
+        {/* A-1: ページ全体を左右カラムに分けない、1列・縦スクロール。
+            max-w-4xl は「ラベル 値」の密な表を読みやすい幅に収めるため
+            の上限であって、複数カラムへの分割ではない。 */}
+        <div className="mt-6 max-w-4xl">
+          {/* B: 商品画像 — 上部にまとめる。画像自体はmax-w-mdで肥大化を
+              防ぐ（PC first）。NORMAL/DAMAGEは明確に分離。 */}
+          <DetailSection title="商品画像">
+            <div className="max-w-md">
+              <InventoryImageGallery images={orderedNormalImages} alt={item.name} />
+              <div className="mt-6">
+                <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
+              </div>
             </div>
-          )}
-          {canDelete && <DeleteInventoryButton inventoryId={item.id} label={`${item.sku} ${item.name}`} />}
-        </div>
-      </div>
-      {role === "VIEWER" && <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>}
-      {role === "EDITOR" && <p className="mt-1 text-[11px] text-gray-400">削除はADMIN権限が必要です。</p>}
+          </DetailSection>
 
-      {/* ZAICO-style 3-column layout (spec §14): 画像 / 情報一覧 / 保管場所
-          ・メタ情報・履歴. Collapses to one column below `lg` (spec §26) —
-          DOM order (image → center → right) is exactly the mobile stacking
-          order spec asks for, so no separate mobile-only reordering is
-          needed. */}
-      <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-[380px_1fr_280px]">
-        <div>
-          <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="商品画像" />
-          {/* hideIfEmpty: most items have zero damage photos — showing a
-              big empty placeholder box for that common case would just
-              be clutter (spec §6/§11). */}
-          <div className="mt-6">
-            <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
-          </div>
-        </div>
+          <DetailSection title="基本情報">
+            <DetailInfoTable rows={basicRows} />
+          </DetailSection>
 
-        <div>
-          <p className="mb-1.5 text-[11px] font-bold text-gray-400">基本情報</p>
-          <DetailInfoTable rows={basicRows} />
+          {/* 販売情報 / サイズ情報 / コンディション — レジストリ駆動、
+              並び順・ラベル・型・単位の定義はextendedFields.tsの1箇所
+              のみ (A-3)。 */}
+          <ExtendedFieldsSummary sections={generalExtendedSections} record={extendedRecord} extra={extendedExtra} />
 
-          {/* 販売情報 / サイズ・商品仕様 / コンディション / 仕入・古物
-              台帳 / 管理メモ — driven entirely by the shared field
-              registry (spec §15/§16); only a section with at least one
-              actual value anywhere in it (including purchasePrice/
-              salePrice injected via `extra`) renders at all. */}
-          <ExtendedFieldsSummary sections={INVENTORY_EXTENDED_SECTIONS} record={extendedRecord} extra={extendedExtra} />
+          <DetailSection title="古物台帳・仕入情報">
+            <DetailInfoTable rows={usedGoodsLedgerRows} />
+          </DetailSection>
 
-          {customFieldRows.length > 0 && (
-            <div className="mt-5 border-t border-gray-100 pt-3">
-              <p className="mb-1.5 text-[11px] font-bold text-gray-400">追加項目</p>
+          <DetailSection title="管理情報">
+            <DetailInfoTable rows={managementRows} />
+          </DetailSection>
+
+          <DetailSection title="追加項目">
+            {customFieldRows.length > 0 ? (
               <DetailInfoTable rows={customFieldRows} />
-            </div>
-          )}
-        </div>
+            ) : (
+              <p className="text-[12px] text-gray-400">追加項目は登録されていません。</p>
+            )}
+          </DetailSection>
 
-        <div>
-          {/* 保管場所 — kept visually prominent (spec §19), not just
-              another row buried in 基本情報. */}
-          <div className="border border-gray-200 bg-gray-50 px-3 py-2">
-            <p className="text-[11px] text-gray-400">保管場所</p>
-            <p className="mt-0.5 text-[14px] font-bold text-gray-900">{location?.name ?? "-"}</p>
-          </div>
-
-          <div className="mt-4">
-            <DetailInfoTable rows={metaRows} />
-          </div>
-
-          <div className="mt-6">
-            <p className="mb-1.5 text-[11px] font-bold text-gray-400">更新履歴</p>
+          {/* F: 更新履歴 — 独立した小さいスクロール領域を廃止し、ペー
+              ジ全体の縦スクロールで確認する。日時/操作/変更内容/実行者
+              の高密度テーブル。 */}
+          <DetailSection title="更新履歴">
             {item.history.length === 0 ? (
               <p className="text-[12px] text-gray-400">変更履歴はまだありません。</p>
             ) : (
-              // A capped, independently-scrolling area (spec §18: a long
-              // history must not push the page's main info out of easy
-              // reach) rather than an unbounded table.
-              <div className="max-h-[420px] overflow-y-auto border border-gray-100">
-                <table className="w-full border-collapse text-[11px]">
-                  <thead className="sticky top-0 bg-gray-50 text-left text-gray-400">
-                    <tr className="border-b border-gray-200">
-                      <th className="py-1 px-2 font-normal">日時</th>
-                      <th className="py-1 px-2 font-normal">操作</th>
-                      <th className="py-1 px-2 font-normal">作成者</th>
-                      <th className="py-1 px-2 font-normal">変更内容</th>
+              <table className="w-full border-collapse text-[12px]">
+                <thead className="text-left text-gray-400">
+                  <tr className="border-b border-gray-200">
+                    <th className="py-1 px-2 font-normal">日時</th>
+                    <th className="py-1 px-2 font-normal">操作</th>
+                    <th className="py-1 px-2 font-normal">変更内容</th>
+                    <th className="py-1 px-2 font-normal">実行者</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {item.history.map((h) => (
+                    <tr key={h.id} className="border-b border-gray-100 text-gray-700">
+                      <td className="whitespace-nowrap py-1 px-2 align-top">{formatDateTime(h.changedAt)}</td>
+                      <td className="py-1 px-2 align-top">{historyOperationLabel(h.fieldName)}</td>
+                      <td className="py-1 px-2 align-top">{historyChangeSummary(h)}</td>
+                      <td className="py-1 px-2 align-top">{h.changedBy ?? "-"}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {item.history.map((h) => (
-                      <tr key={h.id} className="border-b border-gray-100 text-gray-700">
-                        <td className="whitespace-nowrap py-1 px-2 align-top">{formatDateTime(h.changedAt)}</td>
-                        <td className="py-1 px-2 align-top">{historyOperationLabel(h.fieldName)}</td>
-                        <td className="py-1 px-2 align-top">{h.changedBy ?? "-"}</td>
-                        <td className="py-1 px-2 align-top">{historyChangeSummary(h)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                </tbody>
+              </table>
             )}
-          </div>
+          </DetailSection>
         </div>
       </div>
     </div>

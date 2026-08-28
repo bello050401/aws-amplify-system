@@ -5,6 +5,19 @@
 :root {
   --font-body: "Zen Kaku Gothic New", sans-serif;
   --font-display: "Zen Kaku Gothic New", sans-serif;
+
+  /* BELLO在庫管理 (/inventory/*) header row height — shared by the logo
+     block (InventoryNavRail), the merged header row (InventoryHeader:
+     search/toolbar center + role/logout right) so their bottom borders
+     land on exactly the same Y coordinate and read as one continuous
+     horizontal line across the screen (see InventoryHeader.tsx's file
+     comment). Sized to fit BelloLogo's "sidebar" variant (72px) plus its
+     existing py-3 (12px) padding on each side, unchanged from before
+     this value existed — this is a naming of the layout's existing
+     height, not a visual change to it. Scoped by name (inventory-*), not
+     by CSS nesting, since :root is shared with the unrelated Feature
+     system — never referenced outside app/inventory/*. */
+  --inventory-header-height: 96px;
 }
 
 @media (prefers-reduced-motion: reduce) {

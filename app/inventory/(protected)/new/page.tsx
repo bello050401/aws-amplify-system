@@ -3,6 +3,7 @@ import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInvento
 import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses } from "@/lib/inventory/queries";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import { splitImagesByType } from "@/lib/inventory/imageTypes";
+import { InventoryHeader } from "../../InventoryHeader";
 import { NewInventoryForm } from "./NewInventoryForm";
 
 interface NewInventoryPageProps {
@@ -11,6 +12,7 @@ interface NewInventoryPageProps {
 
 export default async function NewInventoryPage({ searchParams }: NewInventoryPageProps) {
   const role = await getInventoryRole();
+  if (!role) return null; // parent layout already redirects a signed-out/unauthorized visitor
   // VIEWER can reach every /inventory/* URL by typing it directly — the
   // (protected) layout only checks "is this an Inventory user at all",
   // not "can this role write". The Data layer already rejects a VIEWER's
@@ -73,14 +75,17 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
     : undefined;
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-4">
-      <NewInventoryForm
-        categories={categories}
-        locations={locations}
-        statuses={statuses}
-        customFieldDefs={customFieldDefs}
-        duplicateFrom={duplicateFrom}
-      />
+    <div className="flex h-full flex-col">
+      <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">新規在庫登録</h1>} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <NewInventoryForm
+          categories={categories}
+          locations={locations}
+          statuses={statuses}
+          customFieldDefs={customFieldDefs}
+          duplicateFrom={duplicateFrom}
+        />
+      </div>
     </div>
   );
 }

@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { remove } from "aws-amplify/storage";
 import { createInventory, type ImageSlotInput } from "@/app/actions/inventory";
 import { LabeledInput, LabeledSelect, CustomFieldInput } from "../FormFields";
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../ImageEditor";
 import { ExtendedFieldsSection } from "../ExtendedFieldsSection";
+import { useUnsavedChanges } from "../../UnsavedChangesProvider";
+import { buildFormDirtySnapshot, discardUnsavedNewImages } from "../../formDirtySnapshot";
 import {
   INVENTORY_EXTENDED_SECTIONS,
   SALES_SECTION_ID,
@@ -146,6 +149,36 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 未保存変更ガード (spec I-N)。dirty = 初期値(マウント時の1回だけ)
+  // ≠ 現在値。buildFormDirtySnapshotはtext/number/date/select/custom
+  // fields/画像(追加・削除・NORMAL⇄DAMAGE・並び替え・トップ画像変更)を
+  // すべて一つの比較対象に含む — 個別のフィールドごとにdirtyを管理しな
+  // い(spec J)。
+  const { setDirty, registerSaveHandler, registerDiscardHandler, guardedNavigate } = useUnsavedChanges();
+  const initialSnapshotRef = useRef<string | null>(null);
+  const currentSnapshot = buildFormDirtySnapshot({
+    name,
+    categoryId,
+    statusId,
+    locationId,
+    quantity,
+    unit,
+    purchasePrice,
+    salePrice,
+    barcode,
+    note,
+    customFieldValues,
+    extendedValues,
+    normalImageSlots,
+    damageImageSlots,
+  });
+  if (initialSnapshotRef.current === null) initialSnapshotRef.current = currentSnapshot;
+  const isDirty = currentSnapshot !== initialSnapshotRef.current;
+
+  useEffect(() => {
+    setDirty(isDirty);
+  }, [isDirty, setDirty]);
+
   function handleCustomFieldChange(fieldKey: string, value: string) {
     setCustomFieldValues((prev) => ({ ...prev, [fieldKey]: value }));
   }
@@ -154,23 +187,37 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
     setExtendedValues((prev) => ({ ...prev, [key]: value }));
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  /**
+   * The actual save attempt — used by BOTH the plain "登録する" submit
+   * button below AND, via registerSaveHandler, the 未保存変更ガードの
+   * 「保存して移動」(spec I-3). Deliberately does no navigation itself:
+   * createInventory is called with `{ skipRedirect: true }` so it just
+   * returns the new record's id instead of redirect()ing to it, and the
+   * CALLER decides where to go next — the plain button always goes to
+   * the new record's own page (unchanged observable behavior); the guard
+   * goes to wherever the user was actually trying to navigate.
+   */
+  async function attemptSave(): Promise<{ success: boolean; id?: string }> {
     setError(null);
-
-    if (!name.trim()) return setError("商品名を入力してください。");
+    if (!name.trim()) {
+      setError("商品名を入力してください。");
+      return { success: false };
+    }
     if (imageEditorHasUploading(normalImageSlots) || imageEditorHasUploading(damageImageSlots)) {
-      return setError("画像のアップロード完了までお待ちください。");
+      setError("画像のアップロード完了までお待ちください。");
+      return { success: false };
     }
     // A failed upload must not be silently dropped from the submission —
     // that previously let a registration "succeed" with zero images and
     // no clear signal why.
     if (imageEditorHasError(normalImageSlots) || imageEditorHasError(damageImageSlots)) {
-      return setError("アップロードに失敗した画像があります。該当の画像を削除するか、再度選択し直してください。");
+      setError("アップロードに失敗した画像があります。該当の画像を削除するか、再度選択し直してください。");
+      return { success: false };
     }
     for (const def of customFieldDefs) {
       if (def.required && !customFieldValues[def.fieldKey]?.trim()) {
-        return setError(`「${def.label}」は必須項目です。`);
+        setError(`「${def.label}」は必須項目です。`);
+        return { success: false };
       }
     }
 
@@ -185,40 +232,74 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
       const images: ImageSlotInput[] = [...slotsToImageInputs(normalImageSlots, "NORMAL"), ...slotsToImageInputs(damageImageSlots, "DAMAGE")];
 
-      await createInventory({
-        name,
-        categoryId: categoryId || undefined,
-        statusId: statusId || undefined,
-        locationId: locationId || undefined,
-        quantity: quantity ? Number(quantity) : 0,
-        unit: unit || undefined,
-        purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
-        salePrice: salePrice ? Number(salePrice) : undefined,
-        barcode: barcode || undefined,
-        note: note || undefined,
-        images,
-        customFields,
-        ...parseExtendedValues(extendedValues),
-      });
-      // createInventory redirect()s on success — Next.js implements that
-      // as a thrown control-flow signal, so normal execution never
-      // actually reaches past the call above on the happy path.
+      const created = await createInventory(
+        {
+          name,
+          categoryId: categoryId || undefined,
+          statusId: statusId || undefined,
+          locationId: locationId || undefined,
+          quantity: quantity ? Number(quantity) : 0,
+          unit: unit || undefined,
+          purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
+          salePrice: salePrice ? Number(salePrice) : undefined,
+          barcode: barcode || undefined,
+          note: note || undefined,
+          images,
+          customFields,
+          ...parseExtendedValues(extendedValues),
+        },
+        { skipRedirect: true },
+      );
+      setDirty(false);
+      return { success: true, id: created.id };
     } catch (err) {
-      // A Next.js redirect() rethrow has digest "NEXT_REDIRECT" and must
-      // be allowed to keep propagating, not swallowed as a form error.
-      if (err && typeof err === "object" && "digest" in err && String(err.digest).startsWith("NEXT_REDIRECT")) {
-        throw err;
-      }
       setError(err instanceof Error ? err.message : "登録に失敗しました。");
+      return { success: false };
+    } finally {
       setSubmitting(false);
+    }
+  }
+
+  // K: 保存後はdirtyを解除し(attemptSave内でsetDirty(false)済み)、以降
+  // のナビゲーションで確認を出さない。ページ離脱(このコンポーネントの
+  // unmount)時にも、保存を経ずに離れた場合の後始末として登録解除・
+  // dirty解除を行う。
+  useEffect(() => {
+    registerSaveHandler(async () => {
+      const result = await attemptSave();
+      return { success: result.success };
+    });
+    registerDiscardHandler(() => {
+      // L: 「保存せず移動」— このセッションでアップロード済みだが未保存
+      // の画像を、大量の孤児S3ファイルを残さない範囲でベストエフォート
+      // 削除する。
+      discardUnsavedNewImages(normalImageSlots, (path) => remove({ path }));
+      discardUnsavedNewImages(damageImageSlots, (path) => remove({ path }));
+    });
+  });
+  useEffect(() => {
+    return () => {
+      registerSaveHandler(null);
+      registerDiscardHandler(null);
+      setDirty(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const result = await attemptSave();
+    if (result.success && result.id) {
+      router.push(`/inventory/${result.id}`);
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="max-w-3xl">
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-base font-bold text-gray-900">新規在庫登録</h1>
-        <button type="button" onClick={() => router.push("/inventory")} className="text-[12px] text-gray-500 hover:text-gray-900">
+      {/* タイトルはInventoryHeader側(new/page.tsx)に表示済み — ここでは
+          未保存変更ガードを経由する「一覧へ戻る」だけを残す。 */}
+      <div className="mb-4 flex items-center justify-end">
+        <button type="button" onClick={() => guardedNavigate("/inventory")} className="text-[12px] text-gray-500 hover:text-gray-900">
           在庫一覧へ戻る
         </button>
       </div>
@@ -328,7 +409,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
         >
           {submitting ? "登録中…" : "登録する"}
         </button>
-        <button type="button" onClick={() => router.push("/inventory")} className="border border-gray-300 px-4 py-2 text-[13px] text-gray-700">
+        <button type="button" onClick={() => guardedNavigate("/inventory")} className="border border-gray-300 px-4 py-2 text-[13px] text-gray-700">
           キャンセル
         </button>
       </div>

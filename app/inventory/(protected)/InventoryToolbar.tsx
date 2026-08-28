@@ -12,12 +12,19 @@ interface InventoryToolbarProps {
 }
 
 /**
- * Top operation bar (spec §23). 新規登録 is the one high-frequency
- * action and gets the one filled/dark button; インポート・エクスポート・
- * 直接編集 are visually present (so the structure doesn't need rework
- * when they land — spec §26/§20) but disabled with a tooltip, since none
- * of them are implemented yet (spec §34) and a dead button that looks
- * clickable is worse than one that visibly isn't.
+ * List-page controls (spec §23) — rendered as InventoryHeader's `center`
+ * content (see that component's file comment), not as its own bordered
+ * bar: this used to carry its own `border-b`/fixed padding, which is
+ * exactly the second of the two misaligned horizontal lines the header
+ * redesign (spec O) fixed, by making InventoryHeader itself the only
+ * thing that owns a border/height in this row.
+ *
+ * 新規登録 is the one high-frequency action and gets the one filled/dark
+ * button; インポート・エクスポート・直接編集 are visually present (so
+ * the structure doesn't need rework when they land — spec §26/§20) but
+ * disabled with a tooltip, since none of them are implemented yet (spec
+ * §34) and a dead button that looks clickable is worse than one that
+ * visibly isn't.
  */
 export function InventoryToolbar({ role, q, categoryId, locationId, statusId, advancedOpen, totalLabel }: InventoryToolbarProps) {
   const canEdit = role === "ADMIN" || role === "EDITOR";
@@ -33,7 +40,7 @@ export function InventoryToolbar({ role, q, categoryId, locationId, statusId, ad
   })();
 
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-gray-200 px-3 py-2">
+    <div className="flex w-full flex-wrap items-center justify-between gap-4">
       <div className="flex items-center gap-3">
         <h1 className="text-base font-bold text-gray-900">在庫一覧</h1>
         <span className="text-xs text-gray-400">{totalLabel}</span>

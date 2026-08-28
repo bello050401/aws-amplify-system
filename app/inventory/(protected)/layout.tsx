@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getInventorySessionStatus } from "@/lib/amplify/requireInventoryUser";
 import { InventoryNavRail } from "../InventoryNavRail";
-import { InventoryTopBar } from "../InventoryTopBar";
+import { UnsavedChangesProvider } from "../UnsavedChangesProvider";
 
 // The root layout (app/layout.tsx) sets title: "特集ページ" for the
 // Feature system — there is only one <html>/<body> for the whole app, so
@@ -33,12 +33,21 @@ export default async function ProtectedInventoryLayout({ children }: { children:
   }
 
   return (
-    <div className="flex h-screen bg-white text-gray-900">
-      <InventoryNavRail />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <InventoryTopBar role={status.role} />
-        <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+    // UnsavedChangesProvider wraps the whole route group (NavRail
+    // included) — the logo/nav-item guardedNavigate calls in NavRail and
+    // the dirty-tracking registration in /new and /[id]/edit's forms
+    // must share exactly one instance of this context (see that file's
+    // own comment). children stays a Server Component tree; wrapping it
+    // in this Client Component provider doesn't change that.
+    <UnsavedChangesProvider>
+      <div className="flex h-screen bg-white text-gray-900">
+        <InventoryNavRail />
+        {/* Each page renders its own InventoryHeader (spec O/P/Q — see
+            that component's file comment for why this replaced a single
+            shared layout-level header bar) as the first child of this
+            column, so it's not duplicated here. */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </div>
-    </div>
+    </UnsavedChangesProvider>
   );
 }

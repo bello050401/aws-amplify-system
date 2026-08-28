@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BelloLogo } from "./BelloLogo";
+import { useUnsavedChanges } from "./UnsavedChangesProvider";
 
 /**
  * Thin fixed icon rail (spec §18) — the left-most of the three layers
@@ -30,24 +30,44 @@ const NAV_ITEMS = [
 
 export function InventoryNavRail() {
   const pathname = usePathname();
+  const { guardedNavigate } = useUnsavedChanges();
 
   return (
-    <nav className="flex w-16 shrink-0 flex-col border-r border-gray-200 bg-white">
+    // No border-r on this outer element — the vertical nav-rail divider
+    // starts below the header row (on the <ul> below), never alongside
+    // the logo. A border-r running the full height here would cross the
+    // header's own border-b right at the logo's corner, producing the
+    // "十字に罫線が交差する" look the header redesign explicitly avoids
+    // (see InventoryHeader.tsx's file comment for the full picture).
+    <nav className="flex w-16 shrink-0 flex-col bg-white">
       {/* Brand area — the icon itself already carries the "BELLO SYSTEM"
           wordmark, so it's the whole brand mark here now, not an icon
-          plus a separate redundant "BELLO" label beside it. Sized by
-          padding + BelloLogo's own "sidebar" variant (72px tall) rather
-          than a fixed height on this container, so it can't clip a real
-          logo file whose actual proportions turn out taller than
-          expected. `overflow-hidden` is the guard for the opposite risk
-          — the rail itself stays exactly `w-16` no matter what: if the
-          real file's aspect ratio would render wider than that at 72px
-          tall, it's cropped right here rather than widening the rail or
-          shifting the nav items below. */}
-      <div className="flex items-center justify-center overflow-hidden border-b border-gray-200 px-2 py-3">
+          plus a separate redundant "BELLO" label beside it. `overflow-hidden`
+          guards against an unusually wide real logo file — the rail itself
+          stays exactly `w-16` no matter what: if the real file's aspect
+          ratio would render wider than that at 72px tall, it's cropped
+          right here rather than widening the rail or shifting the nav
+          items below.
+          Height is the shared --inventory-header-height token, not
+          padding-driven auto height — this is what lets this block's
+          bottom border land on exactly the same Y as InventoryHeader's
+          own border-b elsewhere in the row (see that file's comment);
+          the value itself is unchanged from what this block always
+          rendered at (72px logo + existing py-3 padding), so the logo's
+          own size/position is not affected. */}
+      {/* H/I: ロゴ = 在庫一覧へのホーム導線。未保存変更ガード
+          (UnsavedChangesProvider) を経由するbuttonであって、素の
+          <Link>ではない — dirtyな新規登録/編集フォームを開いたまま
+          クリックしても、確認なしに変更を失わないようにするため。 */}
+      <button
+        type="button"
+        onClick={() => guardedNavigate("/inventory")}
+        className="flex h-[var(--inventory-header-height)] items-center justify-center overflow-hidden border-b border-gray-200 px-2"
+        title="在庫一覧へ戻る"
+      >
         <BelloLogo variant="sidebar" />
-      </div>
-      <ul className="flex flex-1 flex-col py-1">
+      </button>
+      <ul className="flex flex-1 flex-col border-r border-gray-200 py-1">
         {NAV_ITEMS.map((item) => {
           // /inventory itself must not read as "current" for every
           // /inventory/* route (it would otherwise match /inventory/settings
@@ -71,11 +91,12 @@ export function InventoryNavRail() {
               </li>
             );
           }
+          const href = item.href;
           return (
             <li key={item.key}>
-              <Link href={item.href} className={className}>
+              <button type="button" onClick={() => guardedNavigate(href)} className={`w-full ${className}`}>
                 {item.label}
-              </Link>
+              </button>
             </li>
           );
         })}
