@@ -4,7 +4,7 @@ import { listAllCustomFieldDefinitions } from "@/lib/inventory/queries";
 import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
 import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
-import { isZaicoTokenConfigured } from "@/lib/zaico/client";
+import { isZaicoConnected } from "@/lib/zaico/client";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
 
@@ -52,11 +52,12 @@ export default async function InventorySettingsPage() {
     await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions()]);
   }
 
-  const [categories, locations, units, customFields] = await Promise.all([
+  const [categories, locations, units, customFields, zaicoConnected] = await Promise.all([
     listAllMasterEntries("Category"),
     listAllMasterEntries("Location"),
     listAllMasterEntries("Unit"),
     listAllCustomFieldDefinitions(),
+    isZaicoConnected(),
   ]);
 
   return (
@@ -71,7 +72,7 @@ export default async function InventorySettingsPage() {
           customFields={customFields}
           readOnly={role !== "ADMIN"}
           isAdmin={role === "ADMIN"}
-          zaicoConnected={isZaicoTokenConfigured()}
+          zaicoConnected={zaicoConnected}
         />
       </div>
     </div>

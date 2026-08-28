@@ -16,7 +16,7 @@ interface SettingsTabsProps {
   readOnly: boolean;
   /** ZAICO同期タブはADMINにのみ表示する（spec §19: UIレベルのADMIN制限）。実際の書き込み可否はServer Action側（app/actions/zaicoSync.ts）で独立に強制されるため、これは表示上のガードに過ぎない。 */
   isAdmin: boolean;
-  /** サーバー環境変数ZAICO_API_TOKENが設定済みかどうか — 真偽値のみ、トークン本体は一切渡らない（page.tsxのisZaicoTokenConfigured()参照）。 */
+  /** サーバー環境変数ZAICO_API_TOKENが設定済みかどうか — 真偽値のみ、トークン本体は一切渡らない（page.tsxのisZaicoConnected()参照）。 */
   zaicoConnected: boolean;
 }
 

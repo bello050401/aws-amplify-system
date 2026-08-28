@@ -1,4 +1,5 @@
 import "server-only";
+import { getZaicoTokenFromSecretsManager } from "./secretStore";
 
 /**
  * GET-only ZAICO API client. This file has NO write methods — not "we
@@ -9,12 +10,13 @@ import "server-only";
  * future phase genuinely needs a ZAICO write, that is a new, separate,
  * explicitly-reviewed file — never an addition to this one.
  *
- * Token handling: `ZAICO_API_TOKEN` is read from `process.env` inside
- * each call (not hoisted to a module-level constant) so importing this
- * file never throws just because the env var happens to be unset at
- * import time (e.g. during `next build`) — only an actual attempt to
- * call ZAICO does. The token is NEVER logged, NEVER included in a thrown
- * Error's message, and NEVER returned to any caller — every error below
+ * Token handling (夜間開発指示書 §14で更新): まずAWS Secrets Manager
+ * (lib/zaico/secretStore.ts、設定画面から書き込める)を確認し、無ければ
+ * サーバー環境変数`ZAICO_API_TOKEN`(ローカル開発の.env.local、または
+ * Amplify Hosting環境変数)へフォールバックする — getZaicoApiToken()が
+ * その一本化された入口。値はNEVER logged、NEVER included in a thrown
+ * Error's message、NEVER returned to any caller(呼び出し元はcredential
+ * を直接fetchのAuthorizationヘッダへ渡すだけ) — every error below
  * describes the failure (status code, endpoint, retry count) but not the
  * credential used to make the request.
  */
@@ -49,24 +51,35 @@ export class ZaicoApiError extends Error {
   }
 }
 
-function getToken(): string {
-  const token = process.env.ZAICO_API_TOKEN;
+/**
+ * 唯一の入口(spec §14: 「共通：getZaicoApiToken()等でZAICO clientから
+ * 利用」) — AWS Secrets Manager優先、無ければサーバー環境変数
+ * `ZAICO_API_TOKEN`。値はこの関数の戻り値としてのみ存在し、呼び出し元
+ * (getJson)がfetchのAuthorizationヘッダへ直接渡す以外の用途では一切
+ * 使わない。
+ */
+export async function getZaicoApiToken(): Promise<string> {
+  const fromSecretsManager = await getZaicoTokenFromSecretsManager();
+  const token = fromSecretsManager ?? process.env.ZAICO_API_TOKEN;
   if (!token) {
-    throw new Error("ZAICO_API_TOKENが設定されていません。サーバー環境変数として設定してください（値そのものはログに出力されません）。");
+    throw new Error(
+      "ZAICO API TOKENが設定されていません。設定画面のZAICO同期タブから登録するか、サーバー環境変数ZAICO_API_TOKENを設定してください（値そのものはログに出力されません）。",
+    );
   }
   return token;
 }
 
 /**
- * 設定画面の「ZAICO API接続設定」表示用 — サーバー環境変数
- * `ZAICO_API_TOKEN`が設定されているかどうかの真偽値だけを返す。
- * トークンの値そのものは一切返さない・伏字表示すら作らない設計
- * (spec: 「伏字表示すら不要」) — この関数の戻り値をクライアント
- * コンポーネントへpropsとして渡しても、渡っているのは真偽値1つだけで
- * トークン本体は一度もJavaScriptの実行環境（サーバーどちらのプロセス
- * 境界も含め）を越えない。
+ * 設定画面の「ZAICO API接続設定」表示用 — AWS Secrets Managerまたは
+ * サーバー環境変数`ZAICO_API_TOKEN`のいずれかにトークンが設定されて
+ * いるかどうかの真偽値だけを返す。トークンの値そのものは一切返さな
+ * い・伏字表示すら作らない設計(spec: 「伏字表示すら不要」) —
+ * この関数の戻り値をクライアントコンポーネントへpropsとして渡して
+ * も、渡っているのは真偽値1つだけでトークン本体は一度もJavaScriptの
+ * 実行環境(サーバーどちらのプロセス境界も含め)を越えない。
  */
-export function isZaicoTokenConfigured(): boolean {
+export async function isZaicoConnected(): Promise<boolean> {
+  if (await getZaicoTokenFromSecretsManager()) return true;
   return Boolean(process.env.ZAICO_API_TOKEN);
 }
 
@@ -81,8 +94,12 @@ function getBaseUrl(): string {
  * retrying can't fix. Every retry still passes through `throttle()`, so
  * a burst of 429s can't turn into a burst of retries either.
  */
-async function getJson<T>(path: string, searchParams?: Record<string, string | number | undefined>): Promise<T> {
-  const token = getToken();
+async function getJson<T>(
+  path: string,
+  searchParams?: Record<string, string | number | undefined>,
+  tokenOverride?: string,
+): Promise<T> {
+  const token = tokenOverride ?? (await getZaicoApiToken());
   const url = new URL(`${getBaseUrl()}${path}`);
   if (searchParams) {
     for (const [key, value] of Object.entries(searchParams)) {
@@ -188,4 +205,33 @@ export interface ZaicoListPage {
 export async function listInventories(page: number, perPage = 50): Promise<ZaicoListPage> {
   const items = await getJson<ZaicoInventory[]>("/inventories", { page, per_page: perPage });
   return { items, hasMore: items.length === perPage };
+}
+
+export type ZaicoTokenValidationResult =
+  | { ok: true }
+  | { ok: false; reason: "unauthorized" | "network"; message: string };
+
+/**
+ * 設定画面からTOKENを保存する前の疎通確認(spec §14: 「保存前にZAICO
+ * GET APIで成功/認証失敗/通信エラーを判定」)。まだSecrets Managerへ
+ * 保存していない値をその場で試すため、`tokenOverride`でgetJsonの
+ * トークン解決(getZaicoApiToken、Secrets Manager優先)を明示的にバイ
+ * パスする — ここだけの特別な経路で、通常の同期処理は一切この関数を
+ * 経由しない。最も軽い呼び出し(1件だけの一覧取得)で確認する。
+ */
+export async function validateZaicoToken(token: string): Promise<ZaicoTokenValidationResult> {
+  const trimmed = token.trim();
+  if (!trimmed) return { ok: false, reason: "unauthorized", message: "TOKENを入力してください。" };
+  try {
+    await getJson<ZaicoInventory[]>("/inventories", { page: 1, per_page: 1 }, trimmed);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof ZaicoApiError && (err.status === 401 || err.status === 403)) {
+      return { ok: false, reason: "unauthorized", message: "認証に失敗しました。TOKENが正しいか確認してください。" };
+    }
+    if (err instanceof ZaicoApiError) {
+      return { ok: false, reason: "network", message: `ZAICO APIエラー（HTTP ${err.status ?? "不明"}）が発生しました。時間をおいて再度お試しください。` };
+    }
+    return { ok: false, reason: "network", message: "ZAICO APIへ接続できませんでした（通信エラー）。ネットワーク状況を確認してください。" };
+  }
 }

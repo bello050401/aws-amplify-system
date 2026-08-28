@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { syncAllZaicoInventoriesAction, syncOneZaicoInventoryAction } from "@/app/actions/zaicoSync";
+import { deleteZaicoTokenAction, setZaicoTokenAction } from "@/app/actions/zaicoSecret";
 import type { ZaicoSyncResult } from "@/lib/inventory/zaicoSync";
 
 /**
@@ -17,12 +19,59 @@ import type { ZaicoSyncResult } from "@/lib/inventory/zaicoSync";
  * "全件同期" button is present per spec §11/§18 but stays a plainly
  * separate, explicitly-labeled action so it's never triggered by
  * accident while testing the single-item path.
+ *
+ * TOKEN設定UI(夜間開発指示書 §14): password type入力 → Server Action
+ * (app/actions/zaicoSecret.ts) → AWS Secrets Manager、という経路のみ。
+ * このコンポーネントの state にTOKEN文字列を保持するのは送信するその
+ * 一瞬だけで、Server Actionの戻り値には成功/失敗とメッセージしか含ま
+ * れない(TOKEN本体は二度とブラウザへ返ってこない) — 保存/削除に成功
+ * したら入力欄も即座にクリアする。
  */
 export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) {
+  const router = useRouter();
   const [zaicoId, setZaicoId] = useState("");
   const [busy, setBusy] = useState<"idle" | "one" | "all">("idle");
   const [result, setResult] = useState<ZaicoSyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [tokenEditing, setTokenEditing] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenMessage, setTokenMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+
+  async function handleSaveToken() {
+    if (!tokenInput.trim()) return;
+    setTokenBusy(true);
+    setTokenMessage(null);
+    try {
+      const res = await setZaicoTokenAction(tokenInput);
+      setTokenMessage({ kind: res.success ? "success" : "error", text: res.message });
+      if (res.success) {
+        setTokenInput("");
+        setTokenEditing(false);
+        router.refresh();
+      }
+    } catch (err) {
+      setTokenMessage({ kind: "error", text: err instanceof Error ? err.message : "保存に失敗しました。" });
+    } finally {
+      setTokenBusy(false);
+    }
+  }
+
+  async function handleDeleteToken() {
+    if (!window.confirm("ZAICO API TOKENを削除します。削除するとZAICO同期が使用できなくなります。よろしいですか？")) return;
+    setTokenBusy(true);
+    setTokenMessage(null);
+    try {
+      const res = await deleteZaicoTokenAction();
+      setTokenMessage({ kind: res.success ? "success" : "error", text: res.message });
+      if (res.success) router.refresh();
+    } catch (err) {
+      setTokenMessage({ kind: "error", text: err instanceof Error ? err.message : "削除に失敗しました。" });
+    } finally {
+      setTokenBusy(false);
+    }
+  }
 
   async function runOne() {
     const trimmed = zaicoId.trim();
@@ -62,9 +111,11 @@ export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) 
       </p>
 
       {/* ZAICO API接続設定 — トークンの値は表示しない・伏字すら表示しない
-          (サーバー環境変数ZAICO_API_TOKENが設定されているかどうかの
-          真偽値のみをpage.tsx側で判定し、ここへ渡している。
-          lib/zaico/client.tsのisZaicoTokenConfigured参照)。 */}
+          (「接続済み/未設定」の真偽値のみをpage.tsx側で判定し、ここへ渡
+          している。lib/zaico/client.tsのisZaicoConnected参照)。設定/変
+          更/削除はAWS Secrets Manager経由(app/actions/zaicoSecret.ts)
+          — 値は一度もこのコンポーネントの外(Server Actionの戻り値)へ
+          は出ない。 */}
       <div className="mb-3 border border-gray-200 p-4">
         <p className="mb-1 text-[12px] font-bold text-gray-700">ZAICO API接続設定</p>
         <p className="text-[13px]">
@@ -74,11 +125,76 @@ export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) 
             <span className="font-bold text-red-600">● 未設定</span>
           )}
         </p>
-        {!zaicoConnected && (
+
+        {!tokenEditing ? (
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setTokenEditing(true);
+                setTokenMessage(null);
+              }}
+              className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50"
+            >
+              {zaicoConnected ? "API TOKENを変更" : "ZAICO API TOKENを設定"}
+            </button>
+            {zaicoConnected && (
+              <button
+                type="button"
+                onClick={handleDeleteToken}
+                disabled={tokenBusy}
+                className="border border-red-200 px-3 py-1 text-[12px] text-red-500 hover:bg-red-50 disabled:opacity-40"
+              >
+                ZAICO API設定を削除
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="mt-2 border-t border-gray-100 pt-2">
+            <label className="block text-[11px] text-gray-500">ZAICO API TOKEN</label>
+            <div className="mt-0.5 flex gap-2">
+              <input
+                type="password"
+                autoComplete="off"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                disabled={tokenBusy}
+                placeholder="TOKENを貼り付け"
+                className="w-72 border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={handleSaveToken}
+                disabled={tokenBusy || !tokenInput.trim()}
+                className="bg-gray-900 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50"
+              >
+                {tokenBusy ? "確認中…" : "保存する"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTokenEditing(false);
+                  setTokenInput("");
+                  setTokenMessage(null);
+                }}
+                disabled={tokenBusy}
+                className="border border-gray-300 px-3 py-1 text-[12px] text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-gray-400">保存前にZAICO APIへ接続確認します。確認が取れたものだけが保存されます。</p>
+          </div>
+        )}
+
+        {tokenMessage && (
+          <p className={`mt-2 text-[12px] ${tokenMessage.kind === "success" ? "text-green-700" : "text-red-600"}`}>{tokenMessage.text}</p>
+        )}
+
+        {!zaicoConnected && !tokenEditing && (
           <p className="mt-1 text-[11px] text-gray-500">
-            サーバー環境変数 ZAICO_API_TOKEN が設定されていません。ローカル開発では
-            <code className="mx-1 bg-gray-100 px-1">.env.local</code>
-            に、本番環境ではAWS側の安全なsecret管理（詳細は開発チームへ確認してください）に設定してから、サーバーを再起動・再デプロイしてください。
+            上のボタンから設定するか、サーバー環境変数 ZAICO_API_TOKEN で設定できます(ローカル開発では
+            <code className="mx-1 bg-gray-100 px-1">.env.local</code>)。
           </p>
         )}
       </div>
