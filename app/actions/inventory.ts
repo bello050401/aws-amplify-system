@@ -13,6 +13,7 @@ import { getInventoryDetail, listCategories, listLocations, listStatuses } from 
 import { stringifyCustomFields } from "@/lib/inventory/customFieldsCodec";
 import { copyInventoryImage, removeInventoryImage } from "@/lib/inventory/imageServerOps";
 import { diffField, logInventoryHistory } from "@/lib/inventory/history";
+import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 
 /**
  * What the client sends for one image slot (see ImageEditor.tsx):
@@ -54,7 +55,27 @@ async function resolveImages(images: ImageSlotInput[]): Promise<{ storageKey: st
   }
 }
 
-export interface InventoryFieldsInput {
+/**
+ * Picks out just the Phase C extended fields from an InventoryFieldsInput
+ * — NOT `{ ...input }`, which would also carry `images`/`customFields`
+ * in their raw client-submitted shapes (not the resolved storageKeys /
+ * stringified JSON the create/update calls below build separately) and
+ * clobber those. Every field is always assigned (missing/undefined
+ * becomes explicit `null`) rather than only the ones actually provided
+ * — see parseExtendedValues' own comment: this is what lets clearing a
+ * field in the edit form actually clear it in the database, since
+ * Amplify's `.update()` only touches fields it's explicitly given.
+ * Harmless on createInventory, where there's no previous value to clear.
+ */
+function extendedFieldsInput(input: InventoryExtendedFields): Partial<InventoryExtendedFields> {
+  const result: Record<string, string | number | null> = {};
+  for (const field of ALL_EXTENDED_FIELDS) {
+    result[field.key] = input[field.key] ?? null;
+  }
+  return result as Partial<InventoryExtendedFields>;
+}
+
+export interface InventoryFieldsInput extends InventoryExtendedFields {
   name: string;
   categoryId?: string;
   statusId?: string;
@@ -125,6 +146,10 @@ export async function createInventory(input: InventoryFieldsInput): Promise<neve
       customFields: stringifyCustomFields(input.customFields),
       createdBy: who ?? undefined,
       updatedBy: who ?? undefined,
+      // Phase C fields — already fully parsed/typed by the caller (see
+      // lib/inventory/extendedFields.ts's parseExtendedValues), so
+      // spread straight through with no per-field handling needed here.
+      ...extendedFieldsInput(input),
     },
     inventoryAuthMode,
   );
@@ -189,6 +214,7 @@ export async function updateInventory(inventoryId: string, input: InventoryField
       images,
       customFields: stringifyCustomFields(input.customFields),
       updatedBy: who ?? undefined,
+      ...extendedFieldsInput(input),
     },
     inventoryAuthMode,
   );
@@ -217,6 +243,12 @@ export async function updateInventory(inventoryId: string, input: InventoryField
     diffField("備考", existing.note, input.note),
     diffField("追加項目", JSON.stringify(existing.customFields ?? {}), JSON.stringify(input.customFields ?? {})),
     imagesChanged ? { fieldName: "画像", oldValue: `${oldImageKeys.length}枚`, newValue: `${newImageKeys.length}枚` } : null,
+    // Phase C: one diffField call per extended field, reusing the exact
+    // same before/after normalization as every other field above — per
+    // spec, this doesn't need to be more elaborate than "what changed",
+    // and diffField already gives that for free per field rather than
+    // needing a separate combined-summary code path.
+    ...ALL_EXTENDED_FIELDS.map((field) => diffField(field.label, existing[field.key], input[field.key])),
   ].filter((c): c is NonNullable<typeof c> => c !== null);
   await logInventoryHistory(inventoryId, who, changes);
 

@@ -2,6 +2,7 @@ import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
 import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
+import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
 import { SettingsTabs } from "./SettingsTabs";
 
 /**
@@ -34,7 +35,10 @@ export default async function InventorySettingsPage() {
 
   if (role === "ADMIN") {
     await Promise.all([dedupeMasterEntries("Category"), dedupeMasterEntries("Location")]);
-    await seedInventoryMasters();
+    // seedCustomFieldDefinitions (Phase C's low-frequency 口金/脚高/
+    // 座面寸法/梱包サイズ/古物の特徴 fields) doesn't interact with
+    // Category/Location at all, so it doesn't need to wait on the above.
+    await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions()]);
   }
 
   const [categories, locations] = await Promise.all([listAllMasterEntries("Category"), listAllMasterEntries("Location")]);

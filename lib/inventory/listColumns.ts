@@ -33,13 +33,19 @@ export interface InventoryListColumnDef {
 export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
   { key: "image", label: "画像", defaultVisible: true },
   { key: "status", label: "ステータス", defaultVisible: false },
-  { key: "sku", label: "SKU / 在庫ID", defaultVisible: true },
+  { key: "sku", label: "在庫ID", defaultVisible: true },
   { key: "name", label: "物品名", defaultVisible: true },
   { key: "quantity", label: "数量", defaultVisible: true },
   { key: "location", label: "保管場所", defaultVisible: true },
   { key: "category", label: "カテゴリ", defaultVisible: true },
   { key: "purchasePrice", label: "仕入原価", defaultVisible: false },
-  { key: "salePrice", label: "販売予定価格", defaultVisible: true },
+  // Phase C added a real `plannedSalePrice` field distinct from
+  // `salePrice` (the actual, post-sale price) — this column now shows
+  // the former (spec §7/§8's "販売予定価格"); `salePrice` gets its own,
+  // off-by-default column below rather than being repurposed, since it's
+  // a different real value that existing records may already have set.
+  { key: "plannedSalePrice", label: "販売予定価格", defaultVisible: true },
+  { key: "salePrice", label: "販売価格（成約）", defaultVisible: false },
   { key: "note", label: "備考", defaultVisible: false },
   { key: "updatedAt", label: "更新日", defaultVisible: true },
 ];

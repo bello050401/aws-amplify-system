@@ -238,15 +238,15 @@ const schema = a.schema({
   // editable, duplicate-checked code BELLO staff actually work with.
   Inventory: a
     .model({
-      sku: a.string().required(),
+      sku: a.string().required(), // displayed in the UI as "在庫ID" (Phase C) — the field itself, its auto-numbering, and its uniqueness role are unchanged
       name: a.string().required(),
       categoryId: a.string(), // → Category.id, application-level reference (see note above)
       statusId: a.string(), // → StatusMaster.id
       locationId: a.string(), // → Location.id
       quantity: a.integer().default(0),
       unit: a.string(),
-      purchasePrice: a.integer(), // 仕入単価, JPY
-      salePrice: a.integer(), // 販売価格, JPY
+      purchasePrice: a.integer(), // 仕入単価 / 仕入・古物台帳の「購入価格」, JPY
+      salePrice: a.integer(), // 販売価格（成約後の実売価格）, JPY — distinct from plannedSalePrice below
       note: a.string(),
       images: a.ref("InventoryImage").array(),
       customFields: a.json(), // { [fieldKey: string]: string | number | null }, shape governed by CustomFieldDefinition
@@ -259,6 +259,80 @@ const schema = a.schema({
       // secondaryIndex below instead of a redundant boolean flag.
       deletedAt: a.datetime(),
       deletedBy: a.string(),
+
+      // ───────────────────────────────────────────────────────────────
+      // Phase C: business fields BELLO actually needs, added as plain
+      // optional scalars (every one below is unset/nullable — no
+      // `.required()`) so every existing Inventory record stays valid
+      // and readable exactly as before with no migration step. Naming
+      // is deliberately English camelCase (see lib/inventory/
+      // extendedFields.ts's own comment) so a future CSV/ZAICO import
+      // maps one column to one field name directly, rather than a
+      // Japanese UI label needing a separate translation table. Which
+      // of the roughly 40 requested fields became a column here versus
+      // a CustomFieldDefinition entry is explained in
+      // lib/inventory/extendedFields.ts and lib/inventory/
+      // customFieldSeed.ts respectively — the short version: anything
+      // used for search/filter/sort, or structurally important for
+      // sales/仕入台帳 record-keeping and future CSV export, is a real
+      // column; genuinely low-frequency furniture-spec detail is a
+      // CustomField instead.
+      // ───────────────────────────────────────────────────────────────
+
+      // 基本情報
+      barcode: a.string(), // QRコード・バーコードの値
+
+      // 販売情報
+      plannedSalePrice: a.integer(), // ☆販売予定価格（送料別）
+      firstMarkdownPrice: a.string(), // 1回目値下げ金額（30日）— spec: 現時点では文字列で可
+      secondMarkdownPrice: a.string(), // 2回目値下げ金額（60日）
+      thirdMarkdownPrice: a.string(), // 3回目値下げ金額（90日）
+      saleStartDate: a.date(), // 販売開始日
+      saleEndDate: a.date(), // 販売終了日
+      market: a.string(), // 市場（メルカリShops / BASE 等の販売先）
+      externalProductId: a.string(), // 商品ID（販売先サイト上のID）
+      saleCommission: a.integer(), // 販売手数料
+      listingNotes: a.string(), // <<出品情報>>（複数行）
+
+      // コンディション — spec: 評価は現時点で単純なselectではなく複数行テキスト
+      conditionRating: a.string(), // コンディション評価（複数行テキスト）
+      damageNotes: a.string(), // 傷汚れ箇所等メモ（複数行）
+
+      // サイズ・商品仕様 — spec: 現時点では文字列入力で可
+      width: a.string(), // 幅（cm）
+      depth: a.string(), // 奥行（cm）
+      height: a.string(), // 高さ（cm）
+      overallLength: a.string(), // 全長（cm）
+      lengthAdjustable: a.string(), // 全長調節可否 — plain string, not an enum: UI renders it as a <select> with a small hardcoded option list (未設定/可/不可, see extendedFields.ts) that can grow later without a schema change
+      mountType: a.string(), // 取付タイプ — options not finalized yet (spec); plain text input for now, same field would back a <select> once they are
+
+      // 仕入・古物台帳（古物営業法の帳簿記載事項に相当）— structured
+      // fields, not CustomField, since this is a compliance record that
+      // needs to stay reliably exportable/queryable. purchasePrice above
+      // doubles as this ledger's「購入価格」— not duplicated as a second
+      // field. 古物の特徴 is the one exception, seeded as a
+      // CustomFieldDefinition instead (see customFieldSeed.ts) since
+      // it's a free-text description, not a structured ledger value.
+      usedGoodsItemType: a.string(), // 品目
+      transactionDate: a.date(), // 取引の年月日
+      purchaseQuantity: a.integer(), // 数量（仕入台帳） — kept distinct from Inventory.quantity: a purchase-lot quantity is not always the same as current stock quantity
+      transactionType: a.string(), // 取引区分 — options not finalized yet; plain text for now, same reasoning as mountType
+      identityVerificationMethod: a.string(), // 取引相手の真偽確認のためにとった措置の区分および方法
+      counterpartyName: a.string(), // 相手氏名
+      counterpartyOccupation: a.string(), // 職業 — options not finalized yet; plain text for now
+      counterpartyAddress: a.string(), // 住所
+      shippingCost: a.integer(), // 送料
+      dailyPurchaseTotal: a.integer(), // その日の仕入れ合計金額（他商品含む）
+
+      // 管理メモ
+      adminMemo: a.string(), // 管理メモ（複数行）
+
+      // Migration metadata for a future ZAICO (or other system) import —
+      // not written or read by any UI yet (spec: "本格的なZAICO移行処理
+      // はまだ実装しない"), just reserved so that work doesn't need
+      // another schema change to get started.
+      sourceSystem: a.string(),
+      sourceInventoryId: a.string(),
     })
     .secondaryIndexes((index) => [
       index("sku"), // search + pre-create duplicate-check (see §6 below on exact guarantees)

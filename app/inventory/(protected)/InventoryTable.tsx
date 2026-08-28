@@ -35,6 +35,7 @@ const COLUMN_META: Record<string, { className: string; align?: "right" }> = {
   location: { className: "w-28" },
   category: { className: "w-28" },
   purchasePrice: { className: "w-24", align: "right" },
+  plannedSalePrice: { className: "w-24", align: "right" },
   salePrice: { className: "w-24", align: "right" },
   note: { className: "min-w-[200px]" },
   updatedAt: { className: "w-24" },
@@ -86,6 +87,8 @@ function renderCell(
     }
     case "purchasePrice":
       return formatYen(row.purchasePrice);
+    case "plannedSalePrice":
+      return formatYen(row.plannedSalePrice);
     case "salePrice":
       return formatYen(row.salePrice);
     case "note":

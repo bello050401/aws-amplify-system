@@ -2,6 +2,7 @@ import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { Schema } from "@/amplify/data/resource";
 import { parseCustomFields } from "./customFieldsCodec";
+import type { InventoryExtendedFields } from "./extendedFields";
 
 type InventoryModel = Schema["Inventory"]["type"];
 
@@ -23,6 +24,10 @@ export interface InventoryListRow {
   unit: string | null;
   purchasePrice: number | null;
   salePrice: number | null;
+  // Phase C — kept on the list row (unlike the rest of extendedFields,
+  // which is detail-only) since it's a default-visible list column; see
+  // lib/inventory/listColumns.ts.
+  plannedSalePrice: number | null;
   note: string | null;
   mainImageStorageKey: string | null;
   createdAt: string;
@@ -42,10 +47,49 @@ function toListRow(item: InventoryModel): InventoryListRow {
     unit: item.unit ?? null,
     purchasePrice: item.purchasePrice ?? null,
     salePrice: item.salePrice ?? null,
+    plannedSalePrice: item.plannedSalePrice ?? null,
     note: item.note ?? null,
     mainImageStorageKey: images[0]?.storageKey ?? null,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
+  };
+}
+
+/** Every Phase C field mapped to `T | null` (instead of extendedFields.ts's `T | undefined`, used for form-state parsing) — this is what a fully-read Inventory record actually looks like: every field always present on the object, absent ones simply null. Derived from InventoryExtendedFields with `type` rather than re-listed, so the two can't drift apart. */
+type ExtendedFieldsAsNullable = { [K in keyof InventoryExtendedFields]-?: NonNullable<InventoryExtendedFields[K]> | null };
+
+function toExtendedFields(item: InventoryModel): ExtendedFieldsAsNullable {
+  return {
+    barcode: item.barcode ?? null,
+    plannedSalePrice: item.plannedSalePrice ?? null,
+    firstMarkdownPrice: item.firstMarkdownPrice ?? null,
+    secondMarkdownPrice: item.secondMarkdownPrice ?? null,
+    thirdMarkdownPrice: item.thirdMarkdownPrice ?? null,
+    saleStartDate: item.saleStartDate ?? null,
+    saleEndDate: item.saleEndDate ?? null,
+    market: item.market ?? null,
+    externalProductId: item.externalProductId ?? null,
+    saleCommission: item.saleCommission ?? null,
+    listingNotes: item.listingNotes ?? null,
+    conditionRating: item.conditionRating ?? null,
+    damageNotes: item.damageNotes ?? null,
+    width: item.width ?? null,
+    depth: item.depth ?? null,
+    height: item.height ?? null,
+    overallLength: item.overallLength ?? null,
+    lengthAdjustable: item.lengthAdjustable ?? null,
+    mountType: item.mountType ?? null,
+    usedGoodsItemType: item.usedGoodsItemType ?? null,
+    transactionDate: item.transactionDate ?? null,
+    purchaseQuantity: item.purchaseQuantity ?? null,
+    transactionType: item.transactionType ?? null,
+    identityVerificationMethod: item.identityVerificationMethod ?? null,
+    counterpartyName: item.counterpartyName ?? null,
+    counterpartyOccupation: item.counterpartyOccupation ?? null,
+    counterpartyAddress: item.counterpartyAddress ?? null,
+    shippingCost: item.shippingCost ?? null,
+    dailyPurchaseTotal: item.dailyPurchaseTotal ?? null,
+    adminMemo: item.adminMemo ?? null,
   };
 }
 
@@ -97,7 +141,7 @@ export interface InventoryHistoryRow {
   newValue: string | null;
 }
 
-export interface InventoryDetail extends InventoryListRow {
+export interface InventoryDetail extends InventoryListRow, ExtendedFieldsAsNullable {
   images: { storageKey: string; sortOrder: number }[];
   customFields: Record<string, unknown> | null;
   createdBy: string | null;
@@ -120,6 +164,7 @@ export async function getInventoryDetail(id: string): Promise<InventoryDetail | 
 
   return {
     ...toListRow(item),
+    ...toExtendedFields(item),
     images,
     customFields: parseCustomFields(item.customFields),
     createdBy: item.createdBy ?? null,

@@ -10,6 +10,8 @@ import {
 } from "@/lib/inventory/queries";
 import { InventoryImageGallery } from "../../InventoryImageGallery";
 import { DeleteInventoryButton } from "./DeleteInventoryButton";
+import { ExtendedFieldsSummary } from "./ExtendedFieldsSummary";
+import { ALL_EXTENDED_FIELDS, INVENTORY_EXTENDED_SECTIONS } from "@/lib/inventory/extendedFields";
 
 function formatYen(value: number | null): string {
   return value === null ? "-" : value.toLocaleString("ja-JP");
@@ -44,6 +46,11 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
 
   const customFieldEntries = Object.entries(item.customFields ?? {});
   const fieldLabelByKey = new Map(fieldDefs.map((f) => [f.fieldKey, f.label]));
+  // Phase C extended fields, projected down to the plain {key: value}
+  // shape ExtendedFieldsSummary expects — built here rather than passing
+  // `item` directly since InventoryDetail carries a lot more (images,
+  // history, …) than just these ~30 fields.
+  const extendedRecord = Object.fromEntries(ALL_EXTENDED_FIELDS.map((f) => [f.key, item[f.key]]));
 
   return (
     <div className="h-full overflow-y-auto px-6 py-4">
@@ -91,8 +98,10 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
           </Field>
           <Field label="カテゴリ">{category?.name ?? "-"}</Field>
           <Field label="保管場所">{location?.name ?? "-"}</Field>
+          <Field label="販売予定価格">{formatYen(item.plannedSalePrice)}</Field>
           <Field label="仕入単価">{formatYen(item.purchasePrice)}</Field>
-          <Field label="販売価格">{formatYen(item.salePrice)}</Field>
+          <Field label="販売価格（成約）">{formatYen(item.salePrice)}</Field>
+          {item.barcode && <Field label="QRコード・バーコード">{item.barcode}</Field>}
           <Field label="作成日時">{formatDateTime(item.createdAt)}</Field>
           <Field label="更新日時">{formatDateTime(item.updatedAt)}</Field>
           <Field label="作成者">{item.createdBy ?? "-"}</Field>
@@ -117,6 +126,11 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
           )}
         </div>
       </div>
+
+      {/* Phase C: 販売情報 / サイズ・商品仕様 / コンディション / 仕入・
+          古物台帳 / 管理メモ — only sections with at least one non-empty
+          value render at all (spec §6). */}
+      <ExtendedFieldsSummary sections={INVENTORY_EXTENDED_SECTIONS} record={extendedRecord} />
 
       <div className="mt-8">
         <p className="mb-2 text-[11px] font-bold text-gray-400">変更履歴</p>

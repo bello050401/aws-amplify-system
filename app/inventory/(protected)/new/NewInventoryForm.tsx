@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { createInventory, type ImageSlotInput } from "@/app/actions/inventory";
 import { LabeledInput, LabeledSelect, CustomFieldInput } from "../FormFields";
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../ImageEditor";
+import { ExtendedFieldsSection } from "../ExtendedFieldsSection";
+import { INVENTORY_EXTENDED_SECTIONS, extendedValuesFromRecord, parseExtendedValues, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import type { CustomFieldDefinitionRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 
-interface DuplicateSource {
+interface DuplicateSource extends InventoryExtendedFields {
   sourceSku: string;
   name: string;
   categoryId?: string;
@@ -18,6 +20,7 @@ interface DuplicateSource {
   purchasePrice?: number;
   salePrice?: number;
   note?: string;
+  barcode?: string | null;
   customFields?: Record<string, unknown>;
   images: { storageKey: string; sortOrder: number }[];
 }
@@ -42,6 +45,13 @@ interface NewInventoryFormProps {
  * registration — never the source's. Its images become "copy" slots,
  * not "uploaded" ones, so submitting this form copies them to brand-new
  * S3 objects rather than pointing two Inventory records at the same key.
+ *
+ * Phase C's ~30 extended fields (販売情報/サイズ・商品仕様/コンディシ
+ * ョン/仕入・古物台帳/管理メモ) are NOT hand-written here one by one —
+ * they're driven entirely by lib/inventory/extendedFields.ts's shared
+ * config via ExtendedFieldsSection, the exact same component
+ * EditInventoryForm uses, so the ~30 field definitions exist in exactly
+ * one place (spec §5).
  */
 export function NewInventoryForm({ categories, locations, statuses, customFieldDefs, duplicateFrom }: NewInventoryFormProps) {
   const router = useRouter();
@@ -53,10 +63,12 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
   const [unit, setUnit] = useState(duplicateFrom?.unit ?? "");
   const [purchasePrice, setPurchasePrice] = useState(duplicateFrom?.purchasePrice != null ? String(duplicateFrom.purchasePrice) : "");
   const [salePrice, setSalePrice] = useState(duplicateFrom?.salePrice != null ? String(duplicateFrom.salePrice) : "");
+  const [barcode, setBarcode] = useState(duplicateFrom?.barcode ?? "");
   const [note, setNote] = useState(duplicateFrom?.note ?? "");
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>(
     Object.fromEntries(Object.entries(duplicateFrom?.customFields ?? {}).map(([k, v]) => [k, String(v ?? "")])),
   );
+  const [extendedValues, setExtendedValues] = useState<Record<string, string>>(extendedValuesFromRecord(duplicateFrom ?? {}));
   const [imageSlots, setImageSlots] = useState<ImageEditorSlot[]>(
     (duplicateFrom?.images ?? []).map((img) => ({ id: crypto.randomUUID(), kind: "copy" as const, sourceStorageKey: img.storageKey })),
   );
@@ -65,6 +77,10 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
   function handleCustomFieldChange(fieldKey: string, value: string) {
     setCustomFieldValues((prev) => ({ ...prev, [fieldKey]: value }));
+  }
+
+  function handleExtendedFieldChange(key: string, value: string) {
+    setExtendedValues((prev) => ({ ...prev, [key]: value }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -109,9 +125,11 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
         unit: unit || undefined,
         purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
         salePrice: salePrice ? Number(salePrice) : undefined,
+        barcode: barcode || undefined,
         note: note || undefined,
         images,
         customFields,
+        ...parseExtendedValues(extendedValues),
       });
       // createInventory redirect()s on success — Next.js implements that
       // as a thrown control-flow signal, so normal execution never
@@ -138,29 +156,29 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
       {duplicateFrom && (
         <p className="mb-4 border border-gray-200 bg-gray-50 px-3 py-2 text-[12px] text-gray-600">
-          「{duplicateFrom.sourceSku} {duplicateFrom.name}」の内容を引き継いでいます。SKUは登録時に新しく発番されます。内容を確認・修正してから登録してください。
+          「{duplicateFrom.sourceSku} {duplicateFrom.name}」の内容を引き継いでいます。在庫IDは登録時に新しく発番されます。内容を確認・修正してから登録してください。
         </p>
       )}
 
+      <p className="mb-2 text-[11px] font-bold text-gray-400">基本情報</p>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-[12px] text-gray-600">SKU</label>
+          <label className="block text-[12px] text-gray-600">在庫ID</label>
           <p className="mt-0.5 border border-gray-200 bg-gray-50 px-2 py-1 text-[13px] text-gray-400">
             登録時に自動採番されます(例: B000001)
           </p>
         </div>
-        <LabeledInput label="商品名" required value={name} onChange={setName} />
+        <LabeledInput label="物品名" required value={name} onChange={setName} />
 
         <LabeledSelect label="カテゴリ" value={categoryId} onChange={setCategoryId} options={categories.map((c) => ({ value: c.id, label: c.name }))} />
         <LabeledSelect label="保管場所" value={locationId} onChange={setLocationId} options={locations.map((l) => ({ value: l.id, label: l.name }))} />
-        <LabeledSelect label="ステータス" value={statusId} onChange={setStatusId} options={statuses.map((s) => ({ value: s.id, label: s.label }))} />
+        <LabeledSelect label="状態" value={statusId} onChange={setStatusId} options={statuses.map((s) => ({ value: s.id, label: s.label }))} />
 
         <div className="grid grid-cols-2 gap-2">
           <LabeledInput label="数量" type="number" value={quantity} onChange={setQuantity} />
           <LabeledInput label="単位" value={unit} onChange={setUnit} placeholder="個" />
         </div>
-        <LabeledInput label="仕入単価" type="number" value={purchasePrice} onChange={setPurchasePrice} placeholder="円" />
-        <LabeledInput label="販売価格" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
+        <LabeledInput label="QRコード・バーコード" value={barcode} onChange={setBarcode} />
 
         <div className="col-span-2">
           <label className="block text-[12px] text-gray-600">備考</label>
@@ -190,8 +208,34 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
       )}
 
       <div className="mt-4 border-t border-gray-100 pt-4">
+        <p className="mb-2 text-[11px] font-bold text-gray-400">画像</p>
         <ImageEditor slots={imageSlots} onChange={setImageSlots} />
       </div>
+
+      {/* Phase C: 販売情報 / サイズ・商品仕様 / コンディション / 仕入・
+          古物台帳 / 管理メモ, driven entirely by lib/inventory/
+          extendedFields.ts's shared config. 仕入単価(purchasePrice) and
+          販売価格(salePrice) — pre-existing fields with their own state
+          above — are injected into the 仕入・古物台帳 section via
+          `extra`, per spec: purchasePrice IS that ledger's「購入価格」,
+          not a duplicate field. See EditInventoryForm for the identical
+          layout. */}
+      {INVENTORY_EXTENDED_SECTIONS.map((section) => (
+        <ExtendedFieldsSection
+          key={section.id}
+          section={section}
+          values={extendedValues}
+          onChange={handleExtendedFieldChange}
+          extra={
+            section.id === "usedGoodsLedger" ? (
+              <>
+                <LabeledInput label="購入価格" type="number" value={purchasePrice} onChange={setPurchasePrice} placeholder="円" />
+                <LabeledInput label="販売価格（成約）" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
+              </>
+            ) : undefined
+          }
+        />
+      ))}
 
       {error && <p className="mt-4 text-[13px] text-red-600">{error}</p>}
 

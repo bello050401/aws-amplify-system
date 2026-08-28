@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses } from "@/lib/inventory/queries";
+import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import { NewInventoryForm } from "./NewInventoryForm";
 
 interface NewInventoryPageProps {
@@ -35,6 +36,14 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
   // A missing/deleted source (bad link, or it was deleted between
   // opening the list and clicking 複製) just falls back to a blank
   // registration form rather than erroring the whole page.
+  //
+  // Everything about the source item carries over except its identity/
+  // audit trail (spec §11: new Inventory id / 在庫ID / createdAt /
+  // updatedAt / history — id and history simply never get copied here,
+  // and 在庫ID(sku)/createdAt/updatedAt are always freshly assigned by
+  // createInventory itself, never accepted from the client at all).
+  // Phase C's ~30 extended fields ride along via one spread over
+  // ALL_EXTENDED_FIELDS rather than being listed by hand a third time.
   const duplicateFrom = duplicateSource
     ? {
         sourceSku: duplicateSource.sku,
@@ -46,9 +55,11 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
         unit: duplicateSource.unit ?? undefined,
         purchasePrice: duplicateSource.purchasePrice ?? undefined,
         salePrice: duplicateSource.salePrice ?? undefined,
+        barcode: duplicateSource.barcode ?? undefined,
         note: duplicateSource.note ?? undefined,
         customFields: duplicateSource.customFields ?? undefined,
         images: duplicateSource.images,
+        ...(Object.fromEntries(ALL_EXTENDED_FIELDS.map((f) => [f.key, duplicateSource[f.key] ?? undefined])) as Partial<InventoryExtendedFields>),
       }
     : undefined;
 
