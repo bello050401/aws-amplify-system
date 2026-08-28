@@ -153,6 +153,14 @@ function EditorImagePreview({ slot, className, alt }: { slot: ImageEditorSlot; c
 
 export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditorProps) {
   const [dragOver, setDragOver] = useState(false);
+  // "選択中の画像（大きく見るためにクリックしただけ）" と
+  // "トップ画像（isPrimary）" は別概念 (統合改善指示書 §3/§6) —
+  // クリックはこのローカルstateだけを動かし、slots/isPrimaryには一切
+  // 触れない。null = 「まだ何もクリックしていない」= 従来どおり
+  // resolveTopSlotへフォールバック(下のdisplaySlot参照)。保存対象では
+  // ないため、フォームの他のstateと違いonChangeを経由しない —
+  // ページを離れれば消えて構わない、純粋な表示上の選択でしかない。
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Always the freshest `slots` prop, read synchronously on every render
   // — kept so async continuations (the upload in handleFilesSelected, in
@@ -229,22 +237,66 @@ export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditor
     // 画像をトップへ設定する、または未設定状態へ".
   }
 
+  /**
+   * Manual ↑/↓ reorder — never allowed to move the current top image
+   * (isPrimary) out of the front position, or move anything else into
+   * it (統合改善指示書 §7: トップ画像=isPrimary=true=sortOrder先頭の不
+   * 変条件は、この既存の並び替え操作と組み合わせても崩れてはいけな
+   * い). Everything else (positions after the top image) still reorders
+   * freely among itself exactly as before. When nothing is explicitly
+   * primary yet (a fresh multi-upload before the user has picked one),
+   * every slot's `isPrimary` is false and this guard is a no-op — index
+   * 0 is only an implicit fallback top image at that point (see
+   * resolveTopSlot), not a guarantee worth locking in place.
+   */
   function moveSlot(id: string, direction: -1 | 1) {
     const current = slotsRef.current;
     const index = current.findIndex((s) => s.id === id);
     const target = index + direction;
     if (index < 0 || target < 0 || target >= current.length) return;
+    if (current[index].isPrimary || current[target].isPrimary) return;
     const next = [...current];
     [next[index], next[target]] = [next[target], next[index]];
     onChange(next);
   }
 
-  /** Marks exactly one slot isPrimary, clearing it on every other — never repositions the array (spec §4: an explicit flag, not "move to front"). Only ever called from the "normal" variant's UI. */
+  /**
+   * Marks exactly one slot isPrimary, clearing it on every other, AND
+   * moves it to the front of the array (統合改善指示書 §6/§7 — revised
+   * from this function's earlier "never repositions" behavior: トップ
+   * 画像 = サムネイル一覧の一番左, so the array order itself must carry
+   * that, not just the isPrimary flag). Everything else keeps its prior
+   * *relative* order — this is a stable move-to-front, not a full
+   * re-sort. sortOrder itself isn't tracked on the client-side slot at
+   * all; it's only ever assigned at flatten-time from each slot's array
+   * position (see NewInventoryForm/EditInventoryForm's
+   * slotsToImageInputs) — so this reordering alone is what keeps
+   * isPrimary=true and sortOrder=0 aligned on save, with no separate
+   * sortOrder bookkeeping needed here. Only ever called from the
+   * "normal" variant's UI — a damage/condition photo can never become
+   * the top image, by construction.
+   *
+   * Also selects this slot for the big preview (setSelectedId) — a
+   * deliberate act of "make this my top image" is a reasonable moment to
+   * also show it large, even though merely *clicking* a thumbnail for
+   * preview never does the reverse (sets isPrimary).
+   */
   function setTopImage(id: string) {
-    onChange(slotsRef.current.map((s) => ({ ...s, isPrimary: s.id === id })));
+    const current = slotsRef.current;
+    const target = current.find((s) => s.id === id);
+    if (!target) return;
+    const rest = current.filter((s) => s.id !== id);
+    onChange([{ ...target, isPrimary: true }, ...rest.map((s) => (s.isPrimary ? { ...s, isPrimary: false } : s))]);
+    setSelectedId(id);
   }
 
   const topSlot = resolveTopSlot(slots);
+  // 「大きく表示している画像」— 明示的にクリックされたものがあればそ
+  // れ、なければ従来どおりトップ画像優先(spec変更前の挙動と完全互換)。
+  // クリック後にその画像が削除された等でslotsから消えていた場合も、
+  // 毎レンダー計算し直すこの形なら自然にtopSlotへフォールバックする
+  // (別途クリーンアップ用のuseEffectが要らない)。
+  const displaySlot = (selectedId && slots.find((s) => s.id === selectedId)) || topSlot;
   const failedUploads = slots.filter((s): s is Extract<ImageEditorSlot, { kind: "new" }> => s.kind === "new" && !!s.error);
   const topLabel = variant === "damage" ? "代表カット" : "トップ画像";
 
@@ -285,21 +337,37 @@ export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditor
           nothing (0-1 images: a plain 削除 link covers that case) or a
           genuinely small, clearly-secondary thumbnail strip (2+ images)
           — matching how InventoryImageGallery already behaves on the
-          detail page. */}
-      {slots.length > 0 && topSlot && (
+          detail page.
+          Shows `displaySlot` (whichever thumbnail was last clicked,
+          falling back to the top slot) — NOT unconditionally `topSlot`
+          anymore (統合改善指示書 §3: 選択画像とトップ画像は別概念)。
+          `items-center justify-center` makes the centering explicit
+          rather than relying only on object-contain's default
+          object-position, so a narrow/tall or wide/short photo can never
+          read as pinned to one edge (spec §4). */}
+      {slots.length > 0 && displaySlot && (
         <div className="mt-3 w-full max-w-sm">
-          <EditorImagePreview slot={topSlot} alt={topLabel} className="h-64 w-full border border-gray-200 bg-gray-50 object-contain" />
-          <div className="mt-1 flex items-center justify-between">
+          <div className="flex h-64 w-full items-center justify-center border border-gray-200 bg-gray-50">
+            <EditorImagePreview slot={displaySlot} alt={topLabel} className="h-full w-full object-contain" />
+          </div>
+          <div className="mt-1 flex items-center justify-between gap-2">
             <p className="text-[11px] font-bold text-gray-700">
-              {topLabel}
+              {displaySlot.id === topSlot?.id ? topLabel : "選択中の画像"}
               {slots.length > 1 ? `（全${slots.length}枚）` : ""}
             </p>
-            <button type="button" onClick={() => removeSlot(topSlot.id)} className="text-[11px] text-red-500 hover:text-red-700">
-              この画像を削除
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              {variant === "normal" && displaySlot.id !== topSlot?.id && (
+                <button type="button" onClick={() => setTopImage(displaySlot.id)} className="text-[11px] text-gray-500 hover:text-gray-900">
+                  トップ画像に設定
+                </button>
+              )}
+              <button type="button" onClick={() => removeSlot(displaySlot.id)} className="text-[11px] text-red-500 hover:text-red-700">
+                この画像を削除
+              </button>
+            </div>
           </div>
-          {topSlot.kind === "new" && topSlot.uploading && <p className="text-[11px] text-gray-400">アップロード中…</p>}
-          {topSlot.kind === "new" && topSlot.error && <p className="text-[11px] text-red-600">{topSlot.error}</p>}
+          {displaySlot.kind === "new" && displaySlot.uploading && <p className="text-[11px] text-gray-400">アップロード中…</p>}
+          {displaySlot.kind === "new" && displaySlot.error && <p className="text-[11px] text-red-600">{displaySlot.error}</p>}
         </div>
       )}
 
@@ -307,15 +375,23 @@ export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditor
         <ul className="mt-2 flex max-w-sm flex-wrap gap-2">
           {slots.map((slot, index) => {
             const isTop = slot.id === topSlot?.id;
+            const isSelected = slot.id === displaySlot?.id;
             return (
               <li key={slot.id} className="w-16">
-                <div className={`h-16 w-16 border ${isTop ? "border-gray-900" : "border-gray-200"}`}>
+                {/* サムネイルをクリック = 大きく見るためだけの選択
+                    (isPrimary/sortOrderには一切触れない、spec §3)。 */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(slot.id)}
+                  aria-label={`${index + 1}枚目を大きく表示`}
+                  className={`block h-16 w-16 border ${isSelected ? "border-gray-900" : isTop ? "border-gray-400" : "border-gray-200"}`}
+                >
                   <EditorImagePreview
                     slot={slot}
                     alt=""
                     className={`h-full w-full bg-gray-50 object-cover ${slot.kind === "new" && slot.uploading ? "opacity-50" : ""}`}
                   />
-                </div>
+                </button>
                 {variant === "normal" &&
                   (isTop ? (
                     <p className="mt-0.5 text-center text-[10px] font-bold text-gray-700">★トップ</p>
@@ -325,10 +401,24 @@ export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditor
                     </button>
                   ))}
                 <div className="mt-0.5 flex justify-center gap-2 text-[10px] text-gray-400">
-                  <button type="button" onClick={() => moveSlot(slot.id, -1)} disabled={index === 0} className="disabled:text-gray-200">
+                  {/* ↑/↓は通常のスワップに加えて、トップ画像(isPrimary)
+                      を先頭から動かす／先頭へ割り込む操作は無効化する
+                      — moveSlot自体のガードと矛盾しないよう、押せない
+                      場合はボタン自体もdisabledにする(spec §7)。 */}
+                  <button
+                    type="button"
+                    onClick={() => moveSlot(slot.id, -1)}
+                    disabled={index === 0 || slot.isPrimary || slots[index - 1]?.isPrimary}
+                    className="disabled:text-gray-200"
+                  >
                     ↑
                   </button>
-                  <button type="button" onClick={() => moveSlot(slot.id, 1)} disabled={index === slots.length - 1} className="disabled:text-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => moveSlot(slot.id, 1)}
+                    disabled={index === slots.length - 1 || slot.isPrimary || slots[index + 1]?.isPrimary}
+                    className="disabled:text-gray-200"
+                  >
                     ↓
                   </button>
                   <button type="button" onClick={() => removeSlot(slot.id)} className="text-red-400 hover:text-red-600">

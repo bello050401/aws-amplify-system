@@ -72,7 +72,7 @@ export function InventoryAdvancedSearchPanel({
       </div>
       <form action="/inventory" method="get" onSubmit={handleSubmit} className="space-y-3">
         <div>
-          <label className="block text-[11px] text-gray-500">商品検索（商品名・SKU）</label>
+          <label className="block text-[11px] text-gray-500">商品検索</label>
           <input
             type="text"
             name="q"

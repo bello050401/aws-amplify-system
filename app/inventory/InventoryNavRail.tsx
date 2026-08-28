@@ -75,8 +75,11 @@ export function InventoryNavRail() {
           // match; 設定 is current for /inventory/settings and anything
           // nested under it.
           const isCurrent = item.href != null && (item.href === "/inventory" ? pathname === "/inventory" : pathname?.startsWith(item.href));
+          // 統合改善指示書 §10: 10px は他の一覧UI(検索/サイドバーの保
+          // 管場所・カテゴリ等、多くがtext-[12px]/[13px])と比べて明ら
+          // かに小さく見えていた — w-16の密度を崩さない範囲で11pxへ。
           const className = [
-            "flex flex-col items-center gap-0.5 px-1 py-2.5 text-center text-[10px] leading-tight",
+            "flex flex-col items-center gap-0.5 px-1 py-2.5 text-center text-[11px] leading-tight",
             isCurrent
               ? "border-l-2 border-gray-900 bg-gray-100 font-bold text-gray-900"
               : item.enabled

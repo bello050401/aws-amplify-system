@@ -74,17 +74,21 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   return (
     <div className="flex w-full flex-wrap items-center justify-between gap-4">
       <div className="flex items-center gap-4">
-        {/* 1. ページタイトル — 件数は同じ強さにせず、subtleなbadge。 */}
-        <div className="flex items-baseline gap-2">
-          <h1 className="text-lg font-bold tracking-tight text-gray-900">在庫一覧</h1>
-          <span className="border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[11px] font-medium text-gray-500">{totalLabel}</span>
+        {/* 1. ページタイトル — 「在庫一覧＋件数」を薄いborderで囲み、1つ
+            のタイトル領域として認識できるようにする。カードUI(角丸・
+            shadow・塗りつぶし背景)にはせず、細い罫線1本だけで区切る
+            (統合改善指示書 §1: 過度なカードUIにしない)。 */}
+        <div className="flex items-center gap-2 border border-gray-200 px-2.5 py-1">
+          <h1 className="text-[15px] font-bold tracking-tight text-gray-900">在庫一覧</h1>
+          <span className="text-[11px] font-medium text-gray-400">{totalLabel}</span>
         </div>
 
         <div className="h-6 w-px bg-gray-200" aria-hidden />
 
         {/* 2. 商品検索 — アイコン+input+詳細検索を1つの検索ツールとして
-            まとめる。検索対象・ロジックは既存のまま(name/skuのcontains)、
-            文言のみ利用者目線に変更。 */}
+            まとめる。検索対象・ロジックは既存のまま(name/skuのcontains)
+            — 「SKU」という言葉自体をUI上に出さないだけで、SKUでの検索
+            は引き続き内部的に機能する(統合改善指示書 §2)。 */}
         <div className="flex items-center gap-1.5">
           <form action="/inventory" method="get" onSubmit={handleSearchSubmit} className="flex items-center border border-gray-300 bg-white focus-within:border-gray-500 focus-within:ring-1 focus-within:ring-gray-300">
             {categoryIds.length > 0 && <input type="hidden" name="categoryIds" value={categoryIds.join(",")} />}
@@ -107,7 +111,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               type="text"
               name="q"
               defaultValue={q}
-              placeholder="商品名・SKUで検索"
+              placeholder="商品を検索"
               className="w-48 border-none px-1.5 py-1 text-[13px] outline-none placeholder:text-gray-400"
             />
           </form>
