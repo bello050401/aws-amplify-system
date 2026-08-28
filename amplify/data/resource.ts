@@ -146,17 +146,53 @@ const schema = a.schema({
 
   CustomFieldType: a.enum(["TEXT", "TEXTAREA", "NUMBER", "SELECT", "DATE", "URL"]),
 
+  // Phase C.5: an image is either a normal product photo or a
+  // damage/condition photo — absent (legacy rows written before this
+  // enum existed) means NORMAL, handled entirely in application code
+  // (see lib/inventory/imageTypes.ts's normalizeImageRecord), never by a
+  // schema default here — a GraphQL enum field can't default to one of
+  // its own values for rows that predate the field's existence, it just
+  // reads as null/undefined, which the app already treats as NORMAL.
+  ImageType: a.enum(["NORMAL", "DAMAGE"]),
+
   // Named custom type (not a model — no table of its own) for the images
   // embedded on Inventory. Images are always read/written together with
   // their parent Inventory record and never queried independently, so an
   // embedded list keeps this to one DynamoDB item instead of a second
-  // table + relation just to hold a handful of S3 keys. `sortOrder`
-  // determines display order; index 0 is the main image (per spec §6 —
-  // no separate `isMain` flag needed, "set as main image" is just
-  // reordering to the front).
+  // table + relation just to hold a handful of S3 keys.
+  //
+  // `type`/`isPrimary` (Phase C.5) replace the old implicit "index 0 in
+  // the array = main image" convention with an explicit one, while
+  // staying backward compatible with every row written before they
+  // existed: both are optional, so an old image object simply has
+  // type: null / isPrimary: null on read. lib/inventory/imageTypes.ts's
+  // normalizeImageRecord/resolveTopImage are the ONE place that turns
+  // that into "NORMAL, and the top image is whichever NORMAL image has
+  // isPrimary — or if none do (every existing record today), the first
+  // NORMAL image by sortOrder" — every reader (list, detail, edit,
+  // duplicate) goes through those functions rather than re-deriving this
+  // logic, so there's exactly one definition of "top image" in the app.
+  //
+  // Deliberately still ONE field/array (not a second `damageImages`
+  // list) — this is what the spec's own example shape
+  // ({storageKey, type, isPrimary, sortOrder}) asks for, and it means
+  // zero renaming of the existing `images` field or its resolvers;
+  // `sortOrder` is scoped within each `type` group (a NORMAL image's
+  // position among other NORMAL images), not a single global order
+  // across both — the client keeps normal/damage as two separate edited
+  // lists and only flattens them into this one array at submit time
+  // (see app/actions/inventory.ts's resolveImages).
+  //
+  // Extending this further later (original vs. processed image,
+  // processing status/provider/timestamp for a future Adobe-API-backed
+  // auto-correction pipeline — spec §6) is additive: more optional
+  // fields on this same customType, no migration, exactly like this
+  // Phase's own addition of type/isPrimary.
   InventoryImage: a.customType({
     storageKey: a.string().required(), // S3 key under the `inventory/` prefix — see amplify/storage/resource.ts
     sortOrder: a.integer().required(),
+    type: a.ref("ImageType"), // optional — absent on legacy rows, see comment above
+    isPrimary: a.boolean(), // optional — meaningful only for a NORMAL image; see resolveTopImage
   }),
 
   // Category / Location masters below are intentionally flat (`parentId`

@@ -8,6 +8,10 @@ import { InventoryThumbnail } from "./InventoryThumbnail";
 interface InventoryImageGalleryProps {
   images: { storageKey: string; sortOrder: number }[];
   alt: string;
+  /** Section heading rendered above the gallery (Phase C.5: "商品画像" / "傷・汚れ写真" — see the detail page). Omit to render with no heading, matching the original single-gallery layout. */
+  title?: string;
+  /** When true and `images` is empty, renders nothing at all rather than the "No Image" hero placeholder — used for the 傷・汚れ写真 group, where having none at all is the common case and a big empty placeholder box would just be clutter (spec §6/§11: don't over-build this screen). The 商品画像 group keeps the placeholder (hideIfEmpty defaults false) since every Inventory item is expected to have at least a representative photo. */
+  hideIfEmpty?: boolean;
 }
 
 /**
@@ -19,8 +23,17 @@ interface InventoryImageGalleryProps {
  * overlay is exactly what spec asks for ("簡素なライトボックス形式で構
  * わない"). Esc closes it; ←/→ move between images when there's more
  * than one.
+ *
+ * Phase C.5: rendered twice on the detail page — once for 商品画像
+ * (normal), once for 傷・汚れ写真 (damage) — the exact same component
+ * and lightbox both times (spec §11: "lightboxも両方で利用可能な構造")
+ * rather than a second implementation. The caller is expected to have
+ * already put the resolved top image first in `images` for the normal
+ * group (see lib/inventory/imageTypes.ts's resolveTopImage) — this
+ * component itself has no opinion on which image is "the" top one, it
+ * just always shows whichever is first.
  */
-export function InventoryImageGallery({ images, alt }: InventoryImageGalleryProps) {
+export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false }: InventoryImageGalleryProps) {
   const [selected, setSelected] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const current = images[selected] as { storageKey: string } | undefined;
@@ -38,12 +51,19 @@ export function InventoryImageGallery({ images, alt }: InventoryImageGalleryProp
   }, [lightboxOpen, images.length]);
 
   if (images.length === 0) {
-    return <InventoryThumbnail storageKey={null} alt={alt} size="hero" />;
+    if (hideIfEmpty) return null;
+    return (
+      <div>
+        {title && <p className="mb-2 text-[11px] font-bold text-gray-400">{title}</p>}
+        <InventoryThumbnail storageKey={null} alt={alt} size="hero" />
+      </div>
+    );
   }
 
   return (
     <div>
       <ConfigureAmplifyClientSide />
+      {title && <p className="mb-2 text-[11px] font-bold text-gray-400">{title}</p>}
       <button
         type="button"
         onClick={() => setLightboxOpen(true)}

@@ -3,11 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
+  bulkDeleteMasterEntries,
   createMasterEntry,
   deleteMasterEntry,
   renameMasterEntry,
   reorderMasterEntries,
   setMasterEntryActive,
+  type BulkDeleteResult,
   type MasterModelName,
 } from "@/lib/inventory/masters";
 
@@ -66,4 +68,11 @@ export async function deleteMasterEntryAction(model: MasterModelName, id: string
   await requireAdmin();
   await deleteMasterEntry(model, id);
   revalidateSettings();
+}
+
+export async function bulkDeleteMasterEntriesAction(model: MasterModelName, ids: string[]): Promise<BulkDeleteResult> {
+  await requireAdmin();
+  const result = await bulkDeleteMasterEntries(model, ids);
+  revalidateSettings();
+  return result;
 }

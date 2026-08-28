@@ -8,9 +8,9 @@ import { useInventoryImageUrl } from "./useInventoryImageUrl";
 /**
  * Shared image editor for both new-registration and edit (spec: editing
  * must expose the same image operations as registration — preview / add /
- * delete / reorder / set-main). Three kinds of slot, because "edit" and
- * "duplicate" each need a different relationship to an already-uploaded
- * S3 object:
+ * delete / reorder / set-top-image). Three kinds of slot, because "edit"
+ * and "duplicate" each need a different relationship to an already-
+ * uploaded S3 object:
  *
  * - "new": a file picked in this session. Uploads immediately (as before)
  *   so a slow/failed upload is visible right away, not at submit time.
@@ -25,20 +25,31 @@ import { useInventoryImageUrl } from "./useInventoryImageUrl";
  *   when the duplicate form opens — so abandoning that form never leaves
  *   an orphaned copy behind.
  *
- * The component owns upload/remove/reorder logic; the parent form just
- * holds the slot list in its own state (via onChange) so it can compute
- * anyUploading/anyError for its own submit gating, and build the final
- * per-kind payload for its Server Action at submit time. Both
- * NewInventoryForm and EditInventoryForm render this exact same
- * component with no per-screen variant — "統合" here means there was
- * never a second implementation to unify, only a rendering bug (see
- * patchSlot's comment) and a layout that read as two separate image
- * areas for the common single-image case (see the bottom of this file).
+ * Phase C.5: this ONE component now also backs both 商品画像(normal)
+ * and 傷・汚れ写真(damage) editors — NewInventoryForm/EditInventoryForm
+ * render it twice, once per `variant`, each with its own independent
+ * slot list/state, rather than a second copy of this file existing per
+ * spec §8 ("ImageEditorを二重コピーするのではなく...共通コンポーネント
+ * にしてください"). `variant="normal"` is the only one that exposes a
+ * "top image" control — a damage photo can never become the Inventory's
+ * representative image, by construction (there's no button for it, and
+ * the parent forms never tag a damage-variant slot's `isPrimary`).
+ * `type`/whether the Inventory-level top image ends up on this photo is
+ * decided entirely client-side here; the actual InventoryImageType
+ * tagging happens once, when each form flattens its two independent slot
+ * lists into one array for its Server Action call — see
+ * NewInventoryForm/EditInventoryForm's submit handlers and
+ * lib/inventory/imageTypes.ts.
+ *
+ * The component owns upload/remove/reorder/set-top logic; the parent
+ * form just holds each slot list in its own state (via onChange) so it
+ * can compute anyUploading/anyError across both lists for its own submit
+ * gating.
  */
 export type ImageEditorSlot =
-  | { id: string; kind: "new"; localPreviewUrl: string; storageKey: string | null; uploading: boolean; error: string | null }
-  | { id: string; kind: "existing"; storageKey: string }
-  | { id: string; kind: "copy"; sourceStorageKey: string };
+  | { id: string; kind: "new"; localPreviewUrl: string; storageKey: string | null; uploading: boolean; error: string | null; isPrimary: boolean }
+  | { id: string; kind: "existing"; storageKey: string; isPrimary: boolean }
+  | { id: string; kind: "copy"; sourceStorageKey: string; isPrimary: boolean };
 
 export function createNewImageSlot(file: File): ImageEditorSlot {
   return {
@@ -48,6 +59,7 @@ export function createNewImageSlot(file: File): ImageEditorSlot {
     storageKey: null,
     uploading: true,
     error: null,
+    isPrimary: false,
   };
 }
 
@@ -57,9 +69,16 @@ export function slotPreviewKey(slot: ImageEditorSlot): string | null {
   return null; // "new" uses localPreviewUrl instead
 }
 
+/** The slot this editor treats as "the big preview at top" — an explicit isPrimary wins, falling back to the first slot by position. Exported so a parent form can compute the same thing without duplicating the rule (e.g. to show a small top-image indicator elsewhere). Mirrors lib/inventory/imageTypes.ts's resolveTopImage, but over client-side slots rather than saved InventoryImageRecords. */
+export function resolveTopSlot(slots: ImageEditorSlot[]): ImageEditorSlot | undefined {
+  return slots.find((s) => s.isPrimary) ?? slots[0];
+}
+
 interface ImageEditorProps {
   slots: ImageEditorSlot[];
   onChange: (slots: ImageEditorSlot[]) => void;
+  /** "normal" (default) shows the top-image picker; "damage" doesn't — a damage/condition photo is never eligible to be the Inventory's representative image. */
+  variant?: "normal" | "damage";
 }
 
 // Deliberately never embeds the original filename in the S3 key — only
@@ -70,7 +89,7 @@ interface ImageEditorProps {
 // but breaks S3 *copy* — see lib/inventory/imageServerOps.ts's
 // copyInventoryImage for why. Keeping upload and copy on the same safe
 // key scheme means nothing uploaded from here on can ever hit that.
-// Untouched by this pass — see the file-level comment above.
+// Untouched by this pass — used identically for both variants.
 function safeUploadPath(file: File): string {
   const match = /\.([a-zA-Z0-9]{1,8})$/.exec(file.name);
   const ext = match ? `.${match[1].toLowerCase()}` : "";
@@ -107,7 +126,7 @@ function EditorImagePreview({ slot, className, alt }: { slot: ImageEditorSlot; c
   return <img src={url} alt={alt} className={className} />;
 }
 
-export function ImageEditor({ slots, onChange }: ImageEditorProps) {
+export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditorProps) {
   const [dragOver, setDragOver] = useState(false);
 
   // Always the freshest `slots` prop, read synchronously on every render
@@ -175,6 +194,14 @@ export function ImageEditor({ slots, onChange }: ImageEditorProps) {
     // uploaded/copied for them yet in this session. An "existing" image
     // removed here is cleaned up server-side by updateInventory, which
     // diffs against what's actually still on the record after save.
+    //
+    // Deleting the current top image needs no special-case cleanup
+    // either: resolveTopSlot (and, server-side, resolveTopImage) always
+    // recomputes from whatever's left rather than storing "the" top
+    // image anywhere else, so removing it just falls through to the
+    // next remaining slot automatically — or to "no top image" if none
+    // are left. This is exactly spec §4's "トップ画像削除時は安全に次の
+    // 画像をトップへ設定する、または未設定状態へ".
   }
 
   function moveSlot(id: string, direction: -1 | 1) {
@@ -187,23 +214,21 @@ export function ImageEditor({ slots, onChange }: ImageEditorProps) {
     onChange(next);
   }
 
-  function setAsMain(id: string) {
-    const current = slotsRef.current;
-    const index = current.findIndex((s) => s.id === id);
-    if (index <= 0) return;
-    const next = [...current];
-    const [item] = next.splice(index, 1);
-    next.unshift(item);
-    onChange(next);
+  /** Marks exactly one slot isPrimary, clearing it on every other — never repositions the array (spec §4: an explicit flag, not "move to front"). Only ever called from the "normal" variant's UI. */
+  function setTopImage(id: string) {
+    onChange(slotsRef.current.map((s) => ({ ...s, isPrimary: s.id === id })));
   }
 
-  const mainSlot = slots[0];
+  const topSlot = resolveTopSlot(slots);
   const failedUploads = slots.filter((s): s is Extract<ImageEditorSlot, { kind: "new" }> => s.kind === "new" && !!s.error);
+  const topLabel = variant === "damage" ? "代表カット" : "トップ画像";
 
   return (
     <div>
       <ConfigureAmplifyClientSide />
-      <label className="block text-[12px] text-gray-600">画像（複数選択可・先頭が代表画像）</label>
+      <label className="block text-[12px] text-gray-600">
+        {variant === "damage" ? "複数選択可" : "複数選択可・トップ画像を1枚選択できます"}
+      </label>
 
       {/* Add area: click to browse, or drag files in. Still a plain
           <input type="file"> underneath — drag/drop just calls the same
@@ -228,57 +253,66 @@ export function ImageEditor({ slots, onChange }: ImageEditorProps) {
       </label>
 
       {/* Exactly ONE large image area — this used to also render a full
-          thumbnail-styled card for the main slot again just below it
-          (border, "メイン" label, the works), which for the ordinary
-          single-photo case read as the same picture shown twice, large,
-          in two places. Below the main preview there is now only ever
-          either nothing (0-1 images: a plain 削除 link covers that case)
-          or a genuinely small, clearly-secondary thumbnail strip
-          (2+ images) — matching how InventoryImageGallery already
-          behaves on the detail page. */}
-      {slots.length > 0 && (
+          thumbnail-styled card for the top slot again just below it
+          (border, label, the works), which for the ordinary single-photo
+          case read as the same picture shown twice, large, in two
+          places. Below the main preview there is now only ever either
+          nothing (0-1 images: a plain 削除 link covers that case) or a
+          genuinely small, clearly-secondary thumbnail strip (2+ images)
+          — matching how InventoryImageGallery already behaves on the
+          detail page. */}
+      {slots.length > 0 && topSlot && (
         <div className="mt-3 w-full max-w-sm">
-          <EditorImagePreview slot={mainSlot} alt="メイン画像" className="h-64 w-full border border-gray-200 bg-gray-50 object-contain" />
+          <EditorImagePreview slot={topSlot} alt={topLabel} className="h-64 w-full border border-gray-200 bg-gray-50 object-contain" />
           <div className="mt-1 flex items-center justify-between">
-            <p className="text-[11px] font-bold text-gray-700">メイン画像{slots.length > 1 ? `（全${slots.length}枚）` : ""}</p>
-            <button type="button" onClick={() => removeSlot(mainSlot.id)} className="text-[11px] text-red-500 hover:text-red-700">
+            <p className="text-[11px] font-bold text-gray-700">
+              {topLabel}
+              {slots.length > 1 ? `（全${slots.length}枚）` : ""}
+            </p>
+            <button type="button" onClick={() => removeSlot(topSlot.id)} className="text-[11px] text-red-500 hover:text-red-700">
               この画像を削除
             </button>
           </div>
-          {mainSlot.kind === "new" && mainSlot.uploading && <p className="text-[11px] text-gray-400">アップロード中…</p>}
-          {mainSlot.kind === "new" && mainSlot.error && <p className="text-[11px] text-red-600">{mainSlot.error}</p>}
+          {topSlot.kind === "new" && topSlot.uploading && <p className="text-[11px] text-gray-400">アップロード中…</p>}
+          {topSlot.kind === "new" && topSlot.error && <p className="text-[11px] text-red-600">{topSlot.error}</p>}
         </div>
       )}
 
       {slots.length > 1 && (
         <ul className="mt-2 flex max-w-sm flex-wrap gap-2">
-          {slots.map((slot, index) => (
-            <li key={slot.id} className="w-16">
-              <button
-                type="button"
-                onClick={() => setAsMain(slot.id)}
-                title={index === 0 ? "メイン画像" : "クリックでメイン画像に設定"}
-                className={`block h-16 w-16 border ${index === 0 ? "border-gray-900" : "border-gray-200"}`}
-              >
-                <EditorImagePreview
-                  slot={slot}
-                  alt=""
-                  className={`h-full w-full bg-gray-50 object-cover ${slot.kind === "new" && slot.uploading ? "opacity-50" : ""}`}
-                />
-              </button>
-              <div className="mt-0.5 flex justify-center gap-2 text-[10px] text-gray-400">
-                <button type="button" onClick={() => moveSlot(slot.id, -1)} disabled={index === 0} className="disabled:text-gray-200">
-                  ↑
-                </button>
-                <button type="button" onClick={() => moveSlot(slot.id, 1)} disabled={index === slots.length - 1} className="disabled:text-gray-200">
-                  ↓
-                </button>
-                <button type="button" onClick={() => removeSlot(slot.id)} className="text-red-400 hover:text-red-600">
-                  削除
-                </button>
-              </div>
-            </li>
-          ))}
+          {slots.map((slot, index) => {
+            const isTop = slot.id === topSlot?.id;
+            return (
+              <li key={slot.id} className="w-16">
+                <div className={`h-16 w-16 border ${isTop ? "border-gray-900" : "border-gray-200"}`}>
+                  <EditorImagePreview
+                    slot={slot}
+                    alt=""
+                    className={`h-full w-full bg-gray-50 object-cover ${slot.kind === "new" && slot.uploading ? "opacity-50" : ""}`}
+                  />
+                </div>
+                {variant === "normal" &&
+                  (isTop ? (
+                    <p className="mt-0.5 text-center text-[10px] font-bold text-gray-700">★トップ</p>
+                  ) : (
+                    <button type="button" onClick={() => setTopImage(slot.id)} className="mt-0.5 block w-full text-center text-[10px] text-gray-500 hover:text-gray-900">
+                      トップに設定
+                    </button>
+                  ))}
+                <div className="mt-0.5 flex justify-center gap-2 text-[10px] text-gray-400">
+                  <button type="button" onClick={() => moveSlot(slot.id, -1)} disabled={index === 0} className="disabled:text-gray-200">
+                    ↑
+                  </button>
+                  <button type="button" onClick={() => moveSlot(slot.id, 1)} disabled={index === slots.length - 1} className="disabled:text-gray-200">
+                    ↓
+                  </button>
+                  <button type="button" onClick={() => removeSlot(slot.id)} className="text-red-400 hover:text-red-600">
+                    削除
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 

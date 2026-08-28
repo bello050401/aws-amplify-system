@@ -14,6 +14,7 @@ import { stringifyCustomFields } from "@/lib/inventory/customFieldsCodec";
 import { copyInventoryImage, removeInventoryImage } from "@/lib/inventory/imageServerOps";
 import { diffField, logInventoryHistory } from "@/lib/inventory/history";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
+import type { InventoryImageRecord, InventoryImageType } from "@/lib/inventory/imageTypes";
 
 /**
  * What the client sends for one image slot (see ImageEditor.tsx):
@@ -22,8 +23,16 @@ import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/invento
  * - "copy": borrowed from another Inventory record (duplicate only) —
  *   resolveImages() copies it to a brand-new key before it's ever
  *   written onto this record, so two records never share one S3 object.
+ *
+ * `type`/`isPrimary` (Phase C.5) ride along on every slot — the client
+ * (NewInventoryForm/EditInventoryForm) manages normal and damage photos
+ * as two separate ImageEditor instances/lists and flattens them into one
+ * array with these tagged on right before calling createInventory/
+ * updateInventory; see those forms' submit handlers.
  */
-export type ImageSlotInput = { kind: "uploaded"; storageKey: string; sortOrder: number } | { kind: "copy"; sourceStorageKey: string; sortOrder: number };
+export type ImageSlotInput =
+  | { kind: "uploaded"; storageKey: string; sortOrder: number; type: InventoryImageType; isPrimary: boolean }
+  | { kind: "copy"; sourceStorageKey: string; sortOrder: number; type: InventoryImageType; isPrimary: boolean };
 
 /**
  * Resolves every image slot to its final storageKey, copying "copy" slots
@@ -35,18 +44,18 @@ export type ImageSlotInput = { kind: "uploaded"; storageKey: string; sortOrder: 
  * this failing is itself handled without leaving a broken/half-created
  * record on their side either.
  */
-async function resolveImages(images: ImageSlotInput[]): Promise<{ storageKey: string; sortOrder: number }[]> {
-  const resolved: { storageKey: string; sortOrder: number }[] = [];
+async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRecord[]> {
+  const resolved: InventoryImageRecord[] = [];
   const copiedKeys: string[] = []; // subset of resolved actually created by copyInventoryImage in this call
   try {
     for (const img of images) {
       if (img.kind === "uploaded") {
-        resolved.push({ storageKey: img.storageKey, sortOrder: img.sortOrder });
+        resolved.push({ storageKey: img.storageKey, sortOrder: img.sortOrder, type: img.type, isPrimary: img.isPrimary });
         continue;
       }
       const newKey = await copyInventoryImage(img.sourceStorageKey);
       copiedKeys.push(newKey);
-      resolved.push({ storageKey: newKey, sortOrder: img.sortOrder });
+      resolved.push({ storageKey: newKey, sortOrder: img.sortOrder, type: img.type, isPrimary: img.isPrimary });
     }
     return resolved;
   } catch (err) {

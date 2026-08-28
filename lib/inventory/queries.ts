@@ -3,6 +3,7 @@ import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { Schema } from "@/amplify/data/resource";
 import { parseCustomFields } from "./customFieldsCodec";
 import type { InventoryExtendedFields } from "./extendedFields";
+import { normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
 
 type InventoryModel = Schema["Inventory"]["type"];
 
@@ -34,8 +35,13 @@ export interface InventoryListRow {
   updatedAt: string;
 }
 
+/** Every image on the record, normalized (legacy rows with no `type` read as NORMAL — see lib/inventory/imageTypes.ts). Shared by toListRow (just needs the resolved top image) and getInventoryDetail (needs the full normal/damage breakdown). */
+function normalizedImages(item: InventoryModel): InventoryImageRecord[] {
+  return (item.images ?? []).filter((img): img is NonNullable<typeof img> => Boolean(img)).map(normalizeImageRecord);
+}
+
 function toListRow(item: InventoryModel): InventoryListRow {
-  const images = [...(item.images ?? [])].sort((a, b) => (a?.sortOrder ?? 0) - (b?.sortOrder ?? 0));
+  const images = normalizedImages(item);
   return {
     id: item.id,
     sku: item.sku,
@@ -49,7 +55,11 @@ function toListRow(item: InventoryModel): InventoryListRow {
     salePrice: item.salePrice ?? null,
     plannedSalePrice: item.plannedSalePrice ?? null,
     note: item.note ?? null,
-    mainImageStorageKey: images[0]?.storageKey ?? null,
+    // Phase C.5: the explicit top image (isPrimary, falling back to the
+    // first NORMAL image) rather than simply `images[0]` — a damage
+    // photo can never end up as the list thumbnail even if it happens to
+    // sort first. See resolveTopImage's own comment.
+    mainImageStorageKey: resolveTopImage(images)?.storageKey ?? null,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
   };
@@ -142,7 +152,7 @@ export interface InventoryHistoryRow {
 }
 
 export interface InventoryDetail extends InventoryListRow, ExtendedFieldsAsNullable {
-  images: { storageKey: string; sortOrder: number }[];
+  images: InventoryImageRecord[]; // both NORMAL and DAMAGE, normalized — callers split via lib/inventory/imageTypes.ts's splitImagesByType
   customFields: Record<string, unknown> | null;
   createdBy: string | null;
   updatedBy: string | null;
@@ -158,14 +168,10 @@ export async function getInventoryDetail(id: string): Promise<InventoryDetail | 
     ...inventoryAuthMode,
   });
 
-  const images = [...(item.images ?? [])]
-    .filter((img): img is { storageKey: string; sortOrder: number } => Boolean(img))
-    .sort((a, b) => a.sortOrder - b.sortOrder);
-
   return {
     ...toListRow(item),
     ...toExtendedFields(item),
-    images,
+    images: normalizedImages(item),
     customFields: parseCustomFields(item.customFields),
     createdBy: item.createdBy ?? null,
     updatedBy: item.updatedBy ?? null,

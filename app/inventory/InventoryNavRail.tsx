@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BelloLogo } from "./BelloLogo";
 
 /**
  * Thin fixed icon rail (spec §18) — the left-most of the three layers
@@ -32,7 +33,8 @@ export function InventoryNavRail() {
 
   return (
     <nav className="flex w-16 shrink-0 flex-col border-r border-gray-200 bg-white">
-      <div className="flex h-12 items-center justify-center border-b border-gray-200">
+      <div className="flex h-12 items-center justify-center gap-1.5 border-b border-gray-200">
+        <BelloLogo className="h-5 w-5" />
         <span className="text-[11px] font-bold tracking-wide text-gray-700">BELLO</span>
       </div>
       <ul className="flex flex-1 flex-col py-1">

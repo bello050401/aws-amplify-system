@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses } from "@/lib/inventory/queries";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
+import { splitImagesByType } from "@/lib/inventory/imageTypes";
 import { NewInventoryForm } from "./NewInventoryForm";
 
 interface NewInventoryPageProps {
@@ -44,6 +45,13 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
   // createInventory itself, never accepted from the client at all).
   // Phase C's ~30 extended fields ride along via one spread over
   // ALL_EXTENDED_FIELDS rather than being listed by hand a third time.
+  // Phase C.5: normal and damage photos are split here (once) rather
+  // than in the client — NewInventoryForm just seeds its two independent
+  // ImageEditor slot lists straight from these, isPrimary included, so a
+  // duplicate keeps whichever photo was the source's top image too
+  // (spec §9).
+  const { normal: normalImages, damage: damageImages } = splitImagesByType(duplicateSource?.images ?? []);
+
   const duplicateFrom = duplicateSource
     ? {
         sourceSku: duplicateSource.sku,
@@ -58,7 +66,8 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
         barcode: duplicateSource.barcode ?? undefined,
         note: duplicateSource.note ?? undefined,
         customFields: duplicateSource.customFields ?? undefined,
-        images: duplicateSource.images,
+        normalImages,
+        damageImages,
         ...(Object.fromEntries(ALL_EXTENDED_FIELDS.map((f) => [f.key, duplicateSource[f.key] ?? undefined])) as Partial<InventoryExtendedFields>),
       }
     : undefined;

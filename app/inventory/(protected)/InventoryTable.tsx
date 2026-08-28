@@ -27,7 +27,7 @@ const cell = "px-2 py-1";
 
 /** Header label + width for each optional column — kept next to the cell renderer below rather than folded into lib/inventory/listColumns.ts, since column width is a layout detail of this one table, not shared with the settings screen's toggle list. */
 const COLUMN_META: Record<string, { className: string; align?: "right" }> = {
-  image: { className: "w-[76px]" },
+  image: { className: "w-[106px]" }, // Phase C.5 §10: fits the 90px-wide "list" thumbnail with a little breathing room either side
   status: { className: "w-24" },
   sku: { className: "w-32" },
   name: { className: "min-w-[220px]" },
@@ -50,7 +50,13 @@ function renderCell(
 ): React.ReactNode {
   switch (key) {
     case "image":
-      return <InventoryThumbnail storageKey={row.mainImageStorageKey} alt={row.name} size="medium" />;
+      // "list" (3:2, object-contain) — see InventoryThumbnail's own
+      // comment. Same component/props for the plain list and any
+      // 詳細検索-filtered result set, since both render through this one
+      // function; row.mainImageStorageKey is already the resolved top
+      // image (see lib/inventory/queries.ts's toListRow), never just
+      // "whichever image happens to sort first".
+      return <InventoryThumbnail storageKey={row.mainImageStorageKey} alt={row.name} size="list" />;
     case "status": {
       const status = row.statusId ? statusesById[row.statusId] : undefined;
       return status ? (

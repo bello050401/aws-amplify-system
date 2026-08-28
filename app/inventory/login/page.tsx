@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { confirmSignIn, fetchAuthSession, signIn, signOut } from "aws-amplify/auth";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
+import { BelloLogo } from "../BelloLogo";
 
 const NOT_AUTHORIZED_MESSAGE =
   "このアカウントはログインできますが、在庫システムの権限（ADMIN / EDITOR / VIEWER）がありません。管理者に権限グループへの追加を依頼してください。";
@@ -127,7 +128,10 @@ export default function InventoryLoginPage({ searchParams }: InventoryLoginPageP
       <ConfigureAmplifyClientSide />
       {needsNewPassword ? (
         <form onSubmit={handleNewPassword} className="w-full max-w-sm border border-gray-300 bg-white p-8">
-          <h1 className="text-base font-bold text-gray-900">BELLO 在庫管理</h1>
+          <div className="flex items-center gap-2">
+            <BelloLogo className="h-8 w-8" />
+            <h1 className="text-base font-bold text-gray-900">BELLO 在庫管理</h1>
+          </div>
           <p className="mt-1 text-xs text-gray-500">初回ログインのため、新しいパスワードを設定してください。</p>
           <div className="mt-6">
             <label className="block text-xs font-medium text-gray-600">新しいパスワード</label>
@@ -152,7 +156,10 @@ export default function InventoryLoginPage({ searchParams }: InventoryLoginPageP
         </form>
       ) : (
         <form onSubmit={handleSignIn} className="w-full max-w-sm border border-gray-300 bg-white p-8">
-          <h1 className="text-base font-bold text-gray-900">BELLO 在庫管理</h1>
+          <div className="flex items-center gap-2">
+            <BelloLogo className="h-8 w-8" />
+            <h1 className="text-base font-bold text-gray-900">BELLO 在庫管理</h1>
+          </div>
           <div className="mt-6 space-y-3">
             <div>
               <label className="block text-xs font-medium text-gray-600">メールアドレス</label>

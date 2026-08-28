@@ -11,6 +11,13 @@ import { InventoryTopBar } from "../InventoryTopBar";
 // the Feature system's root layout at all.
 export const metadata: Metadata = {
   title: "BELLO 在庫管理",
+  // BELLO SYSTEM's icon (Phase C.5 §12/§13) — the root layout
+  // (app/layout.tsx) sets no icons at all, so this doesn't override or
+  // conflict with anything the Feature side relies on; a browser just
+  // gets a normal 404 for the favicon request until the file is placed
+  // at public/bello-system-icon.png, same graceful-absence behavior as
+  // BelloLogo.tsx.
+  icons: { icon: "/bello-system-icon.png" },
 };
 
 /**

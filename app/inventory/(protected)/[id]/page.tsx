@@ -12,6 +12,7 @@ import { InventoryImageGallery } from "../../InventoryImageGallery";
 import { DeleteInventoryButton } from "./DeleteInventoryButton";
 import { ExtendedFieldsSummary } from "./ExtendedFieldsSummary";
 import { ALL_EXTENDED_FIELDS, INVENTORY_EXTENDED_SECTIONS } from "@/lib/inventory/extendedFields";
+import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 
 function formatYen(value: number | null): string {
   return value === null ? "-" : value.toLocaleString("ja-JP");
@@ -52,6 +53,16 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
   // history, …) than just these ~30 fields.
   const extendedRecord = Object.fromEntries(ALL_EXTENDED_FIELDS.map((f) => [f.key, item[f.key]]));
 
+  // Phase C.5: split once here rather than inside InventoryImageGallery,
+  // which has no opinion on normal-vs-damage — it just renders whatever
+  // array it's given. The resolved top image is moved to the front of
+  // the normal group so the gallery's existing "first image is the big
+  // one" behavior shows it, exactly like before an explicit isPrimary
+  // existed (see resolveTopImage's own comment).
+  const { normal: normalImages, damage: damageImages } = splitImagesByType(item.images);
+  const topImage = resolveTopImage(item.images);
+  const orderedNormalImages = topImage ? [topImage, ...normalImages.filter((i) => i.storageKey !== topImage.storageKey)] : normalImages;
+
   return (
     <div className="h-full overflow-y-auto px-6 py-4">
       <Link href="/inventory" className="text-[12px] text-gray-500 hover:text-gray-900">
@@ -90,7 +101,15 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
       {role === "EDITOR" && <p className="mt-1 text-[11px] text-gray-400">削除はADMIN権限が必要です。</p>}
 
       <div className="mt-6 grid grid-cols-[420px_1fr] gap-8">
-        <InventoryImageGallery images={item.images} alt={item.name} />
+        <div>
+          <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="商品画像" />
+          {/* hideIfEmpty: most items have zero damage photos — showing a
+              big empty placeholder box for that common case would just
+              be clutter (spec §6/§11). */}
+          <div className="mt-6">
+            <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
+          </div>
+        </div>
 
         <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-[13px]">
           <Field label="数量">

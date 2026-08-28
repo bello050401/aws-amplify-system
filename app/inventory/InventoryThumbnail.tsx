@@ -6,10 +6,23 @@ import { useInventoryImageUrl } from "./useInventoryImageUrl";
 
 const SIZE_CLASSES = {
   small: "h-10 w-10", // was the only size; kept for anywhere not yet migrated
-  medium: "h-[60px] w-[60px]", // list table thumbnail (spec: ~1.5x of the old 40px) and the detail gallery's thumbnail strip
+  medium: "h-[60px] w-[60px]", // detail gallery's thumbnail strip
+  // Phase C.5 §10: the list table's image column, specifically — a 3:2
+  // box (matching a typical landscape product photo) rather than a
+  // square, so a 3:2 source image displays uncropped instead of losing
+  // its left/right or top/bottom edges. Height is unchanged from
+  // "medium" on purpose (spec: don't grow the row), only the width
+  // grows to fit the wider box.
+  list: "h-[60px] w-[90px]",
   large: "h-20 w-full", // unused after the detail-page gallery rework, kept for any other small-preview use (e.g. ImageEditor slots)
   hero: "h-[380px] w-full", // detail page main image / no-image fallback
 } as const;
+
+// "list" uses object-contain (never crop — letterbox on a white
+// background instead) since its whole point is showing a 3:2 photo
+// uncropped; every other size keeps the previous object-cover behavior,
+// where a cropped square/fixed box reads fine at that size.
+const CONTAIN_SIZES: ReadonlySet<keyof typeof SIZE_CLASSES> = new Set(["list"]);
 
 /**
  * Resolves an `inventory/*` Storage key to a viewable URL client-side, one
@@ -33,6 +46,7 @@ export function InventoryThumbnail({
   const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => setLoadFailed(false), [storageKey]);
   const failed = resolveFailed || loadFailed;
+  const fitClass = CONTAIN_SIZES.has(size) ? "object-contain" : "object-cover";
 
   if (!storageKey || failed) {
     return (
@@ -71,7 +85,7 @@ export function InventoryThumbnail({
         console.error(`[InventoryThumbnail] image failed to load for "${storageKey}":`, e);
         setLoadFailed(true);
       }}
-      className={`${SIZE_CLASSES[size]} shrink-0 overflow-hidden border border-gray-200 object-cover bg-gray-50`}
+      className={`${SIZE_CLASSES[size]} shrink-0 overflow-hidden border border-gray-200 ${fitClass} bg-gray-50`}
     />
   );
 }

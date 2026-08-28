@@ -5,6 +5,7 @@ import type { Metadata } from "next";
 // thin server layout is the standard way to still set a per-segment title.
 export const metadata: Metadata = {
   title: "BELLO 在庫管理 - ログイン",
+  icons: { icon: "/bello-system-icon.png" }, // see (protected)/layout.tsx's identical note
 };
 
 export default function InventoryLoginLayout({ children }: { children: React.ReactNode }) {

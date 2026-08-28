@@ -7,6 +7,7 @@ import { LabeledInput, LabeledSelect, CustomFieldInput } from "../../FormFields"
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../../ImageEditor";
 import { ExtendedFieldsSection } from "../../ExtendedFieldsSection";
 import { INVENTORY_EXTENDED_SECTIONS, extendedValuesFromRecord, parseExtendedValues } from "@/lib/inventory/extendedFields";
+import { splitImagesByType, type InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import type { CustomFieldDefinitionRow, InventoryDetail, MasterOption, StatusOption } from "@/lib/inventory/queries";
 
 interface EditInventoryFormProps {
@@ -17,6 +18,21 @@ interface EditInventoryFormProps {
   customFieldDefs: CustomFieldDefinitionRow[];
 }
 
+/** item.images (both types mixed, as stored) → this session's editable "existing" slot list for one group. Mirrors NewInventoryForm's slotsFromImages, but "existing" kind (nothing to copy — this record already owns these S3 objects) rather than "copy". */
+function slotsFromExistingImages(images: InventoryImageRecord[]): ImageEditorSlot[] {
+  return images.map((img) => ({ id: crypto.randomUUID(), kind: "existing" as const, storageKey: img.storageKey, isPrimary: img.isPrimary }));
+}
+
+/** Same flattening NewInventoryForm uses at submit time — see that file's identical function for the full comment. */
+function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE"): ImageSlotInput[] {
+  return slots.map((slot, idx) => {
+    const isPrimary = type === "NORMAL" && slot.isPrimary;
+    return slot.kind === "copy"
+      ? { kind: "copy", sourceStorageKey: slot.sourceStorageKey, sortOrder: idx, type, isPrimary }
+      : { kind: "uploaded", storageKey: slot.storageKey as string, sortOrder: idx, type, isPrimary };
+  });
+}
+
 /**
  * Same fields as NewInventoryForm, minus 在庫ID (shown read-only — it's
  * the system-issued identifier, spec explicitly rules out editing it
@@ -24,7 +40,11 @@ interface EditInventoryFormProps {
  * Shares LabeledInput/LabeledSelect/CustomFieldInput and ImageEditor with
  * the registration form; see ImageEditor.tsx for why an edit's images
  * start as "existing" slots rather than "new"/"copy" ones — nothing here
- * re-uploads or copies an image the user just leaves alone.
+ * re-uploads or copies an image the user just leaves alone. Phase C.5:
+ * 商品画像(normal)/傷・汚れ写真(damage) are two independent slot
+ * lists/ImageEditor instances, split from `item.images` on load and
+ * re-flattened (type-tagged, isPrimary included) at submit — see
+ * NewInventoryForm's identical structure for the full reasoning.
  *
  * Phase C's ~30 extended fields are rendered by ExtendedFieldsSection
  * from lib/inventory/extendedFields.ts's shared config — the exact same
@@ -47,9 +67,9 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
     Object.fromEntries(Object.entries(item.customFields ?? {}).map(([k, v]) => [k, String(v ?? "")])),
   );
   const [extendedValues, setExtendedValues] = useState<Record<string, string>>(extendedValuesFromRecord(item));
-  const [imageSlots, setImageSlots] = useState<ImageEditorSlot[]>(
-    item.images.map((img) => ({ id: crypto.randomUUID(), kind: "existing" as const, storageKey: img.storageKey })),
-  );
+  const { normal: initialNormal, damage: initialDamage } = splitImagesByType(item.images);
+  const [normalImageSlots, setNormalImageSlots] = useState<ImageEditorSlot[]>(slotsFromExistingImages(initialNormal));
+  const [damageImageSlots, setDamageImageSlots] = useState<ImageEditorSlot[]>(slotsFromExistingImages(initialDamage));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,8 +86,10 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
     setError(null);
 
     if (!name.trim()) return setError("商品名を入力してください。");
-    if (imageEditorHasUploading(imageSlots)) return setError("画像のアップロード完了までお待ちください。");
-    if (imageEditorHasError(imageSlots)) {
+    if (imageEditorHasUploading(normalImageSlots) || imageEditorHasUploading(damageImageSlots)) {
+      return setError("画像のアップロード完了までお待ちください。");
+    }
+    if (imageEditorHasError(normalImageSlots) || imageEditorHasError(damageImageSlots)) {
       return setError("アップロードに失敗した画像があります。該当の画像を削除するか、再度選択し直してください。");
     }
     for (const def of customFieldDefs) {
@@ -85,11 +107,7 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
         customFields[def.fieldKey] = def.fieldType === "NUMBER" ? Number(raw) : raw;
       }
 
-      const images: ImageSlotInput[] = imageSlots.map((slot, idx) =>
-        slot.kind === "copy"
-          ? { kind: "copy", sourceStorageKey: slot.sourceStorageKey, sortOrder: idx }
-          : { kind: "uploaded", storageKey: slot.storageKey as string, sortOrder: idx },
-      );
+      const images: ImageSlotInput[] = [...slotsToImageInputs(normalImageSlots, "NORMAL"), ...slotsToImageInputs(damageImageSlots, "DAMAGE")];
 
       await updateInventory(item.id, {
         name,
@@ -172,8 +190,13 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
       )}
 
       <div className="mt-4 border-t border-gray-100 pt-4">
-        <p className="mb-2 text-[11px] font-bold text-gray-400">画像</p>
-        <ImageEditor slots={imageSlots} onChange={setImageSlots} />
+        <p className="mb-2 text-[11px] font-bold text-gray-400">商品画像</p>
+        <ImageEditor slots={normalImageSlots} onChange={setNormalImageSlots} variant="normal" />
+      </div>
+
+      <div className="mt-4 border-t border-gray-100 pt-4">
+        <p className="mb-2 text-[11px] font-bold text-gray-400">傷・汚れ写真</p>
+        <ImageEditor slots={damageImageSlots} onChange={setDamageImageSlots} variant="damage" />
       </div>
 
       {/* Phase C: 販売情報 / サイズ・商品仕様 / コンディション / 仕入・
@@ -202,7 +225,7 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
       <div className="mt-6 flex gap-2">
         <button
           type="submit"
-          disabled={submitting || imageEditorHasUploading(imageSlots)}
+          disabled={submitting || imageEditorHasUploading(normalImageSlots) || imageEditorHasUploading(damageImageSlots)}
           className="bg-gray-900 px-4 py-2 text-[13px] font-bold text-white disabled:opacity-50"
         >
           {submitting ? "保存中…" : "保存する"}

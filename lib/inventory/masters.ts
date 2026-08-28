@@ -132,6 +132,15 @@ export async function reorderMasterEntries(model: MasterModelName, orderedIds: s
   }
 }
 
+/** How many Inventory records currently reference this id — the one check both deleteMasterEntry and bulkDeleteMasterEntries use to decide delete-vs-deactivate, kept in one place so the two can never disagree about what "in use" means. */
+async function countInventoryReferences(model: MasterModelName, id: string): Promise<number> {
+  const { data } =
+    model === "Category"
+      ? await serverDataClient.models.Inventory.list({ filter: { categoryId: { eq: id } }, ...inventoryAuthMode })
+      : await serverDataClient.models.Inventory.list({ filter: { locationId: { eq: id } }, ...inventoryAuthMode });
+  return data.length;
+}
+
 /**
  * Physical delete is refused whenever any Inventory record currently
  * references this id (spec: "使用中の場合は無効化を優先" / never break
@@ -142,12 +151,9 @@ export async function reorderMasterEntries(model: MasterModelName, orderedIds: s
  * here means "any Inventory row has this id", full stop.
  */
 export async function deleteMasterEntry(model: MasterModelName, id: string): Promise<void> {
-  const { data: inUse } =
-    model === "Category"
-      ? await serverDataClient.models.Inventory.list({ filter: { categoryId: { eq: id } }, ...inventoryAuthMode })
-      : await serverDataClient.models.Inventory.list({ filter: { locationId: { eq: id } }, ...inventoryAuthMode });
-  if (inUse.length > 0) {
-    throw new Error(`${inUse.length}件の在庫がこの${model === "Category" ? "カテゴリ" : "保管場所"}を使用しているため削除できません。無効化してください。`);
+  const inUseCount = await countInventoryReferences(model, id);
+  if (inUseCount > 0) {
+    throw new Error(`${inUseCount}件の在庫がこの${model === "Category" ? "カテゴリ" : "保管場所"}を使用しているため削除できません。無効化してください。`);
   }
   const { errors } =
     model === "Category"
@@ -157,4 +163,49 @@ export async function deleteMasterEntry(model: MasterModelName, id: string): Pro
     console.error(`[deleteMasterEntry] ${model} delete failed:`, errors);
     throw new Error(`削除に失敗しました: ${JSON.stringify(errors)}`);
   }
+}
+
+export interface BulkDeleteResult {
+  /** ids that were unused and got physically deleted. */
+  deletedIds: string[];
+  /** ids that were in use, so were deactivated instead of deleted (never a hard failure — spec: 使用中カテゴリは無効化). */
+  deactivatedIds: string[];
+  /** ids that hit an actual error (neither deleted nor deactivated) — a real failure, not just "in use". */
+  failed: { id: string; reason: string }[];
+}
+
+/**
+ * Phase C.5 §1 — bulk operation for /inventory/settings' multi-select:
+ * for each id, delete it if nothing references it, deactivate it
+ * (never a rejection) if something does, and only land in `failed` on an
+ * actual error. Reuses deleteMasterEntry/setMasterEntryActive rather
+ * than re-implementing either, and countInventoryReferences rather than
+ * re-deriving "is this in use". Sequential, not Promise.all — a settings
+ * screen bulk action is small in practice, and processing one at a time
+ * keeps each id's outcome cleanly isolated (one slow/failing id can't
+ * corrupt another's result).
+ *
+ * Generic over `model` exactly like every other function in this file —
+ * Category and Location get this mechanism for free from the same code
+ * (spec §1: "保管場所についても同じ仕組みを流用可能な構造"); which of
+ * the two actually exposes the bulk-select UI is a settings-screen
+ * concern, not a backend one.
+ */
+export async function bulkDeleteMasterEntries(model: MasterModelName, ids: string[]): Promise<BulkDeleteResult> {
+  const result: BulkDeleteResult = { deletedIds: [], deactivatedIds: [], failed: [] };
+  for (const id of ids) {
+    try {
+      const inUseCount = await countInventoryReferences(model, id);
+      if (inUseCount > 0) {
+        await setMasterEntryActive(model, id, false);
+        result.deactivatedIds.push(id);
+      } else {
+        await deleteMasterEntry(model, id);
+        result.deletedIds.push(id);
+      }
+    } catch (err) {
+      result.failed.push({ id, reason: err instanceof Error ? err.message : "不明なエラー" });
+    }
+  }
+  return result;
 }
