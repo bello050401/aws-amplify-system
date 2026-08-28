@@ -37,7 +37,7 @@ export function InventoryTable({ rows, categoriesById, locationsById, statusesBy
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
             <th className="w-8 px-2 py-1.5"></th>
-            <th className="w-14 px-2 py-1.5 text-left">画像</th>
+            <th className="w-[76px] px-2 py-1.5 text-left">画像</th>
             <th className="w-24 px-2 py-1.5 text-left">ステータス</th>
             <th className="w-32 px-2 py-1.5 text-left">SKU</th>
             <th className="min-w-[220px] px-2 py-1.5 text-left">商品名</th>
@@ -62,7 +62,7 @@ export function InventoryTable({ rows, categoriesById, locationsById, statusesBy
                 </td>
                 <td className={cell}>
                   <Link href={href} className="block">
-                    <InventoryThumbnail storageKey={row.mainImageStorageKey} alt={row.name} />
+                    <InventoryThumbnail storageKey={row.mainImageStorageKey} alt={row.name} size="medium" />
                   </Link>
                 </td>
                 <td className={cell}>

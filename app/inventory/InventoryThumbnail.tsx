@@ -1,37 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getUrl } from "aws-amplify/storage";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
+import { useInventoryImageUrl } from "./useInventoryImageUrl";
 
-const RETRY_DELAYS_MS = [400, 1200]; // total ≤3 attempts
+const SIZE_CLASSES = {
+  small: "h-10 w-10", // was the only size; kept for anywhere not yet migrated
+  medium: "h-[60px] w-[60px]", // list table thumbnail (spec: ~1.5x of the old 40px) and the detail gallery's thumbnail strip
+  large: "h-20 w-full", // unused after the detail-page gallery rework, kept for any other small-preview use (e.g. ImageEditor slots)
+  hero: "h-[380px] w-full", // detail page main image / no-image fallback
+} as const;
 
 /**
  * Resolves an `inventory/*` Storage key to a viewable URL client-side, one
- * request per distinct key. Storage access is Cognito-group scoped (see
+ * request per distinct key (via useInventoryImageUrl — see that file for
+ * the retry rationale). Storage access is Cognito-group scoped (see
  * amplify/storage/resource.ts) — no public/guest rule — so this only
  * works for a signed-in ADMIN/EDITOR/VIEWER, which is exactly who ever
  * reaches this component (it only renders inside the (protected) route
- * group). Doing this client-side, one thumbnail at a time, rather than
- * resolving all URLs server-side per list request, keeps the list page's
- * own render off the Storage round-trip entirely.
- *
- * Retries a couple of times on failure rather than giving up after one
- * rejection: `getUrl()` needs the Identity Pool credentials behind the
- * signed-in user's Cognito session, and on a fresh page load (right after
- * registering, or a hard refresh) Amplify's client-side session
- * restoration can still be in flight when this effect's first attempt
- * fires — that attempt gets treated as unauthenticated (no guest rule
- * exists on this path, so it's denied) even though the user genuinely
- * has access, and normally resolves on retry a moment later. A real
- * permission/missing-object problem still ends in "No Image" once
- * retries are exhausted — this only smooths over the startup race.
+ * group).
  */
-const SIZE_CLASSES = {
-  small: "h-10 w-10", // list table thumbnail
-  large: "h-20 w-full", // detail page / image editor preview
-} as const;
-
 export function InventoryThumbnail({
   storageKey,
   alt,
@@ -41,40 +29,10 @@ export function InventoryThumbnail({
   alt: string;
   size?: keyof typeof SIZE_CLASSES;
 }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    if (!storageKey) return;
-    let cancelled = false;
-    setUrl(null);
-    setFailed(false);
-
-    const attempt = (retriesLeft: number) => {
-      getUrl({ path: storageKey })
-        .then(({ url }) => {
-          if (!cancelled) setUrl(url.toString());
-        })
-        .catch((err) => {
-          if (cancelled) return;
-          if (retriesLeft > 0) {
-            const delay = RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - retriesLeft] ?? 1200;
-            setTimeout(() => !cancelled && attempt(retriesLeft - 1), delay);
-            return;
-          }
-          // Logged, not swallowed — this is exactly the signal needed to
-          // tell "transient session-restore race" apart from "genuine
-          // Storage access/permission problem" the next time this comes up.
-          console.error(`[InventoryThumbnail] getUrl failed for "${storageKey}" after retries:`, err);
-          setFailed(true);
-        });
-    };
-    attempt(RETRY_DELAYS_MS.length);
-
-    return () => {
-      cancelled = true;
-    };
-  }, [storageKey]);
+  const { url, failed: resolveFailed } = useInventoryImageUrl(storageKey);
+  const [loadFailed, setLoadFailed] = useState(false);
+  useEffect(() => setLoadFailed(false), [storageKey]);
+  const failed = resolveFailed || loadFailed;
 
   if (!storageKey || failed) {
     return (
@@ -96,7 +54,7 @@ export function InventoryThumbnail({
         // exist at that key. Falls back to the same placeholder instead
         // of leaving a permanently broken-image icon.
         console.error(`[InventoryThumbnail] image failed to load for "${storageKey}":`, e);
-        setFailed(true);
+        setLoadFailed(true);
       }}
       className={`${SIZE_CLASSES[size]} shrink-0 border border-gray-200 object-cover bg-gray-50`}
     />

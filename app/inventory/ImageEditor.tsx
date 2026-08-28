@@ -56,6 +56,20 @@ interface ImageEditorProps {
   onChange: (slots: ImageEditorSlot[]) => void;
 }
 
+// Deliberately never embeds the original filename in the S3 key — only
+// letters/digits from its extension, everything else discarded. This
+// isn't just tidiness: a key containing a space, parentheses (Windows'
+// own "(1)"/"(2)" duplicate-name suffix), or non-ASCII characters
+// (ordinary for a real photo's filename) works fine for a plain upload,
+// but breaks S3 *copy* — see lib/inventory/imageServerOps.ts's
+// copyInventoryImage for why. Keeping upload and copy on the same safe
+// key scheme means nothing uploaded from here on can ever hit that.
+function safeUploadPath(file: File): string {
+  const match = /\.([a-zA-Z0-9]{1,8})$/.exec(file.name);
+  const ext = match ? `.${match[1].toLowerCase()}` : "";
+  return `inventory/${crypto.randomUUID()}${ext}`;
+}
+
 export function ImageEditor({ slots, onChange }: ImageEditorProps) {
   async function handleFilesSelected(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
@@ -65,7 +79,7 @@ export function ImageEditor({ slots, onChange }: ImageEditorProps) {
 
     await Promise.all(
       newSlots.map(async ({ file, slot }) => {
-        const path = `inventory/${crypto.randomUUID()}-${file.name}`;
+        const path = safeUploadPath(file);
         try {
           await uploadData({ path, data: file }).result;
           patchSlot(slot.id, { storageKey: path, uploading: false });

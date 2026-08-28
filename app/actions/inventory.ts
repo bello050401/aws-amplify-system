@@ -24,19 +24,34 @@ import { diffField, logInventoryHistory } from "@/lib/inventory/history";
  */
 export type ImageSlotInput = { kind: "uploaded"; storageKey: string; sortOrder: number } | { kind: "copy"; sourceStorageKey: string; sortOrder: number };
 
+/**
+ * Resolves every image slot to its final storageKey, copying "copy" slots
+ * one at a time (not Promise.all) so that if one copy fails partway
+ * through a multi-image duplicate, this can clean up exactly the ones it
+ * already made before re-throwing — never leaves orphaned copies behind,
+ * and never returns a partial result for the caller to build an
+ * Inventory record out of. See createInventory/updateInventory for how
+ * this failing is itself handled without leaving a broken/half-created
+ * record on their side either.
+ */
 async function resolveImages(images: ImageSlotInput[]): Promise<{ storageKey: string; sortOrder: number }[]> {
-  return Promise.all(
-    images.map(async (img) => {
-      if (img.kind === "uploaded") return { storageKey: img.storageKey, sortOrder: img.sortOrder };
-      // Keep the source's original filename/extension in the new key —
-      // cosmetic (S3 preserves Content-Type across a copy regardless),
-      // but a key ending in the wrong extension is needlessly confusing
-      // if anyone ever has to read these keys directly (S3 console, logs).
-      const sourceFileName = img.sourceStorageKey.split("/").pop() ?? "copy.jpg";
-      const newKey = await copyInventoryImage(img.sourceStorageKey, sourceFileName);
-      return { storageKey: newKey, sortOrder: img.sortOrder };
-    }),
-  );
+  const resolved: { storageKey: string; sortOrder: number }[] = [];
+  const copiedKeys: string[] = []; // subset of resolved actually created by copyInventoryImage in this call
+  try {
+    for (const img of images) {
+      if (img.kind === "uploaded") {
+        resolved.push({ storageKey: img.storageKey, sortOrder: img.sortOrder });
+        continue;
+      }
+      const newKey = await copyInventoryImage(img.sourceStorageKey);
+      copiedKeys.push(newKey);
+      resolved.push({ storageKey: newKey, sortOrder: img.sortOrder });
+    }
+    return resolved;
+  } catch (err) {
+    await Promise.allSettled(copiedKeys.map((k) => removeInventoryImage(k)));
+    throw err; // copyInventoryImage already attaches a specific, user-facing message
+  }
 }
 
 export interface InventoryFieldsInput {
@@ -69,6 +84,16 @@ export async function createInventory(input: InventoryFieldsInput): Promise<neve
   const name = input.name.trim();
   if (!name) throw new Error("商品名を入力してください。");
 
+  const who = await getCurrentInventoryUserEmail();
+
+  // Images resolved (uploads used as-is, "copy" slots copied to brand-new
+  // S3 objects) *before* anything is written to Data — nothing exists
+  // yet for this to leave half-created if it fails, and resolveImages
+  // itself cleans up any copy it already made this call before
+  // re-throwing. See that function's own comment for the ordering
+  // rationale in full.
+  const images = await resolveImages(input.images);
+
   // SKU is never user-entered (spec revision): a fresh, guaranteed-unique
   // value comes from the generateInventorySku Lambda's atomic DynamoDB
   // counter (see amplify/functions/generate-sku) — not "read the max SKU
@@ -79,11 +104,10 @@ export async function createInventory(input: InventoryFieldsInput): Promise<neve
   // confirming a duplicate — a duplicate never reuses the source's SKU.
   const { data: sku, errors: skuErrors } = await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);
   if (skuErrors || !sku) {
+    console.error("[createInventory] SKU generation failed:", skuErrors);
+    await Promise.allSettled(images.map((img) => removeInventoryImage(img.storageKey)));
     throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(skuErrors)}`);
   }
-
-  const who = await getCurrentInventoryUserEmail();
-  const images = await resolveImages(input.images);
 
   const { data: created, errors } = await serverDataClient.models.Inventory.create(
     {
@@ -106,6 +130,12 @@ export async function createInventory(input: InventoryFieldsInput): Promise<neve
   );
 
   if (errors || !created) {
+    console.error("[createInventory] Inventory.create failed:", errors);
+    // The SKU itself is not reclaimed — a gap in the sequence from an
+    // aborted registration is harmless and exactly what an atomic
+    // counter is expected to produce sometimes; see amplify/functions/
+    // generate-sku's own comment on why it's never decremented.
+    await Promise.allSettled(images.map((img) => removeInventoryImage(img.storageKey)));
     throw new Error(`在庫の登録に失敗しました: ${JSON.stringify(errors)}`);
   }
 
@@ -162,7 +192,10 @@ export async function updateInventory(inventoryId: string, input: InventoryField
     },
     inventoryAuthMode,
   );
-  if (errors) throw new Error(`在庫の更新に失敗しました: ${JSON.stringify(errors)}`);
+  if (errors) {
+    console.error("[updateInventory] Inventory.update failed:", errors);
+    throw new Error(`在庫の更新に失敗しました: ${JSON.stringify(errors)}`);
+  }
 
   const categoryName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? id;
   const locationName = (id: string | null) => locations.find((l) => l.id === id)?.name ?? id;
@@ -226,7 +259,10 @@ export async function deleteInventory(inventoryId: string): Promise<never> {
   const who = await getCurrentInventoryUserEmail();
 
   const { errors } = await serverDataClient.models.Inventory.delete({ id: inventoryId }, inventoryAuthMode);
-  if (errors) throw new Error(`在庫の削除に失敗しました: ${JSON.stringify(errors)}`);
+  if (errors) {
+    console.error("[deleteInventory] Inventory.delete failed:", errors);
+    throw new Error(`在庫の削除に失敗しました: ${JSON.stringify(errors)}`);
+  }
 
   await logInventoryHistory(inventoryId, who, [{ fieldName: "削除", oldValue: "有効", newValue: "削除済み" }]);
   await Promise.allSettled(existing.images.map((img) => removeInventoryImage(img.storageKey)));

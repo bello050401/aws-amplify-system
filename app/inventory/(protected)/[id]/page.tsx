@@ -8,7 +8,7 @@ import {
   listLocations,
   listStatuses,
 } from "@/lib/inventory/queries";
-import { InventoryThumbnail } from "../../InventoryThumbnail";
+import { InventoryImageGallery } from "../../InventoryImageGallery";
 import { DeleteInventoryButton } from "./DeleteInventoryButton";
 
 function formatYen(value: number | null): string {
@@ -79,20 +79,8 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
       {role === "VIEWER" && <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>}
       {role === "EDITOR" && <p className="mt-1 text-[11px] text-gray-400">削除はADMIN権限が必要です。</p>}
 
-      <div className="mt-6 grid grid-cols-[240px_1fr] gap-8">
-        <div>
-          {item.images.length === 0 ? (
-            <InventoryThumbnail storageKey={null} alt={item.name} />
-          ) : (
-            <div className="grid grid-cols-3 gap-1">
-              {item.images.map((img, i) => (
-                <div key={img.storageKey} className={i === 0 ? "col-span-3" : ""}>
-                  <InventoryThumbnail storageKey={img.storageKey} alt={`${item.name} 画像${i + 1}`} />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      <div className="mt-6 grid grid-cols-[420px_1fr] gap-8">
+        <InventoryImageGallery images={item.images} alt={item.name} />
 
         <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-[13px]">
           <Field label="数量">
