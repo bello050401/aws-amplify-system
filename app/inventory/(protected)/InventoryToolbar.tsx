@@ -1,9 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import type { InventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { DirectEditControls } from "./DirectEditControls";
+import { ExportMenu } from "./ExportMenu";
+import { ImportWizard } from "./ImportWizard";
 
 interface InventoryToolbarProps {
   role: InventoryRole;
@@ -38,6 +41,7 @@ interface InventoryToolbarProps {
 export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, advancedOpen, totalLabel }: InventoryToolbarProps) {
   const canEdit = role === "ADMIN" || role === "EDITOR";
   const { isDirty, guardedNavigate } = useUnsavedChanges();
+  const [importOpen, setImportOpen] = useState(false);
 
   function buildHref(overrides: Partial<{ q: string; advanced: string }> = {}) {
     const sp = new URLSearchParams();
@@ -139,23 +143,17 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
             <DirectEditControls />
           </>
         ) : null}
-        <button
-          type="button"
-          disabled
-          title="次のPhaseで実装予定"
-          className="border border-gray-200 px-2 py-1.5 text-[12px] text-gray-300"
-        >
-          インポート
-        </button>
-        <button
-          type="button"
-          disabled
-          title="次のPhaseで実装予定"
-          className="border border-gray-200 px-2 py-1.5 text-[12px] text-gray-300"
-        >
-          エクスポート
-        </button>
+        {/* インポートはADMIN/EDITORのみ(spec §16: VIEWERは不可・ボタン
+            非表示)。エクスポートは既存の閲覧権限モデルに合わせ、
+            VIEWERも含め全ロールが利用可能(ExportMenu参照)。 */}
+        {canEdit && (
+          <button type="button" onClick={() => setImportOpen(true)} className="border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+            インポート
+          </button>
+        )}
+        <ExportMenu currentFilterParams={{ q, categoryIds: categoryIds.length > 0 ? categoryIds.join(",") : undefined, locationId, statusId }} />
       </div>
+      {importOpen && <ImportWizard onClose={() => setImportOpen(false)} />}
     </div>
   );
 }
