@@ -45,14 +45,30 @@ const BASE_URL = process.env.ZAICO_API_BASE_URL ?? "https://web.zaico.co.jp/api/
 const SAMPLE_INVENTORY_ID = process.env.ZAICO_SAMPLE_INVENTORY_ID ?? "73638418";
 const TOKEN = process.env.ZAICO_API_TOKEN;
 
-const PII_KEY_PATTERN = /(name|tel|phone|email|mail|address|zip|postal|氏名|名前|住所|電話|郵便|メール)/i;
+// Deliberately NOT "name" (English) or "氏名"/"名前" (Japanese) — those
+// substrings match far too much of ZAICO's own field/attribute
+// structure to be a useful PII signal here: `optional_attributes[].name`
+// is the actual ZAICO field LABEL ("販売価格" etc, exactly what this
+// script exists to discover, see the incident this comment documents),
+// and the inventory's own `name`/`title` is the product name, not a
+// person's. This inventory is furniture stock, not customer records, so
+// the realistic residual risk is a 仕入先/取引先 contact detail — this
+// list stays narrow (phone/email/address-shaped keys only) rather than
+// broad, on purpose.
+const PII_KEY_PATTERN = /(\btel\b|phone|email|\bmail\b|address|\bzip\b|postal|住所|電話|郵便)/i;
+// These are structural keys ZAICO's API itself uses everywhere (an
+// optional_attribute's {name, value} pair, in particular) — never
+// redacted regardless of PII_KEY_PATTERN, so a future broadening of that
+// pattern can't accidentally catch them again the way "name" just did.
+const NEVER_REDACT_KEYS = new Set(["name", "value", "title", "id"]);
 
 function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === "object") {
     const out = {};
     for (const [key, v] of Object.entries(value)) {
-      out[key] = PII_KEY_PATTERN.test(key) && (typeof v === "string" || typeof v === "number") ? "[REDACTED]" : redact(v);
+      const shouldRedact = !NEVER_REDACT_KEYS.has(key) && PII_KEY_PATTERN.test(key) && (typeof v === "string" || typeof v === "number");
+      out[key] = shouldRedact ? "[REDACTED]" : redact(v);
     }
     return out;
   }
@@ -106,23 +122,37 @@ async function main() {
     );
     process.exit(1);
   }
-  console.log(`Using token: present (length ${TOKEN.length}); base URL: ${BASE_URL}; sample inventory ID: ${SAMPLE_INVENTORY_ID}`);
+  // Which of the three to actually fetch — `node fetchSamples.mjs detail`
+  // fetches only the detail sample (no need to re-pull the ~2MB list
+  // response just to re-run the redaction fix over one field). No
+  // arguments = all three, the original default.
+  const requested = process.argv.slice(2);
+  const targets = requested.length > 0 ? new Set(requested) : new Set(["detail", "list", "attachments"]);
+
+  console.log(`Using token: present (length ${TOKEN.length}); base URL: ${BASE_URL}; sample inventory ID: ${SAMPLE_INVENTORY_ID}; targets: ${[...targets].join(", ")}`);
   await mkdir(OUTPUT_DIR, { recursive: true });
 
-  // Small delay between calls — good practice even for 3 requests, given
-  // ZAICO's documented per-second rate limit for the real sync later.
-  await fetchAndSave("inventory-detail", `${BASE_URL}/inventories/${SAMPLE_INVENTORY_ID}`);
-  await new Promise((r) => setTimeout(r, 400));
+  // Small delay between calls — good practice even for a handful of
+  // requests, given ZAICO's documented per-second rate limit for the
+  // real sync later.
+  if (targets.has("detail")) {
+    await fetchAndSave("inventory-detail", `${BASE_URL}/inventories/${SAMPLE_INVENTORY_ID}`);
+    await new Promise((r) => setTimeout(r, 400));
+  }
 
-  await fetchAndSave("inventory-list-sample", `${BASE_URL}/inventories?limit=5`);
-  await new Promise((r) => setTimeout(r, 400));
+  if (targets.has("list")) {
+    await fetchAndSave("inventory-list-sample", `${BASE_URL}/inventories?limit=5`);
+    await new Promise((r) => setTimeout(r, 400));
+  }
 
-  // Endpoint path guessed (attachments/images are commonly separate from
-  // the core inventory resource) — if this 404s, that's still useful
-  // information: it tells us the image URL is probably inline on the
-  // detail response instead, which the saved inventory-detail.json above
-  // will show either way.
-  await fetchAndSave("inventory-attachments", `${BASE_URL}/inventories/${SAMPLE_INVENTORY_ID}/attachments`);
+  if (targets.has("attachments")) {
+    // Endpoint path guessed (attachments/images are commonly separate
+    // from the core inventory resource) — confirmed 401 in practice; the
+    // image URL is inline on the detail/list response instead
+    // (`item_image.url`), which is what the sync actually uses. Kept
+    // here only so re-running with no arguments still records that.
+    await fetchAndSave("inventory-attachments", `${BASE_URL}/inventories/${SAMPLE_INVENTORY_ID}/attachments`);
+  }
 
   console.log("\nDone. Every response (or error) is saved under zaico-verification/output/ — never printed here, never committed (gitignored).");
   console.log("Please paste the contents of those files back so the ZAICO→BELLO field mapping can be built from them.");
