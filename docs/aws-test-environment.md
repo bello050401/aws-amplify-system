@@ -267,3 +267,41 @@ HandlerErrorCode: AlreadyExists
 `scripts/aws-setup/7-fix-staging-iam-role.ps1`(および同じパターンを持っていた`6-create-staging-app.ps1`)は、失敗したbuild stepのログをWindows PowerShell 5.1の`Invoke-WebRequest -UseBasicParsing`で取得していたが、レスポンスのContent-Typeがテキストと認識されない場合、`.Content`が文字列ではなく生の`byte[]`として返ってくることがある。これを`Write-Host`へそのまま渡すと、各バイトが10進数として1つずつ表示され(「50 48 50 54 45 ...」のような出力)、障害解析が事実上不可能になっていた。
 
 修正: `ConvertTo-DecodedLogText`関数を追加し、`.Content`が`byte[]`の場合はgzipマジックバイト(`0x1f 0x8b`)を検出して必要に応じて解凍したうえで、明示的にUTF-8としてデコードして人間が読めるテキストへ変換するようにした(文字列で返ってきた場合はそのまま使う)。あわせて、失敗ログ全体を一時ファイル(`$env:TEMP`配下、Git管理対象外、スクリプト終了時に削除)へ保存できるようにし、`Find-FirstMeaningfulFailure`関数で末尾の汎用的な「Build failed」バナーだけに頼らず、`CREATE_FAILED`・`HandlerErrorCode`・`AlreadyExists`等のマーカーに最初に一致した行(と前後の文脈)を自動抽出するようにした。
+
+## 11. preflightがSecretを「存在しない」と誤判定した問題(cp932エンコードエラー、修正: `7-fix-staging-iam-role.ps1`・`8-diagnose-zaico-secret.ps1`)
+
+§10で追加したpreflightのSecret存在確認を実際に実行したところ、AWS CLI自体は`bello/zaico-api-token`を正しく発見していた(実際の出力にARN`arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/zaico-api-token-6B6S6P`が表示されている)にもかかわらず、直後に以下のエラーで異常終了し、preflightがこれを「Secret not found」と誤判定した:
+
+```
+System.Management.Automation.RemoteException
+aws: [ERROR]: 'cp932' codec can't encode character '—' in position 15: illegal multibyte sequence
+```
+
+### 11a. 根本原因
+
+`describe-secret`はSecretを発見できていたが、AWS CLI(Python製)がそのSecretの`Description`フィールドに含まれるUnicode文字(EM DASH、U+2014)を、Windows PowerShell 5.1のコンソール(cp932コードページ)へ出力しようとしてエンコードエラーを起こしていた。これは「Secretが存在するかどうか」とは無関係な、**出力のエンコード処理そのものの失敗**であり、そのnon-zero終了コードを、修正前のスクリプトが単純に「AWS CLI呼び出し失敗 = Secret不存在」と丸めて誤判定していた。Secretは最初から一貫して存在していた。
+
+### 11b. 修正後のSecret存在確認方式
+
+`describe-secret`に`--query "{ARN:ARN,Name:Name}"`を指定し、AWS CLI自身に`ARN`と`Name`(共にASCIIのみ)だけを取得・出力させるよう変更した。`Description`・`Tags`等、任意のUnicodeを含み得るフィールドはAWS CLIの出力処理に一切渡らなくなるため、今回と同種のエンコードエラーはこの経路では原理的に再発しない。
+
+あわせて、AWS CLI呼び出しが失敗した場合に何が失敗したのかを分類する`Get-AwsErrorKind`関数を追加した(第二の防御層):
+
+- `ResourceNotFoundException`を含む場合のみ`not-found`と判定する。
+- `AccessDenied`・認証情報エラー・encodingエラー(`codec can't encode`等)は、それぞれ別の種類の失敗として報告し、**いずれも「Secret不存在」とは判定しない**。
+
+この2つの修正を`7-fix-staging-iam-role.ps1`のpreflightと`8-diagnose-zaico-secret.ps1`の両方に適用した。
+
+### 11c. CloudFormation stabilization wait
+
+同じpreflight実行で、staging App配下の以下のCloudFormation stackが`*_IN_PROGRESS`状態であることも確認された:
+
+```
+amplify-d4hkkg7dty2du-...-storage...  : CREATE_IN_PROGRESS
+amplify-d4hkkg7dty2du-...-function... : CREATE_COMPLETE
+amplify-d4hkkg7dty2du-...-SkuCounterStack... : CREATE_COMPLETE
+amplify-d4hkkg7dty2du-...-auth...     : CREATE_COMPLETE
+amplify-d4hkkg7dty2du-...root...      : CREATE_IN_PROGRESS
+```
+
+`*_IN_PROGRESS`のstackが残っている状態で新しいRELEASE buildを開始すると、CloudFormationが同一stackへの同時更新を拒否する可能性があるため、`7-fix-staging-iam-role.ps1`のpreflightへ**stabilization wait**を追加した: 対象stackのいずれかが`_IN_PROGRESS`状態である間、20秒間隔・最大約20分、`describe-stacks`(`StackStatus`のみを`--query`で取得)をポーリングし続け、全てが終端状態(`CREATE_COMPLETE`等の成功系、または`ROLLBACK_COMPLETE`等の失敗系)になってから初めてビルド開始の判断へ進む。終端状態が失敗系だった場合は`describe-stack-events`を読み、最初の実質的な`*_FAILED`イベント(`LogicalResourceId`/`ResourceType`/`ResourceStatusReason`)を自動抽出して表示する。`ROLLBACK_COMPLETE`のstackに対しては`delete-stack`を能動的に呼ばない(次の`ampx pipeline-deploy`が通常のCDK deployの一部として自動的にクリーンアップするため)。既存Secretはどちらの経路でも削除・再作成されない(§10の修正によりCloudFormationはこのSecretを一切所有していないため)。

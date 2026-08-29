@@ -261,6 +261,58 @@ function Find-FirstMeaningfulFailure {
   return @{ Found = $false }
 }
 
+function Get-AwsErrorKind {
+  # Root cause of a real false negative seen in this script: describe-secret
+  # DID find bello/zaico-api-token, but the AWS CLI (Python) then hit
+  #   [ERROR]: 'cp932' codec can't encode character U+2014 in position 15:
+  #   illegal multibyte sequence
+  # while trying to write the secret's Description (which contained a
+  # Unicode em dash, U+2014) to a Windows PowerShell 5.1 console using the
+  # cp932 codepage - an encoding failure while PRINTING output that has
+  # nothing to do with whether the secret exists. That crash produced a
+  # non-zero exit code, which the previous version of this script's simple
+  # "Ok ? found : not-found" check misread as ResourceNotFoundException.
+  #
+  # Fix (see the two callers below): stop requesting/printing fields that
+  # can contain arbitrary Unicode (Description, Tags, etc.) via --query, so
+  # this specific crash cannot happen again. This classifier is kept as a
+  # second, independent layer of defense - it inspects the actual error
+  # text and only ever reports "not-found" for a real
+  # ResourceNotFoundException, distinguishing it from access-denied,
+  # credential, and encoding-class failures, none of which mean "does not
+  # exist".
+  param([string]$RawText)
+  if ($RawText -match "ResourceNotFoundException") { return "not-found" }
+  if ($RawText -match "AccessDenied") { return "access-denied" }
+  if ($RawText -match "CredentialsProviderError|could not load credentials|ExpiredToken|InvalidClientTokenId|UnrecognizedClientException") { return "credentials" }
+  if ($RawText -match "codec can't encode|UnicodeEncodeError|illegal multibyte sequence|UnicodeDecodeError") { return "encoding" }
+  return "other"
+}
+
+function Find-FirstStackFailureEvent {
+  # CloudFormation's describe-stack-events returns events newest-first, so
+  # "the first meaningful failure" (chronologically) is found by reversing
+  # to oldest-first and taking the first *_FAILED status - not the last one
+  # in the raw API response, which would be the earliest event, not the
+  # root cause.
+  param([array]$Events)
+  $chronological = @($Events)
+  [array]::Reverse($chronological)
+  foreach ($ev in $chronological) {
+    if ($ev.ResourceStatus -match "_FAILED$") {
+      return @{
+        Found              = $true
+        LogicalResourceId  = $ev.LogicalResourceId
+        ResourceType       = $ev.ResourceType
+        ResourceStatus     = $ev.ResourceStatus
+        ResourceStatusReason = $ev.ResourceStatusReason
+        Timestamp          = $ev.Timestamp
+      }
+    }
+  }
+  return @{ Found = $false }
+}
+
 function Invoke-AwsCli {
   param([string[]]$ArgList)
   if ($ArgList -contains $ExistingProductionAppId) {
@@ -501,40 +553,123 @@ if ($branchesResult.Ok) {
 }
 
 Write-Host ""
-Write-Host ("  Checking for bello/zaico-api-token in " + $Region + " (list/describe only, never the value)...")
-$secretDescribeResult = Invoke-AwsCli -ArgList @("secretsmanager", "describe-secret", "--secret-id", $SecretName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+Write-Host ("  Checking for " + $SecretName + " in " + $Region + " (ARN/Name only via --query - see" )
+Write-Host "  header comment for why Description/Tags are deliberately never requested)..."
+# --query restricts the CLI's own JSON output to exactly these two fields,
+# so a Description (or Tags, etc.) containing non-ASCII text - the actual
+# cause of the cp932 encoding crash described in Get-AwsErrorKind's comment
+# - is never part of what AWS CLI has to serialize/print at all. This is
+# the real fix; Get-AwsErrorKind below is the second, independent layer.
+$secretDescribeResult = Invoke-AwsCli -ArgList @("secretsmanager", "describe-secret", "--secret-id", $SecretName, "--query", "{ARN:ARN,Name:Name}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+$secretArn = $null
 if ($secretDescribeResult.Ok) {
   $secretInfo = $secretDescribeResult.Raw | ConvertFrom-Json
-  Write-Host ("  Secret found      : " + $secretInfo.ARN) -ForegroundColor Green
+  $secretArn = $secretInfo.ARN
+  Write-Host ("  Secret FOUND      : Name=" + $secretInfo.Name) -ForegroundColor Green
+  Write-Host ("  Secret ARN        : " + $secretArn) -ForegroundColor Green
+  Write-Host ("  Secret Region     : " + $Region) -ForegroundColor Green
 } else {
-  Write-Host ("  Secret NOT found in " + $Region + " - see raw output:") -ForegroundColor Red
-  Write-Host $secretDescribeResult.Raw
-  $preflightProblems += "bello/zaico-api-token was not found in " + $Region + " - run 8-diagnose-zaico-secret.ps1 to check other regions before building (backend.ts now imports this secret by name; if it truly does not exist here, the build will fail again with a different error)."
+  $errorKind = Get-AwsErrorKind -RawText $secretDescribeResult.Raw
+  switch ($errorKind) {
+    "not-found" {
+      Write-Host ("  Secret genuinely NOT found in " + $Region + " (ResourceNotFoundException):") -ForegroundColor Red
+      Write-Host $secretDescribeResult.Raw
+      $preflightProblems += $SecretName + " was not found in " + $Region + " (ResourceNotFoundException - confirmed, not a false negative) - run 8-diagnose-zaico-secret.ps1 to check other regions before building."
+    }
+    "access-denied" {
+      Write-Host "  Could not check - AccessDenied. This is a permissions problem, NOT evidence the secret is missing:" -ForegroundColor Red
+      Write-Host $secretDescribeResult.Raw
+      $preflightProblems += "describe-secret was denied (AccessDenied) - fix IAM permissions for the identity running this script, do not conclude the secret does not exist."
+    }
+    "credentials" {
+      Write-Host "  Could not check - credential problem (expired SSO session, etc.), NOT evidence the secret is missing:" -ForegroundColor Red
+      Write-Host $secretDescribeResult.Raw
+      $preflightProblems += "describe-secret failed due to a credentials problem - re-run 'aws sso login' and retry, do not conclude the secret does not exist."
+    }
+    "encoding" {
+      Write-Host "  [BUG PATTERN AVOIDED] Got an encoding-class error even with the minimal --query - this should not" -ForegroundColor Red
+      Write-Host "  happen since ARN/Name are plain ASCII. Reporting as inconclusive, NOT as not-found:" -ForegroundColor Red
+      Write-Host $secretDescribeResult.Raw
+      $preflightProblems += "describe-secret failed with an encoding-class error even after restricting to ARN/Name - investigate the console codepage, do not conclude the secret does not exist."
+    }
+    default {
+      Write-Host "  Could not check for an unrecognized reason - NOT evidence the secret is missing:" -ForegroundColor Red
+      Write-Host $secretDescribeResult.Raw
+      $preflightProblems += "describe-secret failed for an unclassified reason - see raw output above, do not conclude the secret does not exist."
+    }
+  }
 }
 
 Write-Host ""
-Write-Host "  Listing this app's CloudFormation stacks (best-effort, informational only)..."
-$stacksResult = Invoke-AwsCli -ArgList @("cloudformation", "describe-stacks", "--profile", $ProfileName, "--region", $Region, "--output", "json")
-if ($stacksResult.Ok) {
-  $allStacks = ($stacksResult.Raw | ConvertFrom-Json).Stacks
-  $matchingStacks = $allStacks | Where-Object { $_.StackName -match [regex]::Escape($StagingAppId) }
-  if ($matchingStacks) {
-    foreach ($s in $matchingStacks) {
-      $color = "White"
-      if ($s.StackStatus -match "ROLLBACK|FAILED") { $color = "Yellow" }
-      Write-Host ("    " + $s.StackName + " : " + $s.StackStatus) -ForegroundColor $color
-      if ($s.StackStatus -eq "ROLLBACK_COMPLETE") {
-        Write-Host "      [NOTE] ROLLBACK_COMPLETE - the next 'ampx pipeline-deploy' (triggered by start-job below) will" -ForegroundColor Yellow
-        Write-Host "      [NOTE] delete and recreate this stack automatically as part of a normal CDK deploy. This script" -ForegroundColor Yellow
-        Write-Host "      [NOTE] does not call cloudformation delete-stack itself." -ForegroundColor Yellow
+Write-Host "  Checking this app's CloudFormation stacks for in-progress operations..."
+# Restrict to StackStatus only, for the same reason as the secret query
+# above - StackName is always ASCII/safe, but there is no reason to pull
+# every field CloudFormation could return either.
+function Get-StagingStacks {
+  $result = Invoke-AwsCli -ArgList @("cloudformation", "describe-stacks", "--query", "Stacks[].{StackName:StackName,StackStatus:StackStatus}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if (-not $result.Ok) { return $null }
+  $all = $result.Raw | ConvertFrom-Json
+  return @($all | Where-Object { $_.StackName -match [regex]::Escape($StagingAppId) })
+}
+
+$successTerminalStatuses = @("CREATE_COMPLETE", "UPDATE_COMPLETE", "IMPORT_COMPLETE", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS")
+$failureTerminalStatuses = @("ROLLBACK_COMPLETE", "UPDATE_ROLLBACK_COMPLETE", "CREATE_FAILED", "ROLLBACK_FAILED", "UPDATE_ROLLBACK_FAILED", "DELETE_FAILED", "IMPORT_ROLLBACK_COMPLETE", "IMPORT_ROLLBACK_FAILED")
+
+$matchingStacks = Get-StagingStacks
+if ($null -eq $matchingStacks) {
+  Write-Host "  Could not list CloudFormation stacks (non-fatal, continuing):" -ForegroundColor Yellow
+} elseif ($matchingStacks.Count -eq 0) {
+  Write-Host "    No CloudFormation stacks matching this app ID found yet (expected before any successful deploy)." -ForegroundColor Yellow
+} else {
+  foreach ($s in $matchingStacks) {
+    Write-Host ("    " + $s.StackName + " : " + $s.StackStatus)
+  }
+
+  $inProgress = $matchingStacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }
+  if ($inProgress) {
+    Write-Section "CloudFormation stabilization wait - a previous deploy is still active"
+    Write-Host "  Not starting a new build while these stacks are still changing (a concurrent deploy on the" -ForegroundColor Yellow
+    Write-Host "  same stack would be rejected by CloudFormation anyway). Waiting for a terminal status, every" -ForegroundColor Yellow
+    Write-Host "  20s, up to ~20 minutes. This does NOT call delete-stack or touch any resource - read-only wait." -ForegroundColor Yellow
+    $maxWaitIterations = 60
+    for ($w = 0; $w -lt $maxWaitIterations; $w++) {
+      Start-Sleep -Seconds 20
+      $matchingStacks = Get-StagingStacks
+      $stillInProgress = $matchingStacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }
+      $statusLine = ($matchingStacks | ForEach-Object { $_.StackName + "=" + $_.StackStatus }) -join "; "
+      Write-Host ("    [" + (Get-Date -Format "HH:mm:ss") + "] " + $statusLine)
+      if (-not $stillInProgress) { break }
+    }
+    if ($matchingStacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }) {
+      $preflightProblems += "CloudFormation stack(s) for this app are still *_IN_PROGRESS after the ~20 minute wait - do not start a build on top of an active deploy; re-run this script later."
+    } else {
+      Write-Host "  All stacks reached a terminal status." -ForegroundColor Green
+    }
+  }
+
+  # Re-evaluate (using whatever the latest poll returned) now that nothing
+  # is *_IN_PROGRESS - a stack that settled into a failure/rollback terminal
+  # status is a real problem to surface, not something to silently retry.
+  $failedStacks = $matchingStacks | Where-Object { $failureTerminalStatuses -contains $_.StackStatus }
+  foreach ($fs in $failedStacks) {
+    Write-Host ("    [NOTE] " + $fs.StackName + " is in " + $fs.StackStatus + ".") -ForegroundColor Yellow
+    if ($fs.StackStatus -eq "ROLLBACK_COMPLETE") {
+      Write-Host "      The next 'ampx pipeline-deploy' (triggered by start-job below) deletes and recreates a" -ForegroundColor Yellow
+      Write-Host "      ROLLBACK_COMPLETE stack automatically as part of a normal CDK deploy - this script does not" -ForegroundColor Yellow
+      Write-Host "      call cloudformation delete-stack itself, and never deletes bello/zaico-api-token (it is not" -ForegroundColor Yellow
+      Write-Host "      a resource inside this stack any more - see amplify/backend.ts's Secret.fromSecretNameV2)." -ForegroundColor Yellow
+    } else {
+      $eventsResult = Invoke-AwsCli -ArgList @("cloudformation", "describe-stack-events", "--stack-name", $fs.StackName, "--query", "StackEvents[].{LogicalResourceId:LogicalResourceId,ResourceType:ResourceType,ResourceStatus:ResourceStatus,ResourceStatusReason:ResourceStatusReason,Timestamp:Timestamp}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+      if ($eventsResult.Ok) {
+        $events = $eventsResult.Raw | ConvertFrom-Json
+        $firstFailure = Find-FirstStackFailureEvent -Events $events
+        if ($firstFailure.Found) {
+          Write-Host ("      First failure: " + $firstFailure.LogicalResourceId + " (" + $firstFailure.ResourceType + ") " + $firstFailure.ResourceStatus) -ForegroundColor Red
+          Write-Host ("      Reason: " + $firstFailure.ResourceStatusReason) -ForegroundColor Red
+        }
       }
     }
-  } else {
-    Write-Host "    No CloudFormation stacks matching this app ID found yet (expected before any successful deploy)." -ForegroundColor Yellow
   }
-} else {
-  Write-Host "  Could not list CloudFormation stacks (non-fatal, continuing):" -ForegroundColor Yellow
-  Write-Host $stacksResult.Raw
 }
 
 if ($preflightProblems.Count -gt 0) {

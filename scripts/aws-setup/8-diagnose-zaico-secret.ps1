@@ -16,10 +16,24 @@
 
   Checks, in both us-west-2 and us-east-1:
     - Does a secret literally named bello/zaico-api-token exist in this
-      region (list-secrets with a name filter, and describe-secret)?
+      region (describe-secret)?
     - If found: prints its ARN and name only (never SecretString /
       VersionId payload - describe-secret does not return the value at
       all, and this script never calls get-secret-value).
+
+  Root cause of a real false negative this script (and
+  7-fix-staging-iam-role.ps1's preflight) previously had: describe-secret
+  DID find the secret, but AWS CLI then crashed trying to print its
+  Description (which contained a Unicode em dash, U+2014) to a Windows
+  PowerShell 5.1 console using the cp932 codepage -
+  "'cp932' codec can't encode character ... illegal multibyte sequence" -
+  an encoding failure while PRINTING output, unrelated to whether the
+  secret exists. The non-zero exit code that crash produced was
+  misread as "not found". Fixed by requesting ONLY ARN and Name via
+  --query (Description/Tags/etc. are never part of what AWS CLI has to
+  serialize, so this specific crash cannot recur), and by classifying
+  any remaining failure by its actual error text (Get-AwsErrorKind)
+  rather than assuming any non-zero exit means "not found".
 
   This script makes NO changes to any AWS resource - it is pure
   read-only diagnosis, safe to run against the same account used for
@@ -71,6 +85,18 @@ function Invoke-AwsCli {
   return @{ Ok = ($exitCode -eq 0); Raw = $rawText }
 }
 
+function Get-AwsErrorKind {
+  # See this script's header comment - only a real ResourceNotFoundException
+  # means "not found". AccessDenied/credential/encoding failures are
+  # distinct problems and must never be reported as "secret does not exist".
+  param([string]$RawText)
+  if ($RawText -match "ResourceNotFoundException") { return "not-found" }
+  if ($RawText -match "AccessDenied") { return "access-denied" }
+  if ($RawText -match "CredentialsProviderError|could not load credentials|ExpiredToken|InvalidClientTokenId|UnrecognizedClientException") { return "credentials" }
+  if ($RawText -match "codec can't encode|UnicodeEncodeError|illegal multibyte sequence|UnicodeDecodeError") { return "encoding" }
+  return "other"
+}
+
 Write-Host "BELLO - read-only diagnosis of the bello/zaico-api-token secret's real region(s)" -ForegroundColor Green
 Write-Host "This script never calls get-secret-value and never displays a secret VALUE." -ForegroundColor Yellow
 
@@ -93,24 +119,42 @@ $foundIn = @()
 foreach ($region in $Regions) {
   Write-Section ("Checking region: " + $region)
 
-  # describe-secret is the more direct check (exact name, no pagination) -
-  # a ResourceNotFoundException here just means "not in this region",
-  # which is expected and not an error condition for this script.
-  $describeResult = Invoke-AwsCli -ArgList @("secretsmanager", "describe-secret", "--secret-id", $SecretName, "--profile", $ProfileName, "--region", $region, "--output", "json")
+  # --query restricts AWS CLI's own output to exactly ARN and Name - see
+  # header comment for why Description/Tags/etc. are deliberately never
+  # requested (they can contain non-ASCII text that crashes AWS CLI's own
+  # console output encoding on Windows, which is not the same thing as the
+  # secret not existing).
+  $describeResult = Invoke-AwsCli -ArgList @("secretsmanager", "describe-secret", "--secret-id", $SecretName, "--query", "{ARN:ARN,Name:Name}", "--profile", $ProfileName, "--region", $region, "--output", "json")
   if ($describeResult.Ok) {
     $secretInfo = $describeResult.Raw | ConvertFrom-Json
     Write-Host ("  FOUND in " + $region + ":") -ForegroundColor Green
     Write-Host ("    Name : " + $secretInfo.Name)
     Write-Host ("    ARN  : " + $secretInfo.ARN)
-    if ($secretInfo.DeletedDate) {
-      Write-Host ("    [NOTE] This secret has a DeletedDate set (" + $secretInfo.DeletedDate + ") - it is scheduled for deletion, not active.") -ForegroundColor Yellow
-    }
     $foundIn += @{ Region = $region; Name = $secretInfo.Name; Arn = $secretInfo.ARN }
-  } elseif ($describeResult.Raw -match "ResourceNotFoundException") {
-    Write-Host ("  Not found in " + $region + ".") -ForegroundColor Yellow
   } else {
-    Write-Host ("  Could not check " + $region + " (non-fatal, see raw output):") -ForegroundColor Yellow
-    Write-Host $describeResult.Raw
+    $errorKind = Get-AwsErrorKind -RawText $describeResult.Raw
+    switch ($errorKind) {
+      "not-found" {
+        Write-Host ("  Not found in " + $region + " (ResourceNotFoundException - confirmed, not a false negative).") -ForegroundColor Yellow
+      }
+      "access-denied" {
+        Write-Host ("  Could not check " + $region + " - AccessDenied. This is a permissions problem, NOT evidence the secret is missing:") -ForegroundColor Red
+        Write-Host $describeResult.Raw
+      }
+      "credentials" {
+        Write-Host ("  Could not check " + $region + " - credential problem, NOT evidence the secret is missing:") -ForegroundColor Red
+        Write-Host $describeResult.Raw
+      }
+      "encoding" {
+        Write-Host ("  [BUG PATTERN AVOIDED] Got an encoding-class error in " + $region + " even with the minimal --query -") -ForegroundColor Red
+        Write-Host "  this should not happen since ARN/Name are plain ASCII. Reporting as inconclusive, NOT as not-found:" -ForegroundColor Red
+        Write-Host $describeResult.Raw
+      }
+      default {
+        Write-Host ("  Could not check " + $region + " for an unrecognized reason - NOT evidence the secret is missing:") -ForegroundColor Yellow
+        Write-Host $describeResult.Raw
+      }
+    }
   }
 }
 
