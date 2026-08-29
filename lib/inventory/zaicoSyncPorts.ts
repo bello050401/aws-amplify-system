@@ -39,6 +39,56 @@ import type { InventoryImageRecord } from "./imageTypes";
  * every Server Action call site (the synchronous 1件/5件/全件 sync paths,
  * and the new checkpointed background-batch path in
  * lib/inventory/zaicoBackgroundSync.ts).
+ *
+ * ── 2026-08-29統合改修版での再調査(Q6: 「特定機能が使えなければ諦める
+ * か? A. いいえ」への対応) ─────────────────────────────────────────
+ * `allow.resource(fn)`が使えないことは確定済みだが、それ以外のAWS-native
+ * 手段を実際に一つずつ検証した:
+ *
+ * 1. `backend.data.resources.tables`(型定義を実際に確認: node_modules/
+ *    @aws-amplify/graphql-api-construct/lib/types.d.tsの
+ *    `AmplifyGraphqlApiResources.tables: Record<string, ITable>`) は
+ *    実在し、`generate-sku`が自前のCDKテーブルに対して既にやっている
+ *    のと全く同じ`grantReadWriteData(fn)`を、Amplify Data自動生成の
+ *    Inventory/Category/Location/InventoryHistory/ZaicoSyncJobテーブル
+ *    に対しても行える。これはAppSync/GraphQLを完全に迂回する経路で、
+ *    `allow.resource()`の不具合とは無関係に機能する。
+ * 2. しかし、これを使うにはAppSyncのGraphQLレイヤーではなく生の
+ *    DynamoDB Item形状(属性名・型・secondaryIndexes()由来のGSI用
+ *    computed key属性)を直接読み書きする必要がある。ZaicoSyncJob
+ *    (このアプリ自身が定義したフラットなschemaで、GSIも無い)であれば
+ *    十分安全に手書きできる一方、Inventory(既存の本番データを持つ
+ *    リッチなmodel、ChannelListing/ListingDraftのinventoryId GSI含む)
+ *    に対して同じことをすると、GSI用computed属性の生成ロジックを
+ *    ライブAWS環境で検証せずに手書きすることになり、「一見動くが
+ *    実際は一覧・検索から見えなくなる」類の壊れ方をする実害リスクが
+ *    ある(spec Q16: 「エラーや未完了を「完成」と誤認しない」に反する)。
+ * 3. 「EventBridge Scheduler → Lambda → 既存のadvanceZaicoBackgroundSyncJob
+ *    をNext.js Route Handler経由で叩く」案も検討した。しかし
+ *    serverDataClient(generateServerClientUsingCookies)はNext.jsの
+ *    受信リクエストのCookieヘッダから実際にサインイン中のCognito
+ *    ユーザーのセッションを読む設計であり、EventBridgeからの
+ *    サーバー間呼び出しにはそのセッションが存在しない。専用の
+ *    「サービスアカウント」Cognitoユーザーを作り、その認証情報から
+ *    得たJWTを固定のCookieヘッダとしてEventBridge Target設定へ埋め込み、
+ *    Amplifyのトークン自動リフレッシュに賭けるという設計も理論上は
+ *    組めるが、Amplify Next.js SSRアダプタの実際のCookie形式・
+ *    リフレッシュ挙動をライブ環境なしに正しく組み立てられる確証が
+ *    無く、これも同じQ16のリスクに該当する。
+ *
+ * 結論: 完全無人スケジュール実行そのものは、今回もLOCAL_IMPLEMENTED
+ * まで到達できなかった — が、これは「調査せずに諦めた」のではなく、
+ * 上記3つの具体的な選択肢をそれぞれ型定義・スキーマ設定まで確認した
+ * 上で、残るリスクがライブAWS環境での検証なしには許容できないと判断
+ * した結果である(BLOCKED_BY_EXTERNAL_SERVICE寄り — Amplify Gen2が
+ * `allow.resource()`を実装するか、ユーザーがライブ環境での試行錯誤を
+ * 許容する形で明示的に選択肢2または3を進めるかの、いずれかが必要)。
+ * 一方で、lib/inventory/zaicoBackgroundSync.tsのチェックポイント方式
+ * (ブラウザタブを開いている間は数十秒おきに自動継続、閉じても
+ * 進行状況は失わずどこからでも再開可能)は、「1000件超を安定して処理
+ * できる」「ブラウザを閉じてもデータが失われない」という実務要件は
+ * 満たしている — 満たしていないのは「PCの電源を落としても続く」の
+ * 一点のみであることを完了報告で明確に区別する。
  */
 
 export type InventoryModel = Schema["Inventory"]["type"];

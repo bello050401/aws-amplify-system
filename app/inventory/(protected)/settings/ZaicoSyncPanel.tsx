@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
-  syncAllZaicoInventoriesAction,
   syncOneZaicoInventoryAction,
   syncLimitedZaicoInventoriesAction,
   previewZaicoCatalogSizeAction,
@@ -27,9 +26,16 @@ import type { ZaicoTokenSource } from "@/lib/zaico/client";
  *
  * Phase 1 (spec's own required order): only the single-item sync (by
  * ZAICO ID) is meant to be exercised until it's fully verified — the
- * "全件同期" button is present per spec §11/§18 but stays a plainly
+ * "全件同期" section is present per spec §11/§18 but stays a plainly
  * separate, explicitly-labeled action so it's never triggered by
  * accident while testing the single-item path.
+ *
+ * "全件同期" (BELLO統合改修 master指示書 2026-08-29統合改修版 §6.5):
+ * 見た目上はボタン1つだが、内部的には常にlib/inventory/zaicoBackgroundSync.ts
+ * のチェックポイント付きジョブを使う。1リクエストで全件を処理する旧経路
+ * (syncAllZaicoInventoriesAction)は、大量データでWebリクエストのタイム
+ * アウトに引っかかるリスクがあり、UIからもServer Action自体からも削除
+ * 済み — ユーザーには常に安全な経路だけを見せる。
  *
  * TOKEN設定UI(夜間開発指示書 §14): password type入力 → Server Action
  * (app/actions/zaicoSecret.ts) → AWS Secrets Manager、という経路のみ。
@@ -41,7 +47,7 @@ import type { ZaicoTokenSource } from "@/lib/zaico/client";
 export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConnected: boolean; zaicoTokenSource: ZaicoTokenSource }) {
   const router = useRouter();
   const [zaicoId, setZaicoId] = useState("");
-  const [busy, setBusy] = useState<"idle" | "one" | "limited" | "all" | "preview">("idle");
+  const [busy, setBusy] = useState<"idle" | "one" | "limited" | "preview">("idle");
   const [result, setResult] = useState<ZaicoSyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -116,19 +122,6 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
     setBusy("one");
     try {
       setResult(await syncOneZaicoInventoryAction(trimmed));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "同期に失敗しました。");
-    } finally {
-      setBusy("idle");
-    }
-  }
-
-  async function runAll() {
-    setError(null);
-    setResult(null);
-    setBusy("all");
-    try {
-      setResult(await syncAllZaicoInventoriesAction());
     } catch (err) {
       setError(err instanceof Error ? err.message : "同期に失敗しました。");
     } finally {
@@ -434,76 +427,85 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
         </div>
       </div>
 
+      {/* BELLO統合改修 master指示書(2026-08-29統合改修版) §6.5: 従来は
+          「全件同期」(1リクエストで完結、大量データではWebリクエストの
+          タイムアウトに引っかかる)と「バックグラウンド全件同期」(チェッ
+          クポイント付き)の2系統が並存していたが、ユーザーからは常に安全
+          な後者だけを使わせるべきで、UIも1つに統一する — というのが
+          §6.5の明示的な指示。ボタンは1つだけ残し、内部的には常に
+          lib/inventory/zaicoBackgroundSync.tsのチェックポイント付き
+          ジョブを使う(旧runAll/syncAllZaicoInventoriesActionは、この
+          変更でUI側の呼び出し元がなくなったためapp/actions/zaicoSync.ts
+          からも削除した — 少数件テスト同期はsyncLimitedZaicoInventoriesAction
+          経由で同じ内部関数を独立したlimit引数付きで呼んでいるため、
+          この削除で少数件テスト同期が壊れることはない)。 */}
       <div className="mt-3 border border-gray-200 p-4">
         <p className="mb-2 text-[12px] font-bold text-gray-700">全件同期</p>
         <p className="mb-2 text-[11px] text-gray-500">
-          ZAICOの全在庫を取得し、BELLOへ反映します。件数が多い場合、完了まで時間がかかります。
-          <span className="font-bold text-amber-700">
-            {" "}
-            テスト運用中はまず上の「少数件テスト同期」で問題がないことを確認してから実行してください。
-          </span>
-        </p>
-        <button
-          type="button"
-          onClick={runAll}
-          disabled={busy !== "idle"}
-          className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 disabled:opacity-50"
-        >
-          {busy === "all" ? "同期中…" : "全件同期する"}
-        </button>
-      </div>
-
-      {/* BELLO統合改修 master指示書 Phase A。「全件同期」(上、1リクエスト
-          で完結)とは別に、件数が多い場合向けにこちらを用意する — 進行
-          状況をZaicoSyncJob(DynamoDB)に保存しながら、1回のリクエストで
-          ZAICO 1ページ(最大50件)ずつ進める。この画面を開いている間、
-          自動的にポーリングして進行するが、閉じても進行状況は失われず、
-          次にこの画面を開いたときに再開できる。 */}
-      <div className="mt-3 border border-gray-200 p-4">
-        <p className="mb-2 text-[12px] font-bold text-gray-700">バックグラウンド全件同期（大量データ向け）</p>
-        <p className="mb-2 text-[11px] text-gray-500">
-          ZAICOの件数が多い場合はこちらを使用してください。1リクエストで全件を処理せず、少しずつ（1回あたり最大50件）進行状況を保存しながら同期します。この画面を開いている間は自動的に進行します。画面を閉じても進行状況（チェックポイント）は保存されており、次にこの画面を開いたときに続きから再開されます。
+          ZAICOの全在庫を取得し、BELLOへ反映します。1リクエストで全件を処理せず、少しずつ（1回あたり最大50件）進行状況を保存しながら同期するため、件数が多くても安全です。この画面を開いている間は自動的に進行します。画面を閉じても進行状況（チェックポイント）は保存されており、次にこの画面を開いたときに続きから自動的に再開されます。
         </p>
 
-        {bgJob && (
-          <dl className="mb-3 grid grid-cols-4 gap-y-1 text-[12px] text-gray-700">
-            <dt className="text-gray-500">状態</dt>
-            <dd className="col-span-3">
-              {
+        <dl className="mb-3 grid grid-cols-4 gap-y-1 text-[12px] text-gray-700">
+          <dt className="text-gray-500">最終同期日時</dt>
+          <dd className="col-span-3">
+            {bgJob?.finishedAt
+              ? new Date(bgJob.finishedAt).toLocaleString("ja-JP")
+              : bgJob?.status === "RUNNING" || bgJob?.status === "PENDING"
+                ? `実行中…（開始: ${bgJob.startedAt ? new Date(bgJob.startedAt).toLocaleString("ja-JP") : "-"}）`
+                : "-（まだ実行していません）"}
+          </dd>
+          {bgJob && (
+            <>
+              <dt className="text-gray-500">状態</dt>
+              <dd className="col-span-3">
                 {
-                  PENDING: "開始待ち",
-                  RUNNING: "実行中…",
-                  COMPLETED: "完了",
-                  FAILED: "失敗",
-                  CANCELLED: "中止済み",
-                }[bgJob.status]
-              }
-            </dd>
-            <dt className="text-gray-500">処理済み</dt>
-            <dd className="col-span-3">
-              {bgJob.totalProcessed}件（ページ{bgJob.lastPage}）
-            </dd>
-            <dt className="text-gray-500">新規作成 / 更新 / 変更なし</dt>
-            <dd className="col-span-3">
-              {bgJob.created} / {bgJob.updated} / {bgJob.unchanged}
-            </dd>
-            <dt className="text-gray-500">エラー / 画像取込</dt>
-            <dd className="col-span-3">
-              {bgJob.failed} / {bgJob.imageImported}
-            </dd>
-            {bgJob.status === "COMPLETED" && bgJob.missingSourceIds.length > 0 && (
-              <>
-                <dt className="text-gray-500">ZAICO側で見つからなかった件数</dt>
-                <dd className="col-span-3 text-amber-700">{bgJob.missingSourceIds.length}件（BELLO側には残しています。手動確認してください）</dd>
-              </>
-            )}
-            {bgJob.lastError && (
-              <>
-                <dt className="text-gray-500">最終エラー</dt>
-                <dd className="col-span-3 text-red-600">{bgJob.lastError}</dd>
-              </>
-            )}
-          </dl>
+                  {
+                    PENDING: "待機",
+                    RUNNING: "実行中",
+                    COMPLETED: bgJob.failed > 0 ? "一部失敗" : "完了",
+                    FAILED: "失敗",
+                    CANCELLED: "中止済み",
+                  }[bgJob.status]
+                }
+              </dd>
+              <dt className="text-gray-500">進捗</dt>
+              <dd className="col-span-3">
+                {bgJob.totalProcessed.toLocaleString("ja-JP")}件（ページ{bgJob.lastPage}）
+              </dd>
+              <dt className="text-gray-500">新規</dt>
+              <dd className="col-span-3">{bgJob.created}件</dd>
+              <dt className="text-gray-500">更新</dt>
+              <dd className="col-span-3">{bgJob.updated}件</dd>
+              <dt className="text-gray-500">変更なし</dt>
+              <dd className="col-span-3">{bgJob.unchanged}件</dd>
+              <dt className="text-gray-500">エラー</dt>
+              <dd className="col-span-3">{bgJob.failed}件</dd>
+            </>
+          )}
+        </dl>
+
+        {bgJob && (bgJob.imageImported > 0 || bgJob.missingSourceIds.length > 0 || bgJob.lastError) && (
+          <details className="mb-3 text-[12px] text-gray-700">
+            <summary className="cursor-pointer text-gray-500">詳細</summary>
+            <dl className="mt-2 grid grid-cols-4 gap-y-1">
+              <dt className="text-gray-500">画像取込</dt>
+              <dd className="col-span-3">{bgJob.imageImported}件</dd>
+              {bgJob.status === "COMPLETED" && bgJob.missingSourceIds.length > 0 && (
+                <>
+                  <dt className="text-gray-500">ZAICO側で見つからなかった件数</dt>
+                  <dd className="col-span-3 text-amber-700">
+                    {bgJob.missingSourceIds.length}件（BELLO側には残しています。手動確認してください）
+                  </dd>
+                </>
+              )}
+              {bgJob.lastError && (
+                <>
+                  <dt className="text-gray-500">最終エラー</dt>
+                  <dd className="col-span-3 text-red-600">{bgJob.lastError}</dd>
+                </>
+              )}
+            </dl>
+          </details>
         )}
 
         <div className="flex gap-2">
@@ -513,7 +515,7 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
             disabled={bgPolling || bgBusy !== "idle"}
             className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
           >
-            {bgPolling ? "実行中…" : bgBusy === "starting" ? "開始中…" : "バックグラウンド同期を開始"}
+            {bgPolling ? "実行中…" : bgBusy === "starting" ? "開始中…" : "全件同期する"}
           </button>
           {bgPolling && (
             <button

@@ -3,7 +3,6 @@
 import { revalidatePath } from "next/cache";
 import { getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
-  syncAllZaicoItems,
   syncSingleZaicoItem,
   syncLimitedZaicoItems,
   previewZaicoCatalogSize,
@@ -48,25 +47,17 @@ export async function syncOneZaicoInventoryAction(zaicoId: string): Promise<Zaic
   return result;
 }
 
-export async function syncAllZaicoInventoriesAction(): Promise<ZaicoSyncResult> {
-  const role = await getInventoryRole();
-  requireAdminOrThrow(role);
-
-  const who = await getCurrentInventoryUserEmail();
-  const result = await syncAllZaicoItems(who);
-
-  revalidatePath("/inventory");
-  revalidatePath("/inventory/settings");
-  return result;
-}
-
 /**
  * 少数件テスト同期(AWSテスト環境構築指示 §8/§26: Phase A「5〜10商品」)
- * — 全件同期(syncAllZaicoInventoriesAction)とは別のServer Actionとして
- * 独立させている。UIから件数(1〜50、ZaicoSyncPanel.tsx側でも制限)を
- * 受け取り、lib/inventory/zaicoSync.tsのsyncLimitedZaicoItemsへそのまま
- * 渡す — こちら側でも安全弁として上限50にクランプする(呼び出し元が
- * client componentなので、サーバー側だけで制限が効いている必要がある)。
+ * — lib/inventory/zaicoSync.tsのsyncAllZaicoItemsをlimit付きで呼ぶ薄い
+ * ラッパーsyncLimitedZaicoItemsをそのまま公開するServer Action。旧
+ * 「全件同期」用Action(syncAllZaicoInventoriesAction、limitなしで
+ * syncAllZaicoItemsを呼ぶだけだった)はBELLO統合改修 master指示書
+ * (2026-08-29統合改修版) §6.5でUIの「全件同期」ボタンがバックグラウン
+ * ド同期(下のstartZaicoBackgroundSyncAction系)へ統一されたことで
+ * UI側の呼び出し元がなくなったため削除した — syncAllZaicoItems自体は
+ * このsyncLimitedZaicoItems経由で引き続き使われている(limit引数付き)
+ * ので、lib/inventory/zaicoSync.ts側は変更していない。
  */
 export async function syncLimitedZaicoInventoriesAction(limit: number): Promise<ZaicoSyncResult> {
   const role = await getInventoryRole();
@@ -101,9 +92,11 @@ export async function previewZaicoCatalogSizeAction(): Promise<ZaicoCatalogPrevi
  * repeatedly while a job is RUNNING). Each individual call does bounded
  * work (one ZAICO page, see zaicoBackgroundSync.ts) — this is what makes
  * "全件同期" possible without the ~3 minute single-request timeout the
- * master instructions identified in the previous (syncAllZaicoItems)
- * design; that Server Action is unchanged and still exists for callers
- * who want a single blocking small/medium sync.
+ * master instructions identified in the previous single-request
+ * (syncAllZaicoItems, no limit) design. UI-facing §6.5統合改修以降、
+ * ユーザーが直接トリガーできる「全件同期」経路はこれだけであり、
+ * syncAllZaicoItems自体はsyncLimitedZaicoItems(少数件テスト同期)から
+ * limit付きで呼ばれる形でのみ残っている。
  */
 export async function startZaicoBackgroundSyncAction(): Promise<{ started: boolean; reason?: string }> {
   const role = await getInventoryRole();
