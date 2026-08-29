@@ -58,13 +58,21 @@ backend.generateSku.addEnvironment("SKU_COUNTER_TABLE_NAME", skuCounterTable.tab
 // せる必要がある。RemovalPolicy.RETAINはskuCounterTableと同じ理由 —
 // スタック削除でADMINが設定したTOKENを失うのは事故として大きすぎる。
 //
-// ── IaCとアプリの責務分離(安全性レビューでの指摘を反映) ────────────
-// このSecretリソースの作成・削除はこのファイル(CDK/CloudFormation)
-// だけが行う。アプリ側(lib/zaico/secretStore.ts)はGetSecretValue /
-// PutSecretValueで値(バージョン)を読み書きするだけで、CreateSecret /
-// DeleteSecretは一切呼ばない — CloudFormationが所有するリソースを
-// アプリから物理的に作成・削除すると、次回のcdk diff/deployで
-// drift(定義と実体の不一致)が起こり得るため。
+// ── IaCとアプリの責務分離(安全性レビューでの指摘を反映、後日の追加
+//    修正で一部改訂) ───────────────────────────────────────────────
+// このSecretリソースは通常運用ではこのファイル(CDK/CloudFormation)
+// が作成する。DeleteSecretはアプリ側から一切呼ばない(「削除」操作は
+// 値をUNCONFIGURED_SECRET_PAYLOADへ書き戻すだけ)。
+//
+// ただし、CDKデプロイ未実施の環境でADMINが先に設定画面からTOKENを
+// 保存しようとすると保存できない問題への対応として、ユーザー指示に
+// よりlib/zaico/secretStore.tsのsetZaicoTokenInSecretsManagerへ
+// upsert処理(PutSecretValueがResourceNotFoundExceptionを返した場合
+// のみCreateSecretへフォールバック)を追加した — そのため実行ロール
+// にはCreateSecretの権限も付与する(詳細・既知のトレードオフは
+// lib/zaico/secretStore.tsのファイル冒頭コメント参照)。通常運用で
+// CDKが先にこのSecretを作成していれば、このフォールバックが実際に
+// 呼ばれることはない。
 //
 // `secretStringValue`で初期値を明示的に`{"configured":false}`という
 // 構造化JSONにしている(CDKの既定動作であるランダム文字列の自動生成
@@ -86,10 +94,12 @@ backend.generateSku.addEnvironment("SKU_COUNTER_TABLE_NAME", skuCounterTable.tab
 // (完了報告のBLOCKED_BY_USER参照):
 //   1. Amplify Console → 該当アプリ → 「App settings」→「IAM roles」
 //      (または「Access to AWS resources」)で、SSRコンピュートに割り
-//      当てられている実行ロールに、このSecretのARNだけを対象とした
-//      secretsmanager:GetSecretValue と PutSecretValue の2つだけを
-//      許可するインラインポリシーを追加する(CreateSecret/DeleteSecret
-//      は不要 — 上記の責務分離のため、runtimeへは付与しないこと)。
+//      当てられている実行ロールに、このSecretのARN(バージョン管理用の
+//      ランダムsuffixを含む "bello/zaico-api-token-??????" までを対象
+//      とする)に対して secretsmanager:GetSecretValue・PutSecretValue・
+//      CreateSecretの3つを許可するインラインポリシーを追加する
+//      (DeleteSecretは不要 — 「削除」操作はPutSecretValueのみで実現
+//      するため、runtimeへは付与しないこと)。
 //   2. その許可が済むまでは、lib/zaico/client.tsのgetZaicoApiToken()
 //      が自動的に既存の環境変数ZAICO_API_TOKENへフォールバックする
 //      ため、システムは今まで通り動作し続ける(退行なし)。
