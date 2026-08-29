@@ -83,6 +83,25 @@ export async function isZaicoConnected(): Promise<boolean> {
   return Boolean(process.env.ZAICO_API_TOKEN);
 }
 
+export type ZaicoTokenSource = "secrets-manager" | "env-fallback" | "unconfigured";
+
+/**
+ * どちらの経路からTOKENが得られているかだけを返す診断用関数(値は一切
+ * 含まない)。AWS staging環境でのSSR Compute Role設定確認(AWSテスト環境
+ * 構築指示: 「ZAICO_API_TOKEN env var fallbackが存在していても、成功条件
+ * はSecrets Manager経由で取得できること。fallbackだけで成功扱いしない」)
+ * のために追加した — isZaicoConnected()の真偽値だけでは「Secrets Manager
+ * 経由で本当に取れているのか、単に環境変数フォールバックで動いている
+ * だけなのか」を区別できなかったため。設定画面(ADMIN限定)にこの区別を
+ * 表示することで、Compute Roleのtrust policy/権限設定が正しく効いてい
+ * るかどうかを、Secret値を一切表示せずにブラウザから確認できる。
+ */
+export async function getZaicoTokenSource(): Promise<ZaicoTokenSource> {
+  if (await getZaicoTokenFromSecretsManager()) return "secrets-manager";
+  if (process.env.ZAICO_API_TOKEN) return "env-fallback";
+  return "unconfigured";
+}
+
 function getBaseUrl(): string {
   return process.env.ZAICO_API_BASE_URL ?? DEFAULT_BASE_URL;
 }

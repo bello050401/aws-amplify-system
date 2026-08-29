@@ -10,6 +10,7 @@ import {
 } from "@/app/actions/zaicoSync";
 import { deleteZaicoTokenAction, setZaicoTokenAction } from "@/app/actions/zaicoSecret";
 import type { ZaicoSyncResult, ZaicoCatalogPreview } from "@/lib/inventory/zaicoSync";
+import type { ZaicoTokenSource } from "@/lib/zaico/client";
 
 /**
  * ADMIN-only ZAICO→BELLO 手動同期パネル (spec §18/§27-29). Rendered only
@@ -32,7 +33,7 @@ import type { ZaicoSyncResult, ZaicoCatalogPreview } from "@/lib/inventory/zaico
  * れない(TOKEN本体は二度とブラウザへ返ってこない) — 保存/削除に成功
  * したら入力欄も即座にクリアする。
  */
-export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) {
+export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConnected: boolean; zaicoTokenSource: ZaicoTokenSource }) {
   const router = useRouter();
   const [zaicoId, setZaicoId] = useState("");
   const [busy, setBusy] = useState<"idle" | "one" | "limited" | "all" | "preview">("idle");
@@ -167,6 +168,20 @@ export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) 
             <span className="font-bold text-red-600">● 未設定</span>
           )}
         </p>
+        {/* AWSテスト環境構築指示: 「ZAICO_API_TOKEN env var fallbackが存在
+            していても、成功条件はSecrets Manager経由で取得できること。
+            fallbackだけで成功扱いしない」— この区別を、値を一切表示せず
+            ADMINが画面上で確認できるようにする(lib/zaico/client.tsの
+            getZaicoTokenSource参照)。 */}
+        {zaicoTokenSource === "secrets-manager" && (
+          <p className="mt-1 text-[11px] text-green-700">取得経路: AWS Secrets Manager(SSR Compute Role経由)</p>
+        )}
+        {zaicoTokenSource === "env-fallback" && (
+          <p className="mt-1 text-[11px] text-amber-600">
+            取得経路: サーバー環境変数フォールバック(ZAICO_API_TOKEN) — AWS Secrets Managerからは未取得です。SSR Compute
+            Roleの設定を確認してください。
+          </p>
+        )}
 
         {!tokenEditing ? (
           <div className="mt-2 flex gap-2">

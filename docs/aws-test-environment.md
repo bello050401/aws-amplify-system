@@ -336,3 +336,27 @@ LimitExceededException: The requested branch already have pending or running job
 - ログのbyte配列表示バグ(§10e参照)を修正した`ConvertTo-DecodedLogText`に加え、スクリプト起動時に毎回自動実行される`Test-LogDecoder`(ASCII/日本語混在UTF-8/gzip圧縮テキストの3ケースを実際にデコードして完全一致を確認する自己テスト)を追加した。デコーダ自体が壊れていた場合はAWSへ一切アクセスする前に停止する。
 - AWS CLIの「mutation系」サブコマンド一覧(`update-app`/`start-job`/`create-role`/`put-role-policy`等)を固定リストで管理し、これらの呼び出しに本番App ID・本番ロール名のいずれかが含まれていた場合は実行前に必ず中断する安全策を、スクリプト内の全AWS CLI呼び出しが経由する単一の関数(`Invoke-AwsCli`)へ集約した。読み取り専用の呼び出し(本番ロールのpolicy一覧取得等)はこの対象外で、意図通り許可される。
 - SSR Hosting Compute Role(Backend Deployment Roleとは別物)の設定状況もbest-effortで確認するようにした。ただし実際の`--compute-role-arn`によるロール作成・付与は、このアカウントの実際のAWS CLI/Amplify APIバージョンに対して未検証のため、今回は自動実行せず、状況を報告するだけに留めている。
+
+## 13. staging専用SSR Compute Roleの実装、ZAICO TOKEN取得経路の可視化
+
+Hosting(BUILD/DEPLOY/VERIFY SUCCEED)・Cognito/AppSync/DynamoDB/S3の存在・ADMIN実ログイン・在庫画面表示までAWS側で確認できた後、残っていた「staging専用SSR Compute Roleが未設定」という状態を解消した。
+
+### 13a. Compute Roleのtrust policy設計
+
+`@aws-sdk/client-amplify`の型定義(`App.computeRoleArn`)のドキュメンテーションコメント(「The SSR Compute role allows the Amplify Hosting compute service to securely access specific Amazon Web Services resources」)を根拠に、trust policyのPrincipalはBackend Deployment Roleと同じ`amplify.amazonaws.com`とした(Hosting compute専用の別サービスプリンシパルは存在しない)。
+
+Backend Deployment Role(§9)とは異なり、`aws:SourceArn`条件は**あえて付けていない**: Compute RoleはApp単位で1つだけ設定される値であり(ブランチ単位のARNパターンを持つ概念が無い)、このセッションには実AWSアクセスが無く生きたアカウントに対してSourceArnパターンを検証できない。Backend Deployment RoleのTrust Policyスコープを一度間違えて`Unable to assume specified IAM Role`を発生させた(§9)経緯を踏まえ、同じ間違いをCompute Roleで繰り返すリスクを避けるため、今回は最小限(`Principal: amplify.amazonaws.com`のみ)にとどめた。実際にAssumeRoleが失敗した場合はこのtrust policyをまず疑うこと。
+
+### 13b. 権限設計
+
+新規ロール`BelloAmplifyStagingComputeRole`のinline policyは、ZAICO Secret 1つのARN(バージョンsuffixをワイルドカード化)に対する`secretsmanager:GetSecretValue`・`secretsmanager:PutSecretValue`のみ。`PutSecretValue`を含めたのは、設定画面に実際に「ZAICO API TOKENを設定/変更」機能(`app/actions/zaicoSecret.ts`)が存在し、これがSecrets Managerへの書き込みを行うため。`CreateSecret`・`DeleteSecret`・`ListSecrets`の広範な許可、および`Resource: "*"`は一切与えていない。`7-fix-staging-iam-role.ps1`のSTATE 11がこのロールの作成・trust policy・inline policyを冪等にチェック/修復し、`aws amplify update-app --compute-role-arn`でstaging Appへ設定したうえで、`get-app`を再度呼び出して`computeRoleArn`が期待通りになっていることを読み戻して確認する(既存App/Production側は一切変更しない — mutation対象は常に`$StagingAppId`/`$StagingComputeRoleName`のみで、production識別子が混入していないことは静的grep監査済み)。
+
+### 13c. ZAICO TOKEN取得経路の可視化(Secrets Manager経由か環境変数フォールバックか)
+
+`isZaicoConnected()`の真偽値だけでは「Secrets Manager経由で本当に取得できているか、単に環境変数`ZAICO_API_TOKEN`のフォールバックで動いているだけか」を区別できなかった。これはCompute Roleの設定が実際に効いているかどうかを外部から確認する手段が無いことを意味していた。
+
+`lib/zaico/client.ts`へ`getZaicoTokenSource(): Promise<"secrets-manager" | "env-fallback" | "unconfigured">`を追加し(TOKEN値は一切含まない)、設定画面のZAICO接続ステータス表示に「取得経路: AWS Secrets Manager(SSR Compute Role経由)」または「取得経路: サーバー環境変数フォールバック — AWS Secrets Managerからは未取得です」を追加表示するようにした。これにより、ADMINがstagingへログインして設定画面を開くだけで、Compute Roleが正しく機能しているかどうかをTOKEN値を一切見ることなく確認できる。`isZaicoConnected()`は`getZaicoTokenSource() !== "unconfigured"`から導出するよう変更し、Secrets Managerへの重複呼び出し(GetSecretValueの二重発行)も解消した。
+
+### 13d. 今回の制約と残作業
+
+このセッションには実AWS認証情報・実ZAICO APIアクセス・staging URLへのブラウザアクセスが無いため、以下は実装・local test・commit/pushまでで、実AWS上での実行結果はユーザー側での1回のスクリプト実行と、既にログイン済みのstaging画面での操作で確認する: (1) `7-fix-staging-iam-role.ps1`を実行しComputeRole作成/設定/read-back確認、(2) 設定画面で「取得経路: AWS Secrets Manager」表示を確認、(3) 既存のZAICO同期パネル(既定値5件、上限50でクランプ済み)から「テスト同期する」を1回クリックして実ZAICO 5件同期・DynamoDB保存・画像コピー・在庫一覧表示を確認する。ZAICO→BELLOの同期ロジック自体(dedupeキー=`sourceSystem:"ZAICO"`+`sourceInventoryId`のスキャン、画像は`downloadAndImportInventoryImage`のタイムアウト/Content-Type検証/サイズ上限を維持、purchasePrice=原価のbusiness ruleは`lib/inventory/sales.ts`で`totalCost = totalPurchase`のみを使いshippingCostを合算しない設計を確認済み)は既存実装のままで、今回変更していない。

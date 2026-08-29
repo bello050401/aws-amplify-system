@@ -4,7 +4,7 @@ import { listAllCustomFieldDefinitions } from "@/lib/inventory/queries";
 import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
 import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
-import { isZaicoConnected } from "@/lib/zaico/client";
+import { getZaicoTokenSource } from "@/lib/zaico/client";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
 
@@ -52,13 +52,17 @@ export default async function InventorySettingsPage() {
     await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions()]);
   }
 
-  const [categories, locations, units, customFields, zaicoConnected] = await Promise.all([
+  const [categories, locations, units, customFields, zaicoTokenSource] = await Promise.all([
     listAllMasterEntries("Category"),
     listAllMasterEntries("Location"),
     listAllMasterEntries("Unit"),
     listAllCustomFieldDefinitions(),
-    isZaicoConnected(),
+    getZaicoTokenSource(),
   ]);
+  // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
+  // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
+  // とgetZaicoTokenSource()を両方呼ぶと同じ呼び出しが2回発生していた)。
+  const zaicoConnected = zaicoTokenSource !== "unconfigured";
 
   return (
     <div className="flex h-full flex-col">
@@ -73,6 +77,7 @@ export default async function InventorySettingsPage() {
           readOnly={role !== "ADMIN"}
           isAdmin={role === "ADMIN"}
           zaicoConnected={zaicoConnected}
+          zaicoTokenSource={zaicoTokenSource}
         />
       </div>
     </div>

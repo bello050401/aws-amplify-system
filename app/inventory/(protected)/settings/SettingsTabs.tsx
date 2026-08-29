@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { MasterEntry } from "@/lib/inventory/masters";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
+import type { ZaicoTokenSource } from "@/lib/zaico/client";
 import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
@@ -16,8 +17,10 @@ interface SettingsTabsProps {
   readOnly: boolean;
   /** ZAICO同期タブはADMINにのみ表示する（spec §19: UIレベルのADMIN制限）。実際の書き込み可否はServer Action側（app/actions/zaicoSync.ts）で独立に強制されるため、これは表示上のガードに過ぎない。 */
   isAdmin: boolean;
-  /** サーバー環境変数ZAICO_API_TOKENが設定済みかどうか — 真偽値のみ、トークン本体は一切渡らない（page.tsxのisZaicoConnected()参照）。 */
+  /** サーバー環境変数ZAICO_API_TOKENが設定済みかどうか — 真偽値のみ、トークン本体は一切渡らない（page.tsxのgetZaicoTokenSource()から導出）。 */
   zaicoConnected: boolean;
+  /** どちらの経路でTOKENが得られているか(値は含まない) — AWS Secrets Manager経由かどうかをADMINが画面上で確認できるようにする(lib/zaico/client.tsのgetZaicoTokenSource参照)。 */
+  zaicoTokenSource: ZaicoTokenSource;
 }
 
 /**
@@ -27,7 +30,7 @@ interface SettingsTabsProps {
  * 「設定を最低限：カテゴリ・単位・保管場所・追加項目・一覧表示設定・
  * ZAICO同期に整理」に合わせたタブ構成。
  */
-export function SettingsTabs({ categories, locations, units, customFields, readOnly, isAdmin, zaicoConnected }: SettingsTabsProps) {
+export function SettingsTabs({ categories, locations, units, customFields, readOnly, isAdmin, zaicoConnected, zaicoTokenSource }: SettingsTabsProps) {
   const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico">("category");
 
   const tabClass = (active: boolean) =>
@@ -65,7 +68,7 @@ export function SettingsTabs({ categories, locations, units, customFields, readO
         {tab === "customFields" && <CustomFieldSettings fields={customFields} readOnly={readOnly} />}
         {/* 一覧表示設定の列候補には無効化された追加項目を含めない(新規登録/編集/詳細検索から消えるのと同じ扱い)。 */}
         {tab === "columns" && <ListColumnSettings customFieldDefs={customFields.filter((f) => f.isActive)} />}
-        {tab === "zaico" && isAdmin && <ZaicoSyncPanel zaicoConnected={zaicoConnected} />}
+        {tab === "zaico" && isAdmin && <ZaicoSyncPanel zaicoConnected={zaicoConnected} zaicoTokenSource={zaicoTokenSource} />}
       </div>
     </div>
   );

@@ -997,6 +997,7 @@ function Invoke-HttpValidate {
 # STATE 11: BACKEND_RESOURCE_VALIDATE (+ SSR Compute Role)
 # ============================================================================
 function Test-BackendResources {
+  param([string]$SecretArn)
   Write-StateBanner "STATE 11: BACKEND_RESOURCE_VALIDATE"
   Write-Host "Best-effort read-only presence checks, filtered by this app's ID appearing in the resource" -ForegroundColor Cyan
   Write-Host "name - naming conventions can vary, so a miss here is reported as a warning, not a hard failure." -ForegroundColor Cyan
@@ -1039,33 +1040,182 @@ function Test-BackendResources {
   }
 
   # ---- SSR Compute Role (distinct from the backend deployment role) ------
+  $computeRoleArn = Test-StagingComputeRole -SecretArn $SecretArn
+  return @{ Checks = $checks; ComputeRoleArn = $computeRoleArn }
+}
+
+function Test-StagingComputeRole {
   # Amplify Hosting's SSR compute execution role is a separate App-level
   # field (computeRoleArn) from iamServiceRoleArn (the backend/CDK deploy
-  # role used above in STATE 3). This is best-effort: whether the installed
-  # AWS CLI/Amplify API version exposes/accepts computeRoleArn depends on
-  # its version, so an absent field here is reported, not treated as fatal.
+  # role handled in STATE 3). Per the AWS SDK's own field documentation
+  # (@aws-sdk/client-amplify's App.computeRoleArn: "allows the Amplify
+  # Hosting compute service to securely access specific AWS resources"),
+  # the assuming principal is the same general Amplify service principal
+  # used everywhere else in this script (amplify.amazonaws.com) - NOT a
+  # separate "amplifyhosting.amazonaws.com"-style principal, which does
+  # not exist. Unlike the backend deployment role (STATE 3), this trust
+  # policy is NOT scoped with an aws:SourceArn condition: the compute role
+  # is an App-level single-role assignment (there is no per-branch ARN
+  # concept for Hosting's compute service the way there is for backend
+  # deploy), and the backend deployment role's own history in this repo
+  # (docs/aws-test-environment.md sections 8-9) is a direct warning
+  # against guessing an overly-clever SourceArn condition without being
+  # able to verify it against a live account from this environment - a
+  # wrong guess here would reproduce the exact "Unable to assume
+  # specified IAM Role" failure class already fixed twice this session,
+  # for the compute role instead of the backend role. If assumption ever
+  # fails at Hosting runtime, this trust policy is the first thing to
+  # revisit.
+  param([string]$SecretArn)
+
   Write-Host ""
   Write-Host "Checking the SSR Hosting Compute Role (separate from the backend deployment role)..."
   $appResult = Invoke-AwsCli -ArgList @("amplify", "get-app", "--app-id", $StagingAppId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-  $computeRoleArn = $null
-  if ($appResult.Ok) {
-    $appNow = ($appResult.Raw | ConvertFrom-Json).app
-    $computeRoleArn = $appNow.computeRoleArn
+  if (-not $appResult.Ok) {
+    Write-Host "  get-app failed while checking computeRoleArn:" -ForegroundColor Red
+    Write-Host $appResult.Raw
+    return $null
   }
-  if ($computeRoleArn) {
-    Write-Host ("  computeRoleArn already set: " + $computeRoleArn) -ForegroundColor Green
+  $appNow = ($appResult.Raw | ConvertFrom-Json).app
+  $currentComputeRoleArn = $appNow.computeRoleArn
+
+  # Idempotent check: if computeRoleArn is already set to the expected
+  # staging compute role, and that role's trust/policy already look
+  # correct, do nothing further - COMPUTE_ROLE state is "already OK".
+  $expectedRoleNameFragment = $StagingComputeRoleName
+  if ($currentComputeRoleArn -and $currentComputeRoleArn -match [regex]::Escape($expectedRoleNameFragment)) {
+    $existingRoleCheck = Test-ComputeRolePolicyCorrect -RoleArn $currentComputeRoleArn -SecretArn $SecretArn
+    if ($existingRoleCheck) {
+      Write-Host ("  computeRoleArn already correctly configured: " + $currentComputeRoleArn) -ForegroundColor Green
+      return $currentComputeRoleArn
+    }
+    Write-Host "  [COMPUTE_ROLE_POLICY_INVALID] computeRoleArn is set but its policy does not match the" -ForegroundColor Yellow
+    Write-Host "  expected minimal Secrets Manager grant - repairing the role's policy (not recreating it)." -ForegroundColor Yellow
+  } elseif ($currentComputeRoleArn) {
+    Write-Host ("  [NOTE] computeRoleArn is set to a different role (" + $currentComputeRoleArn + ") - leaving it as-is") -ForegroundColor Yellow
+    Write-Host "  rather than overwriting an intentional existing configuration. Pass -StagingComputeRoleName to" -ForegroundColor Yellow
+    Write-Host "  match it if this IS the intended staging compute role under a different name." -ForegroundColor Yellow
+    return $currentComputeRoleArn
   } else {
-    Write-Host "  computeRoleArn is not set (or this AWS CLI/API version does not return it)." -ForegroundColor Yellow
-    Write-Host "  If lib/zaico/secretStore.ts's Secrets Manager calls need to run under a real IAM identity in" -ForegroundColor Yellow
-    Write-Host "  Amplify Hosting (rather than falling back to ZAICO_API_TOKEN env var), a dedicated compute" -ForegroundColor Yellow
-    Write-Host ("  role (" + $StagingComputeRoleName + ") with GetSecretValue/PutSecretValue scoped to only") -ForegroundColor Yellow
-    Write-Host "  bello/zaico-api-token needs to be created and attached via 'aws amplify update-app" -ForegroundColor Yellow
-    Write-Host "  --compute-role-arn' - not done automatically here since it is untested against this" -ForegroundColor Yellow
-    Write-Host "  account's actual AWS CLI/Amplify API version. Until then, ZAICO_API_TOKEN env var fallback" -ForegroundColor Yellow
-    Write-Host "  keeps the app working (see lib/zaico/client.ts) - this is not a regression." -ForegroundColor Yellow
+    Write-Host "  [COMPUTE_ROLE_MISSING] computeRoleArn is not set - creating and attaching a dedicated staging" -ForegroundColor Yellow
+    Write-Host "  compute role now (never reusing the production role, never touching the production app)." -ForegroundColor Yellow
   }
 
-  return @{ Checks = $checks; ComputeRoleArn = $computeRoleArn }
+  # ---- Create or repair the role itself -----------------------------------
+  $trustPolicyObj = @{
+    Version   = "2012-10-17"
+    Statement = @(
+      @{
+        Effect    = "Allow"
+        Principal = @{ Service = "amplify.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    )
+  }
+  $trustPolicyPath = New-TempJsonFile -Object $trustPolicyObj -Prefix "bello-staging-compute-trust-policy"
+  $roleArn = $null
+  try {
+    $existingComputeRoleResult = Invoke-AwsCli -ArgList @("iam", "get-role", "--role-name", $StagingComputeRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+    if ($existingComputeRoleResult.Ok) {
+      $roleArn = ($existingComputeRoleResult.Raw | ConvertFrom-Json).Role.Arn
+      $updateTrustResult = Invoke-AwsCli -ArgList @("iam", "update-assume-role-policy", "--role-name", $StagingComputeRoleName, "--policy-document", ("file://" + $trustPolicyPath), "--profile", $ProfileName, "--region", $Region)
+      if (-not $updateTrustResult.Ok) {
+        Write-Host "  [COMPUTE_ROLE_TRUST_INVALID] update-assume-role-policy failed:" -ForegroundColor Red
+        Write-Host $updateTrustResult.Raw
+        return $currentComputeRoleArn
+      }
+    } else {
+      $createRoleResult = Invoke-AwsCli -ArgList @(
+        "iam", "create-role", "--role-name", $StagingComputeRoleName,
+        "--assume-role-policy-document", ("file://" + $trustPolicyPath),
+        "--description", "Amplify Hosting SSR compute role for the dedicated staging app only - grants read (and, if the ZAICO token-set UI needs it, write) access to a single Secrets Manager secret. Never used by production.",
+        "--profile", $ProfileName, "--region", $Region, "--output", "json"
+      )
+      if (-not $createRoleResult.Ok) {
+        Write-Host "  [COMPUTE_ROLE_MISSING] create-role failed:" -ForegroundColor Red
+        Write-Host $createRoleResult.Raw
+        return $null
+      }
+      $roleArn = ($createRoleResult.Raw | ConvertFrom-Json).Role.Arn
+    }
+  } finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue $trustPolicyPath
+  }
+
+  # ---- Minimal inline policy: GetSecretValue + PutSecretValue, scoped to
+  # ONLY this one secret (wildcarded version suffix - the exact 6-char
+  # suffix is Secrets Manager's own random value, not something to
+  # hardcode). PutSecretValue is included because the app's settings UI
+  # genuinely has a "set/update ZAICO token" feature (app/actions/
+  # zaicoSecret.ts) that needs it - CreateSecret/DeleteSecret/ListSecrets/
+  # Resource:"*" are deliberately never granted.
+  $secretArnBase = $SecretArn -replace "-[A-Za-z0-9]{6}$", ""
+  $secretArnWildcard = $secretArnBase + "-??????"
+  $policyObj = @{
+    Version   = "2012-10-17"
+    Statement = @(
+      @{
+        Sid      = "BelloZaicoComputeSecretAccess"
+        Effect   = "Allow"
+        Action   = @("secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue")
+        Resource = $secretArnWildcard
+      }
+    )
+  }
+  $policyPath = New-TempJsonFile -Object $policyObj -Prefix "bello-staging-compute-policy"
+  try {
+    $putPolicyResult = Invoke-AwsCli -ArgList @("iam", "put-role-policy", "--role-name", $StagingComputeRoleName, "--policy-name", "BelloZaicoComputeSecretAccess", "--policy-document", ("file://" + $policyPath), "--profile", $ProfileName, "--region", $Region)
+    if (-not $putPolicyResult.Ok) {
+      Write-Host "  [COMPUTE_ROLE_POLICY_INVALID] put-role-policy failed:" -ForegroundColor Red
+      Write-Host $putPolicyResult.Raw
+      return $roleArn
+    }
+  } finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue $policyPath
+  }
+  Write-Host ("  Role ready: " + $roleArn) -ForegroundColor Green
+  Write-Host ("  Policy scoped to: " + $secretArnWildcard + " (GetSecretValue, PutSecretValue only - no CreateSecret/DeleteSecret/wildcard Resource)") -ForegroundColor Green
+
+  # ---- Attach to the staging app only -------------------------------------
+  if ($currentComputeRoleArn -ne $roleArn) {
+    $updateAppResult = Invoke-AwsCli -ArgList @("amplify", "update-app", "--app-id", $StagingAppId, "--compute-role-arn", $roleArn, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+    if (-not $updateAppResult.Ok) {
+      Write-Host "  update-app --compute-role-arn failed:" -ForegroundColor Red
+      Write-Host $updateAppResult.Raw
+      return $roleArn
+    }
+  }
+
+  # ---- Read back to confirm, per explicit instruction not to trust this
+  # without re-reading it from the AWS API. -------------------------------
+  $confirmResult = Invoke-AwsCli -ArgList @("amplify", "get-app", "--app-id", $StagingAppId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  $confirmedArn = $null
+  if ($confirmResult.Ok) {
+    $confirmedArn = ($confirmResult.Raw | ConvertFrom-Json).app.computeRoleArn
+  }
+  if ($confirmedArn -eq $roleArn) {
+    Write-Host ("  Confirmed via get-app re-read: computeRoleArn = " + $confirmedArn) -ForegroundColor Green
+  } else {
+    Write-Host ("  [WARNING] get-app re-read shows computeRoleArn = " + $(if ($confirmedArn) { $confirmedArn } else { "(none)" }) + ", expected " + $roleArn) -ForegroundColor Yellow
+  }
+  return $confirmedArn
+}
+
+function Test-ComputeRolePolicyCorrect {
+  # Read-back verification (never trusts "we just set it" without
+  # re-reading) that the role's inline policy still grants exactly
+  # GetSecretValue/PutSecretValue on this secret's ARN and nothing broader
+  # (no wildcard Resource, no CreateSecret/DeleteSecret/ListSecrets).
+  param([string]$RoleArn, [string]$SecretArn)
+  $getPolicyResult = Invoke-AwsCli -ArgList @("iam", "get-role-policy", "--role-name", $StagingComputeRoleName, "--policy-name", "BelloZaicoComputeSecretAccess", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if (-not $getPolicyResult.Ok) { return $false }
+  $doc = ($getPolicyResult.Raw | ConvertFrom-Json).PolicyDocument
+  $docJson = $doc | ConvertTo-Json -Depth 10 -Compress
+  $secretArnBase = $SecretArn -replace "-[A-Za-z0-9]{6}$", ""
+  $scopedToSecret = $docJson -match [regex]::Escape($secretArnBase)
+  $hasWildcardResource = $docJson -match '"Resource"\s*:\s*"\*"'
+  $hasCreateOrDelete = $docJson -match "CreateSecret|DeleteSecret"
+  return ($scopedToSecret -and -not $hasWildcardResource -and -not $hasCreateOrDelete)
 }
 
 # ============================================================================
@@ -1092,7 +1242,7 @@ if (-not $stepResult.AllSucceeded) {
 }
 
 $httpResult = Invoke-HttpValidate -App $envState.App -Branch $envState.Branch
-$backendResult = Test-BackendResources
+$backendResult = Test-BackendResources -SecretArn $secretState.Arn
 
 Write-StateBanner "STATE 12: COMPLETE"
 Write-Host ("Staging app        : " + $StagingAppId + " (" + $StagingAppName + ")")
