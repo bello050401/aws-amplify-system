@@ -145,3 +145,28 @@ Amplify Gen2では、Amplify Hostingの「ブランチ」ごとに**独立した
 ## 7. 今回スキーマ変更なし
 
 上記の全機能は既存のInventoryスキーマ(`sourceSystem`/`sourceInventoryId`/`InventoryImage`の`sourceSystem`/`sourceUrl`)だけで実現できており、`amplify/data/resource.ts`への変更は不要だった。将来EC統合フェーズで新しいモデル(EcListing等)を追加する際も、この調査で確認した「Inventoryが唯一の真実源」という前提は崩していない。
+
+## 8. 公開URLの404問題(調査結果・修正手順は`scripts/aws-setup/5-fix-404-and-redeploy.ps1`)
+
+### 8a. 調査の前提(このClaude Code環境の制約)
+
+このセッションからは実AWS CLI・実AWS認証情報が利用できず、また公開URL(`*.amplifyapp.com`)自体もこのサンドボックスのネットワークegressプロキシにブロックされており直接curl確認もできない。そのため以下の根本原因はコードベース側の証拠(このリポジトリの`next.config.js`・`amplify.yml`・ローカルでの`next build`成果物構造)とAWS公式ドキュメント・調査記事の記述から特定したもので、`scripts/aws-setup/5-fix-404-and-redeploy.ps1`の実行結果(特にstep 2のビルド成果物ZIP実地確認)で最終的に裏付けを取ること。
+
+### 8b. 根本原因(推測ではなく切り分け済み)
+
+ユーザー報告の事実(`branch framework = null`、`app platform = WEB`)と、このリポジトリの実際の`next build`出力(`.next/server/`ディレクトリが存在し、`/`と`/_not-found`以外の全ルートが`ƒ (Dynamic) server-rendered on demand`)を突き合わせた結果:
+
+- **原因はAmplifyアプリの`platform`設定が`WEB`(静的サイト専用ホスティング)のままになっていること**。AWS公式ドキュメント(下記出典)によれば、Next.js 14以降はSSR/SSGを問わず`platform=WEB_COMPUTE`が必須(Next.js 12〜13のSSRは`WEB_DYNAMIC`という別の中間platformだったが、14以降は`WEB_COMPUTE`のみがサポート対象)。
+- `platform=WEB`のままだと、Amplifyは`.next`ビルド成果物を素の静的ファイル群として扱おうとするが、Next.jsのSSRビルドには静的ホスティングが必要とする`index.html`がルートに存在せず(`.next/server/`配下にサーバーサイドレンダリング用のファイルがあるのみ)、Next.js自身のルーティング/レンダリングを実行するサーバーランタイムも存在しないため、どのパスへのリクエストも配信すべき実体が見つからず404になる。
+- `branch framework = null`は、Amplifyがこのアプリを正しくNext.js SSRアプリとして認識できていない結果の表れ(`platform=WEB_COMPUTE`かつ`framework="Next.js - SSR"`が正しい組み合わせ)。
+- 切り分けた結果、以下は原因ではないと判断: `amplify.yml`の`baseDirectory: .next`/`files: ['**/*']`設定自体は`platform=WEB_COMPUTE`向けの標準的な設定として正しい(AWS公式のNext.js SSR用`amplify.yml`テンプレートと同じ形)。App Router構成・build出力先も問題なし。SPA向けcustomRuleの影響ではない(customRule自体を設定していない)。branch/URLマッピング自体は存在している(job 5がSUCCEEDしている以上、ビルド・デプロイ自体は成功しており「デプロイされたが何を配信すべきか分からない」状態)。
+
+### 8c. なぜApp全体・main設定の変更にならないか
+
+このAmplifyアプリ(`d1uy61lbnqm8ae`)は`4-create-app.ps1`によってテストブランチ専用に新規作成したものであり、`main`ブランチは接続されていない。`platform`はアプリ単位の設定だが、このアプリに紐づくブランチはテストブランチ1つだけなので、`update-app --platform WEB_COMPUTE`を実行しても本番/mainには一切影響しない。別のstaging専用Amplify Appを新たに作る必要はない(このApp自体が最初からstaging専用)。
+
+### 8d. 出典
+
+- [Amplify support for Next.js - AWS Amplify Hosting](https://docs.aws.amazon.com/amplify/latest/userguide/ssr-amplify-support.html)
+- [Migrating a Next.js 11 SSR app to Amplify Hosting compute](https://docs.aws.amazon.com/amplify/latest/userguide/update-app-nextjs-version.html)
+- [How to Update Amplify Platform and Framework Settings from the CLI - NakoBase](https://nakobase.com/en/nakobase-knowledge/amplify-update-platform-and-framework)
