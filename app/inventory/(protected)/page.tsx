@@ -26,9 +26,7 @@ interface InventoryListPageProps {
     advanced?: string;
     /** 詳細検索の実際の条件 — JSON文字列(lib/inventory/advancedSearch.tsのAdvancedSearchQuery)。存在し、有効な条件を1件以上含む場合のみ詳細検索モードになる。 */
     adv?: string;
-    cursor?: string;
     limit?: string;
-    /** 詳細検索/クイック検索(offsetページング)専用。cursorページングとは独立。 */
     offset?: string;
   };
 }
@@ -86,10 +84,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
             { q: searchParams.q, categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId },
             { offset, limit },
           )
-        : await listInventory(
-            { categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId },
-            { cursor: searchParams.cursor, limit },
-          );
+        : await listInventory({ categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId }, { offset, limit });
 
   // Plain objects, not Maps — this now crosses into InventoryTable, a
   // Client Component (it needs to read the column-visibility preference
@@ -108,8 +103,11 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
     adv: searchParams.adv,
   };
 
-  const totalLabel =
-    "total" in listResult ? `${listResult.total.toLocaleString("ja-JP")}件` : `${listResult.items.length}件`;
+  // BELLO統合改修 master指示書 §8修正後: 3経路すべてがlib/inventory/
+  // queries.tsのfetchAllInventoryRecordsベースのSearchPage(常に
+  // `total`を含む)を返すため、これはもう「ページ内件数」へフォール
+  // バックする必要がない — フィルタ/検索条件に対する正確な総件数。
+  const totalLabel = `${listResult.total.toLocaleString("ja-JP")}件`;
 
   return (
     // DirectEditProvider (一覧直接編集の状態) wraps both InventoryHeader's
@@ -158,25 +156,13 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
                 customFieldDefs={customFieldDefs}
               />
             </div>
-            {"total" in listResult ? (
-              <InventoryPagination
-                mode="offset"
-                baseParams={baseParams}
-                offset={listResult.offset}
-                total={listResult.total}
-                limit={limit}
-                currentCount={listResult.items.length}
-              />
-            ) : (
-              <InventoryPagination
-                mode="cursor"
-                baseParams={baseParams}
-                cursor={searchParams.cursor}
-                nextToken={listResult.nextToken}
-                limit={limit}
-                currentCount={listResult.items.length}
-              />
-            )}
+            <InventoryPagination
+              baseParams={baseParams}
+              offset={listResult.offset}
+              total={listResult.total}
+              limit={limit}
+              currentCount={listResult.items.length}
+            />
           </div>
         </div>
       </div>

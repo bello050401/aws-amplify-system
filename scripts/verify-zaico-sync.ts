@@ -23,6 +23,7 @@ import { parseSeenSourceIds, toPublicJob } from "@/lib/inventory/zaicoBackground
 import { summarizeSales } from "@/lib/inventory/sales";
 import { resizeToThumbnailJpeg, THUMBNAIL_MAX_DIMENSION } from "@/lib/inventory/thumbnail";
 import { effectiveListThumbnailKey, type InventoryImageRecord } from "@/lib/inventory/imageTypes";
+import { compareByUpdatedAtDesc } from "@/lib/inventory/queries";
 import sharp from "sharp";
 import type { ZaicoInventory } from "@/lib/zaico/client";
 
@@ -286,6 +287,24 @@ function testEffectiveListThumbnailKey() {
   );
 }
 
+function testUpdatedAtSort() {
+  // 2026-08-29統合改修版 §9の回帰テスト: 一覧デフォルトはupdatedAt DESC。
+  const rows = [
+    { id: "a", updatedAt: "2026-01-01T00:00:00.000Z" },
+    { id: "b", updatedAt: "2026-03-01T00:00:00.000Z" },
+    { id: "c", updatedAt: "2026-02-01T00:00:00.000Z" },
+  ];
+  const sorted = [...rows].sort(compareByUpdatedAtDesc);
+  assertEqual(sorted.map((r) => r.id), ["b", "c", "a"], "compareByUpdatedAtDesc: most recently updated first");
+
+  const tie = [
+    { id: "z", updatedAt: "2026-01-01T00:00:00.000Z" },
+    { id: "y", updatedAt: "2026-01-01T00:00:00.000Z" },
+  ];
+  const sortedTie = [...tie].sort(compareByUpdatedAtDesc);
+  assertEqual(sortedTie.map((r) => r.id), ["z", "y"], "compareByUpdatedAtDesc: a tie on updatedAt breaks stably by id, not arbitrarily");
+}
+
 async function main() {
   await testCreateThenIdempotentUnchanged();
   await testUpdateOnRealChange();
@@ -294,6 +313,7 @@ async function main() {
   testPurchasePriceAllInCostRule();
   await testThumbnailResize();
   testEffectiveListThumbnailKey();
+  testUpdatedAtSort();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

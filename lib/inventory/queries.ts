@@ -160,38 +160,45 @@ function toExtendedFields(item: InventoryModel): ExtendedFieldsAsNullable {
  * (not built in Phase 3, but the query already supports it so that
  * screen is additive later, not a rework of this one).
  */
-export async function listInventory(
-  filters: InventoryListFilters,
-  options: { cursor?: string; limit?: number; includeDeleted?: boolean } = {},
-) {
-  const conditions: Record<string, unknown>[] = [
-    { deletedAt: { attributeExists: Boolean(options.includeDeleted) } },
-  ];
+/**
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §8/§9根本修正 —
+ * 以前はここだけ独立したAppSync cursor(nextToken)ページングだった
+ * (DynamoDBレベルでfilterのみ絞り込み、limit件だけ返す)。これには
+ * 2つの実害があった:
+ *   1. ソート順が一切保証されない(DynamoDBの物理scan順のまま) —
+ *      「updatedAt DESC」を満たせなかった(§9)。
+ *   2. 「総件数」を返せない(1ページ分のitems.lengthしか分からない) —
+ *      一覧上部の「〜件」がページ内件数を超えて表示できなかった(§8)。
+ * さらにnextTokenを積み上げて「前へ」を再現するUI側の実装が、
+ * HTTP 431の実障害を引き起こしてもいた(InventoryPagination.tsx参照)。
+ *
+ * 修正: クイック検索/詳細検索と全く同じ設計(fetchAllInventoryRecords
+ * による、DynamoDBレベルの絞り込み+deletedAt除外を適用した全件取得→
+ * updatedAt DESCで一括ソート→offsetでページ分割)へ統一した。この規模
+ * (SEARCH_MAX_SCAN_ITEMS=20000件が安全弁、現状の運用規模である
+ * 「1000件超」を大きく上回る)では、「一覧に必要な列だけを持つ軽量な
+ * レコード(画像本体やhistoryは含まない)を1回だけ全件取得してメモリ上
+ * でソート・ページ分割する」ことは、DynamoDBに複合GSIを追加してソート
+ * 済みクエリを都度投げるより実装・運用コストが低く、既存のクイック
+ * 検索/詳細検索と同じ「全件走査」設計にそろえることで一覧全体のソート
+ * ・カウント方式を1箇所(fetchAllInventoryRecords)に統一できる利点が
+ * 上回ると判断した。将来この規模を大きく超える場合はOpenSearch等への
+ * 切り替えが必要になる旨をfetchAllInventoryRecords/SEARCH_MAX_SCAN_ITEMS
+ * のコメントに明記済み。
+ */
+export async function listInventory(filters: InventoryListFilters, options: { offset: number; limit: number }): Promise<SearchPage<InventoryListRow>> {
+  const conditions: Record<string, unknown>[] = [];
   // 複数カテゴリはOR条件（いずれかに一致）、他の条件とはAND — spec §9。
   if (filters.categoryIds && filters.categoryIds.length > 0) {
     conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
   }
   if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
-  if (filters.q) {
-    conditions.push({
-      or: [{ name: { contains: filters.q } }, { sku: { contains: filters.q } }],
-    });
-  }
 
-  const { data, nextToken, errors } = await serverDataClient.models.Inventory.list({
-    filter: { and: conditions },
-    limit: options.limit ?? 50,
-    nextToken: options.cursor,
-    ...inventoryAuthMode,
-  });
-
-  if (errors) throw new Error(`在庫一覧の取得に失敗しました: ${JSON.stringify(errors)}`);
-
-  return {
-    items: data.map(toListRow),
-    nextToken: nextToken ?? null,
-  };
+  const all = await fetchAllInventoryRecords(conditions);
+  const total = all.length;
+  const page = all.slice(options.offset, options.offset + options.limit);
+  return { items: page, total, offset: options.offset, limit: options.limit };
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -219,6 +226,19 @@ function toSearchRecord(item: InventoryModel): InventorySearchRecord {
 export const SEARCH_MAX_SCAN_ITEMS = 20000;
 
 /**
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §9: 一覧デフォルト
+ * はupdatedAt DESC(直近で実際に変更された商品が最上位)。純粋な比較
+ * 関数として切り出してあるのは、scripts/verify-zaico-sync.tsから
+ * serverDataClient/AWSに一切触れずに直接テストできるようにするため。
+ * 同点(同一updatedAt、通常は起きないが理論上)はidで安定ソートする —
+ * 「毎回結果の順序が変わる」ことを避ける。
+ */
+export function compareByUpdatedAtDesc(a: { id: string; updatedAt: string }, b: { id: string; updatedAt: string }): number {
+  if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
+  return a.id < b.id ? 1 : -1;
+}
+
+/**
  * 追加のAppSync filter条件(サイドバーのカテゴリ/保管場所/状態等、
  * DynamoDBレベルで絞り込めるもの)を先に適用したうえで、非削除の全件
  * をページングしながら取得する。
@@ -238,6 +258,15 @@ async function fetchAllInventoryRecords(extraConditions: Record<string, unknown>
     nextToken = nt;
     if (items.length >= SEARCH_MAX_SCAN_ITEMS) break;
   } while (nextToken);
+  // BELLO統合改修 master指示書(2026-08-29統合改修版) §9根本修正:
+  // 一覧デフォルトはupdatedAt DESC(直近で実際に変更された商品が最上位)
+  // — 以前はInventory.list()自体がDynamoDBの物理scan順(意味のある
+  // 順序を一切保証しない)をそのまま返しており、明示的なsortが一つも
+  // 無かった。ここで一度だけ、全経路(通常一覧/クイック検索/詳細検索
+  // すべてがこの関数を経由する)が共有するソートとして適用する —
+  // 呼び出し側でバラバラに実装しない。同点(同一updatedAt、通常は起き
+  // ないが理論上)はidで安定ソートする。
+  items.sort(compareByUpdatedAtDesc);
   return items;
 }
 
