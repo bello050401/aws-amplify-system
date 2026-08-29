@@ -62,12 +62,14 @@ export interface ZaicoBackgroundSyncJob {
   triggeredBy: string | null;
 }
 
-function parseSeenSourceIds(raw: unknown): Set<string> {
+/** Exported (in addition to being used internally) so scripts/verify-zaico-background-sync.ts can unit-test it directly without a real DynamoDB row. */
+export function parseSeenSourceIds(raw: unknown): Set<string> {
   if (!Array.isArray(raw)) return new Set();
   return new Set(raw.filter((v): v is string => typeof v === "string"));
 }
 
-function toPublicJob(row: {
+/** Exported for the same reason as parseSeenSourceIds above. */
+export function toPublicJob(row: {
   status: ZaicoSyncJobStatus;
   lastPage?: number | null;
   totalProcessed?: number | null;

@@ -13,7 +13,9 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "amplify:sandbox": "ampx sandbox",
-    "amplify:deploy": "ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID"
+    "amplify:deploy": "ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID",
+    "verify:zaico": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-sync.ts",
+    "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.121.0",
