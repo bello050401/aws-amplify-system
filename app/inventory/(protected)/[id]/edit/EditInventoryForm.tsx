@@ -47,6 +47,7 @@ function slotsFromExistingImages(images: InventoryImageRecord[]): ImageEditorSlo
     isPrimary: img.isPrimary,
     sourceSystem: img.sourceSystem,
     sourceUrl: img.sourceUrl,
+    thumbnailKey: img.thumbnailKey,
   }));
 }
 
@@ -63,6 +64,7 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
           isPrimary,
           sourceSystem: slot.sourceSystem,
           sourceUrl: slot.sourceUrl,
+          sourceThumbnailKey: slot.sourceThumbnailKey,
         }
       : {
           kind: "uploaded",
@@ -72,6 +74,7 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
           isPrimary,
           sourceSystem: slot.sourceSystem,
           sourceUrl: slot.sourceUrl,
+          thumbnailKey: slot.thumbnailKey,
         };
   });
 }

@@ -12,6 +12,7 @@ import {
 import { getInventoryDetail, listCategories, listLocations, listStatuses } from "@/lib/inventory/queries";
 import { stringifyCustomFields } from "@/lib/inventory/customFieldsCodec";
 import { copyInventoryImage, removeInventoryImage } from "@/lib/inventory/imageServerOps";
+import { copyInventoryThumbnail, generateInventoryThumbnail } from "@/lib/inventory/thumbnail";
 import { diffField, logInventoryHistory } from "@/lib/inventory/history";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import type { InventoryImageRecord, InventoryImageType } from "@/lib/inventory/imageTypes";
@@ -47,6 +48,20 @@ export type ImageSlotInput =
       isPrimary: boolean;
       sourceSystem: string | null;
       sourceUrl: string | null;
+      /**
+       * BELLO統合改修 master指示書 Phase B優先度5(変更がなければサム
+       * ネイル再生成をスキップ) — an untouched "existing" slot (see
+       * ImageEditor.tsx) carries the record's current thumbnailKey
+       * through unchanged (possibly still null, for a record from before
+       * this Phase); a freshly-picked "new" file always sends null,
+       * since nothing has generated one yet. null here always means "try
+       * to generate one now" below — which is exactly right in both
+       * cases: a brand-new upload needs its first thumbnail, and an old
+       * pre-backfill image self-heals the next time it's touched. A
+       * non-null value here is always trusted as-is and never
+       * regenerated.
+       */
+      thumbnailKey: string | null;
     }
   | {
       kind: "copy";
@@ -56,24 +71,34 @@ export type ImageSlotInput =
       isPrimary: boolean;
       sourceSystem: string | null;
       sourceUrl: string | null;
+      /** The SOURCE record's thumbnail key, if it has one — resolveImages copies this alongside the original rather than paying for a fresh resize of an image that's by definition unchanged from its source. null means the source has none yet (pre-backfill) — a fresh one is generated from the newly-copied original instead. */
+      sourceThumbnailKey: string | null;
     };
 
 /**
- * Resolves every image slot to its final storageKey, copying "copy" slots
- * one at a time (not Promise.all) so that if one copy fails partway
- * through a multi-image duplicate, this can clean up exactly the ones it
- * already made before re-throwing — never leaves orphaned copies behind,
- * and never returns a partial result for the caller to build an
+ * Resolves every image slot to its final storageKey/thumbnailKey, copying
+ * "copy" slots one at a time (not Promise.all) so that if one copy fails
+ * partway through a multi-image duplicate, this can clean up exactly the
+ * ones it already made before re-throwing — never leaves orphaned copies
+ * behind, and never returns a partial result for the caller to build an
  * Inventory record out of. See createInventory/updateInventory for how
  * this failing is itself handled without leaving a broken/half-created
  * record on their side either.
  */
 async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRecord[]> {
   const resolved: InventoryImageRecord[] = [];
-  const copiedKeys: string[] = []; // subset of resolved actually created by copyInventoryImage in this call
+  const createdKeys: string[] = []; // every original/thumbnail object actually created (copied or freshly generated) in this call — cleaned up on a later failure
   try {
     for (const img of images) {
       if (img.kind === "uploaded") {
+        // Non-null already (an untouched existing image with a thumbnail
+        // from a prior save) → reuse as-is, no new object created, so
+        // nothing to add to createdKeys for it. Null → attempt to
+        // generate one now (see the ImageSlotInput comment above for why
+        // this single check correctly covers both "brand new upload" and
+        // "self-heal a pre-backfill existing image").
+        const thumbnailKey = img.thumbnailKey ?? (await generateInventoryThumbnail(img.storageKey));
+        if (!img.thumbnailKey && thumbnailKey) createdKeys.push(thumbnailKey);
         resolved.push({
           storageKey: img.storageKey,
           sortOrder: img.sortOrder,
@@ -81,11 +106,16 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
           isPrimary: img.isPrimary,
           sourceSystem: img.sourceSystem,
           sourceUrl: img.sourceUrl,
+          thumbnailKey,
         });
         continue;
       }
       const newKey = await copyInventoryImage(img.sourceStorageKey);
-      copiedKeys.push(newKey);
+      createdKeys.push(newKey);
+      const thumbnailKey = img.sourceThumbnailKey
+        ? await copyInventoryThumbnail(img.sourceThumbnailKey)
+        : await generateInventoryThumbnail(newKey);
+      if (thumbnailKey) createdKeys.push(thumbnailKey);
       resolved.push({
         storageKey: newKey,
         sortOrder: img.sortOrder,
@@ -93,13 +123,19 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
         isPrimary: img.isPrimary,
         sourceSystem: img.sourceSystem,
         sourceUrl: img.sourceUrl,
+        thumbnailKey,
       });
     }
     return resolved;
   } catch (err) {
-    await Promise.allSettled(copiedKeys.map((k) => removeInventoryImage(k)));
+    await Promise.allSettled(createdKeys.map((k) => removeInventoryImage(k)));
     throw err; // copyInventoryImage already attaches a specific, user-facing message
   }
+}
+
+/** Every S3 object a set of images actually owns — original AND thumbnail (when present) — flattened for a single Promise.allSettled cleanup call. Used by every "these images are gone now, delete their objects" site below (create/update rollback, an edit's removed images, hard delete) so none of them forget the thumbnail half of Phase B's original/thumbnail pair. */
+function allImageStorageKeys(images: InventoryImageRecord[]): string[] {
+  return images.flatMap((img) => (img.thumbnailKey ? [img.storageKey, img.thumbnailKey] : [img.storageKey]));
 }
 
 /**
@@ -188,7 +224,7 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
   const { data: sku, errors: skuErrors } = await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);
   if (skuErrors || !sku) {
     console.error("[createInventory] SKU generation failed:", skuErrors);
-    await Promise.allSettled(images.map((img) => removeInventoryImage(img.storageKey)));
+    await Promise.allSettled(allImageStorageKeys(images).map((k) => removeInventoryImage(k)));
     throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(skuErrors)}`);
   }
 
@@ -222,7 +258,7 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
     // aborted registration is harmless and exactly what an atomic
     // counter is expected to produce sometimes; see amplify/functions/
     // generate-sku's own comment on why it's never decremented.
-    await Promise.allSettled(images.map((img) => removeInventoryImage(img.storageKey)));
+    await Promise.allSettled(allImageStorageKeys(images).map((k) => removeInventoryImage(k)));
     throw new Error(`在庫の登録に失敗しました: ${JSON.stringify(errors)}`);
   }
 
@@ -323,9 +359,10 @@ export async function updateInventory(
 
   // Clean up S3 objects for images the edit actually removed — never
   // images the "copy"/"uploaded" resolution just created, and never
-  // before the Inventory write above has already succeeded.
-  const removedKeys = oldImageKeys.filter((k) => !newImageKeys.includes(k));
-  await Promise.allSettled(removedKeys.map((k) => removeInventoryImage(k)));
+  // before the Inventory write above has already succeeded. Removes each
+  // removed image's thumbnail too (Phase B), not just its original.
+  const removedImages = existing.images.filter((i) => !newImageKeys.includes(i.storageKey));
+  await Promise.allSettled(allImageStorageKeys(removedImages).map((k) => removeInventoryImage(k)));
 
   revalidatePath("/inventory");
   revalidatePath(`/inventory/${inventoryId}`);
@@ -367,7 +404,7 @@ export async function deleteInventory(inventoryId: string): Promise<never> {
   }
 
   await logInventoryHistory(inventoryId, who, [{ fieldName: "削除", oldValue: "有効", newValue: "削除済み" }]);
-  await Promise.allSettled(existing.images.map((img) => removeInventoryImage(img.storageKey)));
+  await Promise.allSettled(allImageStorageKeys(existing.images).map((k) => removeInventoryImage(k)));
 
   revalidatePath("/inventory");
   redirect("/inventory");

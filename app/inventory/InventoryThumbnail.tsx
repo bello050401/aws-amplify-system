@@ -37,10 +37,20 @@ export function InventoryThumbnail({
   storageKey,
   alt,
   size = "small",
+  loading = "lazy",
 }: {
   storageKey: string | null;
   alt: string;
   size?: keyof typeof SIZE_CLASSES;
+  /**
+   * BELLO統合改修 master指示書 Phase B優先度7 (ファーストビュー優先/
+   * 遅延読み込み) — native `<img loading>`, no library needed. Default
+   * "lazy" for every ordinary thumbnail (list rows scrolled off-screen
+   * never even start downloading); the detail page's "hero" image passes
+   * "eager" explicitly (see InventoryImageGallery.tsx) since it's always
+   * the very first thing that screen shows.
+   */
+  loading?: "lazy" | "eager";
 }) {
   const { url, failed: resolveFailed } = useInventoryImageUrl(storageKey);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -77,6 +87,7 @@ export function InventoryThumbnail({
     <img
       src={url ?? undefined}
       alt={alt}
+      loading={loading}
       onError={(e) => {
         // getUrl() succeeded (a valid presigned URL) but the browser
         // still couldn't load it — e.g. the object doesn't actually

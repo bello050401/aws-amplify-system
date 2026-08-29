@@ -21,6 +21,9 @@ import type { ZaicoSyncPort, InventoryModel, NewInventoryInput, UpdateInventoryI
 import type { HistoryFieldChange } from "@/lib/inventory/history";
 import { parseSeenSourceIds, toPublicJob } from "@/lib/inventory/zaicoBackgroundSync";
 import { summarizeSales } from "@/lib/inventory/sales";
+import { resizeToThumbnailJpeg, THUMBNAIL_MAX_DIMENSION } from "@/lib/inventory/thumbnail";
+import { effectiveListThumbnailKey, type InventoryImageRecord } from "@/lib/inventory/imageTypes";
+import sharp from "sharp";
 import type { ZaicoInventory } from "@/lib/zaico/client";
 
 let failures = 0;
@@ -107,7 +110,7 @@ function createMockPort() {
       historyLog.push({ inventoryId, who, changes });
     },
     async downloadAndImportImage(url: string) {
-      return `mock-storage-key-for/${url}`;
+      return { storageKey: `mock-storage-key-for/${url}`, thumbnailKey: `mock-thumbnail-key-for/${url}` };
     },
     async removeImage(path: string) {
       removedImages.push(path);
@@ -233,12 +236,58 @@ function testPurchasePriceAllInCostRule() {
   assertEqual(summary.totalProfit, 40000, "purchasePrice rule: totalProfit = sales - purchasePrice-only cost");
 }
 
+async function testThumbnailResize() {
+  // A synthetic 1000×600 image (well past THUMBNAIL_MAX_DIMENSION on its
+  // long edge) — sharp can synthesize raw pixel data directly, so this
+  // needs no fixture file checked into the repo.
+  const large = await sharp({ create: { width: 1000, height: 600, channels: 3, background: { r: 200, g: 80, b: 80 } } })
+    .jpeg()
+    .toBuffer();
+  const resized = await resizeToThumbnailJpeg(large);
+  const meta = await sharp(resized).metadata();
+  assertTrue((meta.width ?? 0) <= THUMBNAIL_MAX_DIMENSION, "thumbnail resize: width is capped at THUMBNAIL_MAX_DIMENSION");
+  assertTrue((meta.height ?? 0) <= THUMBNAIL_MAX_DIMENSION, "thumbnail resize: height is capped at THUMBNAIL_MAX_DIMENSION");
+  assertEqual(meta.format, "jpeg", "thumbnail resize: output format is JPEG");
+  assertTrue(resized.length < large.length, "thumbnail resize: output is smaller than the original (the whole point)");
+
+  // A source already smaller than the cap must never be upscaled
+  // (withoutEnlargement) — master指示書 Phase B優先度5 territory: don't
+  // do wasted/harmful work on an image that's already small.
+  const small = await sharp({ create: { width: 100, height: 60, channels: 3, background: { r: 10, g: 10, b: 10 } } })
+    .jpeg()
+    .toBuffer();
+  const resizedSmall = await resizeToThumbnailJpeg(small);
+  const smallMeta = await sharp(resizedSmall).metadata();
+  assertEqual(smallMeta.width, 100, "thumbnail resize: a source already smaller than the cap is never upscaled (width)");
+  assertEqual(smallMeta.height, 60, "thumbnail resize: a source already smaller than the cap is never upscaled (height)");
+}
+
+function testEffectiveListThumbnailKey() {
+  const base: InventoryImageRecord = {
+    storageKey: "inventory/original.jpg",
+    sortOrder: 0,
+    type: "NORMAL",
+    isPrimary: true,
+    sourceSystem: null,
+    sourceUrl: null,
+    thumbnailKey: null,
+  };
+  assertEqual(effectiveListThumbnailKey(base), "inventory/original.jpg", "effectiveListThumbnailKey: falls back to the original when no thumbnail exists (pre-backfill/failed generation)");
+  assertEqual(
+    effectiveListThumbnailKey({ ...base, thumbnailKey: "inventory/thumbnails/small.jpg" }),
+    "inventory/thumbnails/small.jpg",
+    "effectiveListThumbnailKey: uses the thumbnail when one exists",
+  );
+}
+
 async function main() {
   await testCreateThenIdempotentUnchanged();
   await testUpdateOnRealChange();
   await testFailureIsolation();
   testBackgroundJobPureHelpers();
   testPurchasePriceAllInCostRule();
+  await testThumbnailResize();
+  testEffectiveListThumbnailKey();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

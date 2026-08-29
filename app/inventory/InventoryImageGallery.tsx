@@ -55,7 +55,7 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false 
     return (
       <div>
         {title && <p className="mb-2 text-[11px] font-bold text-gray-400">{title}</p>}
-        <InventoryThumbnail storageKey={null} alt={alt} size="hero" />
+        <InventoryThumbnail storageKey={null} alt={alt} size="hero" loading="eager" />
       </div>
     );
   }
@@ -71,7 +71,7 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false 
         aria-label="画像を拡大表示"
       >
         {failed || !url ? (
-          <InventoryThumbnail storageKey={current?.storageKey ?? null} alt={alt} size="hero" />
+          <InventoryThumbnail storageKey={current?.storageKey ?? null} alt={alt} size="hero" loading="eager" />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element -- S3 URL; see InventoryThumbnail's identical note.
           <img src={url} alt={alt} className="h-[380px] w-full object-contain" />

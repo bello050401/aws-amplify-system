@@ -3,7 +3,7 @@ import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { Schema } from "@/amplify/data/resource";
 import { parseCustomFields } from "./customFieldsCodec";
 import type { InventoryExtendedFields } from "./extendedFields";
-import { normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
+import { effectiveListThumbnailKey, normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
 import { resolveDisplayInventoryId } from "./inventoryId";
 import { evaluateQuery, matchesQuickSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 
@@ -38,6 +38,8 @@ export interface InventoryListRow {
   plannedSalePrice: number | null;
   note: string | null;
   mainImageStorageKey: string | null;
+  /** BELLO統合改修 master指示書 Phase B: the key the list view should actually fetch — the top image's small thumbnail when one exists, `mainImageStorageKey` (the original) otherwise. Only ever used by the list table's InventoryThumbnail; every other screen keeps using `mainImageStorageKey`/`storageKey` directly. */
+  mainImageThumbnailKey: string | null;
   createdAt: string;
   updatedAt: string;
   // Additional optional list columns (統合改善指示書 §10) — the same
@@ -89,6 +91,10 @@ function toListRow(item: InventoryModel): InventoryListRow {
     // photo can never end up as the list thumbnail even if it happens to
     // sort first. See resolveTopImage's own comment.
     mainImageStorageKey: resolveTopImage(images)?.storageKey ?? null,
+    mainImageThumbnailKey: (() => {
+      const top = resolveTopImage(images);
+      return top ? effectiveListThumbnailKey(top) : null;
+    })(),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     barcode: item.barcode ?? null,

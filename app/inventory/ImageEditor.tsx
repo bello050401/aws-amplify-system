@@ -70,9 +70,29 @@ export type ImageEditorSlot =
       isPrimary: boolean;
       sourceSystem: string | null;
       sourceUrl: string | null;
+      /** Always null for a freshly-picked file — nothing generates a thumbnail client-side; the server does it once, at save time (see app/actions/inventory.ts's resolveImages). */
+      thumbnailKey: string | null;
     }
-  | { id: string; kind: "existing"; storageKey: string; isPrimary: boolean; sourceSystem: string | null; sourceUrl: string | null }
-  | { id: string; kind: "copy"; sourceStorageKey: string; isPrimary: boolean; sourceSystem: string | null; sourceUrl: string | null };
+  | {
+      id: string;
+      kind: "existing";
+      storageKey: string;
+      isPrimary: boolean;
+      sourceSystem: string | null;
+      sourceUrl: string | null;
+      /** The record's current thumbnail for this image (Phase B) — carried through unchanged on a plain edit-and-save; null for a record from before this Phase, self-healed the next time it's touched (see resolveImages). */
+      thumbnailKey: string | null;
+    }
+  | {
+      id: string;
+      kind: "copy";
+      sourceStorageKey: string;
+      isPrimary: boolean;
+      sourceSystem: string | null;
+      sourceUrl: string | null;
+      /** The SOURCE record's thumbnail for this image, if any — resolveImages copies it alongside the duplicated original instead of paying for a fresh resize. */
+      sourceThumbnailKey: string | null;
+    };
 
 export function createNewImageSlot(file: File): ImageEditorSlot {
   return {
@@ -85,6 +105,7 @@ export function createNewImageSlot(file: File): ImageEditorSlot {
     isPrimary: false,
     sourceSystem: null,
     sourceUrl: null,
+    thumbnailKey: null,
   };
 }
 
@@ -196,7 +217,10 @@ export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditor
       newSlots.map(async ({ file, slot }) => {
         const path = safeUploadPath(file);
         try {
-          await uploadData({ path, data: file }).result;
+          // cacheControl (Phase B優先度9): safe to cache "forever" —
+          // safeUploadPath always mints a brand-new UUID key, so nothing
+          // ever overwrites this object in place.
+          await uploadData({ path, data: file, options: { cacheControl: "public, max-age=31536000, immutable" } }).result;
           patchSlot(slot.id, { storageKey: path, uploading: false });
         } catch (err) {
           console.error(`[ImageEditor] upload failed for "${file.name}":`, err);

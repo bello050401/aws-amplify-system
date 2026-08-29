@@ -21,9 +21,19 @@ export interface InventoryImageRecord {
   sourceSystem: string | null;
   /** ZAICO's `item_image.url` at the time this object was imported — compared on the next sync to skip re-downloading an unchanged photo. Meaningless (and always null) for a non-ZAICO image. */
   sourceUrl: string | null;
+  /**
+   * BELLO統合改修 master指示書 Phase B — a small (list-view-sized)
+   * derivative of `storageKey`, generated once at upload/sync time (see
+   * lib/inventory/thumbnail.ts) or via the ADMIN-triggered backfill
+   * (lib/inventory/thumbnailBackfill.ts) for images uploaded before this
+   * existed. null means "no thumbnail yet" — always fall back to
+   * `storageKey` via `effectiveListThumbnailKey` below, never render a
+   * broken image for it.
+   */
+  thumbnailKey: string | null;
 }
 
-/** Shape as it actually comes back from Amplify Data — `type`/`isPrimary`/`sourceSystem`/`sourceUrl` absent (null/undefined) on any row written before the field existed. */
+/** Shape as it actually comes back from Amplify Data — `type`/`isPrimary`/`sourceSystem`/`sourceUrl`/`thumbnailKey` absent (null/undefined) on any row written before the field existed. */
 export interface RawInventoryImage {
   storageKey: string;
   sortOrder: number;
@@ -31,6 +41,7 @@ export interface RawInventoryImage {
   isPrimary?: boolean | null;
   sourceSystem?: string | null;
   sourceUrl?: string | null;
+  thumbnailKey?: string | null;
 }
 
 /** Legacy image (no `type`) → NORMAL; anything else → whatever it says. This is the one and only migration rule this Phase relies on — no data is ever rewritten to add it. */
@@ -42,7 +53,13 @@ export function normalizeImageRecord(img: RawInventoryImage): InventoryImageReco
     isPrimary: img.isPrimary === true,
     sourceSystem: img.sourceSystem ?? null,
     sourceUrl: img.sourceUrl ?? null,
+    thumbnailKey: img.thumbnailKey ?? null,
   };
+}
+
+/** The key the list view should actually fetch for this image — its small thumbnail when one exists, the original otherwise (pre-backfill records, or a thumbnail generation failure that was swallowed at upload time — see thumbnail.ts). The detail page / gallery / edit preview must NEVER call this; they always use `storageKey` directly, by design (master指示書 Phase B: 詳細画面は高解像度のまま). */
+export function effectiveListThumbnailKey(img: InventoryImageRecord): string {
+  return img.thumbnailKey ?? img.storageKey;
 }
 
 export function splitImagesByType(images: InventoryImageRecord[]): { normal: InventoryImageRecord[]; damage: InventoryImageRecord[] } {

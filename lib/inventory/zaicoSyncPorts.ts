@@ -90,7 +90,8 @@ export interface ZaicoSyncPort {
   createInventory(input: NewInventoryInput): Promise<InventoryModel>;
   updateInventory(input: UpdateInventoryInput): Promise<void>;
   logHistory(inventoryId: string, who: string | null, changes: HistoryFieldChange[]): Promise<void>;
-  downloadAndImportImage(url: string): Promise<string>;
+  /** BELLO統合改修 master指示書 Phase B: also returns the generated list-view thumbnail's key (null if generation failed — never fatal, see lib/inventory/thumbnail.ts). */
+  downloadAndImportImage(url: string): Promise<{ storageKey: string; thumbnailKey: string | null }>;
   removeImage(path: string): Promise<void>;
 }
 

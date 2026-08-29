@@ -74,8 +74,12 @@ interface ImageMergeResult {
   imported: boolean;
   /** A newly-uploaded image's key — the caller removes this on a failed create/update (it was never actually attached to a saved record). */
   newStorageKey?: string;
+  /** The newly-generated thumbnail's key (Phase B), if any — removed alongside newStorageKey on a failed create/update, same reasoning. */
+  newThumbnailKey?: string | null;
   /** The image slot this replaced, if any — the caller removes this only AFTER a successful create/update, never before (see updateInventory's identical ordering in app/actions/inventory.ts: never delete an S3 object the DB might still end up pointing at if the write fails). */
   oldStorageKeyToRemove?: string;
+  /** The replaced slot's thumbnail (Phase B), if any — removed alongside oldStorageKeyToRemove, same ordering. */
+  oldThumbnailKeyToRemove?: string | null;
   warning?: string;
 }
 
@@ -113,8 +117,9 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
   }
 
   let newKey: string;
+  let newThumbnailKey: string | null;
   try {
-    newKey = await port.downloadAndImportImage(newSourceUrl);
+    ({ storageKey: newKey, thumbnailKey: newThumbnailKey } = await port.downloadAndImportImage(newSourceUrl));
   } catch (err) {
     return { images: existingImages, imported: false, warning: err instanceof Error ? err.message : "ZAICO画像の取り込みに失敗しました。" };
   }
@@ -126,6 +131,7 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
     isPrimary: true,
     sourceSystem: "ZAICO",
     sourceUrl: newSourceUrl,
+    thumbnailKey: newThumbnailKey,
   };
   const otherImages = existingImages.filter((i) => i !== currentZaicoImage);
   const otherNormal = otherImages.filter((i) => i.type === "NORMAL").map((i) => ({ ...i, isPrimary: false }));
@@ -136,7 +142,9 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
     images: [newRecord, ...renumberedNormal, ...damage],
     imported: true,
     newStorageKey: newKey,
+    newThumbnailKey,
     oldStorageKeyToRemove: currentZaicoImage?.storageKey,
+    oldThumbnailKeyToRemove: currentZaicoImage?.thumbnailKey,
   };
 }
 
@@ -274,6 +282,7 @@ export async function syncOneZaicoItem(
         sku = await port.generateSku();
       } catch (err) {
         if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
+        if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
         throw err;
       }
 
@@ -300,6 +309,7 @@ export async function syncOneZaicoItem(
         });
       } catch (err) {
         if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
+        if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
         throw err;
       }
 
@@ -343,6 +353,7 @@ export async function syncOneZaicoItem(
       });
     } catch (err) {
       if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
+      if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
       throw err;
     }
 
@@ -351,6 +362,7 @@ export async function syncOneZaicoItem(
     // removed. Best-effort: a failure here is logged inside
     // removeInventoryImage itself and never re-thrown.
     if (imageMerge.oldStorageKeyToRemove) await port.removeImage(imageMerge.oldStorageKeyToRemove);
+    if (imageMerge.oldThumbnailKeyToRemove) await port.removeImage(imageMerge.oldThumbnailKeyToRemove);
 
     await port.logHistory(existingRecord.id, who, changes);
 

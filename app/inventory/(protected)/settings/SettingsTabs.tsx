@@ -8,6 +8,7 @@ import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
 import { ZaicoSyncPanel } from "./ZaicoSyncPanel";
+import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -31,7 +32,7 @@ interface SettingsTabsProps {
  * ZAICO同期に整理」に合わせたタブ構成。
  */
 export function SettingsTabs({ categories, locations, units, customFields, readOnly, isAdmin, zaicoConnected, zaicoTokenSource }: SettingsTabsProps) {
-  const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico">("category");
+  const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images">("category");
 
   const tabClass = (active: boolean) =>
     `border-b-2 px-3 py-2 text-[13px] ${active ? "border-gray-900 font-bold text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`;
@@ -59,6 +60,11 @@ export function SettingsTabs({ categories, locations, units, customFields, readO
             ZAICO同期
           </button>
         )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("images")} className={tabClass(tab === "images")}>
+            画像最適化
+          </button>
+        )}
       </div>
 
       <div className="pt-4">
@@ -69,6 +75,7 @@ export function SettingsTabs({ categories, locations, units, customFields, readO
         {/* 一覧表示設定の列候補には無効化された追加項目を含めない(新規登録/編集/詳細検索から消えるのと同じ扱い)。 */}
         {tab === "columns" && <ListColumnSettings customFieldDefs={customFields.filter((f) => f.isActive)} />}
         {tab === "zaico" && isAdmin && <ZaicoSyncPanel zaicoConnected={zaicoConnected} zaicoTokenSource={zaicoTokenSource} />}
+        {tab === "images" && isAdmin && <ThumbnailBackfillPanel />}
       </div>
     </div>
   );

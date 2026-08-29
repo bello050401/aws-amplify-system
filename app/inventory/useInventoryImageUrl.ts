@@ -34,7 +34,20 @@ export function useInventoryImageUrl(storageKey: string | null): { url: string |
     setFailed(false);
 
     const attempt = (retriesLeft: number) => {
-      getUrl({ path: storageKey })
+      getUrl({
+        path: storageKey,
+        // BELLO統合改修 master指示書 Phase B優先度9 — every inventory/*
+        // object's key is a fresh UUID that's never overwritten in place
+        // (a new upload always gets a brand-new key), so the object at
+        // any given key is genuinely immutable and safe to cache
+        // "forever" in the browser. This response-header override covers
+        // every object regardless of when it was uploaded (new uploads
+        // also set the same Cache-Control at PutObject time — see
+        // lib/inventory/thumbnail.ts's INVENTORY_IMAGE_CACHE_CONTROL —
+        // this is what makes it effective for images uploaded before
+        // that existed, too).
+        options: { cacheControl: "public, max-age=31536000, immutable" },
+      })
         .then(({ url }) => {
           if (!cancelled) setUrl(url.toString());
         })

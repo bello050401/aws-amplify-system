@@ -207,6 +207,21 @@ const schema = a.schema({
     // ZAICO's", exactly the right default.
     sourceSystem: a.string(),
     sourceUrl: a.string(),
+    // BELLO統合改修 master指示書 Phase B(画像パフォーマンス): 一覧表示
+    // 専用の縮小版オブジェクトのS3キー。`storageKey`(常にオリジナル
+    // 解像度)とは別物 — 一覧のサムネイル表示だけがこちらを使い、詳細
+    // 画面/ギャラリー/編集画面のプレビューは引き続き`storageKey`(オリ
+    // ジナル)を使う(「詳細画面は高解像度のまま」という明示的な制約)。
+    // 生成できなかった/まだ生成していない画像はnull — lib/inventory/
+    // imageTypes.tsのeffectiveListThumbnailKeyがその場合`storageKey`
+    // (オリジナル)へフォールバックするので、既存の全レコード・生成に
+    // 失敗した画像も表示自体は壊れない(劣化するのは速度だけ)。生成は
+    // lib/inventory/thumbnail.ts(sharp)が、新規アップロード時
+    // (ZAICO同期・手動アップロードとも)にオリジナルと同時に一度だけ
+    // 行う — 既存画像への遡及生成はlib/inventory/thumbnailBackfill.ts
+    // が別途、ADMINが設定画面から任意のタイミングで走らせるバックフィ
+    // ルとして行う。
+    thumbnailKey: a.string(),
   }),
 
   // Category / Location masters below are intentionally flat (`parentId`

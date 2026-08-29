@@ -69,10 +69,14 @@ function renderReadOnlyCell(
   switch (key) {
     case "image":
       // "list" (3:2, object-contain) — see InventoryThumbnail's own
-      // comment. row.mainImageStorageKey is already the resolved top
-      // image (see lib/inventory/queries.ts's toListRow), never just
-      // "whichever image happens to sort first".
-      return <InventoryThumbnail storageKey={row.mainImageStorageKey} alt={row.name} size="list" />;
+      // comment. row.mainImageThumbnailKey (master指示書 Phase B) is the
+      // resolved top image's small thumbnail when one exists, falling
+      // back to the original (row.mainImageStorageKey) otherwise — see
+      // lib/inventory/queries.ts's toListRow / imageTypes.ts's
+      // effectiveListThumbnailKey. This is the ONLY place in the app that
+      // ever requests the thumbnail instead of the original; every other
+      // screen (detail/gallery/edit preview) still uses the original.
+      return <InventoryThumbnail storageKey={row.mainImageThumbnailKey} alt={row.name} size="list" loading="lazy" />;
     case "status": {
       const status = row.statusId ? statusesById[row.statusId] : undefined;
       return status ? (

@@ -2,24 +2,15 @@ import "server-only";
 import { cookies } from "next/headers";
 import { copy, remove, uploadData } from "aws-amplify/storage/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
+import { generateThumbnailFromBytes, INVENTORY_IMAGE_CACHE_CONTROL } from "./thumbnail";
+import { newInventoryImageKey } from "./imageKeys";
 
-/**
- * Only letters/digits, max 8 chars (covers jpg/jpeg/png/webp/heic/...).
- * Anything else (no extension, a weird one) is dropped rather than risked.
- */
-function safeExtension(path: string): string {
-  const match = /\.([a-zA-Z0-9]{1,8})$/.exec(path);
-  return match ? `.${match[1].toLowerCase()}` : "";
-}
-
-/**
- * Builds a new `inventory/*` key that is guaranteed ASCII-only — see the
- * root-cause note on copyInventoryImage below for why this matters
- * specifically for *copies*, not just tidiness.
- */
-export function newInventoryImageKey(sourcePathForExtension?: string): string {
-  return `inventory/${crypto.randomUUID()}${sourcePathForExtension ? safeExtension(sourcePathForExtension) : ""}`;
-}
+// Re-exported for every existing external caller (app/actions/inventory.ts,
+// zaicoSyncPorts.ts) — this function itself moved to imageKeys.ts (BELLO
+// 統合改修 master指示書 Phase B) purely to break a circular import with
+// thumbnail.ts (which also needs it, and which this file now imports from
+// for the line above) — see imageKeys.ts's file comment.
+export { newInventoryImageKey } from "./imageKeys";
 
 /**
  * Copies an `inventory/*` object to a fresh key under the same prefix and
@@ -106,8 +97,17 @@ const FETCH_TIMEOUT_MS = 15_000;
  * image's last-synced `sourceUrl` first and skips re-downloading when
  * unchanged; this function itself always downloads unconditionally when
  * called.
+ *
+ * BELLO統合改修 master指示書 Phase B(画像パフォーマンス優先度3: ZAICO
+ * 同期時のサムネイル生成): also generates the small list-view thumbnail
+ * right here, once, from the same downloaded bytes an original sync
+ * ever gets — never a second, separately-scheduled step, and never
+ * re-run on a later sync of the same unchanged image (the caller only
+ * calls this function at all when the ZAICO URL actually changed).
+ * `thumbnailKey` is null when generation failed — never fatal, see
+ * lib/inventory/thumbnail.ts's own comment.
  */
-export async function downloadAndImportInventoryImage(sourceUrl: string): Promise<string> {
+export async function downloadAndImportInventoryImage(sourceUrl: string): Promise<{ storageKey: string; thumbnailKey: string | null }> {
   let blob: Blob;
   try {
     const controller = new AbortController();
@@ -148,13 +148,24 @@ export async function downloadAndImportInventoryImage(sourceUrl: string): Promis
   try {
     await runWithAmplifyServerContext({
       nextServerContext: { cookies },
-      operation: (contextSpec) => uploadData(contextSpec, { path: destinationPath, data: blob }).result,
+      operation: (contextSpec) =>
+        uploadData(contextSpec, {
+          path: destinationPath,
+          data: blob,
+          options: { cacheControl: INVENTORY_IMAGE_CACHE_CONTROL },
+        }).result,
     });
-    return destinationPath;
   } catch (err) {
     console.error(`[downloadAndImportInventoryImage] upload failed: "${destinationPath}"`, err);
     throw new Error(`ZAICOの画像のアップロードに失敗しました(URL: ${sourceUrl})。`);
   }
+
+  // Resizes the SAME bytes just uploaded, already in memory — never a
+  // second fetch of the object this function just wrote (see
+  // thumbnail.ts's generateThumbnailFromBytes/generateInventoryThumbnail
+  // split for why the manual-upload path can't take this shortcut).
+  const thumbnailKey = await generateThumbnailFromBytes(Buffer.from(await blob.arrayBuffer()));
+  return { storageKey: destinationPath, thumbnailKey };
 }
 
 /**
