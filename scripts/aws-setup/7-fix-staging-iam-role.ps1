@@ -1,144 +1,197 @@
 <#
 .SYNOPSIS
-  Staging Amplify app deployment: preflight checks, IAM role fix (kept
-  from the previous version of this script, unchanged logic), build,
-  poll, readable failure diagnosis, and post-success HTTP checks - all
-  in one script. Never touches the existing production app/role/main.
+  Idempotent BELLO staging Amplify deployment runner. Re-run this same
+  script any number of times, in any state - it detects what AWS
+  already has and continues from there, never redoing settled work and
+  never touching production. Kept at this filename for backward
+  compatibility (this is what earlier rounds called an "IAM fix
+  script" - it has been redesigned into the general deployment
+  runner; see .DESCRIPTION).
 
 .DESCRIPTION
-  This script started as an IAM-only fix (the staging app's backend
-  deployment role could not be assumed - see section "IAM role" below,
-  now resolved and left in place, idempotent). It has since been
-  broadened into the general staging-deployment validate/build/diagnose
-  script, per the decision to consolidate all AWS-side steps the user
-  would otherwise have to run one at a time into a single script.
+  Design goal (this is a rewrite, not another patch on top of the
+  previous version): running this script should always be safe and
+  should always make forward progress from wherever AWS's real state
+  currently is, whether that is "nothing done yet", "a build is
+  already running", "a build just failed", or "everything already
+  succeeded". No state is ever re-created, re-started, or re-confirmed
+  once it is already correct - each state below checks before it acts.
 
-  ---- Most recent real root cause (do not re-diagnose this as IAM/
-       WEB_COMPUTE/CDK-bootstrap - confirmed resolved) ----------------
-  A real build log showed the backend actually reached CloudFormation
-  deployment (past IAM AssumeRole, past CDK bootstrap) and failed with:
-    AWS::SecretsManager::Secret ZaicoTokenSecretStack/ZaicoApiTokenSecret
-    CREATE_FAILED - "The operation failed because the secret
-    bello/zaico-api-token already exists." (HandlerErrorCode: AlreadyExists)
-  Every other CREATE_FAILED in that log (Cognito group roles, the SKU
-  counter table, etc.) was a secondary rollback effect of this one
-  failure, not an independent problem. The fix is in the application
-  code (amplify/backend.ts now imports this secret with
-  Secret.fromSecretNameV2 instead of creating it - see
-  docs/aws-test-environment.md section 10) - this script's job is to
-  validate that fix took effect (via the preflight secret/stack checks
-  below) and then actually run the build.
+  Fixed real-world facts this script is built from (do not treat as a
+  guess - repository, account, staging/production app IDs, region,
+  role names, and the ZAICO secret name/ARN are exactly as configured
+  below and as confirmed in prior runs):
+    Staging app   : d4hkkg7dty2du (bello-inventory-staging), us-west-2
+    Staging branch: claude/inventory-management-system-5vbvc7
+    Production app: d1uy61lbnqm8ae (main) - NEVER modified by this script
+    ZAICO secret  : bello/zaico-api-token
+                    arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/zaico-api-token-6B6S6P
 
-  Steps performed:
-    0. Identity / root check.
-    1. IAM role: read-only inspect the production role's policies,
-       create/update the staging-only role (BelloAmplifyStagingBackend
-       DeploymentRole) with a trust policy scoped ONLY to the staging
-       app's ARN, replicate permissions onto it, point the staging
-       app's iamServiceRoleArn at it. All of this is idempotent - safe
-       to re-run even though it already succeeded once.
-    2. Preflight (read-only; aborts BEFORE starting a build if anything
-       looks wrong): identity/account, region, staging app ID is not
-       the production app ID, branch is not "main", app platform is
-       WEB_COMPUTE, branch framework is "Next.js - SSR", staging role
-       ARN matches what step 1 just set, whether bello/zaico-api-token
-       exists in this region (list/describe only, never the value),
-       and a best-effort listing of this app's CloudFormation stacks
-       and their StackStatus (so a ROLLBACK_COMPLETE stack is visible
-       up front rather than discovered only after a failure - Amplify's
-       own pipeline-deploy/CDK deploy handles cleaning up a
-       ROLLBACK_COMPLETE stack on the next deploy automatically; this
-       script does not call cloudformation delete-stack itself).
-    3. Confirm the staging app's only branch is the target branch.
-    4. Start a new RELEASE build, poll every 15 seconds (up to ~20
-       minutes).
-    5. On FAILED: fetch every step's log as readable UTF-8 text (fixing
-       the previous byte-array/garbled-numbers display bug - see
-       ConvertTo-DecodedLogText below), save the full combined log to a
-       temp file for manual inspection, and automatically extract the
-       FIRST meaningful failure (not just the generic final "Build
-       failed" banner) with 30 lines of context before / 20 after. If
-       the extracted failure is the known IAM-propagation-delay pattern,
-       retry automatically (up to 3 attempts total); otherwise stop and
-       report exactly what failed.
-    6. On SUCCEED: HTTP-check the public URL and two more entry points
-       (/inventory, /inventory/login), and print the final job/app
-       state for the report.
+  ---- State machine (fixed order, each step below is one function) ----
+    STATE 1  AWS_AUTH                    - Test-AwsAuth
+    STATE 2  ENVIRONMENT_VALIDATE        - Test-StagingEnvironment
+    STATE 3  IAM_VALIDATE                - Test-StagingIamRole (+ repair)
+    STATE 4  SECRET_VALIDATE             - Test-ZaicoSecret
+    STATE 5  CLOUDFORMATION_STABILIZE    - Wait-CloudFormationStable
+    STATE 6  AMPLIFY_JOB_DISCOVER        - Get-ActiveAmplifyJob
+    STATE 7  AMPLIFY_JOB_ATTACH_OR_START - attach existing job, or start
+                                           one only after a second,
+                                           immediately-before-start
+                                           recheck (TOCTOU-safe), with
+                                           LimitExceededException treated
+                                           as a race to recover from, not
+                                           a failure
+    STATE 8  AMPLIFY_JOB_POLL            - Wait-AmplifyJob
+    STATE 9  AMPLIFY_STEP_VALIDATE       - BUILD/DEPLOY/VERIFY checked
+                                           individually - all three must
+                                           be SUCCEED, not just the
+                                           overall job status
+    STATE 10 FAILURE_DIAGNOSE            - readable log decode + first
+             or HTTP_VALIDATE              meaningful failure, OR (on
+                                           full success) HTTP checks
+                                           against a URL built from
+                                           get-app's own defaultDomain
+                                           field, never hardcoded
+    STATE 11 BACKEND_RESOURCE_VALIDATE   - read-only Cognito/AppSync/
+                                           DynamoDB/S3 presence checks,
+                                           plus the SSR Compute Role
+                                           (separate from the backend
+                                           deployment role) is validated/
+                                           configured here too
+    STATE 12 COMPLETE                    - final report; only reports
+                                           success if every hard gate
+                                           above actually passed
 
-  This script does NOT set up the Secrets Manager "compute role" used
-  by SSR runtime requests (a separate role from this backend deployment
-  role - see 2-apply-secrets-policy.ps1, and
-  docs/aws-test-environment.md section 10 for why CreateSecret was
-  removed from that policy).
+  Root cause history this design is meant to end (see
+  docs/aws-test-environment.md sections 8-11 for the individual
+  incidents): platform/framework mismatch, GitHub PAT input capture,
+  IAM trust policy scoping, a CDK-owned vs external Secret conflict, a
+  console encoding crash misread as "secret not found", and finally a
+  LimitExceededException from starting a job without checking for an
+  already-running one first. Each of those was fixed one at a time in
+  earlier commits; this rewrite's job is to make the whole run
+  idempotent so a NEW failure mode (which will eventually happen -
+  AWS/CDK/npm are moving targets) can be re-run against without
+  repeating any already-completed work or clobbering good state.
+
+  ---- Safety invariants (unchanged from every previous version) ----
+  - $ExistingProductionAppId (d1uy61lbnqm8ae) and $ExistingBackendRoleName
+    (BelloAmplifyBackendDeploymentRole) are read-only references. Any
+    AWS CLI call classified as "mutating" (see $MutatingAwsSubcommands)
+    is refused by Invoke-AwsCli if either identifier appears in its
+    arguments - this is enforced at the single call site every AWS CLI
+    invocation in this script goes through, not per-caller.
+  - Secret VALUE (SecretString/SecretBinary) is never requested, never
+    logged, never displayed - every secretsmanager call in this script
+    uses --query to fetch ARN/Name only.
+  - Presigned build-log URLs are fetched but never printed.
+  - No interactive prompts in the normal path (per the explicit
+    instruction that repeated "yes/skip/continue" prompts are exactly
+    the friction this rewrite exists to remove). The one exception is
+    BLOCKED_BY_USER for an expired/wrong AWS SSO session, which prints
+    exactly one command and stops - because that is the one thing only
+    the user's own browser session can do.
 
   This script is plain ASCII on purpose - see 1-discover.ps1's header
   comment for why (Windows PowerShell 5.1 + non-ASCII text without a
   BOM can corrupt string literals and produce ParserError).
 
 .PARAMETER StagingAppId
-  The dedicated staging Amplify app ID (default: d4hkkg7dty2du). This
-  script hard-refuses to ever target the existing production app ID
-  with a mutating call.
+  Default: d4hkkg7dty2du.
+
+.PARAMETER StagingAppName
+  Default: bello-inventory-staging (validated, not used for lookup).
 
 .PARAMETER BranchName
-  The staging branch (default: claude/inventory-management-system-5vbvc7).
-  Refuses to run if this is "main".
+  Default: claude/inventory-management-system-5vbvc7. Refuses to run
+  if this is "main".
 
 .PARAMETER Region
-  AWS region (default: us-west-2).
+  Default: us-west-2.
 
 .PARAMETER ProfileName
-  AWS CLI profile name (default: Bello).
+  Default: Bello.
 
 .PARAMETER ExistingBackendRoleName
-  The existing PRODUCTION backend deployment role to read (never
-  modified) as the basis for what permissions the staging role needs
-  (default: BelloAmplifyBackendDeploymentRole).
+  The PRODUCTION backend deployment role - read-only reference used
+  only to learn what permissions to replicate if the staging role ever
+  needs (re)creating. Default: BelloAmplifyBackendDeploymentRole.
 
 .PARAMETER NewStagingRoleName
-  Name of the staging-only backend deployment role (default:
-  BelloAmplifyStagingBackendDeploymentRole). Already created by a
-  previous run of this script; re-running is safe/idempotent.
+  The staging-only backend deployment role. Default:
+  BelloAmplifyStagingBackendDeploymentRole.
+
+.PARAMETER StagingComputeRoleName
+  The staging-only SSR Hosting Compute role (distinct from the backend
+  deployment role - see STATE 11). Default: BelloAmplifyStagingComputeRole.
 
 .PARAMETER SecretName
-  The ZAICO API token secret name to check for during preflight
-  (default: bello/zaico-api-token). This script only ever lists/
-  describes it - never reads or displays its value.
+  Default: bello/zaico-api-token.
+
+.PARAMETER CfnStabilizeMaxMinutes
+  Max time to wait in STATE 5 for CloudFormation stacks to reach a
+  terminal status before giving up. Default: 25.
+
+.PARAMETER JobPollMaxMinutes
+  Max time to wait in STATE 8 for the Amplify job to reach a terminal
+  status. Default: 30.
 
 .PARAMETER Force
-  Skip the confirmation prompt before making IAM changes (step 1 only -
-  the build itself always proceeds automatically once preflight passes).
+  Deprecated / no-op, kept only so an old invocation with -Force does
+  not error out. This runner no longer has any interactive prompt to
+  skip in the normal path.
 
 .EXAMPLE
   .\7-fix-staging-iam-role.ps1
 #>
 param(
   [string]$StagingAppId = "d4hkkg7dty2du",
+  [string]$StagingAppName = "bello-inventory-staging",
   [string]$BranchName = "claude/inventory-management-system-5vbvc7",
   [string]$Region = "us-west-2",
   [string]$ProfileName = "Bello",
   [string]$ExistingBackendRoleName = "BelloAmplifyBackendDeploymentRole",
   [string]$NewStagingRoleName = "BelloAmplifyStagingBackendDeploymentRole",
+  [string]$StagingComputeRoleName = "BelloAmplifyStagingComputeRole",
   [string]$SecretName = "bello/zaico-api-token",
+  [int]$CfnStabilizeMaxMinutes = 25,
+  [int]$JobPollMaxMinutes = 30,
   [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
 
-# Defense in depth: this script must never operate against the existing
-# production-hosting app or its role, under any circumstance.
+# ---- Fixed identifiers - see header comment. Never accepted as parameters
+# for anything that could target them mutably. ----------------------------
 $ExistingProductionAppId = "d1uy61lbnqm8ae"
+$ExpectedAccountId = "203918843421"
 
-# Temp files created during this run (build logs) - cleaned up at the very
-# end of the script regardless of how it exits. IAM policy temp files are
-# handled separately, closer to where they are created, since those must
-# not persist even across a single failed AWS call.
+# AWS CLI subcommands this script treats as mutating - Invoke-AwsCli refuses
+# any call in this list whose arguments contain the production app ID or
+# the production role name, regardless of which function issued it. Purely
+# read-only calls (get-role, list-attached-role-policies, get-app, etc.)
+# against the production app/role are allowed and expected - that is how
+# this script learns what to replicate without ever touching them.
+$MutatingAwsSubcommands = @(
+  "update-app", "delete-app", "update-branch", "delete-branch",
+  "start-job", "stop-job", "create-branch", "delete-stack",
+  "update-role", "delete-role", "put-role-policy", "attach-role-policy",
+  "detach-role-policy", "create-role", "update-assume-role-policy",
+  "put-secret-value", "create-secret", "delete-secret", "tag-role", "untag-role"
+)
+
 $script:tempLogFiles = @()
 
 function Write-Section {
   param([string]$Title)
   Write-Host ""
-  Write-Host ("==== " + $Title + " ====") -ForegroundColor Cyan
+  Write-Host ("---- " + $Title + " ----") -ForegroundColor Cyan
+}
+
+function Write-StateBanner {
+  param([string]$Name)
+  Write-Host ""
+  Write-Host ("======== " + $Name + " ========") -ForegroundColor Magenta
 }
 
 function Remove-TempLogFiles {
@@ -148,51 +201,32 @@ function Remove-TempLogFiles {
   $script:tempLogFiles = @()
 }
 
-function New-TempJsonFile {
-  # Root cause of "MalformedPolicyDocument: This policy contains invalid
-  # Json" (seen when this script previously passed policy JSON directly as
-  # an --assume-role-policy-document / --policy-document command-line
-  # argument): ConvertTo-Json produces valid JSON on the PowerShell side, but
-  # a JSON document full of embedded double quotes/braces/colons is exactly
-  # the kind of string Windows native-process argument passing
-  # (CommandLineToArgvW, which PowerShell's `& external @array` splatting
-  # ultimately goes through) is known to mangle in transit to aws.exe - the
-  # re-quoting/escaping rules involved do not round-trip a large JSON blob
-  # reliably. This is exactly why AWS's own CLI documentation recommends
-  # file:// for policy documents on Windows rather than an inline JSON
-  # string.
-  #
-  # Fix: write the JSON to a temp file and let the caller pass
-  # file://<path> instead. Windows PowerShell 5.1's built-in
-  # -Encoding utf8 (Out-File/Set-Content) writes a UTF-8 BOM, which is also
-  # not guaranteed safe for aws.exe to parse - so this writes raw UTF-8
-  # without a BOM via [System.IO.File]::WriteAllText with an explicit
-  # UTF8Encoding($false). The object is also round-tripped through
-  # ConvertFrom-Json before being written, so a malformed object is caught
-  # immediately rather than surfacing later as an opaque AWS-side error.
-  param(
-    [Parameter(Mandatory = $true)]$Object,
-    [string]$Prefix = "bello-iam-policy"
-  )
-  $json = $Object | ConvertTo-Json -Depth 20
-  $null = $json | ConvertFrom-Json
-  $tempPath = Join-Path $env:TEMP ($Prefix + "-" + [Guid]::NewGuid().ToString("N") + ".json")
-  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-  [System.IO.File]::WriteAllText($tempPath, $json, $utf8NoBom)
-  return $tempPath
+function Stop-Runner {
+  param([int]$Code = 1)
+  Remove-TempLogFiles
+  exit $Code
 }
 
+function Show-BlockedByUser {
+  # The ONLY interactive stop in this script - an AWS SSO session only the
+  # user's own browser can renew. Exactly one command, no other guidance.
+  param([string]$Reason)
+  Write-Host ""
+  Write-Host "BLOCKED_BY_USER" -ForegroundColor Red
+  Write-Host ("Reason: " + $Reason) -ForegroundColor Red
+  Write-Host ""
+  Write-Host ("aws sso login --profile " + $ProfileName) -ForegroundColor Yellow
+  Write-Host ""
+  Write-Host "Re-run this same script after that command succeeds - it will pick up exactly where it left off."
+  Stop-Runner -Code 2
+}
+
+# ============================================================================
+# Log decoding - fixes the real "68 101 112 ..." decimal-byte-list bug seen
+# in earlier runs (Invoke-WebRequest -UseBasicParsing in Windows PowerShell
+# 5.1 returns .Content as byte[] for many presigned log URLs).
+# ============================================================================
 function ConvertTo-DecodedLogText {
-  # Root cause of the previous "50 48 50 54 45 ..." byte-list log output:
-  # Invoke-WebRequest -UseBasicParsing in Windows PowerShell 5.1 returns
-  # .Content as a raw byte[] (not a string) whenever the response is not
-  # recognized as text - which is common for presigned build-log URLs
-  # served without an explicit text content-type. Piping a byte[] into
-  # Write-Host prints each byte as a decimal number, which is exactly the
-  # garbled numeric output that was seen. This also transparently handles
-  # gzip-compressed content (detected by its magic bytes 0x1f 0x8b) in case
-  # a log URL is ever served pre-compressed without transparent
-  # decompression by Invoke-WebRequest.
   param($RawContent)
   if ($RawContent -is [string]) {
     return $RawContent
@@ -213,33 +247,78 @@ function ConvertTo-DecodedLogText {
   return [System.Text.Encoding]::UTF8.GetString($bytes)
 }
 
+function Test-LogDecoder {
+  # Runs for real, every time this script starts - a broken decoder would
+  # otherwise show up only when a build actually fails, which is exactly
+  # the moment readable diagnostics matter most. Not a "wrote code, assume
+  # it works" check: this actually calls ConvertTo-DecodedLogText three
+  # times with real byte[] input (including gzip) and compares output.
+  $failures = @()
+
+  $t1Text = "plain ascii build log line"
+  $t1Bytes = [System.Text.Encoding]::UTF8.GetBytes($t1Text)
+  $t1Decoded = ConvertTo-DecodedLogText -RawContent $t1Bytes
+  if ($t1Decoded -ne $t1Text) { $failures += "Test1 (ASCII byte[]) mismatch" }
+
+  $t2Text = "build failed: could not find secret [ZAICO API TOKEN test]"
+  $t2Bytes = [System.Text.Encoding]::UTF8.GetBytes($t2Text)
+  $t2Decoded = ConvertTo-DecodedLogText -RawContent $t2Bytes
+  if ($t2Decoded -ne $t2Text) { $failures += "Test2 (UTF8 byte[] with bracketed text) mismatch" }
+
+  $t3Text = "gzip roundtrip check line"
+  $t3PlainBytes = [System.Text.Encoding]::UTF8.GetBytes($t3Text)
+  $t3Ms = New-Object System.IO.MemoryStream
+  $t3Gz = New-Object System.IO.Compression.GZipStream($t3Ms, [System.IO.Compression.CompressionMode]::Compress, $true)
+  $t3Gz.Write($t3PlainBytes, 0, $t3PlainBytes.Length)
+  $t3Gz.Dispose()
+  $t3GzipBytes = $t3Ms.ToArray()
+  $t3Ms.Dispose()
+  $t3Decoded = ConvertTo-DecodedLogText -RawContent $t3GzipBytes
+  if ($t3Decoded -ne $t3Text) { $failures += "Test3 (gzip byte[]) mismatch" }
+
+  if ($failures.Count -gt 0) {
+    Write-Host "[SELF-TEST FAILED] ConvertTo-DecodedLogText:" -ForegroundColor Red
+    foreach ($f in $failures) { Write-Host ("  - " + $f) -ForegroundColor Red }
+    return $false
+  }
+  Write-Host "Log decoder self-test: 3/3 passed (ASCII byte[], UTF8 byte[], gzip byte[])." -ForegroundColor Green
+  return $true
+}
+
 function Get-StepLogText {
-  # Fetches one build step's log via its (presigned, time-limited) logUrl
-  # and returns readable UTF-8 text. The URL itself is not printed - it is
-  # a presigned URL that grants access on its own, so it is handled like a
-  # secret-adjacent value even though it is not the ZAICO/GitHub secret.
+  # The URL itself is never printed - it is a presigned, time-limited URL
+  # that grants access on its own.
   param([string]$LogUrl)
   $response = Invoke-WebRequest -Uri $LogUrl -UseBasicParsing
   return ConvertTo-DecodedLogText -RawContent $response.Content
 }
 
 function Find-FirstMeaningfulFailure {
-  # Scans the full build log TOP-DOWN for the FIRST line matching a real
-  # failure marker, and returns that line plus context - the generic final
-  # "Build failed" banner Amplify always prints is deliberately excluded
-  # from the marker list, since it is a summary, never the actual cause.
+  # Scans TOP-DOWN for the FIRST line matching a real failure marker.
+  # Deliberately EXCLUDED from the marker list: "Build failed", "Command
+  # failed with exit code", the Amplify SSR-framework troubleshooting URL,
+  # and bare "NoStack" - these are generic/secondary and were misreported
+  # as root causes in earlier rounds. NoStack in particular is a known
+  # secondary artifact of a CloudFormation rollback, not a cause on its own.
   param([string]$FullLogText)
   $lines = $FullLogText -split "`r?`n"
   $markers = @(
-    "CREATE_FAILED",
-    "UPDATE_FAILED",
-    "DELETE_FAILED",
+    "CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED",
     "HandlerErrorCode",
     "\[ERROR\]",
     "AlreadyExists",
     "AccessDenied",
     "ResourceNotFoundException",
-    "Unable to assume specified IAM Role"
+    "ValidationException",
+    "MalformedPolicyDocument",
+    "LimitExceededException",
+    "BootstrapDetectionError",
+    "Unable to assume specified IAM Role",
+    "TypeError",
+    "Module not found",
+    "Failed to compile",
+    "npm ERR",
+    "Command failed with exit code [1-9]"
   )
   $pattern = [string]::Join("|", $markers)
   for ($i = 0; $i -lt $lines.Length; $i++) {
@@ -262,63 +341,77 @@ function Find-FirstMeaningfulFailure {
 }
 
 function Get-AwsErrorKind {
-  # Root cause of a real false negative seen in this script: describe-secret
-  # DID find bello/zaico-api-token, but the AWS CLI (Python) then hit
-  #   [ERROR]: 'cp932' codec can't encode character U+2014 in position 15:
-  #   illegal multibyte sequence
-  # while trying to write the secret's Description (which contained a
-  # Unicode em dash, U+2014) to a Windows PowerShell 5.1 console using the
-  # cp932 codepage - an encoding failure while PRINTING output that has
-  # nothing to do with whether the secret exists. That crash produced a
-  # non-zero exit code, which the previous version of this script's simple
-  # "Ok ? found : not-found" check misread as ResourceNotFoundException.
-  #
-  # Fix (see the two callers below): stop requesting/printing fields that
-  # can contain arbitrary Unicode (Description, Tags, etc.) via --query, so
-  # this specific crash cannot happen again. This classifier is kept as a
-  # second, independent layer of defense - it inspects the actual error
-  # text and only ever reports "not-found" for a real
-  # ResourceNotFoundException, distinguishing it from access-denied,
-  # credential, and encoding-class failures, none of which mean "does not
-  # exist".
+  # Root cause of a real false negative this classifier exists to prevent:
+  # describe-secret found the secret, then AWS CLI crashed trying to print
+  # its Description (containing U+2014) on a cp932 Windows console. The
+  # non-zero exit code from THAT crash was misread as "secret not found" by
+  # an earlier version of this script. Only a real ResourceNotFoundException
+  # means "not found" - everything else here is a distinct, separately
+  # reported problem.
   param([string]$RawText)
   if ($RawText -match "ResourceNotFoundException") { return "not-found" }
   if ($RawText -match "AccessDenied") { return "access-denied" }
-  if ($RawText -match "CredentialsProviderError|could not load credentials|ExpiredToken|InvalidClientTokenId|UnrecognizedClientException") { return "credentials" }
+  if ($RawText -match "CredentialsProviderError|could not load credentials|ExpiredToken|InvalidClientTokenId|UnrecognizedClientException|The security token included in the request is expired") { return "credentials" }
   if ($RawText -match "codec can't encode|UnicodeEncodeError|illegal multibyte sequence|UnicodeDecodeError") { return "encoding" }
+  if ($RawText -match "LimitExceededException") { return "limit-exceeded" }
   return "other"
 }
 
 function Find-FirstStackFailureEvent {
-  # CloudFormation's describe-stack-events returns events newest-first, so
-  # "the first meaningful failure" (chronologically) is found by reversing
-  # to oldest-first and taking the first *_FAILED status - not the last one
-  # in the raw API response, which would be the earliest event, not the
-  # root cause.
+  # CloudFormation returns stack events newest-first; reverse to
+  # oldest-first so "first" here means chronologically first, i.e. root
+  # cause, not just the last event in the raw API response.
   param([array]$Events)
   $chronological = @($Events)
   [array]::Reverse($chronological)
   foreach ($ev in $chronological) {
     if ($ev.ResourceStatus -match "_FAILED$") {
       return @{
-        Found              = $true
-        LogicalResourceId  = $ev.LogicalResourceId
-        ResourceType       = $ev.ResourceType
-        ResourceStatus     = $ev.ResourceStatus
+        Found                = $true
+        LogicalResourceId    = $ev.LogicalResourceId
+        ResourceType         = $ev.ResourceType
+        ResourceStatus       = $ev.ResourceStatus
         ResourceStatusReason = $ev.ResourceStatusReason
-        Timestamp          = $ev.Timestamp
+        Timestamp            = $ev.Timestamp
       }
     }
   }
   return @{ Found = $false }
 }
 
+function New-TempJsonFile {
+  # See docs/aws-test-environment.md section 9e for the MalformedPolicyDocument
+  # incident this exists to prevent - a JSON policy document passed directly
+  # as a Windows native-process command-line argument can be mangled in
+  # transit (CommandLineToArgvW re-quoting). Round-trips through
+  # ConvertFrom-Json before writing (catches a malformed object immediately)
+  # and writes UTF-8 WITHOUT a BOM ([System.IO.File]::WriteAllText with an
+  # explicit UTF8Encoding($false) - Windows PowerShell 5.1's -Encoding utf8
+  # adds a BOM, which is also not guaranteed safe for aws.exe to parse).
+  param(
+    [Parameter(Mandatory = $true)]$Object,
+    [string]$Prefix = "bello-iam-policy"
+  )
+  $json = $Object | ConvertTo-Json -Depth 20
+  $null = $json | ConvertFrom-Json
+  $tempPath = Join-Path $env:TEMP ($Prefix + "-" + [Guid]::NewGuid().ToString("N") + ".json")
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($tempPath, $json, $utf8NoBom)
+  return $tempPath
+}
+
 function Invoke-AwsCli {
   param([string[]]$ArgList)
-  if ($ArgList -contains $ExistingProductionAppId) {
-    Write-Host "[SAFETY ABORT] Refusing an AWS CLI call that references the existing production app ID." -ForegroundColor Red
-    Remove-TempLogFiles
-    exit 1
+  $subcommand = $(if ($ArgList.Count -ge 2) { $ArgList[1] } else { "" })
+  if ($MutatingAwsSubcommands -contains $subcommand) {
+    if ($ArgList -contains $ExistingProductionAppId) {
+      Write-Host "[SAFETY ABORT] Refusing a mutating AWS CLI call that references the existing production app ID." -ForegroundColor Red
+      Stop-Runner
+    }
+    if ($ArgList -contains $ExistingBackendRoleName) {
+      Write-Host "[SAFETY ABORT] Refusing a mutating AWS CLI call that references the existing production IAM role." -ForegroundColor Red
+      Stop-Runner
+    }
   }
   $previousEap = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
@@ -332,127 +425,180 @@ function Invoke-AwsCli {
   return @{ Ok = ($exitCode -eq 0); Raw = $rawText }
 }
 
-Write-Host "BELLO Amplify - staging deployment validate/build/diagnose (existing production app/role are never touched)" -ForegroundColor Green
-
-if ($BranchName -eq "main") {
-  Write-Host "Refusing to use 'main' as the staging branch name. Stopping." -ForegroundColor Red
-  exit 1
-}
-if ($StagingAppId -eq $ExistingProductionAppId) {
-  Write-Host "[SAFETY ABORT] -StagingAppId must not be the existing production app ID." -ForegroundColor Red
-  exit 1
-}
-if ($NewStagingRoleName -eq $ExistingBackendRoleName) {
-  Write-Host "[SAFETY ABORT] The new staging role name must differ from the existing production role name." -ForegroundColor Red
-  exit 1
-}
-
-# ---- 0. Identity / root check ----------------------------------------------
-$identityResult = Invoke-AwsCli -ArgList @("sts", "get-caller-identity", "--profile", $ProfileName, "--region", $Region, "--output", "json")
-if (-not $identityResult.Ok) {
-  Write-Host "Failed to get AWS identity. Run 1-discover.ps1 first." -ForegroundColor Red
-  Write-Host $identityResult.Raw
-  exit 1
-}
-$identity = $identityResult.Raw | ConvertFrom-Json
-Write-Host ("Identity: " + $identity.Arn)
-if ($identity.Arn -match ":root$") {
-  Write-Host "Do not run this with root credentials." -ForegroundColor Red
-  exit 1
-}
-$accountId = $identity.Account
-Write-Host ("Account : " + $accountId)
-
 # ============================================================================
-# STEP 1: IAM role fix (unchanged from the previous version of this script -
-# this already worked; kept idempotent, not re-diagnosed as the problem)
+# STATE 1: AWS_AUTH
 # ============================================================================
-Write-Section "1. Reading the existing production role's policies (read-only, not modified)"
-$managedPolicyArns = @()
-$inlinePolicies = @{}
-
-$attachedResult = Invoke-AwsCli -ArgList @("iam", "list-attached-role-policies", "--role-name", $ExistingBackendRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-if ($attachedResult.Ok) {
-  $attached = ($attachedResult.Raw | ConvertFrom-Json).AttachedPolicies
-  foreach ($p in $attached) {
-    Write-Host ("  Managed policy: " + $p.PolicyName + " (" + $p.PolicyArn + ")")
-    $managedPolicyArns += $p.PolicyArn
+function Test-AwsAuth {
+  Write-StateBanner "STATE 1: AWS_AUTH"
+  $identityResult = Invoke-AwsCli -ArgList @("sts", "get-caller-identity", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if (-not $identityResult.Ok) {
+    $kind = Get-AwsErrorKind -RawText $identityResult.Raw
+    if ($kind -eq "credentials") {
+      Show-BlockedByUser -Reason "AWS SSO session for profile '$ProfileName' is expired or not logged in."
+    }
+    Write-Host "Could not get AWS identity for an unrecognized reason:" -ForegroundColor Red
+    Write-Host $identityResult.Raw
+    Stop-Runner
   }
-} else {
-  Write-Host "  Could not list attached managed policies (non-fatal, continuing):" -ForegroundColor Yellow
-  Write-Host $attachedResult.Raw
+  $identity = $identityResult.Raw | ConvertFrom-Json
+  Write-Host ("Identity: " + $identity.Arn)
+  if ($identity.Arn -match ":root$") {
+    Write-Host "Do not run this with root credentials." -ForegroundColor Red
+    Stop-Runner
+  }
+  if ($identity.Account -ne $ExpectedAccountId) {
+    Write-Host ("Wrong AWS account: got " + $identity.Account + ", expected " + $ExpectedAccountId + ". Stopping.") -ForegroundColor Red
+    Stop-Runner
+  }
+  Write-Host ("Account: " + $identity.Account + " - OK") -ForegroundColor Green
+  return $identity
 }
 
-$inlineListResult = Invoke-AwsCli -ArgList @("iam", "list-role-policies", "--role-name", $ExistingBackendRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-if ($inlineListResult.Ok) {
-  $inlineNames = ($inlineListResult.Raw | ConvertFrom-Json).PolicyNames
-  foreach ($name in $inlineNames) {
-    $getPolicyResult = Invoke-AwsCli -ArgList @("iam", "get-role-policy", "--role-name", $ExistingBackendRoleName, "--policy-name", $name, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-    if ($getPolicyResult.Ok) {
-      $doc = ($getPolicyResult.Raw | ConvertFrom-Json).PolicyDocument
-      $inlinePolicies[$name] = $doc
-      Write-Host ("  Inline policy : " + $name)
+# ============================================================================
+# STATE 2: ENVIRONMENT_VALIDATE
+# ============================================================================
+function Test-StagingEnvironment {
+  Write-StateBanner "STATE 2: ENVIRONMENT_VALIDATE"
+  if ($BranchName -eq "main") {
+    Write-Host "Refusing to use 'main' as the staging branch name. Stopping." -ForegroundColor Red
+    Stop-Runner
+  }
+  if ($StagingAppId -eq $ExistingProductionAppId) {
+    Write-Host "[SAFETY ABORT] -StagingAppId must not be the existing production app ID." -ForegroundColor Red
+    Stop-Runner
+  }
+  if ($NewStagingRoleName -eq $ExistingBackendRoleName) {
+    Write-Host "[SAFETY ABORT] The staging role name must differ from the production role name." -ForegroundColor Red
+    Stop-Runner
+  }
+
+  $appResult = Invoke-AwsCli -ArgList @("amplify", "get-app", "--app-id", $StagingAppId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if (-not $appResult.Ok) {
+    Write-Host "get-app failed:" -ForegroundColor Red
+    Write-Host $appResult.Raw
+    Stop-Runner
+  }
+  $app = ($appResult.Raw | ConvertFrom-Json).app
+  Write-Host ("App name          : " + $app.name)
+  Write-Host ("Platform          : " + $app.platform)
+  Write-Host ("defaultDomain     : " + $app.defaultDomain)
+  Write-Host ("iamServiceRoleArn : " + $(if ($app.iamServiceRoleArn) { $app.iamServiceRoleArn } else { "(none)" }))
+
+  $problems = @()
+  if ($app.name -ne $StagingAppName) { $problems += "App name is '" + $app.name + "', expected '" + $StagingAppName + "'." }
+  if ($app.platform -ne "WEB_COMPUTE") { $problems += "Platform is '" + $app.platform + "', expected WEB_COMPUTE." }
+
+  $branchResult = Invoke-AwsCli -ArgList @("amplify", "get-branch", "--app-id", $StagingAppId, "--branch-name", $BranchName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if (-not $branchResult.Ok) {
+    Write-Host "get-branch failed:" -ForegroundColor Red
+    Write-Host $branchResult.Raw
+    Stop-Runner
+  }
+  $branch = ($branchResult.Raw | ConvertFrom-Json).branch
+  Write-Host ("Branch framework  : " + $(if ($branch.framework) { $branch.framework } else { "(null)" }))
+  if ($branch.framework -ne "Next.js - SSR") { $problems += "Branch framework is '" + $branch.framework + "', expected 'Next.js - SSR'." }
+
+  $branchesResult = Invoke-AwsCli -ArgList @("amplify", "list-branches", "--app-id", $StagingAppId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($branchesResult.Ok) {
+    $branches = ($branchesResult.Raw | ConvertFrom-Json).branches
+    $hasMain = $branches | Where-Object { $_.branchName -eq "main" }
+    $unexpectedBranches = $branches | Where-Object { $_.branchName -ne $BranchName }
+    if ($hasMain) {
+      $problems += "This staging app unexpectedly has a 'main' branch connected - refusing to proceed."
+    } elseif ($unexpectedBranches) {
+      $problems += "Staging app has a branch other than '" + $BranchName + "'."
     } else {
-      Write-Host ("  Could not read inline policy '" + $name + "' (non-fatal, skipping):") -ForegroundColor Yellow
-      Write-Host $getPolicyResult.Raw
+      Write-Host ("Branches on app   : only '" + $BranchName + "' - OK") -ForegroundColor Green
     }
+  } else {
+    $problems += "Could not list branches to confirm no 'main' branch is present."
   }
-} else {
-  Write-Host "  Could not list inline policies (non-fatal, continuing):" -ForegroundColor Yellow
-  Write-Host $inlineListResult.Raw
-}
 
-Write-Section "2. Creating/updating the staging-only backend deployment role"
-$stagingAppArn = "arn:aws:amplify:" + $Region + ":" + $accountId + ":apps/" + $StagingAppId + "/branches/*"
-$trustPolicyObj = @{
-  Version   = "2012-10-17"
-  Statement = @(
-    @{
-      Effect    = "Allow"
-      Principal = @{
-        Service = @("amplify.amazonaws.com", "amplifybackend.amazonaws.com")
-      }
-      Action    = "sts:AssumeRole"
-      Condition = @{
-        StringEquals = @{ "aws:SourceAccount" = $accountId }
-        ArnLike      = @{ "aws:SourceArn" = $stagingAppArn }
-      }
-    }
-  )
-}
-Write-Host ("  Role name         : " + $NewStagingRoleName)
-Write-Host ("  Trust policy scope: " + $stagingAppArn + " ONLY (production app is not in this trust policy)")
-
-$trustPolicyPath = New-TempJsonFile -Object $trustPolicyObj -Prefix "bello-staging-trust-policy"
-try {
-  if (-not $Force) {
+  if ($problems.Count -gt 0) {
     Write-Host ""
-    Write-Host "About to create/update this IAM role and point the staging app at it (skip if already done)." -ForegroundColor Cyan
-    $confirmation = Read-Host "Continue? (type yes to continue, or 'skip' to leave IAM alone and go straight to preflight/build)"
-    if ($confirmation -eq "skip") {
-      Write-Host "Skipping IAM role creation/update - assuming it is already correctly configured." -ForegroundColor Yellow
-      $skipIamStep = $true
-    } elseif ($confirmation -ne "yes") {
-      Write-Host "Cancelled. No changes were made." -ForegroundColor Yellow
-      exit 0
+    Write-Host "ENVIRONMENT_VALIDATE failed:" -ForegroundColor Red
+    foreach ($p in $problems) { Write-Host ("  - " + $p) -ForegroundColor Red }
+    Stop-Runner
+  }
+  Write-Host "Environment matches expected staging configuration - OK" -ForegroundColor Green
+  return @{ App = $app; Branch = $branch }
+}
+
+# ============================================================================
+# STATE 3: IAM_VALIDATE (repairs only when actually needed - no prompt)
+# ============================================================================
+function Test-StagingIamRole {
+  param($App, [string]$AccountId)
+  Write-StateBanner "STATE 3: IAM_VALIDATE"
+
+  $roleResult = Invoke-AwsCli -ArgList @("iam", "get-role", "--role-name", $NewStagingRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  $needsRoleCreate = -not $roleResult.Ok
+  $needsTrustFix = $false
+  $roleArn = $null
+
+  if (-not $needsRoleCreate) {
+    $role = ($roleResult.Raw | ConvertFrom-Json).Role
+    $roleArn = $role.Arn
+    $trustJson = $role.AssumeRolePolicyDocument | ConvertTo-Json -Depth 10 -Compress
+    $scopedToStaging = $trustJson -match [regex]::Escape($StagingAppId)
+    $mentionsProduction = $trustJson -match [regex]::Escape($ExistingProductionAppId)
+    if (-not $scopedToStaging -or $mentionsProduction) {
+      $needsTrustFix = $true
     }
   }
 
-  if (-not $skipIamStep) {
-    $existingStagingRoleResult = Invoke-AwsCli -ArgList @("iam", "get-role", "--role-name", $NewStagingRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-    if ($existingStagingRoleResult.Ok) {
-      Write-Host "  Role already exists (re-run) - updating its trust policy in place." -ForegroundColor Yellow
-      $updateTrustResult = Invoke-AwsCli -ArgList @("iam", "update-assume-role-policy", "--role-name", $NewStagingRoleName, "--policy-document", ("file://" + $trustPolicyPath), "--profile", $ProfileName, "--region", $Region)
-      if (-not $updateTrustResult.Ok) {
-        Write-Host "update-assume-role-policy failed:" -ForegroundColor Red
-        Write-Host $updateTrustResult.Raw
-        exit 1
+  $needsAppLinkFix = $false
+  if (-not $needsRoleCreate -and -not $needsTrustFix) {
+    if ($App.iamServiceRoleArn -ne $roleArn) { $needsAppLinkFix = $true }
+  }
+
+  if (-not $needsRoleCreate -and -not $needsTrustFix -and -not $needsAppLinkFix) {
+    Write-Host "IAM already configured - OK" -ForegroundColor Green
+    Write-Host ("  Role: " + $roleArn)
+    return $roleArn
+  }
+
+  Write-Host "IAM needs repair - proceeding automatically (scoped to the staging role/app only, never production):" -ForegroundColor Yellow
+  if ($needsRoleCreate) { Write-Host "  - staging role does not exist yet, will create it" }
+  if ($needsTrustFix) { Write-Host "  - trust policy is missing/wrong, will update it" }
+  if ($needsAppLinkFix) { Write-Host "  - app's iamServiceRoleArn does not point at the staging role, will fix" }
+
+  # Read (never modify) the production role's policies, purely to learn
+  # what permissions to replicate onto the staging role.
+  $managedPolicyArns = @()
+  $inlinePolicies = @{}
+  $attachedResult = Invoke-AwsCli -ArgList @("iam", "list-attached-role-policies", "--role-name", $ExistingBackendRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($attachedResult.Ok) {
+    foreach ($p in ($attachedResult.Raw | ConvertFrom-Json).AttachedPolicies) { $managedPolicyArns += $p.PolicyArn }
+  }
+  $inlineListResult = Invoke-AwsCli -ArgList @("iam", "list-role-policies", "--role-name", $ExistingBackendRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($inlineListResult.Ok) {
+    foreach ($name in ($inlineListResult.Raw | ConvertFrom-Json).PolicyNames) {
+      $getPolicyResult = Invoke-AwsCli -ArgList @("iam", "get-role-policy", "--role-name", $ExistingBackendRoleName, "--policy-name", $name, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+      if ($getPolicyResult.Ok) { $inlinePolicies[$name] = ($getPolicyResult.Raw | ConvertFrom-Json).PolicyDocument }
+    }
+  }
+
+  $stagingAppArn = "arn:aws:amplify:" + $Region + ":" + $AccountId + ":apps/" + $StagingAppId + "/branches/*"
+  $trustPolicyObj = @{
+    Version   = "2012-10-17"
+    Statement = @(
+      @{
+        Effect    = "Allow"
+        Principal = @{ Service = @("amplify.amazonaws.com", "amplifybackend.amazonaws.com") }
+        Action    = "sts:AssumeRole"
+        Condition = @{
+          StringEquals = @{ "aws:SourceAccount" = $AccountId }
+          ArnLike      = @{ "aws:SourceArn" = $stagingAppArn }
+        }
       }
-      $newRoleArn = ($existingStagingRoleResult.Raw | ConvertFrom-Json).Role.Arn
-    } else {
+    )
+  }
+  $trustPolicyPath = New-TempJsonFile -Object $trustPolicyObj -Prefix "bello-staging-trust-policy"
+  try {
+    if ($needsRoleCreate) {
       $createRoleResult = Invoke-AwsCli -ArgList @(
-        "iam", "create-role",
-        "--role-name", $NewStagingRoleName,
+        "iam", "create-role", "--role-name", $NewStagingRoleName,
         "--assume-role-policy-document", ("file://" + $trustPolicyPath),
         "--description", "Amplify backend deployment role for the dedicated staging app only - never used by production.",
         "--profile", $ProfileName, "--region", $Region, "--output", "json"
@@ -460,151 +606,97 @@ try {
       if (-not $createRoleResult.Ok) {
         Write-Host "create-role failed:" -ForegroundColor Red
         Write-Host $createRoleResult.Raw
-        exit 1
+        Stop-Runner
       }
-      $newRoleArn = ($createRoleResult.Raw | ConvertFrom-Json).Role.Arn
-    }
-
-    foreach ($arn in $managedPolicyArns) {
-      $attachResult = Invoke-AwsCli -ArgList @("iam", "attach-role-policy", "--role-name", $NewStagingRoleName, "--policy-arn", $arn, "--profile", $ProfileName, "--region", $Region)
-      if ($attachResult.Ok) {
-        Write-Host ("  Attached managed policy: " + $arn) -ForegroundColor Green
-      } else {
-        Write-Host ("  Failed to attach managed policy " + $arn + ":") -ForegroundColor Red
-        Write-Host $attachResult.Raw
-        exit 1
+      $roleArn = ($createRoleResult.Raw | ConvertFrom-Json).Role.Arn
+      foreach ($arn in $managedPolicyArns) {
+        $attachResult = Invoke-AwsCli -ArgList @("iam", "attach-role-policy", "--role-name", $NewStagingRoleName, "--policy-arn", $arn, "--profile", $ProfileName, "--region", $Region)
+        if (-not $attachResult.Ok) { Write-Host ("Failed to attach " + $arn + ":") -ForegroundColor Red; Write-Host $attachResult.Raw; Stop-Runner }
       }
-    }
-    foreach ($name in $inlinePolicies.Keys) {
-      $inlinePolicyPath = New-TempJsonFile -Object $inlinePolicies[$name] -Prefix "bello-staging-inline-policy"
-      try {
-        $putResult = Invoke-AwsCli -ArgList @("iam", "put-role-policy", "--role-name", $NewStagingRoleName, "--policy-name", $name, "--policy-document", ("file://" + $inlinePolicyPath), "--profile", $ProfileName, "--region", $Region)
-        if ($putResult.Ok) {
-          Write-Host ("  Copied inline policy: " + $name) -ForegroundColor Green
-        } else {
-          Write-Host ("  Failed to copy inline policy " + $name + ":") -ForegroundColor Red
-          Write-Host $putResult.Raw
-          exit 1
+      foreach ($name in $inlinePolicies.Keys) {
+        $inlinePath = New-TempJsonFile -Object $inlinePolicies[$name] -Prefix "bello-staging-inline-policy"
+        try {
+          $putResult = Invoke-AwsCli -ArgList @("iam", "put-role-policy", "--role-name", $NewStagingRoleName, "--policy-name", $name, "--policy-document", ("file://" + $inlinePath), "--profile", $ProfileName, "--region", $Region)
+          if (-not $putResult.Ok) { Write-Host ("Failed to copy inline policy " + $name + ":") -ForegroundColor Red; Write-Host $putResult.Raw; Stop-Runner }
+        } finally {
+          Remove-Item -Force -ErrorAction SilentlyContinue $inlinePath
         }
-      } finally {
-        Remove-Item -Force -ErrorAction SilentlyContinue $inlinePolicyPath
       }
+      Write-Host ("Created staging role: " + $roleArn) -ForegroundColor Green
+    } elseif ($needsTrustFix) {
+      $updateTrustResult = Invoke-AwsCli -ArgList @("iam", "update-assume-role-policy", "--role-name", $NewStagingRoleName, "--policy-document", ("file://" + $trustPolicyPath), "--profile", $ProfileName, "--region", $Region)
+      if (-not $updateTrustResult.Ok) {
+        Write-Host "update-assume-role-policy failed:" -ForegroundColor Red
+        Write-Host $updateTrustResult.Raw
+        Stop-Runner
+      }
+      Write-Host "Trust policy corrected." -ForegroundColor Green
     }
+  } finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue $trustPolicyPath
+  }
 
-    $updateAppResult = Invoke-AwsCli -ArgList @("amplify", "update-app", "--app-id", $StagingAppId, "--iam-service-role-arn", $newRoleArn, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($needsAppLinkFix -or $needsRoleCreate) {
+    $updateAppResult = Invoke-AwsCli -ArgList @("amplify", "update-app", "--app-id", $StagingAppId, "--iam-service-role-arn", $roleArn, "--profile", $ProfileName, "--region", $Region, "--output", "json")
     if (-not $updateAppResult.Ok) {
-      Write-Host "update-app failed:" -ForegroundColor Red
+      Write-Host "update-app (iamServiceRoleArn) failed:" -ForegroundColor Red
       Write-Host $updateAppResult.Raw
-      exit 1
+      Stop-Runner
     }
-    Write-Host ("  Staging role ARN: " + $newRoleArn) -ForegroundColor Green
-    Write-Host "  Staging app now uses the staging-only role." -ForegroundColor Green
+    Write-Host "Staging app's iamServiceRoleArn now points at the staging role." -ForegroundColor Green
   }
-} finally {
-  Remove-Item -Force -ErrorAction SilentlyContinue $trustPolicyPath
+
+  return $roleArn
 }
 
 # ============================================================================
-# STEP 2: Preflight (read-only) - abort BEFORE starting a build if anything
-# looks wrong, per the requirement to check everything up front rather than
-# discover problems only after a 20-minute build attempt.
+# STATE 4: SECRET_VALIDATE
 # ============================================================================
-Write-Section "3. Preflight checks (read-only - no build started yet)"
-$preflightProblems = @()
+function Test-ZaicoSecret {
+  Write-StateBanner "STATE 4: SECRET_VALIDATE"
+  Write-Host ("Checking for " + $SecretName + " (ARN/Name only via --query - Description/Tags are never")
+  Write-Host "requested, since they can contain non-ASCII text that has crashed AWS CLI's own console"
+  Write-Host "output encoding on Windows in the past - unrelated to whether the secret exists)."
 
-$appResult = Invoke-AwsCli -ArgList @("amplify", "get-app", "--app-id", $StagingAppId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-if (-not $appResult.Ok) {
-  Write-Host "get-app failed:" -ForegroundColor Red
-  Write-Host $appResult.Raw
-  exit 1
-}
-$app = ($appResult.Raw | ConvertFrom-Json).app
-Write-Host ("  App name          : " + $app.name)
-Write-Host ("  Platform          : " + $app.platform)
-if ($app.platform -ne "WEB_COMPUTE") {
-  $preflightProblems += "Platform is '" + $app.platform + "', expected WEB_COMPUTE."
-}
-Write-Host ("  iamServiceRoleArn : " + $(if ($app.iamServiceRoleArn) { $app.iamServiceRoleArn } else { "(none)" }))
-if ($app.iamServiceRoleArn -notmatch [regex]::Escape($NewStagingRoleName)) {
-  $preflightProblems += "App's iamServiceRoleArn does not reference '" + $NewStagingRoleName + "'."
-}
-
-$branchResult = Invoke-AwsCli -ArgList @("amplify", "get-branch", "--app-id", $StagingAppId, "--branch-name", $BranchName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-if (-not $branchResult.Ok) {
-  Write-Host "get-branch failed:" -ForegroundColor Red
-  Write-Host $branchResult.Raw
-  exit 1
-}
-$branch = ($branchResult.Raw | ConvertFrom-Json).branch
-Write-Host ("  Branch framework  : " + $(if ($branch.framework) { $branch.framework } else { "(null)" }))
-if ($branch.framework -ne "Next.js - SSR") {
-  $preflightProblems += "Branch framework is '" + $branch.framework + "', expected 'Next.js - SSR'."
-}
-
-$branchesResult = Invoke-AwsCli -ArgList @("amplify", "list-branches", "--app-id", $StagingAppId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-if ($branchesResult.Ok) {
-  $branches = ($branchesResult.Raw | ConvertFrom-Json).branches
-  $unexpectedBranches = $branches | Where-Object { $_.branchName -ne $BranchName }
-  if ($unexpectedBranches) {
-    $preflightProblems += "Staging app has a branch other than '" + $BranchName + "'."
-  } else {
-    Write-Host ("  Branches on app   : only '" + $BranchName + "' - OK") -ForegroundColor Green
+  $describeResult = Invoke-AwsCli -ArgList @("secretsmanager", "describe-secret", "--secret-id", $SecretName, "--query", "{ARN:ARN,Name:Name}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($describeResult.Ok) {
+    $secretInfo = $describeResult.Raw | ConvertFrom-Json
+    Write-Host ("Secret FOUND: Name=" + $secretInfo.Name) -ForegroundColor Green
+    Write-Host ("  ARN   : " + $secretInfo.ARN) -ForegroundColor Green
+    Write-Host ("  Region: " + $Region) -ForegroundColor Green
+    return @{ Found = $true; Arn = $secretInfo.ARN }
   }
-}
 
-Write-Host ""
-Write-Host ("  Checking for " + $SecretName + " in " + $Region + " (ARN/Name only via --query - see" )
-Write-Host "  header comment for why Description/Tags are deliberately never requested)..."
-# --query restricts the CLI's own JSON output to exactly these two fields,
-# so a Description (or Tags, etc.) containing non-ASCII text - the actual
-# cause of the cp932 encoding crash described in Get-AwsErrorKind's comment
-# - is never part of what AWS CLI has to serialize/print at all. This is
-# the real fix; Get-AwsErrorKind below is the second, independent layer.
-$secretDescribeResult = Invoke-AwsCli -ArgList @("secretsmanager", "describe-secret", "--secret-id", $SecretName, "--query", "{ARN:ARN,Name:Name}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
-$secretArn = $null
-if ($secretDescribeResult.Ok) {
-  $secretInfo = $secretDescribeResult.Raw | ConvertFrom-Json
-  $secretArn = $secretInfo.ARN
-  Write-Host ("  Secret FOUND      : Name=" + $secretInfo.Name) -ForegroundColor Green
-  Write-Host ("  Secret ARN        : " + $secretArn) -ForegroundColor Green
-  Write-Host ("  Secret Region     : " + $Region) -ForegroundColor Green
-} else {
-  $errorKind = Get-AwsErrorKind -RawText $secretDescribeResult.Raw
-  switch ($errorKind) {
+  $kind = Get-AwsErrorKind -RawText $describeResult.Raw
+  switch ($kind) {
     "not-found" {
-      Write-Host ("  Secret genuinely NOT found in " + $Region + " (ResourceNotFoundException):") -ForegroundColor Red
-      Write-Host $secretDescribeResult.Raw
-      $preflightProblems += $SecretName + " was not found in " + $Region + " (ResourceNotFoundException - confirmed, not a false negative) - run 8-diagnose-zaico-secret.ps1 to check other regions before building."
+      Write-Host ("Secret genuinely NOT found in " + $Region + " (ResourceNotFoundException). This blocks the build -") -ForegroundColor Red
+      Write-Host "backend.ts imports this secret by name and expects it to already exist. Run" -ForegroundColor Red
+      Write-Host "8-diagnose-zaico-secret.ps1 to check other regions before doing anything else." -ForegroundColor Red
     }
     "access-denied" {
-      Write-Host "  Could not check - AccessDenied. This is a permissions problem, NOT evidence the secret is missing:" -ForegroundColor Red
-      Write-Host $secretDescribeResult.Raw
-      $preflightProblems += "describe-secret was denied (AccessDenied) - fix IAM permissions for the identity running this script, do not conclude the secret does not exist."
+      Write-Host "AccessDenied checking the secret - a permissions problem, NOT evidence it is missing:" -ForegroundColor Red
+      Write-Host $describeResult.Raw
     }
     "credentials" {
-      Write-Host "  Could not check - credential problem (expired SSO session, etc.), NOT evidence the secret is missing:" -ForegroundColor Red
-      Write-Host $secretDescribeResult.Raw
-      $preflightProblems += "describe-secret failed due to a credentials problem - re-run 'aws sso login' and retry, do not conclude the secret does not exist."
+      Show-BlockedByUser -Reason "AWS credentials expired while checking the secret."
     }
     "encoding" {
-      Write-Host "  [BUG PATTERN AVOIDED] Got an encoding-class error even with the minimal --query - this should not" -ForegroundColor Red
-      Write-Host "  happen since ARN/Name are plain ASCII. Reporting as inconclusive, NOT as not-found:" -ForegroundColor Red
-      Write-Host $secretDescribeResult.Raw
-      $preflightProblems += "describe-secret failed with an encoding-class error even after restricting to ARN/Name - investigate the console codepage, do not conclude the secret does not exist."
+      Write-Host "[UNEXPECTED] Encoding-class error even with the minimal --query - investigate the console" -ForegroundColor Red
+      Write-Host "codepage. Not evidence the secret is missing:" -ForegroundColor Red
+      Write-Host $describeResult.Raw
     }
     default {
-      Write-Host "  Could not check for an unrecognized reason - NOT evidence the secret is missing:" -ForegroundColor Red
-      Write-Host $secretDescribeResult.Raw
-      $preflightProblems += "describe-secret failed for an unclassified reason - see raw output above, do not conclude the secret does not exist."
+      Write-Host "Could not check the secret for an unclassified reason - NOT evidence it is missing:" -ForegroundColor Red
+      Write-Host $describeResult.Raw
     }
   }
+  Stop-Runner
 }
 
-Write-Host ""
-Write-Host "  Checking this app's CloudFormation stacks for in-progress operations..."
-# Restrict to StackStatus only, for the same reason as the secret query
-# above - StackName is always ASCII/safe, but there is no reason to pull
-# every field CloudFormation could return either.
+# ============================================================================
+# STATE 5: CLOUDFORMATION_STABILIZE
+# ============================================================================
 function Get-StagingStacks {
   $result = Invoke-AwsCli -ArgList @("cloudformation", "describe-stacks", "--query", "Stacks[].{StackName:StackName,StackStatus:StackStatus}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
   if (-not $result.Ok) { return $null }
@@ -612,196 +704,263 @@ function Get-StagingStacks {
   return @($all | Where-Object { $_.StackName -match [regex]::Escape($StagingAppId) })
 }
 
-$successTerminalStatuses = @("CREATE_COMPLETE", "UPDATE_COMPLETE", "IMPORT_COMPLETE", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS")
-$failureTerminalStatuses = @("ROLLBACK_COMPLETE", "UPDATE_ROLLBACK_COMPLETE", "CREATE_FAILED", "ROLLBACK_FAILED", "UPDATE_ROLLBACK_FAILED", "DELETE_FAILED", "IMPORT_ROLLBACK_COMPLETE", "IMPORT_ROLLBACK_FAILED")
+function Wait-CloudFormationStable {
+  Write-StateBanner "STATE 5: CLOUDFORMATION_STABILIZE"
+  $failureTerminalStatuses = @("ROLLBACK_COMPLETE", "UPDATE_ROLLBACK_COMPLETE", "CREATE_FAILED", "ROLLBACK_FAILED", "UPDATE_ROLLBACK_FAILED", "UPDATE_FAILED", "DELETE_FAILED", "IMPORT_ROLLBACK_COMPLETE", "IMPORT_ROLLBACK_FAILED")
+  $selfHealingStatuses = @("ROLLBACK_COMPLETE", "IMPORT_ROLLBACK_COMPLETE")
 
-$matchingStacks = Get-StagingStacks
-if ($null -eq $matchingStacks) {
-  Write-Host "  Could not list CloudFormation stacks (non-fatal, continuing):" -ForegroundColor Yellow
-} elseif ($matchingStacks.Count -eq 0) {
-  Write-Host "    No CloudFormation stacks matching this app ID found yet (expected before any successful deploy)." -ForegroundColor Yellow
-} else {
-  foreach ($s in $matchingStacks) {
-    Write-Host ("    " + $s.StackName + " : " + $s.StackStatus)
+  $stacks = Get-StagingStacks
+  if ($null -eq $stacks) {
+    Write-Host "Could not list CloudFormation stacks (non-fatal, continuing to job discovery)." -ForegroundColor Yellow
+    return
   }
+  if ($stacks.Count -eq 0) {
+    Write-Host "No CloudFormation stacks matching this app yet (expected before any successful deploy)." -ForegroundColor Yellow
+    return
+  }
+  foreach ($s in $stacks) { Write-Host ("  " + $s.StackName + " : " + $s.StackStatus) }
 
-  $inProgress = $matchingStacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }
+  $inProgress = $stacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }
   if ($inProgress) {
-    Write-Section "CloudFormation stabilization wait - a previous deploy is still active"
-    Write-Host "  Not starting a new build while these stacks are still changing (a concurrent deploy on the" -ForegroundColor Yellow
-    Write-Host "  same stack would be rejected by CloudFormation anyway). Waiting for a terminal status, every" -ForegroundColor Yellow
-    Write-Host "  20s, up to ~20 minutes. This does NOT call delete-stack or touch any resource - read-only wait." -ForegroundColor Yellow
-    $maxWaitIterations = 60
-    for ($w = 0; $w -lt $maxWaitIterations; $w++) {
+    Write-Host ""
+    Write-Host "A previous deploy is still active - waiting for a terminal status (every 20s, up to ~" -ForegroundColor Yellow
+    Write-Host ($CfnStabilizeMaxMinutes.ToString() + " minutes) before considering any Amplify job. Read-only wait, no delete-stack.") -ForegroundColor Yellow
+    $maxIterations = [Math]::Ceiling(($CfnStabilizeMaxMinutes * 60) / 20)
+    for ($w = 0; $w -lt $maxIterations; $w++) {
       Start-Sleep -Seconds 20
-      $matchingStacks = Get-StagingStacks
-      $stillInProgress = $matchingStacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }
-      $statusLine = ($matchingStacks | ForEach-Object { $_.StackName + "=" + $_.StackStatus }) -join "; "
-      Write-Host ("    [" + (Get-Date -Format "HH:mm:ss") + "] " + $statusLine)
+      $stacks = Get-StagingStacks
+      $stillInProgress = $stacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }
+      $statusLine = ($stacks | ForEach-Object { $_.StackName + "=" + $_.StackStatus }) -join "; "
+      Write-Host ("  [" + (Get-Date -Format "HH:mm:ss") + "] " + $statusLine)
       if (-not $stillInProgress) { break }
     }
-    if ($matchingStacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }) {
-      $preflightProblems += "CloudFormation stack(s) for this app are still *_IN_PROGRESS after the ~20 minute wait - do not start a build on top of an active deploy; re-run this script later."
-    } else {
-      Write-Host "  All stacks reached a terminal status." -ForegroundColor Green
+    if ($stacks | Where-Object { $_.StackStatus -match "_IN_PROGRESS$" }) {
+      Write-Host ("Stacks are still *_IN_PROGRESS after " + $CfnStabilizeMaxMinutes + " minutes - not starting a build. Re-run this script later.") -ForegroundColor Red
+      Stop-Runner
     }
+    Write-Host "All stacks reached a terminal status." -ForegroundColor Green
   }
 
-  # Re-evaluate (using whatever the latest poll returned) now that nothing
-  # is *_IN_PROGRESS - a stack that settled into a failure/rollback terminal
-  # status is a real problem to surface, not something to silently retry.
-  $failedStacks = $matchingStacks | Where-Object { $failureTerminalStatuses -contains $_.StackStatus }
-  foreach ($fs in $failedStacks) {
-    Write-Host ("    [NOTE] " + $fs.StackName + " is in " + $fs.StackStatus + ".") -ForegroundColor Yellow
-    if ($fs.StackStatus -eq "ROLLBACK_COMPLETE") {
-      Write-Host "      The next 'ampx pipeline-deploy' (triggered by start-job below) deletes and recreates a" -ForegroundColor Yellow
-      Write-Host "      ROLLBACK_COMPLETE stack automatically as part of a normal CDK deploy - this script does not" -ForegroundColor Yellow
-      Write-Host "      call cloudformation delete-stack itself, and never deletes bello/zaico-api-token (it is not" -ForegroundColor Yellow
-      Write-Host "      a resource inside this stack any more - see amplify/backend.ts's Secret.fromSecretNameV2)." -ForegroundColor Yellow
-    } else {
+  $hardFailures = $stacks | Where-Object { ($failureTerminalStatuses -contains $_.StackStatus) -and ($selfHealingStatuses -notcontains $_.StackStatus) }
+  $selfHealing = $stacks | Where-Object { $selfHealingStatuses -contains $_.StackStatus }
+
+  foreach ($sh in $selfHealing) {
+    Write-Host ("  [NOTE] " + $sh.StackName + " is " + $sh.StackStatus + " - the next Amplify job (ampx pipeline-deploy / CDK") -ForegroundColor Yellow
+    Write-Host "  deploy) cleans this up automatically. Not calling delete-stack here, and bello/zaico-api-token" -ForegroundColor Yellow
+    Write-Host "  is never at risk either way (it is an imported reference, not a resource in this stack)." -ForegroundColor Yellow
+  }
+
+  if ($hardFailures) {
+    Write-Host ""
+    Write-Host "CloudFormation stack(s) settled into a real failure state (not a self-healing rollback):" -ForegroundColor Red
+    foreach ($fs in $hardFailures) {
+      Write-Host ("  " + $fs.StackName + " : " + $fs.StackStatus) -ForegroundColor Red
       $eventsResult = Invoke-AwsCli -ArgList @("cloudformation", "describe-stack-events", "--stack-name", $fs.StackName, "--query", "StackEvents[].{LogicalResourceId:LogicalResourceId,ResourceType:ResourceType,ResourceStatus:ResourceStatus,ResourceStatusReason:ResourceStatusReason,Timestamp:Timestamp}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
       if ($eventsResult.Ok) {
-        $events = $eventsResult.Raw | ConvertFrom-Json
-        $firstFailure = Find-FirstStackFailureEvent -Events $events
+        $firstFailure = Find-FirstStackFailureEvent -Events ($eventsResult.Raw | ConvertFrom-Json)
         if ($firstFailure.Found) {
-          Write-Host ("      First failure: " + $firstFailure.LogicalResourceId + " (" + $firstFailure.ResourceType + ") " + $firstFailure.ResourceStatus) -ForegroundColor Red
-          Write-Host ("      Reason: " + $firstFailure.ResourceStatusReason) -ForegroundColor Red
+          Write-Host ("    LogicalResourceId   : " + $firstFailure.LogicalResourceId) -ForegroundColor Red
+          Write-Host ("    ResourceType         : " + $firstFailure.ResourceType) -ForegroundColor Red
+          Write-Host ("    ResourceStatus       : " + $firstFailure.ResourceStatus) -ForegroundColor Red
+          Write-Host ("    ResourceStatusReason : " + $firstFailure.ResourceStatusReason) -ForegroundColor Red
         }
       }
     }
+    Write-Host ""
+    Write-Host "Not starting a build on top of a stuck stack. This needs investigation before re-running." -ForegroundColor Red
+    Stop-Runner
   }
 }
 
-if ($preflightProblems.Count -gt 0) {
-  Write-Section "Preflight FAILED - not starting a build"
-  foreach ($p in $preflightProblems) {
-    Write-Host ("  - " + $p) -ForegroundColor Red
-  }
-  exit 1
+# ============================================================================
+# STATE 6 / 7: AMPLIFY_JOB_DISCOVER, AMPLIFY_JOB_ATTACH_OR_START
+# ============================================================================
+function Get-ActiveAmplifyJob {
+  $listResult = Invoke-AwsCli -ArgList @("amplify", "list-jobs", "--app-id", $StagingAppId, "--branch-name", $BranchName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if (-not $listResult.Ok) { return @{ Ok = $false; Raw = $listResult.Raw } }
+  $summaries = @(($listResult.Raw | ConvertFrom-Json).jobSummaries)
+  $activeStatuses = @("PENDING", "PROVISIONING", "RUNNING")
+  $active = @($summaries | Where-Object { $activeStatuses -contains $_.status })
+  if ($active.Count -eq 0) { return @{ Ok = $true; Found = $false } }
+  $sorted = @($active | Sort-Object -Property startTime -Descending)
+  return @{ Ok = $true; Found = $true; Primary = $sorted[0]; All = $sorted }
 }
-Write-Host ""
-Write-Host "Preflight OK - proceeding to build." -ForegroundColor Green
+
+function Invoke-AmplifyJobDiscoverAndStart {
+  Write-StateBanner "STATE 6: AMPLIFY_JOB_DISCOVER"
+  try {
+    $gitHead = (& git rev-parse HEAD 2>$null)
+    if ($gitHead) { Write-Host ("Local git HEAD (informational only - not used to reject an active job): " + $gitHead) }
+  } catch {
+    # git not available or not a repo checkout at this path - non-fatal, informational only.
+  }
+
+  $discovery = Get-ActiveAmplifyJob
+  if (-not $discovery.Ok) {
+    Write-Host "list-jobs failed:" -ForegroundColor Red
+    Write-Host $discovery.Raw
+    Stop-Runner
+  }
+
+  Write-StateBanner "STATE 7: AMPLIFY_JOB_ATTACH_OR_START"
+  if ($discovery.Found) {
+    Write-Host "Existing active Amplify job found." -ForegroundColor Green
+    Write-Host ("Attaching to jobId: " + $discovery.Primary.jobId) -ForegroundColor Green
+    if ($discovery.All.Count -gt 1) {
+      Write-Host "Additional active jobs (left alone, not touched):"
+      foreach ($j in ($discovery.All | Select-Object -Skip 1)) {
+        Write-Host ("  - jobId=" + $j.jobId + " status=" + $j.status + " startTime=" + $j.startTime)
+      }
+    }
+    return $discovery.Primary.jobId
+  }
+
+  # TOCTOU-safe recheck immediately before start-job - covers auto-build
+  # having started a job between STATE 6's discovery and now.
+  $recheck = Get-ActiveAmplifyJob
+  if ($recheck.Ok -and $recheck.Found) {
+    Write-Host "An active job appeared between discovery and start (race with auto-build or another run) -" -ForegroundColor Yellow
+    Write-Host ("attaching to jobId: " + $recheck.Primary.jobId + " instead of starting a new one.") -ForegroundColor Yellow
+    return $recheck.Primary.jobId
+  }
+
+  Write-Host "No active job found - starting a new RELEASE job."
+  $startResult = Invoke-AwsCli -ArgList @("amplify", "start-job", "--app-id", $StagingAppId, "--branch-name", $BranchName, "--job-type", "RELEASE", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($startResult.Ok) {
+    $jobId = ($startResult.Raw | ConvertFrom-Json).jobSummary.jobId
+    Write-Host ("Started new RELEASE job: " + $jobId) -ForegroundColor Green
+    return $jobId
+  }
+
+  if ($startResult.Raw -match "LimitExceededException") {
+    Write-Host "start-job hit LimitExceededException (branch already has a pending/running job) - this is an" -ForegroundColor Yellow
+    Write-Host "expected race, not a failure. Re-discovering and attaching, not retrying start-job." -ForegroundColor Yellow
+    $raceRecover = Get-ActiveAmplifyJob
+    if ($raceRecover.Ok -and $raceRecover.Found) {
+      Write-Host ("Attaching to jobId: " + $raceRecover.Primary.jobId) -ForegroundColor Green
+      return $raceRecover.Primary.jobId
+    }
+    Write-Host "start-job reported LimitExceededException but no active job is visible now - transient" -ForegroundColor Red
+    Write-Host "inconsistency on AWS's side. Re-run this script." -ForegroundColor Red
+    Stop-Runner
+  }
+
+  Write-Host "start-job failed for a reason other than LimitExceededException:" -ForegroundColor Red
+  Write-Host $startResult.Raw
+  Stop-Runner
+}
 
 # ============================================================================
-# STEP 3: Build / poll / retry loop
+# STATE 8: AMPLIFY_JOB_POLL
 # ============================================================================
-try {
-  $maxAttempts = 3
-  $attempt = 0
-  $finalStatus = $null
-  $finalJob = $null
-  $newJobId = $null
+function Wait-AmplifyJob {
+  param([string]$JobId)
+  Write-StateBanner "STATE 8: AMPLIFY_JOB_POLL"
+  $terminalStates = @("SUCCEED", "FAILED", "CANCELLED")
+  $maxIterations = [Math]::Ceiling(($JobPollMaxMinutes * 60) / 15)
+  for ($i = 0; $i -lt $maxIterations; $i++) {
+    Start-Sleep -Seconds 15
+    $pollResult = Invoke-AwsCli -ArgList @("amplify", "get-job", "--app-id", $StagingAppId, "--branch-name", $BranchName, "--job-id", $JobId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+    if (-not $pollResult.Ok) {
+      Write-Host "  get-job (poll) failed, retrying:" -ForegroundColor Yellow
+      Write-Host $pollResult.Raw
+      continue
+    }
+    $jobNow = ($pollResult.Raw | ConvertFrom-Json).job
+    $status = $jobNow.summary.status
+    Write-Host ("  [" + (Get-Date -Format "HH:mm:ss") + "] status=" + $status)
+    if ($terminalStates -contains $status) {
+      return $jobNow
+    }
+  }
+  Write-Host ("Timed out after " + $JobPollMaxMinutes + " minutes waiting for jobId " + $JobId + ". Re-run this script - it will re-attach to this same job if it is still active, or move on if it finished.") -ForegroundColor Red
+  Stop-Runner
+}
+
+# ============================================================================
+# STATE 9: AMPLIFY_STEP_VALIDATE
+# ============================================================================
+function Test-AmplifyJobSteps {
+  param($Job)
+  Write-StateBanner "STATE 9: AMPLIFY_STEP_VALIDATE"
+  $stepStatus = @{}
+  foreach ($stepName in @("BUILD", "DEPLOY", "VERIFY")) {
+    $step = $Job.steps | Where-Object { $_.stepName -eq $stepName } | Select-Object -First 1
+    $stepStatus[$stepName] = $(if ($step) { $step.status } else { "(no such step)" })
+    Write-Host ("  " + $stepName.PadRight(8) + ": " + $stepStatus[$stepName])
+  }
+  $allSucceeded = ($stepStatus["BUILD"] -eq "SUCCEED") -and ($stepStatus["DEPLOY"] -eq "SUCCEED") -and ($stepStatus["VERIFY"] -eq "SUCCEED")
+  return @{ AllSucceeded = $allSucceeded; Steps = $stepStatus }
+}
+
+# ============================================================================
+# STATE 10a: FAILURE_DIAGNOSE
+# ============================================================================
+function Invoke-FailureDiagnose {
+  param($Job)
+  Write-StateBanner "STATE 10: FAILURE_DIAGNOSE"
+  $combinedLogText = ""
+  $tempLogFile = Join-Path $env:TEMP ("bello-staging-build-log-" + [Guid]::NewGuid().ToString("N") + ".txt")
+  $script:tempLogFiles += $tempLogFile
+
+  foreach ($step in $Job.steps) {
+    Write-Host ("--- step: " + $step.stepName + " status=" + $step.status + " ---") -ForegroundColor Yellow
+    if ($step.logUrl) {
+      try {
+        $stepLogText = Get-StepLogText -LogUrl $step.logUrl
+        $combinedLogText += ("`n----- " + $step.stepName + " -----`n" + $stepLogText)
+        Add-Content -Path $tempLogFile -Value ("----- " + $step.stepName + " -----`n" + $stepLogText) -Encoding UTF8
+      } catch {
+        Write-Host ("Could not fetch/decode log for this step: " + $_.Exception.Message) -ForegroundColor Red
+      }
+    } else {
+      Write-Host "(no logUrl for this step)"
+    }
+  }
+
+  Write-Host ""
+  Write-Host ("Full readable log saved to (deleted when this script exits): " + $tempLogFile) -ForegroundColor Cyan
+
+  $failureInfo = Find-FirstMeaningfulFailure -FullLogText $combinedLogText
+  if ($failureInfo.Found) {
+    Write-Section "First meaningful failure (not the generic final 'Build failed' banner)"
+    Write-Host ("  Resource type    : " + $failureInfo.ResourceType) -ForegroundColor Red
+    Write-Host ("  HandlerErrorCode : " + $failureInfo.HandlerErrorCode) -ForegroundColor Red
+    Write-Host ("  Matched line     : " + $failureInfo.MatchedLine) -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Context (30 lines before, 20 lines after):" -ForegroundColor Yellow
+    Write-Host $failureInfo.Context
+  } else {
+    Write-Host "Could not automatically identify a specific failure line - review the full log at the temp file path above." -ForegroundColor Yellow
+  }
+  Stop-Runner
+}
+
+# ============================================================================
+# STATE 10b: HTTP_VALIDATE
+# ============================================================================
+function Invoke-HttpValidate {
+  param($App, $Branch)
+  Write-StateBanner "STATE 10: HTTP_VALIDATE"
+
+  if ($App.platform -ne "WEB_COMPUTE" -or $Branch.framework -ne "Next.js - SSR") {
+    Write-Host "Platform/framework no longer match WEB_COMPUTE / Next.js - SSR at HTTP-check time - stopping." -ForegroundColor Red
+    Stop-Runner
+  }
+  if (-not $App.defaultDomain) {
+    Write-Host "get-app did not return a defaultDomain - cannot build the staging URL without hardcoding it." -ForegroundColor Red
+    Stop-Runner
+  }
+
   $urlSafeBranch = $BranchName -replace "/", "-"
-  $newSiteUrl = "https://" + $urlSafeBranch + "." + $StagingAppId + ".amplifyapp.com"
+  $stagingUrl = "https://" + $urlSafeBranch + "." + $App.defaultDomain
+  Write-Host ("Staging URL (from get-app's defaultDomain, not hardcoded): " + $stagingUrl)
 
-  while ($attempt -lt $maxAttempts) {
-    $attempt++
-    Write-Section ("4. Build attempt " + $attempt + " of " + $maxAttempts + " (RELEASE job)")
-    $jobStartResult = Invoke-AwsCli -ArgList @("amplify", "start-job", "--app-id", $StagingAppId, "--branch-name", $BranchName, "--job-type", "RELEASE", "--profile", $ProfileName, "--region", $Region, "--output", "json")
-    if (-not $jobStartResult.Ok) {
-      Write-Host "start-job failed:" -ForegroundColor Red
-      Write-Host $jobStartResult.Raw
-      exit 1
-    }
-    $newJobId = ($jobStartResult.Raw | ConvertFrom-Json).jobSummary.jobId
-    Write-Host ("  Build started: jobId=" + $newJobId) -ForegroundColor Green
-
-    Write-Host "  Polling every 15s, up to ~20 minutes ..."
-    $terminalStates = @("SUCCEED", "FAILED", "CANCELLED")
-    $finalStatus = $null
-    $finalJob = $null
-    for ($i = 0; $i -lt 80; $i++) {
-      Start-Sleep -Seconds 15
-      $pollResult = Invoke-AwsCli -ArgList @("amplify", "get-job", "--app-id", $StagingAppId, "--branch-name", $BranchName, "--job-id", $newJobId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-      if (-not $pollResult.Ok) {
-        Write-Host "  get-job (poll) failed, retrying:" -ForegroundColor Yellow
-        Write-Host $pollResult.Raw
-        continue
-      }
-      $jobNow = ($pollResult.Raw | ConvertFrom-Json).job
-      $status = $jobNow.summary.status
-      Write-Host ("    [" + (Get-Date -Format "HH:mm:ss") + "] status=" + $status)
-      if ($terminalStates -contains $status) {
-        $finalStatus = $status
-        $finalJob = $jobNow
-        break
-      }
-    }
-
-    if (-not $finalStatus) {
-      Write-Host "Timed out waiting for the job to finish. Check manually:" -ForegroundColor Red
-      Write-Host ("  aws amplify get-job --app-id " + $StagingAppId + " --branch-name " + $BranchName + " --job-id " + $newJobId + " --profile " + $ProfileName + " --region " + $Region)
-      exit 1
-    }
-
-    if ($finalStatus -eq "SUCCEED") {
-      break
-    }
-
-    if ($finalStatus -eq "FAILED") {
-      Write-Section ("Build attempt " + $attempt + " FAILED - fetching readable step logs")
-      $combinedLogText = ""
-      $tempLogFile = Join-Path $env:TEMP ("bello-staging-build-log-attempt" + $attempt + "-" + [Guid]::NewGuid().ToString("N") + ".txt")
-      $script:tempLogFiles += $tempLogFile
-
-      foreach ($step in $finalJob.steps) {
-        Write-Host ("--- step: " + $step.stepName + " status=" + $step.status + " ---") -ForegroundColor Yellow
-        if ($step.logUrl) {
-          try {
-            $stepLogText = Get-StepLogText -LogUrl $step.logUrl
-            $combinedLogText += ("`n----- " + $step.stepName + " -----`n" + $stepLogText)
-            Add-Content -Path $tempLogFile -Value ("----- " + $step.stepName + " -----`n" + $stepLogText) -Encoding UTF8
-          } catch {
-            Write-Host ("Could not fetch/decode log for this step: " + $_.Exception.Message) -ForegroundColor Red
-          }
-        } else {
-          Write-Host "(no logUrl for this step)"
-        }
-      }
-
-      Write-Host ""
-      Write-Host ("Full readable log for this attempt saved to (deleted when this script exits): " + $tempLogFile) -ForegroundColor Cyan
-
-      $failureInfo = Find-FirstMeaningfulFailure -FullLogText $combinedLogText
-      if ($failureInfo.Found) {
-        Write-Section "First meaningful failure (not the generic final 'Build failed' banner)"
-        Write-Host ("  Resource type    : " + $failureInfo.ResourceType) -ForegroundColor Red
-        Write-Host ("  HandlerErrorCode : " + $failureInfo.HandlerErrorCode) -ForegroundColor Red
-        Write-Host ("  Matched line     : " + $failureInfo.MatchedLine) -ForegroundColor Red
-        Write-Host ""
-        Write-Host "  Context (30 lines before, 20 lines after):" -ForegroundColor Yellow
-        Write-Host $failureInfo.Context
-      } else {
-        Write-Host "Could not automatically identify a specific failure line - review the full log at the temp file path above." -ForegroundColor Yellow
-      }
-
-      $isIamPropagationPattern = $combinedLogText -match "Unable to assume specified IAM Role"
-      if ($isIamPropagationPattern -and $attempt -lt $maxAttempts) {
-        Write-Host ""
-        Write-Host "  Detected the known IAM role propagation-delay pattern - waiting longer and retrying" -ForegroundColor Yellow
-        Write-Host "  automatically (no user action needed)." -ForegroundColor Yellow
-        Start-Sleep -Seconds 30
-        continue
-      } else {
-        Write-Host ""
-        Write-Host "Build failed for a reason other than (or persisting past retries of) IAM propagation delay. Stopping - review the failure above." -ForegroundColor Red
-        exit 1
-      }
-    }
-
-    # CANCELLED or any other terminal state that isn't SUCCEED/FAILED
-    Write-Host ("Build ended with status " + $finalStatus + " - stopping.") -ForegroundColor Red
-    exit 1
-  }
-
-  # ============================================================================
-  # STEP 4: On SUCCEED - HTTP checks and final state
-  # ============================================================================
-  Write-Section "5. Job SUCCEED - verifying HTTP responses and app settings"
   $pathsToCheck = @("/", "/inventory", "/inventory/login")
   $httpResults = @{}
+  $anyHardFailure = $false
   foreach ($path in $pathsToCheck) {
-    $checkUrl = $newSiteUrl + $path
+    $checkUrl = $stagingUrl + $path
     try {
       $response = Invoke-WebRequest -Uri $checkUrl -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
       $httpResults[$path] = [int]$response.StatusCode
@@ -810,50 +969,154 @@ try {
       if ($_.Exception.Response) {
         $statusCode = [int]$_.Exception.Response.StatusCode
         $httpResults[$path] = $statusCode
-        $isOk = ($statusCode -ge 200 -and $statusCode -lt 400)
+        # 200/301/302/307 are all acceptable - a redirect to a login page for
+        # a protected route is expected behavior, not a failure.
+        $isOk = ($statusCode -eq 200) -or ($statusCode -eq 301) -or ($statusCode -eq 302) -or ($statusCode -eq 307)
+        if (-not $isOk) { $anyHardFailure = $true }
         Write-Host ("  " + $path + " -> HTTP " + $statusCode) -ForegroundColor $(if ($isOk) { "Green" } else { "Red" })
-        if ($statusCode -eq 302 -or $statusCode -eq 301 -or $statusCode -eq 307) {
-          $locationHeader = $_.Exception.Response.Headers["Location"]
-          Write-Host ("    Redirect location: " + $locationHeader)
+        if ($statusCode -eq 301 -or $statusCode -eq 302 -or $statusCode -eq 307) {
+          Write-Host ("    Redirect location: " + $_.Exception.Response.Headers["Location"])
         }
       } else {
         $httpResults[$path] = -1
-        Write-Host ("  " + $path + " -> request failed without an HTTP response: " + $_.Exception.Message) -ForegroundColor Red
+        $anyHardFailure = $true
+        Write-Host ("  " + $path + " -> request failed without an HTTP response (DNS/connection failure): " + $_.Exception.Message) -ForegroundColor Red
       }
     }
   }
 
-  $finalAppResult = Invoke-AwsCli -ArgList @("amplify", "get-app", "--app-id", $StagingAppId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-  $finalPlatform = "(unknown)"
-  if ($finalAppResult.Ok) {
-    $finalPlatform = ($finalAppResult.Raw | ConvertFrom-Json).app.platform
+  if ($anyHardFailure) {
+    Write-Host ""
+    Write-Host "One or more paths returned a non-success status (404/5xx/DNS failure) - HTTP_VALIDATE failed." -ForegroundColor Red
+    Stop-Runner
   }
-  $finalBranchResult = Invoke-AwsCli -ArgList @("amplify", "get-branch", "--app-id", $StagingAppId, "--branch-name", $BranchName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-  $finalFramework = "(unknown)"
-  if ($finalBranchResult.Ok) {
-    $finalFramework = ($finalBranchResult.Raw | ConvertFrom-Json).branch.framework
+  return @{ StagingUrl = $stagingUrl; Results = $httpResults }
+}
+
+# ============================================================================
+# STATE 11: BACKEND_RESOURCE_VALIDATE (+ SSR Compute Role)
+# ============================================================================
+function Test-BackendResources {
+  Write-StateBanner "STATE 11: BACKEND_RESOURCE_VALIDATE"
+  Write-Host "Best-effort read-only presence checks, filtered by this app's ID appearing in the resource" -ForegroundColor Cyan
+  Write-Host "name - naming conventions can vary, so a miss here is reported as a warning, not a hard failure." -ForegroundColor Cyan
+
+  $checks = @{}
+
+  $poolsResult = Invoke-AwsCli -ArgList @("cognito-idp", "list-user-pools", "--max-results", "60", "--query", "UserPools[?contains(Name, '$StagingAppId')].{Name:Name,Id:Id}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($poolsResult.Ok) {
+    $pools = @($poolsResult.Raw | ConvertFrom-Json)
+    $checks["Cognito User Pool"] = $pools.Count -gt 0
+    foreach ($p in $pools) { Write-Host ("  Cognito User Pool : " + $p.Name + " (" + $p.Id + ")") -ForegroundColor Green }
   }
 
-  Write-Section "Summary"
-  Write-Host ("Staging app ID    : " + $StagingAppId)
-  Write-Host ("Build attempts    : " + $attempt + " of " + $maxAttempts)
-  Write-Host ("Final job ID      : " + $newJobId)
-  Write-Host ("Final job status  : " + $finalStatus)
-  Write-Host ("Staging URL       : " + $newSiteUrl)
-  foreach ($path in $pathsToCheck) {
-    Write-Host ("  HTTP " + $path.PadRight(20) + ": " + $httpResults[$path])
+  $apisResult = Invoke-AwsCli -ArgList @("appsync", "list-graphql-apis", "--query", "graphqlApis[?contains(name, '$StagingAppId')].{name:name,apiId:apiId}", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($apisResult.Ok) {
+    $apis = @($apisResult.Raw | ConvertFrom-Json)
+    $checks["AppSync API"] = $apis.Count -gt 0
+    foreach ($a in $apis) { Write-Host ("  AppSync API       : " + $a.name + " (" + $a.apiId + ")") -ForegroundColor Green }
   }
-  Write-Host ("Platform          : " + $finalPlatform)
-  Write-Host ("Branch framework  : " + $finalFramework)
-  Write-Host ("Existing app " + $ExistingProductionAppId + " (production): NOT modified.") -ForegroundColor Green
-  Write-Host ("Existing role " + $ExistingBackendRoleName + " (production): NOT modified.") -ForegroundColor Green
-  Write-Host "main branch: NOT touched." -ForegroundColor Green
+
+  $tablesResult = Invoke-AwsCli -ArgList @("dynamodb", "list-tables", "--query", "TableNames[?contains(@, '$StagingAppId')]", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($tablesResult.Ok) {
+    $tables = @($tablesResult.Raw | ConvertFrom-Json)
+    $checks["DynamoDB tables"] = $tables.Count -gt 0
+    foreach ($t in $tables) { Write-Host ("  DynamoDB table    : " + $t) -ForegroundColor Green }
+  }
+
+  $bucketsResult = Invoke-AwsCli -ArgList @("s3api", "list-buckets", "--query", "Buckets[?contains(Name, '$StagingAppId')].Name", "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($bucketsResult.Ok) {
+    $buckets = @($bucketsResult.Raw | ConvertFrom-Json)
+    $checks["S3 / Storage bucket"] = $buckets.Count -gt 0
+    foreach ($b in $buckets) { Write-Host ("  S3 bucket         : " + $b) -ForegroundColor Green }
+  }
+
+  foreach ($name in $checks.Keys) {
+    if (-not $checks[$name]) {
+      Write-Host ("  [WARNING] " + $name + " was not found by name-matching - verify manually if this matters; naming") -ForegroundColor Yellow
+      Write-Host "  conventions for this resource type may not embed the app ID the way this check assumes." -ForegroundColor Yellow
+    }
+  }
+
+  # ---- SSR Compute Role (distinct from the backend deployment role) ------
+  # Amplify Hosting's SSR compute execution role is a separate App-level
+  # field (computeRoleArn) from iamServiceRoleArn (the backend/CDK deploy
+  # role used above in STATE 3). This is best-effort: whether the installed
+  # AWS CLI/Amplify API version exposes/accepts computeRoleArn depends on
+  # its version, so an absent field here is reported, not treated as fatal.
   Write-Host ""
-  Write-Host "NOTE: HTTP-level checks confirm hosting/routing/SSR responds correctly. They do NOT by" -ForegroundColor Yellow
-  Write-Host "themselves prove an authenticated session can read/write Cognito/AppSync/S3 data - that" -ForegroundColor Yellow
-  Write-Host "needs an actual login. Next step (separate, later): configure the SSR runtime's Secrets" -ForegroundColor Cyan
-  Write-Host "Manager compute role (different role from this backend deployment role) via" -ForegroundColor Cyan
-  Write-Host "2-apply-secrets-policy.ps1, then log in on the staging URL to verify Cognito/AppSync/S3." -ForegroundColor Cyan
-} finally {
-  Remove-TempLogFiles
+  Write-Host "Checking the SSR Hosting Compute Role (separate from the backend deployment role)..."
+  $appResult = Invoke-AwsCli -ArgList @("amplify", "get-app", "--app-id", $StagingAppId, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  $computeRoleArn = $null
+  if ($appResult.Ok) {
+    $appNow = ($appResult.Raw | ConvertFrom-Json).app
+    $computeRoleArn = $appNow.computeRoleArn
+  }
+  if ($computeRoleArn) {
+    Write-Host ("  computeRoleArn already set: " + $computeRoleArn) -ForegroundColor Green
+  } else {
+    Write-Host "  computeRoleArn is not set (or this AWS CLI/API version does not return it)." -ForegroundColor Yellow
+    Write-Host "  If lib/zaico/secretStore.ts's Secrets Manager calls need to run under a real IAM identity in" -ForegroundColor Yellow
+    Write-Host "  Amplify Hosting (rather than falling back to ZAICO_API_TOKEN env var), a dedicated compute" -ForegroundColor Yellow
+    Write-Host ("  role (" + $StagingComputeRoleName + ") with GetSecretValue/PutSecretValue scoped to only") -ForegroundColor Yellow
+    Write-Host "  bello/zaico-api-token needs to be created and attached via 'aws amplify update-app" -ForegroundColor Yellow
+    Write-Host "  --compute-role-arn' - not done automatically here since it is untested against this" -ForegroundColor Yellow
+    Write-Host "  account's actual AWS CLI/Amplify API version. Until then, ZAICO_API_TOKEN env var fallback" -ForegroundColor Yellow
+    Write-Host "  keeps the app working (see lib/zaico/client.ts) - this is not a regression." -ForegroundColor Yellow
+  }
+
+  return @{ Checks = $checks; ComputeRoleArn = $computeRoleArn }
 }
+
+# ============================================================================
+# MAIN
+# ============================================================================
+Write-Host "BELLO Amplify staging deployment runner - idempotent, re-runnable, never touches production." -ForegroundColor Green
+
+if (-not (Test-LogDecoder)) {
+  Write-Host "Refusing to continue - the log decoder self-test failed, so failure diagnosis cannot be trusted." -ForegroundColor Red
+  Stop-Runner
+}
+
+$identity = Test-AwsAuth
+$envState = Test-StagingEnvironment
+$roleArn = Test-StagingIamRole -App $envState.App -AccountId $identity.Account
+$secretState = Test-ZaicoSecret
+Wait-CloudFormationStable
+$jobId = Invoke-AmplifyJobDiscoverAndStart
+$finalJob = Wait-AmplifyJob -JobId $jobId
+$stepResult = Test-AmplifyJobSteps -Job $finalJob
+
+if (-not $stepResult.AllSucceeded) {
+  Invoke-FailureDiagnose -Job $finalJob
+}
+
+$httpResult = Invoke-HttpValidate -App $envState.App -Branch $envState.Branch
+$backendResult = Test-BackendResources
+
+Write-StateBanner "STATE 12: COMPLETE"
+Write-Host ("Staging app        : " + $StagingAppId + " (" + $StagingAppName + ")")
+Write-Host ("Staging role       : " + $roleArn)
+Write-Host ("Secret             : " + $secretState.Arn)
+Write-Host ("Job ID             : " + $jobId)
+Write-Host ("BUILD              : " + $stepResult.Steps["BUILD"])
+Write-Host ("DEPLOY             : " + $stepResult.Steps["DEPLOY"])
+Write-Host ("VERIFY             : " + $stepResult.Steps["VERIFY"])
+Write-Host ("Staging URL        : " + $httpResult.StagingUrl)
+foreach ($path in $httpResult.Results.Keys) {
+  Write-Host ("  HTTP " + $path.PadRight(20) + ": " + $httpResult.Results[$path])
+}
+foreach ($name in $backendResult.Checks.Keys) {
+  Write-Host ("Backend resource   : " + $name.PadRight(20) + ": " + $(if ($backendResult.Checks[$name]) { "FOUND" } else { "NOT FOUND (see warning above)" }))
+}
+Write-Host ("SSR Compute Role   : " + $(if ($backendResult.ComputeRoleArn) { $backendResult.ComputeRoleArn } else { "not configured - see note above" }))
+Write-Host ("Existing production app " + $ExistingProductionAppId + ": NOT modified.") -ForegroundColor Green
+Write-Host ("Existing production role " + $ExistingBackendRoleName + ": NOT modified.") -ForegroundColor Green
+Write-Host "main branch: NOT touched." -ForegroundColor Green
+Write-Host ""
+Write-Host "BUILD/DEPLOY/VERIFY all SUCCEED and HTTP checks passed - staging Hosting is confirmed working." -ForegroundColor Green
+Write-Host "This does NOT by itself confirm an authenticated session can read/write Cognito/AppSync/S3" -ForegroundColor Yellow
+Write-Host "data, or that ZAICO sync works end to end - those need an actual login and a real ZAICO test" -ForegroundColor Yellow
+Write-Host "sync (5 items max), which are the next steps, not yet done by this script." -ForegroundColor Yellow
+
+Stop-Runner -Code 0

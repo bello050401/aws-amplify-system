@@ -305,3 +305,34 @@ amplify-d4hkkg7dty2du-...root...      : CREATE_IN_PROGRESS
 ```
 
 `*_IN_PROGRESS`のstackが残っている状態で新しいRELEASE buildを開始すると、CloudFormationが同一stackへの同時更新を拒否する可能性があるため、`7-fix-staging-iam-role.ps1`のpreflightへ**stabilization wait**を追加した: 対象stackのいずれかが`_IN_PROGRESS`状態である間、20秒間隔・最大約20分、`describe-stacks`(`StackStatus`のみを`--query`で取得)をポーリングし続け、全てが終端状態(`CREATE_COMPLETE`等の成功系、または`ROLLBACK_COMPLETE`等の失敗系)になってから初めてビルド開始の判断へ進む。終端状態が失敗系だった場合は`describe-stack-events`を読み、最初の実質的な`*_FAILED`イベント(`LogicalResourceId`/`ResourceType`/`ResourceStatusReason`)を自動抽出して表示する。`ROLLBACK_COMPLETE`のstackに対しては`delete-stack`を能動的に呼ばない(次の`ampx pipeline-deploy`が通常のCDK deployの一部として自動的にクリーンアップするため)。既存Secretはどちらの経路でも削除・再作成されない(§10の修正によりCloudFormationはこのSecretを一切所有していないため)。
+
+## 12. `7-fix-staging-iam-role.ps1`をstate machine型の冪等デプロイランナーへ再設計
+
+§9〜§11までは、実行のたびに新しく判明した個別の失敗(IAM Trust Policy、Secret CREATE衝突、cp932エンコードエラー)へ1つずつ継ぎ足しで対応してきた。今回、実際にAWS側でBUILD/DEPLOY/VERIFY手前まで到達した状態で、次の失敗が発生した:
+
+```
+LimitExceededException: The requested branch already have pending or running jobs
+```
+
+これはAWS側の障害ではなく、**デプロイ制御スクリプト自身が既存jobの有無を確認せずstart-jobしていた設計上の欠陥**だった(branchはauto build有効なため、git push直後にAmplify自身が既にjobを開始している可能性が常にある)。個別修正ではなく、デプロイ制御そのものをstate machineとして再設計した。
+
+### 12a. 12段階のstate machine
+
+`7-fix-staging-iam-role.ps1`は以下の順で固定された12個のstateを1回の実行で進む(README参照):
+
+`AWS_AUTH` → `ENVIRONMENT_VALIDATE` → `IAM_VALIDATE` → `SECRET_VALIDATE` → `CLOUDFORMATION_STABILIZE` → `AMPLIFY_JOB_DISCOVER` → `AMPLIFY_JOB_ATTACH_OR_START` → `AMPLIFY_JOB_POLL` → `AMPLIFY_STEP_VALIDATE` → `FAILURE_DIAGNOSE`または`HTTP_VALIDATE` → `BACKEND_RESOURCE_VALIDATE` → `COMPLETE`
+
+各stateは「既に正しい状態なら何もしない」ことを前提に設計されている(`IAM_VALIDATE`が典型例 — ロール・Trust Policy・App紐付けが全て期待通りなら`IAM already configured - OK`とだけ表示して即座に次のstateへ進み、AWS側への書き込みは一切発生しない)。これにより、スクリプトを何度実行しても、既に完了した作業をやり直したり、正常なリソースを不要に上書きしたりしない。
+
+### 12b. 今回の最重要修正: Amplify job discovery/attach
+
+`start-job`を呼ぶ前に必ず`list-jobs`でPENDING/PROVISIONING/RUNNINGのjobが無いかを確認し、あればそのjobIdへattachしてpollingへ進む(新規jobは開始しない)。無い場合も、実際に`start-job`を呼ぶ直前にもう一度`list-jobs`で再確認する(TOCTOU対策 — auto buildが両者の間にjobを開始した可能性に対応)。それでも稀に`LimitExceededException`が発生した場合は、これを失敗として扱わず「想定されるrace condition」として直ちに`list-jobs`を再実行し、見つかったjobへattachする(同じ`start-job`をリトライで連打しない)。複数のactive jobが見つかった場合は`startTime`が最も新しいものを主jobとして採用し、残りは表示のみで一切操作しない。
+
+### 12c. その他の設計原則
+
+- 対話prompt(`yes`/`skip`/`continue`の入力待ち)は正常経路から完全に廃止した。唯一の停止は`BLOCKED_BY_USER`(AWS SSOセッション期限切れ)のみで、`aws sso login --profile Bello`という1コマンドだけを表示して停止する。
+- staging URLは`get-app`のレスポンスに含まれる`defaultDomain`フィールドから構築する(`<appId>.amplifyapp.com`という文字列をハードコードしない)。
+- BUILD/DEPLOY/VERIFYの3ステップを個別に確認し、3つ全てが`SUCCEED`でなければ成功と報告しない(job全体のoverall statusだけでは判断しない)。
+- ログのbyte配列表示バグ(§10e参照)を修正した`ConvertTo-DecodedLogText`に加え、スクリプト起動時に毎回自動実行される`Test-LogDecoder`(ASCII/日本語混在UTF-8/gzip圧縮テキストの3ケースを実際にデコードして完全一致を確認する自己テスト)を追加した。デコーダ自体が壊れていた場合はAWSへ一切アクセスする前に停止する。
+- AWS CLIの「mutation系」サブコマンド一覧(`update-app`/`start-job`/`create-role`/`put-role-policy`等)を固定リストで管理し、これらの呼び出しに本番App ID・本番ロール名のいずれかが含まれていた場合は実行前に必ず中断する安全策を、スクリプト内の全AWS CLI呼び出しが経由する単一の関数(`Invoke-AwsCli`)へ集約した。読み取り専用の呼び出し(本番ロールのpolicy一覧取得等)はこの対象外で、意図通り許可される。
+- SSR Hosting Compute Role(Backend Deployment Roleとは別物)の設定状況もbest-effortで確認するようにした。ただし実際の`--compute-role-arn`によるロール作成・付与は、このアカウントの実際のAWS CLI/Amplify APIバージョンに対して未検証のため、今回は自動実行せず、状況を報告するだけに留めている。
