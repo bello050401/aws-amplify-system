@@ -219,3 +219,51 @@ An error occurred (MalformedPolicyDocument) when calling the CreateRole operatio
 ### 9e. 注記: Secrets Manager用Compute Roleとの違い
 
 このBackend Deployment Role(`ampx pipeline-deploy`がCloudFormationスタックをデプロイする際に使うロール)は、Next.js SSRのランタイムがSecrets Managerからシークレットを読み取る際に使う「Compute Role」とは別物である。Compute Roleの設定は、staging Appの公開URLが正常に表示されることを確認した後の次工程として、`2-apply-secrets-policy.ps1`を該当Compute Roleへ対して実行する形で行う(§4参照)。
+
+## 10. staging backend deployが `AWS::SecretsManager::Secret ... AlreadyExists` でrollbackした問題(本当の根本原因・修正: `amplify/backend.ts`)
+
+IAM Role修正(§9)の後、staging backendのCloudFormationデプロイが実際に開始され、backend synth・型チェック・assetsのbuild/publishまで進んだが、以下で最初の実質的な失敗が発生し、デプロイ全体がrollbackした(実ログで確認済み):
+
+```
+AWS::SecretsManager::Secret
+ZaicoTokenSecretStack/ZaicoApiTokenSecret
+
+CREATE_FAILED
+
+Resource handler returned message:
+"The operation failed because the secret bello/zaico-api-token already exists."
+
+HandlerErrorCode: AlreadyExists
+```
+
+この失敗より後に表示されたCognito Group Role群(EDITOR/VIEWER/ADMIN)・`authenticatedUserRole`/`unauthenticatedUserRole`・`SkuCounterTable`等のCREATE_FAILED(`Resource creation cancelled`)、および最終的な`[UnknownFault] NoStack`エラーは、**全てこの1件のSecret作成失敗に伴う二次的なrollback結果**であり、個別に修正すべき別問題ではない(WEB_COMPUTE設定・Next.js SSR対応・IAM AssumeRole・CDK bootstrapのいずれにも問題は無かった)。
+
+### 10a. 根本原因
+
+`amplify/backend.ts`が`new Secret(zaicoTokenSecretStack, "ZaicoApiTokenSecret", { secretName: "bello/zaico-api-token", ... })`という形で、このSecretをCloudFormationが所有する**新規作成resource**として定義していた。この定義はproduction App(`d1uy61lbnqm8ae`、`main`)がbackendを最初にデプロイした時点で実際にAWSアカウント上へこのSecretを作成済みであり、それ以降 `bello/zaico-api-token` は(コード上の定義とは裏腹に)実質的に「既存の外部リソース」になっていた。
+
+ところが同じ`amplify/backend.ts`は全ブランチの`ampx pipeline-deploy`が共有するファイルであり、新しく作成した専用staging App(`d4hkkg7dty2du`、`claude/inventory-management-system-5vbvc7`)がbackendを初回デプロイした際にも同じ`new Secret(...)`定義が評価され、CloudFormationが同名のSecretを新規CREATEしようとして衝突した。これはproduction/staging間のIAM・platform・framework等の設定差とは無関係の、**IaC定義そのものの設計ミス**(共有コードで環境ごとに異なる既存/非既存の外部状態を仮定していた)だった。
+
+### 10b. 修正前のSecret lifecycle
+
+- Secretリソースの所有者: `amplify/backend.ts`(CDK/CloudFormation)。`new Secret(...)`で新規作成・`RemovalPolicy.RETAIN`・初期値`{"configured":false}`を明示的に設定。
+- 新しい環境(新規Amplify App)でbackendを初回デプロイするたびに、CloudFormationは同名のSecretを新規作成しようとする(既存の場合は衝突・失敗)。
+- アプリ側(`lib/zaico/secretStore.ts`)はCreateSecretフォールバック(`PutSecretValue`が`ResourceNotFoundException`を返した場合のみ)も持っており、「CDKが所有」と「アプリが所有」の2つの作成経路が同時に存在していた。
+
+### 10c. 修正後のSecret lifecycle
+
+- Secretリソースの所有者: **AWSアカウント側の既存の外部リソース**。CDK/CloudFormationはこれを作成・削除・rename一切しない。
+- `amplify/backend.ts`は`Secret.fromSecretNameV2(backend.stack, "ZaicoApiTokenSecret", "bello/zaico-api-token")`でこのSecretを**参照(import)するだけ**に変更した。CDKのfrom*系メソッドは対応する`AWS::SecretsManager::Secret`のCloudFormation resourceを一切生成しない(合成時の参照のみ)ため、どの環境・どのAmplify Appでbackendを新規デプロイしても、このSecretを再作成しようとして衝突することはなくなった。
+- `RemovalPolicy.RETAIN`と初期値`secretStringValue`の設定は削除した(どちらもCDKがリソースを所有する場合にのみ意味を持ち、importされた既存リソースには適用できない設定だったため)。
+- アプリ側(`lib/zaico/secretStore.ts`)のCreateSecretフォールバックはコードとしては残しているが、通常運用ではSecretが常に既存の外部リソースとして存在する前提になったため、実際に呼ばれることは無い防御的コードという位置づけに変わった(ファイル冒頭コメントを更新済み)。
+- SSRコンピュート実行ロールへ付与するIAM権限からも`CreateSecret`を外した(`2-apply-secrets-policy.ps1`。付与するのは`GetSecretValue`・`PutSecretValue`のみ)。
+
+### 10d. Secretの実際のRegion・ARN
+
+`bello/zaico-api-token`は`us-west-2`に実在することを確認した(production App `d1uy61lbnqm8ae`・staging App `d4hkkg7dty2du`が共にus-west-2にデプロイされていることと整合し、staging backendの初回デプロイが**まさにus-west-2上で**`AlreadyExists`エラーを返したこと自体が、このリージョンに実在する直接的な証拠になっている — 別リージョンだったならCloudFormationはこのエラーを返さない)。`lib/zaico/secretStore.ts`のリージョンfallbackも、根拠のない`us-east-1`から実際のデプロイ先である`us-west-2`へ修正した(Amplify Hosting上のSSRコンピュート実行環境では`AWS_REGION`が自動設定されるため、このfallback値はローカル開発端末で`AWS_REGION`未設定の場合にのみ効いてくる)。ARN・実在確認は`scripts/aws-setup/8-diagnose-zaico-secret.ps1`(読み取り専用、`describe-secret`のみ、値は取得しない)で確認できる。
+
+### 10e. 修正したAmplify build log取得バグ(byte配列表示)
+
+`scripts/aws-setup/7-fix-staging-iam-role.ps1`(および同じパターンを持っていた`6-create-staging-app.ps1`)は、失敗したbuild stepのログをWindows PowerShell 5.1の`Invoke-WebRequest -UseBasicParsing`で取得していたが、レスポンスのContent-Typeがテキストと認識されない場合、`.Content`が文字列ではなく生の`byte[]`として返ってくることがある。これを`Write-Host`へそのまま渡すと、各バイトが10進数として1つずつ表示され(「50 48 50 54 45 ...」のような出力)、障害解析が事実上不可能になっていた。
+
+修正: `ConvertTo-DecodedLogText`関数を追加し、`.Content`が`byte[]`の場合はgzipマジックバイト(`0x1f 0x8b`)を検出して必要に応じて解凍したうえで、明示的にUTF-8としてデコードして人間が読めるテキストへ変換するようにした(文字列で返ってきた場合はそのまま使う)。あわせて、失敗ログ全体を一時ファイル(`$env:TEMP`配下、Git管理対象外、スクリプト終了時に削除)へ保存できるようにし、`Find-FirstMeaningfulFailure`関数で末尾の汎用的な「Build failed」バナーだけに頼らず、`CREATE_FAILED`・`HandlerErrorCode`・`AlreadyExists`等のマーカーに最初に一致した行(と前後の文脈)を自動抽出するようにした。

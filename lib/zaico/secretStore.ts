@@ -59,32 +59,40 @@ import {
  * Amplify Console側で付与してもらう方式を選んだ — ユーザー本人のAWS
  * 操作が必要な部分は完了報告にまとめてある。
  *
- * ── IaCとアプリの責務分離(今回の追加修正で一部改訂) ────────────────
- * Secretリソースそのもの(CloudFormationスタックが管理する実体)は、
- * 通常運用ではamplify/backend.ts(CDK)が事前に作成する。しかし、CDK
- * デプロイ未実施の環境(ローカルsandbox初回セットアップ時等)でADMINが
- * 先に設定画面からTOKENを保存しようとした場合に保存できない問題への
- * 対応として、ユーザー指示によりsetZaicoTokenInSecretsManagerへ
- * upsert(PutSecretValueが「Secretが存在しない」ことを示す
- * ResourceNotFoundExceptionを返した場合のみ、CreateSecretへ安全に
- * フォールバックする)処理を追加した。
+ * ── IaCとアプリの責務分離(staging backend deploy失敗を受けて再訂正) ─
+ * 訂正の経緯: 以前はamplify/backend.ts(CDK)がこのSecretを
+ * `new Secret(...)`で新規作成するCloudFormation resourceとして定義し
+ * ていた。これはproduction App(main)の初回デプロイ時にAWSアカウント
+ * 上へ実際に作成済みだったため、専用staging App作成後の初回backend
+ * デプロイで同じCDK定義が評価された際、CloudFormationが同名のSecretを
+ * 再度CREATEしようとして
+ *   "The operation failed because the secret bello/zaico-api-token
+ *   already exists." (HandlerErrorCode: AlreadyExists)
+ * で失敗し、staging backend全体がrollbackする実障害が発生した。
+ *
+ * 修正: amplify/backend.tsは`Secret.fromSecretNameV2()`でこのSecretを
+ * 「既に存在する外部リソースへの参照」としてimportするよう変更した
+ * (CDKはこのSecretに対応するCloudFormation resourceを一切生成しない
+ * ため、どの環境・どのAmplify Appでbackendを新規デプロイしても、この
+ * Secretを再作成しようとして衝突することはなくなった)。
+ *
+ * これにより、以下のsetZaicoTokenInSecretsManagerの
+ * CreateSecretフォールバックは、通常運用では**もう呼ばれることのない
+ * 防御的コード**という位置づけになった — Secretは常にAWS側に既存の
+ * 外部リソースとして存在する前提であり、SSRコンピュート実行ロールへ
+ * secretsmanager:CreateSecretを付与すること自体、原則として不要
+ * (2-apply-secrets-policy.psも既にCreateSecretを外した)。それでも
+ * このフォールバックコード自体は削除せず残している(万一Secretが本当
+ * に存在しない状態に陥っても、TOKEN保存操作自体は失敗するだけで、
+ * getZaicoApiToken側の環境変数フォールバックは影響を受けないため、
+ * 安全側のまま維持できる):
  *   - ResourceNotFoundException**だけ**を「Secret不存在」と判断する。
  *     AccessDeniedException等、他の例外は絶対にこの分岐に落とさない
  *     (classifyAwsError参照)。
- *   - DeleteSecretは今回も一切呼ばない(「削除」操作は引き続き
+ *   - DeleteSecretは一切呼ばない(「削除」操作は引き続き
  *     UNCONFIGURED_SECRET_PAYLOADへのPutSecretValueのみ)。
- *   - 通常運用でCDKが既にSecretを作成済みであれば、この
- *     CreateSecretフォールバックが実際に呼ばれることはない
- *     (PutSecretValueがそのまま成功するため)。
- *   - 既知のトレードオフ: もしアプリがCreateSecretで先にこのSecretを
- *     作成した状態で、後からamplify/backend.tsのCDKスタックを初めて
- *     デプロイすると、CloudFormationは同名のSecretが既にCloudFormation
- *     管理外に存在するためスタック作成に失敗し得る(「すでに存在します」
- *     エラー)。その場合は`cdk import`でこのSecretをCloudFormation管理
- *     下へ取り込むか、AWSコンソールから対象Secretを削除してから
- *     CDKデプロイをやり直す必要がある。実運用では「CDKを先にデプロイ
- *     する」運用を推奨するが、アプリ側の可用性(ADMINがいつTOKENを設定
- *     しても保存できること)を優先し、このフォールバックを実装した。
+ *   - 通常運用ではこの分岐に到達すること自体が想定外であり、到達した
+ *     場合はSecretの存在・リージョン・命名を先に疑うべきサイン。
  *
  * ── 「未設定」の表現方法 ─────────────────────────────────────────
  * Secrets Managerの値そのものを空文字列にする設計は避けた(一部API/
@@ -109,19 +117,32 @@ const SECRET_DESCRIPTION =
   "BELLO在庫管理システム — ZAICO API TOKEN(ZAICO→BELLO一方向同期専用、GETのみ)。設定画面(ADMIN限定)から読み書きする。";
 
 /**
- * BELLOのAmplify環境はus-east-1(ユーザー指定)。AWS SDKはリージョンを
- * 環境変数(AWS_REGION/AWS_DEFAULT_REGION)や~/.aws/configの既定プロ
- * ファイルから解決しようとするが、ローカル開発端末でこれが一つも設定
- * されていない場合、SecretsManagerClientはネットワークへ一度も出ずに
- * 同期的に`Error: Region is missing`を投げる(AWSの実エラーではなく
- * SDK内のコンフィグエラー)。このエラーは`instanceof ResourceNotFoundException`
- * ではないため、これまでのコードでは「IAM権限不足」という誤った
- * メッセージに丸められてしまっていた(今回の調査で実際に再現・特定した
- * 根本原因の一つ)。環境変数が明示されていればそれを優先しつつ、未設定
- * の場合はBELLOの既知のリージョンへ明示的にフォールバックすることで、
- * この種の設定エラー自体を未然に防ぐ。
+ * 訂正: 以前このフォールバックは"us-east-1"だったが、これは誤りだった
+ * (根拠なき推測値で、実際にAmplify Hosting/backendがデプロイされてい
+ * るリージョンと一致していなかった)。production App(d1uy61lbnqm8ae)
+ * ・専用staging App(d4hkkg7dty2du)は共にus-west-2にデプロイされてお
+ * り、bello/zaico-api-tokenの実体もこのリージョンに存在する(staging
+ * backendの初回デプロイでus-west-2上で"AlreadyExists"エラーが実際に
+ * 発生したことでも確認済み — 別リージョンだったならCloudFormationは
+ * このエラーを返さない)。scripts/aws-setup/8-diagnose-zaico-secret.ps1
+ * でAWS CLIから実リージョンをlist/describeのみで確認できる(値は取得
+ * しない)。
+ *
+ * AWS SDKはリージョンを環境変数(AWS_REGION/AWS_DEFAULT_REGION)や
+ * ~/.aws/configの既定プロファイルから解決しようとするが、ローカル開発
+ * 端末でこれが一つも設定されていない場合、SecretsManagerClientはネッ
+ * トワークへ一度も出ずに同期的に`Error: Region is missing`を投げる
+ * (AWSの実エラーではなくSDK内のコンフィグエラー)。このエラーは
+ * `instanceof ResourceNotFoundException`ではないため、これまでのコー
+ * ドでは「IAM権限不足」という誤ったメッセージに丸められてしまっていた
+ * (過去の調査で再現・特定した根本原因の一つ)。環境変数が明示されて
+ * いればそれを優先しつつ、未設定の場合はBELLOの実際のデプロイ先リー
+ * ジョンへ明示的にフォールバックすることで、この種の設定エラー自体を
+ * 未然に防ぐ。なお、Amplify Hosting上のSSRコンピュート実行環境では
+ * AWS_REGIONが自動的に設定されるため、このフォールバック値が実際に使
+ * われるのは主にローカル開発端末でAWS_REGIONが未設定の場合に限られる。
  */
-const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
+const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-west-2";
 
 /** amplify/backend.tsのSecret初期値と同じ形。ここだけの正規表現ではなく型で共有したいところだが、CDK側はJSON文字列としてしか渡せないため、キー名の一致をコメントで明示するに留める。 */
 interface ZaicoTokenSecretPayload {
@@ -197,7 +218,7 @@ function classifyAwsError(err: unknown): { kind: AwsErrorKind; userMessage: stri
     return {
       kind: "access-denied",
       userMessage:
-        "AWS Secrets Managerへのアクセス権限がありません。このアプリの実行ロール/ユーザーへ、対象Secret(bello/zaico-api-token)に対するsecretsmanager:GetSecretValue・PutSecretValue・CreateSecretの権限を確認してください。",
+        "AWS Secrets Managerへのアクセス権限がありません。このアプリの実行ロール/ユーザーへ、対象Secret(bello/zaico-api-token)に対するsecretsmanager:GetSecretValue・PutSecretValueの権限を確認してください(Secretは既存の外部リソースとして扱うため、通常はCreateSecretの権限は不要です)。",
     };
   }
   // AWS SDKの資格情報プロバイダーチェーンが、環境変数・共有設定ファイル

@@ -109,6 +109,35 @@ function Write-Section {
   Write-Host ("==== " + $Title + " ====") -ForegroundColor Cyan
 }
 
+function ConvertTo-DecodedLogText {
+  # Fixes a real bug seen in 7-fix-staging-iam-role.ps1's identical log-
+  # fetching code: Invoke-WebRequest -UseBasicParsing in Windows PowerShell
+  # 5.1 returns .Content as a raw byte[] (not a string) whenever the
+  # response is not recognized as text - common for presigned build-log
+  # URLs served without an explicit text content-type. Piping a byte[] into
+  # Write-Host prints each byte as a decimal number ("50 48 50 54 45 ...")
+  # instead of readable text. This also transparently handles gzip-
+  # compressed content (detected by its magic bytes 0x1f 0x8b).
+  param($RawContent)
+  if ($RawContent -is [string]) {
+    return $RawContent
+  }
+  $bytes = [byte[]]$RawContent
+  if ($bytes.Length -ge 2 -and $bytes[0] -eq 0x1f -and $bytes[1] -eq 0x8b) {
+    $ms = New-Object System.IO.MemoryStream(, $bytes)
+    $gz = New-Object System.IO.Compression.GZipStream($ms, [System.IO.Compression.CompressionMode]::Decompress)
+    $reader = New-Object System.IO.StreamReader($gz, [System.Text.Encoding]::UTF8)
+    try {
+      return $reader.ReadToEnd()
+    } finally {
+      $reader.Dispose()
+      $gz.Dispose()
+      $ms.Dispose()
+    }
+  }
+  return [System.Text.Encoding]::UTF8.GetString($bytes)
+}
+
 function Invoke-AwsCli {
   param([string[]]$ArgList)
   if ($ArgList -contains $ExistingProductionAppId) {
@@ -398,7 +427,8 @@ if ($finalStatus -eq "FAILED") {
     Write-Host ("--- step: " + $step.stepName + " status=" + $step.status + " ---") -ForegroundColor Yellow
     if ($step.logUrl) {
       try {
-        $logText = (Invoke-WebRequest -Uri $step.logUrl -UseBasicParsing).Content
+        $logResponse = Invoke-WebRequest -Uri $step.logUrl -UseBasicParsing
+        $logText = ConvertTo-DecodedLogText -RawContent $logResponse.Content
         Write-Host $logText
       } catch {
         Write-Host ("Could not fetch log for this step: " + $_.Exception.Message) -ForegroundColor Red

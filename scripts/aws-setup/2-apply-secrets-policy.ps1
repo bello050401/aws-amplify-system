@@ -5,11 +5,19 @@
   (this script makes a change - it asks for confirmation first).
 
 .DESCRIPTION
-  Grants only secretsmanager:GetSecretValue, PutSecretValue and
-  CreateSecret, scoped to the bello/zaico-api-token secret (with the
-  version-suffix part of the ARN wildcarded), on the IAM role you pass
-  in. Does not grant ListSecrets / DescribeSecret / DeleteSecret, since
-  the app code (lib/zaico/secretStore.ts) never calls those.
+  Grants only secretsmanager:GetSecretValue and PutSecretValue, scoped
+  to the bello/zaico-api-token secret (with the version-suffix part of
+  the ARN wildcarded), on the IAM role you pass in. Does not grant
+  ListSecrets / DescribeSecret / DeleteSecret / CreateSecret.
+
+  CreateSecret was deliberately dropped from this policy: as of the
+  amplify/backend.ts fix that made bello/zaico-api-token an imported
+  (Secret.fromSecretNameV2), pre-existing external resource rather than
+  something CDK creates, the secret is now expected to always already
+  exist in this account/region - the SSR compute role updating its
+  value only ever needs PutSecretValue on an existing secret, never
+  CreateSecret. See docs/aws-test-environment.md section 10 for the
+  full root-cause writeup this change is part of.
 
   Prints the target role and the policy document, then waits for you to
   type "yes" before making any change, unless -Force is passed.
@@ -32,7 +40,11 @@
   AWS CLI profile name (default: Bello)
 
 .PARAMETER Region
-  AWS region (default: us-east-1)
+  AWS region (default: us-west-2 - matches the region both the
+  production app d1uy61lbnqm8ae and the dedicated staging app
+  d4hkkg7dty2du actually deploy to; see 8-diagnose-zaico-secret.ps1 to
+  confirm the secret's real region via list/describe before running
+  this against a compute role in a different region).
 
 .PARAMETER Force
   Skip the confirmation prompt and apply immediately.
@@ -47,7 +59,7 @@ param(
   [string]$SecretArn,
 
   [string]$ProfileName = "Bello",
-  [string]$Region = "us-east-1",
+  [string]$Region = "us-west-2",
 
   [switch]$Force
 )
@@ -83,8 +95,7 @@ $policyDocument = @"
       "Effect": "Allow",
       "Action": [
         "secretsmanager:GetSecretValue",
-        "secretsmanager:PutSecretValue",
-        "secretsmanager:CreateSecret"
+        "secretsmanager:PutSecretValue"
       ],
       "Resource": "$SecretArn"
     }
@@ -95,7 +106,7 @@ $policyDocument = @"
 Write-Host ""
 Write-Host ("Target role   : " + $RoleName)
 Write-Host ("Target secret : " + $SecretArn)
-Write-Host "Policy to apply (does not include ListSecrets/DescribeSecret/DeleteSecret):"
+Write-Host "Policy to apply (does not include ListSecrets/DescribeSecret/DeleteSecret/CreateSecret):"
 Write-Host $policyDocument
 
 if (-not $Force) {
