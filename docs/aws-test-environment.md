@@ -22,13 +22,14 @@
 
 ## 2. セットアップスクリプト(`scripts/aws-setup/`)
 
-Windows PowerShell + AWS CLIから一度に実行できるスクリプト一式を用意した(手作業のコマンド転記を最小化するため)。実行順序・安全上の注意は `scripts/aws-setup/README.md` を参照。
+Windows PowerShell + AWS CLIから一度に実行できるスクリプト一式を用意した(手作業のコマンド転記を最小化するため)。実行順序・安全上の注意は `scripts/aws-setup/README.md` を参照。全スクリプトASCII文字のみで記述している(日本語Windows環境でのWindows PowerShell 5.1のBOM無し.ps1文字化け問題を回避するため — 詳細は各スクリプト冒頭のコメント参照)。
 
 1. `1-discover.ps1`(読み取り専用) — 現在のAWS identity(rootでないか確認)・region・既存Amplifyアプリ/ブランチ・SSRコンピュートロールらしきARN・Secretsの存在有無を一括確認する。何も変更しない。
 2. `2-apply-secrets-policy.ps1`(書き込みあり、要確認プロンプト) — `1-discover.ps1`で特定したロール名を渡すと、Secrets Manager用の最小権限ポリシー(下記)を追加する。
 3. `3-create-branch.ps1`(書き込みあり、要確認プロンプト) — 既存Amplifyアプリへ`claude/inventory-management-system-5vbvc7`ブランチを追加し、初回ビルドを開始する。
+4. `4-create-app.ps1`(書き込みあり、要確認プロンプト) — Amplifyアプリがまだ存在しない場合に使う。`us-east-1`/`ap-northeast-1`/`us-west-2`の3リージョンを再確認して重複作成を避けたうえで、GitHub Personal Access Token(`--oauth-token`)を使いAWS CLIだけでアプリ作成・ブランチ追加・初回ビルド開始までを行う。**ユーザー本人にしかできない操作はGitHub PATの発行だけ**(下記§4a参照) — AWS Console上でのGitHubアプリ連携(複数画面のOAuth同意フロー)は不要になった。
 
-**Amplifyアプリ自体がまだ存在しない場合**(`1-discover.ps1`が「見つかりませんでした」と表示した場合)は、GitHub OAuth同意を伴うため`3-create-branch.ps1`は使えず、下記§4の手順でAWS Console操作が必要(BLOCKED_BY_USER)。
+**Amplifyアプリ自体がまだ存在しない場合**(`1-discover.ps1`が「見つかりませんでした」と表示した場合)は`4-create-app.ps1`を実行する。
 
 ## 3. Secrets Manager用IAMポリシー(参考・`2-apply-secrets-policy.ps1`が自動生成する内容と同一)
 
@@ -56,9 +57,23 @@ Secrets Managerの仕様上、Secretの完全なARNには作成時にランダ�
 
 `secretsmanager:ListSecrets`・`DescribeSecret`・`DeleteSecret`は現行コード(`lib/zaico/secretStore.ts`)が一切呼ばないため付与しない。手動で適用する場合は`2-apply-secrets-policy.ps1 -RoleName <ロール名>`を実行すればよい(このJSONを自動生成して確認プロンプト付きで適用する)。
 
-## 4. Amplify Hostingブランチデプロイ(BLOCKED_BY_USER — Amplifyアプリが未作成の場合のみ)
+## 4. Amplify Hostingブランチデプロイ
 
-`1-discover.ps1`の結果、bello050401/aws-amplify-system用のAmplifyアプリが存在しない場合、GitHub連携を伴うAmplify Console操作が必要 — Claude Codeからは実行不可(GitHub OAuth同意はユーザー本人のブラウザ操作が前提)。
+### 4a. CLIだけで完結する経路(推奨、`4-create-app.ps1`が自動化)
+
+`amplify create-app`は`--oauth-token`引数でGitHub Personal Access Token(PAT)を直接渡せる(新しい「GitHub App」方式の代わりに旧来の「OAuth token」方式を使う)。これによりAmplify Console上での複数画面のGitHub連携フローが不要になり、ユーザー本人にしかできない操作は「GitHub PATを1枚発行してスクリプトへ貼り付ける」ことだけになる。
+
+BLOCKED_BY_USER(本人のGitHubアカウントでの操作が必須): GitHub → 右上アイコン → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → **Generate new token (classic)** → scopeで**repo**にチェック → 発行 → その文字列を`4-create-app.ps1`実行時のプロンプトへ貼り付ける(スクリプト内でSecureString化して扱い、画面表示・ログ・ファイル保存は一切行わない)。
+
+`4-create-app.ps1`が内部で行うこと(すべてAWS CLI経由、確認プロンプトあり):
+1. `us-east-1`・`ap-northeast-1`・`us-west-2`の3リージョンを再スキャンし、既存アプリが無いことを再確認(重複作成防止)
+2. `aws amplify create-app --platform WEB_COMPUTE --oauth-token <PAT>` でアプリを作成
+3. `aws amplify create-branch` で`claude/inventory-management-system-5vbvc7`を追加(`main`は対象外)
+4. `aws amplify start-job --job-type RELEASE` で初回ビルドを開始
+
+**未検証の注意点**: `--platform WEB_COMPUTE`・`--oauth-token`はAWS Amplify Hosting CLIの公式ドキュメント上の既知のパラメータだが、このClaude Code環境には実AWS認証情報が無いため実行結果を実機確認できていない。`4-create-app.ps1`はAWS CLIが返す生のエラーメッセージをそのまま表示するので、失敗した場合はそのメッセージを教えてもらえれば原因を特定して修正する。
+
+### 4b. AWS Consoleでの代替手順(4aが失敗した場合のフォールバック)
 
 1. AWS Console → **Amplify** → 「新しいアプリの作成」→「GitHubからデプロイ」
 2. GitHubアカウント認可 → リポジトリ `bello050401/aws-amplify-system` を選択
@@ -66,9 +81,19 @@ Secrets Managerの仕様上、Secretの完全なARNには作成時にランダ�
 4. ビルド設定はリポジトリ直下の `amplify.yml` がそのまま使われる(既存のGen2 + Next.js SSR標準構成、変更不要)
 5. デプロイ実行 → 完了後、そのブランチ専用のURLが発行される
 
-Amplifyアプリが既に存在する場合は、上記STEP 1〜4の代わりに`3-create-branch.ps1`をそのApp IDで実行すればよい(GitHub App連携済みのアプリであれば、CLIからのブランチ追加だけでWebhook経由の自動ビルドが有効になる)。**重要**: どちらの経路でも別ブランチの追加であり、`main`ブランチの設定・本番ドメインには一切触れない。
+Amplifyアプリが既に存在する場合は、4a/4bのアプリ作成の代わりに`3-create-branch.ps1`をそのApp IDで実行すればよい。**重要**: どの経路でも別ブランチの追加であり、`main`ブランチの設定・本番ドメインには一切触れない。
 
-## 5. ZAICO少数件テスト同期(今回コード実装済み)
+### 4c. Amplify Gen2バックエンドとHosting Appの関係(重要)
+
+Amplify Gen2では、Amplify Hostingの「ブランチ」ごとに**独立したバックエンド環境**(専用のCognito User Pool・AppSync API・S3バケット)が作られる — `amplify.yml`のbackendフェーズが実行する`ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID`が、ブランチ名をキーにCloudFormationスタックを作成/更新する仕組みのため。
+
+このリポジトリはこれまで一度もAmplify Hostingへ接続されたことが無い(`1-discover.ps1`でus-east-1に既存アプリが無いことを確認済み、`4-create-app.ps1`で他2リージョンも再確認する)。つまり:
+
+- 今回`claude/inventory-management-system-5vbvc7`ブランチ用に作られるCognito/AppSync/S3は、**このアプリにとって初めてのHosting経由バックエンド**であり、既存の本番リソースを上書き・共有することは無い(そもそも存在しない)。
+- 将来`main`を別途Amplify Hostingへ接続して本番運用する場合も、Gen2の「ブランチ=独立バックエンド」の仕組みにより、今回作成したテスト用バックエンドとは完全に分離された別のCognito/AppSync/S3が新たに作られる — 今回の作業が将来の本番環境構築を妨げたり、リソースを共有してしまったりすることは無い。
+- ローカル開発者が各自`ampx sandbox`で使っている個人サンドボックス環境(一時的、`.amplify/`はgitignore対象)とも完全に別物 — 混同しないこと。
+
+## 5. ZAICO少数件テスト同期(コード実装済み)
 
 `/inventory/settings` のZAICO同期パネルに追加:
 

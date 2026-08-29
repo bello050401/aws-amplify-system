@@ -44,13 +44,59 @@ function Write-Section {
 function Invoke-AwsJson {
   # Named $ArgList (not $Args) to avoid colliding with PowerShell's
   # automatic $args variable inside a function.
+  #
+  # Windows PowerShell 5.1 bug worked around here: with
+  # $ErrorActionPreference = "Stop" (set at script scope above), text
+  # that a native command (aws.exe) writes to stderr and that gets
+  # merged into the success stream via "2>&1" is promoted from a plain
+  # string into a terminating NativeCommandError - which aborts the
+  # whole script right there, before $LASTEXITCODE can even be checked.
+  # This is exactly what happened when Secrets Manager returned
+  # ResourceNotFoundException (aws.exe writes the error JSON to stderr
+  # and exits non-zero, which is completely normal/expected here - it
+  # is a result to classify, not a script bug). The fix is to switch
+  # $ErrorActionPreference to "Continue" for the duration of the native
+  # call only, so its stderr is treated as plain text instead of a
+  # terminating error, and to restore the previous value afterward no
+  # matter what (finally).
   param([string[]]$ArgList)
   $fullArgs = $ArgList + @("--profile", $ProfileName, "--region", $Region, "--output", "json")
-  $out = & aws @fullArgs 2>&1
-  if ($LASTEXITCODE -ne 0) {
-    return @{ Ok = $false; Raw = ($out -join "`n") }
+
+  $previousEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $out = & aws @fullArgs 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousEap
   }
-  return @{ Ok = $true; Raw = ($out -join "`n") }
+
+  # Every element of $out is converted to a plain string explicitly -
+  # a merged stderr line can come back as an ErrorRecord object rather
+  # than a bare string, and ErrorRecord's default ToString() already
+  # returns the underlying message text, so this never loses information.
+  $rawText = ($out | ForEach-Object { $_.ToString() }) -join "`n"
+
+  if ($exitCode -ne 0) {
+    return @{ Ok = $false; Raw = $rawText }
+  }
+  return @{ Ok = $true; Raw = $rawText }
+}
+
+<#
+.SYNOPSIS (helper) Classify-AwsError
+  Turns the raw text of a failed AWS CLI call into one of a small set
+  of known reasons, instead of only ever saying "it failed". Matches
+  the same reasons app/actions and lib/zaico/secretStore.ts already
+  distinguish for the running app itself.
+#>
+function Get-AwsErrorKind {
+  param([string]$RawText)
+  if ($RawText -match "ResourceNotFoundException") { return "not-found" }
+  if ($RawText -match "AccessDeniedException" -or $RawText -match "is not authorized to perform") { return "access-denied" }
+  if ($RawText -match "InvalidClientTokenId" -or $RawText -match "UnrecognizedClientException" -or $RawText -match "ExpiredToken") { return "auth-error" }
+  if ($RawText -match "Unable to locate credentials" -or $RawText -match "Could not connect to the endpoint") { return "network-or-credentials" }
+  return "other"
 }
 
 Write-Host "BELLO AWS test environment - discovery script" -ForegroundColor Green
@@ -112,9 +158,10 @@ if (-not $targetApp) {
   Write-Host "It might exist in a different region. All apps found in this region:"
   $apps | ForEach-Object { Write-Host ("  - " + $_.name + " (" + $_.appId + ") repo=" + $_.repository) }
   Write-Host ""
-  Write-Host "[NEXT ACTION] Create a new Amplify app in the AWS Console and connect the GitHub repository." -ForegroundColor Cyan
-  Write-Host "See docs/aws-test-environment.md section 4 for the exact steps."
-  Write-Host "Once the app is created, use its App ID with 3-create-branch.ps1."
+  Write-Host "[NEXT ACTION] Run 4-create-app.ps1 - it re-checks a short list of other regions, and if" -ForegroundColor Cyan
+  Write-Host "still nothing is found, creates the app and connects the branch from the CLI (a GitHub" -ForegroundColor Cyan
+  Write-Host "personal access token is the only manual step it needs). See docs/aws-test-environment.md" -ForegroundColor Cyan
+  Write-Host "section 4 for details, or section 4b for the AWS Console alternative." -ForegroundColor Cyan
 } else {
   if ($targetApp -is [array]) { $targetApp = $targetApp[0] }
   Write-Host "Found an existing app:" -ForegroundColor Green
@@ -172,11 +219,30 @@ if ($secretResult.Ok) {
   Write-Host ("  ARN: " + $secret.ARN)
   Write-Host "You can pass this full ARN to 2-apply-secrets-policy.ps1 -SecretArn for the strictest exact-match policy."
 } else {
-  if ($secretResult.Raw -match "ResourceNotFoundException") {
-    Write-Host "The secret does not exist yet (amplify/backend.ts's CDK stack may not be deployed to this account/region yet)." -ForegroundColor Yellow
-    Write-Host "The app will auto-create it (CreateSecret) the first time an ADMIN saves a token from the settings screen - no manual pre-creation is needed."
-  } else {
-    Write-Host $secretResult.Raw
+  $kind = Get-AwsErrorKind -RawText $secretResult.Raw
+  switch ($kind) {
+    "not-found" {
+      Write-Host "Secret not found: it does not exist yet in this account/region." -ForegroundColor Yellow
+      Write-Host "This is expected and fine - the app will auto-create it (CreateSecret) the first time an ADMIN saves a token from the settings screen. No manual pre-creation is needed."
+    }
+    "access-denied" {
+      Write-Host "Access denied: this identity is not authorized to call secretsmanager:DescribeSecret here." -ForegroundColor Red
+      Write-Host "This does not block the app itself (it only needs GetSecretValue/PutSecretValue/CreateSecret on the Hosting execution role, checked separately in step 2b/2)."
+      Write-Host $secretResult.Raw
+    }
+    "auth-error" {
+      Write-Host "Authentication error while calling Secrets Manager (invalid or expired credentials)." -ForegroundColor Red
+      Write-Host ("Try: aws sso login --profile " + $ProfileName + "   then re-run this script.")
+      Write-Host $secretResult.Raw
+    }
+    "network-or-credentials" {
+      Write-Host "Could not reach AWS, or no usable credentials were found for this call." -ForegroundColor Red
+      Write-Host $secretResult.Raw
+    }
+    default {
+      Write-Host "Other AWS error while checking the secret:" -ForegroundColor Red
+      Write-Host $secretResult.Raw
+    }
   }
 }
 
