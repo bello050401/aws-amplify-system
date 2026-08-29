@@ -1,6 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { getInventoryDetail } from "@/lib/inventory/queries";
+import { getInventoryDetail, listInventory } from "@/lib/inventory/queries";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { createMercariProduct, MercariApiError } from "./mercari/adapter";
 import type {
@@ -140,6 +140,149 @@ export async function getChannelListing(inventoryId: string, channel: ListingCha
     ...inventoryAuthMode,
   });
   return data[0] ? toChannelListingRecord(data[0]) : null;
+}
+
+/** lib/inventory/queries.tsのSEARCH_MAX_SCAN_ITEMSと同じ上限 — Inventory自体がその上限を超えない前提なので、Inventoryとjoinするこちらの一括取得も同じ規模で揃えておく。 */
+const LISTING_OVERVIEW_MAX_ITEMS = 20000;
+
+async function fetchAllChannelListings(channel: ListingChannel): Promise<ChannelListingRecord[]> {
+  const items: ChannelListingRecord[] = [];
+  let nextToken: string | null | undefined;
+  do {
+    const { data, nextToken: nt, errors } = await serverDataClient.models.ChannelListing.list({
+      filter: { channel: { eq: channel } },
+      limit: 200,
+      nextToken: nextToken ?? undefined,
+      ...inventoryAuthMode,
+    });
+    if (errors) throw new Error(`出品状況の取得に失敗しました: ${JSON.stringify(errors)}`);
+    items.push(...data.map(toChannelListingRecord));
+    nextToken = nt;
+    if (items.length >= LISTING_OVERVIEW_MAX_ITEMS) break;
+  } while (nextToken);
+  return items;
+}
+
+async function fetchAllListingDrafts(): Promise<ListingDraftRecord[]> {
+  const items: ListingDraftRecord[] = [];
+  let nextToken: string | null | undefined;
+  do {
+    const { data, nextToken: nt, errors } = await serverDataClient.models.ListingDraft.list({
+      filter: { deletedAt: { attributeExists: false } },
+      limit: 200,
+      nextToken: nextToken ?? undefined,
+      ...inventoryAuthMode,
+    });
+    if (errors) throw new Error(`出品下書き一覧の取得に失敗しました: ${JSON.stringify(errors)}`);
+    items.push(...data.map(toListingDraftRecord));
+    nextToken = nt;
+    if (items.length >= LISTING_OVERVIEW_MAX_ITEMS) break;
+  } while (nextToken);
+  return items;
+}
+
+/** 一覧ベースのEC出品管理画面(下記ListingOverviewRow)の1行。 */
+export interface ListingOverviewRow {
+  inventoryId: string;
+  displayId: string;
+  name: string;
+  quantity: number;
+  price: number | null;
+  thumbnailKey: string | null;
+  inventoryUpdatedAt: string;
+  hasDraft: boolean;
+  /** 現時点でチャネルはMERCARI_SHOPSのみ(lib/listing/types.tsのListingChannel参照) — 将来チャネルが増えたらこの1フィールドを配列にする。 */
+  channelListing: ChannelListingRecord | null;
+}
+
+/**
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §15/§16: 在庫一覧
+ * ベースのEC出品管理画面(item-centric)向けの一括取得。「eコンビニ」の
+ * ような他社の出品管理ツールは、あくまでUI設計の"コンセプト"
+ * (商品中心・一括操作・外部ID/状態の可視化・詳細への深いリンク)だけの
+ * 参考であり、UI/デザイン/コードは一切参照・コピーしていない。
+ *
+ * Inventory本体(全件、既存のlistInventoryを再利用)へChannelListing
+ * (MERCARI_SHOPS)の有無を突き合わせる — 一度も出品したことがない商品
+ * も含めて全件を返すのが意図(spec: 一覧から出品前の商品も見えて選べる
+ * 必要がある)。ChannelListing/ListingDraftはInventoryと同じ規模
+ * (1 Inventoryにつき最大各1件)なので、lib/inventory/queries.tsの
+ * fetchAllInventoryRecordsと同じ「まとめて全件取得してメモリ上でjoin
+ * する」方式で十分 — 専用の検索基盤が要るほどの規模ではない。
+ */
+export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
+  const [inventoryPage, channelListings, drafts] = await Promise.all([
+    listInventory({}, { offset: 0, limit: LISTING_OVERVIEW_MAX_ITEMS }),
+    fetchAllChannelListings("MERCARI_SHOPS"),
+    fetchAllListingDrafts(),
+  ]);
+
+  const channelListingByInventoryId = new Map(channelListings.map((c) => [c.inventoryId, c]));
+  const draftInventoryIds = new Set(drafts.map((d) => d.inventoryId));
+
+  return inventoryPage.items.map((item) => ({
+    inventoryId: item.id,
+    displayId: item.displayId,
+    name: item.name,
+    quantity: item.quantity,
+    price: item.salePrice ?? item.plannedSalePrice ?? null,
+    thumbnailKey: item.mainImageThumbnailKey ?? item.mainImageStorageKey,
+    inventoryUpdatedAt: item.updatedAt,
+    hasDraft: draftInventoryIds.has(item.id),
+    channelListing: channelListingByInventoryId.get(item.id) ?? null,
+  }));
+}
+
+/**
+ * 一覧画面からの一括下書き作成(spec §16: 「一括操作」)。既に下書きが
+ * ある商品は上書きせずスキップする(既存のカスタマイズを壊さないため
+ * — saveListingDraftはupsertなので、うっかり全件へ呼ぶとタイトル/価格
+ * を初期値へ巻き戻してしまう)。conditionの初期値
+ * "NO_NOTABLE_DAMAGE"は、既存の単品編集フォーム
+ * (ListingForm.tsxのuseState初期値)が新規下書きに対して使っているのと
+ * 同じ既定値 — 出品実行前にADMIN/EDITORが商品詳細のEC出品タブで確認・
+ * 変更できる、あくまで編集可能な下書きの初期値であり、
+ * lib/listing/mercari/adapter.tsが拒否する「未確認のまま実際にMercari
+ * へ送ってしまう」こととは別の話(そちらは出品実行の直前でconditionが
+ * nullなら明示的にブロックする、既に対応済みの安全弁)。
+ */
+export async function bulkCreateListingDrafts(
+  inventoryIds: string[],
+  who: string | null,
+): Promise<{ created: string[]; skipped: string[]; failed: { inventoryId: string; error: string }[] }> {
+  const created: string[] = [];
+  const skipped: string[] = [];
+  const failed: { inventoryId: string; error: string }[] = [];
+
+  for (const inventoryId of inventoryIds) {
+    try {
+      const existing = await getListingDraftForInventory(inventoryId);
+      if (existing) {
+        skipped.push(inventoryId);
+        continue;
+      }
+      const inventory = await getInventoryDetail(inventoryId);
+      if (!inventory) {
+        failed.push({ inventoryId, error: "対象の在庫が見つかりません。" });
+        continue;
+      }
+      await saveListingDraft(
+        inventoryId,
+        {
+          title: inventory.name,
+          description: "",
+          price: inventory.salePrice ?? inventory.plannedSalePrice ?? 0,
+          condition: "NO_NOTABLE_DAMAGE",
+        },
+        who,
+      );
+      created.push(inventoryId);
+    } catch (err) {
+      failed.push({ inventoryId, error: err instanceof Error ? err.message : "不明なエラー" });
+    }
+  }
+
+  return { created, skipped, failed };
 }
 
 export interface ListingDraftInput {

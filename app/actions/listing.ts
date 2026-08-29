@@ -3,13 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
+  bulkCreateListingDrafts,
   getChannelListing,
   getListingDraftForInventory,
+  listListingsOverview,
   saveChannelOverride,
   saveListingDraft,
   listOnMercari,
   type ChannelOverrideInput,
   type ListingDraftInput,
+  type ListingOverviewRow,
 } from "@/lib/listing/service";
 import { fetchMercariCategories } from "@/lib/listing/mercari/adapter";
 import { isMercariConnected } from "@/lib/listing/mercari/tokenAccess";
@@ -63,6 +66,27 @@ export async function listOnMercariAction(inventoryId: string, shippingPayer: Sh
   const who = await requireEditPermission();
   const result = await listOnMercari(inventoryId, shippingPayer, who);
   revalidatePath(`/inventory/${inventoryId}/listing`);
+  return result;
+}
+
+/**
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §15/§16: 一覧ベース
+ * のEC出品管理画面(app/inventory/(protected)/listings/page.tsx)向け。
+ * 閲覧はrequireEditPermissionを課さない — 在庫詳細を読める人(VIEWER
+ * 含む)なら出品状況の一覧閲覧も問題ない、既存のgetListingDraftAction/
+ * getChannelListingActionと同じ閲覧権限モデル。
+ */
+export async function listListingsOverviewAction(): Promise<ListingOverviewRow[]> {
+  return listListingsOverview();
+}
+
+/** 一覧画面からの一括下書き作成(spec §16: 一括操作) — 書き込みなのでcanEditInventory境界を課す。 */
+export async function bulkCreateListingDraftsAction(
+  inventoryIds: string[],
+): Promise<{ created: string[]; skipped: string[]; failed: { inventoryId: string; error: string }[] }> {
+  const who = await requireEditPermission();
+  const result = await bulkCreateListingDrafts(inventoryIds, who);
+  if (result.created.length > 0) revalidatePath("/inventory/listings");
   return result;
 }
 

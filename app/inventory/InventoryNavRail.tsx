@@ -26,6 +26,13 @@ const NAV_ITEMS = [
   { key: "inventory", label: "在庫一覧", href: "/inventory", enabled: true },
   // 夜間開発指示書 §12: 在庫一覧/売上/設定という主要構成。
   { key: "sales", label: "売上", href: "/inventory/sales", enabled: true },
+  // BELLO統合改修 master指示書(2026-08-29統合改修版) §14: 「EC出品」を
+  // 売上の直下へ追加 — 在庫詳細画面の既存「EC出品」リンク
+  // (/inventory/[id]/listing、1商品単位)はこの変更後も残したまま
+  // (Q4/Q12/Q13で明示的に要求されている)、こちらは横断的な一覧
+  // ベースの管理画面(/inventory/listings、app/inventory/(protected)/
+  // listings/page.tsx)への入口。
+  { key: "listings", label: "EC出品", href: "/inventory/listings", enabled: true },
   { key: "tools", label: "ツール", href: null, enabled: false },
   { key: "settings", label: "設定", href: "/inventory/settings", enabled: true },
 ] as const;
