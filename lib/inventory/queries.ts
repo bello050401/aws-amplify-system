@@ -232,6 +232,18 @@ export const SEARCH_MAX_SCAN_ITEMS = 20000;
  * serverDataClient/AWSに一切触れずに直接テストできるようにするため。
  * 同点(同一updatedAt、通常は起きないが理論上)はidで安定ソートする —
  * 「毎回結果の順序が変わる」ことを避ける。
+ *
+ * 既知の残課題(2026-08-29統合改修版 taskラウンド、意図的に未修正 —
+ * 理由はlib/inventory/thumbnailBackfill.tsの該当コメント参照): この
+ * `updatedAt`はInventoryモデルに明示フィールドを持たない、Amplifyの
+ * 自動管理タイムスタンプであり、成功した`.update()`呼び出しなら中身が
+ * ユーザーにとって意味のある変更かどうかに関わらず必ず「今」へ更新さ
+ * れる。ZAICO同期・編集画面保存・一括編集・インラインー編集・重複統合
+ * (masterDedupe)・インポートの各書き込みはすべて実際のユーザー向け
+ * フィールド変更なので、この一覧の意図(「直近で実際に変更された商品
+ * が最上位」)と一致する。唯一の例外がlib/inventory/thumbnailBackfill.ts
+ * ―既存画像へのサムネイル遡及生成で、ユーザーには見えないthumbnailKey
+ * だけを書き込むためこの一覧の意図とは食い違う。
  */
 export function compareByUpdatedAtDesc(a: { id: string; updatedAt: string }, b: { id: string; updatedAt: string }): number {
   if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
