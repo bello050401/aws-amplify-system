@@ -15,10 +15,12 @@ export function MercariSettingsPanel({
   mercariConnected,
   mercariTokenSource,
   mercariEnvironment,
+  mercariApiClientNameConfigured,
 }: {
   mercariConnected: boolean;
   mercariTokenSource: MercariTokenSource;
   mercariEnvironment: "sandbox" | "production";
+  mercariApiClientNameConfigured: boolean;
 }) {
   const router = useRouter();
   const [tokenEditing, setTokenEditing] = useState(false);
@@ -154,6 +156,39 @@ export function MercariSettingsPanel({
           <p className="mt-1 text-[11px] text-gray-500">
             上のボタンから設定するか、サーバー環境変数 MERCARI_ACCESS_TOKEN で設定できます。環境(sandbox/production)はサーバー環境変数
             MERCARI_ENV で切り替えます(既定: sandbox)。
+          </p>
+        )}
+      </div>
+
+      {/* BELLO統合改修 master指示書(2026-08-29統合改修版) §7/§17:
+          実際に報告されたHTTP 404の根本原因調査で判明した、Mercari公式
+          ドキュメントが必須とするUser-Agentヘッダ用の設定
+          (lib/listing/mercari/endpoints.tsのgetMercariUserAgent参照)。
+          TOKENと違い認証情報そのものではないため値を隠す必要はないが、
+          値自体はサーバー環境変数からしか設定できない(Mercariとの契約
+          時に個社へ割り当てられる値で、この画面から入力・保存する対象
+          ではない)ため、ここでは「設定済みかどうか」だけを表示する。 */}
+      <div className="mt-3 border border-gray-200 p-4">
+        <p className="mb-1 text-[12px] font-bold text-gray-700">API接続用User-Agent設定</p>
+        <p className="mb-2 text-[11px] text-gray-500">
+          Mercari
+          Shops公式ドキュメントは、すべてのリクエストへ正しいUser-Agent（契約時にMercariから割り当てられるAPIクライアント名を含む）を設定することを必須としています。未設定のまま出品を試みると、原因が分かりにくいエラー（HTTP
+          404を含む）になることがあります。
+        </p>
+        <p className="text-[13px]">
+          {mercariApiClientNameConfigured ? (
+            <span className="font-bold text-green-700">● 設定済み</span>
+          ) : (
+            <span className="font-bold text-red-600">● 未設定</span>
+          )}
+        </p>
+        {!mercariApiClientNameConfigured && (
+          <p className="mt-1 text-[11px] text-gray-500">
+            サーバー環境変数 <code className="mx-1 bg-gray-100 px-1">MERCARI_API_CLIENT_NAME</code>
+            にMercari Shopsとの契約時に割り当てられたAPIクライアント名を設定してください（値についてはMercari
+            Shopsの契約担当窓口へご確認ください。この画面から捏造した値を設定しても解決しません）。バージョン文字列は任意で
+            <code className="mx-1 bg-gray-100 px-1">MERCARI_API_CLIENT_VERSION</code>
+            （未設定時は既定値 0.0.0）で指定できます。
           </p>
         )}
       </div>

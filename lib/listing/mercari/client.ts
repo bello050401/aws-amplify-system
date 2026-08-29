@@ -1,5 +1,5 @@
 import "server-only";
-import { getMercariEndpoint, getMercariEnvironment, type MercariEnvironment } from "./endpoints";
+import { getMercariEndpoint, getMercariEnvironment, getMercariUserAgent, type MercariEnvironment } from "./endpoints";
 import type { GraphQLErrorItem, GraphQLResponse } from "./types";
 
 /**
@@ -81,6 +81,12 @@ export class MercariShopsClient {
 
   private async singleRequest<TData, TVariables>(query: string, variables: TVariables): Promise<TData> {
     const token = await this.getAccessToken();
+    // endpoints.tsのgetMercariUserAgent参照 — 実際に報告されたHTTP 404
+    // の根本原因調査で判明した、公式ドキュメントが必須とするヘッダ。
+    // 未設定はネットワークエラーではなく設定不備なので、下のtry/catch
+    // (ネットワークエラー→リトライ対象)より前に呼び、無駄なリトライを
+    // させず即座にエラーとして扱う。
+    const userAgent = getMercariUserAgent();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -91,6 +97,7 @@ export class MercariShopsClient {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "User-Agent": userAgent,
         },
         body: JSON.stringify({ query, variables }),
         signal: controller.signal,

@@ -14,6 +14,7 @@ import { SHIPPING_DURATIONS, shippingDurationLabel, shippingDurationToMercariVal
 import { internalStatusToMercariApiStatus } from "@/lib/listing/mercari/mapper/productStatus";
 import { resolveEffectiveListingFields, type ChannelListingRecord, type ListingDraftRecord } from "@/lib/listing/types";
 import { createMercariProduct } from "@/lib/listing/mercari/adapter";
+import { getMercariUserAgent, isMercariApiClientNameConfigured } from "@/lib/listing/mercari/endpoints";
 
 let failures = 0;
 let passes = 0;
@@ -187,6 +188,41 @@ async function testAdapterValidation() {
   );
 }
 
+// ── BELLO統合改修 master指示書(2026-08-29統合改修版) §7/§17根本修正:
+// 実際に報告されたHTTP 404の根本原因調査で判明した必須User-Agent
+// ヘッダ(lib/listing/mercari/endpoints.tsのgetMercariUserAgent)。
+// process.envを直接書き換えて検証する — このテストの前後で必ず元の
+// 値へ復元し、他のテスト・呼び出し元への副作用を残さない。 ───────────
+
+function testMercariUserAgent() {
+  const originalName = process.env.MERCARI_API_CLIENT_NAME;
+  const originalVersion = process.env.MERCARI_API_CLIENT_VERSION;
+  try {
+    delete process.env.MERCARI_API_CLIENT_NAME;
+    delete process.env.MERCARI_API_CLIENT_VERSION;
+    assertEqual(isMercariApiClientNameConfigured(), false, "getMercariUserAgent: isMercariApiClientNameConfigured is false when unset");
+    let threw = false;
+    try {
+      getMercariUserAgent();
+    } catch (err) {
+      threw = err instanceof Error && err.message.includes("MERCARI_API_CLIENT_NAME");
+    }
+    assertTrue(threw, "getMercariUserAgent: throws a CONFIG_REQUIRED error naming MERCARI_API_CLIENT_NAME when unset, instead of sending a fabricated value");
+
+    process.env.MERCARI_API_CLIENT_NAME = "bello-inventory";
+    assertEqual(isMercariApiClientNameConfigured(), true, "getMercariUserAgent: isMercariApiClientNameConfigured is true once set");
+    assertEqual(getMercariUserAgent(), "bello-inventory/0.0.0", "getMercariUserAgent: defaults VERSION to 0.0.0 per Mercari's own documented convention when unset");
+
+    process.env.MERCARI_API_CLIENT_VERSION = "1.2.3";
+    assertEqual(getMercariUserAgent(), "bello-inventory/1.2.3", "getMercariUserAgent: uses MERCARI_API_CLIENT_VERSION when set");
+  } finally {
+    if (originalName === undefined) delete process.env.MERCARI_API_CLIENT_NAME;
+    else process.env.MERCARI_API_CLIENT_NAME = originalName;
+    if (originalVersion === undefined) delete process.env.MERCARI_API_CLIENT_VERSION;
+    else process.env.MERCARI_API_CLIENT_VERSION = originalVersion;
+  }
+}
+
 async function main() {
   testConditionMapper();
   testShippingPayerMapper();
@@ -194,6 +230,7 @@ async function main() {
   testProductStatusMapper();
   testResolveEffectiveListingFields();
   await testAdapterValidation();
+  testMercariUserAgent();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

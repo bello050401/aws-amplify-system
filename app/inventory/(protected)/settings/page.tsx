@@ -6,7 +6,7 @@ import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
 import { getMercariTokenSource } from "@/lib/listing/mercari/tokenAccess";
-import { getMercariEnvironment } from "@/lib/listing/mercari/endpoints";
+import { getMercariEnvironment, isMercariApiClientNameConfigured } from "@/lib/listing/mercari/endpoints";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
 
@@ -87,6 +87,7 @@ export default async function InventorySettingsPage() {
           mercariConnected={mercariConnected}
           mercariTokenSource={mercariTokenSource}
           mercariEnvironment={getMercariEnvironment()}
+          mercariApiClientNameConfigured={isMercariApiClientNameConfigured()}
         />
       </div>
     </div>

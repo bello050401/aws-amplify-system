@@ -28,6 +28,8 @@ interface SettingsTabsProps {
   mercariConnected: boolean;
   mercariTokenSource: MercariTokenSource;
   mercariEnvironment: "sandbox" | "production";
+  /** サーバー環境変数MERCARI_API_CLIENT_NAMEが設定済みかどうか(lib/listing/mercari/endpoints.tsのgetMercariUserAgent参照 — 実際に報告されたHTTP 404の根本原因調査で判明した必須User-Agentヘッダ用)。 */
+  mercariApiClientNameConfigured: boolean;
 }
 
 /**
@@ -49,6 +51,7 @@ export function SettingsTabs({
   mercariConnected,
   mercariTokenSource,
   mercariEnvironment,
+  mercariApiClientNameConfigured,
 }: SettingsTabsProps) {
   const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari">("category");
 
@@ -100,7 +103,12 @@ export function SettingsTabs({
         {tab === "zaico" && isAdmin && <ZaicoSyncPanel zaicoConnected={zaicoConnected} zaicoTokenSource={zaicoTokenSource} />}
         {tab === "images" && isAdmin && <ThumbnailBackfillPanel />}
         {tab === "mercari" && isAdmin && (
-          <MercariSettingsPanel mercariConnected={mercariConnected} mercariTokenSource={mercariTokenSource} mercariEnvironment={mercariEnvironment} />
+          <MercariSettingsPanel
+            mercariConnected={mercariConnected}
+            mercariTokenSource={mercariTokenSource}
+            mercariEnvironment={mercariEnvironment}
+            mercariApiClientNameConfigured={mercariApiClientNameConfigured}
+          />
         )}
       </div>
     </div>
