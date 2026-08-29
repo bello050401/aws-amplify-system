@@ -1,25 +1,32 @@
 <#
 .SYNOPSIS
-  BELLO AWSテスト環境の現状を確認する(読み取り専用・安全)。
+  Check the current state of the BELLO AWS test environment (read-only, safe).
 
 .DESCRIPTION
-  以下を確認し、画面へ表示する。AWSリソースは一切変更しない。
-    1. 現在のAWS identity(sts get-caller-identity) — root credentialsでないことを確認
-    2. 現在のregion設定
-    3. bello050401/aws-amplify-system に紐づく既存Amplifyアプリの有無
-    4. 見つかった場合: 既存ブランチ一覧、claude/inventory-management-system-5vbvc7 が既に登録済みか
-    5. 見つかった場合: SSRコンピュートロールらしきARN(computeRoleArnを含むフィールド)の抽出
-    6. Secrets Manager上の bello/zaico-api-token の存在有無
+  Checks and prints the following. Does NOT change any AWS resource.
+    1. Current AWS identity (sts get-caller-identity) - confirms it is not root
+    2. Current region setting
+    3. Whether an Amplify app already exists for bello050401/aws-amplify-system
+    4. If found: existing branches, whether claude/inventory-management-system-5vbvc7 is already registered
+    5. If found: candidate IAM role ARNs (to help identify the SSR compute role)
+    6. Whether the Secrets Manager secret bello/zaico-api-token already exists
+
+  This script is plain ASCII on purpose (Windows PowerShell 5.1 on a
+  Japanese-locale machine can misinterpret a script file containing
+  multi-byte characters if it is not saved with a BOM, which corrupts
+  string literals and produces ParserError / MissingEndCurlyBrace /
+  "unexpected token" errors). Keeping every string literal ASCII-only
+  removes that failure mode entirely, independent of file encoding.
 
 .PARAMETER ProfileName
-  AWS CLIプロファイル名(既定: Bello)
+  AWS CLI profile name (default: Bello)
 
 .PARAMETER Region
-  AWSリージョン(既定: us-east-1 — BELLOのAmplify環境の指定値)
+  AWS region (default: us-east-1, BELLO's Amplify environment)
 
 .EXAMPLE
-  ./1-discover.ps1
-  ./1-discover.ps1 -ProfileName Bello -Region us-east-1
+  .\1-discover.ps1
+  .\1-discover.ps1 -ProfileName Bello -Region us-east-1
 #>
 param(
   [string]$ProfileName = "Bello",
@@ -28,13 +35,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Write-Section($title) {
+function Write-Section {
+  param([string]$Title)
   Write-Host ""
-  Write-Host "==== $title ====" -ForegroundColor Cyan
+  Write-Host ("==== " + $Title + " ====") -ForegroundColor Cyan
 }
 
 function Invoke-AwsJson {
-  # $ArgList(自動変数$argsとの衝突を避けるためこの名前にしている)。
+  # Named $ArgList (not $Args) to avoid colliding with PowerShell's
+  # automatic $args variable inside a function.
   param([string[]]$ArgList)
   $fullArgs = $ArgList + @("--profile", $ProfileName, "--region", $Region, "--output", "json")
   $out = & aws @fullArgs 2>&1
@@ -44,52 +53,52 @@ function Invoke-AwsJson {
   return @{ Ok = $true; Raw = ($out -join "`n") }
 }
 
-Write-Host "BELLO AWSテスト環境 — 現状確認スクリプト" -ForegroundColor Green
-Write-Host "profile=$ProfileName region=$Region"
+Write-Host "BELLO AWS test environment - discovery script" -ForegroundColor Green
+Write-Host ("profile=" + $ProfileName + " region=" + $Region)
 
-# ── 1. AWS CLIの存在確認 ─────────────────────────────────────────────
+# ---- 0. Confirm AWS CLI is installed ------------------------------------
 Write-Section "0. AWS CLI"
 $awsVersion = & aws --version 2>&1
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "AWS CLIが見つかりません。https://aws.amazon.com/cli/ からインストールしてください。" -ForegroundColor Red
+  Write-Host "AWS CLI was not found. Install it from https://aws.amazon.com/cli/ and try again." -ForegroundColor Red
   exit 1
 }
 Write-Host $awsVersion
 
-# ── 2. 現在のAWS identity ────────────────────────────────────────────
-Write-Section "1. 現在のAWS identity"
+# ---- 1. Current AWS identity ---------------------------------------------
+Write-Section "1. Current AWS identity"
 $identityResult = Invoke-AwsJson -ArgList @("sts", "get-caller-identity")
 if (-not $identityResult.Ok) {
-  Write-Host "identityの取得に失敗しました。SSOログインが必要な可能性があります:" -ForegroundColor Yellow
-  Write-Host "  aws sso login --profile $ProfileName"
+  Write-Host "Failed to get identity. You may need to run SSO login:" -ForegroundColor Yellow
+  Write-Host ("  aws sso login --profile " + $ProfileName)
   Write-Host $identityResult.Raw
   exit 1
 }
 $identity = $identityResult.Raw | ConvertFrom-Json
-Write-Host "Account : $($identity.Account)"
-Write-Host "Arn     : $($identity.Arn)"
-Write-Host "UserId  : $($identity.UserId)"
+Write-Host ("Account : " + $identity.Account)
+Write-Host ("Arn     : " + $identity.Arn)
+Write-Host ("UserId  : " + $identity.UserId)
 
 if ($identity.Arn -match ":root$") {
   Write-Host ""
-  Write-Host "【警告】root credentialsが使用されています。" -ForegroundColor Red
-  Write-Host "このままIAM変更(2-apply-secrets-policy.ps1)を実行しないでください。" -ForegroundColor Red
-  Write-Host "安全な代替手順:" -ForegroundColor Red
-  Write-Host "  1. AWS Console (ルートアカウントでサインイン) → IAM → ユーザー または IAM Identity Center でSSOユーザーを作成"
-  Write-Host "  2. 必要な権限(IAMロールへのポリシー付与、Amplify閲覧)を持つグループへ所属させる"
-  Write-Host "  3. aws configure sso --profile $ProfileName でそのSSOユーザーのプロファイルを設定し直す"
-  Write-Host "  4. aws sso login --profile $ProfileName でログインし、このスクリプトを再実行する"
+  Write-Host "[WARNING] You are using root account credentials." -ForegroundColor Red
+  Write-Host "Do not proceed to IAM changes (2-apply-secrets-policy.ps1) with root credentials." -ForegroundColor Red
+  Write-Host "Safer alternative:" -ForegroundColor Red
+  Write-Host "  1. Sign in to the AWS Console as root, then go to IAM (or IAM Identity Center) and create an IAM/SSO user"
+  Write-Host "  2. Put that user in a group with the permissions needed here (attach role policies, view Amplify)"
+  Write-Host ("  3. Run: aws configure sso --profile " + $ProfileName + "   (set up that SSO user's profile)")
+  Write-Host ("  4. Run: aws sso login --profile " + $ProfileName + "   then re-run this script")
   exit 1
 }
-Write-Host "root credentialsではありません。続行します。" -ForegroundColor Green
+Write-Host "Not using root credentials. Continuing." -ForegroundColor Green
 
 $accountId = $identity.Account
 
-# ── 3. Amplifyアプリの検索 ───────────────────────────────────────────
-Write-Section "2. 既存Amplifyアプリの検索(bello050401/aws-amplify-system)"
+# ---- 2. Look for an existing Amplify app ---------------------------------
+Write-Section "2. Looking for an existing Amplify app (bello050401/aws-amplify-system)"
 $appsResult = Invoke-AwsJson -ArgList @("amplify", "list-apps")
 if (-not $appsResult.Ok) {
-  Write-Host "amplify list-apps に失敗しました(権限不足の可能性):" -ForegroundColor Yellow
+  Write-Host "amplify list-apps failed (possible permission issue):" -ForegroundColor Yellow
   Write-Host $appsResult.Raw
   $apps = @()
 } else {
@@ -99,78 +108,78 @@ if (-not $appsResult.Ok) {
 $targetApp = $apps | Where-Object { $_.repository -match "aws-amplify-system" }
 
 if (-not $targetApp) {
-  Write-Host "region=$Region に bello050401/aws-amplify-system 用のAmplifyアプリは見つかりませんでした。" -ForegroundColor Yellow
-  Write-Host "他のリージョンに存在する可能性があります。全アプリ一覧:"
-  $apps | ForEach-Object { Write-Host ("  - {0} ({1}) repo={2}" -f $_.name, $_.appId, $_.repository) }
+  Write-Host ("No Amplify app for bello050401/aws-amplify-system was found in region " + $Region + ".") -ForegroundColor Yellow
+  Write-Host "It might exist in a different region. All apps found in this region:"
+  $apps | ForEach-Object { Write-Host ("  - " + $_.name + " (" + $_.appId + ") repo=" + $_.repository) }
   Write-Host ""
-  Write-Host "【次のアクション】AWS ConsoleでAmplifyアプリを新規作成し、GitHubリポジトリを接続してください。" -ForegroundColor Cyan
-  Write-Host "手順は docs/aws-test-environment.md の §4 を参照してください。"
-  Write-Host "アプリ作成後、そのApp IDを使って 3-create-branch.ps1 を実行してください。"
+  Write-Host "[NEXT ACTION] Create a new Amplify app in the AWS Console and connect the GitHub repository." -ForegroundColor Cyan
+  Write-Host "See docs/aws-test-environment.md section 4 for the exact steps."
+  Write-Host "Once the app is created, use its App ID with 3-create-branch.ps1."
 } else {
   if ($targetApp -is [array]) { $targetApp = $targetApp[0] }
-  Write-Host "既存アプリを発見しました:" -ForegroundColor Green
-  Write-Host "  AppId      : $($targetApp.appId)"
-  Write-Host "  Name       : $($targetApp.name)"
-  Write-Host "  Repository : $($targetApp.repository)"
-  Write-Host "  Platform   : $($targetApp.platform)"
+  Write-Host "Found an existing app:" -ForegroundColor Green
+  Write-Host ("  AppId      : " + $targetApp.appId)
+  Write-Host ("  Name       : " + $targetApp.name)
+  Write-Host ("  Repository : " + $targetApp.repository)
+  Write-Host ("  Platform   : " + $targetApp.platform)
   $appId = $targetApp.appId
 
-  Write-Section "2-a. 既存ブランチ一覧"
+  Write-Section "2a. Existing branches"
   $branchesResult = Invoke-AwsJson -ArgList @("amplify", "list-branches", "--app-id", $appId)
   if ($branchesResult.Ok) {
     $branches = ($branchesResult.Raw | ConvertFrom-Json).branches
-    $branches | ForEach-Object { Write-Host ("  - {0} (stage={1})" -f $_.branchName, $_.stage) }
+    $branches | ForEach-Object { Write-Host ("  - " + $_.branchName + " (stage=" + $_.stage + ")") }
     $targetBranch = $branches | Where-Object { $_.branchName -eq "claude/inventory-management-system-5vbvc7" }
     if ($targetBranch) {
       Write-Host ""
-      Write-Host "claude/inventory-management-system-5vbvc7 は既にAmplifyへ登録済みです。" -ForegroundColor Green
-      Write-Host "staging URL: https://claude-inventory-management-system-5vbvc7.$appId.amplifyapp.com" -ForegroundColor Cyan
-      Write-Host "(実際のURLは Amplify Console のブランチ詳細で確認してください — ブランチ名のスラッシュはURL上ハイフンに変換される場合があります)"
+      Write-Host "claude/inventory-management-system-5vbvc7 is already registered on this app." -ForegroundColor Green
+      Write-Host ("Approximate staging URL: https://claude-inventory-management-system-5vbvc7." + $appId + ".amplifyapp.com") -ForegroundColor Cyan
+      Write-Host "(Confirm the exact URL on the branch's detail page in the Amplify Console - slashes in the branch name may be shown differently there.)"
     } else {
       Write-Host ""
-      Write-Host "【次のアクション】3-create-branch.ps1 -AppId $appId を実行して、このブランチをAmplifyへ追加してください。" -ForegroundColor Cyan
+      Write-Host ("[NEXT ACTION] Run: 3-create-branch.ps1 -AppId " + $appId + "   to add this branch to Amplify.") -ForegroundColor Cyan
     }
   } else {
     Write-Host $branchesResult.Raw
   }
 
-  Write-Section "2-b. SSRコンピュートロールの手がかり(get-app / get-branch の生JSONから抽出)"
+  Write-Section "2b. Candidate IAM role ARNs (from raw get-app JSON)"
   $getAppResult = Invoke-AwsJson -ArgList @("amplify", "get-app", "--app-id", $appId)
   if ($getAppResult.Ok) {
     $roleArns = [regex]::Matches($getAppResult.Raw, 'arn:aws:iam::[0-9]+:role/[^"\s]+') | ForEach-Object { $_.Value } | Select-Object -Unique
     if ($roleArns.Count -gt 0) {
-      Write-Host "get-app の応答内で見つかったIAMロールARN候補:"
-      $roleArns | ForEach-Object { Write-Host "  - $_" }
-      Write-Host "この中に 'computeRole' や 'compute' を含むキー名で紐づいているものが、SSR実行ロールです。"
-      Write-Host "(下の生JSONで computeRoleArn / iamServiceRoleArn 等のキー名を目視確認してください)"
+      Write-Host "IAM role ARNs found in the get-app response:"
+      $roleArns | ForEach-Object { Write-Host ("  - " + $_) }
+      Write-Host "The one associated with a key containing 'computeRole' (or similar) is the SSR execution role."
+      Write-Host "(Look at the raw JSON below and check key names such as computeRoleArn / iamServiceRoleArn.)"
     } else {
-      Write-Host "get-app の応答内にIAMロールARNは見つかりませんでした(まだコンピュートロールが割り当てられていない可能性)。"
+      Write-Host "No IAM role ARN was found in the get-app response (a compute role may not be assigned yet)."
     }
     Write-Host ""
-    Write-Host "--- get-app 生JSON(必要な部分を目視確認) ---"
+    Write-Host "--- raw get-app JSON (inspect manually) ---"
     Write-Host $getAppResult.Raw
   } else {
     Write-Host $getAppResult.Raw
   }
 }
 
-# ── 4. Secrets Managerの確認 ─────────────────────────────────────────
-Write-Section "3. Secrets Manager (bello/zaico-api-token) の確認"
+# ---- 3. Check Secrets Manager ---------------------------------------------
+Write-Section "3. Secrets Manager (bello/zaico-api-token)"
 $secretResult = Invoke-AwsJson -ArgList @("secretsmanager", "describe-secret", "--secret-id", "bello/zaico-api-token")
 if ($secretResult.Ok) {
   $secret = $secretResult.Raw | ConvertFrom-Json
-  Write-Host "Secretは既に存在します:" -ForegroundColor Green
-  Write-Host "  ARN: $($secret.ARN)"
-  Write-Host "この完全なARNを 2-apply-secrets-policy.ps1 の -SecretArn に渡すと、suffix完全一致で最も厳密なポリシーを作成できます。"
+  Write-Host "The secret already exists:" -ForegroundColor Green
+  Write-Host ("  ARN: " + $secret.ARN)
+  Write-Host "You can pass this full ARN to 2-apply-secrets-policy.ps1 -SecretArn for the strictest exact-match policy."
 } else {
   if ($secretResult.Raw -match "ResourceNotFoundException") {
-    Write-Host "Secretはまだ存在しません(amplify/backend.tsのCDKデプロイ未実施、またはこのregion/accountに未デプロイ)。" -ForegroundColor Yellow
-    Write-Host "アプリ初回起動時、ADMIN画面からのTOKEN保存操作がCreateSecretで自動作成します(lib/zaico/secretStore.ts参照) — 事前作成は不要です。"
+    Write-Host "The secret does not exist yet (amplify/backend.ts's CDK stack may not be deployed to this account/region yet)." -ForegroundColor Yellow
+    Write-Host "The app will auto-create it (CreateSecret) the first time an ADMIN saves a token from the settings screen - no manual pre-creation is needed."
   } else {
     Write-Host $secretResult.Raw
   }
 }
 
-Write-Section "まとめ"
-Write-Host "AccountId: $accountId"
-Write-Host "このスクリプトは何も変更していません。上記の【次のアクション】に従って次のスクリプトを実行してください。"
+Write-Section "Summary"
+Write-Host ("AccountId: " + $accountId)
+Write-Host "This script made no changes. Follow the [NEXT ACTION] notes above to run the next script."

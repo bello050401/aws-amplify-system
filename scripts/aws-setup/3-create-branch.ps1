@@ -1,34 +1,40 @@
 <#
 .SYNOPSIS
-  既存のAmplifyアプリへ claude/inventory-management-system-5vbvc7
-  ブランチを追加し、初回ビルド(RELEASEジョブ)を開始する(書き込みあり)。
+  Add the claude/inventory-management-system-5vbvc7 branch to an
+  existing Amplify app and start its first build (this script makes a
+  change - it asks for confirmation first).
 
 .DESCRIPTION
-  前提: 1-discover.ps1 で既存のAmplifyアプリ(bello050401/aws-amplify-system
-  に接続済み)が見つかっていること。まだAmplifyアプリ自体が存在しない
-  場合、このスクリプトは使えない — 先にAWS ConsoleでGitHubリポジトリを
-  接続したAmplifyアプリを作成する必要がある(docs/aws-test-environment.md
-  §4参照、これはGitHub OAuth同意を伴うためAWS Console操作が必須)。
+  Prerequisite: 1-discover.ps1 already found an existing Amplify app
+  connected to bello050401/aws-amplify-system. If no Amplify app exists
+  yet, this script cannot be used - you first need to create one and
+  connect the GitHub repository through the AWS Console (this requires
+  GitHub OAuth consent, which only you can grant - see
+  docs/aws-test-environment.md section 4).
 
-  mainブランチには一切触れない。既存の他ブランチ設定も変更しない。
+  Never touches the main branch or any other existing branch's settings.
+
+  This script is plain ASCII on purpose - see 1-discover.ps1's header
+  comment for why (Windows PowerShell 5.1 + non-ASCII text without a
+  BOM can corrupt string literals and produce ParserError).
 
 .PARAMETER AppId
-  対象のAmplifyアプリID(1-discover.ps1の出力から取得)。必須。
+  The target Amplify app ID (from 1-discover.ps1's output). Required.
 
 .PARAMETER BranchName
-  追加するブランチ名(既定: claude/inventory-management-system-5vbvc7 — 変更不要なはず)。
+  The branch to add (default: claude/inventory-management-system-5vbvc7 - normally leave this as-is).
 
 .PARAMETER ProfileName
-  AWS CLIプロファイル名(既定: Bello)
+  AWS CLI profile name (default: Bello)
 
 .PARAMETER Region
-  AWSリージョン(既定: us-east-1)
+  AWS region (default: us-east-1)
 
 .PARAMETER Force
-  確認プロンプトをスキップして即実行する。
+  Skip the confirmation prompt and apply immediately.
 
 .EXAMPLE
-  ./3-create-branch.ps1 -AppId d1234567890abc
+  .\3-create-branch.ps1 -AppId d1234567890abc
 #>
 param(
   [Parameter(Mandatory = $true)]
@@ -44,38 +50,38 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "BELLO AWSテスト環境 — Amplifyブランチ追加" -ForegroundColor Green
-Write-Host "AppId  : $AppId"
-Write-Host "Branch : $BranchName (mainには一切触れません)"
+Write-Host "BELLO AWS test environment - add Amplify branch" -ForegroundColor Green
+Write-Host ("AppId  : " + $AppId)
+Write-Host ("Branch : " + $BranchName + " (main is never touched by this script)")
 
 if ($BranchName -eq "main") {
-  Write-Host "mainブランチはこのスクリプトの対象外です。中断します。" -ForegroundColor Red
+  Write-Host "Refusing to run against the main branch. Stopping." -ForegroundColor Red
   exit 1
 }
 
 if (-not $Force) {
-  $confirmation = Read-Host "アプリ '$AppId' へブランチ '$BranchName' を追加し、初回ビルドを開始しますか？ (yes と入力して続行)"
+  $confirmation = Read-Host ("Add branch '" + $BranchName + "' to app '" + $AppId + "' and start a build? (type yes to continue)")
   if ($confirmation -ne "yes") {
-    Write-Host "中断しました。何も変更していません。" -ForegroundColor Yellow
+    Write-Host "Cancelled. No changes were made." -ForegroundColor Yellow
     exit 0
   }
 }
 
 Write-Host ""
-Write-Host "-- ブランチ作成 --"
+Write-Host "-- Creating branch --"
 & aws amplify create-branch `
   --app-id $AppId `
   --branch-name $BranchName `
   --profile $ProfileName --region $Region
 
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "ブランチ作成に失敗しました(既に存在する場合はこのエラーで問題ありません — その場合は下のジョブ開始だけ再実行してください)。" -ForegroundColor Yellow
+  Write-Host "create-branch failed (this is fine if the branch already exists - just re-run the job-start step below)." -ForegroundColor Yellow
 } else {
-  Write-Host "ブランチを作成しました。" -ForegroundColor Green
+  Write-Host "Branch created." -ForegroundColor Green
 }
 
 Write-Host ""
-Write-Host "-- 初回ビルド(RELEASEジョブ)開始 --"
+Write-Host "-- Starting the first build (RELEASE job) --"
 & aws amplify start-job `
   --app-id $AppId `
   --branch-name $BranchName `
@@ -83,14 +89,14 @@ Write-Host "-- 初回ビルド(RELEASEジョブ)開始 --"
   --profile $ProfileName --region $Region
 
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "ジョブ開始に失敗しました。GitHub連携(webhook)が未完了の可能性があります — Amplify Consoleでブランチの状態を確認してください。" -ForegroundColor Red
+  Write-Host "Failed to start the build job. The GitHub webhook connection may not be complete - check the branch's status in the Amplify Console." -ForegroundColor Red
   exit 1
 }
 
 Write-Host ""
-Write-Host "ビルドを開始しました。進捗確認コマンド:" -ForegroundColor Green
-Write-Host "  aws amplify list-jobs --app-id $AppId --branch-name $BranchName --profile $ProfileName --region $Region"
+Write-Host "Build started. Check progress with:" -ForegroundColor Green
+Write-Host ("  aws amplify list-jobs --app-id " + $AppId + " --branch-name " + $BranchName + " --profile " + $ProfileName + " --region " + $Region)
 Write-Host ""
-Write-Host "ビルド完了後のURL(概ねの形。正確な値はAmplify Consoleのブランチ詳細で確認):"
+Write-Host "Approximate URL once the build finishes (confirm the exact value in the Amplify Console branch detail page):"
 $urlSafeBranch = $BranchName -replace "/", "-"
-Write-Host "  https://$urlSafeBranch.$AppId.amplifyapp.com"
+Write-Host ("  https://" + $urlSafeBranch + "." + $AppId + ".amplifyapp.com")

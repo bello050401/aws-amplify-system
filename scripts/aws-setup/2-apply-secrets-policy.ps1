@@ -1,39 +1,44 @@
 <#
 .SYNOPSIS
-  Amplify Hosting SSR実行ロールへ、bello/zaico-api-token用の最小権限
-  Secrets Managerポリシーを追加する(書き込みあり・要確認)。
+  Add a least-privilege Secrets Manager inline policy for
+  bello/zaico-api-token to the Amplify Hosting SSR execution role
+  (this script makes a change - it asks for confirmation first).
 
 .DESCRIPTION
-  secretsmanager:GetSecretValue / PutSecretValue / CreateSecret の3つ
-  だけを、bello/zaico-api-token (のバージョンsuffixを含むARNパターン)
-  へ限定して許可するインラインポリシーを、指定したIAMロールへ追加する。
-  ListSecrets / DescribeSecret / DeleteSecret は付与しない
-  (lib/zaico/secretStore.tsが実際に呼ぶAPIのみ)。
+  Grants only secretsmanager:GetSecretValue, PutSecretValue and
+  CreateSecret, scoped to the bello/zaico-api-token secret (with the
+  version-suffix part of the ARN wildcarded), on the IAM role you pass
+  in. Does not grant ListSecrets / DescribeSecret / DeleteSecret, since
+  the app code (lib/zaico/secretStore.ts) never calls those.
 
-  実行前に対象ロール名・ポリシー内容を表示し、-Force を渡さない限り
-  確認プロンプトで止まる。
+  Prints the target role and the policy document, then waits for you to
+  type "yes" before making any change, unless -Force is passed.
+
+  This script is plain ASCII on purpose - see 1-discover.ps1's header
+  comment for why (Windows PowerShell 5.1 + non-ASCII text without a
+  BOM can corrupt string literals and produce ParserError).
 
 .PARAMETER RoleName
-  ポリシーを追加するIAMロール名(1-discover.ps1の出力で見つけたSSR
-  実行ロール名を渡す)。必須。
+  The IAM role to update (the SSR execution role you found via
+  1-discover.ps1). Required.
 
 .PARAMETER SecretArn
-  対象SecretのARN。省略した場合、AccountId/Regionから
+  The target secret's ARN. If omitted, it is built automatically as
   "arn:aws:secretsmanager:<region>:<account>:secret:bello/zaico-api-token-??????"
-  (バージョンsuffixをワイルドカードにしたもの)を自動生成する。
-  1-discover.ps1で完全なARNが分かっている場合はそちらを渡すとより厳密。
+  (with the random version suffix wildcarded). If 1-discover.ps1 printed
+  the exact ARN, pass that here for a stricter exact match.
 
 .PARAMETER ProfileName
-  AWS CLIプロファイル名(既定: Bello)
+  AWS CLI profile name (default: Bello)
 
 .PARAMETER Region
-  AWSリージョン(既定: us-east-1)
+  AWS region (default: us-east-1)
 
 .PARAMETER Force
-  確認プロンプトをスキップして即実行する。
+  Skip the confirmation prompt and apply immediately.
 
 .EXAMPLE
-  ./2-apply-secrets-policy.ps1 -RoleName amplify-xxxxx-computeRole
+  .\2-apply-secrets-policy.ps1 -RoleName amplify-xxxxx-computeRole
 #>
 param(
   [Parameter(Mandatory = $true)]
@@ -49,25 +54,24 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "BELLO AWSテスト環境 — Secrets Manager IAMポリシー適用" -ForegroundColor Green
+Write-Host "BELLO AWS test environment - apply Secrets Manager IAM policy" -ForegroundColor Green
 
-# identityは常に一度確認する(SecretArnの自動生成に使うだけでなく、
-# root credentialsでの実行を必ず検出するため — SecretArnが明示的に
-# 渡されたケースでもこのチェックを省略しない)。
+# Always check identity first, whether or not -SecretArn was passed in,
+# so a root-credential run is caught either way.
 $identityRaw = & aws sts get-caller-identity --profile $ProfileName --region $Region --output json
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "AWS identityの取得に失敗しました。先に 1-discover.ps1 を実行してください。" -ForegroundColor Red
+  Write-Host "Failed to get AWS identity. Run 1-discover.ps1 first." -ForegroundColor Red
   exit 1
 }
 $identity = $identityRaw | ConvertFrom-Json
 
 if ($identity.Arn -match ":root$") {
-  Write-Host "root credentialsではこの操作を行わないでください。1-discover.ps1 の警告(SSOユーザーへの切り替え手順)に従ってください。" -ForegroundColor Red
+  Write-Host "Do not run this with root credentials. Follow the safer steps printed by 1-discover.ps1." -ForegroundColor Red
   exit 1
 }
 
 if (-not $SecretArn) {
-  $SecretArn = "arn:aws:secretsmanager:${Region}:$($identity.Account):secret:bello/zaico-api-token-??????"
+  $SecretArn = "arn:aws:secretsmanager:" + $Region + ":" + $identity.Account + ":secret:bello/zaico-api-token-??????"
 }
 
 $policyDocument = @"
@@ -89,15 +93,15 @@ $policyDocument = @"
 "@
 
 Write-Host ""
-Write-Host "対象ロール : $RoleName"
-Write-Host "対象Secret : $SecretArn"
-Write-Host "適用ポリシー(secretsmanager:ListSecrets/DescribeSecret/DeleteSecretは含めない):"
+Write-Host ("Target role   : " + $RoleName)
+Write-Host ("Target secret : " + $SecretArn)
+Write-Host "Policy to apply (does not include ListSecrets/DescribeSecret/DeleteSecret):"
 Write-Host $policyDocument
 
 if (-not $Force) {
-  $confirmation = Read-Host "このポリシーをロール '$RoleName' へ追加しますか？ (yes と入力して続行)"
+  $confirmation = Read-Host ("Add this policy to role '" + $RoleName + "'? (type yes to continue)")
   if ($confirmation -ne "yes") {
-    Write-Host "中断しました。何も変更していません。" -ForegroundColor Yellow
+    Write-Host "Cancelled. No changes were made." -ForegroundColor Yellow
     exit 0
   }
 }
@@ -109,17 +113,17 @@ try {
   & aws iam put-role-policy `
     --role-name $RoleName `
     --policy-name BelloZaicoSecretAccess `
-    --policy-document "file://$tempFile" `
+    --policy-document ("file://" + $tempFile) `
     --profile $ProfileName --region $Region
 
   if ($LASTEXITCODE -ne 0) {
-    Write-Host "ポリシーの適用に失敗しました。上記のエラーを確認してください(ロール名の誤り・権限不足の可能性)。" -ForegroundColor Red
+    Write-Host "Failed to apply the policy. Check the error above (wrong role name, or insufficient permissions)." -ForegroundColor Red
     exit 1
   }
 
   Write-Host ""
-  Write-Host "ポリシーを適用しました。確認コマンド:" -ForegroundColor Green
-  Write-Host "  aws iam get-role-policy --role-name $RoleName --policy-name BelloZaicoSecretAccess --profile $ProfileName --region $Region"
+  Write-Host "Policy applied. Verify with:" -ForegroundColor Green
+  Write-Host ("  aws iam get-role-policy --role-name " + $RoleName + " --policy-name BelloZaicoSecretAccess --profile " + $ProfileName + " --region " + $Region)
 } finally {
   Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
 }
