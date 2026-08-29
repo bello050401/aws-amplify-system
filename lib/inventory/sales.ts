@@ -110,3 +110,89 @@ export function shiftYearMonth(year: number, month: number, deltaMonths: number)
   const nextMonth = (zeroBased % 12) + 1;
   return { year: nextYear, month: nextMonth };
 }
+
+/**
+ * 今月の売上着地予測(追加修正指示 §3-§8)。
+ *
+ * サーバーの実行タイムゾーン(AWS/Amplify Hostingは通常UTC)に一切依存
+ * せず、常にJST(Asia/Tokyo)を基準に「今日は何年何月何日か」を求める
+ * (§5: 「UTCとJSTのズレにより、夜間~早朝に日付がずれて着地予測が変わ
+ * ってしまう」ことを防ぐ)。Intl.DateTimeFormatのtimeZone指定は
+ * Node.js標準のICUデータで動作するため、追加の日付ライブラリ導入は
+ * 不要。
+ */
+export interface JstDate {
+  year: number;
+  month: number; // 1-12
+  day: number; // 1-31
+}
+
+/** `referenceDate`(既定: 現在時刻)をJSTのカレンダー日付に変換する。 */
+export function nowInJst(referenceDate: Date = new Date()): JstDate {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(referenceDate);
+  const get = (type: "year" | "month" | "day") => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return { year: get("year"), month: get("month"), day: get("day") };
+}
+
+/**
+ * 指定年月の実際の日数(28/29/30/31)。固定値(30等)は一切使わず(§4:
+ * 「平均売上×30のような固定値計算は禁止」)、「その月の翌月の0日目 =
+ * 当月の末日」というDate仕様を利用して求める — 閏年の2月29日も
+ * new Date自身が判定するため、閏年判定を自前で書く必要がない。
+ * UTC基準(Date.UTC)で計算しており、「ある年月の末日が何日か」という
+ * 問いはタイムゾーンに依存しない値なので、これ自体にJST変換は不要
+ * (JST変換が必要なのは「今日は何月何日か」という現在時刻依存の部分
+ * だけ — nowInJst側で行っている)。
+ */
+export function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/** 指定年月がJSTで見た「現在進行中の月」かどうか(§7: 過去の確定月は着地予測の対象外とするための判定)。 */
+export function isCurrentJstYearMonth(year: number, month: number, referenceDate: Date = new Date()): boolean {
+  const jstNow = nowInJst(referenceDate);
+  return jstNow.year === year && jstNow.month === month;
+}
+
+export interface SalesForecast {
+  year: number;
+  month: number;
+  /** JSTでの「今日」の日(1-31) — 経過日数の算出根拠。 */
+  today: number;
+  /** 当月の総日数(28〜31、閏年2月は29)。 */
+  totalDaysInMonth: number;
+  /** 経過日数(月初1日から今日まで、§5: 8/1→1, 8/29→29)。0除算防止のため最低1にクランプする。 */
+  elapsedDays: number;
+  /** 1日あたり平均売上 = 当月累計売上 ÷ 経過日数。 */
+  averageDailySales: number;
+  /** 今月の売上着地予測 = 1日あたり平均売上 × 当月の総日数。 */
+  projectedMonthEndSales: number;
+}
+
+/**
+ * 今月の売上着地予測を計算する(§3の計算式そのもの)。
+ *
+ *   1日あたり平均売上 = 当月累計売上(totalSales) ÷ 経過日数
+ *   今月の売上着地予測 = 1日あたり平均売上 × 当月の総日数
+ *
+ * 呼び出し側は、表示対象の年月が実際に「JSTで見た現在進行中の月」であ
+ * る場合にのみこの関数を呼ぶ(isCurrentJstYearMonthで判定) — 過去の確
+ * 定月に対して呼んでも数値としては計算できてしまうが、意味を持たない
+ * ため(§7)、この関数自体はその判定を行わず呼び出し側の責務とする。
+ *
+ * 0円運用でも安全(§8): totalSalesが0なら平均・着地予測とも0を返す。
+ * elapsedDaysは1〜当月日数の範囲にクランプするため、todayDayにどんな
+ * 値が渡ってもNaN/Infinity/0除算が発生することはない。
+ */
+export function calculateMonthEndForecast(totalSales: number, year: number, month: number, todayDay: number): SalesForecast {
+  const totalDaysInMonth = daysInMonth(year, month);
+  const elapsedDays = Math.min(Math.max(Math.trunc(todayDay) || 1, 1), totalDaysInMonth);
+  const averageDailySales = totalSales === 0 ? 0 : totalSales / elapsedDays;
+  const projectedMonthEndSales = totalSales === 0 ? 0 : averageDailySales * totalDaysInMonth;
+  return { year, month, today: todayDay, totalDaysInMonth, elapsedDays, averageDailySales, projectedMonthEndSales };
+}

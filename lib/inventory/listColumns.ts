@@ -36,14 +36,24 @@ export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
   { key: "image", label: "画像", defaultVisible: true, defaultWidth: 106 },
   { key: "status", label: "ステータス", defaultVisible: false, defaultWidth: 96 },
   { key: "sku", label: "在庫ID", defaultVisible: true, defaultWidth: 128 },
-  // ユーザー指示により、既定幅を240pxから約半分の120pxへ縮小(列幅の
-  // マウスドラッグリサイズ機能自体は撤回・削除済み — InventoryTable.tsx
-  // 参照。この値は表示設定「初期設定に戻す」でも使われる唯一の基準値)。
-  { key: "name", label: "物品名", defaultVisible: true, defaultWidth: 120 },
+  // 追加修正指示 §1: 120px(前回の「約50%縮小」後の値)はSKU/保管場所等
+  // と比べても物品名が読み取りづらいとのフィードバックを受け、約1.5倍の
+  // 180pxへ拡大。他列(image/quantity/location/category/plannedSalePrice/
+  // updatedAt等)のdefaultWidthは一切変更していない — 可視列合計
+  // (totalWidth, InventoryTable.tsx)が広がった分は外側のoverflow-auto
+  // コンテナの横スクロールが吸収するため、他列を圧迫しない。列幅の
+  // マウスドラッグリサイズ機能自体は撤回・削除済み(InventoryTable.tsx
+  // 参照)で、この値が表示設定「初期設定に戻す」でも使われる唯一の基準
+  // 値であることに変わりはない。
+  { key: "name", label: "物品名", defaultVisible: true, defaultWidth: 180 },
   { key: "quantity", label: "数量", defaultVisible: true, defaultWidth: 64 },
   { key: "location", label: "保管場所", defaultVisible: true, defaultWidth: 112 },
   { key: "category", label: "カテゴリ", defaultVisible: true, defaultWidth: 112 },
-  { key: "purchasePrice", label: "仕入原価", defaultVisible: false, defaultWidth: 96 },
+  // 追加修正指示 §9-§11: 「原価」は今後purchasePriceを唯一のデータソー
+  // スとする運用方針(送料等を含めた最終仕入原価を直接入力)に変更した
+  // ため、一覧列のラベルも実態に合わせて「仕入原価」から「原価」へ変更
+  // した(キー/データ自体は不変 — 表示ラベルのみの変更)。
+  { key: "purchasePrice", label: "原価", defaultVisible: false, defaultWidth: 96 },
   // Phase C added a real `plannedSalePrice` field distinct from
   // `salePrice` (the actual, post-sale price) — this column now shows
   // the former (spec §7/§8's "販売予定価格"); `salePrice` gets its own,

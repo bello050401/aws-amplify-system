@@ -161,7 +161,32 @@ export const INVENTORY_EXTENDED_SECTIONS: ExtendedSectionDef[] = [
       { key: "counterpartyName", label: "相手氏名", type: "text" },
       { key: "counterpartyOccupation", label: "職業", type: "text" },
       { key: "counterpartyAddress", label: "住所", type: "text" },
-      { key: "shippingCost", label: "送料", type: "number", unit: "円" },
+      // 追加修正指示 §9-§10: 送料(shippingCost)は新規登録/編集フォーム
+      // の入力欄からは撤去した(BELLOの実運用は「購入価格+送料等の諸経
+      // 費込みの原価」をpurchasePriceへ直接入力する方式へ統一するため
+      // — 上のUSED_GOODS_LEDGER_SECTION_ID自体がpurchasePriceの注入先で
+      // あることに変わりはない、extendedFields.tsのコメント参照)。
+      //
+      // ただしこのフィールド定義自体・schema・保存済みデータは一切削除
+      // していない — 単にこの配列(=フォーム入力欄が参照する一覧)から
+      // 取り除いただけ。理由:
+      //  ・app/inventory/(protected)/[id]/page.tsxの「D. 古物台帳」表
+      //    示は、この配列を経由せずitem.shippingCostを直接参照する独自
+      //    実装(仕様上固定の9項目+送料)なので、既存レコードの送料は
+      //    詳細画面で引き続き閲覧できる。
+      //  ・lib/inventory/exportFields.ts(CSV/Excel入出力)と
+      //    lib/inventory/zaicoMapping.ts(ZAICO連携)はどちらもこの配列
+      //    ではなく独自のフィールド一覧でshippingCostを参照している
+      //    ため、CSV/Excelのインポート・エクスポートおよびZAICO連携の
+      //    互換性に一切影響しない。
+      //  ・ALL_EXTENDED_FIELDS(この配列のflatMap)から外れるため、
+      //    parseExtendedValues()は今後shippingCostキー自体を結果へ含め
+      //    なくなる — 更新時は「未指定(そのフィールドに触れない)」を
+      //    意味し、既存レコードのshippingCost値を上書き・消去すること
+      //    はない(extendedFields.ts冒頭のparseExtendedValuesの説明を
+      //    参照)。
+      // 完全な非推奨化(schemaからの削除)を行う場合の安全な移行手順は
+      // 今回のcommitメッセージ/完了報告に記載した。
       { key: "dailyPurchaseTotal", label: "その日の仕入れ合計金額（他商品含む）", type: "number", unit: "円" },
     ],
   },

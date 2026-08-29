@@ -321,8 +321,24 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
           ないとブラウザは内容量に応じて列幅を自動調整し直してしまい、
           設定した幅(物品名列を含む)が反映されない。合計がビューポート
           を超えた分は、外側のoverflow-autoコンテナが横スクロールで吸収
-          する(物品名が長い場合でも他列や画像列を圧迫しない)。 */}
-      <table className="border-collapse text-[13px]" style={{ tableLayout: "fixed", width: totalWidth }}>
+          する(物品名が長い場合でも他列や画像列を圧迫しない)。
+
+          追加修正指示 §2: 一覧の右端が「開いた」ように見える不具合の
+          修正 — 従来、行間の区切り線(各<tr>のborder-b)以外にテーブル
+          を縦方向に閉じる罫線が一切存在しなかった(左右の縦罫線が最初
+          から未実装)。border-rightをtable要素そのものに置くのが正しい
+          解: table-layout:fixed + 明示的なwidth(=totalWidth、可視列幅の
+          合計)により、<table>自身のボックス幅は常に「その時点で実際に
+          表示されている最後の列」の右端と厳密に一致する。そのため列の
+          表示/非表示をどう変更してtotalWidthが変わっても、この
+          border-rightは常に真の右端に追従する — 特定の列名(例:
+          updatedAt)をハードコードした右端固定は一切行っていない。
+          border-collapseにより、この<table>要素自身のborderは各行の
+          border-bと同じ罫線モデルで描画される(二重線にならない)。色は
+          既存のヘッダー下罫線と同じgray-200・太さもTailwindの既定1px
+          で統一し、行間のgray-100(より薄い区切り線)とは意図的に区別
+          した見た目の一貫性を保つ。 */}
+      <table className="border-collapse border-r border-gray-200 text-[13px]" style={{ tableLayout: "fixed", width: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
             <th style={{ width: CHECKBOX_COLUMN_WIDTH }} className="px-2 py-1.5"></th>

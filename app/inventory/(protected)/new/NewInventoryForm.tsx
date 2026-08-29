@@ -401,7 +401,19 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
             section.id === SALES_SECTION_ID ? (
               <LabeledInput label="販売価格（成約）" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
             ) : section.id === USED_GOODS_LEDGER_SECTION_ID ? (
-              <LabeledInput label="購入価格" type="number" value={purchasePrice} onChange={setPurchasePrice} placeholder="円" />
+              // 追加修正指示 §9-§11: この欄のラベルを「購入価格」から
+              // 「原価」へ変更 — フィールド自体(purchasePrice, schema
+              // 不変)・値は一切変えず、表示ラベルのみの変更。BELLOの実
+              // 運用方針として、今後はここへ「購入価格+送料等の諸経費
+              // 込みの最終的な仕入原価」を直接入力する(送料の別入力欄
+              // は撤去済み — extendedFields.ts参照)。今後の利益計算は
+              // 売上金額-原価(=purchasePrice)を正とする(§11)。
+              // 在庫詳細画面の「古物台帳」表示(法定台帳の記載順が固定の
+              // 区画)は、古物営業法上の帳簿表記に合わせて引き続き「購入
+              // 価格」のラベルのまま据え置いている — 同じ値を指す表示だ
+              // が、法定台帳の用語とBELLOの日常業務用語を意図的に分けた
+              // (値・キー自体は完全に同一)。
+              <LabeledInput label="原価" type="number" value={purchasePrice} onChange={setPurchasePrice} placeholder="円（送料等込みの最終原価）" />
             ) : undefined
           }
         />

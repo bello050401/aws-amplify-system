@@ -1,7 +1,14 @@
 import Link from "next/link";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listAllInventory } from "@/lib/inventory/queries";
-import { summarizeSales, shiftYearMonth, type SalesSummary } from "@/lib/inventory/sales";
+import {
+  summarizeSales,
+  shiftYearMonth,
+  nowInJst,
+  isCurrentJstYearMonth,
+  calculateMonthEndForecast,
+  type SalesSummary,
+} from "@/lib/inventory/sales";
 import { InventoryHeader } from "../../InventoryHeader";
 
 interface SalesPageProps {
@@ -31,10 +38,15 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
   const role = await getInventoryRole();
   if (!role) return null;
 
-  const now = new Date();
-  const year = Number(searchParams.y) || now.getFullYear();
-  const monthRaw = Number(searchParams.m) || now.getMonth() + 1;
-  const month = monthRaw >= 1 && monthRaw <= 12 ? monthRaw : now.getMonth() + 1;
+  // 追加修正指示 §5: 「今日」「今月」の判定はすべてJST(Asia/Tokyo)基準
+  // で行う — サーバーの実行タイムゾーン(AWS/Amplify Hostingは通常UTC)
+  // にnew Date()の年/月/日をそのまま使うと、日本時間の夜間~早朝
+  // (UTCでは日付が進む/戻る境界)に「今月」の判定や着地予測が実際とズレ
+  // うる。lib/inventory/sales.tsのnowInJstがこのズレを吸収する。
+  const jstNow = nowInJst();
+  const year = Number(searchParams.y) || jstNow.year;
+  const monthRaw = Number(searchParams.m) || jstNow.month;
+  const month = monthRaw >= 1 && monthRaw <= 12 ? monthRaw : jstNow.month;
 
   const records = await listAllInventory();
   const summary: SalesSummary = summarizeSales(records, year, month);
@@ -45,9 +57,15 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
 
   const prev = shiftYearMonth(year, month, -1);
   const next = shiftYearMonth(year, month, 1);
-  const thisMonth = { year: now.getFullYear(), month: now.getMonth() + 1 };
+  const thisMonth = { year: jstNow.year, month: jstNow.month };
   const lastMonth = shiftYearMonth(thisMonth.year, thisMonth.month, -1);
-  const isCurrent = year === thisMonth.year && month === thisMonth.month;
+  const isCurrent = isCurrentJstYearMonth(year, month);
+
+  // 追加修正指示 §3-§8: 今月の売上着地予測。現在表示中の年月がJSTで見た
+  // 「今まさに進行中の月」の場合にのみ計算・表示する(§7: 過去の確定月
+  // に着地予測を出すのは無意味なため) — 将来「月別の売上分析」機能を
+  // 追加する際も、この isCurrent 分岐点を起点に拡張できる。
+  const forecast = isCurrent ? calculateMonthEndForecast(summary.totalSales, year, month, jstNow.day) : null;
 
   const yen = (n: number) => `¥${n.toLocaleString("ja-JP")}`;
 
@@ -77,6 +95,25 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
             先月
           </Link>
         </div>
+
+        {/* 追加修正指示 §3-§8: 今月の売上着地予測。当月進行中(isCurrent)
+            のときだけ表示する — 過去月を見ている間は下の既存サマリー
+            (実績のみ)がそのまま表示される。派手なダッシュボード風には
+            せず、既存のSummaryTileと同じ地味なグリッドのまま追加する
+            (§6: 「派手なダッシュボードにはしない」)。 */}
+        {forecast && (
+          <div className="mb-6 max-w-3xl">
+            <p className="mb-1.5 text-[11px] font-bold text-gray-400">今月の売上着地予測</p>
+            <div className="grid grid-cols-1 gap-px border border-gray-200 bg-gray-200 sm:grid-cols-3">
+              <SummaryTile label="今月の売上" value={yen(summary.totalSales)} />
+              <SummaryTile label="1日平均売上" value={`${yen(Math.round(forecast.averageDailySales))} / 日`} />
+              <SummaryTile label="今月の売上着地予測" value={yen(Math.round(forecast.projectedMonthEndSales))} />
+            </div>
+            <p className="mt-1 text-[11px] text-gray-400">
+              {forecast.month}月{forecast.today}日時点 / {forecast.totalDaysInMonth}日間
+            </p>
+          </div>
+        )}
 
         {/* 集計サマリー */}
         <div className="mb-6 grid max-w-3xl grid-cols-2 gap-px border border-gray-200 bg-gray-200 sm:grid-cols-3">
