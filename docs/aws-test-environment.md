@@ -2,6 +2,16 @@
 
 このファイルは「AWSテスト環境構築・ZAICO実データ少数同期・画像クラウド保存」指示への対応で判明した事実と、次工程(EC出品統合)が再調査せずに済むようにするための記録。`docs/NOTES_BELLO.md`の補足に位置づける — 全体地図はそちらを見ること。
 
+## 0. 【TEMPORARY WORKAROUND】amplify.ymlのnpm ci→npm install(暫定対応)
+
+**現状**: `amplify.yml`のbackend/frontend両フェーズで`npm ci`を`npm install`へ変更している。これは**暫定対応**であり、AWS側の該当バグが修正され次第`npm ci`へ戻すこと。
+
+**根本原因(リポジトリ側の問題ではない)**: `npm ci`が`Missing: @opentelemetry/core@2.0.0 from lock file`で失敗する。原因はAWSが公開している`@aws-amplify/data-construct`(最新1.17.7、直近の1.17.5/1.17.6でも同様)と`@aws-amplify/graphql-api-construct`(最新1.22.2)自体が、パッケージ内部にバンドル(vendoring)した`@opentelemetry/core`(バンドル版は2.8.0)と、同じくバンドルされた`@opentelemetry/resources`/`@opentelemetry/sdk-trace-base`(バンドル版は2.0.0で、内部的に`@opentelemetry/core@2.0.0`を厳密要求)との間で、バージョンが自己矛盾していること。実際に該当バージョンのtarballを取得・展開し、`node_modules/@opentelemetry/*/package.json`を直接確認して検証済み。
+
+**なぜpackage.json/package-lock.jsonの修正で直せないか**: バンドル依存(`bundleDependencies`)はnpmパッケージのtarballに埋め込まれた固定内容であり、消費側(このリポジトリ)の`package.json`の`overrides`フィールドはバンドル依存には一切効果がない(npm公式の既知の制約)。`@aws-amplify/data-construct`を古いバージョン(バグの無い1.17.0など)へ強制ダウングレードする案も検討したが、`@aws-amplify/backend-data@1.8.0`は`^1.17.7`を要求しており、AWSが検証していない非対応の組み合わせになり実デプロイでのスキーマ生成に悪影響が出るリスクがあるため見送った(ユーザー判断済み)。
+
+**なぜnpm installが安全か**: `npm install`は`npm ci`のような「ロックファイルの内部厳密整合性チェック」を行わないため、同じ壊れたバンドル依存があってもエラーにならず、実際にこのリポジトリで`node_modules`が正しく構築され`next build`まで成功することを確認済み。ローカル開発の運用方針(通常は`npm install`のまま)自体は変更していない — 変更したのは`amplify.yml`のAmplify Hostingビルド専用コマンドのみ。
+
 ## 1. 実行主体(ローカル / AWS Amplify Hosting)の整理
 
 このアプリのInventoryサーバーサイドコードは、大きく2種類の「AWSへのアクセス方法」を使い分けている。この違いを理解しないと、IAM権限をどこへ付与すべきかを誤る。
