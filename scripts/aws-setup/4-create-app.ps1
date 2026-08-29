@@ -1,10 +1,9 @@
 <#
 .SYNOPSIS
   Look for an existing Amplify app across a short list of likely regions,
-  and if none is found anywhere, create a new one via the AWS CLI,
-  connect it to GitHub with a personal access token, add the test
-  branch, and start the first build - all without opening the Amplify
-  Console.
+  and if none is found anywhere, create a new one via the AWS CLI using
+  the official GitHub App connection method, add the test branch, and
+  start the first build.
 
 .DESCRIPTION
   This script exists because 1-discover.ps1 found no Amplify app for
@@ -12,14 +11,28 @@
   app, it re-checks a short list of other plausible regions first, so a
   duplicate app is never created if one already exists elsewhere.
 
-  If nothing is found in any scanned region, it creates a new app with:
-    aws amplify create-app --platform WEB_COMPUTE --oauth-token <token> ...
-  The GitHub OAuth token path (rather than the newer "GitHub App"
-  Console-based connection) is what makes this possible entirely from
-  the CLI - a GitHub Personal Access Token is still something only you
-  can generate (that one step is the unavoidable BLOCKED_BY_USER part),
-  but everything after that - app creation, branch creation, starting
-  the first build - runs from this one script.
+  GitHub connection method (per AWS's current official guidance, which
+  recommends the GitHub App method over the legacy OAuth-token method
+  for GitHub specifically - --oauth-token is for non-GitHub providers
+  such as Bitbucket or CodeCommit only):
+    aws amplify create-app --platform WEB_COMPUTE --access-token <token> ...
+  This requires ONE prerequisite that only you can do in a browser: the
+  "AWS Amplify" GitHub App for the target region must be installed and
+  authorized on your GitHub account/organization first. Do this once at
+  (replace REGION if you pass a different -Region than the default):
+    https://github.com/apps/aws-amplify-us-east-1
+  Sign in on GitHub -> Install & Authorize -> choose "Only select
+  repositories" and pick bello050401/aws-amplify-system (or "All
+  repositories"). See docs/aws-test-environment.md section 4a for
+  details and a link to try if the install page for your region 404s.
+
+  After that one-time GitHub App install, you still pass a classic
+  GitHub Personal Access Token (one starting with ghp_ - fine-grained
+  tokens are not reliably accepted by Amplify's accessToken parameter)
+  with the admin:repo_hook scope; Amplify uses it together with the
+  GitHub App installation to set up the webhook, and the GitHub App
+  itself (not the token) is what the App actually uses for read access
+  to repository content on every build.
 
   The token is only ever held in memory for the single API call and is
   never written to disk, never logged, and never printed to the
@@ -41,10 +54,14 @@
   previously caused ParserError in these scripts).
 
 .PARAMETER GitHubToken
-  A GitHub Personal Access Token with the "repo" scope (classic token),
-  or a fine-grained token scoped to this repository with Contents:Read
-  and Webhooks:Read-and-write. If omitted, you will be prompted for it
-  as masked input.
+  A classic GitHub Personal Access Token (starts with ghp_) with the
+  admin:repo_hook scope, used with --access-token per AWS's current
+  GitHub App connection method. Requires the AWS Amplify GitHub App to
+  already be installed on your account for the target region (see
+  DESCRIPTION above). If the connect step reports a permission error
+  even with admin:repo_hook, AWS's documented fallback is to also add
+  the repo scope. If omitted, you will be prompted for it as masked
+  input.
 
 .PARAMETER RepositoryUrl
   The GitHub repository URL (default: https://github.com/bello050401/aws-amplify-system)
@@ -160,12 +177,21 @@ if ($found.Count -gt 0) {
 Write-Host ""
 Write-Host "No existing app found in any scanned region. Proceeding to create one in $Region." -ForegroundColor Yellow
 
-# ---- 3. Get the GitHub token securely --------------------------------------
+# ---- 3. Confirm the GitHub App prerequisite, then get the token securely --
+Write-Host ""
+Write-Host "PREREQUISITE (one-time, browser, only you can do this):" -ForegroundColor Cyan
+Write-Host ("  The AWS Amplify GitHub App for region " + $Region + " must already be installed and")
+Write-Host "  authorized on your GitHub account/org. If you have not done this yet, open:"
+Write-Host ("    https://github.com/apps/aws-amplify-" + $Region)
+Write-Host "  and choose Install & Authorize (select this repository, or All repositories), before"
+Write-Host "  continuing. See docs/aws-test-environment.md section 4a if that URL 404s for your region."
+Write-Host ""
+
 $secureToken = $null
 if ($GitHubToken) {
   $plainToken = $GitHubToken
 } else {
-  $secureToken = Read-Host -AsSecureString "GitHub Personal Access Token (repo scope, or fine-grained scoped to this repo)"
+  $secureToken = Read-Host -AsSecureString "GitHub Personal Access Token (classic, admin:repo_hook scope)"
   $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($secureToken)
   try {
     $plainToken = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($bstr)
@@ -198,12 +224,16 @@ if (-not $Force) {
 }
 
 # ---- 4. Create the app ------------------------------------------------------
+# --access-token (not --oauth-token) is the correct flag for GitHub per AWS's
+# current documented method: it is used together with the already-installed
+# Amplify GitHub App above. --oauth-token is for non-GitHub providers only
+# (Bitbucket, CodeCommit) and is not used here.
 $createResult = Invoke-AwsCli -ArgList @(
   "amplify", "create-app",
   "--name", $AppName,
   "--repository", $RepositoryUrl,
   "--platform", "WEB_COMPUTE",
-  "--oauth-token", $plainToken,
+  "--access-token", $plainToken,
   "--profile", $ProfileName, "--region", $Region, "--output", "json"
 )
 # Drop the token from memory as soon as the call is made, whether it succeeded or not.
@@ -215,7 +245,12 @@ if (-not $createResult.Ok) {
   Write-Host "create-app failed. Full CLI output below (this never includes your token):" -ForegroundColor Red
   Write-Host $createResult.Raw
   Write-Host ""
-  Write-Host "Common causes: an invalid/expired token, a token missing the 'repo' scope, or (for a fine-grained token) it not being scoped to this repository."
+  Write-Host "Common causes:"
+  Write-Host "  - The AWS Amplify GitHub App for this region was not installed/authorized yet"
+  Write-Host ("    (visit https://github.com/apps/aws-amplify-" + $Region + " first)")
+  Write-Host "  - The token is not a classic token (fine-grained tokens are not reliably accepted here)"
+  Write-Host "  - The token is missing admin:repo_hook (AWS's documented fallback is to also add the repo scope)"
+  Write-Host "  - The token is invalid or expired"
   exit 1
 }
 

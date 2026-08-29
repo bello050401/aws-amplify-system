@@ -6,7 +6,7 @@
 
 1. **`1-discover.ps1`**(読み取り専用、安全) — 現在のAWS identity・region・Amplifyアプリ/ブランチ・Secretの存在有無を確認し、次に何をすべきかを画面に表示する。何も変更しない。
 2. **Amplifyアプリが既に見つかった場合** → **`3-create-branch.ps1`**(書き込みあり) — 既存のAmplifyアプリへ`claude/inventory-management-system-5vbvc7`ブランチを追加し、初回ビルドを開始する。
-   **Amplifyアプリが見つからなかった場合** → **`4-create-app.ps1`**(書き込みあり) — 他の主要リージョンも再確認したうえで、GitHub Personal Access Tokenを使いAWS CLIだけでアプリ作成・ブランチ追加・初回ビルド開始までを行う(必要な本人操作はGitHub PATの発行のみ)。
+   **Amplifyアプリが見つからなかった場合** → **`4-create-app.ps1`**(書き込みあり) — 他の主要リージョンも再確認したうえで、`--access-token`(AWS公式のGitHub App接続方式)を使いAWS CLIだけでアプリ作成・ブランチ追加・初回ビルド開始までを行う。必要な本人操作は2つだけ: (a) 対象RegionのAmplify GitHub Appを`https://github.com/apps/aws-amplify-<region>`から1回インストール・認可、(b) `admin:repo_hook`スコープのClassic PATを1回発行してスクリプトへ貼り付け。詳細は`docs/aws-test-environment.md`§4a参照。
 3. **`2-apply-secrets-policy.ps1`**(書き込みあり) — 上記で分かった(または`4-create-app.ps1`実行後にAmplify Consoleで確認する)SSR実行ロールへ、Secrets Manager用の最小権限インラインポリシーを追加する。ロール名を引数で渡す。
 
 ## 前提

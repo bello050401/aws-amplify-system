@@ -61,17 +61,36 @@ Secrets Managerの仕様上、Secretの完全なARNには作成時にランダ�
 
 ### 4a. CLIだけで完結する経路(推奨、`4-create-app.ps1`が自動化)
 
-`amplify create-app`は`--oauth-token`引数でGitHub Personal Access Token(PAT)を直接渡せる(新しい「GitHub App」方式の代わりに旧来の「OAuth token」方式を使う)。これによりAmplify Console上での複数画面のGitHub連携フローが不要になり、ユーザー本人にしかできない操作は「GitHub PATを1枚発行してスクリプトへ貼り付ける」ことだけになる。
+**訂正(初版からの修正)**: 初版では`--oauth-token`を使う設計にしていたが、これはGitHub以外のプロバイダ(Bitbucket・CodeCommit)専用のパラメータで、GitHubに対してAWSが現在公式に推奨しているのは「Amplify GitHub App」経由の`--access-token`方式であることが判明したため修正した([AWS CLI `create-app`リファレンス](https://docs.aws.amazon.com/cli/latest/reference/amplify/create-app.html)、[AWS公式アナウンス「AWS Amplify Hosting now uses a GitHub App」](https://aws.amazon.com/about-aws/whats-new/2022/04/aws-amplify-hosting-github-access-workflows/))。
 
-BLOCKED_BY_USER(本人のGitHubアカウントでの操作が必須): GitHub → 右上アイコン → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → **Generate new token (classic)** → scopeで**repo**にチェック → 発行 → その文字列を`4-create-app.ps1`実行時のプロンプトへ貼り付ける(スクリプト内でSecureString化して扱い、画面表示・ログ・ファイル保存は一切行わない)。
+この方式は次の2段階になる。両方ともユーザー本人のGitHubアカウントでの操作が必須(BLOCKED_BY_USER)だが、いずれも1回だけで済む単純な操作。
 
-`4-create-app.ps1`が内部で行うこと(すべてAWS CLI経由、確認プロンプトあり):
+**手順1(1回だけ・ブラウザ): Amplify GitHub Appをインストール・認可する**
+1. `https://github.com/apps/aws-amplify-us-east-1` を開く(Regionを変える場合はus-east-1の部分を置き換える — Amplify GitHub AppはRegionごとに別アプリとして提供されている)
+2. GitHubへサインイン → **Install & Authorize**
+3. 「Only select repositories」を選び `bello050401/aws-amplify-system` を選択(または「All repositories」)→ **Install & Authorize**
+
+もしそのURLが404になる場合は、AWS ConsoleのAmplify → 「新しいアプリの作成」→「GitHubからデプロイ」→「GitHubで続行」の画面まで進むと、そのRegion用の正しいインストールURLへ自動的にリダイレクトされる(ここで実際にアプリを作成する必要はない — インストール画面まで進んだら一度ブラウザを閉じてよい)。
+
+**手順2(1回だけ・ブラウザ): Classic PATを発行する**
+
+GitHub → 右上アイコン → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → **Generate new token (classic)**。
+
+- 必ず **Classic token**(`ghp_`で始まるもの)を使う — Fine-grained tokenはAmplifyの`accessToken`では確実に動作しないことが報告されている。
+- scopeは **`admin:repo_hook`** のみで発行する(AWS公式User Guideの案内に基づく必要最小限。`repo`フルスコープは要求しない)。
+- もし手順3でAmplify側が権限不足のエラーを返す場合、AWS公式のフォールバックとして`repo`スコープの追加が案内されている — その場合のみ追加する。
+
+発行したPATは`4-create-app.ps1`実行時のプロンプトへ貼り付ける(スクリプト内でSecureString化して扱い、画面表示・ログ・ファイル保存は一切行わない)。
+
+**手順3(自動・スクリプト): `4-create-app.ps1`を実行**
+
+内部で行うこと(すべてAWS CLI経由、確認プロンプトあり):
 1. `us-east-1`・`ap-northeast-1`・`us-west-2`の3リージョンを再スキャンし、既存アプリが無いことを再確認(重複作成防止)
-2. `aws amplify create-app --platform WEB_COMPUTE --oauth-token <PAT>` でアプリを作成
+2. `aws amplify create-app --platform WEB_COMPUTE --access-token <PAT>` でアプリを作成(手順1でインストール済みのGitHub Appと組み合わせて使われる)
 3. `aws amplify create-branch` で`claude/inventory-management-system-5vbvc7`を追加(`main`は対象外)
 4. `aws amplify start-job --job-type RELEASE` で初回ビルドを開始
 
-**未検証の注意点**: `--platform WEB_COMPUTE`・`--oauth-token`はAWS Amplify Hosting CLIの公式ドキュメント上の既知のパラメータだが、このClaude Code環境には実AWS認証情報が無いため実行結果を実機確認できていない。`4-create-app.ps1`はAWS CLIが返す生のエラーメッセージをそのまま表示するので、失敗した場合はそのメッセージを教えてもらえれば原因を特定して修正する。
+**未検証の注意点**: このClaude Code環境には実AWS認証情報・実GitHubアカウントが無いため、`--access-token`での接続を実機確認できていない。`4-create-app.ps1`はAWS CLIが返す生のエラーメッセージをそのまま表示するので、失敗した場合はそのメッセージを教えてもらえれば原因を特定して修正する。
 
 ### 4b. AWS Consoleでの代替手順(4aが失敗した場合のフォールバック)
 
