@@ -204,6 +204,18 @@ staging Appの`iamServiceRoleArn`だけを新ロールへ更新し(他の設定�
 - 新規ロールのTrust Policyはstaging App自身のARNだけに限定されており、本番Appからはassumeできない。
 - スクリプトは既存App ID(`d1uy61lbnqm8ae`)を対象とするAWS CLI呼び出しを検出した場合、実行前に必ず中断する安全策を内蔵している。
 
-### 9d. 注記: Secrets Manager用Compute Roleとの違い
+### 9d. 追記: Trust Policy JSONが `MalformedPolicyDocument` で拒否された問題
+
+`7-fix-staging-iam-role.ps1`の初版実行時、`create-role`が以下で失敗した:
+
+```
+An error occurred (MalformedPolicyDocument) when calling the CreateRole operation: This policy contains invalid Json
+```
+
+**原因**: PowerShellの`ConvertTo-Json`自体は正しいJSONを生成していたが、それを`--assume-role-policy-document`へ**インラインのコマンドライン引数としてそのまま渡していた**ことが問題だった。Trust PolicyのようなJSONは二重引用符・波括弧・コロンを大量に含む長い文字列であり、Windowsのネイティブプロセス引数渡し(`CommandLineToArgvW`。PowerShellの`& 外部コマンド @配列`によるsplattingも最終的にこれを経由する)は、こうした文字列の再クォート・エスケープ処理でJSONを破損させることが知られている。AWS公式CLIドキュメントがWindows環境でポリシードキュメントに`file://`形式を推奨しているのはこのためであり、単純な短いGitHub PAT文字列(英数字とアンダースコアのみ)を渡した時には問題が起きなかったのとは対照的である。
+
+**修正**: Trust Policy(および複製する各inline policy)を一時JSONファイルへUTF-8(BOM無し、`[System.IO.File]::WriteAllText`+明示的な`UTF8Encoding($false)`で書き込み — Windows PowerShell 5.1の`-Encoding utf8`はBOM付きで書き込むため使用しない)として書き出し、書き込み前に`ConvertFrom-Json`で再パース検証したうえで、`--assume-role-policy-document file://<一時ファイルパス>`の形式でAWS CLIへ渡すよう変更した。一時ファイルは`$env:TEMP`配下に作成され、Git管理対象には含まれず、使用後は`finally`ブロックで必ず削除される。Trust Policyの構造(Version/Effect/Principal.Service/Action/Condition — App IDやARNを含むがシークレットは含まない)は、AWS CLI呼び出し前にコンソールへ安全に表示される。
+
+### 9e. 注記: Secrets Manager用Compute Roleとの違い
 
 このBackend Deployment Role(`ampx pipeline-deploy`がCloudFormationスタックをデプロイする際に使うロール)は、Next.js SSRのランタイムがSecrets Managerからシークレットを読み取る際に使う「Compute Role」とは別物である。Compute Roleの設定は、staging Appの公開URLが正常に表示されることを確認した後の次工程として、`2-apply-secrets-policy.ps1`を該当Compute Roleへ対して実行する形で行う(§4参照)。

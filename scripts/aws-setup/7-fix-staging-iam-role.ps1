@@ -120,6 +120,40 @@ function Write-Section {
   Write-Host ("==== " + $Title + " ====") -ForegroundColor Cyan
 }
 
+function New-TempJsonFile {
+  # Root cause of "MalformedPolicyDocument: This policy contains invalid
+  # Json" (seen when this script previously passed policy JSON directly as
+  # an --assume-role-policy-document / --policy-document command-line
+  # argument): ConvertTo-Json produces valid JSON on the PowerShell side, but
+  # a JSON document full of embedded double quotes/braces/colons is exactly
+  # the kind of string Windows native-process argument passing
+  # (CommandLineToArgvW, which PowerShell's `& external @array` splatting
+  # ultimately goes through) is known to mangle in transit to aws.exe - the
+  # re-quoting/escaping rules involved do not round-trip a large JSON blob
+  # reliably. This is exactly why AWS's own CLI documentation recommends
+  # file:// for policy documents on Windows rather than an inline JSON
+  # string.
+  #
+  # Fix: write the JSON to a temp file and let the caller pass
+  # file://<path> instead. Windows PowerShell 5.1's built-in
+  # -Encoding utf8 (Out-File/Set-Content) writes a UTF-8 BOM, which is also
+  # not guaranteed safe for aws.exe to parse - so this writes raw UTF-8
+  # without a BOM via [System.IO.File]::WriteAllText with an explicit
+  # UTF8Encoding($false). The object is also round-tripped through
+  # ConvertFrom-Json before being written, so a malformed object is caught
+  # immediately rather than surfacing later as an opaque AWS-side error.
+  param(
+    [Parameter(Mandatory = $true)]$Object,
+    [string]$Prefix = "bello-iam-policy"
+  )
+  $json = $Object | ConvertTo-Json -Depth 20
+  $null = $json | ConvertFrom-Json
+  $tempPath = Join-Path $env:TEMP ($Prefix + "-" + [Guid]::NewGuid().ToString("N") + ".json")
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($tempPath, $json, $utf8NoBom)
+  return $tempPath
+}
+
 function Invoke-AwsCli {
   param([string[]]$ArgList)
   if ($ArgList -contains $ExistingProductionAppId) {
@@ -238,10 +272,22 @@ $trustPolicyObj = @{
     }
   )
 }
-$trustPolicyJson = $trustPolicyObj | ConvertTo-Json -Depth 10 -Compress
-
 Write-Host ("  New role name     : " + $NewStagingRoleName)
 Write-Host ("  Trust policy scope: " + $stagingAppArn + " ONLY (production app is not in this trust policy)")
+
+# Build the trust policy as a real JSON file rather than an inline CLI
+# argument - see New-TempJsonFile's header comment for why. The temp file is
+# never part of the git-tracked tree and is deleted in the finally block
+# below regardless of success or failure.
+$trustPolicyPath = New-TempJsonFile -Object $trustPolicyObj -Prefix "bello-staging-trust-policy"
+Write-Section "2a. Trust policy structure (no secrets in this document - safe to print)"
+Write-Host ("  Version                                    : " + $trustPolicyObj.Version)
+Write-Host ("  Effect                                     : " + $trustPolicyObj.Statement[0].Effect)
+Write-Host ("  Principal.Service                          : " + ($trustPolicyObj.Statement[0].Principal.Service -join ", "))
+Write-Host ("  Action                                     : " + $trustPolicyObj.Statement[0].Action)
+Write-Host ("  Condition.StringEquals.aws:SourceAccount   : " + $trustPolicyObj.Statement[0].Condition.StringEquals["aws:SourceAccount"])
+Write-Host ("  Condition.ArnLike.aws:SourceArn            : " + $trustPolicyObj.Statement[0].Condition.ArnLike["aws:SourceArn"])
+Write-Host "  (Re-parsed successfully via ConvertFrom-Json before being written to a temp file - see above.)" -ForegroundColor Green
 
 if (-not $Force) {
   Write-Host ""
@@ -250,34 +296,39 @@ if (-not $Force) {
   $confirmation = Read-Host "Continue? (type yes to continue)"
   if ($confirmation -ne "yes") {
     Write-Host "Cancelled. No changes were made." -ForegroundColor Yellow
+    Remove-Item -Force -ErrorAction SilentlyContinue $trustPolicyPath
     exit 0
   }
 }
 
-$existingStagingRoleResult = Invoke-AwsCli -ArgList @("iam", "get-role", "--role-name", $NewStagingRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
-if ($existingStagingRoleResult.Ok) {
-  Write-Host "  Role already exists (re-run) - updating its trust policy in place." -ForegroundColor Yellow
-  $updateTrustResult = Invoke-AwsCli -ArgList @("iam", "update-assume-role-policy", "--role-name", $NewStagingRoleName, "--policy-document", $trustPolicyJson, "--profile", $ProfileName, "--region", $Region)
-  if (-not $updateTrustResult.Ok) {
-    Write-Host "update-assume-role-policy failed:" -ForegroundColor Red
-    Write-Host $updateTrustResult.Raw
-    exit 1
+try {
+  $existingStagingRoleResult = Invoke-AwsCli -ArgList @("iam", "get-role", "--role-name", $NewStagingRoleName, "--profile", $ProfileName, "--region", $Region, "--output", "json")
+  if ($existingStagingRoleResult.Ok) {
+    Write-Host "  Role already exists (re-run) - updating its trust policy in place." -ForegroundColor Yellow
+    $updateTrustResult = Invoke-AwsCli -ArgList @("iam", "update-assume-role-policy", "--role-name", $NewStagingRoleName, "--policy-document", ("file://" + $trustPolicyPath), "--profile", $ProfileName, "--region", $Region)
+    if (-not $updateTrustResult.Ok) {
+      Write-Host "update-assume-role-policy failed:" -ForegroundColor Red
+      Write-Host $updateTrustResult.Raw
+      exit 1
+    }
+    $newRoleArn = ($existingStagingRoleResult.Raw | ConvertFrom-Json).Role.Arn
+  } else {
+    $createRoleResult = Invoke-AwsCli -ArgList @(
+      "iam", "create-role",
+      "--role-name", $NewStagingRoleName,
+      "--assume-role-policy-document", ("file://" + $trustPolicyPath),
+      "--description", "Amplify backend deployment role for the dedicated staging app only - never used by production.",
+      "--profile", $ProfileName, "--region", $Region, "--output", "json"
+    )
+    if (-not $createRoleResult.Ok) {
+      Write-Host "create-role failed:" -ForegroundColor Red
+      Write-Host $createRoleResult.Raw
+      exit 1
+    }
+    $newRoleArn = ($createRoleResult.Raw | ConvertFrom-Json).Role.Arn
   }
-  $newRoleArn = ($existingStagingRoleResult.Raw | ConvertFrom-Json).Role.Arn
-} else {
-  $createRoleResult = Invoke-AwsCli -ArgList @(
-    "iam", "create-role",
-    "--role-name", $NewStagingRoleName,
-    "--assume-role-policy-document", $trustPolicyJson,
-    "--description", "Amplify backend deployment role for the dedicated staging app only - never used by production.",
-    "--profile", $ProfileName, "--region", $Region, "--output", "json"
-  )
-  if (-not $createRoleResult.Ok) {
-    Write-Host "create-role failed:" -ForegroundColor Red
-    Write-Host $createRoleResult.Raw
-    exit 1
-  }
-  $newRoleArn = ($createRoleResult.Raw | ConvertFrom-Json).Role.Arn
+} finally {
+  Remove-Item -Force -ErrorAction SilentlyContinue $trustPolicyPath
 }
 Write-Host ("  Staging role ARN: " + $newRoleArn) -ForegroundColor Green
 
@@ -294,14 +345,22 @@ foreach ($arn in $managedPolicyArns) {
   }
 }
 foreach ($name in $inlinePolicies.Keys) {
-  $docJson = $inlinePolicies[$name] | ConvertTo-Json -Depth 20 -Compress
-  $putResult = Invoke-AwsCli -ArgList @("iam", "put-role-policy", "--role-name", $NewStagingRoleName, "--policy-name", $name, "--policy-document", $docJson, "--profile", $ProfileName, "--region", $Region)
-  if ($putResult.Ok) {
-    Write-Host ("  Copied inline policy: " + $name) -ForegroundColor Green
-  } else {
-    Write-Host ("  Failed to copy inline policy " + $name + ":") -ForegroundColor Red
-    Write-Host $putResult.Raw
-    exit 1
+  # Same file:// approach as the trust policy above, for the same reason -
+  # an inline policy document copied from the production role can be
+  # arbitrarily large/complex and is not safe to pass as an inline CLI
+  # argument on Windows.
+  $inlinePolicyPath = New-TempJsonFile -Object $inlinePolicies[$name] -Prefix "bello-staging-inline-policy"
+  try {
+    $putResult = Invoke-AwsCli -ArgList @("iam", "put-role-policy", "--role-name", $NewStagingRoleName, "--policy-name", $name, "--policy-document", ("file://" + $inlinePolicyPath), "--profile", $ProfileName, "--region", $Region)
+    if ($putResult.Ok) {
+      Write-Host ("  Copied inline policy: " + $name) -ForegroundColor Green
+    } else {
+      Write-Host ("  Failed to copy inline policy " + $name + ":") -ForegroundColor Red
+      Write-Host $putResult.Raw
+      exit 1
+    }
+  } finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue $inlinePolicyPath
   }
 }
 
