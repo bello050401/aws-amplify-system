@@ -189,20 +189,39 @@ Write-Host ""
 
 # Token handling below sanitizes and pre-validates against GitHub's own API
 # before AWS ever sees it - see 6-create-staging-app.ps1's identical block
-# for why (a real-world "same token works direct to GitHub, 401s only via
-# create-app" case traced back to an unsanitized trailing
-# newline/whitespace picked up from a clipboard paste into Read-Host).
-$secureToken = $null
+# for the full history of why.
+#
+# Root cause found (second iteration of this fix, see 6-create-staging-app.ps1
+# for the original diagnosis): `Read-Host -AsSecureString` is itself buggy
+# here - a real run showed it captured Length=1 after pasting a full ghp_...
+# token. Windows PowerShell 5.1's secure/masked console input path does not
+# reliably receive a full clipboard paste character-by-character the way its
+# normal (non-secure) input does; only one character made it through. A plain
+# `Read-Host` (no masking) was confirmed to capture the same token correctly.
+#
+# Fix: read the token with plain `Read-Host` (echoed to the screen, not
+# masked). This trades a moment of on-screen visibility - on your own
+# machine, in your own terminal, never captured to a log or file by this
+# script - for actually working reliably. Everything downstream (sanitize,
+# safe shape diagnostics that never print the value itself, pre-validation
+# against GitHub with this exact variable, then passing that same variable to
+# AWS) is unchanged.
+Write-Host ""
+Write-Host "Please enter a NEW Personal Access Token now. Do not reuse a token that has" -ForegroundColor Yellow
+Write-Host "already been typed into a chat or shared elsewhere - treat any such token as" -ForegroundColor Yellow
+Write-Host "compromised and revoke it on GitHub (Settings > Developer settings >" -ForegroundColor Yellow
+Write-Host "Personal access tokens) before continuing." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "NOTE: this prompt is NOT masked - the token will be visible as you type or" -ForegroundColor Yellow
+Write-Host "paste it (Read-Host -AsSecureString does not reliably receive a full pasted" -ForegroundColor Yellow
+Write-Host "token in Windows PowerShell 5.1 - only plain Read-Host does). It is never" -ForegroundColor Yellow
+Write-Host "written to a log, file, or environment variable by this script." -ForegroundColor Yellow
+Write-Host ""
+
 if ($GitHubToken) {
   $rawToken = $GitHubToken
 } else {
-  $secureToken = Read-Host -AsSecureString "GitHub Personal Access Token (classic, admin:repo_hook scope)"
-  $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($secureToken)
-  try {
-    $rawToken = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($bstr)
-  } finally {
-    [System.Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($bstr)
-  }
+  $rawToken = Read-Host "GitHub Personal Access Token (classic, admin:repo_hook scope) - visible as typed, see note above"
 }
 
 if (-not $rawToken) {
@@ -223,8 +242,23 @@ Write-Host ("  Length                         : " + $plainToken.Length)
 Write-Host ("  Starts with 'ghp_'             : " + $plainToken.StartsWith("ghp_"))
 Write-Host ("  Had embedded newline (removed) : " + $hadEmbeddedNewline)
 Write-Host ("  Had leading/trailing whitespace (trimmed): " + $hadLeadingOrTrailingWhitespace)
+
+# Fail fast on an obviously-wrong shape rather than spending a network round
+# trip on something that cannot be a real classic PAT - a truncated read (the
+# exact bug this fix addresses) is caught right here.
+$shapeLooksValid = $true
 if (-not $plainToken.StartsWith("ghp_")) {
-  Write-Host "  [WARNING] A current classic GitHub PAT normally starts with 'ghp_'. Double-check the whole token was copied." -ForegroundColor Yellow
+  Write-Host "  [WARNING] A current classic GitHub PAT normally starts with 'ghp_'. This one does not - double-check the whole token was copied/pasted." -ForegroundColor Yellow
+  $shapeLooksValid = $false
+}
+if ($plainToken.Length -lt 20) {
+  Write-Host "  [WARNING] This looks too short for a real GitHub PAT (a classic ghp_ token is normally 40 characters)." -ForegroundColor Yellow
+  $shapeLooksValid = $false
+}
+if (-not $shapeLooksValid) {
+  Write-Host "  Stopping before calling GitHub or AWS - the captured value does not look like a real token." -ForegroundColor Red
+  $plainToken = $null
+  exit 1
 }
 
 Write-Host ""

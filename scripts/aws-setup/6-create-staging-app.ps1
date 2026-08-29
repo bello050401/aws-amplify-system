@@ -163,19 +163,28 @@ if ($roleResult.Ok) {
 # ---- 2. GitHub token: acquire, sanitize, diagnose (never reveal the value),
 #         then pre-validate against GitHub itself before AWS ever sees it ---
 #
-# Root cause this section fixes: a previous run got "401 Bad credentials"
-# from `aws amplify create-app --access-token`, even though the exact same
-# token worked when the user tested it directly against
-# https://api.github.com/user. That gap (works against GitHub directly,
-# fails only via this script's call into AWS) points at the token being
-# altered somewhere between capture and use - most commonly a trailing
-# newline or space picked up from a clipboard paste into Read-Host, which
-# a real classic PAT never legitimately contains. This section now trims
-# any such whitespace, prints safe shape diagnostics (never the token
-# itself), and - critically - re-validates the EXACT SAME variable against
-# GitHub's own API immediately before it is ever passed to the AWS CLI, so
-# a bad token is caught here with a clear reason instead of surfacing as an
-# opaque 401 from deep inside create-app.
+# Root cause found (second iteration of this fix): `Read-Host -AsSecureString`
+# is the actual bug here. Diagnostics from a real run showed the captured
+# token had Length=1 after pasting a full ghp_... token - Windows
+# PowerShell 5.1's secure/masked console input handling does not reliably
+# receive a full clipboard paste character-by-character the way its normal
+# (non-secure) input does; only one character made it through. This is a
+# known limitation of -AsSecureString's masked input path in Windows
+# PowerShell 5.1 (as opposed to PowerShell 7's revised console handling),
+# not something the earlier trim/sanitize logic could ever have caught,
+# since the string was already truncated to 1 character before any of that
+# ran. The user independently confirmed a PLAIN `Read-Host` (no masking)
+# captured the same token correctly and it validated fine directly against
+# https://api.github.com/user.
+#
+# Fix: read the token with plain `Read-Host` (echoed to the screen, not
+# masked). This trades a moment of on-screen visibility - on the user's own
+# machine, in their own terminal, never captured to a log or file by this
+# script - for actually working reliably, which the user explicitly
+# prioritized. Everything downstream (sanitize, safe shape diagnostics that
+# never print the value itself, pre-validation against GitHub with this
+# exact variable, then passing that same variable to AWS) is unchanged from
+# the previous fix and remains in place.
 Write-Host ""
 Write-Host "PREREQUISITE: the AWS Amplify GitHub App for this region should already be" -ForegroundColor Cyan
 Write-Host "installed, since the existing production app already deploys this same" -ForegroundColor Cyan
@@ -187,23 +196,16 @@ Write-Host "already been typed into a chat or shared elsewhere - treat any such 
 Write-Host "compromised and revoke it on GitHub (Settings > Developer settings >" -ForegroundColor Yellow
 Write-Host "Personal access tokens) before continuing." -ForegroundColor Yellow
 Write-Host ""
+Write-Host "NOTE: this prompt is NOT masked - the token will be visible as you type or" -ForegroundColor Yellow
+Write-Host "paste it (Read-Host -AsSecureString does not reliably receive a full pasted" -ForegroundColor Yellow
+Write-Host "token in Windows PowerShell 5.1 - only plain Read-Host does). It is never" -ForegroundColor Yellow
+Write-Host "written to a log, file, or environment variable by this script." -ForegroundColor Yellow
+Write-Host ""
 
 if ($GitHubToken) {
   $rawToken = $GitHubToken
 } else {
-  $secureToken = Read-Host -AsSecureString "GitHub Personal Access Token (classic, admin:repo_hook scope)"
-  # PowerShell 5.1-compatible SecureString -> plaintext decode (the
-  # ConvertFrom-SecureString -AsPlainText parameter is PowerShell 6+ only).
-  # Decoded into a fixed unmanaged buffer and freed immediately after the
-  # single PtrToStringUni copy, so the plaintext token exists in managed
-  # memory only as long as this script needs it, and is never written to
-  # disk, an environment variable, or any log.
-  $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($secureToken)
-  try {
-    $rawToken = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($bstr)
-  } finally {
-    [System.Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($bstr)
-  }
+  $rawToken = Read-Host "GitHub Personal Access Token (classic, admin:repo_hook scope) - visible as typed, see note above"
 }
 if (-not $rawToken) {
   Write-Host "No token was provided. Stopping without creating anything." -ForegroundColor Red
@@ -225,11 +227,23 @@ Write-Host ("  Length                         : " + $plainToken.Length)
 Write-Host ("  Starts with 'ghp_'             : " + $plainToken.StartsWith("ghp_"))
 Write-Host ("  Had embedded newline (removed) : " + $hadEmbeddedNewline)
 Write-Host ("  Had leading/trailing whitespace (trimmed): " + $hadLeadingOrTrailingWhitespace)
+
+# Fail fast on an obviously-wrong shape rather than spending a network round
+# trip on something that cannot be a real classic PAT - a truncated read
+# (the exact bug this fix addresses) is caught right here.
+$shapeLooksValid = $true
 if (-not $plainToken.StartsWith("ghp_")) {
-  Write-Host "  [WARNING] A current classic GitHub PAT normally starts with 'ghp_'. This one does not - double-check the whole token was copied." -ForegroundColor Yellow
+  Write-Host "  [WARNING] A current classic GitHub PAT normally starts with 'ghp_'. This one does not - double-check the whole token was copied/pasted." -ForegroundColor Yellow
+  $shapeLooksValid = $false
 }
 if ($plainToken.Length -lt 20) {
-  Write-Host "  [WARNING] This looks too short for a real GitHub PAT." -ForegroundColor Yellow
+  Write-Host "  [WARNING] This looks too short for a real GitHub PAT (a classic ghp_ token is normally 40 characters)." -ForegroundColor Yellow
+  $shapeLooksValid = $false
+}
+if (-not $shapeLooksValid) {
+  Write-Host "  Stopping before calling GitHub or AWS - the captured value does not look like a real token." -ForegroundColor Red
+  $plainToken = $null
+  exit 1
 }
 
 # Pre-validate this EXACT variable against GitHub's own API before AWS ever
