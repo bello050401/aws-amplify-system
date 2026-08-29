@@ -10,6 +10,7 @@ import {
   type SalesSummary,
 } from "@/lib/inventory/sales";
 import { InventoryHeader } from "../../InventoryHeader";
+import { YearMonthPicker } from "./YearMonthPicker";
 
 interface SalesPageProps {
   searchParams: { y?: string; m?: string };
@@ -78,9 +79,7 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
           <Link href={monthHref(prev.year, prev.month)} className="border border-gray-300 px-2 py-1 text-[12px] text-gray-600 hover:bg-gray-50">
             ← 前月
           </Link>
-          <span className="min-w-[96px] border border-gray-200 bg-gray-50 px-3 py-1 text-center text-[14px] font-bold text-gray-900">
-            {summary.year}年{summary.month}月
-          </span>
+          <YearMonthPicker year={summary.year} month={summary.month} currentYear={jstNow.year} />
           <Link href={monthHref(next.year, next.month)} className="border border-gray-300 px-2 py-1 text-[12px] text-gray-600 hover:bg-gray-50">
             翌月 →
           </Link>
