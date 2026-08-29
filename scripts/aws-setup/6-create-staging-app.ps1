@@ -160,27 +160,97 @@ if ($roleResult.Ok) {
   Write-Host ("Role '" + $BackendRoleName + "' not found or not accessible - the new app will be created without --iam-service-role-arn (Amplify's own default backend build credentials will be used instead).") -ForegroundColor Yellow
 }
 
-# ---- 2. GitHub token ---------------------------------------------------------
+# ---- 2. GitHub token: acquire, sanitize, diagnose (never reveal the value),
+#         then pre-validate against GitHub itself before AWS ever sees it ---
+#
+# Root cause this section fixes: a previous run got "401 Bad credentials"
+# from `aws amplify create-app --access-token`, even though the exact same
+# token worked when the user tested it directly against
+# https://api.github.com/user. That gap (works against GitHub directly,
+# fails only via this script's call into AWS) points at the token being
+# altered somewhere between capture and use - most commonly a trailing
+# newline or space picked up from a clipboard paste into Read-Host, which
+# a real classic PAT never legitimately contains. This section now trims
+# any such whitespace, prints safe shape diagnostics (never the token
+# itself), and - critically - re-validates the EXACT SAME variable against
+# GitHub's own API immediately before it is ever passed to the AWS CLI, so
+# a bad token is caught here with a clear reason instead of surfacing as an
+# opaque 401 from deep inside create-app.
 Write-Host ""
 Write-Host "PREREQUISITE: the AWS Amplify GitHub App for this region should already be" -ForegroundColor Cyan
 Write-Host "installed, since the existing production app already deploys this same" -ForegroundColor Cyan
 Write-Host "repository from this same account/region. If create-app below fails with a" -ForegroundColor Cyan
 Write-Host ("GitHub-App-related error, visit https://github.com/apps/aws-amplify-" + $Region + " and Install & Authorize first.") -ForegroundColor Cyan
 Write-Host ""
+Write-Host "Please enter a NEW Personal Access Token now. Do not reuse a token that has" -ForegroundColor Yellow
+Write-Host "already been typed into a chat or shared elsewhere - treat any such token as" -ForegroundColor Yellow
+Write-Host "compromised and revoke it on GitHub (Settings > Developer settings >" -ForegroundColor Yellow
+Write-Host "Personal access tokens) before continuing." -ForegroundColor Yellow
+Write-Host ""
 
 if ($GitHubToken) {
-  $plainToken = $GitHubToken
+  $rawToken = $GitHubToken
 } else {
   $secureToken = Read-Host -AsSecureString "GitHub Personal Access Token (classic, admin:repo_hook scope)"
+  # PowerShell 5.1-compatible SecureString -> plaintext decode (the
+  # ConvertFrom-SecureString -AsPlainText parameter is PowerShell 6+ only).
+  # Decoded into a fixed unmanaged buffer and freed immediately after the
+  # single PtrToStringUni copy, so the plaintext token exists in managed
+  # memory only as long as this script needs it, and is never written to
+  # disk, an environment variable, or any log.
   $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($secureToken)
   try {
-    $plainToken = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($bstr)
+    $rawToken = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($bstr)
   } finally {
     [System.Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($bstr)
   }
 }
-if (-not $plainToken) {
+if (-not $rawToken) {
   Write-Host "No token was provided. Stopping without creating anything." -ForegroundColor Red
+  exit 1
+}
+
+# A real classic PAT never legitimately contains a leading/trailing space or
+# an embedded CR/LF - if either is present, it was introduced by the
+# capture step (clipboard/paste), not part of the actual credential.
+$hadEmbeddedNewline = $rawToken -match "[\r\n]"
+$strippedToken = $rawToken -replace "[\r\n]", ""
+$trimmedToken = $strippedToken.Trim()
+$hadLeadingOrTrailingWhitespace = ($trimmedToken -ne $strippedToken)
+$plainToken = $trimmedToken
+$rawToken = $null
+
+Write-Section "2a. Token shape diagnostics (the token value itself is never printed)"
+Write-Host ("  Length                         : " + $plainToken.Length)
+Write-Host ("  Starts with 'ghp_'             : " + $plainToken.StartsWith("ghp_"))
+Write-Host ("  Had embedded newline (removed) : " + $hadEmbeddedNewline)
+Write-Host ("  Had leading/trailing whitespace (trimmed): " + $hadLeadingOrTrailingWhitespace)
+if (-not $plainToken.StartsWith("ghp_")) {
+  Write-Host "  [WARNING] A current classic GitHub PAT normally starts with 'ghp_'. This one does not - double-check the whole token was copied." -ForegroundColor Yellow
+}
+if ($plainToken.Length -lt 20) {
+  Write-Host "  [WARNING] This looks too short for a real GitHub PAT." -ForegroundColor Yellow
+}
+
+# Pre-validate this EXACT variable against GitHub's own API before AWS ever
+# sees it. If this fails, the problem is the token itself (or how it just
+# got captured) - not AWS - and we stop here rather than let it surface
+# later as an opaque 401 from create-app.
+Write-Section "2b. Pre-validating this exact token against https://api.github.com/user"
+try {
+  $ghUser = Invoke-RestMethod -Uri "https://api.github.com/user" -Method Get -Headers @{
+    Authorization = "token $plainToken"
+    "User-Agent"  = "bello-inventory-staging-setup"
+    Accept        = "application/vnd.github+json"
+  }
+  Write-Host ("  GitHub accepted this token. login=" + $ghUser.login) -ForegroundColor Green
+} catch {
+  Write-Host "  GitHub rejected this exact token - stopping before calling AWS at all." -ForegroundColor Red
+  if ($_.Exception.Response) {
+    Write-Host ("  HTTP status: " + [int]$_.Exception.Response.StatusCode) -ForegroundColor Red
+  }
+  Write-Host ("  " + $_.Exception.Message) -ForegroundColor Red
+  $plainToken = $null
   exit 1
 }
 
@@ -203,6 +273,13 @@ if (-not $Force) {
   }
 }
 
+# $plainToken here is literally the same variable that was just trimmed,
+# diagnosed, and pre-validated against GitHub above - never re-read or
+# re-derived. $createArgs is a plain array passed to aws.exe via
+# PowerShell's native-command splatting (`& aws @createArgs`), which hands
+# each element to the process as its own argv entry with no further shell
+# requoting - correct and sufficient for a classic PAT (alphanumeric plus
+# underscore only), so no manual quoting is added or needed here.
 $createArgs = @(
   "amplify", "create-app",
   "--name", $AppName,

@@ -187,21 +187,62 @@ Write-Host "  and choose Install & Authorize (select this repository, or All rep
 Write-Host "  continuing. See docs/aws-test-environment.md section 4a if that URL 404s for your region."
 Write-Host ""
 
+# Token handling below sanitizes and pre-validates against GitHub's own API
+# before AWS ever sees it - see 6-create-staging-app.ps1's identical block
+# for why (a real-world "same token works direct to GitHub, 401s only via
+# create-app" case traced back to an unsanitized trailing
+# newline/whitespace picked up from a clipboard paste into Read-Host).
 $secureToken = $null
 if ($GitHubToken) {
-  $plainToken = $GitHubToken
+  $rawToken = $GitHubToken
 } else {
   $secureToken = Read-Host -AsSecureString "GitHub Personal Access Token (classic, admin:repo_hook scope)"
   $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($secureToken)
   try {
-    $plainToken = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($bstr)
+    $rawToken = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($bstr)
   } finally {
     [System.Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($bstr)
   }
 }
 
-if (-not $plainToken) {
+if (-not $rawToken) {
   Write-Host "No token was provided. Stopping without creating anything." -ForegroundColor Red
+  exit 1
+}
+
+$hadEmbeddedNewline = $rawToken -match "[\r\n]"
+$strippedToken = $rawToken -replace "[\r\n]", ""
+$trimmedToken = $strippedToken.Trim()
+$hadLeadingOrTrailingWhitespace = ($trimmedToken -ne $strippedToken)
+$plainToken = $trimmedToken
+$rawToken = $null
+
+Write-Host ""
+Write-Host "Token shape diagnostics (the token value itself is never printed):"
+Write-Host ("  Length                         : " + $plainToken.Length)
+Write-Host ("  Starts with 'ghp_'             : " + $plainToken.StartsWith("ghp_"))
+Write-Host ("  Had embedded newline (removed) : " + $hadEmbeddedNewline)
+Write-Host ("  Had leading/trailing whitespace (trimmed): " + $hadLeadingOrTrailingWhitespace)
+if (-not $plainToken.StartsWith("ghp_")) {
+  Write-Host "  [WARNING] A current classic GitHub PAT normally starts with 'ghp_'. Double-check the whole token was copied." -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "Pre-validating this exact token against https://api.github.com/user ..."
+try {
+  $ghUser = Invoke-RestMethod -Uri "https://api.github.com/user" -Method Get -Headers @{
+    Authorization = "token $plainToken"
+    "User-Agent"  = "bello-inventory-staging-setup"
+    Accept        = "application/vnd.github+json"
+  }
+  Write-Host ("GitHub accepted this token. login=" + $ghUser.login) -ForegroundColor Green
+} catch {
+  Write-Host "GitHub rejected this exact token - stopping before calling AWS at all." -ForegroundColor Red
+  if ($_.Exception.Response) {
+    Write-Host ("HTTP status: " + [int]$_.Exception.Response.StatusCode) -ForegroundColor Red
+  }
+  Write-Host ("  " + $_.Exception.Message) -ForegroundColor Red
+  $plainToken = $null
   exit 1
 }
 
