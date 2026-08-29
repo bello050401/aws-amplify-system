@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import type { CustomFieldDefinitionRow, InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
@@ -291,76 +291,22 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
   // 指示書 §11) — customFieldDefsが変わらない限りuseMemoで同じ配列参照
   // を保つ(useInventoryListColumns内のuseEffectの依存に使われるため)。
   const dynamicColumns: InventoryListColumnDef[] = useMemo(() => dynamicColumnDefsFrom(customFieldDefs), [customFieldDefs]);
-  const { visibility, order, widths, setColumnWidth } = useInventoryListColumns(dynamicColumns);
+  const { visibility, order, widths } = useInventoryListColumns(dynamicColumns);
   const columnByKey = new Map([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c]));
   const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key]);
 
   const { enabled: directEditEnabled, getValue, setValue, isRowDirty } = useDirectEdit();
 
-  // ── 列幅ドラッグリサイズ(夜間開発指示書 §13、フォローアップでPointer
-  // Eventsへ全面書き換え) ────────────────────────────────────────────
-  // window.addEventListener("mousemove"/...)ではなく、ハンドル要素自身
-  // へのPointer Capture(setPointerCapture)方式にした — こちらは
-  // useEffectの依存配列(旧実装ではsetColumnWidthの参照が変わるたびに
-  // 登録し直していた)やイベント登録タイミングに一切依存せず、
-  // pointerdownを受けた要素がpointerId分のその後のmove/upを確実に
-  // (ポインタが要素の外へ出ても)受け取り続けるブラウザ標準の仕組みの
-  // ため、より壊れにくい。
-  //
-  // draggingRef: ドラッグ中だけ意味を持つ値(どの列を・どこから・元の
-  // 幅は何pxだったか、どのpointerIdか) — pointermoveのたびにReact
-  // stateへ積むと不要な再レンダリングの依存関係が増えるため、refに逃
-  // がして実際に再レンダリングが必要な「今の見た目の幅」だけを
-  // liveWidth stateで持つ。pointerupで初めてuseInventoryListColumns
-  // (localStorage)へ確定保存する。
-  const draggingRef = useRef<{ key: string; startX: number; startWidth: number; pointerId: number } | null>(null);
-  const [liveWidth, setLiveWidth] = useState<{ key: string; width: number } | null>(null);
-
-  const widthFor = useCallback(
-    (key: string): number => {
-      if (liveWidth && liveWidth.key === key) return liveWidth.width;
-      return widths[key] ?? columnByKey.get(key)?.defaultWidth ?? 100;
-    },
-    // columnByKey is rebuilt every render from a stable static registry — safe to omit
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [liveWidth, widths],
-  );
-
-  function handleResizePointerDown(e: React.PointerEvent<HTMLDivElement>, key: string) {
-    // 商品詳細リンク等への誤クリック防止 — ヘッダーの<th>自体はLinkでは
-    // ないが、将来ヘッダークリックでソートする等の機能が乗っても親へは
-    // 伝播させない。
-    e.preventDefault();
-    e.stopPropagation();
-    const startWidth = widths[key] ?? columnByKey.get(key)?.defaultWidth ?? 100;
-    draggingRef.current = { key, startX: e.clientX, startWidth, pointerId: e.pointerId };
-    setLiveWidth({ key, width: startWidth });
-    // これ以降のpointermove/pointerupは、ポインタが実際にどこへ移動し
-    // てもこのハンドル要素自身へ配送される(標準のPointer Capture) —
-    // window/documentへの手動addEventListenerが不要になる。
-    e.currentTarget.setPointerCapture(e.pointerId);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }
-
-  function handleResizePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    const d = draggingRef.current;
-    if (!d || d.pointerId !== e.pointerId) return;
-    const next = Math.max(MIN_COLUMN_WIDTH, d.startWidth + (e.clientX - d.startX));
-    setLiveWidth({ key: d.key, width: next });
-  }
-
-  function endResize(e: React.PointerEvent<HTMLDivElement>) {
-    const d = draggingRef.current;
-    if (!d || d.pointerId !== e.pointerId) return;
-    setLiveWidth((prev) => {
-      if (prev && prev.key === d.key) setColumnWidth(prev.key, prev.width);
-      return null;
-    });
-    draggingRef.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
+  // 列幅はlib/inventory/listColumns.tsのdefaultWidth(表示設定の「初期
+  // 設定に戻す」で使う既定値)を基準に、useInventoryListColumns経由の
+  // 保存済み値があればそちらを優先する — 通常表示・一覧直接編集どちら
+  // も同じこの1系統だけを参照するため、モード切替で幅が変わることは
+  // ない。マウスドラッグでの列幅リサイズ機能は撤回・削除済み(spec:
+  // 「カテゴリを含め、列幅リサイズ機能の追加・修正は行わなくて構いま
+  // せん」) — 幅を変える唯一の手段は今後 defaultWidth の値そのものを
+  // 変更することか、表示設定画面の「初期設定に戻す」のみ。
+  function widthFor(key: string): number {
+    return widths[key] ?? columnByKey.get(key)?.defaultWidth ?? 100;
   }
 
   if (rows.length === 0) {
@@ -373,9 +319,9 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
     <div className="h-full overflow-auto">
       {/* table-layout: fixed + 明示的なtable幅(全可視列の合計) — これが
           ないとブラウザは内容量に応じて列幅を自動調整し直してしまい、
-          ドラッグで設定した幅が反映されない。合計がビューポートを超え
-          た分は、外側のoverflow-autoコンテナが横スクロールで吸収する
-          (spec §13: 必要幅がviewportを超えたら横スクロール)。 */}
+          設定した幅(物品名列を含む)が反映されない。合計がビューポート
+          を超えた分は、外側のoverflow-autoコンテナが横スクロールで吸収
+          する(物品名が長い場合でも他列や画像列を圧迫しない)。 */}
       <table className="border-collapse text-[13px]" style={{ tableLayout: "fixed", width: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
@@ -384,27 +330,10 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
               const w = widthFor(col.key);
               const align = RIGHT_ALIGN_COLUMNS.has(col.key) ? "text-right" : "text-left";
               return (
-                <th key={col.key} style={{ width: w, minWidth: MIN_COLUMN_WIDTH }} className={`relative select-none px-2 py-1.5 ${align}`}>
+                <th key={col.key} style={{ width: w, minWidth: MIN_COLUMN_WIDTH }} className={`px-2 py-1.5 ${align}`}>
                   <span className="block truncate" title={col.label}>
                     {col.label}
                   </span>
-                  {/* リサイズハンドル — spec §13/フォローアップ:
-                      ヘッダー境界、視覚線より広め(10px)の透明hit area、
-                      hover時cursor: col-resize、Pointer Eventsで
-                      pointerdown→pointermove→リアルタイム幅変更→pointerup。
-                      onClickは意図的に付けない(商品詳細リンク等が無い
-                      ヘッダー行なので誤クリックの実害は無いが、念のため
-                      pointerdown側でstopPropagationしている)。 */}
-                  <div
-                    onPointerDown={(e) => handleResizePointerDown(e, col.key)}
-                    onPointerMove={handleResizePointerMove}
-                    onPointerUp={endResize}
-                    onPointerCancel={endResize}
-                    role="separator"
-                    aria-orientation="vertical"
-                    aria-label={`${col.label}列の幅を変更`}
-                    className="absolute right-[-5px] top-0 z-10 h-full w-[10px] cursor-col-resize touch-none select-none hover:bg-gray-300 active:bg-gray-400"
-                  />
                 </th>
               );
             })}

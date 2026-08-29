@@ -36,7 +36,10 @@ export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
   { key: "image", label: "画像", defaultVisible: true, defaultWidth: 106 },
   { key: "status", label: "ステータス", defaultVisible: false, defaultWidth: 96 },
   { key: "sku", label: "在庫ID", defaultVisible: true, defaultWidth: 128 },
-  { key: "name", label: "物品名", defaultVisible: true, defaultWidth: 240 },
+  // ユーザー指示により、既定幅を240pxから約半分の120pxへ縮小(列幅の
+  // マウスドラッグリサイズ機能自体は撤回・削除済み — InventoryTable.tsx
+  // 参照。この値は表示設定「初期設定に戻す」でも使われる唯一の基準値)。
+  { key: "name", label: "物品名", defaultVisible: true, defaultWidth: 120 },
   { key: "quantity", label: "数量", defaultVisible: true, defaultWidth: 64 },
   { key: "location", label: "保管場所", defaultVisible: true, defaultWidth: 112 },
   { key: "category", label: "カテゴリ", defaultVisible: true, defaultWidth: 112 },
@@ -68,7 +71,7 @@ export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
   { key: "adminMemo", label: "管理メモ", defaultVisible: false, defaultWidth: 160 },
 ];
 
-/** リサイズ可能な列がここより小さくなることはない — テキストや操作可能領域が潰れて使い物にならなくなるのを防ぐ下限(spec §13: 適切なminWidthを設定)。 */
+/** 列幅の下限(px) — defaultWidth/保存済みwidthがどんな値でも、テキストや操作可能領域が潰れて使い物にならなくなるのを防ぐ安全弁。マウスドラッグでの列幅リサイズ機能自体は撤回・削除済み(InventoryTable.tsx参照)。 */
 export const MIN_COLUMN_WIDTH = 48;
 
 /** 動的なCustomFieldDefinitionを列定義へ変換する際の初期幅(px)。長めの自由記述もある程度読める幅を確保しつつ、既定では表示しない(defaultVisible: false)ため一覧を情報過多にしない。 */

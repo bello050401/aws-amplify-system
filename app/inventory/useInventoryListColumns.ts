@@ -144,14 +144,6 @@ export function useInventoryListColumns(dynamicColumns: InventoryListColumnDef[]
     [preferences],
   );
 
-  /** 1列だけ幅を更新する — ドラッグ中に毎フレームpersist()の対象オブジェクト全体を組み直すのを避け、リサイズ操作用に用意した専用ヘルパー。 */
-  const setColumnWidth = useCallback(
-    (key: string, width: number) => {
-      persist({ ...preferences, widths: { ...preferences.widths, [key]: width } });
-    },
-    [preferences],
-  );
-
   return {
     visibility: preferences.visibility,
     order: preferences.order,
@@ -159,7 +151,6 @@ export function useInventoryListColumns(dynamicColumns: InventoryListColumnDef[]
     setVisibility,
     setOrder,
     setWidths,
-    setColumnWidth,
     hydrated,
   };
 }

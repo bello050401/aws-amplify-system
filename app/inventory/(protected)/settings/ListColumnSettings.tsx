@@ -25,8 +25,10 @@ interface ListColumnSettingsProps {
  * either; ↑/↓ matches the exact pattern ImageEditor.tsx already uses for
  * reordering images, so this doesn't introduce a second reordering
  * idiom or a drag-and-drop library into the app for one settings list.
- * (在庫一覧本体の列"幅"は代わりにヘッダー境界のマウスドラッグでリサイ
- * ズする — InventoryTable.tsx参照。ここでは表示/非表示・順序だけ。)
+ * (在庫一覧本体の列"幅"はマウスドラッグでのリサイズ機能を一度実装した
+ * 後、ユーザー指示により撤回・削除した — 各列の幅はlib/inventory/
+ * listColumns.tsのdefaultWidthのみで決まる。ここの「初期設定に戻す」
+ * は表示/非表示・順序に加え、そのdefaultWidthへも明示的にリセットする。)
  *
  * `customFieldDefs`(夜間開発指示書 §11) — 追加項目もInventoryTable.tsx
  * と全く同じ仕組み(dynamicColumnDefsFrom)で列候補に混ざる。ADMINが追
@@ -61,7 +63,7 @@ export function ListColumnSettings({ customFieldDefs }: ListColumnSettingsProps)
   return (
     <div>
       <p className="mb-3 max-w-md text-[12px] text-gray-500">
-        在庫一覧・詳細検索結果に表示する列と順序を選べます。この設定はお使いのブラウザに保存され、通常の一覧と検索結果の両方に同じ内容が反映されます。列の幅は一覧画面でヘッダーの境界をドラッグして調整してください。
+        在庫一覧・詳細検索結果に表示する列と順序を選べます。この設定はお使いのブラウザに保存され、通常の一覧と検索結果の両方に同じ内容が反映されます。
       </p>
       <ul className="max-w-md divide-y divide-gray-100 border-y border-gray-200">
         {orderedColumns.map((col, index) => (
