@@ -75,19 +75,22 @@ async function main() {
   // same cloud assembly directory rather than appearing in
   // `assembly.stacks` — so search the whole synthesized output tree, not
   // just the top-level stack templates.
-  const hits = findFilesContaining(assembly.directory, "ZaicoSyncJob");
-  if (hits.length === 0) throw new Error(`ZaicoSyncJob was not found in any synthesized template under ${assembly.directory}.`);
-  console.log(`✓ Found "ZaicoSyncJob" referenced in ${hits.length} synthesized template file(s):`);
-  for (const f of hits) console.log(`  - ${path.relative(assembly.directory, f)}`);
+  //
+  // Checks every a.model() added by this master指示書 round: Phase A's
+  // ZaicoSyncJob and Phase D's ListingDraft/ChannelListing (BELLO統合改修
+  // master指示書 Phase D — EC Listing / Mercari Shops連携).
+  for (const modelName of ["ZaicoSyncJob", "ListingDraft", "ChannelListing"]) {
+    const hits = findFilesContaining(assembly.directory, modelName);
+    if (hits.length === 0) throw new Error(`${modelName} was not found in any synthesized template under ${assembly.directory}.`);
 
-  let totalZaicoJobResources = 0;
-  for (const f of hits) {
-    const template = JSON.parse(fs.readFileSync(f, "utf8"));
-    const matches = Object.keys(template.Resources ?? {}).filter((id) => id.includes("ZaicoSyncJob"));
-    totalZaicoJobResources += matches.length;
+    let totalResources = 0;
+    for (const f of hits) {
+      const template = JSON.parse(fs.readFileSync(f, "utf8"));
+      totalResources += Object.keys(template.Resources ?? {}).filter((id) => id.includes(modelName)).length;
+    }
+    console.log(`✓ ${modelName}: referenced in ${hits.length} synthesized template file(s), ${totalResources} CloudFormation resource(s) with it in their logical id.`);
+    if (totalResources === 0) throw new Error(`${modelName} text was found (e.g. in a GraphQL schema string) but no actual CloudFormation resource for it exists.`);
   }
-  console.log(`✓ Total CloudFormation resources whose logical id contains "ZaicoSyncJob": ${totalZaicoJobResources}`);
-  if (totalZaicoJobResources === 0) throw new Error("ZaicoSyncJob text was found (e.g. in a GraphQL schema string) but no actual CloudFormation resource for it exists.");
 }
 
 main().catch((err) => {

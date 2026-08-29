@@ -551,6 +551,105 @@ const schema = a.schema({
       allow.group("ADMIN"),
       allow.group("EDITOR").to(["read"]), // visibility only — starting/cancelling/advancing a background sync is an ADMIN action, same boundary as the synchronous sync Server Actions
     ]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // BELLO統合改修 master指示書 Phase D: EC Listing / Mercari Shops連携。
+  //
+  // 絶対要件(spec): Inventory MasterへEC出品専用フィールドを一切混在
+  // させない。EC出品データはInventoryとは別のモデルへ完全に分離する
+  // — 以下のListingDraft/ChannelListingは、どちらも独立したモデルで
+  // あり、Inventory model自体には1フィールドも追加していない
+  // (inventoryIdによる紐付けのみ、Category/Locationの親子関係と同じ
+  // 「正式なbelongsTo relationではなくフラットなID参照」方式 — Phase 2
+  // 時点でこのアプリが既に採用しているパターンを踏襲)。
+  //
+  // spec指定の5概念(Inventory / Common Listing Draft / Channel Listing
+  // / Channel Override / External Listing Status)を、モデル数を最小限
+  // に保ちながら以下2モデルへ実装している(spec自身の「schema追加は
+  // 最小限に」との指示、およびこのアプリ全体の「今の規模に対して過剰
+  // 設計しない」という一貫した設計判断に合わせた、意図的な単純化):
+  //   - Inventory              → 既存Inventoryモデル(無変更)
+  //   - Common Listing Draft   → ListingDraft(チャネルに依存しない
+  //                              共通の出品下書き — タイトル/説明文/
+  //                              価格/コンディション/画像。1つの
+  //                              Inventoryにつき通常1件)
+  //   - Channel Listing        → ChannelListingのchannel/status/
+  //                              createdAt/updatedAtフィールド
+  //   - Channel Override       → ChannelListingのoverrideTitle/
+  //                              overrideDescription/overridePrice
+  //                              (設定されていれば共通下書きの値より
+  //                              優先される — チャネルごとに「ここだけ
+  //                              違う」を表現する最小限の形。将来2つ目
+  //                              以降のチャネルが実際に追加された時点
+  //                              で、真に共有できない項目が増えれば、
+  //                              このJSON/フィールド構成を見直せば良い)
+  //   - External Listing Status → ChannelListingのstatus/
+  //                              externalListingId/listingUrl/
+  //                              listedAt/lastError
+  // ChannelListingが「Channel Listing」「Channel Override」
+  // 「External Listing Status」の3概念を1モデルに同居させているのは、
+  // 現時点でチャネルがMercari Shops 1つしかなく、これら3つが常に
+  // 1:1(1つのChannelListingの生涯にわたって1組)の関係にあるため —
+  // 将来別チャネルが増えても、この1モデルに新しい行(channel="..."の
+  // 別行)が増えるだけで、モデル自体の再設計は不要。
+  //
+  // READ ONLY境界(spec): 在庫マスタのユーザーによる作成・編集・削除は
+  // 禁止のまま — ListingDraft/ChannelListingへの書き込みは
+  // lib/listing/service.tsを通じてのみ行われ、そこはInventoryモデルへ
+  // 一切書き込まない(在庫の書き込みはapp/actions/inventory.ts経由の
+  // 既存の道だけ)。これはコード構造上の分離であり、このschema定義
+  // 自体もそれを裏付ける — ListingDraft/ChannelListingのどちらも
+  // Inventoryモデルのフィールドを一切変更しない、独立したモデル。
+  ListingChannel: a.enum(["MERCARI_SHOPS"]), // 現時点でMercari Shopsのみ。将来チャネル追加時はここへ値を足すだけ
+
+  ListingCondition: a.enum(["NEW", "LIKE_NEW", "NO_NOTABLE_DAMAGE", "SLIGHT_DAMAGE", "DAMAGE", "BAD"]), // lib/listing/condition.tsの6段階と1対1 — Mercariの実際のcondition enum値は lib/listing/mercari/mapper/condition.ts が変換する(BELLOの内部語彙とMercari APIの語彙を分離)
+
+  ListingStatus: a.enum(["DRAFT", "QUEUED", "LISTED", "FAILED"]),
+
+  /** チャネルに依存しない共通の出品下書き — 1つのInventoryにつき0または1件。 */
+  ListingDraft: a
+    .model({
+      inventoryId: a.string().required(), // FK — belongsTo relationではなくフラットなID参照(Category/Locationのparent-child関係と同じ設計判断)
+      title: a.string().required(),
+      description: a.string(),
+      price: a.integer(),
+      condition: a.ref("ListingCondition"),
+      images: a.json(), // Inventory.images由来のstorageKeyを並び替えたもの([{storageKey, sortOrder}] 相当) — 出品用に画像を再アップロードすることはない、既存のInventory画像をそのまま参照する
+      createdBy: a.string(),
+      updatedBy: a.string(),
+      deletedAt: a.datetime(), // ソフトデリート — Inventory本体と同じ規約
+    })
+    .secondaryIndexes((index) => [index("inventoryId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"), // Inventory編集権限(canEditInventory)と同じ境界 — spec: 「Listing: create/edit allowed」
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /** チャネル別の出品状態(Channel Listing + Channel Override + External Listing Statusを1モデルに統合 — 上のコメント参照)。1つのListingDraftにつき、チャネルごとに0または1件(重複防止はlib/listing/service.ts側でinventoryId+channelの事前存在チェックにより行う — DynamoDBに複合ユニーク制約は無いため)。 */
+  ChannelListing: a
+    .model({
+      listingDraftId: a.string().required(),
+      inventoryId: a.string().required(), // 非正規化 — READ ONLY境界チェック/一覧表示のためlistingDraftを経由せず直接引けるようにする
+      channel: a.ref("ListingChannel").required(),
+      categoryMapping: a.json(), // チャネル固有のカテゴリ情報(例: {mercariCategoryId, mercariCategoryName})
+      overrideTitle: a.string(), // 設定されていればListingDraft.titleより優先
+      overrideDescription: a.string(),
+      overridePrice: a.integer(),
+      status: a.ref("ListingStatus").required(),
+      externalListingId: a.string(), // 例: MercariのProduct ID
+      listingUrl: a.string(),
+      listedAt: a.datetime(),
+      lastError: a.string(),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    .secondaryIndexes((index) => [index("inventoryId"), index("listingDraftId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
