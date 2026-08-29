@@ -3,6 +3,8 @@ import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listAllInventory } from "@/lib/inventory/queries";
 import {
   summarizeSales,
+  summarizeMonthlyTrend,
+  calculateItemGrossProfit,
   shiftYearMonth,
   nowInJst,
   isCurrentJstYearMonth,
@@ -11,6 +13,7 @@ import {
 } from "@/lib/inventory/sales";
 import { InventoryHeader } from "../../InventoryHeader";
 import { YearMonthPicker } from "./YearMonthPicker";
+import { SalesTrendChart } from "./SalesTrendChart";
 
 interface SalesPageProps {
   searchParams: { y?: string; m?: string };
@@ -51,6 +54,11 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
 
   const records = await listAllInventory();
   const summary: SalesSummary = summarizeSales(records, year, month);
+  // BELLO統合改修 master指示書(2026-08-29統合改修版) §20: 12ヶ月推移
+  // グラフ — 表示中の年月を最終月とする直近12ヶ月分。listAllInventory
+  // は既にこの画面で1回取得済みなので、追加のDB往復なしにそのまま
+  // summarizeMonthlyTrendへ渡すだけで済む。
+  const trendPoints = summarizeMonthlyTrend(records, year, month, 12);
 
   function monthHref(y: number, m: number): string {
     return `/inventory/sales?y=${y}&m=${m}`;
@@ -99,12 +107,16 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
             のときだけ表示する — 過去月を見ている間は下の既存サマリー
             (実績のみ)がそのまま表示される。派手なダッシュボード風には
             せず、既存のSummaryTileと同じ地味なグリッドのまま追加する
-            (§6: 「派手なダッシュボードにはしない」)。 */}
+            (§6: 「派手なダッシュボードにはしない」)。
+            BELLO統合改修 master指示書(2026-08-29統合改修版) §19: 「今月
+            の売上」タイルは、すぐ下のサマリーの「売上高」タイルと同じ
+            値(summary.totalSales)を別の呼び名で重複表示していただけ
+            だったため撤去した — 冗長なラベルは一本化する、という
+            spec §19の要件そのもの。 */}
         {forecast && (
           <div className="mb-6 max-w-3xl">
             <p className="mb-1.5 text-[11px] font-bold text-gray-400">今月の売上着地予測</p>
-            <div className="grid grid-cols-1 gap-px border border-gray-200 bg-gray-200 sm:grid-cols-3">
-              <SummaryTile label="今月の売上" value={yen(summary.totalSales)} />
+            <div className="grid grid-cols-1 gap-px border border-gray-200 bg-gray-200 sm:grid-cols-2">
               <SummaryTile label="1日平均売上" value={`${yen(Math.round(forecast.averageDailySales))} / 日`} />
               <SummaryTile label="今月の売上着地予測" value={yen(Math.round(forecast.projectedMonthEndSales))} />
             </div>
@@ -121,15 +133,25 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
             重複表示されて紛らわしい — 「購入金額」タイルは廃止し「原価」
             へ一本化した。「送料」は過去データの参照用として残すが、
             原価には一切含まれないことが分かるよう「（参考）」を明示。
-            新たに「利益」(= 売上高 − 原価)を追加。 */}
+            BELLO統合改修 master指示書(2026-08-29統合改修版) Q15/§19:
+            「利益」ではなく必ず「粗利益」と表示する — このアプリの
+            どの画面でも「利益」という表記単独では使わない。 */}
         <div className="mb-6 grid max-w-3xl grid-cols-2 gap-px border border-gray-200 bg-gray-200 sm:grid-cols-3">
           <SummaryTile label="売上高" value={yen(summary.totalSales)} />
           <SummaryTile label="原価" value={yen(summary.totalCost)} />
-          <SummaryTile label="利益" value={yen(summary.totalProfit)} />
+          <SummaryTile label="粗利益" value={yen(summary.totalProfit)} />
           <SummaryTile label="原価率" value={`${summary.costRate.toFixed(1)}%`} />
           <SummaryTile label="送料（参考・原価には含みません）" value={yen(summary.totalShipping)} />
           <SummaryTile label="販売件数" value={`${summary.count}件`} />
           <SummaryTile label="平均販売単価" value={yen(Math.round(summary.averageSalePrice))} />
+        </div>
+
+        {/* BELLO統合改修 master指示書(2026-08-29統合改修版) §20: 12ヶ月
+            推移グラフ(売上高・粗利益)。表示中の月を最終月とする直近
+            12ヶ月 — 月を切り替えるたびにグラフの範囲も追従する。 */}
+        <div className="mb-6 max-w-3xl border border-gray-200 p-3">
+          <p className="mb-2 text-[11px] font-bold text-gray-400">直近12ヶ月の推移</p>
+          <SalesTrendChart points={trendPoints} />
         </div>
 
         {/* 対象商品一覧 */}
@@ -150,19 +172,20 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
                   <th className="px-2 py-1.5 text-right font-normal">販売価格</th>
                   <th className="px-2 py-1.5 text-right font-normal">送料（参考）</th>
                   <th className="px-2 py-1.5 text-right font-normal">原価</th>
-                  <th className="px-2 py-1.5 text-right font-normal">利益</th>
+                  <th className="px-2 py-1.5 text-right font-normal">粗利益</th>
                 </tr>
               </thead>
               <tbody>
                 {summary.items.map((item) => {
-                  // 【重要】原価 = purchasePriceのみ(lib/inventory/sales.tsの
-                  // SalesSummary.totalCostと同じ考え方 — shippingCostを
-                  // 加算すると、送料込みで入力された新運用のpurchasePrice
-                  // に対して二重計上になる)。送料は「送料（参考）」列で
-                  // 過去データの参照用として表示するだけで、原価・利益の
-                  // 計算には使わない。
+                  // BELLO統合改修 master指示書(2026-08-29統合改修版) §21:
+                  // 「一つの中央計算から算出する」— この行の粗利益も、
+                  // 月合計(summary.totalProfit)と全く同じ
+                  // lib/inventory/sales.tsのcalculateItemGrossProfitを
+                  // 呼ぶ。原価=purchasePriceのみで、shippingCostを重ねて
+                  // 加算しない(二重計上防止)というルールもこの1関数に
+                  // 集約されている。
                   const cost = item.purchasePrice ?? 0;
-                  const profit = (item.salePrice ?? 0) - cost;
+                  const profit = calculateItemGrossProfit(item.salePrice, item.purchasePrice);
                   return (
                     <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                       <td className="px-2 py-1">

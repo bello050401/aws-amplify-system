@@ -58,11 +58,34 @@ export interface SalesSummary {
   totalCost: number;
   /** 原価率(%) = 原価 ÷ 売上高 × 100。売上高が0の場合は0として安全に扱う(0除算しない)。 */
   costRate: number;
-  /** 利益 = 売上高 − 原価(= totalSales − totalCost、totalCost = totalPurchaseのため実質 売上高 − purchasePrice合計)。 */
+  /**
+   * 粗利益 = 売上高 − 原価(= totalSales − totalCost、totalCost =
+   * totalPurchaseのため実質 売上高 − purchasePrice合計)。
+   *
+   * フィールド名はtotalProfitのまま(呼び出し側を無闇に変更しないため)
+   * だが、UI表示は必ず「粗利益」であって「利益」だけの表記は使わない
+   * — BELLO統合改修 master指示書(2026-08-29統合改修版) Q15の呼称
+   * ルール。この画面が一つの中央集計ロジック(この関数)からしか
+   * 粗利益の値を得ないこと自体が、spec §21の「一つの中央計算から算出
+   * し、あちこちで別々に再計算しない」という要件を満たしている。
+   */
   totalProfit: number;
   /** 平均販売単価 = 売上高 ÷ 件数。件数が0の場合は0。 */
   averageSalePrice: number;
   items: SalesTargetItem[];
+}
+
+/**
+ * 1商品の粗利益 = 販売価格 − 原価(purchasePriceのみ、shippingCostは
+ * 加算しない — summarizeSalesのtotalCost/totalProfitと全く同じルール)。
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §21: 「一つの中央
+ * 計算から算出する」ため、対象商品一覧テーブル(1商品ごとの粗利益列)
+ * とsummarizeSales(月合計のtotalProfit)の両方がこの1関数を経由する
+ * — どちらか一方だけ式を変えて数字が食い違う、という事態を構造的に
+ * 防ぐ。
+ */
+export function calculateItemGrossProfit(salePrice: number | null, purchasePrice: number | null): number {
+  return (salePrice ?? 0) - (purchasePrice ?? 0);
 }
 
 /** AWSDate("YYYY-MM-DD")の文字列が指定年月と一致するか。 */
@@ -96,18 +119,23 @@ export function summarizeSales(records: SalesSourceRecord[], year: number, month
   let totalSales = 0;
   let totalPurchase = 0;
   let totalShipping = 0;
+  let totalProfit = 0;
   for (const r of matched) {
     totalSales += r.salePrice ?? 0;
     totalPurchase += r.purchasePrice ?? 0;
     totalShipping += r.shippingCost ?? 0;
+    // §21「一つの中央計算から算出する」— 月合計の粗利益も、対象商品
+    // 一覧テーブルの1行ごとの粗利益と同じcalculateItemGrossProfitを
+    // 積み上げて求める(totalSales - totalCostという別の式を並行して
+    // 持たない)。
+    totalProfit += calculateItemGrossProfit(r.salePrice, r.purchasePrice);
   }
   // 【重要】原価 = purchasePrice合計のみ。shippingCostは加算しない
   // (二重計上防止 — 上のtotalCostのコメント参照)。totalShippingは
-  // 過去データの参照用としてSalesSummaryへ残すが、原価・利益の計算式
+  // 過去データの参照用としてSalesSummaryへ残すが、原価・粗利益の計算式
   // には一切使わない。
   const totalCost = totalPurchase;
   const costRate = totalSales === 0 ? 0 : (totalCost / totalSales) * 100;
-  const totalProfit = totalSales - totalCost;
   const averageSalePrice = matched.length === 0 ? 0 : totalSales / matched.length;
 
   return {
@@ -140,6 +168,39 @@ export function shiftYearMonth(year: number, month: number, deltaMonths: number)
   const nextYear = Math.floor(zeroBased / 12);
   const nextMonth = (zeroBased % 12) + 1;
   return { year: nextYear, month: nextMonth };
+}
+
+/** 12ヶ月推移グラフ(下記summarizeMonthlyTrend)の1ヶ月分。 */
+export interface MonthlyTrendPoint {
+  year: number;
+  month: number;
+  /** 売上高(summarizeSalesのtotalSalesと同一)。 */
+  totalSales: number;
+  /** 粗利益(summarizeSalesのtotalProfitと同一 — 表示名は「利益」ではなく必ず「粗利益」とする、というBELLO統合改修 master指示書(2026-08-29統合改修版) Q15の呼称ルールに合わせて、フィールド名もここでは最初からtotalGrossProfitと表現している)。 */
+  totalGrossProfit: number;
+}
+
+/**
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §20/§21: 売上画面の
+ * 12ヶ月推移グラフ用データ。`endYear`/`endMonth`を最終月として、そこ
+ * から遡る`monthsBack`ヶ月分(既定12)を古い順に返す — 対象月が0件でも
+ * 0埋めで含む(spec: 「実績が無い月も0として表示、月が飛ばない」)。
+ *
+ * 「一つの中央集計ロジックから算出する」(spec §21)を満たすため、各月
+ * の集計は既存のsummarizeSales(単月ビューと全く同じ関数)をそのまま
+ * 呼び出すだけ — 別の集計式をここで新たに書かない。`records`は呼び出
+ * し側が一度だけ全件取得したものをそのまま渡す想定(spec: 「現在ページ
+ * だけでなく全件」) — 12回呼んでも同じ配列に対するインメモリのfilter/
+ * reduceを12回繰り返すだけで、追加のDB往復は発生しない。
+ */
+export function summarizeMonthlyTrend(records: SalesSourceRecord[], endYear: number, endMonth: number, monthsBack = 12): MonthlyTrendPoint[] {
+  const points: MonthlyTrendPoint[] = [];
+  for (let i = monthsBack - 1; i >= 0; i--) {
+    const { year, month } = shiftYearMonth(endYear, endMonth, -i);
+    const summary = summarizeSales(records, year, month);
+    points.push({ year, month, totalSales: summary.totalSales, totalGrossProfit: summary.totalProfit });
+  }
+  return points;
 }
 
 /**

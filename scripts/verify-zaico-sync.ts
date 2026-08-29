@@ -20,7 +20,7 @@ import { syncOneZaicoItem } from "@/lib/inventory/zaicoSync";
 import type { ZaicoSyncPort, InventoryModel, NewInventoryInput, UpdateInventoryInput } from "@/lib/inventory/zaicoSyncPorts";
 import type { HistoryFieldChange } from "@/lib/inventory/history";
 import { parseSeenSourceIds, toPublicJob } from "@/lib/inventory/zaicoBackgroundSync";
-import { summarizeSales } from "@/lib/inventory/sales";
+import { summarizeSales, summarizeMonthlyTrend, calculateItemGrossProfit } from "@/lib/inventory/sales";
 import { resizeToThumbnailJpeg, THUMBNAIL_MAX_DIMENSION } from "@/lib/inventory/thumbnail";
 import { effectiveListThumbnailKey, type InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import { compareByUpdatedAtDesc } from "@/lib/inventory/queries";
@@ -243,6 +243,33 @@ function testPurchasePriceAllInCostRule() {
   assertEqual(summary.totalProfit, 40000, "purchasePrice rule: totalProfit = sales - purchasePrice-only cost");
 }
 
+// BELLO統合改修 master指示書(2026-08-29統合改修版) §20/§21 —
+// 12ヶ月推移グラフの中央集計ロジック(summarizeMonthlyTrend)と、商品
+// 単位の粗利益(calculateItemGrossProfit)。 ───────────────────────────
+
+function testCalculateItemGrossProfit() {
+  assertEqual(calculateItemGrossProfit(10000, 6000), 4000, "calculateItemGrossProfit: salePrice - purchasePrice");
+  assertEqual(calculateItemGrossProfit(null, 6000), -6000, "calculateItemGrossProfit: treats a missing salePrice as 0");
+  assertEqual(calculateItemGrossProfit(10000, null), 10000, "calculateItemGrossProfit: treats a missing purchasePrice as 0");
+}
+
+function testSummarizeMonthlyTrend() {
+  const records = [
+    { id: "a", displayId: "0001", sku: "SKU-0001", name: "3月商品", saleEndDate: "2026-03-10", salePrice: 5000, purchasePrice: 2000, shippingCost: 0 },
+    { id: "b", displayId: "0002", sku: "SKU-0002", name: "1月商品", saleEndDate: "2026-01-05", salePrice: 3000, purchasePrice: 1000, shippingCost: 0 },
+  ];
+  const points = summarizeMonthlyTrend(records, 2026, 3, 12);
+  assertEqual(points.length, 12, "summarizeMonthlyTrend: always returns exactly monthsBack points");
+  assertEqual(points[points.length - 1], { year: 2026, month: 3, totalSales: 5000, totalGrossProfit: 3000 }, "summarizeMonthlyTrend: last point is the end month itself");
+  assertEqual(points[9], { year: 2026, month: 1, totalSales: 3000, totalGrossProfit: 2000 }, "summarizeMonthlyTrend: an earlier month with real sales is included, not just the end month");
+  // 実績が無い月(2026年2月)も0埋めで含まれる(欠番にならない) — spec:
+  // 「実績が無い月も0として表示、月が飛ばない」。
+  assertEqual(points[10], { year: 2026, month: 2, totalSales: 0, totalGrossProfit: 0 }, "summarizeMonthlyTrend: a month with zero matching sales is zero-filled, not skipped");
+  // 年をまたぐ(2025年4月〜2026年3月の12ヶ月)ことも確認 — shiftYearMonth
+  // 経由で年境界を正しく扱えているかの回帰確認。
+  assertEqual(points[0], { year: 2025, month: 4, totalSales: 0, totalGrossProfit: 0 }, "summarizeMonthlyTrend: the oldest point correctly crosses the year boundary");
+}
+
 async function testThumbnailResize() {
   // A synthetic 1000×600 image (well past THUMBNAIL_MAX_DIMENSION on its
   // long edge) — sharp can synthesize raw pixel data directly, so this
@@ -311,6 +338,8 @@ async function main() {
   await testFailureIsolation();
   testBackgroundJobPureHelpers();
   testPurchasePriceAllInCostRule();
+  testCalculateItemGrossProfit();
+  testSummarizeMonthlyTrend();
   await testThumbnailResize();
   testEffectiveListThumbnailKey();
   testUpdatedAtSort();
