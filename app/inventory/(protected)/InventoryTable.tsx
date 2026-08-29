@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { CustomFieldDefinitionRow, InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
@@ -42,6 +42,8 @@ function formatAwsDate(value: string | null): string {
 
 const numCell = "px-2 py-1 text-right tabular-nums overflow-hidden";
 const cell = "px-2 py-1 overflow-hidden";
+/** 一覧直接編集で入力中のセルは<td>のpaddingを持たない — inputClass自身のpx-2 py-1がinsetを肩代わりする(二重padding防止、通常表示との密度統一)。 */
+const editableCell = "overflow-hidden";
 
 /** 右寄せ表示する列(数値系)。幅そのものはlib/inventory/listColumns.tsのdefaultWidth + ユーザーのドラッグ操作(useInventoryListColumns.widths)へ一本化した — 列幅の初期値・保存値を二重管理しない。 */
 const RIGHT_ALIGN_COLUMNS = new Set(["quantity", "purchasePrice", "plannedSalePrice", "salePrice", "saleCommission"]);
@@ -179,7 +181,14 @@ function renderEditableCell(
   getValue: ReturnType<typeof useDirectEdit>["getValue"],
   setValue: ReturnType<typeof useDirectEdit>["setValue"],
 ): React.ReactNode {
-  const inputClass = "w-full border border-gray-300 bg-white px-1 py-0.5 text-[12px] focus:border-gray-500 focus:outline-none";
+  // 通常表示の読み取り専用セル(<td>のpx-2 py-1だけがinsetで、中身の
+  // <span>自体は余白を持たない)と見た目の密度を揃える(夜間開発の
+  // フォローアップ: 「通常一覧とDirect Editでヘッダー幅感が違う」) —
+  // 編集モードの<td>はpaddingを0にし(下のnumCell/cellの分岐参照)、
+  // その分をinput自身のpx-2 py-1が肩代わりする。<td>のpaddingとinputの
+  // paddingが二重にならないため、同じ列幅で読み取り時と編集時の実効的
+  // な余白が一致する。
+  const inputClass = "block w-full border border-gray-300 bg-white px-2 py-1 text-[12px] focus:border-gray-500 focus:outline-none";
 
   switch (column) {
     case "name": {
@@ -288,15 +297,23 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
 
   const { enabled: directEditEnabled, getValue, setValue, isRowDirty } = useDirectEdit();
 
-  // ── 列幅ドラッグリサイズ(夜間開発指示書 §13) ──────────────────────
+  // ── 列幅ドラッグリサイズ(夜間開発指示書 §13、フォローアップでPointer
+  // Eventsへ全面書き換え) ────────────────────────────────────────────
+  // window.addEventListener("mousemove"/...)ではなく、ハンドル要素自身
+  // へのPointer Capture(setPointerCapture)方式にした — こちらは
+  // useEffectの依存配列(旧実装ではsetColumnWidthの参照が変わるたびに
+  // 登録し直していた)やイベント登録タイミングに一切依存せず、
+  // pointerdownを受けた要素がpointerId分のその後のmove/upを確実に
+  // (ポインタが要素の外へ出ても)受け取り続けるブラウザ標準の仕組みの
+  // ため、より壊れにくい。
+  //
   // draggingRef: ドラッグ中だけ意味を持つ値(どの列を・どこから・元の
-  // 幅は何pxだったか) — mousemoveのたびにReact stateへ積むとuseEffect
-  // の再購読(依存配列にdragState自体を積む形)が毎フレーム走ってしまう
-  // ため、refに逃がして実際に再レンダリングが必要な「今の見た目の幅」
-  // だけをliveWidth stateで持つ。mouseupで初めてuseInventoryListColumns
-  // (localStorage)へ確定保存する — 毎pxごとにJSON.stringifyされるのを
-  // 避けつつ、mousemoveでのリアルタイム表示は実現する。
-  const draggingRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
+  // 幅は何pxだったか、どのpointerIdか) — pointermoveのたびにReact
+  // stateへ積むと不要な再レンダリングの依存関係が増えるため、refに逃
+  // がして実際に再レンダリングが必要な「今の見た目の幅」だけを
+  // liveWidth stateで持つ。pointerupで初めてuseInventoryListColumns
+  // (localStorage)へ確定保存する。
+  const draggingRef = useRef<{ key: string; startX: number; startWidth: number; pointerId: number } | null>(null);
   const [liveWidth, setLiveWidth] = useState<{ key: string; width: number } | null>(null);
 
   const widthFor = useCallback(
@@ -309,40 +326,41 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
     [liveWidth, widths],
   );
 
-  useEffect(() => {
-    function onMove(e: MouseEvent) {
-      const d = draggingRef.current;
-      if (!d) return;
-      const next = Math.max(MIN_COLUMN_WIDTH, d.startWidth + (e.clientX - d.startX));
-      setLiveWidth({ key: d.key, width: next });
-    }
-    function onUp() {
-      const d = draggingRef.current;
-      if (!d) return;
-      setLiveWidth((prev) => {
-        if (prev && prev.key === d.key) setColumnWidth(prev.key, prev.width);
-        return null;
-      });
-      draggingRef.current = null;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [setColumnWidth]);
-
-  function startResize(e: React.MouseEvent, key: string) {
+  function handleResizePointerDown(e: React.PointerEvent<HTMLDivElement>, key: string) {
+    // 商品詳細リンク等への誤クリック防止 — ヘッダーの<th>自体はLinkでは
+    // ないが、将来ヘッダークリックでソートする等の機能が乗っても親へは
+    // 伝播させない。
     e.preventDefault();
     e.stopPropagation();
     const startWidth = widths[key] ?? columnByKey.get(key)?.defaultWidth ?? 100;
-    draggingRef.current = { key, startX: e.clientX, startWidth };
+    draggingRef.current = { key, startX: e.clientX, startWidth, pointerId: e.pointerId };
     setLiveWidth({ key, width: startWidth });
+    // これ以降のpointermove/pointerupは、ポインタが実際にどこへ移動し
+    // てもこのハンドル要素自身へ配送される(標準のPointer Capture) —
+    // window/documentへの手動addEventListenerが不要になる。
+    e.currentTarget.setPointerCapture(e.pointerId);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
+  }
+
+  function handleResizePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const d = draggingRef.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    const next = Math.max(MIN_COLUMN_WIDTH, d.startWidth + (e.clientX - d.startX));
+    setLiveWidth({ key: d.key, width: next });
+  }
+
+  function endResize(e: React.PointerEvent<HTMLDivElement>) {
+    const d = draggingRef.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    setLiveWidth((prev) => {
+      if (prev && prev.key === d.key) setColumnWidth(prev.key, prev.width);
+      return null;
+    });
+    draggingRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
   }
 
   if (rows.length === 0) {
@@ -370,13 +388,22 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                   <span className="block truncate" title={col.label}>
                     {col.label}
                   </span>
-                  {/* リサイズハンドル — spec §13: ヘッダー境界にcursor: col-resize、mousedown→mousemove→リアルタイム幅変更→mouseupの一連 */}
+                  {/* リサイズハンドル — spec §13/フォローアップ:
+                      ヘッダー境界、視覚線より広め(10px)の透明hit area、
+                      hover時cursor: col-resize、Pointer Eventsで
+                      pointerdown→pointermove→リアルタイム幅変更→pointerup。
+                      onClickは意図的に付けない(商品詳細リンク等が無い
+                      ヘッダー行なので誤クリックの実害は無いが、念のため
+                      pointerdown側でstopPropagationしている)。 */}
                   <div
-                    onMouseDown={(e) => startResize(e, col.key)}
+                    onPointerDown={(e) => handleResizePointerDown(e, col.key)}
+                    onPointerMove={handleResizePointerMove}
+                    onPointerUp={endResize}
+                    onPointerCancel={endResize}
                     role="separator"
                     aria-orientation="vertical"
                     aria-label={`${col.label}列の幅を変更`}
-                    className="absolute right-0 top-0 z-10 h-full w-2 cursor-col-resize touch-none hover:bg-gray-300 active:bg-gray-400"
+                    className="absolute right-[-5px] top-0 z-10 h-full w-[10px] cursor-col-resize touch-none select-none hover:bg-gray-300 active:bg-gray-400"
                   />
                 </th>
               );
@@ -396,7 +423,11 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                   const editable = directEditEnabled && isInlineEditableColumn(col.key);
                   const w = widthFor(col.key);
                   return (
-                    <td key={col.key} style={{ width: w, minWidth: MIN_COLUMN_WIDTH }} className={RIGHT_ALIGN_COLUMNS.has(col.key) && !editable ? numCell : cell}>
+                    <td
+                      key={col.key}
+                      style={{ width: w, minWidth: MIN_COLUMN_WIDTH }}
+                      className={editable ? editableCell : RIGHT_ALIGN_COLUMNS.has(col.key) ? numCell : cell}
+                    >
                       {editable ? (
                         // `editable` already confirmed col.key passes
                         // isInlineEditableColumn above — TS just can't
