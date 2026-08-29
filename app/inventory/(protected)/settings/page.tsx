@@ -5,6 +5,8 @@ import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
 import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
+import { getMercariTokenSource } from "@/lib/listing/mercari/tokenAccess";
+import { getMercariEnvironment } from "@/lib/listing/mercari/endpoints";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
 
@@ -52,17 +54,21 @@ export default async function InventorySettingsPage() {
     await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions()]);
   }
 
-  const [categories, locations, units, customFields, zaicoTokenSource] = await Promise.all([
+  const [categories, locations, units, customFields, zaicoTokenSource, mercariTokenSource] = await Promise.all([
     listAllMasterEntries("Category"),
     listAllMasterEntries("Location"),
     listAllMasterEntries("Unit"),
     listAllCustomFieldDefinitions(),
     getZaicoTokenSource(),
+    getMercariTokenSource(),
   ]);
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
   // とgetZaicoTokenSource()を両方呼ぶと同じ呼び出しが2回発生していた)。
   const zaicoConnected = zaicoTokenSource !== "unconfigured";
+  // 同じ理由でMercariもgetMercariTokenSource()の結果から導出する(BELLO
+  // 統合改修 master指示書 Phase D)。
+  const mercariConnected = mercariTokenSource !== "unconfigured";
 
   return (
     <div className="flex h-full flex-col">
@@ -78,6 +84,9 @@ export default async function InventorySettingsPage() {
           isAdmin={role === "ADMIN"}
           zaicoConnected={zaicoConnected}
           zaicoTokenSource={zaicoTokenSource}
+          mercariConnected={mercariConnected}
+          mercariTokenSource={mercariTokenSource}
+          mercariEnvironment={getMercariEnvironment()}
         />
       </div>
     </div>

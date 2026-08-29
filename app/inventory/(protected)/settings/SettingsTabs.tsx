@@ -4,11 +4,13 @@ import { useState } from "react";
 import type { MasterEntry } from "@/lib/inventory/masters";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import type { ZaicoTokenSource } from "@/lib/zaico/client";
+import type { MercariTokenSource } from "@/lib/listing/mercari/tokenAccess";
 import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
 import { ZaicoSyncPanel } from "./ZaicoSyncPanel";
 import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
+import { MercariSettingsPanel } from "./MercariSettingsPanel";
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -22,6 +24,10 @@ interface SettingsTabsProps {
   zaicoConnected: boolean;
   /** どちらの経路でTOKENが得られているか(値は含まない) — AWS Secrets Manager経由かどうかをADMINが画面上で確認できるようにする(lib/zaico/client.tsのgetZaicoTokenSource参照)。 */
   zaicoTokenSource: ZaicoTokenSource;
+  /** BELLO統合改修 master指示書 Phase D — Mercari接続設定タブもADMINにのみ表示する。zaicoConnected/zaicoTokenSourceと同じ理由・同じ導出方法。 */
+  mercariConnected: boolean;
+  mercariTokenSource: MercariTokenSource;
+  mercariEnvironment: "sandbox" | "production";
 }
 
 /**
@@ -31,8 +37,20 @@ interface SettingsTabsProps {
  * 「設定を最低限：カテゴリ・単位・保管場所・追加項目・一覧表示設定・
  * ZAICO同期に整理」に合わせたタブ構成。
  */
-export function SettingsTabs({ categories, locations, units, customFields, readOnly, isAdmin, zaicoConnected, zaicoTokenSource }: SettingsTabsProps) {
-  const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images">("category");
+export function SettingsTabs({
+  categories,
+  locations,
+  units,
+  customFields,
+  readOnly,
+  isAdmin,
+  zaicoConnected,
+  zaicoTokenSource,
+  mercariConnected,
+  mercariTokenSource,
+  mercariEnvironment,
+}: SettingsTabsProps) {
+  const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari">("category");
 
   const tabClass = (active: boolean) =>
     `border-b-2 px-3 py-2 text-[13px] ${active ? "border-gray-900 font-bold text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`;
@@ -65,6 +83,11 @@ export function SettingsTabs({ categories, locations, units, customFields, readO
             画像最適化
           </button>
         )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("mercari")} className={tabClass(tab === "mercari")}>
+            EC出品（Mercari）
+          </button>
+        )}
       </div>
 
       <div className="pt-4">
@@ -76,6 +99,9 @@ export function SettingsTabs({ categories, locations, units, customFields, readO
         {tab === "columns" && <ListColumnSettings customFieldDefs={customFields.filter((f) => f.isActive)} />}
         {tab === "zaico" && isAdmin && <ZaicoSyncPanel zaicoConnected={zaicoConnected} zaicoTokenSource={zaicoTokenSource} />}
         {tab === "images" && isAdmin && <ThumbnailBackfillPanel />}
+        {tab === "mercari" && isAdmin && (
+          <MercariSettingsPanel mercariConnected={mercariConnected} mercariTokenSource={mercariTokenSource} mercariEnvironment={mercariEnvironment} />
+        )}
       </div>
     </div>
   );

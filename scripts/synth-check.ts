@@ -79,7 +79,7 @@ async function main() {
   // Checks every a.model() added by this master指示書 round: Phase A's
   // ZaicoSyncJob and Phase D's ListingDraft/ChannelListing (BELLO統合改修
   // master指示書 Phase D — EC Listing / Mercari Shops連携).
-  for (const modelName of ["ZaicoSyncJob", "ListingDraft", "ChannelListing"]) {
+  for (const modelName of ["ZaicoSyncJob", "ListingDraft", "ChannelListing", "MercariApiTokenSecret"]) {
     const hits = findFilesContaining(assembly.directory, modelName);
     if (hits.length === 0) throw new Error(`${modelName} was not found in any synthesized template under ${assembly.directory}.`);
 

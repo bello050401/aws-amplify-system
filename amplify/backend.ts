@@ -1,5 +1,5 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { RemovalPolicy } from "aws-cdk-lib";
+import { RemovalPolicy, SecretValue } from "aws-cdk-lib";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { auth } from "./auth/resource";
@@ -122,3 +122,51 @@ backend.generateSku.addEnvironment("SKU_COUNTER_TABLE_NAME", skuCounterTable.tab
 //      が自動的に既存の環境変数ZAICO_API_TOKENへフォールバックする
 //      ため、システムは今まで通り動作し続ける(退行なし)。
 export const zaicoTokenSecret = Secret.fromSecretNameV2(backend.stack, "ZaicoApiTokenSecret", "bello/zaico-api-token");
+
+// Mercari Shops Personal API Access Token(BELLO統合改修 master指示書
+// Phase D、lib/listing/mercari/secretStore.tsが実際の読み書きを行う)。
+//
+// ZAICOのSecretと違い、こちらはこのアプリがAWSアカウント上に存在させる
+// 初めての実体 — production/staging問わず、`bello/mercari-access-token`
+// という名前のSecretはまだAWS側に存在しない。そのためZAICOのような
+// `Secret.fromSecretNameV2()`(既存の外部リソースへの参照 — CFN resource
+// を一切生成しない)ではなく、CDKが実際に所有・作成する
+// `new Secret(...)`を使う。これはZAICOのSecretが元々そう定義されていて、
+// production初回デプロイ後の別App(staging)向け再デプロイで
+// "AlreadyExists"衝突を起こした、その同じ形そのものだが — Mercariの
+// SecretはどのApp/環境向けにも初回デプロイであり、事前にAWS側へ存在
+// する実体がまだ無いため、この状況では発生し得ない(ZAICOの障害は
+// 「CDK管理外で既に存在するリソースをCDKが新規作成しようとした」ことが
+// 原因であり、「CDKでリソースを新規作成すること自体」が問題だったわけ
+// ではない — zaicoTokenSecretの上のコメント参照)。
+//
+// RemovalPolicy.RETAIN: このSecret(ADMINが設定画面から保存した実際の
+// Personal API Access Tokenを含む)は、スタックの削除・再作成があっても
+// 誤って失われてはならない — zaicoTokenSecret運用開始前のSecretが本来
+// 持つべきだった性質と同じ。
+const mercariTokenSecretStack = backend.createStack("MercariApiTokenSecretStack");
+export const mercariTokenSecret = new Secret(mercariTokenSecretStack, "MercariApiTokenSecret", {
+  secretName: "bello/mercari-access-token",
+  description: "BELLO在庫管理システム — Mercari Shops Personal API Access Token(EC出品機能専用)。設定画面(ADMIN限定)から読み書きする。",
+  secretStringValue: SecretValue.unsafePlainText(JSON.stringify({ configured: false })),
+  removalPolicy: RemovalPolicy.RETAIN,
+});
+
+// 重要な制約(ZAICOと全く同じ理由 — 上のzaicoTokenSecretコメント参照):
+// このSecretへの読み書き権限を、Next.jsのSSRコード
+// (lib/listing/mercari/secretStore.ts)が実際に実行されるAmplify
+// HostingのSSRコンピュート実行ロールへ、この`defineBackend()`からは
+// 付与できない。以下をAmplify Console側でADMINが手動設定する必要が
+// ある(完了報告のBLOCKED_BY_USER参照):
+//   1. Amplify Console → 該当アプリ → 「App settings」→「IAM roles」
+//      で、SSRコンピュート実行ロールに、このSecretのARN
+//      ("bello/mercari-access-token-??????")に対して
+//      secretsmanager:GetSecretValue・PutSecretValueを許可する
+//      インラインポリシーを追加する。
+//   2. その許可が済むまでは、lib/listing/mercari/tokenAccess.tsの
+//      getMercariAccessToken()が自動的に環境変数
+//      MERCARI_ACCESS_TOKENへフォールバックする(退行なし)。
+//   3. ZAICOと異なりこのSecretはCDKが所有しているため、
+//      `ampx pipeline-deploy`が実際にAWSへ接続してデプロイできる状態
+//      になれば、上記1のIAM権限設定を除き、Secret自体の作成は自動的に
+//      行われる(手動でのCreateSecretは不要)。

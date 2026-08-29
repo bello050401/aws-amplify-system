@@ -239,6 +239,14 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
                 <Link href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   複製
                 </Link>
+                {/* BELLO統合改修 master指示書 Phase D — EC出品機能への
+                    唯一の導線。この詳細画面自体のレイアウト/密度は他に
+                    一切変更しない(実際の出品UI・下書き編集は独立した
+                    サブページ app/inventory/(protected)/[id]/listing/
+                    にある)。 */}
+                <Link href={`/inventory/${item.id}/listing`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                  EC出品
+                </Link>
               </div>
             )}
             {canDelete && <DeleteInventoryButton inventoryId={item.id} label={`${item.displayId} ${item.name}`} />}
