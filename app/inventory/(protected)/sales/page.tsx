@@ -115,13 +115,20 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
           </div>
         )}
 
-        {/* 集計サマリー */}
+        {/* 集計サマリー。
+            追加修正(原価計算の新運用への統一): 原価(totalCost)は
+            purchasePrice合計のみ(= totalPurchaseと同値)になったため、
+            「購入金額」と「原価」を別タイルとして両方出すと同じ数字が
+            重複表示されて紛らわしい — 「購入金額」タイルは廃止し「原価」
+            へ一本化した。「送料」は過去データの参照用として残すが、
+            原価には一切含まれないことが分かるよう「（参考）」を明示。
+            新たに「利益」(= 売上高 − 原価)を追加。 */}
         <div className="mb-6 grid max-w-3xl grid-cols-2 gap-px border border-gray-200 bg-gray-200 sm:grid-cols-3">
           <SummaryTile label="売上高" value={yen(summary.totalSales)} />
-          <SummaryTile label="購入金額" value={yen(summary.totalPurchase)} />
-          <SummaryTile label="送料" value={yen(summary.totalShipping)} />
           <SummaryTile label="原価" value={yen(summary.totalCost)} />
+          <SummaryTile label="利益" value={yen(summary.totalProfit)} />
           <SummaryTile label="原価率" value={`${summary.costRate.toFixed(1)}%`} />
+          <SummaryTile label="送料（参考・原価には含みません）" value={yen(summary.totalShipping)} />
           <SummaryTile label="販売件数" value={`${summary.count}件`} />
           <SummaryTile label="平均販売単価" value={yen(Math.round(summary.averageSalePrice))} />
         </div>
@@ -142,14 +149,21 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
                   <th className="px-2 py-1.5 text-left font-normal">商品名</th>
                   <th className="px-2 py-1.5 text-left font-normal">販売終了日</th>
                   <th className="px-2 py-1.5 text-right font-normal">販売価格</th>
-                  <th className="px-2 py-1.5 text-right font-normal">購入価格</th>
-                  <th className="px-2 py-1.5 text-right font-normal">送料</th>
+                  <th className="px-2 py-1.5 text-right font-normal">送料（参考）</th>
                   <th className="px-2 py-1.5 text-right font-normal">原価</th>
+                  <th className="px-2 py-1.5 text-right font-normal">利益</th>
                 </tr>
               </thead>
               <tbody>
                 {summary.items.map((item) => {
-                  const cost = (item.purchasePrice ?? 0) + (item.shippingCost ?? 0);
+                  // 【重要】原価 = purchasePriceのみ(lib/inventory/sales.tsの
+                  // SalesSummary.totalCostと同じ考え方 — shippingCostを
+                  // 加算すると、送料込みで入力された新運用のpurchasePrice
+                  // に対して二重計上になる)。送料は「送料（参考）」列で
+                  // 過去データの参照用として表示するだけで、原価・利益の
+                  // 計算には使わない。
+                  const cost = item.purchasePrice ?? 0;
+                  const profit = (item.salePrice ?? 0) - cost;
                   return (
                     <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                       <td className="px-2 py-1">
@@ -165,9 +179,9 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
                       </td>
                       <td className="px-2 py-1 text-gray-600">{item.saleEndDate.replace(/-/g, "/")}</td>
                       <td className="px-2 py-1 text-right tabular-nums">{item.salePrice !== null ? yen(item.salePrice) : "-"}</td>
-                      <td className="px-2 py-1 text-right tabular-nums">{item.purchasePrice !== null ? yen(item.purchasePrice) : "-"}</td>
                       <td className="px-2 py-1 text-right tabular-nums">{item.shippingCost !== null ? yen(item.shippingCost) : "-"}</td>
-                      <td className="px-2 py-1 text-right tabular-nums">{yen(cost)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{item.purchasePrice !== null ? yen(cost) : "-"}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{yen(profit)}</td>
                     </tr>
                   );
                 })}

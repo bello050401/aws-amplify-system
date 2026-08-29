@@ -27,14 +27,39 @@ export interface SalesSummary {
   count: number;
   /** 売上高 = 販売価格合計。 */
   totalSales: number;
-  /** 購入金額 = 購入価格合計。 */
+  /**
+   * 購入金額 = purchasePrice合計。追加修正指示により、purchasePriceは
+   * 「送料等の諸経費込みの最終原価」を直接入力する運用へ統一された
+   * ため、原価(totalCost)そのものと同じ値になる —
+   * 詳しくはtotalCost/totalShippingのコメント参照。
+   */
   totalPurchase: number;
-  /** 送料 = 仕入送料合計。 */
+  /**
+   * 送料 = shippingCost合計。今後の新規レコードはshippingCostへ値を
+   * 入力しない運用(extendedFields.tsで入力欄自体を撤去済み)のため、
+   * 新規データでは常に0になる。過去データの送料実績を参照用として
+   * 残しているだけで、**原価(totalCost)・利益(totalProfit)の計算には
+   * 一切使わない**(shippingCostをpurchasePriceへ加算すると、
+   * purchasePrice自体が既に送料込みの最終原価であるレコードで二重計上
+   * になってしまうため)。
+   */
   totalShipping: number;
-  /** 原価 = 購入価格 + 送料。 */
+  /**
+   * 原価 = purchasePrice合計(totalPurchaseと同じ値)。
+   *
+   * 【重要・追加修正指示】purchasePriceは「商品購入代金+送料+その他
+   * 仕入れに伴う費用」をすべて含めた最終原価として直接入力する運用に
+   * 統一されたため、原価 = purchasePriceが正しい基本ルールであり、
+   * shippingCostを重ねて加算してはいけない(過去に
+   * `totalPurchase + totalShipping`だった旧ロジックは、purchasePrice
+   * とは別に送料を入力していた旧運用でのみ正しく、新運用のレコードに
+   * 適用すると送料が二重計上されてしまうため撤廃した)。
+   */
   totalCost: number;
   /** 原価率(%) = 原価 ÷ 売上高 × 100。売上高が0の場合は0として安全に扱う(0除算しない)。 */
   costRate: number;
+  /** 利益 = 売上高 − 原価(= totalSales − totalCost、totalCost = totalPurchaseのため実質 売上高 − purchasePrice合計)。 */
+  totalProfit: number;
   /** 平均販売単価 = 売上高 ÷ 件数。件数が0の場合は0。 */
   averageSalePrice: number;
   items: SalesTargetItem[];
@@ -76,8 +101,13 @@ export function summarizeSales(records: SalesSourceRecord[], year: number, month
     totalPurchase += r.purchasePrice ?? 0;
     totalShipping += r.shippingCost ?? 0;
   }
-  const totalCost = totalPurchase + totalShipping;
+  // 【重要】原価 = purchasePrice合計のみ。shippingCostは加算しない
+  // (二重計上防止 — 上のtotalCostのコメント参照)。totalShippingは
+  // 過去データの参照用としてSalesSummaryへ残すが、原価・利益の計算式
+  // には一切使わない。
+  const totalCost = totalPurchase;
   const costRate = totalSales === 0 ? 0 : (totalCost / totalSales) * 100;
+  const totalProfit = totalSales - totalCost;
   const averageSalePrice = matched.length === 0 ? 0 : totalSales / matched.length;
 
   return {
@@ -89,6 +119,7 @@ export function summarizeSales(records: SalesSourceRecord[], year: number, month
     totalShipping,
     totalCost,
     costRate,
+    totalProfit,
     averageSalePrice,
     items: matched.map((r) => ({
       id: r.id,
