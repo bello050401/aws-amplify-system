@@ -1,6 +1,7 @@
 "use client";
 
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
+import { DateField } from "../DateField";
 
 /**
  * Shared field primitives for the new-registration and edit forms — pulled
@@ -150,7 +151,16 @@ export function CustomFieldInput({
     );
   }
 
-  const inputType = def.fieldType === "NUMBER" ? "number" : def.fieldType === "DATE" ? "date" : def.fieldType === "URL" ? "url" : "text";
+  if (def.fieldType === "DATE") {
+    return (
+      <div>
+        {label}
+        <DateField value={value} required={def.required} onChange={onChange} className={fieldClass} />
+      </div>
+    );
+  }
+
+  const inputType = def.fieldType === "NUMBER" ? "number" : def.fieldType === "URL" ? "url" : "text";
   return (
     <div>
       {label}

@@ -11,6 +11,7 @@ import {
   type SearchFieldDef,
 } from "@/lib/inventory/advancedSearch";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
+import { DateField } from "../DateField";
 
 interface InventoryAdvancedSearchPanelProps {
   fieldDefs: SearchFieldDef[];
@@ -292,7 +293,7 @@ function ValueInput({
   }
 
   if (field.valueType === "date" || field.valueType === "datetime") {
-    return wrap(<input type="date" value={value} onChange={(e) => onChange(e.target.value)} className={inputClass} />);
+    return wrap(<DateField value={value} onChange={onChange} className={inputClass} />);
   }
 
   if (field.valueType === "number") {

@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { ExtendedSectionDef } from "@/lib/inventory/extendedFields";
 import type { FieldSize } from "./FormFields";
+import { DateField } from "../DateField";
 
 interface ExtendedFieldsSectionProps {
   section: ExtendedSectionDef;
@@ -78,9 +79,11 @@ export function ExtendedFieldsSection({ section, values, onChange, extra, size =
                   </option>
                 ))}
               </select>
+            ) : field.type === "date" ? (
+              <DateField value={values[field.key] ?? ""} onChange={(v) => onChange(field.key, v)} className={fieldClass} />
             ) : (
               <input
-                type={field.type === "number" ? "number" : field.type === "date" ? "date" : "text"}
+                type={field.type === "number" ? "number" : "text"}
                 value={values[field.key] ?? ""}
                 onChange={(e) => onChange(field.key, e.target.value)}
                 className={fieldClass}

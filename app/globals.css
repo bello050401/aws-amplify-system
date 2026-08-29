@@ -27,3 +27,19 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* BELLO統合改修 master指示書(2026-08-29統合改修版) §13: 日付欄のカレン
+   ダーアイコンを左側へ。ネイティブ<input type="date">のアイコンは
+   WebKit/Blink系(Chrome/Edge/Safari)でのみ疑似要素として位置指定でき
+   る — Firefoxはこの疑似要素に対応していないため、その場合は既定の
+   右側表示のまま(壊れるわけではない、穏やかな劣化)。app/inventory/
+   DateField.tsxが左側の余白(pl-8)を確保した上でこのクラスを付与する
+   — このファイル単体では意味を持たない、対で使うためのスタイル。 */
+.bello-date-field::-webkit-calendar-picker-indicator {
+  position: absolute;
+  left: 0.5rem;
+  cursor: pointer;
+}
+.bello-date-field {
+  position: relative;
+}
