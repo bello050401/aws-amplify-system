@@ -20,28 +20,21 @@
 
 この区別は今回の調査で確定した事実であり、以前のラウンドの一部コメントが「Secrets ManagerもS3も同じHosting実行ロールへの権限付与が必要」であるかのように読める書き方をしていた点を、ここで訂正する。
 
-## 2. Amplify Hosting SSR実行ロールの特定方法(BLOCKED_BY_USER)
+## 2. セットアップスクリプト(`scripts/aws-setup/`)
 
-このロールの実名・ARNは、実際にAmplify Hosting上へこのアプリがデプロイされていないと存在しない。Claude Codeのこのセッションには実AWS認証情報がなく特定不可能。ユーザーが以下の手順で特定する。
+Windows PowerShell + AWS CLIから一度に実行できるスクリプト一式を用意した(手作業のコマンド転記を最小化するため)。実行順序・安全上の注意は `scripts/aws-setup/README.md` を参照。
 
-```powershell
-# 前提: AWS CLIがインストール済み、AWS SSOプロファイル(前回までの例: Bello)でログイン済み
-aws sso login --profile Bello
+1. `1-discover.ps1`(読み取り専用) — 現在のAWS identity(rootでないか確認)・region・既存Amplifyアプリ/ブランチ・SSRコンピュートロールらしきARN・Secretsの存在有無を一括確認する。何も変更しない。
+2. `2-apply-secrets-policy.ps1`(書き込みあり、要確認プロンプト) — `1-discover.ps1`で特定したロール名を渡すと、Secrets Manager用の最小権限ポリシー(下記)を追加する。
+3. `3-create-branch.ps1`(書き込みあり、要確認プロンプト) — 既存Amplifyアプリへ`claude/inventory-management-system-5vbvc7`ブランチを追加し、初回ビルドを開始する。
 
-# Amplifyアプリ一覧からアプリIDを確認
-aws amplify list-apps --profile Bello --region us-east-1
+**Amplifyアプリ自体がまだ存在しない場合**(`1-discover.ps1`が「見つかりませんでした」と表示した場合)は、GitHub OAuth同意を伴うため`3-create-branch.ps1`は使えず、下記§4の手順でAWS Console操作が必要(BLOCKED_BY_USER)。
 
-# 対象アプリのSSRコンピュートロールを確認(Amplify Hosting for Next.js SSR)
-aws amplify get-app --app-id <APP_ID> --profile Bello --region us-east-1
-```
-
-または AWS Console: **Amplify → 該当アプリ → App settings → Hosting compute → SSRの実行ロール**のリンクをたどるか、**IAM → ロール**で `amplify-<appId>-<branch>-<ハッシュ>-computeRole` のような名前のロールを探す。
-
-## 3. Secrets Manager用IAMポリシー(このロールへ付与するインラインポリシー例)
+## 3. Secrets Manager用IAMポリシー(参考・`2-apply-secrets-policy.ps1`が自動生成する内容と同一)
 
 Secret名: `bello/zaico-api-token` / Region: `us-east-1`(`amplify/backend.ts`で定義)。
 
-Secrets Managerの仕様上、Secretの完全なARNには作成時にランダムな6文字のsuffixが付与される(`bello/zaico-api-token-XXXXXX`)。作成前は正確なsuffixが分からないため、`CreateSecret`のAuthorizationはsuffix無しの名前に対して評価される一方、`GetSecretValue`/`PutSecretValue`は実際のARN(suffix込み)に対して評価される。そのため、Resourceは以下のようにワイルドカードでsuffix部分だけを許容する(名前全体を`*`にはしない)。
+Secrets Managerの仕様上、Secretの完全なARNには作成時にランダムな6文字のsuffixが付与される(`bello/zaico-api-token-XXXXXX`)。`CreateSecret`のAuthorizationはsuffix無しの名前に対して評価される一方、`GetSecretValue`/`PutSecretValue`は実際のARN(suffix込み)に対して評価されるため、Resourceは以下のようにワイルドカードでsuffix部分だけを許容する(名前全体を`*`にはしない)。
 
 ```json
 {
@@ -61,30 +54,19 @@ Secrets Managerの仕様上、Secretの完全なARNには作成時にランダ�
 }
 ```
 
-`<ACCOUNT_ID>`は`aws sts get-caller-identity --profile Bello`で確認できる。`secretsmanager:ListSecrets`・`DescribeSecret`・`DeleteSecret`は現行コード(`lib/zaico/secretStore.ts`)が一切呼ばないため付与しない。
+`secretsmanager:ListSecrets`・`DescribeSecret`・`DeleteSecret`は現行コード(`lib/zaico/secretStore.ts`)が一切呼ばないため付与しない。手動で適用する場合は`2-apply-secrets-policy.ps1 -RoleName <ロール名>`を実行すればよい(このJSONを自動生成して確認プロンプト付きで適用する)。
 
-適用コマンド例(PowerShell、上記でロール名を特定済みとして):
+## 4. Amplify Hostingブランチデプロイ(BLOCKED_BY_USER — Amplifyアプリが未作成の場合のみ)
 
-```powershell
-aws iam put-role-policy `
-  --role-name <SSR_COMPUTE_ROLE_NAME> `
-  --policy-name BelloZaicoSecretAccess `
-  --policy-document file://zaico-secret-policy.json `
-  --profile Bello --region us-east-1
-```
+`1-discover.ps1`の結果、bello050401/aws-amplify-system用のAmplifyアプリが存在しない場合、GitHub連携を伴うAmplify Console操作が必要 — Claude Codeからは実行不可(GitHub OAuth同意はユーザー本人のブラウザ操作が前提)。
 
-## 4. Amplify Hostingブランチデプロイ(BLOCKED_BY_USER)
-
-`claude/inventory-management-system-5vbvc7`ブランチをインターネット経由のstaging URLとして確認できるようにするには、GitHub連携を伴うAmplify Console操作が必要 — Claude Codeからは実行不可(GitHub OAuth同意・AWS Console操作はユーザー本人のブラウザ操作が前提)。
-
-手順(初回、Amplifyアプリ自体が未作成の場合):
 1. AWS Console → **Amplify** → 「新しいアプリの作成」→「GitHubからデプロイ」
 2. GitHubアカウント認可 → リポジトリ `bello050401/aws-amplify-system` を選択
 3. ブランチとして `claude/inventory-management-system-5vbvc7` を選択(**mainは選択しない**)
 4. ビルド設定はリポジトリ直下の `amplify.yml` がそのまま使われる(既存のGen2 + Next.js SSR標準構成、変更不要)
-5. デプロイ実行 → 完了後、そのブランチ専用のURL(`https://<branch>.<appId>.amplifyapp.com`)が発行される
+5. デプロイ実行 → 完了後、そのブランチ専用のURLが発行される
 
-既にAmplifyアプリが存在する場合は、「App settings → ブランチ」から同ブランチを追加するだけでよい。**重要**: 別ブランチの追加であり、`main`ブランチの設定・本番ドメインには一切触れない。
+Amplifyアプリが既に存在する場合は、上記STEP 1〜4の代わりに`3-create-branch.ps1`をそのApp IDで実行すればよい(GitHub App連携済みのアプリであれば、CLIからのブランチ追加だけでWebhook経由の自動ビルドが有効になる)。**重要**: どちらの経路でも別ブランチの追加であり、`main`ブランチの設定・本番ドメインには一切触れない。
 
 ## 5. ZAICO少数件テスト同期(今回コード実装済み)
 
