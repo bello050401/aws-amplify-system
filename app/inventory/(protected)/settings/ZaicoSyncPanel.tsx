@@ -2,9 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { syncAllZaicoInventoriesAction, syncOneZaicoInventoryAction } from "@/app/actions/zaicoSync";
+import {
+  syncAllZaicoInventoriesAction,
+  syncOneZaicoInventoryAction,
+  syncLimitedZaicoInventoriesAction,
+  previewZaicoCatalogSizeAction,
+} from "@/app/actions/zaicoSync";
 import { deleteZaicoTokenAction, setZaicoTokenAction } from "@/app/actions/zaicoSecret";
-import type { ZaicoSyncResult } from "@/lib/inventory/zaicoSync";
+import type { ZaicoSyncResult, ZaicoCatalogPreview } from "@/lib/inventory/zaicoSync";
 
 /**
  * ADMIN-only ZAICO→BELLO 手動同期パネル (spec §18/§27-29). Rendered only
@@ -30,9 +35,15 @@ import type { ZaicoSyncResult } from "@/lib/inventory/zaicoSync";
 export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) {
   const router = useRouter();
   const [zaicoId, setZaicoId] = useState("");
-  const [busy, setBusy] = useState<"idle" | "one" | "all">("idle");
+  const [busy, setBusy] = useState<"idle" | "one" | "limited" | "all" | "preview">("idle");
   const [result, setResult] = useState<ZaicoSyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // AWSテスト環境構築指示 §8/§26: Phase A(5〜10件)向けの少数件テスト
+  // 同期 — 既定値5、上限50(サーバー側app/actions/zaicoSync.tsでも
+  // クランプ済み、ここは誤入力を防ぐUI側の一次防御)。
+  const [testLimit, setTestLimit] = useState("5");
+  const [preview, setPreview] = useState<ZaicoCatalogPreview | null>(null);
 
   const [tokenEditing, setTokenEditing] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
@@ -99,6 +110,37 @@ export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) 
       setResult(await syncAllZaicoInventoriesAction());
     } catch (err) {
       setError(err instanceof Error ? err.message : "同期に失敗しました。");
+    } finally {
+      setBusy("idle");
+    }
+  }
+
+  async function runLimited() {
+    const n = Number(testLimit);
+    if (!Number.isFinite(n) || n < 1) {
+      setError("同期する件数(1〜50)を正しく入力してください。");
+      return;
+    }
+    setError(null);
+    setResult(null);
+    setBusy("limited");
+    try {
+      setResult(await syncLimitedZaicoInventoriesAction(n));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "同期に失敗しました。");
+    } finally {
+      setBusy("idle");
+    }
+  }
+
+  async function runPreview() {
+    setError(null);
+    setPreview(null);
+    setBusy("preview");
+    try {
+      setPreview(await previewZaicoCatalogSizeAction());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "件数の確認に失敗しました。");
     } finally {
       setBusy("idle");
     }
@@ -220,9 +262,63 @@ export function ZaicoSyncPanel({ zaicoConnected }: { zaicoConnected: boolean }) 
         </div>
       </div>
 
+      {/* AWSテスト環境構築指示 §8/§26: いきなり全件同期しない安全なテスト
+          モード。件数確認(同期しない)→少数件テスト同期、の順で試せる
+          ようにする。「全件同期」ボタン自体は既存のまま残すが、
+          テスト運用中はまずこちらを使うよう注意書きを添える。 */}
+      <div className="mt-3 border border-gray-200 p-4">
+        <p className="mb-2 text-[12px] font-bold text-gray-700">少数件テスト同期（推奨）</p>
+        <p className="mb-2 text-[11px] text-gray-500">
+          まずZAICO側の件数を確認してから、少数件（既定5件、最大50件）だけを試すことを推奨します。再実行しても同じZAICO商品が重複作成されることはありません（ZAICOの在庫IDで既存レコードと照合します）。
+        </p>
+        <div className="mb-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={runPreview}
+            disabled={busy !== "idle"}
+            className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {busy === "preview" ? "確認中…" : "ZAICOの件数を確認（同期しない）"}
+          </button>
+          {preview && (
+            <span className="text-[12px] text-gray-600">
+              少なくとも{preview.sampleCount}件{preview.hasMore ? "以上あります（1ページ目のみ確認）" : "（全件確認済み）"}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-[12px] text-gray-600">
+            同期件数:
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={testLimit}
+              onChange={(e) => setTestLimit(e.target.value)}
+              disabled={busy !== "idle"}
+              className="ml-1 w-16 border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none disabled:opacity-50"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={runLimited}
+            disabled={busy !== "idle"}
+            className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
+          >
+            {busy === "limited" ? "同期中…" : "テスト同期する"}
+          </button>
+        </div>
+      </div>
+
       <div className="mt-3 border border-gray-200 p-4">
         <p className="mb-2 text-[12px] font-bold text-gray-700">全件同期</p>
-        <p className="mb-2 text-[11px] text-gray-500">ZAICOの全在庫を取得し、BELLOへ反映します。件数が多い場合、完了まで時間がかかります。</p>
+        <p className="mb-2 text-[11px] text-gray-500">
+          ZAICOの全在庫を取得し、BELLOへ反映します。件数が多い場合、完了まで時間がかかります。
+          <span className="font-bold text-amber-700">
+            {" "}
+            テスト運用中はまず上の「少数件テスト同期」で問題がないことを確認してから実行してください。
+          </span>
+        </p>
         <button
           type="button"
           onClick={runAll}

@@ -71,27 +71,77 @@ export async function copyInventoryImage(sourcePath: string): Promise<string> {
   }
 }
 
+/** ZAICOの商品画像として受け入れる実際の画像MIME型のみ(拡張子は信用しない — spec: 「file extensionを信用し過ぎない」「invalid mime拒否」)。 */
+const ALLOWED_IMAGE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic", "image/heif"]);
+
+/** 1枚あたりの上限(バイト) — 壊れたURL/想定外の巨大レスポンスでメモリを圧迫しないための安全弁(spec: 「file size上限」)。ZAICOの実運用画像はこれで十分収まる想定。 */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20MB
+
+/** fetch自体がハングし続けないための上限(spec: 「timeout」)。 */
+const FETCH_TIMEOUT_MS = 15_000;
+
 /**
- * ZAICO image sync (implementation instructions §14-18): downloads
- * ZAICO's `item_image.url` server-side and re-uploads it into BELLO's
- * own S3 under the same safe `inventory/<uuid><ext>` key convention
- * every other image uses — the ZAICO URL is NEVER stored as a hotlink
- * anywhere the UI would render it directly (spec: ダウンロード後、
- * BELLO自身のS3へ保存). The caller (lib/inventory/zaicoSync.ts) is
- * responsible for deciding WHETHER to call this at all — it compares
- * the new URL against the image's last-synced `sourceUrl` first and
- * skips re-downloading when unchanged; this function itself always
- * downloads unconditionally when called.
+ * ZAICO image sync (implementation instructions §14-18、AWSテスト環境
+ * 構築指示 §12-13で強化): downloads ZAICO's `item_image.url` server-side
+ * and re-uploads it into BELLO's own S3 under the same safe
+ * `inventory/<uuid><ext>` key convention every other image uses — the
+ * ZAICO URL is NEVER stored as a hotlink anywhere the UI would render it
+ * directly (spec: ダウンロード後、BELLO自身のS3へ保存)。この関数は商品
+ * 単位・画像単位で1枚ずつ処理する(呼び出し元のlib/inventory/zaicoSync.ts
+ * が1商品ずつ順番に呼ぶ) — 複数画像を1つの巨大Bufferへまとめて読み込む
+ * ことはしない。
+ *
+ * 強化点(AWSテスト環境構築指示 §12/§13/§22):
+ *  - timeout: AbortControllerでFETCH_TIMEOUT_MSを超えるfetchを中断する
+ *    (壊れたURL/応答しないホストでハングし続けない)。
+ *  - invalid mime拒否: レスポンスのContent-Typeヘッダを実際に検査し、
+ *    ALLOWED_IMAGE_CONTENT_TYPESに無い型は拒否する — URLの拡張子は
+ *    一切信用しない(spec: 「file extensionを信用し過ぎない」)。
+ *  - file size上限: Content-Lengthヘッダ(あれば)とダウンロード後の実
+ *    バイト数の両方をMAX_IMAGE_BYTESと比較し、超過分は拒否する(嘘の
+ *    Content-Lengthやヘッダ欠如でも実サイズ側のチェックで防げる)。
+ *
+ * The caller (lib/inventory/zaicoSync.ts) is responsible for deciding
+ * WHETHER to call this at all — it compares the new URL against the
+ * image's last-synced `sourceUrl` first and skips re-downloading when
+ * unchanged; this function itself always downloads unconditionally when
+ * called.
  */
 export async function downloadAndImportInventoryImage(sourceUrl: string): Promise<string> {
   let blob: Blob;
   try {
-    const res = await fetch(sourceUrl);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(sourceUrl, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (!ALLOWED_IMAGE_CONTENT_TYPES.has(contentType)) {
+      throw new Error(`invalid content-type: "${contentType || "(なし)"}"`);
+    }
+
+    const contentLengthHeader = res.headers.get("content-length");
+    const declaredLength = contentLengthHeader ? Number(contentLengthHeader) : NaN;
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_IMAGE_BYTES) {
+      throw new Error(`image too large: declared ${declaredLength} bytes`);
+    }
+
     blob = await res.blob();
+    if (blob.size > MAX_IMAGE_BYTES) {
+      // Content-Lengthが無い/嘘だった場合の最終防衛線 — ダウンロード後
+      // の実サイズでも必ず上限を確認する。
+      throw new Error(`image too large: actual ${blob.size} bytes`);
+    }
   } catch (err) {
+    const aborted = err instanceof Error && err.name === "AbortError";
     console.error(`[downloadAndImportInventoryImage] fetch failed: "${sourceUrl}"`, err);
-    throw new Error(`ZAICOの画像の取得に失敗しました(URL: ${sourceUrl})。`);
+    if (aborted) throw new Error(`ZAICOの画像の取得がタイムアウトしました(URL: ${sourceUrl})。`);
+    throw new Error(`ZAICOの画像の取得に失敗しました(URL: ${sourceUrl})。${err instanceof Error ? err.message : ""}`.trim());
   }
 
   const destinationPath = newInventoryImageKey(sourceUrl);

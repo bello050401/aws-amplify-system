@@ -106,7 +106,22 @@ interface ImageMergeResult {
  * slot tagged as ZAICO's own is ever replaced.
  */
 async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSourceUrl: string | null): Promise<ImageMergeResult> {
-  if (!newSourceUrl) return { images: existingImages, imported: false };
+  if (!newSourceUrl) {
+    // AWSテスト環境構築指示 §16: ZAICO側の画像が消失(item_imageが
+    // null/欠落)しても、BELLO側のS3画像を即削除しない — ここでは何も
+    // 変更せず既存画像をそのまま維持する。ただし「検出」だけは行い、
+    // 同期結果の警告として可視化する(実際にZAICO由来の画像を過去に
+    // 取り込んでいた場合のみ — 元々ZAICO画像が無かった商品にまで警告
+    // を出すと毎回のノイズになるため)。
+    const hadZaicoImage = existingImages.some((i) => i.sourceSystem === "ZAICO");
+    return {
+      images: existingImages,
+      imported: false,
+      warning: hadZaicoImage
+        ? "ZAICO側で画像URLが取得できませんでした(item_image消失の可能性)。BELLO側の既存画像は削除せずそのまま維持しています。"
+        : undefined,
+    };
+  }
 
   const currentZaicoImage = existingImages.find((i) => i.sourceSystem === "ZAICO") ?? null;
   if (currentZaicoImage && currentZaicoImage.sourceUrl === newSourceUrl) {
@@ -395,20 +410,26 @@ export async function syncSingleZaicoItem(zaicoId: string, who: string | null): 
 }
 
 /**
- * Full-catalog sync (spec §11, only to be reached once the single-item
- * path is verified). One upfront prefetch of every ZAICO-managed BELLO
- * record (fetchAllZaicoManagedInventory) plus ZAICO's own paginated
- * listing (lib/zaico/client.ts's listInventories, throttled/retried
- * internally) — a single blocking Server Action call, deliberately not a
- * Lambda/background-job architecture: this app isn't hosted online yet
- * (local dev / local sandbox only), so there's no practical serverless
- * request-timeout risk today, and building queue/background-job
- * infrastructure ahead of that need would be over-engineering for "a few
- * hundred records" (spec's own instruction: 過剰設計しないこと). Revisit
- * this once the app is actually deployed behind a request-timeout-bound
- * host.
+ * Full-catalog/limited-batch sync (spec §11、AWSテスト環境構築指示
+ * §8/§9/§26で追加された安全なテストモード)。One upfront prefetch of
+ * every ZAICO-managed BELLO record (fetchAllZaicoManagedInventory) plus
+ * ZAICO's own paginated listing (lib/zaico/client.ts's listInventories,
+ * throttled/retried internally) — a single blocking Server Action call,
+ * deliberately not a Lambda/background-job architecture: at "a few
+ * hundred records" scale, building queue/background-job infrastructure
+ * ahead of that need would be over-engineering (spec's own instruction:
+ * 過剰設計しないこと). Revisit this once the app is actually deployed
+ * behind a request-timeout-bound host and the catalog grows much larger.
+ *
+ * `options.limit`(AWSテスト環境構築指示 §8: 「初期同期はデフォルトで
+ * 全件にしない」)— 指定した場合、その件数に達した時点でZAICO側からの
+ * 追加ページ取得も含めて即座に打ち切る。未指定(呼び出し元が明示的に
+ * 全件同期を選んだ場合のみ)は既存どおり全件を対象にする — デフォルト
+ * 引数ではなくoptional paramにしているのは、"うっかり省略したら全件"
+ * ではなく呼び出し側(app/actions/zaicoSync.ts)の各Server Actionが
+ * それぞれ明示的にlimitあり/なしを選ぶ形にするため。
  */
-export async function syncAllZaicoItems(who: string | null): Promise<ZaicoSyncResult> {
+export async function syncAllZaicoItems(who: string | null, options: { limit?: number } = {}): Promise<ZaicoSyncResult> {
   const startedAt = new Date().toISOString();
   const prefetched = await fetchAllZaicoManagedInventory();
   const items: ZaicoSyncItemResult[] = [];
@@ -417,13 +438,46 @@ export async function syncAllZaicoItems(who: string | null): Promise<ZaicoSyncRe
   // requested ⇒ last page") is a best-effort assumption — see
   // lib/zaico/client.ts's listInventories comment; not re-confirmed
   // against a real multi-page response in this environment.
-  for (;;) {
+  outer: for (;;) {
     const { items: zaicoItems, hasMore } = await listInventories(page);
     for (const zaicoItem of zaicoItems) {
       items.push(await syncOneZaicoItem(zaicoItem, who, prefetched));
+      if (options.limit !== undefined && items.length >= options.limit) break outer;
     }
     if (!hasMore) break;
     page += 1;
   }
   return aggregateResult(startedAt, items);
+}
+
+/**
+ * 少数件テスト同期(AWSテスト環境構築指示 §8: 「初期：5〜10商品のみ」)
+ * — syncAllZaicoItemsの薄いラッパー。全件同期(syncAllZaicoItems呼び出
+ * し側でlimit省略)とは別の名前の関数として呼び出し元(app/actions/
+ * zaicoSync.ts)から呼ばれることで、「limitを付け忘れて誤って全件同期
+ * してしまう」事故を経路自体で防ぐ意図がある。
+ */
+export async function syncLimitedZaicoItems(limit: number, who: string | null): Promise<ZaicoSyncResult> {
+  const safeLimit = Math.max(1, Math.min(Math.trunc(limit) || 1, 50)); // 上限50 — テスト段階で誤って大量実行しないための安全弁
+  return syncAllZaicoItems(who, { limit: safeLimit });
+}
+
+export interface ZaicoCatalogPreview {
+  /** このページ(1ページ目)で実際に取得できた件数。 */
+  sampleCount: number;
+  /** ZAICO側にまだ次ページがあるかどうか — trueなら実際の総件数はsampleCountより多い。 */
+  hasMore: boolean;
+}
+
+/**
+ * ZAICO側の規模を「同期を実行せずに」確認するための軽量プレビュー
+ * (AWSテスト環境構築指示 §8: 「実行前件数表示」)。ZAICOの一覧APIは
+ * 総件数を返さない(lib/zaico/client.tsのlistInventories参照)ため、
+ * 正確な総数ではなく「1ページ目の件数」と「まだ続きがあるか」だけを
+ * 返す — 呼び出し側(UI)は「少なくともN件」「N件以上あります」という
+ * 控えめな表現で表示し、実際には無い精度を装わない。
+ */
+export async function previewZaicoCatalogSize(): Promise<ZaicoCatalogPreview> {
+  const { items, hasMore } = await listInventories(1);
+  return { sampleCount: items.length, hasMore };
 }
