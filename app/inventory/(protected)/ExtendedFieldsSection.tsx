@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import type { ExtendedSectionDef } from "@/lib/inventory/extendedFields";
+import type { FieldSize } from "./FormFields";
 
 interface ExtendedFieldsSectionProps {
   section: ExtendedSectionDef;
@@ -19,6 +20,15 @@ interface ExtendedFieldsSectionProps {
    * forms.
    */
   extra?: ReactNode;
+  /**
+   * BELLO統合改修 master指示書 Phase C — both default to the exact
+   * pre-Phase-C look (2-column grid, 13px compact inputs), so
+   * NewInventoryForm.tsx (which never passes these) is completely
+   * unaffected. Only EditInventoryForm.tsx passes size="large"
+   * columns={1} (spec: 編集画面の追加項目セクションも単一カラム).
+   */
+  size?: FieldSize;
+  columns?: 1 | 2;
 }
 
 /**
@@ -33,28 +43,35 @@ interface ExtendedFieldsSectionProps {
  * fields in each form (they need master-data-driven `<select>`s and the
  * image editor, not a plain text/number/date/select input).
  */
-export function ExtendedFieldsSection({ section, values, onChange, extra }: ExtendedFieldsSectionProps) {
+const SIZE_CLASSES: Record<FieldSize, string> = {
+  compact: "text-[13px] py-1",
+  large: "text-[16px] py-2.5",
+};
+
+export function ExtendedFieldsSection({ section, values, onChange, extra, size = "compact", columns = 2 }: ExtendedFieldsSectionProps) {
+  const fieldClass = `mt-0.5 w-full border border-gray-300 px-2.5 focus:border-gray-500 focus:outline-none ${SIZE_CLASSES[size]}`;
+  // A single-column layout has nothing to "span" — col-span-2 on a
+  // grid-cols-1 grid is a harmless no-op, but omitting it entirely keeps
+  // the DOM/class list honest about what's actually a 1-column layout.
+  const spanFullWidthClass = columns === 2 ? "col-span-2" : undefined;
+
   return (
     <details open className="mt-4 border-t border-gray-100 pt-4">
       <summary className="cursor-pointer text-[11px] font-bold text-gray-400">{section.title}</summary>
-      <div className="mt-3 grid grid-cols-2 gap-4">
+      <div className={`mt-3 grid gap-4 ${columns === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
         {extra}
         {section.fields.map((field) => (
-          <div key={field.key} className={field.fullWidth ? "col-span-2" : undefined}>
+          <div key={field.key} className={field.fullWidth ? spanFullWidthClass : undefined}>
             <label className="block text-[12px] text-gray-600">{field.label}</label>
             {field.type === "textarea" ? (
               <textarea
                 value={values[field.key] ?? ""}
                 onChange={(e) => onChange(field.key, e.target.value)}
-                rows={2}
-                className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
+                rows={size === "large" ? 4 : 2}
+                className={fieldClass}
               />
             ) : field.type === "select" ? (
-              <select
-                value={values[field.key] ?? ""}
-                onChange={(e) => onChange(field.key, e.target.value)}
-                className="mt-0.5 w-full border border-gray-300 bg-white px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
-              >
+              <select value={values[field.key] ?? ""} onChange={(e) => onChange(field.key, e.target.value)} className={`bg-white ${fieldClass}`}>
                 {(field.options ?? []).map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
@@ -66,7 +83,7 @@ export function ExtendedFieldsSection({ section, values, onChange, extra }: Exte
                 type={field.type === "number" ? "number" : field.type === "date" ? "date" : "text"}
                 value={values[field.key] ?? ""}
                 onChange={(e) => onChange(field.key, e.target.value)}
-                className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
+                className={fieldClass}
               />
             )}
           </div>
