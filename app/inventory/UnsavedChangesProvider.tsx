@@ -41,22 +41,32 @@ interface AttemptSaveResult {
   success: boolean;
 }
 
+/** A navigation target is either a literal path (router.push) or the sentinel "BACK" (router.back() — actual browser history, not a reconstructed URL). See InventoryPagination.tsx's CursorPagination for why "← 前へ" needs this instead of a path: reconstructing "the previous page's URL" server-side would require accumulating every visited cursor into the URL itself, which is exactly the unbounded-URL-growth bug (HTTP 431) BELLO統合改修 master指示書(2026-08-29統合改修版) §7 fixed. */
+type NavigationTarget = string | "BACK";
+
 interface UnsavedChangesContextValue {
   isDirty: boolean;
   setDirty: (dirty: boolean) => void;
   registerSaveHandler: (fn: (() => Promise<AttemptSaveResult>) | null) => void;
   registerDiscardHandler: (fn: (() => void) | null) => void;
   guardedNavigate: (path: string) => void;
+  /** Same guard, but the ultimate navigation is router.back() instead of router.push(path) once resolved (immediately, if not dirty). */
+  guardedBack: () => void;
 }
 
 const UnsavedChangesContext = createContext<UnsavedChangesContextValue | null>(null);
+
+function runNavigation(router: ReturnType<typeof useRouter>, target: NavigationTarget) {
+  if (target === "BACK") router.back();
+  else router.push(target);
+}
 
 export function UnsavedChangesProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [isDirty, setIsDirtyState] = useState(false);
   const saveHandlerRef = useRef<(() => Promise<AttemptSaveResult>) | null>(null);
   const discardHandlerRef = useRef<(() => void) | null>(null);
-  const [dialog, setDialog] = useState<{ targetPath: string; saving: boolean } | null>(null);
+  const [dialog, setDialog] = useState<{ target: NavigationTarget; saving: boolean } | null>(null);
 
   const setDirty = useCallback((dirty: boolean) => setIsDirtyState(dirty), []);
   const registerSaveHandler = useCallback((fn: (() => Promise<AttemptSaveResult>) | null) => {
@@ -73,10 +83,18 @@ export function UnsavedChangesProvider({ children }: { children: React.ReactNode
         router.push(path);
         return;
       }
-      setDialog({ targetPath: path, saving: false });
+      setDialog({ target: path, saving: false });
     },
     [isDirty, router],
   );
+
+  const guardedBack = useCallback(() => {
+    if (!isDirty) {
+      router.back();
+      return;
+    }
+    setDialog({ target: "BACK", saving: false });
+  }, [isDirty, router]);
 
   // M: ブラウザ標準の離脱警告（更新/タブを閉じる/URL直接変更） — アプ
   // リ内ナビゲーションのguardedNavigateとは別経路。dirtyな間だけ登録。
@@ -98,9 +116,9 @@ export function UnsavedChangesProvider({ children }: { children: React.ReactNode
     if (result.success) {
       // I-3: 保存成功 → dirty解除 → 元々向かっていた先へ移動。
       setIsDirtyState(false);
-      const target = dialog.targetPath;
+      const target = dialog.target;
       setDialog(null);
-      router.push(target);
+      runNavigation(router, target);
     } else {
       // I-3: 保存失敗時は移動しない。フォーム自身の保存処理が既に自分の
       // エラーstateをセットしているはずなので（app/actions/inventory.ts
@@ -117,9 +135,9 @@ export function UnsavedChangesProvider({ children }: { children: React.ReactNode
     // 移動。追加確認なし。
     discardHandlerRef.current?.();
     setIsDirtyState(false);
-    const target = dialog.targetPath;
+    const target = dialog.target;
     setDialog(null);
-    router.push(target);
+    runNavigation(router, target);
   }
 
   function handleCancel() {
@@ -129,8 +147,8 @@ export function UnsavedChangesProvider({ children }: { children: React.ReactNode
   }
 
   const value = useMemo<UnsavedChangesContextValue>(
-    () => ({ isDirty, setDirty, registerSaveHandler, registerDiscardHandler, guardedNavigate }),
-    [isDirty, setDirty, registerSaveHandler, registerDiscardHandler, guardedNavigate],
+    () => ({ isDirty, setDirty, registerSaveHandler, registerDiscardHandler, guardedNavigate, guardedBack }),
+    [isDirty, setDirty, registerSaveHandler, registerDiscardHandler, guardedNavigate, guardedBack],
   );
 
   return (

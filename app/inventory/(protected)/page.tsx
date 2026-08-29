@@ -27,7 +27,6 @@ interface InventoryListPageProps {
     /** 詳細検索の実際の条件 — JSON文字列(lib/inventory/advancedSearch.tsのAdvancedSearchQuery)。存在し、有効な条件を1件以上含む場合のみ詳細検索モードになる。 */
     adv?: string;
     cursor?: string;
-    stack?: string;
     limit?: string;
     /** 詳細検索/クイック検索(offsetページング)専用。cursorページングとは独立。 */
     offset?: string;
@@ -54,7 +53,6 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
 
   const limit = searchParams.limit === "100" ? 100 : 50;
   const advancedOpen = searchParams.advanced === "1";
-  const cursorStack = searchParams.stack ? searchParams.stack.split(",") : [];
   const categoryIds = searchParams.categoryIds ? searchParams.categoryIds.split(",").filter(Boolean) : [];
   const offset = Math.max(0, Number(searchParams.offset) || 0);
 
@@ -174,7 +172,6 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
                 mode="cursor"
                 baseParams={baseParams}
                 cursor={searchParams.cursor}
-                cursorStack={cursorStack}
                 nextToken={listResult.nextToken}
                 limit={limit}
                 currentCount={listResult.items.length}

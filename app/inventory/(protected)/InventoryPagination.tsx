@@ -11,8 +11,8 @@ interface CommonProps {
 
 interface CursorPaginationProps extends CommonProps {
   mode: "cursor";
+  /** Present iff this isn't the first page — the AppSync nextToken used to fetch it. */
   cursor?: string;
-  cursorStack: string[]; // previous page cursors, most recent last; "" represents "first page (no cursor)"
   nextToken: string | null;
 }
 
@@ -66,13 +66,29 @@ function PageSizeLinks({ baseParams, limit, extraReset }: { baseParams: Record<s
  * front, so this keeps 前へ/次へ + a page-size selector and drops
  * jump-to-page-N. Used only for the plain browse path (no free-text
  * search, no 詳細検索) — see lib/inventory/queries.ts's listInventory.
+ *
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §7根本修正:
+ * これ以前は「← 前へ」を再現するため、これまで訪れた全ページの
+ * nextTokenを`stack` URLクエリパラメータへカンマ区切りで蓄積していた
+ * (page.tsxのsearchParams.stack)。AppSyncのnextTokenは(特にfilter付き
+ * のExclusiveStartKeyを含むと)不透明かつ数百バイト〜1KB超になり得る
+ * ため、「次へ」を数回押すだけでURL(すなわちリクエストラインそのもの
+ * — Cookieとは別にHTTPリクエストヘッダ全体のサイズに数えられる)が
+ * 際限なく肥大化し、実際に報告された`HTTP ERROR 431`(Request Header
+ * Fields Too Large)を引き起こしていた — これが根本原因。
+ *
+ * 修正: 「次へ」のURLはそのページ1件分のnextTokenだけを常に運ぶ
+ * (蓄積しない、O(1)のURLサイズ)。「← 前へ」は`router.back()`(ブラウザ
+ * の実際のナビゲーション履歴)へ切り替え — これによりサーバー側で
+ * 「前ページのcursorが何か」を再現する必要が無くなり、URL肥大化の根本
+ * 原因そのものが消える。制約: 直接このURLを開いた(共有リンク等)場合
+ * router.back()はアプリ内履歴の外へ戻る可能性があるが、これは内部業務
+ * ツールとして許容範囲内のトレードオフであり、少なくとも431で完全に
+ * 操作不能になる現状よりは明確に改善である。
  */
-function CursorPagination({ baseParams, cursor, cursorStack, nextToken, limit, currentCount }: CursorPaginationProps) {
-  const { isDirty, guardedNavigate } = useUnsavedChanges();
-  const hasPrev = cursorStack.length > 0;
-  const prevStack = cursorStack.slice(0, -1);
-  const prevCursor = cursorStack[cursorStack.length - 1] ?? "";
-  const nextStack = [...cursorStack, cursor ?? ""].join(",");
+function CursorPagination({ baseParams, cursor, nextToken, limit, currentCount }: CursorPaginationProps) {
+  const { isDirty, guardedNavigate, guardedBack } = useUnsavedChanges();
+  const hasPrev = Boolean(cursor); // このページ自体がcursorで到達されたなら、前のページが存在する
 
   function handleClick(e: React.MouseEvent, href: string) {
     if (!isDirty) return;
@@ -85,20 +101,15 @@ function CursorPagination({ baseParams, cursor, cursorStack, nextToken, limit, c
       <span>{currentCount}件表示</span>
       <div className="flex items-center gap-3">
         {hasPrev ? (
-          (() => {
-            const href = hrefFor(baseParams, { cursor: prevCursor || undefined, stack: prevStack.join(",") || undefined });
-            return (
-              <Link href={href} onClick={(e) => handleClick(e, href)} className="border border-gray-300 px-2 py-1 hover:bg-gray-50">
-                ← 前へ
-              </Link>
-            );
-          })()
+          <button type="button" onClick={guardedBack} className="border border-gray-300 px-2 py-1 hover:bg-gray-50">
+            ← 前へ
+          </button>
         ) : (
           <span className="border border-gray-100 px-2 py-1 text-gray-300">← 前へ</span>
         )}
         {nextToken ? (
           (() => {
-            const href = hrefFor(baseParams, { cursor: nextToken, stack: nextStack });
+            const href = hrefFor(baseParams, { cursor: nextToken });
             return (
               <Link href={href} onClick={(e) => handleClick(e, href)} className="border border-gray-300 px-2 py-1 hover:bg-gray-50">
                 次へ →
@@ -109,7 +120,7 @@ function CursorPagination({ baseParams, cursor, cursorStack, nextToken, limit, c
           <span className="border border-gray-100 px-2 py-1 text-gray-300">次へ →</span>
         )}
       </div>
-      <PageSizeLinks baseParams={baseParams} limit={limit} extraReset={{ cursor: undefined, stack: undefined }} />
+      <PageSizeLinks baseParams={baseParams} limit={limit} extraReset={{ cursor: undefined }} />
     </div>
   );
 }

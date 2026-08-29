@@ -188,6 +188,12 @@ async function testFailureIsolation() {
 function testBackgroundJobPureHelpers() {
   assertEqual(Array.from(parseSeenSourceIds(["a", "b", "a", 3, null])).sort(), ["a", "b"], "parseSeenSourceIds dedups and drops non-string entries");
   assertEqual(Array.from(parseSeenSourceIds(undefined)), [], "parseSeenSourceIds tolerates a missing/undefined value");
+  // 2026-08-29統合改修版 §6.4: 実際に報告された `Variable 'seenSourceIds'
+  // has an invalid value.` の回帰テスト — 書き込み側が常にJSON文字列化
+  // するようになった(stringifySeenSourceIds)後も、読み取り側がその
+  // 文字列を正しく複合できることを確認する。
+  assertEqual(Array.from(parseSeenSourceIds(JSON.stringify(["x", "y", "x"]))).sort(), ["x", "y"], "parseSeenSourceIds parses the JSON string form (what write side now always produces)");
+  assertEqual(Array.from(parseSeenSourceIds("not valid json")), [], "parseSeenSourceIds degrades to empty on unparseable garbage instead of throwing");
 
   const job = toPublicJob({
     status: "RUNNING",

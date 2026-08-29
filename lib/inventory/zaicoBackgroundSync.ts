@@ -62,10 +62,38 @@ export interface ZaicoBackgroundSyncJob {
   triggeredBy: string | null;
 }
 
-/** Exported (in addition to being used internally) so scripts/verify-zaico-background-sync.ts can unit-test it directly without a real DynamoDB row. */
+/**
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §6.4根本修正:
+ * `ZaicoSyncJob.seenSourceIds`は`a.json()`(AWSJSON)フィールド —
+ * lib/inventory/customFieldsCodec.tsで既に文書化されている「wire
+ * quirk」(ミューテーション変数には実際のJSON文字列を渡す必要があり、
+ * 生のJS配列/オブジェクトを渡すと`Variable '...' has an invalid
+ * value.`で失敗する)が、このファイルには適用されていなかった —
+ * これが実際に報告された`Variable 'seenSourceIds' has an invalid
+ * value.`エラーの根本原因(startZaicoBackgroundSyncJob/
+ * advanceZaicoBackgroundSyncJobの3箇所すべてで生配列を直接渡していた)。
+ * `stringifySeenSourceIds`で書き込み前に必ず文字列化し、この
+ * `parseSeenSourceIds`は文字列(常にこちらが書き込む形)・配列(一部の
+ * 読み取り経路で観測される、既にパース済みの形)・その他(壊れた値/
+ * 未設定)のいずれが来ても安全に空集合へ倒す。
+ */
 export function parseSeenSourceIds(raw: unknown): Set<string> {
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parseSeenSourceIds(parsed);
+    } catch (err) {
+      console.error("[ZaicoSyncJob.seenSourceIds] failed to JSON.parse stored value:", raw, err);
+      return new Set();
+    }
+  }
   if (!Array.isArray(raw)) return new Set();
   return new Set(raw.filter((v): v is string => typeof v === "string"));
+}
+
+/** The write-side half of the fix above — always call this, never pass `Array.from(...)`/`[]` directly to a ZaicoSyncJob.seenSourceIds field. */
+function stringifySeenSourceIds(ids: Iterable<string>): string {
+  return JSON.stringify(Array.from(ids));
 }
 
 /** Exported for the same reason as parseSeenSourceIds above. */
@@ -133,7 +161,7 @@ export async function startZaicoBackgroundSyncJob(who: string | null): Promise<{
     unchanged: 0,
     failed: 0,
     imageImported: 0,
-    seenSourceIds: [] as string[],
+    seenSourceIds: stringifySeenSourceIds([]),
     missingSourceIds: [] as string[],
     startedAt: now,
     updatedAt: now,
@@ -235,7 +263,7 @@ export async function advanceZaicoBackgroundSyncJob(who: string | null, port: Za
           status: "COMPLETED",
           lastPage: nextPage,
           ...counts,
-          seenSourceIds: Array.from(seenSourceIds),
+          seenSourceIds: stringifySeenSourceIds(seenSourceIds),
           missingSourceIds,
           updatedAt: now,
           finishedAt: now,
@@ -252,7 +280,7 @@ export async function advanceZaicoBackgroundSyncJob(who: string | null, port: Za
         status: "RUNNING",
         lastPage: nextPage,
         ...counts,
-        seenSourceIds: Array.from(seenSourceIds),
+        seenSourceIds: stringifySeenSourceIds(seenSourceIds),
         updatedAt: now,
       },
       inventoryAuthMode,
