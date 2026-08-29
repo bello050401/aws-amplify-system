@@ -63,6 +63,60 @@ import { resolveEffectiveListingFields } from "../types";
  *   足りる(新しいモデルは不要)。
  */
 
+/**
+ * BELLO統合改修 master指示書(2026-08-29統合改修版) §0-A/§17-A監査
+ * (task #25) — 既存のListingDraft/ChannelListing/このアダプタを、
+ * §17-Aが要求するMercari Shops側の必須フィールド/依存関係と突き合わせ
+ * た結果。この監査で実際に修正した2点(コンディション未設定の黙った
+ * フォールバック廃止/variant quantityのInventory実数量化)は上の
+ * createMercariProduct本体に反映済み。以下は、監査の結果「今回の
+ * ラウンドでは着手しない、設計・実装ともに未着手」と判断した項目 —
+ * 隠さずここに明記する(完了報告の残課題として扱う):
+ *
+ * 1. brandId(ブランド、Mercari側のブランドマスタからの外部ID指定):
+ *    lib/listing/mercari/types.tsのCreateProductInputには型としては
+ *    既に`brandId?: string | null`が存在するが、送信側(この関数)は
+ *    一度も値を設定していない。BELLOのInventory/ListingDraftのどちらに
+ *    も「ブランド」という概念のフィールドが現状存在しない — 新設する
+ *    にはBELLO側のブランド管理(自由入力か、Mercariのブランドマスタを
+ *    検索して選ぶUIか)の設計そのものから必要で、Option Profile
+ *    (下記2)と並ぶ規模の追加機能になるため、今回は着手しなかった。
+ *
+ * 2. Option Profile(EcOptionProfile相当のモデル: ラベル名/送料負担者/
+ *    配送方法/配送日数/発送元地域/配送設定ID)が丸ごと未実装。現状の
+ *    shippingPayerはUI/Server Actionが出品実行のたびに都度渡すだけの
+ *    値で永続化されておらず、shippingMethod/shippingFromStateIdは
+ *    このファイル冒頭のFALLBACK_*定数へ固定、shippingDurationも
+ *    "FOUR_SEVEN_DAYS"へ固定 — 商品ごと/出品者の運用ごとに選べる状態
+ *    には程遠い。特に重要な既知の罠(§17-A原文): APIが要求する「配送
+ *    設定ID」は、Mercari自身のUIに表示される人間向けの「送料ID（任意）」
+ *    ラベルとは別物で、実際のIDは配送設定の編集画面URLの
+ *    `/`と`/edit`の間のセグメントに埋め込まれている、というもの —
+ *    これはOption Profile機能そのものが無い今は該当箇所が無いため
+ *    UI文言化もできていない。将来Option Profileを実装する際は、その
+ *    入力欄のヘルプテキストに必ずこの罠を明記すること。
+ *
+ * 3. variant構造のSKU/JAN(任意項目): lib/listing/mercari/types.tsの
+ *    MercariProductVariantInputには`janCode`フィールドが既にあるが、
+ *    この関数は一度も設定していない(BELLO側にJANコードを保持する
+ *    フィールドはInventory.barcodeが近いが、これがJANコードそのものか
+ *    は別の確認が要る — 誤って無関係の値を送るくらいなら未設定のまま
+ *    にする、という判断)。variantのname相当のフィールドも
+ *    CreateProductInput自体に無く、実Schema未確認のまま追加するのは
+ *    リスクが高いため見送った。
+ *
+ * 4. 「配送方法/配送元地域を商品ごとに選択可能にする」
+ *    (このファイル従来のコメントが将来対応として言及していた内容)は
+ *    上記2のOption Profileが実装されて初めて意味を持つため、これも
+ *    未着手。
+ *
+ * これら4点は、いずれも新しいモデル/UI設計を要する規模の追加機能で
+ * あり、「検証できないものを不確かなまま出荷しない」という今回の
+ * ラウンド全体の方針、および実Mercari Schemaへ到達する手段がこの
+ * sandbox環境に無いという制約から、今回は意図的に着手を見送った —
+ * 完了報告の残課題として明記する。
+ */
+
 /** [UNVERIFIED] 配送方法の暫定フォールバック値。元ブランチのFALLBACK_SHIPPING_METHODと同じ位置づけ。 */
 const FALLBACK_SHIPPING_METHOD = "MERCARI_SHIPPING";
 /** [UNVERIFIED] 配送元地域の暫定フォールバック値 — BELLOにはまだ「配送元地域」という設定項目が無いため。 */
@@ -73,6 +127,15 @@ export interface MercariListingInput {
   channelListing: ChannelListingRecord;
   /** BELLOにはまだ永続化された「送料負担者」フィールドが無いため、呼び出し元(Server Action)が都度渡す — lib/listing/types.tsのShippingPayerCodeコメント参照。 */
   shippingPayer: ShippingPayerCode;
+  /**
+   * BELLO統合改修 master指示書(2026-08-29統合改修版) §17-A: variant構造
+   * のquantityは「Inventory側の在庫数量から導出」が必須要件 — 呼び出し
+   * 元(lib/listing/service.tsのlistOnMercari)が出品実行の直前に
+   * Inventoryを再取得し、その時点のquantityをここへ渡す(ListingDraft
+   * 自体には保存しない — 在庫数量は常にInventoryが単一の真実の情報源
+   * であり、下書き保存時点の値をコピーして古くなるのを避けるため)。
+   */
+  inventoryQuantity: number;
 }
 
 export interface MercariListingResult {
@@ -110,13 +173,31 @@ async function resolveImageUrlForMercari(storageKey: string): Promise<string> {
  * service.tsの1箇所に集約するため)。
  */
 export async function createMercariProduct(input: MercariListingInput): Promise<MercariListingResult> {
-  const { draft, channelListing, shippingPayer } = input;
+  const { draft, channelListing, shippingPayer, inventoryQuantity } = input;
 
   if (!channelListing.categoryMapping?.mercariCategoryId) {
     throw new Error("Mercariのカテゴリーが未設定です。末端カテゴリーを選択してください。");
   }
   if (draft.images.length === 0) {
     throw new Error("画像が1枚も登録されていません。出品するにはInventory側に少なくとも1枚の画像が必要です。");
+  }
+  // BELLO統合改修 master指示書(2026-08-29統合改修版) §17-A: コンディ
+  // ションが未設定のまま実在のMercari APIへ「目立った傷や汚れなし」等
+  // を黙って送るのは、ユーザーが選んでいない値を実出品してしまう
+  // ことになり、Q16/Q17が禁止する「エラーを握り潰して成功したふりを
+  // する」の変種にあたる — 以前はdraft.condition ?? "NO_NOTABLE_DAMAGE"
+  // で黙ってフォールバックしていたが、CONFIG_REQUIREDとして明示的に
+  // ブロックするよう修正した(未マッピングを"new"へ黙ってフォールバッ
+  // クしてはならない、という同じ原則の適用)。
+  if (!draft.condition) {
+    throw new Error("商品の状態（コンディション）が未設定です。出品下書き編集画面でコンディションを選択してから出品してください。");
+  }
+  // BELLO統合改修 master指示書(2026-08-29統合改修版) §17-A: variant
+  // 構造のquantityは「Inventory側の在庫数量から導出」が必須要件 —
+  // 数量0(在庫切れ)のまま出品すると実際に売れない商品を公開してしまう
+  // ため、これも明示的にブロックする。
+  if (inventoryQuantity <= 0) {
+    throw new Error("在庫数量が0です。出品するには在庫数量を1以上に設定してください。");
   }
 
   const effective = resolveEffectiveListingFields(draft, channelListing);
@@ -126,14 +207,12 @@ export async function createMercariProduct(input: MercariListingInput): Promise<
       .map(async (img, idx) => ({ url: await resolveImageUrlForMercari(img.storageKey), sortOrder: idx })),
   );
 
-  const conditionCode = draft.condition ?? "NO_NOTABLE_DAMAGE"; // 未設定時のフォールバック — Inventory側は自由記述のconditionRatingしか持たないため、Listing DraftはBELLO側で明示的に選び直す前提
-
   const apiInput: CreateProductInput = {
     name: effective.title,
     description: effective.description,
     price: effective.price,
     categoryId: channelListing.categoryMapping.mercariCategoryId,
-    condition: conditionToMercariValue(conditionCode),
+    condition: conditionToMercariValue(draft.condition),
     images,
     shippingPayer: shippingPayerToMercariValue(shippingPayer),
     // [UNVERIFIED] 配送方法/配送元地域はBELLOにまだ商品ごとの設定項目が
@@ -142,7 +221,9 @@ export async function createMercariProduct(input: MercariListingInput): Promise<
     shippingDuration: shippingDurationToMercariValue("FOUR_SEVEN_DAYS"),
     shippingFromStateId: FALLBACK_SHIPPING_FROM_STATE_ID,
     status: internalStatusToMercariApiStatus(channelListing.status),
-    variants: [{ skuCode: draft.inventoryId, stockQuantity: 1 }],
+    // stockQuantityはInventory側の実在庫数量から導出する(§17-A必須要件
+    // — 以前はハードコードされた1固定値だった)。
+    variants: [{ skuCode: draft.inventoryId, stockQuantity: inventoryQuantity }],
   };
 
   const data = await client().request<CreateProductPayload>(CREATE_PRODUCT_MUTATION, { input: apiInput }, { disableRetry: true });

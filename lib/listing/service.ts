@@ -272,13 +272,21 @@ export async function listOnMercari(
     );
   }
 
+  // BELLO統合改修 master指示書(2026-08-29統合改修版) §17-A: variant
+  // 構造のquantityは出品実行の直前に取得した実在庫数量を使う
+  // (lib/listing/mercari/adapter.tsのMercariListingInputコメント参照
+  // — 下書き保存時点の値をコピーして古くならないよう、ここで都度取得
+  // する)。
+  const inventory = await getInventoryDetail(inventoryId);
+  if (!inventory) throw new Error("対象の在庫が見つかりません。");
+
   await serverDataClient.models.ChannelListing.update(
     { id: channelListing.id, status: "QUEUED", updatedBy: who ?? undefined },
     inventoryAuthMode,
   );
 
   try {
-    const result = await createMercariProduct({ draft, channelListing, shippingPayer });
+    const result = await createMercariProduct({ draft, channelListing, shippingPayer, inventoryQuantity: inventory.quantity });
     const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
       {
         id: channelListing.id,

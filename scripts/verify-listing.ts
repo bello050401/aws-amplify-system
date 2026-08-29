@@ -176,15 +176,36 @@ async function testAdapterValidation() {
   };
 
   await assertRejects(
-    () => createMercariProduct({ draft, channelListing, shippingPayer: "SELLER" }),
+    () => createMercariProduct({ draft, channelListing, shippingPayer: "SELLER", inventoryQuantity: 1 }),
     "カテゴリー",
     "adapter validation: refuses to list without a Mercari category mapping",
   );
 
+  const withCategory = { ...channelListing, categoryMapping: { mercariCategoryId: "cat-1" } };
+
   await assertRejects(
-    () => createMercariProduct({ draft, channelListing: { ...channelListing, categoryMapping: { mercariCategoryId: "cat-1" } }, shippingPayer: "SELLER" }),
+    () => createMercariProduct({ draft, channelListing: withCategory, shippingPayer: "SELLER", inventoryQuantity: 1 }),
     "画像",
     "adapter validation: refuses to list with zero images",
+  );
+
+  const draftWithImage = { ...draft, images: [{ storageKey: "inventory/a.jpg", sortOrder: 0 }] };
+
+  // BELLO統合改修 master指示書(2026-08-29統合改修版) §17-A:
+  // コンディション未設定は黙ってフォールバックせずCONFIG_REQUIREDとして
+  // ブロックする(以前はNO_NOTABLE_DAMAGEへ黙って倒していた)。
+  await assertRejects(
+    () => createMercariProduct({ draft: { ...draftWithImage, condition: null }, channelListing: withCategory, shippingPayer: "SELLER", inventoryQuantity: 1 }),
+    "コンディション",
+    "adapter validation: refuses to list without a condition selected, instead of silently defaulting one",
+  );
+
+  // §17-A: variantのquantityはInventory実在庫数量から導出必須 — 0以下
+  // (在庫切れ)はブロックする。
+  await assertRejects(
+    () => createMercariProduct({ draft: draftWithImage, channelListing: withCategory, shippingPayer: "SELLER", inventoryQuantity: 0 }),
+    "在庫数量",
+    "adapter validation: refuses to list when the current Inventory quantity is 0",
   );
 }
 
