@@ -1,15 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   syncAllZaicoInventoriesAction,
   syncOneZaicoInventoryAction,
   syncLimitedZaicoInventoriesAction,
   previewZaicoCatalogSizeAction,
+  startZaicoBackgroundSyncAction,
+  advanceZaicoBackgroundSyncAction,
+  cancelZaicoBackgroundSyncAction,
+  getZaicoBackgroundSyncStatusAction,
 } from "@/app/actions/zaicoSync";
 import { deleteZaicoTokenAction, setZaicoTokenAction } from "@/app/actions/zaicoSecret";
 import type { ZaicoSyncResult, ZaicoCatalogPreview } from "@/lib/inventory/zaicoSync";
+import type { ZaicoBackgroundSyncJob } from "@/lib/inventory/zaicoBackgroundSync";
 import type { ZaicoTokenSource } from "@/lib/zaico/client";
 
 /**
@@ -45,6 +50,21 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
   // クランプ済み、ここは誤入力を防ぐUI側の一次防御)。
   const [testLimit, setTestLimit] = useState("5");
   const [preview, setPreview] = useState<ZaicoCatalogPreview | null>(null);
+
+  // BELLO統合改修 master指示書 Phase A: ZAICO background full sync。
+  // 1リクエストで全件を処理せず(Webリクエストのタイムアウトに引っかか
+  // るため)、lib/inventory/zaicoBackgroundSync.tsのチェックポイント付き
+  // ジョブを、この画面を開いている間だけクライアント側からポーリングで
+  // 少しずつ進める。ページ遷移/リロードしても進行状況はDynamoDB側の
+  // ZaicoSyncJobレコードに保存されており、次にこの画面を開いたときに
+  // マウント時のuseEffectが自動的に再開する(実行中ジョブがない場合は
+  // 何もしない)。
+  const [bgJob, setBgJob] = useState<ZaicoBackgroundSyncJob | null>(null);
+  const [bgPolling, setBgPolling] = useState(false);
+  const [bgBusy, setBgBusy] = useState<"idle" | "starting" | "cancelling">("idle");
+  const [bgError, setBgError] = useState<string | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
 
   const [tokenEditing, setTokenEditing] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
@@ -144,6 +164,95 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
       setError(err instanceof Error ? err.message : "件数の確認に失敗しました。");
     } finally {
       setBusy("idle");
+    }
+  }
+
+  // マウント時に、既に実行中(PENDING/RUNNING)のバックグラウンド同期
+  // ジョブがないか確認する — 別タブ/前回セッションで開始したまま画面を
+  // 閉じていた場合、ここで自動的にポーリングを再開する。
+  useEffect(() => {
+    unmountedRef.current = false;
+    (async () => {
+      try {
+        const job = await getZaicoBackgroundSyncStatusAction();
+        if (unmountedRef.current || !job) return;
+        setBgJob(job);
+        if (job.status === "PENDING" || job.status === "RUNNING") {
+          setBgPolling(true);
+          scheduleAdvance(0);
+        }
+      } catch {
+        // 起動時の状態確認に失敗しても致命的ではない — 手動で「開始」す
+        // れば通常どおり動作する。
+      }
+    })();
+    return () => {
+      unmountedRef.current = true;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function scheduleAdvance(delayMs: number) {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    pollTimerRef.current = setTimeout(() => {
+      void runAdvance();
+    }, delayMs);
+  }
+
+  // setIntervalではなくsetTimeoutの再帰呼び出しにしているのは、1回の
+  // advanceZaicoBackgroundSyncAction呼び出し(ZAICO 1ページ分、最大50件
+  // の画像取込を含む)がintervalより長くかかった場合に、次の呼び出しが
+  // 重複して発火するのを防ぐため(重複発火はロック機構で安全ではあるが、
+  // 無駄な同時リクエストを避ける)。
+  async function runAdvance() {
+    try {
+      const { job, shouldContinue } = await advanceZaicoBackgroundSyncAction();
+      if (unmountedRef.current) return;
+      setBgJob(job);
+      setBgError(null);
+      if (shouldContinue) {
+        scheduleAdvance(300);
+      } else {
+        setBgPolling(false);
+        router.refresh();
+      }
+    } catch (err) {
+      if (unmountedRef.current) return;
+      setBgPolling(false);
+      setBgError(err instanceof Error ? err.message : "バックグラウンド同期の進行に失敗しました。");
+    }
+  }
+
+  async function startBackground() {
+    setBgError(null);
+    setBgBusy("starting");
+    try {
+      const res = await startZaicoBackgroundSyncAction();
+      if (!res.started) {
+        setBgError(res.reason ?? "バックグラウンド同期を開始できませんでした。");
+        return;
+      }
+      setBgPolling(true);
+      scheduleAdvance(0);
+    } catch (err) {
+      setBgError(err instanceof Error ? err.message : "開始に失敗しました。");
+    } finally {
+      setBgBusy("idle");
+    }
+  }
+
+  async function cancelBackground() {
+    setBgBusy("cancelling");
+    try {
+      await cancelZaicoBackgroundSyncAction();
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      setBgPolling(false);
+      setBgJob(await getZaicoBackgroundSyncStatusAction());
+    } catch (err) {
+      setBgError(err instanceof Error ? err.message : "中止に失敗しました。");
+    } finally {
+      setBgBusy("idle");
     }
   }
 
@@ -342,6 +451,83 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
         >
           {busy === "all" ? "同期中…" : "全件同期する"}
         </button>
+      </div>
+
+      {/* BELLO統合改修 master指示書 Phase A。「全件同期」(上、1リクエスト
+          で完結)とは別に、件数が多い場合向けにこちらを用意する — 進行
+          状況をZaicoSyncJob(DynamoDB)に保存しながら、1回のリクエストで
+          ZAICO 1ページ(最大50件)ずつ進める。この画面を開いている間、
+          自動的にポーリングして進行するが、閉じても進行状況は失われず、
+          次にこの画面を開いたときに再開できる。 */}
+      <div className="mt-3 border border-gray-200 p-4">
+        <p className="mb-2 text-[12px] font-bold text-gray-700">バックグラウンド全件同期（大量データ向け）</p>
+        <p className="mb-2 text-[11px] text-gray-500">
+          ZAICOの件数が多い場合はこちらを使用してください。1リクエストで全件を処理せず、少しずつ（1回あたり最大50件）進行状況を保存しながら同期します。この画面を開いている間は自動的に進行します。画面を閉じても進行状況（チェックポイント）は保存されており、次にこの画面を開いたときに続きから再開されます。
+        </p>
+
+        {bgJob && (
+          <dl className="mb-3 grid grid-cols-4 gap-y-1 text-[12px] text-gray-700">
+            <dt className="text-gray-500">状態</dt>
+            <dd className="col-span-3">
+              {
+                {
+                  PENDING: "開始待ち",
+                  RUNNING: "実行中…",
+                  COMPLETED: "完了",
+                  FAILED: "失敗",
+                  CANCELLED: "中止済み",
+                }[bgJob.status]
+              }
+            </dd>
+            <dt className="text-gray-500">処理済み</dt>
+            <dd className="col-span-3">
+              {bgJob.totalProcessed}件（ページ{bgJob.lastPage}）
+            </dd>
+            <dt className="text-gray-500">新規作成 / 更新 / 変更なし</dt>
+            <dd className="col-span-3">
+              {bgJob.created} / {bgJob.updated} / {bgJob.unchanged}
+            </dd>
+            <dt className="text-gray-500">エラー / 画像取込</dt>
+            <dd className="col-span-3">
+              {bgJob.failed} / {bgJob.imageImported}
+            </dd>
+            {bgJob.status === "COMPLETED" && bgJob.missingSourceIds.length > 0 && (
+              <>
+                <dt className="text-gray-500">ZAICO側で見つからなかった件数</dt>
+                <dd className="col-span-3 text-amber-700">{bgJob.missingSourceIds.length}件（BELLO側には残しています。手動確認してください）</dd>
+              </>
+            )}
+            {bgJob.lastError && (
+              <>
+                <dt className="text-gray-500">最終エラー</dt>
+                <dd className="col-span-3 text-red-600">{bgJob.lastError}</dd>
+              </>
+            )}
+          </dl>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={startBackground}
+            disabled={bgPolling || bgBusy !== "idle"}
+            className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
+          >
+            {bgPolling ? "実行中…" : bgBusy === "starting" ? "開始中…" : "バックグラウンド同期を開始"}
+          </button>
+          {bgPolling && (
+            <button
+              type="button"
+              onClick={cancelBackground}
+              disabled={bgBusy === "cancelling"}
+              className="border border-red-200 px-3 py-1 text-[12px] text-red-500 hover:bg-red-50 disabled:opacity-40"
+            >
+              {bgBusy === "cancelling" ? "中止中…" : "中止する"}
+            </button>
+          )}
+        </div>
+
+        {bgError && <p className="mt-2 text-[12px] text-red-600">{bgError}</p>}
       </div>
 
       {error && <p className="mt-3 text-[13px] text-red-600">{error}</p>}

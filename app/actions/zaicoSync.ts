@@ -10,6 +10,13 @@ import {
   type ZaicoSyncResult,
   type ZaicoCatalogPreview,
 } from "@/lib/inventory/zaicoSync";
+import {
+  startZaicoBackgroundSyncJob,
+  advanceZaicoBackgroundSyncJob,
+  cancelZaicoBackgroundSyncJob,
+  getZaicoBackgroundSyncStatus,
+  type ZaicoBackgroundSyncJob,
+} from "@/lib/inventory/zaicoBackgroundSync";
 
 /**
  * The ADMIN-gated Server Action surface for the ZAICO→BELLO sync (spec
@@ -84,4 +91,53 @@ export async function previewZaicoCatalogSizeAction(): Promise<ZaicoCatalogPrevi
   const role = await getInventoryRole();
   requireAdminOrThrow(role);
   return previewZaicoCatalogSize();
+}
+
+/**
+ * BELLO統合改修 master指示書 Phase A: ZAICO background full sync.
+ *
+ * These four actions drive lib/inventory/zaicoBackgroundSync.ts's
+ * checkpointed job from the browser (ZaicoSyncPanel.tsx polls `advance`
+ * repeatedly while a job is RUNNING). Each individual call does bounded
+ * work (one ZAICO page, see zaicoBackgroundSync.ts) — this is what makes
+ * "全件同期" possible without the ~3 minute single-request timeout the
+ * master instructions identified in the previous (syncAllZaicoItems)
+ * design; that Server Action is unchanged and still exists for callers
+ * who want a single blocking small/medium sync.
+ */
+export async function startZaicoBackgroundSyncAction(): Promise<{ started: boolean; reason?: string }> {
+  const role = await getInventoryRole();
+  requireAdminOrThrow(role);
+  const who = await getCurrentInventoryUserEmail();
+  return startZaicoBackgroundSyncJob(who);
+}
+
+export async function advanceZaicoBackgroundSyncAction(): Promise<{ job: ZaicoBackgroundSyncJob; shouldContinue: boolean }> {
+  const role = await getInventoryRole();
+  requireAdminOrThrow(role);
+  const who = await getCurrentInventoryUserEmail();
+  const result = await advanceZaicoBackgroundSyncJob(who);
+  if (!result.shouldContinue) {
+    // Only revalidate once the run is done/stopped — not after every
+    // single-page advance, which would otherwise force a full
+    // Inventory list re-fetch every few seconds while a large sync is
+    // still in progress.
+    revalidatePath("/inventory");
+    revalidatePath("/inventory/settings");
+  }
+  return result;
+}
+
+export async function cancelZaicoBackgroundSyncAction(): Promise<void> {
+  const role = await getInventoryRole();
+  requireAdminOrThrow(role);
+  await cancelZaicoBackgroundSyncJob();
+  revalidatePath("/inventory");
+  revalidatePath("/inventory/settings");
+}
+
+export async function getZaicoBackgroundSyncStatusAction(): Promise<ZaicoBackgroundSyncJob | null> {
+  const role = await getInventoryRole();
+  requireAdminOrThrow(role);
+  return getZaicoBackgroundSyncStatus();
 }

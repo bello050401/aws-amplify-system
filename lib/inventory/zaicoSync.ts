@@ -1,16 +1,11 @@
 import "server-only";
-import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import type { Schema } from "@/amplify/data/resource";
 import { getInventory, listInventories, type ZaicoInventory } from "@/lib/zaico/client";
 import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
-import { findOrCreateMasterEntryByName } from "./masters";
-import { downloadAndImportInventoryImage, removeInventoryImage } from "./imageServerOps";
 import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
-import { diffField, logInventoryHistory, type HistoryFieldChange } from "./history";
+import { diffField, type HistoryFieldChange } from "./history";
 import { stringifyCustomFields, parseCustomFields } from "./customFieldsCodec";
 import { ALL_EXTENDED_FIELDS } from "./extendedFields";
-
-type InventoryModel = Schema["Inventory"]["type"];
+import { getServerSyncPort, type InventoryModel, type ZaicoSyncPort } from "./zaicoSyncPorts";
 
 /**
  * The ZAICO→BELLO one-way sync engine (implementation instructions §1-39).
@@ -19,15 +14,32 @@ type InventoryModel = Schema["Inventory"]["type"];
  * updateInventory Server Actions from app/actions/inventory.ts — those
  * `redirect()` on success, which is correct for a browser form submit
  * and wrong for a batch loop that needs to keep going across many items.
- * This talks to `serverDataClient.models.Inventory` directly instead,
- * reusing every other piece (generateInventorySku, logInventoryHistory,
- * diffField, the image S3 helpers, the master upsert helper) exactly as
- * the rest of the app does.
+ *
+ * BELLO統合改修 master指示書 Phase A (ZAICO background sync)で追加した
+ * `port: ZaicoSyncPort`パラメータ(全公開関数、既定値は
+ * `getServerSyncPort()` = 従来通りserverDataClient経由): このファイル
+ * 自体はAWSクライアントを直接呼ばず、`zaicoSyncPorts.ts`が定義する
+ * port経由でDynamoDB/AppSync/S3へアクセスする。既存の呼び出し元
+ * (app/actions/zaicoSync.tsの1件/5件/全件同期、いずれもportを渡さない)
+ * は既定値がそのまま従来の`serverDataClient`実装に解決されるため、
+ * 挙動は一切変わらない(既にAWS上で動作確認済みの5件同期パスは無傷)。
+ * 新設したチェックポイント方式のbackground batch同期
+ * (lib/inventory/zaicoBackgroundSync.ts、app/actions/zaicoSync.tsの
+ * advanceZaicoBackgroundSyncAction経由)も、同じ`syncOneZaicoItem`を
+ * 同じデフォルトportで呼ぶだけで、mapping/dedup/diffロジックを一切複製
+ * しない。zaicoSyncPorts.tsのファイル冒頭コメント参照 — 当初計画していた
+ * 「EventBridgeで自律起動するLambda」経路は、Amplify Gen2の
+ * `allow.resource(fn)`(model-level function resource authorization)が
+ * @aws-amplify/data-schema@1.26.1(最新版)で未実装(パッケージ自身の
+ * ソースに`TODO: delete when we make resource auth available at each
+ * level in the schema`とある)であることを実際にビルド・実行して確認した
+ * ため、今回は見送っている。
  *
  * ADMIN enforcement is NOT done here — it's the caller's job
- * (app/actions/zaicoSync.ts), matching how every other Inventory server
- * action in this codebase keeps the permission check at the Server
- * Action boundary, not buried in a shared lib function.
+ * (app/actions/zaicoSync.ts, for every sync path including the new
+ * background-batch one), matching how every other Inventory server
+ * check at the Server Action boundary, not buried in a shared lib
+ * function.
  */
 
 export interface ZaicoSyncItemResult {
@@ -57,34 +69,6 @@ export interface ZaicoSyncResult {
   items: ZaicoSyncItemResult[];
 }
 
-/** A ZAICO-managed record already in BELLO, looked up by sourceInventoryId — a Scan+filter (no secondary index) is deliberate: at "a few hundred records" scale this is far simpler than adding an index or making one query per item, and syncAllZaicoItems below does exactly ONE such scan per run (via fetchAllZaicoManagedInventory), not one per item. */
-async function findExistingZaicoInventory(sourceInventoryId: string): Promise<InventoryModel | null> {
-  const { data } = await serverDataClient.models.Inventory.list({
-    filter: { and: [{ sourceSystem: { eq: "ZAICO" } }, { sourceInventoryId: { eq: sourceInventoryId } }] },
-    ...inventoryAuthMode,
-  });
-  return data.find((d) => !d.deletedAt) ?? null;
-}
-
-/** Every ZAICO-managed record, keyed by sourceInventoryId — fetched ONCE per full-catalog sync run (paginating through every AppSync page, never "fetch page 1 and assume that's everything") so syncOneZaicoItem never issues a per-item lookup query during a full sync. */
-async function fetchAllZaicoManagedInventory(): Promise<Map<string, InventoryModel>> {
-  const map = new Map<string, InventoryModel>();
-  let nextToken: string | null | undefined;
-  do {
-    const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
-      filter: { sourceSystem: { eq: "ZAICO" } },
-      nextToken: nextToken ?? undefined,
-      ...inventoryAuthMode,
-    });
-    for (const item of data) {
-      if (item.deletedAt || !item.sourceInventoryId) continue;
-      map.set(item.sourceInventoryId, item);
-    }
-    nextToken = nt;
-  } while (nextToken);
-  return map;
-}
-
 interface ImageMergeResult {
   images: InventoryImageRecord[];
   imported: boolean;
@@ -105,7 +89,7 @@ interface ImageMergeResult {
  * alone (spec: 同期でBELLO追加画像を削除しない) — only ever the ONE
  * slot tagged as ZAICO's own is ever replaced.
  */
-async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSourceUrl: string | null): Promise<ImageMergeResult> {
+async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSourceUrl: string | null, port: ZaicoSyncPort): Promise<ImageMergeResult> {
   if (!newSourceUrl) {
     // AWSテスト環境構築指示 §16: ZAICO側の画像が消失(item_imageが
     // null/欠落)しても、BELLO側のS3画像を即削除しない — ここでは何も
@@ -130,7 +114,7 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
 
   let newKey: string;
   try {
-    newKey = await downloadAndImportInventoryImage(newSourceUrl);
+    newKey = await port.downloadAndImportImage(newSourceUrl);
   } catch (err) {
     return { images: existingImages, imported: false, warning: err instanceof Error ? err.message : "ZAICO画像の取り込みに失敗しました。" };
   }
@@ -166,16 +150,27 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
  * を止めないこと).
  *
  * `prefetched`, when given (full-catalog sync), skips the per-item
- * findExistingZaicoInventory lookup in favor of the one upfront scan.
+ * findExistingBySourceId lookup in favor of the one upfront scan.
+ *
+ * `port` (BELLO統合改修 master指示書 Phase A) — every AWS-touching
+ * operation goes through this, defaulting to `getServerSyncPort()`
+ * (byte-identical to this function's pre-refactor behavior). The
+ * background sync worker (amplify/functions/zaico-sync-worker) passes
+ * its own Lambda-side port instead — see zaicoSyncPorts.ts.
  */
-export async function syncOneZaicoItem(zaicoItem: ZaicoInventory, who: string | null, prefetched?: Map<string, InventoryModel>): Promise<ZaicoSyncItemResult> {
+export async function syncOneZaicoItem(
+  zaicoItem: ZaicoInventory,
+  who: string | null,
+  prefetched?: Map<string, InventoryModel>,
+  port: ZaicoSyncPort = getServerSyncPort(),
+): Promise<ZaicoSyncItemResult> {
   const sourceInventoryId = String(zaicoItem.id);
   const warnings: string[] = [];
   let categoryCreated = false;
   let locationCreated = false;
 
   try {
-    const existing = prefetched ? (prefetched.get(sourceInventoryId) ?? null) : await findExistingZaicoInventory(sourceInventoryId);
+    const existing = prefetched ? (prefetched.get(sourceInventoryId) ?? null) : await port.findExistingBySourceId(sourceInventoryId);
     const isNewRecord = existing === null;
 
     const { fields: core, warnings: coreWarnings } = mapZaicoCoreFields(zaicoItem);
@@ -191,7 +186,7 @@ export async function syncOneZaicoItem(zaicoItem: ZaicoInventory, who: string | 
     let categoryId = existing?.categoryId ?? null;
     if (core.categoryName) {
       try {
-        const r = await findOrCreateMasterEntryByName("Category", core.categoryName);
+        const r = await port.findOrCreateCategory(core.categoryName);
         categoryId = r.id;
         categoryCreated = r.created;
       } catch (err) {
@@ -202,7 +197,7 @@ export async function syncOneZaicoItem(zaicoItem: ZaicoInventory, who: string | 
     let locationId = existing?.locationId ?? null;
     if (core.locationName) {
       try {
-        const r = await findOrCreateMasterEntryByName("Location", core.locationName);
+        const r = await port.findOrCreateLocation(core.locationName);
         locationId = r.id;
         locationCreated = r.created;
       } catch (err) {
@@ -215,7 +210,7 @@ export async function syncOneZaicoItem(zaicoItem: ZaicoInventory, who: string | 
     const existingImages: InventoryImageRecord[] = (existing?.images ?? [])
       .filter((img): img is NonNullable<typeof img> => Boolean(img))
       .map(normalizeImageRecord);
-    const imageMerge = await mergeZaicoImage(existingImages, core.imageSourceUrl);
+    const imageMerge = await mergeZaicoImage(existingImages, core.imageSourceUrl, port);
     if (imageMerge.warning) warnings.push(imageMerge.warning);
 
     const existingCustomFields = parseCustomFields(existing?.customFields ?? null) ?? {};
@@ -274,14 +269,17 @@ export async function syncOneZaicoItem(zaicoItem: ZaicoInventory, who: string | 
     }
 
     if (isNewRecord) {
-      const { data: sku, errors: skuErrors } = await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);
-      if (skuErrors || !sku) {
-        if (imageMerge.newStorageKey) await removeInventoryImage(imageMerge.newStorageKey);
-        throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(skuErrors)}`);
+      let sku: string;
+      try {
+        sku = await port.generateSku();
+      } catch (err) {
+        if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
+        throw err;
       }
 
-      const { data: created, errors } = await serverDataClient.models.Inventory.create(
-        {
+      let created: InventoryModel;
+      try {
+        created = await port.createInventory({
           sku,
           name: core.name,
           categoryId: categoryId ?? undefined,
@@ -298,16 +296,14 @@ export async function syncOneZaicoItem(zaicoItem: ZaicoInventory, who: string | 
           updatedBy: who ?? "ZAICO同期",
           sourceSystem: "ZAICO",
           sourceInventoryId,
-          ...optAttrs.extendedFields,
-        },
-        inventoryAuthMode,
-      );
-      if (errors || !created) {
-        if (imageMerge.newStorageKey) await removeInventoryImage(imageMerge.newStorageKey);
-        throw new Error(`在庫の作成に失敗しました: ${JSON.stringify(errors)}`);
+          extendedFields: optAttrs.extendedFields,
+        });
+      } catch (err) {
+        if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
+        throw err;
       }
 
-      await logInventoryHistory(created.id, who, [
+      await port.logHistory(created.id, who, [
         { fieldName: "ZAICO同期", oldValue: null, newValue: `ZAICO ID ${sourceInventoryId} から新規作成 (SKU ${sku})` },
       ]);
 
@@ -328,8 +324,8 @@ export async function syncOneZaicoItem(zaicoItem: ZaicoInventory, who: string | 
     // narrow that across the branches above, so assert it explicitly
     // rather than repeating the `existing &&` guard a third time.
     const existingRecord = existing!;
-    const { errors } = await serverDataClient.models.Inventory.update(
-      {
+    try {
+      await port.updateInventory({
         id: existingRecord.id,
         name: core.name,
         categoryId: categoryId ?? undefined,
@@ -343,22 +339,20 @@ export async function syncOneZaicoItem(zaicoItem: ZaicoInventory, who: string | 
         images: imageMerge.images,
         customFields: stringifyCustomFields(mergedCustomFields),
         updatedBy: who ?? "ZAICO同期",
-        ...optAttrs.extendedFields,
-      },
-      inventoryAuthMode,
-    );
-    if (errors) {
-      if (imageMerge.newStorageKey) await removeInventoryImage(imageMerge.newStorageKey);
-      throw new Error(`在庫の更新に失敗しました: ${JSON.stringify(errors)}`);
+        extendedFields: optAttrs.extendedFields,
+      });
+    } catch (err) {
+      if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
+      throw err;
     }
 
     // Only now — after the write that (re)points the record at it has
     // actually succeeded — is the old ZAICO image slot's S3 object
     // removed. Best-effort: a failure here is logged inside
     // removeInventoryImage itself and never re-thrown.
-    if (imageMerge.oldStorageKeyToRemove) await removeInventoryImage(imageMerge.oldStorageKeyToRemove);
+    if (imageMerge.oldStorageKeyToRemove) await port.removeImage(imageMerge.oldStorageKeyToRemove);
 
-    await logInventoryHistory(existingRecord.id, who, changes);
+    await port.logHistory(existingRecord.id, who, changes);
 
     return {
       zaicoId: sourceInventoryId,
@@ -402,10 +396,10 @@ function aggregateResult(startedAt: string, items: ZaicoSyncItemResult[]): Zaico
 }
 
 /** The Phase 1 test path (spec §30-36): sync exactly one ZAICO item by its numeric id, and only that one. */
-export async function syncSingleZaicoItem(zaicoId: string, who: string | null): Promise<ZaicoSyncResult> {
+export async function syncSingleZaicoItem(zaicoId: string, who: string | null, port: ZaicoSyncPort = getServerSyncPort()): Promise<ZaicoSyncResult> {
   const startedAt = new Date().toISOString();
   const zaicoItem = await getInventory(zaicoId);
-  const result = await syncOneZaicoItem(zaicoItem, who);
+  const result = await syncOneZaicoItem(zaicoItem, who, undefined, port);
   return aggregateResult(startedAt, [result]);
 }
 
@@ -429,9 +423,10 @@ export async function syncSingleZaicoItem(zaicoId: string, who: string | null): 
  * ではなく呼び出し側(app/actions/zaicoSync.ts)の各Server Actionが
  * それぞれ明示的にlimitあり/なしを選ぶ形にするため。
  */
-export async function syncAllZaicoItems(who: string | null, options: { limit?: number } = {}): Promise<ZaicoSyncResult> {
+export async function syncAllZaicoItems(who: string | null, options: { limit?: number; port?: ZaicoSyncPort } = {}): Promise<ZaicoSyncResult> {
+  const port = options.port ?? getServerSyncPort();
   const startedAt = new Date().toISOString();
-  const prefetched = await fetchAllZaicoManagedInventory();
+  const prefetched = await port.fetchAllZaicoManaged();
   const items: ZaicoSyncItemResult[] = [];
   let page = 1;
   // ZAICO API pagination convention (page/per_page, "fewer than
@@ -441,7 +436,7 @@ export async function syncAllZaicoItems(who: string | null, options: { limit?: n
   outer: for (;;) {
     const { items: zaicoItems, hasMore } = await listInventories(page);
     for (const zaicoItem of zaicoItems) {
-      items.push(await syncOneZaicoItem(zaicoItem, who, prefetched));
+      items.push(await syncOneZaicoItem(zaicoItem, who, prefetched, port));
       if (options.limit !== undefined && items.length >= options.limit) break outer;
     }
     if (!hasMore) break;

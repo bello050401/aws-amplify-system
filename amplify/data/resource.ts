@@ -447,6 +447,95 @@ const schema = a.schema({
     .returns(a.string())
     .authorization((allow) => [allow.group("ADMIN"), allow.group("EDITOR")])
     .handler(a.handler.function(generateSku)),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ZAICO background full sync (BELLO統合改修 master指示書 Phase A).
+  //
+  // Orchestration note (root cause investigation, not a guess): the
+  // originally-designed architecture used a scheduled Amplify Function
+  // (EventBridge-backed, via defineFunction's `schedule` option) that
+  // would advance this job on its own, unattended, via
+  // `allow.resource(fn)` model-level authorization (the officially
+  // documented mechanism referenced by @aws-amplify/backend-function's
+  // own getAmplifyDataClientConfig helper). This was implemented, then
+  // found to fail at BOTH compile time ("Property 'resource' does not
+  // exist on type 'BaseAllowModifier'") AND runtime ("allow.resource is
+  // not a function") against @aws-amplify/data-schema@1.26.1 - the
+  // latest version published as of this change (confirmed via `npm view
+  // @aws-amplify/data-schema versions`, so this is not a stale-dependency
+  // problem an upgrade would fix). The package's own source
+  // (Authorization.mjs) confirms this directly: `// TODO: delete when we
+  // make resource auth available at each level in the schema (model,
+  // field)` - function-resource-based model/field authorization is
+  // acknowledged-but-not-yet-shipped in Amplify Gen2 itself at this
+  // point in time, not a mechanism this app is using incorrectly.
+  //
+  // Because of that confirmed gap, there is currently no supported way
+  // for a bare Lambda to read/write Inventory/InventoryHistory/Category/
+  // Location without either (a) a broad apiKey rule (rejected - would
+  // reopen the public-API-key hole this schema deliberately never had
+  // for Inventory data) or (b) hand-written raw DynamoDB calls against
+  // Amplify's internal, undocumented table item shape (rejected as
+  // unacceptably risky to author correctly without a live table to
+  // verify against). The scheduled-Lambda approach is therefore not
+  // shipped in this round - see docs/aws-test-environment.md for the
+  // full writeup and what unblocks it (either a future Amplify Gen2
+  // release that finishes this TODO, or a deliberate, separately-
+  // reviewed decision to accept one of the two rejected options above).
+  //
+  // What IS shipped instead: this same ZaicoSyncJob checkpoint/lock
+  // model, advanced by ADMIN-triggered Server Actions
+  // (lib/inventory/zaicoBackgroundSync.ts) that reuse the
+  // already-AWS-verified serverDataClient path (getServerSyncPort from
+  // zaicoSyncPorts.ts) - each "advance" call processes one bounded ZAICO
+  // page (not the whole catalog) and returns, so no single HTTP request
+  // ever runs long enough to hit the ~3 minute timeout the master
+  // instructions identified as the original problem. The settings UI
+  // drives repeated "advance" calls while a run is in progress (a
+  // background job in the sense of "resumable, checkpointed, never
+  // blocks on the whole catalog in one request" - not yet in the sense
+  // of "keeps running with no browser tab open", which needs the gap
+  // above closed first).
+  //
+  // Exactly ONE row exists (id: ZAICO_SYNC_JOB_SINGLETON_ID, see
+  // lib/inventory/zaicoBackgroundSync.ts) — "the current/most recent
+  // background full-sync job". A single well-known id gives concurrency
+  // control for free: starting a new run is a conditional update against
+  // this one row (refuses if it is already PENDING/RUNNING) rather than
+  // needing a separate lock table.
+  //
+  // `seenSourceIds` (BELLO統合改修 master指示書 Phase A: 「missing detection
+  // safety」) accumulates every ZAICO sourceInventoryId actually observed
+  // so far in the CURRENT run — compared, only once the run reaches
+  // COMPLETED (never on a partial/cancelled run, so an interrupted sync
+  // can never misreport real records as missing), against every BELLO
+  // record with sourceSystem="ZAICO" to populate `missingSourceIds`. This
+  // is reporting only — nothing is ever auto-deleted from BELLO.
+  // ─────────────────────────────────────────────────────────────────────
+  ZaicoSyncStatus: a.enum(["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]),
+
+  ZaicoSyncJob: a
+    .model({
+      status: a.ref("ZaicoSyncStatus").required(),
+      lastPage: a.integer().default(0), // next ZAICO page to fetch (checkpoint)
+      totalProcessed: a.integer().default(0),
+      created: a.integer().default(0),
+      updated: a.integer().default(0),
+      unchanged: a.integer().default(0),
+      failed: a.integer().default(0),
+      imageImported: a.integer().default(0),
+      seenSourceIds: a.json(), // string[] accumulated across the run — see comment above
+      missingSourceIds: a.string().array(), // computed once COMPLETED only
+      startedAt: a.datetime(),
+      updatedAt: a.datetime(), // last checkpoint write, not a schema-managed timestamp
+      finishedAt: a.datetime(),
+      lastError: a.string(),
+      triggeredBy: a.string(),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]), // visibility only — starting/cancelling/advancing a background sync is an ADMIN action, same boundary as the synchronous sync Server Actions
+    ]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
