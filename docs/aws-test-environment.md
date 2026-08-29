@@ -146,7 +146,9 @@ Amplify Gen2では、Amplify Hostingの「ブランチ」ごとに**独立した
 
 上記の全機能は既存のInventoryスキーマ(`sourceSystem`/`sourceInventoryId`/`InventoryImage`の`sourceSystem`/`sourceUrl`)だけで実現できており、`amplify/data/resource.ts`への変更は不要だった。将来EC統合フェーズで新しいモデル(EcListing等)を追加する際も、この調査で確認した「Inventoryが唯一の真実源」という前提は崩していない。
 
-## 8. 公開URLの404問題(調査結果・修正手順は`scripts/aws-setup/5-fix-404-and-redeploy.ps1`)
+## 8. 公開URLの404問題(調査結果・修正手順は`scripts/aws-setup/5-fix-404-and-redeploy.ps1`/`6-create-staging-app.ps1`)
+
+**訂正(初版からの重要な修正)**: 初版では「このAmplifyアプリ(`d1uy61lbnqm8ae`)はテストブランチ専用で`main`は接続されていない」と誤認識しており、`update-app --platform WEB_COMPUTE`を直接このAppへ適用する設計にしていた。**実際にはこのAppには`main`が本番(PRODUCTION)ブランチとして既に存在しており**、`platform`はApp単位の設定のため、そのまま適用すると本番へ影響するリスクがあった。ユーザーの指摘により、**既存App(`d1uy61lbnqm8ae`)には一切変更を加えず、`platform=WEB_COMPUTE`を最初から指定した別の新規staging専用Amplify Appを作成する方式**へ修正した。`5-fix-404-and-redeploy.ps1`は読み取り専用の診断のみに変更し、実際の修正は`6-create-staging-app.ps1`(新規App作成)が行う。
 
 ### 8a. 調査の前提(このClaude Code環境の制約)
 
@@ -161,9 +163,14 @@ Amplify Gen2では、Amplify Hostingの「ブランチ」ごとに**独立した
 - `branch framework = null`は、Amplifyがこのアプリを正しくNext.js SSRアプリとして認識できていない結果の表れ(`platform=WEB_COMPUTE`かつ`framework="Next.js - SSR"`が正しい組み合わせ)。
 - 切り分けた結果、以下は原因ではないと判断: `amplify.yml`の`baseDirectory: .next`/`files: ['**/*']`設定自体は`platform=WEB_COMPUTE`向けの標準的な設定として正しい(AWS公式のNext.js SSR用`amplify.yml`テンプレートと同じ形)。App Router構成・build出力先も問題なし。SPA向けcustomRuleの影響ではない(customRule自体を設定していない)。branch/URLマッピング自体は存在している(job 5がSUCCEEDしている以上、ビルド・デプロイ自体は成功しており「デプロイされたが何を配信すべきか分からない」状態)。
 
-### 8c. なぜApp全体・main設定の変更にならないか
+### 8c. なぜ既存Appを変更せず、新規App作成という方針にしたか
 
-このAmplifyアプリ(`d1uy61lbnqm8ae`)は`4-create-app.ps1`によってテストブランチ専用に新規作成したものであり、`main`ブランチは接続されていない。`platform`はアプリ単位の設定だが、このアプリに紐づくブランチはテストブランチ1つだけなので、`update-app --platform WEB_COMPUTE`を実行しても本番/mainには一切影響しない。別のstaging専用Amplify Appを新たに作る必要はない(このApp自体が最初からstaging専用)。
+`platform`はApp単位の設定であり、既存App(`d1uy61lbnqm8ae`)には`main`が本番ブランチとして既に存在するため、既存Appのplatformを変更すると本番へ影響するリスクがある。したがって:
+
+- 既存App(`d1uy61lbnqm8ae`)・`main`ブランチには一切変更を加えない(`5-fix-404-and-redeploy.ps1`は読み取り専用診断のみに変更済み)。
+- `6-create-staging-app.ps1`が、`platform=WEB_COMPUTE`を最初から指定した**別の新規staging専用Amplify App**を作成し、テスト用ブランチ(`claude/inventory-management-system-5vbvc7`)だけを接続する。新Appには`main`を一切追加しない。
+- 既存の`BelloAmplifyBackendDeploymentRole`(Amplify backendデプロイ用IAMロール)は読み取り専用で存在確認したうえで新Appへ再利用する(ロール自体への変更は行わない) — 同一アカウント内で複数のAmplify Appが同じbackendデプロイロールを共有するのは一般的で安全な構成。
+- CDK bootstrap(us-west-2)はアカウント/リージョン単位のリソースであり、Amplify App単位ではないため、新規App用に再実行する必要はない。
 
 ### 8d. 出典
 
