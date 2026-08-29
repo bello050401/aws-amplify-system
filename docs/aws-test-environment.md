@@ -169,7 +169,7 @@ Amplify Gen2では、Amplify Hostingの「ブランチ」ごとに**独立した
 
 - 既存App(`d1uy61lbnqm8ae`)・`main`ブランチには一切変更を加えない(`5-fix-404-and-redeploy.ps1`は読み取り専用診断のみに変更済み)。
 - `6-create-staging-app.ps1`が、`platform=WEB_COMPUTE`を最初から指定した**別の新規staging専用Amplify App**を作成し、テスト用ブランチ(`claude/inventory-management-system-5vbvc7`)だけを接続する。新Appには`main`を一切追加しない。
-- 既存の`BelloAmplifyBackendDeploymentRole`(Amplify backendデプロイ用IAMロール)は読み取り専用で存在確認したうえで新Appへ再利用する(ロール自体への変更は行わない) — 同一アカウント内で複数のAmplify Appが同じbackendデプロイロールを共有するのは一般的で安全な構成。
+- 既存の`BelloAmplifyBackendDeploymentRole`(Amplify backendデプロイ用IAMロール)は読み取り専用で存在確認したうえで新Appへ再利用を**試みた**(ロール自体への変更は行わない方針だった)。**訂正: この再利用は実際には失敗した — 詳細は下記§9参照。**
 - CDK bootstrap(us-west-2)はアカウント/リージョン単位のリソースであり、Amplify App単位ではないため、新規App用に再実行する必要はない。
 
 ### 8d. 出典
@@ -177,3 +177,33 @@ Amplify Gen2では、Amplify Hostingの「ブランチ」ごとに**独立した
 - [Amplify support for Next.js - AWS Amplify Hosting](https://docs.aws.amazon.com/amplify/latest/userguide/ssr-amplify-support.html)
 - [Migrating a Next.js 11 SSR app to Amplify Hosting compute](https://docs.aws.amazon.com/amplify/latest/userguide/update-app-nextjs-version.html)
 - [How to Update Amplify Platform and Framework Settings from the CLI - NakoBase](https://nakobase.com/en/nakobase-knowledge/amplify-update-platform-and-framework)
+
+## 9. staging Appのビルドが `Unable to assume specified IAM Role` で失敗した問題(修正: `scripts/aws-setup/7-fix-staging-iam-role.ps1`)
+
+`6-create-staging-app.ps1`で新規staging App(`d4hkkg7dty2du`、us-west-2)を作成した際、既存の`BelloAmplifyBackendDeploymentRole`のARNをそのまま`--iam-service-role-arn`として再利用したが、最初のRELEASE job(jobId=1)がBUILDステップで以下のエラーによりFAILEDした:
+
+```
+Unable to assume specified IAM Role.
+Please ensure the selected IAM Role has sufficient permissions and the Trust Relationship is configured correctly.
+```
+
+### 9a. 根本原因
+
+`BelloAmplifyBackendDeploymentRole`のTrust PolicyはAssumeRoleの条件(`aws:SourceArn`)を既存の本番App(`d1uy61lbnqm8ae`)のARNだけに限定して発行されていた。そのため、新規staging App(`d4hkkg7dty2du`)からのAssumeRoleリクエストはTrust Policyの条件に合致せず拒否され、Amplify側にはこれが「ロールをassumeできない」という上記メッセージとして表れる。ロールのIAMポリシー(権限)自体の不足ではなく、Trust Policy(誰がこのロールをassumeできるか)側の制限が原因だった。
+
+### 9b. 修正方針
+
+既存の本番ロール`BelloAmplifyBackendDeploymentRole`のTrust Policyを緩めて両方のAppを許可する案は採用しなかった(本番用ロールの権限境界を広げることになり、本番へのリスクを増やすため)。代わりに、staging専用の新しいIAMロール`BelloAmplifyStagingBackendDeploymentRole`を作成し、Trust PolicyのSourceArn条件をstaging App自身のARN(`arn:aws:amplify:us-west-2:203918843421:apps/d4hkkg7dty2du/branches/*`)だけに限定した。既存の本番ロールは読み取り専用でattached managed policy / inline policyを調査し、その内容(既存が`AdministratorAccess-Amplify`のような広いmanaged policyを使っている場合はそれを含む)を新しいstaging専用ロールへ複製した。理由: 初期構築段階で権限不足によるビルド失敗を避けるため、production側と同水準の権限を暫定的に付与しているが、ロール自体はTrust Policyでstaging Appのみからしかassumeできないよう分離されているため、本番への影響はない。将来的にstagingの動作確認が完了した後、権限を絞り込むことが望ましい(TODO)。
+
+staging Appの`iamServiceRoleArn`だけを新ロールへ更新し(他の設定は一切変更しない)、branchが対象の1本だけであることを確認したうえで新しいRELEASE buildを開始する。IAMの変更(ロール作成・ポリシーアタッチ)は反映まで数秒〜数十秒のラグが生じることがあり、これによる`Unable to assume specified IAM Role`の再発は設定ミスではなく一時的な伝播待ちであるため、`7-fix-staging-iam-role.ps1`はビルドログに同一エラー文言を検出した場合、追加待機のうえ自動的に最大3回までリトライする。
+
+### 9c. 実施した安全対策
+
+- 既存本番App(`d1uy61lbnqm8ae`)・本番ロール(`BelloAmplifyBackendDeploymentRole`)には一切変更を加えない(読み取りのみ)。
+- `main`ブランチには一切触れない。
+- 新規ロールのTrust Policyはstaging App自身のARNだけに限定されており、本番Appからはassumeできない。
+- スクリプトは既存App ID(`d1uy61lbnqm8ae`)を対象とするAWS CLI呼び出しを検出した場合、実行前に必ず中断する安全策を内蔵している。
+
+### 9d. 注記: Secrets Manager用Compute Roleとの違い
+
+このBackend Deployment Role(`ampx pipeline-deploy`がCloudFormationスタックをデプロイする際に使うロール)は、Next.js SSRのランタイムがSecrets Managerからシークレットを読み取る際に使う「Compute Role」とは別物である。Compute Roleの設定は、staging Appの公開URLが正常に表示されることを確認した後の次工程として、`2-apply-secrets-policy.ps1`を該当Compute Roleへ対して実行する形で行う(§4参照)。
