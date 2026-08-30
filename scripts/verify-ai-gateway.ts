@@ -256,18 +256,47 @@ function testBedrockModelRegistry() {
   assertEqual(premium.modelId, standard.modelId, "BEDROCK_MODEL_REGISTRY: us-west-2で実在を確認できたAnthropicモデルはHaiku 4.5/Sonnet 4のみのため、PREMIUMはSonnet 4で代替する(存在しないOpusのIDを登録しない)");
 }
 
-function testBedrockErrorMessages() {
+
+// ── 自動QA: Bedrockのエラー文言がインフラ情報を漏らさない ──────────────
+// 実機で「AIで下書きを生成」を押したとき、画面に上流の403本文がそのまま
+// 出ていた:
+//   403 {"type":"error","request_id":"req_...","error":{"type":
+//   "permission_error","message":"User: arn:aws:sts::<account>:assumed-role/
+//   <RoleName>/AmplifyHostingCompute-app=<appId> is not authorized to
+//   perform: bedrock-mantle:CreateInference ..."}}
+// アカウントID・ロール名・アプリID・拒否アクション名・request_idはどれも
+// 利用者向け画面に出す必要が無い。分類した日本語だけを返す。
+function testBedrockErrorNeverLeaksInfrastructure() {
+  const upstream403 = Object.assign(
+    new Error(
+      '403 {"type":"error","request_id":"req_glv7nvl5sliqzogo7hcejih7jpnuoibkujb54fe6st76oo2hl6ya","error":{"type":"permission_error","message":"User: arn:aws:sts::203918843421:assumed-role/BelloAmplifyStagingComputeRole/AmplifyHostingCompute-app=d4hkkg7dty2du is not authorized to perform: bedrock-mantle:CreateInference on resource: arn:aws:bedrock-mantle:us-west-2:203918843421:project/default"}}',
+    ),
+    { status: 403 },
+  );
+  const msg = describeBedrockError(upstream403);
+
+  for (const leak of ["arn:aws", "203918843421", "BelloAmplifyStagingComputeRole", "d4hkkg7dty2du", "req_", "bedrock-mantle:CreateInference", "assumed-role"]) {
+    assertTrue(!msg.includes(leak), `describeBedrockError: 利用者向け文言に "${leak}" を含めない`);
+  }
+  assertTrue(msg.includes("権限"), "describeBedrockError: 403は権限の問題として説明する");
+  assertTrue(/[ぁ-んァ-ヶ一-龠]/.test(msg), "describeBedrockError: 日本語で説明する");
+}
+
+function testBedrockErrorClassification() {
   const verifying = describeBedrockError(
     Object.assign(new Error("Your account is currently being verified. Verification normally takes less than 2 hours."), { name: "AccessDeniedException" }),
   );
-  assertTrue(verifying.includes("検証"), "describeBedrockError: アカウント検証待ちを利用者に分かる日本語で説明する");
-  assertTrue(!verifying.includes("AccessDenied"), "describeBedrockError: 内部の例外名をそのまま利用者へ出さない");
+  assertTrue(verifying.includes("検証"), "describeBedrockError: アカウント検証待ちは権限不足と区別する");
+  assertTrue(!verifying.includes("権限がありません"), "describeBedrockError: 検証待ちを「権限不足」と誤って案内しない");
 
-  const denied = describeBedrockError(Object.assign(new Error("User is not authorized to perform bedrock:InvokeModel"), { name: "AccessDeniedException" }));
-  assertTrue(denied.includes("権限"), "describeBedrockError: 権限不足は検証待ちと区別して案内する");
+  assertTrue(describeBedrockError(Object.assign(new Error("rate limited"), { status: 429 })).includes("混雑"), "describeBedrockError: 429は再試行を促す");
+  assertTrue(describeBedrockError(Object.assign(new Error("bad input"), { status: 400 })).includes("不正"), "describeBedrockError: 400はリクエスト内容の問題として説明する");
+  assertTrue(describeBedrockError(Object.assign(new Error("no such model"), { status: 404 })).includes("モデル"), "describeBedrockError: 404はモデル/リージョンの問題として説明する");
 
-  const throttled = describeBedrockError(Object.assign(new Error("Too many requests"), { name: "ThrottlingException" }));
-  assertTrue(throttled.includes("混雑"), "describeBedrockError: スロットリングは再試行を促す文言にする");
+  // 未知のエラーでも本文をそのまま出さない
+  const unknown = describeBedrockError(new Error("internal detail: /var/task/secret-path 12345"));
+  assertTrue(!unknown.includes("/var/task"), "describeBedrockError: 未知のエラーでも上流メッセージ本文を混ぜない");
+  assertTrue(unknown.includes("失敗"), "describeBedrockError: 未知のエラーでも利用者に状況は伝える");
 }
 
 async function main() {
@@ -276,7 +305,8 @@ async function main() {
   testModelRegistry();
   testProviderResolution();
   testBedrockModelRegistry();
-  testBedrockErrorMessages();
+  testBedrockErrorNeverLeaksInfrastructure();
+  testBedrockErrorClassification();
   await testRouterEscalation();
   await testBenchmarkHarness();
   testAiPromptsNeverLeakAdminMemo();

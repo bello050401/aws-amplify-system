@@ -51,23 +51,48 @@ function client(): AnthropicBedrockMantle {
   return new AnthropicBedrockMantle({ awsRegion });
 }
 
-/** Secret/資格情報を一切含まない、利用者に見せて安全な説明へ変換する。 */
+/**
+ * 利用者に見せて安全な説明へ変換する。
+ *
+ * **上流のメッセージ本文は決して混ぜない。** AWSの権限エラーは本文へ
+ * 実行ロールのARN・ロール名・拒否されたアクション名・request_idを含めて
+ * 返してくる。実際に画面へ次のような文字列がそのまま出ていた:
+ *
+ *   403 {"type":"error","request_id":"req_...","error":{"type":
+ *   "permission_error","message":"User: arn:aws:sts::<account>:assumed-role/
+ *   <RoleName>/AmplifyHostingCompute-app=<appId> is not authorized to
+ *   perform: bedrock-mantle:CreateInference ..."}}
+ *
+ * アカウントID・ロール名・アプリIDを利用者向け画面へ出す必要は無い。
+ * 詳細は呼び出し元がconsole.errorでサーバーログへ落としているので、
+ * ここでは分類した日本語だけを返す。
+ */
 export function describeBedrockError(err: unknown): string {
   const name = (err as { name?: string } | null)?.name ?? "";
+  const status = (err as { status?: number } | null)?.status;
   const message = err instanceof Error ? err.message : String(err);
-  if (name === "AccessDeniedException" || /AccessDenied/i.test(message)) {
-    if (/being verified/i.test(message)) {
-      return "AWSアカウントの検証が完了していないため、Amazon Bedrockをまだ利用できません（AWS側の手続きが完了すると自動的に利用可能になります）。";
-    }
-    return "Amazon Bedrockの呼び出し権限がありません。実行ロールにBedrockの推論権限が付与されているかご確認ください。";
+  const haystack = `${name} ${message}`;
+
+  // アカウント検証待ちは権限不足と区別する — 利用者側で対処のしようが
+  // 無く、AWS側の手続き完了で自動的に解消するため。
+  if (/being verified|account is currently being verified/i.test(haystack)) {
+    return "AWSアカウントの検証が完了していないため、Amazon Bedrockをまだ利用できません（AWS側の手続きが完了すると自動的に利用可能になります）。";
   }
-  if (/ThrottlingException|TooManyRequests/i.test(name + message)) {
+  // permission_error はAnthropicのBedrockクライアントが403で返す型名。
+  // AccessDeniedExceptionはAWS SDK側の名前。どちらも権限不足。
+  if (status === 403 || /AccessDenied|permission_error|not authorized to perform/i.test(haystack)) {
+    return "Amazon Bedrockを呼び出す権限がありません。実行ロールに推論の権限が付与されているかをご確認ください（詳細はサーバーログに記録しています）。";
+  }
+  if (status === 429 || /Throttl|TooManyRequests|rate_limit/i.test(haystack)) {
     return "Amazon Bedrockが混雑しています。少し時間をおいて再度お試しください。";
   }
-  if (/ValidationException/i.test(name + message)) {
+  if (status === 400 || /ValidationException|invalid_request/i.test(haystack)) {
     return "Amazon Bedrockへのリクエスト内容が不正でした（モデルIDまたはパラメータをご確認ください）。";
   }
-  return `Amazon Bedrockの呼び出しに失敗しました: ${message}`;
+  if (status === 404 || /not_found_error|ResourceNotFound/i.test(haystack)) {
+    return "指定したモデルがこのリージョンで見つかりませんでした（モデルIDとリージョンの組み合わせをご確認ください）。";
+  }
+  return "Amazon Bedrockの呼び出しに失敗しました。時間をおいて再度お試しください（詳細はサーバーログに記録しています）。";
 }
 
 const THINKING = { type: "adaptive" } as const;
