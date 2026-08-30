@@ -1,12 +1,9 @@
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
+import { ensureSettingsBootstrap } from "@/lib/inventory/settingsBootstrap";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { listAllCustomFieldDefinitions } from "@/lib/inventory/queries";
-import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
-import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
-import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
 import { getMercariTokenSource, getMercariClientNameConfig } from "@/lib/listing/mercari/tokenAccess";
-import { seedShippingRates } from "@/lib/shipping/service";
 import { getMercariEnvironment } from "@/lib/listing/mercari/endpoints";
 import { getLineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { InventoryHeader } from "../../InventoryHeader";
@@ -47,15 +44,13 @@ export default async function InventorySettingsPage() {
   if (!role) return null; // parent layout already redirects signed-out/unauthorized users
 
   if (role === "ADMIN") {
-    // Unitはdedupe未対応(masterDedupe.tsのガード参照 — 新規追加のため
-    // 過去の重複が存在しない)。
-    await Promise.all([dedupeMasterEntries("Category"), dedupeMasterEntries("Location")]);
-    // seedCustomFieldDefinitions (Phase Cの低頻度 口金/脚高/座面寸法/
-    // 梱包サイズ/古物の特徴 fields) doesn't interact with
-    // Category/Location/Unit at all, so it doesn't need to wait on the above.
-    // seedShippingRates (§65-66) も同様に独立 — 家財おまかせ便料金マスタへ
-    // 実際にWebSearchで確認できた2件のみを追加専用で投入する(lib/shipping/ratesSeed.ts参照)。
-    await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions(), seedShippingRates()]);
+    // dedupe + 各種seedは、以前ここで毎回のページ描画中に直接実行して
+    // いた。家財おまかせ便の料金マスターが2件から450件になった時点で、
+    // 1回の描画中に400件超の書き込みを試みるようになり、設定ページが
+    // 高確率で500になった(実測8回中7回)。ブートストラップは
+    // 「一度整えば済む」作業なので、プロセス単位に畳んで描画パスから
+    // 外す(lib/inventory/settingsBootstrap.ts)。
+    await ensureSettingsBootstrap();
   }
 
   const [categories, locations, units, customFields, zaicoTokenSource, mercariTokenSource, mercariClientNameConfig, lineTokenSource] = await Promise.all([
