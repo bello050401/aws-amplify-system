@@ -73,7 +73,14 @@ function buildListingSystemPrompt(): string {
   ].join("\n");
 }
 
-function buildListingUserPrompt(input: ListingCopyGenerationInput): string {
+/**
+ * exportしているのは`scripts/verify-ai-gateway.ts`が実際に組み立てられた
+ * プロンプト文字列を検証できるようにするため(§6.3/§6.5「internal note
+ * がpromptに含まれない」の回帰テスト) — TypeScriptの型(この関数の引数
+ * 型に`adminMemo`が存在しない)だけでなく、実際に生成される文字列自体に
+ * 混入していないことを実行時に確認する。
+ */
+export function buildListingUserPrompt(input: ListingCopyGenerationInput): string {
   const lines = [
     `商品名: ${input.name}`,
     input.brand ? `ブランド: ${input.brand}` : null,
@@ -134,7 +141,8 @@ export interface ReplyDraftInput {
   conversationHistory?: { direction: "INBOUND" | "OUTBOUND"; body: string }[];
 }
 
-function buildReplySystemPrompt(): string {
+/** buildListingUserPromptと同じ理由でexport(§6.3/§6.5の回帰テスト用)。 */
+export function buildReplySystemPrompt(): string {
   // §49 Prompt Injection対策 + §50 BELLO返信ルール。
   return [
     "あなたはBELLO(中古家具・什器のリユース販売)のカスタマーサポート担当として、顧客からの問い合わせへの返信案を作成します。",
@@ -151,7 +159,8 @@ function buildReplySystemPrompt(): string {
   ].join("\n");
 }
 
-function buildReplyUserPrompt(input: ReplyDraftInput): string {
+/** buildListingUserPromptと同じ理由でexport(§6.3/§6.5の回帰テスト用)。 */
+export function buildReplyUserPrompt(input: ReplyDraftInput): string {
   const context = [
     input.productName ? `商品名: ${input.productName}` : null,
     input.productCondition ? `コンディション: ${input.productCondition}` : null,
