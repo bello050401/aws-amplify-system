@@ -21,7 +21,7 @@ export function DirectEditControls() {
 
   if (!enabled) {
     return (
-      <button type="button" onClick={toggleEnabled} className="border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+      <button type="button" onClick={toggleEnabled} className="whitespace-nowrap border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
         直接編集
       </button>
     );
@@ -35,7 +35,7 @@ export function DirectEditControls() {
             {lastResult.successCount}件保存{lastResult.failCount > 0 ? `・${lastResult.failCount}件失敗` : ""}
           </span>
         )}
-        <button type="button" onClick={toggleEnabled} className="border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+        <button type="button" onClick={toggleEnabled} className="whitespace-nowrap border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
           直接編集を終了
         </button>
       </div>

@@ -110,9 +110,12 @@ export function InventorySidebar(props: InventorySidebarProps) {
         <FilterContent {...props} />
       </aside>
 
-      {/* モバイル: トリガーボタン。一覧本体の直前に横並びで置けるよう
-          shrink-0の細いバーにする(InventoryToolbar側は変更しない)。 */}
-      <div className="flex shrink-0 items-center border-b border-gray-200 bg-white px-3 py-2 md:hidden">
+      {/* モバイル: トリガーボタン。第六ラウンド§17-18(P0-4)で修正:
+          親(page.tsx)がflex-col md:flex-rowになったため、ここは
+          「一覧の上に乗る横長の帯」として`w-full`を明示する
+          (以前は`flex-row`の兄弟としてalign-items: stretchで縦に
+          引き伸ばされていた——page.tsxのコメント参照)。 */}
+      <div className="flex w-full shrink-0 items-center border-b border-gray-200 bg-white px-3 py-2 md:hidden">
         <button
           type="button"
           onClick={() => setSheetOpen(true)}

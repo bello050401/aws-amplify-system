@@ -90,14 +90,15 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
             shadow・塗りつぶし背景)にはせず、細い罫線1本だけで区切る
             (統合改善指示書 §1: 過度なカードUIにしない)。 */}
         <div className="flex items-center gap-2 border border-gray-200 px-2.5 py-1">
-          <h1 className="text-[15px] font-bold tracking-tight text-gray-900">在庫一覧</h1>
+          <h1 className="whitespace-nowrap text-[15px] font-bold tracking-tight text-gray-900">在庫一覧</h1>
           <span className="text-[11px] font-medium text-gray-400">{totalLabel}</span>
           {advancedActive && (
             <span className="border border-gray-900 bg-gray-900 px-1.5 py-0.5 text-[10px] font-bold text-white">詳細検索の結果</span>
           )}
         </div>
 
-        <div className="h-6 w-px bg-gray-200" aria-hidden />
+        {/* 第六ラウンド§17-18(P0-4): 装飾のみの区切り線はモバイルでは非表示にし、その分の幅を実際のコントロールに譲る。 */}
+        <div className="hidden h-6 w-px bg-gray-200 md:block" aria-hidden />
 
         {/* 2. 商品検索 — アイコン+input+詳細検索を1つの検索ツールとして
             まとめる。検索対象・ロジックは既存のまま(name/skuのcontains)
@@ -126,13 +127,13 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               name="q"
               defaultValue={q}
               placeholder="商品を検索"
-              className="w-48 border-none px-1.5 py-1 text-[13px] outline-none placeholder:text-gray-400"
+              className="w-28 border-none px-1.5 py-1 text-[13px] outline-none placeholder:text-gray-400 md:w-48"
             />
           </form>
           <Link
             href={advancedHref}
             onClick={(e) => handleGuardedLinkClick(e, advancedHref)}
-            className={`border px-2 py-1 text-[12px] ${advancedOpen ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
+            className={`whitespace-nowrap border px-2 py-1 text-[12px] ${advancedOpen ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
           >
             詳細検索
           </Link>
@@ -148,7 +149,8 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               onClick={(e) => handleGuardedLinkClick(e, "/inventory/new")}
               className="bg-gray-900 px-3 py-1.5 text-[13px] font-bold text-white hover:bg-gray-800"
             >
-              + 新規登録
+              <span className="md:hidden">+ 新規</span>
+              <span className="hidden md:inline">+ 新規登録</span>
             </Link>
             <DirectEditControls />
           </>
@@ -157,7 +159,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
             非表示)。エクスポートは既存の閲覧権限モデルに合わせ、
             VIEWERも含め全ロールが利用可能(ExportMenu参照)。 */}
         {canEdit && (
-          <button type="button" onClick={() => setImportOpen(true)} className="border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+          <button type="button" onClick={() => setImportOpen(true)} className="whitespace-nowrap border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
             インポート
           </button>
         )}

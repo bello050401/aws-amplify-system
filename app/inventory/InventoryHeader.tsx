@@ -41,11 +41,24 @@ export function InventoryHeader({ role, center }: { role: InventoryRole; center?
   const router = useRouter();
 
   return (
-    <div className="flex h-[var(--inventory-header-height)] shrink-0 items-center justify-between gap-4 border-b border-gray-200 bg-white px-4">
+    // 第六ラウンド§17-18(P0-4)で実機発見・修正: `h-[var(--inventory-
+    // header-height)]`(固定96px)+ `overflow-x-auto`の組み合わせは、
+    // 390px幅では中身(タイトル+検索+新規登録+直接編集+インポート+
+    // エクスポート)が到底収まらず、はみ出た分が横スクロール可能な
+    // だけの領域に押し込まれ、かつ固定高さのせいで折り返した文字が
+    // 上下に見切れていた(実機スクリーンショット相当のPlaywright
+    // 計測で確認済み——overflow=0のE2Eだけでは検出できない種類の不具合、
+    // 詳細はdocs参照)。モバイルでは高さを内容に応じて可変にし
+    // (`h-auto`)、`overflow-x-auto`ではなく`flex-wrap`で複数行に
+    // 折り返させる——デスクトップ(`md:`)は既存の固定高さ・横スクロール
+    // のまま変更しない。
+    <div className="flex h-auto min-h-[52px] shrink-0 flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-white px-4 py-2 md:h-[var(--inventory-header-height)] md:flex-nowrap md:gap-4 md:py-0">
       <ConfigureAmplifyClientSide />
-      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto">{center}</div>
-      <div className="flex shrink-0 items-center gap-4 text-xs text-gray-500">
-        <span>{ROLE_LABEL[role]}</span>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3 md:flex-nowrap md:overflow-x-auto">{center}</div>
+      <div className="flex shrink-0 items-center gap-2 text-xs text-gray-500 md:gap-4">
+        {/* モバイルはロールの説明文言を省略し、コンパクトに(§155)。 */}
+        <span className="hidden md:inline">{ROLE_LABEL[role]}</span>
+        <span className="md:hidden">{role}</span>
         <button
           type="button"
           onClick={async () => {

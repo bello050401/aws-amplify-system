@@ -90,7 +90,7 @@ export function ExportMenu({ currentFilterParams }: ExportMenuProps) {
         ref={buttonRef}
         type="button"
         onClick={toggle}
-        className="border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50"
+        className="whitespace-nowrap border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50"
       >
         エクスポート
       </button>

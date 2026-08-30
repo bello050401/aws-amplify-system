@@ -133,7 +133,23 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
             />
           }
         />
-        <div className="flex min-h-0 flex-1">
+        {/*
+          第六ラウンド§17-18(P0-4)で実機発見・修正: この行が常時
+          `flex`(=flex-row)だったため、InventorySidebarのモバイル用
+          トリガーバー(`md:hidden`の細い横長バーのつもり)が、
+          flex-rowの兄弟要素(InventoryTable側の高さいっぱいの列)と
+          並んだ結果、既定の`align-items: stretch`でその高さ
+          (692px相当)いっぱいまで縦に引き伸ばされ、幅111px×高さ
+          フル画面という縦長の帯になっていた——ユーザーが実iPhoneで
+          見た「左ナビ/保管場所/カテゴリが大きすぎ、商品一覧が右へ
+          押し出されている」の実際の原因はこれだった(overflow=0の
+          Playwright E2Eではこの「幅は小さいが縦に伸び切って隣を圧迫
+          する」形の不具合を検出できていなかった——第五ラウンドP1-Aの
+          限界そのもの)。`md:flex-row`(デスクトップは従来通り横並び)
+          `flex-col`(モバイルは縦積み——フィルターバーが上、一覧が下)
+          で修正する。
+        */}
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           <InventorySidebar
             categories={categories}
             locations={locations}

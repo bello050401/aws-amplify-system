@@ -75,5 +75,37 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("北欧デザインダイニングチェア").first()).toBeVisible({ timeout: 10_000 });
       await assertNoHorizontalOverflow(page, "在庫詳細ページ");
     });
+
+    /**
+     * 第六ラウンド§17-18(P0-4): overflow=0だけでは検出できなかった
+     * 実際の不具合(InventorySidebarのモバイル用トリガーバーが
+     * flex-rowの兄弟としてalign-items:stretchで画面高さいっぱいまで
+     * 縦に伸び、商品一覧を右へ圧迫していた)を実機計測で発見・修正した
+     * ——同じ再発を防ぐため、密度メトリクスを数値で固定する回帰テスト。
+     */
+    test("モバイル用フィルターバーが画面幅いっぱいの横長バーで、商品一覧を圧迫しない", async ({ page }) => {
+      await signInAsE2EFixtureRole(page, "ADMIN");
+      await page.goto("/inventory");
+      await expect(page.getByText("北欧デザインダイニングチェア").first()).toBeVisible({ timeout: 10_000 });
+
+      const filterButton = page.getByRole("button", { name: /フィルター/ });
+      await expect(filterButton).toBeVisible();
+      const triggerBar = filterButton.locator("xpath=..");
+      const barBox = await triggerBar.boundingBox();
+      expect(barBox, "フィルタートリガーのbounding boxが取得できる").not.toBeNull();
+      if (barBox) {
+        // 横長バー(幅=viewport幅、高さは60px未満)であること——縦に
+        // 伸びきった帯(以前の不具合では600px超)になっていないことを保証する。
+        expect(barBox.width, `フィルターバーの幅(${barBox.width}px)はviewport幅(${viewport.width}px)と同等であるべき`).toBeGreaterThanOrEqual(viewport.width - 2);
+        expect(barBox.height, `フィルターバーの高さ(${barBox.height}px)が60pxを超えている——縦に伸びきる不具合の再発`).toBeLessThan(60);
+      }
+
+      // above-the-fold行数(spec §158「一画面4〜6行以上を目標」)。
+      const rowCount = await page.evaluate((vh) => {
+        const lis = Array.from(document.querySelectorAll("ul.divide-y > li"));
+        return lis.filter((li) => li.getBoundingClientRect().bottom <= vh).length;
+      }, viewport.height);
+      expect(rowCount, `above-the-fold商品行数(${rowCount}行)がspec目標(4〜6行以上)を下回っている`).toBeGreaterThanOrEqual(4);
+    });
   });
 }

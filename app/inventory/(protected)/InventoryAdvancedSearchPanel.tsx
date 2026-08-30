@@ -121,7 +121,12 @@ export function InventoryAdvancedSearchPanel({ fieldDefs, initialQuery }: Invent
   }
 
   return (
-    <div className="flex w-[340px] shrink-0 flex-col overflow-y-auto border-r border-gray-200 bg-gray-50 p-3 text-sm">
+    // 第六ラウンド§17-18(P0-4): page.tsxの兄弟flexコンテナが
+    // flex-col md:flex-rowになったため(InventorySidebarと同じ理由)、
+    // ここも固定340pxのままだとモバイル(375px)でほぼ画面全幅を専有
+    // してしまう——`w-full md:w-[340px]`でモバイルは全幅、デスクトップ
+    // は従来通り固定340pxにする。
+    <div className="flex w-full shrink-0 flex-col overflow-y-auto border-b border-gray-200 bg-gray-50 p-3 text-sm md:w-[340px] md:border-b-0 md:border-r">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-[12px] font-bold text-gray-700">詳細検索</h2>
         <button type="button" onClick={closePanel} className="text-[11px] text-gray-400 hover:text-gray-700">
