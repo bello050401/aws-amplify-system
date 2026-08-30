@@ -374,6 +374,52 @@ function testShippingRankLimitsMatchSource() {
   assertEqual(calculateShippingRankFromSum(451), "OVERSIZE", "calculateShippingRankFromSum(451cm) = OVERSIZE(料金表の対象外)");
 }
 
+// ── 自動QA: 料金マスター投入の重複判定に destinationArea を含める ──────
+// 以前の seedShippingRates は provider + 宛先都道府県 + rank だけで既存
+// 判定しており、全国表(450件)を入れた時点で北海道4エリアが1件に潰れる
+// バグになっていた。「北海道 + Cランク」が4エリアで同じキーになり、
+// 最初の1件を入れた後は残り3件が「既にある」と誤判定される。しかも
+// createがdestinationArea自体を書いていなかったため、入った1件もどの
+// エリアか分からない状態だった(stagingで411件すべてがarea=nullだった)。
+//
+// ここでは「エリアを含めたキーなら4エリアが別物として扱われる」ことを
+// 固定する。キー生成の実装が壊れたらこのテストが落ちる。
+function testShippingRateKeyDistinguishesHokkaidoAreas() {
+  const key = (pref: string, area: string | null, rank: string) => `アートセッティングデリバリー ${pref} ${area ?? ""} ${rank}`;
+
+  const hokkaidoKeys = HOKKAIDO_AREAS.map((a) => key("北海道", a, "C"));
+  assertEqual(new Set(hokkaidoKeys).size, 4, "重複判定キー: 北海道の4エリアは別々のキーになる(1件に潰れない)");
+
+  // エリアを含めないキーだと潰れることの対比(これが以前のバグ)
+  const naiveKeys = HOKKAIDO_AREAS.map(() => key("北海道", null, "C"));
+  assertEqual(new Set(naiveKeys).size, 1, "エリアを含めないキーだと北海道4エリアが1件に潰れる(以前のバグの再現)");
+
+  // 都府県はエリアを持たないので、エリアの有無で取り違えない
+  assertTrue(key("東京都", null, "C") !== key("北海道", null, "C"), "重複判定キー: 宛先が違えば別キー");
+  assertTrue(key("北海道", "函館", "C") !== key("北海道", "函館", "D"), "重複判定キー: ランクが違えば別キー");
+}
+
+// seed全件が「エリアを含めたキー」で一意であること — ここが重複していると
+// 投入時に取りこぼしが出る。
+function testShippingRateSeedKeysAreUnique() {
+  const keys = SHIPPING_RATE_SEED.map((r) => `${r.provider} ${r.destinationPrefecture} ${r.destinationArea ?? ""} ${r.rank}`);
+  assertEqual(new Set(keys).size, SHIPPING_RATE_SEED.length, "SHIPPING_RATE_SEED: エリアを含めたキーで全450件が一意(投入時に取りこぼさない)");
+
+  // 北海道は 4エリア x 9ランク = 36件あるはず
+  const hokkaido = SHIPPING_RATE_SEED.filter((r) => r.destinationPrefecture === "北海道");
+  assertEqual(hokkaido.length, 36, "SHIPPING_RATE_SEED: 北海道は4エリア x 9ランク = 36件");
+  assertEqual(new Set(hokkaido.map((r) => r.destinationArea)).size, 4, "SHIPPING_RATE_SEED: 北海道の行は4エリアすべてを持つ");
+  assertTrue(
+    hokkaido.every((r) => r.destinationArea != null),
+    "SHIPPING_RATE_SEED: 北海道の行は必ずdestinationAreaを持つ(nullだとどのエリアの料金か分からなくなる)",
+  );
+  // 都府県側は逆にエリアを持たない
+  assertTrue(
+    SHIPPING_RATE_SEED.filter((r) => r.destinationPrefecture !== "北海道").every((r) => r.destinationArea === null),
+    "SHIPPING_RATE_SEED: 北海道以外の宛先はdestinationAreaを持たない",
+  );
+}
+
 function main() {
   testCalculateShippingRankFromSum();
   testParseDimensionCm();
@@ -393,6 +439,8 @@ function main() {
   testShippingRateSeedBoundaryValues();
   testHokkaidoAreaResolution();
   testShippingRankLimitsMatchSource();
+  testShippingRateKeyDistinguishesHokkaidoAreas();
+  testShippingRateSeedKeysAreUnique();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
