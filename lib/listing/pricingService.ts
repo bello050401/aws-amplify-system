@@ -382,3 +382,43 @@ export async function runPricingCheck(inventoryId: string, who: string | null, c
   // という事実だけをlastAutomationResult/PriceHistoryに残す。
   return { executed: false, reason: undefined, wouldChangePriceTo: newPrice };
 }
+
+export interface PriceHistoryEntry {
+  id: string;
+  oldPrice: number | null;
+  newPrice: number;
+  reason: string;
+  actor: "USER" | "SYSTEM";
+  externalResult: string | null;
+  changedAt: string;
+}
+
+/**
+ * §20「なぜこの価格になったか」を実際に見られるようにする読み出し。
+ *
+ * PriceHistoryはこれまで**書かれるだけで、どこからも読まれていなかった**。
+ * 設定画面の注記は「監査ログ（商品詳細画面から確認可能）」と書いていたが、
+ * 実際に画面へ出ていたのは`lastAutomationResult`(直近1回の判定を要約した
+ * 文字列)だけで、価格の変更履歴そのものは表示されていなかった。
+ *
+ * channelListingIdのGSIが最初から張ってあるのでScanは不要。新しい順に
+ * 返す(件数はUI側で必要なだけ切る)。
+ */
+export async function listPriceHistory(channelListingId: string, limit = 20): Promise<PriceHistoryEntry[]> {
+  const { data } = await serverDataClient.models.PriceHistory.listPriceHistoryByChannelListingId(
+    { channelListingId },
+    { ...inventoryAuthMode, limit: 200 },
+  );
+  return data
+    .map((r) => ({
+      id: r.id,
+      oldPrice: r.oldPrice ?? null,
+      newPrice: r.newPrice,
+      reason: r.reason,
+      actor: (r.actor ?? "SYSTEM") as "USER" | "SYSTEM",
+      externalResult: r.externalResult ?? null,
+      changedAt: r.changedAt,
+    }))
+    .sort((a, b) => (a.changedAt < b.changedAt ? 1 : -1))
+    .slice(0, limit);
+}

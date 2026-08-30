@@ -12,6 +12,7 @@ import {
   type AutoPricingSettingInput,
   type PricingCheckResult,
 } from "@/lib/listing/pricingService";
+import { listPriceHistory, type PriceHistoryEntry } from "@/lib/listing/pricingService";
 import type { PricingRuleRecord } from "@/lib/listing/pricing";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 
@@ -102,4 +103,14 @@ export async function bulkAssignPricingRuleAction(inventoryIds: string[], input:
     console.error(JSON.stringify({ level: "error", action: "bulkAssignPricingRuleAction", correlationId, errorMessage: err instanceof Error ? err.message : String(err) }));
     return { ok: false, error: err instanceof Error ? err.message : "一括適用に失敗しました。", correlationId };
   }
+}
+
+/**
+ * §20: 価格変更履歴の読み出し。閲覧は在庫を見られる役割すべてに開ける
+ * (PriceHistory自体のauthorizationもADMIN書き込み/EDITOR・VIEWER読み取り)。
+ */
+export async function listPriceHistoryAction(channelListingId: string): Promise<PriceHistoryEntry[]> {
+  const role = await getInventoryRole();
+  if (!role) throw new Error("この操作にはログインが必要です。");
+  return listPriceHistory(channelListingId);
 }

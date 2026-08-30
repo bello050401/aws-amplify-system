@@ -1,7 +1,10 @@
 "use client";
 
+import { formatJstDateTime } from "@/lib/inventory/formatJst";
+import type { PriceHistoryEntry } from "@/lib/listing/pricingService";
 import { useEffect, useState } from "react";
-import { listPricingRulesAction, runPricingCheckAction, setAutoPricingForListingAction } from "@/app/actions/pricing";
+import { listPriceHistoryAction,
+  listPricingRulesAction, runPricingCheckAction, setAutoPricingForListingAction } from "@/app/actions/pricing";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 import type { PricingRuleRecord } from "@/lib/listing/pricing";
 
@@ -44,6 +47,16 @@ export function AutoPricingSection({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [checkResult, setCheckResult] = useState<string | null>(null);
+  // §20「なぜこの価格になったか」。PriceHistoryは以前から書かれていたが
+  // 読み出す経路が無く、画面に出ていたのは直近1回の判定を要約した
+  // lastAutomationResultだけだった。
+  const [history, setHistory] = useState<PriceHistoryEntry[] | null>(null);
+
+  useEffect(() => {
+    listPriceHistoryAction(channelListing.id)
+      .then(setHistory)
+      .catch(() => setHistory([])); // 履歴が読めなくても値下げ設定自体は使えるべきなので握りつぶす
+  }, [channelListing.id]);
 
   useEffect(() => {
     listPricingRulesAction()
@@ -163,6 +176,42 @@ export function AutoPricingSection({
 
       {channelListing.lastAutomationResult && (
         <p className="mt-2 text-[11px] text-gray-400">前回の判定: {channelListing.lastAutomationResult}</p>
+      )}
+
+      {history !== null && (
+        <div className="mt-3">
+          <p className="mb-1 text-[11px] font-bold text-gray-500">価格変更履歴</p>
+          {history.length === 0 ? (
+            <p className="text-[11px] text-gray-400">まだ価格変更の記録がありません。</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[11px]">
+                <thead className="text-left text-gray-400">
+                  <tr className="border-b border-gray-200">
+                    <th className="py-1 pr-3 font-normal">日時</th>
+                    <th className="py-1 pr-3 font-normal">変更</th>
+                    <th className="py-1 pr-3 font-normal">理由</th>
+                    <th className="py-1 pr-3 font-normal">実行</th>
+                    <th className="py-1 font-normal">送信結果</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((h) => (
+                    <tr key={h.id} className="border-b border-gray-100 align-top">
+                      <td className="py-1 pr-3 whitespace-nowrap text-gray-500">{formatJstDateTime(h.changedAt)}</td>
+                      <td className="py-1 pr-3 whitespace-nowrap tabular-nums text-gray-700">
+                        {`${h.oldPrice != null ? `¥${h.oldPrice.toLocaleString("ja-JP")}` : "-"} → ¥${h.newPrice.toLocaleString("ja-JP")}`}
+                      </td>
+                      <td className="py-1 pr-3 text-gray-600">{h.reason}</td>
+                      <td className="py-1 pr-3 whitespace-nowrap text-gray-500">{h.actor === "SYSTEM" ? "自動" : "手動"}</td>
+                      <td className="py-1 text-gray-500">{h.externalResult ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
