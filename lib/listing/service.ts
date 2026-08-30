@@ -2,7 +2,9 @@ import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getInventoryDetail, listInventory } from "@/lib/inventory/queries";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
+import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { createMercariProduct, MercariApiError } from "./mercari/adapter";
+import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import type {
   ChannelListingRecord,
   ListingChannel,
@@ -11,6 +13,20 @@ import type {
   ListingImageRef,
   ShippingPayerCode,
 } from "./types";
+
+/**
+ * BELLO統合業務OS指示書(2026-08-30) §12: 「これは単なるfrontend
+ * filterではない」— initial fetch/search/bulk/direct route/server
+ * action/API mutationのすべてでisEcListingEligibleを通す。Categoryは
+ * 小規模なマスタ(masterSeed.tsのCATEGORY_SEED参照、多くても数十件)
+ * なので、書き込み系の各関数(1回の呼び出しにつき1回)がこのヘルパーで
+ * 都度取得しても実害は無い — bulkCreateListingDraftsだけはループの
+ * 外で1回だけ呼ぶ(ループ内で毎回呼ぶ全件スキャンの重複を避けるため)。
+ */
+async function loadCategoryNameLookup(): Promise<CategoryNameLookup> {
+  const categories = await listAllMasterEntries("Category");
+  return buildCategoryNameLookup(categories);
+}
 
 /**
  * BELLO統合改修 master指示書 Phase D — EC Listing / Mercari Shops連携の
@@ -211,26 +227,32 @@ export interface ListingOverviewRow {
  * する」方式で十分 — 専用の検索基盤が要るほどの規模ではない。
  */
 export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
-  const [inventoryPage, channelListings, drafts] = await Promise.all([
+  const [inventoryPage, channelListings, drafts, categoryNameOf] = await Promise.all([
     listInventory({}, { offset: 0, limit: LISTING_OVERVIEW_MAX_ITEMS }),
     fetchAllChannelListings("MERCARI_SHOPS"),
     fetchAllListingDrafts(),
+    loadCategoryNameLookup(),
   ]);
 
   const channelListingByInventoryId = new Map(channelListings.map((c) => [c.inventoryId, c]));
   const draftInventoryIds = new Set(drafts.map((d) => d.inventoryId));
 
-  return inventoryPage.items.map((item) => ({
-    inventoryId: item.id,
-    displayId: item.displayId,
-    name: item.name,
-    quantity: item.quantity,
-    price: item.salePrice ?? item.plannedSalePrice ?? null,
-    thumbnailKey: item.mainImageThumbnailKey ?? item.mainImageStorageKey,
-    inventoryUpdatedAt: item.updatedAt,
-    hasDraft: draftInventoryIds.has(item.id),
-    channelListing: channelListingByInventoryId.get(item.id) ?? null,
-  }));
+  // §12: 「initial fetch」の時点で対象外カテゴリーを除外する — 一覧
+  // にすら現れなければ、検索・絞り込み・ページングのどの経路からも
+  // 復活しようがない(§94「search: 復活しない」)。
+  return inventoryPage.items
+    .filter((item) => isEcListingEligible(categoryNameOf(item.categoryId)))
+    .map((item) => ({
+      inventoryId: item.id,
+      displayId: item.displayId,
+      name: item.name,
+      quantity: item.quantity,
+      price: item.salePrice ?? item.plannedSalePrice ?? null,
+      thumbnailKey: item.mainImageThumbnailKey ?? item.mainImageStorageKey,
+      inventoryUpdatedAt: item.updatedAt,
+      hasDraft: draftInventoryIds.has(item.id),
+      channelListing: channelListingByInventoryId.get(item.id) ?? null,
+    }));
 }
 
 /**
@@ -253,6 +275,9 @@ export async function bulkCreateListingDrafts(
   const created: string[] = [];
   const skipped: string[] = [];
   const failed: { inventoryId: string; error: string }[] = [];
+  // §12/§94「bulk: 含まれない」— ループの外で1回だけCategoryを取得する
+  // (件数分だけ全件スキャンを繰り返さないため)。
+  const categoryNameOf = await loadCategoryNameLookup();
 
   for (const inventoryId of inventoryIds) {
     try {
@@ -264,6 +289,11 @@ export async function bulkCreateListingDrafts(
       const inventory = await getInventoryDetail(inventoryId);
       if (!inventory) {
         failed.push({ inventoryId, error: "対象の在庫が見つかりません。" });
+        continue;
+      }
+      const categoryName = categoryNameOf(inventory.categoryId);
+      if (!isEcListingEligible(categoryName)) {
+        failed.push({ inventoryId, error: ecListingIneligibleReason(categoryName as string) });
         continue;
       }
       await saveListingDraft(
@@ -310,6 +340,14 @@ export async function saveListingDraft(
 
   const inventory = await getInventoryDetail(inventoryId);
   if (!inventory) throw new Error("対象の在庫が見つかりません。");
+
+  // §12: 「direct route」「product detail listing action」「server
+  // action」全部で対象外カテゴリーをブロックする — 一覧に出ていない
+  // 商品でも、詳細画面や直接のServer Action呼び出しから下書きを作れて
+  // しまう抜け道を防ぐ。
+  const categoryNameOf = await loadCategoryNameLookup();
+  const categoryName = categoryNameOf(inventory.categoryId);
+  if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
   // 出品用画像はInventoryの商品画像(NORMAL)をそのまま参照する — 出品
   // 専用の画像を別途アップロードする機能はPhase Dでは持たない(spec:
@@ -360,6 +398,16 @@ export async function saveChannelOverride(
 ): Promise<ChannelListingRecord> {
   const draft = await getListingDraftForInventory(inventoryId);
   if (!draft) throw new Error("先に出品下書き（タイトル・説明文・価格）を保存してください。");
+
+  // §12/§128: カテゴリーはInventory編集画面からいつでも変更されうる
+  // ため、下書き作成時点で通っていても、ここでも都度再確認する
+  // (「Status Sync」— ローカルの古い前提を信用しない、という考え方を
+  // このEC出品対象外判定にも適用)。
+  const inventory = await getInventoryDetail(inventoryId);
+  if (!inventory) throw new Error("対象の在庫が見つかりません。");
+  const categoryNameOf = await loadCategoryNameLookup();
+  const categoryName = categoryNameOf(inventory.categoryId);
+  if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
   const existing = await getChannelListing(inventoryId, channel);
   const fields = {
@@ -422,6 +470,12 @@ export async function listOnMercari(
   // する)。
   const inventory = await getInventoryDetail(inventoryId);
   if (!inventory) throw new Error("対象の在庫が見つかりません。");
+
+  // §12/§128: 出品実行の直前にも再確認する(下書き保存後にカテゴリーが
+  // 対象外へ変更された場合、実際の出品APIを叩く前にここで止める)。
+  const categoryNameOf = await loadCategoryNameLookup();
+  const categoryName = categoryNameOf(inventory.categoryId);
+  if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
   await serverDataClient.models.ChannelListing.update(
     { id: channelListing.id, status: "QUEUED", updatedBy: who ?? undefined },

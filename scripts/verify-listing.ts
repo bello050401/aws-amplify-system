@@ -16,6 +16,7 @@ import { resolveEffectiveListingFields, type ChannelListingRecord, type ListingD
 import { createMercariProduct } from "@/lib/listing/mercari/adapter";
 import { formatMercariUserAgent } from "@/lib/listing/mercari/endpoints";
 import { MercariApiError, classifyHttpStatus, classifyForbiddenError, classifyGraphQLErrors, isRetryableMercariErrorCode } from "@/lib/listing/mercari/errors";
+import { isEcListingEligible, buildCategoryNameLookup, EXCLUDED_CATEGORY_NAMES } from "@/lib/listing/ecEligibility";
 
 let failures = 0;
 let passes = 0;
@@ -221,6 +222,31 @@ async function testAdapterValidation() {
 // ユニットテストしない — 接続確認画面での実際の保存・検証フロー経由
 // でのみ検証される。 ───────────────────────────────────────────────
 
+// ── BELLO統合業務OS指示書(2026-08-30) §12/§94: EC出品対象外カテゴリー
+// (lib/listing/ecEligibility.ts)。 ──────────────────────────────────────
+
+function testEcListingEligibility() {
+  assertEqual(EXCLUDED_CATEGORY_NAMES.length, 6, "EXCLUDED_CATEGORY_NAMES: exactly the 6 categories named in the spec");
+  for (const name of EXCLUDED_CATEGORY_NAMES) {
+    assertTrue(!isEcListingEligible(name), `isEcListingEligible: "${name}" is excluded`);
+  }
+  assertTrue(isEcListingEligible("販売中"), "isEcListingEligible: an ordinary category is eligible");
+  assertTrue(isEcListingEligible(null), "isEcListingEligible: no category set is not itself a reason to exclude (other required-field checks handle that separately)");
+  // 正規化(NFKC/trim/空白畳み込み/大文字小文字無視)が効くことの確認 —
+  // masterSeed.tsが実際に投入する値と表記ゆれがあっても除外漏れしない。
+  assertTrue(!isEcListingEligible("　破棄　"), "isEcListingEligible: normalizes full-width spaces/whitespace before comparing");
+
+  const lookup = buildCategoryNameLookup([
+    { id: "cat-1", name: "破棄" },
+    { id: "cat-2", name: "販売中" },
+  ]);
+  assertEqual(lookup("cat-1"), "破棄", "buildCategoryNameLookup: resolves a known categoryId to its name");
+  assertEqual(lookup("cat-2"), "販売中", "buildCategoryNameLookup: resolves a different categoryId independently");
+  assertEqual(lookup("cat-unknown"), null, "buildCategoryNameLookup: an unknown categoryId resolves to null, not a crash");
+  assertEqual(lookup(null), null, "buildCategoryNameLookup: no categoryId resolves to null");
+  assertTrue(!isEcListingEligible(lookup("cat-1")), "isEcListingEligible + buildCategoryNameLookup compose: an excluded category's id is correctly rejected end-to-end");
+}
+
 function testFormatMercariUserAgent() {
   assertEqual(formatMercariUserAgent("bello-inventory", "1.2.3"), "bello-inventory/1.2.3", "formatMercariUserAgent: joins clientName/version with a slash");
   assertEqual(formatMercariUserAgent("bello-inventory"), "bello-inventory/0.0.0", "formatMercariUserAgent: defaults version to 0.0.0 per Mercari's own documented convention when omitted");
@@ -267,6 +293,7 @@ async function main() {
   await testAdapterValidation();
   testFormatMercariUserAgent();
   testMercariErrorClassification();
+  testEcListingEligibility();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
