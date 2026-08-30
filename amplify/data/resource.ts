@@ -783,6 +783,87 @@ const schema = a.schema({
       allow.group("EDITOR").to(["read"]),
       allow.group("VIEWER").to(["read"]),
     ]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // BELLO統合業務OS指示書(2026-08-30) §38-50: Message core
+  // (Conversation/Message)。対象チャネルはMercari Shops/Yahoo!オーク
+  // ションストア/LINE公式アカウント/Email(§39) — ListingChannel
+  // (現状Mercari Shopsのみ)とは独立したenumにしてある。将来チャネルが
+  // 増えても、出品(Listing)とメッセージ(Conversation)は別々に増える
+  // 可能性があるため。
+  //
+  // 【現状の実装範囲】このラウンドでは、実際にLINE Webhook/Mercari
+  // 問い合わせAPI/Emailプロバイダのいずれからもメッセージを受信する
+  // 経路を実装していない(§51以降=Priority 6、外部サービスの実仕様
+  // 確認が別途必要なため) — スキーマ・状態遷移ロジック・受信箱UI・
+  // AI下書き編集・送信前確認・送信自体の骨組みまでを用意し、ADMIN
+  // 限定の「テスト会話を作成」機能(ZaicoSyncPanel.tsxの「1件同期
+  // （テスト用）」と同じ考え方)で実際に動作を確認できるようにしてい
+  // る。実チャネルからの受信(recordIncomingMessage相当)は、各チャネル
+  // のWebhook/pollingハンドラが将来これを呼び出す形で接続する。
+  // ─────────────────────────────────────────────────────────────────────
+  MessageChannel: a.enum(["MERCARI_SHOPS", "YAHOO_AUCTION", "LINE", "EMAIL", "TEST"]), // TEST = ADMIN限定のテスト会話作成専用(§166 Message Definition of Doneの動作確認用)。実チャネルと混同しないよう一覧では明示的に区別する。
+
+  ConversationStatus: a.enum(["OPEN", "WAITING_FOR_REPLY", "REPLIED", "RESOLVED", "ARCHIVED"]),
+
+  ConversationPriority: a.enum(["NORMAL", "HIGH"]),
+
+  MessageDirection: a.enum(["INBOUND", "OUTBOUND"]),
+
+  MessageSenderType: a.enum(["CUSTOMER", "STAFF", "AI"]),
+
+  MessageDeliveryStatus: a.enum(["RECEIVED", "DRAFT", "SENDING", "SENT", "FAILED"]),
+
+  /** §40 Conversation Model。 */
+  Conversation: a
+    .model({
+      channel: a.ref("MessageChannel").required(),
+      externalConversationId: a.string(), // 実チャネル側の会話ID(TESTチャネルではnull)
+      externalCustomerId: a.string(),
+      customerDisplayName: a.string(),
+      relatedInventoryId: a.string(), // → Inventory.id(READ ONLY境界: このモデルもInventoryを書き込まない、参照のみ)
+      relatedListingId: a.string(), // → ChannelListing.id
+      relatedOrderId: a.string(), // 将来のOrder機能用に予約(§136: 今回は無理に二重Sales/Orderモデルを作らない、のでこのフィールドは現状常にnull)
+      subject: a.string(),
+      status: a.ref("ConversationStatus").required(),
+      unreadCount: a.integer().default(0),
+      needsReply: a.boolean().default(false), // lib/messaging/conversationStatus.tsのderiveNeedsReplyが算出する値をそのまま保存(§121の一覧ソートで使うため、毎回全メッセージを読み直して計算しない)
+      priority: a.ref("ConversationPriority"), // 未設定はアプリケーション側でNORMAL扱い(a.ref()はa.enum()と違いdefault()を持たないため — lib/messaging配下の読み取り関数がnull→NORMALのフォールバックを行う)
+      lastMessagePreview: a.string(),
+      lastMessageAt: a.datetime(),
+      lastIncomingAt: a.datetime(),
+      lastOutgoingAt: a.datetime(),
+      assignedUserId: a.string(),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    .secondaryIndexes((index) => [index("relatedInventoryId"), index("status")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /** §41 Message Model。 */
+  Message: a
+    .model({
+      conversationId: a.string().required(),
+      externalMessageId: a.string(),
+      direction: a.ref("MessageDirection").required(),
+      senderType: a.ref("MessageSenderType").required(),
+      body: a.string().required(),
+      contentType: a.string(), // 例: "text"/"image" — 添付ありメッセージのUI表示分岐用(§53: 添付解析までは今回未実装、表示のみ)
+      externalSentAt: a.datetime(),
+      deliveryStatus: a.ref("MessageDeliveryStatus").required(),
+      aiGenerated: a.boolean().default(false), // §134: AI生成文章かどうかの内部フラグ
+      createdBy: a.string(),
+    })
+    .secondaryIndexes((index) => [index("conversationId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
