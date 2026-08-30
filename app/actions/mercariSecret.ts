@@ -2,14 +2,20 @@
 
 import { revalidatePath } from "next/cache";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { validateMercariToken } from "@/lib/listing/mercari/adapter";
-import { clearMercariTokenInSecretsManager, setMercariTokenInSecretsManager } from "@/lib/listing/mercari/secretStore";
+import { validateMercariConnection } from "@/lib/listing/mercari/adapter";
+import type { MercariErrorCode } from "@/lib/listing/mercari/client";
+import { clearMercariTokenInSecretsManager, setMercariConnectionInSecretsManager } from "@/lib/listing/mercari/secretStore";
 
 /**
- * Mercari Shops Personal API Access Tokenの登録/削除(BELLO統合改修
- * master指示書 Phase D)。app/actions/zaicoSecret.tsと同一のパターン
+ * Mercari Shops接続設定(TOKEN + APIクライアント名)の登録/削除
+ * (BELLO統合業務OS指示書 2026-08-30 §24: 「Token欄はあるが
+ * `MERCARI_API_CLIENT_NAME`入力欄がない」問題への対応 — 1つの
+ * 「接続確認して保存」操作でTOKEN・APIクライアント名の両方をまとめて
+ * 検証・保存する)。app/actions/zaicoSecret.tsと同一のパターン
  * (ADMIN限定、戻り値にTOKEN本体を一切含めない、保存前に実際のAPIで
- * 疎通確認してから保存)。
+ * 疎通確認してから保存、§92: 検証失敗時は既存の有効な設定を破壊しない
+ * — setMercariConnectionInSecretsManagerは検証成功後にしか呼ばれない
+ * ので、この関数の外側で失敗時に古い値へ戻す処理は不要)。
  */
 async function requireAdmin(): Promise<void> {
   const role = await getInventoryRole();
@@ -21,24 +27,28 @@ async function requireAdmin(): Promise<void> {
 export interface MercariTokenActionResult {
   success: boolean;
   message: string;
+  code?: MercariErrorCode;
 }
 
-export async function setMercariTokenAction(token: string): Promise<MercariTokenActionResult> {
+export async function setMercariConnectionAction(params: { token: string; clientName: string; clientVersion?: string }): Promise<MercariTokenActionResult> {
   await requireAdmin();
-  const trimmed = token.trim();
-  if (!trimmed) return { success: false, message: "TOKENを入力してください。" };
+  const token = params.token.trim();
+  const clientName = params.clientName.trim();
+  const clientVersion = params.clientVersion?.trim() || undefined;
+  if (!token) return { success: false, message: "Personal API Access Tokenを入力してください。" };
+  if (!clientName) return { success: false, message: "APIクライアント名を入力してください（Mercari Shopsとの契約時に割り当てられた値です）。" };
 
-  const validation = await validateMercariToken(trimmed);
-  if (!validation.ok) return { success: false, message: validation.message };
+  const validation = await validateMercariConnection({ token, clientName, clientVersion });
+  if (!validation.ok) return { success: false, message: validation.message, code: validation.code };
 
   try {
-    await setMercariTokenInSecretsManager(trimmed);
+    await setMercariConnectionInSecretsManager({ token, clientName, clientVersion });
   } catch (err) {
     return { success: false, message: err instanceof Error ? err.message : "保存に失敗しました。" };
   }
 
   revalidatePath("/inventory/settings");
-  return { success: true, message: "Mercari Shops API TOKENを保存しました（接続確認済み）。" };
+  return { success: true, message: "Mercari Shops API接続設定を保存しました（接続確認済み）。" };
 }
 
 export async function deleteMercariTokenAction(): Promise<MercariTokenActionResult> {
@@ -49,5 +59,5 @@ export async function deleteMercariTokenAction(): Promise<MercariTokenActionResu
     return { success: false, message: err instanceof Error ? err.message : "削除に失敗しました。" };
   }
   revalidatePath("/inventory/settings");
-  return { success: true, message: "Mercari Shops API TOKENを削除しました。" };
+  return { success: true, message: "Mercari Shops API接続設定を削除しました。" };
 }

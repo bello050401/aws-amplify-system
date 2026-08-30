@@ -26,6 +26,36 @@ export function getMercariEndpoint(env: MercariEnvironment = getMercariEnvironme
 }
 
 /**
+ * BELLO統合業務OS指示書(2026-08-30) §28: 「Mercari
+ * docsにあるstatic outbound IP記載が『Mercari webhook送信元IP』なのか
+ * 『APIクライアントのIP allowlist要件』なのかを混同しないこと」への
+ * 調査結果。
+ *
+ * WebSearchで確認できた内容(公式ドキュメント本文はこのsandbox環境から
+ * api.mercari-shops.comへ直接到達できず、検索結果の要約経由): Mercari
+ * Shops公式ドキュメントに記載されている固定IPアドレス(CIDR表記、2025年
+ * 8月に新しいレンジへ更新された、という更新履歴あり)は、**Mercari
+ * 自身がWebhookを送信してくる送信元IP**であり、Webhook受信側
+ * (今回でいえばBELLO側)がファイアウォール/allowlistでその送信元を
+ * 検証するためのものだった。BELLOがMercari
+ * GraphQL APIへ発信するリクエスト(このファイルのgetMercariEndpoint宛
+ * 通信)側に固定送信元IPを要求する記載は見つからなかった。
+ *
+ * 結論: BELLO→Mercari
+ * のAPI発信経路に固定IP(NAT Gateway等の継続コストがかかる構成)は不要
+ * ——
+ * 必要になるのはむしろ将来Mercariの問い合わせWebhookを受信する場合
+ * (§39以降のMessage機能)で、その際はBELLO側のWebhookエンドポイントが
+ * 受信リクエストの送信元IPをこのCIDRレンジと突き合わせて検証する、
+ * という逆方向の使い方になる。§125(AWS
+ * cost)の「固定IPが不要なら作らない」を満たすため、現時点でNAT
+ * Gateway等は導入していない。[UNVERIFIED: 公式ドキュメント本文へ直接
+ * 到達できていないため、実際のCIDRレンジ値そのものはこのコメントには
+ * 転記していない — Webhook実装時に改めて公式ドキュメントで確認するこ
+ * と。]
+ */
+
+/**
  * BELLO統合改修 master指示書(2026-08-29統合改修版) §7/§17: 実際に報告
  * されたMercari Shops API HTTP 404の根本原因調査。
  *
@@ -66,18 +96,21 @@ export function getMercariEndpoint(env: MercariEnvironment = getMercariEnvironme
  * 管理画面/契約担当者へ確認するよう促す(CONFIG_REQUIRED、決して黙っ
  * て仮の値でリクエストを送らない)。
  */
-/** MERCARI_API_CLIENT_NAMEはtoken同様の秘匿値ではない(Mercariとの契約上の識別名であって認証情報そのものではない)ため、値自体を設定画面へ表示しても問題ない — が、まずは「設定済みかどうか」の真偽値だけをMercariSettingsPanel.tsxへ渡す(getMercariUserAgentのCONFIG_REQUIREDエラーを、出品を試すまで気付けない状態にしないため)。 */
-export function isMercariApiClientNameConfigured(): boolean {
-  return Boolean(process.env.MERCARI_API_CLIENT_NAME?.trim());
-}
+/** Mercari公式ドキュメントの既定値どおり — 特にバージョン管理していない場合の固定値。 */
+export const MERCARI_DEFAULT_CLIENT_VERSION = "0.0.0";
 
-export function getMercariUserAgent(): string {
-  const clientName = process.env.MERCARI_API_CLIENT_NAME?.trim();
-  if (!clientName) {
-    throw new Error(
-      "MERCARI_API_CLIENT_NAMEが設定されていません。Mercari Shopsとの契約時に割り当てられたAPIクライアント名を、サーバー環境変数MERCARI_API_CLIENT_NAMEへ設定してください（Mercari公式ドキュメントによれば、正しいUser-Agentヘッダを送らないリクエストは拒否されます。値の割り当てについてはMercari Shopsの契約担当窓口へご確認ください）。",
-    );
-  }
-  const version = process.env.MERCARI_API_CLIENT_VERSION?.trim() || "0.0.0"; // Mercari公式ドキュメントの既定値どおり — 特にバージョン管理していない場合の固定値
+/**
+ * BELLO統合業務OS指示書(2026-08-30) §24/§26: APIクライアント名の解決
+ * (Secrets Manager優先・環境変数フォールバック、TOKENと同じ経路)は
+ * lib/listing/mercari/tokenAccess.tsのgetMercariUserAgent/
+ * getMercariClientNameConfig/isMercariApiClientNameConfiguredへ移した
+ * (このファイルはAWSに触れない、純粋なローカル設定/フォーマットだけを
+ * 置く場所という位置づけを保つため)。ここに残すのは、実際に
+ * clientName/versionが揃った後の「User-Agent文字列を組み立てる」だけの
+ * 副作用フリーな純関数 — scripts/verify-listing.tsがAWSに一切触れずに
+ * フォーマットの正しさだけを検証できるようにするため、意図的に分離して
+ * いる。
+ */
+export function formatMercariUserAgent(clientName: string, version: string = MERCARI_DEFAULT_CLIENT_VERSION): string {
   return `${clientName}/${version}`;
 }

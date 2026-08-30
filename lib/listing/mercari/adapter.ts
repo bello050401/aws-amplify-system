@@ -2,8 +2,8 @@ import "server-only";
 import { cookies } from "next/headers";
 import { getUrl } from "aws-amplify/storage/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
-import { MercariApiError, MercariShopsClient } from "./client";
-import { getMercariEnvironment } from "./endpoints";
+import { MercariApiError, MercariShopsClient, type MercariErrorCode } from "./client";
+import { getMercariEnvironment, formatMercariUserAgent } from "./endpoints";
 import { getMercariAccessToken } from "./tokenAccess";
 import { CREATE_PRODUCT_MUTATION } from "./mutations";
 import { PRODUCT_CATEGORIES_QUERY, type ProductCategoriesResponse } from "./queries";
@@ -245,19 +245,38 @@ export async function fetchMercariCategories(): Promise<ProductCategoriesRespons
 }
 
 /**
- * 指定したトークンで実際にMercari Shops APIへ疎通できるかを確認する
- * (app/actions/zaicoSecret.tsのvalidateZaicoTokenと同じ「保存前に検証
- * する」パターン)。渡されたtokenだけを使い、Secrets Manager/環境変数
- * には一切触れない — 保存が確定する前の検証専用。
+ * 指定したTOKEN・APIクライアント名で実際にMercari Shops APIへ疎通でき
+ * るかを確認する(app/actions/zaicoSecret.tsのvalidateZaicoTokenと同じ
+ * 「保存前に検証する」パターン)。渡された値だけを使い、Secrets
+ * Manager/環境変数に既に保存されている値には一切触れない — 保存が
+ * 確定する前の検証専用(BELLO統合業務OS指示書 2026-08-30 §92: 「新token
+ * 検証失敗時に既存の有効設定を破壊しない」)。
+ *
+ * clientNameを引数で受け取れるようにしたのは§24の要件(設定画面から
+ * APIクライアント名も入力・保存できるようにする)対応 — 検証時点では
+ * まだSecrets Managerに保存されていない入力中の値でUser-Agentを組み立
+ * てる必要があるため、lib/listing/mercari/client.tsのMercariShopsClient
+ * が受け付けるようになったgetUserAgent注入を使う。
  */
-export async function validateMercariToken(token: string): Promise<{ ok: boolean; message: string }> {
+export async function validateMercariConnection(params: {
+  token: string;
+  clientName: string;
+  clientVersion?: string;
+}): Promise<{ ok: boolean; message: string; code?: MercariErrorCode }> {
   const environment = getMercariEnvironment();
-  const testClient = new MercariShopsClient({ environment, getAccessToken: async () => token });
+  const testClient = new MercariShopsClient({
+    environment,
+    getAccessToken: async () => params.token,
+    getUserAgent: async () => formatMercariUserAgent(params.clientName, params.clientVersion),
+  });
   try {
     await testClient.request<ProductCategoriesResponse>(PRODUCT_CATEGORIES_QUERY, {}, { disableRetry: true });
     return { ok: true, message: `Mercari Shops API（${environment}）への接続を確認しました。` };
   } catch (err) {
-    const message = err instanceof MercariApiError ? err.message : err instanceof Error ? err.message : "不明なエラー";
+    if (err instanceof MercariApiError) {
+      return { ok: false, message: `Mercari Shops APIへの接続に失敗しました: ${err.message}`, code: err.code };
+    }
+    const message = err instanceof Error ? err.message : "不明なエラー";
     return { ok: false, message: `Mercari Shops APIへの接続に失敗しました: ${message}` };
   }
 }

@@ -5,8 +5,8 @@ import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
 import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
-import { getMercariTokenSource } from "@/lib/listing/mercari/tokenAccess";
-import { getMercariEnvironment, isMercariApiClientNameConfigured } from "@/lib/listing/mercari/endpoints";
+import { getMercariTokenSource, getMercariClientNameConfig } from "@/lib/listing/mercari/tokenAccess";
+import { getMercariEnvironment } from "@/lib/listing/mercari/endpoints";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
 
@@ -54,13 +54,14 @@ export default async function InventorySettingsPage() {
     await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions()]);
   }
 
-  const [categories, locations, units, customFields, zaicoTokenSource, mercariTokenSource] = await Promise.all([
+  const [categories, locations, units, customFields, zaicoTokenSource, mercariTokenSource, mercariClientNameConfig] = await Promise.all([
     listAllMasterEntries("Category"),
     listAllMasterEntries("Location"),
     listAllMasterEntries("Unit"),
     listAllCustomFieldDefinitions(),
     getZaicoTokenSource(),
     getMercariTokenSource(),
+    getMercariClientNameConfig(),
   ]);
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
@@ -87,7 +88,8 @@ export default async function InventorySettingsPage() {
           mercariConnected={mercariConnected}
           mercariTokenSource={mercariTokenSource}
           mercariEnvironment={getMercariEnvironment()}
-          mercariApiClientNameConfigured={isMercariApiClientNameConfigured()}
+          mercariClientName={mercariClientNameConfig.clientName}
+          mercariClientNameSource={mercariClientNameConfig.source}
         />
       </div>
     </div>

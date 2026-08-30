@@ -28,8 +28,9 @@ interface SettingsTabsProps {
   mercariConnected: boolean;
   mercariTokenSource: MercariTokenSource;
   mercariEnvironment: "sandbox" | "production";
-  /** サーバー環境変数MERCARI_API_CLIENT_NAMEが設定済みかどうか(lib/listing/mercari/endpoints.tsのgetMercariUserAgent参照 — 実際に報告されたHTTP 404の根本原因調査で判明した必須User-Agentヘッダ用)。 */
-  mercariApiClientNameConfigured: boolean;
+  /** BELLO統合業務OS指示書(2026-08-30) §24: 保存済みのAPIクライアント名(secrets-manager/env-fallbackどちらか、無ければnull) — TOKENと違い秘匿値ではないため表示してよい。 */
+  mercariClientName: string | null;
+  mercariClientNameSource: MercariTokenSource;
 }
 
 /**
@@ -51,7 +52,8 @@ export function SettingsTabs({
   mercariConnected,
   mercariTokenSource,
   mercariEnvironment,
-  mercariApiClientNameConfigured,
+  mercariClientName,
+  mercariClientNameSource,
 }: SettingsTabsProps) {
   const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari">("category");
 
@@ -107,7 +109,8 @@ export function SettingsTabs({
             mercariConnected={mercariConnected}
             mercariTokenSource={mercariTokenSource}
             mercariEnvironment={mercariEnvironment}
-            mercariApiClientNameConfigured={mercariApiClientNameConfigured}
+            mercariClientName={mercariClientName}
+            mercariClientNameSource={mercariClientNameSource}
           />
         )}
       </div>

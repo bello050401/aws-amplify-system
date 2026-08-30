@@ -49,6 +49,18 @@ const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-w
 interface MercariTokenSecretPayload {
   configured: boolean;
   token?: string;
+  /**
+   * BELLO統合業務OS指示書(2026-08-30) §24/§26: MercariのUser-Agent
+   * ヘッダに必要なAPIクライアント名/バージョン。TOKENと違い秘匿情報
+   * そのものではないが、§26「Client Nameもserver-side
+   * config。environment variable fallback可」— TOKENと全く同じ
+   * 「Secrets Manager優先・環境変数フォールバック」の経路に乗せる
+   * (設定画面から2つまとめて1回のvalidate+saveで保存できるようにする
+   * ため、TOKENと同じsecretのpayloadへ同居させている — 新しいSecretを
+   * もう一つ作る理由が無い)。
+   */
+  clientName?: string;
+  clientVersion?: string;
 }
 
 /** IaCの初期値・削除後の値として書き込む「未設定」ペイロード。amplify/backend.tsのSecret初期値と完全に同じ形にすること。 */
@@ -105,20 +117,43 @@ function classifyAwsError(err: unknown): string {
   return `Secrets Managerへの保存に失敗しました(${name ?? "unknown error"})。詳細はサーバーログを確認してください。`;
 }
 
-export async function getMercariTokenFromSecretsManager(): Promise<string | null> {
+/**
+ * token/clientName/clientVersionをまとめて1回のGetSecretValueで返す —
+ * 3つとも同じsecretの同じpayloadに同居しているため、個別に3回
+ * GetSecretValueを呼ぶ理由が無い(§126のrate limit意識にも合う)。
+ * 未設定(configured=false)の場合は3つとも null。
+ */
+export async function getMercariConnectionFromSecretsManager(): Promise<{ token: string | null; clientName: string | null; clientVersion: string | null }> {
   try {
     const res = await getClient().send(new GetSecretValueCommand({ SecretId: SECRET_NAME }));
     const payload = parsePayload(res.SecretString);
-    if (!payload?.configured) return null;
-    return payload.token?.trim() || null;
+    if (!payload?.configured) return { token: null, clientName: null, clientVersion: null };
+    return {
+      token: payload.token?.trim() || null,
+      clientName: payload.clientName?.trim() || null,
+      clientVersion: payload.clientVersion?.trim() || null,
+    };
   } catch (err) {
     logAwsError("getSecretValue", err);
-    return null;
+    return { token: null, clientName: null, clientVersion: null };
   }
 }
 
-export async function setMercariTokenInSecretsManager(token: string): Promise<void> {
-  const payload: MercariTokenSecretPayload = { configured: true, token };
+/** lib/listing/mercari/tokenAccess.tsからのみ呼ばれる薄いラッパー — 呼び出し側の意図(「TOKENだけ知りたい」)を名前で表す。 */
+export async function getMercariTokenFromSecretsManager(): Promise<string | null> {
+  return (await getMercariConnectionFromSecretsManager()).token;
+}
+
+/**
+ * BELLO統合業務OS指示書(2026-08-30) §24: 設定画面の「接続確認して
+ * 保存」ボタン1つで、APIクライアント名とTOKENをまとめて保存する
+ * (§92: 保存前に必ず接続検証し、成功したものだけ確定する — この関数
+ * 自体は検証済みの値を保存するだけで、検証は呼び出し元
+ * app/actions/mercariSecret.tsのServer Action側が
+ * lib/listing/mercari/adapter.tsのvalidateMercariConnectionで先に行う)。
+ */
+export async function setMercariConnectionInSecretsManager(params: { token: string; clientName: string; clientVersion?: string }): Promise<void> {
+  const payload: MercariTokenSecretPayload = { configured: true, token: params.token, clientName: params.clientName, clientVersion: params.clientVersion };
   const secretString = JSON.stringify(payload);
 
   try {

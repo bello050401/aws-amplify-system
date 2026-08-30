@@ -14,7 +14,8 @@ import { SHIPPING_DURATIONS, shippingDurationLabel, shippingDurationToMercariVal
 import { internalStatusToMercariApiStatus } from "@/lib/listing/mercari/mapper/productStatus";
 import { resolveEffectiveListingFields, type ChannelListingRecord, type ListingDraftRecord } from "@/lib/listing/types";
 import { createMercariProduct } from "@/lib/listing/mercari/adapter";
-import { getMercariUserAgent, isMercariApiClientNameConfigured } from "@/lib/listing/mercari/endpoints";
+import { formatMercariUserAgent } from "@/lib/listing/mercari/endpoints";
+import { MercariApiError, classifyHttpStatus, classifyForbiddenError, classifyGraphQLErrors, isRetryableMercariErrorCode } from "@/lib/listing/mercari/errors";
 
 let failures = 0;
 let passes = 0;
@@ -211,37 +212,50 @@ async function testAdapterValidation() {
 
 // ── BELLO統合改修 master指示書(2026-08-29統合改修版) §7/§17根本修正:
 // 実際に報告されたHTTP 404の根本原因調査で判明した必須User-Agent
-// ヘッダ(lib/listing/mercari/endpoints.tsのgetMercariUserAgent)。
-// process.envを直接書き換えて検証する — このテストの前後で必ず元の
-// 値へ復元し、他のテスト・呼び出し元への副作用を残さない。 ───────────
+// ヘッダ。フォーマット自体(lib/listing/mercari/endpoints.tsの
+// formatMercariUserAgent)は副作用の無い純関数としてテストする —
+// 実際にどこから値を取得するか(Secrets Manager優先・環境変数フォール
+// バック、lib/listing/mercari/tokenAccess.tsのgetMercariUserAgent/
+// getMercariClientNameConfig)はAWSへ実際に触れるため、このアプリの
+// 他のAWS接続コード(getMercariAccessToken等)と同じ理由でここでは
+// ユニットテストしない — 接続確認画面での実際の保存・検証フロー経由
+// でのみ検証される。 ───────────────────────────────────────────────
 
-function testMercariUserAgent() {
-  const originalName = process.env.MERCARI_API_CLIENT_NAME;
-  const originalVersion = process.env.MERCARI_API_CLIENT_VERSION;
-  try {
-    delete process.env.MERCARI_API_CLIENT_NAME;
-    delete process.env.MERCARI_API_CLIENT_VERSION;
-    assertEqual(isMercariApiClientNameConfigured(), false, "getMercariUserAgent: isMercariApiClientNameConfigured is false when unset");
-    let threw = false;
-    try {
-      getMercariUserAgent();
-    } catch (err) {
-      threw = err instanceof Error && err.message.includes("MERCARI_API_CLIENT_NAME");
-    }
-    assertTrue(threw, "getMercariUserAgent: throws a CONFIG_REQUIRED error naming MERCARI_API_CLIENT_NAME when unset, instead of sending a fabricated value");
+function testFormatMercariUserAgent() {
+  assertEqual(formatMercariUserAgent("bello-inventory", "1.2.3"), "bello-inventory/1.2.3", "formatMercariUserAgent: joins clientName/version with a slash");
+  assertEqual(formatMercariUserAgent("bello-inventory"), "bello-inventory/0.0.0", "formatMercariUserAgent: defaults version to 0.0.0 per Mercari's own documented convention when omitted");
+}
 
-    process.env.MERCARI_API_CLIENT_NAME = "bello-inventory";
-    assertEqual(isMercariApiClientNameConfigured(), true, "getMercariUserAgent: isMercariApiClientNameConfigured is true once set");
-    assertEqual(getMercariUserAgent(), "bello-inventory/0.0.0", "getMercariUserAgent: defaults VERSION to 0.0.0 per Mercari's own documented convention when unset");
+// ── BELLO統合業務OS指示書(2026-08-30) §29/§90: Mercariエラー分類
+// (lib/listing/mercari/errors.ts)。 ─────────────────────────────────────
 
-    process.env.MERCARI_API_CLIENT_VERSION = "1.2.3";
-    assertEqual(getMercariUserAgent(), "bello-inventory/1.2.3", "getMercariUserAgent: uses MERCARI_API_CLIENT_VERSION when set");
-  } finally {
-    if (originalName === undefined) delete process.env.MERCARI_API_CLIENT_NAME;
-    else process.env.MERCARI_API_CLIENT_NAME = originalName;
-    if (originalVersion === undefined) delete process.env.MERCARI_API_CLIENT_VERSION;
-    else process.env.MERCARI_API_CLIENT_VERSION = originalVersion;
-  }
+function testMercariErrorClassification() {
+  assertEqual(classifyHttpStatus(401), "AUTH_FAILED", "classifyHttpStatus: 401 -> AUTH_FAILED");
+  assertEqual(classifyHttpStatus(403), "AUTH_FAILED", "classifyHttpStatus: 403 defaults to AUTH_FAILED (classifyForbiddenError refines further)");
+  assertEqual(classifyHttpStatus(429), "RATE_LIMITED", "classifyHttpStatus: 429 -> RATE_LIMITED");
+  assertEqual(classifyHttpStatus(500), "UNKNOWN_REMOTE_ERROR", "classifyHttpStatus: 5xx -> UNKNOWN_REMOTE_ERROR (retryable)");
+  assertEqual(classifyHttpStatus(404), "UNKNOWN_REMOTE_ERROR", "classifyHttpStatus: 404 (the historically-reported bug) falls back to UNKNOWN_REMOTE_ERROR, not a guessed specific cause");
+
+  assertEqual(classifyForbiddenError("Access denied: IP address not allowed"), "IP_NOT_ALLOWED", "classifyForbiddenError: recognizes an IP-restriction message");
+  assertEqual(classifyForbiddenError("Forbidden"), "AUTH_FAILED", "classifyForbiddenError: a generic 403 without IP wording stays AUTH_FAILED");
+
+  assertEqual(classifyGraphQLErrors([{ message: "Unauthenticated request" }]), "AUTH_FAILED", "classifyGraphQLErrors: recognizes an auth-related message");
+  assertEqual(
+    classifyGraphQLErrors([{ message: "bad request", extensions: { code: "RATE_LIMITED" } }]),
+    "RATE_LIMITED",
+    "classifyGraphQLErrors: reads extensions.code when present",
+  );
+  assertEqual(classifyGraphQLErrors([{ message: "price must be a positive integer" }]), "REMOTE_VALIDATION_ERROR", "classifyGraphQLErrors: an ordinary input error defaults to REMOTE_VALIDATION_ERROR");
+
+  assertTrue(isRetryableMercariErrorCode("RATE_LIMITED"), "isRetryableMercariErrorCode: RATE_LIMITED is retryable");
+  assertTrue(isRetryableMercariErrorCode("NETWORK_ERROR"), "isRetryableMercariErrorCode: NETWORK_ERROR is retryable");
+  assertTrue(!isRetryableMercariErrorCode("CONFIG_REQUIRED"), "isRetryableMercariErrorCode: CONFIG_REQUIRED is not retryable (retrying can't fix missing config)");
+  assertTrue(!isRetryableMercariErrorCode("AUTH_FAILED"), "isRetryableMercariErrorCode: AUTH_FAILED is not retryable");
+
+  const err = new MercariApiError("AUTH_FAILED", "HTTP 401: invalid token");
+  assertEqual(err.code, "AUTH_FAILED", "MercariApiError: exposes the classified code");
+  assertTrue(err.message.includes("認証に失敗"), "MercariApiError: user-facing message uses the Japanese category label");
+  assertTrue(err.causeMessage.includes("HTTP 401"), "MercariApiError: technical detail is kept separately in causeMessage");
 }
 
 async function main() {
@@ -251,7 +265,8 @@ async function main() {
   testProductStatusMapper();
   testResolveEffectiveListingFields();
   await testAdapterValidation();
-  testMercariUserAgent();
+  testFormatMercariUserAgent();
+  testMercariErrorClassification();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
