@@ -6,6 +6,15 @@ import type { InventoryExtendedFields } from "./extendedFields";
 import { effectiveListThumbnailKey, normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
 import { resolveDisplayInventoryId } from "./inventoryId";
 import { evaluateQuery, matchesQuickSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
+import {
+  isE2EFixtureModeActive,
+  E2E_CATEGORIES,
+  E2E_LOCATIONS,
+  E2E_STATUSES,
+  E2E_CUSTOM_FIELD_DEFS,
+  e2eListPage,
+  e2eInventoryDetail,
+} from "./e2eFixtures";
 
 type InventoryModel = Schema["Inventory"]["type"];
 
@@ -187,6 +196,13 @@ function toExtendedFields(item: InventoryModel): ExtendedFieldsAsNullable {
  * のコメントに明記済み。
  */
 export async function listInventory(filters: InventoryListFilters, options: { offset: number; limit: number }): Promise<SearchPage<InventoryListRow>> {
+  // 第五ラウンド§7/P1-A: e2eFixtures.tsの安全ゲート参照(NODE_ENV!==
+  // "production" AND 明示的opt-in環境変数——実デプロイでは構造的に
+  // 絶対に成立しない)。Playwright E2Eが実際の保護されたルート
+  // (このファイルの各関数を実際に呼ぶ本物のpage.tsx/layout.tsx)を
+  // 本物のブラウザで描画するために、DB読み取りだけをこのfixtureへ
+  // 差し替える——書き込み系には一切適用しない。
+  if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit);
   const conditions: Record<string, unknown>[] = [];
   // 複数カテゴリはOR条件（いずれかに一致）、他の条件とはAND — spec §9。
   if (filters.categoryIds && filters.categoryIds.length > 0) {
@@ -306,6 +322,7 @@ export async function listInventorySimpleSearch(
   filters: InventoryListFilters,
   options: { offset: number; limit: number },
 ): Promise<SearchPage<InventoryListRow>> {
+  if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const conditions: Record<string, unknown>[] = [];
   if (filters.categoryIds && filters.categoryIds.length > 0) {
     conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
@@ -336,6 +353,7 @@ export async function listInventoryAdvanced(
   fieldsByKey: Map<string, SearchFieldDef>,
   options: { offset: number; limit: number },
 ): Promise<SearchPage<InventoryListRow>> {
+  if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const all = await fetchAllInventoryRecords();
   const filtered = all.filter((r) => evaluateQuery(r as unknown as SearchableRecord, query, fieldsByKey));
 
@@ -362,6 +380,7 @@ export interface InventoryDetail extends InventoryListRow, ExtendedFieldsAsNulla
 }
 
 export async function getInventoryDetail(id: string): Promise<InventoryDetail | null> {
+  if (isE2EFixtureModeActive()) return e2eInventoryDetail(id); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const { data: item } = await serverDataClient.models.Inventory.get({ id }, inventoryAuthMode);
   if (!item || item.deletedAt) return null;
 
@@ -425,6 +444,7 @@ export interface MasterOption {
  * a user could newly pick some other way.
  */
 export async function listCategories(includeInactiveId?: string | null): Promise<MasterOption[]> {
+  if (isE2EFixtureModeActive()) return E2E_CATEGORIES; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const { data } = await serverDataClient.models.Category.list({
     filter: { isActive: { eq: true } },
     ...inventoryAuthMode,
@@ -443,6 +463,7 @@ export async function listCategories(includeInactiveId?: string | null): Promise
 }
 
 export async function listLocations(includeInactiveId?: string | null): Promise<MasterOption[]> {
+  if (isE2EFixtureModeActive()) return E2E_LOCATIONS; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const { data } = await serverDataClient.models.Location.list({
     filter: { isActive: { eq: true } },
     ...inventoryAuthMode,
@@ -495,6 +516,7 @@ export interface StatusOption {
 }
 
 export async function listStatuses(): Promise<StatusOption[]> {
+  if (isE2EFixtureModeActive()) return E2E_STATUSES; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const { data } = await serverDataClient.models.StatusMaster.list({
     filter: { isActive: { eq: true } },
     ...inventoryAuthMode,
@@ -539,6 +561,7 @@ function toCustomFieldDefinitionRow(f: {
 
 /** 新規登録/編集フォーム・検索・Import/Export等、実際にユーザーへ入力・表示させる側が使う — 無効化された追加項目は含まない。 */
 export async function listCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
+  if (isE2EFixtureModeActive()) return E2E_CUSTOM_FIELD_DEFS; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const { data } = await serverDataClient.models.CustomFieldDefinition.list({
     filter: { isActive: { eq: true } },
     ...inventoryAuthMode,

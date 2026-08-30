@@ -6,21 +6,33 @@ import { getUrl } from "aws-amplify/storage";
 const RETRY_DELAYS_MS = [400, 1200]; // total ≤3 attempts
 
 /**
- * Resolves an `inventory/*` Storage key to a viewable URL client-side.
- * Extracted out of InventoryThumbnail once the detail page's image
- * gallery (InventoryImageGallery.tsx) needed the same resolution logic
- * for its large hero/lightbox view, not just small thumbnails.
+ * 第五ラウンド§7/§43(P0-C性能監査で発覚): このhookは元々
+ * storageKeyごとに完全に独立した`getUrl()`呼び出しをコンポーネントの
+ * mountのたびに行っていた — 一覧ページの各行が別々のInventoryThumbnail
+ * インスタンスであるため、50件表示なら初回描画で最大50並列の
+ * signed URL生成が走り、かつ「一覧→詳細→戻る」で同じ一覧ページへ
+ * 戻った際も、Reactがコンポーネントツリーを再マウントすれば
+ * (Next.js App RouterのRouter Cacheが効かない場合)全く同じ50件分を
+ * もう一度生成し直していた。
  *
- * Retries a couple of times on failure rather than giving up after one
- * rejection: `getUrl()` needs the Identity Pool credentials behind the
- * signed-in user's Cognito session, and on a fresh page load those can
- * still be mid-restoration when the first attempt fires. A genuine
- * permission/missing-object problem still ends in `failed: true` once
- * retries are exhausted and logs the real error — this only smooths over
- * that startup race.
+ * 対象オブジェクトは呼び出し元コメントの通りキー自体が不変(新規
+ * アップロードは常に新しいUUIDキー)なので、signed URLの署名内容
+ * (パス)自体はいつ生成しても同じだが、**URLの有効期限だけは時間
+ * 経過で切れる**(Amplify Storageの`getUrl`既定expiresIn=900秒)。
+ * そのため「無期限にキャッシュしてよい」わけではなく、期限切れの
+ * 恐れが無い範囲(既定の900秒よりはっきり短い10分=600秒)だけ
+ * モジュールスコープのMapで共有することで、同一セッション内で複数
+ * コンポーネントインスタンス/再マウントをまたいで再署名コストを
+ * 避ける——ページを再読み込みすれば自然に空になる(永続化しない、
+ * 単なるその場のメモリキャッシュ)。
  */
+const URL_CACHE_TTL_MS = 10 * 60 * 1000;
+const urlCache = new Map<string, { url: string; expiresAt: number }>();
+
 export function useInventoryImageUrl(storageKey: string | null): { url: string | null; failed: boolean } {
-  const [url, setUrl] = useState<string | null>(null);
+  const cached = storageKey ? urlCache.get(storageKey) : undefined;
+  const cachedFresh = cached && cached.expiresAt > Date.now() ? cached.url : null;
+  const [url, setUrl] = useState<string | null>(cachedFresh);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -29,6 +41,13 @@ export function useInventoryImageUrl(storageKey: string | null): { url: string |
       setFailed(false);
       return;
     }
+    const hit = urlCache.get(storageKey);
+    if (hit && hit.expiresAt > Date.now()) {
+      setUrl(hit.url);
+      setFailed(false);
+      return;
+    }
+
     let cancelled = false;
     setUrl(null);
     setFailed(false);
@@ -49,7 +68,10 @@ export function useInventoryImageUrl(storageKey: string | null): { url: string |
         options: { cacheControl: "public, max-age=31536000, immutable" },
       })
         .then(({ url }) => {
-          if (!cancelled) setUrl(url.toString());
+          if (cancelled) return;
+          const resolved = url.toString();
+          urlCache.set(storageKey, { url: resolved, expiresAt: Date.now() + URL_CACHE_TTL_MS });
+          setUrl(resolved);
         })
         .catch((err) => {
           if (cancelled) return;

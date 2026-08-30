@@ -23,7 +23,45 @@ export type InventorySessionStatus =
  * and EDITOR), ADMIN wins — there is no scenario where a user should be
  * treated as less privileged than a group they actually hold.
  */
+/**
+ * 第五ラウンド§7/P1-A: Playwright E2E専用の、明示的opt-inかつ二重ゲート
+ * 付きの認証bypass。
+ *
+ * 【安全設計、必ずこの順で読むこと】
+ *   1. `process.env.NODE_ENV !== "production"`——AWS Amplify Hostingの
+ *      SSRコンピュートはNext.jsの標準挙動により常にNODE_ENV=production
+ *      で実行される(`next start`が強制する、Amplify Hosting固有の
+ *      設定ではなくNext.js自体の挙動)。つまり実際にデプロイされた
+ *      環境では、下の環境変数を誤って設定してもこの分岐は構造的に
+ *      絶対に通らない——ここが最初かつ最強の防御線。
+ *   2. `INVENTORY_E2E_AUTH_TOKEN`環境変数——16文字以上の秘密トークン。
+ *      ローカルの`npm run test:e2e`(playwright.config.tsが`.env.test`
+ *      相当から読む)だけが設定する。amplify.yml/Amplify Console環境
+ *      変数には一切記載しない。
+ *   3. さらにCookie(`__inv_e2e_role`)の値が`${role}:${token}`と完全
+ *      一致する必要がある——tokenが未設定(=本番)ならこの比較は
+ *      `undefined`との比較になり、どんなCookie値を攻撃者が設定しても
+ *      絶対に一致しない。
+ * 3つとも同時に成立しない限り、この関数は実Cognitoチェックへ
+ * フォールスルーする——既存の認可ロジックには一切手を加えていない。
+ */
+function getE2EBypassRole(): InventoryRole | null {
+  if (process.env.NODE_ENV === "production") return null;
+  const token = process.env.INVENTORY_E2E_AUTH_TOKEN;
+  if (!token || token.length < 16) return null;
+  const raw = cookies().get("__inv_e2e_role")?.value;
+  if (!raw) return null;
+  const separatorIndex = raw.indexOf(":");
+  if (separatorIndex < 0) return null;
+  const role = raw.slice(0, separatorIndex);
+  const suppliedToken = raw.slice(separatorIndex + 1);
+  if (suppliedToken !== token) return null;
+  return (INVENTORY_ROLES as string[]).includes(role) ? (role as InventoryRole) : null;
+}
+
 export async function getInventorySessionStatus(): Promise<InventorySessionStatus> {
+  const bypassRole = getE2EBypassRole();
+  if (bypassRole) return { kind: "authorized", role: bypassRole };
   try {
     return await runWithAmplifyServerContext({
       nextServerContext: { cookies },
