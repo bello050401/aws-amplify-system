@@ -43,6 +43,8 @@ export default function InventoryLoginPage({ searchParams }: InventoryLoginPageP
   );
   const [submitting, setSubmitting] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
+  /** 別のアプリ側で有効なセッションを持っている状態。勝手に切らず、案内だけ出す。 */
+  const [signedInElsewhere, setSignedInElsewhere] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,8 +57,22 @@ export default function InventoryLoginPage({ searchParams }: InventoryLoginPageP
         return;
       }
       if (status === "signed-in-not-authorized") {
+        // ここで signOut() を呼んではいけない。
+        //
+        // このアプリは在庫管理(/inventory)と管理画面(/admin)の2つを載せて
+        // おり、Cognitoのセッションは両者で共有されている。以前はここで
+        // 無条件にサインアウトしていたため、**片方に正常ログインしている
+        // 利用者が、もう片方のログイン画面を開いただけでセッションを失う**
+        // 状態だった。ルート(/)は/adminへ転送されるので、在庫管理を使って
+        // いる人がドメインを直打ち・ブックマークから開くだけで踏む
+        // (実際にこの監査中、refresh tokenが revoked になって作業中の
+        //  セッションが切れた)。
+        //
+        // 権限が無いことを伝えるだけにして、いま使える画面への導線を出す。
+        // 別アカウントで入り直したい場合だけ、明示的にボタンを押して
+        // サインアウトしてもらう。
         setError(NOT_AUTHORIZED_MESSAGE);
-        await signOut();
+        setSignedInElsewhere(true);
       }
       if (!cancelled) setCheckingSession(false);
     })();
@@ -145,6 +161,26 @@ export default function InventoryLoginPage({ searchParams }: InventoryLoginPageP
             />
           </div>
           {error && <p className="mt-4 text-xs text-red-600">{error}</p>}
+          {signedInElsewhere && (
+            /* 別アプリ側の有効なセッションを保ったまま案内する。
+               「別のアカウントでログイン」を押したときだけサインアウトする。 */
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+              <a href="/admin" className="font-bold underline">
+                管理画面へ戻る
+              </a>
+              <button
+                type="button"
+                onClick={async () => {
+                  await signOut();
+                  setSignedInElsewhere(false);
+                  setError(null);
+                }}
+                className="text-gray-500 underline hover:text-gray-900"
+              >
+                別のアカウントでログインする
+              </button>
+            </div>
+          )}
           <button
             type="submit"
             disabled={submitting}
@@ -182,6 +218,26 @@ export default function InventoryLoginPage({ searchParams }: InventoryLoginPageP
             </div>
           </div>
           {error && <p className="mt-4 text-xs text-red-600">{error}</p>}
+          {signedInElsewhere && (
+            /* 別アプリ側の有効なセッションを保ったまま案内する。
+               「別のアカウントでログイン」を押したときだけサインアウトする。 */
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+              <a href="/admin" className="font-bold underline">
+                管理画面へ戻る
+              </a>
+              <button
+                type="button"
+                onClick={async () => {
+                  await signOut();
+                  setSignedInElsewhere(false);
+                  setError(null);
+                }}
+                className="text-gray-500 underline hover:text-gray-900"
+              >
+                別のアカウントでログインする
+              </button>
+            </div>
+          )}
           <button
             type="submit"
             disabled={submitting}
