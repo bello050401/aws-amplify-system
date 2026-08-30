@@ -94,6 +94,7 @@ function createBenchmarkPort(existingCount: number, masterCategoryCount: number,
   const store = new Map<string, InventoryModel & { sourceInventoryId: string }>();
   const categories = new Map<string, string>();
   const locations = new Map<string, string>();
+  const claimedLinks = new Map<string, string>(); // sourceInventoryId -> inventoryId(ZaicoSourceLinkのin-memory模倣)
   let nextId = 1;
   let nextSku = 1;
 
@@ -175,10 +176,24 @@ function createBenchmarkPort(existingCount: number, masterCategoryCount: number,
     async createInventory(input: NewInventoryInput) {
       sim.dbWrites++;
       sim.dbWriteMs += SIM.dbOpBaseMs;
-      const id = `inv-${nextId++}`;
-      const record = { id, ...input } as unknown as InventoryModel;
-      store.set(id, record as InventoryModel & { sourceInventoryId: string });
+      // input.idはclaimSourceLinkで既に確保済み(実装と同じ規約) — この
+      // 関数がidを新規発行することはない。
+      const record = { ...input } as unknown as InventoryModel;
+      store.set(input.id, record as InventoryModel & { sourceInventoryId: string });
       return record;
+    },
+    async claimSourceLink(sourceInventoryId, inventoryId) {
+      sim.dbWrites++;
+      sim.dbWriteMs += SIM.dbOpBaseMs;
+      const existing = claimedLinks.get(sourceInventoryId);
+      if (existing !== undefined) return { claimed: false, existingInventoryId: existing };
+      claimedLinks.set(sourceInventoryId, inventoryId);
+      return { claimed: true };
+    },
+    async releaseSourceLink(sourceInventoryId) {
+      sim.dbWrites++;
+      sim.dbWriteMs += SIM.dbOpBaseMs;
+      claimedLinks.delete(sourceInventoryId);
     },
     async updateInventory(input: UpdateInventoryInput) {
       sim.dbWrites++;

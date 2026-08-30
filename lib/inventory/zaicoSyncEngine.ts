@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
 import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
 import { ALL_EXTENDED_FIELDS } from "./extendedFields";
@@ -85,6 +86,20 @@ export function parseCustomFields(raw: unknown): Record<string, unknown> | null 
 // ── masters.tsから複製した純粋関数 ────────────────────────────────────
 export function normalizeMasterName(name: string): string {
   return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11: `ZaicoSourceLink`
+ * (amplify/data/resource.tsのモデルコメント参照)の主キー`id`を組み立てる
+ * 純粋関数。Next.js側(zaicoSyncPorts.ts)とLambda側
+ * (amplify/functions/zaico-sync-worker/lambdaSyncPort.ts、生DynamoDB)
+ * の両方の`ZaicoSyncPort`実装がこれを共有することで、どちらの経路で
+ * claimしても同じ`id`に収束する(=同じsourceInventoryIdなら必ず同じ
+ * 行を奪い合う)ことを保証する——1箇所だけ別の組み立て方をすると、
+ * この一意性保証自体が意味を成さなくなるため、複製せず共有必須。
+ */
+export function buildZaicoSourceLinkId(sourceSystem: string, sourceInventoryId: string): string {
+  return `${sourceSystem}#${sourceInventoryId}`;
 }
 
 export interface ZaicoSyncItemResult {
@@ -204,8 +219,50 @@ export async function syncOneZaicoItem(
   let locationCreated = false;
 
   try {
-    const existing = prefetched ? (prefetched.get(sourceInventoryId) ?? null) : await port.findExistingBySourceId(sourceInventoryId);
-    const isNewRecord = existing === null;
+    let existing = prefetched ? (prefetched.get(sourceInventoryId) ?? null) : await port.findExistingBySourceId(sourceInventoryId);
+    let isNewRecord = existing === null;
+
+    // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.7:
+    // 「検索して無ければcreate」というアプリ側の判定だけでは、直前の
+    // findExistingBySourceId呼び出しの後・実際のInventory.create()の前に
+    // 別の同期(同時実行/二重クリック/resumeとretryの重複起動)が同じ
+    // sourceInventoryIdを既にcreate済みだった場合、二重作成され得る
+    // (実データで確認されたZAICO在庫ID重複の実害候補の1つ)。
+    //
+    // 新規作成と判定した時点で、実際にInventoryを作る前にこの
+    // sourceInventoryIdをDB層で原子的にclaimする——`port.claimSourceLink`
+    // はAmplifyのcreateミューテーションが標準で行う条件付き書き込み
+    // (対象idが未存在の場合のみ成功)を利用しており、同じ
+    // sourceInventoryIdに対して2箇所が同時にclaimしようとしても片方
+    // しか成功しない。claimに失敗した側は「自分より先に誰かが本当に
+    // このsourceInventoryIdを保持している」ことが確定するので、新規
+    // 作成をやめてその既存レコードへのupdate経路へ安全に切り替える
+    // ——これによりcreate自体は決して2回実行されない。
+    let claimedInventoryId: string | null = null;
+    if (isNewRecord) {
+      claimedInventoryId = randomUUID();
+      const claim = await port.claimSourceLink(sourceInventoryId, claimedInventoryId);
+      if (!claim.claimed) {
+        claimedInventoryId = null;
+        // claim済みの行が指す実際のInventoryを取り直す——findExistingBySourceId
+        // はリンクが存在すればO(1)のget経由でこれを見つけられる(ここでは
+        // 必ずリンクが存在する状態になっているため、直前の呼び出しがまだ
+        // リンクを見ていなかった場合でも今度は確実に見つかる)。
+        existing = await port.findExistingBySourceId(sourceInventoryId);
+        isNewRecord = existing === null;
+        if (isNewRecord) {
+          // 理論上到達しないはずの経路(claim失敗=既に誰かがこの
+          // sourceInventoryIdを保持しているはずなのに、そのInventory
+          // レコード自体が見つからない——リンクだけが残った不整合な
+          // 状態、例えば以前のcreate失敗時に補償削除が失敗した場合等)。
+          // 安全側に倒し、詳細なエラーを返して手動確認を促す
+          // (「不整合なまま強引に作り直す」ことはしない)。
+          throw new Error(
+            `ZAICO在庫ID ${sourceInventoryId} の重複防止リンクは存在しますが、参照先のInventoryレコードが見つかりません(不整合な状態です)。管理者による確認が必要です。`,
+          );
+        }
+      }
+    }
 
     const { fields: core, warnings: coreWarnings } = mapZaicoCoreFields(zaicoItem);
     warnings.push(...coreWarnings);
@@ -289,18 +346,21 @@ export async function syncOneZaicoItem(
     }
 
     if (isNewRecord) {
+      const inventoryId = claimedInventoryId!; // isNewRecord===trueの場合、上のclaim処理で必ず設定済み
       let sku: string;
       try {
         sku = await port.generateSku();
       } catch (err) {
         if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
         if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
+        await port.releaseSourceLink(sourceInventoryId); // claim済みロックを解放——次回の再試行が「既に誰かが保持している」と誤判定しないようにする
         throw err;
       }
 
       let created: InventoryModel;
       try {
         created = await port.createInventory({
+          id: inventoryId, // claimSourceLinkで既に予約済みのidをそのまま使う(ZaicoSyncJobの単一行idと同じ「明示id指定create」パターン)
           sku,
           name: core.name,
           categoryId: categoryId ?? undefined,
@@ -322,6 +382,7 @@ export async function syncOneZaicoItem(
       } catch (err) {
         if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
         if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
+        await port.releaseSourceLink(sourceInventoryId); // 同上——create自体が失敗した場合もclaimを解放し、再試行を妨げない
         throw err;
       }
 

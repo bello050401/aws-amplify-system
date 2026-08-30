@@ -316,12 +316,19 @@ const categoryTable = backend.data.resources.tables["Category"];
 const locationTable = backend.data.resources.tables["Location"];
 const inventoryHistoryTable = backend.data.resources.tables["InventoryHistory"];
 const zaicoSyncJobTable = backend.data.resources.tables["ZaicoSyncJob"];
+// 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.7: ZAICO在庫ID
+// 重複作成の根本防止に使う原子的claim用テーブル
+// (amplify/data/resource.tsのZaicoSourceLinkモデルコメント参照)。
+// このLambda(1件同期のNext.js経路とは別のバックグラウンドworker)も
+// 同じテーブルへ書き込むため、Inventory本体と同じ粒度でgrantする。
+const zaicoSourceLinkTable = backend.data.resources.tables["ZaicoSourceLink"];
 
 inventoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 categoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 locationTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 inventoryHistoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 zaicoSyncJobTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+zaicoSourceLinkTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 backend.storage.resources.bucket.grantRead(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
 backend.storage.resources.bucket.grantPut(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
 backend.storage.resources.bucket.grantDelete(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
@@ -333,5 +340,6 @@ backend.zaicoSyncWorker.addEnvironment("CATEGORY_TABLE_NAME", categoryTable.tabl
 backend.zaicoSyncWorker.addEnvironment("LOCATION_TABLE_NAME", locationTable.tableName);
 backend.zaicoSyncWorker.addEnvironment("INVENTORY_HISTORY_TABLE_NAME", inventoryHistoryTable.tableName);
 backend.zaicoSyncWorker.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJobTable.tableName);
+backend.zaicoSyncWorker.addEnvironment("ZAICO_SOURCE_LINK_TABLE_NAME", zaicoSourceLinkTable.tableName);
 backend.zaicoSyncWorker.addEnvironment("STORAGE_BUCKET_NAME", backend.storage.resources.bucket.bucketName);
 backend.zaicoSyncWorker.addEnvironment("GENERATE_SKU_FUNCTION_NAME", backend.generateSku.resources.lambda.functionName);

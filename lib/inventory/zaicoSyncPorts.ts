@@ -5,6 +5,7 @@ import { findOrCreateMasterEntryByName } from "./masters";
 import { logInventoryHistory, type HistoryFieldChange } from "./history";
 import { downloadAndImportInventoryImage, removeInventoryImage } from "./imageServerOps";
 import type { InventoryImageRecord } from "./imageTypes";
+import { buildZaicoSourceLinkId } from "./zaicoSyncEngine";
 
 /**
  * Ports-and-adapters boundary for the ZAICO sync engine (BELLO統合改修
@@ -94,6 +95,8 @@ import type { InventoryImageRecord } from "./imageTypes";
 export type InventoryModel = Schema["Inventory"]["type"];
 
 export interface NewInventoryInput {
+  /** 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.7: claimSourceLinkで既に予約済みのid。Amplifyのcreateミューテーションはidを明示指定でき(ZaicoSyncJobの単一行idで既に使われている既存パターン)、これによりclaim〜実create間の窓を作らず、claim段階で確保したidをそのままInventoryの主キーにする。 */
+  id: string;
   sku: string;
   name: string;
   categoryId?: string;
@@ -147,6 +150,12 @@ export interface MasterCache {
   locations: Map<string, { id: string }>;
 }
 
+export interface ClaimSourceLinkResult {
+  claimed: boolean;
+  /** claimed=falseのとき、既にこのsourceInventoryIdを保持している既存Inventoryのid。 */
+  existingInventoryId?: string;
+}
+
 export interface ZaicoSyncPort {
   findExistingBySourceId(sourceInventoryId: string): Promise<InventoryModel | null>;
   /** One full scan of every ZAICO-managed BELLO record, keyed by sourceInventoryId - called once per sync run (Next.js: once per request; Lambda: once per batch tick), never once per item. */
@@ -160,6 +169,17 @@ export interface ZaicoSyncPort {
   /** BELLO統合改修 master指示書 Phase B: also returns the generated list-view thumbnail's key (null if generation failed — never fatal, see lib/inventory/thumbnail.ts). */
   downloadAndImportImage(url: string): Promise<{ storageKey: string; thumbnailKey: string | null; originalHash: string }>;
   removeImage(path: string): Promise<void>;
+  /**
+   * 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.7: DB層での
+   * 原子的な新規sourceInventoryId確保(ZaicoSourceLinkモデル、
+   * amplify/data/resource.tsのコメント参照)。同じsourceInventoryIdへ
+   * 2箇所が同時にclaimしようとしても片方しか成功しない
+   * (Amplifyのcreateミューテーションの標準的な条件付き書き込みを
+   * 利用——新規のDynamoDB直接操作パターンは導入していない)。
+   */
+  claimSourceLink(sourceInventoryId: string, inventoryId: string): Promise<ClaimSourceLinkResult>;
+  /** createInventory失敗時の補償操作 — 確保したclaimを解放し、再試行を妨げない(既存のimage cleanupと同じ「失敗したら後始末する」規約)。 */
+  releaseSourceLink(sourceInventoryId: string): Promise<void>;
 }
 
 /** Same scan semantics as lib/inventory/zaicoSync.ts's previous fetchAllZaicoManagedInventory - unchanged. */
@@ -191,11 +211,59 @@ async function serverFetchAllZaicoManaged(): Promise<Map<string, InventoryModel>
 export function createServerSyncPort(): ZaicoSyncPort {
   return {
     async findExistingBySourceId(sourceInventoryId) {
-      const { data } = await serverDataClient.models.Inventory.list({
-        filter: { and: [{ sourceSystem: { eq: "ZAICO" } }, { sourceInventoryId: { eq: sourceInventoryId } }] },
-        ...inventoryAuthMode,
-      });
-      return data.find((d) => !d.deletedAt) ?? null;
+      // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.3/§11.4:
+      // 実データで確認されたZAICO在庫ID重複("50666071"等)の根本原因
+      // ——以前はここが`Inventory.list({filter})`単発呼び出し(nextToken
+      // ループ無し)だった。sourceSystem/sourceInventoryIdはInventoryの
+      // GSIに含まれておらず、この呼び出しは実質DynamoDB Scan+
+      // FilterExpressionであり、単発呼び出しはテーブル全体ではなく
+      // 1回のレスポンスに収まる範囲しか走査しない——Inventoryが増える
+      // ほど、目的の行がこの範囲外に落ちて「既存が見つからない」と
+      // 誤判定し、新規重複作成する実害があった。
+      //
+      // 一次手段: ZaicoSourceLinkの主キー直接get(スキャン不要、常に
+      // 完全・即時)。リンクが存在しないレコード(このスキーマ変更より
+      // 前に同期された既存ZAICO商品)向けのフォールバックとして、
+      // 必ずnextTokenをループする完全スキャンを残す(このリポジトリの
+      // 他の全件走査——fetchAllInventoryRecords等——と同じ規約)。
+      const linkId = buildZaicoSourceLinkId("ZAICO", sourceInventoryId);
+      const { data: link } = await serverDataClient.models.ZaicoSourceLink.get({ id: linkId }, inventoryAuthMode);
+      if (link) {
+        const { data: inv } = await serverDataClient.models.Inventory.get({ id: link.inventoryId }, inventoryAuthMode);
+        if (inv && !inv.deletedAt) return inv;
+        // リンクは存在するが参照先が壊れている(手動削除等) — リンクを
+        // 信用せず、安全側のフォールバックスキャンへ進む。
+      }
+      let nextToken: string | null | undefined;
+      do {
+        const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+          filter: { and: [{ sourceSystem: { eq: "ZAICO" } }, { sourceInventoryId: { eq: sourceInventoryId } }] },
+          nextToken: nextToken ?? undefined,
+          ...inventoryAuthMode,
+        });
+        const hit = data.find((d) => !d.deletedAt);
+        if (hit) return hit;
+        nextToken = nt;
+      } while (nextToken);
+      return null;
+    },
+    async claimSourceLink(sourceInventoryId, inventoryId) {
+      const linkId = buildZaicoSourceLinkId("ZAICO", sourceInventoryId);
+      const { data: created, errors } = await serverDataClient.models.ZaicoSourceLink.create(
+        { id: linkId, sourceSystem: "ZAICO", sourceInventoryId, inventoryId },
+        inventoryAuthMode,
+      );
+      if (created && !errors) return { claimed: true };
+      // create失敗——文字列一致に頼らず、実際に既存行を読みに行くことで
+      // 「同時実行による既存claim」と「その他の予期しないエラー」を
+      // 区別する(予期しないエラーは握りつぶさずthrowする)。
+      const { data: existingLink } = await serverDataClient.models.ZaicoSourceLink.get({ id: linkId }, inventoryAuthMode);
+      if (existingLink) return { claimed: false, existingInventoryId: existingLink.inventoryId };
+      throw new Error(`ZAICO在庫ID ${sourceInventoryId} の重複防止claimに失敗しました: ${JSON.stringify(errors)}`);
+    },
+    async releaseSourceLink(sourceInventoryId) {
+      const linkId = buildZaicoSourceLinkId("ZAICO", sourceInventoryId);
+      await serverDataClient.models.ZaicoSourceLink.delete({ id: linkId }, inventoryAuthMode);
     },
     fetchAllZaicoManaged: serverFetchAllZaicoManaged,
     findOrCreateCategory: (name) => findOrCreateMasterEntryByName("Category", name),
@@ -208,6 +276,7 @@ export function createServerSyncPort(): ZaicoSyncPort {
     async createInventory(input) {
       const { data: created, errors } = await serverDataClient.models.Inventory.create(
         {
+          id: input.id,
           sku: input.sku,
           name: input.name,
           categoryId: input.categoryId,

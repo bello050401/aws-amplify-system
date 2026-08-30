@@ -10,6 +10,7 @@ import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
 import { ZaicoSyncPanel } from "./ZaicoSyncPanel";
+import { ZaicoDuplicateAuditPanel } from "./ZaicoDuplicateAuditPanel";
 import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 import { ListingPartitionBackfillPanel } from "./ListingPartitionBackfillPanel";
 import { MercariSettingsPanel } from "./MercariSettingsPanel";
@@ -140,7 +141,16 @@ export function SettingsTabs({
         {tab === "customFields" && <CustomFieldSettings fields={customFields} readOnly={readOnly} />}
         {/* 一覧表示設定の列候補には無効化された追加項目を含めない(新規登録/編集/詳細検索から消えるのと同じ扱い)。 */}
         {tab === "columns" && <ListColumnSettings customFieldDefs={customFields.filter((f) => f.isActive)} />}
-        {tab === "zaico" && isAdmin && <ZaicoSyncPanel zaicoConnected={zaicoConnected} zaicoTokenSource={zaicoTokenSource} />}
+        {tab === "zaico" && isAdmin && (
+          <div className="space-y-6">
+            <ZaicoSyncPanel zaicoConnected={zaicoConnected} zaicoTokenSource={zaicoTokenSource} />
+            {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11:
+                同期設定と同じZAICOタブへ配置する(新規タブは作らない)。 */}
+            <div className="border-t border-gray-200 pt-6">
+              <ZaicoDuplicateAuditPanel />
+            </div>
+          </div>
+        )}
         {tab === "images" && isAdmin && (
           <div className="space-y-6">
             <ThumbnailBackfillPanel />

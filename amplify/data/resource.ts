@@ -635,6 +635,62 @@ const schema = a.schema({
     ]),
 
   // ─────────────────────────────────────────────────────────────────────
+  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11: 実データで
+  // 確認された「同一ZAICO在庫ID(例: 50666071)がBELLO側で複数Inventory
+  // に紐付いている」重大不具合への根本対応。
+  //
+  // 根本原因(実装コードを読んで特定、推測ではない):
+  // `lib/inventory/zaicoSyncPorts.ts`の`findExistingBySourceId`は
+  // 「そのsourceInventoryIdを持つ既存Inventoryがあるか」を
+  // `Inventory.list({filter: {sourceSystem, sourceInventoryId}})`という
+  // **nextTokenページングの無い単発の`.list()`呼び出し**で判定していた
+  // ——sourceSystem/sourceInventoryIdはInventoryのGSIに含まれておらず
+  // (secondaryIndexesに無い)、この呼び出しは実質DynamoDB Scan+
+  // FilterExpressionであり、単発呼び出しは「テーブル全体」ではなく
+  // DynamoDBが1回のレスポンスで返せる範囲(≈1MB分の生item)しか走査
+  // しない。Inventoryが増えるほど、目的の行がこの1回の走査範囲外に
+  // 落ちる確率が上がり、「既存が見つからない」と誤判定→新規重複作成、
+  // という不具合を構造的に埋め込んでいた(このリポジトリの他の箇所
+  // ——`fetchAllInventoryRecords`/`serverFetchAllZaicoManaged`等——は
+  // 同じ理由から必ずnextTokenループで全件走査しており、この関数だけが
+  // 例外的にループを欠いていた)。
+  //
+  // 併せて指示書§11.7が要求する「DB層でのcreate二重防止」
+  // (アプリ側の「検索→無ければcreate」だけでは競合時に二重create
+  // し得る)にも対応する必要がある。
+  //
+  // この`ZaicoSourceLink`モデル1つで両方を解決する:
+  //   1. `id`をsourceSystem+sourceInventoryIdから決定的に組み立てる
+  //      (例: "ZAICO#50666071")ことで、`.get({id})`という**主キー直接
+  //      取得**(スキャン不要、常に完全・即時)がexisting判定の一次
+  //      手段になる——上記のスキャン欠落バグを構造的に再発不能にする。
+  //   2. Amplifyが生成する`create`ミューテーションは(AppSyncの標準
+  //      挙動として)対象`id`に対し`attribute_not_exists`相当の条件付き
+  //      書き込みを行う——同じ`id`で2回目の`create`は必ず失敗する。
+  //      これを「同じsourceInventoryIdの二重claim」を防ぐ排他ロックと
+  //      して使う(`lib/inventory/zaicoSyncPorts.ts`の
+  //      `claimSourceLink`参照)——新規のDynamoDB SDK直接操作は導入せず、
+  //      既存の`ZaicoSyncJob`が単一行id(`ZAICO_SYNC_JOB_SINGLETON_ID`)
+  //      で既に使っているのと全く同じ「決定的なcustom id」パターンの
+  //      応用に過ぎない。
+  //
+  // `inventoryId`は他の箇所(ListingDraft/ChannelListing等)と同じ
+  // フラットなID参照(belongsToリレーションではない)。
+  // ─────────────────────────────────────────────────────────────────────
+  ZaicoSourceLink: a
+    .model({
+      sourceSystem: a.string().required(), // 現状は"ZAICO"のみ。将来別ソースが増えても`id`の名前空間が衝突しないよう明示的に持つ
+      sourceInventoryId: a.string().required(),
+      inventoryId: a.string().required(), // → Inventory.id
+    })
+    .secondaryIndexes((index) => [index("inventoryId")]) // 逆引き(重複統合時、あるInventoryが持つlinkを消す/付け替える用途)
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read", "create", "update", "delete"]), // ZAICO同期の実行権限はADMIN限定(app/actions/zaicoSync.ts)だが、このモデル自体はInventory本体と同じ編集権限境界にしておく(将来の実行権限緩和に追従しやすくするため)
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  // ─────────────────────────────────────────────────────────────────────
   // BELLO統合改修 master指示書 Phase D: EC Listing / Mercari Shops連携。
   //
   // 絶対要件(spec): Inventory MasterへEC出品専用フィールドを一切混在

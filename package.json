@@ -26,6 +26,7 @@
     "benchmark:inventory-queries": "node scripts/with-server-only-stub.cjs scripts/benchmark-inventory-queries.ts",
     "verify:import": "node scripts/with-server-only-stub.cjs scripts/verify-import.ts",
     "verify:inventory-cursor": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-cursor.ts",
+    "verify:zaico-duplicate-audit": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-duplicate-audit.ts",
     "test:e2e": "playwright test",
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts"
   },

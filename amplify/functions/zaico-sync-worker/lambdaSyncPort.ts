@@ -1,11 +1,11 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, UpdateCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand, ScanCommand, GetCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { randomUUID, createHash } from "node:crypto";
 import sharp from "sharp";
-import type { ZaicoSyncPort, InventoryModel, NewInventoryInput, UpdateInventoryInput } from "@/lib/inventory/zaicoSyncPorts";
-import { normalizeMasterName } from "@/lib/inventory/zaicoSyncEngine";
+import type { ZaicoSyncPort, InventoryModel, NewInventoryInput, UpdateInventoryInput, ClaimSourceLinkResult } from "@/lib/inventory/zaicoSyncPorts";
+import { normalizeMasterName, buildZaicoSourceLinkId } from "@/lib/inventory/zaicoSyncEngine";
 
 /**
  * BELLO統合業務OS 第五ラウンド §4(P0-A): `ZaicoSyncPort`の
@@ -46,6 +46,7 @@ const INVENTORY_TABLE = process.env.INVENTORY_TABLE_NAME!;
 const CATEGORY_TABLE = process.env.CATEGORY_TABLE_NAME!;
 const LOCATION_TABLE = process.env.LOCATION_TABLE_NAME!;
 const INVENTORY_HISTORY_TABLE = process.env.INVENTORY_HISTORY_TABLE_NAME!;
+const ZAICO_SOURCE_LINK_TABLE = process.env.ZAICO_SOURCE_LINK_TABLE_NAME!;
 const STORAGE_BUCKET = process.env.STORAGE_BUCKET_NAME!;
 const GENERATE_SKU_FUNCTION_NAME = process.env.GENERATE_SKU_FUNCTION_NAME!;
 
@@ -53,12 +54,76 @@ const THUMBNAIL_MAX_DIMENSION = 320; // lib/inventory/thumbnail.tsと同じ値(s
 const THUMBNAIL_JPEG_QUALITY = 72;
 
 async function findExistingBySourceId(sourceInventoryId: string): Promise<InventoryModel | null> {
-  // GSI無し(sourceInventoryIdは索引化されていない、docs/implementation-audit.mdの既知の技術的負債)
-  // ——Lambda側もhandler.tsのfetchAllZaicoManaged prefetchを必ず使う前提
-  // なので、この関数自体は単発同期(将来の拡張用)以外では呼ばれない。
-  const res = await ddb.send(new ScanCommand({ TableName: INVENTORY_TABLE, FilterExpression: "sourceSystem = :z AND sourceInventoryId = :sid", ExpressionAttributeValues: { ":z": "ZAICO", ":sid": sourceInventoryId } }));
-  const items = (res.Items ?? []) as InventoryModel[];
-  return items.find((i) => !i.deletedAt) ?? null;
+  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.3/§11.4: この
+  // 関数の以前の実装は`ScanCommand`を`ExclusiveStartKey`ループ無しで
+  // 一度だけ呼んでいた——「Lambda側はfetchAllZaicoManaged prefetchを
+  // 必ず使う前提なので単発同期以外では呼ばれない」という前提コメントが
+  // あったが、前提が崩れた場合(将来の呼び出し追加、または前提自体の
+  // 誤り)に備え、Next.js側(lib/inventory/zaicoSyncPorts.ts)と全く同じ
+  // 根治を行う: ZaicoSourceLinkの主キー直接get(スキャン不要)を一次
+  // 手段とし、リンクが無い既存レコード向けのフォールバックとして
+  // 必ずExclusiveStartKeyをループする完全スキャンを残す。
+  const linkId = buildZaicoSourceLinkId("ZAICO", sourceInventoryId);
+  const linkRes = await ddb.send(new GetCommand({ TableName: ZAICO_SOURCE_LINK_TABLE, Key: { id: linkId } }));
+  const link = linkRes.Item as { inventoryId?: string } | undefined;
+  if (link?.inventoryId) {
+    const invRes = await ddb.send(new GetCommand({ TableName: INVENTORY_TABLE, Key: { id: link.inventoryId } }));
+    const inv = invRes.Item as InventoryModel | undefined;
+    if (inv && !inv.deletedAt) return inv;
+    // リンクは存在するが参照先が壊れている — 安全側のフォールバックスキャンへ進む。
+  }
+  let lastEvaluatedKey: Record<string, unknown> | undefined;
+  do {
+    const res = await ddb.send(
+      new ScanCommand({
+        TableName: INVENTORY_TABLE,
+        FilterExpression: "sourceSystem = :z AND sourceInventoryId = :sid",
+        ExpressionAttributeValues: { ":z": "ZAICO", ":sid": sourceInventoryId },
+        ExclusiveStartKey: lastEvaluatedKey,
+      }),
+    );
+    const items = (res.Items ?? []) as InventoryModel[];
+    const hit = items.find((i) => !i.deletedAt);
+    if (hit) return hit;
+    lastEvaluatedKey = res.LastEvaluatedKey;
+  } while (lastEvaluatedKey);
+  return null;
+}
+
+/**
+ * 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.7: DB層での
+ * 原子的な新規sourceInventoryId確保。`lib/inventory/zaicoSyncPorts.ts`の
+ * `createServerSyncPort`版と全く同じ意味論(idが既に存在すれば失敗)を、
+ * 生DynamoDBの`ConditionExpression: "attribute_not_exists(id)"`付き
+ * `PutCommand`で実現する——AWS SDKが公式に文書化している標準的な
+ * 条件付き書き込みの失敗は`ConditionalCheckFailedException`という
+ * 決まった名前の例外になるため、エラーメッセージの文字列一致に頼る
+ * 必要がない。
+ */
+async function claimSourceLink(sourceInventoryId: string, inventoryId: string): Promise<ClaimSourceLinkResult> {
+  const id = buildZaicoSourceLinkId("ZAICO", sourceInventoryId);
+  try {
+    await ddb.send(
+      new PutCommand({
+        TableName: ZAICO_SOURCE_LINK_TABLE,
+        Item: { id, sourceSystem: "ZAICO", sourceInventoryId, inventoryId, createdAt: new Date().toISOString() },
+        ConditionExpression: "attribute_not_exists(id)",
+      }),
+    );
+    return { claimed: true };
+  } catch (err) {
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      const res = await ddb.send(new GetCommand({ TableName: ZAICO_SOURCE_LINK_TABLE, Key: { id } }));
+      const existingLink = res.Item as { inventoryId?: string } | undefined;
+      if (existingLink?.inventoryId) return { claimed: false, existingInventoryId: existingLink.inventoryId };
+    }
+    throw err;
+  }
+}
+
+async function releaseSourceLink(sourceInventoryId: string): Promise<void> {
+  const id = buildZaicoSourceLinkId("ZAICO", sourceInventoryId);
+  await ddb.send(new DeleteCommand({ TableName: ZAICO_SOURCE_LINK_TABLE, Key: { id } }));
 }
 
 async function fetchAllZaicoManaged(): Promise<Map<string, InventoryModel>> {
@@ -100,7 +165,10 @@ async function generateSku(): Promise<string> {
 }
 
 async function createInventory(input: NewInventoryInput): Promise<InventoryModel> {
-  const id = randomUUID();
+  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.7: idはこの
+  // 関数が新規発行するのではなく、claimSourceLinkで既に確保済みの
+  // input.idをそのまま使う——claim〜実createの間に窓を作らない。
+  const id = input.id;
   const now = new Date().toISOString();
   const item: Record<string, unknown> = {
     id,
@@ -240,6 +308,8 @@ export function createLambdaSyncPort(): ZaicoSyncPort {
     logHistory,
     downloadAndImportImage,
     removeImage,
+    claimSourceLink,
+    releaseSourceLink,
   };
 }
 
