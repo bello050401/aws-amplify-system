@@ -600,7 +600,14 @@ const schema = a.schema({
   // 既存の道だけ)。これはコード構造上の分離であり、このschema定義
   // 自体もそれを裏付ける — ListingDraft/ChannelListingのどちらも
   // Inventoryモデルのフィールドを一切変更しない、独立したモデル。
-  ListingChannel: a.enum(["MERCARI_SHOPS"]), // 現時点でMercari Shopsのみ。将来チャネル追加時はここへ値を足すだけ
+  // BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASE
+  // (thebase.in)を「別システムだから」という理由で対象外にしない —
+  // BASEは商品作成(items/add)・商品編集(items/edit)を公式に提供する
+  // 実在の書き込み可能なAPIであることをWebSearchで確認済み
+  // (lib/listing/base/adapter.ts参照)。ChannelListing.channelへ
+  // "BASE"を追加するだけで、既存のListingDraft/ChannelListing設計
+  // (1つのInventory×複数チャネル)がそのまま両チャネルに対応する。
+  ListingChannel: a.enum(["MERCARI_SHOPS", "BASE"]),
 
   ListingCondition: a.enum(["NEW", "LIKE_NEW", "NO_NOTABLE_DAMAGE", "SLIGHT_DAMAGE", "DAMAGE", "BAD"]), // lib/listing/condition.tsの6段階と1対1 — Mercariの実際のcondition enum値は lib/listing/mercari/mapper/condition.ts が変換する(BELLOの内部語彙とMercari APIの語彙を分離)
 

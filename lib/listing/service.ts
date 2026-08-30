@@ -4,6 +4,8 @@ import { getInventoryDetail, listInventory } from "@/lib/inventory/queries";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { createMercariProduct, MercariApiError } from "./mercari/adapter";
+import { createBaseProduct } from "./base/adapter";
+import { BaseListingApiError } from "./base/errors";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import type {
   ChannelListingRecord,
@@ -560,6 +562,68 @@ export async function listOnMercari(
       inventoryAuthMode,
     );
     console.error(`[listOnMercari] inventoryId=${inventoryId} failed:`, err);
+    if (failed) return toChannelListingRecord(failed);
+    throw err;
+  }
+}
+
+/**
+ * BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASEへ実際に
+ *出品する。listOnMercariと同じ状態遷移パターン(PUBLISHING→ACTIVE/
+ * ERROR)だが、BASEの実API(items/add)はMercariと違いカテゴリー
+ * マッピング必須ではなく、画像も送らない(lib/listing/base/adapter.ts
+ * ファイル冒頭コメント参照 — 画像同期は今回未実装)。
+ */
+export async function listOnBase(inventoryId: string, who: string | null): Promise<ChannelListingRecord> {
+  const draft = await getListingDraftForInventory(inventoryId);
+  if (!draft) throw new Error("先に出品下書きを保存してください。");
+
+  const channelListing = await getChannelListing(inventoryId, "BASE");
+  if (!channelListing) throw new Error("先にBASEのチャネル設定を保存してください。");
+
+  if (channelListing.status === "ACTIVE" && channelListing.externalListingId) {
+    throw new Error(`既にBASEへ出品済みです（商品ID: ${channelListing.externalListingId}）。再出品（更新）は現時点では未対応の機能です。`);
+  }
+
+  const inventory = await getInventoryDetail(inventoryId);
+  if (!inventory) throw new Error("対象の在庫が見つかりません。");
+
+  const categoryNameOf = await loadCategoryNameLookup();
+  const categoryName = categoryNameOf(inventory.categoryId);
+  if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
+
+  await serverDataClient.models.ChannelListing.update({ id: channelListing.id, status: "PUBLISHING", updatedBy: who ?? undefined }, inventoryAuthMode);
+
+  try {
+    const result = await createBaseProduct({
+      draft,
+      overrideTitle: channelListing.overrideTitle,
+      overrideDescription: channelListing.overrideDescription,
+      overridePrice: channelListing.overridePrice,
+      quantity: inventory.quantity,
+    });
+    const nowIso = new Date().toISOString();
+    const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
+      {
+        id: channelListing.id,
+        status: "ACTIVE",
+        externalListingId: result.externalProductId,
+        firstListedAt: channelListing.firstListedAt ?? nowIso,
+        lastListedAt: nowIso,
+        lastError: undefined,
+        updatedBy: who ?? undefined,
+      },
+      inventoryAuthMode,
+    );
+    if (errors || !updated) throw new Error(`出品結果の保存に失敗しました: ${JSON.stringify(errors)}`);
+    return toChannelListingRecord(updated);
+  } catch (err) {
+    const message = err instanceof BaseListingApiError ? err.message : err instanceof Error ? err.message : "不明なエラー";
+    const { data: failed } = await serverDataClient.models.ChannelListing.update(
+      { id: channelListing.id, status: "ERROR", lastError: message, updatedBy: who ?? undefined },
+      inventoryAuthMode,
+    );
+    console.error(`[listOnBase] inventoryId=${inventoryId} failed:`, err);
     if (failed) return toChannelListingRecord(failed);
     throw err;
   }

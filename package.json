@@ -19,6 +19,7 @@
     "verify:messaging": "node scripts/with-server-only-stub.cjs scripts/verify-messaging.ts",
     "verify:shipping": "node scripts/with-server-only-stub.cjs scripts/verify-shipping.ts",
     "verify:line": "node scripts/with-server-only-stub.cjs scripts/verify-line.ts",
+    "verify:base": "node scripts/with-server-only-stub.cjs scripts/verify-base.ts",
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts"
   },
   "dependencies": {

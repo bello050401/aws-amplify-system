@@ -10,12 +10,14 @@ import {
   saveChannelOverride,
   saveListingDraft,
   listOnMercari,
+  listOnBase,
   type ChannelOverrideInput,
   type ListingDraftInput,
   type ListingOverviewRow,
 } from "@/lib/listing/service";
 import { fetchMercariCategories } from "@/lib/listing/mercari/adapter";
 import { isMercariConnected } from "@/lib/listing/mercari/tokenAccess";
+import { isBaseConnected } from "@/lib/base/oauth";
 import type { ChannelListingRecord, ListingDraftRecord, ShippingPayerCode } from "@/lib/listing/types";
 
 /**
@@ -67,6 +69,30 @@ export async function listOnMercariAction(inventoryId: string, shippingPayer: Sh
   const result = await listOnMercari(inventoryId, shippingPayer, who);
   revalidatePath(`/inventory/${inventoryId}/listing`);
   return result;
+}
+
+// BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASEチャネル用の
+// 対応するServer Action群 — Mercari用の上記と全く同じ権限境界。
+export async function getBaseChannelListingAction(inventoryId: string): Promise<ChannelListingRecord | null> {
+  return getChannelListing(inventoryId, "BASE");
+}
+
+export async function saveBaseChannelOverrideAction(inventoryId: string, input: ChannelOverrideInput): Promise<ChannelListingRecord> {
+  const who = await requireEditPermission();
+  const result = await saveChannelOverride(inventoryId, "BASE", input, who);
+  revalidatePath(`/inventory/${inventoryId}/listing`);
+  return result;
+}
+
+export async function listOnBaseAction(inventoryId: string): Promise<ChannelListingRecord> {
+  const who = await requireEditPermission();
+  const result = await listOnBase(inventoryId, who);
+  revalidatePath(`/inventory/${inventoryId}/listing`);
+  return result;
+}
+
+export async function isBaseConnectedAction(): Promise<boolean> {
+  return isBaseConnected();
 }
 
 /**

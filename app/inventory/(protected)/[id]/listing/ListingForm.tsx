@@ -14,6 +14,7 @@ import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 import { AutoPricingSection } from "./AutoPricingSection";
 import { ShippingEstimateSection } from "./ShippingEstimateSection";
+import { BaseListingSection } from "./BaseListingSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
@@ -425,6 +426,12 @@ export function ListingForm({
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
           AutoPricingSectionと同じ理由でChannelListing存在時のみ表示する。 */}
       {channelListing && <ShippingEstimateSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
+
+      {/* BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASEを
+          「別システムだから」と対象外にせず、Mercariと並列のチャネルと
+          して扱う。draftの有無だけを条件にする(BASEはMercariと違い
+          カテゴリーマッピング等の事前設定が必須ではないため)。 */}
+      <BaseListingSection inventoryId={inventoryId} hasDraft={Boolean(draft)} />
     </div>
   );
 }

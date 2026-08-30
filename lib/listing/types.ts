@@ -10,7 +10,7 @@
 
 import type { ShippingRank } from "../shipping/rank";
 
-export type ListingChannel = "MERCARI_SHOPS";
+export type ListingChannel = "MERCARI_SHOPS" | "BASE";
 
 export type ListingConditionCode = "NEW" | "LIKE_NEW" | "NO_NOTABLE_DAMAGE" | "SLIGHT_DAMAGE" | "DAMAGE" | "BAD";
 

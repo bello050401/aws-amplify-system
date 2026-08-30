@@ -51,7 +51,7 @@ export async function setAutoPricingForListingAction(inventoryId: string, input:
   return result;
 }
 
-export async function runPricingCheckAction(inventoryId: string): Promise<PricingCheckResult> {
+export async function runPricingCheckAction(inventoryId: string, channel: ChannelListingRecord["channel"] = "MERCARI_SHOPS"): Promise<PricingCheckResult> {
   const who = await requireEditPermission();
-  return runPricingCheck(inventoryId, who);
+  return runPricingCheck(inventoryId, who, channel);
 }

@@ -12,7 +12,7 @@
  * successを作らない)。
  */
 
-import type { ListingStatus } from "./types";
+import type { ListingChannel, ListingStatus } from "./types";
 
 export type PricingMarkdownType = "FIXED_AMOUNT" | "PERCENTAGE";
 export type PricingFloorMode = "FIXED_AMOUNT" | "PERCENTAGE_OF_ORIGINAL";
@@ -22,7 +22,7 @@ export interface PricingRuleRecord {
   id: string;
   name: string;
   enabled: boolean;
-  channel: "MERCARI_SHOPS";
+  channel: ListingChannel;
   startAfterDays: number;
   intervalDays: number;
   markdownType: PricingMarkdownType;

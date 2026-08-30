@@ -2,6 +2,9 @@ import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { getChannelListing } from "./service";
+import { updateBaseProduct } from "./base/adapter";
+import { BaseListingApiError } from "./base/errors";
+import type { ListingChannel } from "./types";
 import {
   calculateFloorPrice,
   calculateMarkdownPrice,
@@ -41,7 +44,7 @@ function toPricingRuleRecord(row: {
   id: string;
   name: string;
   enabled?: boolean | null;
-  channel: "MERCARI_SHOPS";
+  channel: ListingChannel;
   startAfterDays: number;
   intervalDays: number;
   markdownType: PricingMarkdownType;
@@ -186,18 +189,57 @@ export interface PricingCheckResult {
   executed: boolean;
   reason?: PricingSafetyBlockReason;
   wouldChangePriceTo?: number;
+  /** §6(第二次完全完遂指示): 実際に外部へ送信できた場合のエラーメッセージ(送信自体は成功したがレスポンス確認等で問題があった場合)。 */
+  externalError?: string;
 }
 
 /**
- * §17-20: 「今、値下げを実行して良いか」を判定し、safeな場合は
- * PriceHistoryへ記録する(ただし実際のMercari側価格変更は送信しない
- * — このファイル冒頭コメント参照)。実際にスケジューラから定期実行
- * される経路はまだ無く(§22 AWS-nativeスケジューラは今回未実装)、
- * 現状はUIからの手動テスト実行(「今すぐ価格チェックを実行」ボタン)
- * からのみ呼ばれる。
+ * §17-20/第二次完全完遂指示§6: 「今、値下げを実行して良いか」を判定し、
+ * safeな場合はPriceHistoryへ記録する。
+ *
+ * 【第二次ラウンドでの変更】Mercari Shopsのupdate系ミューテーション
+ * (updateProduct)は今回もWebSearchで複数の切り口(公式docs直接fetch、
+ * sandbox GraphQLエンドポイント、GitHub上の非公式クライアント2件の
+ * ソース確認)から再調査したが、`UpdateProductInput`に
+ * `shippingConfigurationId`/`channelListingScope`が存在することは
+ * 確認できたものの、price/status等の肝心のフィールド名までは確認
+ * できなかった([UNVERIFIED]のまま — 引き続きBLOCKED_BY_EXTERNAL_
+ * SERVICE、憶測でのフィールド名送信はしない)。
+ *
+ * 一方BASEは`items/edit`(price/stock/visible)の実フィールド名を確認
+ * 済み(lib/listing/base/adapter.ts参照)のため、BASEチャネルの
+ * ChannelListingに対しては実際にupdateBaseProductを呼び、成功すれば
+ * ChannelListing.currentPrice/markdownCount/lastPriceChangeAt/
+ * nextPriceActionAtを実際に更新する — 「判定のみ」から「実行」まで
+ * 到達した初めてのチャネル。
+ *
+ * 【§8 完全無人スケジュール実行について、今回の再調査結果】
+ * lib/inventory/zaicoSyncPorts.tsが既に検証済みの結論(Amplify Data
+ * @aws-amplify/data-schema@1.26.1で`allow.resource(fn)`が機能しない
+ * ため、Lambda等の非ブラウザ実行体からinventoryAuthMode
+ * (`authMode: "userPool"`)を要求するChannelListing/PricingRule等へ
+ * 安全に書き込む経路が無い)を、今回改めてnode_modules内の実際の型
+ * 定義(@aws-amplify/data-schema/dist/esm/Authorization.d.ts)を読んで
+ * 再確認した — Providers一覧は apiKey/identityPool/userPools/oidc/
+ * function の5つのみで、userPools系のgroup認可を無条件のIAM
+ * (Lambda実行ロール)から満たす手段は無い。「調べていないからBLOCKED」
+ * ではなく、型定義まで再確認した上でのBLOCKED_BY_EXTERNAL_SERVICE
+ * (Amplify Gen2側の既知の制約)。
+ *
+ * 生DynamoDB API経由(backend.data.resources.tables +
+ * grantReadWriteData、ZaicoSyncJobで検証済みの安全な適用範囲)は
+ * GSIを持たないテーブルへの読み書きでは安全に使えるが、ChannelListing
+ * はinventoryId/listingDraftIdのGSIを持つため、生DynamoDB
+ * PutItem/UpdateItemでGSI用computed属性を手書きすると
+ * 「一見成功するが一覧・検索から見えなくなる」実害リスクがあり、
+ * ライブAWS環境での検証なしに採用しない(zaicoSyncPorts.tsと同じ判断
+ * 基準)。そのため今回も新規のLambda/EventBridge基盤は追加していない
+ * — 未検証のまま「AWS background job実装済み」と称することの方が
+ * ユーザーにとって有害(§157)と判断した。現状はUIからの手動テスト
+ * 実行(「今すぐ価格チェックを実行」ボタン)からのみ呼ばれる。
  */
-export async function runPricingCheck(inventoryId: string, who: string | null): Promise<PricingCheckResult> {
-  const channelListing = await getChannelListing(inventoryId, "MERCARI_SHOPS");
+export async function runPricingCheck(inventoryId: string, who: string | null, channel: ListingChannel = "MERCARI_SHOPS"): Promise<PricingCheckResult> {
+  const channelListing = await getChannelListing(inventoryId, channel);
   if (!channelListing) throw new Error("対象のChannelListingが見つかりません。");
 
   const inventory = await getInventoryDetail(inventoryId);
@@ -230,6 +272,53 @@ export async function runPricingCheck(inventoryId: string, who: string | null): 
   const currentPrice = channelListing.currentPrice ?? 0;
   const floorPrice = channelListing.floorPrice ?? 0;
   const newPrice = rule ? calculateMarkdownPrice(currentPrice, rule, floorPrice) : currentPrice;
+
+  if (channel === "BASE" && channelListing.externalListingId) {
+    // §6: BASEは実フィールド名確認済みなので、実際に送信する。
+    let externalResult: string;
+    let executed = false;
+    let externalError: string | undefined;
+    try {
+      await updateBaseProduct({ itemId: channelListing.externalListingId, price: newPrice });
+      externalResult = `SUCCESS: BASE items/edit APIへ実際に価格変更(¥${currentPrice}→¥${newPrice})を送信しました。`;
+      executed = true;
+    } catch (err) {
+      externalResult = `FAILED: ${err instanceof BaseListingApiError ? err.message : err instanceof Error ? err.message : String(err)}`;
+      externalError = externalResult;
+    }
+
+    await serverDataClient.models.PriceHistory.create(
+      {
+        channelListingId: channelListing.id,
+        oldPrice: currentPrice,
+        newPrice,
+        reason: `自動値下げルール「${rule?.name ?? ""}」による定期値下げ`,
+        ruleId: rule?.id,
+        actor: "SYSTEM",
+        externalResult,
+        changedAt: new Date().toISOString(),
+      },
+      inventoryAuthMode,
+    );
+
+    if (executed) {
+      const nowIso = new Date().toISOString();
+      const nextAt = rule ? calculateNextPriceActionAt(rule, new Date(channelListing.firstListedAt ?? nowIso), new Date(nowIso)) : null;
+      await serverDataClient.models.ChannelListing.update(
+        {
+          id: channelListing.id,
+          currentPrice: newPrice,
+          markdownCount: channelListing.markdownCount + 1,
+          lastPriceChangeAt: nowIso,
+          nextPriceActionAt: nextAt?.toISOString(),
+          updatedBy: who ?? undefined,
+        },
+        inventoryAuthMode,
+      );
+    }
+
+    return { executed, reason: undefined, wouldChangePriceTo: newPrice, externalError };
+  }
 
   await serverDataClient.models.PriceHistory.create(
     {
