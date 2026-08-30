@@ -1,83 +1,766 @@
 import "server-only";
+import type { ShippingRank } from "./rank";
 
 /**
- * BELLO統合業務OS指示書(2026-08-30) §61-66: 家財おまかせ便の実料金
- * 調査結果と、このラウンドで投入した初期データについての記録。
+ * 家財おまかせ便 全国料金マスター(埼玉県発送)。
  *
- * 【実施した調査】(WebFetchはこのsandbox環境のegress proxyにより
- * antique-alver.com/www.rakuten.ne.jp等の候補サイトへ到達できず
- * EGRESS_BLOCKEDで失敗 — Mercari調査時と同じ制約)。WebSearch
- * (サーバー側フェッチ経由の要約を返す)で複数クエリを実行:
- *   - "家財おまかせ便 料金表 ランク SS S A B C D 円"
- *   - "アートセッティングデリバリー 家財おまかせ便 埼玉 発送 料金 円 税込"
- *   - "kazai_list.pdf ヤマト 関東 埼玉 Bランク Cランク Dランク 円"
- *   - "viviandcoco kazai.html 料金表 関東 Aランク..Gランク"
- *   - "raku1.co.jp 家財おまかせ便送料表 ランク 円"
- *   - "des-moa.com 家財おまかせ便 料金 ランク..."
+ * ## 出典
  *
- * 【確認できたこと】
- *   - ランクは3辺合計(cm)で9段階(SS〜G)、指示書§63の閾値と整合。
- *   - 発地/着地の都道府県(地域)によって同ランクでも金額が変わる
- *     (地域区分の詳細な線引きは確認できず — 都道府県単位の実例のみ)。
- *   - F/Gランクは地域限定配送で要事前確認、繁忙期加算が別途存在する
- *     (金額は未確認)。
- *   - 実例として、埼玉→東京のルートで:
- *       Bランク(3辺合計200cm以内) = ¥4,510(税込)
- *       Cランク(3辺合計250cm以内) = ¥7,740(税込)
- *     という具体的な数値がWebSearch要約から得られた
- *     (出典: WebSearchクエリ「アートセッティングデリバリー 家財おまか
- *     せ便 埼玉 発送 料金 円 税込」、2026-08-30に確認)。
+ * 利用者が提供した一次資料(2026-08-30の原始メモ)に含まれる公式料金
+ * 一覧をそのまま構造化したもの。「公式Web取得ができないのでこれで
+ * サイズと料金がすべて把握できるのでデータベースに入れて、この料金を
+ * 商品詳細に登録等の必要な時によびだせるようにしてください」という
+ * 依頼に対応する。
  *
- * 【確認できなかったこと(未実装の理由)】
- *   - 埼玉発の他ランク(SS/S/A/D/E/F/G)・他都道府県着の金額表全体。
- *   - 公式の料金検索ツール(form.008008.jp)はJavaScriptフォーム/
- *     セッション経由の動的な見積りツールであり、単純なURL fetchでは
- *     結果を取得できない(§117: 「単にHTTP errorだったから無理、と
- *     しない」を踏まえ複数クエリを試したが、このsandbox環境の
- *     WebFetchは候補サイトすべてでEGRESS_BLOCKEDとなり、フォーム入力
- *     を伴う実際のUIフローを辿る手段が無い)。
+ * それ以前のこのファイルは、公式サイトへのegressがブロックされていた
+ * 環境でWebSearchの要約から拾えた**2件だけ**(埼玉→東京のB/Cランク)を
+ * 持っていた。今回の一次資料はその2件と完全に一致しており、
+ * (東京 B=4,510円 / C=7,740円)、残りを推測で埋めずに待った判断が
+ * 正しかったことも同時に裏づけられた。
  *
- * 【第二次完全完遂指示(2026-08-30)での再調査】form.008008.jpへの
- * WebFetch直接試行(初期画面のフォーム構造・POSTパラメータ確認目的)を
- * 再度行ったが、同じくEGRESS_BLOCKEDで到達不可。追加のWebSearchで
- * 「北海道(道東・道北・札幌／千歳・函館の3エリア)＋46都道府県分の
- * 料金表が提供されている」こと(=表自体は存在し、当該47都道府県超の
- * 粒度で構成されていること)・地域区分が「地域Ⅰ〜Ⅺ」の11区分である
- * ことを追加確認したが、表の実数値(価格)はWebSearchの要約経由では
- * 取得できなかった(検索エンジンがJS動的レンダリングされた料金表の
- * 中身までは要約してくれないため)。技術的な取得手段(WebFetchの
- * egress許可)が無いことが根本原因であり、調査を怠ったためではない。
+ * ## 構造
  *
- * 【今回の対応】ShippingRateはDBマスタとして設計し(スキーマ・CRUD・
- * ルックアップロジックは完全に実装済み)、実データは上記で実際に確認
- * できた2件(埼玉→東京、B/Cランク)だけを検証済みとして投入する。
- * それ以外のランク・着地は空のまま(ADMINが設定画面から実際の料金
- * 検索結果を見ながら入力する運用 — sourceReference/verifiedAtを
- * 必須に近い形でUIに持たせているのはこのため)。憶測の金額を埋めて
- * 「実装完了」に見せかけることはしない(§157 fake success禁止)。
+ * - 発送元は常に埼玉県(§61、BELLOの所在地)。
+ * - 宛先は46都府県 + 北海道の4エリア(函館 / 札幌・千歳 / 道北 / 道東)
+ *   = 50。北海道だけは市区町村でエリアが変わるため
+ *   `HOKKAIDO_AREA_BY_MUNICIPALITY`で解決する。
+ * - ランクは3辺合計(cm)でSS〜Gの9段階。閾値は`SHIPPING_RANK_LIMIT_CM`。
+ * - **料金がnullの行は「0円」ではなく「その地域・ランクは取り扱い不可」**。
+ *   原資料で「----」と書かれている行(沖縄県のF/Gランク)がこれに当たる。
+ *   0円で埋めるとUIが「送料無料」と誤表示するため、必ずnullのまま扱う。
+ * - 金額は税込(原資料の表記が「料金（税込）」)。
  *
- * 完了報告での分類: 家財おまかせ便レート表本体はBLOCKED_BY_EXTERNAL_SERVICE
- * (公式料金検索ツールが動的フォームでこのsandbox環境から到達不可のため)
- * だが、上記2件のみ実際にWebSearchで確認できた値としてLOCAL_IMPLEMENTED
- * (ランク判定ロジック・マスタ管理・見積りUI・AI返信連携の枠組みは
- * すべて完成しており、料金データの拡充だけがADMIN作業として残る)。
+ * 全50宛先 × 9ランク = 450件。うち金額あり
+ * 448件、取り扱い不可
+ * 2件。
+ *
+ * このファイルは原資料から機械的に生成した(手打ちしていない)。
+ * 料金改定時は原資料を差し替えて再生成する。
  */
 export const SHIPPING_RATE_SEED_SOURCE_REFERENCE =
-  "WebSearch「アートセッティングデリバリー 家財おまかせ便 埼玉 発送 料金 円 税込」(2026-08-30確認、公式サイトの一次情報への直接到達はsandbox環境の制約により不可)";
+  "利用者提供の一次資料(2026-08-30 原始メモ)に含まれる家財おまかせ便 公式料金一覧(埼玉県発送・税込)";
 
 export const SHIPPING_RATE_SEED_VERIFIED_AT = "2026-08-30T00:00:00.000Z";
+
+export const SHIPPING_RATE_SEED_PROVIDER = "アートセッティングデリバリー";
+export const SHIPPING_RATE_SEED_SERVICE = "家財おまかせ便";
+export const SHIPPING_RATE_SEED_ORIGIN_PREFECTURE = "埼玉県";
+
+/**
+ * 各ランクの3辺合計の上限(cm)は `lib/shipping/rank.ts` が既に定義して
+ * いる(RANK_MAX_SUM_CM)。原資料の「◯cmまで」と全ランクで一致することを
+ * 確認済みなので、ここでは重複定義せず既存を正とする —
+ * scripts/verify-shipping.ts が両者の一致を回帰テストで固定する。
+ */
+
+/** 北海道の4エリア。原資料の「北海道[◯◯エリア]」表記に対応する。 */
+export const HOKKAIDO_AREAS = ["函館", "札幌/千歳", "道北", "道東"] as const;
+export type HokkaidoArea = (typeof HOKKAIDO_AREAS)[number];
 
 export interface ShippingRateSeedRow {
   provider: string;
   service: string;
   originPrefecture: string;
   destinationPrefecture: string;
-  rank: "B" | "C";
-  price: number;
+  /** 北海道のみ設定される(4エリア)。他の都府県はnull。 */
+  destinationArea: HokkaidoArea | null;
+  rank: ShippingRank;
+  /** 税込。**nullは「取り扱い不可」であって0円ではない**。 */
+  price: number | null;
 }
 
-/** §66調査で実際に確認できた2件のみ。他は憶測で埋めない。 */
 export const SHIPPING_RATE_SEED: ShippingRateSeedRow[] = [
-  { provider: "アートセッティングデリバリー", service: "家財おまかせ便", originPrefecture: "埼玉県", destinationPrefecture: "東京都", rank: "B", price: 4510 },
-  { provider: "アートセッティングデリバリー", service: "家財おまかせ便", originPrefecture: "埼玉県", destinationPrefecture: "東京都", rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "SS", price: 1950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "S", price: 2680 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "A", price: 3850 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "B", price: 6380 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "C", price: 10650 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "D", price: 16880 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "E", price: 26070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "F", price: 33540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "函館", rank: "G", price: 44680 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "SS", price: 2070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "S", price: 2820 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "A", price: 4110 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "B", price: 6790 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "C", price: 12890 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "D", price: 18440 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "E", price: 28650 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "F", price: 37870 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "札幌/千歳", rank: "G", price: 49990 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "SS", price: 2190 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "S", price: 2950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "A", price: 4370 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "B", price: 7310 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "C", price: 14020 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "D", price: 20230 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "E", price: 32230 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "F", price: 42180 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道北", rank: "G", price: 55330 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "SS", price: 2190 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "S", price: 2950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "A", price: 4370 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "B", price: 7310 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "C", price: 14020 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "D", price: 20230 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "E", price: 32230 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "F", price: 42180 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "北海道", destinationArea: "道東", rank: "G", price: 55330 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "SS", price: 1830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "S", price: 2550 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "A", price: 3720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "B", price: 6120 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "C", price: 10220 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "D", price: 15720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "E", price: 24720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "F", price: 32600 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "青森県", destinationArea: null, rank: "G", price: 42040 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "SS", price: 1810 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "S", price: 2520 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "A", price: 3550 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "B", price: 5680 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "C", price: 9360 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "D", price: 13200 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "E", price: 20800 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "F", price: 28300 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岩手県", destinationArea: null, rank: "G", price: 36990 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "SS", price: 1580 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "S", price: 2270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "A", price: 3290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "B", price: 4820 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "C", price: 8440 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "D", price: 11850 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "E", price: 18000 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "F", price: 25410 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮城県", destinationArea: null, rank: "G", price: 33760 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "SS", price: 1830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "S", price: 2530 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "A", price: 3700 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "B", price: 5830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "C", price: 9790 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "D", price: 14460 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "E", price: 22810 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "F", price: 30450 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "秋田県", destinationArea: null, rank: "G", price: 39520 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "SS", price: 1580 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "S", price: 2270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "A", price: 3290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "B", price: 4820 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "C", price: 8440 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "D", price: 11850 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "E", price: 18000 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "F", price: 25410 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山形県", destinationArea: null, rank: "G", price: 33760 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "SS", price: 1570 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "S", price: 2250 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "B", price: 4650 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "C", price: 8010 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "D", price: 11470 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "E", price: 17420 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "F", price: 24690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福島県", destinationArea: null, rank: "G", price: 32330 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "SS", price: 1560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "S", price: 2240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "B", price: 4510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "D", price: 11270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "E", price: 17070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "F", price: 24160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "茨城県", destinationArea: null, rank: "G", price: 31290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "SS", price: 1560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "S", price: 2240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "B", price: 4510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "D", price: 11270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "E", price: 17070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "F", price: 24160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "栃木県", destinationArea: null, rank: "G", price: 31290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "SS", price: 1560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "S", price: 2240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "B", price: 4510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "D", price: 11270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "E", price: 17070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "F", price: 24160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "群馬県", destinationArea: null, rank: "G", price: 31290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "SS", price: 1560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "S", price: 2240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "B", price: 4510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "D", price: 11270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "E", price: 17070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "F", price: 24160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "埼玉県", destinationArea: null, rank: "G", price: 31290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "SS", price: 1560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "S", price: 2240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "B", price: 4510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "D", price: 11270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "E", price: 17070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "F", price: 24160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "千葉県", destinationArea: null, rank: "G", price: 31290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "SS", price: 1560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "S", price: 2240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "B", price: 4510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "D", price: 11270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "E", price: 17070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "F", price: 24160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "東京都", destinationArea: null, rank: "G", price: 31290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "SS", price: 1560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "S", price: 2240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "B", price: 4510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "D", price: 11270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "E", price: 17070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "F", price: 24160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "神奈川県", destinationArea: null, rank: "G", price: 31290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "SS", price: 1570 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "S", price: 2270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "A", price: 3280 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "B", price: 4800 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "C", price: 8390 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "D", price: 11770 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "E", price: 17870 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "F", price: 25210 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "新潟県", destinationArea: null, rank: "G", price: 33480 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "SS", price: 1590 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "S", price: 2290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "A", price: 3430 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "B", price: 4980 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "C", price: 8870 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "D", price: 12240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "E", price: 19020 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "F", price: 26340 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "富山県", destinationArea: null, rank: "G", price: 35070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "SS", price: 1590 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "S", price: 2300 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "A", price: 3440 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "B", price: 5020 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "C", price: 8920 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "D", price: 12320 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "E", price: 19150 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "F", price: 26540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "石川県", destinationArea: null, rank: "G", price: 35340 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "SS", price: 1810 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "S", price: 2520 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "A", price: 3560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "B", price: 5690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "C", price: 9400 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "D", price: 13280 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "E", price: 20930 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "F", price: 28500 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福井県", destinationArea: null, rank: "G", price: 37270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "SS", price: 1560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "S", price: 2240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "B", price: 4510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "C", price: 7740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "D", price: 11270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "E", price: 17070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "F", price: 24160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山梨県", destinationArea: null, rank: "G", price: 31290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "SS", price: 1570 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "S", price: 2250 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "B", price: 4650 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "C", price: 8010 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "D", price: 11470 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "E", price: 17420 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "F", price: 24690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長野県", destinationArea: null, rank: "G", price: 32330 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "SS", price: 1590 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "S", price: 2290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "A", price: 3320 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "B", price: 4870 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "C", price: 8540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "D", price: 12020 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "E", price: 18250 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "F", price: 25790 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岐阜県", destinationArea: null, rank: "G", price: 34300 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "SS", price: 1570 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "S", price: 2250 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "A", price: 3260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "B", price: 4540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "C", price: 7790 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "D", price: 11360 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "E", price: 17200 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "F", price: 24360 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "静岡県", destinationArea: null, rank: "G", price: 31560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "SS", price: 1580 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "S", price: 2280 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "A", price: 3300 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "B", price: 4840 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "C", price: 8490 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "D", price: 11930 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "E", price: 18130 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "F", price: 25600 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛知県", destinationArea: null, rank: "G", price: 34030 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "SS", price: 1590 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "S", price: 2290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "A", price: 3430 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "B", price: 4980 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "C", price: 8870 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "D", price: 12240 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "E", price: 19020 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "F", price: 26340 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "三重県", destinationArea: null, rank: "G", price: 35070 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "SS", price: 1590 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "S", price: 2300 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "A", price: 3440 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "B", price: 5020 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "C", price: 8920 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "D", price: 12320 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "E", price: 19150 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "F", price: 26540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "滋賀県", destinationArea: null, rank: "G", price: 35340 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "SS", price: 1810 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "S", price: 2520 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "A", price: 3560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "B", price: 5690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "C", price: 9400 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "D", price: 13280 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "E", price: 20930 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "F", price: 28500 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "京都府", destinationArea: null, rank: "G", price: 37270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "SS", price: 1830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "S", price: 2530 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "A", price: 3590 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "B", price: 5720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "C", price: 9460 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "D", price: 13360 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "E", price: 21050 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "F", price: 28690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大阪府", destinationArea: null, rank: "G", price: 37540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "SS", price: 1830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "S", price: 2530 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "A", price: 3590 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "B", price: 5720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "C", price: 9460 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "D", price: 13360 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "E", price: 21050 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "F", price: 28690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "兵庫県", destinationArea: null, rank: "G", price: 37540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "SS", price: 1610 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "S", price: 2310 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "A", price: 3480 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "B", price: 5060 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "C", price: 9020 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "D", price: 12480 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "E", price: 19400 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "F", price: 26930 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "奈良県", destinationArea: null, rank: "G", price: 35890 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "SS", price: 1830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "S", price: 2540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "A", price: 3700 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "B", price: 5860 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "C", price: 9840 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "D", price: 14540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "E", price: 22930 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "F", price: 30650 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "和歌山県", destinationArea: null, rank: "G", price: 39790 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "SS", price: 1830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "S", price: 2550 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "A", price: 3720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "B", price: 6120 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "C", price: 10220 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "D", price: 15720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "E", price: 24720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "F", price: 32600 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鳥取県", destinationArea: null, rank: "G", price: 42040 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "SS", price: 1950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "S", price: 2690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "A", price: 3870 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "B", price: 6410 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "C", price: 10700 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "D", price: 16960 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "E", price: 26200 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "F", price: 33740 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "島根県", destinationArea: null, rank: "G", price: 44950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "SS", price: 1830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "S", price: 2560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "A", price: 3730 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "B", price: 6130 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "C", price: 10270 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "D", price: 15810 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "E", price: 24850 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "F", price: 32800 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "岡山県", destinationArea: null, rank: "G", price: 42310 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "SS", price: 1960 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "S", price: 2710 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "A", price: 3880 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "B", price: 6450 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "C", price: 10750 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "D", price: 17040 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "E", price: 26330 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "F", price: 33930 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "広島県", destinationArea: null, rank: "G", price: 45220 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "SS", price: 1970 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "S", price: 2720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "A", price: 4030 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "B", price: 6600 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "C", price: 11950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "D", price: 17970 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "E", price: 27350 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "F", price: 36520 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "山口県", destinationArea: null, rank: "G", price: 47640 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "SS", price: 1830 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "S", price: 2550 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "A", price: 3720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "B", price: 5900 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "C", price: 10000 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "D", price: 14840 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "E", price: 23400 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "F", price: 31280 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "徳島県", destinationArea: null, rank: "G", price: 40720 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "SS", price: 1840 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "S", price: 2570 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "A", price: 3850 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "B", price: 6160 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "C", price: 10430 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "D", price: 16110 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "E", price: 25190 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "F", price: 33430 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "香川県", destinationArea: null, rank: "G", price: 43250 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "SS", price: 1960 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "S", price: 2710 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "A", price: 3880 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "B", price: 6450 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "C", price: 10860 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "D", price: 17260 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "E", price: 26660 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "F", price: 34370 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "愛媛県", destinationArea: null, rank: "G", price: 45880 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "SS", price: 1950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "S", price: 2690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "A", price: 3870 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "B", price: 6410 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "C", price: 10810 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "D", price: 17180 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "E", price: 26530 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "F", price: 34180 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "高知県", destinationArea: null, rank: "G", price: 45610 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "SS", price: 2090 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "S", price: 2860 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "A", price: 4180 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "B", price: 6930 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "C", price: 13140 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "D", price: 18850 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "E", price: 29290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "F", price: 38840 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "福岡県", destinationArea: null, rank: "G", price: 51370 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "SS", price: 2090 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "S", price: 2860 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "A", price: 4180 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "B", price: 6930 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "C", price: 13140 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "D", price: 18850 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "E", price: 29290 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "F", price: 38840 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "佐賀県", destinationArea: null, rank: "G", price: 51370 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "SS", price: 2100 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "S", price: 2880 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "A", price: 4210 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "B", price: 7090 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "C", price: 13790 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "D", price: 19560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "E", price: 31950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "F", price: 40330 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "長崎県", destinationArea: null, rank: "G", price: 53120 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "SS", price: 2100 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "S", price: 2880 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "A", price: 4210 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "B", price: 7090 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "C", price: 13790 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "D", price: 19560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "E", price: 31950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "F", price: 40330 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "熊本県", destinationArea: null, rank: "G", price: 53120 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "SS", price: 2100 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "S", price: 2880 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "A", price: 4210 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "B", price: 7090 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "C", price: 13790 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "D", price: 19560 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "E", price: 31950 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "F", price: 40330 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "大分県", destinationArea: null, rank: "G", price: 53120 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "SS", price: 2230 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "S", price: 3040 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "A", price: 4700 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "B", price: 7860 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "C", price: 14540 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "D", price: 21980 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "E", price: 33900 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "F", price: 46510 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "宮崎県", destinationArea: null, rank: "G", price: 61030 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "SS", price: 2220 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "S", price: 3010 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "A", price: 4690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "B", price: 7810 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "C", price: 14440 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "D", price: 21820 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "E", price: 33650 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "F", price: 46110 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "鹿児島県", destinationArea: null, rank: "G", price: 60490 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "SS", price: 2620 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "S", price: 4140 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "A", price: 6320 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "B", price: 11210 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "C", price: 21060 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "D", price: 32690 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "E", price: 50750 },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "F", price: null },
+  { provider: SHIPPING_RATE_SEED_PROVIDER, service: SHIPPING_RATE_SEED_SERVICE, originPrefecture: SHIPPING_RATE_SEED_ORIGIN_PREFECTURE, destinationPrefecture: "沖縄県", destinationArea: null, rank: "G", price: null },
 ];
+
+/**
+ * 北海道の市区町村 → 4エリアの対応。原資料の一覧をそのまま構造化した
+ * (189件)。
+ *
+ * 検索しやすいよう、キーは全角スペースを半角へ寄せた正規化済みの表記に
+ * してある(`normalizeHokkaidoMunicipality`が同じ正規化を行う)。
+ * 原表記は値側で失われないよう、キー自体が原表記の正規化結果である
+ * ことに留めている — 郡名つき("虻田郡 京極町")と市区名("旭川市")の
+ * どちらの書き方でも引けるよう、解決関数側で後方一致も試す。
+ */
+export const HOKKAIDO_AREA_BY_MUNICIPALITY: Record<string, HokkaidoArea> = {
+  "赤平市": "道北",
+  "阿寒郡 鶴居村": "道東",
+  "旭川市": "道北",
+  "芦別市": "道北",
+  "足寄郡 足寄町": "道東",
+  "足寄郡 陸別町": "道東",
+  "厚岸郡 厚岸町": "道東",
+  "厚岸郡 浜中町": "道東",
+  "網走郡 大空町": "道東",
+  "網走郡 津別町": "道東",
+  "網走郡 美幌町": "道東",
+  "網走市": "道東",
+  "虻田郡 喜茂別町": "札幌/千歳",
+  "虻田郡 京極町": "札幌/千歳",
+  "虻田郡 倶知安町": "札幌/千歳",
+  "虻田郡 洞爺湖町": "札幌/千歳",
+  "虻田郡 豊浦町": "札幌/千歳",
+  "虻田郡 ニセコ町": "札幌/千歳",
+  "虻田郡 真狩村": "札幌/千歳",
+  "虻田郡 留寿都": "札幌/千歳",
+  "石狩郡 新篠津村": "札幌/千歳",
+  "石狩郡 当別町": "札幌/千歳",
+  "石狩市": "札幌/千歳",
+  "磯谷郡 蘭越町": "札幌/千歳",
+  "岩内郡 岩内町": "札幌/千歳",
+  "岩内郡 共和町": "札幌/千歳",
+  "岩見沢市": "札幌/千歳",
+  "有珠郡 壮瞥町": "札幌/千歳",
+  "歌志内市": "道北",
+  "浦河郡 浦河町": "札幌/千歳",
+  "雨竜郡 雨竜町": "道北",
+  "雨竜郡 秩父別町": "道北",
+  "雨竜郡 沼田町": "道北",
+  "雨竜郡 北竜町": "道北",
+  "雨竜郡 幌加内町": "道北",
+  "雨竜郡 妹背牛町": "道北",
+  "枝幸郡 枝幸町": "道北",
+  "枝幸郡 中頓別町": "道北",
+  "枝幸郡 浜頓別町": "道北",
+  "恵庭市": "札幌/千歳",
+  "江別市": "札幌/千歳",
+  "奥尻郡 奥尻町": "函館",
+  "小樽市": "札幌/千歳",
+  "帯広市": "道東",
+  "河西郡 更別村": "道東",
+  "河西郡 中札内村": "道東",
+  "河西郡 芽室町": "道東",
+  "河東郡 音更町": "道東",
+  "河東郡 上士幌町": "道東",
+  "河東郡 鹿追町": "道東",
+  "河東郡 士幌町": "道東",
+  "樺戸郡 浦臼町": "道北",
+  "樺戸郡 新十津川町": "道北",
+  "樺戸郡 月形町": "札幌/千歳",
+  "上磯郡 木古内町": "函館",
+  "上磯郡 知内町": "函館",
+  "上川郡 愛別町": "道北",
+  "上川郡 上川町": "道北",
+  "上川郡 剣淵町": "道北",
+  "上川郡 清水町": "道東",
+  "上川郡 下川町": "道北",
+  "上川郡 新得町": "道東",
+  "上川郡 鷹栖町": "道北",
+  "上川郡 当麻町": "道北",
+  "上川郡 東神楽町": "道北",
+  "上川郡 東川町": "道北",
+  "上川郡 美瑛町": "道北",
+  "上川郡 比布町": "道北",
+  "上川郡 和寒町": "道北",
+  "亀田郡 七飯町": "函館",
+  "茅部郡 鹿部町": "函館",
+  "茅部郡 森町": "函館",
+  "川上郡 標茶町": "道東",
+  "川上郡 弟子屈町": "道東",
+  "北広島市": "札幌/千歳",
+  "北見市": "道東",
+  "釧路郡 釧路町": "道東",
+  "釧路市": "道東",
+  "九遠郡 せたな町": "函館",
+  "札幌市 厚別区": "札幌/千歳",
+  "札幌市 北区": "札幌/千歳",
+  "札幌市 清田区": "札幌/千歳",
+  "札幌市 白石区": "札幌/千歳",
+  "札幌市 中央": "札幌/千歳",
+  "札幌市 手稲区": "札幌/千歳",
+  "札幌市 豊平区": "札幌/千歳",
+  "札幌市 西区": "札幌/千歳",
+  "札幌市 東区": "札幌/千歳",
+  "札幌市 南区": "札幌/千歳",
+  "様似郡 様似町": "札幌/千歳",
+  "沙流郡 日高町": "札幌/千歳",
+  "沙流郡 平取町": "札幌/千歳",
+  "標津郡 標津町": "道東",
+  "標津郡 中標津町": "道東",
+  "士別市": "道北",
+  "島牧郡 島牧村": "函館",
+  "積丹郡 積丹町": "札幌/千歳",
+  "斜里郡 清里町": "道東",
+  "斜里郡 小清水町": "道東",
+  "斜里郡 斜里町": "道東",
+  "白老郡 白老町": "札幌/千歳",
+  "白糠郡 白糠町": "道東",
+  "寿都郡 黒松内町": "函館",
+  "寿都郡 寿都町": "函館",
+  "砂川市": "道北",
+  "瀬棚郡 今金町": "函館",
+  "宗谷郡 猿払村": "道北",
+  "空知郡 上砂川町": "札幌/千歳",
+  "空知郡 上富良野町": "道北",
+  "空知郡 奈井江町": "札幌/千歳",
+  "空知郡 中富良野町": "道北",
+  "空知郡 南幌町": "札幌/千歳",
+  "空知郡 南富良野町": "道北",
+  "滝川市": "道北",
+  "伊達市": "札幌/千歳",
+  "千歳市": "札幌/千歳",
+  "天塩郡 遠別町": "道北",
+  "天塩郡 天塩町": "道北",
+  "天塩郡 豊富町": "道北",
+  "天塩郡 幌延町": "道北",
+  "十勝郡 浦幌町": "道東",
+  "常呂郡 置戸町": "道東",
+  "常呂郡 訓子府町": "道東",
+  "常呂郡 佐呂間町": "道東",
+  "苫小牧市": "札幌/千歳",
+  "苫前郡 初山別村": "道北",
+  "苫前郡 苫前町": "道北",
+  "苫前郡 羽幌町": "道北",
+  "中川郡 池田町": "道東",
+  "中川郡 音威子府村": "道北",
+  "中川郡 豊頃町": "道東",
+  "中川郡 中川町": "道北",
+  "中川郡 美深町": "道北",
+  "中川郡 本別町": "道東",
+  "中川郡 幕別町": "道東",
+  "名寄市": "道北",
+  "新冠郡 新冠町": "札幌/千歳",
+  "爾志郡 乙部町": "函館",
+  "根室市": "道東",
+  "野付郡 別海町": "道東",
+  "登別市": "札幌/千歳",
+  "函館市": "函館",
+  "日高郡 新ひだか町": "札幌/千歳",
+  "檜山郡 厚沢部町": "函館",
+  "檜山郡 江差町": "函館",
+  "檜山郡 上ノ国町": "函館",
+  "広尾郡 大樹町": "道東",
+  "広尾郡 広尾町": "道東",
+  "美唄市": "札幌/千歳",
+  "深川市": "道北",
+  "二海郡 八雲町": "函館",
+  "富良野市": "道北",
+  "古宇郡 神恵内村": "札幌/千歳",
+  "古宇郡 泊村": "札幌/千歳",
+  "古宇郡 古平町": "札幌/千歳",
+  "北斗市": "函館",
+  "幌泉郡 えりも町": "札幌/千歳",
+  "増毛郡 増毛町": "道北",
+  "松前郡 福島町": "函館",
+  "松前郡 松前町": "函館",
+  "三笠市": "札幌/千歳",
+  "室蘭市": "札幌/千歳",
+  "目梨郡 羅臼町": "道東",
+  "紋別郡 遠軽町": "道北",
+  "紋別郡 雄武町": "道北",
+  "紋別郡 興部町": "道北",
+  "紋別郡 上湧別町": "道北",
+  "紋別郡 滝上町": "道北",
+  "紋別郡 西興部村": "道北",
+  "紋別郡 湧別町": "道北",
+  "紋別市": "道北",
+  "山越郡 長万部町": "函館",
+  "夕張郡 栗山町": "札幌/千歳",
+  "夕張郡 長沼町": "札幌/千歳",
+  "夕張郡 由仁町": "札幌/千歳",
+  "夕張市": "札幌/千歳",
+  "勇払郡 厚真町": "札幌/千歳",
+  "勇払郡 安平町": "札幌/千歳",
+  "勇払郡 占冠村": "道北",
+  "勇払郡 むかわ町": "札幌/千歳",
+  "余市郡 赤井川村": "札幌/千歳",
+  "余市郡 仁木町": "札幌/千歳",
+  "余市郡 余市町": "札幌/千歳",
+  "利尻郡 利尻町": "道北",
+  "利尻郡 利尻富士町": "道北",
+  "留萌郡 小平町": "道北",
+  "留萌市": "道北",
+  "礼文郡 礼文町": "道北",
+  "稚内市": "道北",
+};
+
+/** 全角スペース・連続空白・前後空白のゆれを吸収する。原データも上のテーブルに残る。 */
+export function normalizeHokkaidoMunicipality(input: string): string {
+  return input.replace(/\u3000/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * 北海道の市区町村名から配送エリアを解決する。
+ *
+ * 「虻田郡 京極町」のような郡つき表記でも「京極町」だけでも引けるよう、
+ * 完全一致 → 末尾一致の順で探す。該当が無ければnull(呼び出し側が
+ * 「エリアを特定できませんでした」と案内する)。推測でエリアを当てない。
+ */
+export function resolveHokkaidoArea(municipality: string): HokkaidoArea | null {
+  const key = normalizeHokkaidoMunicipality(municipality);
+  if (!key) return null;
+  const exact = HOKKAIDO_AREA_BY_MUNICIPALITY[key];
+  if (exact) return exact;
+  const suffixMatches = Object.entries(HOKKAIDO_AREA_BY_MUNICIPALITY).filter(([name]) => name.endsWith(" " + key) || name === key);
+  if (suffixMatches.length === 1) return suffixMatches[1 - 1][1];
+  return null;
+}
+
+/**
+ * 宛先(+北海道ならエリア)とランクから料金を引く。
+ *
+ * 戻り値は
+ *   { kind: "available", price }    … 金額あり
+ *   { kind: "unavailable" }          … その地域・ランクは取り扱い不可(原資料が「----」)
+ *   { kind: "unknown" }              … マスターに該当行が無い
+ * の3値。**「不可」と「未登録」を混ぜない** — UIで出し分けるため。
+ */
+export type ShippingRateLookup = { kind: "available"; price: number } | { kind: "unavailable" } | { kind: "unknown" };
+
+export function lookupShippingRate(destinationPrefecture: string, rank: ShippingRank, destinationArea?: HokkaidoArea | null): ShippingRateLookup {
+  const row = SHIPPING_RATE_SEED.find(
+    (r) => r.destinationPrefecture === destinationPrefecture && r.rank === rank && (r.destinationArea ?? null) === (destinationArea ?? null),
+  );
+  if (!row) return { kind: "unknown" };
+  return row.price == null ? { kind: "unavailable" } : { kind: "available", price: row.price };
+}

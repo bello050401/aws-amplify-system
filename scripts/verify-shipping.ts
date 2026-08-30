@@ -6,6 +6,8 @@
  * Run with: npm run verify:shipping
  */
 import { calculateShippingRankFromSum, calculateShippingRankFromDimensions, parseDimensionCm, SHIPPING_RANKS } from "@/lib/shipping/rank";
+import type { ShippingRank } from "@/lib/shipping/rank";
+import { SHIPPING_RATE_SEED, HOKKAIDO_AREA_BY_MUNICIPALITY, HOKKAIDO_AREAS, lookupShippingRate, resolveHokkaidoArea } from "@/lib/shipping/ratesSeed";
 import { calculateMedian, pickLatestPerPrefecture, buildShippingReferencePriceView, MIN_DISTINCT_REGIONS_FOR_MEDIAN, REGION_DIFFERENCE_THRESHOLD_YEN } from "@/lib/shipping/referencePrice";
 import { buildExpectedMatrix, computeMatrixCompleteness, computeRawHash, ALL_SHIPPING_RANKS } from "@/lib/shipping/importer";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
@@ -266,6 +268,112 @@ function testAllShippingRanksMatchesRankModule() {
   assertEqual([...ALL_SHIPPING_RANKS].sort(), [...SHIPPING_RANKS].sort(), "importerの全ランク定義がrank.tsの定義と一致する");
 }
 
+// ── 夜間指示書§7: らくらく家財 全国料金マスター ──────────────────────
+// 利用者提供の一次資料(原始メモ)から機械的に生成した全国料金表を、
+// 件数・境界値・「取り扱い不可」の扱いまで固定する。
+function testShippingRateSeedCoverage() {
+  assertEqual(SHIPPING_RATE_SEED.length, 450, "SHIPPING_RATE_SEED: 50宛先 x 9ランク = 450件(原資料の全件)");
+
+  const destinations = new Set(SHIPPING_RATE_SEED.map((r) => `${r.destinationPrefecture}${r.destinationArea ? "[" + r.destinationArea + "]" : ""}`));
+  assertEqual(destinations.size, 50, "SHIPPING_RATE_SEED: 宛先は46都府県 + 北海道4エリア = 50");
+
+  // 各宛先が9ランク揃っている(欠けたランクがあるとUIが無言で空欄になる)
+  const byDest = new Map<string, number>();
+  for (const r of SHIPPING_RATE_SEED) {
+    const key = `${r.destinationPrefecture}${r.destinationArea ?? ""}`;
+    byDest.set(key, (byDest.get(key) ?? 0) + 1);
+  }
+  assertTrue([...byDest.values()].every((n) => n === 9), "SHIPPING_RATE_SEED: 全ての宛先がSS〜Gの9ランクを持つ");
+
+  assertTrue(
+    SHIPPING_RATE_SEED.every((r) => r.originPrefecture === "埼玉県"),
+    "SHIPPING_RATE_SEED: 発送元は全件が埼玉県(§61 BELLOの所在地)",
+  );
+  // OVERSIZE(451cm〜)はこの料金表の対象外 — 個別見積りなので行を持たない
+  assertTrue(
+    SHIPPING_RATE_SEED.every((r) => r.rank !== "OVERSIZE"),
+    "SHIPPING_RATE_SEED: OVERSIZEは料金表の対象外(個別見積り)なので行を持たない",
+  );
+}
+
+function testShippingRateSeedUnavailableIsNotZero() {
+  const unavailable = SHIPPING_RATE_SEED.filter((r) => r.price == null);
+  assertEqual(unavailable.length, 2, "SHIPPING_RATE_SEED: 原資料で「----」の行は2件(沖縄県のF/Gランク)");
+  assertTrue(
+    unavailable.every((r) => r.destinationPrefecture === "沖縄県" && (r.rank === "F" || r.rank === "G")),
+    "SHIPPING_RATE_SEED: 取り扱い不可は沖縄県のF/Gランクのみ",
+  );
+  assertTrue(
+    SHIPPING_RATE_SEED.every((r) => r.price !== 0),
+    "SHIPPING_RATE_SEED: 取り扱い不可を0円で埋めていない(0円だと『送料無料』と誤表示される)",
+  );
+  // lookupが「不可」と「未登録」を別物として返すこと
+  assertEqual(lookupShippingRate("沖縄県", "G").kind, "unavailable", "lookupShippingRate: 沖縄県Gランクは unavailable(取り扱い不可)");
+  assertEqual(lookupShippingRate("架空県", "G").kind, "unknown", "lookupShippingRate: マスターに無い宛先は unknown(不可とは別物)");
+  const okinawaE = lookupShippingRate("沖縄県", "E");
+  assertEqual(okinawaE.kind, "available", "lookupShippingRate: 沖縄県Eランクは金額あり");
+  assertEqual(okinawaE.kind === "available" ? okinawaE.price : -1, 50750, "lookupShippingRate: 沖縄県Eランク = 50,750円");
+}
+
+function testShippingRateSeedBoundaryValues() {
+  // 原資料からの代表値。転記ミスが入ったらここで落ちる。
+  const cases: [string, ShippingRank, number][] = [
+    ["埼玉県", "SS", 1560],
+    ["埼玉県", "B", 4510],
+    ["埼玉県", "G", 31290],
+    ["東京都", "B", 4510],
+    ["東京都", "C", 7740],
+    ["青森県", "SS", 1830],
+    ["沖縄県", "SS", 2620],
+  ];
+  for (const [pref, rank, expected] of cases) {
+    const got = lookupShippingRate(pref, rank);
+    assertEqual(got.kind === "available" ? got.price : null, expected, `lookupShippingRate: ${pref} ${rank}ランク = ${expected.toLocaleString()}円`);
+  }
+  // 以前このファイルが持っていた2件(WebSearch由来)と一次資料が一致することの確認
+  assertEqual(
+    lookupShippingRate("東京都", "B").kind === "available" ? (lookupShippingRate("東京都", "B") as { price: number }).price : null,
+    4510,
+    "一次資料は、旧seedがWebSearchで得ていた東京Bランク4,510円と一致する(推測で埋めなかった判断の裏づけ)",
+  );
+}
+
+function testHokkaidoAreaResolution() {
+  assertEqual(Object.keys(HOKKAIDO_AREA_BY_MUNICIPALITY).length, 189, "HOKKAIDO_AREA_BY_MUNICIPALITY: 原資料の市区町村189件");
+
+  // 4エリアそれぞれに料金が存在し、かつ区別されている
+  const areaPrices = HOKKAIDO_AREAS.map((a) => {
+    const r = lookupShippingRate("北海道", "G", a);
+    return r.kind === "available" ? r.price : null;
+  });
+  assertTrue(areaPrices.every((p) => p != null), "北海道: 4エリアすべてにGランク料金が登録されている");
+  assertTrue(new Set(areaPrices).size > 1, "北海道: エリアによって料金が異なる(4エリアを区別する意味がある)");
+  assertEqual(lookupShippingRate("北海道", "G", "函館").kind === "available" ? (lookupShippingRate("北海道", "G", "函館") as { price: number }).price : null, 44680, "北海道[函館] Gランク = 44,680円");
+  assertEqual(lookupShippingRate("北海道", "G", "道東").kind === "available" ? (lookupShippingRate("北海道", "G", "道東") as { price: number }).price : null, 55330, "北海道[道東] Gランク = 55,330円");
+
+  // 市区町村からのエリア解決
+  assertEqual(resolveHokkaidoArea("旭川市"), "道北", "resolveHokkaidoArea: 旭川市 -> 道北");
+  assertEqual(resolveHokkaidoArea("網走市"), "道東", "resolveHokkaidoArea: 網走市 -> 道東");
+  assertEqual(resolveHokkaidoArea("小樽市"), "札幌/千歳", "resolveHokkaidoArea: 小樽市 -> 札幌/千歳");
+  assertEqual(resolveHokkaidoArea("奥尻郡 奥尻町"), "函館", "resolveHokkaidoArea: 郡つき表記でも解決できる");
+  assertEqual(resolveHokkaidoArea("奥尻郡　奥尻町"), "函館", "resolveHokkaidoArea: 全角スペースを吸収する");
+  assertEqual(resolveHokkaidoArea("  旭川市  "), "道北", "resolveHokkaidoArea: 前後の空白を吸収する");
+  assertEqual(resolveHokkaidoArea("存在しない町"), null, "resolveHokkaidoArea: 該当が無ければnull(推測でエリアを当てない)");
+  assertEqual(resolveHokkaidoArea(""), null, "resolveHokkaidoArea: 空文字はnull");
+}
+
+function testShippingRankLimitsMatchSource() {
+  // 原資料の「◯cmまで」と rank.ts の既存閾値が一致すること。
+  // ここが割れると、商品サイズから引いたランクと料金表のランクがずれる。
+  const expected: [number, ShippingRank][] = [
+    [80, "SS"], [120, "S"], [160, "A"], [200, "B"], [250, "C"], [300, "D"], [350, "E"], [400, "F"], [450, "G"],
+  ];
+  for (const [cm, rank] of expected) {
+    assertEqual(calculateShippingRankFromSum(cm), rank, `calculateShippingRankFromSum(${cm}cm) = ${rank}(原資料の上限と一致)`);
+  }
+  assertEqual(calculateShippingRankFromSum(451), "OVERSIZE", "calculateShippingRankFromSum(451cm) = OVERSIZE(料金表の対象外)");
+}
+
 function main() {
   testCalculateShippingRankFromSum();
   testParseDimensionCm();
@@ -280,6 +388,11 @@ function main() {
   testComputeMatrixCompletenessAllVerified();
   testComputeRawHash();
   testAllShippingRanksMatchesRankModule();
+  testShippingRateSeedCoverage();
+  testShippingRateSeedUnavailableIsNotZero();
+  testShippingRateSeedBoundaryValues();
+  testHokkaidoAreaResolution();
+  testShippingRankLimitsMatchSource();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
