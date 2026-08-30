@@ -77,7 +77,13 @@ function normalizedImages(item: InventoryModel): InventoryImageRecord[] {
   return (item.images ?? []).filter((img): img is NonNullable<typeof img> => Boolean(img)).map(normalizeImageRecord);
 }
 
-function toListRow(item: InventoryModel): InventoryListRow {
+/**
+ * 第六ラウンドP0-5: lib/inventory/inventoryCursorList.ts(新設、真の
+ * サーバー側cursor pagination)からも同じInventoryModel→InventoryListRow
+ * 変換を再利用するためexportする — 一覧の行データ構造を2箇所で別々に
+ * 組み立てて将来ズレるのを防ぐ。
+ */
+export function toListRow(item: InventoryModel): InventoryListRow {
   const images = normalizedImages(item);
   return {
     id: item.id,

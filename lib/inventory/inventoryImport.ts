@@ -567,7 +567,18 @@ export async function executeImportRows(
 
         const { customFields, ...corePayload } = splitCustomFields(outcome.writePayload ?? {});
         const { data: created, errors } = await serverDataClient.models.Inventory.create(
-          { sku, name: outcome.name, ...corePayload, customFields: stringifyCustomFields(customFields), createdBy: who ?? undefined, updatedBy: who ?? undefined },
+          {
+            sku,
+            name: outcome.name,
+            ...corePayload,
+            customFields: stringifyCustomFields(customFields),
+            createdBy: who ?? undefined,
+            updatedBy: who ?? undefined,
+            // 第六ラウンドP0-5(amplify/data/resource.tsのInventory
+            // モデルコメント参照)。
+            listingPartition: "ACTIVE",
+            listUpdatedAt: new Date().toISOString(),
+          },
           inventoryAuthMode,
         );
         if (errors || !created) throw new Error(`作成に失敗しました: ${JSON.stringify(errors)}`);
@@ -587,6 +598,9 @@ export async function executeImportRows(
             ...corePayload,
             ...(mergedCustomFields ? { customFields: stringifyCustomFields(mergedCustomFields) } : {}),
             updatedBy: who ?? undefined,
+            // 第六ラウンドP0-5: インポートによる実データ更新なので一覧の
+            // 並び順を最新化する対象(thumbnailBackfill.tsとは異なる)。
+            listUpdatedAt: new Date().toISOString(),
           },
           inventoryAuthMode,
         );

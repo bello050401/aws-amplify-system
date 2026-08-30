@@ -458,6 +458,33 @@ const schema = a.schema({
       // another schema change to get started.
       sourceSystem: a.string(),
       sourceInventoryId: a.string(),
+
+      // 第六ラウンド§19-20(P0-5): 一覧のupdatedAt DESCソート済み
+      // server-side cursor paginationを実現するための、定数パーティション
+      // キー+ソートキーGSI(DynamoDBで「テーブル全体をある属性でソート
+      // したい」場合の標準パターン)。
+      //
+      // 【なぜAmplify自動付与のupdatedAtを直接使わないか】このリポジトリの
+      // AIUsageLogモデルの既存コメントが記録する通り、Amplify Dataの
+      // 自動付与タイムスタンプ(createdAt/updatedAt)はsecondaryIndexesの
+      // sortKeysに指定できない(synth時に実際にエラーで確認済み——明示的
+      // なmodelフィールドしか使えない)。そのため、既存の自動updatedAtと
+      // 意味的に等価な明示フィールド`listUpdatedAt`をこのモデルへ追加し、
+      // create/update双方の書き込み経路で必ず`new Date().toISOString()`
+      // を設定する(全書き込み経路のリストと実装はdocs/
+      // inventory-cursor-pagination-20260830.md参照)。
+      //
+      // `listingPartition`は常に固定値"ACTIVE"を入れる(deletedAtによる
+      // 論理削除は現状どの書き込み経路にも実装されておらず——
+      // Inventory.delete()による物理削除のみ実在する、lib/inventory/
+      // queries.tsのfetchAllInventoryRecordsコメント参照——物理削除
+      // された行はGSIからもテーブル本体からも自動的に消える)。既存
+      // データへの移行(lib/inventory/listingPartitionBackfill.ts参照)が
+      // 完了するまでは、この属性を持たない既存行はこのGSIに現れない
+      // ——だからこそlistInventory本体はこのラウンドではまだこのGSI
+      // 経由の関数へ切り替えていない(同docsに安全な切り替え手順を明記)。
+      listingPartition: a.string(),
+      listUpdatedAt: a.datetime(),
     })
     .secondaryIndexes((index) => [
       index("sku"), // search + pre-create duplicate-check (see §6 below on exact guarantees)
@@ -465,6 +492,7 @@ const schema = a.schema({
       index("statusId"),
       index("locationId"),
       index("deletedAt"),
+      index("listingPartition").sortKeys(["listUpdatedAt"]),
     ])
     .authorization((allow) => [
       allow.group("ADMIN"), // full CRUD, including hard delete (完全削除)

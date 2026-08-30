@@ -114,6 +114,12 @@ async function createInventory(input: NewInventoryInput): Promise<InventoryModel
     sourceInventoryId: input.sourceInventoryId,
     createdAt: now,
     updatedAt: now,
+    // 第六ラウンドP0-5(amplify/data/resource.tsのInventoryモデル
+    // コメント参照)。この経路はserverDataClientを経由しない生の
+    // DynamoDB PutItemなので、Amplify Data側のcreate/updateと同じ
+    // フィールドをここで明示的に設定する必要がある。
+    listingPartition: "ACTIVE",
+    listUpdatedAt: now,
     ...input.extendedFields,
   };
   // undefined値の属性はそもそも書き込まない(DynamoDBDocumentClientは
@@ -142,7 +148,17 @@ async function updateInventory(input: UpdateInventoryInput): Promise<void> {
   // deletedAt)のうち、実際にZAICO側で値が変わったものだけがこの
   // UpdateExpressionに含まれる(呼び出し元のsyncOneZaicoItemが
   // 既にfields差分を計算済み)。
-  const fields: Record<string, unknown> = { name: input.name, images: input.images, updatedBy: input.updatedBy, updatedAt: new Date().toISOString(), ...input.extendedFields };
+  // 第六ラウンドP0-5: この呼び出し元(syncOneZaicoItem)はZAICO側の実際の
+  // 差分が検出された場合のみupdateInventoryを呼ぶ(unchanged fast-pathは
+  // ここに到達しない)ので、listUpdatedAtを更新してよい対象。
+  const fields: Record<string, unknown> = {
+    name: input.name,
+    images: input.images,
+    updatedBy: input.updatedBy,
+    updatedAt: new Date().toISOString(),
+    listUpdatedAt: new Date().toISOString(),
+    ...input.extendedFields,
+  };
   for (const [key, value] of [
     ["categoryId", input.categoryId],
     ["locationId", input.locationId],

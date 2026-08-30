@@ -261,6 +261,13 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
       customFields: stringifyCustomFields(input.customFields),
       createdBy: who ?? undefined,
       updatedBy: who ?? undefined,
+      // 第六ラウンドP0-5: 真のサーバー側cursor pagination用GSI
+      // (amplify/data/resource.tsのInventoryモデルコメント参照)。
+      // listingPartitionは常に固定値"ACTIVE"(在庫の削除は物理削除のみで
+      // ソフトデリート経路が存在しないため、パーティションの出し入れ管理が
+      // 不要 — 詳細はdocs/inventory-cursor-pagination-20260830.md)。
+      listingPartition: "ACTIVE",
+      listUpdatedAt: new Date().toISOString(),
       // Phase C fields — already fully parsed/typed by the caller (see
       // lib/inventory/extendedFields.ts's parseExtendedValues), so
       // spread straight through with no per-field handling needed here.
@@ -336,6 +343,10 @@ export async function updateInventory(
       images,
       customFields: stringifyCustomFields(input.customFields),
       updatedBy: who ?? undefined,
+      // 第六ラウンドP0-5: ユーザーの実編集操作なので一覧の並び順を
+      // 最新化してよい(thumbnailBackfill.tsの内部書き込みとは異なり、
+      // ここは意図的にlistUpdatedAtを更新する対象)。
+      listUpdatedAt: new Date().toISOString(),
       ...extendedFieldsInput(input),
     },
     inventoryAuthMode,

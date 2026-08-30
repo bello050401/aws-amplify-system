@@ -68,7 +68,14 @@ export async function bulkUpdateInventoryListFields(items: BulkInventoryEditItem
       // undefinedのままAmplifyの.update()から除外され、既存値を保持する
       // (createInventory/updateInventoryと同じ規約)。
       const { errors } = await serverDataClient.models.Inventory.update(
-        { id: item.id, updatedBy: who ?? undefined, ...item.changes },
+        {
+          id: item.id,
+          updatedBy: who ?? undefined,
+          // 第六ラウンドP0-5: 一覧の直接編集による実データ変更なので
+          // 一覧の並び順(listUpdatedAt)も更新対象とする。
+          listUpdatedAt: new Date().toISOString(),
+          ...item.changes,
+        },
         inventoryAuthMode,
       );
       if (errors) {

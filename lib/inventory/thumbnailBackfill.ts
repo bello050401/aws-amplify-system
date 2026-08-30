@@ -130,6 +130,18 @@ export async function advanceThumbnailBackfill(nextToken: string | null): Promis
       // change, and logging one row per record here would just be noise
       // in every item's history — matching how ZAICO's own "unchanged"
       // path already writes nothing rather than logging a no-op).
+      //
+      // 第六ラウンドP0-5: この`.update()`呼び出しは意図的に`listUpdatedAt`
+      // を設定しない — これがこのファイルの元々のコメント(このファイル
+      // 冒頭、旧バージョン)が指摘していた「thumbnailKeyだけの内部更新が
+      // Amplifyの自動updatedAtを"今"へ勝手に進め、ユーザーには見えない
+      // 変更なのに一覧の並び順(updatedAt DESC)の先頭へ突然浮上する」
+      // 不具合そのものへの根治的な修正である。listingPartition/
+      // listUpdatedAt GSI(amplify/data/resource.tsのInventoryモデル
+      // コメント、docs/inventory-cursor-pagination-20260830.md参照)は
+      // Amplify自動updatedAtとは独立した明示フィールドなので、ここで
+      // 触れない限り既存のlistUpdatedAt値がそのまま保たれ、バックフィル
+      // によって一覧の並び順が乱れることはない。
       await serverDataClient.models.Inventory.update({ id: item.id, images: updatedImages }, inventoryAuthMode);
     }
   }

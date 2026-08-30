@@ -32,7 +32,13 @@ async function reassignInventoryReferences(model: MasterModelName, fromId: strin
         { categoryId: fromId },
         { limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode },
       );
-      await Promise.all(data.map((item) => serverDataClient.models.Inventory.update({ id: item.id, categoryId: toId }, inventoryAuthMode)));
+      // 第六ラウンドP0-5: カテゴリ統合によるユーザー起点の実データ変更
+      // なので、一覧の並び順(listUpdatedAt)も更新対象とする。
+      await Promise.all(
+        data.map((item) =>
+          serverDataClient.models.Inventory.update({ id: item.id, categoryId: toId, listUpdatedAt: new Date().toISOString() }, inventoryAuthMode),
+        ),
+      );
       total += data.length;
       nextToken = nt;
     } else {
@@ -40,7 +46,11 @@ async function reassignInventoryReferences(model: MasterModelName, fromId: strin
         { locationId: fromId },
         { limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode },
       );
-      await Promise.all(data.map((item) => serverDataClient.models.Inventory.update({ id: item.id, locationId: toId }, inventoryAuthMode)));
+      await Promise.all(
+        data.map((item) =>
+          serverDataClient.models.Inventory.update({ id: item.id, locationId: toId, listUpdatedAt: new Date().toISOString() }, inventoryAuthMode),
+        ),
+      );
       total += data.length;
       nextToken = nt;
     }

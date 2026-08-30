@@ -224,6 +224,10 @@ export function createServerSyncPort(): ZaicoSyncPort {
           updatedBy: input.updatedBy,
           sourceSystem: input.sourceSystem,
           sourceInventoryId: input.sourceInventoryId,
+          // 第六ラウンドP0-5(amplify/data/resource.tsのInventory
+          // モデルコメント参照)。
+          listingPartition: "ACTIVE",
+          listUpdatedAt: new Date().toISOString(),
           ...input.extendedFields,
         },
         inventoryAuthMode,
@@ -247,6 +251,9 @@ export function createServerSyncPort(): ZaicoSyncPort {
           images: input.images,
           customFields: input.customFields,
           updatedBy: input.updatedBy,
+          // 第六ラウンドP0-5: ZAICO側の実データ変更を反映する更新なので
+          // 一覧の並び順を最新化する対象。
+          listUpdatedAt: new Date().toISOString(),
           ...input.extendedFields,
         },
         inventoryAuthMode,

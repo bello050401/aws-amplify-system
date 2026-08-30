@@ -11,6 +11,7 @@ import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
 import { ZaicoSyncPanel } from "./ZaicoSyncPanel";
 import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
+import { ListingPartitionBackfillPanel } from "./ListingPartitionBackfillPanel";
 import { MercariSettingsPanel } from "./MercariSettingsPanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
@@ -140,7 +141,18 @@ export function SettingsTabs({
         {/* 一覧表示設定の列候補には無効化された追加項目を含めない(新規登録/編集/詳細検索から消えるのと同じ扱い)。 */}
         {tab === "columns" && <ListColumnSettings customFieldDefs={customFields.filter((f) => f.isActive)} />}
         {tab === "zaico" && isAdmin && <ZaicoSyncPanel zaicoConnected={zaicoConnected} zaicoTokenSource={zaicoTokenSource} />}
-        {tab === "images" && isAdmin && <ThumbnailBackfillPanel />}
+        {tab === "images" && isAdmin && (
+          <div className="space-y-6">
+            <ThumbnailBackfillPanel />
+            {/* 第六ラウンドP0-5: 内部索引フィールドの一度きりの移行 —
+                サムネイルバックフィルと同じ「ADMINが必要に応じて一度回す」
+                性質の内部メンテナンス作業なので、同じタブへ並べて配置する
+                (新規タブは今回新設しない)。 */}
+            <div className="border-t border-gray-200 pt-6">
+              <ListingPartitionBackfillPanel />
+            </div>
+          </div>
+        )}
         {tab === "mercari" && isAdmin && (
           <MercariSettingsPanel
             mercariConnected={mercariConnected}
