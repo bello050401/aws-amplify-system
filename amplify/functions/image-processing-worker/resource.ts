@@ -27,6 +27,11 @@ import { defineFunction } from "@aws-amplify/backend";
 export const imageProcessingWorker = defineFunction({
   name: "image-processing-worker",
   entry: "./handler.ts",
+  // dataスタックへ移す理由はpricing-scheduler/resource.tsの同じ位置の
+  // コメントを参照(data ⇄ function のネストスタック循環依存の根本修正)。
+  // このLambdaもProcessingJob/ImageProcessingVersion/PhotoProfile/
+  // Inventoryの各テーブルをbackend.tsからgrantされている。
+  resourceGroupName: "data",
   timeoutSeconds: 300,
   memoryMB: 1024, // sharpのRAW→複数導出バッファ生成はデフォルト128MBでは不足するため引き上げ(pricing-schedulerはJSONのみを扱うため既定値のままだったのと対照的)
   schedule: "every 5m",

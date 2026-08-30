@@ -31,6 +31,14 @@ import { defineFunction } from "@aws-amplify/backend";
 export const zaicoSyncWorker = defineFunction({
   name: "zaico-sync-worker",
   entry: "./handler.ts",
+  // dataスタックへ移す理由はpricing-scheduler/resource.tsの同じ位置の
+  // コメントを参照(data ⇄ function のネストスタック循環依存の根本修正)。
+  // このLambdaはInventory/Category/Location/InventoryHistory/
+  // ZaicoSyncJob/ZaicoSourceLinkをgrantされている。なお本Lambdaは
+  // generate-sku(functionスタックに残る)をgrantInvokeするが、これは
+  // data → function 方向であり、data/resource.tsが既に持っている向きと
+  // 同じ。逆向きのエッジを増やさないため循環にはならない。
+  resourceGroupName: "data",
   timeoutSeconds: 240, // 5分スケジュールに対して余裕を残す(次のtickと重ならない)
   memoryMB: 512, // sharpによるthumbnail生成を含むため既定値(128MB)より引き上げ
   schedule: "every 5m",

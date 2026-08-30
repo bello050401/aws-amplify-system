@@ -49,6 +49,35 @@ import { defineFunction } from "@aws-amplify/backend";
 export const pricingScheduler = defineFunction({
   name: "pricing-scheduler",
   entry: "./handler.ts",
+  // ── staging build失敗(job#30〜#63、全34本)の根本修正 ────────────────
+  // このLambdaは`amplify/backend.ts`で
+  // `backend.data.resources.tables[...].grantReadWriteData(...)`と
+  // `addEnvironment(...tableName)`を受けているため、Lambdaが属するネスト
+  // スタックはdataスタックのOutput(テーブル名/ARN)を参照する
+  // ── つまり function → data の依存が生まれる。
+  //
+  // 一方で`amplify/data/resource.ts`はgenerate-skuを
+  // `a.handler.function(generateSku)`としてカスタムmutationのresolverに
+  // 使っており、こちらは data → function の依存を生む。
+  //
+  // generate-skuとこのLambdaが「どちらも既定の`function`ネストスタック」
+  // に同居していたため、data ⇄ function の相互参照になり、
+  // CloudFormationが以下で全デプロイを拒否していた(実ログで確認済み):
+  //   [CloudformationStackCircularDependencyError] circular dependency
+  //   found between nested stacks [data7552DF31, function1351588B]
+  //
+  // 修正: dataのテーブルを直接触るworker系Lambda(このファイル、
+  // image-processing-worker、zaico-sync-worker)を`resourceGroupName:
+  // "data"`でdataスタック側へ移す。これはAmplify自身がこのエラーの
+  // 解決策として案内している方法そのもの(cdk_error_mapper.jsの
+  // resolutionMessage「If your function is used as data resolver or
+  // calls data API, you should assign this function to data stack」)。
+  //
+  // 移動後の依存は data → function(generate-skuのresolver参照)の一方向
+  // のみになり、テーブル参照はdataスタック内部の同一スタック参照になる
+  // ためスタック間エッジ自体が消える。scripts/synth-check.tsの
+  // ネストスタック循環検出が、この状態をローカルで回帰確認する。
+  resourceGroupName: "data",
   timeoutSeconds: 60,
   // 既定OFFの自動値下げ(§161)対象商品が実際にどれだけあるかに応じて
   // 頻度は調整可能だが、家財おまかせ便の値下げ間隔が「日」単位
