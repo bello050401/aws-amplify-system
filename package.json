@@ -25,6 +25,7 @@
     "benchmark:zaico-sync": "node scripts/with-server-only-stub.cjs scripts/benchmark-zaico-sync.ts",
     "benchmark:inventory-queries": "node scripts/with-server-only-stub.cjs scripts/benchmark-inventory-queries.ts",
     "verify:import": "node scripts/with-server-only-stub.cjs scripts/verify-import.ts",
+    "test:e2e": "playwright test",
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts"
   },
   "dependencies": {

@@ -26,3 +26,9 @@ amplify_outputs.d.ts
 # fetched from a live account; never committed regardless of where the
 # script is run from. See zaico-verification/README.md.
 zaico-verification/output/
+
+# Playwright E2E artifacts (第五ラウンド P1-A) — local run output only.
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
