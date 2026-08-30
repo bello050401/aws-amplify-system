@@ -150,6 +150,29 @@ export const zaicoTokenSecret = Secret.fromSecretNameV2(backend.stack, "ZaicoApi
 // Personal API Access Tokenを含む)は、スタックの削除・再作成があっても
 // 誤って失われてはならない — zaicoTokenSecret運用開始前のSecretが本来
 // 持つべきだった性質と同じ。
+// ── 実測に基づく補足(2026-08-30、staging build job#64以降) ──────────
+// 上の「どのApp/環境向けにも初回デプロイなので衝突は発生し得ない」と
+// いう前提は、bello/mercari-access-tokenについては今も成立している
+// **が、それはこのSecretを最初に作成したのがstaging App
+// (d4hkkg7dty2du)側だったからに過ぎない**:
+//   aws secretsmanager list-secrets の実データ
+//     bello/mercari-access-token  created 2026-08-29T22:51 JST
+//     owning stack: amplify-d4hkkg7dty2du-...-MercariApiTokenSecretStack...
+// つまりstaging Appにとっては自分が所有するリソースのUPDATEなので正常
+// に通るが、**同じbranchが自動ビルドで繋がっているもう一方のApp
+// (d1uy61lbnqm8ae)にとっては「CDK管理外で既に存在するSecretを新規作成
+// しようとする」状態**であり、そちらのビルドは
+//   CREATE_FAILED ... "the secret bello/mercari-access-token already
+//   exists." (HandlerErrorCode: AlreadyExists)
+// で失敗し続けている(job#69のログで確認済み — 当該branchの全50 job
+// が失敗、成功は一度も無い)。
+//
+// これをzaicoTokenSecret/lineChannelSecretと同じ`fromSecretNameV2()`
+// importへ揃えれば構造的には最も一貫するが、その変更はもう一方のApp
+// のバックエンドデプロイを実際に成功させてしまう。d1uy61lbnqm8aeへの
+// 変更は現在の作業方針で明示的に禁止されているため、この判断は意図的に
+// 保留してある——「気づいていない」のではなく「意図的に触っていない」。
+// 解禁の判断が出た時点で、このブロックもfromSecretNameV2()へ揃えること。
 const mercariTokenSecretStack = backend.createStack("MercariApiTokenSecretStack");
 export const mercariTokenSecret = new Secret(mercariTokenSecretStack, "MercariApiTokenSecret", {
   secretName: "bello/mercari-access-token",
@@ -179,17 +202,52 @@ export const mercariTokenSecret = new Secret(mercariTokenSecretStack, "MercariAp
 
 // BELLO統合業務OS指示書(2026-08-30) §51-52: LINE公式アカウントの
 // Channel Secret(Webhook署名検証用)+ Channel Access Token(Reply/Push
-// 送信用)。mercariTokenSecretと全く同じ理由・同じ構造(このアプリが
-// AWSアカウント上に存在させる初めての実体なので`new Secret(...)`、
-// RemovalPolicy.RETAIN、IAM権限付与はAmplify Console側でADMINが手動
-// 設定する必要がある — 上のmercariTokenSecretコメント参照)。
-const lineChannelSecretStack = backend.createStack("LineChannelSecretStack");
-export const lineChannelSecret = new Secret(lineChannelSecretStack, "LineChannelSecret", {
-  secretName: "bello/line-channel-secret",
-  description: "BELLO在庫管理システム — LINE公式アカウントのChannel Secret/Channel Access Token(メッセージ機能専用)。設定画面(ADMIN限定)から読み書きする。",
-  secretStringValue: SecretValue.unsafePlainText(JSON.stringify({ configured: false })),
-  removalPolicy: RemovalPolicy.RETAIN,
-});
+// 送信用)。lib/messaging/lineSecretStore.tsが実際の読み書きを行う。
+//
+// ── 訂正(staging build job#64の実測結果に基づく) ───────────────────
+// このSecretは当初、上のmercariTokenSecretと同じ`new Secret(...)`
+// (CDKが所有・作成するリソース)として定義されていた。その前提は
+// 「`bello/line-channel-secret`という名前のSecretはまだAWS側に存在
+// しない」だったが、これは実測の結果**誤りだった**:
+//
+//   aws secretsmanager list-secrets の実データ
+//     bello/line-channel-secret  created 2026-08-30T11:36 JST
+//     owning stack: amplify-d1uy61lbnqm8ae-...-LineChannelSecretStack...
+//
+// つまりこのSecretは、同じbranchへ自動ビルドが繋がっているもう一方の
+// App(d1uy61lbnqm8ae)側のデプロイによって、既にAWSアカウント上へ実体
+// として作成済みだった。そのため専用staging App(d4hkkg7dty2du)の
+// backendデプロイでは、zaicoTokenSecretが辿ったのと全く同じ経路で
+// CloudFormationが失敗していた(job#64のビルドログで確認済み):
+//   AWS::SecretsManager::Secret LineChannelSecretStack/LineChannelSecret
+//   CREATE_FAILED - "The operation failed because the secret
+//   bello/line-channel-secret already exists." (HandlerErrorCode:
+//   AlreadyExists)
+// この1件の失敗でstaging backend全体がrollbackし、storage/functionの
+// 各nested stackもUPDATE_FAILED(Resource update cancelled)になっていた
+// — これらは全てこのSecret作成失敗の二次的な結果である。
+//
+// 修正: zaicoTokenSecretと同一の扱いにする。`Secret.fromSecretNameV2()`
+// で「この名前を持つ、同じアカウント/リージョンに既に存在するSecretへの
+// 参照」としてimportする — CloudFormation templateにこのSecretに対応
+// する`AWS::SecretsManager::Secret`リソースは一切生成されなくなり、
+// Secretの物理的な作成・削除はこのCDK定義の管轄外になる。ADMINが設定
+// 画面から保存した実際のChannel Secret/Access Token値には一切触れない。
+//
+// 併せて`backend.createStack("LineChannelSecretStack")`も削除した —
+// importは実体を持つCFNリソースを生成しないため、そのためだけの専用
+// nested stackは空になり存在意義が無い(zaicoTokenSecretが
+// `backend.stack`へ直接importしているのと同じ形に揃える)。
+// 既にこのnested stackを持っているApp側では、次回デプロイでこの空
+// スタックが削除されるが、削除前のテンプレートでSecretへ
+// `RemovalPolicy.RETAIN`が設定されていたため、Secretの実体はCFNの
+// 管理から外れる(orphan)だけで削除されない — zaicoTokenSecretを
+// importへ移行した際(commit 61f8ec2)と同じ挙動。
+//
+// IAM権限に関する制約はmercariTokenSecret/zaicoTokenSecretと同じ
+// (SSRコンピュート実行ロールへの付与はAmplify Console側でADMINが手動
+// 設定する必要がある — 上のコメント参照)。
+export const lineChannelSecret = Secret.fromSecretNameV2(backend.stack, "LineChannelSecret", "bello/line-channel-secret");
 
 // ─────────────────────────────────────────────────────────────────────
 // BELLO統合業務OS §9(PC不在中・完全自律継続実装指示): Pricing Rule
