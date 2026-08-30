@@ -8,6 +8,7 @@ import { getInventoryDetail } from "@/lib/inventory/queries";
 import { splitImagesByType } from "@/lib/inventory/imageTypes";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
 import { ensureOriginalHash, OriginalImageMissingError } from "@/lib/inventory/originalHashRepair";
+import { parseReferenceImageKeys, serializeForAwsJson } from "@/lib/imageProcessing/photoProfile";
 
 /**
  * BELLO画像自動加工システム(2026-08-30指示書)§8.1/§12/§13の
@@ -216,7 +217,7 @@ export async function listPhotoProfilesAction(): Promise<PhotoProfileSummary[]> 
   requireImageProcessingPermission(role);
   const { data } = await serverDataClient.models.PhotoProfile.list({ ...inventoryAuthMode });
   return data
-    .map((p) => ({ id: p.id, name: p.name, version: p.version, active: p.active ?? false, referenceImageKeys: (p.referenceImageKeys as string[] | null) ?? [] }))
+    .map((p) => ({ id: p.id, name: p.name, version: p.version, active: p.active ?? false, referenceImageKeys: parseReferenceImageKeys(p.referenceImageKeys) }))
     .sort((a, b) => b.version - a.version);
 }
 
@@ -232,21 +233,46 @@ export async function createPhotoProfileAction(name: string, referenceImageKeys:
   const currentActive = existing.find((p) => p.active);
 
   const { DEFAULT_OCCUPANCY_RANGE } = await import("@/lib/imageProcessing/pipeline");
+  // `referenceImageKeys`/`targetOccupancy*`はスキーマ上 a.json() = AWSJSON。
+  // AWSJSONは**JSONエンコード済みの文字列**しか受け付けず、生の配列/オブ
+  // ジェクトを渡すとAppSyncが
+  //   "Variable 'referenceImageKeys' has an invalid value."
+  // を返して作成が失敗する(実際にstagingのAppSyncへ両方の形で投げて確認
+  // 済み: 生の配列=失敗 / JSON文字列=成功)。これがPhoto Profile作成が
+  // 常に失敗し、一覧が「まだPhoto Profileがありません」のままだった原因。
+  // 同じ罠はFeature.contentでも一度踏んでいる(commit 4bd0a1b)。
   const { errors } = await serverDataClient.models.PhotoProfile.create(
     {
       name: name.trim(),
-      referenceImageKeys,
-      targetOccupancySquare: DEFAULT_OCCUPANCY_RANGE.SQUARE_1_1,
-      targetOccupancyLandscape: DEFAULT_OCCUPANCY_RANGE.LANDSCAPE_3_2,
+      referenceImageKeys: serializeForAwsJson(referenceImageKeys),
+      targetOccupancySquare: serializeForAwsJson(DEFAULT_OCCUPANCY_RANGE.SQUARE_1_1),
+      targetOccupancyLandscape: serializeForAwsJson(DEFAULT_OCCUPANCY_RANGE.LANDSCAPE_3_2),
       version: nextVersion,
       active: true,
     },
     inventoryAuthMode,
   );
-  if (errors) throw new Error(`Photo Profileの作成に失敗しました: ${JSON.stringify(errors)}`);
+  // 内部エラー詳細(GraphQLのpath/locations等)をそのまま利用者へ出さない。
+  // 詳細はサーバーログへ、画面には対処可能な文言だけを返す。
+  if (errors) {
+    console.error("[createPhotoProfileAction] create failed:", JSON.stringify(errors));
+    throw new Error("Photo Profileの作成に失敗しました。時間をおいて再度お試しください。");
+  }
 
+  // 新Profileの作成が成功して初めて旧ACTIVEを降ろす(この順序により、
+  // 作成が失敗したときに「どのProfileもACTIVEでない」中途半端な状態が
+  // 残らない)。
   if (currentActive) {
-    await serverDataClient.models.PhotoProfile.update({ id: currentActive.id, active: false }, inventoryAuthMode);
+    const { errors: deactivateErrors } = await serverDataClient.models.PhotoProfile.update(
+      { id: currentActive.id, active: false },
+      inventoryAuthMode,
+    );
+    if (deactivateErrors) {
+      // 新Profileは既にACTIVEで作成済み。旧を降ろせなくてもACTIVEが
+      // 二重になるだけで、getActivePhotoProfileはversion降順で新しい方を
+      // 選ぶため実害は無い——作成自体を失敗扱いにはしない。
+      console.error("[createPhotoProfileAction] failed to deactivate previous profile:", JSON.stringify(deactivateErrors));
+    }
   }
   revalidatePath("/inventory/settings");
 }

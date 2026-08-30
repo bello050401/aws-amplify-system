@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { OriginalImageMissingError } from "@/lib/inventory/originalHashRepair";
+import { parseReferenceImageKeys, serializeForAwsJson } from "@/lib/imageProcessing/photoProfile";
 /**
  * BELLO画像自動加工システム(2026-08-30指示書)§18.1 自動テスト。
  * pipeline.ts(純粋ロジック)+ sharpProcessor.ts(実sharp呼び出し、
@@ -197,6 +198,29 @@ function testOriginalImageMissingError() {
   assertTrue(!err.message.includes("保存し直す"), "OriginalImageMissingError: 「保存し直す」という無関係な操作を促さない");
 }
 
+// ── 夜間指示書§4: Photo Profile の AWSJSON 取り扱い ──────────────────
+// PhotoProfile.referenceImageKeys は a.json() = AWSJSON で、JSONエンコード
+// 済みの文字列しか受け付けない。生の配列を渡すとAppSyncが
+//   "Variable 'referenceImageKeys' has an invalid value."
+// を返し、Profile作成が必ず失敗する — stagingのAppSyncへ両方の形を実際に
+// 投げて確認済み(生の配列=失敗 / JSON文字列=成功)。これがPhoto Profile
+// 作成が常に失敗し、一覧が「まだPhoto Profileがありません」のままだった
+// 原因。同じ罠はFeature.contentで一度踏んでいる(commit 4bd0a1b)。
+function testPhotoProfileAwsJsonRoundTrip() {
+  const keys = ["inventory/photo-profile/a.jpg", "inventory/photo-profile/b.jpg"];
+  const wire = serializeForAwsJson(keys);
+  assertTrue(typeof wire === "string", "serializeForAwsJson: AWSJSONへは必ず文字列で送る(生の配列はAppSyncに拒否される)");
+  assertEqual(parseReferenceImageKeys(wire), keys, "parseReferenceImageKeys: 直列化した値を元の配列へ戻せる");
+  assertEqual(parseReferenceImageKeys(keys), keys, "parseReferenceImageKeys: 既に配列ならそのまま受け入れる(旧経路で書かれた値との互換)");
+  assertEqual(parseReferenceImageKeys(null), [], "parseReferenceImageKeys: nullは空配列");
+  assertEqual(parseReferenceImageKeys("{ broken json"), [], "parseReferenceImageKeys: 壊れた値でも例外を投げず空配列(Profile一覧全体を落とさない)");
+  assertEqual(parseReferenceImageKeys(serializeForAwsJson({ not: "an array" })), [], "parseReferenceImageKeys: 配列以外のJSONは空配列");
+  assertEqual(parseReferenceImageKeys(serializeForAwsJson(["ok", 123, null])), ["ok"], "parseReferenceImageKeys: 文字列以外の要素は落とす");
+  assertEqual(parseReferenceImageKeys(serializeForAwsJson([])), [], "parseReferenceImageKeys: 空配列も往復できる");
+  // 2枚でProfileを作れること(UIの「約10枚程度から開始」は推奨であって制約ではない)
+  assertEqual(parseReferenceImageKeys(serializeForAwsJson(keys)).length, 2, "Photo Profile: 基準写真2枚でも成立する(必要枚数を10枚へ勝手に引き上げない)");
+}
+
 async function main() {
   testAspectRatioDecision();
   testCompositionStrength();
@@ -207,6 +231,7 @@ async function main() {
   testBulkImageProcessingEligibleStatuses();
   testOriginalHashComputation();
   testOriginalImageMissingError();
+  testPhotoProfileAwsJsonRoundTrip();
   await testSharpProcessorRoundTrip();
 
   console.log(`\n${passes} passed, ${failures} failed`);
