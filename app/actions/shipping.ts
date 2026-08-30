@@ -8,8 +8,10 @@ import {
   deleteShippingRate,
   calculateShippingEstimate,
   confirmShippingFee,
+  getShippingReferencePrice,
   type ShippingRateInput,
   type ShippingEstimateResult,
+  type GetShippingReferencePriceResult,
 } from "@/lib/shipping/service";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 import type { ChannelListingRecord } from "@/lib/listing/types";
@@ -62,4 +64,11 @@ export async function confirmShippingFeeAction(inventoryId: string, confirmedFee
   const result = await confirmShippingFee(inventoryId, confirmedFee, who);
   revalidatePath(`/inventory/${inventoryId}/listing`);
   return result;
+}
+
+/** §31/§46: 送料込み参考価格。読み取り専用(何も書き換えない)なので閲覧権限(VIEWER含む)で十分——ADMIN/EDITOR限定にしない。 */
+export async function getShippingReferencePriceAction(inventoryId: string): Promise<GetShippingReferencePriceResult> {
+  const role = await getInventoryRole();
+  if (!role) throw new Error("ログインが必要です。");
+  return getShippingReferencePrice(inventoryId);
 }

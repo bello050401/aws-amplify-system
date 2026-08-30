@@ -14,6 +14,7 @@ import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 import { AutoPricingSection } from "./AutoPricingSection";
 import { ShippingEstimateSection } from "./ShippingEstimateSection";
+import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
 
@@ -426,6 +427,12 @@ export function ListingForm({
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
           AutoPricingSectionと同じ理由でChannelListing存在時のみ表示する。 */}
       {channelListing && <ShippingEstimateSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
+
+      {/* BELLO統合業務OS ZAICO級高速化・完成保証最大化版(2026-08-30) §31/§46:
+          送料込み参考価格。ShippingEstimateSectionと違いChannelListing
+          の有無に依存しない(出品準備前でも販売予定金額・寸法さえあれば
+          表示できる読み取り専用の目安)。 */}
+      <ShippingReferencePriceSection inventoryId={inventoryId} />
 
       {/* BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASEを
           「別システムだから」と対象外にせず、Mercariと並列のチャネルと

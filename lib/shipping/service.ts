@@ -7,6 +7,7 @@ import { calculateShippingRankFromDimensions, type ShippingRank } from "./rank";
 import { SHIPPING_ORIGIN_PREFECTURE } from "./prefectures";
 import { SHIPPING_RATE_SEED, SHIPPING_RATE_SEED_SOURCE_REFERENCE, SHIPPING_RATE_SEED_VERIFIED_AT } from "./ratesSeed";
 import type { ShippingRateRecord } from "./types";
+import { buildShippingReferencePriceView, pickLatestPerPrefecture, type ShippingReferencePriceView } from "./referencePrice";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §65-68: 家財おまかせ便の料金
@@ -244,4 +245,42 @@ export async function confirmShippingFee(inventoryId: string, confirmedFee: numb
 
   const refreshed = await getChannelListing(inventoryId, SHIPPING_CHANNEL);
   return refreshed!;
+}
+
+export type GetShippingReferencePriceResult =
+  | { available: false; reason: string }
+  | { available: true; view: ShippingReferencePriceView };
+
+/**
+ * §31/§46: EC出品下書きの「送料込み参考価格」。plannedPrice(Inventory.
+ * plannedSalePrice)は絶対に書き換えない——読み取って派生値を計算する
+ * だけ。ランクはInventoryの寸法から都度計算する(ChannelListing行が
+ * まだ無い商品でも表示できるようにするため——出品準備前でも見積りの
+ * 目安は見たい、という自然な利用順序に合わせた設計判断)。
+ *
+ * 中央値算出に使う`verifiedRates`は、同一都道府県の重複バージョンを
+ * pickLatestPerPrefectureで1件に絞り、`verifiedAt`が設定されている
+ * (=手入力の未確認値ではない)行だけに限定する——§157「憶測値を実装
+ * 済みに見せかけない」原則を、このバージョンでも徹底する。
+ */
+export async function getShippingReferencePrice(inventoryId: string): Promise<GetShippingReferencePriceResult> {
+  const inventory = await getInventoryDetail(inventoryId);
+  if (!inventory) throw new Error("対象の在庫が見つかりません。");
+  if (inventory.plannedSalePrice == null) {
+    return { available: false, reason: "販売予定金額が未入力です。先に在庫詳細で販売予定金額を入力してください。" };
+  }
+
+  const dims = calculateShippingRankFromDimensions(inventory.width, inventory.depth, inventory.height);
+  if (!dims) {
+    return { available: false, reason: "幅・奥行・高さが未入力のため、家財おまかせ便ランクを判定できません。" };
+  }
+
+  const { data } = await serverDataClient.models.ShippingRate.list({
+    filter: { rank: { eq: dims.rank } },
+    ...inventoryAuthMode,
+  });
+  const verifiedRates = pickLatestPerPrefecture(data.map(toShippingRateRecord).filter((r) => r.verifiedAt != null));
+
+  const view = buildShippingReferencePriceView({ plannedPrice: inventory.plannedSalePrice, rank: dims.rank, verifiedRates });
+  return { available: true, view };
 }
