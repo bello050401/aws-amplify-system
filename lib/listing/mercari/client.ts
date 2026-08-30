@@ -96,6 +96,23 @@ export class MercariShopsClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
+    // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §4.3: 秘密情報
+    // (TOKEN本体)は絶対にログへ出さず、運用上判断できる非秘密情報だけ
+    // 出す——endpoint/environment/GraphQL operation name/User-Agentが
+    // 設定されたか/token present(真偽値)/token length。これにより、
+    // 実際にAWS環境で404等が発生した際、実TOKENを晒すことなく
+    // 「User-Agentは送られていたか」「どの環境・エンドポイントへ送った
+    // か」を後からログで追跡できる。
+    const operationName = extractGraphQLOperationName(query);
+    const logContext = {
+      endpoint: this.endpoint,
+      environment: this.environment,
+      operationName,
+      userAgentSet: Boolean(userAgent),
+      tokenPresent: Boolean(token),
+      tokenLength: token.length,
+    };
+
     let response: Response;
     try {
       response = await fetch(this.endpoint, {
@@ -109,6 +126,7 @@ export class MercariShopsClient {
         signal: controller.signal,
       });
     } catch (err) {
+      console.error("[MercariShopsClient] network error:", JSON.stringify(logContext), err instanceof Error ? err.message : err);
       throw new MercariApiError("NETWORK_ERROR", err instanceof Error ? err.message : "Network error calling Mercari Shops API");
     } finally {
       clearTimeout(timer);
@@ -118,6 +136,7 @@ export class MercariShopsClient {
       const bodyText = await safeReadText(response);
       let code = classifyHttpStatus(response.status);
       if (response.status === 403) code = classifyForbiddenError(bodyText);
+      console.error("[MercariShopsClient] non-OK response:", JSON.stringify({ ...logContext, status: response.status, code }));
       throw new MercariApiError(code, `HTTP ${response.status}${bodyText ? `: ${bodyText}` : ""}`);
     }
 
@@ -137,6 +156,12 @@ export class MercariShopsClient {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** ログ用にGraphQL文字列から`query Name`/`mutation Name`のNameだけを抜き出す(§4.3、秘密を含まない診断情報)。取れなければ"unknown"。 */
+export function extractGraphQLOperationName(query: string): string {
+  const m = /^\s*(?:query|mutation)\s+([A-Za-z0-9_]+)/.exec(query);
+  return m?.[1] ?? "unknown";
 }
 
 async function safeReadText(response: Response): Promise<string> {

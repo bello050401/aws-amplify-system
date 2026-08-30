@@ -16,6 +16,8 @@ import { resolveEffectiveListingFields, type ChannelListingRecord, type ListingD
 import { createMercariProduct } from "@/lib/listing/mercari/adapter";
 import { formatMercariUserAgent } from "@/lib/listing/mercari/endpoints";
 import { MercariApiError, classifyHttpStatus, classifyForbiddenError, classifyGraphQLErrors, isRetryableMercariErrorCode } from "@/lib/listing/mercari/errors";
+import { extractGraphQLOperationName } from "@/lib/listing/mercari/client";
+import { PRODUCT_CATEGORIES_QUERY } from "@/lib/listing/mercari/queries";
 import { isEcListingEligible, buildCategoryNameLookup, EXCLUDED_CATEGORY_NAMES } from "@/lib/listing/ecEligibility";
 import { calculateFloorPrice, calculateMarkdownPrice, calculateNextPriceActionAt, evaluatePricingSafety, type PricingRuleRecord } from "@/lib/listing/pricing";
 
@@ -393,7 +395,14 @@ function testMercariErrorClassification() {
   assertEqual(classifyHttpStatus(403), "AUTH_FAILED", "classifyHttpStatus: 403 defaults to AUTH_FAILED (classifyForbiddenError refines further)");
   assertEqual(classifyHttpStatus(429), "RATE_LIMITED", "classifyHttpStatus: 429 -> RATE_LIMITED");
   assertEqual(classifyHttpStatus(500), "UNKNOWN_REMOTE_ERROR", "classifyHttpStatus: 5xx -> UNKNOWN_REMOTE_ERROR (retryable)");
-  assertEqual(classifyHttpStatus(404), "UNKNOWN_REMOTE_ERROR", "classifyHttpStatus: 404 (the historically-reported bug) falls back to UNKNOWN_REMOTE_ERROR, not a guessed specific cause");
+  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §4での再調査
+  // (WebSearch、複数回一貫して同じ内容を確認)で、Mercari Shops API
+  // 公式ドキュメントに「未登録のIPアドレスからのリクエストは404を返す」
+  // と明記されていることが判明した——以前はUNKNOWN_REMOTE_ERROR
+  // (「推測で決めつけない」ための暫定分類)だったが、今回の裏付けにより
+  // IP_NOT_ALLOWEDへ正しく分類するよう更新した(docs/
+  // mercari-404-root-cause-20260830.md参照)。
+  assertEqual(classifyHttpStatus(404), "IP_NOT_ALLOWED", "classifyHttpStatus: 404 -> IP_NOT_ALLOWED(公式ドキュメントに「未登録IPは404を返す」と明記されていることを2026-08-30に再調査・確認)");
 
   assertEqual(classifyForbiddenError("Access denied: IP address not allowed"), "IP_NOT_ALLOWED", "classifyForbiddenError: recognizes an IP-restriction message");
   assertEqual(classifyForbiddenError("Forbidden"), "AUTH_FAILED", "classifyForbiddenError: a generic 403 without IP wording stays AUTH_FAILED");
@@ -410,11 +419,19 @@ function testMercariErrorClassification() {
   assertTrue(isRetryableMercariErrorCode("NETWORK_ERROR"), "isRetryableMercariErrorCode: NETWORK_ERROR is retryable");
   assertTrue(!isRetryableMercariErrorCode("CONFIG_REQUIRED"), "isRetryableMercariErrorCode: CONFIG_REQUIRED is not retryable (retrying can't fix missing config)");
   assertTrue(!isRetryableMercariErrorCode("AUTH_FAILED"), "isRetryableMercariErrorCode: AUTH_FAILED is not retryable");
+  assertTrue(!isRetryableMercariErrorCode("IP_NOT_ALLOWED"), "isRetryableMercariErrorCode: IP_NOT_ALLOWED is not retryable(未登録IPは再試行しても直らない)");
 
   const err = new MercariApiError("AUTH_FAILED", "HTTP 401: invalid token");
   assertEqual(err.code, "AUTH_FAILED", "MercariApiError: exposes the classified code");
   assertTrue(err.message.includes("認証に失敗"), "MercariApiError: user-facing message uses the Japanese category label");
   assertTrue(err.causeMessage.includes("HTTP 401"), "MercariApiError: technical detail is kept separately in causeMessage");
+
+  const ipErr = new MercariApiError("IP_NOT_ALLOWED", "HTTP 404: Not Found");
+  assertTrue(ipErr.message.includes("固定IPアドレスの事前登録"), "MercariApiError(IP_NOT_ALLOWED): user-facing message gives actionable guidance, not a generic 'unknown error'");
+
+  assertEqual(extractGraphQLOperationName(PRODUCT_CATEGORIES_QUERY), "ProductCategories", "extractGraphQLOperationName: extracts the operation name from a real query used by this codebase");
+  assertEqual(extractGraphQLOperationName("mutation CreateProduct($input: CreateProductInput!) { createProduct(input: $input) { id } }"), "CreateProduct", "extractGraphQLOperationName: works for mutations too");
+  assertEqual(extractGraphQLOperationName("{ productCategories { id } }"), "unknown", "extractGraphQLOperationName: an anonymous query falls back to 'unknown' rather than throwing");
 }
 
 async function main() {

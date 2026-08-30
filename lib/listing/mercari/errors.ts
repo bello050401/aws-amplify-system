@@ -31,7 +31,20 @@ export type MercariErrorCode =
 export const MERCARI_ERROR_LABEL: Record<MercariErrorCode, string> = {
   CONFIG_REQUIRED: "設定が不足しています。",
   AUTH_FAILED: "認証に失敗しました（TOKENが無効か期限切れの可能性があります）。",
-  IP_NOT_ALLOWED: "アクセス元が許可されていません（IP制限の可能性があります）。",
+  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §4での再調査
+  // (WebSearch、2026-08-30時点)で新たに確認: Mercari Shops API公式
+  // ドキュメント(api.mercari-shops.com/docs/index.html、この
+  // サンドボックスからは直接WebFetchできない対象だが、検索結果の
+  // 要約から複数回・一貫して同じ内容を確認できた)には「未登録の
+  // IPアドレスからのリクエストは404 NotFoundを返す」「個別の固定IP
+  // アドレスを環境(sandbox/production)ごとに事前登録する必要がある
+  // （IP範囲指定は不可）」と明記されていた——これはlib/listing/
+  // mercari/endpoints.tsの以前の調査(「Mercari→BELLOのWebhook送信元
+  // IPの話であり、BELLO→MercariのAPI発信には固定IP不要」という結論)
+  // を訂正する新事実であり、実際に報告されたHTTP 404と完全に一致する
+  // (403ではなく404である点も公式記述と一致)。詳細:
+  // docs/mercari-404-root-cause-20260830.md参照。
+  IP_NOT_ALLOWED: "アクセス元のIPアドレスがMercari側に未登録の可能性があります（固定IPアドレスの事前登録が環境ごとに必要です）。契約担当者経由でMercariへ登録を依頼してください。",
   RATE_LIMITED: "リクエストが多すぎます。しばらく待って再試行してください。",
   REMOTE_VALIDATION_ERROR: "送信内容にMercari側で受け付けられない項目があります。",
   NETWORK_ERROR: "Mercari Shops APIへ接続できません（ネットワークエラー）。",
@@ -70,9 +83,20 @@ export function isRetryableMercariErrorCode(code: MercariErrorCode): boolean {
 export function classifyHttpStatus(status: number): MercariErrorCode {
   if (status === 401) return "AUTH_FAILED";
   if (status === 403) return "AUTH_FAILED"; // classifyForbiddenErrorがbody次第でIP_NOT_ALLOWEDへ上書きする
+  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §4: 実際に報告された
+  // HTTP 404の再調査(WebSearch、2026-08-30時点、複数回一貫して同じ内容を
+  // 確認)で、Mercari Shops API公式ドキュメントに「未登録のIPアドレス
+  // からのリクエストは404 NotFoundを返す」と明記されていることが判明した
+  // ——以前は404を「他のどのカテゴリにも当てはまらない予期しないHTTP
+  // ステータス」としてUNKNOWN_REMOTE_ERROR扱いにしていたが、実際には
+  // Mercari側で明確に定義された意味を持つステータスだった(403ではなく
+  // 404である点も含め公式記述と一致)。詳細:
+  // docs/mercari-404-root-cause-20260830.md、lib/listing/mercari/
+  // endpoints.tsのコメント参照。
+  if (status === 404) return "IP_NOT_ALLOWED";
   if (status === 429) return "RATE_LIMITED";
   if (status >= 500) return "UNKNOWN_REMOTE_ERROR"; // §29のカテゴリ一覧に5xx専用の名前が無いため、リトライ対象という性質だけ揃えてここへ分類
-  return "UNKNOWN_REMOTE_ERROR"; // 404等、他のどのカテゴリにも当てはまらない予期しないHTTPステータス
+  return "UNKNOWN_REMOTE_ERROR"; // 401/403/404/429/5xx以外の、他のどのカテゴリにも当てはまらない予期しないHTTPステータス
 }
 
 /** 403応答のbody文面にIP制限を示す語があればIP_NOT_ALLOWEDへ格上げする。 */

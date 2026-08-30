@@ -31,28 +31,38 @@ export function getMercariEndpoint(env: MercariEnvironment = getMercariEnvironme
  * 『APIクライアントのIP allowlist要件』なのかを混同しないこと」への
  * 調査結果。
  *
- * WebSearchで確認できた内容(公式ドキュメント本文はこのsandbox環境から
- * api.mercari-shops.comへ直接到達できず、検索結果の要約経由): Mercari
- * Shops公式ドキュメントに記載されている固定IPアドレス(CIDR表記、2025年
- * 8月に新しいレンジへ更新された、という更新履歴あり)は、**Mercari
- * 自身がWebhookを送信してくる送信元IP**であり、Webhook受信側
- * (今回でいえばBELLO側)がファイアウォール/allowlistでその送信元を
- * 検証するためのものだった。BELLOがMercari
- * GraphQL APIへ発信するリクエスト(このファイルのgetMercariEndpoint宛
- * 通信)側に固定送信元IPを要求する記載は見つからなかった。
+ * 【2026-08-30 不具合修正指示書§4での再調査により訂正】以前のこの
+ * コメントは「BELLO→MercariのAPI発信経路に固定IPは不要」と結論して
+ * いたが、これは誤りだった。改めてWebSearch経由で確認したところ
+ * (複数回・独立したクエリで一貫して同じ内容を確認——直接のWebFetchは
+ * 引き続きこのsandbox環境からブロックされているため、検索エンジンの
+ * ページ要約経由):
  *
- * 結論: BELLO→Mercari
- * のAPI発信経路に固定IP(NAT Gateway等の継続コストがかかる構成)は不要
- * ——
- * 必要になるのはむしろ将来Mercariの問い合わせWebhookを受信する場合
- * (§39以降のMessage機能)で、その際はBELLO側のWebhookエンドポイントが
- * 受信リクエストの送信元IPをこのCIDRレンジと突き合わせて検証する、
- * という逆方向の使い方になる。§125(AWS
- * cost)の「固定IPが不要なら作らない」を満たすため、現時点でNAT
- * Gateway等は導入していない。[UNVERIFIED: 公式ドキュメント本文へ直接
- * 到達できていないため、実際のCIDRレンジ値そのものはこのコメントには
- * 転記していない — Webhook実装時に改めて公式ドキュメントで確認するこ
- * と。]
+ *   - Mercari Shops API公式ドキュメント(api.mercari-shops.com/docs/
+ *     index.html)には、**sandbox環境を含め、APIを呼び出す側(BELLO)の
+ *     送信元IPアドレスを個別に事前登録する必要がある**と明記されて
+ *     いる(IP範囲指定は不可、個々のホストIPを登録)。
+ *   - 許可IPアドレスはsandbox/production環境ごとに別々に管理される。
+ *   - **未登録のIPアドレスからのリクエストは、403ではなく404
+ *     NotFoundを返す**——実際に報告された「HTTP 404: Not Found」と
+ *     完全に一致する。
+ *
+ * 以前の調査で見つけたCIDR記載(Mercari→BELLOのWebhook送信元IP)は
+ * これとは別物として実在するが、上記の「BELLO→MercariのAPI発信に
+ * 固定IPが要る」という要件そのものは見落としていた——直接のドキュメント
+ * 本文にアクセスできない制約下での調査の限界であり、今回改めて複数の
+ * 検索クエリで裏付けが取れたため訂正する(詳細:
+ * docs/mercari-404-root-cause-20260830.md)。
+ *
+ * 【現在の結論・残作業】BELLOの現在のAmplify Hosting SSRコンピュートは
+ * 固定の送信元IPを持たない(NAT Gateway等を導入していないため)。実際に
+ * Mercari Shops APIへ接続するには、(1) 固定の送信元IP経由でAPIへ
+ * 到達できるAWSインフラ変更(典型的にはVPC+NAT Gateway+Elastic IP、
+ * 継続コストを伴う——§125のAWSコスト方針に照らした判断が必要)と、
+ * (2) その固定IPをMercari側の契約担当者経由でsandbox/production
+ * それぞれに登録してもらうこと、の両方が必要になる。(2)はBELLO側の
+ * コードでは絶対に代替できない(Mercariとの契約・登録作業そのもの)
+ * ——ユーザー本人が対応する必要がある実作業として完了報告に明記する。
  */
 
 /**
