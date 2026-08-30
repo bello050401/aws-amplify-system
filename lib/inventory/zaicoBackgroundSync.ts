@@ -2,7 +2,7 @@ import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listInventories } from "@/lib/zaico/client";
 import { syncOneZaicoItem } from "./zaicoSync";
-import { getServerSyncPort, type ZaicoSyncPort } from "./zaicoSyncPorts";
+import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaicoSyncPorts";
 
 /**
  * BELLO統合改修 master指示書 Phase A: ZAICO background full sync.
@@ -236,8 +236,21 @@ export async function advanceZaicoBackgroundSyncJob(who: string | null, port: Za
       return { job: freshRow ? toPublicJob(freshRow) : toPublicJob({ status: "CANCELLED" }), shouldContinue: false };
     }
 
+    // BELLO ZAICO級高速化仕様書 §30.7(baseline計測で確定した根本原因の
+    // 修正): この関数はsyncOneZaicoItemへ`prefetched`を渡していなかった
+    // ため、このページの全50件が(unchangedであっても)findExistingBySourceId
+    // 経由でInventoryテーブル全件Scanを1件ずつ繰り返していた——
+    // syncAllZaicoItems(旧同期経路)は最初からfetchAllZaicoManaged()を
+    // 1回prefetchしていたのに、後発のこの関数だけ祖無かった、という
+    // 実在した性能regression。1ページにつき1回のprefetchで、このページ
+    // 内の全アイテムがO(1)のMapルックアップになる(scripts/
+    // benchmark-zaico-sync.tsのbefore/after計測で実証)。masterCacheも
+    // 同じ理由で1ページ1個、空で開始する。
+    const prefetched = await port.fetchAllZaicoManaged();
+    const masterCache: MasterCache = { categories: new Map(), locations: new Map() };
+
     for (const zaicoItem of zaicoItems) {
-      const result = await syncOneZaicoItem(zaicoItem, who, undefined, port);
+      const result = await syncOneZaicoItem(zaicoItem, who, prefetched, port, masterCache);
       seenSourceIds.add(result.zaicoId);
       counts.totalProcessed += 1;
       if (result.status === "created") counts.created += 1;

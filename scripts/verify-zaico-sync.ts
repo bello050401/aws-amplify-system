@@ -62,10 +62,16 @@ function createMockPort() {
   let nextInventoryNum = 1;
   let nextSkuNum = 1;
 
-  const calls = { createInventory: 0, updateInventory: 0, generateSku: 0 };
+  // BELLO ZAICO級高速化仕様書 §30.7: prefetched map / masterCacheが
+  // 実際にpore呼び出しを削減していることを検証する(testPrefetchAndMasterCacheAvoidRepeatedLookups)
+  // ためのcall counter — findExistingBySourceId/findOrCreateCategory/
+  // findOrCreateLocationは全て「呼ばれるたびに高コストなScan相当」を
+  // 表す操作なので、この3つの呼び出し回数を数える。
+  const calls = { createInventory: 0, updateInventory: 0, generateSku: 0, findExistingBySourceId: 0, findOrCreateCategory: 0, findOrCreateLocation: 0 };
 
   const port: ZaicoSyncPort = {
     async findExistingBySourceId(sourceInventoryId) {
+      calls.findExistingBySourceId++;
       for (const v of store.values()) {
         if (v.sourceInventoryId === sourceInventoryId && !v.deletedAt) return v;
       }
@@ -79,12 +85,14 @@ function createMockPort() {
       return map;
     },
     async findOrCreateCategory(name: string) {
+      calls.findOrCreateCategory++;
       if (categories.has(name)) return { id: categories.get(name)!, created: false };
       const id = `cat-${categories.size + 1}`;
       categories.set(name, id);
       return { id, created: true };
     },
     async findOrCreateLocation(name: string) {
+      calls.findOrCreateLocation++;
       if (locations.has(name)) return { id: locations.get(name)!, created: false };
       const id = `loc-${locations.size + 1}`;
       locations.set(name, id);
@@ -184,6 +192,48 @@ async function testFailureIsolation() {
   const result = await syncOneZaicoItem(item, "tester@example.com", undefined, brokenPort);
   assertEqual(result.status, "failed", "a per-item failure is caught and reported, not thrown");
   assertTrue(typeof result.error === "string" && result.error.includes("mock SKU service unavailable"), "failure carries the underlying error message");
+}
+
+/**
+ * BELLO ZAICO級高速化仕様書 §30.7: baseline計測(scripts/
+ * benchmark-zaico-sync.ts)で確定した2つのN+1(sourceInventoryIdの
+ * 全件Scan、Category/Locationマスタの全件取得)がprefetched map /
+ * masterCacheで実際に回避されることを、呼び出し回数レベルで検証する
+ * ——ミリ秒の計測ではなく「該当port関数が呼ばれた回数」という決定論的
+ * な指標でのregressionテスト。
+ */
+async function testPrefetchAndMasterCacheAvoidRepeatedLookups() {
+  const { port, calls } = createMockPort();
+  // 3件、同じカテゴリ/場所名を共有する既存ZAICO商品を用意。
+  for (const id of [3001, 3002, 3003]) {
+    await syncOneZaicoItem(makeZaicoItem({ id, category: "家具", place: "倉庫A" }), "tester@example.com", undefined, port);
+  }
+  const createCalls = { ...calls };
+  assertEqual(createCalls.findOrCreateCategory, 3, "前提: prefetch無しの初回作成では商品ごとにfindOrCreateCategoryが呼ばれる");
+
+  // prefetched mapを渡さない(従来のadvanceZaicoBackgroundSyncJobの実際
+  // にあったバグを再現)場合: 3件とも変更無しでもfindExistingBySourceId
+  // が3回呼ばれ、masterCache無しなのでfindOrCreateCategory/Locationも
+  // それぞれ3回追加で呼ばれる。
+  const beforeFix = { ...calls };
+  for (const id of [3001, 3002, 3003]) {
+    await syncOneZaicoItem(makeZaicoItem({ id, category: "家具", place: "倉庫A" }), "tester@example.com", undefined, port);
+  }
+  assertEqual(calls.findExistingBySourceId - beforeFix.findExistingBySourceId, 3, "prefetch無し: 3件のunchanged再同期でfindExistingBySourceIdが3回呼ばれる(修正前の実装)");
+  assertEqual(calls.findOrCreateCategory - beforeFix.findOrCreateCategory, 3, "prefetch無し: masterCache無しでは3件ともfindOrCreateCategoryを呼ぶ");
+
+  // 修正後: 1ページ分としてprefetched map + masterCacheを1回だけ用意し、
+  // 3件全てに使い回す。
+  const prefetched = await port.fetchAllZaicoManaged();
+  const masterCache = { categories: new Map<string, { id: string }>(), locations: new Map<string, { id: string }>() };
+  const afterFixStart = { ...calls };
+  for (const id of [3001, 3002, 3003]) {
+    const result = await syncOneZaicoItem(makeZaicoItem({ id, category: "家具", place: "倉庫A" }), "tester@example.com", prefetched, port, masterCache);
+    assertEqual(result.status, "unchanged", `修正後: id=${id}は正しくunchanged判定される(prefetch/cacheの有無が判定結果自体を変えない)`);
+  }
+  assertEqual(calls.findExistingBySourceId - afterFixStart.findExistingBySourceId, 0, "修正後: prefetched mapがあるのでfindExistingBySourceIdは1回も呼ばれない");
+  assertEqual(calls.findOrCreateCategory - afterFixStart.findOrCreateCategory, 1, "修正後: masterCacheにより同じカテゴリ名の3件でfindOrCreateCategoryは初出の1回だけ");
+  assertEqual(calls.findOrCreateLocation - afterFixStart.findOrCreateLocation, 1, "修正後: masterCacheにより同じ場所名の3件でfindOrCreateLocationは初出の1回だけ");
 }
 
 function testBackgroundJobPureHelpers() {
@@ -338,6 +388,7 @@ async function main() {
   await testCreateThenIdempotentUnchanged();
   await testUpdateOnRealChange();
   await testFailureIsolation();
+  await testPrefetchAndMasterCacheAvoidRepeatedLookups();
   testBackgroundJobPureHelpers();
   testPurchasePriceAllInCostRule();
   testCalculateItemGrossProfit();

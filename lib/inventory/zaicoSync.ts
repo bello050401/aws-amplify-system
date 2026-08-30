@@ -5,7 +5,8 @@ import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
 import { diffField, type HistoryFieldChange } from "./history";
 import { stringifyCustomFields, parseCustomFields } from "./customFieldsCodec";
 import { ALL_EXTENDED_FIELDS } from "./extendedFields";
-import { getServerSyncPort, type InventoryModel, type ZaicoSyncPort } from "./zaicoSyncPorts";
+import { getServerSyncPort, type InventoryModel, type ZaicoSyncPort, type MasterCache } from "./zaicoSyncPorts";
+import { normalizeMasterName } from "./masters";
 
 /**
  * The ZAICO→BELLO one-way sync engine (implementation instructions §1-39).
@@ -173,11 +174,45 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
  * background sync worker (amplify/functions/zaico-sync-worker) passes
  * its own Lambda-side port instead — see zaicoSyncPorts.ts.
  */
+/**
+ * BELLO ZAICO級高速化仕様書 §30.7で追加した`masterCache`パラメータ:
+ * 商品1件ごとにfindOrCreateCategory/findOrCreateLocation(内部で
+ * マスタ全件取得)を呼ぶ既存の実装は、1ページ内に同じカテゴリ/場所名
+ * が繰り返し現れても毎回マスタ全件を取り直す実N+1だった(このラウンド
+ * のbaseline計測で確認、scripts/benchmark-zaico-sync.ts参照)。
+ * `findOrCreateCategoryCached`/`findOrCreateLocationCached`がこの
+ * cacheをcheckし、cache missの時だけport呼び出し(実際のDB往復)を行い
+ * 結果をcacheへ書き戻す — 呼び出し元(advanceZaicoBackgroundSyncJob/
+ * syncAllZaicoItems)がページ/run単位で新しい空cacheを渡すだけで有効
+ * になる、後方互換の追加パラメータ(省略時は毎回port呼び出し=従来通り
+ * の動作、syncSingleZaicoItem等の単発呼び出しはcache不要なので省略)。
+ */
+async function findOrCreateCategoryCached(name: string, port: ZaicoSyncPort, cache?: MasterCache): Promise<{ id: string; created: boolean }> {
+  if (!cache) return port.findOrCreateCategory(name);
+  const key = normalizeMasterName(name);
+  const hit = cache.categories.get(key);
+  if (hit) return { id: hit.id, created: false };
+  const result = await port.findOrCreateCategory(name);
+  cache.categories.set(key, { id: result.id });
+  return result;
+}
+
+async function findOrCreateLocationCached(name: string, port: ZaicoSyncPort, cache?: MasterCache): Promise<{ id: string; created: boolean }> {
+  if (!cache) return port.findOrCreateLocation(name);
+  const key = normalizeMasterName(name);
+  const hit = cache.locations.get(key);
+  if (hit) return { id: hit.id, created: false };
+  const result = await port.findOrCreateLocation(name);
+  cache.locations.set(key, { id: result.id });
+  return result;
+}
+
 export async function syncOneZaicoItem(
   zaicoItem: ZaicoInventory,
   who: string | null,
   prefetched?: Map<string, InventoryModel>,
   port: ZaicoSyncPort = getServerSyncPort(),
+  masterCache?: MasterCache,
 ): Promise<ZaicoSyncItemResult> {
   const sourceInventoryId = String(zaicoItem.id);
   const warnings: string[] = [];
@@ -201,7 +236,7 @@ export async function syncOneZaicoItem(
     let categoryId = existing?.categoryId ?? null;
     if (core.categoryName) {
       try {
-        const r = await port.findOrCreateCategory(core.categoryName);
+        const r = await findOrCreateCategoryCached(core.categoryName, port, masterCache);
         categoryId = r.id;
         categoryCreated = r.created;
       } catch (err) {
@@ -212,7 +247,7 @@ export async function syncOneZaicoItem(
     let locationId = existing?.locationId ?? null;
     if (core.locationName) {
       try {
-        const r = await port.findOrCreateLocation(core.locationName);
+        const r = await findOrCreateLocationCached(core.locationName, port, masterCache);
         locationId = r.id;
         locationCreated = r.created;
       } catch (err) {
@@ -446,6 +481,10 @@ export async function syncAllZaicoItems(who: string | null, options: { limit?: n
   const port = options.port ?? getServerSyncPort();
   const startedAt = new Date().toISOString();
   const prefetched = await port.fetchAllZaicoManaged();
+  // ZAICO級高速化仕様書 §30.7: このrun全体で1個のmasterCacheを使い回す
+  // (advanceZaicoBackgroundSyncJobはページ毎に新しいcacheだが、こちら
+  // は1リクエスト内で完結する同期なのでrun全体で共有してよい)。
+  const masterCache: MasterCache = { categories: new Map(), locations: new Map() };
   const items: ZaicoSyncItemResult[] = [];
   let page = 1;
   // ZAICO API pagination convention (page/per_page, "fewer than
@@ -455,7 +494,7 @@ export async function syncAllZaicoItems(who: string | null, options: { limit?: n
   outer: for (;;) {
     const { items: zaicoItems, hasMore } = await listInventories(page);
     for (const zaicoItem of zaicoItems) {
-      items.push(await syncOneZaicoItem(zaicoItem, who, prefetched, port));
+      items.push(await syncOneZaicoItem(zaicoItem, who, prefetched, port, masterCache));
       if (options.limit !== undefined && items.length >= options.limit) break outer;
     }
     if (!hasMore) break;

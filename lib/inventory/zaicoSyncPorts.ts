@@ -130,6 +130,23 @@ export interface UpdateInventoryInput {
   extendedFields: Record<string, unknown>;
 }
 
+/**
+ * BELLO ZAICO級高速化仕様書 §30.7: Category/Locationの
+ * findOrCreateがsyncOneZaicoItemから商品1件ごとに(unchangedでも)
+ * 呼ばれ、その実装(lib/inventory/masters.tsのfindOrCreateMasterEntryByName)
+ * が毎回`listAllMasterEntries`でマスタ全件を取得し直していた
+ * (findExistingBySourceIdの全件Scan問題と並ぶ、もう1つの実N+1) —
+ * このcacheをsyncOneZaicoItemへ渡すことで、1ページ(advanceZaicoBackgroundSyncJobの
+ * 1回の呼び出し)内で同じカテゴリ/場所名が複数商品に現れても
+ * マスタ取得は初出時の1回だけになる。空のMapで開始し、cache miss時
+ * だけport.findOrCreateCategory/Locationを呼んで結果をcacheへ書き戻す
+ * ——追加のprefetch専用port呼び出しを増やさない、最小変更の設計。
+ */
+export interface MasterCache {
+  categories: Map<string, { id: string }>; // normalizeMasterName(name) -> entry
+  locations: Map<string, { id: string }>;
+}
+
 export interface ZaicoSyncPort {
   findExistingBySourceId(sourceInventoryId: string): Promise<InventoryModel | null>;
   /** One full scan of every ZAICO-managed BELLO record, keyed by sourceInventoryId - called once per sync run (Next.js: once per request; Lambda: once per batch tick), never once per item. */
