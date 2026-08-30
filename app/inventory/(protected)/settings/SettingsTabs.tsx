@@ -15,6 +15,7 @@ import { MercariSettingsPanel } from "./MercariSettingsPanel";
 import { PricingRulePanel } from "./PricingRulePanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
+import { SystemAuditPanel } from "./SystemAuditPanel";
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -65,7 +66,7 @@ export function SettingsTabs({
   lineTokenSource,
 }: SettingsTabsProps) {
   const [tab, setTab] = useState<
-    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "pricing" | "shipping" | "line"
+    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "pricing" | "shipping" | "line" | "systemAudit"
   >("category");
 
   const tabClass = (active: boolean) =>
@@ -119,6 +120,11 @@ export function SettingsTabs({
             LINE連携
           </button>
         )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("systemAudit")} className={tabClass(tab === "systemAudit")}>
+            System Audit
+          </button>
+        )}
       </div>
 
       <div className="pt-4">
@@ -142,6 +148,7 @@ export function SettingsTabs({
         {tab === "pricing" && isAdmin && <PricingRulePanel />}
         {tab === "shipping" && isAdmin && <ShippingRatePanel />}
         {tab === "line" && isAdmin && <LineSettingsPanel lineConnected={lineConnected} lineTokenSource={lineTokenSource} />}
+        {tab === "systemAudit" && isAdmin && <SystemAuditPanel />}
       </div>
     </div>
   );

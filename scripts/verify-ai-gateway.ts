@@ -12,6 +12,7 @@
  */
 import { checkTextQuality, checkStructuredQuality } from "@/lib/ai/gateway/qualityGate";
 import { routeGenerateText, routeGenerateStructured } from "@/lib/ai/gateway/router";
+import { runBenchmark, BENCHMARK_CASES } from "@/lib/ai/gateway/benchmark";
 import { getModelForTier, getModelById, MODEL_REGISTRY } from "@/lib/ai/gateway/modelRegistry";
 import type { AIGatewayProvider, AIGenerateResult, AIToolSchema } from "@/lib/ai/gateway/types";
 
@@ -155,11 +156,34 @@ async function testRouterEscalation() {
   assertTrue(!premiumResult.qualityGatePassed, "routeGenerateText: PREMIUMでも品質ゲート不合格ならqualityGatePassed=falseのまま返す(fake successにしない)");
 }
 
+/**
+ * §5/§6: Benchmark harness自体の堅牢性を検証する — このsandbox環境には
+ * ANTHROPIC_API_KEYが無い(実際にmessages.createを呼び401
+ * invalid x-api-keyを確認済み)ため、実行結果は全件FAILEDになるはずだが、
+ * それでも例外を投げず、正しい構造のBenchmarkReportを返すことを確認する
+ * (「実Provider credentialsが無い場合でもrunner/schema/result storageを
+ * 完成させる」の実地検証)。
+ */
+async function testBenchmarkHarness() {
+  const report = await runBenchmark(["ECONOMY"]);
+  assertEqual(report.results.length, BENCHMARK_CASES.length, "runBenchmark: 全ケース分の結果が返る(例外で中断しない)");
+  assertEqual(report.summary.total, BENCHMARK_CASES.length, "runBenchmark: summary.totalが正しい");
+  assertTrue(
+    report.results.every((r) => r.status === "FAILED" || r.status === "SUCCESS"),
+    "runBenchmark: 各結果が正しいstatus値を持つ",
+  );
+  assertTrue(
+    report.results.every((r) => r.status !== "FAILED" || typeof r.errorMessage === "string"),
+    "runBenchmark: FAILEDの場合は必ずerrorMessageを持つ(fake successにしない)",
+  );
+}
+
 async function main() {
   testQualityGateText();
   testQualityGateStructured();
   testModelRegistry();
   await testRouterEscalation();
+  await testBenchmarkHarness();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
