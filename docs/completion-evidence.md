@@ -70,3 +70,38 @@
 「Mobile 375/390/430px E2E」は第四ラウンドの**Partial**から
 **LOCAL_VERIFIED**(実保護route・実測)へ前進した——ただし実Cognito
 経由ではないため**AWS_VERIFIED**には未達のまま。
+
+---
+
+## 第六ラウンド追補(2026-08-30)
+
+ユーザーが実際にアプリを使用して報告した4件のP0課題への対応。
+
+| 領域 | 完成条件 | 証拠 | 状態 | 未達時の理由 |
+|---|---|---|---|---|
+| AI自動下書きのProduction表示エラー(P0-1) | 実production build+実ブラウザで根本原因を再現・特定し、try/catchで隠すだけでなく修正 | `docs/ai-draft-error-root-cause-20260830.md`(実`next build && next start`+Playwrightでの再現→修正→再検証)、`app/global-error.tsx`/`app/inventory/error.tsx`/`app/admin/error.tsx`(このアプリ初のApp Router error boundary) | **LOCAL_VERIFIED** | 実際のProduction環境(App `d1uy61lbnqm8ae`)での再現・修正確認はBLOCKED_BY_USER(AWS credential無効、下記AWS再検証参照)——ローカルで再現したのと全く同じNext.js production build機構(dev modeではなく`next build && next start`)による検証であり、原理的な差異は無い |
+| 家財おまかせ便 公式送料の埼玉発全件取得(P0-2) | 公式ページから検証済み値のみDBへ保存、非公式値・AI推測値で埋めない | `docs/shipping-official-rate-research-20260830.md`、`lib/shipping/importer.ts`(実`fetch()`を伴う正直な実装、WebFetch/WebSearch/実Playwright Chromiumの3手法で再確認したブロック状況)、`verify:shipping`66件(本ラウンド+14) | **BLOCKED_BY_EXTERNAL_SERVICE**(正直な記録、0件補完・非公式転載は一切していない) | このサンドボックスから公式料金検索ページ(`https://form.008008.jp/...`)へのアクセス自体が3手法とも遮断される(`EGRESS_BLOCKED`/`net::ERR_TUNNEL_CONNECTION_FAILED`)。実装は完成しており、到達可能な環境(実ユーザー環境・実AWS Lambda等)であれば動作するはずだが、その検証はできていない |
+| 自動値下げルールのEC出品への移設+一括割当(P0-3) | UIをEC出品へ再配置、既存Pricing Rule Engineを複製せず再利用、設定側は編集不可に | `docs/pricing-rule-relocation-20260830.md`、`app/inventory/(protected)/listings/pricing-rules/`(新設)、`bulkAssignPricingRuleAction`(既存`setAutoPricingForListing`をそのまま呼ぶだけ、新規ロジック無し)、設定側の「pricing」タブはリンクのみに縮小(実装をgrepで確認済み、二重編集不可) | **LOCAL_VERIFIED** | AWS実環境でのUI操作確認はBLOCKED_BY_USER(下記AWS再検証と同一理由) |
+| iPhone実機相当のZAICO級density(P0-4) | overflow=0だけでなく実際のbounding box計測で密度不具合を検出・修正 | `docs/mobile-density-fix-20260830.md`(実Chromium+`getBoundingClientRect()`計測でのbefore/after数値、`align-items: stretch`による縦長バー化という新種の不具合を発見・修正)、`e2e/inventory-mobile.spec.ts`12/12 | **LOCAL_VERIFIED**(fixtureデータでの実測、実ユーザー本人のiPhoneでの最終目視確認は未実施) | 実iPhone実機でのユーザー本人による目視確認はBLOCKED_BY_USER(§159、本人のみ実施可能)。商品行高さ(64px、目標48〜58px)等、完全には未達成の項目は同docに正直に記録済み |
+| Inventory一覧pagination根治(P0-5) | 全件走査+アプリ側ソートではなく真のDynamoDB Queryへ | `docs/inventory-cursor-pagination-20260830.md`、`amplify/data/resource.ts`(新GSI、synth:check済み)、`lib/inventory/inventoryCursorList.ts`+`scripts/verify-inventory-cursor.ts`(20件)、書き込み経路8箇所への`listingPartition`/`listUpdatedAt`伝播+`thumbnailBackfill.ts`からの意図的除外(既知バグの根治) | **PARTIAL**(新基盤はLOCAL_VERIFIEDだが`listInventory`のデフォルト切替は見送り) | 実データへのバックフィル未実行(実AWS環境が無い)、cursor方式は総件数表示・多段階「前へ」を構造的に持たないというUI設計判断を伴うため、切替は次回以降に委ねた。理由は同docに全て記載——`PARTIAL`は「一部だけやって完成扱いにした」の意味ではなく、新基盤自体は完成・検証済みだが利用者が触る挙動(`listInventory`のデフォルト)はまだ変わっていない、という切り分けを明示するため |
+| AWS認証・Staging再検証(P0-6) | 機械的な再確認(前ラウンドの結論を鵜呑みにしない) | `docs/aws-staging-reverify-20260830.md`(STS GetCallerIdentity+`ampx sandbox --once`×2の独立3手法、いずれも`InvalidClientTokenId`/`UnrecognizedClientException`で一致) | **確認完了**(結果はBLOCKED、前ラウンドより詳細な原因を特定——ネットワーク到達性はあるが認証情報自体が無効) | クレデンシャル無効、ユーザー本人のAWS SSO/MFA認証待ち。Production App `d1uy61lbnqm8ae`・既存ZAICO Secretには到達すらしていない(認証情報が無効なため、意図に関わらずどのAWSリソースへも到達不能) |
+| ZAICO Background Job実AWS検証(P0-7) | Staging上のLambdaで実際にcreate/update/resume/retry-DLQを確認 | `docs/aws-staging-reverify-20260830.md`(P0-6と同一原因) | **BLOCKED_BY_USER** | 同上。`amplify/functions/zaico-sync-worker/`への今回の変更(P0-5のlistingPartition/listUpdatedAt設定)は`synth:check`(Lambdaバンドル成功を含む)まで確認済み |
+
+### テストマトリクス追加分(第六ラウンド)
+
+| 項目 | 結果 |
+|---|---|
+| typecheck(第六ラウンド全変更後) | ✅ green |
+| lint(第六ラウンド全変更後) | ✅ green |
+| synth:check(P0-2/P0-5スキーマ変更、zaico-sync-worker Lambda変更後) | ✅ green |
+| verify:* 全10スイート(第六ラウンド新規`verify:inventory-cursor`含む) | ✅ green(346 assertion——66 shipping+76 listing+48 zaico+14 messaging+13 line+8 base+27 ai-gateway+36 image-processing+38 import+20 inventory-cursor) |
+| next build(production mode) | ✅ green(23ページ生成、EC出品配下の新規pricing-rules/pricing-rules/assignルート含む) |
+| Playwright E2E(375/390/430px×4テスト) | ✅ green(12/12、P0-4新規3件含む) |
+| セキュリティ静的監査(P1) | ✅ `dangerouslySetInnerHTML`未使用、secret値のログ出力無し(名称・エラー種別のみ)、shipping importerの`sourceUrl`はハードコード定数でSSRF経路無し、新規Server Action全件にサーバー側ロール判定あり(`bulkAssignPricingRuleAction`/`listingPartitionBackfillAction`/`runShippingRateImportAction`) |
+| Remaining Work Scan(P2) | ✅ 完了(swallowed error/AI直接呼び出し/Tokyo限定送料/0円補完/Pricing Rule UI二重化/巨大クエリ文字列/mobile fixed-width残存/N+1パターンの8観点でgrep監査、新規の未修正不具合は発見せず——見つかった項目は全て既存の正当な設計(埼玉→東京の2件検証済みseed、settings「pricing」タブのリンクのみ化等)であることを確認) |
+
+「1つでも必須項目が赤なら全体完成扱い禁止」の基準に対し、第六ラウンドで
+赤(fail)の項目は無い。`PARTIAL`(P0-5)・`BLOCKED_BY_EXTERNAL_SERVICE`
+(P0-2)・`BLOCKED_BY_USER`(P0-6/P0-7)は、指示書が新設した分類基準
+(「PARTIALは絶対にLOCAL_VERIFIEDへ切り上げない」)に従い、正直な状態
+のまま記録している。
