@@ -8,6 +8,7 @@ import { isInlineEditableColumn, type InlineEditFieldKey } from "@/lib/inventory
 import { useInventoryListColumns } from "../useInventoryListColumns";
 import { InventoryThumbnail } from "../InventoryThumbnail";
 import { useDirectEdit } from "./DirectEditProvider";
+import { useInventorySelection } from "./InventorySelectionProvider";
 import { InventoryCardList } from "./InventoryCardList";
 
 interface InventoryTableProps {
@@ -301,6 +302,12 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
   const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key]);
 
   const { enabled: directEditEnabled, getValue, setValue, isRowDirty } = useDirectEdit();
+  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §7: 以前は
+  // どの操作にも繋がっていなかったチェックボックス(下のtdの
+  // <input type="checkbox">参照)へ、実際の用途(選択した商品の画像を
+  // 一括自動加工——app/inventory/(protected)/InventoryToolbar.tsxの
+  // ボタン参照)を与える。
+  const { isSelected, toggle, toggleAll } = useInventorySelection();
 
   // 列幅はlib/inventory/listColumns.tsのdefaultWidth(表示設定の「初期
   // 設定に戻す」で使う既定値)を基準に、useInventoryListColumns経由の
@@ -354,7 +361,15 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
       <table className="border-collapse border-r border-gray-200 text-[13px]" style={{ tableLayout: "fixed", width: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
-            <th style={{ width: CHECKBOX_COLUMN_WIDTH }} className="px-2 py-1.5"></th>
+            <th style={{ width: CHECKBOX_COLUMN_WIDTH }} className="px-2 py-1.5 text-center">
+              <input
+                type="checkbox"
+                className="align-middle"
+                aria-label="表示中の商品をすべて選択"
+                checked={rows.length > 0 && rows.every((row) => isSelected(row.id))}
+                onChange={() => toggleAll(rows.map((row) => row.id))}
+              />
+            </th>
             {visibleColumns.map((col) => {
               const w = widthFor(col.key);
               const align = RIGHT_ALIGN_COLUMNS.has(col.key) ? "text-right" : "text-left";
@@ -375,7 +390,13 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
             return (
               <tr key={row.id} className={`border-b border-gray-100 ${dirty ? "bg-amber-50" : directEditEnabled ? "" : "hover:bg-gray-50"}`}>
                 <td style={{ width: CHECKBOX_COLUMN_WIDTH }} className="px-2 py-1 text-center">
-                  <input type="checkbox" className="align-middle" aria-label={`${row.name} を選択`} />
+                  <input
+                    type="checkbox"
+                    className="align-middle"
+                    aria-label={`${row.name} を選択`}
+                    checked={isSelected(row.id)}
+                    onChange={() => toggle(row.id)}
+                  />
                 </td>
                 {visibleColumns.map((col) => {
                   const editable = directEditEnabled && isInlineEditableColumn(col.key);

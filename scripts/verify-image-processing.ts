@@ -19,6 +19,8 @@ import {
   DEFAULT_CONFIDENCE_THRESHOLD,
 } from "@/lib/imageProcessing/pipeline";
 import { SharpImageProcessingProvider, ENGINE_VERSION } from "@/lib/imageProcessing/sharpProcessor";
+import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
+import { reprocessButtonLabel } from "@/app/inventory/ImageProcessingPanel";
 
 let failures = 0;
 let passes = 0;
@@ -144,12 +146,36 @@ async function testSharpProcessorRoundTrip() {
   assertTrue(ENGINE_VERSION >= 1, "ENGINE_VERSION: 1以上の正の整数");
 }
 
+/**
+ * 不具合修正・ZAICO同期重複根絶・EC出品UI改善・画像自動加工 完全自律
+ * 実装指示書(2026-08-30) §12: 「画像を自動加工」ボタンのUXロジック
+ * (状態に応じたボタン文言・一括対象の判定)の回帰テスト。
+ */
+function testReprocessButtonLabel() {
+  assertEqual(reprocessButtonLabel("UNPROCESSED"), "加工する", "reprocessButtonLabel: 未加工の画像には「再加工」ではなく「加工する」と表示する(§12「何を押せば処理されるか理解できない」への対処)");
+  assertEqual(reprocessButtonLabel("FAILED"), "再試行", "reprocessButtonLabel: 失敗した画像は「再試行」");
+  assertEqual(reprocessButtonLabel("DEAD_LETTER"), "再試行", "reprocessButtonLabel: リトライ上限到達も「再試行」");
+  assertEqual(reprocessButtonLabel("READY"), "再加工", "reprocessButtonLabel: 加工済の画像は「再加工」");
+  assertEqual(reprocessButtonLabel("NEEDS_REVIEW"), "再加工", "reprocessButtonLabel: 要確認の画像も「再加工」");
+}
+
+function testBulkImageProcessingEligibleStatuses() {
+  assertEqual(
+    [...BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES].sort(),
+    ["DEAD_LETTER", "FAILED", "NEEDS_REVIEW", "UNPROCESSED"].sort(),
+    "BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES: 一括加工の対象は未加工・失敗・要確認のみ(READY/QUEUED/PROCESSING/REPROCESSINGは巻き込まない——付録B「再加工で全画像を巻き込む処理」の禁止)",
+  );
+  assertTrue(!(BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES as readonly string[]).includes("READY"), "BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES: 既にREADYの画像は一括ボタンの対象に含まれない");
+}
+
 async function main() {
   testAspectRatioDecision();
   testCompositionStrength();
   testIdempotencyKey();
   testStatusTransitions();
   testQualityGateDecision();
+  testReprocessButtonLabel();
+  testBulkImageProcessingEligibleStatuses();
   await testSharpProcessorRoundTrip();
 
   console.log(`\n${passes} passed, ${failures} failed`);

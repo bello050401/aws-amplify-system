@@ -4,6 +4,9 @@ import { revalidatePath } from "next/cache";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { enqueueProcessingJob, listVersions, setActiveVersion } from "@/lib/imageProcessing/jobService";
+import { getInventoryDetail } from "@/lib/inventory/queries";
+import { splitImagesByType } from "@/lib/inventory/imageTypes";
+import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
 
 /**
  * BELLO画像自動加工システム(2026-08-30指示書)§8.1/§12/§13の
@@ -69,6 +72,105 @@ export async function reprocessImageAction(input: {
   });
   revalidatePath(`/inventory/${input.inventoryId}`);
   return { enqueued };
+}
+
+/**
+ * 不具合修正・ZAICO同期重複根絶・EC出品UI改善・画像自動加工 完全自律
+ * 実装指示書(2026-08-30) §12.3: 商品詳細の画像エリアに明確な
+ * 「画像を自動加工」ボタンを設置し、カテゴリ変更に頼らずこのボタン
+ * だけで処理を開始できるようにする——既存の`enqueueProcessingJob`
+ * (冪等性チェック込み)をそのまま再利用し、新しい加工ロジックは一切
+ * 追加しない。既に処理待ち/処理中/処理済みの画像は
+ * `enqueueProcessingJob`の冪等性チェックで自然にスキップされる
+ * (このAction自体は「対象画像を全部投げる」だけで、状態判定は
+ * 呼び出し元のUIとenqueueProcessingJob双方が担う二重の安全網)。
+ */
+export async function reprocessAllImagesAction(
+  inventoryId: string,
+  images: { storageKey: string; originalHash: string | null }[],
+): Promise<{ enqueuedCount: number; skippedNoHashCount: number }> {
+  const role = await getInventoryRole();
+  requireImageProcessingPermission(role);
+
+  let enqueuedCount = 0;
+  let skippedNoHashCount = 0;
+  for (const img of images) {
+    if (!img.originalHash) {
+      skippedNoHashCount++;
+      continue;
+    }
+    const created = await enqueueProcessingJob({
+      inventoryId,
+      imageStorageKey: img.storageKey,
+      originalHash: img.originalHash,
+      triggerType: "MANUAL_REPROCESS",
+    });
+    if (created) enqueuedCount++;
+  }
+  revalidatePath(`/inventory/${inventoryId}`);
+  return { enqueuedCount, skippedNoHashCount };
+}
+
+/**
+ * 不具合修正・ZAICO同期重複根絶・EC出品UI改善・画像自動加工 完全自律
+ * 実装指示書(2026-08-30) §7/§12.8: 在庫一覧のチェックボックス
+ * (以前はどの操作にも繋がっていなかった、実質的に死んでいたUI要素
+ * ——app/inventory/(protected)/InventoryTable.tsxの該当箇所参照)へ
+ * 与える、実際に意味のある一括操作。複数商品を横断して選択し、まとめて
+ * 画像の自動加工を予約する。
+ *
+ * 商品ごとの`reprocessAllImagesAction`と同じ判定(未加工・失敗・要確認
+ * の画像だけを対象とし、既にREADYの画像は巻き込まない——付録B「再加工
+ * で全画像を巻き込む処理」の禁止と同じ理由)を、選択された商品全件へ
+ * 適用する。
+ */
+export interface BulkReprocessInventoryImagesResult {
+  itemsProcessed: number;
+  itemsSkippedNotFound: number;
+  enqueuedCount: number;
+  skippedNoHashCount: number;
+}
+
+export async function bulkReprocessInventoryImagesAction(inventoryIds: string[]): Promise<BulkReprocessInventoryImagesResult> {
+  const role = await getInventoryRole();
+  requireImageProcessingPermission(role);
+
+  let itemsProcessed = 0;
+  let itemsSkippedNotFound = 0;
+  let enqueuedCount = 0;
+  let skippedNoHashCount = 0;
+
+  for (const inventoryId of inventoryIds) {
+    const detail = await getInventoryDetail(inventoryId);
+    if (!detail) {
+      itemsSkippedNotFound++;
+      continue;
+    }
+    itemsProcessed++;
+    const { normal } = splitImagesByType(detail.images);
+    for (const img of normal) {
+      const versions = await listVersions(img.storageKey);
+      const active = versions.find((v) => v.active);
+      const status = active ? active.status : versions.length === 0 ? "UNPROCESSED" : versions[versions.length - 1].status;
+      // ImageProcessingPanel.tsxのbulkTargetsフィルタと同じ4状態のみ対象
+      // (READY/QUEUED/PROCESSING/REPROCESSING/SUPERSEDEDは巻き込まない)。
+      if (!(BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES as readonly string[]).includes(status)) continue;
+      if (!img.originalHash) {
+        skippedNoHashCount++;
+        continue;
+      }
+      const created = await enqueueProcessingJob({
+        inventoryId,
+        imageStorageKey: img.storageKey,
+        originalHash: img.originalHash,
+        triggerType: "MANUAL_REPROCESS",
+      });
+      if (created) enqueuedCount++;
+    }
+  }
+
+  revalidatePath("/inventory");
+  return { itemsProcessed, itemsSkippedNotFound, enqueuedCount, skippedNoHashCount };
 }
 
 /** §12: 直前のversion(または選んだ任意のversion)へロールバックする。 */

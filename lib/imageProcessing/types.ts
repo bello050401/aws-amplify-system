@@ -120,3 +120,15 @@ export interface RawDevelopmentProvider {
   /** RAW(CR2/NEF/ARW等)を高品質JPEGへ現像する(§10)。 */
   develop(rawBuffer: Buffer, format: string): Promise<Buffer>;
 }
+
+/**
+ * 不具合修正・ZAICO同期重複根絶・EC出品UI改善・画像自動加工 完全自律
+ * 実装指示書(2026-08-30) §12.8: 「画像を自動加工」一括ボタン(商品単位:
+ * app/inventory/ImageProcessingPanel.tsx、複数商品横断:
+ * app/actions/imageProcessing.tsのbulkReprocessInventoryImagesAction)
+ * の両方が対象とする画像のversion状態——既にREADYの画像は巻き込まない
+ * (付録B「再加工で全画像を巻き込む処理」の禁止と同じ理由)。"use
+ * client"ファイルと"use server"ファイルの両方から安全にimportできる
+ * よう、どちらの境界も持たないこの中立なtypes.tsへ置く。
+ */
+export const BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES = ["UNPROCESSED", "FAILED", "DEAD_LETTER", "NEEDS_REVIEW"] as const;

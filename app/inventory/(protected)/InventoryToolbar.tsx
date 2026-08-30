@@ -7,6 +7,7 @@ import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { DirectEditControls } from "./DirectEditControls";
 import { ExportMenu } from "./ExportMenu";
 import { ImportWizard } from "./ImportWizard";
+import { BulkImageProcessingControl } from "./BulkImageProcessingControl";
 
 interface InventoryToolbarProps {
   role: InventoryRole;
@@ -163,6 +164,11 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
             インポート
           </button>
         )}
+        {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §7/§12.8:
+            在庫一覧のチェックボックス(InventoryTable.tsx)へ与えた実際の
+            用途。選択が空の間はBulkImageProcessingControl自身が何も
+            描画しない。 */}
+        {canEdit && <BulkImageProcessingControl />}
         <ExportMenu
           currentFilterParams={{
             q,

@@ -11,6 +11,7 @@ import {
 import { buildSearchFieldDefs, completeConditions, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
 import { InventoryHeader } from "../InventoryHeader";
 import { DirectEditProvider } from "./DirectEditProvider";
+import { InventorySelectionProvider } from "./InventorySelectionProvider";
 import { InventorySidebar } from "./InventorySidebar";
 import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryAdvancedSearchPanel } from "./InventoryAdvancedSearchPanel";
@@ -115,6 +116,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
     // and the table body below — they're siblings in the DOM but share
     // one Context so the header button can drive what the table renders.
     // See that file's own comment.
+    <InventorySelectionProvider>
     <DirectEditProvider rows={listResult.items}>
       <div className="flex h-full flex-col">
         <InventoryHeader
@@ -183,5 +185,6 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
         </div>
       </div>
     </DirectEditProvider>
+    </InventorySelectionProvider>
   );
 }
