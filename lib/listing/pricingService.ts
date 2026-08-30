@@ -4,9 +4,10 @@ import { getInventoryDetail } from "@/lib/inventory/queries";
 import { getChannelListing } from "./service";
 import { updateBaseProduct } from "./base/adapter";
 import { BaseListingApiError } from "./base/errors";
-import type { ListingChannel } from "./types";
+import type { ListingChannel, ListingStatus } from "./types";
 import {
   calculateFloorPrice,
+  decideActionAtFloor,
   calculateMarkdownPrice,
   calculateNextPriceActionAt,
   evaluatePricingSafety,
@@ -238,6 +239,30 @@ export interface PricingCheckResult {
  * ユーザーにとって有害(§157)と判断した。現状はUIからの手動テスト
  * 実行(「今すぐ価格チェックを実行」ボタン)からのみ呼ばれる。
  */
+/**
+ * 下限価格に到達した出品へ、ルールの「下限到達時の動作」を適用する。
+ * 何をするかの判定は`decideActionAtFloor`(純粋関数)が持ち、ここは
+ * その結果を書き込むだけ。変更が不要な場合でも、なぜ何もしなかったかは
+ * lastAutomationResultに必ず残す。
+ */
+async function applyActionAtFloor(
+  channelListing: { id: string; status: ListingStatus; automationHold?: boolean | null },
+  rule: PricingRuleRecord,
+  who: string | null,
+): Promise<void> {
+  const decision = decideActionAtFloor(rule.actionAtFloor, channelListing);
+  await serverDataClient.models.ChannelListing.update(
+    {
+      id: channelListing.id,
+      ...(decision.status ? { status: decision.status } : {}),
+      ...(decision.automationHold ? { automationHold: true } : {}),
+      lastAutomationResult: `${new Date().toISOString()} at-floor(${rule.actionAtFloor}): ${decision.note}`,
+      updatedBy: who ?? undefined,
+    },
+    inventoryAuthMode,
+  );
+}
+
 export async function runPricingCheck(inventoryId: string, who: string | null, channel: ListingChannel = "MERCARI_SHOPS"): Promise<PricingCheckResult> {
   const channelListing = await getChannelListing(inventoryId, channel);
   if (!channelListing) throw new Error("対象のChannelListingが見つかりません。");
@@ -266,6 +291,24 @@ export async function runPricingCheck(inventoryId: string, who: string | null, c
     { id: channelListing.id, lastAutomationResult: `${new Date().toISOString()} ${summary}`, updatedBy: who ?? undefined },
     inventoryAuthMode,
   );
+
+  // 下限価格に到達したときだけは、単に止めるのではなくルールの
+  // 「下限到達時の動作」に従う。
+  //
+  // これは以前まったく効いていなかった: actionAtFloorはルールとして
+  // 保存され設定画面に4択で出るのに、判定側がこの値を一度も読んでおらず、
+  // 「そのまま維持」「出品を停止」「手動確認を促す」のどれを選んでも
+  // AT_FLOOR_PRICEで止まるだけで挙動が同一だった。「出品を停止」を選んだ
+  // 利用者は停止されると期待するので、選択肢が効かないまま並んでいるのは
+  // 黙って機能を縮小しているのと同じ(§155)。
+  //
+  // 外部APIを呼ぶ動作(RELIST=再出品)はMercari側の再出品APIが未確認の
+  // ため引き続き実行しない — 代わりに「なぜ実行しなかったか」を
+  // lastAutomationResultへ必ず残し、UIのラベルも「未実装」のままにする。
+  if (!safety.safe && safety.reason === "AT_FLOOR_PRICE" && rule) {
+    await applyActionAtFloor(channelListing, rule, who);
+    return { executed: false, reason: safety.reason };
+  }
 
   if (!safety.safe) return { executed: false, reason: safety.reason };
 

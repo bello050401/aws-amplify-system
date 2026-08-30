@@ -138,3 +138,36 @@ export function evaluatePricingSafety(input: PricingSafetyInput): PricingSafetyR
   }
   return { safe: true };
 }
+
+/**
+ * 下限価格に到達したときに何をするかを決める。DBへは触れず、
+ * 「どう更新すべきか」だけを返す純粋関数(判定はpricing.ts、
+ * 書き込みはpricingService.tsという既存の分担に合わせる)。
+ *
+ * この設定は以前まったく効いていなかった — ルールとして保存され設定画面に
+ * 4択で出るのに、判定側がこの値を一度も読んでおらず、どれを選んでも
+ * AT_FLOOR_PRICEで止まるだけで挙動が同一だった。
+ *
+ * どの分岐も価格自体は変更しない(下限より下げない)。RELISTはMercariの
+ * 再出品APIが未確認のため実行せず、何もしなかったことを記録だけする。
+ */
+export function decideActionAtFloor(
+  action: PricingActionAtFloor,
+  current: { status: string; automationHold?: boolean | null },
+): { status?: "PAUSED"; automationHold?: true; note: string } {
+  switch (action) {
+    case "PAUSE":
+      return current.status === "PAUSED"
+        ? { note: "下限に到達しています(出品は既に停止済み)。" }
+        : { status: "PAUSED", note: "下限に到達したため出品を停止しました。" };
+    case "MANUAL_REVIEW":
+      return current.automationHold
+        ? { note: "下限に到達しています(既に手動確認待ち)。" }
+        : { automationHold: true, note: "下限に到達したため手動確認待ちにしました。" };
+    case "RELIST":
+      return { note: "再出品は未実装のため、価格・状態とも変更していません。" };
+    case "KEEP":
+    default:
+      return { note: "下限に到達しました。設定により価格・状態とも変更していません。" };
+  }
+}

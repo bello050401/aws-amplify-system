@@ -19,7 +19,8 @@ import { MercariApiError, classifyHttpStatus, classifyForbiddenError, classifyGr
 import { extractGraphQLOperationName } from "@/lib/listing/mercari/client";
 import { PRODUCT_CATEGORIES_QUERY } from "@/lib/listing/mercari/queries";
 import { isEcListingEligible, buildCategoryNameLookup, EXCLUDED_CATEGORY_NAMES } from "@/lib/listing/ecEligibility";
-import { calculateFloorPrice, calculateMarkdownPrice, calculateNextPriceActionAt, evaluatePricingSafety, type PricingRuleRecord } from "@/lib/listing/pricing";
+import { calculateFloorPrice, calculateMarkdownPrice, calculateNextPriceActionAt, decideActionAtFloor,
+  evaluatePricingSafety, type PricingRuleRecord } from "@/lib/listing/pricing";
 
 let failures = 0;
 let passes = 0;
@@ -308,6 +309,38 @@ const BASE_RULE: PricingRuleRecord = {
   actionAtFloor: "PAUSE",
 };
 
+function testActionAtFloor() {
+  // この4択は以前どれを選んでも挙動が同じだった(判定側がactionAtFloorを
+  // 一度も読んでいなかった)。選択肢ごとに実際に違う結果になることを固定する。
+  const atFloor = { status: "QUEUED", automationHold: false };
+
+  const keep = decideActionAtFloor("KEEP", atFloor);
+  assertTrue(keep.status === undefined && keep.automationHold === undefined, "decideActionAtFloor: KEEPは状態を変えない");
+  assertTrue(keep.note.length > 0, "decideActionAtFloor: KEEPでも理由は記録する");
+
+  const pause = decideActionAtFloor("PAUSE", atFloor);
+  assertEqual(pause.status, "PAUSED", "decideActionAtFloor: PAUSEは出品を停止する");
+  assertTrue(pause.automationHold === undefined, "decideActionAtFloor: PAUSEはholdを立てない");
+
+  const review = decideActionAtFloor("MANUAL_REVIEW", atFloor);
+  assertEqual(review.automationHold, true, "decideActionAtFloor: MANUAL_REVIEWは手動確認待ちにする");
+  assertTrue(review.status === undefined, "decideActionAtFloor: MANUAL_REVIEWは出品を停止しない");
+
+  const relist = decideActionAtFloor("RELIST", atFloor);
+  assertTrue(relist.status === undefined && relist.automationHold === undefined, "decideActionAtFloor: RELISTは未実装なので何も変更しない");
+  assertTrue(relist.note.includes("未実装"), "decideActionAtFloor: RELISTは未実装であることを記録に残す");
+
+  // 4択が互いに区別できること(全部同じ結果に戻る退行を防ぐ)
+  const notes = new Set([keep.note, pause.note, review.note, relist.note]);
+  assertEqual(notes.size, 4, "decideActionAtFloor: 4つの選択肢がそれぞれ異なる結果になる");
+
+  // 冪等性 — 既に停止済み/確認待ちなら重ねて書かない
+  const alreadyPaused = decideActionAtFloor("PAUSE", { status: "PAUSED", automationHold: false });
+  assertTrue(alreadyPaused.status === undefined, "decideActionAtFloor: 既にPAUSEDなら再度停止しない");
+  const alreadyHeld = decideActionAtFloor("MANUAL_REVIEW", { status: "QUEUED", automationHold: true });
+  assertTrue(alreadyHeld.automationHold === undefined, "decideActionAtFloor: 既に確認待ちなら重ねて立てない");
+}
+
 function testPricingCalculations() {
   assertEqual(calculateFloorPrice(10000, { floorPriceMode: "FIXED_AMOUNT", floorPriceValue: 3000 }), 3000, "calculateFloorPrice: FIXED_AMOUNT returns the value as-is");
   assertEqual(
@@ -446,6 +479,7 @@ async function main() {
   testEcListingEligibility();
   testPricingCalculations();
   testPricingSafety();
+  testActionAtFloor();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
