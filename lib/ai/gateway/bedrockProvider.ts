@@ -1,5 +1,5 @@
 import "server-only";
-import { AnthropicBedrockMantle } from "@anthropic-ai/bedrock-sdk";
+import { AnthropicBedrock } from "@anthropic-ai/bedrock-sdk";
 import { getBedrockModelForTier, getBedrockModelById } from "./modelRegistry";
 import type { AIGatewayProvider, AIGeneratePolicy, AIGenerateResult, AITask, AITokenUsage, AIToolSchema } from "./types";
 
@@ -29,26 +29,40 @@ import type { AIGatewayProvider, AIGeneratePolicy, AIGenerateResult, AITask, AIT
  * のAmplify Appと同じリージョン)。Bedrockはリージョンごとに使える
  * モデルが異なるため、明示的に上書きできるようにしてある。
  *
- * ## 現時点の外部ブロッカー(実測)
+ * ## なぜ`AnthropicBedrock`で、`AnthropicBedrockMantle`ではないのか
  *
- * このAWSアカウント(203918843421)では、2026-08-31時点でBedrockの
- * `Converse`がモデルを問わず以下で拒否される:
+ * 最初はMantle(`https://bedrock-mantle.{region}.api.aws/anthropic`、
+ * SigV4のservice名`bedrock-mantle`)を使っていた。権限
+ * (`bedrock-mantle:CreateInference`)を付ければ疎通はするが、**この
+ * アカウントのMantleプロジェクトにはモデルが1件も存在しない**。素の
+ * モデル名(`claude-sonnet-4-6`等)も日付入りもBedrockの推論プロファイル
+ * IDも、全て`404 The model '...' does not exist`になることを実測した。
+ * 一方、通常のBedrock(`AnthropicBedrock`)側には`us.anthropic.*`の推論
+ * プロファイルが実在し、実際に生成が返ることを確認できたため、そちらへ
+ * 統一した。IAMも`bedrock:InvokeModel`系だけで足りる。
  *
- *   AccessDeniedException: Your account is currently being verified.
- *   Verification normally takes less than 2 hours.
+ * ## 現時点の外部ブロッカー(実測・AWSの一次APIで確定)
  *
- * これはモデルアクセス許諾の問題ではなく**AWS側のアカウント検証待ち**
- * であり、コードでは解消できない。検証が完了すればこのProviderはその
- * まま動作する(コード側は完成させ、外部要因だけを分離する — 指示書
- * §6-13の方針)。`healthCheck()`はこの状態を利用者に分かる言葉で返す。
+ * このAWSアカウントは**Bedrockの「Anthropic use case details」フォーム
+ * が未提出**で、Anthropicモデルの呼び出しが拒否される:
+ *
+ *   404 Model use case details have not been submitted for this account.
+ *       Fill out the Anthropic use case details form before using the model.
+ *
+ * 推測ではなく`bedrock get-use-case-for-model-access`が
+ * `ResourceNotFoundException: You have not filled out the request form.`
+ * を返すことで確定させた。これはコードでは解消できず、AWSコンソール
+ * (Bedrock → Model access)での提出が必要な**利用者側の操作**である。
+ * 提出後はこのProviderがそのまま動作する(コード側は完成させ、外部要因
+ * だけを分離する — 指示書§6-13の方針)。
  */
 
-function client(): AnthropicBedrockMantle {
+function client(): AnthropicBedrock {
   const awsRegion = process.env.BEDROCK_REGION || process.env.AWS_REGION || "us-west-2";
   // 資格情報は明示的に渡さない — Amplify SSRコンピュート/Lambdaの実行
   // ロール(既定の資格情報プロバイダチェーン)を使う。APIキーもSecretも
   // 増やさない。
-  return new AnthropicBedrockMantle({ awsRegion });
+  return new AnthropicBedrock({ awsRegion });
 }
 
 /**
@@ -73,10 +87,21 @@ export function describeBedrockError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   const haystack = `${name} ${message}`;
 
+  // 用途フォーム未提出。404で返ってくるが「モデルが無い」ではなく
+  // 「アカウントの手続きが済んでいない」なので、先に判定して具体的な
+  // 対処を案内する — これが分からないと利用者は延々モデルIDを疑う。
+  if (/use case details have not been submitted|filled out the request form/i.test(haystack)) {
+    return "AWSアカウントでAmazon Bedrockの利用申請（Anthropicモデルの用途フォーム）がまだ提出されていません。AWSコンソールの Bedrock → モデルアクセス から提出すると利用できるようになります。";
+  }
   // アカウント検証待ちは権限不足と区別する — 利用者側で対処のしようが
   // 無く、AWS側の手続き完了で自動的に解消するため。
   if (/being verified|account is currently being verified/i.test(haystack)) {
     return "AWSアカウントの検証が完了していないため、Amazon Bedrockをまだ利用できません（AWS側の手続きが完了すると自動的に利用可能になります）。";
+  }
+  // 「このアカウントでは提供されていない」「Legacy扱いで使えない」は
+  // どちらもモデル選択の問題。設定で別モデルへ切り替えられる。
+  if (/not available for this account|marked by provider as Legacy/i.test(haystack)) {
+    return "選択中のAIモデルはこのAWSアカウントでは利用できません（別のモデルへの切り替えが必要です）。";
   }
   // permission_error はAnthropicのBedrockクライアントが403で返す型名。
   // AccessDeniedExceptionはAWS SDK側の名前。どちらも権限不足。
@@ -95,7 +120,15 @@ export function describeBedrockError(err: unknown): string {
   return "Amazon Bedrockの呼び出しに失敗しました。時間をおいて再度お試しください（詳細はサーバーログに記録しています）。";
 }
 
-const THINKING = { type: "adaptive" } as const;
+/**
+ * adaptive thinkingはClaude 4.6以降のみ。4.5系へ送ると400
+ * ValidationExceptionになるため、Registryのフラグで出し分ける
+ * (`budget_tokens`形式は使わない — 品質より確実に通ることを優先し、
+ * 非対応モデルではthinking自体を送らない)。
+ */
+function thinkingFor(model: { supportsAdaptiveThinking?: boolean }) {
+  return model.supportsAdaptiveThinking ? ({ thinking: { type: "adaptive" } } as const) : {};
+}
 
 export class BedrockGatewayProvider implements AIGatewayProvider {
   readonly providerId = "bedrock";
@@ -127,7 +160,7 @@ export class BedrockGatewayProvider implements AIGatewayProvider {
       res = await client().messages.create({
         model: model.modelId,
         max_tokens: policy.maxTokens ?? model.maxOutputTokens,
-        thinking: THINKING,
+        ...thinkingFor(model),
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
       });
@@ -165,7 +198,7 @@ export class BedrockGatewayProvider implements AIGatewayProvider {
       res = await client().messages.create({
         model: model.modelId,
         max_tokens: policy.maxTokens ?? model.maxOutputTokens,
-        thinking: THINKING,
+        ...thinkingFor(model),
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
         tools: [toolSchema],

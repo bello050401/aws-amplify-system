@@ -91,4 +91,10 @@ export interface ModelRegistryEntry {
   supportsStructuredOutput: boolean;
   /** §4.1 escalation先の優先順位(小さいほど先) — PREMIUM内に複数モデルがある場合に使う。 */
   fallbackPriority: number;
+  /**
+   * `thinking: { type: "adaptive" }` を受け付けるか。Claude 4.6以降のみtrueで、
+   * それ以前のモデルへ送ると400になる(4.5系は`budget_tokens`形式)。
+   * 未指定はfalse扱い — 迷ったらthinkingを送らない方が安全なため。
+   */
+  supportsAdaptiveThinking?: boolean;
 }

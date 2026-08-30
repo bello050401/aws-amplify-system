@@ -246,14 +246,29 @@ function testBedrockModelRegistry() {
     assertTrue(getBedrockModelById(m.modelId) !== undefined, `getBedrockModelById: ${tier}のモデルIDで引ける`);
   }
   // 実測で存在を確認したモデルだけを登録する(存在しないIDはescalation時に
-  // 必ずValidationExceptionで落ちるため)。
-  const premium = getBedrockModelForTier("PREMIUM");
-  const standard = getBedrockModelForTier("STANDARD");
+  // 必ずValidationExceptionで落ちるため)。us-west-2でmessages.createが
+  // 実際に通ったのは Sonnet 4.5 / Sonnet 4.6 / Opus 4.5 の3つだけで、
+  // Sonnet 5・Opus 5・Fable 5は403「not available for this account」、
+  // Claude 3系は404「marked by provider as Legacy」だった。
   assertTrue(
-    BEDROCK_MODEL_REGISTRY.every((m) => m.modelId.startsWith("us.anthropic.") || m.modelId.startsWith("anthropic.")),
-    "BEDROCK_MODEL_REGISTRY: 全モデルIDがBedrockの綴り(推論プロファイルまたは素のモデルID)",
+    BEDROCK_MODEL_REGISTRY.every((m) => m.modelId.startsWith("us.anthropic.")),
+    "BEDROCK_MODEL_REGISTRY: 全モデルIDがクロスリージョン推論プロファイル(素のON_DEMAND IDでは呼べない)",
   );
-  assertEqual(premium.modelId, standard.modelId, "BEDROCK_MODEL_REGISTRY: us-west-2で実在を確認できたAnthropicモデルはHaiku 4.5/Sonnet 4のみのため、PREMIUMはSonnet 4で代替する(存在しないOpusのIDを登録しない)");
+  const verified = new Set(["us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us.anthropic.claude-sonnet-4-6", "us.anthropic.claude-opus-4-5-20251101-v1:0"]);
+  assertTrue(
+    BEDROCK_MODEL_REGISTRY.every((m) => verified.has(m.modelId)),
+    "BEDROCK_MODEL_REGISTRY: 実際に生成が返ることを確認済みのモデルだけを登録する",
+  );
+  // adaptive thinkingはClaude 4.6以降のみ。4.5系にtrueを付けると実行時に
+  // 400で落ちるため、フラグとモデル世代の対応をここで固定する。
+  const ADAPTIVE_CAPABLE = new Set(["us.anthropic.claude-sonnet-4-6"]);
+  for (const m of BEDROCK_MODEL_REGISTRY) {
+    assertEqual(
+      m.supportsAdaptiveThinking === true,
+      ADAPTIVE_CAPABLE.has(m.modelId),
+      `BEDROCK_MODEL_REGISTRY: ${m.modelId} のsupportsAdaptiveThinkingが4.6以降のモデルだけtrueになっている`,
+    );
+  }
 }
 
 
@@ -292,6 +307,20 @@ function testBedrockErrorClassification() {
   assertTrue(describeBedrockError(Object.assign(new Error("rate limited"), { status: 429 })).includes("混雑"), "describeBedrockError: 429は再試行を促す");
   assertTrue(describeBedrockError(Object.assign(new Error("bad input"), { status: 400 })).includes("不正"), "describeBedrockError: 400はリクエスト内容の問題として説明する");
   assertTrue(describeBedrockError(Object.assign(new Error("no such model"), { status: 404 })).includes("モデル"), "describeBedrockError: 404はモデル/リージョンの問題として説明する");
+
+  // 用途フォーム未提出も404で来るが、「モデルIDが違う」と案内すると
+  // 利用者は永久に直せない。実際にこのアカウントで観測した文言。
+  const form = describeBedrockError(
+    Object.assign(new Error("404 Model use case details have not been submitted for this account. Fill out the Anthropic use case details form before using the model."), { status: 404 }),
+  );
+  assertTrue(form.includes("利用申請") || form.includes("用途"), "describeBedrockError: 用途フォーム未提出は申請が必要だと案内する");
+  assertTrue(!form.includes("モデルIDとリージョン"), "describeBedrockError: 用途フォーム未提出をモデルID間違いと誤って案内しない");
+
+  const unavailable = describeBedrockError(
+    Object.assign(new Error("anthropic.claude-opus-5 is not available for this account."), { status: 403 }),
+  );
+  assertTrue(unavailable.includes("利用できません"), "describeBedrockError: 未提供モデルはモデル側の問題として説明する");
+  assertTrue(!unavailable.includes("権限がありません"), "describeBedrockError: 未提供モデルを権限不足と誤って案内しない");
 
   // 未知のエラーでも本文をそのまま出さない
   const unknown = describeBedrockError(new Error("internal detail: /var/task/secret-path 12345"));

@@ -111,6 +111,52 @@ HTTP 500**。他ページは正常だったため切り分けられた。
 壊れた411行は削除して作り直した(全行 `createdBy: "system-seed"`、
 手動投入行は0件であることをスクリプトが確認したうえで実行)。
 
+**修正後の実測(AWS_VERIFIED)**:
+
+| 状態 | 設定ページ成功率 | 応答時間 |
+|---|---|---|
+| 修正前 | 8回中1回(87.5%失敗) | 平均 3,159ms |
+| 修正後・投入中 | 6回中5回 | 5〜7秒(60件ずつ投入) |
+| **修正後・投入完了** | **10回中10回(失敗0)** | **中央値 1,035ms** |
+
+料金マスターは **450/450件** で完了。北海道は **36行(4エリア×9ランク)**
+で、**全行が `destinationArea` を保持**(修正前は0行)。エリアは
+函館 / 札幌·千歳 / 道北 / 道東 の4種すべてが存在する。
+
+### QA-c: Bedrockのエラー本文がUIへ露出していた — **LOCAL_VERIFIED**
+
+「AIで下書きを生成」を実機で押したところ、`ANTHROPIC_API_KEY` の文言は
+消えて実際にBedrockへ到達するようになった一方、403の**上流メッセージが
+そのまま画面に出ていた**:
+
+```
+403 {"type":"error","request_id":"req_...","error":{"type":
+"permission_error","message":"User: arn:aws:sts::<account>:assumed-role/
+<RoleName>/AmplifyHostingCompute-app=<appId> is not authorized to
+perform: bedrock-mantle:CreateInference ..."}}
+```
+
+アカウントID・実行ロール名・アプリID・拒否アクション名・request_idが
+利用者向け画面に出ていた。`describeBedrockError` が上流本文を混ぜない
+ようにし、status/エラー型で分類した日本語だけを返すよう修正。
+
+**同時に判明した権限の誤り**: `AnthropicBedrockMantle` クライアントは
+`bedrock:InvokeModel` を呼ばない。実際に必要なのは
+
+```
+bedrock-mantle:CreateInference on
+arn:aws:bedrock-mantle:<region>:<account>:project/default
+```
+
+最初に付与したのは `bedrock:*` だったため効かず、
+`simulate-principal-policy` が「allowed」と答えたのも**実行時に使われ
+ないアクションをsimulateしていた**ため。Stagingロールへ
+`bedrock-mantle:CreateInference` を追加した(Productionロールは未変更)。
+
+**あわせて BLOCKED_BY_EXTERNAL_SERVICE が1件解消**: Bedrockの
+アカウント検証が完了し、管理者資格情報でのConverse呼び出しが成功する
+ようになった。
+
 ---
 
 ## 2. 誤検知として退けたもの(報告しなかった)
@@ -227,3 +273,84 @@ NAT Gatewayを作らない」)。
 | Mercari IP登録 | Mercari契約担当経由で**日本国内の固定IP**を申請(Sandbox/本番それぞれ) | 実接続成功の確認 |
 | LINE 実連携 | Channel Secret / Access Token を保存し、Webhook URL をLINE Developers Consoleへ登録 | 受信→Conversation/Message生成の実確認 |
 | Bedrock | AWSアカウント検証の完了(AWS側の手続き) | AI下書きの実生成 |
+
+### QA-c 続報: Mantle経路は行き止まりだった — **BLOCKED_BY_USER**
+
+`bedrock-mantle:CreateInference` を付与して403は消えたが、次は
+`404 The model '...' does not exist` になった。ここで「モデルIDが違う」
+と決めつけず、Mantleのエンドポイントへ総当たりした:
+
+| 渡したモデルID | 結果 |
+|---|---|
+| `claude-haiku-4-5` / `claude-sonnet-4-5` / `claude-sonnet-4-6` | 404 does not exist |
+| `claude-opus-5` / `claude-sonnet-5` | 404 does not exist |
+| `claude-haiku-4-5-20251001` など日付入り | 404 does not exist |
+| `us.anthropic.claude-haiku-4-5-...-v1:0` | 404 does not exist |
+| `GET /v1/models` | 404 |
+
+**このアカウントのMantleプロジェクトにはモデルが1件も存在しない。**
+一方、通常のBedrock側には`us.anthropic.*`の推論プロファイルが21件実在
+したため、`AnthropicBedrockMantle` → `AnthropicBedrock` へ切り替えた。
+
+通常Bedrockでの実測(us-west-2、1件ずつ`messages.create`):
+
+| モデル | 結果 |
+|---|---|
+| `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | **生成成功** |
+| `us.anthropic.claude-sonnet-4-6` | **生成成功** |
+| `us.anthropic.claude-opus-4-5-20251101-v1:0` | **生成成功** |
+| `us.anthropic.claude-sonnet-5` / `opus-5` / `fable-5` | 403 not available for this account |
+| `us.anthropic.claude-3-haiku` / `claude-3-sonnet` | 404 marked by provider as Legacy |
+| `us.anthropic.claude-haiku-4-5-...` | 404 用途フォーム未提出 |
+
+**ただしこの3件の成功は初回のみだった。** 直後から同じ呼び出しが一貫して
+
+```
+404 Model use case details have not been submitted for this account.
+    Fill out the Anthropic use case details form before using the model.
+```
+
+を返すようになり、5連続で再現した。**1回成功しただけで「解決」と
+しない**という原則がそのまま当てはまったケースで、成功した3件を根拠に
+「AI生成は動く」と報告していたら誤報になっていた。
+
+根本原因はAWSの一次APIで確定させた(推測ではない):
+
+```
+aws bedrock get-use-case-for-model-access
+-> ResourceNotFoundException: You have not filled out the request form.
+```
+
+**これはコードでは解消できず、AWSコンソール(Bedrock → モデルアクセス)
+での用途フォーム提出という利用者側の操作が必要**。したがってAI生成は
+**BLOCKED_BY_USER**であり、LOCAL/コード側は完成している。
+
+対応した内容:
+
+- Provider を `AnthropicBedrock` へ変更(Mantleは廃止)
+- Registryを**実際に生成が返ったモデルだけ**に差し替え
+  (ECONOMY=Sonnet 4.5 / STANDARD=Sonnet 4.6 / PREMIUM=Opus 4.5)。
+  存在しないIDを登録するとescalation時に必ず落ちるため
+- `thinking: {type:"adaptive"}` はClaude 4.6以降のみ送る
+  (4.5系へ送ると400)。Registryの`supportsAdaptiveThinking`で出し分け
+- 用途フォーム未提出の404を「モデルIDが違う」ではなく
+  **「AWSコンソールで利用申請を提出してください」**と案内する分類を追加
+- IAMから`bedrock-mantle:CreateInference`を削除(最小権限)。
+  手順は `scripts/aws-setup/11-apply-staging-bedrock-policy.ps1` に固定
+  — Stagingロール以外を対象にしたら実行を拒否する
+
+### QA-1: Photo Profile を実機で作成 — **AWS_VERIFIED**
+
+| 操作 | 結果 |
+|---|---|
+| 基準写真3枚をS3へアップロード | 成功(3.5秒) |
+| 「作成してACTIVEにする」 | **v1 / 3枚 / ACTIVE** |
+| 画面エラー・Consoleエラー・HTTP 4xx/5xx | **いずれも0件** |
+| リロード後の保持 | 保持される |
+| 2本目を作成 | **v2がACTIVE、v1が自動的に「履歴」へ** |
+| v1を手動で「ACTIVEにする」 | v1がACTIVE、v2が履歴へ戻る |
+
+P0-Bで直したServer Componentsのレンダーエラーは再現しない。
+なお`photoProfile`はworkerで**version記録にのみ**使われ、加工結果には
+影響しない(セグメンテーション未実装のため意図的)ので、この検証用
+Profileが実データの加工を歪めることはない。

@@ -87,23 +87,33 @@ export function getModelById(modelId: string): ModelRegistryEntry | undefined {
 export const BEDROCK_MODEL_REGISTRY: ModelRegistryEntry[] = [
   {
     providerId: "bedrock",
-    // クロスリージョン推論プロファイル。Bedrockのlist-foundation-modelsで
-    // このモデルのinferenceTypesSupportedが["INFERENCE_PROFILE"]である
-    // ことを実測確認済み — ON_DEMANDの素のモデルIDでは呼べない。
-    modelId: process.env.BEDROCK_MODEL_ECONOMY || "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    displayName: "Claude Haiku 4.5 (Bedrock)",
+    // ここに並ぶIDは全て`bedrock list-inference-profiles`に実在し、かつ
+    // このアカウントから実際にmessages.createが通ることを1件ずつ実測
+    // 確認したものだけ。素のON_DEMANDモデルIDでは呼べず、必ず`us.`付き
+    // のクロスリージョン推論プロファイルを使う。
+    //
+    // 実測で除外したもの(推測ではなく実際のAPI応答):
+    //   claude-sonnet-5 / opus-5 / fable-5 … 403「not available for this account」
+    //   claude-3-haiku / claude-3-sonnet   … 404「marked by provider as Legacy」
+    //   claude-haiku-4-5                   … 404(用途フォーム提出前は最初から不可)
+    // Haikuが使えれば単価は約1/3になるため、フォーム提出後に
+    // BEDROCK_MODEL_ECONOMY で切り替えられるようにしてある。
+    modelId: process.env.BEDROCK_MODEL_ECONOMY || "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    displayName: "Claude Sonnet 4.5 (Bedrock)",
     qualityTier: "ECONOMY",
     enabled: true,
-    costPerMillionInputTokensUsd: 1.0,
-    costPerMillionOutputTokensUsd: 5.0,
-    maxOutputTokens: 4096,
+    costPerMillionInputTokensUsd: 3.0,
+    costPerMillionOutputTokensUsd: 15.0,
+    maxOutputTokens: 8192,
     supportsStructuredOutput: true,
     fallbackPriority: 1,
+    // 4.5系はadaptive thinking非対応(4.6以降のみ)。
+    supportsAdaptiveThinking: false,
   },
   {
     providerId: "bedrock",
-    modelId: process.env.BEDROCK_MODEL_STANDARD || "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    displayName: "Claude Sonnet 4 (Bedrock)",
+    modelId: process.env.BEDROCK_MODEL_STANDARD || "us.anthropic.claude-sonnet-4-6",
+    displayName: "Claude Sonnet 4.6 (Bedrock)",
     qualityTier: "STANDARD",
     enabled: true,
     costPerMillionInputTokensUsd: 3.0,
@@ -111,25 +121,23 @@ export const BEDROCK_MODEL_REGISTRY: ModelRegistryEntry[] = [
     maxOutputTokens: 8192,
     supportsStructuredOutput: true,
     fallbackPriority: 1,
+    supportsAdaptiveThinking: true,
   },
   {
     providerId: "bedrock",
-    // PREMIUMもSonnet 4を指す。Bedrockのus-west-2で実測できた
-    // Anthropicモデルは Haiku 4.5 / Sonnet 4 で、Opus系は
-    // list-foundation-modelsに現れなかった — 存在しないモデルIDを
-    // 「PREMIUM」として登録すると、品質ゲートのescalation時に必ず
-    // ValidationExceptionで落ちる。実在するものだけを登録する。
-    modelId: process.env.BEDROCK_MODEL_PREMIUM || "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    displayName: "Claude Sonnet 4 (Bedrock, PREMIUM代替)",
+    modelId: process.env.BEDROCK_MODEL_PREMIUM || "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    displayName: "Claude Opus 4.5 (Bedrock)",
     qualityTier: "PREMIUM",
     enabled: true,
-    costPerMillionInputTokensUsd: 3.0,
-    costPerMillionOutputTokensUsd: 15.0,
+    costPerMillionInputTokensUsd: 5.0,
+    costPerMillionOutputTokensUsd: 25.0,
     maxOutputTokens: 8192,
     supportsStructuredOutput: true,
     fallbackPriority: 1,
+    supportsAdaptiveThinking: false,
   },
 ];
+
 
 export function getBedrockModelForTier(tier: AIQualityTier): ModelRegistryEntry {
   const candidates = BEDROCK_MODEL_REGISTRY.filter((m) => m.qualityTier === tier && m.enabled).sort((a, b) => a.fallbackPriority - b.fallbackPriority);
