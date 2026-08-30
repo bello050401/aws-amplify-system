@@ -95,8 +95,52 @@ async function getInventoryClassification(inventoryId: string, imageStorageKey: 
   return { classification, type, isPrimary: Boolean(img.isPrimary) };
 }
 
+/**
+ * 第五ラウンド§8(P1-C、ZaicoSyncJobとのBackground Job基盤比較で発覚):
+ * PENDING→PROCESSINGへの遷移が無条件UpdateItemだったため、5分毎の
+ * スケジュール実行が(前回の実行が処理件数超過で長引く等の理由で)
+ * 重なった場合、2つのLambda実行が同じPENDING行を両方Scanで拾い、
+ * 両方が同じ画像を二重に加工しうる——ZaicoSyncJobのlease機構
+ * (amplify/functions/zaico-sync-worker/handler.tsのclaimOrRenewLease)
+ * とは異なる形だが、目的は同じ「同じ作業単位を複数の実行主体が同時に
+ * 処理しない」という保証。ProcessingJobは1行=1画像の独立した作業単位
+ * なので、ZaicoSyncJobのような有効期限付きleaseではなく、
+ * 「PENDINGのままである」ことをConditionExpressionで確認してから
+ * PROCESSINGへ書き換える、より単純なcompare-and-swapで十分
+ * (amplify/functions/generate-skuの採番と同じ「1回限りの遷移」パターン)。
+ * 条件が満たせなければ(既に他の実行がPROCESSING以降へ進めていた場合)
+ * ConditionalCheckFailedExceptionを捕まえ、二重処理せずスキップする。
+ */
+async function claimJob(job: ProcessingJobRow): Promise<boolean> {
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: PROCESSING_JOB_TABLE,
+        Key: { id: job.id },
+        UpdateExpression: "SET #s = :processing, startedAt = :now, attemptCount = :attempt",
+        ConditionExpression: "#s = :pending",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: {
+          ":processing": "PROCESSING",
+          ":pending": "PENDING",
+          ":now": new Date().toISOString(),
+          ":attempt": (job.attemptCount ?? 0) + 1,
+        },
+      }),
+    );
+    return true;
+  } catch (err) {
+    if ((err as { name?: string }).name === "ConditionalCheckFailedException") return false;
+    throw err;
+  }
+}
+
 async function processOne(job: ProcessingJobRow): Promise<void> {
-  await updateJobStatus(job.id, { status: "PROCESSING", startedAt: new Date().toISOString(), attemptCount: (job.attemptCount ?? 0) + 1 });
+  const claimed = await claimJob(job);
+  if (!claimed) {
+    console.log(`[image-processing-worker] job=${job.id} already claimed by another invocation — skipping (no double-processing).`);
+    return;
+  }
 
   try {
     const imageInfo = await getInventoryClassification(job.inventoryId, job.imageStorageKey);
