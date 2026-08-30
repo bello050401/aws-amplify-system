@@ -48,9 +48,15 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
   // (UTCでは日付が進む/戻る境界)に「今月」の判定や着地予測が実際とズレ
   // うる。lib/inventory/sales.tsのnowInJstがこのズレを吸収する。
   const jstNow = nowInJst();
-  const year = Number(searchParams.y) || jstNow.year;
+  // 月と同じように年も検証する。以前は年だけ素通りで、URLを直接
+  // 書き換えると「-5年8月」「99999年1月」「10000000000年3月」といった
+  // 見出しがそのまま出ていた(実測)。前月/翌月リンクもその値を基準に
+  // 作られるため、一度入ると抜け出しにくい。BELLOの創業より前や
+  // 翌年より先の売上は存在しないので、その範囲外は今月へ戻す。
+  const yearRaw = Number(searchParams.y);
+  const year = Number.isInteger(yearRaw) && yearRaw >= 2000 && yearRaw <= jstNow.year + 1 ? yearRaw : jstNow.year;
   const monthRaw = Number(searchParams.m) || jstNow.month;
-  const month = monthRaw >= 1 && monthRaw <= 12 ? monthRaw : jstNow.month;
+  const month = Number.isInteger(monthRaw) && monthRaw >= 1 && monthRaw <= 12 ? monthRaw : jstNow.month;
 
   const records = await listAllInventory();
   const summary: SalesSummary = summarizeSales(records, year, month);

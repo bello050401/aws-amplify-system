@@ -2,8 +2,64 @@
 
 import { useEffect, useState } from "react";
 import { getUrl } from "aws-amplify/storage";
+import { fetchAuthSession } from "aws-amplify/auth";
 
 const RETRY_DELAYS_MS = [400, 1200]; // total ≤3 attempts
+
+/**
+ * ## 資格情報の取得が画像の枚数ぶん走っていた問題(実測)
+ *
+ * `getUrl()`は署名にCognito Identity Poolの一時認証情報を要る。一覧は
+ * 各行が独立したInventoryThumbnailなので、mount時に全行がほぼ同時に
+ * `getUrl()`を呼ぶ。Amplifyは資格情報をキャッシュするが、**1件目が
+ * 返る前に残り全部が走る**ため誰もキャッシュに当たらない。Stagingの
+ * 在庫一覧(画像100枚)で実測した1画面あたりの通信:
+ *
+ *   100 x GetId 200
+ *    99 x GetCredentialsForIdentity 200
+ *     3〜27 x GetCredentialsForIdentity 400 (TooManyRequestsException)
+ *
+ * つまり画像1枚につきIdentity Poolを2往復し、その一部がスロットリング
+ * で弾かれていた。弾かれた分はこのhookのリトライで復旧するので画像は
+ * 最終的に出るが、無駄な往復・表示の遅れ・Cognitoのレート消費になる。
+ *
+ * 対策は2段構え:
+ *
+ * 1. **warmCredentials()** — 最初の1回だけ`fetchAuthSession()`を走らせ、
+ *    全hookはその同じPromiseを待つ。解決した時点でAmplify内部の資格情報
+ *    キャッシュが埋まっているので、後続の`getUrl()`は往復ゼロで済む。
+ * 2. **同時実行数の上限** — それでも署名処理が一斉に走らないよう、
+ *    getUrl自体を少数ずつに絞る。期限切れでAmplifyが再取得する場合でも
+ *    殺到しない。
+ *
+ * どちらも「1枚目を待ってから残りを流す」だけで、キーごとの結果は
+ * 変わらない。
+ */
+let credentialsWarmup: Promise<void> | null = null;
+function warmCredentials(): Promise<void> {
+  // 失敗しても握りつぶす — 認証が無い/切れている場合はgetUrl側が
+  // 本来のエラーを出すべきで、ここで画像を永久に止めない。
+  if (!credentialsWarmup) credentialsWarmup = fetchAuthSession().then(() => undefined).catch(() => undefined);
+  return credentialsWarmup;
+}
+
+const MAX_CONCURRENT_SIGNS = 6;
+let inFlight = 0;
+const waiting: (() => void)[] = [];
+
+async function acquireSlot(): Promise<void> {
+  if (inFlight < MAX_CONCURRENT_SIGNS) {
+    inFlight++;
+    return;
+  }
+  await new Promise<void>((resolve) => waiting.push(resolve));
+  inFlight++;
+}
+
+function releaseSlot(): void {
+  inFlight--;
+  waiting.shift()?.();
+}
 
 /**
  * 第五ラウンド§7/§43(P0-C性能監査で発覚): このhookは元々
@@ -52,24 +108,36 @@ export function useInventoryImageUrl(storageKey: string | null): { url: string |
     setUrl(null);
     setFailed(false);
 
+    // 署名の実行本体。資格情報のウォームアップ待ち → 同時実行枠の取得、
+    // の順に通してからgetUrlを呼ぶ。
+    const signOnce = async (): Promise<string> => {
+      await warmCredentials();
+      await acquireSlot();
+      try {
+        const { url } = await getUrl({
+          path: storageKey,
+          // BELLO統合改修 master指示書 Phase B優先度9 — every inventory/*
+          // object's key is a fresh UUID that's never overwritten in place
+          // (a new upload always gets a brand-new key), so the object at
+          // any given key is genuinely immutable and safe to cache
+          // "forever" in the browser. This response-header override covers
+          // every object regardless of when it was uploaded (new uploads
+          // also set the same Cache-Control at PutObject time — see
+          // lib/inventory/thumbnail.ts's INVENTORY_IMAGE_CACHE_CONTROL —
+          // this is what makes it effective for images uploaded before
+          // that existed, too).
+          options: { cacheControl: "public, max-age=31536000, immutable" },
+        });
+        return url.toString();
+      } finally {
+        releaseSlot();
+      }
+    };
+
     const attempt = (retriesLeft: number) => {
-      getUrl({
-        path: storageKey,
-        // BELLO統合改修 master指示書 Phase B優先度9 — every inventory/*
-        // object's key is a fresh UUID that's never overwritten in place
-        // (a new upload always gets a brand-new key), so the object at
-        // any given key is genuinely immutable and safe to cache
-        // "forever" in the browser. This response-header override covers
-        // every object regardless of when it was uploaded (new uploads
-        // also set the same Cache-Control at PutObject time — see
-        // lib/inventory/thumbnail.ts's INVENTORY_IMAGE_CACHE_CONTROL —
-        // this is what makes it effective for images uploaded before
-        // that existed, too).
-        options: { cacheControl: "public, max-age=31536000, immutable" },
-      })
-        .then(({ url }) => {
+      signOnce()
+        .then((resolved) => {
           if (cancelled) return;
-          const resolved = url.toString();
           urlCache.set(storageKey, { url: resolved, expiresAt: Date.now() + URL_CACHE_TTL_MS });
           setUrl(resolved);
         })
@@ -84,6 +152,7 @@ export function useInventoryImageUrl(storageKey: string | null): { url: string |
           setFailed(true);
         });
     };
+
     attempt(RETRY_DELAYS_MS.length);
 
     return () => {
