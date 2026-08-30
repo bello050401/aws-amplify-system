@@ -218,15 +218,26 @@ export function CustomFieldSettings({ fields, readOnly }: CustomFieldSettingsPro
           {fields.map((field, index) => (
             <tr key={field.id} className={`border-b border-gray-100 align-top ${field.isActive ? "" : "text-gray-400"}`}>
               <td className="py-1.5">
+                {/* 並び替えの ↑/↓ はグリフだけを置くと実測13x20pxしか
+                    無く、モバイル(375-430px)では隣のボタンと押し分けられ
+                    ない。文字サイズは変えずに、当たり判定だけを32px角へ
+                    広げる(min-h-8/min-w-8 + inline-flexで中央寄せ)。 */}
                 <div className="flex gap-1">
-                  <button type="button" onClick={() => move(index, -1)} disabled={readOnly || pending || index === 0} className="disabled:text-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => move(index, -1)}
+                    disabled={readOnly || pending || index === 0}
+                    aria-label="1つ上へ移動"
+                    className="inline-flex min-h-8 min-w-8 items-center justify-center disabled:text-gray-200"
+                  >
                     ↑
                   </button>
                   <button
                     type="button"
                     onClick={() => move(index, 1)}
                     disabled={readOnly || pending || index === fields.length - 1}
-                    className="disabled:text-gray-200"
+                    aria-label="1つ下へ移動"
+                    className="inline-flex min-h-8 min-w-8 items-center justify-center disabled:text-gray-200"
                   >
                     ↓
                   </button>
@@ -282,7 +293,7 @@ export function CustomFieldSettings({ fields, readOnly }: CustomFieldSettingsPro
                   onClick={() => toggleActive(field)}
                   disabled={readOnly || pending}
                   title={readOnly ? undefined : field.isActive ? "クリックで無効化" : "クリックで有効化"}
-                  className={`inline-flex items-center gap-1 border px-1.5 py-0.5 text-[11px] ${
+                  className={`inline-flex min-h-8 items-center justify-center gap-1 border px-2 py-0.5 text-[11px] ${
                     field.isActive ? "border-gray-300 text-gray-600" : "border-gray-200 text-gray-400"
                   } ${readOnly ? "" : "hover:bg-gray-50"}`}
                 >

@@ -74,7 +74,9 @@ export function ListColumnSettings({ customFieldDefs }: ListColumnSettingsProps)
                 onClick={() => move(col.key, -1)}
                 disabled={index === 0}
                 aria-label={`${col.label}を上へ`}
-                className="disabled:text-gray-200"
+                // CustomFieldSettings.tsx と同じ理由 — グリフだけだと
+                // 実測13x20pxで、モバイルでは隣と押し分けられない。
+                className="inline-flex min-h-8 min-w-8 items-center justify-center disabled:text-gray-200"
               >
                 ↑
               </button>
@@ -83,7 +85,7 @@ export function ListColumnSettings({ customFieldDefs }: ListColumnSettingsProps)
                 onClick={() => move(col.key, 1)}
                 disabled={index === orderedColumns.length - 1}
                 aria-label={`${col.label}を下へ`}
-                className="disabled:text-gray-200"
+                className="inline-flex min-h-8 min-w-8 items-center justify-center disabled:text-gray-200"
               >
                 ↓
               </button>
