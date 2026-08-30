@@ -11,7 +11,20 @@ import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 const AUTHORIZE_ENDPOINT = "https://api.thebase.in/1/oauth/authorize";
 const TOKEN_ENDPOINT = "https://api.thebase.in/1/oauth/token";
 const TOKEN_ROW_ID = "singleton";
-const DEFAULT_SCOPE = "read_items";
+/**
+ * BELLOベンダー非依存・交換可能アーキテクチャ仕様書(2026-08-30) §18
+ * 監査で発見: lib/listing/base/adapter.ts(第二次ラウンドで新設、
+ * items/add・items/edit経由でBASEへ実際に出品・価格変更する)が要求
+ * するBASE公式スコープ`write_items`(WebSearchで確認: read_users/
+ * read_users_mail/read_items/read_orders/read_savings/write_items/
+ * write_ordersがBASE公式の全スコープ)が、以前からのFeature-page
+ * 読み取り専用スコープ("read_items"のみ)に含まれていなかった —
+ * このままでは新しく接続したBASE OAuthトークンにEC出品用の書き込み
+ * 権限が付与されず、items/add/items/edit呼び出しがすべて権限エラーに
+ * なる。read_items(既存のFeature-page機能が使用)とwrite_items
+ * (新設のBASE Listing Channel Adapterが使用)を両方要求するよう修正。
+ */
+const DEFAULT_SCOPE = "read_items write_items";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
