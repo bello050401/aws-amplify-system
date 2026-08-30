@@ -54,7 +54,17 @@ for (const viewport of VIEWPORTS) {
     test.use({ viewport: { width: viewport.width, height: viewport.height } });
 
     test("未ログイン時、保護ルートは/inventory/loginへリダイレクトされる(実際の認証ガードが機能している)", async ({ page }) => {
-      await page.goto("/inventory");
+      // このsuite全体で最初にヒットするルートがこのtestになった場合、
+      // /inventory→/inventory/loginへのリダイレクト自体はHTTPレベルで
+      // 常に即座に返っている(curl -D -で307/Location:/inventory/login
+      // を直接確認済み。アプリ側のredirect()に不具合は無い)が、
+      // `page.goto`はリダイレクト先(/inventory/login)の`load`——未
+      // コンパイルJSチャンクをNext.js dev serverがその場で初回
+      // コンパイルし終えるまで——を待ち切ってから解決するため、既定の
+      // goto timeout(30秒)より掛かることがある(playwright.config.ts
+      // 全体のworkers:1化の対処後の実測で最大約16秒)。この1テストだけ
+      // 明示的に長いtimeoutを与える。
+      await page.goto("/inventory", { timeout: 45_000 });
       await expect(page).toHaveURL(/\/inventory\/login/);
       await assertNoHorizontalOverflow(page, "ログインページ");
     });

@@ -26,6 +26,19 @@ export default defineConfig({
   // コストを払うため、余裕を持って60秒に設定する。
   timeout: 60_000,
   fullyParallel: false,
+  // 不具合修正指示書(2026-08-30)対応時に実際に踏んだ不具合: `webServer`は
+  // 全spec fileで共有される単一の`next dev`プロセス。`fullyParallel:
+  // false`はファイル内の直列化のみを保証し、ファイル間は既定で別workerが
+  // 並行実行され得る——2 workerがこの同一dev serverへ「初回コンパイル
+  // (コールドスタート)」のタイミングで同時にnavigationすると、webpackの
+  // 同時コンパイルが競合し、`TypeError: Cannot read properties of null
+  // (reading 'useContext')`(PathnameContext)というNext.js dev server側
+  // の実クラッシュ(Server Error dialog)を引き起こすことを実際に
+  // 再現・特定した——リダイレクト先URLの見た目上の不一致に見えるが、
+  // 原因は本物のサーバー側render crashであり、timeoutを伸ばしても
+  // 解決しない(実際に検証済み)。単一の共有dev serverへ複数workerで
+  // 同時アクセスさせないよう、全spec fileを常に1 workerで直列実行する。
+  workers: 1,
   retries: 0,
   reporter: [["list"]],
   use: {
