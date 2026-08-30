@@ -111,7 +111,7 @@ function createMockPort() {
       historyLog.push({ inventoryId, who, changes });
     },
     async downloadAndImportImage(url: string) {
-      return { storageKey: `mock-storage-key-for/${url}`, thumbnailKey: `mock-thumbnail-key-for/${url}` };
+      return { storageKey: `mock-storage-key-for/${url}`, thumbnailKey: `mock-thumbnail-key-for/${url}`, originalHash: `mock-hash-for/${url}` };
     },
     async removeImage(path: string) {
       removedImages.push(path);

@@ -118,8 +118,9 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
 
   let newKey: string;
   let newThumbnailKey: string | null;
+  let newOriginalHash: string;
   try {
-    ({ storageKey: newKey, thumbnailKey: newThumbnailKey } = await port.downloadAndImportImage(newSourceUrl));
+    ({ storageKey: newKey, thumbnailKey: newThumbnailKey, originalHash: newOriginalHash } = await port.downloadAndImportImage(newSourceUrl));
   } catch (err) {
     return { images: existingImages, imported: false, warning: err instanceof Error ? err.message : "ZAICO画像の取り込みに失敗しました。" };
   }
@@ -132,14 +133,11 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
     sourceSystem: "ZAICO",
     sourceUrl: newSourceUrl,
     thumbnailKey: newThumbnailKey,
-    // BELLO画像自動加工システム: ZAICO同期経路はoriginalHashを計算して
-    // いない(downloadAndImportImageの契約を変えずに済ませるための、
-    // このラウンドでの意図的な未対応範囲——完了報告の技術的負債へ記載)。
-    // originalHashがnullの画像はlib/imageProcessing/jobService.tsの
-    // triggerImageProcessingIfNeededが対象外として扱う(自動加工ジョブ
-    // は作られない)ため、ZAICO由来の画像は現状、手動再加工UIからのみ
-    // 加工対象にできる。
-    originalHash: null,
+    // BELLO画像自動加工システム: downloadAndImportImageは既に画像を
+    // メモリ上に持っているため(imageServerOps.tsのサムネイル生成と
+    // 同じバイト列)、originalHashも追加のfetch無しで計算できる——
+    // ZAICO由来の画像もこれで自動加工ジョブの対象になる(§11.1/§11.2)。
+    originalHash: newOriginalHash,
     classification: null,
   };
   const otherImages = existingImages.filter((i) => i !== currentZaicoImage);

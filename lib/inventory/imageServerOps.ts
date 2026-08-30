@@ -108,7 +108,7 @@ const FETCH_TIMEOUT_MS = 15_000;
  * `thumbnailKey` is null when generation failed — never fatal, see
  * lib/inventory/thumbnail.ts's own comment.
  */
-export async function downloadAndImportInventoryImage(sourceUrl: string): Promise<{ storageKey: string; thumbnailKey: string | null }> {
+export async function downloadAndImportInventoryImage(sourceUrl: string): Promise<{ storageKey: string; thumbnailKey: string | null; originalHash: string }> {
   let blob: Blob;
   try {
     const controller = new AbortController();
@@ -165,8 +165,14 @@ export async function downloadAndImportInventoryImage(sourceUrl: string): Promis
   // second fetch of the object this function just wrote (see
   // thumbnail.ts's generateThumbnailFromBytes/generateInventoryThumbnail
   // split for why the manual-upload path can't take this shortcut).
-  const thumbnailKey = await generateThumbnailFromBytes(Buffer.from(await blob.arrayBuffer()));
-  return { storageKey: destinationPath, thumbnailKey };
+  const bytes = Buffer.from(await blob.arrayBuffer());
+  const thumbnailKey = await generateThumbnailFromBytes(bytes);
+  // BELLO画像自動加工システム: computeOriginalHashForPathと違い、ここは
+  // 既にメモリ上にバイト列があるため追加のfetchなしでハッシュ計算できる
+  // (このパスがoriginalHash欠落の既知の技術的負債を持たなかった理由が
+  // 元々無い——単に前回のラウンドでは配線していなかっただけ)。
+  const originalHash = computeOriginalHash(bytes);
+  return { storageKey: destinationPath, thumbnailKey, originalHash };
 }
 
 /**
