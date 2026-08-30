@@ -64,11 +64,18 @@ export function ExtendedFieldsSummary({ sections, record, extra }: ExtendedField
         }));
         const rows = [...fieldRows, ...extraRows];
 
+        // BELLO統合業務OS指示書(2026-08-30) §75: DetailSection.tsxと
+        // 同じ<details>アコーディオンにする(見た目のクラス名を揃えて
+        // いる箇所なので、そちらの変更にここも追従させる — 同ファイルの
+        // 冒頭コメント「同期させる」を実行)。
         return (
-          <div key={section.id} className="mt-5 border-t border-gray-100 pt-3">
-            <p className="mb-1.5 text-[11px] font-bold text-gray-400">{section.title}</p>
+          <details key={section.id} className="group mt-5 border-t border-gray-100 pt-3" open>
+            <summary className="mb-1.5 flex cursor-pointer list-none items-center gap-1 text-[11px] font-bold text-gray-400">
+              <span className="inline-block transition-transform group-open:rotate-90">▶</span>
+              {section.title}
+            </summary>
             <DetailInfoTable rows={rows} />
-          </div>
+          </details>
         );
       })}
     </>

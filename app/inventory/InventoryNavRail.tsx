@@ -22,7 +22,11 @@ import { useUnsavedChanges } from "./UnsavedChangesProvider";
  * `current="inventory"` passed down from that layout could never tell
  * the two apart.
  */
-const NAV_ITEMS = [
+// BELLO統合業務OS指示書(2026-08-30) §70-72: MobileBottomNav.tsx(モバイル
+// 用ボトムナビ)と共有する — 「在庫一覧/売上/EC出品/メッセージ/設定」の
+// 並び順・href・enabledはデスクトップ用rail/モバイル用bottom navで
+// 絶対に食い違ってはいけない一次情報なので、1箇所にのみ定義する。
+export const NAV_ITEMS = [
   { key: "inventory", label: "在庫一覧", href: "/inventory", enabled: true },
   // 夜間開発指示書 §12: 在庫一覧/売上/設定という主要構成。
   { key: "sales", label: "売上", href: "/inventory/sales", enabled: true },
@@ -40,6 +44,12 @@ const NAV_ITEMS = [
   { key: "settings", label: "設定", href: "/inventory/settings", enabled: true },
 ] as const;
 
+/**
+ * §70/§122: モバイル幅では「常設のデスクトップサイドバー」を残さない
+ * — このrail自体は`md:flex`以上でのみ表示し、390px等の狭幅では
+ * `hidden`にする(代わりにMobileBottomNav.tsxが表示される、
+ * ProtectedInventoryLayout側で両方をレンダーしCSSで出し分ける)。
+ */
 export function InventoryNavRail() {
   const pathname = usePathname();
   const { guardedNavigate } = useUnsavedChanges();
@@ -51,7 +61,7 @@ export function InventoryNavRail() {
     // header's own border-b right at the logo's corner, producing the
     // "十字に罫線が交差する" look the header redesign explicitly avoids
     // (see InventoryHeader.tsx's file comment for the full picture).
-    <nav className="flex w-16 shrink-0 flex-col bg-white">
+    <nav className="hidden w-16 shrink-0 flex-col bg-white md:flex">
       {/* Brand area — the icon itself already carries the "BELLO SYSTEM"
           wordmark, so it's the whole brand mark here now, not an icon
           plus a separate redundant "BELLO" label beside it. `overflow-hidden`

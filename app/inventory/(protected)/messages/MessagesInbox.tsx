@@ -48,6 +48,11 @@ export function MessagesInbox({
   const [conversations, setConversations] = useState(initialConversations);
   const [filter, setFilter] = useState<Filter>("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(initialConversations[0]?.id ?? null);
+  // BELLO統合業務OS指示書(2026-08-30) §70/§78: モバイル幅では一覧と
+  // 詳細を横並びにする余地が無い(w-72の一覧だけで390pxの大半を占めて
+  // しまう) — selectedIdとは独立に「今どちらの画面を見せるか」を持つ。
+  // デスクトップ(`md:`以上)ではこの値を無視して常に両方表示する。
+  const [mobileView, setMobileView] = useState<"list" | "detail">("list");
   const [messages, setMessages] = useState<MessageRecord[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -181,8 +186,8 @@ export function MessagesInbox({
 
   return (
     <div className="flex min-h-0 flex-1">
-      {/* 一覧(§43) */}
-      <div className="flex w-72 shrink-0 flex-col border-r border-gray-200">
+      {/* 一覧(§43)。モバイルでは詳細を見ている間`hidden`にする(§78)。 */}
+      <div className={`w-full shrink-0 flex-col border-r border-gray-200 md:flex md:w-72 ${mobileView === "detail" ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1 border-b border-gray-200 px-2 py-1.5 text-[11px]">
           {(["ALL", "NEEDS_REPLY", "REPLIED", "RESOLVED"] as Filter[]).map((f) => (
             <button
@@ -201,7 +206,10 @@ export function MessagesInbox({
             <button
               key={c.id}
               type="button"
-              onClick={() => setSelectedId(c.id)}
+              onClick={() => {
+                setSelectedId(c.id);
+                setMobileView("detail");
+              }}
               className={`block w-full border-b border-gray-100 px-3 py-2 text-left ${selectedId === c.id ? "bg-gray-100" : "hover:bg-gray-50"}`}
             >
               <div className="flex items-center justify-between">
@@ -256,12 +264,20 @@ export function MessagesInbox({
         )}
       </div>
 
-      {/* 詳細(§44) */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      {/* 詳細(§44)。モバイルでは一覧を見ている間`hidden`にする(§78)。 */}
+      <div className={`min-h-0 flex-1 overflow-y-auto p-4 md:flex md:flex-col ${mobileView === "list" ? "hidden" : "flex"}`}>
         {!selected ? (
           <p className="text-[13px] text-gray-400">左の一覧から会話を選択してください。</p>
         ) : (
           <div className="max-w-2xl">
+            {/* §78: モバイル専用の「一覧へ戻る」— デスクトップでは常に両方表示しているため不要。 */}
+            <button
+              type="button"
+              onClick={() => setMobileView("list")}
+              className="mb-2 text-[12px] text-gray-500 hover:text-gray-900 md:hidden"
+            >
+              ← 会話一覧へ戻る
+            </button>
             <div className="mb-3 flex items-center justify-between">
               <div>
                 <p className="text-[15px] font-bold text-gray-900">{selected.customerDisplayName ?? "不明な顧客"}</p>

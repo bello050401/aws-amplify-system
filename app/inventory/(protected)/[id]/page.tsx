@@ -306,26 +306,34 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
           {item.history.length === 0 ? (
             <p className="text-[12px] text-gray-400">変更履歴はまだありません。</p>
           ) : (
-            <table className="w-full border-collapse text-[12px]">
-              <thead className="text-left text-gray-400">
-                <tr className="border-b border-gray-200">
-                  <th className="py-1 px-2 font-normal">日時</th>
-                  <th className="py-1 px-2 font-normal">操作</th>
-                  <th className="py-1 px-2 font-normal">変更内容</th>
-                  <th className="py-1 px-2 font-normal">実行者</th>
-                </tr>
-              </thead>
-              <tbody>
-                {item.history.map((h) => (
-                  <tr key={h.id} className="border-b border-gray-100 text-gray-700">
-                    <td className="whitespace-nowrap py-1 px-2 align-top">{formatDateTime(h.changedAt)}</td>
-                    <td className="py-1 px-2 align-top">{historyOperationLabel(h.fieldName)}</td>
-                    <td className="py-1 px-2 align-top">{historyChangeSummary(h)}</td>
-                    <td className="py-1 px-2 align-top">{h.changedBy ?? "-"}</td>
+            // BELLO統合業務OS指示書(2026-08-30) §70/§165: 390px幅で
+            // 「変更内容」列(自由長テキスト、折り返さない)が原因で
+            // page body自体が横スクロールしないよう、この表だけの
+            // overflow-x-autoで横スクロールを閉じ込める(§78「body自体は
+            // 横スクロールしない」の binding要件 — テーブル自体が幅を
+            // 持つのは許容範囲、ページ全体が伸びるのは不可)。
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[480px] border-collapse text-[12px]">
+                <thead className="text-left text-gray-400">
+                  <tr className="border-b border-gray-200">
+                    <th className="py-1 px-2 font-normal">日時</th>
+                    <th className="py-1 px-2 font-normal">操作</th>
+                    <th className="py-1 px-2 font-normal">変更内容</th>
+                    <th className="py-1 px-2 font-normal">実行者</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {item.history.map((h) => (
+                    <tr key={h.id} className="border-b border-gray-100 text-gray-700">
+                      <td className="whitespace-nowrap py-1 px-2 align-top">{formatDateTime(h.changedAt)}</td>
+                      <td className="whitespace-nowrap py-1 px-2 align-top">{historyOperationLabel(h.fieldName)}</td>
+                      <td className="py-1 px-2 align-top">{historyChangeSummary(h)}</td>
+                      <td className="whitespace-nowrap py-1 px-2 align-top">{h.changedBy ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getInventorySessionStatus } from "@/lib/amplify/requireInventoryUser";
 import { InventoryNavRail } from "../InventoryNavRail";
+import { MobileBottomNav } from "../MobileBottomNav";
 import { UnsavedChangesProvider } from "../UnsavedChangesProvider";
 
 // The root layout (app/layout.tsx) sets title: "特集ページ" for the
@@ -45,8 +46,13 @@ export default async function ProtectedInventoryLayout({ children }: { children:
         {/* Each page renders its own InventoryHeader (spec O/P/Q — see
             that component's file comment for why this replaced a single
             shared layout-level header bar) as the first child of this
-            column, so it's not duplicated here. */}
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
+            column, so it's not duplicated here.
+            BELLO統合業務OS指示書(2026-08-30) §70/§122: pb-14はモバイル
+            幅専用のMobileBottomNav(固定・高さ約56px)の下に、ページ末尾
+            のコンテンツが隠れないための余白 — `md:`以上ではrail側に
+            戻るのでボトムナビ自体が無く、この余白も不要(md:pb-0)。 */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-14 md:pb-0">{children}</div>
+        <MobileBottomNav />
       </div>
     </UnsavedChangesProvider>
   );

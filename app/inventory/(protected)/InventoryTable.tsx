@@ -8,6 +8,7 @@ import { isInlineEditableColumn, type InlineEditFieldKey } from "@/lib/inventory
 import { useInventoryListColumns } from "../useInventoryListColumns";
 import { InventoryThumbnail } from "../InventoryThumbnail";
 import { useDirectEdit } from "./DirectEditProvider";
+import { InventoryCardList } from "./InventoryCardList";
 
 interface InventoryTableProps {
   rows: InventoryListRow[];
@@ -320,7 +321,15 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
   const totalWidth = CHECKBOX_COLUMN_WIDTH + visibleColumns.reduce((sum, col) => sum + widthFor(col.key), 0);
 
   return (
-    <div className="h-full overflow-auto">
+    <>
+      {/* BELLO統合業務OS指示書(2026-08-30) §70/§72/§122: モバイル幅
+          (`md`未満)ではこの高密度な表そのものではなく
+          InventoryCardList(カード型一覧)を表示する — 列表示設定・
+          一覧直接編集を持ち込まないシンプルな縦一列ビュー。 */}
+      <div className="h-full md:hidden">
+        <InventoryCardList rows={rows} categoriesById={categoriesById} locationsById={locationsById} statusesById={statusesById} />
+      </div>
+      <div className="hidden h-full overflow-auto md:block">
       {/* table-layout: fixed + 明示的なtable幅(全可視列の合計) — これが
           ないとブラウザは内容量に応じて列幅を自動調整し直してしまい、
           設定した幅(物品名列を含む)が反映されない。合計がビューポート
@@ -398,6 +407,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
           })}
         </tbody>
       </table>
-    </div>
+      </div>
+    </>
   );
 }
