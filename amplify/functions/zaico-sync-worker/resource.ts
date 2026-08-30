@@ -39,6 +39,11 @@ export const zaicoSyncWorker = defineFunction({
   // data → function 方向であり、data/resource.tsが既に持っている向きと
   // 同じ。逆向きのエッジを増やさないため循環にはならない。
   resourceGroupName: "data",
+  // sharpをバンドルから外してLambdaレイヤーで供給する。理由と仕組みは
+  // image-processing-worker/resource.tsの同じ位置のコメント参照
+  // (このLambdaもlambdaSyncPort.tsでthumbnail生成にsharpを使うため、
+  // 同じくINITで即死していた——5分ごとに7回起動して7回とも失敗)。
+  layers: { sharp: "bello-sharp-linux-x64:1" },
   timeoutSeconds: 240, // 5分スケジュールに対して余裕を残す(次のtickと重ならない)
   memoryMB: 512, // sharpによるthumbnail生成を含むため既定値(128MB)より引き上げ
   schedule: "every 5m",

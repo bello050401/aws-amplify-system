@@ -25,6 +25,8 @@
    詳細は`docs/aws-test-environment.md`§9・§10・§12参照。
 7. **`bello/zaico-api-token`がどのリージョンに実在するかだけを確認したい場合** → **`8-diagnose-zaico-secret.ps1`**(読み取り専用、安全) — `us-west-2`と`us-east-1`の両方で`describe-secret`を実行し、Secretの存在有無・ARN・名前だけを表示する(値は一切取得・表示しない)。`7-fix-staging-iam-role.ps1`のpreflightにも同等のチェックが組み込まれているが、ビルドを伴わずに単独で確認したい場合はこちらを使う。
 
+8. **Lambdaの`sharp`が`Could not load the "sharp" module using the linux-x64 runtime`で起動即死する場合** → **`9-publish-sharp-layer.ps1`** — `sharp`はネイティブアドオン(`@img/sharp-linux-x64`の`.node`バイナリ)を必要とし、esbuildがバンドルへ畳み込むと実行時に必ず失敗する。このスクリプトが`sharp`をlinux-x64向けにインストールしてLambdaレイヤーとして発行し、`amplify/functions/image-processing-worker`と`zaico-sync-worker`の`resource.ts`が`layers: { sharp: "bello-sharp-linux-x64:<version>" }`でそれを参照する(このキー名がそのままesbuildの`externalModules`になる — 詳細はresource.tsのコメント)。**このレイヤーはCDK管理外の前提リソース**なので、新しいAWSアカウント/リージョンへ初めてデプロイする場合や`package.json`の`sharp`を上げた場合は、`ampx pipeline-deploy`より先に実行すること。同一バージョンのレイヤーが既にあれば何もせず終了する(`-Force`で強制発行)。
+
 ## 前提
 
 - AWS CLIがインストール済みであること(`aws --version`)。
