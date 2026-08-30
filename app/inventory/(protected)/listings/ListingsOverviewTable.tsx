@@ -7,7 +7,12 @@ import { bulkCreateListingDraftsAction } from "@/app/actions/listing";
 import type { ListingOverviewRow } from "@/lib/listing/service";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
 
-type StatusFilter = "ALL" | "NOT_STARTED" | "DRAFT" | "QUEUED" | "LISTED" | "FAILED";
+// BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
+// 12値 + このUI独自の"NOT_STARTED"(ChannelListing行がまだ無い商品)。
+// state自体の遷移はlib/listing/service.tsだけが行う(§14「UIが直接
+// 自由にstatusを変更しない」) — ここは表示のためのラベル/バッジ定義
+// のみ。
+type StatusFilter = "ALL" | "NOT_STARTED" | Exclude<ListingOverviewRow["channelListing"], null>["status"];
 
 /**
  * 1行の状態を、既存のListingOverviewRow(Inventory + 最大1件のChannelListing)
@@ -16,25 +21,40 @@ type StatusFilter = "ALL" | "NOT_STARTED" | "DRAFT" | "QUEUED" | "LISTED" | "FAI
  */
 function statusOf(row: ListingOverviewRow): Exclude<StatusFilter, "ALL"> {
   if (!row.channelListing) return row.hasDraft ? "DRAFT" : "NOT_STARTED";
-  if (row.channelListing.status === "DRAFT") return "DRAFT";
-  return row.channelListing.status; // QUEUED | LISTED | FAILED
+  return row.channelListing.status;
 }
 
 const STATUS_LABEL: Record<StatusFilter, string> = {
   ALL: "すべて",
   NOT_STARTED: "未着手",
+  NOT_PREPARED: "未準備",
   DRAFT: "下書き",
-  QUEUED: "出品処理中",
-  LISTED: "出品済み",
-  FAILED: "出品失敗",
+  READY: "出品準備完了",
+  QUEUED: "出品待ち",
+  PUBLISHING: "出品処理中",
+  ACTIVE: "出品済み",
+  PAUSED: "停止中",
+  SOLD: "売却済み",
+  ENDED: "終了",
+  RELIST_PENDING: "再出品待ち",
+  ERROR: "出品失敗",
+  ARCHIVED: "アーカイブ済み",
 };
 
 const STATUS_BADGE_CLASS: Record<Exclude<StatusFilter, "ALL">, string> = {
   NOT_STARTED: "bg-gray-100 text-gray-500",
+  NOT_PREPARED: "bg-gray-100 text-gray-500",
   DRAFT: "bg-amber-50 text-amber-700",
+  READY: "bg-amber-50 text-amber-700",
   QUEUED: "bg-blue-50 text-blue-700",
-  LISTED: "bg-green-50 text-green-700",
-  FAILED: "bg-red-50 text-red-700",
+  PUBLISHING: "bg-blue-50 text-blue-700",
+  ACTIVE: "bg-green-50 text-green-700",
+  PAUSED: "bg-gray-100 text-gray-600",
+  SOLD: "bg-green-50 text-green-700",
+  ENDED: "bg-gray-100 text-gray-500",
+  RELIST_PENDING: "bg-blue-50 text-blue-700",
+  ERROR: "bg-red-50 text-red-700",
+  ARCHIVED: "bg-gray-100 text-gray-400",
 };
 
 /**
@@ -211,7 +231,7 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
                   <td className="px-2 py-2 align-middle">{row.price != null ? `¥${row.price.toLocaleString("ja-JP")}` : "-"}</td>
                   <td className="px-2 py-2 align-middle">
                     <span className={`inline-block px-2 py-0.5 text-[11px] font-bold ${STATUS_BADGE_CLASS[status]}`}>{STATUS_LABEL[status]}</span>
-                    {status === "FAILED" && row.channelListing?.lastError && (
+                    {status === "ERROR" && row.channelListing?.lastError && (
                       <div className="mt-1 max-w-[220px] truncate text-[11px] text-red-600" title={row.channelListing.lastError}>
                         {row.channelListing.lastError}
                       </div>

@@ -90,8 +90,8 @@ function testShippingDurationMapper() {
 }
 
 function testProductStatusMapper() {
-  assertEqual(internalStatusToMercariApiStatus("QUEUED"), "PUBLISHED", "productStatus mapper: QUEUED -> PUBLISHED");
-  assertEqual(internalStatusToMercariApiStatus("LISTED"), "PUBLISHED", "productStatus mapper: LISTED -> PUBLISHED");
+  assertEqual(internalStatusToMercariApiStatus("PUBLISHING"), "PUBLISHED", "productStatus mapper: PUBLISHING -> PUBLISHED");
+  assertEqual(internalStatusToMercariApiStatus("ACTIVE"), "PUBLISHED", "productStatus mapper: ACTIVE -> PUBLISHED");
   assertEqual(internalStatusToMercariApiStatus("DRAFT"), "PUBLISHED", "productStatus mapper: DRAFT falls back to PUBLISHED (send-on-attempt default)");
 }
 
@@ -123,7 +123,11 @@ function testResolveEffectiveListingFields() {
     status: "DRAFT",
     externalListingId: null,
     listingUrl: null,
-    listedAt: null,
+    firstListedAt: null,
+    lastListedAt: null,
+    lastRelistedAt: null,
+    endedAt: null,
+    soldAt: null,
     lastError: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -171,7 +175,11 @@ async function testAdapterValidation() {
     status: "DRAFT",
     externalListingId: null,
     listingUrl: null,
-    listedAt: null,
+    firstListedAt: null,
+    lastListedAt: null,
+    lastRelistedAt: null,
+    endedAt: null,
+    soldAt: null,
     lastError: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",

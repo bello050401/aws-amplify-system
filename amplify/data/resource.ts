@@ -604,7 +604,42 @@ const schema = a.schema({
 
   ListingCondition: a.enum(["NEW", "LIKE_NEW", "NO_NOTABLE_DAMAGE", "SLIGHT_DAMAGE", "DAMAGE", "BAD"]), // lib/listing/condition.tsの6段階と1対1 — Mercariの実際のcondition enum値は lib/listing/mercari/mapper/condition.ts が変換する(BELLOの内部語彙とMercari APIの語彙を分離)
 
-  ListingStatus: a.enum(["DRAFT", "QUEUED", "LISTED", "FAILED"]),
+  /**
+   * BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State
+   * Machine。以前は["DRAFT", "QUEUED", "LISTED", "FAILED"]の4値だけ
+   * だったが、状態遷移(§21 再出品/§19 自動価格の安全条件等)を正しく
+   * 表現するには不足していたため、指示書の12値へ拡張した。
+   * state transitionはlib/listing/service.tsの中でのみ管理し、UIが
+   * 直接自由にstatusを変更しない、という原則(§14)は既存のまま —
+   * ChannelListing.statusへの書き込みはlib/listing/service.tsの数関数
+   * (saveChannelOverride/listOnMercari)経由のみで、Server Action/UIから
+   * status値を直接受け取って書き込む経路は無い。
+   *
+   * 現在の実装が実際に到達する状態(§109/§155「fake successにしない」
+   * の原則どおり、遷移させる手段が無い状態を実装済みとは言わない):
+   *   DRAFT(ChannelListing作成時) → PUBLISHING(出品API呼び出し直前)
+   *   → ACTIVE(成功) または ERROR(失敗)。
+   * NOT_PREPARED/READY/QUEUED/PAUSED/SOLD/ENDED/RELIST_PENDING/ARCHIVED
+   * はスキーマ上の値として用意しているが、そこへ遷移させる具体的な
+   * トリガー(§82一括操作のキュー、§128外部ステータス同期、§21実際の
+   * 再出品API呼び出し等)はまだ実装していない — 完了報告で
+   * LOCAL_IMPLEMENTED(スキーマ)とLOCAL_VERIFIED(実際に遷移する経路)
+   * を明確に分けて報告する。
+   */
+  ListingStatus: a.enum([
+    "NOT_PREPARED",
+    "DRAFT",
+    "READY",
+    "QUEUED",
+    "PUBLISHING",
+    "ACTIVE",
+    "PAUSED",
+    "SOLD",
+    "ENDED",
+    "RELIST_PENDING",
+    "ERROR",
+    "ARCHIVED",
+  ]),
 
   /** チャネルに依存しない共通の出品下書き — 1つのInventoryにつき0または1件。 */
   ListingDraft: a
@@ -639,7 +674,24 @@ const schema = a.schema({
       status: a.ref("ListingStatus").required(),
       externalListingId: a.string(), // 例: MercariのProduct ID
       listingUrl: a.string(),
-      listedAt: a.datetime(),
+      // BELLO統合業務OS指示書(2026-08-30) §15: 出品開始日時の自動記録
+      // — 単一のlistedAtフィールド(以前の形)では「初回出品はいつか」
+      // と「直近の(再)出品はいつか」を区別できなかったため、3フィール
+      // ドへ分離した(まだ実際のUIには表示していないフィールドなので、
+      // 破壊的変更ではなく単純な置き換えとして扱った)。
+      //   firstListedAt: 初回成功時刻のみ、以降は上書きしない
+      //   lastListedAt : 直近の成功(初回 or 再出品)のたびに更新
+      //   lastRelistedAt: 再出品が成功した時刻のみ(初回では設定しない)
+      // すべてlib/listing/service.tsが出品API成功時にのみ設定する —
+      // 失敗時に成功扱いの日時を書き込むことは無い(§144「外部成功前に
+      // success icon禁止」と同じ考え方)。
+      firstListedAt: a.datetime(),
+      lastListedAt: a.datetime(),
+      lastRelistedAt: a.datetime(),
+      /** §21: 出品終了(売却以外の理由)。現時点でこの状態へ遷移させる具体的なトリガーは未実装 — スキーマのみ用意。 */
+      endedAt: a.datetime(),
+      /** §83: 売却記録用。Cross-channel sold protectionの実装(他チャネルの出品を自動停止する等)は今回のラウンドでは未着手 — スキーマのみ用意。 */
+      soldAt: a.datetime(),
       lastError: a.string(),
       createdBy: a.string(),
       updatedBy: a.string(),

@@ -12,7 +12,20 @@ export type ListingChannel = "MERCARI_SHOPS";
 
 export type ListingConditionCode = "NEW" | "LIKE_NEW" | "NO_NOTABLE_DAMAGE" | "SLIGHT_DAMAGE" | "DAMAGE" | "BAD";
 
-export type ListingStatus = "DRAFT" | "QUEUED" | "LISTED" | "FAILED";
+/** BELLO統合業務OS指示書(2026-08-30) §14 — amplify/data/resource.tsのListingStatus enumと1対1。あちらのコメントに、実際に到達する状態と未実装のトリガーの区別を記載している。 */
+export type ListingStatus =
+  | "NOT_PREPARED"
+  | "DRAFT"
+  | "READY"
+  | "QUEUED"
+  | "PUBLISHING"
+  | "ACTIVE"
+  | "PAUSED"
+  | "SOLD"
+  | "ENDED"
+  | "RELIST_PENDING"
+  | "ERROR"
+  | "ARCHIVED";
 
 /**
  * BELLOには「送料を誰が負担するか」を表す既存フィールドが無いため、
@@ -57,7 +70,14 @@ export interface ChannelListingRecord {
   status: ListingStatus;
   externalListingId: string | null;
   listingUrl: string | null;
-  listedAt: string | null;
+  /** §15: 初回成功時刻のみ、以降は上書きしない。 */
+  firstListedAt: string | null;
+  /** §15: 直近の成功(初回 or 再出品)のたびに更新。 */
+  lastListedAt: string | null;
+  /** §15: 再出品が成功した時刻のみ(初回では設定しない)。 */
+  lastRelistedAt: string | null;
+  endedAt: string | null;
+  soldAt: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;

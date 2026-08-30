@@ -13,11 +13,22 @@ import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, Sh
 import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 
+// BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
+// 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
+// STATUS_LABELと同じ日本語ラベル方針)。
 const STATUS_LABEL: Record<ChannelListingRecord["status"], string> = {
+  NOT_PREPARED: "未準備",
   DRAFT: "下書き",
-  QUEUED: "出品処理中…",
-  LISTED: "出品済み",
-  FAILED: "出品失敗",
+  READY: "出品準備完了",
+  QUEUED: "出品待ち",
+  PUBLISHING: "出品処理中…",
+  ACTIVE: "出品済み",
+  PAUSED: "停止中",
+  SOLD: "売却済み",
+  ENDED: "終了",
+  RELIST_PENDING: "再出品待ち",
+  ERROR: "出品失敗",
+  ARCHIVED: "アーカイブ済み",
 };
 
 /**
@@ -142,7 +153,7 @@ export function ListingForm({
     try {
       const result = await listOnMercariAction(inventoryId, shippingPayer);
       setChannelListing(result);
-      if (result.status === "FAILED") setListingError(result.lastError ?? "出品に失敗しました。");
+      if (result.status === "ERROR") setListingError(result.lastError ?? "出品に失敗しました。");
     } catch (err) {
       setListingError(err instanceof Error ? err.message : "出品に失敗しました。");
       await refreshStatus();
@@ -360,11 +371,11 @@ export function ListingForm({
         <button
           type="button"
           onClick={handleListOnMercari}
-          disabled={!mercariConnected || listing || !draft || !channelListing || channelListing.status === "LISTED"}
+          disabled={!mercariConnected || listing || !draft || !channelListing || channelListing.status === "ACTIVE"}
           className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 disabled:opacity-40"
           title={!mercariConnected ? "Mercari接続（TOKEN設定）が必要です" : undefined}
         >
-          {listing ? "出品処理中…" : channelListing?.status === "LISTED" ? "出品済みです" : "Mercariに出品する"}
+          {listing ? "出品処理中…" : channelListing?.status === "ACTIVE" ? "出品済みです" : "Mercariに出品する"}
         </button>
         {listingError && <p className="mt-2 text-[12px] text-red-600">{listingError}</p>}
         {!mercariConnected && <p className="mt-2 text-[11px] text-gray-400">Mercari未接続のため出品ボタンは無効化されています。</p>}

@@ -115,7 +115,11 @@ function toChannelListingRecord(row: {
   status: ChannelListingRecord["status"];
   externalListingId?: string | null;
   listingUrl?: string | null;
-  listedAt?: string | null;
+  firstListedAt?: string | null;
+  lastListedAt?: string | null;
+  lastRelistedAt?: string | null;
+  endedAt?: string | null;
+  soldAt?: string | null;
   lastError?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -133,7 +137,11 @@ function toChannelListingRecord(row: {
     status: row.status,
     externalListingId: row.externalListingId ?? null,
     listingUrl: row.listingUrl ?? null,
-    listedAt: row.listedAt ?? null,
+    firstListedAt: row.firstListedAt ?? null,
+    lastListedAt: row.lastListedAt ?? null,
+    lastRelistedAt: row.lastRelistedAt ?? null,
+    endedAt: row.endedAt ?? null,
+    soldAt: row.soldAt ?? null,
     lastError: row.lastError ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -441,10 +449,18 @@ export async function saveChannelOverride(
 
 /**
  * Mercari Shopsへ実際に出品する。冪等性/重複防止(spec要件): 既に
- * LISTED(externalListingIdを持つ)状態のChannelListingへ再度出品を
- * 試みることは拒否する — 更新(updateProduct)はPhase Dのスコープ外
- * (元ブランチのMercariShopsAdapter.updateProductと同じ「Phase 2機能」
- * という位置づけをそのまま踏襲)。
+ * ACTIVE(externalListingIdを持つ)状態のChannelListingへ再度出品を
+ * 試みることは拒否する。
+ *
+ * BELLO統合業務OS指示書(2026-08-30) §21: 「自動再出品」自体
+ * (旧listing ENDED→新listing作成、または同一IDでの再公開)は、
+ * Mercari側のupdateProduct/再出品APIの実仕様がこのsandbox環境から
+ * 確認できていない([UNVERIFIED] — lib/listing/mercari/adapter.tsの
+ * ファイル冒頭コメント参照)ため今回は実装していない — 実際に呼び出す
+ * 手段の無い状態を「実装済み」と称さない(§109/§155)。ACTIVE状態への
+ * 再出品を試みた場合、以前と同じくエラーとして明確にブロックする
+ * (状態機械上はRELIST_PENDINGを用意済みだが、そこへ遷移させる具体的
+ * なトリガーはまだ無い)。
  */
 export async function listOnMercari(
   inventoryId: string,
@@ -457,7 +473,7 @@ export async function listOnMercari(
   const channelListing = await getChannelListing(inventoryId, "MERCARI_SHOPS");
   if (!channelListing) throw new Error("先にMercariのカテゴリー設定を保存してください。");
 
-  if (channelListing.status === "LISTED" && channelListing.externalListingId) {
+  if (channelListing.status === "ACTIVE" && channelListing.externalListingId) {
     throw new Error(
       `既にMercari Shopsへ出品済みです（商品ID: ${channelListing.externalListingId}）。再出品（更新）は現時点では未対応の機能です。`,
     );
@@ -477,20 +493,29 @@ export async function listOnMercari(
   const categoryName = categoryNameOf(inventory.categoryId);
   if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
+  // §15: PUBLISHING = 外部APIへ呼び出し中(旧QUEUEDから改称 — QUEUEDは
+  // §14の新しい語彙では「バッチ/スケジュール待ち」を指すため、この
+  // 同期的なcreateProduct呼び出し中の状態にはPUBLISHINGの方が正確)。
   await serverDataClient.models.ChannelListing.update(
-    { id: channelListing.id, status: "QUEUED", updatedBy: who ?? undefined },
+    { id: channelListing.id, status: "PUBLISHING", updatedBy: who ?? undefined },
     inventoryAuthMode,
   );
 
   try {
     const result = await createMercariProduct({ draft, channelListing, shippingPayer, inventoryQuantity: inventory.quantity });
+    const nowIso = new Date().toISOString();
     const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
       {
         id: channelListing.id,
-        status: "LISTED",
+        status: "ACTIVE",
         externalListingId: result.externalProductId,
         listingUrl: null, // [UNVERIFIED] MercariのcreateProduct応答にlistingUrl相当のフィールドが含まれるか未確認 — 含まれることが確認できたらここへ設定する
-        listedAt: new Date().toISOString(),
+        // §15: firstListedAtは初回のみ設定(既存値があれば上書きしない)、
+        // lastListedAtは成功のたびに更新。このrelist未実装の現状では
+        // 実質的に同時刻になるが、フィールドの意味自体は将来の再出品
+        // 実装にそのまま使える形にしてある。
+        firstListedAt: channelListing.firstListedAt ?? nowIso,
+        lastListedAt: nowIso,
         lastError: undefined,
         updatedBy: who ?? undefined,
       },
@@ -501,7 +526,7 @@ export async function listOnMercari(
   } catch (err) {
     const message = err instanceof MercariApiError ? err.message : err instanceof Error ? err.message : "不明なエラー";
     const { data: failed } = await serverDataClient.models.ChannelListing.update(
-      { id: channelListing.id, status: "FAILED", lastError: message, updatedBy: who ?? undefined },
+      { id: channelListing.id, status: "ERROR", lastError: message, updatedBy: who ?? undefined },
       inventoryAuthMode,
     );
     console.error(`[listOnMercari] inventoryId=${inventoryId} failed:`, err);
