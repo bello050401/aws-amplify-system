@@ -88,9 +88,62 @@ function testParseLineWebhookBody() {
   assertEqual(parseLineWebhookBody({ destination: "x", events: [] }), [], "parseLineWebhookBody: イベントが無ければ空配列");
 }
 
+// ── 自動QA: LINE webhook が取りこぼしを隠していた問題 ────────────────
+// 以前は recordIncomingMessage が失敗しても常に 200 `{ok:true}` を返して
+// いた。LINEは2xxを受信成功とみなして**再送しない**ため、記録に失敗した
+// メッセージはそのまま失われていた——当時のコメントが前提にしていた
+// 「失敗してもLINEの再送で安全に再処理できる」は、200を返している限り
+// 成立しない。
+//
+// 修正後は1件でも失敗したら500を返して再送させる。再送で重複しないことは
+// recordIncomingMessageのidempotency(externalMessageIdのGSIで既存を検出)
+// が保証する。ここではその「再送しても安全」という前提そのものを固定する。
+function testLineWebhookRetryContract() {
+  // 同一 externalMessageId が2回届いても、2回目は重複として扱われる
+  // (=500を返して全件再送させても、成功済みは二重登録されない)という
+  // 契約を、parse段階のIDの一意性で確認する。
+  const body: LineWebhookBody = {
+    destination: "U0000000000000000000000000000000",
+    events: [
+      {
+        type: "message",
+        replyToken: "r1",
+        timestamp: 1756500000000,
+        source: { type: "user", userId: "Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+        message: { id: "msg-1", type: "text", text: "1件目" },
+      },
+      {
+        type: "message",
+        replyToken: "r2",
+        timestamp: 1756500001000,
+        source: { type: "user", userId: "Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+        message: { id: "msg-2", type: "text", text: "2件目" },
+      },
+    ],
+  } as LineWebhookBody;
+
+  const parsed = parseLineWebhookBody(body);
+  assertEqual(parsed.length, 2, "parseLineWebhookBody: 2件のイベントを2件として取り出す");
+  const ids = parsed.map((m) => m.externalMessageId);
+  assertEqual(new Set(ids).size, 2, "parseLineWebhookBody: externalMessageIdが一意(再送時の重複判定キーとして使える)");
+  assertTrue(
+    ids.every((id) => typeof id === "string" && id.length > 0),
+    "parseLineWebhookBody: externalMessageIdが必ず埋まる(空だとidempotency判定が効かず、再送で重複登録される)",
+  );
+
+  // 同じbodyをもう一度parseしても同じIDになる — LINEの再送は同一IDで届く
+  const reparsed = parseLineWebhookBody(body);
+  assertEqual(
+    reparsed.map((m) => m.externalMessageId),
+    ids,
+    "parseLineWebhookBody: 同じイベントを再parseすると同じexternalMessageIdになる(再送が重複と判定できる根拠)",
+  );
+}
+
 function main() {
   testVerifyLineSignature();
   testParseLineWebhookBody();
+  testLineWebhookRetryContract();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
