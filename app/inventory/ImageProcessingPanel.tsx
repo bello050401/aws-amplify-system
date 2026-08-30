@@ -64,6 +64,26 @@ export function reprocessButtonLabel(status: string): string {
   return "加工する";
 }
 
+/**
+ * 「要確認」で止まっている加工結果のうち、採用候補として見せる1件を選ぶ。
+ *
+ * workerは`active: status === "READY"`でしかACTIVEにせず、被写体
+ * セグメンテーションが未実装の間は判定が必ずNEEDS_REVIEWへ倒れる。
+ * そのため、この関数が拾わないと**生成済みの加工結果を画面から一切
+ * 見られない**(比較UIもACTIVEなversionを前提にしていた)。
+ *
+ * 複数溜まっている場合は最新(配列の末尾側)を採る。ロジックをJSXの中に
+ * 埋めずここへ出してあるのは、reprocessButtonLabelと同じ理由 —
+ * 実機ログインなしにテストで固定できるようにするため。
+ */
+export function pickPendingReviewVersion(
+  versions: ImageProcessingVersionSummary[],
+  status: string,
+): ImageProcessingVersionSummary | null {
+  if (status !== "NEEDS_REVIEW") return null;
+  return [...versions].reverse().find((v) => v.status === "NEEDS_REVIEW") ?? null;
+}
+
 /** §12.5: 加工前/加工後を実際の画像で見比べる、原本を破壊しないside-by-side表示。トグルで開閉する(常時表示すると画像が多い商品で重くなるため)。 */
 function BeforeAfterToggle({ originalKey, processedKey, label }: { originalKey: string; processedKey: string; label: string }) {
   const [open, setOpen] = useState(false);
@@ -110,7 +130,20 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
     // eslint-disable-next-line react-hooks/exhaustive-deps -- imagesは親から毎レンダー新配列で渡り得るため、storageKeyの並びをJSON化した依存にする
   }, [JSON.stringify(images.map((i) => i.storageKey))]);
 
-  if (images.length === 0 || byKey === null) return null;
+  if (images.length === 0) return null;
+
+  // 読み込み前/失敗時にパネルごと消していた。setErrorは呼ばれるのに
+  // その表示先がこの下のJSXの中にあるため、**エラーが誰にも見えない**
+  // 状態になっていた(実際、セッション切れで版一覧の取得が失敗したとき、
+  // 画面からは「加工パネルが最初から存在しない」ようにしか見えず、
+  // 原因の切り分けに時間がかかった)。状態を必ず何か表示する。
+  if (byKey === null) {
+    return (
+      <div className="mt-2 text-[11px]">
+        {error ? <p className="text-red-600">画像加工の状態を読み込めませんでした: {error}</p> : <p className="text-gray-400">画像加工の状態を読み込み中…</p>}
+      </div>
+    );
+  }
 
   const statusOf = (img: ImagePanelRow) => currentStatus(byKey[img.storageKey] ?? []);
   const readyCount = images.filter((img) => statusOf(img) === "READY").length;
@@ -219,10 +252,7 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
           const meta = STATUS_LABELS[status] ?? { label: status, className: "text-gray-500" };
           const superseded = versions.filter((v) => v.status === "SUPERSEDED" || (!v.active && v.status === "READY"));
           const activeVersion = versions.find((v) => v.active);
-          // 「要確認」で止まっている最新の加工結果。workerはREADY以外を
-          // ACTIVEにしないため、この行はactiveVersionには現れない。
-          // これを拾わないと、生成済みの加工結果を画面から一切見られない。
-          const pendingReview = status === "NEEDS_REVIEW" ? [...versions].reverse().find((v) => v.status === "NEEDS_REVIEW") ?? null : null;
+          const pendingReview = pickPendingReviewVersion(versions, status);
           const shownVersion = activeVersion ?? pendingReview;
           const processedKey = shownVersion?.webKey ?? shownVersion?.processedMasterKey ?? null;
           const isBusy = busyKey === img.storageKey || BUSY_STATUSES.has(status);

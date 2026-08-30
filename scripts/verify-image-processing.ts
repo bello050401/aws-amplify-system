@@ -23,7 +23,7 @@ import {
 } from "@/lib/imageProcessing/pipeline";
 import { SharpImageProcessingProvider, ENGINE_VERSION } from "@/lib/imageProcessing/sharpProcessor";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
-import { reprocessButtonLabel } from "@/app/inventory/ImageProcessingPanel";
+import { pickPendingReviewVersion, reprocessButtonLabel } from "@/app/inventory/ImageProcessingPanel";
 
 let failures = 0;
 let passes = 0;
@@ -221,6 +221,33 @@ function testPhotoProfileAwsJsonRoundTrip() {
   assertEqual(parseReferenceImageKeys(serializeForAwsJson(keys)).length, 2, "Photo Profile: 基準写真2枚でも成立する(必要枚数を10枚へ勝手に引き上げない)");
 }
 
+
+function testPickPendingReviewVersion() {
+  // workerはREADY以外をACTIVEにせず、セグメンテーション未実装の間は
+  // 判定が必ずNEEDS_REVIEWへ倒れる。この関数が無かったころは、
+  // 生成済みの加工結果を画面から見ることも採用することもできなかった。
+  const v = (id: string, status: string, active = false) =>
+    ({ id, status, active, version: Number(id.replace("v", "")), webKey: id + ".webp", processedMasterKey: id + ".jpg" }) as never;
+
+  const reviewable = [v("v1", "SUPERSEDED"), v("v2", "NEEDS_REVIEW"), v("v3", "NEEDS_REVIEW")];
+  const picked = pickPendingReviewVersion(reviewable, "NEEDS_REVIEW");
+  assertTrue(picked !== null, "pickPendingReviewVersion: 要確認の加工結果を拾う");
+  assertEqual((picked as { id: string }).id, "v3", "pickPendingReviewVersion: 複数あるときは最新を採用候補にする");
+
+  assertTrue(
+    pickPendingReviewVersion(reviewable, "READY") === null,
+    "pickPendingReviewVersion: READYのときは採用候補を出さない(既にACTIVEなものがある)",
+  );
+  assertTrue(
+    pickPendingReviewVersion([v("v1", "SUPERSEDED"), v("v2", "READY", true)], "NEEDS_REVIEW") === null,
+    "pickPendingReviewVersion: 要確認のversionが無ければnull",
+  );
+  assertTrue(pickPendingReviewVersion([], "NEEDS_REVIEW") === null, "pickPendingReviewVersion: versionが1件も無ければnull");
+  for (const st of ["UNPROCESSED", "QUEUED", "PROCESSING", "FAILED", "DEAD_LETTER"]) {
+    assertTrue(pickPendingReviewVersion(reviewable, st) === null, `pickPendingReviewVersion: ${st} では採用候補を出さない`);
+  }
+}
+
 async function main() {
   testAspectRatioDecision();
   testCompositionStrength();
@@ -228,6 +255,7 @@ async function main() {
   testStatusTransitions();
   testQualityGateDecision();
   testReprocessButtonLabel();
+  testPickPendingReviewVersion();
   testBulkImageProcessingEligibleStatuses();
   testOriginalHashComputation();
   testOriginalImageMissingError();
