@@ -201,7 +201,9 @@ export function MessagesInbox({
               key={f}
               type="button"
               onClick={() => setFilter(f)}
-              className={`px-1.5 py-0.5 ${filter === f ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-100"}`}
+              // 実測45x21 — 4つが横に並ぶので、モバイルでは押し分けに
+              // 高さが要る。文字サイズは据え置きで高さだけ32pxへ。
+              className={`inline-flex min-h-8 items-center px-2 py-0.5 ${filter === f ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-100"}`}
             >
               {{ ALL: "すべて", NEEDS_REPLY: "要返信", REPLIED: "返信済み", RESOLVED: "解決済み" }[f]}
             </button>

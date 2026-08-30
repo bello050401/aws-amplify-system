@@ -316,7 +316,11 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
       {/* タイトルはInventoryHeader側(new/page.tsx)に表示済み — ここでは
           未保存変更ガードを経由する「一覧へ戻る」だけを残す。 */}
       <div className="mb-4 flex items-center justify-end">
-        <button type="button" onClick={() => guardedNavigate("/inventory")} className="text-[12px] text-gray-500 hover:text-gray-900">
+        <button
+          type="button"
+          onClick={() => guardedNavigate("/inventory")}
+          className="inline-flex min-h-8 items-center text-[12px] text-gray-500 hover:text-gray-900"
+        >
           在庫一覧へ戻る
         </button>
       </div>

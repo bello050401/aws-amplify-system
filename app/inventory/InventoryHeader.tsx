@@ -65,7 +65,9 @@ export function InventoryHeader({ role, center }: { role: InventoryRole; center?
             await signOut();
             router.push("/inventory/login");
           }}
-          className="text-gray-500 hover:text-gray-900"
+          // 実測60x16 — 指で押すには低すぎる。全画面のヘッダーに出るので
+          // ここだけで全ページのタップ領域が揃う(文字サイズは変えない)。
+          className="inline-flex min-h-8 items-center text-gray-500 hover:text-gray-900"
         >
           ログアウト
         </button>

@@ -180,10 +180,11 @@ export function MasterList({ model, label, entries, readOnly }: MasterListProps)
 
       {!readOnly && entries.length > 0 && (
         <div className="mb-2 flex items-center gap-3 text-[12px] text-gray-600">
-          <button type="button" onClick={selectAll} className="hover:text-gray-900 hover:underline">
+          {/* 実測36x18 / 48x18 — 行内の他のボタンと同じく当たり判定だけ広げる。 */}
+          <button type="button" onClick={selectAll} className="inline-flex min-h-8 items-center hover:text-gray-900 hover:underline">
             全選択
           </button>
-          <button type="button" onClick={clearSelection} className="hover:text-gray-900 hover:underline">
+          <button type="button" onClick={clearSelection} className="inline-flex min-h-8 items-center hover:text-gray-900 hover:underline">
             選択解除
           </button>
           <span>{selectedIds.size}件選択中</span>
@@ -220,24 +221,39 @@ export function MasterList({ model, label, entries, readOnly }: MasterListProps)
             <tr key={entry.id} className={`border-b border-gray-100 ${entry.isActive ? "" : "text-gray-400"}`}>
               {!readOnly && (
                 <td className="py-1.5">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(entry.id)}
-                    onChange={() => toggleSelected(entry.id)}
-                    aria-label={`${entry.name} を選択`}
-                  />
+                  {/* チェックボックス自体は13x13のまま(見た目を変えない)、
+                      labelで包んで押せる範囲だけを32px角へ広げる。 */}
+                  <label className="inline-flex min-h-8 min-w-8 cursor-pointer items-center justify-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(entry.id)}
+                      onChange={() => toggleSelected(entry.id)}
+                      aria-label={`${entry.name} を選択`}
+                    />
+                  </label>
                 </td>
               )}
               <td className="py-1.5">
                 <div className="flex gap-1">
-                  <button type="button" onClick={() => move(index, -1)} disabled={readOnly || pending || index === 0} className="disabled:text-gray-200">
+                  {/* CustomFieldSettings.tsx と同じ理由 — グリフだけだと
+                      実測13x20pxで、モバイル(375-430px)では隣と押し分けら
+                      れない。文字サイズは変えずに当たり判定だけ32px角へ。
+                      設定画面の既定タブがここなので、実際に一番よく触られる。 */}
+                  <button
+                    type="button"
+                    onClick={() => move(index, -1)}
+                    disabled={readOnly || pending || index === 0}
+                    aria-label={`${entry.name}を上へ`}
+                    className="inline-flex min-h-8 min-w-8 items-center justify-center disabled:text-gray-200"
+                  >
                     ↑
                   </button>
                   <button
                     type="button"
                     onClick={() => move(index, 1)}
                     disabled={readOnly || pending || index === entries.length - 1}
-                    className="disabled:text-gray-200"
+                    aria-label={`${entry.name}を下へ`}
+                    className="inline-flex min-h-8 min-w-8 items-center justify-center disabled:text-gray-200"
                   >
                     ↓
                   </button>
@@ -275,7 +291,7 @@ export function MasterList({ model, label, entries, readOnly }: MasterListProps)
                   onClick={() => toggleActive(entry)}
                   disabled={readOnly || pending}
                   title={readOnly ? undefined : entry.isActive ? "クリックで無効化" : "クリックで有効化"}
-                  className={`inline-flex items-center gap-1 border px-1.5 py-0.5 text-[11px] ${
+                  className={`inline-flex min-h-8 items-center gap-1 border px-2 py-0.5 text-[11px] ${
                     entry.isActive ? "border-gray-300 text-gray-600" : "border-gray-200 text-gray-400"
                   } ${readOnly ? "" : "hover:bg-gray-50"}`}
                 >
@@ -285,7 +301,12 @@ export function MasterList({ model, label, entries, readOnly }: MasterListProps)
               </td>
               {!readOnly && (
                 <td className="py-1.5">
-                  <button type="button" onClick={() => handleDelete(entry)} disabled={pending} className="text-[12px] text-red-400 hover:text-red-600">
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(entry)}
+                    disabled={pending}
+                    className="inline-flex min-h-8 min-w-8 items-center justify-center text-[12px] text-red-400 hover:text-red-600"
+                  >
                     削除
                   </button>
                 </td>

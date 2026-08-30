@@ -203,13 +203,17 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
             <tr className="border-b border-gray-200 bg-gray-50 text-left text-[11px] text-gray-500">
               {canEdit && (
                 <th className="w-8 px-2 py-2">
-                  <input
-                    type="checkbox"
-                    checked={allSelectableSelected}
-                    onChange={toggleAll}
-                    disabled={selectableIds.length === 0}
-                    aria-label="すべて選択"
-                  />
+                  {/* MasterList.tsxと同じ — チェックボックスの見た目は
+                      変えず、labelで包んで当たり判定だけ32px角へ広げる。 */}
+                  <label className="inline-flex min-h-8 min-w-8 cursor-pointer items-center justify-center">
+                    <input
+                      type="checkbox"
+                      checked={allSelectableSelected}
+                      onChange={toggleAll}
+                      disabled={selectableIds.length === 0}
+                      aria-label="すべて選択"
+                    />
+                  </label>
                 </th>
               )}
               <th className="w-24 px-2 py-2">画像</th>
