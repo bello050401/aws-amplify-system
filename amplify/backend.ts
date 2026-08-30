@@ -6,6 +6,7 @@ import { auth } from "./auth/resource";
 import { data } from "./data/resource";
 import { storage } from "./storage/resource";
 import { generateSku } from "./functions/generate-sku/resource";
+import { pricingScheduler } from "./functions/pricing-scheduler/resource";
 
 /**
  * Amplify Gen2 backend definition.
@@ -30,6 +31,7 @@ const backend = defineBackend({
   data,
   storage,
   generateSku,
+  pricingScheduler,
 });
 
 // SKU counter table for amplify/functions/generate-sku. This is
@@ -184,3 +186,48 @@ export const lineChannelSecret = new Secret(lineChannelSecretStack, "LineChannel
   secretStringValue: SecretValue.unsafePlainText(JSON.stringify({ configured: false })),
   removalPolicy: RemovalPolicy.RETAIN,
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// BELLO統合業務OS §9(PC不在中・完全自律継続実装指示): Pricing Rule
+// Engineの完全無人スケジュール実行(EventBridge Scheduler→Lambda)。
+// amplify/functions/pricing-scheduler/resource.tsのファイル冒頭コメ
+// ント参照 — defineFunctionの`schedule`オプションが実際のEventBridge
+// Scheduler配線を行う(ここでの手動CDK配線は不要)。ここで行うのは:
+//   1. PriceExecutionLogテーブル(生CDK、GSI無し — skuCounterTableと
+//      全く同じ理由・同じパターン)の新設。
+//   2. 各テーブルへの最小権限IAM付与(read-only/read-writeを明確に
+//      区別 — handler.tsのコメント参照)。
+// ─────────────────────────────────────────────────────────────────────
+const priceExecutionLogStack = backend.createStack("PriceExecutionLogStack");
+const priceExecutionLogTable = new Table(priceExecutionLogStack, "PriceExecutionLogTable", {
+  partitionKey: { name: "id", type: AttributeType.STRING },
+  billingMode: BillingMode.PAY_PER_REQUEST,
+  removalPolicy: RemovalPolicy.RETAIN, // 監査ログのため、スタック再作成時にも失われてはならない(skuCounterTableと同じ判断)。
+});
+priceExecutionLogTable.grantReadWriteData(backend.pricingScheduler.resources.lambda);
+backend.pricingScheduler.addEnvironment("PRICE_EXECUTION_LOG_TABLE_NAME", priceExecutionLogTable.tableName);
+
+// Amplify Data管理下のテーブルへは、AppSync/GraphQL/Cognitoセッション
+// を一切経由せず、IAM(生DynamoDB API)から直接アクセスする —
+// backend.data.resources.tablesの型はAmplifyGraphqlApiResources.tables:
+// Record<string, ITable>として実在を確認済み(node_modules内で再確認、
+// lib/inventory/zaicoSyncPorts.tsが以前確認していたのと同じAPI)。
+//
+// 権限の考え方(handler.tsの実装と対になる境界):
+//   - ChannelListing: read(Scanで対象抽出)+ write(価格関連フィールド
+//     のみに限定したUpdateItem — GSIキー属性(id/inventoryId/
+//     listingDraftId)には触れないことをhandler.ts側のコードで強制)。
+//   - PricingRule: read-onlyのみ(ルール自体はこのLambdaから変更しない)。
+//   - BaseOAuthToken: read-onlyのみ(トークンのリフレッシュはこの
+//     Lambdaでは行わない — resource.tsのファイル冒頭コメント参照)。
+const channelListingTable = backend.data.resources.tables["ChannelListing"];
+const pricingRuleTable = backend.data.resources.tables["PricingRule"];
+const baseOAuthTokenTable = backend.data.resources.tables["BaseOAuthToken"];
+
+channelListingTable.grantReadWriteData(backend.pricingScheduler.resources.lambda);
+pricingRuleTable.grantReadData(backend.pricingScheduler.resources.lambda);
+baseOAuthTokenTable.grantReadData(backend.pricingScheduler.resources.lambda);
+
+backend.pricingScheduler.addEnvironment("CHANNEL_LISTING_TABLE_NAME", channelListingTable.tableName);
+backend.pricingScheduler.addEnvironment("PRICING_RULE_TABLE_NAME", pricingRuleTable.tableName);
+backend.pricingScheduler.addEnvironment("BASE_OAUTH_TOKEN_TABLE_NAME", baseOAuthTokenTable.tableName);
