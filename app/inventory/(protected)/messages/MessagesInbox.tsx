@@ -1,5 +1,6 @@
 "use client";
 
+import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { useEffect, useState } from "react";
 import {
   createTestConversationAction,
@@ -225,7 +226,7 @@ export function MessagesInbox({
               <p className="truncate text-[13px] font-bold text-gray-900">{c.customerDisplayName ?? "不明な顧客"}</p>
               <p className="truncate text-[12px] text-gray-500">{c.lastMessagePreview ?? "（本文なし）"}</p>
               <p className="mt-0.5 text-[10px] text-gray-400">
-                {STATUS_LABEL[c.status]} ・ {c.lastMessageAt ? new Date(c.lastMessageAt).toLocaleString("ja-JP") : ""}
+                {STATUS_LABEL[c.status]} ・ {c.lastMessageAt ? formatJstDateTime(c.lastMessageAt) : ""}
               </p>
             </button>
           ))}

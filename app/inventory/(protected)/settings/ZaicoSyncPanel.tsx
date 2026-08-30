@@ -1,5 +1,6 @@
 "use client";
 
+import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -452,9 +453,9 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
           <dt className="text-gray-500">最終同期日時</dt>
           <dd className="col-span-3">
             {bgJob?.finishedAt
-              ? new Date(bgJob.finishedAt).toLocaleString("ja-JP")
+              ? formatJstDateTime(bgJob.finishedAt)
               : bgJob?.status === "RUNNING" || bgJob?.status === "PENDING"
-                ? `実行中…（開始: ${bgJob.startedAt ? new Date(bgJob.startedAt).toLocaleString("ja-JP") : "-"}）`
+                ? `実行中…（開始: ${formatJstDateTime(bgJob.startedAt)}）`
                 : "-（まだ実行していません）"}
           </dd>
           {bgJob && (

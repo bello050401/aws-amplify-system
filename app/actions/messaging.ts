@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { listConversations, getConversation, listMessages, createTestConversation, draftReply, sendReply, resolveConversation } from "@/lib/messaging/service";
+import { listConversations, listMessages, createTestConversation, draftReply, sendReply, resolveConversation } from "@/lib/messaging/service";
 import type { ConversationRecord, MessageRecord } from "@/lib/messaging/types";
 
 /**
@@ -27,10 +27,6 @@ async function requireAdmin(): Promise<string | null> {
 
 export async function listConversationsAction(): Promise<ConversationRecord[]> {
   return listConversations();
-}
-
-export async function getConversationAction(id: string): Promise<ConversationRecord | null> {
-  return getConversation(id);
 }
 
 export async function listMessagesAction(conversationId: string): Promise<MessageRecord[]> {

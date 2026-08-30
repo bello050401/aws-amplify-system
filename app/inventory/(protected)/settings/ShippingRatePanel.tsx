@@ -1,5 +1,6 @@
 "use client";
 
+import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { useEffect, useState } from "react";
 import { listShippingRatesAction, saveShippingRateAction, deleteShippingRateAction, runShippingRateImportAction, getLatestShippingImportBatchAction } from "@/app/actions/shipping";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
@@ -157,7 +158,7 @@ export function ShippingRatePanel() {
         <p className="mb-1 font-bold text-gray-700">埼玉発料金データ(公式Web取得)</p>
         {importBatch ? (
           <ul className="mb-2 space-y-0.5 text-gray-600">
-            <li>最終実行: {importBatch.startedAt ? new Date(importBatch.startedAt).toLocaleString("ja-JP") : "-"}（status: {importBatch.status}）</li>
+            <li>最終実行: {formatJstDateTime(importBatch.startedAt)}（status: {importBatch.status}）</li>
             <li>
               取得済み: {importBatch.verifiedCells}件 / 配送不可: {importBatch.unavailableCells}件 / 未取得: {importBatch.missingCells}件 / 失敗:{" "}
               {importBatch.failedCells}件

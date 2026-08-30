@@ -89,9 +89,12 @@ export function SalesTrendChart({ points }: { points: MonthlyTrendPoint[] }) {
               onFocus={() => setHoverIndex(i)}
               onBlur={() => setHoverIndex(null)}
             >
-              <title>
-                {p.year}年{p.month}月: 売上高 {yen(p.totalSales)} / 粗利益 {yen(p.totalGrossProfit)}
-              </title>
+              {/* 中身は必ず「式ひとつ」にする。複数の式を並べるとReactは
+                  サーバー側で text ノードの間に `<!-- -->` を挟むが、
+                  `<title>`はHTMLのRCDATA要素でコメントが解釈されず生の
+                  文字列になるため、hydrationがテキストノードを見つけられず
+                  「Hydration failed」で落ちる(実際に売上画面で発生していた)。 */}
+              <title>{`${p.year}年${p.month}月: 売上高 ${yen(p.totalSales)} / 粗利益 ${yen(p.totalGrossProfit)}`}</title>
             </rect>
           </g>
         ))}

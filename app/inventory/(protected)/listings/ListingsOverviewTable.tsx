@@ -1,5 +1,6 @@
 "use client";
 
+import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -290,7 +291,7 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
                     )}
                   </td>
                   <td className="px-2 py-2 align-middle text-[11px] text-gray-500">
-                    {new Date(row.channelListing?.updatedAt ?? row.inventoryUpdatedAt).toLocaleString("ja-JP")}
+                    {formatJstDateTime(row.channelListing?.updatedAt ?? row.inventoryUpdatedAt)}
                   </td>
                 </tr>
               );

@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { CustomFieldDefinitionRow, InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
 import { isInlineEditableColumn, type InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
+import { formatJstDate } from "@/lib/inventory/formatJst";
 import { useInventoryListColumns } from "../useInventoryListColumns";
 import { InventoryThumbnail } from "../InventoryThumbnail";
 import { useDirectEdit } from "./DirectEditProvider";
@@ -35,7 +36,10 @@ function formatYen(value: number | null): string {
 }
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("ja-JP");
+  // 表示は必ずJST固定。実行環境のタイムゾーンに任せるとSSR(UTC)と
+  // ブラウザ(JST)で別の日付になり、hydrationが壊れる
+  // (実測: Server "2026/8/31" / Client "2026/8/30" — formatJst.ts参照)。
+  return formatJstDate(iso);
 }
 
 function formatAwsDate(value: string | null): string {

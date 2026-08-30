@@ -106,10 +106,12 @@ export function PricingRuleAssignForm({ rules, rows }: { rules: PricingRuleRecor
             className="mt-1 block w-full border border-gray-300 px-2 py-1.5 text-[13px] focus:border-gray-500 focus:outline-none"
           >
             <option value="">選択してください</option>
+            {/* optionの中身は式ひとつにまとめる — 子に式を並べるとReactが
+                textノードを分割し、SSR/hydrationの境界で扱いが揺れる
+                (SalesTrendChartの`<title>`で実際にhydrationが壊れていた)。 */}
             {rules.map((r) => (
               <option key={r.id} value={r.id}>
-                {r.name}
-                {!r.enabled ? "（無効）" : ""}
+                {`${r.name}${r.enabled ? "" : "（無効）"}`}
               </option>
             ))}
           </select>

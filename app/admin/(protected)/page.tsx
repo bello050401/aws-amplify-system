@@ -1,3 +1,4 @@
+import { formatJstDate } from "@/lib/inventory/formatJst";
 import Link from "next/link";
 import { listFeaturesForDashboard } from "@/lib/features/queries";
 
@@ -49,7 +50,7 @@ export default async function AdminDashboardPage() {
                 <td className="py-4 pr-4">{STATUS_LABEL[f.status]}</td>
                 <td className="py-4 pr-4">{f.templateType}</td>
                 <td className="py-4 pr-4">{f.itemCount}</td>
-                <td className="py-4 pr-4 text-muted">{new Date(f.createdAt).toLocaleDateString("ja-JP")}</td>
+                <td className="py-4 pr-4 text-muted">{formatJstDate(f.createdAt)}</td>
                 <td className="py-4 text-right">
                   <Link href={`/admin/features/${f.id}`} className="text-xs uppercase tracking-label text-ink underline">
                     編集
