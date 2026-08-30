@@ -32,3 +32,6 @@ zaico-verification/output/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# QA中に使う一時スクリプト(コミットしない)
+.*.mjs
