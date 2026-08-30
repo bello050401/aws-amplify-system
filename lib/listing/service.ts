@@ -121,6 +121,16 @@ function toChannelListingRecord(row: {
   endedAt?: string | null;
   soldAt?: string | null;
   lastError?: string | null;
+  autoPricingEnabled?: boolean | null;
+  pricingRuleId?: string | null;
+  originalPrice?: number | null;
+  currentPrice?: number | null;
+  floorPrice?: number | null;
+  markdownCount?: number | null;
+  lastPriceChangeAt?: string | null;
+  nextPriceActionAt?: string | null;
+  automationHold?: boolean | null;
+  lastAutomationResult?: string | null;
   createdAt: string;
   updatedAt: string;
 }): ChannelListingRecord {
@@ -143,6 +153,16 @@ function toChannelListingRecord(row: {
     endedAt: row.endedAt ?? null,
     soldAt: row.soldAt ?? null,
     lastError: row.lastError ?? null,
+    autoPricingEnabled: row.autoPricingEnabled ?? false,
+    pricingRuleId: row.pricingRuleId ?? null,
+    originalPrice: row.originalPrice ?? null,
+    currentPrice: row.currentPrice ?? null,
+    floorPrice: row.floorPrice ?? null,
+    markdownCount: row.markdownCount ?? 0,
+    lastPriceChangeAt: row.lastPriceChangeAt ?? null,
+    nextPriceActionAt: row.nextPriceActionAt ?? null,
+    automationHold: row.automationHold ?? false,
+    lastAutomationResult: row.lastAutomationResult ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

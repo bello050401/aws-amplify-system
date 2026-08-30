@@ -11,6 +11,7 @@ import { ListColumnSettings } from "./ListColumnSettings";
 import { ZaicoSyncPanel } from "./ZaicoSyncPanel";
 import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 import { MercariSettingsPanel } from "./MercariSettingsPanel";
+import { PricingRulePanel } from "./PricingRulePanel";
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -55,7 +56,7 @@ export function SettingsTabs({
   mercariClientName,
   mercariClientNameSource,
 }: SettingsTabsProps) {
-  const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari">("category");
+  const [tab, setTab] = useState<"category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "pricing">("category");
 
   const tabClass = (active: boolean) =>
     `border-b-2 px-3 py-2 text-[13px] ${active ? "border-gray-900 font-bold text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`;
@@ -93,6 +94,11 @@ export function SettingsTabs({
             EC出品（Mercari）
           </button>
         )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("pricing")} className={tabClass(tab === "pricing")}>
+            自動値下げルール
+          </button>
+        )}
       </div>
 
       <div className="pt-4">
@@ -113,6 +119,7 @@ export function SettingsTabs({
             mercariClientNameSource={mercariClientNameSource}
           />
         )}
+        {tab === "pricing" && isAdmin && <PricingRulePanel />}
       </div>
     </div>
   );

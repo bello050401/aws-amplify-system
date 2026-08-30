@@ -79,6 +79,18 @@ export interface ChannelListingRecord {
   endedAt: string | null;
   soldAt: string | null;
   lastError: string | null;
+  // BELLO統合業務OS指示書(2026-08-30) §18: 商品別自動価格設定
+  // (lib/listing/pricing.ts/lib/listing/pricingService.tsが実際に使う)。
+  autoPricingEnabled: boolean;
+  pricingRuleId: string | null;
+  originalPrice: number | null;
+  currentPrice: number | null;
+  floorPrice: number | null;
+  markdownCount: number;
+  lastPriceChangeAt: string | null;
+  nextPriceActionAt: string | null;
+  automationHold: boolean;
+  lastAutomationResult: string | null;
   createdAt: string;
   updatedAt: string;
 }

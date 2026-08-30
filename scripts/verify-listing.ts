@@ -17,6 +17,7 @@ import { createMercariProduct } from "@/lib/listing/mercari/adapter";
 import { formatMercariUserAgent } from "@/lib/listing/mercari/endpoints";
 import { MercariApiError, classifyHttpStatus, classifyForbiddenError, classifyGraphQLErrors, isRetryableMercariErrorCode } from "@/lib/listing/mercari/errors";
 import { isEcListingEligible, buildCategoryNameLookup, EXCLUDED_CATEGORY_NAMES } from "@/lib/listing/ecEligibility";
+import { calculateFloorPrice, calculateMarkdownPrice, calculateNextPriceActionAt, evaluatePricingSafety, type PricingRuleRecord } from "@/lib/listing/pricing";
 
 let failures = 0;
 let passes = 0;
@@ -129,6 +130,16 @@ function testResolveEffectiveListingFields() {
     endedAt: null,
     soldAt: null,
     lastError: null,
+    autoPricingEnabled: false,
+    pricingRuleId: null,
+    originalPrice: null,
+    currentPrice: null,
+    floorPrice: null,
+    markdownCount: 0,
+    lastPriceChangeAt: null,
+    nextPriceActionAt: null,
+    automationHold: false,
+    lastAutomationResult: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -181,6 +192,16 @@ async function testAdapterValidation() {
     endedAt: null,
     soldAt: null,
     lastError: null,
+    autoPricingEnabled: false,
+    pricingRuleId: null,
+    originalPrice: null,
+    currentPrice: null,
+    floorPrice: null,
+    markdownCount: 0,
+    lastPriceChangeAt: null,
+    nextPriceActionAt: null,
+    automationHold: false,
+    lastAutomationResult: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -255,6 +276,100 @@ function testEcListingEligibility() {
   assertTrue(!isEcListingEligible(lookup("cat-1")), "isEcListingEligible + buildCategoryNameLookup compose: an excluded category's id is correctly rejected end-to-end");
 }
 
+// ── BELLO統合業務OS指示書(2026-08-30) §17-19: Pricing Rule Engine
+// (lib/listing/pricing.ts)。 ────────────────────────────────────────────
+
+const BASE_RULE: PricingRuleRecord = {
+  id: "rule-1",
+  name: "テストルール",
+  enabled: true,
+  channel: "MERCARI_SHOPS",
+  startAfterDays: 7,
+  intervalDays: 5,
+  markdownType: "PERCENTAGE",
+  markdownValue: 10,
+  floorPriceMode: "PERCENTAGE_OF_ORIGINAL",
+  floorPriceValue: 50,
+  maxExecutions: 3,
+  relistEnabled: false,
+  relistAfterDays: null,
+  actionAtFloor: "PAUSE",
+};
+
+function testPricingCalculations() {
+  assertEqual(calculateFloorPrice(10000, { floorPriceMode: "FIXED_AMOUNT", floorPriceValue: 3000 }), 3000, "calculateFloorPrice: FIXED_AMOUNT returns the value as-is");
+  assertEqual(
+    calculateFloorPrice(10000, { floorPriceMode: "PERCENTAGE_OF_ORIGINAL", floorPriceValue: 50 }),
+    5000,
+    "calculateFloorPrice: PERCENTAGE_OF_ORIGINAL computes a percentage of the original price",
+  );
+  assertEqual(
+    calculateFloorPrice(9999, { floorPriceMode: "PERCENTAGE_OF_ORIGINAL", floorPriceValue: 33 }),
+    3300,
+    "calculateFloorPrice: rounds UP (ceil) so the floor is never accidentally undercut by rounding",
+  );
+
+  assertEqual(calculateMarkdownPrice(10000, { markdownType: "FIXED_AMOUNT", markdownValue: 1000 }, 0), 9000, "calculateMarkdownPrice: FIXED_AMOUNT subtracts a flat amount");
+  assertEqual(calculateMarkdownPrice(10000, { markdownType: "PERCENTAGE", markdownValue: 10 }, 0), 9000, "calculateMarkdownPrice: PERCENTAGE subtracts a percentage of current price");
+  assertEqual(
+    calculateMarkdownPrice(5100, { markdownType: "PERCENTAGE", markdownValue: 10 }, 5000),
+    5000,
+    "calculateMarkdownPrice: clamps at the floor price rather than going below it",
+  );
+
+  const firstListedAt = new Date("2026-01-01T00:00:00.000Z");
+  assertEqual(
+    calculateNextPriceActionAt(BASE_RULE, firstListedAt, null).toISOString(),
+    "2026-01-08T00:00:00.000Z",
+    "calculateNextPriceActionAt: first markdown is firstListedAt + startAfterDays",
+  );
+  const lastChange = new Date("2026-01-08T00:00:00.000Z");
+  assertEqual(
+    calculateNextPriceActionAt(BASE_RULE, firstListedAt, lastChange).toISOString(),
+    "2026-01-13T00:00:00.000Z",
+    "calculateNextPriceActionAt: subsequent markdowns use lastPriceChangeAt + intervalDays, not startAfterDays again",
+  );
+}
+
+function testPricingSafety() {
+  const base = {
+    status: "ACTIVE" as const,
+    quantity: 3,
+    autoPricingEnabled: true,
+    automationHold: false,
+    externalListingId: "ext-1",
+    currentPrice: 8000,
+    floorPrice: 5000,
+    markdownCount: 1,
+    rule: BASE_RULE,
+    nextPriceActionAt: new Date("2026-01-01T00:00:00.000Z"),
+    now: new Date("2026-01-02T00:00:00.000Z"),
+  };
+
+  assertEqual(evaluatePricingSafety(base), { safe: true }, "evaluatePricingSafety: all conditions satisfied is safe");
+
+  assertEqual(evaluatePricingSafety({ ...base, status: "SOLD" }), { safe: false, reason: "STATUS_NOT_ELIGIBLE" }, "evaluatePricingSafety: SOLD blocks automation");
+  assertEqual(evaluatePricingSafety({ ...base, status: "ENDED" }), { safe: false, reason: "STATUS_NOT_ELIGIBLE" }, "evaluatePricingSafety: ENDED blocks automation");
+  assertEqual(evaluatePricingSafety({ ...base, status: "ARCHIVED" }), { safe: false, reason: "STATUS_NOT_ELIGIBLE" }, "evaluatePricingSafety: ARCHIVED blocks automation");
+  assertEqual(evaluatePricingSafety({ ...base, quantity: 0 }), { safe: false, reason: "OUT_OF_STOCK" }, "evaluatePricingSafety: zero stock blocks automation");
+  assertEqual(evaluatePricingSafety({ ...base, autoPricingEnabled: false }), { safe: false, reason: "AUTO_PRICING_DISABLED" }, "evaluatePricingSafety: per-listing opt-in must be on (default OFF per §161)");
+  assertEqual(evaluatePricingSafety({ ...base, automationHold: true }), { safe: false, reason: "AUTOMATION_ON_HOLD" }, "evaluatePricingSafety: a manual hold blocks automation even if otherwise enabled");
+  assertEqual(evaluatePricingSafety({ ...base, externalListingId: null }), { safe: false, reason: "NO_EXTERNAL_LISTING" }, "evaluatePricingSafety: no external listing yet blocks automation");
+  assertEqual(evaluatePricingSafety({ ...base, rule: null }), { safe: false, reason: "RULE_MISSING" }, "evaluatePricingSafety: no assigned rule blocks automation");
+  assertEqual(evaluatePricingSafety({ ...base, rule: { ...BASE_RULE, enabled: false } }), { safe: false, reason: "RULE_DISABLED" }, "evaluatePricingSafety: a disabled rule blocks automation");
+  assertEqual(
+    evaluatePricingSafety({ ...base, markdownCount: 3 }),
+    { safe: false, reason: "MAX_EXECUTIONS_REACHED" },
+    "evaluatePricingSafety: reaching maxExecutions blocks further automation",
+  );
+  assertEqual(evaluatePricingSafety({ ...base, currentPrice: 5000, floorPrice: 5000 }), { safe: false, reason: "AT_FLOOR_PRICE" }, "evaluatePricingSafety: already at the floor blocks further markdown");
+  assertEqual(
+    evaluatePricingSafety({ ...base, nextPriceActionAt: new Date("2026-06-01T00:00:00.000Z") }),
+    { safe: false, reason: "NOT_DUE_YET" },
+    "evaluatePricingSafety: not yet due blocks a premature markdown",
+  );
+}
+
 function testFormatMercariUserAgent() {
   assertEqual(formatMercariUserAgent("bello-inventory", "1.2.3"), "bello-inventory/1.2.3", "formatMercariUserAgent: joins clientName/version with a slash");
   assertEqual(formatMercariUserAgent("bello-inventory"), "bello-inventory/0.0.0", "formatMercariUserAgent: defaults version to 0.0.0 per Mercari's own documented convention when omitted");
@@ -302,6 +417,8 @@ async function main() {
   testFormatMercariUserAgent();
   testMercariErrorClassification();
   testEcListingEligibility();
+  testPricingCalculations();
+  testPricingSafety();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

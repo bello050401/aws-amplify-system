@@ -12,6 +12,7 @@ import {
 import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, ShippingPayerCode } from "@/lib/listing/types";
 import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
+import { AutoPricingSection } from "./AutoPricingSection";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
 // 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
@@ -380,6 +381,11 @@ export function ListingForm({
         {listingError && <p className="mt-2 text-[12px] text-red-600">{listingError}</p>}
         {!mercariConnected && <p className="mt-2 text-[11px] text-gray-400">Mercari未接続のため出品ボタンは無効化されています。</p>}
       </div>
+
+      {/* BELLO統合業務OS指示書(2026-08-30) §18/§161: 自動値下げは商品
+          ごとの明示的なオプトインで、既定はOFF。ChannelListingが存在
+          する(=Mercari個別設定を保存済み)商品にだけ表示する。 */}
+      {channelListing && <AutoPricingSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
     </div>
   );
 }

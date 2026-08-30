@@ -695,11 +695,92 @@ const schema = a.schema({
       lastError: a.string(),
       createdBy: a.string(),
       updatedBy: a.string(),
+
+      // ───────────────────────────────────────────────────────────────
+      // BELLO統合業務OS指示書(2026-08-30) §18: 商品別自動価格設定。
+      // autoPricingEnabledの既定値はfalse(§161「本番自動実行は
+      // default OFF」— 個別の商品ごとにADMIN/EDITORが明示的にONへ
+      // 切り替えるまで、この商品は絶対に自動値下げされない)。
+      // lib/listing/pricing.tsのevaluatePricingSafetyがこのフラグと
+      // status/quantity等を突き合わせて安全条件を判定する(§19)。
+      // 実際にMercariへ価格変更を送信するupdateProduct相当の呼び出し
+      // は、そのGraphQL実Schemaがこのsandbox環境から確認できていない
+      // ([UNVERIFIED])ため今回は未実装 — evaluatePricingSafetyが
+      // 「今、値下げ実行して良いか」までを判定し、実際の外部API呼び出し
+      // は明示的にBLOCKED_BY_EXTERNAL_SERVICEとして完了報告に記載する。
+      // ───────────────────────────────────────────────────────────────
+      autoPricingEnabled: a.boolean().default(false),
+      pricingRuleId: a.string(), // → PricingRule.id
+      originalPrice: a.integer(), // 初回出品時の価格(値下げの基準点)
+      currentPrice: a.integer(), // 現在Mercari上で有効なはずの価格(BELLO側の認識 — 実際にMercari上と一致しているかはstatus sync未実装のため保証できない)
+      floorPrice: a.integer(), // PricingRuleから計算された下限価格(lib/listing/pricing.tsのcalculateFloorPrice)
+      markdownCount: a.integer().default(0),
+      lastPriceChangeAt: a.datetime(),
+      nextPriceActionAt: a.datetime(), // 将来のスケジューラがこの時刻以降にrunPricingCheckを呼ぶ、という設計(§22) — スケジューラ自体は今回未実装
+      automationHold: a.boolean().default(false), // ADMINが個別に一時停止したい場合の手動フラグ(autoPricingEnabledとは別 — こちらはルール自体を無効化せず一時停止するためのもの)
+      lastAutomationResult: a.string(), // 直近のrunPricingCheck結果の要約(監査用、§85 Audit Log相当の最小実装)
     })
     .secondaryIndexes((index) => [index("inventoryId"), index("listingDraftId")])
     .authorization((allow) => [
       allow.group("ADMIN"),
       allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // BELLO統合業務OS指示書(2026-08-30) §17: Pricing Rule Engine。
+  // 値下げ日数・率はBELLO独自の経営ルールとして将来変わりうるため
+  // hardcodeしない(§2.3の「価格を何日後に何%下げるかというBELLO独自の
+  // 経営ルールが全く未定」という質問例そのもの) — ADMINが設定画面から
+  // ルールを作成・編集できるようにする、という形でこの可変性に対応する。
+  // ─────────────────────────────────────────────────────────────────────
+  PricingMarkdownType: a.enum(["FIXED_AMOUNT", "PERCENTAGE"]),
+  /** 下限価格の指定方法 — 固定額、または初回価格に対する割合。 */
+  PricingFloorMode: a.enum(["FIXED_AMOUNT", "PERCENTAGE_OF_ORIGINAL"]),
+  PricingActionAtFloor: a.enum(["KEEP", "PAUSE", "RELIST", "MANUAL_REVIEW"]),
+
+  PricingRule: a
+    .model({
+      name: a.string().required(),
+      enabled: a.boolean().default(false), // §161: ルール自体も既定は無効 — ChannelListing.autoPricingEnabledとの二重の安全弁
+      channel: a.ref("ListingChannel").required(),
+      startAfterDays: a.integer().required(), // 出品(firstListedAt)から何日後に最初の値下げを行うか
+      intervalDays: a.integer().required(), // 以降何日おきに値下げを繰り返すか
+      markdownType: a.ref("PricingMarkdownType").required(),
+      markdownValue: a.integer().required(), // FIXED_AMOUNTなら円、PERCENTAGEなら%(1〜100)
+      floorPriceMode: a.ref("PricingFloorMode").required(),
+      floorPriceValue: a.integer().required(),
+      maxExecutions: a.integer(), // 未設定なら無制限(floorPriceで自然に停止する)
+      relistEnabled: a.boolean().default(false),
+      relistAfterDays: a.integer(), // relistEnabled時のみ意味を持つ
+      actionAtFloor: a.ref("PricingActionAtFloor").required(),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"), // ルールの作成・編集はADMIN限定(価格戦略そのものの設定のため、EDITORの「Listing: create/edit allowed」より一段厳しい境界にする)
+      allow.group("EDITOR").to(["read"]), // 個別ChannelListingへルールを割り当てる際、EDITORも選択肢一覧を読める必要がある
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  PriceHistoryActor: a.enum(["USER", "SYSTEM"]),
+
+  /** §20: 「なぜこの価格になったか」を追跡可能にする価格変更履歴。実際にMercariへ反映される前(dry-run/評価のみ)の記録も含む — reasonフィールドで区別する。 */
+  PriceHistory: a
+    .model({
+      channelListingId: a.string().required(),
+      oldPrice: a.integer(),
+      newPrice: a.integer().required(),
+      reason: a.string().required(),
+      ruleId: a.string(),
+      actor: a.ref("PriceHistoryActor").required(),
+      externalResult: a.string(), // 実際の外部API呼び出し結果(未実装の間は"NOT_IMPLEMENTED"等、正直な値を入れる — §157 fake success禁止)
+      changedAt: a.datetime().required(),
+    })
+    .secondaryIndexes((index) => [index("channelListingId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
       allow.group("VIEWER").to(["read"]),
     ]),
 });
