@@ -21,6 +21,29 @@ import "server-only";
  *   構成、Webhookペイロードの実際のJSON形状、署名検証方式は確認できて
  *   いない([UNVERIFIED])。
  *
+ * 【第二次完全完遂指示(2026-08-30)での再調査】「未確認はBLOCKED理由
+ * にならない」との指摘を受け、改めて複数の切り口で再調査した:
+ * (1) Webhook自体の提供形態を確認 — 「WebhookはAPI利用者専用の機能で、
+ *     管理画面からは設定できず、createWebhook APIでのみ設定可能」と
+ *     いう記述を確認(=Webhook機構自体は実在し、createWebhookという
+ *     ミューテーション名も実在することの追加確認)。
+ * (2) updateProductミューテーションについても再調査し、
+ *     `UpdateProductInput`が`shippingConfigurationId`/
+ *     `channelListingScope`フィールドを持つことを確認(が、price/
+ *     status等の肝心のフィールド名は依然未確認)。
+ * (3) GitHub上の非公式クライアント2件(mercari-shops-api-client,
+ *     mercapi_shops)のソースを直接fetchしたが、いずれも読み取り専用
+ *     (search/landing取得)のクライアントで、書き込み系ミューテーション
+ *     の実装は含まれていなかった。
+ * (4) sandbox GraphQLエンドポイント(api.mercari-shops-sandbox.com)への
+ *     直接到達を試みたが、このsandbox環境のegress proxyでブロックされた
+ *     (EGRESS_BLOCKED)。
+ * 結論は変わらず: Webhook署名検証方式・問い合わせ一覧Query・
+ * AddInquiryMessageInputの詳細フィールドは、いずれも実際のMercari
+ * Shops開発者ポータルへのアクセス(契約者専用)無しには確定できない。
+ * これは「調べていない」のではなく、上記4つの具体的な経路をすべて
+ * 試した上でのBLOCKED_BY_EXTERNAL_SERVICE。
+ *
  * 【今回未実装とした理由】上記の断片的な情報だけでは、実際に
  * 動作するリクエストを組み立てられない(特にWebhook署名検証の方式が
  * 不明なまま受信エンドポイントを公開するのは、検証されていないリクエ

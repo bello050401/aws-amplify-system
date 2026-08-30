@@ -37,12 +37,32 @@ import "server-only";
  * 無意味なコードになり、かつ「実装した」という誤解を招く(§157 fake
  * success禁止)。
  *
+ * 【第二次完全完遂指示(2026-08-30)での追加調査】§14「代替経路
+ * (公式通知メールのEmail ingestion化)が無いか検討する」に対応し、
+ * ヤフオクの「落札通知メール」を調査した。ヤフオクは出品者の登録
+ * 連絡先メールアドレスへ、落札成立時に自動通知メール(出品者が
+ * 任意メッセージを追記可能、2020年5月からHTML形式にも対応)を送信する
+ * ことを確認 — これは実在する、規約に沿った公式の通知経路である
+ * (スクレイピングではない)。
+ *
+ * 設計上の結論: lib/messaging/email/sesAdapter.tsのSES受信機能
+ * (現状BLOCKED_BY_USER — 送信ドメインの検証がユーザーの意思決定待ち、
+ * 同ファイル参照)が実装されれば、ヤフオクの登録連絡先メールアドレスを
+ * そのSES検証済みドメイン配下のアドレスに設定するだけで、「落札通知
+ * メール受信→Conversation化」を他チャネルと全く同じ
+ * recordIncomingMessage経路に接続できる可能性が高い(出品作成・価格
+ * 変更・双方向メッセージ送信は依然として公式API不在のため対象外だが、
+ * 「落札の事実を検知してConversationを開始する」ことは可能になる)。
+ * ただしこれもEmail受信と同じ根本原因(AWS認証情報未復旧)で今回は
+ * 実装まで到達していない。
+ *
  * 完了報告での分類: BLOCKED_BY_EXTERNAL_SERVICE
  * (一般提供されているオークションストア向け出品/メッセージAPIの
  * 存在を確認できなかったため。もし将来Yahoo! JAPANとの個別契約で
  * 専用APIへのアクセスが得られた場合は、そのAPI仕様に基づいて
  * lib/messaging/service.tsのrecordIncomingMessage/sendReplyへ他の
- * チャネルと同じ形で接続できる)。
+ * チャネルと同じ形で接続できる)。落札通知メールのEmail ingestion化
+ * 自体はBLOCKED_BY_USER(SES受信ドメイン確定待ち)。
  */
 export async function fetchYahooAuctionMessages(): Promise<never> {
   throw new Error(
