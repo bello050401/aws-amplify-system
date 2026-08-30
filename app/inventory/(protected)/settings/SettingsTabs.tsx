@@ -16,6 +16,7 @@ import { PricingRulePanel } from "./PricingRulePanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
+import { PhotoProfilePanel } from "./PhotoProfilePanel";
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -66,7 +67,7 @@ export function SettingsTabs({
   lineTokenSource,
 }: SettingsTabsProps) {
   const [tab, setTab] = useState<
-    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "pricing" | "shipping" | "line" | "systemAudit"
+    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "pricing" | "shipping" | "line" | "systemAudit" | "photoProfile"
   >("category");
 
   const tabClass = (active: boolean) =>
@@ -125,6 +126,11 @@ export function SettingsTabs({
             System Audit
           </button>
         )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("photoProfile")} className={tabClass(tab === "photoProfile")}>
+            Photo Profile
+          </button>
+        )}
       </div>
 
       <div className="pt-4">
@@ -149,6 +155,7 @@ export function SettingsTabs({
         {tab === "shipping" && isAdmin && <ShippingRatePanel />}
         {tab === "line" && isAdmin && <LineSettingsPanel lineConnected={lineConnected} lineTokenSource={lineTokenSource} />}
         {tab === "systemAudit" && isAdmin && <SystemAuditPanel />}
+        {tab === "photoProfile" && isAdmin && <PhotoProfilePanel />}
       </div>
     </div>
   );

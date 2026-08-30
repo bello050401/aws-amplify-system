@@ -9,6 +9,7 @@ import {
   listStatuses,
 } from "@/lib/inventory/queries";
 import { InventoryImageGallery } from "../../InventoryImageGallery";
+import { ImageProcessingPanel } from "../../ImageProcessingPanel";
 import { InventoryHeader } from "../../InventoryHeader";
 import { DeleteInventoryButton } from "./DeleteInventoryButton";
 import { DetailSection } from "./DetailSection";
@@ -263,6 +264,12 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
           {/* 左カラム: 商品画像。NORMAL/DAMAGEは明確に分離。 */}
           <div>
             <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="商品画像" />
+            {canEdit && (
+              <ImageProcessingPanel
+                inventoryId={item.id}
+                images={orderedNormalImages.map((img) => ({ storageKey: img.storageKey, originalHash: img.originalHash }))}
+              />
+            )}
             <div className="mt-6">
               <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
             </div>
