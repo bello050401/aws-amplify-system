@@ -354,3 +354,147 @@ P0-Bで直したServer Componentsのレンダーエラーは再現しない。
 なお`photoProfile`はworkerで**version記録にのみ**使われ、加工結果には
 影響しない(セグメンテーション未実装のため意図的)ので、この検証用
 Profileが実データの加工を歪めることはない。
+
+---
+
+## 自動QAフェーズ 第2ラウンド
+
+### QA-d: hydration が壊れていた2箇所 — **AWS_VERIFIED**
+
+Staging実機のConsoleに `Minified React error #418 / #425` が出ていた。
+本番ビルドでは番号しか出ないため、ローカルの開発ビルドで同じ操作を
+再現して全文を取得した。
+
+**(1) 売上ページ — SVGの`<title>`**
+
+```
+Warning: Expected server HTML to contain a matching text node for "2025" in <title>
+  at SalesTrendChart
+Hydration failed because the initial UI does not match what was rendered on the server.
+```
+
+`<title>`の中に式を6つ並べていた。ReactはSSR時に隣り合うtextノードの
+間へ `<!-- -->` を挟むが、`<title>`はHTMLのRCDATA要素でコメントが
+解釈されず生の文字列になるため、hydrationがtextノードを対応付けられず
+失敗する。テンプレートリテラル1つにまとめて解消。同じ形が
+`PricingRuleAssignForm`の`<option>`にもあったため併せて修正。
+
+**(2) 在庫一覧 — タイムゾーン依存の日付**
+
+```
+Warning: Text content did not match.
+  Server: "2026/8/31"  Client: "2026/8/30"
+```
+
+`new Date(iso).toLocaleDateString("ja-JP")` は**実行環境の**タイムゾーンで
+日付を出す。Amplify HostingのSSRはUTC、ブラウザはJSTなので、UTC 15:00
+以降に更新されたレコードが一覧に出ていると必ずずれる。
+
+「今日/今月」の判定をJSTで行う既存方針(`nowInJst`)に合わせ、
+`lib/inventory/formatJst.ts` を追加して**表示もJST固定**にした。
+日付を出していた6箇所すべてを移行。
+
+検証(ローカル開発ビルド、3ページ × 3タイムゾーン × 3回 = 27回):
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| /inventory (Asia/Tokyo) | 2/3で発生 | **0/3** |
+| /inventory/sales | 3/3で発生 | **0/3** |
+| 27回の合計 | — | **hydrationエラー 0件** |
+
+### QA-e: 画像1枚ごとにCognitoの資格情報を取り直していた — **修正済み**
+
+在庫一覧を1回開くだけで、Cognito Identity Poolへの通信が実測200回超:
+
+```
+100 x GetId 200
+ 99 x GetCredentialsForIdentity 200
+  3〜27 x GetCredentialsForIdentity 400 TooManyRequestsException
+```
+
+各行のサムネイルが独立したコンポーネントで、mount時に全行が同時に
+`getUrl()`を呼ぶ。Amplifyは資格情報をキャッシュするが、**1件目が返る前に
+残り全部が走る**ため誰もキャッシュに当たらない。スロットリングされた分は
+hook側のリトライで復旧するので画像自体は最終的に表示され、**問題が
+見えないまま画像1枚につき2往復を払い続けていた**。
+
+対策: 共有した`fetchAuthSession()`のPromiseを最初に1回だけ待たせ、
+その後は署名の同時実行数を6に制限。
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| GetId | 100回 | **1回** |
+| GetCredentialsForIdentity | 91〜99回 | **1回** |
+| スロットリング(400) | 3〜27回 | **0回** |
+
+### QA-f: モバイルのタップ領域 — **修正済み**
+
+以前のラウンドで`CustomFieldSettings`と`ListColumnSettings`は32px角へ
+広げていたが、**設定画面が最初に開くタブである`MasterList`が漏れていた**。
+390pxで実測すると、そのタブだけで24px未満の操作要素が95個
+(19行 × チェックボックス13x13 / ↑13x20 / ↓13x20 / 状態ピル51x23 /
+削除24x18)。
+
+文字サイズは一切変えず当たり判定だけを広げ、チェックボックスは見た目を
+保つためlabelで包んだ。ヘッダーのログアウト(60x16、全ページに出る)、
+全選択/選択解除、EC出品一覧の全選択、受信箱のフィルタ4つ、新規登録の
+戻るリンクも同様に対応。
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| 6ページ × 390/430px の小さいタップ領域 | **105件** | **0件** |
+| 横スクロール・pageerror | 0 | 0 |
+
+### QA-g: 自動値下げの「下限到達時の動作」が4択とも同じだった — **修正済み**
+
+設定画面は「そのまま維持 / 出品を停止 / 再出品（未実装） / 手動確認を
+促す」の4択を出し、未実装と書かれているのは再出品だけ。しかし
+`actionAtFloor`は**保存され、フォームに読み戻されるだけで、判定側が
+一度も読んでいなかった**。下限に到達すると`AT_FLOOR_PRICE`で止まるだけで、
+「出品を停止」を選んでも何も停止しない。
+
+- PAUSE → statusをPAUSEDにする
+- MANUAL_REVIEW → automationHoldを立てて確認待ちにする
+- KEEP → 従来どおり何もしないが、理由は監査ログへ残す
+- RELIST → Mercariの再出品APIが未確認のため引き続き実行せず、
+  「何もしなかった」ことを記録に残す
+
+判定は`pricing.ts`の純粋関数`decideActionAtFloor`へ切り出し、
+4択が互いに異なる結果になることをテストで固定した(再び同一へ潰れる
+退行の検出)。現在`autoPricingEnabled`の出品は0件のため、進行中の
+動作は何も変わらない。
+
+### QA-h: エクスポートしたCSVを無編集で取り込むと全行が「更新」になった — **修正済み**
+
+エクスポート → 1文字も変えずにインポート → プレビューが
+「スキップ（変更なし）」ではなく**「更新 1件」**。56列を二分探索して
+原因列が**「更新日」**であることを特定した。
+
+`exportFields.ts`は以前から「更新日」「作成日」「棚卸日」へ
+`importable: false`を付けていたが、**そのフラグがどこからも参照されて
+おらず**、書き込み対象へ素通りしていた(除外されていたのは照合キーの
+displayId/skuだけ)。表示用に整形された日時は保存値と一致しないので、
+毎回「変更あり」と判定されていた。
+
+この画面の通常の使い方は「エクスポート → Excelで一部だけ直す →
+取り込む」なので、**触っていない行まで往復のたびに書き換わり、更新履歴が
+実際の変更で埋もれる**状態だった。
+
+`isWritableImportTarget()`へ一本化してフラグを効かせ、実機の
+インポートウィザードで同じ無編集CSVが**「スキップ（変更なし）1件」**に
+なることを確認。追加項目(CustomFieldDefinition由来)は従来どおり
+書き込める。
+
+あわせてエクスポートのファイル名も`toISOString()`(UTC)から
+JST基準へ変更した — UTCで動くAmplifyでは、日本時間の朝9時より前に
+出力すると前日の日付のファイル名になっていた。
+
+### QA-i: 呼び出し元の無いServer Action — **削除**
+
+`app/actions/`配下の全exportを走査し、他ファイルから一度も参照されない
+ものを探したところ`getConversationAction`の1件だけだった
+(ネットワークから到達できる入口が用途無く1つ増えている状態)。削除。
+
+`relistEnabled`/`relistAfterDays`、画像加工の`highlightRecovery`/
+`shadowLift`も未使用だが、いずれも**UIに露出しておらず利用者が設定
+できない**休眠スキーマ/型定義であり、実害が無いため触っていない。
