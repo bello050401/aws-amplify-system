@@ -75,7 +75,7 @@ const MAPPING_TARGETS: { key: string; label: string; valueType: ExportFieldValue
  * ZAICO_COMPAT_FIELDSの列名(⚪︎/⚫︎等の記号を含む)を実際のZAICO
  * エクスポートファイルのヘッダーと確実に対応付けるための備え。
  */
-function normalizeImportHeaderLabel(text: string): string {
+export function normalizeImportHeaderLabel(text: string): string {
   return normalizeMasterName(
     text
       .normalize("NFKC")
@@ -95,7 +95,7 @@ function normalizeImportHeaderLabel(text: string): string {
  * ている」場合のフォールバック専用(buildSuggestedMappingの後段でのみ
  * 使う)。
  */
-function stripLeadingDecoration(text: string): string {
+export function stripLeadingDecoration(text: string): string {
   return text
     .normalize("NFKC")
     .trim()
@@ -134,7 +134,7 @@ const IMPORT_HEADER_ALIASES: { alias: string; key: string }[] = [
  * これでも一致しなければnull — フリー本推測(fuzzy matching)は一切行
  * わず、ユーザー確認へ回す(spec: 「勝手に確定しない」)。
  */
-function buildSuggestedMapping(headers: string[], mappingTargets: { key: string; label: string }[]): Record<string, string | null> {
+export function buildSuggestedMapping(headers: string[], mappingTargets: { key: string; label: string }[]): Record<string, string | null> {
   const targetKeys = new Set(mappingTargets.map((t) => t.key));
 
   const byLabel = new Map<string, string>();
@@ -165,7 +165,7 @@ function buildSuggestedMapping(headers: string[], mappingTargets: { key: string;
   return mapping;
 }
 
-function parseCsvFile(text: string): { headers: string[]; rows: Record<string, string>[] } {
+export function parseCsvFile(text: string): { headers: string[]; rows: Record<string, string>[] } {
   const table = parseCsv(text);
   if (table.length === 0) return { headers: [], rows: [] };
   const headers = table[0].map((h) => h.trim());
@@ -173,7 +173,7 @@ function parseCsvFile(text: string): { headers: string[]; rows: Record<string, s
   return { headers, rows };
 }
 
-async function parseXlsxFile(buffer: ArrayBuffer): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
+export async function parseXlsxFile(buffer: ArrayBuffer): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
   const sheet = workbook.worksheets[0];
@@ -264,7 +264,7 @@ export interface ImportRowOutcome {
 }
 
 /** "22,800" "¥22800" 等 → 数値。変換できなければ警告のみ、行全体は失敗させない。 */
-function parseImportNumber(raw: string, label: string, warnings: string[]): number | null {
+export function parseImportNumber(raw: string, label: string, warnings: string[]): number | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   const cleaned = trimmed.replace(/[,円¥]/g, "");
@@ -277,7 +277,7 @@ function parseImportNumber(raw: string, label: string, warnings: string[]): numb
 }
 
 /** "2026/08/27" "2026-08-27" → AWSDate "2026-08-27"。 */
-function parseImportDate(raw: string, label: string, warnings: string[]): string | null {
+export function parseImportDate(raw: string, label: string, warnings: string[]): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   const normalized = trimmed.replace(/\//g, "-");

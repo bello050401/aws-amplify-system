@@ -23,6 +23,7 @@
     "verify:ai-gateway": "node scripts/with-server-only-stub.cjs scripts/verify-ai-gateway.ts",
     "verify:image-processing": "node scripts/with-server-only-stub.cjs scripts/verify-image-processing.ts",
     "benchmark:zaico-sync": "node scripts/with-server-only-stub.cjs scripts/benchmark-zaico-sync.ts",
+    "verify:import": "node scripts/with-server-only-stub.cjs scripts/verify-import.ts",
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts"
   },
   "dependencies": {
