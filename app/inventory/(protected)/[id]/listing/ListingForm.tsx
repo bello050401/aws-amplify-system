@@ -17,6 +17,8 @@ import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
+import { InventoryImageGallery } from "../../../InventoryImageGallery";
+import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
 // 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
@@ -48,12 +50,15 @@ const STATUS_LABEL: Record<ChannelListingRecord["status"], string> = {
 export function ListingForm({
   inventoryId,
   inventoryName,
+  images,
   initialDraft,
   initialChannelListing,
   mercariConnected,
 }: {
   inventoryId: string;
   inventoryName: string;
+  /** 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: Inventory Masterの商品画像(トップ画像が先頭に来るよう呼び出し元でソート済み) — このコンポーネント自体は画像データを一切書き込まず、表示のみ。 */
+  images: InventoryImageRecord[];
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
   mercariConnected: boolean;
@@ -205,6 +210,15 @@ export function ListingForm({
       <p className="mb-4 text-[12px] text-gray-500">
         「{inventoryName}」をECチャネルへ出品するための下書き・設定です。Inventory本体（在庫マスタ）のデータは一切変更されません。
       </p>
+
+      {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: 在庫詳細
+          ページと同一のInventoryImageGallery(メイン画像+複数画像の
+          閲覧手段+ライトボックス+No Imageプレースホルダーを標準装備)を
+          そのまま再利用する——画像を複製せず、既存のthumbnail/S3/
+          signed URLアーキテクチャに乗る。 */}
+      <div className="mb-4">
+        <InventoryImageGallery images={images} alt={inventoryName} title="商品画像" />
+      </div>
 
       {!mercariConnected && (
         <div className="mb-4 border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">

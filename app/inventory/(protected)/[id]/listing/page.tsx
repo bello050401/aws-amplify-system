@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/service";
 import { isMercariConnected } from "@/lib/listing/mercari/tokenAccess";
+import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingForm } from "./ListingForm";
 
@@ -39,11 +41,37 @@ export default async function ListingPage({ params }: { params: { id: string } }
     isMercariConnected(),
   ]);
 
+  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: Inventory
+  // Masterの商品画像をEC出品詳細へ表示する——画像データをEC Listing側へ
+  // 複製せず、Inventory本体の画像をそのまま参照する(page.tsx冒頭の
+  // 「READ ONLY境界」コメントと同じ原則)。並び順・トップ画像の解決は
+  // 在庫詳細ページ(app/inventory/(protected)/[id]/page.tsx)と全く同じ
+  // ロジック(splitImagesByType + resolveTopImage)を再利用し、表示規約
+  // がこの2画面で食い違わないようにする。
+  const { normal: normalImages } = splitImagesByType(item.images);
+  const topImage = resolveTopImage(item.images);
+  const orderedNormalImages = topImage ? [topImage, ...normalImages.filter((i) => i.storageKey !== topImage.storageKey)] : normalImages;
+
   return (
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">EC出品</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <ListingForm inventoryId={item.id} inventoryName={item.name} initialDraft={draft} initialChannelListing={channelListing} mercariConnected={mercariConnected} />
+        <div className="mx-auto mb-3 max-w-2xl">
+          {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §10: EC出品
+              詳細から元のBELLO在庫詳細へ戻れる導線。inventoryId(一意キー)
+              による直接リンクで、商品名/SKUの曖昧検索は使わない。 */}
+          <Link href={`/inventory/${item.id}`} className="text-[12px] text-blue-700 underline hover:text-blue-900">
+            ← 在庫詳細を開く
+          </Link>
+        </div>
+        <ListingForm
+          inventoryId={item.id}
+          inventoryName={item.name}
+          images={orderedNormalImages}
+          initialDraft={draft}
+          initialChannelListing={channelListing}
+          mercariConnected={mercariConnected}
+        />
       </div>
     </div>
   );

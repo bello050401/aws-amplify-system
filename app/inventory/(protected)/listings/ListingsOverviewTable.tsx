@@ -218,13 +218,12 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
               <th className="px-2 py-2">状態</th>
               <th className="px-2 py-2">外部ID</th>
               <th className="px-2 py-2">最終更新</th>
-              <th className="px-2 py-2"></th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={canEdit ? 9 : 8} className="px-2 py-8 text-center text-[12px] text-gray-400">
+                <td colSpan={canEdit ? 8 : 7} className="px-2 py-8 text-center text-[12px] text-gray-400">
                   該当する商品がありません。
                 </td>
               </tr>
@@ -249,7 +248,17 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
                     <InventoryThumbnail storageKey={row.thumbnailKey} alt={row.name} size="small" />
                   </td>
                   <td className="px-2 py-2 align-middle">
-                    <div className="font-bold text-gray-900">{row.name}</div>
+                    {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30)
+                        §8: 「詳細」ボタン(旧: 末尾列のリンク)を廃止し、
+                        商品タイトルをクリック可能なリンクにする——
+                        Linkはネイティブに<a>を描画するのでhover/focus
+                        (下線+色)・キーボード操作(Tab+Enter)・
+                        aria読み上げ(タイトルがリンクテキスト)を
+                        追加コード無しで満たす。既存の行操作
+                        (チェックボックス/画像)とは別要素なので干渉しない。 */}
+                    <Link href={`/inventory/${row.inventoryId}/listing`} className="font-bold text-gray-900 underline decoration-transparent hover:decoration-gray-400 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-900">
+                      {row.name}
+                    </Link>
                     <div className="font-mono text-[11px] text-gray-500">{row.displayId}</div>
                   </td>
                   <td className="px-2 py-2 align-middle">{row.quantity.toLocaleString("ja-JP")}</td>
@@ -282,11 +291,6 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
                   </td>
                   <td className="px-2 py-2 align-middle text-[11px] text-gray-500">
                     {new Date(row.channelListing?.updatedAt ?? row.inventoryUpdatedAt).toLocaleString("ja-JP")}
-                  </td>
-                  <td className="px-2 py-2 align-middle">
-                    <Link href={`/inventory/${row.inventoryId}/listing`} className="text-[12px] text-blue-700 underline">
-                      詳細を開く
-                    </Link>
                   </td>
                 </tr>
               );
