@@ -165,6 +165,39 @@ export function buildSuggestedMapping(headers: string[], mappingTargets: { key: 
   return mapping;
 }
 
+/**
+ * 不具合修正・ZAICO同期重複根絶・EC出品UI改善・画像自動加工 完全自律
+ * 実装指示書(2026-08-30) §5.2: CSVの文字コードをUTF-8決め打ちに
+ * しない。Excelの「CSV(コンマ区切り)」形式での保存はWindows既定で
+ * Shift_JIS(CP932)になることが多く、以前の実装
+ * (`new TextDecoder("utf-8").decode(bytes)`)はTextDecoderの既定動作
+ * (不正なUTF-8バイト列を例外無しでU+FFFDへ置換する)により、
+ * Shift_JISファイルを読んでも例外を出さずに文字化けした内容を
+ * そのまま返していた——エラーにすらならず、ユーザーが気づかないまま
+ * 全列が誤対応/文字化けするという、クラッシュより発見しにくい不具合
+ * だった。
+ *
+ * 修正: まずUTF-8を`fatal: true`で試し(不正なバイト列があれば例外を
+ * 投げさせる——実際にNode.jsのTextDecoderでこの検知が機能することを
+ * 確認済み)、失敗したらShift_JISとして再デコードする。UTF-8 BOM
+ * (Excelの「UTF-8 CSV」形式が付与する)は事前に取り除く。
+ */
+export function decodeImportText(bytes: ArrayBuffer): string {
+  const withoutBom = (() => {
+    const view = new Uint8Array(bytes);
+    if (view.length >= 3 && view[0] === 0xef && view[1] === 0xbb && view[2] === 0xbf) {
+      return view.slice(3).buffer;
+    }
+    return bytes;
+  })();
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(withoutBom);
+  } catch {
+    // UTF-8として不正 — Excel(Windows既定)のShift_JIS(CP932)保存を想定してフォールバックする。
+    return new TextDecoder("shift_jis").decode(withoutBom);
+  }
+}
+
 export function parseCsvFile(text: string): { headers: string[]; rows: Record<string, string>[] } {
   const table = parseCsv(text);
   if (table.length === 0) return { headers: [], rows: [] };
@@ -175,7 +208,17 @@ export function parseCsvFile(text: string): { headers: string[]; rows: Record<st
 
 export async function parseXlsxFile(buffer: ArrayBuffer): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
+  try {
+    await workbook.xlsx.load(buffer);
+  } catch (err) {
+    // 不具合修正指示書§5.5: 壊れたxlsx/CSVを装った別形式等を、原因不明の
+    // 例外のまま上へ伝播させない——ここで検知して安全なメッセージへ
+    // 変換する(P0-1で確立した「throwする場合もユーザーに理解可能な
+    // メッセージにする」方針、実際にexceljsが投げる例外を実機確認して
+    // 追加した分岐)。
+    console.error("[parseXlsxFile] workbook.xlsx.load failed:", err instanceof Error ? err.message : err);
+    throw new Error("ファイルが破損しているか、正しいExcel形式(.xlsx)ではありません。別のファイルを確認してください。");
+  }
   const sheet = workbook.worksheets[0];
   if (!sheet) return { headers: [], rows: [] };
 
@@ -212,8 +255,14 @@ export async function parseXlsxFile(buffer: ArrayBuffer): Promise<{ headers: str
 }
 
 export async function parseImportFile(filename: string, bytes: ArrayBuffer): Promise<ParsedImportFile> {
+  // 不具合修正指示書§5.5: 0バイトファイルを、ExcelJS/CSVパーサの原因
+  // 不明な例外(または「ヘッダー行が見つかりません」という誤解を招く
+  // メッセージ)に委ねず、ここで明確に検知する。
+  if (bytes.byteLength === 0) {
+    throw new Error("ファイルが空です。内容のあるCSVまたはExcelファイルを選択してください。");
+  }
   const isXlsx = /\.xlsx$/i.test(filename);
-  const { headers, rows } = isXlsx ? await parseXlsxFile(bytes) : parseCsvFile(new TextDecoder("utf-8").decode(bytes));
+  const { headers, rows } = isXlsx ? await parseXlsxFile(bytes) : parseCsvFile(decodeImportText(bytes));
 
   if (rows.length > IMPORT_MAX_ROWS) {
     throw new Error(`1回のインポートは最大${IMPORT_MAX_ROWS}件までです（${rows.length}件検出）。ファイルを分割してください。`);

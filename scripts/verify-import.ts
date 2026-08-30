@@ -17,7 +17,16 @@
  */
 import ExcelJS from "exceljs";
 import { parseCsv, toCsv } from "@/lib/inventory/csv";
-import { parseCsvFile, parseXlsxFile, buildSuggestedMapping, parseImportNumber, parseImportDate, normalizeImportHeaderLabel, stripLeadingDecoration } from "@/lib/inventory/inventoryImport";
+import {
+  parseCsvFile,
+  parseXlsxFile,
+  buildSuggestedMapping,
+  parseImportNumber,
+  parseImportDate,
+  normalizeImportHeaderLabel,
+  stripLeadingDecoration,
+  decodeImportText,
+} from "@/lib/inventory/inventoryImport";
 
 let failures = 0;
 let passes = 0;
@@ -171,6 +180,62 @@ async function testParseXlsxKeepsRowWithPartialData() {
   assertEqual(rows[0], { 商品名: "机", 数量: "" }, "XLSX: 保持された行の空セルは空文字になる(nullではない)");
 }
 
+/**
+ * 不具合修正・ZAICO同期重複根絶・EC出品UI改善・画像自動加工 完全自律
+ * 実装指示書(2026-08-30) §5.2/§5.5: 実機再現(production build +
+ * Playwright、docs/csv-xlsx-import-error-root-cause-20260830.md)で
+ * 確認した2つの実害の回帰テスト——
+ *   1. Shift_JIS(Excel Windows既定のCSV保存形式)を読んでも、以前は
+ *      例外もエラーも無いまま静かに文字化けしていた(TextDecoderの
+ *      既定動作)。
+ *   2. 壊れたxlsx/0バイトファイルは、原因不明の例外のまま上位へ
+ *      伝播していた(production環境ではNext.jsに汎用メッセージへ
+ *      潰される)。
+ */
+function testDecodeImportTextShiftJisFallback() {
+  // `printf '商品名,数量\n椅子,3\n' | iconv -f UTF-8 -t SHIFT_JIS`で
+  // 実際に生成したバイト列(このテストファイル自身が正しいことを、
+  // 生成時にTextDecoder('shift_jis')での逆変換で確認済み)。
+  const shiftJisBytes = new Uint8Array([143, 164, 149, 105, 150, 188, 44, 144, 148, 151, 202, 10, 136, 214, 142, 113, 44, 51, 10]).buffer;
+  const decoded = decodeImportText(shiftJisBytes);
+  assertEqual(decoded, "商品名,数量\n椅子,3\n", "decodeImportText: Shift_JIS(Excel Windows既定のCSV保存)を正しく検知してデコードする(文字化けを黙って通さない)");
+}
+
+function testDecodeImportTextUtf8WithBom() {
+  const withBom = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("商品名,数量\n")]).buffer;
+  assertEqual(decodeImportText(withBom), "商品名,数量\n", "decodeImportText: UTF-8 BOM付き(Excelの「UTF-8 CSV」保存)を正しく除去する");
+}
+
+function testDecodeImportTextPlainUtf8() {
+  const plain = new TextEncoder().encode("商品名,数量\n").buffer;
+  assertEqual(decodeImportText(plain), "商品名,数量\n", "decodeImportText: 通常のUTF-8(BOM無し)はそのまま正しくデコードされる");
+}
+
+async function testParseXlsxFileRejectsCorruptContent() {
+  // .xlsxとして送られたが実体はプレーンテキスト(壊れている/別形式) —
+  // 実機確認済みの実際の失敗モード。
+  const notReallyXlsx = new TextEncoder().encode("this is not a real xlsx file, just plain text").buffer;
+  try {
+    await parseXlsxFile(notReallyXlsx);
+    failures++;
+    console.error("✗ FAIL parseXlsxFile: 壊れたxlsxは例外を投げるべきだが投げなかった");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    assertTrue(message.includes("破損している") || message.includes("正しいExcel形式"), "parseXlsxFile: 壊れたxlsxに対し、原因不明の例外ではなくユーザーが理解できるメッセージを投げる");
+  }
+}
+
+async function testParseXlsxFileRejectsEmptyBuffer() {
+  try {
+    await parseXlsxFile(new ArrayBuffer(0));
+    failures++;
+    console.error("✗ FAIL parseXlsxFile: 0バイトのxlsxは例外を投げるべきだが投げなかった");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    assertTrue(message.includes("破損している") || message.includes("正しいExcel形式"), "parseXlsxFile: 0バイトファイルに対しても、ユーザーが理解できるメッセージを投げる");
+  }
+}
+
 async function main() {
   testParseCsvQuoting();
   testParseCsvBom();
@@ -186,6 +251,11 @@ async function main() {
   testNormalizeAndStrip();
   await testParseXlsxRoundTrip();
   await testParseXlsxKeepsRowWithPartialData();
+  testDecodeImportTextShiftJisFallback();
+  testDecodeImportTextUtf8WithBom();
+  testDecodeImportTextPlainUtf8();
+  await testParseXlsxFileRejectsCorruptContent();
+  await testParseXlsxFileRejectsEmptyBuffer();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

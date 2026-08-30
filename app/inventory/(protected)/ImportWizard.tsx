@@ -10,10 +10,17 @@ import type { ImportExecuteResult, ImportSummary, ParsedImportFile } from "@/lib
 
 type WizardStep = "file" | "mapping" | "result";
 
+// 不具合修正・ZAICO同期重複根絶・EC出品UI改善・画像自動加工 完全自律
+// 実装指示書(2026-08-30) §5.3: 「③実行」は独立した画面を持たず②の
+// 画面上のボタン一つとして扱う設計(このファイル冒頭コメント参照)ため、
+// ここに表示する3つのステップは連番で③まで、のはずが以前は最後の
+// ステップに「④」という飛び番号が付いていた(③が実在しないのに番号
+// だけ4まで進む、という単純な表記ミス)。実際のステップ数(3つ)に
+// 合わせて①②③へ修正する。
 const STEP_LABELS: { key: WizardStep; label: string }[] = [
   { key: "file", label: "①ファイル" },
   { key: "mapping", label: "②内容確認" },
-  { key: "result", label: "④結果" },
+  { key: "result", label: "③結果" },
 ];
 
 const ACCEPTED_EXTENSIONS = /\.(csv|xlsx)$/i;
@@ -50,9 +57,13 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
     try {
       const fd = new FormData();
       fd.set("file", file);
-      const result = await parseInventoryImportFileAction(fd);
-      setParsed(result);
-      setMapping(Object.fromEntries(Object.entries(result.suggestedMapping).map(([h, k]) => [h, k ?? ""])));
+      const res = await parseInventoryImportFileAction(fd);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setParsed(res.data);
+      setMapping(Object.fromEntries(Object.entries(res.data.suggestedMapping).map(([h, k]) => [h, k ?? ""])));
       setPreview(null);
       setAutoMappedCollapsed(true);
       setStep("mapping");
@@ -108,7 +119,12 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
     setError(null);
     setBusy("previewing");
     try {
-      setPreview(await previewInventoryImportAction(parsed.rows, mappingAsRecord()));
+      const res = await previewInventoryImportAction(parsed.rows, mappingAsRecord());
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setPreview(res.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "内容確認に失敗しました。");
     } finally {
@@ -121,8 +137,12 @@ export function ImportWizard({ onClose }: { onClose: () => void }) {
     setError(null);
     setBusy("executing");
     try {
-      const r = await executeInventoryImportAction(parsed.rows, mappingAsRecord(), sourceLabel);
-      setResult(r);
+      const res = await executeInventoryImportAction(parsed.rows, mappingAsRecord(), sourceLabel);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setResult(res.data);
       setStep("result");
     } catch (err) {
       setError(err instanceof Error ? err.message : "インポートの実行に失敗しました。");
