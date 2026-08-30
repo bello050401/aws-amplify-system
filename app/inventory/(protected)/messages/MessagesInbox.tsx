@@ -8,6 +8,7 @@ import {
   resolveConversationAction,
   sendReplyAction,
 } from "@/app/actions/messaging";
+import { generateReplyDraftAction } from "@/app/actions/ai";
 import type { ConversationRecord, MessageRecord } from "@/lib/messaging/types";
 
 type Filter = "ALL" | "NEEDS_REPLY" | "REPLIED" | "RESOLVED";
@@ -56,6 +57,8 @@ export function MessagesInbox({
   const [showTestForm, setShowTestForm] = useState(false);
   const [testCustomer, setTestCustomer] = useState("");
   const [testBody, setTestBody] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [isAiDraft, setIsAiDraft] = useState(false);
 
   const filtered = conversations.filter((c) => {
     if (filter === "NEEDS_REPLY") return c.needsReply;
@@ -78,6 +81,7 @@ export function MessagesInbox({
     if (selectedId) void loadMessages(selectedId);
     else setMessages([]);
     setReplyBody("");
+    setIsAiDraft(false);
     setConfirmingMessageId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
@@ -87,13 +91,34 @@ export function MessagesInbox({
     setBusy(true);
     setError(null);
     try {
-      await draftReplyAction(selected.id, replyBody, false);
+      await draftReplyAction(selected.id, replyBody, isAiDraft);
       setReplyBody("");
+      setIsAiDraft(false);
       await loadMessages(selected.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "下書きの保存に失敗しました。");
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * §45/§89: AI generates ↓ human edits ↓ send click ↓ confirmation ↓
+   * external send。ここではdraftを生成してテキストエリアへ入れるだけ
+   * — 保存も送信もしない。このボタンを押すまでAI requestは発生しない。
+   */
+  async function handleGenerateReply() {
+    if (!selected) return;
+    setAiBusy(true);
+    setError(null);
+    try {
+      const draft = await generateReplyDraftAction(selected.id);
+      setReplyBody(draft);
+      setIsAiDraft(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "AI生成に失敗しました。");
+    } finally {
+      setAiBusy(false);
     }
   }
 
@@ -275,13 +300,14 @@ export function MessagesInbox({
               ))}
             </div>
 
-            {/* §45: AI draft ↓ human edits ↓ send click ↓ confirmation ↓ external send。このタスク(P3)ではAI生成自体は未実装 — 素の返信編集欄のみ(AI生成はP4で追加)。 */}
+            {/* §45: AI draft ↓ human edits ↓ send click ↓ confirmation ↓ external send。AI生成はここの「AIで返信案を生成」ボタン経由のみ(§89: 明示操作なしにAI requestしない)。 */}
             {canEdit && (
               <div className="border border-gray-200 p-3">
                 <p className="mb-1 text-[11px] font-bold text-gray-500">返信</p>
                 {draftMessage ? (
                   <div>
                     <p className="whitespace-pre-wrap text-[13px] text-gray-700">{draftMessage.body}</p>
+                    {draftMessage.aiGenerated && <p className="mt-1 text-[10px] text-gray-400">（AI生成の下書き）</p>}
                     <button
                       type="button"
                       onClick={() => setConfirmingMessageId(draftMessage.id)}
@@ -295,19 +321,33 @@ export function MessagesInbox({
                   <div>
                     <textarea
                       value={replyBody}
-                      onChange={(e) => setReplyBody(e.target.value)}
+                      onChange={(e) => {
+                        setReplyBody(e.target.value);
+                        setIsAiDraft(false); // 人力で編集した時点でAI生成フラグは外す(§134: 最終本文がAI生成そのままか人力編集済みかを区別する)
+                      }}
                       rows={4}
                       placeholder="返信内容を入力"
                       className="w-full border border-gray-300 px-2 py-1 text-[13px]"
                     />
-                    <button
-                      type="button"
-                      onClick={handleSaveDraft}
-                      disabled={busy || !replyBody.trim()}
-                      className="mt-2 bg-gray-900 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50"
-                    >
-                      下書きを保存
-                    </button>
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSaveDraft}
+                        disabled={busy || !replyBody.trim()}
+                        className="bg-gray-900 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50"
+                      >
+                        下書きを保存
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleGenerateReply}
+                        disabled={aiBusy}
+                        className="border border-gray-300 px-3 py-1 text-[12px] text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        {aiBusy ? "生成中…" : "AIで返信案を生成"}
+                      </button>
+                      {isAiDraft && <span className="text-[10px] text-gray-400">AI生成（未編集）</span>}
+                    </div>
                   </div>
                 )}
               </div>

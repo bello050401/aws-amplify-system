@@ -13,6 +13,7 @@ import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, Sh
 import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 import { AutoPricingSection } from "./AutoPricingSection";
+import { generateListingCopyAction } from "@/app/actions/ai";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
 // 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
@@ -64,6 +65,7 @@ export function ListingForm({
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
 
   const [categoryId, setCategoryId] = useState(initialChannelListing?.categoryMapping?.mercariCategoryId ?? "");
   const [categoryName, setCategoryName] = useState(initialChannelListing?.categoryMapping?.mercariCategoryName ?? "");
@@ -94,6 +96,27 @@ export function ListingForm({
     const [d, c] = await Promise.all([getListingDraftAction(inventoryId), getChannelListingAction(inventoryId)]);
     setDraft(d);
     setChannelListing(c);
+  }
+
+  /**
+   * BELLO統合業務OS指示書(2026-08-30) §56/§59: 生成結果はタイトル/
+   * 説明文欄へ反映するだけ — 「保存」は別ボタン(handleSaveDraft)で
+   * ユーザーが明示的に行う。§89: このボタンを押すまでAI requestは
+   * 発生しない。
+   */
+  async function handleGenerateWithAi() {
+    setAiBusy(true);
+    setDraftError(null);
+    try {
+      const result = await generateListingCopyAction(inventoryId);
+      setTitle(result.title);
+      const points = result.sellingPoints.length > 0 ? `\n\n${result.sellingPoints.map((p) => `・${p}`).join("\n")}` : "";
+      setDescription(`${result.description}${points}\n\n【コンディション】${result.conditionText}`);
+    } catch (err) {
+      setDraftError(err instanceof Error ? err.message : "AI生成に失敗しました。");
+    } finally {
+      setAiBusy(false);
+    }
   }
 
   async function handleSaveDraft() {
@@ -177,7 +200,18 @@ export function ListingForm({
 
       {/* 出品下書き(Common Listing Draft) — チャネルに依存しない共通項目。 */}
       <div className="border border-gray-200 p-4">
-        <p className="mb-2 text-[12px] font-bold text-gray-700">出品下書き（共通項目）</p>
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[12px] font-bold text-gray-700">出品下書き（共通項目）</p>
+          <button
+            type="button"
+            onClick={handleGenerateWithAi}
+            disabled={aiBusy}
+            className="border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            title="在庫の事実情報からタイトル・説明文の下書きを生成します（生成結果は編集・保存前提です）"
+          >
+            {aiBusy ? "生成中…" : "AIで下書きを生成"}
+          </button>
+        </div>
         <div className="grid grid-cols-1 gap-3">
           <div>
             <label className="block text-[12px] text-gray-600">
