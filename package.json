@@ -17,6 +17,7 @@
     "verify:zaico": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-sync.ts",
     "verify:listing": "node scripts/with-server-only-stub.cjs scripts/verify-listing.ts",
     "verify:messaging": "node scripts/with-server-only-stub.cjs scripts/verify-messaging.ts",
+    "verify:shipping": "node scripts/with-server-only-stub.cjs scripts/verify-shipping.ts",
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts"
   },
   "dependencies": {

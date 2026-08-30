@@ -8,6 +8,8 @@
  * 必要がある)。
  */
 
+import type { ShippingRank } from "../shipping/rank";
+
 export type ListingChannel = "MERCARI_SHOPS";
 
 export type ListingConditionCode = "NEW" | "LIKE_NEW" | "NO_NOTABLE_DAMAGE" | "SLIGHT_DAMAGE" | "DAMAGE" | "BAD";
@@ -91,6 +93,13 @@ export interface ChannelListingRecord {
   nextPriceActionAt: string | null;
   automationHold: boolean;
   lastAutomationResult: string | null;
+  // BELLO統合業務OS指示書(2026-08-30) §67-68: 家財おまかせ便の送料見積り
+  // (lib/shipping/service.tsが実際に使う)。
+  shippingRank: ShippingRank | null;
+  shippingDestinationPrefecture: string | null;
+  calculatedShippingFee: number | null;
+  confirmedShippingFee: number | null;
+  shippingFeeUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

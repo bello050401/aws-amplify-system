@@ -140,6 +140,11 @@ function testResolveEffectiveListingFields() {
     nextPriceActionAt: null,
     automationHold: false,
     lastAutomationResult: null,
+    shippingRank: null,
+    shippingDestinationPrefecture: null,
+    calculatedShippingFee: null,
+    confirmedShippingFee: null,
+    shippingFeeUpdatedAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -202,6 +207,11 @@ async function testAdapterValidation() {
     nextPriceActionAt: null,
     automationHold: false,
     lastAutomationResult: null,
+    shippingRank: null,
+    shippingDestinationPrefecture: null,
+    calculatedShippingFee: null,
+    confirmedShippingFee: null,
+    shippingFeeUpdatedAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };

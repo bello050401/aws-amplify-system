@@ -719,6 +719,22 @@ const schema = a.schema({
       nextPriceActionAt: a.datetime(), // 将来のスケジューラがこの時刻以降にrunPricingCheckを呼ぶ、という設計(§22) — スケジューラ自体は今回未実装
       automationHold: a.boolean().default(false), // ADMINが個別に一時停止したい場合の手動フラグ(autoPricingEnabledとは別 — こちらはルール自体を無効化せず一時停止するためのもの)
       lastAutomationResult: a.string(), // 直近のrunPricingCheck結果の要約(監査用、§85 Audit Log相当の最小実装)
+
+      // ───────────────────────────────────────────────────────────────
+      // BELLO統合業務OS指示書(2026-08-30) §67-68: 家財おまかせ便の
+      // 送料見積り。shippingRank/calculatedShippingFeeはInventoryの
+      // 寸法+選択した発送先都道府県からlib/shipping/service.tsの
+      // calculateShippingEstimateが自動計算して書き込む(参考値)。
+      // confirmedShippingFeeはADMIN/EDITORが実際の値を確認して手動で
+      // 確定させた値(§68「calculated shippingとconfirmed shippingの
+      // 区別」) — AI返信生成(lib/ai/ecCopy.ts §69)はconfirmedを優先し、
+      // 無ければcalculatedを使い、どちらも無ければ送料に触れない。
+      // ───────────────────────────────────────────────────────────────
+      shippingRank: a.ref("ShippingRank"), // Inventoryの寸法から計算した直近のランク(発送先に依存しない)
+      shippingDestinationPrefecture: a.string(), // 見積りに使った発送先(参考値 — 実際の購入者の住所とは限らない)
+      calculatedShippingFee: a.integer(), // ShippingRateマスタからの自動見積り
+      confirmedShippingFee: a.integer(), // 人が確認・確定した金額(AI返信等で優先的に使う確定値)
+      shippingFeeUpdatedAt: a.datetime(),
     })
     .secondaryIndexes((index) => [index("inventoryId"), index("listingDraftId")])
     .authorization((allow) => [
@@ -862,6 +878,54 @@ const schema = a.schema({
     .authorization((allow) => [
       allow.group("ADMIN"),
       allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // BELLO統合業務OS指示書(2026-08-30) §61-69: 家財おまかせ便(アート
+  // セッティングデリバリー)の配送ランク・料金マスタ。発送元はBELLOの
+  // 所在地である埼玉県固定(§61)。ランク判定ロジックはlib/shipping/
+  // rank.ts(純粋関数、9段階 SS〜G + OVERSIZE)。
+  //
+  // 【現状の実装範囲】公式の料金検索ツール(form.008008.jp)はJS
+  // フォーム/セッション経由の動的な見積りであり、このsandbox環境の
+  // WebFetchはegress proxyにより候補サイトすべてに到達できない
+  // (Mercari調査時と同じ制約)。WebSearch経由で実際に確認できたのは
+  // 埼玉→東京のB/Cランクの2件のみ(lib/shipping/ratesSeed.ts参照) —
+  // それ以外のランク・都道府県の金額は憶測で埋めず、ADMINが設定画面
+  // (ShippingRatePanel)から公式の料金検索結果を見ながら追加する運用と
+  // した(§157 fake success禁止 — 未確認の金額を「実装済み」に見せか
+  // けない)。
+  // ─────────────────────────────────────────────────────────────────────
+  ShippingRank: a.enum(["SS", "S", "A", "B", "C", "D", "E", "F", "G", "OVERSIZE"]),
+
+  /** §65 ShippingRate Model — 家財おまかせ便の料金マスタ(ADMIN管理)。 */
+  ShippingRate: a
+    .model({
+      provider: a.string().required(), // 例: "アートセッティングデリバリー"
+      service: a.string().required(), // 例: "家財おまかせ便"
+      originPrefecture: a.string().required(), // 常に"埼玉県"(§61) — 将来複数拠点になった場合に備えてDBには持たせる
+      originArea: a.string(), // 地域細分(§66調査では未確認のため現状常にnull)
+      destinationPrefecture: a.string().required(),
+      destinationArea: a.string(),
+      rank: a.ref("ShippingRank").required(),
+      price: a.integer().required(), // 税込
+      surcharge: a.integer(), // 繁忙期加算等(存在は確認済み、金額は未確認 — §66)
+      effectiveFrom: a.date(),
+      effectiveTo: a.date(),
+      sourceReference: a.string(), // 出典(URL・検索クエリ・確認日等) — 憶測値でないことの根拠を必ず残す
+      verifiedAt: a.datetime(),
+      version: a.integer().default(1),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    // 発送元は常に埼玉県固定のため索引に含めない。着地+ランクで絞り込み、
+    // 複数該当時はlib/shipping/service.ts側でeffectiveFrom/versionにより
+    // 最新のものを選ぶ。
+    .secondaryIndexes((index) => [index("destinationPrefecture").sortKeys(["rank"])])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
       allow.group("VIEWER").to(["read"]),
     ]),
 });

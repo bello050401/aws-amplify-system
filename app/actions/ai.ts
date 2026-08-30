@@ -4,6 +4,7 @@ import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInvento
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { generateListingCopy, generateReplyDraft, type ListingCopyResult } from "@/lib/ai/ecCopy";
 import { getConversation, listMessages } from "@/lib/messaging/service";
+import { getChannelListing } from "@/lib/listing/service";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §56/§88-90: AI生成のServer Action層。
@@ -46,6 +47,13 @@ export async function generateReplyDraftAction(conversationId: string): Promise<
   if (!latestIncoming) throw new Error("返信対象となる受信メッセージがありません。");
 
   const inventory = conversation.relatedInventoryId ? await getInventoryDetail(conversation.relatedInventoryId) : null;
+  // §69: 送料は必ず事前計算済みの確定値のみをAIへ渡す(AIに暗算させない)。
+  // confirmedShippingFee(人が確認した値)を最優先し、無ければ
+  // calculatedShippingFee(自動見積り)、どちらも無ければnull —
+  // generateReplyDraft側のsystem promptが「未確定の場合は具体的な金額
+  // を言わない」よう指示する。
+  const channelListing = conversation.relatedInventoryId ? await getChannelListing(conversation.relatedInventoryId, "MERCARI_SHOPS") : null;
+  const shippingFee = channelListing?.confirmedShippingFee ?? channelListing?.calculatedShippingFee ?? null;
 
   return generateReplyDraft({
     channel: conversation.channel,
@@ -54,10 +62,7 @@ export async function generateReplyDraftAction(conversationId: string): Promise<
     productCondition: inventory?.conditionRating ?? null,
     sellingPrice: inventory?.salePrice ?? inventory?.plannedSalePrice ?? null,
     stockQuantity: inventory?.quantity ?? null,
-    // §69: 送料計算(Priority 5, Shipping Rate Engine)は今回未実装のため
-    // 常にnull — generateReplyDraft側のsystem promptが「未確定の場合は
-    // 具体的な金額を言わない」よう指示する。
-    shippingFee: null,
+    shippingFee,
     conversationHistory: messages.slice(-10).map((m) => ({ direction: m.direction, body: m.body })),
   });
 }

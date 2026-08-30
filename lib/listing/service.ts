@@ -131,6 +131,11 @@ function toChannelListingRecord(row: {
   nextPriceActionAt?: string | null;
   automationHold?: boolean | null;
   lastAutomationResult?: string | null;
+  shippingRank?: ChannelListingRecord["shippingRank"];
+  shippingDestinationPrefecture?: string | null;
+  calculatedShippingFee?: number | null;
+  confirmedShippingFee?: number | null;
+  shippingFeeUpdatedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }): ChannelListingRecord {
@@ -163,6 +168,11 @@ function toChannelListingRecord(row: {
     nextPriceActionAt: row.nextPriceActionAt ?? null,
     automationHold: row.automationHold ?? false,
     lastAutomationResult: row.lastAutomationResult ?? null,
+    shippingRank: row.shippingRank ?? null,
+    shippingDestinationPrefecture: row.shippingDestinationPrefecture ?? null,
+    calculatedShippingFee: row.calculatedShippingFee ?? null,
+    confirmedShippingFee: row.confirmedShippingFee ?? null,
+    shippingFeeUpdatedAt: row.shippingFeeUpdatedAt ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

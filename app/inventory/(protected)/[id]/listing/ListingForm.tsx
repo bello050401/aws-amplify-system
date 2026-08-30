@@ -13,6 +13,7 @@ import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, Sh
 import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 import { AutoPricingSection } from "./AutoPricingSection";
+import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
@@ -420,6 +421,10 @@ export function ListingForm({
           ごとの明示的なオプトインで、既定はOFF。ChannelListingが存在
           する(=Mercari個別設定を保存済み)商品にだけ表示する。 */}
       {channelListing && <AutoPricingSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
+
+      {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
+          AutoPricingSectionと同じ理由でChannelListing存在時のみ表示する。 */}
+      {channelListing && <ShippingEstimateSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
     </div>
   );
 }

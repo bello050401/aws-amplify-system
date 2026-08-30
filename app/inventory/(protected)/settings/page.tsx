@@ -6,6 +6,7 @@ import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
 import { getMercariTokenSource, getMercariClientNameConfig } from "@/lib/listing/mercari/tokenAccess";
+import { seedShippingRates } from "@/lib/shipping/service";
 import { getMercariEnvironment } from "@/lib/listing/mercari/endpoints";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
@@ -51,7 +52,9 @@ export default async function InventorySettingsPage() {
     // seedCustomFieldDefinitions (Phase Cの低頻度 口金/脚高/座面寸法/
     // 梱包サイズ/古物の特徴 fields) doesn't interact with
     // Category/Location/Unit at all, so it doesn't need to wait on the above.
-    await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions()]);
+    // seedShippingRates (§65-66) も同様に独立 — 家財おまかせ便料金マスタへ
+    // 実際にWebSearchで確認できた2件のみを追加専用で投入する(lib/shipping/ratesSeed.ts参照)。
+    await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions(), seedShippingRates()]);
   }
 
   const [categories, locations, units, customFields, zaicoTokenSource, mercariTokenSource, mercariClientNameConfig] = await Promise.all([
