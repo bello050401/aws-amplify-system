@@ -1,3 +1,4 @@
+import { nowInJst } from "@/lib/inventory/sales";
 import "server-only";
 import ExcelJS from "exceljs";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
@@ -206,7 +207,13 @@ export async function buildInventoryExport(
     return row;
   });
 
-  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  // ファイル名の日付はJST基準。toISOString()はUTCなので、Amplifyの実行
+  // 環境(UTC)で朝9時より前に出力すると前日の名前が付いてしまい、
+  // 「今日出したファイル」が昨日の日付で保存される。日次の在庫表を
+  // 日付で並べて管理する使い方では実害があるため、表示日付をJSTへ
+  // 固定した他の箇所(lib/inventory/formatJst.ts)と揃える。
+  const jst = nowInJst();
+  const timestamp = `${jst.year}${String(jst.month).padStart(2, "0")}${String(jst.day).padStart(2, "0")}`;
   if (format === "csv") {
     const csv = toCsv(
       columns.map((c) => c.label),

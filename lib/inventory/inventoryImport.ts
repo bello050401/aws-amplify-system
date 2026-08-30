@@ -134,6 +134,26 @@ const IMPORT_HEADER_ALIASES: { alias: string; key: string }[] = [
  * これでも一致しなければnull — フリー本推測(fuzzy matching)は一切行
  * わず、ユーザー確認へ回す(spec: 「勝手に確定しない」)。
  */
+/**
+ * その対応先へ実際に書き込んでよいかどうか。
+ *
+ * 書き込まないもの:
+ *  - "displayId" / "sku" … 既存レコードの照合キー専用
+ *  - exportFields.tsで `importable: false` を付けた列
+ *    (「更新日」「作成日」「棚卸日」など、BELLO側が管理する値)
+ *
+ * この判定が無かったころは、`importable` フラグがどこからも参照されず、
+ * 「更新日」まで書き込み対象に入っていた。その結果、エクスポートした
+ * CSVを1文字も編集せずに取り込んでも必ず「更新」と判定され、触っていない
+ * 行まで毎回書き換わっていた(実測 — 56列を二分探索して原因列を特定)。
+ */
+export function isWritableImportTarget(target: string): boolean {
+  if (target === "sku" || target === "displayId") return false;
+  const field = STATIC_EXPORT_FIELDS.find((f) => f.key === target);
+  // 見つからないkeyはCustomFieldDefinition由来の追加項目 — こちらは書き込む。
+  return field ? field.importable : true;
+}
+
 export function buildSuggestedMapping(headers: string[], mappingTargets: { key: string; label: string }[]): Record<string, string | null> {
   const targetKeys = new Set(mappingTargets.map((t) => t.key));
 
@@ -406,7 +426,18 @@ export async function resolveImportRows(
   // の照合キー専用 — 一般のfieldEntriesループには含めない。
   const displayIdHeader = Object.entries(mapping).find(([, target]) => target === "displayId")?.[0];
   const skuHeader = Object.entries(mapping).find(([, target]) => target === "sku")?.[0];
-  const fieldEntries = Object.entries(mapping).filter(([, target]) => target && target !== "sku" && target !== "displayId") as [string, string][];
+  // 「更新日」「作成日」「棚卸日」のようにBELLOが書き換えてはいけない列も
+  // 同様に除外する。exportFields.tsは以前からこれらへ importable: false を
+  // 付けていたが、その値がどこでも参照されておらず、書き込み対象へ素通り
+  // していた。
+  //
+  // 実害: エクスポートしたCSVを1文字も編集せずにそのまま取り込むと、
+  // プレビューが「スキップ(変更なし)」ではなく必ず「更新」になる
+  // (実測 — 56列を二分探索して原因列が「更新日」だと確認した)。
+  // ユーザーの通常の使い方は「エクスポート → Excelで一部だけ直す →
+  // 取り込む」なので、触っていない行まで毎回更新扱いになり、更新履歴が
+  // 実際の変更で埋もれる。
+  const fieldEntries = Object.entries(mapping).filter(([, target]) => target && isWritableImportTarget(target)) as [string, string][];
 
   /**
    * spec §7の照合優先順位: 1. ZAICO在庫ID(sourceInventoryId) → 2. BELLO

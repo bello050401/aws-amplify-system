@@ -21,12 +21,14 @@ import {
   parseCsvFile,
   parseXlsxFile,
   buildSuggestedMapping,
+  isWritableImportTarget,
   parseImportNumber,
   parseImportDate,
   normalizeImportHeaderLabel,
   stripLeadingDecoration,
   decodeImportText,
 } from "@/lib/inventory/inventoryImport";
+import { STATIC_EXPORT_FIELDS } from "@/lib/inventory/exportFields";
 
 let failures = 0;
 let passes = 0;
@@ -145,6 +147,30 @@ function testBuildSuggestedMappingDuplicateHeaders() {
   assertEqual(mapping["商品名"], "name", "重複ヘッダー: 例外を投げず、最後の解決結果が残る");
 }
 
+function testWritableImportTargets() {
+  // エクスポートしたCSVを無編集で取り込むと必ず「更新」になっていた原因。
+  // exportFields.tsのimportableフラグがどこからも参照されておらず、
+  // 「更新日」まで書き込み対象に入っていた。
+  assertTrue(!isWritableImportTarget("updatedAt"), "isWritableImportTarget: 更新日は書き込まない");
+  assertTrue(!isWritableImportTarget("createdAt"), "isWritableImportTarget: 作成日は書き込まない");
+  assertTrue(!isWritableImportTarget("stocktakeDate"), "isWritableImportTarget: 棚卸日は書き込まない");
+  assertTrue(!isWritableImportTarget("displayId"), "isWritableImportTarget: 在庫IDは照合専用で書き込まない");
+  assertTrue(!isWritableImportTarget("sku"), "isWritableImportTarget: SKUは照合専用で書き込まない");
+
+  // 通常の項目は書き込む(過剰な除外で取り込めなくなる退行を防ぐ)
+  for (const key of ["name", "quantity", "salePrice", "purchasePrice", "note", "categoryName", "locationName", "statusLabel"]) {
+    assertTrue(isWritableImportTarget(key), `isWritableImportTarget: ${key} は書き込み対象のまま`);
+  }
+  // CustomFieldDefinition由来の追加項目(STATIC_EXPORT_FIELDSに無いkey)も書き込む
+  assertTrue(isWritableImportTarget("legHeight"), "isWritableImportTarget: 追加項目は書き込み対象");
+
+  // importable:false の列が実在すること自体を固定する(フラグごと消える退行の検出)
+  assertTrue(
+    STATIC_EXPORT_FIELDS.some((f) => !f.importable),
+    "STATIC_EXPORT_FIELDS: 書き込み禁止の列が定義されている",
+  );
+}
+
 function testNormalizeAndStrip() {
   assertEqual(normalizeImportHeaderLabel("商品名"), normalizeImportHeaderLabel("商品名　"), "正規化: 全角/半角スペースの畳み込み");
   assertEqual(stripLeadingDecoration("★商品名"), "商品名", "装飾除去: 先頭の★を除去");
@@ -249,6 +275,7 @@ async function main() {
   testBuildSuggestedMappingDecoration();
   testBuildSuggestedMappingDuplicateHeaders();
   testNormalizeAndStrip();
+  testWritableImportTargets();
   await testParseXlsxRoundTrip();
   await testParseXlsxKeepsRowWithPartialData();
   testDecodeImportTextShiftJisFallback();
