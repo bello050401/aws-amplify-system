@@ -27,6 +27,8 @@
 
 8. **Lambdaの`sharp`が`Could not load the "sharp" module using the linux-x64 runtime`で起動即死する場合** → **`9-publish-sharp-layer.ps1`** — `sharp`はネイティブアドオン(`@img/sharp-linux-x64`の`.node`バイナリ)を必要とし、esbuildがバンドルへ畳み込むと実行時に必ず失敗する。このスクリプトが`sharp`をlinux-x64向けにインストールしてLambdaレイヤーとして発行し、`amplify/functions/image-processing-worker`と`zaico-sync-worker`の`resource.ts`が`layers: { sharp: "bello-sharp-linux-x64:<version>" }`でそれを参照する(このキー名がそのままesbuildの`externalModules`になる — 詳細はresource.tsのコメント)。**このレイヤーはCDK管理外の前提リソース**なので、新しいAWSアカウント/リージョンへ初めてデプロイする場合や`package.json`の`sharp`を上げた場合は、`ampx pipeline-deploy`より先に実行すること。同一バージョンのレイヤーが既にあれば何もせず終了する(`-Force`で強制発行)。
 
+9. **Amplify SSRコンピュートがSecretを読めない / SSRのログがCloudWatchに出ない場合** → **`10-apply-compute-runtime-policy.ps1`** — 実測の結果、`BelloAmplifyStagingComputeRole`の唯一のインラインポリシーは`bello/zaico-api-token`しか許可しておらず、`bello/mercari-access-token`/`bello/line-channel-secret`へは到達できなかった(環境変数フォールバックもapp/branch両レベルで0個)。その結果`lib/listing/mercari/secretStore.ts`はAccessDeniedを握りつぶして`token: null`を返し、Mercari接続テストはMercariへ到達する前に「Token未設定」で失敗する。さらに`logs:*`権限も無く`/aws/amplify/*`ロググループ自体が存在しないため、Mercari 404調査のために追加した診断ログ(endpoint/operation/User-Agent有無/token有無)がどこにも読める形で残らない。このスクリプトは**別名のインラインポリシー**(`BelloComputeRuntimeAccess`)として追加するので、既存の`BelloZaicoComputeSecretAccess`を壊すことはない。`amplify/backend.ts`が「ADMINが手動設定する必要がある」と記していた作業がこれにあたる(SSRコンピュートのロールは`defineBackend()`の管理外のためCDKからは付与できない)。Staging専用で、Production App IDを指定すると実行を拒否する。**Secret値の読み書きは一切行わない(IAMのみ変更)。**
+
 ## 前提
 
 - AWS CLIがインストール済みであること(`aws --version`)。

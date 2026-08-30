@@ -60,6 +60,8 @@ const T = (name: string) => `${name}-${SUFFIX}`;
 const ZAICO_SCHEDULE = "amplify-d4hkkg7dty2du-cla-zaicosyncworkerlambdasch-JCU7FY8GOKX0";
 
 const EXECUTE = process.argv.includes("--execute");
+/** 固有内容を持つ超過レコードを、正本へ引き継いだうえで削除する。 */
+const MERGE_HELD = process.argv.includes("--merge-held");
 const OUT_DIR = process.argv.includes("--out-dir")
   ? process.argv[process.argv.indexOf("--out-dir") + 1]
   : ".";
@@ -211,7 +213,11 @@ async function main(): Promise<void> {
     JSON.stringify(im);
   const isUserUploaded = (im: Record<string, unknown>): boolean => !im["sourceUrl"] && Boolean(im["storageKey"]);
 
-  type Held = { src: string; excessId: string; excessSku: string | null; canonicalId: string; canonicalSku: string | null; reasons: string[] };
+  type Held = {
+    src: string; excessId: string; excessSku: string | null;
+    canonicalId: string; canonicalSku: string | null; reasons: string[];
+    draftIds: string[]; uploadedImages: Record<string, unknown>[];
+  };
   const held: Held[] = [];
   for (const e of excess) {
     const id = e.row["id"] as string;
@@ -231,19 +237,32 @@ async function main(): Promise<void> {
     const canCat = str(e.canonical, "categoryId");
     if (exCat && canCat && exCat !== canCat) reasons.push(`カテゴリ不一致(超過=${exCat.slice(0, 8)} 正本=${canCat.slice(0, 8)})`);
 
-    if (reasons.length) held.push({ src: e.src, excessId: id, excessSku: str(e.row, "sku"), canonicalId: e.canonical["id"] as string, canonicalSku: str(e.canonical, "sku"), reasons });
+    if (reasons.length) {
+      held.push({
+        src: e.src, excessId: id, excessSku: str(e.row, "sku"),
+        canonicalId: e.canonical["id"] as string, canonicalSku: str(e.canonical, "sku"),
+        reasons, draftIds, uploadedImages: uploaded,
+      });
+    }
   }
 
-  // 承認条件: 「想定外の重要参照やデータ不整合が見つかった場合のみ、その
-  // 対象の削除を止めて報告」。固有内容を持つ超過レコードは、その1件だけを
-  // 削除対象から外す(グループ全体は止めない——同じグループの純粋な重複は
-  // 予定どおり削除してよい)。
-  console.log(`\n=== 固有内容を持つため削除しない超過レコード: ${held.length} 件 ===`);
+  // 既定では、固有内容を持つ超過レコードはその1件だけを削除対象から外す
+  // (グループ全体は止めない——同じグループの純粋な重複は予定どおり削除する)。
+  //
+  // --merge-held を付けると、固有内容を正本へ引き継いだうえで削除する。
+  // 引き継ぐのは「その超過レコードにしか無い実データ」だけ:
+  //   - ListingDraft.inventoryId を正本へ付け替える
+  //   - 利用者がアップロードした画像(sourceUrlを持たない)を正本の images へ
+  //     追加する
+  // カテゴリは引き継がない。ZAICO同期が最新のZAICO情報で在庫情報を上書き
+  // する運用のため、「発送完了」「出品待ち」のどちらを残すかを人手で決めても
+  // 次の同期で上書きされる——ここで固定するのはかえって誤解を生む。
+  console.log(`\n=== 固有内容を持つ超過レコード: ${held.length} 件 (${MERGE_HELD ? "引き継いでから削除" : "削除しない"}) ===`);
   for (const h of held) {
     console.log(`  ZAICO ${h.src}: ${h.excessSku}(${h.excessId.slice(0, 8)})  正本=${h.canonicalSku}(${h.canonicalId.slice(0, 8)})`);
     for (const r of h.reasons) console.log(`      - ${r}`);
   }
-  for (const h of held) blockedIds.add(h.excessId);
+  if (!MERGE_HELD) for (const h of held) blockedIds.add(h.excessId);
 
   // --- ZaicoSourceLink バックフィル計画 --------------------------------
   // リンクidの組み立て規則は lib/inventory/zaicoSyncEngine.ts の
@@ -281,11 +300,41 @@ async function main(): Promise<void> {
   }
 
   // ================= ここから実書き込み =================
-  // 引き継ぎ(ListingDraftの付け替え・画像/カテゴリのマージ)はここでは
-  // 行わない。固有内容を持つ超過レコードは削除せずそのまま残すため、
-  // その情報は今も元のレコード上に無傷で存在している。どちらを正とするか
-  // (例: 同一ZAICO商品に対する「発送完了」と「出品待ち」の食い違い)は
-  // 業務判断であり、このスクリプトが決めてよいものではない。
+  if (MERGE_HELD && held.length) {
+    console.log(`\n=== 固有内容を正本へ引き継ぎ ===`);
+    for (const h of held) {
+      for (const draftId of h.draftIds) {
+        await ddb.send(new UpdateCommand({
+          TableName: T("ListingDraft"), Key: { id: draftId },
+          UpdateExpression: "SET inventoryId = :inv, updatedAt = :now",
+          // 付け替え元が想定どおりであることを条件にする——別の同期や操作が
+          // 先にこのdraftを動かしていた場合は、黙って上書きせず失敗させる。
+          ConditionExpression: "inventoryId = :from",
+          ExpressionAttributeValues: { ":inv": h.canonicalId, ":from": h.excessId, ":now": new Date().toISOString() },
+        }));
+        console.log(`  ListingDraft ${draftId.slice(0, 8)} : ${h.excessSku} -> ${h.canonicalSku}`);
+      }
+      if (h.uploadedImages.length) {
+        // 正本の既存画像は一切変更しない。取り込む画像は必ず isPrimary:false
+        // にする——正本には既にprimaryがあり、primaryが2枚ある状態は不正。
+        // どれを主写真にするかはUIから1クリックで変えられる。
+        const cur = await ddb.send(new GetCommand({ TableName: T("Inventory"), Key: { id: h.canonicalId } }));
+        const curImages = (Array.isArray(cur.Item?.["images"]) ? cur.Item!["images"] : []) as Record<string, unknown>[];
+        const curIdentities = new Set(curImages.map(imageIdentity));
+        const toAdd = h.uploadedImages
+          .filter((im) => !curIdentities.has(imageIdentity(im)))
+          .map((im, i) => ({ ...im, isPrimary: false, sortOrder: curImages.length + i }));
+        if (toAdd.length) {
+          await ddb.send(new UpdateCommand({
+            TableName: T("Inventory"), Key: { id: h.canonicalId },
+            UpdateExpression: "SET images = :img, updatedAt = :now",
+            ExpressionAttributeValues: { ":img": [...curImages, ...toAdd], ":now": new Date().toISOString() },
+          }));
+          for (const im of toAdd) console.log(`  画像 ${String(im["storageKey"]).slice(0, 40)} -> ${h.canonicalSku} (isPrimary=false で追加)`);
+        }
+      }
+    }
+  }
 
   console.log(`\n=== ZaicoSourceLink を正本へ整備 ===`);
   let linkWrites = 0;
