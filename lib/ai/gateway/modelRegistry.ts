@@ -65,3 +65,78 @@ export function getModelForTier(tier: AIQualityTier): ModelRegistryEntry {
 export function getModelById(modelId: string): ModelRegistryEntry | undefined {
   return MODEL_REGISTRY.find((m) => m.modelId === modelId);
 }
+
+/**
+ * 夜間長時間・全課題解決指示書 §6: Amazon Bedrock経由で同じモデル群を
+ * 使うためのレジストリ。Anthropic直APIとはモデルIDの綴りが異なる
+ * (Bedrockは`anthropic.`接頭辞つき、クロスリージョン推論プロファイルは
+ * さらに`us.`接頭辞つき)ため、上のMODEL_REGISTRYとは別表にしてある —
+ * どちらのProviderでもモデルIDをコード中へ散在させない、という方針は
+ * 同じ(§6-6)。
+ *
+ * 単価について: Bedrock経由のClaudeは**AWSが販売するパートナー提供**で
+ * あり、Anthropic直APIの料金とは別建て。ここに置いた値はAnthropic直の
+ * 公開単価と同額を暫定値として使っているが、AWS側の実請求と一致する
+ * 保証はない(「無料」と断定できる根拠はこのアカウントでは確認できて
+ * いない — 指示書§6-4「『無料』を架空に断定しない」)。コスト表示は
+ * あくまで概算であり、正確な費用はAWSの請求で確認する必要がある。
+ *
+ * 既定のモデル選択は`BEDROCK_MODEL_ECONOMY`等の環境変数で上書きできる
+ * (§6-6「configurableにする」)。
+ */
+export const BEDROCK_MODEL_REGISTRY: ModelRegistryEntry[] = [
+  {
+    providerId: "bedrock",
+    // クロスリージョン推論プロファイル。Bedrockのlist-foundation-modelsで
+    // このモデルのinferenceTypesSupportedが["INFERENCE_PROFILE"]である
+    // ことを実測確認済み — ON_DEMANDの素のモデルIDでは呼べない。
+    modelId: process.env.BEDROCK_MODEL_ECONOMY || "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    displayName: "Claude Haiku 4.5 (Bedrock)",
+    qualityTier: "ECONOMY",
+    enabled: true,
+    costPerMillionInputTokensUsd: 1.0,
+    costPerMillionOutputTokensUsd: 5.0,
+    maxOutputTokens: 4096,
+    supportsStructuredOutput: true,
+    fallbackPriority: 1,
+  },
+  {
+    providerId: "bedrock",
+    modelId: process.env.BEDROCK_MODEL_STANDARD || "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    displayName: "Claude Sonnet 4 (Bedrock)",
+    qualityTier: "STANDARD",
+    enabled: true,
+    costPerMillionInputTokensUsd: 3.0,
+    costPerMillionOutputTokensUsd: 15.0,
+    maxOutputTokens: 8192,
+    supportsStructuredOutput: true,
+    fallbackPriority: 1,
+  },
+  {
+    providerId: "bedrock",
+    // PREMIUMもSonnet 4を指す。Bedrockのus-west-2で実測できた
+    // Anthropicモデルは Haiku 4.5 / Sonnet 4 で、Opus系は
+    // list-foundation-modelsに現れなかった — 存在しないモデルIDを
+    // 「PREMIUM」として登録すると、品質ゲートのescalation時に必ず
+    // ValidationExceptionで落ちる。実在するものだけを登録する。
+    modelId: process.env.BEDROCK_MODEL_PREMIUM || "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    displayName: "Claude Sonnet 4 (Bedrock, PREMIUM代替)",
+    qualityTier: "PREMIUM",
+    enabled: true,
+    costPerMillionInputTokensUsd: 3.0,
+    costPerMillionOutputTokensUsd: 15.0,
+    maxOutputTokens: 8192,
+    supportsStructuredOutput: true,
+    fallbackPriority: 1,
+  },
+];
+
+export function getBedrockModelForTier(tier: AIQualityTier): ModelRegistryEntry {
+  const candidates = BEDROCK_MODEL_REGISTRY.filter((m) => m.qualityTier === tier && m.enabled).sort((a, b) => a.fallbackPriority - b.fallbackPriority);
+  if (candidates.length === 0) throw new Error(`Bedrock Model Registryに${tier}向けの有効なモデルが登録されていません。`);
+  return candidates[0];
+}
+
+export function getBedrockModelById(modelId: string): ModelRegistryEntry | undefined {
+  return BEDROCK_MODEL_REGISTRY.find((m) => m.modelId === modelId);
+}

@@ -13,7 +13,9 @@
 import { checkTextQuality, checkStructuredQuality } from "@/lib/ai/gateway/qualityGate";
 import { routeGenerateText, routeGenerateStructured } from "@/lib/ai/gateway/router";
 import { runBenchmark, BENCHMARK_CASES } from "@/lib/ai/gateway/benchmark";
-import { getModelForTier, getModelById, MODEL_REGISTRY } from "@/lib/ai/gateway/modelRegistry";
+import { getModelForTier, getModelById, MODEL_REGISTRY, getBedrockModelForTier, getBedrockModelById, BEDROCK_MODEL_REGISTRY } from "@/lib/ai/gateway/modelRegistry";
+import { resolveProviderId } from "@/lib/ai/gateway/gateway";
+import { describeBedrockError } from "@/lib/ai/gateway/bedrockProvider";
 import type { AIGatewayProvider, AIGenerateResult, AIToolSchema } from "@/lib/ai/gateway/types";
 import { buildListingUserPrompt, buildReplySystemPrompt, buildReplyUserPrompt, type ListingCopyGenerationInput, type ReplyDraftInput } from "@/lib/ai/ecCopy";
 
@@ -220,10 +222,61 @@ function testAiPromptsNeverLeakAdminMemo() {
   assertTrue(replySystemPrompt.includes("内部情報"), "buildReplySystemPrompt: 「顧客へ内部情報を一切出さない」という明示指示がsystem promptに含まれる(§50 BELLO返信ルール)");
 }
 
+// ── 夜間指示書§6: AI ProviderのAWS(Bedrock)既定化 ────────────────────
+// 以前は無条件にAnthropic直APIを選んでいたため、ANTHROPIC_API_KEYが
+// 無い環境では商品説明の自動生成が必ず
+// 「ANTHROPIC_API_KEYが設定されていません。」で失敗していた。
+// BELLOはAWS上でIAMロールを持って動くので、キーが無ければBedrockを既定に
+// する(追加のキー発行も保管も不要)。
+function testProviderResolution() {
+  assertEqual(resolveProviderId({ ANTHROPIC_API_KEY: "sk-xxx" }), "anthropic", "resolveProviderId: APIキーがあればAnthropic直APIを使う(既存挙動を維持)");
+  assertEqual(resolveProviderId({}), "bedrock", "resolveProviderId: APIキーが無ければBedrockへ倒す(キー未設定で機能停止しない)");
+  assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "bedrock", ANTHROPIC_API_KEY: "sk-xxx" }), "bedrock", "resolveProviderId: 明示指定はAPIキーより優先(キーがある環境でもBedrockを試せる)");
+  assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "anthropic" }), "anthropic", "resolveProviderId: 明示指定はフォールバックより優先(キーが無くてもAnthropicを強制できる)");
+  assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "  BEDROCK  " }), "bedrock", "resolveProviderId: 前後の空白と大文字小文字を許容する");
+  assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "unknown-provider" }), "bedrock", "resolveProviderId: 未知の値はキーの有無による既定判定へ落ちる(未知の名前で起動不能にしない)");
+}
+
+function testBedrockModelRegistry() {
+  for (const tier of ["ECONOMY", "STANDARD", "PREMIUM"] as const) {
+    const m = getBedrockModelForTier(tier);
+    assertEqual(m.providerId, "bedrock", `getBedrockModelForTier(${tier}): providerIdはbedrock`);
+    assertTrue(m.modelId.includes("anthropic."), `getBedrockModelForTier(${tier}): BedrockのモデルIDはanthropic.接頭辞を持つ(Anthropic直APIの綴りとは異なる)`);
+    assertTrue(m.maxOutputTokens > 0, `getBedrockModelForTier(${tier}): maxOutputTokensが正`);
+    assertTrue(getBedrockModelById(m.modelId) !== undefined, `getBedrockModelById: ${tier}のモデルIDで引ける`);
+  }
+  // 実測で存在を確認したモデルだけを登録する(存在しないIDはescalation時に
+  // 必ずValidationExceptionで落ちるため)。
+  const premium = getBedrockModelForTier("PREMIUM");
+  const standard = getBedrockModelForTier("STANDARD");
+  assertTrue(
+    BEDROCK_MODEL_REGISTRY.every((m) => m.modelId.startsWith("us.anthropic.") || m.modelId.startsWith("anthropic.")),
+    "BEDROCK_MODEL_REGISTRY: 全モデルIDがBedrockの綴り(推論プロファイルまたは素のモデルID)",
+  );
+  assertEqual(premium.modelId, standard.modelId, "BEDROCK_MODEL_REGISTRY: us-west-2で実在を確認できたAnthropicモデルはHaiku 4.5/Sonnet 4のみのため、PREMIUMはSonnet 4で代替する(存在しないOpusのIDを登録しない)");
+}
+
+function testBedrockErrorMessages() {
+  const verifying = describeBedrockError(
+    Object.assign(new Error("Your account is currently being verified. Verification normally takes less than 2 hours."), { name: "AccessDeniedException" }),
+  );
+  assertTrue(verifying.includes("検証"), "describeBedrockError: アカウント検証待ちを利用者に分かる日本語で説明する");
+  assertTrue(!verifying.includes("AccessDenied"), "describeBedrockError: 内部の例外名をそのまま利用者へ出さない");
+
+  const denied = describeBedrockError(Object.assign(new Error("User is not authorized to perform bedrock:InvokeModel"), { name: "AccessDeniedException" }));
+  assertTrue(denied.includes("権限"), "describeBedrockError: 権限不足は検証待ちと区別して案内する");
+
+  const throttled = describeBedrockError(Object.assign(new Error("Too many requests"), { name: "ThrottlingException" }));
+  assertTrue(throttled.includes("混雑"), "describeBedrockError: スロットリングは再試行を促す文言にする");
+}
+
 async function main() {
   testQualityGateText();
   testQualityGateStructured();
   testModelRegistry();
+  testProviderResolution();
+  testBedrockModelRegistry();
+  testBedrockErrorMessages();
   await testRouterEscalation();
   await testBenchmarkHarness();
   testAiPromptsNeverLeakAdminMemo();

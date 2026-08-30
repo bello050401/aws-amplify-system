@@ -31,6 +31,7 @@
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.33.3",
     "@anthropic-ai/sdk": "^0.121.0",
     "@aws-amplify/adapter-nextjs": "^1.2.0",
     "@aws-sdk/client-dynamodb": "^3.700.0",

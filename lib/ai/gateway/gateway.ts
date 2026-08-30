@@ -1,5 +1,6 @@
 import "server-only";
 import { AnthropicGatewayProvider } from "./anthropicProvider";
+import { BedrockGatewayProvider } from "./bedrockProvider";
 import { routeGenerateText, routeGenerateStructured } from "./router";
 import { recordAIUsage } from "./usageLog";
 import type { AIGeneratePolicy, AIGenerateResult, AITask, AIToolSchema } from "./types";
@@ -10,16 +11,40 @@ import type { TextQualityRules } from "./qualityGate";
  * 「OpenAIを呼ぶ」ではなく「このタスクをこの品質クラスで実行する」と
  * 依頼する、という仕様書§3.2の考え方をそのまま体現する。
  *
- * Provider切替は`AI_GATEWAY_PROVIDER`環境変数(既定: "anthropic" —
- * 既存lib/ai/のAI_PROVIDER環境変数とは別物。あちらはBASE特集ページ
- * 専用、こちらはBELLO EC/メッセージ専用で意図的に独立させている)。
- * 現時点ではAnthropicのみ実装済み — Bedrock等の追加はAWS認証情報
- * 復旧後、実際に利用可能なモデル・リージョンを確認してから追加する
- * (仕様書§17.3「モデル名を推測しない」)。
+ * Provider切替は`AI_GATEWAY_PROVIDER`環境変数(既存lib/ai/の
+ * AI_PROVIDER環境変数とは別物。あちらはBASE特集ページ専用、こちらは
+ * BELLO EC/メッセージ専用で意図的に独立させている)。
+ *
+ * ## 既定の選び方(夜間長時間・全課題解決指示書 §6)
+ *
+ * 以前は無条件にAnthropic直APIを返しており、`ANTHROPIC_API_KEY`が
+ * 未設定の環境では商品説明の自動生成が
+ * 「ANTHROPIC_API_KEYが設定されていません。」で必ず失敗していた。
+ * BELLOはAWS上でIAMロールを持って動いているので、APIキーが無いときは
+ * **Amazon Bedrock**を既定にする — 追加のキー発行も保管も要らない。
+ *
+ *   AI_GATEWAY_PROVIDER=bedrock    → 常にBedrock
+ *   AI_GATEWAY_PROVIDER=anthropic  → 常にAnthropic直API
+ *   未指定                          → ANTHROPIC_API_KEYがあればAnthropic、
+ *                                     無ければBedrock
+ *
+ * 明示指定を最優先にしてあるのは、キーがある環境でもBedrockを試せる
+ * ようにするため(逆も同様)。
  */
+export type GatewayProviderId = "anthropic" | "bedrock";
+
+/** 実際にどちらのProviderが選ばれるかを、呼び出さずに判定する(設定画面の表示・テスト用)。 */
+export function resolveProviderId(
+  env: { AI_GATEWAY_PROVIDER?: string; ANTHROPIC_API_KEY?: string } = process.env as { AI_GATEWAY_PROVIDER?: string; ANTHROPIC_API_KEY?: string },
+): GatewayProviderId {
+  const explicit = env.AI_GATEWAY_PROVIDER?.trim().toLowerCase();
+  if (explicit === "bedrock") return "bedrock";
+  if (explicit === "anthropic") return "anthropic";
+  return env.ANTHROPIC_API_KEY ? "anthropic" : "bedrock";
+}
+
 function getProvider() {
-  // 将来Provider追加時、ここのswitchを増やすだけでよい設計。
-  return new AnthropicGatewayProvider();
+  return resolveProviderId() === "bedrock" ? new BedrockGatewayProvider() : new AnthropicGatewayProvider();
 }
 
 export interface GatewayTextRequest {
