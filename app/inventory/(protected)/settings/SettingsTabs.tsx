@@ -5,6 +5,7 @@ import type { MasterEntry } from "@/lib/inventory/masters";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import type { ZaicoTokenSource } from "@/lib/zaico/client";
 import type { MercariTokenSource } from "@/lib/listing/mercari/tokenAccess";
+import type { LineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
@@ -13,6 +14,7 @@ import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 import { MercariSettingsPanel } from "./MercariSettingsPanel";
 import { PricingRulePanel } from "./PricingRulePanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
+import { LineSettingsPanel } from "./LineSettingsPanel";
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -33,6 +35,9 @@ interface SettingsTabsProps {
   /** BELLO統合業務OS指示書(2026-08-30) §24: 保存済みのAPIクライアント名(secrets-manager/env-fallbackどちらか、無ければnull) — TOKENと違い秘匿値ではないため表示してよい。 */
   mercariClientName: string | null;
   mercariClientNameSource: MercariTokenSource;
+  /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
+  lineConnected: boolean;
+  lineTokenSource: LineTokenSource;
 }
 
 /**
@@ -56,9 +61,11 @@ export function SettingsTabs({
   mercariEnvironment,
   mercariClientName,
   mercariClientNameSource,
+  lineConnected,
+  lineTokenSource,
 }: SettingsTabsProps) {
   const [tab, setTab] = useState<
-    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "pricing" | "shipping"
+    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "pricing" | "shipping" | "line"
   >("category");
 
   const tabClass = (active: boolean) =>
@@ -107,6 +114,11 @@ export function SettingsTabs({
             配送料金（家財おまかせ便）
           </button>
         )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("line")} className={tabClass(tab === "line")}>
+            LINE連携
+          </button>
+        )}
       </div>
 
       <div className="pt-4">
@@ -129,6 +141,7 @@ export function SettingsTabs({
         )}
         {tab === "pricing" && isAdmin && <PricingRulePanel />}
         {tab === "shipping" && isAdmin && <ShippingRatePanel />}
+        {tab === "line" && isAdmin && <LineSettingsPanel lineConnected={lineConnected} lineTokenSource={lineTokenSource} />}
       </div>
     </div>
   );

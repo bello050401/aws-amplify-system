@@ -170,3 +170,17 @@ export const mercariTokenSecret = new Secret(mercariTokenSecretStack, "MercariAp
 //      `ampx pipeline-deploy`が実際にAWSへ接続してデプロイできる状態
 //      になれば、上記1のIAM権限設定を除き、Secret自体の作成は自動的に
 //      行われる(手動でのCreateSecretは不要)。
+
+// BELLO統合業務OS指示書(2026-08-30) §51-52: LINE公式アカウントの
+// Channel Secret(Webhook署名検証用)+ Channel Access Token(Reply/Push
+// 送信用)。mercariTokenSecretと全く同じ理由・同じ構造(このアプリが
+// AWSアカウント上に存在させる初めての実体なので`new Secret(...)`、
+// RemovalPolicy.RETAIN、IAM権限付与はAmplify Console側でADMINが手動
+// 設定する必要がある — 上のmercariTokenSecretコメント参照)。
+const lineChannelSecretStack = backend.createStack("LineChannelSecretStack");
+export const lineChannelSecret = new Secret(lineChannelSecretStack, "LineChannelSecret", {
+  secretName: "bello/line-channel-secret",
+  description: "BELLO在庫管理システム — LINE公式アカウントのChannel Secret/Channel Access Token(メッセージ機能専用)。設定画面(ADMIN限定)から読み書きする。",
+  secretStringValue: SecretValue.unsafePlainText(JSON.stringify({ configured: false })),
+  removalPolicy: RemovalPolicy.RETAIN,
+});

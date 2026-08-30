@@ -1,6 +1,9 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { deriveConversationStatus, deriveNeedsReply, buildMessagePreview, sortConversations } from "./conversationStatus";
+import { sendLinePush } from "./line/adapter";
+import { sendEmailReply } from "./email/sesAdapter";
+import { buildReplySubject } from "./email/mime";
 import type { ConversationRecord, MessageRecord, MessageChannel, MessageSenderType } from "./types";
 
 /**
@@ -8,20 +11,26 @@ import type { ConversationRecord, MessageRecord, MessageChannel, MessageSenderTy
  * 読み書き窓口(lib/listing/service.tsと同じ「1ファイルへ書き込みを
  * 集約する」設計方針)。
  *
- * 【現状の実装範囲、正直に】実チャネル(Mercari問い合わせAPI/LINE
- * Webhook/Email)からの受信も、実チャネルへの送信も未実装
- * (§39/§51以降=Priority 6の範囲、各外部サービスの実API調査が別途
- * 必要)。ここにあるのは:
- *   - Conversation/Messageの読み取り・一覧ソート(§121)
- *   - ADMIN限定のテスト会話作成(createTestConversation) — 実チャネル
- *     を介さずローカルで会話・メッセージのライフサイクル全体
- *     (受信→下書き→送信前確認→送信→REPLIED反映)を動作確認できる。
- *   - 返信下書きの保存(draftReply) — AI生成でも人力でも同じ経路。
- *   - 送信(sendReply) — TESTチャネルの会話だけは実際に「送信成功」
- *     として扱う(BELLO内で完結する安全なシミュレーションのため)。
- *     実チャネル(MERCARI_SHOPS/YAHOO_AUCTION/LINE/EMAIL)の会話へは
- *     明示的にエラーを投げ、「このチャネルへの送信は未実装」と正直に
- *     伝える — 実装していない送信を成功したことにしない(§157)。
+ * 【現状の実装範囲、正直に】(P6 = Priority 6での追加分)
+ *   - LINE: app/api/line/webhook/route.tsが署名検証済みのWebhookを
+ *     recordIncomingMessageへ渡す形で受信を実装済み。送信も
+ *     lib/messaging/line/adapter.tsのsendLinePush経由で実際にLINE
+ *     APIを呼ぶ(§46確認モーダル通過後のみ)。ただし実際のLINE公式
+ *     アカウントのChannel Secret/Access Token設定・Webhook URL登録は
+ *     ADMINが行う必要がある(BLOCKED_BY_USER — このアプリがまだ
+ *     ライブ公開URLを持たないため、LINE Developers ConsoleへのWebhook
+ *     URL登録もユーザー側の作業)。
+ *   - Email: lib/messaging/email/sesAdapter.tsがAWS SES
+ *     (SendEmailV2)経由で実際に送信を試みる。受信(SES Receiving→S3→
+ *     取り込み)は検証済みの送信ドメイン(DNS設定含む、ユーザーの
+ *     ビジネス判断が必要)が無いと構築できないため未実装
+ *     (BLOCKED_BY_USER — 使用するドメイン自体が本アプリの設定項目
+ *     ではなくユーザーの意思決定)。
+ *   - Mercari問い合わせAPI/Yahoo!オークションストア: 引き続き未実装
+ *     (lib/messaging/mercari/inquiryAdapter.ts参照 —
+ *     BLOCKED_BY_EXTERNAL_SERVICE、公式仕様が確認できないため)。
+ *   - TESTチャネルの会話は引き続き実際に「送信成功」として扱う
+ *     (BELLO内で完結する安全なシミュレーション)。
  */
 
 function toConversationRecord(row: {
@@ -164,6 +173,90 @@ export async function createTestConversation(input: { customerDisplayName: strin
 }
 
 /**
+ * §51/§87: 実チャネル(現状LINE)からの受信メッセージを取り込む共通の
+ * 入口。同じchannel+externalCustomerIdの会話が既にあれば追記、無ければ
+ * 新規Conversationを作る(§39 findOrCreate)。
+ *
+ * 冪等性(§51「redelivery-safe idempotency」): LINEはWebhookの
+ * at-least-once配送を保証する(同じイベントが複数回届きうる)。
+ * externalMessageId(LINEのmessage.id)で既存Messageを検索し、既にあれば
+ * 何もせず終了する — 同じメッセージが二重に会話へ現れることを防ぐ。
+ */
+export async function recordIncomingMessage(params: {
+  channel: MessageChannel;
+  externalCustomerId: string;
+  externalMessageId: string;
+  body: string;
+  externalSentAt: string;
+  customerDisplayName?: string | null;
+}): Promise<{ conversationId: string; messageId: string } | { deduped: true }> {
+  const { data: existingMessages } = await serverDataClient.models.Message.list({
+    filter: { externalMessageId: { eq: params.externalMessageId } },
+    ...inventoryAuthMode,
+  });
+  if (existingMessages.length > 0) return { deduped: true };
+
+  const { data: existingConversations } = await serverDataClient.models.Conversation.list({
+    filter: { and: [{ channel: { eq: params.channel } }, { externalCustomerId: { eq: params.externalCustomerId } }] },
+    ...inventoryAuthMode,
+  });
+  let conversation = existingConversations[0] ?? null;
+
+  const preview = buildMessagePreview(params.body);
+  if (!conversation) {
+    const { data: created, errors } = await serverDataClient.models.Conversation.create(
+      {
+        channel: params.channel,
+        externalCustomerId: params.externalCustomerId,
+        customerDisplayName: params.customerDisplayName ?? null,
+        status: "WAITING_FOR_REPLY",
+        unreadCount: 1,
+        needsReply: true,
+        priority: "NORMAL",
+        lastMessagePreview: preview,
+        lastMessageAt: params.externalSentAt,
+        lastIncomingAt: params.externalSentAt,
+      },
+      inventoryAuthMode,
+    );
+    if (errors || !created) throw new Error(`会話の作成に失敗しました: ${JSON.stringify(errors)}`);
+    conversation = created;
+  } else {
+    const needsReply = deriveNeedsReply(params.externalSentAt, conversation.lastOutgoingAt ?? null);
+    const status = deriveConversationStatus(needsReply, true, conversation.status);
+    await serverDataClient.models.Conversation.update(
+      {
+        id: conversation.id,
+        status,
+        needsReply,
+        unreadCount: (conversation.unreadCount ?? 0) + 1,
+        lastMessagePreview: preview,
+        lastMessageAt: params.externalSentAt,
+        lastIncomingAt: params.externalSentAt,
+      },
+      inventoryAuthMode,
+    );
+  }
+
+  const { data: message, errors: msgErrors } = await serverDataClient.models.Message.create(
+    {
+      conversationId: conversation.id,
+      externalMessageId: params.externalMessageId,
+      direction: "INBOUND",
+      senderType: "CUSTOMER",
+      body: params.body,
+      contentType: "text",
+      externalSentAt: params.externalSentAt,
+      deliveryStatus: "RECEIVED",
+    },
+    inventoryAuthMode,
+  );
+  if (msgErrors || !message) throw new Error(`メッセージの保存に失敗しました: ${JSON.stringify(msgErrors)}`);
+
+  return { conversationId: conversation.id, messageId: message.id };
+}
+
+/**
  * §44/§45: AI下書きでも人力でも同じ経路で保存する — deliveryStatus
  * DRAFTのまま、まだ送信しない。既存のDRAFTメッセージがあれば上書き
  * せず追加する(§135 Draft History相当 — 再生成のたびに前の下書きを
@@ -204,7 +297,23 @@ export async function sendReply(conversationId: string, messageId: string, who: 
   const conversation = await getConversation(conversationId);
   if (!conversation) throw new Error("対象の会話が見つかりません。");
 
-  if (conversation.channel !== "TEST") {
+  const draft = await serverDataClient.models.Message.get({ id: messageId }, inventoryAuthMode);
+  const body = draft.data?.body ?? "";
+
+  if (conversation.channel === "LINE") {
+    if (!conversation.externalCustomerId) throw new Error("この会話にはLINEの送信先(userId)が記録されていません。");
+    await sendLinePush(conversation.externalCustomerId, body); // §46確認モーダル通過後の実送信 — 失敗時はここでthrowされ、DRAFTのまま残る(SENTへ書き換えない)
+  } else if (conversation.channel === "EMAIL") {
+    if (!conversation.externalCustomerId) throw new Error("この会話には送信先のメールアドレスが記録されていません。");
+    const priorMessages = await listMessages(conversationId);
+    const latestIncoming = [...priorMessages].reverse().find((m) => m.direction === "INBOUND");
+    await sendEmailReply({
+      to: conversation.externalCustomerId,
+      subject: buildReplySubject(conversation.subject),
+      body,
+      inReplyToExternalMessageId: latestIncoming?.externalMessageId ?? null,
+    });
+  } else if (conversation.channel !== "TEST") {
     throw new Error(
       `${conversation.channel}チャネルへの送信は現時点で未実装です（外部API/Webhook連携の実装が必要 — 完了報告のBLOCKED_BY_EXTERNAL_SERVICE参照）。`,
     );

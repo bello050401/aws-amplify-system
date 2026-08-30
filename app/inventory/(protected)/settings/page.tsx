@@ -8,6 +8,7 @@ import { getZaicoTokenSource } from "@/lib/zaico/client";
 import { getMercariTokenSource, getMercariClientNameConfig } from "@/lib/listing/mercari/tokenAccess";
 import { seedShippingRates } from "@/lib/shipping/service";
 import { getMercariEnvironment } from "@/lib/listing/mercari/endpoints";
+import { getLineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
 
@@ -57,7 +58,7 @@ export default async function InventorySettingsPage() {
     await Promise.all([seedInventoryMasters(), seedCustomFieldDefinitions(), seedShippingRates()]);
   }
 
-  const [categories, locations, units, customFields, zaicoTokenSource, mercariTokenSource, mercariClientNameConfig] = await Promise.all([
+  const [categories, locations, units, customFields, zaicoTokenSource, mercariTokenSource, mercariClientNameConfig, lineTokenSource] = await Promise.all([
     listAllMasterEntries("Category"),
     listAllMasterEntries("Location"),
     listAllMasterEntries("Unit"),
@@ -65,6 +66,7 @@ export default async function InventorySettingsPage() {
     getZaicoTokenSource(),
     getMercariTokenSource(),
     getMercariClientNameConfig(),
+    getLineTokenSource(),
   ]);
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
@@ -73,6 +75,8 @@ export default async function InventorySettingsPage() {
   // 同じ理由でMercariもgetMercariTokenSource()の結果から導出する(BELLO
   // 統合改修 master指示書 Phase D)。
   const mercariConnected = mercariTokenSource !== "unconfigured";
+  // 同じ理由でLINEもgetLineTokenSource()の結果から導出する(§51-52)。
+  const lineConnected = lineTokenSource !== "unconfigured";
 
   return (
     <div className="flex h-full flex-col">
@@ -93,6 +97,8 @@ export default async function InventorySettingsPage() {
           mercariEnvironment={getMercariEnvironment()}
           mercariClientName={mercariClientNameConfig.clientName}
           mercariClientNameSource={mercariClientNameConfig.source}
+          lineConnected={lineConnected}
+          lineTokenSource={lineTokenSource}
         />
       </div>
     </div>
