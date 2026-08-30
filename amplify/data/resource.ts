@@ -861,7 +861,7 @@ const schema = a.schema({
       floorPrice: a.integer(), // PricingRuleから計算された下限価格(lib/listing/pricing.tsのcalculateFloorPrice)
       markdownCount: a.integer().default(0),
       lastPriceChangeAt: a.datetime(),
-      nextPriceActionAt: a.datetime(), // 将来のスケジューラがこの時刻以降にrunPricingCheckを呼ぶ、という設計(§22) — スケジューラ自体は今回未実装
+      nextPriceActionAt: a.datetime(), // スケジューラがこの時刻以降にrunPricingCheckを呼ぶ(§22)。「スケジューラ自体は今回未実装」と書いていたのは陳腐化 — amplify/functions/pricing-schedulerが実装済みで、AWS上で毎時(cron(0 */1 * * ? *))稼働していることを実測確認済み。未実装なのはMercariへの実価格送信のみ(handler.tsの該当コメント参照)。
       automationHold: a.boolean().default(false), // ADMINが個別に一時停止したい場合の手動フラグ(autoPricingEnabledとは別 — こちらはルール自体を無効化せず一時停止するためのもの)
       lastAutomationResult: a.string(), // 直近のrunPricingCheck結果の要約(監査用、§85 Audit Log相当の最小実装)
 

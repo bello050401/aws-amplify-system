@@ -321,7 +321,7 @@ async function main(): Promise<void> {
         const cur = await ddb.send(new GetCommand({ TableName: T("Inventory"), Key: { id: h.canonicalId } }));
         const curImages = (Array.isArray(cur.Item?.["images"]) ? cur.Item!["images"] : []) as Record<string, unknown>[];
         const curIdentities = new Set(curImages.map(imageIdentity));
-        const toAdd = h.uploadedImages
+        const toAdd: Record<string, unknown>[] = h.uploadedImages
           .filter((im) => !curIdentities.has(imageIdentity(im)))
           .map((im, i) => ({ ...im, isPrimary: false, sortOrder: curImages.length + i }));
         if (toAdd.length) {
