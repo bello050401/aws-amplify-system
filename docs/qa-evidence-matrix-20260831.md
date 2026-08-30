@@ -1,0 +1,79 @@
+# BELLO 自動QA 証拠マトリクス（2026-08-31）
+
+対象: Staging (`d4hkkg7dty2du` / branch `claude/inventory-management-system-5vbvc7`)
+Production App・Production IAM・Productionデータ・Production Secret は一切変更していない。
+`main` は `63b5942` のまま（merge/rebaseなし）。
+
+状態の意味:
+- **AWS_VERIFIED** … Staging実機で実際に操作し、期待どおりであることを確認
+- **LOCAL_VERIFIED** … ローカルで再現・修正・テストまで確認（実機は未到達か不要）
+- **BLOCKED_BY_USER** … コードは完成、AWSコンソール等での利用者操作待ち
+- **BLOCKED_BY_EXTERNAL_SERVICE** … 外部サービス側の要因で完了できない
+
+---
+
+## 1. 修正した不具合
+
+| # | 内容 | 根拠 | 状態 |
+|---|---|---|---|
+| 1 | 設定ページが87.5%の確率でHTTP 500（料金マスターを毎レンダー投入していた） | 修正前 8回中1回成功 → 修正後 **10回中10回成功**、中央値 3,159ms→1,035ms | **AWS_VERIFIED** |
+| 2 | 北海道4エリアが1つに潰れていた（重複判定キーが `destinationArea` を無視） | 411行が `destinationArea: null` → **450/450件、北海道36行が4エリアすべてを保持** | **AWS_VERIFIED** |
+| 3 | Photo Profile 作成が Server Components エラーで失敗 | 実機で作成→**v1 ACTIVE**、2本目でv2へ自動切替、v1へ手動復帰まで成功、エラー0 | **AWS_VERIFIED** |
+| 4 | originalHash 未計算で画像加工を予約できない | サーバー側で元画像から自己修復し、予約まで継続 | **AWS_VERIFIED** |
+| 5 | 売上ページ・在庫一覧の hydration 崩れ（React #418 / #425） | `<title>`のRCDATA問題とTZ依存日付。**3ページ×3TZ×3回=27回すべて0件**、実機でも0件 | **AWS_VERIFIED** |
+| 6 | 画像1枚ごとにCognito資格情報を取得（1画面で約200往復・最大27回スロットリング） | **5回連続すべて GetId 1回 / 資格情報1回 / 4xx 0件** | **AWS_VERIFIED** |
+| 7 | 設定の既定タブがモバイルで押し分けられない（24px未満95個） | 6ページ×390/430px で **105件 → 0件** | **AWS_VERIFIED** |
+| 8 | 自動値下げの「下限到達時の動作」4択が全部同じ挙動 | `actionAtFloor`を判定側が未参照だった。純粋関数へ切り出し、4択が別結果になることをテストで固定 | **LOCAL_VERIFIED** |
+| 9 | 無編集のエクスポートCSVを取り込むと全行が「更新」になる | 56列を二分探索し原因列「更新日」を特定。**「スキップ（変更なし）」へ是正** | **AWS_VERIFIED** |
+| 10 | 加工済み画像がUIから到達不能（見ることも採用することもできない） | 実機に16件の加工結果が死蔵。比較UIと採用ボタンを追加 | 実機検証中 |
+| 11 | 価格変更履歴が書かれるだけで読まれていない | 26モデル走査で唯一の書き込み専用。EC出品画面に履歴表示を追加 | 実機検証中 |
+| 12 | LINE webhook が失敗を成功として返していた | 失敗時に500を返し再送させる（重複は`externalMessageId`で防止） | **LOCAL_VERIFIED** |
+| 13 | エクスポートのファイル名がUTC基準（朝9時前は前日日付） | JST基準へ。実機の出力が `bello-inventory-20260831.xlsx` | **AWS_VERIFIED** |
+| 14 | セキュリティヘッダーが1つも無い | 実機で **5種すべて配信を確認** | **AWS_VERIFIED** |
+| 15 | 呼び出し元の無いServer Action (`getConversationAction`) | 全Server Action走査で唯一。削除 | **LOCAL_VERIFIED** |
+
+## 2. 実機で完走した業務フロー
+
+| フロー | 結果 | 状態 |
+|---|---|---|
+| ZAICO重複の非再発 | 1,000件 / ZAICO ID 1,000種 / **重複0件**、一覧を開いてもZAICO通信0件・件数不変 | **AWS_VERIFIED** |
+| 画像の追加・並び替え・削除 | 各段階でDB検証。**元の6枚は全て健在**、テスト画像のみ消え、順序も復元 | **AWS_VERIFIED** |
+| 画像加工worker | 4件投入→1分以内に全16件DONE→master/web/サムネイル3種が全行揃う。S3実体とオリジナル保持も確認 | **AWS_VERIFIED** |
+| メッセージ | 会話作成→要返信→下書き→確認ダイアログ→送信済み→解決済み | **AWS_VERIFIED** |
+| 新規登録→EC下書き→削除 | 作成→下書き保存→**EC出品一覧に1件表示**→削除→404、在庫は1,000件へ復帰 | **AWS_VERIFIED** |
+| CSV/XLSXエクスポート | CSV 1,369行(Excel互換BOM) / XLSX 1,001行・56列・オートフィルタ | **AWS_VERIFIED** |
+| CSVインポート | 56列すべて自動対応（確認要0）、無編集なら「変更なし」 | **AWS_VERIFIED** |
+| 認証境界 | 未ログインで全ページがログインへ転送、Server Action直叩きは307、HTMLに在庫データ0件 | **AWS_VERIFIED** |
+
+## 3. 完了できていない項目（外部要因）
+
+| 項目 | 根拠 | 状態 |
+|---|---|---|
+| AIによる商品説明・返信の生成 | `aws bedrock get-use-case-for-model-access` が `ResourceNotFoundException: You have not filled out the request form.` を返す。**AWSコンソール（Bedrock → モデルアクセス）で用途フォームを提出**すれば動作する。コード側は完成 | **BLOCKED_BY_USER** |
+| Mercari Shopsへの実出品 | Personal API Access Token 未設定。設定画面から入力が必要 | **BLOCKED_BY_USER** |
+| Mercariへの実価格変更・再出品 | 公式GraphQL仕様がこの環境から確認できず、fake successを作らない方針で未実装のまま | **BLOCKED_BY_EXTERNAL_SERVICE** |
+| 画像の被写体セグメンテーション | Provider未実装。そのため加工結果は常に「要確認」で、人が採用する運用になる | 仕様どおり |
+
+## 4. 性能の実測（1,000件時点）
+
+| ページ | TTFB | 総所要(中央値) |
+|---|---|---|
+| **在庫一覧** | **3,253ms** | 5,387ms |
+| 売上 | 1,980ms | 3,667ms |
+| EC出品一覧 | 1,941ms | 3,558ms |
+| 商品詳細 | 990ms | 2,522ms |
+| 設定 | 703ms | 2,263ms |
+| メッセージ | 512ms | 2,086ms |
+
+在庫一覧が重いのは`listInventory`が毎回全件を取得してメモリでソート・
+スライスするため（明文化された設計判断で、安全弁は20,000件）。
+**件数に比例して伸びる**ため実測値を残す。今回書き換えなかった理由は
+`docs/nightly-qa-20260831.md` の QA-m に記載。
+
+## 5. 不具合に見えたが違ったもの（誤報を避けた記録）
+
+- 編集画面「全4枚」vs DB 6枚 … NORMAL 4 + DAMAGE 2 の別セクション構成
+- 詳細画面で9枚中1枚 / 一覧で101枚中51枚 … 遅延読み込み。待てば全て表示
+- `masterKey`が空 … 正しいフィールド名は`processedMasterKey`
+- ローカルで在庫登録が権限エラー … Cookieを書き換えて使っているための差異。実機では正常
+- EC出品一覧が0件 … 既存1,000件が全て除外カテゴリ。対象商品を1件作ると即座に1件表示
