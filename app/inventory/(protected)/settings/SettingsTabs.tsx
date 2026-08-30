@@ -12,7 +12,6 @@ import { ListColumnSettings } from "./ListColumnSettings";
 import { ZaicoSyncPanel } from "./ZaicoSyncPanel";
 import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 import { MercariSettingsPanel } from "./MercariSettingsPanel";
-import { PricingRulePanel } from "./PricingRulePanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
@@ -151,7 +150,18 @@ export function SettingsTabs({
             mercariClientNameSource={mercariClientNameSource}
           />
         )}
-        {tab === "pricing" && isAdmin && <PricingRulePanel />}
+        {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側
+            (/inventory/listings/pricing-rules)へ移設した。ここに残す
+            ロジック付きUIを二重に持たない(同じ設定を二箇所で編集できる
+            状態を避ける、§118)——リンクのみ。 */}
+        {tab === "pricing" && isAdmin && (
+          <div className="text-[13px] text-gray-600">
+            <p>自動値下げルールの管理は「EC出品」画面へ移動しました。</p>
+            <a href="/inventory/listings/pricing-rules" className="mt-2 inline-block text-blue-700 underline">
+              自動値下げルール管理画面を開く →
+            </a>
+          </div>
+        )}
         {tab === "shipping" && isAdmin && <ShippingRatePanel />}
         {tab === "line" && isAdmin && <LineSettingsPanel lineConnected={lineConnected} lineTokenSource={lineTokenSource} />}
         {tab === "systemAudit" && isAdmin && <SystemAuditPanel />}

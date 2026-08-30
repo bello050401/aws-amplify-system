@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { bulkCreateListingDraftsAction } from "@/app/actions/listing";
+import { savePricingAssignmentSelection } from "@/lib/listing/pricingAssignmentSelection";
 import type { ListingOverviewRow } from "@/lib/listing/service";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
 
@@ -108,6 +109,17 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
     setSelected(allSelectableSelected ? new Set() : new Set(selectableIds));
   }
 
+  /**
+   * 第六ラウンド§14: 選択IDはクエリ文字列へ入れず(431再発防止、
+   * lib/listing/pricingAssignmentSelection.tsのコメント参照)
+   * sessionStorage経由で割当ページへ渡す。
+   */
+  function goToPricingRuleAssignment() {
+    if (selected.size === 0) return;
+    savePricingAssignmentSelection(Array.from(selected));
+    router.push("/inventory/listings/pricing-rules/assign");
+  }
+
   async function runBulkCreate() {
     if (selected.size === 0) return;
     setBusy(true);
@@ -164,6 +176,19 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
             >
               {busy ? "作成中…" : "選択した商品の出品下書きを一括作成"}
             </button>
+            {/* 第六ラウンド§14/§122-124: 自動値下げルールの主導線をEC出品側へ配置。 */}
+            <button
+              type="button"
+              onClick={goToPricingRuleAssignment}
+              disabled={busy || selected.size === 0}
+              title={selected.size === 0 ? "商品を選択してください" : undefined}
+              className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 hover:bg-gray-50 disabled:opacity-50"
+            >
+              自動値下げルールを設定
+            </button>
+            <Link href="/inventory/listings/pricing-rules" className="text-[12px] text-blue-700 underline">
+              ルール一覧を管理
+            </Link>
           </div>
         )}
       </div>
