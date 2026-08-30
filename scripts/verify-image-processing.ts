@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { OriginalImageMissingError } from "@/lib/inventory/originalHashRepair";
 /**
  * BELLO画像自動加工システム(2026-08-30指示書)§18.1 自動テスト。
  * pipeline.ts(純粋ロジック)+ sharpProcessor.ts(実sharp呼び出し、
@@ -168,6 +170,33 @@ function testBulkImageProcessingEligibleStatuses() {
   assertTrue(!(BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES as readonly string[]).includes("READY"), "BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES: 既にREADYの画像は一括ボタンの対象に含まれない");
 }
 
+// ── 夜間指示書§5: originalHash 自己修復 ────────────────────────────
+// 実データでは画像1,009枚中146枚にoriginalHashが無く、138商品が
+// 「加工状況 0/2」のまま予約できない状態だった(旧ブラウザ駆動ZAICO同期
+// がhashを計算していなかったため)。ensureOriginalHashは、計算済みなら
+// 再計算せず、未計算なら元画像から計算して予約を続行させる。
+function testOriginalHashComputation() {
+  const bytes = Buffer.from("BELLO image bytes for hash test");
+  const a = computeOriginalHash(bytes);
+  const b = computeOriginalHash(Buffer.from("BELLO image bytes for hash test"));
+  assertEqual(a, b, "computeOriginalHash: 同一バイト列は同一hashになる(再同期で別hashにならない)");
+  assertTrue(/^[0-9a-f]{64}$/.test(a), "computeOriginalHash: SHA-256のhex 64桁");
+  const different = computeOriginalHash(Buffer.from("different bytes"));
+  assertTrue(a !== different, "computeOriginalHash: 異なるバイト列は異なるhash");
+  // ZAICO同期Lambda(lambdaSyncPort.ts)と同じ算出方法であることの確認 —
+  // 両経路が同じ画像へ別のhashを付けると冪等性キーが割れる。
+  const viaNode = createHash("sha256").update(bytes).digest("hex");
+  assertEqual(a, viaNode, "computeOriginalHash: Lambda側と同一のSHA-256算出");
+}
+
+function testOriginalImageMissingError() {
+  const err = new OriginalImageMissingError("inventory/abc.jpg");
+  assertTrue(err instanceof Error, "OriginalImageMissingError: Errorを継承する");
+  assertEqual(err.storageKey, "inventory/abc.jpg", "OriginalImageMissingError: 対象のstorageKeyを保持する");
+  assertTrue(!err.message.includes("originalHash"), "OriginalImageMissingError: 利用者向け文言に内部用語(originalHash)を出さない");
+  assertTrue(!err.message.includes("保存し直す"), "OriginalImageMissingError: 「保存し直す」という無関係な操作を促さない");
+}
+
 async function main() {
   testAspectRatioDecision();
   testCompositionStrength();
@@ -176,6 +205,8 @@ async function main() {
   testQualityGateDecision();
   testReprocessButtonLabel();
   testBulkImageProcessingEligibleStatuses();
+  testOriginalHashComputation();
+  testOriginalImageMissingError();
   await testSharpProcessorRoundTrip();
 
   console.log(`\n${passes} passed, ${failures} failed`);

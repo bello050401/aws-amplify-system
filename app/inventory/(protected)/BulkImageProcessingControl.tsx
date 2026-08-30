@@ -28,7 +28,10 @@ export function BulkImageProcessingControl() {
     try {
       const result = await bulkReprocessInventoryImagesAction(Array.from(selected));
       const parts = [`${result.itemsProcessed}件の商品を確認し、${result.enqueuedCount}枚の画像加工を予約しました`];
-      if (result.skippedNoHashCount > 0) parts.push(`${result.skippedNoHashCount}枚はoriginalHash未計算のためスキップ`);
+      // hash未計算はサーバー側で自動修復されるようになったため、ここへ
+      // 計上されるのは元画像がS3に存在しないものだけ(ImageProcessingPanel
+      // 側の同じ文言変更と対)。
+      if (result.skippedNoHashCount > 0) parts.push(`${result.skippedNoHashCount}枚は元画像が見つからずスキップ`);
       if (result.itemsSkippedNotFound > 0) parts.push(`${result.itemsSkippedNotFound}件は見つかりませんでした`);
       setMessage(parts.join("。"));
       clear();

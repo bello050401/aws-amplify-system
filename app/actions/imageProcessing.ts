@@ -7,6 +7,7 @@ import { enqueueProcessingJob, listVersions, setActiveVersion } from "@/lib/imag
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { splitImagesByType } from "@/lib/inventory/imageTypes";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
+import { ensureOriginalHash, OriginalImageMissingError } from "@/lib/inventory/originalHashRepair";
 
 /**
  * BELLO画像自動加工システム(2026-08-30指示書)§8.1/§12/§13の
@@ -60,13 +61,17 @@ export async function reprocessImageAction(input: {
 }): Promise<{ enqueued: boolean }> {
   const role = await getInventoryRole();
   requireImageProcessingPermission(role);
-  if (!input.originalHash) {
-    throw new Error("この画像はまだoriginalHashが計算されていないため、再加工を予約できません(ZAICO同期由来の画像等)。詳細画面で画像を保存し直すと自己修復されます。");
-  }
+  // 夜間指示書§5: hashが無いだけで予約を断らない。サーバー側で元画像から
+  // 計算して保存し、そのまま予約を続ける(利用者に「保存し直し」をさせない)。
+  const originalHash = await ensureOriginalHash({
+    inventoryId: input.inventoryId,
+    storageKey: input.imageStorageKey,
+    originalHash: input.originalHash,
+  });
   const enqueued = await enqueueProcessingJob({
     inventoryId: input.inventoryId,
     imageStorageKey: input.imageStorageKey,
-    originalHash: input.originalHash,
+    originalHash,
     triggerType: "MANUAL_REPROCESS",
     requestedAdjustments: input.requestedAdjustments,
   });
@@ -95,14 +100,22 @@ export async function reprocessAllImagesAction(
   let enqueuedCount = 0;
   let skippedNoHashCount = 0;
   for (const img of images) {
-    if (!img.originalHash) {
-      skippedNoHashCount++;
-      continue;
+    // 夜間指示書§5: hash未計算は「予約できない理由」ではなく「その場で
+    // 直す対象」。元画像が本当に取得できないものだけをスキップへ落とす。
+    let originalHash: string;
+    try {
+      originalHash = await ensureOriginalHash({ inventoryId, storageKey: img.storageKey, originalHash: img.originalHash });
+    } catch (err) {
+      if (err instanceof OriginalImageMissingError) {
+        skippedNoHashCount++;
+        continue;
+      }
+      throw err;
     }
     const created = await enqueueProcessingJob({
       inventoryId,
       imageStorageKey: img.storageKey,
-      originalHash: img.originalHash,
+      originalHash,
       triggerType: "MANUAL_REPROCESS",
     });
     if (created) enqueuedCount++;
@@ -155,14 +168,21 @@ export async function bulkReprocessInventoryImagesAction(inventoryIds: string[])
       // ImageProcessingPanel.tsxのbulkTargetsフィルタと同じ4状態のみ対象
       // (READY/QUEUED/PROCESSING/REPROCESSING/SUPERSEDEDは巻き込まない)。
       if (!(BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES as readonly string[]).includes(status)) continue;
-      if (!img.originalHash) {
-        skippedNoHashCount++;
-        continue;
+      // 夜間指示書§5: 一括経路でも同じく、hash未計算はその場で修復する。
+      let originalHash: string;
+      try {
+        originalHash = await ensureOriginalHash({ inventoryId, storageKey: img.storageKey, originalHash: img.originalHash });
+      } catch (err) {
+        if (err instanceof OriginalImageMissingError) {
+          skippedNoHashCount++;
+          continue;
+        }
+        throw err;
       }
       const created = await enqueueProcessingJob({
         inventoryId,
         imageStorageKey: img.storageKey,
-        originalHash: img.originalHash,
+        originalHash,
         triggerType: "MANUAL_REPROCESS",
       });
       if (created) enqueuedCount++;

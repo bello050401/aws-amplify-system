@@ -131,7 +131,12 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
         bulkTargets.map((img) => ({ storageKey: img.storageKey, originalHash: img.originalHash })),
       );
       if (result.skippedNoHashCount > 0) {
-        setError(`${result.skippedNoHashCount}件の画像はoriginalHash未計算のため加工を予約できませんでした（詳細画面で画像を保存し直すと自己修復されます）。`);
+        // 以前はここで「originalHash未計算のため予約できません(画像を保存し
+        // 直すと自己修復されます)」と出していたが、hash未計算はサーバー側の
+        // ensureOriginalHashがその場で元画像から計算して予約まで続けるように
+        // なったため、この分岐へ来るのは「元画像そのものがS3に無い」場合だけ。
+        // 利用者に無関係な操作(保存し直し)を促す文言は残さない。
+        setError(`${result.skippedNoHashCount}件の画像は元画像が見つからないため加工できませんでした。該当画像を登録し直してください。`);
       }
       await refresh();
     } catch (err) {
