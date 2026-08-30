@@ -167,3 +167,31 @@ export async function setActiveVersion(imageStorageKey: string, newActiveVersion
   }
   await serverDataClient.models.ImageProcessingVersion.update({ id: newActiveVersionId, active: true }, inventoryAuthMode);
 }
+
+/**
+ * 「要確認」の加工結果を人が見たうえで採用する(§17)。
+ *
+ * ## なぜ必要だったか
+ *
+ * workerは`active: status === "READY"`でしかACTIVEにしない。そして
+ * 被写体セグメンテーションが未実装の間はcompositionConfidenceが常に0で、
+ * 判定は**必ずNEEDS_REVIEWへ倒れる**(pipeline.tsに明記のとおり、意図的な
+ * 安全側動作)。
+ *
+ * つまりこの関数が無い状態では、workerがmaster/web/サムネイルを生成して
+ * S3とDBへ残しても、**ACTIVEになる経路が1つも存在しなかった**。実機で
+ * 16件の加工結果が出来ていたが、画面からは加工前/加工後の比較すら
+ * 開けず(比較UIはREADYのときだけ描画)、採用するボタンも無く、
+ * 生成物が完全に到達不能だった。
+ *
+ * 「要確認」は"人が見て決める"という意味なので、決める手段を用意する。
+ * 自動でREADYにするのではなく、**人が押したときだけ**READY+ACTIVEにする
+ * — 安全側の判定そのものは変えない。
+ */
+export async function adoptVersion(imageStorageKey: string, versionId: string): Promise<void> {
+  await setActiveVersion(imageStorageKey, versionId);
+  // 人の確認が済んだのでREADYへ。setActiveVersionが旧ACTIVEを
+  // SUPERSEDEDへ落とした後に実行する(順序を入れ替えるとSUPERSEDED側を
+  // READYへ戻してしまう)。
+  await serverDataClient.models.ImageProcessingVersion.update({ id: versionId, status: "READY" }, inventoryAuthMode);
+}

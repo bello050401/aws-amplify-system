@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { enqueueProcessingJob, listVersions, setActiveVersion } from "@/lib/imageProcessing/jobService";
+import { adoptVersion, enqueueProcessingJob, listVersions, setActiveVersion } from "@/lib/imageProcessing/jobService";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { splitImagesByType } from "@/lib/inventory/imageTypes";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
@@ -192,6 +192,17 @@ export async function bulkReprocessInventoryImagesAction(inventoryIds: string[])
 
   revalidatePath("/inventory");
   return { itemsProcessed, itemsSkippedNotFound, enqueuedCount, skippedNoHashCount };
+}
+
+/**
+ * §17: 「要確認」の加工結果を人が確認したうえで採用する。
+ * 権限はロールバックと同じ(画像加工を操作できる役割)。
+ */
+export async function adoptImageVersionAction(inventoryId: string, imageStorageKey: string, versionId: string): Promise<void> {
+  const role = await getInventoryRole();
+  requireImageProcessingPermission(role);
+  await adoptVersion(imageStorageKey, versionId);
+  revalidatePath(`/inventory/${inventoryId}`);
 }
 
 /** §12: 直前のversion(または選んだ任意のversion)へロールバックする。 */

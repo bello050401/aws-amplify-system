@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listImageProcessingVersionsAction, reprocessAllImagesAction, reprocessImageAction, rollbackImageVersionAction, type ImageProcessingVersionSummary } from "@/app/actions/imageProcessing";
+import { listImageProcessingVersionsAction, reprocessAllImagesAction, reprocessImageAction, adoptImageVersionAction,
+  rollbackImageVersionAction, type ImageProcessingVersionSummary } from "@/app/actions/imageProcessing";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
 import { useInventoryImageUrl } from "./useInventoryImageUrl";
 
@@ -159,6 +160,24 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
     }
   }
 
+  /**
+   * 「要確認」の加工結果を採用してACTIVEにする。自動では決してACTIVEに
+   * ならない(workerはREADYのみACTIVE化し、confidenceが常に0の現状では
+   * 必ずNEEDS_REVIEWになる)ため、ここが唯一の採用経路。
+   */
+  async function handleAdopt(img: ImagePanelRow, versionId: string) {
+    setBusyKey(img.storageKey);
+    setError(null);
+    try {
+      await adoptImageVersionAction(inventoryId, img.storageKey, versionId);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加工結果の採用に失敗しました。");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
   async function handleRollback(img: ImagePanelRow, versionId: string) {
     setBusyKey(img.storageKey);
     setError(null);
@@ -200,7 +219,12 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
           const meta = STATUS_LABELS[status] ?? { label: status, className: "text-gray-500" };
           const superseded = versions.filter((v) => v.status === "SUPERSEDED" || (!v.active && v.status === "READY"));
           const activeVersion = versions.find((v) => v.active);
-          const processedKey = activeVersion?.webKey ?? activeVersion?.processedMasterKey ?? null;
+          // 「要確認」で止まっている最新の加工結果。workerはREADY以外を
+          // ACTIVEにしないため、この行はactiveVersionには現れない。
+          // これを拾わないと、生成済みの加工結果を画面から一切見られない。
+          const pendingReview = status === "NEEDS_REVIEW" ? [...versions].reverse().find((v) => v.status === "NEEDS_REVIEW") ?? null : null;
+          const shownVersion = activeVersion ?? pendingReview;
+          const processedKey = shownVersion?.webKey ?? shownVersion?.processedMasterKey ?? null;
           const isBusy = busyKey === img.storageKey || BUSY_STATUSES.has(status);
           return (
             <li key={img.storageKey} className="text-[11px]">
@@ -210,6 +234,16 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
                 <button type="button" onClick={() => handleReprocess(img)} disabled={isBusy} className="text-gray-400 hover:text-gray-900 disabled:opacity-50">
                   {reprocessButtonLabel(status)}
                 </button>
+                {pendingReview && (
+                  <button
+                    type="button"
+                    onClick={() => handleAdopt(img, pendingReview.id)}
+                    disabled={isBusy}
+                    className="font-bold text-emerald-700 hover:text-emerald-900 disabled:opacity-50"
+                  >
+                    この加工を採用する
+                  </button>
+                )}
                 {superseded.length > 0 && (
                   <button
                     type="button"
@@ -221,7 +255,7 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
                   </button>
                 )}
               </div>
-              {status === "READY" && processedKey && <BeforeAfterToggle originalKey={img.storageKey} processedKey={processedKey} label={`画像${i + 1}`} />}
+              {(status === "READY" || status === "NEEDS_REVIEW") && processedKey && <BeforeAfterToggle originalKey={img.storageKey} processedKey={processedKey} label={`画像${i + 1}`} />}
             </li>
           );
         })}
