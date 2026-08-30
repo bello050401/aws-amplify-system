@@ -16,12 +16,20 @@ export interface ShippingRateRecord {
   destinationPrefecture: string;
   destinationArea: string | null;
   rank: ShippingRank;
-  price: number; // 税込
+  // 第六ラウンド§9/§84: サービス対象外(status="UNAVAILABLE")の組合せは
+  // 0円ではなくnullで表す — 「配送不可/要確認」の表示はこのnullを見る。
+  price: number | null;
+  taxIncluded: boolean; // 第六ラウンド§10追加。既存データ(この項目導入以前)はtrue扱いで読む(既存の税込前提を変えない)
+  currency: string; // 第六ラウンド§10追加。既定"JPY"
   surcharge: number | null; // 繁忙期加算等(§66調査で存在は確認済み、金額は未確認)
   effectiveFrom: string | null;
   effectiveTo: string | null;
   sourceReference: string | null; // 出典(URL・検索日等)
+  acquiredAt: string | null; // 第六ラウンド§10追加。importerが実際に取得した日時(verifiedAtとは別概念)
   verifiedAt: string | null;
+  status: "VERIFIED" | "UNAVAILABLE" | "STALE" | "UNCONFIRMED" | null; // 第六ラウンド§10追加。null=この項目導入以前の手動投入行
+  rawHash: string | null; // 第六ラウンド§10追加
+  importBatchId: string | null; // 第六ラウンド§10追加
   version: number;
   createdBy: string | null;
   updatedBy: string | null;

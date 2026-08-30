@@ -76,8 +76,9 @@ export function ShippingReferencePriceSection({ inventoryId }: { inventoryId: st
               "status" in row ? (
                 <tr key={row.prefecture} className="border-b border-gray-50">
                   <td className="py-0.5 text-gray-600">{row.label}</td>
+                  {/* 第六ラウンド§9/§84: 「データ不足」(未取得)と「配送不可/要確認」(公式がサービス対象外と明示)を混同しない */}
                   <td className="py-0.5 text-gray-400" colSpan={2}>
-                    データ不足
+                    {row.status === "UNAVAILABLE" ? "配送不可/要確認" : "データ不足"}
                   </td>
                 </tr>
               ) : (

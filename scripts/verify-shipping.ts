@@ -7,6 +7,7 @@
  */
 import { calculateShippingRankFromSum, calculateShippingRankFromDimensions, parseDimensionCm, SHIPPING_RANKS } from "@/lib/shipping/rank";
 import { calculateMedian, pickLatestPerPrefecture, buildShippingReferencePriceView, MIN_DISTINCT_REGIONS_FOR_MEDIAN, REGION_DIFFERENCE_THRESHOLD_YEN } from "@/lib/shipping/referencePrice";
+import { buildExpectedMatrix, computeMatrixCompleteness, computeRawHash, ALL_SHIPPING_RANKS } from "@/lib/shipping/importer";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 
 let failures = 0;
@@ -103,11 +104,17 @@ function makeRate(overrides: Partial<ShippingRateRecord> = {}): ShippingRateReco
     destinationArea: null,
     rank: "B",
     price: 4510,
+    taxIncluded: true,
+    currency: "JPY",
     surcharge: null,
     effectiveFrom: null,
     effectiveTo: null,
     sourceReference: "test",
+    acquiredAt: null,
     verifiedAt: "2026-08-01T00:00:00.000Z",
+    status: "VERIFIED",
+    rawHash: null,
+    importBatchId: null,
     version: 1,
     createdBy: null,
     updatedBy: null,
@@ -206,6 +213,59 @@ function testShippingReferencePriceNoFakeGuess() {
   assertTrue(!view.notableDifferenceRegions.some((r) => r.label.includes("福岡")), "差額がしきい値未満の地域は追加表示されない(推測で目立たせない)");
 }
 
+/** 第六ラウンド§9(P0-2): buildExpectedMatrix/computeMatrixCompleteness/computeRawHash——importerの純粋ロジック部分。 */
+function testBuildExpectedMatrix() {
+  const matrix = buildExpectedMatrix(["東京都", "大阪府"], ["B", "C"]);
+  assertEqual(matrix.length, 4, "2都道府県×2rankで4組合せ");
+  assertTrue(
+    matrix.some((c) => c.destinationPrefecture === "東京都" && c.rank === "B") && matrix.some((c) => c.destinationPrefecture === "大阪府" && c.rank === "C"),
+    "全組合せが総当たりで生成される",
+  );
+}
+
+function testComputeMatrixCompleteness() {
+  const expected = buildExpectedMatrix(["東京都", "大阪府", "北海道"], ["B", "C"]);
+  // 6組合せ中、東京都B=VERIFIED、東京都C=UNAVAILABLE、大阪府B=VERIFIED、
+  // 残り3件(大阪府C, 北海道B, 北海道C)は未取得(missing)。
+  const actual: { destinationPrefecture: string; rank: "B" | "C"; status: "VERIFIED" | "UNAVAILABLE" }[] = [
+    { destinationPrefecture: "東京都", rank: "B", status: "VERIFIED" },
+    { destinationPrefecture: "東京都", rank: "C", status: "UNAVAILABLE" },
+    { destinationPrefecture: "大阪府", rank: "B", status: "VERIFIED" },
+  ];
+  const result = computeMatrixCompleteness(expected, actual);
+  assertEqual(result.expectedCells, 6, "期待組合せ数=6");
+  assertEqual(result.verifiedCells, 2, "VERIFIED=2");
+  assertEqual(result.unavailableCells, 1, "UNAVAILABLE=1");
+  assertEqual(result.missingCells, 3, "missing=3(0円で埋めず未取得として列挙)");
+  assertEqual(result.missingCombinations.length, 3, "missingCombinationsが実際に3件列挙される");
+  assertTrue(!result.missingCombinations.some((c) => c.destinationPrefecture === "東京都" && c.rank === "B"), "取得済みの組合せはmissingに含まれない");
+  // §9「全国matrix completenessが100%でない場合は『全取得完了』と報告しない」— この比率を報告に使う。
+  assertTrue(result.completenessRatio < 1, "6件中3件しか結果を得ていないのでcompletenessRatioは1未満");
+}
+
+function testComputeMatrixCompletenessAllVerified() {
+  const expected = buildExpectedMatrix(["東京都"], ["B"]);
+  const actual: { destinationPrefecture: string; rank: "B"; status: "VERIFIED" | "UNAVAILABLE" }[] = [{ destinationPrefecture: "東京都", rank: "B", status: "VERIFIED" }];
+  const result = computeMatrixCompleteness(expected, actual);
+  assertEqual(result.completenessRatio, 1, "全組合せがVERIFIED/UNAVAILABLEで埋まればcompletenessRatio=1");
+  assertEqual(result.missingCells, 0, "missingCells=0");
+}
+
+function testComputeRawHash() {
+  const h1 = computeRawHash("¥4,510(税込)");
+  const h2 = computeRawHash("¥4,510(税込)");
+  const h3 = computeRawHash("¥4,520(税込)");
+  assertEqual(h1, h2, "同一文字列は同一hash(差分検出で再書き込みを抑制するための前提)");
+  assertTrue(h1 !== h3, "異なる文字列は異なるhash(実際の変更を見逃さない)");
+}
+
+function testAllShippingRanksMatchesRankModule() {
+  // importer.tsのALL_SHIPPING_RANKSがlib/shipping/rank.tsのSHIPPING_RANKS
+  // (OVERSIZEも含む実際の全ランク)と食い違っていないかの回帰チェック
+  // ——期待matrixが実際のランク体系から漏れなく生成されることを保証する。
+  assertEqual([...ALL_SHIPPING_RANKS].sort(), [...SHIPPING_RANKS].sort(), "importerの全ランク定義がrank.tsの定義と一致する");
+}
+
 function main() {
   testCalculateShippingRankFromSum();
   testParseDimensionCm();
@@ -215,6 +275,11 @@ function main() {
   testShippingReferencePriceInsufficientData();
   testShippingReferencePriceOk();
   testShippingReferencePriceNoFakeGuess();
+  testBuildExpectedMatrix();
+  testComputeMatrixCompleteness();
+  testComputeMatrixCompletenessAllVerified();
+  testComputeRawHash();
+  testAllShippingRanksMatchesRankModule();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

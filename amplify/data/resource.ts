@@ -969,7 +969,21 @@ const schema = a.schema({
   // ─────────────────────────────────────────────────────────────────────
   ShippingRank: a.enum(["SS", "S", "A", "B", "C", "D", "E", "F", "G", "OVERSIZE"]),
 
-  /** §65 ShippingRate Model — 家財おまかせ便の料金マスタ(ADMIN管理)。 */
+  // 第六ラウンド§10: import batchの結果(VERIFIED=公式ページから実際に
+  // 確認できた金額、UNAVAILABLE=公式が「このルートはサービス対象外」と
+  // 明示、STALE=verifiedAtから一定期間を超えて未更新、UNCONFIRMED=
+  // ADMINが手動入力しsourceReferenceはあるが正式importer検証は未実施)。
+  ShippingRateStatus: a.enum(["VERIFIED", "UNAVAILABLE", "STALE", "UNCONFIRMED"]),
+
+  /**
+   * §65 ShippingRate Model — 家財おまかせ便の料金マスタ(ADMIN管理)。
+   *
+   * 第六ラウンド§10で追加したfield(既存fieldは無変更、破壊的置換なし):
+   * taxIncluded/currency/acquiredAt/status/rawHash/importBatchId。
+   * originArea/destinationArea/sourceReferenceは既存のまま維持
+   * (§10の推奨fieldであるoriginAreaCode/destinationAreaCode相当を
+   * 既に名前違いで持っていたため、重複追加せず既存を再利用する)。
+   */
   ShippingRate: a
     .model({
       provider: a.string().required(), // 例: "アートセッティングデリバリー"
@@ -979,12 +993,18 @@ const schema = a.schema({
       destinationPrefecture: a.string().required(),
       destinationArea: a.string(),
       rank: a.ref("ShippingRank").required(),
-      price: a.integer().required(), // 税込
+      price: a.integer(), // 税込。UNAVAILABLE行はnull(0円で埋めない、§9/§84)
+      taxIncluded: a.boolean().default(true), // 公式表示が税別の場合はfalseにしrawの値をsurchargeやsourceReference側に残す
+      currency: a.string().default("JPY"),
       surcharge: a.integer(), // 繁忙期加算等(存在は確認済み、金額は未確認 — §66)
       effectiveFrom: a.date(),
       effectiveTo: a.date(),
       sourceReference: a.string(), // 出典(URL・検索クエリ・確認日等) — 憶測値でないことの根拠を必ず残す
+      acquiredAt: a.datetime(), // importerが実際にこの値を取得した日時(verifiedAtは人が確認した日時——別概念、既存のまま)
       verifiedAt: a.datetime(),
+      status: a.ref("ShippingRateStatus"), // 未設定(null)= 第五ラウンド以前の手動投入行(既存データ互換)
+      rawHash: a.string(), // 取得したraw値のhash——再importでの差分検出用(同一なら書き込みを抑制)
+      importBatchId: a.string(), // このrateを書いたShippingImportBatch.id(手動投入行はnull)
       version: a.integer().default(1),
       createdBy: a.string(),
       updatedBy: a.string(),
@@ -997,6 +1017,42 @@ const schema = a.schema({
       allow.group("ADMIN"),
       allow.group("EDITOR").to(["read"]),
       allow.group("VIEWER").to(["read"]),
+    ]),
+
+  ShippingImportBatchStatus: a.enum(["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]),
+
+  /**
+   * 第六ラウンド§11: 公式料金データの取得batch1回につき1行。
+   * lib/shipping/importer.tsが読み書きする——ZaicoSyncJobと同じ
+   * lease/checkpoint/retry設計思想(amplify/functions/zaico-sync-worker/
+   * のコメント参照)を、単一シングルトンではなく「batch実行のたびに
+   * 新規行」という形で採用している(過去のimport履歴を全て残せる
+   * 利点があるため、ZaicoSyncJobのsingleton方式は踏襲しない)。
+   */
+  ShippingImportBatch: a
+    .model({
+      status: a.ref("ShippingImportBatchStatus").required(),
+      sourceUrl: a.string().required(), // 公式料金検索ページのURL(取得元の証跡)
+      expectedCells: a.integer().default(0), // 全destination×全rankの期待組合せ数
+      verifiedCells: a.integer().default(0),
+      unavailableCells: a.integer().default(0),
+      missingCells: a.integer().default(0), // 取得を試みたが結果を得られなかった組合せ(0円扱いにしない、§9)
+      failedCells: a.integer().default(0),
+      changedCells: a.integer().default(0), // 既存verified値からrawHashが変化した件数
+      unchangedCells: a.integer().default(0), // rawHash一致でDB write抑制した件数
+      lastDestinationProcessed: a.string(), // resume用checkpoint
+      lastRankProcessed: a.ref("ShippingRank"),
+      lastError: a.string(),
+      leaseOwner: a.string(), // 同時import二重実行防止(§103)
+      leaseExpiresAt: a.datetime(),
+      retryCount: a.integer().default(0),
+      startedAt: a.datetime(),
+      finishedAt: a.datetime(),
+      triggeredBy: a.string(),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
     ]),
 
   // ─────────────────────────────────────────────────────────────────────

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listShippingRatesAction, saveShippingRateAction, deleteShippingRateAction } from "@/app/actions/shipping";
+import { listShippingRatesAction, saveShippingRateAction, deleteShippingRateAction, runShippingRateImportAction, getLatestShippingImportBatchAction } from "@/app/actions/shipping";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
+import type { ShippingImportBatchSummary } from "@/lib/shipping/importer";
 import { SHIPPING_RANKS, SHIPPING_RANK_LABEL, type ShippingRank } from "@/lib/shipping/rank";
 import { JAPAN_PREFECTURES, SHIPPING_ORIGIN_PREFECTURE } from "@/lib/shipping/prefectures";
 
@@ -38,13 +39,41 @@ export function ShippingRatePanel() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [showForm, setShowForm] = useState(false);
+  // 第六ラウンド§11(P0-2): 埼玉発料金データの取得状況表示 + 「公式料金を更新」action。
+  const [importBatch, setImportBatch] = useState<ShippingImportBatchSummary | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
 
   async function reload() {
     setRates(await listShippingRatesAction());
   }
 
+  async function reloadImportStatus() {
+    const result = await getLatestShippingImportBatchAction();
+    if (result.ok) setImportBatch(result.data);
+  }
+
+  async function handleRunImport() {
+    setImportBusy(true);
+    setImportMessage(null);
+    try {
+      const result = await runShippingRateImportAction();
+      if (!result.ok) {
+        setImportMessage(result.error);
+        return;
+      }
+      setImportMessage(result.data.status === "COMPLETED" ? "取得処理が完了しました。" : `取得処理が失敗しました: ${result.data.reason ?? ""}`);
+      await Promise.all([reload(), reloadImportStatus()]);
+    } catch (err) {
+      setImportMessage(err instanceof Error ? err.message : "公式料金の取得に失敗しました。");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   useEffect(() => {
     void reload();
+    void reloadImportStatus();
   }, []);
 
   function startNew() {
@@ -61,7 +90,12 @@ export function ShippingRatePanel() {
       service: rate.service,
       destinationPrefecture: rate.destinationPrefecture,
       rank: rate.rank,
-      price: rate.price,
+      // 第六ラウンド§9/§84: UNAVAILABLE行(price=null)を編集フォームで
+      // 開いた場合、0円という実在しない金額を暗示しないよう、フォーム上
+      // は空欄相当の0から入力し直す運用とする(手動編集フォーム自体は
+      // 「配送不可」入力をこのラウンドではサポートしない——UNAVAILABLE
+      // 行はimporterだけが書く想定のため)。
+      price: rate.price ?? 0,
       surcharge: rate.surcharge ?? 0,
       sourceReference: rate.sourceReference ?? "",
     });
@@ -118,6 +152,32 @@ export function ShippingRatePanel() {
         </p>
       </details>
 
+      {/* 第六ラウンド§11: 埼玉発料金データの取得状況 + 「公式料金を更新」action。 */}
+      <div className="mb-4 border border-gray-200 bg-gray-50 p-3 text-[12px]">
+        <p className="mb-1 font-bold text-gray-700">埼玉発料金データ(公式Web取得)</p>
+        {importBatch ? (
+          <ul className="mb-2 space-y-0.5 text-gray-600">
+            <li>最終実行: {importBatch.startedAt ? new Date(importBatch.startedAt).toLocaleString("ja-JP") : "-"}（status: {importBatch.status}）</li>
+            <li>
+              取得済み: {importBatch.verifiedCells}件 / 配送不可: {importBatch.unavailableCells}件 / 未取得: {importBatch.missingCells}件 / 失敗:{" "}
+              {importBatch.failedCells}件
+            </li>
+            {importBatch.lastError && <li className="text-red-600">前回エラー: {importBatch.lastError}</li>}
+          </ul>
+        ) : (
+          <p className="mb-2 text-gray-400">まだ実行履歴がありません。</p>
+        )}
+        <button
+          type="button"
+          onClick={handleRunImport}
+          disabled={importBusy}
+          className="border border-gray-900 px-3 py-1 text-[12px] font-bold text-gray-900 hover:bg-white disabled:opacity-50"
+        >
+          {importBusy ? "取得中…" : "公式料金を更新"}
+        </button>
+        {importMessage && <p className="mt-2 text-[11px] text-gray-600">{importMessage}</p>}
+      </div>
+
       <div className="overflow-x-auto border border-gray-200">
         <table className="w-full min-w-[560px] border-collapse text-[13px]">
           <thead className="bg-gray-50 text-[11px] text-gray-500">
@@ -153,7 +213,7 @@ export function ShippingRatePanel() {
                   </button>
                 </td>
                 <td className="px-2 py-1.5 text-gray-600">{rate.rank}</td>
-                <td className="px-2 py-1.5 text-gray-600">¥{rate.price.toLocaleString("ja-JP")}</td>
+                <td className="px-2 py-1.5 text-gray-600">{rate.price != null ? `¥${rate.price.toLocaleString("ja-JP")}` : "配送不可/要確認"}</td>
                 <td className="px-2 py-1.5 text-gray-600">{rate.surcharge != null ? `¥${rate.surcharge.toLocaleString("ja-JP")}` : "-"}</td>
                 <td className="px-2 py-1.5 text-gray-400">{rate.verifiedAt ? "確認済み" : "未確認"}</td>
                 <td className="px-2 py-1.5 text-right">

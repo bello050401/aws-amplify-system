@@ -73,6 +73,9 @@ export interface RegionPriceRow {
   diffFromMedian: number;
 }
 
+/** 第六ラウンド§9/§84: サービス対象外(price=null)の代表地域は「配送不可/要確認」として区別する——0円扱いにしない。 */
+export type RepresentativeRegionRow = RegionPriceRow | { label: string; prefecture: string; status: "NO_DATA" } | { label: string; prefecture: string; status: "UNAVAILABLE" };
+
 export type ShippingReferencePriceView =
   | {
       status: "INSUFFICIENT_DATA";
@@ -86,8 +89,8 @@ export type ShippingReferencePriceView =
       rank: ShippingRank;
       medianShipping: number;
       referenceTotal: number;
-      /** §31.3: 東京・名古屋圏・大阪圏(データが無い代表地域は別途nullで返す)。 */
-      representativeRegions: (RegionPriceRow | { label: string; prefecture: string; status: "NO_DATA" })[];
+      /** §31.3: 東京・名古屋圏・大阪圏(データが無い/サービス対象外の代表地域は別途区別して返す)。 */
+      representativeRegions: RepresentativeRegionRow[];
       /** §31.3: 代表地域以外で、中央値との差額が2,000円以上の地域(価格帯でグルーピング済み)。 */
       notableDifferenceRegions: RegionPriceRow[];
     };
@@ -98,27 +101,38 @@ export type ShippingReferencePriceView =
  * 設定されている」ものだけに絞り込んで渡す前提——ここでは追加の
  * フィルタリングはしない(責務の分離: どのデータを「検証済み」と
  * 見なすかはservice層の判断、中央値計算そのものはこの純粋関数の責務)。
+ *
+ * 第六ラウンド§9/§84: status="UNAVAILABLE"(price=null、サービス対象外
+ * と公式が明示したルート)の行は中央値の母集団(distinctPrefectures/
+ * 中央値算出)には含めない——「データが無い」のではなく「価格という
+ * 概念自体が存在しない」ため、0円として紛れ込ませない。ただし代表地域
+ * (東京/名古屋圏/大阪圏)がUNAVAILABLEの場合は、それを利用者へ明示する
+ * 意味があるため`representativeRegions`には残す。
  */
 export function buildShippingReferencePriceView(input: {
   plannedPrice: number;
   rank: ShippingRank;
   verifiedRates: ShippingRateRecord[];
 }): ShippingReferencePriceView {
-  const distinctPrefectures = new Set(input.verifiedRates.map((r) => r.destinationPrefecture));
+  const pricedRates = input.verifiedRates.filter((r): r is ShippingRateRecord & { price: number } => r.price != null);
+  const unavailableByPrefecture = new Map(input.verifiedRates.filter((r) => r.price == null).map((r) => [r.destinationPrefecture, r] as const));
+
+  const distinctPrefectures = new Set(pricedRates.map((r) => r.destinationPrefecture));
   if (distinctPrefectures.size < MIN_DISTINCT_REGIONS_FOR_MEDIAN) {
     return { status: "INSUFFICIENT_DATA", availableRegionCount: distinctPrefectures.size, requiredRegionCount: MIN_DISTINCT_REGIONS_FOR_MEDIAN };
   }
 
-  const prices = input.verifiedRates.map((r) => r.price).sort((a, b) => a - b);
+  const prices = pricedRates.map((r) => r.price).sort((a, b) => a - b);
   const medianShipping = calculateMedian(prices);
   const referenceTotal = input.plannedPrice + medianShipping;
 
-  const byPrefecture = new Map(input.verifiedRates.map((r) => [r.destinationPrefecture, r] as const));
+  const byPrefecture = new Map(pricedRates.map((r) => [r.destinationPrefecture, r] as const));
 
-  const toRow = (label: string, prefecture: string): RegionPriceRow | { label: string; prefecture: string; status: "NO_DATA" } => {
+  const toRow = (label: string, prefecture: string): RepresentativeRegionRow => {
     const rate = byPrefecture.get(prefecture);
-    if (!rate) return { label, prefecture, status: "NO_DATA" };
-    return { label, prefecture, price: rate.price, total: input.plannedPrice + rate.price, diffFromMedian: rate.price - medianShipping };
+    if (rate) return { label, prefecture, price: rate.price, total: input.plannedPrice + rate.price, diffFromMedian: rate.price - medianShipping };
+    if (unavailableByPrefecture.has(prefecture)) return { label, prefecture, status: "UNAVAILABLE" };
+    return { label, prefecture, status: "NO_DATA" };
   };
 
   const representativeRegions = REPRESENTATIVE_REGIONS.map((r) => toRow(r.label, r.prefecture));
@@ -127,7 +141,7 @@ export function buildShippingReferencePriceView(input: {
   // §31.3: 代表地域以外で差額が閾値以上のものだけ追加表示。同一価格の
   // 地域は「料金帯」としてラベルをまとめる(指示書「同一料金帯の地域を
   // 大量に羅列せず…まとめる」)。
-  const others = input.verifiedRates.filter((r) => !representativePrefectures.has(r.destinationPrefecture) && Math.abs(r.price - medianShipping) >= REGION_DIFFERENCE_THRESHOLD_YEN);
+  const others = pricedRates.filter((r) => !representativePrefectures.has(r.destinationPrefecture) && Math.abs(r.price - medianShipping) >= REGION_DIFFERENCE_THRESHOLD_YEN);
   const groupedByPrice = new Map<number, string[]>();
   for (const r of others) {
     const list = groupedByPrice.get(r.price) ?? [];

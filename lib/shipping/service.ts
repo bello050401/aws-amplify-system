@@ -25,12 +25,18 @@ function toShippingRateRecord(row: {
   destinationPrefecture: string;
   destinationArea?: string | null;
   rank: ShippingRank;
-  price: number;
+  price?: number | null;
+  taxIncluded?: boolean | null;
+  currency?: string | null;
   surcharge?: number | null;
   effectiveFrom?: string | null;
   effectiveTo?: string | null;
   sourceReference?: string | null;
+  acquiredAt?: string | null;
   verifiedAt?: string | null;
+  status?: "VERIFIED" | "UNAVAILABLE" | "STALE" | "UNCONFIRMED" | null;
+  rawHash?: string | null;
+  importBatchId?: string | null;
   version?: number | null;
   createdBy?: string | null;
   updatedBy?: string | null;
@@ -46,12 +52,21 @@ function toShippingRateRecord(row: {
     destinationPrefecture: row.destinationPrefecture,
     destinationArea: row.destinationArea ?? null,
     rank: row.rank,
-    price: row.price,
+    price: row.price ?? null,
+    // 第六ラウンド§10導入以前の既存行はtaxIncludedが未設定(undefined)
+    // ——導入前の全データは税込前提だったため、その挙動を変えずtrueへ
+    // フォールバックする(新規行はschema既定値のtrueが常に入る)。
+    taxIncluded: row.taxIncluded ?? true,
+    currency: row.currency ?? "JPY",
     surcharge: row.surcharge ?? null,
     effectiveFrom: row.effectiveFrom ?? null,
     effectiveTo: row.effectiveTo ?? null,
     sourceReference: row.sourceReference ?? null,
+    acquiredAt: row.acquiredAt ?? null,
     verifiedAt: row.verifiedAt ?? null,
+    status: row.status ?? null,
+    rawHash: row.rawHash ?? null,
+    importBatchId: row.importBatchId ?? null,
     version: row.version ?? 1,
     createdBy: row.createdBy ?? null,
     updatedBy: row.updatedBy ?? null,
@@ -209,13 +224,19 @@ export async function calculateShippingEstimate(inventoryId: string, destination
   }
 
   const rate = await lookupShippingRate(destinationPrefecture, dims.rank);
+  // 第六ラウンド§9/§84: status="UNAVAILABLE"(price=null、公式がサービス
+  // 対象外と明示したルート)は「未登録」とは異なる——0円/未登録扱いに
+  // せず、専用の理由文言で明示する。
+  const ratePrice = rate?.price ?? null;
+  const isUnavailable = rate != null && ratePrice == null;
+  const hasPrice = ratePrice != null;
 
   const { errors } = await serverDataClient.models.ChannelListing.update(
     {
       id: channelListing.id,
       shippingRank: dims.rank,
       shippingDestinationPrefecture: destinationPrefecture,
-      calculatedShippingFee: rate ? rate.price + (rate.surcharge ?? 0) : null,
+      calculatedShippingFee: hasPrice ? ratePrice + (rate!.surcharge ?? 0) : null,
       shippingFeeUpdatedAt: new Date().toISOString(),
       updatedBy: who,
     },
@@ -227,8 +248,12 @@ export async function calculateShippingEstimate(inventoryId: string, destination
   return {
     channelListing: refreshed!,
     rank: dims.rank,
-    rateFound: rate != null,
-    reason: rate ? undefined : `埼玉県 → ${destinationPrefecture}・${dims.rank}ランクの料金がまだ料金マスタに登録されていません。設定画面から追加してください。`,
+    rateFound: hasPrice,
+    reason: hasPrice
+      ? undefined
+      : isUnavailable
+        ? `埼玉県 → ${destinationPrefecture}・${dims.rank}ランクは公式にサービス対象外(配送不可)と確認されています。`
+        : `埼玉県 → ${destinationPrefecture}・${dims.rank}ランクの料金がまだ料金マスタに登録されていません。設定画面から追加してください。`,
   };
 }
 
