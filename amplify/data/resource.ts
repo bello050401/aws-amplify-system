@@ -935,7 +935,16 @@ const schema = a.schema({
       aiGenerated: a.boolean().default(false), // §134: AI生成文章かどうかの内部フラグ
       createdBy: a.string(),
     })
-    .secondaryIndexes((index) => [index("conversationId")])
+    // 第五ラウンド§6(P0-B) GSI/Scan監査で追加: externalMessageId(LINE
+    // 等のWebhook配送idempotency判定キー、lib/messaging/service.tsの
+    // recordIncomingMessage)は必ずWHERE句として使われるのに以前は
+    // 未index — 追記専用で無制限に増え続けるこのテーブルへの、Webhook
+    // 受信のたびに走るfilter付きScanになっていた。既存モデルへの
+    // 追加GSIは既存データを壊さない(GSIは新規追加時に既存項目へ
+    // backfillされる、Amplify Gen2のAmplifyDynamoDBTableカスタム
+    // リソースが管理)——synth:checkで既存の他モデル参照が壊れないこと
+    // を確認済み(本round作業ログ参照)。
+    .secondaryIndexes((index) => [index("conversationId"), index("externalMessageId")])
     .authorization((allow) => [
       allow.group("ADMIN"),
       allow.group("EDITOR"),

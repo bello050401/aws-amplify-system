@@ -180,22 +180,39 @@ function toChannelListingRecord(row: {
   };
 }
 
-/** inventoryIdに紐づくListingDraftを1件だけ返す(存在しなければnull) — DynamoDBに複合ユニーク制約は無いため、「1つのInventoryにつき最大1件」は呼び出し側(このファイル)がlist+filterで確認して守る(ZAICO同期のsourceInventoryId重複防止と同じ考え方)。 */
+/**
+ * inventoryIdに紐づくListingDraftを1件だけ返す(存在しなければnull) —
+ * DynamoDBに複合ユニーク制約は無いため、「1つのInventoryにつき最大1件」
+ * は呼び出し側(このファイル)がlist+filterで確認して守る(ZAICO同期の
+ * sourceInventoryId重複防止と同じ考え方)。
+ *
+ * 第五ラウンド§6(P0-B) GSI/Scan監査: 以前は`.list({filter})`——
+ * ListingDraftテーブル全体に対するDynamoDB Scan——だった。schemaには
+ * `secondaryIndexes(index("inventoryId"))`が既に宣言済みで
+ * (synth出力のmodel-schema.graphqlで実測確認: queryField名
+ * `listListingDraftByInventoryId`)、この呼び出しは商品詳細/EC出品
+ * 画面を開くたび=高頻度に発生するため、真のDynamoDB Query(該当
+ * inventoryIdの行だけを読む、通常0〜1件)に切り替える。
+ */
 export async function getListingDraftForInventory(inventoryId: string): Promise<ListingDraftRecord | null> {
-  const { data } = await serverDataClient.models.ListingDraft.list({
-    filter: { inventoryId: { eq: inventoryId } },
-    ...inventoryAuthMode,
-  });
+  const { data } = await serverDataClient.models.ListingDraft.listListingDraftByInventoryId({ inventoryId }, { ...inventoryAuthMode });
   const found = data.find((d) => !d.deletedAt);
   return found ? toListingDraftRecord(found) : null;
 }
 
+/**
+ * 第五ラウンド§6(P0-B): ChannelListingは`inventoryId`用と
+ * `listingDraftId`用、2本の独立したsecondaryIndexes(複合indexではない)
+ * が宣言されている。`channel`はindex化されていないため、
+ * `listChannelListingByInventoryId`で該当商品のChannelListing行
+ * (実運用ではチャネル数=最大数件)だけを真のQueryで取得し、`channel`
+ * 一致判定はその小さな結果集合に対しアプリ側で行う——テーブル全体への
+ * Scanを避けつつ、宣言されていない複合キーを偽装しない。
+ */
 export async function getChannelListing(inventoryId: string, channel: ListingChannel): Promise<ChannelListingRecord | null> {
-  const { data } = await serverDataClient.models.ChannelListing.list({
-    filter: { and: [{ inventoryId: { eq: inventoryId } }, { channel: { eq: channel } }] },
-    ...inventoryAuthMode,
-  });
-  return data[0] ? toChannelListingRecord(data[0]) : null;
+  const { data } = await serverDataClient.models.ChannelListing.listChannelListingByInventoryId({ inventoryId }, { ...inventoryAuthMode });
+  const found = data.find((d) => d.channel === channel);
+  return found ? toChannelListingRecord(found) : null;
 }
 
 /** lib/inventory/queries.tsのSEARCH_MAX_SCAN_ITEMSと同じ上限 — Inventory自体がその上限を超えない前提なので、Inventoryとjoinするこちらの一括取得も同じ規模で揃えておく。 */

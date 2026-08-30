@@ -182,19 +182,49 @@ export async function reorderMasterEntries(model: MasterModelName, orderedIds: s
  * い。将来Inventory.unitを本当の外部キーへ移行する場合は、既存レコー
  * ドの移行方針を別途検討する必要がある(今回はそこまで踏み込まない)。
  */
+/**
+ * 第五ラウンド§6(P0-B) GSI/Scan監査で2点修正:
+ *   1. Category/Locationはschema既存のsecondaryIndexes(HASHキーのみ、
+ *      安全性はRound5 P0-Aで実測確認済み——masterDedupe.tsの同種コメント
+ *      参照)を使った真のQueryに切り替える(以前は`.list({filter})`
+ *      ——Inventoryテーブル全体へのScan)。
+ *   2. (副次的に発見した正確性の不具合)以前はページングが無く、
+ *      デフォルトpage内に収まる件数しか数えていなかった——「使用中の
+ *      場合は物理削除を拒否する」という安全装置が、page境界をまたぐ
+ *      場合に0件と誤判定し実際には使用中のmasterを物理削除できて
+ *      しまう実害があった。categoryId/locationIdはGSI Query、unitは
+ *      (indexが無いため)従来通りfilter付きScanのまま、いずれも
+ *  200件単位でnextTokenを追い切ってから件数を確定する。
+ */
 async function countInventoryReferences(model: MasterModelName, id: string): Promise<number> {
-  if (model === "Category") {
-    const { data } = await serverDataClient.models.Inventory.list({ filter: { categoryId: { eq: id } }, ...inventoryAuthMode });
-    return data.length;
-  }
-  if (model === "Location") {
-    const { data } = await serverDataClient.models.Inventory.list({ filter: { locationId: { eq: id } }, ...inventoryAuthMode });
-    return data.length;
+  if (model === "Category" || model === "Location") {
+    let total = 0;
+    let nextToken: string | null | undefined;
+    do {
+      const result =
+        model === "Category"
+          ? await serverDataClient.models.Inventory.listInventoryByCategoryId({ categoryId: id }, { limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode })
+          : await serverDataClient.models.Inventory.listInventoryByLocationId({ locationId: id }, { limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode });
+      total += result.data.length;
+      nextToken = result.nextToken;
+    } while (nextToken);
+    return total;
   }
   const { data: unitEntry } = await serverDataClient.models.UnitMaster.get({ id }, inventoryAuthMode);
   if (!unitEntry) return 0;
-  const { data } = await serverDataClient.models.Inventory.list({ filter: { unit: { eq: unitEntry.name } }, ...inventoryAuthMode });
-  return data.length;
+  let total = 0;
+  let nextToken: string | null | undefined;
+  do {
+    const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+      filter: { unit: { eq: unitEntry.name } },
+      limit: 200,
+      nextToken: nextToken ?? undefined,
+      ...inventoryAuthMode,
+    });
+    total += data.length;
+    nextToken = nt;
+  } while (nextToken);
+  return total;
 }
 
 /**

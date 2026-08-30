@@ -119,11 +119,17 @@ export async function getConversation(id: string): Promise<ConversationRecord | 
   return data ? toConversationRecord(data) : null;
 }
 
+/**
+ * 第五ラウンド§6(P0-B) GSI/Scan監査: 以前は`.list({filter})`——
+ * Messageテーブル全体(全会話ぶん、蓄積し続け上限がない)に対する
+ * DynamoDB Scanだった。会話を開くたびに毎回発生する高頻度呼び出しで、
+ * かつテーブル自体はInventoryHistoryと同じ「追記専用で無制限に増える」
+ * 性質を持つため優先度が高い。schemaの`secondaryIndexes(index(
+ * "conversationId"))`(synth出力で実測確認済みqueryField名
+ * `listMessageByConversationId`)を使った真のQueryに切り替える。
+ */
 export async function listMessages(conversationId: string): Promise<MessageRecord[]> {
-  const { data, errors } = await serverDataClient.models.Message.list({
-    filter: { conversationId: { eq: conversationId } },
-    ...inventoryAuthMode,
-  });
+  const { data, errors } = await serverDataClient.models.Message.listMessageByConversationId({ conversationId }, { ...inventoryAuthMode });
   if (errors) throw new Error(`メッセージの取得に失敗しました: ${JSON.stringify(errors)}`);
   return data.map(toMessageRecord).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
 }
@@ -190,10 +196,13 @@ export async function recordIncomingMessage(params: {
   externalSentAt: string;
   customerDisplayName?: string | null;
 }): Promise<{ conversationId: string; messageId: string } | { deduped: true }> {
-  const { data: existingMessages } = await serverDataClient.models.Message.list({
-    filter: { externalMessageId: { eq: params.externalMessageId } },
-    ...inventoryAuthMode,
-  });
+  // 第五ラウンド§6(P0-B): externalMessageId用GSIを新規追加
+  // (amplify/data/resource.ts参照)——Webhook受信のたびに走る
+  // idempotency判定を、Messageテーブル全体へのScanから真のQueryへ。
+  const { data: existingMessages } = await serverDataClient.models.Message.listMessageByExternalMessageId(
+    { externalMessageId: params.externalMessageId },
+    { ...inventoryAuthMode },
+  );
   if (existingMessages.length > 0) return { deduped: true };
 
   const { data: existingConversations } = await serverDataClient.models.Conversation.list({

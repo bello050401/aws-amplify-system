@@ -365,10 +365,22 @@ export async function getInventoryDetail(id: string): Promise<InventoryDetail | 
   const { data: item } = await serverDataClient.models.Inventory.get({ id }, inventoryAuthMode);
   if (!item || item.deletedAt) return null;
 
-  const { data: historyRows } = await serverDataClient.models.InventoryHistory.list({
-    filter: { inventoryId: { eq: id } },
-    ...inventoryAuthMode,
-  });
+  // 第五ラウンド§6(P0-B) GSI/Scan監査: このモデルはsecondaryIndexes
+  // (inventoryId + changedAt sort key)を実際に宣言済みだが、以前は他の
+  // モデルの慣例(lib/imageProcessing/jobService.tsのlistVersions等)に
+  // 合わせて`.list({filter})`——DynamoDB Scan相当、テーブル全体の行数に
+  // 比例したコスト——で呼んでいた。InventoryHistoryは「一度書いたら
+  // 消さない追記専用の監査ログ」で件数が無制限に増え続け(モデル定義の
+  // コメント参照)、かつこの呼び出しは商品詳細ページを開くたび=高頻度
+  // に発生するため、他のGSI未使用箇所より優先度が高い(監査結果は
+  // docs/gsi-scan-audit.md参照)。生成されたクエリField名は
+  // synth出力のmodel-schema.graphqlで実測確認済み
+  // (`listInventoryHistoryByInventoryIdAndChangedAt`)——真のDynamoDB
+  // Query(該当inventoryIdの行だけを読む)に切り替える。
+  const { data: historyRows } = await serverDataClient.models.InventoryHistory.listInventoryHistoryByInventoryIdAndChangedAt(
+    { inventoryId: id },
+    { ...inventoryAuthMode },
+  );
 
   return {
     ...toListRow(item),
