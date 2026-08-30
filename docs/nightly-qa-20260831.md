@@ -613,3 +613,34 @@ S3署名付きURL・Amplifyのインラインスクリプトへ同時に依存�
 あわせて、`fetchAllInventoryRecords`の上のコメントが
 「listInventoryはcursorページングの安価な経路として無変更で残す」と
 **実態と食い違ったまま**だったので、実測値つきで現状に合わせて訂正した。
+
+### QA-n: 加工済み画像がUIから到達不能だった — **最優先領域の実害**
+
+画像加工は最優先の監査領域なので、生成物が**実際に使えるか**まで追った。
+結果、workerがmaster/web/サムネイルを生成してS3とDBへ残しているのに、
+**画面からは見ることも採用することもできない**状態だった。
+
+原因は3つが噛み合った結果:
+
+1. workerは `active: status === "READY"` でしかACTIVEにしない
+2. 被写体セグメンテーションが未実装のためcompositionConfidenceが常に0で、
+   判定は**必ずNEEDS_REVIEWへ倒れる**(pipeline.tsに明記された意図的な
+   安全側動作)
+3. パネル側は
+   - 加工前/加工後の比較UIを `status === "READY"` のときだけ描画
+   - 「直前版に戻す」を SUPERSEDED か 非ACTIVE&READY のversionにしか出さない
+
+つまり**ACTIVEになる経路が1つも存在しない**。「要確認」と表示されるのに
+確認する手段が無く、採用するボタンも無い。Stagingには実際に16件の
+加工結果がこの状態で溜まっていた。
+
+対応:
+
+- 比較UIを NEEDS_REVIEW でも開けるようにし、そのversion自身の
+  webKey/processedMasterKey を表示対象にした
+- 「この加工を採用する」を追加し、押したときだけ READY + ACTIVE にする
+  (`adoptVersion` → 既存の`setActiveVersion`で旧ACTIVEをSUPERSEDEDへ
+  落としてから status を READY へ)
+
+**安全側の判定自体は変えていない** — 自動でREADYにはせず、人が押した
+ときだけ採用する。「要確認」が本来意味していた動作をそのまま実装した。
