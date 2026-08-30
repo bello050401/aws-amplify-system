@@ -1,40 +1,22 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
+import { generateStructured, generateText } from "./gateway/gateway";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §56/§88: AI商品情報生成・AI返信案
- * 生成の共通AI接続層。既存のlib/ai/(Feature=BASEマーケティングLP生成
- * 専用)のAnthropicProvider/AIProviderはFeatureCopy用の固定tool
- * schemaに強く結合しており、無関係なEC出品・返信生成のためにそちらの
- * interfaceを拡張するのは既存の安定した仕組みを不必要に変更すること
- * になる(§124 過剰設計防止の逆側 — 無関係な関心事を1つのinterfaceへ
- * 混ぜない、というこのアプリ既存の判断: lib/zaico/secretStore.tsと
- * lib/listing/mercari/secretStore.tsを意図的に別ファイルにしている
- * のと同じ理由)。そのため、Anthropic
- * SDKクライアント構築・エラー処理という「低レベルの再利用可能な部分」
- * だけをこのファイルへ複製し(§88「現在AI serviceがあれば再利用」の
- * 対応 — 同じANTHROPIC_API_KEY/ANTHROPIC_MODEL環境変数、同じ
- * Anthropic.APIErrorハンドリング方針)、EC出品・返信生成専用の
- * ツールschema/プロンプトはこちらに独立させている。
+ * 生成のタスク別プロンプト/ツールschema定義。
+ *
+ * 【2026-08-30 第三次: ベンダー非依存化】以前はこのファイル自身が
+ * Anthropic SDKクライアント構築・エラー処理を直接複製していたが
+ * (既存lib/ai/のFeatureCopy専用AIProviderへ無理に相乗りしない、という
+ * 判断は変えていない — lib/zaico/secretStore.tsとlib/listing/mercari/
+ * secretStore.tsを意図的に別ファイルにしているのと同じ理由)、
+ * BELLOベンダー非依存・交換可能アーキテクチャ仕様書(2026-08-30)の
+ * Strangler Pattern指示に従い、Anthropic固有の呼び出しはすべて
+ * lib/ai/gateway/(AIGateway/AIRouter/AnthropicGatewayProvider/
+ * AIUsageLog)へ集約した。このファイルは「タスクごとのプロンプト・
+ * ツールschemaを組み立て、Gatewayへ依頼する」ことだけに専念する —
+ * Provider/Model切替・品質ゲート・使用量監査ログはGateway側の責務。
  */
-
-function client(): Anthropic {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error("ANTHROPIC_API_KEYが設定されていません。ローカル開発では.envに、本番ではAmplify Hostingの環境変数として設定してください。");
-  }
-  return new Anthropic({ apiKey });
-}
-
-function describeAnthropicError(err: unknown): string {
-  if (err instanceof Anthropic.APIError) {
-    const requestId = err.requestID ? ` (request_id: ${err.requestID})` : "";
-    return `Anthropic API error: ${err.message}${requestId}`;
-  }
-  return err instanceof Error ? err.message : String(err);
-}
-
-const THINKING = { type: "adaptive" } as const;
 
 // ── §56: 商品情報AI生成(Listing Draft生成) ─────────────────────────────
 
@@ -105,27 +87,29 @@ function buildListingUserPrompt(input: ListingCopyGenerationInput): string {
   return lines.join("\n");
 }
 
+/**
+ * BELLOベンダー非依存アーキテクチャ仕様書(2026-08-30) §16
+ * Strangler Pattern: 外部から見た入出力(ListingCopyGenerationInput→
+ * ListingCopyResult)は一切変えず、内部実装だけをlib/ai/gateway/経由に
+ * 差し替える。呼び出し元(app/actions/ai.ts)は無変更で動く。これにより
+ * 「Provider/Modelを一元変更可能」「AIUsageLog記録」「品質ゲート」が
+ * 既存のAI出品コピー生成機能へ後付けで適用される。
+ */
 export async function generateListingCopy(input: ListingCopyGenerationInput): Promise<ListingCopyResult> {
-  let res;
-  try {
-    res = await client().messages.create({
-      model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5",
-      max_tokens: 2000,
-      thinking: THINKING,
-      output_config: { effort: "medium" },
-      system: buildListingSystemPrompt(),
-      messages: [{ role: "user", content: buildListingUserPrompt(input) }],
-      tools: [LISTING_COPY_TOOL],
-      tool_choice: { type: "tool", name: LISTING_COPY_TOOL.name },
-    });
-  } catch (err) {
-    console.error("[generateListingCopy] request failed:", err);
-    throw new Error(describeAnthropicError(err));
-  }
-
-  const toolUse = res.content.find((block) => block.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") throw new Error("AI応答に期待した構造化出力が含まれていませんでした。");
-  return toolUse.input as ListingCopyResult;
+  const result = await generateStructured<ListingCopyResult & Record<string, unknown>>({
+    // §3.1のタスク一覧にはタイトル生成/説明文生成が別々に定義されているが、
+    // このツールは1回の呼び出しでtitle/description/conditionText/
+    // sellingPointsをまとめて生成する既存の設計(§88時点の実装)を維持する
+    // ため、主目的である説明文生成のタスク種別で記録する。
+    task: "LISTING_DESCRIPTION_GENERATION",
+    systemPrompt: buildListingSystemPrompt(),
+    userPrompt: buildListingUserPrompt(input),
+    toolSchema: LISTING_COPY_TOOL,
+    tier: "STANDARD",
+    promptVersion: "listing-copy-v1",
+    requiredNonEmptyFields: ["title", "description", "conditionText"],
+  });
+  return result.output as ListingCopyResult;
 }
 
 // ── §47/§69: AI返信案生成 ────────────────────────────────────────────
@@ -193,23 +177,19 @@ function buildReplyUserPrompt(input: ReplyDraftInput): string {
     .join("\n\n");
 }
 
+/** Strangler Pattern(上のgenerateListingCopyと同じ理由) — 入出力(ReplyDraftInput→string)は不変、内部だけgateway経由に差し替え。 */
 export async function generateReplyDraft(input: ReplyDraftInput): Promise<string> {
-  let res;
-  try {
-    res = await client().messages.create({
-      model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5",
-      max_tokens: 1500,
-      thinking: THINKING,
-      output_config: { effort: "medium" },
-      system: buildReplySystemPrompt(),
-      messages: [{ role: "user", content: buildReplyUserPrompt(input) }],
-    });
-  } catch (err) {
-    console.error("[generateReplyDraft] request failed:", err);
-    throw new Error(describeAnthropicError(err));
-  }
-
-  const textBlock = res.content.find((block) => block.type === "text");
-  if (!textBlock || textBlock.type !== "text") throw new Error("AI応答にテキスト出力が含まれていませんでした。");
-  return textBlock.text.trim();
+  const result = await generateText({
+    task: "CUSTOMER_REPLY_DRAFT",
+    systemPrompt: buildReplySystemPrompt(),
+    userPrompt: buildReplyUserPrompt(input),
+    tier: "STANDARD",
+    promptVersion: "reply-draft-v1",
+    qualityRules: {
+      minLength: 1,
+      // §69: 送料が未確定の場合、AIが具体的な金額を勝手に案内していないかの簡易検査(system promptの指示が守られているかの二重チェック)。
+      forbiddenPatterns: input.shippingFee == null ? [/送料[はが]?\s*¥?\d[\d,]*円/] : [],
+    },
+  });
+  return result.output;
 }

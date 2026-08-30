@@ -935,6 +935,53 @@ const schema = a.schema({
       allow.group("EDITOR").to(["read"]),
       allow.group("VIEWER").to(["read"]),
     ]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // BELLO 統合業務OS ベンダー非依存・交換可能アーキテクチャ仕様書
+  // (2026-08-30) §6/§15: AI呼び出しの監査ログ。プロンプト全文・顧客
+  // メッセージ本文・内部メモ等は一切保存しない(仕様書「全文promptを
+  // 監査目的だけで無制限保存しない」「秘密情報や顧客個人情報を不要に
+  // 保存しない」への対応) — 保存するのはtask/provider/model/tier/
+  // トークン数/概算コスト/成功可否/fallback発生有無/品質ゲート結果/
+  // promptVersionといったメタデータのみ。lib/ai/gateway/usageLog.ts
+  // が実際の書き込みを行う。
+  // ─────────────────────────────────────────────────────────────────────
+  AITaskName: a.enum(["LISTING_TITLE_GENERATION", "LISTING_DESCRIPTION_GENERATION", "CUSTOMER_REPLY_DRAFT", "PRODUCT_INFORMATION_EXTRACTION", "CLASSIFICATION"]),
+
+  AIQualityTierName: a.enum(["ECONOMY", "STANDARD", "PREMIUM"]),
+
+  /** §15 Observability/Cost — AI呼び出し1回につき1行。 */
+  AIUsageLog: a
+    .model({
+      task: a.ref("AITaskName").required(),
+      providerId: a.string().required(), // 例: "anthropic"
+      modelId: a.string().required(),
+      qualityTier: a.ref("AIQualityTierName").required(),
+      inputTokens: a.integer().required(),
+      outputTokens: a.integer().required(),
+      estimatedCostUsd: a.float(), // lib/ai/gateway/modelRegistry.tsの単価から算出、取得不能ならnull
+      latencyMs: a.integer().required(),
+      success: a.boolean().required(),
+      errorMessage: a.string(), // 失敗時のみ、技術的詳細(顧客データは含まない)
+      retryCount: a.integer().default(0),
+      fallbackOccurred: a.boolean().default(false), // §4.1: ECONOMY/STANDARD→PREMIUMのescalationが発生したか
+      qualityGatePassed: a.boolean(),
+      qualityGateViolations: a.json(), // string[] — 違反ラベルのみ(生成本文は含まない)
+      promptVersion: a.string().required(),
+    })
+    // Amplify Dataの自動付与createdAtはsecondaryIndexesのsortKeysに
+    // 指定できない(明示的なmodelフィールドしか使えない、synth時に
+    // 実際にエラーで確認済み)ため、taskのみで索引する — 月次集計は
+    // 呼び出し元(lib/ai/gateway/auditReport.ts)がtask別の全件を取得後
+    // JS側でcreatedAtにより絞り込む(件数がAI呼び出し回数程度である
+    // 前提であれば許容範囲、lib/inventory/queries.tsの他の集計と同じ
+    // 考え方)。
+    .secondaryIndexes((index) => [index("task")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
