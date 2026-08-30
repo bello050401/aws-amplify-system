@@ -155,6 +155,21 @@ const schema = a.schema({
   // reads as null/undefined, which the app already treats as NORMAL.
   ImageType: a.enum(["NORMAL", "DAMAGE"]),
 
+  // BELLO画像自動加工システム §11.3: Image状態遷移。UNPROCESSED(初期)→
+  // QUEUED(ProcessingJob作成済み)→PROCESSING(worker実行中)→READY(採用版
+  // あり)。例外系はNEEDS_REVIEW(低confidenceで自動READYにしない、§17
+  // 品質ゲート)/FAILED(処理失敗、RAW等は削除しない)/REPROCESSING(1枚
+  // 単位の再加工中、§12)/SUPERSEDED(旧バージョン、rollbackで復活可能)。
+  ImageProcessingStatus: a.enum(["UNPROCESSED", "QUEUED", "PROCESSING", "READY", "NEEDS_REVIEW", "FAILED", "REPROCESSING", "SUPERSEDED"]),
+
+  // §7 画像分類。自動分類モデルは今回未実装(§Phase 1 PoCが必要、実画像
+  // 無しのためこのラウンドでは未着手 — SPEC_UNCONFIRMED)なので、現状は
+  // 常に手動割り当て専用(classificationConfidenceは常にnull)。
+  ImageClassification: a.enum(["TOP", "FULL", "DETAIL", "DAMAGE", "LABEL"]),
+
+  // §6 BELLO全体トップ画像標準の2択。
+  ImageAspectRatio: a.enum(["SQUARE_1_1", "LANDSCAPE_3_2"]),
+
   // Named custom type (not a model — no table of its own) for the images
   // embedded on Inventory. Images are always read/written together with
   // their parent Inventory record and never queried independently, so an
@@ -222,6 +237,33 @@ const schema = a.schema({
     // が別途、ADMINが設定画面から任意のタイミングで走らせるバックフィ
     // ルとして行う。
     thumbnailKey: a.string(),
+    // ─────────────────────────────────────────────────────────────────
+    // BELLO画像自動加工システム(2026-08-30指示書)— このcustomTypeへは
+    // originalHashだけを足す。処理結果(status/classification/採用
+    // version/processedKey/webKey/confidence等)はあえてここへ
+    // 二重化(denormalize)しない — バックグラウンドworker Lambdaが
+    // Inventory.imagesという配列フィールドを安全に部分更新する手段が
+    // 無い(DynamoDBのUpdateExpressionは配列要素をインデックスでしか
+    // 更新できず、ブラウザ側の同時編集で配列順が変わるとインデックスが
+    // ずれる実害がある)ため、書き込みは全て独立行のImageProcessingVersion
+    // (このファイル下方)へ行い、そちらのGSI(imageStorageKey)で引く設計
+    // にした——pricing-schedulerで確立した「GSIを持つ配列/オブジェクト
+    // への部分更新は危険、独立テーブルへのUPDATE(GSIキー属性に触れない
+    // 形)は安全」という原則を、今回は「そもそも配列を書き込み対象にし
+    // ない」形でさらに徹底したもの。originalHashだけは例外——アップ
+    // ロード時に一度書くだけで、その後workerもUIも書き換えないため
+    // 安全(§11.4冪等性のキー計算に使う)。
+    originalHash: a.string(),
+    // §7 画像分類。type(NORMAL/DAMAGE)より細かい、加工の強さを決める
+    // ための編集可能メタデータ(isPrimaryと同じ位置づけ — ユーザーが
+    // 画像編集画面から設定する入力であり、workerが書き込む出力ではない
+    // ため、Inventory.images配列への通常の保存経路(resolveImages、既存
+    // のtype/isPrimaryと全く同じ書き込み方)で安全に扱える)。未設定は
+    // null — lib/imageProcessing/jobService.tsのdefaultClassificationが
+    // 「isPrimaryなNORMAL画像はTOP、それ以外のNORMALはFULL、DAMAGE画像
+    // はDAMAGE」という既定値へ補完する。自動分類モデルは未実装(types.ts
+    // のコメント参照)なのでconfidenceは持たない。
+    classification: a.ref("ImageClassification"),
   }),
 
   // Category / Location masters below are intentionally flat (`parentId`
@@ -977,6 +1019,126 @@ const schema = a.schema({
     // 前提であれば許容範囲、lib/inventory/queries.tsの他の集計と同じ
     // 考え方)。
     .secondaryIndexes((index) => [index("task")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // BELLO画像自動加工システム(2026-08-30指示書)§15 データモデル。
+  // ImageAsset/ProductCompositionProfile相当はInventoryImage customType
+  // 自身へ折り込んだ(上のコメント参照)。ここでは「画像1件に対して複数
+  // 存在し、独立に検索・一覧・rollbackする必要がある」3モデルのみ新設
+  // する。processingVersion/photoProfileVersion/engineVersionは全てこの
+  // ラウンドで導入した最初のバージョン(=1)から始まる整数。
+  // ─────────────────────────────────────────────────────────────────────
+
+  ProcessingJobTriggerType: a.enum(["CATEGORY_TRANSITION", "NEW_IMAGE", "MANUAL_REPROCESS"]),
+  ProcessingJobStatus: a.enum(["PENDING", "PROCESSING", "DONE", "FAILED", "DEAD_LETTER"]),
+
+  /**
+   * §15.5 ProcessingJob — 加工キュー。amplify/functions/
+   * image-processing-worker/がスケジュール実行でPENDING行をScanし、
+   * lib/inventory/pricing-scheduler(amplify/functions/pricing-scheduler)
+   * と同じ「Scan→1件ずつ処理→GSIを持たないUPDATE限定の更新」パターンを
+   * 再利用する(このラウンドで確立したUpdateItem安全性の原則、
+   * amplify/functions/pricing-scheduler/resource.tsのコメント参照)。
+   * `idempotencyKey`(storageKey+originalHash+engineVersion+
+   * photoProfileVersionから決定的に算出、lib/imageProcessing/
+   * jobService.tsのbuildIdempotencyKey)で同一内容の重複ジョブ作成を
+   * 防ぐ(§11.4 冪等性)。GSIは意図的に持たせない(このテーブルの検索は
+   * 常にstatus値でのScan+FilterExpressionのみ、pricing-schedulerの
+   * PriceExecutionLogと同じ設計判断)。
+   */
+  ProcessingJob: a
+    .model({
+      inventoryId: a.string().required(),
+      imageStorageKey: a.string().required(), // どのInventoryImage(storageKeyで特定)向けのジョブか
+      triggerType: a.ref("ProcessingJobTriggerType").required(),
+      idempotencyKey: a.string().required(),
+      status: a.ref("ProcessingJobStatus").required(),
+      attemptCount: a.integer().default(0),
+      queuedAt: a.datetime().required(),
+      startedAt: a.datetime(),
+      completedAt: a.datetime(),
+      errorCode: a.string(),
+      errorMessage: a.string(),
+      // §12 画像単位の再加工: ユーザーが選んだ再加工理由/要求パラメータ
+      // (明るさ調整・1:1↔3:2変更・床補正の強弱等)。MANUAL_REPROCESS以外
+      // では常にnull。
+      requestedAdjustments: a.json(),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * §15.2 ImageProcessingVersion — 1画像につき複数行(version昇順)。
+   * どのversionが採用中かは`active`フラグで表す(InventoryImage側には
+   * 一切書き込まない設計——上のInventoryImage customTypeコメント参照。
+   * ちょうど1行だけactive=trueというアプリ側の不変条件はlib/
+   * imageProcessing/jobService.tsのsetActiveVersion——新しいactiveを
+   * 立てる前に旧activeを先に降ろす、2回の独立UPDATE——が保証する。
+   * 検索はsecondaryIndexes(imageStorageKey)を使い、Scanは行わない)。
+   * 旧versionはSUPERSEDEDのまま消さない(§12「旧版を即削除せず…直前版
+   * へ戻せる」)。
+   */
+  ImageProcessingVersion: a
+    .model({
+      inventoryId: a.string().required(),
+      imageStorageKey: a.string().required(),
+      version: a.integer().required(),
+      active: a.boolean().default(false),
+      aspectRatio: a.ref("ImageAspectRatio"),
+      cropRect: a.json(), // {x,y,width,height} — 正規化座標(0.0〜1.0)
+      occupancy: a.float(), // 被写体占有率の実測値(§6 目標65〜75%/60〜70%との比較用)
+      // §8.3 補正対象をまとめて1つのjsonへ(exposure/wb/temperature/tint/
+      // highlight/shadow/contrast/saturation) — 個別列にすると
+      // Photo Profileの調整項目が増えるたびにスキーマmigrationが必要に
+      // なるため、意図的にjson一本化(lib/imageProcessing/types.tsの
+      // ToneAdjustments型がこのjsonの実体を定義する)。
+      adjustments: a.json(),
+      floorCleanupEnabled: a.boolean().default(false),
+      floorCleanupStrength: a.float(), // 0.0〜1.0。floorCleanupEnabled=falseなら常にnull
+      photoProfileVersion: a.integer(), // 生成時にACTIVEだったPhotoProfile.version
+      engineVersion: a.integer().required(), // lib/imageProcessing/sharpProcessor.tsのENGINE_VERSION
+      status: a.ref("ImageProcessingStatus").required(),
+      failureCode: a.string(),
+      failureDetail: a.string(),
+      processedMasterKey: a.string(), // 高品質JPEGマスターのS3キー
+      webKey: a.string(),
+      thumbnailKey: a.string(),
+      startedAt: a.datetime(),
+      completedAt: a.datetime(),
+    })
+    .secondaryIndexes((index) => [index("imageStorageKey")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * §15.4 / §8.1 PhotoProfile — 管理画面から編集するBELLO全体の理想写真
+   * 基準。ACTIVEは常に高々1件(lib/imageProcessing/photoProfileService.ts
+   * が保証する、DB制約ではなくアプリ側ロジック — 他の「singleton」行
+   * (BaseOAuthToken等)と異なり複数バージョンを履歴として残す必要が
+   * あるため、テーブル自体はマルチ行、ACTIVE切替はフラグの付け替えで
+   * 実装する)。
+   */
+  PhotoProfile: a
+    .model({
+      name: a.string().required(),
+      referenceImageKeys: a.json().required(), // string[] — S3キー(photo-profile/プレフィックス)
+      targetOccupancySquare: a.json(), // {min,max} — §6の1:1初期値65〜75%
+      targetOccupancyLandscape: a.json(), // {min,max} — §6の3:2初期値60〜70%
+      compositionDefaults: a.json(), // その他の構図既定値(safeMargins等)
+      version: a.integer().required(),
+      active: a.boolean().default(false),
+    })
     .authorization((allow) => [
       allow.group("ADMIN"),
       allow.group("EDITOR").to(["read"]),

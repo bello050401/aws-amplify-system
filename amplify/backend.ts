@@ -7,6 +7,7 @@ import { data } from "./data/resource";
 import { storage } from "./storage/resource";
 import { generateSku } from "./functions/generate-sku/resource";
 import { pricingScheduler } from "./functions/pricing-scheduler/resource";
+import { imageProcessingWorker } from "./functions/image-processing-worker/resource";
 
 /**
  * Amplify Gen2 backend definition.
@@ -32,6 +33,7 @@ const backend = defineBackend({
   storage,
   generateSku,
   pricingScheduler,
+  imageProcessingWorker,
 });
 
 // SKU counter table for amplify/functions/generate-sku. This is
@@ -231,3 +233,47 @@ baseOAuthTokenTable.grantReadData(backend.pricingScheduler.resources.lambda);
 backend.pricingScheduler.addEnvironment("CHANNEL_LISTING_TABLE_NAME", channelListingTable.tableName);
 backend.pricingScheduler.addEnvironment("PRICING_RULE_TABLE_NAME", pricingRuleTable.tableName);
 backend.pricingScheduler.addEnvironment("BASE_OAUTH_TOKEN_TABLE_NAME", baseOAuthTokenTable.tableName);
+
+// ─────────────────────────────────────────────────────────────────────
+// BELLO画像自動加工システム(2026-08-30指示書)§14: ProcessingJobキュー
+// を処理する完全無人Lambda(amplify/functions/image-processing-worker/
+// resource.tsのコメント参照)。pricing-schedulerと同じIAM直接付与
+// パターン + S3(backend.storage.resources.bucket、@aws-amplify/
+// backend-storageのIBucket型で実在確認済み)への読み書きを追加する。
+//
+// 権限の考え方:
+//   - ProcessingJob: read(Scanで対象抽出)+ write(status/attemptCount/
+//     errorMessage等の限定フィールドのみへのUpdateItem。GSIを持たない
+//     テーブルなのでUpdateItem自体に構造的なGSI破壊リスクが無い)。
+//   - ImageProcessingVersion: write(新規行の作成、旧activeの降格)。
+//     GSI(secondaryIndexes(imageStorageKey))を持つが、このLambdaが
+//     書くのはid指定のUpdateItem(active/statusのみ)か新規PutItemの
+//     どちらかで、GSIキー属性(imageStorageKey)自体を書き換える
+//     UpdateItemは一切行わない——pricing-schedulerで確立した安全原則
+//     と同じ。
+//   - PhotoProfile: read-onlyのみ(ACTIVE Profileのversion/調整値を
+//     参照するだけ、更新はUIから行う)。
+//   - Inventory: read-onlyのみ(画像のclassification/isPrimaryを読む
+//     だけ——処理結果はInventory.imagesへは一切書き込まない、上記
+//     InventoryImage customTypeコメントの設計判断)。
+//   - S3(inventory/*プレフィックス): オリジナルのread + 派生画像の
+//     write。バケット全体ではなくprefixスコープのIAM policyにする
+//     (amplify/storage/resource.tsの既存のinventory/*境界を尊重)。
+const processingJobTable = backend.data.resources.tables["ProcessingJob"];
+const imageProcessingVersionTable = backend.data.resources.tables["ImageProcessingVersion"];
+const photoProfileTable = backend.data.resources.tables["PhotoProfile"];
+const inventoryTable = backend.data.resources.tables["Inventory"];
+
+processingJobTable.grantReadWriteData(backend.imageProcessingWorker.resources.lambda);
+imageProcessingVersionTable.grantReadWriteData(backend.imageProcessingWorker.resources.lambda);
+photoProfileTable.grantReadData(backend.imageProcessingWorker.resources.lambda);
+inventoryTable.grantReadData(backend.imageProcessingWorker.resources.lambda);
+backend.storage.resources.bucket.grantRead(backend.imageProcessingWorker.resources.lambda, "inventory/*");
+backend.storage.resources.bucket.grantPut(backend.imageProcessingWorker.resources.lambda, "inventory/processed/*");
+backend.storage.resources.bucket.grantPut(backend.imageProcessingWorker.resources.lambda, "inventory/thumbnails/*");
+
+backend.imageProcessingWorker.addEnvironment("PROCESSING_JOB_TABLE_NAME", processingJobTable.tableName);
+backend.imageProcessingWorker.addEnvironment("IMAGE_PROCESSING_VERSION_TABLE_NAME", imageProcessingVersionTable.tableName);
+backend.imageProcessingWorker.addEnvironment("PHOTO_PROFILE_TABLE_NAME", photoProfileTable.tableName);
+backend.imageProcessingWorker.addEnvironment("INVENTORY_TABLE_NAME", inventoryTable.tableName);
+backend.imageProcessingWorker.addEnvironment("STORAGE_BUCKET_NAME", backend.storage.resources.bucket.bucketName);

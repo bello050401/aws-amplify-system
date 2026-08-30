@@ -11,7 +11,7 @@ import {
 } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories, listLocations, listStatuses } from "@/lib/inventory/queries";
 import { stringifyCustomFields } from "@/lib/inventory/customFieldsCodec";
-import { copyInventoryImage, removeInventoryImage } from "@/lib/inventory/imageServerOps";
+import { computeOriginalHashForPath, copyInventoryImage, removeInventoryImage } from "@/lib/inventory/imageServerOps";
 import { copyInventoryThumbnail, generateInventoryThumbnail } from "@/lib/inventory/thumbnail";
 import { diffField, logInventoryHistory } from "@/lib/inventory/history";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
@@ -62,6 +62,9 @@ export type ImageSlotInput =
        * regenerated.
        */
       thumbnailKey: string | null;
+      /** BELLO画像自動加工システム: 既存(未変更)スロットはこの画像の現在のoriginalHash/classificationをそのまま持ち回る(thumbnailKeyと同じ考え方)。真に新規のアップロード(thumbnailKey===nullの場合)は常にnull——resolveImagesがここでハッシュを計算する。 */
+      originalHash: string | null;
+      classification: string | null;
     }
   | {
       kind: "copy";
@@ -73,6 +76,9 @@ export type ImageSlotInput =
       sourceUrl: string | null;
       /** The SOURCE record's thumbnail key, if it has one — resolveImages copies this alongside the original rather than paying for a fresh resize of an image that's by definition unchanged from its source. null means the source has none yet (pre-backfill) — a fresh one is generated from the newly-copied original instead. */
       sourceThumbnailKey: string | null;
+      /** BELLO画像自動加工システム: 複製元画像のoriginalHash/classification。中身は複製元と同一バイト列なので、そのまま引き継ぐ(再計算しない)。 */
+      sourceOriginalHash: string | null;
+      sourceClassification: string | null;
     };
 
 /**
@@ -99,6 +105,11 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
         // "self-heal a pre-backfill existing image").
         const thumbnailKey = img.thumbnailKey ?? (await generateInventoryThumbnail(img.storageKey));
         if (!img.thumbnailKey && thumbnailKey) createdKeys.push(thumbnailKey);
+        // BELLO画像自動加工システム: thumbnailKeyと全く同じ判定
+        // (nullなら「真に新規、または自己修復対象の既存画像」)で
+        // originalHashも未計算なら今ここで計算する——新規アップロード
+        // ジョブ登録(triggerImageProcessingIfNeeded)がこの値を要求する。
+        const originalHash = img.originalHash ?? (await computeOriginalHashForPath(img.storageKey));
         resolved.push({
           storageKey: img.storageKey,
           sortOrder: img.sortOrder,
@@ -107,6 +118,8 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
           sourceSystem: img.sourceSystem,
           sourceUrl: img.sourceUrl,
           thumbnailKey,
+          originalHash,
+          classification: (img.classification as InventoryImageRecord["classification"]) ?? null,
         });
         continue;
       }
@@ -124,6 +137,10 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
         sourceSystem: img.sourceSystem,
         sourceUrl: img.sourceUrl,
         thumbnailKey,
+        // 複製元と全く同じバイト列なのでoriginalHashもそのまま引き継ぐ
+        // (§11.4 冪等性——複製直後に再加工ジョブが二重で走ることはない)。
+        originalHash: img.sourceOriginalHash,
+        classification: (img.sourceClassification as InventoryImageRecord["classification"]) ?? null,
       });
     }
     return resolved;
@@ -331,6 +348,26 @@ export async function updateInventory(
   const categoryName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? id;
   const locationName = (id: string | null) => locations.find((l) => l.id === id)?.name ?? id;
   const statusLabel = (id: string | null) => statuses.find((s) => s.id === id)?.label ?? id;
+
+  // BELLO画像自動加工システム(2026-08-30指示書)§11.1/§11.2: カテゴリ
+  // 「撮影待ち」→「出品待ち」遷移トリガーと、出品待ち中の画像追加差分
+  // トリガー。Inventory.updateが成功した直後(このtry/catchで書き込み
+  // 自体が失敗した場合はジョブも作られない、順序として正しい)、失敗
+  // してもupdateInventory自体は失敗させない(画像加工ジョブの登録失敗
+  // は在庫更新の成否と無関係——thumbnailKey生成失敗と同じ「必須では
+  // ない」扱い)。
+  try {
+    const { triggerImageProcessingIfNeeded } = await import("@/lib/imageProcessing/jobService");
+    await triggerImageProcessingIfNeeded({
+      inventoryId,
+      oldCategoryName: categoryName(existing.categoryId),
+      newCategoryName: categoryName(input.categoryId ?? null),
+      oldImageStorageKeys: existing.images.map((i) => i.storageKey),
+      newImages: images.map((i) => ({ storageKey: i.storageKey, type: i.type, originalHash: i.originalHash })),
+    });
+  } catch (err) {
+    console.error("[updateInventory] triggerImageProcessingIfNeeded failed (non-fatal):", err);
+  }
 
   const oldImageKeys = existing.images.map((i) => i.storageKey);
   const newImageKeys = images.map((i) => i.storageKey);

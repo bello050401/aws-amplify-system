@@ -72,6 +72,9 @@ export type ImageEditorSlot =
       sourceUrl: string | null;
       /** Always null for a freshly-picked file — nothing generates a thumbnail client-side; the server does it once, at save time (see app/actions/inventory.ts's resolveImages). */
       thumbnailKey: string | null;
+      /** BELLO画像自動加工システム: 新規ファイルは常にnull(originalHashもclassificationもサーバー側でのみ決まる)。 */
+      originalHash: string | null;
+      classification: string | null;
     }
   | {
       id: string;
@@ -82,6 +85,9 @@ export type ImageEditorSlot =
       sourceUrl: string | null;
       /** The record's current thumbnail for this image (Phase B) — carried through unchanged on a plain edit-and-save; null for a record from before this Phase, self-healed the next time it's touched (see resolveImages). */
       thumbnailKey: string | null;
+      /** BELLO画像自動加工システム: この画像の現在のoriginalHash/classification——thumbnailKeyと同じく、変更していないスロットはそのまま持ち回る。 */
+      originalHash: string | null;
+      classification: string | null;
     }
   | {
       id: string;
@@ -92,6 +98,9 @@ export type ImageEditorSlot =
       sourceUrl: string | null;
       /** The SOURCE record's thumbnail for this image, if any — resolveImages copies it alongside the duplicated original instead of paying for a fresh resize. */
       sourceThumbnailKey: string | null;
+      /** BELLO画像自動加工システム: 複製元のoriginalHash/classification。 */
+      sourceOriginalHash: string | null;
+      sourceClassification: string | null;
     };
 
 export function createNewImageSlot(file: File): ImageEditorSlot {
@@ -106,6 +115,8 @@ export function createNewImageSlot(file: File): ImageEditorSlot {
     sourceSystem: null,
     sourceUrl: null,
     thumbnailKey: null,
+    originalHash: null,
+    classification: null,
   };
 }
 

@@ -132,6 +132,15 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
     sourceSystem: "ZAICO",
     sourceUrl: newSourceUrl,
     thumbnailKey: newThumbnailKey,
+    // BELLO画像自動加工システム: ZAICO同期経路はoriginalHashを計算して
+    // いない(downloadAndImportImageの契約を変えずに済ませるための、
+    // このラウンドでの意図的な未対応範囲——完了報告の技術的負債へ記載)。
+    // originalHashがnullの画像はlib/imageProcessing/jobService.tsの
+    // triggerImageProcessingIfNeededが対象外として扱う(自動加工ジョブ
+    // は作られない)ため、ZAICO由来の画像は現状、手動再加工UIからのみ
+    // 加工対象にできる。
+    originalHash: null,
+    classification: null,
   };
   const otherImages = existingImages.filter((i) => i !== currentZaicoImage);
   const otherNormal = otherImages.filter((i) => i.type === "NORMAL").map((i) => ({ ...i, isPrimary: false }));

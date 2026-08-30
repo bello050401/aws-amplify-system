@@ -1,9 +1,10 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { copy, remove, uploadData } from "aws-amplify/storage/server";
+import { copy, getUrl, remove, uploadData } from "aws-amplify/storage/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { generateThumbnailFromBytes, INVENTORY_IMAGE_CACHE_CONTROL } from "./thumbnail";
 import { newInventoryImageKey } from "./imageKeys";
+import { computeOriginalHash } from "@/lib/imageProcessing/pipeline";
 
 // Re-exported for every existing external caller (app/actions/inventory.ts,
 // zaicoSyncPorts.ts) — this function itself moved to imageKeys.ts (BELLO
@@ -185,5 +186,34 @@ export async function removeInventoryImage(path: string): Promise<void> {
     });
   } catch (err) {
     console.error(`[removeInventoryImage] failed to delete "${path}":`, err);
+  }
+}
+
+/**
+ * BELLO画像自動加工システム(2026-08-30指示書)§11.4冪等性: 新規に
+ * アップロードされた画像のoriginalHash(SHA-256)を計算する。
+ * generateInventoryThumbnail(thumbnail.ts)と同じ理由・同じ手法
+ * (presigned GET URL経由でこのサーバー自身が今アップロードしたばかり
+ * のオブジェクトを取得——@aws-amplify/storageのサーバー側APIに
+ * "download object bytes"直接呼び出しが無いため)でバイト列を取得し、
+ * lib/imageProcessing/pipeline.tsのcomputeOriginalHashへ渡す。
+ * 失敗時はnull(サムネイル生成と同じ「必須ではない」契約——
+ * originalHashが無い画像はjobService.triggerImageProcessingIfNeededが
+ * 自動加工ジョブの対象から除外するだけで、アップロード自体は失敗
+ * させない)。
+ */
+export async function computeOriginalHashForPath(sourcePath: string): Promise<string | null> {
+  try {
+    const { url } = await runWithAmplifyServerContext({
+      nextServerContext: { cookies },
+      operation: (contextSpec) => getUrl(contextSpec, { path: sourcePath }),
+    });
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching own object "${sourcePath}"`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return computeOriginalHash(buffer);
+  } catch (err) {
+    console.error(`[computeOriginalHashForPath] failed for "${sourcePath}":`, err);
+    return null;
   }
 }

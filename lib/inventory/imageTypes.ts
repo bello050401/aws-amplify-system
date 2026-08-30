@@ -11,6 +11,8 @@
  * inspect `.type`/`.isPrimary` directly.
  */
 export type InventoryImageType = "NORMAL" | "DAMAGE";
+/** §7 BELLO画像自動加工システム(2026-08-30指示書)の画像分類。未設定(null)は defaultClassification (jobService.ts) が isPrimary/type から補完する。 */
+export type ImageClassificationName = "TOP" | "FULL" | "DETAIL" | "DAMAGE" | "LABEL";
 
 export interface InventoryImageRecord {
   storageKey: string;
@@ -31,6 +33,16 @@ export interface InventoryImageRecord {
    * broken image for it.
    */
   thumbnailKey: string | null;
+  /**
+   * BELLO画像自動加工システム(2026-08-30指示書)— アップロード時点の
+   * オリジナルバイト列のSHA-256(lib/imageProcessing/pipeline.ts の
+   * computeOriginalHash)。ProcessingJobの冪等性キー計算に使う。一度
+   * 書いたら以後誰も書き換えない(workerもUIも)ので、既存のthumbnailKey
+   * と違って「後から書き換わる」心配が無い、単純な追加専用フィールド。
+   */
+  originalHash: string | null;
+  /** §7 画像分類。ユーザーが画像編集画面から明示的に設定する入力(isPrimaryと同じ位置づけ)——workerが書き込む出力ではない。未設定はnull。 */
+  classification: ImageClassificationName | null;
 }
 
 /** Shape as it actually comes back from Amplify Data — `type`/`isPrimary`/`sourceSystem`/`sourceUrl`/`thumbnailKey` absent (null/undefined) on any row written before the field existed. */
@@ -42,6 +54,8 @@ export interface RawInventoryImage {
   sourceSystem?: string | null;
   sourceUrl?: string | null;
   thumbnailKey?: string | null;
+  originalHash?: string | null;
+  classification?: string | null;
 }
 
 /** Legacy image (no `type`) → NORMAL; anything else → whatever it says. This is the one and only migration rule this Phase relies on — no data is ever rewritten to add it. */
@@ -54,6 +68,8 @@ export function normalizeImageRecord(img: RawInventoryImage): InventoryImageReco
     sourceSystem: img.sourceSystem ?? null,
     sourceUrl: img.sourceUrl ?? null,
     thumbnailKey: img.thumbnailKey ?? null,
+    originalHash: img.originalHash ?? null,
+    classification: (img.classification as ImageClassificationName | undefined) ?? null,
   };
 }
 

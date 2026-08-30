@@ -21,6 +21,7 @@
     "verify:line": "node scripts/with-server-only-stub.cjs scripts/verify-line.ts",
     "verify:base": "node scripts/with-server-only-stub.cjs scripts/verify-base.ts",
     "verify:ai-gateway": "node scripts/with-server-only-stub.cjs scripts/verify-ai-gateway.ts",
+    "verify:image-processing": "node scripts/with-server-only-stub.cjs scripts/verify-image-processing.ts",
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts"
   },
   "dependencies": {

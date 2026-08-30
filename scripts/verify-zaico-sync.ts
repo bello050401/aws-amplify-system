@@ -305,6 +305,8 @@ function testEffectiveListThumbnailKey() {
     sourceSystem: null,
     sourceUrl: null,
     thumbnailKey: null,
+    originalHash: null,
+    classification: null,
   };
   assertEqual(effectiveListThumbnailKey(base), "inventory/original.jpg", "effectiveListThumbnailKey: falls back to the original when no thumbnail exists (pre-backfill/failed generation)");
   assertEqual(
