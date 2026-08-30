@@ -224,12 +224,22 @@ export async function listInventory(filters: InventoryListFilters, options: { of
 }
 
 // ────────────────────────────────────────────────────────────────────
-// 詳細検索・クイック検索(case-insensitive)・売上集計 共通の全件取得
-// (夜間開発指示書 §6/§7/§12)。既存のlistInventory(上記、cursorページ
-// ング)は"サイドバーのカテゴリ/保管場所/状態のみ"の従来通り安価な経路
-// として無変更で残し、テキスト検索・詳細検索・売上集計だけがこちらの
-// 全件走査(chunked、lib/inventory/inventoryExport.tsのfetchAllForExport
-// と同じ形)を経由する。DynamoDBの`contains`はcase-sensitiveであり、
+// 通常一覧・クイック検索・詳細検索・売上集計に共通の全件取得
+// (夜間開発指示書 §6/§7/§12)。
+//
+// ※このコメントは以前「listInventoryはcursorページングの安価な経路と
+//   して無変更で残す」と書いていたが、実態と食い違っていた — 上の
+//   listInventoryも既にこの関数を経由する(§9のupdatedAt DESC統一で
+//   そう変更された)。**通常の一覧表示も毎回全件を取得してから
+//   メモリ上でソート・スライスする**。1,000件時点でStagingのTTFBは
+//   実測3.2秒で、件数に比例して伸びる。SEARCH_MAX_SCAN_ITEMS(20,000)を
+//   安全弁としているが、実用上はその手前で体感が悪化するため、規模が
+//   増えたらcursor方式(lib/inventory/inventoryCursorList.ts)への移行か
+//   OpenSearch等が必要になる。
+//
+// 一覧はトップ画像のサムネイルを出すためimages配列を必要とするので、
+// 「軽い列だけ取る」形へは単純には落とせない(selectionSetで削ると
+//  サムネイルが出なくなる)。DynamoDBの`contains`はcase-sensitiveであり、
 // 保存値をlowercase化することも禁止されているため、文字列演算子の判定
 // はこの走査で取得した候補集合に対しapplication code側でcase-insensitive
 // に行う(lib/inventory/advancedSearch.ts参照) — フロントだけ
