@@ -112,13 +112,19 @@ export function MessagesInbox({
    * external send。ここではdraftを生成してテキストエリアへ入れるだけ
    * — 保存も送信もしない。このボタンを押すまでAI requestは発生しない。
    */
+  // 第六ラウンドP0-1: generateReplyDraftActionはもう例外をthrowせず
+  // `{ok, ...}`を返す(app/actions/ai.tsのコメント参照)。
   async function handleGenerateReply() {
     if (!selected) return;
     setAiBusy(true);
     setError(null);
     try {
-      const draft = await generateReplyDraftAction(selected.id);
-      setReplyBody(draft);
+      const result = await generateReplyDraftAction(selected.id);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setReplyBody(result.data);
       setIsAiDraft(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "AI生成に失敗しました。");

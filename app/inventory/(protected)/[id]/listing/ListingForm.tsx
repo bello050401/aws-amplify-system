@@ -106,15 +106,26 @@ export function ListingForm({
    * 説明文欄へ反映するだけ — 「保存」は別ボタン(handleSaveDraft)で
    * ユーザーが明示的に行う。§89: このボタンを押すまでAI requestは
    * 発生しない。
+   *
+   * 第六ラウンドP0-1: generateListingCopyActionはもう例外をthrowせず
+   * `{ok, ...}`を返す(app/actions/ai.tsのコメント参照——production
+   * buildでNext.js自身がServer Actionのthrowメッセージを問答無用で
+   * マスクする実挙動を実機再現した上での根本修正)。ここでのtry/catch
+   * は「Server Actionそのものの呼び出しが失敗する」極めて稀なケース
+   * (ネットワーク切断等)だけを拾う——業務エラーはもう例外経路を通らない。
    */
   async function handleGenerateWithAi() {
     setAiBusy(true);
     setDraftError(null);
     try {
       const result = await generateListingCopyAction(inventoryId);
-      setTitle(result.title);
-      const points = result.sellingPoints.length > 0 ? `\n\n${result.sellingPoints.map((p) => `・${p}`).join("\n")}` : "";
-      setDescription(`${result.description}${points}\n\n【コンディション】${result.conditionText}`);
+      if (!result.ok) {
+        setDraftError(result.error);
+        return;
+      }
+      setTitle(result.data.title);
+      const points = result.data.sellingPoints.length > 0 ? `\n\n${result.data.sellingPoints.map((p) => `・${p}`).join("\n")}` : "";
+      setDescription(`${result.data.description}${points}\n\n【コンディション】${result.data.conditionText}`);
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "AI生成に失敗しました。");
     } finally {

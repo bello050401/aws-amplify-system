@@ -7,6 +7,7 @@ import { createMercariProduct, MercariApiError } from "./mercari/adapter";
 import { createBaseProduct } from "./base/adapter";
 import { BaseListingApiError } from "./base/errors";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import type {
   ChannelListingRecord,
   ListingChannel,
@@ -195,6 +196,10 @@ function toChannelListingRecord(row: {
  * inventoryIdの行だけを読む、通常0〜1件)に切り替える。
  */
 export async function getListingDraftForInventory(inventoryId: string): Promise<ListingDraftRecord | null> {
+  // 第六ラウンドP0-1: E2E fixtureモードでは常に「下書きなし」——
+  // lib/inventory/e2eFixtures.tsと同じ二重ゲート(NODE_ENV!=='production'
+  // かつ明示的opt-in環境変数)、読み取り専用。
+  if (isE2EFixtureModeActive()) return null;
   const { data } = await serverDataClient.models.ListingDraft.listListingDraftByInventoryId({ inventoryId }, { ...inventoryAuthMode });
   const found = data.find((d) => !d.deletedAt);
   return found ? toListingDraftRecord(found) : null;
@@ -210,6 +215,7 @@ export async function getListingDraftForInventory(inventoryId: string): Promise<
  * Scanを避けつつ、宣言されていない複合キーを偽装しない。
  */
 export async function getChannelListing(inventoryId: string, channel: ListingChannel): Promise<ChannelListingRecord | null> {
+  if (isE2EFixtureModeActive()) return null; // 第六ラウンドP0-1、getListingDraftForInventoryと同じ安全ゲート
   const { data } = await serverDataClient.models.ChannelListing.listChannelListingByInventoryId({ inventoryId }, { ...inventoryAuthMode });
   const found = data.find((d) => d.channel === channel);
   return found ? toChannelListingRecord(found) : null;
