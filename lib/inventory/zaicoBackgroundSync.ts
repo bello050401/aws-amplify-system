@@ -3,6 +3,9 @@ import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listInventories } from "@/lib/zaico/client";
 import { syncOneZaicoItem } from "./zaicoSync";
 import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaicoSyncPorts";
+import type { Schema } from "@/amplify/data/resource";
+
+type ZaicoSyncJobModel = Schema["ZaicoSyncJob"]["type"];
 
 /**
  * BELLO統合改修 master指示書 Phase A: ZAICO background full sync.
@@ -15,27 +18,71 @@ import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaico
  * and `advanceZaicoBackgroundSyncJob` processes exactly ONE bounded
  * ZAICO page (default 50 items — matching lib/zaico/client.ts's own
  * page size) per call, persisting a checkpoint (lastPage + running
- * counts + seenSourceIds) before returning. The settings UI
- * (ZaicoSyncPanel.tsx) calls `advance` repeatedly (client-side polling)
- * while a job is RUNNING, so the whole catalog gets synced across many
- * short, safe requests instead of one long one — and if the browser tab
- * closes mid-run, reopening the settings page and clicking "続きから再開"
- * (which just calls `advance` again) picks up exactly where the
- * checkpoint left off, never restarting from page 1.
+ * counts + seenSourceIds) before returning.
  *
- * What this does NOT (yet) provide: fully unattended execution with no
- * browser tab open at all (a true "scheduled job"). That needs a
- * Lambda (or similar) advancing the job on a timer with no user present
- * — see zaicoSyncPorts.ts's file comment and amplify/data/resource.ts's
- * ZaicoSyncJob comment for why that specific piece is not shipped this
- * round (a confirmed Amplify Gen2 platform gap, not a skipped
- * implementation choice).
+ * BELLO統合業務OS 第五ラウンド §4(P0-A)以降: `amplify/functions/
+ * zaico-sync-worker/`が5分毎のスケジュールで同じジョブ行を独立に
+ * advanceし続けるため、ブラウザタブを開き続ける必要はもう無い
+ * ——`startZaicoBackgroundSyncJob`でPENDING行を作った後は、ブラウザを
+ * 閉じてもPCを落としてもLambda側が最後まで進める。この関数
+ * (`advanceZaicoBackgroundSyncJob`)自体は「今すぐ手元で少し進めて
+ * 結果を見たい」という補助的なADMIN操作として引き続き有効
+ * (ZaicoSyncPanel.tsxの「今すぐ1ページ進める」ボタン用)——Lambda側
+ * と同じlease機構(claimOrRenewLease/releaseLease、下記)を使うことで、
+ * 両者が同じページを二重処理することを防ぐ。
  *
  * Reuses the exact same `syncOneZaicoItem` (and therefore the exact same
  * mapping/dedup/diff/image-merge rules) as the existing, AWS-verified
  * 1件/5件/全件 synchronous sync paths — this file adds NO second copy of
  * that logic, only the job/checkpoint/lock bookkeeping around it.
  */
+
+const LEASE_DURATION_MS = 60_000; // ブラウザ側は1ページ分だけの短時間占有 — Lambda側(4分)よりずっと短くしてよい(1回のadvance呼び出しは通常数秒で終わる)
+const BROWSER_OWNER_PREFIX = "browser";
+
+/**
+ * amplify/functions/zaico-sync-worker/handler.tsのclaimOrRenewLeaseと
+ * 同じ意図(「誰も保持していない、または期限切れ、または自分自身」の
+ * 時だけ成功する)だが、Amplify Data(AppSync経由の`.update()`)は生
+ * DynamoDBのConditionExpressionを露出しないため、ここは
+ * read→判定→writeの非原子的な実装に留まる——read/writeの間に別の
+ * 実行主体が割り込む理論上のrace windowがある。
+ *
+ * これを許容できる理由: (1) 実際の衝突頻度は極めて低い(Lambda側は
+ * 5分に1回、ブラウザ側はADMINの手動操作という非同期な頻度差)。
+ * (2) 万一衝突して同じページが二重処理されても、syncOneZaicoItemの
+ * 冪等性(verify:zaicoの「re-syncing the identical item is a no-op」
+ * テストで検証済み)により、実害は「同じ商品をもう一度unchanged判定
+ * するだけの無駄なAPI呼び出し」に留まり、重複作成やデータ破損には
+ * ならない。真の原子性が必要になった場合は、この関数だけをLambda側
+ * と同じ生DynamoDB実装へ差し替えれば良い(port抽象を壊さない)。
+ */
+async function claimLease(ownerId: string): Promise<boolean> {
+  const { data: current } = await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode);
+  if (current?.leaseOwner && current.leaseOwner !== ownerId) {
+    const stillValid = current.leaseExpiresAt && new Date(current.leaseExpiresAt).getTime() > Date.now();
+    if (stillValid) return false; // 他の実行主体(Lambda、または別ブラウザタブ)が有効なleaseを保持中
+  }
+  const leaseExpiresAt = new Date(Date.now() + LEASE_DURATION_MS).toISOString();
+  const now = new Date().toISOString();
+  try {
+    await serverDataClient.models.ZaicoSyncJob.update({ id: ZAICO_SYNC_JOB_SINGLETON_ID, leaseOwner: ownerId, leaseExpiresAt, lastHeartbeatAt: now }, inventoryAuthMode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function releaseLeaseIfOwned(ownerId: string): Promise<void> {
+  try {
+    const { data: fresh } = await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode);
+    if (fresh?.leaseOwner === ownerId) {
+      await serverDataClient.models.ZaicoSyncJob.update({ id: ZAICO_SYNC_JOB_SINGLETON_ID, leaseOwner: null, leaseExpiresAt: null }, inventoryAuthMode);
+    }
+  } catch (err) {
+    console.error("[advanceZaicoBackgroundSyncJob] failed to release lease (non-fatal):", err);
+  }
+}
 
 /** The one well-known row id — see file comment above for why a singleton row is this job's lock/lease mechanism. */
 const ZAICO_SYNC_JOB_SINGLETON_ID = "zaico-full-sync-singleton";
@@ -212,6 +259,24 @@ export async function advanceZaicoBackgroundSyncJob(who: string | null, port: Za
   if (!row || (row.status !== "PENDING" && row.status !== "RUNNING")) {
     return { job: row ? toPublicJob(row) : toPublicJob({ status: "COMPLETED" }), shouldContinue: false };
   }
+
+  // 第五ラウンド §4(P0-A): zaico-sync-worker Lambdaが今まさに同じ
+  // ジョブを処理中かもしれない——lease確保できなければ何もせず
+  // 「今は進められない、後で再試行してください」を返す(shouldContinue
+  // はtrueのまま——UIは少し待って再度advanceを呼べば良い)。
+  const ownerId = `${BROWSER_OWNER_PREFIX}:${who ?? "anonymous"}:${Date.now()}`;
+  const leaseAcquired = await claimLease(ownerId);
+  if (!leaseAcquired) {
+    return { job: toPublicJob(row), shouldContinue: true };
+  }
+  try {
+    return await advanceOnePage(row, who, port);
+  } finally {
+    await releaseLeaseIfOwned(ownerId);
+  }
+}
+
+async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: ZaicoSyncPort): Promise<AdvanceResult> {
 
   const nextPage = (row.lastPage ?? 0) + 1;
   const seenSourceIds = parseSeenSourceIds(row.seenSourceIds);

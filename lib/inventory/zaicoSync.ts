@@ -1,60 +1,35 @@
 import "server-only";
-import { getInventory, listInventories, type ZaicoInventory } from "@/lib/zaico/client";
-import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
-import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
-import { diffField, type HistoryFieldChange } from "./history";
-import { stringifyCustomFields, parseCustomFields } from "./customFieldsCodec";
-import { ALL_EXTENDED_FIELDS } from "./extendedFields";
-import { getServerSyncPort, type InventoryModel, type ZaicoSyncPort, type MasterCache } from "./zaicoSyncPorts";
-import { normalizeMasterName } from "./masters";
+import { getInventory, listInventories } from "@/lib/zaico/client";
+import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaicoSyncPorts";
+import { syncOneZaicoItem, type ZaicoSyncItemResult } from "./zaicoSyncEngine";
 
 /**
- * The ZAICO→BELLO one-way sync engine (implementation instructions §1-39).
- * This file does NOT call ZAICO write endpoints (lib/zaico/client.ts has
- * none to call) and does NOT call the existing createInventory/
- * updateInventory Server Actions from app/actions/inventory.ts — those
- * `redirect()` on success, which is correct for a browser form submit
- * and wrong for a batch loop that needs to keep going across many items.
+ * The ZAICO→BELLO one-way sync engine's Next.js entry points
+ * (implementation instructions §1-39). This file does NOT call ZAICO
+ * write endpoints (lib/zaico/client.ts has none to call) and does NOT
+ * call the existing createInventory/updateInventory Server Actions from
+ * app/actions/inventory.ts — those `redirect()` on success, which is
+ * correct for a browser form submit and wrong for a batch loop that
+ * needs to keep going across many items.
  *
- * BELLO統合改修 master指示書 Phase A (ZAICO background sync)で追加した
- * `port: ZaicoSyncPort`パラメータ(全公開関数、既定値は
- * `getServerSyncPort()` = 従来通りserverDataClient経由): このファイル
- * 自体はAWSクライアントを直接呼ばず、`zaicoSyncPorts.ts`が定義する
- * port経由でDynamoDB/AppSync/S3へアクセスする。既存の呼び出し元
- * (app/actions/zaicoSync.tsの1件/5件/全件同期、いずれもportを渡さない)
- * は既定値がそのまま従来の`serverDataClient`実装に解決されるため、
- * 挙動は一切変わらない(既にAWS上で動作確認済みの5件同期パスは無傷)。
- * 新設したチェックポイント方式のbackground batch同期
- * (lib/inventory/zaicoBackgroundSync.ts、app/actions/zaicoSync.tsの
- * advanceZaicoBackgroundSyncAction経由)も、同じ`syncOneZaicoItem`を
- * 同じデフォルトportで呼ぶだけで、mapping/dedup/diffロジックを一切複製
- * しない。zaicoSyncPorts.tsのファイル冒頭コメント参照 — 当初計画していた
- * 「EventBridgeで自律起動するLambda」経路は、Amplify Gen2の
- * `allow.resource(fn)`(model-level function resource authorization)が
- * @aws-amplify/data-schema@1.26.1(最新版)で未実装(パッケージ自身の
- * ソースに`TODO: delete when we make resource auth available at each
- * level in the schema`とある)であることを実際にビルド・実行して確認した
- * ため、今回は見送っている。
+ * BELLO統合業務OS 第五ラウンド §4(P0-A): `syncOneZaicoItem`とその純粋
+ * ヘルパーは`./zaicoSyncEngine`(server-onlyを持たない、Lambdaへ
+ * bundle可能なファイル)へ移動した——`amplify/functions/
+ * zaico-sync-worker/`がこの同じ関数を、Lambda側の生AWS SDK実装の
+ * `ZaicoSyncPort`と共に呼ぶ。このファイル自身は引き続き`server-only`
+ * (ZAICO APIを直接呼ぶ`syncSingleZaicoItem`/`syncAllZaicoItems`が
+ * `lib/zaico/client.ts`を必要とするため)で、既存のServer Action呼び
+ * 出し元(app/actions/zaicoSync.ts)は無修正のまま動作する
+ * ——`syncOneZaicoItem`は元の場所からそのままre-exportしているため、
+ * import pathの変更も不要。
  *
  * ADMIN enforcement is NOT done here — it's the caller's job
- * (app/actions/zaicoSync.ts, for every sync path including the new
- * background-batch one), matching how every other Inventory server
- * check at the Server Action boundary, not buried in a shared lib
- * function.
+ * (app/actions/zaicoSync.ts, for every sync path), matching how every
+ * other Inventory server check at the Server Action boundary, not
+ * buried in a shared lib function.
  */
 
-export interface ZaicoSyncItemResult {
-  zaicoId: string;
-  name: string;
-  status: "created" | "updated" | "unchanged" | "failed";
-  inventoryId?: string;
-  sku?: string;
-  imageImported: boolean;
-  categoryCreated: boolean;
-  locationCreated: boolean;
-  warnings: string[];
-  error?: string;
-}
+export { syncOneZaicoItem, type ZaicoSyncItemResult };
 
 export interface ZaicoSyncResult {
   startedAt: string;
@@ -68,369 +43,6 @@ export interface ZaicoSyncResult {
   categoryCreated: number;
   locationCreated: number;
   items: ZaicoSyncItemResult[];
-}
-
-interface ImageMergeResult {
-  images: InventoryImageRecord[];
-  imported: boolean;
-  /** A newly-uploaded image's key — the caller removes this on a failed create/update (it was never actually attached to a saved record). */
-  newStorageKey?: string;
-  /** The newly-generated thumbnail's key (Phase B), if any — removed alongside newStorageKey on a failed create/update, same reasoning. */
-  newThumbnailKey?: string | null;
-  /** The image slot this replaced, if any — the caller removes this only AFTER a successful create/update, never before (see updateInventory's identical ordering in app/actions/inventory.ts: never delete an S3 object the DB might still end up pointing at if the write fails). */
-  oldStorageKeyToRemove?: string;
-  /** The replaced slot's thumbnail (Phase B), if any — removed alongside oldStorageKeyToRemove, same ordering. */
-  oldThumbnailKeyToRemove?: string | null;
-  warning?: string;
-}
-
-/**
- * Downloads+imports ZAICO's item_image.url only when it's actually new —
- * either there is no ZAICO image on this record yet, or the URL changed
- * since the image currently tagged sourceSystem:"ZAICO" was imported
- * (spec §16: unchanged URL ⇒ no re-download/re-upload). The new image
- * always becomes the top image (NORMAL, isPrimary, sortOrder 0 — spec
- * §17), and every BELLO-added NORMAL/DAMAGE photo is left completely
- * alone (spec: 同期でBELLO追加画像を削除しない) — only ever the ONE
- * slot tagged as ZAICO's own is ever replaced.
- */
-async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSourceUrl: string | null, port: ZaicoSyncPort): Promise<ImageMergeResult> {
-  if (!newSourceUrl) {
-    // AWSテスト環境構築指示 §16: ZAICO側の画像が消失(item_imageが
-    // null/欠落)しても、BELLO側のS3画像を即削除しない — ここでは何も
-    // 変更せず既存画像をそのまま維持する。ただし「検出」だけは行い、
-    // 同期結果の警告として可視化する(実際にZAICO由来の画像を過去に
-    // 取り込んでいた場合のみ — 元々ZAICO画像が無かった商品にまで警告
-    // を出すと毎回のノイズになるため)。
-    const hadZaicoImage = existingImages.some((i) => i.sourceSystem === "ZAICO");
-    return {
-      images: existingImages,
-      imported: false,
-      warning: hadZaicoImage
-        ? "ZAICO側で画像URLが取得できませんでした(item_image消失の可能性)。BELLO側の既存画像は削除せずそのまま維持しています。"
-        : undefined,
-    };
-  }
-
-  const currentZaicoImage = existingImages.find((i) => i.sourceSystem === "ZAICO") ?? null;
-  if (currentZaicoImage && currentZaicoImage.sourceUrl === newSourceUrl) {
-    return { images: existingImages, imported: false };
-  }
-
-  let newKey: string;
-  let newThumbnailKey: string | null;
-  let newOriginalHash: string;
-  try {
-    ({ storageKey: newKey, thumbnailKey: newThumbnailKey, originalHash: newOriginalHash } = await port.downloadAndImportImage(newSourceUrl));
-  } catch (err) {
-    return { images: existingImages, imported: false, warning: err instanceof Error ? err.message : "ZAICO画像の取り込みに失敗しました。" };
-  }
-
-  const newRecord: InventoryImageRecord = {
-    storageKey: newKey,
-    sortOrder: 0,
-    type: "NORMAL",
-    isPrimary: true,
-    sourceSystem: "ZAICO",
-    sourceUrl: newSourceUrl,
-    thumbnailKey: newThumbnailKey,
-    // BELLO画像自動加工システム: downloadAndImportImageは既に画像を
-    // メモリ上に持っているため(imageServerOps.tsのサムネイル生成と
-    // 同じバイト列)、originalHashも追加のfetch無しで計算できる——
-    // ZAICO由来の画像もこれで自動加工ジョブの対象になる(§11.1/§11.2)。
-    originalHash: newOriginalHash,
-    classification: null,
-  };
-  const otherImages = existingImages.filter((i) => i !== currentZaicoImage);
-  const otherNormal = otherImages.filter((i) => i.type === "NORMAL").map((i) => ({ ...i, isPrimary: false }));
-  const damage = otherImages.filter((i) => i.type === "DAMAGE");
-  const renumberedNormal = otherNormal.map((img, idx) => ({ ...img, sortOrder: idx + 1 }));
-
-  return {
-    images: [newRecord, ...renumberedNormal, ...damage],
-    imported: true,
-    newStorageKey: newKey,
-    newThumbnailKey,
-    oldStorageKeyToRemove: currentZaicoImage?.storageKey,
-    oldThumbnailKeyToRemove: currentZaicoImage?.thumbnailKey,
-  };
-}
-
-/**
- * Syncs exactly one ZAICO item into BELLO — create if no BELLO record
- * carries this sourceInventoryId yet, update (ZAICO-authoritative fields
- * always overwritten) otherwise, or "unchanged" if nothing about it
- * actually differs. Never throws — every failure path is caught and
- * returned as `status: "failed"` with a human-readable `error`, so one
- * bad item can never take down a whole batch (spec: 部分的な失敗が全体
- * を止めないこと).
- *
- * `prefetched`, when given (full-catalog sync), skips the per-item
- * findExistingBySourceId lookup in favor of the one upfront scan.
- *
- * `port` (BELLO統合改修 master指示書 Phase A) — every AWS-touching
- * operation goes through this, defaulting to `getServerSyncPort()`
- * (byte-identical to this function's pre-refactor behavior). The
- * background sync worker (amplify/functions/zaico-sync-worker) passes
- * its own Lambda-side port instead — see zaicoSyncPorts.ts.
- */
-/**
- * BELLO ZAICO級高速化仕様書 §30.7で追加した`masterCache`パラメータ:
- * 商品1件ごとにfindOrCreateCategory/findOrCreateLocation(内部で
- * マスタ全件取得)を呼ぶ既存の実装は、1ページ内に同じカテゴリ/場所名
- * が繰り返し現れても毎回マスタ全件を取り直す実N+1だった(このラウンド
- * のbaseline計測で確認、scripts/benchmark-zaico-sync.ts参照)。
- * `findOrCreateCategoryCached`/`findOrCreateLocationCached`がこの
- * cacheをcheckし、cache missの時だけport呼び出し(実際のDB往復)を行い
- * 結果をcacheへ書き戻す — 呼び出し元(advanceZaicoBackgroundSyncJob/
- * syncAllZaicoItems)がページ/run単位で新しい空cacheを渡すだけで有効
- * になる、後方互換の追加パラメータ(省略時は毎回port呼び出し=従来通り
- * の動作、syncSingleZaicoItem等の単発呼び出しはcache不要なので省略)。
- */
-async function findOrCreateCategoryCached(name: string, port: ZaicoSyncPort, cache?: MasterCache): Promise<{ id: string; created: boolean }> {
-  if (!cache) return port.findOrCreateCategory(name);
-  const key = normalizeMasterName(name);
-  const hit = cache.categories.get(key);
-  if (hit) return { id: hit.id, created: false };
-  const result = await port.findOrCreateCategory(name);
-  cache.categories.set(key, { id: result.id });
-  return result;
-}
-
-async function findOrCreateLocationCached(name: string, port: ZaicoSyncPort, cache?: MasterCache): Promise<{ id: string; created: boolean }> {
-  if (!cache) return port.findOrCreateLocation(name);
-  const key = normalizeMasterName(name);
-  const hit = cache.locations.get(key);
-  if (hit) return { id: hit.id, created: false };
-  const result = await port.findOrCreateLocation(name);
-  cache.locations.set(key, { id: result.id });
-  return result;
-}
-
-export async function syncOneZaicoItem(
-  zaicoItem: ZaicoInventory,
-  who: string | null,
-  prefetched?: Map<string, InventoryModel>,
-  port: ZaicoSyncPort = getServerSyncPort(),
-  masterCache?: MasterCache,
-): Promise<ZaicoSyncItemResult> {
-  const sourceInventoryId = String(zaicoItem.id);
-  const warnings: string[] = [];
-  let categoryCreated = false;
-  let locationCreated = false;
-
-  try {
-    const existing = prefetched ? (prefetched.get(sourceInventoryId) ?? null) : await port.findExistingBySourceId(sourceInventoryId);
-    const isNewRecord = existing === null;
-
-    const { fields: core, warnings: coreWarnings } = mapZaicoCoreFields(zaicoItem);
-    warnings.push(...coreWarnings);
-
-    const optAttrs = mapZaicoOptionalAttributes(zaicoItem.optional_attributes, isNewRecord);
-    warnings.push(...optAttrs.warnings);
-    warnings.push(...optAttrs.unmapped.map((u) => `unmapped optional attribute: "${u.name}"`));
-
-    // Category / Location: ZAICO is authoritative for a ZAICO-managed
-    // item on every sync (spec §8/§9) — even if BELLO staff manually
-    // changed it since the last sync, the next sync moves it back.
-    let categoryId = existing?.categoryId ?? null;
-    if (core.categoryName) {
-      try {
-        const r = await findOrCreateCategoryCached(core.categoryName, port, masterCache);
-        categoryId = r.id;
-        categoryCreated = r.created;
-      } catch (err) {
-        warnings.push(`カテゴリの同期に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    let locationId = existing?.locationId ?? null;
-    if (core.locationName) {
-      try {
-        const r = await findOrCreateLocationCached(core.locationName, port, masterCache);
-        locationId = r.id;
-        locationCreated = r.created;
-      } catch (err) {
-        warnings.push(`保管場所の同期に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    } else {
-      warnings.push("ZAICO側で保管場所(place)が取得できませんでした。保管場所は更新していません。");
-    }
-
-    const existingImages: InventoryImageRecord[] = (existing?.images ?? [])
-      .filter((img): img is NonNullable<typeof img> => Boolean(img))
-      .map(normalizeImageRecord);
-    const imageMerge = await mergeZaicoImage(existingImages, core.imageSourceUrl, port);
-    if (imageMerge.warning) warnings.push(imageMerge.warning);
-
-    const existingCustomFields = parseCustomFields(existing?.customFields ?? null) ?? {};
-    const mergedCustomFields = { ...existingCustomFields, ...optAttrs.customFields };
-
-    // ── Diff against the existing record (skipped for a brand-new one —
-    // everything about it is "new" by definition). Only the fields ZAICO
-    // actually returned a usable value for this sync are diffed/written
-    // — a field ZAICO didn't send a value for this time (null/absent)
-    // leaves BELLO's existing value untouched rather than being zeroed
-    // out, which is the conservative reading of "ZAICO由来フィールドは
-    // 上書き" that avoids silently destroying data on a sparse response.
-    const changes: HistoryFieldChange[] = [];
-    if (!isNewRecord && existing) {
-      const push = (c: HistoryFieldChange | null) => c && changes.push(c);
-      push(diffField("商品名", existing.name, core.name));
-      if (core.quantity !== null) push(diffField("数量", existing.quantity, core.quantity));
-      if (core.unit !== null) push(diffField("単位", existing.unit, core.unit));
-      if (core.note !== null) push(diffField("備考", existing.note, core.note));
-      if (core.barcode !== null) push(diffField("QRコード・バーコード", existing.barcode, core.barcode));
-      if (core.categoryName && categoryId !== (existing.categoryId ?? null)) {
-        changes.push({ fieldName: "カテゴリ", oldValue: null, newValue: `${core.categoryName}（ZAICO同期）` });
-      }
-      if (core.locationName && locationId !== (existing.locationId ?? null)) {
-        changes.push({ fieldName: "保管場所", oldValue: null, newValue: `${core.locationName}（ZAICO同期）` });
-      }
-      if (optAttrs.coreFields.purchasePrice !== undefined) push(diffField("購入価格", existing.purchasePrice, optAttrs.coreFields.purchasePrice));
-      if (optAttrs.coreFields.salePrice !== undefined) push(diffField("販売価格", existing.salePrice, optAttrs.coreFields.salePrice));
-      for (const [key, value] of Object.entries(optAttrs.extendedFields)) {
-        const label = ALL_EXTENDED_FIELDS.find((f) => f.key === key)?.label ?? key;
-        const oldValue = (existing as unknown as Record<string, unknown>)[key] as string | number | null | undefined;
-        push(diffField(label, oldValue ?? null, value));
-      }
-      for (const [key, value] of Object.entries(optAttrs.customFields)) {
-        push(diffField(key, (existingCustomFields[key] as string | number | null | undefined) ?? null, value));
-      }
-      if (imageMerge.imported) changes.push({ fieldName: "ZAICO画像", oldValue: null, newValue: "更新" });
-    }
-
-    if (!isNewRecord && existing && changes.length === 0) {
-      // Nothing to write — the one thing that COULD have needed cleanup
-      // (a downloaded-but-unused image) never happens here: mergeZaicoImage
-      // only downloads when it detected an actual URL change, which
-      // always produces a "ZAICO画像" change above.
-      return {
-        zaicoId: sourceInventoryId,
-        name: core.name,
-        status: "unchanged",
-        inventoryId: existing.id,
-        sku: existing.sku,
-        imageImported: false,
-        categoryCreated,
-        locationCreated,
-        warnings,
-      };
-    }
-
-    if (isNewRecord) {
-      let sku: string;
-      try {
-        sku = await port.generateSku();
-      } catch (err) {
-        if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
-        if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
-        throw err;
-      }
-
-      let created: InventoryModel;
-      try {
-        created = await port.createInventory({
-          sku,
-          name: core.name,
-          categoryId: categoryId ?? undefined,
-          locationId: locationId ?? undefined,
-          quantity: core.quantity ?? 0,
-          unit: core.unit ?? undefined,
-          purchasePrice: optAttrs.coreFields.purchasePrice,
-          salePrice: optAttrs.coreFields.salePrice,
-          note: core.note ?? undefined,
-          barcode: core.barcode ?? undefined,
-          images: imageMerge.images,
-          customFields: stringifyCustomFields(mergedCustomFields),
-          createdBy: who ?? "ZAICO同期",
-          updatedBy: who ?? "ZAICO同期",
-          sourceSystem: "ZAICO",
-          sourceInventoryId,
-          extendedFields: optAttrs.extendedFields,
-        });
-      } catch (err) {
-        if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
-        if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
-        throw err;
-      }
-
-      await port.logHistory(created.id, who, [
-        { fieldName: "ZAICO同期", oldValue: null, newValue: `ZAICO ID ${sourceInventoryId} から新規作成 (SKU ${sku})` },
-      ]);
-
-      return {
-        zaicoId: sourceInventoryId,
-        name: core.name,
-        status: "created",
-        inventoryId: created.id,
-        sku,
-        imageImported: imageMerge.imported,
-        categoryCreated,
-        locationCreated,
-        warnings,
-      };
-    }
-
-    // existing !== null here (isNewRecord is false) — TypeScript can't
-    // narrow that across the branches above, so assert it explicitly
-    // rather than repeating the `existing &&` guard a third time.
-    const existingRecord = existing!;
-    try {
-      await port.updateInventory({
-        id: existingRecord.id,
-        name: core.name,
-        categoryId: categoryId ?? undefined,
-        locationId: locationId ?? undefined,
-        quantity: core.quantity !== null ? core.quantity : undefined,
-        unit: core.unit !== null ? core.unit : undefined,
-        note: core.note !== null ? core.note : undefined,
-        barcode: core.barcode !== null ? core.barcode : undefined,
-        purchasePrice: optAttrs.coreFields.purchasePrice,
-        salePrice: optAttrs.coreFields.salePrice,
-        images: imageMerge.images,
-        customFields: stringifyCustomFields(mergedCustomFields),
-        updatedBy: who ?? "ZAICO同期",
-        extendedFields: optAttrs.extendedFields,
-      });
-    } catch (err) {
-      if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
-      if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
-      throw err;
-    }
-
-    // Only now — after the write that (re)points the record at it has
-    // actually succeeded — is the old ZAICO image slot's S3 object
-    // removed. Best-effort: a failure here is logged inside
-    // removeInventoryImage itself and never re-thrown.
-    if (imageMerge.oldStorageKeyToRemove) await port.removeImage(imageMerge.oldStorageKeyToRemove);
-    if (imageMerge.oldThumbnailKeyToRemove) await port.removeImage(imageMerge.oldThumbnailKeyToRemove);
-
-    await port.logHistory(existingRecord.id, who, changes);
-
-    return {
-      zaicoId: sourceInventoryId,
-      name: core.name,
-      status: "updated",
-      inventoryId: existingRecord.id,
-      sku: existingRecord.sku,
-      imageImported: imageMerge.imported,
-      categoryCreated,
-      locationCreated,
-      warnings,
-    };
-  } catch (err) {
-    return {
-      zaicoId: sourceInventoryId,
-      name: zaicoItem.title?.trim() || sourceInventoryId,
-      status: "failed",
-      imageImported: false,
-      categoryCreated,
-      locationCreated,
-      warnings,
-      error: err instanceof Error ? err.message : "不明なエラー",
-    };
-  }
 }
 
 function aggregateResult(startedAt: string, items: ZaicoSyncItemResult[]): ZaicoSyncResult {
@@ -462,12 +74,11 @@ export async function syncSingleZaicoItem(zaicoId: string, who: string | null, p
  * §8/§9/§26で追加された安全なテストモード)。One upfront prefetch of
  * every ZAICO-managed BELLO record (fetchAllZaicoManagedInventory) plus
  * ZAICO's own paginated listing (lib/zaico/client.ts's listInventories,
- * throttled/retried internally) — a single blocking Server Action call,
- * deliberately not a Lambda/background-job architecture: at "a few
- * hundred records" scale, building queue/background-job infrastructure
- * ahead of that need would be over-engineering (spec's own instruction:
- * 過剰設計しないこと). Revisit this once the app is actually deployed
- * behind a request-timeout-bound host and the catalog grows much larger.
+ * throttled/retried internally) — a single blocking Server Action call.
+ * 第五ラウンドで新設した`amplify/functions/zaico-sync-worker/`が
+ * ブラウザ非依存の主経路になった後も、この関数はADMIN設定画面からの
+ * 「今すぐ少数件だけ試したい」という同期的な確認用途に残す
+ * (syncLimitedZaicoItems経由、上限50件——過剰設計を避ける)。
  *
  * `options.limit`(AWSテスト環境構築指示 §8: 「初期同期はデフォルトで
  * 全件にしない」)— 指定した場合、その件数に達した時点でZAICO側からの

@@ -588,6 +588,18 @@ const schema = a.schema({
       finishedAt: a.datetime(),
       lastError: a.string(),
       triggeredBy: a.string(),
+      // ─────────────────────────────────────────────────────────────
+      // BELLO統合業務OS 第五ラウンド §4(P0-A): ブラウザ非依存の完全
+      // Background Job化に必要なlease/heartbeat/retry。この4フィールド
+      // により、ブラウザ手動advance(zaicoBackgroundSync.ts)と
+      // amplify/functions/zaico-sync-worker/(スケジュールLambda)の
+      // 両方が同じジョブ行を安全に共有できる——どちらか一方が
+      // leaseOwnerを保持している間は、もう一方は同じページを二重処理
+      // しない(claimLease系のConditionExpressionで強制)。
+      leaseOwner: a.string(), // 例: "lambda:<requestId>" / "browser:<sessionToken先頭8文字>"。null=誰も保持していない
+      leaseExpiresAt: a.datetime(), // この時刻を過ぎたleaseは失効扱い——保持者がクラッシュしても永久にブロックしない
+      retryCount: a.integer().default(0), // 直近のadvance/pageで失敗した回数。上限到達でFAILEDへ(DLQ相当)
+      lastHeartbeatAt: a.datetime(), // 実行中であることを示す生存確認。UIの「実行中だが最後の更新から時間が経っている」検知にも使える
     })
     .authorization((allow) => [
       allow.group("ADMIN"),

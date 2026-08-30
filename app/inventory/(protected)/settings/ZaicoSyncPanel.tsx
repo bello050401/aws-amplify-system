@@ -442,7 +442,10 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
       <div className="mt-3 border border-gray-200 p-4">
         <p className="mb-2 text-[12px] font-bold text-gray-700">全件同期</p>
         <p className="mb-2 text-[11px] text-gray-500">
-          ZAICOの全在庫を取得し、BELLOへ反映します。1リクエストで全件を処理せず、少しずつ（1回あたり最大50件）進行状況を保存しながら同期するため、件数が多くても安全です。この画面を開いている間は自動的に進行します。画面を閉じても進行状況（チェックポイント）は保存されており、次にこの画面を開いたときに続きから自動的に再開されます。
+          ZAICOの全在庫を取得し、BELLOへ反映します。1リクエストで全件を処理せず、少しずつ（1回あたり最大50件）進行状況を保存しながら同期するため、件数が多くても安全です。開始後はAWS側のバックグラウンド処理（5分毎）が自動的に続きを進めるため、この画面を開いたままにする必要はなく、ブラウザを閉じてもPCの電源を落としても最後まで同期が完了します（この画面を開いている間は、進行状況をより早く確認したい場合の補助として1ページずつ手動で進めることもできます）。
+        </p>
+        <p className="mb-2 text-[11px] text-amber-700">
+          ※AWS側のバックグラウンド処理はこのラウンドで新規実装（LOCAL_IMPLEMENTED）— 新規商品の作成についてはAWS環境での実同期・一覧画面での表示確認（AWS_VERIFIED）がまだ済んでいません。実AWS環境へのデプロイ後、少数件でのテスト同期による確認を推奨します。
         </p>
 
         <dl className="mb-3 grid grid-cols-4 gap-y-1 text-[12px] text-gray-700">

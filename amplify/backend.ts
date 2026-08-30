@@ -8,6 +8,7 @@ import { storage } from "./storage/resource";
 import { generateSku } from "./functions/generate-sku/resource";
 import { pricingScheduler } from "./functions/pricing-scheduler/resource";
 import { imageProcessingWorker } from "./functions/image-processing-worker/resource";
+import { zaicoSyncWorker } from "./functions/zaico-sync-worker/resource";
 
 /**
  * Amplify Gen2 backend definition.
@@ -34,6 +35,7 @@ const backend = defineBackend({
   generateSku,
   pricingScheduler,
   imageProcessingWorker,
+  zaicoSyncWorker,
 });
 
 // SKU counter table for amplify/functions/generate-sku. This is
@@ -277,3 +279,59 @@ backend.imageProcessingWorker.addEnvironment("IMAGE_PROCESSING_VERSION_TABLE_NAM
 backend.imageProcessingWorker.addEnvironment("PHOTO_PROFILE_TABLE_NAME", photoProfileTable.tableName);
 backend.imageProcessingWorker.addEnvironment("INVENTORY_TABLE_NAME", inventoryTable.tableName);
 backend.imageProcessingWorker.addEnvironment("STORAGE_BUCKET_NAME", backend.storage.resources.bucket.bucketName);
+
+// ─────────────────────────────────────────────────────────────────────
+// BELLO統合業務OS 第五ラウンド §4(P0-A): ZAICO同期の完全無人化。
+// amplify/functions/zaico-sync-worker/resource.tsのコメント参照 —
+// pricing-scheduler/image-processing-workerと同じ
+// `backend.data.resources.tables[...].grantReadWriteData(fn)`パターン
+// をInventory本体へ初めて適用する(このラウンドでsynth生成の実
+// CloudFormationからGSI安全性を確認して初めて可能になった)。
+//
+// 権限の考え方:
+//   - Inventory: read+write(新規作成・既存更新の両方。GSIキー属性
+//     (id/sku/categoryId/statusId/locationId/deletedAt)は全て素の
+//     トップレベル属性であることを確認済み——lambdaSyncPort.tsの
+//     コメント参照)。
+//   - Category/Location: read+write(findOrCreate — 新規カテゴリ/
+//     場所の作成もZAICO同期の正当な範囲、既存のNext.js側実装と同じ)。
+//   - InventoryHistory: read+write(このLambdaは読み取らないが、
+//     grantWriteDataのみだと将来の変更履歴閲覧機能追加時に権限不足で
+//     気づきにくいため、他のBELLO全体の慣行(常にread+write単位で
+//     付与)に合わせる——実際に使うのはPutItemのみ)。
+//   - ZaicoSyncJob: read+write(checkpoint/lease/heartbeatの読み書き)。
+//   - S3(inventory/*): read+write(ZAICO画像のオリジナル保存先は
+//     `inventory/`直下——image-processing-workerと違い派生画像限定
+//     ではない、ZAICO同期が扱うのは常に「オリジナル画像の新規保存」
+//     のため)。
+//   - Secrets Manager(bello/zaico-api-token): read専用。このLambda
+//     自身の実行ロールはdefineBackend()の管理下にあるため、Next.js
+//     SSRコンピュートと違い、Amplify Console側の手動IAM設定なしに
+//     ここから直接grantできる(zaicoTokenSecret宣言の上のコメントが
+//     説明する「SSRコンピュートへは付与できない」制約は、この
+//     Lambda実行ロールには適用されない)。
+//   - generate-sku Lambda: lambda:InvokeFunction専用(SKU発番ロジック
+//     を複製せず、既存の正しい実装をそのまま呼び出す)。
+const categoryTable = backend.data.resources.tables["Category"];
+const locationTable = backend.data.resources.tables["Location"];
+const inventoryHistoryTable = backend.data.resources.tables["InventoryHistory"];
+const zaicoSyncJobTable = backend.data.resources.tables["ZaicoSyncJob"];
+
+inventoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+categoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+locationTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+inventoryHistoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+zaicoSyncJobTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+backend.storage.resources.bucket.grantRead(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
+backend.storage.resources.bucket.grantPut(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
+backend.storage.resources.bucket.grantDelete(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
+zaicoTokenSecret.grantRead(backend.zaicoSyncWorker.resources.lambda);
+backend.generateSku.resources.lambda.grantInvoke(backend.zaicoSyncWorker.resources.lambda);
+
+backend.zaicoSyncWorker.addEnvironment("INVENTORY_TABLE_NAME", inventoryTable.tableName);
+backend.zaicoSyncWorker.addEnvironment("CATEGORY_TABLE_NAME", categoryTable.tableName);
+backend.zaicoSyncWorker.addEnvironment("LOCATION_TABLE_NAME", locationTable.tableName);
+backend.zaicoSyncWorker.addEnvironment("INVENTORY_HISTORY_TABLE_NAME", inventoryHistoryTable.tableName);
+backend.zaicoSyncWorker.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJobTable.tableName);
+backend.zaicoSyncWorker.addEnvironment("STORAGE_BUCKET_NAME", backend.storage.resources.bucket.bucketName);
+backend.zaicoSyncWorker.addEnvironment("GENERATE_SKU_FUNCTION_NAME", backend.generateSku.resources.lambda.functionName);
