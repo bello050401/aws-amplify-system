@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, QueryCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand, ScanCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 // 純粋ロジックのみを取り込む。service.ts は "server-only" と
 // serverDataClient(Cookie前提)を引き込むため、ここからは触らない。
 import { buildMessagePreview, deriveNeedsReply, deriveConversationStatus } from "./conversationStatus";
@@ -55,7 +55,6 @@ const MESSAGE_TABLE = process.env.MESSAGE_TABLE_NAME;
 
 /** Amplifyが作るGSIの名前。`index("externalMessageId")` から生成される。 */
 const MESSAGE_BY_EXTERNAL_ID_INDEX = "messagesByExternalMessageId";
-const CONVERSATION_BY_STATUS_INDEX = "conversationsByStatus";
 
 let cached: DynamoDBDocumentClient | null = null;
 function ddb(): DynamoDBDocumentClient {
@@ -66,6 +65,25 @@ function ddb(): DynamoDBDocumentClient {
 /** 設定が揃っているか。揃っていなければ呼び出し側が「未設定」として扱えるようにする。 */
 export function isWebhookStoreConfigured(): boolean {
   return Boolean(CONVERSATION_TABLE && MESSAGE_TABLE);
+}
+
+/**
+ * 失敗の種別。**運用者が原因を切り分けるためだけの短い符号**で、
+ * ARN・ロール名・テーブル名・本文といった中身は一切含めない。
+ *
+ * これを足した理由は、Amplify HostingのSSRログが有効になっておらず、
+ * 500だけを見ても「テーブル名が渡っていない」のか「権限が無い」のか
+ * 「別の障害」なのかが区別できなかったため。実際にこの切り分けができず
+ * 一度デプロイをやり直している。
+ */
+export type WebhookStoreFailure = "TABLE_NOT_CONFIGURED" | "ACCESS_DENIED" | "TABLE_NOT_FOUND" | "OTHER";
+
+export function classifyWebhookStoreFailure(err: unknown): WebhookStoreFailure {
+  if (!CONVERSATION_TABLE || !MESSAGE_TABLE) return "TABLE_NOT_CONFIGURED";
+  const name = err instanceof Error ? err.name : "";
+  if (name === "AccessDeniedException") return "ACCESS_DENIED";
+  if (name === "ResourceNotFoundException") return "TABLE_NOT_FOUND";
+  return "OTHER";
 }
 
 export interface IncomingWebhookMessage {
@@ -79,17 +97,34 @@ export interface IncomingWebhookMessage {
 
 export type RecordResult = { conversationId: string; messageId: string } | { deduped: true };
 
+/**
+ * この関数が外界に対して持っている依存の全て。
+ *
+ * 本番は下の `recordIncomingWebhookMessage` が実クライアント・実UUID・実時刻を
+ * 詰めて渡す。テストは偽の `send` を渡して、DynamoDBへ実際に何を送るか
+ * (どのテーブル・どのGSI・どの式)を検査する。この継ぎ目が無いと、
+ * 「新規会話を作る/既存会話へ足す/再送を弾く」という**分岐そのもの**が
+ * 実AWSでしか確かめられず、実質テスト不能になる。
+ */
+export interface WebhookStoreDeps {
+  send: (command: unknown) => Promise<Record<string, unknown>>;
+  conversationTable: string;
+  messageTable: string;
+  newId: () => string;
+  now: () => string;
+}
+
 /** 既に取り込み済みか（LINEの再送で重複を作らないための判定）。 */
-async function findExistingMessage(externalMessageId: string): Promise<boolean> {
-  const res = await ddb().send(
+async function findExistingMessage(deps: WebhookStoreDeps, externalMessageId: string): Promise<boolean> {
+  const res = (await deps.send(
     new QueryCommand({
-      TableName: MESSAGE_TABLE,
+      TableName: deps.messageTable,
       IndexName: MESSAGE_BY_EXTERNAL_ID_INDEX,
       KeyConditionExpression: "externalMessageId = :e",
       ExpressionAttributeValues: { ":e": externalMessageId },
       Limit: 1,
     }),
-  );
+  )) as { Items?: unknown[] };
   return (res.Items?.length ?? 0) > 0;
 }
 
@@ -100,18 +135,21 @@ async function findExistingMessage(externalMessageId: string): Promise<boolean> 
  * Webhook受信は1件ずつでスループットが小さく、会話数もInventoryのような
  * 規模にはならないため許容する。将来件数が増えたらGSIを足す。
  */
-async function findConversation(channel: MessageChannel, externalCustomerId: string): Promise<Record<string, unknown> | null> {
-  const { ScanCommand } = await import("@aws-sdk/lib-dynamodb");
+async function findConversation(
+  deps: WebhookStoreDeps,
+  channel: MessageChannel,
+  externalCustomerId: string,
+): Promise<Record<string, unknown> | null> {
   let key: Record<string, unknown> | undefined;
   do {
-    const res = await ddb().send(
+    const res = (await deps.send(
       new ScanCommand({
-        TableName: CONVERSATION_TABLE,
+        TableName: deps.conversationTable,
         FilterExpression: "channel = :c AND externalCustomerId = :e",
         ExpressionAttributeValues: { ":c": channel, ":e": externalCustomerId },
         ExclusiveStartKey: key,
       }),
-    );
+    )) as { Items?: Record<string, unknown>[]; LastEvaluatedKey?: Record<string, unknown> };
     const hit = res.Items?.[0];
     if (hit) return hit;
     key = res.LastEvaluatedKey;
@@ -132,19 +170,35 @@ export async function recordIncomingWebhookMessage(params: IncomingWebhookMessag
       "受信メッセージ保存用のテーブル名が未設定です（CONVERSATION_TABLE_NAME / MESSAGE_TABLE_NAME）。",
     );
   }
+  return recordIncomingWebhookMessageWith(
+    {
+      send: (command) => ddb().send(command as never) as Promise<Record<string, unknown>>,
+      conversationTable: CONVERSATION_TABLE,
+      messageTable: MESSAGE_TABLE,
+      newId: randomUUID,
+      now: () => new Date().toISOString(),
+    },
+    params,
+  );
+}
 
-  if (await findExistingMessage(params.externalMessageId)) return { deduped: true };
+/** 上の本体。依存を引数で受け取るので、テストから実AWS無しで通せる。 */
+export async function recordIncomingWebhookMessageWith(
+  deps: WebhookStoreDeps,
+  params: IncomingWebhookMessage,
+): Promise<RecordResult> {
+  if (await findExistingMessage(deps, params.externalMessageId)) return { deduped: true };
 
-  const now = new Date().toISOString();
+  const now = deps.now();
   const preview = buildMessagePreview(params.body);
-  const existing = await findConversation(params.channel, params.externalCustomerId);
+  const existing = await findConversation(deps, params.channel, params.externalCustomerId);
 
   let conversationId: string;
   if (!existing) {
-    conversationId = randomUUID();
-    await ddb().send(
+    conversationId = deps.newId();
+    await deps.send(
       new PutCommand({
-        TableName: CONVERSATION_TABLE,
+        TableName: deps.conversationTable,
         Item: {
           id: conversationId,
           __typename: "Conversation",
@@ -169,9 +223,9 @@ export async function recordIncomingWebhookMessage(params: IncomingWebhookMessag
     conversationId = String(existing.id);
     const needsReply = deriveNeedsReply(params.externalSentAt, (existing.lastOutgoingAt as string | null) ?? null);
     const status = deriveConversationStatus(needsReply, true, existing.status as never);
-    await ddb().send(
+    await deps.send(
       new UpdateCommand({
-        TableName: CONVERSATION_TABLE,
+        TableName: deps.conversationTable,
         Key: { id: conversationId },
         UpdateExpression:
           "SET #s = :s, needsReply = :n, unreadCount = :u, lastMessagePreview = :p, lastMessageAt = :m, lastIncomingAt = :i, updatedAt = :t, updatedBy = :b",
@@ -190,10 +244,10 @@ export async function recordIncomingWebhookMessage(params: IncomingWebhookMessag
     );
   }
 
-  const messageId = randomUUID();
-  await ddb().send(
+  const messageId = deps.newId();
+  await deps.send(
     new PutCommand({
-      TableName: MESSAGE_TABLE,
+      TableName: deps.messageTable,
       Item: {
         id: messageId,
         __typename: "Message",
@@ -215,5 +269,3 @@ export async function recordIncomingWebhookMessage(params: IncomingWebhookMessag
 
   return { conversationId, messageId };
 }
-
-export { CONVERSATION_BY_STATUS_INDEX };

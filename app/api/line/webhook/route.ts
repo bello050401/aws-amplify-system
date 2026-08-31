@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyLineSignature } from "@/lib/messaging/line/signature";
 import { getLineChannelSecret } from "@/lib/messaging/line/tokenAccess";
 import { parseLineWebhookBody } from "@/lib/messaging/line/adapter";
-import { recordIncomingWebhookMessage } from "@/lib/messaging/webhookStore";
+import { recordIncomingWebhookMessage, classifyWebhookStoreFailure, type WebhookStoreFailure } from "@/lib/messaging/webhookStore";
 import type { LineWebhookBody } from "@/lib/messaging/line/types";
 
 /**
@@ -62,6 +62,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const normalized = parseLineWebhookBody(body);
   let failedCount = 0;
+  // 何で失敗したのかの種別だけを集める（中身は持たない）。
+  const failures = new Set<WebhookStoreFailure>();
   for (const msg of normalized) {
     try {
       await recordIncomingWebhookMessage({
@@ -74,6 +76,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     } catch (err) {
       // 1件の失敗で他のイベントの処理を止めない — 残りは処理を続ける。
       failedCount++;
+      failures.add(classifyWebhookStoreFailure(err));
       console.error("[line webhook] 受信メッセージの保存に失敗:", err instanceof Error ? err.message : err);
     }
   }
@@ -90,7 +93,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   // `{deduped:true}`を返す)が保証しており、成功済みのメッセージは二重登録
   // されない。よって「全部再送させる」のが正しく、かつ安全な選択。
   if (failedCount > 0) {
-    return NextResponse.json({ ok: false, failed: failedCount }, { status: 500 });
+    return NextResponse.json({ ok: false, failed: failedCount, reasons: [...failures] }, { status: 500 });
   }
   return NextResponse.json({ ok: true });
 }
