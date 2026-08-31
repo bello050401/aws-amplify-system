@@ -268,7 +268,30 @@ setMessage({ kind: res.success ? "success" : "error", text: res.message });
 **本人の承認なしには実行しない**。金額は構成と転送量で変わるため、
 承認いただけるなら案を1つに絞ったうえで見積もりを出す。
 
-### 6.3 コード側は準備済み
+### 6.3 IAM権限は足りている（保存できない原因ではない）
+
+「保存できないのはIAM権限が無いからでは」という別の仮説を潰しておく。
+Staging SSRコンピュートの実行ロール
+`BelloAmplifyStagingComputeRole` のインラインポリシー
+`BelloComputeRuntimeAccess` に、次が実際に付与されていることを確認した:
+
+```
+Sid: BelloMercariAndLineSecretAccess
+Action: secretsmanager:GetSecretValue, secretsmanager:PutSecretValue
+Resource:
+  arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/mercari-access-token-??????
+  arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/line-channel-secret-??????
+```
+
+**読み書きの両方が許可されている。** Secretの実体も既に存在するため
+`CreateSecret` は不要。つまりIAMは保存できない理由ではなく、
+原因は「接続確認に成功しないと保存しない」という設計と、
+IP制限で接続確認が成功し得ないことの組み合わせだけだった(§4.1)。
+
+裏を返すと、**§4.2の修正で、TOKENを入力すれば実際に保存できる**
+(未検証状態で保存され、IP登録後に「接続確認」を押せば接続済みになる)。
+
+### 6.4 コード側は準備済み
 
 上記の判断がどうなっても、**コード側の作業は完了している**:
 IP登録が済んだ時点で、設定画面でTOKENを保存し(未検証状態で保存できる)、
@@ -286,4 +309,6 @@ IP登録が済んだ時点で、設定画面でTOKENを保存し(未検証状態
 | Secret読み取り失敗のsilent failure | **COMPLETE** |
 | 404の原因特定 | **VERIFIED**(実測 + 一次資料。ただしBELLOのIPの登録状況自体は我々からは観測不能) |
 | 実TOKENでのE2E | **BLOCKED_BY_EXTERNAL_SERVICE**(IP申請が前提。TOKEN入力だけでは到達できない) |
+| IAM(Secret読み書き権限) | **VERIFIED**(GetSecretValue/PutSecretValue とも付与済み。保存できない原因ではなかった) |
+| Staging設定画面のUI確認 | **BLOCKED_BY_USER**(ADMINログイン済みセッションへClaude Codeから到達できず、画面操作を伴うE2Eは未実施) |
 | 固定IPインフラ | **BLOCKED_BY_USER**(有料インフラの新設は承認が必要) |
