@@ -212,7 +212,29 @@ export class SharpImageProcessingProvider implements ImageProcessingProvider {
 
     const rotated = sharp(req.sourceBuffer).rotate(); // EXIF orientationを正規化
     const analysisRaw = await toAnalysisRaw(rotated);
-    const analysis = analyzeImage(analysisRaw);
+
+    // 被写体の検出は「露出を整えたあと」に行う(仕様§13 暗所対応)。
+    //
+    // 暗い写真をそのまま解析すると、商品と床のスポット光の差が小さく、
+    // 尤度が全体的に低いまま横並びになる。実測では、背景輝度51の丸テーブルで
+    // bbox内部の平均尤度が0.14しかなく確信度が閾値を下回り、構図を変えられな
+    // かった。同じ画素でも、周辺減光とゲインを当ててから見れば差は開く。
+    //
+    // 露出量の推定自体は元の暗い画像から行い(そうしないと目標が決まらない)、
+    // 被写体検出だけを整えた画像で行う。
+    const baseAnalysis = analyzeImage(analysisRaw);
+    const normalizePlan = planTone(baseAnalysis, toneTargets);
+    const normalizedPreview: RawImage = {
+      data: applyTonePixels(analysisRaw, normalizePlan, baseAnalysis.background.medianLuminance),
+      width: analysisRaw.width,
+      height: analysisRaw.height,
+      channels: analysisRaw.channels,
+    };
+    const normalizedAnalysis = analyzeImage(normalizedPreview);
+
+    // 背景の統計は元画像から(露出補正の目標を決めるため)、被写体は
+    // 整えた画像から採る。どちらも同じ寸法なので座標系は一致する。
+    const analysis: ImageAnalysis = { ...baseAnalysis, subject: normalizedAnalysis.subject };
 
     // DETAIL/DAMAGE/LABELは元の構図を尊重する(§6)。傷の写真を勝手に寄せない。
     const strong = shouldApplyStrongComposition(req.classification);
