@@ -1,5 +1,5 @@
 import "server-only";
-import { getMercariConnectionFromSecretsManager, getMercariTokenFromSecretsManager } from "./secretStore";
+import { getMercariConnectionFromSecretsManager, getMercariTokenFromSecretsManager, readMercariConnectionSecret } from "./secretStore";
 import { formatMercariUserAgent, MERCARI_DEFAULT_CLIENT_VERSION } from "./endpoints";
 
 /**
@@ -80,4 +80,78 @@ export async function getMercariUserAgent(): Promise<string> {
     );
   }
   return formatMercariUserAgent(clientName, clientVersion);
+}
+
+/**
+ * 夜間統合指示書(2026-09-01) §3.4/§6.7: 「接続済み / 未設定 / 設定済み
+ * 未検証 / 読み取り失敗」を混同せずに1回のGetSecretValueで解決する、
+ * 設定画面向けの単一の状態取得関数。
+ *
+ * これまで設定ページ(app/inventory/(protected)/settings/page.tsx)は
+ * getMercariTokenSource()とgetMercariClientNameConfig()を両方awaitして
+ * おり、同じSecretに対してGetSecretValueが2回飛んでいた(それぞれが
+ * 内部で独立に読むため)。TOKEN・クライアント名・検証状態はすべて同じ
+ * payloadに同居しているので、ここで1回だけ読んでまとめて返す。
+ */
+export type MercariVerificationState = "verified" | "unverified" | "unknown";
+
+export interface MercariConnectionState {
+  tokenSource: MercariTokenSource;
+  clientName: string | null;
+  clientNameSource: MercariTokenSource;
+  clientVersion: string;
+  /**
+   * verified   : Secretに保存済みで、保存時に実際の接続確認が取れていた
+   * unverified : Secretに保存済みだが接続確認が取れていない(IP未登録等)
+   * unknown    : 環境変数フォールバック由来、または未設定 — 検証記録が存在しない
+   */
+  verification: MercariVerificationState;
+  lastCheckedAt: string | null;
+  lastCheckCode: string | null;
+  /**
+   * Secretを読めなかった場合の利用者向け説明(権限不足・認証切れ等)。
+   * null以外なら、画面は「未設定」ではなく「設定を確認できません」と
+   * 表示しなければならない — §6.1で問題にした「失敗を未設定として
+   * 黙って表示する」を防ぐための情報。
+   */
+  secretReadError: string | null;
+}
+
+export async function getMercariConnectionState(): Promise<MercariConnectionState> {
+  const read = await readMercariConnectionSecret();
+
+  const envToken = process.env.MERCARI_ACCESS_TOKEN?.trim();
+  const envName = process.env.MERCARI_API_CLIENT_NAME?.trim();
+  const envVersion = process.env.MERCARI_API_CLIENT_VERSION?.trim() || MERCARI_DEFAULT_CLIENT_VERSION;
+
+  if (!read.ok) {
+    // Secretが読めない場合でも環境変数フォールバックがあれば動作自体は
+    // 可能なので、そちらの状態は正直に返しつつ、読めなかった事実も返す。
+    return {
+      tokenSource: envToken ? "env-fallback" : "unconfigured",
+      clientName: envName ?? null,
+      clientNameSource: envName ? "env-fallback" : "unconfigured",
+      clientVersion: envVersion,
+      verification: "unknown",
+      lastCheckedAt: null,
+      lastCheckCode: null,
+      secretReadError: read.errorMessage,
+    };
+  }
+
+  const tokenSource: MercariTokenSource = read.token ? "secrets-manager" : envToken ? "env-fallback" : "unconfigured";
+  const clientName = read.clientName ?? envName ?? null;
+  const clientNameSource: MercariTokenSource = read.clientName ? "secrets-manager" : envName ? "env-fallback" : "unconfigured";
+
+  return {
+    tokenSource,
+    clientName,
+    clientNameSource,
+    clientVersion: read.clientVersion ?? (clientNameSource === "env-fallback" ? envVersion : MERCARI_DEFAULT_CLIENT_VERSION),
+    // 検証記録はSecrets Manager経由の設定にしか存在しない。
+    verification: tokenSource === "secrets-manager" ? (read.verified ? "verified" : "unverified") : "unknown",
+    lastCheckedAt: read.lastCheckedAt,
+    lastCheckCode: read.lastCheckCode,
+    secretReadError: null,
+  };
 }

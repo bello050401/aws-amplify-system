@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { MasterEntry } from "@/lib/inventory/masters";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import type { ZaicoTokenSource } from "@/lib/zaico/client";
-import type { MercariTokenSource } from "@/lib/listing/mercari/tokenAccess";
+import type { MercariTokenSource, MercariVerificationState } from "@/lib/listing/mercari/tokenAccess";
 import type { LineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
@@ -38,6 +38,11 @@ interface SettingsTabsProps {
   /** BELLO統合業務OS指示書(2026-08-30) §24: 保存済みのAPIクライアント名(secrets-manager/env-fallbackどちらか、無ければnull) — TOKENと違い秘匿値ではないため表示してよい。 */
   mercariClientName: string | null;
   mercariClientNameSource: MercariTokenSource;
+  /** 夜間統合指示書(2026-09-01) §3.4: 「接続済み」と「設定済みだが未検証」を区別するための状態。 */
+  mercariVerification: MercariVerificationState;
+  mercariLastCheckedAt: string | null;
+  /** Secret自体を読めなかった場合の説明 — §6.1「失敗を未設定として黙って表示しない」。 */
+  mercariSecretReadError: string | null;
   /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
   lineConnected: boolean;
   lineTokenSource: LineTokenSource;
@@ -64,6 +69,9 @@ export function SettingsTabs({
   mercariEnvironment,
   mercariClientName,
   mercariClientNameSource,
+  mercariVerification,
+  mercariLastCheckedAt,
+  mercariSecretReadError,
   lineConnected,
   lineTokenSource,
 }: SettingsTabsProps) {
@@ -170,6 +178,9 @@ export function SettingsTabs({
             mercariEnvironment={mercariEnvironment}
             mercariClientName={mercariClientName}
             mercariClientNameSource={mercariClientNameSource}
+            mercariVerification={mercariVerification}
+            mercariLastCheckedAt={mercariLastCheckedAt}
+            mercariSecretReadError={mercariSecretReadError}
           />
         )}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側

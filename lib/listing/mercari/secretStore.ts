@@ -50,6 +50,35 @@ interface MercariTokenSecretPayload {
   configured: boolean;
   token?: string;
   /**
+   * 夜間統合指示書(2026-09-01) §3.4: 「接続済み」と「設定済みだが未検証」を
+   * 混同しないための状態。
+   *
+   * 以前はSecretへの書き込みが「接続確認に成功した場合のみ」行われていた。
+   * ところがMercariは**未登録の送信元IPからのリクエストへ、認証を評価する
+   * 前に404を返す**(公式FAQ「申請いただいていないIPアドレスからの
+   * リクエストに対しては404 NotFoundが返却されます」/ 2026-09-01の実測でも
+   * Authorizationヘッダを一切付けない場合と付けた場合で応答が完全に同一)。
+   * つまりIPが未登録の間は、**正しいTOKENを入力しても接続確認は絶対に
+   * 成功せず、したがってTOKENを保存することもできない**——実際にこの
+   * Secretは作成時の`{configured:false}`のまま一度も更新されていなかった。
+   * これが「保存デッドロック」の実体である。
+   *
+   * そこで「検証は取れていないが、利用者が入力した設定を保持している」
+   * 状態を表現できるようにした。verified=falseの設定は接続済みとは
+   * 表示せず、EC出品機能も従来どおりTOKENが揃っていなければ動かないが、
+   * 少なくとも入力内容が消えず、IP登録が完了した時点で「接続確認」を
+   * 押すだけで済むようになる。
+   *
+   * 後方互換: このフィールドが存在しない既存payloadは、当時の保存経路が
+   * 検証成功時にしか書き込まなかったことから「検証済み」とみなす
+   * (verified !== false)。
+   */
+  verified?: boolean;
+  /** 最後に接続確認を試みた時刻(ISO8601)。秘密値ではない。 */
+  lastCheckedAt?: string;
+  /** 最後の接続確認の結果コード(MercariErrorCode、成功時は"OK")。秘密値ではない。 */
+  lastCheckCode?: string;
+  /**
    * BELLO統合業務OS指示書(2026-08-30) §24/§26: MercariのUser-Agent
    * ヘッダに必要なAPIクライアント名/バージョン。TOKENと違い秘匿情報
    * そのものではないが、§26「Client Nameもserver-side
@@ -123,20 +152,72 @@ function classifyAwsError(err: unknown): string {
  * GetSecretValueを呼ぶ理由が無い(§126のrate limit意識にも合う)。
  * 未設定(configured=false)の場合は3つとも null。
  */
-export async function getMercariConnectionFromSecretsManager(): Promise<{ token: string | null; clientName: string | null; clientVersion: string | null }> {
+/**
+ * Secret読み取りの結果。夜間統合指示書(2026-09-01) §6.1の
+ * 「error swallowing / silent failure」監査で見つかった問題への対応:
+ * 以前はGetSecretValueが**どんな理由で失敗しても**catchで握り潰して
+ * `{token:null,...}`を返していた。呼び出し側から見ると、これは
+ * 「まだ設定されていない」と全く区別が付かない。
+ *
+ * 実害: IAM権限が外れている/AWS認証情報が切れている状態でも、設定画面は
+ * 淡々と「未設定」と表示する。利用者は正しく保存済みのTOKENを
+ * 「消えた」と受け取り、再入力を繰り返すことになる(そして再入力もまた
+ * 別の理由で失敗する)。原因が画面のどこにも出ない。
+ *
+ * そこで「未設定(ok:true, token:null)」と「読めなかった(ok:false)」を
+ * 型として分離する。
+ */
+export type MercariSecretRead =
+  | {
+      ok: true;
+      token: string | null;
+      clientName: string | null;
+      clientVersion: string | null;
+      /** configured=true かつ接続確認済みか(上のpayloadコメントの後方互換規則を適用済み)。 */
+      verified: boolean;
+      lastCheckedAt: string | null;
+      lastCheckCode: string | null;
+    }
+  | { ok: false; errorMessage: string };
+
+const EMPTY_READ = { ok: true, token: null, clientName: null, clientVersion: null, verified: false, lastCheckedAt: null, lastCheckCode: null } as const;
+
+/** 読み取り失敗を「未設定」と区別して返す、このファイルの正となる読み取り関数。 */
+export async function readMercariConnectionSecret(): Promise<MercariSecretRead> {
+  let res;
   try {
-    const res = await getClient().send(new GetSecretValueCommand({ SecretId: SECRET_NAME }));
-    const payload = parsePayload(res.SecretString);
-    if (!payload?.configured) return { token: null, clientName: null, clientVersion: null };
-    return {
-      token: payload.token?.trim() || null,
-      clientName: payload.clientName?.trim() || null,
-      clientVersion: payload.clientVersion?.trim() || null,
-    };
+    res = await getClient().send(new GetSecretValueCommand({ SecretId: SECRET_NAME }));
   } catch (err) {
+    // Secretがまだ存在しないのは「読み取り失敗」ではなく「未設定」——
+    // IaCで作られる前の状態であり、利用者が対処すべき異常ではない。
+    if (err instanceof ResourceNotFoundException) return { ...EMPTY_READ };
     logAwsError("getSecretValue", err);
-    return { token: null, clientName: null, clientVersion: null };
+    return { ok: false, errorMessage: classifyAwsError(err) };
   }
+  const payload = parsePayload(res.SecretString);
+  if (!payload?.configured) return { ...EMPTY_READ };
+  return {
+    ok: true,
+    token: payload.token?.trim() || null,
+    clientName: payload.clientName?.trim() || null,
+    clientVersion: payload.clientVersion?.trim() || null,
+    verified: payload.verified !== false,
+    lastCheckedAt: payload.lastCheckedAt?.trim() || null,
+    lastCheckCode: payload.lastCheckCode?.trim() || null,
+  };
+}
+
+/**
+ * 既存の呼び出し元(lib/listing/mercari/tokenAccess.ts)が使う従来の形。
+ * 読み取り失敗時は従来どおり「値なし」に見えるが、それは
+ * **実際にTOKENを使えない**という一点においては正しい振る舞いである
+ * (握り潰しが問題なのは「画面表示上、未設定と失敗を区別できない」点なので、
+ * 状態表示のほうはreadMercariConnectionSecretを直接使う)。
+ */
+export async function getMercariConnectionFromSecretsManager(): Promise<{ token: string | null; clientName: string | null; clientVersion: string | null }> {
+  const read = await readMercariConnectionSecret();
+  if (!read.ok) return { token: null, clientName: null, clientVersion: null };
+  return { token: read.token, clientName: read.clientName, clientVersion: read.clientVersion };
 }
 
 /** lib/listing/mercari/tokenAccess.tsからのみ呼ばれる薄いラッパー — 呼び出し側の意図(「TOKENだけ知りたい」)を名前で表す。 */
@@ -152,8 +233,24 @@ export async function getMercariTokenFromSecretsManager(): Promise<string | null
  * app/actions/mercariSecret.tsのServer Action側が
  * lib/listing/mercari/adapter.tsのvalidateMercariConnectionで先に行う)。
  */
-export async function setMercariConnectionInSecretsManager(params: { token: string; clientName: string; clientVersion?: string }): Promise<void> {
-  const payload: MercariTokenSecretPayload = { configured: true, token: params.token, clientName: params.clientName, clientVersion: params.clientVersion };
+export async function setMercariConnectionInSecretsManager(params: {
+  token: string;
+  clientName: string;
+  clientVersion?: string;
+  /** 接続確認が取れているか。省略時はtrue(従来どおり「検証成功後にだけ保存する」経路の互換)。 */
+  verified?: boolean;
+  /** 最後に接続確認を試みた結果コード(成功なら"OK")。 */
+  lastCheckCode?: string;
+}): Promise<void> {
+  const payload: MercariTokenSecretPayload = {
+    configured: true,
+    token: params.token,
+    clientName: params.clientName,
+    clientVersion: params.clientVersion,
+    verified: params.verified !== false,
+    lastCheckedAt: new Date().toISOString(),
+    lastCheckCode: params.lastCheckCode,
+  };
   const secretString = JSON.stringify(payload);
 
   try {

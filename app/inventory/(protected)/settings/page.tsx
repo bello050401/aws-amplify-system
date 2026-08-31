@@ -3,7 +3,7 @@ import { ensureSettingsBootstrap } from "@/lib/inventory/settingsBootstrap";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { listAllCustomFieldDefinitions } from "@/lib/inventory/queries";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
-import { getMercariTokenSource, getMercariClientNameConfig } from "@/lib/listing/mercari/tokenAccess";
+import { getMercariConnectionState } from "@/lib/listing/mercari/tokenAccess";
 import { getMercariEnvironment } from "@/lib/listing/mercari/endpoints";
 import { getLineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { InventoryHeader } from "../../InventoryHeader";
@@ -53,23 +53,27 @@ export default async function InventorySettingsPage() {
     await ensureSettingsBootstrap();
   }
 
-  const [categories, locations, units, customFields, zaicoTokenSource, mercariTokenSource, mercariClientNameConfig, lineTokenSource] = await Promise.all([
+  // Mercariは以前getMercariTokenSource()とgetMercariClientNameConfig()を
+  // 両方awaitしており、同じSecretへGetSecretValueが2回飛んでいた
+  // (それぞれが内部で独立に読むため)。TOKEN・クライアント名・検証状態は
+  // すべて同じpayloadに同居しているので、getMercariConnectionState()で
+  // 1回だけ読む(夜間統合指示書 2026-09-01 §6.2の不要なfetch削減)。
+  const [categories, locations, units, customFields, zaicoTokenSource, mercariState, lineTokenSource] = await Promise.all([
     listAllMasterEntries("Category"),
     listAllMasterEntries("Location"),
     listAllMasterEntries("Unit"),
     listAllCustomFieldDefinitions(),
     getZaicoTokenSource(),
-    getMercariTokenSource(),
-    getMercariClientNameConfig(),
+    getMercariConnectionState(),
     getLineTokenSource(),
   ]);
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
   // とgetZaicoTokenSource()を両方呼ぶと同じ呼び出しが2回発生していた)。
   const zaicoConnected = zaicoTokenSource !== "unconfigured";
-  // 同じ理由でMercariもgetMercariTokenSource()の結果から導出する(BELLO
+  // 同じ理由でMercariもgetMercariConnectionState()の結果から導出する(BELLO
   // 統合改修 master指示書 Phase D)。
-  const mercariConnected = mercariTokenSource !== "unconfigured";
+  const mercariConnected = mercariState.tokenSource !== "unconfigured";
   // 同じ理由でLINEもgetLineTokenSource()の結果から導出する(§51-52)。
   const lineConnected = lineTokenSource !== "unconfigured";
 
@@ -88,10 +92,13 @@ export default async function InventorySettingsPage() {
           zaicoConnected={zaicoConnected}
           zaicoTokenSource={zaicoTokenSource}
           mercariConnected={mercariConnected}
-          mercariTokenSource={mercariTokenSource}
+          mercariTokenSource={mercariState.tokenSource}
           mercariEnvironment={getMercariEnvironment()}
-          mercariClientName={mercariClientNameConfig.clientName}
-          mercariClientNameSource={mercariClientNameConfig.source}
+          mercariClientName={mercariState.clientName}
+          mercariClientNameSource={mercariState.clientNameSource}
+          mercariVerification={mercariState.verification}
+          mercariLastCheckedAt={mercariState.lastCheckedAt}
+          mercariSecretReadError={mercariState.secretReadError}
           lineConnected={lineConnected}
           lineTokenSource={lineTokenSource}
         />

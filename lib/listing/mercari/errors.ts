@@ -21,16 +21,32 @@ import type { GraphQLErrorItem } from "./types";
 export type MercariErrorCode =
   | "CONFIG_REQUIRED"
   | "AUTH_FAILED"
+  | "BAD_REQUEST"
   | "IP_NOT_ALLOWED"
   | "RATE_LIMITED"
   | "REMOTE_VALIDATION_ERROR"
   | "NETWORK_ERROR"
+  | "TIMEOUT"
+  | "INVALID_RESPONSE"
   | "UNKNOWN_REMOTE_ERROR";
 
 /** ADMIN向け(接続設定画面)の日本語メッセージ — §90: 「raw stack trace禁止」「user-facing: 一般的な説明」。技術的な詳細(HTTPステータス/GraphQLメッセージ全文)はcauseMessageへ別枠で保持し、必要な場合だけ「詳細」展開に使う。 */
 export const MERCARI_ERROR_LABEL: Record<MercariErrorCode, string> = {
   CONFIG_REQUIRED: "設定が不足しています。",
   AUTH_FAILED: "認証に失敗しました（TOKENが無効か期限切れの可能性があります）。",
+  // 2026-09-01: Mercari Shops公式ドキュメント本文(api.mercari-shops.com/
+  // docs/index.html)を、この端末から**直接HTTP 200で取得**して確認した
+  // FAQ(Error)の記載 — 以前のセッションはこのURLへ直接到達できず検索結果の
+  // 要約に頼っていたが、実際には到達できる(docs/mercari-connection-
+  // evidence-20260901.md に実測ログあり)。そこには「400エラー: JSON構文
+  // エラーやクエリ構文エラー時」に加え、原因として「Authorizationヘッダー
+  // の指定ミス」「アクセス先の環境とアクセストークンの組み合わせが
+  // 間違っている(Sandbox用トークンで本番環境へアクセス、逆も同様)」
+  // 「アクセストークンを発行したアカウントが削除された」が明記されている。
+  // つまり400は「こちらの送り方・設定の誤り」であり、リトライで直る種類の
+  // 失敗ではない — 以前はUNKNOWN_REMOTE_ERROR(=リトライ対象)へ落ちており、
+  // 設定ミスのまま無駄に4回リクエストを送っていた。
+  BAD_REQUEST: "リクエストがMercari側に受け付けられませんでした（TOKENと環境（sandbox/本番）の組み合わせや、Authorizationヘッダの設定をご確認ください）。",
   // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §4での再調査
   // (WebSearch、2026-08-30時点)で新たに確認: Mercari Shops API公式
   // ドキュメント(api.mercari-shops.com/docs/index.html、この
@@ -48,6 +64,12 @@ export const MERCARI_ERROR_LABEL: Record<MercariErrorCode, string> = {
   RATE_LIMITED: "リクエストが多すぎます。しばらく待って再試行してください。",
   REMOTE_VALIDATION_ERROR: "送信内容にMercari側で受け付けられない項目があります。",
   NETWORK_ERROR: "Mercari Shops APIへ接続できません（ネットワークエラー）。",
+  TIMEOUT: "Mercari Shops APIからの応答が時間内に返りませんでした。しばらく待ってから再試行してください。",
+  // HTTP 200なのに本文がJSONでない場合(WAF/プロキシの割り込みページ等)。
+  // 以前はresponse.json()のSyntaxErrorがそのまま外へ伝播し、
+  // 「Unexpected token < in JSON at position 0」のような生の例外文言が
+  // 設定画面に出得た(§3.3「raw JavaScript exceptionをUIへ出さない」違反)。
+  INVALID_RESPONSE: "Mercari Shops APIから想定外の形式の応答が返りました。",
   UNKNOWN_REMOTE_ERROR: "不明なエラーが発生しました。",
 };
 
@@ -70,7 +92,13 @@ export class MercariApiError extends Error {
 
 /** §29: 429/5xxはリトライ対象 — client.tsのリトライループが判定に使う。CONFIG_REQUIREDのような設定不備はリトライしても直らないため対象外。 */
 export function isRetryableMercariErrorCode(code: MercariErrorCode): boolean {
-  return code === "RATE_LIMITED" || code === "NETWORK_ERROR" || code === "UNKNOWN_REMOTE_ERROR";
+  // TIMEOUTは「一時的に遅い/届かない」であってこちらの設定の誤りではない
+  // ため、NETWORK_ERRORと同じくリトライ対象に含める(公式FAQも
+  // DEADLINE_EXCEEDEDについて「一時的なタイムアウトが発生した可能性が
+  // あります。リトライをお試しください」と案内している)。
+  // 逆にBAD_REQUEST(400)とINVALID_RESPONSEは送り方・応答形式そのものの
+  // 問題で、同じ内容を送り直しても結果は変わらないためリトライしない。
+  return code === "RATE_LIMITED" || code === "NETWORK_ERROR" || code === "TIMEOUT" || code === "UNKNOWN_REMOTE_ERROR";
 }
 
 /**
@@ -81,6 +109,11 @@ export function isRetryableMercariErrorCode(code: MercariErrorCode): boolean {
  * 一次分類し、403の詳細な出し分けはclassifyForbiddenErrorへ委ねる。
  */
 export function classifyHttpStatus(status: number): MercariErrorCode {
+  // 公式ドキュメントFAQ(Error)「400エラー: JSON構文エラーやクエリ構文
+  // エラー時」/「Authorizationヘッダーの指定ミス」/「環境とトークンの
+  // 組み合わせ違い」— リトライしても直らないのでUNKNOWN_REMOTE_ERROR
+  // (リトライ対象)とは別に分類する。
+  if (status === 400) return "BAD_REQUEST";
   if (status === 401) return "AUTH_FAILED";
   if (status === 403) return "AUTH_FAILED"; // classifyForbiddenErrorがbody次第でIP_NOT_ALLOWEDへ上書きする
   // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §4: 実際に報告された

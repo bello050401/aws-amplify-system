@@ -37,8 +37,10 @@ function check(ok: boolean, label: string, detail = "") {
   else { failures++; console.error(`✗ FAIL ${label}${detail ? ` — ${detail}` : ""}`); }
 }
 
-async function resolveTable(model: string, envValue: string | undefined): Promise<string> {
-  if (envValue) return envValue;
+/** ListTablesは1回で全部返るとは限らないので、必ず最後まで辿る。結果は1回だけ取る。 */
+let cachedTableNames: string[] | null = null;
+async function listAllTableNames(): Promise<string[]> {
+  if (cachedTableNames) return cachedTableNames;
   const names: string[] = [];
   let start: string | undefined;
   do {
@@ -46,9 +48,54 @@ async function resolveTable(model: string, envValue: string | undefined): Promis
     names.push(...(res.TableNames ?? []));
     start = res.LastEvaluatedTableName;
   } while (start);
-  const hits = names.filter((n) => n.startsWith(`${model}-`));
+  cachedTableNames = names;
+  return names;
+}
+
+/**
+ * Amplify Dataのテーブル名は `<Model>-<apiId>-<branch>` という形をしている。
+ * 同じAWSアカウントに過去の(あるいは別ブランチの)Amplifyアプリが残っていると
+ * `Inventory-` で始まるテーブルが複数ヒットし、以前はそこで
+ * 「一意に決められません」と停止していた —— 実際に2026-09-01時点で
+ * `Inventory-4negeddn7navhip2gzxelpl7hq-NONE`(項目数0の残骸)と
+ * `Inventory-j6up24p7lnczdmklzjdt3vrp4y-NONE`(本番の5,313件)の2つが存在し、
+ * この整合性チェックがまるごと実行できなくなっていた。
+ *
+ * モデル単体で選ぼうとすると曖昧になるが、**このチェックが必要とする
+ * モデルが揃っている apiId は1つしかない** ため、apiIdの単位で選べば
+ * 決定的に解決できる(残骸のアプリにはZaicoSourceLinkが存在しない)。
+ * 項目数で選ぶような当てずっぽうはしない。
+ */
+const REQUIRED_MODELS = ["Inventory", "ZaicoSourceLink", "ZaicoSyncJob"] as const;
+
+let cachedApiId: string | null = null;
+async function resolveApiId(): Promise<string> {
+  if (cachedApiId) return cachedApiId;
+  const names = await listAllTableNames();
+  /** apiId -> そのapiIdで見つかったモデル名の集合 */
+  const byApiId = new Map<string, Set<string>>();
+  for (const name of names) {
+    const m = /^([A-Za-z0-9]+)-([a-z0-9]{20,})-/.exec(name);
+    if (!m) continue;
+    const [, model, apiId] = m;
+    if (!byApiId.has(apiId)) byApiId.set(apiId, new Set());
+    byApiId.get(apiId)!.add(model);
+  }
+  const complete = [...byApiId.entries()].filter(([, models]) => REQUIRED_MODELS.every((m) => models.has(m))).map(([apiId]) => apiId);
+  if (complete.length === 1) return (cachedApiId = complete[0]);
+  throw new Error(
+    `BELLOのAmplify Data APIを一意に決められません(必要なモデル(${REQUIRED_MODELS.join(", ")})が揃っている候補 ${complete.length}件)。` +
+      `環境変数 BELLO_INVENTORY_TABLE / BELLO_ZAICO_LINK_TABLE / BELLO_ZAICO_JOB_TABLE で明示してください。`,
+  );
+}
+
+async function resolveTable(model: string, envValue: string | undefined): Promise<string> {
+  if (envValue) return envValue;
+  const apiId = await resolveApiId();
+  const names = await listAllTableNames();
+  const hits = names.filter((n) => n.startsWith(`${model}-${apiId}-`));
   if (hits.length === 1) return hits[0];
-  throw new Error(`${model} のテーブルを一意に決められません(候補 ${hits.length}件)。環境変数で明示してください。`);
+  throw new Error(`${model} のテーブルを一意に決められません(apiId=${apiId} の候補 ${hits.length}件)。環境変数で明示してください。`);
 }
 
 async function scanAll<T>(table: string, projection: string): Promise<T[]> {
@@ -62,19 +109,27 @@ async function scanAll<T>(table: string, projection: string): Promise<T[]> {
   return out;
 }
 
-/** ZAICOの全在庫IDを取得する。per_pageは無視されるので、空ページが来るまで進める。 */
-async function fetchAllZaicoIds(token: string): Promise<string[]> {
-  const ids: string[] = [];
+/**
+ * ZAICOの全在庫を取得する。per_pageは無視されるので、空ページが来るまで進める。
+ *
+ * created_atも一緒に返すのは、「BELLOに無い在庫」が
+ * 「取り込みに失敗した(不具合)」のか「直近の同期より後にZAICOへ追加された
+ * だけ(正常なラグ)」なのかを区別するため —— 区別しないと、誰かがZAICOへ
+ * 商品を1件登録した直後は必ずこの突合が赤くなり、本物の不具合と
+ * 見分けが付かなくなる。詳細はmain()の該当箇所のコメントを参照。
+ */
+async function fetchAllZaicoItems(token: string): Promise<Array<{ id: string; createdAt: string | null }>> {
+  const out: Array<{ id: string; createdAt: string | null }> = [];
   for (let page = 1; page <= 200; page++) {
     const res = await fetch(`https://web.zaico.co.jp/api/v1/inventories?page=${page}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`ZAICO API ${res.status} (page ${page})`);
-    const items = (await res.json()) as Array<{ id: number }>;
+    const items = (await res.json()) as Array<{ id: number; created_at?: string }>;
     if (!Array.isArray(items) || items.length === 0) break;
-    ids.push(...items.map((i) => String(i.id)));
+    out.push(...items.map((i) => ({ id: String(i.id), createdAt: i.created_at ?? null })));
   }
-  return ids;
+  return out;
 }
 
 async function main(): Promise<void> {
@@ -86,8 +141,10 @@ async function main(): Promise<void> {
   const secret = await sm.send(new GetSecretValueCommand({ SecretId: "bello/zaico-api-token" }));
   const token = JSON.parse(secret.SecretString!).token as string;
 
-  const zaicoIds = await fetchAllZaicoIds(token);
+  const zaicoItems = await fetchAllZaicoItems(token);
+  const zaicoIds = zaicoItems.map((i) => i.id);
   const zaicoSet = new Set(zaicoIds);
+  const zaicoCreatedAt = new Map(zaicoItems.map((i) => [i.id, i.createdAt] as const));
   console.log(`ZAICO API: ${zaicoIds.length}件（ユニーク ${zaicoSet.size}件）`);
 
   const inventories = await scanAll<{ id: string; sourceSystem?: string; sourceInventoryId?: string; deletedAt?: string }>(
@@ -135,7 +192,42 @@ async function main(): Promise<void> {
   console.log(`BELLO: ZAICO由来 ${zaicoRows.length}件 / リンク ${links.length}件 / Inventory全体 ${invIds.size}件\n`);
 
   // ── 必須条件: ZAICOにある在庫は、すべてBELLOにある ──
-  check(missing.length === 0, "欠落なし（ZAICOの全在庫がBELLOに存在する）", missing.length ? missing.slice(0, 10).join(",") : `0件 / ZAICO ${zaicoSet.size}件`);
+  //
+  // ただし「直近の同期が終わった後にZAICOへ追加された在庫」は、まだ
+  // BELLOに無くて当然であり不具合ではない(次の同期で入る)。両者を
+  // 区別せずに落とすと、誰かがZAICOへ1件登録しただけでこの突合が赤くなり、
+  // 本物の取り込み失敗と見分けが付かなくなる —— 2026-09-01の実行が
+  // まさにそれで、73729844(ZAICOでの作成 2026-09-01T00:04:37+09:00)が
+  // 直近同期の完了(2026-08-31T12:12:19Z)より後だったために落ちていた。
+  //
+  // これは判定を緩めているのではなく、逆に厳しくしている: 「同期完了より
+  // 前から存在するのにBELLOに無い」は、以前の1,000件打ち切りや
+  // 宙に浮いたリンクのような**取り込み不具合そのもの**であり、
+  // ラグでは説明できない。そこだけを失敗として扱う。
+  const syncFinishedAt = (job.Item?.finishedAt as string | undefined) ?? null;
+  const syncFinishedMs = syncFinishedAt ? Date.parse(syncFinishedAt) : NaN;
+  const missingCreatedAfterSync: string[] = [];
+  const missingDespiteSync: string[] = [];
+  for (const id of missing) {
+    const createdAt = zaicoCreatedAt.get(id) ?? null;
+    const createdMs = createdAt ? Date.parse(createdAt) : NaN;
+    // 作成時刻が読めない場合は安全側(=不具合候補)へ倒す。
+    if (Number.isFinite(syncFinishedMs) && Number.isFinite(createdMs) && createdMs > syncFinishedMs) missingCreatedAfterSync.push(id);
+    else missingDespiteSync.push(id);
+  }
+
+  check(
+    missingDespiteSync.length === 0,
+    "欠落なし（直近同期の時点で存在したZAICO在庫は、すべてBELLOにある）",
+    missingDespiteSync.length ? missingDespiteSync.slice(0, 10).join(",") : `0件 / ZAICO ${zaicoSet.size}件`,
+  );
+
+  if (missingCreatedAfterSync.length > 0) {
+    console.log(`
+[情報] 直近同期(${syncFinishedAt})より後にZAICOへ追加され、まだBELLOに無い在庫: ${missingCreatedAfterSync.length}件`);
+    console.log(`  ${missingCreatedAfterSync.slice(0, 20).join(", ")}`);
+    console.log("  次回の同期で取り込まれる想定。取り込まれない場合は不具合として扱う。");
+  }
   check(duplicates.length === 0, "重複なし", duplicates.length ? duplicates.slice(0, 10).map(([k, n]) => `${k}×${n}`).join(",") : "0件");
   check(danglingLinks.length === 0, "宙に浮いたリンクなし（この1件が48824174を永久に取り込めなくしていた）", danglingLinks.length ? danglingLinks.slice(0, 10).map((l) => l.sourceInventoryId).join(",") : "0件");
   check(links.length === zaicoRows.length, "リンク件数とZAICO由来行の件数が一致", `${links.length} / ${zaicoRows.length}`);

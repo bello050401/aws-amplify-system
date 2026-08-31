@@ -22,6 +22,7 @@
     "verify:base": "node scripts/with-server-only-stub.cjs scripts/verify-base.ts",
     "verify:ai-gateway": "node scripts/with-server-only-stub.cjs scripts/verify-ai-gateway.ts",
     "verify:ai-live": "node scripts/with-server-only-stub.cjs scripts/verify-ai-live.ts",
+    "verify:mercari": "node scripts/with-server-only-stub.cjs scripts/verify-mercari.ts",
     "verify:mercari-live": "node scripts/with-server-only-stub.cjs scripts/verify-mercari-live.ts",
     "verify:image-processing": "node scripts/with-server-only-stub.cjs scripts/verify-image-processing.ts",
     "benchmark:zaico-sync": "node scripts/with-server-only-stub.cjs scripts/benchmark-zaico-sync.ts",

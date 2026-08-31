@@ -33,8 +33,12 @@ export class MercariShopsClient {
   constructor(params: { getAccessToken: () => Promise<string>; getUserAgent?: () => Promise<string>; environment?: MercariEnvironment }) {
     this.environment = params.environment ?? getMercariEnvironment();
     this.endpoint = getMercariEndpoint(this.environment);
-    this.timeoutMs = Number(process.env.MERCARI_TIMEOUT_MS ?? 15000);
-    this.maxRetries = Number(process.env.MERCARI_MAX_RETRIES ?? 3);
+    // 環境変数に数値でない値が入っていた場合、Number()はNaNを返す。
+    // setTimeout(fn, NaN)は「0ms後」と解釈されるため、以前はMERCARI_TIMEOUT_MSに
+    // 誤った値が入るだけで全リクエストが即座にabortされ、原因の分かりにくい
+    // NETWORK_ERRORが出続ける状態になり得た。既定値へフォールバックする。
+    this.timeoutMs = positiveIntFromEnv(process.env.MERCARI_TIMEOUT_MS, 15000);
+    this.maxRetries = nonNegativeIntFromEnv(process.env.MERCARI_MAX_RETRIES, 3);
     this.getAccessToken = params.getAccessToken;
     // BELLO統合業務OS指示書(2026-08-30) §92: 保存前の接続確認は、まだ
     // Secrets Manager/環境変数に保存されていない「入力中の値」で検証
@@ -126,22 +130,67 @@ export class MercariShopsClient {
         signal: controller.signal,
       });
     } catch (err) {
-      console.error("[MercariShopsClient] network error:", JSON.stringify(logContext), err instanceof Error ? err.message : err);
-      throw new MercariApiError("NETWORK_ERROR", err instanceof Error ? err.message : "Network error calling Mercari Shops API");
+      // AbortControllerによる打ち切りは「繋がらない」ではなく「時間内に
+      // 返ってこなかった」— 利用者への説明も対処も異なるため、
+      // NETWORK_ERRORへ一括りにせずTIMEOUTとして分類する(§3.3の
+      // errorCode一覧でもNETWORK_ERRORとTIMEOUTは別項目)。
+      const timedOut = controller.signal.aborted || (err instanceof Error && err.name === "AbortError");
+      const code = timedOut ? "TIMEOUT" : "NETWORK_ERROR";
+      console.error(`[MercariShopsClient] ${code}:`, JSON.stringify({ ...logContext, timeoutMs: this.timeoutMs }), err instanceof Error ? err.message : err);
+      throw new MercariApiError(
+        code,
+        timedOut ? `Timed out after ${this.timeoutMs}ms` : err instanceof Error ? err.message : "Network error calling Mercari Shops API",
+      );
     } finally {
       clearTimeout(timer);
     }
+
+    // 429は公式ドキュメントのRate Limitingに従い、リセット時刻を
+    // X-Ratelimit-Resetヘッダから読み取れる — 秘密値ではないので、
+    // 「いつ再試行できるのか」を運用者が判断できるようログと
+    // causeMessageへ含める。
+    const rateLimitReset = response.headers.get("x-ratelimit-reset") ?? undefined;
 
     if (!response.ok) {
       const bodyText = await safeReadText(response);
       let code = classifyHttpStatus(response.status);
       if (response.status === 403) code = classifyForbiddenError(bodyText);
-      console.error("[MercariShopsClient] non-OK response:", JSON.stringify({ ...logContext, status: response.status, code }));
-      throw new MercariApiError(code, `HTTP ${response.status}${bodyText ? `: ${bodyText}` : ""}`);
+      console.error(
+        "[MercariShopsClient] non-OK response:",
+        JSON.stringify({ ...logContext, status: response.status, code, ...(rateLimitReset ? { rateLimitReset } : {}) }),
+      );
+      const detail = bodyText ? `: ${bodyText}` : "";
+      throw new MercariApiError(code, `HTTP ${response.status}${detail}${rateLimitReset ? ` (X-Ratelimit-Reset: ${rateLimitReset})` : ""}`);
     }
 
     const requestId = response.headers.get("x-request-id") ?? undefined;
-    const json = (await response.json()) as GraphQLResponse<TData>;
+
+    // HTTP 200でも本文がJSONとは限らない(WAF/プロキシの割り込みHTML等)。
+    // 以前はここのresponse.json()が無防備で、SyntaxErrorがMercariApiError
+    // ではない生の例外として外まで伝播していた — 接続確認画面には
+    // 「Unexpected token < in JSON at position 0」のような、利用者が
+    // 判断できない文言がそのまま出得た。JSON化の失敗も分類済みの
+    // MercariApiError(INVALID_RESPONSE)として扱う。
+    let json: GraphQLResponse<TData>;
+    try {
+      json = (await response.json()) as GraphQLResponse<TData>;
+    } catch (err) {
+      console.error(
+        "[MercariShopsClient] response body was not valid JSON:",
+        JSON.stringify({ ...logContext, status: response.status, contentType: response.headers.get("content-type") ?? null }),
+        err instanceof Error ? err.message : err,
+      );
+      throw new MercariApiError(
+        "INVALID_RESPONSE",
+        `HTTP ${response.status} but the body was not valid JSON (content-type: ${response.headers.get("content-type") ?? "unknown"})`,
+        [],
+        requestId,
+      );
+    }
+
+    if (json === null || typeof json !== "object") {
+      throw new MercariApiError("INVALID_RESPONSE", `HTTP ${response.status} but the body was not a JSON object`, [], requestId);
+    }
 
     if (json.errors && json.errors.length > 0) {
       const code = classifyGraphQLErrors(json.errors);
@@ -164,10 +213,33 @@ export function extractGraphQLOperationName(query: string): string {
   return m?.[1] ?? "unknown";
 }
 
+/**
+ * エラー応答の本文は、Cloudflare等のエッジが返すHTMLだと数百KBになる
+ * ことがある(実測: api.mercari-shops.com/docs は1.3MB)。そのまま
+ * MercariApiErrorのcauseMessageへ入れると、ログにも、場合によっては
+ * 画面にも巨大な本文が流れ込む。原因の切り分けに必要なのは先頭だけなので
+ * 上限を設けて切り詰める。
+ */
+const MAX_ERROR_BODY_CHARS = 500;
+
 async function safeReadText(response: Response): Promise<string> {
   try {
-    return await response.text();
+    const text = await response.text();
+    if (text.length <= MAX_ERROR_BODY_CHARS) return text;
+    return `${text.slice(0, MAX_ERROR_BODY_CHARS)}…(以下${text.length - MAX_ERROR_BODY_CHARS}文字省略)`;
   } catch {
     return "";
   }
+}
+
+/** 環境変数から正の整数を読む。未設定・数値でない・0以下ならフォールバック値。 */
+export function positiveIntFromEnv(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+/** 環境変数から0以上の整数を読む(リトライ回数は0が有効な設定値)。 */
+export function nonNegativeIntFromEnv(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
 }
