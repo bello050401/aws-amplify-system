@@ -19,6 +19,7 @@ import {
   LOCAL_CONFIDENCE_SUFFICIENT,
 } from "@/lib/imageProcessing/vision/router";
 import { MIN_CROP_CONFIDENCE } from "@/lib/imageProcessing/cropPlanner";
+import { BudgetedVisionAnalyzer, DEFAULT_VISION_BUDGET } from "@/lib/imageProcessing/vision/budgetedAnalyzer";
 import type { VisionAnalysisInput } from "@/lib/imageProcessing/vision/types";
 
 let failures = 0;
@@ -275,6 +276,48 @@ async function testCostControl() {
   assertEqual(analyzer.calls, 1, "コスト: 呼び出し回数を観測できる");
 }
 
+/**
+ * 呼び出し予算（§35 コスト / §36 障害耐性）。
+ *
+ * image-processing-workerのtimeoutは300秒で1起動あたり最大20件を処理する。
+ * Vision解析は最大20秒×2回試行=40秒かかり得るので、難例が続くと
+ * 20×40=800秒となりLambdaごとtimeoutして**加工結果が1件も残らない**。
+ * AIを入れたせいで従来動いていた処理を壊す、という最悪の形になる。
+ */
+async function testBudget() {
+  const inner = new MockVisionAnalyzer(() => ROUND_TABLE_FIXTURE);
+  const budgeted = new BudgetedVisionAnalyzer(inner, { maxCalls: 2, maxTotalMs: 10_000 });
+
+  assertTrue((await budgeted.analyze(input)) !== null, "予算: 1回目は通る");
+  assertTrue((await budgeted.analyze(input)) !== null, "予算: 2回目も通る");
+  assertEqual(await budgeted.analyze(input), null, "予算: 上限を超えたらnull（例外にしない）");
+  assertEqual(await budgeted.analyze(input), null, "予算: 超過後は何度呼んでもnull");
+  assertEqual(inner.calls, 2, "予算: 上限を超えたら実際にAPIを呼ばない（課金しない）");
+  assertTrue(budgeted.state.exhausted, "予算: 使い切ったことを観測できる");
+
+  // 時間の上限。失敗した呼び出しも時間を消費したものとして数える。
+  const slow = new BudgetedVisionAnalyzer(
+    new MockVisionAnalyzer(() => new Error("VISION_TIMEOUT")),
+    { maxCalls: 99, maxTotalMs: 0 },
+  );
+  assertEqual(await slow.analyze(input), null, "予算: 時間の予算が0なら呼ばない");
+
+  // 障害で例外が出ても予算の計上が壊れないこと。
+  const failing = new BudgetedVisionAnalyzer(new MockVisionAnalyzer(() => new Error("boom")), { maxCalls: 2 });
+  assertEqual(await failing.analyze(input), null, "予算: 内側が失敗してもnullで返る");
+  assertEqual(failing.state.calls, 1, "予算: 失敗した呼び出しも1回として数える");
+
+  // 予算切れは「AIの助けが無い」だけなので、統合側はローカルの判断を保つ。
+  const merged = mergeVisionWithLocal(input.localBbox, 0.3, await budgeted.analyze(input));
+  assertEqual(merged.bbox, input.localBbox, "予算: 切れてもローカルの見立てで加工を続ける");
+  assertTrue(merged.reasonCodes.includes("VISION_UNAVAILABLE"), "予算: 切れたことが理由コードに残る");
+
+  // 既定値がLambdaのtimeoutに対して安全であること。
+  const worstCaseMs = DEFAULT_VISION_BUDGET.maxCalls * 40_000;
+  assertTrue(DEFAULT_VISION_BUDGET.maxTotalMs <= 120_000, "予算: 既定の時間上限がLambda timeout(300秒)より十分小さい");
+  assertTrue(worstCaseMs <= 150_000, "予算: 既定の回数上限でも最悪ケースがtimeoutに収まる");
+}
+
 async function main(): Promise<void> {
   testJsonExtraction();
   testValidation();
@@ -284,6 +327,7 @@ async function main(): Promise<void> {
   await testNoLocalSubject();
   await testFailureModes();
   await testCostControl();
+  await testBudget();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exitCode = 1;

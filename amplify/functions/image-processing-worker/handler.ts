@@ -3,6 +3,9 @@ import { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateComm
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { randomUUID } from "node:crypto";
 import { SharpImageProcessingProvider, ENGINE_VERSION } from "../../../lib/imageProcessing/sharpProcessor";
+import { BedrockVisionAnalyzer } from "../../../lib/imageProcessing/vision/bedrockVisionAnalyzer";
+import { BudgetedVisionAnalyzer } from "../../../lib/imageProcessing/vision/budgetedAnalyzer";
+import type { VisionAnalysisResult } from "../../../lib/imageProcessing/vision/types";
 import { decideAspectRatio, decideResultStatus, DEFAULT_CONFIDENCE_THRESHOLD } from "../../../lib/imageProcessing/pipeline";
 import type { ImageClassificationName } from "../../../lib/inventory/imageTypes";
 
@@ -25,7 +28,51 @@ const PHOTO_PROFILE_TABLE = process.env.PHOTO_PROFILE_TABLE_NAME!;
 const INVENTORY_TABLE = process.env.INVENTORY_TABLE_NAME!;
 const STORAGE_BUCKET = process.env.STORAGE_BUCKET_NAME!;
 
-const provider = new SharpImageProcessingProvider();
+/**
+ * AI Vision(難例だけの意味解析フォールバック)の有効化。
+ *
+ * ## 既定で無効にしてある理由
+ *
+ * AIを足すこと自体は品質改善ではない(§56)。実際、提示された参照写真4枚は
+ * 露出補正を被写体検出の前へ動かした時点でローカル解析だけで解決しており、
+ * AIは1枚も呼ばれない。環境変数で明示的に有効化したときだけ使う。
+ *
+ * ## 予算を必ず通す理由
+ *
+ * このLambdaのtimeoutは300秒で、1回の起動で最大${MAX_JOBS_PER_RUN}件を処理する。
+ * Vision解析は1件あたり最大20秒×2回試行=40秒かかり得るため、難例が続くと
+ * 20件×40秒=800秒となり**Lambdaごとtimeoutして加工結果が1件も残らない**。
+ * AIを入れたせいで従来動いていた処理を壊すことになる。BudgetedVisionAnalyzerで
+ * 「1起動あたり何件・何秒まで」を先に決め、使い切ったら静かにローカルへ戻す。
+ *
+ * ## キャッシュ
+ *
+ * モジュールスコープのMapをwarm containerで共有する。同じ画像を再加工した
+ * ときに二重で課金しないため(§35)。プロセスが再利用される間だけ生きる
+ * 揮発キャッシュで、正しさには影響しない(外れてもAPIを呼び直すだけ)。
+ */
+const VISION_ENABLED = process.env.BELLO_VISION_ENABLED === "true";
+const VISION_MAX_CALLS_PER_RUN = Number(process.env.BELLO_VISION_MAX_CALLS_PER_RUN ?? "3");
+const VISION_MAX_MS_PER_RUN = Number(process.env.BELLO_VISION_MAX_MS_PER_RUN ?? "90000");
+
+const visionCache = new Map<string, VisionAnalysisResult>();
+
+/**
+ * 予算は1起動ごとに使い切る形にしたいので、解析器はhandlerの中で作る
+ * (モジュールスコープで作ると、warm containerで予算が復活しないまま
+ *  2回目以降の起動がAIを一切使えなくなる)。キャッシュだけは共有する。
+ */
+function createVisionAnalyzer(): BudgetedVisionAnalyzer | undefined {
+  if (!VISION_ENABLED) return undefined;
+  return new BudgetedVisionAnalyzer(
+    new BedrockVisionAnalyzer({
+      modelId: process.env.BELLO_VISION_MODEL_ID,       // 未設定なら us.amazon.nova-lite-v1:0
+      region: process.env.BELLO_VISION_REGION,           // 未設定なら BEDROCK_REGION → AWS_REGION → us-west-2
+      cache: visionCache,
+    }),
+    { maxCalls: VISION_MAX_CALLS_PER_RUN, maxTotalMs: VISION_MAX_MS_PER_RUN },
+  );
+}
 
 // 1回の起動(5分毎)で処理する最大件数。sharp処理+S3 I/Oは商品画像
 // 1枚あたり数秒〜十数秒かかり得るため、Lambdaのtimeout(300秒)内に
@@ -135,7 +182,7 @@ async function claimJob(job: ProcessingJobRow): Promise<boolean> {
   }
 }
 
-async function processOne(job: ProcessingJobRow): Promise<void> {
+async function processOne(job: ProcessingJobRow, provider: SharpImageProcessingProvider): Promise<void> {
   const claimed = await claimJob(job);
   if (!claimed) {
     console.log(`[image-processing-worker] job=${job.id} already claimed by another invocation — skipping (no double-processing).`);
@@ -162,6 +209,15 @@ async function processOne(job: ProcessingJobRow): Promise<void> {
       aspectRatio,
       adjustments: (job.requestedAdjustments as Record<string, unknown> | undefined) ?? {},
     });
+
+    // AIを使ったか、使えたか、何を避けたかを残す(§49 観測)。
+    // これが無いと「有効化したつもりで実は一度も呼ばれていない」に気付けない。
+    const v = result.diagnostics.vision;
+    if (v.requested) {
+    console.log(
+      `[image-processing-worker] vision: requested=${v.requested} trigger=${v.trigger ?? "-"} applied=${v.applied} model=${v.modelId ?? "-"} latency=${v.latencyMs ?? "-"}ms avoid=${v.avoidRegions.length}`,
+    );
+    }
 
     const masterKey = `inventory/processed/${randomUUID()}.jpg`;
     const webKey = `inventory/processed/${randomUUID()}.webp`;
@@ -236,9 +292,25 @@ export const handler = async () => {
   const res = await ddb.send(new ScanCommand({ TableName: PROCESSING_JOB_TABLE, FilterExpression: "#s = :pending", ExpressionAttributeNames: { "#s": "status" }, ExpressionAttributeValues: { ":pending": "PENDING" }, Limit: MAX_JOBS_PER_RUN }));
   const jobs = (res.Items ?? []) as ProcessingJobRow[];
 
-  console.log(`[image-processing-worker] ${jobs.length} pending job(s) (max ${MAX_JOBS_PER_RUN}/run).`);
+  // 予算は1起動ぶん。warm containerでも起動ごとに作り直す。
+  const analyzer = createVisionAnalyzer();
+  const provider = new SharpImageProcessingProvider(analyzer ? { visionAnalyzer: analyzer } : {});
+
+  console.log(
+    `[image-processing-worker] ${jobs.length} pending job(s) (max ${MAX_JOBS_PER_RUN}/run); vision=${
+      analyzer ? `enabled(${VISION_MAX_CALLS_PER_RUN} calls / ${VISION_MAX_MS_PER_RUN}ms per run)` : "disabled"
+    }.`,
+  );
+
   for (const job of jobs) {
-    await processOne(job).catch((err) => console.error(`[image-processing-worker] job=${job.id} unhandled error:`, err));
+    await processOne(job, provider).catch((err) => console.error(`[image-processing-worker] job=${job.id} unhandled error:`, err));
+  }
+
+  if (analyzer) {
+    const spent = analyzer.state;
+    console.log(
+      `[image-processing-worker] vision budget: ${spent.calls} call(s) / ${Math.round(spent.elapsedMs)}ms${spent.exhausted ? " (exhausted — remaining jobs used local analysis only)" : ""}`,
+    );
   }
   return { processedCount: jobs.length };
 };

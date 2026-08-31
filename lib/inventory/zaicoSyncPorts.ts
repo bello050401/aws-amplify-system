@@ -263,7 +263,22 @@ export function createServerSyncPort(): ZaicoSyncPort {
     },
     async releaseSourceLink(sourceInventoryId) {
       const linkId = buildZaicoSourceLinkId("ZAICO", sourceInventoryId);
-      await serverDataClient.models.ZaicoSourceLink.delete({ id: linkId }, inventoryAuthMode);
+      const { errors } = await serverDataClient.models.ZaicoSourceLink.delete({ id: linkId }, inventoryAuthMode);
+      // 失敗を握りつぶさない。
+      //
+      // ここはcreate失敗時の補償処理で、claimだけが残るとその在庫IDは
+      // 「リンクはあるがInventoryが無い」不整合になり、以後の同期で
+      // zaicoSyncEngineが毎回throwする——つまり**その1件は二度と
+      // 取り込めなくなる**。実際にZAICO ID 48824174がこの状態で
+      // 取り残されていた(5,312件中1件だけがBELLOに存在しない)。
+      //
+      // Amplifyのdeleteは失敗を例外ではなく errors で返すため、
+      // awaitするだけでは成功と見分けが付かない。
+      if (errors && errors.length > 0) {
+        throw new Error(
+          `ZAICO在庫ID ${sourceInventoryId} の重複防止リンクの解放に失敗しました(リンクだけが残る不整合になります): ${JSON.stringify(errors)}`,
+        );
+      }
     },
     fetchAllZaicoManaged: serverFetchAllZaicoManaged,
     findOrCreateCategory: (name) => findOrCreateMasterEntryByName("Category", name),

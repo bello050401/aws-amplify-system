@@ -32,7 +32,8 @@
     "benchmark:images": "node scripts/with-server-only-stub.cjs scripts/benchmark-image-processing.ts",
     "verify:zaico-pagination": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-pagination.ts",
     "verify:vision": "node scripts/with-server-only-stub.cjs scripts/verify-vision.ts",
-    "verify:image-pipeline": "node scripts/with-server-only-stub.cjs scripts/verify-image-pipeline.ts"
+    "verify:image-pipeline": "node scripts/with-server-only-stub.cjs scripts/verify-image-pipeline.ts",
+    "repair:zaico-links": "node scripts/with-server-only-stub.cjs scripts/repair-zaico-dangling-links.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

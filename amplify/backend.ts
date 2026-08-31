@@ -2,6 +2,7 @@ import { defineBackend } from "@aws-amplify/backend";
 import { RemovalPolicy, SecretValue } from "aws-cdk-lib";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
+import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
 import { data } from "./data/resource";
 import { storage } from "./storage/resource";
@@ -337,6 +338,59 @@ backend.imageProcessingWorker.addEnvironment("IMAGE_PROCESSING_VERSION_TABLE_NAM
 backend.imageProcessingWorker.addEnvironment("PHOTO_PROFILE_TABLE_NAME", photoProfileTable.tableName);
 backend.imageProcessingWorker.addEnvironment("INVENTORY_TABLE_NAME", inventoryTable.tableName);
 backend.imageProcessingWorker.addEnvironment("STORAGE_BUCKET_NAME", backend.storage.resources.bucket.bucketName);
+
+// ─────────────────────────────────────────────────────────────────────
+// AI Vision(2026-08-31 AI Vision統合仕様書 §33): 難例だけの意味解析
+// フォールバックとして image-processing-worker から Amazon Bedrock を
+// 呼べるようにする。
+//
+// ## なぜ Amazon Nova で、Anthropic Claude ではないのか
+//
+// 実測した結果、このアカウントで Anthropic モデルを呼ぶとモデルを問わず
+// `404 Model use case details have not been submitted for this account.`
+// になる(利用者本人によるフォーム提出が要る)。一方 Nova は申請なしで
+// そのまま応答した。us-west-2 には Anthropic 以外に画像入力対応モデルが
+// 27件あり、必要なのは「商品はここ / これは撮影機材」という座標と分類
+// だけなので Nova Lite で足りる。実機で丸テーブルを confidence 0.95 で
+// 判定し、右端の撮影機材も検出できている。利用者の AWS 操作を1つも
+// 増やさない(§8 の優先順位)。
+//
+// ## クロスリージョン推論プロファイルに必要な権限
+//
+// 既定のモデルIDは `us.` 接頭辞つきの**推論プロファイル**である。
+// プロファイル自身の ARN に加えて、**そのプロファイルがルーティングし得る
+// 全リージョンの基盤モデル ARN** を許可しないと AccessDeniedException に
+// なる(プロファイル ARN だけでは足りない)。ルーティング先は
+// `aws bedrock get-inference-profile` で実測して列挙している。
+//
+// 基盤モデル ARN にアカウントIDが入らないのは仕様(AWS 所有のリソース)。
+const VISION_MODEL = "amazon.nova-lite-v1:0";
+const VISION_PROFILE = "us.amazon.nova-lite-v1:0";
+/** 推論プロファイルのルーティング先。get-inference-profileの実測値。 */
+const VISION_MODEL_REGIONS = ["us-east-1", "us-east-2", "us-west-2"];
+
+backend.imageProcessingWorker.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["bedrock:InvokeModel"],
+    resources: [
+      // 推論プロファイル本体(呼び出し先として指定するID)
+      `arn:aws:bedrock:${backend.stack.region}:${backend.stack.account}:inference-profile/${VISION_PROFILE}`,
+      // プロファイルがルーティングし得る各リージョンの基盤モデル
+      ...VISION_MODEL_REGIONS.map((r) => `arn:aws:bedrock:${r}::foundation-model/${VISION_MODEL}`),
+    ],
+  }),
+);
+
+// 既定では無効。AIを足すこと自体は品質改善ではないため(§56)、明示的に
+// 有効化したときだけ使う。予算はLambdaのtimeout(300秒)を守るための上限で、
+// 使い切ったら静かにローカル解析へ戻る(BudgetedVisionAnalyzer参照)。
+backend.imageProcessingWorker.addEnvironment("BELLO_VISION_ENABLED", "true");
+backend.imageProcessingWorker.addEnvironment("BELLO_VISION_MODEL_ID", VISION_PROFILE);
+backend.imageProcessingWorker.addEnvironment("BELLO_VISION_REGION", backend.stack.region);
+backend.imageProcessingWorker.addEnvironment("BELLO_VISION_MAX_CALLS_PER_RUN", "3");
+backend.imageProcessingWorker.addEnvironment("BELLO_VISION_MAX_MS_PER_RUN", "90000");
+
 
 // ─────────────────────────────────────────────────────────────────────
 // BELLO統合業務OS 第五ラウンド §4(P0-A): ZAICO同期の完全無人化。

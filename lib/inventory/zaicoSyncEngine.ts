@@ -57,6 +57,36 @@ function normalizeHistoryValue(value: string | number | null | undefined): strin
   return String(value);
 }
 
+/**
+ * claim の解放を試み、**失敗しても元のエラーを握りつぶさない**。
+ *
+ * 解放が失敗するとその在庫IDは「リンクはあるがInventoryが無い」不整合に
+ * なり、以後の同期で毎回 throw される——つまりその1件は二度と取り込め
+ * なくなる。実際に ZAICO ID 48824174 がこの状態で取り残されていた。
+ *
+ * とはいえ、ここで解放の失敗を投げ直すと**本来の失敗原因**(SKU採番、
+ * create失敗など)が失われて調査できなくなる。両方を残すため、解放の
+ * 失敗は元のエラーのメッセージへ追記する形にする。
+ */
+async function releaseClaimPreservingError(
+  port: ZaicoSyncPort,
+  sourceInventoryId: string,
+  originalError: unknown,
+): Promise<unknown> {
+  try {
+    await port.releaseSourceLink(sourceInventoryId);
+    return originalError;
+  } catch (releaseErr) {
+    const original = originalError instanceof Error ? originalError.message : String(originalError);
+    const release = releaseErr instanceof Error ? releaseErr.message : String(releaseErr);
+    const combined = new Error(
+      `${original} / さらに重複防止リンクの解放にも失敗しました(この在庫IDは手動修復が必要です): ${release}`,
+    );
+    if (originalError instanceof Error && originalError.stack) combined.stack = originalError.stack;
+    return combined;
+  }
+}
+
 export function diffField(fieldName: string, oldValue: string | number | null | undefined, newValue: string | number | null | undefined): HistoryFieldChange | null {
   const oldNorm = normalizeHistoryValue(oldValue);
   const newNorm = normalizeHistoryValue(newValue);
@@ -353,8 +383,8 @@ export async function syncOneZaicoItem(
       } catch (err) {
         if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
         if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
-        await port.releaseSourceLink(sourceInventoryId); // claim済みロックを解放——次回の再試行が「既に誰かが保持している」と誤判定しないようにする
-        throw err;
+        // claim済みロックを解放——次回の再試行が「既に誰かが保持している」と誤判定しないようにする
+        throw await releaseClaimPreservingError(port, sourceInventoryId, err);
       }
 
       let created: InventoryModel;
@@ -382,8 +412,8 @@ export async function syncOneZaicoItem(
       } catch (err) {
         if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
         if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
-        await port.releaseSourceLink(sourceInventoryId); // 同上——create自体が失敗した場合もclaimを解放し、再試行を妨げない
-        throw err;
+        // 同上——create自体が失敗した場合もclaimを解放し、再試行を妨げない
+        throw await releaseClaimPreservingError(port, sourceInventoryId, err);
       }
 
       await port.logHistory(created.id, who, [

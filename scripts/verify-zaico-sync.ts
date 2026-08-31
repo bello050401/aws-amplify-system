@@ -334,6 +334,55 @@ async function testCreateFailureReleasesClaimForRetry() {
 }
 
 /**
+ * 補償処理(releaseSourceLink)自体が失敗した場合の扱い。
+ *
+ * ## なぜこれを検証するのか
+ *
+ * create失敗時にclaimを解放できないと、その在庫IDは「リンクはあるが
+ * Inventoryが無い」不整合になり、以後の同期で毎回throwされる——つまり
+ * **その1件は再同期しても永久に取り込めない**。
+ *
+ * 実際に 2026-08-31 の全件同期(5,312件)で ZAICO ID 48824174 の1件だけが
+ * この状態になり、BELLO側が 5,311件 に留まる原因になっていた。当時の
+ * releaseSourceLinkはAmplifyの `errors` を確認せずawaitするだけだったため、
+ * 解放の失敗が成功と区別できず、ログにも何も残らなかった。
+ *
+ * 直したうえで、**元の失敗原因が消えない**ことも確認する。解放の失敗を
+ * そのまま投げ直すと、本来の原因(SKU採番失敗、create失敗など)が失われて
+ * 調査できなくなるため。
+ */
+async function testReleaseFailureIsReportedWithoutLosingOriginalError() {
+  const { port, store } = createMockPort();
+  const flakyPort: ZaicoSyncPort = {
+    ...port,
+    async createInventory() {
+      throw new Error("mock: 一時的な書き込み失敗");
+    },
+    async releaseSourceLink() {
+      throw new Error("mock: リンクの解放にも失敗");
+    },
+  };
+
+  const result = await syncOneZaicoItem(makeZaicoItem({ id: 48824174 }), "tester@example.com", undefined, flakyPort);
+  assertEqual(result.status, "failed", "解放失敗: 結果はfailedとして報告される");
+  assertEqual(store.size, 0, "解放失敗: Inventoryは作られていない");
+
+  const message = result.error ?? "";
+  assertTrue(
+    message.includes("一時的な書き込み失敗"),
+    "解放失敗: 元の失敗原因がメッセージに残る(調査できなくならない)",
+  );
+  assertTrue(
+    message.includes("解放"),
+    "解放失敗: 解放にも失敗したことがメッセージに出る(黙って不整合を残さない)",
+  );
+  assertTrue(
+    message.includes("手動修復"),
+    "解放失敗: 手当てが必要なことが分かる文言になっている",
+  );
+}
+
+/**
  * BELLO ZAICO級高速化仕様書 §30.7: baseline計測(scripts/
  * benchmark-zaico-sync.ts)で確定した2つのN+1(sourceInventoryIdの
  * 全件Scan、Category/Locationマスタの全件取得)がprefetched map /
@@ -533,6 +582,7 @@ async function main() {
   await testNumberStringIdBoundaryTreatedAsSameSource();
   await testRepeatedFullResyncNeverIncreasesCount();
   await testCreateFailureReleasesClaimForRetry();
+  await testReleaseFailureIsReportedWithoutLosingOriginalError();
   await testPrefetchAndMasterCacheAvoidRepeatedLookups();
   testBackgroundJobPureHelpers();
   testPurchasePriceAllInCostRule();
