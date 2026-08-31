@@ -27,15 +27,20 @@ export function SearchClient() {
     setSearching(true);
     const timer = setTimeout(async () => {
       try {
-        const items = await searchBaseItems(query);
-        setResults(items);
-        setError(null);
-      } catch (err) {
-        // Surfaces the real reason (e.g. "BASEに接続されていません…", or the
-        // actual BASE API error) instead of a generic message that hides
-        // it — the server-side cause is also logged in the `npm run dev`
-        // terminal by searchBaseItems() itself.
-        setError(err instanceof Error ? err.message : "検索に失敗しました。時間をおいて再度お試しください。");
+        // 2026-09-01: Server Actionは例外を投げず、必ず結果オブジェクトを返す
+        // ——production buildではthrowしたmessageがNext.jsに丸められ、
+        // 利用者には英語の技術文言しか届かないため(app/actions/base.ts参照)。
+        const res = await searchBaseItems(query);
+        if (res && res.ok) {
+          setResults(res.items);
+          setError(null);
+        } else {
+          setResults([]);
+          setError(res?.error ?? "検索に失敗しました。時間をおいて再度お試しください。");
+        }
+      } catch {
+        // Server Actionへ到達できなかった場合(通信断・セッション切れ等)。
+        setError("検索できませんでした。通信状況を確認するか、ログインし直してから再試行してください。");
       } finally {
         setSearching(false);
       }
@@ -79,9 +84,14 @@ export function SearchClient() {
   async function handleAddUrls() {
     let items: BaseItem[];
     try {
-      items = await resolveBaseItemsFromUrls(urlText);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "商品の取得に失敗しました。");
+      const res = await resolveBaseItemsFromUrls(urlText);
+      if (!res || !res.ok) {
+        setError(res?.error ?? "商品の取得に失敗しました。");
+        return;
+      }
+      items = res.items;
+    } catch {
+      setError("商品を取得できませんでした。通信状況を確認するか、ログインし直してから再試行してください。");
       return;
     }
     if (items.length === 0) {
