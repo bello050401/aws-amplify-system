@@ -22,7 +22,7 @@
  *     node scripts/with-server-only-stub.cjs scripts/verify-zaico-reconciliation.ts
  */
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, ScanCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 
 const REGION = process.env.AWS_REGION || process.env.BELLO_REGION || "us-west-2";
@@ -107,15 +107,41 @@ async function main(): Promise<void> {
   const danglingLinks = links.filter((l) => !invIds.has(l.inventoryId));
   const linksWithoutZaico = links.filter((l) => !zaicoSet.has(l.sourceInventoryId));
 
+  // 同期ジョブが「ZAICO側で消えた」と報告した在庫ID。
+  //
+  // BELLOはZAICOでの削除を追いかけて自動削除しない(schemaのコメント:
+  // 「This is reporting only — nothing is ever auto-deleted from BELLO」)。
+  // 商品写真・内部メモ・ListingDraft等がZAICO側の操作だけで消えるのを
+  // 避けるための設計判断なので、BELLO側に余分な行があること自体は
+  // 異常ではない。**異常なのは、それが同期ジョブに把握されていない場合**。
+  const jobTable = await resolveTable("ZaicoSyncJob", process.env.BELLO_ZAICO_JOB_TABLE);
+  const job = await ddb.send(new GetCommand({ TableName: jobTable, Key: { id: "zaico-full-sync-singleton" } }));
+  const reportedMissing: string[] = (job.Item?.missingSourceIds as string[] | undefined) ?? [];
+  const jobStatus = (job.Item?.status as string | undefined) ?? "(なし)";
+  const unexplained = orphans.filter((o) => !reportedMissing.includes(o));
+
   console.log(`BELLO: ZAICO由来 ${zaicoRows.length}件 / リンク ${links.length}件 / Inventory全体 ${invIds.size}件\n`);
 
-  check(zaicoRows.length === zaicoSet.size, "ZAICO実件数とBELLOのZAICO由来件数が一致", `${zaicoRows.length} / ${zaicoSet.size}`);
-  check(missing.length === 0, "欠落なし", missing.length ? missing.slice(0, 10).join(",") : "0件");
+  // ── 必須条件: ZAICOにある在庫は、すべてBELLOにある ──
+  check(missing.length === 0, "欠落なし（ZAICOの全在庫がBELLOに存在する）", missing.length ? missing.slice(0, 10).join(",") : `0件 / ZAICO ${zaicoSet.size}件`);
   check(duplicates.length === 0, "重複なし", duplicates.length ? duplicates.slice(0, 10).map(([k, n]) => `${k}×${n}`).join(",") : "0件");
-  check(orphans.length === 0, "孤児（ZAICOに存在しないZAICO由来行）なし", orphans.length ? orphans.slice(0, 10).join(",") : "0件");
-  check(danglingLinks.length === 0, "宙に浮いたリンクなし", danglingLinks.length ? danglingLinks.slice(0, 10).map((l) => l.sourceInventoryId).join(",") : "0件");
-  check(linksWithoutZaico.length === 0, "ZAICOに存在しないリンクなし", linksWithoutZaico.length ? linksWithoutZaico.slice(0, 10).map((l) => l.sourceInventoryId).join(",") : "0件");
+  check(danglingLinks.length === 0, "宙に浮いたリンクなし（この1件が48824174を永久に取り込めなくしていた）", danglingLinks.length ? danglingLinks.slice(0, 10).map((l) => l.sourceInventoryId).join(",") : "0件");
   check(links.length === zaicoRows.length, "リンク件数とZAICO由来行の件数が一致", `${links.length} / ${zaicoRows.length}`);
+
+  // ── ZAICO側で削除された在庫: 保持は仕様。把握できているかを見る ──
+  check(
+    unexplained.length === 0,
+    "BELLO側の余剰は、すべて同期ジョブが把握している上流削除である",
+    unexplained.length ? `未把握 ${unexplained.slice(0, 10).join(",")}` : `未把握 0件（ジョブ報告 ${reportedMissing.length}件）`,
+  );
+
+  if (orphans.length > 0) {
+    console.log(`
+[情報] ZAICO側で削除されたがBELLOに残っている在庫: ${orphans.length}件`);
+    console.log(`  ${orphans.slice(0, 20).join(", ")}`);
+    console.log("  BELLOはZAICOの削除を追いかけて自動削除しない（商品写真・内部メモ・ListingDraft等を守るため）。");
+    console.log(`  直近の同期ジョブ(${jobStatus})も missingSourceIds として同じものを報告している。`);
+  }
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exitCode = 1;
