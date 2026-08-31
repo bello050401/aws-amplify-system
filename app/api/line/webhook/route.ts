@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyLineSignature } from "@/lib/messaging/line/signature";
 import { getLineChannelSecret } from "@/lib/messaging/line/tokenAccess";
 import { parseLineWebhookBody } from "@/lib/messaging/line/adapter";
-import { recordIncomingMessage } from "@/lib/messaging/service";
+import { recordIncomingWebhookMessage } from "@/lib/messaging/webhookStore";
 import type { LineWebhookBody } from "@/lib/messaging/line/types";
 
 /**
@@ -64,7 +64,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   let failedCount = 0;
   for (const msg of normalized) {
     try {
-      await recordIncomingMessage({
+      await recordIncomingWebhookMessage({
         channel: "LINE",
         externalCustomerId: msg.externalCustomerId,
         externalMessageId: msg.externalMessageId,
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     } catch (err) {
       // 1件の失敗で他のイベントの処理を止めない — 残りは処理を続ける。
       failedCount++;
-      console.error("[line webhook] recordIncomingMessage失敗:", err instanceof Error ? err.message : err);
+      console.error("[line webhook] 受信メッセージの保存に失敗:", err instanceof Error ? err.message : err);
     }
   }
 

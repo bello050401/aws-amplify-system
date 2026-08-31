@@ -230,11 +230,21 @@ function testAiPromptsNeverLeakAdminMemo() {
 // する(追加のキー発行も保管も不要)。
 function testProviderResolution() {
   assertEqual(resolveProviderId({ ANTHROPIC_API_KEY: "sk-xxx" }), "anthropic", "resolveProviderId: APIキーがあればAnthropic直APIを使う(既存挙動を維持)");
-  assertEqual(resolveProviderId({}), "bedrock", "resolveProviderId: APIキーが無ければBedrockへ倒す(キー未設定で機能停止しない)");
+  // 既定は "bedrock"(Anthropic on Bedrock) から "nova" へ変えた。
+  //
+  // このアカウントではAnthropicモデルを呼ぶとモデルを問わず
+  // 「Model use case details have not been submitted」になり、利用者本人が
+  // AWSコンソールで利用目的フォームを提出するまでAI文章生成が一切動かない。
+  // 実画面の「AIで下書きを生成」で用途申請エラーが出続けていたのがこれ。
+  // Novaは申請なしで動くので、既定は「今すぐ動く側」に置く。
+  assertEqual(resolveProviderId({}), "nova", "resolveProviderId: キーが無ければ申請不要のNovaへ倒す(用途申請待ちで機能停止しない)");
   assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "bedrock", ANTHROPIC_API_KEY: "sk-xxx" }), "bedrock", "resolveProviderId: 明示指定はAPIキーより優先(キーがある環境でもBedrockを試せる)");
   assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "anthropic" }), "anthropic", "resolveProviderId: 明示指定はフォールバックより優先(キーが無くてもAnthropicを強制できる)");
   assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "  BEDROCK  " }), "bedrock", "resolveProviderId: 前後の空白と大文字小文字を許容する");
-  assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "unknown-provider" }), "bedrock", "resolveProviderId: 未知の値はキーの有無による既定判定へ落ちる(未知の名前で起動不能にしない)");
+  assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "unknown-provider" }), "nova", "resolveProviderId: 未知の値はキーの有無による既定判定へ落ちる(未知の名前で起動不能にしない)");
+  assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "nova" }), "nova", "resolveProviderId: novaを明示指定できる");
+  // 申請が通ったあとは環境変数1つでClaudeへ戻せる、が「壊していない」の条件。
+  assertEqual(resolveProviderId({ AI_GATEWAY_PROVIDER: "bedrock" }), "bedrock", "resolveProviderId: 用途申請後はbedrock指定でAnthropicへ戻せる");
 }
 
 function testBedrockModelRegistry() {
