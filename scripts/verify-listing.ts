@@ -15,7 +15,7 @@ import { internalStatusToMercariApiStatus } from "@/lib/listing/mercari/mapper/p
 import { resolveEffectiveListingFields, type ChannelListingRecord, type ListingDraftRecord } from "@/lib/listing/types";
 import { createMercariProduct } from "@/lib/listing/mercari/adapter";
 import { formatMercariUserAgent } from "@/lib/listing/mercari/endpoints";
-import { MercariApiError, classifyHttpStatus, classifyForbiddenError, classifyGraphQLErrors, isRetryableMercariErrorCode } from "@/lib/listing/mercari/errors";
+import { MERCARI_ERROR_LABEL, MercariApiError, classifyHttpStatus, classifyForbiddenError, classifyGraphQLErrors, isRetryableMercariErrorCode } from "@/lib/listing/mercari/errors";
 import { extractGraphQLOperationName } from "@/lib/listing/mercari/client";
 import { PRODUCT_CATEGORIES_QUERY } from "@/lib/listing/mercari/queries";
 import { isEcListingEligible, buildCategoryNameLookup, EXCLUDED_CATEGORY_NAMES } from "@/lib/listing/ecEligibility";
@@ -436,6 +436,20 @@ function testMercariErrorClassification() {
   // IP_NOT_ALLOWEDへ正しく分類するよう更新した(docs/
   // mercari-404-root-cause-20260830.md参照)。
   assertEqual(classifyHttpStatus(404), "IP_NOT_ALLOWED", "classifyHttpStatus: 404 -> IP_NOT_ALLOWED(公式ドキュメントに「未登録IPは404を返す」と明記されていることを2026-08-30に再調査・確認)");
+
+  // 2026-08-31の実測: api.mercari-shops.com は `/` も `/v1/graphql` も
+  // 存在しないパスも、トークンを一切送らないGET/POST双方で、同一の
+  // `404 text/plain "Not Found"`(Server: cloudflare)を返した。
+  // これで自社Next.jsの404・トークン不良・メソッド誤り・パス誤りは
+  // いずれも除外できた一方、「IPが未登録であること」自体を我々の側から
+  // 確認する手段は無い(Mercari側の登録状況は見えない)。
+  // したがって利用者向けの文言で断定してはいけない。
+  const ipMessage = MERCARI_ERROR_LABEL.IP_NOT_ALLOWED;
+  assertTrue(ipMessage.includes("可能性"), "IP_NOT_ALLOWEDの文言: 未確定の原因を断定せず「可能性」として伝える");
+  assertTrue(
+    !/未登録です|IPが原因です|IPアドレスが登録されていません/.test(ipMessage),
+    "IP_NOT_ALLOWEDの文言: 根本原因が確定していないのに断定的な表現を使わない",
+  );
 
   assertEqual(classifyForbiddenError("Access denied: IP address not allowed"), "IP_NOT_ALLOWED", "classifyForbiddenError: recognizes an IP-restriction message");
   assertEqual(classifyForbiddenError("Forbidden"), "AUTH_FAILED", "classifyForbiddenError: a generic 403 without IP wording stays AUTH_FAILED");

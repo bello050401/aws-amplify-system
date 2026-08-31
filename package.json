@@ -29,7 +29,8 @@
     "verify:zaico-duplicate-audit": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-duplicate-audit.ts",
     "test:e2e": "playwright test",
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts",
-    "benchmark:images": "node scripts/with-server-only-stub.cjs scripts/benchmark-image-processing.ts"
+    "benchmark:images": "node scripts/with-server-only-stub.cjs scripts/benchmark-image-processing.ts",
+    "verify:zaico-pagination": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-pagination.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",
