@@ -182,6 +182,26 @@ Secrets Manager の `bello/mercari-access-token` は中身が `{"configured": fa
 `docs/mercari-404-root-cause-20260830.md` / `docs/zaico-pagination-and-mercari-404-20260831.md`
 が扱った404は、TOKENを付けずに直接叩いた実測であり、上記と矛盾しない。
 
+### 設定を保存できない可能性がある（デッドロック）
+
+`app/actions/mercariSecret.ts` の `setMercariConnectionAction` は、
+**接続確認に成功したときだけ**TOKENをSecrets Managerへ保存する
+（`validateMercariConnection` が実際に `productCategories` クエリを投げ、
+失敗したら保存せずに戻る）。これは§92「新token検証失敗時に既存の有効設定を
+破壊しない」を満たすための意図的な設計。
+
+しかし送信元IPが未登録である限り、その接続確認は404で失敗する。つまり:
+
+- TOKENを保存できない ← 接続確認が404で落ちるため
+- 接続確認を通せない ← 固定送信元IPが無く、Mercariへ登録できないため
+
+**TOKENを入力しても保存できずに終わる可能性が高い。** `configured: false` の
+ままなのは、これを踏んだ結果かもしれない（未確認）。
+
+まず設定画面でTOKENの保存を試し、`IP_NOT_ALLOWED`（「アクセス元のIPアドレスが
+Mercari側に未登録の可能性があります」）が出るかどうかを確認するのが、次の一手を
+決める最短経路。出た場合は下記3・4が先に必要になる。
+
 ### 残っている作業（いずれもコードでは代替できない）
 
 1. **TOKEN と APIクライアント名の入力**（本人操作）— 設定画面のEC出品タブから。
