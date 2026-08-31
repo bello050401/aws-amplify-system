@@ -10,6 +10,7 @@
  * scriptと呼び出し方を揃えるため同じ経路にしてある。)
  */
 import { deriveNeedsReply, deriveConversationStatus, buildMessagePreview, sortConversations } from "@/lib/messaging/conversationStatus";
+import { recordIncomingWebhookMessageWith, type WebhookStoreDeps } from "@/lib/messaging/webhookStore";
 import type { ConversationRecord } from "@/lib/messaging/types";
 
 let failures = 0;
@@ -84,11 +85,141 @@ function testSortConversations() {
   assertEqual(sortConversations(tie).map((r) => r.id), ["a", "b"], "sortConversations: an exact tie breaks stably by id");
 }
 
-function main() {
+
+// ─────────────────────────────────────────────────────────────────────
+// Webhook受信の保存経路(lib/messaging/webhookStore.ts)。
+//
+// LINE webhookは未認証POSTで、Cookieもユーザーセッションも無い。そのため
+// AppSync経由の recordIncomingMessage は必ず失敗し、受信メッセージが一件も
+// 保存されていなかった。その修正としてDynamoDB直書きの経路を足したので、
+// 「新規会話を作る/既存会話へ足す/再送を弾く」という分岐を実AWS無しで固定する。
+//
+// deps.sendへ渡された実際のコマンドを検査する。「例外が出ないこと」だけを
+// 確かめても、違うテーブルや違う式を送っていることには気づけない。
+
+interface SentCommand {
+  name: string;
+  input: Record<string, any>;
+}
+
+/** DynamoDBの代わりに、送られたコマンドを記録して定型応答を返す。 */
+function fakeDynamo(responses: { existingMessage?: boolean; conversation?: Record<string, unknown> | null }) {
+  const sent: SentCommand[] = [];
+  let idCounter = 0;
+  const deps: WebhookStoreDeps = {
+    conversationTable: "Conversation-test",
+    messageTable: "Message-test",
+    newId: () => `id-${++idCounter}`,
+    now: () => "2026-08-31T12:00:00.000Z",
+    send: async (command: any) => {
+      const name = command?.constructor?.name ?? "Unknown";
+      sent.push({ name, input: command.input });
+      if (name === "QueryCommand") return { Items: responses.existingMessage ? [{ id: "already" }] : [] };
+      if (name === "ScanCommand") return { Items: responses.conversation ? [responses.conversation] : [] };
+      return {};
+    },
+  };
+  return { deps, sent };
+}
+
+const incoming = {
+  channel: "LINE" as const,
+  externalCustomerId: "Uaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  externalMessageId: "line-msg-1",
+  body: "ソファの在庫はありますか",
+  externalSentAt: "2026-08-31T11:59:00.000Z",
+};
+
+async function testWebhookStoreCreatesConversation() {
+  const { deps, sent } = fakeDynamo({ conversation: null });
+  const result = await recordIncomingWebhookMessageWith(deps, incoming);
+
+  assertEqual(result, { conversationId: "id-1", messageId: "id-2" }, "webhookStore: 新規顧客なら会話とメッセージを1件ずつ作る");
+  assertEqual(
+    sent.map((c) => c.name),
+    ["QueryCommand", "ScanCommand", "PutCommand", "PutCommand"],
+    "webhookStore: 重複判定→会話検索→会話作成→メッセージ作成の順で送る",
+  );
+
+  const dedupeQuery = sent[0].input;
+  assertEqual(dedupeQuery.TableName, "Message-test", "webhookStore: 重複判定はMessageテーブルへ問い合わせる");
+  assertEqual(dedupeQuery.IndexName, "messagesByExternalMessageId", "webhookStore: 重複判定はexternalMessageIdのGSIを使う(全件Scanにしない)");
+
+  const conversation = sent[2].input.Item;
+  assertEqual(sent[2].input.TableName, "Conversation-test", "webhookStore: 会話はConversationテーブルへ入れる");
+  assertEqual(conversation.channel, "LINE", "webhookStore: 会話のchannelは受信チャネル");
+  assertEqual(conversation.externalCustomerId, incoming.externalCustomerId, "webhookStore: 会話に送信者のLINE userIdを保存する");
+  assertEqual(conversation.status, "WAITING_FOR_REPLY", "webhookStore: 新規受信は未返信(WAITING_FOR_REPLY)で始まる");
+  assertEqual(conversation.needsReply, true, "webhookStore: 新規受信はneedsReply=true(一覧で先頭に出るための値)");
+  assertEqual(conversation.unreadCount, 1, "webhookStore: 新規会話の未読は1件");
+  assertEqual(conversation.lastMessagePreview, incoming.body, "webhookStore: プレビューは本文から作る");
+  assertEqual(conversation.lastIncomingAt, incoming.externalSentAt, "webhookStore: lastIncomingAtはLINE側の送信時刻(受信を処理した時刻ではない)");
+
+  const message = sent[3].input.Item;
+  assertEqual(sent[3].input.TableName, "Message-test", "webhookStore: メッセージはMessageテーブルへ入れる");
+  assertEqual(message.conversationId, "id-1", "webhookStore: メッセージは今作った会話に紐づく");
+  assertEqual(message.direction, "INBOUND", "webhookStore: 受信メッセージはINBOUND");
+  assertEqual(message.senderType, "CUSTOMER", "webhookStore: 送信者は顧客");
+  assertEqual(message.deliveryStatus, "RECEIVED", "webhookStore: 受信済みとして保存する");
+  assertEqual(message.externalMessageId, incoming.externalMessageId, "webhookStore: 再送の重複判定キーを必ず保存する(無いと次回の判定が効かない)");
+  assertEqual(message.aiGenerated, false, "webhookStore: 顧客の発言をAI生成として記録しない");
+}
+
+async function testWebhookStoreAppendsToExistingConversation() {
+  const { deps, sent } = fakeDynamo({
+    conversation: { id: "conv-existing", status: "REPLIED", unreadCount: 2, lastOutgoingAt: "2026-08-31T10:00:00.000Z" },
+  });
+  const result = await recordIncomingWebhookMessageWith(deps, incoming);
+
+  assertEqual(result, { conversationId: "conv-existing", messageId: "id-1" }, "webhookStore: 既存会話があれば新しい会話を作らず、その会話へ足す");
+  assertEqual(
+    sent.map((c) => c.name),
+    ["QueryCommand", "ScanCommand", "UpdateCommand", "PutCommand"],
+    "webhookStore: 既存会話はPutで上書きせずUpdateする(担当者・優先度など他の項目を消さないため)",
+  );
+
+  const update = sent[2].input;
+  assertEqual(update.Key, { id: "conv-existing" }, "webhookStore: 更新対象は見つかった会話");
+  assertEqual(update.ExpressionAttributeNames, { "#s": "status" }, "webhookStore: statusはDynamoDBの予約語なので必ず別名にする");
+  assertEqual(update.ExpressionAttributeValues[":u"], 3, "webhookStore: 未読件数は既存値+1(2→3)");
+  assertEqual(update.ExpressionAttributeValues[":n"], true, "webhookStore: 前回返信より後の受信なので、再びneedsReply=trueへ戻る");
+  assertEqual(update.ExpressionAttributeValues[":s"], "WAITING_FOR_REPLY", "webhookStore: REPLIEDだった会話が新着でWAITING_FOR_REPLYへ戻る");
+  assertTrue(!update.UpdateExpression.includes("createdAt"), "webhookStore: 既存会話のcreatedAtは書き換えない");
+}
+
+async function testWebhookStoreKeepsManuallyResolvedStatus() {
+  const { deps, sent } = fakeDynamo({
+    conversation: { id: "conv-resolved", status: "RESOLVED", unreadCount: 0, lastOutgoingAt: null },
+  });
+  await recordIncomingWebhookMessageWith(deps, incoming);
+  assertEqual(
+    sent[2].input.ExpressionAttributeValues[":s"],
+    "RESOLVED",
+    "webhookStore: 人が解決済みにした会話を受信だけで差し戻さない(deriveConversationStatusの取り決めをこの経路でも守る)",
+  );
+}
+
+async function testWebhookStoreDedupesResentMessage() {
+  const { deps, sent } = fakeDynamo({ existingMessage: true, conversation: null });
+  const result = await recordIncomingWebhookMessageWith(deps, incoming);
+
+  assertEqual(result, { deduped: true }, "webhookStore: 取り込み済みのexternalMessageIdは重複として返す");
+  assertEqual(
+    sent.map((c) => c.name),
+    ["QueryCommand"],
+    "webhookStore: 重複と分かったら以降は一切書き込まない(LINEの再送で二重登録しない)",
+  );
+}
+
+async function main() {
   testDeriveNeedsReply();
   testDeriveConversationStatus();
   testBuildMessagePreview();
   testSortConversations();
+  await testWebhookStoreCreatesConversation();
+  await testWebhookStoreAppendsToExistingConversation();
+  await testWebhookStoreKeepsManuallyResolvedStatus();
+  await testWebhookStoreDedupesResentMessage();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

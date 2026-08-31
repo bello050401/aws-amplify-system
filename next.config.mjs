@@ -25,6 +25,41 @@ const nextConfig = {
   },
 
   /**
+   * LINE webhookの受信保存が使うDynamoDBテーブル名を、ビルド時に
+   * サーバーバンドルへ埋め込む。
+   *
+   * ## なぜ必要か(推測ではなく実測)
+   *
+   * Amplifyコンソールに設定した環境変数は**ビルドには渡るが、Next.jsの
+   * SSRランタイムのprocess.envには現れない**。Stagingへ正しい署名付きの
+   * 本物のwebhookリクエストを送ったところ、CONVERSATION_TABLE_NAME /
+   * MESSAGE_TABLE_NAME をコンソールに設定済みであるにもかかわらず
+   *   500 {"ok":false,"failed":1,"reasons":["TABLE_NOT_CONFIGURED"]}
+   * が返った(2026-08-31、job 105)。実行時には両方とも空だった。
+   *
+   * ## なぜ .env.production ではなくここか
+   *
+   * amplify.ymlの `artifacts.baseDirectory` は `.next` で、リポジトリ
+   * 直下に書き出した `.env.production` が実行環境まで運ばれる保証が無い。
+   * 一方この `env` はwebpackのDefinePluginでビルド時に**リテラルへ置換**
+   * されるため、.next の中だけが配られても値が残る。
+   *
+   * ## 制約
+   *
+   * 値はビルド成果物へ焼き込まれる。Amplify側の環境変数を変えたときは
+   * 再ビルドが要る。テーブル名は秘密情報ではないので焼き込んで問題ない。
+   * **TOKEN類は絶対にここへ書かない** — 従来どおりSecrets Managerから
+   * 実行時に取得する(lib/zaico/secretStore.ts等)。
+   *
+   * 未設定のブランチではキーが省かれ、実行時は undefined のままになる。
+   * その場合はwebhookが TABLE_NOT_CONFIGURED を返すので原因が分かる。
+   */
+  env: {
+    ...(process.env.CONVERSATION_TABLE_NAME ? { CONVERSATION_TABLE_NAME: process.env.CONVERSATION_TABLE_NAME } : {}),
+    ...(process.env.MESSAGE_TABLE_NAME ? { MESSAGE_TABLE_NAME: process.env.MESSAGE_TABLE_NAME } : {}),
+  },
+
+  /**
    * セキュリティヘッダー。実機(Staging)のレスポンスを確認したところ、
    * HSTS・X-Frame-Options・X-Content-Type-Options・Referrer-Policy の
    * いずれも付いていなかった。認証済みセッションで在庫・売上・顧客
