@@ -160,7 +160,26 @@ export const handler = async () => {
         break;
       }
 
+      // 1ページが1,000件になったことへの対応。
+      //
+      // ZAICOは per_page を無視して常に1,000件返す(実測)。以前は
+      // hasMoreの判定が壊れていて1ページ目で終わっていたため表面化して
+      // いなかったが、それを直すと1回の呼び出しで1,000件を処理しようと
+      // してLambdaの実行時間を超えうる。特に新規登録は画像取り込みを
+      // 伴うので1件あたりの時間が長い。
+      //
+      // ページ内の途中で時間切れになったら、lastPageを進めずに
+      // checkpointだけ書いて次回の呼び出しへ譲る。次回は同じページを
+      // 取り直し、seenSourceIdsに入っている分を飛ばして続きから進む。
+      // seenSourceIdsは元から再開時に読み込まれているので、スキーマを
+      // 変えずにページ内再開が成立する。
+      let budgetExhausted = false;
       for (const zaicoItem of zaicoItems) {
+        if (seenSourceIds.has(String(zaicoItem.id))) continue; // 前回までに処理済み
+        if (Date.now() - startTime > TIME_BUDGET_MS) {
+          budgetExhausted = true;
+          break;
+        }
         const result = await syncOneZaicoItem(zaicoItem, "ZAICO同期(AWS Background Job)", prefetched, port, masterCache);
         seenSourceIds.add(result.zaicoId);
         counts.totalProcessed += 1;
@@ -172,6 +191,24 @@ export const handler = async () => {
       }
 
       pagesThisRun += 1;
+
+      if (budgetExhausted) {
+        // ページの途中。lastPageは進めない(同じページを取り直して続ける)。
+        const now = new Date().toISOString();
+        await writeCheckpoint({
+          status: "RUNNING",
+          lastPage: nextPage - 1,
+          ...counts,
+          seenSourceIds: JSON.stringify(Array.from(seenSourceIds)),
+          updatedAt: now,
+          retryCount: 0,
+        });
+        console.log(
+          `[zaico-sync-worker] time budget reached mid-page ${nextPage} — checkpointed ${counts.totalProcessed} item(s); next invocation resumes within the same page.`,
+        );
+        break;
+      }
+
       const isDone = !hasMore || zaicoItems.length === 0;
       const now = new Date().toISOString();
 

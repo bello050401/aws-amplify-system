@@ -125,6 +125,49 @@ async function testNoFixedItemCap() {
   assertTrue(summary.completed, "12,000件: 正常終了");
 }
 
+/**
+ * 実際に起きていた不具合の再現と回帰防止。
+ *
+ * ZAICOの `/inventories` は per_page を無視し、**常に1,000件**返す
+ * (2026-08-31実測。per_page=10/50/100/500/1000/2000/未指定、および
+ *  limit/count/size/per/page_size/perPage のいずれでも1,000件)。
+ * 旧実装は `hasMore = items.length === perPage` としていたため、
+ * `1000 === 50` が偽になり **1ページ目だけを処理して完了扱い**になっていた。
+ * 実在庫5,312件に対し、4,312件が一度も同期されていなかった。
+ */
+function fixedPageSizeApi(total: number, serverPageSize: number): FetchPage<Item> {
+  return async (page, _requestedPerPage) => {
+    const start = (page - 1) * serverPageSize;
+    const items: Item[] = [];
+    for (let i = start; i < Math.min(total, start + serverPageSize); i++) items.push({ id: i + 1 });
+    // 実装と同じ判定（修正後）: 件が返る限り次があるとみなす
+    return { items, hasMore: items.length > 0 };
+  };
+}
+
+async function testServerIgnoresPerPage() {
+  // 実測どおりの条件: 5,312件、サーバは常に1,000件返す、こちらは50を要求
+  const seen = new Set<number>();
+  const summary = await paginateAll(fixedPageSizeApi(5312, 1000), {
+    perPage: 50,
+    onPage: (items) => { for (const it of items) seen.add(it.id); },
+  });
+  assertEqual(seen.size, 5312, "per_page無視: 要求50・応答1,000でも5,312件すべて取得する");
+  assertTrue(summary.completed, "per_page無視: 正常終了として扱う");
+  assertEqual(summary.pages, 6, "per_page無視: 1,000件×5 + 312件で6ページ");
+
+  // 旧実装の判定を再現すると1,000件で止まることを示す（回帰の可視化）
+  const brokenApi: FetchPage<Item> = async (page, requestedPerPage) => {
+    const start = (page - 1) * 1000;
+    const items: Item[] = [];
+    for (let i = start; i < Math.min(5312, start + 1000); i++) items.push({ id: i + 1 });
+    return { items, hasMore: items.length === requestedPerPage }; // ← 旧実装
+  };
+  let brokenCount = 0;
+  await paginateAll(brokenApi, { perPage: 50, onPage: (items) => { brokenCount += items.length; } });
+  assertEqual(brokenCount, 1000, "旧判定の再現: items.length === perPage で比較すると1,000件で止まる");
+}
+
 async function testRunawayGuard() {
   // 常に満杯ページを返し続ける壊れたAPI。止まらないと無限ループになる。
   const runaway: FetchPage<Item> = async (page, perPage) => {
@@ -250,6 +293,7 @@ async function main(): Promise<void> {
   await testItemCounts();
   await testPageBoundaries();
   await testNoFixedItemCap();
+  await testServerIgnoresPerPage();
   await testRunawayGuard();
   await testDuplicatePageDetection();
   await testAbort();

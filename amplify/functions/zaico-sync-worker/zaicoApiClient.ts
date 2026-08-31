@@ -109,7 +109,11 @@ export async function listInventories(page: number, perPage = 50): Promise<{ ite
     }
     if (!res.ok) throw new ZaicoApiError(`ZAICO APIエラー: HTTP ${res.status} (/inventories)`, res.status);
     const items = (await res.json()) as ZaicoInventory[];
-    return { items, hasMore: items.length === perPage };
+    // lib/zaico/client.ts と同じ理由。ZAICOは per_page を無視して常に
+    // 1,000件返すため、要求値と比較すると `1000 === 50` が偽になり、
+    // 1ページ目だけを処理して同期が完了扱いになる(実測で確認)。
+    // 件が返る限り次があるとみなし、空ページで終わる。
+    return { items, hasMore: items.length > 0 };
   }
   throw lastErr instanceof Error ? lastErr : new Error("ZAICO APIへの接続に失敗しました。");
 }

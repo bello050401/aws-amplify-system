@@ -314,7 +314,15 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
     const prefetched = await port.fetchAllZaicoManaged();
     const masterCache: MasterCache = { categories: new Map(), locations: new Map() };
 
-    for (const zaicoItem of zaicoItems) {
+    // ZAICOは per_page を無視して常に1,000件返す(2026-08-31 実測)。
+    // 1回の呼び出しで1,000件を処理するとServer Actionが長時間化するため、
+    // この呼び出しで扱う件数は従来どおり ITEMS_PER_ADVANCE 件に保つ。
+    // 続きは seenSourceIds を頼りに次の呼び出しが引き継ぐ — ページを
+    // 取り直しても、既に処理した分は飛ばされる。
+    const pending = zaicoItems.filter((item) => !seenSourceIds.has(String(item.id)));
+    const batch = pending.slice(0, ITEMS_PER_ADVANCE);
+
+    for (const zaicoItem of batch) {
       const result = await syncOneZaicoItem(zaicoItem, who, prefetched, port, masterCache);
       seenSourceIds.add(result.zaicoId);
       counts.totalProcessed += 1;
@@ -325,7 +333,9 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
       if (result.imageImported) counts.imageImported += 1;
     }
 
-    const isDone = !hasMore || zaicoItems.length === 0;
+    // このページにまだ未処理が残っているなら、ページ番号は進めない。
+    const pageComplete = pending.length <= batch.length;
+    const isDone = pageComplete && (!hasMore || zaicoItems.length === 0);
     const now = new Date().toISOString();
 
     if (isDone) {
@@ -356,7 +366,9 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
       {
         id: ZAICO_SYNC_JOB_SINGLETON_ID,
         status: "RUNNING",
-        lastPage: nextPage,
+        // ページ内にまだ未処理が残っているなら進めない。次の呼び出しが
+        // 同じページを取り直し、seenSourceIdsで既処理を飛ばして続きを行う。
+        lastPage: pageComplete ? nextPage : nextPage - 1,
         ...counts,
         seenSourceIds: stringifySeenSourceIds(seenSourceIds),
         updatedAt: now,

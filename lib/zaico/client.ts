@@ -223,7 +223,21 @@ export interface ZaicoListPage {
  */
 export async function listInventories(page: number, perPage = 50): Promise<ZaicoListPage> {
   const items = await getJson<ZaicoInventory[]>("/inventories", { page, per_page: perPage });
-  return { items, hasMore: items.length === perPage };
+  // `items.length === perPage` で最終ページを判定してはいけない。
+  //
+  // ZAICOの `/inventories` は **per_page を無視して常に1,000件返す**。
+  // 2026-08-31に実測で確認した(per_page=10 / 50 / 100 / 500 / 1000 / 2000 /
+  // 未指定、さらに limit / count / size / per / page_size / perPage の
+  // いずれを付けても応答は1,000件)。
+  //
+  // そのため要求値と比較すると `1000 === 50` が偽になり、**1ページ目だけを
+  // 処理して同期が完了扱いになっていた**。これが「ZAICOが1,000件で止まる」の
+  // 正体で、コード上の固定上限ではない。実際の在庫は5,312件あり、
+  // 4,312件が一度も同期されていなかった。
+  //
+  // サーバが返す件数に依存しない判定にする: 件が返る限り次ページがあり、
+  // 空ページで終わる。per_pageが将来効くようになっても正しく動く。
+  return { items, hasMore: items.length > 0 };
 }
 
 export type ZaicoTokenValidationResult =
