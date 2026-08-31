@@ -133,6 +133,46 @@ export async function triggerImageProcessingIfNeeded(input: {
 }
 
 /**
+ * 2026-08-31ユーザー実機フィードバック対応: 「個々の写真の『加工する』を
+ * 押しても何の反応もない」の根本原因への対処。`ImageProcessingVersion`
+ * は加工が実際に完了して初めて1行できるため、5分毎起動のworkerが
+ * まだ拾っていない間(押した直後〜最大5分)は、画面側にその「予約は
+ * 済んでいる」という情報が一切無く、押していないのと区別が付かな
+ * かった。ProcessingJob(status PENDING/PROCESSING)の存在を
+ * imageStorageKeyごとに引けるようにし、ImageProcessingPanel.tsxが
+ * ImageProcessingVersionが無い間もQUEUED/PROCESSING表示を出せるように
+ * する。
+ *
+ * ProcessingJobはsecondaryIndexesを持たない設計(schema側コメント参照
+ * ——workerのstatus Scanのみを想定していた)ため、ここでのimageStorageKey
+ * 指定は実質Scan+FilterExpressionになる。listVersionsと同じ理由
+ * (想定行数はこの商品の画像加工履歴程度)で許容するが、ProcessingJob
+ * 全体の行数が増えてきた場合はsecondaryIndexes追加を検討すること。
+ */
+export async function listPendingJobStatuses(imageStorageKeys: string[]): Promise<Record<string, "PENDING" | "PROCESSING">> {
+  if (imageStorageKeys.length === 0) return {};
+  const { data } = await serverDataClient.models.ProcessingJob.list({
+    filter: {
+      and: [
+        { or: imageStorageKeys.map((k) => ({ imageStorageKey: { eq: k } })) },
+        { or: [{ status: { eq: "PENDING" } }, { status: { eq: "PROCESSING" } }] },
+      ],
+    },
+    ...inventoryAuthMode,
+  });
+  const result: Record<string, "PENDING" | "PROCESSING"> = {};
+  for (const job of data) {
+    // 同じ画像に複数の未完了ジョブが理論上あっても(通常は起きない —
+    // enqueueProcessingJob自体が同一idempotencyKeyの重複を防ぐ)、
+    // PROCESSINGの方がより進んだ状態として優先表示する。
+    if (job.status === "PROCESSING" || result[job.imageStorageKey] === undefined) {
+      result[job.imageStorageKey] = job.status as "PENDING" | "PROCESSING";
+    }
+  }
+  return result;
+}
+
+/**
  * その画像(imageStorageKey)の全バージョン、version昇順。schema側の
  * secondaryIndexes(index("imageStorageKey"))はDynamoDB上のGSIとしては
  * 実在するが、このリポジトリの既存コード(lib/listing/service.tsの

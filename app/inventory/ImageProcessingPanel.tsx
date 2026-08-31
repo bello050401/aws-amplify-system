@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listImageProcessingVersionsAction, reprocessAllImagesAction, reprocessImageAction, adoptImageVersionAction,
+import { listImageProcessingVersionsAction, listPendingImageProcessingJobStatusesAction, reprocessAllImagesAction, reprocessImageAction, adoptImageVersionAction,
   rollbackImageVersionAction, type ImageProcessingVersionSummary } from "@/app/actions/imageProcessing";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
 import { useInventoryImageUrl } from "./useInventoryImageUrl";
@@ -48,10 +48,19 @@ interface ImagePanelRow {
   originalHash: string | null;
 }
 
-function currentStatus(versions: ImageProcessingVersionSummary[]): string {
+/** pendingJob: ImageProcessingVersionがまだ無い間だけ意味を持つ、ProcessingJobの状態(listPendingImageProcessingJobStatusesAction由来)。 */
+function currentStatus(versions: ImageProcessingVersionSummary[], pendingJob?: "PENDING" | "PROCESSING"): string {
   const active = versions.find((v) => v.active);
   if (active) return active.status;
-  if (versions.length === 0) return "UNPROCESSED";
+  if (versions.length === 0) {
+    // ImageProcessingVersionがまだ無い=workerがまだ拾っていない状態。
+    // ProcessingJobが実際に予約されているなら、UNPROCESSEDのままにせず
+    // 「予約済み/加工中」と分かる表示にする(2026-08-31フィードバック
+    // 「加工するを押しても反応がない」対応——上のコメント参照)。
+    if (pendingJob === "PROCESSING") return "PROCESSING";
+    if (pendingJob === "PENDING") return "QUEUED";
+    return "UNPROCESSED";
+  }
   // ACTIVEが無い(処理中/失敗のみ)場合は最新versionの状態を見せる。
   return versions[versions.length - 1].status;
 }
@@ -115,13 +124,18 @@ function BeforeAfterToggle({ originalKey, processedKey, label }: { originalKey: 
 
 export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: string; images: ImagePanelRow[] }) {
   const [byKey, setByKey] = useState<Record<string, ImageProcessingVersionSummary[]> | null>(null);
+  const [pendingJobs, setPendingJobs] = useState<Record<string, "PENDING" | "PROCESSING">>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
-    const entries = await Promise.all(images.map(async (img) => [img.storageKey, await listImageProcessingVersionsAction(img.storageKey)] as const));
+    const [entries, jobStatuses] = await Promise.all([
+      Promise.all(images.map(async (img) => [img.storageKey, await listImageProcessingVersionsAction(img.storageKey)] as const)),
+      listPendingImageProcessingJobStatusesAction(images.map((img) => img.storageKey)),
+    ]);
     setByKey(Object.fromEntries(entries));
+    setPendingJobs(jobStatuses);
   }
 
   useEffect(() => {
@@ -129,6 +143,25 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
     refresh().catch((err) => setError(err instanceof Error ? err.message : "読み込みに失敗しました。"));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- imagesは親から毎レンダー新配列で渡り得るため、storageKeyの並びをJSON化した依存にする
   }, [JSON.stringify(images.map((i) => i.storageKey))]);
+
+  const statusOf = (img: ImagePanelRow) => currentStatus(byKey?.[img.storageKey] ?? [], pendingJobs[img.storageKey]);
+  const anyBusyGlobally = images.some((img) => BUSY_STATUSES.has(statusOf(img)));
+
+  // 2026-08-31フィードバック対応: 予約中/処理中の画像が1件でもある間
+  // だけ、手動リロード無しで進捗が見えるよう軽くポーリングする(常時
+  // ポーリングはしない——完了した後は自動的に止まるので、ブラウザへの
+  // 負荷は「何か処理中の間だけ」に限定される)。workerは5分毎起動なので、
+  // 15秒間隔は十分軽い頻度。
+  useEffect(() => {
+    if (!anyBusyGlobally) return;
+    const timer = setInterval(() => {
+      refresh().catch(() => {
+        /* ポーリング失敗は無視 — 次回interval or 手動操作で回復する */
+      });
+    }, 15_000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshは毎レンダー新規関数だが依存に入れるとintervalが再生成され続けるため、anyBusyGloballyの変化だけをtriggerにする
+  }, [anyBusyGlobally]);
 
   if (images.length === 0) return null;
 
@@ -145,11 +178,9 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
     );
   }
 
-  const statusOf = (img: ImagePanelRow) => currentStatus(byKey[img.storageKey] ?? []);
   const readyCount = images.filter((img) => statusOf(img) === "READY").length;
   const needsReviewCount = images.filter((img) => statusOf(img) === "NEEDS_REVIEW").length;
   const failedCount = images.filter((img) => ["FAILED", "DEAD_LETTER"].includes(statusOf(img))).length;
-  const anyBusyGlobally = images.some((img) => BUSY_STATUSES.has(statusOf(img)));
   // 一括ボタンの対象: 未加工・失敗・要確認(まだ完了扱いではない)の画像のみ。
   // 既にREADYの画像を一括ボタンで巻き込むと「意図せず全部再加工」に
   // なってしまう(付録B「再加工で全画像を巻き込む処理」の禁止と同じ
@@ -248,7 +279,7 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
       <ul className="space-y-1">
         {images.map((img, i) => {
           const versions = byKey[img.storageKey] ?? [];
-          const status = currentStatus(versions);
+          const status = currentStatus(versions, pendingJobs[img.storageKey]);
           const meta = STATUS_LABELS[status] ?? { label: status, className: "text-gray-500" };
           const superseded = versions.filter((v) => v.status === "SUPERSEDED" || (!v.active && v.status === "READY"));
           const activeVersion = versions.find((v) => v.active);

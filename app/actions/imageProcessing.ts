@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { adoptVersion, enqueueProcessingJob, listVersions, setActiveVersion } from "@/lib/imageProcessing/jobService";
+import { adoptVersion, enqueueProcessingJob, listPendingJobStatuses, listVersions, setActiveVersion } from "@/lib/imageProcessing/jobService";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { splitImagesByType } from "@/lib/inventory/imageTypes";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
@@ -51,6 +51,17 @@ export async function listImageProcessingVersionsAction(imageStorageKey: string)
     failureDetail: v.failureDetail ?? null,
     completedAt: v.completedAt ?? null,
   }));
+}
+
+/**
+ * 2026-08-31フィードバック対応: 「加工するを押しても反応がない」の
+ * 直接対処。ImageProcessingVersionがまだ無い画像について、
+ * ProcessingJob(PENDING/PROCESSING)が存在するかをまとめて引く——
+ * これによりUIは「予約済みで次のworker実行を待っている」ことを表示
+ * できる。
+ */
+export async function listPendingImageProcessingJobStatusesAction(imageStorageKeys: string[]): Promise<Record<string, "PENDING" | "PROCESSING">> {
+  return listPendingJobStatuses(imageStorageKeys);
 }
 
 /** §12: 手動再加工。requestedAdjustmentsは自由入力の再加工理由をUI側であらかじめパラメータへ変換したもの(空でも可——単純な「もう一度」)。 */
