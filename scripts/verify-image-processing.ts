@@ -107,10 +107,19 @@ async function testSharpProcessorRoundTrip() {
 
   const masterMeta = await sharp(result.masterJpeg).metadata();
   assertEqual(masterMeta.format, "jpeg", "SharpImageProcessingProvider: masterJpegは実際にJPEG形式");
-  // §6.1「切断回避を数値目標より優先」——containを使うため、正方形指定でも
-  // 元画像(1200x800)の中身が切り取られず全体が収まる(縦横比が
-  // 1200x800の"contain"結果は幅=高さの正方形キャンバス内に収まる)。
-  assertEqual(masterMeta.width, masterMeta.height, "SharpImageProcessingProvider: SQUARE_1_1指定時、TOP画像の出力は正方形(containで余白を足す、cropで切断しない)");
+  // ここは以前「SQUARE_1_1指定なら常に正方形になる(containで余白を足す)」
+  // ことを固定していた。2026-08-31の画像自動加工完全仕様書§8はその挙動
+  // そのものを禁止している — 白帯を足すと家具は相対的に小さくなり、
+  // 提示されたBefore/Afterが求める方向と逆になる。
+  //
+  // この合成画像は一様な単色で被写体が存在しないため、新しい実装は
+  // 「構図を変える根拠が無い」と判断して元の比率を保つのが正しい。
+  // 理由の文字列ではなく挙動を固定する。一様な画像でもJPEG圧縮の微小な
+  // ノイズで弱い信号は出るため、実装は NO_SUBJECT にも LOW_CONFIDENCE にも
+  // なりうる。どちらも「寄せる根拠が無いので構図を変えない」という同じ要求。
+  assertEqual(result.diagnostics.crop.applied, false, "SharpImageProcessingProvider: 被写体の無い一様な画像では構図を変えない(根拠なくcropしない)");
+  assertEqual(masterMeta.width, 1200, "SharpImageProcessingProvider: 被写体が無ければ元の幅を保つ(白帯を足さない)");
+  assertEqual(masterMeta.height, 800, "SharpImageProcessingProvider: 被写体が無ければ元の高さを保つ");
 
   const webMeta = await sharp(result.webWebp).metadata();
   assertEqual(webMeta.format, "webp", "SharpImageProcessingProvider: webWebpは実際にWebP形式");
@@ -248,6 +257,94 @@ function testPickPendingReviewVersion() {
   }
 }
 
+/**
+ * 2026-08-31 画像自動加工完全仕様書 §8/§27 — 構図の作り直しを固定する。
+ *
+ * 被写体のある合成画像(明るい背景に濃い矩形)を作り、
+ *  ・白帯を足さずcropで比率を作ること
+ *  ・被写体を切らないこと
+ *  ・被写体が画面に占める割合が実際に上がること
+ * を確認する。実写4組のベンチマークはscripts/benchmark-image-processing.tsに
+ * あるが、あちらはユーザーの実商品写真が要るためCIでは動かない。ここは
+ * 合成画像だけで成立する回帰テストとして常に走る。
+ */
+async function testCompositionRecrop() {
+  // 1705x960(16:9)の明るい背景の中央やや下に、濃い色の被写体を置く。
+  const W = 1705, H = 960;
+  const subjectW = 420, subjectH = 380;
+  const subject = await sharp({ create: { width: subjectW, height: subjectH, channels: 3, background: { r: 60, g: 45, b: 40 } } }).png().toBuffer();
+  const source = await sharp({ create: { width: W, height: H, channels: 3, background: { r: 205, g: 203, b: 208 } } })
+    .composite([{ input: subject, left: Math.round((W - subjectW) / 2), top: 380 }])
+    .jpeg()
+    .toBuffer();
+
+  const provider = new SharpImageProcessingProvider();
+  const result = await provider.process({ sourceBuffer: source, classification: "FULL", aspectRatio: "SQUARE_1_1" });
+  const crop = result.diagnostics.crop;
+
+  assertEqual(crop.applied, true, "構図: 被写体が小さく写っている画像では実際にcropして寄せる");
+  assertEqual(crop.reason, "APPLIED", "構図: cropを適用した理由がAPPLIEDとして記録される");
+
+  const meta = await sharp(result.masterJpeg).metadata();
+  const outW = meta.width ?? 0;
+  const outH = meta.height ?? 0;
+  assertTrue(outW < W, "構図: 出力幅が元より狭い(cropしている＝白帯を足していない)");
+
+  // 白帯を足していないことの直接確認: 出力の四隅が、元画像に存在しない
+  // 純白(255,255,255)になっていないこと。containで余白を足すと隅が純白になる。
+  const corner = await sharp(result.masterJpeg).extract({ left: 0, top: 0, width: 24, height: 24 }).stats();
+  const cornerMean = corner.channels.slice(0, 3).reduce((s, c) => s + c.mean, 0) / 3;
+  assertTrue(cornerMean < 252, "構図: 出力の隅が純白の余白になっていない(白帯を足していない)");
+
+  // 被写体が切れていないこと: 元の被写体は中央にあるので、crop矩形が
+  // 被写体の範囲を完全に含んでいるかを正規化座標で確認する。
+  const sx0 = (W - subjectW) / 2 / W;
+  const sx1 = (W + subjectW) / 2 / W;
+  const sy0 = 380 / H;
+  const sy1 = (380 + subjectH) / H;
+  assertTrue(crop.rect.x <= sx0 + 0.001, "構図: crop左端が被写体を切っていない");
+  assertTrue(crop.rect.x + crop.rect.width >= sx1 - 0.001, "構図: crop右端が被写体を切っていない");
+  assertTrue(crop.rect.y <= sy0 + 0.001, "構図: crop上端が被写体を切っていない");
+  assertTrue(crop.rect.y + crop.rect.height >= sy1 - 0.001, "構図: crop下端が被写体を切っていない");
+
+  // 寄せた結果、被写体は画面に対して大きくなっているはず。
+  const beforeExtent = Math.max(subjectW / W, subjectH / H);
+  assertTrue(
+    (crop.resultingSubjectExtent ?? 0) > beforeExtent,
+    "構図: crop後は被写体が画面に対して大きくなる(これがBefore/Afterの主要因)",
+  );
+
+  // DETAIL/DAMAGE/LABELは元構図を尊重する(傷の写真を勝手に寄せない)。
+  const damage = await provider.process({ sourceBuffer: source, classification: "DAMAGE", aspectRatio: "SQUARE_1_1" });
+  assertEqual(damage.diagnostics.crop.applied, false, "構図: DAMAGE画像はBELLO標準構図を強制せず元の構図を保つ");
+}
+
+/**
+ * §9/§14 — 暗く周辺減光のある画像を明るくするが、白飛びさせない。
+ */
+async function testToneCorrection() {
+  const W = 800, H = 600;
+  // 暗い背景 + 中央の被写体。周辺減光は同心円状の暗いオーバーレイで作る。
+  const subject = await sharp({ create: { width: 240, height: 220, channels: 3, background: { r: 40, g: 30, b: 28 } } }).png().toBuffer();
+  const dark = await sharp({ create: { width: W, height: H, channels: 3, background: { r: 96, g: 92, b: 108 } } })
+    .composite([{ input: subject, left: 280, top: 240 }])
+    .jpeg()
+    .toBuffer();
+
+  const provider = new SharpImageProcessingProvider();
+  const result = await provider.process({ sourceBuffer: dark, classification: "FULL", aspectRatio: "SQUARE_1_1" });
+
+  const stats = await sharp(result.masterJpeg).stats();
+  const mean = stats.channels.slice(0, 3).reduce((s, c) => s + c.mean, 0) / 3;
+  assertTrue(mean > 96, "トーン: 暗い画像は実際に明るくなる(恒等変換のままではない)");
+  assertTrue(mean < 245, "トーン: 明るくしすぎて白へ張り付かない");
+
+  // 青に寄った背景(R96/G92/B108)のかぶりを、上限つきで補正している。
+  assertTrue(result.diagnostics.tone.gainB <= 1.0, "トーン: 青かぶりの背景では青を持ち上げない");
+  assertTrue(result.diagnostics.tone.gainB >= 0.85, "トーン: WB補正には上限があり、商品色を動かすほど強く掛けない");
+  assertTrue(result.diagnostics.tone.notes.length > 0, "トーン: なぜその補正になったかを説明として残す");
+}
+
 async function main() {
   testAspectRatioDecision();
   testCompositionStrength();
@@ -261,6 +358,8 @@ async function main() {
   testOriginalImageMissingError();
   testPhotoProfileAwsJsonRoundTrip();
   await testSharpProcessorRoundTrip();
+  await testCompositionRecrop();
+  await testToneCorrection();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
