@@ -159,3 +159,96 @@ ImageProcessingVersion 3件、S3 の元画像2件と派生画像9件）はすべ
 - テスト **782 passed / 0 failed**（14スイート）
 - lint / typecheck / build いずれも通過
 - 実画像ベンチマーク: 「理想へ向かって改善しない項目はありませんでした。」
+
+---
+
+# タスク#18: 採用ボタンと価格変更履歴の実機E2E（2026-08-31）
+
+Staging ADMIN セッションで実施。認証は利用者本人がブラウザへ直接入力し、
+パスワード・トークンの類は一切チャットにもログにも通していない。
+取得したセッションは gitignore 済みの一時ファイルに保存し、検証後に破棄した。
+
+## 1. 加工結果の採用ボタン → READY / ACTIVE
+
+対象: SKU `B001312`（`inventory/95e173cd-...`）、`ImageProcessingVersion` v1。
+
+画面上の遷移:
+
+```
+押す前: 画像1: 要確認  再加工  この加工を採用する  加工前/加工後を見る
+押した後: 画像1: 加工済  再加工
+採用ボタンの残数: 0
+console error: なし / HTTP>=400: なし
+```
+
+DB実測:
+
+| id | 前 | 後 |
+|---|---|---|
+| `5371bcb6-...` | NEEDS_REVIEW / active=false | **READY / active=true** |
+
+`READY かつ active=true` が1件、ACTIVE もちょうど1件。
+この商品には先行するACTIVE版が無かったため SUPERSEDED は0件で、
+`adoptVersion` の「旧ACTIVEを降ろしてからREADYへ上げる」順序どおりの結果。
+
+## 2. 価格変更履歴の表示
+
+`ChannelListing` は Staging に1件も存在しなかったため、E2E用に
+`ListingDraft` / `ChannelListing` / `PriceHistory`(2件) を作成した。
+**外部API(BASE/Mercari)は一切呼んでいない** — 出品ボタンは押さず、
+表示経路だけを確認するためにレコードのみを用意している。
+
+`/inventory/[id]/listing` の実画面:
+
+```
+価格変更履歴
+日時              変更                理由                  実行   送信結果
+2026/8/31 21:41   ¥7,000 → ¥6,800    定期値下げ（E2E検証）   自動   NOT_IMPLEMENTED
+2026/8/31 20:41   ¥7,500 → ¥7,000    初回値下げ（E2E検証）   手動   NOT_IMPLEMENTED
+```
+
+行数2、「まだ価格変更の記録がありません」は非表示、console error / HTTP>=400 ともに0。
+日時のJST表記、`¥` 区切り、actor の 自動/手動 変換、`externalResult` の
+そのままの表示（`NOT_IMPLEMENTED` を成功と偽らない）まで確認できた。
+
+## 3. E2E用データの削除と再突合
+
+作成物（ListingDraft 1 / ChannelListing 1 / PriceHistory 2）をすべて削除。
+`id` が `e2e-` で始まる行が全関連テーブルで0件であることを確認した。
+既存の ListingDraft 3件は利用者が 8/30 に作成したもので、手を触れていない。
+
+削除後の再突合:
+
+```
+✓ 欠落なし（ZAICOの全在庫がBELLOに存在する） — 0件 / ZAICO 5312件
+✓ 重複なし / 宙に浮いたリンクなし / リンク件数一致
+✓ ZaicoSyncJobがちょうど1行
+✓ BELLO側の余剰は、すべて同期ジョブが把握している上流削除である
+6 passed, 0 failed
+```
+
+なお採用操作そのものは元に戻していない。これは検証のための細工ではなく
+「人が確認して採用した」という正規の業務操作であり、画面の「直前版に戻す」で
+いつでも戻せるためである。
+
+## 4. 同期ジョブIDの誤指定に対するガード
+
+運用作業中に、Lambdaが使うidではなくブラウザ経路のidを指定してしまい、
+どこからも参照されない `ZaicoSyncJob` 行を作る事故を起こした。原因は
+**2つの実行主体がそれぞれ独立にリテラルを持っていた**ことで、どちらが正か
+コード上に書かれていなかった。
+
+- 原因の除去: `lib/inventory/zaicoSyncJobId.ts` に定義を1本化。
+  `zaicoBackgroundSync.ts` は `serverDataClient` 経由で "server-only" を
+  引き込むためLambdaから直接importできない。値だけのファイルを分けることで
+  両方から共有できる。
+- 静的ガード: リテラルが `zaicoSyncJobId.ts` 以外に書き直されていないこと、
+  利用側2ファイルが共有定数を参照していることをソース走査で検査
+  （コメント内の言及は除外）。
+- 運用ガード: 突合ツールに「ZaicoSyncJobがちょうど1行で、idが正規のもの」
+  を追加。今回の事故ならその場で検出される。
+
+## 5. 検証結果
+
+- テスト **786 passed / 0 failed**（14スイート）
+- lint / typecheck / build いずれも通過

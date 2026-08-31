@@ -5,6 +5,7 @@ import { listInventories } from "./zaicoApiClient";
 import { createLambdaSyncPort, findMissingZaicoManagedInventory } from "./lambdaSyncPort";
 import { syncOneZaicoItem } from "@/lib/inventory/zaicoSyncEngine";
 import type { MasterCache } from "@/lib/inventory/zaicoSyncPorts";
+import { ZAICO_SYNC_JOB_ID } from "../../../lib/inventory/zaicoSyncJobId";
 
 /**
  * BELLO統合業務OS 第五ラウンド §4(P0-A): ZAICO同期の完全無人worker。
@@ -17,7 +18,7 @@ import type { MasterCache } from "@/lib/inventory/zaicoSyncPorts";
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const ZAICO_SYNC_JOB_TABLE = process.env.ZAICO_SYNC_JOB_TABLE_NAME!;
-const JOB_ID = "zaico-full-sync-singleton";
+const JOB_ID = ZAICO_SYNC_JOB_ID;
 const ITEMS_PER_PAGE = 50;
 const LEASE_DURATION_MS = 4 * 60 * 1000; // 4分——Lambda自体のtimeout(240秒)より短く、他の実行主体が「lease切れ」と判定できる猶予を作る
 const TIME_BUDGET_MS = 210_000; // 240秒timeoutに対し、最後のcheckpoint書き込み分の余裕を30秒残す

@@ -35,3 +35,6 @@ zaico-verification/output/
 
 # QA中に使う一時スクリプト(コミットしない)
 .*.mjs
+
+# E2E用のStaging認証情報（コミット禁止・使用後は削除）
+.env.e2e.local

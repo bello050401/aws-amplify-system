@@ -24,6 +24,7 @@
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+import { ZAICO_SYNC_JOB_ID } from "@/lib/inventory/zaicoSyncJobId";
 
 const REGION = process.env.AWS_REGION || process.env.BELLO_REGION || "us-west-2";
 const raw = new DynamoDBClient({ region: REGION });
@@ -115,7 +116,18 @@ async function main(): Promise<void> {
   // 避けるための設計判断なので、BELLO側に余分な行があること自体は
   // 異常ではない。**異常なのは、それが同期ジョブに把握されていない場合**。
   const jobTable = await resolveTable("ZaicoSyncJob", process.env.BELLO_ZAICO_JOB_TABLE);
-  const job = await ddb.send(new GetCommand({ TableName: jobTable, Key: { id: "zaico-full-sync-singleton" } }));
+  const job = await ddb.send(new GetCommand({ TableName: jobTable, Key: { id: ZAICO_SYNC_JOB_ID } }));
+
+  // ZaicoSyncJob は設計上ちょうど1行。lease/heartbeat による排他制御が
+  // その前提に立っている。行が増えると2つの実行主体が別々の行を見て
+  // 互いのleaseを無視することになるうえ、余分な行が PENDING のままだと
+  // UIが「同期実行中」と表示し続ける。
+  //
+  // 実際に運用作業でidを取り違えて余分な行を作ってしまったことがある
+  // (2026-08-31)。そのときは気付くまでに時間がかかったので、突合で
+  // 一目で分かるようにした。
+  const jobRows = await scanAll<{ id: string }>(jobTable, "id");
+  const strayJobs = jobRows.filter((r) => r.id !== ZAICO_SYNC_JOB_ID);
   const reportedMissing: string[] = (job.Item?.missingSourceIds as string[] | undefined) ?? [];
   const jobStatus = (job.Item?.status as string | undefined) ?? "(なし)";
   const unexplained = orphans.filter((o) => !reportedMissing.includes(o));
@@ -129,6 +141,12 @@ async function main(): Promise<void> {
   check(links.length === zaicoRows.length, "リンク件数とZAICO由来行の件数が一致", `${links.length} / ${zaicoRows.length}`);
 
   // ── ZAICO側で削除された在庫: 保持は仕様。把握できているかを見る ──
+  check(
+    jobRows.length === 1 && strayJobs.length === 0,
+    "ZaicoSyncJobがちょうど1行（idの取り違えで余分な行を作っていない）",
+    strayJobs.length ? `想定外のid: ${strayJobs.map((r) => r.id).join(",")}` : `${jobRows.length}行 / id=${ZAICO_SYNC_JOB_ID}`,
+  );
+
   check(
     unexplained.length === 0,
     "BELLO側の余剰は、すべて同期ジョブが把握している上流削除である",

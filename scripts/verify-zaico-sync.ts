@@ -16,6 +16,9 @@
  * Exits with a non-zero status if any assertion fails, so it can be
  * wired into CI later without any changes.
  */
+import fs from "node:fs";
+import path from "node:path";
+import { ZAICO_SYNC_JOB_ID } from "@/lib/inventory/zaicoSyncJobId";
 import { syncOneZaicoItem } from "@/lib/inventory/zaicoSync";
 import type { ZaicoSyncPort, InventoryModel, NewInventoryInput, UpdateInventoryInput } from "@/lib/inventory/zaicoSyncPorts";
 import type { HistoryFieldChange } from "@/lib/inventory/history";
@@ -383,6 +386,57 @@ async function testReleaseFailureIsReportedWithoutLosingOriginalError() {
 }
 
 /**
+ * ZaicoSyncJob の単一行 id が1箇所でしか定義されていないことを守る。
+ *
+ * ## なぜこのガードを足したか
+ *
+ * この値はブラウザ起点の手動advanceとスケジュールLambdaの2つが共有する。
+ * 以前は両者がそれぞれ自前のリテラルを持っていて、「どちらが正か」が
+ * コード上どこにも書かれていなかった。実際に運用作業中、別のidを指定して
+ * **どこからも参照されない ZaicoSyncJob 行を作ってしまう**事故が起きた
+ * (2026-08-31)。作られた行は PENDING だったため、放置すればUIが
+ * 「同期実行中」と表示し続ける状態でもあった。
+ *
+ * 値が一致しているかどうかを実行時に比べても意味がない(同じ定数を
+ * 見に行くので必ず一致する)。**再びリテラルが書かれていないか**を
+ * ソースそのものに対して検査する。
+ */
+function testSyncJobIdHasSingleDefinition() {
+  const SOURCES = [
+    "lib/inventory/zaicoBackgroundSync.ts",
+    "amplify/functions/zaico-sync-worker/handler.ts",
+    "lib/inventory/zaicoSyncJobId.ts",
+  ];
+  const LITERAL = ZAICO_SYNC_JOB_ID;
+
+  assertTrue(typeof LITERAL === "string" && LITERAL.length > 0, "ジョブID: 定数が空でない");
+
+  const definers: string[] = [];
+  for (const rel of SOURCES) {
+    const src = fs.readFileSync(path.join(process.cwd(), rel), "utf8");
+    // 文字列リテラルとして直接書かれているか。
+    // コメント内でこのidに言及するのは自由にしたいので、コメントは除いてから見る。
+    const code = src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    const hasLiteral = [`"${LITERAL}"`, `'${LITERAL}'`, `\`${LITERAL}\``].some((q) => code.includes(q));
+    if (hasLiteral) definers.push(rel);
+  }
+
+  assertEqual(
+    definers,
+    ["lib/inventory/zaicoSyncJobId.ts"],
+    "ジョブID: リテラルの定義はzaicoSyncJobId.tsの1箇所だけ(他所に書き直さない)",
+  );
+
+  // 利用側が定数を参照していること
+  for (const rel of ["lib/inventory/zaicoBackgroundSync.ts", "amplify/functions/zaico-sync-worker/handler.ts"]) {
+    const src = fs.readFileSync(path.join(process.cwd(), rel), "utf8");
+    assertTrue(src.includes("ZAICO_SYNC_JOB_ID"), `ジョブID: ${rel} が共有定数を参照している`);
+  }
+}
+
+/**
  * BELLO ZAICO級高速化仕様書 §30.7: baseline計測(scripts/
  * benchmark-zaico-sync.ts)で確定した2つのN+1(sourceInventoryIdの
  * 全件Scan、Category/Locationマスタの全件取得)がprefetched map /
@@ -583,6 +637,7 @@ async function main() {
   await testRepeatedFullResyncNeverIncreasesCount();
   await testCreateFailureReleasesClaimForRetry();
   await testReleaseFailureIsReportedWithoutLosingOriginalError();
+  testSyncJobIdHasSingleDefinition();
   await testPrefetchAndMasterCacheAvoidRepeatedLookups();
   testBackgroundJobPureHelpers();
   testPurchasePriceAllInCostRule();

@@ -4,6 +4,7 @@ import { listInventories } from "@/lib/zaico/client";
 import { syncOneZaicoItem } from "./zaicoSync";
 import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaicoSyncPorts";
 import type { Schema } from "@/amplify/data/resource";
+import { ZAICO_SYNC_JOB_ID } from "./zaicoSyncJobId";
 
 type ZaicoSyncJobModel = Schema["ZaicoSyncJob"]["type"];
 
@@ -85,7 +86,7 @@ async function releaseLeaseIfOwned(ownerId: string): Promise<void> {
 }
 
 /** The one well-known row id — see file comment above for why a singleton row is this job's lock/lease mechanism. */
-const ZAICO_SYNC_JOB_SINGLETON_ID = "zaico-full-sync-singleton";
+const ZAICO_SYNC_JOB_SINGLETON_ID = ZAICO_SYNC_JOB_ID;
 
 /** How many ZAICO items one `advance` call processes at most — matches lib/zaico/client.ts's own per-page size, so one advance call is "fetch and sync one ZAICO page". */
 const ITEMS_PER_ADVANCE = 50;
