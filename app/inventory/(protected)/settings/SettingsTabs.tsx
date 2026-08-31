@@ -6,6 +6,7 @@ import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import type { ZaicoTokenSource } from "@/lib/zaico/client";
 import type { MercariTokenSource, MercariVerificationState } from "@/lib/listing/mercari/tokenAccess";
 import type { LineTokenSource } from "@/lib/messaging/line/tokenAccess";
+import type { BaseConnectionState } from "@/lib/base/connectionState";
 import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
@@ -14,6 +15,7 @@ import { ZaicoDuplicateAuditPanel } from "./ZaicoDuplicateAuditPanel";
 import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 import { ListingPartitionBackfillPanel } from "./ListingPartitionBackfillPanel";
 import { MercariSettingsPanel } from "./MercariSettingsPanel";
+import { BaseSettingsPanel } from "./BaseSettingsPanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
@@ -43,6 +45,8 @@ interface SettingsTabsProps {
   mercariLastCheckedAt: string | null;
   /** Secret自体を読めなかった場合の説明 — §6.1「失敗を未設定として黙って表示しない」。 */
   mercariSecretReadError: string | null;
+  /** 夜間統合指示書(2026-09-01) §4.2: 既存のBASE特集ページ連携設定の状態をそのまま表示する(新しい認証情報は作らない)。 */
+  baseConnection: BaseConnectionState;
   /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
   lineConnected: boolean;
   lineTokenSource: LineTokenSource;
@@ -72,11 +76,12 @@ export function SettingsTabs({
   mercariVerification,
   mercariLastCheckedAt,
   mercariSecretReadError,
+  baseConnection,
   lineConnected,
   lineTokenSource,
 }: SettingsTabsProps) {
   const [tab, setTab] = useState<
-    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "pricing" | "shipping" | "line" | "systemAudit" | "photoProfile"
+    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "base" | "pricing" | "shipping" | "line" | "systemAudit" | "photoProfile"
   >("category");
 
   const tabClass = (active: boolean) =>
@@ -113,6 +118,11 @@ export function SettingsTabs({
         {isAdmin && (
           <button type="button" onClick={() => setTab("mercari")} className={tabClass(tab === "mercari")}>
             EC出品（Mercari）
+          </button>
+        )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("base")} className={tabClass(tab === "base")}>
+            BASE連携
           </button>
         )}
         {isAdmin && (
@@ -183,6 +193,7 @@ export function SettingsTabs({
             mercariSecretReadError={mercariSecretReadError}
           />
         )}
+        {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側
             (/inventory/listings/pricing-rules)へ移設した。ここに残す
             ロジック付きUIを二重に持たない(同じ設定を二箇所で編集できる

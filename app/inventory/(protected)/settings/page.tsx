@@ -4,6 +4,7 @@ import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { listAllCustomFieldDefinitions } from "@/lib/inventory/queries";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
 import { getMercariConnectionState } from "@/lib/listing/mercari/tokenAccess";
+import { getBaseConnectionState } from "@/lib/base/connectionState";
 import { getMercariEnvironment } from "@/lib/listing/mercari/endpoints";
 import { getLineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { InventoryHeader } from "../../InventoryHeader";
@@ -67,6 +68,10 @@ export default async function InventorySettingsPage() {
     getMercariConnectionState(),
     getLineTokenSource(),
   ]);
+
+  // BASEの接続状態(§4.2)。既存の特集ページ連携設定をそのまま参照する
+  // だけで、BELLO側に新しいBASE認証情報は作らない。
+  const baseConnection = await getBaseConnectionState();
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
   // とgetZaicoTokenSource()を両方呼ぶと同じ呼び出しが2回発生していた)。
@@ -99,6 +104,7 @@ export default async function InventorySettingsPage() {
           mercariVerification={mercariState.verification}
           mercariLastCheckedAt={mercariState.lastCheckedAt}
           mercariSecretReadError={mercariState.secretReadError}
+          baseConnection={baseConnection}
           lineConnected={lineConnected}
           lineTokenSource={lineTokenSource}
         />

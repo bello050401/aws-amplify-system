@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { generateListingCopy, generateReplyDraft, type ListingCopyResult } from "@/lib/ai/ecCopy";
+import { buildCustomerSafeFacts } from "@/lib/ai/productIntro/facts";
 import { getConversation, listMessages } from "@/lib/messaging/service";
 import { getChannelListing } from "@/lib/listing/service";
 
@@ -85,13 +86,50 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
     const inventory = await getInventoryDetail(inventoryId);
     if (!inventory) throw new Error("対象の在庫が見つかりません。");
 
-    const data = await generateListingCopy({
+    // 【2026-09-01】以前はここで inventory.conditionRating と
+    // inventory.note を**そのまま**AIへ渡していた。本番データを実測した
+    // 結果、その2つは顧客向けの生成に渡してよい値ではなかった:
+    //
+    //   - conditionRating の実態は社内の5段階スコア("3.5"/"4"/"3"…)。
+    //     これを「コンディション: 4」として渡していたため、モデルは
+    //     忠実に「コンディションは4です」と書いていた。顧客へ開示すべき
+    //     状態説明は damageNotes 側にあるのに、そちらは渡していなかった。
+    //   - note には顧客の配送先住所が入っている行がある(実測300件中2件)。
+    //     生成結果は公開される商品説明なので、他人の住所が載り得た。
+    //
+    // buildCustomerSafeFacts が、社内スコアの除去・個人情報らしき記述の
+    // 除去・寸法の整形をまとめて行う。落とした項目は redactions として
+    // 返るので、サーバーログにだけ残す(顧客にもUIにも出さない)。
+    const { facts, redactions } = buildCustomerSafeFacts({
       name: inventory.name,
-      dimensions: [inventory.width, inventory.depth, inventory.height].filter(Boolean).length
-        ? `幅${inventory.width ?? "-"} × 奥行${inventory.depth ?? "-"} × 高さ${inventory.height ?? "-"} (cm)`
-        : null,
-      conditionNote: inventory.conditionRating,
+      width: inventory.width,
+      depth: inventory.depth,
+      height: inventory.height,
+      conditionRating: inventory.conditionRating,
+      damageNotes: inventory.damageNotes,
       note: inventory.note,
+    });
+    if (redactions.length > 0) {
+      console.info(
+        JSON.stringify({
+          level: "info",
+          action: "generateListingCopyAction",
+          correlationId,
+          message: "AIへ渡す前に除外した項目があります",
+          inventoryId,
+          redactions,
+        }),
+      );
+    }
+
+    const data = await generateListingCopy({
+      name: facts.name,
+      dimensions: facts.dimensions,
+      categoryName: facts.categoryName,
+      conditionNote: facts.conditionDisclosure,
+      note: facts.publicNote,
+      // 生成後の機械検査が「出てはいけない値」として使う。
+      guard: { stockQuantity: inventory.quantity, sku: inventory.sku },
     });
     return { ok: true, data };
   } catch (err) {
@@ -121,11 +159,22 @@ export async function generateReplyDraftAction(conversationId: string): Promise<
     const channelListing = conversation.relatedInventoryId ? await getChannelListing(conversation.relatedInventoryId, "MERCARI_SHOPS") : null;
     const shippingFee = channelListing?.confirmedShippingFee ?? channelListing?.calculatedShippingFee ?? null;
 
+    // 返信案も顧客が読む文章なので、出品コピーと同じ理由で
+    // conditionRating(社内の5段階スコア)をそのまま渡さない。
+    // 「コンディションは4です」と返信してしまう経路をここでも塞ぐ。
+    const replyFacts = inventory
+      ? buildCustomerSafeFacts({
+          name: inventory.name,
+          conditionRating: inventory.conditionRating,
+          damageNotes: inventory.damageNotes,
+        }).facts
+      : null;
+
     const data = await generateReplyDraft({
       channel: conversation.channel,
       inquiryBody: latestIncoming.body,
       productName: inventory?.name ?? null,
-      productCondition: inventory?.conditionRating ?? null,
+      productCondition: replyFacts?.conditionDisclosure ?? null,
       sellingPrice: inventory?.salePrice ?? inventory?.plannedSalePrice ?? null,
       stockQuantity: inventory?.quantity ?? null,
       shippingFee,
