@@ -1,4 +1,5 @@
 import { borderLikelihood, type ImageAnalysis, type NormalizedRect } from "./analysis";
+import { cropIncludesAvoidRegion } from "./vision/router";
 
 /**
  * BELLO画像自動加工 — 構図の再設計(2026-08-31 画像自動加工完全仕様書 §8 Stage 2 / §27)。
@@ -70,6 +71,14 @@ export interface CropPlan {
   /** cropを適用した場合の、出力フレームに対する被写体の最大相対寸法。 */
   resultingSubjectExtent: number | null;
   shape: SubjectShape;
+  /**
+   * 画角に不要物(撮影機材など)が残っているか。
+   *
+   * 残っていても crop 自体は成立させる。消去はしないし(§5)、不要物を
+   * 外すためだけに商品を切るのは優先順位が逆(付録B: ②切らない)。
+   * 残った場合は要レビューの材料として上へ渡す(§42)。
+   */
+  avoidRegionIncluded?: boolean;
   /** 採用した切り口の、4辺のうち最も商品に掛かっている度合い。0.00が完全な背景。 */
   borderScore?: number;
   /** 実際に採用した出力比率。希望と違う場合がある(横長商品を正方形へ押し込まないため)。 */
@@ -107,6 +116,11 @@ export function planCrop(
   analysis: ImageAnalysis,
   aspect: OutputAspect,
   targets: CropTargets = DEFAULT_CROP_TARGETS,
+  /**
+   * 画角から外したい領域(撮影機材など)。AI Visionが見つけたときだけ入る。
+   * 空のときの挙動は従来と完全に同じ。
+   */
+  avoidRegions: NormalizedRect[] = [],
 ): CropPlan {
   const srcW = analysis.width;
   const srcH = analysis.height;
@@ -140,11 +154,27 @@ export function planCrop(
     seen.add(candidateAspect);
     const plan = planCropForAspect(analysis, aspectValue(candidateAspect, srcW, srcH), targets, srcW, srcH, shape, full);
     if (!plan.applied) { lastFailure = plan; continue; }
-    const withAspect = { ...plan, aspect: candidateAspect };
-    if (!best || (withAspect.resultingSubjectExtent ?? 0) > (best.resultingSubjectExtent ?? 0)) best = withAspect;
+    const includesAvoid = avoidRegions.length > 0 && cropIncludesAvoidRegion(plan.rect, avoidRegions);
+    const withAspect = { ...plan, aspect: candidateAspect, avoidRegionIncluded: includesAvoid };
+    if (!best || isBetterPlan(withAspect, best)) best = withAspect;
   }
   if (best) return best;
   return lastFailure ?? { rect: full, applied: false, reason: "NO_SUBJECT", resultingSubjectExtent: null, shape };
+}
+
+/**
+ * どちらの構図案を採るか。
+ *
+ * 不要物を画角外にできる案を優先し、その中で商品が最も大きく写る案を選ぶ。
+ * 「不要物を外す」を「商品を大きく」より先に見るのは、機材が写り込んだ
+ * 写真は寄っていても商品写真として使えないため(§5)。ただし不要物を
+ * 外すために商品を切ることはしない — 切る案はそもそもここへ来ない。
+ */
+function isBetterPlan(candidate: CropPlan, best: CropPlan): boolean {
+  const cClean = !candidate.avoidRegionIncluded;
+  const bClean = !best.avoidRegionIncluded;
+  if (cClean !== bClean) return cClean;
+  return (candidate.resultingSubjectExtent ?? 0) > (best.resultingSubjectExtent ?? 0);
 }
 
 /** 1つの比率について、切り口が商品に掛からない構図を探す。 */

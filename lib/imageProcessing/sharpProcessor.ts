@@ -3,7 +3,10 @@ import { DEFAULT_ADJUSTMENTS, shouldApplyStrongComposition } from "./pipeline";
 import { analyzeImage, type ImageAnalysis, type RawImage } from "./analysis";
 import { planCrop, DEFAULT_CROP_TARGETS, type CropPlan, type CropTargets, type OutputAspect } from "./cropPlanner";
 import { planTone, buildToneCurve, DEFAULT_TONE_TARGETS, type TonePlan, type ToneTargets } from "./toneMap";
+import { decideVisionRouting, mergeVisionWithLocal } from "./vision/router";
+import type { NormalizedRect, VisionAnalyzer, VisionTriggerReason } from "./vision/types";
 import type { ImageProcessingProvider, ProcessRequest, ProcessResult, ToneAdjustments } from "./types";
+import { createHash } from "node:crypto";
 
 /**
  * lib/inventory/thumbnail.tsのTHUMBNAIL_MAX_DIMENSION(=320)と同じ値。
@@ -29,6 +32,15 @@ const MASTER_LONG_EDGE = 2000;
 
 /** 解析はこの長辺へ縮小してから行う。構図と背景の統計にはこれで十分で、4000px級でも速い。 */
 const ANALYSIS_LONG_EDGE = 640;
+
+/**
+ * AIへ渡すJPEGの品質。
+ *
+ * 細い脚や金属の輪郭が潰れると位置判断を誤るので落としすぎない(§37)。
+ * 640px長辺・q85でおよそ60〜90KBに収まり、実測の丸テーブルで入力
+ * 1,031トークンだった。
+ */
+const VISION_JPEG_QUALITY = 85;
 
 /**
  * BELLO画像自動加工の本体(2026-08-31 画像自動加工完全仕様書)。
@@ -172,10 +184,84 @@ export function applyTonePixels(
   return out;
 }
 
+/** AIを使ったかどうかと、その結果。監査とコスト把握のために必ず残す(§49)。 */
+export interface VisionDiagnostics {
+  /** ルーティングが「難例」と判断したか。falseならAIは呼んでいない。 */
+  requested: boolean;
+  trigger: VisionTriggerReason | null;
+  /** 実際にAIの回答を採用できたか。障害・不正応答ならfalse。 */
+  applied: boolean;
+  modelId: string | null;
+  latencyMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reasonCodes: string[];
+  avoidRegions: NormalizedRect[];
+}
+
+
+/**
+ * 周辺減光の補正量を「実測して」決める(§25 品質ゲート)。
+ *
+ * ## なぜ計算で決められないのか
+ *
+ * 減光量は元画像の全面(中心 vs 四隅)で測る。ところが実際に補正が
+ * 掛かるのは**cropした後の狭い範囲**で、そこには元の隅は含まれない。
+ * 全面ぶんの持ち上げをそのまま当てると入れすぎになる。
+ *
+ * 実測: 椅子の組で、背景輝度が既に223ある画像へ全面ぶんの補正を当てた
+ * 結果、周辺減光が 101 → **-46**(隅のほうが中心より明るい)まで行き過ぎ、
+ * 白飛びが8.0%発生した。理想写真の残留減光は -11 で、白飛びは0.0%である。
+ *
+ * ## 何をするか
+ *
+ * 補正量に対する残留減光の応答は線形なので、0とL0の2点を実測して
+ * 残留が0になる補正量を解く。そのうえで、実際に白飛びが出ないところまで
+ * 下げる。推定値ではなく、cropした後の画で測った値だけを使う。
+ */
+function solveVignetteLift(
+  /** 補正量を与えると、crop後の状態を測って返す。 */
+  measure: (lift: number) => ImageAnalysis,
+  /** 全面から見積もった出発点。 */
+  initialLift: number,
+  targets: ToneTargets,
+): { lift: number; analysis: ImageAnalysis; notes: string[] } {
+  const notes: string[] = [];
+  const uncorrected = measure(0);
+  const residual = uncorrected.background.vignetteDrop;
+
+  // crop後に減光が残っていないなら、触らない。
+  if (initialLift <= 0 || residual <= 12) return { lift: 0, analysis: uncorrected, notes };
+
+  const atInitial = measure(initialLift);
+  // 補正量1あたり、残留減光がどれだけ減るか。
+  const slope = (residual - atInitial.background.vignetteDrop) / initialLift;
+  let lift = slope > 1e-4 ? (residual / slope) * targets.vignetteCorrection : initialLift;
+  lift = Math.max(0, Math.min(lift, initialLift * 1.5));
+  notes.push(
+    `crop後の周辺減光を実測(${residual.toFixed(0)})し、補正量を ${initialLift.toFixed(0)} → ${lift.toFixed(0)} へ調整`,
+  );
+
+  let result = Math.abs(lift - initialLift) < 0.5 ? atInitial : measure(lift);
+
+  // 隅を持ち上げると白が飛ぶ。飛ばない量まで下げる — 明るさより情報の保持を優先する。
+  for (let i = 0; i < 5 && lift > 0 && result.highlightClipRatio > targets.maxHighlightClipRatio; i++) {
+    const reduced = lift * 0.65;
+    notes.push(
+      `白飛びが${(result.highlightClipRatio * 100).toFixed(1)}%出るため周辺減光補正を ${lift.toFixed(0)} → ${reduced.toFixed(0)} へ抑制`,
+    );
+    lift = reduced;
+    result = measure(lift);
+  }
+  if (lift < 1) return { lift: 0, analysis: uncorrected, notes };
+  return { lift, analysis: result, notes };
+}
+
 export interface ProcessDiagnostics {
   analysis: ImageAnalysis;
   crop: CropPlan;
   tone: TonePlan;
+  vision: VisionDiagnostics;
   /** 加工後に測り直した被写体占有率。品質ゲートと採用判断の根拠になる。 */
   resultOccupancy: number | null;
 }
@@ -187,7 +273,33 @@ export interface BelloProcessResult extends ProcessResult {
 export interface SharpProcessorOptions {
   cropTargets?: CropTargets;
   toneTargets?: ToneTargets;
+  /**
+   * 難例のときだけ相談するVision解析。渡さなければAIは一切使わない。
+   *
+   * 既定でundefinedにしてあるのは意図的で、AIを足すこと自体は品質改善
+   * ではないため(§56)。呼び出し側が明示的に有効化する。
+   */
+  visionAnalyzer?: VisionAnalyzer;
 }
+
+/** 被写体が画面の端に接しているか。画角の外に何かある可能性の手がかりになる。 */
+function touchesFrameEdge(bbox: NormalizedRect | null): boolean {
+  if (!bbox) return false;
+  const m = 0.02;
+  return bbox.x <= m || bbox.y <= m || bbox.x + bbox.width >= 1 - m || bbox.y + bbox.height >= 1 - m;
+}
+
+const VISION_NOT_USED: VisionDiagnostics = {
+  requested: false,
+  trigger: null,
+  applied: false,
+  modelId: null,
+  latencyMs: null,
+  inputTokens: null,
+  outputTokens: null,
+  reasonCodes: [],
+  avoidRegions: [],
+};
 
 export class SharpImageProcessingProvider implements ImageProcessingProvider {
   // パラメータプロパティ構文は使わない。型を落とすだけのランタイム
@@ -239,8 +351,15 @@ export class SharpImageProcessingProvider implements ImageProcessingProvider {
     // DETAIL/DAMAGE/LABELは元の構図を尊重する(§6)。傷の写真を勝手に寄せない。
     const strong = shouldApplyStrongComposition(req.classification);
     const aspect: OutputAspect = strong ? (req.aspectRatio as OutputAspect) : "ORIGINAL";
+
+    // ローカル解析で決めきれない画像だけAIへ相談する。
+    const { subject, avoidRegions, vision } = strong
+      ? await this.consultVisionIfNeeded(req, analysis, normalizedPreview)
+      : { subject: analysis.subject, avoidRegions: [] as NormalizedRect[], vision: VISION_NOT_USED };
+    const composed: ImageAnalysis = { ...analysis, subject };
+
     const crop = strong
-      ? planCrop(analysis, aspect, cropTargets)
+      ? planCrop(composed, aspect, cropTargets, avoidRegions)
       : { rect: { x: 0, y: 0, width: 1, height: 1 }, applied: false, reason: "ALREADY_WELL_FRAMED" as const, resultingSubjectExtent: null, shape: "BALANCED" as const };
 
     const meta = await rotated.clone().metadata();
@@ -273,14 +392,22 @@ export class SharpImageProcessingProvider implements ImageProcessingProvider {
     // 実測で背景が249〜255まで飛び、白飛び率が39〜63%になったのがこれ。
     // まず減光補正だけを解析用の縮小画像へ当ててcropし、その状態で
     // 背景輝度とWBを測り直してからゲインを決める。
-    const vignetteOnly: TonePlan = { ...planTone(analysis, toneTargets), gain: 1, gainR: 1, gainB: 1, highlightKnee: 255 };
-    const preview = applyTonePixels(analysisRaw, vignetteOnly, analysis.background.medianLuminance);
-    const previewRaw: RawImage = { data: preview, width: analysisRaw.width, height: analysisRaw.height, channels: analysisRaw.channels };
-    const croppedPreview = crop.applied ? cropRaw(previewRaw, crop.rect) : previewRaw;
-    const correctedAnalysis = analyzeImage(croppedPreview);
+    const vignetteBase: TonePlan = { ...planTone(analysis, toneTargets), gain: 1, gainR: 1, gainB: 1, highlightKnee: 255 };
+
+    // 補正量は「当ててみて、cropした後の画を測る」ことで決める。
+    // 全面から見積もった値をそのまま使うと入れすぎになる(solveVignetteLift参照)。
+    const measureAtLift = (lift: number): ImageAnalysis => {
+      const preview = applyTonePixels(analysisRaw, { ...vignetteBase, vignetteLift: lift }, analysis.background.medianLuminance);
+      const previewRaw: RawImage = { data: preview, width: analysisRaw.width, height: analysisRaw.height, channels: analysisRaw.channels };
+      return analyzeImage(crop.applied ? cropRaw(previewRaw, crop.rect) : previewRaw);
+    };
+    const solved = solveVignetteLift(measureAtLift, vignetteBase.vignetteLift, toneTargets);
+    const correctedAnalysis = solved.analysis;
+    const tonePlan = planTone(correctedAnalysis, toneTargets);
     const tone: TonePlan = {
-      ...planTone(correctedAnalysis, toneTargets),
-      vignetteLift: vignetteOnly.vignetteLift,
+      ...tonePlan,
+      vignetteLift: solved.lift,
+      notes: [...tonePlan.notes, ...solved.notes],
     };
 
     const { data, info } = await staged.removeAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -330,7 +457,73 @@ export class SharpImageProcessingProvider implements ImageProcessingProvider {
       height: outMeta.height ?? info.height,
       readBackVerified: masterOk && webOk && thumbOk,
       floorCleanupApplied: false,
-      diagnostics: { analysis, crop, tone, resultOccupancy },
+      diagnostics: { analysis: composed, crop, tone, resultOccupancy, vision },
     };
+  }
+
+  /**
+   * 難例のときだけAIへ相談する(§5「全画像に無条件でAIを適用する設計は禁止」)。
+   *
+   * AIが落ちても、不正な応答を返しても、ここは必ず「ローカルの判断」を
+   * 返して加工を続行する(§36)。例外は外へ出さない。
+   */
+  private async consultVisionIfNeeded(
+    req: ProcessRequest,
+    analysis: ImageAnalysis,
+    normalized: RawImage,
+  ): Promise<{ subject: ImageAnalysis["subject"]; avoidRegions: NormalizedRect[]; vision: VisionDiagnostics }> {
+    const analyzer = this.options.visionAnalyzer;
+    const local = { subject: analysis.subject, avoidRegions: [] as NormalizedRect[], vision: VISION_NOT_USED };
+    if (!analyzer) return local;
+
+    const routing = decideVisionRouting({
+      localConfidence: analysis.subject.confidence,
+      hasLocalSubject: analysis.subject.bbox !== null,
+      backgroundLuminance: analysis.background.medianLuminance,
+      subjectTouchesFrameEdge: touchesFrameEdge(analysis.subject.bbox),
+    });
+    if (!routing.useVision || !routing.reason) return local;
+
+    const requested: VisionDiagnostics = { ...VISION_NOT_USED, requested: true, trigger: routing.reason };
+    try {
+      // 送るのは解析用の縮小画像。元の数MBの写真は送らない(§37)。
+      // 露出を整えた側を渡す — 暗いままではAIも被写体を見誤る。
+      const imageJpeg = await sharp(normalized.data, {
+        raw: { width: normalized.width, height: normalized.height, channels: normalized.channels as 3 },
+      })
+        .jpeg({ quality: VISION_JPEG_QUALITY })
+        .toBuffer();
+
+      const result = await analyzer.analyze({
+        imageJpeg,
+        imageWidth: normalized.width,
+        imageHeight: normalized.height,
+        localBbox: analysis.subject.bbox,
+        localConfidence: analysis.subject.confidence,
+        sourceHash: createHash("sha256").update(req.sourceBuffer).digest("hex"),
+        trigger: routing.reason,
+      });
+
+      const merged = mergeVisionWithLocal(analysis.subject.bbox, analysis.subject.confidence, result);
+      return {
+        subject: { ...analysis.subject, bbox: merged.bbox, confidence: merged.confidence },
+        avoidRegions: merged.avoidRegions,
+        vision: {
+          ...requested,
+          applied: result !== null,
+          modelId: result?.modelId ?? null,
+          latencyMs: result?.latencyMs ?? null,
+          inputTokens: result?.inputTokens ?? null,
+          outputTokens: result?.outputTokens ?? null,
+          reasonCodes: merged.reasonCodes,
+          avoidRegions: merged.avoidRegions,
+        },
+      };
+    } catch (err) {
+      // 画像もSecretも出さない。種別だけ残して、ローカル判断のまま続行する。
+      const name = err instanceof Error ? err.name : "UnknownError";
+      console.warn(`[SharpImageProcessingProvider] vision consultation failed: ${name}; continuing without AI`);
+      return { ...local, vision: { ...requested, reasonCodes: ["VISION_UNAVAILABLE"] } };
+    }
   }
 }
