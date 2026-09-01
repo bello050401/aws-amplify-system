@@ -107,13 +107,31 @@ const schema = a.schema({
       allow.publicApiKey().to(["read"]),
     ]),
 
-  // BASE OAuth2 tokens for this shop's connected app. Admins-only, no
+  // BASE OAuth2 tokens for this shop's connected app. Admin-only, no
   // public rule at all — unlike the models above, this is a credential,
   // not display data. There is exactly one row (id: "singleton"). Written
   // by the OAuth callback route (has the connecting admin's session) and
   // refreshed by lib/base/oauth.ts, always from an admin-authenticated
   // request context (see BaseItemCache comment above for why that's true
   // of every caller of the BASE API client in this system).
+  //
+  // ## 2026-09-01: `ADMIN` を追加した理由（実機で発見した接続不能の原因）
+  //
+  // このアプリには**別々のCognitoグループ体系**が2つある —— Feature/BASE
+  // 側の `Admins` と、在庫管理側の `ADMIN`/`EDITOR`/`VIEWER`（このファイル
+  // 冒頭の設計メモ参照）。BASE接続の操作画面は在庫管理側の
+  // /inventory/settings にあり `ADMIN` で守られている。
+  //
+  // 実測: このユーザープールの唯一の利用者は `ADMIN` にのみ所属し
+  // `Admins` には入っていない。そのためOAuth認可自体は成功しているのに、
+  // 戻ってきたtokenをこのモデルへ書く操作が AppSync に拒否され、
+  // BaseOAuthTokenテーブルは0行のままだった（両テーブルをscanして確認）。
+  // 画面が「連携完了」と表示していたのは、書き込み結果のerrorsを
+  // 呼び出し側が見ていなかったため（lib/base/oauth.ts側で修正済み）。
+  //
+  // 操作する画面の門と、そこが書くデータの認可を一致させる。
+  // `Admins` も残すのは、/admin 配下の特集ページ機能が同じtokenを
+  // 読んでいるため（BASE認証をひとつだけ持つ、という方針の維持）。
   BaseOAuthToken: a
     .model({
       accessToken: a.string().required(),
@@ -121,7 +139,7 @@ const schema = a.schema({
       expiresAt: a.datetime().required(),
       updatedAt: a.datetime().required(),
     })
-    .authorization((allow) => [allow.group("Admins")]),
+    .authorization((allow) => [allow.group("Admins"), allow.group("ADMIN")]),
 
   // ─────────────────────────────────────────────────────────────────────
   // Inventory (BELLO在庫管理システム, Phase 2: data model only, no UI yet)

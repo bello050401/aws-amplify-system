@@ -1,4 +1,5 @@
 import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { unwrapDataResult, AmplifyDataError, type AmplifyDataResult } from "@/lib/amplify/dataResult";
 import { getBaseCredentials } from "./secretStore";
 import { BaseNotConfiguredError } from "./errors";
 import { resolveRedirectUri } from "./redirectUri";
@@ -146,12 +147,53 @@ export async function exchangeCodeForToken(code: string, request: Request): Prom
   await saveToken(body.access_token, body.refresh_token, body.expires_in);
 }
 
+/**
+ * トークンの保存・読み出しが失敗したことを表すエラー。
+ *
+ * 【なぜ専用の型が要るのか — 実機で起きたこと】Amplify Dataの
+ * `models.X.create()` / `.update()` / `.get()` は、**認可で拒否されても
+ * 例外を投げない**。`{ data: null, errors: [...] }` を返すだけである。
+ * この`errors`を見ずに `const { data } = await ...` と分解していたため、
+ * OAuth callbackは「保存できた」と判断して緑色の成功表示を出し、
+ * 実際にはBaseOAuthTokenテーブルは0行のままだった（両テーブルを
+ * scanして確認）。状態表示だけが「未連携」と正しく言っていた。
+ *
+ * 失敗を必ず例外へ変換して、成功表示が「本当に保存できたこと」だけを
+ * 意味するようにする。
+ */
+export class BaseTokenStorageError extends Error {
+  constructor(
+    message: string,
+    /** 認可拒否か（設定の問題）、それ以外か（一時的な障害の可能性）。 */
+    public readonly unauthorized: boolean,
+  ) {
+    super(message);
+    this.name = "BaseTokenStorageError";
+  }
+}
+
+/**
+ * Amplify Dataの戻り値からdataを取り出す。errorsがあれば必ず投げる。
+ * 判定そのものは lib/amplify/dataResult.ts の純粋関数（単体検証対象）。
+ */
+function unwrapTokenResult<T>(result: AmplifyDataResult<T>, operation: string): T {
+  try {
+    return unwrapDataResult(result, `BaseOAuthToken.${operation}`, {
+      unauthorized: "BASEの接続情報を保存・参照する権限がありません。管理者アカウントの権限設定をご確認ください。",
+      failed: "BASEの接続情報の保存・参照に失敗しました。時間をおいて再度お試しください。",
+    });
+  } catch (err) {
+    if (err instanceof AmplifyDataError) throw new BaseTokenStorageError(err.message, err.unauthorized);
+    throw err;
+  }
+}
+
 async function saveToken(accessToken: string, refreshToken: string | undefined, expiresIn: number) {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresIn * 1000).toISOString();
-  const { data: existing } = await serverDataClient.models.BaseOAuthToken.get(
-    { id: TOKEN_ROW_ID },
-    adminAuthMode,
+  const existing = unwrapTokenResult(
+    await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode),
+    "get(before-save)",
   );
 
   const finalRefreshToken = refreshToken ?? existing?.refreshToken;
@@ -159,28 +201,29 @@ async function saveToken(accessToken: string, refreshToken: string | undefined, 
     throw new Error("BASE did not return a refresh_token and none was already stored.");
   }
 
+  const row = {
+    id: TOKEN_ROW_ID,
+    accessToken,
+    refreshToken: finalRefreshToken,
+    expiresAt,
+    updatedAt: now.toISOString(),
+  };
+
   if (existing) {
-    await serverDataClient.models.BaseOAuthToken.update(
-      {
-        id: TOKEN_ROW_ID,
-        accessToken,
-        refreshToken: finalRefreshToken,
-        expiresAt,
-        updatedAt: now.toISOString(),
-      },
-      adminAuthMode,
-    );
+    unwrapTokenResult(await serverDataClient.models.BaseOAuthToken.update(row, adminAuthMode), "update");
   } else {
-    await serverDataClient.models.BaseOAuthToken.create(
-      {
-        id: TOKEN_ROW_ID,
-        accessToken,
-        refreshToken: finalRefreshToken,
-        expiresAt,
-        updatedAt: now.toISOString(),
-      },
-      adminAuthMode,
-    );
+    unwrapTokenResult(await serverDataClient.models.BaseOAuthToken.create(row, adminAuthMode), "create");
+  }
+
+  // 書き込みが受理されたことと、実際に読み戻せることは別物。
+  // 「連携完了」と表示してよいのは後者を確かめてからにする ——
+  // 今回の不具合はまさに「保存できたつもり」で成功表示を出していた。
+  const saved = unwrapTokenResult(
+    await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode),
+    "get(after-save)",
+  );
+  if (!saved) {
+    throw new BaseTokenStorageError("BASEの接続情報を保存できませんでした（保存後に読み戻せませんでした）。", false);
   }
 }
 
@@ -191,8 +234,18 @@ export class BaseNotConnectedError extends Error {
   }
 }
 
+/**
+ * 保存済みトークンの有無。**読み出しに失敗した場合は投げる** ——
+ * 「読めなかった」を「未連携」として表示すると、権限設定の誤りが
+ * 「まだ連携していないだけ」に見えてしまい、原因に辿り着けない
+ * （呼び出し側の getBaseConnectionState はこれを捕まえて
+ * 「確認できませんでした」と区別して表示する）。
+ */
 export async function isBaseConnected(): Promise<boolean> {
-  const { data } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode);
+  const data = unwrapTokenResult(
+    await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode),
+    "get(is-connected)",
+  );
   return Boolean(data);
 }
 
@@ -208,7 +261,10 @@ export async function getAccessToken(): Promise<string> {
   // ことが違う。取り違えると設定画面の案内が的外れになるので先に分ける。
   if (!(await getBaseCredentials())) throw new BaseNotConfiguredError();
 
-  const { data: token } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode);
+  const token = unwrapTokenResult(
+    await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode),
+    "get(access-token)",
+  );
   if (!token) throw new BaseNotConnectedError();
 
   const expiresAt = new Date(token.expiresAt).getTime();
@@ -228,6 +284,11 @@ export async function getAccessToken(): Promise<string> {
 }
 
 export async function disconnectBase(): Promise<void> {
-  const { data: existing } = await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode);
-  if (existing) await serverDataClient.models.BaseOAuthToken.delete({ id: TOKEN_ROW_ID }, adminAuthMode);
+  const existing = unwrapTokenResult(
+    await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode),
+    "get(before-disconnect)",
+  );
+  if (existing) {
+    unwrapTokenResult(await serverDataClient.models.BaseOAuthToken.delete({ id: TOKEN_ROW_ID }, adminAuthMode), "delete");
+  }
 }

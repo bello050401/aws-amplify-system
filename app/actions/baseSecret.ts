@@ -6,7 +6,7 @@ import { deleteBaseCredentials, saveBaseCredentials } from "@/lib/base/secretSto
 import { getBaseClient } from "@/lib/base";
 import { BaseNotConfiguredError } from "@/lib/base/errors";
 import { BaseApiError } from "@/lib/base/client";
-import { BaseNotConnectedError, disconnectBase } from "@/lib/base/oauth";
+import { BaseNotConnectedError, BaseTokenStorageError, disconnectBase } from "@/lib/base/oauth";
 
 /**
  * BASEアプリ認証情報（Client ID / Client Secret）の登録・削除と、接続テスト。
@@ -164,6 +164,11 @@ export async function testBaseConnectionAction(): Promise<BaseConnectionTestResu
     }
     if (err instanceof BaseNotConnectedError) {
       return { success: false, message: err.message, retryable: false };
+    }
+    if (err instanceof BaseTokenStorageError) {
+      // 保存済みトークンを読めない場合。「未連携」と言い切らずに、
+      // 読めなかったこと自体を伝える（§6.1）。
+      return { success: false, message: err.message, retryable: !err.unauthorized };
     }
     if (err instanceof BaseApiError) {
       // BaseApiErrorのmessageにはBASEの応答本文が入り得るので、そのままは出さない。

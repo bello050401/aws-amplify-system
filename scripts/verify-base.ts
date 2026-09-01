@@ -11,6 +11,7 @@
 import { classifyBaseHttpStatus, BaseListingApiError } from "@/lib/listing/base/errors";
 import { buildRedirectUriFromHost, resolveAppOrigin, resolveRedirectUri, OAUTH_CALLBACK_PATH } from "@/lib/base/redirectUri";
 import { resolveScope, READ_ONLY_SCOPE, READ_WRITE_SCOPE } from "@/lib/base/scope";
+import { unwrapDataResult, AmplifyDataError } from "@/lib/amplify/dataResult";
 
 let failures = 0;
 let passes = 0;
@@ -123,10 +124,71 @@ function testScope() {
   else process.env.BASE_SCOPES = previous;
 }
 
+/**
+ * Amplify Dataの「拒否されても例外を投げない」挙動を握りつぶさない。
+ *
+ * これは実機で起きた不具合そのもの: OAuth認可もtoken交換も成功して
+ * いたのに、tokenの書き込みがAppSyncに拒否され、BaseOAuthTokenは0行の
+ * まま管理画面が「連携が完了しました」と表示していた。原因は
+ * `const { data } = await client.models.X.create(...)` が errors を
+ * 見ていなかったこと。
+ */
+function testUnwrapDataResult() {
+  const messages = { unauthorized: "権限がありません。", failed: "失敗しました。" };
+
+  assertEqual(unwrapDataResult({ data: { id: "x" } }, "T.get", messages), { id: "x" }, "unwrapDataResult: errorsが無ければdataをそのまま返す");
+  assertEqual(unwrapDataResult({ data: null, errors: [] }, "T.get", messages), null, "unwrapDataResult: 空のerrors配列は成功として扱う（行が無いだけ）");
+
+  // 拒否は必ず例外にする —— ここが「保存できたつもり」を防ぐ唯一の砦。
+  let thrown: unknown = null;
+  try {
+    unwrapDataResult({ data: null, errors: [{ errorType: "Unauthorized", message: "Not Authorized to access createBaseOAuthToken" }] }, "T.create", messages);
+  } catch (err) {
+    thrown = err;
+  }
+  assertEqual(thrown instanceof AmplifyDataError, true, "unwrapDataResult: 認可拒否は例外になる（黙って成功扱いにしない）");
+  assertEqual((thrown as AmplifyDataError).unauthorized, true, "unwrapDataResult: 認可拒否を unauthorized=true と分類する");
+  assertEqual((thrown as AmplifyDataError).message, messages.unauthorized, "unwrapDataResult: 認可拒否には権限の文言を出す");
+  assertEqual((thrown as AmplifyDataError).errorTypes, ["Unauthorized"], "unwrapDataResult: errorTypeを監査用に保持する");
+
+  // errorType が無く message にだけ現れる場合もある。
+  let thrown2: unknown = null;
+  try {
+    unwrapDataResult({ data: null, errors: [{ message: "Not authorized" }] }, "T.update", messages);
+  } catch (err) {
+    thrown2 = err;
+  }
+  assertEqual((thrown2 as AmplifyDataError).unauthorized, true, "unwrapDataResult: messageだけの認可拒否も検出する");
+
+  // 認可以外の失敗は、時間をおけば直る可能性がある別分類。
+  let thrown3: unknown = null;
+  try {
+    unwrapDataResult({ data: null, errors: [{ errorType: "DynamoDB:ProvisionedThroughputExceeded", message: "throttled" }] }, "T.create", messages);
+  } catch (err) {
+    thrown3 = err;
+  }
+  assertEqual((thrown3 as AmplifyDataError).unauthorized, false, "unwrapDataResult: 認可以外の失敗は unauthorized=false");
+  assertEqual((thrown3 as AmplifyDataError).message, messages.failed, "unwrapDataResult: 認可以外には一時的障害の文言を出す");
+
+  // 秘密値を持つモデルからも呼ばれる。dataの中身がメッセージへ漏れないこと。
+  let thrown4: unknown = null;
+  try {
+    unwrapDataResult({ data: { accessToken: "SECRET-VALUE-SHOULD-NOT-LEAK" }, errors: [{ errorType: "Unauthorized" }] }, "T.get", messages);
+  } catch (err) {
+    thrown4 = err;
+  }
+  assertEqual(
+    (thrown4 as Error).message.includes("SECRET-VALUE-SHOULD-NOT-LEAK"),
+    false,
+    "unwrapDataResult: エラーメッセージにdataの中身を含めない",
+  );
+}
+
 function main() {
   testClassifyBaseHttpStatus();
   testRedirectUri();
   testScope();
+  testUnwrapDataResult();
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }

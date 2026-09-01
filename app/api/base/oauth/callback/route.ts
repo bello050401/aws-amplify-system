@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { exchangeCodeForToken, BaseTokenExchangeError } from "@/lib/base/oauth";
+import { exchangeCodeForToken, isBaseConnected, BaseTokenExchangeError, BaseTokenStorageError } from "@/lib/base/oauth";
 import { BaseNotConfiguredError } from "@/lib/base/errors";
 import { resolveAppOrigin } from "@/lib/base/redirectUri";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
@@ -55,11 +55,20 @@ export async function GET(request: Request) {
 
   try {
     await exchangeCodeForToken(code, request);
+
+    // 「連携完了」と表示してよいのは、保存したトークンをこの経路とは
+    // 別に読み直せたときだけ。以前はトークン交換が例外を投げなければ
+    // 成功扱いにしていたが、保存処理はAmplify Dataのerrorsを見ておらず
+    // **拒否されても例外にならなかった** —— 結果として、テーブルが0行の
+    // まま緑色の成功メッセージが出ていた。二重に確かめる。
+    if (!(await isBaseConnected())) {
+      throw new BaseTokenStorageError("BASEの接続情報を保存できませんでした（保存後に確認できませんでした）。", false);
+    }
     settingsUrl.searchParams.set("baseConnected", "1");
   } catch (err) {
     // 利用者へ出すのは日本語に畳んだ説明だけ。BASEの応答本文や送信内容は
     // サーバーログにのみ残す(lib/base/oauth.ts の requestToken 参照)。
-    if (err instanceof BaseTokenExchangeError || err instanceof BaseNotConfiguredError) {
+    if (err instanceof BaseTokenExchangeError || err instanceof BaseTokenStorageError || err instanceof BaseNotConfiguredError) {
       settingsUrl.searchParams.set("baseError", err.message);
     } else {
       console.error("[base/oauth/callback] unexpected error:", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
