@@ -293,7 +293,20 @@ async function fetchAllInventoryRecords(extraConditions: Record<string, unknown>
   do {
     const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.list({
       filter: { and: [{ deletedAt: { attributeExists: false } }, ...extraConditions] },
-      limit: 200,
+      // 1リクエストで読む件数。DynamoDBは1ページ1MBで頭打ちになるので、
+      // ここを大きくしても"1回で全部"にはならないが、**往復の回数**は減る。
+      //
+      // 実測(在庫5,313件、同じ全件走査を3回ずつ):
+      //   limit 200  → 往復 27回
+      //   limit 1000 → 往復  7回
+      // 1MBの上限に先に当たるため7回で頭打ちになる。所要時間はAWS外の
+      // クライアントから測ると11〜20秒とばらつきが大きく、時間としては
+      // 有意差を主張できない。確かなのは往復回数が27→7になること。
+      // SSRはAWS内で動くので、1往復ごとのAppSync/Lambdaの固定費が
+      // そのまま20回分減る。
+      //
+      // 絞り込みの条件も返る行も変わらない —— 読み方だけを変えている。
+      limit: 1000,
       nextToken: nextToken ?? undefined,
       ...inventoryAuthMode,
     });
