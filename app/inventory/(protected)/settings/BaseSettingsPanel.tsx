@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { BaseConnectionState } from "@/lib/base/connectionState";
+import { BaseArchivePanel } from "./BaseArchivePanel";
 import {
   deleteBaseCredentialsAction,
   saveBaseCredentialsAction,
@@ -411,6 +412,7 @@ export function BaseSettingsPanel({ state }: { state: BaseConnectionState }) {
             )}
           </div>
         )}
+        <BaseArchivePanel connected={state.hasOAuthToken} />
       </div>
     </div>
   );
