@@ -987,6 +987,23 @@ const schema = a.schema({
 
   ConversationPriority: a.enum(["NORMAL", "HIGH"]),
 
+  /**
+   * 業務上の確認状況。既読/未読(技術的状態)とは**別軸**で持つ。
+   *
+   * 【なぜ分けるか】「未読」は人がまだ開いていないという事実で、
+   * 「返信済み」「大原確認」は業務がどこまで進んだかという事実。
+   * 1つのstatusに混ぜると「既読にしたら返信済みになった」のような
+   * 取り違えが起きる。Conversation.isUnread/lastReadAt が前者、
+   * このworkflowStatusが後者を担う。
+   */
+  ConversationWorkflowStatus: a.enum(["NEW", "REPLIED", "OHARA_REVIEW", "ICHIKAWA_REVIEW"]),
+
+  /** 受信メッセージの種別。画像を「本文が空のテキスト」として捨てないために要る。 */
+  MessageContentKind: a.enum(["TEXT", "IMAGE", "STICKER", "FILE", "OTHER"]),
+
+  /** 添付バイナリをBELLO側へ保存できたか。取得失敗を会話の消失にしないため、状態として持つ。 */
+  MessageAttachmentStatus: a.enum(["NONE", "PENDING", "STORED", "FAILED"]),
+
   MessageDirection: a.enum(["INBOUND", "OUTBOUND"]),
 
   MessageSenderType: a.enum(["CUSTOMER", "STAFF", "AI"]),
@@ -1013,6 +1030,30 @@ const schema = a.schema({
       lastIncomingAt: a.datetime(),
       lastOutgoingAt: a.datetime(),
       assignedUserId: a.string(),
+      /**
+       * 未読フラグ。unreadCountは**加算しかされておらず、0へ戻す経路が
+       * コード中に1つも無かった**(実測: lib/messaging/webhookStore.ts と
+       * service.ts の該当箇所はすべて +1 のみ)。これが「会話を開いても
+       * 未読が消えない」の正体。件数ではなく真偽値を正本にし、
+       * 「人が開いた」操作だけがfalseにする。
+       */
+      isUnread: a.boolean().default(true),
+      /** 人が実際に画面で開いた時刻。AI生成・Webhook・バックグラウンド処理では更新しない。 */
+      lastReadAt: a.datetime(),
+      lastReadBy: a.string(),
+      /** 業務ステータス(未読/既読とは別軸 — ConversationWorkflowStatusのコメント参照)。 */
+      workflowStatus: a.ref("ConversationWorkflowStatus"),
+      /** 顧客名をいつ外部APIから取得したか。毎回LINE APIを叩かないためのキャッシュ判定に使う。 */
+      customerNameFetchedAt: a.datetime(),
+      /** 顧客名の出所("LINE_PROFILE"等)。取得できなかったのか、そもそも取りに行っていないのかを区別する。 */
+      customerNameSource: a.string(),
+      /**
+       * 論理削除。AI返信ログ・監査データから参照され得るため物理削除しない
+       * (§3の「履歴・監査上残す必要があるデータを不用意に消さない」)。
+       * 一覧・詳細・AI参照はすべてこれがnullの会話のみを対象にする。
+       */
+      deletedAt: a.datetime(),
+      deletedBy: a.string(),
       createdBy: a.string(),
       updatedBy: a.string(),
     })
@@ -1035,6 +1076,21 @@ const schema = a.schema({
       externalSentAt: a.datetime(),
       deliveryStatus: a.ref("MessageDeliveryStatus").required(),
       aiGenerated: a.boolean().default(false), // §134: AI生成文章かどうかの内部フラグ
+      /**
+       * メッセージ種別。以前は画像イベントを parseLineWebhookBody が
+       * `message.type !== "text"` で捨てており、**画像を送られると会話に
+       * 何も残らなかった**。本文が空であることを理由に捨てないために、
+       * 種別を明示的に持つ。
+       */
+      contentKind: a.ref("MessageContentKind"),
+      /** BELLO側(S3)へ保存した添付のキー。LINEの画像URLは期限切れするため、受信直後に自前へ保存する。 */
+      attachmentStorageKey: a.string(),
+      attachmentContentType: a.string(),
+      attachmentSizeBytes: a.integer(),
+      /** 取得できたか。失敗しても会話は残し、再取得可能な状態として記録する。 */
+      attachmentStatus: a.ref("MessageAttachmentStatus"),
+      /** 取得失敗の理由(利用者に見せる短い日本語。秘密値は含めない)。 */
+      attachmentError: a.string(),
       createdBy: a.string(),
     })
     // 第五ラウンド§6(P0-B) GSI/Scan監査で追加: externalMessageId(LINE
@@ -1444,6 +1500,154 @@ const schema = a.schema({
       autoSendEnabled: a.boolean().default(false),
       updatedBy: a.string(),
     })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * 過去にBASEへ掲載した商品のアーカイブ。
+   *
+   * 【なぜ別モデルなのか】既存の `BaseItemCache` は特集ページを描画する
+   * ための読み取りキャッシュで、載せる商品だけを短期間持つもの。
+   * こちらは**文体分析と類似商品参照のための蓄積**で、目的も寿命も違う。
+   * 同じ表に混ぜると、特集ページのキャッシュ掃除が分析用の母集団を
+   * 消してしまう。
+   *
+   * 再同期で重複を作らないよう、識別子はBASEのitem_idそのもの。
+   * 元の説明文(detailRaw)は書き換えず、分析に使う正規化テキストは
+   * 別フィールドに持つ(§2「元データを勝手に書き換えず」)。
+   */
+  BaseProductArchive: a
+    .model({
+      baseItemId: a.string().required(),
+      title: a.string().required(),
+      /** BASEから受け取ったままの説明文(HTML等を含む)。加工しない。 */
+      detailRaw: a.string(),
+      /** 分析用に正規化した平文。 */
+      detailText: a.string(),
+      /** 抽出した「◎商品のご紹介」本文(取れなかった場合はnull)。 */
+      introText: a.string(),
+      /** セクション分解の結果(JSON文字列)。見出し→本文。 */
+      sectionsJson: a.string(),
+      price: a.integer(),
+      properPrice: a.integer(),
+      stock: a.integer(),
+      visible: a.boolean(),
+      /** BASE側の最終更新(unix秒をISOへ変換したもの)。取得期間の算出に使う。 */
+      modifiedAt: a.datetime(),
+      /** 画像URLの配列(JSON文字列)。 */
+      imageUrlsJson: a.string(),
+      variationsJson: a.string(),
+      itemUrl: a.string(),
+      /** 商品名から機械的に導いたブランド候補(JSON配列)。推測した事実ではなく検索用の手がかり。 */
+      brandHintsJson: a.string(),
+      /** 検索用に正規化した商品名(社内マーカー・検索語ノイズを落としたもの)。 */
+      titleCore: a.string(),
+      syncedAt: a.datetime().required(),
+    })
+    .identifier(["baseItemId"])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("Admins"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * BELLO Style Profile。過去BASE説明文の全体分析結果を、versionを付けて残す。
+   *
+   * 【なぜversionを持つのか】文体は商品が増えれば変わるし、分析の仕方も
+   * 変わる。上書きしてしまうと「いつの分析でこの文章が生成されたのか」が
+   * 追えなくなる。生成物(GeneratedProductPage)がversionを参照するので、
+   * 後から突き合わせられる。
+   */
+  BelloStyleProfile: a
+    .model({
+      version: a.integer().required(),
+      /** AIが参照するのは isActive=true の1件だけ。 */
+      isActive: a.boolean().default(false),
+      analyzedItemCount: a.integer().required(),
+      analysisPeriodStart: a.datetime(),
+      analysisPeriodEnd: a.datetime(),
+      /** 分析結果そのもの(JSON文字列)。lib/ai/productIntro/styleProfile.tsの型。 */
+      profileJson: a.string().required(),
+      /** 分析の確からしさ(サンプル数から機械的に導く)。 */
+      confidence: a.float(),
+      generatedAt: a.datetime().required(),
+      generatedBy: a.string(),
+    })
+    // GSIは張らない。booleanはDynamoDBのキーに使えず、そのためだけに
+    // 文字列フラグを増やすほどの行数ではない(分析を回した回数ぶんしか
+    // 増えず、実運用でも数十行の桁)。読み出しは全件取得して
+    // isActive で絞る —— この表に限っては全件取得が正しい選択。
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * 在庫から生成した商品ページ。単一の文章ではなくセクションごとに持つ
+   * (§10「在庫登録→写真加工→情報補完→商品ページ生成→人間確認→出品」
+   * へつなぐため、後段が必要な部分だけを差し替えられる形にする)。
+   */
+  GeneratedProductPage: a
+    .model({
+      inventoryId: a.string().required(),
+      title: a.string(),
+      introduction: a.string(),
+      brandSection: a.string(),
+      designerSection: a.string(),
+      featureSection: a.string(),
+      materialSection: a.string(),
+      dimensionsSection: a.string(),
+      conditionSection: a.string(),
+      shippingSection: a.string(),
+      fullDescription: a.string(),
+      styleProfileVersion: a.integer(),
+      /** 参照した過去BASE商品のID(JSON配列)。事実の出所を後から追えるようにする。 */
+      referencedBaseItemIdsJson: a.string(),
+      /** 生成後の検査結果(JSON)。事実の裏付けが無い記述を検出した内容。 */
+      validationJson: a.string(),
+      /** 在庫に情報が無く、人の入力を待っている項目(JSON配列)。推測で埋めない。 */
+      missingFactsJson: a.string(),
+      modelProvider: a.string(),
+      modelName: a.string(),
+      generatedAt: a.datetime().required(),
+      generatedBy: a.string(),
+    })
+    .secondaryIndexes((index) => [index("inventoryId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * ナレッジ文書の版。誤編集から戻せるようにするためのもの。
+   *
+   * 【なぜKnowledgeDocumentを二重に持たないか】正本はあくまで
+   * KnowledgeDocument。ここに入るのは**保存前の中身**(つまり1つ前の状態)
+   * で、AIは決してこちらを参照しない。復元も「この行の中身で正本を
+   * 上書きする」新しい更新として扱うので、履歴が枝分かれしない。
+   */
+  KnowledgeDocumentRevision: a
+    .model({
+      documentId: a.string().required(),
+      /** その版が「KnowledgeDocument.version がいくつだったときの中身か」。 */
+      version: a.integer().required(),
+      title: a.string(),
+      body: a.string(),
+      /** MANUAL_EDIT / RESTORE のいずれか。復元自体も1つの変更として残す。 */
+      changeType: a.string(),
+      /** 復元の場合、どの版から戻したか。 */
+      restoredFromVersion: a.integer(),
+      changedBy: a.string(),
+      changedAt: a.datetime().required(),
+    })
+    .secondaryIndexes((index) => [index("documentId")])
     .authorization((allow) => [
       allow.group("ADMIN"),
       allow.group("EDITOR").to(["read"]),
