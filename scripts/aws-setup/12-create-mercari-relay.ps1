@@ -375,6 +375,15 @@ if ($instExists) {
     # 「text contents could not be decoded」で失敗する
     # (PYTHONUTF8=1 でも変わらないことを実測)。user-dataテンプレートは
     # ASCIIのみで書く決まりなので、ここで機械的に担保する。
+    # 実測(2026-09-01): このLightsailイメージのcloud-initは user-data を
+    # **sh(dash)で実行し、#!/bin/bash のシェバンを無視する**。dashには
+    # pipefail が無いため `set -o pipefail` があるとその行でシェルごと終了し、
+    # ログもリスナーも一切残らない —— 原因不明のまま3回作り直す羽目になった。
+    # 二度と混入しないよう、送信前に機械的に弾く。
+    if ($userData -match '(?m)^\s*set\s+-[a-z]*o?\s*pipefail' -or $userData -match '(?m)^\s*set\s+-[euo]') {
+      throw "user-dataに 'set -e/-u/-o pipefail' が含まれています。cloud-initはshで実行するため、これがあるとスクリプトごと即死します。除去してください。"
+    }
+
     $nonAscii = [regex]::Matches($userData, '[^\x00-\x7F]')
     if ($nonAscii.Count -gt 0) {
       throw ("user-dataに非ASCII文字が{0}個含まれています(最初の文字: '{1}')。テンプレートはASCIIのみで書いてください。" -f $nonAscii.Count, $nonAscii[0].Value)

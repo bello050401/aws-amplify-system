@@ -15,6 +15,7 @@
  *     解消しつつ、既存の検証済み設定を壊さない。
  *  4. 設定不備や400のような「送り直しても直らない」失敗でリトライしない。
  */
+import { createHmac } from "node:crypto";
 import { MercariShopsClient, extractGraphQLOperationName, positiveIntFromEnv, nonNegativeIntFromEnv } from "@/lib/listing/mercari/client";
 import {
   MercariApiError,
@@ -27,6 +28,7 @@ import {
 } from "@/lib/listing/mercari/errors";
 import { decideMercariSave, isMercariRetryableForUser, isMercariTokenRejected } from "@/lib/listing/mercari/connectionPolicy";
 import { validateMercariConnection } from "@/lib/listing/mercari/adapter";
+import { buildRelayAuthHeaders, getMercariRelayUrl } from "@/lib/listing/mercari/relay";
 
 let failures = 0;
 let passes = 0;
@@ -461,7 +463,83 @@ function testEnvParsing() {
   assertEqual(extractGraphQLOperationName("query ProductCategories { a }"), "ProductCategories", "extractGraphQLOperationName: 操作名を取り出す");
 }
 
+// ── 中継(東京の固定IP)経由の経路 ─────────────────────────────────────
+
+function testRelayAuthHeaders() {
+  const key = "dGVzdC1yZWxheS1rZXktMzItYnl0ZXMtZm9yLXVuaXQtdGVzdA==";
+  const body = JSON.stringify({ query: "query ProductCategories { productCategories { id } }", variables: {} });
+  const ts = 1788220800;
+  const h = buildRelayAuthHeaders(key, body, ts);
+
+  assertEqual(h["x-bello-relay-key"], key, "中継認証: 共有鍵をそのままヘッダへ載せる");
+  assertEqual(h["x-bello-relay-timestamp"], String(ts), "中継認証: タイムスタンプを秒で載せる");
+
+  const expected = createHmac("sha256", key).update(`${ts}.${body}`, "utf8").digest("base64");
+  assertEqual(h["x-bello-relay-signature"], expected, "中継認証: 署名は HMAC-SHA256(key, timestamp + '.' + body) の base64");
+
+  // 本文が1文字でも変われば署名も変わる(改竄検知)
+  const tampered = buildRelayAuthHeaders(key, body + " ", ts);
+  assertTrue(tampered["x-bello-relay-signature"] !== h["x-bello-relay-signature"], "中継認証: 本文が変われば署名も変わる");
+
+  // タイムスタンプが変われば署名も変わる(リプレイ防止の土台)
+  const later = buildRelayAuthHeaders(key, body, ts + 1);
+  assertTrue(later["x-bello-relay-signature"] !== h["x-bello-relay-signature"], "中継認証: タイムスタンプが変われば署名も変わる");
+}
+
+async function testRelayErrorIsNotTokenRejection() {
+  // 中継自身の認証失敗(401 + X-Bello-Relay-Error: AUTH)を、Mercariの401と
+  // 取り違えてはいけない。取り違えると connectionPolicy が TOKEN_REJECTED と
+  // 判断し、**正しいトークンが保存されなくなる**。
+  await withFetch(
+    async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json", "x-bello-relay-error": "AUTH" } }),
+    async () => {
+      const err = (await captureError(() => makeClient().request("query Q { a }", {}, { disableRetry: true }))) as MercariApiError;
+      assertTrue(err instanceof MercariApiError, "中継401: MercariApiErrorとして返る");
+      assertEqual(err.code, "NETWORK_ERROR", "中継401: AUTH_FAILEDではなくNETWORK_ERRORへ分類する(トークンの正否を判定できないため)");
+      assertTrue(!isMercariTokenRejected(err.code), "中継401: トークン拒否として扱わない");
+      assertEqual(
+        decideMercariSave({ validationOk: false, code: err.code, hasVerifiedExisting: false }),
+        { save: true, verified: false, status: "SAVED_UNVERIFIED" },
+        "中継401: 初回設定でも入力内容は保存される(中継の設定ミスでTOKENを捨てない)",
+      );
+    },
+  );
+
+  // 中継のレート制限は RATE_LIMITED として扱う(再試行の余地がある)
+  await withFetch(
+    async () => new Response("{}", { status: 429, headers: { "content-type": "application/json", "x-bello-relay-error": "RATE" } }),
+    async () => {
+      const err = (await captureError(() => makeClient().request("query Q { a }", {}, { disableRetry: true }))) as MercariApiError;
+      assertEqual(err.code, "RATE_LIMITED", "中継429: RATE_LIMITEDへ分類する");
+    },
+  );
+
+  // 中継ヘッダが無い401は、従来どおりMercari由来の認証失敗として扱う
+  await withFetch(
+    async () => new Response("unauthorized", { status: 401 }),
+    async () => {
+      const err = (await captureError(() => makeClient().request("query Q { a }", {}, { disableRetry: true }))) as MercariApiError;
+      assertEqual(err.code, "AUTH_FAILED", "中継ヘッダ無しの401: 従来どおりAUTH_FAILED(Mercariがトークンを拒否)");
+    },
+  );
+}
+
+function testRelayUrlResolution() {
+  const prev = process.env.MERCARI_RELAY_URL;
+  delete process.env.MERCARI_RELAY_URL;
+  assertEqual(getMercariRelayUrl(), null, "中継URL: 未設定なら null(従来どおり直接接続する)");
+  process.env.MERCARI_RELAY_URL = "https://198.51.100.10/";
+  assertEqual(getMercariRelayUrl(), "https://198.51.100.10", "中継URL: 末尾のスラッシュを落として返す");
+  process.env.MERCARI_RELAY_URL = "   ";
+  assertEqual(getMercariRelayUrl(), null, "中継URL: 空白だけなら未設定扱い");
+  if (prev === undefined) delete process.env.MERCARI_RELAY_URL;
+  else process.env.MERCARI_RELAY_URL = prev;
+}
+
 async function main() {
+  testRelayAuthHeaders();
+  testRelayUrlResolution();
+  await testRelayErrorIsNotTokenRejection();
   testErrorTaxonomy();
   testConnectionPolicy();
   testEnvParsing();

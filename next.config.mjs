@@ -57,6 +57,10 @@ const nextConfig = {
   env: {
     ...(process.env.CONVERSATION_TABLE_NAME ? { CONVERSATION_TABLE_NAME: process.env.CONVERSATION_TABLE_NAME } : {}),
     ...(process.env.MESSAGE_TABLE_NAME ? { MESSAGE_TABLE_NAME: process.env.MESSAGE_TABLE_NAME } : {}),
+    // Mercari中継サーバーのURL。**秘密値ではない**(共有鍵とCAはSecrets
+    // Managerにある)。Amplifyの環境変数はSSRランタイムのprocess.envへ届かない
+    // ため、上の2つと同じくビルド時にここでリテラルへ埋め込む。
+    ...(process.env.MERCARI_RELAY_URL ? { MERCARI_RELAY_URL: process.env.MERCARI_RELAY_URL } : {}),
   },
 
   /**

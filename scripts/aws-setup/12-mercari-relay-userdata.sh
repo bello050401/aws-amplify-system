@@ -18,9 +18,19 @@
 # Ubuntu 24.04 ships nodejs 18.x, which has everything the relay uses
 # (global fetch, X509Certificate, node:https, timingSafeEqual).
 #
-# No `set -e`: each step is checked explicitly and recorded, so one failure can
-# never skip the secret-wiping step at the end.
-set -uo pipefail
+# NO "set" OPTIONS AT ALL - this line is load-bearing, do not "tidy" it back in.
+#
+# Measured on 2026-09-01 with isolated Lightsail instances: cloud-init on this
+# image runs user-data with sh (dash) and IGNORES the #!/bin/bash shebang.
+# dash has no "pipefail", so "set -o pipefail" aborts the shell on that very
+# line, before anything runs - no log, no listener, nothing to diagnose.
+# That is what silently broke builds #1-#3.
+#
+#   A: shebang + "set -uo pipefail" + http server  -> never ran (port 80 dead)
+#   B: shebang + "exec >> log 2>&1" + http server  -> ran fine (port 80 served)
+#
+# Keep this script POSIX-sh compatible and check every step explicitly rather
+# than relying on shell options. The error handling below does not need them.
 exec >> /var/log/bello-relay-setup.log 2>&1
 
 RELAY_DIR=/etc/bello-relay

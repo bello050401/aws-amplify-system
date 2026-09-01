@@ -149,14 +149,39 @@ if (mode === "main") {
   out.rateLimited = got429;
   out.requestsUntil429 = n;
 } else if (mode === "local") {
-  // ログ秘匿の検証用: 認証OKの1本と、認証NGの1本を通す。
-  out.ok = (await call("/mercari/graphql")).status;
+  // ログ秘匿の検証用。本文にだけ現れる目印を入れる ——
+  // operationName(=ProductCategories)は設計上わざとログへ出すので、
+  // それを「本文が漏れた」と誤判定しないようにするため。
+  const sentinel = JSON.stringify({ query: "query ProductCategories { productCategories { id } }", variables: { note: "BODY-SENTINEL-MUST-NOT-APPEAR-IN-LOGS" } });
+  out.ok = (await call("/mercari/graphql", { body: sentinel })).status;
   out.unauth = (await call("/mercari/graphql", { h: { key: "wrong-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" } })).status;
+} else if (mode === "diag") {
+  out.diag = (await call("/diag", { method: "GET" })).status;
 } else if (mode === "health") {
   out.healthz = (await call("/healthz", { method: "GET" })).status;
 }
 console.log(JSON.stringify(out, null, 2));
 '@
+
+  # ── 0. 固定IPの維持と、一時診断サーバーが残っていないこと ──────────
+  Step "固定IPと一時診断サーバー"
+  if ($staticIp -eq "13.196.230.130") {
+    Ok "固定IPが維持されている: $staticIp (Mercariへ申請する値)"
+  } else {
+    Ng "固定IPが変わっている: $staticIp (Mercariへの再申請が必要になる)"
+  }
+  $attachedTo = (aws lightsail get-static-ip --static-ip-name $StaticIpName --region $Region --profile $Profile --query 'staticIp.attachedTo' --output text)
+  if ($attachedTo -eq $InstanceName) { Ok "静的IPがインスタンスへアタッチされている" } else { Ng "静的IPが未アタッチ: $attachedTo" }
+
+  # 一時診断サーバーは、正常時には停止していなければならない(構築時に
+  # relayが443を掴む直前で止める設計)。残っていると鍵さえあればログを
+  # 読めてしまうので、明示的に確認する。
+  $diagProbe = (node $nodeScript $staticIp "$tmp/ca.crt" "$tmp/relay.key" diag 2>&1 | Out-String)
+  if ($diagProbe -match '"diag"\s*:\s*"?200"?') {
+    Ng "一時診断サーバーがまだ動いている(正常時は停止しているべき)"
+  } else {
+    Ok "一時診断サーバーは停止している"
+  }
 
   # ── 1〜5 ───────────────────────────────────────────────────────────
   Step "TLS / 認証 / 期限切れ署名 / 経路・宛先制限"
@@ -239,7 +264,9 @@ console.log(JSON.stringify(out, null, 2));
     if ($logs -match "dummy-token-for-verification-only") { $leaks += "Mercariトークン" }
     if ($logs -match "Bearer\s+[A-Za-z0-9._\-]{10,}")      { $leaks += "Authorizationヘッダ" }
     if ($logs -match [regex]::Escape($secret.relayKey))    { $leaks += "中継共有鍵" }
-    if ($logs -match "productCategories")                  { $leaks += "リクエスト本文(GraphQL)" }
+        # operationName は設計上わざと記録する非機密情報なので、それではなく
+    # **本文にしか存在しない目印**が出ていないかで判定する。
+    if ($logs -match "BODY-SENTINEL-MUST-NOT-APPEAR-IN-LOGS") { $leaks += "リクエスト本文(variables含む)" }
     if ($leaks.Count -eq 0) { Ok "ログにトークン・Authorization・共有鍵・本文のいずれも出ていない" }
     else { Ng ("ログに機密が出ている: " + ($leaks -join ", ")) }
 

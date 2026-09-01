@@ -3,6 +3,7 @@ import { getMercariEndpoint, getMercariEnvironment, type MercariEnvironment } fr
 import { getMercariUserAgent } from "./tokenAccess";
 import type { GraphQLResponse } from "./types";
 import { MercariApiError, classifyHttpStatus, classifyForbiddenError, classifyGraphQLErrors, isRetryableMercariErrorCode } from "./errors";
+import { getMercariRelayUrl, postViaMercariRelay } from "./relay";
 
 export { MercariApiError } from "./errors";
 export type { MercariErrorCode } from "./errors";
@@ -117,18 +118,32 @@ export class MercariShopsClient {
       tokenLength: token.length,
     };
 
+    // 中継(東京の固定IP)が設定されていればそちら経由。未設定なら従来どおり
+    // Mercariへ直接接続する —— 既存の動作を一切変えないための分岐。
+    const relayUrl = getMercariRelayUrl();
+    const body = JSON.stringify({ query, variables });
+
     let response: Response;
     try {
-      response = await fetch(this.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-          "User-Agent": userAgent,
-        },
-        body: JSON.stringify({ query, variables }),
-        signal: controller.signal,
-      });
+      response = relayUrl
+        ? await postViaMercariRelay({
+            relayUrl,
+            environment: this.environment,
+            body,
+            token,
+            userAgent,
+            signal: controller.signal,
+          })
+        : await fetch(this.endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+              "User-Agent": userAgent,
+            },
+            body,
+            signal: controller.signal,
+          });
     } catch (err) {
       // AbortControllerによる打ち切りは「繋がらない」ではなく「時間内に
       // 返ってこなかった」— 利用者への説明も対処も異なるため、
@@ -150,6 +165,27 @@ export class MercariShopsClient {
     // 「いつ再試行できるのか」を運用者が判断できるようログと
     // causeMessageへ含める。
     const rateLimitReset = response.headers.get("x-ratelimit-reset") ?? undefined;
+
+    // 中継**自身**が返したエラーか、Mercariが返したエラーかを必ず区別する。
+    //
+    // これが無いと、中継の共有鍵がずれているだけで401が返り、それが
+    // AUTH_FAILED(=TOKENが拒否された)として扱われる。すると
+    // connectionPolicy が TOKEN_REJECTED と判断し、**正しいMercariトークンを
+    // 保存しなくなる**。原因は中継の設定なのに、画面には「TOKENが無効」と
+    // 出る —— もっとも避けたい誤診なので、ここで明示的に分岐する。
+    // 中継の障害はトークンの正否を判定できないだけなので NETWORK_ERROR。
+    const relayError = response.headers.get("x-bello-relay-error");
+    if (relayError) {
+      const relayCode = relayError === "RATE" ? "RATE_LIMITED" : "NETWORK_ERROR";
+      console.error(
+        "[MercariShopsClient] relay error (not a Mercari error):",
+        JSON.stringify({ ...logContext, status: response.status, relayError, code: relayCode }),
+      );
+      throw new MercariApiError(
+        relayCode,
+        `Mercari中継サーバーでエラーが発生しました (relay ${relayError}, HTTP ${response.status})。Mercariのトークンの正否は判定できていません。`,
+      );
+    }
 
     if (!response.ok) {
       const bodyText = await safeReadText(response);
