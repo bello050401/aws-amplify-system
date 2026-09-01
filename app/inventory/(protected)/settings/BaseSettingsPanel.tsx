@@ -207,6 +207,14 @@ export function BaseSettingsPanel({ state }: { state: BaseConnectionState }) {
           {/* 表示は必ず dataSource から導く。usingRealApi の2値だと、
               本番で認証情報が無い場合(実際にはモックへ落ちず失敗する)まで
               「モックデータを使用中」と表示してしまう。 */}
+          {/* 書き込みの可否は、接続の可否とは別の話。接続できていることと
+              「BELLOがBASEのデータを変えられる」ことを混同させない。 */}
+          <p>
+            BASEへの書き込み（出品・価格変更）:{" "}
+            <span className={state.writesEnabled ? "text-amber-600" : "text-green-700"}>
+              {state.writesEnabled ? "許可されています" : "停止中（読み取りのみ）"}
+            </span>
+          </p>
           <p>
             商品データの取得元:{" "}
             <span

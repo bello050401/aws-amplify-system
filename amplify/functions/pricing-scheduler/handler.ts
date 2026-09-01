@@ -2,6 +2,7 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand, GetCommand, UpdateCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "node:crypto";
 import { calculateMarkdownPrice, evaluatePricingSafety, type PricingRuleRecord } from "../../../lib/listing/pricing";
+import { isExternalWriteEnabled } from "../../../lib/integrations/writeGuard";
 
 /**
  * §9(PC不在中・完全自律継続実装指示): 完全無人スケジュール実行の
@@ -176,6 +177,16 @@ async function processOne(row: ChannelListingRow): Promise<void> {
   }
   if (!row.externalListingId) {
     await writeLog({ channelListingId: row.id, result: "SKIPPED", reason: "NO_EXTERNAL_LISTING" });
+    return;
+  }
+
+  // 外部サービスへの書き込みは既定で禁止（lib/integrations/writeGuard.ts）。
+  // この経路は人の操作なしに1時間ごとに走るので、いちばん止めておく
+  // 価値がある。例外は投げずに、止めた事実をログへ残して抜ける ——
+  // 遮断は障害ではなく既定の状態であり、FAILEDとして記録すると
+  // 本物の失敗が埋もれる。
+  if (!isExternalWriteEnabled("BASE")) {
+    await writeLog({ channelListingId: row.id, result: "BLOCKED", reason: "EXTERNAL_WRITES_DISABLED" });
     return;
   }
 

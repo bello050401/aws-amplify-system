@@ -1,6 +1,7 @@
 import "server-only";
 import { getAccessToken, isBaseConnected, BaseNotConnectedError } from "@/lib/base/oauth";
 import { BaseListingApiError, classifyBaseHttpStatus } from "./errors";
+import { assertExternalWriteAllowed } from "@/lib/integrations/writeGuard";
 import type { ListingDraftRecord } from "../types";
 
 /**
@@ -36,6 +37,13 @@ import type { ListingDraftRecord } from "../types";
 const API_BASE = "https://api.thebase.in/1";
 
 async function baseApiCall<T>(path: string, params: Record<string, string | number>): Promise<T> {
+  // このファイルの呼び出しは items/add と items/edit の2つだけで、
+  // どちらもBASE側の実データを変える。読み取りは lib/base/client.real.ts
+  // が別に持っているので、ここを通るものは全部「書き込み」でよい。
+  // 関門はトークン取得より前に置く —— 遮断されるのに認証だけ走るのは
+  // 無駄だし、失敗の理由も分かりにくくなる。
+  assertExternalWriteAllowed("BASE", path.replace(/^\//, ""));
+
   let token: string;
   try {
     token = await getAccessToken();

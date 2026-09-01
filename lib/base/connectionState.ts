@@ -1,6 +1,7 @@
 import { isBaseConnected } from "./oauth";
 import { getBaseCredentialsState, type BaseCredentialsSource } from "./secretStore";
 import { buildRedirectUriFromHost } from "./redirectUri";
+import { isExternalWriteEnabled } from "@/lib/integrations/writeGuard";
 
 /**
  * BASE APIの接続状態を、設定画面が「正直に」表示できる形へまとめる
@@ -80,6 +81,12 @@ export interface BaseConnectionState {
   credentialsUpdatedBy: string | null;
   /** BASE Developersへ登録すべきコールバックURL。画面でコピーさせる。 */
   redirectUri: string | null;
+  /**
+   * BASEへの書き込み（出品・価格変更）が許可されているか。
+   * 既定は禁止で、AWS側の環境変数でのみ開く（lib/integrations/writeGuard.ts）。
+   * 画面には状態を表示するだけで、ここから変更はできない。
+   */
+  writesEnabled: boolean;
   /** OAuthトークンが保存されているか。 */
   hasOAuthToken: boolean;
   /** 設定画面に出す日本語の説明。 */
@@ -140,6 +147,7 @@ export async function getBaseConnectionState(host?: string | null): Promise<Base
     credentialsUpdatedAt: credentials.updatedAt,
     credentialsUpdatedBy: credentials.updatedBy,
     redirectUri,
+    writesEnabled: isExternalWriteEnabled("BASE"),
   };
 
   if (isBaseMockForced()) {

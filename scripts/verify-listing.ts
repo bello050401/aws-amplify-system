@@ -19,6 +19,7 @@ import { MERCARI_ERROR_LABEL, MercariApiError, classifyHttpStatus, classifyForbi
 import { extractGraphQLOperationName } from "@/lib/listing/mercari/client";
 import { PRODUCT_CATEGORIES_QUERY } from "@/lib/listing/mercari/queries";
 import { isEcListingEligible, buildCategoryNameLookup, EXCLUDED_CATEGORY_NAMES } from "@/lib/listing/ecEligibility";
+import { assertExternalWriteAllowed, isExternalWriteEnabled, listEnabledExternalWrites, ExternalWriteBlockedError } from "@/lib/integrations/writeGuard";
 import { calculateFloorPrice, calculateMarkdownPrice, calculateNextPriceActionAt, decideActionAtFloor,
   evaluatePricingSafety, type PricingRuleRecord } from "@/lib/listing/pricing";
 
@@ -481,6 +482,72 @@ function testMercariErrorClassification() {
   assertEqual(extractGraphQLOperationName("{ productCategories { id } }"), "unknown", "extractGraphQLOperationName: an anonymous query falls back to 'unknown' rather than throwing");
 }
 
+/**
+ * 外部サービスへの書き込み禁止スイッチ。
+ *
+ * このスイッチが守っているのは「設定を忘れたときに、書き込めてしまう
+ * 側に倒れない」という一点なので、**未設定・空・変な値のときに禁止に
+ * なること**を最も丁寧に固定する。実運用で開ける判断をするまで、
+ * pricing-scheduler Lambda（1時間ごとに無人で走る）を含めて、
+ * どの経路からもBASE/Mercariの実データが変わらないことの根拠になる。
+ */
+function testExternalWriteGuard() {
+  // 既定は禁止。ここが崩れると、他のすべての防御が意味を失う。
+  assertEqual(listEnabledExternalWrites({}), [], "writeGuard: 環境変数が未設定なら何も許可しない");
+  assertEqual(listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: "" }), [], "writeGuard: 空文字は許可しない");
+  assertEqual(listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: "   " }), [], "writeGuard: 空白だけは許可しない");
+  assertEqual(isExternalWriteEnabled("BASE", {}), false, "writeGuard: 未設定ならBASEは禁止");
+  assertEqual(isExternalWriteEnabled("MERCARI_SHOPS", {}), false, "writeGuard: 未設定ならMercariは禁止");
+
+  // 「全部オン」を一語で書けないこと —— スイッチの意味が失われるため。
+  assertEqual(listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: "ALL" }), [], "writeGuard: ALL では許可しない（チャネル名を明示させる）");
+  assertEqual(listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: "true" }), [], "writeGuard: true では許可しない");
+  assertEqual(listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: "1" }), [], "writeGuard: 1 では許可しない");
+  assertEqual(listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: "ZAICO" }), [], "writeGuard: 知らない名前は無視する");
+
+  // 明示的に名前を書いたときだけ、そのチャネルだけが開く。
+  assertEqual(listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: "BASE" }), ["BASE"], "writeGuard: BASEだけを許可できる");
+  assertEqual(
+    isExternalWriteEnabled("MERCARI_SHOPS", { EXTERNAL_WRITES_ENABLED: "BASE" }),
+    false,
+    "writeGuard: BASEを開けてもMercariは閉じたまま（片方ずつ開けられる）",
+  );
+  assertEqual(
+    listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: " base , mercari_shops " }),
+    ["BASE", "MERCARI_SHOPS"],
+    "writeGuard: 前後の空白と大文字小文字は吸収する",
+  );
+  assertEqual(
+    listEnabledExternalWrites({ EXTERNAL_WRITES_ENABLED: "BASE,UNKNOWN,MERCARI_SHOPS" }),
+    ["BASE", "MERCARI_SHOPS"],
+    "writeGuard: 知らない名前が混ざっても、正しい名前は生きる",
+  );
+
+  // 関門は「投げる」こと。戻り値で伝えると呼び出し側が無視できてしまう。
+  let thrown: unknown = null;
+  try {
+    assertExternalWriteAllowed("BASE", "items/edit", {});
+  } catch (err) {
+    thrown = err;
+  }
+  assertEqual(thrown instanceof ExternalWriteBlockedError, true, "writeGuard: 禁止時は例外になる（黙って素通りしない）");
+  assertEqual((thrown as ExternalWriteBlockedError).channel, "BASE", "writeGuard: どのチャネルが止まったかを保持する");
+  assertEqual((thrown as ExternalWriteBlockedError).operation, "items/edit", "writeGuard: 何をしようとしたかを保持する");
+  assertEqual(
+    (thrown as Error).message.includes("EXTERNAL_WRITES_ENABLED"),
+    true,
+    "writeGuard: 解除方法がメッセージから分かる",
+  );
+
+  let threw2 = false;
+  try {
+    assertExternalWriteAllowed("BASE", "items/add", { EXTERNAL_WRITES_ENABLED: "BASE" });
+  } catch {
+    threw2 = true;
+  }
+  assertEqual(threw2, false, "writeGuard: 許可されていれば通す");
+}
+
 async function main() {
   testConditionMapper();
   testShippingPayerMapper();
@@ -494,6 +561,7 @@ async function main() {
   testPricingCalculations();
   testPricingSafety();
   testActionAtFloor();
+  testExternalWriteGuard();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

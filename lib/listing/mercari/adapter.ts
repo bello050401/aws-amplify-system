@@ -6,6 +6,7 @@ import { MercariApiError, MercariShopsClient, type MercariErrorCode } from "./cl
 import { getMercariEnvironment, formatMercariUserAgent } from "./endpoints";
 import { getMercariAccessToken } from "./tokenAccess";
 import { CREATE_PRODUCT_MUTATION } from "./mutations";
+import { assertExternalWriteAllowed } from "@/lib/integrations/writeGuard";
 import { PRODUCT_CATEGORIES_QUERY, type ProductCategoriesResponse } from "./queries";
 import type { CreateProductInput, CreateProductPayload } from "./types";
 import { conditionToMercariValue } from "./mapper/condition";
@@ -225,6 +226,11 @@ export async function createMercariProduct(input: MercariListingInput): Promise<
     // — 以前はハードコードされた1固定値だった)。
     variants: [{ skuCode: draft.inventoryId, stockQuantity: inventoryQuantity }],
   };
+
+  // Mercariへ実際に商品を作る唯一の呼び出し。ここより手前の
+  // バリデーションや画像URLの解決は相手のデータを変えないので、
+  // 関門は送信の直前に置く（新しい経路が増えても素通りしないように）。
+  assertExternalWriteAllowed("MERCARI_SHOPS", "createProduct");
 
   const data = await client().request<CreateProductPayload>(CREATE_PRODUCT_MUTATION, { input: apiInput }, { disableRetry: true });
 
