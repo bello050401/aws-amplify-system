@@ -255,17 +255,22 @@ function EvidenceView({
           <ul className="space-y-0.5">
             {evidence.externalFacts.map((fact, i) => (
               <li key={i}>
-                {fact.field}: {fact.value ?? "（確認できず）"}
-                {fact.sourceUrl && (
-                  <>
-                    {" "}
-                    —{" "}
-                    <a href={fact.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">
-                      {fact.sourceTitle ?? fact.sourceUrl}
-                    </a>
-                  </>
-                )}
+                <span>
+                  {fact.field}: {fact.value ?? "（確認できず）"}
+                </span>
                 {fact.status !== "FOUND" && <span className="ml-1 text-amber-700">［{fact.status}］</span>}
+                {/* 出典はタイトルとURLの両方を文字として出す。リンクの表示文字に
+                    URLを隠すと、どのサイトの情報かがこの画面で読めない。
+                    AgentCore Web Searchの利用条件も、検索結果を使った出力には
+                    出典とリンクを保持・表示することを求めている。 */}
+                {fact.sourceUrl && (
+                  <div className="ml-3 text-gray-500">
+                    <div>出典: {fact.sourceTitle ?? "(タイトル不明)"}</div>
+                    <a href={fact.sourceUrl} target="_blank" rel="noopener noreferrer" className="break-all text-blue-700 underline">
+                      {fact.sourceUrl}
+                    </a>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
