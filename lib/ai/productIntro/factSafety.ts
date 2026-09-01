@@ -56,18 +56,51 @@ export interface FactSafetyResult {
  * 著名ブランドを押さえられればよい。ここに無いブランドを捏造された場合は
  * 検出できないが、それは「検査が緩い」のであって「誤って弾く」のではない。
  */
-export const KNOWN_FURNITURE_BRANDS = [
-  "HAY", "Muuto", "ムート", "ムーート", "BoConcept", "ボーコンセプト",
-  "vitra", "Vitra", "ヴィトラ", "ビトラ",
-  "Cassina", "カッシーナ", "USM", "Artek", "アルテック",
-  "Fritz Hansen", "フリッツハンセン", "Herman Miller", "ハーマンミラー",
-  "Knoll", "ノル", "Carl Hansen", "カールハンセン", "&Tradition", "アンドトラディション",
-  "Louis Poulsen", "ルイスポールセン", "Flos", "フロス", "Kartell", "カルテル",
-  "B&B Italia", "Minotti", "ミノッティ", "Poliform", "NATUZZI", "ナツッジ",
-  "IKEA", "イケア", "無印良品", "MUJI", "Karimoku", "カリモク",
-  "天童木工", "マルニ", "MARUNI", "yamagiwa", "ヤマギワ",
-  "Arflex", "アルフレックス", "Ligne Roset", "リーンロゼ", "Time & Style",
+/**
+ * 同じブランドの別表記をひとまとまりにしたもの。
+ *
+ * 【2026-09-02 実測で必要になった】在庫名が「カリモク」で、生成文が
+ * 「Karimoku」と書いたケースを UNSUPPORTED_BRAND として弾いていた。
+ * 同じブランドの英字表記と日本語表記であって、捏造ではない。
+ * 表記ごとに独立した文字列として並べていたため、事実側の「カリモク」と
+ * 生成側の「Karimoku」が結び付かなかった。
+ *
+ * ここを組にしておけば、**事実に含まれるブランドのどの表記が出ても
+ * 通り、事実に無いブランドは表記を変えても弾ける**。検査は緩くならない。
+ */
+const BRAND_ALIAS_GROUPS: readonly (readonly string[])[] = [
+  ["HAY"],
+  ["Muuto", "ムート", "ムーート"],
+  ["BoConcept", "ボーコンセプト"],
+  ["vitra", "Vitra", "ヴィトラ", "ビトラ"],
+  ["Cassina", "カッシーナ"],
+  ["USM"],
+  ["Artek", "アルテック"],
+  ["Fritz Hansen", "フリッツハンセン"],
+  ["Herman Miller", "ハーマンミラー"],
+  ["Knoll", "ノル"],
+  ["Carl Hansen", "カールハンセン"],
+  ["&Tradition", "アンドトラディション"],
+  ["Louis Poulsen", "ルイスポールセン"],
+  ["Flos", "フロス"],
+  ["Kartell", "カルテル"],
+  ["B&B Italia"],
+  ["Minotti", "ミノッティ"],
+  ["Poliform"],
+  ["NATUZZI", "ナツッジ"],
+  ["IKEA", "イケア"],
+  ["無印良品", "MUJI"],
+  ["Karimoku", "カリモク"],
+  ["天童木工"],
+  ["マルニ", "MARUNI"],
+  ["yamagiwa", "ヤマギワ"],
+  ["Arflex", "アルフレックス"],
+  ["Ligne Roset", "リーンロゼ"],
+  ["Time & Style"],
 ] as const;
+
+/** 平坦な一覧。既存の呼び出し側・テストが参照しているため形は変えない。 */
+export const KNOWN_FURNITURE_BRANDS = BRAND_ALIAS_GROUPS.flat() as readonly string[];
 
 /**
  * 生成文が「商品紹介」以外の定型セクションへ侵食していないかを見る見出し。
@@ -176,7 +209,15 @@ export function checkFactSafety(params: {
   }
 
   // ── 事実に無いブランドの捏造 ─────────────────────────────────────
-  const invented = KNOWN_FURNITURE_BRANDS.filter((b) => mentionsBrand(output, b) && !mentionsBrand(factsText, b));
+  // 判定はブランド単位(表記の組)で行う。事実側にそのブランドのいずれかの
+  // 表記があれば、生成側がどの表記で書いても捏造ではない。
+  const invented: string[] = [];
+  for (const group of BRAND_ALIAS_GROUPS) {
+    const inOutput = group.filter((b) => mentionsBrand(output, b));
+    if (inOutput.length === 0) continue;
+    const supportedByFacts = group.some((b) => mentionsBrand(factsText, b));
+    if (!supportedByFacts) invented.push(...inOutput);
+  }
   if (invented.length > 0) {
     violations.push({
       code: "UNSUPPORTED_BRAND",

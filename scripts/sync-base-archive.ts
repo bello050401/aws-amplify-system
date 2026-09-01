@@ -63,7 +63,7 @@ async function main() {
       price: typeof it.price === "number" ? it.price : null,
       properPrice: typeof it.proper_price === "number" ? it.proper_price : null,
       stock: typeof it.stock === "number" ? it.stock : null,
-      visible: it.visible === 1 || it.visible === true,
+      visible: it.visible === 1,
       modifiedAt: it.modified ? new Date(it.modified * 1000).toISOString() : null,
       imageUrlsJson: JSON.stringify(imageUrls(it)),
       variationsJson: JSON.stringify(it.variations ?? []),

@@ -1,0 +1,214 @@
+import "server-only";
+import { generateStructured } from "@/lib/ai/gateway/gateway";
+import { buildCustomerSafeFacts, type CustomerSafeFacts, type FactRedaction } from "@/lib/ai/productIntro/facts";
+import { checkFactSafety, type FactSafetyViolation } from "@/lib/ai/productIntro/factSafety";
+import type { BelloStyleProfile } from "@/lib/ai/productIntro/styleProfile";
+import { findSimilarArchivedProducts, type ArchivedStyleReference, type SimilarityHit } from "@/lib/base/archive/similar";
+import {
+  buildProductPageSystemPrompt,
+  buildProductPageUserPrompt,
+  PRODUCT_PAGE_PROMPT_VERSION,
+  PRODUCT_PAGE_TOOL,
+  type ProductPageSections,
+} from "./prompt";
+
+/**
+ * 在庫1件から、BASE掲載用の商品ページを作る。
+ *
+ * ## 何を作り、何を作らないか
+ *
+ * 作るのは**下書き**である。人が確認してからBASEへ載せる前提で、
+ * この関数は外部サービスへ何も書き込まない(書き込みは
+ * lib/integrations/writeGuard.ts が別途止めている)。
+ *
+ * ## 事実が足りないときに埋めない
+ *
+ * ブランド・型番・デザイナー・製造年・素材・寸法・付属品・傷の状態は
+ * 推測禁止(§7)。在庫に無ければ、そのセクションは空のまま返し、
+ * `missingFacts` に「何が足りないか」を入れて人へ返す。
+ * それらしい文章で穴を埋めるほうが、空欄より危険である ——
+ * 空欄は気づけるが、もっともらしい嘘は気づけない。
+ */
+
+/** 書き直しは1回だけ。直らないものを何度投げてもコストが増えるだけ。 */
+const MAX_ATTEMPTS = 2;
+
+/**
+ * 紹介文に寸法が書かれていないかの判定。
+ * 弾きたいのは W/D/H の羅列と「幅120 奥行60」「120×60」のような寸法表記で、
+ * 文章に自然に出る単位付きの数値まで拾うと、書けることが不当に狭くなる。
+ */
+const INTRO_DIMENSION_PATTERN = /(?:[WDHwdh]\s*[:：]?\s*\d|[幅奥行高][さきみ]?\s*[:：]?\s*\d|\d+\s*[×x]\s*\d+)/;
+
+export interface ProductPageGenerationInput {
+  inventoryId: string;
+  name: string;
+  categoryName?: string | null;
+  width?: string | null;
+  depth?: string | null;
+  height?: string | null;
+  damageNotes?: string | null;
+  note?: string | null;
+  conditionRating?: string | null;
+  stockQuantity?: number | null;
+  sku?: string | null;
+  /** 文体の参考にする過去BASE商品(呼び出し側がアーカイブを渡す)。 */
+  archive: ArchivedStyleReference[];
+  /** 現在有効な Style Profile。無ければ最低限の型だけで生成する。 */
+  styleProfile: BelloStyleProfile | null;
+  styleProfileVersion?: number | null;
+  /** 「発送について」の定型文(ナレッジ由来)。 */
+  shippingBoilerplate?: string | null;
+  price?: number | null;
+  brand?: string | null;
+}
+
+export interface ProductPageResult {
+  ok: boolean;
+  sections: ProductPageSections | null;
+  /** 全セクションを結合した掲載用本文(BELLOの見出し付き)。 */
+  fullDescription: string | null;
+  /** 在庫に無く、人の入力を待っている項目。 */
+  missingFacts: string[];
+  /** 生成後の機械検査で見つかった問題。 */
+  violations: FactSafetyViolation[];
+  /** 参照した過去BASE商品(監査用)。 */
+  referencedBaseItemIds: string[];
+  /** 事実を組み立てる際に落とした情報(監査用)。 */
+  redactions: FactRedaction[];
+  styleProfileVersion: number | null;
+  modelProvider: string | null;
+  modelName: string | null;
+  failureReason: string | null;
+}
+
+/** 在庫に無いと生成できない/埋めてはいけない項目。空欄のまま人へ返す。 */
+function collectMissingFacts(facts: CustomerSafeFacts): string[] {
+  const missing: string[] = [];
+  if (!facts.dimensions?.trim()) missing.push("寸法(幅・奥行・高さ)");
+  if (!facts.conditionDisclosure?.trim()) missing.push("コンディションの説明(傷・使用感)");
+  if (!facts.categoryName?.trim()) missing.push("カテゴリ");
+  return missing;
+}
+
+/**
+ * セクションをBELLOの掲載形式へ組み立てる。
+ *
+ * 見出しと並び順は Style Profile の実測(recommendedSectionOrder)に
+ * 従う。空のセクションは見出しごと出さない —— 「◎素材」とだけ書かれた
+ * 空欄は、情報が無いことを伝えるどころか、書き忘れに見える。
+ */
+export function composeFullDescription(sections: ProductPageSections, shippingBoilerplate?: string | null): string {
+  const parts: { heading: string; body: string }[] = [
+    { heading: "◎商品のご紹介", body: sections.introduction },
+    { heading: "◎ブランドについて", body: sections.brandSection },
+    { heading: "◎デザイナーについて", body: sections.designerSection },
+    { heading: "◎商品の特徴", body: sections.featureSection },
+    { heading: "◎素材・カラー", body: sections.materialSection },
+    { heading: "◎サイズ", body: sections.dimensionsSection },
+    { heading: "◎コンディション", body: sections.conditionSection },
+    { heading: "◎発送について", body: sections.shippingSection || (shippingBoilerplate ?? "") },
+  ];
+  return parts
+    .filter((p) => p.body && p.body.trim())
+    .map((p) => `${p.heading}\n${p.body.trim()}`)
+    .join("\n\n");
+}
+
+export async function generateProductPage(input: ProductPageGenerationInput): Promise<ProductPageResult> {
+  // 1. 事実を顧客向けに安全な形へ整える(社内スコア・個人情報を落とす)。
+  //    ここは既存の仕組みをそのまま使う —— 検査を二重に作らない。
+  const { facts, redactions } = buildCustomerSafeFacts({
+    name: input.name,
+    width: input.width ?? null,
+    depth: input.depth ?? null,
+    height: input.height ?? null,
+    categoryName: input.categoryName ?? null,
+    conditionRating: input.conditionRating ?? null,
+    damageNotes: input.damageNotes ?? null,
+    note: input.note ?? null,
+  });
+
+  const missingFacts = collectMissingFacts(facts);
+
+  // 2. 文体の参考にする過去商品を選ぶ(事実の出典ではない)。
+  const similar: SimilarityHit[] = findSimilarArchivedProducts(
+    { name: input.name, brand: input.brand ?? null, category: input.categoryName ?? null, price: input.price ?? null },
+    input.archive,
+    { limit: 4 },
+  );
+
+  const base = {
+    missingFacts,
+    referencedBaseItemIds: similar.map((h) => h.reference.baseItemId),
+    redactions,
+    styleProfileVersion: input.styleProfileVersion ?? null,
+  };
+
+  const systemPrompt = buildProductPageSystemPrompt(input.styleProfile);
+  const userPrompt = buildProductPageUserPrompt({ facts, similar, shippingBoilerplate: input.shippingBoilerplate ?? null });
+
+  let result;
+  let sections: ProductPageSections;
+
+  // 「紹介文に寸法を書かない」はプロンプトで指示しても守られないことがある
+  // (実測: 12件中2件で W/D/H が紹介文へ入った)。守られたかどうかは
+  // 機械的に判定できるので、判定して1回だけ書き直させる。
+  // 何度も投げてもコストが増えるだけなので、試行は2回まで。
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      result = await generateStructured<ProductPageSections & Record<string, unknown>>({
+        task: "LISTING_DESCRIPTION_GENERATION",
+        systemPrompt:
+          attempt === 1
+            ? systemPrompt
+            : `${systemPrompt}\n\n【前回の出力で検出された問題(必ず直すこと)】\n- 「商品のご紹介」に寸法(W/D/H・幅・奥行・高さ・○×○)が書かれていました。寸法はサイズのセクションだけに書き、紹介文からは完全に取り除いてください。`,
+        userPrompt,
+        toolSchema: PRODUCT_PAGE_TOOL,
+        tier: "STANDARD",
+        promptVersion: PRODUCT_PAGE_PROMPT_VERSION,
+        requiredNonEmptyFields: ["title", "introduction"],
+      });
+    } catch (err) {
+      return {
+        ...base,
+        ok: false,
+        sections: null,
+        fullDescription: null,
+        violations: [],
+        modelProvider: null,
+        modelName: null,
+        failureReason: err instanceof Error ? err.message : "商品ページの生成に失敗しました。",
+      };
+    }
+
+    sections = result.output;
+    if (!INTRO_DIMENSION_PATTERN.test(sections.introduction ?? "")) break;
+    console.warn("[productPage] 紹介文に寸法が含まれていたため書き直します", { attempt, inventoryId: input.inventoryId });
+  }
+
+  sections = result!.output;
+  const fullDescription = composeFullDescription(sections, input.shippingBoilerplate);
+
+  // 3. 生成後の機械検査。プロンプトで禁じただけでは守られないことがある
+  //    ので、在庫数・SKU・社内スコア・商品名に無いブランド等を実際に探す。
+  const check = checkFactSafety({
+    output: fullDescription,
+    facts,
+    stockQuantity: input.stockQuantity ?? null,
+    sku: input.sku ?? null,
+    // セクション構成ぶん長くなるため、紹介文単体より大きい上限にする。
+    maxLength: 4000,
+  });
+
+  return {
+    ...base,
+    ok: check.ok,
+    sections,
+    fullDescription,
+    violations: check.violations,
+    modelProvider: result!.providerId,
+    modelName: result!.modelId,
+    failureReason: check.ok ? null : `生成結果が事実の裏付けを外れていました: ${check.violations.map((v) => v.detail).join(" / ")}`,
+  };
+}
