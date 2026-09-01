@@ -524,6 +524,32 @@ async function testRelayErrorIsNotTokenRejection() {
   );
 }
 
+async function testRelayUnreachableIsNotAMercariFailure() {
+  // 中継へ届かなかったときは、応答が無いので X-Bello-Relay-Error では
+  // 区別できない。それでも「Mercariが応答しなかった」と説明してはいけない
+  // —— 中継の停止やポート閉塞をMercari側の障害と読み違えると、調査が
+  // まるごと外れる。127.0.0.1:1 は即座に接続を拒否されるので、
+  // ネットワーク待ちを起こさずにこの経路を再現できる。
+  const prev = process.env.MERCARI_RELAY_URL;
+  process.env.MERCARI_RELAY_URL = "https://127.0.0.1:1";
+  try {
+    const err = (await captureError(() => makeClient().request("query Q { a }", {}, { disableRetry: true }))) as MercariApiError;
+    assertTrue(err instanceof MercariApiError, "中継到達不能: MercariApiErrorとして返る");
+    assertTrue(!isMercariTokenRejected(err.code), "中継到達不能: トークン拒否として扱わない");
+    assertTrue(
+      err.message.includes("中継サーバーへ到達できませんでした"),
+      "中継到達不能: Mercariの障害ではなく中継へ到達できなかったことを説明する",
+    );
+    assertTrue(
+      err.message.includes("TOKENの正否は判定できていません"),
+      "中継到達不能: TOKENの正否を判定していないと明示する",
+    );
+  } finally {
+    if (prev === undefined) delete process.env.MERCARI_RELAY_URL;
+    else process.env.MERCARI_RELAY_URL = prev;
+  }
+}
+
 function testRelayUrlResolution() {
   const prev = process.env.MERCARI_RELAY_URL;
   delete process.env.MERCARI_RELAY_URL;
@@ -540,6 +566,7 @@ async function main() {
   testRelayAuthHeaders();
   testRelayUrlResolution();
   await testRelayErrorIsNotTokenRejection();
+  await testRelayUnreachableIsNotAMercariFailure();
   testErrorTaxonomy();
   testConnectionPolicy();
   testEnvParsing();

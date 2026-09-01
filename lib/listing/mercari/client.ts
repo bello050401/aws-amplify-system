@@ -109,18 +109,22 @@ export class MercariShopsClient {
     // 「User-Agentは送られていたか」「どの環境・エンドポイントへ送った
     // か」を後からログで追跡できる。
     const operationName = extractGraphQLOperationName(query);
-    const logContext = {
-      endpoint: this.endpoint,
-      environment: this.environment,
-      operationName,
-      userAgentSet: Boolean(userAgent),
-      tokenPresent: Boolean(token),
-      tokenLength: token.length,
-    };
 
     // 中継(東京の固定IP)が設定されていればそちら経由。未設定なら従来どおり
     // Mercariへ直接接続する —— 既存の動作を一切変えないための分岐。
     const relayUrl = getMercariRelayUrl();
+
+    const logContext = {
+      endpoint: this.endpoint,
+      environment: this.environment,
+      operationName,
+      // 障害の切り分けは「どちらの経路で送ったか」が分からないと始まらない。
+      // 中継のURL自体は秘密ではないが、ログには経路の種別だけを残す。
+      via: relayUrl ? "relay" : "direct",
+      userAgentSet: Boolean(userAgent),
+      tokenPresent: Boolean(token),
+      tokenLength: token.length,
+    };
     const body = JSON.stringify({ query, variables });
 
     let response: Response;
@@ -152,9 +156,16 @@ export class MercariShopsClient {
       const timedOut = controller.signal.aborted || (err instanceof Error && err.name === "AbortError");
       const code = timedOut ? "TIMEOUT" : "NETWORK_ERROR";
       console.error(`[MercariShopsClient] ${code}:`, JSON.stringify({ ...logContext, timeoutMs: this.timeoutMs }), err instanceof Error ? err.message : err);
+      // 中継経由のときは、そもそもMercariまで届いていない可能性がある。
+      // 「Mercariが応答しなかった」と書くと、中継の停止・ポート閉塞・TLS不一致を
+      // Mercari側の障害と読み違える —— 応答自体が返っていない以上
+      // X-Bello-Relay-Error では区別できないので、ここで文言を分ける。
+      const reason = timedOut ? `Timed out after ${this.timeoutMs}ms` : err instanceof Error ? err.message : "Network error calling Mercari Shops API";
       throw new MercariApiError(
         code,
-        timedOut ? `Timed out after ${this.timeoutMs}ms` : err instanceof Error ? err.message : "Network error calling Mercari Shops API",
+        relayUrl
+          ? `Mercari中継サーバーへ到達できませんでした (${reason})。Mercariまでリクエストが届いたか、およびTOKENの正否は判定できていません。`
+          : reason,
       );
     } finally {
       clearTimeout(timer);
