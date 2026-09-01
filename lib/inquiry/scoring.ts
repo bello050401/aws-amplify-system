@@ -66,17 +66,25 @@ const SCORE_NAME_FRAGMENT_MAX = 0.32;
 export const WEAK_SIGNAL_SCORE_CAP = 0.92;
 
 /**
- * 商品名の「他:」以降を切り落とす。
+ * 商品名の「検索用キーワード」部分を切り落とす。
  *
- * 実在庫の商品名は `… ブラック 他:フランス アルテミデ ヤマギワ` のように、
- * 末尾へ検索用の関連ワードを並べる運用になっている。ここに他社ブランド名が
- * 入るため、そのまま照合すると「ヤマギワ」の問い合わせが別メーカーの
- * 商品にヒットする。関連ワードは商品の同一性を示さないので、
- * ブランド・型番の照合からは外す。
+ * 実在庫の商品名は、末尾へ検索用の関連ワードを並べる運用になっている:
+ *
+ *   PIIROINEN A-Frame sofa 2人掛け ソファ … 検:アルフレックス カッシーナ ボーコンセプト
+ *
+ * ここに入るのは**他社ブランド名**なので、そのまま照合すると
+ * 「カッシーナのソファについて」という問い合わせが、カッシーナ製ではない
+ * この商品にヒットする。関連ワードは商品の同一性を示さない。
+ *
+ * 【実測】Staging在庫400件のうち172件(43%)が `検:` を使っていた。
+ * `他:` は0件 —— 当初 `他:` だけを見ていたが、実データでは一度も
+ * 使われていない書き方だった。両方を見る。
  */
+const KEYWORD_TAIL = /(?:検索|検|他)\s*[:：]/;
+
 export function nameCore(name: string): string {
-  const idx = name.search(/他\s*[:：]/);
-  return idx >= 0 ? name.slice(0, idx) : name;
+  const match = name.match(KEYWORD_TAIL);
+  return match?.index !== undefined ? name.slice(0, match.index) : name;
 }
 
 export function scoreInventory(inv: MatchableInventory, signals: MatchSignals): { confidence: number; reasons: string[] } {

@@ -154,7 +154,30 @@ function emptySignals(): MatchSignals {
 }
 
 function testProductScoring() {
-  assertEqual(nameCore("ヤマギワ Libra SS226B 他:フランス アルテミデ"), "ヤマギワ Libra SS226B ", "商品名: 「他:」以降の関連ワードを切り落とす");
+  // 実在庫400件の実測: 172件(43%)が「検:」、「他:」は0件。両方を見る。
+  assertEqual(
+    nameCore("PIIROINEN A-Frame sofa 2人掛け ソファ 検:アルフレックス カッシーナ"),
+    "PIIROINEN A-Frame sofa 2人掛け ソファ ",
+    "商品名: 「検:」以降の検索用キーワードを切り落とす(実データで最も多い書き方)",
+  );
+  assertEqual(nameCore("ヤマギワ Libra SS226B 他:フランス アルテミデ"), "ヤマギワ Libra SS226B ", "商品名: 「他:」以降も切り落とす");
+  assertEqual(nameCore("SLAMP CACTUS 検索：フロス"), "SLAMP CACTUS ", "商品名: 「検索：」(全角コロン)も切り落とす");
+  assertEqual(nameCore("普通の商品名 ソファ"), "普通の商品名 ソファ", "商品名: キーワード欄が無ければそのまま");
+
+  // 実データの形でそのまま確認する —— カッシーナは検索キーワードであって
+  // この商品のブランドではない。
+  const piiroinen: MatchableInventory = {
+    id: "inv-p",
+    displayInventoryId: "64482551",
+    sku: "B000900",
+    name: "【11/15午前】PIIROINEN A-Frame sofa 2人掛け ソファ 2Pソファ モダン 検:アルフレックス カッシーナ ボーコンセプト",
+    externalProductId: null,
+    barcode: null,
+    sourceInventoryId: "64482551",
+    listings: [],
+  };
+  const wrongBrand = scoreInventory(piiroinen, { ...emptySignals(), brandNames: ["Cassina", "カッシーナ"], nameFragments: ["カッシーナ"] });
+  assertEqual(wrongBrand.confidence, 0, "照合: 検索用キーワードに書かれた他社ブランドではヒットしない(実データの形で確認)");
 
   const bySku = scoreInventory(SOFA_A, { ...emptySignals(), skus: ["B000004"] });
   assertTrue(bySku.confidence >= PRODUCT_MATCH_AUTO_CONFIRM, "照合: SKU完全一致は自動確定の水準");
