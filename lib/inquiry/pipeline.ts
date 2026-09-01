@@ -1,0 +1,422 @@
+import "server-only";
+import { generateText } from "@/lib/ai/gateway/gateway";
+import { buildCustomerSafeFacts, type CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
+import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
+import { lookupShippingRate } from "@/lib/shipping/service";
+import { calculateShippingRankFromDimensions } from "@/lib/shipping/rank";
+import { listSearchableKnowledge } from "@/lib/knowledge/store";
+import { retrieveKnowledge } from "@/lib/knowledge/retrieval";
+import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./intent";
+import { resolveProductFromInquiry } from "./productResolver";
+import { getAIReplySettings } from "./settings";
+import { extractShippingDestination, missingShippingInfo } from "./shippingIntent";
+import { buildInquirySystemPrompt, buildInquiryUserPrompt, INQUIRY_PROMPT_VERSION } from "./prompt";
+import { REPLY_MAX_GENERATION_ATTEMPTS, validateReplyDraft } from "./validate";
+import { createDirectUrlProvider, getWebResearchAvailability, researchMissingFacts } from "./research/service";
+import type {
+  ExternalResearchFact,
+  InquiryIntent,
+  InquiryReplyRequest,
+  ProductResolutionStatus,
+  ReplyDraftStatus,
+  ReplyEvidence,
+  ShippingEvidence,
+  UnresolvedFact,
+} from "./types";
+
+/**
+ * §11 AI返信パイプライン。チャネルに依存しない(§16)。
+ *
+ * 呼び出し側(Server Action)はチャネル名と本文を渡すだけで、LINE固有の
+ * ことは何も知らない。将来BASE・メール・Instagramが増えても、
+ * 会話とメッセージの形さえ同じなら、この関数はそのまま使える。
+ *
+ * 【段階ごとに「できなかった」を返す】どこかが失敗しても全体を落とさない。
+ * 商品が特定できなくても営業時間には答えられるし、外部調査ができなくても
+ * 在庫情報だけで答えられることは答える。何ができて何ができなかったかは
+ * ReplyEvidenceに残し、画面に出す(§19「成功したふり」を禁止)。
+ */
+
+export interface GenerateInquiryReplyResult {
+  status: ReplyDraftStatus;
+  draftText: string | null;
+  evidence: ReplyEvidence;
+  intents: InquiryIntent[];
+  unresolvedFacts: UnresolvedFact[];
+  modelProvider: string | null;
+  modelName: string | null;
+  /** 生成できなかった場合の、管理者向けの理由。 */
+  failureReason: string | null;
+}
+
+/** 顧客向けに出してよい在庫の項目。ここに無いものはAIへ渡さない。 */
+const CUSTOMER_SAFE_INVENTORY_FIELDS = ["商品名", "カテゴリー", "サイズ", "状態", "商品説明", "販売状況"] as const;
+
+export async function generateInquiryReplyDraft(request: InquiryReplyRequest): Promise<GenerateInquiryReplyResult> {
+  const settings = await getAIReplySettings();
+  const messageText = normalizeMessage(request.messageText);
+  const intents = extractIntents(messageText);
+
+  // ── 商品の特定 ────────────────────────────────────────────────
+  const resolution = await resolveProductFromInquiry({
+    messageText,
+    overrideInventoryId: request.overrideInventoryId ?? null,
+    conversationInventoryId: request.conversationInventoryId ?? null,
+  });
+
+  const unresolved: UnresolvedFact[] = [];
+  const inventoryFieldsUsed: string[] = [];
+  const trustedProductFacts: { label: string; value: string }[] = [];
+  let facts: CustomerSafeFacts = { name: "", dimensions: null, categoryName: null, conditionDisclosure: null, publicNote: null };
+  let stockQuantity: number | null = null;
+  let sku: string | null = null;
+  let dimensionTexts: string[] = [];
+
+  const inventory = resolution.resolved ? await getInventoryDetail(resolution.resolved.inventoryId) : null;
+  // カテゴリー名・販売状況はInventoryにはIDしか無いため、マスタから引く。
+  // 商品が特定できていない場合は引かない(無駄な問い合わせを増やさない)。
+  const [categoryName, statusName] = inventory ? await resolveMasterLabels(inventory.categoryId, inventory.statusId) : [null, null];
+  if (inventory) {
+    sku = inventory.sku;
+    stockQuantity = inventory.quantity ?? null;
+    const built = buildCustomerSafeFacts({
+      name: inventory.name,
+      width: inventory.width,
+      depth: inventory.depth,
+      height: inventory.height,
+      categoryName,
+      conditionRating: inventory.conditionRating,
+      damageNotes: inventory.damageNotes,
+      note: inventory.note,
+    });
+    facts = built.facts;
+    if (facts.name) {
+      trustedProductFacts.push({ label: "商品名", value: facts.name });
+      inventoryFieldsUsed.push("商品名");
+    }
+    if (facts.categoryName) {
+      trustedProductFacts.push({ label: "カテゴリー", value: facts.categoryName });
+      inventoryFieldsUsed.push("カテゴリー");
+    }
+    if (facts.dimensions) {
+      trustedProductFacts.push({ label: "サイズ", value: facts.dimensions });
+      inventoryFieldsUsed.push("サイズ");
+      dimensionTexts = [facts.dimensions];
+    }
+    if (facts.conditionDisclosure) {
+      trustedProductFacts.push({ label: "状態", value: facts.conditionDisclosure });
+      inventoryFieldsUsed.push("状態");
+    }
+    if (facts.publicNote) {
+      trustedProductFacts.push({ label: "商品説明", value: facts.publicNote });
+      inventoryFieldsUsed.push("商品説明");
+    }
+    // §36: 売却済みでも商品自体は特定できる。ただし現在の販売状態は正しく扱う。
+    if (statusName) {
+      trustedProductFacts.push({ label: "販売状況", value: statusName });
+      inventoryFieldsUsed.push("販売状況");
+    }
+  }
+
+  // 商品固有の質問なのに商品が決まっていない場合は、そのことを明示する。
+  if (requiresProduct(intents) && !inventory) {
+    unresolved.push({
+      field: "対象商品",
+      reason:
+        resolution.status === "AMBIGUOUS"
+          ? "候補が複数あり、どの商品か確定できていません。"
+          : resolution.status === "NOT_FOUND"
+            ? "問い合わせに含まれる情報に一致する在庫が見つかりませんでした。"
+            : "問い合わせから対象商品を特定できる情報が見つかりませんでした。",
+    });
+  }
+
+  // ── ナレッジ ──────────────────────────────────────────────────
+  let knowledgeHits: { id: string; title: string; fileName: string; excerpt: string }[] = [];
+  if (settings.knowledgeEnabled) {
+    try {
+      const docs = await listSearchableKnowledge();
+      // 種別を渡すのは、「お店はどこ」のように文書側の語(所在地)が
+      // 問い合わせに一切現れない場合に引けるようにするため。
+      knowledgeHits = retrieveKnowledge(docs, messageText, { intents }).map((hit) => ({
+        id: hit.document.id,
+        title: hit.document.title,
+        fileName: hit.document.originalFileName,
+        excerpt: hit.snippet,
+      }));
+    } catch (err) {
+      // §19: ナレッジが読めなかったことを黙って「該当なし」にしない。
+      unresolved.push({ field: "社内文書の参照", reason: err instanceof Error ? err.message : "ナレッジ文書を取得できませんでした。" });
+    }
+  }
+
+  // ── 送料(既存のらくらく家財DBを参照。新しいマスタは作らない) ──
+  let shipping: ShippingEvidence | null = null;
+  if (intents.includes("SHIPPING")) {
+    shipping = await resolveShipping({ messageText, inventory });
+    for (const missing of shipping.missingCustomerInfo) {
+      unresolved.push({ field: missing, reason: "送料を確定するために必要な情報が不足しています。" });
+    }
+  }
+
+  // ── 外部Webリサーチ(不明な項目だけ) ──────────────────────────
+  const researchFields = settings.webResearchEnabled ? identifyResearchableFields(intents, inventory != null, facts) : [];
+  const availability = await getWebResearchAvailability();
+  const research = await researchMissingFacts({
+    fields: researchFields,
+    inventoryId: resolution.resolved?.inventoryId ?? null,
+    modelHints: [...resolution.references.modelNumbers, ...resolution.references.brandNames],
+    providers: researchFields.length > 0 ? [createDirectUrlProvider(resolution.references.urls)] : [],
+  });
+  for (const fact of research.facts) {
+    if (fact.status === "NOT_FOUND") {
+      unresolved.push({ field: fact.field, reason: "公式情報を含め、確認できませんでした。" });
+    } else if (fact.status === "UNCERTAIN") {
+      unresolved.push({ field: fact.field, reason: "情報は見つかりましたが、この商品のものと確定できませんでした。" });
+    }
+  }
+  if (researchFields.length > 0 && !research.attempted && !availability.available) {
+    // 検索APIが未設定であることは事実として残す。UIにも出す。
+    unresolved.push({ field: "外部情報の調査", reason: availability.reason });
+  }
+
+  const evidence: ReplyEvidence = {
+    product: resolution.resolved
+      ? {
+          inventoryId: resolution.resolved.inventoryId,
+          displayInventoryId: resolution.resolved.displayInventoryId,
+          name: resolution.resolved.name,
+          confidence: resolution.resolved.confidence,
+        }
+      : null,
+    productStatus: resolution.status,
+    productCandidates: resolution.candidates,
+    inventoryFieldsUsed,
+    knowledgeDocuments: knowledgeHits.map((k) => ({ id: k.id, title: k.title, fileName: k.fileName })),
+    shipping,
+    externalResearchAttempted: research.attempted,
+    externalFacts: research.facts,
+    unresolvedFacts: unresolved,
+  };
+
+  // ── 生成できない条件を先に判定する ────────────────────────────
+  if (!settings.autoDraftEnabled) {
+    return failed("AI返信案の生成が設定で無効になっています。", evidence, intents, unresolved);
+  }
+  const nothingToAnswerWith =
+    trustedProductFacts.length === 0 && knowledgeHits.length === 0 && shipping === null && research.facts.length === 0;
+  if (nothingToAnswerWith && requiresProduct(intents) && !hasProductIndependentIntent(intents)) {
+    return {
+      status: resolution.status === "AMBIGUOUS" ? "NEEDS_PRODUCT_CONFIRMATION" : "NEEDS_PRODUCT_CONFIRMATION",
+      draftText: null,
+      evidence,
+      intents,
+      unresolvedFacts: unresolved,
+      modelProvider: null,
+      modelName: null,
+      failureReason: "回答の根拠になる情報が1件も得られなかったため、返信案を生成していません。対象商品を指定してから再生成してください。",
+    };
+  }
+
+  // ── 生成 ──────────────────────────────────────────────────────
+  const systemPrompt = buildInquirySystemPrompt();
+  const userPrompt = buildInquiryUserPrompt({
+    intents,
+    trustedProductFacts,
+    knowledgeExcerpts: knowledgeHits.map((k) => ({ title: k.title, excerpt: k.excerpt })),
+    shipping,
+    externalFacts: research.facts,
+    unresolved,
+    customerMessage: messageText,
+    history: request.history.slice(-10),
+  });
+
+  const allowedShippingFee = shipping?.feeYen ?? null;
+  const allowedDimensionText = [...dimensionTexts, ...research.facts.map((f) => f.value ?? "")];
+
+  let lastViolations: string[] = [];
+  let modelProvider: string | null = null;
+  let modelName: string | null = null;
+
+  for (let attempt = 1; attempt <= REPLY_MAX_GENERATION_ATTEMPTS; attempt++) {
+    let output: string;
+    try {
+      const result = await generateText({
+        task: "CUSTOMER_REPLY_DRAFT",
+        systemPrompt: attempt === 1 ? systemPrompt : `${systemPrompt}\n\n【前回の出力で検出された問題(必ず直すこと)】\n${lastViolations.join("\n")}`,
+        userPrompt,
+        tier: "STANDARD",
+        promptVersion: INQUIRY_PROMPT_VERSION,
+      });
+      output = result.output.trim();
+      modelProvider = result.providerId;
+      modelName = result.modelId;
+    } catch (err) {
+      return failed(err instanceof Error ? err.message : "AIの呼び出しに失敗しました。", evidence, intents, unresolved);
+    }
+
+    const validation = validateReplyDraft({
+      output,
+      facts,
+      stockQuantity,
+      sku,
+      allowedShippingFeeYen: allowedShippingFee,
+      unresolved,
+      externalTexts: research.documentTexts,
+      allowedDimensionText,
+    });
+    if (validation.ok) {
+      return {
+        status: deriveStatus(resolution.status, unresolved, research.facts),
+        draftText: output,
+        evidence,
+        intents,
+        unresolvedFacts: unresolved,
+        modelProvider,
+        modelName,
+        failureReason: null,
+      };
+    }
+    lastViolations = validation.violations.map((v) => `- ${v.detail}`);
+    // §32: 検査に落ちたことは構造化ログに残す。生成文そのものは残さない
+    // (顧客本文・生成文には個人情報が混ざりうる)。
+    console.warn("[inquiryReply] 生成結果が検査に不合格", {
+      attempt,
+      codes: validation.violations.map((v) => v.code),
+      conversationId: request.conversationId,
+    });
+  }
+
+  return {
+    status: "FAILED",
+    draftText: null,
+    evidence,
+    intents,
+    unresolvedFacts: unresolved,
+    modelProvider,
+    modelName,
+    failureReason: `生成結果が安全性・事実整合性の検査に${REPLY_MAX_GENERATION_ATTEMPTS}回続けて不合格でした: ${lastViolations.join(" ")}`,
+  };
+}
+
+/**
+ * §18 状態の決定。
+ *
+ * 「返信案はできたが、確認が要る点がある」を READY と同じ扱いにしない ——
+ * 担当者が根拠パネルを開かずに送信してしまう経路を作らないため。
+ */
+function deriveStatus(productStatus: ProductResolutionStatus, unresolved: UnresolvedFact[], facts: ExternalResearchFact[]): ReplyDraftStatus {
+  if (productStatus === "AMBIGUOUS") return "NEEDS_PRODUCT_CONFIRMATION";
+  if (unresolved.some((u) => u.field.includes("お届け先") || u.field.includes("市区町村"))) return "NEEDS_CUSTOMER_INFO";
+  if (facts.some((f) => f.status === "NOT_FOUND" || f.status === "UNCERTAIN")) return "RESEARCH_INCOMPLETE";
+  if (unresolved.length > 0) return "RESEARCH_INCOMPLETE";
+  return "READY";
+}
+
+function failed(reason: string, evidence: ReplyEvidence, intents: InquiryIntent[], unresolved: UnresolvedFact[]): GenerateInquiryReplyResult {
+  return { status: "FAILED", draftText: null, evidence, intents, unresolvedFacts: unresolved, modelProvider: null, modelName: null, failureReason: reason };
+}
+
+/**
+ * §10 送料。金額は必ず既存のShippingRateマスタから引く。
+ *
+ * 【書き込みをしない】lib/shipping/service.tsのcalculateShippingEstimateは
+ * ChannelListingへ見積り結果を保存する。問い合わせを開いただけで出品情報が
+ * 書き換わるのは副作用として重すぎるので、ここではランク計算とマスタ検索
+ * (どちらも読み取りのみ)を直接使う。
+ */
+async function resolveShipping(params: {
+  messageText: string;
+  inventory: { width: string | null; depth: string | null; height: string | null } | null;
+}): Promise<ShippingEvidence> {
+  const destination = extractShippingDestination(params.messageText);
+  const dims = params.inventory ? calculateShippingRankFromDimensions(params.inventory.width, params.inventory.depth, params.inventory.height) : null;
+
+  const missing = missingShippingInfo({
+    productResolved: params.inventory != null,
+    destinationPrefecture: destination.prefecture,
+    cityHint: destination.cityHint,
+    hasDimensions: dims != null,
+  });
+
+  if (!destination.prefecture || !dims) {
+    return {
+      destinationPrefecture: destination.prefecture,
+      rank: dims?.rank ?? null,
+      feeYen: null,
+      note: !destination.prefecture ? "お届け先が特定できないため、金額を出していません。" : "商品の寸法が未入力のため、配送ランクを判定できません。",
+      missingCustomerInfo: missing,
+    };
+  }
+
+  const rate = await lookupShippingRate(destination.prefecture, dims.rank);
+  if (!rate) {
+    return {
+      destinationPrefecture: destination.prefecture,
+      rank: dims.rank,
+      feeYen: null,
+      note: `埼玉県 → ${destination.prefecture}・${dims.rank}ランクの料金が料金マスタに未登録です。`,
+      missingCustomerInfo: missing,
+    };
+  }
+  if (rate.price == null) {
+    return {
+      destinationPrefecture: destination.prefecture,
+      rank: dims.rank,
+      feeYen: null,
+      note: `埼玉県 → ${destination.prefecture}・${dims.rank}ランクは公式にサービス対象外と確認されています。`,
+      missingCustomerInfo: missing,
+    };
+  }
+  return {
+    destinationPrefecture: destination.prefecture,
+    rank: dims.rank,
+    feeYen: rate.price + (rate.surcharge ?? 0),
+    // 市区町村が分からない段階の金額は参考値。確定額として案内させない。
+    note: destination.cityHint ? null : "都道府県のみで引いた参考額です。市区町村により変わる場合があります。",
+    missingCustomerInfo: missing,
+  };
+}
+
+/**
+ * §9.1 外部調査を発動する条件。
+ *
+ * 在庫DBで答えられるなら調べない。ここが「Web検索費用対策」(§21)の
+ * 実体で、条件を満たさない限り外部へは1リクエストも出ない。
+ */
+export function identifyResearchableFields(intents: InquiryIntent[], hasProduct: boolean, facts: CustomerSafeFacts): string[] {
+  if (!hasProduct) return [];
+  const fields: string[] = [];
+  if (intents.includes("SIZE") && !facts.dimensions) fields.push("寸法");
+  if (intents.includes("MATERIAL")) fields.push("素材");
+  if (intents.includes("PRODUCT_SPEC")) fields.push("耐荷重");
+  if (intents.includes("COMPATIBILITY")) fields.push("適合");
+  return fields;
+}
+
+/** §11 normalizeMessage。制御文字とゼロ幅文字を落とし、改行を揃える。 */
+export function normalizeMessage(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/[​-‏‪-‮⁠-⁤﻿]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * カテゴリー名・販売状況の表示名を引く。
+ *
+ * IDのままAIへ渡すと、顧客への返信に内部IDが出る経路になる。マスタが
+ * 引けなかった場合はnull —— 「不明なカテゴリー」等の作り話をしない。
+ */
+async function resolveMasterLabels(categoryId: string | null, statusId: string | null): Promise<[string | null, string | null]> {
+  if (!categoryId && !statusId) return [null, null];
+  try {
+    const [categories, statuses] = await Promise.all([categoryId ? listCategories() : Promise.resolve([]), statusId ? listStatuses() : Promise.resolve([])]);
+    return [categories.find((c) => c.id === categoryId)?.name ?? null, statuses.find((s) => s.id === statusId)?.label ?? null];
+  } catch {
+    return [null, null];
+  }
+}
+
+export { CUSTOMER_SAFE_INVENTORY_FIELDS };

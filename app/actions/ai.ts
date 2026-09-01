@@ -3,10 +3,8 @@
 import { randomUUID } from "node:crypto";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail } from "@/lib/inventory/queries";
-import { generateListingCopy, generateReplyDraft, type ListingCopyResult } from "@/lib/ai/ecCopy";
+import { generateListingCopy, type ListingCopyResult } from "@/lib/ai/ecCopy";
 import { buildCustomerSafeFacts } from "@/lib/ai/productIntro/facts";
-import { getConversation, listMessages } from "@/lib/messaging/service";
-import { getChannelListing } from "@/lib/listing/service";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §56/§88-90: AI生成のServer Action層。
@@ -135,54 +133,5 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
   } catch (err) {
     logActionFailure("generateListingCopyAction", correlationId, { inventoryId }, err);
     return { ok: false, error: safeErrorMessage(err, "AI下書きの生成に失敗しました。時間をおいて再試行してください。"), correlationId };
-  }
-}
-
-export type GenerateReplyDraftActionResult = { ok: true; data: string } | { ok: false; error: string; correlationId: string };
-
-export async function generateReplyDraftAction(conversationId: string): Promise<GenerateReplyDraftActionResult> {
-  const correlationId = randomUUID();
-  try {
-    await requireEditPermission();
-    const conversation = await getConversation(conversationId);
-    if (!conversation) throw new Error("対象の会話が見つかりません。");
-    const messages = await listMessages(conversationId);
-    const latestIncoming = [...messages].reverse().find((m) => m.direction === "INBOUND");
-    if (!latestIncoming) throw new Error("返信対象となる受信メッセージがありません。");
-
-    const inventory = conversation.relatedInventoryId ? await getInventoryDetail(conversation.relatedInventoryId) : null;
-    // §69: 送料は必ず事前計算済みの確定値のみをAIへ渡す(AIに暗算させない)。
-    // confirmedShippingFee(人が確認した値)を最優先し、無ければ
-    // calculatedShippingFee(自動見積り)、どちらも無ければnull —
-    // generateReplyDraft側のsystem promptが「未確定の場合は具体的な金額
-    // を言わない」よう指示する。
-    const channelListing = conversation.relatedInventoryId ? await getChannelListing(conversation.relatedInventoryId, "MERCARI_SHOPS") : null;
-    const shippingFee = channelListing?.confirmedShippingFee ?? channelListing?.calculatedShippingFee ?? null;
-
-    // 返信案も顧客が読む文章なので、出品コピーと同じ理由で
-    // conditionRating(社内の5段階スコア)をそのまま渡さない。
-    // 「コンディションは4です」と返信してしまう経路をここでも塞ぐ。
-    const replyFacts = inventory
-      ? buildCustomerSafeFacts({
-          name: inventory.name,
-          conditionRating: inventory.conditionRating,
-          damageNotes: inventory.damageNotes,
-        }).facts
-      : null;
-
-    const data = await generateReplyDraft({
-      channel: conversation.channel,
-      inquiryBody: latestIncoming.body,
-      productName: inventory?.name ?? null,
-      productCondition: replyFacts?.conditionDisclosure ?? null,
-      sellingPrice: inventory?.salePrice ?? inventory?.plannedSalePrice ?? null,
-      stockQuantity: inventory?.quantity ?? null,
-      shippingFee,
-      conversationHistory: messages.slice(-10).map((m) => ({ direction: m.direction, body: m.body })),
-    });
-    return { ok: true, data };
-  } catch (err) {
-    logActionFailure("generateReplyDraftAction", correlationId, { conversationId }, err);
-    return { ok: false, error: safeErrorMessage(err, "AI返信案の生成に失敗しました。時間をおいて再試行してください。"), correlationId };
   }
 }

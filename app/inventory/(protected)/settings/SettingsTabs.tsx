@@ -20,6 +20,7 @@ import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
 import { PhotoProfilePanel } from "./PhotoProfilePanel";
+import { KnowledgeSettingsPanel } from "./KnowledgeSettingsPanel";
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -81,7 +82,21 @@ export function SettingsTabs({
   lineTokenSource,
 }: SettingsTabsProps) {
   const [tab, setTab] = useState<
-    "category" | "unit" | "location" | "customFields" | "columns" | "zaico" | "images" | "mercari" | "base" | "pricing" | "shipping" | "line" | "systemAudit" | "photoProfile"
+    | "category"
+    | "unit"
+    | "location"
+    | "customFields"
+    | "columns"
+    | "zaico"
+    | "images"
+    | "mercari"
+    | "base"
+    | "pricing"
+    | "shipping"
+    | "line"
+    | "knowledge"
+    | "systemAudit"
+    | "photoProfile"
   >("category");
 
   const tabClass = (active: boolean) =>
@@ -138,6 +153,11 @@ export function SettingsTabs({
         {isAdmin && (
           <button type="button" onClick={() => setTab("line")} className={tabClass(tab === "line")}>
             LINE連携
+          </button>
+        )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("knowledge")} className={tabClass(tab === "knowledge")}>
+            AI返信ナレッジ
           </button>
         )}
         {isAdmin && (
@@ -208,6 +228,7 @@ export function SettingsTabs({
         )}
         {tab === "shipping" && isAdmin && <ShippingRatePanel />}
         {tab === "line" && isAdmin && <LineSettingsPanel lineConnected={lineConnected} lineTokenSource={lineTokenSource} />}
+        {tab === "knowledge" && isAdmin && <KnowledgeSettingsPanel />}
         {tab === "systemAudit" && isAdmin && <SystemAuditPanel />}
         {tab === "photoProfile" && isAdmin && <PhotoProfilePanel />}
       </div>

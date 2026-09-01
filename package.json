@@ -40,7 +40,9 @@
     "verify:vision": "node scripts/with-server-only-stub.cjs scripts/verify-vision.ts",
     "verify:image-pipeline": "node scripts/with-server-only-stub.cjs scripts/verify-image-pipeline.ts",
     "repair:zaico-links": "node scripts/with-server-only-stub.cjs scripts/repair-zaico-dangling-links.ts",
-    "verify:zaico-reconciliation": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-reconciliation.ts"
+    "verify:zaico-reconciliation": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-reconciliation.ts",
+    "verify:inquiry": "node scripts/with-server-only-stub.cjs scripts/verify-inquiry.ts",
+    "verify:knowledge": "node scripts/with-server-only-stub.cjs scripts/verify-knowledge.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

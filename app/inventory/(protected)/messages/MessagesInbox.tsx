@@ -9,7 +9,7 @@ import {
   resolveConversationAction,
   sendReplyAction,
 } from "@/app/actions/messaging";
-import { generateReplyDraftAction } from "@/app/actions/ai";
+import { AiReplyPanel } from "./AiReplyPanel";
 import type { ConversationRecord, MessageRecord } from "@/lib/messaging/types";
 
 type Filter = "ALL" | "NEEDS_REPLY" | "REPLIED" | "RESOLVED";
@@ -63,7 +63,6 @@ export function MessagesInbox({
   const [showTestForm, setShowTestForm] = useState(false);
   const [testCustomer, setTestCustomer] = useState("");
   const [testBody, setTestBody] = useState("");
-  const [aiBusy, setAiBusy] = useState(false);
   const [isAiDraft, setIsAiDraft] = useState(false);
 
   const filtered = conversations.filter((c) => {
@@ -110,28 +109,13 @@ export function MessagesInbox({
 
   /**
    * §45/§89: AI generates ↓ human edits ↓ send click ↓ confirmation ↓
-   * external send。ここではdraftを生成してテキストエリアへ入れるだけ
-   * — 保存も送信もしない。このボタンを押すまでAI requestは発生しない。
+   * external send。返信案の生成そのものはAiReplyPanelが担当し、ここは
+   * 「反映された文章を受け取る」だけ —— 生成と送信を同じボタンに
+   * まとめない(§14「AI生成と送信を一体化しない」)。
    */
-  // 第六ラウンドP0-1: generateReplyDraftActionはもう例外をthrowせず
-  // `{ok, ...}`を返す(app/actions/ai.tsのコメント参照)。
-  async function handleGenerateReply() {
-    if (!selected) return;
-    setAiBusy(true);
-    setError(null);
-    try {
-      const result = await generateReplyDraftAction(selected.id);
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      setReplyBody(result.data);
-      setIsAiDraft(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "AI生成に失敗しました。");
-    } finally {
-      setAiBusy(false);
-    }
+  function handleApplyAiDraft(text: string) {
+    setReplyBody(text);
+    setIsAiDraft(true);
   }
 
   // §46: 送信前最終確認 — 「この内容で送信してもよろしいですか？」を
@@ -344,6 +328,9 @@ export function MessagesInbox({
                   </div>
                 ) : (
                   <div>
+                    <div className="mb-3">
+                      <AiReplyPanel conversationId={selected.id} onApplyToReply={handleApplyAiDraft} />
+                    </div>
                     <textarea
                       value={replyBody}
                       onChange={(e) => {
@@ -362,14 +349,6 @@ export function MessagesInbox({
                         className="bg-gray-900 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50"
                       >
                         下書きを保存
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleGenerateReply}
-                        disabled={aiBusy}
-                        className="border border-gray-300 px-3 py-1 text-[12px] text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-                      >
-                        {aiBusy ? "生成中…" : "AIで返信案を生成"}
                       </button>
                       {isAiDraft && <span className="text-[10px] text-gray-400">AI生成（未編集）</span>}
                     </div>
