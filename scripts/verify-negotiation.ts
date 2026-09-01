@@ -313,6 +313,17 @@ function testKeigoFidelity() {
 
   assertTrue(!keigo("よろしくお願いします。", "").ok, "敬語: 空の出力は不合格");
 
+  // Staging実機で起きた混入。数値は増えていないが、原文に無い話題が足された。
+  const contentAdded = keigo(
+    "かしこまりました。よろしくお願いします。",
+    "かしこまりました。よろしくお願いいたします。\n\n送料につきましては、現在確認中です。確認が完了次第、改めてご連絡させていただきます。",
+  );
+  assertTrue(!contentAdded.ok && contentAdded.codes.includes("CONTENT_ADDED"), "敬語: 原文に無い話題が足されたら弾く");
+  assertTrue(
+    keigo("在庫あります。", "在庫はございます。ご検討のほどよろしくお願いいたします。").ok,
+    "敬語: 敬語にするぶんの自然な増加は許容する",
+  );
+
   // §6.1 初回挨拶は原文に無くても足してよい。
   const greeting = "初めまして。BELLOカスタマーサービスでございます。\nこのたちはお問い合わせいただきまして、ありがとうございます。";
   assertTrue(
@@ -362,13 +373,12 @@ function testKeigoPrompt() {
     original: "在庫ございます。",
     knowledgeExcerpts: [{ title: "BELLO敬語返信ルール", excerpt: "丁寧に" }],
     greeting: "初めまして。",
-    history: [],
   });
   assertTrue(withGreeting.includes("FIRST_REPLY_GREETING"), "敬語プロンプト: 初回挨拶のブロックがある");
   assertTrue(withGreeting.includes("STAFF_DRAFT"), "敬語プロンプト: 下書きのブロックがある");
   assertTrue(withGreeting.includes("BELLO敬語返信ルール"), "敬語プロンプト: ナレッジの文体ルールを渡す");
 
-  const withoutGreeting = buildKeigoUserPrompt({ original: "はい。", knowledgeExcerpts: [], greeting: null, history: [] });
+  const withoutGreeting = buildKeigoUserPrompt({ original: "はい。", knowledgeExcerpts: [], greeting: null });
   assertTrue(withoutGreeting.includes("初めまして」は書かないでください"), "敬語プロンプト: 2回目以降は挨拶を書かないと明示する");
 }
 

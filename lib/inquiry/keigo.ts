@@ -21,6 +21,7 @@ export type KeigoViolationCode =
   | "MODEL_NUMBER_ADDED"
   | "PROMISE_STRENGTHENED"
   | "NEGATION_FLIPPED"
+  | "CONTENT_ADDED"
   | "EMPTY_OUTPUT";
 
 export interface KeigoViolation {
@@ -116,6 +117,20 @@ export function checkKeigoFidelity(params: { original: string; rewritten: string
     violations.push({ code: "NEGATION_FLIPPED", detail: "原文の否定が肯定へ反転している可能性があります。" });
   }
 
+  // 分量が大きく増えていたら、言い換えではなく内容が足されている。
+  // 具体的な数値が増えていなくても、原文に無い話題（「送料は確認中です」等）が
+  // 混ざることが実機で起きた。敬語にすると多少は長くなるので倍率で見る。
+  // comparable は挨拶を除いた本文なので、比較の基準も原文だけにする
+  // （基準に挨拶ぶんを足すと、短い下書きで1文まるごと足されても
+  //   閾値に届かなくなる）。
+  const baseLength = params.original.trim().length;
+  if (baseLength > 0 && comparable.trim().length > baseLength * 1.8 + 25) {
+    violations.push({
+      code: "CONTENT_ADDED",
+      detail: `整えた文章が原文に対して長くなりすぎています（${params.original.trim().length} → ${comparable.trim().length}文字）。内容が足された可能性があります。`,
+    });
+  }
+
   // 重複を畳む（同じ数値が複数回現れると同じ指摘が並ぶ）。
   const seen = new Set<string>();
   const unique = violations.filter((v) => {
@@ -175,11 +190,22 @@ export function buildKeigoSystemPrompt(): string {
   ].join("\n");
 }
 
+/**
+ * 敬語モードのユーザープロンプト。
+ *
+ * **会話履歴を渡さない。** 最初は文脈の参考として直近数件を入れていたが、
+ * Staging実機で「かしこまりました。よろしくお願いします。」を整えた結果に
+ * 「送料につきましては現在確認中です」という、原文に無い内容が会話履歴から
+ * 混ざった。具体的な数値は増えていないので値の検査は通ってしまう。
+ * 渡さなければ混ざりようがない。
+ *
+ * 敬語モードは「スタッフが書いたことを言い換える」だけの経路なので、
+ * 文脈を読む必要がそもそも無い。
+ */
 export function buildKeigoUserPrompt(params: {
   original: string;
   knowledgeExcerpts: { title: string; excerpt: string }[];
   greeting: string | null;
-  history: { direction: "INBOUND" | "OUTBOUND"; body: string }[];
 }): string {
   const sections: string[] = [];
   if (params.knowledgeExcerpts.length > 0) {
@@ -191,13 +217,6 @@ export function buildKeigoUserPrompt(params: {
     sections.push(`FIRST_REPLY_GREETING(この返信は初回なので、本文の前にこの挨拶を置いてください):\n${params.greeting}`);
   } else {
     sections.push("FIRST_REPLY_GREETING:\n(なし。2回目以降の返信なので「初めまして」は書かないでください)");
-  }
-  if (params.history.length > 0) {
-    sections.push(
-      `CONVERSATION_HISTORY(文脈の参考。ここから事実を足さないでください):\n${params.history
-        .map((m) => `${m.direction === "INBOUND" ? "お客様" : "BELLO"}: ${m.body.replace(/\s+/g, " ").slice(0, 200)}`)
-        .join("\n")}`,
-    );
   }
   sections.push(`STAFF_DRAFT(事実の正本。ここに書かれていることだけを整える):\n${params.original}`);
   sections.push("上記の下書きを、意味を変えずに整えた本文だけを出力してください。");

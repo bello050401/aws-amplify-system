@@ -94,8 +94,6 @@ export async function rewriteAsKeigo(params: {
     original,
     knowledgeExcerpts,
     greeting,
-    // 文脈は直近数件だけ。ここから事実を足さないようプロンプトで明示している。
-    history: params.messages.slice(-4).map((m) => ({ direction: m.direction, body: m.body })),
   });
 
   let lastViolations: KeigoViolation[] = [];
