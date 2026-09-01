@@ -1,5 +1,6 @@
 import "server-only";
 import { listKnowledgeDocuments, saveKnowledgeDocument } from "./store";
+import { BUSINESS_RULE_SEEDS } from "./businessRules";
 
 /**
  * §6/§7/§43 初期ナレッジの登録。
@@ -69,6 +70,9 @@ const SEEDS: { title: string; fileName: string; mimeType: string; content: strin
     category: "運用ルール",
     description: "AI返信の方針。ADMINが編集・差し替えできる。",
   },
+  // 敬語・値引き・配送希望日・商品状態・照明の各業務ルール。
+  // 接客文体をコードに二重管理しないため、同じ仕組みで登録する（§7/§19）。
+  ...BUSINESS_RULE_SEEDS,
 ];
 
 export interface KnowledgeSeedResult {
