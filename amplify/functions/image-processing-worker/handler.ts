@@ -80,6 +80,10 @@ function createVisionAnalyzer(): BudgetedVisionAnalyzer | undefined {
 // forループ参照)——pricing-schedulerには無い制約(あちらはBASE API
 // 呼び出しのみでI/O量が小さいため無制限に全件処理していた)。
 const MAX_JOBS_PER_RUN = 20;
+/** 1回のScanで読む件数(フィルタ適用前)。往復を減らすため必要件数より大きめに取る。 */
+const SCAN_PAGE_SIZE = 200;
+/** 走査するページ数の上限。完了済みが積み上がっても読み取り量が際限なく増えないようにする。 */
+const MAX_SCAN_PAGES = 20;
 
 interface ProcessingJobRow {
   id: string;
@@ -288,9 +292,53 @@ async function supersedeActiveVersionsExcept(imageStorageKey: string, exceptId: 
   }
 }
 
+/**
+ * PENDINGのジョブを集める。
+ *
+ * ## 直したバグ(2026-09-02、実データで再現)
+ *
+ * 以前はここが1回のScanで `Limit: MAX_JOBS_PER_RUN` を付けていた。
+ * DynamoDBの `Limit` は**フィルタ適用前に読む件数**の上限で、
+ * 「フィルタに合致する件数」ではない。ProcessingJobは完了済みの行が
+ * 積み上がるので、先頭20件がすべてDONEになった時点で、
+ * **PENDINGが何件あっても毎回0件しか返らなくなる**。
+ *
+ * 実測(Staging): 全49件(DONE 39 / PENDING 10)に対し、当時と同じ
+ * クエリを投げると returned=0 / scannedCount=20 / hasMore=true。
+ * ログにも「0 pending job(s)」が5分ごとに出続けており、
+ * **10件が2026-08-31から処理されないまま滞留していた**。
+ *
+ * 必要な件数が集まるまでページを進める。テーブル全体を無制限に読まない
+ * よう、ページ数には上限を置く(完了済みが増えても走査量が爆発しない)。
+ */
+async function fetchPendingJobs(limit: number): Promise<ProcessingJobRow[]> {
+  const jobs: ProcessingJobRow[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  let pages = 0;
+
+  do {
+    const res = await ddb.send(
+      new ScanCommand({
+        TableName: PROCESSING_JOB_TABLE,
+        FilterExpression: "#s = :pending",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: { ":pending": "PENDING" },
+        // 1ページあたりの読み取り件数。フィルタ後の件数ではないので、
+        // 必要件数より大きめに取って往復を減らす。
+        Limit: SCAN_PAGE_SIZE,
+        ExclusiveStartKey: lastKey,
+      }),
+    );
+    jobs.push(...((res.Items ?? []) as ProcessingJobRow[]));
+    lastKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+    pages++;
+  } while (lastKey && jobs.length < limit && pages < MAX_SCAN_PAGES);
+
+  return jobs.slice(0, limit);
+}
+
 export const handler = async () => {
-  const res = await ddb.send(new ScanCommand({ TableName: PROCESSING_JOB_TABLE, FilterExpression: "#s = :pending", ExpressionAttributeNames: { "#s": "status" }, ExpressionAttributeValues: { ":pending": "PENDING" }, Limit: MAX_JOBS_PER_RUN }));
-  const jobs = (res.Items ?? []) as ProcessingJobRow[];
+  const jobs = await fetchPendingJobs(MAX_JOBS_PER_RUN);
 
   // 予算は1起動ぶん。warm containerでも起動ごとに作り直す。
   const analyzer = createVisionAnalyzer();
