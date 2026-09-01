@@ -10,10 +10,17 @@ import {
   sendReplyAction,
 } from "@/app/actions/messaging";
 import { politenessRewriteAction } from "@/app/actions/inquiryReply";
+import {
+  markConversationReadAction,
+  setConversationWorkflowStatusAction,
+  deleteConversationAction,
+} from "@/app/actions/messaging";
+import { WORKFLOW_STATUS_LABEL, type ConversationWorkflowStatus } from "@/lib/messaging/types";
 import { AiReplyPanel } from "./AiReplyPanel";
+import { MessageAttachment } from "./MessageAttachment";
 import type { ConversationRecord, MessageRecord } from "@/lib/messaging/types";
 
-type Filter = "ALL" | "NEEDS_REPLY" | "REPLIED" | "RESOLVED";
+type Filter = "ALL" | "UNREAD" | "NEEDS_REPLY" | "REPLIED" | "OHARA_REVIEW" | "ICHIKAWA_REVIEW" | "RESOLVED";
 
 const CHANNEL_LABEL: Record<ConversationRecord["channel"], string> = {
   MERCARI_SHOPS: "Mercari",
@@ -73,8 +80,12 @@ export function MessagesInbox({
 
   const filtered = conversations.filter((c) => {
     if (filter === "NEEDS_REPLY") return c.needsReply;
-    if (filter === "REPLIED") return c.status === "REPLIED";
+    if (filter === "REPLIED") return c.workflowStatus === "REPLIED";
     if (filter === "RESOLVED") return c.status === "RESOLVED" || c.status === "ARCHIVED";
+    // 業務ステータスでの絞り込み(§7)。未読は技術的状態、こちらは業務の進み具合。
+    if (filter === "UNREAD") return c.isUnread;
+    if (filter === "OHARA_REVIEW") return c.workflowStatus === "OHARA_REVIEW";
+    if (filter === "ICHIKAWA_REVIEW") return c.workflowStatus === "ICHIKAWA_REVIEW";
     return true;
   });
   const selected = conversations.find((c) => c.id === selectedId) ?? null;
@@ -89,13 +100,58 @@ export function MessagesInbox({
   }
 
   useEffect(() => {
-    if (selectedId) void loadMessages(selectedId);
-    else setMessages([]);
+    if (selectedId) {
+      void loadMessages(selectedId);
+      // 【ここが唯一の既読化の入口】人が会話を開いたという操作そのもの。
+      // 一覧の描画やAI生成では呼ばない(サーバー側 markConversationRead の
+      // コメント参照)。失敗しても会話の閲覧は妨げない。
+      void markConversationReadAction(selectedId)
+        .then(() => {
+          setConversations((prev) =>
+            prev.map((c) => (c.id === selectedId ? { ...c, isUnread: false, unreadCount: 0 } : c)),
+          );
+        })
+        .catch((err) => console.error("[messages] 既読にできませんでした:", err));
+    } else {
+      setMessages([]);
+    }
     setReplyBody("");
     setIsAiDraft(false);
     setConfirmingMessageId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
+
+  async function handleChangeWorkflowStatus(status: ConversationWorkflowStatus) {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await setConversationWorkflowStatusAction(selected.id, status);
+      setConversations((prev) => prev.map((c) => (c.id === selected.id ? { ...c, workflowStatus: status } : c)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "ステータスを変更できませんでした。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteConversation() {
+    if (!selected) return;
+    // 誤操作で即時に消えないよう、必ず確認を挟む(§3)。
+    if (!window.confirm("本当に削除してもよろしいでしょうか？")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteConversationAction(selected.id);
+      setConversations((prev) => prev.filter((c) => c.id !== selected.id));
+      setSelectedId(null);
+      setMobileView("list");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "会話を削除できませんでした。");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function handleSaveDraft() {
     if (!selected || !replyBody.trim()) return;
@@ -229,7 +285,7 @@ export function MessagesInbox({
       {/* 一覧(§43)。モバイルでは詳細を見ている間`hidden`にする(§78)。 */}
       <div className={`w-full shrink-0 flex-col border-r border-gray-200 md:flex md:w-72 ${mobileView === "detail" ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1 border-b border-gray-200 px-2 py-1.5 text-[11px]">
-          {(["ALL", "NEEDS_REPLY", "REPLIED", "RESOLVED"] as Filter[]).map((f) => (
+          {(["ALL", "UNREAD", "NEEDS_REPLY", "REPLIED", "OHARA_REVIEW", "ICHIKAWA_REVIEW", "RESOLVED"] as Filter[]).map((f) => (
             <button
               key={f}
               type="button"
@@ -238,7 +294,7 @@ export function MessagesInbox({
               // 高さが要る。文字サイズは据え置きで高さだけ32pxへ。
               className={`inline-flex min-h-8 items-center px-2 py-0.5 ${filter === f ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-100"}`}
             >
-              {{ ALL: "すべて", NEEDS_REPLY: "要返信", REPLIED: "返信済み", RESOLVED: "解決済み" }[f]}
+              {{ ALL: "すべて", UNREAD: "未読", NEEDS_REPLY: "要返信", REPLIED: "返信済み", OHARA_REVIEW: "大原確認", ICHIKAWA_REVIEW: "市川確認", RESOLVED: "解決済み" }[f]}
             </button>
           ))}
         </div>
@@ -255,13 +311,23 @@ export function MessagesInbox({
               className={`block w-full border-b border-gray-100 px-3 py-2 text-left ${selectedId === c.id ? "bg-gray-100" : "hover:bg-gray-50"}`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-gray-400">{CHANNEL_LABEL[c.channel]}</span>
-                {c.needsReply && <span className="h-1.5 w-1.5 rounded-full bg-red-600" aria-label="要返信" />}
+                {/* どのチャネルから届いたかを必ず出す(§2)。 */}
+                <span className="rounded border border-gray-200 px-1 text-[10px] text-gray-500">{CHANNEL_LABEL[c.channel]}</span>
+                <span className="flex items-center gap-1">
+                  {/* 未読は業務ステータスと別軸なので、バッジも分ける。 */}
+                  {c.isUnread && <span className="rounded bg-red-600 px-1 text-[10px] font-bold text-white">未読</span>}
+                  {c.needsReply && <span className="h-1.5 w-1.5 rounded-full bg-red-600" aria-label="要返信" />}
+                </span>
               </div>
-              <p className="truncate text-[13px] font-bold text-gray-900">{c.customerDisplayName ?? "不明な顧客"}</p>
-              <p className="truncate text-[12px] text-gray-500">{c.lastMessagePreview ?? "（本文なし）"}</p>
-              <p className="mt-0.5 text-[10px] text-gray-400">
-                {STATUS_LABEL[c.status]} ・ {c.lastMessageAt ? formatJstDateTime(c.lastMessageAt) : ""}
+              <p className={`truncate text-[13px] text-gray-900 ${c.isUnread ? "font-bold" : ""}`}>
+                {c.customerDisplayName ?? "不明な顧客"}
+              </p>
+              <p className="truncate text-[12px] text-gray-500">
+                {c.lastMessagePreview ?? "（本文なし）"}
+              </p>
+              <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-gray-400">
+                <span className="rounded bg-gray-100 px-1 text-gray-600">{WORKFLOW_STATUS_LABEL[c.workflowStatus]}</span>
+                <span>{c.lastMessageAt ? formatJstDateTime(c.lastMessageAt) : ""}</span>
               </p>
             </button>
           ))}
@@ -336,12 +402,46 @@ export function MessagesInbox({
                   )}
                 </p>
               </div>
-              {canEdit && selected.status !== "RESOLVED" && selected.status !== "ARCHIVED" && (
-                <button type="button" onClick={handleResolve} disabled={busy} className="border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">
-                  解決済みにする
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {canEdit && selected.status !== "RESOLVED" && selected.status !== "ARCHIVED" && (
+                  <button type="button" onClick={handleResolve} disabled={busy} className="border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">
+                    解決済みにする
+                  </button>
+                )}
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleDeleteConversation}
+                    disabled={busy}
+                    className="border border-red-300 px-2 py-1 text-[11px] text-red-600 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    会話を削除
+                  </button>
+                )}
+              </div>
             </div>
+
+            {/* 業務ステータス(§6)。未読/既読とは別軸なので、行を分けて置く。 */}
+            {canEdit && (
+              <div className="mb-3 flex flex-wrap items-center gap-1 border border-gray-200 bg-gray-50 p-2">
+                <span className="mr-1 text-[11px] text-gray-500">業務ステータス:</span>
+                {(["NEW", "REPLIED", "OHARA_REVIEW", "ICHIKAWA_REVIEW"] as ConversationWorkflowStatus[]).map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => void handleChangeWorkflowStatus(st)}
+                    disabled={busy}
+                    className={`border px-2 py-0.5 text-[11px] disabled:opacity-50 ${
+                      selected.workflowStatus === st
+                        ? "border-gray-900 bg-gray-900 font-bold text-white"
+                        : "border-gray-300 text-gray-600 hover:bg-white"
+                    }`}
+                  >
+                    {WORKFLOW_STATUS_LABEL[st]}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* timeline */}
             <div className="mb-4 space-y-2">
@@ -349,6 +449,17 @@ export function MessagesInbox({
               {messages.map((m) => (
                 <div key={m.id} className={`max-w-[80%] rounded p-2 text-[13px] ${m.direction === "INBOUND" ? "bg-gray-100" : "ml-auto bg-blue-50"}`}>
                   <p className="whitespace-pre-wrap">{m.body}</p>
+                  {/* 受信画像。BELLO側S3へ保存済みのものだけを出す ——
+                      LINEのURLは期限切れするので直接は参照しない。 */}
+                  {m.attachmentStatus === "STORED" && m.attachmentStorageKey && (
+                    <MessageAttachment storageKey={m.attachmentStorageKey} contentType={m.attachmentContentType} />
+                  )}
+                  {/* 取得に失敗しても会話は残る。何が起きたかを担当者に見せる。 */}
+                  {m.attachmentStatus === "FAILED" && (
+                    <p className="mt-1 border border-amber-300 bg-amber-50 p-1 text-[11px] text-amber-800">
+                      画像を取得できませんでした{m.attachmentError ? `: ${m.attachmentError}` : ""}
+                    </p>
+                  )}
                   <p className="mt-1 text-[10px] text-gray-400">
                     {m.direction === "INBOUND" ? "受信" : "送信"}
                     {m.aiGenerated && "（AI生成）"} ・{" "}

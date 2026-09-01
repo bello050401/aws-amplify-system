@@ -13,6 +13,7 @@ import {
   setConversationWorkflowStatus,
   softDeleteConversation,
 } from "@/lib/messaging/service";
+import { ATTACHMENT_PREFIX, createAttachmentViewUrl } from "@/lib/messaging/attachmentStore";
 import type { ConversationRecord, ConversationWorkflowStatus, MessageRecord } from "@/lib/messaging/types";
 
 /**
@@ -104,4 +105,33 @@ export async function resolveConversationAction(conversationId: string): Promise
   const who = await requireEditPermission();
   await resolveConversation(conversationId, who);
   revalidatePath("/inventory/messages");
+}
+
+/**
+ * 受信画像の表示用URLを作る。
+ *
+ * バケットは非公開なので、キーをそのまま <img src> にはできない。
+ * サーバー側で期限付きの署名付きURLを作って渡す。
+ *
+ * 【範囲を絞る】messaging/attachments/ 配下のキーしか受け付けない ——
+ * 引数はクライアント由来なので、任意のキーを渡されてバケット内の別の場所
+ * (在庫画像・ナレッジ原本)を読まれないようにする。
+ */
+export async function getMessageAttachmentUrlAction(
+  storageKey: string,
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  try {
+    const role = await getInventoryRole();
+    if (!role) return { ok: false, error: "ログインが必要です。" };
+
+    const key = typeof storageKey === "string" ? storageKey : "";
+    if (!key.startsWith(`${ATTACHMENT_PREFIX}/`) || key.includes("..")) {
+      return { ok: false, error: "この添付は表示できません。" };
+    }
+
+    return { ok: true, url: await createAttachmentViewUrl(key) };
+  } catch (err) {
+    console.error("[getMessageAttachmentUrlAction] failed:", err instanceof Error ? err.message : err);
+    return { ok: false, error: "画像のURLを作成できませんでした。" };
+  }
 }

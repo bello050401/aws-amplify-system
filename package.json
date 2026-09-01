@@ -57,6 +57,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1120.0",
     "@aws-sdk/client-sesv2": "^3.1121.0",
     "@aws-sdk/lib-dynamodb": "^3.1121.0",
+    "@aws-sdk/s3-request-presigner": "^3.1123.0",
     "@smithy/signature-v4": "^5.7.3",
     "aws-amplify": "^6.6.0",
     "exceljs": "^4.4.0",

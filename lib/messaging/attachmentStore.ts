@@ -86,3 +86,17 @@ export async function saveIncomingAttachment(params: {
     return { ok: false, reason: err instanceof Error ? err.message : "添付の保存に失敗しました。" };
   }
 }
+
+/**
+ * 添付を表示するための期限付きURL。
+ *
+ * バケットは非公開なので、画面側は毎回これを作り直して使う。
+ * URLそのものを保存しないのは、期限切れのURLが残ると「画像が壊れている」
+ * ように見えるため —— 保存するのはキーだけにする。
+ */
+export async function createAttachmentViewUrl(storageKey: string, expiresInSeconds = 300): Promise<string> {
+  if (!BUCKET) throw new Error("添付の保存先バケットが設定されていません。");
+  const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+  const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+  return getSignedUrl(s3(), new GetObjectCommand({ Bucket: BUCKET, Key: storageKey }), { expiresIn: expiresInSeconds });
+}
