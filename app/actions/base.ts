@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getBaseClient, BaseNotConfiguredError, type BaseItem } from "@/lib/base";
 import { BaseApiError } from "@/lib/base/client";
-import { BaseNotConnectedError, disconnectBase } from "@/lib/base/oauth";
+import { BaseNotConnectedError, BaseTokenExchangeError, disconnectBase } from "@/lib/base/oauth";
 
 /**
  * BASE商品検索のServer Action層。
@@ -49,6 +49,11 @@ function describeBaseFailure(err: unknown): { error: string; code: BaseFailureCo
       error: "BASEアカウントとの連携が完了していません。設定画面の「BASE連携」タブから接続してください。",
       code: "NOT_CONNECTED",
     };
+  }
+  if (err instanceof BaseTokenExchangeError) {
+    // トークンの更新に失敗した場合。BASE側の応答から日本語へ畳んだ説明を
+    // そのまま出す(再連携が必要なのか、時間をおけばよいのかが分かる)。
+    return { error: err.message, code: "NOT_CONNECTED" };
   }
   if (err instanceof BaseApiError) {
     // BaseApiErrorのmessageにはBASEの応答本文が入り得るので、そのままは出さない。
