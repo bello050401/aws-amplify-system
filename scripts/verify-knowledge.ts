@@ -200,7 +200,7 @@ function testSeedContent() {
 function testRevisionPruning() {
   assertEqual(MAX_REVISIONS, 2, "revisions: 保持するのは直近2世代");
 
-  const mk = (v) => ({ version: v });
+  const mk = (v: number) => ({ version: v });
   assertEqual(selectRevisionsToPrune([]), [], "revisions: 履歴が無ければ何も消さない");
   assertEqual(selectRevisionsToPrune([mk(1)]), [], "revisions: 1世代なら消さない");
   assertEqual(selectRevisionsToPrune([mk(2), mk(1)]), [], "revisions: ちょうど2世代なら消さない");
