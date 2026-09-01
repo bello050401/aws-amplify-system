@@ -9,6 +9,7 @@ import {
   resolveConversationAction,
   sendReplyAction,
 } from "@/app/actions/messaging";
+import { politenessRewriteAction } from "@/app/actions/inquiryReply";
 import { AiReplyPanel } from "./AiReplyPanel";
 import type { ConversationRecord, MessageRecord } from "@/lib/messaging/types";
 
@@ -64,6 +65,11 @@ export function MessagesInbox({
   const [testCustomer, setTestCustomer] = useState("");
   const [testBody, setTestBody] = useState("");
   const [isAiDraft, setIsAiDraft] = useState(false);
+  // 「敬語に整える」の状態。整える前の文章は戻せるように取っておく
+  // ——整えた結果が気に入らないときに、書き直しをやり直させない。
+  const [keigoBusy, setKeigoBusy] = useState(false);
+  const [keigoNotes, setKeigoNotes] = useState<string[]>([]);
+  const [keigoBefore, setKeigoBefore] = useState<string | null>(null);
 
   const filtered = conversations.filter((c) => {
     if (filter === "NEEDS_REPLY") return c.needsReply;
@@ -116,6 +122,49 @@ export function MessagesInbox({
   function handleApplyAiDraft(text: string) {
     setReplyBody(text);
     setIsAiDraft(true);
+  }
+
+  /**
+   * §4.2/§6 スタッフが書いた内容を、意味を変えずに敬語へ整える。
+   *
+   * この経路は商品検索もWeb検索も配送DBも通らない（サーバー側の
+   * politenessRewriteAction のコメント参照）。スタッフが既に答えを
+   * 決めている場面なので、調べ直す理由がない。
+   */
+  async function handleKeigo() {
+    if (!selected || !replyBody.trim()) return;
+    setKeigoBusy(true);
+    setError(null);
+    setKeigoNotes([]);
+    try {
+      const result = await politenessRewriteAction(selected.id, replyBody);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      const data = result.data;
+      if (!data.ok || !data.text) {
+        // 事実が変わっていたら採用しない。何が起きたかは担当者に見せる。
+        setError(data.failureReason ?? "敬語への変換結果を採用できませんでした。");
+        setKeigoNotes(data.ambiguityNotes);
+        return;
+      }
+      setKeigoBefore(replyBody);
+      setReplyBody(data.text);
+      setIsAiDraft(false); // 事実はスタッフの原文のまま。AI生成の下書きとは別物。
+      setKeigoNotes(data.ambiguityNotes);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "敬語への変換に失敗しました。");
+    } finally {
+      setKeigoBusy(false);
+    }
+  }
+
+  function handleUndoKeigo() {
+    if (keigoBefore === null) return;
+    setReplyBody(keigoBefore);
+    setKeigoBefore(null);
+    setKeigoNotes([]);
   }
 
   // §46: 送信前最終確認 — 「この内容で送信してもよろしいですか？」を
@@ -350,8 +399,34 @@ export function MessagesInbox({
                       >
                         下書きを保存
                       </button>
+                      <button
+                        type="button"
+                        onClick={handleKeigo}
+                        disabled={keigoBusy || !replyBody.trim()}
+                        title="書いた内容の意味は変えずに、丁寧な言い回しへ整えます"
+                        className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        {keigoBusy ? "整えています…" : "敬語に整える"}
+                      </button>
+                      {keigoBefore !== null && (
+                        <button
+                          type="button"
+                          onClick={handleUndoKeigo}
+                          className="border border-gray-300 px-3 py-1 text-[12px] text-gray-600 hover:bg-gray-50"
+                        >
+                          元に戻す
+                        </button>
+                      )}
                       {isAiDraft && <span className="text-[10px] text-gray-400">AI生成（未編集）</span>}
                     </div>
+                    {/* §6.3 曖昧な原文の注意。顧客には送られない、担当者向けの表示。 */}
+                    {keigoNotes.length > 0 && (
+                      <ul className="mt-2 border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
+                        {keigoNotes.map((note, i) => (
+                          <li key={i}>・{note}</li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
               </div>

@@ -31,6 +31,13 @@ import {
   extractRequestedDeliveryDate,
   STANDARD_DELIVERY_WINDOW_DAYS,
 } from "@/lib/inquiry/deliveryWindow";
+import {
+  buildKeigoSystemPrompt,
+  buildKeigoUserPrompt,
+  checkKeigoFidelity,
+  detectAmbiguity,
+  isFirstOutgoingReply,
+} from "@/lib/inquiry/keigo";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 
 let failures = 0;
@@ -255,6 +262,116 @@ function testDeliveryDateExtraction() {
   assertTrue(!detectDeliveryDateIntent("営業時間は何時までですか"), "配送意図: 営業時間の質問を拾わない");
 }
 
+
+// ── §6/§29 敬語に整える ─────────────────────────────────────────
+
+function keigo(original: string, rewritten: string, greeting?: string) {
+  const r = checkKeigoFidelity({ original, rewritten, allowedGreeting: greeting });
+  return { ok: r.ok, codes: r.violations.map((v) => v.code) };
+}
+
+function testKeigoFidelity() {
+  assertTrue(
+    keigo("明日発送できます。送料は確認します。", "明日発送させていただきます。送料につきましては確認のうえご連絡いたします。").ok,
+    "敬語: 意味を変えない言い換えは通る",
+  );
+
+  // §29-3 未確定の送料を確定させない。
+  const strengthened = keigo("明日発送できます。送料は確認します。", "明日発送いたします。送料は無料で対応できます。");
+  assertTrue(!strengthened.ok, "敬語: 未確定の送料を確定として書いたら弾く");
+
+  const amountAdded = keigo("送料は確認します。", "送料は5,000円でご案内いたします。");
+  assertTrue(!amountAdded.ok && amountAdded.codes.includes("AMOUNT_ADDED"), "敬語: 原文に無い金額を足したら弾く");
+
+  const dateAdded = keigo("発送日はお知らせします。", "9月15日に発送いたします。");
+  assertTrue(!dateAdded.ok, "敬語: 原文に無い日付を足したら弾く");
+
+  const measureAdded = keigo("サイズはご確認ください。", "幅120cmでございます。");
+  assertTrue(!measureAdded.ok, "敬語: 原文に無い寸法を足したら弾く");
+
+  const modelAdded = keigo("こちらの照明です。", "型番AW-0573の照明でございます。");
+  assertTrue(!modelAdded.ok && modelAdded.codes.includes("MODEL_NUMBER_ADDED"), "敬語: 原文に無い型番を足したら弾く");
+
+  const urlAdded = keigo("商品ページをご覧ください。", "商品ページ https://example.com/x をご覧ください。");
+  assertTrue(!urlAdded.ok && urlAdded.codes.includes("URL_ADDED"), "敬語: 原文に無いURLを足したら弾く");
+
+  // §6.2 約束を強めない。
+  const promise = keigo("在庫を確認します。", "在庫はご用意できます。");
+  assertTrue(!promise.ok && promise.codes.includes("PROMISE_STRENGTHENED"), "敬語: 「確認します」を「ご用意できます」へ強めたら弾く");
+
+  const possibility = keigo("配送が遅れる可能性があります。", "配送は可能です。");
+  assertTrue(!possibility.ok, "敬語: 「可能性があります」を「可能です」へ強めたら弾く");
+
+  const flipped = keigo("お値引きはできません。", "お値引きできます。");
+  assertTrue(!flipped.ok && flipped.codes.includes("NEGATION_FLIPPED"), "敬語: 否定を肯定へ反転したら弾く");
+
+  // §29-4 原文にある数字・型番・金額はそのまま残ってよい。
+  assertTrue(
+    keigo("価格は38,500円です。型番はAW-0573です。", "価格は38,500円でございます。型番はAW-0573でございます。").ok,
+    "敬語: 原文にある金額・型番はそのまま残せる",
+  );
+
+  assertTrue(!keigo("よろしくお願いします。", "").ok, "敬語: 空の出力は不合格");
+
+  // §6.1 初回挨拶は原文に無くても足してよい。
+  const greeting = "初めまして。BELLOカスタマーサービスでございます。\nこのたちはお問い合わせいただきまして、ありがとうございます。";
+  assertTrue(
+    keigo("在庫ございます。", `${greeting}\n在庫はございます。`, greeting).ok,
+    "敬語: 許可された初回挨拶は「原文に無い」として弾かない",
+  );
+}
+
+function testFirstReplyDetection() {
+  const inbound = { direction: "INBOUND" as const, deliveryStatus: "RECEIVED" };
+  assertTrue(isFirstOutgoingReply([inbound]), "初回判定: 受信だけなら初回");
+  assertTrue(isFirstOutgoingReply([]), "初回判定: メッセージが無くても初回");
+
+  // §6.1 AI下書きがあるだけでは「返信済み」にしない。
+  assertTrue(
+    isFirstOutgoingReply([inbound, { direction: "OUTBOUND", deliveryStatus: "DRAFT" }]),
+    "初回判定: 下書き(DRAFT)があるだけでは返信済みにしない",
+  );
+  assertTrue(
+    !isFirstOutgoingReply([inbound, { direction: "OUTBOUND", deliveryStatus: "SENT" }]),
+    "初回判定: 実際に送信済みの返信があれば初回ではない",
+  );
+  assertTrue(
+    !isFirstOutgoingReply([inbound, { direction: "OUTBOUND", deliveryStatus: "SENDING" }]),
+    "初回判定: 送信中も初回ではない",
+  );
+  assertTrue(
+    isFirstOutgoingReply([inbound, { direction: "OUTBOUND", deliveryStatus: "FAILED" }]),
+    "初回判定: 送信に失敗した返信は「送れていない」ので初回のまま",
+  );
+}
+
+function testAmbiguityDetection() {
+  assertTrue(detectAmbiguity("たぶん明日には発送できます").length > 0, "曖昧: 推量表現を検出する");
+  assertTrue(detectAmbiguity("それで大丈夫です").length > 0, "曖昧: 指示語を検出する");
+  assertTrue(detectAmbiguity("早めに発送します").length > 0, "曖昧: 時期の曖昧表現を検出する");
+  assertEqual(detectAmbiguity("9月15日に発送いたします。送料は1,200円です。"), [], "曖昧: 具体的な文は警告しない");
+}
+
+function testKeigoPrompt() {
+  const system = buildKeigoSystemPrompt();
+  assertTrue(system.includes("事実の正本"), "敬語プロンプト: 下書きが事実の正本だと明示する");
+  assertTrue(system.includes("下書きに無い情報を足さない"), "敬語プロンプト: 情報を足さないと明示する");
+  assertTrue(system.includes("商品を調べたり"), "敬語プロンプト: 調べ直さないと明示する");
+
+  const withGreeting = buildKeigoUserPrompt({
+    original: "在庫ございます。",
+    knowledgeExcerpts: [{ title: "BELLO敬語返信ルール", excerpt: "丁寧に" }],
+    greeting: "初めまして。",
+    history: [],
+  });
+  assertTrue(withGreeting.includes("FIRST_REPLY_GREETING"), "敬語プロンプト: 初回挨拶のブロックがある");
+  assertTrue(withGreeting.includes("STAFF_DRAFT"), "敬語プロンプト: 下書きのブロックがある");
+  assertTrue(withGreeting.includes("BELLO敬語返信ルール"), "敬語プロンプト: ナレッジの文体ルールを渡す");
+
+  const withoutGreeting = buildKeigoUserPrompt({ original: "はい。", knowledgeExcerpts: [], greeting: null, history: [] });
+  assertTrue(withoutGreeting.includes("初めまして」は書かないでください"), "敬語プロンプト: 2回目以降は挨拶を書かないと明示する");
+}
+
 function main() {
   testDiscountIntent();
   testBaseDiscount();
@@ -264,6 +381,10 @@ function main() {
   testDaysOnSale();
   testDeliveryWindow();
   testDeliveryDateExtraction();
+  testKeigoFidelity();
+  testFirstReplyDetection();
+  testAmbiguityDetection();
+  testKeigoPrompt();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

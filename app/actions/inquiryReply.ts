@@ -6,6 +6,7 @@ import { getConversation, listMessages } from "@/lib/messaging/service";
 import { generateInquiryReplyDraft } from "@/lib/inquiry/pipeline";
 import { latestReplyDraftFor, markReplyDraftStatus, saveReplyDraft } from "@/lib/inquiry/draftStore";
 import { getAIReplySettings } from "@/lib/inquiry/settings";
+import { rewriteAsKeigo, type KeigoRewriteResult } from "@/lib/inquiry/keigoService";
 import type { ReplyDraftRecord } from "@/lib/inquiry/types";
 
 /**
@@ -151,5 +152,47 @@ export async function getInquiryReplyAvailabilityAction(): Promise<ActionResult<
   } catch (err) {
     logActionFailure("getInquiryReplyAvailabilityAction", correlationId, {}, err);
     return { ok: false, error: safeErrorMessage(err, "AI返信設定の取得に失敗しました。"), correlationId };
+  }
+}
+
+/**
+ * §4.2/§6 スタッフの下書きを敬語へ整える。
+ *
+ * この経路は商品検索・配送DB・Web検索・BASE APIを**一切通らない**。
+ * lib/inquiry/keigoService.ts のimportを見れば、その保証が読み取れる。
+ * スタッフが既に答えを決めている場面なので、調べ直す理由がなく、
+ * 調べ直せばそのぶん下書きに無い事実が混ざる入口になる。
+ */
+export async function politenessRewriteAction(
+  conversationId: string,
+  draftText: string,
+): Promise<ActionResult<KeigoRewriteResult>> {
+  const correlationId = randomUUID();
+  const startedAt = Date.now();
+  try {
+    await requireEditPermission();
+    const messages = await listMessages(conversationId);
+    const result = await rewriteAsKeigo({
+      original: draftText,
+      messages: messages.map((m) => ({ direction: m.direction, deliveryStatus: m.deliveryStatus, body: m.body })),
+    });
+    // §26: モード・結果・所要時間だけを残す。下書き本文は残さない。
+    console.info(
+      "[inquiryReply] keigo",
+      JSON.stringify({
+        conversationId,
+        mode: "keigo",
+        ok: result.ok,
+        greetingApplied: result.greetingApplied,
+        knowledgeDocsCount: result.knowledgeTitles.length,
+        webSearchCount: 0,
+        violationCodes: result.violations.map((v) => v.code),
+        durationMs: Date.now() - startedAt,
+      }),
+    );
+    return { ok: true, data: result };
+  } catch (err) {
+    logActionFailure("politenessRewriteAction", correlationId, { conversationId }, err);
+    return { ok: false, error: safeErrorMessage(err, "敬語への変換に失敗しました。"), correlationId };
   }
 }
