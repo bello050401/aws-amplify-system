@@ -2,7 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { randomUUID } from "node:crypto";
 import {
   listShippingRates,
   saveShippingRate,
@@ -14,7 +13,6 @@ import {
   type ShippingEstimateResult,
   type GetShippingReferencePriceResult,
 } from "@/lib/shipping/service";
-import { runShippingRateImportBatch, getLatestShippingImportBatch, type ShippingImportBatchSummary, type RunImportResult } from "@/lib/shipping/importer";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 
@@ -76,53 +74,4 @@ export async function getShippingReferencePriceAction(inventoryId: string): Prom
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 第六ラウンド§11(P0-2): 公式料金importer。新規コードのため、
-// app/actions/ai.tsで確立した「throwではなくreturnでエラーを伝える」
-// パターン(production buildでのNext.js Server Actionメッセージmasking
-// を回避する、docs/ai-draft-error-root-cause-20260830.md参照)を最初
-// から採用する。
-// ─────────────────────────────────────────────────────────────────────
 
-function logShippingActionFailure(action: string, correlationId: string, err: unknown): void {
-  console.error(
-    JSON.stringify({
-      level: "error",
-      action,
-      correlationId,
-      timestamp: new Date().toISOString(),
-      errorMessage: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined,
-    }),
-  );
-}
-
-export type RunShippingImportActionResult = { ok: true; data: RunImportResult } | { ok: false; error: string; correlationId: string };
-
-/** §11「公式料金を更新」action。ADMIN限定、background job化(ここではServer Action自体が処理する——実際の外部fetchが失敗する場合の扱いはlib/shipping/importer.tsのコメント参照)。 */
-export async function runShippingRateImportAction(): Promise<RunShippingImportActionResult> {
-  const correlationId = randomUUID();
-  try {
-    const who = await requireAdmin();
-    const data = await runShippingRateImportBatch(who);
-    revalidatePath("/inventory/settings");
-    return { ok: true, data };
-  } catch (err) {
-    logShippingActionFailure("runShippingRateImportAction", correlationId, err);
-    return { ok: false, error: err instanceof Error ? err.message : "公式料金の取得に失敗しました。", correlationId };
-  }
-}
-
-export type GetLatestShippingImportBatchActionResult = { ok: true; data: ShippingImportBatchSummary | null } | { ok: false; error: string; correlationId: string };
-
-export async function getLatestShippingImportBatchAction(): Promise<GetLatestShippingImportBatchActionResult> {
-  const correlationId = randomUUID();
-  try {
-    const role = await getInventoryRole();
-    if (!role) throw new Error("ログインが必要です。");
-    const data = await getLatestShippingImportBatch();
-    return { ok: true, data };
-  } catch (err) {
-    logShippingActionFailure("getLatestShippingImportBatchAction", correlationId, err);
-    return { ok: false, error: err instanceof Error ? err.message : "取得状況の確認に失敗しました。", correlationId };
-  }
-}

@@ -1,10 +1,8 @@
 "use client";
 
-import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { useEffect, useState } from "react";
-import { listShippingRatesAction, saveShippingRateAction, deleteShippingRateAction, runShippingRateImportAction, getLatestShippingImportBatchAction } from "@/app/actions/shipping";
+import { listShippingRatesAction, saveShippingRateAction, deleteShippingRateAction } from "@/app/actions/shipping";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
-import type { ShippingImportBatchSummary } from "@/lib/shipping/importer";
 import { SHIPPING_RANKS, SHIPPING_RANK_LABEL, type ShippingRank } from "@/lib/shipping/rank";
 import { JAPAN_PREFECTURES, SHIPPING_ORIGIN_PREFECTURE } from "@/lib/shipping/prefectures";
 
@@ -40,41 +38,13 @@ export function ShippingRatePanel() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [showForm, setShowForm] = useState(false);
-  // 第六ラウンド§11(P0-2): 埼玉発料金データの取得状況表示 + 「公式料金を更新」action。
-  const [importBatch, setImportBatch] = useState<ShippingImportBatchSummary | null>(null);
-  const [importBusy, setImportBusy] = useState(false);
-  const [importMessage, setImportMessage] = useState<string | null>(null);
 
   async function reload() {
     setRates(await listShippingRatesAction());
   }
 
-  async function reloadImportStatus() {
-    const result = await getLatestShippingImportBatchAction();
-    if (result.ok) setImportBatch(result.data);
-  }
-
-  async function handleRunImport() {
-    setImportBusy(true);
-    setImportMessage(null);
-    try {
-      const result = await runShippingRateImportAction();
-      if (!result.ok) {
-        setImportMessage(result.error);
-        return;
-      }
-      setImportMessage(result.data.status === "COMPLETED" ? "取得処理が完了しました。" : `取得処理が失敗しました: ${result.data.reason ?? ""}`);
-      await Promise.all([reload(), reloadImportStatus()]);
-    } catch (err) {
-      setImportMessage(err instanceof Error ? err.message : "公式料金の取得に失敗しました。");
-    } finally {
-      setImportBusy(false);
-    }
-  }
-
   useEffect(() => {
     void reload();
-    void reloadImportStatus();
   }, []);
 
   function startNew() {
@@ -146,38 +116,12 @@ export function ShippingRatePanel() {
         発送元は{SHIPPING_ORIGIN_PREFECTURE}固定です。発送先都道府県・サイズランクごとの料金（税込）を登録すると、EC出品画面の送料見積り・AI返信案作成で使われます。
       </p>
       <details className="mb-3 text-[11px] text-gray-400">
-        <summary className="cursor-pointer">詳細（料金データの出典について）</summary>
+        <summary className="cursor-pointer">詳細（料金データの扱いについて）</summary>
         <p className="mt-1">
-          公式の料金検索ツールはフォーム入力・セッション経由の動的な見積りのため、この開発環境から自動取得できませんでした。初期値として、Web検索で実際に確認できた埼玉→東京のB/Cランクの2件のみを登録しています。それ以外の行は、公式サイト（アートセッティングデリバリー
-          家財おまかせ便）の料金検索結果を確認のうえ、このフォームから追加してください。出典欄に確認元（URLや確認日）を残すことを推奨します。
+          配送料金はBELLO内部のこの表を正本として運用します。公式サイトからの自動取得は行いません（フォーム入力・セッション経由の動的な見積りで、安定して取得できないため）。
+          料金を変更する場合はこの画面から編集し、出典欄に確認元（URLや確認日）を残してください。値引き計算・送料回答・AI返信案は、すべてこの表を参照します。
         </p>
       </details>
-
-      {/* 第六ラウンド§11: 埼玉発料金データの取得状況 + 「公式料金を更新」action。 */}
-      <div className="mb-4 border border-gray-200 bg-gray-50 p-3 text-[12px]">
-        <p className="mb-1 font-bold text-gray-700">埼玉発料金データ(公式Web取得)</p>
-        {importBatch ? (
-          <ul className="mb-2 space-y-0.5 text-gray-600">
-            <li>最終実行: {formatJstDateTime(importBatch.startedAt)}（status: {importBatch.status}）</li>
-            <li>
-              取得済み: {importBatch.verifiedCells}件 / 配送不可: {importBatch.unavailableCells}件 / 未取得: {importBatch.missingCells}件 / 失敗:{" "}
-              {importBatch.failedCells}件
-            </li>
-            {importBatch.lastError && <li className="text-red-600">前回エラー: {importBatch.lastError}</li>}
-          </ul>
-        ) : (
-          <p className="mb-2 text-gray-400">まだ実行履歴がありません。</p>
-        )}
-        <button
-          type="button"
-          onClick={handleRunImport}
-          disabled={importBusy}
-          className="border border-gray-900 px-3 py-1 text-[12px] font-bold text-gray-900 hover:bg-white disabled:opacity-50"
-        >
-          {importBusy ? "取得中…" : "公式料金を更新"}
-        </button>
-        {importMessage && <p className="mt-2 text-[11px] text-gray-600">{importMessage}</p>}
-      </div>
 
       <div className="overflow-x-auto border border-gray-200">
         <table className="w-full min-w-[560px] border-collapse text-[13px]">

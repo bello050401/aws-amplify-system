@@ -9,7 +9,7 @@ import { calculateShippingRankFromSum, calculateShippingRankFromDimensions, pars
 import type { ShippingRank } from "@/lib/shipping/rank";
 import { SHIPPING_RATE_SEED, HOKKAIDO_AREA_BY_MUNICIPALITY, HOKKAIDO_AREAS, lookupShippingRate, resolveHokkaidoArea } from "@/lib/shipping/ratesSeed";
 import { calculateMedian, pickLatestPerPrefecture, buildShippingReferencePriceView, MIN_DISTINCT_REGIONS_FOR_MEDIAN, REGION_DIFFERENCE_THRESHOLD_YEN } from "@/lib/shipping/referencePrice";
-import { buildExpectedMatrix, computeMatrixCompleteness, computeRawHash, ALL_SHIPPING_RANKS } from "@/lib/shipping/importer";
+import { buildExpectedMatrix, computeMatrixCompleteness, computeRawHash, ALL_SHIPPING_RANKS } from "@/lib/shipping/matrix";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 
 let failures = 0;
