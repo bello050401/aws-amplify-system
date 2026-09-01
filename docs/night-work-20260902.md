@@ -317,3 +317,52 @@ LINEのコンテンツAPIから実体を取り、BELLO側S3(`messaging/attachmen
 | 売上集計の高速化 | 集計対象が母集団の85%で、絞り込みでは改善しない。集計方式の設計変更が必要。 |
 | 画像一覧の転送量 | 画像加工の master/web/thumb と統合して設計する方針のため、単独では着手しない(指示書の指定どおり)。 |
 | LINEからの実受信E2E(テキスト・画像) | 外部からのメッセージ送信が必要。 |
+
+---
+
+## 8. 画像加工 — 実測で見つけた2件
+
+### ジョブが10件、5日間ずっと処理されていなかった(修正済み・実機確認済み)
+
+image-processing-worker のログには5分ごとに `0 pending job(s)` が出て
+いたのに、ProcessingJob には `status=PENDING` が**10件**あり、最古は
+2026-08-31 だった。画像加工を依頼しても永久に処理されない状態。
+
+**原因**: pending取得が1回のScanで `Limit: 20` を付けていた。
+DynamoDBの `Limit` は**フィルタ適用前に読む件数**の上限で、「合致した
+件数」ではない。完了済みの行が積み上がり、先頭20件がすべてDONEに
+なった時点から、PENDINGが何件あっても毎回0件しか返らなくなる。
+
+当時と同じクエリを実データへ投げて再現:
+
+```
+returned=0 / scannedCount=20 / hasMore=true    （全49件: DONE 39 / PENDING 10）
+```
+
+「0件」はテーブルの状態ではなく、読み方の結果だった。
+
+**修正**: 必要件数が集まるまでページを進める(1ページ200件・最大20ページ)。
+
+**実機確認**:
+
+| 時刻(UTC) | ログ |
+|---|---|
+| 17:45 | `0 pending job(s)` |
+| 17:50 | `0 pending job(s)` |
+| **17:55** | **`10 pending job(s)`** ← 修正後の初回実行 |
+
+その後 ProcessingJob は **49件すべて DONE**(PENDING 0)。
+
+### 保持期間の判定が実在しないstatusを見ていた(修正済み)
+
+`status !== "COMPLETED"` を条件にしていたが、ImageProcessingStatus に
+`COMPLETED` は存在しない(UNPROCESSED / QUEUED / PROCESSING / READY /
+NEEDS_REVIEW / FAILED / REPROCESSING / SUPERSEDED)。つまり
+「動くように見えて何も削除対象にならない」状態だった。自分で書いた
+検証が通っていたのは、fixtureにも同じ架空のstatusを書いていたから。
+
+実データを数えて(NEEDS_REVIEW 33 / READY 6)気づき、削除対象を
+READY と SUPERSEDED に限定。NEEDS_REVIEW は人がまだ採否を決めていない
+状態なので消さない(実データの85%がこれ)。
+
+現時点の判定結果(削除は実行していない): 版39件 / 採用済み6 / 削除対象 **0**。
