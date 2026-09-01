@@ -15,6 +15,7 @@ import {
 import type { KnowledgeDocumentRecord } from "@/lib/knowledge/store";
 import type { AIReplySettings } from "@/lib/inquiry/settings";
 import { KNOWLEDGE_ALLOWED_EXTENSIONS, KNOWLEDGE_MAX_FILE_BYTES } from "@/lib/knowledge/limits";
+import { KnowledgeEditor } from "./KnowledgeEditor";
 import { MarkdownPreview } from "./MarkdownPreview";
 
 /**
@@ -43,6 +44,9 @@ export function KnowledgeSettingsPanel() {
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const [replaceTargetId, setReplaceTargetId] = useState<string | null>(null);
+  // 編集は1文書ずつ。複数を同時に開けると、どれを保存しようとしているのか
+  // 分からなくなる(そして競合検知のversionも取り違えやすい)。
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
     void refresh();
@@ -323,6 +327,15 @@ export function KnowledgeSettingsPanel() {
                     <button type="button" onClick={() => void handlePreview(doc)} disabled={busy} className="border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-50 disabled:opacity-40">
                       {preview?.id === doc.id ? "閉じる" : "プレビュー"}
                     </button>
+                    {/* 編集と削除は別のボタンに分ける(§削除操作と本文編集を分離)。 */}
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(editingId === doc.id ? null : doc.id)}
+                      disabled={busy}
+                      className="border border-gray-900 px-2 py-1 text-[11px] font-bold text-gray-900 hover:bg-gray-50 disabled:opacity-40"
+                    >
+                      {editingId === doc.id ? "編集を閉じる" : "編集"}
+                    </button>
                     <button type="button" onClick={() => void handleDownload(doc)} disabled={busy} className="border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-50 disabled:opacity-40">
                       ダウンロード
                     </button>
@@ -342,6 +355,9 @@ export function KnowledgeSettingsPanel() {
                     </button>
                   </div>
                 </div>
+                {editingId === doc.id && (
+                  <KnowledgeEditor doc={doc} onSaved={() => void refresh()} />
+                )}
                 {preview?.id === doc.id && (
                   <div className="mt-3 max-h-80 overflow-y-auto border border-gray-200 bg-gray-50 p-3">
                     <MarkdownPreview source={preview.content} plain={!/\.(md|markdown)$/i.test(preview.fileName)} />

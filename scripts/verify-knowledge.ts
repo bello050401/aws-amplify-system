@@ -21,6 +21,7 @@ import { KNOWLEDGE_ALLOWED_EXTENSIONS, KNOWLEDGE_MAX_FILE_BYTES, KNOWLEDGE_SEARC
 import { markdownToPlainText, parseInline, parseMarkdown, sanitizeLinkHref } from "@/lib/knowledge/markdown";
 import { buildSearchText } from "@/lib/knowledge/store";
 import { KNOWLEDGE_SEED_BASIC_INFO, KNOWLEDGE_SEED_REPLY_RULES } from "@/lib/knowledge/seed";
+import { MAX_REVISIONS, selectRevisionsToPrune } from "@/lib/knowledge/revisions";
 
 let failures = 0;
 let passes = 0;
@@ -191,8 +192,39 @@ function testSeedContent() {
   assertTrue(rules.ok, "初期文書: AI問い合わせ返信ルール.mdはアップロード検証を通る");
 }
 
+/**
+ * 版の保持数。「現在版＋直近2世代」という要件そのもの。
+ * 消しすぎ(戻せない)も残しすぎ(消したはずの記述が残り続ける)も困るので、
+ * 境界を固定しておく。
+ */
+function testRevisionPruning() {
+  assertEqual(MAX_REVISIONS, 2, "revisions: 保持するのは直近2世代");
+
+  const mk = (v) => ({ version: v });
+  assertEqual(selectRevisionsToPrune([]), [], "revisions: 履歴が無ければ何も消さない");
+  assertEqual(selectRevisionsToPrune([mk(1)]), [], "revisions: 1世代なら消さない");
+  assertEqual(selectRevisionsToPrune([mk(2), mk(1)]), [], "revisions: ちょうど2世代なら消さない");
+  assertEqual(
+    selectRevisionsToPrune([mk(3), mk(2), mk(1)]).map((r) => r.version),
+    [1],
+    "revisions: 3世代目からは古いものを消す",
+  );
+  assertEqual(
+    selectRevisionsToPrune([mk(5), mk(4), mk(3), mk(2), mk(1)]).map((r) => r.version),
+    [3, 2, 1],
+    "revisions: 新しい2つを残し、それより古いものを全部消す",
+  );
+  // 並び順に依存しないこと。呼び出し側が並べ忘れても新しい版を消さない。
+  assertEqual(
+    selectRevisionsToPrune([mk(1), mk(3), mk(2)]).map((r) => r.version),
+    [1],
+    "revisions: 入力がばらばらでも、消すのは常に古い方",
+  );
+}
+
 function main() {
   testUploadValidation();
+  testRevisionPruning();
   testFileNameSanitization();
   testMarkdownSafety();
   testSearchTextBuilding();

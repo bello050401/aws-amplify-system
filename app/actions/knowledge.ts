@@ -1,6 +1,7 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
+import { saveKnowledgeBody, listRevisions, restoreKnowledgeRevision, type KnowledgeRevisionRecord } from "@/lib/knowledge/revisions";
 import { revalidatePath } from "next/cache";
 import { getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
@@ -197,5 +198,75 @@ export async function updateAIReplySettingsAction(patch: {
   } catch (err) {
     logActionFailure("updateAIReplySettingsAction", correlationId, {}, err);
     return { ok: false, error: safeErrorMessage(err, "AI返信設定の保存に失敗しました。"), correlationId };
+  }
+}
+
+/**
+ * ナレッジ文書の本文をその場で編集して保存する(ADMIN限定)。
+ *
+ * 競合検知のため、編集を始めた時点の version を必ず渡してもらう。
+ * 古い画面からの上書きで、他の人の変更を消さないようにするため。
+ */
+export async function saveKnowledgeBodyAction(input: {
+  documentId: string;
+  body: string;
+  expectedVersion: number;
+}): Promise<ActionResult<KnowledgeDocumentRecord>> {
+  const correlationId = randomUUID();
+  try {
+    const who = await requireAdmin();
+    const result = await saveKnowledgeBody({
+      documentId: String(input?.documentId ?? ""),
+      body: typeof input?.body === "string" ? input.body : "",
+      expectedVersion: Number(input?.expectedVersion),
+      who,
+    });
+    if (!result.ok) return { ok: false, error: result.message, correlationId };
+    revalidatePath("/inventory/settings");
+    return { ok: true, data: result.document };
+  } catch (err) {
+    logActionFailure("saveKnowledgeBodyAction", correlationId, { documentId: input?.documentId }, err);
+    return { ok: false, error: safeErrorMessage(err, "保存に失敗しました。"), correlationId };
+  }
+}
+
+/** 履歴一覧(旧版のみ。現在版は KnowledgeDocument 側)。 */
+export async function listKnowledgeRevisionsAction(documentId: string): Promise<ActionResult<KnowledgeRevisionRecord[]>> {
+  const correlationId = randomUUID();
+  try {
+    await requireAdmin();
+    return { ok: true, data: await listRevisions(documentId) };
+  } catch (err) {
+    logActionFailure("listKnowledgeRevisionsAction", correlationId, { documentId }, err);
+    return { ok: false, error: safeErrorMessage(err, "履歴の取得に失敗しました。"), correlationId };
+  }
+}
+
+/**
+ * 指定した版へ戻す。
+ *
+ * 「いきなり上書きしない」という要件は、**画面側が対象版の中身を見せて
+ * 確認を取ってから**このactionを呼ぶことで満たす。
+ */
+export async function restoreKnowledgeRevisionAction(input: {
+  documentId: string;
+  revisionId: string;
+  expectedVersion: number;
+}): Promise<ActionResult<KnowledgeDocumentRecord>> {
+  const correlationId = randomUUID();
+  try {
+    const who = await requireAdmin();
+    const result = await restoreKnowledgeRevision({
+      documentId: String(input?.documentId ?? ""),
+      revisionId: String(input?.revisionId ?? ""),
+      expectedVersion: Number(input?.expectedVersion),
+      who,
+    });
+    if (!result.ok) return { ok: false, error: result.message, correlationId };
+    revalidatePath("/inventory/settings");
+    return { ok: true, data: result.document };
+  } catch (err) {
+    logActionFailure("restoreKnowledgeRevisionAction", correlationId, { documentId: input?.documentId }, err);
+    return { ok: false, error: safeErrorMessage(err, "復元に失敗しました。"), correlationId };
   }
 }
