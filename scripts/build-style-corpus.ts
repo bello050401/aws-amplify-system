@@ -27,7 +27,7 @@
  * 入るのはBELLO自身が書いた**顧客向けの商品紹介文**だけで、
  * 社内メモ・価格・個人情報は入らない。
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
@@ -61,8 +61,39 @@ async function resolveInventoryTable(): Promise<string> {
   return names.find((n) => n.startsWith(`Inventory-${complete[0]}-`))!;
 }
 
+/**
+ * BASEのアーカイブJSONから読む経路。
+ *
+ * 【なぜこちらを使うのか — 実測】Inventory.note から作った当初の corpus は
+ * 2,920件中137件(4.7%)しか紹介文を取り出せなかった。同じ抽出器を実際の
+ * BASE説明文へ当てると **267件中267件(100%)** 取れる。在庫のnoteは社内
+ * メモで、BASEの説明文こそがBELLOが顧客へ向けて書いた文章なので、文体の
+ * 手本にすべきはこちら。このファイル冒頭のコメントが「BASE連携が有効に
+ * なったら同じ抽出処理をBASEへ回して corpus を差し替えられる」と書いて
+ * いた、まさにその差し替えにあたる。
+ */
+function loadBaseRows(file: string): StyleSourceRow[] {
+  const parsed = JSON.parse(readFileSync(file, "utf8")) as { items: { item_id: number | string; title: string; detail: string }[] };
+  return parsed.items.map((it) => ({
+    id: `base:${it.item_id}`,
+    name: sanitizeProductName(it.title ?? "").name,
+    description: it.detail,
+  }));
+}
+
 async function main() {
-  const maxExamples = Number(process.argv[2] ?? 40);
+  const args = process.argv.slice(2);
+  const fromBaseIndex = args.indexOf("--from-base");
+  const fromBaseFile = fromBaseIndex >= 0 ? args[fromBaseIndex + 1] : null;
+  const maxExamples = Number(args.find((a) => /^[0-9]+$/.test(a)) ?? 40);
+
+  if (fromBaseFile) {
+    const baseRows = loadBaseRows(fromBaseFile);
+    console.log(`BASEアーカイブ: ${baseRows.length}件`);
+    await emit(baseRows, maxExamples);
+    return;
+  }
+
   const table = await resolveInventoryTable();
   console.log(`inventory=${table}`);
 
@@ -88,7 +119,10 @@ async function main() {
   } while (key);
 
   console.log(`スキャン: ${scanned}件 / note付き: ${rows.length}件`);
+  await emit(rows, maxExamples);
+}
 
+async function emit(rows: StyleSourceRow[], maxExamples: number) {
   const { examples, stats } = buildStyleCorpus(rows);
 
   // 二重の網: 抽出できた文章にも、corpus へ入れたくないものが残っていないかを再確認する。
@@ -121,9 +155,17 @@ async function main() {
   });
 
   // 長い順ではなく、程よい長さのものを優先する(極端に長い例に引っ張られない)。
+  //
+  // 目標の長さは固定値ではなく**実測の中央値**にする。以前は 220 が直接
+  // 書かれていたが、これは在庫のnoteから作った corpus の中央値(159字)に
+  // 合わせた数字で、BASEの実説明文(中央値421字)へ当てると「短い例ばかりが
+  // 選ばれる」方向に偏る。母集団が変われば目標も変わるべき。
+  const sortedLengths = deduped.map((e) => e.intro.length).sort((a, b) => a - b);
+  const targetLength = sortedLengths.length ? sortedLengths[Math.floor(sortedLengths.length / 2)] : 220;
+  console.log(`例文の目標長: ${targetLength}字(実測の中央値)`);
   const picked = deduped
     .slice()
-    .sort((a, b) => Math.abs(a.intro.length - 220) - Math.abs(b.intro.length - 220))
+    .sort((a, b) => Math.abs(a.intro.length - targetLength) - Math.abs(b.intro.length - targetLength))
     .slice(0, maxExamples);
 
   const guide = deriveStyleGuide(picked, stats);
