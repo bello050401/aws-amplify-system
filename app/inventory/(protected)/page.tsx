@@ -147,6 +147,15 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
     <InventorySelectionProvider>
     <DirectEditProvider rows={rows}>
       <div className="flex h-full flex-col">
+        {/* どちらの取得経路を通ったかを、画面には出さずDOMにだけ残す。
+            速度改善が実際に効いているか、GSI経路が落ちて従来経路へ
+            退避していないかを、実機で確認できるようにするため。
+            秘密値は含まない（経路名とエラー名だけ）。 */}
+        <span
+          hidden
+          data-inventory-source={pagedResult === null ? "search" : pagedResult.usedIndex ? "index" : "fallback"}
+          data-inventory-index-error={pagedResult?.indexFailureReason ?? ""}
+        />
         <InventoryHeader
           role={role}
           center={

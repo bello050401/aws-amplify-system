@@ -63,6 +63,11 @@ export interface InventoryOffsetPage {
   hasNext: boolean;
   /** GSI経由で取得できたか。falseなら呼び出し側は従来経路へ落とす。 */
   usedIndex: boolean;
+  /**
+   * GSI経路が使えなかった理由（管理者向けの観測用。秘密値は含まない）。
+   * 正常時はnull。
+   */
+  indexFailureReason: string | null;
 }
 
 /**
@@ -78,7 +83,7 @@ export async function listInventoryOffsetPage(
 ): Promise<InventoryOffsetPage> {
   if (isE2EFixtureModeActive()) {
     const page = e2eListPage(options.offset, options.limit);
-    return { items: page.items, offset: page.offset, limit: page.limit, hasNext: page.offset + page.limit < page.total, usedIndex: true };
+    return { items: page.items, offset: page.offset, limit: page.limit, hasNext: page.offset + page.limit < page.total, usedIndex: true, indexFailureReason: null };
   }
 
   const filter = buildFilter(filters);
@@ -87,7 +92,12 @@ export async function listInventoryOffsetPage(
   let nextToken: string | null | undefined;
   let pages = 0;
 
-  do {
+  // GSI経路はあくまで高速化のための道。ここで落ちたときに画面ごと
+  // エラーにするのは割に合わない —— 実測で6回に1回、一覧が丸ごと
+  // エラー画面になった。失敗したら理由を持ち帰り、呼び出し側が従来
+  // 経路へ落とす。遅くはなるが、一覧は出る。
+  try {
+    do {
     const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.listInventoryByListingPartitionAndListUpdatedAt(
       { listingPartition: "ACTIVE" },
       {
@@ -100,15 +110,20 @@ export async function listInventoryOffsetPage(
     );
     // §13.2: errorsを無視して空配列にしない。取得エラーと0件は別物。
     if (errors) throw new Error(`在庫データの取得に失敗しました: ${errors.map((e) => e.message).join("; ")}`);
-    collected.push(...data.map(toListRow));
-    nextToken = nt;
-    pages++;
-  } while (nextToken && collected.length < needed && pages < MAX_PAGES);
+      collected.push(...data.map(toListRow));
+      nextToken = nt;
+      pages++;
+    } while (nextToken && collected.length < needed && pages < MAX_PAGES);
+  } catch (err) {
+    const reason = err instanceof Error ? `${err.name}: ${err.message}`.slice(0, 300) : "unknown";
+    console.warn("[inventoryPage] GSI経路が失敗したため従来経路へ切り替えます", { reason });
+    return { items: [], offset: options.offset, limit: options.limit, hasNext: false, usedIndex: false, indexFailureReason: reason };
+  }
 
   // GSIに1件も出てこない = バックフィル未完了の可能性。呼び出し側で
   // 従来経路へ落とせるようにする（黙って「0件」と表示しない）。
   if (collected.length === 0 && options.offset === 0 && !nextToken) {
-    return { items: [], offset: options.offset, limit: options.limit, hasNext: false, usedIndex: false };
+    return { items: [], offset: options.offset, limit: options.limit, hasNext: false, usedIndex: false, indexFailureReason: "GSIから1件も返らなかった（バックフィル未完了の可能性）" };
   }
 
   const items = collected.slice(options.offset, options.offset + options.limit);
@@ -119,6 +134,7 @@ export async function listInventoryOffsetPage(
     // 取り切れていない（まだnextTokenがある）か、今回集めた中に次ページ分が残っているか。
     hasNext: Boolean(nextToken) || collected.length > options.offset + options.limit,
     usedIndex: true,
+    indexFailureReason: null,
   };
 }
 
