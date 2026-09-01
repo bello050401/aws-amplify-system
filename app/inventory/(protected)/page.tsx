@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
   listCategories,
@@ -133,14 +132,11 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   // queries.tsのfetchAllInventoryRecordsベースのSearchPage(常に
   // `total`を含む)を返すため、これはもう「ページ内件数」へフォール
   // バックする必要がない — フィルタ/検索条件に対する正確な総件数。
+  // 検索経路はすでに件数を持っているのでそのまま出す。通常の一覧は
+  // 描画後にクライアントから取りに行く（サーバー描画に全件走査を
+  // 含めない — 含めると、その失敗が画面ごと巻き込む）。
   const totalLabel =
-    knownTotal !== null ? (
-      `${knownTotal.toLocaleString("ja-JP")}件`
-    ) : (
-      <Suspense fallback={<span className="text-gray-300">件数を集計中…</span>}>
-        <InventoryTotalCount filters={filters} />
-      </Suspense>
-    );
+    knownTotal !== null ? `${knownTotal.toLocaleString("ja-JP")}件` : <InventoryTotalCount filters={filters} />;
 
   return (
     // DirectEditProvider (一覧直接編集の状態) wraps both InventoryHeader's
