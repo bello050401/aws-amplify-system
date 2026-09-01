@@ -20,7 +20,8 @@ interface InventoryToolbarProps {
   advancedActive: boolean;
   /** searchParams.advをそのまま — パネルの開閉トグルだけでは詳細検索条件を消さないため保持しておく。 */
   advRaw?: string;
-  totalLabel: string;
+  /** 総件数の表示。Suspenseで後から差し込まれるServer Componentを受け取るためReactNode。 */
+  totalLabel: React.ReactNode;
 }
 
 /**

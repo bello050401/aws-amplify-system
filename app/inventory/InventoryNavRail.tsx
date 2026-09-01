@@ -1,6 +1,7 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useRef } from "react";
 import { BelloLogo } from "./BelloLogo";
 import { useUnsavedChanges } from "./UnsavedChangesProvider";
 
@@ -50,9 +51,29 @@ export const NAV_ITEMS = [
  * `hidden`にする(代わりにMobileBottomNav.tsxが表示される、
  * ProtectedInventoryLayout側で両方をレンダーしCSSで出し分ける)。
  */
+/**
+ * 主要ナビはhoverした時点で次の画面を先読みする（指示書§17）。
+ *
+ * このrailは未保存変更のガードのため<Link>ではなくbuttonで作られている。
+ * その副作用として、App Routerが<Link>へ自動で行うprefetchが**一切
+ * 効いていなかった** —— 毎回の遷移がサーバー往復の丸ごと待ちになる。
+ * 押す直前のhoverで先読みしておけば、実際に押したときには手元にある。
+ *
+ * 一覧400行の詳細リンクを一斉に先読みするような真似はしない（§17の
+ * 「悪い候補」）。ここで先読みするのは、サイドバーの主要5ルートだけ。
+ */
 export function InventoryNavRail() {
   const pathname = usePathname();
   const { guardedNavigate } = useUnsavedChanges();
+  const router = useRouter();
+  // 同じルートを何度も先読みしない。hoverのたびにリクエストを出すと、
+  // 先読みが目的の「待ち時間を減らす」の逆に働く。
+  const prefetchedRef = useRef<Set<string>>(new Set());
+  const prefetch = (href: string) => {
+    if (prefetchedRef.current.has(href)) return;
+    prefetchedRef.current.add(href);
+    router.prefetch(href);
+  };
 
   return (
     // No border-r on this outer element — the vertical nav-rail divider
@@ -84,6 +105,8 @@ export function InventoryNavRail() {
       <button
         type="button"
         onClick={() => guardedNavigate("/inventory")}
+        onMouseEnter={() => prefetch("/inventory")}
+        onFocus={() => prefetch("/inventory")}
         className="flex h-[var(--inventory-header-height)] items-center justify-center overflow-hidden border-b border-gray-200 px-2"
         title="在庫一覧へ戻る"
       >
@@ -119,7 +142,13 @@ export function InventoryNavRail() {
           const href = item.href;
           return (
             <li key={item.key}>
-              <button type="button" onClick={() => guardedNavigate(href)} className={`w-full ${className}`}>
+              <button
+                type="button"
+                onClick={() => guardedNavigate(href)}
+                onMouseEnter={() => prefetch(href)}
+                onFocus={() => prefetch(href)}
+                className={`w-full ${className}`}
+              >
                 {item.label}
               </button>
             </li>

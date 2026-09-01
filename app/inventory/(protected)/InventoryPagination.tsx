@@ -8,7 +8,13 @@ interface InventoryPaginationProps {
   limit: number;
   currentCount: number;
   offset: number;
-  total: number;
+  /**
+   * 総件数。null = まだ集計していない（行の表示は件数を待たない）。
+   * 「次へ」の可否はtotalではなくhasNextで判断する —— nextTokenの有無から
+   * 分かるので、全件を数えなくても正しく出せる。
+   */
+  total: number | null;
+  hasNext: boolean;
 }
 
 function hrefFor(baseParams: Record<string, string | undefined>, extra: Record<string, string | undefined>) {
@@ -63,11 +69,10 @@ function PageSizeLinks({ baseParams, limit, extraReset }: { baseParams: Record<s
  * 3つとも解消している — offsetは単なる数値なのでURLが肥大化しようが
  * ない。
  */
-export function InventoryPagination({ baseParams, offset, total, limit, currentCount }: InventoryPaginationProps) {
+export function InventoryPagination({ baseParams, offset, total, limit, currentCount, hasNext }: InventoryPaginationProps) {
   const { isDirty, guardedNavigate } = useUnsavedChanges();
   const hasPrev = offset > 0;
-  const hasNext = offset + limit < total;
-  const rangeStart = total === 0 ? 0 : offset + 1;
+  const rangeStart = currentCount === 0 ? 0 : offset + 1;
   const rangeEnd = offset + currentCount;
 
   function handleClick(e: React.MouseEvent, href: string) {
@@ -79,7 +84,8 @@ export function InventoryPagination({ baseParams, offset, total, limit, currentC
   return (
     <div className="flex items-center justify-between border-t border-gray-200 px-3 py-1.5 text-[12px] text-gray-600">
       <span>
-        {total.toLocaleString("ja-JP")}件中 {rangeStart.toLocaleString("ja-JP")}–{rangeEnd.toLocaleString("ja-JP")}件表示
+        {total === null ? "" : `${total.toLocaleString("ja-JP")}件中 `}
+        {rangeStart.toLocaleString("ja-JP")}–{rangeEnd.toLocaleString("ja-JP")}件表示
       </span>
       <div className="flex items-center gap-3">
         {hasPrev ? (

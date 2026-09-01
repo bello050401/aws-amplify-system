@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
   listCategories,
@@ -9,6 +10,8 @@ import {
   listStatuses,
 } from "@/lib/inventory/queries";
 import { buildSearchFieldDefs, completeConditions, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
+import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
+import { InventoryTotalCount } from "./InventoryTotalCount";
 import { InventoryHeader } from "../InventoryHeader";
 import { DirectEditProvider } from "./DirectEditProvider";
 import { InventorySelectionProvider } from "./InventorySelectionProvider";
@@ -77,6 +80,20 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   const fieldDefs = buildSearchFieldDefs(customFieldDefs, { categories, locations, statuses });
   const fieldsByKey = new Map(fieldDefs.map((f) => [f.key, f]));
 
+  // 検索していない通常の一覧（＝日常的に最も多い経路）は、GSIへの
+  // Queryで**表示するページだけ**を取る。従来はここで全5,313件を読んで
+  // から50件をsliceしており、実測でTTFB約8秒のほぼ全部がこれだった。
+  //
+  // テキスト検索・詳細検索は、条件がDynamoDBのKeyCondition/Filterだけ
+  // では表現できない（部分一致・AND/OR混在）ので従来経路のまま。
+  // 検索は利用者が明示的に行う操作で、一覧を開くたびに走るものではない。
+  const filters = { categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId };
+  const pagedResult = searchMode === "plain" ? await listInventoryOffsetPage(filters, { offset, limit }) : null;
+
+  // GSIに1件も出てこない場合（バックフィル未完了など）は、黙って0件と
+  // 表示せず従来経路へ落とす。§13.2「エラーや取りこぼしを0件と混同しない」。
+  const fallbackNeeded = pagedResult !== null && !pagedResult.usedIndex;
+
   const listResult =
     searchMode === "advanced" && advancedQuery
       ? await listInventoryAdvanced(advancedQuery, fieldsByKey, { offset, limit })
@@ -85,7 +102,15 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
             { q: searchParams.q, categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId },
             { offset, limit },
           )
-        : await listInventory({ categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId }, { offset, limit });
+        : fallbackNeeded
+          ? await listInventory(filters, { offset, limit })
+          : null;
+
+  const rows = listResult ? listResult.items : pagedResult!.items;
+  // 総件数は行の表示を待たせない（Suspenseで後から差し込む）。検索経路は
+  // 従来どおり集計済みの値をそのまま使う。
+  const knownTotal = listResult ? listResult.total : null;
+  const hasNext = listResult ? listResult.offset + limit < listResult.total : pagedResult!.hasNext;
 
   // Plain objects, not Maps — this now crosses into InventoryTable, a
   // Client Component (it needs to read the column-visibility preference
@@ -108,7 +133,14 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   // queries.tsのfetchAllInventoryRecordsベースのSearchPage(常に
   // `total`を含む)を返すため、これはもう「ページ内件数」へフォール
   // バックする必要がない — フィルタ/検索条件に対する正確な総件数。
-  const totalLabel = `${listResult.total.toLocaleString("ja-JP")}件`;
+  const totalLabel =
+    knownTotal !== null ? (
+      `${knownTotal.toLocaleString("ja-JP")}件`
+    ) : (
+      <Suspense fallback={<span className="text-gray-300">件数を集計中…</span>}>
+        <InventoryTotalCount filters={filters} />
+      </Suspense>
+    );
 
   return (
     // DirectEditProvider (一覧直接編集の状態) wraps both InventoryHeader's
@@ -117,7 +149,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
     // one Context so the header button can drive what the table renders.
     // See that file's own comment.
     <InventorySelectionProvider>
-    <DirectEditProvider rows={listResult.items}>
+    <DirectEditProvider rows={rows}>
       <div className="flex h-full flex-col">
         <InventoryHeader
           role={role}
@@ -165,7 +197,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1">
               <InventoryTable
-                rows={listResult.items}
+                rows={rows}
                 categories={categories}
                 locations={locations}
                 categoriesById={categoriesById}
@@ -176,10 +208,11 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
             </div>
             <InventoryPagination
               baseParams={baseParams}
-              offset={listResult.offset}
-              total={listResult.total}
+              offset={offset}
+              total={knownTotal}
               limit={limit}
-              currentCount={listResult.items.length}
+              currentCount={rows.length}
+              hasNext={hasNext}
             />
           </div>
         </div>
