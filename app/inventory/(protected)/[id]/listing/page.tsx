@@ -7,6 +7,7 @@ import { isMercariConnected } from "@/lib/listing/mercari/tokenAccess";
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingForm } from "./ListingForm";
+import { ProductPageSection } from "./ProductPageSection";
 
 /**
  * BELLO統合改修 master指示書 Phase D — 在庫詳細画面(app/inventory/
@@ -72,6 +73,11 @@ export default async function ListingPage({ params }: { params: { id: string } }
           initialChannelListing={channelListing}
           mercariConnected={mercariConnected}
         />
+        {/* BASE掲載用の商品ページ生成。出品操作とは別に置く ——
+            生成は下書きを作るだけで、外部へは何も送らない。 */}
+        <div className="mx-auto max-w-2xl">
+          <ProductPageSection inventoryId={item.id} />
+        </div>
       </div>
     </div>
   );
