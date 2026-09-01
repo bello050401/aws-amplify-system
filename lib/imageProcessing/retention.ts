@@ -11,11 +11,24 @@
  *
  * 1. `active === false` —— 採用されていない。
  * 2. 完了から14日を過ぎている —— 「あとで見よう」の余地を残す。
- * 3. 完了している(COMPLETED) —— 実行中・失敗のものは対象外。
- *    失敗の記録は原因を追うために残す価値がある。
+ * 3. status が `READY` または `SUPERSEDED` —— 成果物が実際にあり、
+ *    かつ人の判断がもう要らないもの。
  * 4. 同じ画像に対する**採用済みの版が別に存在する** —— これが最後の
  *    砦。採用版が1つも無い画像の加工結果を消すと、加工をやり直す以外に
  *    復旧手段が無くなる。
+ *
+ * ## status の扱い(実データで確認した)
+ *
+ * ImageProcessingStatus は UNPROCESSED / QUEUED / PROCESSING / READY /
+ * NEEDS_REVIEW / FAILED / REPROCESSING / SUPERSEDED の8つ。
+ * Stagingの実データ39件の内訳は NEEDS_REVIEW 33 / READY 6 だった。
+ *
+ * - `NEEDS_REVIEW` は**消さない**。人がまだ採否を決めていない状態で、
+ *   消すとその判断材料そのものが無くなる。同じ画像に採用版があっても、
+ *   見比べたい場面がある。
+ * - `FAILED` も消さない。失敗の記録は原因を追うために残す価値がある
+ *   (そもそも成果物のファイルが無いことが多い)。
+ * - 実行中(QUEUED / PROCESSING / REPROCESSING)は当然対象外。
  *
  * 4つ目は「消しすぎない」ためだけの条件で、消す量は減る。
  * それでよい —— 残しすぎは容量の問題だが、消しすぎは復旧できない。
@@ -28,6 +41,12 @@
  */
 
 export const RETENTION_DAYS = 14;
+
+/**
+ * 削除の対象になり得る status。
+ * ここに無いものは、理由を付けて必ず残す(上のコメント参照)。
+ */
+export const DELETABLE_STATUSES = new Set(["READY", "SUPERSEDED"]);
 
 export interface RetentionCandidate {
   id: string;
@@ -74,8 +93,10 @@ export function selectExpiredVersions(
       keep("採用済み");
       continue;
     }
-    if (c.status !== "COMPLETED") {
-      keep("完了していない(実行中・失敗)");
+    if (!DELETABLE_STATUSES.has(c.status)) {
+      // NEEDS_REVIEW は「人がまだ決めていない」状態なので消さない。
+      // FAILED・実行中も同様に残す。
+      keep(`削除対象の状態ではない(${c.status})`);
       continue;
     }
     if (!c.completedAt) {

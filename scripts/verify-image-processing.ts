@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { RETENTION_DAYS, selectExpiredVersions } from "@/lib/imageProcessing/retention";
+import { DELETABLE_STATUSES, RETENTION_DAYS, selectExpiredVersions } from "@/lib/imageProcessing/retention";
 import { OriginalImageMissingError } from "@/lib/inventory/originalHashRepair";
 import { parseReferenceImageKeys, serializeForAwsJson } from "@/lib/imageProcessing/photoProfile";
 /**
@@ -357,13 +357,16 @@ function testRetention() {
   const base = {
     imageStorageKey: "inventory/a.jpg",
     active: false,
-    status: "COMPLETED",
+    status: "READY",
     processedMasterKey: "m",
     webKey: "w",
     thumbnailKey: "t",
   };
 
   assertEqual(RETENTION_DAYS, 14, "retention: 保持期間は14日");
+  // 実在しないstatusで試験すると、作り話の世界を検証してしまう。
+  // ImageProcessingStatus に実際にある値だけを対象にする。
+  assertEqual([...DELETABLE_STATUSES].sort(), ["READY", "SUPERSEDED"], "retention: 削除対象の状態はREADYとSUPERSEDEDだけ");
 
   // 採用版がある画像の、14日より古い未採用版だけが消える。
   const withActive = [
@@ -395,9 +398,12 @@ function testRetention() {
     { ...base, id: "adopted", version: 9, active: true, completedAt: daysAgo(1) },
     { ...base, id: "failed", version: 1, status: "FAILED", completedAt: daysAgo(90) },
     { ...base, id: "running", version: 2, status: "PROCESSING", completedAt: null },
-    { ...base, id: "noDate", version: 3, completedAt: null },
+    // NEEDS_REVIEW は人がまだ採否を決めていない状態。実データ39件中33件が
+    // これで、消すと判断材料そのものが無くなる。
+    { ...base, id: "review", version: 3, status: "NEEDS_REVIEW", completedAt: daysAgo(90) },
+    { ...base, id: "noDate", version: 4, completedAt: null },
   ];
-  assertEqual(selectExpiredVersions(mixed, now).expired.length, 0, "retention: 採用済み・失敗・実行中・日時不明はいずれも消さない");
+  assertEqual(selectExpiredVersions(mixed, now).expired.length, 0, "retention: 採用済み・失敗・実行中・確認待ち・日時不明はいずれも消さない");
   assertTrue(
     Object.keys(selectExpiredVersions(mixed, now).keptReasons).length >= 3,
     "retention: 残した理由を内訳として説明できる",
