@@ -102,7 +102,7 @@ function Remove-ShellComments {
       if ($line.Trim() -ceq $tag) { $inHeredoc = $false; $tag = $null }
       continue
     }
-    $m = [regex]::Match($line, "<<'([A-Za-z0-9_]+)'")
+    $m = [regex]::Match($line, "<<'?([A-Za-z0-9_]+)'?")
     if ($m.Success) { $inHeredoc = $true; $tag = $m.Groups[1].Value; $out.Add($line); continue }
     if ($first) { $out.Add($line); $first = $false; continue }   # shebang は残す
     if ($line -match '^\s*#') { continue }                        # 行全体がコメント
@@ -110,6 +110,22 @@ function Remove-ShellComments {
     $out.Add($line)
   }
   return ($out -join "`n")
+}
+
+# relay/server.mjs も送信時だけコメントを落とす(リポジトリ側は注釈付きのまま)。
+# 行頭が // や JSDoc の * で始まる行だけを対象にする —— 行の途中にある
+# コメントや、正規表現リテラル(/.../)には一切触らない。素朴に `//` を
+# 探して切ると `/^\s*(?:query|mutation)/` のような正規表現を壊す。
+function Remove-JsComments {
+  param([string]$Source)
+  $kept = foreach ($line in ($Source -split "`n")) {
+    $t = $line.TrimStart()
+    if ($t -eq '') { continue }
+    if ($t.StartsWith('//')) { continue }
+    if ($t.StartsWith('/*') -or $t.StartsWith('*/') -or $t.StartsWith('* ') -or $t -eq '*') { continue }
+    $line
+  }
+  return ($kept -join "`n")
 }
 
 function Resolve-OpenSsl {
@@ -324,7 +340,18 @@ if ($instExists) {
   try {
     $utf8NoBom = New-Object Text.UTF8Encoding($false)
     # 改行はLFへ揃える(Linux側で読むため)
-    [IO.File]::WriteAllText((Join-Path $stage "server.mjs"), ([IO.File]::ReadAllText((Join-Path $repoRoot "relay/server.mjs"), $utf8Read) -replace "`r`n", "`n"), $utf8NoBom)
+    $mjsFull = [IO.File]::ReadAllText((Join-Path $repoRoot "relay/server.mjs"), $utf8Read) -replace "`r`n", "`n"
+    $mjsSlim = Remove-JsComments -Source $mjsFull
+    $stagedMjs = Join-Path $stage "server.mjs"
+    [IO.File]::WriteAllText($stagedMjs, $mjsSlim, $utf8NoBom)
+    # コメント除去でコードを壊していないことを、送る前に実際に構文検査する。
+    $prevChk = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & node --check $stagedMjs 2>&1 | Out-Null
+    $nodeCheck = $LASTEXITCODE
+    $ErrorActionPreference = $prevChk
+    if ($nodeCheck -ne 0) { throw "コメント除去後の server.mjs が構文エラーになりました。Remove-JsComments を見直してください。" }
+    Info ("server.mjs: {0} -> {1} bytes (コメント除去後、構文検査OK)" -f [Text.Encoding]::UTF8.GetByteCount($mjsFull), [Text.Encoding]::UTF8.GetByteCount($mjsSlim))
     [IO.File]::WriteAllText((Join-Path $stage "server.crt"), ($secret.serverCert -replace "`r`n", "`n"), $utf8NoBom)
     [IO.File]::WriteAllText((Join-Path $stage "server.key"), ($secret.serverKey  -replace "`r`n", "`n"), $utf8NoBom)
     [IO.File]::WriteAllText((Join-Path $stage "relay.key"),  $secret.relayKey, $utf8NoBom)
