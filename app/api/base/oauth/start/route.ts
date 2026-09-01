@@ -3,27 +3,43 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { buildAuthorizeUrl } from "@/lib/base/oauth";
 import { BaseNotConfiguredError } from "@/lib/base/errors";
-import { requireAdminOrRedirect } from "@/lib/amplify/requireAdmin";
+import { resolveAppOrigin } from "@/lib/base/redirectUri";
+import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 
 const STATE_COOKIE = "base_oauth_state";
 
 /**
- * GET /api/base/oauth/start — the "BASEアカウントを連携する" button target.
- * Only a signed-in admin can trigger this (checked below): it sends their
- * browser to BASE's consent screen, which only the actual shop owner can
- * approve — that's the one step in this whole flow that genuinely has to
- * be a human clicking through BASE's own UI.
+ * GET /api/base/oauth/start — 「BASEアカウントを連携する」ボタンの遷移先。
+ * ブラウザ自体をBASEの認可画面へ送る必要があるので、Server Actionでは
+ * なくRoute Handlerになっている。
  *
- * 失敗したら設定画面へ理由付きで戻す。以前は認証情報が無いと
- * `requireEnv` が素の Error を投げ、利用者にはNext.jsの500画面しか
- * 見えなかった —— 何をすればよいか分からない状態になる。
+ * ## 認可の門は inventory の ADMIN
+ *
+ * 以前は requireAdminOrRedirect（Cognitoグループ `Admins`）で守っていたが、
+ * このボタンを置いている /inventory/settings は `getInventoryRole()`
+ * （グループ `ADMIN`）で守られている **別の権限体系** だった。
+ * 実測: このユーザープールの利用者は `ADMIN` にのみ所属しており
+ * `Admins` には入っていない。つまり設定画面には入れるのに、ボタンを
+ * 押した瞬間だけ /admin/login へ弾かれる状態だった。
+ * ボタンを表示する画面と同じ門にする。
+ *
+ * ## リダイレクト先はヘッダから組み立てる
+ *
+ * Amplify HostingのSSRでは `request.url` のホストが `localhost:3000` に
+ * なる（実測: 本番URLへのcurlに対し Location: https://localhost:3000/... が
+ * 返っていた）。`new URL(path, request.url)` で作った戻り先は
+ * ブラウザから到達できないので、x-forwarded-host から組み立てる。
  */
 export async function GET(request: Request) {
-  const denied = await requireAdminOrRedirect(request);
-  if (denied) return denied;
-
-  const settingsUrl = new URL("/inventory/settings", request.url);
+  const origin = resolveAppOrigin(request);
+  const settingsUrl = new URL("/inventory/settings", origin);
   settingsUrl.searchParams.set("tab", "base");
+
+  if ((await getInventoryRole()) !== "ADMIN") {
+    // /inventory/login は redirect パラメータを解釈しないので付けない。
+    // そもそも設定画面を開けている時点で署名済みなので、ここは防御的な経路。
+    return NextResponse.redirect(new URL("/inventory/login", origin));
+  }
 
   const state = randomUUID();
 

@@ -1,3 +1,5 @@
+import { resolveAppOrigin } from "@/lib/http/appOrigin";
+
 /**
  * BASE OAuthの `redirect_uri` を決める。
  *
@@ -19,17 +21,9 @@
 
 export const OAUTH_CALLBACK_PATH = "/api/base/oauth/callback";
 
-/** ブラウザから見たこのアプリのオリジン（例: https://xxx.amplifyapp.com）。 */
-export function resolveAppOrigin(request: Request): string {
-  const headers = request.headers;
-  const forwardedHost = headers.get("x-forwarded-host")?.split(",")[0]?.trim();
-  const host = forwardedHost || headers.get("host")?.trim();
-  if (host) {
-    const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || (host.startsWith("localhost") ? "http" : "https");
-    return `${proto}://${host}`;
-  }
-  return new URL(request.url).origin;
-}
+// オリジンの解決自体はBASE固有ではない（管理画面のログインリダイレクトも
+// 同じ問題を持っていた）ので lib/http/appOrigin.ts に置いてある。
+export { resolveAppOrigin };
 
 /**
  * 認可URL・トークン交換の両方で使う `redirect_uri`。

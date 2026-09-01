@@ -2,31 +2,35 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { exchangeCodeForToken, BaseTokenExchangeError } from "@/lib/base/oauth";
 import { BaseNotConfiguredError } from "@/lib/base/errors";
-import { requireAdminOrRedirect } from "@/lib/amplify/requireAdmin";
+import { resolveAppOrigin } from "@/lib/base/redirectUri";
+import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 
 const STATE_COOKIE = "base_oauth_state";
 
 /**
- * GET /api/base/oauth/callback — this is exactly the URL to register as
- * the app's "Callback URL" in BASE Developers. BASE redirects the admin's
- * browser here with `?code=...&state=...` after they approve the app.
+ * GET /api/base/oauth/callback — BASE Developersへ「コールバックURL」として
+ * 登録するのはまさにこのURL。BASEは承認後、`?code=...&state=...` を付けて
+ * 管理者のブラウザをここへ戻す。
  *
- * 戻り先は設定 → BASE連携タブ。以前は /admin/settings へ戻していたが、
- * 接続操作を行う画面は /inventory/settings のBASE連携タブなので、
- * 操作を始めた場所へ結果を持って戻る。
+ * 門と戻り先の考え方は start/route.ts と同じ（同じ理由で
+ * getInventoryRole と x-forwarded-host を使う）。
  */
 export async function GET(request: Request) {
-  const denied = await requireAdminOrRedirect(request);
-  if (denied) return denied;
+  const origin = resolveAppOrigin(request);
+  const settingsUrl = new URL("/inventory/settings", origin);
+  settingsUrl.searchParams.set("tab", "base");
+
+  if ((await getInventoryRole()) !== "ADMIN") {
+    // /inventory/login は redirect パラメータを解釈しないので付けない。
+    // そもそも設定画面を開けている時点で署名済みなので、ここは防御的な経路。
+    return NextResponse.redirect(new URL("/inventory/login", origin));
+  }
 
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const expectedState = cookies().get(STATE_COOKIE)?.value;
   cookies().delete(STATE_COOKIE);
-
-  const settingsUrl = new URL("/inventory/settings", request.url);
-  settingsUrl.searchParams.set("tab", "base");
 
   const denialCode = url.searchParams.get("error");
   if (denialCode) {
