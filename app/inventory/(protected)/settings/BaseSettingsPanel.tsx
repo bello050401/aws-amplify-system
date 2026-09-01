@@ -65,10 +65,17 @@ export function BaseSettingsPanel({ state }: { state: BaseConnectionState }) {
               {state.hasOAuthToken ? "連携済み（トークンはサーバー側に保存）" : "未連携"}
             </span>
           </p>
+          {/* 表示は必ず dataSource から導く。usingRealApi の2値だと、
+              本番で認証情報が無い場合(実際にはモックへ落ちず失敗する)まで
+              「モックデータを使用中」と表示してしまう。 */}
           <p>
             商品データの取得元:{" "}
-            <span className={state.usingRealApi ? "text-green-700" : "text-amber-600"}>
-              {state.usingRealApi ? "BASEの実データ" : "開発用のモックデータ（実在しない商品）"}
+            <span className={state.dataSource === "REAL" ? "text-green-700" : state.dataSource === "MOCK" ? "text-amber-600" : "text-red-600"}>
+              {state.dataSource === "REAL"
+                ? "BASEの実データ"
+                : state.dataSource === "MOCK"
+                  ? "開発用のモックデータ（実在しない商品）"
+                  : "取得できません（接続が完了するまでBASEの商品は表示されません）"}
             </span>
           </p>
         </div>

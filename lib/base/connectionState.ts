@@ -40,10 +40,27 @@ export type BaseConnectionStatus =
   /** 明示的にモックを使う設定になっている(開発用)。 */
   | "MOCK";
 
+/**
+ * 商品データが実際にどこから来るか。
+ *
+ * 【2026-09-01 UI E2Eで発見】以前は `usingRealApi: boolean` の2値しか
+ * 持っておらず、設定画面は false のとき一律に
+ * 「開発用のモックデータ（実在しない商品）」と表示していた。
+ * ところが本番では認証情報が無いとモックへ落ちず
+ * `BaseNotConfiguredError` で失敗する(lib/base/index.ts)ため、
+ * **実際にはモックすら返らないのに「モックデータを使用中」と表示される**
+ * という食い違いが起きていた。実画面を見て初めて分かった不整合。
+ *
+ * 3値にして、表示と実挙動を一致させる。
+ */
+export type BaseDataSource = "REAL" | "MOCK" | "UNAVAILABLE";
+
 export interface BaseConnectionState {
   status: BaseConnectionStatus;
   /** 実際のBASE APIを呼ぶ構成になっているか(モックならfalse)。 */
   usingRealApi: boolean;
+  /** 商品データの取得元。UIはこれを表示する。 */
+  dataSource: BaseDataSource;
   /** Client ID / Secret が両方設定されているか。値そのものは返さない。 */
   hasAppCredentials: boolean;
   /** OAuthトークンが保存されているか。 */
@@ -86,6 +103,7 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
     return {
       status: "MOCK",
       usingRealApi: false,
+      dataSource: "MOCK",
       hasAppCredentials,
       hasOAuthToken: false,
       message: "開発用のモックデータを使う設定になっています（BASE_USE_MOCK=true）。実際のBASEの商品は表示されません。",
@@ -97,6 +115,8 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
     return {
       status: "NOT_CONFIGURED",
       usingRealApi: false,
+      // 本番では getBaseClient() がモックへ落ちずに失敗する。
+      dataSource: isProductionRuntime() ? "UNAVAILABLE" : "MOCK",
       hasAppCredentials: false,
       hasOAuthToken: false,
       message: isProductionRuntime()
@@ -115,6 +135,7 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
     return {
       status: "CREDENTIALS_ONLY",
       usingRealApi: true,
+      dataSource: "UNAVAILABLE",
       hasAppCredentials: true,
       hasOAuthToken: false,
       message: "BASEの接続状態を確認できませんでした。",
@@ -126,6 +147,8 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
     return {
       status: "CREDENTIALS_ONLY",
       usingRealApi: true,
+      // 認証情報はあるがOAuth未完了 —— 実際の取得は BaseNotConnectedError になる。
+      dataSource: "UNAVAILABLE",
       hasAppCredentials: true,
       hasOAuthToken: false,
       message: "BASEアプリの認証情報は設定済みですが、BASEアカウントとの連携（OAuth認可）がまだ完了していません。",
@@ -136,6 +159,7 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
   return {
     status: "CONNECTED",
     usingRealApi: true,
+    dataSource: "REAL",
     hasAppCredentials: true,
     hasOAuthToken: true,
     message: "接続済み（既存のBASE特集ページ連携設定を使用）。認証情報はサーバー側にのみ保存されています。",
