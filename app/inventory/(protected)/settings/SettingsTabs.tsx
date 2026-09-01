@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { MasterEntry } from "@/lib/inventory/masters";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import type { ZaicoTokenSource } from "@/lib/zaico/client";
@@ -81,6 +82,11 @@ export function SettingsTabs({
   lineConnected,
   lineTokenSource,
 }: SettingsTabsProps) {
+  // BASE OAuthのcallbackは `?tab=base` を付けてこのページへ戻る。
+  // 操作を始めたタブへ結果と一緒に戻らないと、利用者は連携が成功したのか
+  // どうかを確かめる場所を自分で探す羽目になる。
+  const initialTab = useSearchParams().get("tab");
+
   const [tab, setTab] = useState<
     | "category"
     | "unit"
@@ -97,7 +103,7 @@ export function SettingsTabs({
     | "knowledge"
     | "systemAudit"
     | "photoProfile"
-  >("category");
+  >(initialTab === "base" ? "base" : "category");
 
   const tabClass = (active: boolean) =>
     `border-b-2 px-3 py-2 text-[13px] ${active ? "border-gray-900 font-bold text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`;

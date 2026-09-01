@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { ensureSettingsBootstrap } from "@/lib/inventory/settingsBootstrap";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
@@ -71,7 +72,15 @@ export default async function InventorySettingsPage() {
 
   // BASEの接続状態(§4.2)。既存の特集ページ連携設定をそのまま参照する
   // だけで、BELLO側に新しいBASE認証情報は作らない。
-  const baseConnection = await getBaseConnectionState();
+  //
+  // hostを渡すのは、BASE Developersへ登録すべきコールバックURLを
+  // 画面に表示するため。手で組み立てさせると、そこがずれた場合の
+  // `redirect_uri_mismatch` は原因が最も分かりにくい失敗になる
+  // (lib/base/redirectUri.ts)。Amplify HostingはCloudFrontの背後に
+  // あるので、ブラウザから見えるホストは x-forwarded-host に入る。
+  const requestHeaders = headers();
+  const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
+  const baseConnection = await getBaseConnectionState(host);
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
   // とgetZaicoTokenSource()を両方呼ぶと同じ呼び出しが2回発生していた)。

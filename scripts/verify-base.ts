@@ -9,6 +9,8 @@
  * unit test対象外 — ここではエラー分類の純粋関数のみを検証する。)
  */
 import { classifyBaseHttpStatus, BaseListingApiError } from "@/lib/listing/base/errors";
+import { buildRedirectUriFromHost, resolveAppOrigin, resolveRedirectUri, OAUTH_CALLBACK_PATH } from "@/lib/base/redirectUri";
+import { resolveScope, READ_ONLY_SCOPE, READ_WRITE_SCOPE } from "@/lib/base/scope";
 
 let failures = 0;
 let passes = 0;
@@ -39,8 +41,92 @@ function testClassifyBaseHttpStatus() {
   assertEqual(err.causeMessage.includes("token expired"), true, "classifyBaseHttpStatus: causeMessage keeps the technical detail separate from the user-facing message");
 }
 
+
+/**
+ * redirect_uri は「BASE Developersへ登録した値」「認可URLの値」
+ * 「トークン交換で送る値」の3つが完全一致しなければならず、
+ * ずれたときの `redirect_uri_mismatch` は原因が最も分かりにくい。
+ * その一致を保証しているのがこの関数なので、固定して壊れないようにする。
+ */
+function makeRequest(url: string, headers: Record<string, string> = {}): Request {
+  return new Request(url, { headers });
+}
+
+function testRedirectUri() {
+  const previous = process.env.BASE_REDIRECT_URI;
+  delete process.env.BASE_REDIRECT_URI;
+
+  // Amplify HostingのSSRはCloudFrontの背後にあり、ブラウザが実際に見て
+  // いるホストは x-forwarded-host に入る。ここを取り違えると、内部の
+  // ホスト名でredirect_uriを組み立ててしまい必ずmismatchになる。
+  assertEqual(
+    resolveAppOrigin(makeRequest("https://internal.local/api/base/oauth/start", { "x-forwarded-host": "app.example.com", "x-forwarded-proto": "https" })),
+    "https://app.example.com",
+    "resolveAppOrigin: x-forwarded-host を host より優先する",
+  );
+  assertEqual(
+    resolveAppOrigin(makeRequest("https://internal.local/x", { "x-forwarded-host": "a.example.com, b.example.com" })),
+    "https://a.example.com",
+    "resolveAppOrigin: x-forwarded-host が複数値なら先頭を使う",
+  );
+  assertEqual(
+    resolveAppOrigin(makeRequest("http://localhost:3000/x", { host: "localhost:3000" })),
+    "http://localhost:3000",
+    "resolveAppOrigin: localhost は http のまま扱う",
+  );
+  assertEqual(
+    resolveRedirectUri(makeRequest("https://internal.local/x", { "x-forwarded-host": "app.example.com" })),
+    "https://app.example.com" + OAUTH_CALLBACK_PATH,
+    "resolveRedirectUri: 実際のホスト + コールバックパス",
+  );
+  assertEqual(
+    buildRedirectUriFromHost("app.example.com"),
+    "https://app.example.com" + OAUTH_CALLBACK_PATH,
+    "buildRedirectUriFromHost: 画面表示用の値が resolveRedirectUri と一致する",
+  );
+  assertEqual(buildRedirectUriFromHost(null), null, "buildRedirectUriFromHost: ホスト不明なら null（推測した値を表示しない）");
+
+  // 明示的な上書きは全経路で同じように効かなければならない。
+  // 片方だけ効くと、認可URLとトークン交換で値がずれる。
+  process.env.BASE_REDIRECT_URI = "https://custom.example.com/cb";
+  assertEqual(
+    resolveRedirectUri(makeRequest("https://internal.local/x", { "x-forwarded-host": "app.example.com" })),
+    "https://custom.example.com/cb",
+    "resolveRedirectUri: BASE_REDIRECT_URI が最優先",
+  );
+  assertEqual(
+    buildRedirectUriFromHost("app.example.com"),
+    "https://custom.example.com/cb",
+    "buildRedirectUriFromHost: 上書き時も同じ値を表示する（画面と実際の送信値がずれない）",
+  );
+
+  if (previous === undefined) delete process.env.BASE_REDIRECT_URI;
+  else process.env.BASE_REDIRECT_URI = previous;
+}
+
+/**
+ * BASE Developers側で許可されていない権限を要求すると認可自体が通らず、
+ * 読み取りすらできなくなる。read-onlyで繋げる逃げ道を必ず残す。
+ */
+function testScope() {
+  const previous = process.env.BASE_SCOPES;
+  delete process.env.BASE_SCOPES;
+
+  assertEqual(resolveScope(true), READ_WRITE_SCOPE, "resolveScope: write要求ONなら read_items write_items");
+  assertEqual(resolveScope(false), READ_ONLY_SCOPE, "resolveScope: write要求OFFなら read_items のみ");
+  assertEqual(READ_ONLY_SCOPE.includes("write"), false, "resolveScope: read-onlyスコープに write が混ざっていない");
+
+  process.env.BASE_SCOPES = "read_items read_users";
+  assertEqual(resolveScope(true), "read_items read_users", "resolveScope: BASE_SCOPES が最優先");
+
+  if (previous === undefined) delete process.env.BASE_SCOPES;
+  else process.env.BASE_SCOPES = previous;
+}
+
 function main() {
   testClassifyBaseHttpStatus();
+  testRedirectUri();
+  testScope();
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }

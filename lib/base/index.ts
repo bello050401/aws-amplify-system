@@ -1,7 +1,7 @@
 import type { BaseApiClient } from "./client";
 import { MockBaseApiClient } from "./client.mock";
 import { RealBaseApiClient } from "./client.real";
-import { hasBaseAppCredentials, isBaseMockForced, isProductionRuntime, shouldUseBaseMock } from "./connectionState";
+import { isBaseMockForced, isProductionRuntime, shouldUseBaseMock } from "./connectionState";
 
 export type { BaseApiClient } from "./client";
 export { BaseApiError } from "./client";
@@ -12,15 +12,12 @@ let instance: BaseApiClient | null = null;
 /**
  * 設定不備でBASEを呼べないことを表すエラー。呼び出し側(Server Action)は
  * これを捕まえて、利用者に分かる日本語で表示する。
+ *
+ * 定義そのものは lib/base/errors.ts へ移した —— 認証情報の解決が
+ * Secrets Manager経由（非同期）になり、oauth.ts からも投げる必要が
+ * 出たため（index.ts をimportすると循環する）。
  */
-export class BaseNotConfiguredError extends Error {
-  constructor() {
-    super(
-      "BASE APIのアプリ認証情報（BASE_CLIENT_ID / BASE_CLIENT_SECRET）が設定されていないため、BASEの商品を取得できません。",
-    );
-    this.name = "BaseNotConfiguredError";
-  }
-}
+export { BaseNotConfiguredError } from "./errors";
 
 /**
  * Single entry point every route/component should import instead of
@@ -47,13 +44,16 @@ export function getBaseClient(): BaseApiClient {
   if (!instance) {
     if (shouldUseBaseMock()) {
       if (!isBaseMockForced()) {
-        console.warn("[lib/base] BASE_CLIENT_ID / BASE_CLIENT_SECRET is not set — falling back to the mock BASE client (development only).");
+        console.warn("[lib/base] BASE credentials are not set — falling back to the mock BASE client (development only).");
       }
       instance = new MockBaseApiClient();
-    } else if (!hasBaseAppCredentials()) {
-      // 本番で認証情報が無い場合。作り物を返さずに、設定不備として失敗する。
-      throw new BaseNotConfiguredError();
     } else {
+      // 認証情報の有無はここでは判定しない。Secrets Managerからの読み出しは
+      // 非同期で、この関数は同期のまま各所から呼ばれているため。
+      // 未設定の場合は RealBaseApiClient が最初のAPI呼び出しで
+      // getAccessToken() → BaseNotConfiguredError を投げる（lib/base/oauth.ts）。
+      // 大事なのは「作り物の商品を黙って返さない」ことで、それはここで
+      // モックを選ばないことによって守られている。
       instance = new RealBaseApiClient();
     }
   }

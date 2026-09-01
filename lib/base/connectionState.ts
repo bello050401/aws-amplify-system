@@ -1,4 +1,6 @@
 import { isBaseConnected } from "./oauth";
+import { getBaseCredentialsState, type BaseCredentialsSource } from "./secretStore";
+import { buildRedirectUriFromHost } from "./redirectUri";
 
 /**
  * BASE APIの接続状態を、設定画面が「正直に」表示できる形へまとめる
@@ -63,6 +65,21 @@ export interface BaseConnectionState {
   dataSource: BaseDataSource;
   /** Client ID / Secret が両方設定されているか。値そのものは返さない。 */
   hasAppCredentials: boolean;
+  /**
+   * 認証情報がどこから来ているか。設定画面の案内を変えるために要る ——
+   * 環境変数由来の場合、画面から上書き保存はできるがAWS側の環境変数が
+   * 残り続けるので、その旨を伝える必要がある。
+   */
+  credentialsSource: BaseCredentialsSource;
+  /** 保存済みのClient ID。**秘匿値ではない**ので、設定済みの確認用に表示してよい。Secretは決して返さない。 */
+  clientId: string | null;
+  /** 認可時に `write_items` まで要求する設定になっているか。 */
+  requestWriteItems: boolean;
+  /** 誰がいつ登録したか(監査用)。値は含まない。 */
+  credentialsUpdatedAt: string | null;
+  credentialsUpdatedBy: string | null;
+  /** BASE Developersへ登録すべきコールバックURL。画面でコピーさせる。 */
+  redirectUri: string | null;
   /** OAuthトークンが保存されているか。 */
   hasOAuthToken: boolean;
   /** 設定画面に出す日本語の説明。 */
@@ -76,7 +93,16 @@ export function isProductionRuntime(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
-export function hasBaseAppCredentials(): boolean {
+/**
+ * 環境変数だけを見る同期版。**モックへ落ちてよいかの判定にだけ使う。**
+ *
+ * 認証情報の本当の所在はSecrets Manager（lib/base/secretStore.ts）で、
+ * それを読むのは非同期。`getBaseClient()` は各所から同期に呼ばれている
+ * ため、そこでSecrets Managerを待つことはできない。
+ * 幸いこの関数が必要なのは「本番でないローカル開発で、環境変数が無い
+ * ときにモックを使ってよいか」の判定だけで、本番の分岐には関与しない。
+ */
+export function hasBaseAppCredentialsInEnv(): boolean {
   return Boolean(process.env.BASE_CLIENT_ID?.trim() && process.env.BASE_CLIENT_SECRET?.trim());
 }
 
@@ -91,16 +117,34 @@ export function isBaseMockForced(): boolean {
  */
 export function shouldUseBaseMock(): boolean {
   if (isBaseMockForced()) return true;
-  if (hasBaseAppCredentials()) return false;
+  if (hasBaseAppCredentialsInEnv()) return false;
   // ローカル開発でのみ、認証情報なしでもモックで動かせる。
   return !isProductionRuntime();
 }
 
-export async function getBaseConnectionState(): Promise<BaseConnectionState> {
-  const hasAppCredentials = hasBaseAppCredentials();
+/**
+ * @param host 設定画面を開いているブラウザから見たホスト名。
+ *   BASE Developersへ登録すべきコールバックURLを組み立てるためだけに使う。
+ *   渡されなければ redirectUri は null になり、画面は環境変数側の値を案内する。
+ */
+export async function getBaseConnectionState(host?: string | null): Promise<BaseConnectionState> {
+  const credentials = await getBaseCredentialsState();
+  const hasAppCredentials = credentials.source !== "unconfigured";
+  const redirectUri = buildRedirectUriFromHost(host ?? null);
+
+  /** 全分岐で共通の、秘匿値を含まない部分。 */
+  const base = {
+    credentialsSource: credentials.source,
+    clientId: credentials.clientId,
+    requestWriteItems: credentials.requestWriteItems,
+    credentialsUpdatedAt: credentials.updatedAt,
+    credentialsUpdatedBy: credentials.updatedBy,
+    redirectUri,
+  };
 
   if (isBaseMockForced()) {
     return {
+      ...base,
       status: "MOCK",
       usingRealApi: false,
       dataSource: "MOCK",
@@ -113,6 +157,7 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
 
   if (!hasAppCredentials) {
     return {
+      ...base,
       status: "NOT_CONFIGURED",
       usingRealApi: false,
       // 本番では getBaseClient() がモックへ落ちずに失敗する。
@@ -120,7 +165,7 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
       hasAppCredentials: false,
       hasOAuthToken: false,
       message: isProductionRuntime()
-        ? "BASE APIのアプリ認証情報（BASE_CLIENT_ID / BASE_CLIENT_SECRET）が設定されていません。BASE連携機能は利用できません。"
+        ? "BASE APIのアプリ認証情報（Client ID / Client Secret）が未登録です。下のフォームから登録してください。"
         : "BASE APIのアプリ認証情報が未設定のため、開発用のモックデータで動作しています（本番では無効です）。",
       checkError: null,
     };
@@ -133,6 +178,7 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
     // §6.1: 確認できなかったことを「未接続」と偽らない。
     console.error("[getBaseConnectionState] failed to read the BASE OAuth token:", err instanceof Error ? err.message : String(err));
     return {
+      ...base,
       status: "CREDENTIALS_ONLY",
       usingRealApi: true,
       dataSource: "UNAVAILABLE",
@@ -145,24 +191,26 @@ export async function getBaseConnectionState(): Promise<BaseConnectionState> {
 
   if (!hasOAuthToken) {
     return {
+      ...base,
       status: "CREDENTIALS_ONLY",
       usingRealApi: true,
       // 認証情報はあるがOAuth未完了 —— 実際の取得は BaseNotConnectedError になる。
       dataSource: "UNAVAILABLE",
       hasAppCredentials: true,
       hasOAuthToken: false,
-      message: "BASEアプリの認証情報は設定済みですが、BASEアカウントとの連携（OAuth認可）がまだ完了していません。",
+      message: "アプリ認証情報は設定済みです。次に「BASEアカウントを連携する」を実行してください（BASEアカウント所有者本人の承認が必要です）。",
       checkError: null,
     };
   }
 
   return {
+    ...base,
     status: "CONNECTED",
     usingRealApi: true,
     dataSource: "REAL",
     hasAppCredentials: true,
     hasOAuthToken: true,
-    message: "接続済み（既存のBASE特集ページ連携設定を使用）。認証情報はサーバー側にのみ保存されています。",
+    message: "接続済み。特集ページ作成機能と商品説明分析機能は、この同じ接続を共用します（認証情報はサーバー側にのみ保存されています）。",
     checkError: null,
   };
 }
