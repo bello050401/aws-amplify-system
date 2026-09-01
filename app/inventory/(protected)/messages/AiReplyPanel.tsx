@@ -246,6 +246,9 @@ function EvidenceView({
       )}
 
       <Section title="外部情報">
+        {/* Web検索は課金対象。何回呼んだかを必ず見えるようにする —— 在庫DBや
+            社内文書で答えられた問い合わせでは0回になる。 */}
+        <p className="text-gray-500">Web検索の呼び出し: {evidence.webSearchCallCount ?? 0}回</p>
         {evidence.externalFacts.length === 0 ? (
           <p className="text-gray-500">{evidence.externalResearchAttempted ? "取得できた情報はありません。" : "外部調査は実行していません。"}</p>
         ) : (

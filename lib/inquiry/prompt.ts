@@ -85,12 +85,15 @@ export function buildInquiryUserPrompt(input: InquiryUserPromptInput): string {
   }
   sections.push(`TRUSTED_FACTS:\n${trusted.length > 0 ? trusted.join("\n") : "(なし)"}`);
 
+  // UNCERTAIN(対象商品のものだと確定できなかった値)はAIへ渡さない。
+  //
+  // 「確証なし」と注記して渡す形も考えたが、渡した値は高い確率で文中へ
+  // 出る。対象商品と紐づかない仕様は、顧客にとっては単なる誤情報なので、
+  // 存在しないものとして扱い、UNRESOLVED側で「確認が必要」と伝える。
+  // 見つけた内容自体は管理画面の参照情報に残るので、担当者は判断できる。
   const external = input.externalFacts
-    .filter((f) => f.status === "FOUND" || f.status === "UNCERTAIN")
-    .map((f) => {
-      const certainty = f.status === "UNCERTAIN" ? "(対象モデルが一致するか確証なし)" : "";
-      return `- ${f.field}: ${f.value ?? "(値なし)"} ${certainty}\n  出典: ${f.sourceTitle ?? "不明"} / ${f.sourceUrl ?? "不明"}`;
-    });
+    .filter((f) => f.status === "FOUND")
+    .map((f) => `- ${f.field}: ${f.value ?? "(値なし)"}\n  出典: ${f.sourceTitle ?? "不明"} / ${f.sourceUrl ?? "不明"}`);
   sections.push(`UNTRUSTED_EXTERNAL_FACTS:\n${external.length > 0 ? external.join("\n") : "(なし)"}`);
 
   const unresolved = input.unresolved.map((u) => `- ${u.field}`);

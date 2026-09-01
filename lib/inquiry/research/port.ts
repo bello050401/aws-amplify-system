@@ -19,8 +19,18 @@ export interface ResearchQuery {
   field: string;
   /** 検索に使う語(メーカー名・型番・商品名などを組み立てたもの)。 */
   queryText: string;
-  /** 対象を特定するための情報(§38 年式・シリーズの取り違え防止に使う)。 */
+  /**
+   * **その商品だと同定できる**手がかり。型番・品番のみ。
+   *
+   * ブランド名をここへ入れてはいけない。実測で、ブランド名だけの一致を
+   * 「型番整合が取れた」と扱った結果、DAIKOの**別商品**(人感センサー付
+   * ダウンライト)の消費電力7.8Wを、問い合わせのあったペンダントライト
+   * DPN-41362Yの仕様としてFOUNDで採用してしまった。§38が警告する
+   * 「同じシリーズ名の別年式」より悪い、まったくの別商品だった。
+   */
   modelHints: string[];
+  /** 検索語を作るためだけの手がかり(ブランド名など)。同定には使わない。 */
+  brandHints: string[];
 }
 
 export interface ResearchSourceDocument {
@@ -86,7 +96,10 @@ export function compareBySourcePriority(a: { sourceType?: ExternalSourceType }, 
  */
 export function evaluateModelEvidence(documentText: string, modelHints: string[]): { matched: string[]; certain: boolean } {
   const haystack = documentText.toUpperCase();
-  const matched = modelHints.filter((h) => h.trim().length >= 2 && haystack.includes(h.toUpperCase()));
+  // 3文字未満の断片は同定の根拠にしない(型番の一部が偶然一致しうる)。
+  const matched = modelHints.filter((h) => h.trim().length >= 3 && haystack.includes(h.toUpperCase()));
+  // 型番の手がかりが1つも無ければ、そのページが対象商品のものだとは
+  // 言えない —— 「ブランドの公式サイトだから正しい」は成り立たない。
   return { matched, certain: matched.length > 0 };
 }
 

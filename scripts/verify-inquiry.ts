@@ -36,8 +36,10 @@ import { buildResearchCacheKey, isResearchCacheFresh, researchTtlMs } from "@/li
 import { compareBySourcePriority, downgradeIfUncertain, evaluateModelEvidence } from "@/lib/inquiry/research/port";
 import { buildInquiryUserPrompt, buildInquirySystemPrompt } from "@/lib/inquiry/prompt";
 import { assertsUnresolvedField, isPersonalDataGrounded, validateReplyDraft } from "@/lib/inquiry/validate";
-import { identifyResearchableFields, normalizeMessage } from "@/lib/inquiry/pipeline";
-import { classifySource, extractFieldValue, isFetchableExternalUrl } from "@/lib/inquiry/research/service";
+import { extractModelHintsFromName, identifyResearchableFields, normalizeMessage, specNounsInQuestion } from "@/lib/inquiry/pipeline";
+import { classifySource, extractFieldValue, isFetchableExternalUrl, isGuidanceText, researchMissingFacts } from "@/lib/inquiry/research/service";
+import { buildSearchQuery, parseWebSearchResults, WEB_SEARCH_QUERY_MAX_CHARS } from "@/lib/inquiry/research/agentCoreProvider";
+import { allOfficialDomains, brandsInText, officialDomainsForBrands } from "@/lib/inquiry/research/officialDomains";
 
 let failures = 0;
 let passes = 0;
@@ -357,7 +359,17 @@ function testResearchTriggering() {
   );
   assertEqual(identifyResearchableFields(["SIZE"], false, FACTS_WITH_DIMENSIONS), [], "調査発動: 商品が特定できていなければ調べない");
   assertEqual(identifyResearchableFields(["BUSINESS_HOURS"], true, FACTS_WITH_DIMENSIONS), [], "調査発動: 営業時間の質問で外部を調べない");
-  assertTrue(identifyResearchableFields(["PRODUCT_SPEC"], true, FACTS_WITH_DIMENSIONS).includes("耐荷重"), "調査発動: 仕様の質問では耐荷重を調べる");
+  // 何を調べるかは質問文から決まる。家具向けの「耐荷重」を固定で入れると、
+  // 照明の問い合わせで的外れな項目を調べて課金だけが増える。
+  assertTrue(
+    identifyResearchableFields(["PRODUCT_SPEC"], true, FACTS_WITH_DIMENSIONS, "耐荷重はどのくらいですか").includes("耐荷重"),
+    "調査発動: 耐荷重を聞かれたら耐荷重を調べる",
+  );
+  assertEqual(
+    identifyResearchableFields(["PRODUCT_SPEC"], true, FACTS_WITH_DIMENSIONS),
+    ["仕様"],
+    "調査発動: 具体的な項目名が無ければ「仕様」として調べる",
+  );
 
   const sorted = [{ sourceType: "OTHER" as const }, { sourceType: "MANUFACTURER" as const }, { sourceType: "OFFICIAL_CATALOG" as const }].sort(
     compareBySourcePriority,
@@ -559,7 +571,204 @@ function testNormalizeMessage() {
   assertEqual(normalizeMessage("営業​時間"), "営業時間", "正規化: ゼロ幅文字を落とす");
 }
 
-function main() {
+
+// ── §9 AgentCore Web Search 経由の外部調査 ────────────────────────
+
+/**
+ * 実測で得た、商品ページの仕様表の形。HTMLのタグを剥がすと
+ * 「ラベル 改行 改行 値」になる(artworkstudio.co.jpの製品ページ)。
+ */
+const SPEC_TABLE_TEXT = [
+  "Session-dining pendant AW-0573",
+  "仕様について",
+  "サイズ",
+  "※商品画像を横スクロールして出てくるサイズ表の画像をご覧ください",
+  "材質 ",
+  " ",
+  " スチール ",
+  " ",
+  "重量 ",
+  " ",
+  " 1.2kg ",
+  " ",
+  "最大消費電力 ",
+  " ",
+  " 100W ",
+  " ",
+  "電球口金サイズ ",
+  " ",
+  " E26 ",
+].join("\n");
+
+function testSpecTableExtraction() {
+  assertEqual(extractFieldValue(SPEC_TABLE_TEXT, "材質"), "スチール", "仕様表: ラベルの次の行を値として取る");
+  assertEqual(extractFieldValue(SPEC_TABLE_TEXT, "素材"), "スチール", "仕様表: 「素材」で聞かれても「材質」から取れる(表記ゆれ)");
+  assertEqual(extractFieldValue(SPEC_TABLE_TEXT, "重量"), "1.2kg", "仕様表: 重量を取れる");
+  assertEqual(extractFieldValue(SPEC_TABLE_TEXT, "消費電力"), "100W", "仕様表: 「最大消費電力」は消費電力の値として認める");
+  assertEqual(extractFieldValue(SPEC_TABLE_TEXT, "口金"), "E26", "仕様表: 「電球口金サイズ」から口金を取れる");
+
+  // 実測で実際に誤抽出した2件。ここが崩れると顧客への回答が壊れる。
+  assertEqual(
+    extractFieldValue(SPEC_TABLE_TEXT, "サイズ"),
+    null,
+    "仕様表: 「電球口金サイズ」の末尾を「サイズ」として拾わない(口金の値を寸法として答えない)",
+  );
+  assertEqual(extractFieldValue(SPEC_TABLE_TEXT, "仕様"), null, "仕様表: 「仕様について」の続きを値にしない");
+  assertTrue(isGuidanceText("※商品画像を横スクロールして出てくるサイズ表の画像をご覧ください"), "仕様表: 案内文は値として扱わない");
+  assertTrue(!isGuidanceText("スチール"), "仕様表: 普通の値を案内文と誤判定しない");
+}
+
+/**
+ * §38 型番整合。ブランド名の一致を「その商品のページだ」と扱わない。
+ *
+ * 実測で起きた誤り: DAIKO公式サイトの**別商品**(人感センサー付ダウンライト)
+ * のページを、ブランド名 daiko が一致しただけでDPN-41362Yのものと判定し、
+ * 消費電力7.8WをFOUNDとして採用した。
+ */
+function testModelEvidence() {
+  const otherProductPage = "人感センサー付 高気密SB形ダウンライト | 大光電機株式会社 消費電力 7.8W";
+
+  assertTrue(!evaluateModelEvidence(otherProductPage, []).certain, "型番整合: 型番の手がかりが無ければ同定できたとしない");
+
+  const wrongModel = evaluateModelEvidence(otherProductPage, ["DPN-41362Y"]);
+  assertTrue(!wrongModel.certain, "型番整合: 型番がページに無ければ同定できたとしない(別商品のページ)");
+
+  const rightModel = evaluateModelEvidence("Session-dining pendant AW-0573 材質 スチール", ["AW-0573"]);
+  assertTrue(rightModel.certain, "型番整合: 型番がページ本文にあれば同定できたとする");
+  assertEqual(rightModel.matched, ["AW-0573"], "型番整合: 一致した型番を根拠として返す");
+
+  assertTrue(!evaluateModelEvidence("A1 という記号がある", ["A1"]).certain, "型番整合: 2文字以下の断片は根拠にしない");
+
+  const downgraded = downgradeIfUncertain({ field: "消費電力", value: "7.8W", status: "FOUND", confidence: 0.8 }, wrongModel.certain);
+  assertEqual(downgraded.status, "UNCERTAIN", "型番整合: 同定できないFOUNDはUNCERTAINへ落とす");
+  assertTrue(downgraded.confidence <= 0.4, "型番整合: 確度も下げる");
+}
+
+/** §9 検索結果(MCP応答)の取り出し。AWSへ接続せずに形を固定する。 */
+function testWebSearchResultParsing() {
+  const mcpResponse = {
+    isError: false,
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          id: "824f89d0",
+          results: [
+            { title: "公式ページ", url: "https://artworkstudio.co.jp/products/aw-0573", text: "材質 スチール", publishedDate: "2024-10-07" },
+            { title: "通販", url: "https://example.com/x", text: "在庫あり" },
+          ],
+        }),
+      },
+    ],
+  };
+  const results = parseWebSearchResults(mcpResponse);
+  assertEqual(results.length, 2, "検索結果: MCP応答から結果を取り出す");
+  assertEqual(results[0].url, "https://artworkstudio.co.jp/products/aw-0573", "検索結果: URLを取り出す");
+
+  assertEqual(parseWebSearchResults({ content: [{ type: "text", text: "これはJSONではない" }] }), [], "検索結果: JSONでないtextは無視する(壊れない)");
+  assertEqual(parseWebSearchResults(null), [], "検索結果: 応答が空でも落ちない");
+
+  assertEqual(buildSearchQuery(["アートワークスタジオ"], ["AW-0573"], "素材"), "アートワークスタジオ AW-0573 素材", "検索語: ブランド + 型番 + 項目");
+  assertTrue(buildSearchQuery([], ["あ".repeat(300)], "素材").length <= WEB_SEARCH_QUERY_MAX_CHARS, "検索語: 200文字の上限で切る");
+}
+
+/** §9 公式ドメインの解決。 */
+function testOfficialDomains() {
+  assertEqual(officialDomainsForBrands(["アートワークスタジオ"]), ["artworkstudio.co.jp"], "公式ドメイン: 日本語のブランド名から引ける");
+  assertEqual(officialDomainsForBrands(["Kartell"]), ["kartell.com"], "公式ドメイン: 大文字小文字を問わない");
+  assertEqual(officialDomainsForBrands(["存在しないブランド"]), [], "公式ドメイン: 未知のブランドは空(公式限定の検索を行わない)");
+
+  assertTrue(brandsInText("アートワークスタジオ セッションダイニングペンダント AW-0573").includes("アートワークスタジオ"), "公式ドメイン: 商品名からブランドを拾う");
+  assertTrue(!brandsInText("highwayを走る").includes("hay"), "公式ドメイン: highwayをHAYとして拾わない");
+
+  assertTrue(allOfficialDomains().includes("kartell.com"), "公式ドメイン: 既知ドメイン一覧を返す");
+  assertEqual(
+    classifySource("https://artworkstudio.co.jp/products/aw-0573", allOfficialDomains()),
+    "MANUFACTURER",
+    "公式ドメイン: 既知の公式ドメインはMANUFACTURER",
+  );
+}
+
+/** §21 在庫DB・ナレッジで答えられる問い合わせではWeb検索を呼ばない。 */
+async function testNoSearchWhenAnswerable() {
+  let called = 0;
+  const spyProvider = {
+    id: "spy",
+    async fetchDocuments() {
+      called++;
+      return { status: "OK" as const, documents: [] };
+    },
+  };
+
+  const none = await researchMissingFacts({
+    fields: [],
+    inventoryId: null,
+    modelHints: [],
+    providers: [spyProvider],
+    readSearchCallCount: () => called,
+  });
+  assertEqual(called, 0, "検索回数: 調べる項目が無ければProviderを呼ばない");
+  assertEqual(none.searchCallCount, 0, "検索回数: 0として報告される");
+  assertEqual(none.attempted, false, "検索回数: 外部調査を試みていないと報告される");
+
+  assertEqual(
+    identifyResearchableFields(["BUSINESS_HOURS"], false, EMPTY_FACTS, "営業時間を教えてください"),
+    [],
+    "検索回数: 営業時間の問い合わせでは調査項目が立たない",
+  );
+  assertEqual(
+    identifyResearchableFields(["SIZE"], true, FACTS_WITH_DIMENSIONS, "サイズを教えてください"),
+    [],
+    "検索回数: 在庫DBに寸法があればサイズは調べない",
+  );
+}
+
+/** §9.2 質問文に書かれた仕様項目を、そのまま調べる項目にする。 */
+function testSpecNounDetection() {
+  assertTrue(specNounsInQuestion("消費電力は何Wですか").includes("消費電力"), "調査項目: 質問文から仕様項目を拾う");
+  assertTrue(specNounsInQuestion("耐荷重はどのくらいですか").includes("耐荷重"), "調査項目: 耐荷重を拾う");
+  assertEqual(specNounsInQuestion("こんにちは"), [], "調査項目: 仕様項目が無ければ空");
+
+  const fields = identifyResearchableFields(["PRODUCT_SPEC"], true, FACTS_WITH_DIMENSIONS, "この照明の消費電力は何Wですか");
+  assertTrue(fields.includes("消費電力"), "調査項目: 照明の質問で消費電力を調べる(家具向けの固定項目に縛られない)");
+  assertTrue(!fields.includes("耐荷重"), "調査項目: 聞かれていない項目を勝手に調べない(そのぶん課金される)");
+
+  assertEqual(
+    identifyResearchableFields(["PRODUCT_SPEC"], true, FACTS_WITH_DIMENSIONS, "消費電力と消費電力について"),
+    ["消費電力"],
+    "調査項目: 同じ項目を2回調べない",
+  );
+
+  assertTrue(
+    extractModelHintsFromName("アートワークスタジオ セッションダイニングペンダント AW-0573").includes("AW-0573"),
+    "調査項目: 商品名から型番を拾う",
+  );
+  assertEqual(extractModelHintsFromName("北欧 ソファ グレー"), [], "調査項目: 型番が無い商品名からは何も拾わない");
+}
+
+/** §9 UNCERTAINな値はAIへ渡さない(参照情報には残す)。 */
+function testUncertainFactsAreNotGivenToAi() {
+  const prompt = buildInquiryUserPrompt({
+    intents: ["PRODUCT_SPEC"],
+    trustedProductFacts: [],
+    knowledgeExcerpts: [],
+    shipping: null,
+    externalFacts: [
+      { field: "消費電力", value: "7.8W", status: "UNCERTAIN", sourceTitle: "別商品のページ", sourceUrl: "https://example.com/other", confidence: 0.4 },
+      { field: "素材", value: "スチール", status: "FOUND", sourceTitle: "公式", sourceUrl: "https://example.com/official", confidence: 0.8 },
+    ],
+    unresolved: [{ field: "消費電力", reason: "この商品のものと確定できませんでした。" }],
+    customerMessage: "消費電力は?",
+    history: [],
+  });
+  assertTrue(!prompt.includes("7.8W"), "UNCERTAIN: 対象商品のものと確定できない値はAIへ渡さない");
+  assertTrue(prompt.includes("スチール"), "UNCERTAIN: 確定できた値は渡す");
+  assertTrue(prompt.includes("UNRESOLVED:"), "UNCERTAIN: 不明点として伝える");
+}
+
+const EMPTY_FACTS: CustomerSafeFacts = { name: "", dimensions: null, categoryName: null, conditionDisclosure: null, publicNote: null };
+
+async function main() {
   testReferenceExtraction();
   testIntentClassification();
   testProductScoring();
@@ -573,6 +782,13 @@ function main() {
   testReplyValidation();
   testAddressGrounding();
   testNormalizeMessage();
+  testSpecTableExtraction();
+  testModelEvidence();
+  testWebSearchResultParsing();
+  testOfficialDomains();
+  await testNoSearchWhenAnswerable();
+  testSpecNounDetection();
+  testUncertainFactsAreNotGivenToAi();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

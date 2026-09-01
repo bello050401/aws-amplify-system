@@ -12,7 +12,10 @@ import { getAIReplySettings } from "./settings";
 import { extractShippingDestination, missingShippingInfo } from "./shippingIntent";
 import { buildInquirySystemPrompt, buildInquiryUserPrompt, INQUIRY_PROMPT_VERSION } from "./prompt";
 import { REPLY_MAX_GENERATION_ATTEMPTS, validateReplyDraft } from "./validate";
-import { createDirectUrlProvider, getWebResearchAvailability, researchMissingFacts } from "./research/service";
+import { createDirectUrlProvider, getAgentCoreGatewayUrl, getWebResearchAvailability, researchMissingFacts } from "./research/service";
+import { createAgentCoreSearchProvider } from "./research/agentCoreProvider";
+import { brandsInText, officialDomainsForBrands } from "./research/officialDomains";
+import { nameCore } from "./scoring";
 import type {
   ExternalResearchFact,
   InquiryIntent,
@@ -160,13 +163,61 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   }
 
   // ── 外部Webリサーチ(不明な項目だけ) ──────────────────────────
-  const researchFields = settings.webResearchEnabled ? identifyResearchableFields(intents, inventory != null, facts) : [];
-  const availability = await getWebResearchAvailability();
+  //
+  // ここへ来るまでに在庫DB・ナレッジ・配送DBを見終えている。
+  // identifyResearchableFieldsが空を返せば、外部へは1リクエストも出ない。
+  const researchFields = settings.webResearchEnabled ? identifyResearchableFields(intents, inventory != null, facts, messageText) : [];
+  const availability = getWebResearchAvailability();
+
+  // 型番・ブランドの手がかりは、問い合わせ本文と**商品名の両方**から集める。
+  // 「この商品の耐荷重は?」のように、本文にブランドが出てこない問い合わせが
+  // 普通にあるため。商品名の「検:」以降は他社の検索用キーワードなので落とす。
+  const productNameCore = inventory ? nameCore(inventory.name) : "";
+  const brandHints = [...new Set([...resolution.references.brandNames, ...brandsInText(productNameCore)])];
+  // 型番だけを同定の手がかりにする。ブランド名を混ぜると、そのブランドの
+  // 公式サイトにある**別商品**のページを「対象商品のもの」と誤認する。
+  const modelHints = [...new Set([...resolution.references.modelNumbers, ...extractModelHintsFromName(productNameCore)])];
+  const officialDomains = officialDomainsForBrands(brandHints);
+
+  // Web検索(課金対象)の呼び出し回数を数える。Providerが呼ぶたびに増える。
+  let webSearchCallCount = 0;
+  const gatewayUrl = getAgentCoreGatewayUrl();
+  const providers =
+    researchFields.length > 0
+      ? [
+          createDirectUrlProvider(resolution.references.urls),
+          ...(gatewayUrl
+            ? [
+                createAgentCoreSearchProvider({
+                  gatewayUrl,
+                  officialDomains,
+                  onSearch: (info) => {
+                    webSearchCallCount++;
+                    // §32: 何を何回検索したかは残す。顧客本文は残さない。
+                    console.info(
+                      "[inquiryReply] web search",
+                      JSON.stringify({
+                        conversationId: request.conversationId,
+                        scope: info.scope,
+                        query: info.query,
+                        resultCount: info.resultCount,
+                        callCount: webSearchCallCount,
+                      }),
+                    );
+                  },
+                }),
+              ]
+            : []),
+        ]
+      : [];
+
   const research = await researchMissingFacts({
     fields: researchFields,
     inventoryId: resolution.resolved?.inventoryId ?? null,
-    modelHints: [...resolution.references.modelNumbers, ...resolution.references.brandNames],
-    providers: researchFields.length > 0 ? [createDirectUrlProvider(resolution.references.urls)] : [],
+    modelHints,
+    brandHints,
+    providers,
+    readSearchCallCount: () => webSearchCallCount,
   });
   for (const fact of research.facts) {
     if (fact.status === "NOT_FOUND") {
@@ -196,6 +247,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     shipping,
     externalResearchAttempted: research.attempted,
     externalFacts: research.facts,
+    webSearchCallCount: research.searchCallCount,
     unresolvedFacts: unresolved,
   };
 
@@ -387,14 +439,84 @@ async function resolveShipping(params: {
  * 在庫DBで答えられるなら調べない。ここが「Web検索費用対策」(§21)の
  * 実体で、条件を満たさない限り外部へは1リクエストも出ない。
  */
-export function identifyResearchableFields(intents: InquiryIntent[], hasProduct: boolean, facts: CustomerSafeFacts): string[] {
+/**
+ * 問い合わせ本文に直接書かれている仕様項目。
+ *
+ * 種別(PRODUCT_SPEC)から固定の項目を決め打ちすると、家具向けの
+ * 「耐荷重」しか調べられない。実際の在庫には照明も多く、
+ * 「消費電力は何Wですか」「口金は何ですか」が来る。聞かれた語を
+ * そのまま調べる項目にするほうが、当たるし説明もしやすい。
+ */
+const SPEC_NOUNS = [
+  "耐荷重",
+  "消費電力",
+  "重量",
+  "重さ",
+  "素材",
+  "材質",
+  "生地",
+  "張地",
+  "口金",
+  "色温度",
+  "光束",
+  "明るさ",
+  "電圧",
+  "寸法",
+  "サイズ",
+  "座面高",
+  "全長",
+  "定格",
+  "生産国",
+  "原産国",
+  "耐熱",
+  "防水",
+];
+
+export function specNounsInQuestion(text: string): string[] {
+  return SPEC_NOUNS.filter((noun) => text.includes(noun));
+}
+
+export function identifyResearchableFields(
+  intents: InquiryIntent[],
+  hasProduct: boolean,
+  facts: CustomerSafeFacts,
+  messageText = "",
+): string[] {
   if (!hasProduct) return [];
   const fields: string[] = [];
+
+  // 質問文に仕様項目が書かれていれば、それを最優先で調べる。
+  for (const noun of specNounsInQuestion(messageText)) {
+    // 在庫DBに寸法があるなら、寸法は調べない(§9.1 発動条件)。
+    if ((noun === "寸法" || noun === "サイズ") && facts.dimensions) continue;
+    fields.push(noun);
+  }
+
   if (intents.includes("SIZE") && !facts.dimensions) fields.push("寸法");
   if (intents.includes("MATERIAL")) fields.push("素材");
-  if (intents.includes("PRODUCT_SPEC")) fields.push("耐荷重");
+  if (intents.includes("PRODUCT_SPEC") && fields.length === 0) fields.push("仕様");
   if (intents.includes("COMPATIBILITY")) fields.push("適合");
-  return fields;
+  // 同じ項目を2回調べない(そのぶん課金される)。
+  return [...new Set(fields)];
+}
+
+/**
+ * 商品名から型番らしき語を拾う。
+ *
+ * references.tsのextractModelNumbersは問い合わせ本文向けで、日本語混じりの
+ * 商品名だとカタカナ語まで拾ってしまう。ここでは英数字が混ざった語だけを
+ * 型番候補として取り、検索語と型番整合確認の両方に使う。
+ */
+export function extractModelHintsFromName(name: string): string[] {
+  const hints: string[] = [];
+  for (const token of name.split(/[\s　、,。「」『』()（）\[\]【】:：;；]+/)) {
+    const t = token.replace(/^[-/.]+|[-/.]+$/g, "");
+    if (t.length < 3 || t.length > 20) continue;
+    if (!/^[0-9A-Za-z][0-9A-Za-z\-/.]*$/.test(t)) continue;
+    if (!/[A-Za-z]/.test(t) || !/[0-9]/.test(t)) continue;
+    hints.push(t.toUpperCase());
+  }
+  return [...new Set(hints)];
 }
 
 /** §11 normalizeMessage。制御文字とゼロ幅文字を落とし、改行を揃える。 */

@@ -141,6 +141,8 @@ export interface ReplyEvidence {
   shipping: ShippingEvidence | null;
   externalResearchAttempted: boolean;
   externalFacts: ExternalResearchFact[];
+  /** Web検索(課金対象)を実際に呼んだ回数。在庫DB・ナレッジで答えられた場合は0。 */
+  webSearchCallCount?: number;
   unresolvedFacts: UnresolvedFact[];
 }
 
