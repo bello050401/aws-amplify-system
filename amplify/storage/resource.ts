@@ -45,5 +45,17 @@ export const storage = defineStorage({
       allow.groups(["ADMIN", "EDITOR", "Admins"]).to(["read", "write", "delete"]),
       allow.groups(["VIEWER"]).to(["read"]),
     ],
+    // AI問い合わせ返信の社内ナレッジ文書(2026-09-01仕様書 §22:
+    // 「ナレッジ文書はADMINのみ管理可能」)。inventory/*配下に置くと
+    // EDITORにも書き込み権限が付いてしまうため、意図的に別prefixにする。
+    //
+    // "Admins"を併記しているのは上のコメントと同じIdentity Poolの
+    // 事情による —— ADMINとAdminsの両方に所属するアカウントは常に
+    // Adminsのロールでリクエストするため、ここへ書かないとその
+    // アカウントだけが自分の管理画面から文書を上げられなくなる。
+    // VIEWER/EDITORはここには一切現れない(読み取りも与えない):
+    // AI返信が根拠として使う本文はDynamoDB側のsearchTextから読むので、
+    // 原本のS3オブジェクトへ触れる必要があるのはADMINだけ。
+    "knowledge/*": [allow.groups(["ADMIN", "Admins"]).to(["read", "write", "delete"])],
   }),
 });

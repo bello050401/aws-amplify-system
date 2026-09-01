@@ -1305,6 +1305,163 @@ const schema = a.schema({
       allow.group("EDITOR").to(["read"]),
       allow.group("VIEWER").to(["read"]),
     ]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // AI問い合わせ返信・商品自動特定・ナレッジ文書管理 仕様書(2026-09-01)
+  // §5/§17/§20/§43。すべて**新規モデル**であり、既存モデルへのフィールド
+  // 追加・変更は一切行わない(§30 破壊的マイグレーション禁止)。
+  // ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * §5.5 KnowledgeDocument — 設定画面から登録するBELLOの社内文書。
+   *
+   * 【原本と検索用テキストを分ける理由】原本はS3(Amplify Storage)へ置き、
+   * DynamoDBには検索用の抽出テキストだけを持つ。ダウンロードは原本の
+   * バイト列をそのまま返さないと「上げた物と同じ物が落ちてくる」保証が
+   * できない(§5.3)。一方、問い合わせのたびに全文書のS3オブジェクトを
+   * 読むのは遅く高くつくので、検索はDynamoDB側のsearchTextだけで完結
+   * させる。
+   *
+   * searchTextはKNOWLEDGE_SEARCH_TEXT_MAX_CHARSで切り詰める(DynamoDBの
+   * 1項目400KB制限に対する安全弁 — lib/knowledge/limits.ts)。切り詰めが
+   * 起きたかはsearchTextTruncatedで分かるようにし、「なぜ検索に出ないか」
+   * を後から説明できるようにする。
+   */
+  KnowledgeDocument: a
+    .model({
+      /** S3上のキー(inventory/knowledge/<uuid><ext>)。表示名ではない。 */
+      storageKey: a.string().required(),
+      /** アップロード時のファイル名(sanitize済み)。ダウンロード時のファイル名に使う。 */
+      originalFileName: a.string().required(),
+      title: a.string().required(),
+      description: a.string(),
+      category: a.string(),
+      mimeType: a.string().required(),
+      sizeBytes: a.integer().required(),
+      /** 検索用に抽出した本文(切り詰めあり)。原本はS3側。 */
+      searchText: a.string(),
+      searchTextTruncated: a.boolean().default(false),
+      /** 一覧上の有効/無効。falseなら検索対象にもAI参照対象にもしない。 */
+      isActive: a.boolean().default(true),
+      /** AI参照ON/OFF(§5.2)。isActiveがtrueでもこれがfalseならAIへは渡さない。 */
+      aiReferenceEnabled: a.boolean().default(true),
+      /** 原本のSHA-256(§23)。差し替え検出・監査用。 */
+      checksum: a.string(),
+      /** 差し替えのたびに+1(§23 最低限のバージョン)。 */
+      version: a.integer().default(1),
+      sortOrder: a.integer().default(0),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    .authorization((allow) => [
+      // 管理(作成・差し替え・削除)はADMINのみ(§22)。EDITOR/VIEWERは読み取り
+      // のみ — AI返信の根拠として本文が必要なため。
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  ReplyDraftStatus: a.enum([
+    "GENERATING",
+    "READY",
+    "NEEDS_PRODUCT_CONFIRMATION",
+    "NEEDS_CUSTOMER_INFO",
+    "RESEARCH_INCOMPLETE",
+    "FAILED",
+    "USED",
+    "DISMISSED",
+  ]),
+
+  /**
+   * §17/§18 ReplyDraft — 生成した返信案1件。
+   *
+   * 顧客メッセージ本文・外部サイトの取得文・Secretはここへ複製しない
+   * (§17末尾)。draftTextは顧客へ送る文面そのものなので保存するが、根拠
+   * (sourceSummary)は「どの文書のどの見出しを使ったか」という参照情報
+   * だけを持ち、外部ページの本文は持たない。
+   */
+  ReplyDraft: a
+    .model({
+      conversationId: a.string().required(),
+      sourceMessageId: a.string().required(),
+      resolvedInventoryId: a.string(),
+      productMatchConfidence: a.float(),
+      /** InquiryIntentの配列をJSONで保持(a.enum().array()はAmplify Dataで扱えないため)。 */
+      intents: a.json(),
+      draftText: a.string(),
+      /** 「分からないままにした事実」の一覧(§3)。UnresolvedFactのJSON配列。 */
+      unresolvedFacts: a.json(),
+      /** §33 参照情報。ReplyEvidenceのJSON。 */
+      sourceSummary: a.json(),
+      modelProvider: a.string(),
+      modelName: a.string(),
+      status: a.ref("ReplyDraftStatus").required(),
+      /** 生成が失敗した場合の管理者向け説明(顧客には出さない)。 */
+      failureReason: a.string(),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    .secondaryIndexes((index) => [index("conversationId"), index("sourceMessageId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * §42/§43 AI返信の運用設定。1行だけ(id: "singleton")。
+   *
+   * autoSendEnabledは**必ずfalse始まり**(§41)。将来自動送信を実装する
+   * 場合でも、このフラグをtrueにする操作は人が明示的に行う。
+   */
+  AIReplySettings: a
+    .model({
+      /** 返信案の生成を許可するか(§43 初期ON)。falseならUIのボタンも無効化する。 */
+      autoDraftEnabled: a.boolean().default(true),
+      /** 外部Webリサーチを許可するか(§43 初期ON)。falseなら不明点は不明のまま。 */
+      webResearchEnabled: a.boolean().default(true),
+      /** ナレッジ文書をAIへ渡すか(§43 初期ON)。 */
+      knowledgeEnabled: a.boolean().default(true),
+      /** 顧客への自動送信(§41 常にfalse始まり。今回のUIからtrueにはできない)。 */
+      autoSendEnabled: a.boolean().default(false),
+      updatedBy: a.string(),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  ExternalResearchStatus: a.enum(["FOUND", "NOT_FOUND", "CONFLICT", "UNCERTAIN"]),
+
+  /**
+   * §20 外部Webリサーチ結果のキャッシュ。同じ商品の同じ項目を何度も
+   * 調べ直さないため。
+   *
+   * cacheKeyは「対象商品の識別子 + 調べた項目」から作る決定的な文字列
+   * (lib/inquiry/research/cache.tsのbuildResearchCacheKey)。価格・在庫の
+   * ような変動情報は短いTTL、公式仕様・寸法は長いTTL —— TTLはfieldの
+   * 種類から決まるので、ここには「いつ取得したか」だけを持ち、有効期限の
+   * 判断は読み出し側で行う(TTL方針を変えても既存行を書き換えずに済む)。
+   */
+  ExternalResearchCache: a
+    .model({
+      cacheKey: a.string().required(),
+      field: a.string().required(),
+      value: a.string(),
+      status: a.ref("ExternalResearchStatus").required(),
+      sourceTitle: a.string(),
+      sourceUrl: a.string(),
+      sourceType: a.string(),
+      confidence: a.float(),
+      fetchedAt: a.datetime().required(),
+    })
+    .identifier(["cacheKey"])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
