@@ -35,7 +35,7 @@ Claude Code一括自律実装完全仕様書`（2026-09-01）。
 | 3 | BASEの商品情報 | `ChannelListing.externalListingId` / `listingUrl` との照合（BASE APIは補助であり正本にしない） |
 | 4 | ナレッジ文書 | `lib/knowledge/retrieval.ts`（関連箇所だけ） |
 | 5 | 既存の配送DB | `lib/shipping/service.ts` の `lookupShippingRate` をそのまま使う。**新しい送料マスタは作っていない** |
-| 6 | 外部Web | `lib/inquiry/research/`（不明な項目だけ、認証情報が無ければ実行しない） |
+| 6 | 外部Web | `lib/inquiry/research/`（不明な項目だけ。AgentCore Web Search + 本文のURL直接取得） |
 
 システムプロンプトに「UNTRUSTED_EXTERNAL_FACTS が TRUSTED_FACTS と矛盾する
 場合は必ず TRUSTED_FACTS を優先する」と明示し、ブロックも分けている。
@@ -99,15 +99,47 @@ PIIROINEN A-Frame sofa 2人掛け ソファ … 検:アルフレックス カッ
 値が書いてあっても `UNCERTAIN` へ落とす（§38）。同じシリーズ名の別年式を
 正解として返すのが、この機能で最も起きやすい誤りだから。
 
-### Web検索APIは未設定 —— 動くふりをしない
+### Web検索は Amazon Bedrock AgentCore Web Search
 
-BELLOにはWeb検索APIの認証情報が無い。`getWebResearchAvailability()` は
-`NOT_CONFIGURED` を返し、画面の参照情報にもそう出る（§19「成功したふりを
-禁止」）。問い合わせ本文にURLが含まれる場合は、そのページを直接取得する
-（認証不要）。取得先はループバック・プライベートIPを弾く。
+**新しい契約もAPIキーも増やさない**方式を選んだ。他は使えなかった。
 
-Secrets Manager の `bello/web-research` に
-`{"provider":"...","apiKey":"..."}` を入れれば、コードを変えずに検索が有効になる。
+| 方式 | 判定 |
+|---|---|
+| Google Custom Search JSON API | 新規受付終了（既存顧客も2027-01-01まで） |
+| Bing Web Search API | 2025-08-11に廃止済み |
+| Brave / Tavily / Exa | 外部のAPIキー取得が必要（Braveはカード登録必須・支出上限なし） |
+| Anthropic web_search | Anthropic APIキーが必要。BELLOは未取得（AIはBedrock/Nova） |
+| DuckDuckGo Instant Answer API | 実測: 3件のクエリすべてで結果0件。Web検索APIではない |
+| SerpApi / Serper 等 | Google結果の転売。規約リスクのため除外 |
+
+AgentCoreは認可がIAM（SigV4）で、検索クエリはAWS内で完結する。東京
+リージョン（ap-northeast-1）。$7/1,000クエリ、固定費なし。
+
+**呼ぶまでの条件**: 在庫DB → ナレッジ → 配送DB で答えられるなら呼ばない。
+`identifyResearchableFields` が空を返せば外部へ1リクエストも出ない。
+何を調べるかは**質問文から決める** —— PRODUCT_SPECに「耐荷重」を固定で
+割り当てると、照明の問い合わせで的外れな項目を調べて課金だけが増える。
+
+**検索結果を事実として採用しない**: 検索が返すのは候補URLであって事実では
+ない。公式ドメイン限定の1回目 → 足りなければ範囲を広げる、で候補を得た
+あと、**ページを実際に取得**し、`sanitizeExternalText` で指示文を落とし、
+型番整合を確認し、決定的に抽出する。
+
+**呼び出し回数を計測する**: `ReplyEvidence.webSearchCallCount` と構造化ログの
+両方に出し、参照情報パネルにも「Web検索の呼び出し: N回」と表示する。
+0回であることを主張ではなく計測で示せる。
+
+### 型番の一致だけを「その商品のページだ」の根拠にする
+
+実測で起きた誤り: DAIKO公式サイトの**別商品**（人感センサー付ダウン
+ライト）のページを、ブランド名 daiko が一致しただけで DPN-41362Y のものと
+判定し、消費電力7.8WをFOUNDとして採用していた。§38が警告する「同じ
+シリーズ名の別年式」より悪い、まったくの別商品だった。
+
+同定に使う手がかりからブランド名を外し、型番だけにした。型番の一致が
+無ければUNCERTAINへ落とし、**UNCERTAINな値はAIへ渡さない** ——「確証なし」と
+注記して渡しても高い確率で文中に出るし、対象商品と紐づかない仕様は顧客に
+とっては単なる誤情報だから。見つけた内容自体は参照情報に残る。
 
 ### ナレッジは関連箇所だけをAIへ渡す（§8）
 
@@ -167,9 +199,9 @@ S3は `knowledge/*` を新設し、**ADMIN（と Admins）のみ**に許可し�
 
 | 種別 | 件数 |
 |---|---|
-| `npm run verify:inquiry` | 135 |
+| `npm run verify:inquiry` | 184 |
 | `npm run verify:knowledge` | 51 |
-| offline全18 suite | 1,337（うち上記186件が新規） |
+| offline全18 suite | 1,390（うち上記235件が新規） |
 
 Staging実機E2E（`§25`）:
 
@@ -179,7 +211,7 @@ Staging実機E2E（`§25`）:
 | E2E-02 住所 | ✓ 返信案に所在地、参照情報に 基本情報.txt |
 | E2E-03 BASE商品URL | **未実施** — StagingにChannelListingが0件のため（照合ロジックはunitで固定済み） |
 | E2E-04 商品名・型番 | ✓ DPN-41362Y から候補提示 → 選択 → 在庫DBの寸法が反映 |
-| E2E-05 外部調査 | ✓ 未設定であることが参照情報に出る／耐荷重を断定しない |
+| E2E-05 外部調査 | ✓ 下記のWeb検索E2Eを参照 |
 | E2E-06 送料 | ✓ 市区町村を尋ねる／金額を勝手に案内しない |
 | E2E-07 内部情報 | ✓ 社内スコア・SKU・在庫IDが出ない |
 | E2E-08 個人情報 | ✓ 商品名の【細井様】が返信案へ出ない（実データで確認） |
@@ -188,6 +220,44 @@ Staging実機E2E（`§25`）:
 
 いずれもconsoleエラー0件。E2Eで作ったTESTチャネルの会話16件は実行後に
 削除済み（LINEの実会話・既存のQA会話には触れていない）。
+
+### Web検索のStaging実機E2E（15 passed / 0 failed）
+
+対象は実在庫「アートワークスタジオ セッションダイニングペンダント
+AW-0573」。素材は在庫DBに項目が無く、問い合わせ本文にもURLが無い。
+
+| 確認 | 結果 |
+|---|---|
+| A: 商品特定 → 不足判定 → Web検索 → 公式優先 → ページ取得 → 型番整合 → 抽出 → 返信案 | ✓ 呼び出し1回。返信案「…素材に関しては、メーカーの公式情報によるとスチールとなっています」 |
+| A: 根拠URLの表示 | ✓ 参照情報に `https://artworkstudio.co.jp/products/aw-0573` をURLのまま表示 |
+| A': 同じ項目の再調査 | ✓ キャッシュが効き、検索の呼び出しは0回（§20） |
+| B: 公式にも情報が無い項目（耐荷重） | ✓ 検索は実行、値は断定せず「確認が必要」。不明点に耐荷重が出る |
+| C: ナレッジで答えられる問い合わせ（営業時間） | ✓ **Web検索の呼び出し0回**、返信案は正しく生成 |
+
+いずれもconsoleエラー0件。E2Eで作ったTESTチャネルの会話は実行後に削除済み。
+
+### 利用条件
+
+AgentCore Web Search の利用条件は、検索結果を使った出力に**出典とリンクを
+保持・表示すること**を求めている。参照情報パネルにタイトルとURLの両方を
+文字として出しているのはこのため（バルク抽出・競合インデックス構築は
+行わない）。
+
+## AWS側の構成
+
+`scripts/aws-setup/13-create-web-search-gateway.mjs`（冪等・`--destroy` 付き）。
+
+| リソース | 名前 | 費用 |
+|---|---|---|
+| AgentCore Gateway | `bello-web-search`（ap-northeast-1 / MCP / AWS_IAM） | 呼び出し $0.005/1,000 |
+| Gateway Target | `web-search-tool`（connector `web-search` 1.2.0） | ツール索引 $0.02/100ツール/月 |
+| IAMロール | `BelloAgentCoreWebSearchGatewayRole` | — |
+| Web Search | — | $7/1,000クエリ |
+
+固定費なし。権限は、サービスロールが実Gateway ARNとWeb Searchのサービス
+所有ARNのみ、呼び出し側のSSR実行ロール（`BelloAmplifyStagingComputeRole`）も
+実Gateway ARNのみに限定。再実行時に一瞬でも権限が広がらないようにしてある。
+
 
 ## 既存機能への影響
 
@@ -199,7 +269,9 @@ Staging実機E2E（`§25`）:
 
 ## 今後の候補
 
-- Web検索APIの認証情報を入れると外部調査が有効になる（コード変更不要）
+- 公式ドメインの一覧（`officialDomains.ts`）は網羅を目指していない。未登録の
+  ブランドは公式限定の1回目を飛ばして広い検索へ進むだけなので動作はするが、
+  当たりやすさは下がる。運用しながら足していく
 - 受信直後の軽量解析（§15の推奨）は未実装。現状は「作成」を押した時点で
   種別判定と商品特定をまとめて行う。webhookを遅くしないことを優先した
 - BASE出品データが入ったらE2E-03を実施する
