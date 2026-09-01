@@ -1,6 +1,6 @@
 import "server-only";
 import { getLineAccessToken } from "./tokenAccess";
-import type { LineWebhookBody, LineWebhookEvent, NormalizedLineIncomingMessage } from "./types";
+import type { LineWebhookBody, LineWebhookEvent, NormalizedLineIncomingMessage, LineContentKind } from "./types";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §51-52: LINE Messaging APIの実際の
@@ -100,7 +100,9 @@ export async function validateLineConnection(params: { channelSecret: string; ac
  * する(純粋関数寄り — 外部I/Oは無い)。
  *   - type !== "message" のイベント(follow/unfollow/postback等)は
  *     現状無視する(§39: 今回のMessage coreの対象はテキスト会話のみ)。
- *   - message.type !== "text"(画像・スタンプ等)も現状無視する。
+ *   - 画像・スタンプ等も**捨てずに記録する**(2026-09-02)。以前は
+ *     `message.type !== "text"` で無視しており、画像を送られても会話に
+ *     何も残らなかった。本文の有無ではなく種別で扱いを分ける。
  *   - source.userIdが無いイベント(グループ/ルームでの発言等、1:1
  *     チャット以外)も無視する(customerDisplayNameを一意に紐付ける
  *     設計が1:1チャット前提のため — §39で言及されたLINE公式アカウント
@@ -115,15 +117,65 @@ export function parseLineWebhookBody(body: LineWebhookBody): NormalizedLineIncom
   return result;
 }
 
+/**
+ * LINEのmessage.type を BELLO側の種別へ写す。
+ * 知らない種別は捨てずに OTHER として残す —— 捨てると「何か届いたのに
+ * 画面には何も無い」という、いちばん気づけない失われ方をする。
+ */
+function toContentKind(lineType: string | undefined): LineContentKind {
+  switch (lineType) {
+    case "text":
+      return "TEXT";
+    case "image":
+      return "IMAGE";
+    case "sticker":
+      return "STICKER";
+    case "file":
+    case "video":
+    case "audio":
+      return "FILE";
+    default:
+      return "OTHER";
+  }
+}
+
+/** 種別ごとの、本文が空のときに画面へ出す代わりの文言。 */
+function placeholderBody(kind: LineContentKind): string {
+  switch (kind) {
+    case "IMAGE":
+      return "[画像]";
+    case "STICKER":
+      return "[スタンプ]";
+    case "FILE":
+      return "[ファイル]";
+    case "OTHER":
+      return "[未対応の形式のメッセージ]";
+    default:
+      return "";
+  }
+}
+
 function normalizeEvent(event: LineWebhookEvent): NormalizedLineIncomingMessage | null {
   if (event.type !== "message") return null;
-  if (event.message?.type !== "text" || !event.message.text) return null;
   if (event.source?.type !== "user" || !event.source.userId) return null;
+  if (!event.message?.id) return null;
+
+  const kind = toContentKind(event.message.type);
+  const text = event.message.text ?? "";
+
+  // テキストなのに本文が空のイベントは、記録しても何も分からないので捨てる。
+  // それ以外(画像・スタンプ等)は本文が空でも捨てない。
+  if (kind === "TEXT" && !text.trim()) return null;
 
   return {
     externalMessageId: event.message.id,
     externalCustomerId: event.source.userId,
-    body: event.message.text,
+    body: text.trim() ? text : placeholderBody(kind),
+    contentKind: kind,
+    // 画像・動画・音声・ファイルはLINEのコンテンツAPIから実体を取れる。
+    // contentProvider が "line" 以外(外部URL)の場合、コンテンツAPIでは取得できない。
+    hasDownloadableContent:
+      (kind === "IMAGE" || kind === "FILE") && (event.message.contentProvider?.type ?? "line") === "line",
     externalSentAt: new Date(event.timestamp).toISOString(),
     replyToken: event.replyToken ?? null,
   };

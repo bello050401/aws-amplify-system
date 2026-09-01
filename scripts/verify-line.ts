@@ -78,12 +78,73 @@ function testParseLineWebhookBody() {
   };
 
   const normalized = parseLineWebhookBody(body);
-  assertEqual(normalized.length, 1, "parseLineWebhookBody: 4イベント中、1:1チャットのテキストメッセージ1件だけが正規化される");
+  // 【2026-09-02 仕様変更】以前はテキスト1件だけを取り、画像イベントは
+  // パーサ段階で捨てていた —— そのため画像を送られると会話に何も残らず、
+  // 「画像が受信できない」という形で表面化していた。
+  // 1:1チャットのメッセージは種別を問わず残し、follow等とグループ発言は
+  // これまで通り無視する(4イベント中2件)。
+  assertEqual(normalized.length, 2, "parseLineWebhookBody: 1:1チャットのメッセージは種別を問わず残る(follow・グループ発言は無視)");
   assertEqual(normalized[0].externalMessageId, "msg1", "parseLineWebhookBody: externalMessageIdはmessage.id");
   assertEqual(normalized[0].externalCustomerId, "U1234567890", "parseLineWebhookBody: externalCustomerIdはsource.userId");
   assertEqual(normalized[0].body, "こんにちは", "parseLineWebhookBody: bodyはmessage.text");
+  assertEqual(normalized[0].contentKind, "TEXT", "parseLineWebhookBody: テキストはTEXT種別");
+  assertEqual(normalized[0].hasDownloadableContent, false, "parseLineWebhookBody: テキストに取得すべき実体は無い");
   assertEqual(normalized[0].replyToken, "reply-token-1", "parseLineWebhookBody: replyTokenも保持する");
   assertEqual(normalized[0].externalSentAt, new Date(1735689600000).toISOString(), "parseLineWebhookBody: externalSentAtはtimestampのISO文字列化");
+
+  // 画像イベント。本文が無いことを理由に捨てない、が要件の中心。
+  const image = normalized[1];
+  assertEqual(image.externalMessageId, "msg3", "parseLineWebhookBody: 画像イベントも正規化される");
+  assertEqual(image.contentKind, "IMAGE", "parseLineWebhookBody: 画像はIMAGE種別");
+  assertEqual(image.body, "[画像]", "parseLineWebhookBody: 本文が無い画像は代替表示にする(空文字で保存しない)");
+  assertEqual(image.hasDownloadableContent, true, "parseLineWebhookBody: 画像はLINEのコンテンツAPIから実体を取れる");
+
+  // スタンプ・未対応形式も、届いた事実は残す。
+  const stickerOnly = parseLineWebhookBody({
+    destination: "x",
+    events: [
+      {
+        type: "message",
+        webhookEventId: "evt9",
+        timestamp: 1735689600000,
+        source: { type: "user", userId: "U1234567890" },
+        message: { id: "msg9", type: "sticker" },
+      },
+    ],
+  });
+  assertEqual(stickerOnly.length, 1, "parseLineWebhookBody: スタンプも捨てずに残す");
+  assertEqual(stickerOnly[0].contentKind, "STICKER", "parseLineWebhookBody: スタンプはSTICKER種別");
+  assertEqual(stickerOnly[0].hasDownloadableContent, false, "parseLineWebhookBody: スタンプに取得すべき実体は無い");
+
+  // 本文が空のテキストは、記録しても何も分からないので従来どおり捨てる。
+  const emptyText = parseLineWebhookBody({
+    destination: "x",
+    events: [
+      {
+        type: "message",
+        webhookEventId: "evt10",
+        timestamp: 1735689600000,
+        source: { type: "user", userId: "U1234567890" },
+        message: { id: "msg10", type: "text", text: "   " },
+      },
+    ],
+  });
+  assertEqual(emptyText.length, 0, "parseLineWebhookBody: 本文が空のテキストは残さない");
+
+  // 外部URL提供の画像はコンテンツAPIから取れない。取れるつもりで失敗させない。
+  const externalImage = parseLineWebhookBody({
+    destination: "x",
+    events: [
+      {
+        type: "message",
+        webhookEventId: "evt11",
+        timestamp: 1735689600000,
+        source: { type: "user", userId: "U1234567890" },
+        message: { id: "msg11", type: "image", contentProvider: { type: "external", originalContentUrl: "https://example.com/a.jpg" } },
+      },
+    ],
+  });
+  assertEqual(externalImage[0].hasDownloadableContent, false, "parseLineWebhookBody: 外部URL提供の画像はコンテンツAPIの対象外と判定する");
 
   assertEqual(parseLineWebhookBody({ destination: "x", events: [] }), [], "parseLineWebhookBody: イベントが無ければ空配列");
 }

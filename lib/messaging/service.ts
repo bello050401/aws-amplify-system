@@ -4,7 +4,7 @@ import { deriveConversationStatus, deriveNeedsReply, buildMessagePreview, sortCo
 import { sendLinePush } from "./line/adapter";
 import { sendEmailReply } from "./email/sesAdapter";
 import { buildReplySubject } from "./email/mime";
-import type { ConversationRecord, MessageRecord, MessageChannel, MessageSenderType } from "./types";
+import type { ConversationRecord, ConversationWorkflowStatus, MessageRecord, MessageChannel, MessageSenderType } from "./types";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §38-50: Message coreの唯一の
@@ -45,6 +45,13 @@ function toConversationRecord(row: {
   subject?: string | null;
   status: ConversationRecord["status"];
   unreadCount?: number | null;
+  isUnread?: boolean | null;
+  lastReadAt?: string | null;
+  lastReadBy?: string | null;
+  workflowStatus?: ConversationWorkflowStatus | null;
+  customerNameSource?: string | null;
+  customerNameFetchedAt?: string | null;
+  deletedAt?: string | null;
   needsReply?: boolean | null;
   priority?: ConversationRecord["priority"] | null;
   lastMessagePreview?: string | null;
@@ -67,6 +74,14 @@ function toConversationRecord(row: {
     subject: row.subject ?? null,
     status: row.status,
     unreadCount: row.unreadCount ?? 0,
+    // 既存行(このフィールドが無い時期に作られたもの)は、未読件数から
+    // 推定する —— 過去データを壊さずに新しい仕組みへ載せるため。
+    isUnread: row.isUnread ?? (row.unreadCount ?? 0) > 0,
+    lastReadAt: row.lastReadAt ?? null,
+    lastReadBy: row.lastReadBy ?? null,
+    workflowStatus: row.workflowStatus ?? "NEW",
+    customerNameSource: row.customerNameSource ?? null,
+    customerNameFetchedAt: row.customerNameFetchedAt ?? null,
     needsReply: row.needsReply ?? false,
     priority: row.priority ?? "NORMAL",
     lastMessagePreview: row.lastMessagePreview ?? null,
@@ -87,6 +102,12 @@ function toMessageRecord(row: {
   senderType: MessageSenderType;
   body: string;
   contentType?: string | null;
+  contentKind?: MessageRecord["contentKind"] | null;
+  attachmentStorageKey?: string | null;
+  attachmentContentType?: string | null;
+  attachmentSizeBytes?: number | null;
+  attachmentStatus?: MessageRecord["attachmentStatus"] | null;
+  attachmentError?: string | null;
   externalSentAt?: string | null;
   deliveryStatus: MessageRecord["deliveryStatus"];
   aiGenerated?: boolean | null;
@@ -100,6 +121,12 @@ function toMessageRecord(row: {
     senderType: row.senderType,
     body: row.body,
     contentType: row.contentType ?? null,
+    contentKind: row.contentKind ?? "TEXT",
+    attachmentStorageKey: row.attachmentStorageKey ?? null,
+    attachmentContentType: row.attachmentContentType ?? null,
+    attachmentSizeBytes: row.attachmentSizeBytes ?? null,
+    attachmentStatus: row.attachmentStatus ?? "NONE",
+    attachmentError: row.attachmentError ?? null,
     externalSentAt: row.externalSentAt ?? null,
     deliveryStatus: row.deliveryStatus,
     aiGenerated: row.aiGenerated ?? false,
@@ -111,7 +138,57 @@ function toMessageRecord(row: {
 export async function listConversations(): Promise<ConversationRecord[]> {
   const { data, errors } = await serverDataClient.models.Conversation.list({ ...inventoryAuthMode });
   if (errors) throw new Error(`会話一覧の取得に失敗しました: ${JSON.stringify(errors)}`);
-  return sortConversations(data.map(toConversationRecord));
+  // 論理削除済みは一覧・詳細・AI参照のいずれからも外す。行自体は
+  // 監査のために残っている(amplify/data/resource.ts の deletedAt 参照)。
+  return sortConversations(data.filter((row) => !row.deletedAt).map(toConversationRecord));
+}
+
+/**
+ * 人が会話を開いたので既読にする。
+ *
+ * 【なぜ専用の関数なのか】未読を落としてよいのは「人が画面で開いた」
+ * ときだけで、AI生成・Webhook・バックグラウンド処理が会話を読み込んだ
+ * だけでは落としてはいけない(§5)。読み取り関数の副作用にすると、
+ * どこから呼ばれても既読になってしまい、この区別が保てない。
+ * 呼び出し元は会話詳細を開くUIの1箇所だけにする。
+ */
+export async function markConversationRead(conversationId: string, who: string | null): Promise<void> {
+  const now = new Date().toISOString();
+  const { errors } = await serverDataClient.models.Conversation.update(
+    { id: conversationId, isUnread: false, unreadCount: 0, lastReadAt: now, lastReadBy: who ?? undefined, updatedBy: who ?? undefined },
+    inventoryAuthMode,
+  );
+  if (errors) throw new Error(`既読にできませんでした: ${JSON.stringify(errors)}`);
+}
+
+/** 業務ステータスの変更(手動)。既読/未読には触れない —— 別の軸だから。 */
+export async function setConversationWorkflowStatus(
+  conversationId: string,
+  status: ConversationWorkflowStatus,
+  who: string | null,
+): Promise<void> {
+  const { errors } = await serverDataClient.models.Conversation.update(
+    { id: conversationId, workflowStatus: status, updatedBy: who ?? undefined },
+    inventoryAuthMode,
+  );
+  if (errors) throw new Error(`ステータスを変更できませんでした: ${JSON.stringify(errors)}`);
+}
+
+/**
+ * 会話の削除(論理削除)。
+ *
+ * 物理削除にしないのは、AI返信ログ・監査情報から参照され得るため
+ * (§3「履歴・監査上残す必要があるデータを不用意に消さない」)。
+ * 消すのはBELLOの管理画面上の見え方だけで、LINE等の外部サービス側の
+ * メッセージには一切触れない。
+ */
+export async function softDeleteConversation(conversationId: string, who: string | null): Promise<void> {
+  const now = new Date().toISOString();
+  const { errors } = await serverDataClient.models.Conversation.update(
+    { id: conversationId, deletedAt: now, deletedBy: who ?? undefined, updatedBy: who ?? undefined },
+    inventoryAuthMode,
+  );
+  if (errors) throw new Error(`会話を削除できませんでした: ${JSON.stringify(errors)}`);
 }
 
 export async function getConversation(id: string): Promise<ConversationRecord | null> {

@@ -93,6 +93,19 @@ export interface IncomingWebhookMessage {
   body: string;
   externalSentAt: string;
   customerDisplayName?: string | null;
+  /** 顧客名をどこから取ったか("LINE_PROFILE"等)。取得を試みた事実の記録。 */
+  customerNameSource?: string | null;
+  /** 顧客名の取得を試みた時刻。次に取り直すかの判断に使う。 */
+  customerNameFetchedAt?: string | null;
+  /** メッセージ種別。画像を「本文が空のテキスト」として捨てないために持つ。 */
+  contentKind?: "TEXT" | "IMAGE" | "STICKER" | "FILE" | "OTHER";
+  /** 添付をBELLO側へ保存できた場合のキー。 */
+  attachmentStorageKey?: string | null;
+  attachmentContentType?: string | null;
+  attachmentSizeBytes?: number | null;
+  /** NONE / PENDING / STORED / FAILED。取得失敗を会話の消失にしないための状態。 */
+  attachmentStatus?: "NONE" | "PENDING" | "STORED" | "FAILED";
+  attachmentError?: string | null;
 }
 
 export type RecordResult = { conversationId: string; messageId: string } | { deduped: true };
@@ -205,8 +218,17 @@ export async function recordIncomingWebhookMessageWith(
           channel: params.channel,
           externalCustomerId: params.externalCustomerId,
           customerDisplayName: params.customerDisplayName ?? null,
+          customerNameSource: params.customerNameSource ?? null,
+          customerNameFetchedAt: params.customerNameFetchedAt ?? null,
           status: "WAITING_FOR_REPLY",
           unreadCount: 1,
+          // 未読の正本はこのフラグ。unreadCountは件数の目安として残すが、
+          // 「開いたら消える」判定はこちらで行う(0へ戻す経路が
+          // これまでコード中に1つも無かった)。
+          isUnread: true,
+          lastReadAt: null,
+          // 業務ステータスの初期値。既読/未読とは別軸。
+          workflowStatus: "NEW",
           needsReply: true,
           priority: "NORMAL",
           lastMessagePreview: preview,
@@ -227,18 +249,30 @@ export async function recordIncomingWebhookMessageWith(
       new UpdateCommand({
         TableName: deps.conversationTable,
         Key: { id: conversationId },
+        // 新着が来たら必ず未読へ戻す(§5「新しい顧客メッセージが追加
+        // された場合は再び未読にする」)。業務ステータスには触れない ——
+        // 「大原確認」中に新着が来ても、確認待ちであることは変わらない。
         UpdateExpression:
-          "SET #s = :s, needsReply = :n, unreadCount = :u, lastMessagePreview = :p, lastMessageAt = :m, lastIncomingAt = :i, updatedAt = :t, updatedBy = :b",
+          "SET #s = :s, needsReply = :n, unreadCount = :u, isUnread = :unread, lastMessagePreview = :p, lastMessageAt = :m, lastIncomingAt = :i, updatedAt = :t, updatedBy = :b" +
+          (params.customerDisplayName ? ", customerDisplayName = :dn, customerNameSource = :dns, customerNameFetchedAt = :dnf" : ""),
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {
           ":s": status,
           ":n": needsReply,
           ":u": (Number(existing.unreadCount) || 0) + 1,
+          ":unread": true,
           ":p": preview,
           ":m": params.externalSentAt,
           ":i": params.externalSentAt,
           ":t": now,
           ":b": "LINE受信",
+          ...(params.customerDisplayName
+            ? {
+                ":dn": params.customerDisplayName,
+                ":dns": params.customerNameSource ?? null,
+                ":dnf": params.customerNameFetchedAt ?? now,
+              }
+            : {}),
         },
       }),
     );
@@ -256,7 +290,13 @@ export async function recordIncomingWebhookMessageWith(
         direction: "INBOUND",
         senderType: "CUSTOMER",
         body: params.body,
-        contentType: "text",
+        contentType: params.contentKind === "IMAGE" ? "image" : "text",
+        contentKind: params.contentKind ?? "TEXT",
+        attachmentStorageKey: params.attachmentStorageKey ?? null,
+        attachmentContentType: params.attachmentContentType ?? null,
+        attachmentSizeBytes: params.attachmentSizeBytes ?? null,
+        attachmentStatus: params.attachmentStatus ?? "NONE",
+        attachmentError: params.attachmentError ?? null,
         externalSentAt: params.externalSentAt,
         deliveryStatus: "RECEIVED",
         aiGenerated: false,

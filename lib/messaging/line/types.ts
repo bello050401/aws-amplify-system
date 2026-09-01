@@ -20,16 +20,36 @@ export interface LineWebhookEvent {
   replyToken?: string;
   message?: {
     id: string;
-    type: string; // "text" | "image" | "sticker" 等 — 今回はtextのみ処理する
+    /** "text" | "image" | "sticker" | "video" | "audio" | "file" | "location" */
+    type: string;
     text?: string;
+    /**
+     * 画像・動画・音声で、コンテンツをどこから取れるか。
+     * "line" ならLINEのコンテンツAPIから、"external" なら外部URLから。
+     * 型に起こしているのは、取得可否を保存時に判断するため。
+     */
+    contentProvider?: { type: string; originalContentUrl?: string; previewImageUrl?: string };
   };
 }
+
+/** BELLO側で扱うメッセージ種別。amplify/data/resource.ts の MessageContentKind と対応する。 */
+export type LineContentKind = "TEXT" | "IMAGE" | "STICKER" | "FILE" | "OTHER";
 
 /** app/api/line/webhook/route.tsが受信メッセージを処理した後にlib/messaging/service.tsへ渡す正規化済みの形。 */
 export interface NormalizedLineIncomingMessage {
   externalMessageId: string; // message.id(冪等性チェックのキー)
   externalCustomerId: string; // source.userId(1:1チャットの相手を一意に識別)
+  /**
+   * 本文。画像・スタンプでは空になり得る。
+   *
+   * 【2026-09-02】以前は本文が取れないイベントを丸ごと捨てていたため、
+   * 画像を送られると会話に何も残らなかった。本文の有無で捨てず、
+   * 種別(contentKind)で扱いを分ける。
+   */
   body: string;
+  contentKind: LineContentKind;
+  /** LINEのコンテンツAPIから取得できる添付か(画像等)。 */
+  hasDownloadableContent: boolean;
   externalSentAt: string; // event.timestampをISO文字列化したもの
   replyToken: string | null;
 }
