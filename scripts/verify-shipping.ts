@@ -10,6 +10,7 @@ import type { ShippingRank } from "@/lib/shipping/rank";
 import { SHIPPING_RATE_SEED, HOKKAIDO_AREA_BY_MUNICIPALITY, HOKKAIDO_AREAS, lookupShippingRate, resolveHokkaidoArea } from "@/lib/shipping/ratesSeed";
 import { calculateMedian, pickLatestPerPrefecture, buildShippingReferencePriceView, MIN_DISTINCT_REGIONS_FOR_MEDIAN, REGION_DIFFERENCE_THRESHOLD_YEN } from "@/lib/shipping/referencePrice";
 import { buildExpectedMatrix, computeMatrixCompleteness, computeRawHash, ALL_SHIPPING_RANKS } from "@/lib/shipping/matrix";
+import { buildShippingCsv, parseShippingCsv, selectChangedRows, splitCsvLine } from "@/lib/shipping/csv";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 
 let failures = 0;
@@ -420,7 +421,70 @@ function testShippingRateSeedKeysAreUnique() {
   );
 }
 
+
+/**
+ * 送料マスタのCSV一括更新。450件を守ることが要件なので、
+ * 「壊れた入力で既存が壊れない」ことを重点的に固定する。
+ */
+function testShippingCsv() {
+  assertEqual(splitCsvLine('a,b,c'), ["a", "b", "c"], "CSV: 単純な行を分解できる");
+  assertEqual(splitCsvLine('"a,1",b'), ["a,1", "b"], "CSV: 引用符の中のカンマは区切りにしない");
+  assertEqual(splitCsvLine('"say ""hi""",b'), ['say "hi"', "b"], "CSV: 二重引用符のエスケープを解ける");
+
+  const csv = buildShippingCsv([
+    { destinationPrefecture: "東京都", destinationArea: null, rank: "B", price: 12000, sourceReference: "確認済", updatedAt: "2026-09-01T00:00:00.000Z" },
+    { destinationPrefecture: "沖縄県", destinationArea: null, rank: "B", price: null, sourceReference: null, updatedAt: null },
+  ]);
+  assertEqual(csv.split("\n")[0], "発送先都道府県,地域,ランク,料金,配送不可,備考,最終更新日時", "CSV: 見出し行");
+  assertTrue(csv.includes("東京都,,B,12000,,確認済"), "CSV: 通常行を書き出せる");
+  assertTrue(csv.includes("沖縄県,,B,,1,,"), "CSV: 配送不可は料金を空欄にし0円で埋めない");
+
+  // 往復して同じ意味になること。
+  const round = parseShippingCsv(csv);
+  assertTrue(round.ok, "CSV: 書き出したものを読み戻せる");
+  if (round.ok) {
+    assertEqual(round.rows.length, 2, "CSV: 2行として読める");
+    assertEqual(round.rows[0].price, 12000, "CSV: 料金が数値として読める");
+    assertEqual(round.rows[1].price, null, "CSV: 配送不可はnull(0ではない)");
+    assertEqual(round.rows[1].unavailable, true, "CSV: 配送不可フラグが立つ");
+  }
+
+  // 壊れた入力は全体を拒否する。途中まで適用しない。
+  const badRank = parseShippingCsv("発送先都道府県,ランク,料金\n東京都,Z,1000");
+  assertEqual(badRank.ok, false, "CSV: 未知のランクは拒否する");
+  const badPrice = parseShippingCsv("発送先都道府県,ランク,料金\n東京都,B,abc");
+  assertEqual(badPrice.ok, false, "CSV: 数値でない料金は拒否する");
+  const noPrefecture = parseShippingCsv("発送先都道府県,ランク,料金\n,B,1000");
+  assertEqual(noPrefecture.ok, false, "CSV: 都道府県が空の行は拒否する");
+  const dup = parseShippingCsv("発送先都道府県,ランク,料金\n東京都,B,1000\n東京都,B,2000");
+  assertEqual(dup.ok, false, "CSV: 同じ組合せが2行あれば拒否する(どちらが正か決められない)");
+  const conflicting = parseShippingCsv("発送先都道府県,ランク,料金,配送不可\n東京都,B,1000,1");
+  assertEqual(conflicting.ok, false, "CSV: 配送不可と料金の同時指定は拒否する");
+  const missingHeader = parseShippingCsv("県,ランク\n東京都,B");
+  assertEqual(missingHeader.ok, false, "CSV: 必須の見出しが無ければ拒否する");
+  assertEqual(parseShippingCsv("").ok, false, "CSV: 空のCSVは拒否する");
+
+  // 金額の表記ゆれは受ける(表計算からの貼り付けで普通に起きる)。
+  const formatted = parseShippingCsv('発送先都道府県,ランク,料金\n東京都,B,"12,000"');
+  assertTrue(formatted.ok, "CSV: 桁区切りつきの金額を受け付ける");
+  if (formatted.ok) assertEqual(formatted.rows[0].price, 12000, "CSV: 桁区切りを取り除いて数値にする");
+
+  // 変わった行だけを書く。
+  const existing = [
+    { destinationPrefecture: "東京都", destinationArea: null, rank: "B", price: 12000 },
+    { destinationPrefecture: "大阪府", destinationArea: null, rank: "B", price: 15000 },
+  ];
+  const incoming: Parameters<typeof selectChangedRows>[0] = [
+    { destinationPrefecture: "東京都", destinationArea: null, rank: "B", price: 12000, unavailable: false, sourceReference: null },
+    { destinationPrefecture: "大阪府", destinationArea: null, rank: "B", price: 16000, unavailable: false, sourceReference: null },
+    { destinationPrefecture: "京都府", destinationArea: null, rank: "B", price: 14000, unavailable: false, sourceReference: null },
+  ];
+  const changed = selectChangedRows(incoming, existing);
+  assertEqual(changed.map((c) => c.destinationPrefecture), ["大阪府", "京都府"], "CSV: 値が変わった行と新しい行だけを書く(同じ値は書き直さない)");
+}
+
 function main() {
+  testShippingCsv();
   testCalculateShippingRankFromSum();
   testParseDimensionCm();
   testCalculateShippingRankFromDimensions();

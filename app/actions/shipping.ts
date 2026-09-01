@@ -13,6 +13,7 @@ import {
   type ShippingEstimateResult,
   type GetShippingReferencePriceResult,
 } from "@/lib/shipping/service";
+import { buildShippingCsv, parseShippingCsv, selectChangedRows } from "@/lib/shipping/csv";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 
@@ -75,3 +76,98 @@ export async function getShippingReferencePriceAction(inventoryId: string): Prom
 
 // ─────────────────────────────────────────────────────────────────────
 
+
+// ─────────────────────────────────────────────────────────────────────
+// CSV一括更新(§配送料金の正本をBELLO内部で運用する)。
+//
+// 既存行の削除は行わない。CSVに載っていない組合せは「変更なし」であって
+// 「削除」ではない —— 450件を守る要件があるため、削除の意図を受け取る
+// 経路自体を作らない。
+// ─────────────────────────────────────────────────────────────────────
+
+export type ShippingCsvExportResult = { ok: true; csv: string; rows: number } | { ok: false; error: string };
+
+export async function exportShippingRatesCsvAction(): Promise<ShippingCsvExportResult> {
+  try {
+    const role = await getInventoryRole();
+    if (!role) return { ok: false, error: "ログインが必要です。" };
+    const rates = await listShippingRates();
+    return {
+      ok: true,
+      rows: rates.length,
+      csv: buildShippingCsv(
+        rates.map((r) => ({
+          destinationPrefecture: r.destinationPrefecture,
+          destinationArea: r.destinationArea,
+          rank: r.rank,
+          price: r.price,
+          sourceReference: r.sourceReference,
+          updatedAt: r.updatedAt,
+        })),
+      ),
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "CSVの書き出しに失敗しました。" };
+  }
+}
+
+export type ShippingCsvImportResult =
+  | { ok: true; applied: number; unchanged: number; total: number }
+  | { ok: false; error: string; lineErrors?: { line: number; message: string }[] };
+
+/**
+ * CSVで料金を一括更新する(ADMIN限定)。
+ *
+ * 1行でも壊れていたら**何も適用しない**。途中まで書いて止まると、
+ * どこまで反映されたか分からない状態になる。
+ */
+export async function importShippingRatesCsvAction(csvText: string): Promise<ShippingCsvImportResult> {
+  try {
+    const who = await requireAdmin();
+
+    const parsed = parseShippingCsv(typeof csvText === "string" ? csvText : "");
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        error: `${parsed.errors.length}件の問題があるため、1件も更新していません。`,
+        lineErrors: parsed.errors.slice(0, 20),
+      };
+    }
+
+    const existing = await listShippingRates();
+    const changed = selectChangedRows(
+      parsed.rows,
+      existing.map((r) => ({
+        destinationPrefecture: r.destinationPrefecture,
+        destinationArea: r.destinationArea,
+        rank: r.rank,
+        price: r.price,
+      })),
+    );
+
+    const byKey = new Map(existing.map((r) => [`${r.destinationPrefecture}|${r.destinationArea ?? ""}|${r.rank}`, r]));
+    for (const row of changed) {
+      const key = `${row.destinationPrefecture}|${row.destinationArea ?? ""}|${row.rank}`;
+      const current = byKey.get(key);
+      await saveShippingRate(
+        current?.id ?? null,
+        {
+          provider: current?.provider ?? "アートセッティングデリバリー",
+          service: current?.service ?? "家財おまかせ便",
+          destinationPrefecture: row.destinationPrefecture,
+          destinationArea: row.destinationArea,
+          rank: row.rank,
+          // 配送不可はpriceを持たせない(0円で埋めない)。
+          price: row.price ?? 0,
+          sourceReference: row.sourceReference ?? current?.sourceReference ?? null,
+        },
+        who,
+      );
+    }
+
+    revalidatePath("/inventory/settings");
+    return { ok: true, applied: changed.length, unchanged: parsed.rows.length - changed.length, total: parsed.rows.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "CSVの取り込みに失敗しました。" };
+  }
+}

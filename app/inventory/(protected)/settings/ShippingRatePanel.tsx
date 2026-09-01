@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listShippingRatesAction, saveShippingRateAction, deleteShippingRateAction } from "@/app/actions/shipping";
+import {
+  listShippingRatesAction,
+  saveShippingRateAction,
+  deleteShippingRateAction,
+  exportShippingRatesCsvAction,
+  importShippingRatesCsvAction,
+} from "@/app/actions/shipping";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 import { SHIPPING_RANKS, SHIPPING_RANK_LABEL, type ShippingRank } from "@/lib/shipping/rank";
 import { JAPAN_PREFECTURES, SHIPPING_ORIGIN_PREFECTURE } from "@/lib/shipping/prefectures";
@@ -38,6 +44,60 @@ export function ShippingRatePanel() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [showForm, setShowForm] = useState(false);
+
+  // CSV一括更新。450件を1件ずつ直すのは現実的ではないので、書き出して
+  // 直して戻せるようにする。取り込みは1行でも壊れていたら何も適用しない。
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvResult, setCsvResult] = useState<{ kind: "success" | "error"; text: string; lines?: string[] } | null>(null);
+
+  async function handleExportCsv() {
+    setCsvBusy(true);
+    setCsvResult(null);
+    try {
+      const result = await exportShippingRatesCsvAction();
+      if (!result.ok) {
+        setCsvResult({ kind: "error", text: result.error });
+        return;
+      }
+      // BOMを付ける。付けないとExcelが日本語を文字化けさせる。
+      const blob = new Blob(["﻿" + result.csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `配送料金_家財おまかせ便_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setCsvResult({ kind: "success", text: `${result.rows}件を書き出しました。` });
+    } finally {
+      setCsvBusy(false);
+    }
+  }
+
+  async function handleImportCsv(file: File) {
+    setCsvBusy(true);
+    setCsvResult(null);
+    try {
+      const text = await file.text();
+      const result = await importShippingRatesCsvAction(text);
+      if (!result.ok) {
+        setCsvResult({
+          kind: "error",
+          text: result.error,
+          lines: result.lineErrors?.map((e) => `${e.line}行目: ${e.message}`),
+        });
+        return;
+      }
+      setCsvResult({
+        kind: "success",
+        text: `${result.applied}件を更新しました（変更なし ${result.unchanged}件 / 読み込み ${result.total}件）。`,
+      });
+      await reload();
+    } catch (err) {
+      setCsvResult({ kind: "error", text: err instanceof Error ? err.message : "CSVの取り込みに失敗しました。" });
+    } finally {
+      setCsvBusy(false);
+    }
+  }
 
   async function reload() {
     setRates(await listShippingRatesAction());
@@ -122,6 +182,50 @@ export function ShippingRatePanel() {
           料金を変更する場合はこの画面から編集し、出典欄に確認元（URLや確認日）を残してください。値引き計算・送料回答・AI返信案は、すべてこの表を参照します。
         </p>
       </details>
+
+      <div className="mb-4 border border-gray-200 bg-gray-50 p-3 text-[12px]">
+        <p className="mb-1 font-bold text-gray-700">CSVで一括更新</p>
+        <p className="mb-2 text-[11px] text-gray-500">
+          書き出したCSVを表計算で編集して取り込みます。<strong>1行でも問題があれば1件も更新しません。</strong>
+          CSVに載っていない組合せは変更されません（削除は行いません）。配送不可の行は料金を空欄にし、「配送不可」列に1を入れてください。
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleExportCsv()}
+            disabled={csvBusy}
+            className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-white disabled:opacity-50"
+          >
+            {csvBusy ? "処理中…" : "CSVを書き出す"}
+          </button>
+          <label className="cursor-pointer border border-gray-900 px-3 py-1 text-[12px] font-bold text-gray-900 hover:bg-white">
+            CSVを取り込む
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              disabled={csvBusy}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void handleImportCsv(file);
+              }}
+            />
+          </label>
+        </div>
+        {csvResult && (
+          <div className={`mt-2 border p-2 text-[11px] ${csvResult.kind === "success" ? "border-green-300 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-700"}`}>
+            <p>{csvResult.text}</p>
+            {csvResult.lines && csvResult.lines.length > 0 && (
+              <ul className="mt-1 list-disc pl-4">
+                {csvResult.lines.map((l, i) => (
+                  <li key={i}>{l}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="overflow-x-auto border border-gray-200">
         <table className="w-full min-w-[560px] border-collapse text-[13px]">
