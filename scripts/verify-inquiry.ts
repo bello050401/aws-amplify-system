@@ -98,6 +98,14 @@ function testReferenceExtraction() {
   assertTrue(models.includes("SS226B"), "型番抽出: ラベル付きの型番を拾う");
   assertTrue(!extractModelNumbers("横幅は120cmですか").includes("120CM"), "型番抽出: 単位付きの数値は型番として拾わない");
   assertTrue(!extractModelNumbers("ソファについて").includes("ソファ"), "型番抽出: 数字を含まない語は型番として拾わない");
+  // Staging実機で商品がまったく特定できなかった原因。日本語の問い合わせでは
+  // 型番の直後に区切りが無く助詞が続く。
+  assertTrue(
+    extractModelNumbers("AW-0573のセッションダイニングペンダントですが、素材は何ですか？").includes("AW-0573"),
+    "型番抽出: 型番の直後に日本語が続いても拾う(「AW-0573の素材は」)",
+  );
+  assertTrue(extractModelNumbers("DPN-41362Yについて").includes("DPN-41362Y"), "型番抽出: 「型番+について」を拾う");
+  assertTrue(!extractModelNumbers("120cmの幅").includes("120CM"), "型番抽出: 区切り無しでも単位付き数値は除外する");
 
   const ref = extractProductReferences("HAYのソファ https://bello.base.shop/items/999 について", KNOWN_FURNITURE_BRANDS);
   assertEqual(ref.baseItemIds, ["999"], "統合抽出: BASE商品IDが取れる");

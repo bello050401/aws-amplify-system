@@ -127,10 +127,14 @@ export function extractModelNumbers(text: string): string[] {
   const labelled = text.matchAll(/(?:型番|品番|モデル(?:番号)?|model)\s*[:：#＃]?\s*([0-9A-Za-z][0-9A-Za-z\-/.]{1,19})/gi);
   for (const m of labelled) out.push(m[1]);
 
-  for (const token of text.split(/[\s　、,。「」『』()（）\[\]【】:：;；]+/)) {
-    const t = token.replace(/^[-/.]+|[-/.]+$/g, "");
+  // 空白で区切って探すだけでは足りない。日本語の問い合わせでは
+  // 「AW-0573の素材は何ですか」のように、型番の直後にそのまま助詞が続く。
+  // 区切り文字が無いので token は「AW-0573の素材は何ですか」となり、
+  // 型番として認識できなかった(Staging実機のE2Eでこれに当たり、商品が
+  // まったく特定できなかった)。英数字の連なりそのものを拾う。
+  for (const m of text.matchAll(/(?<![0-9A-Za-z])[0-9A-Za-z][0-9A-Za-z\-/.]{1,19}(?![0-9A-Za-z])/g)) {
+    const t = m[0].replace(/^[-/.]+|[-/.]+$/g, "");
     if (t.length < 2 || t.length > 20) continue;
-    if (!/^[0-9A-Za-z][0-9A-Za-z\-/.]*$/.test(t)) continue;
     if (!/[A-Za-z]/.test(t) || !/[0-9]/.test(t)) continue;
     // "10cm" "3人掛け" のような単位付き数値は型番ではない。
     if (/^\d+(?:\.\d+)?(?:cm|mm|m|kg|g|w|v|a|inch|in)$/i.test(t)) continue;
