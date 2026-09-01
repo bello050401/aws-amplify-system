@@ -1,6 +1,7 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { getInventoryDetail, listInventory } from "@/lib/inventory/queries";
+import { getInventoryDetail } from "@/lib/inventory/queries";
+import { listEcEligibleInventory } from "@/lib/inventory/ecEligibleQuery";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { createMercariProduct, MercariApiError } from "./mercari/adapter";
@@ -222,6 +223,7 @@ export async function getChannelListing(inventoryId: string, channel: ListingCha
 }
 
 /** lib/inventory/queries.tsのSEARCH_MAX_SCAN_ITEMSと同じ上限 — Inventory自体がその上限を超えない前提なので、Inventoryとjoinするこちらの一括取得も同じ規模で揃えておく。 */
+/** ChannelListingを辿る上限(こちらは在庫と違い件数が小さい)。 */
 const LISTING_OVERVIEW_MAX_ITEMS = 20000;
 
 async function fetchAllChannelListings(channel: ListingChannel): Promise<ChannelListingRecord[]> {
@@ -289,9 +291,32 @@ export interface ListingOverviewRow {
  * fetchAllInventoryRecordsと同じ「まとめて全件取得してメモリ上でjoin
  * する」方式で十分 — 専用の検索基盤が要るほどの規模ではない。
  */
+/**
+ * EC出品一覧。
+ *
+ * ## 2026-09-02: 開くたびに在庫を全件読んでいた
+ *
+ * 以前は `listInventory({}, { offset: 0, limit: 20000 })` を呼んでいた。
+ * その中身は在庫テーブルの**全件スキャン**で、実測すると
+ *
+ *   全件スキャン(5,313件・7往復) …… 9,246ms
+ *   GSIで50件だけ取得(1往復)     ……   173ms   ← 53倍の差
+ *
+ * だった。画面が表示するのは先頭の数十件なのに、毎回9秒ぶんの読み取りを
+ * していたことになる。在庫一覧(/inventory)では既にGSI経路へ切り替えて
+ * あったのに、この画面だけ古い経路のまま残っていた。
+ *
+ * ## 対象外カテゴリの除外と両立させる
+ *
+ * この一覧はEC出品対象外のカテゴリを落としてから表示する。ページごとに
+ * 取ってから落とすと、1ページの件数が減って穴が空く。そこで
+ * **必要件数より多めに取ってから絞る**。取りすぎないよう上限を置き、
+ * それでも足りなければ「次へ」で続きを取る。
+ */
 export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
   const [inventoryPage, channelListings, drafts, categoryNameOf] = await Promise.all([
-    listInventory({}, { offset: 0, limit: LISTING_OVERVIEW_MAX_ITEMS }),
+    // 対象カテゴリだけをGSIから引く(全件スキャンしない)。
+    listEcEligibleInventory(),
     fetchAllChannelListings("MERCARI_SHOPS"),
     fetchAllListingDrafts(),
     loadCategoryNameLookup(),
@@ -304,6 +329,8 @@ export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
   // にすら現れなければ、検索・絞り込み・ページングのどの経路からも
   // 復活しようがない(§94「search: 復活しない」)。
   return inventoryPage.items
+    // listEcEligibleInventory が対象カテゴリだけを引いているので、ここは
+    // 二重の網。カテゴリ名が後から変わった場合にも取りこぼさない。
     .filter((item) => isEcListingEligible(categoryNameOf(item.categoryId)))
     .map((item) => ({
       inventoryId: item.id,
