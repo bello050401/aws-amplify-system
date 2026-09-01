@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { clearInventoryCountCache } from "@/lib/inventory/inventoryPage";
 import { redirect } from "next/navigation";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import {
@@ -288,6 +289,9 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
 
   await logInventoryHistory(created.id, who, [{ fieldName: "登録", oldValue: null, newValue: `SKU ${sku} を新規登録` }]);
 
+  // 件数の集計はプロセス内に60秒だけ持つ（lib/inventory/inventoryPage.ts）。
+  // 追加・削除の直後に古い件数を出し続けないよう、ここで捨てる。
+  clearInventoryCountCache();
   revalidatePath("/inventory");
   if (options?.skipRedirect) return { id: created.id };
   redirect(`/inventory/${created.id}`);
@@ -412,6 +416,9 @@ export async function updateInventory(
   const removedImages = existing.images.filter((i) => !newImageKeys.includes(i.storageKey));
   await Promise.allSettled(allImageStorageKeys(removedImages).map((k) => removeInventoryImage(k)));
 
+  // 件数の集計はプロセス内に60秒だけ持つ（lib/inventory/inventoryPage.ts）。
+  // 追加・削除の直後に古い件数を出し続けないよう、ここで捨てる。
+  clearInventoryCountCache();
   revalidatePath("/inventory");
   revalidatePath(`/inventory/${inventoryId}`);
   if (options?.skipRedirect) return { id: inventoryId };
@@ -454,6 +461,9 @@ export async function deleteInventory(inventoryId: string): Promise<never> {
   await logInventoryHistory(inventoryId, who, [{ fieldName: "削除", oldValue: "有効", newValue: "削除済み" }]);
   await Promise.allSettled(allImageStorageKeys(existing.images).map((k) => removeInventoryImage(k)));
 
+  // 件数の集計はプロセス内に60秒だけ持つ（lib/inventory/inventoryPage.ts）。
+  // 追加・削除の直後に古い件数を出し続けないよう、ここで捨てる。
+  clearInventoryCountCache();
   revalidatePath("/inventory");
   redirect("/inventory");
 }
