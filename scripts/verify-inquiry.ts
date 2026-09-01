@@ -35,7 +35,7 @@ import { findLongVerbatimCopy, htmlToText, sanitizeExternalText } from "@/lib/in
 import { buildResearchCacheKey, isResearchCacheFresh, researchTtlMs } from "@/lib/inquiry/research/cache";
 import { compareBySourcePriority, downgradeIfUncertain, evaluateModelEvidence } from "@/lib/inquiry/research/port";
 import { buildInquiryUserPrompt, buildInquirySystemPrompt } from "@/lib/inquiry/prompt";
-import { assertsUnresolvedField, validateReplyDraft } from "@/lib/inquiry/validate";
+import { assertsUnresolvedField, isPersonalDataGrounded, validateReplyDraft } from "@/lib/inquiry/validate";
 import { identifyResearchableFields, normalizeMessage } from "@/lib/inquiry/pipeline";
 import { classifySource, extractFieldValue, isFetchableExternalUrl } from "@/lib/inquiry/research/service";
 
@@ -471,6 +471,64 @@ function testReplyValidation() {
   assertEqual(findLongVerbatimCopy("短い文", "短い文", 60), null, "コピー検出: 短い一致は誤検出しない");
 }
 
+/**
+ * 住所の扱い。Staging実測で見つかった不具合の再発防止。
+ *
+ * 「お店はどこにありますか」への返信で店舗の住所を書くと、既存の
+ * factSafety(出品コピー向け)がPERSONAL_DATAとして弾き、返信案が
+ * 2回とも不合格になって生成失敗になっていた。出品コピーに住所が出るのは
+ * 顧客の住所が漏れた場合しかないので、あちらの判定自体は正しい。
+ * 問い合わせ返信では、根拠(社内文書)に書かれている住所かどうかで分ける。
+ */
+function testAddressGrounding() {
+  const BASIC_INFO = ["BELLO 基本情報", "【所在地】", "埼玉県所沢市南永井939-1", "【営業時間】", "平日 9:00～17:00"].join("\n");
+
+  assertTrue(
+    isPersonalDataGrounded("所在地は埼玉県所沢市南永井939-1です。", [BASIC_INFO]),
+    "住所: 社内文書に書かれている店舗住所は根拠ありと判定する",
+  );
+  assertTrue(
+    !isPersonalDataGrounded("東京都渋谷区神南1-2-3へお越しください。", [BASIC_INFO]),
+    "住所: 根拠のどこにも無い住所は根拠なしと判定する",
+  );
+  assertTrue(
+    isPersonalDataGrounded("埼玉県所沢市南永井９３９−１です。", [BASIC_INFO]),
+    "住所: 全角数字やハイフンの表記ゆれを吸収する",
+  );
+
+  const grounded = validateReplyDraft({
+    output: "BELLOの所在地は埼玉県所沢市南永井939-1です。営業時間は平日9:00～17:00となっております。",
+    facts: REPLY_FACTS,
+    allowedShippingFeeYen: null,
+    unresolved: [],
+    externalTexts: [],
+    allowedDimensionText: [],
+    groundedTexts: [BASIC_INFO],
+  });
+  assertTrue(grounded.ok, "住所: 社内文書に基づく店舗案内の返信は通る");
+
+  const ungrounded = validateReplyDraft({
+    output: "お客様の東京都渋谷区神南1-2-3へお届けします。",
+    facts: REPLY_FACTS,
+    allowedShippingFeeYen: null,
+    unresolved: [],
+    externalTexts: [],
+    allowedDimensionText: [],
+    groundedTexts: [BASIC_INFO],
+  });
+  assertTrue(!ungrounded.ok, "住所: 根拠の無い住所は従来どおり弾く");
+
+  const noGrounding = validateReplyDraft({
+    output: "所在地は埼玉県所沢市南永井939-1です。",
+    facts: REPLY_FACTS,
+    allowedShippingFeeYen: null,
+    unresolved: [],
+    externalTexts: [],
+    allowedDimensionText: [],
+  });
+  assertTrue(!noGrounding.ok, "住所: 根拠を渡さなければ従来どおり弾く(既定の厳しさを変えない)");
+}
+
 // ── §11 normalizeMessage ────────────────────────────────────────────
 
 function testNormalizeMessage() {
@@ -490,6 +548,7 @@ function main() {
   testResearchCache();
   testPromptStructure();
   testReplyValidation();
+  testAddressGrounding();
   testNormalizeMessage();
 
   console.log(`\n${passes} passed, ${failures} failed`);

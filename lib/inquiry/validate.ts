@@ -14,6 +14,7 @@
  */
 import { checkFactSafety, type FactSafetyViolation } from "@/lib/ai/productIntro/factSafety";
 import type { CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
+import { JAPAN_PREFECTURES } from "@/lib/shipping/prefectures";
 import { findLongVerbatimCopy } from "./research/sanitize";
 import type { UnresolvedFact } from "./types";
 
@@ -55,6 +56,11 @@ export function validateReplyDraft(params: {
   externalTexts: string[];
   /** 生成文に出てよい寸法の文字列(在庫DBの寸法・外部調査で確認できた寸法)。 */
   allowedDimensionText: string[];
+  /**
+   * 返信の根拠として認めた文章(ナレッジ文書の抜粋・商品の事実)。
+   * 「その記述が根拠に書いてあるか」を判定するために使う。
+   */
+  groundedTexts?: string[];
   maxLength?: number;
 }): ReplyValidationResult {
   const violations: ReplyValidationViolation[] = [];
@@ -88,6 +94,18 @@ export function validateReplyDraft(params: {
     // 根拠のある金額しか書かれていないことは、すぐ上で既に確かめている
     // —— そのうえでPRICE_CLAIMを立てると、正しい回答が永久に通らない。
     if (v.code === "PRICE_CLAIM" && allowed != null && unauthorizedMoney.length === 0) continue;
+
+    // 住所も同じ理由で扱いが変わる。出品コピーに住所が出るのは、
+    // 商品メモに紛れ込んだ**顧客の住所**が漏れた場合しかない。一方、
+    // 「お店はどこにありますか」への返信で住所を書かないなら、答えて
+    // いないのと同じ。
+    //
+    // 区別する基準は「その住所がどこから来たか」。社内文書(基本情報.txt)
+    // に書かれている住所なら、それはBELLO自身の所在地として登録された
+    // 事実であり、出してよい。根拠のどこにも無い住所は、出典不明の
+    // 個人情報なので従来どおり弾く。
+    if (v.code === "PERSONAL_DATA" && isPersonalDataGrounded(output, params.groundedTexts ?? [])) continue;
+
     violations.push({ code: "FACT_SAFETY", detail: describeFactSafety(v) });
   }
 
@@ -153,6 +171,60 @@ export function assertsUnresolvedField(output: string, field: string): boolean {
     if (ASSERTION_MARKERS.some((a) => sentence.includes(a))) return true;
   }
   return false;
+}
+
+/**
+ * 生成文に現れた「住所・電話番号らしき記述」が、すべて根拠の文章に
+ * 由来しているか。
+ *
+ * 【なぜ「根拠テキストにも個人情報がある」で済ませないか】それだと、
+ * ナレッジ文書のどこかに住所さえあれば、生成文にどんな住所を書いても
+ * 通ってしまう。実際に書かれた記述そのものが根拠の中にあることを見る。
+ *
+ * 表記ゆれ(全角数字・空白)を吸収してから比較する。番地の書き方が
+ * 「939-1」と「939−1」で違うだけで弾かれるのは、正しさに寄与しない。
+ */
+export function isPersonalDataGrounded(output: string, groundedTexts: string[]): boolean {
+  const mentions = extractPersonalDataMentions(output);
+  if (mentions.length === 0) return false;
+  const grounded = groundedTexts.map(normalizeForGrounding).join(" | ");
+  return mentions.every((m) => grounded.includes(normalizeForGrounding(m)));
+}
+
+/**
+ * looksLikePersonalDataが見ているのと同じ形を、実際の文字列として取り出す。
+ *
+ * 住所の末尾は「ひらがなが現れたら終わり」とする。`[^\s、。]{0,20}` の
+ * ように貪欲に取ると「…南永井939-1です」まで含んでしまい、根拠の文書に
+ * 書かれている「…南永井939-1」と一致しなくなる。日本語の住所表記に
+ * ひらがなは現れない(「の」を含む地名はあるが、番地の後には来ない)。
+ */
+function extractPersonalDataMentions(text: string): string[] {
+  const t = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  const addressTail = "[\\u4E00-\\u9FFF\\u30A0-\\u30FFA-Za-z0-9\\-−ー－丁目番地条]*";
+  // 都道府県名は閉じた集合なので、そのまま並べる。
+  // `[^\s]{2,3}県` のようなワイルドカードだと、「所在地は埼玉県…」から
+  // 「は埼玉県…」を切り出してしまい、根拠の文書に書かれている
+  // 「埼玉県…」と一致しなくなる(実際にそうなった)。
+  const prefectures = JAPAN_PREFECTURES.join("|");
+  const patterns = [
+    /\d{3}\s*[-−ー－]\s*\d{4}/g,
+    /0\d{1,4}[-−ー－]\d{1,4}[-−ー－]\d{3,4}/g,
+    new RegExp(`(?:${prefectures})\\s*[^\\s]{1,12}?(?:市|区|郡|町|村)${addressTail}`, "g"),
+    new RegExp(`\\d+\\s*丁目${addressTail}`, "g"),
+  ];
+  const found: string[] = [];
+  for (const re of patterns) {
+    for (const m of t.matchAll(re)) found.push(m[0]);
+  }
+  return found;
+}
+
+function normalizeForGrounding(text: string): string {
+  return text
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[-−ー－]/g, "-")
+    .replace(/[\s　]/g, "");
 }
 
 function describeFactSafety(v: FactSafetyViolation): string {

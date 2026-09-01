@@ -264,6 +264,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       unresolved,
       externalTexts: research.documentTexts,
       allowedDimensionText,
+      // 根拠として認めた文章。住所のように「出典があれば出してよいが
+      // 出典が無ければ個人情報」という記述の判定に使う。
+      groundedTexts: [...knowledgeHits.map((k) => k.excerpt), ...trustedProductFacts.map((f) => f.value)],
     });
     if (validation.ok) {
       return {
