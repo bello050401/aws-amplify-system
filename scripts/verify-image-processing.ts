@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { RETENTION_DAYS, selectExpiredVersions } from "@/lib/imageProcessing/retention";
 import { OriginalImageMissingError } from "@/lib/inventory/originalHashRepair";
 import { parseReferenceImageKeys, serializeForAwsJson } from "@/lib/imageProcessing/photoProfile";
 /**
@@ -345,7 +346,68 @@ async function testToneCorrection() {
   assertTrue(result.diagnostics.tone.notes.length > 0, "トーン: なぜその補正になったかを説明として残す");
 }
 
+/**
+ * 採用されなかった加工結果の保持期間。
+ * 「残しすぎは容量の問題だが、消しすぎは復旧できない」ので、
+ * 消さない側の条件を重点的に固定する。
+ */
+function testRetention() {
+  const now = new Date("2026-09-02T00:00:00.000Z");
+  const daysAgo = (n: number) => new Date(now.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
+  const base = {
+    imageStorageKey: "inventory/a.jpg",
+    active: false,
+    status: "COMPLETED",
+    processedMasterKey: "m",
+    webKey: "w",
+    thumbnailKey: "t",
+  };
+
+  assertEqual(RETENTION_DAYS, 14, "retention: 保持期間は14日");
+
+  // 採用版がある画像の、14日より古い未採用版だけが消える。
+  const withActive = [
+    { ...base, id: "adopted", version: 2, active: true, completedAt: daysAgo(30), processedMasterKey: "m2", webKey: "w2", thumbnailKey: "t2" },
+    { ...base, id: "old", version: 1, completedAt: daysAgo(20) },
+  ];
+  const d1 = selectExpiredVersions(withActive, now);
+  assertEqual(d1.expired.map((e) => e.id), ["old"], "retention: 採用版がある画像の古い未採用版は消える");
+  assertEqual(d1.storageKeys.sort(), ["m", "t", "w"], "retention: master/web/thumbの3つを削除対象にする");
+
+  // 採用版が無ければ消さない(最後の砦)。
+  const noActive = [{ ...base, id: "only", version: 1, completedAt: daysAgo(60) }];
+  assertEqual(selectExpiredVersions(noActive, now).expired.length, 0, "retention: 採用版が1つも無い画像は消さない(復旧手段が無くなる)");
+
+  // 14日ちょうどは消さない、15日は消す。
+  const boundary = [
+    { ...base, id: "adopted", version: 9, active: true, completedAt: daysAgo(1) },
+    { ...base, id: "exact14", version: 1, completedAt: daysAgo(14) },
+  ];
+  assertEqual(selectExpiredVersions(boundary, now).expired.length, 0, "retention: ちょうど14日は消さない(境界)");
+  const past = [
+    { ...base, id: "adopted", version: 9, active: true, completedAt: daysAgo(1) },
+    { ...base, id: "day15", version: 1, completedAt: daysAgo(15) },
+  ];
+  assertEqual(selectExpiredVersions(past, now).expired.map((e) => e.id), ["day15"], "retention: 15日経過は消す");
+
+  // 採用済み・失敗・実行中は消さない。
+  const mixed = [
+    { ...base, id: "adopted", version: 9, active: true, completedAt: daysAgo(1) },
+    { ...base, id: "failed", version: 1, status: "FAILED", completedAt: daysAgo(90) },
+    { ...base, id: "running", version: 2, status: "PROCESSING", completedAt: null },
+    { ...base, id: "noDate", version: 3, completedAt: null },
+  ];
+  assertEqual(selectExpiredVersions(mixed, now).expired.length, 0, "retention: 採用済み・失敗・実行中・日時不明はいずれも消さない");
+  assertTrue(
+    Object.keys(selectExpiredVersions(mixed, now).keptReasons).length >= 3,
+    "retention: 残した理由を内訳として説明できる",
+  );
+
+  assertEqual(selectExpiredVersions([], now).expired.length, 0, "retention: 対象が無ければ何も消さない");
+}
+
 async function main() {
+  testRetention();
   testAspectRatioDecision();
   testCompositionStrength();
   testIdempotencyKey();
