@@ -220,14 +220,18 @@ async function updateInventory(input: UpdateInventoryInput): Promise<void> {
   // 差分が検出された場合のみupdateInventoryを呼ぶ(unchanged fast-pathは
   // ここに到達しない)ので、listUpdatedAtを更新してよい対象。
   const fields: Record<string, unknown> = {
-    name: input.name,
     images: input.images,
     updatedBy: input.updatedBy,
     updatedAt: new Date().toISOString(),
     listUpdatedAt: new Date().toISOString(),
     ...input.extendedFields,
   };
+  // 2026-09-02: name も任意になった。項目別の更新方針
+  // (lib/inventory/zaicoUpdatePolicy.ts)によっては商品名を更新しない
+  // と決まるため、undefined をそのまま書いて既存値を壊さないよう、
+  // 他の任意項目と同じ扱いにする。
   for (const [key, value] of [
+    ["name", input.name],
     ["categoryId", input.categoryId],
     ["locationId", input.locationId],
     ["quantity", input.quantity],
@@ -237,6 +241,7 @@ async function updateInventory(input: UpdateInventoryInput): Promise<void> {
     ["purchasePrice", input.purchasePrice],
     ["salePrice", input.salePrice],
     ["customFields", input.customFields],
+    ["zaicoSnapshotJson", input.zaicoSnapshotJson],
   ] as const) {
     if (value !== undefined) fields[key] = value;
   }

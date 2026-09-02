@@ -51,7 +51,11 @@
     "verify:intro-validator": "node scripts/with-server-only-stub.cjs scripts/verify-intro-validator.ts",
     "verify:search-projection": "node scripts/with-server-only-stub.cjs scripts/verify-search-projection.ts",
     "verify:sales-aggregate": "node scripts/with-server-only-stub.cjs scripts/verify-sales-aggregate.ts",
-    "rebuild:sales-aggregate": "node scripts/with-server-only-stub.cjs scripts/rebuild-sales-aggregate.ts"
+    "rebuild:sales-aggregate": "node scripts/with-server-only-stub.cjs scripts/rebuild-sales-aggregate.ts",
+    "e2e:staging": "playwright test --config=playwright.staging.config.ts",
+    "e2e:staging:login": "node scripts/with-server-only-stub.cjs scripts/staging-login.ts",
+    "verify:zaico-update-policy": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-update-policy.ts",
+    "audit:zaico-update-policy": "node scripts/with-server-only-stub.cjs scripts/audit-zaico-update-policy.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

@@ -475,6 +475,24 @@ const schema = a.schema({
       // はまだ実装しない"), just reserved so that work doesn't need
       // another schema change to get started.
       sourceSystem: a.string(),
+      /**
+       * 前回のZAICO同期が「ZAICOから渡された値」を項目ごとに畳んだもの
+       * (JSON文字列)。2026-09-02 追加。
+       *
+       * 人が変更した値をZAICO同期が差し戻す事故が実データで確認された
+       * ため、3-way merge の基準として持つ:
+       *
+       *   BELLOの現在値 === 前回のZAICO値  → 誰も触っていない → 更新可
+       *   BELLOの現在値 !== 前回のZAICO値  → 人が変えた       → 方針に従う
+       *
+       * ここに入るのは**ZAICOが何と言ってきたか**であって、BELLOが何に
+       * なったかではない。取り違えると、人が変更した項目が次回
+       * 「前回値と同じ」に見えて2回目の同期で上書きされる。
+       *
+       * 未記録(null)は「誰が入れた値か分からない」を意味し、保護対象の
+       * 項目は上書きせずスナップショットだけを記録する(安全側)。
+       */
+      zaicoSnapshotJson: a.string(),
       sourceInventoryId: a.string(),
 
       // 第六ラウンド§19-20(P0-5): 一覧のupdatedAt DESCソート済み

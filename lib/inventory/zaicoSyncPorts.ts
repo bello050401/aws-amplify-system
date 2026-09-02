@@ -118,7 +118,11 @@ export interface NewInventoryInput {
 
 export interface UpdateInventoryInput {
   id: string;
-  name: string;
+  /**
+   * 2026-09-02: 任意になった。項目別の更新方針(zaicoUpdatePolicy.ts)に
+   * よって、商品名を更新しないと決まる場合があるため。
+   */
+  name?: string;
   categoryId?: string;
   locationId?: string;
   quantity?: number;
@@ -131,6 +135,11 @@ export interface UpdateInventoryInput {
   customFields: string | undefined;
   updatedBy: string;
   extendedFields: Record<string, unknown>;
+  /**
+   * 今回ZAICOが渡してきた値のスナップショット(JSON)。次回の3-way
+   * merge の基準になる。**書き込んだ値ではなくZAICOが言ってきた値**。
+   */
+  zaicoSnapshotJson?: string;
 }
 
 /**
@@ -335,6 +344,9 @@ export function createServerSyncPort(): ZaicoSyncPort {
           images: input.images,
           customFields: input.customFields,
           updatedBy: input.updatedBy,
+          // 次回の3-way merge の基準。ZAICOが何と言ってきたかを残す
+          // (BELLOへ書き込んだ値ではない)。
+          zaicoSnapshotJson: input.zaicoSnapshotJson,
           // 第六ラウンドP0-5: ZAICO側の実データ変更を反映する更新なので
           // 一覧の並び順を最新化する対象。
           listUpdatedAt: new Date().toISOString(),

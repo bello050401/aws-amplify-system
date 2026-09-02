@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
+import { mergeZaicoUpdate } from "./zaicoSyncMerge";
 import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
 import { ALL_EXTENDED_FIELDS } from "./extendedFields";
 import type { InventoryModel, ZaicoSyncPort, MasterCache } from "./zaicoSyncPorts";
@@ -434,22 +435,71 @@ export async function syncOneZaicoItem(
     }
 
     const existingRecord = existing!;
+
+    // ── 項目別の更新方針を適用する(2026-09-02) ────────────────────
+    //
+    // 以前はここで全項目を無条件に上書きしていた。その結果、人が
+    // 「発送完了 → 補修待ち」へ戻した判断を42分後の同期が差し戻す、
+    // という事故が実データで2件起きていた(lib/inventory/
+    // zaicoUpdatePolicy.ts の冒頭に履歴を引用してある)。
+    //
+    // いまは前回ZAICOが渡した値をスナップショットとして持ち、
+    //   BELLOの現在値 === 前回のZAICO値 → 誰も触っていない → 更新可
+    //   BELLOの現在値 !== 前回のZAICO値 → 人が変えた       → 方針に従う
+    // で判定する。
+    const merge = mergeZaicoUpdate({
+      zaico: {
+        categoryId: categoryId ?? undefined,
+        locationId: locationId ?? undefined,
+        name: core.name,
+        quantity: core.quantity ?? undefined,
+        unit: core.unit ?? undefined,
+        note: core.note ?? undefined,
+        barcode: core.barcode ?? undefined,
+        purchasePrice: optAttrs.coreFields.purchasePrice,
+        salePrice: optAttrs.coreFields.salePrice,
+        extendedFields: optAttrs.extendedFields as Record<string, unknown>,
+        customFields: optAttrs.customFields as Record<string, unknown>,
+      },
+      bello: {
+        categoryId: existingRecord.categoryId ?? null,
+        locationId: existingRecord.locationId ?? null,
+        name: existingRecord.name,
+        quantity: existingRecord.quantity ?? null,
+        unit: existingRecord.unit ?? null,
+        note: existingRecord.note ?? null,
+        barcode: existingRecord.barcode ?? null,
+        purchasePrice: existingRecord.purchasePrice ?? null,
+        salePrice: existingRecord.salePrice ?? null,
+        extendedFields: existingRecord as unknown as Record<string, unknown>,
+        customFields: existingCustomFields,
+      },
+      snapshotJson: (existingRecord as unknown as { zaicoSnapshotJson?: string | null }).zaicoSnapshotJson ?? null,
+      isNewRecord: false,
+    });
+
+    // 人の編集を守って据え置いた項目・自動判断しない食い違いは、黙って
+    // 落とさず必ず報告へ載せる。「同期したのに変わっていない」を
+    // 利用者が自分で調べる羽目にならないようにする。
+    for (const s of merge.skipped) {
+      warnings.push(`${s.label}: ZAICOの値を反映しませんでした(${s.reason})`);
+    }
+    for (const c of merge.conflicts) {
+      warnings.push(
+        `${c.label}: BELLO「${String(c.belloValue)}」とZAICO「${String(c.zaicoValue)}」が食い違っています。` +
+          `どちらが正しいか確認してください(自動では変更していません)。`,
+      );
+    }
+
     try {
       await port.updateInventory({
         id: existingRecord.id,
-        name: core.name,
-        categoryId: categoryId ?? undefined,
-        locationId: locationId ?? undefined,
-        quantity: core.quantity !== null ? core.quantity : undefined,
-        unit: core.unit !== null ? core.unit : undefined,
-        note: core.note !== null ? core.note : undefined,
-        barcode: core.barcode !== null ? core.barcode : undefined,
-        purchasePrice: optAttrs.coreFields.purchasePrice,
-        salePrice: optAttrs.coreFields.salePrice,
+        ...merge.updates,
         images: imageMerge.images,
-        customFields: stringifyCustomFields(mergedCustomFields),
+        customFields: stringifyCustomFields(merge.customFields),
         updatedBy: who ?? "ZAICO同期",
-        extendedFields: optAttrs.extendedFields,
+        extendedFields: merge.extendedFields,
+        zaicoSnapshotJson: merge.nextSnapshotJson,
       });
     } catch (err) {
       if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);

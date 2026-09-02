@@ -38,3 +38,7 @@ zaico-verification/output/
 
 # E2E用のStaging認証情報（コミット禁止・使用後は削除）
 .env.e2e.local
+
+# Staging E2E: 保存済みのログイン状態はリポジトリ外(%LOCALAPPDATA%\BELLO\playwright)へ
+# 置くが、万一ここへ出力した場合に備えて無視する。中身は生きたCognitoトークン。
+*storage-state*.json
