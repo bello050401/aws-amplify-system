@@ -28,7 +28,7 @@
 param(
     [string] $RepoPath,
     [string] $SessionName,
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'bello-claude-host.config.psd1'),
+    [string] $ConfigPath,
 
     # Task Scheduler location.
     [string] $TaskName = 'ClaudeCodeRemoteControl',
@@ -54,6 +54,55 @@ param(
     [switch] $ReportOnly
 )
 
+# ---------------------------------------------------------------------------
+# Script directory resolution - Windows PowerShell 5.1 safe.
+#
+# Never use $BelloScriptDir in a param() default. PowerShell evaluates parameter
+# defaults BEFORE the script body runs, and $BelloScriptDir is empty whenever the
+# script is dot-sourced, run through Invoke-Expression, executed from an editor
+# selection, or hosted without a script context. Join-Path then fails with
+# "Cannot bind argument to parameter 'Path' because it is an empty string"
+# before any of this script's own code gets a chance to run.
+#
+# Resolve the directory here instead, at script scope, where $MyInvocation
+# still refers to this script, with the current directory as a last resort.
+# ---------------------------------------------------------------------------
+$BelloScriptDir = ''
+if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $BelloScriptDir = $PSScriptRoot
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir) -and -not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+    $BelloScriptDir = Split-Path -Parent $PSCommandPath
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $belloInvocationPath = ''
+    if ($MyInvocation -and $MyInvocation.MyCommand) {
+        $belloInvocationPath = [string]$MyInvocation.MyCommand.Path
+    }
+    if (-not [string]::IsNullOrWhiteSpace($belloInvocationPath)) {
+        $BelloScriptDir = Split-Path -Parent $belloInvocationPath
+    }
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $BelloScriptDir = (Get-Location).ProviderPath
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $BelloScriptDir = '.'
+}
+# If the toolkit files are not beside the resolved directory but they are in
+# the current directory, prefer the current directory.
+if (-not (Test-Path -LiteralPath (Join-Path $BelloScriptDir 'bello-claude-host.config.psd1'))) {
+    $belloCurrentDir = (Get-Location).ProviderPath
+    if ((-not [string]::IsNullOrWhiteSpace($belloCurrentDir)) -and
+        (Test-Path -LiteralPath (Join-Path $belloCurrentDir 'bello-claude-host.config.psd1'))) {
+        $BelloScriptDir = $belloCurrentDir
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $BelloScriptDir 'bello-claude-host.config.psd1'
+}
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
@@ -64,9 +113,9 @@ function Write-Warn   { param([string]$m) Write-Host "  [warn] $m" -ForegroundCo
 function Write-Fail   { param([string]$m) Write-Host "  [FAIL] $m" -ForegroundColor Red }
 function Write-Action { param([string]$m) Write-Host "  [YOU]  $m" -ForegroundColor Magenta }
 
-$supervisor = Join-Path $PSScriptRoot 'Start-BelloClaudeHost.ps1'
+$supervisor = Join-Path $BelloScriptDir 'Start-BelloClaudeHost.ps1'
 if (-not (Test-Path -LiteralPath $supervisor)) {
-    throw "Start-BelloClaudeHost.ps1 not found next to this script ($PSScriptRoot)."
+    throw "Start-BelloClaudeHost.ps1 not found next to this script ($BelloScriptDir)."
 }
 
 # --------------------------------------------------------------------------
@@ -86,7 +135,20 @@ if ($PSBoundParameters.ContainsKey('RepoPath'))    { $config.RepoPath    = $Repo
 if ($PSBoundParameters.ContainsKey('SessionName')) { $config.SessionName = $SessionName }
 
 if ([string]::IsNullOrWhiteSpace($config.LogRoot)) {
-    $config.LogRoot = Join-Path $env:LOCALAPPDATA 'BELLO\claude-host'
+    # LOCALAPPDATA can be absent in some non-interactive contexts; resolve it
+    # without depending on the environment variable so Join-Path never receives
+    # an empty string.
+    $belloLocalAppData = [string]$env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($belloLocalAppData)) {
+        $belloLocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
+    }
+    if ([string]::IsNullOrWhiteSpace($belloLocalAppData) -and -not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $belloLocalAppData = Join-Path $env:USERPROFILE 'AppData\Local'
+    }
+    if ([string]::IsNullOrWhiteSpace($belloLocalAppData)) {
+        $belloLocalAppData = $BelloScriptDir
+    }
+    $config.LogRoot = Join-Path $belloLocalAppData 'BELLO\claude-host'
 }
 
 Write-Info "Repository  : $($config.RepoPath)"
@@ -137,11 +199,15 @@ Write-Step '3. Claude Code installation'
 function Find-Claude {
     $c = Get-Command -Name 'claude' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($c) { return @{ File = $c.Source; Kind = 'path' } }
-    $native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
-    if (Test-Path -LiteralPath $native) { return @{ File = $native; Kind = 'native' } }
-    foreach ($leaf in @('claude.cmd', 'claude.exe')) {
-        $p = Join-Path $env:APPDATA ('npm\' + $leaf)
-        if (Test-Path -LiteralPath $p) { return @{ File = $p; Kind = 'npm' } }
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+        if (Test-Path -LiteralPath $native) { return @{ File = $native; Kind = 'native' } }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        foreach ($leaf in @('claude.cmd', 'claude.exe')) {
+            $p = Join-Path $env:APPDATA ('npm\' + $leaf)
+            if (Test-Path -LiteralPath $p) { return @{ File = $p; Kind = 'npm' } }
+        }
     }
     return $null
 }
@@ -258,8 +324,20 @@ if ($foundOther) {
 # --------------------------------------------------------------------------
 Write-Step '5. Scheduled task registration'
 
-$psExe = Join-Path $PSHOME 'powershell.exe'
-if (-not (Test-Path -LiteralPath $psExe)) { $psExe = Join-Path $PSHOME 'pwsh.exe' }
+# Drive the scheduled task with Windows PowerShell 5.1, which exists on every
+# supported Windows build. Using $PSHOME would bind the task to whichever host
+# happened to run this installer (PowerShell 7, an IDE-embedded host, ...).
+$belloSystemRoot = [string]$env:SystemRoot
+if ([string]::IsNullOrWhiteSpace($belloSystemRoot)) { $belloSystemRoot = 'C:\Windows' }
+$psExe = Join-Path $belloSystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $psExe)) {
+    $psFallback = Get-Command 'powershell.exe' -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($psFallback) { $psExe = $psFallback.Source }
+    elseif (Test-Path -LiteralPath (Join-Path $PSHOME 'pwsh.exe')) { $psExe = Join-Path $PSHOME 'pwsh.exe' }
+    else { $psExe = Join-Path $PSHOME 'powershell.exe' }
+}
+Write-Info "Task host: $psExe"
 
 $windowStyle = if ($Hidden) { 'Hidden' } else { 'Minimized' }
 $argLine = '-NoProfile -ExecutionPolicy Bypass -WindowStyle {0} -File "{1}" -ConfigPath "{2}"' -f `
@@ -273,7 +351,7 @@ if ($ReportOnly) {
 } else {
     $userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-    $action = New-ScheduledTaskAction -Execute $psExe -Argument $argLine -WorkingDirectory $PSScriptRoot
+    $action = New-ScheduledTaskAction -Execute $psExe -Argument $argLine -WorkingDirectory $BelloScriptDir
 
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
     # Let the network stack settle before the first connection attempt.
@@ -392,8 +470,8 @@ Write-Action "   Remote Control must be started from a trusted project directory
 Write-Info    "Both are one-time. The scheduled task reuses the login afterwards."
 
 Write-Step 'Next'
-Write-Info "Verify the setup:  powershell -ExecutionPolicy Bypass -File `"$(Join-Path $PSScriptRoot 'Test-BelloClaudeHost.ps1')`""
+Write-Info "Verify the setup:  powershell -ExecutionPolicy Bypass -File `"$(Join-Path $BelloScriptDir 'Test-BelloClaudeHost.ps1')`""
 Write-Info "Start it now:      powershell -ExecutionPolicy Bypass -File `"$supervisor`""
-Write-Info "Check status:      powershell -ExecutionPolicy Bypass -File `"$(Join-Path $PSScriptRoot 'Get-BelloClaudeHostStatus.ps1')`""
+Write-Info "Check status:      powershell -ExecutionPolicy Bypass -File `"$(Join-Path $BelloScriptDir 'Get-BelloClaudeHostStatus.ps1')`""
 Write-Info "Logs:              $(Join-Path $config.LogRoot 'logs')"
-Write-Info "Undo everything:   powershell -ExecutionPolicy Bypass -File `"$(Join-Path $PSScriptRoot 'Uninstall-BelloClaudeHost.ps1')`""
+Write-Info "Undo everything:   powershell -ExecutionPolicy Bypass -File `"$(Join-Path $BelloScriptDir 'Uninstall-BelloClaudeHost.ps1')`""

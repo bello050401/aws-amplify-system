@@ -2,9 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { getInventoryDetail } from "@/lib/inventory/queries";
-import { generateListingCopy, type ListingCopyResult } from "@/lib/ai/ecCopy";
-import { buildCustomerSafeFacts } from "@/lib/ai/productIntro/facts";
+import { generateCanonicalProductPage, toListingDraftCopy, type ListingDraftCopy } from "@/lib/ai/productPage/canonical";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §56/§88-90: AI生成のServer Action層。
@@ -71,7 +69,22 @@ async function requireEditPermission(): Promise<void> {
   if (!canEditInventory(role)) throw new Error("この操作にはADMINまたはEDITOR権限が必要です。");
 }
 
-export type GenerateListingCopyActionResult = { ok: true; data: ListingCopyResult } | { ok: false; error: string; correlationId: string };
+export type GenerateListingCopyActionResult =
+  | {
+      ok: true;
+      data: ListingDraftCopy;
+      /** 品質検査で見つかった問題(空なら合格)。担当者向け。 */
+      violations: string[];
+      /** 在庫に無いため空欄のまま返した項目。 */
+      missingFacts: string[];
+      /** 参照した BELLO Style Profile の version。 */
+      styleProfileVersion: number | null;
+      /** 文体の参考にした過去BASE商品のID(監査用)。 */
+      referencedBaseItemIds: string[];
+      /** 紹介文から寸法を含む文を機械的に除去したか。 */
+      introSanitized: boolean;
+    }
+  | { ok: false; error: string; correlationId: string };
 
 /**
  * §57: Inventoryの事実情報のみをAIへ渡す — adminMemo(自社内での連絡
@@ -81,33 +94,21 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
   const correlationId = randomUUID();
   try {
     await requireEditPermission();
-    const inventory = await getInventoryDetail(inventoryId);
-    if (!inventory) throw new Error("対象の在庫が見つかりません。");
 
-    // 【2026-09-01】以前はここで inventory.conditionRating と
-    // inventory.note を**そのまま**AIへ渡していた。本番データを実測した
-    // 結果、その2つは顧客向けの生成に渡してよい値ではなかった:
+    // ── 2026-09-02 指示書§2: 生成エンジンを一本化した ──────────
     //
-    //   - conditionRating の実態は社内の5段階スコア("3.5"/"4"/"3"…)。
-    //     これを「コンディション: 4」として渡していたため、モデルは
-    //     忠実に「コンディションは4です」と書いていた。顧客へ開示すべき
-    //     状態説明は damageNotes 側にあるのに、そちらは渡していなかった。
-    //   - note には顧客の配送先住所が入っている行がある(実測300件中2件)。
-    //     生成結果は公開される商品説明なので、他人の住所が載り得た。
+    // 以前はここが lib/ai/ecCopy.ts の generateListingCopy を呼んでいた。
+    // 同じ画面の下側にある「BASE商品ページの下書き」より品質が低かった
+    // 理由は文章の巧拙ではなく、**片方にだけ機能が付いていた**ことだった:
     //
-    // buildCustomerSafeFacts が、社内スコアの除去・個人情報らしき記述の
-    // 除去・寸法の整形をまとめて行う。落とした項目は redactions として
-    // 返るので、サーバーログにだけ残す(顧客にもUIにも出さない)。
-    const { facts, redactions } = buildCustomerSafeFacts({
-      name: inventory.name,
-      width: inventory.width,
-      depth: inventory.depth,
-      height: inventory.height,
-      conditionRating: inventory.conditionRating,
-      damageNotes: inventory.damageNotes,
-      note: inventory.note,
-    });
-    if (redactions.length > 0) {
+    //   BELLO Style Profile / 類似BASE商品 / セクション構造 /
+    //   紹介文の寸法除外検査 / missing facts
+    //
+    // これらが上側には1つも無かった。下側を正本にして、上側からも
+    // 同じ関数を呼ぶ。生成コアは複製しない(lib/ai/productPage/canonical.ts)。
+    const result = await generateCanonicalProductPage(inventoryId);
+
+    if (result.redactions.length > 0) {
       console.info(
         JSON.stringify({
           level: "info",
@@ -115,21 +116,31 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
           correlationId,
           message: "AIへ渡す前に除外した項目があります",
           inventoryId,
-          redactions,
+          redactions: result.redactions,
         }),
       );
     }
 
-    const data = await generateListingCopy({
-      name: facts.name,
-      dimensions: facts.dimensions,
-      categoryName: facts.categoryName,
-      conditionNote: facts.conditionDisclosure,
-      note: facts.publicNote,
-      // 生成後の機械検査が「出てはいけない値」として使う。
-      guard: { stockQuantity: inventory.quantity, sku: inventory.sku },
-    });
-    return { ok: true, data };
+    const copy = toListingDraftCopy(result);
+    if (!copy) {
+      return {
+        ok: false,
+        error: result.failureReason ?? "AI下書きの生成に失敗しました。",
+        correlationId,
+      };
+    }
+
+    // 品質検査に落ちた場合も、何が出たのかを人が見られるように結果は返す
+    // ——ただし「問題なし」とは言わない。violations を添えて返す。
+    return {
+      ok: true,
+      data: copy,
+      violations: result.violations.map((v) => v.detail),
+      missingFacts: result.missingFacts,
+      styleProfileVersion: result.usedStyleProfileVersion,
+      referencedBaseItemIds: result.referencedBaseItemIds,
+      introSanitized: result.introSanitized ?? false,
+    };
   } catch (err) {
     logActionFailure("generateListingCopyAction", correlationId, { inventoryId }, err);
     return { ok: false, error: safeErrorMessage(err, "AI下書きの生成に失敗しました。時間をおいて再試行してください。"), correlationId };

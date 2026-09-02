@@ -74,6 +74,20 @@ export function ListingForm({
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  /**
+   * 生成の品質情報(2026-09-02 指示書§2/§10)。
+   *
+   * どのStyle Profile版を使い、どの過去BASE商品を参考にし、検査で何が
+   * 引っかかったかを担当者へ出す。「生成しました」だけでは、寸法が
+   * 混ざったのか事実を作ったのかが分からない。
+   */
+  const [aiQuality, setAiQuality] = useState<{
+    violations: string[];
+    missingFacts: string[];
+    styleProfileVersion: number | null;
+    referencedBaseItemIds: string[];
+    introSanitized: boolean;
+  } | null>(null);
 
   const [categoryId, setCategoryId] = useState(initialChannelListing?.categoryMapping?.mercariCategoryId ?? "");
   const [categoryName, setCategoryName] = useState(initialChannelListing?.categoryMapping?.mercariCategoryName ?? "");
@@ -122,6 +136,7 @@ export function ListingForm({
   async function handleGenerateWithAi() {
     setAiBusy(true);
     setDraftError(null);
+    setAiQuality(null);
     try {
       const result = await generateListingCopyAction(inventoryId);
       if (!result.ok) {
@@ -129,8 +144,19 @@ export function ListingForm({
         return;
       }
       setTitle(result.data.title);
-      const points = result.data.sellingPoints.length > 0 ? `\n\n${result.data.sellingPoints.map((p) => `・${p}`).join("\n")}` : "";
-      setDescription(`${result.data.description}${points}\n\n【コンディション】${result.data.conditionText}`);
+      // 2026-09-02: 本文は正本エンジンが作ったセクション付きの完成形を
+      // そのまま使う。以前はここで箇条書きと【コンディション】を継ぎ足して
+      // いたが、いまは description に「◎商品のご紹介 / ◎サイズ /
+      // ◎コンディション / ◎発送について」が既に入っているので、
+      // 足すと二重になる。
+      setDescription(result.data.description);
+      setAiQuality({
+        violations: result.violations,
+        missingFacts: result.missingFacts,
+        styleProfileVersion: result.styleProfileVersion,
+        referencedBaseItemIds: result.referencedBaseItemIds,
+        introSanitized: result.introSanitized,
+      });
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "AI生成に失敗しました。");
     } finally {
@@ -240,6 +266,30 @@ export function ListingForm({
             {aiBusy ? "生成中…" : "AIで下書きを生成"}
           </button>
         </div>
+        {aiQuality && (
+          <div className="mb-2 border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-600">
+            <p className="font-bold text-gray-700">生成の内訳（担当者向け）</p>
+            <p>
+              文体プロファイル: {aiQuality.styleProfileVersion != null ? `v${aiQuality.styleProfileVersion}` : "未設定"} ／ 参考にした過去BASE商品:{" "}
+              {aiQuality.referencedBaseItemIds.length}件
+            </p>
+            {aiQuality.introSanitized && (
+              <p className="text-amber-700">「◎商品のご紹介」に寸法が含まれていたため、該当の文を自動で取り除きました。</p>
+            )}
+            {aiQuality.missingFacts.length > 0 && (
+              <p>在庫に無いため空欄のまま: {aiQuality.missingFacts.join("、")}</p>
+            )}
+            {aiQuality.violations.length > 0 ? (
+              <ul className="mt-1 border border-amber-300 bg-amber-50 p-1 text-amber-800">
+                {aiQuality.violations.map((v, i) => (
+                  <li key={i}>・{v}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-gray-500">品質検査: 問題は見つかりませんでした。</p>
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-3">
           <div>
             <label className="block text-[12px] text-gray-600">

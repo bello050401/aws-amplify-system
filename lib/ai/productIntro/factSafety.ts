@@ -31,7 +31,13 @@ export type FactSafetyViolationCode =
   | "PROMPT_LEAKAGE"
   | "EMPTY_OUTPUT"
   | "TOO_LONG"
-  | "EXCESSIVE_REPETITION";
+  | "EXCESSIVE_REPETITION"
+  // 2026-09-02 指示書§5/§7: 商品ページ生成の品質ゲート。
+  // 「◎商品のご紹介」に寸法が残っている / 一般的なEC表現に偏っている。
+  // 事実の捏造ではないが、どちらも「そのまま採用してはいけない」種類の
+  // 問題なので、同じ violations の仕組みで扱う。
+  | "INTRO_CONTAINS_DIMENSIONS"
+  | "GENERIC_PHRASING";
 
 export interface FactSafetyViolation {
   code: FactSafetyViolationCode;

@@ -3,11 +3,8 @@
 import { randomUUID } from "node:crypto";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { getInventoryDetail } from "@/lib/inventory/queries";
-import { listAllMasterEntries } from "@/lib/inventory/masters";
-import { generateProductPage, type ProductPageResult } from "@/lib/ai/productPage/service";
-import { inferCategory, type BelloStyleProfile } from "@/lib/ai/productIntro/styleProfile";
-import { baseBrandHint, type ArchivedStyleReference } from "@/lib/base/archive/similar";
+import type { ProductPageResult } from "@/lib/ai/productPage/service";
+import { generateCanonicalProductPage } from "@/lib/ai/productPage/canonical";
 
 /**
  * 在庫からBASE掲載用の商品ページを生成する。
@@ -29,47 +26,11 @@ export type ProductPageActionResult =
   | { ok: false; error: string; correlationId: string };
 
 /**
- * 文体の参考にする過去BASE商品を読む。
- *
- * 267件・約2.7MBなので毎回読むのは無駄がある一方、生成は「ボタンを
- * 押したとき」にしか起きない低頻度の操作なので、キャッシュを持って
- * 古い文体を参照し続けるより、その都度読む方が素直で安全。
+ * 2026-09-02 指示書§2: 過去BASE商品の読み込みと Style Profile の取得は
+ * lib/ai/productPage/canonical.ts へ移した。上側の出品下書きと下側の
+ * BASE商品ページ下書きが**同じ関数**を通るようにするため —— ここに複製を
+ * 残すと、片方だけ直したときに静かに挙動が食い違う。
  */
-async function loadArchive(): Promise<ArchivedStyleReference[]> {
-  const out: ArchivedStyleReference[] = [];
-  let nextToken: string | null | undefined;
-  do {
-    const { data, nextToken: nt, errors } = await serverDataClient.models.BaseProductArchive.list({
-      limit: 200,
-      nextToken: nextToken ?? undefined,
-      ...inventoryAuthMode,
-    });
-    if (errors) throw new Error(`過去BASE商品の取得に失敗しました: ${errors.map((e) => e.message).join("; ")}`);
-    for (const row of data) {
-      if (!row.introText) continue; // 紹介文が無いものは文体の参考にならない
-      out.push({
-        baseItemId: row.baseItemId,
-        titleCore: row.titleCore ?? row.title ?? "",
-        brand: baseBrandHint(row.title ?? ""),
-        category: inferCategory(row.title ?? ""),
-        price: row.price ?? null,
-        introText: row.introText,
-      });
-    }
-    nextToken = nt;
-  } while (nextToken);
-  return out;
-}
-
-/** 現在有効な Style Profile(isActive の1件)。無ければ null。 */
-async function loadActiveStyleProfile(): Promise<{ profile: BelloStyleProfile; version: number } | null> {
-  const { data, errors } = await serverDataClient.models.BelloStyleProfile.list({ ...inventoryAuthMode, limit: 100 });
-  if (errors) throw new Error(`文体プロファイルの取得に失敗しました: ${errors.map((e) => e.message).join("; ")}`);
-  const active = data.find((d) => d.isActive === true);
-  if (!active?.profileJson) return null;
-  return { profile: JSON.parse(active.profileJson) as BelloStyleProfile, version: active.version };
-}
-
 export async function generateProductPageAction(inventoryId: string): Promise<ProductPageActionResult> {
   const correlationId = randomUUID();
   try {
@@ -79,34 +40,9 @@ export async function generateProductPageAction(inventoryId: string): Promise<Pr
     }
     const who = await getCurrentInventoryUserEmail();
 
-    const item = await getInventoryDetail(inventoryId);
-    if (!item) return { ok: false, error: "対象の在庫が見つかりません。", correlationId };
-
-    const [archive, styleProfile, categories] = await Promise.all([
-      loadArchive(),
-      loadActiveStyleProfile(),
-      listAllMasterEntries("Category"),
-    ]);
-    const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
-
-    const result = await generateProductPage({
-      inventoryId: item.id,
-      name: item.name,
-      categoryName,
-      width: item.width ? String(item.width) : null,
-      depth: item.depth ? String(item.depth) : null,
-      height: item.height ? String(item.height) : null,
-      damageNotes: item.damageNotes ?? null,
-      note: item.note ?? null,
-      conditionRating: item.conditionRating ?? null,
-      stockQuantity: item.quantity ?? null,
-      sku: item.sku ?? null,
-      price: item.salePrice ?? item.plannedSalePrice ?? null,
-      brand: baseBrandHint(item.name),
-      archive,
-      styleProfile: styleProfile?.profile ?? null,
-      styleProfileVersion: styleProfile?.version ?? null,
-    });
+    // 上側の出品下書きとまったく同じ関数を通る(指示書§2の一本化)。
+    // 在庫の存在確認も canonical 側が行い、見つからなければ例外になる。
+    const result = await generateCanonicalProductPage(inventoryId);
 
     // 生成できたものは保存する。事実の裏付け検査に落ちた場合でも
     // 保存はする —— 何が出たのかを人が見られないと、直しようがない。
@@ -114,7 +50,7 @@ export async function generateProductPageAction(inventoryId: string): Promise<Pr
     if (result.sections) {
       const { data, errors } = await serverDataClient.models.GeneratedProductPage.create(
         {
-          inventoryId: item.id,
+          inventoryId: result.inventoryId,
           title: result.sections.title,
           introduction: result.sections.introduction,
           brandSection: result.sections.brandSection,
