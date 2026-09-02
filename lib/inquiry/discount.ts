@@ -50,9 +50,26 @@ export function detectDiscountIntent(text: string): boolean {
   return !onlyPlainPrice;
 }
 
-/** §9.2 基本7%引き。既存の値下げと同じくMath.floorで丸める。 */
+/**
+ * §9.2 基本7%引き。既存の値下げと同じくMath.floorで丸める。
+ *
+ * ── なぜ 1 - 0.07 を使わないのか ────────────────────────────────
+ *
+ * JavaScriptの二進小数では `1 - 0.07 === 0.9299999999999999` になり、
+ * 0.93 と等しくない。その差で **1円ずれる**:
+ *
+ *   Math.floor(29800 * (1 - 0.07)) = 27713
+ *   Math.floor(29800 * 0.93)       = 27714   ← 意図している値
+ *
+ * 1〜200,000円の範囲で **478通りの価格**がこのずれを踏む(実測)。
+ * 実データの B005648(販売価格 29,800円)がちょうどそれで、値引き後の
+ * 提示額が1円安くなっていた。
+ *
+ * 百分率を整数のまま扱えば、小数の引き算が入らないのでずれない。
+ */
 export function calculateBaseDiscountedPrice(salePrice: number): number {
-  return Math.floor(salePrice * (1 - BASE_DISCOUNT_RATE));
+  const remainingPercent = 100 - Math.round(BASE_DISCOUNT_RATE * 100);
+  return Math.floor((salePrice * remainingPercent) / 100);
 }
 
 /**

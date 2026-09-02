@@ -10,6 +10,11 @@ import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./
 import { resolveNegotiationContext } from "./negotiation";
 import { resolveNegotiation, type NegotiationInventoryFacts } from "./negotiationService";
 import { resolveProductFromInquiry } from "./productResolver";
+import {
+  decideUrlRequest,
+  identificationBasis,
+  PRODUCT_URL_REQUEST_TEMPLATE,
+} from "./productIdentification";
 import { getAIReplySettings } from "./settings";
 import { extractShippingDestination, missingShippingInfo } from "./shippingIntent";
 import { buildInquirySystemPrompt, buildInquiryUserPrompt, INQUIRY_PROMPT_VERSION } from "./prompt";
@@ -107,6 +112,28 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       if (retry.resolved) resolution = retry;
     }
   }
+
+  // ── 何を根拠に商品が決まったか ────────────────────────────────
+  //
+  // 確信度だけでは足りない。**同じ RESOLVED でも根拠によって信頼度が
+  // 違う**。商品名の断片だけで 0.9 が出ても、同名・類似商品があれば
+  // 別物かもしれない。それに気づかず値下げ・価格・寸法・仕入情報を
+  // 答えると実害になる。
+  //
+  // 逆に、URLで確実に特定できているのに「URLを送ってください」と返すのは
+  // 話を聞いていないのと同じ。特定できているときは確認を挟まない。
+  const basis = identificationBasis({
+    status: resolution.status,
+    references: resolution.references,
+    fromOperatorOrConversation: Boolean(request.overrideInventoryId || request.conversationInventoryId),
+    candidateCount: resolution.candidates.length,
+  });
+  const urlRequest = decideUrlRequest({
+    basis,
+    status: resolution.status,
+    candidateCount: resolution.candidates.length,
+    requiresProduct: requiresProduct(intents),
+  });
 
   const unresolved: UnresolvedFact[] = [];
   const inventoryFieldsUsed: string[] = [];
@@ -353,6 +380,27 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     staffCard: negotiationResult?.staffCard ?? null,
     generationRoute: negotiation.isNegotiation ? "negotiation" : "standard",
   };
+
+  // ── 商品が確実に特定できていなければ、答えずにURLを尋ねる ──────
+  //
+  // ここは**生成より前**に置く。AIに投げてから「やっぱり分からない」と
+  // 捨てるのでは、その間に商品固有の事実がプロンプトへ混ざる余地が残る。
+  // 特定できていない時点で、商品の話は一切しない。
+  if (urlRequest.requestUrl) {
+    return {
+      status: "NEEDS_PRODUCT_CONFIRMATION",
+      draftText: PRODUCT_URL_REQUEST_TEMPLATE,
+      evidence,
+      intents,
+      unresolvedFacts: [
+        ...unresolved,
+        { field: "対象商品", reason: urlRequest.reason },
+      ],
+      modelProvider: null,
+      modelName: null,
+      failureReason: null,
+    };
+  }
 
   // ── 生成できない条件を先に判定する ────────────────────────────
   if (!settings.autoDraftEnabled) {

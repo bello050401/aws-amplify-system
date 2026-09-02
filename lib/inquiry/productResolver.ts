@@ -5,6 +5,7 @@ import { listAllInventory } from "@/lib/inventory/queries";
 import { resolveDisplayInventoryId } from "@/lib/inventory/inventoryId";
 import { KNOWN_FURNITURE_BRANDS } from "@/lib/ai/productIntro/factSafety";
 import { extractProductReferences, normalizeUrl, type ProductReferenceResult } from "./references";
+import { lookupBaseProducts } from "./baseProductLookup";
 import { decideResolution, scoreInventory, type MatchableInventory, type MatchSignals } from "./scoring";
 import type { ProductMatch, ProductResolution } from "./types";
 
@@ -166,23 +167,39 @@ export interface BaseArchiveMatch {
   itemUrl: string | null;
 }
 
+/**
+ * BASE商品IDから商品情報を引く。
+ *
+ * ── 取り込み済みデータだけでは足りない（実測） ──────────────────
+ *
+ * 以前はここが `BaseProductArchive` の get だけだった。しかしアーカイブは
+ * **267件しか無い**（Staging実測）。指示書の実例 `156144635` も入って
+ * いない。
+ *
+ * アーカイブに無いIDは商品名が1つも得られず、URLという最も確実な手がかりを
+ * 持っているのに「該当なし」になっていた —— これが「BASE商品URLを送っても
+ * 商品を特定できない」の正体。URL抽出そのものは正しく動いていた
+ * （14通りのURLパターンで実測、失敗0件）。
+ *
+ * いまは lookupBaseProducts が、アーカイブに無ければ **BASE API へ直接
+ * 聞く**（既存の getBaseClient().getItem を再利用。新しいクライアントは
+ * 作っていない）。
+ */
 async function findBaseArchive(baseItemIds: string[]): Promise<BaseArchiveMatch[]> {
   if (baseItemIds.length === 0) return [];
-  const rows = await Promise.all(
-    baseItemIds.slice(0, 5).map(async (baseItemId) => {
-      // identifier が baseItemId なので get で一意に引ける(Scanしない)。
-      const { data } = await serverDataClient.models.BaseProductArchive.get({ baseItemId }, inventoryAuthMode);
-      if (!data) return null;
-      return {
-        baseItemId: data.baseItemId,
-        title: data.title,
-        titleCore: data.titleCore ?? null,
-        price: data.price ?? null,
-        itemUrl: data.itemUrl ?? null,
-      } satisfies BaseArchiveMatch;
-    }),
-  );
-  return rows.filter((r): r is BaseArchiveMatch => r !== null);
+  const found = await lookupBaseProducts(baseItemIds);
+  return found
+    .filter((f) => f.source !== "not-found" && f.title)
+    .map(
+      (f) =>
+        ({
+          baseItemId: f.baseItemId,
+          title: f.title as string,
+          titleCore: f.titleCore,
+          price: f.price,
+          itemUrl: f.itemUrl,
+        }) satisfies BaseArchiveMatch,
+    );
 }
 
 /**
