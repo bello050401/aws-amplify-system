@@ -1,5 +1,7 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { listAllPages } from "@/lib/amplify/listAll";
+import type { Schema } from "@/amplify/data/resource";
 import type { ImageClassificationName } from "@/lib/inventory/imageTypes";
 import { ENGINE_VERSION } from "./sharpProcessor";
 import { buildIdempotencyKey } from "./pipeline";
@@ -62,12 +64,26 @@ export async function enqueueProcessingJob(input: {
   // 許容範囲(pricing-scheduler Lambda側のScanと違い、これはブラウザの
   // Server Action経由なので、件数が増えた場合はGSI追加を検討する旨を
   // 完了報告のコスト最適化候補へ記載する)。
-  const { data: existingJobs } = await serverDataClient.models.ProcessingJob.list({
-    filter: {
-      and: [{ idempotencyKey: { eq: idempotencyKey } }, { or: [{ status: { eq: "PENDING" } }, { status: { eq: "PROCESSING" } }] }],
+  // ★ ここを1ページだけ読むと、**冪等性が壊れる方向**へ倒れる。
+  //
+  // 既存の未完了ジョブを見つけられなければ「無い」と判断して新しい
+  // ジョブを作ってしまう —— 同じ画像に対する重複ジョブが積み上がる。
+  // 取りこぼしが「何もしない」ではなく「余計に作る」に化けるので、
+  // 他の箇所より実害が大きい。
+  const existingJobs = await listAllPages<{ id: string }>(
+    async (nextToken) => {
+      const res = await serverDataClient.models.ProcessingJob.list({
+        filter: {
+          and: [{ idempotencyKey: { eq: idempotencyKey } }, { or: [{ status: { eq: "PENDING" } }, { status: { eq: "PROCESSING" } }] }],
+        },
+        limit: 200,
+        nextToken,
+        ...inventoryAuthMode,
+      });
+      return { data: res.data as unknown as { id: string }[], nextToken: res.nextToken, errors: res.errors };
     },
-    ...inventoryAuthMode,
-  });
+    { label: "画像加工ジョブ(重複確認)" },
+  );
   if (existingJobs.length > 0) return false;
 
   const { errors } = await serverDataClient.models.ProcessingJob.create(
@@ -151,15 +167,31 @@ export async function triggerImageProcessingIfNeeded(input: {
  */
 export async function listPendingJobStatuses(imageStorageKeys: string[]): Promise<Record<string, "PENDING" | "PROCESSING">> {
   if (imageStorageKeys.length === 0) return {};
-  const { data } = await serverDataClient.models.ProcessingJob.list({
-    filter: {
-      and: [
-        { or: imageStorageKeys.map((k) => ({ imageStorageKey: { eq: k } })) },
-        { or: [{ status: { eq: "PENDING" } }, { status: { eq: "PROCESSING" } }] },
-      ],
+  // ★ Limit-before-Filter の再発防止(2026-09-02)。
+  //
+  // DynamoDBの Limit は**フィルタ適用前に読む件数**の上限。filter付きの
+  // list を1ページだけ読むと、条件に合う行が他に何件あっても返らない。
+  // image-processing-worker が5分ごとに「0 pending job(s)」と言い続けて
+  // いたのと同じ不具合で、あちらは修正済みだが**画面側の同じ読み方は
+  // 残っていた**。ProcessingJob は完了済みの行が積み上がるテーブルなので、
+  // 行数が増えるほど確実に踏む。
+  const data = await listAllPages<{ imageStorageKey: string; status: string }>(
+    async (nextToken) => {
+      const res = await serverDataClient.models.ProcessingJob.list({
+        filter: {
+          and: [
+            { or: imageStorageKeys.map((k) => ({ imageStorageKey: { eq: k } })) },
+            { or: [{ status: { eq: "PENDING" } }, { status: { eq: "PROCESSING" } }] },
+          ],
+        },
+        limit: 200,
+        nextToken,
+        ...inventoryAuthMode,
+      });
+      return { data: res.data as unknown as { imageStorageKey: string; status: string }[], nextToken: res.nextToken, errors: res.errors };
     },
-    ...inventoryAuthMode,
-  });
+    { label: "画像加工ジョブ" },
+  );
   const result: Record<string, "PENDING" | "PROCESSING"> = {};
   for (const job of data) {
     // 同じ画像に複数の未完了ジョブが理論上あっても(通常は起きない —
@@ -182,10 +214,25 @@ export async function listPendingJobStatuses(imageStorageKeys: string[]): Promis
  * 加工履歴のみなので、Scan相当のfilter付きlistでも許容範囲)。
  */
 export async function listVersions(imageStorageKey: string) {
-  const { data } = await serverDataClient.models.ImageProcessingVersion.list({
-    filter: { imageStorageKey: { eq: imageStorageKey } },
-    ...inventoryAuthMode,
-  });
+  // 同上 —— ImageProcessingVersion も追記専用で増え続けるテーブル。
+  // 1ページだけ読むと、版が増えたある日から**加工済みの画像が画面に
+  // 出なくなる**(「未加工」と表示される)。件数が少ないうちは動いて
+  // 見えるので、増えてから気づくことになる。
+  // 版の行そのものの型。Amplify の list の戻り値から引くと条件型が
+  // 深くなりすぎて tsc が止まるので、Schema から直接取る。
+  type VersionRow = Schema["ImageProcessingVersion"]["type"];
+  const data = await listAllPages<VersionRow>(
+    async (nextToken) => {
+      const res = await serverDataClient.models.ImageProcessingVersion.list({
+        filter: { imageStorageKey: { eq: imageStorageKey } },
+        limit: 200,
+        nextToken,
+        ...inventoryAuthMode,
+      });
+      return { data: res.data as unknown as VersionRow[], nextToken: res.nextToken, errors: res.errors };
+    },
+    { label: "画像加工の版" },
+  );
   return data.sort((a, b) => a.version - b.version);
 }
 
