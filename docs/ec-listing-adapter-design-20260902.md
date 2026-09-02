@@ -1,10 +1,24 @@
 # EC出品のアダプタ化 — 現状の監査と設計提案
 
-2026-09-02 / **提案のみ。コードは変更していない。**
+2026-09-02 / **本格的なアダプタ化は未実施。境界整理とテストのみ実施済み。**
 
-ご指示のとおり、安全に取り出せるものだけを取り出し、それ以外は提案に留める
-方針。今回は「取り出す」側に倒せる根拠が足りないと判断したので、全体を提案
-として書く。理由は §4。
+## この文書の現況（2026-09-02 追記）
+
+外部EC連携ハブの候補が Next Engine / JUNGLE / 各モール直接API と複数あり、
+**どれを採用するかが未確定**。特定のハブに依存した実装は行わない方針。
+
+実施済み:
+
+- 出品のBELLO側手順を `lib/listing/publishFlow.ts` へ純粋関数として抽出
+  （挙動は変えていない。出品先ごとの違いは `PublishRoute` に明示）
+- 状態遷移を固定するテスト 47件（`npm run verify:publish-flow`）
+
+未実施（承認待ち）:
+
+- アダプタ interface の定義と `listOnChannel` への統合（§3）
+
+§4 の「テストが薄いのでリファクタの前にテストが要る」は解消した。
+残る保留理由は「ハブが決まっていない」の1点。
 
 ---
 
@@ -19,8 +33,8 @@
 | 1 | チャネル名 | `"MERCARI_SHOPS"` / `"BASE"` |
 | 2 | 未設定時の文言 | 「先にMercariのカテゴリー設定を…」/「先にBASEのチャネル設定を…」 |
 | 3 | アダプタ呼び出し | 入力の形が違う（下記 §2） |
-| 4 | 成功時に書く列 | Mercariは `externalStatus` と `listingUrl: null` も書く |
-| 5 | catchのエラー型 | `MercariApiError` / `BaseListingApiError` |
+| 4 | 成功時に書く列 | Mercariは `listingUrl: null` も書く（BASEはキー自体を送らない） |
+| 5 | catchのエラー型 | 見た目は違うが**実際には同じ**（下記 §5-d） |
 
 残りは全部同じ手順を踏んでいる。
 
@@ -30,7 +44,7 @@
 3. ChannelListing.status を PUBLISHING にする
 4. 外部APIを呼ぶ
 5. 成功  → ACTIVE / externalListingId / firstListedAt / lastListedAt / lastError クリア
-   失敗  → FAILED / lastError にメッセージ
+   失敗  → ERROR / lastError にメッセージ
 ```
 
 3チャネル目（ヤフオク・楽天・自社EC等）を足すとき、この50行を**もう一度
@@ -45,7 +59,7 @@ Mercari側にだけ残っていて、BASE側には無い。
 | | Mercari | BASE |
 |---|---|---|
 | 入力 | `draft` / `channelListing` / `shippingPayer` / `inventoryQuantity` | `draft` / `overrideTitle` / `overrideDescription` / `overridePrice` / `quantity` |
-| 出力 | `externalProductId` / `externalStatus` | `externalProductId` |
+| 出力 | `externalProductId` / `externalStatus`（※後者は**保存されていない**） | `externalProductId` |
 | 上書き値の解決 | `channelListing` を丸ごと渡し、**アダプタの中で**解決 | 呼び出し元が展開して渡す |
 | エラー型 | `MercariApiError` | `BaseListingApiError` |
 
@@ -149,10 +163,10 @@ export const listOnBase = (inventoryId, who) =>
 
 ```
 1. いまの listOnMercari / listOnBase の状態遷移を固定するテストを書く
-   （ChannelListing の status が PUBLISHING → ACTIVE / FAILED と動くこと、
+   （ChannelListing の status が PUBLISHING → ACTIVE / ERROR と動くこと、
      失敗時に lastError が入ること、成功時に lastError が消えること、
      二重出品を弾くこと）
-   ← ここまでは振る舞いを一切変えないので、承認なしで進められる
+   ← **実施済み**（verify:publish-flow 47件）
 
 2. アダプタ interface を定義し、既存2つをその形に合わせる（中身は移すだけ）
 
@@ -166,13 +180,78 @@ export const listOnBase = (inventoryId, who) =>
 
 ---
 
-## 5. 今回この監査で見つけた、設計とは別の小さな問題
+## 5. 調査結果 — listingUrl と上書き値の一元化（ご指示③）
 
-| 内容 | 場所 | 重さ |
+「安全に一元化できるなら実施、挙動変更を伴うなら報告のみ」という指示に対する回答。
+
+### (a) 上書き価格の扱いが違い、**Mercariは0円で出品されうる** — High・要判断
+
+同じ「上書き値の解決」が2箇所にあり、**規則が違う**。
+
+| | Mercari (`resolveEffectiveListingFields`) | BASE（`base/adapter.ts` 内で直接） |
 |---|---|---|
-| `listingUrl: null` の `[UNVERIFIED]` コメントがMercari側だけに残り、BASE側には同等の記述が無い。BASEの応答にURLが含まれるかも未確認のまま | `service.ts` | Low |
-| 上書き値の解決規則が2箇所にある（Mercariはアダプタ内、BASEは呼び出し元） | `mercari/adapter.ts` / `service.ts` | Low |
-| `fetchAllChannelListings` が `filter` 付き `list` を使っている。`limit: 200` とページ送りがあるので取りこぼしはしないが、`channel` はindex化されていないため実質フルスキャン。現在 `ChannelListing` は0件なので影響なし | `service.ts` | Low |
+| タイトル | `override ?? draft.title` | `override?.trim() \|\| draft.title` |
+| 説明 | `override ?? draft.description ?? ""` | `override?.trim() \|\| draft.description \|\| ""` |
+| 価格 | `override ?? draft.price ?? **0**` | `override ?? draft.price` → **null なら例外** |
 
-いずれも今回は直していない。単独で直すと差分がこの設計提案と混ざって、
-どちらの判断だったのか後から読めなくなるため。
+価格の違いが効く。
+
+- `ListingDraft.price` は `a.integer()` で**必須ではない**
+- `saveListingDraft` はタイトルの空欄は弾くが、**価格は検証していない**
+- BASE は `if (price == null \|\| price <= 0) throw`（「価格が未設定です。」）で止まる
+- Mercari は `?? 0` で埋め、**価格ガードが無い**まま `createProduct` へ渡す
+
+つまり価格未設定の下書きから出品すると、BASEは止まり、**Mercariには0円で
+出品リクエストが飛ぶ**。Mercari側APIが弾く可能性はあるが、BELLOは止めていない。
+
+**実装しなかった。** 一元化はどちらかの挙動を変えることになり、
+「挙動変更を伴う場合は報告」というご指示に該当するため。
+
+対処案（どれも承認が要る）:
+
+1. `saveListingDraft` で価格を必須にする（入口で止める。影響範囲が最小）
+2. Mercariアダプタにも BASE と同じ価格ガードを足す（出口で止める）
+3. `resolveEffectiveListingFields` を両者共通にする（規則を1つにする）
+
+**1と2の併用を勧める。** 3は規則の統一という点で正しいが、
+`?? ` と `?.trim() ||` の違い（空文字・空白のみの扱い）も同時に変わるので、
+先に1・2で危険を止めてから落ち着いて行うほうがよい。
+
+### (b) listingUrl の扱いが違う — Low・一元化は挙動変更を伴う
+
+- Mercari: 成功時に `listingUrl: null` を送り、**既存値を明示的に消す**
+- BASE: キー自体を送らないので、**既存値がそのまま残る**
+
+`[UNVERIFIED]` コメントのとおり、Mercariの `createProduct` 応答に
+listingUrl 相当が含まれるかは未確認。BASE側も同様に未確認。
+
+現在 `listingUrl` に非nullを書き込む経路は**コード上に1つも無い**
+（読む側は `lib/inquiry/` の商品特定と一覧のリンク表示のみ）。
+つまり実データ上は常に null で、この違いは現時点で表面化しない。
+
+**実装しなかった。** どちらに揃えても片方の挙動が変わるため。
+違いは `PublishRoute.clearsListingUrlOnPublish` として**消さずに明示**した ——
+応答仕様が確認できた時点で、1箇所を直せば揃う形にしてある。
+
+### (c) 上書き値の解決場所が2箇所 — Low・(a)と同じ判断
+
+Mercariはアダプタ内、BASEは呼び出し元。「どこで上書きが効くのか」を追うのに
+毎回2箇所を読むことになる。(a) の対処と同時に行うのが自然。
+
+### (d) catch のエラー型は、もともと分岐していなかった — 解消済み
+
+```ts
+err instanceof MercariApiError ? err.message
+  : err instanceof Error ? err.message : "不明なエラー"
+```
+
+前2つは同じ値を返すので、実質「Errorならmessage」でしかない。
+チャネル固有の分岐は最初から存在しなかった。`describePublishFailure` に
+1つへ畳んだ（挙動不変。等価性はテストで固定）。結果として service.ts から
+`MercariApiError` / `BaseListingApiError` の import が不要になった。
+
+### (e) fetchAllChannelListings が実質フルスキャン — Low・未対処
+
+`channel` はindex化されていないため `filter` 付き `list`。
+`limit: 200` とページ送りがあるので取りこぼしはしない。
+現在 `ChannelListing` は0件なので影響なし。
