@@ -49,7 +49,9 @@
     "verify:shipping-live": "node scripts/with-server-only-stub.cjs scripts/verify-shipping-rates-live.ts",
     "verify:negotiation-case": "node scripts/with-server-only-stub.cjs scripts/verify-negotiation-case.ts",
     "verify:intro-validator": "node scripts/with-server-only-stub.cjs scripts/verify-intro-validator.ts",
-    "verify:search-projection": "node scripts/with-server-only-stub.cjs scripts/verify-search-projection.ts"
+    "verify:search-projection": "node scripts/with-server-only-stub.cjs scripts/verify-search-projection.ts",
+    "verify:sales-aggregate": "node scripts/with-server-only-stub.cjs scripts/verify-sales-aggregate.ts",
+    "rebuild:sales-aggregate": "node scripts/with-server-only-stub.cjs scripts/rebuild-sales-aggregate.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

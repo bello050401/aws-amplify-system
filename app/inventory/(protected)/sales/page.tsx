@@ -1,9 +1,7 @@
 import Link from "next/link";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { listAllInventory } from "@/lib/inventory/queries";
+import { loadSalesView } from "@/lib/inventory/salesView";
 import {
-  summarizeSales,
-  summarizeMonthlyTrend,
   calculateItemGrossProfit,
   shiftYearMonth,
   nowInJst,
@@ -58,13 +56,16 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
   const monthRaw = Number(searchParams.m) || jstNow.month;
   const month = Number.isInteger(monthRaw) && monthRaw >= 1 && monthRaw <= 12 ? monthRaw : jstNow.month;
 
-  const records = await listAllInventory();
-  const summary: SalesSummary = summarizeSales(records, year, month);
-  // BELLO統合改修 master指示書(2026-08-29統合改修版) §20: 12ヶ月推移
-  // グラフ — 表示中の年月を最終月とする直近12ヶ月分。listAllInventory
-  // は既にこの画面で1回取得済みなので、追加のDB往復なしにそのまま
-  // summarizeMonthlyTrendへ渡すだけで済む。
-  const trendPoints = summarizeMonthlyTrend(records, year, month, 12);
+  // 2026-09-02 指示書§20: 画面を開くたびに在庫を全件読む状態をやめた。
+  //
+  //   合計と12ヶ月推移 … 月次集計(read model)から GetItem 13回
+  //   その月の商品一覧 … その月のぶんだけ取得
+  //
+  // 集計が無い月は黙って0にせず、その場で計算する(数字は必ず正しく、
+  // 遅いか速いかだけが変わる)。詳細は lib/inventory/salesView.ts。
+  const view = await loadSalesView(year, month);
+  const summary: SalesSummary = view.summary;
+  const trendPoints = view.trend;
 
   function monthHref(y: number, m: number): string {
     return `/inventory/sales?y=${y}&m=${m}`;
@@ -89,6 +90,19 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">売上</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {/* 年月ナビゲーション(spec §12: 前月/翌月/今月/先月を簡単に選択可能) */}
+        {/* 集計をいつ作り直したか。合計が集計由来か、その場の計算かも
+            隠さずに出す —— どちらでも数字は正しいが、「いつ時点の値か」
+            は判断に関わる。 */}
+        {view.servedFromAggregate && view.aggregateRebuiltAt && (
+          <p className="mb-2 text-[11px] text-gray-400">
+            集計は {view.aggregateRebuiltAt.slice(0, 16).replace("T", " ")} 時点のものです。
+          </p>
+        )}
+        {!view.servedFromAggregate && (
+          <p className="mb-2 text-[11px] text-gray-400">
+            月次集計がまだ作られていないため、その場で計算しています（数値は同じです）。
+          </p>
+        )}
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Link href={monthHref(prev.year, prev.month)} className="border border-gray-300 px-2 py-1 text-[12px] text-gray-600 hover:bg-gray-50">
             ← 前月

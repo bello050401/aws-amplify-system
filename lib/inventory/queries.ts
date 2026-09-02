@@ -404,6 +404,28 @@ async function fetchAllInventoryRecords(extraConditions: Record<string, unknown>
   return items;
 }
 
+/**
+ * 指定した年月に販売終了した在庫だけを取る(2026-09-02 指示書§20)。
+ *
+ * 売上画面の「その月に売れた商品の一覧」用。以前はこの一覧のために
+ * 在庫を全件(5,313件・8,163KB)読んでいた。
+ *
+ * saleEndDate は "YYYY-MM-DD" なので、前方一致で月を絞れる。判定は
+ * lib/inventory/sales.ts の isInYearMonth と同じく**文字列の先頭**を
+ * 見る —— Date へ通すとタイムゾーンで1日ずれ、月境界の売上が隣の月へ
+ * 移りうる。
+ *
+ * 【正直に書いておく】DynamoDBはフィルタを適用する前に行を読むので、
+ * **往復回数は減らない**(1ページ1MBの上限が先に効くため)。減るのは
+ * AppSync→Next.js の転送量とメモリ。往復も減らすには saleEndDate の
+ * 年月を持つ列とGSIが要り、既存4,511件への遡及書き込みを伴うので、
+ * ここでは行っていない。
+ */
+export async function listInventoryBySaleMonth(year: number, month: number): Promise<InventorySearchRecord[]> {
+  const prefix = `${year}-${String(month).padStart(2, "0")}-`;
+  return fetchAllInventoryRecords([{ saleEndDate: { beginsWith: prefix } }]);
+}
+
 /** 売上集計(統合改善指示書)等、フィルタなしで在庫全件が必要な呼び出し向け。 */
 export async function listAllInventory(): Promise<InventorySearchRecord[]> {
   return fetchAllInventoryRecords();

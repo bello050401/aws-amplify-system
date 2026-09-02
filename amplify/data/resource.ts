@@ -1605,6 +1605,40 @@ const schema = a.schema({
     ]),
 
   /**
+   * 売上の月次集計(2026-09-02 指示書§15〜§20)。
+   *
+   * **派生データ**。正本は今までどおり Inventory で、この表はいつでも
+   * 捨てて作り直せる。加算していく設計にしていないのは、加算はイベントを
+   * 1つ取りこぼしただけで静かにズレ、しかも気づけないから。対象月の
+   * レコードから毎回作り直すので、二重計上も取消の取りこぼしも起きない。
+   *
+   * identifier を yearMonth にしてあるので、月を指定した読み出しは
+   * Scan ではなく GetItem 1回で済む。
+   */
+  SalesMonthlyAggregate: a
+    .model({
+      /** "2026-09" 形式。集計の単位であり主キー。 */
+      yearMonth: a.string().required(),
+      count: a.integer().required(),
+      totalSales: a.integer().required(),
+      totalPurchase: a.integer().required(),
+      totalShipping: a.integer().required(),
+      totalCost: a.integer().required(),
+      totalProfit: a.integer().required(),
+      /** 何件の在庫レコードから作ったか(母集団の大きさ)。 */
+      sourceRecordCount: a.integer(),
+      /** いつ作り直したか。画面に「○○時点の集計」と出すため。 */
+      rebuiltAt: a.datetime().required(),
+      rebuiltBy: a.string(),
+    })
+    .identifier(["yearMonth"])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
    * BELLO改善指示(Human Editorial Guidance)。
    *
    * 2026-09-02 追加仕様§4/§5: 「過去BASE実績から抽出した Style Profile」と
