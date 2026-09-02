@@ -55,7 +55,8 @@
     "e2e:staging": "playwright test --config=playwright.staging.config.ts",
     "e2e:staging:login": "node scripts/with-server-only-stub.cjs scripts/staging-login.ts",
     "verify:zaico-update-policy": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-update-policy.ts",
-    "audit:zaico-update-policy": "node scripts/with-server-only-stub.cjs scripts/audit-zaico-update-policy.ts"
+    "audit:zaico-update-policy": "node scripts/with-server-only-stub.cjs scripts/audit-zaico-update-policy.ts",
+    "verify:staging-auth": "node scripts/with-server-only-stub.cjs scripts/verify-staging-auth.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",
