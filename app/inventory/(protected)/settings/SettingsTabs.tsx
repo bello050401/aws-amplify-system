@@ -22,6 +22,7 @@ import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
 import { PhotoProfilePanel } from "./PhotoProfilePanel";
 import { KnowledgeSettingsPanel } from "./KnowledgeSettingsPanel";
+import { ProductDescriptionPanel } from "./ProductDescriptionPanel";
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -103,6 +104,7 @@ export function SettingsTabs({
     | "knowledge"
     | "systemAudit"
     | "photoProfile"
+    | "productDescription"
   >(initialTab === "base" ? "base" : "category");
 
   const tabClass = (active: boolean) =>
@@ -161,6 +163,16 @@ export function SettingsTabs({
             LINE連携
           </button>
         )}
+        {/* 2026-09-02 追加仕様§1: 商品説明文を独立した設定項目として置く。
+            AI返信ナレッジ(返信の文体)の隣に並べる —— どちらも
+            「AIが何を参照して書くか」の設定なので、探す場所が同じになる。 */}
+        <button
+          type="button"
+          onClick={() => setTab("productDescription")}
+          className={tabClass(tab === "productDescription")}
+        >
+          商品説明文
+        </button>
         {isAdmin && (
           <button type="button" onClick={() => setTab("knowledge")} className={tabClass(tab === "knowledge")}>
             AI返信ナレッジ
@@ -237,6 +249,7 @@ export function SettingsTabs({
         {tab === "knowledge" && isAdmin && <KnowledgeSettingsPanel />}
         {tab === "systemAudit" && isAdmin && <SystemAuditPanel />}
         {tab === "photoProfile" && isAdmin && <PhotoProfilePanel />}
+        {tab === "productDescription" && <ProductDescriptionPanel readOnly={readOnly} />}
       </div>
     </div>
   );

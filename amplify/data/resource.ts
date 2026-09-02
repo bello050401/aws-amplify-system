@@ -1605,6 +1605,75 @@ const schema = a.schema({
     ]),
 
   /**
+   * BELLO改善指示(Human Editorial Guidance)。
+   *
+   * 2026-09-02 追加仕様§4/§5: 「過去BASE実績から抽出した Style Profile」と
+   * 「担当者が書いた改善要望」を**混ぜて上書きしない**。前者は
+   * BelloStyleProfile(機械が数えた結果)、後者がこのモデル(人が書いた指示)。
+   *
+   * 生成時の優先順位:
+   *   Inventory等の確定事実 > BELLO改善指示 > Style Profile >
+   *   類似BASE商品 > 一般的なAI表現
+   *
+   * ただし改善指示で**商品の事実を変えることはできない** —— 事実の検査
+   * (factSafety)は改善指示より後段にあり、指示の内容に関わらず効く。
+   */
+  ProductDescriptionGuidance: a
+    .model({
+      /** 自然文の指示(例:「商品のご紹介にはサイズを書かない」)。 */
+      instruction: a.string().required(),
+      /**
+       * 有効/無効。削除より無効化を優先する(追加仕様§6) ——
+       * 過去に生成した文章が「どの指示のもとで作られたか」を後から
+       * 追えなくなるため。
+       */
+      enabled: a.boolean().default(true),
+      /** 並び順。小さいほど先に効く(競合したときに人が順序で解決できる)。 */
+      sortOrder: a.integer().default(0),
+      /** この指示自体の版。編集のたびに増える。 */
+      version: a.integer().default(1),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * 商品説明設定のversion履歴(追加仕様§9)。
+   *
+   * 「いつ・誰が・どのStyle Profile版と、どの改善指示の組み合わせを
+   * ACTIVEにしたか」を残す。復元は過去versionを書き換えるのではなく、
+   * **その内容で新しいversionを作ってACTIVEにする** —— 履歴が枝分かれ
+   * しないようにするため(ナレッジ文書の復元と同じ考え方)。
+   */
+  ProductDescriptionSettingVersion: a
+    .model({
+      version: a.integer().required(),
+      activatedAt: a.datetime().required(),
+      activatedBy: a.string(),
+      /** このversionで参照していた BelloStyleProfile の version。 */
+      styleProfileVersion: a.integer(),
+      /** そのときの改善指示のスナップショット(JSON配列)。 */
+      guidanceSnapshotJson: a.string(),
+      /** 生成設定(将来の拡張用。現状は空オブジェクト)。 */
+      generationConfigJson: a.string(),
+      /** 変更の理由。人が書く。 */
+      note: a.string(),
+      /** 現在有効な1件。 */
+      isActive: a.boolean().default(false),
+      /** 復元で作られた版なら、その元のversion。 */
+      restoredFromVersion: a.integer(),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
    * 在庫から生成した商品ページ。単一の文章ではなくセクションごとに持つ
    * (§10「在庫登録→写真加工→情報補完→商品ページ生成→人間確認→出品」
    * へつなぐため、後段が必要な部分だけを差し替えられる形にする)。

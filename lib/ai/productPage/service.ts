@@ -66,6 +66,10 @@ export interface ProductPageGenerationInput {
   styleProfileVersion?: number | null;
   /** 「発送について」の定型文(ナレッジ由来)。 */
   shippingBoilerplate?: string | null;
+  /** ACTIVEな BELLO改善指示(lib/ai/productPage/guidance.ts が組み立てたブロック)。 */
+  guidanceBlock?: string | null;
+  /** 適用した改善指示の本文(監査用。どの指示のもとで作られたかを残す)。 */
+  appliedGuidance?: string[];
   price?: number | null;
   brand?: string | null;
 }
@@ -85,6 +89,8 @@ export interface ProductPageResult {
   genericPhrases?: string[];
   /** 参照した過去BASE商品(監査用)。 */
   referencedBaseItemIds: string[];
+  /** 適用した BELLO改善指示(監査用)。 */
+  appliedGuidance?: string[];
   /** 事実を組み立てる際に落とした情報(監査用)。 */
   redactions: FactRedaction[];
   styleProfileVersion: number | null;
@@ -151,13 +157,19 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
 
   const base = {
     missingFacts,
+    appliedGuidance: input.appliedGuidance ?? [],
     referencedBaseItemIds: similar.map((h) => h.reference.baseItemId),
     redactions,
     styleProfileVersion: input.styleProfileVersion ?? null,
   };
 
   const systemPrompt = buildProductPageSystemPrompt(input.styleProfile);
-  const userPrompt = buildProductPageUserPrompt({ facts, similar, shippingBoilerplate: input.shippingBoilerplate ?? null });
+  const userPrompt = buildProductPageUserPrompt({
+    facts,
+    similar,
+    shippingBoilerplate: input.shippingBoilerplate ?? null,
+    guidanceBlock: input.guidanceBlock ?? null,
+  });
 
   let result;
   let sections: ProductPageSections;

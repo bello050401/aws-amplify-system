@@ -9,6 +9,8 @@
  *
  * Run with: npm run verify:intro-validator
  */
+import { buildGuidanceBlock } from "@/lib/ai/productPage/guidanceBlock";
+import { buildProductPageUserPrompt } from "@/lib/ai/productPage/prompt";
 import {
   findGenericPhrases,
   findIntroDimensionViolations,
@@ -109,7 +111,96 @@ function testGenericPhrases() {
   assertTrue(findGenericPhrases(specific).length <= MAX_GENERIC_PHRASES, "商品固有の説明はテンプレ判定に引っかからない");
 }
 
+/**
+ * 2026-09-02 追加仕様§4/§5: BELLO改善指示のプロンプトブロック。
+ *
+ * 事実のブロックと混ぜないこと、無効な指示を渡さないこと、優先順位が
+ * 本文で明示されていることを固定する。
+ */
+function testGuidanceBlock() {
+  assertEqual(buildGuidanceBlock([]), null, "指示が0件ならブロックを作らない");
+  assertEqual(
+    buildGuidanceBlock([{ instruction: "サイズを書かない", enabled: false }]),
+    null,
+    "無効な指示だけならブロックを作らない",
+  );
+  assertEqual(
+    buildGuidanceBlock([{ instruction: "   ", enabled: true }]),
+    null,
+    "空白だけの指示は無視する",
+  );
+
+  const block = buildGuidanceBlock([
+    { instruction: "商品のご紹介にはサイズを書かない", enabled: true },
+    { instruction: "これは無効", enabled: false },
+    { instruction: "汎用的なEC表現を減らす", enabled: true },
+  ]);
+  assertTrue(block !== null, "有効な指示があればブロックを作る");
+  assertTrue(block!.includes("商品のご紹介にはサイズを書かない"), "有効な指示は入る");
+  assertTrue(block!.includes("汎用的なEC表現を減らす"), "有効な指示は入る(2件目)");
+  assertTrue(!block!.includes("これは無効"), "無効な指示は入らない");
+  assertTrue(block!.includes("1. 商品のご紹介にはサイズを書かない"), "有効なものだけで番号を振り直す");
+  assertTrue(block!.includes("2. 汎用的なEC表現を減らす"), "無効を飛ばして連番になる");
+
+  // ここが本体。指示を「事実」として書き写されないための文言。
+  assertTrue(block!.includes("事実ではない"), "これは事実ではない、と明示する");
+  assertTrue(block!.includes("確定事実を優先"), "確定事実を優先すると明示する");
+}
+
+/**
+ * §5 の優先順位が、プロンプトの並びとして実際に守られているか。
+ *
+ *   確定事実 > BELLO改善指示 > 類似BASE商品(見本)
+ *
+ * 事実が先頭にあること、改善指示が見本より後ろ(= より近く)にあること。
+ */
+function testProductPagePromptOrdering() {
+  const facts = {
+    name: "TEST CHAIR",
+    dimensions: "幅50 奥行50 高さ80",
+    categoryName: "チェア",
+    conditionDisclosure: "小傷あり",
+    publicNote: null,
+  };
+  const similar = [
+    {
+      reference: { baseItemId: "1", titleCore: "SAMPLE", brand: null, category: null, price: null, introText: "見本の紹介文です。" },
+      score: 1,
+      reasons: ["ブランド一致"],
+    },
+  ];
+  const guidanceBlock = buildGuidanceBlock([{ instruction: "汎用表現を減らす", enabled: true }]);
+
+  const prompt = buildProductPageUserPrompt({
+    facts,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    similar: similar as any,
+    shippingBoilerplate: null,
+    guidanceBlock,
+  });
+
+  const factsAt = prompt.indexOf("今回の商品の事実情報");
+  const sampleAt = prompt.indexOf("文体の見本");
+  const guidanceAt = prompt.indexOf("書き方の指示");
+  assertTrue(factsAt >= 0, "事実のブロックがある");
+  assertTrue(sampleAt > factsAt, "見本は事実より後ろ");
+  assertTrue(guidanceAt > sampleAt, "改善指示は見本より後ろ(= より強く効く位置)");
+  assertTrue(prompt.includes("汎用表現を減らす"), "指示の本文が入る");
+
+  // 指示が無ければブロックごと出ない(空の見出しを残さない)。
+  const without = buildProductPageUserPrompt({
+    facts,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    similar: similar as any,
+    shippingBoilerplate: null,
+    guidanceBlock: null,
+  });
+  assertTrue(!without.includes("書き方の指示"), "指示が無ければブロックを出さない");
+}
+
 function main() {
+  testGuidanceBlock();
+  testProductPagePromptOrdering();
   testDetectsFixedFailureCase();
   testDetectsSeatAndArmDimensions();
   testDoesNotOverBlock();

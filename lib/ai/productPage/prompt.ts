@@ -148,6 +148,15 @@ export function buildProductPageUserPrompt(input: {
   similar: SimilarityHit[];
   /** 発送についての定型文(ナレッジ由来)。無ければ省略。 */
   shippingBoilerplate?: string | null;
+  /**
+   * BELLO担当者が指定した書き方の指示(2026-09-02 追加仕様§4/§5)。
+   *
+   * 事実のブロックとは**別に**置く —— 混ぜるとモデルが指示文そのものを
+   * 事実として書き写しうる。優先順位は
+   *   確定事実 > この指示 > Style Profile > 類似商品
+   * で、この指示で事実を改変することはできない(validatorが後段にある)。
+   */
+  guidanceBlock?: string | null;
 }): string {
   const blocks: string[] = [];
 
@@ -169,6 +178,13 @@ export function buildProductPageUserPrompt(input: {
         .join("\n\n"),
       "==== 見本ここまで(ここは事実の出典ではない) ====",
     );
+  }
+
+  // 改善指示は「見本」より後、「発送定型文」より前に置く。
+  // 直前のブロックほど効きやすいので、事実 → 見本 → **指示** の順に
+  // することで、見本の文体を指示が上書きできる並びになる。
+  if (input.guidanceBlock?.trim()) {
+    blocks.push("", "==== BELLO担当者からの書き方の指示(事実ではない) ====", input.guidanceBlock.trim(), "==== 指示ここまで ====");
   }
 
   if (input.shippingBoilerplate?.trim()) {

@@ -6,6 +6,7 @@ import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { baseBrandHint, type ArchivedStyleReference } from "@/lib/base/archive/similar";
 import { inferCategory, type BelloStyleProfile } from "@/lib/ai/productIntro/styleProfile";
 import { generateProductPage, type ProductPageResult } from "./service";
+import { buildGuidanceBlock, listActiveGuidance, type GuidanceRule } from "./guidance";
 
 /**
  * 商品説明生成の**正本**(2026-09-02 指示書§2/§10)。
@@ -92,6 +93,8 @@ export interface CanonicalGenerationResult extends ProductPageResult {
   usedStyleProfileVersion: number | null;
   /** 参照した過去BASE商品の総数(母集団の大きさ)。 */
   archiveSize: number;
+  /** 適用したACTIVEな改善指示。 */
+  activeGuidance: GuidanceRule[];
 }
 
 /**
@@ -109,10 +112,11 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
   const item = await getInventoryDetail(inventoryId);
   if (!item) throw new Error("対象の在庫が見つかりません。");
 
-  const [archive, styleProfile, categories] = await Promise.all([
+  const [archive, styleProfile, categories, guidance] = await Promise.all([
     loadStyleArchive(),
     loadActiveStyleProfile(),
     listAllMasterEntries("Category"),
+    listActiveGuidance(),
   ]);
   const categoryName = categories.find((c: { id: string; name: string }) => c.id === item.categoryId)?.name ?? null;
 
@@ -133,6 +137,8 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
     archive,
     styleProfile: styleProfile?.profile ?? null,
     styleProfileVersion: styleProfile?.version ?? null,
+    guidanceBlock: buildGuidanceBlock(guidance),
+    appliedGuidance: guidance.map((g) => g.instruction),
   });
 
   return {
@@ -141,6 +147,7 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
     inventoryName: item.name,
     usedStyleProfileVersion: styleProfile?.version ?? null,
     archiveSize: archive.length,
+    activeGuidance: guidance,
   };
 }
 
