@@ -16,6 +16,7 @@ import {
   getZaicoBackgroundSyncStatus,
   type ZaicoBackgroundSyncJob,
 } from "@/lib/inventory/zaicoBackgroundSync";
+import type { ZaicoSyncMode } from "@/lib/inventory/zaicoDelta";
 
 /**
  * The ADMIN-gated Server Action surface for the ZAICO→BELLO sync (spec
@@ -98,11 +99,31 @@ export async function previewZaicoCatalogSizeAction(): Promise<ZaicoCatalogPrevi
  * syncAllZaicoItems自体はsyncLimitedZaicoItems(少数件テスト同期)から
  * limit付きで呼ばれる形でのみ残っている。
  */
-export async function startZaicoBackgroundSyncAction(): Promise<{ started: boolean; reason?: string }> {
+/**
+ * 同期を開始する。
+ *
+ * ── 既定は差分 ──────────────────────────────────────────────────
+ *
+ * 引数を省略すると "DELTA"。前回の**成功**時刻以降にZAICO側で作成/更新
+ * されたものだけを処理する。通常運用はこちら。
+ *
+ * "FULL" は管理者が画面で明示的に選び、確認ダイアログを通ったときだけ
+ * 渡される。自動の定期実行から全件が走ることは無い。
+ *
+ * mode は画面から来る値なので、そのまま信用せず**ここで検証する**。
+ * ボタンを無効化するだけでは、アクションを直接呼ばれた場合に防げない
+ * (このファイル冒頭の ADMIN ゲートと同じ考え方)。
+ */
+export async function startZaicoBackgroundSyncAction(
+  mode: ZaicoSyncMode = "DELTA",
+): Promise<{ started: boolean; reason?: string }> {
   const role = await getInventoryRole();
   requireAdminOrThrow(role);
+  if (mode !== "DELTA" && mode !== "FULL") {
+    return { started: false, reason: "同期の種類が不正です。" };
+  }
   const who = await getCurrentInventoryUserEmail();
-  return startZaicoBackgroundSyncJob(who);
+  return startZaicoBackgroundSyncJob(who, mode);
 }
 
 export async function advanceZaicoBackgroundSyncAction(): Promise<{ job: ZaicoBackgroundSyncJob; shouldContinue: boolean }> {

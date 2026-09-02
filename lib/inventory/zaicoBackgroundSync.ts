@@ -6,6 +6,7 @@ import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaico
 import type { Schema } from "@/amplify/data/resource";
 import { ZAICO_SYNC_JOB_ID } from "./zaicoSyncJobId";
 import { unwrapGet, unwrapWriteRequired } from "@/lib/amplify/listAll";
+import { resolveDeltaSince, splitByDelta, nextSuccessfulSyncAt, type ZaicoSyncMode } from "./zaicoDelta";
 
 type ZaicoSyncJobModel = Schema["ZaicoSyncJob"]["type"];
 
@@ -149,6 +150,15 @@ export interface ZaicoBackgroundSyncJob {
   finishedAt: string | null;
   lastError: string | null;
   triggeredBy: string | null;
+  // ── 差分同期 ──────────────────────────────────────────────────
+  /** この回の走らせ方。既存行(未設定)は全件相当として扱う。 */
+  mode: "DELTA" | "FULL";
+  /** この回で実際に使った切り取り時刻。全件のときは null。 */
+  syncSince: string | null;
+  /** 前回以降変わっていないので処理を省いた件数。 */
+  skippedByDelta: number;
+  /** 最後に**最後まで通った**同期の開始時刻。次回の差分はここを基準にする。 */
+  lastSuccessfulSyncAt: string | null;
 }
 
 /**
@@ -201,6 +211,10 @@ export function toPublicJob(row: {
   finishedAt?: string | null;
   lastError?: string | null;
   triggeredBy?: string | null;
+  mode?: "DELTA" | "FULL" | null;
+  syncSince?: string | null;
+  skippedByDelta?: number | null;
+  lastSuccessfulSyncAt?: string | null;
 }): ZaicoBackgroundSyncJob {
   return {
     status: row.status,
@@ -212,6 +226,12 @@ export function toPublicJob(row: {
     failed: row.failed ?? 0,
     imageImported: row.imageImported ?? 0,
     missingSourceIds: (row.missingSourceIds ?? []).filter((v): v is string => Boolean(v)),
+    // 既存行には mode が入っていない。差分の基準も無いので、全件相当と
+    // して扱う ——「不明なら全部処理する」の側へ倒す。
+    mode: row.mode ?? "FULL",
+    syncSince: row.syncSince ?? null,
+    skippedByDelta: row.skippedByDelta ?? 0,
+    lastSuccessfulSyncAt: row.lastSuccessfulSyncAt ?? null,
     startedAt: row.startedAt ?? null,
     updatedAt: row.updatedAt ?? null,
     finishedAt: row.finishedAt ?? null,
@@ -234,15 +254,39 @@ export async function getZaicoBackgroundSyncStatus(): Promise<ZaicoBackgroundSyn
  * counter/checkpoint field back to zero/empty, since this is a brand new
  * full-catalog pass.
  */
-export async function startZaicoBackgroundSyncJob(who: string | null): Promise<{ started: boolean; reason?: string }> {
+/**
+ * 同期を開始する。
+ *
+ * ── mode ────────────────────────────────────────────────────────
+ *
+ *   "DELTA" … 通常運用。前回の**成功**時刻以降に ZAICO 側で作成/更新
+ *             されたものだけを処理する。初回(基準が無い)は全件と同じ。
+ *   "FULL"  … 管理者が明示的に選んだときだけ。全件を処理する。
+ *
+ * 省略時は "DELTA"。自動実行の定期ジョブが全件を流さないよう、
+ * 既定を差分側にしてある。
+ *
+ * lastSuccessfulSyncAt は**ここでリセットしない**。前回の値をそのまま
+ * 引き継ぐ —— 開始時に消すと、この回が途中で失敗したときに基準が
+ * 失われ、次回が全件へ戻ってしまう。
+ */
+export async function startZaicoBackgroundSyncJob(
+  who: string | null,
+  mode: ZaicoSyncMode = "DELTA",
+): Promise<{ started: boolean; reason?: string }> {
   const existing = await getZaicoBackgroundSyncStatus();
   if (existing && (existing.status === "PENDING" || existing.status === "RUNNING")) {
     return { started: false, reason: "既にバックグラウンド同期が実行中です。" };
   }
 
   const now = new Date().toISOString();
+  const lastSuccess = existing?.lastSuccessfulSyncAt ?? null;
+  const syncSince = mode === "FULL" ? null : resolveDeltaSince(lastSuccess);
   const fields = {
     status: "PENDING" as const,
+    mode,
+    syncSince,
+    skippedByDelta: 0,
     lastPage: 0,
     totalProcessed: 0,
     created: 0,
@@ -362,7 +406,23 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
     // 続きは seenSourceIds を頼りに次の呼び出しが引き継ぐ — ページを
     // 取り直しても、既に処理した分は飛ばされる。
     const pending = zaicoItems.filter((item) => !seenSourceIds.has(String(item.id)));
-    const batch = pending.slice(0, ITEMS_PER_ADVANCE);
+
+    // ── 差分同期の振り分け ────────────────────────────────────────
+    //
+    // ZAICO API はサーバー側の差分取得に対応していない(実測。
+    // lib/inventory/zaicoDelta.ts 冒頭に根拠)。取得の往復は減らせないが、
+    // **1件ごとの処理**は前回以降変わったものだけに絞れる。同期時間の
+    // 大半は取得ではなく、照合・マージ・書き込み・画像・履歴のほう。
+    //
+    // 省いたものも観測済みとして記録する。記録しないと、完了時の
+    // 「ZAICOから無くなった在庫の検出」が、単に今回処理しなかっただけの
+    // 在庫を「消えた」と誤報告する。
+    const since = row.mode === "FULL" ? null : (row.syncSince ?? null);
+    const { toProcess, skipped } = splitByDelta(pending, since);
+    for (const item of skipped) seenSourceIds.add(String(item.id));
+    const skippedByDelta = (row.skippedByDelta ?? 0) + skipped.length;
+
+    const batch = toProcess.slice(0, ITEMS_PER_ADVANCE);
 
     for (const zaicoItem of batch) {
       const result = await syncOneZaicoItem(zaicoItem, who, prefetched, port, masterCache);
@@ -376,7 +436,8 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
     }
 
     // このページにまだ未処理が残っているなら、ページ番号は進めない。
-    const pageComplete = pending.length <= batch.length;
+    // 差分で省いたものは「処理済み」として扱ってよい(観測済みに入れた)。
+    const pageComplete = toProcess.length <= batch.length;
     const isDone = pageComplete && (!hasMore || zaicoItems.length === 0);
     const now = new Date().toISOString();
 
@@ -387,16 +448,24 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
       // misreport a real, still-existing ZAICO item as missing. Reporting
       // only — nothing here is ever deleted.
       const missingSourceIds = await findMissingZaicoManagedInventory(seenSourceIds);
+      // **ここが差分同期の要。** 最後まで通ったときだけ基準を進める。
+      // 途中で失敗した回で進めると、その回に処理できなかった分を次回が
+      // 「前回以降ではない」と判断して永久に取りこぼす。
+      //
+      // 記録するのは完了時刻ではなく**開始時刻**。実行中にZAICO側で
+      // 更新されたものを次回が拾い直せるようにするため。
       const { data: updated, errors } = await serverDataClient.models.ZaicoSyncJob.update(
         {
           id: ZAICO_SYNC_JOB_SINGLETON_ID,
           status: "COMPLETED",
           lastPage: nextPage,
           ...counts,
+          skippedByDelta,
           seenSourceIds: stringifySeenSourceIds(seenSourceIds),
           missingSourceIds,
           updatedAt: now,
           finishedAt: now,
+          lastSuccessfulSyncAt: nextSuccessfulSyncAt(row.startedAt, now),
         },
         inventoryAuthMode,
       );
@@ -412,6 +481,7 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
         // 同じページを取り直し、seenSourceIdsで既処理を飛ばして続きを行う。
         lastPage: pageComplete ? nextPage : nextPage - 1,
         ...counts,
+        skippedByDelta,
         seenSourceIds: stringifySeenSourceIds(seenSourceIds),
         updatedAt: now,
       },

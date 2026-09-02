@@ -60,7 +60,10 @@
     "verify:amplify-list-errors": "node scripts/with-server-only-stub.cjs scripts/verify-amplify-list-errors.ts",
     "verify:base-token-refresh": "node scripts/with-server-only-stub.cjs scripts/verify-base-token-refresh.ts",
     "verify:image-fixtures": "node scripts/with-server-only-stub.cjs scripts/verify-image-fixtures.ts",
-    "verify:publish-flow": "node scripts/with-server-only-stub.cjs scripts/verify-publish-flow.ts"
+    "verify:publish-flow": "node scripts/with-server-only-stub.cjs scripts/verify-publish-flow.ts",
+    "probe:zaico-delta": "node scripts/with-server-only-stub.cjs scripts/probe-zaico-delta-support.ts",
+    "verify:zaico-delta": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-delta.ts",
+    "measure:zaico-delta": "node scripts/with-server-only-stub.cjs scripts/measure-zaico-delta-impact.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

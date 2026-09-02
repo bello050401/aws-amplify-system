@@ -218,11 +218,25 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
     }
   }
 
-  async function startBackground() {
+  /**
+   * 同期を開始する。
+   *
+   * 全件同期は誤操作の代償が大きい(5,000件超を処理する)ので、必ず
+   * 確認を挟む。通常同期(差分)は日常操作なので確認しない —— 毎回
+   * 確認を出すと読まずに押すようになり、本当に確認したい全件のほうが
+   * 効かなくなる。
+   */
+  async function startBackground(mode: "DELTA" | "FULL" = "DELTA") {
+    if (mode === "FULL") {
+      const ok = window.confirm(
+        "ZAICOの全件同期を実行します。処理に時間がかかる可能性があります。実行しますか？",
+      );
+      if (!ok) return;
+    }
     setBgError(null);
     setBgBusy("starting");
     try {
-      const res = await startZaicoBackgroundSyncAction();
+      const res = await startZaicoBackgroundSyncAction(mode);
       if (!res.started) {
         setBgError(res.reason ?? "バックグラウンド同期を開始できませんでした。");
         return;
@@ -472,6 +486,20 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
                   }[bgJob.status]
                 }
               </dd>
+              {/* この回が差分だったのか全件だったのかは、件数の読み方が
+                  変わるので必ず出す。差分で「新規0・更新0」は正常だが、
+                  全件で同じ数字なら異常。 */}
+              <dt className="text-gray-500">種類</dt>
+              <dd className="col-span-3">
+                {bgJob.mode === "DELTA" ? "差分同期" : "全件同期"}
+                {bgJob.mode === "DELTA" && (
+                  <span className="ml-2 text-[11px] text-gray-500">
+                    {bgJob.syncSince
+                      ? `${new Date(bgJob.syncSince).toLocaleString("ja-JP")} 以降`
+                      : "初回のため全件を対象"}
+                  </span>
+                )}
+              </dd>
               <dt className="text-gray-500">進捗</dt>
               <dd className="col-span-3">
                 {bgJob.totalProcessed.toLocaleString("ja-JP")}件（ページ{bgJob.lastPage}）
@@ -482,6 +510,17 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
               <dd className="col-span-3">{bgJob.updated}件</dd>
               <dt className="text-gray-500">変更なし</dt>
               <dd className="col-span-3">{bgJob.unchanged}件</dd>
+              {bgJob.skippedByDelta > 0 && (
+                <>
+                  <dt className="text-gray-500">差分スキップ</dt>
+                  <dd className="col-span-3">
+                    {bgJob.skippedByDelta.toLocaleString("ja-JP")}件
+                    <span className="ml-2 text-[11px] text-gray-500">
+                      前回以降ZAICO側で変更されていないため、処理を省きました
+                    </span>
+                  </dd>
+                </>
+              )}
               <dt className="text-gray-500">エラー</dt>
               <dd className="col-span-3">{bgJob.failed}件</dd>
             </>
@@ -502,6 +541,14 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
                   </dd>
                 </>
               )}
+              {/* 次回の差分がどこを基準にするか。ここが進んでいない＝
+                  前回が最後まで通っていない、と読める。 */}
+              <dt className="text-gray-500">最終同期成功</dt>
+              <dd className="col-span-3">
+                {bgJob.lastSuccessfulSyncAt
+                  ? new Date(bgJob.lastSuccessfulSyncAt).toLocaleString("ja-JP")
+                  : "まだ一度も完了していません（次回は全件が対象）"}
+              </dd>
               {bgJob.lastError && (
                 <>
                   <dt className="text-gray-500">最終エラー</dt>
@@ -512,14 +559,25 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
           </details>
         )}
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* 通常運用はこちら。前回の成功時刻以降に変わったものだけを処理する。 */}
           <button
             type="button"
-            onClick={startBackground}
+            onClick={() => startBackground("DELTA")}
             disabled={bgPolling || bgBusy !== "idle"}
             className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
           >
-            {bgPolling ? "実行中…" : bgBusy === "starting" ? "開始中…" : "全件同期する"}
+            {bgPolling ? "実行中…" : bgBusy === "starting" ? "開始中…" : "通常同期する（差分）"}
+          </button>
+          {/* 全件は管理者が明示的に選んだときだけ。見た目も控えめにして、
+              こちらが既定ではないことが分かるようにする。 */}
+          <button
+            type="button"
+            onClick={() => startBackground("FULL")}
+            disabled={bgPolling || bgBusy !== "idle"}
+            className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            全件同期する
           </button>
           {bgPolling && (
             <button

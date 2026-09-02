@@ -635,6 +635,22 @@ const schema = a.schema({
   // ─────────────────────────────────────────────────────────────────────
   ZaicoSyncStatus: a.enum(["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]),
 
+  /**
+   * 同期の走らせ方。
+   *
+   *   DELTA … 通常運用。前回の成功時刻以降に ZAICO 側で作成/更新された
+   *           ものだけを処理する。
+   *   FULL  … 管理者が明示的に実行したときだけ。全件を処理する。
+   *
+   * ZAICO API は「更新日時以降だけ返す」条件指定に**対応していない**
+   * (2026-09-02 実測。updated_at_since / since / updated_at_gteq など
+   *  8種のパラメータと未来日時を試したが、いずれも応答が変わらず常に
+   *  1,000件を返した)。そのため取得の往復自体は減らせない。
+   *  減らせるのは1件ごとの処理 —— 既存在庫の照合・マージ・書き込み・
+   *  画像取り込み・履歴記録で、同期時間の大半はここ。
+   */
+  ZaicoSyncMode: a.enum(["DELTA", "FULL"]),
+
   ZaicoSyncJob: a
     .model({
       status: a.ref("ZaicoSyncStatus").required(),
@@ -660,6 +676,19 @@ const schema = a.schema({
       // 両方が同じジョブ行を安全に共有できる——どちらか一方が
       // leaseOwnerを保持している間は、もう一方は同じページを二重処理
       // しない(claimLease系のConditionExpressionで強制)。
+      // ── 差分同期 ────────────────────────────────────────────────
+      //
+      // lastSuccessfulSyncAt は**実行開始時にリセットしない**。
+      // COMPLETED になったときだけ進める —— 途中でエラー・タイムアウト・
+      // 中断が起きた回で進めてしまうと、その回に処理できなかった分を
+      // 次回が「前回以降ではない」と判断して永久に取りこぼす。
+      //
+      // 記録するのは「その回の開始時刻」であって完了時刻ではない。
+      // 実行中に ZAICO 側で更新されたものを次回が拾えるようにするため。
+      lastSuccessfulSyncAt: a.datetime(),
+      mode: a.ref("ZaicoSyncMode"), // この回の走らせ方。省略時(既存行)は FULL 相当として扱う
+      syncSince: a.datetime(), // この回で実際に使った切り取り時刻(報告用。FULL では null)
+      skippedByDelta: a.integer().default(0), // 「前回以降に変わっていない」で処理を省いた件数
       leaseOwner: a.string(), // 例: "lambda:<requestId>" / "browser:<sessionToken先頭8文字>"。null=誰も保持していない
       leaseExpiresAt: a.datetime(), // この時刻を過ぎたleaseは失効扱い——保持者がクラッシュしても永久にブロックしない
       retryCount: a.integer().default(0), // 直近のadvance/pageで失敗した回数。上限到達でFAILEDへ(DLQ相当)
