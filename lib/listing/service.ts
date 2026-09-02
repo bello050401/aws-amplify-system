@@ -4,12 +4,24 @@ import { getInventoryDetail } from "@/lib/inventory/queries";
 import { listEcEligibleInventory } from "@/lib/inventory/ecEligibleQuery";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
-import { createMercariProduct, MercariApiError } from "./mercari/adapter";
+import { createMercariProduct } from "./mercari/adapter";
 import { createBaseProduct } from "./base/adapter";
-import { BaseListingApiError } from "./base/errors";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { unwrapList } from "@/lib/amplify/listAll";
+import {
+  BASE_ROUTE,
+  MERCARI_ROUTE,
+  assertNotAlreadyListed,
+  describePublishFailure,
+  failedPatch,
+  publishedPatch,
+  publishingPatch,
+  requireChannelListing,
+  requireDraft,
+  saveFailureMessage,
+  type PublishRoute,
+} from "./publishFlow";
 import type {
   ChannelListingRecord,
   ListingChannel,
@@ -558,17 +570,14 @@ export async function listOnMercari(
   shippingPayer: ShippingPayerCode,
   who: string | null,
 ): Promise<ChannelListingRecord> {
+  const route: PublishRoute = MERCARI_ROUTE;
+
   const draft = await getListingDraftForInventory(inventoryId);
-  if (!draft) throw new Error("先に出品下書きを保存してください。");
+  requireDraft(draft);
 
-  const channelListing = await getChannelListing(inventoryId, "MERCARI_SHOPS");
-  if (!channelListing) throw new Error("先にMercariのカテゴリー設定を保存してください。");
-
-  if (channelListing.status === "ACTIVE" && channelListing.externalListingId) {
-    throw new Error(
-      `既にMercari Shopsへ出品済みです（商品ID: ${channelListing.externalListingId}）。再出品（更新）は現時点では未対応の機能です。`,
-    );
-  }
+  const channelListing = await getChannelListing(inventoryId, route.channel);
+  requireChannelListing(channelListing, route);
+  assertNotAlreadyListed(channelListing, route);
 
   // BELLO統合改修 master指示書(2026-08-29統合改修版) §17-A: variant
   // 構造のquantityは出品実行の直前に取得した実在庫数量を使う
@@ -587,40 +596,22 @@ export async function listOnMercari(
   // §15: PUBLISHING = 外部APIへ呼び出し中(旧QUEUEDから改称 — QUEUEDは
   // §14の新しい語彙では「バッチ/スケジュール待ち」を指すため、この
   // 同期的なcreateProduct呼び出し中の状態にはPUBLISHINGの方が正確)。
-  await serverDataClient.models.ChannelListing.update(
-    { id: channelListing.id, status: "PUBLISHING", updatedBy: who ?? undefined },
-    inventoryAuthMode,
-  );
+  await serverDataClient.models.ChannelListing.update(publishingPatch(channelListing.id, who), inventoryAuthMode);
 
   try {
     const result = await createMercariProduct({ draft, channelListing, shippingPayer, inventoryQuantity: inventory.quantity });
-    const nowIso = new Date().toISOString();
     const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
-      {
-        id: channelListing.id,
-        status: "ACTIVE",
-        externalListingId: result.externalProductId,
-        listingUrl: null, // [UNVERIFIED] MercariのcreateProduct応答にlistingUrl相当のフィールドが含まれるか未確認 — 含まれることが確認できたらここへ設定する
-        // §15: firstListedAtは初回のみ設定(既存値があれば上書きしない)、
-        // lastListedAtは成功のたびに更新。このrelist未実装の現状では
-        // 実質的に同時刻になるが、フィールドの意味自体は将来の再出品
-        // 実装にそのまま使える形にしてある。
-        firstListedAt: channelListing.firstListedAt ?? nowIso,
-        lastListedAt: nowIso,
-        lastError: undefined,
-        updatedBy: who ?? undefined,
-      },
+      publishedPatch({ channelListing, result, route, who, nowIso: new Date().toISOString() }),
       inventoryAuthMode,
     );
-    if (errors || !updated) throw new Error(`出品結果の保存に失敗しました: ${JSON.stringify(errors)}`);
+    if (errors || !updated) throw new Error(saveFailureMessage(errors));
     return toChannelListingRecord(updated);
   } catch (err) {
-    const message = err instanceof MercariApiError ? err.message : err instanceof Error ? err.message : "不明なエラー";
     const { data: failed } = await serverDataClient.models.ChannelListing.update(
-      { id: channelListing.id, status: "ERROR", lastError: message, updatedBy: who ?? undefined },
+      failedPatch(channelListing.id, describePublishFailure(err), who),
       inventoryAuthMode,
     );
-    console.error(`[listOnMercari] inventoryId=${inventoryId} failed:`, err);
+    console.error(`[${route.logLabel}] inventoryId=${inventoryId} failed:`, err);
     if (failed) return toChannelListingRecord(failed);
     throw err;
   }
@@ -634,15 +625,14 @@ export async function listOnMercari(
  * ファイル冒頭コメント参照 — 画像同期は今回未実装)。
  */
 export async function listOnBase(inventoryId: string, who: string | null): Promise<ChannelListingRecord> {
+  const route: PublishRoute = BASE_ROUTE;
+
   const draft = await getListingDraftForInventory(inventoryId);
-  if (!draft) throw new Error("先に出品下書きを保存してください。");
+  requireDraft(draft);
 
-  const channelListing = await getChannelListing(inventoryId, "BASE");
-  if (!channelListing) throw new Error("先にBASEのチャネル設定を保存してください。");
-
-  if (channelListing.status === "ACTIVE" && channelListing.externalListingId) {
-    throw new Error(`既にBASEへ出品済みです（商品ID: ${channelListing.externalListingId}）。再出品（更新）は現時点では未対応の機能です。`);
-  }
+  const channelListing = await getChannelListing(inventoryId, route.channel);
+  requireChannelListing(channelListing, route);
+  assertNotAlreadyListed(channelListing, route);
 
   const inventory = await getInventoryDetail(inventoryId);
   if (!inventory) throw new Error("対象の在庫が見つかりません。");
@@ -651,7 +641,7 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
   const categoryName = categoryNameOf(inventory.categoryId);
   if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
-  await serverDataClient.models.ChannelListing.update({ id: channelListing.id, status: "PUBLISHING", updatedBy: who ?? undefined }, inventoryAuthMode);
+  await serverDataClient.models.ChannelListing.update(publishingPatch(channelListing.id, who), inventoryAuthMode);
 
   try {
     const result = await createBaseProduct({
@@ -661,28 +651,18 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
       overridePrice: channelListing.overridePrice,
       quantity: inventory.quantity,
     });
-    const nowIso = new Date().toISOString();
     const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
-      {
-        id: channelListing.id,
-        status: "ACTIVE",
-        externalListingId: result.externalProductId,
-        firstListedAt: channelListing.firstListedAt ?? nowIso,
-        lastListedAt: nowIso,
-        lastError: undefined,
-        updatedBy: who ?? undefined,
-      },
+      publishedPatch({ channelListing, result, route, who, nowIso: new Date().toISOString() }),
       inventoryAuthMode,
     );
-    if (errors || !updated) throw new Error(`出品結果の保存に失敗しました: ${JSON.stringify(errors)}`);
+    if (errors || !updated) throw new Error(saveFailureMessage(errors));
     return toChannelListingRecord(updated);
   } catch (err) {
-    const message = err instanceof BaseListingApiError ? err.message : err instanceof Error ? err.message : "不明なエラー";
     const { data: failed } = await serverDataClient.models.ChannelListing.update(
-      { id: channelListing.id, status: "ERROR", lastError: message, updatedBy: who ?? undefined },
+      failedPatch(channelListing.id, describePublishFailure(err), who),
       inventoryAuthMode,
     );
-    console.error(`[listOnBase] inventoryId=${inventoryId} failed:`, err);
+    console.error(`[${route.logLabel}] inventoryId=${inventoryId} failed:`, err);
     if (failed) return toChannelListingRecord(failed);
     throw err;
   }
