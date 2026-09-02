@@ -15,7 +15,15 @@ export default async function EditInventoryPage({ params }: { params: { id: stri
     redirect(`/inventory/${params.id}`);
   }
 
-  const item = await getInventoryDetail(params.id);
+  // item に依存しない3つ(ステータス・追加項目の定義・単位)は、item の
+  // 取得を待つ理由が無い。以前は item を取り切ってから5つまとめて投げて
+  // いたので、独立した問い合わせが1往復ぶん後ろへずれていた。
+  const [item, statuses, customFieldDefs, units] = await Promise.all([
+    getInventoryDetail(params.id),
+    listStatuses(),
+    listCustomFieldDefinitions(),
+    listUnits(),
+  ]);
   if (!item) notFound();
 
   // Pass the record's current categoryId/locationId through so a value
@@ -23,12 +31,9 @@ export default async function EditInventoryPage({ params }: { params: { id: stri
   // selectable (labeled "（無効）") option — see listCategories'/
   // listLocations' own comment. Depends on `item`, so this can't join
   // the Promise.all above.
-  const [categories, locations, statuses, customFieldDefs, units] = await Promise.all([
+  const [categories, locations] = await Promise.all([
     listCategories(item.categoryId),
     listLocations(item.locationId),
-    listStatuses(),
-    listCustomFieldDefinitions(),
-    listUnits(),
   ]);
 
   return (

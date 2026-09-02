@@ -101,17 +101,25 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
   const role = await getInventoryRole();
   if (!role) return null;
 
-  const item = await getInventoryDetail(params.id);
+  // item に依存しない2つ(ステータス・追加項目の定義)は、item の取得を
+  // 待つ理由が無い。以前は item を取り切ってから4つまとめて投げていた
+  // ので、独立した問い合わせが1往復ぶん後ろへずれていた。依存がある
+  // カテゴリー/保管場所だけを次の段へ残す —— この2つは item の
+  // categoryId/locationId を渡して「無効化済みでも名前が出る」ように
+  // する必要があり、item より先には投げられない。
+  const [item, statuses, fieldDefs] = await Promise.all([
+    getInventoryDetail(params.id),
+    listStatuses(),
+    listCustomFieldDefinitions(),
+  ]);
   if (!item) notFound();
 
   // Same reasoning as the edit page: a deactivated category/location must
   // still resolve to its name here rather than falling back to "-", since
   // this record still legitimately references it.
-  const [categories, locations, statuses, fieldDefs] = await Promise.all([
+  const [categories, locations] = await Promise.all([
     listCategories(item.categoryId),
     listLocations(item.locationId),
-    listStatuses(),
-    listCustomFieldDefinitions(),
   ]);
 
   const category = item.categoryId ? categories.find((c) => c.id === item.categoryId) : undefined;

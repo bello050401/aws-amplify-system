@@ -1,5 +1,7 @@
 import "server-only";
+import { cache } from "react";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { listAllPages } from "@/lib/amplify/listAll";
 import { INVENTORY_SEARCH_SELECTION_SET } from "./searchProjection";
 import type { Schema } from "@/amplify/data/resource";
 import { parseCustomFields } from "./customFieldsCodec";
@@ -571,12 +573,41 @@ export interface MasterOption {
  * "（無効）" so it reads as a deactivated option, not an active choice
  * a user could newly pick some other way.
  */
-export async function listCategories(includeInactiveId?: string | null): Promise<MasterOption[]> {
+/**
+ * マスタ4種(カテゴリー / 保管場所 / ステータス / 追加項目)の読み出し。
+ *
+ * ── limit と全ページ走査 ────────────────────────────────────────
+ *
+ * どれも `filter: { isActive: { eq: true } }` を付けて呼ぶ。DynamoDB の
+ * filter は**読んだ後に間引く**ので、`limit` 未指定(既定100)のままだと
+ * 「100件読んで、そのうち有効なものだけ」になる。無効化した行が増えて
+ * 総数が100を超えた瞬間、有効なマスタが**黙って選択肢から消える** ——
+ * これは lookupShippingRate が0件を返していたのと同じ種類の不具合
+ * (lib/amplify/listAll.ts の冒頭に実測を書いてある)。
+ *
+ * 現在の実データは カテゴリー19 / 保管場所13 / ステータス0 / 追加項目6 で、
+ * まだ100に届いていない ——「いま壊れている」のではなく「増えたら壊れる」
+ * 側。件数が小さいうちに、正しい読み方へ寄せておく。
+ *
+ * ── cache() ─────────────────────────────────────────────────────
+ *
+ * マスタは1画面の中で複数の場所から要求される(ページ本体・フォーム・
+ * Suspense下の子)。リクエスト内の重複だけを排除する。リクエストを
+ * またいでは保持しない ——「設定でカテゴリーを直したのに一覧に出ない」
+ * を作らないため。
+ */
+export const listCategories = cache(async function listCategories(includeInactiveId?: string | null): Promise<MasterOption[]> {
   if (isE2EFixtureModeActive()) return E2E_CATEGORIES; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const { data } = await serverDataClient.models.Category.list({
-    filter: { isActive: { eq: true } },
-    ...inventoryAuthMode,
-  });
+  const data = await listAllPages(
+    (nextToken) =>
+      serverDataClient.models.Category.list({
+        filter: { isActive: { eq: true } },
+        limit: 1000,
+        nextToken,
+        ...inventoryAuthMode,
+      }),
+    { label: "カテゴリーマスタ" },
+  );
   const options = data
     .map((c) => ({ id: c.id, name: c.name, parentId: c.parentId ?? null, sortOrder: c.sortOrder ?? 0 }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
@@ -588,14 +619,20 @@ export async function listCategories(includeInactiveId?: string | null): Promise
     }
   }
   return options;
-}
+});
 
-export async function listLocations(includeInactiveId?: string | null): Promise<MasterOption[]> {
+export const listLocations = cache(async function listLocations(includeInactiveId?: string | null): Promise<MasterOption[]> {
   if (isE2EFixtureModeActive()) return E2E_LOCATIONS; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const { data } = await serverDataClient.models.Location.list({
-    filter: { isActive: { eq: true } },
-    ...inventoryAuthMode,
-  });
+  const data = await listAllPages(
+    (nextToken) =>
+      serverDataClient.models.Location.list({
+        filter: { isActive: { eq: true } },
+        limit: 1000,
+        nextToken,
+        ...inventoryAuthMode,
+      }),
+    { label: "保管場所マスタ" },
+  );
   const options = data
     .map((l) => ({ id: l.id, name: l.name, parentId: l.parentId ?? null, sortOrder: l.sortOrder ?? 0 }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
@@ -607,7 +644,7 @@ export async function listLocations(includeInactiveId?: string | null): Promise<
     }
   }
   return options;
-}
+});
 
 /**
  * 単位マスタ(夜間開発指示書 §10)の有効な名称一覧 — 新規登録/編集フォー
@@ -643,16 +680,22 @@ export interface StatusOption {
   sortOrder: number;
 }
 
-export async function listStatuses(): Promise<StatusOption[]> {
+export const listStatuses = cache(async function listStatuses(): Promise<StatusOption[]> {
   if (isE2EFixtureModeActive()) return E2E_STATUSES; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const { data } = await serverDataClient.models.StatusMaster.list({
-    filter: { isActive: { eq: true } },
-    ...inventoryAuthMode,
-  });
+  const data = await listAllPages(
+    (nextToken) =>
+      serverDataClient.models.StatusMaster.list({
+        filter: { isActive: { eq: true } },
+        limit: 1000,
+        nextToken,
+        ...inventoryAuthMode,
+      }),
+    { label: "ステータスマスタ" },
+  );
   return data
     .map((s) => ({ id: s.id, code: s.code, label: s.label, sortOrder: s.sortOrder ?? 0 }))
     .sort((a, b) => a.sortOrder - b.sortOrder);
-}
+});
 
 export interface CustomFieldDefinitionRow {
   id: string;
@@ -688,17 +731,29 @@ function toCustomFieldDefinitionRow(f: {
 }
 
 /** 新規登録/編集フォーム・検索・Import/Export等、実際にユーザーへ入力・表示させる側が使う — 無効化された追加項目は含まない。 */
-export async function listCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
+export const listCustomFieldDefinitions = cache(async function listCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
   if (isE2EFixtureModeActive()) return E2E_CUSTOM_FIELD_DEFS; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const { data } = await serverDataClient.models.CustomFieldDefinition.list({
-    filter: { isActive: { eq: true } },
-    ...inventoryAuthMode,
-  });
+  const data = await listAllPages(
+    (nextToken) =>
+      serverDataClient.models.CustomFieldDefinition.list({
+        filter: { isActive: { eq: true } },
+        limit: 1000,
+        nextToken,
+        ...inventoryAuthMode,
+      }),
+    { label: "追加項目の定義" },
+  );
   return data.map(toCustomFieldDefinitionRow).sort((a, b) => a.sortOrder - b.sortOrder);
-}
+});
 
 /** 設定画面の追加項目管理タブ専用 — 無効化済みも含めた全件(ADMINが再度有効化できるように、lib/inventory/masters.tsのlistAllMasterEntriesと同じ考え方)。 */
 export async function listAllCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
-  const { data } = await serverDataClient.models.CustomFieldDefinition.list(inventoryAuthMode);
+  // filter が無いので間引きは起きないが、既定100件で**1ページ目だけ**を
+  // 返すのは同じ。設定画面の管理タブは全件が出ていないと困る。
+  const data = await listAllPages(
+    (nextToken) =>
+      serverDataClient.models.CustomFieldDefinition.list({ limit: 1000, nextToken, ...inventoryAuthMode }),
+    { label: "追加項目の定義(無効含む)" },
+  );
   return data.map(toCustomFieldDefinitionRow).sort((a, b) => a.sortOrder - b.sortOrder);
 }

@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { fetchAuthSession } from "aws-amplify/auth/server";
@@ -59,7 +60,34 @@ function getE2EBypassRole(): InventoryRole | null {
   return (INVENTORY_ROLES as string[]).includes(role) ? (role as InventoryRole) : null;
 }
 
-export async function getInventorySessionStatus(): Promise<InventorySessionStatus> {
+/**
+ * 1リクエスト内で何度呼んでも、Cognitoへの問い合わせは1回になる。
+ *
+ * ── なぜ必要か ──────────────────────────────────────────────────
+ *
+ * この関数は保護レイアウト(app/inventory/(protected)/layout.tsx)と、
+ * その下の**各ページ**の両方から呼ばれる。ページはさらに
+ * getInventoryRole 経由でも呼ぶ。つまり画面を1枚開くたびに、同じ
+ * Cookieに対する fetchAuthSession が最低2回走っていた —— JWTの復号と
+ * 検証をやり直し、トークンが期限に近ければCognitoへのリフレッシュ
+ * 往復まで2回行う。同じ答えしか返らないのに。
+ *
+ * React の cache() はレンダー1回(= HTTPリクエスト1回)の中でだけ結果を
+ * 保持する。Cookieはそのリクエストの間は変わらないので、同じ入力に
+ * 同じ答えを返すという意味を変えずに往復だけを削れる。
+ *
+ * ── リクエストをまたいで残らない ────────────────────────────────
+ *
+ * cache() のスコープはリクエスト単位。別の利用者のリクエストへ漏れる
+ * ことも、ログアウト後まで生き残ることもない —— 認可判定をキャッシュ
+ * する上でここは譲れない点なので明記しておく。
+ *
+ * ── レンダー外(Server Action等)で呼ばれた場合 ───────────────────
+ *
+ * Reactのdispatcherが無い文脈では cache() は素通しで元の関数を呼ぶ。
+ * 重複排除が効かないだけで、挙動は今までと同一。
+ */
+export const getInventorySessionStatus = cache(async function getInventorySessionStatus(): Promise<InventorySessionStatus> {
   const bypassRole = getE2EBypassRole();
   if (bypassRole) return { kind: "authorized", role: bypassRole };
   try {
@@ -76,7 +104,7 @@ export async function getInventorySessionStatus(): Promise<InventorySessionStatu
   } catch {
     return { kind: "signed-out" };
   }
-}
+});
 
 export async function getInventoryRole(): Promise<InventoryRole | null> {
   const status = await getInventorySessionStatus();
@@ -92,7 +120,8 @@ export function canHardDeleteInventory(role: InventoryRole | null): boolean {
 }
 
 /** Identity string for Inventory.createdBy/updatedBy and InventoryHistory.changedBy — email if the token carries one, else the Cognito sub, so a write is never silently attributed to "unknown". */
-export async function getCurrentInventoryUserEmail(): Promise<string | null> {
+/** 書き込み系のアクションは createdBy/updatedBy/changedBy で繰り返しこれを呼ぶ。理由は getInventorySessionStatus と同じ。 */
+export const getCurrentInventoryUserEmail = cache(async function getCurrentInventoryUserEmail(): Promise<string | null> {
   try {
     return await runWithAmplifyServerContext({
       nextServerContext: { cookies },
@@ -106,7 +135,7 @@ export async function getCurrentInventoryUserEmail(): Promise<string | null> {
   } catch {
     return null;
   }
-}
+});
 
 /** For use in Route Handlers, mirroring requireAdminOrRedirect in requireAdmin.ts. */
 export async function requireInventoryUserOrRedirect(request: Request): Promise<NextResponse | null> {
