@@ -3,6 +3,7 @@ import { unwrapDataResult, AmplifyDataError, type AmplifyDataResult } from "@/li
 import { getBaseCredentials } from "./secretStore";
 import { BaseNotConfiguredError } from "./errors";
 import { resolveRedirectUri } from "./redirectUri";
+import { createSingleFlight, shouldRetryToken, tokenRetryDelayMs } from "./tokenRetry";
 import { resolveScope } from "./scope";
 
 /**
@@ -84,13 +85,26 @@ export class BaseTokenExchangeError extends Error {
   }
 }
 
-/** BASEのエラーコードを、担当者が次に何をすればよいか分かる日本語にする。 */
-function describeTokenError(code: string | null, status: number | null): string {
+/** どちらの経路で失敗したか。同じ `invalid_grant` でも原因が違う。 */
+export type TokenGrantKind = "authorization_code" | "refresh_token";
+
+/**
+ * BASEのエラーコードを、担当者が次に何をすればよいか分かる日本語にする。
+ *
+ * `invalid_grant` は経路で意味が変わる。連携時なら「認可コードが古い」で、
+ * 更新時なら「リフレッシュトークンが失効した」。どちらも次にやることは
+ * 再連携だが、**原因が違うので原因の文言を取り違えると調査が逸れる** ——
+ * 更新時に「認可コードが無効です」と出ると、連携手順を疑って何度もやり直す
+ * ことになり、本当の原因(トークンの失効・回転の競合)に辿り着けない。
+ */
+function describeTokenError(code: string | null, status: number | null, grant: TokenGrantKind): string {
   switch (code) {
     case "invalid_client":
       return "BASEがClient ID / Client Secretを受け付けませんでした。設定画面で登録した値がBASE Developersのものと一致しているか確認してください。";
     case "invalid_grant":
-      return "認可コードが無効か、既に使用済みです。設定画面からもう一度「BASEアカウントを連携する」をやり直してください。";
+      return grant === "refresh_token"
+        ? "BASEのアクセストークンを更新できませんでした（リフレッシュトークンが失効しています）。設定画面からもう一度「BASEアカウントを連携する」をやり直してください。"
+        : "認可コードが無効か、既に使用済みです。設定画面からもう一度「BASEアカウントを連携する」をやり直してください。";
     case "redirect_uri_mismatch":
       return "コールバックURLがBASE Developersへ登録した値と一致していません。設定画面に表示されているコールバックURLをそのまま登録してください。";
     case "invalid_scope":
@@ -100,13 +114,34 @@ function describeTokenError(code: string | null, status: number | null): string 
   }
 }
 
-async function requestToken(params: Record<string, string>): Promise<RawTokenResponse> {
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(params),
-    cache: "no-store",
-  });
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * トークンエンドポイントを1回叩く。失敗はすべて BaseTokenExchangeError。
+ *
+ * ネットワーク層の失敗(DNS・接続断・タイムアウト)は status を null に
+ * して包む —— 呼び出し側が「再試行する価値があるか」を同じ形で判定
+ * できるようにするため。
+ */
+async function requestTokenOnce(params: Record<string, string>, grant: TokenGrantKind): Promise<RawTokenResponse> {
+  let res: Response;
+  try {
+    res = await fetch(TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params),
+      cache: "no-store",
+    });
+  } catch (err) {
+    // 例外そのものは出さない —— fetchの例外メッセージにURLや
+    // ヘッダが載る実装があるため。種別だけ記録する。
+    console.error("[base/oauth] token endpoint unreachable", { name: err instanceof Error ? err.name : "unknown" });
+    throw new BaseTokenExchangeError(
+      "BASEへ接続できませんでした。時間をおいて再度お試しください。",
+      null,
+      null,
+    );
+  }
 
   const text = await res.text();
   if (!res.ok) {
@@ -120,7 +155,7 @@ async function requestToken(params: Record<string, string>): Promise<RawTokenRes
     // サーバーログには応答本文を残す（原因調査に要る）。送信した
     // パラメータ側は絶対に出さない —— client_secretが入っているため。
     console.error("[base/oauth] token endpoint failed", { status: res.status, code, body: text.slice(0, 500) });
-    throw new BaseTokenExchangeError(describeTokenError(code, res.status), code, res.status);
+    throw new BaseTokenExchangeError(describeTokenError(code, res.status, grant), code, res.status);
   }
 
   try {
@@ -131,19 +166,44 @@ async function requestToken(params: Record<string, string>): Promise<RawTokenRes
 }
 
 /**
+ * 一時的な失敗だけ、指数バックオフで再試行する。
+ *
+ * invalid_grant / invalid_client のような 4xx は**再試行しない** ——
+ * 何度投げても同じ答えしか返らないうえ、レート制限に当たって本当に
+ * 必要なときの1回を潰す。判定は lib/base/tokenRetry.ts。
+ */
+async function requestToken(params: Record<string, string>, grant: TokenGrantKind): Promise<RawTokenResponse> {
+  let attempt = 0;
+  for (;;) {
+    attempt++;
+    try {
+      return await requestTokenOnce(params, grant);
+    } catch (err) {
+      const status = err instanceof BaseTokenExchangeError ? err.status : null;
+      if (!(err instanceof BaseTokenExchangeError) || !shouldRetryToken(attempt, status)) throw err;
+      console.warn("[base/oauth] token request retrying", { attempt, status });
+      await sleep(tokenRetryDelayMs(attempt));
+    }
+  }
+}
+
+/**
  * Called once, from the OAuth callback route, with the `code` BASE just
  * handed back. `redirect_uri` は認可を開始したときと同一でなければ
  * ならないので、同じ関数（resolveRedirectUri）で組み立てる。
  */
 export async function exchangeCodeForToken(code: string, request: Request): Promise<void> {
   const { clientId, clientSecret } = await requireCredentials();
-  const body = await requestToken({
-    grant_type: "authorization_code",
-    client_id: clientId,
-    client_secret: clientSecret,
-    redirect_uri: resolveRedirectUri(request),
-    code,
-  });
+  const body = await requestToken(
+    {
+      grant_type: "authorization_code",
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: resolveRedirectUri(request),
+      code,
+    },
+    "authorization_code",
+  );
   await saveToken(body.access_token, body.refresh_token, body.expires_in);
 }
 
@@ -267,21 +327,38 @@ export async function getAccessToken(): Promise<string> {
   );
   if (!token) throw new BaseNotConnectedError();
 
+  // expiresAt が壊れていれば getTime() は NaN になり、この比較は false。
+  // つまり「期限が読めないなら更新する」側へ倒れる —— 読めない値を
+  // 有効期限内とみなして期限切れトークンを使い続けるより安全。
   const expiresAt = new Date(token.expiresAt).getTime();
   if (expiresAt > Date.now() + 60_000) {
     return token.accessToken;
   }
 
-  const { clientId, clientSecret } = await requireCredentials();
-  const body = await requestToken({
-    grant_type: "refresh_token",
-    client_id: clientId,
-    client_secret: clientSecret,
-    refresh_token: token.refreshToken,
+  // 同時に走らせない。BASEはリフレッシュのたびに refresh_token を回転
+  // させることがあり、2本同時だと後から来たほうが**既に無効になった**
+  // トークンを送って invalid_grant になる。さらに悪いのは保存の競合で、
+  // 古いトークンで上書きすると連携そのものが壊れ、**人による再連携**が
+  // 必要になる。BASEの再認証は人しかできないので、そこへ落とさない。
+  // (効くのは同一プロセス内まで。理由は lib/base/tokenRetry.ts に書いた)
+  return refreshInFlight(async () => {
+    const { clientId, clientSecret } = await requireCredentials();
+    const body = await requestToken(
+      {
+        grant_type: "refresh_token",
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: token.refreshToken,
+      },
+      "refresh_token",
+    );
+    await saveToken(body.access_token, body.refresh_token, body.expires_in);
+    return body.access_token;
   });
-  await saveToken(body.access_token, body.refresh_token, body.expires_in);
-  return body.access_token;
 }
+
+/** 更新の同時実行を1本に畳む。モジュールスコープ = プロセス単位。 */
+const refreshInFlight = createSingleFlight<string>();
 
 export async function disconnectBase(): Promise<void> {
   const existing = unwrapTokenResult(
