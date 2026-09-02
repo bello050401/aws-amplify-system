@@ -43,7 +43,9 @@
     "verify:zaico-reconciliation": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-reconciliation.ts",
     "verify:inquiry": "node scripts/with-server-only-stub.cjs scripts/verify-inquiry.ts",
     "verify:knowledge": "node scripts/with-server-only-stub.cjs scripts/verify-knowledge.ts",
-    "verify:negotiation": "node scripts/with-server-only-stub.cjs scripts/verify-negotiation.ts"
+    "verify:negotiation": "node scripts/with-server-only-stub.cjs scripts/verify-negotiation.ts",
+    "verify:zaico-mapping": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-mapping.ts",
+    "audit:zaico-fields": "node scripts/with-server-only-stub.cjs scripts/audit-zaico-fields.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

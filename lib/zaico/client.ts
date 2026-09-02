@@ -184,7 +184,14 @@ export interface ZaicoOptionalAttribute {
 export interface ZaicoInventory {
   id: number;
   title: string;
-  quantity: number | null;
+  /**
+   * ZAICOは数量を**文字列**で返す(実応答: `"2.0"` / `"1.0"`)。以前ここが
+   * `number | null` と宣言されていたため、呼び出し側(zaicoMapping.tsの
+   * mapZaicoCoreFields)が `typeof === "number"` で弾き、Stagingの在庫
+   * 5,313件が全件 quantity=0 になっていた。型を実際の応答に合わせる
+   * (将来ZAICOが数値で返すようになっても壊れないよう両方許す)。
+   */
+  quantity: number | string | null;
   unit: string | null;
   category: string | null;
   categories?: string[] | null;

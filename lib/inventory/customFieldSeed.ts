@@ -29,6 +29,23 @@ const CUSTOM_FIELD_SEED: { fieldKey: string; label: string; fieldType: "TEXT" | 
   // this, rather than adminMemo or a new Inventory column, was judged
   // the most faithful of the options offered.
   { fieldKey: "salePriority", label: "売却の優先度", fieldType: "TEXT" },
+
+  // ── 2026-09-02 ZAICO全項目監査で追加(lib/inventory/zaicoMapping.ts) ──
+  //
+  // ZAICOのraw responseに実際に値が入っているのに、BELLO側に受け皿が
+  // 無かった項目。新しいInventory列(schema変更 = 再デプロイが必要で、
+  // 失敗時の巻き戻しも重い)ではなく、既存のCustomFieldDefinition機構で
+  // 受ける — この仕組みは追加のみで既存データに一切触れない。
+  //
+  // 「売却時配送料金」と既存の「送料」(shippingCost)は別概念。前者は
+  // 売却時に発生した配送料金、後者は仕入時にBELLOが負担した送料で、
+  // ZAICOも別項目として持っている。統合しない(指示書§14)。
+  { fieldKey: "material", label: "材質", fieldType: "TEXT" },
+  { fieldKey: "newOrUsed", label: "新品or中古", fieldType: "TEXT" },
+  { fieldKey: "saleShippingCost", label: "売却時配送料金", fieldType: "TEXT" },
+  { fieldKey: "netSaleProceeds", label: "手元に入ってきた売上金", fieldType: "TEXT" },
+  { fieldKey: "transferDate", label: "振込日", fieldType: "TEXT" },
+  { fieldKey: "entryMemo", label: "記入メモ", fieldType: "TEXTAREA" },
 ];
 
 export async function seedCustomFieldDefinitions(): Promise<void> {

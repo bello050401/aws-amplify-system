@@ -127,6 +127,76 @@ export const ZAICO_ATTRIBUTE_MAP: Record<string, ZaicoAttributeTarget> = {
   "⚫︎相手氏名": { kind: "extendedField", field: "counterpartyName", valueType: "text" },
   "●売却の優先度": { kind: "customField", fieldKey: "salePriority", valueType: "text" },
   "●販売日数": { kind: "unmapped" },
+
+  // ── 2026-09-02 ZAICO全項目監査で追加 ────────────────────────────────
+  //
+  // ここから下は、ZAICOのraw responseを実際に1,000件+個別取得して数えた
+  // 結果(`npm run audit:zaico-fields`)、「値が入っているのにBELLO側の
+  // 受け皿(列またはCustomFieldDefinition)が既にあるのに繋がっていない」
+  // ことが判明した項目。新しい概念を作ったのではなく、**既にある受け皿へ
+  // 配線し直しただけ**。名前は表示名ではなくZAICOが返す実際の
+  // `optional_attributes[].name` をそのまま正規化して突き合わせる。
+  //
+  // 【最重要】"☆販売予定価格（送料別大原記載）"
+  // 指示書§11の「ZAICOに販売予定価格が登録済みなのにBELLOへ反映されない」
+  // の根本原因そのもの。ZAICOはこの名前で値(例 "24800")を返しており、
+  // BELLOには Inventory.plannedSalePrice という専用列が最初から存在し、
+  // CSV入出力(exportFields.ts)も同じラベルで既に対応していたが、
+  // **この表だけに項目が無く unmapped として捨てられていた**。
+  // 実測: 5,313件中 plannedSalePrice を持つのは2件のみで、その2件は
+  // ZAICO同期ではなくCSV/手入力由来。
+  "☆販売予定価格（送料別大原記載）": { kind: "extendedField", field: "plannedSalePrice", valueType: "number" },
+
+  // 出品情報。ZAICOでは "<<出品情報>>" という見出し形の名前を持つが、
+  // 実データでは**本文(ヤフオク/メルカリ/BASEの価格、コンディション文、
+  // 注意書き)がまるごとこのvalueに入っている**。isDecorativeHeadingは
+  // 「値が空のときだけ」見出し扱いにするので、値を持つこのケースは
+  // これまで unmapped として捨てられていた。受け皿は既存の listingNotes。
+  "<<出品情報>>": { kind: "extendedField", field: "listingNotes", valueType: "text" },
+
+  // 仕入・古物台帳(既存のInventory列がそのまま対応する)。
+  "⚫︎送料": { kind: "extendedField", field: "shippingCost", valueType: "number" },
+  "⚫︎その日の仕入れ合計金額(他商品含む)": { kind: "extendedField", field: "dailyPurchaseTotal", valueType: "number" },
+  "⚫︎数量": { kind: "extendedField", field: "purchaseQuantity", valueType: "number" },
+  "⚫︎取引区分": { kind: "extendedField", field: "transactionType", valueType: "text" },
+  "⚫︎取引相手の真偽の確認のためにとった措置の区分および方法": {
+    kind: "extendedField",
+    field: "identityVerificationMethod",
+    valueType: "text",
+  },
+  "⚫︎住所": { kind: "extendedField", field: "counterpartyAddress", valueType: "text" },
+  "⚫︎職業": { kind: "extendedField", field: "counterpartyOccupation", valueType: "text" },
+  "⚫︎品目": { kind: "extendedField", field: "usedGoodsItemType", valueType: "text" },
+
+  // サイズ・商品仕様(既存のInventory列)。
+  "⚪︎全長（cm）": { kind: "extendedField", field: "overallLength", valueType: "text" },
+  "⚪︎全長調節可否": { kind: "extendedField", field: "lengthAdjustable", valueType: "text" },
+  "⚪︎取付タイプ": { kind: "extendedField", field: "mountType", valueType: "text" },
+
+  // 既にCustomFieldDefinitionとしてseedされているのに、この表へ載って
+  // いなかったためZAICOから値が流れていなかったもの(customFieldSeed.ts)。
+  // 梱包サイズは実データで "家財B" のような**家財おまかせ便のランクが
+  // 直接入っている**ため、送料判定の裏付けとして特に重要。
+  "⚪︎梱包サイズ": { kind: "customField", fieldKey: "packageSize", valueType: "text" },
+  "⚪︎口金": { kind: "customField", fieldKey: "socketType", valueType: "text" },
+  "⚪︎脚高": { kind: "customField", fieldKey: "legHeight", valueType: "text" },
+  "⚫︎古物の特徴": { kind: "customField", fieldKey: "usedGoodsFeature", valueType: "text" },
+  // ZAICO側に2つの綴り(素の「座面寸法」と補足付き)が実在する。どちらも
+  // 同じ意味なので同じfieldKeyへ寄せる。
+  "⚪︎座面寸法(ソファ・椅子)": { kind: "customField", fieldKey: "seatDimensions", valueType: "text" },
+
+  // BELLO側に対応する概念が無かったもの。新しいInventory列を足すのでは
+  // なく、既存のCustomFieldDefinition機構(追加のみ・schema変更不要)で
+  // 受ける(customFieldSeed.tsへ同じfieldKeyをseedしてある)。
+  "⚪︎材質": { kind: "customField", fieldKey: "material", valueType: "text" },
+  "新品or中古": { kind: "customField", fieldKey: "newOrUsed", valueType: "text" },
+  // 「⚫︎送料」(仕入時にBELLOが払った送料)とは別概念。売却時に顧客から
+  // 受け取った/負担した配送料金なので統合しない(指示書§14「別の意味なら
+  // 統合しない」)。
+  "⚫︎売却時配送料金": { kind: "customField", fieldKey: "saleShippingCost", valueType: "number" },
+  "⚫︎手元に入ってきた売上金": { kind: "customField", fieldKey: "netSaleProceeds", valueType: "number" },
+  "⚪︎振込日": { kind: "customField", fieldKey: "transferDate", valueType: "text" },
+  "⚫︎記入メモ": { kind: "customField", fieldKey: "entryMemo", valueType: "text" },
 };
 
 /**
@@ -224,6 +294,38 @@ export interface ZaicoCoreMappedFields {
  *   item_image.url → 画像取込元（ここでは URL を返すだけ、実際の
  *        ダウンロード/S3アップロードは zaicoSync.ts が行う）
  */
+/**
+ * ZAICOの `quantity` を数値へ。
+ *
+ * 【実測で見つけた不具合】ZAICO APIは数量を**文字列**で返す(実データ:
+ * `"2.0"` / `"1.0"`)。ここが `typeof item.quantity === "number"` で
+ * 判定していたため常に null になり、zaicoSyncEngine側の
+ * `quantity: core.quantity ?? 0`(新規)/`: undefined`(更新)と合わさって、
+ * **Staging の Inventory 5,313件が全件 quantity = 0** になっていた
+ * (2026-09-02 実測、0以外の値は1件も存在しなかった)。ZAICO側では
+ * 同じ商品が "2.0" を返している。
+ *
+ * 小数を含む文字列で返るのは ZAICO が数量を小数対応で持っているため。
+ * 整数へ丸めず、そのまま数値化する(BELLOのquantityはinteger列なので、
+ * 小数が来た場合だけ切り捨てて警告を残す — 黙って0にしない)。
+ */
+export function parseZaicoQuantity(raw: unknown, warnings: string[]): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed.replace(/,/g, ""));
+  if (!Number.isFinite(n)) {
+    warnings.push(`数量の値 "${raw}" を数値に変換できませんでした。`);
+    return null;
+  }
+  if (!Number.isInteger(n)) {
+    warnings.push(`数量の値 "${raw}" は小数のため、${Math.trunc(n)} として取り込みました。`);
+    return Math.trunc(n);
+  }
+  return n;
+}
+
 export function mapZaicoCoreFields(item: ZaicoInventory): { fields: ZaicoCoreMappedFields; warnings: string[] } {
   const warnings: string[] = [];
   const name = item.title?.trim();
@@ -232,7 +334,7 @@ export function mapZaicoCoreFields(item: ZaicoInventory): { fields: ZaicoCoreMap
   return {
     fields: {
       name: name || `ZAICO在庫 #${item.id}`,
-      quantity: typeof item.quantity === "number" ? item.quantity : null,
+      quantity: parseZaicoQuantity(item.quantity, warnings),
       unit: item.unit?.trim() || null,
       note: item.etc?.trim() || null,
       barcode: item.code?.trim() || null,
