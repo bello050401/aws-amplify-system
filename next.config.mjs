@@ -22,6 +22,10 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: "2mb",
     },
+    // instrumentation.ts を有効にする。Next.js 14 では experimental 扱い。
+    // 目的と出力内容は instrumentation.ts の冒頭コメントに書いてある
+    // (SSRログがCloudWatchへ届いているかを確定させるための1行だけ)。
+    instrumentationHook: true,
   },
 
   /**
