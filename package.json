@@ -48,7 +48,8 @@
     "audit:zaico-fields": "node scripts/with-server-only-stub.cjs scripts/audit-zaico-fields.ts",
     "verify:shipping-live": "node scripts/with-server-only-stub.cjs scripts/verify-shipping-rates-live.ts",
     "verify:negotiation-case": "node scripts/with-server-only-stub.cjs scripts/verify-negotiation-case.ts",
-    "verify:intro-validator": "node scripts/with-server-only-stub.cjs scripts/verify-intro-validator.ts"
+    "verify:intro-validator": "node scripts/with-server-only-stub.cjs scripts/verify-intro-validator.ts",
+    "verify:search-projection": "node scripts/with-server-only-stub.cjs scripts/verify-search-projection.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

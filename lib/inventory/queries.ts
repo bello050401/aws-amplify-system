@@ -1,5 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { INVENTORY_SEARCH_SELECTION_SET } from "./searchProjection";
 import type { Schema } from "@/amplify/data/resource";
 import { parseCustomFields } from "./customFieldsCodec";
 import type { InventoryExtendedFields } from "./extendedFields";
@@ -287,34 +288,110 @@ export function compareByUpdatedAtDesc(a: { id: string; updatedAt: string }, b: 
  * DynamoDBレベルで絞り込めるもの)を先に適用したうえで、非削除の全件
  * をページングしながら取得する。
  */
+/**
+ * projection(selectionSet)を使うかどうか。
+ *
+ * ── なぜ「使えなかったら戻す」形にしてあるか ──────────────────
+ *
+ * selectionSet で custom type の配列(images)の子フィールドだけを選ぶ
+ * 書き方が、この Amplify のバージョンで受け付けられるかどうかを、
+ * ブラウザのCognitoセッション無しでは実機確認できなかった。
+ * 受け付けられなければ AppSync はクエリ全体をバリデーションで落とす
+ * ——つまり**在庫一覧が丸ごと出なくなる**。
+ *
+ * 推測でそのまま入れる代わりに、1回だけ試して駄目なら全列取得へ戻す。
+ * 戻ったことは警告として必ず残す(黙って遅いままにしない)。
+ * 実機で projection が通ることを確認したら、このフラグごと外してよい。
+ */
+let projectionSupported: boolean | null = null;
+
+/** テスト・実機確認のために判定をやり直させる。 */
+export function resetInventoryProjectionSupport(): void {
+  projectionSupported = null;
+}
+
+export function isInventoryProjectionInUse(): boolean | null {
+  return projectionSupported;
+}
+
 async function fetchAllInventoryRecords(extraConditions: Record<string, unknown>[] = []): Promise<InventorySearchRecord[]> {
-  const items: InventorySearchRecord[] = [];
-  let nextToken: string | null | undefined;
-  do {
-    const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.list({
-      filter: { and: [{ deletedAt: { attributeExists: false } }, ...extraConditions] },
-      // 1リクエストで読む件数。DynamoDBは1ページ1MBで頭打ちになるので、
-      // ここを大きくしても"1回で全部"にはならないが、**往復の回数**は減る。
-      //
-      // 実測(在庫5,313件、同じ全件走査を3回ずつ):
-      //   limit 200  → 往復 27回
-      //   limit 1000 → 往復  7回
-      // 1MBの上限に先に当たるため7回で頭打ちになる。所要時間はAWS外の
-      // クライアントから測ると11〜20秒とばらつきが大きく、時間としては
-      // 有意差を主張できない。確かなのは往復回数が27→7になること。
-      // SSRはAWS内で動くので、1往復ごとのAppSync/Lambdaの固定費が
-      // そのまま20回分減る。
-      //
-      // 絞り込みの条件も返る行も変わらない —— 読み方だけを変えている。
-      limit: 1000,
-      nextToken: nextToken ?? undefined,
-      ...inventoryAuthMode,
-    });
-    if (errors) throw new Error(`在庫データの取得に失敗しました: ${JSON.stringify(errors)}`);
-    items.push(...data.map(toSearchRecord));
-    nextToken = nt;
-    if (items.length >= SEARCH_MAX_SCAN_ITEMS) break;
-  } while (nextToken);
+  const filter = { and: [{ deletedAt: { attributeExists: false } }, ...extraConditions] };
+
+  async function fetchPages(useProjection: boolean): Promise<InventorySearchRecord[]> {
+    const items: InventorySearchRecord[] = [];
+    let nextToken: string | null | undefined;
+    do {
+      // selectionSet を条件付きで足すと Amplify の条件型が深くなりすぎて
+      // tsc が "Type instantiation is excessively deep" で止まる。
+      // 呼び出しの型だけを緩め、戻り値は明示的に型付けする
+      // ——型を捨てるのは list の引数1つぶんだけに留める。
+      const listWithOptions = serverDataClient.models.Inventory.list as unknown as (
+        options: Record<string, unknown>,
+      ) => Promise<{ data: InventoryModel[]; nextToken?: string | null; errors?: { message: string }[] }>;
+      const { data, nextToken: nt, errors } = await listWithOptions({
+        filter,
+        // 1リクエストで読む件数。DynamoDBは1ページ1MBで頭打ちになるので、
+        // ここを大きくしても"1回で全部"にはならないが、**往復の回数**は減る。
+        //
+        // 実測(在庫5,313件、同じ全件走査を3回ずつ):
+        //   limit 200  → 往復 27回
+        //   limit 1000 → 往復  7回
+        // 1MBの上限に先に当たるため7回で頭打ちになる。
+        limit: 1000,
+        nextToken: nextToken ?? undefined,
+        // 2026-09-02 指示書§10/§11: 検索・一覧が実際に読む列だけを取る。
+        //
+        // 【なぜ手で列挙しないか】1つでも漏らすとその列が undefined になり、
+        // 詳細検索の判定が**静かに**壊れる。だから列挙は人が書かず、
+        // 検索フィールド定義・一覧の列定義・拡張フィールド定義の和集合として
+        // 機械的に組み立てる(lib/inventory/searchProjection.ts)。さらに
+        // scripts/verify-search-projection.ts が、
+        //   ・検索フィールド定義の全項目が projection に含まれているか
+        //   ・projection の全列が Inventory モデルに実在するか
+        //   ・Stagingの実データ5,313件に対し24通りの検索の結果ID・件数・順序が一致するか
+        // を毎回照合する。
+        //
+        // 実測(Staging 5,313件):
+        //   全列       8,163KB
+        //   projection 5,804KB  (28.9%削減)
+        //   うち images 2,516KB → 1,004KB (60.1%削減)
+        //
+        // images を落としたのではなく、一覧でも検索でも一度も参照されない
+        // 子フィールド(sourceUrl / originalHash / sourceSystem /
+        // classification)だけを外している。サムネイルは今までどおり出る。
+        //
+        // なお往復回数は変わらない —— ページ境界を決めるのはDynamoDB側の
+        // 1MB上限で、そちらは projection の前に効くため。減るのは
+        // AppSync→Next.js の転送量とシリアライズ量。
+        ...(useProjection ? { selectionSet: INVENTORY_SEARCH_SELECTION_SET } : {}),
+        ...inventoryAuthMode,
+      });
+      if (errors) throw new Error(`在庫データの取得に失敗しました: ${JSON.stringify(errors)}`);
+      items.push(...data.map(toSearchRecord));
+      nextToken = nt;
+      if (items.length >= SEARCH_MAX_SCAN_ITEMS) break;
+    } while (nextToken);
+    return items;
+  }
+
+  let items: InventorySearchRecord[];
+  if (projectionSupported === false) {
+    items = await fetchPages(false);
+  } else {
+    try {
+      items = await fetchPages(true);
+      projectionSupported = true;
+    } catch (err) {
+      if (projectionSupported === true) throw err; // 一度通っている = projectionのせいではない
+      projectionSupported = false;
+      console.warn(
+        "[inventory] selectionSet(projection)が受け付けられなかったため全列取得へ戻しました。転送量の削減が効いていません。",
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+      items = await fetchPages(false);
+    }
+  }
+
   // BELLO統合改修 master指示書(2026-08-29統合改修版) §9根本修正:
   // 一覧デフォルトはupdatedAt DESC(直近で実際に変更された商品が最上位)
   // — 以前はInventory.list()自体がDynamoDBの物理scan順(意味のある
