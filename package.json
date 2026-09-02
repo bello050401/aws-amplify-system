@@ -58,7 +58,8 @@
     "audit:zaico-update-policy": "node scripts/with-server-only-stub.cjs scripts/audit-zaico-update-policy.ts",
     "verify:staging-auth": "node scripts/with-server-only-stub.cjs scripts/verify-staging-auth.ts",
     "verify:amplify-list-errors": "node scripts/with-server-only-stub.cjs scripts/verify-amplify-list-errors.ts",
-    "verify:base-token-refresh": "node scripts/with-server-only-stub.cjs scripts/verify-base-token-refresh.ts"
+    "verify:base-token-refresh": "node scripts/with-server-only-stub.cjs scripts/verify-base-token-refresh.ts",
+    "verify:image-fixtures": "node scripts/with-server-only-stub.cjs scripts/verify-image-fixtures.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",
