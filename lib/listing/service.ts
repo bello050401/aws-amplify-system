@@ -9,6 +9,7 @@ import { createBaseProduct } from "./base/adapter";
 import { BaseListingApiError } from "./base/errors";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
+import { unwrapList } from "@/lib/amplify/listAll";
 import type {
   ChannelListingRecord,
   ListingChannel,
@@ -201,7 +202,12 @@ export async function getListingDraftForInventory(inventoryId: string): Promise<
   // lib/inventory/e2eFixtures.tsと同じ二重ゲート(NODE_ENV!=='production'
   // かつ明示的opt-in環境変数)、読み取り専用。
   if (isE2EFixtureModeActive()) return null;
-  const { data } = await serverDataClient.models.ListingDraft.listListingDraftByInventoryId({ inventoryId }, { ...inventoryAuthMode });
+  // 取得に失敗して0件が返ると「下書きは無い」と表示され、そこから
+  // 保存すると2件目の下書きができる。失敗は0件ではない。
+  const data = unwrapList(
+    await serverDataClient.models.ListingDraft.listListingDraftByInventoryId({ inventoryId }, { ...inventoryAuthMode }),
+    "出品下書き",
+  );
   const found = data.find((d) => !d.deletedAt);
   return found ? toListingDraftRecord(found) : null;
 }
@@ -217,7 +223,10 @@ export async function getListingDraftForInventory(inventoryId: string): Promise<
  */
 export async function getChannelListing(inventoryId: string, channel: ListingChannel): Promise<ChannelListingRecord | null> {
   if (isE2EFixtureModeActive()) return null; // 第六ラウンドP0-1、getListingDraftForInventoryと同じ安全ゲート
-  const { data } = await serverDataClient.models.ChannelListing.listChannelListingByInventoryId({ inventoryId }, { ...inventoryAuthMode });
+  const data = unwrapList(
+    await serverDataClient.models.ChannelListing.listChannelListingByInventoryId({ inventoryId }, { ...inventoryAuthMode }),
+    "チャネル出品",
+  );
   const found = data.find((d) => d.channel === channel);
   return found ? toChannelListingRecord(found) : null;
 }

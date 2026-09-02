@@ -1,6 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { listAllPages } from "@/lib/amplify/listAll";
+import { listAllPages, unwrapList } from "@/lib/amplify/listAll";
 import { MESSAGE_PAGE_SIZE } from "./messagePaging";
 import { deriveConversationStatus, deriveNeedsReply, buildMessagePreview, sortConversations } from "./conversationStatus";
 import { sendLinePush } from "./line/adapter";
@@ -401,16 +401,26 @@ export async function recordIncomingMessage(params: {
   // 第五ラウンド§6(P0-B): externalMessageId用GSIを新規追加
   // (amplify/data/resource.ts参照)——Webhook受信のたびに走る
   // idempotency判定を、Messageテーブル全体へのScanから真のQueryへ。
-  const { data: existingMessages } = await serverDataClient.models.Message.listMessageByExternalMessageId(
-    { externalMessageId: params.externalMessageId },
-    { ...inventoryAuthMode },
+  // ここで取得に失敗して0件が返ると「まだ受け取っていない」と判断し、
+  // **同じメッセージをもう1件作る**。Webhookは再送されるので、失敗は
+  // 黙って通すより投げたほうがよい —— 送信側が再試行してくれる。
+  const existingMessages = unwrapList(
+    await serverDataClient.models.Message.listMessageByExternalMessageId(
+      { externalMessageId: params.externalMessageId },
+      { ...inventoryAuthMode },
+    ),
+    "受信済みメッセージの照合",
   );
   if (existingMessages.length > 0) return { deduped: true };
 
-  const { data: existingConversations } = await serverDataClient.models.Conversation.list({
-    filter: { and: [{ channel: { eq: params.channel } }, { externalCustomerId: { eq: params.externalCustomerId } }] },
-    ...inventoryAuthMode,
-  });
+  // 同じ理由。0件と誤認すると会話スレッドが二重に作られる。
+  const existingConversations = unwrapList(
+    await serverDataClient.models.Conversation.list({
+      filter: { and: [{ channel: { eq: params.channel } }, { externalCustomerId: { eq: params.externalCustomerId } }] },
+      ...inventoryAuthMode,
+    }),
+    "既存の会話の照合",
+  );
   let conversation = existingConversations[0] ?? null;
 
   const preview = buildMessagePreview(params.body);

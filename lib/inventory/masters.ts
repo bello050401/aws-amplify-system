@@ -1,5 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { unwrapList } from "@/lib/amplify/listAll";
 
 /**
  * Category / Location / Unit share an identical shape (name/sortOrder/
@@ -205,7 +206,10 @@ async function countInventoryReferences(model: MasterModelName, id: string): Pro
         model === "Category"
           ? await serverDataClient.models.Inventory.listInventoryByCategoryId({ categoryId: id }, { limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode })
           : await serverDataClient.models.Inventory.listInventoryByLocationId({ locationId: id }, { limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode });
-      total += result.data.length;
+      // 「使われているか」を数える処理。ここで取得に失敗して0件が
+      // 返ると、deleteMasterEntry は「誰も使っていない」と判断して
+      // **使用中のマスタを削除する**。失敗は0件ではない。
+      total += unwrapList(result, `${masterLabel(model)}の使用件数`).length;
       nextToken = result.nextToken;
     } while (nextToken);
     return total;
@@ -215,13 +219,14 @@ async function countInventoryReferences(model: MasterModelName, id: string): Pro
   let total = 0;
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+    const res = await serverDataClient.models.Inventory.list({
       filter: { unit: { eq: unitEntry.name } },
       limit: 200,
       nextToken: nextToken ?? undefined,
       ...inventoryAuthMode,
     });
-    total += data.length;
+    const { nextToken: nt } = res;
+    total += unwrapList(res, "単位の使用件数").length;
     nextToken = nt;
   } while (nextToken);
   return total;

@@ -86,3 +86,52 @@ export async function listAllPages<T>(
 
   return out;
 }
+
+/**
+ * `list()` の結果から配列を取り出す。GraphQLエラーが乗っていたら**投げる**。
+ *
+ * ── なぜ要るのか(Amplifyランタイムの実装) ──────────────────────
+ *
+ * @aws-amplify/data-schema の handleListGraphQlError は、list系の
+ * 呼び出しでGraphQLエラーが起きたとき **`data: []` を返す**:
+ *
+ *     function handleListGraphQlError(error) {
+ *       if (error?.errors) {
+ *         return { ...error, data: [] };   // ← エラーが空配列になる
+ *       } else {
+ *         throw error;                     // ネットワーク等はthrow
+ *       }
+ *     }
+ *
+ * つまり `const { data } = await ...list(...)` と書いて `errors` を見ない限り、
+ * 認可拒否・indexの不在・スロットリングが、呼び出し側からは
+ * **「該当0件」と完全に区別が付かない**。
+ *
+ * これは既存の原則(§13.2「エラーや取りこぼしを0件と混同しない」)に
+ * 真っ向から反する。とくに危ないのは次の2種類:
+ *
+ *   重複を防ぐ判定  … 「既にあるか」を空で受け取ると、もう1件作る
+ *   削除の可否判定  … 「使われているか」を0で受け取ると、使用中でも消す
+ *
+ * どちらも失敗したときに**開く**方向へ倒れる。閉じる方向へ倒す。
+ */
+export function unwrapList<T>(
+  result: { data: T[]; errors?: { message: string }[] },
+  label: string,
+): T[] {
+  if (result.errors && result.errors.length > 0) {
+    throw new Error(`${label}の取得に失敗しました: ${result.errors.map((e) => e.message).join("; ")}`);
+  }
+  return result.data;
+}
+
+/** 単数(get)版。「見つからない」(data===null かつ errors無し)は正常な結果として null を返す。 */
+export function unwrapGet<T>(
+  result: { data: T | null; errors?: { message: string }[] },
+  label: string,
+): T | null {
+  if (result.errors && result.errors.length > 0) {
+    throw new Error(`${label}の取得に失敗しました: ${result.errors.map((e) => e.message).join("; ")}`);
+  }
+  return result.data;
+}

@@ -9,6 +9,7 @@ import { splitImagesByType } from "@/lib/inventory/imageTypes";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
 import { ensureOriginalHash, OriginalImageMissingError } from "@/lib/inventory/originalHashRepair";
 import { parseReferenceImageKeys, serializeForAwsJson } from "@/lib/imageProcessing/photoProfile";
+import { unwrapList } from "@/lib/amplify/listAll";
 
 /**
  * BELLO画像自動加工システム(2026-08-30指示書)§8.1/§12/§13の
@@ -250,7 +251,12 @@ export async function createPhotoProfileAction(name: string, referenceImageKeys:
   if (!name.trim()) throw new Error("Profile名を入力してください。");
   if (referenceImageKeys.length === 0) throw new Error("基準写真を1枚以上追加してください。");
 
-  const { data: existing } = await serverDataClient.models.PhotoProfile.list({ ...inventoryAuthMode });
+  // 0件と誤認すると版番号が1に戻って既存と衝突し、さらに currentActive が
+  // undefined になって**古いACTIVEが降りないまま**新しいACTIVEができる。
+  const existing = unwrapList(
+    await serverDataClient.models.PhotoProfile.list({ ...inventoryAuthMode }),
+    "Photo Profile",
+  );
   const nextVersion = existing.length > 0 ? Math.max(...existing.map((p) => p.version)) + 1 : 1;
   const currentActive = existing.find((p) => p.active);
 
@@ -302,7 +308,11 @@ export async function createPhotoProfileAction(name: string, referenceImageKeys:
 export async function setActivePhotoProfileAction(id: string): Promise<void> {
   const role = await getInventoryRole();
   requireImageProcessingPermission(role);
-  const { data: existing } = await serverDataClient.models.PhotoProfile.list({ ...inventoryAuthMode });
+  // 0件と誤認すると、古いACTIVEを降ろすループが1周も回らずにACTIVEが2つ残る。
+  const existing = unwrapList(
+    await serverDataClient.models.PhotoProfile.list({ ...inventoryAuthMode }),
+    "Photo Profile",
+  );
   for (const p of existing) {
     if (p.active && p.id !== id) await serverDataClient.models.PhotoProfile.update({ id: p.id, active: false }, inventoryAuthMode);
   }

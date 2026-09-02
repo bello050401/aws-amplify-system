@@ -1,5 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { unwrapList } from "@/lib/amplify/listAll";
 
 /**
  * The handful of Phase C items low-frequency enough to go through the
@@ -56,7 +57,12 @@ export async function seedCustomFieldDefinitions(): Promise<void> {
   // moment someone turned one off. fieldKey has a secondaryIndex but
   // that's not a uniqueness constraint in Amplify Data, so this check is
   // the only thing actually preventing that.
-  const { data: existing } = await serverDataClient.models.CustomFieldDefinition.list(inventoryAuthMode);
+  // 上のコメントのとおり、この照合が同一fieldKeyの2件目を防ぐ**唯一の**
+  // 仕組み。取得に失敗して0件が返ると、全項目をもう一度seedしてしまう。
+  const existing = unwrapList(
+    await serverDataClient.models.CustomFieldDefinition.list(inventoryAuthMode),
+    "追加項目の定義",
+  );
   const existingKeys = new Set(existing.map((f) => f.fieldKey));
   const missing = CUSTOM_FIELD_SEED.filter((f) => !existingKeys.has(f.fieldKey));
   if (missing.length === 0) return;
