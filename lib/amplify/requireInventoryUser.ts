@@ -1,4 +1,4 @@
-import { cache } from "react";
+import { requestCache } from "./requestCache";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { fetchAuthSession } from "aws-amplify/auth/server";
@@ -87,7 +87,7 @@ function getE2EBypassRole(): InventoryRole | null {
  * Reactのdispatcherが無い文脈では cache() は素通しで元の関数を呼ぶ。
  * 重複排除が効かないだけで、挙動は今までと同一。
  */
-export const getInventorySessionStatus = cache(async function getInventorySessionStatus(): Promise<InventorySessionStatus> {
+export const getInventorySessionStatus = requestCache(async function getInventorySessionStatus(): Promise<InventorySessionStatus> {
   const bypassRole = getE2EBypassRole();
   if (bypassRole) return { kind: "authorized", role: bypassRole };
   try {
@@ -121,7 +121,7 @@ export function canHardDeleteInventory(role: InventoryRole | null): boolean {
 
 /** Identity string for Inventory.createdBy/updatedBy and InventoryHistory.changedBy — email if the token carries one, else the Cognito sub, so a write is never silently attributed to "unknown". */
 /** 書き込み系のアクションは createdBy/updatedBy/changedBy で繰り返しこれを呼ぶ。理由は getInventorySessionStatus と同じ。 */
-export const getCurrentInventoryUserEmail = cache(async function getCurrentInventoryUserEmail(): Promise<string | null> {
+export const getCurrentInventoryUserEmail = requestCache(async function getCurrentInventoryUserEmail(): Promise<string | null> {
   try {
     return await runWithAmplifyServerContext({
       nextServerContext: { cookies },

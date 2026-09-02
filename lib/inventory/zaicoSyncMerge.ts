@@ -4,6 +4,7 @@ import {
   resolveCustomFields,
   resolveFieldUpdate,
   ruleFor,
+  shouldReportKeep,
   type UpdateDecision,
 } from "./zaicoUpdatePolicy";
 
@@ -101,7 +102,8 @@ const TOP_LEVEL_FIELDS = [
   "salePrice",
 ] as const;
 
-function labelOf(field: string): string {
+/** 項目キーを人が読むラベルへ。履歴の記録でも同じ名前を使うため公開している。 */
+export function labelOf(field: string): string {
   return ruleFor(field)?.label ?? field;
 }
 
@@ -137,8 +139,12 @@ export function mergeZaicoUpdate(params: {
       return;
     }
     // KEEP。値が同じ / ZAICOが空 のときは「据え置いた」と報告する意味が
-    // 無いので、実際に人の編集で守ったときだけ記録する。
-    if (decision.reason.includes("人が変更") || decision.reason.includes("BELLO側に値がある") || decision.reason.includes("判断できない")) {
+    // 無いので、実際に人の編集などで守ったときだけ記録する。
+    //
+    // 判定は理由の**種別**で行う。以前はここで理由の日本語文を
+    // includes() で見ていたが、文面を直した瞬間に分類が静かに外れて
+    // 「守ったのに報告されない」状態になりうる。
+    if (shouldReportKeep(decision.kind)) {
       skipped.push({ field, label: labelOf(field), belloValue, zaicoValue, reason: decision.reason });
     }
   };

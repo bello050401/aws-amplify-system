@@ -1,5 +1,5 @@
 import "server-only";
-import { cache } from "react";
+import { requestCache } from "@/lib/amplify/requestCache";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages } from "@/lib/amplify/listAll";
 import { INVENTORY_SEARCH_SELECTION_SET } from "./searchProjection";
@@ -596,7 +596,7 @@ export interface MasterOption {
  * またいでは保持しない ——「設定でカテゴリーを直したのに一覧に出ない」
  * を作らないため。
  */
-export const listCategories = cache(async function listCategories(includeInactiveId?: string | null): Promise<MasterOption[]> {
+export const listCategories = requestCache(async function listCategories(includeInactiveId?: string | null): Promise<MasterOption[]> {
   if (isE2EFixtureModeActive()) return E2E_CATEGORIES; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const data = await listAllPages(
     (nextToken) =>
@@ -621,7 +621,7 @@ export const listCategories = cache(async function listCategories(includeInactiv
   return options;
 });
 
-export const listLocations = cache(async function listLocations(includeInactiveId?: string | null): Promise<MasterOption[]> {
+export const listLocations = requestCache(async function listLocations(includeInactiveId?: string | null): Promise<MasterOption[]> {
   if (isE2EFixtureModeActive()) return E2E_LOCATIONS; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const data = await listAllPages(
     (nextToken) =>
@@ -680,7 +680,7 @@ export interface StatusOption {
   sortOrder: number;
 }
 
-export const listStatuses = cache(async function listStatuses(): Promise<StatusOption[]> {
+export const listStatuses = requestCache(async function listStatuses(): Promise<StatusOption[]> {
   if (isE2EFixtureModeActive()) return E2E_STATUSES; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const data = await listAllPages(
     (nextToken) =>
@@ -731,7 +731,7 @@ function toCustomFieldDefinitionRow(f: {
 }
 
 /** 新規登録/編集フォーム・検索・Import/Export等、実際にユーザーへ入力・表示させる側が使う — 無効化された追加項目は含まない。 */
-export const listCustomFieldDefinitions = cache(async function listCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
+export const listCustomFieldDefinitions = requestCache(async function listCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
   if (isE2EFixtureModeActive()) return E2E_CUSTOM_FIELD_DEFS; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const data = await listAllPages(
     (nextToken) =>

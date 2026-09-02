@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
-import { mergeZaicoUpdate } from "./zaicoSyncMerge";
+import { mergeZaicoUpdate, labelOf } from "./zaicoSyncMerge";
 import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
 import { ALL_EXTENDED_FIELDS } from "./extendedFields";
 import type { InventoryModel, ZaicoSyncPort, MasterCache } from "./zaicoSyncPorts";
@@ -335,6 +335,12 @@ export async function syncOneZaicoItem(
     const existingCustomFields = parseCustomFields(existing?.customFields ?? null) ?? {};
     const mergedCustomFields = { ...existingCustomFields, ...optAttrs.customFields };
 
+    // ── ZAICOが「何か言ってきているか」だけを見る生の差分 ──────────
+    //
+    // これは**早期returnの判定にしか使わない**。ここで作った差分をその
+    // まま履歴へ書くと、更新方針(mergeZaicoUpdate)が「人の編集を守って
+    // 書き込まなかった」項目まで「変更した」と記録してしまう。
+    // 履歴は実際に書き込んだものだけを載せる —— 下の appliedChanges。
     const changes: HistoryFieldChange[] = [];
     if (!isNewRecord && existing) {
       const push = (c: HistoryFieldChange | null) => c && changes.push(c);
@@ -491,6 +497,36 @@ export async function syncOneZaicoItem(
       );
     }
 
+    // ── 履歴は「実際に書き込んだもの」だけ ──────────────────────
+    //
+    // 上の `changes` はZAICOとBELLOの生の差分で、mergeが据え置いた項目も
+    // 含んでいる。それを履歴にすると、人が「発送完了 → 補修待ち」へ
+    // 戻した判断を守れている場合でも、履歴には
+    //
+    //     ステータス: 補修待ち → 発送完了（ZAICO同期）
+    //
+    // と残る —— **実際に起きた差し戻し事故と全く同じ見え方**になる。
+    // この履歴は、その事故を突き止めるのに使った証跡そのものなので、
+    // 嘘が混じると次に何かあったときに追えなくなる。
+    const appliedChanges: HistoryFieldChange[] = [];
+    for (const [key, value] of Object.entries(merge.updates)) {
+      const before = (existingRecord as unknown as Record<string, unknown>)[key];
+      const c = diffField(labelOf(key), before as string | number | null | undefined, value as string | number | null | undefined);
+      if (c) appliedChanges.push(c);
+    }
+    for (const [key, value] of Object.entries(merge.extendedFields)) {
+      const label = ALL_EXTENDED_FIELDS.find((f) => f.key === key)?.label ?? labelOf(key);
+      const before = (existingRecord as unknown as Record<string, unknown>)[key];
+      const c = diffField(label, before as string | number | null | undefined, value as string | number | null | undefined);
+      if (c) appliedChanges.push(c);
+    }
+    for (const [key, value] of Object.entries(merge.customFields)) {
+      const before = existingCustomFields[key] as string | number | null | undefined;
+      const c = diffField(key, before ?? null, value as string | number | null | undefined);
+      if (c) appliedChanges.push(c);
+    }
+    if (imageMerge.imported) appliedChanges.push({ fieldName: "ZAICO画像", oldValue: null, newValue: "更新" });
+
     try {
       await port.updateInventory({
         id: existingRecord.id,
@@ -510,7 +546,7 @@ export async function syncOneZaicoItem(
     if (imageMerge.oldStorageKeyToRemove) await port.removeImage(imageMerge.oldStorageKeyToRemove);
     if (imageMerge.oldThumbnailKeyToRemove) await port.removeImage(imageMerge.oldThumbnailKeyToRemove);
 
-    await port.logHistory(existingRecord.id, who, changes);
+    await port.logHistory(existingRecord.id, who, appliedChanges);
 
     return {
       zaicoId: sourceInventoryId,

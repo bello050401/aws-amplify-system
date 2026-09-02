@@ -17,6 +17,7 @@ import {
   policyFor,
   resolveCustomFields,
   resolveFieldUpdate,
+  shouldReportKeep,
   valuesEqual,
 } from "@/lib/inventory/zaicoUpdatePolicy";
 
@@ -426,9 +427,224 @@ function main() {
   testUniversalSafety();
   testSnapshot();
   testRuleTable();
+  testValueEdges();
+  testKeepKind();
+  testIdempotency();
+  testReportVolume();
+  testSnapshotCorruption();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }
 
 main();
+
+/* ══════════════════════════════════════════════════════════════════
+ * 以下は main() より後ろに置いてあるが、関数宣言は巻き上げられるので
+ * 呼び出しより前に定義済みになる。既存の並びを崩さず追記するため。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* 10. 値の型のふち(0 / false / "" / 数字文字列 / 日付)
+ *
+ * ZAICOはJSONで来るので、同じ「2」が 2 だったり "2.0" だったりする。
+ * ここを取り違えると「変わっていないのに変わった」と判定して毎回
+ * 書き込みが走る(数量が全件0になっていた件はこの種類の取り違え)。
+ */
+function testValueEdges() {
+  assertEqual(isEmptyValue(0), false, "ふち: 0 は空ではない");
+  assertEqual(isEmptyValue(false), false, "ふち: false は空ではない");
+  assertEqual(isEmptyValue(""), true, "ふち: 空文字は空");
+  assertEqual(isEmptyValue("   "), true, "ふち: 空白のみは空");
+  assertEqual(isEmptyValue(null), true, "ふち: null は空");
+  assertEqual(isEmptyValue(undefined), true, "ふち: undefined は空");
+
+  assertEqual(valuesEqual(2, "2"), true, "ふち: 2 と 文字列2 は同じ");
+  assertEqual(valuesEqual(2, "2.0"), true, "ふち: 2 と 文字列2.0 は同じ(ZAICOはこの形で返す)");
+  assertEqual(valuesEqual(0, "0"), true, "ふち: 0 と 文字列0 は同じ");
+  assertEqual(valuesEqual(2, "3"), false, "ふち: 数字文字列でも違えば違う");
+  assertEqual(valuesEqual("A-1", " A-1 "), true, "ふち: 前後空白は無視する");
+  assertEqual(valuesEqual("A-1", "A-2"), false, "ふち: 中身が違えば違う");
+
+  assertEqual(valuesEqual(0, ""), false, "ふち: 0 と 空文字 は別物(0円が未入力に化けない)");
+  assertEqual(valuesEqual(null, ""), true, "ふち: null と 空文字 はどちらも空として同じ");
+
+  assertEqual(valuesEqual("2026-09-02", "2026-09-02"), true, "ふち: 同じ日付文字列は同じ");
+  assertEqual(valuesEqual("2026-09-02", "2026-09-03"), false, "ふち: 違う日付は違う");
+
+  const zeroQty = resolveFieldUpdate({
+    field: "quantity",
+    zaicoValue: 0,
+    belloValue: 5,
+    lastZaicoValue: 5,
+    isNewRecord: false,
+  });
+  assertEqual(zeroQty.action, "APPLY", "ふち: ZAICOの0は空扱いせず書き込む");
+  assertEqual(zeroQty.action === "APPLY" ? zeroQty.value : null, 0, "ふち: 書き込む値は0");
+}
+
+/* 11. 据え置きの理由を「種別」で分類する
+ *
+ * 以前は理由の日本語文を includes() で見ていた。文面を直した瞬間に
+ * 分類が静かに外れ、「人の編集を守ったのに報告されない」という
+ * 一番気づきにくい壊れ方をする。
+ */
+function testKeepKind() {
+  const humanEdit = resolveFieldUpdate({
+    field: "adminMemo",
+    zaicoValue: "高",
+    belloValue: "低",
+    lastZaicoValue: "高",
+    isNewRecord: false,
+  });
+  assertEqual(humanEdit.action, "KEEP", "種別: 人が変えた項目は据え置く(管理メモ)");
+  assertEqual(humanEdit.action === "KEEP" ? humanEdit.kind : null, "HUMAN_EDIT", "種別: HUMAN_EDIT が付く");
+
+  const noSnapshot = resolveFieldUpdate({
+    field: "adminMemo",
+    zaicoValue: "高",
+    belloValue: "低",
+    lastZaicoValue: undefined,
+    isNewRecord: false,
+  });
+  assertEqual(noSnapshot.action === "KEEP" ? noSnapshot.kind : null, "NO_SNAPSHOT", "種別: 前回値が無ければ NO_SNAPSHOT");
+
+  const zaicoEmpty = resolveFieldUpdate({
+    field: "name",
+    zaicoValue: "",
+    belloValue: "既存",
+    lastZaicoValue: "既存",
+    isNewRecord: false,
+  });
+  assertEqual(zaicoEmpty.action === "KEEP" ? zaicoEmpty.kind : null, "ZAICO_EMPTY", "種別: ZAICOが空なら ZAICO_EMPTY");
+
+  const same = resolveFieldUpdate({
+    field: "name",
+    zaicoValue: "同じ",
+    belloValue: "同じ",
+    lastZaicoValue: "同じ",
+    isNewRecord: false,
+  });
+  assertEqual(same.action === "KEEP" ? same.kind : null, "SAME_VALUE", "種別: 同値なら SAME_VALUE");
+
+  assertEqual(shouldReportKeep("HUMAN_EDIT"), true, "種別: 人の編集は報告する");
+  assertEqual(shouldReportKeep("ALREADY_FILLED"), true, "種別: 補完しなかったことは報告する");
+  assertEqual(shouldReportKeep("NO_SNAPSHOT"), true, "種別: 判断できなかったことは報告する");
+  assertEqual(shouldReportKeep("ZAICO_EMPTY"), false, "種別: ZAICOが空は報告しない(毎回出て埋もれる)");
+  assertEqual(shouldReportKeep("SAME_VALUE"), false, "種別: 同値は報告しない");
+}
+
+/* 12. 冪等性 — 同じ入力を2回流しても2回目は何も起きない */
+function testIdempotency() {
+  const zaico = {
+    name: "チェア",
+    quantity: 3,
+    extendedFields: { width: "60" },
+    customFields: { ステータス: "発送完了", 色: "黒" },
+  };
+  const belloBefore = { name: "旧チェア", quantity: 1, extendedFields: {}, customFields: {} };
+
+  const first = mergeZaicoUpdate({ zaico, bello: belloBefore, snapshotJson: null, isNewRecord: false });
+  assertEqual(first.hasChanges, true, "冪等: 1回目は書き込みが必要");
+
+  const belloAfter = {
+    name: (first.updates.name as string) ?? belloBefore.name,
+    quantity: (first.updates.quantity as number) ?? belloBefore.quantity,
+    extendedFields: { ...belloBefore.extendedFields, ...first.extendedFields },
+    customFields: first.customFields,
+  };
+
+  const second = mergeZaicoUpdate({
+    zaico,
+    bello: belloAfter,
+    snapshotJson: first.nextSnapshotJson,
+    isNewRecord: false,
+  });
+  assertEqual(second.hasChanges, false, "冪等: 2回目は書き込む必要が無い");
+  assertEqual(Object.keys(second.updates).length, 0, "冪等: 2回目に更新する列は無い");
+  assertEqual(Object.keys(second.extendedFields).length, 0, "冪等: 2回目に更新する拡張項目は無い");
+  assertEqual(second.skipped.length, 0, "冪等: 2回目に据え置きの報告は出ない");
+  assertEqual(second.conflicts.length, 0, "冪等: 2回目に食い違いは出ない");
+  assertEqual(second.nextSnapshotJson, first.nextSnapshotJson, "冪等: スナップショットも同じ");
+
+  const third = mergeZaicoUpdate({
+    zaico,
+    bello: belloAfter,
+    snapshotJson: second.nextSnapshotJson,
+    isNewRecord: false,
+  });
+  assertEqual(third.hasChanges, false, "冪等: 3回目も書き込む必要が無い");
+
+  const reordered = mergeZaicoUpdate({
+    zaico,
+    bello: { ...belloAfter, customFields: { 色: "黒", ステータス: "発送完了" } },
+    snapshotJson: first.nextSnapshotJson,
+    isNewRecord: false,
+  });
+  assertEqual(reordered.hasChanges, false, "冪等: 追加項目のキー順が違うだけでは書き込まない");
+}
+
+/* 13. 報告の量 — 毎回同じ警告が大量に出ると、見るべき1件が埋もれる */
+function testReportVolume() {
+  const many = mergeZaicoUpdate({
+    zaico: {
+      name: "ZAICO名",
+      extendedFields: {},
+      customFields: { ステータス: "発送完了", salePriority: "高", 色: "赤" },
+    },
+    bello: {
+      name: "ZAICO名",
+      extendedFields: {},
+      customFields: { ステータス: "補修待ち", salePriority: "低", 色: "青" },
+    },
+    snapshotJson: JSON.stringify({
+      name: "ZAICO名",
+      __customFields: { ステータス: "発送完了", salePriority: "高", 色: "赤" },
+    }),
+    isNewRecord: false,
+  });
+  assertEqual(many.skipped.length, 3, "報告: 守った3項目ぶんだけ出る");
+  assertEqual(
+    many.skipped.some((s) => s.field === "name"),
+    false,
+    "報告: 同値だった項目は含まれない",
+  );
+  const fields = many.skipped.map((s) => s.field);
+  assertEqual(new Set(fields).size, fields.length, "報告: 同じ項目を二重に報告しない");
+
+  const emptyHeavy = mergeZaicoUpdate({
+    zaico: { name: "", note: "", unit: "", barcode: "", extendedFields: { width: "", height: "" }, customFields: {} },
+    bello: { name: "既存", note: "既存", unit: "個", barcode: "B1", extendedFields: { width: "70" }, customFields: {} },
+    snapshotJson: JSON.stringify({ name: "既存" }),
+    isNewRecord: false,
+  });
+  assertEqual(emptyHeavy.skipped.length, 0, "報告: ZAICOが空なだけの項目は報告しない");
+  assertEqual(emptyHeavy.hasChanges, false, "報告: 空だけなら書き込みも不要");
+}
+
+/* 14. スナップショットの壊れ方に対する耐性 */
+function testSnapshotCorruption() {
+  const zaico = { name: "新", extendedFields: {}, customFields: {} };
+  const bello = { name: "人が直した名前", extendedFields: {}, customFields: {} };
+
+  const broken: [string, string][] = [
+    ["壊れたJSON", "{壊れ"],
+    ["途中で切れたJSON", '{"name":"新'],
+    ["配列", "[1,2,3]"],
+    ["JSONのnull", "null"],
+    ["数値", "42"],
+    ["文字列", '"ただの文字列"'],
+    ["空文字", ""],
+  ];
+  for (const [label, raw] of broken) {
+    const r = mergeZaicoUpdate({ zaico, bello, snapshotJson: raw, isNewRecord: false });
+    assertEqual(typeof r.nextSnapshotJson, "string", `壊れたスナップショット(${label}): 例外にならず次回ぶんを作る`);
+  }
+
+  const kept = mergeZaicoUpdate({
+    zaico: { extendedFields: {}, customFields: { salePriority: "高" } },
+    bello: { extendedFields: {}, customFields: { salePriority: "低" } },
+    snapshotJson: "{壊れ",
+    isNewRecord: false,
+  });
+  assertEqual(kept.customFields.salePriority, "低", "壊れたスナップショット: 判断できないので人の値を残す");
+}

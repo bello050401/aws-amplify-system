@@ -197,11 +197,36 @@ export function ruleFor(field: string): ZaicoFieldRule | null {
 export const IMAGE_POLICY_NOTE =
   "画像はBELLO優先(追加のみ)。ZAICO由来の1枚は originalHash で重複判定し、人が足した写真は削除しない。";
 
+/**
+ * KEEP(書き込まない)の理由の**種別**。
+ *
+ * 以前は理由の日本語文を `reason.includes("人が変更")` のように
+ * 文字列一致で分類していた。文面を少し直しただけで分類が静かに外れ、
+ * 「人の編集を守ったこと」が報告に載らなくなる —— 守れてはいるが誰も
+ * 知らされない、という一番気づきにくい壊れ方をする。種別を値で持つ。
+ */
+export type KeepKind =
+  /** ZAICO側が空。空で既存値を消さない。報告する必要は無い。 */
+  | "ZAICO_EMPTY"
+  /** 値が同じ。書き込む必要が無い。報告する必要は無い。 */
+  | "SAME_VALUE"
+  /** 人が編集した値を守った。**必ず報告する。** */
+  | "HUMAN_EDIT"
+  /** BELLO側に値があるので補完しなかった。**報告する。** */
+  | "ALREADY_FILLED"
+  /** 前回のZAICO値が無く、人の編集か判断できないので安全側へ倒した。**報告する。** */
+  | "NO_SNAPSHOT";
+
+/** 報告に載せるべきKEEPかどうか。「据え置いた」と伝える意味があるものだけ。 */
+export function shouldReportKeep(kind: KeepKind): boolean {
+  return kind === "HUMAN_EDIT" || kind === "ALREADY_FILLED" || kind === "NO_SNAPSHOT";
+}
+
 export type UpdateDecision =
   /** ZAICOの値を書き込む。 */
   | { action: "APPLY"; value: unknown; reason: string }
   /** 書き込まない(BELLOの値を残す)。 */
-  | { action: "KEEP"; reason: string }
+  | { action: "KEEP"; kind: KeepKind; reason: string }
   /** 書き込まないが、食い違いを人へ提示する。 */
   | { action: "CONFLICT"; belloValue: unknown; zaicoValue: unknown; reason: string };
 
@@ -220,7 +245,39 @@ function normalizeForCompare(v: unknown): string {
   return JSON.stringify(v);
 }
 
+/**
+ * 片方が数値で、もう片方が数値に読める文字列なら、数として比べる。
+ *
+ * ZAICOは数量を `"2.0"` のような**文字列**で返す(実測。数量が全件0に
+ * なっていた件の原因もこれだった)。BELLO側は integer で持っているので、
+ * 文字列として比べると `2` と `"2.0"` が「違う」ことになる。すると:
+ *
+ *   ・数量はZAICO常時優先なので、毎回「変わった」と判定して全件書き込む
+ *   ・人優先の項目では、BELLOの 2 と スナップショットの "2.0" が
+ *     食い違うため「人が変更した」と誤認し、**永久に据え置いて毎回
+ *     警告を出し続ける**
+ *
+ * 両方が文字列の場合は数として比べない —— `"007"` と `"7"` は別物で
+ * ありうる(バーコード・型番など)。片方が実際の数値のときだけ、
+ * 「同じ数を指しているか」を見る。
+ */
+function numericallyEqual(a: unknown, b: unknown): boolean {
+  const pair =
+    typeof a === "number" && typeof b === "string"
+      ? ([a, b] as const)
+      : typeof b === "number" && typeof a === "string"
+        ? ([b, a] as const)
+        : null;
+  if (!pair) return false;
+  const [num, str] = pair;
+  const trimmed = str.trim();
+  if (trimmed === "") return false;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed === num;
+}
+
 export function valuesEqual(a: unknown, b: unknown): boolean {
+  if (numericallyEqual(a, b)) return true;
   return normalizeForCompare(a) === normalizeForCompare(b);
 }
 
@@ -250,13 +307,13 @@ export function resolveFieldUpdate(input: ResolveInput): UpdateDecision {
   const policy = policyFor(field);
 
   if (isEmptyValue(zaicoValue)) {
-    return { action: "KEEP", reason: "ZAICO側が空。空で既存値を消さない。" };
+    return { action: "KEEP", kind: "ZAICO_EMPTY", reason: "ZAICO側が空。空で既存値を消さない。" };
   }
   if (isNewRecord) {
     return { action: "APPLY", value: zaicoValue, reason: "新規作成。人の編集は存在しない。" };
   }
   if (valuesEqual(zaicoValue, belloValue)) {
-    return { action: "KEEP", reason: "値が同じ。書き込む必要が無い。" };
+    return { action: "KEEP", kind: "SAME_VALUE", reason: "値が同じ。書き込む必要が無い。" };
   }
 
   switch (policy) {
@@ -266,7 +323,7 @@ export function resolveFieldUpdate(input: ResolveInput): UpdateDecision {
     case "FILL_IF_EMPTY":
       return isEmptyValue(belloValue)
         ? { action: "APPLY", value: zaicoValue, reason: "BELLO側が空欄なので補完する。" }
-        : { action: "KEEP", reason: "BELLO側に値がある。空欄のときだけ補完する項目。" };
+        : { action: "KEEP", kind: "ALREADY_FILLED", reason: "BELLO側に値がある。空欄のときだけ補完する項目。" };
 
     case "HUMAN_WINS": {
       if (lastZaicoValue === undefined) {
@@ -274,6 +331,7 @@ export function resolveFieldUpdate(input: ResolveInput): UpdateDecision {
         // 倒さない。次回からはスナップショットがあるので判定できる。
         return {
           action: "KEEP",
+          kind: "NO_SNAPSHOT",
           reason: "前回のZAICO値が記録されていないため、人の編集かどうか判断できない。安全側で据え置く。",
         };
       }
@@ -282,6 +340,7 @@ export function resolveFieldUpdate(input: ResolveInput): UpdateDecision {
       }
       return {
         action: "KEEP",
+        kind: "HUMAN_EDIT",
         reason: "前回のZAICO値と違う = 人が変更している。ZAICOで戻さない。",
       };
     }
