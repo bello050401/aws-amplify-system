@@ -5,8 +5,7 @@ import { useEffect, useState } from "react";
 import {
   createTestConversationAction,
   draftReplyAction,
-  listMessagesAction,
-  resolveConversationAction,
+  listRecentMessagesAction,
   sendReplyAction,
 } from "@/app/actions/messaging";
 import { politenessRewriteAction } from "@/app/actions/inquiryReply";
@@ -15,12 +14,38 @@ import {
   setConversationWorkflowStatusAction,
   deleteConversationAction,
 } from "@/app/actions/messaging";
-import { WORKFLOW_STATUS_LABEL, type ConversationWorkflowStatus } from "@/lib/messaging/types";
+import {
+  CONVERSATION_FILTERS,
+  CONVERSATION_FILTER_LABEL,
+  DEFAULT_CONVERSATION_FILTER,
+  SELECTABLE_WORKFLOW_STATUSES,
+  WORKFLOW_STATUS_LABEL,
+  type ConversationFilter,
+  type ConversationWorkflowStatus,
+} from "@/lib/messaging/types";
+import { listCompletedConversationsAction, setConversationCompletedAction } from "@/app/actions/messaging";
+import { getLineOutboundStatusAction } from "@/app/actions/messaging";
+import { MESSAGE_PAGE_SIZE } from "@/lib/messaging/messagePaging";
 import { AiReplyPanel } from "./AiReplyPanel";
 import { MessageAttachment } from "./MessageAttachment";
 import type { ConversationRecord, MessageRecord } from "@/lib/messaging/types";
 
-type Filter = "ALL" | "UNREAD" | "NEEDS_REPLY" | "REPLIED" | "OHARA_REVIEW" | "ICHIKAWA_REVIEW" | "RESOLVED";
+/**
+ * 2026-09-02 指示書§2/§4/§7 のフィルタ再設計。
+ *
+ *   未返信 ｜ 返信済み ｜ すべて ｜ 大原確認 ｜ 市川確認 ｜ 対応済み
+ *
+ * 「未読」と「要返信」は廃止して「未返信」へ一本化した。業務の判断は
+ * 「読んだか」ではなく「返信したか」で行う —— 人が画面で会話を開いた
+ * だけで対応対象から消えてはいけない。read/unread はDBに残してあり、
+ * 新着の視覚的な目印としてだけ使う。
+ *
+ * 「解決済み」は廃止して「対応済み」へ。返信済み ≠ 対応済み で、
+ * 配送予定日を回答済みでも配送前なら返信済みであって対応済みではない。
+ *
+ * 並び順は lib/messaging/types.ts の CONVERSATION_FILTERS が正本。
+ */
+const FILTER_ORDER = CONVERSATION_FILTERS;
 
 const CHANNEL_LABEL: Record<ConversationRecord["channel"], string> = {
   MERCARI_SHOPS: "Mercari",
@@ -55,7 +80,14 @@ export function MessagesInbox({
   isAdmin: boolean;
 }) {
   const [conversations, setConversations] = useState(initialConversations);
-  const [filter, setFilter] = useState<Filter>("ALL");
+  // 初期表示は「未返信」(指示書§3)。日常業務で最優先なのは
+  // まだ返信していない問い合わせなので、開いた瞬間に対応対象が見える。
+  const [filter, setFilter] = useState<ConversationFilter>(DEFAULT_CONVERSATION_FILTER);
+  // 対応済みは通常の取得から外してある(サーバー側で除外)。タブを
+  // 押したときにだけ取りに行く。
+  const [completedConversations, setCompletedConversations] = useState<ConversationRecord[] | null>(null);
+  const [completedLoading, setCompletedLoading] = useState(false);
+  const [completedError, setCompletedError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(initialConversations[0]?.id ?? null);
   // BELLO統合業務OS指示書(2026-08-30) §70/§78: モバイル幅では一覧と
   // 詳細を横並びにする余地が無い(w-72の一覧だけで390pxの大半を占めて
@@ -64,6 +96,13 @@ export function MessagesInbox({
   const [mobileView, setMobileView] = useState<"list" | "detail">("list");
   const [messages, setMessages] = useState<MessageRecord[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [totalMessageCount, setTotalMessageCount] = useState(0);
+  const [messageLimit, setMessageLimit] = useState(MESSAGE_PAGE_SIZE);
+  // LINEへの実送信が有効かどうか。サーバー側の feature flag が正本で、
+  // ここはその表示用(UIをdisabledにするのは補助であって防御ではない)。
+  const [lineOutbound, setLineOutbound] = useState<{ enabled: boolean; message: string } | null>(null);
   const [replyBody, setReplyBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,25 +117,79 @@ export function MessagesInbox({
   const [keigoNotes, setKeigoNotes] = useState<string[]>([]);
   const [keigoBefore, setKeigoBefore] = useState<string | null>(null);
 
-  const filtered = conversations.filter((c) => {
-    if (filter === "NEEDS_REPLY") return c.needsReply;
-    if (filter === "REPLIED") return c.workflowStatus === "REPLIED";
-    if (filter === "RESOLVED") return c.status === "RESOLVED" || c.status === "ARCHIVED";
-    // 業務ステータスでの絞り込み(§7)。未読は技術的状態、こちらは業務の進み具合。
-    if (filter === "UNREAD") return c.isUnread;
+  // 「未返信」は needsReply(= 最新の受信より後にBELLOから返信して
+  // いない)で判定する。unreadCount では判定しない —— 人が開いただけで
+  // 消えてしまい、対応漏れの温床になる。
+  const activeList = filter === "COMPLETED" ? (completedConversations ?? []) : conversations;
+  const filtered = activeList.filter((c) => {
+    if (filter === "UNREPLIED") return c.needsReply;
+    if (filter === "REPLIED") return !c.needsReply;
     if (filter === "OHARA_REVIEW") return c.workflowStatus === "OHARA_REVIEW";
     if (filter === "ICHIKAWA_REVIEW") return c.workflowStatus === "ICHIKAWA_REVIEW";
+    // ALL = 現在対応中の全会話。対応済みはサーバー側で既に除外されている。
+    // COMPLETED = 対応済みだけ(別途取得したリスト)。
     return true;
   });
-  const selected = conversations.find((c) => c.id === selectedId) ?? null;
+  const selected = [...conversations, ...(completedConversations ?? [])].find((c) => c.id === selectedId) ?? null;
+  // LINEの会話で、かつ送信が無効なとき。TEST会話はBELLO内で完結する
+  // ので止めない(実顧客へは届かない)。
+  const outboundBlocked = selected?.channel === "LINE" && lineOutbound?.enabled !== true;
 
-  async function loadMessages(conversationId: string) {
+  // 「対応済み」タブを押したときにだけ取りに行く(指示書§14)。
+  useEffect(() => {
+    if (filter !== "COMPLETED" || completedConversations !== null || completedLoading) return;
+    setCompletedLoading(true);
+    setCompletedError(null);
+    listCompletedConversationsAction()
+      .then(setCompletedConversations)
+      .catch((err) => setCompletedError(err instanceof Error ? err.message : "対応済みの会話を取得できませんでした。"))
+      .finally(() => setCompletedLoading(false));
+  }, [filter, completedConversations, completedLoading]);
+
+  /**
+   * 会話を開いたときは**最新50件だけ**読む(指示書§16)。
+   *
+   * 会話が長く続けばMessageは際限なく増える。最初から全件読むと、
+   * 古い会話ほど開くのが遅くなる。続きは「過去のメッセージを読み込む」
+   * で明示的に取る。
+   */
+  async function loadMessages(conversationId: string, limit = MESSAGE_PAGE_SIZE) {
     setMessagesLoading(true);
+    setMessagesError(null);
     try {
-      setMessages(await listMessagesAction(conversationId));
+      const page = await listRecentMessagesAction(conversationId, limit);
+      setMessages(page.messages);
+      setHasOlderMessages(page.hasOlder);
+      setTotalMessageCount(page.totalCount);
+      setMessageLimit(limit);
+    } catch (err) {
+      // 会話そのものは開けている。ここだけを局所的に失敗させる(§33)。
+      setMessagesError(err instanceof Error ? err.message : "メッセージを読み込めませんでした。");
     } finally {
       setMessagesLoading(false);
     }
+  }
+
+  // LINE送信が有効かどうかをサーバーへ確認する。会話を開くたびではなく
+  // 画面のマウント時に1回だけ(設定値なので会話ごとに変わらない)。
+  useEffect(() => {
+    let cancelled = false;
+    getLineOutboundStatusAction()
+      .then((s) => {
+        if (!cancelled) setLineOutbound(s);
+      })
+      .catch(() => {
+        // 取得できなかったときは**送信できない側**へ倒す。
+        if (!cancelled) setLineOutbound({ enabled: false, message: "送信可否を確認できなかったため、送信を無効にしています。" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function loadOlderMessages() {
+    if (!selectedId) return;
+    await loadMessages(selectedId, messageLimit + MESSAGE_PAGE_SIZE);
   }
 
   useEffect(() => {
@@ -248,12 +341,39 @@ export function MessagesInbox({
     }
   }
 
-  async function handleResolve() {
+  /**
+   * 「対応済みにする」/「対応済みを解除」(指示書§11/§12)。
+   *
+   * archive 的な業務状態であって削除ではない —— Message も画像も残る。
+   * 対応済みにした会話は通常の一覧(未返信/返信済み/すべて)から外れ、
+   * 「対応済み」タブから参照できる。
+   */
+  async function handleSetCompleted(completed: boolean) {
     if (!selected) return;
+    if (completed) {
+      const ok = window.confirm(
+        "この会話を「対応済み」にしますか？\n対応済みの会話は通常の未返信・返信済み一覧から外れます。\n（会話や画像は削除されません）",
+      );
+      if (!ok) return;
+    }
     setBusy(true);
+    setError(null);
     try {
-      await resolveConversationAction(selected.id);
-      setConversations((prev) => prev.map((c) => (c.id === selected.id ? { ...c, status: "RESOLVED" as const, needsReply: false } : c)));
+      await setConversationCompletedAction(selected.id, completed);
+      if (completed) {
+        // 通常一覧からは外す。対応済みタブは次に開いたときに取り直す。
+        setConversations((prev) => prev.filter((c) => c.id !== selected.id));
+        setCompletedConversations(null);
+        setSelectedId(null);
+        setMobileView("list");
+      } else {
+        setCompletedConversations(null);
+        setConversations((prev) =>
+          prev.some((c) => c.id === selected.id)
+            ? prev.map((c) => (c.id === selected.id ? { ...c, workflowStatus: "NEW" as const, completedAt: null } : c))
+            : [{ ...selected, workflowStatus: "NEW" as const, completedAt: null }, ...prev],
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新に失敗しました。");
     } finally {
@@ -285,21 +405,41 @@ export function MessagesInbox({
       {/* 一覧(§43)。モバイルでは詳細を見ている間`hidden`にする(§78)。 */}
       <div className={`w-full shrink-0 flex-col border-r border-gray-200 md:flex md:w-72 ${mobileView === "detail" ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1 border-b border-gray-200 px-2 py-1.5 text-[11px]">
-          {(["ALL", "UNREAD", "NEEDS_REPLY", "REPLIED", "OHARA_REVIEW", "ICHIKAWA_REVIEW", "RESOLVED"] as Filter[]).map((f) => (
+          {FILTER_ORDER.map((f) => (
             <button
               key={f}
               type="button"
+              data-filter={f}
               onClick={() => setFilter(f)}
-              // 実測45x21 — 4つが横に並ぶので、モバイルでは押し分けに
+              // 実測45x21 — 6つが横に並ぶので、モバイルでは押し分けに
               // 高さが要る。文字サイズは据え置きで高さだけ32pxへ。
-              className={`inline-flex min-h-8 items-center px-2 py-0.5 ${filter === f ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-100"}`}
+              className={`inline-flex min-h-8 items-center whitespace-nowrap px-1.5 py-0.5 ${filter === f ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-100"}`}
             >
-              {{ ALL: "すべて", UNREAD: "未読", NEEDS_REPLY: "要返信", REPLIED: "返信済み", OHARA_REVIEW: "大原確認", ICHIKAWA_REVIEW: "市川確認", RESOLVED: "解決済み" }[f]}
+              {CONVERSATION_FILTER_LABEL[f]}
             </button>
           ))}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {filtered.length === 0 && <p className="p-4 text-center text-[12px] text-gray-400">会話がありません。</p>}
+          {filter === "COMPLETED" && completedLoading && (
+            <p className="p-4 text-center text-[12px] text-gray-400">対応済みの会話を読み込んでいます…</p>
+          )}
+          {filter === "COMPLETED" && completedError && (
+            <div className="m-2 border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
+              <p>{completedError}</p>
+              <button
+                type="button"
+                onClick={() => setCompletedConversations(null)}
+                className="mt-1 border border-amber-400 px-2 py-0.5"
+              >
+                再試行
+              </button>
+            </div>
+          )}
+          {filtered.length === 0 && !completedLoading && (
+            <p className="p-4 text-center text-[12px] text-gray-400">
+              {filter === "UNREPLIED" ? "未返信の会話はありません。" : "会話がありません。"}
+            </p>
+          )}
           {filtered.map((c) => (
             <button
               key={c.id}
@@ -314,9 +454,10 @@ export function MessagesInbox({
                 {/* どのチャネルから届いたかを必ず出す(§2)。 */}
                 <span className="rounded border border-gray-200 px-1 text-[10px] text-gray-500">{CHANNEL_LABEL[c.channel]}</span>
                 <span className="flex items-center gap-1">
-                  {/* 未読は業務ステータスと別軸なので、バッジも分ける。 */}
-                  {c.isUnread && <span className="rounded bg-red-600 px-1 text-[10px] font-bold text-white">未読</span>}
-                  {c.needsReply && <span className="h-1.5 w-1.5 rounded-full bg-red-600" aria-label="要返信" />}
+                  {/* 業務判断は「未返信」で行う。未読は新着の目印としてだけ
+                      小さく出す —— 利用者に2つを混同させない(指示書§23)。 */}
+                  {c.needsReply && <span className="rounded bg-red-600 px-1 text-[10px] font-bold text-white">未返信</span>}
+                  {c.isUnread && <span className="h-1.5 w-1.5 rounded-full bg-red-500" aria-label="新着" title="新着" />}
                 </span>
               </div>
               <p className={`truncate text-[13px] text-gray-900 ${c.isUnread ? "font-bold" : ""}`}>
@@ -403,11 +544,29 @@ export function MessagesInbox({
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                {canEdit && selected.status !== "RESOLVED" && selected.status !== "ARCHIVED" && (
-                  <button type="button" onClick={handleResolve} disabled={busy} className="border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">
-                    解決済みにする
-                  </button>
-                )}
+                {/* 対応済みは archive 的な業務状態であって削除ではない。
+                    Message も画像も一切消さない(指示書§29)。
+                    誤操作と再問い合わせのために解除もできる(§12)。 */}
+                {canEdit &&
+                  (selected.workflowStatus === "COMPLETED" ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleSetCompleted(false)}
+                      disabled={busy}
+                      className="border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50"
+                    >
+                      対応済みを解除
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void handleSetCompleted(true)}
+                      disabled={busy}
+                      className="border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50"
+                    >
+                      対応済みにする
+                    </button>
+                  ))}
                 {isAdmin && (
                   <button
                     type="button"
@@ -421,31 +580,84 @@ export function MessagesInbox({
               </div>
             </div>
 
-            {/* 業務ステータス(§6)。未読/既読とは別軸なので、行を分けて置く。 */}
-            {canEdit && (
-              <div className="mb-3 flex flex-wrap items-center gap-1 border border-gray-200 bg-gray-50 p-2">
-                <span className="mr-1 text-[11px] text-gray-500">業務ステータス:</span>
-                {(["NEW", "REPLIED", "OHARA_REVIEW", "ICHIKAWA_REVIEW"] as ConversationWorkflowStatus[]).map((st) => (
+            {/* 返信状態と業務ステータスを別の行に分ける(指示書§24)。
+
+                返信状態は「最新の受信より後にBELLOから返信したか」という
+                事実で、人がボタンで切り替えるものではない。だから表示だけ。
+                業務ステータスは人が指定するもので、返信状態とは独立に持つ
+                —— 「大原確認」中でも「まだ返信していない」事実は消えない。 */}
+            <div className="mb-3 space-y-1 border border-gray-200 bg-gray-50 p-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-gray-500">返信状態:</span>
+                <span
+                  className={`px-2 py-0.5 text-[11px] font-bold ${
+                    selected.needsReply ? "bg-red-600 text-white" : "bg-gray-200 text-gray-700"
+                  }`}
+                >
+                  {selected.needsReply ? "未返信" : "返信済み"}
+                </span>
+                <span className="text-[10px] text-gray-400">
+                  お客様へ実際に送信されたときだけ「返信済み」になります（AI案の作成・下書き保存では変わりません）。
+                </span>
+              </div>
+              {canEdit && (
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="mr-1 text-[11px] text-gray-500">業務ステータス:</span>
+                  {SELECTABLE_WORKFLOW_STATUSES.map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => void handleChangeWorkflowStatus(st)}
+                      disabled={busy}
+                      className={`border px-2 py-0.5 text-[11px] disabled:opacity-50 ${
+                        selected.workflowStatus === st
+                          ? "border-gray-900 bg-gray-900 font-bold text-white"
+                          : "border-gray-300 text-gray-600 hover:bg-white"
+                      }`}
+                    >
+                      {WORKFLOW_STATUS_LABEL[st]}
+                    </button>
+                  ))}
                   <button
-                    key={st}
                     type="button"
-                    onClick={() => void handleChangeWorkflowStatus(st)}
+                    onClick={() => void handleChangeWorkflowStatus("NEW")}
                     disabled={busy}
                     className={`border px-2 py-0.5 text-[11px] disabled:opacity-50 ${
-                      selected.workflowStatus === st
+                      selected.workflowStatus === "NEW" || selected.workflowStatus === "REPLIED"
                         ? "border-gray-900 bg-gray-900 font-bold text-white"
                         : "border-gray-300 text-gray-600 hover:bg-white"
                     }`}
                   >
-                    {WORKFLOW_STATUS_LABEL[st]}
+                    確認指定なし
                   </button>
-                ))}
-              </div>
-            )}
+                </div>
+              )}
+            </div>
 
             {/* timeline */}
             <div className="mb-4 space-y-2">
               {messagesLoading && <p className="text-[12px] text-gray-400">読み込み中…</p>}
+              {messagesError && (
+                <div className="border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
+                  <p>{messagesError}</p>
+                  <button
+                    type="button"
+                    onClick={() => selectedId && void loadMessages(selectedId, messageLimit)}
+                    className="mt-1 border border-amber-400 px-2 py-0.5"
+                  >
+                    再読み込み
+                  </button>
+                </div>
+              )}
+              {hasOlderMessages && !messagesLoading && (
+                <button
+                  type="button"
+                  onClick={() => void loadOlderMessages()}
+                  className="mx-auto block border border-gray-300 px-3 py-1 text-[11px] text-gray-600 hover:bg-gray-50"
+                >
+                  過去のメッセージを読み込む（表示 {messages.length} / 全 {totalMessageCount} 件）
+                </button>
+              )}
               {messages.map((m) => (
                 <div key={m.id} className={`max-w-[80%] rounded p-2 text-[13px] ${m.direction === "INBOUND" ? "bg-gray-100" : "ml-auto bg-blue-50"}`}>
                   <p className="whitespace-pre-wrap">{m.body}</p>
@@ -480,7 +692,7 @@ export function MessagesInbox({
                     <button
                       type="button"
                       onClick={() => setConfirmingMessageId(draftMessage.id)}
-                      disabled={busy}
+                      disabled={busy || outboundBlocked}
                       className="mt-2 bg-gray-900 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50"
                     >
                       送信する
@@ -491,6 +703,17 @@ export function MessagesInbox({
                     <div className="mb-3">
                       <AiReplyPanel conversationId={selected.id} onApplyToReply={handleApplyAiDraft} />
                     </div>
+                    {/* 2026-09-02 指示書§5: LINEへの実送信は現在テスト段階のため
+                        無効。UIをdisabledにするのは補助であって防御ではない ——
+                        本体の防御は lib/messaging/line/outboundGuard.ts で、
+                        LINE APIへHTTPリクエストを出す唯一の場所が拒否する。 */}
+                    {outboundBlocked && (
+                      <p className="mb-2 border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
+                        {lineOutbound?.message ?? "現在テスト中のため、LINEへの送信は無効です。"}
+                        <br />
+                        返信案の作成・敬語への変換・下書きの保存は通常どおり行えます。
+                      </p>
+                    )}
                     <textarea
                       value={replyBody}
                       onChange={(e) => {

@@ -1,9 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { getLineOutboundStatus } from "@/lib/messaging/line/outboundGuard";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
   listConversations,
+  listRecentMessages,
+  setConversationCompleted,
+  type ConversationScope,
+  type MessagePage,
   listMessages,
   createTestConversation,
   draftReply,
@@ -36,12 +41,43 @@ async function requireAdmin(): Promise<string | null> {
   return getCurrentInventoryUserEmail();
 }
 
-export async function listConversationsAction(): Promise<ConversationRecord[]> {
-  return listConversations();
+export async function listConversationsAction(scope: ConversationScope = "ACTIVE"): Promise<ConversationRecord[]> {
+  return listConversations(scope);
+}
+
+/**
+ * 「対応済み」タブを押したときだけ呼ぶ(指示書§14)。
+ * 通常の一覧では対応済みを一切読まないので、蓄積しても初期表示が
+ * 重くならない。
+ */
+export async function listCompletedConversationsAction(): Promise<ConversationRecord[]> {
+  const role = await getInventoryRole();
+  if (!role) throw new Error("ログインが必要です。");
+  return listConversations("COMPLETED");
+}
+
+/** 会話を「対応済み」にする/解除する。Message・画像は一切削除しない。 */
+export async function setConversationCompletedAction(conversationId: string, completed: boolean): Promise<void> {
+  const who = await requireEditPermission();
+  await setConversationCompleted(conversationId, completed, who);
+  revalidatePath("/inventory/messages");
+}
+
+/** LINEへの実送信が有効かどうか(UIの送信ボタンの活殺と説明文に使う)。 */
+export async function getLineOutboundStatusAction(): Promise<{ enabled: boolean; message: string }> {
+  return getLineOutboundStatus();
 }
 
 export async function listMessagesAction(conversationId: string): Promise<MessageRecord[]> {
   return listMessages(conversationId);
+}
+
+/**
+ * 会話を開いたときに読む分だけ取得する(指示書§16)。
+ * 画面はこちらを使い、全件版は送信・AI生成など全件が要る処理だけが使う。
+ */
+export async function listRecentMessagesAction(conversationId: string, limit?: number): Promise<MessagePage> {
+  return listRecentMessages(conversationId, limit);
 }
 
 export async function createTestConversationAction(input: { customerDisplayName: string; body: string }): Promise<ConversationRecord> {
@@ -61,14 +97,13 @@ export async function draftReplyAction(conversationId: string, body: string, aiG
 export async function sendReplyAction(conversationId: string, messageId: string): Promise<MessageRecord> {
   const who = await requireEditPermission();
   const result = await sendReply(conversationId, messageId, who);
-  // 返信が実際に送れたときだけ「返信済み」へ進める(§6の自動化)。
-  // 送信に失敗した場合はここへ来ないので、嘘のステータスにならない。
-  // 記録に失敗しても送信自体は成功しているので、そこで例外にはしない。
-  try {
-    await setConversationWorkflowStatus(conversationId, "REPLIED", who);
-  } catch (err) {
-    console.error("[sendReplyAction] 業務ステータスの更新に失敗:", err instanceof Error ? err.message : err);
-  }
+  // 2026-09-02 指示書§24: 「返信済み」を業務ステータスとして書かない。
+  //
+  // 返信したかどうかは Conversation.needsReply(= 最新の受信より後に
+  // BELLOから送信したか)から導く事実で、業務ステータス
+  // (大原確認/市川確認/対応済み)とは別の軸。同じ1つのフィールドへ
+  // 両方を書くと、「大原確認中だが未返信」という実在する状態を
+  // 表現できなくなる。needsReply は sendReply が送信成功時に更新する。
   revalidatePath("/inventory/messages");
   return result;
 }

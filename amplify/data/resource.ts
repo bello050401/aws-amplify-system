@@ -996,7 +996,16 @@ const schema = a.schema({
    * 取り違えが起きる。Conversation.isUnread/lastReadAt が前者、
    * このworkflowStatusが後者を担う。
    */
-  ConversationWorkflowStatus: a.enum(["NEW", "REPLIED", "OHARA_REVIEW", "ICHIKAWA_REVIEW"]),
+  /**
+   * 業務ステータス。返信したかどうか(replyState)とは**別軸**。
+   *
+   * 2026-09-02: COMPLETED(対応済み)を追加。「返信済み」と「対応済み」は
+   * 別概念 —— 配送予定日を回答済みでも配送前なら返信済みであって
+   * 対応済みではない。既存の NEW / REPLIED はデータ互換のために残す
+   * (値を消すとその値を持つ既存行が読めなくなる)。UI上は両方とも
+   * 「確認指定なし」として扱い、返信状態は needsReply から導く。
+   */
+  ConversationWorkflowStatus: a.enum(["NEW", "REPLIED", "OHARA_REVIEW", "ICHIKAWA_REVIEW", "COMPLETED"]),
 
   /** 受信メッセージの種別。画像を「本文が空のテキスト」として捨てないために要る。 */
   MessageContentKind: a.enum(["TEXT", "IMAGE", "STICKER", "FILE", "OTHER"]),
@@ -1043,6 +1052,13 @@ const schema = a.schema({
       lastReadBy: a.string(),
       /** 業務ステータス(未読/既読とは別軸 — ConversationWorkflowStatusのコメント参照)。 */
       workflowStatus: a.ref("ConversationWorkflowStatus"),
+      /**
+       * 「対応済み」にした日時。対応済み一覧の並び順に使う。
+       * 解除したらnullへ戻す(履歴は InventoryHistory ではなく
+       * Conversation.updatedBy/updatedAt で追う)。
+       */
+      completedAt: a.datetime(),
+      completedBy: a.string(),
       /** 顧客名をいつ外部APIから取得したか。毎回LINE APIを叩かないためのキャッシュ判定に使う。 */
       customerNameFetchedAt: a.datetime(),
       /** 顧客名の出所("LINE_PROFILE"等)。取得できなかったのか、そもそも取りに行っていないのかを区別する。 */

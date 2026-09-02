@@ -12,6 +12,13 @@
 import { deriveNeedsReply, deriveConversationStatus, buildMessagePreview, sortConversations } from "@/lib/messaging/conversationStatus";
 import { recordIncomingWebhookMessageWith, type WebhookStoreDeps } from "@/lib/messaging/webhookStore";
 import type { ConversationRecord } from "@/lib/messaging/types";
+import {
+  CONVERSATION_FILTERS,
+  CONVERSATION_FILTER_LABEL,
+  DEFAULT_CONVERSATION_FILTER,
+  SELECTABLE_WORKFLOW_STATUSES,
+  WORKFLOW_STATUS_LABEL,
+} from "@/lib/messaging/types";
 
 let failures = 0;
 let passes = 0;
@@ -211,7 +218,78 @@ async function testWebhookStoreDedupesResentMessage() {
   );
 }
 
+/**
+ * 2026-09-02 指示書§2/§31: 上部フィルタの並びを固定する。
+ *
+ *   未返信 ｜ 返信済み ｜ すべて ｜ 大原確認 ｜ 市川確認 ｜ 対応済み
+ *
+ * 並びは lib/messaging/types.ts の CONVERSATION_FILTERS が正本で、UIは
+ * その配列をそのままmapする。ここが通っている限り、画面のタブ順は変わらない。
+ */
+function testConversationFilterOrder() {
+  assertEqual(
+    CONVERSATION_FILTERS.map((f) => CONVERSATION_FILTER_LABEL[f]),
+    ["未返信", "返信済み", "すべて", "大原確認", "市川確認", "対応済み"],
+    "フィルタの並びが指定どおり",
+  );
+  assertEqual(CONVERSATION_FILTER_LABEL[CONVERSATION_FILTERS[0]], "未返信", "先頭は未返信");
+  assertEqual(CONVERSATION_FILTER_LABEL[CONVERSATION_FILTERS[CONVERSATION_FILTERS.length - 1]], "対応済み", "末尾は対応済み");
+  assertEqual(DEFAULT_CONVERSATION_FILTER, "UNREPLIED", "初期表示は未返信(すべてではない)");
+
+  // 廃止したフィルタが残っていないこと。
+  const labels = CONVERSATION_FILTERS.map((f) => CONVERSATION_FILTER_LABEL[f]);
+  assertTrue(!labels.includes("未読"), "「未読」フィルタは存在しない");
+  assertTrue(!labels.includes("要返信"), "「要返信」フィルタは存在しない");
+  assertTrue(!labels.includes("解決済み"), "「解決済み」フィルタは存在しない");
+}
+
+/**
+ * §24/§25: 返信状態と業務ステータスは別の軸。
+ */
+function testReplyStateAndWorkflowAreSeparate() {
+  // 人が操作できる業務ステータスに「返信済み」は含まない。
+  assertEqual(
+    SELECTABLE_WORKFLOW_STATUSES.map((s) => WORKFLOW_STATUS_LABEL[s]),
+    ["大原確認", "市川確認", "対応済み"],
+    "業務ステータスとして選べるのは3つだけ(「返信済み」は含めない)",
+  );
+  // 既存データの NEW / REPLIED はどちらも「確認指定なし」として読む。
+  assertEqual(WORKFLOW_STATUS_LABEL.NEW, "確認指定なし", "旧NEWは確認指定なしとして表示");
+  assertEqual(WORKFLOW_STATUS_LABEL.REPLIED, "確認指定なし", "旧REPLIEDも確認指定なしとして表示(返信状態は別軸)");
+
+  // 「大原確認」中でも未返信という事実は保持される。
+  // needsReply は最新の受信と最新の送信の時刻だけで決まり、
+  // workflowStatus を一切見ない。
+  assertTrue(deriveNeedsReply("2026-09-02T09:15:00Z", "2026-09-02T09:10:00Z"), "顧客の再受信後は未返信");
+  assertTrue(!deriveNeedsReply("2026-09-02T09:15:00Z", "2026-09-02T09:20:00Z"), "返信後は返信済み");
+  assertTrue(deriveNeedsReply("2026-09-02T09:00:00Z", null), "一度も返信していなければ未返信");
+}
+
+/**
+ * §5/§25: 開いただけ・AI案を作っただけ・下書きを保存しただけでは
+ * 「返信済み」にならない。
+ *
+ * deriveNeedsReply が見るのは lastOutgoingAt だけで、これは**送信が
+ * 成功したときにしか更新されない**。開く/AI生成/下書き保存はどれも
+ * lastOutgoingAt を触らないので、この関数の入力が変わらない。
+ */
+function testOnlyRealSendClearsUnreplied() {
+  const lastIncoming = "2026-09-02T09:00:00Z";
+  assertTrue(deriveNeedsReply(lastIncoming, null), "受信のみ → 未返信");
+  // 開く/AI生成/下書き保存は lastOutgoingAt を更新しない = 入力が同じ
+  assertTrue(deriveNeedsReply(lastIncoming, null), "会話を開いても未返信のまま");
+  assertTrue(deriveNeedsReply(lastIncoming, null), "AI返信案を作っても未返信のまま");
+  assertTrue(deriveNeedsReply(lastIncoming, null), "下書きを保存しても未返信のまま");
+  // 実送信で lastOutgoingAt が入って初めて返信済みへ
+  assertTrue(!deriveNeedsReply(lastIncoming, "2026-09-02T09:30:00Z"), "実送信が成功して初めて返信済み");
+  // 再受信で未返信へ戻る
+  assertTrue(deriveNeedsReply("2026-09-02T10:00:00Z", "2026-09-02T09:30:00Z"), "再受信で未返信へ戻る");
+}
+
 async function main() {
+  testConversationFilterOrder();
+  testReplyStateAndWorkflowAreSeparate();
+  testOnlyRealSendClearsUnreplied();
   testDeriveNeedsReply();
   testDeriveConversationStatus();
   testBuildMessagePreview();

@@ -19,17 +19,68 @@ export type MessageSenderType = "CUSTOMER" | "STAFF" | "AI";
 
 export type MessageDeliveryStatus = "RECEIVED" | "DRAFT" | "SENDING" | "SENT" | "FAILED";
 
-/** 業務上の確認状況。既読/未読(技術的状態)と混同しないよう別の型にする。 */
-export type ConversationWorkflowStatus = "NEW" | "REPLIED" | "OHARA_REVIEW" | "ICHIKAWA_REVIEW";
+/**
+ * 業務上の確認状況。既読/未読(技術的状態)とも、返信したかどうか
+ * (replyState)とも別の軸。
+ *
+ * 2026-09-02: COMPLETED(対応済み)を追加。NEW / REPLIED は既存データとの
+ * 互換のために型としては残すが、**UIの業務ステータスとしては使わない**
+ * ——「返信済み」は業務ステータスではなく返信状態だから(指示書§24)。
+ * どちらも表示上は「確認指定なし」として扱う。
+ */
+export type ConversationWorkflowStatus = "NEW" | "REPLIED" | "OHARA_REVIEW" | "ICHIKAWA_REVIEW" | "COMPLETED";
 
-/** 一覧の絞り込み。「すべて」はフィルタ無し。 */
-export type ConversationFilter = "ALL" | "UNREAD" | "REPLIED" | "OHARA_REVIEW" | "ICHIKAWA_REVIEW";
+/**
+ * 返信状態。業務ステータスと独立した軸(指示書§9/§24)。
+ * 「大原確認」中でも「まだ返信していない」という事実は保持される。
+ */
+export type ConversationReplyState = "UNREPLIED" | "REPLIED";
 
-export const WORKFLOW_STATUS_LABEL: Record<ConversationWorkflowStatus, string> = {
-  NEW: "未対応",
+export const REPLY_STATE_LABEL: Record<ConversationReplyState, string> = {
+  UNREPLIED: "未返信",
   REPLIED: "返信済み",
+};
+
+/**
+ * 一覧の絞り込み。**この順番がそのまま画面のタブの並び**(指示書§2)。
+ * 配列の順序を変えないこと。E2E/DOMテストがこの順序を固定している。
+ */
+export const CONVERSATION_FILTERS = [
+  "UNREPLIED",
+  "REPLIED",
+  "ALL",
+  "OHARA_REVIEW",
+  "ICHIKAWA_REVIEW",
+  "COMPLETED",
+] as const;
+
+export type ConversationFilter = (typeof CONVERSATION_FILTERS)[number];
+
+export const CONVERSATION_FILTER_LABEL: Record<ConversationFilter, string> = {
+  UNREPLIED: "未返信",
+  REPLIED: "返信済み",
+  ALL: "すべて",
   OHARA_REVIEW: "大原確認",
   ICHIKAWA_REVIEW: "市川確認",
+  COMPLETED: "対応済み",
+};
+
+/** 画面を開いた直後のフィルタ(指示書§3)。 */
+export const DEFAULT_CONVERSATION_FILTER: ConversationFilter = "UNREPLIED";
+
+/**
+ * 業務ステータスとして人が操作できるもの。
+ * 「返信済み」はここに含めない —— 返信状態は送信の事実から導く値であって、
+ * 人がボタンで切り替えるものではない(指示書§25/§27)。
+ */
+export const SELECTABLE_WORKFLOW_STATUSES = ["OHARA_REVIEW", "ICHIKAWA_REVIEW", "COMPLETED"] as const;
+
+export const WORKFLOW_STATUS_LABEL: Record<ConversationWorkflowStatus, string> = {
+  NEW: "確認指定なし",
+  REPLIED: "確認指定なし",
+  OHARA_REVIEW: "大原確認",
+  ICHIKAWA_REVIEW: "市川確認",
+  COMPLETED: "対応済み",
 };
 
 export interface ConversationRecord {
@@ -51,8 +102,11 @@ export interface ConversationRecord {
   isUnread: boolean;
   lastReadAt: string | null;
   lastReadBy: string | null;
-  /** 業務ステータス。未読/既読とは別軸(NEW/REPLIED/OHARA_REVIEW/ICHIKAWA_REVIEW)。 */
+  /** 業務ステータス。未読/既読とも返信状態とも別軸。 */
   workflowStatus: ConversationWorkflowStatus;
+  /** 「対応済み」にした日時(対応済み一覧の並び順)。解除するとnull。 */
+  completedAt: string | null;
+  completedBy: string | null;
   /** 顧客名の出所。取得を試みたが取れなかったのか、まだ試していないのかを区別する。 */
   customerNameSource: string | null;
   customerNameFetchedAt: string | null;

@@ -1,5 +1,7 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { listAllPages } from "@/lib/amplify/listAll";
+import { MESSAGE_PAGE_SIZE } from "./messagePaging";
 import { deriveConversationStatus, deriveNeedsReply, buildMessagePreview, sortConversations } from "./conversationStatus";
 import { sendLinePush } from "./line/adapter";
 import { sendEmailReply } from "./email/sesAdapter";
@@ -49,6 +51,8 @@ function toConversationRecord(row: {
   lastReadAt?: string | null;
   lastReadBy?: string | null;
   workflowStatus?: ConversationWorkflowStatus | null;
+  completedAt?: string | null;
+  completedBy?: string | null;
   customerNameSource?: string | null;
   customerNameFetchedAt?: string | null;
   deletedAt?: string | null;
@@ -80,6 +84,8 @@ function toConversationRecord(row: {
     lastReadAt: row.lastReadAt ?? null,
     lastReadBy: row.lastReadBy ?? null,
     workflowStatus: row.workflowStatus ?? "NEW",
+    completedAt: row.completedAt ?? null,
+    completedBy: row.completedBy ?? null,
     customerNameSource: row.customerNameSource ?? null,
     customerNameFetchedAt: row.customerNameFetchedAt ?? null,
     needsReply: row.needsReply ?? false,
@@ -134,13 +140,87 @@ function toMessageRecord(row: {
   };
 }
 
-/** §80: 一覧はConversationだけを全件取得する(Messageは開いたときだけ取得 — 「conversation listで全文messageを全部取得しない」)。 */
-export async function listConversations(): Promise<ConversationRecord[]> {
-  const { data, errors } = await serverDataClient.models.Conversation.list({ ...inventoryAuthMode });
-  if (errors) throw new Error(`会話一覧の取得に失敗しました: ${JSON.stringify(errors)}`);
+/**
+ * 会話一覧。**Messageは1件も読まない**(開いたときだけ取得する)。
+ *
+ * ── scope(2026-09-02 指示書§14) ──────────────────────────────
+ *
+ * 「対応済み」は参照頻度が低い一方、時間とともに際限なく増える。
+ * 通常の一覧(未返信/返信済み/すべて)で毎回それを引くと、業務が
+ * 進むほど画面が重くなる。scopeで**サーバー側の取得段階から**外す。
+ *
+ *   ACTIVE    … 対応済みを除く(未返信/返信済み/すべて/大原確認/市川確認)
+ *   COMPLETED … 対応済みだけ
+ *
+ * 「すべて」= 現在対応中の全会話(対応済みを含まない)。対応済みは
+ * archive として別タブで見る、という運用に合わせている。
+ *
+ * ── 全ページ辿る理由 ──────────────────────────────────────────
+ *
+ * DynamoDBのLimitはフィルタ適用前の読み取り件数の上限なので、
+ * filter付きlistを1ページだけ読むと条件に合う会話を静かに取りこぼす
+ * (lib/amplify/listAll.ts に実測値)。
+ */
+export type ConversationScope = "ACTIVE" | "COMPLETED";
+
+export async function listConversations(scope: ConversationScope = "ACTIVE"): Promise<ConversationRecord[]> {
+  const filter =
+    scope === "COMPLETED"
+      ? { workflowStatus: { eq: "COMPLETED" } }
+      : { not: { workflowStatus: { eq: "COMPLETED" } } };
+
+  const rows = await listAllPages<Parameters<typeof toConversationRecord>[0] & { deletedAt?: string | null }>(
+    async (nextToken) => {
+      const res = await serverDataClient.models.Conversation.list({
+        filter,
+        limit: 200,
+        nextToken,
+        ...inventoryAuthMode,
+      });
+      return {
+        data: res.data as unknown as (Parameters<typeof toConversationRecord>[0] & { deletedAt?: string | null })[],
+        nextToken: res.nextToken,
+        errors: res.errors,
+      };
+    },
+    { label: "会話一覧" },
+  );
+
   // 論理削除済みは一覧・詳細・AI参照のいずれからも外す。行自体は
   // 監査のために残っている(amplify/data/resource.ts の deletedAt 参照)。
-  return sortConversations(data.filter((row) => !row.deletedAt).map(toConversationRecord));
+  const records = rows.filter((row) => !row.deletedAt).map(toConversationRecord);
+  if (scope === "COMPLETED") {
+    // 対応済みは「いつ片付いたか」で並べるのが業務上自然。
+    // completedAt が無い既存行は最終メッセージ日時で代用する。
+    return records.sort((a, b) => {
+      const at = new Date(a.completedAt ?? a.lastMessageAt ?? 0).getTime();
+      const bt = new Date(b.completedAt ?? b.lastMessageAt ?? 0).getTime();
+      return bt - at;
+    });
+  }
+  return sortConversations(records);
+}
+
+/**
+ * 「対応済みにする」/「対応済みを解除する」(指示書§11/§12)。
+ *
+ * archive的な業務状態であって削除ではない。Message も画像も一切消さない。
+ * 解除できるようにしてあるのは、誤操作と顧客からの再問い合わせのため。
+ */
+export async function setConversationCompleted(conversationId: string, completed: boolean, who: string | null): Promise<void> {
+  const { errors } = await serverDataClient.models.Conversation.update(
+    {
+      id: conversationId,
+      // 解除は「確認指定なし」へ戻す。大原確認/市川確認を復元しないのは、
+      // 対応済みにした時点でその確認は終わっているという運用のため。
+      workflowStatus: completed ? "COMPLETED" : "NEW",
+      completedAt: completed ? new Date().toISOString() : null,
+      completedBy: completed ? (who ?? undefined) : null,
+      updatedBy: who ?? undefined,
+    },
+    inventoryAuthMode,
+  );
+  if (errors) throw new Error(`対応済みの変更に失敗しました: ${JSON.stringify(errors)}`);
 }
 
 /**
@@ -205,10 +285,55 @@ export async function getConversation(id: string): Promise<ConversationRecord | 
  * "conversationId"))`(synth出力で実測確認済みqueryField名
  * `listMessageByConversationId`)を使った真のQueryに切り替える。
  */
+/**
+ * 会話の全メッセージ。**送信・AI生成など「全件が要る」処理からだけ**呼ぶ。
+ * 画面表示には listRecentMessages を使う(下)。
+ */
 export async function listMessages(conversationId: string): Promise<MessageRecord[]> {
-  const { data, errors } = await serverDataClient.models.Message.listMessageByConversationId({ conversationId }, { ...inventoryAuthMode });
-  if (errors) throw new Error(`メッセージの取得に失敗しました: ${JSON.stringify(errors)}`);
-  return data.map(toMessageRecord).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  const rows = await listAllPages<Parameters<typeof toMessageRecord>[0]>(
+    async (nextToken) => {
+      const res = await serverDataClient.models.Message.listMessageByConversationId(
+        { conversationId },
+        { limit: 200, nextToken, ...inventoryAuthMode },
+      );
+      return { data: res.data as unknown as Parameters<typeof toMessageRecord>[0][], nextToken: res.nextToken, errors: res.errors };
+    },
+    { label: "メッセージ" },
+  );
+  return rows.map(toMessageRecord).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+}
+
+/**
+ * 会話を開いたときに読む分だけ(2026-09-02 指示書§16)。
+ *
+ * 会話が何年も続けばMessageは際限なく増える。最初から全件読むと、
+ * 古い会話ほど開くのが遅くなる。新しい側から `limit` 件だけ読み、
+ * 「過去のメッセージを読み込む」で続きを取る。
+ *
+ * GSIには createdAt のソートキーが無いため、DynamoDB側で「新しい順に
+ * N件」を直接は取れない。会話単位のQueryで全ページ辿ってから末尾を
+ * 切り出す —— **1会話ぶん**のQueryなので、一覧を開くたびに全会話の
+ * 全Messageを読んでいた形とは桁が違う。件数が実用上の問題になるほど
+ * 増えたら、そのときにGSIへソートキーを足す(いま足すと既存の
+ * listMessageByConversationId の呼び出し名が変わり、影響範囲が広い)。
+ */
+export interface MessagePage {
+  messages: MessageRecord[];
+  /** これより古いメッセージがまだあるか。 */
+  hasOlder: boolean;
+  /** この会話のメッセージ総数(「残り○件」の表示用)。 */
+  totalCount: number;
+}
+
+
+export async function listRecentMessages(conversationId: string, limit: number = MESSAGE_PAGE_SIZE): Promise<MessagePage> {
+  const all = await listMessages(conversationId);
+  const take = Math.max(1, limit);
+  return {
+    messages: all.slice(Math.max(0, all.length - take)),
+    hasOlder: all.length > take,
+    totalCount: all.length,
+  };
 }
 
 /**
@@ -310,15 +435,21 @@ export async function recordIncomingMessage(params: {
   } else {
     const needsReply = deriveNeedsReply(params.externalSentAt, conversation.lastOutgoingAt ?? null);
     const status = deriveConversationStatus(needsReply, true, conversation.status);
+    // 対応済みの会話へ新しい問い合わせが来たら、対応済みを解除して
+    // 通常業務へ戻す(指示書§12/§26)。会話も画像も消さない ——
+    // 状態だけを戻すので、過去のやり取りはそのまま残る。
+    const reopened = conversation.workflowStatus === "COMPLETED";
     await serverDataClient.models.Conversation.update(
       {
         id: conversation.id,
         status,
         needsReply,
         unreadCount: (conversation.unreadCount ?? 0) + 1,
+        isUnread: true,
         lastMessagePreview: preview,
         lastMessageAt: params.externalSentAt,
         lastIncomingAt: params.externalSentAt,
+        ...(reopened ? { workflowStatus: "NEW" as const, completedAt: null, completedBy: null } : {}),
       },
       inventoryAuthMode,
     );
@@ -430,10 +561,28 @@ export async function sendReply(conversationId: string, messageId: string, who: 
   return toMessageRecord(message);
 }
 
-/** §42: 会話を「解決済み」へ手動で移す(needsReplyの自動判定の対象外にする)。 */
+/**
+ * 会話を「対応済み」へ手動で移す。
+ *
+ * 2026-09-02: UI上の「解決済み」は廃止し「対応済み」に統一した
+ * (指示書§7)。既存の Conversation.status="RESOLVED" は**消さない**
+ * —— 過去にこの状態にした会話の履歴を壊さないため。新しい正本は
+ * workflowStatus="COMPLETED" で、こちらを両方立てて互換を保つ。
+ *
+ * needsReply を false にはしない。返信状態は「最新の受信より後に
+ * 返信したか」という事実で、対応済みかどうかとは別の軸だから
+ * (指示書§9/§24)。対応済みは一覧のスコープで除外される。
+ */
 export async function resolveConversation(conversationId: string, who: string | null): Promise<void> {
   await serverDataClient.models.Conversation.update(
-    { id: conversationId, status: "RESOLVED", needsReply: false, updatedBy: who ?? undefined },
+    {
+      id: conversationId,
+      status: "RESOLVED",
+      workflowStatus: "COMPLETED",
+      completedAt: new Date().toISOString(),
+      completedBy: who ?? undefined,
+      updatedBy: who ?? undefined,
+    },
     inventoryAuthMode,
   );
 }
