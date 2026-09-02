@@ -60,16 +60,6 @@ export default async function InventorySettingsPage() {
   // (それぞれが内部で独立に読むため)。TOKEN・クライアント名・検証状態は
   // すべて同じpayloadに同居しているので、getMercariConnectionState()で
   // 1回だけ読む(夜間統合指示書 2026-09-01 §6.2の不要なfetch削減)。
-  const [categories, locations, units, customFields, zaicoTokenSource, mercariState, lineTokenSource] = await Promise.all([
-    listAllMasterEntries("Category"),
-    listAllMasterEntries("Location"),
-    listAllMasterEntries("Unit"),
-    listAllCustomFieldDefinitions(),
-    getZaicoTokenSource(),
-    getMercariConnectionState(),
-    getLineTokenSource(),
-  ]);
-
   // BASEの接続状態(§4.2)。既存の特集ページ連携設定をそのまま参照する
   // だけで、BELLO側に新しいBASE認証情報は作らない。
   //
@@ -78,9 +68,26 @@ export default async function InventorySettingsPage() {
   // `redirect_uri_mismatch` は原因が最も分かりにくい失敗になる
   // (lib/base/redirectUri.ts)。Amplify HostingはCloudFrontの背後に
   // あるので、ブラウザから見えるホストは x-forwarded-host に入る。
+  //
+  // headers() は同期なので host は即座に決まる —— getBaseConnectionState は
+  // 上の7件に何も依存していない。以前は Promise.all の**後ろ**で単独に
+  // awaitしており、Secrets Managerへの往復が1つだけ直列に後ろへ
+  // ぶら下がっていた。この画面は外部サービスの接続状態を4つ読む
+  // (ZAICO / Mercari / LINE / BASE)ので、そのうち1つが直列なのは効く。
   const requestHeaders = headers();
   const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
-  const baseConnection = await getBaseConnectionState(host);
+
+  const [categories, locations, units, customFields, zaicoTokenSource, mercariState, lineTokenSource, baseConnection] =
+    await Promise.all([
+      listAllMasterEntries("Category"),
+      listAllMasterEntries("Location"),
+      listAllMasterEntries("Unit"),
+      listAllCustomFieldDefinitions(),
+      getZaicoTokenSource(),
+      getMercariConnectionState(),
+      getLineTokenSource(),
+      getBaseConnectionState(host),
+    ]);
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
   // とgetZaicoTokenSource()を両方呼ぶと同じ呼び出しが2回発生していた)。
