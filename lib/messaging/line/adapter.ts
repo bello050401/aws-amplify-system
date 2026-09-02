@@ -1,5 +1,6 @@
 import "server-only";
 import { getLineAccessToken } from "./tokenAccess";
+import { assertLineOutboundAllowed } from "./outboundGuard";
 import type { LineWebhookBody, LineWebhookEvent, NormalizedLineIncomingMessage, LineContentKind } from "./types";
 
 /**
@@ -39,6 +40,17 @@ function classifyLineHttpStatus(status: number, bodyText: string): LineApiError 
 }
 
 async function callLineApi(path: string, accessToken: string, body: unknown): Promise<void> {
+  // ★ BELLO → 外部LINE の実送信ハードロック(2026-09-02 指示書§K)。
+  //
+  // ここは LINE Messaging API へ実際にHTTPリクエストを出す**唯一の**
+  // 場所。呼び出し側(UI / server action / API route / worker / retry /
+  // 直接呼び出し)ごとに判定を置くと経路が増えるたびに1つ抜け、抜けた
+  // 1本が実顧客への誤送信になる。だから入口ではなく出口で止める。
+  //
+  // 既定は無効。LINE_OUTBOUND_ENABLED=true を明示的に設定した場合だけ
+  // 送信できる(lib/messaging/line/outboundGuard.ts)。
+  assertLineOutboundAllowed();
+
   let res: Response;
   try {
     res = await fetch(`${LINE_API_BASE}${path}`, {
@@ -57,6 +69,11 @@ async function callLineApi(path: string, accessToken: string, body: unknown): Pr
 
 /** §46: 人が確認した返信本文をLINEの相手(userId)へpushメッセージとして送る。 */
 export async function sendLinePush(userId: string, text: string): Promise<void> {
+  // 送信できないと決まっているなら、認証情報すら取りに行かない。
+  // (callLineApi 側にも同じ判定がある —— あちらが最後の砦、こちらは
+  //  「無効なのにSecrets Managerを叩く」無駄と、失敗理由が
+  //  CONFIG_REQUIRED にすり替わるのを防ぐため。)
+  assertLineOutboundAllowed();
   const accessToken = await getLineAccessToken();
   if (!accessToken) throw new LineApiError("CONFIG_REQUIRED", "LINE Channel Access Tokenが設定されていません。設定画面のLINEタブから登録してください。");
   await callLineApi("/v2/bot/message/push", accessToken, { to: userId, messages: [{ type: "text", text }] });
@@ -64,6 +81,7 @@ export async function sendLinePush(userId: string, text: string): Promise<void> 
 
 /** 受信直後の即時応答用(現状未使用 — ファイル冒頭コメント参照)。 */
 export async function sendLineReply(replyToken: string, text: string): Promise<void> {
+  assertLineOutboundAllowed();
   const accessToken = await getLineAccessToken();
   if (!accessToken) throw new LineApiError("CONFIG_REQUIRED", "LINE Channel Access Tokenが設定されていません。");
   await callLineApi("/v2/bot/message/reply", accessToken, { replyToken, messages: [{ type: "text", text }] });

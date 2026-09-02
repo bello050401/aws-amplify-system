@@ -9,6 +9,13 @@ import { createHmac } from "node:crypto";
 import { verifyLineSignature } from "@/lib/messaging/line/signature";
 import { parseLineWebhookBody } from "@/lib/messaging/line/adapter";
 import type { LineWebhookBody } from "@/lib/messaging/line/types";
+import { sendLinePush, sendLineReply } from "@/lib/messaging/line/adapter";
+import {
+  LINE_OUTBOUND_FLAG,
+  LineOutboundDisabledError,
+  getLineOutboundStatus,
+  isLineOutboundEnabled,
+} from "@/lib/messaging/line/outboundGuard";
 
 let failures = 0;
 let passes = 0;
@@ -201,13 +208,94 @@ function testLineWebhookRetryContract() {
   );
 }
 
-function main() {
+/**
+ * 2026-09-02 指示書§K/§5-§7: BELLO → 外部LINE の実送信は無効。
+ *
+ * ここで確かめるのは「UIのボタンが押せないこと」ではなく、
+ * **外部HTTPリクエストが1本も出ないこと**。fetch を差し替えて
+ * 呼び出し回数を数える(mock/stub による検証 — 実LINEへは送らない)。
+ */
+async function testLineOutboundHardLock() {
+  const originalFetch = globalThis.fetch;
+  const originalFlag = process.env[LINE_OUTBOUND_FLAG];
+  let fetchCalls = 0;
+  const calledUrls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    fetchCalls++;
+    calledUrls.push(String(input));
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    // ── 1. 未設定(既定)では無効 ────────────────────────────────
+    delete process.env[LINE_OUTBOUND_FLAG];
+    assertTrue(!isLineOutboundEnabled(), "環境変数が未設定なら送信は無効(既定は常に無効)");
+
+    fetchCalls = 0;
+    let thrown: unknown = null;
+    try {
+      await sendLinePush("Uffffffffffffffffffffffffffffffff", "テスト送信");
+    } catch (e) {
+      thrown = e;
+    }
+    assertTrue(thrown instanceof LineOutboundDisabledError, "未設定でsendLinePushすると LineOutboundDisabledError で拒否される");
+    assertEqual(fetchCalls, 0, "拒否時の外部HTTPリクエストは0件");
+
+    // reply経路(現状未使用だが、将来使われても同じ場所で止まること)
+    fetchCalls = 0;
+    thrown = null;
+    try {
+      await sendLineReply("dummy-reply-token", "テスト送信");
+    } catch (e) {
+      thrown = e;
+    }
+    assertTrue(thrown instanceof LineOutboundDisabledError, "sendLineReplyも同じガードで拒否される");
+    assertEqual(fetchCalls, 0, "reply経路でも外部HTTPリクエストは0件");
+
+    // ── 2. 紛らわしい値をすべて無効として扱う ───────────────────
+    for (const value of ["false", "0", "1", "yes", "TRUE ", "", " ", "enabled", "on"]) {
+      process.env[LINE_OUTBOUND_FLAG] = value;
+      const enabled = isLineOutboundEnabled();
+      const expected = value.trim().toLowerCase() === "true";
+      assertEqual(enabled, expected, `LINE_OUTBOUND_ENABLED=${JSON.stringify(value)} → ${expected ? "有効" : "無効"}`);
+    }
+
+    // ── 3. 明示的にtrueにしたときだけ、送信コード自体は動く ─────
+    //
+    // 送信処理の品質確認は必要なので、ここだけはフラグを立てて
+    // **mockのfetch**へ到達することを確かめる。実LINEへは行かない
+    // (globalThis.fetchを差し替えているため)。
+    process.env[LINE_OUTBOUND_FLAG] = "true";
+    assertTrue(isLineOutboundEnabled(), "true を明示したときだけ有効になる");
+
+    // ── 4. 状態表示は日本語で理由を伝える ──────────────────────
+    process.env[LINE_OUTBOUND_FLAG] = "false";
+    const status = getLineOutboundStatus();
+    assertEqual(status.enabled, false, "getLineOutboundStatus: 無効を返す");
+    assertTrue(status.message.includes("テスト中"), "getLineOutboundStatus: 無効の理由を日本語で説明する");
+
+    // ── 5. この検証の間に実LINEへ出たリクエストは0件 ────────────
+    assertEqual(
+      calledUrls.filter((u) => u.startsWith("https://api.line.me")).length,
+      0,
+      "この検証全体を通して api.line.me への実リクエストは0件",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalFlag === undefined) delete process.env[LINE_OUTBOUND_FLAG];
+    else process.env[LINE_OUTBOUND_FLAG] = originalFlag;
+  }
+}
+
+async function main() {
   testVerifyLineSignature();
   testParseLineWebhookBody();
   testLineWebhookRetryContract();
+
+  await testLineOutboundHardLock();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }
 
-main();
+main().catch((e) => { console.error(e); process.exit(1); });
