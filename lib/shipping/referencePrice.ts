@@ -1,4 +1,4 @@
-import type { ShippingRank } from "./rank";
+import type { AxisEvidence, ShippingRank } from "./rank";
 import type { ShippingRateRecord } from "./types";
 
 /**
@@ -76,12 +76,36 @@ export interface RegionPriceRow {
 /** 第六ラウンド§9/§84: サービス対象外(price=null)の代表地域は「配送不可/要確認」として区別する——0円扱いにしない。 */
 export type RepresentativeRegionRow = RegionPriceRow | { label: string; prefecture: string; status: "NO_DATA" } | { label: string; prefecture: string; status: "UNAVAILABLE" };
 
+/**
+ * 送料判定の「計測根拠」(2026-09-02 指示書§13)。
+ *
+ * どの寸法欄をどう読み、何を送料判定から**除外**し、3辺合計がいくらで
+ * どのランクになったのかを、そのまま画面に出せる形で持つ。
+ * 「どの寸法で判定されたのか」を利用者が一目で確認できることが要件。
+ */
+export interface ShippingMeasurementEvidence {
+  /** 常に「最大外形3辺の合計」。将来別方式が増えたときに何で判定したかが残るようにする。 */
+  method: "最大外形3辺の合計";
+  axes: AxisEvidence[];
+  sumCm: number;
+  rank: ShippingRank;
+  /** 送料判定に使った Inventory の項目名(管理者向け)。 */
+  inventoryFieldsUsed: string[];
+}
+
+/** ShippingRateに登録されている1地域ぶんの料金(全地域参照UI用)。 */
+export type RegionRateRow =
+  | { prefecture: string; area: string | null; price: number; total: number; diffFromMedian: number; status: "OK" }
+  | { prefecture: string; area: string | null; status: "UNAVAILABLE" };
+
 export type ShippingReferencePriceView =
   | {
       status: "INSUFFICIENT_DATA";
       /** 何件・何地域の検証済み料金が現時点であるか(UIの「送料データ不足」表示に添えるための実数)。 */
       availableRegionCount: number;
       requiredRegionCount: number;
+      /** データ不足でも計測根拠は出す — 「なぜこのランクなのか」は分かるべき。 */
+      measurement: ShippingMeasurementEvidence | null;
     }
   | {
       status: "OK";
@@ -93,6 +117,13 @@ export type ShippingReferencePriceView =
       representativeRegions: RepresentativeRegionRow[];
       /** §31.3: 代表地域以外で、中央値との差額が2,000円以上の地域(価格帯でグルーピング済み)。 */
       notableDifferenceRegions: RegionPriceRow[];
+      /**
+       * 2026-09-02 指示書§16/§17: このランクで ShippingRate に登録されて
+       * いる**全地域**。代表3地域のハードコードだけでデータの有無を判断
+       * しないため、UIは常にこちらを参照できる。
+       */
+      allRegions: RegionRateRow[];
+      measurement: ShippingMeasurementEvidence | null;
     };
 
 /**
@@ -113,13 +144,19 @@ export function buildShippingReferencePriceView(input: {
   plannedPrice: number;
   rank: ShippingRank;
   verifiedRates: ShippingRateRecord[];
+  measurement?: ShippingMeasurementEvidence | null;
 }): ShippingReferencePriceView {
   const pricedRates = input.verifiedRates.filter((r): r is ShippingRateRecord & { price: number } => r.price != null);
   const unavailableByPrefecture = new Map(input.verifiedRates.filter((r) => r.price == null).map((r) => [r.destinationPrefecture, r] as const));
 
   const distinctPrefectures = new Set(pricedRates.map((r) => r.destinationPrefecture));
   if (distinctPrefectures.size < MIN_DISTINCT_REGIONS_FOR_MEDIAN) {
-    return { status: "INSUFFICIENT_DATA", availableRegionCount: distinctPrefectures.size, requiredRegionCount: MIN_DISTINCT_REGIONS_FOR_MEDIAN };
+    return {
+      status: "INSUFFICIENT_DATA",
+      availableRegionCount: distinctPrefectures.size,
+      requiredRegionCount: MIN_DISTINCT_REGIONS_FOR_MEDIAN,
+      measurement: input.measurement ?? null,
+    };
   }
 
   const prices = pricedRates.map((r) => r.price).sort((a, b) => a - b);
@@ -158,5 +195,35 @@ export function buildShippingReferencePriceView(input: {
       diffFromMedian: price - medianShipping,
     }));
 
-  return { status: "OK", plannedPrice: input.plannedPrice, rank: input.rank, medianShipping, referenceTotal, representativeRegions, notableDifferenceRegions };
+  // §17: 登録済みの全地域を一覧できる形で返す。行数は多いが、UIが
+  // 「主要地域だけ表示 → 展開で全件」を選べるようにするのはUI側の仕事で、
+  // データを絞るのはここの仕事ではない(絞ると「登録済みなのにデータ不足」
+  // の再発を招く)。
+  const allRegions: RegionRateRow[] = [
+    ...pricedRates.map(
+      (r): RegionRateRow => ({
+        prefecture: r.destinationPrefecture,
+        area: r.destinationArea,
+        price: r.price,
+        total: input.plannedPrice + r.price,
+        diffFromMedian: r.price - medianShipping,
+        status: "OK",
+      }),
+    ),
+    ...[...unavailableByPrefecture.values()].map(
+      (r): RegionRateRow => ({ prefecture: r.destinationPrefecture, area: r.destinationArea, status: "UNAVAILABLE" }),
+    ),
+  ].sort((a, b) => a.prefecture.localeCompare(b.prefecture, "ja"));
+
+  return {
+    status: "OK",
+    plannedPrice: input.plannedPrice,
+    rank: input.rank,
+    medianShipping,
+    referenceTotal,
+    representativeRegions,
+    notableDifferenceRegions,
+    allRegions,
+    measurement: input.measurement ?? null,
+  };
 }

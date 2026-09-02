@@ -5,7 +5,14 @@
  *
  * Run with: npm run verify:shipping
  */
-import { calculateShippingRankFromSum, calculateShippingRankFromDimensions, parseDimensionCm, SHIPPING_RANKS } from "@/lib/shipping/rank";
+import {
+  calculateShippingRankFromSum,
+  calculateShippingRankFromDimensions,
+  calculateShippingRankFromDimensionsDetailed,
+  parseDimensionCm,
+  resolveOuterDimensionCm,
+  SHIPPING_RANKS,
+} from "@/lib/shipping/rank";
 import type { ShippingRank } from "@/lib/shipping/rank";
 import { SHIPPING_RATE_SEED, HOKKAIDO_AREA_BY_MUNICIPALITY, HOKKAIDO_AREAS, lookupShippingRate, resolveHokkaidoArea } from "@/lib/shipping/ratesSeed";
 import { calculateMedian, pickLatestPerPrefecture, buildShippingReferencePriceView, MIN_DISTINCT_REGIONS_FOR_MEDIAN, REGION_DIFFERENCE_THRESHOLD_YEN } from "@/lib/shipping/referencePrice";
@@ -483,6 +490,86 @@ function testShippingCsv() {
   assertEqual(changed.map((c) => c.destinationPrefecture), ["大阪府", "京都府"], "CSV: 値が変わった行と新しい行だけを書く(同じ値は書き直さない)");
 }
 
+/**
+ * 2026-09-02 指示書§8-§12/§20: 送料判定は「家具を収める最大外形の3辺」。
+ * SH(座面高)・AH(肘高)・座面寸法を混ぜてはいけない。
+ *
+ * 固定回帰ケースは指示書が名指しした Anonymous Lounge Chair
+ * (W72 × D71 × H81 → 3辺合計224cm → Cランク)と、Staging実データの
+ * HAY REVOLVER BAR STOOL HIGH(幅欄に「座面直径34」しか無い)。
+ */
+function testOuterDimensionExcludesSeatAndArm() {
+  // 素の数値はそのまま外形として使う。
+  assertEqual(resolveOuterDimensionCm("72").valueCm, 72, "外形: 素の数値");
+  assertEqual(resolveOuterDimensionCm("72cm").valueCm, 72, "外形: 単位付き");
+
+  // 1つの欄に複数の寸法。外形として使えるものの最大値を採る。
+  const height = resolveOuterDimensionCm("75 フットレスト高さ25.5");
+  assertEqual(height.valueCm, 75, "外形: 複数値なら最大値(75 / フットレスト25.5)");
+
+  // SH / AH / 座面 は除外する。
+  assertEqual(resolveOuterDimensionCm("SH45").valueCm, null, "SHのみ → 送料判定に使えない");
+  assertEqual(resolveOuterDimensionCm("AH65").valueCm, null, "AHのみ → 送料判定に使えない");
+  assertEqual(resolveOuterDimensionCm("座面高45").valueCm, null, "座面高のみ → 送料判定に使えない");
+  assertEqual(resolveOuterDimensionCm("座面直径34").valueCm, null, "座面直径のみ → 送料判定に使えない(実データ B005610 の幅欄)");
+  assertEqual(resolveOuterDimensionCm("座面奥行き43座面高さ44").valueCm, null, "座面寸法だけの欄 → 使えない");
+
+  // 除外した理由が残ること(画面に出すため)。
+  const seat = resolveOuterDimensionCm("座面直径34");
+  assertEqual(seat.excluded.length, 1, "除外した候補が記録される");
+  assertTrue(seat.excluded[0].reason.includes("座面"), "除外理由に座面寸法である旨が入る");
+
+  // 外形とSHが同居する場合、外形だけを採る(SHの方が大きいことは無いが、
+  // 「数字が3つあるから選ぶ」実装を禁止するためラベルで判定する)。
+  const both = resolveOuterDimensionCm("全高81 SH45");
+  assertEqual(both.valueCm, 81, "全高81 / SH45 → 81");
+  assertEqual(both.excluded.length, 1, "SHは除外候補として残る");
+
+  // 3辺合計が書かれていても1辺として足さない。
+  assertEqual(resolveOuterDimensionCm("3辺合計224").valueCm, null, "3辺合計は1辺ではない");
+
+  // 脚幅は座面寸法ではない —— 外形として使う(実データ B005610 の奥行欄)。
+  assertEqual(resolveOuterDimensionCm("脚幅44").valueCm, 44, "脚幅は外形として使う");
+}
+
+function testAnonymousLoungeChairFixedCase() {
+  const r = calculateShippingRankFromDimensions("72", "71", "81");
+  assertTrue(r !== null, "Anonymous Lounge Chair: 3辺そろえば判定できる");
+  assertEqual(r!.widthCm, 72, "W = 72");
+  assertEqual(r!.depthCm, 71, "D = 71");
+  assertEqual(r!.heightCm, 81, "H = 81");
+  assertEqual(r!.sumCm, 224, "3辺合計 = 224cm");
+  assertEqual(r!.rank, "C", "224cm → Cランク（〜250cm）");
+
+  // SH/AHが併記されていても結果が変わらないこと(指示書§10の禁止例)。
+  const withSeat = calculateShippingRankFromDimensions("72", "71", "81 SH45 AH65");
+  assertEqual(withSeat!.sumCm, 224, "SH45/AH65が併記されても3辺合計は224のまま");
+  assertEqual(withSeat!.rank, "C", "SH/AHを混ぜても同じCランク");
+
+  // 禁止された組合せ(W+D+SH = 72+71+45 = 188 → Bランク)には絶対にならない。
+  assertTrue(withSeat!.sumCm !== 188, "W+D+SH(188cm/Bランク)にはならない");
+}
+
+function testDetailedFailureExplainsWhy() {
+  // 実データ: 幅が「座面直径34」しか無い → 判定不能だが、理由が分かる。
+  const r = calculateShippingRankFromDimensionsDetailed("座面直径34", "脚幅44", "75 フットレスト高さ25.5");
+  assertTrue(!("rank" in r), "座面寸法しか無い軸があればランク判定しない");
+  if (!("rank" in r)) {
+    assertEqual(r.missingAxes.length, 1, "足りない軸は幅の1つだけ");
+    assertEqual(r.missingAxes[0].label, "幅", "足りないのは幅");
+    assertEqual(r.axes[1].valueCm, 44, "奥行は44として読めている");
+    assertEqual(r.axes[2].valueCm, 75, "高さは75として読めている(フットレスト25.5ではない)");
+  }
+}
+
+function testRankBoundariesOffByOne() {
+  // 指示書§18: 境界で1ランクずれないこと。
+  assertEqual(calculateShippingRankFromSum(200), "B", "200cm → B");
+  assertEqual(calculateShippingRankFromSum(201), "C", "201cm → C");
+  assertEqual(calculateShippingRankFromSum(250), "C", "250cm → C");
+  assertEqual(calculateShippingRankFromSum(251), "D", "251cm → D");
+}
+
 function main() {
   testShippingCsv();
   testCalculateShippingRankFromSum();
@@ -505,6 +592,11 @@ function main() {
   testShippingRankLimitsMatchSource();
   testShippingRateKeyDistinguishesHokkaidoAreas();
   testShippingRateSeedKeysAreUnique();
+
+  testOuterDimensionExcludesSeatAndArm();
+  testAnonymousLoungeChairFixedCase();
+  testDetailedFailureExplainsWhy();
+  testRankBoundariesOffByOne();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
