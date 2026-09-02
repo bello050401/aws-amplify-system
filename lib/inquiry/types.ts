@@ -129,6 +129,77 @@ export interface ExternalResearchFact {
   modelEvidence?: string;
 }
 
+/**
+ * 値下げ交渉の判定結果(管理画面の「参照情報」に出す)。
+ * 顧客向け本文へは一切渡さない。
+ */
+export interface NegotiationEvidence {
+  detected: boolean;
+  /** そう判断した根拠(「〜になりませんか」「数量 2脚」等)。 */
+  signals: string[];
+  quantity: number | null;
+  requestedTotalPriceYen: number | null;
+  requestedUnitPriceYen: number | null;
+  /** 今回の本文からではなく、会話の過去の問い合わせから引き継いだか。 */
+  carriedOverFromHistory: boolean;
+  /** 配送先が未確定のため、値下げ可否より先に地域を確認する段階か。 */
+  awaitingDestination: boolean;
+}
+
+/**
+ * 管理者向けの値下げ判断カード(指示書§6)。
+ *
+ * **顧客向けの返信本文へは絶対に渡さない。** 仕入価格・販売開始日時・
+ * 経過日数を含むため、customer-safe な事実とは型ごと分けてある
+ * (lib/inquiry/pipeline.ts は trustedProductFacts と別の変数で扱い、
+ *  プロンプト組み立て関数にはこの型を渡す口が無い)。
+ */
+export interface NegotiationStaffCard {
+  productName: string | null;
+  baseItemId: string | null;
+  baseItemUrl: string | null;
+  baseListedPriceYen: number | null;
+  inventoryId: string | null;
+  displayInventoryId: string | null;
+  quantity: number | null;
+  /** 現在販売価格(単価)。 */
+  unitSalePriceYen: number | null;
+  /** 現在販売価格(数量合計)。 */
+  totalSalePriceYen: number | null;
+  requestedTotalPriceYen: number | null;
+  requestedUnitPriceYen: number | null;
+  /** 希望値引率(現在価格に対する)。0.12 = 12%。 */
+  requestedDiscountRate: number | null;
+  /** staff-only。 */
+  purchaseUnitPriceYen: number | null;
+  /** staff-only。 */
+  purchaseTotalPriceYen: number | null;
+  /** staff-only。 */
+  saleStartDate: string | null;
+  /** staff-only。 */
+  daysOnSale: number | null;
+  shippingRank: string | null;
+  /** 送料判定に使った最大外形3辺(表示用)。 */
+  shippingDimensionText: string | null;
+  shippingSumCm: number | null;
+  destinationPrefecture: string | null;
+  shippingFeeYen: number | null;
+  /** 送料込みの採算情報(現在価格 + 送料)。 */
+  totalWithShippingYen: number | null;
+  /** 7%値引き基準額(単価)。 */
+  baseDiscountedUnitPriceYen: number | null;
+  /** 7%値引き後の数量合計。 */
+  baseDiscountedTotalPriceYen: number | null;
+  /** 希望額との差額(希望額 − 7%値引き後合計)。負なら希望のほうが安い。 */
+  differenceFromRequestedYen: number | null;
+  /** 公式LINE＋請求書払い条件の適用可否。 */
+  officialLinePaymentCondition: { applicable: boolean; reason: string; sourceDocumentTitle: string | null };
+  /** AIではなくコードが出した判断理由。 */
+  decisionNotes: string[];
+  /** 判断に足りていない情報。 */
+  missingInformation: string[];
+}
+
 /** §33 参照情報。管理画面にだけ出す(顧客へは送らない)。 */
 export interface ReplyEvidence {
   product: { inventoryId: string; displayInventoryId: string; name: string; confidence: number } | null;
@@ -144,6 +215,14 @@ export interface ReplyEvidence {
   /** Web検索(課金対象)を実際に呼んだ回数。在庫DB・ナレッジで答えられた場合は0。 */
   webSearchCallCount?: number;
   unresolvedFacts: UnresolvedFact[];
+  /** URLから特定できたBASE商品。在庫紐付けが未確定でも「どこまで特定できたか」を示す。 */
+  baseProducts?: { baseItemId: string; title: string; price: number | null; itemUrl: string | null }[];
+  /** 値下げ交渉の判定結果。 */
+  negotiation?: NegotiationEvidence | null;
+  /** 管理者向けの値下げ判断カード(顧客本文へは渡らない)。 */
+  staffCard?: NegotiationStaffCard | null;
+  /** どの生成ルートを通ったか(「参照情報を表示」の診断用)。 */
+  generationRoute?: string;
 }
 
 /** §10 送料回答の根拠。金額はすべて既存のShippingRateマスタ由来。 */

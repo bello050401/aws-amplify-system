@@ -40,6 +40,10 @@ import { extractModelHintsFromName, identifyResearchableFields, normalizeMessage
 import { classifySource, extractFieldValue, isFetchableExternalUrl, isGuidanceText, researchMissingFacts } from "@/lib/inquiry/research/service";
 import { buildSearchQuery, parseWebSearchResults, WEB_SEARCH_QUERY_MAX_CHARS } from "@/lib/inquiry/research/agentCoreProvider";
 import { allOfficialDomains, brandsInText, officialDomainsForBrands } from "@/lib/inquiry/research/officialDomains";
+import { extractNegotiation, extractAmounts, extractQuantity, resolveNegotiationContext } from "@/lib/inquiry/negotiation";
+import { evaluateOfficialLinePaymentCondition } from "@/lib/inquiry/negotiationService";
+import { detectDiscountIntent } from "@/lib/inquiry/discount";
+import { normalizeProductTitle } from "@/lib/inquiry/scoring";
 
 let failures = 0;
 let passes = 0;
@@ -776,7 +780,133 @@ function testUncertainFactsAreNotGivenToAi() {
 
 const EMPTY_FACTS: CustomerSafeFacts = { name: "", dimensions: null, categoryName: null, conditionDisclosure: null, publicNote: null };
 
+/**
+ * 2026-09-02 指示書§3: 値下げ交渉の構造化抽出。
+ *
+ * 固定実例「こちら2脚で6万円になりませんか」には「値下げ」「値引き」
+ * 「安く」「交渉」のどれも現れない。キーワード表だけでは交渉として
+ * 認識できず、一般的な「値引き不可」文面が生成されていた。
+ */
+function testNegotiationExtraction() {
+  const fixed = extractNegotiation("こちら2脚で6万円になりませんか");
+  assertTrue(fixed.isNegotiation, "固定実例を値下げ交渉として認識する");
+  assertEqual(fixed.quantity, 2, "数量 = 2(「2脚」)");
+  assertEqual(fixed.requestedTotalPriceYen, 60000, "希望総額 = 60,000円(「6万円」)");
+  assertEqual(fixed.requestedUnitPriceYen, 30000, "希望単価 = 30,000円");
+
+  // 既存のキーワード判定では認識できなかったことを固定しておく
+  // (この行が落ちたら、どちらかの実装が変わったということ)。
+  assertTrue(!extractIntents("こちら2脚で6万円になりませんか").includes("NEGOTIATION"), "キーワード表単独では交渉と判定できない(この不具合の原因)");
+  assertTrue(!detectDiscountIntent("こちら2脚で6万円になりませんか"), "既存の値下げ正規表現でも交渉と判定できない");
+
+  // 金額表記のゆれ
+  assertEqual(extractAmounts("60,000円")[0]?.yen, 60000, "60,000円");
+  assertEqual(extractAmounts("6万円")[0]?.yen, 60000, "6万円");
+  assertEqual(extractAmounts("6万5千円")[0]?.yen, 65000, "6万5千円");
+  assertEqual(extractAmounts("3.5万円")[0]?.yen, 35000, "3.5万円");
+  assertEqual(extractAmounts("六万円")[0]?.yen, 60000, "六万円");
+  assertEqual(extractAmounts("２脚で６万円")[0]?.yen, 60000, "全角の6万円");
+  assertEqual(extractAmounts("2脚").length, 0, "「2脚」を金額として読まない");
+  assertEqual(extractAmounts("155832757").length, 0, "商品IDを金額として読まない");
+
+  // 数量
+  assertEqual(extractQuantity("2脚")?.value, 2, "2脚");
+  assertEqual(extractQuantity("二台")?.value, 2, "二台");
+  assertEqual(extractQuantity("3点セット")?.value, 3, "3点");
+  assertEqual(extractQuantity("2つ")?.value, 2, "2つ");
+  assertEqual(extractQuantity("1万円"), null, "「1万円」の1を数量として読まない");
+  assertEqual(extractQuantity("サイズを教えてください"), null, "数量が無ければnull");
+
+  // 交渉ではないもの
+  assertTrue(!extractNegotiation("サイズを教えてください").isNegotiation, "通常の問い合わせは交渉ではない");
+  assertTrue(!extractNegotiation("この商品は6万円です").isNegotiation, "金額の記述だけでは交渉ではない");
+  assertTrue(!extractNegotiation("送料はいくらですか").isNegotiation, "送料の質問は交渉ではない");
+
+  // 明示的な交渉語は金額が無くても交渉
+  assertTrue(extractNegotiation("値下げは可能ですか").isNegotiation, "「値下げは可能ですか」");
+  assertTrue(extractNegotiation("もう少しお安くなりませんか").isNegotiation, "「お安くなりませんか」");
+  assertEqual(extractNegotiation("値下げは可能ですか").requestedTotalPriceYen, null, "金額が書かれていなければ希望額はnull");
+
+  // その他の言い回し
+  assertTrue(extractNegotiation("5万円なら購入します").isNegotiation, "「〜なら購入します」");
+  assertTrue(extractNegotiation("二脚まとめて10万円でいかがですか").isNegotiation, "「まとめて〜でいかがですか」");
+  assertEqual(extractNegotiation("二脚まとめて10万円でいかがですか").requestedUnitPriceYen, 50000, "まとめ買いの単価 = 総額 ÷ 数量");
+}
+
+/**
+ * §14後半 / §16: 配送先の回答だけを引き継ぎ、通常の問い合わせは引き継がない。
+ */
+function testNegotiationCarryOver() {
+  const history = [{ direction: "INBOUND" as const, body: "こちら2脚で6万円になりませんか" }];
+
+  const carried = resolveNegotiationContext({ currentText: "埼玉県です", history, currentHasDestination: true });
+  assertTrue(carried.isNegotiation, "配送先の回答では直前の交渉条件を引き継ぐ");
+  assertEqual(carried.quantity, 2, "引き継いだ数量");
+  assertEqual(carried.requestedTotalPriceYen, 60000, "引き継いだ希望総額");
+  assertTrue(!carried.fromCurrentMessage, "引き継ぎであることが記録される");
+
+  // ★ 回帰防止(指示書§16): 交渉のあった会話でも、通常の問い合わせに
+  //    配送先を聞き返すようになってはいけない。
+  const normal = resolveNegotiationContext({ currentText: "サイズを教えてください", history, currentHasDestination: false });
+  assertTrue(!normal.isNegotiation, "通常の問い合わせは交渉として扱わない");
+  const condition = resolveNegotiationContext({ currentText: "商品の状態を教えてください", history, currentHasDestination: false });
+  assertTrue(!condition.isNegotiation, "状態の問い合わせも交渉として扱わない");
+
+  // 交渉のない会話で配送先だけ言われても、交渉にはしない。
+  const noPrior = resolveNegotiationContext({
+    currentText: "埼玉県です",
+    history: [{ direction: "INBOUND" as const, body: "サイズを教えてください" }],
+    currentHasDestination: true,
+  });
+  assertTrue(!noPrior.isNegotiation, "過去に交渉が無ければ引き継がない");
+}
+
+/** §8: 公式LINE＋請求書払い条件は、チャネルがLINEのときだけ適用可とする。 */
+function testOfficialLineCondition() {
+  const line = evaluateOfficialLinePaymentCondition("LINE");
+  assertTrue(line.applicable, "LINE経由なら適用可");
+  assertEqual(line.sourceDocumentTitle, "BELLO値引き交渉返信ルール", "条件の出所は既存の値引きルール文書");
+  assertTrue(!evaluateOfficialLinePaymentCondition("EMAIL").applicable, "メール経由では自動適用しない(勝手に提示しない)");
+  assertTrue(!evaluateOfficialLinePaymentCondition("MERCARI_SHOPS").applicable, "Mercari経由でも自動適用しない");
+}
+
+/** §2: BASE商品名からの照合。語順違いだけの重複在庫を取り違えない。 */
+function testBaseTitleMatching() {
+  const baseTitle = "HAY REVOLVER BAR STOOL HIGH / デンマーク 北欧 ヘイ リボルバー バースツール ハイスツール デザイナーズ チェア / Leon Ransmeier（Herman Miller）";
+  const mk = (name: string) => ({
+    id: name, displayInventoryId: name, sku: name, name,
+    externalProductId: null, barcode: null, sourceInventoryId: null, listings: [],
+  });
+  const signals = {
+    normalizedUrls: [], baseItemIds: ["155832757"], skus: [], inventoryIds: [],
+    modelNumbers: [], brandNames: [], nameFragments: [], baseTitles: [baseTitle],
+  };
+
+  const exact = scoreInventory(mk("【在庫2】" + baseTitle), signals);
+  const reordered = scoreInventory(mk("【在庫2】HAY REVOLVER BAR STOOL HIGH / 北欧 デンマーク ヘイ リボルバー バースツール ハイスツール デザイナーズ チェア / Leon Ransmeier（Herman Miller）"), signals);
+  const different = scoreInventory(mk("【在庫2】HAY REVOLVER BAR STOOL LOW / 北欧 デンマーク ヘイ リボルバー バースツール"), signals);
+
+  assertTrue(exact.confidence > reordered.confidence, "語順まで一致する在庫が最上位になる");
+  assertTrue(reordered.confidence > different.confidence, "同じHIGHでも語順違いは、別型(LOW)より上位");
+  assertTrue(exact.confidence >= 0.95, "完全一致は自動確定の水準に達する");
+  assertTrue(different.confidence < 0.95, "別型(LOW)は自動確定しない");
+
+  // 【在庫2】等の社内マーカーは比較から外れる。
+  assertEqual(normalizeProductTitle("【在庫2】ABC / DEF"), normalizeProductTitle("ABC / DEF"), "社内マーカーは比較対象から外す");
+
+  // 同名の在庫が2件あれば自動確定しない(勝手に片方へ決めない)。
+  const tie = decideResolution([
+    { inventoryId: "a", displayInventoryId: "a", sku: "a", name: "x", confidence: 0.96, reasons: [], source: "INVENTORY" },
+    { inventoryId: "b", displayInventoryId: "b", sku: "b", name: "x", confidence: 0.96, reasons: [], source: "INVENTORY" },
+  ]);
+  assertEqual(tie.status, "AMBIGUOUS", "同名の在庫が2件なら自動確定せず人の確認へ回す");
+}
+
 async function main() {
+  testNegotiationExtraction();
+  testNegotiationCarryOver();
+  testOfficialLineCondition();
+  testBaseTitleMatching();
   testReferenceExtraction();
   testIntentClassification();
   testProductScoring();

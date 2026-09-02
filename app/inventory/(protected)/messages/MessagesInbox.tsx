@@ -530,13 +530,19 @@ export function MessagesInbox({
                       )}
                       {isAiDraft && <span className="text-[10px] text-gray-400">AI生成（未編集）</span>}
                     </div>
-                    {/* §6.3 曖昧な原文の注意。顧客には送られない、担当者向けの表示。 */}
+                    {/* §6.3 曖昧な原文の注意。顧客には送られない、担当者向けの表示。
+                        エラーではないことが分かる見出しを必ず添える —— 見出しが
+                        無かったため、変換が成功していても「エラーになった」と
+                        受け取られていた。 */}
                     {keigoNotes.length > 0 && (
-                      <ul className="mt-2 border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
+                      <div className="mt-2 border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
+                      <p className="mb-1 font-bold">担当者向けの確認事項（エラーではありません。お客様には送られません）</p>
+                      <ul>
                         {keigoNotes.map((note, i) => (
                           <li key={i}>・{note}</li>
                         ))}
                       </ul>
+                      </div>
                     )}
                   </div>
                 )}

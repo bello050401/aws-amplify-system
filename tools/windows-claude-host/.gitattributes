@@ -1,0 +1,7 @@
+# Windows tooling: keep native line endings so PowerShell and cmd.exe
+# behave identically regardless of the developer's git config.
+*.ps1   text eol=crlf
+*.psd1  text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.md    text

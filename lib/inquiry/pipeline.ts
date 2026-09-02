@@ -7,6 +7,8 @@ import { calculateShippingRankFromDimensions } from "@/lib/shipping/rank";
 import { listSearchableKnowledge } from "@/lib/knowledge/store";
 import { retrieveKnowledge } from "@/lib/knowledge/retrieval";
 import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./intent";
+import { resolveNegotiationContext } from "./negotiation";
+import { resolveNegotiation, type NegotiationInventoryFacts } from "./negotiationService";
 import { resolveProductFromInquiry } from "./productResolver";
 import { getAIReplySettings } from "./settings";
 import { extractShippingDestination, missingShippingInfo } from "./shippingIntent";
@@ -58,14 +60,53 @@ const CUSTOMER_SAFE_INVENTORY_FIELDS = ["商品名", "カテゴリー", "サイ�
 export async function generateInquiryReplyDraft(request: InquiryReplyRequest): Promise<GenerateInquiryReplyResult> {
   const settings = await getAIReplySettings();
   const messageText = normalizeMessage(request.messageText);
-  const intents = extractIntents(messageText);
+
+  // ── 値下げ交渉の判定(指示書§3) ──────────────────────────────
+  //
+  // キーワード表(intent.ts)だけでは「こちら2脚で6万円になりませんか」を
+  // 交渉として認識できなかった —— この文には「値下げ」「値引き」「安く」
+  // 「交渉」のどれも現れない。金額の提示そのものを交渉として扱う
+  // 決定的な抽出(negotiation.ts)を併用する。
+  //
+  // 配送先の回答(「埼玉県です」)だけが届いた場合は、直前の交渉条件を
+  // 引き継ぐ。引き継ぐ条件をここまで狭くしているのは、普通の問い合わせ
+  // にまで配送先を聞き返す回帰を防ぐため(指示書§16)。
+  const destinationFromCurrent = extractShippingDestination(messageText);
+  const negotiation = resolveNegotiationContext({
+    currentText: messageText,
+    history: request.history,
+    currentHasDestination: destinationFromCurrent.prefecture != null,
+  });
+
+  const keywordIntents = extractIntents(messageText);
+  // 交渉と判定したら NEGOTIATION を必ず立てる。OTHER 単独だったものが
+  // NEGOTIATION になるので、OTHER は落とす(意味のないラベルを残さない)。
+  const intents: InquiryIntent[] = negotiation.isNegotiation
+    ? [...new Set<InquiryIntent>(["NEGOTIATION", ...keywordIntents.filter((i) => i !== "OTHER")])]
+    : keywordIntents;
 
   // ── 商品の特定 ────────────────────────────────────────────────
-  const resolution = await resolveProductFromInquiry({
+  // 商品の手がかりは今回の本文に無くても、会話の過去の受信メッセージに
+  // あることがある(「(BASE URL) 2脚で6万円に…」→「埼玉県です」)。
+  // 今回の本文だけで特定できなかった場合に限り、過去の受信本文も足して
+  // もう一度だけ試す —— 常に履歴を混ぜると、話題が変わった会話で
+  // 古い商品を引きずる。
+  let resolution = await resolveProductFromInquiry({
     messageText,
     overrideInventoryId: request.overrideInventoryId ?? null,
     conversationInventoryId: request.conversationInventoryId ?? null,
   });
+  if (!resolution.resolved && negotiation.isNegotiation && !negotiation.fromCurrentMessage) {
+    const inboundHistory = request.history.filter((h) => h.direction === "INBOUND").map((h) => h.body);
+    if (inboundHistory.length > 0) {
+      const retry = await resolveProductFromInquiry({
+        messageText: [...inboundHistory, messageText].join("\n"),
+        overrideInventoryId: request.overrideInventoryId ?? null,
+        conversationInventoryId: request.conversationInventoryId ?? null,
+      });
+      if (retry.resolved) resolution = retry;
+    }
+  }
 
   const unresolved: UnresolvedFact[] = [];
   const inventoryFieldsUsed: string[] = [];
@@ -154,11 +195,64 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   }
 
   // ── 送料(既存のらくらく家財DBを参照。新しいマスタは作らない) ──
+  //
+  // 値下げ交渉でも送料が要る(採算判断に効くため)。ただし配送先が
+  // 未確定のうちは金額を作らない —— resolveShipping は「分からない」を
+  // ちゃんと「分からない」として返す。
+  //
+  // 配送先は今回の本文だけでなく会話全体から探す。「埼玉県です」が
+  // 別のメッセージで届くため。
+  const destinationSearchText = [
+    ...request.history.filter((h) => h.direction === "INBOUND").map((h) => h.body),
+    messageText,
+  ].join("\n");
+  const destinationPrefecture = negotiation.isNegotiation
+    ? extractShippingDestination(destinationSearchText).prefecture
+    : destinationFromCurrent.prefecture;
+
   let shipping: ShippingEvidence | null = null;
-  if (intents.includes("SHIPPING")) {
-    shipping = await resolveShipping({ messageText, inventory });
+  if (intents.includes("SHIPPING") || negotiation.isNegotiation) {
+    shipping = await resolveShipping({
+      messageText: negotiation.isNegotiation ? destinationSearchText : messageText,
+      inventory,
+    });
     for (const missing of shipping.missingCustomerInfo) {
+      // 交渉では市区町村まで求めない —— 指示書§4が求めているのは
+      // 「まず都道府県を確認する」ことなので、そこで止める。
+      if (negotiation.isNegotiation && missing === "お届け先の市区町村") continue;
       unresolved.push({ field: missing, reason: "送料を確定するために必要な情報が不足しています。" });
+    }
+  }
+
+  // ── 値下げ交渉の計算(金額はすべてここで確定する。AIには計算させない) ──
+  let negotiationResult: Awaited<ReturnType<typeof resolveNegotiation>> | null = null;
+  if (negotiation.isNegotiation) {
+    const negotiationInventory: NegotiationInventoryFacts | null =
+      inventory && resolution.resolved
+        ? {
+            inventoryId: resolution.resolved.inventoryId,
+            displayInventoryId: resolution.resolved.displayInventoryId,
+            name: inventory.name,
+            unitSalePriceYen: inventory.salePrice ?? inventory.plannedSalePrice ?? null,
+            unitSalePriceSource:
+              inventory.salePrice != null ? "salePrice" : inventory.plannedSalePrice != null ? "plannedSalePrice" : null,
+            purchasePriceYen: inventory.purchasePrice ?? null,
+            saleStartDate: inventory.saleStartDate ?? null,
+            width: inventory.width,
+            depth: inventory.depth,
+            height: inventory.height,
+          }
+        : null;
+    negotiationResult = await resolveNegotiation({
+      context: negotiation,
+      inventory: negotiationInventory,
+      destinationPrefecture,
+      channel: request.channel,
+      baseProduct: resolution.baseProducts[0] ?? null,
+    });
+    for (const m of negotiationResult.missing) {
+      if (unresolved.some((u) => u.field === m)) continue;
+      unresolved.push({ field: m, reason: "値下げ可否を判断するために必要な情報が不足しています。" });
     }
   }
 
@@ -249,6 +343,15 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     externalFacts: research.facts,
     webSearchCallCount: research.searchCallCount,
     unresolvedFacts: unresolved,
+    baseProducts: resolution.baseProducts.map((b) => ({
+      baseItemId: b.baseItemId,
+      title: b.title,
+      price: b.price,
+      itemUrl: b.itemUrl,
+    })),
+    negotiation: negotiationResult?.evidence ?? null,
+    staffCard: negotiationResult?.staffCard ?? null,
+    generationRoute: negotiation.isNegotiation ? "negotiation" : "standard",
   };
 
   // ── 生成できない条件を先に判定する ────────────────────────────
@@ -274,13 +377,23 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   const systemPrompt = buildInquirySystemPrompt();
   const userPrompt = buildInquiryUserPrompt({
     intents,
-    trustedProductFacts,
+    // 交渉で確定した金額だけを事実として足す。配送先が未確定なら
+    // customerSafeFacts は空なので、AIが提示できる金額が存在しない。
+    trustedProductFacts: [...trustedProductFacts, ...(negotiationResult?.customerSafeFacts ?? [])],
     knowledgeExcerpts: knowledgeHits.map((k) => ({ title: k.title, excerpt: k.excerpt })),
     shipping,
     externalFacts: research.facts,
     unresolved,
     customerMessage: messageText,
     history: request.history.slice(-10),
+    negotiation: negotiationResult
+      ? {
+          awaitingDestination: negotiationResult.evidence.awaitingDestination,
+          quantity: negotiationResult.evidence.quantity,
+          requestedTotalPriceYen: negotiationResult.evidence.requestedTotalPriceYen,
+          customerQuestions: negotiationResult.customerQuestions,
+        }
+      : null,
   });
 
   const allowedShippingFee = shipping?.feeYen ?? null;

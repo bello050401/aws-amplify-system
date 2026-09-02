@@ -170,6 +170,11 @@ export function AiReplyPanel({
             </div>
           )}
 
+          {/* 値下げ交渉のときだけ出す、管理者向けの判断材料。
+              参照情報を開かなくても見える位置に置く —— 値下げの可否は
+              返信を書く前に決める必要があるため。 */}
+          {evidence?.staffCard && <NegotiationStaffCardView card={evidence.staffCard} negotiation={evidence.negotiation ?? null} />}
+
           {evidence && (
             <div>
               <button type="button" onClick={() => setShowEvidence((v) => !v)} className="text-[11px] text-blue-700 underline">
@@ -178,6 +183,138 @@ export function AiReplyPanel({
               {showEvidence && <EvidenceView evidence={evidence} draft={draft} onUseCandidate={(id) => void generate(id)} busy={busy} />}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 管理者向けの値下げ判断カード(2026-09-02 指示書§6)。
+ *
+ * **顧客向けの返信本文には一切出ない情報**(仕入価格・販売開始日時・
+ * 経過日数)を含む。サーバー側で型を分けてあり(NegotiationStaffCard は
+ * 顧客向けプロンプト組み立て関数へ渡す口が無い)、この画面だけが受け取る。
+ */
+function NegotiationStaffCardView({
+  card,
+  negotiation,
+}: {
+  card: NonNullable<NonNullable<ReplyDraftRecord["evidence"]>["staffCard"]>;
+  negotiation: NonNullable<ReplyDraftRecord["evidence"]>["negotiation"];
+}) {
+  const yen = (v: number | null | undefined) => (v == null ? "—" : `${v.toLocaleString("ja-JP")}円`);
+  const pct = (v: number | null | undefined) => (v == null ? "—" : `${(v * 100).toFixed(1)}%`);
+  return (
+    <div className="border border-amber-300 bg-amber-50 p-3 text-[11px] text-gray-800">
+      <p className="mb-2 text-[12px] font-bold text-amber-900">値下げ判断（担当者向け・お客様には送信されません）</p>
+
+      {negotiation?.awaitingDestination && (
+        <p className="mb-2 border border-amber-400 bg-white p-1.5 text-amber-900">
+          お届け先の都道府県が未確認のため、送料が確定していません。値下げの可否・金額はまだ確定できません。
+          まずお届け先をお伺いする段階です。
+        </p>
+      )}
+
+      <dl className="grid grid-cols-[9rem_1fr] gap-y-0.5">
+        <dt>商品名</dt>
+        <dd>{card.productName ?? "—"}</dd>
+        {card.baseItemId && (
+          <>
+            <dt>BASE商品ID</dt>
+            <dd>
+              {card.baseItemId}
+              {card.baseItemUrl ? (
+                <a href={card.baseItemUrl} target="_blank" rel="noreferrer" className="ml-1 text-blue-700 underline">
+                  開く
+                </a>
+              ) : null}
+            </dd>
+            <dt>BASE掲載価格</dt>
+            <dd>{yen(card.baseListedPriceYen)}</dd>
+          </>
+        )}
+        <dt>BELLO在庫ID</dt>
+        <dd>{card.displayInventoryId ?? "未確定（BASE商品は特定済み）"}</dd>
+        <dt>数量</dt>
+        <dd>{card.quantity ?? "（記載なし）"}</dd>
+        <dt>現在販売価格（単価）</dt>
+        <dd>{yen(card.unitSalePriceYen)}</dd>
+        <dt>現在販売価格（合計）</dt>
+        <dd>{yen(card.totalSalePriceYen)}</dd>
+        <dt>お客様希望価格（合計）</dt>
+        <dd>{yen(card.requestedTotalPriceYen)}</dd>
+        <dt>お客様希望価格（単価）</dt>
+        <dd>{yen(card.requestedUnitPriceYen)}</dd>
+        <dt>希望値引率</dt>
+        <dd>{pct(card.requestedDiscountRate)}</dd>
+
+        <dt className="text-amber-900">仕入価格（単価）</dt>
+        <dd className="text-amber-900">{yen(card.purchaseUnitPriceYen)}</dd>
+        <dt className="text-amber-900">仕入価格（合計）</dt>
+        <dd className="text-amber-900">{yen(card.purchaseTotalPriceYen)}</dd>
+        <dt className="text-amber-900">販売開始日時</dt>
+        <dd className="text-amber-900">{card.saleStartDate ?? "—"}</dd>
+        <dt className="text-amber-900">販売開始からの経過</dt>
+        <dd className="text-amber-900">{card.daysOnSale != null ? `${card.daysOnSale}日` : "—"}</dd>
+
+        <dt>送料判定に使った寸法</dt>
+        <dd>{card.shippingDimensionText ?? "—"}</dd>
+        <dt>3辺合計</dt>
+        <dd>{card.shippingSumCm != null ? `${card.shippingSumCm} cm` : "—"}</dd>
+        <dt>配送ランク</dt>
+        <dd>{card.shippingRank ?? "—"}</dd>
+        <dt>配送先</dt>
+        <dd>{card.destinationPrefecture ?? "未確認"}</dd>
+        <dt>送料</dt>
+        <dd>{card.shippingFeeYen != null ? yen(card.shippingFeeYen) : "未算出"}</dd>
+        <dt>送料込み合計</dt>
+        <dd>{yen(card.totalWithShippingYen)}</dd>
+
+        <dt>7%値引き後（単価）</dt>
+        <dd>{yen(card.baseDiscountedUnitPriceYen)}</dd>
+        <dt>7%値引き後（合計）</dt>
+        <dd>{yen(card.baseDiscountedTotalPriceYen)}</dd>
+        <dt>希望額との差</dt>
+        <dd>
+          {card.differenceFromRequestedYen == null
+            ? "—"
+            : card.differenceFromRequestedYen >= 0
+              ? `希望額が ${card.differenceFromRequestedYen.toLocaleString("ja-JP")}円 高い`
+              : `希望額が ${Math.abs(card.differenceFromRequestedYen).toLocaleString("ja-JP")}円 安い`}
+        </dd>
+
+        <dt>公式LINE＋請求書払い</dt>
+        <dd>
+          {card.officialLinePaymentCondition.applicable ? "適用可" : "自動適用しない"}
+          <span className="ml-1 text-gray-500">{card.officialLinePaymentCondition.reason}</span>
+        </dd>
+        {card.officialLinePaymentCondition.sourceDocumentTitle && (
+          <>
+            <dt>条件の出所</dt>
+            <dd>{card.officialLinePaymentCondition.sourceDocumentTitle}</dd>
+          </>
+        )}
+      </dl>
+
+      {card.decisionNotes.length > 0 && (
+        <div className="mt-2">
+          <p className="font-bold">判断メモ</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {card.decisionNotes.map((n, i) => (
+              <li key={i}>・{n}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {card.missingInformation.length > 0 && (
+        <div className="mt-2">
+          <p className="font-bold">不足している情報</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {card.missingInformation.map((n, i) => (
+              <li key={i}>・{n}</li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
@@ -198,6 +335,49 @@ function EvidenceView({
   return (
     <div className="mt-2 space-y-2 border border-gray-200 bg-white p-2 text-[11px] text-gray-700">
       <p className="text-[11px] text-gray-400">この参照情報は担当者向けです。お客様へは送信されません。</p>
+
+      {/* 2026-09-02 指示書§13: 処理経路をここだけで追えるようにする。 */}
+      <Section title="処理の経路">
+        <dl className="grid grid-cols-[7rem_1fr] gap-y-0.5">
+          <dt>意図</dt>
+NaN
+          <dt>生成ルート</dt>
+          <dd>{evidence.generationRoute === "negotiation" ? "negotiation（値下げ交渉）" : "standard（通常問い合わせ）"}</dd>
+          <dt>商品特定</dt>
+          <dd>{evidence.product ? "成功" : describeProductStatus(evidence.productStatus)}</dd>
+          {evidence.baseProducts && evidence.baseProducts.length > 0 && (
+            <>
+              <dt>BASE商品</dt>
+              <dd>
+                {evidence.baseProducts.map((b) => (
+                  <span key={b.baseItemId} className="block">
+                    {b.baseItemId} / {b.title.slice(0, 40)}
+                    {b.price != null ? ` / ${b.price.toLocaleString("ja-JP")}円` : ""}
+                  </span>
+                ))}
+              </dd>
+            </>
+          )}
+          {evidence.negotiation && (
+            <>
+              <dt>数量</dt>
+              <dd>{evidence.negotiation.quantity ?? "（記載なし）"}</dd>
+              <dt>希望総額</dt>
+              <dd>
+                {evidence.negotiation.requestedTotalPriceYen != null
+                  ? `${evidence.negotiation.requestedTotalPriceYen.toLocaleString("ja-JP")}円`
+                  : "（記載なし）"}
+              </dd>
+              <dt>配送先</dt>
+              <dd>{evidence.shipping?.destinationPrefecture ?? "未確認"}</dd>
+              <dt>値下げルール</dt>
+              <dd>7%（既存の値引きルール文書に準拠）</dd>
+              <dt>判定の根拠</dt>
+              <dd>{evidence.negotiation.signals.join(" / ") || "（なし）"}</dd>
+            </>
+          )}
+        </dl>
+      </Section>
 
       <Section title="対象商品">
         {evidence.product ? (

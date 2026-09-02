@@ -38,6 +38,23 @@ export interface MatchSignals {
   modelNumbers: string[];
   brandNames: string[];
   nameFragments: string[];
+  /**
+   * URLから**IDで確定的に**引き当てたBASE過去商品の商品名。
+   *
+   * 顧客が本文へ書いた語(nameFragments)とは性質がまったく違う。
+   * こちらは「このBASE商品ページの正式なタイトル」で、BELLOが自分の
+   * 在庫名から起こしたものなので、在庫名との一致は同一性の強い証拠に
+   * なる。実データで確認した例:
+   *
+   *   BASE 155832757 : "HAY REVOLVER BAR STOOL HIGH / デンマーク 北欧 …"
+   *   Inventory B005611: "【在庫2】HAY REVOLVER BAR STOOL HIGH / デンマーク 北欧 …"
+   *   Inventory B005610: "【在庫2】HAY REVOLVER BAR STOOL HIGH / 北欧 デンマーク …"
+   *
+   * 語の集合はほぼ同じで、**語順だけ**が違う。ブランド+語の断片という
+   * 弱い手がかりの積み上げ(合計0.52)では候補の下限0.60にすら届かず、
+   * 「候補0件」になっていた —— 正しい在庫が目の前にあるのに。
+   */
+  baseTitles?: string[];
 }
 
 /**
@@ -64,6 +81,48 @@ const SCORE_BRAND = 0.2;
 const SCORE_NAME_FRAGMENT = 0.08;
 const SCORE_NAME_FRAGMENT_MAX = 0.32;
 export const WEAK_SIGNAL_SCORE_CAP = 0.92;
+
+/**
+ * BASE商品名との一致の配点。
+ *
+ * 完全一致(正規化後)は同一性を保証する扱いにする —— BASEの商品ページは
+ * BELLOが自分の在庫名から起こしているため。ただし**同名の在庫が2件ある
+ * 場合は両方が同点になり、decideResolution の同点判定(AMBIGUITY_MARGIN)
+ * で自動確定されない**。「在庫2」のような重複はまさにこの形で現れるので、
+ * 高い点を付けても勝手に片方へ決めてしまうことは無い。
+ */
+const SCORE_BASE_TITLE_EXACT = 0.96;
+const SCORE_BASE_TITLE_NEAR = 0.85;
+const SCORE_BASE_TITLE_PARTIAL = 0.7;
+const BASE_TITLE_NEAR_THRESHOLD = 0.85;
+const BASE_TITLE_PARTIAL_THRESHOLD = 0.6;
+
+/**
+ * 商品名を比較できる形へ。
+ *
+ * 在庫名の先頭にある【在庫2】【6/30指定】のような社内マーカーはBASEの
+ * 商品ページには載らないので落とす。末尾の検索用キーワードも同様
+ * (nameCoreと同じ理由)。記号・空白の差は同一性に関係しないので畳む。
+ */
+export function normalizeProductTitle(name: string): string {
+  return nameCore(name)
+    .normalize("NFKC")
+    .replace(/【[^】]*】/g, " ")
+    .replace(/[（）()［］\[\]{}「」『』/／・,、。]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+/** 語の集合の重なり(Jaccard)。語順の違いを同一性の差として扱わないため。 */
+function titleOverlap(a: string, b: string): number {
+  const sa = new Set(a.split(" ").filter((t) => t.length > 0));
+  const sb = new Set(b.split(" ").filter((t) => t.length > 0));
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let shared = 0;
+  for (const t of sa) if (sb.has(t)) shared++;
+  return shared / (sa.size + sb.size - shared);
+}
 
 /**
  * 商品名の「検索用キーワード」部分を切り落とす。
@@ -123,6 +182,33 @@ export function scoreInventory(inv: MatchableInventory, signals: MatchSignals): 
   if (inv.barcode && signals.inventoryIds.includes(inv.barcode)) {
     strong = Math.max(strong, SCORE_BARCODE);
     reasons.push("バーコードが一致");
+  }
+
+  // ── BASE商品名との一致(URLからIDで確定的に引いたタイトル) ────
+  if (signals.baseTitles && signals.baseTitles.length > 0) {
+    const invTitle = normalizeProductTitle(inv.name);
+    let best = 0;
+    let bestReason = "";
+    for (const raw of signals.baseTitles) {
+      const baseTitle = normalizeProductTitle(raw);
+      if (!baseTitle || !invTitle) continue;
+      if (baseTitle === invTitle) {
+        if (SCORE_BASE_TITLE_EXACT > best) { best = SCORE_BASE_TITLE_EXACT; bestReason = "BASE商品ページの商品名と完全に一致"; }
+        continue;
+      }
+      const overlap = titleOverlap(baseTitle, invTitle);
+      if (overlap >= BASE_TITLE_NEAR_THRESHOLD && SCORE_BASE_TITLE_NEAR > best) {
+        best = SCORE_BASE_TITLE_NEAR;
+        bestReason = `BASE商品ページの商品名とほぼ一致(語の重なり ${(overlap * 100).toFixed(0)}%)`;
+      } else if (overlap >= BASE_TITLE_PARTIAL_THRESHOLD && SCORE_BASE_TITLE_PARTIAL > best) {
+        best = SCORE_BASE_TITLE_PARTIAL;
+        bestReason = `BASE商品ページの商品名と部分的に一致(語の重なり ${(overlap * 100).toFixed(0)}%)`;
+      }
+    }
+    if (best > 0) {
+      strong = Math.max(strong, best);
+      reasons.push(bestReason);
+    }
   }
 
   // ── 同一性を保証しない手がかり ────────────────────────────────
