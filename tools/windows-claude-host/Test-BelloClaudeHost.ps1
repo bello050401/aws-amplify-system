@@ -26,7 +26,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'bello-claude-host.config.psd1'),
+    [string] $ConfigPath,
     [string] $TaskName   = 'ClaudeCodeRemoteControl',
     [string] $TaskPath   = '\BELLO\',
 
@@ -34,6 +34,55 @@ param(
     [switch] $Live,
     [int]    $LiveSeconds = 90
 )
+
+# ---------------------------------------------------------------------------
+# Script directory resolution - Windows PowerShell 5.1 safe.
+#
+# Never use $BelloScriptDir in a param() default. PowerShell evaluates parameter
+# defaults BEFORE the script body runs, and $BelloScriptDir is empty whenever the
+# script is dot-sourced, run through Invoke-Expression, executed from an editor
+# selection, or hosted without a script context. Join-Path then fails with
+# "Cannot bind argument to parameter 'Path' because it is an empty string"
+# before any of this script's own code gets a chance to run.
+#
+# Resolve the directory here instead, at script scope, where $MyInvocation
+# still refers to this script, with the current directory as a last resort.
+# ---------------------------------------------------------------------------
+$BelloScriptDir = ''
+if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $BelloScriptDir = $PSScriptRoot
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir) -and -not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+    $BelloScriptDir = Split-Path -Parent $PSCommandPath
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $belloInvocationPath = ''
+    if ($MyInvocation -and $MyInvocation.MyCommand) {
+        $belloInvocationPath = [string]$MyInvocation.MyCommand.Path
+    }
+    if (-not [string]::IsNullOrWhiteSpace($belloInvocationPath)) {
+        $BelloScriptDir = Split-Path -Parent $belloInvocationPath
+    }
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $BelloScriptDir = (Get-Location).ProviderPath
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $BelloScriptDir = '.'
+}
+# If the toolkit files are not beside the resolved directory but they are in
+# the current directory, prefer the current directory.
+if (-not (Test-Path -LiteralPath (Join-Path $BelloScriptDir 'bello-claude-host.config.psd1'))) {
+    $belloCurrentDir = (Get-Location).ProviderPath
+    if ((-not [string]::IsNullOrWhiteSpace($belloCurrentDir)) -and
+        (Test-Path -LiteralPath (Join-Path $belloCurrentDir 'bello-claude-host.config.psd1'))) {
+        $BelloScriptDir = $belloCurrentDir
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $BelloScriptDir 'bello-claude-host.config.psd1'
+}
 
 $ErrorActionPreference = 'Continue'
 
@@ -54,10 +103,11 @@ $expected = @(
     'Stop-BelloClaudeHost.ps1',
     'Get-BelloClaudeHostStatus.ps1',
     'Test-BelloClaudeHost.ps1',
+    'Invoke-Ps51CompatibilityAudit.ps1',
     'bello-claude-host.config.psd1'
 )
 foreach ($name in $expected) {
-    $p = Join-Path $PSScriptRoot $name
+    $p = Join-Path $BelloScriptDir $name
     if (-not (Test-Path -LiteralPath $p)) { T-Fail "missing: $name"; continue }
     if ($name -like '*.ps1') {
         $errors = $null; $tokens = $null
@@ -69,7 +119,46 @@ foreach ($name in $expected) {
     }
 }
 
-$supervisor = Join-Path $PSScriptRoot 'Start-BelloClaudeHost.ps1'
+# Guard against the regression that broke setup once already: a param()
+# default that dereferences $PSScriptRoot binds before the script body runs and
+# fails with "Cannot bind argument to parameter 'Path' because it is an empty
+# string" whenever $PSScriptRoot is not populated.
+$paramDefaultOffenders = 0
+foreach ($ps1 in (Get-ChildItem -LiteralPath $BelloScriptDir -Filter '*.ps1' -File)) {
+    $tk = $null; $er = $null
+    $fileAst = [System.Management.Automation.Language.Parser]::ParseFile($ps1.FullName, [ref]$tk, [ref]$er)
+    if ($er -and $er.Count) { continue }
+    foreach ($pb in $fileAst.FindAll({ $args[0] -is [System.Management.Automation.Language.ParamBlockAst] }, $true)) {
+        foreach ($prm in $pb.Parameters) {
+            if ($null -eq $prm.DefaultValue) { continue }
+            foreach ($v in $prm.DefaultValue.FindAll({ $args[0] -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
+                if ($v.VariablePath.UserPath -in @('PSScriptRoot', 'PSCommandPath', 'MyInvocation')) {
+                    $paramDefaultOffenders++
+                    T-Fail ("{0}: parameter -{1} defaults to an expression using `${2}" -f $ps1.Name, $prm.Name.VariablePath.UserPath, $v.VariablePath.UserPath)
+                }
+            }
+        }
+    }
+}
+if ($paramDefaultOffenders -eq 0) {
+    T-Pass 'no param() default depends on $PSScriptRoot (Windows PowerShell 5.1 safe)'
+}
+
+T-Info "script directory resolved to: $BelloScriptDir"
+T-Info ("running on: PowerShell {0} ({1})" -f $PSVersionTable.PSVersion, $PSVersionTable.PSEdition)
+
+$supervisor = Join-Path $BelloScriptDir 'Start-BelloClaudeHost.ps1'
+
+# Launch child checks with Windows PowerShell 5.1 explicitly, so the test
+# exercises the same host the scheduled task uses.
+$belloSystemRoot = [string]$env:SystemRoot
+if ([string]::IsNullOrWhiteSpace($belloSystemRoot)) { $belloSystemRoot = 'C:\Windows' }
+$psExe = Join-Path $belloSystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $psExe)) {
+    $psFallback = Get-Command 'powershell.exe' -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($psFallback) { $psExe = $psFallback.Source } else { $psExe = 'powershell.exe' }
+}
 
 # --------------------------------------------------------------------------
 Section '2. Configuration and repository'
@@ -82,7 +171,15 @@ try {
     T-Fail ("config does not load: {0}" -f $_.Exception.Message)
 }
 
-$logRoot = Join-Path $env:LOCALAPPDATA 'BELLO\claude-host'
+$belloLocalAppData = [string]$env:LOCALAPPDATA
+if ([string]::IsNullOrWhiteSpace($belloLocalAppData)) {
+    $belloLocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
+}
+if ([string]::IsNullOrWhiteSpace($belloLocalAppData) -and -not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+    $belloLocalAppData = Join-Path $env:USERPROFILE 'AppData\Local'
+}
+if ([string]::IsNullOrWhiteSpace($belloLocalAppData)) { $belloLocalAppData = $BelloScriptDir }
+$logRoot = Join-Path $belloLocalAppData 'BELLO\claude-host'
 if ($config) {
     if (-not [string]::IsNullOrWhiteSpace($config.LogRoot)) { $logRoot = $config.LogRoot }
     if (Test-Path -LiteralPath $config.RepoPath) {
@@ -103,11 +200,15 @@ Section '3. Claude Code executable'
 function Find-Claude {
     $c = Get-Command -Name 'claude' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($c) { return @{ File = $c.Source; Kind = 'path' } }
-    $native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
-    if (Test-Path -LiteralPath $native) { return @{ File = $native; Kind = 'native' } }
-    foreach ($leaf in @('claude.cmd', 'claude.exe')) {
-        $p = Join-Path $env:APPDATA ('npm\' + $leaf)
-        if (Test-Path -LiteralPath $p) { return @{ File = $p; Kind = 'npm' } }
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+        if (Test-Path -LiteralPath $native) { return @{ File = $native; Kind = 'native' } }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        foreach ($leaf in @('claude.cmd', 'claude.exe')) {
+            $p = Join-Path $env:APPDATA ('npm\' + $leaf)
+            if (Test-Path -LiteralPath $p) { return @{ File = $p; Kind = 'npm' } }
+        }
     }
     $npx = Get-Command -Name 'npx.cmd' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($npx) { return @{ File = $npx.Source; Kind = 'npx' } }
@@ -178,7 +279,7 @@ Section '5. Supervisor dry run and logging'
 
 $logDir = Join-Path $logRoot 'logs'
 $before = @(Get-ChildItem -LiteralPath $logDir -Filter 'supervisor-*.log' -ErrorAction SilentlyContinue).Count
-$dry = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $ConfigPath -WhatIfLaunch 2>&1 | Out-String
+$dry = & $psExe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $ConfigPath -WhatIfLaunch 2>&1 | Out-String
 $dryExit = $LASTEXITCODE
 if ($dryExit -eq 0 -and $dry -match 'WhatIfLaunch specified') {
     T-Pass "supervisor dry run succeeded (exit $dryExit)"
@@ -205,12 +306,12 @@ try { $held = $probe.WaitOne(0) } catch { $held = $false }
 
 if (-not $held) {
     T-Info 'The host mutex is already held, which means a BELLO host is running right now.'
-    $second = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $ConfigPath -WhatIfLaunch 2>&1 | Out-String
+    $second = & $psExe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $ConfigPath -WhatIfLaunch 2>&1 | Out-String
     if ($second -match 'already running') { T-Pass 'a second host refuses to start while one is running' }
     else { T-Fail 'a second host was NOT blocked' }
 } else {
     try {
-        $second = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $ConfigPath -WhatIfLaunch 2>&1 | Out-String
+        $second = & $psExe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $ConfigPath -WhatIfLaunch 2>&1 | Out-String
         $secondExit = $LASTEXITCODE
         if ($second -match 'already running' -and $secondExit -eq 0) {
             T-Pass 'a second host detects the lock, logs it and exits 0 (no double launch)'
@@ -227,7 +328,9 @@ $probe.Dispose()
 # --------------------------------------------------------------------------
 Section '7. Abnormal exit and crash-loop guard (end to end, isolated)'
 
-$sandbox = Join-Path $env:TEMP ('bello-host-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+$belloTemp = [string]$env:TEMP
+if ([string]::IsNullOrWhiteSpace($belloTemp)) { $belloTemp = [System.IO.Path]::GetTempPath() }
+$sandbox = Join-Path $belloTemp ('bello-host-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 try {
     $fakeBin  = Join-Path $sandbox 'bin'
     $fakeRepo = Join-Path $sandbox 'repo'
@@ -265,7 +368,7 @@ try {
     $savedPath = $env:PATH
     $env:PATH = "$fakeBin;$savedPath"
     try {
-        $crashOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $fakeConfig 2>&1 | Out-String
+        $crashOut = & $psExe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $fakeConfig 2>&1 | Out-String
         $crashExit = $LASTEXITCODE
     } finally {
         $env:PATH = $savedPath
@@ -352,8 +455,8 @@ try {
 public static extern uint SetThreadExecutionState(uint esFlags);
 '@
     }
-    $ES_CONTINUOUS = [uint32]'0x80000000'
-    $ES_SYSTEM_REQUIRED = [uint32]'0x00000001'
+    $ES_CONTINUOUS = [uint32]2147483648      # ES_CONTINUOUS
+    $ES_SYSTEM_REQUIRED = [uint32]1          # ES_SYSTEM_REQUIRED
     $prev = [Bello.PowerUtilTest]::SetThreadExecutionState($ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED)
     [void][Bello.PowerUtilTest]::SetThreadExecutionState($ES_CONTINUOUS)
     if ($prev -ne 0) { T-Pass 'the no-system-sleep request works on this PC (asserted and released)' }
@@ -384,13 +487,13 @@ if ($Live) {
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     $offset = if ($liveLogBefore) { (Get-Content -LiteralPath $liveLogBefore.FullName).Count } else { 0 }
 
-    $p = Start-Process -FilePath 'powershell.exe' `
+    $p = Start-Process -FilePath $psExe `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $supervisor, '-ConfigPath', $ConfigPath) `
         -PassThru -WindowStyle Minimized
     T-Info "host started as pid $($p.Id); waiting $LiveSeconds s ..."
     Start-Sleep -Seconds $LiveSeconds
 
-    & (Join-Path $PSScriptRoot 'Stop-BelloClaudeHost.ps1') -ConfigPath $ConfigPath | Out-Null
+    & (Join-Path $BelloScriptDir 'Stop-BelloClaudeHost.ps1') -ConfigPath $ConfigPath | Out-Null
     $deadline = (Get-Date).AddSeconds(60)
     while (-not $p.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }

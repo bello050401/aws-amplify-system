@@ -8,11 +8,60 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $ConfigPath = (Join-Path $PSScriptRoot 'bello-claude-host.config.psd1'),
+    [string] $ConfigPath,
     [string] $TaskName   = 'ClaudeCodeRemoteControl',
     [string] $TaskPath   = '\BELLO\',
     [int]    $LogLines   = 25
 )
+
+# ---------------------------------------------------------------------------
+# Script directory resolution - Windows PowerShell 5.1 safe.
+#
+# Never use $BelloScriptDir in a param() default. PowerShell evaluates parameter
+# defaults BEFORE the script body runs, and $BelloScriptDir is empty whenever the
+# script is dot-sourced, run through Invoke-Expression, executed from an editor
+# selection, or hosted without a script context. Join-Path then fails with
+# "Cannot bind argument to parameter 'Path' because it is an empty string"
+# before any of this script's own code gets a chance to run.
+#
+# Resolve the directory here instead, at script scope, where $MyInvocation
+# still refers to this script, with the current directory as a last resort.
+# ---------------------------------------------------------------------------
+$BelloScriptDir = ''
+if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $BelloScriptDir = $PSScriptRoot
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir) -and -not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+    $BelloScriptDir = Split-Path -Parent $PSCommandPath
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $belloInvocationPath = ''
+    if ($MyInvocation -and $MyInvocation.MyCommand) {
+        $belloInvocationPath = [string]$MyInvocation.MyCommand.Path
+    }
+    if (-not [string]::IsNullOrWhiteSpace($belloInvocationPath)) {
+        $BelloScriptDir = Split-Path -Parent $belloInvocationPath
+    }
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $BelloScriptDir = (Get-Location).ProviderPath
+}
+if ([string]::IsNullOrWhiteSpace($BelloScriptDir)) {
+    $BelloScriptDir = '.'
+}
+# If the toolkit files are not beside the resolved directory but they are in
+# the current directory, prefer the current directory.
+if (-not (Test-Path -LiteralPath (Join-Path $BelloScriptDir 'bello-claude-host.config.psd1'))) {
+    $belloCurrentDir = (Get-Location).ProviderPath
+    if ((-not [string]::IsNullOrWhiteSpace($belloCurrentDir)) -and
+        (Test-Path -LiteralPath (Join-Path $belloCurrentDir 'bello-claude-host.config.psd1'))) {
+        $BelloScriptDir = $belloCurrentDir
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $BelloScriptDir 'bello-claude-host.config.psd1'
+}
 
 $ErrorActionPreference = 'Continue'
 
@@ -22,7 +71,20 @@ if (Test-Path -LiteralPath $ConfigPath) {
     foreach ($k in $fromFile.Keys) { $config[$k] = $fromFile[$k] }
 }
 if ([string]::IsNullOrWhiteSpace($config.LogRoot)) {
-    $config.LogRoot = Join-Path $env:LOCALAPPDATA 'BELLO\claude-host'
+    # LOCALAPPDATA can be absent in some non-interactive contexts; resolve it
+    # without depending on the environment variable so Join-Path never receives
+    # an empty string.
+    $belloLocalAppData = [string]$env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($belloLocalAppData)) {
+        $belloLocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
+    }
+    if ([string]::IsNullOrWhiteSpace($belloLocalAppData) -and -not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $belloLocalAppData = Join-Path $env:USERPROFILE 'AppData\Local'
+    }
+    if ([string]::IsNullOrWhiteSpace($belloLocalAppData)) {
+        $belloLocalAppData = $BelloScriptDir
+    }
+    $config.LogRoot = Join-Path $belloLocalAppData 'BELLO\claude-host'
 }
 $logDir   = Join-Path $config.LogRoot 'logs'
 $stateDir = Join-Path $config.LogRoot 'state'
@@ -32,12 +94,17 @@ function Section { param([string]$t) Write-Host "`n=== $t ===" -ForegroundColor 
 Section 'Host process'
 $pidFile = Join-Path $stateDir 'supervisor.pid'
 if (Test-Path -LiteralPath $pidFile) {
-    $hostPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
-    $proc = Get-Process -Id $hostPid -ErrorAction SilentlyContinue
-    if ($proc) {
-        Write-Host "  Supervisor RUNNING (pid $hostPid, started $($proc.StartTime))" -ForegroundColor Green
+    $hostPidText = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+    $hostPid = 0
+    if (-not [int]::TryParse($hostPidText, [ref]$hostPid)) {
+        Write-Host "  PID file is unreadable (contents: '$hostPidText')." -ForegroundColor Yellow
     } else {
-        Write-Host "  Stale PID file (pid $hostPid is gone). Supervisor is NOT running." -ForegroundColor Yellow
+        $proc = Get-Process -Id $hostPid -ErrorAction SilentlyContinue
+        if ($proc) {
+            Write-Host "  Supervisor RUNNING (pid $hostPid, started $($proc.StartTime))" -ForegroundColor Green
+        } else {
+            Write-Host "  Stale PID file (pid $hostPid is gone). Supervisor is NOT running." -ForegroundColor Yellow
+        }
     }
 } else {
     Write-Host '  Supervisor is not running (no PID file).' -ForegroundColor Yellow

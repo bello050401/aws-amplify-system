@@ -75,6 +75,7 @@ PATH の再読み込みを待つ必要がありません。
 | `Get-BelloClaudeHostStatus.ps1` | 現在の状態確認（読み取りのみ） |
 | `Stop-BelloClaudeHost.ps1` | 再起動させずに安全停止 |
 | `Uninstall-BelloClaudeHost.ps1` | 全部元に戻す |
+| `Invoke-Ps51CompatibilityAudit.ps1` | 全 .ps1 を静的監査し、Windows PowerShell 5.1 非互換箇所を検出 |
 
 ---
 
@@ -276,6 +277,68 @@ Start-ScheduledTask -TaskName ClaudeCodeRemoteControl -TaskPath \BELLO\
 スペースキーで QR コードを表示できます。
 スマホ / ブラウザからは [claude.ai/code](https://claude.ai/code) のセッション一覧に
 `BELLO-dev` として（緑のドット付きで）現れます。
+
+---
+
+## 10.5 Windows PowerShell 5.1 互換性
+
+このツールは `powershell -ExecutionPolicy Bypass -File .\xxx.ps1`、つまり
+**Windows PowerShell 5.1** で実行される前提で書かれています。
+
+### 既知の落とし穴と対策
+
+`param()` のデフォルト値で `$PSScriptRoot` を使ってはいけません。
+PowerShell はパラメータのデフォルト値を**スクリプト本体より前に**評価します。
+そして `$PSScriptRoot` は、ドットソース実行・`Invoke-Expression` 経由・
+エディタでの選択範囲実行・スクリプトコンテキストを持たないホストからの実行時に
+**空**になります。その状態では
+
+```
+Join-Path : 引数が空の文字列であるため、パラメーター 'Path' にバインドできません
+```
+
+が、自分のコードが 1 行も動く前に発生します。
+
+対策として全スクリプトは `param()` の直後に、スクリプトディレクトリを
+`$PSScriptRoot` → `$PSCommandPath` → `$MyInvocation.MyCommand.Path` →
+カレントディレクトリの順で解決してから `$ConfigPath` を組み立てます。
+同じ理由で、`$env:LOCALAPPDATA` / `$env:USERPROFILE` / `$env:APPDATA` /
+`$env:TEMP` / `$env:SystemRoot` を `Join-Path` に渡す箇所はすべて
+空チェックで保護しています。
+
+また、タスクスケジューラのアクションは `$PSHOME` ではなく
+`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` を明示指定します。
+`$PSHOME` を使うと、インストーラを実行したホスト（PowerShell 7 など）に
+タスクが暗黙に固定されてしまうためです。
+
+### 静的監査
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Invoke-Ps51CompatibilityAudit.ps1
+```
+
+検出する内容:
+
+| ルール | 内容 |
+|---|---|
+| PS51-001 | `param()` デフォルトでの `$PSScriptRoot` / `$PSCommandPath` / `$MyInvocation` 使用 |
+| PS51-002 | 三項演算子 `? :`（PS7 専用） |
+| PS51-003 | パイプラインチェーン `&&` `\|\|`（PS7 専用） |
+| PS51-004 | `??` `??=` `?.` `?[]`（PS7 専用） |
+| PS51-005 | `$IsWindows` / `$IsLinux` / `$IsMacOS`（5.1 では未定義＝常に false 扱い） |
+| PS51-006 | 5.1 に存在しないコマンドレット |
+| PS51-007 | 5.1 が受け付けない `-Encoding` 値（`utf8NoBOM` など） |
+| PS51-008 | 5.1 以降に追加されたパラメータ |
+| PS51-009 | BOM なし .ps1 に非 ASCII バイト（5.1 は ANSI として読み文字化けする） |
+| PS51-010 | `#requires -Version` が 5.1 を除外している |
+| PS51-011 | 空チェックなしで環境変数を `Join-Path` / `Split-Path` に渡している |
+
+PowerShell 7 で実行すると PS7 専用構文を AST で検出します。
+Windows PowerShell 5.1 で実行した場合も有効で、PS7 専用構文は
+パースエラーとして報告されます。
+
+`Test-BelloClaudeHost.ps1` にも PS51-001 相当のチェックが組み込まれており、
+この不具合が再発したら検証時点で `[FAIL]` になります。
 
 ---
 
