@@ -432,6 +432,7 @@ function main() {
   testIdempotency();
   testReportVolume();
   testSnapshotCorruption();
+  testSnapshotOnlyMode();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
@@ -647,4 +648,117 @@ function testSnapshotCorruption() {
     isNewRecord: false,
   });
   assertEqual(kept.customFields.salePriority, "低", "壊れたスナップショット: 判断できないので人の値を残す");
+}
+
+/* 15. C案 — 初回は業務値を書き換えず、基準(snapshot)だけを作る
+ *
+ * 3-wayマージは「前回ZAICOが渡した値」を基準に人が触ったかを判定する。
+ * その基準がまだ1件も無い(Staging実測: 5,313件中0件)。基準が無いまま
+ * マージを流すと、初回に食い違っていた項目が2回目以降「人が編集した」と
+ * 誤認され、永久に据え置かれて毎回警告が出る。
+ *
+ * 初回だけ SNAPSHOT_ONLY で走らせて基準を作る。
+ */
+function testSnapshotOnlyMode() {
+  const zaico = {
+    name: "ZAICOの名前",
+    quantity: 5,
+    extendedFields: { width: "80" },
+    customFields: { ステータス: "発送完了", 色: "赤" },
+  };
+  const bello = {
+    name: "人が直した名前",
+    quantity: 5,
+    extendedFields: { width: "72" },
+    customFields: { ステータス: "補修待ち", 色: "赤" },
+  };
+
+  const baseline = mergeZaicoUpdate({ zaico, bello, snapshotJson: null, isNewRecord: false, mode: "SNAPSHOT_ONLY" });
+
+  // 一番大事な性質: 業務値を1つも書き換えない。
+  assertEqual(Object.keys(baseline.updates).length, 0, "C案: 列を1つも書き換えない");
+  assertEqual(Object.keys(baseline.extendedFields).length, 0, "C案: 拡張項目を1つも書き換えない");
+  assertEqual(baseline.customFields, bello.customFields, "C案: 追加項目はBELLOの現在値のまま返す");
+  assertEqual(baseline.writesBusinessValues, false, "C案: 業務値を書かないことが結果に明示される");
+  assertEqual(baseline.mode, "SNAPSHOT_ONLY", "C案: モードが結果に残る");
+
+  // 基準は作る。
+  assertTrue(baseline.hasChanges, "C案: 基準が無ければ書き込みが必要(基準そのものを保存する)");
+  const snap = JSON.parse(baseline.nextSnapshotJson) as Record<string, unknown>;
+  assertEqual(snap.name, "ZAICOの名前", "C案: 基準にはZAICOの現在値が入る(BELLOの値ではない)");
+  assertEqual(snap.width, "80", "C案: 拡張項目もZAICOの現在値");
+  assertEqual((snap.__customFields as Record<string, unknown>).ステータス, "発送完了", "C案: 追加項目もZAICOの現在値");
+
+  // 食い違いは「据え置き」でも「競合」でもなく、確認用の一覧として出す。
+  assertEqual(baseline.skipped.length, 0, "C案: 据え置きとしては報告しない(まだ何も判定していない)");
+  assertEqual(baseline.conflicts.length, 0, "C案: 競合としても報告しない");
+  const diffFields = baseline.baselineDifferences.map((d) => d.field).sort();
+  assertEqual(diffFields, ["customFields.ステータス", "name", "width"], "C案: 食い違っていた項目だけを並べる");
+  assertTrue(
+    baseline.baselineDifferences.every((d) => d.reason.includes("確認")),
+    "C案: 人が確認すべきものだと分かる文言になっている",
+  );
+
+  // 同じ値の項目は出さない。全部出すと本当に見るべきものが埋もれる。
+  assertTrue(
+    !baseline.baselineDifferences.some((d) => d.field === "quantity"),
+    "C案: 一致している項目は一覧に出さない",
+  );
+  assertTrue(
+    !baseline.baselineDifferences.some((d) => d.field === "customFields.色"),
+    "C案: 一致している追加項目も出さない",
+  );
+
+  // ZAICOが空の項目は比べない。
+  const withEmpty = mergeZaicoUpdate({
+    zaico: { name: "", note: "", extendedFields: { height: "" }, customFields: {} },
+    bello: { name: "既存", note: "既存の備考", extendedFields: { height: "60" }, customFields: {} },
+    snapshotJson: null,
+    isNewRecord: false,
+    mode: "SNAPSHOT_ONLY",
+  });
+  assertEqual(withEmpty.baselineDifferences.length, 0, "C案: ZAICOが空の項目は食い違いとして出さない");
+
+  // 2回流しても2回目は何も起きない(基準が同じなら書かない)。
+  const second = mergeZaicoUpdate({
+    zaico,
+    bello,
+    snapshotJson: baseline.nextSnapshotJson,
+    isNewRecord: false,
+    mode: "SNAPSHOT_ONLY",
+  });
+  assertEqual(second.hasChanges, false, "C案: 同じ基準が既にあれば2回目は書き込まない");
+  assertEqual(second.nextSnapshotJson, baseline.nextSnapshotJson, "C案: 2回目でも基準は同じ");
+
+  // 基準ができた後は、本来の3-wayが働く。
+  const afterMerge = mergeZaicoUpdate({
+    zaico: { ...zaico, name: "ZAICOが後から変えた名前" },
+    bello,
+    snapshotJson: baseline.nextSnapshotJson,
+    isNewRecord: false,
+  });
+  assertEqual(afterMerge.mode, "MERGE", "C案: 2回目以降は通常のマージ");
+  assertEqual(afterMerge.writesBusinessValues, true, "C案: 2回目以降は業務値を書く");
+  assertEqual(
+    afterMerge.updates.name,
+    "ZAICOが後から変えた名前",
+    "C案: 基準ができた後はZAICO常時優先の項目が正しく反映される",
+  );
+
+  // 基準ができた後、人が編集した項目は守られる。ここが C案 の目的。
+  const humanEdited = mergeZaicoUpdate({
+    zaico: { extendedFields: {}, customFields: { ステータス: "発送完了" } },
+    bello: { extendedFields: {}, customFields: { ステータス: "補修待ち" } },
+    snapshotJson: JSON.stringify({ __customFields: { ステータス: "補修待ち" } }),
+    isNewRecord: false,
+  });
+  assertEqual(
+    humanEdited.customFields.ステータス,
+    "発送完了",
+    "C案: 基準と同じ値なら人は触っていないのでZAICOを反映する",
+  );
+
+  // 通常モードの結果にも新しいフィールドが入っていること(呼び出し側が
+  // writesBusinessValues を見て安全側に倒せる)。
+  assertEqual(afterMerge.baselineDifferences.length, 0, "C案: 通常モードでは基準相違の一覧は空");
 }

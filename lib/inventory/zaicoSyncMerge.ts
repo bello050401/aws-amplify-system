@@ -2,9 +2,11 @@ import {
   buildZaicoSnapshot,
   parseSnapshot,
   resolveCustomFields,
+  isEmptyValue,
   resolveFieldUpdate,
   ruleFor,
   shouldReportKeep,
+  valuesEqual,
   type UpdateDecision,
 } from "./zaicoUpdatePolicy";
 
@@ -72,6 +74,31 @@ export interface SkippedField {
   reason: string;
 }
 
+/**
+ * 同期の走らせ方。
+ *
+ * ── なぜ2つ要るのか ─────────────────────────────────────────────
+ *
+ * 3-wayマージは「前回ZAICOが渡した値」を基準に、人が触ったかどうかを
+ * 判定する。その基準(スナップショット)が**まだ1件も無い**。
+ *
+ * 基準が無い状態でいきなりマージを流すと、初回に食い違っていた項目は
+ * すべて「人の編集か判断できない」として据え置かれ、その回にZAICOの値が
+ * スナップショットへ入る。すると2回目以降は「BELLOの値 ≠ 前回ZAICO値」
+ * となり、**それが人の編集だったかどうかに関わらず永久に据え置かれて
+ * 毎回警告が出る**。
+ *
+ * そこで初回だけ SNAPSHOT_ONLY で走らせる。業務値には一切触れず、
+ * ZAICOの現在値を基準として記録するだけ。同時に「その時点で食い違って
+ * いた項目」を一覧で出すので、人はそれを見て判断できる。
+ * 2回目からは MERGE で、本来の意味の3-wayが働く。
+ */
+export type MergeMode =
+  /** 通常。方針表に従って書き込む。 */
+  | "MERGE"
+  /** 初回の基準作り。**業務値は1つも書き換えない。** */
+  | "SNAPSHOT_ONLY";
+
 export interface MergeResult {
   /** 実際に書き込む値(トップレベルの列)。 */
   updates: Record<string, unknown>;
@@ -87,6 +114,22 @@ export interface MergeResult {
   nextSnapshotJson: string;
   /** 何か書き込む必要があるか。 */
   hasChanges: boolean;
+  /** どのモードで判定したか。 */
+  mode: MergeMode;
+  /**
+   * この結果が業務値(在庫の中身)を書き換えるか。
+   * SNAPSHOT_ONLY では**必ず false**。呼び出し側がこれを見て、
+   * 誤って業務値を書かないための最後の歯止めにできる。
+   */
+  writesBusinessValues: boolean;
+  /**
+   * SNAPSHOT_ONLY のときだけ埋まる ——「基準を作った時点で
+   * ZAICOとBELLOが食い違っていた項目」。
+   *
+   * 据え置いた(skipped)でも食い違い(conflicts)でもない。まだ何も
+   * 判定していない、人が見て決めるための一覧。
+   */
+  baselineDifferences: FieldConflict[];
 }
 
 /** トップレベル列として扱う項目。 */
@@ -120,9 +163,15 @@ export function mergeZaicoUpdate(params: {
   /** Inventory.zaicoSnapshotJson の中身。未記録なら null。 */
   snapshotJson: string | null | undefined;
   isNewRecord: boolean;
+  /** 省略時は "MERGE"。既存の呼び出しは何も変わらない。 */
+  mode?: MergeMode;
 }): MergeResult {
   const { zaico, bello, snapshotJson, isNewRecord } = params;
+  const mode: MergeMode = params.mode ?? "MERGE";
   const snapshot = parseSnapshot(snapshotJson);
+
+  // 初回の基準作り。業務値には触れず、いま食い違っているものを並べて返す。
+  if (mode === "SNAPSHOT_ONLY") return buildBaseline({ zaico, bello, snapshotJson });
 
   const updates: Record<string, unknown> = {};
   const extendedFields: Record<string, unknown> = {};
@@ -227,5 +276,83 @@ export function mergeZaicoUpdate(params: {
     conflicts,
     nextSnapshotJson: JSON.stringify(nextSnapshot),
     hasChanges,
+    mode: "MERGE",
+    writesBusinessValues: true,
+    baselineDifferences: [],
+  };
+}
+
+/**
+ * 初回の基準作り(C案)。
+ *
+ * ── 何をするか ──────────────────────────────────────────────────
+ *
+ *   ・業務値は**1つも**書き換えない(updates / extendedFields は空、
+ *     customFields は BELLO の現在値をそのまま返す)
+ *   ・ZAICOの現在値をスナップショットとして記録する
+ *   ・その時点で食い違っていた項目を baselineDifferences に並べる
+ *
+ * ── なぜ「据え置いた」と呼ばないか ──────────────────────────────
+ *
+ * 据え置き(skipped)は「人が編集したと判定したので守った」という意味。
+ * ここではまだ何も判定していない —— 基準が無いので判定しようがない。
+ * 意味の違うものを同じ名前で返すと、警告の意味が薄まって読まれなくなる。
+ */
+function buildBaseline(params: {
+  zaico: ZaicoProposedValues;
+  bello: BelloCurrentValues;
+  snapshotJson: string | null | undefined;
+}): MergeResult {
+  const { zaico, bello, snapshotJson } = params;
+  const baselineDifferences: FieldConflict[] = [];
+
+  const note = (field: string, zaicoValue: unknown, belloValue: unknown) => {
+    // ZAICOが値を持っていない項目は比べない。基準としては記録するが、
+    // 「食い違い」として人に見せる意味が無い。
+    if (isEmptyValue(zaicoValue)) return;
+    if (valuesEqual(zaicoValue, belloValue)) return;
+    baselineDifferences.push({
+      field,
+      label: labelOf(field),
+      belloValue,
+      zaicoValue,
+      reason: "基準作成時点でZAICOとBELLOの値が違いました。どちらを正とするか確認してください。",
+    });
+  };
+
+  for (const field of TOP_LEVEL_FIELDS) {
+    if (zaico[field] === undefined) continue;
+    note(field, zaico[field], bello[field]);
+  }
+  for (const [field, zaicoValue] of Object.entries(zaico.extendedFields)) {
+    note(field, zaicoValue, bello.extendedFields[field]);
+  }
+  for (const [key, zaicoValue] of Object.entries(zaico.customFields)) {
+    note(`customFields.${key}`, zaicoValue, bello.customFields[key]);
+  }
+
+  const snapshotSource: Record<string, unknown> = {};
+  for (const field of TOP_LEVEL_FIELDS) {
+    if (zaico[field] !== undefined) snapshotSource[field] = zaico[field];
+  }
+  for (const [k, v] of Object.entries(zaico.extendedFields)) snapshotSource[k] = v;
+  const nextSnapshot = buildZaicoSnapshot(snapshotSource);
+  nextSnapshot.__customFields = buildZaicoSnapshot(zaico.customFields);
+  const nextSnapshotJson = JSON.stringify(nextSnapshot);
+
+  return {
+    // ここが空であることが、この関数の存在理由そのもの。
+    updates: {},
+    extendedFields: {},
+    customFields: bello.customFields,
+    skipped: [],
+    conflicts: [],
+    nextSnapshotJson,
+    // スナップショットが変わるときだけ書く。既に同じ基準が入っていれば
+    // 2回流しても何も起きない。
+    hasChanges: nextSnapshotJson !== (snapshotJson ?? null),
+    mode: "SNAPSHOT_ONLY",
+    writesBusinessValues: false,
+    baselineDifferences,
   };
 }

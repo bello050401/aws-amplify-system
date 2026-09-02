@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
-import { mergeZaicoUpdate, labelOf } from "./zaicoSyncMerge";
+import { mergeZaicoUpdate, labelOf, type MergeMode } from "./zaicoSyncMerge";
 import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
 import { ALL_EXTENDED_FIELDS } from "./extendedFields";
 import type { InventoryModel, ZaicoSyncPort, MasterCache } from "./zaicoSyncPorts";
@@ -237,12 +237,27 @@ async function findOrCreateLocationCached(name: string, port: ZaicoSyncPort, cac
  * `ZaicoSyncPort`実装を渡して同じこの関数を呼ぶ(mapping/dedup/diff
  * ロジックの完全な単一化——§4「既存実装を作り直さない」)。
  */
+/**
+ * ZAICOの1件をBELLOへ反映する。
+ *
+ * ── mode: "SNAPSHOT_ONLY" (C案の初回基準づくり) ──────────────────
+ *
+ * **既存の在庫の業務値を1つも書き換えない。** ZAICOの現在値を
+ * 3-way判定の基準(zaicoSnapshotJson)として記録するだけ。その時点で
+ * 食い違っていた項目は warnings に「確認してください」として並ぶ。
+ *
+ * 新規作成(BELLOにまだ無いZAICO商品)はこのモードでも従来どおり作る。
+ * 基準を作る対象がそもそも存在しないし、新規作成に人の編集は無いため。
+ *
+ * 省略時は "MERGE"。既存の呼び出しは何も変わらない。
+ */
 export async function syncOneZaicoItem(
   zaicoItem: ZaicoInventory,
   who: string | null,
   prefetched: Map<string, InventoryModel> | undefined,
   port: ZaicoSyncPort,
   masterCache?: MasterCache,
+  mode: MergeMode = "MERGE",
 ): Promise<ZaicoSyncItemResult> {
   const sourceInventoryId = String(zaicoItem.id);
   const warnings: string[] = [];
@@ -368,7 +383,9 @@ export async function syncOneZaicoItem(
       if (imageMerge.imported) changes.push({ fieldName: "ZAICO画像", oldValue: null, newValue: "更新" });
     }
 
-    if (!isNewRecord && existing && changes.length === 0) {
+    // 基準作成モードでは、生の差分が無くてもスナップショットを書く必要が
+    // あるので早期returnしない(基準がまだ1件も無いのが今回の出発点)。
+    if (mode === "MERGE" && !isNewRecord && existing && changes.length === 0) {
       return {
         zaicoId: sourceInventoryId,
         name: core.name,
@@ -482,13 +499,31 @@ export async function syncOneZaicoItem(
       },
       snapshotJson: (existingRecord as unknown as { zaicoSnapshotJson?: string | null }).zaicoSnapshotJson ?? null,
       isNewRecord: false,
+      mode,
     });
+
+    // 最後の歯止め。SNAPSHOT_ONLY で業務値が入っていたら、そこはバグ
+    // なので処理を続けない —— 「基準を作るだけ」と言って業務値を書き
+    // 換えるのが、この設計で一番やってはいけないこと。
+    if (!merge.writesBusinessValues) {
+      const wouldWrite = [...Object.keys(merge.updates), ...Object.keys(merge.extendedFields)];
+      if (wouldWrite.length > 0) {
+        throw new Error(`基準作成モードで業務値を書き込もうとしました(項目: ${wouldWrite.join(", ")})。処理を中止します。`);
+      }
+    }
 
     // 人の編集を守って据え置いた項目・自動判断しない食い違いは、黙って
     // 落とさず必ず報告へ載せる。「同期したのに変わっていない」を
     // 利用者が自分で調べる羽目にならないようにする。
     for (const s of merge.skipped) {
       warnings.push(`${s.label}: ZAICOの値を反映しませんでした(${s.reason})`);
+    }
+    // 基準作成モードで見つかった食い違い。据え置きでも競合でもなく、
+    // 「基準を作った時点でずれていた」という事実の一覧。
+    for (const d of merge.baselineDifferences) {
+      warnings.push(
+        `${d.label}: BELLO「${String(d.belloValue)}」/ ZAICO「${String(d.zaicoValue)}」(基準作成時点の相違。値は変更していません)`,
+      );
     }
     for (const c of merge.conflicts) {
       warnings.push(
@@ -546,7 +581,10 @@ export async function syncOneZaicoItem(
     if (imageMerge.oldStorageKeyToRemove) await port.removeImage(imageMerge.oldStorageKeyToRemove);
     if (imageMerge.oldThumbnailKeyToRemove) await port.removeImage(imageMerge.oldThumbnailKeyToRemove);
 
-    await port.logHistory(existingRecord.id, who, appliedChanges);
+    // 基準作成モードでは業務値を書いていないので、履歴に残すことは何も
+    // 無い。空配列を渡せば logInventoryHistory 側が何もしないが、意図を
+    // 明示しておく(履歴は「実際に書き込んだもの」だけ、という原則)。
+    await port.logHistory(existingRecord.id, who, merge.writesBusinessValues ? appliedChanges : []);
 
     return {
       zaicoId: sourceInventoryId,
