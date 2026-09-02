@@ -1052,7 +1052,27 @@ const schema = a.schema({
    * (値を消すとその値を持つ既存行が読めなくなる)。UI上は両方とも
    * 「確認指定なし」として扱い、返信状態は needsReply から導く。
    */
-  ConversationWorkflowStatus: a.enum(["NEW", "REPLIED", "OHARA_REVIEW", "ICHIKAWA_REVIEW", "COMPLETED"]),
+  /**
+   * 業務ステータス。返信状態(needsReply)とは**別の軸**。
+   *
+   * AWAITING_PRODUCT_URL は「商品URLを送ってもらう返信をしたので、
+   * お客様の返答を待っている」状態。既存の軸を壊さずに足してある:
+   *
+   *   返信状態     … REPLIED(こちらは返信済み)
+   *   業務ステータス … AWAITING_PRODUCT_URL(まだ本題に入れていない)
+   *
+   * 「返信済み」と「対応済み」の間にある状態を表現できないと、
+   * URL依頼を送った会話が「返信済み」のまま一覧に埋もれ、
+   * お客様からURLが届いても誰も気づかない。
+   */
+  ConversationWorkflowStatus: a.enum([
+    "NEW",
+    "REPLIED",
+    "AWAITING_PRODUCT_URL",
+    "OHARA_REVIEW",
+    "ICHIKAWA_REVIEW",
+    "COMPLETED",
+  ]),
 
   /** 受信メッセージの種別。画像を「本文が空のテキスト」として捨てないために要る。 */
   MessageContentKind: a.enum(["TEXT", "IMAGE", "STICKER", "FILE", "OTHER"]),
@@ -1074,6 +1094,17 @@ const schema = a.schema({
       externalCustomerId: a.string(),
       customerDisplayName: a.string(),
       relatedInventoryId: a.string(), // → Inventory.id(READ ONLY境界: このモデルもInventoryを書き込まない、参照のみ)
+      /**
+       * この会話で特定できたBASE商品ID。
+       *
+       * 一度URLから特定できたら記録しておき、次の受信のたびにBASE APIへ
+       * 問い合わせ直さない。relatedInventoryId とは別に持つ ——
+       * BASE商品が特定できても、対応するBELLO在庫が見つからないことが
+       * ある(BaseProductArchive 267件に対し在庫紐付けは0件、という実測)。
+       * 片方だけ分かっている状態を表現できないと、分かった事実まで捨てる
+       * ことになる。
+       */
+      relatedBaseItemId: a.string(),
       relatedListingId: a.string(), // → ChannelListing.id
       relatedOrderId: a.string(), // 将来のOrder機能用に予約(§136: 今回は無理に二重Sales/Orderモデルを作らない、のでこのフィールドは現状常にnull)
       subject: a.string(),

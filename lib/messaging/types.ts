@@ -28,7 +28,14 @@ export type MessageDeliveryStatus = "RECEIVED" | "DRAFT" | "SENDING" | "SENT" | 
  * ——「返信済み」は業務ステータスではなく返信状態だから(指示書§24)。
  * どちらも表示上は「確認指定なし」として扱う。
  */
-export type ConversationWorkflowStatus = "NEW" | "REPLIED" | "OHARA_REVIEW" | "ICHIKAWA_REVIEW" | "COMPLETED";
+export type ConversationWorkflowStatus =
+  | "NEW"
+  | "REPLIED"
+  /** 商品URLを送ってもらう返信をして、お客様の返答を待っている。 */
+  | "AWAITING_PRODUCT_URL"
+  | "OHARA_REVIEW"
+  | "ICHIKAWA_REVIEW"
+  | "COMPLETED";
 
 /**
  * 返信状態。業務ステータスと独立した軸(指示書§9/§24)。
@@ -49,6 +56,14 @@ export const CONVERSATION_FILTERS = [
   "UNREPLIED",
   "REPLIED",
   "ALL",
+  // 業務ステータスのタブ群(大原確認・市川確認・対応済み)の先頭へ置く。
+  // 「商品確認待ち」は返信状態ではなく業務の段階なので、そちら側に
+  // まとめるのが自然。
+  //
+  // この結果、大原確認から後ろのタブは1つずつ右へ動く。既存の並びを
+  // 固定していたテストもあわせて更新した —— あの固定は「うっかり順序を
+  // 変えない」ためのもので、意図的な追加まで止めるものではない。
+  "AWAITING_PRODUCT_URL",
   "OHARA_REVIEW",
   "ICHIKAWA_REVIEW",
   "COMPLETED",
@@ -60,6 +75,7 @@ export const CONVERSATION_FILTER_LABEL: Record<ConversationFilter, string> = {
   UNREPLIED: "未返信",
   REPLIED: "返信済み",
   ALL: "すべて",
+  AWAITING_PRODUCT_URL: "商品確認待ち",
   OHARA_REVIEW: "大原確認",
   ICHIKAWA_REVIEW: "市川確認",
   COMPLETED: "対応済み",
@@ -73,11 +89,20 @@ export const DEFAULT_CONVERSATION_FILTER: ConversationFilter = "UNREPLIED";
  * 「返信済み」はここに含めない —— 返信状態は送信の事実から導く値であって、
  * 人がボタンで切り替えるものではない(指示書§25/§27)。
  */
-export const SELECTABLE_WORKFLOW_STATUSES = ["OHARA_REVIEW", "ICHIKAWA_REVIEW", "COMPLETED"] as const;
+export const SELECTABLE_WORKFLOW_STATUSES = [
+  // 商品確認待ちは、URL依頼を送った時点でシステムが付ける。人が手で
+  // 付け直せるようにもしておく —— 電話で聞いた等、システムの外で
+  // 状況が変わることがある。
+  "AWAITING_PRODUCT_URL",
+  "OHARA_REVIEW",
+  "ICHIKAWA_REVIEW",
+  "COMPLETED",
+] as const;
 
 export const WORKFLOW_STATUS_LABEL: Record<ConversationWorkflowStatus, string> = {
   NEW: "確認指定なし",
   REPLIED: "確認指定なし",
+  AWAITING_PRODUCT_URL: "商品確認待ち",
   OHARA_REVIEW: "大原確認",
   ICHIKAWA_REVIEW: "市川確認",
   COMPLETED: "対応済み",

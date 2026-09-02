@@ -229,7 +229,9 @@ async function testWebhookStoreDedupesResentMessage() {
 function testConversationFilterOrder() {
   assertEqual(
     CONVERSATION_FILTERS.map((f) => CONVERSATION_FILTER_LABEL[f]),
-    ["未返信", "返信済み", "すべて", "大原確認", "市川確認", "対応済み"],
+    // 商品確認待ちは業務ステータス側のタブ群の先頭。返信状態(未返信/
+    // 返信済み)とは別の軸なので、そちらへ混ぜない。
+    ["未返信", "返信済み", "すべて", "商品確認待ち", "大原確認", "市川確認", "対応済み"],
     "フィルタの並びが指定どおり",
   );
   assertEqual(CONVERSATION_FILTER_LABEL[CONVERSATION_FILTERS[0]], "未返信", "先頭は未返信");
@@ -250,8 +252,8 @@ function testReplyStateAndWorkflowAreSeparate() {
   // 人が操作できる業務ステータスに「返信済み」は含まない。
   assertEqual(
     SELECTABLE_WORKFLOW_STATUSES.map((s) => WORKFLOW_STATUS_LABEL[s]),
-    ["大原確認", "市川確認", "対応済み"],
-    "業務ステータスとして選べるのは3つだけ(「返信済み」は含めない)",
+    ["商品確認待ち", "大原確認", "市川確認", "対応済み"],
+    "業務ステータスとして選べるものに「返信済み」は含めない",
   );
   // 既存データの NEW / REPLIED はどちらも「確認指定なし」として読む。
   assertEqual(WORKFLOW_STATUS_LABEL.NEW, "確認指定なし", "旧NEWは確認指定なしとして表示");

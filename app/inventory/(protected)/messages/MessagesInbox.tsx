@@ -124,6 +124,7 @@ export function MessagesInbox({
   const filtered = activeList.filter((c) => {
     if (filter === "UNREPLIED") return c.needsReply;
     if (filter === "REPLIED") return !c.needsReply;
+    if (filter === "AWAITING_PRODUCT_URL") return c.workflowStatus === "AWAITING_PRODUCT_URL";
     if (filter === "OHARA_REVIEW") return c.workflowStatus === "OHARA_REVIEW";
     if (filter === "ICHIKAWA_REVIEW") return c.workflowStatus === "ICHIKAWA_REVIEW";
     // ALL = 現在対応中の全会話。対応済みはサーバー側で既に除外されている。
