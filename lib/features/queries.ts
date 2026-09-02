@@ -3,6 +3,7 @@ import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { BaseItem } from "@/lib/base";
 import { fetchAndCacheItems } from "./baseSync";
 import { parseFeatureContent, type FeatureContent } from "./contentCodec";
+import { unwrapGet, unwrapList } from "@/lib/amplify/listAll";
 
 export interface FeatureDashboardRow {
   id: string;
@@ -22,8 +23,10 @@ export interface FeatureDashboardRow {
  * alongside the price/stock sync job (BaseItemCache), not here.
  */
 export async function listFeaturesForDashboard(): Promise<FeatureDashboardRow[]> {
-  const { data: features } = await serverDataClient.models.Feature.list(adminAuthMode);
-  const { data: allItems } = await serverDataClient.models.FeatureItem.list(adminAuthMode);
+  // 取得に失敗すると「特集が1件も無い」画面になる。作ったはずのものが
+  // 消えたように見えるので、0件と失敗を区別する。
+  const features = unwrapList(await serverDataClient.models.Feature.list(adminAuthMode), "特集");
+  const allItems = unwrapList(await serverDataClient.models.FeatureItem.list(adminAuthMode), "特集の掲載商品");
 
   return features
     .map((f) => ({
@@ -53,13 +56,21 @@ export interface FeatureWithItems {
 }
 
 export async function getFeatureWithItems(featureId: string): Promise<FeatureWithItems | null> {
-  const { data: feature } = await serverDataClient.models.Feature.get({ id: featureId }, adminAuthMode);
+  const feature = unwrapGet(
+    await serverDataClient.models.Feature.get({ id: featureId }, adminAuthMode),
+    "特集",
+  );
   if (!feature) return null;
 
-  const { data: featureItemRows } = await serverDataClient.models.FeatureItem.list({
-    filter: { featureId: { eq: featureId } },
-    ...adminAuthMode,
-  });
+  // 掲載商品が空に化けると、編集画面から商品が消えたように見える。
+  // そのまま保存すると本当に消える。
+  const featureItemRows = unwrapList(
+    await serverDataClient.models.FeatureItem.list({
+      filter: { featureId: { eq: featureId } },
+      ...adminAuthMode,
+    }),
+    "特集の掲載商品",
+  );
   const sortedRows = [...featureItemRows].sort((a, b) => a.sortOrder - b.sortOrder);
 
   const items = await fetchAndCacheItems(sortedRows.map((r) => r.baseItemId));

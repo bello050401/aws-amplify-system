@@ -6,6 +6,7 @@ import { logInventoryHistory, type HistoryFieldChange } from "./history";
 import { downloadAndImportInventoryImage, removeInventoryImage } from "./imageServerOps";
 import type { InventoryImageRecord } from "./imageTypes";
 import { buildZaicoSourceLinkId } from "./zaicoSyncEngine";
+import { unwrapGet, unwrapList } from "@/lib/amplify/listAll";
 
 /**
  * Ports-and-adapters boundary for the ZAICO sync engine (BELLO統合改修
@@ -235,21 +236,34 @@ export function createServerSyncPort(): ZaicoSyncPort {
       // 前に同期された既存ZAICO商品)向けのフォールバックとして、
       // 必ずnextTokenをループする完全スキャンを残す(このリポジトリの
       // 他の全件走査——fetchAllInventoryRecords等——と同じ規約)。
+      // ここが null を返すと、呼び出し元は「BELLOにまだ無いZAICO商品」と
+      // 判断して**新規作成する**。取得に失敗しただけなのに二重登録になる
+      // ——このリポジトリが何度も潰してきた重複の作られ方そのもの。
+      // 失敗は「無い」ではないので、握り潰さず投げる。
       const linkId = buildZaicoSourceLinkId("ZAICO", sourceInventoryId);
-      const { data: link } = await serverDataClient.models.ZaicoSourceLink.get({ id: linkId }, inventoryAuthMode);
+      const link = unwrapGet(
+        await serverDataClient.models.ZaicoSourceLink.get({ id: linkId }, inventoryAuthMode),
+        "ZAICO商品の紐付け",
+      );
       if (link) {
-        const { data: inv } = await serverDataClient.models.Inventory.get({ id: link.inventoryId }, inventoryAuthMode);
+        const inv = unwrapGet(
+          await serverDataClient.models.Inventory.get({ id: link.inventoryId }, inventoryAuthMode),
+          "紐付け先の在庫",
+        );
         if (inv && !inv.deletedAt) return inv;
         // リンクは存在するが参照先が壊れている(手動削除等) — リンクを
         // 信用せず、安全側のフォールバックスキャンへ進む。
       }
       let nextToken: string | null | undefined;
       do {
-        const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+        // 上と同じ理由。ここが空配列に化けると新規作成へ落ちる。
+        const res = await serverDataClient.models.Inventory.list({
           filter: { and: [{ sourceSystem: { eq: "ZAICO" } }, { sourceInventoryId: { eq: sourceInventoryId } }] },
           nextToken: nextToken ?? undefined,
           ...inventoryAuthMode,
         });
+        const nt = res.nextToken;
+        const data = unwrapList(res, "ZAICO由来の在庫の探索");
         const hit = data.find((d) => !d.deletedAt);
         if (hit) return hit;
         nextToken = nt;

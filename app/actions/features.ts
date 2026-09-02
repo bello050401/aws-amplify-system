@@ -6,6 +6,7 @@ import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { fetchAndCacheItems } from "@/lib/features/baseSync";
 import { getAIProvider, suggestTemplateType, suggestSlug, type TemplateType } from "@/lib/ai";
 import { parseFeatureContent, stringifyFeatureContent, type FeatureContent } from "@/lib/features/contentCodec";
+import { unwrapList, unwrapWrite } from "@/lib/amplify/listAll";
 
 /**
  * The "選択したN商品で特集を生成" CTA (spec §1 core flow, §7). Creates a
@@ -147,7 +148,10 @@ export async function regenerateWholeFeature(featureId: string) {
 }
 
 export async function removeFeatureItem(featureItemRowId: string, featureId: string) {
-  await serverDataClient.models.FeatureItem.delete({ id: featureItemRowId }, adminAuthMode);
+  unwrapWrite(
+    await serverDataClient.models.FeatureItem.delete({ id: featureItemRowId }, adminAuthMode),
+    "掲載商品の削除",
+  );
   revalidatePath(`/admin/features/${featureId}`);
 }
 
@@ -192,12 +196,24 @@ export async function archiveFeature(featureId: string) {
 }
 
 export async function deleteFeature(featureId: string) {
-  const { data: rows } = await serverDataClient.models.FeatureItem.list({
-    filter: { featureId: { eq: featureId } },
-    ...adminAuthMode,
-  });
-  await Promise.all(rows.map((r) => serverDataClient.models.FeatureItem.delete({ id: r.id }, adminAuthMode)));
-  await serverDataClient.models.Feature.delete({ id: featureId }, adminAuthMode);
+  // 子(FeatureItem)を消してから親(Feature)を消す。ここで一覧の取得が
+  // 失敗して0件が返ると、**子を1件も消さないまま親だけ消える** ——
+  // 存在しない特集を指す行が残り、あとから辿れなくなる。
+  // 取得に失敗したら削除そのものを行わない。
+  const rows = unwrapList(
+    await serverDataClient.models.FeatureItem.list({
+      filter: { featureId: { eq: featureId } },
+      ...adminAuthMode,
+    }),
+    "特集の掲載商品",
+  );
+  // 子の削除も1件ずつ確認する。どれかが失敗したまま親を消すと同じことになる。
+  await Promise.all(
+    rows.map(async (r) =>
+      unwrapWrite(await serverDataClient.models.FeatureItem.delete({ id: r.id }, adminAuthMode), "掲載商品の削除"),
+    ),
+  );
+  unwrapWrite(await serverDataClient.models.Feature.delete({ id: featureId }, adminAuthMode), "特集の削除");
   revalidatePath("/admin");
   redirect("/admin");
 }

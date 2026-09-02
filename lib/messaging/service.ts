@@ -1,6 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { listAllPages, unwrapList } from "@/lib/amplify/listAll";
+import { listAllPages, unwrapGet, unwrapList } from "@/lib/amplify/listAll";
 import { MESSAGE_PAGE_SIZE } from "./messagePaging";
 import { deriveConversationStatus, deriveNeedsReply, buildMessagePreview, sortConversations } from "./conversationStatus";
 import { sendLinePush } from "./line/adapter";
@@ -524,8 +524,16 @@ export async function sendReply(conversationId: string, messageId: string, who: 
   const conversation = await getConversation(conversationId);
   if (!conversation) throw new Error("対象の会話が見つかりません。");
 
-  const draft = await serverDataClient.models.Message.get({ id: messageId }, inventoryAuthMode);
-  const body = draft.data?.body ?? "";
+  // 本文の取得に失敗すると draft.data が null になり、`?? ""` が
+  // **空文字のまま顧客へ送信**していた。取り消せない外部送信の直前で
+  // 「読めなかった」を「空だった」にしてはいけない。
+  const draft = unwrapGet(
+    await serverDataClient.models.Message.get({ id: messageId }, inventoryAuthMode),
+    "返信の下書き",
+  );
+  if (!draft) throw new Error("返信の下書きが見つかりません。");
+  const body = draft.body ?? "";
+  if (!body.trim()) throw new Error("返信本文が空です。内容を入力してから送信してください。");
 
   if (conversation.channel === "LINE") {
     if (!conversation.externalCustomerId) throw new Error("この会話にはLINEの送信先(userId)が記録されていません。");

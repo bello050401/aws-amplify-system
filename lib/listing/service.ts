@@ -8,7 +8,7 @@ import { createMercariProduct } from "./mercari/adapter";
 import { createBaseProduct } from "./base/adapter";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
-import { unwrapList } from "@/lib/amplify/listAll";
+import { unwrapList, unwrapWriteRequired } from "@/lib/amplify/listAll";
 import {
   BASE_ROUTE,
   MERCARI_ROUTE,
@@ -596,7 +596,12 @@ export async function listOnMercari(
   // §15: PUBLISHING = 外部APIへ呼び出し中(旧QUEUEDから改称 — QUEUEDは
   // §14の新しい語彙では「バッチ/スケジュール待ち」を指すため、この
   // 同期的なcreateProduct呼び出し中の状態にはPUBLISHINGの方が正確)。
-  await serverDataClient.models.ChannelListing.update(publishingPatch(channelListing.id, who), inventoryAuthMode);
+  // 外部APIを叩く前に「呼び出し中」を確実に残す。ここが黙って失敗すると、
+  // 途中で落ちたときに出品済みかどうかを判断する手がかりが無くなる。
+  unwrapWriteRequired(
+    await serverDataClient.models.ChannelListing.update(publishingPatch(channelListing.id, who), inventoryAuthMode),
+    "出品状態(呼び出し中)",
+  );
 
   try {
     const result = await createMercariProduct({ draft, channelListing, shippingPayer, inventoryQuantity: inventory.quantity });
@@ -641,7 +646,11 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
   const categoryName = categoryNameOf(inventory.categoryId);
   if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
-  await serverDataClient.models.ChannelListing.update(publishingPatch(channelListing.id, who), inventoryAuthMode);
+  // Mercari側と同じ理由。
+  unwrapWriteRequired(
+    await serverDataClient.models.ChannelListing.update(publishingPatch(channelListing.id, who), inventoryAuthMode),
+    "出品状態(呼び出し中)",
+  );
 
   try {
     const result = await createBaseProduct({

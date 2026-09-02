@@ -1,6 +1,7 @@
 import "server-only";
 import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getBaseClient, type BaseItem } from "@/lib/base";
+import { unwrapGet, unwrapWriteRequired } from "@/lib/amplify/listAll";
 
 async function upsertCacheRow(item: BaseItem, cachedAt: string) {
   const fields = {
@@ -19,15 +20,18 @@ async function upsertCacheRow(item: BaseItem, cachedAt: string) {
   // from an authenticated admin flow — see the doc comment below); reading
   // the cache back for the public feature page stays on the default apiKey
   // mode and never touches this file.
-  const { data: existing } = await serverDataClient.models.BaseItemCache.get(
-    { baseItemId: item.itemId },
-    adminAuthMode,
+  // 「既にあるか」を見て update / create を分ける。ここで取得に失敗して
+  // null が返ると **無条件に create へ落ちて同じ商品の行が二重になる**。
+  // 失敗は「無い」ではない。
+  const existing = unwrapGet(
+    await serverDataClient.models.BaseItemCache.get({ baseItemId: item.itemId }, adminAuthMode),
+    "BASE商品キャッシュ",
   );
 
   if (existing) {
-    await serverDataClient.models.BaseItemCache.update(fields, adminAuthMode);
+    unwrapWriteRequired(await serverDataClient.models.BaseItemCache.update(fields, adminAuthMode), "BASE商品キャッシュ");
   } else {
-    await serverDataClient.models.BaseItemCache.create(fields, adminAuthMode);
+    unwrapWriteRequired(await serverDataClient.models.BaseItemCache.create(fields, adminAuthMode), "BASE商品キャッシュ");
   }
 }
 

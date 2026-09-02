@@ -135,3 +135,41 @@ export function unwrapGet<T>(
   }
   return result.data;
 }
+
+/**
+ * 書き込み(create / update / delete)の結果を取り出す。エラーが乗っていたら投げる。
+ *
+ * ── 読み取りとは失敗の意味が違う ────────────────────────────────
+ *
+ * 読み取りで errors を無視すると「0件」に化ける。書き込みで無視すると
+ * **「成功した」ことになる**。呼び出し側はそのまま次の処理へ進み、
+ * 画面には完了と出る。実際には何も保存されていない。
+ *
+ * Amplify は書き込みでも例外を投げず `{ data: null, errors: [...] }` を
+ * 返すので、`await ...update(...)` と書いて戻り値を捨てると、認可拒否も
+ * 条件付き書き込みの失敗も、何事も無かったように通過する。
+ *
+ * ── data の null は投げない ─────────────────────────────────────
+ *
+ * errors が無くて data が null になるのは delete で「元々無かった」場合。
+ * これは異常ではないので、null をそのまま返して呼び出し側に委ねる。
+ */
+export function unwrapWrite<T>(
+  result: { data: T | null; errors?: { message: string }[] },
+  label: string,
+): T | null {
+  if (result.errors && result.errors.length > 0) {
+    throw new Error(`${label}の保存に失敗しました: ${result.errors.map((e) => e.message).join("; ")}`);
+  }
+  return result.data;
+}
+
+/** unwrapWrite と同じだが、書き込んだ行が返ってくることを要求する。create / update 向け。 */
+export function unwrapWriteRequired<T>(
+  result: { data: T | null; errors?: { message: string }[] },
+  label: string,
+): T {
+  const data = unwrapWrite(result, label);
+  if (!data) throw new Error(`${label}の保存に失敗しました（保存後の行を読み戻せませんでした）。`);
+  return data;
+}

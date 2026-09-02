@@ -5,6 +5,7 @@ import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { diffField, logInventoryHistory, type HistoryFieldChange } from "@/lib/inventory/history";
 import { INLINE_EDIT_HISTORY_SUFFIX, type InlineEditChanges } from "@/lib/inventory/inlineEdit";
+import { unwrapGet } from "@/lib/amplify/listAll";
 
 export interface BulkInventoryEditItem {
   id: string;
@@ -59,7 +60,13 @@ export async function bulkUpdateInventoryListFields(items: BulkInventoryEditItem
 
   for (const item of items) {
     try {
-      const { data: existing } = await serverDataClient.models.Inventory.get({ id: item.id }, inventoryAuthMode);
+      // 書き込み自体は errors を見ているので取り違えは起きないが、
+      // 取得に失敗したときに「見つかりません」と報告していた。原因が
+      // 違うと次にやることも違うので、区別して伝える。
+      const existing = unwrapGet(
+        await serverDataClient.models.Inventory.get({ id: item.id }, inventoryAuthMode),
+        "対象の在庫",
+      );
       if (!existing || existing.deletedAt) {
         throw new Error("対象の在庫が見つかりません。");
       }

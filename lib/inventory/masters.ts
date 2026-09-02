@@ -75,7 +75,14 @@ export async function listAllMasterEntries(model: MasterModelName): Promise<Mast
     }
   }
 
-  const { data } = model === "Category" ? await serverDataClient.models.Category.list(inventoryAuthMode) : await serverDataClient.models.Location.list(inventoryAuthMode);
+  // この結果は seedModel の「まだ無い名前」判定に使われる。空に化けると
+  // **全件をもう一度seedして重複マスタを作る**。取得の失敗は0件ではない。
+  const data = unwrapList(
+    model === "Category"
+      ? await serverDataClient.models.Category.list(inventoryAuthMode)
+      : await serverDataClient.models.Location.list(inventoryAuthMode),
+    model === "Category" ? "カテゴリーマスタ" : "保管場所マスタ",
+  );
   return data
     .map((d) => ({ id: d.id, name: d.name, sortOrder: d.sortOrder ?? 0, isActive: d.isActive ?? true }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));

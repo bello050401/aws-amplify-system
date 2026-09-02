@@ -20,7 +20,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { unwrapList, unwrapGet } from "@/lib/amplify/listAll";
+import { unwrapList, unwrapGet, unwrapWrite, unwrapWriteRequired } from "@/lib/amplify/listAll";
 
 let failures = 0;
 let passes = 0;
@@ -90,6 +90,37 @@ function testUnwrap() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 1b. 書き込みの結果を取り出す
+ * ══════════════════════════════════════════════════════════════════
+ * 読み取りで errors を無視すると「0件」に化ける。書き込みで無視すると
+ * **「成功した」ことになる** —— 呼び出し側はそのまま次へ進み、画面には
+ * 完了と出るが、実際には何も保存されていない。
+ */
+function testUnwrapWrite() {
+  assertEqual(unwrapWrite({ data: { id: "x" } }, "テスト"), { id: "x" }, "unwrapWrite: 成功すれば行を返す");
+  assertEqual(unwrapWrite({ data: null }, "テスト"), null, "unwrapWrite: deleteで元々無い場合の null は投げない");
+
+  const msg = assertThrows(
+    () => unwrapWrite({ data: null, errors: [{ message: "Not Authorized" }] }, "出品状態"),
+    "unwrapWrite: errorsがあれば投げる(成功したことにしない)",
+  );
+  assertTrue(msg.includes("出品状態"), "unwrapWrite: 何の保存に失敗したかを名指しする");
+  assertTrue(msg.includes("Not Authorized"), "unwrapWrite: 元のエラー文言を捨てない");
+  assertTrue(msg.includes("保存に失敗"), "unwrapWrite: 読み取りではなく保存の失敗だと分かる");
+
+  // 行が返ることを要求する版。create / update で使う。
+  assertEqual(unwrapWriteRequired({ data: { id: "x" } }, "テスト"), { id: "x" }, "unwrapWriteRequired: 行を返す");
+  assertThrows(
+    () => unwrapWriteRequired({ data: null }, "同期ジョブのlease"),
+    "unwrapWriteRequired: errorsが無くても行が無ければ投げる(書けたか確かめられない)",
+  );
+  assertThrows(
+    () => unwrapWriteRequired({ data: null, errors: [{ message: "boom" }] }, "テスト"),
+    "unwrapWriteRequired: errorsがあれば投げる",
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * 2. Amplifyランタイムの前提が変わっていないか
  * ══════════════════════════════════════════════════════════════════
  * この検証の存在理由そのものが「GraphQLエラーが data:[] になる」こと。
@@ -107,6 +138,10 @@ function testRuntimeAssumption() {
   const body = fn.slice(0, fn.indexOf("function handleSingularGraphQlError"));
   assertTrue(body.includes("data: []"), "前提: list系のGraphQLエラーは data:[] になる(だからerrorsを見る必要がある)");
   assertTrue(body.includes("throw error"), "前提: GraphQL以外のエラーは再throwされる");
+
+  // 書き込み(create/update/delete)側。こちらは data:null になる。
+  const singular = src.slice(src.indexOf("function handleSingularGraphQlError"));
+  assertTrue(singular.includes("data: null"), "前提: 書き込みのGraphQLエラーは data:null になる(例外にならない)");
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -151,6 +186,46 @@ const GUARD_SITES: GuardSite[] = [
     decisions: ["const nextVersion = existing.length > 0", "if (p.active && p.id !== id)"],
     why: "Photo Profile: 0件だと版番号が衝突しACTIVEが2つ残る",
   },
+  {
+    file: "app/actions/features.ts",
+    decisions: ["rows.map(async (r) =>"],
+    why: "特集の削除: 0件だと子を残したまま親だけ消えて孤児になる",
+  },
+  {
+    file: "lib/features/baseSync.ts",
+    decisions: ["if (existing) {"],
+    why: "商品キャッシュのupsert: 取得失敗がcreateへ落ちて二重になる",
+  },
+  {
+    file: "lib/messaging/service.ts",
+    decisions: ["const body = draft.body ?? \"\";"],
+    why: "返信送信: 本文の取得失敗が空文字のまま顧客へ送られる",
+  },
+  {
+    file: "lib/inventory/zaicoSyncPorts.ts",
+    decisions: ["const hit = data.find((d) => !d.deletedAt);"],
+    why: "ZAICO既存商品の探索: 取得失敗が未登録に化けて二重登録になる",
+  },
+  {
+    file: "lib/inventory/zaicoBackgroundSync.ts",
+    decisions: ["if (current?.leaseOwner && current.leaseOwner !== ownerId) {"],
+    why: "同期の排他: 取得失敗が「誰も持っていない」に化けて二重に走る",
+  },
+  {
+    file: "lib/shipping/service.ts",
+    decisions: ["for (const r of data) existingKeys.add("],
+    why: "送料マスタのseed: 取得失敗で450件を重複登録する",
+  },
+  {
+    file: "lib/inventory/masters.ts",
+    decisions: ["total +="],
+    why: "マスタ削除の可否: 0件だと使用中でも消える",
+  },
+  {
+    file: "app/features/[slug]/page.tsx",
+    decisions: ["const feature = features[0];"],
+    why: "公開特集ページ: 取得失敗が「商品0件の特集」として公開される",
+  },
 ];
 
 function testGuardSites() {
@@ -168,7 +243,9 @@ function testGuardSites() {
       for (const idx of at) {
         // 判定の直前12行のどこかで unwrapList を通していること。
         const window = lines.slice(Math.max(0, idx - 12), idx + 1).join("\n");
-        assertTrue(window.includes("unwrapList"), `${site.file}:${idx + 1} ${site.why}`);
+        // unwrapList / unwrapGet / unwrapWrite のいずれかを通していること。
+        const guarded = ["unwrapList", "unwrapGet", "unwrapWrite"].some((fn) => window.includes(fn));
+        assertTrue(guarded, `${site.file}:${idx + 1} ${site.why}`);
       }
     }
   }
@@ -198,20 +275,21 @@ function reportRemaining() {
   for (const f of files) {
     const lines = read(f).split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
-      if (!/serverDataClient\.models\.\w+\.list\w*\(/.test(lines[i])) continue;
+      if (!/serverDataClient\.models\.\w+\.\w+\(/.test(lines[i])) continue;
       total++;
       const ctx = lines.slice(Math.max(0, i - 8), i + 4).join("\n");
-      if (ctx.includes("errors") || ctx.includes("listAllPages") || ctx.includes("unwrapList")) handled++;
+      if (["errors", "listAllPages", "unwrapList", "unwrapGet", "unwrapWrite", "unwrapDataResult", "unwrapTokenResult"].some((t) => ctx.includes(t))) handled++;
     }
   }
   console.log("");
-  console.log(`   list系の呼び出し           : ${total} 箇所`);
+  console.log(`   Amplify呼び出し(全op)      : ${total} 箇所`);
   console.log(`   errorsを見ている           : ${handled} 箇所`);
   console.log(`   まだ0件と混同しうる        : ${total - handled} 箇所`);
   console.log("   （0件が「開く方向」へ倒れる判定は上の3で個別に固定してある）");
 }
 
 testUnwrap();
+testUnwrapWrite();
 testRuntimeAssumption();
 testGuardSites();
 reportRemaining();

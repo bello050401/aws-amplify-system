@@ -5,6 +5,7 @@ import { syncOneZaicoItem } from "./zaicoSync";
 import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaicoSyncPorts";
 import type { Schema } from "@/amplify/data/resource";
 import { ZAICO_SYNC_JOB_ID } from "./zaicoSyncJobId";
+import { unwrapGet, unwrapWriteRequired } from "@/lib/amplify/listAll";
 
 type ZaicoSyncJobModel = Schema["ZaicoSyncJob"]["type"];
 
@@ -59,7 +60,27 @@ const BROWSER_OWNER_PREFIX = "browser";
  * と同じ生DynamoDB実装へ差し替えれば良い(port抽象を壊さない)。
  */
 async function claimLease(ownerId: string): Promise<boolean> {
-  const { data: current } = await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode);
+  // ここは同期の排他そのもの。2箇所で「失敗」が「成功」に化けていた。
+  //
+  //   1. 現在のlease取得が失敗すると current が null になり、
+  //      「誰も持っていない」と判断して**奪ってしまう**
+  //   2. leaseの書き込みが失敗しても、AmplifyはGraphQLエラーを例外に
+  //      せず戻り値で返すので try/catch を素通りし、**取れたことにして
+  //      true を返す**
+  //
+  // どちらも結果は同じ ——「2つの実行主体が同時に自分がleaseを持って
+  // いると思う」。ZAICO同期が二重に走ると重複登録につながる。
+  // 分からないときは取らない(fail closed)。
+  let current;
+  try {
+    current = unwrapGet(
+      await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode),
+      "同期ジョブのlease",
+    );
+  } catch (err) {
+    console.error("[claimLease] leaseの状態を読めなかったため取得を見送ります:", err);
+    return false;
+  }
   if (current?.leaseOwner && current.leaseOwner !== ownerId) {
     const stillValid = current.leaseExpiresAt && new Date(current.leaseExpiresAt).getTime() > Date.now();
     if (stillValid) return false; // 他の実行主体(Lambda、または別ブラウザタブ)が有効なleaseを保持中
@@ -67,18 +88,38 @@ async function claimLease(ownerId: string): Promise<boolean> {
   const leaseExpiresAt = new Date(Date.now() + LEASE_DURATION_MS).toISOString();
   const now = new Date().toISOString();
   try {
-    await serverDataClient.models.ZaicoSyncJob.update({ id: ZAICO_SYNC_JOB_SINGLETON_ID, leaseOwner: ownerId, leaseExpiresAt, lastHeartbeatAt: now }, inventoryAuthMode);
+    unwrapWriteRequired(
+      await serverDataClient.models.ZaicoSyncJob.update(
+        { id: ZAICO_SYNC_JOB_SINGLETON_ID, leaseOwner: ownerId, leaseExpiresAt, lastHeartbeatAt: now },
+        inventoryAuthMode,
+      ),
+      "同期ジョブのlease",
+    );
     return true;
-  } catch {
+  } catch (err) {
+    console.error("[claimLease] leaseを書き込めなかったため取得を見送ります:", err);
     return false;
   }
 }
 
 async function releaseLeaseIfOwned(ownerId: string): Promise<void> {
   try {
-    const { data: fresh } = await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode);
+    // 解放は「自分が持っているときだけ」。取得に失敗して null になると
+    // 比較が偽になり解放されないが、leaseには期限があるので最終的には
+    // 期限切れで回収される。ここで他人のleaseを消すほうが危ないので、
+    // この向きの失敗は許容する(ログには残す)。
+    const fresh = unwrapGet(
+      await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode),
+      "同期ジョブのlease",
+    );
     if (fresh?.leaseOwner === ownerId) {
-      await serverDataClient.models.ZaicoSyncJob.update({ id: ZAICO_SYNC_JOB_SINGLETON_ID, leaseOwner: null, leaseExpiresAt: null }, inventoryAuthMode);
+      unwrapWriteRequired(
+        await serverDataClient.models.ZaicoSyncJob.update(
+          { id: ZAICO_SYNC_JOB_SINGLETON_ID, leaseOwner: null, leaseExpiresAt: null },
+          inventoryAuthMode,
+        ),
+        "同期ジョブのlease解放",
+      );
     }
   } catch (err) {
     console.error("[advanceZaicoBackgroundSyncJob] failed to release lease (non-fatal):", err);
