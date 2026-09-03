@@ -57,11 +57,23 @@ export const UNCONFIGURED_GMAIL_PAYLOAD: GmailSecretPayload = { configured: fals
 /**
  * 既定の検索条件。
  *
+ * ── 送信元を絞る理由(実測) ──────────────────────────────────────
+ *
+ * 以前は `from:mercari` だった。これは **mercari.jp からのキャンペーン
+ * メール・新着通知・サポート返信・HubSpot経由の配信まで拾う**。実際に
+ * それらを問い合わせとして取り込み、会話が20件近く増えていた。
+ * 問い合わせ通知の送信元は no-reply@mercari-shops.com なので、そこへ絞る。
+ *
+ * 取りこぼしの心配より誤検出の実害のほうが大きい —— 誤検出は無関係な
+ * 会話とAI呼び出しを生み、本物の問い合わせがその中に埋もれる。
+ * なお送信元で絞っても、パーサ側が定型文で問い合わせ通知かを再判定する
+ * ので、二重の防御になっている。
+ *
  * `newer_than` を必ず付ける —— 付けないと初回実行で受信箱の全履歴を
  * 舐めることになり、**何年も前の問い合わせが「新着」として大量に通知
  * される**。取り込み側にも重複防止はあるが、そもそも取りに行かない。
  */
-export const DEFAULT_GMAIL_QUERY = "from:mercari newer_than:7d";
+export const DEFAULT_GMAIL_QUERY = "from:no-reply@mercari-shops.com newer_than:7d";
 
 let cachedClient: SecretsManagerClient | null = null;
 function getClient(): SecretsManagerClient {

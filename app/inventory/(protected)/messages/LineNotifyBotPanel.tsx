@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import {
   deleteNotifyBotConnectionAction,
+  resendWaitingDeliveriesAction,
   saveNotifyBotDisplayAction,
   sendTestNotificationAction,
   setNotifyBotConnectionAction,
@@ -158,6 +159,15 @@ export function LineNotifyBotPanel({ status, isAdmin }: { status: NotifyBotStatu
             className="border border-gray-400 bg-white px-3 py-1.5 text-[12px] hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             テスト通知を送信
+          </button>
+          {/* §7 友だち追加前に溜まった通知を、上限付きでまとめて送る。 */}
+          <button
+            type="button"
+            disabled={busy || !status.connected || !status.hasTarget}
+            onClick={() => run(() => resendWaitingDeliveriesAction())}
+            className="border border-gray-400 bg-white px-3 py-1.5 text-[12px] hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            通知待ちをまとめて送信
           </button>
           {isAdmin && !editing && (
             <button

@@ -29,6 +29,14 @@ export interface NotificationDeliveryRecord {
   lastAttemptAt: string | null;
   sentAt: string | null;
   errorMessage: string | null;
+  /** 解析側の状態(§7)。通知の status とは別軸。 */
+  analysisStatus: string | null;
+  /** メール由来の問い合わせ種別(§9)。 */
+  inquiryKind: string | null;
+  /** 取引メッセージの注文番号(§9)。 */
+  orderNumber: string | null;
+  /** この通知を置き換えた新しい通知のid(§10)。 */
+  supersededBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -48,6 +56,10 @@ interface DeliveryRow {
   lastAttemptAt?: string | null;
   sentAt?: string | null;
   errorMessage?: string | null;
+  analysisStatus?: string | null;
+  inquiryKind?: string | null;
+  orderNumber?: string | null;
+  supersededBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,6 +80,10 @@ function toRecord(row: DeliveryRow): NotificationDeliveryRecord {
     lastAttemptAt: row.lastAttemptAt ?? null,
     sentAt: row.sentAt ?? null,
     errorMessage: row.errorMessage ?? null,
+    analysisStatus: row.analysisStatus ?? null,
+    inquiryKind: row.inquiryKind ?? null,
+    orderNumber: row.orderNumber ?? null,
+    supersededBy: row.supersededBy ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -108,6 +124,9 @@ export async function createPendingDelivery(params: {
   summaryText: string;
   replyText: string | null;
   createdBy: string | null;
+  analysisStatus?: string | null;
+  inquiryKind?: string | null;
+  orderNumber?: string | null;
 }): Promise<NotificationDeliveryRecord> {
   const row = unwrapWriteRequired(
     await serverDataClient.models.NotificationDelivery.create(
@@ -123,6 +142,9 @@ export async function createPendingDelivery(params: {
         replyText: params.replyText ?? undefined,
         attemptCount: 0,
         createdBy: params.createdBy ?? undefined,
+        analysisStatus: params.analysisStatus ?? undefined,
+        inquiryKind: params.inquiryKind ?? undefined,
+        orderNumber: params.orderNumber ?? undefined,
       },
       inventoryAuthMode,
     ),
@@ -170,6 +192,17 @@ export async function updateDeliveryContent(params: {
     priority: params.priority,
     replyDraftId: params.replyDraftId ?? undefined,
   });
+}
+
+/**
+ * 古い通知を「置き換え済み」にする(§10)。
+ *
+ * **消さない。** 本文抽出の不具合で作られた通知を再処理したとき、元の
+ * レコードを残したまま置き換え先を指しておくことで、どの通知がどの再処理で
+ * 差し替わったかを後から追える。
+ */
+export async function markDeliverySuperseded(id: string, supersededBy: string | null, reason: string): Promise<void> {
+  await patch(id, { status: "SUPERSEDED", supersededBy: supersededBy ?? undefined, errorMessage: reason });
 }
 
 /** 状態を PENDING へ戻して再送可能にする(DEAD_LETTER からの手動再送用)。 */

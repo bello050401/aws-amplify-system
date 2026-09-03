@@ -1686,8 +1686,28 @@ const schema = a.schema({
       allow.group("VIEWER").to(["read"]),
     ]),
 
-  /** §8 通知の配送状態。 */
-  NotificationDeliveryStatus: a.enum(["PENDING", "PROCESSING", "SENT", "FAILED", "DEAD_LETTER"]),
+  /**
+   * §8 通知の配送状態。
+   *
+   * 【WAITING_FOR_TARGET を分けた理由】2026-09-03 追加指示§7。通知先が
+   * 未登録なだけの状態を DEAD_LETTER(恒久停止)にしていたため、解析は
+   * 成功しているのに画面が「停止(要対応)」と表示していた。**解析の失敗と
+   * 通知先の未設定は別物**で、後者は友だち追加すれば送れる。再送可能な
+   * 状態として分けておく。
+   *
+   * 【SUPERSEDED】本文抽出の不具合で作られた通知を、再処理後に「置き換え
+   * 済み」として残すための状態。消さずに残すことで、どの通知がどの再処理で
+   * 置き換わったかを後から追える(§10 不可逆な一括削除をしない)。
+   */
+  NotificationDeliveryStatus: a.enum([
+    "PENDING",
+    "PROCESSING",
+    "SENT",
+    "FAILED",
+    "DEAD_LETTER",
+    "WAITING_FOR_TARGET",
+    "SUPERSEDED",
+  ]),
 
   /** §33 通知の優先度。1通目の先頭へ【要確認】を出すかの判断に使う。 */
   NotificationPriority: a.enum(["NORMAL", "ATTENTION", "URGENT", "PARSE_ERROR"]),
@@ -1726,6 +1746,21 @@ const schema = a.schema({
       sentAt: a.datetime(),
       /** 失敗理由。短い日本語で、トークン等の秘密値は入れない(§6-1)。 */
       errorMessage: a.string(),
+      /**
+       * 解析側の状態(§7)。通知の状態(status)とは**別軸**。
+       *
+       * "OK" / "NEEDS_REVIEW" / "PARSE_FAILED" / "GENERATION_FAILED"。
+       * 一覧で「解析は済んでいるが通知待ち」と「解析自体が失敗」を
+       * 区別するために持つ。毎回ReplyDraftを読みに行かなくて済むよう、
+       * 通知の作成時に確定した値を写しておく。
+       */
+      analysisStatus: a.string(),
+      /** メール由来の問い合わせ種別(PRODUCT_INQUIRY / ORDER_MESSAGE)。 */
+      inquiryKind: a.string(),
+      /** 取引メッセージのときの注文番号(§9 1通目に出す)。 */
+      orderNumber: a.string(),
+      /** この通知を置き換えた新しい通知のid(SUPERSEDED のときだけ)。 */
+      supersededBy: a.string(),
       createdBy: a.string(),
     })
     .secondaryIndexes((index) => [index("dedupeKey"), index("status"), index("conversationId")])

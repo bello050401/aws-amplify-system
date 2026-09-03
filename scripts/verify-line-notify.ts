@@ -267,6 +267,56 @@ function testTruncation() {
 /* ══════════════════════════════════════════════════════════════════
  * §10/§8 重複防止と再試行
  * ══════════════════════════════════════════════════════════════════ */
+function testNotifyTargetSeparation() {
+  // §7 通知先未登録は「解析失敗」でも「恒久停止」でもない。
+  const noTarget = decideAfterFailure({
+    attemptCount: 1,
+    retryable: false,
+    errorMessage: "通知先が未登録です。",
+    noTarget: true,
+  });
+  assertEqual(noTarget.status, "WAITING_FOR_TARGET", "通知先未登録: DEAD_LETTERにしない");
+  assertTrue(!noTarget.shouldRetry, "通知先未登録: その場では送らない");
+  assertTrue(noTarget.reason.includes("友だち追加"), "通知先未登録: 何をすれば送れるか書く");
+
+  // 友だち追加が済めば再送できる。
+  assertTrue(
+    canSend({ status: "WAITING_FOR_TARGET", attemptCount: 1 }).shouldRetry,
+    "通知先未登録: 登録後は再送できる",
+  );
+
+  // 置き換え済みは二度と送らない。
+  assertTrue(!canSend({ status: "SUPERSEDED", attemptCount: 1 }).shouldRetry, "置き換え済み: 再送しない");
+
+  // 通知先未登録は試行回数を消費しない(何度受信しても待たせるだけ)。
+  const many = decideAfterFailure({ attemptCount: 99, retryable: false, errorMessage: "x", noTarget: true });
+  assertEqual(many.status, "WAITING_FOR_TARGET", "通知先未登録: 試行回数に関係なく待ち状態");
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * §9 問い合わせ種別を見出しに出す
+ * ══════════════════════════════════════════════════════════════════ */
+function testInquiryKindHeader() {
+  const order = buildSummaryMessage(
+    baseInput({ channel: "MERCARI_SHOPS", inquiryKind: "ORDER_MESSAGE", orderNumber: "order_abc123" }),
+  );
+  assertTrue(order.startsWith("【メルカリShops｜取引メッセージ】"), "種別: 取引メッセージの見出し");
+  assertTrue(order.includes("注文番号：order_abc123"), "種別: 取引メッセージには注文番号を出す");
+
+  const product = buildSummaryMessage(baseInput({ channel: "MERCARI_SHOPS", inquiryKind: "PRODUCT_INQUIRY" }));
+  assertTrue(product.startsWith("【メルカリShops｜お問い合わせ】"), "種別: 通常問い合わせの見出し");
+  assertTrue(!product.includes("注文番号"), "種別: 通常問い合わせに注文番号を出さない");
+
+  // 種別が無いチャネル(公式LINE等)は従来どおり。
+  assertTrue(buildSummaryMessage(baseInput({ channel: "LINE" })).startsWith("【公式LINE】"), "種別: 未指定なら従来の見出し");
+
+  // 要確認との組み合わせ。
+  const both = buildSummaryMessage(
+    baseInput({ channel: "MERCARI_SHOPS", inquiryKind: "ORDER_MESSAGE", needsHumanReview: true, reviewReasons: ["理由"] }),
+  );
+  assertTrue(both.startsWith("【メルカリShops｜取引メッセージ / 要確認】"), "種別: 要確認と併記できる");
+}
+
 function testDeliveryPolicy() {
   assertEqual(
     buildDedupeKey({ channel: "LINE", conversationId: "c1", sourceMessageId: "m1" }),
@@ -389,6 +439,8 @@ testFailureNotification();
 testReplyMessage();
 testTruncation();
 testDeliveryPolicy();
+testNotifyTargetSeparation();
+testInquiryKindHeader();
 testReviewPolicy();
 
 console.log(`\n${passes} passed, ${failures} failed`);

@@ -367,4 +367,12 @@ export interface InquiryReplyRequest {
    * プロンプトへは渡さない。
    */
   productLookupText?: string | null;
+  /**
+   * 顧客本文とは別に、**事実として**AIへ渡す前提。
+   *
+   * メルカリShopsの取引メッセージのように、「購入済みの注文に対する
+   * やり取りである」という文脈がメール側のメタ情報として届く場合に使う。
+   * 顧客本文へ混ぜると、AIがそれを顧客の発言として読んでしまう。
+   */
+  additionalContext?: string | null;
 }

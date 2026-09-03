@@ -58,6 +58,16 @@ export interface NotificationInput {
   logId: string | null;
   /** AI生成が失敗した理由(担当者向けの短い日本語)。 */
   failureReason: string | null;
+  /**
+   * メール由来の問い合わせ種別(§9)。見出しを分ける。
+   *
+   * 通常の商品問い合わせと、購入済み注文への取引メッセージは、
+   * 担当者の対応が全く違う(前者は販売前、後者は発送・日程の調整)。
+   * 見出しで即座に区別できないと、読み違えたまま返信してしまう。
+   */
+  inquiryKind?: "PRODUCT_INQUIRY" | "ORDER_MESSAGE" | null;
+  /** 取引メッセージの注文番号(§9 1通目に出す)。 */
+  orderNumber?: string | null;
 }
 
 export interface NotificationMessages {
@@ -126,7 +136,13 @@ function section(heading: string, lines: (string | null)[]): string | null {
  * 対象商品カードと同じ方針 — IdentifiedProductCardView 参照)。
  */
 export function buildSummaryMessage(input: NotificationInput): string {
-  const channelLabel = MESSAGE_CHANNEL_LABEL[input.channel];
+  // §9 チャネル名に問い合わせ種別を足す。メルカリShopsは「お問い合わせ」と
+  // 「取引メッセージ」で担当者の動きが違うので、見出しで区別する。
+  const kindLabel =
+    input.inquiryKind === "ORDER_MESSAGE" ? "取引メッセージ" : input.inquiryKind === "PRODUCT_INQUIRY" ? "お問い合わせ" : null;
+  const channelLabel = kindLabel
+    ? `${MESSAGE_CHANNEL_LABEL[input.channel]}｜${kindLabel}`
+    : MESSAGE_CHANNEL_LABEL[input.channel];
   const header = input.needsHumanReview ? `【${channelLabel} / 要確認】` : `【${channelLabel}】`;
 
   const product = input.evidence?.identifiedProduct ?? null;
@@ -171,6 +187,9 @@ export function buildSummaryMessage(input: NotificationInput): string {
       `配送先：${shipping?.destinationPrefecture ?? UNKNOWN}`,
       `想定送料：${yen(shipping?.feeYen ?? null)}`,
     ]),
+    // §9 取引メッセージなら注文番号を1通目に出す。担当者が管理画面で
+    // 注文を引くときにそのまま使える。
+    input.orderNumber ? section("注文情報", [`注文番号：${input.orderNumber}`]) : null,
     section("問い合わせ判定", [intentText]),
     // なぜ人が判断する必要があるのかを必ず書く。【要確認】だけ付けて
     // 理由を書かないと、担当者が何を決めればよいか分からない。

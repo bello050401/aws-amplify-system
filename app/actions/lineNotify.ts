@@ -17,7 +17,7 @@ import {
 import { listRecentDeliveries, type NotificationDeliveryRecord } from "@/lib/messaging/lineNotify/deliveryStore";
 import { getReplyDraft } from "@/lib/inquiry/draftStore";
 import type { IdentifiedProductCard } from "@/lib/inquiry/types";
-import { retryDelivery, sendTestNotification } from "@/lib/messaging/lineNotify/service";
+import { resendWaitingDeliveries, retryDelivery, sendTestNotification } from "@/lib/messaging/lineNotify/service";
 
 /**
  * 2026-09-03 指示書 §6/§35: 社内通知Botの設定・接続確認・テスト送信。
@@ -173,6 +173,19 @@ export async function getDeliveryEvidenceAction(replyDraftId: string): Promise<{
     modelName: draft.modelName,
     status: draft.status,
   };
+}
+
+/**
+ * 通知先の登録待ちだったものをまとめて送る(§7)。
+ *
+ * 友だち追加の直後に使う。**古いものを一気に送らない**よう、件数と期間の
+ * 上限は service 側が持っている。
+ */
+export async function resendWaitingDeliveriesAction(): Promise<NotifyBotActionResult> {
+  await requireEditor();
+  const r = await resendWaitingDeliveries();
+  revalidatePath("/inventory/messages");
+  return { success: r.failed === 0 && r.sent > 0, message: r.message };
 }
 
 /** 失敗・停止した通知の手動再送。原因を直した後に人が流せるようにする。 */

@@ -9,7 +9,22 @@
  * 触らない形にして、全分岐を scripts/verify-line-notify.ts で固定する。
  */
 
-export type DeliveryStatus = "PENDING" | "PROCESSING" | "SENT" | "FAILED" | "DEAD_LETTER";
+export type DeliveryStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "SENT"
+  | "FAILED"
+  | "DEAD_LETTER"
+  /**
+   * 通知先(友だち追加)が未登録なだけの状態(2026-09-03 追加指示§7)。
+   *
+   * **解析の失敗ではない。** 以前はこれを DEAD_LETTER にしていたため、
+   * 解析が成功しているのに画面が「停止(要対応)」と出ていた。友だち追加が
+   * 済めば送れるので、再送可能な状態として分ける。
+   */
+  | "WAITING_FOR_TARGET"
+  /** 本文抽出の不具合等で作り直した通知に置き換えられた(§10)。 */
+  | "SUPERSEDED";
 
 /**
  * 最大試行回数。
@@ -43,7 +58,19 @@ export function decideAfterFailure(params: {
   retryable: boolean;
   /** 失敗理由(そのまま画面へ出す)。 */
   errorMessage: string;
+  /** 通知先が未登録なだけか(§7)。 */
+  noTarget?: boolean;
 }): DeliveryDecision {
+  // §7 通知先未登録は「解析失敗」でも「恒久停止」でもない。友だち追加が
+  // 済めば送れるので、試行回数も消費せずに待たせる。ここを DEAD_LETTER に
+  // していたため、解析成功の通知まで「停止(要対応)」と表示されていた。
+  if (params.noTarget) {
+    return {
+      status: "WAITING_FOR_TARGET",
+      shouldRetry: false,
+      reason: "通知先が未登録のため送信を保留しています。社内通知Botを友だち追加すると送信できます。",
+    };
+  }
   if (!params.retryable) {
     return {
       status: "DEAD_LETTER",
@@ -82,6 +109,13 @@ export function canSend(existing: { status: DeliveryStatus; attemptCount: number
   }
   if (existing.status === "PROCESSING") {
     return { status: "PROCESSING", shouldRetry: false, reason: "別の処理が送信中です。重複して送りません。" };
+  }
+  if (existing.status === "SUPERSEDED") {
+    return { status: "SUPERSEDED", shouldRetry: false, reason: "この通知は新しい内容に置き換えられています。" };
+  }
+  if (existing.status === "WAITING_FOR_TARGET") {
+    // 通知先が登録されれば送れる。自動の再処理でも送信を試してよい。
+    return { status: "WAITING_FOR_TARGET", shouldRetry: true, reason: "通知先の登録待ちだったものを再試行します。" };
   }
   if (existing.status === "DEAD_LETTER") {
     return {

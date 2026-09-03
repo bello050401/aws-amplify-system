@@ -10,6 +10,7 @@ import {
   markDeliveryFailed,
   markDeliveryProcessing,
   markDeliverySent,
+  listRecentDeliveries,
   resetDeliveryForRetry,
   updateDeliveryContent,
   type NotificationDeliveryRecord,
@@ -49,6 +50,12 @@ export interface NotifyInquiryParams {
   /** 生成が失敗した理由(担当者向けの短い日本語)。成功していれば null。 */
   failureReason: string | null;
   createdBy: string | null;
+  /** メール由来の問い合わせ種別(§9)。 */
+  inquiryKind?: "PRODUCT_INQUIRY" | "ORDER_MESSAGE" | null;
+  /** 取引メッセージの注文番号(§9)。 */
+  orderNumber?: string | null;
+  /** 本文の抽出に失敗しているか(§3/§7 解析状態の記録に使う)。 */
+  parseFailed?: boolean;
 }
 
 export interface NotifyResult {
@@ -81,7 +88,28 @@ function toNotificationInput(params: NotifyInquiryParams): NotificationInput {
     // AI処理ログから元の問い合わせへ辿れる。
     logId: params.replyDraftId,
     failureReason: params.failureReason,
+    inquiryKind: params.inquiryKind ?? null,
+    orderNumber: params.orderNumber ?? null,
   };
+}
+
+/**
+ * 解析側の状態(§7)。**通知の成否とは別軸。**
+ *
+ * 通知先が未登録なだけの通知が「停止(要対応)」と表示され、解析まで失敗した
+ * ように見えていた。解析がどこまで進んだかをここで確定させ、通知の状態と
+ * 並べて出せるようにする。
+ */
+function analysisStatusFor(params: NotifyInquiryParams): string {
+  if (params.parseFailed) return "PARSE_FAILED";
+  if (params.failureReason) return "GENERATION_FAILED";
+  const review = decideReview({
+    draftStatus: params.draftStatus,
+    evidence: params.evidence,
+    deliveryWindowState: params.deliveryWindowState,
+    generationFailed: false,
+  });
+  return review.needsHumanReview ? "NEEDS_REVIEW" : "OK";
 }
 
 /**
@@ -130,6 +158,9 @@ export async function notifyInquiry(params: NotifyInquiryParams): Promise<Notify
         summaryText: messages.summary,
         replyText: messages.reply,
         createdBy: params.createdBy,
+        analysisStatus: analysisStatusFor(params),
+        inquiryKind: params.inquiryKind ?? null,
+        orderNumber: params.orderNumber ?? null,
       });
     }
 
@@ -174,6 +205,8 @@ async function dispatch(
       attemptCount,
       retryable: notifyErr.retryable,
       errorMessage: notifyErr.message,
+      // §7 通知先未登録は解析失敗でも恒久停止でもない。
+      noTarget: notifyErr.code === "NO_TARGET",
     });
     const failed = await markDeliveryFailed(processing.id, decision.status, decision.reason);
     await recordNotifyResult(decision.status);
@@ -197,6 +230,58 @@ export async function retryDelivery(deliveryId: string): Promise<NotifyResult> {
     return { sent: false, status: "DEAD_LETTER", reason: "送信する本文が残っていません。", deliveryId };
   }
   return dispatch({ ...reset, attemptCount: 0 }, reset.summaryText, reset.replyText);
+}
+
+/**
+ * 通知先の登録待ちだったものをまとめて送る(2026-09-03 追加指示§7)。
+ *
+ * ── 古いものを一気に送らない ────────────────────────────────────
+ *
+ * §7末尾。友だち追加した瞬間に何十件も届くと、どれが今対応すべき
+ * 問い合わせなのか分からなくなり、通知そのものが役に立たなくなる。
+ * **期間と件数の両方**に上限を設ける。上限を超えた分は
+ * WAITING_FOR_TARGET のまま残るので、画面から個別に再送できる。
+ */
+export const RESEND_MAX_COUNT = 10;
+export const RESEND_MAX_AGE_HOURS = 48;
+
+export async function resendWaitingDeliveries(): Promise<{ sent: number; skipped: number; failed: number; message: string }> {
+  const settings = await getLineNotifySettings();
+  if (!settings.targetUserId) {
+    return { sent: 0, skipped: 0, failed: 0, message: "通知先が未登録のため送信できません。先に友だち追加してください。" };
+  }
+
+  const all = await listRecentDeliveries(200);
+  const cutoff = Date.now() - RESEND_MAX_AGE_HOURS * 3600_000;
+  const waiting = all
+    .filter((d) => d.status === "WAITING_FOR_TARGET" || d.status === "PENDING")
+    .filter((d) => new Date(d.createdAt).getTime() >= cutoff)
+    // 古い順に送る。届く順番が問い合わせの順番と一致するほうが読みやすい。
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  const targets = waiting.slice(0, RESEND_MAX_COUNT);
+  const skipped = waiting.length - targets.length;
+
+  let sent = 0;
+  let failed = 0;
+  for (const d of targets) {
+    if (!d.summaryText) {
+      failed++;
+      continue;
+    }
+    const r = await dispatch({ ...d, attemptCount: 0 }, d.summaryText, d.replyText);
+    if (r.sent) sent++;
+    else failed++;
+  }
+
+  const parts = [`${sent}件送信`, failed > 0 ? `${failed}件失敗` : null, skipped > 0 ? `${skipped}件は上限のため未送信` : null]
+    .filter(Boolean)
+    .join(" / ");
+  const note =
+    skipped > 0
+      ? `（1回あたり最大${RESEND_MAX_COUNT}件、過去${RESEND_MAX_AGE_HOURS}時間以内のものだけを送ります。残りは再度実行するか、個別に再送してください。）`
+      : "";
+  return { sent, skipped, failed, message: `${parts || "対象がありませんでした"}${note}` };
 }
 
 /**

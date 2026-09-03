@@ -104,6 +104,25 @@ export async function processInquiryAndNotify(params: {
    * なので、先に通知の有無を見る。
    */
   skipIfAlreadyNotified?: boolean;
+  /**
+   * 分類・返信案の生成を行わない(2026-09-03 追加指示§3)。
+   *
+   * メール本文の抽出に失敗したときに使う。**件名や商品名だけから
+   * 問い合わせ意図を推測させない** —— 実際にそれで「素材」という
+   * 誤分類と、的外れな返信案が生成された。
+   */
+  skipGeneration?: boolean;
+  /** skipGeneration の理由。社内通知へそのまま出す。 */
+  skipReason?: string | null;
+  /**
+   * 顧客本文とは別に、事実としてAIへ渡す前提(§2)。
+   * 取引メッセージの「購入済み」と注文情報がこれにあたる。
+   */
+  additionalContext?: string | null;
+  /** メール由来の問い合わせ種別。通知の見出しに使う(§9)。 */
+  inquiryKind?: "PRODUCT_INQUIRY" | "ORDER_MESSAGE" | null;
+  /** 取引メッセージの注文番号。通知の1通目に出す(§9)。 */
+  orderNumber?: string | null;
 }): Promise<AutoReplyResult> {
   try {
     const settings = await getAIReplySettings();
@@ -157,7 +176,10 @@ export async function processInquiryAndNotify(params: {
     let generated: Awaited<ReturnType<typeof generateInquiryReplyDraft>> | null = null;
     let failureReason: string | null = null;
 
-    if (!settings.autoDraftEnabled) {
+    if (params.skipGeneration) {
+      // §3 本文が無い状態で分類・生成へ進めない。**推測させない。**
+      failureReason = params.skipReason ?? "問い合わせ本文を取得できなかったため、分類と返信案の生成を行いませんでした。";
+    } else if (!settings.autoDraftEnabled) {
       failureReason = "AI返信案の生成が設定で無効になっています。";
     } else {
       try {
@@ -169,6 +191,7 @@ export async function processInquiryAndNotify(params: {
           history,
           conversationInventoryId: conversation.relatedInventoryId,
           productLookupText: params.productLookupHint ?? null,
+          additionalContext: params.additionalContext ?? null,
         });
       } catch (err) {
         // 生成の失敗で通知まで止めない(§34)。
@@ -219,6 +242,10 @@ export async function processInquiryAndNotify(params: {
       deliveryWindowState: evaluateDeliveryState(target.body),
       failureReason,
       createdBy: params.who,
+      inquiryKind: params.inquiryKind ?? null,
+      orderNumber: params.orderNumber ?? null,
+      // §3 本文が取れていない場合は、通知側でもそれと分かるようにする。
+      parseFailed: Boolean(params.skipGeneration),
     });
 
     return {

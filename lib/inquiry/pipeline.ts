@@ -535,6 +535,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     shipping,
     externalFacts: research.facts,
     unresolved,
+    context: request.additionalContext ?? null,
     customerMessage: messageText,
     history: request.history.slice(-10),
     negotiation: negotiationResult

@@ -68,6 +68,11 @@ export interface InquiryUserPromptInput {
   /** 外部調査で得た事実。信頼できないデータとして別ブロックに置く。 */
   externalFacts: ExternalResearchFact[];
   unresolved: UnresolvedFact[];
+  /**
+   * このお問い合わせの前提(チャネル側から得た事実)。
+   * 「購入済みの注文に対する取引メッセージ」等。顧客の発言ではない。
+   */
+  context?: string | null;
   /** 顧客からの最新メッセージ。 */
   customerMessage: string;
   /** 直近のやり取り(古い順)。 */
@@ -91,6 +96,13 @@ export function buildInquiryUserPrompt(input: InquiryUserPromptInput): string {
   const sections: string[] = [];
 
   sections.push(`INTENT:\n${input.intents.join(", ")}`);
+
+  // §2 チャネル側から得た前提。**顧客の発言ではなく事実**として置く。
+  // 「購入済みの注文に対する取引メッセージ」がこれにあたり、これが無いと
+  // 購入済みの相手へ購入を勧めるような返信になりうる。
+  if (input.context?.trim()) {
+    sections.push(`INQUIRY_CONTEXT(BELLOが把握している事実。顧客の発言ではない):\n${input.context.trim()}`);
+  }
 
   // §16/§19 返信ルール。事実(TRUSTED_FACTS)より前に置く —— 「どう答えるか」を
   // 決めてから「何を答えるか」を見るほうが、方針が効きやすい。

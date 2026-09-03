@@ -30,12 +30,21 @@ import { MESSAGE_CHANNEL_LABEL } from "@/lib/messaging/types";
  * いない(errorMessage は分類済みの日本語のみ)。
  */
 
+/**
+ * 通知の状態(§7)。**解析の状態とは別軸**で出す。
+ *
+ * 以前は通知先が未登録なだけでも「停止（要対応）」と表示していたため、
+ * 解析まで失敗したように見えていた。友だち追加すれば送れるものは
+ * 「通知待ち」として区別する。
+ */
 const STATUS_LABEL: Record<NotificationDeliveryRecord["status"], string> = {
-  PENDING: "送信待ち",
+  PENDING: "通知待ち",
   PROCESSING: "送信中",
-  SENT: "送信済み",
-  FAILED: "失敗（再試行対象）",
-  DEAD_LETTER: "停止（要対応）",
+  SENT: "通知済み",
+  FAILED: "通知失敗（再試行対象）",
+  DEAD_LETTER: "通知停止（要対応）",
+  WAITING_FOR_TARGET: "通知待ち（友だち追加待ち）",
+  SUPERSEDED: "置き換え済み",
 };
 
 const STATUS_CLASS: Record<NotificationDeliveryRecord["status"], string> = {
@@ -44,6 +53,28 @@ const STATUS_CLASS: Record<NotificationDeliveryRecord["status"], string> = {
   SENT: "text-green-700",
   FAILED: "text-amber-700",
   DEAD_LETTER: "text-red-700",
+  WAITING_FOR_TARGET: "text-amber-700",
+  SUPERSEDED: "text-gray-400",
+};
+
+/** 解析側の状態(§7)。通知が届いたかとは無関係。 */
+const ANALYSIS_LABEL: Record<string, string> = {
+  OK: "解析完了",
+  NEEDS_REVIEW: "解析完了（要確認）",
+  PARSE_FAILED: "本文抽出に失敗",
+  GENERATION_FAILED: "返信案の生成に失敗",
+};
+
+const ANALYSIS_CLASS: Record<string, string> = {
+  OK: "text-green-700",
+  NEEDS_REVIEW: "text-amber-700",
+  PARSE_FAILED: "text-red-700",
+  GENERATION_FAILED: "text-red-700",
+};
+
+const KIND_LABEL: Record<string, string> = {
+  PRODUCT_INQUIRY: "お問い合わせ",
+  ORDER_MESSAGE: "取引メッセージ",
 };
 
 interface Evidence {
@@ -125,7 +156,20 @@ export function AiProcessingLogPanel({ deliveries }: { deliveries: NotificationD
                           {MESSAGE_CHANNEL_LABEL[d.channel]}
                         </span>
                       )}
-                      <span className={`text-[12px] font-bold ${STATUS_CLASS[d.status]}`}>{STATUS_LABEL[d.status]}</span>
+                      {d.inquiryKind && (
+                        <span className="border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600">
+                          {KIND_LABEL[d.inquiryKind] ?? d.inquiryKind}
+                        </span>
+                      )}
+                      {/* §7 解析と通知は別軸。並べて出し、混同させない。 */}
+                      {d.analysisStatus && (
+                        <span className={`text-[12px] ${ANALYSIS_CLASS[d.analysisStatus] ?? "text-gray-600"}`}>
+                          解析: {ANALYSIS_LABEL[d.analysisStatus] ?? d.analysisStatus}
+                        </span>
+                      )}
+                      <span className={`text-[12px] font-bold ${STATUS_CLASS[d.status]}`}>
+                        通知: {STATUS_LABEL[d.status]}
+                      </span>
                       {d.priority && d.priority !== "NORMAL" && (
                         <span className="border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-800">
                           {PRIORITY_LABEL[d.priority] ?? d.priority}
@@ -166,7 +210,7 @@ export function AiProcessingLogPanel({ deliveries }: { deliveries: NotificationD
                     </button>
                     {/* 送信済みは再送させない。同じ通知が2回届くと、担当者は
                         新しい問い合わせが来たと読む。 */}
-                    {d.status !== "SENT" && d.status !== "PROCESSING" && (
+                    {d.status !== "SENT" && d.status !== "PROCESSING" && d.status !== "SUPERSEDED" && (
                       <button
                         type="button"
                         disabled={busy === d.id}
@@ -237,7 +281,14 @@ export function AiProcessingLogPanel({ deliveries }: { deliveries: NotificationD
                                 </>
                               )}
 
-                              <dt className="text-gray-500">モデル</dt>
+                              {d.orderNumber && (
+                          <>
+                            <dt className="text-gray-500">注文番号</dt>
+                            <dd className="break-all">{d.orderNumber}</dd>
+                          </>
+                        )}
+
+                        <dt className="text-gray-500">モデル</dt>
                               <dd>{evidence[d.id]!.modelName ?? "—"}</dd>
 
                               <dt className="text-gray-500">返信案の状態</dt>
