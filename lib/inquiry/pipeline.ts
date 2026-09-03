@@ -540,6 +540,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     externalFacts: research.facts,
     unresolved,
     context: request.additionalContext ?? null,
+    // §4 顧客が商品を指し示せない経路(メール由来)では、商品特定の失敗を
+    // 顧客への質問に変換させない。urlRequest の判定と同じ条件を使う。
+    customerCanIdentifyProduct: request.channel !== "MERCARI_SHOPS",
     customerMessage: messageText,
     history: request.history.slice(-10),
     negotiation: negotiationResult

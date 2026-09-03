@@ -73,6 +73,14 @@ export interface InquiryUserPromptInput {
    * 「購入済みの注文に対する取引メッセージ」等。顧客の発言ではない。
    */
   context?: string | null;
+  /**
+   * 顧客が商品を指し示す手段を持っているか(2026-09-03 追加指示§4)。
+   *
+   * false のとき、**商品が特定できないことを顧客への質問に変換しない**。
+   * メルカリShopsのメール経由では、顧客は既に商品ページから問い合わせて
+   * いるので、商品名やURLを尋ねるのは内部の失敗を押し付けているだけ。
+   */
+  customerCanIdentifyProduct?: boolean;
   /** 顧客からの最新メッセージ。 */
   customerMessage: string;
   /** 直近のやり取り(古い順)。 */
@@ -176,6 +184,25 @@ export function buildInquiryUserPrompt(input: InquiryUserPromptInput): string {
     lines.push("- 仕入価格・原価・利益・販売開始からの経過期間には一切触れない。");
     for (const q of n.customerQuestions) lines.push(`- お客様へ確認する: ${q}`);
     sections.push(`NEGOTIATION_POLICY:\n${lines.join("\n")}`);
+  }
+
+  // §4 内部の商品特定失敗を顧客への質問に変換させない。
+  //
+  // URLを尋ねる定型文は decideUrlRequest 側で止めているが、**AIが自分の
+  // 言葉で「商品名や商品番号を教えてください」と書いてしまう**ことが実際に
+  // あった(実メールで確認)。顧客は既に商品ページから問い合わせており、
+  // 手元に商品名も番号も無い。ここで明示的に禁じる。
+  if (input.customerCanIdentifyProduct === false) {
+    sections.push(
+      [
+        "PRODUCT_IDENTIFICATION_POLICY:",
+        "- お客様は販売サイトの商品ページから問い合わせている。**どの商品かはこちらで確認する。**",
+        "- 商品名・商品番号・商品URL・型番などを、お客様に尋ねたり送るよう依頼したりしない。",
+        "- 対象商品が確定していない場合でも、お客様へその事実を伝えて確認を求めない。",
+        "- 商品が特定できずに答えられないことは、**お客様へ質問せず**、社内で確認する前提で書く",
+        "  (例: 「確認のうえ、改めてご案内いたします」)。",
+      ].join("\n"),
+    );
   }
 
   if (input.history.length > 0) {
