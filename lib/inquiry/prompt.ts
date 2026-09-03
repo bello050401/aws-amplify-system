@@ -81,6 +81,15 @@ export interface InquiryUserPromptInput {
    * いるので、商品名やURLを尋ねるのは内部の失敗を押し付けているだけ。
    */
   customerCanIdentifyProduct?: boolean;
+  /**
+   * この会話ですでに分かっていること(2026-09-03 追加指示 §23)。
+   *
+   * **重ねて尋ねさせないために渡す。** 実機で、顧客が「埼玉です」と答えた
+   * 直後の返信案が「お届け先の都道府県を教えていただけますか」になった。
+   * 会話文脈には埼玉県が入っていたのに、プロンプトへ渡していなかったので
+   * AIには知りようがなかった。
+   */
+  knownFacts?: { label: string; value: string }[];
   /** 顧客からの最新メッセージ。 */
   customerMessage: string;
   /** 直近のやり取り(古い順)。 */
@@ -142,6 +151,17 @@ export function buildInquiryUserPrompt(input: InquiryUserPromptInput): string {
     else trusted.push("- 送料: 未確定(金額を案内してはならない)");
   }
   sections.push(`TRUSTED_FACTS:\n${trusted.length > 0 ? trusted.join("\n") : "(なし)"}`);
+
+  // §23 すでに分かっていることは二度尋ねない。TRUSTED_FACTS とは別に置く ——
+  // あちらは「回答に使ってよい事実」、こちらは「もう聞かない項目」で、
+  // 役割が違う(商品を特定できていなくても、聞き直しの禁止は効かせたい)。
+  const known = input.knownFacts ?? [];
+  if (known.length > 0) {
+    sections.push(
+      "ALREADY_KNOWN(この会話で確認済み。**同じことを聞き直さないこと**):\n" +
+        known.map((f) => `- ${f.label}: ${f.value}`).join("\n"),
+    );
+  }
 
   // UNCERTAIN(対象商品のものだと確定できなかった値)はAIへ渡さない。
   //

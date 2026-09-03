@@ -41,6 +41,7 @@ import { extractShippingDestination } from "@/lib/inquiry/shippingIntent";
 import { decideUrlRequest, identificationBasis } from "@/lib/inquiry/productIdentification";
 import { calculateShippingRankFromDimensions } from "@/lib/shipping/rank";
 import { buildSummaryMessage, buildReplyMessage } from "@/lib/messaging/lineNotify/format";
+import { buildInquiryUserPrompt } from "@/lib/inquiry/prompt";
 import {
   saveConversationContextWith,
   loadConversationContextWith,
@@ -649,6 +650,40 @@ function testShippingCompletion() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * §23 すでに分かっていることを聞き直さない(プロンプト)
+ * ══════════════════════════════════════════════════════════════════ */
+
+function testAlreadyKnownPrompt() {
+  console.log("\n── §23 プロンプトへ「確認済み」を渡す ──");
+
+  const base = {
+    intents: ["NEGOTIATION"] as const,
+    trustedProductFacts: [],
+    knowledgeExcerpts: [],
+    shipping: null,
+    externalFacts: [],
+    unresolved: [],
+    customerMessage: "埼玉です",
+    history: [],
+  };
+
+  const withKnown = buildInquiryUserPrompt({
+    ...base,
+    intents: [...base.intents],
+    knownFacts: [
+      { label: "対象商品", value: "BoConcept Elba Lounge Chair" },
+      { label: "配送先", value: "埼玉県" },
+    ],
+  });
+  check(withKnown.includes("ALREADY_KNOWN"), "確認済みの項目をプロンプトへ渡す");
+  check(withKnown.includes("配送先: 埼玉県"), "配送先が確認済みとして入る");
+  check(withKnown.includes("聞き直さない"), "聞き直さない指示が入る");
+
+  const withoutKnown = buildInquiryUserPrompt({ ...base, intents: [...base.intents] });
+  check(!withoutKnown.includes("ALREADY_KNOWN"), "確認済みが無ければブロックごと出さない");
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * §27 社内LINE通知
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -713,6 +748,7 @@ async function main() {
   testMergeRules();
   testPendingAnswers();
   testConversationLinking();
+  testAlreadyKnownPrompt();
   await testConcurrentUpdates();
   testDimensionExtraction();
   testAttributeExtraction();

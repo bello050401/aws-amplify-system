@@ -851,6 +851,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     // 顧客への質問に変換させない。urlRequest の判定と同じ条件を使う。
     customerCanIdentifyProduct:
       request.channel !== "MERCARI_SHOPS" && !resolution.references.urls.some((u) => isBaseUrl(u)),
+    // §23 会話ですでに分かっていること。**今回の更新を反映した後の文脈**を
+    // 使う —— 「埼玉です」への返信を作る時点で、配送先はもう分かっている。
+    knownFacts: knownFacts(workingContext),
     customerMessage: messageText,
     history: request.history.slice(-10),
     negotiation: negotiationResult
