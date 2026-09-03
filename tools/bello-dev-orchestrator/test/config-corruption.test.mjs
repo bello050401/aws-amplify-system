@@ -419,6 +419,53 @@ test("修復して再起動しても、設定と実行時データの場所が�
   assert.ok(second.config.claude.disallowedTools.includes("Bash(git push:*)"));
 });
 
+// ------------------------------------------- 6. 一時停止が再起動を跨いで効くこと
+
+test("一時停止は再起動しても解除されず、停止中タスクを勝手に再開しない", async () => {
+  const { buildHarness } = await import("./helpers.mjs");
+  const { Orchestrator } = await import("../src/core/orchestrator.mjs");
+
+  const h = await buildHarness();
+  try {
+    // 停止中のタスクがある状態を作る。
+    h.repo.createTask({
+      title: "停止中のタスク",
+      instruction: "これは再開されてはいけない",
+      source: "user_ui",
+      priority: 50,
+      repoPath: h.config.repoPath,
+      maxAttempts: 3,
+      maxRevisions: 3,
+    });
+
+    h.orchestrator.pause();
+    assert.equal(h.repo.getPaused(), true, "一時停止が DB に残っていない");
+
+    // 再起動に相当する。同じ DB から Orchestrator を作り直す。
+    const restarted = new Orchestrator({
+      config: h.config,
+      paths: h.paths,
+      repo: h.repo,
+      logger: h.logger,
+      runner: h.runner,
+      reviewEngine: h.reviewEngine,
+      todoManager: h.todoManager,
+    });
+    assert.equal(restarted.paused, true, "再起動で一時停止が解除されている");
+
+    // 停止中はタスクを 1 件も掴まない。
+    const did = await restarted.tick();
+    assert.equal(did, false, "一時停止中なのにタスクを実行した");
+
+    // 明示的に再開したときだけ動けるようになる。
+    restarted.resume();
+    assert.equal(h.repo.getPaused(), false);
+    assert.equal(restarted.paused, false);
+  } finally {
+    h.cleanup();
+  }
+});
+
 // ------------------------------------------------------------------ ヘルパー
 
 function request(url, method = "GET") {

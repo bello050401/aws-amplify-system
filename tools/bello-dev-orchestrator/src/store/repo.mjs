@@ -90,6 +90,20 @@ export class Repo {
     return provider;
   }
 
+  /**
+   * 一時停止状態。メモリだけに持つと再起動で必ず解除されてしまい、
+   * 「止めたはずのタスクが再起動で勝手に動き出す」ことになる。DB に持たせる。
+   */
+  getPaused() {
+    return this.store.getMeta("paused") === "1";
+  }
+
+  setPaused(paused, actor = "user") {
+    this.store.setMeta("paused", paused ? "1" : "0");
+    this.audit(actor, paused ? "orchestrator.pause" : "orchestrator.resume", null, "ok", null);
+    return paused;
+  }
+
   // ---------------------------------------------------------------- audit
   audit(actor, action, target, result, detail) {
     this.store.run("INSERT INTO audit_log(at,actor,action,target,result,detail) VALUES(?,?,?,?,?,?)", [

@@ -249,6 +249,29 @@ async function cmdResume(loaded) {
   return EXIT.OK;
 }
 
+/**
+ * タスク処理を一時停止 / 再開する。DB に持つので再起動しても効き続ける。
+ * stop (プロセス停止) とは別物。Orchestrator は動いたままキューを掴まなくなる。
+ */
+async function cmdPause(loaded, paused) {
+  if (!fs.existsSync(loaded.paths.dbFile)) {
+    // DB がまだ無い場合でも、先に停止意思を記録できるようにする。
+    ensureDirs(loaded.paths);
+  }
+  const store = await Store.open(loaded.paths.dbFile);
+  const repo = new Repo(store);
+  repo.setPaused(paused, "user");
+  store.close();
+  if (paused) {
+    say("タスク処理を一時停止しました（再起動しても停止したままです）。");
+    say("実行中のタスクがあれば、そのタスクの終了後に新しいタスクを掴まなくなります。");
+    say("再開するには: bello.ps1 unpause または ダッシュボードの「再開」");
+  } else {
+    say("タスク処理を再開しました。");
+  }
+  return EXIT.OK;
+}
+
 async function cmdStatus(loaded) {
   const pid = readPid(loaded.paths.pidFile);
   const alive = pid ? isLiveNodeProcess(pid) : false;
@@ -518,6 +541,8 @@ async function main() {
     say("  config-check   設定ファイルの文字化け / 破損を点検する（壊れていても動く）");
     say("  config-repair  隔離 → 救出 → 検証 → atomic 置換で設定ファイルを復旧する");
     say("  resume     停止フラグ / crash-loop クールダウンを解除する");
+    say("  pause      タスク処理を一時停止する（再起動しても停止したまま）");
+    say("  unpause    タスク処理を再開する");
     say("  uninstall  常駐登録の解除（プログラム本体と実行時データは消しません）");
     say("");
     say('  add-task --title "件名" --file 指示.txt [--priority 50]');
@@ -558,6 +583,10 @@ async function main() {
       return cmdStart(loaded, args);
     case "stop":
       return cmdStop(loaded);
+    case "pause":
+      return cmdPause(loaded, true);
+    case "unpause":
+      return cmdPause(loaded, false);
     case "status":
       return cmdStatus(loaded);
     case "diagnose":

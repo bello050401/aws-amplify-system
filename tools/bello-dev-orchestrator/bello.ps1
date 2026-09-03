@@ -17,7 +17,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'diagnose', 'repair', 'resume',
-                 'config-check', 'config-repair', 'uninstall', 'help')]
+                 'config-check', 'config-repair', 'pause', 'unpause', 'uninstall', 'help')]
     [string] $Command = 'help',
 
     [string] $ConfigPath,
@@ -272,6 +272,8 @@ switch ($Command) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $ConfigPath
         exit $LASTEXITCODE
     }
+    'pause'         { exit (Invoke-Cli @('pause')) }
+    'unpause'       { exit (Invoke-Cli @('unpause')) }
     'config-check'  { exit (Invoke-Cli @('config-check')) }
     'config-repair' { exit (Invoke-Cli @('config-repair')) }
     'status'   { exit (Invoke-Cli @('status')) }
@@ -289,6 +291,8 @@ switch ($Command) {
         Write-Host '  bello.ps1 diagnose   自己診断 (Claude / OpenAI 設定 / DB / 権限 / タスク / ディスク)'
         Write-Host '  bello.ps1 repair     安全に直せる設定のみ修復'
         Write-Host '  bello.ps1 resume     停止フラグ / crash-loop クールダウンを解除する'
+        Write-Host '  bello.ps1 pause      タスク処理を一時停止する (再起動しても停止したまま)'
+        Write-Host '  bello.ps1 unpause    タスク処理を再開する'
         Write-Host '  bello.ps1 config-check   設定ファイルの文字化け / 破損を点検する (壊れていても動く)'
         Write-Host '  bello.ps1 config-repair  隔離 → 救出 → 検証 → atomic 置換で設定を復旧する'
         Write-Host '  bello.ps1 uninstall  常駐登録の解除 (本体とデータは消しません)'

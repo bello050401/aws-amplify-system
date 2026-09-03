@@ -50,7 +50,9 @@ export class Orchestrator {
       todoManager.onManualReview = (todo) => this.applyManualReview(todo);
     }
 
-    this.paused = false;
+    // 前回の一時停止を引き継ぐ。設定破損などで止めた状態から再起動したとき、
+    // 人が明示的に再開するまでタスクを掴まないようにするため。
+    this.paused = typeof repo?.getPaused === "function" ? repo.getPaused() : false;
     this.stopping = false;
     this.currentTaskId = null;
     this.stopCurrentRequested = false;
@@ -183,12 +185,15 @@ export class Orchestrator {
 
   pause() {
     this.paused = true;
-    this.repo.audit("user", "orchestrator.pause", null, "ok", null);
+    // 再起動を跨いで効かせる。監査ログは setPaused が書く。
+    if (typeof this.repo.setPaused === "function") this.repo.setPaused(true, "user");
+    else this.repo.audit("user", "orchestrator.pause", null, "ok", null);
   }
 
   resume() {
     this.paused = false;
-    this.repo.audit("user", "orchestrator.resume", null, "ok", null);
+    if (typeof this.repo.setPaused === "function") this.repo.setPaused(false, "user");
+    else this.repo.audit("user", "orchestrator.resume", null, "ok", null);
   }
 
   requestStopCurrent() {
