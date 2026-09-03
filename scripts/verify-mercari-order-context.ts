@@ -205,6 +205,19 @@ function baseRecord(): MercariOrderContextRecord {
   };
 }
 
+/**
+ * ケースE(同じメールの再取込)の内訳。
+ *
+ * ・Conversation / Message  … verify-messaging.ts(externalMessageIdのGSIで
+ *   重複判定し、重複と分かったら一切書き込まない)
+ * ・NotificationDelivery    … verify-line-notify.ts(dedupeKeyで、SENTなら
+ *   送信も文面差し替えもしない)
+ * ・Product Context(注文)  … 下の testCaseG_Idempotent
+ *
+ * 購入通知は Message を作らないので、上2つの重複判定に載らない。
+ * そのぶんは注文Contextの purchaseMailGmailIds が担う。
+ */
+
 /** ケースG: 同じ購入通知を再取込しても対応が重複しない・増えない。 */
 function testCaseG_Idempotent() {
   const patch = {
