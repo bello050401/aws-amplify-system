@@ -254,6 +254,19 @@ export async function resolveProductFromInquiry(params: {
   overrideInventoryId?: string | null;
   /** 会話に元から紐づく在庫ID。手がかりが無いときの既定値として使う。 */
   conversationInventoryId?: string | null;
+  /**
+   * 販売チャネル側が持っている**正式な商品名**(2026-09-03 追加指示§4)。
+   *
+   * メルカリShopsの通知メールは商品URLを含まないが、出品時のタイトルを
+   * そのまま載せてくる。これはBASEの商品タイトルと同じ性質の手がかり
+   * (人が入力した曖昧な文字列ではなく、出品データそのもの)なので、
+   * 本文から拾った語の断片ではなく**タイトルとして**照合へ渡す。
+   *
+   * ここを本文と同じ扱いにすると、名前の断片の積み上げにしかならず
+   * 確定値(0.95)へ届かない —— 実際、メールから取り込んだ27件が
+   * すべて NOT_FOUND / AMBIGUOUS になっていた。
+   */
+  productTitle?: string | null;
 }): Promise<ResolveProductResult> {
   const references = extractProductReferences(params.messageText, KNOWN_FURNITURE_BRANDS);
   const signals: MatchSignals = {
@@ -277,6 +290,17 @@ export async function resolveProductFromInquiry(params: {
   // ChannelListing も Inventory.externalProductId も BASE item_id を
   // 持っていないため(findBaseArchive のコメントに実測値)、ここで得た
   // 商品名を照合の手がかりに足さないと在庫へ辿り着けない。
+  // チャネル側の正式な商品名があれば、タイトルとして手がかりに足す。
+  // BASE商品タイトルと同じ扱いにすることで、同じ高信頼の照合経路に乗る。
+  if (params.productTitle?.trim()) {
+    const title = params.productTitle.trim();
+    signals.baseTitles = [...(signals.baseTitles ?? []), title];
+    const fromTitle = extractProductReferences(title, KNOWN_FURNITURE_BRANDS);
+    signals.brandNames = [...new Set([...signals.brandNames, ...fromTitle.brandNames])];
+    signals.modelNumbers = [...new Set([...signals.modelNumbers, ...fromTitle.modelNumbers])];
+    signals.nameFragments = [...new Set([...signals.nameFragments, ...fromTitle.productNameFragments])];
+  }
+
   const baseProducts = await findBaseArchive(signals.baseItemIds);
   if (baseProducts.length > 0) {
     // BASEの商品名から手がかりを取り出して足す。**事実として転記するの
@@ -289,7 +313,7 @@ export async function resolveProductFromInquiry(params: {
     // 積み上げ(実測 0.52)では候補の下限 0.60 にすら届かず「候補0件」に
     // なっていた —— 正しい在庫が目の前にあるのに。詳細は
     // scoring.ts の MatchSignals.baseTitles のコメント。
-    signals.baseTitles = baseProducts.map((b) => b.title);
+    signals.baseTitles = [...(signals.baseTitles ?? []), ...baseProducts.map((b) => b.title)];
   }
 
   const strongRows = await findByStrongSignals(signals);

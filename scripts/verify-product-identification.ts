@@ -202,6 +202,43 @@ function testUrlRequest() {
 /* ══════════════════════════════════════════════════════════════════
  * 4. 依頼文
  * ══════════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════════
+ * §4 内部の商品特定失敗を顧客へ転嫁しない
+ *
+ * メルカリShopsのメール経由では、顧客は既に商品ページから問い合わせて
+ * いる。商品URLを送れる導線がそもそも無いのに「URLをお送りください」と
+ * 返すのは、BELLO側で紐付けられなかっただけの失敗を顧客の手間へ
+ * 押し付けることになる。実際にその返信案が8件生成されていた。
+ * ══════════════════════════════════════════════════════════════════ */
+function testNoUrlRequestWhereImpossible() {
+  const base = {
+    basis: "NAME_ONLY" as IdentificationBasis,
+    status: "NOT_FOUND" as const,
+    candidateCount: 0,
+    requiresProduct: true,
+  };
+
+  // 既定(URLを送れる経路)では従来どおり尋ねる。
+  assertTrue(decideUrlRequest(base).requestUrl, "URL依頼: 送れる経路では従来どおり尋ねる");
+
+  // 送れない経路では尋ねない。
+  const noUrl = decideUrlRequest({ ...base, customerCanProvideUrl: false });
+  assertTrue(!noUrl.requestUrl, "URL依頼: 顧客がURLを送れない経路では尋ねない(§4)");
+  assertTrue(noUrl.reason.includes("社内"), "URL依頼: 代わりに社内で確認する旨を理由に書く");
+
+  // 候補が複数のときも同じ。
+  assertTrue(
+    !decideUrlRequest({ ...base, status: "AMBIGUOUS", candidateCount: 3, customerCanProvideUrl: false }).requestUrl,
+    "URL依頼: 候補が複数でも、送れない経路では尋ねない",
+  );
+
+  // 商品が特定できていれば、そもそも尋ねない(経路に関係なく)。
+  assertTrue(
+    !decideUrlRequest({ ...base, basis: "BASE_ITEM_ID", status: "RESOLVED", customerCanProvideUrl: false }).requestUrl,
+    "URL依頼: 特定済みなら尋ねない",
+  );
+}
+
 function testTemplate() {
   const t = PRODUCT_URL_REQUEST_TEMPLATE;
   assertTrue(t.includes("URL"), "文面: URLを求めていると分かる");
@@ -254,6 +291,7 @@ function testLinkedBaseProduct() {
 testUrlExtraction();
 testBasis();
 testUrlRequest();
+testNoUrlRequestWhereImpossible();
 testTemplate();
 testLinkedBaseProduct();
 

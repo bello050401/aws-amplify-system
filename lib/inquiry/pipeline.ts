@@ -112,6 +112,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     messageText: lookupText,
     overrideInventoryId: request.overrideInventoryId ?? null,
     conversationInventoryId: request.conversationInventoryId ?? null,
+    productTitle: request.productTitle ?? null,
   });
   if (!resolution.resolved && negotiation.isNegotiation && !negotiation.fromCurrentMessage) {
     const inboundHistory = request.history.filter((h) => h.direction === "INBOUND").map((h) => h.body);
@@ -147,6 +148,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     status: resolution.status,
     candidateCount: resolution.candidates.length,
     requiresProduct: requiresProduct(intents),
+    // §4 メルカリShopsはメール経由で、顧客は商品ページから問い合わせている。
+    // 商品URLを送ってもらう導線がそもそも無いので、依頼しない。
+    customerCanProvideUrl: request.channel !== "MERCARI_SHOPS",
   });
 
   const unresolved: UnresolvedFact[] = [];

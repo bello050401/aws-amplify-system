@@ -375,4 +375,9 @@ export interface InquiryReplyRequest {
    * 顧客本文へ混ぜると、AIがそれを顧客の発言として読んでしまう。
    */
   additionalContext?: string | null;
+  /**
+   * 販売チャネル側の正式な商品名(§4)。商品URLが無いチャネル
+   * (メルカリShopsのメール)で、出品タイトルをそのまま照合へ渡すために使う。
+   */
+  productTitle?: string | null;
 }

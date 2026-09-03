@@ -140,8 +140,9 @@ export async function ingestMercariNotificationMails(params: { maxResults?: numb
         conversationId: stored.conversationId,
         sourceMessageId: stored.messageId,
         who: params.who,
-        // §4 メールに商品URLは無い。商品名で最大限照合する。
+        // §4 メールに商品URLは無い。出品タイトルをそのまま高信頼の照合へ渡す。
         productLookupHint: buildProductLookupText(parsed),
+        productTitle: parsed.productName,
         // §3 本文が取れていないなら、分類も返信案生成もしない。
         skipGeneration: parsed.status === "PARSE_FAILED",
         skipReason:

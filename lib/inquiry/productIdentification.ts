@@ -115,11 +115,30 @@ export function decideUrlRequest(params: {
   candidateCount: number;
   /** 商品が決まらないと答えられない質問か。 */
   requiresProduct: boolean;
+  /**
+   * 顧客が商品URLを送れる立場にあるか(2026-09-03 追加指示§4)。
+   *
+   * メルカリShopsのメール経由の問い合わせでは false。顧客は既に商品ページ
+   * から問い合わせており、**こちらが商品を紐付けられなかっただけ**。
+   * それを理由にURLの再送を頼むのは、内部の失敗を顧客へ転嫁している。
+   */
+  customerCanProvideUrl?: boolean;
 }): UrlRequestDecision {
   const { basis, status, candidateCount, requiresProduct } = params;
+  const customerCanProvideUrl = params.customerCanProvideUrl ?? true;
 
   if (!requiresProduct) {
     return { requestUrl: false, basis, reason: "商品が決まらなくても答えられる問い合わせです。" };
+  }
+  // §4 顧客がURLを送れない経路では、URLを尋ねる返信を作らない。
+  // 商品が特定できないことは社内側で【要確認】として扱う。
+  if (!customerCanProvideUrl) {
+    return {
+      requestUrl: false,
+      basis,
+      reason:
+        "顧客が商品URLを送れる経路ではないため、URLの送付は依頼しません。商品を特定できない場合は社内で確認してください。",
+    };
   }
   if (canAnswerProductSpecifics(basis)) {
     return { requestUrl: false, basis, reason: "商品を一意に特定できているため、確認は不要です。" };

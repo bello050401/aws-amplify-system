@@ -123,6 +123,8 @@ export async function processInquiryAndNotify(params: {
   inquiryKind?: "PRODUCT_INQUIRY" | "ORDER_MESSAGE" | null;
   /** 取引メッセージの注文番号。通知の1通目に出す(§9)。 */
   orderNumber?: string | null;
+  /** 販売チャネル側の正式な商品名(§4)。高信頼の照合へ渡す。 */
+  productTitle?: string | null;
 }): Promise<AutoReplyResult> {
   try {
     const settings = await getAIReplySettings();
@@ -191,6 +193,7 @@ export async function processInquiryAndNotify(params: {
           history,
           conversationInventoryId: conversation.relatedInventoryId,
           productLookupText: params.productLookupHint ?? null,
+          productTitle: params.productTitle ?? null,
           additionalContext: params.additionalContext ?? null,
         });
       } catch (err) {
