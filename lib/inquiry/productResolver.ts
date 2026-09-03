@@ -169,6 +169,14 @@ export interface BaseArchiveMatch {
   titleCore: string | null;
   price: number | null;
   itemUrl: string | null;
+  /**
+   * 商品説明(2026-09-03 追加指示 §31)。在庫にサイズが無いとき、ここから
+   * 寸法を補完して送料まで出す。持ち回らないと、同じBASE商品をもう一度
+   * 引き直すことになる(BASE APIを2回叩く)。
+   */
+  description: string | null;
+  /** archive(取り込み済み) か api(BASEへ問い合わせた現在値) か。出典として持つ。 */
+  source: "archive" | "api";
 }
 
 /**
@@ -202,6 +210,8 @@ async function findBaseArchive(baseItemIds: string[]): Promise<BaseArchiveMatch[
           titleCore: f.titleCore,
           price: f.price,
           itemUrl: f.itemUrl,
+          description: f.description,
+          source: f.source === "api" ? "api" : "archive",
         }) satisfies BaseArchiveMatch,
     );
 }

@@ -5,6 +5,8 @@ import { DynamoDBDocumentClient, QueryCommand, ScanCommand, PutCommand, UpdateCo
 // 純粋ロジックのみを取り込む。service.ts は "server-only" と
 // serverDataClient(Cookie前提)を引き込むため、ここからは触らない。
 import { buildMessagePreview, deriveNeedsReply, deriveConversationStatus } from "./conversationStatus";
+import { decideConversationLink, type ConversationCandidate } from "./conversationLink";
+import { parseConversationContext } from "@/lib/inquiry/conversationContext";
 import type { MessageChannel } from "./types";
 
 /**
@@ -88,7 +90,17 @@ export function classifyWebhookStoreFailure(err: unknown): WebhookStoreFailure {
 
 export interface IncomingWebhookMessage {
   channel: MessageChannel;
+  /**
+   * チャネル側の顧客ID(LINEの source.userId)。
+   *
+   * **これが取れるなら、これだけで会話を決める。** 空文字を渡してきた場合は
+   * 表示名による補助照合へ落ちる(2026-09-03 追加指示 §19)。
+   */
   externalCustomerId: string;
+  /** チャネル側の会話ID(メルカリShopsの inquiryId 等)。最も強い識別子。 */
+  externalConversationId?: string | null;
+  /** 本文から取れたBASE商品ID。表示名照合のときに文脈の継続性を見るのに使う。 */
+  baseItemIds?: string[];
   externalMessageId: string;
   body: string;
   externalSentAt: string;
@@ -175,32 +187,138 @@ async function findExistingMessage(
 }
 
 /**
- * チャネルと顧客IDで既存の会話を探す。
+ * 条件に合う会話をすべて集める。
  *
  * Conversationには (channel, externalCustomerId) のGSIが無いのでScanになる。
  * Webhook受信は1件ずつでスループットが小さく、会話数もInventoryのような
  * 規模にはならないため許容する。将来件数が増えたらGSIを足す。
  */
-async function findConversation(
+async function scanConversations(
   deps: WebhookStoreDeps,
-  channel: MessageChannel,
-  externalCustomerId: string,
-): Promise<Record<string, unknown> | null> {
+  filterExpression: string,
+  values: Record<string, unknown>,
+  names?: Record<string, string>,
+): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
   let key: Record<string, unknown> | undefined;
   do {
     const res = (await deps.send(
       new ScanCommand({
         TableName: deps.conversationTable,
-        FilterExpression: "channel = :c AND externalCustomerId = :e",
-        ExpressionAttributeValues: { ":c": channel, ":e": externalCustomerId },
+        FilterExpression: filterExpression,
+        ExpressionAttributeValues: values,
+        ...(names ? { ExpressionAttributeNames: names } : {}),
         ExclusiveStartKey: key,
       }),
     )) as { Items?: Record<string, unknown>[]; LastEvaluatedKey?: Record<string, unknown> };
-    const hit = res.Items?.[0];
-    if (hit) return hit;
+    out.push(...(res.Items ?? []));
     key = res.LastEvaluatedKey;
   } while (key);
-  return null;
+  return out;
+}
+
+function str(row: Record<string, unknown>, field: string): string | null {
+  const v = row[field];
+  return typeof v === "string" && v !== "" ? v : null;
+}
+
+/** 会話行を、結合判定が要る形へ落とす。 */
+function toCandidate(row: Record<string, unknown>): ConversationCandidate {
+  const context = parseConversationContext(str(row, "inquiryContext"));
+  return {
+    id: String(row.id),
+    channel: String(row.channel),
+    externalCustomerId: str(row, "externalCustomerId"),
+    externalConversationId: str(row, "externalConversationId"),
+    customerDisplayName: str(row, "customerDisplayName"),
+    lastMessageAt: str(row, "lastMessageAt"),
+    lastOutgoingAt: str(row, "lastOutgoingAt"),
+    status: str(row, "status"),
+    relatedBaseItemId: str(row, "relatedBaseItemId"),
+    hasPendingQuestion: context.pendingQuestions.length > 0,
+    deletedAt: str(row, "deletedAt"),
+  };
+}
+
+/**
+ * 受信メッセージを入れる会話を決める(2026-09-03 追加指示 §19)。
+ *
+ * ── 識別子の強い順に見る ────────────────────────────────────
+ *
+ * チャネル側の会話ID → 顧客ID → (どちらも無い場合だけ)表示名＋文脈。
+ * 表示名は単独では効かない。同姓同名の別人の会話へ問い合わせを混ぜると、
+ * 前の顧客の商品・価格・住所がそのまま新しい顧客への返信に出る。
+ *
+ * ── なぜ全件を集めてから判定するのか ────────────────────────
+ *
+ * 表示名照合では「候補が1件に決まるか」を見る必要がある。2件以上あれば
+ * 結合しない、という判断は、先頭1件で打ち切っていてはできない。
+ * 顧客IDが取れる通常経路(公式LINE)では**これまでどおり**顧客IDだけで
+ * 絞るので、走査量は変わらない。
+ */
+async function findConversation(
+  deps: WebhookStoreDeps,
+  params: IncomingWebhookMessage,
+): Promise<{ row: Record<string, unknown> | null; reason: string }> {
+  const channel = params.channel;
+
+  if (params.externalConversationId) {
+    const rows = await scanConversations(
+      deps,
+      "channel = :c AND externalConversationId = :e",
+      { ":c": channel, ":e": params.externalConversationId },
+    );
+    if (rows.length > 0) {
+      const decision = decideConversationLink(
+        {
+          channel,
+          externalCustomerId: params.externalCustomerId || null,
+          externalConversationId: params.externalConversationId,
+          customerDisplayName: params.customerDisplayName ?? null,
+          receivedAt: params.externalSentAt,
+          baseItemIds: params.baseItemIds ?? [],
+        },
+        rows.map(toCandidate),
+      );
+      const hit = rows.find((r) => String(r.id) === decision.conversationId) ?? null;
+      if (hit) return { row: hit, reason: decision.reason };
+    }
+  }
+
+  if (params.externalCustomerId) {
+    const rows = await scanConversations(
+      deps,
+      "channel = :c AND externalCustomerId = :e",
+      { ":c": channel, ":e": params.externalCustomerId },
+    );
+    if (rows.length > 0) {
+      return { row: rows[0], reason: "チャネル側の顧客IDが一致しました。" };
+    }
+    return { row: null, reason: "この顧客IDの会話はまだありません。新しい会話にします。" };
+  }
+
+  // ── 顧客IDが取れない場合だけ、表示名を補助情報として使う ──
+  const name = params.customerDisplayName?.trim();
+  if (!name) return { row: null, reason: "顧客IDも表示名も無いため、新しい会話にします。" };
+
+  const rows = await scanConversations(
+    deps,
+    "channel = :c AND customerDisplayName = :n",
+    { ":c": channel, ":n": name },
+  );
+  const decision = decideConversationLink(
+    {
+      channel,
+      externalCustomerId: null,
+      externalConversationId: params.externalConversationId ?? null,
+      customerDisplayName: name,
+      receivedAt: params.externalSentAt,
+      baseItemIds: params.baseItemIds ?? [],
+    },
+    rows.map(toCandidate),
+  );
+  const hit = decision.conversationId ? (rows.find((r) => String(r.id) === decision.conversationId) ?? null) : null;
+  return { row: hit, reason: decision.reason };
 }
 
 /**
@@ -263,7 +381,11 @@ export async function recordIncomingWebhookMessageWith(
 
   const now = deps.now();
   const preview = buildMessagePreview(params.body);
-  const existing = await findConversation(deps, params.channel, params.externalCustomerId);
+  const link = await findConversation(deps, params);
+  const existing = link.row;
+  // どう判断したかを残す。表示名で結合した/しなかったの根拠が追えないと、
+  // 会話が分かれた・混ざったときに原因を特定できない。
+  console.info("[webhookStore] 会話の紐付け", { channel: params.channel, linked: existing != null, reason: link.reason });
 
   let conversationId: string;
   if (!existing) {

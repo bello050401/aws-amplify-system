@@ -56,6 +56,14 @@ export interface NotifyInquiryParams {
   orderNumber?: string | null;
   /** 本文の抽出に失敗しているか(§3/§7 解析状態の記録に使う)。 */
   parseFailed?: boolean;
+  /** 会話から引き継いだ情報(§27)。1通目に出す。 */
+  carriedFacts?: { label: string; value: string }[];
+  /** 今回のメッセージで解消した確認事項(§22)。 */
+  answeredQuestions?: string[];
+  /** 商品情報の補完(§33)。 */
+  productContextNotes?: string[];
+  /** 会話文脈の読み書きで起きた問題。 */
+  contextIssues?: string[];
 }
 
 export interface NotifyResult {
@@ -90,6 +98,10 @@ function toNotificationInput(params: NotifyInquiryParams): NotificationInput {
     failureReason: params.failureReason,
     inquiryKind: params.inquiryKind ?? null,
     orderNumber: params.orderNumber ?? null,
+    carriedFacts: params.carriedFacts ?? [],
+    answeredQuestions: params.answeredQuestions ?? [],
+    productContextNotes: params.productContextNotes ?? [],
+    contextIssues: params.contextIssues ?? [],
   };
 }
 

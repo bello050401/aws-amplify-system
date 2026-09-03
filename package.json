@@ -42,6 +42,7 @@
     "repair:zaico-links": "node scripts/with-server-only-stub.cjs scripts/repair-zaico-dangling-links.ts",
     "verify:zaico-reconciliation": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-reconciliation.ts",
     "verify:inquiry": "node scripts/with-server-only-stub.cjs scripts/verify-inquiry.ts",
+    "verify:conversation-context": "node scripts/with-server-only-stub.cjs scripts/verify-conversation-context.ts",
     "verify:knowledge": "node scripts/with-server-only-stub.cjs scripts/verify-knowledge.ts",
     "verify:negotiation": "node scripts/with-server-only-stub.cjs scripts/verify-negotiation.ts",
     "verify:zaico-mapping": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-mapping.ts",

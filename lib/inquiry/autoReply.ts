@@ -5,6 +5,8 @@ import { notifyInquiry, type NotifyResult } from "@/lib/messaging/lineNotify/ser
 import { buildDedupeKey } from "@/lib/messaging/lineNotify/deliveryPolicy";
 import { findDeliveryByDedupeKey } from "@/lib/messaging/lineNotify/deliveryStore";
 import { generateInquiryReplyDraft } from "./pipeline";
+import { loadConversationContext, saveConversationContext } from "./contextStore";
+import { mergeConversationContext } from "./conversationContext";
 import { saveReplyDraft } from "./draftStore";
 import { getAIReplySettings } from "./settings";
 import { detectDeliveryDateIntent, evaluateDeliveryWindow, extractRequestedDeliveryDate } from "./deliveryWindow";
@@ -171,6 +173,18 @@ export async function processInquiryAndNotify(params: {
       .slice(-10)
       .map((m) => ({ direction: m.direction, body: m.body }));
 
+    // ── 会話文脈(2026-09-03 追加指示 §17/§25) ────────────────
+    //
+    // **新着メッセージだけを見て処理しない。** 処理の順序は
+    //   会話を取得 → 過去メッセージと文脈を取得 → 今回の分を足す →
+    //   商品特定・分類・生成 → 文脈を保存 → 通知
+    // で、この関数がその順序そのものになっている。
+    //
+    // 読めなかったことは黙って握りつぶさず、社内確認の理由として残す。
+    const loadedContext = await loadConversationContext(conversation.id);
+    const contextIssues: string[] = [];
+    if (!loadedContext.loaded && loadedContext.reason) contextIssues.push(loadedContext.reason);
+
     // ── 返信案 ────────────────────────────────────────────────
     //
     // 生成が無効化されていても**通知はする**(§34の精神)。返信案が無い
@@ -191,6 +205,7 @@ export async function processInquiryAndNotify(params: {
           messageId: target.id,
           messageText: target.body,
           history,
+          context: loadedContext.context,
           conversationInventoryId: conversation.relatedInventoryId,
           productLookupText: params.productLookupHint ?? null,
           productTitle: params.productTitle ?? null,
@@ -230,6 +245,43 @@ export async function processInquiryAndNotify(params: {
       if (generated.failureReason) failureReason = generated.failureReason;
     }
 
+    // ── 会話文脈を保存する ────────────────────────────────────
+    //
+    // 通知より**前**に保存する。通知は失敗しうる(LINE APIの障害、
+    // 通知先未登録)が、そのときに文脈まで失うと次のメッセージで
+    // また商品特定からやり直しになる。
+    //
+    // 保存は「読んだ版と一致するときだけ」書く。同じ会話へ短時間に
+    // 2通届いたとき、片方の更新が消えるのを防ぐ(§25)。競合したら
+    // 読み直して同じマージをやり直すので、両方の更新が残る。
+    if (generated) {
+      const result = generated;
+      const saved = await saveConversationContext(conversation.id, (current) =>
+        // current は競合時に読み直された最新値。そこへ**今回分かったことを
+        // 足す**形で書く(上書きしない)。
+        mergeConversationContext(current, {
+          channel: result.context.channel,
+          identifiedProduct: result.context.identifiedProduct,
+          negotiation: result.context.negotiation,
+          shipping: result.context.shipping,
+          order: result.context.order,
+          intents: result.context.intents,
+          knowledgeDocumentIds: result.context.knowledgeDocumentIds,
+          reviewReasons: result.context.reviewReasons,
+        }),
+      );
+      if (!saved.saved && saved.reason) contextIssues.push(saved.reason);
+      // 確認待ちの項目は「足す」ではなく「今回の結果で置き換える」。
+      // 解消した項目が残り続けると、次の関係ないメッセージを回答として
+      // 読んでしまう。競合時の再実行でも同じ結果になるので、マージの外で行う。
+      if (saved.saved) {
+        await saveConversationContext(conversation.id, (current) => ({
+          ...current,
+          pendingQuestions: result.context.pendingQuestions,
+        }));
+      }
+    }
+
     // ── 通知 ──────────────────────────────────────────────────
     const notify = await notifyInquiry({
       conversationId: conversation.id,
@@ -243,6 +295,12 @@ export async function processInquiryAndNotify(params: {
       replyDraftId: draft?.id ?? null,
       draftStatus: generated?.status ?? null,
       deliveryWindowState: evaluateDeliveryState(target.body),
+      // §27 引き継いだ情報を1通目に出す。「埼玉です」だけを見せられても
+      // 担当者は判断できない。
+      carriedFacts: generated?.carriedFacts ?? [],
+      answeredQuestions: generated?.answeredQuestions ?? [],
+      productContextNotes: generated?.productContextNotes ?? [],
+      contextIssues,
       failureReason,
       createdBy: params.who,
       inquiryKind: params.inquiryKind ?? null,

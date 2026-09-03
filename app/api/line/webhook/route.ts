@@ -7,6 +7,7 @@ import { saveIncomingAttachment } from "@/lib/messaging/attachmentStore";
 import { parseLineWebhookBody } from "@/lib/messaging/line/adapter";
 import { recordIncomingWebhookMessage, classifyWebhookStoreFailure, type WebhookStoreFailure } from "@/lib/messaging/webhookStore";
 import { processInquiryAndNotifyUnauthenticated } from "@/lib/inquiry/autoReply";
+import { extractBaseItemId, extractUrls, isBaseUrl } from "@/lib/inquiry/references";
 import type { LineWebhookBody } from "@/lib/messaging/line/types";
 
 /**
@@ -140,6 +141,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         customerNameSource: profile.source,
         customerNameFetchedAt: new Date().toISOString(),
         contentKind: msg.contentKind,
+        // §19 表示名で会話を継続するときに、商品文脈が続いているかを見るため。
+        // 公式LINEでは source.userId が必ず取れるのでこちらは通常使われないが、
+        // 顧客IDが取れない経路でも同じ判定が働くように渡しておく。
+        baseItemIds: extractUrls(msg.body)
+          .filter((u) => isBaseUrl(u))
+          .map((u) => extractBaseItemId(u))
+          .filter((id): id is string => id != null),
         ...attachment,
       });
 

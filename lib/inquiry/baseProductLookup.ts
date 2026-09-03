@@ -51,6 +51,15 @@ export interface BaseProductLookup {
   stock: number | null;
   itemUrl: string | null;
   imageUrls: string[];
+  /**
+   * 商品説明(2026-09-03 追加指示 §31)。
+   *
+   * 在庫にサイズが入っていない商品でも、BASEの商品ページには
+   * 「W850 × D900 × H720 mm」と書かれていることがある。**そこにある数字を
+   * 使えば送料まで出せる**ので、説明文を捨てずに持ち回る。HTMLを含みうるので、
+   * 読む側が descriptionToPlainText を通す。
+   */
+  description: string | null;
   /** BASE APIから取れた場合のみ。公開状態は現在値でしか分からない。 */
   isPublished: boolean | null;
 }
@@ -77,6 +86,14 @@ function fromArchive(row: Record<string, unknown>): BaseProductLookup {
     stock: typeof row.stock === "number" ? row.stock : null,
     itemUrl: typeof row.itemUrl === "string" ? row.itemUrl : null,
     imageUrls: parseImageUrls(row.imageUrlsJson),
+    // 平文(detailText)を優先する。取り込み時に整形済みで、HTMLタグの
+    // 属性値に含まれる数字を寸法として誤読する余地が無い。
+    description:
+      typeof row.detailText === "string" && row.detailText.trim() !== ""
+        ? row.detailText
+        : typeof row.detailRaw === "string"
+          ? row.detailRaw
+          : null,
     isPublished: typeof row.visible === "boolean" ? row.visible : null,
   };
 }
@@ -91,6 +108,7 @@ function fromApi(item: BaseItem): BaseProductLookup {
     stock: typeof item.stock === "number" ? item.stock : null,
     itemUrl: item.itemUrl || null,
     imageUrls: (item.images ?? []).map((i) => i.url).filter(Boolean),
+    description: item.description || null,
     isPublished: item.isPublished,
   };
 }
@@ -112,6 +130,7 @@ export async function lookupBaseProduct(baseItemId: string): Promise<BaseProduct
     stock: null,
     itemUrl: null,
     imageUrls: [],
+    description: null,
     isPublished: null,
   };
 

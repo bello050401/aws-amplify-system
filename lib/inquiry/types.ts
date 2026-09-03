@@ -381,6 +381,18 @@ export interface InquiryReplyRequest {
   /** 会話にあらかじめ紐づいている在庫ID(既存のConversation.relatedInventoryId)。 */
   conversationInventoryId?: string | null;
   /**
+   * これまでの会話で確定した情報(2026-09-03 追加指示 §17-§25)。
+   *
+   * **history とは役割が違う。** history は文章の並びで、読み直せば
+   * だいたい分かる、という程度のもの。こちらは「どの商品か」「いくらの
+   * 希望か」「いま何を尋ねて待っているか」を構造として確定させたもので、
+   * 短い後続メッセージ(「埼玉です」)でも失われない。
+   *
+   * 未指定なら空の文脈として扱う —— この機能の前に作られた会話や、
+   * 画面からの単発の再生成でも動く必要がある。
+   */
+  context?: import("./conversationContext").ConversationContext | null;
+  /**
    * 商品特定にだけ使う追加テキスト。**顧客本文とは別扱いにする。**
    *
    * メルカリShopsの通知メールのように、顧客の文面とは別に商品名・商品URLが

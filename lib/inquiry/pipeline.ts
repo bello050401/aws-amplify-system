@@ -25,7 +25,19 @@ import { createDirectUrlProvider, getAgentCoreGatewayUrl, getWebResearchAvailabi
 import { createAgentCoreSearchProvider } from "./research/agentCoreProvider";
 import { brandsInText, officialDomainsForBrands } from "./research/officialDomains";
 import { nameCore } from "./scoring";
-import { extractBaseItemId, isBaseUrl } from "./references";
+import { extractBaseItemId, extractUrls, isBaseUrl } from "./references";
+import {
+  addPendingQuestions,
+  clearPendingQuestions,
+  detectAskedQuestions,
+  emptyConversationContext,
+  mergeConversationContext,
+  switchesProduct,
+  knownFacts,
+  type ConversationContext,
+} from "./conversationContext";
+import { resolvePendingAnswers } from "./pendingAnswer";
+import { buildResolvedProductContext, shippingDimensionsOf, type ResolvedProductContext } from "./productContext";
 import { selectReplyRules, type ReplyRuleRecord } from "./replyRuleSelection";
 import { listActiveReplyRules } from "./replyRuleStore";
 import type { MessageChannel } from "@/lib/messaging/types";
@@ -64,14 +76,77 @@ export interface GenerateInquiryReplyResult {
   modelName: string | null;
   /** 生成できなかった場合の、管理者向けの理由。 */
   failureReason: string | null;
+  /**
+   * この処理で分かったことを反映した会話文脈(§17-§24)。
+   *
+   * 呼び出し側(autoReply)がそのまま保存する。**返信案を作れなかった場合も
+   * 返す** —— 商品が特定できたのに返信生成で失敗したとき、次のターンで
+   * また商品特定からやり直すのは無駄で、しかも同じ結果になる保証が無い。
+   */
+  context: ConversationContext;
+  /** 今回の返信で新たに顧客へ尋ねた項目。通知に出す。 */
+  askedQuestions: string[];
+  /** 今回のメッセージで解消した確認事項。通知に出す。 */
+  answeredQuestions: string[];
+  /** 引き継いだ情報(§27 社内通知の「引き継いだ情報」)。 */
+  carriedFacts: { label: string; value: string }[];
+  /** 商品情報をどこから補完したか(§33)。 */
+  productContextNotes: string[];
 }
 
 /** 顧客向けに出してよい在庫の項目。ここに無いものはAIへ渡さない。 */
 const CUSTOMER_SAFE_INVENTORY_FIELDS = ["商品名", "カテゴリー", "サイズ", "状態", "商品説明", "販売状況"] as const;
 
+/** 会話文脈の項目を除いた返信結果。生成処理の中ではこの形で組み立てる。 */
+type BaseReplyResult = Omit<
+  GenerateInquiryReplyResult,
+  "context" | "askedQuestions" | "answeredQuestions" | "carriedFacts" | "productContextNotes"
+>;
+
 export async function generateInquiryReplyDraft(request: InquiryReplyRequest): Promise<GenerateInquiryReplyResult> {
   const settings = await getAIReplySettings();
   const messageText = normalizeMessage(request.messageText);
+
+  // ── 会話文脈(2026-09-03 追加指示 §17-§24) ─────────────────────
+  //
+  // **今回のメッセージだけを見て処理しない。** 「埼玉です」の1通から
+  // 商品も希望価格も読み取れるはずがない。ここまでに確定した事実を
+  // 引き継いだうえで、今回分かったことを足す。
+  const incomingContext = request.context ?? emptyConversationContext();
+  const carriedFacts = knownFacts(incomingContext);
+
+  // 直前の確認事項への回答か(§22)。確認待ちの項目がある場合だけ読む。
+  const pendingAnswers = resolvePendingAnswers({ context: incomingContext, messageText });
+  const answeredDestination = pendingAnswers.find((a) => a.field === "DESTINATION_PREFECTURE")?.value ?? null;
+  const answeredDeliveryDate = pendingAnswers.find((a) => a.field === "REQUESTED_DELIVERY_DATE")?.value ?? null;
+
+  // 更新されていく文脈。早期returnの経路でも必ず返す。
+  let workingContext = clearPendingQuestions(
+    incomingContext,
+    pendingAnswers.map((a) => a.field),
+  );
+  const answeredQuestions = pendingAnswers.map((a) => a.reason);
+  let productContextNotes: string[] = [];
+
+  /**
+   * 返信結果へ会話文脈を添えて返す。
+   *
+   * 返信案の**文面から**「何を尋ねたか」を読み取り、確認待ちとして積む。
+   * 別のフラグで持つと文面と食い違う —— 顧客が読むのは文面のほうなので、
+   * 文面を正本にする。
+   */
+  const finish = (base: BaseReplyResult): GenerateInquiryReplyResult => {
+    const asked = detectAskedQuestions(base.draftText, new Date().toISOString());
+    const context = addPendingQuestions(workingContext, asked);
+    return {
+      ...base,
+      context,
+      askedQuestions: asked.map((a) => a.askedText),
+      answeredQuestions,
+      carriedFacts,
+      productContextNotes,
+    };
+  };
 
   // ── 値下げ交渉の判定(指示書§3) ──────────────────────────────
   //
@@ -84,13 +159,54 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // 引き継ぐ。引き継ぐ条件をここまで狭くしているのは、普通の問い合わせ
   // にまで配送先を聞き返す回帰を防ぐため(指示書§16)。
   const destinationFromCurrent = extractShippingDestination(messageText);
-  const negotiation = resolveNegotiationContext({
+  // 「埼玉です」は確認事項への回答としても読める。どちらで読めても同じ値。
+  const currentDestination = destinationFromCurrent.prefecture ?? answeredDestination;
+  let negotiation = resolveNegotiationContext({
     currentText: messageText,
     history: request.history,
-    currentHasDestination: destinationFromCurrent.prefecture != null,
+    currentHasDestination: currentDestination != null,
   });
 
   const keywordIntents = extractIntents(messageText);
+
+  // ── 交渉の引き継ぎ(§21) ───────────────────────────────────────
+  //
+  // 会話文脈に「交渉中」が残っていれば、今回の本文が交渉に見えなくても
+  // 交渉として続ける。resolveNegotiationContext は本文と履歴だけを見る
+  // 実装で、引き継ぐ条件を「配送先の回答のとき」に限っていた。文脈を
+  // 持てるようになった以上、そこはもう本文の推測に頼らない。
+  //
+  // ただし**無条件には引き継がない**。一度交渉があった会話で以降ずっと
+  // 交渉として扱うと、「サイズを教えてください」にまで配送先を聞き返す
+  // (2026-09-02 指示書§16が名指しで禁じた回帰)。引き継ぐのは
+  //   ・確認事項への回答である、または
+  //   ・今回の本文が独立した別の話題を持っていない
+  // ときだけにする。
+  const currentBaseItemIds = extractUrls(messageText)
+    .filter((u) => isBaseUrl(u))
+    .map((u) => extractBaseItemId(u))
+    .filter((id): id is string => id != null);
+  const productSwitched = switchesProduct(incomingContext, currentBaseItemIds);
+  const currentHasOwnTopic = keywordIntents.some((i) => i !== "OTHER" && i !== "NEGOTIATION");
+  const carryNegotiation =
+    !negotiation.isNegotiation &&
+    incomingContext.negotiation.active &&
+    !productSwitched &&
+    (pendingAnswers.length > 0 || !currentHasOwnTopic);
+
+  if (carryNegotiation) {
+    negotiation = {
+      isNegotiation: true,
+      signals: ["(この会話の引き継ぎ情報から: 値下げ交渉の続き)"],
+      quantity: incomingContext.negotiation.quantity,
+      quantityRaw: null,
+      requestedTotalPriceYen: incomingContext.negotiation.requestedTotalPriceYen,
+      requestedUnitPriceYen: incomingContext.negotiation.requestedUnitPriceYen,
+      amounts: [],
+      fromCurrentMessage: false,
+    };
+  }
+
   // 交渉と判定したら NEGOTIATION を必ず立てる。OTHER 単独だったものが
   // NEGOTIATION になるので、OTHER は落とす(意味のないラベルを残さない)。
   const intents: InquiryIntent[] = negotiation.isNegotiation
@@ -108,10 +224,33 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // productLookupText のコメント参照)。特定にはそちらを使い、
   // **プロンプトへは messageText しか渡さない**。
   const lookupText = request.productLookupText?.trim() || messageText;
+
+  // ── 商品の引き継ぎ(§17/§21/§23) ───────────────────────────────
+  //
+  // 一度BASE URLで特定できた商品は、次のターンで本文にURLが無くても
+  // **同じ商品の話が続いている**。特定済みのURLを照合用テキストの先頭へ
+  // 戻すことで、1通目とまったく同じ経路(URL → BASE商品 → 在庫照合)を
+  // 通す —— 別経路を作ると、1通目と2通目で違う商品に解決しうる。
+  //
+  // 顧客が**別の**BASE商品URLを送ってきたときは引き継がない
+  // (switchesProduct)。話題が変わったのに古い商品を引きずるほうが有害。
+  const carriedBaseUrl =
+    !productSwitched && currentBaseItemIds.length === 0 ? incomingContext.identifiedProduct.baseItemUrl : null;
+  const effectiveLookupText = carriedBaseUrl ? `${carriedBaseUrl}\n${lookupText}` : lookupText;
+  if (carriedBaseUrl) {
+    productContextNotes.push("対象商品：前のメッセージで特定したBASE商品を引き継ぎました。");
+  }
+
+  // URLが無いまま在庫だけ分かっている場合(担当者が選んだ、名前で特定した等)は、
+  // 在庫IDを引き継ぐ。productResolver はこれを**候補が0件のときの拠り所**
+  // としてしか使わないので、今回の本文に別の手がかりがあればそちらが勝つ。
+  const carriedInventoryId =
+    !productSwitched && !carriedBaseUrl ? incomingContext.identifiedProduct.inventoryId : null;
+
   let resolution = await resolveProductFromInquiry({
-    messageText: lookupText,
+    messageText: effectiveLookupText,
     overrideInventoryId: request.overrideInventoryId ?? null,
-    conversationInventoryId: request.conversationInventoryId ?? null,
+    conversationInventoryId: request.conversationInventoryId ?? carriedInventoryId,
     productTitle: request.productTitle ?? null,
   });
   if (!resolution.resolved && negotiation.isNegotiation && !negotiation.fromCurrentMessage) {
@@ -120,9 +259,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       const retry = await resolveProductFromInquiry({
         // 再試行でも特定用テキストを使う。ここだけ messageText に戻すと、
         // メール経由の問い合わせで一度目に効いた手がかりが二度目に消える。
-        messageText: [...inboundHistory, lookupText].join("\n"),
+        messageText: [...inboundHistory, effectiveLookupText].join("\n"),
         overrideInventoryId: request.overrideInventoryId ?? null,
-        conversationInventoryId: request.conversationInventoryId ?? null,
+        conversationInventoryId: request.conversationInventoryId ?? carriedInventoryId,
       });
       if (retry.resolved) resolution = retry;
     }
@@ -140,7 +279,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   const basis = identificationBasis({
     status: resolution.status,
     references: resolution.references,
-    fromOperatorOrConversation: Boolean(request.overrideInventoryId || request.conversationInventoryId),
+    fromOperatorOrConversation: Boolean(
+      request.overrideInventoryId || request.conversationInventoryId || carriedInventoryId,
+    ),
     candidateCount: resolution.candidates.length,
   });
   const urlRequest = decideUrlRequest({
@@ -152,7 +293,13 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     // 商品URLを送ってもらう導線がそもそも無いので、依頼しない。
     customerCanProvideUrl: request.channel !== "MERCARI_SHOPS",
     // 既にURLが本文にあるなら、再送を頼んでも結果は変わらない。
-    customerAlreadySentUrl: resolution.references.urls.some((u) => isBaseUrl(u)),
+    //
+    // §23 会話の**前のメッセージ**で送られたURLも同じ。顧客からすれば
+    // 一度送ったものをもう一度求められているだけで、内部の照合が
+    // うまくいかないことは顧客の責任ではない。特定できないなら社内の
+    // 【要確認】として扱う。
+    customerAlreadySentUrl:
+      resolution.references.urls.some((u) => isBaseUrl(u)) || incomingContext.identifiedProduct.baseItemId != null,
   });
 
   const unresolved: UnresolvedFact[] = [];
@@ -316,15 +463,73 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     ...request.history.filter((h) => h.direction === "INBOUND").map((h) => h.body),
     messageText,
   ].join("\n");
-  const destinationPrefecture = negotiation.isNegotiation
-    ? extractShippingDestination(destinationSearchText).prefecture
-    : destinationFromCurrent.prefecture;
+  // 会話文脈の配送先が最優先。一度教わった配送先を、後のメッセージで
+  // 本文に書かれていないという理由で見失わない(§21)。
+  const destinationPrefecture =
+    currentDestination ??
+    incomingContext.shipping.prefecture ??
+    (negotiation.isNegotiation ? extractShippingDestination(destinationSearchText).prefecture : null);
+  const destinationCityHint =
+    destinationFromCurrent.cityHint ??
+    incomingContext.shipping.cityHint ??
+    (negotiation.isNegotiation ? extractShippingDestination(destinationSearchText).cityHint : null);
+
+  // ── 統合Product Context(§29-§36) ──────────────────────────────
+  //
+  // 商品情報を「Inventoryだけ」から取らない。在庫にサイズが無くても、
+  // 顧客が送ってきたBASE商品ページには書かれていることがある。実際、
+  // それで**計算できるはずの想定送料が「不明」になっていた**。
+  //
+  // 出典ごとに上書きするのではなく、足りない項目を別の出典で補う。
+  // チャネルでは分岐しない —— 公式LINEでもメルカリShopsでも同じ文脈を使う(§34)。
+  const linkedBaseForContext = linkedBaseProduct(basis, resolution.baseProducts) ?? resolution.baseProducts[0] ?? null;
+  const productContext: ResolvedProductContext = await buildResolvedProductContext({
+    inventory: inventory
+      ? {
+          id: inventory.id,
+          displayInventoryId: resolution.resolved?.displayInventoryId ?? null,
+          sku: inventory.sku,
+          name: inventory.name,
+          salePriceYen: inventory.salePrice ?? null,
+          plannedSalePriceYen: inventory.plannedSalePrice ?? null,
+          purchasePriceYen: inventory.purchasePrice ?? null,
+          saleStartDate: inventory.saleStartDate ?? null,
+          width: inventory.width,
+          depth: inventory.depth,
+          height: inventory.height,
+          quantity: inventory.quantity ?? null,
+          categoryName,
+          statusName,
+        }
+      : null,
+    baseProduct: linkedBaseForContext
+      ? {
+          baseItemId: linkedBaseForContext.baseItemId,
+          title: linkedBaseForContext.title,
+          price: linkedBaseForContext.price,
+          itemUrl: linkedBaseForContext.itemUrl,
+          description: linkedBaseForContext.description,
+          source: linkedBaseForContext.source,
+        }
+      : null,
+    baseItemId: linkedBaseForContext?.baseItemId ?? incomingContext.identifiedProduct.baseItemId ?? null,
+    baseItemUrl: linkedBaseForContext?.itemUrl ?? incomingContext.identifiedProduct.baseItemUrl ?? null,
+  });
+  productContextNotes = [...productContextNotes, ...productContext.completionNotes];
+  for (const reason of productContext.reviewReasons) {
+    // §39 低信頼の寸法は使うが、必ず人へ知らせる。
+    unresolved.push({ field: "商品サイズの確認", reason });
+  }
+
+  const mergedDimensions = shippingDimensionsOf(productContext);
 
   let shipping: ShippingEvidence | null = null;
   if (intents.includes("SHIPPING") || negotiation.isNegotiation) {
     shipping = await resolveShipping({
-      messageText: negotiation.isNegotiation ? destinationSearchText : messageText,
-      inventory,
+      destinationPrefecture,
+      cityHint: destinationCityHint,
+      dimensions: mergedDimensions,
+      productResolved: inventory != null || productContext.identity.baseItemId != null,
     });
     for (const missing of shipping.missingCustomerInfo) {
       // 交渉では市区町村まで求めない —— 指示書§4が求めているのは
@@ -348,9 +553,12 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
               inventory.salePrice != null ? "salePrice" : inventory.plannedSalePrice != null ? "plannedSalePrice" : null,
             purchasePriceYen: inventory.purchasePrice ?? null,
             saleStartDate: inventory.saleStartDate ?? null,
-            width: inventory.width,
-            depth: inventory.depth,
-            height: inventory.height,
+            // §36 在庫にサイズが無いという理由だけで値下げ判断を止めない。
+            // BASEから補完した寸法があればそれを使い、送料まで出してから
+            // 判断する。統合Product Context が出典も持っている。
+            width: mergedDimensions.width,
+            depth: mergedDimensions.depth,
+            height: mergedDimensions.height,
           }
         : null;
     negotiationResult = await resolveNegotiation({
@@ -465,13 +673,62 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     generationRoute: negotiation.isNegotiation ? "negotiation" : "standard",
   };
 
+  // ── 分かったことを会話文脈へ足す(§21) ─────────────────────────
+  //
+  // **消さない。** 今回分からなかった項目は undefined を渡して、既存の値を
+  // そのまま残す。「埼玉です」の1通で商品や希望価格が消えるのが、今回
+  // 直している不具合そのものなので、ここが最も重要な不変条件になる。
+  const identifiedBase = linkedBaseForContext;
+  workingContext = mergeConversationContext(workingContext, {
+    channel: request.channel,
+    intents,
+    identifiedProduct: {
+      baseItemId: identifiedBase?.baseItemId ?? undefined,
+      baseItemUrl: productContext.identity.baseItemUrl ?? undefined,
+      baseProductName: identifiedBase?.title ?? undefined,
+      baseListedPriceYen: identifiedBase?.price ?? undefined,
+      // §24 BASE商品と在庫で段階を分ける。BASEが特定できていれば、
+      // 在庫が絞れなくてもそのことは失わない。
+      baseStatus: identifiedBase ? "RESOLVED" : undefined,
+      inventoryId: resolution.resolved?.inventoryId ?? undefined,
+      displayInventoryId: resolution.resolved?.displayInventoryId ?? undefined,
+      inventoryName: resolution.resolved?.name ?? undefined,
+      inventoryCandidateIds:
+        resolution.candidates.length > 0 ? resolution.candidates.map((c) => c.inventoryId) : undefined,
+      inventoryStatus: resolution.status,
+      basis,
+      salePriceYen: productContext.commerce.currentSalePriceYen?.value ?? undefined,
+    },
+    negotiation: negotiation.isNegotiation
+      ? {
+          active: true,
+          requestedTotalPriceYen: negotiation.requestedTotalPriceYen ?? undefined,
+          requestedUnitPriceYen: negotiation.requestedUnitPriceYen ?? undefined,
+          quantity: negotiation.quantity ?? undefined,
+          currentUnitPriceYen: productContext.commerce.currentSalePriceYen?.value ?? undefined,
+        }
+      : undefined,
+    shipping: {
+      prefecture: destinationPrefecture ?? undefined,
+      cityHint: destinationCityHint ?? undefined,
+      estimatedShippingCostYen: shipping?.feeYen ?? undefined,
+      rank: shipping?.rank ?? productContext.shipping.rank ?? undefined,
+    },
+    order: {
+      requestedDeliveryDate: answeredDeliveryDate ?? undefined,
+    },
+    appliedReplyRuleIds: undefined,
+    knowledgeDocumentIds: knowledgeHits.length > 0 ? knowledgeHits.map((k) => k.id) : undefined,
+    reviewReasons: productContext.reviewReasons.length > 0 ? productContext.reviewReasons : undefined,
+  });
+
   // ── 商品が確実に特定できていなければ、答えずにURLを尋ねる ──────
   //
   // ここは**生成より前**に置く。AIに投げてから「やっぱり分からない」と
   // 捨てるのでは、その間に商品固有の事実がプロンプトへ混ざる余地が残る。
   // 特定できていない時点で、商品の話は一切しない。
   if (urlRequest.requestUrl) {
-    return {
+    return finish({
       status: "NEEDS_PRODUCT_CONFIRMATION",
       draftText: PRODUCT_URL_REQUEST_TEMPLATE,
       evidence,
@@ -483,18 +740,18 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       modelProvider: null,
       modelName: null,
       failureReason: null,
-    };
+    });
   }
 
   // ── 生成できない条件を先に判定する ────────────────────────────
   if (!settings.autoDraftEnabled) {
-    return failed("AI返信案の生成が設定で無効になっています。", evidence, intents, unresolved);
+    return finish(failed("AI返信案の生成が設定で無効になっています。", evidence, intents, unresolved));
   }
   const nothingToAnswerWith =
     trustedProductFacts.length === 0 && knowledgeHits.length === 0 && shipping === null && research.facts.length === 0;
   if (nothingToAnswerWith && requiresProduct(intents) && !hasProductIndependentIntent(intents)) {
-    return {
-      status: resolution.status === "AMBIGUOUS" ? "NEEDS_PRODUCT_CONFIRMATION" : "NEEDS_PRODUCT_CONFIRMATION",
+    return finish({
+      status: "NEEDS_PRODUCT_CONFIRMATION",
       draftText: null,
       evidence,
       intents,
@@ -502,7 +759,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       modelProvider: null,
       modelName: null,
       failureReason: "回答の根拠になる情報が1件も得られなかったため、返信案を生成していません。対象商品を指定してから再生成してください。",
-    };
+    });
   }
 
   // ── 返信ルール(§16/§19) ───────────────────────────────────────
@@ -589,7 +846,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       modelProvider = result.providerId;
       modelName = result.modelId;
     } catch (err) {
-      return failed(err instanceof Error ? err.message : "AIの呼び出しに失敗しました。", evidence, intents, unresolved);
+      return finish(failed(err instanceof Error ? err.message : "AIの呼び出しに失敗しました。", evidence, intents, unresolved));
     }
 
     const validation = validateReplyDraft({
@@ -606,7 +863,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       groundedTexts: [...knowledgeHits.map((k) => k.excerpt), ...trustedProductFacts.map((f) => f.value)],
     });
     if (validation.ok) {
-      return {
+      return finish({
         status: deriveStatus(resolution.status, unresolved, research.facts),
         draftText: output,
         evidence,
@@ -615,7 +872,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
         modelProvider,
         modelName,
         failureReason: null,
-      };
+      });
     }
     lastViolations = validation.violations.map((v) => `- ${v.detail}`);
     // §32: 検査に落ちたことは構造化ログに残す。生成文そのものは残さない
@@ -627,7 +884,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     });
   }
 
-  return {
+  return finish({
     status: "FAILED",
     draftText: null,
     evidence,
@@ -636,7 +893,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     modelProvider,
     modelName,
     failureReason: `生成結果が安全性・事実整合性の検査に${REPLY_MAX_GENERATION_ATTEMPTS}回続けて不合格でした: ${lastViolations.join(" ")}`,
-  };
+  });
 }
 
 /**
@@ -653,7 +910,7 @@ function deriveStatus(productStatus: ProductResolutionStatus, unresolved: Unreso
   return "READY";
 }
 
-function failed(reason: string, evidence: ReplyEvidence, intents: InquiryIntent[], unresolved: UnresolvedFact[]): GenerateInquiryReplyResult {
+function failed(reason: string, evidence: ReplyEvidence, intents: InquiryIntent[], unresolved: UnresolvedFact[]): BaseReplyResult {
   return { status: "FAILED", draftText: null, evidence, intents, unresolvedFacts: unresolved, modelProvider: null, modelName: null, failureReason: reason };
 }
 
@@ -665,55 +922,71 @@ function failed(reason: string, evidence: ReplyEvidence, intents: InquiryIntent[
  * 書き換わるのは副作用として重すぎるので、ここではランク計算とマスタ検索
  * (どちらも読み取りのみ)を直接使う。
  */
+/**
+ * 【本文からもう一度読み直さない】以前はここで配送先を本文から抽出し、
+ * 寸法は在庫から直接読んでいた。会話文脈を持てるようになった今、
+ * 「どこ宛か」と「どの寸法か」は呼び出し側が既に確定させている
+ * (§32 の順序: Inventory → BASE保存データ → BASEライブ)。同じことを
+ * 2箇所で判断すると、片方だけ直したときに食い違う。
+ */
 async function resolveShipping(params: {
-  messageText: string;
-  inventory: { width: string | null; depth: string | null; height: string | null } | null;
+  destinationPrefecture: string | null;
+  cityHint: string | null;
+  /** 統合Product Context が決めた寸法(出典は問わない)。 */
+  dimensions: { width: string | null; depth: string | null; height: string | null };
+  /** 商品が特定できているか(不足情報の案内文の出し分けに使う)。 */
+  productResolved: boolean;
 }): Promise<ShippingEvidence> {
-  const destination = extractShippingDestination(params.messageText);
-  const dims = params.inventory ? calculateShippingRankFromDimensions(params.inventory.width, params.inventory.depth, params.inventory.height) : null;
+  const dims = calculateShippingRankFromDimensions(
+    params.dimensions.width,
+    params.dimensions.depth,
+    params.dimensions.height,
+  );
 
   const missing = missingShippingInfo({
-    productResolved: params.inventory != null,
-    destinationPrefecture: destination.prefecture,
-    cityHint: destination.cityHint,
+    productResolved: params.productResolved,
+    destinationPrefecture: params.destinationPrefecture,
+    cityHint: params.cityHint,
     hasDimensions: dims != null,
   });
 
-  if (!destination.prefecture || !dims) {
+  if (!params.destinationPrefecture || !dims) {
     return {
-      destinationPrefecture: destination.prefecture,
+      destinationPrefecture: params.destinationPrefecture,
       rank: dims?.rank ?? null,
       feeYen: null,
-      note: !destination.prefecture ? "お届け先が特定できないため、金額を出していません。" : "商品の寸法が未入力のため、配送ランクを判定できません。",
+      note: !params.destinationPrefecture
+        ? "お届け先が特定できないため、金額を出していません。"
+        : "在庫にもBASE商品ページにも送料判定に使える寸法が無いため、配送ランクを判定できません。",
       missingCustomerInfo: missing,
     };
   }
 
-  const rate = await lookupShippingRate(destination.prefecture, dims.rank);
+  const rate = await lookupShippingRate(params.destinationPrefecture, dims.rank);
   if (!rate) {
     return {
-      destinationPrefecture: destination.prefecture,
+      destinationPrefecture: params.destinationPrefecture,
       rank: dims.rank,
       feeYen: null,
-      note: `埼玉県 → ${destination.prefecture}・${dims.rank}ランクの料金が料金マスタに未登録です。`,
+      note: `埼玉県 → ${params.destinationPrefecture}・${dims.rank}ランクの料金が料金マスタに未登録です。`,
       missingCustomerInfo: missing,
     };
   }
   if (rate.price == null) {
     return {
-      destinationPrefecture: destination.prefecture,
+      destinationPrefecture: params.destinationPrefecture,
       rank: dims.rank,
       feeYen: null,
-      note: `埼玉県 → ${destination.prefecture}・${dims.rank}ランクは公式にサービス対象外と確認されています。`,
+      note: `埼玉県 → ${params.destinationPrefecture}・${dims.rank}ランクは公式にサービス対象外と確認されています。`,
       missingCustomerInfo: missing,
     };
   }
   return {
-    destinationPrefecture: destination.prefecture,
+    destinationPrefecture: params.destinationPrefecture,
     rank: dims.rank,
     feeYen: rate.price + (rate.surcharge ?? 0),
     // 市区町村が分からない段階の金額は参考値。確定額として案内させない。
-    note: destination.cityHint ? null : "都道府県のみで引いた参考額です。市区町村により変わる場合があります。",
+    note: params.cityHint ? null : "都道府県のみで引いた参考額です。市区町村により変わる場合があります。",
     missingCustomerInfo: missing,
   };
 }

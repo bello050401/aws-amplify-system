@@ -68,6 +68,20 @@ export interface NotificationInput {
   inquiryKind?: "PRODUCT_INQUIRY" | "ORDER_MESSAGE" | null;
   /** 取引メッセージの注文番号(§9 1通目に出す)。 */
   orderNumber?: string | null;
+  /**
+   * 会話から引き継いだ情報(2026-09-03 追加指示 §27)。
+   *
+   * 後続メッセージだと、1通目に出るのが「埼玉です」だけになる。それでは
+   * 担当者は**何の話か分からないまま返信案の可否を判断する**ことになる。
+   * 今回の判断に使った文脈を並べて、その場で読めるようにする。
+   */
+  carriedFacts?: { label: string; value: string }[];
+  /** 今回のメッセージで解消した確認事項(§22)。 */
+  answeredQuestions?: string[];
+  /** 商品情報をどこから補完したか(§33「サイズ：BASE商品ページから補完」)。 */
+  productContextNotes?: string[];
+  /** 会話文脈の読み書きで起きた問題。黙って成功にしない。 */
+  contextIssues?: string[];
 }
 
 export interface NotificationMessages {
@@ -258,6 +272,27 @@ export function buildSummaryMessage(input: NotificationInput): string {
     // §9 取引メッセージなら注文番号を1通目に出す。担当者が管理画面で
     // 注文を引くときにそのまま使える。
     input.orderNumber ? section("注文情報", [`注文番号：${input.orderNumber}`]) : null,
+    // §27 引き継いだ情報。今回の判断に使った文脈だけを並べる ——
+    // 会話の全履歴を貼ると、肝心の判断材料が下へ押し出されて読めなくなる。
+    input.carriedFacts && input.carriedFacts.length > 0
+      ? section(
+          "引き継いだ情報",
+          input.carriedFacts.map((f) => `${f.label}：${f.value}`),
+        )
+      : null,
+    input.answeredQuestions && input.answeredQuestions.length > 0
+      ? section(
+          "今回いただいた回答",
+          input.answeredQuestions.map((r) => `・${r}`),
+        )
+      : null,
+    // §33 どの情報でこの判断をしたか。送料が出せた/出せなかった理由の追跡に要る。
+    input.productContextNotes && input.productContextNotes.length > 0
+      ? section(
+          "商品情報の補完",
+          input.productContextNotes.map((r) => `・${r}`),
+        )
+      : null,
     section("問い合わせ判定", [intentText]),
     // なぜ人が判断する必要があるのかを必ず書く。【要確認】だけ付けて
     // 理由を書かないと、担当者が何を決めればよいか分からない。
@@ -272,6 +307,16 @@ export function buildSummaryMessage(input: NotificationInput): string {
           input.logId ? `管理画面ログID：${input.logId}` : null,
         ])
       : null,
+    // 会話の引き継ぎが働かなかったことは隠さない。担当者が
+    // 「なぜ商品を引き継げていないのか」を追えるようにする。
+    input.contextIssues && input.contextIssues.length > 0
+      ? section(
+          "引き継ぎの問題",
+          input.contextIssues.map((r) => `・${r}`),
+        )
+      : null,
+    // §27 1通目の最後は必ずこの1行。2通目が来ることを担当者へ知らせる。
+    input.draftText && input.draftText.trim() ? "【次のメッセージで返信提案します】" : null,
   ];
 
   return truncate(parts.filter((p): p is string => p !== null).join("\n\n"), LINE_TEXT_LIMIT);
@@ -283,10 +328,15 @@ export function buildSummaryMessage(input: NotificationInput): string {
  * **そのままコピーして顧客へ送れる完成文だけを入れる。** 「以下のように
  * 返信するとよいでしょう」のようなAIの解説は入れない —— 担当者がコピーの
  * たびに解説行を削る運用は必ず事故る(消し忘れがそのまま顧客へ届く)。
- * 見出しの【返信提案】だけは、1通目と区別するために必要なので残す。
+ * ── 見出しを付けない(2026-09-03 追加指示 §27) ───────────────────
+ *
+ * 以前は【返信提案】を先頭に付けていた。担当者はこの2通目を**そのまま
+ * コピーして顧客へ送る**ので、見出しが残っていると顧客に見出しごと届く。
+ * 1通目との区別は、1通目の末尾の【次のメッセージで返信提案します】が
+ * 担っている —— 区別のために、送る側の文面を汚す必要は無い。
  */
 export function buildReplyMessage(draftText: string): string {
-  return truncate(`【返信提案】\n\n${draftText.trim()}`, LINE_TEXT_LIMIT);
+  return truncate(draftText.trim(), LINE_TEXT_LIMIT);
 }
 
 function decidePriority(input: NotificationInput): NotificationPriority {

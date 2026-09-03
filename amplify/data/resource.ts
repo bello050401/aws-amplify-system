@@ -1137,6 +1137,32 @@ const schema = a.schema({
        */
       completedAt: a.datetime(),
       completedBy: a.string(),
+      /**
+       * 会話の確定情報(2026-09-03 追加指示 §17-§25)。JSON文字列。
+       *
+       * 「https://…/items/156144635 3万円まで下げられますか」→
+       * 「お届け先の都道府県を教えてください」→「埼玉です」の3通目で、
+       * 商品・希望価格・交渉であることが**毎回失われていた**。履歴の本文を
+       * AIへ渡すだけでは足りない —— 一度確定した事実を文章から読み直すと、
+       * 短い返答のターンで読み取れずに消える。構造として保持する。
+       *
+       * 【なぜ別モデルにしないか】会話と1対1で、会話が消えれば無意味になる。
+       * 別テーブルにすると読み書きが2往復になり、Webhookの中で同期処理して
+       * いる今の構成では遅延がそのまま顧客への返信遅れになる。
+       *
+       * 中身の型は lib/inquiry/conversationContext.ts の ConversationContext。
+       */
+      inquiryContext: a.string(),
+      /**
+       * inquiryContext の版数。**同一会話へ短時間に2通届いたときの
+       * lost update を防ぐ**ために使う(§25)。
+       *
+       * 「埼玉です」「できれば今週欲しいです」が連続で届くと、2つの処理が
+       * 同じ版を読んで別々に書き戻し、片方の更新が消える。書き込みは
+       * 「読んだ版と一致するときだけ」成立させ(条件付き更新)、外れたら
+       * 読み直してマージし直す —— lib/inquiry/contextStore.ts。
+       */
+      inquiryContextVersion: a.integer(),
       /** 顧客名をいつ外部APIから取得したか。毎回LINE APIを叩かないためのキャッシュ判定に使う。 */
       customerNameFetchedAt: a.datetime(),
       /** 顧客名の出所("LINE_PROFILE"等)。取得できなかったのか、そもそも取りに行っていないのかを区別する。 */
