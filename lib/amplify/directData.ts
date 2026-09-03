@@ -303,11 +303,21 @@ async function modelCreate(model: string, input: Record<string, unknown>): Promi
   return { data: item };
 }
 
-async function modelUpdate(model: string, input: Record<string, unknown>): Promise<ItemResult> {
-  const idField = identifierFor(model);
-  const { [idField]: id, ...rest } = input;
-  if (typeof id !== "string") throw new Error(`${model}.update には ${idField} が必要です。`);
-
+/**
+ * update の UpdateExpression を組み立てる。
+ *
+ * **純粋関数として切り出してある。** ここを間違えると DynamoDB が式全体を
+ * 拒否し、その経路の書き込みが1つも通らなくなる。しかも呼び出し側は
+ * try/catch で「取得できなかった」に丸めていることが多く、原因が
+ * 「データが無い」と区別できない形で消える —— 実際にBASE商品照合が
+ * それで壊れていた(下記 updatedAt の重複)。実機でしか気づけない形に
+ * しないため、式の組み立てだけを単体で固定できるようにする。
+ */
+export function buildUpdateExpression(rest: Record<string, unknown>, updatedAtIso: string): {
+  expression: string;
+  names: Record<string, string>;
+  values: Record<string, unknown>;
+} {
   const sets: string[] = [];
   const removes: string[] = [];
   const names: Record<string, string> = {};
@@ -315,6 +325,19 @@ async function modelUpdate(model: string, input: Record<string, unknown>): Promi
   let i = 0;
   for (const [k, v] of Object.entries(rest)) {
     if (v === undefined) continue;
+    // updatedAt は下で必ず設定する。ここでも通すと、同じ属性に別々の
+    // プレースホルダが2つ割り当たり、DynamoDB が UpdateExpression 全体を
+    // 拒否する(ValidationException: Two document paths overlap)。
+    //
+    // **その経路の書き込みが1つも通らなくなる**。実際、BASEのOAuthトークン
+    // 更新が updatedAt を明示的に渡していたため、未認証経路からのBASE商品
+    // 照合が常に失敗し、取り込み済み267件以外の商品を特定できなくなっていた。
+    // 失敗は lookupBaseProduct の catch に吸われ、「商品が見つからない」と
+    // 区別が付かない形で消えていた。
+    //
+    // AppSync も updatedAt はサーバ側で付け直すので、呼び出し側の値を
+    // 捨てる方が本来の挙動に近い。
+    if (k === "updatedAt") continue;
     const nk = `#u${i}`;
     names[nk] = k;
     if (v === null) {
@@ -328,12 +351,25 @@ async function modelUpdate(model: string, input: Record<string, unknown>): Promi
     i++;
   }
   names["#ua"] = "updatedAt";
-  values[":ua"] = nowIso();
+  values[":ua"] = updatedAtIso;
   sets.push("#ua = :ua");
 
-  const expr = [sets.length > 0 ? `SET ${sets.join(", ")}` : "", removes.length > 0 ? `REMOVE ${removes.join(", ")}` : ""]
+  const expression = [
+    sets.length > 0 ? `SET ${sets.join(", ")}` : "",
+    removes.length > 0 ? `REMOVE ${removes.join(", ")}` : "",
+  ]
     .filter(Boolean)
     .join(" ");
+  return { expression, names, values };
+}
+
+async function modelUpdate(model: string, input: Record<string, unknown>): Promise<ItemResult> {
+  const idField = identifierFor(model);
+  const { [idField]: id, ...rest } = input;
+  if (typeof id !== "string") throw new Error(`${model}.update には ${idField} が必要です。`);
+
+  const { expression: expr, names, values } = buildUpdateExpression(rest, nowIso());
+
 
   try {
     const res = await ddb().send(
