@@ -18,6 +18,8 @@ import { PRODUCT_MATCH_AUTO_CONFIRM, PRODUCT_MATCH_CANDIDATE_FLOOR } from "./typ
 /** 照合対象として渡す在庫1件分の情報(必要な項目だけ)。 */
 export interface MatchableInventory {
   id: string;
+  /** 在庫数。同一商品をまとめたときの内訳表示に使う。 */
+  quantity?: number | null;
   displayInventoryId: string;
   sku: string;
   name: string;
@@ -86,10 +88,15 @@ export const WEAK_SIGNAL_SCORE_CAP = 0.92;
  * BASE商品名との一致の配点。
  *
  * 完全一致(正規化後)は同一性を保証する扱いにする —— BASEの商品ページは
- * BELLOが自分の在庫名から起こしているため。ただし**同名の在庫が2件ある
- * 場合は両方が同点になり、decideResolution の同点判定(AMBIGUITY_MARGIN)
- * で自動確定されない**。「在庫2」のような重複はまさにこの形で現れるので、
- * 高い点を付けても勝手に片方へ決めてしまうことは無い。
+ * BELLOが自分の在庫名から起こしているため。同名の在庫が2件あれば両方が
+ * 同点になるが、それは mergeSameProduct が**1件へまとめてから**
+ * decideResolution へ渡す。BELLOは同じ商品を傷の有無や在庫数で行に
+ * 分けており(「【小傷あり】…」「【在庫2】…」)、これは候補が割れたので
+ * はなく同じ商品なので、人の確認を待たせる理由が無い
+ * (2026-09-03 利用者指示)。
+ *
+ * **芯が違う商品どうしは今も同点のまま AMBIGUOUS になる。**
+ * まとめるのは「先頭の【】を落とすと同じ文字列になるもの」だけ。
  */
 const SCORE_BASE_TITLE_EXACT = 0.96;
 const SCORE_BASE_TITLE_NEAR = 0.85;
@@ -245,6 +252,72 @@ export function scoreInventory(inv: MatchableInventory, signals: MatchSignals): 
  * スコアもほぼ同じになる。
  */
 export const AMBIGUITY_MARGIN = 0.05;
+
+/**
+ * 商品名から、在庫行ごとの注記(【小傷あり】【在庫2】など)を落とした「商品の芯」。
+ *
+ * BELLOは同じ商品を状態や在庫数で行に分けており、その違いは名前の先頭の
+ * 【】に入る。ここを落とすと同じ文字列になるものは、同じ商品と見てよい
+ * (2026-09-03 利用者指示)。
+ */
+export function productIdentityKey(name: string): string {
+  return name
+    // 先頭に連続する【…】をすべて落とす。途中の【】は商品名の一部で
+    // ありうるので触らない。
+    .replace(/^(?:\s*【[^】]*】)+/u, "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+/**
+ * 同一商品として扱える候補をまとめる。
+ *
+ * **候補が割れているのか、同じ商品が行に分かれているだけなのかは別物。**
+ * 前者は人が判断する必要があるが、後者は自動で答えてよい。実機で
+ * 「【小傷あり】BoConcept Elba…」と「【在庫2】BoConcept Elba…」が
+ * 0.96で並び、同じ商品なのに AMBIGUOUS になっていた。
+ *
+ * まとめた行の内訳は mergedRows に残す —— 担当者は「どの行が何点か」で
+ * 出荷を判断するので、ここを捨てると使えない通知になる。
+ */
+export function mergeSameProduct(scored: ProductMatch[]): ProductMatch[] {
+  const groups = new Map<string, ProductMatch[]>();
+  for (const m of scored) {
+    const key = productIdentityKey(m.name);
+    // 芯が空になる名前(【】だけ等)は統合しない。別物を巻き込みかねない。
+    const bucket = key ? key : `__unique__:${m.inventoryId}`;
+    const list = groups.get(bucket);
+    if (list) list.push(m);
+    else groups.set(bucket, [m]);
+  }
+
+  const merged: ProductMatch[] = [];
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      merged.push(list[0]);
+      continue;
+    }
+    // 代表は確信度が最も高い行。同点なら在庫IDで安定させる(実行ごとに
+    // 代表が入れ替わると、通知の内容が理由なく変わる)。
+    const sorted = [...list].sort(
+      (a, b) => b.confidence - a.confidence || a.inventoryId.localeCompare(b.inventoryId),
+    );
+    const head = sorted[0];
+    merged.push({
+      ...head,
+      // 統合したことを理由にも残す。担当者が「なぜ1件になったか」を追える。
+      reasons: [...head.reasons, `同一商品の在庫${sorted.length}行を1件にまとめました`],
+      mergedRows: sorted.map((m) => ({
+        displayInventoryId: m.displayInventoryId,
+        name: m.name,
+        quantity: m.quantity ?? null,
+      })),
+    });
+  }
+  return merged;
+}
 
 export function decideResolution(scored: ProductMatch[]): ProductResolution {
   const sorted = [...scored].sort((a, b) => b.confidence - a.confidence || a.inventoryId.localeCompare(b.inventoryId));

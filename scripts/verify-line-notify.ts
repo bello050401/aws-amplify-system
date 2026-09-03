@@ -76,6 +76,8 @@ function evidenceWithProduct(): ReplyEvidence {
       sku: "BL-0001",
       name: "COR Arthe サイドテーブル",
       imageKey: null,
+      stockRows: [],
+      totalQuantity: 1,
       salePriceYen: 98000,
       salePriceSource: "salePrice",
       purchasePriceYen: 32000,
@@ -552,6 +554,52 @@ function testNothingKnownStaysUnchanged() {
   assertTrue(!msg.includes("販売ページ："), "対象商品: 無い情報の行は作らない");
 }
 
+/** 同一商品をまとめたときの在庫内訳。担当者は行ごとの点数で出荷を判断する。 */
+function testStockBreakdown() {
+  const evidence = {
+    ...evidenceWithProduct(),
+  } as ReplyEvidence;
+  (evidence.identifiedProduct as NonNullable<ReplyEvidence["identifiedProduct"]>).stockRows = [
+    { displayInventoryId: "73445666", name: "【小傷あり】BoConcept Elba Lounge Chair", quantity: 1 },
+    { displayInventoryId: "72179017", name: "【在庫2】BoConcept Elba Lounge Chair", quantity: 2 },
+  ];
+  (evidence.identifiedProduct as NonNullable<ReplyEvidence["identifiedProduct"]>).totalQuantity = 3;
+
+  const msg = buildSummaryMessage({
+    channel: "LINE",
+    customerName: "テスト",
+    messageText: "在庫はありますか",
+    intents: ["STOCK"],
+    evidence,
+    needsHumanReview: false,
+    reviewReasons: [],
+    failureReason: null,
+    inquiryKind: null,
+    orderNumber: null,
+  } as never);
+
+  assertTrue(msg.includes("在庫：計3点"), "在庫内訳: 合計点数を出す");
+  assertTrue(msg.includes("73445666") && msg.includes("72179017"), "在庫内訳: 行ごとの在庫IDを出す");
+  assertTrue(msg.includes("【小傷あり】") && msg.includes("【在庫2】"), "在庫内訳: 行を見分ける注記を出す");
+  assertTrue(!msg.includes("在庫ID："), "在庫内訳: まとめたときは代表1行の在庫IDを単独で出さない");
+
+  // 1行だけなら従来どおり在庫IDを出し、内訳は出さない。
+  const single = buildSummaryMessage({
+    channel: "LINE",
+    customerName: "テスト",
+    messageText: "在庫はありますか",
+    intents: ["STOCK"],
+    evidence: evidenceWithProduct(),
+    needsHumanReview: false,
+    reviewReasons: [],
+    failureReason: null,
+    inquiryKind: null,
+    orderNumber: null,
+  } as never);
+  assertTrue(single.includes("在庫ID："), "在庫内訳: 1行なら従来どおり在庫IDを出す");
+  assertTrue(!single.includes("在庫：計"), "在庫内訳: 1行なら内訳を出さない");
+}
+
 testSummaryTemplate();
 testLayout();
 testUnknownValues();
@@ -566,6 +614,7 @@ testReviewPolicy();
 testRegistrationPolicy();
 testAmbiguousInventoryKeepsBaseFacts();
 testNothingKnownStaysUnchanged();
+testStockBreakdown();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures > 0 ? 1 : 0);

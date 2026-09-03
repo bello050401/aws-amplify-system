@@ -433,6 +433,17 @@ export async function listAllInventory(): Promise<InventorySearchRecord[]> {
   return fetchAllInventoryRecords();
 }
 
+/**
+ * 指定カテゴリの在庫だけを取る。
+ *
+ * 問い合わせの商品特定が「出品中」に絞って照合するために使う
+ * (lib/inquiry/onSaleCategory.ts)。DynamoDB側で絞るので、
+ * 全件(5,313件)を読んでからJSで捨てるより速く、候補も混ざらない。
+ */
+export async function listInventoryByCategory(categoryId: string): Promise<InventorySearchRecord[]> {
+  return fetchAllInventoryRecords([{ categoryId: { eq: categoryId } }]);
+}
+
 export interface SearchPage<T> {
   items: T[];
   total: number;

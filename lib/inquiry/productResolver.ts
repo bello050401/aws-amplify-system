@@ -1,12 +1,13 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages } from "@/lib/amplify/listAll";
-import { listAllInventory } from "@/lib/inventory/queries";
+import { listAllInventory, listInventoryByCategory } from "@/lib/inventory/queries";
+import { getOnSaleCategoryId, ON_SALE_CATEGORY_NAME } from "./onSaleCategory";
 import { resolveDisplayInventoryId } from "@/lib/inventory/inventoryId";
 import { KNOWN_FURNITURE_BRANDS } from "@/lib/ai/productIntro/factSafety";
 import { extractProductReferences, normalizeUrl, type ProductReferenceResult } from "./references";
 import { lookupBaseProducts } from "./baseProductLookup";
-import { decideResolution, scoreInventory, type MatchableInventory, type MatchSignals } from "./scoring";
+import { decideResolution, mergeSameProduct, scoreInventory, type MatchableInventory, type MatchSignals } from "./scoring";
 import type { ProductMatch, ProductResolution } from "./types";
 
 /**
@@ -77,6 +78,8 @@ interface InventoryRow {
   id: string;
   sku: string;
   name: string;
+  /** 在庫数。同一商品をまとめたときの内訳に出す。 */
+  quantity?: number | null;
   externalProductId?: string | null;
   barcode?: string | null;
   sourceSystem?: string | null;
@@ -86,6 +89,7 @@ interface InventoryRow {
 function toMatchable(row: InventoryRow, listings: ChannelListingRow[]): MatchableInventory {
   return {
     id: row.id,
+    quantity: row.quantity ?? null,
     displayInventoryId: resolveDisplayInventoryId({
       sourceSystem: row.sourceSystem ?? null,
       sourceInventoryId: row.sourceInventoryId ?? null,
@@ -203,21 +207,45 @@ async function findBaseArchive(baseItemIds: string[]): Promise<BaseArchiveMatch[
 }
 
 /**
- * 商品名照合のための全件読み込み(キャッシュ付き)。
+ * 商品名照合のための読み込み(キャッシュ付き)。
  *
- * §36「売却済み・非販売中商品でも履歴が残っていれば特定できる設計」に
- * 従い、販売状態では絞り込まない。除外するのは論理削除だけ
- * (listAllInventoryが既にdeletedAtで絞っている)。
+ * ── 出品中(販売中)だけを見る(2026-09-03 利用者指示) ──────────────
+ *
+ * 「商品は出品中からしかこない」。お客様が問い合わせてくるのは販売ページに
+ * 出ている商品だけなので、それ以外を候補に入れる意味が無い。
+ *
+ * 以前は §36「売却済み・非販売中商品でも履歴が残っていれば特定できる設計」に
+ * 従って販売状態で絞っていなかったが、実測すると害のほうが大きかった:
+ *
+ *   - 発送完了(4,329件)に同名の過去在庫があり、1件に絞れず AMBIGUOUS になる
+ *   - 5,313件を毎回走査するので遅い
+ *
+ * §36が守りたいのは「過去の取引について問い合わせが来ても分かること」だが、
+ * それは会話に紐づく商品(conversationInventoryId)や、SKU・在庫IDといった
+ * 決定的な手がかりの経路で拾える —— そちらは findByStrongSignals が
+ * カテゴリに関係なく引く。**絞るのは商品名だけを頼りにする弱い経路に限る。**
+ *
+ * カテゴリを解決できなかった場合は絞り込みを諦めて全件を見る。ここで
+ * 空を返すと、カテゴリ名が変わった瞬間に全問い合わせで商品が特定できなく
+ * なり、しかも画面には「商品が見つからない」としか出ないため原因に
+ * 辿り着けない。
  */
 async function loadAllForNameScan(): Promise<MatchableInventory[]> {
   if (nameScanCache && Date.now() - nameScanCache.at < NAME_SCAN_CACHE_TTL_MS) return nameScanCache.items;
-  const records = await listAllInventory();
+  const onSaleCategoryId = await getOnSaleCategoryId();
+  if (!onSaleCategoryId) {
+    console.warn(
+      `[productResolver] カテゴリ「${ON_SALE_CATEGORY_NAME}」を解決できないため、出品中での絞り込みを行いません。`,
+    );
+  }
+  const records = onSaleCategoryId ? await listInventoryByCategory(onSaleCategoryId) : await listAllInventory();
   const items = records.map((r) =>
     toMatchable(
       {
         id: r.id,
         sku: r.sku,
         name: r.name,
+        quantity: r.quantity ?? null,
         externalProductId: r.externalProductId ?? null,
         barcode: r.barcode ?? null,
         sourceSystem: r.sourceSystem ?? null,
@@ -359,11 +387,15 @@ export async function resolveProductFromInquiry(params: {
         confidence,
         reasons,
         source: "INVENTORY" as const,
+        quantity: inv.quantity ?? null,
       };
     })
     .filter((m) => m.confidence > 0);
 
-  const resolution = decideResolution(scored);
+  // 同じ商品が在庫の都合で複数行に分かれているだけなら、候補が割れたとは
+  // 扱わない(2026-09-03 利用者指示)。判定の前にまとめる —— 後だと
+  // AMBIGUOUS が確定してしまい、人の確認待ちのまま止まる。
+  const resolution = decideResolution(mergeSameProduct(scored));
 
   // 候補が1件も残らず、会話に紐づく商品があるならそれを使う。
   if (resolution.candidates.length === 0 && params.conversationInventoryId) {

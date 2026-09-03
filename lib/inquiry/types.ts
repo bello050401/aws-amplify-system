@@ -70,6 +70,19 @@ export interface ProductMatch {
   /** なぜこの商品だと判断したか。管理画面に出す(顧客には出さない)。 */
   reasons: string[];
   source: ProductMatchSource;
+  /** この在庫行の数量。統合表示の内訳に使う。 */
+  quantity?: number | null;
+  /**
+   * 同一商品として統合した在庫行(2026-09-03 利用者指示)。
+   *
+   * BELLOでは同じ商品を傷の有無や在庫数で複数行に分けている
+   * (「【小傷あり】…」「【在庫2】…」)。これらは**同じ商品**なので、
+   * 候補が割れたと扱わず1件にまとめる。ただし担当者は「どの行が何点か」で
+   * 出荷を判断するため、内訳は捨てずにここへ残す。
+   *
+   * 統合していない(1行だけの)場合は undefined。
+   */
+  mergedRows?: { displayInventoryId: string; name: string; quantity: number | null }[];
 }
 
 /**
@@ -272,6 +285,16 @@ export interface IdentifiedProductCard {
   /** 在庫ステータス名。マスタから引いた表示名。 */
   statusName: string | null;
   quantity: number | null;
+  /**
+   * 同一商品としてまとめた在庫行の内訳(2026-09-03 利用者指示)。
+   *
+   * BELLOは同じ商品を傷の有無や在庫数で行に分けている。返信の中身は
+   * 1商品として扱ってよいが、**担当者はどの行が何点あるかで出荷を判断する**
+   * ので内訳は残す。1行しか無い場合は空配列。
+   */
+  stockRows: { displayInventoryId: string; name: string; quantity: number | null }[];
+  /** 内訳を合計した点数。行が1つなら quantity と同じ。 */
+  totalQuantity: number | null;
   /**
    * BASE商品ページ。**この在庫と1対1で結び付いたときだけ**入れる。
    *

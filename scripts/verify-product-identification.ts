@@ -16,6 +16,7 @@
  * Run with: npm run verify:product-identification
  */
 import { extractBaseItemId, extractUrls, isBaseUrl, extractProductReferences } from "@/lib/inquiry/references";
+import { decideResolution, mergeSameProduct, productIdentityKey } from "@/lib/inquiry/scoring";
 import {
   PRODUCT_URL_REQUEST_TEMPLATE,
   canAnswerProductSpecifics,
@@ -326,6 +327,68 @@ function testUrlAlreadySent() {
   );
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 7. 同一商品の在庫行をまとめる(2026-09-03 利用者指示)
+ *
+ * BELLOは同じ商品を傷の有無や在庫数で複数行に分けている。これは候補が
+ * 割れているのではなく同じ商品なので、人の確認を待たせる理由が無い。
+ * ただし芯が違う商品どうしを巻き込んではいけない。
+ * ══════════════════════════════════════════════════════════════════ */
+function testMergeSameProduct() {
+  const m = (id: string, name: string, confidence: number, quantity: number | null) => ({
+    inventoryId: id,
+    displayInventoryId: id,
+    sku: id,
+    name,
+    confidence,
+    reasons: [],
+    source: "INVENTORY" as const,
+    quantity,
+  });
+
+  assertEqual(productIdentityKey("【小傷あり】BoConcept Elba"), "boconcept elba", "芯: 先頭の【】を落とす");
+  assertEqual(productIdentityKey("【在庫2】【小傷あり】BoConcept Elba"), "boconcept elba", "芯: 連続する【】をすべて落とす");
+  assertEqual(productIdentityKey("HAY 【限定】Chair"), "hay 【限定】chair", "芯: 途中の【】は商品名の一部として残す");
+
+  const merged = mergeSameProduct([
+    m("73445666", "【小傷あり】BoConcept Elba Lounge Chair", 0.96, 1),
+    m("72179017", "【在庫2】BoConcept Elba Lounge Chair", 0.96, 2),
+  ]);
+  assertEqual(merged.length, 1, "統合: 同一商品の2行は1件になる");
+  assertEqual(merged[0].mergedRows?.length, 2, "統合: 内訳に両方の行を残す");
+  assertTrue(
+    merged[0].reasons.some((r) => r.includes("1件にまとめました")),
+    "統合: まとめた事実を理由に残す",
+  );
+
+  // 芯が違えば別商品。まとめない。
+  const distinct = mergeSameProduct([
+    m("a", "【小傷あり】BoConcept Elba Lounge Chair", 0.96, 1),
+    m("b", "【小傷あり】BoConcept Elba Lounge Table", 0.96, 1),
+  ]);
+  assertEqual(distinct.length, 2, "統合: 芯が違う商品はまとめない");
+
+  // 統合した結果、同点で割れていたものが自動確定できるようになる。
+  const resolved = decideResolution(
+    mergeSameProduct([
+      m("73445666", "【小傷あり】BoConcept Elba Lounge Chair", 0.96, 1),
+      m("72179017", "【在庫2】BoConcept Elba Lounge Chair", 0.96, 2),
+    ]),
+  );
+  assertEqual(resolved.status, "RESOLVED", "統合: 同名2行だけならAMBIGUOUSにならない");
+
+  // 芯が違う同点は今までどおり人が判断する。
+  const ambiguous = decideResolution(
+    mergeSameProduct([
+      m("a", "BoConcept Elba Lounge Chair", 0.96, 1),
+      m("b", "BoConcept Elba Lounge Table", 0.96, 1),
+    ]),
+  );
+  assertEqual(ambiguous.status, "AMBIGUOUS", "統合: 別商品の同点は引き続き要確認");
+
+  assertEqual(mergeSameProduct([]).length, 0, "統合: 空でも落ちない");
+}
+
 testUrlExtraction();
 testBasis();
 testUrlRequest();
@@ -333,6 +396,7 @@ testUrlAlreadySent();
 testNoUrlRequestWhereImpossible();
 testTemplate();
 testLinkedBaseProduct();
+testMergeSameProduct();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures > 0 ? 1 : 0);

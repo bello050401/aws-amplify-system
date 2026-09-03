@@ -128,6 +128,16 @@ function section(heading: string, lines: (string | null)[]): string | null {
 }
 
 /**
+ * 在庫行を見分けるための注記。商品名の先頭の【…】がそれにあたる
+ * (「【小傷あり】」「【在庫2】」)。同じ商品の行を並べるので、
+ * 商品名を丸ごと繰り返しても読みづらいだけ。
+ */
+function stockRowLabel(name: string): string {
+  const m = name.match(/^(?:\s*【[^】]*】)+/u);
+  return m ? m[0].trim() : "";
+}
+
+/**
  * ■対象商品 の中身。
  *
  * 【1件に決めつけない】在庫を1件に絞れていないときに候補の1つを載せると、
@@ -147,13 +157,28 @@ function section(heading: string, lines: (string | null)[]): string | null {
 function productLines(evidence: ReplyEvidence | null | undefined): (string | null)[] {
   const product = evidence?.identifiedProduct ?? null;
   if (product) {
+    // 同じ商品を傷の有無や在庫数で複数行に分けている場合、返信は1商品と
+    // して扱ってよいが、**担当者はどの行が何点あるかで出荷を判断する**ので
+    // 内訳を出す(2026-09-03 利用者指示)。
+    const rows = product.stockRows ?? [];
+    const breakdown =
+      rows.length > 1
+        ? [
+            `在庫：計${product.totalQuantity == null ? UNKNOWN : `${product.totalQuantity}点`}`,
+            ...rows.map((r) => `　・${r.displayInventoryId}${stockRowLabel(r.name)} ${r.quantity == null ? UNKNOWN : `${r.quantity}点`}`),
+          ]
+        : [];
+
     return [
       `商品名：${product.name}`,
-      `在庫ID：${product.displayInventoryId}`,
+      // まとめた場合、代表1行の在庫IDだけを出すと「その行の商品」と
+      // 読めてしまう。内訳を出すときは在庫IDの単独行を出さない。
+      rows.length > 1 ? null : `在庫ID：${product.displayInventoryId}`,
       // URLは商品と1対1で結び付いたときだけ入る(pipeline.ts の
       // linkedBaseProduct)。無ければ行ごと出さない —— 「URL：不明」は
       // 担当者にとって意味が無く、行が増えるだけ。
       product.baseItemUrl ? `URL：${product.baseItemUrl}` : null,
+      ...breakdown,
     ];
   }
 

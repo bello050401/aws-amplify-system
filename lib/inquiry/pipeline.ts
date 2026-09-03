@@ -212,6 +212,16 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       saleStartedAt: inventory.saleStartDate ?? null,
       statusName,
       quantity: inventory.quantity ?? null,
+      // 同一商品としてまとめた行の内訳。まとめていなければ空。
+      stockRows: top.mergedRows ?? [],
+      totalQuantity: top.mergedRows
+        ? top.mergedRows.reduce<number | null>(
+            // 1行でも数量不明があれば合計を出さない。足りない数を
+            // 「合計」として出すと、出荷可能数を実際より少なく見せる。
+            (sum, r) => (sum == null || r.quantity == null ? null : sum + r.quantity),
+            0,
+          )
+        : (inventory.quantity ?? null),
       baseItemId: linkedBase?.baseItemId ?? null,
       baseItemUrl: linkedBaseUrl,
       // 結び付けられなかったURLは件数だけ残す。担当者が「他のURLの話かも
