@@ -1,0 +1,71 @@
+{
+  "$comment": [
+    "BELLO Claude Code 自律開発管理システム - 非秘密の運用設定。",
+    "APIキー・トークン・認証情報は絶対にここへ書かない。環境変数のみを使う。",
+    "実行時データ (DB/ログ/inbox/アップロード) の場所は dataRoot で決まり、既定は %LOCALAPPDATA%\\BELLO\\dev-orchestrator。"
+  ],
+
+  "repoPath": "C:\\Users\\win\\Documents\\GitHub\\aws-amplify-system",
+  "dataRoot": "",
+
+  "claude": {
+    "executable": "",
+    "model": "sonnet",
+    "permissionMode": "acceptEdits",
+    "permissionPrompts": "none",
+    "maxBudgetUsd": 5,
+    "timeoutSeconds": 3600,
+    "idleTimeoutSeconds": 900,
+    "extraArgs": []
+  },
+
+  "review": {
+    "provider": "openai",
+    "model": "",
+    "maxRevisions": 3,
+    "requestTimeoutSeconds": 120,
+    "maxRetries": 4,
+    "baseBackoffSeconds": 5,
+    "maxBackoffSeconds": 300,
+    "maxDiffChars": 60000,
+    "minConfidenceToAccept": 0.5
+  },
+
+  "queue": {
+    "maxAttempts": 3,
+    "retryBaseSeconds": 30,
+    "retryMaxSeconds": 1800,
+    "heartbeatWarnSeconds": 900,
+    "pollIntervalSeconds": 5
+  },
+
+  "intake": {
+    "maxFileBytes": 26214400,
+    "stableChecks": 3,
+    "stableIntervalMs": 1500,
+    "pollIntervalSeconds": 10
+  },
+
+  "dashboard": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 4319,
+    "lanAccess": false,
+    "lanAccessTokenEnvVar": "BELLO_DASHBOARD_TOKEN"
+  },
+
+  "logging": {
+    "level": "info",
+    "retentionDays": 30,
+    "maxFileBytes": 5242880,
+    "maxFiles": 10
+  },
+
+  "timezone": "Asia/Tokyo",
+
+  "git": {
+    "autoCommit": true,
+    "allowPush": false,
+    "protectedBranches": ["main", "master", "production"]
+  }
+}

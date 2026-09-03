@@ -1,0 +1,15 @@
+# Windows tooling: keep native line endings so PowerShell and cmd.exe
+# behave identically regardless of the developer's git config.
+# 日本語を含む .ps1 は UTF-8 BOM 付きで保存する。Windows PowerShell 5.1 は
+# BOM が無いと .ps1 を ANSI (日本語環境では Shift-JIS) として読み、文字化けする。
+*.ps1   text eol=crlf working-tree-encoding=UTF-8
+*.psd1  text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.md    text
+*.mjs   text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.sql   text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf

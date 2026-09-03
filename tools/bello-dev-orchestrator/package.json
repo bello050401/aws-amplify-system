@@ -1,0 +1,21 @@
+{
+  "name": "bello-dev-orchestrator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BELLO Claude Code 自律開発管理システム - キュー / Claude Runner / OpenAI 審査 / ユーザーTODO / Word取込 / ローカルダッシュボード",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "bello-orchestrator": "./src/cli.mjs"
+  },
+  "scripts": {
+    "start": "node src/cli.mjs start",
+    "status": "node src/cli.mjs status",
+    "diagnose": "node src/cli.mjs diagnose",
+    "test": "node --test test/"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
