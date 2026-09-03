@@ -12,7 +12,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadConfig, ensureDirs, PACKAGE_ROOT } from "./config.mjs";
+import { loadConfig, ensureDirs, PACKAGE_ROOT, DEFAULT_CONFIG_PATH } from "./config.mjs";
+import { readConfigFile, quarantineConfigFile, writeConfigFile, salvageConfigText } from "./configFile.mjs";
+import { startDiagnosticDashboard, readGitVersion } from "./diagnosticMode.mjs";
 import { buildApp, runService, SingleInstanceLock, isLiveNodeProcess } from "./app.mjs";
 import { Diagnostics } from "./diagnostics.mjs";
 import { Store } from "./store/db.mjs";
@@ -26,6 +28,154 @@ function say(line = "") {
 }
 function warn(line) {
   process.stderr.write(line + "\n");
+}
+
+function configPathInUse() {
+  return process.env.BELLO_ORCHESTRATOR_CONFIG || DEFAULT_CONFIG_PATH;
+}
+
+/**
+ * 設定ファイルの健全性だけを見る。設定が壊れていても必ず動く。
+ * 「今どう壊れているか」を人が読める形で出し、Git の正常版と突き合わせる。
+ */
+async function cmdConfigCheck() {
+  const configPath = configPathInUse();
+  const read = readConfigFile(configPath);
+
+  say("=== 設定ファイルの点検 ===");
+  say(`  パス        : ${configPath}`);
+  say(`  存在        : ${read.exists ? "あり" : "なし"}`);
+  say(`  SHA-256     : ${read.sha256 ?? "-"}`);
+  say(`  BOM         : ${read.hadBom ? "あり (UTF-8 BOM 付き)" : "なし (推奨)"}`);
+
+  if (read.issues.length === 0) {
+    say("  判定        : 健全 (UTF-8 として読め、JSON として正しい)");
+    const gitText = readGitVersion(configPath);
+    if (gitText !== null) {
+      say(`  Git 正常版  : ${gitText === read.text ? "一致" : "差分あり (ユーザー設定の変更と思われます)"}`);
+    }
+    return EXIT.OK;
+  }
+
+  say("  判定        : 壊れています");
+  say("");
+  say("--- 検出した問題 ---");
+  for (const issue of read.issues) {
+    say(`  [${issue.kind}] ${issue.message}`);
+    if (issue.sample) say(`      該当箇所: ${issue.sample}`);
+  }
+
+  const salvage = read.text ? salvageConfigText(read.text) : { salvaged: false, reason: "unreadable" };
+  say("");
+  say("--- 救出の見込み ---");
+  if (salvage.salvaged) {
+    say(`  ユーザー設定を失わずに復元できます (${salvage.reason})。`);
+    say("  実行するには: node src/cli.mjs config-repair");
+  } else {
+    say(`  自動では復元できません (${salvage.reason})。`);
+    say("  Git の正常版から戻す場合: git checkout -- bello-orchestrator.config.json");
+    say("  (その場合、コミットしていないユーザー設定は失われます。まず隔離コピーを確認してください)");
+  }
+  return EXIT.CONFIG;
+}
+
+/**
+ * 壊れた設定を修復する。手順は必ず 隔離 → 救出 → 検証 → atomic 置換 の順。
+ * 元ファイルは削除しない。救出できなければ何も書き換えない。
+ */
+async function cmdConfigRepair() {
+  const configPath = configPathInUse();
+  const read = readConfigFile(configPath);
+
+  if (!read.exists) {
+    warn(`設定ファイルがありません: ${configPath}`);
+    return EXIT.CONFIG;
+  }
+  if (read.issues.length === 0) {
+    say("設定ファイルは健全です。修復するものはありません。");
+    return EXIT.OK;
+  }
+
+  // 1. 触る前に証拠を残す。コピーであって移動ではないので、元ファイルは残る。
+  const quarantine = quarantineConfigFile(configPath, {
+    issues: read.issues,
+    reason: "config-repair",
+  });
+  say("=== 証拠を隔離しました (元ファイルは削除していません) ===");
+  say(`  コピー   : ${quarantine.copyPath}`);
+  say(`  メタ情報 : ${quarantine.metaPath}`);
+  say(`  SHA-256  : ${quarantine.meta.sha256}`);
+  say("");
+
+  // 2. ユーザー設定を失わない形で救出する。
+  const salvage = read.text ? salvageConfigText(read.text) : { salvaged: false, reason: "unreadable", config: null };
+  if (!salvage.salvaged) {
+    warn(`自動では復元できません (${salvage.reason})。設定ファイルは書き換えていません。`);
+    warn("隔離コピーを確認したうえで、Git の正常版から戻すか、手で直してください。");
+    return EXIT.CONFIG;
+  }
+
+  // 3. 救出した設定が設定として妥当かを、書き込む前に検証する。
+  //    ここでは環境依存の検査 (repoPath の実在など) はしない。
+  //    対象リポジトリが今見えるかどうかと、文字化けを直せるかどうかは別の話。
+  const merged = loadConfig(configPath, { salvage: true, checkEnvironment: false });
+  if (merged.errors.length) {
+    warn("救出した設定は検証を通りませんでした。設定ファイルは書き換えていません:");
+    for (const e of merged.errors) warn(`  - ${e}`);
+    return EXIT.CONFIG;
+  }
+
+  // 4. 一時ファイル → 再読込検証 → atomic replace。途中の状態がディスクに残らない。
+  writeConfigFile(configPath, salvage.config);
+
+  const after = readConfigFile(configPath);
+  if (after.issues.length) {
+    warn("書き戻した設定にまだ問題があります:");
+    for (const i of after.issues) warn(`  - ${i.message}`);
+    return EXIT.RUNTIME;
+  }
+
+  say(`修復しました (${salvage.reason})。`);
+  say(`  新しい SHA-256 : ${after.sha256}`);
+  say("  ユーザー設定は保持し、壊れていた $comment だけを取り除いています。");
+  say("");
+  say("次に: node src/cli.mjs config-check で健全性を確認し、bello.ps1 start で再起動してください。");
+  return EXIT.OK;
+}
+
+/**
+ * 設定が壊れているときの起動。危険な代替設定で本番を動かさない。
+ * ダッシュボードだけを診断モードで出し、Claude 実行・キュー・inbox は起動しない。
+ */
+async function startDiagnostic(configPath, corruption) {
+  let quarantine = null;
+  try {
+    quarantine = quarantineConfigFile(configPath, { issues: corruption?.issues ?? [], reason: "diagnostic_start" });
+    warn(`壊れた設定を隔離保存しました: ${quarantine.copyPath} (sha256 ${quarantine.meta.sha256})`);
+  } catch (err) {
+    warn(`隔離保存に失敗しました: ${err.message}`);
+  }
+
+  const diag = await startDiagnosticDashboard({
+    configPath,
+    corruption,
+    quarantine,
+    appliedConfig: null,
+    logLine: (line) => warn(line),
+  });
+
+  warn("");
+  warn("診断モードです。タスクの自動実行・Claude 実行は行いません。");
+  warn("復旧するには: node src/cli.mjs config-repair");
+  warn("Ctrl+C で終了します。");
+
+  await new Promise((resolve) => {
+    const stop = () => resolve();
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+  });
+  await diag.close();
+  return EXIT.CONFIG;
 }
 
 function loadOrExplain() {
@@ -365,6 +515,8 @@ async function main() {
     say("  status     稼働状態・キュー・TODO");
     say("  diagnose   自己診断（Claude / OpenAI 設定 / DB / 権限 / タスク / ディスク）");
     say("  repair     安全に直せる設定のみ修復");
+    say("  config-check   設定ファイルの文字化け / 破損を点検する（壊れていても動く）");
+    say("  config-repair  隔離 → 救出 → 検証 → atomic 置換で設定ファイルを復旧する");
     say("  resume     停止フラグ / crash-loop クールダウンを解除する");
     say("  uninstall  常駐登録の解除（プログラム本体と実行時データは消しません）");
     say("");
@@ -380,8 +532,26 @@ async function main() {
     return delegateToPowerShell(command, args);
   }
 
+  // 設定が壊れていても動かないといけないコマンド。先に処理する。
+  if (command === "config-check") return cmdConfigCheck();
+  if (command === "config-repair") return cmdConfigRepair();
+
   const loaded = loadOrExplain();
-  if (!loaded) return EXIT.CONFIG;
+  if (!loaded) {
+    // 設定ファイル自体が壊れている場合、常駐起動だけは「無言で止まる」より
+    // 「診断モードで理由を見せる」ほうが安全に運用できる。
+    // ただしタスク実行は一切しない。
+    const probe = loadConfig(process.env.BELLO_ORCHESTRATOR_CONFIG || undefined);
+    if (command === "start" && probe.corruption) {
+      return startDiagnostic(probe.configPath, probe.corruption);
+    }
+    if (probe.corruption) {
+      warn("");
+      warn("設定ファイルが壊れています。次で詳細と復旧手順を確認してください:");
+      warn("  node src/cli.mjs config-check");
+    }
+    return EXIT.CONFIG;
+  }
 
   switch (command) {
     case "start":

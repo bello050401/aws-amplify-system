@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { readConfigFile, salvageConfigText } from "./configFile.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(HERE, "..");
@@ -119,13 +120,22 @@ const LOG_LEVELS = ["debug", "info", "warn", "error"];
 /**
  * 設定を検証する。返り値の errors が空でなければ起動してはいけない。
  * warnings は起動を止めないが必ず表示する。
+ *
+ * @param {object} cfg
+ * @param {{checkEnvironment?: boolean}} [options]
+ *   checkEnvironment=false にすると、環境に依存する検査 (repoPath の実在、
+ *   環境変数の有無) を飛ばし、設定そのものの妥当性だけを見る。
+ *   文字化けした設定ファイルの修復は、対象リポジトリが今この瞬間に
+ *   見えるかどうかとは無関係に行えなければならないため。
  */
-export function validateConfig(cfg) {
+export function validateConfig(cfg, { checkEnvironment = true } = {}) {
   const errors = [];
   const warnings = [];
 
   if (!cfg.repoPath || typeof cfg.repoPath !== "string") {
     errors.push("repoPath が設定されていません。対象リポジトリの絶対パスを指定してください。");
+  } else if (!checkEnvironment) {
+    /* 環境検査を飛ばす。パスの文字列としての妥当性は上で見ている。 */
   } else if (!fs.existsSync(cfg.repoPath)) {
     errors.push(`repoPath が存在しません: ${cfg.repoPath}`);
   } else if (!fs.existsSync(path.join(cfg.repoPath, ".git"))) {
@@ -176,7 +186,7 @@ export function validateConfig(cfg) {
   }
   // OPENAI_API_KEY が無いことは「エラー」でも「警告」でもない。
   // 既定の審査方式は Claude であり、OpenAI は任意のオプションだから。
-  if (cfg.review.provider === "openai" && !process.env.OPENAI_API_KEY) {
+  if (checkEnvironment && cfg.review.provider === "openai" && !process.env.OPENAI_API_KEY) {
     warnings.push(
       "review.provider=openai ですが OPENAI_API_KEY が未設定です。審査待ちで止まります。ダッシュボードの設定で「Claude審査」または「手動審査」へ切り替えられます。",
     );
@@ -206,7 +216,7 @@ export function validateConfig(cfg) {
       errors.push("dashboard.lanAccess を有効にするなら host も 0.0.0.0 等へ変更してください。");
     }
     const tokenVar = cfg.dashboard.lanAccessTokenEnvVar;
-    if (!tokenVar || !process.env[tokenVar]) {
+    if (checkEnvironment && (!tokenVar || !process.env[tokenVar])) {
       errors.push(
         `dashboard.lanAccess=true ですが認証トークン環境変数 ${tokenVar || "(未設定)"} がありません。無認証で LAN 公開はしません。`,
       );
@@ -273,32 +283,61 @@ export function ensureDirs(paths) {
  * 設定を読み込む。ファイルが壊れている場合も例外を投げず、errors に入れて返す。
  * 呼び出し側 (cli.mjs) が診断モードを選べるようにするため。
  */
-export function loadConfig(configPath = DEFAULT_CONFIG_PATH) {
-  const result = { configPath, config: null, paths: null, errors: [], warnings: [] };
+export function loadConfig(configPath = DEFAULT_CONFIG_PATH, { salvage = false, checkEnvironment = true } = {}) {
+  const result = {
+    configPath,
+    config: null,
+    paths: null,
+    errors: [],
+    warnings: [],
+    /**
+     * 設定ファイル自体が壊れていたときの証拠。null なら健全。
+     * cli.mjs はこれを見て「診断モードで起動する」判断をする。
+     */
+    corruption: null,
+  };
 
-  let raw = null;
-  try {
-    raw = fs.readFileSync(configPath, "utf8");
-  } catch (err) {
-    result.errors.push(`設定ファイルを読めません (${configPath}): ${err.message}`);
-    return result;
-  }
+  const read = readConfigFile(configPath);
+  let parsed = read.parsed;
 
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    result.errors.push(`設定ファイルが JSON として不正です (${configPath}): ${err.message}`);
-    return result;
+  if (read.issues.length > 0) {
+    // 壊れ方を捨てずに残す。SHA-256 は隔離保存した証拠と突き合わせるために持つ。
+    const salvageResult = read.text ? salvageConfigText(read.text) : { salvaged: false, reason: "unreadable", config: null };
+    result.corruption = {
+      sha256: read.sha256,
+      exists: read.exists,
+      hadBom: read.hadBom,
+      issues: read.issues,
+      text: read.text,
+      salvage: salvageResult,
+    };
+    for (const issue of read.issues) {
+      result.errors.push(`設定ファイルが壊れています (${configPath}): ${issue.message}`);
+    }
+    // 明示的に許可されたときだけ、救出できた設定で先へ進む。
+    // 既定では「壊れていたら止める」。黙って代替設定で走らせない。
+    if (!(salvage && salvageResult.salvaged)) return result;
+
+    parsed = salvageResult.config;
+    result.errors = [];
+    result.warnings.push(
+      `設定ファイルの壊れた部分を除いて読み込みました (${salvageResult.reason})。` +
+        "元ファイルは隔離保存済みです。復旧後に bello.ps1 config-repair で書き戻してください。",
+    );
   }
 
   const cfg = deepMerge(DEFAULTS, parsed);
-  if (!cfg.repoPath) cfg.repoPath = path.resolve(PACKAGE_ROOT, "..", "..");
+  if (!cfg.repoPath) {
+    cfg.repoPath = path.resolve(PACKAGE_ROOT, "..", "..");
+    result.warnings.push(`repoPath が空のため、このツールの位置から推定しました: ${cfg.repoPath}`);
+  }
 
-  const { errors, warnings } = validateConfig(cfg);
+  const { errors, warnings } = validateConfig(cfg, { checkEnvironment });
   result.config = cfg;
   result.paths = derivePaths(cfg);
-  result.errors = errors;
-  result.warnings = warnings;
+  // 破損の救出や repoPath の推定で積んだ警告を消さない。上書きすると
+  // 「壊れた設定から救出して動いている」ことが運用者に伝わらなくなる。
+  result.errors = [...result.errors, ...errors];
+  result.warnings = [...result.warnings, ...warnings];
   return result;
 }

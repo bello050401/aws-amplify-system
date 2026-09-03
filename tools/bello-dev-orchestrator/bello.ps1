@@ -3,7 +3,8 @@
     BELLO Dev Orchestrator の運用コマンド入口 (指示書 §15)。
 
 .DESCRIPTION
-    install / start / stop / restart / status / diagnose / repair / uninstall
+    install / start / stop / restart / status / diagnose / repair / resume
+    config-check / config-repair / uninstall
 
     Windows PowerShell 5.1 で動く。管理者権限は不要。
     秘密値は表示しない。終了コードを正しく返す。
@@ -15,7 +16,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'diagnose', 'repair', 'resume', 'uninstall', 'help')]
+    [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'diagnose', 'repair', 'resume',
+                 'config-check', 'config-repair', 'uninstall', 'help')]
     [string] $Command = 'help',
 
     [string] $ConfigPath,
@@ -232,6 +234,13 @@ switch ($Command) {
     'install'   { exit (Invoke-Install) }
     'uninstall' { exit (Invoke-Uninstall) }
     'start' {
+        # 設定が壊れていないかを先に見る。壊れていれば監督プロセスが
+        # 診断モードで起動し、タスクの自動実行はしない。
+        $configState = Invoke-Cli @('config-check')
+        if ($configState -ne 0) {
+            Write-Warn2 '設定ファイルが壊れています。診断モードで起動し、タスクは実行しません。'
+            Write-Action '復旧するには: bello.ps1 config-repair'
+        }
         # 手動 start は起動の意思表示なので、停止フラグと crash-loop
         # クールダウンを先に解除する。これが無いとウォッチドッグが
         # フラグを見て待機し、start しても何も起きない。
@@ -263,6 +272,8 @@ switch ($Command) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $supervisor -ConfigPath $ConfigPath
         exit $LASTEXITCODE
     }
+    'config-check'  { exit (Invoke-Cli @('config-check')) }
+    'config-repair' { exit (Invoke-Cli @('config-repair')) }
     'status'   { exit (Invoke-Cli @('status')) }
     'diagnose' { exit (Invoke-Cli @('diagnose')) }
     'repair'   { exit (Invoke-Cli @('repair')) }
@@ -278,6 +289,8 @@ switch ($Command) {
         Write-Host '  bello.ps1 diagnose   自己診断 (Claude / OpenAI 設定 / DB / 権限 / タスク / ディスク)'
         Write-Host '  bello.ps1 repair     安全に直せる設定のみ修復'
         Write-Host '  bello.ps1 resume     停止フラグ / crash-loop クールダウンを解除する'
+        Write-Host '  bello.ps1 config-check   設定ファイルの文字化け / 破損を点検する (壊れていても動く)'
+        Write-Host '  bello.ps1 config-repair  隔離 → 救出 → 検証 → atomic 置換で設定を復旧する'
         Write-Host '  bello.ps1 uninstall  常駐登録の解除 (本体とデータは消しません)'
         Write-Host ''
         Write-Host '  詳細は README.md と docs/ を参照してください。'

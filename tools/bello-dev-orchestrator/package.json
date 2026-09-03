@@ -14,7 +14,7 @@
     "start": "node src/cli.mjs start",
     "status": "node src/cli.mjs status",
     "diagnose": "node src/cli.mjs diagnose",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {},
   "devDependencies": {}

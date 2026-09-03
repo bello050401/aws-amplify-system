@@ -40,16 +40,80 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
 
 $ErrorActionPreference = 'Stop'
 
+# --- UTF-8 の明示的な読み書き -----------------------------------------------
+# Windows PowerShell 5.1 の Get-Content は、-Encoding を省くと BOM が無いファイルを
+# ANSI コードページ (日本語環境では CP932) として読む。設定ファイルは BOM 無し
+# UTF-8 なので、指定を省くと日本語が化ける。CP932 の 2 バイト目には 0x5C (\) が
+# 含まれるため、化けた文字列を書き戻すと JSON のエスケープまで壊れる。
+# 2026-09-03 の障害はこれが原因だった。読み書きは必ずこの 2 関数を通すこと。
+function Read-BelloUtf8Text {
+    param([Parameter(Mandatory)][string] $Path)
+    # -Encoding UTF8 を明示すると、BOM の有無にかかわらず UTF-8 として読む。
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
+    if ($null -eq $text) { return '' }
+    # UTF-8 BOM 付きで保存されていた場合に残る先頭の U+FEFF を落とす。
+    return $text.TrimStart([char]0xFEFF)
+}
+
+function Write-BelloUtf8Text {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Text
+    )
+    # 5.1 の Set-Content -Encoding UTF8 は BOM を付けてしまう。BOM 無しで書くために
+    # .NET の UTF8Encoding($false) を使う。一時ファイルへ書いて読み直し、
+    # 一致を確かめてから置き換える (途中の状態をディスクに残さない)。
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    # [System.IO.File] は .NET のカレントディレクトリを基準に相対パスを解決する。
+    # PowerShell の現在位置とは別物なので、必ず絶対パスへ直してから渡す。
+    $dir = Split-Path -Parent $Path
+    if ([string]::IsNullOrWhiteSpace($dir)) { $dir = (Get-Location).ProviderPath }
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $dir  = (Resolve-Path -LiteralPath $dir).ProviderPath
+    $Path = Join-Path $dir (Split-Path -Leaf $Path)
+    $tmp = '{0}.{1}.{2}.tmp' -f $Path, $PID, ([DateTime]::UtcNow.Ticks)
+    [System.IO.File]::WriteAllText($tmp, $Text, $utf8NoBom)
+    $readBack = [System.IO.File]::ReadAllText($tmp, $utf8NoBom)
+    if ($readBack -ne $Text) {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        throw "書き込んだ内容と読み直した内容が一致しません: $Path"
+    }
+    try {
+        if (Test-Path -LiteralPath $Path) {
+            # File.Replace は ReplaceFile API を呼ぶ。置換は 1 手で終わるので、
+            # 途中の状態 (空ファイルや書きかけ) が他のプロセスから見えない。
+            [System.IO.File]::Replace($tmp, $Path, $null)
+        } else {
+            [System.IO.File]::Move($tmp, $Path)
+        }
+    } catch {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
 # --- 設定の読み取り (非秘密のみ) --------------------------------------------
+# 設定が壊れていた場合、既定値で本番を動かしてはいけない。
+# dataRoot が変われば別の DB / worktree / ログを掴み、allowedTools や
+# protectedBranches といった安全境界もすべて外れるため。
+# ここでは「壊れている」という事実だけを持ち越し、Node 側で診断モードへ倒す。
 $dataRoot = ''
+$script:ConfigBroken = $false
+$script:ConfigError  = ''
 try {
-    $raw = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop
+    $raw = Read-BelloUtf8Text -Path $ConfigPath
     $cfg = $raw | ConvertFrom-Json
     if ($cfg.PSObject.Properties['dataRoot'] -and -not [string]::IsNullOrWhiteSpace($cfg.dataRoot)) {
         $dataRoot = $cfg.dataRoot
     }
 } catch {
-    Write-Warning ("設定ファイルを読めません ({0}): {1}" -f $ConfigPath, $_.Exception.Message)
+    $script:ConfigBroken = $true
+    $script:ConfigError  = $_.Exception.Message
+    Write-Warning ("設定ファイルを読めません ({0}): {1}" -f $ConfigPath, $script:ConfigError)
+    Write-Warning '設定が壊れているため、タスクの自動実行はしません (診断モードで起動します)。'
+    Write-Warning '復旧するには: bello.ps1 config-repair'
 }
 if ([string]::IsNullOrWhiteSpace($dataRoot)) {
     $localAppData = [string]$env:LOCALAPPDATA
@@ -57,6 +121,10 @@ if ([string]::IsNullOrWhiteSpace($dataRoot)) {
         $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
     }
     $dataRoot = Join-Path $localAppData 'BELLO\dev-orchestrator'
+    if ($script:ConfigBroken) {
+        # 既定の場所はログを書くためだけに使う。DB も worktree もここでは触らない。
+        Write-Warning ("設定を読めないため、ログ出力先には既定の場所を使います: {0}" -f $dataRoot)
+    }
 }
 
 $logDir        = Join-Path $dataRoot 'logs'
@@ -180,7 +248,7 @@ function Get-RunningOrchestrator {
     # ここへ来る時点で Mutex を保持している = 他に監督プロセスは居ない。
     if (-not (Test-Path -LiteralPath $orchestratorPidPath)) { return $null }
     $text = ''
-    try { $text = (Get-Content -LiteralPath $orchestratorPidPath -Raw).Trim() } catch { return $null }
+    try { $text = (Get-Content -LiteralPath $orchestratorPidPath -Raw -Encoding UTF8).Trim() } catch { return $null }
     $opid = 0
     if (-not [int]::TryParse($text, [ref]$opid)) { return $null }
     $proc = Get-Process -Id $opid -ErrorAction SilentlyContinue
@@ -214,7 +282,7 @@ try {
     if (-not $mutexOwned) {
         if ($Watchdog) { $script:QuietExit = $true; exit 0 }
         $other = 'unknown'
-        if (Test-Path -LiteralPath $pidPath) { $other = (Get-Content -LiteralPath $pidPath -Raw).Trim() }
+        if (Test-Path -LiteralPath $pidPath) { $other = (Get-Content -LiteralPath $pidPath -Raw -Encoding UTF8).Trim() }
         Write-HostLog -Level WARN -Message ("Orchestrator は既に起動しています (pid {0})。二重起動はしません。" -f $other)
         exit 0
     }

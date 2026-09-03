@@ -108,6 +108,80 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 status
 自動コミットは、作業開始時点で既に変更されていたファイルを除外します。
 `git reflog` と `logs\` で実際に何が起きたか追えます。
 
+## 4.5 設定ファイルが文字化けして読めない（2026-09-03 の障害）
+
+### 症状
+
+```text
+警告: 設定ファイルを読めません (...bello-orchestrator.config.json):
+      ','ではなく無効な配列が渡されました。
+```
+
+`bello-orchestrator.config.json` の `$comment` にある日本語が化け、引用符と改行の
+対応まで壊れて JSON として読めなくなる。Orchestrator は設定を読めないまま、
+**別の dataRoot・別の安全境界**で起動してしまう。
+
+### 原因
+
+Windows PowerShell 5.1 の `Get-Content` は、`-Encoding` を省くと BOM の無いファイルを
+ANSI コードページ（日本語環境では CP932）として読む。設定ファイルは BOM 無し UTF-8
+なので、指定を省くと日本語が化ける。さらに CP932 の 2 バイト目には `0x5C` (`\`) が
+含まれるため、化けた文字列を書き戻すと JSON のエスケープまで壊れる。
+
+`Start-BelloOrchestrator.ps1` の設定読み取りに `-Encoding UTF8` が無かったことが
+直接の原因だった。
+
+### 復旧手順
+
+```powershell
+cd "C:\Users\win\Documents\GitHub\aws-amplify-system\tools\bello-dev-orchestrator"
+
+# 1. 何がどう壊れているかを見る（設定が壊れていても動く）
+powershell -ExecutionPolicy Bypass -File .\bello.ps1 config-check
+
+# 2. 隔離 → 救出 → 検証 → atomic 置換 で直す
+#    元ファイルは削除せず、SHA-256 付きで quarantine\ へコピーしてから直す
+powershell -ExecutionPolicy Bypass -File .\bello.ps1 config-repair
+
+# 3. 直ったことを確認して再起動する
+powershell -ExecutionPolicy Bypass -File .\bello.ps1 config-check
+powershell -ExecutionPolicy Bypass -File .\bello.ps1 start
+powershell -ExecutionPolicy Bypass -File .\bello.ps1 status
+```
+
+`config-repair` は壊れた `$comment` だけを取り除き、`repoPath` / `allowedTools` /
+`disallowedTools` / `protectedBranches` / `isolation` / `allowPush` / `review.provider`
+といったユーザー設定は 1 つも変えない。救出できない壊れ方のときは、
+**何も書き換えずに** 中止して隔離コピーの場所を示す。
+
+### 設定が壊れているときの起動（診断モード）
+
+設定を読めないときは、それらしい既定値で本番を動かさない。dataRoot が変われば
+別の DB / worktree を掴み、`allowedTools` や `protectedBranches` の安全境界も
+すべて外れるため。代わりに **ダッシュボードだけを診断モードで起動**する。
+
+* Claude 実行・キュー処理・inbox 取込は起動しない
+* DB / worktree / ログには触らない（開かない・作らない）
+* `127.0.0.1` に固定。LAN 公開はしない
+* 画面は読み取り専用（GET 以外は 405）
+* Git の正常版 / 壊れた版 / 実際に適用された設定を並べて見せる
+
+`http://127.0.0.1:4319/` を開くと、壊れた箇所・隔離先・SHA-256・復旧手順が出る。
+
+### 再発防止
+
+| 対策 | 場所 |
+| --- | --- |
+| 読み込みは `Get-Content -Raw -Encoding UTF8` を明示 | `Start-BelloOrchestrator.ps1` `Read-BelloUtf8Text` |
+| 書き込みは UTF-8 (BOM 無し)、一時ファイル → 検証 → atomic 置換 | `Start-BelloOrchestrator.ps1` `Write-BelloUtf8Text` / `src/configFile.mjs` `writeConfigFile` |
+| UTF-8 として厳密にデコードし、文字化けを検出 | `src/configFile.mjs` `readConfigFile` / `detectMojibake` |
+| 壊れた設定で本番を動かさず診断モードへ倒す | `src/cli.mjs` `startDiagnostic` |
+| 設定ファイルの `$comment` を ASCII のみにする | `bello-orchestrator.config.json` |
+| 文字化け / 壊れた JSON / 書き込み途中 / 再起動の回帰テスト | `test/config-corruption.test.mjs` |
+
+`$comment` を ASCII にしたのは、設定ファイルに非 ASCII のバイトを 1 つも置かなければ
+エンコーディング事故そのものが起きないため。日本語の説明は `README.md` と `docs/` にある。
+
 ## 5. PC 再起動を伴う最終確認（ユーザー操作）
 
 自動では行いません。次の手順でご確認ください。
