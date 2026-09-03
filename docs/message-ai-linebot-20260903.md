@@ -187,10 +187,42 @@ AIが「顧客がURLを送ってきた」と読み、返信文に事実でない
 
 `tsc --noEmit` / `next lint` / `next build` / `synth:check` すべて成功。
 
+### 実機で確認したこと(Staging / apiId `j6up24p7lnczdmklzjdt3vrp4y`)
+
+Amplifyのデプロイ(job 177)が SUCCEED し、新モデルが実際に作られたことを確認した。
+
+```
+LineNotifySettings-j6up24p7lnczdmklzjdt3vrp4y-NONE     作成済み
+NotificationDelivery-j6up24p7lnczdmklzjdt3vrp4y-NONE   作成済み / GSI 3本すべて ACTIVE
+  notificationDeliveriesByDedupeKey / ByStatus / ByConversationId
+ReplyRule-j6up24p7lnczdmklzjdt3vrp4y-NONE              作成済み
+```
+
+実データでのラウンドトリップ(一時行を作って消す):
+
+```
+✓ NotificationDelivery への書き込み
+✓ dedupeKey のGSIで引ける（重複判定が実際に使う経路）
+✓ 重複判定が「送信済みなので送らない」と答える
+✓ Conversation に channel=BASE を保存して読み戻せる（enum追加が反映済み）
+✓ 一時行の片付け完了
+```
+
+BASE商品URL → 在庫特定 → 通知文面 までを実在の商品で通し、
+指示書§40 Case A(値下げ+配送先あり)/ Case B(値下げ+配送先なし)の
+両方で期待どおりの1通目・2通目が生成されることを確認した。
+Case B では `【BASE / 要確認】` が付き、理由に「配送先が不明です」が入り、
+2通目が「お届け先の都道府県をお教えいただけますでしょうか」になる。
+
 ### 検証で見つけて直した実バグ
 
-`htmlToText` がタグごと `href` を捨てており、商品URLがリンクの中にしか無いメール
-(通知メールでは一般的)で商品IDを取り落としていた。
+1. `htmlToText` がタグごと `href` を捨てており、商品URLがリンクの中にしか
+   無いメール(通知メールでは一般的)で商品IDを取り落としていた。
+2. 1通目の空行が §7-1 のテンプレートと2箇所ずれていた(見出し直後に空行が2つ、
+   お名前と本文の間の空行が消えていた)。実データで通して気づいた。
+3. LINEの再送を「重複」として素通ししていたため、初回で保存後に解析・通知が
+   落ちると**通知が永久に作られない**穴があった。再送をやり直しの機会として
+   使うようにした。
 
 ---
 
