@@ -321,15 +321,6 @@
         return fmt(h.at) + "  " + (h.from_state || "-") + " -> " + h.to_state + "  [" + h.actor + "] " + (h.reason || "");
       }).join("\n"));
       section("変更ファイル", (data.task.changedFiles || []).join("\n") || "（なし）");
-      section(
-        "作業場所（証拠の所在）",
-        [
-          "分離方式: " + (data.task.isolation || "不明"),
-          "作業場所: " + (data.task.workDir || "-"),
-          "専用ブランチ: " + (data.task.worktreeBranch || "（専用ブランチなし）"),
-          "基準: " + (data.task.baseBranch || "-") + " @ " + (data.task.baseCommit || "-"),
-        ].join("\n"),
-      );
       box.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
