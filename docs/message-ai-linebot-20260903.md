@@ -120,6 +120,65 @@ relatedInventoryId / relatedBaseItemId / externalMessageId / 本文)を持って
 
 ---
 
+## 2.5 未認証Webhookからの自動処理(2026-09-03 追加指示 §5/§6)
+
+### 何が壊れていたか
+
+署名付きWebhookをStagingへ実際に送って判明した。
+
+```
+Conversation         作られる ✓
+Message              作られる ✓
+ReplyDraft           0件 ✗
+NotificationDelivery 0件 ✗
+```
+
+`processInquiryAndNotify` の下にある `getConversation` /
+`generateInquiryReplyDraft` / `saveReplyDraft` などは `serverDataClient`
+(Cookie + `authMode:"userPool"`)を使う。LINE Webhookは未認証POSTで
+Cookieもセッションも無いため、AppSyncが認可で弾き `data` が null で返る。
+会話は存在するのに「見つからない」ように見えていた。
+
+同じ制約は `lib/messaging/webhookStore.ts` の冒頭に既に記録がある
+(だからメッセージ保存はDynamoDB直接)。今回追加した経路がそれを踏まえていなかった。
+
+### どう直したか
+
+**AppSyncの認可は広げていない。スキーマは無変更。** 既存方式に合わせた ——
+`webhookStore` と worker 3本(zaico-sync / image-processing /
+pricing-scheduler)はいずれもDynamoDBを直接叩いており、
+「未認証・バックグラウンドはAppSyncを通さない」がこのリポジトリの方針。
+
+`serverDataClient` と同じ形のDynamoDB直結クライアントを1つ作り
+(`lib/amplify/directData.ts`)、`AsyncLocalStorage` で囲った中だけ差し替える
+(`lib/amplify/dataClient.ts` の Proxy)。
+
+```
+processInquiryAndNotifyUnauthenticated(params)
+  = runWithDirectData(() => processInquiryAndNotify(params))
+```
+
+**呼び出し側と下位モジュールは1行も変えていない。** 在庫検索・ナレッジ・
+返信ルール・送料・返信案は10以上のモジュールに散っており、個別にDynamoDB版を
+書き足すと同じ問い合わせ処理が2実装になって必ず食い違う。
+`runWithDirectData` で明示的に囲まれていない限り、これまでと完全に同じ
+クライアントが返るので、画面・Server Action の経路は影響を受けない。
+
+### 安全側に倒した点
+
+- **未実装の操作・フィルタは例外を投げる。** 黙って空配列を返すと
+  「商品が無い」「ナレッジが0件」と誤認したまま返信案が作られる
+- `list` の `limit` は「絞り込み後の件数」として扱う(DynamoDBの `Limit` は
+  絞り込み**前**なので、そのまま渡すと条件に合う行があるのに空で返る)
+- `update` で `null` を渡したら属性を消す(AppSyncと同じ意味)
+- Webhookに与えたのはDynamoDBの読み書きのみ。管理者権限相当は与えていない
+
+### テーブル名の決め方
+
+`<Model>-<apiId>-<env>`。既に設定済みの `CONVERSATION_TABLE_NAME` から
+apiId と env を取り出して他のモデルへ流用する。モデルごとに環境変数を
+増やすと、モデルを足すたびにAmplify Consoleの設定作業が要る(そして忘れる)。
+
 ## 3. 設計上の判断(なぜそうしたか)
 
 ### 顧客向けLINE送信ロックを緩めていない

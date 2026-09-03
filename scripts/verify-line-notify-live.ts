@@ -233,11 +233,34 @@ async function main() {
     console.log(`シナリオ: ${scenario.label}`);
     console.log(`messageId: ${messageId}\n本文:\n${scenario.text}\n`);
 
+    // Webhookは同期処理なので、応答までの時間がそのまま
+    // 「受信→保存→商品特定→AI生成→通知」の所要時間になる。
+    // Amplify Hostingの実行時間上限に対する余裕を測るために出す(§7)。
+    const startedAt = Date.now();
     const res = await postWebhook(messageId, scenario.text);
-    console.log(`Webhook応答: HTTP ${res.status} ${res.body}`);
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    console.log(`Webhook応答: HTTP ${res.status} ${res.body}  (${elapsed}秒)`);
     if (res.status !== 200) {
       console.error("Webhookが200を返しませんでした。処理が完了していない可能性があります。");
     }
+
+    // 保存・解析まで到達したかを、通知とは別に数える。
+    const convs = (await scanAll(T("Conversation"))).filter((c) => c.externalCustomerId === TEST_USER_ID);
+    const convIds = new Set(convs.map((c) => c.id));
+    const msgs = (await scanAll(T("Message"))).filter((m) => convIds.has(m.conversationId));
+    const drafts = (await scanAll(T("ReplyDraft"))).filter((d) => convIds.has(d.conversationId));
+    console.log(`\nConversation ${convs.length}件 / Message ${msgs.length}件 / ReplyDraft ${drafts.length}件`);
+    const draft = drafts.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    if (draft) {
+      const ev = typeof draft.sourceSummary === "string" ? JSON.parse(draft.sourceSummary) : draft.sourceSummary;
+      console.log(`  返信案の状態 : ${draft.status}`);
+      console.log(`  商品特定     : ${ev?.productStatus ?? "-"} ${ev?.product?.name ? `(${String(ev.product.name).slice(0, 30)})` : ""}`);
+      console.log(`  分類         : ${(typeof draft.intents === "string" ? JSON.parse(draft.intents) : draft.intents ?? []).join(", ") || "-"}`);
+      console.log(`  適用ルール   : ${(ev?.appliedReplyRules ?? []).map((r: { title: string }) => r.title).join(" / ") || "なし"}`);
+      console.log(`  参照ナレッジ : ${(ev?.knowledgeDocuments ?? []).map((k: { title: string }) => k.title).join(" / ") || "なし"}`);
+      console.log(`  モデル       : ${draft.modelName ?? "-"}`);
+    }
+
     await waitAndReport(messageId, scenario.label);
     return;
   }

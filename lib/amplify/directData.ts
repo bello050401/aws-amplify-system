@@ -75,6 +75,24 @@ function pluralize(model: string): string {
   return `${lower}s`;
 }
 
+/**
+ * 主キーが `id` ではないモデル(`.identifier([...])` を宣言しているもの)。
+ *
+ * これを持たないと update/delete が `id` を探して失敗する。実測で
+ * amplify/data/resource.ts の `.identifier(` を洗い出したもの。
+ * モデルを足すときはここも見る。
+ */
+const CUSTOM_IDENTIFIERS: Record<string, string> = {
+  BaseItemCache: "baseItemId",
+  BaseProductArchive: "baseItemId",
+  SalesMonthlyAggregate: "yearMonth",
+  ExternalResearchCache: "cacheKey",
+};
+
+function identifierFor(model: string): string {
+  return CUSTOM_IDENTIFIERS[model] ?? "id";
+}
+
 let cached: DynamoDBDocumentClient | null = null;
 function ddb(): DynamoDBDocumentClient {
   if (!cached) cached = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
@@ -197,8 +215,12 @@ async function modelList(
         ...(built
           ? {
               FilterExpression: built.expr,
-              ExpressionAttributeNames: built.names,
-              ExpressionAttributeValues: built.values,
+              ...(Object.keys(built.names).length > 0 ? { ExpressionAttributeNames: built.names } : {}),
+              // 空の ExpressionAttributeValues は DynamoDB が拒否する
+              // (ValidationException)。attribute_not_exists だけの条件
+              // ——「削除されていない行」の絞り込みがまさにこれ——では
+              // 値が1つも無いので、キーごと外す。
+              ...(Object.keys(built.values).length > 0 ? { ExpressionAttributeValues: built.values } : {}),
             }
           : {}),
       }),
@@ -211,7 +233,11 @@ async function modelList(
     if (pages >= 100) break;
   } while (key && out.length < limit);
 
-  return { data: out.slice(0, limit), nextToken: encodeToken(key) };
+  // **切り詰めない。** limit を超えた分を捨てて nextToken だけ先へ進めると、
+  // 捨てた行が二度と読まれない —— listAllPages で全件を集める呼び出し
+  // (商品名照合の全在庫読み込み等)が、黙って一部を落とした集合を
+  // 「全部」として返すことになる。多めに返るのは無害。
+  return { data: out, nextToken: encodeToken(key) };
 }
 
 /** GSIでの絞り込み。`list<Model>By<Field>` から索引名とキー名を導く。 */
@@ -252,14 +278,19 @@ async function modelIndexQuery(
     if (pages >= 100) break;
   } while (key && out.length < limit);
 
-  return { data: out.slice(0, limit), nextToken: encodeToken(key) };
+  // 切り詰めない理由は modelList と同じ。
+  return { data: out, nextToken: encodeToken(key) };
 }
 
 async function modelCreate(model: string, input: Record<string, unknown>): Promise<ItemResult> {
   const now = nowIso();
+  const idField = identifierFor(model);
   const item: Record<string, unknown> = {
-    id: typeof input.id === "string" && input.id ? input.id : randomUUID(),
     ...input,
+    // **spread の後に置く。** 先に置くと、呼び出し側が `id: undefined` を
+    // 明示的に含めていた場合に spread が上書きし、キーの無い行を書こうとして失敗する。
+    [idField]:
+      typeof input[idField] === "string" && input[idField] ? (input[idField] as string) : randomUUID(),
     createdAt: input.createdAt ?? now,
     updatedAt: now,
     // AppSync経由で作った行と同じ形にする。__typename が無いと、
@@ -273,8 +304,9 @@ async function modelCreate(model: string, input: Record<string, unknown>): Promi
 }
 
 async function modelUpdate(model: string, input: Record<string, unknown>): Promise<ItemResult> {
-  const { id, ...rest } = input;
-  if (typeof id !== "string") throw new Error(`${model}.update には id が必要です。`);
+  const idField = identifierFor(model);
+  const { [idField]: id, ...rest } = input;
+  if (typeof id !== "string") throw new Error(`${model}.update には ${idField} が必要です。`);
 
   const sets: string[] = [];
   const removes: string[] = [];
@@ -306,7 +338,7 @@ async function modelUpdate(model: string, input: Record<string, unknown>): Promi
   const res = await ddb().send(
     new UpdateCommand({
       TableName: tableFor(model),
-      Key: { id },
+      Key: { [idField]: id },
       UpdateExpression: expr,
       ExpressionAttributeNames: names,
       ...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),

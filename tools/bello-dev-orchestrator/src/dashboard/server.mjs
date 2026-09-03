@@ -430,6 +430,13 @@ function publicTask(task) {
     changedFiles: task.changedFiles,
     gitStartCommit: task.git_start_commit,
     gitEndCommit: task.git_end_commit,
+    // どこで作業したかを画面から追えるようにする（証拠の所在）
+    isolation: task.isolation,
+    workDir: task.work_dir,
+    worktreePath: task.worktree_path,
+    worktreeBranch: task.worktree_branch,
+    baseCommit: task.base_commit,
+    baseBranch: task.base_branch,
     todoIds: task.todoIds,
     documentId: task.document_id,
     heartbeatAt: task.heartbeat_at,
