@@ -1,8 +1,9 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
+import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { generateCanonicalProductPage, toListingDraftCopy, type ListingDraftCopy } from "@/lib/ai/productPage/canonical";
+import { saveGeneratedProductPage } from "@/lib/ai/productPage/history";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §56/§88-90: AI生成のServer Action層。
@@ -83,6 +84,13 @@ export type GenerateListingCopyActionResult =
       referencedBaseItemIds: string[];
       /** 紹介文から寸法を含む文を機械的に除去したか。 */
       introSanitized: boolean;
+      /**
+       * 在庫に無くBASEから補った項目(2026-09-03 追加指示 §33/§44)。
+       * 何をどこから取ったかを担当者が見られるようにする。
+       */
+      completionNotes: string[];
+      /** 生成履歴として保存できたか。保存できていればそのid。 */
+      savedId: string | null;
     }
   | { ok: false; error: string; correlationId: string };
 
@@ -106,7 +114,24 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
     //
     // これらが上側には1つも無かった。下側を正本にして、上側からも
     // 同じ関数を呼ぶ。生成コアは複製しない(lib/ai/productPage/canonical.ts)。
+    // 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」の
+    // UIを消し、生成の入口をここへ一本化した。あちら側にだけあった
+    // 生成履歴の保存も、一緒に消えないようここへ引き取っている(§47)。
     const result = await generateCanonicalProductPage(inventoryId);
+    const who = await getCurrentInventoryUserEmail();
+    const history = await saveGeneratedProductPage(result, who);
+    if (history.reason) {
+      // 保存できなくても生成結果は返す。ただし黙って捨てない。
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          action: "generateListingCopyAction",
+          correlationId,
+          inventoryId,
+          message: history.reason,
+        }),
+      );
+    }
 
     if (result.redactions.length > 0) {
       console.info(
@@ -140,6 +165,8 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
       styleProfileVersion: result.usedStyleProfileVersion,
       referencedBaseItemIds: result.referencedBaseItemIds,
       introSanitized: result.introSanitized ?? false,
+      completionNotes: result.completionNotes,
+      savedId: history.savedId,
     };
   } catch (err) {
     logActionFailure("generateListingCopyAction", correlationId, { inventoryId }, err);

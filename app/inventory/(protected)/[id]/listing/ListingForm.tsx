@@ -86,6 +86,8 @@ export function ListingForm({
     missingFacts: string[];
     styleProfileVersion: number | null;
     referencedBaseItemIds: string[];
+    completionNotes: string[];
+    savedId: string | null;
     introSanitized: boolean;
   } | null>(null);
 
@@ -155,6 +157,8 @@ export function ListingForm({
         missingFacts: result.missingFacts,
         styleProfileVersion: result.styleProfileVersion,
         referencedBaseItemIds: result.referencedBaseItemIds,
+        completionNotes: result.completionNotes,
+        savedId: result.savedId,
         introSanitized: result.introSanitized,
       });
     } catch (err) {
@@ -276,8 +280,15 @@ export function ListingForm({
             {aiQuality.introSanitized && (
               <p className="text-amber-700">「◎商品のご紹介」に寸法が含まれていたため、該当の文を自動で取り除きました。</p>
             )}
+            {aiQuality.completionNotes.length > 0 && (
+              <ul className="mt-1">
+                {aiQuality.completionNotes.map((n, i) => (
+                  <li key={i}>・{n}</li>
+                ))}
+              </ul>
+            )}
             {aiQuality.missingFacts.length > 0 && (
-              <p>在庫に無いため空欄のまま: {aiQuality.missingFacts.join("、")}</p>
+              <p>在庫にもBASEにも情報が無いため空欄のまま: {aiQuality.missingFacts.join("、")}</p>
             )}
             {aiQuality.violations.length > 0 ? (
               <ul className="mt-1 border border-amber-300 bg-amber-50 p-1 text-amber-800">

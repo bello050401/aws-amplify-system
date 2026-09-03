@@ -7,7 +7,6 @@ import { isMercariConnected } from "@/lib/listing/mercari/tokenAccess";
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingForm } from "./ListingForm";
-import { ProductPageSection } from "./ProductPageSection";
 
 /**
  * BELLO統合改修 master指示書 Phase D — 在庫詳細画面(app/inventory/
@@ -73,11 +72,10 @@ export default async function ListingPage({ params }: { params: { id: string } }
           initialChannelListing={channelListing}
           mercariConnected={mercariConnected}
         />
-        {/* BASE掲載用の商品ページ生成。出品操作とは別に置く ——
-            生成は下書きを作るだけで、外部へは何も送らない。 */}
-        <div className="mx-auto max-w-2xl">
-          <ProductPageSection inventoryId={item.id} />
-        </div>
+        {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
+            ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
+            役割が重複していたので消した。生成エンジン・生成履歴の保存・
+            BASEからの情報補完は、そちらへ引き取ってある(消したのはUIだけ)。 */}
       </div>
     </div>
   );

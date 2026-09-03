@@ -7,6 +7,8 @@ import { baseBrandHint, type ArchivedStyleReference } from "@/lib/base/archive/s
 import { inferCategory, type BelloStyleProfile } from "@/lib/ai/productIntro/styleProfile";
 import { generateProductPage, type ProductPageResult } from "./service";
 import { buildGuidanceBlock, listActiveGuidance, type GuidanceRule } from "./guidance";
+import { resolveLinkedBaseItem, type BaseLink } from "./baseLink";
+import { buildResolvedProductContext, type ResolvedProductContext } from "@/lib/inquiry/productContext";
 
 /**
  * 商品説明生成の**正本**(2026-09-02 指示書§2/§10)。
@@ -44,14 +46,25 @@ import { buildGuidanceBlock, listActiveGuidance, type GuidanceRule } from "./gui
  * 押したとき」にしか起きない低頻度の操作なので、キャッシュを持って
  * 古い文体を参照し続けるより、その都度読む方が素直で安全。
  */
-export async function loadStyleArchive(): Promise<ArchivedStyleReference[]> {
-  const rows = await listAllPages<{
-    baseItemId: string;
-    title?: string | null;
-    titleCore?: string | null;
-    price?: number | null;
-    introText?: string | null;
-  }>(
+/** 過去BASE商品の生の行。文体の参考にも、同一商品の照合にも使う。 */
+export interface ArchiveRow {
+  baseItemId: string;
+  title?: string | null;
+  titleCore?: string | null;
+  price?: number | null;
+  introText?: string | null;
+}
+
+/**
+ * 過去BASE商品を読む。
+ *
+ * 267件・約2.7MBある。**1回の生成で2回読まない**ために、生の行を返す
+ * この関数を1つ置き、文体の参考(loadStyleArchive)と同一商品の照合
+ * (baseLink.ts)がそこから派生する。以前はそれぞれが読んでいたわけでは
+ * ないが、§44 で照合が加わるときに二度読みになるところだった。
+ */
+export async function loadArchiveRows(): Promise<ArchiveRow[]> {
+  return listAllPages<ArchiveRow>(
     async (nextToken) => {
       const res = await serverDataClient.models.BaseProductArchive.list({
         limit: 200,
@@ -62,9 +75,12 @@ export async function loadStyleArchive(): Promise<ArchivedStyleReference[]> {
     },
     { label: "過去BASE商品" },
   );
+}
 
+/** 文体の参考にできる形へ。紹介文が無い行は文体の見本にならないので落とす。 */
+export function toStyleReferences(rows: ArchiveRow[]): ArchivedStyleReference[] {
   return rows
-    .filter((row) => Boolean(row.introText)) // 紹介文が無いものは文体の参考にならない
+    .filter((row) => Boolean(row.introText))
     .map((row) => ({
       baseItemId: row.baseItemId,
       titleCore: row.titleCore ?? row.title ?? "",
@@ -73,6 +89,11 @@ export async function loadStyleArchive(): Promise<ArchivedStyleReference[]> {
       price: row.price ?? null,
       introText: row.introText!,
     }));
+}
+
+/** 文体の参考にする過去BASE商品(既存の呼び出し口。中身は上の2つの合成)。 */
+export async function loadStyleArchive(): Promise<ArchivedStyleReference[]> {
+  return toStyleReferences(await loadArchiveRows());
 }
 
 /** 現在有効な Style Profile(isActive の1件)。無ければ null。 */
@@ -95,6 +116,13 @@ export interface CanonicalGenerationResult extends ProductPageResult {
   archiveSize: number;
   /** 適用したACTIVEな改善指示。 */
   activeGuidance: GuidanceRule[];
+  /**
+   * 同一商品として結び付いたBASE商品(2026-09-03 追加指示 §44)。
+   * 見つからなければ null —— まだBASEへ出していない在庫では普通のこと。
+   */
+  baseLink: BaseLink | null;
+  /** 在庫に無くBASEから補った項目の記録(§33 出典を必ず持つ)。 */
+  completionNotes: string[];
 }
 
 /**
@@ -112,28 +140,100 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
   const item = await getInventoryDetail(inventoryId);
   if (!item) throw new Error("対象の在庫が見つかりません。");
 
-  const [archive, styleProfile, categories, guidance] = await Promise.all([
-    loadStyleArchive(),
+  const [archiveRows, styleProfile, categories, guidance] = await Promise.all([
+    loadArchiveRows(),
     loadActiveStyleProfile(),
     listAllMasterEntries("Category"),
     listActiveGuidance(),
   ]);
+  const archive = toStyleReferences(archiveRows);
   const categoryName = categories.find((c: { id: string; name: string }) => c.id === item.categoryId)?.name ?? null;
+
+  // ── BASEからの補完(2026-09-03 追加指示 §44) ────────────────
+  //
+  // 在庫にサイズ・素材・ブランドが無くても、同じ商品がBASEに出ていれば
+  // そこに書いてあることがある。**同一商品と言い切れる根拠がある場合だけ**
+  // 使う(baseLink.ts) —— 文体の参考にしている「似ている商品」の寸法を
+  // 使うと、別商品の事実をこの商品の説明へ書き込むことになる。
+  //
+  // 補完に失敗しても生成は止めない。空欄で返すのがこれまでの動きで、
+  // それは正しい挙動なのだから、補完できないときはそこへ戻るだけでよい。
+  let baseLink: BaseLink | null = null;
+  let productContext: ResolvedProductContext | null = null;
+  const completionNotes: string[] = [];
+  try {
+    baseLink = await resolveLinkedBaseItem(item.id, item.name, archiveRows);
+    if (baseLink) {
+      completionNotes.push(`BASE商品 ${baseLink.baseItemId} と結び付けました(${baseLink.reason})`);
+      productContext = await buildResolvedProductContext({
+        inventory: {
+          id: item.id,
+          displayInventoryId: null,
+          sku: item.sku ?? null,
+          name: item.name,
+          salePriceYen: item.salePrice ?? null,
+          plannedSalePriceYen: item.plannedSalePrice ?? null,
+          purchasePriceYen: item.purchasePrice ?? null,
+          saleStartDate: item.saleStartDate ?? null,
+          width: item.width ? String(item.width) : null,
+          depth: item.depth ? String(item.depth) : null,
+          height: item.height ? String(item.height) : null,
+          quantity: item.quantity ?? null,
+          categoryName,
+          statusName: null,
+        },
+        baseItemId: baseLink.baseItemId,
+      });
+      completionNotes.push(...productContext.completionNotes);
+    }
+  } catch (err) {
+    // §19 黙って「BASEに情報が無かった」ことにしない。
+    completionNotes.push(
+      `BASE商品情報を参照できませんでした: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  /** 在庫の値を優先し、無いときだけBASEの値を使う(§30 補完方式)。 */
+  const completed = (
+    inventoryValue: string | null,
+    fromBase: string | null,
+    label: string,
+  ): string | null => {
+    if (inventoryValue && inventoryValue.trim() !== "") return inventoryValue;
+    if (!fromBase) return null;
+    completionNotes.push(`${label}：BASE商品ページから補完(${fromBase})`);
+    return fromBase;
+  };
+
+  const dims = productContext?.dimensions ?? null;
+  // 寸法は3辺そろって初めて意味がある。1辺だけBASEから足すと、出所の
+  // 違う数字を並べた寸法表記になる。productContext は3辺そろったときしか
+  // 値を持たないので、ここはそのまま渡してよい。
+  const width = completed(item.width ? String(item.width) : null, dims?.width?.value ?? null, "幅");
+  const depth = completed(item.depth ? String(item.depth) : null, dims?.depth?.value ?? null, "奥行");
+  const height = completed(item.height ? String(item.height) : null, dims?.height?.value ?? null, "高さ");
 
   const result = await generateProductPage({
     inventoryId: item.id,
     name: item.name,
     categoryName,
-    width: item.width ? String(item.width) : null,
-    depth: item.depth ? String(item.depth) : null,
-    height: item.height ? String(item.height) : null,
+    width,
+    depth,
+    height,
     damageNotes: item.damageNotes ?? null,
     note: item.note ?? null,
     conditionRating: item.conditionRating ?? null,
     stockQuantity: item.quantity ?? null,
     sku: item.sku ?? null,
     price: item.salePrice ?? item.plannedSalePrice ?? null,
-    brand: baseBrandHint(item.name),
+    // ブランドは在庫の商品名から機械的に導いたものを優先し、無ければ
+    // BASEの商品説明に「ブランド：」と明示されているものを使う。
+    // どちらも無ければ null のまま —— 推測して書かせない。
+    brand: completed(
+      baseBrandHint(item.name),
+      productContext?.details.brand?.value ?? null,
+      "ブランド",
+    ),
     archive,
     styleProfile: styleProfile?.profile ?? null,
     styleProfileVersion: styleProfile?.version ?? null,
@@ -148,6 +248,8 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
     usedStyleProfileVersion: styleProfile?.version ?? null,
     archiveSize: archive.length,
     activeGuidance: guidance,
+    baseLink,
+    completionNotes,
   };
 }
 
