@@ -24,7 +24,12 @@ export type DeliveryStatus =
    */
   | "WAITING_FOR_TARGET"
   /** 本文抽出の不具合等で作り直した通知に置き換えられた(§10)。 */
-  | "SUPERSEDED";
+  | "SUPERSEDED"
+  /**
+   * 送る必要が無いと人が判断したもの(初回バックフィル・開発検証分)。
+   * 通知先が登録されても**自動では送られない**。
+   */
+  | "NOT_REQUIRED";
 
 /**
  * 最大試行回数。
@@ -112,6 +117,9 @@ export function canSend(existing: { status: DeliveryStatus; attemptCount: number
   }
   if (existing.status === "SUPERSEDED") {
     return { status: "SUPERSEDED", shouldRetry: false, reason: "この通知は新しい内容に置き換えられています。" };
+  }
+  if (existing.status === "NOT_REQUIRED") {
+    return { status: "NOT_REQUIRED", shouldRetry: false, reason: "送信不要として扱われています(バックフィル・検証分)。" };
   }
   if (existing.status === "WAITING_FOR_TARGET") {
     // 通知先が登録されれば送れる。自動の再処理でも送信を試してよい。

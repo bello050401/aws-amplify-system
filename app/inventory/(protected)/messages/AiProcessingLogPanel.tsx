@@ -45,6 +45,7 @@ const STATUS_LABEL: Record<NotificationDeliveryRecord["status"], string> = {
   DEAD_LETTER: "通知停止（要対応）",
   WAITING_FOR_TARGET: "通知待ち（友だち追加待ち）",
   SUPERSEDED: "置き換え済み",
+  NOT_REQUIRED: "送信不要",
 };
 
 const STATUS_CLASS: Record<NotificationDeliveryRecord["status"], string> = {
@@ -55,6 +56,7 @@ const STATUS_CLASS: Record<NotificationDeliveryRecord["status"], string> = {
   DEAD_LETTER: "text-red-700",
   WAITING_FOR_TARGET: "text-amber-700",
   SUPERSEDED: "text-gray-400",
+  NOT_REQUIRED: "text-gray-400",
 };
 
 /** 解析側の状態(§7)。通知が届いたかとは無関係。 */
@@ -210,7 +212,7 @@ export function AiProcessingLogPanel({ deliveries }: { deliveries: NotificationD
                     </button>
                     {/* 送信済みは再送させない。同じ通知が2回届くと、担当者は
                         新しい問い合わせが来たと読む。 */}
-                    {d.status !== "SENT" && d.status !== "PROCESSING" && d.status !== "SUPERSEDED" && (
+                    {d.status !== "SENT" && d.status !== "PROCESSING" && d.status !== "SUPERSEDED" && d.status !== "NOT_REQUIRED" && (
                       <button
                         type="button"
                         disabled={busy === d.id}

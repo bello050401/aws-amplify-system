@@ -253,6 +253,10 @@ export async function resendWaitingDeliveries(): Promise<{ sent: number; skipped
 
   const all = await listRecentDeliveries(200);
   const cutoff = Date.now() - RESEND_MAX_AGE_HOURS * 3600_000;
+  // NOT_REQUIRED / SUPERSEDED は対象にしない。バックフィル・検証で作られた
+  // 履歴が、通知先の登録をきっかけに一斉に飛ぶのを防ぐ(利用者の指示)。
+  // 本物の新規問い合わせが一時的に送れなかった場合は WAITING_FOR_TARGET の
+  // ままなので、この経路で再送できる。
   const waiting = all
     .filter((d) => d.status === "WAITING_FOR_TARGET" || d.status === "PENDING")
     .filter((d) => new Date(d.createdAt).getTime() >= cutoff)

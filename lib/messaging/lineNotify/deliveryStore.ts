@@ -205,6 +205,17 @@ export async function markDeliverySuperseded(id: string, supersededBy: string | 
   await patch(id, { status: "SUPERSEDED", supersededBy: supersededBy ?? undefined, errorMessage: reason });
 }
 
+/**
+ * 「送る必要が無い」として印を付ける。
+ *
+ * 初回バックフィルや開発検証で作られた通知が、通知先の登録をきっかけに
+ * 一斉に飛ぶのを防ぐ。**記録は消さない**ので、何がなぜ送られなかったかは
+ * 後から追える。
+ */
+export async function markDeliveryNotRequired(id: string, reason: string): Promise<void> {
+  await patch(id, { status: "NOT_REQUIRED", errorMessage: reason });
+}
+
 /** 状態を PENDING へ戻して再送可能にする(DEAD_LETTER からの手動再送用)。 */
 export async function resetDeliveryForRetry(id: string): Promise<NotificationDeliveryRecord> {
   return patch(id, { status: "PENDING", attemptCount: 0, errorMessage: null });
