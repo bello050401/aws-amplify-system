@@ -11,7 +11,18 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.join(HERE, "schema.sql");
 
-export const SCHEMA_VERSION = "1";
+export const SCHEMA_VERSION = "2";
+
+/**
+ * 追記のみのマイグレーション。既存のタスク・TODO・文書を壊さないよう、
+ * 列の削除や型変更は行わない。
+ */
+const MIGRATIONS = [
+  // v2: 手動審査の TODO を、通常の依頼 TODO と区別するための種別
+  "ALTER TABLE todos ADD COLUMN kind TEXT NOT NULL DEFAULT 'action'",
+  // v2: 審査が連続で失敗した回数。再起動しても数え直しにならないよう DB に持つ
+  "ALTER TABLE tasks ADD COLUMN review_failures INTEGER NOT NULL DEFAULT 0",
+];
 
 /**
  * node:sqlite が使えるかを起動前に確かめる。
@@ -52,6 +63,16 @@ export class Store {
 
     const schema = fs.readFileSync(SCHEMA_PATH, "utf8");
     db.exec(schema);
+
+    // 既存 DB への列追加。CREATE TABLE IF NOT EXISTS では列は増えないため、
+    // ALTER を個別に試す。既にあれば SQLite がエラーを返すので握りつぶす。
+    for (const sql of MIGRATIONS) {
+      try {
+        db.exec(sql);
+      } catch {
+        /* 適用済み */
+      }
+    }
 
     const store = new Store(db);
     store.setMeta("schemaVersion", SCHEMA_VERSION);

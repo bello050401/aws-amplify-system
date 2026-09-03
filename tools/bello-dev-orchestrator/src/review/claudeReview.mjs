@@ -111,7 +111,7 @@ export class ClaudeReviewEngine {
     return Boolean(resolveClaudeExecutable(this.config.claude?.executable));
   }
 
-  #buildArgs() {
+  buildArgs() {
     const s = this.settings;
     const allowed = s.allowedTools?.length ? s.allowedTools : DEFAULT_REVIEW_ALLOWED_TOOLS;
     const disallowed = s.disallowedTools?.length ? s.disallowedTools : DEFAULT_REVIEW_DISALLOWED_TOOLS;
@@ -168,7 +168,7 @@ export class ClaudeReviewEngine {
     const stderrPath = path.join(reviewDir, `review-${stamp}.stderr.log`);
     fs.writeFileSync(path.join(reviewDir, `review-${stamp}.prompt.txt`), redactText(prompt), "utf8");
 
-    const args = this.#buildArgs();
+    const args = this.buildArgs();
     this.logger?.info?.("審査担当 Claude を起動します（実装セッションとは別）", {
       taskId: task.id,
       command: redactCommand(resolved.file, args.map((a) => (a.length > 120 ? "<schema>" : a))),

@@ -8,7 +8,13 @@ import crypto from "node:crypto";
 import { STATES, ACTIVE_STATES } from "./states.mjs";
 import * as git from "./git.mjs";
 import { evaluateEvidence } from "../review/evidenceGate.mjs";
-import { ReviewUnavailableError } from "../review/openaiReview.mjs";
+import { ReviewUnavailableError, REVIEW_FAILURE, NEEDS_USER_ACTION, describeFailure } from "../review/errors.mjs";
+import {
+  MANUAL_REVIEW_TODO_KIND,
+  buildManualReviewTodo,
+  parseManualAnswer,
+  toReviewRecord,
+} from "../review/manualReview.mjs";
 import { redactText } from "../log/redact.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -21,20 +27,51 @@ function failureSignature(parts) {
 }
 
 export class Orchestrator {
-  constructor({ config, paths, repo, logger, runner, reviewEngine, todoManager }) {
+  constructor({ config, paths, repo, logger, runner, reviewEngine, reviewEngines, todoManager }) {
     this.config = config;
     this.paths = paths;
     this.repo = repo;
     this.logger = logger;
     this.runner = runner;
+    // 直接注入された 1 個のエンジン (テスト用)。あれば方式の選択より優先する。
     this.reviewEngine = reviewEngine;
+    // 方式名 -> エンジン。本番はこちらを使い、ダッシュボードの選択で切り替える。
+    this.reviewEngines = reviewEngines ?? {};
     this.todoManager = todoManager;
+
+    // 手動審査の判定 (TODO の回答) を審査結果として取り込む。
+    if (todoManager) {
+      todoManager.onManualReview = (todo) => this.applyManualReview(todo);
+    }
 
     this.paused = false;
     this.stopping = false;
     this.currentTaskId = null;
     this.stopCurrentRequested = false;
     this.snapshots = new Map(); // taskId -> git snapshot
+  }
+
+  /**
+   * いま使う審査方式。設定ファイルの値を既定に、ダッシュボードの選択 (meta) を優先する。
+   * テストでエンジンを直接注入している場合はそちらを使う。
+   */
+  get reviewProvider() {
+    if (this.reviewEngine) return this.reviewEngine.provider ?? "injected";
+    return this.repo.getReviewProvider(this.config.review.provider);
+  }
+
+  /** 手動審査のときは null を返す (エンジンを呼ばず人に投げるため)。 */
+  #resolveEngine(provider) {
+    if (this.reviewEngine) return this.reviewEngine;
+    if (provider === "manual") return null;
+    const engine = this.reviewEngines[provider];
+    if (!engine) {
+      throw new ReviewUnavailableError(
+        `審査方式「${provider}」に対応するエンジンがありません。ダッシュボードの設定で選び直してください。`,
+        REVIEW_FAILURE.NOT_CONFIGURED,
+      );
+    }
+    return engine;
   }
 
   // ------------------------------------------------------------- recovery
@@ -332,9 +369,32 @@ export class Orchestrator {
         repoPath: task.repo_path,
       });
 
+    const provider = this.reviewProvider;
+
+    // 手動審査: エンジンを呼ばず、人に判定を依頼する TODO を出して待つ。
+    // 状態は awaiting_ai_review のまま保持する (審査を待っている点は同じ)。
+    if (provider === "manual" && !this.reviewEngine) {
+      const existing = this.repo.openTodosForTask(task.id, MANUAL_REVIEW_TODO_KIND);
+      if (existing.length === 0) {
+        const { todo } = this.todoManager.createFromUserAction(
+          buildManualReviewTodo({ task, report, evidence }),
+          { waitingTaskIds: [task.id], source: "manual_review" },
+        );
+        this.repo.updateTask(task.id, {
+          blocked_reason: "手動審査の判定待ちです。ダッシュボードの TODO から判定してください。",
+          retry_after: null,
+        });
+        this.repo.audit("system", "review.manual.requested", task.id, todo.id, null);
+        this.logger.info("手動審査を依頼しました", { taskId: task.id, todoId: todo.id });
+      }
+      return;
+    }
+
     let reviewResult = null;
+    let engine = null;
     try {
-      reviewResult = await this.reviewEngine.review({
+      engine = this.#resolveEngine(provider);
+      reviewResult = await engine.review({
         task,
         report,
         gitStat: git.diffStat(task.repo_path, task.git_start_commit),
@@ -342,62 +402,49 @@ export class Orchestrator {
         priorReviews: this.repo.reviewsFor(task.id),
       });
     } catch (err) {
-      // どちらの経路でも retry_after を必ず入れる。入れないと次の tick で
-      // 同じタスクを掴み直し、ループが眠らずに回り続ける。
-      const firstTime = !task.retry_after;
-      if (err instanceof ReviewUnavailableError && err.reason === "no_api_key") {
-        // キーが無くてもシステムは止めない (§7-1)。TODO を出して待つ。
-        this.todoManager.ensureEnvironmentTodos();
-        this.repo.updateTask(task.id, {
-          blocked_reason: "OPENAI_API_KEY 未設定のため AI 審査待ちです。キーを設定すれば自動で審査へ進みます。",
-          retry_after: new Date(Date.now() + REVIEW_RECHECK_MS).toISOString(),
-        });
-        if (firstTime) {
-          this.repo.audit("review_engine", "review.unavailable", task.id, "no_api_key", null);
-          this.logger.warn("AI 審査を実行できません (APIキー未設定)。審査待ちのまま保持し、1 分ごとに再確認します。", {
-            taskId: task.id,
-          });
-        }
-        return;
-      }
-      // API 障害は指数バックオフ後に再試行。ここでは審査待ちのまま置く。
-      const waitMs = Math.min(
-        this.config.review.baseBackoffSeconds * 1000 * 2 ** Math.min(task.revision_count, 6),
-        this.config.review.maxBackoffSeconds * 1000,
-      ) || REVIEW_RECHECK_MS;
-      this.repo.audit("review_engine", "review.failed", task.id, "api_failure", err.message);
-      this.logger.error("AI 審査に失敗しました。バックオフして再試行します。", {
-        taskId: task.id,
-        error: err.message,
-        retryInSeconds: Math.round(waitMs / 1000),
-      });
-      this.repo.updateTask(task.id, {
-        last_error: redactText(err.message),
-        retry_after: new Date(Date.now() + waitMs).toISOString(),
-      });
+      this.#handleReviewFailure(task, err, provider);
       return;
     }
 
     const { review, meta } = reviewResult;
-    // 審査できたので待機指示は消す。残したまま次の状態へ行くと、後の再試行判定を狂わせる。
-    this.repo.updateTask(task.id, { retry_after: null, last_error: null });
+    // 審査できたので待機指示と失敗カウンタは消す。残したまま次の状態へ行くと、
+    // 後の再試行判定を狂わせる。審査失敗を知らせていた TODO も自動で閉じる。
+    this.repo.updateTask(task.id, { retry_after: null, last_error: null, review_failures: 0 });
+    this.#closeReviewFailureTodos(task.id);
     const reviewId = this.repo.saveReview(task.id, task.report_id, review, meta);
 
-    // ---- 証拠ゲートが AI より強い (§7-4) --------------------------------
+    const enforced = this.#enforceEvidenceGate(task, review, evidence);
+    await this.#applyDecision(task, enforced.decision, review, {
+      reviewId,
+      evidence,
+      overrideReason: enforced.overrideReason,
+    });
+  }
+
+  /**
+   * 証拠ゲートは審査者より強い (§7-4)。
+   * AI が accept と言おうが、人が「合格」と打とうが、テストが通っていなければ通さない。
+   * これは審査方式に関係なく共通で、Claude 審査 / OpenAI 審査 / 手動審査すべてに適用する。
+   */
+  #enforceEvidenceGate(task, review, evidence) {
     let decision = review.decision;
     let overrideReason = null;
-    if (decision === "accept_and_continue" && !evidence.passed) {
+
+    if (decision === "accept_and_continue" && evidence && !evidence.passed) {
       decision = "revision_required";
-      overrideReason = `証拠ゲート不合格のため AI の accept を採用しません: ${evidence.failures.join(" / ")}`;
+      overrideReason = `証拠ゲート不合格のため accept を採用しません: ${(evidence.failures ?? []).join(" / ")}`;
       this.repo.audit("system", "review.override", task.id, "accept->revision", overrideReason);
     }
-    if (decision === "accept_and_continue" && review.confidence < this.config.review.minConfidenceToAccept) {
+    if (
+      decision === "accept_and_continue" &&
+      Number.isFinite(review.confidence) &&
+      review.confidence < this.config.review.minConfidenceToAccept
+    ) {
       decision = "pause_for_user_review";
       overrideReason = `審査の確信度が低い (${review.confidence}) ためレビュー待ちにします。`;
       this.repo.audit("system", "review.override", task.id, "accept->pause", overrideReason);
     }
-
-    await this.#applyDecision(task, decision, review, { reviewId, evidence, overrideReason });
+    return { decision, overrideReason };
   }
 
   async #applyDecision(task, decision, review, { reviewId, evidence, overrideReason }) {
@@ -495,6 +542,131 @@ export class Orchestrator {
         });
         return;
     }
+  }
+
+  // --------------------------------------------------------- 審査の失敗
+  /** 審査失敗を知らせていた TODO を閉じる。審査が通ったのに残っていると紛らわしい。 */
+  #closeReviewFailureTodos(taskId) {
+    for (const todo of this.repo.openTodosForTask(taskId, "review_failure")) {
+      this.repo.store.run("UPDATE todos SET status='cancelled' WHERE id=? AND status='open'", [todo.id]);
+      this.repo.audit("system", "todo.autoclose", todo.id, "審査が成功したため", null);
+    }
+  }
+
+  /**
+   * 審査ができなかったときの扱い (指示書 §7-4 / 追加要件)。
+   *
+   * 状態は awaiting_ai_review のまま保持する。ここで awaiting_user へ落とすと、
+   * 利用上限が自然回復しても人が TODO を閉じるまで再開しなくなるため。
+   * 「状態を保存する」= DB に残す、であって「人待ちにする」ではない。
+   */
+  #handleReviewFailure(task, err, provider) {
+    const reason = err instanceof ReviewUnavailableError ? err.reason : REVIEW_FAILURE.TRANSIENT;
+    const fresh = this.repo.getTask(task.id) ?? task;
+    const failures = (fresh.review_failures ?? 0) + 1;
+    const needsUser = NEEDS_USER_ACTION.includes(reason);
+
+    // 利用上限は自然回復を待つので長め、認証切れと設定不足は人の操作後すぐ効くよう短め。
+    const waitMs = needsUser
+      ? reason === REVIEW_FAILURE.USAGE_LIMIT
+        ? 15 * 60_000
+        : REVIEW_RECHECK_MS
+      : Math.min(
+          (this.config.review.baseBackoffSeconds || 5) * 1000 * 2 ** Math.min(failures - 1, 6),
+          (this.config.review.maxBackoffSeconds || 300) * 1000,
+        ) || REVIEW_RECHECK_MS;
+
+    this.repo.updateTask(task.id, {
+      last_error: redactText(err.message).slice(0, 4000),
+      review_failures: failures,
+      retry_after: new Date(Date.now() + waitMs).toISOString(),
+      blocked_reason: needsUser
+        ? `審査を実行できません (${reason})。状態は保存してあります。`
+        : `審査に失敗しました。${Math.round(waitMs / 1000)} 秒後に再試行します。`,
+    });
+    this.repo.checkpoint(task.id, "review_failure", { provider, reason, failures, message: redactText(err.message) });
+    this.repo.audit("review_engine", "review.failed", task.id, reason, err.message);
+
+    // 人の操作が要る失敗は初回から、そうでない失敗は繰り返してから TODO を出す。
+    // 一時的な失敗のたびに人を呼ぶと TODO がノイズになる。
+    const shouldNotify = needsUser || failures >= 3;
+    if (shouldNotify) {
+      const description = describeFailure(reason, { provider });
+      this.todoManager.createFromUserAction(
+        { ...description, kind: "review_failure" },
+        { waitingTaskIds: [task.id], source: "review_engine" },
+      );
+    }
+
+    this.logger[needsUser ? "warn" : "error"](
+      needsUser ? "審査を実行できません。状態を保存して待機します。" : "審査に失敗しました。バックオフして再試行します。",
+      {
+        taskId: task.id,
+        provider,
+        reason,
+        failures,
+        retryInSeconds: Math.round(waitMs / 1000),
+        error: err.message,
+      },
+    );
+  }
+
+  // --------------------------------------------------------- 手動審査の適用
+  /**
+   * 手動審査 TODO の回答を審査結果として取り込む。
+   * TodoManager.complete() から呼ばれる。
+   */
+  applyManualReview(todo) {
+    const taskId = (todo.waitingTaskIds ?? [])[0];
+    const task = taskId ? this.repo.getTask(taskId) : null;
+    if (!task) {
+      this.logger.warn("手動審査の対象タスクが見つかりません", { todoId: todo.id });
+      return null;
+    }
+    if (task.state !== STATES.AWAITING_AI_REVIEW) {
+      this.logger.warn("手動審査の対象タスクが審査待ちではありません", { todoId: todo.id, state: task.state });
+      return null;
+    }
+
+    const parsed = parseManualAnswer(todo.completed_answer);
+    if (!parsed.decision) {
+      this.logger.warn("手動審査の回答を解釈できませんでした", { todoId: todo.id });
+      return null;
+    }
+
+    const checkpoint = this.repo.store.get(
+      "SELECT data FROM checkpoints WHERE task_id=? AND phase='evidence_gate' ORDER BY id DESC LIMIT 1",
+      [task.id],
+    );
+    let evidence = null;
+    try {
+      evidence = checkpoint ? JSON.parse(checkpoint.data) : null;
+    } catch {
+      evidence = null;
+    }
+
+    const review = toReviewRecord(parsed, { evidence });
+    const reviewId = this.repo.saveReview(task.id, task.report_id, review, {
+      model: "human",
+      promptVersion: "manual-v1",
+      provider: "manual",
+      usage: { answeredBy: "user", todoId: todo.id },
+    });
+    this.repo.updateTask(task.id, { retry_after: null, review_failures: 0 });
+    this.repo.audit("user", "review.manual.applied", task.id, review.decision, null);
+
+    // 手動でも「証拠ゲートが審査者より強い」規則は同じにする。
+    // 人が「合格」と打っても、テスト未実行なら completed にはしない。
+    const enforced = this.#enforceEvidenceGate(task, review, evidence);
+    this.#applyDecision(task, enforced.decision, review, {
+      reviewId,
+      evidence,
+      overrideReason: enforced.overrideReason,
+    }).catch((err) => {
+      this.logger.error("手動審査の適用中にエラー", { taskId: task.id, error: err.message });
+    });
+
+    return { decision: review.decision, reviewId, taskId: task.id };
   }
 
   // ------------------------------------------------------------- failures

@@ -40,7 +40,16 @@ export class TodoManager {
     const category = CATEGORIES.has(action.category) ? action.category : "other";
     const dedupeKey = crypto
       .createHash("sha256")
-      .update(`${category}|${String(action.title ?? "").trim()}|${String(action.completionCondition ?? "").trim()}`)
+      .update(
+        [
+          category,
+          action.kind ?? "action",
+          String(action.title ?? "").trim(),
+          String(action.completionCondition ?? "").trim(),
+          // 手動審査はタスクごとに別の依頼なので、まとめてはいけない
+          action.kind === "manual_review" ? waitingTaskIds.join(",") : "",
+        ].join("|"),
+      )
       .digest("hex")
       .slice(0, 32);
 
@@ -63,6 +72,7 @@ export class TodoManager {
       answerRequired: action.answerRequired ?? needsAnswer,
       waitingTaskIds,
       dedupeKey,
+      kind: action.kind ?? "action",
     });
 
     if (created) this.logger?.info?.("ユーザー TODO を作成しました", { todoId: todo.id, title: todo.title, source });
@@ -101,6 +111,7 @@ export class TodoManager {
     }
 
     const resumed = [];
+    let manualReviewTodo = null;
     this.repo.store.transaction(() => {
       this.repo.store.run(
         "UPDATE todos SET status='completed', completed_at=?, completed_answer=?, attachment_path=? WHERE id=? AND status='open'",
@@ -112,6 +123,14 @@ export class TodoManager {
       const fresh = this.repo.getTodo(todoId);
       if (fresh.resume_dispatched === 0) {
         this.repo.store.run("UPDATE todos SET resume_dispatched=1 WHERE id=?", [todoId]);
+
+        // 手動審査の判定は「依存解除」ではなく「審査結果」として扱う。
+        // ここで queued へ戻すと審査を飛ばして再実行になってしまう。
+        if (fresh.kind === "manual_review") {
+          manualReviewTodo = fresh;
+          return;
+        }
+
         for (const taskId of fresh.waitingTaskIds) {
           const task = this.repo.getTask(taskId);
           if (!task || task.state !== STATES.AWAITING_USER) continue;
@@ -125,14 +144,56 @@ export class TodoManager {
       }
     });
 
-    this.logger?.info?.("TODO を完了しました", { todoId, resumedTaskIds: resumed });
-    return { todo: this.repo.getTodo(todoId), resumedTaskIds: resumed, alreadyCompleted: false };
+    // トランザクションの外で呼ぶ。審査結果の適用は状態遷移と監査ログを伴い、
+    // 失敗しても「TODO は完了した」事実は残すべきだから。
+    let manualReview = null;
+    if (manualReviewTodo && typeof this.onManualReview === "function") {
+      try {
+        manualReview = this.onManualReview(manualReviewTodo);
+      } catch (err) {
+        this.logger?.error?.("手動審査の適用に失敗しました", { todoId, error: err.message });
+        this.repo.audit("user", "review.manual.failed", todoId, "error", err.message);
+      }
+    }
+
+    this.logger?.info?.("TODO を完了しました", { todoId, resumedTaskIds: resumed, manualReview: manualReview?.decision ?? null });
+    return {
+      todo: this.repo.getTodo(todoId),
+      resumedTaskIds: resumed,
+      alreadyCompleted: false,
+      manualReview,
+    };
   }
 
   /** 待機中の TODO が他にも残っていないか確認する (§8-2「すべて解除された時だけ」)。 */
   #allBlockingTodosClosed(taskId) {
     const open = this.repo.listTodos({ status: "open" });
     return !open.some((t) => t.waitingTaskIds.includes(taskId));
+  }
+
+  /**
+   * もう当てはまらない環境 TODO を閉じる。
+   *
+   * 審査方式を Claude / 手動へ戻したのに「OpenAI キーを設定してください」が
+   * 残り続けると、要らない作業を延々と要求することになる。
+   */
+  closeObsoleteEnvironmentTodos(env = process.env) {
+    const closed = [];
+    const stillNeeded = Boolean(this.requireOpenAiKey) && !env.OPENAI_API_KEY;
+    if (stillNeeded) return closed;
+
+    for (const todo of this.repo.listTodos({ status: "open" })) {
+      // kind が付く前に作られた古い TODO も件名で拾う
+      const isOpenAiKeyTodo = todo.kind === "openai_key" || todo.title.includes("OpenAI API キーを設定する");
+      if (!isOpenAiKeyTodo) continue;
+      this.repo.store.run("UPDATE todos SET status='cancelled' WHERE id=? AND status='open'", [todo.id]);
+      this.repo.audit("system", "todo.autoclose", todo.id, "この審査方式では不要になったため", null);
+      closed.push(todo.id);
+    }
+    if (closed.length) {
+      this.logger?.info?.("不要になった環境 TODO を閉じました", { count: closed.length });
+    }
+    return closed;
   }
 
   cancel(todoId, actor = "user") {
@@ -146,10 +207,16 @@ export class TodoManager {
   /**
    * 環境の不足に応じた初期 TODO (§8-3)。
    * 既に満たされている項目は作らない。
+   *
+   * **OPENAI_API_KEY が無いことは不足ではない。** 既定の審査方式は追加課金の要らない
+   * Claude 審査であり、OpenAI は任意のオプションだから。ここで TODO を作ると、
+   * 使う予定のない設定を延々と要求することになる。
    */
   ensureEnvironmentTodos(env = process.env) {
     const created = [];
-    if (!env.OPENAI_API_KEY) {
+    // 将来 OpenAI を明示的に選び、かつキーが無い場合だけ知らせる。
+    // 既定 (claude / manual) では何も作らない。
+    if (this.requireOpenAiKey && !env.OPENAI_API_KEY) {
       const { todo, created: made } = this.createFromUserAction(
         {
           category: "auth",
@@ -161,8 +228,9 @@ export class TodoManager {
             "Windows のユーザー環境変数 OPENAI_API_KEY にその値を設定する（PowerShell: [Environment]::SetEnvironmentVariable('OPENAI_API_KEY','<キー>','User')）",
             "Orchestrator を再起動する（bello.ps1 restart）",
           ],
+          kind: "openai_key",
           completionCondition:
-            "bello.ps1 diagnose の出力で「OpenAI: 設定済み」と表示されること。キーの値はどこにも貼らないでください。",
+            "bello.ps1 diagnose の出力で「OpenAI 連携 設定済み」と表示されること。キーの値はどこにも貼らないでください。",
           canUseIPhone: false,
           estimatedMinutes: 10,
           priority: "normal",

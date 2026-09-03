@@ -38,7 +38,15 @@ const DEFAULTS = {
     extraArgs: [],
   },
   review: {
-    provider: "openai",
+    // 既定は追加課金の要らない Claude 審査。openai / manual も選べる。
+    provider: "claude",
+    claude: {
+      model: "sonnet",
+      timeoutSeconds: 900,
+      maxBudgetUsd: 1,
+      allowedTools: [],
+      disallowedTools: [],
+    },
     model: "",
     maxRevisions: 3,
     requestTimeoutSeconds: 120,
@@ -89,6 +97,8 @@ function deepMerge(base, override) {
 }
 
 const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
+/** 審査方式。claude = 別セッションの Claude Code（追加課金なし・既定）。 */
+export const REVIEW_PROVIDERS = ["claude", "openai", "manual"];
 const PERMISSION_PROMPTS = ["host", "none"];
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 
@@ -141,6 +151,22 @@ export function validateConfig(cfg) {
     );
   }
 
+  if (!REVIEW_PROVIDERS.includes(cfg.review.provider)) {
+    errors.push(`review.provider が不正です: ${cfg.review.provider}. 使用可能: ${REVIEW_PROVIDERS.join(", ")}`);
+  }
+  if (!Array.isArray(cfg.review.claude?.allowedTools) || !Array.isArray(cfg.review.claude?.disallowedTools)) {
+    errors.push("review.claude.allowedTools / disallowedTools は配列である必要があります（空配列なら既定値を使います）。");
+  }
+  if (!Number.isFinite(cfg.review.claude?.timeoutSeconds) || cfg.review.claude.timeoutSeconds < 60) {
+    errors.push("review.claude.timeoutSeconds は 60 以上の数値である必要があります。");
+  }
+  // OPENAI_API_KEY が無いことは「エラー」でも「警告」でもない。
+  // 既定の審査方式は Claude であり、OpenAI は任意のオプションだから。
+  if (cfg.review.provider === "openai" && !process.env.OPENAI_API_KEY) {
+    warnings.push(
+      "review.provider=openai ですが OPENAI_API_KEY が未設定です。審査待ちで止まります。ダッシュボードの設定で「Claude審査」または「手動審査」へ切り替えられます。",
+    );
+  }
   if (!Number.isInteger(cfg.review.maxRevisions) || cfg.review.maxRevisions < 1) {
     errors.push("review.maxRevisions は 1 以上の整数である必要があります (無限修正ループ防止)。");
   }

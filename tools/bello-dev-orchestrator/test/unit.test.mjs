@@ -70,6 +70,18 @@ test("設定検証: 不正な設定は errors を返す", () => {
   badRevisions.review.maxRevisions = 0;
   assert.ok(validateConfig(badRevisions).errors.some((e) => e.includes("maxRevisions")));
 
+  const badProvider = makeConfig();
+  badProvider.review.provider = "gemini";
+  assert.ok(validateConfig(badProvider).errors.some((e) => e.includes("review.provider")));
+
+  const noKeyIsFine = makeConfig();
+  delete process.env.OPENAI_API_KEY;
+  assert.equal(
+    validateConfig(noKeyIsFine).errors.length,
+    0,
+    "既定の Claude 審査では OPENAI_API_KEY 未設定はエラーにしない",
+  );
+
   const lanNoToken = makeConfig();
   lanNoToken.dashboard.lanAccess = true;
   lanNoToken.dashboard.host = "0.0.0.0";
@@ -311,16 +323,24 @@ test("TODO: 完了は一度しか依存解除しない", async () => {
   }
 });
 
-test("TODO: 環境不足の初期 TODO は不足時のみ作る", async () => {
+test("TODO: OPENAI_API_KEY 未設定を TODO にしない（既定は追加課金なしの Claude 審査）", async () => {
   const h = await buildHarness();
   try {
     const saved = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
-    assert.equal(h.todoManager.ensureEnvironmentTodos().length, 1);
+
+    // 既定 (Claude 審査) では OpenAI キーは不要なので、何も要求しない
+    assert.equal(h.todoManager.ensureEnvironmentTodos().length, 0, "使う予定のない設定を要求しない");
+    assert.equal(h.repo.listTodos({ status: "open" }).length, 0);
+
+    // OpenAI を明示的に選んだ場合だけ知らせる
+    h.todoManager.requireOpenAiKey = true;
+    assert.equal(h.todoManager.ensureEnvironmentTodos().length, 1, "OpenAI を選んだときだけ知らせる");
     assert.equal(h.todoManager.ensureEnvironmentTodos().length, 0, "二重に作らない");
 
     process.env.OPENAI_API_KEY = "sk-test-value-1234567890";
     const h2 = await buildHarness();
+    h2.todoManager.requireOpenAiKey = true;
     assert.equal(h2.todoManager.ensureEnvironmentTodos().length, 0, "満たされていれば要求しない");
     h2.cleanup();
 
@@ -416,4 +436,112 @@ test("設定検証: allowedTools が空 + prompts=none は警告する", () => {
   cfg.claude.allowedTools = [];
   const { warnings } = validateConfig(cfg);
   assert.ok(warnings.some((w) => w.includes("自動拒否")), "Bash が動かない組み合わせを黙認しない");
+});
+
+// ------------------------------------------------- Claude 審査（追加課金なし）
+test("Claude審査: 実装セッションを継承せず、編集系ツールを一切許可しない", async () => {
+  const { ClaudeReviewEngine, DEFAULT_REVIEW_ALLOWED_TOOLS, DEFAULT_REVIEW_DISALLOWED_TOOLS } = await import(
+    "../src/review/claudeReview.mjs"
+  );
+  const config = makeConfig();
+  const engine = new ClaudeReviewEngine({ config, paths: { runsDir: tempDir("r-") }, logger: null });
+  const args = engine.buildArgs();
+
+  assert.ok(args.includes("-p"), "非対話実行");
+  assert.equal(args[args.indexOf("--output-format") + 1], "json");
+  assert.ok(args.includes("--json-schema"), "審査結果もスキーマ検証させる");
+  assert.ok(!args.includes("--resume"), "実装セッションを継承しない = 独立した審査者");
+  assert.ok(!args.includes("--continue"));
+
+  const allowed = args[args.indexOf("--allowedTools") + 1].split(",");
+  const disallowed = args[args.indexOf("--disallowedTools") + 1].split(",");
+
+  for (const forbidden of ["Edit", "Write", "NotebookEdit"]) {
+    assert.ok(!allowed.includes(forbidden), `${forbidden} を許可してはいけない`);
+    assert.ok(disallowed.includes(forbidden), `${forbidden} を明示的に禁止する`);
+  }
+  for (const mutating of ["Bash(git commit:*)", "Bash(git push:*)", "Bash(git reset:*)", "Bash(rm:*)"]) {
+    assert.ok(disallowed.includes(mutating), `${mutating} を禁止する`);
+  }
+  // 自己申告を確かめるための読み取り手段は与える
+  for (const needed of ["Bash(git diff:*)", "Bash(git log:*)", "Bash(node --test:*)", "Read"]) {
+    assert.ok(allowed.includes(needed), `${needed} は審査に必要`);
+  }
+  assert.equal(DEFAULT_REVIEW_ALLOWED_TOOLS.includes("Write"), false);
+  assert.ok(DEFAULT_REVIEW_DISALLOWED_TOOLS.includes("Write"));
+});
+
+test("Claude審査: OPENAI_API_KEY が無くても使える（追加課金なしの要件）", async () => {
+  const { ClaudeReviewEngine } = await import("../src/review/claudeReview.mjs");
+  const saved = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  const engine = new ClaudeReviewEngine({ config: makeConfig(), paths: { runsDir: tempDir("r-") }, logger: null });
+  // claude 実行ファイルの有無だけで決まる。API キーは一切見ない。
+  assert.equal(typeof engine.isConfigured(), "boolean");
+  assert.equal(engine.provider, "claude");
+  if (saved !== undefined) process.env.OPENAI_API_KEY = saved;
+});
+
+test("審査失敗の分類: 利用上限と認証切れを見分ける", async () => {
+  const { classifyFailureText, REVIEW_FAILURE, NEEDS_USER_ACTION } = await import("../src/review/errors.mjs");
+  assert.equal(classifyFailureText("Claude usage limit reached"), REVIEW_FAILURE.USAGE_LIMIT);
+  assert.equal(classifyFailureText("429 rate limit exceeded"), REVIEW_FAILURE.USAGE_LIMIT);
+  assert.equal(classifyFailureText("利用上限に達しました"), REVIEW_FAILURE.USAGE_LIMIT);
+  assert.equal(classifyFailureText("Please run /login"), REVIEW_FAILURE.AUTH_EXPIRED);
+  assert.equal(classifyFailureText("401 Unauthorized"), REVIEW_FAILURE.AUTH_EXPIRED);
+  assert.equal(classifyFailureText("connection reset"), REVIEW_FAILURE.TRANSIENT, "分からないものは待って再試行");
+  assert.ok(NEEDS_USER_ACTION.includes(REVIEW_FAILURE.USAGE_LIMIT));
+  assert.ok(NEEDS_USER_ACTION.includes(REVIEW_FAILURE.AUTH_EXPIRED));
+  assert.ok(!NEEDS_USER_ACTION.includes(REVIEW_FAILURE.TRANSIENT));
+});
+
+test("手動審査: 回答の解釈", async () => {
+  const { parseManualAnswer, toReviewRecord } = await import("../src/review/manualReview.mjs");
+  assert.equal(parseManualAnswer("合格").decision, "accept_and_continue");
+  assert.equal(parseManualAnswer("  合格。 ").decision, "accept_and_continue");
+  assert.equal(parseManualAnswer("OK").decision, "accept_and_continue");
+  assert.equal(parseManualAnswer("取消").decision, "fail_safely");
+  const revision = parseManualAnswer("テストを追加してから再提出してください");
+  assert.equal(revision.decision, "revision_required");
+  assert.equal(revision.nextClaudeInstruction, "テストを追加してから再提出してください");
+  assert.equal(parseManualAnswer("   ").decision, null);
+
+  const record = toReviewRecord(revision, { evidence: null });
+  assert.equal(validate(record, REVIEW_SCHEMA).valid, true, "手動審査も同じスキーマで保存する");
+});
+
+test("審査方式: 既定は Claude で、切り替えは保存される", async () => {
+  const h = await buildHarness();
+  try {
+    assert.equal(h.repo.getReviewProvider(h.config.review.provider), "claude", "初期設定は Claude 審査");
+    h.repo.setReviewProvider("manual");
+    assert.equal(h.repo.getReviewProvider(h.config.review.provider), "manual");
+    h.repo.setReviewProvider("openai");
+    assert.equal(h.repo.getReviewProvider(h.config.review.provider), "openai");
+    assert.ok(h.repo.listAudit().some((a) => a.action === "settings.reviewProvider"), "切り替えを監査ログに残す");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("TODO: 審査方式を戻したら、不要になった OpenAI キーの TODO は自動で閉じる", async () => {
+  const h = await buildHarness();
+  try {
+    const saved = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    h.todoManager.requireOpenAiKey = true;
+    assert.equal(h.todoManager.ensureEnvironmentTodos().length, 1);
+    assert.equal(h.todoManager.closeObsoleteEnvironmentTodos().length, 0, "まだ必要なら閉じない");
+
+    // Claude 審査へ戻す
+    h.todoManager.requireOpenAiKey = false;
+    assert.equal(h.todoManager.closeObsoleteEnvironmentTodos().length, 1, "不要になったら閉じる");
+    assert.equal(h.repo.listTodos({ status: "open" }).length, 0);
+
+    if (saved === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = saved;
+  } finally {
+    h.cleanup();
+  }
 });

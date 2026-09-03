@@ -14,6 +14,7 @@ import { registerEnvSecrets } from "./log/redact.mjs";
 import { Orchestrator } from "./core/orchestrator.mjs";
 import { ClaudeRunner } from "./runner/claudeRunner.mjs";
 import { OpenAiReviewEngine } from "./review/openaiReview.mjs";
+import { ClaudeReviewEngine } from "./review/claudeReview.mjs";
 import { TodoManager } from "./todo/todoManager.mjs";
 import { DocumentIntake } from "./intake/documentIntake.mjs";
 import { Dashboard } from "./dashboard/server.mjs";
@@ -99,12 +100,17 @@ export async function buildApp({ config, paths, echoLogs = true }) {
   const repo = new Repo(store);
   const todoManager = new TodoManager({ repo, logger });
   const runner = new ClaudeRunner({ config, paths, logger });
-  const reviewEngine = new OpenAiReviewEngine({ config, logger });
+  // 審査方式は実行時に選べる。既定は追加課金の要らない Claude 審査。
+  // OpenAI は削除せず、選べば使えるオプションとして常に組み立てておく。
+  const reviewEngines = {
+    claude: new ClaudeReviewEngine({ config, paths, logger }),
+    openai: new OpenAiReviewEngine({ config, logger }),
+  };
   const intake = new DocumentIntake({ config, paths, repo, logger });
   const diagnostics = new Diagnostics({ config, paths, repo, logger });
-  const orchestrator = new Orchestrator({ config, paths, repo, logger, runner, reviewEngine, todoManager });
+  const orchestrator = new Orchestrator({ config, paths, repo, logger, runner, reviewEngines, todoManager });
 
-  return { logger, store, repo, todoManager, runner, reviewEngine, intake, diagnostics, orchestrator };
+  return { logger, store, repo, todoManager, runner, reviewEngines, intake, diagnostics, orchestrator };
 }
 
 /**
@@ -130,8 +136,12 @@ export async function runService({ config, paths }) {
     dataRoot: paths.dataRoot,
   });
 
-  // 環境不足に応じた初期 TODO (§8-3)
+  // 環境不足に応じた初期 TODO (§8-3)。
+  // 既定の審査方式 (Claude) は API キーを要らないので、通常は何も作られない。
+  todoManager.requireOpenAiKey = repo.getReviewProvider(config.review.provider) === "openai";
   todoManager.ensureEnvironmentTodos();
+  todoManager.closeObsoleteEnvironmentTodos();
+  logger.info("審査方式", { provider: repo.getReviewProvider(config.review.provider) });
 
   // 中断復旧 (§6-3)
   await orchestrator.recover();

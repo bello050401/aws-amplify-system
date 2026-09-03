@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   document_id       TEXT,
   retry_after       TEXT,                          -- retry_wait 用の再開時刻
   heartbeat_at      TEXT,
-  last_failure_signature TEXT                      -- 同一失敗の連続検知 (§7-4)
+  last_failure_signature TEXT,                     -- 同一失敗の連続検知 (§7-4)
+  review_failures   INTEGER NOT NULL DEFAULT 0     -- 審査が連続で失敗した回数
 );
 
 -- 冪等性キー: 同じ指示を二重登録しない (§5-1, §14-1)
@@ -111,6 +112,8 @@ CREATE TABLE IF NOT EXISTS todos (
   completed_answer     TEXT,
   attachment_path      TEXT,
   dedupe_key           TEXT NOT NULL,
+  -- 'action' = 人にやってもらう依頼 / 'manual_review' = 手動審査の判定待ち
+  kind                 TEXT NOT NULL DEFAULT 'action',
   resume_dispatched    INTEGER NOT NULL DEFAULT 0     -- 依存解除を一度しか実行しないため (§8-2)
 );
 -- 同じ TODO を繰り返し作らない (§8-3 「既に満たされている項目を繰り返し要求しない」)

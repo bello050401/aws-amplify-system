@@ -37,7 +37,8 @@ export function makeConfig(overrides = {}) {
       extraArgs: [],
     },
     review: {
-      provider: "openai",
+      provider: "claude",
+      claude: { model: "sonnet", timeoutSeconds: 120, maxBudgetUsd: 1, allowedTools: [], disallowedTools: [] },
       model: "",
       maxRevisions: 2,
       requestTimeoutSeconds: 30,

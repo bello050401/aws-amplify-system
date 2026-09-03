@@ -343,7 +343,7 @@ test("シナリオ8: 審査API障害では状態を失わず、復旧後に流�
       effect: () => { changed = h.commitSomething(); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
-    h.reviewEngine.script = [{ kind: "unavailable", reason: "api_failure", message: "500" }];
+    h.reviewEngine.script = [{ kind: "unavailable", reason: "transient", message: "500" }];
     h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
 
     await h.orchestrator.tick();
@@ -365,7 +365,7 @@ test("シナリオ8: 審査API障害では状態を失わず、復旧後に流�
   }
 });
 
-test("シナリオ8b: APIキー未設定でもシステムは止まらずTODOを出す", async () => {
+test("シナリオ8b: 審査に必要な設定が無くてもシステムは止まらず状態を保存する", async () => {
   const h = await harnessWithRepo();
   try {
     const saved = process.env.OPENAI_API_KEY;
@@ -378,12 +378,22 @@ test("シナリオ8b: APIキー未設定でもシステムは止まらずTODOを
       effect: () => { changed = h.commitSomething(); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
-    h.reviewEngine.script = [{ kind: "unavailable", reason: "no_api_key", message: "キーがありません" }];
+    h.reviewEngine.script = [{ kind: "unavailable", reason: "not_configured", message: "審査方式に必要な設定がありません" }];
 
     await h.orchestrator.tick();
     const after = h.repo.getTask(task.id);
-    assert.equal(after.state, STATES.AWAITING_AI_REVIEW);
-    assert.ok(h.repo.listTodos({ status: "open" }).some((t) => t.title.includes("OpenAI API キー")));
+    assert.equal(after.state, STATES.AWAITING_AI_REVIEW, "状態は保存されたまま");
+    assert.ok(after.retry_after, "再確認の時刻が入る");
+
+    const todos = h.repo.listTodos({ status: "open" });
+    assert.ok(
+      todos.some((t) => t.kind === "review_failure"),
+      "審査できないことを知らせる TODO を出す",
+    );
+    assert.ok(
+      !todos.some((t) => t.title.includes("OpenAI API キーを設定する")),
+      "OPENAI_API_KEY 未設定そのものを TODO にはしない",
+    );
 
     if (saved === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = saved;
@@ -575,7 +585,7 @@ test("審査不能時: 同じタスクを掴み続けてループが空転しな
       effect: () => { changed = h.commitSomething(); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
-    h.reviewEngine.setDefault({ kind: "unavailable", reason: "no_api_key", message: "キーがありません" });
+    h.reviewEngine.setDefault({ kind: "unavailable", reason: "not_configured", message: "審査方式に必要な設定がありません" });
 
     await h.orchestrator.tick();
     const after = h.repo.getTask(task.id);
@@ -609,7 +619,7 @@ test("シナリオ7c: 審査待ちのタスクは復旧で作り直さない（�
       effect: () => { changed = h.commitSomething(); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
-    h.reviewEngine.setDefault({ kind: "unavailable", reason: "no_api_key", message: "キーがありません" });
+    h.reviewEngine.setDefault({ kind: "unavailable", reason: "not_configured", message: "審査方式に必要な設定がありません" });
 
     await h.orchestrator.tick();
     const beforeReport = h.repo.getTask(task.id).report_id;
@@ -668,6 +678,243 @@ test("シナリオ7e: 検証中で完了報告が無ければ再実行に回す"
 
     await h.orchestrator.recover();
     assert.equal(h.repo.getTask(task.id).state, STATES.RETRY_WAIT);
+  } finally {
+    h.cleanup();
+  }
+});
+
+// ==================================================== 審査方式の切り替え
+/** 審査エンジンを注入せず、方式の選択が効く Orchestrator を作る。 */
+function orchestratorWithProviders(h, reviewEngines = {}) {
+  return new Orchestrator({
+    config: h.config,
+    paths: h.paths,
+    repo: h.repo,
+    logger: h.logger,
+    runner: h.runner,
+    reviewEngines,
+    todoManager: h.todoManager,
+  });
+}
+
+/** 実行中にコミットする実装担当の振る舞い。実 Claude と同じ順序を再現する。 */
+function committingRunner(h, task, overrides = {}) {
+  let changed = null;
+  return {
+    kind: "success",
+    effect: () => {
+      changed = h.commitSomething();
+    },
+    get report() {
+      return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }], ...overrides });
+    },
+  };
+}
+
+test("手動審査: 合格と回答すると完了する（AI を一切呼ばない）", async () => {
+  const h = await harnessWithRepo();
+  try {
+    h.repo.setReviewProvider("manual");
+    const orch = orchestratorWithProviders(h);
+
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+
+    await orch.tick();
+    let after = h.repo.getTask(task.id);
+    assert.equal(after.state, STATES.AWAITING_AI_REVIEW, "審査待ちで保持する");
+
+    const todo = h.repo.listTodos({ status: "open" }).find((t) => t.kind === "manual_review");
+    assert.ok(todo, "手動審査の TODO が作られる");
+    assert.ok(todo.reason.includes("証拠ゲート"), "機械的な証拠も一緒に見せる");
+    assert.equal(todo.answerRequired, true, "チェックだけで完了させない");
+
+    assert.equal(await orch.tick(), false, "判定待ちのタスクは掴まない");
+    assert.equal(h.repo.listTodos({ status: "open" }).filter((t) => t.kind === "manual_review").length, 1);
+
+    const result = h.todoManager.complete(todo.id, { answer: "合格" });
+    assert.equal(result.manualReview.decision, "accept_and_continue");
+    after = h.repo.getTask(task.id);
+    assert.equal(after.state, STATES.COMPLETED);
+
+    const reviews = h.repo.reviewsFor(task.id);
+    assert.equal(reviews.length, 1);
+    assert.equal(reviews[0].provider, "manual");
+    assert.equal(reviews[0].decision, "accept_and_continue");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("手動審査: 修正内容を書くと、そのまま実装担当への指示になる", async () => {
+  const h = await harnessWithRepo();
+  try {
+    h.repo.setReviewProvider("manual");
+    const orch = orchestratorWithProviders(h);
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+
+    await orch.tick();
+    const todo = h.repo.listTodos({ status: "open" }).find((t) => t.kind === "manual_review");
+    h.todoManager.complete(todo.id, { answer: "E2E テストを追加してください" });
+
+    const after = h.repo.getTask(task.id);
+    assert.equal(after.state, STATES.QUEUED, "修正のため再実行キューへ戻る");
+    assert.equal(after.revision_count, 1);
+    assert.ok(after.blocked_reason.includes("E2E テストを追加"), "回答が修正指示になる");
+
+    await orch.tick();
+    assert.ok(h.runner.calls[1].instruction.includes("E2E テストを追加してください"));
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("手動審査: 証拠ゲートが落ちていれば「合格」と打っても完了にしない", async () => {
+  const h = await harnessWithRepo();
+  try {
+    h.repo.setReviewProvider("manual");
+    const orch = orchestratorWithProviders(h);
+    const task = addTask(h);
+    h.runner.setDefault({ kind: "success", report: makeReport(task.id, { tests: [], changes: [] }) });
+
+    await orch.tick();
+    const todo = h.repo.listTodos({ status: "open" }).find((t) => t.kind === "manual_review");
+    assert.equal(todo.priority, "urgent", "証拠が足りない場合は緊急にする");
+    h.todoManager.complete(todo.id, { answer: "合格" });
+
+    const after = h.repo.getTask(task.id);
+    assert.notEqual(after.state, STATES.COMPLETED, "人が合格と言っても証拠が無ければ通さない");
+    assert.ok(h.repo.listAudit().some((a) => a.action === "review.override"));
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("審査方式: 使えない方式を選んでも状態を保存して TODO を出す（止まらない）", async () => {
+  const h = await harnessWithRepo();
+  try {
+    h.repo.setReviewProvider("openai");
+    const orch = orchestratorWithProviders(h, {});
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+
+    await orch.tick();
+    const after = h.repo.getTask(task.id);
+    assert.equal(after.state, STATES.AWAITING_AI_REVIEW, "状態は保存される");
+    assert.equal(after.review_failures, 1);
+    assert.ok(after.retry_after);
+    assert.ok(h.repo.listTodos({ status: "open" }).some((t) => t.kind === "review_failure"));
+
+    h.repo.setReviewProvider("claude");
+    h.repo.updateTask(task.id, { retry_after: null });
+    const orch2 = orchestratorWithProviders(h, { claude: new FakeReviewEngine() });
+    await orch2.tick();
+    assert.equal(h.repo.getTask(task.id).state, STATES.COMPLETED, "方式を変えれば再実行なしで完了できる");
+    assert.equal(h.runner.calls.length, 1, "Claude を走らせ直していない");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("利用上限・認証切れ: 初回から TODO を出し、状態は審査待ちのまま保つ", async () => {
+  const cases = [
+    ["usage_limit", "利用上限"],
+    ["auth_expired", "ログインが切れて"],
+  ];
+  for (const [reason, expectTitle] of cases) {
+    const h = await harnessWithRepo();
+    try {
+      const task = addTask(h);
+      h.runner.setDefault(committingRunner(h, task));
+      h.reviewEngine.setDefault({ kind: "unavailable", reason, message: "fake " + reason });
+
+      await h.orchestrator.tick();
+      const after = h.repo.getTask(task.id);
+      assert.equal(after.state, STATES.AWAITING_AI_REVIEW, reason + ": 状態を保存する");
+      assert.ok(after.retry_after, reason + ": 再確認の時刻が入る");
+      assert.ok(after.last_error, reason + ": 理由を残す");
+
+      const todos = h.repo.listTodos({ status: "open" });
+      assert.ok(
+        todos.some((t) => t.kind === "review_failure" && t.title.includes(expectTitle)),
+        reason + ": 初回から TODO を出す",
+      );
+      const checkpoint = h.repo.store.get(
+        "SELECT data FROM checkpoints WHERE task_id=? AND phase='review_failure' ORDER BY id DESC LIMIT 1",
+        [task.id],
+      );
+      assert.ok(checkpoint, reason + ": チェックポイントを残す");
+    } finally {
+      h.cleanup();
+    }
+  }
+});
+
+test("審査が復旧したら、審査失敗の TODO は自動で閉じる", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+    h.reviewEngine.script = [{ kind: "unavailable", reason: "usage_limit", message: "limit" }];
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+
+    await h.orchestrator.tick();
+    assert.ok(h.repo.listTodos({ status: "open" }).some((t) => t.kind === "review_failure"));
+
+    h.repo.updateTask(task.id, { retry_after: null });
+    await h.orchestrator.tick();
+    assert.equal(h.repo.getTask(task.id).state, STATES.COMPLETED);
+    assert.equal(h.repo.getTask(task.id).review_failures, 0, "失敗カウンタを戻す");
+    assert.equal(
+      h.repo.listTodos({ status: "open" }).filter((t) => t.kind === "review_failure").length,
+      0,
+      "解決済みの TODO を残さない",
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("自動修正は最大 3 回で止まる（既定値）", async () => {
+  const h = await harnessWithRepo({
+    review: {
+      provider: "claude",
+      claude: { model: "sonnet", timeoutSeconds: 120, maxBudgetUsd: 1, allowedTools: [], disallowedTools: [] },
+      model: "",
+      maxRevisions: 3,
+      requestTimeoutSeconds: 30,
+      maxRetries: 1,
+      baseBackoffSeconds: 0,
+      maxBackoffSeconds: 0,
+      maxDiffChars: 1000,
+      minConfidenceToAccept: 0.5,
+    },
+    queue: { maxAttempts: 20, retryBaseSeconds: 0, retryMaxSeconds: 0, heartbeatWarnSeconds: 900, pollIntervalSeconds: 1 },
+  });
+  try {
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+    let n = 0;
+    h.reviewEngine.review = async () => {
+      n += 1;
+      return {
+        review: makeReview("revision_required", { reason: "毎回ちがう理由 " + n }),
+        meta: { model: "fake", promptVersion: "v1", usage: null, provider: "fake", attempts: 1 },
+      };
+    };
+
+    for (let i = 0; i < 10; i += 1) {
+      h.repo.releaseDueRetries();
+      if (!(await h.orchestrator.tick())) break;
+      const st = h.repo.getTask(task.id).state;
+      if (st === STATES.AWAITING_USER || st === STATES.FAILED) break;
+    }
+
+    const after = h.repo.getTask(task.id);
+    assert.equal(after.state, STATES.AWAITING_USER);
+    assert.ok(after.revision_count > h.config.review.maxRevisions, "修正回数 " + after.revision_count);
+    assert.equal(h.runner.calls.length, h.config.review.maxRevisions + 1, "実装は 1 回 + 修正 3 回 = 4 回まで");
   } finally {
     h.cleanup();
   }

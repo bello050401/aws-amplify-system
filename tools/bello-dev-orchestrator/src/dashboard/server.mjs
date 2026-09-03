@@ -12,6 +12,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { STATE_LABELS_JA, STATES } from "../core/states.mjs";
+import { REVIEW_PROVIDERS } from "../config.mjs";
 import { redactValue } from "../log/redact.mjs";
 import { safeFileName } from "../intake/documentIntake.mjs";
 
@@ -129,7 +130,11 @@ export class Dashboard {
         case "/api/system":
           return this.#json(res, 200, await this.diagnostics.report());
         case "/api/settings":
-          return this.#json(res, 200, { config: publicConfig(this.config), paths: this.paths });
+          return this.#json(res, 200, {
+            config: publicConfig(this.config),
+            paths: this.paths,
+            reviewProvider: this.#reviewProviderState(),
+          });
         default:
           break;
       }
@@ -162,6 +167,23 @@ export class Dashboard {
           return this.#json(res, 200, { requested: true });
         case "/api/control/diagnose":
           return this.#json(res, 200, await this.diagnostics.report());
+        case "/api/settings/review-provider": {
+          const provider = String(body.provider ?? "");
+          if (!REVIEW_PROVIDERS.includes(provider)) {
+            throw new Error(`審査方式は ${REVIEW_PROVIDERS.join(" / ")} のいずれかです。`);
+          }
+          this.repo.setReviewProvider(provider, "user");
+          // OpenAI を選んだときだけ、キー未設定を知らせる。既定では知らせない。
+          this.todoManager.requireOpenAiKey = provider === "openai";
+          this.todoManager.ensureEnvironmentTodos();
+          this.todoManager.closeObsoleteEnvironmentTodos();
+          // 待機中の審査タスクをすぐ再評価させる
+          for (const t of this.repo.listTasks({ state: STATES.AWAITING_AI_REVIEW, limit: 200 })) {
+            this.repo.updateTask(t.id, { retry_after: null });
+          }
+          this.logger.info("審査方式を切り替えました", { provider });
+          return this.#json(res, 200, { reviewProvider: this.#reviewProviderState() });
+        }
         case "/api/tasks": {
           if (!body.title || !body.instruction) throw new Error("title と instruction は必須です。");
           const { task, created } = this.repo.createTask({
@@ -249,7 +271,40 @@ export class Dashboard {
       urgentTodoCount: openTodos.filter((t) => t.priority === "urgent").length,
       openTodos,
       lastHeartbeat: current?.heartbeat_at ?? null,
-      reviewConfigured: this.diagnostics.isReviewConfigured(),
+      reviewProvider: this.#reviewProviderState(),
+    };
+  }
+
+  /** 画面に出す審査方式の状態。秘密は含めない。 */
+  #reviewProviderState() {
+    const current = this.repo.getReviewProvider(this.config.review.provider);
+    return {
+      current,
+      configuredDefault: this.config.review.provider,
+      options: [
+        {
+          value: "claude",
+          label: "Claude審査（追加課金なし・推奨）",
+          description:
+            "別の Claude Code セッションが、実装担当とは独立に完了報告・Git差分・テスト結果・証拠を確認します。お使いの Claude Code の枠内で動くため、追加の API 課金は発生しません。",
+          available: true,
+        },
+        {
+          value: "openai",
+          label: "OpenAI審査（API課金あり）",
+          description:
+            "OpenAI の API で審査します。OPENAI_API_KEY の設定が必要で、利用量に応じた課金が発生します。",
+          available: Boolean(process.env.OPENAI_API_KEY),
+          note: process.env.OPENAI_API_KEY ? null : "OPENAI_API_KEY が未設定です（この方式を選ぶ場合のみ必要）",
+        },
+        {
+          value: "manual",
+          label: "手動審査（人が判定）",
+          description:
+            "AI を使わず、あなたが TODO 画面で判定します。利用上限や認証切れの影響を受けません。",
+          available: true,
+        },
+      ],
     };
   }
 
@@ -384,6 +439,7 @@ function publicTodo(todo) {
   if (!todo) return null;
   return {
     id: todo.id,
+    kind: todo.kind ?? "action",
     category: todo.category,
     title: todo.title,
     actionRequired: todo.action_required,

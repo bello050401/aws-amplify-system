@@ -97,10 +97,14 @@ export class Diagnostics {
         version: claudeVersion?.out ?? null,
       },
       review: {
-        provider: this.config.review.provider,
-        // 値は返さない。設定済みかどうかだけ。
-        apiKeyConfigured: this.isReviewConfigured(),
-        model: this.config.review.model || process.env.OPENAI_MODEL || "(既定)",
+        // いま実際に使う方式 (ダッシュボードの選択 > 設定ファイルの既定)
+        provider: this.repo ? this.repo.getReviewProvider(this.config.review.provider) : this.config.review.provider,
+        configuredDefault: this.config.review.provider,
+        claudeModel: this.config.review.claude?.model ?? "(既定)",
+        // OpenAI は任意のオプション。未設定でも異常ではない。
+        openaiOptional: true,
+        openaiKeyConfigured: this.isReviewConfigured(),
+        openaiModel: this.config.review.model || process.env.OPENAI_MODEL || "(既定)",
       },
       dashboard: {
         host: this.config.dashboard.host,
@@ -130,8 +134,14 @@ export class Diagnostics {
     lines.push(`${mark(report.sqlite.ok)} node:sqlite ${report.sqlite.ok ? "利用可能" : report.sqlite.reason}`);
     lines.push(`${mark(report.git.isRepo)} リポジトリ ${report.git.repoPath}${report.git.branch ? ` (${report.git.branch})` : ""}`);
     lines.push(`${mark(report.claude.found)} Claude Code ${report.claude.version ?? "見つかりません"}`);
+    const providerLabel = {
+      claude: "Claude審査（別セッション・追加課金なし）",
+      openai: "OpenAI審査（API課金あり）",
+      manual: "手動審査（人が判定）",
+    }[report.review.provider] ?? report.review.provider;
+    lines.push(`[ OK ] 審査方式 ${providerLabel}`);
     lines.push(
-      `${mark(report.review.apiKeyConfigured)} OpenAI 審査 ${report.review.apiKeyConfigured ? "設定済み" : "未設定 (AI審査は待機状態になります)"}`,
+      `[INFO] OpenAI 連携 ${report.review.openaiKeyConfigured ? "設定済み（選択すれば使えます）" : "未設定（任意のオプションです。Claude審査には不要）"}`,
     );
     lines.push(`${mark(report.storage.writable)} 実行時データ ${report.storage.dataRoot}`);
     lines.push(`${mark(report.storage.dbIntegrity.ok !== false)} DB 整合性 ${report.storage.dbIntegrity.detail}`);

@@ -126,6 +126,22 @@
       counts.appendChild(li);
     });
 
+    var rp = data.reviewProvider || {};
+    var rpLabels = {
+      claude: "Claude審査（追加課金なし）",
+      openai: "OpenAI審査（API課金あり）",
+      manual: "手動審査（人が判定）",
+    };
+    document.getElementById("home-review-provider").textContent = rpLabels[rp.current] || rp.current || "—";
+    document.getElementById("home-review-note").textContent =
+      rp.current === "claude"
+        ? "別の Claude Code セッションが独立に審査します。"
+        : rp.current === "manual"
+          ? "あなたが TODO 画面で判定します。"
+          : rp.current === "openai"
+            ? "OpenAI API を使います（利用量に応じた課金があります）。"
+            : "";
+
     var banner = document.getElementById("todo-banner");
     if (data.openTodoCount > 0) {
       banner.classList.remove("banner-hidden");
@@ -365,6 +381,62 @@
     });
   }
 
+  // ----------------------------------------------------- 審査方式の選択
+  function renderReviewProvider(rp) {
+    var box = clear(document.getElementById("review-provider-options"));
+    var status = document.getElementById("review-provider-status");
+    (rp.options || []).forEach(function (opt) {
+      var row = el("div", "todo-item" + (opt.value === rp.current ? " urgent" : ""));
+
+      var label = el("label");
+      label.style.display = "flex";
+      label.style.gap = "8px";
+      label.style.alignItems = "flex-start";
+      label.style.color = "inherit";
+      label.style.marginTop = "0";
+
+      var radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "review-provider";
+      radio.value = opt.value;
+      radio.checked = opt.value === rp.current;
+      radio.style.width = "auto";
+      radio.style.marginTop = "4px";
+
+      var text = el("div");
+      var head = el("strong", null, opt.label + (opt.value === rp.current ? "（選択中）" : ""));
+      text.appendChild(head);
+      text.appendChild(el("p", "muted", opt.description));
+      if (opt.note) text.appendChild(el("p", "err", opt.note));
+
+      label.appendChild(radio);
+      label.appendChild(text);
+      row.appendChild(label);
+
+      radio.addEventListener("change", function () {
+        if (!radio.checked) return;
+        status.className = "muted";
+        status.textContent = "切り替え中…";
+        api("/api/settings/review-provider", { method: "POST", body: { provider: opt.value } })
+          .then(function (r) {
+            status.className = "ok";
+            status.textContent = "審査方式を「" + opt.label + "」に変更しました。";
+            renderReviewProvider(r.reviewProvider || {});
+          })
+          .catch(function (err) {
+            status.className = "err";
+            status.textContent = "変更できません: " + err.message;
+            refresh();
+          });
+      });
+
+      box.appendChild(row);
+    });
+    if (rp.configuredDefault) {
+      box.appendChild(el("p", "muted", "設定ファイルの既定値: " + rp.configuredDefault));
+    }
+  }
+
   // ------------------------------------------------------------- refresh
   function refresh() {
     if (state.view === "home") {
@@ -381,7 +453,10 @@
         .catch(function () {});
     } else if (state.view === "settings") {
       api("/api/settings")
-        .then(function (r) { document.getElementById("settings-report").textContent = JSON.stringify(r, null, 2); })
+        .then(function (r) {
+          renderReviewProvider(r.reviewProvider || {});
+          document.getElementById("settings-report").textContent = JSON.stringify(r.config, null, 2);
+        })
         .catch(function () {});
     } else if (state.view === "audit") {
       api("/api/audit")

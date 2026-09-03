@@ -58,6 +58,12 @@
             <h3>キュー内訳</h3>
             <ul id="counts" class="kv"></ul>
           </article>
+          <article class="card">
+            <h3>審査方式</h3>
+            <p id="home-review-provider" class="big">—</p>
+            <p class="muted" id="home-review-note"></p>
+            <button type="button" class="link-button" data-view-link="settings">変更する</button>
+          </article>
         </div>
 
         <article class="card">
@@ -119,7 +125,19 @@
 
       <!-- 設定 -->
       <section id="view-settings" class="view hidden">
-        <h2>設定（表示のみ）</h2>
+        <h2>設定</h2>
+
+        <article class="card">
+          <h3>審査方式</h3>
+          <p class="muted">
+            完了報告を誰が審査するかを選びます。変更は即座に反映され、審査待ちのタスクは新しい方式で審査されます。
+            再起動は不要です。
+          </p>
+          <div id="review-provider-options"></div>
+          <p id="review-provider-status" class="muted"></p>
+        </article>
+
+        <h3>その他の設定（表示のみ）</h3>
         <p class="muted">秘密情報は表示しません。変更は bello-orchestrator.config.json を編集して再起動してください。</p>
         <pre id="settings-report" class="pre"></pre>
       </section>

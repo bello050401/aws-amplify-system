@@ -2,7 +2,7 @@
  * Fake Review Engine (指示書 §14-2, §18-3)。
  * OpenAI へ課金せずに全状態遷移を自動検証するために使う。
  */
-import { ReviewUnavailableError } from "./openaiReview.mjs";
+import { ReviewUnavailableError, REVIEW_FAILURE } from "./errors.mjs";
 import { REVIEW_PROMPT_VERSION } from "./reviewSchema.mjs";
 
 export function makeReview(decision, overrides = {}) {
@@ -44,7 +44,7 @@ export class FakeReviewEngine {
     const behaviour = this.script.shift() ?? this.defaultBehaviour;
 
     if (behaviour.kind === "unavailable") {
-      throw new ReviewUnavailableError(behaviour.message ?? "fake unavailable", behaviour.reason ?? "api_failure");
+      throw new ReviewUnavailableError(behaviour.message ?? "fake unavailable", behaviour.reason ?? REVIEW_FAILURE.TRANSIENT);
     }
     return {
       review: behaviour.review ?? makeReview("accept_and_continue"),

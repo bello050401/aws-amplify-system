@@ -75,7 +75,14 @@
     ]
   },
   "review": {
-    "provider": "openai",
+    "provider": "claude",
+    "claude": {
+      "model": "sonnet",
+      "timeoutSeconds": 900,
+      "maxBudgetUsd": 1,
+      "allowedTools": [],
+      "disallowedTools": []
+    },
     "model": "",
     "maxRevisions": 3,
     "requestTimeoutSeconds": 120,
