@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { generateInquiryReplyAction, getInquiryReplyDraftAction, markInquiryReplyDraftAction } from "@/app/actions/inquiryReply";
 import { INQUIRY_INTENT_LABEL, REPLY_DRAFT_STATUS_LABEL, type ProductMatch, type ReplyDraftRecord } from "@/lib/inquiry/types";
+import { IdentifiedProductCardView } from "./IdentifiedProductCardView";
 
 /**
  * §14/§33 問い合わせ詳細のAI返信パネル。
@@ -168,6 +169,14 @@ export function AiReplyPanel({
                 ))}
               </ul>
             </div>
+          )}
+
+          {/* 対象商品カード。値下げ交渉かどうかに関わらず、商品が一意に
+              特定できたときは常に出す —— 担当者が「どの商品の話か」を
+              返信を書く前に確認できるようにするため。参照情報を開かないと
+              見えない位置には置かない。 */}
+          {evidence?.identifiedProduct && (
+            <IdentifiedProductCardView card={evidence.identifiedProduct} />
           )}
 
           {/* 値下げ交渉のときだけ出す、管理者向けの判断材料。

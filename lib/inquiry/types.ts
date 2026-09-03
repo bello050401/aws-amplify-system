@@ -217,12 +217,71 @@ export interface ReplyEvidence {
   unresolvedFacts: UnresolvedFact[];
   /** URLから特定できたBASE商品。在庫紐付けが未確定でも「どこまで特定できたか」を示す。 */
   baseProducts?: { baseItemId: string; title: string; price: number | null; itemUrl: string | null }[];
+  /**
+   * 特定できた商品の要点。担当者が対象商品をその場で確認するための情報で、
+   * **顧客向けの返信本文には渡らない**（仕入価格・販売開始日時を含むため）。
+   */
+  identifiedProduct?: IdentifiedProductCard | null;
   /** 値下げ交渉の判定結果。 */
   negotiation?: NegotiationEvidence | null;
   /** 管理者向けの値下げ判断カード(顧客本文へは渡らない)。 */
   staffCard?: NegotiationStaffCard | null;
   /** どの生成ルートを通ったか(「参照情報を表示」の診断用)。 */
   generationRoute?: string;
+}
+
+/**
+ * メッセージ画面に出す「対象商品」カード。
+ *
+ * ── 顧客向けではない ────────────────────────────────────────────
+ *
+ * 仕入価格と販売開始日時が入る。値下げ交渉のときにこの2つをすぐ確認
+ * したい、という運用要件から来ている。返信本文の組み立て関数へは渡らない
+ * 経路にしてあり、既存の NegotiationStaffCard と同じ扱い。
+ *
+ * ── 「特定できた」ときだけ出す ──────────────────────────────────
+ *
+ * 商品を一意に特定できていないときは出さない。候補の1つを載せると、
+ * 担当者がそれを確定した商品だと思い込む。
+ */
+export interface IdentifiedProductCard {
+  inventoryId: string;
+  /** 画面に出す在庫ID(SKU)。 */
+  displayInventoryId: string;
+  sku: string;
+  name: string;
+  /** 一覧用サムネイルのstorageKey。無ければnull。 */
+  imageKey: string | null;
+  salePriceYen: number | null;
+  /**
+   * salePriceYen がどちらの項目から来たか。画面の見出しを
+   * 「販売価格」/「販売予定価格」で出し分けるために持つ。
+   */
+  salePriceSource: "salePrice" | "plannedSalePrice" | null;
+  purchasePriceYen: number | null;
+  /** 販売開始日時(ISO)。 */
+  saleStartedAt: string | null;
+  /** 在庫ステータス名。マスタから引いた表示名。 */
+  statusName: string | null;
+  quantity: number | null;
+  /**
+   * BASE商品ページ。**この在庫と1対1で結び付いたときだけ**入れる。
+   *
+   * 問い合わせに商品URLが複数あると、どのURLがこの在庫に対応するかは
+   * 照合の途中で失われる(URL群のタイトルをまとめて手がかりにして1件へ
+   * 絞るため)。担当者選択・会話紐付けで決まった商品も、URLとは無関係に
+   * 決まっている。どちらの場合も、別商品のページへの導線を「この商品の
+   * ページ」として見せることになるので null にする。
+   */
+  baseItemId: string | null;
+  baseItemUrl: string | null;
+  /**
+   * 問い合わせに含まれていたが、このカードと結び付けられなかったBASE商品
+   * URLの件数。0でなければ画面で注意を出し、担当者に選び直させる。
+   */
+  unlinkedBaseProductCount: number;
+  /** 何を根拠に特定したか。担当者が信頼度を判断できるようにする。 */
+  basis: string;
 }
 
 /** §10 送料回答の根拠。金額はすべて既存のShippingRateマスタ由来。 */

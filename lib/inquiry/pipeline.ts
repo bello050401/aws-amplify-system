@@ -10,9 +10,11 @@ import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./
 import { resolveNegotiationContext } from "./negotiation";
 import { resolveNegotiation, type NegotiationInventoryFacts } from "./negotiationService";
 import { resolveProductFromInquiry } from "./productResolver";
+import { effectiveListThumbnailKey, resolveTopImage } from "@/lib/inventory/imageTypes";
 import {
   decideUrlRequest,
   identificationBasis,
+  linkedBaseProduct,
   PRODUCT_URL_REQUEST_TEMPLATE,
 } from "./productIdentification";
 import { getAIReplySettings } from "./settings";
@@ -23,6 +25,7 @@ import { createDirectUrlProvider, getAgentCoreGatewayUrl, getWebResearchAvailabi
 import { createAgentCoreSearchProvider } from "./research/agentCoreProvider";
 import { brandsInText, officialDomainsForBrands } from "./research/officialDomains";
 import { nameCore } from "./scoring";
+import { extractBaseItemId, isBaseUrl } from "./references";
 import type {
   ExternalResearchFact,
   InquiryIntent,
@@ -32,6 +35,7 @@ import type {
   ReplyEvidence,
   ShippingEvidence,
   UnresolvedFact,
+  IdentifiedProductCard,
 } from "./types";
 
 /**
@@ -144,9 +148,62 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   let dimensionTexts: string[] = [];
 
   const inventory = resolution.resolved ? await getInventoryDetail(resolution.resolved.inventoryId) : null;
+  // 対象商品カード。**一意に特定できたときだけ**組み立てる —— 候補の1つを
+  // 載せると、担当者がそれを確定した商品だと思い込む
+  // (AMBIGUOUS のとき resolution.resolved は null なので、ここは通らない)。
+  let identifiedProduct: IdentifiedProductCard | null = null;
   // カテゴリー名・販売状況はInventoryにはIDしか無いため、マスタから引く。
   // 商品が特定できていない場合は引かない(無駄な問い合わせを増やさない)。
   const [categoryName, statusName] = inventory ? await resolveMasterLabels(inventory.categoryId, inventory.statusId) : [null, null];
+  if (inventory && resolution.resolved) {
+    const top = resolution.resolved;
+    // BASE商品ページへの導線は、この在庫と1対1で結び付いたときだけ出す。
+    // 判定理由は linkedBaseProduct のコメントを参照。
+    const baseMatches = resolution.baseProducts ?? [];
+    const linkedBase = linkedBaseProduct(basis, baseMatches);
+    // BASE商品ページのURL。取り込み済みデータ(BaseProductArchive)には
+    // itemUrl が入っていない(Staging実測: 267件すべて空)ため、それだけに
+    // 頼るとリンクが常に出ない。**顧客が送ってきたURLそのもの**へ落とす ——
+    // 店舗ドメインをコードに埋め込まずに済み、顧客が見ているページと確実に
+    // 同じものが開く。linkedBase があるのは商品URLが1件のときだけなので、
+    // 取り違えようがない。
+    const linkedBaseUrl = linkedBase
+      ? (linkedBase.itemUrl ??
+        resolution.references.urls.find((u) => isBaseUrl(u) && extractBaseItemId(u) === linkedBase.baseItemId) ??
+        null)
+      : null;
+    identifiedProduct = {
+      inventoryId: inventory.id,
+      displayInventoryId: top.displayInventoryId,
+      sku: inventory.sku,
+      name: inventory.name,
+      // 一覧と同じ選び方(トップ画像 → サムネイルがあればそちら)。
+      imageKey: (() => {
+        const topImage = resolveTopImage(inventory.images);
+        return topImage ? effectiveListThumbnailKey(topImage) : null;
+      })(),
+      // 販売価格は salePrice(成約後の実売価格) → plannedSalePrice
+      // (販売予定価格) の順で採る。**値下げ交渉が来るのはまだ売れて
+      // いない商品**なので、その場面では salePrice が空で
+      // plannedSalePrice に希望価格が入っている。salePrice だけを見ると、
+      // 交渉のために作ったカードが肝心の場面で「—」になる
+      // (Staging実測: plannedSalePrice しか無い在庫が265件)。
+      // 値下げ判定側(下の unitSalePriceYen)と同じ選び方に揃える。
+      salePriceYen: inventory.salePrice ?? inventory.plannedSalePrice ?? null,
+      salePriceSource:
+        inventory.salePrice != null ? "salePrice" : inventory.plannedSalePrice != null ? "plannedSalePrice" : null,
+      purchasePriceYen: inventory.purchasePrice ?? null,
+      saleStartedAt: inventory.saleStartDate ?? null,
+      statusName,
+      quantity: inventory.quantity ?? null,
+      baseItemId: linkedBase?.baseItemId ?? null,
+      baseItemUrl: linkedBaseUrl,
+      // 結び付けられなかったURLは件数だけ残す。担当者が「他のURLの話かも
+      // しれない」と気づける最低限の情報。
+      unlinkedBaseProductCount: baseMatches.length - (linkedBase ? 1 : 0),
+      basis,
+    };
+  }
   if (inventory) {
     sku = inventory.sku;
     stockQuantity = inventory.quantity ?? null;
@@ -376,6 +433,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       price: b.price,
       itemUrl: b.itemUrl,
     })),
+    identifiedProduct,
     negotiation: negotiationResult?.evidence ?? null,
     staffCard: negotiationResult?.staffCard ?? null,
     generationRoute: negotiation.isNegotiation ? "negotiation" : "standard",

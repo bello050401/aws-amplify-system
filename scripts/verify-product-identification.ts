@@ -21,6 +21,7 @@ import {
   canAnswerProductSpecifics,
   decideUrlRequest,
   identificationBasis,
+  linkedBaseProduct,
   type IdentificationBasis,
 } from "@/lib/inquiry/productIdentification";
 
@@ -213,10 +214,48 @@ function testTemplate() {
   assertTrue(!t.includes("？"), "文面: 詰問調にならない");
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 担当者向けカードに載せるBASE商品ページの選び方
+ *
+ * カードは仕入価格・販売開始日時まで出す。そこに別商品のページへの
+ * 導線が並ぶと、担当者が「この商品の話だ」と信じたまま**別商品の
+ * 条件で値下げを判断する**。結び付けられないときは出さない、を固定する。
+ * ══════════════════════════════════════════════════════════════════ */
+function testLinkedBaseProduct() {
+  const a = { baseItemId: "156144635" };
+  const b = { baseItemId: "155832757" };
+
+  assertEqual(linkedBaseProduct("BASE_ITEM_ID", [a]), a, "BASE商品ページ: URL1件で特定できたら結び付ける");
+  assertEqual(linkedBaseProduct("BASE_ITEM_ID", []), null, "BASE商品ページ: 該当のBASE商品が無ければ出さない");
+
+  // 複数URL: 照合は全URLのタイトルをまとめて使うので、どのURLの商品に
+  // 決まったのかは残っていない。先頭を採ると別商品を指しうる。
+  assertEqual(linkedBaseProduct("BASE_ITEM_ID", [a, b]), null, "BASE商品ページ: URLが2件なら、どちらか決められないので出さない");
+
+  // 担当者選択・会話紐付けで決まった商品は、同じ問い合わせにURLがあっても
+  // そのURLが指す商品とは限らない（照合に失敗したURLがそのまま残る経路がある）。
+  assertEqual(
+    linkedBaseProduct("OPERATOR_OR_CONVERSATION", [a]),
+    null,
+    "BASE商品ページ: 担当者選択・会話紐付けで決まったなら、問い合わせ中のURLとは結び付けない",
+  );
+  for (const basis of ["STRONG_CODE", "NAME_ONLY", "NONE"] as IdentificationBasis[]) {
+    assertEqual(linkedBaseProduct(basis, [a]), null, `BASE商品ページ: ${basis} では結び付けない`);
+  }
+
+  // 画面に出す「結び付けられなかった件数」— pipeline.ts と同じ式。
+  const unlinked = (basis: IdentificationBasis, list: unknown[]) => list.length - (linkedBaseProduct(basis, list) ? 1 : 0);
+  assertEqual(unlinked("BASE_ITEM_ID", [a]), 0, "未結合件数: URL1件で結び付いたら0件（注意を出さない）");
+  assertEqual(unlinked("BASE_ITEM_ID", [a, b]), 2, "未結合件数: URL2件でどちらも結び付かなければ2件");
+  assertEqual(unlinked("OPERATOR_OR_CONVERSATION", [a]), 1, "未結合件数: 会話紐付けの商品にURL1件が残れば1件");
+  assertEqual(unlinked("NAME_ONLY", []), 0, "未結合件数: URLが無ければ0件");
+}
+
 testUrlExtraction();
 testBasis();
 testUrlRequest();
 testTemplate();
+testLinkedBaseProduct();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures > 0 ? 1 : 0);

@@ -64,6 +64,32 @@ export function identificationBasis(input: IdentificationInput): IdentificationB
   return "NAME_ONLY";
 }
 
+/**
+ * 担当者向けカードに載せてよいBASE商品ページを選ぶ。
+ *
+ * ── 先頭を採ってはいけない ──────────────────────────────────────
+ *
+ * resolveProductFromInquiry が返す baseProducts は「URLから見つかった
+ * BASE商品」の一覧で、**並び順は照合結果と無関係**。商品URLが複数ある
+ * ときは全URLのタイトルをまとめて手がかりにして在庫を1件へ絞るため、
+ * どのURLがその在庫に対応するかは照合の途中で失われている。先頭を採ると
+ * 別商品のページを「この商品のページ」として見せてしまう。
+ *
+ * ── 担当者選択・会話紐付けも同じ ────────────────────────────────
+ *
+ * basis が OPERATOR_OR_CONVERSATION のとき、商品はURLとは無関係に
+ * 決まっている。productResolver の「候補0件だが会話に紐づく商品がある」
+ * 経路は、**照合に失敗したURLを baseProducts に載せたまま**返すので、
+ * ここで弾かないと無関係な商品ページへの導線が出る。
+ *
+ * 結び付けられなかったURLは件数だけ画面に出して、担当者に選び直させる。
+ */
+export function linkedBaseProduct<T>(basis: IdentificationBasis, baseProducts: readonly T[]): T | null {
+  if (basis !== "BASE_ITEM_ID") return null;
+  // 2件以上ある時点で、どれがこの在庫のものか決められない。
+  return baseProducts.length === 1 ? baseProducts[0] : null;
+}
+
 /** その根拠で、商品固有の内容を答えてよいか。 */
 export function canAnswerProductSpecifics(basis: IdentificationBasis): boolean {
   return basis === "BASE_ITEM_ID" || basis === "STRONG_CODE" || basis === "OPERATOR_OR_CONVERSATION";
