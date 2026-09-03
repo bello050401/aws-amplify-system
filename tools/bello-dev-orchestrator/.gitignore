@@ -1,0 +1,15 @@
+# 実行時データは %LOCALAPPDATA%\BELLO\dev-orchestrator に置くのでここには来ないが、
+# dataRoot をこの配下に設定した場合に備えて無視する。
+/orchestrator.db
+/orchestrator.db-*
+/logs/
+/state/
+/inbox/
+/processed/
+/error/
+/uploads/
+/evidence/
+/runs/
+
+# 調査用に作る一時スクリプト置き場（コミットしない）
+.tmp*/

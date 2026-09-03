@@ -78,7 +78,8 @@ node src\cli.mjs list-tasks
 | 一時的にタスクの取得を止める | ダッシュボードの「一時停止」。再開は「再開」 |
 | 実行中の 1 タスクだけ止める | ダッシュボードの「現在タスクを安全に停止」 |
 | システムごと止める | `bello.ps1 stop` |
-| 再開する | `bello.ps1 start` |
+| 再開する | `bello.ps1 start`（停止フラグと crash-loop クールダウンを自動で解除します） |
+| 待機フラグだけ解除する | `bello.ps1 resume` |
 
 `bello.ps1 stop` は停止フラグを書きます。**ウォッチドッグはこのフラグを尊重して待機します**ので、
 1 分後に勝手に再起動することはありません。再開は `bello.ps1 start` です。
@@ -163,6 +164,12 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 diagnose
 Node、node:sqlite、リポジトリ、Claude Code、OpenAI 設定の有無、データ置き場、DB 整合性、
 2 つの Scheduled Task、キュー内訳を確認し、`evidence/` に JSON で保存します。
 
+> **Scheduled Task の `LastResult` が `0x800710E0` でも異常ではありません。**
+> これは「既に実行中のインスタンスがあるため、1 分ごとのウォッチドッグの起動をスキップした」
+> という印で、`MultipleInstances=IgnoreNew` が正しく効いている状態です
+> (Task Scheduler の Operational ログではイベント ID 322)。
+> 実行中を表す `0x41301`、正常終了の `0x0` と並んで、健全な値です。
+
 ### 修復
 
 ```powershell
@@ -184,7 +191,9 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 repair
 | 項目 | 既定 | 意味 |
 |---|---|---|
 | `claude.model` | `sonnet` | 使用モデル |
-| `claude.permissionMode` | `acceptEdits` | ファイル編集は自動、プロンプトが要るものは自動拒否 |
+| `claude.permissionMode` | `acceptEdits` | ファイル編集は自動 |
+| `claude.allowedTools` | 35 項目 | **実行を許可するコマンドの列挙**。ここに無い Bash コマンドは自動拒否されます。実測: 許可リストが空だとテストもビルドも一切走りません |
+| `claude.disallowedTools` | 19 項目 | 許可リストより強い拒否。`git push` / `reset` / `checkout` / `stash` / `clean`、`rm`、`ampx`、`aws`、`gh`、`npm publish`、`curl` |
 | `claude.maxBudgetUsd` | 5 | 1 タスクの API 費用上限 |
 | `claude.timeoutSeconds` | 3600 | 1 タスクの全体タイムアウト |
 | `claude.idleTimeoutSeconds` | 900 | 無出力の判定閾値（CPU と子プロセスも見てから止めます） |

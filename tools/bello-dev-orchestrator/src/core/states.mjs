@@ -25,13 +25,21 @@ export const ALL_STATES = Object.freeze(Object.values(STATES));
 /** 終端状態。ここから先へは (再試行の明示操作を除いて) 進まない。 */
 export const TERMINAL_STATES = Object.freeze([STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED]);
 
-/** 「まだ動いている / 動く予定」の状態。復旧時の検出対象 (§6-3-3)。 */
-export const ACTIVE_STATES = Object.freeze([
-  STATES.PREFLIGHT,
-  STATES.RUNNING,
-  STATES.VERIFYING,
-  STATES.AWAITING_AI_REVIEW,
-]);
+/**
+ * 子プロセスを抱えて「実際に動いていた」状態。Orchestrator が落ちるとこれらの
+ * 追跡は不能になるため、復旧時に作り直す対象になる (§6-3-3)。
+ *
+ * awaiting_ai_review をここへ入れてはいけない。あれは待っているだけの状態で、
+ * 完了報告は既に保存済みである。作り直すと成功した Claude 実行を丸ごと捨てて
+ * しまう (実 E2E で実際に起きた)。
+ */
+export const ACTIVE_STATES = Object.freeze([STATES.PREFLIGHT, STATES.RUNNING]);
+
+/**
+ * 落ちた時点で完了報告が残っている可能性がある状態。
+ * 報告があれば審査から再開でき、Claude を走らせ直さずに済む。
+ */
+export const RESUMABLE_STATES = Object.freeze([STATES.VERIFYING]);
 
 const TRANSITIONS = Object.freeze({
   [STATES.QUEUED]: [STATES.PREFLIGHT, STATES.PAUSED, STATES.CANCELLED, STATES.AWAITING_USER, STATES.FAILED],

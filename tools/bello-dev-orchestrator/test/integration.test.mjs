@@ -598,3 +598,77 @@ test("審査不能時: 同じタスクを掴み続けてループが空転しな
     h.cleanup();
   }
 });
+
+test("シナリオ7c: 審査待ちのタスクは復旧で作り直さない（成功した Claude 実行を捨てない）", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    let changed = null;
+    h.runner.setDefault({
+      kind: "success",
+      effect: () => { changed = h.commitSomething(); },
+      get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
+    });
+    h.reviewEngine.setDefault({ kind: "unavailable", reason: "no_api_key", message: "キーがありません" });
+
+    await h.orchestrator.tick();
+    const beforeReport = h.repo.getTask(task.id).report_id;
+    assert.equal(h.repo.getTask(task.id).state, STATES.AWAITING_AI_REVIEW);
+    assert.ok(beforeReport, "完了報告が保存されている");
+    const runsBefore = h.runner.calls.length;
+
+    // 再起動相当
+    const fresh = new Orchestrator({
+      config: h.config, paths: h.paths, repo: h.repo, logger: h.logger,
+      runner: h.runner, reviewEngine: h.reviewEngine, todoManager: h.todoManager,
+    });
+    await fresh.recover();
+
+    const after = h.repo.getTask(task.id);
+    assert.equal(after.state, STATES.AWAITING_AI_REVIEW, "審査待ちのまま");
+    assert.equal(after.report_id, beforeReport, "完了報告を失わない");
+    assert.equal(after.retry_after, null, "起動直後に審査へ進めるよう待機指示は消す");
+
+    // キーが復活すれば Claude を走らせ直さずに完了する
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+    await fresh.tick();
+    assert.equal(h.repo.getTask(task.id).state, STATES.COMPLETED);
+    assert.equal(h.runner.calls.length, runsBefore, "Claude を再実行していない");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("シナリオ7d: 検証中に落ちたら、完了報告があれば審査から再開する", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    h.repo.setState(task.id, STATES.PREFLIGHT, "x", "system");
+    h.repo.setState(task.id, STATES.RUNNING, "x", "system");
+    h.repo.setState(task.id, STATES.VERIFYING, "x", "system");
+    const reportId = h.repo.saveReport(task.id, 1, makeReport(task.id), true);
+    h.repo.updateTask(task.id, { report_id: reportId });
+
+    await h.orchestrator.recover();
+    const after = h.repo.getTask(task.id);
+    assert.equal(after.state, STATES.AWAITING_AI_REVIEW, "Claude を走らせ直さない");
+    assert.equal(after.report_id, reportId);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("シナリオ7e: 検証中で完了報告が無ければ再実行に回す", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    h.repo.setState(task.id, STATES.PREFLIGHT, "x", "system");
+    h.repo.setState(task.id, STATES.RUNNING, "x", "system");
+    h.repo.setState(task.id, STATES.VERIFYING, "x", "system");
+
+    await h.orchestrator.recover();
+    assert.equal(h.repo.getTask(task.id).state, STATES.RETRY_WAIT);
+  } finally {
+    h.cleanup();
+  }
+});

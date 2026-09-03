@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'diagnose', 'repair', 'uninstall', 'help')]
+    [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'diagnose', 'repair', 'resume', 'uninstall', 'help')]
     [string] $Command = 'help',
 
     [string] $ConfigPath,
@@ -232,10 +232,13 @@ switch ($Command) {
     'install'   { exit (Invoke-Install) }
     'uninstall' { exit (Invoke-Uninstall) }
     'start' {
+        # 手動 start は起動の意思表示なので、停止フラグと crash-loop
+        # クールダウンを先に解除する。これが無いとウォッチドッグが
+        # フラグを見て待機し、start しても何も起きない。
+        [void](Invoke-Cli @('resume'))
         $task = Get-BelloTask
         if ($task) {
-            # 停止フラグを消してからタスクで起動する (手動 start = 起動意思)
-            $exit = Invoke-Cli @('repair')
+            [void](Invoke-Cli @('repair'))
             try {
                 Start-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName
                 Write-Ok 'Scheduled Task 経由で起動しました。'
@@ -251,6 +254,7 @@ switch ($Command) {
     'restart' {
         [void](Invoke-Cli @('stop'))
         Start-Sleep -Seconds 3
+        [void](Invoke-Cli @('resume'))
         $task = Get-BelloTask
         if ($task) {
             [void](Invoke-Cli @('repair'))
@@ -262,6 +266,7 @@ switch ($Command) {
     'status'   { exit (Invoke-Cli @('status')) }
     'diagnose' { exit (Invoke-Cli @('diagnose')) }
     'repair'   { exit (Invoke-Cli @('repair')) }
+    'resume'   { exit (Invoke-Cli @('resume')) }
     default {
         Write-Host 'BELLO Dev Orchestrator'
         Write-Host ''
@@ -272,6 +277,7 @@ switch ($Command) {
         Write-Host '  bello.ps1 status     稼働状態・キュー・未完了 TODO'
         Write-Host '  bello.ps1 diagnose   自己診断 (Claude / OpenAI 設定 / DB / 権限 / タスク / ディスク)'
         Write-Host '  bello.ps1 repair     安全に直せる設定のみ修復'
+        Write-Host '  bello.ps1 resume     停止フラグ / crash-loop クールダウンを解除する'
         Write-Host '  bello.ps1 uninstall  常駐登録の解除 (本体とデータは消しません)'
         Write-Host ''
         Write-Host '  詳細は README.md と docs/ を参照してください。'

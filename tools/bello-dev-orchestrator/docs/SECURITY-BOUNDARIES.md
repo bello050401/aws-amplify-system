@@ -55,6 +55,10 @@ push は行いません（`git.allowPush` は既定 false で、実装も呼び�
 
 - 既定 `--permission-mode acceptEdits`（ファイル編集は自動、それ以外でプロンプトが要るものは拒否）
 - 既定 `--permission-prompts none`（誰も答えないので、プロンプトが必要な操作は**自動的に拒否**される）
+- `--allowedTools` に、テスト・ビルド・調査・作業ブランチへのコミットに必要なコマンドだけを列挙する。
+  ここに無い Bash コマンドは実行されない（実測で確認。`docs/TEST-RESULTS.md` §4）
+- `--disallowedTools` で `git push` / `reset` / `checkout` / `stash` / `clean`、`rm`、
+  `ampx`、`aws`、`gh`、`npm publish`、`curl` を塞ぐ（拒否リストは許可リストより強い）
 - `bypassPermissions` は既定にしません。設定した場合は起動時に警告を出します。
 - `--max-budget-usd` で 1 タスクの API 費用に上限を掛けます。
 - 指示本文はコマンドライン引数ではなく**標準入力**で渡します（プロセス一覧に指示が出ないため）。

@@ -36,11 +36,15 @@ Orchestrator の起動時 (`Orchestrator.recover()`):
 
 1. 単一起動ロックを取得
 2. `PRAGMA integrity_check` で DB の整合性を確認（NG なら起動しない）
-3. 前回 `preflight` / `running` / `verifying` / `awaiting_ai_review` だったタスクを検出
-4. 監督プロセスが死んだ時点でプロセス追跡は不能なので、**セッションを再開せず新しい試行として作り直す**
+3. `awaiting_ai_review` のタスクは**作り直さない**。待っていただけで完了報告は保存済みなので、
+   待機指示だけ消して起動直後に審査へ進める（作り直すと成功した Claude 実行を丸ごと捨てることになる）
+4. `verifying` のタスクは、完了報告があれば `awaiting_ai_review` へ進めて**審査から再開**する。
+   完了報告が無い場合だけ再実行に回す
+5. 実際に子プロセスを抱えていた `preflight` / `running` だけを作り直す。監督プロセスが死んだ
+   時点でプロセス追跡は不能なので、**セッションを再開せず新しい試行にする**
    （同じ外部操作の二重実行を避けるため）
-5. 再試行余地があれば `retry_wait`、上限に達していれば `awaiting_user` + ユーザー TODO
-6. チェックポイントと監査ログに記録
+6. 再試行余地があれば `retry_wait`、上限に達していれば `awaiting_user` + ユーザー TODO
+7. チェックポイントと監査ログに記録
 
 ### 実測ログ（2026-09-03）
 
@@ -56,6 +60,16 @@ task_366e49a34658b2d3d2  state=awaiting_user  attempts=1
 --- audit ---
   2026-09-03T02:10:02.151Z recovery task.recovered task_366e49a34658b2d3d2 running
 ```
+
+## 3.5 Scheduled Task の結果コードの読み方
+
+| LastResult | 意味 | 正常か |
+|---|---|---|
+| `0x41301` | 実行中 (SCHED_S_TASK_RUNNING) | 正常 |
+| `0x0` | 直前の実行が正常終了した | 正常 |
+| `0x800710E0` | 既に実行中のためウォッチドッグの起動をスキップした (IgnoreNew) | **正常**。多重起動抑止が効いている印 |
+| `0x41303` | **一度も実行されていない** (SCHED_S_TASK_HAS_NOT_RUN) | 要確認。2026-09-03 の Remote Control 障害はこれだった |
+| `0x1` / その他 | 直前の実行が非 0 で終了した | ログを確認 |
 
 ## 4. 症状別の対処
 

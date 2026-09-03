@@ -32,7 +32,7 @@ pnpm は未導入のため採用しない。既存リポジトリは npm。
 
 - 指示書 §4-6 は「トランザクション・一意制約・再起動耐性が必要。利用可能なら SQLite を優先」。
 - `better-sqlite3` はネイティブビルドが必要で、Windows では node-gyp / Build Tools 依存になる。指示書 §4-5「ネイティブビルド必須パッケージは採用前に実機インストールを確認する」に対し、**確認コストと将来の破損リスクを避ける**判断。
-- Node 24 には `node:sqlite` が同梱され、同期 API・トランザクション・UNIQUE 制約・WAL をすべて満たす。実測で `DatabaseSync` が利用可能であることを確認した（`test/store.test.mjs` が実行時検証を兼ねる）。
+- Node 24 には `node:sqlite` が同梱され、同期 API・トランザクション・UNIQUE 制約・WAL をすべて満たす。実測で `DatabaseSync` の UNIQUE 制約とトランザクション (ROLLBACK) が期待どおり動くことを確認した。起動時にも `probeSqlite()` が実行時検証を行う。
 
 トレードオフ: `node:sqlite` は Node のバージョンに依存する。`src/store/db.mjs` が起動時にバージョンと API 可用性を検査し、満たさない場合は**診断モードで安全に起動失敗**する（指示書 §13-1）。
 
@@ -77,7 +77,26 @@ claude -p "..." --output-format json --json-schema '{...}' --permission-prompts 
 
 `--max-turns` は**この版の CLI に存在しない**（`--help` 全文を `evidence/claude-help.txt` に保存済み）。想像で実装せず、ターン数の暴走は `--max-budget-usd` とタイムアウトで抑える。
 
-権限モードの既定は `acceptEdits`（ファイル編集は自動、破壊的操作はプロンプト＝`--permission-prompts none` により自動拒否）。`bypassPermissions` は既定にしない（指示書 §12）。
+**権限モードは実測で決めた。** 同じプロンプト（Bash で `node -e "console.log(42)"` を実行させる）で比較した結果:
+
+| 設定 | 結果 | 拒否件数 |
+|---|---|---|
+| `acceptEdits` + `--permission-prompts none` | 拒否 | 1 |
+| `auto` + `--permission-prompts none` | 拒否 | 1 |
+| `dontAsk` + `--permission-prompts none` | 拒否 | 1 |
+| `acceptEdits` + `--allowedTools Bash` | **成功** | 0 |
+| `acceptEdits` + `--allowedTools 'Bash(node:*)'` | **成功** | 0 |
+| `bypassPermissions` | 成功 | 0 |
+
+つまり `--permission-prompts none` だけでは Bash が「承認できる主体が居ない」として
+自動拒否され、テストもビルドも走らない。これは実 E2E で実際に起きた
+（1 回目の実行が全コマンド exit -1 で blocked になった）。
+
+**採用: `acceptEdits` + パターン付き許可リスト (`claude.allowedTools`) + 拒否リスト
+(`claude.disallowedTools`)。** `bypassPermissions` で全部素通しにするのは指示書 §12 の
+安全境界に反するため採らない。許可リストにはテスト・ビルド・調査・作業ブランチへの
+コミットに必要なコマンドだけを列挙し、拒否リストで `git push` / `reset` / `checkout` /
+`stash` / `clean`、`rm`、`ampx`、`aws`、`gh`、`npm publish`、`curl` を塞ぐ。
 
 ## 5. OpenAI Review Engine
 
@@ -91,7 +110,7 @@ claude -p "..." --output-format json --json-schema '{...}' --permission-prompts 
 
 **決定: 既存 `tools/windows-claude-host` の Supervisor 方式を再利用し、Orchestrator 用に第 2 のタスクを分離登録する。**
 
-- 既存タスク `\BELLO\ClaudeCodeRemoteControl` は**壊さない**（§11-1）。本日その根本原因調査と修正を完了済み（`docs/INCIDENT-20260903-remote-control-offline.md`）。
+- 既存タスク `\BELLO\ClaudeCodeRemoteControl` は**壊さない**（§11-1）。本日その根本原因調査と修正を完了済み（コミット `ea66a88`、実測値は `docs/TEST-RESULTS.md` §3-2）。
 - Orchestrator は `\BELLO\BelloDevOrchestrator` として登録する。
 - 常駐の設計（ログオントリガ＋1 分ウォッチドッグ、Mutex + `MultipleInstances=IgnoreNew` の二重防御、指数バックオフ、crash-loop 停止、スリープ抑止、コンソール喪失検知）は Remote Control ホストで**実測合格した方式をそのまま踏襲する**。
 

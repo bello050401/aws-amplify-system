@@ -90,7 +90,7 @@ inbox フォルダの場所はダッシュボードの「設定」画面に表�
 | `src/dashboard/` | ローカルダッシュボード (node:http + 素の HTML/CSS/JS) |
 | `src/store/` | 永続ストア (node:sqlite) |
 | `src/log/` | ログとローテーション、秘密情報の除去 |
-| `test/` | 単体 33 件 + 統合 19 件 |
+| `test/` | 単体 34 件 + 統合 24 件（+ 手動のダッシュボード安全性試験 12 件） |
 | `docs/` | 設計・運用・復旧・安全境界の文書 |
 
 **実行時データ** (DB / ログ / inbox / 取込済み文書) は `%LOCALAPPDATA%\BELLO\dev-orchestrator\` に置き、

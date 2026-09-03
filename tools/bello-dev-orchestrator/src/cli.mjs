@@ -76,6 +76,29 @@ async function cmdStop(loaded) {
   return EXIT.NOT_RUNNING;
 }
 
+/**
+ * 意図的な停止 / crash-loop クールダウンを解除する。
+ * 「人が start と打った」= 起動の意思表示なので、ウォッチドッグ用の待機指示を消す。
+ * これが無いと bello.ps1 start がフラグに阻まれて何も起きない。
+ */
+async function cmdResume(loaded) {
+  const cleared = [];
+  for (const [label, file] of [
+    ["停止フラグ", loaded.paths.stopFlag],
+    ["停止フラグ(記録済み)", loaded.paths.stopFlag + ".ack"],
+    ["crash-loop クールダウン", loaded.paths.crashLoopFlag],
+    ["crash-loop クールダウン(記録済み)", loaded.paths.crashLoopFlag + ".ack"],
+  ]) {
+    if (fs.existsSync(file)) {
+      fs.rmSync(file, { force: true });
+      cleared.push(label);
+    }
+  }
+  if (cleared.length === 0) say("解除するものはありませんでした。");
+  else say("解除しました: " + cleared.join(" / "));
+  return EXIT.OK;
+}
+
 async function cmdStatus(loaded) {
   const pid = readPid(loaded.paths.pidFile);
   const alive = pid ? isLiveNodeProcess(pid) : false;
@@ -261,6 +284,7 @@ async function main() {
     say("  status     稼働状態・キュー・TODO");
     say("  diagnose   自己診断（Claude / OpenAI 設定 / DB / 権限 / タスク / ディスク）");
     say("  repair     安全に直せる設定のみ修復");
+    say("  resume     停止フラグ / crash-loop クールダウンを解除する");
     say("  uninstall  常駐登録の解除（プログラム本体と実行時データは消しません）");
     say("");
     say('  add-task --title "件名" --file 指示.txt [--priority 50]');
@@ -287,6 +311,8 @@ async function main() {
       return cmdDiagnose(loaded);
     case "repair":
       return cmdRepair(loaded);
+    case "resume":
+      return cmdResume(loaded);
     case "add-task":
       return cmdAddTask(loaded, args);
     case "list-tasks":

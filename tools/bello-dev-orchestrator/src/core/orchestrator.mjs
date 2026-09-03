@@ -49,6 +49,27 @@ export class Orchestrator {
       throw new Error(`永続ストアが壊れています: ${integrity.detail}`);
     }
 
+    // 審査待ちで止まっていたものは作り直さない。待機指示だけ消して、
+    // 起動直後に審査へ進めるようにする。
+    for (const waiting of this.repo.listTasks({ state: STATES.AWAITING_AI_REVIEW, limit: 500 })) {
+      if (waiting.retry_after) this.repo.updateTask(waiting.id, { retry_after: null });
+    }
+
+    // 完了報告が残っている verifying は、Claude を走らせ直さずに審査から再開する。
+    let resumed = 0;
+    for (const task of this.repo.listTasks({ state: STATES.VERIFYING, limit: 500 })) {
+      if (task.report_id) {
+        this.repo.setState(task.id, STATES.AWAITING_AI_REVIEW, "検証中に中断。完了報告が残っているため審査から再開します。", "recovery");
+        this.repo.checkpoint(task.id, "recovery", { previousState: STATES.VERIFYING, resumedFrom: "report" });
+        resumed += 1;
+      } else {
+        this.repo.setState(task.id, STATES.RETRY_WAIT, "検証中に中断。完了報告が無いため再実行します。", "recovery", {
+          retry_after: new Date(Date.now() + 5000).toISOString(),
+        });
+      }
+    }
+    if (resumed) this.logger.info("完了報告が残っていたタスクを審査から再開します", { count: resumed });
+
     const stranded = [];
     for (const state of ACTIVE_STATES) {
       stranded.push(...this.repo.listTasks({ state, limit: 500 }));
