@@ -212,10 +212,20 @@ async function showStatus() {
   }
 }
 
-async function waitAndReport(dedupeKeyPart: string, label: string) {
+async function testConversationIds(): Promise<Set<string>> {
+  const convs = (await scanAll(T("Conversation"))).filter((c) => c.externalCustomerId === TEST_USER_ID);
+  return new Set(convs.map((c) => c.id as string));
+}
+
+async function waitAndReport(_unused: string, label: string) {
   // Webhookは同期処理なので、応答が返った時点で通知まで終わっている。
+  //
+  // dedupeKey は "LINE:<会話ID>:<Messageの行ID>" で、**LINEのmessage.idでは
+  // ない**。テスト用のmessageIdで絞ると必ず0件になり、「通知が作られていない」
+  // と誤って読める(実際に一度そう誤診した)。会話IDで絞る。
+  const convIds = await testConversationIds();
   const deliveries = (await scanAll(T("NotificationDelivery")))
-    .filter((d) => String(d.dedupeKey).includes(dedupeKeyPart))
+    .filter((d) => convIds.has(String(d.conversationId)))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 
   console.log(`\n--- ${label} の通知レコード (${deliveries.length}件) ---`);
@@ -350,9 +360,8 @@ async function main() {
 
     const second = await postWebhook(messageId, scenario.text);
     console.log(`\n2回目: HTTP ${second.status}`);
-    const afterSecond = (await scanAll(T("NotificationDelivery"))).filter((d) =>
-      String(d.dedupeKey).includes(messageId),
-    );
+    const convIds2 = await testConversationIds();
+    const afterSecond = (await scanAll(T("NotificationDelivery"))).filter((d) => convIds2.has(String(d.conversationId)));
 
     console.log(`\n通知レコード: 1回目=${afterFirst.length}件 → 2回目=${afterSecond.length}件`);
     if (afterSecond.length === afterFirst.length && afterFirst.length === 1) {
