@@ -7,6 +7,7 @@ import { generateInquiryReplyDraft } from "@/lib/inquiry/pipeline";
 import { latestReplyDraftFor, markReplyDraftStatus, saveReplyDraft } from "@/lib/inquiry/draftStore";
 import { getAIReplySettings } from "@/lib/inquiry/settings";
 import { rewriteAsKeigo, type KeigoRewriteResult } from "@/lib/inquiry/keigoService";
+import { notifyInquiry } from "@/lib/messaging/lineNotify/service";
 import type { ReplyDraftRecord } from "@/lib/inquiry/types";
 
 /**
@@ -115,6 +116,39 @@ export async function generateInquiryReplyAction(
       },
       who,
     );
+
+    // ── 社内LINEへ通知(2026-09-03 指示書 §7) ────────────────────
+    //
+    // **この経路はログイン済みのServer Actionなので、AppSyncを userPool で
+    // 叩ける。** LINE Webhookからの自動処理は同じことができない(Cookieも
+    // セッションも無く、serverDataClient の userPool 認証が通らない) ——
+    // 詳細は lib/inquiry/autoReply.ts の冒頭コメント参照。
+    //
+    // 通知の失敗で返信案の生成まで失敗にしない(§8)。生成結果は既に
+    // 保存済みで、通知は NotificationDelivery に失敗として残り再送できる。
+    try {
+      await notifyInquiry({
+        conversationId,
+        sourceMessageId: latestIncoming.id,
+        channel: conversation.channel,
+        customerName: conversation.customerDisplayName,
+        messageText: latestIncoming.body,
+        intents: result.intents,
+        evidence: result.evidence,
+        draftText: result.draftText,
+        replyDraftId: saved.id,
+        draftStatus: result.status,
+        deliveryWindowState: null,
+        failureReason: result.failureReason,
+        createdBy: who,
+      });
+    } catch (notifyErr) {
+      console.error(
+        "[inquiryReply] 社内LINEへの通知に失敗しました(返信案の保存は成功しています)",
+        notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+      );
+    }
+
     return { ok: true, data: saved };
   } catch (err) {
     logActionFailure("generateInquiryReplyAction", correlationId, { conversationId }, err);

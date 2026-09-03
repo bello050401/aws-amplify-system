@@ -7,17 +7,13 @@
 import { REVIEW_SCHEMA, REVIEW_SYSTEM_PROMPT, REVIEW_PROMPT_VERSION, buildReviewInput } from "./reviewSchema.mjs";
 import { validate } from "../core/validate.mjs";
 import { redactValue, redactText } from "../log/redact.mjs";
+import { ReviewUnavailableError, REVIEW_FAILURE, classifyFailureText } from "./errors.mjs";
+
+// 既存の import 経路 (fakeReview 等) を壊さないよう、ここからも公開しておく。
+export { ReviewUnavailableError, REVIEW_FAILURE };
 
 const API_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_MODEL = "gpt-4o-2024-08-06"; // strict structured outputs に対応する版
-
-export class ReviewUnavailableError extends Error {
-  constructor(message, reason) {
-    super(message);
-    this.name = "ReviewUnavailableError";
-    this.reason = reason; // 'no_api_key' | 'api_failure'
-  }
-}
 
 /**
  * OpenAI の JSON Schema (strict) は additionalProperties:false と
@@ -58,8 +54,8 @@ export class OpenAiReviewEngine {
   async review({ task, report, gitStat, testSummary, priorReviews }) {
     if (!this.isConfigured()) {
       throw new ReviewUnavailableError(
-        "OPENAI_API_KEY が設定されていないため AI 審査を実行できません。",
-        "no_api_key",
+        "OPENAI_API_KEY が設定されていないため OpenAI 審査を実行できません。ダッシュボードの設定で「Claude審査」または「手動審査」に切り替えられます。",
+        REVIEW_FAILURE.NOT_CONFIGURED,
       );
     }
 
@@ -113,9 +109,11 @@ export class OpenAiReviewEngine {
         }
         if (!res.ok) {
           const text = await res.text();
+          // 401/403 は認証切れ、429/quota は利用上限として分類し、
+          // 「待てば直る」のか「人が直すまで直らない」のかを呼び出し側へ伝える。
           throw new ReviewUnavailableError(
             `OpenAI API エラー ${res.status}: ${redactText(text).slice(0, 500)}`,
-            "api_failure",
+            classifyFailureText(`${res.status} ${text}`),
           );
         }
 
@@ -123,7 +121,7 @@ export class OpenAiReviewEngine {
         const content = payload?.choices?.[0]?.message?.content;
         const refusal = payload?.choices?.[0]?.message?.refusal;
         if (refusal) {
-          throw new ReviewUnavailableError(`審査モデルが応答を拒否しました: ${redactText(refusal)}`, "api_failure");
+          throw new ReviewUnavailableError(`審査モデルが応答を拒否しました: ${redactText(refusal)}`, REVIEW_FAILURE.REVIEW_FAILED);
         }
         if (typeof content !== "string") {
           lastError = new Error("OpenAI の応答に content がありません。");
@@ -152,7 +150,7 @@ export class OpenAiReviewEngine {
             });
             continue;
           }
-          throw new ReviewUnavailableError(lastError.message, "api_failure");
+          throw new ReviewUnavailableError(lastError.message, REVIEW_FAILURE.REVIEW_FAILED);
         }
 
         return {
@@ -176,7 +174,7 @@ export class OpenAiReviewEngine {
 
     throw new ReviewUnavailableError(
       `OpenAI 審査が ${maxRetries + 1} 回失敗しました: ${lastError ? redactText(lastError.message) : "不明"}`,
-      "api_failure",
+      REVIEW_FAILURE.REVIEW_FAILED,
     );
   }
 

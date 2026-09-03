@@ -84,12 +84,26 @@ function logAwsError(operation: string, err: unknown): void {
   );
 }
 
-function classifyAwsError(err: unknown): string {
+function classifyAwsError(err: unknown, operation?: string): string {
   if (err instanceof ResourceNotFoundException) return "AWS Secrets Managerに通知Bot用のSecretがまだ存在しません。";
   const name = err instanceof Error ? err.name : undefined;
   const message = err instanceof Error ? err.message : String(err);
   if (name === "AccessDeniedException") {
-    return `AWS Secrets Managerへのアクセス権限がありません。このアプリの実行ロールへ、対象Secret(${SECRET_NAME})に対するsecretsmanager:GetSecretValue・PutSecretValueの権限を確認してください。`;
+    // どのAPIで落ちたかを書く。
+    //
+    // 以前はどのAPIで失敗しても「GetSecretValue・PutSecretValueの権限を
+    // 確認してください」と出していたが、実際に起きたのは **CreateSecret の
+    // 拒否**だった(Secretがまだ存在せず、PutSecretValue→CreateSecret へ
+    // フォールバックした)。Get/Put は許可されていたので、指示どおり確認しても
+    // 「権限はあるのにエラーが出る」となり原因に辿り着けない。
+    //
+    // 実行ロールに CreateSecret は**意図的に与えていない**(ZAICO/Mercari と
+    // 同じ方針。Secretは既存の外部リソースとして扱い、実行時に作らせない)。
+    // したがって正しい対処は権限追加ではなく、**Secretを先に作っておくこと**。
+    if (operation === "createSecret") {
+      return `Secret(${SECRET_NAME})がまだ存在せず、作成する権限もありません。これは想定どおりの設計です(実行ロールにCreateSecretは与えていません)。AWS管理者が次のコマンドで空のSecretを1度だけ作成してください: aws secretsmanager create-secret --name ${SECRET_NAME} --secret-string '{"configured":false}'`;
+    }
+    return `AWS Secrets Managerへのアクセス権限がありません。このアプリの実行ロールへ、対象Secret(${SECRET_NAME})に対するsecretsmanager:${operation === "getSecretValue" ? "GetSecretValue" : "PutSecretValue"}の権限を確認してください。`;
   }
   if (name === "CredentialsProviderError" || /could not load credentials/i.test(message)) {
     return "AWS認証情報を確認できません。ローカル環境ではAWS CLIのプロファイル設定またはSSOログイン、AWS上で実行している場合は実行ロールの設定を確認してください。";
@@ -130,7 +144,7 @@ export async function setNotifyBotConnectionInSecretsManager(params: { channelSe
   } catch (err) {
     if (!(err instanceof ResourceNotFoundException)) {
       logAwsError("putSecretValue", err);
-      throw new Error(classifyAwsError(err));
+      throw new Error(classifyAwsError(err, "putSecretValue"));
     }
   }
 
@@ -144,11 +158,11 @@ export async function setNotifyBotConnectionInSecretsManager(params: { channelSe
         return;
       } catch (retryErr) {
         logAwsError("putSecretValue(after race with concurrent create)", retryErr);
-        throw new Error(classifyAwsError(retryErr));
+        throw new Error(classifyAwsError(retryErr, "putSecretValue"));
       }
     }
     logAwsError("createSecret", err);
-    throw new Error(classifyAwsError(err));
+    throw new Error(classifyAwsError(err, "createSecret"));
   }
 }
 
@@ -160,7 +174,7 @@ export async function clearNotifyBotConnectionInSecretsManager(): Promise<void> 
   } catch (err) {
     if (err instanceof ResourceNotFoundException) return;
     logAwsError("putSecretValue(clear)", err);
-    throw new Error(classifyAwsError(err));
+    throw new Error(classifyAwsError(err, "putSecretValue"));
   }
 }
 

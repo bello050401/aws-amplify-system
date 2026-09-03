@@ -95,7 +95,25 @@ export async function processInquiryAndNotify(params: {
       listMessages(params.conversationId),
     ]);
     if (!conversation) {
-      return { drafted: false, draft: null, notify: null, reason: "会話が見つかりませんでした。" };
+      // **未認証の経路から呼ばれると必ずここへ来る。**
+      //
+      // getConversation は serverDataClient(Cookie + authMode:"userPool")を
+      // 使う。LINE WebhookはLINEプラットフォームからの未認証POSTで、Cookieも
+      // セッションも無いため、AppSyncの呼び出しが認可で弾かれ、data が null で
+      // 返る(errors は握り潰される)。会話は実際には存在しているのに
+      // 「見つからない」に見える。
+      //
+      // 同じ問題は lib/messaging/webhookStore.ts のファイル冒頭に記録があり、
+      // メッセージ保存はそれを避けるためDynamoDBを直接叩いている。この関数は
+      // 在庫・ナレッジ・返信ルールまで読むため同じ回避ができておらず、
+      // **Webhookからの自動処理は現状ここで止まる**(docs参照)。
+      //
+      // 静かに終わらせない。原因が分かる形でログへ残す。
+      const message =
+        "会話を読み込めませんでした。未認証の経路(LINE Webhook等)から呼ばれた場合、" +
+        "serverDataClientのuserPool認証が通らないため必ずこの結果になります。";
+      console.error("[autoReply] " + message, { conversationId: params.conversationId });
+      return { drafted: false, draft: null, notify: null, reason: message };
     }
 
     const target = params.sourceMessageId
