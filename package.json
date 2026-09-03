@@ -72,7 +72,8 @@
     "ingest:mercari-mail": "node scripts/with-server-only-stub.cjs scripts/ingest-mercari-mail.ts",
     "verify:line-notify-live": "node scripts/with-server-only-stub.cjs scripts/verify-line-notify-live.ts",
     "repair:mercari-ingest": "node scripts/with-server-only-stub.cjs scripts/repair-mercari-ingest.ts",
-    "cleanup:mercari": "node scripts/with-server-only-stub.cjs scripts/cleanup-mercari-misingested.ts"
+    "cleanup:mercari": "node scripts/with-server-only-stub.cjs scripts/cleanup-mercari-misingested.ts",
+    "mark:backfill": "node scripts/with-server-only-stub.cjs scripts/mark-backfill-not-required.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",
