@@ -204,6 +204,31 @@ async function findConversation(
 }
 
 /**
+ * 取り込み済みかだけを調べる(保存はしない)。
+ *
+ * メール取り込みが「本文を取りに行く前に」既処理を弾くために使う。
+ * 本文の取得は1通ごとにGmail APIを1往復するので、先に落とせるものを
+ * 落としておかないと、2回目以降の実行でも毎回30通分の往復が発生する。
+ */
+export async function findMessageByExternalId(
+  externalMessageId: string,
+): Promise<{ conversationId?: string; messageId?: string } | null> {
+  if (!CONVERSATION_TABLE || !MESSAGE_TABLE) {
+    throw new Error("受信メッセージ保存用のテーブル名が未設定です（CONVERSATION_TABLE_NAME / MESSAGE_TABLE_NAME）。");
+  }
+  return findExistingMessage(
+    {
+      send: (command) => ddb().send(command as never) as Promise<Record<string, unknown>>,
+      conversationTable: CONVERSATION_TABLE,
+      messageTable: MESSAGE_TABLE,
+      newId: randomUUID,
+      now: () => new Date().toISOString(),
+    },
+    externalMessageId,
+  );
+}
+
+/**
  * 受信メッセージを保存する。
  *
  * 失敗は握りつぶさず投げる。呼び出し元(webhookハンドラ)が500を返し、

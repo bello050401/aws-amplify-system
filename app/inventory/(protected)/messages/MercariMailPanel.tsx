@@ -8,6 +8,7 @@ import {
   setGmailCredentialsAction,
   type GmailStatus,
 } from "@/app/actions/mercariMail";
+import { callAction } from "./actionResult";
 
 /**
  * 2026-09-03 指示書 §13/§14: メルカリShops問い合わせメールの取り込み設定。
@@ -27,12 +28,18 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
   const [query, setQuery] = useState(status.query);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  /** 直近の実行でGmailへ実際に渡した検索条件。表示値との一致確認に使う。 */
+  const [lastQuery, setLastQuery] = useState<string | null>(null);
 
   async function handleIngest() {
     setBusy(true);
     setMessage(null);
     try {
-      const res = await ingestMercariMailAction();
+      // callAction は戻り値が無い場合も失敗として扱う。以前は res.ok を
+      // 直接触っていたため、アクションが解決しなかったときに
+      // 「Cannot read properties of undefined (reading 'ok')」という
+      // 利用者に何も伝えないメッセージが出ていた(actionResult.ts 参照)。
+      const res = await callAction(() => ingestMercariMailAction());
       if (!res.ok) {
         setMessage({ kind: "error", text: res.error });
         return;
@@ -44,15 +51,15 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
         `取り込み済み ${r.duplicated}件`,
         `対象外 ${r.skipped}件`,
       ];
+      if (r.reprocessed > 0) parts.push(`再処理 ${r.reprocessed}件`);
       if (r.parseFailed > 0) parts.push(`解析失敗 ${r.parseFailed}件`);
       if (r.failed > 0) parts.push(`エラー ${r.failed}件`);
+      setLastQuery(r.query || null);
       setMessage({
         kind: r.failed > 0 ? "error" : "success",
         text: [parts.join(" / "), ...r.messages].join("\n"),
       });
       router.refresh();
-    } catch (err) {
-      setMessage({ kind: "error", text: err instanceof Error ? err.message : "取り込みに失敗しました。" });
     } finally {
       setBusy(false);
     }
@@ -81,6 +88,25 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
           </dd>
           <dt className="text-gray-500">検索条件</dt>
           <dd className="break-all font-mono text-[12px]">{status.query}</dd>
+
+          {/* 取り込みを実行したら、**実際にGmailへ渡した条件**も出す。
+              画面の表示だけを見ていると、保存値と実行値がずれていても
+              気づけない —— 古いページを開いたままだと実際にずれる。 */}
+          {lastQuery && (
+            <>
+              <dt className="text-gray-500">前回の実行条件</dt>
+              <dd
+                className={
+                  lastQuery === status.query
+                    ? "break-all font-mono text-[12px] text-gray-700"
+                    : "break-all font-mono text-[12px] text-amber-700"
+                }
+              >
+                {lastQuery}
+                {lastQuery !== status.query && "  ← 表示と不一致。ページを再読み込みしてください"}
+              </dd>
+            </>
+          )}
         </dl>
 
         {/* 「まだ入力していない」のか「読めなかった」のかを区別して出す。
@@ -122,7 +148,7 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
               onClick={async () => {
                 if (!window.confirm("Gmailの認証情報を削除します。削除するとメルカリShopsの問い合わせを取り込めなくなります。よろしいですか？")) return;
                 setBusy(true);
-                const res = await clearGmailCredentialsAction();
+                const res = await callAction(() => clearGmailCredentialsAction());
                 setMessage(res.ok ? { kind: "success", text: "認証情報を削除しました。" } : { kind: "error", text: res.error });
                 setBusy(false);
                 router.refresh();
@@ -206,7 +232,7 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
               onClick={async () => {
                 setBusy(true);
                 setMessage(null);
-                const res = await setGmailCredentialsAction({ clientId, clientSecret, refreshToken, query });
+                const res = await callAction(() => setGmailCredentialsAction({ clientId, clientSecret, refreshToken, query }));
                 if (res.ok) {
                   setMessage({ kind: "success", text: "Gmailの認証情報を保存しました（接続確認済み）。" });
                   setClientId("");

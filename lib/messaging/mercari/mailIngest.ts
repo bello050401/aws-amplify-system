@@ -1,6 +1,10 @@
 import "server-only";
-import { fetchMercariNotificationMails, GmailError } from "@/lib/messaging/email/gmailClient";
-import { recordIncomingWebhookMessage } from "@/lib/messaging/webhookStore";
+import {
+  fetchMercariNotificationMailsByIds,
+  listMercariNotificationMailIds,
+  GmailError,
+} from "@/lib/messaging/email/gmailClient";
+import { findMessageByExternalId, recordIncomingWebhookMessage } from "@/lib/messaging/webhookStore";
 import { processInquiryAndNotifyUnauthenticated } from "@/lib/inquiry/autoReply";
 import {
   buildProductLookupText,
@@ -42,8 +46,22 @@ export interface MailIngestResult {
   /** 問い合わせ通知ではなかった数。 */
   skipped: number;
   failed: number;
+  /** まだ処理していないメールが残っているか(1回の上限で打ち切った場合)。 */
+  remaining: number;
+  /** 実際にGmailへ渡した検索条件。画面表示と突き合わせられるようにする。 */
+  query: string;
   messages: string[];
 }
+
+/**
+ * 1回の実行で本文まで取りに行く上限。
+ *
+ * Server Action はホスティング側の実行時間上限の中で必ず返さなければ
+ * ならない。**返せないと、画面には結果が届かず「押しても何も起きない」
+ * ように見える**(実際にそれが起きた)。1通あたりGmail APIの往復とAI生成が
+ * 入るので、確実に返せる件数で区切り、残りは次回に回す。
+ */
+const MAX_PER_RUN = 8;
 
 /**
  * 保存する本文。
@@ -105,11 +123,31 @@ export async function ingestMercariNotificationMails(params: {
     parseFailed: 0,
     skipped: 0,
     failed: 0,
+    remaining: 0,
+    query: "",
     messages: [],
   };
 
-  const mails = await fetchMercariNotificationMails(params.maxResults ?? 30);
-  result.fetched = mails.length;
+  // ── まずIDだけ取る ────────────────────────────────────────
+  //
+  // 本文まで取ると1通ごとにAPIを1往復するため、30通で十数秒かかる。
+  // 取り込み済みかはIDだけで判定できるので、**新しいものだけ本文を取りに行く**。
+  // これで2回目以降の実行が数秒で終わる。
+  const { ids, query } = await listMercariNotificationMailIds(params.maxResults ?? 30);
+  result.query = query;
+  result.fetched = ids.length;
+
+  const unseen: string[] = [];
+  for (const id of ids) {
+    const existing = await findMessageByExternalId(`gmail:${id}`);
+    if (existing && !params.reprocess) result.duplicated++;
+    else unseen.push(id);
+  }
+
+  // 1回で処理する分だけ本文を取る。残りは次回。
+  const batch = unseen.slice(0, MAX_PER_RUN);
+  result.remaining = unseen.length - batch.length;
+  const mails = await fetchMercariNotificationMailsByIds(batch);
 
   for (const mail of mails) {
     try {
@@ -189,6 +227,11 @@ export async function ingestMercariNotificationMails(params: {
     }
   }
 
+  if (result.remaining > 0) {
+    result.messages.push(
+      `未処理のメールが${result.remaining}件残っています。1回あたり${MAX_PER_RUN}件までに区切っているので、もう一度実行してください。`,
+    );
+  }
   if (result.parseFailed > 0) {
     result.messages.push(
       `${result.parseFailed}件は本文を抽出できませんでした。受信は保存済みで、社内通知は【要確認】になっています(分類・返信案は生成していません)。`,

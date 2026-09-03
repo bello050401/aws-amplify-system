@@ -130,13 +130,20 @@ export interface FetchedMail extends MercariMailInput {
   gmailId: string;
 }
 
+/** いま使っている検索条件。画面表示と実際の検索を一致させるために公開する。 */
+export async function currentGmailQuery(): Promise<string | null> {
+  const creds = await getGmailCredentials();
+  return creds?.query ?? null;
+}
+
 /**
- * 検索条件に合うメールを取ってくる。
+ * 検索条件に合うメールの**IDだけ**を取ってくる。
  *
- * @param maxResults 1回の取り込みで処理する上限。多すぎると1回の実行が
- *   長くなり、途中で失敗したときの巻き戻しが大きくなる。
+ * 本文まで取ると1通ごとにAPIを1回叩くため、30通で十数秒かかる。
+ * 取り込み済みかどうかはIDだけで判定できるので、まずIDを取り、
+ * **新しいものだけ本文を取りに行く**。2回目以降の実行がこれで一気に短くなる。
  */
-export async function fetchMercariNotificationMails(maxResults = 20): Promise<FetchedMail[]> {
+export async function listMercariNotificationMailIds(maxResults = 30): Promise<{ ids: string[]; query: string }> {
   const creds = await getGmailCredentials();
   if (!creds) {
     throw new GmailError(
@@ -145,12 +152,30 @@ export async function fetchMercariNotificationMails(maxResults = 20): Promise<Fe
     );
   }
   const accessToken = await getAccessToken(creds);
-
+  const query = creds.query ?? "";
   const list = await apiGet<{ messages?: { id: string }[] }>(
-    `/messages?q=${encodeURIComponent(creds.query ?? "")}&maxResults=${maxResults}`,
+    `/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`,
     accessToken,
   );
-  const ids = (list.messages ?? []).map((m) => m.id);
+  return { ids: (list.messages ?? []).map((m) => m.id), query };
+}
+
+/**
+ * 指定したIDのメールを取ってくる。
+ *
+ * @param maxResults 1回の取り込みで処理する上限。多すぎると1回の実行が
+ *   長くなり、途中で失敗したときの巻き戻しが大きくなる。
+ */
+export async function fetchMercariNotificationMailsByIds(ids: string[]): Promise<FetchedMail[]> {
+  if (ids.length === 0) return [];
+  const creds = await getGmailCredentials();
+  if (!creds) {
+    throw new GmailError(
+      "CONFIG_REQUIRED",
+      "Gmailの認証情報が設定されていません。設定画面からGoogle OAuthの認証情報を登録してください。",
+    );
+  }
+  const accessToken = await getAccessToken(creds);
 
   const mails: FetchedMail[] = [];
   for (const id of ids) {
