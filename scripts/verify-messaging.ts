@@ -210,11 +210,23 @@ async function testWebhookStoreDedupesResentMessage() {
   const { deps, sent } = fakeDynamo({ existingMessage: true, conversation: null });
   const result = await recordIncomingWebhookMessageWith(deps, incoming);
 
-  assertEqual(result, { deduped: true }, "webhookStore: 取り込み済みのexternalMessageIdは重複として返す");
+  assertEqual(
+    (result as { deduped?: true }).deduped,
+    true,
+    "webhookStore: 取り込み済みのexternalMessageIdは重複として返す",
+  );
   assertEqual(
     sent.map((c) => c.name),
     ["QueryCommand"],
     "webhookStore: 重複と分かったら以降は一切書き込まない(LINEの再送で二重登録しない)",
+  );
+  // 重複でも既存行のIDを返す。返さないと、初回の保存後に解析・通知が
+  // 落ちた場合、LINEの再送を「やり直しの機会」として使えず、通知が
+  // 永久に作られないまま終わる(app/api/line/webhook/route.ts のコメント参照)。
+  assertEqual(
+    (result as { messageId?: string }).messageId,
+    "already",
+    "webhookStore: 重複時も既存メッセージのIDを返す(通知のやり直しに使う)",
   );
 }
 

@@ -108,7 +108,18 @@ export interface IncomingWebhookMessage {
   attachmentError?: string | null;
 }
 
-export type RecordResult = { conversationId: string; messageId: string } | { deduped: true };
+export type RecordResult =
+  | { conversationId: string; messageId: string }
+  | {
+      deduped: true;
+      /**
+       * 既に取り込まれていた行のID。GSIの射影に含まれていれば入る。
+       * 呼び出し側はこれを使って、解析・通知だけをやり直せる
+       * (findExistingMessage のコメント参照)。
+       */
+      conversationId?: string;
+      messageId?: string;
+    };
 
 /**
  * この関数が外界に対して持っている依存の全て。
@@ -127,8 +138,23 @@ export interface WebhookStoreDeps {
   now: () => string;
 }
 
-/** 既に取り込み済みか（LINEの再送で重複を作らないための判定）。 */
-async function findExistingMessage(deps: WebhookStoreDeps, externalMessageId: string): Promise<boolean> {
+/**
+ * 取り込み済みかを調べ、**見つかったらその行のIDも返す**。
+ *
+ * 真偽値だけを返していたときは、再送で弾いた時点で
+ * conversationId/messageId が分からず、呼び出し側が「このメッセージに
+ * ついて後続処理(解析・通知)をやり直す」ことができなかった。
+ *
+ * これは実際に穴になる: 初回の受信で保存までは成功し、その後の解析・通知が
+ * 途中で落ちた(実行時間の上限、AIの失敗)場合、LINEは再送してくるが、
+ * こちらは「重複」とだけ判断して**通知を作らないまま終わる**。
+ * 保存済みのメッセージは画面には出るが、LINE通知は永遠に来ない。
+ * IDを返せば、再送を「やり直しの機会」として使える。
+ */
+async function findExistingMessage(
+  deps: WebhookStoreDeps,
+  externalMessageId: string,
+): Promise<{ conversationId?: string; messageId?: string } | null> {
   const res = (await deps.send(
     new QueryCommand({
       TableName: deps.messageTable,
@@ -137,8 +163,15 @@ async function findExistingMessage(deps: WebhookStoreDeps, externalMessageId: st
       ExpressionAttributeValues: { ":e": externalMessageId },
       Limit: 1,
     }),
-  )) as { Items?: unknown[] };
-  return (res.Items?.length ?? 0) > 0;
+  )) as { Items?: Record<string, unknown>[] };
+  const item = res.Items?.[0];
+  if (!item) return null;
+  // GSIの射影に含まれていない可能性を考えて、取れなければ undefined のまま返す
+  // (呼び出し側は「IDが無い重複」として、これまでどおり何もしない)。
+  return {
+    conversationId: typeof item.conversationId === "string" ? item.conversationId : undefined,
+    messageId: typeof item.id === "string" ? item.id : undefined,
+  };
 }
 
 /**
@@ -200,7 +233,8 @@ export async function recordIncomingWebhookMessageWith(
   deps: WebhookStoreDeps,
   params: IncomingWebhookMessage,
 ): Promise<RecordResult> {
-  if (await findExistingMessage(deps, params.externalMessageId)) return { deduped: true };
+  const already = await findExistingMessage(deps, params.externalMessageId);
+  if (already) return { deduped: true, ...already };
 
   const now = deps.now();
   const preview = buildMessagePreview(params.body);

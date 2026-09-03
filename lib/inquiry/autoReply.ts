@@ -1,6 +1,8 @@
 import "server-only";
 import { getConversation, listMessages } from "@/lib/messaging/service";
 import { notifyInquiry, type NotifyResult } from "@/lib/messaging/lineNotify/service";
+import { buildDedupeKey } from "@/lib/messaging/lineNotify/deliveryPolicy";
+import { findDeliveryByDedupeKey } from "@/lib/messaging/lineNotify/deliveryStore";
 import { generateInquiryReplyDraft } from "./pipeline";
 import { saveReplyDraft } from "./draftStore";
 import { getAIReplySettings } from "./settings";
@@ -74,6 +76,16 @@ export async function processInquiryAndNotify(params: {
    * 顧客本文には混ぜない —— lib/inquiry/types.ts の productLookupText 参照。
    */
   productLookupHint?: string | null;
+  /**
+   * 既に通知済みなら、AIを呼ばずに終える。
+   *
+   * LINEの再送経路から呼ぶときに使う。再送は「一度目の処理が最後まで
+   * 進まなかったかもしれない」という機会である一方、**実際には通知まで
+   * 完了していることのほうが多い**。通知側の dedupeKey は二重送信を止めて
+   * くれるが、そこへ辿り着くまでにAIを1回呼んでしまう。課金と時間の無駄
+   * なので、先に通知の有無を見る。
+   */
+  skipIfAlreadyNotified?: boolean;
 }): Promise<AutoReplyResult> {
   try {
     const settings = await getAIReplySettings();
@@ -91,6 +103,19 @@ export async function processInquiryAndNotify(params: {
       : [...messages].reverse().find((m) => m.direction === "INBOUND");
     if (!target) {
       return { drafted: false, draft: null, notify: null, reason: "対象の受信メッセージが見つかりませんでした。" };
+    }
+
+    // 既に通知が済んでいるなら、ここで終える。AIを呼ぶ前に見る。
+    if (params.skipIfAlreadyNotified) {
+      const dedupeKey = buildDedupeKey({
+        channel: conversation.channel,
+        conversationId: conversation.id,
+        sourceMessageId: target.id,
+      });
+      const existing = await findDeliveryByDedupeKey(dedupeKey);
+      if (existing && (existing.status === "SENT" || existing.status === "PROCESSING")) {
+        return { drafted: false, draft: null, notify: null, reason: "この問い合わせは既に通知済みです。" };
+      }
     }
 
     const history = messages

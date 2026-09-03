@@ -66,7 +66,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const normalized = parseLineWebhookBody(body);
   // 保存に成功した受信メッセージ。保存ループの後でまとめて解析・通知する。
-  const processed: { conversationId: string; messageId: string }[] = [];
+  // retry=true は「既に取り込み済みだったもの」。通知が未完了の可能性が
+  // あるので処理はするが、通知済みならAIを呼ばずに終える。
+  const processed: { conversationId: string; messageId: string; retry: boolean }[] = [];
   let failedCount = 0;
   // 何で失敗したのかの種別だけを集める（中身は持たない）。
   const failures = new Set<WebhookStoreFailure>();
@@ -146,16 +148,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // **保存が終わってから**行う。ここから先が失敗しても、問い合わせ
       // そのものは既にDBにあるので失われない(§8)。
       //
-      // 再送(deduped)のときは何もしない。既に一度処理しているので、
-      // ここで走らせると同じ問い合わせをもう一度解析することになる
-      // (通知側の dedupeKey でも止まるが、AIの呼び出しは無駄になる)。
-      //
       // 【同期実行の理由】Next.js 14 には `after()` が無く、レスポンス後に
       // 処理を続ける安全な口が無い。awaitせずに投げるとLambdaの凍結で
       // 処理が消え、「通知したつもりで届いていない」状態になる。
       // 詳細は lib/inquiry/autoReply.ts の冒頭コメント参照。
+      //
+      // 【再送も処理の対象にする】以前は deduped を素通ししていたが、それだと
+      // 穴が残る: 初回で保存までは成功し、その後の解析・通知が実行時間の上限で
+      // 落ちた場合、LINEの再送は「重複」として弾かれ、**通知が永久に作られない**。
+      // 保存済みメッセージは画面に出るのにLINEには来ない、という気づきにくい
+      // 状態になる。再送を「やり直しの機会」として使い、
+      // skipIfAlreadyNotified で既に通知済みのものだけを弾く。
       if (!("deduped" in stored)) {
-        processed.push(stored);
+        processed.push({ ...stored, retry: false });
+      } else if (stored.conversationId && stored.messageId) {
+        processed.push({ conversationId: stored.conversationId, messageId: stored.messageId, retry: true });
       }
     } catch (err) {
       // 1件の失敗で他のイベントの処理を止めない — 残りは処理を続ける。
@@ -182,6 +189,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         conversationId: target.conversationId,
         sourceMessageId: target.messageId,
         who: null,
+        skipIfAlreadyNotified: target.retry,
       });
     } catch (err) {
       console.error("[line webhook] 解析・通知に失敗:", err instanceof Error ? err.message : err);
