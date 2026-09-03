@@ -36,6 +36,7 @@ import {
   knownFacts,
   type ConversationContext,
 } from "./conversationContext";
+import type { PendingQuestion, PendingQuestionField } from "./conversationContext";
 import { resolvePendingAnswers } from "./pendingAnswer";
 import { buildResolvedProductContext, shippingDimensionsOf, type ResolvedProductContext } from "./productContext";
 import { selectReplyRules, type ReplyRuleRecord } from "./replyRuleSelection";
@@ -88,6 +89,13 @@ export interface GenerateInquiryReplyResult {
   askedQuestions: string[];
   /** 今回のメッセージで解消した確認事項。通知に出す。 */
   answeredQuestions: string[];
+  /**
+   * 今回解消した確認事項の項目。**保存側がやり直しても同じ結果になるように**
+   * 文字列ではなく項目で返す(contextStore は競合時にマージをやり直す)。
+   */
+  resolvedPendingFields: PendingQuestionField[];
+  /** 今回新たに尋ねた確認事項。同上。 */
+  askedPendingQuestions: PendingQuestion[];
   /** 引き継いだ情報(§27 社内通知の「引き継いだ情報」)。 */
   carriedFacts: { label: string; value: string }[];
   /** 商品情報をどこから補完したか(§33)。 */
@@ -100,7 +108,13 @@ const CUSTOMER_SAFE_INVENTORY_FIELDS = ["商品名", "カテゴリー", "サイ�
 /** 会話文脈の項目を除いた返信結果。生成処理の中ではこの形で組み立てる。 */
 type BaseReplyResult = Omit<
   GenerateInquiryReplyResult,
-  "context" | "askedQuestions" | "answeredQuestions" | "carriedFacts" | "productContextNotes"
+  | "context"
+  | "askedQuestions"
+  | "answeredQuestions"
+  | "resolvedPendingFields"
+  | "askedPendingQuestions"
+  | "carriedFacts"
+  | "productContextNotes"
 >;
 
 export async function generateInquiryReplyDraft(request: InquiryReplyRequest): Promise<GenerateInquiryReplyResult> {
@@ -126,6 +140,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     pendingAnswers.map((a) => a.field),
   );
   const answeredQuestions = pendingAnswers.map((a) => a.reason);
+  const resolvedPendingFields = pendingAnswers.map((a) => a.field);
   let productContextNotes: string[] = [];
 
   /**
@@ -143,6 +158,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       context,
       askedQuestions: asked.map((a) => a.askedText),
       answeredQuestions,
+      resolvedPendingFields,
+      askedPendingQuestions: asked,
       carriedFacts,
       productContextNotes,
     };

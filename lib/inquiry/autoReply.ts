@@ -6,7 +6,7 @@ import { buildDedupeKey } from "@/lib/messaging/lineNotify/deliveryPolicy";
 import { findDeliveryByDedupeKey } from "@/lib/messaging/lineNotify/deliveryStore";
 import { generateInquiryReplyDraft } from "./pipeline";
 import { loadConversationContext, saveConversationContext } from "./contextStore";
-import { mergeConversationContext } from "./conversationContext";
+import { addPendingQuestions, clearPendingQuestions, mergeConversationContext } from "./conversationContext";
 import { saveReplyDraft } from "./draftStore";
 import { getAIReplySettings } from "./settings";
 import { detectDeliveryDateIntent, evaluateDeliveryWindow, extractRequestedDeliveryDate } from "./deliveryWindow";
@@ -256,10 +256,10 @@ export async function processInquiryAndNotify(params: {
     // 読み直して同じマージをやり直すので、両方の更新が残る。
     if (generated) {
       const result = generated;
-      const saved = await saveConversationContext(conversation.id, (current) =>
+      const saved = await saveConversationContext(conversation.id, (current) => {
         // current は競合時に読み直された最新値。そこへ**今回分かったことを
         // 足す**形で書く(上書きしない)。
-        mergeConversationContext(current, {
+        const merged = mergeConversationContext(current, {
           channel: result.context.channel,
           identifiedProduct: result.context.identifiedProduct,
           negotiation: result.context.negotiation,
@@ -268,18 +268,17 @@ export async function processInquiryAndNotify(params: {
           intents: result.context.intents,
           knowledgeDocumentIds: result.context.knowledgeDocumentIds,
           reviewReasons: result.context.reviewReasons,
-        }),
-      );
+        });
+        // 確認待ちは「解消した項目を落として、今回尋ねた項目を足す」。
+        // 今回の結果でまるごと置き換えると、競合してやり直したときに
+        // **相手が尋ねた確認事項を消してしまう**。差分で書けば、
+        // 何度やり直しても同じ結果になる。
+        return addPendingQuestions(
+          clearPendingQuestions(merged, result.resolvedPendingFields),
+          result.askedPendingQuestions,
+        );
+      });
       if (!saved.saved && saved.reason) contextIssues.push(saved.reason);
-      // 確認待ちの項目は「足す」ではなく「今回の結果で置き換える」。
-      // 解消した項目が残り続けると、次の関係ないメッセージを回答として
-      // 読んでしまう。競合時の再実行でも同じ結果になるので、マージの外で行う。
-      if (saved.saved) {
-        await saveConversationContext(conversation.id, (current) => ({
-          ...current,
-          pendingQuestions: result.context.pendingQuestions,
-        }));
-      }
     }
 
     // ── 通知 ──────────────────────────────────────────────────
