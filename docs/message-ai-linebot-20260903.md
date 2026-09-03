@@ -37,20 +37,41 @@ https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com/a
 
 保存先は Secrets Manager `bello/gmail-oauth`。
 
-### C. IAMポリシーの追加1件(Gmailを使う場合のみ)
+### C. AWS側の準備 — **すべて完了済み(大原さんの作業は不要)**
 
-`bello/line-notify-bot` の権限は付与済み。`bello/gmail-oauth` は**未付与**
-(作業中に権限操作がブロックされたため)。Gmail取り込みを使うときに以下を実行する。
+| 項目 | 状態 |
+|---|---|
+| `bello/line-notify-bot` のSecret作成 | 完了(ARN `...-Hp47Yk`) |
+| `bello/gmail-oauth` のSecret作成 | 完了(ARN `...-CwC8Te`) |
+| 実行ロールへの両ARN追加 | 完了(`BelloComputeRuntimeAccess`) |
+| 問い合わせ処理用のDynamoDB権限 | 完了(`BelloLineWebhookDataAccess`) |
+
+#### ここで2度踏んだ罠: 「Secretを先に作る」
+
+`bello/line-notify-bot` と `bello/gmail-oauth` の**両方**で、設定画面が
+
+> AWS Secrets Managerへのアクセス権限がありません。…GetSecretValue・PutSecretValue の権限を確認してください。
+
+というエラーを出した。しかし実測すると:
+
+```
+GetSecretValue  allowed
+PutSecretValue  allowed
+CreateSecret    implicitDeny  ← 実際に落ちていたのはここ
+```
+
+保存処理は `PutSecretValue` → ResourceNotFound → `CreateSecret` と進む。
+実行ロールに `CreateSecret` は**意図的に与えていない**(ZAICO/Mercari/LINEと
+同じ方針で、Secretは既存の外部リソースとして扱う)。
+
+**正しい対処は権限追加ではなく、Secretを空で先に作ること。**
 
 ```bash
-aws iam get-role-policy --role-name BelloAmplifyStagingComputeRole \
-  --policy-name BelloComputeRuntimeAccess --query PolicyDocument > pol.json
-# pol.json の Sid=BelloMercariAndLineSecretAccess の Resource へ
-#   arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/gmail-oauth-??????
-# を1行足してから
-aws iam put-role-policy --role-name BelloAmplifyStagingComputeRole \
-  --policy-name BelloComputeRuntimeAccess --policy-document file://pol.json
+aws secretsmanager create-secret --name bello/<用途> --secret-string '{"configured":false}'
 ```
+
+エラー文もどのAPIで落ちたかを含めるよう直したので、次に別のSecretを足すときは
+画面のメッセージだけで判断できる。
 
 > `put-role-policy` はポリシー全体を**置換**する。必ず現在の内容を読んでから足すこと
 > (`scripts/aws-setup/10-apply-compute-runtime-policy.ps1` は内容が古い。同ファイル冒頭の警告参照)。
