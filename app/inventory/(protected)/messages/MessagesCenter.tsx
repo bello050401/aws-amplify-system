@@ -5,10 +5,12 @@ import type { ConversationRecord } from "@/lib/messaging/types";
 import type { ReplyRuleRecord } from "@/lib/inquiry/replyRuleSelection";
 import type { NotificationDeliveryRecord } from "@/lib/messaging/lineNotify/deliveryStore";
 import type { NotifyBotStatus } from "@/app/actions/lineNotify";
+import type { GmailStatus } from "@/app/actions/mercariMail";
 import { MessagesInbox } from "./MessagesInbox";
 import { LineNotifyBotPanel } from "./LineNotifyBotPanel";
 import { ReplyRulesPanel } from "./ReplyRulesPanel";
 import { AiProcessingLogPanel } from "./AiProcessingLogPanel";
+import { MercariMailPanel } from "./MercariMailPanel";
 import { KnowledgeSettingsPanel } from "../settings/KnowledgeSettingsPanel";
 
 /**
@@ -32,11 +34,12 @@ import { KnowledgeSettingsPanel } from "../settings/KnowledgeSettingsPanel";
  * ので、そのまま置ける。同じ機能を2つ実装すると、片方だけ直す事故が起きる。
  */
 
-type TabKey = "inbox" | "linebot" | "rules" | "knowledge" | "logs";
+type TabKey = "inbox" | "linebot" | "mail" | "rules" | "knowledge" | "logs";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "inbox", label: "問い合わせ" },
   { key: "linebot", label: "LINE Bot" },
+  { key: "mail", label: "メール取込" },
   { key: "rules", label: "返信ルール" },
   { key: "knowledge", label: "ナレッジ" },
   { key: "logs", label: "AI処理ログ" },
@@ -47,6 +50,7 @@ export function MessagesCenter({
   canEdit,
   isAdmin,
   notifyStatus,
+  gmailStatus,
   replyRules,
   deliveries,
 }: {
@@ -54,6 +58,7 @@ export function MessagesCenter({
   canEdit: boolean;
   isAdmin: boolean;
   notifyStatus: NotifyBotStatus | null;
+  gmailStatus: GmailStatus | null;
   replyRules: ReplyRuleRecord[];
   deliveries: NotificationDeliveryRecord[];
 }) {
@@ -106,6 +111,14 @@ export function MessagesCenter({
           ) : (
             <p className="p-4 text-[12px] text-gray-500">
               社内通知Botの状態を読み込めませんでした。時間をおいて再読み込みしてください。
+            </p>
+          ))}
+        {tab === "mail" &&
+          (gmailStatus ? (
+            <MercariMailPanel status={gmailStatus} isAdmin={isAdmin} />
+          ) : (
+            <p className="p-4 text-[12px] text-gray-500">
+              メール取り込みの状態を読み込めませんでした。時間をおいて再読み込みしてください。
             </p>
           ))}
         {tab === "rules" && <ReplyRulesPanel rules={replyRules} isAdmin={isAdmin} />}

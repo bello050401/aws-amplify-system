@@ -103,8 +103,13 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // 今回の本文だけで特定できなかった場合に限り、過去の受信本文も足して
   // もう一度だけ試す —— 常に履歴を混ぜると、話題が変わった会話で
   // 古い商品を引きずる。
+  // 商品特定にだけ使うテキスト。メール経由の問い合わせでは、商品名・商品URLが
+  // 顧客の文面ではなくメールのメタ情報として届く(types.ts の
+  // productLookupText のコメント参照)。特定にはそちらを使い、
+  // **プロンプトへは messageText しか渡さない**。
+  const lookupText = request.productLookupText?.trim() || messageText;
   let resolution = await resolveProductFromInquiry({
-    messageText,
+    messageText: lookupText,
     overrideInventoryId: request.overrideInventoryId ?? null,
     conversationInventoryId: request.conversationInventoryId ?? null,
   });
@@ -112,7 +117,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     const inboundHistory = request.history.filter((h) => h.direction === "INBOUND").map((h) => h.body);
     if (inboundHistory.length > 0) {
       const retry = await resolveProductFromInquiry({
-        messageText: [...inboundHistory, messageText].join("\n"),
+        // 再試行でも特定用テキストを使う。ここだけ messageText に戻すと、
+        // メール経由の問い合わせで一度目に効いた手がかりが二度目に消える。
+        messageText: [...inboundHistory, lookupText].join("\n"),
         overrideInventoryId: request.overrideInventoryId ?? null,
         conversationInventoryId: request.conversationInventoryId ?? null,
       });

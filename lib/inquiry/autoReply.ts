@@ -69,6 +69,11 @@ export async function processInquiryAndNotify(params: {
   conversationId: string;
   sourceMessageId?: string | null;
   who: string | null;
+  /**
+   * 商品特定にだけ使う追加テキスト(メール経由の商品名・商品URL)。
+   * 顧客本文には混ぜない —— lib/inquiry/types.ts の productLookupText 参照。
+   */
+  productLookupHint?: string | null;
 }): Promise<AutoReplyResult> {
   try {
     const settings = await getAIReplySettings();
@@ -111,6 +116,7 @@ export async function processInquiryAndNotify(params: {
           messageText: target.body,
           history,
           conversationInventoryId: conversation.relatedInventoryId,
+          productLookupText: params.productLookupHint ?? null,
         });
       } catch (err) {
         // 生成の失敗で通知まで止めない(§34)。

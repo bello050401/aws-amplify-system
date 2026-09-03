@@ -357,4 +357,14 @@ export interface InquiryReplyRequest {
   overrideInventoryId?: string | null;
   /** 会話にあらかじめ紐づいている在庫ID(既存のConversation.relatedInventoryId)。 */
   conversationInventoryId?: string | null;
+  /**
+   * 商品特定にだけ使う追加テキスト。**顧客本文とは別扱いにする。**
+   *
+   * メルカリShopsの通知メールのように、顧客の文面とは別に商品名・商品URLが
+   * メタ情報として届く経路のためのもの。これを messageText へ混ぜると、
+   * AIが「顧客が商品URLを送ってきた」と読み、「お送りいただいたURLの
+   * 商品ですが」のような事実でない前置きを書く。特定にだけ使い、
+   * プロンプトへは渡さない。
+   */
+  productLookupText?: string | null;
 }

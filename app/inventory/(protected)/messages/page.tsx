@@ -2,6 +2,7 @@ import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInvento
 import { listConversationsAction } from "@/app/actions/messaging";
 import { getNotifyBotStatusAction, listRecentDeliveriesAction, type NotifyBotStatus } from "@/app/actions/lineNotify";
 import { listReplyRulesAction } from "@/app/actions/replyRules";
+import { getGmailStatusAction, type GmailStatus } from "@/app/actions/mercariMail";
 import type { ReplyRuleRecord } from "@/lib/inquiry/replyRuleSelection";
 import type { NotificationDeliveryRecord } from "@/lib/messaging/lineNotify/deliveryStore";
 import { InventoryHeader } from "../../InventoryHeader";
@@ -28,15 +29,17 @@ export default async function MessagesPage() {
   const role = await getInventoryRole();
   if (!role) return null;
 
-  const [conversationsResult, notifyResult, rulesResult, deliveriesResult] = await Promise.allSettled([
+  const [conversationsResult, notifyResult, gmailResult, rulesResult, deliveriesResult] = await Promise.allSettled([
     listConversationsAction(),
     getNotifyBotStatusAction(),
+    getGmailStatusAction(),
     listReplyRulesAction(),
     listRecentDeliveriesAction(50),
   ]);
 
   const conversations = conversationsResult.status === "fulfilled" ? conversationsResult.value : [];
   const notifyStatus: NotifyBotStatus | null = notifyResult.status === "fulfilled" ? notifyResult.value : null;
+  const gmailStatus: GmailStatus | null = gmailResult.status === "fulfilled" ? gmailResult.value : null;
   const replyRules: ReplyRuleRecord[] =
     rulesResult.status === "fulfilled" && rulesResult.value.ok ? rulesResult.value.data : [];
   const deliveries: NotificationDeliveryRecord[] =
@@ -47,6 +50,7 @@ export default async function MessagesPage() {
   for (const [label, result] of [
     ["会話一覧", conversationsResult],
     ["通知Bot状態", notifyResult],
+    ["メール取込状態", gmailResult],
     ["返信ルール", rulesResult],
     ["通知履歴", deliveriesResult],
   ] as const) {
@@ -77,6 +81,7 @@ export default async function MessagesPage() {
         canEdit={canEditInventory(role)}
         isAdmin={role === "ADMIN"}
         notifyStatus={notifyStatus}
+        gmailStatus={gmailStatus}
         replyRules={replyRules}
         deliveries={deliveries}
       />
