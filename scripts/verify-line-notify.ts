@@ -30,6 +30,7 @@ import {
   MAX_DELIVERY_ATTEMPTS,
 } from "@/lib/messaging/lineNotify/deliveryPolicy";
 import { decideReview } from "@/lib/messaging/lineNotify/reviewPolicy";
+import { decideNotifyRegistration, LINE_WEBHOOK_TEST_USER_ID } from "@/lib/messaging/lineNotify/registrationPolicy";
 import type { ReplyEvidence } from "@/lib/inquiry/types";
 
 let failures = 0;
@@ -431,6 +432,67 @@ function testReviewPolicy() {
   );
 }
 
+/**
+ * 通知先の登録判定。
+ *
+ * ここを間違えると**存在しない宛先が登録され、通知は「成功」したまま
+ * 誰にも届かない**。実機では気づけないので全分岐を固定する。
+ */
+function testRegistrationPolicy() {
+  const REAL_USER_ID = "U0123456789abcdef0123456789abcdef";
+
+  assertEqual(
+    decideNotifyRegistration({ type: "message", source: { type: "user", userId: REAL_USER_ID } }),
+    { action: "REGISTER", userId: REAL_USER_ID },
+    "登録判定: 通常のメッセージでも登録する(followの取りこぼし対策)",
+  );
+  assertEqual(
+    decideNotifyRegistration({ type: "follow", source: { type: "user", userId: REAL_USER_ID } }),
+    { action: "REGISTER", userId: REAL_USER_ID },
+    "登録判定: followでも登録する",
+  );
+  assertEqual(
+    decideNotifyRegistration({ type: "unfollow", source: { type: "user", userId: REAL_USER_ID } }),
+    { action: "CLEAR" },
+    "登録判定: ブロックされたら通知先を解除する",
+  );
+
+  // LINEの「検証」ボタンはダミーIDのmessageイベントを送ってくる。
+  // 任意イベントで登録する仕様にした結果、押しただけで壊れる状態だった。
+  const verify = decideNotifyRegistration({
+    type: "message",
+    source: { type: "user", userId: LINE_WEBHOOK_TEST_USER_ID },
+  });
+  assertEqual(verify.action, "IGNORE", "登録判定: Webhook検証のダミーIDは登録しない");
+  assertTrue(
+    verify.action === "IGNORE" && verify.reason.includes("通知先は変更していません"),
+    "登録判定: 検証を受信したことは記録に残す",
+  );
+
+  // 解除はID検査より先。ブロックされたのに宛先が残るほうが害が大きい。
+  assertEqual(
+    decideNotifyRegistration({ type: "unfollow", source: { type: "user", userId: LINE_WEBHOOK_TEST_USER_ID } }),
+    { action: "CLEAR" },
+    "登録判定: 解除はダミーID判定より優先する",
+  );
+
+  assertEqual(
+    decideNotifyRegistration({ type: "message", source: { type: "user", userId: "NOT-A-LINE-ID" } }).action,
+    "IGNORE",
+    "登録判定: 形式が違うIDは登録しない",
+  );
+  assertEqual(
+    decideNotifyRegistration({ type: "join", source: { type: "group", userId: REAL_USER_ID } }).action,
+    "IGNORE",
+    "登録判定: グループからのイベントは対象外(全員へ仕入価格が飛ぶのを防ぐ)",
+  );
+  assertEqual(
+    decideNotifyRegistration({ type: "message", source: { type: "user" } }).action,
+    "IGNORE",
+    "登録判定: userIdが無いイベントは対象外",
+  );
+}
+
 testSummaryTemplate();
 testLayout();
 testUnknownValues();
@@ -442,6 +504,7 @@ testDeliveryPolicy();
 testNotifyTargetSeparation();
 testInquiryKindHeader();
 testReviewPolicy();
+testRegistrationPolicy();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures > 0 ? 1 : 0);
