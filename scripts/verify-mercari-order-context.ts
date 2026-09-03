@@ -193,6 +193,7 @@ function baseRecord(): MercariOrderContextRecord {
     resolvedAt: null,
     evidenceSource: null,
     sourceGmailIds: [],
+    purchaseMailGmailIds: [],
     purchaseNotificationSeen: false,
     shopId: null,
     orderUrl: null,
@@ -211,11 +212,13 @@ function testCaseG_Idempotent() {
     evidenceSource: "PURCHASE_NOTIFICATION" as const,
     purchaseNotificationSeen: true,
     addSourceGmailIds: ["gmail-1"],
+    addPurchaseMailGmailIds: ["gmail-1"],
     addInquiryIds: [] as string[],
   };
   const once = mergeOrderContext(baseRecord(), patch);
   const twice = mergeOrderContext(once, patch);
   assertEqual(twice.sourceGmailIds, ["gmail-1"], "ケースG 同じメールを2回取り込んでも由来が重複しない");
+  assertEqual(twice.purchaseMailGmailIds, ["gmail-1"], "ケースG 購入通知の処理済み判定も重複しない");
   assertEqual(twice.productName, PRODUCT, "ケースG 商品名は変わらない");
   assertEqual(twice.orderId, ORDER_ID, "ケースG 行は1つのまま(識別子は注文番号)");
 }
@@ -229,6 +232,7 @@ function testCaseFH_DoesNotWipeKnownProduct() {
     purchaseNotificationSeen: true,
     inventoryStatus: "NOT_FOUND",
     addSourceGmailIds: ["gmail-1"],
+    addPurchaseMailGmailIds: ["gmail-1"],
   });
   // 後続の取引メッセージ。商品名も金額も入っていない。
   const afterMessage = mergeOrderContext(afterPurchase, {

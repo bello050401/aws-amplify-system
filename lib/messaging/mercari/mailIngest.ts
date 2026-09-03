@@ -152,7 +152,7 @@ export async function ingestMercariNotificationMails(params: {
   // ここを省くと、上限(MAX_PER_RUN)を購入通知が毎回食い潰し、本物の
   // 問い合わせが後回しになる。
   const orderContexts = await listAllMercariOrderContexts();
-  const seenPurchaseMailIds = new Set(orderContexts.flatMap((c) => c.sourceGmailIds));
+  const seenPurchaseMailIds = new Set(orderContexts.flatMap((c) => c.purchaseMailGmailIds));
 
   const unseen: string[] = [];
   for (const id of ids) {
@@ -216,18 +216,6 @@ export async function ingestMercariNotificationMails(params: {
         : null;
       const productName = restored?.productName ?? parsed.productName;
 
-      // 今回のメールから分かる注文情報を対応表へ足す(§51/§59)。
-      // 商品名が今回のメールにあるなら、在庫までここで解決して保存する
-      // —— 次の取引メッセージが再解析しなくて済む。
-      if (orderId) {
-        await recordOrderContextFromMail({
-          parsed: productName === parsed.productName ? parsed : { ...parsed, productName },
-          gmailId: mail.gmailId,
-          receivedAt: mail.receivedAt,
-          who: params.who,
-        });
-      }
-
       // ── 会話の鍵(§5) ────────────────────────────────────
       // 同じ問い合わせページ → 同じConversation。
       const externalCustomerId = conversationKeyFor(parsed, mail.messageId);
@@ -266,6 +254,22 @@ export async function ingestMercariNotificationMails(params: {
         result.ingested++;
       }
 
+      // 今回のメールから分かる注文情報を対応表へ足す(§51/§59)。
+      // 商品名が今回のメールにあるなら、在庫までここで解決して保存する
+      // —— 次の取引メッセージが再解析しなくて済む。
+      //
+      // **メッセージを保存した後に置く。** 先に書くと、メッセージの保存で
+      // 失敗したときに「このメールは処理済み」の痕跡だけが残りうる。
+      // 受信の記録より先に副次的な表を更新しない。
+      const orderRecord = orderId
+        ? await recordOrderContextFromMail({
+            parsed: productName === parsed.productName ? parsed : { ...parsed, productName },
+            gmailId: mail.gmailId,
+            receivedAt: mail.receivedAt,
+            who: params.who,
+          })
+        : null;
+
       await processInquiryAndNotifyUnauthenticated({
         conversationId,
         sourceMessageId: messageId,
@@ -295,9 +299,11 @@ export async function ingestMercariNotificationMails(params: {
               shippingFeeYen: parsed.order.shippingFeeYen,
               couponDiscountYen: parsed.order.couponDiscountYen,
               totalAmountYen: parsed.order.totalAmountYen,
-              inventoryId: restored?.record?.inventoryId ?? null,
-              baseItemId: restored?.record?.baseItemId ?? null,
-              baseUrl: restored?.record?.baseUrl ?? null,
+              // 今回の解決結果を優先する。restored は解決前の値なので、
+              // それだけを見ると「さっき特定できた在庫」を渡し損ねる。
+              inventoryId: orderRecord?.inventoryId ?? restored?.record?.inventoryId ?? null,
+              baseItemId: orderRecord?.baseItemId ?? restored?.record?.baseItemId ?? null,
+              baseUrl: orderRecord?.baseUrl ?? restored?.record?.baseUrl ?? null,
             }
           : null,
         // §50 どうやって商品名へ辿り着いたか。社内通知の「商品情報の補完」に出す。

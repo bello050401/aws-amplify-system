@@ -140,6 +140,7 @@ export async function restoreOrderProduct(params: {
         purchasedAt: parsed.kind === "PURCHASE_NOTIFICATION" ? mail.receivedAt : undefined,
         addInquiryIds: [parsed.inquiryId, params.inquiryId].filter((v): v is string => Boolean(v)),
         addSourceGmailIds: [mail.gmailId],
+        addPurchaseMailGmailIds: parsed.kind === "PURCHASE_NOTIFICATION" ? [mail.gmailId] : [],
       });
       return { orderId, productName: parsed.productName, source: "GMAIL_SEARCH", notes, record: saved };
     }
@@ -267,6 +268,10 @@ export async function recordOrderContextFromMail(params: {
     baseUrl: resolved?.baseUrl ?? undefined,
     addInquiryIds: parsed.inquiryId ? [parsed.inquiryId] : [],
     addSourceGmailIds: [params.gmailId],
+    // 取り込みの重複判定に使うのは**購入通知だけ**(§63 購入通知は Message を
+    // 作らない)。取引メッセージのIDまで入れると、Message の作成に失敗した
+    // 問い合わせが「処理済み」に見えて二度と取り込まれなくなる。
+    addPurchaseMailGmailIds: parsed.kind === "PURCHASE_NOTIFICATION" ? [params.gmailId] : [],
     updatedBy: params.who,
   });
 }

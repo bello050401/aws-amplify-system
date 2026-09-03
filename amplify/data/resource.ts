@@ -1290,8 +1290,17 @@ const schema = a.schema({
       resolvedAt: a.datetime(),
       /** 何を根拠にこの対応を作ったか("PURCHASE_NOTIFICATION"/"ORDER_MESSAGE"/"GMAIL_SEARCH")。 */
       evidenceSource: a.string(),
-      /** 由来のGmail message ID。同じメールを二度処理しないための鍵でもある。 */
+      /** 由来のGmail message ID(来歴)。どのメールからこの対応ができたかを追う。 */
       sourceGmailIds: a.string().array(),
+      /**
+       * 購入通知メールのGmail message ID。
+       *
+       * **来歴とは別に持つ。** 購入通知は Message を作らない(§63)ので、
+       * メッセージ側の重複判定に載らない。取り込みは「このIDは処理済みか」を
+       * ここで判定する。取引メッセージのIDまで混ぜると、Message の作成に
+       * 失敗した問い合わせが「処理済み」に見えて二度と取り込まれなくなる。
+       */
+      purchaseMailGmailIds: a.string().array(),
       /** 購入通知を取り込んだか。false なら取引メッセージ由来だけで作られた対応。 */
       purchaseNotificationSeen: a.boolean(),
       shopId: a.string(),

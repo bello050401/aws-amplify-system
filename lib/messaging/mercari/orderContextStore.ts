@@ -67,6 +67,8 @@ export interface MercariOrderContextRecord {
   resolvedAt: string | null;
   evidenceSource: OrderContextEvidenceSource | null;
   sourceGmailIds: string[];
+  /** 購入通知メールのGmail message ID。取り込みの重複判定に使う(来歴とは別)。 */
+  purchaseMailGmailIds: string[];
   purchaseNotificationSeen: boolean;
   shopId: string | null;
   orderUrl: string | null;
@@ -79,12 +81,17 @@ export interface MercariOrderContextRecord {
 
 /** 書き込む差分。**undefined は「今回は分からなかった」で既存値を消さない。** */
 export type OrderContextPatch = Partial<
-  Omit<MercariOrderContextRecord, "orderId" | "inquiryIds" | "sourceGmailIds" | "createdAt" | "updatedAt">
+  Omit<
+    MercariOrderContextRecord,
+    "orderId" | "inquiryIds" | "sourceGmailIds" | "purchaseMailGmailIds" | "createdAt" | "updatedAt"
+  >
 > & {
   /** 追加する問い合わせスレッドID(既存へ足す。置き換えない)。 */
   addInquiryIds?: string[];
   /** 追加するGmail message ID(既存へ足す)。 */
   addSourceGmailIds?: string[];
+  /** 追加する購入通知メールのGmail message ID(既存へ足す)。 */
+  addPurchaseMailGmailIds?: string[];
 };
 
 export interface OrderContextStoreDeps {
@@ -124,6 +131,7 @@ function emptyRecord(orderId: string): MercariOrderContextRecord {
     resolvedAt: null,
     evidenceSource: null,
     sourceGmailIds: [],
+    purchaseMailGmailIds: [],
     purchaseNotificationSeen: false,
     shopId: null,
     orderUrl: null,
@@ -161,6 +169,7 @@ function fromItem(item: Record<string, unknown>): MercariOrderContextRecord {
     resolvedAt: str(item.resolvedAt),
     evidenceSource: (str(item.evidenceSource) as OrderContextEvidenceSource | null) ?? null,
     sourceGmailIds: arr(item.sourceGmailIds),
+    purchaseMailGmailIds: arr(item.purchaseMailGmailIds),
     purchaseNotificationSeen: item.purchaseNotificationSeen === true,
     shopId: str(item.shopId),
     orderUrl: str(item.orderUrl),
@@ -190,6 +199,7 @@ export function mergeOrderContext(
     ...prev,
     inquiryIds: uniq([...prev.inquiryIds, ...(patch.addInquiryIds ?? [])]),
     sourceGmailIds: uniq([...prev.sourceGmailIds, ...(patch.addSourceGmailIds ?? [])]),
+    purchaseMailGmailIds: uniq([...prev.purchaseMailGmailIds, ...(patch.addPurchaseMailGmailIds ?? [])]),
     productName: keep(prev.productName, patch.productName),
     productPriceYen: keep(prev.productPriceYen, patch.productPriceYen),
     quantity: keep(prev.quantity, patch.quantity),
