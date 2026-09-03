@@ -1229,6 +1229,85 @@ const schema = a.schema({
       allow.group("VIEWER").to(["read"]),
     ]),
 
+  /**
+   * 2026-09-04 追加指示 §51/§64: **注文番号 → 商品** の対応表。
+   *
+   * ── なぜ要るのか(実際に起きたこと) ──────────────────────────────
+   *
+   * メルカリShopsの取引メッセージは、注文が進むにつれて手がかりが痩せる。
+   * 実データ(2026-09-03)では、同じ注文 order_2JW2rNd9i7WdFrivCjhfpw に
+   * ついて3通の取引メッセージが届き、社内通知はいずれも
+   * 「対象商品：特定できませんでした」だった —— **購入された商品は
+   * 「販売中」カテゴリから外れる**ので、商品名で在庫を探す既存の経路が
+   * 構造的に当たらない。
+   *
+   * 一方、購入が発生した時点で届く購入通知メールには**商品名と注文番号が
+   * 必ず揃っている**。そこで購入時点で対応を作って持っておき、以後の
+   * 取引メッセージはこの表を引くだけにする(§65 主経路)。
+   *
+   * ── なぜ Conversation に相乗りさせないのか ──────────────────────
+   *
+   * §53。inquiryId(会話スレッド)と orderId(注文)は別の識別子で、
+   * 1つの注文に複数の問い合わせスレッドが立ちうる。会話の行へ入れると、
+   * 別スレッドから同じ注文の商品を引けない —— まさにそれを可能にするのが
+   * この表の目的。会話側の inquiryContext は従来どおり会話ごとの文脈を
+   * 持ち続ける(役割が違うので二重管理にはならない)。
+   *
+   * 識別子は orderId そのもの。同じ注文のメールを何度取り込んでも
+   * 行が増えない(§70 ケースG)。
+   */
+  MercariOrderContext: a
+    .model({
+      /** `order_` 接頭辞を含む正規化済みの注文番号。 */
+      orderId: a.string().required(),
+      /**
+       * この注文に紐づく問い合わせスレッドID(複数ありうる)。
+       * §53「同じ注文について複数の問い合わせスレッドが発生する可能性」。
+       * 会話の主キーではない —— 会話は従来どおり inquiryId で決まる。
+       */
+      inquiryIds: a.string().array(),
+      /** メルカリShopsの出品タイトル。購入通知・取引メッセージのどちらからでも入る。 */
+      productName: a.string(),
+      productPriceYen: a.integer(),
+      quantity: a.integer(),
+      itemAmountYen: a.integer(),
+      shippingFeeYen: a.integer(),
+      couponDiscountYen: a.integer(),
+      totalAmountYen: a.integer(),
+      /** 顧客が希望した配送日(ISO日付)。取引メッセージから分かった場合に入る。 */
+      requestedDeliveryDate: a.string(),
+      /** 商品名から特定できたBELLO在庫。特定できなければ null のまま残す。 */
+      inventoryId: a.string(),
+      displayInventoryId: a.string(),
+      inventoryName: a.string(),
+      /** 1件に絞れなかったときの候補。捨てない(§24と同じ方針)。 */
+      inventoryCandidateIds: a.string().array(),
+      /** 在庫の特定状態("RESOLVED"/"AMBIGUOUS"/"NOT_FOUND"/"NONE")。 */
+      inventoryStatus: a.string(),
+      baseItemId: a.string(),
+      baseUrl: a.string(),
+      /** 商品の特定が最後に成立した時刻。未解決なら null。 */
+      resolvedAt: a.datetime(),
+      /** 何を根拠にこの対応を作ったか("PURCHASE_NOTIFICATION"/"ORDER_MESSAGE"/"GMAIL_SEARCH")。 */
+      evidenceSource: a.string(),
+      /** 由来のGmail message ID。同じメールを二度処理しないための鍵でもある。 */
+      sourceGmailIds: a.string().array(),
+      /** 購入通知を取り込んだか。false なら取引メッセージ由来だけで作られた対応。 */
+      purchaseNotificationSeen: a.boolean(),
+      shopId: a.string(),
+      orderUrl: a.string(),
+      /** 購入通知メールの受信時刻(= 実質の購入日時)。 */
+      purchasedAt: a.datetime(),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    .identifier(["orderId"])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
   // ─────────────────────────────────────────────────────────────────────
   // BELLO統合業務OS指示書(2026-08-30) §61-69: 家財おまかせ便(アート
   // セッティングデリバリー)の配送ランク・料金マスタ。発送元はBELLOの

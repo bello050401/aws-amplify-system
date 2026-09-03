@@ -154,7 +154,7 @@ async function main() {
     modelNumbers: [...new Set([...refs.modelNumbers, ...fromBase.modelNumbers])],
     brandNames: [...new Set([...refs.brandNames, ...fromBase.brandNames])],
     nameFragments: [...new Set([...refs.productNameFragments, ...fromBase.productNameFragments])],
-    baseTitles: [baseItem.title],
+    officialTitles: [baseItem.title],
   };
   const matchables: MatchableInventory[] = alive.map((r) => ({
     id: r.id,

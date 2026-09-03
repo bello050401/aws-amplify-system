@@ -161,6 +161,69 @@ export async function listMercariNotificationMailIds(maxResults = 30): Promise<{
 }
 
 /**
+ * 任意の検索条件でメールを取ってくる(本文まで)。
+ *
+ * 2026-09-04 追加指示 §56。**保存済みデータで復元できない場合の最後の
+ * 手段**として、注文番号でGmailを直接引くために使う:
+ *
+ *   "order_2JW2rNd9i7WdFrivCjhfpw" from:no-reply@mercari-shops.com
+ *
+ * ── 問い合わせのたびに呼ばない ──────────────────────────────────
+ *
+ * §56が明示している。ここを通常経路にすると、取り込みのたびに
+ * Gmailへの往復が1つ増え、しかも取れる情報は購入通知の時点で既に
+ * BELLOへ入っているはずのもの。呼び出し側(orderProductContext.ts)は
+ * 保存済みデータを先に見て、無いときだけここへ来る。
+ *
+ * 定期取り込みの検索条件(creds.query)とは独立に検索する ——
+ * 既定の条件は `newer_than:7d` で、過去の購入通知を探すには狭すぎる。
+ */
+export async function searchMercariMails(query: string, maxResults = 10): Promise<FetchedMail[]> {
+  const creds = await getGmailCredentials();
+  if (!creds) {
+    throw new GmailError(
+      "CONFIG_REQUIRED",
+      "Gmailの認証情報が設定されていません。設定画面からGoogle OAuthの認証情報を登録してください。",
+    );
+  }
+  const accessToken = await getAccessToken(creds);
+  const list = await apiGet<{ messages?: { id: string }[] }>(
+    `/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`,
+    accessToken,
+  );
+  const ids = (list.messages ?? []).map((m) => m.id);
+  return fetchMercariNotificationMailsByIds(ids);
+}
+
+/**
+ * 検索条件に合うメールのIDだけを取ってくる(条件を明示する版)。
+ *
+ * 既定の検索条件では届かない範囲(過去のメール)を対象にする
+ * バックフィル(§59/§67)から使う。
+ */
+export async function listMercariMailIdsByQuery(query: string, maxResults = 100): Promise<string[]> {
+  const creds = await getGmailCredentials();
+  if (!creds) {
+    throw new GmailError(
+      "CONFIG_REQUIRED",
+      "Gmailの認証情報が設定されていません。設定画面からGoogle OAuthの認証情報を登録してください。",
+    );
+  }
+  const accessToken = await getAccessToken(creds);
+  const ids: string[] = [];
+  let pageToken: string | undefined = undefined;
+  do {
+    const page: { messages?: { id: string }[]; nextPageToken?: string } = await apiGet(
+      `/messages?q=${encodeURIComponent(query)}&maxResults=100${pageToken ? `&pageToken=${pageToken}` : ""}`,
+      accessToken,
+    );
+    for (const m of page.messages ?? []) ids.push(m.id);
+    pageToken = page.nextPageToken;
+  } while (pageToken && ids.length < maxResults);
+  return ids.slice(0, maxResults);
+}
+
+/**
  * 指定したIDのメールを取ってくる。
  *
  * @param maxResults 1回の取り込みで処理する上限。多すぎると1回の実行が

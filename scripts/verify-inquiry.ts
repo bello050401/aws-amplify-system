@@ -879,7 +879,7 @@ function testBaseTitleMatching() {
   });
   const signals = {
     normalizedUrls: [], baseItemIds: ["155832757"], skus: [], inventoryIds: [],
-    modelNumbers: [], brandNames: [], nameFragments: [], baseTitles: [baseTitle],
+    modelNumbers: [], brandNames: [], nameFragments: [], officialTitles: [baseTitle],
   };
 
   const exact = scoreInventory(mk("【在庫2】" + baseTitle), signals);

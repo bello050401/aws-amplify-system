@@ -70,6 +70,17 @@ export interface NotificationInput {
   /** 取引メッセージの注文番号(§9 1通目に出す)。 */
   orderNumber?: string | null;
   /**
+   * 注文から確定している商品(2026-09-04 追加指示 §58)。
+   *
+   * メルカリShopsの注文では、商品名は注文そのものに載っている。BELLO在庫と
+   * 結び付けられなくても「どの商品か」は分かっているので、
+   * 「対象商品：特定できませんでした」と書くのは事実に反する。
+   *
+   * evidence とは別に受け取る —— 本文が取れずAI処理を行わなかった経路では
+   * evidence が null になるが、注文の商品名は分かっている。
+   */
+  orderProduct?: { productName: string; orderId: string } | null;
+  /**
    * 会話から引き継いだ情報(2026-09-03 追加指示 §27)。
    *
    * 後続メッセージだと、1通目に出るのが「埼玉です」だけになる。それでは
@@ -187,7 +198,10 @@ function baseOnlyFacts(evidence: ReplyEvidence | null | undefined): string | nul
  * 販売ページは顧客が指したものそのものなので確実に書ける。伏せるべきなのは
  * **どの在庫か**の一点だけなので、そこを候補として明示する。
  */
-function productLines(evidence: ReplyEvidence | null | undefined): (string | null)[] {
+function productLines(
+  evidence: ReplyEvidence | null | undefined,
+  orderProduct?: { productName: string; orderId: string } | null,
+): (string | null)[] {
   const product = evidence?.identifiedProduct ?? null;
   if (product) {
     // 同じ商品を傷の有無や在庫数で複数行に分けている場合、返信は1商品と
@@ -217,6 +231,28 @@ function productLines(evidence: ReplyEvidence | null | undefined): (string | nul
 
   const base = (evidence?.baseProducts ?? [])[0] ?? null;
   const candidates = evidence?.productCandidates ?? [];
+
+  // ── 注文から確定している商品(2026-09-04 追加指示 §58) ───────────
+  //
+  // 在庫もBASEも引けなくても、**注文の商品名は分かっている**。実データで
+  // 起きたのはまさにこれで、通知は「対象商品：特定できませんでした」の
+  // 一行だけだった —— メールには商品名も注文番号も載っていたのに。
+  // 未確定なのは「どのBELLO在庫か」の一点なので、そこだけを未確定と書く。
+  const channel = evidence?.channelProduct ?? null;
+  const channelName = channel?.productName ?? orderProduct?.productName ?? null;
+  const channelOrderId = channel?.orderId ?? orderProduct?.orderId ?? null;
+  if (!base && channelName) {
+    const ids = candidates.map((c) => c.displayInventoryId).filter((v): v is string => Boolean(v));
+    return [
+      "販売チャネルの商品：特定できました",
+      `商品名：${channelName}`,
+      channelOrderId ? `注文番号：${channelOrderId}` : null,
+      ids.length > 0
+        ? `在庫：特定できていません（候補${candidates.length}件：${ids.join(" / ")}）`
+        : "在庫：該当する在庫が見つかりません（お客様への確認は不要です。在庫データ側で確認してください）",
+    ];
+  }
+
   if (!base) {
     // 販売ページも分からない。候補だけはある場合、件数は出す
     // (「調べる必要がある」ことと「候補すら無い」ことは別の情報)。
@@ -274,6 +310,7 @@ export function buildSummaryMessage(input: NotificationInput): string {
   const product = input.evidence?.identifiedProduct ?? null;
   const shipping = input.evidence?.shipping ?? null;
   const ageDays = inventoryAgeDays(input.evidence);
+  const order = input.evidence?.channelProduct ?? null;
 
   const intentText =
     input.intents.length > 0 ? input.intents.map((i) => INQUIRY_INTENT_LABEL[i]).join("・") : UNKNOWN;
@@ -286,7 +323,7 @@ export function buildSummaryMessage(input: NotificationInput): string {
       "",
       truncate(input.messageText.trim(), QUOTED_BODY_LIMIT),
     ]),
-    section("対象商品", productLines(input.evidence)),
+    section("対象商品", productLines(input.evidence, input.orderProduct)),
     // 商品が決まっていないのに価格欄を出さない。空欄が並ぶと
     // 「取得に失敗した」のか「そもそも商品が決まっていない」のか読めない。
     product
@@ -316,7 +353,20 @@ export function buildSummaryMessage(input: NotificationInput): string {
     ]),
     // §9 取引メッセージなら注文番号を1通目に出す。担当者が管理画面で
     // 注文を引くときにそのまま使える。
-    input.orderNumber ? section("注文情報", [`注文番号：${input.orderNumber}`]) : null,
+    //
+    // §55 金額も出す。取れなかった項目は行ごと出さない —— 「送料：不明」は
+    // 「送料無料だったかもしれない」と読まれうるので、書かないほうが安全。
+    input.orderNumber
+      ? section("注文情報", [
+          `注文番号：${input.orderNumber}`,
+          order?.itemAmountYen == null ? null : `商品代金：${yen(order.itemAmountYen)}`,
+          order?.shippingFeeYen == null ? null : `送料：${yen(order.shippingFeeYen)}`,
+          order?.couponDiscountYen == null || order.couponDiscountYen === 0
+            ? null
+            : `クーポン割引：${yen(order.couponDiscountYen)}`,
+          order?.totalAmountYen == null ? null : `合計金額：${yen(order.totalAmountYen)}`,
+        ])
+      : null,
     // §27 引き継いだ情報。今回の判断に使った文脈だけを並べる ——
     // 会話の全履歴を貼ると、肝心の判断材料が下へ押し出されて読めなくなる。
     input.carriedFacts && input.carriedFacts.length > 0

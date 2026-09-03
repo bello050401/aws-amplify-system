@@ -51,6 +51,7 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
         `取り込み済み ${r.duplicated}件`,
         `対象外 ${r.skipped}件`,
       ];
+      if (r.purchaseNotifications > 0) parts.push(`購入通知 ${r.purchaseNotifications}件`);
       if (r.reprocessed > 0) parts.push(`再処理 ${r.reprocessed}件`);
       if (r.parseFailed > 0) parts.push(`解析失敗 ${r.parseFailed}件`);
       if (r.failed > 0) parts.push(`エラー ${r.failed}件`);

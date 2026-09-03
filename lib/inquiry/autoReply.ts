@@ -127,6 +127,16 @@ export async function processInquiryAndNotify(params: {
   orderNumber?: string | null;
   /** 販売チャネル側の正式な商品名(§4)。高信頼の照合へ渡す。 */
   productTitle?: string | null;
+  /**
+   * 購入済み注文の情報(2026-09-04 追加指示 §54/§55)。
+   * 会話文脈へ保持し、後続の短いメッセージでも注文と商品を失わない。
+   */
+  order?: import("./types").InquiryOrderInfo | null;
+  /**
+   * 商品情報の補完経路(§50)。注文番号からどう商品名へ辿り着いたかを
+   * 社内通知の1通目へそのまま出す。
+   */
+  productContextNotes?: string[];
 }): Promise<AutoReplyResult> {
   try {
     const settings = await getAIReplySettings();
@@ -214,6 +224,8 @@ export async function processInquiryAndNotify(params: {
           productLookupText: params.productLookupHint ?? null,
           productTitle: params.productTitle ?? null,
           additionalContext: params.additionalContext ?? null,
+          order: params.order ?? null,
+          productContextNotes: params.productContextNotes ?? [],
         });
       } catch (err) {
         // 生成の失敗で通知まで止めない(§34)。
@@ -302,7 +314,16 @@ export async function processInquiryAndNotify(params: {
       // 担当者は判断できない。
       carriedFacts: generated?.carriedFacts ?? [],
       answeredQuestions: generated?.answeredQuestions ?? [],
-      productContextNotes: generated?.productContextNotes ?? [],
+      // 生成まで進めなかった場合(§3 本文が取れない等)でも、注文番号から
+      // 商品名をどう復元したかは担当者にとって判断材料になる。
+      productContextNotes: generated?.productContextNotes ?? params.productContextNotes ?? [],
+      // §58 商品Contextを復元できたら、社内通知にも商品情報を出す。
+      // evidence が無い経路(生成をしなかった場合)でも出せるよう、
+      // 生成結果とは別に渡す。
+      orderProduct:
+        params.order && params.order.productName
+          ? { productName: params.order.productName, orderId: params.order.orderId }
+          : null,
       contextIssues,
       failureReason,
       createdBy: params.who,

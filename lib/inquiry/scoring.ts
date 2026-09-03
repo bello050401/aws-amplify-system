@@ -41,12 +41,16 @@ export interface MatchSignals {
   brandNames: string[];
   nameFragments: string[];
   /**
-   * URLから**IDで確定的に**引き当てたBASE過去商品の商品名。
+   * 販売チャネル側の**正式な出品タイトル**。
+   *
+   * 出所は2つある。どちらも「BELLOが自分の在庫名から起こした出品タイトル」
+   * という同じ性質なので、同じ扱いにする:
+   *
+   *   ・BASE商品URLから**IDで確定的に**引き当てたBASE商品のタイトル
+   *   ・メルカリShopsの通知メールに載っている出品タイトル(2026-09-04 §64)
    *
    * 顧客が本文へ書いた語(nameFragments)とは性質がまったく違う。
-   * こちらは「このBASE商品ページの正式なタイトル」で、BELLOが自分の
-   * 在庫名から起こしたものなので、在庫名との一致は同一性の強い証拠に
-   * なる。実データで確認した例:
+   * 在庫名との一致は同一性の強い証拠になる。実データで確認した例:
    *
    *   BASE 155832757 : "HAY REVOLVER BAR STOOL HIGH / デンマーク 北欧 …"
    *   Inventory B005611: "【在庫2】HAY REVOLVER BAR STOOL HIGH / デンマーク 北欧 …"
@@ -56,7 +60,7 @@ export interface MatchSignals {
    * 弱い手がかりの積み上げ(合計0.52)では候補の下限0.60にすら届かず、
    * 「候補0件」になっていた —— 正しい在庫が目の前にあるのに。
    */
-  baseTitles?: string[];
+  officialTitles?: string[];
 }
 
 /**
@@ -85,9 +89,9 @@ const SCORE_NAME_FRAGMENT_MAX = 0.32;
 export const WEAK_SIGNAL_SCORE_CAP = 0.92;
 
 /**
- * BASE商品名との一致の配点。
+ * 出品タイトルとの一致の配点。
  *
- * 完全一致(正規化後)は同一性を保証する扱いにする —— BASEの商品ページは
+ * 完全一致(正規化後)は同一性を保証する扱いにする —— 出品ページは
  * BELLOが自分の在庫名から起こしているため。同名の在庫が2件あれば両方が
  * 同点になるが、それは mergeSameProduct が**1件へまとめてから**
  * decideResolution へ渡す。BELLOは同じ商品を傷の有無や在庫数で行に
@@ -98,11 +102,42 @@ export const WEAK_SIGNAL_SCORE_CAP = 0.92;
  * **芯が違う商品どうしは今も同点のまま AMBIGUOUS になる。**
  * まとめるのは「先頭の【】を落とすと同じ文字列になるもの」だけ。
  */
-const SCORE_BASE_TITLE_EXACT = 0.96;
-const SCORE_BASE_TITLE_NEAR = 0.85;
-const SCORE_BASE_TITLE_PARTIAL = 0.7;
-const BASE_TITLE_NEAR_THRESHOLD = 0.85;
-const BASE_TITLE_PARTIAL_THRESHOLD = 0.6;
+const SCORE_OFFICIAL_TITLE_EXACT = 0.96;
+const SCORE_OFFICIAL_TITLE_NEAR = 0.85;
+const SCORE_OFFICIAL_TITLE_PARTIAL = 0.7;
+const OFFICIAL_TITLE_NEAR_THRESHOLD = 0.85;
+const OFFICIAL_TITLE_PARTIAL_THRESHOLD = 0.6;
+
+/**
+ * 出品タイトルの一致を理由文の**先頭**で見分けるための語。
+ *
+ * 「販売中に無い在庫まで探しに行ってよいのは、出品タイトルで一致した
+ * ときだけ」という絞り込み(productResolver)がこの語に依存している。
+ * 文言を変えるとその絞り込みが黙って全通しになるので、定数にして
+ * 両方から参照する。
+ */
+export const OFFICIAL_TITLE_MATCH_PREFIX = "出品タイトルと";
+
+/**
+ * 在庫名が**出品タイトルを丸ごと含む**ときの配点。完全一致と同じ扱い。
+ *
+ * ── なぜ必要か(実データ 2026-09-04) ────────────────────────────
+ *
+ * BELLOの在庫名は、出品タイトルの前後に社内の注記が付く。【】で囲まれた
+ * ものは normalizeProductTitle が落とすが、囲まれていない注記もある:
+ *
+ *   出品タイトル : "BoConcept Lugo / 北欧 デンマーク Morten Georgsen 名作 …"
+ *   在庫 B005614 : "EDI登録済【9/3午前中】BoConcept Lugo / 北欧 デンマーク Morten Georgsen 名作 …"
+ *
+ * 語の集合で見ると 93% 一致で「ほぼ一致(0.85)」止まりになり、確定
+ * (0.95)に届かない。一方で在庫 B005186 は語順と語が実際に違う別個体で、
+ * こちらは 67% の「部分一致」。**タイトルが連続した部分文字列として
+ * まるごと入っている**というのは、語の重なり率とは質の違う証拠 ——
+ * 出品タイトルは在庫名から起こしたものなので、丸ごと含むなら同じ商品。
+ *
+ * 短いタイトルで誤爆しないよう、語数の下限を置く。
+ */
+const OFFICIAL_TITLE_CONTAINED_MIN_TOKENS = 4;
 
 /**
  * 商品名を比較できる形へ。
@@ -191,25 +226,37 @@ export function scoreInventory(inv: MatchableInventory, signals: MatchSignals): 
     reasons.push("バーコードが一致");
   }
 
-  // ── BASE商品名との一致(URLからIDで確定的に引いたタイトル) ────
-  if (signals.baseTitles && signals.baseTitles.length > 0) {
+  // ── 出品タイトルとの一致(BASE商品ページ / メルカリShopsの出品タイトル) ──
+  if (signals.officialTitles && signals.officialTitles.length > 0) {
     const invTitle = normalizeProductTitle(inv.name);
     let best = 0;
     let bestReason = "";
-    for (const raw of signals.baseTitles) {
-      const baseTitle = normalizeProductTitle(raw);
-      if (!baseTitle || !invTitle) continue;
-      if (baseTitle === invTitle) {
-        if (SCORE_BASE_TITLE_EXACT > best) { best = SCORE_BASE_TITLE_EXACT; bestReason = "BASE商品ページの商品名と完全に一致"; }
+    for (const raw of signals.officialTitles) {
+      const officialTitle = normalizeProductTitle(raw);
+      if (!officialTitle || !invTitle) continue;
+      if (officialTitle === invTitle) {
+        if (SCORE_OFFICIAL_TITLE_EXACT > best) {
+          best = SCORE_OFFICIAL_TITLE_EXACT;
+          bestReason = `${OFFICIAL_TITLE_MATCH_PREFIX}完全に一致`;
+        }
         continue;
       }
-      const overlap = titleOverlap(baseTitle, invTitle);
-      if (overlap >= BASE_TITLE_NEAR_THRESHOLD && SCORE_BASE_TITLE_NEAR > best) {
-        best = SCORE_BASE_TITLE_NEAR;
-        bestReason = `BASE商品ページの商品名とほぼ一致(語の重なり ${(overlap * 100).toFixed(0)}%)`;
-      } else if (overlap >= BASE_TITLE_PARTIAL_THRESHOLD && SCORE_BASE_TITLE_PARTIAL > best) {
-        best = SCORE_BASE_TITLE_PARTIAL;
-        bestReason = `BASE商品ページの商品名と部分的に一致(語の重なり ${(overlap * 100).toFixed(0)}%)`;
+      // 在庫名が出品タイトルを丸ごと含む(社内注記が前後に付いただけ)。
+      const tokenCount = officialTitle.split(" ").filter(Boolean).length;
+      if (tokenCount >= OFFICIAL_TITLE_CONTAINED_MIN_TOKENS && invTitle.includes(officialTitle)) {
+        if (SCORE_OFFICIAL_TITLE_EXACT > best) {
+          best = SCORE_OFFICIAL_TITLE_EXACT;
+          bestReason = `${OFFICIAL_TITLE_MATCH_PREFIX}一致(在庫名に社内の注記が付いたもの)`;
+        }
+        continue;
+      }
+      const overlap = titleOverlap(officialTitle, invTitle);
+      if (overlap >= OFFICIAL_TITLE_NEAR_THRESHOLD && SCORE_OFFICIAL_TITLE_NEAR > best) {
+        best = SCORE_OFFICIAL_TITLE_NEAR;
+        bestReason = `${OFFICIAL_TITLE_MATCH_PREFIX}ほぼ一致(語の重なり ${(overlap * 100).toFixed(0)}%)`;
+      } else if (overlap >= OFFICIAL_TITLE_PARTIAL_THRESHOLD && SCORE_OFFICIAL_TITLE_PARTIAL > best) {
+        best = SCORE_OFFICIAL_TITLE_PARTIAL;
+        bestReason = `${OFFICIAL_TITLE_MATCH_PREFIX}部分的に一致(語の重なり ${(overlap * 100).toFixed(0)}%)`;
       }
     }
     if (best > 0) {

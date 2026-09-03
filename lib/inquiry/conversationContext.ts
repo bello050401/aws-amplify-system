@@ -66,6 +66,14 @@ export interface IdentifiedProductContext {
   baseItemUrl: string | null;
   /** BASE側の商品名。在庫が確定していなくても分かる。 */
   baseProductName: string | null;
+  /**
+   * 販売チャネル側の出品タイトル(2026-09-04 追加指示 §55)。
+   *
+   * メルカリShopsの注文では、商品名は注文そのものに載っている。
+   * BASE商品でも在庫でもない**第三の確定情報**なので、別に持つ。
+   * これを持たないと、後続の短いメッセージで商品名を失う。
+   */
+  channelProductName: string | null;
   baseListedPriceYen: number | null;
   /** BASE商品として特定できているか。 */
   baseStatus: "RESOLVED" | "AMBIGUOUS" | "NOT_FOUND" | "NONE";
@@ -99,10 +107,21 @@ export interface ShippingContextState {
   rank: string | null;
 }
 
+/**
+ * 注文の文脈(2026-09-04 追加指示 §55)。
+ *
+ * 「11日の午前中でお願いします」だけの後続メッセージで、どの注文・
+ * いくらの取引だったかを失わないために持つ。金額は**取れなかったら null**
+ * にする(0にしない) —— 送料0円と「送料の記載が無い」は別物。
+ */
 export interface OrderContextState {
   orderId: string | null;
   /** ISO日付(YYYY-MM-DD)。 */
   requestedDeliveryDate: string | null;
+  itemAmountYen: number | null;
+  shippingFeeYen: number | null;
+  couponDiscountYen: number | null;
+  totalAmountYen: number | null;
 }
 
 /**
@@ -139,6 +158,7 @@ export function emptyConversationContext(): ConversationContext {
       baseItemId: null,
       baseItemUrl: null,
       baseProductName: null,
+      channelProductName: null,
       baseListedPriceYen: null,
       baseStatus: "NONE",
       inventoryId: null,
@@ -157,7 +177,14 @@ export function emptyConversationContext(): ConversationContext {
       currentUnitPriceYen: null,
     },
     shipping: { prefecture: null, cityHint: null, estimatedShippingCostYen: null, rank: null },
-    order: { orderId: null, requestedDeliveryDate: null },
+    order: {
+      orderId: null,
+      requestedDeliveryDate: null,
+      itemAmountYen: null,
+      shippingFeeYen: null,
+      couponDiscountYen: null,
+      totalAmountYen: null,
+    },
     intents: [],
     pendingQuestions: [],
     appliedReplyRuleIds: [],
@@ -324,7 +351,9 @@ export function switchesProduct(context: ConversationContext, currentBaseItemIds
 export function knownFacts(context: ConversationContext): { label: string; value: string }[] {
   const p = context.identifiedProduct;
   const out: { label: string; value: string }[] = [];
-  const name = p.inventoryName ?? p.baseProductName;
+  // 出品タイトルは注文そのものに載っている確定情報なので、在庫やBASEを
+  // 引けなくても「どの商品か」は分かっている(§54/§55)。
+  const name = p.inventoryName ?? p.baseProductName ?? p.channelProductName;
   if (name) out.push({ label: "対象商品", value: name });
   if (p.baseItemUrl) out.push({ label: "商品URL", value: p.baseItemUrl });
   else if (p.baseItemId) out.push({ label: "BASE商品ID", value: p.baseItemId });
