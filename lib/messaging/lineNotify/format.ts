@@ -102,11 +102,19 @@ function inventoryAgeDays(evidence: ReplyEvidence | null): number | null {
   return days >= 0 ? days : null;
 }
 
-/** ■見出しと中身。中身が1行も無いセクションは丸ごと出さない(空見出しを残さない)。 */
+/**
+ * ■見出しと中身。中身が1行も無いセクションは丸ごと出さない(空見出しを残さない)。
+ *
+ * **null と空文字を区別する。** null は「その行は出さない」、空文字は
+ * 「意図的な空行」。§7-1 のテンプレートはお名前と本文の間に空行を置いて
+ * いて、そこを詰めると読みづらくなる(名前と問い合わせ文が続けて並ぶ)。
+ * 一律に空文字も落とすと、その空行まで消える。
+ */
 function section(heading: string, lines: (string | null)[]): string | null {
-  const body = lines.filter((l): l is string => l !== null && l !== "");
-  if (body.length === 0) return null;
-  return [`■ ${heading}`, ...body].join("\n");
+  const kept = lines.filter((l): l is string => l !== null);
+  // 実際に中身がある行が1つも無ければ、見出しごと出さない。
+  if (kept.every((l) => l.trim() === "")) return null;
+  return [`■ ${heading}`, ...kept].join("\n");
 }
 
 /**
@@ -128,9 +136,9 @@ export function buildSummaryMessage(input: NotificationInput): string {
   const intentText =
     input.intents.length > 0 ? input.intents.map((i) => INQUIRY_INTENT_LABEL[i]).join("・") : UNKNOWN;
 
+  // 各要素は "\n\n" で連結する。ここへ空文字を挟むと空行が2つ並ぶ。
   const parts: (string | null)[] = [
     header,
-    "",
     section("お問い合わせ内容", [
       `お名前：${input.customerName ?? UNKNOWN}`,
       "",

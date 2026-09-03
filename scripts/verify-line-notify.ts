@@ -140,6 +140,31 @@ function testSummaryTemplate() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 体裁 — §7-1 のテンプレートは空行の位置まで含めて指定されている
+ *
+ * 実データで通したとき、見出し直後に空行が2つ入り、お名前と本文の間の
+ * 空行が消えていた。読めなくはないが、指定と違ううえ、名前と問い合わせ文が
+ * 続けて並ぶと読みづらい。体裁も固定する。
+ * ══════════════════════════════════════════════════════════════════ */
+function testLayout() {
+  const s = buildSummaryMessage(baseInput());
+  const lines = s.split("\n");
+
+  assertEqual(lines[0], "【メルカリShops】", "体裁: 1行目はチャネル見出し");
+  assertEqual(lines[1], "", "体裁: 見出しの次は空行1つ");
+  assertEqual(lines[2], "■ お問い合わせ内容", "体裁: 空行は1つだけ(2つ続けない)");
+  assertEqual(lines[3], "お名前：山田様", "体裁: お名前が見出しの直後");
+  assertEqual(lines[4], "", "体裁: お名前と本文の間に空行を残す(§7-1のテンプレート)");
+  assertEqual(lines[5], "埼玉県なのですが、お値下げ可能でしょうか。", "体裁: 本文が続く");
+
+  // 空行が3つ以上続く箇所が無いこと。
+  assertTrue(!/\n{3,}/.test(s), "体裁: 空行が2つ以上続かない");
+
+  // セクション同士は空行1つで区切る。
+  assertTrue(s.includes("\n\n■ 対象商品"), "体裁: セクションの前は空行1つ");
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * §7-2 推測して埋めない
  * ══════════════════════════════════════════════════════════════════ */
 function testUnknownValues() {
@@ -357,6 +382,7 @@ function testReviewPolicy() {
 }
 
 testSummaryTemplate();
+testLayout();
 testUnknownValues();
 testHumanReviewHeader();
 testFailureNotification();
