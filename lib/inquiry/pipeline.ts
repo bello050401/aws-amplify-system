@@ -3,7 +3,7 @@ import { generateText } from "@/lib/ai/gateway/gateway";
 import { buildCustomerSafeFacts, type CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
 import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
 import { lookupShippingRate } from "@/lib/shipping/service";
-import { calculateShippingRankFromDimensions } from "@/lib/shipping/rank";
+import { calculateShippingRankFromDimensions, SHIPPING_RANKS, type ShippingRank } from "@/lib/shipping/rank";
 import { listSearchableKnowledge } from "@/lib/knowledge/store";
 import { retrieveKnowledge } from "@/lib/knowledge/retrieval";
 import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./intent";
@@ -560,6 +560,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       cityHint: destinationCityHint,
       dimensions: mergedDimensions,
       productResolved: inventory != null || productContext.identity.baseItemId != null,
+      // 寸法が読めない商品でも、説明文にランクが書かれていれば送料は出せる。
+      declaredRank: productContext.shipping.declaredRank,
     });
     for (const missing of shipping.missingCustomerInfo) {
       // 交渉では市区町村まで求めない —— 指示書§4が求めているのは
@@ -977,6 +979,16 @@ async function resolveShipping(params: {
   dimensions: { width: string | null; depth: string | null; height: string | null };
   /** 商品が特定できているか(不足情報の案内文の出し分けに使う)。 */
   productResolved: boolean;
+  /**
+   * BASEの商品説明に明記されていた配送ランク(2026-09-03 実測)。
+   *
+   * 寸法から推定するより**こちらが正確**。BELLOが商品ごとに決めて
+   * 説明文へ書いた値そのもので、推定ではない。
+   * 円形スツール(座面直径34cm / 脚幅44cm / 高さ75cm)のように
+   * 幅・奥行・高さの3辺で書かれていない商品では寸法抽出が成立せず、
+   * 「想定送料：不明」になっていたが、説明文にはランクが明記されていた。
+   */
+  declaredRank?: { rank: string; matchedText: string } | null;
 }): Promise<ShippingEvidence> {
   const dims = calculateShippingRankFromDimensions(
     params.dimensions.width,
@@ -984,50 +996,67 @@ async function resolveShipping(params: {
     params.dimensions.height,
   );
 
+  // 寸法から出せるならそれを使い、出せないときだけ明記されたランクを使う。
+  // 3辺がそろっているなら実測に基づく計算のほうが追跡しやすいため。
+  // 明記されたランクは文字列なので、料金マスタが知っている値だけを通す。
+  // 未知の文字列をそのまま渡すと、料金が引けずに「未登録」と報告され、
+  // 原因が説明文の表記ゆれなのかマスタ不足なのか分からなくなる。
+  const declared = params.declaredRank && (SHIPPING_RANKS as string[]).includes(params.declaredRank.rank)
+    ? (params.declaredRank.rank as ShippingRank)
+    : null;
+  const rank: ShippingRank | null = dims?.rank ?? declared;
+
   const missing = missingShippingInfo({
     productResolved: params.productResolved,
     destinationPrefecture: params.destinationPrefecture,
     cityHint: params.cityHint,
-    hasDimensions: dims != null,
+    hasDimensions: rank != null,
   });
 
-  if (!params.destinationPrefecture || !dims) {
+  if (!params.destinationPrefecture || !rank) {
     return {
       destinationPrefecture: params.destinationPrefecture,
-      rank: dims?.rank ?? null,
+      rank,
       feeYen: null,
       note: !params.destinationPrefecture
         ? "お届け先が特定できないため、金額を出していません。"
-        : "在庫にもBASE商品ページにも送料判定に使える寸法が無いため、配送ランクを判定できません。",
+        : "在庫にもBASE商品ページにも、送料判定に使える寸法・配送ランクの記載がありません。",
       missingCustomerInfo: missing,
     };
   }
 
-  const rate = await lookupShippingRate(params.destinationPrefecture, dims.rank);
+  const rate = await lookupShippingRate(params.destinationPrefecture, rank);
   if (!rate) {
     return {
       destinationPrefecture: params.destinationPrefecture,
-      rank: dims.rank,
+      rank,
       feeYen: null,
-      note: `埼玉県 → ${params.destinationPrefecture}・${dims.rank}ランクの料金が料金マスタに未登録です。`,
+      note: `埼玉県 → ${params.destinationPrefecture}・${rank}ランクの料金が料金マスタに未登録です。`,
       missingCustomerInfo: missing,
     };
   }
   if (rate.price == null) {
     return {
       destinationPrefecture: params.destinationPrefecture,
-      rank: dims.rank,
+      rank,
       feeYen: null,
-      note: `埼玉県 → ${params.destinationPrefecture}・${dims.rank}ランクは公式にサービス対象外と確認されています。`,
+      note: `埼玉県 → ${params.destinationPrefecture}・${rank}ランクは公式にサービス対象外と確認されています。`,
       missingCustomerInfo: missing,
     };
   }
   return {
     destinationPrefecture: params.destinationPrefecture,
-    rank: dims.rank,
+    rank,
     feeYen: rate.price + (rate.surcharge ?? 0),
     // 市区町村が分からない段階の金額は参考値。確定額として案内させない。
-    note: params.cityHint ? null : "都道府県のみで引いた参考額です。市区町村により変わる場合があります。",
+    // ランクを説明文から読んだ場合はそれも書く —— 担当者が金額の根拠を
+    // 追えるようにするため(寸法から計算したのか、記載を読んだのか)。
+    note: [
+      params.cityHint ? null : "都道府県のみで引いた参考額です。市区町村により変わる場合があります。",
+      dims ? null : declared ? `配送ランクはBASEの商品説明の「${params.declaredRank?.matchedText}」から読み取りました。` : null,
+    ]
+      .filter(Boolean)
+      .join(" ") || null,
     missingCustomerInfo: missing,
   };
 }

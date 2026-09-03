@@ -44,6 +44,7 @@ import {
   descriptionToPlainText,
   extractAttributesFromText,
   extractDimensionsFromText,
+  extractShippingRankFromText,
   type DimensionConfidence,
 } from "./productDetailExtraction";
 
@@ -126,6 +127,14 @@ export interface ResolvedProductContext {
     sumCm: number | null;
     /** どの出典の寸法で計算したか(§33)。 */
     sizeSource: ProductFieldSource | null;
+    /**
+     * BASEの商品説明に明記されていた配送ランク。
+     *
+     * 寸法が3辺そろわない商品(円形スツール等)でも、説明文にランクが
+     * 書かれていれば送料を出せる。推定ではなくBELLOが決めた値なので、
+     * 寸法から起こすより正確。
+     */
+    declaredRank: { rank: string; matchedText: string } | null;
   };
   sources: {
     inventory: boolean;
@@ -284,6 +293,17 @@ export async function buildResolvedProductContext(
       ? calculateShippingRankFromDimensions(dimensions.width.value, dimensions.depth.value, dimensions.height.value)
       : null;
 
+  // ── 明記された配送ランク ──────────────────────────────────────
+  //
+  // 寸法が読めない商品でも、説明文にランクが書かれていれば送料は出せる。
+  // 実測: HAY REVOLVER BAR STOOL は「座面直径34cm / 脚幅44cm / 高さ75cm」で
+  // 幅・奥行・高さの3辺が無く寸法抽出が null になり「想定送料：不明」に
+  // なっていたが、同じ説明文に「家財おまかせ便Bランク」と明記されていた。
+  const declaredRank = baseText ? extractShippingRankFromText(baseText) : null;
+  if (!rankResult && declaredRank) {
+    completionNotes.push(`配送ランク：BASEの商品説明の「${declaredRank.matchedText}」から読み取りました。`);
+  }
+
   // ── 属性(§31) ─────────────────────────────────────────────────
   const attributes = baseText ? extractAttributesFromText(baseText) : null;
 
@@ -333,9 +353,10 @@ export async function buildResolvedProductContext(
       statusName: inventory?.statusName ?? null,
     },
     shipping: {
-      rank: rankResult?.rank ?? null,
+      rank: rankResult?.rank ?? declaredRank?.rank ?? null,
       sumCm: rankResult?.sumCm ?? null,
       sizeSource,
+      declaredRank,
     },
     sources: {
       inventory: inventory != null,

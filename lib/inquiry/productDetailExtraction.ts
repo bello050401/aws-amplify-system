@@ -253,3 +253,45 @@ export function descriptionToPlainText(raw: string | null | undefined): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+/**
+ * 商品説明に書かれている配送ランクを読み取る。
+ *
+ * ── なぜ寸法より優先するのか(2026-09-03 実測) ────────────────────
+ *
+ * BELLOのBASE商品説明には、発送方法としてランクがそのまま書かれている:
+ *
+ *   埼玉県より、家財おまかせ便Bランク、または、自社での配送を予定しております。
+ *
+ * これは**BELLOが商品ごとに決めた値**であって、寸法から推定した結果では
+ * ない。寸法からの推定は、
+ *
+ *   - 円形スツール(座面直径34cm / 脚幅44cm / 高さ75cm)のように
+ *     幅・奥行・高さの3辺で書かれていない商品では取れない
+ *   - 取れても、脚の張り出しや梱包の実寸とはずれる
+ *
+ * ため、書いてあるならそちらを使うほうが正確で、取りこぼしも少ない。
+ * 実際、HAY REVOLVER BAR STOOL は寸法抽出が null になり
+ * 「想定送料：不明」になっていたが、説明文にはBランクと明記されていた。
+ *
+ * **推測はしない。** 「大型」「小型」のような曖昧な語からランクを起こす
+ * ことはせず、ランクが明示されている場合だけ返す。
+ */
+export function extractShippingRankFromText(text: string | null | undefined): {
+  rank: string;
+  matchedText: string;
+} | null {
+  if (!text) return null;
+  // 「家財おまかせ便Bランク」「らくらく家財便 Cランク」「Eランク」など。
+  // ランク名は SS / S / A〜G。SS を先に見ないと S として読んでしまう。
+  const re = /(?:家財[^。\n]{0,12}便\s*)?(SS|[A-G])\s*ランク/gi;
+  let best: { rank: string; matchedText: string } | null = null;
+  for (const m of text.matchAll(re)) {
+    const rank = m[1].toUpperCase();
+    // 最初に見つかったものを採る。説明文では発送方法の記載が1箇所なので
+    // 通常1件しか当たらない。複数当たった場合に後勝ちで上書きすると、
+    // 注意書き側の記述に引きずられる。
+    if (!best) best = { rank, matchedText: m[0].trim() };
+  }
+  return best;
+}

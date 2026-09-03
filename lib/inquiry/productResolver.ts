@@ -2,7 +2,8 @@ import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages } from "@/lib/amplify/listAll";
 import { listAllInventory, listInventoryByCategory } from "@/lib/inventory/queries";
-import { getOnSaleCategoryId, ON_SALE_CATEGORY_NAME } from "./onSaleCategory";
+import { getInquiryCategoryScopes, ON_SALE_CATEGORY_NAME } from "./onSaleCategory";
+import { getZaicoSyncFreshness } from "./zaicoSyncFreshness";
 import { resolveDisplayInventoryId } from "@/lib/inventory/inventoryId";
 import { KNOWN_FURNITURE_BRANDS } from "@/lib/ai/productIntro/factSafety";
 import { extractProductReferences, normalizeUrl, type ProductReferenceResult } from "./references";
@@ -29,7 +30,8 @@ import type { ProductMatch, ProductResolution } from "./types";
  */
 
 const NAME_SCAN_CACHE_TTL_MS = 60_000;
-let nameScanCache: { at: number; items: MatchableInventory[] } | null = null;
+let onSaleScanCache: { at: number; items: MatchableInventory[] } | null = null;
+let fallbackScanCache: { at: number; items: MatchableInventory[] } | null = null;
 
 interface ChannelListingRow {
   inventoryId: string;
@@ -219,37 +221,66 @@ async function findBaseArchive(baseItemIds: string[]): Promise<BaseArchiveMatch[
 /**
  * 商品名照合のための読み込み(キャッシュ付き)。
  *
- * ── 出品中(販売中)だけを見る(2026-09-03 利用者指示) ──────────────
+ * ── 基本は出品中(販売中)だけ(2026-09-03 利用者指示) ──────────────
  *
- * 「商品は出品中からしかこない」。お客様が問い合わせてくるのは販売ページに
- * 出ている商品だけなので、それ以外を候補に入れる意味が無い。
+ * 「商品は出品中からしかこない」。発送完了(4,329件)まで含めて照合して
+ * いたため、同名の過去在庫が候補に混ざって1件に絞れず、かつ5,313件を
+ * 毎回走査していた。
  *
- * 以前は §36「売却済み・非販売中商品でも履歴が残っていれば特定できる設計」に
- * 従って販売状態で絞っていなかったが、実測すると害のほうが大きかった:
+ * §36「売却済み・非販売中商品でも履歴が残っていれば特定できる設計」が
+ * 守りたいのは過去取引の問い合わせだが、それは会話への紐付けや
+ * SKU・在庫IDといった決定的な手がかりの経路で拾える —— findByStrongSignals
+ * はカテゴリに関係なく引く。**絞るのは商品名だけを頼りにする弱い経路に限る。**
  *
- *   - 発送完了(4,329件)に同名の過去在庫があり、1件に絞れず AMBIGUOUS になる
- *   - 5,313件を毎回走査するので遅い
+ * ── カテゴリを解決できないときは全件へ戻さない ──────────────────
  *
- * §36が守りたいのは「過去の取引について問い合わせが来ても分かること」だが、
- * それは会話に紐づく商品(conversationInventoryId)や、SKU・在庫IDといった
- * 決定的な手がかりの経路で拾える —— そちらは findByStrongSignals が
- * カテゴリに関係なく引く。**絞るのは商品名だけを頼りにする弱い経路に限る。**
- *
- * カテゴリを解決できなかった場合は絞り込みを諦めて全件を見る。ここで
- * 空を返すと、カテゴリ名が変わった瞬間に全問い合わせで商品が特定できなく
- * なり、しかも画面には「商品が見つからない」としか出ないため原因に
- * 辿り着けない。
+ * 以前はカテゴリ名を引けなければ全在庫(5,313件)へ黙って戻していた。
+ * これは誤特定側に倒れる: 「販売中だけを見る」という前提で組んだ照合が、
+ * 何も知らせずに発送完了まで含む範囲で動いてしまう。
+ * **内部エラーとして扱い、候補を作らない。** BASE商品側の情報だけで
+ * 処理は続けられるので、問い合わせ全体が止まるわけではない。
  */
-async function loadAllForNameScan(): Promise<MatchableInventory[]> {
-  if (nameScanCache && Date.now() - nameScanCache.at < NAME_SCAN_CACHE_TTL_MS) return nameScanCache.items;
-  const onSaleCategoryId = await getOnSaleCategoryId();
-  if (!onSaleCategoryId) {
-    console.warn(
-      `[productResolver] カテゴリ「${ON_SALE_CATEGORY_NAME}」を解決できないため、出品中での絞り込みを行いません。`,
-    );
+async function loadOnSaleForNameScan(): Promise<{ items: MatchableInventory[]; categoryResolved: boolean }> {
+  if (onSaleScanCache && Date.now() - onSaleScanCache.at < NAME_SCAN_CACHE_TTL_MS) {
+    return { items: onSaleScanCache.items, categoryResolved: true };
   }
-  const records = onSaleCategoryId ? await listInventoryByCategory(onSaleCategoryId) : await listAllInventory();
-  const items = records.map((r) =>
+  const scopes = await getInquiryCategoryScopes();
+  if (!scopes.onSaleCategoryId) {
+    console.error(
+      `[productResolver] カテゴリ「${ON_SALE_CATEGORY_NAME}」を解決できません。名前照合の候補を作らずに続行します。`,
+    );
+    return { items: [], categoryResolved: false };
+  }
+  const items = toMatchables(await listInventoryByCategory(scopes.onSaleCategoryId));
+  onSaleScanCache = { at: Date.now(), items };
+  return { items, categoryResolved: true };
+}
+
+/**
+ * 同期遅れが疑われるときだけ見る、広めの候補集合。
+ *
+ * BELLOの在庫カテゴリはZAICO同期で入るため、BASEの出品状態より遅れる
+ * ことがある。実測(2026-09-03)でも、BASEで出品中の
+ * BoConcept Elba Lounge Chair の在庫は「五十嵐さん」「複数在庫 未出品」に
+ * あり、販売中には1件も無かった。
+ *
+ * 明らかな過去在庫(発送完了・破棄・売り切れ)だけを除く。除きすぎると
+ * フォールバックの意味が無くなるので、迷うもの(保留・補修待ち等)は残す。
+ * 誤特定の抑止は**採用条件をBASE商品名の強い一致に限る**ことで担保する
+ * (resolveProduct の acceptableForSyncLag)。
+ */
+async function loadSyncLagFallbackForNameScan(): Promise<MatchableInventory[]> {
+  if (fallbackScanCache && Date.now() - fallbackScanCache.at < NAME_SCAN_CACHE_TTL_MS) return fallbackScanCache.items;
+  const scopes = await getInquiryCategoryScopes();
+  const past = new Set(scopes.pastCategoryIds);
+  const records = (await listAllInventory()).filter((r) => !r.categoryId || !past.has(r.categoryId));
+  const items = toMatchables(records);
+  fallbackScanCache = { at: Date.now(), items };
+  return items;
+}
+
+function toMatchables(records: { id: string; sku: string; name: string; quantity?: number | null; externalProductId?: string | null; barcode?: string | null; sourceSystem?: string | null; sourceInventoryId?: string | null }[]): MatchableInventory[] {
+  return records.map((r) =>
     toMatchable(
       {
         id: r.id,
@@ -266,13 +297,12 @@ async function loadAllForNameScan(): Promise<MatchableInventory[]> {
       [],
     ),
   );
-  nameScanCache = { at: Date.now(), items };
-  return items;
 }
 
 /** テストや、在庫を大量に変更した直後にキャッシュを捨てるため。 */
 export function clearProductResolverCache(): void {
-  nameScanCache = null;
+  onSaleScanCache = null;
+  fallbackScanCache = null;
 }
 
 export interface ResolveProductResult extends ProductResolution {
@@ -284,6 +314,24 @@ export interface ResolveProductResult extends ProductResolution {
    * 在庫への紐付けが未確定でも、ここまでは確実に特定できたことを示す。
    */
   baseProducts: BaseArchiveMatch[];
+  /**
+   * 「販売中」カテゴリを解決できたか。false は内部エラー。
+   *
+   * 黙って全在庫へ広げない代わりに、解決できなかったことを呼び出し側へ
+   * 伝える。担当者には【要確認】として出す —— 商品が見つからないのと
+   * 「探す範囲を決められなかった」のは全く違う。
+   */
+  onSaleCategoryResolved: boolean;
+  /**
+   * ZAICO同期の未反映が疑われる状態で在庫を特定したか(2026-09-03 利用者指示)。
+   *
+   * BELLOの在庫カテゴリはZAICO同期で入るため、BASEの出品状態より遅れる。
+   * 「販売中に無い」ことだけを理由に候補を0件にせず、BASE商品名の強い
+   * 一致がある場合に限って範囲を広げて拾う。拾ったことは隠さない。
+   */
+  inventorySyncSuspected: boolean;
+  /** 最後にZAICO同期が完了した時刻(判断材料として通知へ出す)。 */
+  zaicoLastSyncedAt: string | null;
 }
 
 export async function resolveProductFromInquiry(params: {
@@ -321,7 +369,19 @@ export async function resolveProductFromInquiry(params: {
   const forcedId = params.overrideInventoryId ?? null;
   if (forcedId) {
     const forced = await loadOne(forcedId, forcedId === params.overrideInventoryId ? "担当者が選択した商品" : "会話に紐づく商品");
-    if (forced) return { status: "RESOLVED", resolved: forced, candidates: [forced], references, usedFullScan: false, baseProducts: [] };
+    if (forced) {
+      return {
+        status: "RESOLVED",
+        resolved: forced,
+        candidates: [forced],
+        references,
+        usedFullScan: false,
+        baseProducts: [],
+        onSaleCategoryResolved: true,
+        inventorySyncSuspected: false,
+        zaicoLastSyncedAt: null,
+      };
+    }
   }
 
   // BASE商品IDがあれば、まず取り込み済みのBASE過去商品から商品名を得る。
@@ -362,13 +422,18 @@ export async function resolveProductFromInquiry(params: {
   const rows = [...strongRows, ...extraRows];
   let usedFullScan = false;
   let matchables: MatchableInventory[];
+  // 名前照合を「販売中」に絞れたか。解決できないまま全件へ広げるのは
+  // 誤特定側に倒れるので行わない(loadOnSaleForNameScan のコメント参照)。
+  let onSaleCategoryResolved = true;
 
   if (rows.length > 0) {
     const listingsByInventory = await listingsFor(rows.map((r) => r.id));
     matchables = rows.map((r) => toMatchable(r, listingsByInventory.get(r.id) ?? []));
   } else if (hasWeakSignals(signals)) {
     usedFullScan = true;
-    matchables = await loadAllForNameScan();
+    const onSale = await loadOnSaleForNameScan();
+    matchables = onSale.items;
+    onSaleCategoryResolved = onSale.categoryResolved;
   } else {
     matchables = [];
   }
@@ -381,9 +446,31 @@ export async function resolveProductFromInquiry(params: {
     // 会話に紐づく商品があるなら、それを候補として残す。
     if (params.conversationInventoryId) {
       const linked = await loadOne(params.conversationInventoryId, "この会話に紐づけられている商品");
-      if (linked) return { status: "RESOLVED", resolved: linked, candidates: [linked], references, usedFullScan, baseProducts };
+      if (linked) {
+        return {
+          status: "RESOLVED",
+          resolved: linked,
+          candidates: [linked],
+          references,
+          usedFullScan,
+          baseProducts,
+          onSaleCategoryResolved,
+          inventorySyncSuspected: false,
+          zaicoLastSyncedAt: null,
+        };
+      }
     }
-    return { status, resolved: null, candidates: [], references, usedFullScan, baseProducts };
+    return {
+      status,
+      resolved: null,
+      candidates: [],
+      references,
+      usedFullScan,
+      baseProducts,
+      onSaleCategoryResolved,
+      inventorySyncSuspected: false,
+      zaicoLastSyncedAt: (await getZaicoSyncFreshness()).lastSyncedAt,
+    };
   }
 
   const scored: ProductMatch[] = matchables
@@ -405,14 +492,77 @@ export async function resolveProductFromInquiry(params: {
   // 同じ商品が在庫の都合で複数行に分かれているだけなら、候補が割れたとは
   // 扱わない(2026-09-03 利用者指示)。判定の前にまとめる —— 後だと
   // AMBIGUOUS が確定してしまい、人の確認待ちのまま止まる。
-  const resolution = decideResolution(mergeSameProduct(scored));
+  let resolution = decideResolution(mergeSameProduct(scored));
+  let inventorySyncSuspected = false;
+  const freshness = await getZaicoSyncFreshness();
+
+  // ── ZAICO同期の未反映を疑うフォールバック(2026-09-03 利用者指示) ──
+  //
+  // 「販売中カテゴリに存在しない → 対象外」と即断しない。BELLOの在庫
+  // カテゴリはZAICO同期で入るため、BASEの出品状態より遅れることがある。
+  // 実測(2026-09-03)でも、BASEで出品中の BoConcept Elba の在庫は
+  // 「五十嵐さん」「複数在庫 未出品」にあり、販売中には1件も無かった。
+  //
+  // ただし発送完了まで無差別に拾うと誤特定になる。**採用条件を
+  // 「BASE商品ページの商品名と一致した候補」に限る** —— 顧客が送ってきた
+  // URLからIDで確定的に引いたタイトルとの一致なので、ブランド名や語の
+  // 断片の積み上げとは信頼度が違う(scoring.ts の baseTitles 参照)。
+  const hasBaseTitleSignal = (signals.baseTitles?.length ?? 0) > 0;
+  if (resolution.candidates.length === 0 && usedFullScan && hasBaseTitleSignal && baseProducts.length > 0) {
+    const wider = await loadSyncLagFallbackForNameScan();
+    const rescored = wider
+      .map((inv) => {
+        const { confidence, reasons } = scoreInventory(inv, signals);
+        return {
+          inventoryId: inv.id,
+          displayInventoryId: inv.displayInventoryId,
+          sku: inv.sku,
+          name: inv.name,
+          confidence,
+          reasons,
+          source: "INVENTORY" as const,
+          quantity: inv.quantity ?? null,
+        };
+      })
+      // BASE商品名の一致で拾えたものだけ。語の断片の積み上げで
+      // 引っかかった過去在庫は採らない。
+      .filter((m) => m.reasons.some((r) => r.startsWith("BASE商品ページの商品名と")));
+
+    if (rescored.length > 0) {
+      const widened = decideResolution(mergeSameProduct(rescored));
+      if (widened.candidates.length > 0) {
+        resolution = widened;
+        inventorySyncSuspected = true;
+      }
+    }
+  }
 
   // 候補が1件も残らず、会話に紐づく商品があるならそれを使う。
   if (resolution.candidates.length === 0 && params.conversationInventoryId) {
     const linked = await loadOne(params.conversationInventoryId, "この会話に紐づけられている商品");
-    if (linked) return { status: "RESOLVED", resolved: linked, candidates: [linked], references, usedFullScan, baseProducts };
+    if (linked) {
+      return {
+        status: "RESOLVED",
+        resolved: linked,
+        candidates: [linked],
+        references,
+        usedFullScan,
+        baseProducts,
+        onSaleCategoryResolved,
+        inventorySyncSuspected,
+        zaicoLastSyncedAt: freshness.lastSyncedAt,
+      };
+    }
   }
-  return { ...resolution, references, usedFullScan, baseProducts };
+  return {
+    ...resolution,
+    references,
+    usedFullScan,
+    baseProducts,
+    onSaleCategoryResolved,
+    inventorySyncSuspected,
+    zaicoLastSyncedAt: freshness.lastSyncedAt,
+  };
 }
 
 function hasWeakSignals(signals: MatchSignals): boolean {
