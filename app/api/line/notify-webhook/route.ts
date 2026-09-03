@@ -85,19 +85,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // という状態を実機で踏んだ。runWithDirectData でDynamoDB直結にする
       // (lib/amplify/dataClient.ts、LINE Webhook側と同じ扱い)。
       await runWithDirectData(async () => {
-        if (event.type === "follow") {
-          const profile = await fetchNotifyTargetProfile(userId);
-          await registerNotifyTarget({ userId, displayName: profile.displayName });
-          console.info("[lineNotify webhook] 通知先を登録しました。");
-        } else if (event.type === "unfollow") {
+        if (event.type === "unfollow") {
           // ブロックされた宛先へ送り続けない。再試行が無駄に失敗し続け、
           // DEAD_LETTER が溜まるだけになる。
           await clearNotifyTarget();
           console.info("[lineNotify webhook] 通知先を解除しました。");
+          return;
         }
+
+        // ── follow だけに頼らない ──────────────────────────────
+        //
+        // 通知先は follow(友だち追加・ブロック解除)で登録する設計だったが、
+        // **follow は一度きりで、取りこぼすと二度と来ない**。実際、
+        // Webhook URLの設定前に友だち追加されていたため、いくら待っても
+        // 登録されない状態になった(LINEはfollowを再送しない)。
+        //
+        // そこで、そのBotへユーザーから届く**どのイベントでも**登録する。
+        // Botへ一言送るだけで復旧でき、follow の再発火に依存しなくなる。
+        // 送信先はこのBotを友だち追加した本人に限られる(LINEの仕様)ので、
+        // 知らない相手が登録されることはない。
+        const profile = await fetchNotifyTargetProfile(userId);
+        await registerNotifyTarget({ userId, displayName: profile.displayName });
+        console.info("[lineNotify webhook] 通知先を登録しました。", { eventType: event.type });
       });
-      // message等その他のイベントは何もしない。この Bot は社内通知の
-      // 送信専用で、受け取ったメッセージを処理する役割を持たない。
+      // 受け取ったメッセージの中身は扱わない。この Bot は社内通知の
+      // 送信専用で、返信や会話の取り込みは行わない —— 登録のために
+      // userId だけを見る。
     } catch (err) {
       // 1件の失敗で 500 を返すと、LINEが同じWebhookを再送し続ける。
       // 登録は次の友だち追加でやり直せるので、ログを残して 200 で返す。
