@@ -44,6 +44,7 @@
     "verify:inquiry": "node scripts/with-server-only-stub.cjs scripts/verify-inquiry.ts",
     "verify:conversation-context": "node scripts/with-server-only-stub.cjs scripts/verify-conversation-context.ts",
     "verify:listing-draft": "node scripts/with-server-only-stub.cjs scripts/verify-listing-draft.ts",
+    "verify:inquiry-live-case": "node scripts/with-server-only-stub.cjs scripts/verify-inquiry-live-case.ts",
     "verify:knowledge": "node scripts/with-server-only-stub.cjs scripts/verify-knowledge.ts",
     "verify:negotiation": "node scripts/with-server-only-stub.cjs scripts/verify-negotiation.ts",
     "verify:zaico-mapping": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-mapping.ts",
