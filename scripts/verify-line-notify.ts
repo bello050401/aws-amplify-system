@@ -493,6 +493,65 @@ function testRegistrationPolicy() {
   );
 }
 
+/**
+ * 在庫が絞れないときに、分かっている分まで捨てない。
+ *
+ * 実機で、顧客が送ってきたBASEの商品URLから販売ページは確実に特定できて
+ * いたのに、同名の在庫が2件あって絞れないという理由だけで商品名も出品価格
+ * も伏せ、「特定できませんでした」の一行だけを出していた。担当者から見れば
+ * 「何も分からなかった」と読める。
+ */
+function testAmbiguousInventoryKeepsBaseFacts() {
+  const evidence = {
+    ...emptyEvidence(),
+    identifiedProduct: null,
+    baseProducts: [
+      { baseItemId: "156144635", title: "BoConcept Elba Lounge Chair", price: 54800, itemUrl: null },
+    ],
+    productCandidates: [
+      { displayInventoryId: "73445666" },
+      { displayInventoryId: "72179017" },
+    ],
+  } as unknown as ReplyEvidence;
+
+  const msg = buildSummaryMessage({
+    channel: "LINE",
+    customerName: "テスト",
+    messageText: "こちら3万円になりませんか",
+    intents: ["NEGOTIATION"],
+    evidence,
+    needsHumanReview: true,
+    reviewReasons: ["対象商品を特定できていません。"],
+    failureReason: null,
+    inquiryKind: null,
+    orderNumber: null,
+  } as never);
+
+  assertTrue(msg.includes("販売ページ：BoConcept Elba Lounge Chair"), "対象商品: 販売ページは確実なので出す");
+  assertTrue(msg.includes("出品価格：54,800円"), "対象商品: 出品価格を出す");
+  assertTrue(msg.includes("73445666") && msg.includes("72179017"), "対象商品: 在庫の候補IDを全部出す");
+  assertTrue(msg.includes("在庫：特定できていません"), "対象商品: どの在庫かは断定しない");
+  assertTrue(!msg.includes("在庫ID：73445666"), "対象商品: 候補の1件を確定した在庫として書かない");
+}
+
+/** 販売ページも候補も無ければ、従来どおり一行だけ。 */
+function testNothingKnownStaysUnchanged() {
+  const msg = buildSummaryMessage({
+    channel: "LINE",
+    customerName: null,
+    messageText: "営業時間を教えてください",
+    intents: ["OTHER"],
+    evidence: emptyEvidence(),
+    needsHumanReview: false,
+    reviewReasons: [],
+    failureReason: null,
+    inquiryKind: null,
+    orderNumber: null,
+  } as never);
+  assertTrue(msg.includes("特定できませんでした"), "対象商品: 何も分からなければ従来どおり");
+  assertTrue(!msg.includes("販売ページ："), "対象商品: 無い情報の行は作らない");
+}
+
 testSummaryTemplate();
 testLayout();
 testUnknownValues();
@@ -505,6 +564,8 @@ testNotifyTargetSeparation();
 testInquiryKindHeader();
 testReviewPolicy();
 testRegistrationPolicy();
+testAmbiguousInventoryKeepsBaseFacts();
+testNothingKnownStaysUnchanged();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures > 0 ? 1 : 0);

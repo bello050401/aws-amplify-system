@@ -128,6 +128,61 @@ function section(heading: string, lines: (string | null)[]): string | null {
 }
 
 /**
+ * ■対象商品 の中身。
+ *
+ * 【1件に決めつけない】在庫を1件に絞れていないときに候補の1つを載せると、
+ * 担当者がそれを確定した商品だと思い込む(メッセージ画面の対象商品カードと
+ * 同じ方針 — IdentifiedProductCardView 参照)。
+ *
+ * 【ただし分かっている分は捨てない】以前は在庫が確定しない限り
+ * 「特定できませんでした」の一行だけだった。実機で、顧客が送ってきた
+ * BASEの商品URLから**販売ページは確実に特定できていた**のに、同名の在庫が
+ * 2件あって絞れないという理由だけで、商品名も出品価格も伏せていた。
+ * 担当者から見れば「何も分からなかった」と読めてしまい、実際には
+ * 手元にある情報を捨てている。
+ *
+ * 販売ページは顧客が指したものそのものなので確実に書ける。伏せるべきなのは
+ * **どの在庫か**の一点だけなので、そこを候補として明示する。
+ */
+function productLines(evidence: ReplyEvidence | null | undefined): (string | null)[] {
+  const product = evidence?.identifiedProduct ?? null;
+  if (product) {
+    return [
+      `商品名：${product.name}`,
+      `在庫ID：${product.displayInventoryId}`,
+      // URLは商品と1対1で結び付いたときだけ入る(pipeline.ts の
+      // linkedBaseProduct)。無ければ行ごと出さない —— 「URL：不明」は
+      // 担当者にとって意味が無く、行が増えるだけ。
+      product.baseItemUrl ? `URL：${product.baseItemUrl}` : null,
+    ];
+  }
+
+  const base = (evidence?.baseProducts ?? [])[0] ?? null;
+  const candidates = evidence?.productCandidates ?? [];
+  if (!base) {
+    // 販売ページも分からない。候補だけはある場合、件数は出す
+    // (「調べる必要がある」ことと「候補すら無い」ことは別の情報)。
+    if (candidates.length > 0) {
+      return [PRODUCT_UNIDENTIFIED, `在庫の候補：${candidates.length}件（どれか確認してください）`];
+    }
+    return [PRODUCT_UNIDENTIFIED];
+  }
+
+  // 販売ページは確実。書けるものは書く。
+  const ids = candidates
+    .map((c) => c.displayInventoryId)
+    .filter((v): v is string => Boolean(v));
+  return [
+    `販売ページ：${base.title}`,
+    base.price == null ? null : `出品価格：${yen(base.price)}`,
+    base.itemUrl ? `URL：${base.itemUrl}` : null,
+    ids.length > 0
+      ? `在庫：特定できていません（候補${candidates.length}件：${ids.join(" / ")}）`
+      : "在庫：特定できていません",
+  ];
+}
+
+/**
  * 1通目。§7-1 のテンプレートに沿う。
  *
  * 【対象商品を1件に決めつけない】商品が特定できていないときは商品名や
@@ -160,19 +215,7 @@ export function buildSummaryMessage(input: NotificationInput): string {
       "",
       truncate(input.messageText.trim(), QUOTED_BODY_LIMIT),
     ]),
-    section(
-      "対象商品",
-      product
-        ? [
-            `商品名：${product.name}`,
-            `在庫ID：${product.displayInventoryId}`,
-            // URLは商品と1対1で結び付いたときだけ入る(pipeline.ts の
-            // linkedBaseProduct)。無ければ行ごと出さない —— 「URL：不明」は
-            // 担当者にとって意味が無く、行が増えるだけ。
-            product.baseItemUrl ? `URL：${product.baseItemUrl}` : null,
-          ]
-        : [PRODUCT_UNIDENTIFIED],
-    ),
+    section("対象商品", productLines(input.evidence)),
     // 商品が決まっていないのに価格欄を出さない。空欄が並ぶと
     // 「取得に失敗した」のか「そもそも商品が決まっていない」のか読めない。
     product
