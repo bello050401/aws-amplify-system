@@ -258,6 +258,23 @@ export interface ReplyEvidence {
   /** URLから特定できたBASE商品。在庫紐付けが未確定でも「どこまで特定できたか」を示す。 */
   baseProducts?: { baseItemId: string; title: string; price: number | null; itemUrl: string | null }[];
   /**
+   * 販売チャネル側で**確定している**商品(2026-09-04 追加指示 §55/§58)。
+   *
+   * メルカリShopsの注文では、商品名は注文そのものに載っている。BELLO在庫と
+   * 結び付けられなくても「どの商品か」は分かっているので、社内通知で
+   * 「対象商品：特定できませんでした」と書くのは事実に反する ——
+   * 実際に持っている商品名を捨てることにもなる。BASE商品の特定状態を
+   * 別に持っているのと同じ理由で、別の事実として持つ。
+   */
+  channelProduct?: {
+    productName: string;
+    orderId: string | null;
+    itemAmountYen: number | null;
+    shippingFeeYen: number | null;
+    couponDiscountYen: number | null;
+    totalAmountYen: number | null;
+  } | null;
+  /**
    * 特定できた商品の要点。担当者が対象商品をその場で確認するための情報で、
    * **顧客向けの返信本文には渡らない**（仕入価格・販売開始日時を含むため）。
    */
@@ -468,4 +485,35 @@ export interface InquiryReplyRequest {
    * (メルカリShopsのメール)で、出品タイトルをそのまま照合へ渡すために使う。
    */
   productTitle?: string | null;
+  /**
+   * 購入済み注文の情報(2026-09-04 追加指示 §54/§55)。
+   *
+   * **注文番号は強い証拠**。これがあるということは、どの商品かは
+   * メルカリShops側で確定していて、BELLOがまだ紐付けられていないだけ。
+   * 顧客へ商品URLや商品名を聞き返す理由には決してならない(§54)。
+   *
+   * 会話Contextへそのまま保持するので、後続の「11日の午前中でお願いします」
+   * だけのメッセージでも、どの注文・どの商品の話かを失わない(§55)。
+   */
+  order?: InquiryOrderInfo | null;
+  /**
+   * 商品情報をどこから補完したか(呼び出し側が既に分かっている分)。
+   * 注文番号からの復元経路(§50)をそのまま社内通知へ出すために使う。
+   */
+  productContextNotes?: string[];
+}
+
+/** §55 会話へ保持する注文情報。メール取り込みが組み立てる。 */
+export interface InquiryOrderInfo {
+  orderId: string;
+  /** メルカリShopsの出品タイトル。復元できなければ null。 */
+  productName: string | null;
+  itemAmountYen: number | null;
+  shippingFeeYen: number | null;
+  couponDiscountYen: number | null;
+  totalAmountYen: number | null;
+  /** 注文番号から復元できたBELLO在庫・BASE商品(§64)。 */
+  inventoryId: string | null;
+  baseItemId: string | null;
+  baseUrl: string | null;
 }

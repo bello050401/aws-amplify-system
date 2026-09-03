@@ -8,10 +8,13 @@ import { findMessageByExternalId, recordIncomingWebhookMessage } from "@/lib/mes
 import { processInquiryAndNotifyUnauthenticated } from "@/lib/inquiry/autoReply";
 import {
   buildProductLookupText,
+  canonicalOrderId,
   conversationKeyFor,
   parseMercariNotificationMail,
   type MercariMailParseResult,
 } from "./notificationMailParser";
+import { listAllMercariOrderContexts } from "./orderContextStore";
+import { recordOrderContextFromMail, restoreOrderProduct } from "./orderProductContext";
 
 /**
  * 2026-09-03 追加指示 §1-§6: メルカリShops問い合わせメールの取り込み。
@@ -43,6 +46,11 @@ export interface MailIngestResult {
   reprocessed: number;
   /** 本文を抽出できなかったが保存した数(§3)。 */
   parseFailed: number;
+  /**
+   * 購入通知として取り込み、注文→商品の対応だけを登録した数
+   * (2026-09-04 追加指示 §62/§63)。会話もAI返信も社内通知も作っていない。
+   */
+  purchaseNotifications: number;
   /** 問い合わせ通知ではなかった数。 */
   skipped: number;
   failed: number;
@@ -121,6 +129,7 @@ export async function ingestMercariNotificationMails(params: {
     duplicated: 0,
     reprocessed: 0,
     parseFailed: 0,
+    purchaseNotifications: 0,
     skipped: 0,
     failed: 0,
     remaining: 0,
@@ -137,10 +146,18 @@ export async function ingestMercariNotificationMails(params: {
   result.query = query;
   result.fetched = ids.length;
 
+  // 購入通知は Message を作らない(§63)ので、メッセージ側の重複判定に
+  // 載らない。取り込んだGmail message IDを注文の対応表に残してあるので、
+  // それを使って**同じ購入通知を毎回取りに行かない**ようにする。
+  // ここを省くと、上限(MAX_PER_RUN)を購入通知が毎回食い潰し、本物の
+  // 問い合わせが後回しになる。
+  const orderContexts = await listAllMercariOrderContexts();
+  const seenPurchaseMailIds = new Set(orderContexts.flatMap((c) => c.sourceGmailIds));
+
   const unseen: string[] = [];
   for (const id of ids) {
     const existing = await findMessageByExternalId(`gmail:${id}`);
-    if (existing && !params.reprocess) result.duplicated++;
+    if ((existing || seenPurchaseMailIds.has(id)) && !params.reprocess) result.duplicated++;
     else unseen.push(id);
   }
 
@@ -160,7 +177,56 @@ export async function ingestMercariNotificationMails(params: {
         result.skipped++;
         continue;
       }
+
+      // ── §62/§63 購入通知 ──────────────────────────────────
+      //
+      // 問い合わせではない。**会話もAI返信も社内通知も作らない。**
+      // やることは「注文番号 → 商品」の登録だけ。ここで作った対応が、
+      // 後続の取引メッセージにおける商品復元の主経路になる(§65)。
+      if (parsed.status === "PURCHASE_NOTIFICATION") {
+        const saved = await recordOrderContextFromMail({
+          parsed,
+          gmailId: mail.gmailId,
+          receivedAt: mail.receivedAt,
+          who: params.who,
+        });
+        result.purchaseNotifications++;
+        if (!saved) {
+          result.messages.push(
+            `購入通知を解析しましたが、注文番号を取り出せなかったため対応表へ登録できませんでした(Gmail ID: ${mail.gmailId})。`,
+          );
+        }
+        continue;
+      }
+
       if (parsed.status === "PARSE_FAILED") result.parseFailed++;
+
+      // ── §50/§65 注文番号から商品Contextを復元する ──────────
+      //
+      // 取引メッセージは購入後のやり取りで、商品名が落ちることがある。
+      // **即座に「特定できませんでした」にしない。** 保存済みの対応表
+      // (購入通知由来が主経路)を引き、無ければGmailを注文番号で検索する。
+      const orderId = canonicalOrderId(parsed.order.orderNumber);
+      const restored = orderId
+        ? await restoreOrderProduct({
+            orderId,
+            inquiryId: parsed.inquiryId,
+            mailProductName: parsed.productName,
+          })
+        : null;
+      const productName = restored?.productName ?? parsed.productName;
+
+      // 今回のメールから分かる注文情報を対応表へ足す(§51/§59)。
+      // 商品名が今回のメールにあるなら、在庫までここで解決して保存する
+      // —— 次の取引メッセージが再解析しなくて済む。
+      if (orderId) {
+        await recordOrderContextFromMail({
+          parsed: productName === parsed.productName ? parsed : { ...parsed, productName },
+          gmailId: mail.gmailId,
+          receivedAt: mail.receivedAt,
+          who: params.who,
+        });
+      }
 
       // ── 会話の鍵(§5) ────────────────────────────────────
       // 同じ問い合わせページ → 同じConversation。
@@ -205,8 +271,9 @@ export async function ingestMercariNotificationMails(params: {
         sourceMessageId: messageId,
         who: params.who,
         // §4 メールに商品URLは無い。出品タイトルをそのまま高信頼の照合へ渡す。
-        productLookupHint: buildProductLookupText(parsed),
-        productTitle: parsed.productName,
+        // §50 今回のメールに商品名が無ければ、注文番号から復元したものを使う。
+        productLookupHint: buildProductLookupText({ ...parsed, productName }),
+        productTitle: productName,
         // §3 本文が取れていないなら、分類も返信案生成もしない。
         skipGeneration: parsed.status === "PARSE_FAILED",
         skipReason:
@@ -214,10 +281,27 @@ export async function ingestMercariNotificationMails(params: {
             ? "メルカリShopsメール本文の抽出に失敗しました。件名や商品名から内容を推測せず、管理画面で原文をご確認ください。"
             : null,
         // §2 購入済みの文脈をAIへ渡す。
-        additionalContext: contextFor(parsed),
+        additionalContext: contextFor({ ...parsed, productName }),
         // §9 通知の見出しと注文番号に使う。
-        inquiryKind: parsed.kind,
-        orderNumber: parsed.order.orderNumber,
+        inquiryKind: parsed.kind === "PURCHASE_NOTIFICATION" ? null : parsed.kind,
+        orderNumber: orderId,
+        // §54/§55 注文情報は強い証拠として扱う。会話Contextへ保持し、
+        // 後続の短いメッセージでも注文・商品・配送の文脈を失わない。
+        order: orderId
+          ? {
+              orderId,
+              productName,
+              itemAmountYen: parsed.order.itemAmountYen,
+              shippingFeeYen: parsed.order.shippingFeeYen,
+              couponDiscountYen: parsed.order.couponDiscountYen,
+              totalAmountYen: parsed.order.totalAmountYen,
+              inventoryId: restored?.record?.inventoryId ?? null,
+              baseItemId: restored?.record?.baseItemId ?? null,
+              baseUrl: restored?.record?.baseUrl ?? null,
+            }
+          : null,
+        // §50 どうやって商品名へ辿り着いたか。社内通知の「商品情報の補完」に出す。
+        productContextNotes: restored?.notes ?? [],
       });
     } catch (err) {
       result.failed++;
@@ -235,6 +319,11 @@ export async function ingestMercariNotificationMails(params: {
   if (result.parseFailed > 0) {
     result.messages.push(
       `${result.parseFailed}件は本文を抽出できませんでした。受信は保存済みで、社内通知は【要確認】になっています(分類・返信案は生成していません)。`,
+    );
+  }
+  if (result.purchaseNotifications > 0) {
+    result.messages.push(
+      `${result.purchaseNotifications}件は購入通知でした。注文番号と商品の対応だけを登録しています(会話・返信案・社内通知は作成していません)。`,
     );
   }
   return result;

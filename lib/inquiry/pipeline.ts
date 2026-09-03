@@ -146,7 +146,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   );
   const answeredQuestions = pendingAnswers.map((a) => a.reason);
   const resolvedPendingFields = pendingAnswers.map((a) => a.field);
-  let productContextNotes: string[] = [];
+  // 呼び出し側(メール取込)が既に分かっている補完経路を先頭へ置く。
+  // 「注文番号から商品名を復元した」ことは、担当者が一番知りたい情報。
+  let productContextNotes: string[] = [...(request.productContextNotes ?? [])];
 
   /**
    * 返信結果へ会話文脈を添えて返す。
@@ -269,11 +271,26 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   const carriedInventoryId =
     !productSwitched && !carriedBaseUrl ? incomingContext.identifiedProduct.inventoryId : null;
 
+  // ── 購入済み注文かどうか(2026-09-04 追加指示 §50/§65) ─────────
+  //
+  // 注文番号があるなら、その商品は**もう売れている**。「販売中」だけを
+  // 見る既定の探し方では原理的に当たらないので、照合側へそのことを伝える。
+  // 会話文脈に注文番号が残っていれば、後続の短いメッセージでも同じ扱いを
+  // 続ける(「11日でお願いします」で商品を見失わない)。
+  const orderInfo = request.order ?? null;
+  const orderIdForLookup = orderInfo?.orderId ?? incomingContext.order.orderId ?? null;
+  const purchasedOrder = Boolean(orderIdForLookup);
+
+  // 注文番号から復元済みの在庫があるなら、それを会話に紐づく商品として使う
+  // (§64 一度確定した対応は再解析しない)。
+  const orderInventoryId = orderInfo?.inventoryId ?? null;
+
   let resolution = await resolveProductFromInquiry({
     messageText: effectiveLookupText,
     overrideInventoryId: request.overrideInventoryId ?? null,
-    conversationInventoryId: request.conversationInventoryId ?? carriedInventoryId,
-    productTitle: request.productTitle ?? null,
+    conversationInventoryId: request.conversationInventoryId ?? orderInventoryId ?? carriedInventoryId,
+    productTitle: request.productTitle ?? incomingContext.identifiedProduct.channelProductName ?? null,
+    purchasedOrder,
   });
   if (!resolution.resolved && negotiation.isNegotiation && !negotiation.fromCurrentMessage) {
     const inboundHistory = request.history.filter((h) => h.direction === "INBOUND").map((h) => h.body);
@@ -283,7 +300,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
         // メール経由の問い合わせで一度目に効いた手がかりが二度目に消える。
         messageText: [...inboundHistory, effectiveLookupText].join("\n"),
         overrideInventoryId: request.overrideInventoryId ?? null,
-        conversationInventoryId: request.conversationInventoryId ?? carriedInventoryId,
+        conversationInventoryId: request.conversationInventoryId ?? orderInventoryId ?? carriedInventoryId,
+        productTitle: request.productTitle ?? incomingContext.identifiedProduct.channelProductName ?? null,
+        purchasedOrder,
       });
       if (retry.resolved) resolution = retry;
     }
@@ -302,7 +321,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     status: resolution.status,
     references: resolution.references,
     fromOperatorOrConversation: Boolean(
-      request.overrideInventoryId || request.conversationInventoryId || carriedInventoryId,
+      request.overrideInventoryId || request.conversationInventoryId || orderInventoryId || carriedInventoryId,
     ),
     candidateCount: resolution.candidates.length,
   });
@@ -313,7 +332,11 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     requiresProduct: requiresProduct(intents),
     // §4 メルカリShopsはメール経由で、顧客は商品ページから問い合わせている。
     // 商品URLを送ってもらう導線がそもそも無いので、依頼しない。
-    customerCanProvideUrl: request.channel !== "MERCARI_SHOPS",
+    //
+    // §54 注文番号があるなら、その注文は既に成立している。どの商品かは
+    // メルカリShops側で確定していて、BELLOが紐付けられていないだけ ——
+    // それを顧客に解決させない。チャネルを問わず依頼しない。
+    customerCanProvideUrl: request.channel !== "MERCARI_SHOPS" && !purchasedOrder,
     // 既にURLが本文にあるなら、再送を頼んでも結果は変わらない。
     //
     // §23 会話の**前のメッセージ**で送られたURLも同じ。顧客からすれば
@@ -496,8 +519,13 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   if (requiresProduct(intents) && !inventory) {
     unresolved.push({
       field: "対象商品",
-      reason:
-        resolution.status === "AMBIGUOUS"
+      reason: purchasedOrder
+        ? // §54 注文番号は把握できている。**顧客に聞くことは何も無い**ので、
+          // 社内で確認すべき内部の課題として書く。
+          `注文番号(${orderIdForLookup})は把握していますが、対応するBELLO在庫を特定できませんでした。` +
+          (resolution.candidates.length > 0 ? `候補が${resolution.candidates.length}件あります。` : "") +
+          "在庫データ側で確認してください(お客様への確認は不要です)。"
+        : resolution.status === "AMBIGUOUS"
           ? "候補が複数あり、どの商品か確定できていません。"
           : resolution.status === "NOT_FOUND"
             ? "問い合わせに含まれる情報に一致する在庫が見つかりませんでした。"
@@ -608,6 +636,11 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   }
 
   const mergedDimensions = shippingDimensionsOf(productContext);
+
+  // 販売チャネル側で確定している商品名(§55)。今回のメールで分かったものを
+  // 優先し、無ければ会話文脈から引き継ぐ —— 後続の短いメッセージでも失わない。
+  const channelProductName =
+    orderInfo?.productName ?? request.productTitle ?? incomingContext.identifiedProduct.channelProductName ?? null;
 
 
 
@@ -771,6 +804,18 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       itemUrl: b.itemUrl,
     })),
     identifiedProduct,
+    // §55/§58 販売チャネル側で確定している商品。在庫やBASEを引けなくても
+    // 「どの商品か」は分かっているので、通知でそれを捨てない。
+    channelProduct: channelProductName
+      ? {
+          productName: channelProductName,
+          orderId: orderIdForLookup,
+          itemAmountYen: orderInfo?.itemAmountYen ?? incomingContext.order.itemAmountYen,
+          shippingFeeYen: orderInfo?.shippingFeeYen ?? incomingContext.order.shippingFeeYen,
+          couponDiscountYen: orderInfo?.couponDiscountYen ?? incomingContext.order.couponDiscountYen,
+          totalAmountYen: orderInfo?.totalAmountYen ?? incomingContext.order.totalAmountYen,
+        }
+      : null,
     negotiation: negotiationResult?.evidence ?? null,
     staffCard: negotiationResult?.staffCard ?? null,
     generationRoute: negotiation.isNegotiation ? "negotiation" : "standard",
@@ -796,6 +841,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       baseItemId: identifiedBase?.baseItemId ?? customerSentBaseItemId ?? undefined,
       baseItemUrl: productContext.identity.baseItemUrl ?? customerSentBaseUrl ?? undefined,
       baseProductName: identifiedBase?.title ?? undefined,
+      // §55 出品タイトルは注文に載っている確定情報。在庫・BASEとは別に持つ。
+      channelProductName: channelProductName ?? undefined,
       baseListedPriceYen: identifiedBase?.price ?? undefined,
       // §24 BASE商品と在庫で段階を分ける。BASEが特定できていれば、
       // 在庫が絞れなくてもそのことは失わない。URLは分かるが商品を取得
@@ -825,8 +872,15 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       estimatedShippingCostYen: shipping?.feeYen ?? undefined,
       rank: shipping?.rank ?? productContext.shipping.rank ?? undefined,
     },
+    // §55 注文情報。後続が「11日の午前中でお願いします」だけでも、
+    // どの注文・いくらの取引かを失わない。
     order: {
+      orderId: orderIdForLookup ?? undefined,
       requestedDeliveryDate: answeredDeliveryDate ?? undefined,
+      itemAmountYen: orderInfo?.itemAmountYen ?? undefined,
+      shippingFeeYen: orderInfo?.shippingFeeYen ?? undefined,
+      couponDiscountYen: orderInfo?.couponDiscountYen ?? undefined,
+      totalAmountYen: orderInfo?.totalAmountYen ?? undefined,
     },
     appliedReplyRuleIds: undefined,
     knowledgeDocumentIds: knowledgeHits.length > 0 ? knowledgeHits.map((k) => k.id) : undefined,

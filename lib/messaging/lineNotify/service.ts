@@ -54,6 +54,8 @@ export interface NotifyInquiryParams {
   inquiryKind?: "PRODUCT_INQUIRY" | "ORDER_MESSAGE" | null;
   /** 取引メッセージの注文番号(§9)。 */
   orderNumber?: string | null;
+  /** 注文から確定している商品(2026-09-04 §58)。在庫が引けなくても通知へ出す。 */
+  orderProduct?: { productName: string; orderId: string } | null;
   /** 本文の抽出に失敗しているか(§3/§7 解析状態の記録に使う)。 */
   parseFailed?: boolean;
   /** 会話から引き継いだ情報(§27)。1通目に出す。 */
@@ -98,6 +100,7 @@ function toNotificationInput(params: NotifyInquiryParams): NotificationInput {
     failureReason: params.failureReason,
     inquiryKind: params.inquiryKind ?? null,
     orderNumber: params.orderNumber ?? null,
+    orderProduct: params.orderProduct ?? null,
     carriedFacts: params.carriedFacts ?? [],
     answeredQuestions: params.answeredQuestions ?? [],
     productContextNotes: params.productContextNotes ?? [],

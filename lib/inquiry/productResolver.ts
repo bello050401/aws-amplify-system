@@ -8,7 +8,14 @@ import { resolveDisplayInventoryId } from "@/lib/inventory/inventoryId";
 import { KNOWN_FURNITURE_BRANDS } from "@/lib/ai/productIntro/factSafety";
 import { extractProductReferences, normalizeUrl, type ProductReferenceResult } from "./references";
 import { lookupBaseProducts } from "./baseProductLookup";
-import { decideResolution, mergeSameProduct, scoreInventory, type MatchableInventory, type MatchSignals } from "./scoring";
+import {
+  decideResolution,
+  mergeSameProduct,
+  OFFICIAL_TITLE_MATCH_PREFIX,
+  scoreInventory,
+  type MatchableInventory,
+  type MatchSignals,
+} from "./scoring";
 import type { ProductMatch, ProductResolution } from "./types";
 
 /**
@@ -32,6 +39,8 @@ import type { ProductMatch, ProductResolution } from "./types";
 const NAME_SCAN_CACHE_TTL_MS = 60_000;
 let onSaleScanCache: { at: number; items: MatchableInventory[] } | null = null;
 let fallbackScanCache: { at: number; items: MatchableInventory[] } | null = null;
+/** 購入済み注文の照合用(販売中を外れた在庫まで含む)。 */
+let orderScanCache: { at: number; items: MatchableInventory[] } | null = null;
 
 interface ChannelListingRow {
   inventoryId: string;
@@ -279,6 +288,47 @@ async function loadSyncLagFallbackForNameScan(): Promise<MatchableInventory[]> {
   return items;
 }
 
+/**
+ * **購入済みの注文**について商品を探すときの候補集合(2026-09-04 §50/§65)。
+ *
+ * ── なぜ「販売中」では絶対に見つからないのか ────────────────────
+ *
+ * 取引メッセージは購入後のやり取りなので、その商品は既に売れている。
+ * BELLOの運用では売れた在庫は「発送完了」「売り切れ」へ移る。つまり
+ * **注文の商品を「販売中」から探すのは、原理的に当たらない探し方**。
+ *
+ * 実測(2026-09-03、order_2JW2rNd9i7WdFrivCjhfpw): 出品タイトルと一致する
+ * 在庫 B005614 は「発送完了」にあり、販売中スキャンでは0件だった。
+ * 結果、社内通知は3通とも「対象商品：特定できませんでした」。
+ *
+ * ── 誤特定をどう抑えるか ────────────────────────────────────────
+ *
+ * 範囲を広げる代わりに、**採用条件を出品タイトルの一致だけに絞る**
+ * (resolveProduct の acceptable フィルタ)。ブランド名や語の断片の
+ * 積み上げで過去在庫を拾うことはない。「破棄」だけは除く —— そこに
+ * 移った在庫は注文の対象になりえない。
+ */
+async function loadOrderScopeForNameScan(): Promise<MatchableInventory[]> {
+  if (orderScanCache && Date.now() - orderScanCache.at < NAME_SCAN_CACHE_TTL_MS) return orderScanCache.items;
+  const scopes = await getInquiryCategoryScopes();
+  const discardedIds = new Set(
+    scopes.pastCategoryIds.length > 0 ? await discardedCategoryIds() : [],
+  );
+  const records = (await listAllInventory()).filter((r) => !r.categoryId || !discardedIds.has(r.categoryId));
+  const items = toMatchables(records);
+  orderScanCache = { at: Date.now(), items };
+  return items;
+}
+
+/** 「破棄」カテゴリのID。注文の対象になりえないものだけを除くために引く。 */
+async function discardedCategoryIds(): Promise<string[]> {
+  const { data, errors } = await serverDataClient.models.Category.list({ limit: 500, ...inventoryAuthMode });
+  if (errors && errors.length > 0) return [];
+  return ((data ?? []) as unknown as { id: string; name?: string | null }[])
+    .filter((c) => c.name === "破棄")
+    .map((c) => c.id);
+}
+
 function toMatchables(records: { id: string; sku: string; name: string; quantity?: number | null; externalProductId?: string | null; barcode?: string | null; sourceSystem?: string | null; sourceInventoryId?: string | null }[]): MatchableInventory[] {
   return records.map((r) =>
     toMatchable(
@@ -303,6 +353,7 @@ function toMatchables(records: { id: string; sku: string; name: string; quantity
 export function clearProductResolverCache(): void {
   onSaleScanCache = null;
   fallbackScanCache = null;
+  orderScanCache = null;
 }
 
 export interface ResolveProductResult extends ProductResolution {
@@ -353,6 +404,16 @@ export async function resolveProductFromInquiry(params: {
    * すべて NOT_FOUND / AMBIGUOUS になっていた。
    */
   productTitle?: string | null;
+  /**
+   * **購入済みの注文**についての照合か(2026-09-04 追加指示 §50/§65)。
+   *
+   * true なら、名前照合の範囲を「販売中」に限らない。購入された商品は
+   * 「発送完了」等へ移っているので、販売中だけを見る既定の探し方では
+   * 原理的に当たらない(loadOrderScopeForNameScan のコメントに実測)。
+   * 誤特定を避けるため、広げた範囲から採るのは**出品タイトルが一致した
+   * 候補だけ**に絞る。
+   */
+  purchasedOrder?: boolean;
 }): Promise<ResolveProductResult> {
   const references = extractProductReferences(params.messageText, KNOWN_FURNITURE_BRANDS);
   const signals: MatchSignals = {
@@ -392,7 +453,7 @@ export async function resolveProductFromInquiry(params: {
   // BASE商品タイトルと同じ扱いにすることで、同じ高信頼の照合経路に乗る。
   if (params.productTitle?.trim()) {
     const title = params.productTitle.trim();
-    signals.baseTitles = [...(signals.baseTitles ?? []), title];
+    signals.officialTitles = [...(signals.officialTitles ?? []), title];
     const fromTitle = extractProductReferences(title, KNOWN_FURNITURE_BRANDS);
     signals.brandNames = [...new Set([...signals.brandNames, ...fromTitle.brandNames])];
     signals.modelNumbers = [...new Set([...signals.modelNumbers, ...fromTitle.modelNumbers])];
@@ -410,8 +471,8 @@ export async function resolveProductFromInquiry(params: {
     // BASE商品ページの正式タイトルそのものも渡す。ブランド+語の断片の
     // 積み上げ(実測 0.52)では候補の下限 0.60 にすら届かず「候補0件」に
     // なっていた —— 正しい在庫が目の前にあるのに。詳細は
-    // scoring.ts の MatchSignals.baseTitles のコメント。
-    signals.baseTitles = [...(signals.baseTitles ?? []), ...baseProducts.map((b) => b.title)];
+    // scoring.ts の MatchSignals.officialTitles のコメント。
+    signals.officialTitles = [...(signals.officialTitles ?? []), ...baseProducts.map((b) => b.title)];
   }
 
   const strongRows = await findByStrongSignals(signals);
@@ -438,7 +499,13 @@ export async function resolveProductFromInquiry(params: {
     matchables = [];
   }
 
-  if (matchables.length === 0) {
+  // 購入済み注文で出品タイトルがあるなら、まだ探す場所が残っている
+  // (下の「購入済み注文の照合」)。ここで早期に NOT_FOUND を返すと
+  // そこへ辿り着けない。**候補が空でも先へ進める**だけで、範囲を
+  // 広げるのは向こう側 —— 採用条件(出品タイトルの一致)もそちらにある。
+  const orderScopePending = Boolean(params.purchasedOrder) && (signals.officialTitles?.length ?? 0) > 0;
+
+  if (matchables.length === 0 && !orderScopePending) {
     // 手がかりが何も無ければ「商品を指していない問い合わせ」。
     // 手がかりはあったが在庫に無い場合と区別する(§4.4)。
     const anySignal = hasWeakSignals(signals) || signals.skus.length > 0 || signals.inventoryIds.length > 0 || signals.baseItemIds.length > 0;
@@ -506,11 +573,12 @@ export async function resolveProductFromInquiry(params: {
   // ただし発送完了まで無差別に拾うと誤特定になる。**採用条件を
   // 「BASE商品ページの商品名と一致した候補」に限る** —— 顧客が送ってきた
   // URLからIDで確定的に引いたタイトルとの一致なので、ブランド名や語の
-  // 断片の積み上げとは信頼度が違う(scoring.ts の baseTitles 参照)。
-  const hasBaseTitleSignal = (signals.baseTitles?.length ?? 0) > 0;
-  if (resolution.candidates.length === 0 && usedFullScan && hasBaseTitleSignal && baseProducts.length > 0) {
-    const wider = await loadSyncLagFallbackForNameScan();
-    const rescored = wider
+  // 断片の積み上げとは信頼度が違う(scoring.ts の officialTitles 参照)。
+  const hasOfficialTitleSignal = (signals.officialTitles?.length ?? 0) > 0;
+
+  /** 広げた範囲を出品タイトルの一致だけで採る。語の断片で拾った過去在庫は採らない。 */
+  const rescoreByOfficialTitle = (wider: MatchableInventory[]): ProductMatch[] =>
+    wider
       .map((inv) => {
         const { confidence, reasons } = scoreInventory(inv, signals);
         return {
@@ -524,15 +592,37 @@ export async function resolveProductFromInquiry(params: {
           quantity: inv.quantity ?? null,
         };
       })
-      // BASE商品名の一致で拾えたものだけ。語の断片の積み上げで
-      // 引っかかった過去在庫は採らない。
-      .filter((m) => m.reasons.some((r) => r.startsWith("BASE商品ページの商品名と")));
+      .filter((m) => m.reasons.some((r) => r.startsWith(OFFICIAL_TITLE_MATCH_PREFIX)));
 
+  if (resolution.candidates.length === 0 && usedFullScan && hasOfficialTitleSignal && baseProducts.length > 0) {
+    const rescored = rescoreByOfficialTitle(await loadSyncLagFallbackForNameScan());
     if (rescored.length > 0) {
       const widened = decideResolution(mergeSameProduct(rescored));
       if (widened.candidates.length > 0) {
         resolution = widened;
         inventorySyncSuspected = true;
+      }
+    }
+  }
+
+  // ── 購入済み注文の照合(2026-09-04 追加指示 §50/§65) ──────────────
+  //
+  // 取引メッセージ・購入通知は**既に売れた商品**の話なので、その在庫は
+  // 「販売中」から外れている。上の販売中スキャンは原理的に当たらない
+  // (実測: order_2JW2rNd9i7WdFrivCjhfpw の在庫 B005614 は「発送完了」)。
+  //
+  // 販売中の結果を捨てるのではなく、**より確かなほうを採る**。販売中に
+  // 出品タイトルと確実に一致する在庫があるなら(同じ商品を再出品した等)
+  // そちらのほうが自然なので、確信度で比べて高いほうを残す。
+  if (orderScopePending && rows.length === 0) {
+    const rescored = rescoreByOfficialTitle(await loadOrderScopeForNameScan());
+    if (rescored.length > 0) {
+      const widened = decideResolution(mergeSameProduct(rescored));
+      const currentTop = resolution.candidates[0]?.confidence ?? 0;
+      const widenedTop = widened.candidates[0]?.confidence ?? 0;
+      if (widened.candidates.length > 0 && widenedTop >= currentTop) {
+        resolution = widened;
+        usedFullScan = true;
       }
     }
   }

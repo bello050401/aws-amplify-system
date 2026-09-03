@@ -38,6 +38,7 @@ async function main() {
         `  取得            : ${result.fetched}件`,
         `  新規取り込み    : ${result.ingested}件`,
         `  取り込み済み    : ${result.duplicated}件`,
+        `  購入通知        : ${result.purchaseNotifications}件(注文→商品の登録のみ)`,
         `  再処理          : ${result.reprocessed}件`,
         `  対象外          : ${result.skipped}件`,
         `  解析失敗(保存済): ${result.parseFailed}件`,

@@ -64,6 +64,19 @@ function tableFor(model: string): string {
 }
 
 /**
+ * モデル名から実テーブル名を組み立てる(未認証経路向け)。
+ *
+ * lib/messaging/webhookStore.ts / lib/inquiry/contextStore.ts のように、
+ * 条件付き更新など Amplify Data のクライアントでは表現できない操作の
+ * ために DynamoDB を直接叩くモジュールが、**同じ命名規則をもう一度
+ * 書かずに済むよう**公開する。規則を二重に持つと、環境が変わったときに
+ * 片方だけ直して静かにテーブルを取り違える。
+ */
+export function directTableName(model: string): string {
+  return tableFor(model);
+}
+
+/**
  * AmplifyのGSI名。`<複数形lowerCamel>By<Field>[And<Field>]` で生成される
  * (実測: messagesByConversationId / inventoriesByCategoryId /
  *  notificationDeliveriesByDedupeKey / inventoryHistoriesByInventoryIdAndChangedAt)。
@@ -87,6 +100,7 @@ const CUSTOM_IDENTIFIERS: Record<string, string> = {
   BaseProductArchive: "baseItemId",
   SalesMonthlyAggregate: "yearMonth",
   ExternalResearchCache: "cacheKey",
+  MercariOrderContext: "orderId",
 };
 
 function identifierFor(model: string): string {
