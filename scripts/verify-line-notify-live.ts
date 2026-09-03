@@ -118,6 +118,75 @@ async function postWebhook(messageId: string, text: string): Promise<{ status: n
   return { status: res.status, body: (await res.text()).slice(0, 300) };
 }
 
+/**
+ * 通知Bot側のWebhookへ、署名付きの follow / unfollow を送る。
+ *
+ * **顧客向けチャネルとは別のChannel Secretで署名する** —— 通知Botは
+ * 別チャネルなので、こちらの秘密を使わないと署名検証を通らない。
+ */
+async function postNotifyWebhook(eventType: "follow" | "unfollow", userId: string): Promise<{ status: number }> {
+  const secret = await readSecret("bello/line-notify-bot");
+  const channelSecret = typeof secret?.channelSecret === "string" ? secret.channelSecret : null;
+  if (!channelSecret) throw new Error("通知BotのChannel Secretが読めません(まだ登録されていません)。");
+
+  const body = JSON.stringify({
+    destination: "Ubot",
+    events: [
+      {
+        type: eventType,
+        mode: "active",
+        timestamp: Date.now(),
+        source: { type: "user", userId },
+        webhookEventId: `test-${eventType}-${Date.now()}`,
+        deliveryContext: { isRedelivery: false },
+      },
+    ],
+  });
+  const signature = createHmac("sha256", channelSecret).update(body, "utf8").digest("base64");
+  const res = await fetch(`${APP_URL}/api/line/notify-webhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-line-signature": signature },
+    body,
+  });
+  return { status: res.status };
+}
+
+async function targetUserId(): Promise<string | null> {
+  const rows = await scanAll(T("LineNotifySettings"));
+  return (rows[0]?.targetUserId as string) ?? null;
+}
+
+/**
+ * follow イベントで通知先が自動登録されるかを確かめる。
+ *
+ * **テスト用の偽IDで登録したまま終わらせない。** 偽の宛先が残ると、実際の
+ * 問い合わせ通知が届かない相手へ送られ続ける。確認できたら unfollow を送って
+ * 元の状態(未登録、または既に登録済みの本物)へ必ず戻す。
+ */
+async function verifyFollow() {
+  const before = await targetUserId();
+  console.log(`実行前の通知先: ${before ?? "未登録"}`);
+  if (before && !before.startsWith("Utest")) {
+    console.log("既に本物の通知先が登録されています。上書きしないため、この確認は行いません。");
+    return;
+  }
+
+  const fake = "Utest0000000000000000000000000009";
+  const f = await postNotifyWebhook("follow", fake);
+  console.log(`follow 送信: HTTP ${f.status}`);
+  const afterFollow = await targetUserId();
+  console.log(`  → 通知先: ${afterFollow ?? "未登録"}`);
+  if (afterFollow === fake) console.log("  ✓ follow イベントから通知先が自動登録された");
+  else console.log("  ✗ 自動登録されなかった");
+
+  const u = await postNotifyWebhook("unfollow", fake);
+  console.log(`unfollow 送信: HTTP ${u.status}`);
+  const afterUnfollow = await targetUserId();
+  console.log(`  → 通知先: ${afterUnfollow ?? "未登録"}`);
+  if (!afterUnfollow) console.log("  ✓ unfollow で通知先が外れた(偽IDを残さない)");
+  else console.log("  ✗ 偽の通知先が残っている。手動で消してください。");
+}
+
 async function showStatus() {
   const notify = await readSecret("bello/line-notify-bot");
   console.log("=== 社内通知Bot ===");
@@ -213,6 +282,11 @@ async function main() {
 
   if (cmd === "cleanup") {
     await cleanup();
+    return;
+  }
+
+  if (cmd === "follow-test") {
+    await verifyFollow();
     return;
   }
 

@@ -3,6 +3,7 @@ import { verifyLineSignature } from "@/lib/messaging/line/signature";
 import { getNotifyBotChannelSecret } from "@/lib/messaging/lineNotify/secretStore";
 import { fetchNotifyTargetProfile } from "@/lib/messaging/lineNotify/client";
 import { clearNotifyTarget, registerNotifyTarget } from "@/lib/messaging/lineNotify/settingsStore";
+import { runWithDirectData } from "@/lib/amplify/dataClient";
 
 /**
  * 2026-09-03 指示書 §6/§4-3: **社内通知用**LINE BotのWebhook。
@@ -76,16 +77,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!userId) continue;
 
     try {
-      if (event.type === "follow") {
-        const profile = await fetchNotifyTargetProfile(userId);
-        await registerNotifyTarget({ userId, displayName: profile.displayName });
-        console.info("[lineNotify webhook] 通知先を登録しました。");
-      } else if (event.type === "unfollow") {
-        // ブロックされた宛先へ送り続けない。再試行が無駄に失敗し続け、
-        // DEAD_LETTER が溜まるだけになる。
-        await clearNotifyTarget();
-        console.info("[lineNotify webhook] 通知先を解除しました。");
-      }
+      // ★ このrouteも**未認証**。LINEからのPOSTでCookieもセッションも無い。
+      //
+      // LineNotifySettings の読み書きは serverDataClient(userPool認証)を
+      // 通るため、そのままではAppSyncに弾かれて**黙って登録されない**。
+      // 実際、friend追加のイベントは200で返るのに通知先が未登録のまま、
+      // という状態を実機で踏んだ。runWithDirectData でDynamoDB直結にする
+      // (lib/amplify/dataClient.ts、LINE Webhook側と同じ扱い)。
+      await runWithDirectData(async () => {
+        if (event.type === "follow") {
+          const profile = await fetchNotifyTargetProfile(userId);
+          await registerNotifyTarget({ userId, displayName: profile.displayName });
+          console.info("[lineNotify webhook] 通知先を登録しました。");
+        } else if (event.type === "unfollow") {
+          // ブロックされた宛先へ送り続けない。再試行が無駄に失敗し続け、
+          // DEAD_LETTER が溜まるだけになる。
+          await clearNotifyTarget();
+          console.info("[lineNotify webhook] 通知先を解除しました。");
+        }
+      });
       // message等その他のイベントは何もしない。この Bot は社内通知の
       // 送信専用で、受け取ったメッセージを処理する役割を持たない。
     } catch (err) {

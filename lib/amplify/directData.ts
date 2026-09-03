@@ -335,17 +335,34 @@ async function modelUpdate(model: string, input: Record<string, unknown>): Promi
     .filter(Boolean)
     .join(" ");
 
-  const res = await ddb().send(
-    new UpdateCommand({
-      TableName: tableFor(model),
-      Key: { [idField]: id },
-      UpdateExpression: expr,
-      ExpressionAttributeNames: names,
-      ...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
-      ReturnValues: "ALL_NEW",
-    }),
-  );
-  return { data: res.Attributes ?? null };
+  try {
+    const res = await ddb().send(
+      new UpdateCommand({
+        TableName: tableFor(model),
+        Key: { [idField]: id },
+        UpdateExpression: expr,
+        // **存在しない行を作らない。**
+        //
+        // DynamoDB の UpdateItem は既定で upsert なので、条件を付けないと
+        // 「無い行を update したら中途半端な行ができる」。AppSync の update は
+        // 存在しない行に対しては失敗するので、そちらへ挙動を合わせる。
+        //
+        // 合わせないと実害がある: 1行だけの設定(AIReplySettings /
+        // LineNotifySettings)は「まず update、駄目なら create」で書いており、
+        // update が勝手に成功すると createdAt も __typename も無い行ができて、
+        // 後から画面(AppSync)で読んだときに壊れる。
+        ConditionExpression: `attribute_exists(#pk)`,
+        ExpressionAttributeNames: { ...names, "#pk": idField },
+        ...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
+        ReturnValues: "ALL_NEW",
+      }),
+    );
+    return { data: res.Attributes ?? null };
+  } catch (err) {
+    // 行が無かった。呼び出し側(upsert)が create へ回れるよう null を返す。
+    if ((err as { name?: string })?.name === "ConditionalCheckFailedException") return { data: null };
+    throw err;
+  }
 }
 
 async function modelDelete(model: string, key: Record<string, unknown>): Promise<ItemResult> {
