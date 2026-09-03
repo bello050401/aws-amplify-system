@@ -1806,6 +1806,16 @@ const schema = a.schema({
       lastNotifiedAt: a.datetime(),
       /** 直近の通知結果(§6 表示項目)。NotificationDeliveryStatus の文字列。 */
       lastNotifyStatus: a.string(),
+      /**
+       * 通知BotのWebhookを最後に受け取った日時と、その処理結果。
+       *
+       * SSRのconsoleログはCloudWatchへ届かない(d44d8e0で確認済み)ため、
+       * Webhookの中で起きた失敗が**どこからも見えない**。実際、LINEからの
+       * follow相当のリクエストが200で返っているのに通知先が登録されない、
+       * という状態を切り分けられなかった。受信そのものを残す。
+       */
+      lastWebhookAt: a.datetime(),
+      lastWebhookResult: a.string(),
       updatedBy: a.string(),
     })
     .authorization((allow) => [

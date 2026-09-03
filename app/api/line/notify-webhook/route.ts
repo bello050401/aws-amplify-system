@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyLineSignature } from "@/lib/messaging/line/signature";
 import { getNotifyBotChannelSecret } from "@/lib/messaging/lineNotify/secretStore";
 import { fetchNotifyTargetProfile } from "@/lib/messaging/lineNotify/client";
-import { clearNotifyTarget, registerNotifyTarget } from "@/lib/messaging/lineNotify/settingsStore";
+import { clearNotifyTarget, recordWebhookEvent, registerNotifyTarget } from "@/lib/messaging/lineNotify/settingsStore";
 import { runWithDirectData } from "@/lib/amplify/dataClient";
 
 /**
@@ -69,12 +69,28 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return new NextResponse("Invalid JSON", { status: 400 });
   }
 
+  // §6 受信そのものを残す。
+  //
+  // このrouteは**何が起きても200を返す**(500だとLINEが再送し続けるため)。
+  // その代償として、失敗が呼び出し側から見えない。SSRのconsoleログも
+  // CloudWatchへ届かない(d44d8e0)。結果、LINEから200で返っている記録は
+  // あるのに通知先が登録されない、という状態の原因を絞り込めなかった。
+  // 受け取ったイベント種別と処理結果をDBへ残し、画面から見えるようにする。
+  //
+  // **userIdは残さない。** 画面表示用の診断情報であって、通知先の登録は
+  // あくまでイベント本体から行う(転記による取り違えを防ぐ設計)。
+  const trace: string[] = [];
+  if ((body.events ?? []).length === 0) trace.push("イベント無し(疎通確認)");
+
   for (const event of body.events ?? []) {
     // 通知先は1人(大原さん本人)を想定しているので、グループ・ルームからの
     // イベントは無視する。誤ってグループへ追加されたときに、そのグループ
     // 全員へ仕入価格が飛ぶのを防ぐ。
     const userId = event.source?.type === "user" ? event.source.userId : undefined;
-    if (!userId) continue;
+    if (!userId) {
+      trace.push(`${event.type ?? "不明"}: 個人からのイベントではないため対象外(source=${event.source?.type ?? "無し"})`);
+      continue;
+    }
 
     try {
       // ★ このrouteも**未認証**。LINEからのPOSTでCookieもセッションも無い。
@@ -89,6 +105,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           // ブロックされた宛先へ送り続けない。再試行が無駄に失敗し続け、
           // DEAD_LETTER が溜まるだけになる。
           await clearNotifyTarget();
+          trace.push("unfollow: 通知先を解除しました");
           console.info("[lineNotify webhook] 通知先を解除しました。");
           return;
         }
@@ -106,6 +123,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         // 知らない相手が登録されることはない。
         const profile = await fetchNotifyTargetProfile(userId);
         await registerNotifyTarget({ userId, displayName: profile.displayName });
+        trace.push(`${event.type ?? "不明"}: 通知先を登録しました`);
         console.info("[lineNotify webhook] 通知先を登録しました。", { eventType: event.type });
       });
       // 受け取ったメッセージの中身は扱わない。この Bot は社内通知の
@@ -114,12 +132,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     } catch (err) {
       // 1件の失敗で 500 を返すと、LINEが同じWebhookを再送し続ける。
       // 登録は次の友だち追加でやり直せるので、ログを残して 200 で返す。
-      console.error("[lineNotify webhook] イベント処理に失敗しました", {
-        type: event.type,
-        message: err instanceof Error ? err.message : String(err),
-      });
+      const message = err instanceof Error ? err.message : String(err);
+      trace.push(`${event.type ?? "不明"}: 失敗 — ${message}`);
+      console.error("[lineNotify webhook] イベント処理に失敗しました", { type: event.type, message });
     }
   }
+
+  // 記録はDynamoDB直結側で行う。ここもCookieが無い未認証経路なので、
+  // 通常の serverDataClient では書けない。
+  await runWithDirectData(() => recordWebhookEvent(trace.join(" / ") || "処理対象のイベントがありませんでした"));
 
   return NextResponse.json({ ok: true });
 }

@@ -20,6 +20,9 @@ export interface LineNotifySettings {
   botDisplayName: string | null;
   lastNotifiedAt: string | null;
   lastNotifyStatus: string | null;
+  /** 通知BotのWebhookを最後に受信した日時と結果(登録できない原因の切り分け用)。 */
+  lastWebhookAt: string | null;
+  lastWebhookResult: string | null;
 }
 
 export const LINE_NOTIFY_SETTINGS_DEFAULT: LineNotifySettings = {
@@ -31,6 +34,8 @@ export const LINE_NOTIFY_SETTINGS_DEFAULT: LineNotifySettings = {
   botDisplayName: null,
   lastNotifiedAt: null,
   lastNotifyStatus: null,
+  lastWebhookAt: null,
+  lastWebhookResult: null,
 };
 
 const SINGLETON_ID = "singleton";
@@ -53,6 +58,8 @@ export async function getLineNotifySettings(): Promise<LineNotifySettings> {
     botDisplayName: data.botDisplayName ?? null,
     lastNotifiedAt: data.lastNotifiedAt ?? null,
     lastNotifyStatus: data.lastNotifyStatus ?? null,
+    lastWebhookAt: data.lastWebhookAt ?? null,
+    lastWebhookResult: data.lastWebhookResult ?? null,
   };
 }
 
@@ -96,6 +103,21 @@ export async function registerNotifyTarget(params: { userId: string; displayName
 /** ブロック(unfollow)されたら通知先を外す。送れない宛先へ延々と再試行しない。 */
 export async function clearNotifyTarget(): Promise<void> {
   await upsert({ targetUserId: null, targetDisplayName: null, followedAt: null });
+}
+
+/**
+ * Webhookで受け取ったイベントと、その処理結果を残す。
+ *
+ * **成功も失敗も残す。** 失敗だけ記録すると、「そもそも届いていない」のか
+ * 「届いたが失敗した」のかが区別できず、今回まさにそこで詰まった。
+ * 記録自体の失敗で登録処理を巻き添えにしないよう、例外は握りつぶす。
+ */
+export async function recordWebhookEvent(result: string): Promise<void> {
+  try {
+    await upsert({ lastWebhookAt: new Date().toISOString(), lastWebhookResult: result });
+  } catch (err) {
+    console.warn("[lineNotifySettings] Webhook受信を記録できませんでした。", err instanceof Error ? err.message : String(err));
+  }
 }
 
 /** 接続確認できた Bot の情報と、友だち追加の案内(QR/URL)を保存する。 */

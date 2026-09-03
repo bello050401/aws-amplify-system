@@ -145,10 +145,32 @@ export function LineNotifyBotPanel({ status, isAdmin }: { status: NotifyBotStatu
         {/* 接続はできているのに通知先が無い、という状態を明示する。
             これが一番気づきにくい —— 「接続済み」だけ見て送れると思ってしまう。 */}
         {status.connected && !status.hasTarget && (
-          <p className="mt-3 border border-amber-300 bg-amber-50 p-2 text-[12px] text-amber-900">
-            Botの接続はできていますが、通知先が未登録です。上のQRコード（または友だち追加リンク）からBotを友だち追加してください。
-            友だち追加を検知すると自動で通知先に登録されます。
-          </p>
+          <div className="mt-3 border border-amber-300 bg-amber-50 p-2 text-[12px] text-amber-900">
+            <p>
+              Botの接続はできていますが、通知先が未登録です。上のQRコード（または友だち追加リンク）からBotを友だち追加し、
+              <strong>Botへ何かメッセージを1通送ってください。</strong>
+            </p>
+            {/* 「友だち追加してください」だけでは詰むことがある。
+                follow は一度きりのイベントで、Webhook URLの設定前に追加して
+                いた場合は二度と飛んでこない(LINEは再送しない)。実際にその
+                状態になった。メッセージ送信ならいつでもやり直せる。 */}
+            <p className="mt-1 text-amber-800">
+              すでに友だち追加済みの場合、友だち追加の通知（follow）は一度しか送られないため、
+              追加済みでも登録されないことがあります。その場合もBotへ1通送れば登録されます。
+            </p>
+          </div>
+        )}
+
+        {/* Webhookが実際に届いているかを画面から確かめられるようにする。
+            これが無いと「LINE側の設定が悪い」のか「届いた後に失敗している」
+            のかを利用者側から切り分けられない。 */}
+        {status.settings.lastWebhookAt && (
+          <dl className="mt-3 grid grid-cols-[9rem_1fr] gap-y-1 border border-gray-200 bg-gray-50 p-2 text-[12px]">
+            <dt className="text-gray-500">最終Webhook受信</dt>
+            <dd>{new Date(status.settings.lastWebhookAt).toLocaleString("ja-JP")}</dd>
+            <dt className="text-gray-500">受信内容</dt>
+            <dd className="break-all">{status.settings.lastWebhookResult ?? "—"}</dd>
+          </dl>
         )}
 
         <div className="mt-4 flex flex-wrap gap-2">
