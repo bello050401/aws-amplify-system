@@ -347,9 +347,18 @@ function testMergeSameProduct() {
     quantity,
   });
 
-  assertEqual(productIdentityKey("【小傷あり】BoConcept Elba"), "boconcept elba", "芯: 先頭の【】を落とす");
-  assertEqual(productIdentityKey("【在庫2】【小傷あり】BoConcept Elba"), "boconcept elba", "芯: 連続する【】をすべて落とす");
-  assertEqual(productIdentityKey("HAY 【限定】Chair"), "hay 【限定】chair", "芯: 途中の【】は商品名の一部として残す");
+  // 芯は正規化して語を並べ替えた形(語順の違いを同一性の差にしない)。
+  assertEqual(productIdentityKey("【小傷あり】BoConcept Elba"), "BOCONCEPT ELBA", "芯: 先頭の【】を落とす");
+  assertEqual(productIdentityKey("【在庫2】【小傷あり】BoConcept Elba"), "BOCONCEPT ELBA", "芯: 連続する【】をすべて落とす");
+  assertEqual(
+    productIdentityKey("【在庫1】HAY REVOLVER / デンマーク 北欧"),
+    productIdentityKey("【在庫2】HAY REVOLVER / 北欧 デンマーク"),
+    "芯: 語順だけが違う同じ商品は同じ芯になる",
+  );
+  assertTrue(
+    productIdentityKey("HAY REVOLVER BAR STOOL") !== productIdentityKey("HAY REVOLVER BAR TABLE"),
+    "芯: 語が違えば別の芯になる",
+  );
 
   const merged = mergeSameProduct([
     m("73445666", "【小傷あり】BoConcept Elba Lounge Chair", 0.96, 1),

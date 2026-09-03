@@ -259,16 +259,25 @@ export const AMBIGUITY_MARGIN = 0.05;
  * BELLOは同じ商品を状態や在庫数で行に分けており、その違いは名前の先頭の
  * 【】に入る。ここを落とすと同じ文字列になるものは、同じ商品と見てよい
  * (2026-09-03 利用者指示)。
+ *
+ * ── 語順の違いを同一性の差として扱わない ────────────────────────
+ *
+ * 実データ(2026-09-03)では、同じ商品の行で語順だけが違うことがある:
+ *
+ *   【在庫1】HAY REVOLVER BAR STOOL HIGH / デンマーク 北欧 ヘイ …
+ *   【在庫2】HAY REVOLVER BAR STOOL HIGH / 北欧 デンマーク ヘイ …
+ *
+ * 文字列として比べると別物になり、同じ商品なのに統合されない。
+ * 正規化(記号・末尾の検索キーワードを落とす)したうえで語を並べ替えて
+ * 比べる —— **語の集合が完全に一致する場合だけ**同じ扱いにするので、
+ * 別商品を巻き込まない(部分一致では統合しない)。
  */
 export function productIdentityKey(name: string): string {
-  return name
-    // 先頭に連続する【…】をすべて落とす。途中の【】は商品名の一部で
-    // ありうるので触らない。
-    .replace(/^(?:\s*【[^】]*】)+/u, "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/\s+/gu, " ")
-    .trim();
+  // normalizeProductTitle が【】の除去・記号の畳み込み・検索キーワードの
+  // 切り落としまで済ませてくれる(BASE商品名との照合と同じ正規化)。
+  const normalized = normalizeProductTitle(name);
+  if (!normalized) return "";
+  return normalized.split(" ").filter(Boolean).sort().join(" ");
 }
 
 /**
