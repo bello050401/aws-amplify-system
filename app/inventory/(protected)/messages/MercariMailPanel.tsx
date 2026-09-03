@@ -70,12 +70,25 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
         </p>
         <dl className="mt-3 grid grid-cols-[9rem_1fr] gap-y-1">
           <dt className="text-gray-500">接続状態</dt>
-          <dd className={status.configured ? "text-green-700" : "text-red-600"}>
-            {status.configured ? "接続済み" : "未設定"}
+          <dd className={status.configured ? "text-green-700" : status.state === "unconfigured" ? "text-red-600" : "text-amber-700"}>
+            {status.configured
+              ? "接続済み"
+              : status.state === "unconfigured"
+                ? "未設定"
+                : status.state === "secret-missing"
+                  ? "保存先が未作成"
+                  : "確認できません"}
           </dd>
           <dt className="text-gray-500">検索条件</dt>
           <dd className="break-all font-mono text-[12px]">{status.query}</dd>
         </dl>
+
+        {/* 「まだ入力していない」のか「読めなかった」のかを区別して出す。
+            同じ「未設定」にすると、権限やSecret未作成が原因のときに
+            「設定したのに反映されない」で調査が止まる。 */}
+        {status.detail && (
+          <p className="mt-3 border border-amber-300 bg-amber-50 p-2 text-[12px] text-amber-900">{status.detail}</p>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-2">
           <button

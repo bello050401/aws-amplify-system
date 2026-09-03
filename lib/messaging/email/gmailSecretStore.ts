@@ -92,31 +92,83 @@ function logAwsError(operation: string, err: unknown): void {
   );
 }
 
-function classifyAwsError(err: unknown): string {
+/**
+ * どのAPIで落ちたかを文面に含める。
+ *
+ * ── なぜ必要か(実際に踏んだ) ────────────────────────────────────
+ *
+ * Secretがまだ存在しないと、保存は
+ * `PutSecretValue` → ResourceNotFound → `CreateSecret` の順に進む。
+ * 実行ロールに `CreateSecret` は**意図的に与えていない**(ZAICO/Mercari/
+ * LINEと同じ方針。Secretは既存の外部リソースとして扱い、実行時に作らせない)
+ * ため、ここで AccessDenied になる。
+ *
+ * 以前はどのAPIで失敗しても「GetSecretValue・PutSecretValueの権限を確認して
+ * ください」と出していた。**その2つは許可されている**ので、指示どおり確認しても
+ * 「権限はあるのにエラーが出る」となり原因に辿り着けない。実際に
+ * bello/line-notify-bot と bello/gmail-oauth の両方でこれを踏んだ。
+ *
+ * 正しい対処は権限追加ではなく、**Secretを先に作っておくこと**。
+ */
+function classifyAwsError(err: unknown, operation?: "getSecretValue" | "putSecretValue" | "createSecret"): string {
   const name = err instanceof Error ? err.name : undefined;
   if (name === "AccessDeniedException") {
-    return `AWS Secrets Managerへのアクセス権限がありません。実行ロールへ ${SECRET_NAME} に対する secretsmanager:GetSecretValue・PutSecretValue の権限を確認してください。`;
+    if (operation === "createSecret") {
+      return (
+        `Secret(${SECRET_NAME})がまだ存在せず、作成する権限もありません。これは想定どおりの設計です` +
+        `(実行ロールにCreateSecretは与えていません)。AWS管理者が次のコマンドで空のSecretを1度だけ作成してください: ` +
+        `aws secretsmanager create-secret --name ${SECRET_NAME} --secret-string '{"configured":false}'`
+      );
+    }
+    const action = operation === "getSecretValue" ? "GetSecretValue" : "PutSecretValue";
+    return `AWS Secrets Managerへのアクセス権限がありません。実行ロールへ ${SECRET_NAME} に対する secretsmanager:${action} の権限を確認してください。`;
   }
   if (name === "CredentialsProviderError") return "AWS認証情報を確認できません。";
   return `Secrets Managerへの保存に失敗しました(${name ?? "unknown error"})。詳細はサーバーログを確認してください。`;
 }
 
-export async function getGmailCredentials(): Promise<GmailOAuthCredentials | null> {
+/**
+ * 読み取りの結果。**「未設定」と「読めなかった」を区別する。**
+ *
+ * 以前はどちらも null を返していたため、権限不足やSecret未作成が
+ * 画面上は「未設定」に見えていた。原因が全く違うものを同じ表示にすると、
+ * 「設定したのに未設定のまま」で調査が止まる(§6.1「失敗を未設定として
+ * 黙って表示しない」)。
+ */
+export type GmailCredentialState =
+  | { kind: "configured"; credentials: GmailOAuthCredentials }
+  /** Secretはあるが、まだ値が入っていない。 */
+  | { kind: "unconfigured" }
+  /** Secretそのものが存在しない。AWS管理者が1度だけ作る必要がある。 */
+  | { kind: "secret-missing" }
+  /** 読み取りに失敗した(権限・ネットワーク等)。理由を持つ。 */
+  | { kind: "error"; message: string };
+
+export async function readGmailCredentialState(): Promise<GmailCredentialState> {
   try {
     const res = await getClient().send(new GetSecretValueCommand({ SecretId: SECRET_NAME }));
     const payload = parsePayload(res.SecretString);
-    if (!payload?.configured) return null;
-    if (!payload.clientId || !payload.clientSecret || !payload.refreshToken) return null;
+    if (!payload?.configured) return { kind: "unconfigured" };
+    if (!payload.clientId || !payload.clientSecret || !payload.refreshToken) return { kind: "unconfigured" };
     return {
-      clientId: payload.clientId,
-      clientSecret: payload.clientSecret,
-      refreshToken: payload.refreshToken,
-      query: payload.query?.trim() || DEFAULT_GMAIL_QUERY,
+      kind: "configured",
+      credentials: {
+        clientId: payload.clientId,
+        clientSecret: payload.clientSecret,
+        refreshToken: payload.refreshToken,
+        query: payload.query?.trim() || DEFAULT_GMAIL_QUERY,
+      },
     };
   } catch (err) {
-    if (!(err instanceof ResourceNotFoundException)) logAwsError("getSecretValue", err);
-    return null;
+    if (err instanceof ResourceNotFoundException) return { kind: "secret-missing" };
+    logAwsError("getSecretValue", err);
+    return { kind: "error", message: classifyAwsError(err, "getSecretValue") };
   }
+}
+
+export async function getGmailCredentials(): Promise<GmailOAuthCredentials | null> {
+  const state = await readGmailCredentialState();
+  return state.kind === "configured" ? state.credentials : null;
 }
 
 export async function setGmailCredentials(creds: GmailOAuthCredentials): Promise<void> {
@@ -128,7 +180,7 @@ export async function setGmailCredentials(creds: GmailOAuthCredentials): Promise
   } catch (err) {
     if (!(err instanceof ResourceNotFoundException)) {
       logAwsError("putSecretValue", err);
-      throw new Error(classifyAwsError(err));
+      throw new Error(classifyAwsError(err, "putSecretValue"));
     }
   }
   try {
@@ -139,7 +191,7 @@ export async function setGmailCredentials(creds: GmailOAuthCredentials): Promise
       return;
     }
     logAwsError("createSecret", err);
-    throw new Error(classifyAwsError(err));
+    throw new Error(classifyAwsError(err, "createSecret"));
   }
 }
 
@@ -151,7 +203,7 @@ export async function clearGmailCredentials(): Promise<void> {
   } catch (err) {
     if (err instanceof ResourceNotFoundException) return;
     logAwsError("putSecretValue(clear)", err);
-    throw new Error(classifyAwsError(err));
+    throw new Error(classifyAwsError(err, "putSecretValue"));
   }
 }
 

@@ -6,7 +6,7 @@ import { validateGmailConnection } from "@/lib/messaging/email/gmailClient";
 import {
   clearGmailCredentials,
   DEFAULT_GMAIL_QUERY,
-  getGmailCredentials,
+  readGmailCredentialState,
   setGmailCredentials,
 } from "@/lib/messaging/email/gmailSecretStore";
 import { ingestMercariNotificationMails, type MailIngestResult } from "@/lib/messaging/mercari/mailIngest";
@@ -38,12 +38,35 @@ export interface GmailStatus {
   configured: boolean;
   /** 監視中の検索条件。秘密情報ではないので表示してよい。 */
   query: string;
+  /**
+   * なぜ未設定なのか。**「まだ入力していない」と「読めなかった」を区別する。**
+   * 同じ「未設定」表示にすると、権限やSecret未作成が原因のときに
+   * 「設定したのに反映されない」で調査が止まる。
+   */
+  state: "configured" | "unconfigured" | "secret-missing" | "error";
+  /** state が error / secret-missing のときの説明。秘密値は含まない。 */
+  detail: string | null;
 }
 
 export async function getGmailStatusAction(): Promise<GmailStatus> {
   await requireEditor();
-  const creds = await getGmailCredentials();
-  return { configured: creds !== null, query: creds?.query ?? DEFAULT_GMAIL_QUERY };
+  const s = await readGmailCredentialState();
+  if (s.kind === "configured") {
+    return { configured: true, query: s.credentials.query ?? DEFAULT_GMAIL_QUERY, state: "configured", detail: null };
+  }
+  if (s.kind === "secret-missing") {
+    return {
+      configured: false,
+      query: DEFAULT_GMAIL_QUERY,
+      state: "secret-missing",
+      detail:
+        "認証情報の保存先(AWS Secrets Manager の bello/gmail-oauth)がまだ作成されていません。AWS管理者による1度だけの作成が必要です。",
+    };
+  }
+  if (s.kind === "error") {
+    return { configured: false, query: DEFAULT_GMAIL_QUERY, state: "error", detail: s.message };
+  }
+  return { configured: false, query: DEFAULT_GMAIL_QUERY, state: "unconfigured", detail: null };
 }
 
 export async function setGmailCredentialsAction(params: {
