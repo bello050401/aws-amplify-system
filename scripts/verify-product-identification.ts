@@ -16,6 +16,7 @@
  * Run with: npm run verify:product-identification
  */
 import { extractBaseItemId, extractUrls, isBaseUrl, extractProductReferences } from "@/lib/inquiry/references";
+import { extractDimensionsFromText, extractShippingRankFromText } from "@/lib/inquiry/productDetailExtraction";
 import { decideResolution, mergeSameProduct, productIdentityKey } from "@/lib/inquiry/scoring";
 import {
   PRODUCT_URL_REQUEST_TEMPLATE,
@@ -389,6 +390,37 @@ function testMergeSameProduct() {
   assertEqual(mergeSameProduct([]).length, 0, "統合: 空でも落ちない");
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 8. 商品説明に明記された配送ランク(2026-09-03 利用者指示)
+ *
+ * BELLOが人の判断で書いた値なので、3辺合計からの推定より優先する。
+ * 円形スツール(座面直径34cm / 脚幅44cm / 高さ75cm)のように3辺で
+ * 表せない商品では、そもそも推定が成立しない。
+ * ══════════════════════════════════════════════════════════════════ */
+function testDeclaredShippingRank() {
+  const hay = "◎発送について 埼玉県より、家財おまかせ便Bランク、または、自社での配送を予定しております。";
+  assertEqual(extractShippingRankFromText(hay)?.rank, "B", "明記ランク: 家財おまかせ便Bランクを読む");
+  assertEqual(
+    extractShippingRankFromText("らくらく家財便 SSランクで発送します")?.rank,
+    "SS",
+    "明記ランク: SSをSと読み違えない",
+  );
+  assertEqual(extractShippingRankFromText("Cランク")?.rank, "C", "明記ランク: 便名が無くても読む");
+  assertEqual(extractShippingRankFromText("大型商品のため別途お見積り"), null, "明記ランク: 曖昧な語から起こさない");
+  assertEqual(extractShippingRankFromText(""), null, "明記ランク: 空文字なら null");
+  assertEqual(extractShippingRankFromText(null), null, "明記ランク: null なら null");
+  assertEqual(
+    extractShippingRankFromText("家財おまかせ便Bランク。なお大型はDランク扱いになる場合があります。")?.rank,
+    "B",
+    "明記ランク: 複数あれば先頭を採る",
+  );
+  assertEqual(
+    extractDimensionsFromText("◎商品詳細 座面直径:34cm 脚幅:44cm 高さ:75cm フットレスト高さ:25.5cm"),
+    null,
+    "明記ランク: 3辺で書かれていない商品は寸法を推定しない",
+  );
+}
+
 testUrlExtraction();
 testBasis();
 testUrlRequest();
@@ -397,6 +429,7 @@ testNoUrlRequestWhereImpossible();
 testTemplate();
 testLinkedBaseProduct();
 testMergeSameProduct();
+testDeclaredShippingRank();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures > 0 ? 1 : 0);

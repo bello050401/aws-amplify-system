@@ -16,6 +16,23 @@
 
 export type ShippingRank = "SS" | "S" | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "OVERSIZE";
 
+/**
+ * 配送ランクをどこから得たか(2026-09-03 利用者指示)。
+ *
+ * 優先順位は BASE_DECLARED > STRUCTURED > DIMENSION_INFERRED。
+ * **BELLOが商品説明に明記したランクを、寸法からの推定で上書きしない。**
+ * 明記された値は、人が形状・梱包・実際の配送方法まで考慮して決めたもので、
+ * 3辺合計から機械的に出した値より信頼度が高い。円形スツールのように
+ * 3辺で表せない商品では、そもそも推定が成立しない。
+ */
+export type ShippingRankSource = "BASE_DECLARED" | "STRUCTURED" | "DIMENSION_INFERRED";
+
+export const SHIPPING_RANK_SOURCE_LABEL: Record<ShippingRankSource, string> = {
+  BASE_DECLARED: "BASE商品説明の記載",
+  STRUCTURED: "登録済みの配送ランク",
+  DIMENSION_INFERRED: "寸法からの推定",
+};
+
 export const SHIPPING_RANKS: ShippingRank[] = ["SS", "S", "A", "B", "C", "D", "E", "F", "G", "OVERSIZE"];
 
 /** 各ランクの3辺合計(cm)上限。OVERSIZEには上限が無い(このランク表の対象外という意味)。 */

@@ -326,6 +326,12 @@ export function resolveFieldUpdate(input: ResolveInput): UpdateDecision {
         : { action: "KEEP", kind: "ALREADY_FILLED", reason: "BELLO側に値がある。空欄のときだけ補完する項目。" };
 
     case "HUMAN_WINS": {
+      // BELLO側が空なら、守るべき人の編集は存在しない。基準の有無に
+      // かかわらず入れてよい —— ここを据え置くと、空欄のまま基準も
+      // 進まず、その項目が永久に埋まらなくなる。
+      if (isEmptyValue(belloValue)) {
+        return { action: "APPLY", value: zaicoValue, reason: "BELLO側が空欄。守るべき人の編集が無い。" };
+      }
       if (lastZaicoValue === undefined) {
         // 前回値を知らない = 誰が入れた値か分からない。人の入力を消す側へ
         // 倒さない。次回からはスナップショットがあるので判定できる。

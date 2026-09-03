@@ -433,6 +433,7 @@ function main() {
   testReportVolume();
   testSnapshotCorruption();
   testSnapshotOnlyMode();
+  testSnapshotLatch();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
@@ -761,4 +762,95 @@ function testSnapshotOnlyMode() {
   // 通常モードの結果にも新しいフィールドが入っていること(呼び出し側が
   // writesBusinessValues を見て安全側に倒せる)。
   assertEqual(afterMerge.baselineDifferences.length, 0, "C案: 通常モードでは基準相違の一覧は空");
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 12. 基準(スナップショット)の固着 —— 2026-09-03 の実データで発覚
+ *
+ * 据え置いた回にも基準をZAICOの現在値へ進めていたため、BELLOの値は
+ * 二度と基準と一致せず、その項目が**永久に「人が編集した」と判定され**
+ * ZAICOの変更が入らなくなっていた。
+ *
+ * 実測: 在庫5,049件のうち43件でカテゴリ(業務ステータス)が固着。
+ *   BELLO=五十嵐さん / ZAICO=販売中 (在庫72179017)
+ *   BELLO=売り切れ   / ZAICO=発送完了 (3件)
+ * 72179017 の更新履歴はすべてZAICO同期で、人の編集は1件も無かった。
+ * ══════════════════════════════════════════════════════════════════ */
+function testSnapshotLatch() {
+  const base = { extendedFields: {}, customFields: {} };
+
+  // 基準が無い初回。据え置くが、**基準にZAICOの値を置かない**。
+  const first = mergeZaicoUpdate({
+    zaico: { ...base, categoryId: "cat-sale" },
+    bello: { ...base, categoryId: "cat-igarashi" },
+    snapshotJson: null,
+    isNewRecord: false,
+  });
+  assertEqual(first.updates.categoryId, undefined, "固着: 基準が無い初回は据え置く");
+  const firstSnap = JSON.parse(first.nextSnapshotJson) as Record<string, unknown>;
+  assertEqual(
+    firstSnap.categoryId,
+    "cat-igarashi",
+    "固着: 基準にはBELLOの現在値を置く(ZAICOの値を置くと永久に一致しなくなる)",
+  );
+
+  // 2回目。ZAICOは同じことを言っている。今度は基準と一致するので反映される。
+  const second = mergeZaicoUpdate({
+    zaico: { ...base, categoryId: "cat-sale" },
+    bello: { ...base, categoryId: "cat-igarashi" },
+    snapshotJson: first.nextSnapshotJson,
+    isNewRecord: false,
+  });
+  assertEqual(second.updates.categoryId, "cat-sale", "固着: 2回目でZAICOの値が入る(固着しない)");
+
+  // 人が本当に編集した場合は、据え置きつつ基準を動かさない。
+  const applied = mergeZaicoUpdate({
+    zaico: { ...base, categoryId: "cat-a" },
+    bello: { ...base, categoryId: "cat-a" },
+    snapshotJson: JSON.stringify({ categoryId: "cat-a" }),
+    isNewRecord: false,
+  });
+  const humanEdited = mergeZaicoUpdate({
+    zaico: { ...base, categoryId: "cat-a" },
+    bello: { ...base, categoryId: "cat-human" },
+    snapshotJson: applied.nextSnapshotJson,
+    isNewRecord: false,
+  });
+  assertEqual(humanEdited.updates.categoryId, undefined, "固着: 人の編集は従来どおり守る");
+  assertEqual(
+    (JSON.parse(humanEdited.nextSnapshotJson) as Record<string, unknown>).categoryId,
+    "cat-a",
+    "固着: 人の編集を守った回は基準を動かさない(編集値が基準になってしまう)",
+  );
+
+  // 守り続けること(何回同期しても人の編集は消えない)。
+  const again = mergeZaicoUpdate({
+    zaico: { ...base, categoryId: "cat-a" },
+    bello: { ...base, categoryId: "cat-human" },
+    snapshotJson: humanEdited.nextSnapshotJson,
+    isNewRecord: false,
+  });
+  assertEqual(again.updates.categoryId, undefined, "固着: 人の編集は繰り返し同期しても守られる");
+
+  // BELLO側が空なら守るべき編集が無いので入れる。
+  const emptyBello = mergeZaicoUpdate({
+    zaico: { ...base, categoryId: "cat-sale" },
+    bello: { ...base, categoryId: null },
+    snapshotJson: null,
+    isNewRecord: false,
+  });
+  assertEqual(emptyBello.updates.categoryId, "cat-sale", "固着: BELLO側が空なら基準が無くても入れる");
+
+  // ZAICOが今回言及しなかった項目の基準は持ち越す(落とすと初回状態へ戻る)。
+  const carried = mergeZaicoUpdate({
+    zaico: { ...base, name: "新しい名前" },
+    bello: { ...base, name: "古い名前", categoryId: "cat-x" },
+    snapshotJson: JSON.stringify({ categoryId: "cat-x", name: "古い名前" }),
+    isNewRecord: false,
+  });
+  assertEqual(
+    (JSON.parse(carried.nextSnapshotJson) as Record<string, unknown>).categoryId,
+    "cat-x",
+    "固着: ZAICOが触れなかった項目の基準は持ち越す",
+  );
 }

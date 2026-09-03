@@ -39,6 +39,7 @@
  */
 import "server-only";
 import { calculateShippingRankFromDimensions } from "@/lib/shipping/rank";
+import type { ShippingRankSource } from "@/lib/shipping/rank";
 import { lookupBaseProduct } from "./baseProductLookup";
 import {
   descriptionToPlainText,
@@ -135,6 +136,8 @@ export interface ResolvedProductContext {
      * 寸法から起こすより正確。
      */
     declaredRank: { rank: string; matchedText: string } | null;
+    /** rank をどこから得たか。通知と記録に出す。 */
+    rankSource: ShippingRankSource | null;
   };
   sources: {
     inventory: boolean;
@@ -300,8 +303,15 @@ export async function buildResolvedProductContext(
   // 幅・奥行・高さの3辺が無く寸法抽出が null になり「想定送料：不明」に
   // なっていたが、同じ説明文に「家財おまかせ便Bランク」と明記されていた。
   const declaredRank = baseText ? extractShippingRankFromText(baseText) : null;
-  if (!rankResult && declaredRank) {
+  if (declaredRank) {
     completionNotes.push(`配送ランク：BASEの商品説明の「${declaredRank.matchedText}」から読み取りました。`);
+    if (rankResult && rankResult.rank !== declaredRank.rank) {
+      // 食い違いは隠さない。明記を採るが、差があること自体が
+      // 担当者にとっての情報(梱包サイズが3辺合計とずれている等)。
+      completionNotes.push(
+        `寸法から計算すると${rankResult.rank}ランクですが、商品説明の記載(${declaredRank.rank}ランク)を優先しました。`,
+      );
+    }
   }
 
   // ── 属性(§31) ─────────────────────────────────────────────────
@@ -353,7 +363,10 @@ export async function buildResolvedProductContext(
       statusName: inventory?.statusName ?? null,
     },
     shipping: {
-      rank: rankResult?.rank ?? declaredRank?.rank ?? null,
+      // §優先順位: 明記 > 登録済み > 寸法推定(2026-09-03 利用者指示)。
+      // 明記されたランクを寸法推定で上書きしない。
+      rank: declaredRank?.rank ?? rankResult?.rank ?? null,
+      rankSource: declaredRank ? "BASE_DECLARED" : rankResult ? "DIMENSION_INFERRED" : null,
       sumCm: rankResult?.sumCm ?? null,
       sizeSource,
       declaredRank,

@@ -80,7 +80,8 @@
     "mark:backfill": "node scripts/with-server-only-stub.cjs scripts/mark-backfill-not-required.ts",
     "verify:notify-webhook-live": "node scripts/with-server-only-stub.cjs scripts/verify-notify-webhook-live.ts",
     "send:line-notify-e2e": "node scripts/with-server-only-stub.cjs scripts/send-line-notify-e2e.ts",
-    "verify:direct-data": "node scripts/with-server-only-stub.cjs scripts/verify-direct-data.ts"
+    "verify:direct-data": "node scripts/with-server-only-stub.cjs scripts/verify-direct-data.ts",
+    "repair:zaico-snapshot-latch": "node scripts/with-server-only-stub.cjs scripts/repair-zaico-snapshot-latch.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

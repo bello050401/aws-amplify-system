@@ -320,6 +320,15 @@ export interface ShippingEvidence {
   /** 見積りに使った発送先都道府県。特定できなければnull。 */
   destinationPrefecture: string | null;
   rank: string | null;
+  /**
+   * rank をどこから得たか(2026-09-03 利用者指示)。
+   *
+   * BASE_DECLARED(BELLOが商品説明に明記) > STRUCTURED(登録済み) >
+   * DIMENSION_INFERRED(寸法からの推定)。担当者が金額の根拠を追えるように
+   * 保持する —— 同じ「Cランク」でも、明記されたものと推定したものでは
+   * 確認すべきことが違う。
+   */
+  rankSource?: import("@/lib/shipping/rank").ShippingRankSource | null;
   /** 税込の合計(price + surcharge)。マスタに無ければnull。 */
   feeYen: number | null;
   /** 「なぜ金額を出せないのか」の説明(管理画面向け)。 */

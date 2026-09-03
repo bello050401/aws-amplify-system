@@ -178,12 +178,37 @@ export function mergeZaicoUpdate(params: {
   const skipped: SkippedField[] = [];
   const conflicts: FieldConflict[] = [];
 
+  // 次回の基準(スナップショット)に何を残すか。フィールド単位で決める。
+  // 詳しい理由は下の「次回のためのスナップショット」のコメント。
+  const nextBase: Record<string, unknown> = {};
+
   const record = (field: string, decision: UpdateDecision, zaicoValue: unknown, belloValue: unknown, sink: Record<string, unknown>) => {
     if (decision.action === "APPLY") {
       sink[field] = decision.value;
+      // 実際に書き込んだので、次回の基準はこの値。
+      nextBase[field] = zaicoValue;
       return;
     }
+    if (decision.action === "KEEP") {
+      if (decision.kind === "SAME_VALUE" || decision.kind === "ZAICO_EMPTY") {
+        // 食い違っていない(または比較対象が無い)。基準はZAICOの値でよい。
+        nextBase[field] = zaicoValue;
+      } else if (decision.kind === "NO_SNAPSHOT") {
+        // 基準が無いので今回は据え置いた。**ZAICOの値を基準にしない。**
+        // それをすると「BELLOは基準と違う = 人が編集した」と永久に
+        // 判定され続け、以後ZAICOの変更が二度と入らなくなる(下記)。
+        // BELLOの現在値を基準に置くことで、次回ZAICOが違う値を返したときに
+        // 「人は触っていない」と正しく判定できる。
+        nextBase[field] = belloValue;
+      } else {
+        // 人の編集を守った/空欄補完の対象外。基準は動かさない ——
+        // 動かすと、その編集が「基準そのもの」になってしまう。
+        if (snapshot && snapshot[field] !== undefined) nextBase[field] = snapshot[field];
+      }
+    }
     if (decision.action === "CONFLICT") {
+      // 人が決める項目。基準は動かさない。
+      if (snapshot && snapshot[field] !== undefined) nextBase[field] = snapshot[field];
       conflicts.push({ field, label: labelOf(field), belloValue, zaicoValue, reason: decision.reason });
       return;
     }
@@ -254,12 +279,41 @@ export function mergeZaicoUpdate(params: {
 
   // ── 次回のためのスナップショット ────────────────────────────────
   //
-  // ZAICOが「何と言ってきたか」を記録する。書き込んだかどうかは無関係。
-  const snapshotSource: Record<string, unknown> = {};
-  for (const field of TOP_LEVEL_FIELDS) {
-    if (zaico[field] !== undefined) snapshotSource[field] = zaico[field];
+  // ── 以前の実装と、それが起こした事故 ──────────────────────────
+  //
+  // 以前はここで「ZAICOが何と言ってきたか」を、**書き込んだかどうかに
+  // 関係なく**記録していた。これが3-wayマージの基準を壊す。
+  //
+  //   HUMAN_WINS は「BELLOの値 == 前回のZAICO値」なら人は触っていないと
+  //   判定して適用する。ところが据え置いた回にも基準をZAICOの現在値へ
+  //   進めてしまうと、BELLOの値は二度と基準と一致しない。以後その項目は
+  //   **永久に「人が編集した」と判定され、ZAICOの変更が入らなくなる。**
+  //
+  // 実測(2026-09-03): 在庫5,049件のうち43件でカテゴリが固着していた。
+  // カテゴリはBELLOでは業務ステータス(販売中/発送完了/売り切れ等)なので
+  // 実害がある。例:
+  //
+  //   BELLO=五十嵐さん / ZAICO=販売中 (在庫72179017)
+  //   BELLO=売り切れ   / ZAICO=発送完了 (3件)
+  //
+  // 72179017 の更新履歴は**すべてZAICO同期**で、人がBELLOで編集した記録は
+  // 1件も無い。つまり「人の編集を守った」は誤判定だった。
+  //
+  // ── 直し方 ──────────────────────────────────────────────────
+  //
+  // 基準は「BELLOとZAICOが実際に一致していた状態」でなければならない。
+  // 適用した項目と、もともと同じだった項目だけ基準を進める(nextBase)。
+  // 据え置いた項目は基準を動かさない —— 動かすと、据え置いたこと自体が
+  // 「合意した状態」として記録されてしまう。
+  const snapshotSource: Record<string, unknown> = { ...nextBase };
+  // ZAICOが今回言及しなかった項目は、前回の基準をそのまま持ち越す。
+  // 落とすと NO_SNAPSHOT へ戻り、次回また据え置きになる。
+  if (snapshot) {
+    for (const [k, v] of Object.entries(snapshot)) {
+      if (k === "__customFields") continue;
+      if (snapshotSource[k] === undefined) snapshotSource[k] = v;
+    }
   }
-  for (const [k, v] of Object.entries(zaico.extendedFields)) snapshotSource[k] = v;
   const nextSnapshot = buildZaicoSnapshot(snapshotSource);
   // customFields は入れ子で持つ(トップレベルのキーと衝突させない)。
   nextSnapshot.__customFields = buildZaicoSnapshot(zaico.customFields);

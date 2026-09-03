@@ -3,7 +3,12 @@ import { generateText } from "@/lib/ai/gateway/gateway";
 import { buildCustomerSafeFacts, type CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
 import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
 import { lookupShippingRate } from "@/lib/shipping/service";
-import { calculateShippingRankFromDimensions, SHIPPING_RANKS, type ShippingRank } from "@/lib/shipping/rank";
+import {
+  calculateShippingRankFromDimensions,
+  SHIPPING_RANKS,
+  type ShippingRank,
+  type ShippingRankSource,
+} from "@/lib/shipping/rank";
 import { listSearchableKnowledge } from "@/lib/knowledge/store";
 import { retrieveKnowledge } from "@/lib/knowledge/retrieval";
 import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./intent";
@@ -996,15 +1001,25 @@ async function resolveShipping(params: {
     params.dimensions.height,
   );
 
-  // 寸法から出せるならそれを使い、出せないときだけ明記されたランクを使う。
-  // 3辺がそろっているなら実測に基づく計算のほうが追跡しやすいため。
+  // ── 優先順位(2026-09-03 利用者指示) ──────────────────────────
+  //
+  //   1. BASE等にBELLOが明記した配送ランク (BASE_DECLARED)
+  //   2. その他の確定済み配送ランク         (STRUCTURED)
+  //   3. 寸法からの推定                     (DIMENSION_INFERRED)
+  //   4. 不明
+  //
+  // **明記されたランクを寸法推定で上書きしない。** 明記された値は、人が
+  // 形状・梱包・実際の配送方法まで考慮して決めたもので、3辺合計から
+  // 機械的に出した値より信頼度が高い。円形スツール(座面直径34cm /
+  // 脚幅44cm / 高さ75cm)のように3辺で表せない商品では推定自体が成立しない。
   // 明記されたランクは文字列なので、料金マスタが知っている値だけを通す。
   // 未知の文字列をそのまま渡すと、料金が引けずに「未登録」と報告され、
   // 原因が説明文の表記ゆれなのかマスタ不足なのか分からなくなる。
   const declared = params.declaredRank && (SHIPPING_RANKS as string[]).includes(params.declaredRank.rank)
     ? (params.declaredRank.rank as ShippingRank)
     : null;
-  const rank: ShippingRank | null = dims?.rank ?? declared;
+  const rank: ShippingRank | null = declared ?? dims?.rank ?? null;
+  const rankSource: ShippingRankSource | null = declared ? "BASE_DECLARED" : dims ? "DIMENSION_INFERRED" : null;
 
   const missing = missingShippingInfo({
     productResolved: params.productResolved,
@@ -1017,6 +1032,7 @@ async function resolveShipping(params: {
     return {
       destinationPrefecture: params.destinationPrefecture,
       rank,
+      rankSource,
       feeYen: null,
       note: !params.destinationPrefecture
         ? "お届け先が特定できないため、金額を出していません。"
@@ -1030,6 +1046,7 @@ async function resolveShipping(params: {
     return {
       destinationPrefecture: params.destinationPrefecture,
       rank,
+      rankSource,
       feeYen: null,
       note: `埼玉県 → ${params.destinationPrefecture}・${rank}ランクの料金が料金マスタに未登録です。`,
       missingCustomerInfo: missing,
@@ -1039,6 +1056,7 @@ async function resolveShipping(params: {
     return {
       destinationPrefecture: params.destinationPrefecture,
       rank,
+      rankSource,
       feeYen: null,
       note: `埼玉県 → ${params.destinationPrefecture}・${rank}ランクは公式にサービス対象外と確認されています。`,
       missingCustomerInfo: missing,
@@ -1047,13 +1065,17 @@ async function resolveShipping(params: {
   return {
     destinationPrefecture: params.destinationPrefecture,
     rank,
+    rankSource,
     feeYen: rate.price + (rate.surcharge ?? 0),
     // 市区町村が分からない段階の金額は参考値。確定額として案内させない。
     // ランクを説明文から読んだ場合はそれも書く —— 担当者が金額の根拠を
     // 追えるようにするため(寸法から計算したのか、記載を読んだのか)。
     note: [
       params.cityHint ? null : "都道府県のみで引いた参考額です。市区町村により変わる場合があります。",
-      dims ? null : declared ? `配送ランクはBASEの商品説明の「${params.declaredRank?.matchedText}」から読み取りました。` : null,
+      declared ? `配送ランクはBASEの商品説明の「${params.declaredRank?.matchedText}」から読み取りました。` : null,
+      // 明記と推定が食い違う場合は隠さない。梱包サイズが3辺合計と
+      // ずれていることの手がかりになる。
+      declared && dims && dims.rank !== declared ? `寸法からの計算では${dims.rank}ランクです。` : null,
     ]
       .filter(Boolean)
       .join(" ") || null,
