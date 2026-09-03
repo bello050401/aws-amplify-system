@@ -171,6 +171,9 @@ export class ClaudeRunner {
       taskId: task.id,
       repoPath: task.repo_path,
       branch: task.branch,
+      workDir: task.work_dir || task.repo_path,
+      isolation: task.isolation,
+      baseCommit: task.base_commit,
     }) + instruction;
 
     // 指示本文はコマンドラインへ出さない。証拠として保存はする (秘密除去済み)。
@@ -180,12 +183,12 @@ export class ClaudeRunner {
     this.logger.info("Claude Runner 起動", {
       taskId: task.id,
       command: redactCommand(resolved.file, args.map((a) => (a.length > 120 ? "<schema>" : a))),
-      cwd: task.repo_path,
+      cwd: task.work_dir || task.repo_path,
       stdoutPath,
     });
 
     const child = spawn(resolved.file, args, {
-      cwd: task.repo_path,
+      cwd: task.work_dir || task.repo_path,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
       env: this.#childEnv(),

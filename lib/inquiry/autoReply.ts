@@ -1,4 +1,5 @@
 import "server-only";
+import { runWithDirectData } from "@/lib/amplify/dataClient";
 import { getConversation, listMessages } from "@/lib/messaging/service";
 import { notifyInquiry, type NotifyResult } from "@/lib/messaging/lineNotify/service";
 import { buildDedupeKey } from "@/lib/messaging/lineNotify/deliveryPolicy";
@@ -67,6 +68,23 @@ function evaluateDeliveryState(messageText: string): DeliveryWindowState | null 
  *
  * @param sourceMessageId 対象の受信メッセージ。省略時は最新のINBOUND。
  */
+/**
+ * 未認証の経路(LINE Webhook / メール取込 / 定期実行)向けの入口。
+ *
+ * runWithDirectData の中で実行することで、この呼び出しの下にある
+ * serverDataClient の読み書きがすべてDynamoDB直結になる
+ * (lib/amplify/dataClient.ts の Proxy)。呼び出し側も下位モジュールも
+ * コードは1行も変えていない。
+ *
+ * 認証済みの経路(Server Action)からは**こちらを使わない** ——
+ * AppSyncの認可チェックを回さずに読み書きすることになる。
+ */
+export function processInquiryAndNotifyUnauthenticated(
+  params: Parameters<typeof processInquiryAndNotify>[0],
+): Promise<AutoReplyResult> {
+  return runWithDirectData(() => processInquiryAndNotify(params));
+}
+
 export async function processInquiryAndNotify(params: {
   conversationId: string;
   sourceMessageId?: string | null;
@@ -95,23 +113,14 @@ export async function processInquiryAndNotify(params: {
       listMessages(params.conversationId),
     ]);
     if (!conversation) {
-      // **未認証の経路から呼ばれると必ずここへ来る。**
-      //
-      // getConversation は serverDataClient(Cookie + authMode:"userPool")を
-      // 使う。LINE WebhookはLINEプラットフォームからの未認証POSTで、Cookieも
-      // セッションも無いため、AppSyncの呼び出しが認可で弾かれ、data が null で
-      // 返る(errors は握り潰される)。会話は実際には存在しているのに
-      // 「見つからない」に見える。
-      //
-      // 同じ問題は lib/messaging/webhookStore.ts のファイル冒頭に記録があり、
-      // メッセージ保存はそれを避けるためDynamoDBを直接叩いている。この関数は
-      // 在庫・ナレッジ・返信ルールまで読むため同じ回避ができておらず、
-      // **Webhookからの自動処理は現状ここで止まる**(docs参照)。
-      //
       // 静かに終わらせない。原因が分かる形でログへ残す。
+      //
+      // 未認証の経路から processInquiryAndNotifyUnauthenticated を経由せずに
+      // 直接呼ぶと、AppSyncの認可で弾かれて必ずここへ来る(data が null で返る)。
+      // 呼び出し経路の取り違えを疑えるよう、その可能性を文面へ残す。
       const message =
-        "会話を読み込めませんでした。未認証の経路(LINE Webhook等)から呼ばれた場合、" +
-        "serverDataClientのuserPool認証が通らないため必ずこの結果になります。";
+        "会話を読み込めませんでした。未認証の経路から呼ぶ場合は " +
+        "processInquiryAndNotifyUnauthenticated を使ってください(AppSyncの認可で弾かれます)。";
       console.error("[autoReply] " + message, { conversationId: params.conversationId });
       return { drafted: false, draft: null, notify: null, reason: message };
     }

@@ -79,6 +79,19 @@ export async function listReplyDrafts(conversationId: string): Promise<ReplyDraf
   return (data as unknown as ReplyDraftRow[]).map(toRecord).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/**
+ * idで1件引く。AI処理ログが「この通知の根拠」を出すために使う。
+ *
+ * 通知(NotificationDelivery)は replyDraftId しか持っていないので、
+ * 特定できた商品・使ったナレッジ・適用したルールを見るには、ここから
+ * evidence を取り直す必要がある。
+ */
+export async function getReplyDraft(id: string): Promise<ReplyDraftRecord | null> {
+  const { data, errors } = await serverDataClient.models.ReplyDraft.get({ id }, inventoryAuthMode);
+  if (errors) throw new Error(`返信案の取得に失敗しました: ${errors.map((e) => e.message).join("; ")}`);
+  return data ? toRecord(data as unknown as ReplyDraftRow) : null;
+}
+
 /** その受信メッセージに対する最新の返信案(無ければnull)。 */
 export async function latestReplyDraftFor(conversationId: string, sourceMessageId: string): Promise<ReplyDraftRecord | null> {
   const drafts = await listReplyDrafts(conversationId);

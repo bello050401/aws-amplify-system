@@ -193,14 +193,14 @@ export class ClaudeReviewEngine {
     this.logger?.info?.("審査担当 Claude を起動します（実装セッションとは別）", {
       taskId: task.id,
       command: redactCommand(resolved.file, args.map((a) => (a.length > 120 ? "<schema>" : a))),
-      cwd: task.repo_path,
+      cwd: task.work_dir || task.repo_path,
     });
 
     const timeoutSeconds = Number.isFinite(this.settings.timeoutSeconds) ? this.settings.timeoutSeconds : 900;
     const started = Date.now();
 
     const child = spawn(resolved.file, args, {
-      cwd: task.repo_path,
+      cwd: task.work_dir || task.repo_path,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
       env: this.#childEnv(),

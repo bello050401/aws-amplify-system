@@ -1,7 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { cookies } from "next/headers";
 import { generateServerClientUsingCookies } from "@aws-amplify/adapter-nextjs/data";
 import type { Schema } from "@/amplify/data/resource";
 import outputs from "@/amplify_outputs.json";
+import { createDirectDataClient } from "./directData";
 
 /**
  * Server-side Amplify Data client for use inside Server Components,
@@ -22,10 +24,60 @@ import outputs from "@/amplify_outputs.json";
  *     satisfy. Use `adminAuthMode` below on all of those, or the call
  *     fails with an authorization error even for a signed-in admin.
  */
-export const serverDataClient = generateServerClientUsingCookies<Schema>({
+const cookieDataClient = generateServerClientUsingCookies<Schema>({
   config: outputs,
   cookies,
 });
+
+/**
+ * 2026-09-03 追加指示 §5/§6: 未認証経路のための切り替え。
+ *
+ * ── 何のためか ──────────────────────────────────────────────────
+ *
+ * 上のクライアントは Cookie + userPool 認証なので、**ログイン中のユーザーが
+ * いる前提**。LINE Webhook のような未認証POSTから呼ぶと AppSync に弾かれ、
+ * `data` が null で返る(errors は握り潰されることがある)。実測で
+ * ReplyDraft も NotificationDelivery も作られない状態になっていた。
+ *
+ * 呼び出し側は10以上のモジュールに散っていて、そのすべてがこの
+ * `serverDataClient` を直接 import している。**1箇所で差し替えられる**ように
+ * Proxy を挟み、`runWithDirectData()` の中でだけ DynamoDB 直結の実装
+ * (lib/amplify/directData.ts)へ向ける。
+ *
+ * ── 既定の挙動は変えていない ────────────────────────────────────
+ *
+ * `runWithDirectData()` で明示的に囲まれていない限り、これまでと**完全に
+ * 同じ**クライアントが返る。画面・Server Action の経路は一切影響を受けない。
+ */
+const directDataScope = new AsyncLocalStorage<{ direct: true }>();
+
+/**
+ * この中で行う `serverDataClient` の呼び出しを DynamoDB 直結へ向ける。
+ *
+ * 未認証の経路(LINE Webhook / メール取込 / 定期実行スクリプト)からのみ使う。
+ * 認証済みの経路で使ってはいけない —— AppSyncの認可チェックを回さずに
+ * 読み書きすることになる。
+ */
+export function runWithDirectData<T>(fn: () => Promise<T>): Promise<T> {
+  return directDataScope.run({ direct: true }, fn);
+}
+
+/** いま直結モードか。ログや分岐の説明に使う。 */
+export function isDirectDataMode(): boolean {
+  return directDataScope.getStore()?.direct === true;
+}
+
+let directClientSingleton: { models: Record<string, unknown> } | null = null;
+
+export const serverDataClient = new Proxy(cookieDataClient as object, {
+  get(target, prop, receiver) {
+    if (prop === "models" && directDataScope.getStore()?.direct) {
+      if (!directClientSingleton) directClientSingleton = createDirectDataClient();
+      return directClientSingleton.models;
+    }
+    return Reflect.get(target, prop, receiver);
+  },
+}) as typeof cookieDataClient;
 
 /** Spread/pass as the options argument on any admin-only Amplify Data call — see the note above. */
 export const adminAuthMode = { authMode: "userPool" } as const;

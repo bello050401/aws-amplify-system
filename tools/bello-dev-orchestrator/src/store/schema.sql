@@ -44,7 +44,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   retry_after       TEXT,                          -- retry_wait 用の再開時刻
   heartbeat_at      TEXT,
   last_failure_signature TEXT,                     -- 同一失敗の連続検知 (§7-4)
-  review_failures   INTEGER NOT NULL DEFAULT 0     -- 審査が連続で失敗した回数
+  review_failures   INTEGER NOT NULL DEFAULT 0,    -- 審査が連続で失敗した回数
+  worktree_path     TEXT,                          -- タスク専用 worktree の場所
+  worktree_branch   TEXT,                          -- タスク専用ブランチ
+  base_commit       TEXT,                          -- 作業の基準コミット
+  base_branch       TEXT,                          -- 基準ブランチ
+  isolation         TEXT NOT NULL DEFAULT 'in-place' -- worktree | in-place
 );
 
 -- 冪等性キー: 同じ指示を二重登録しない (§5-1, §14-1)

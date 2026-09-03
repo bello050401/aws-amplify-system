@@ -15,6 +15,8 @@ import {
   type LineNotifySettings,
 } from "@/lib/messaging/lineNotify/settingsStore";
 import { listRecentDeliveries, type NotificationDeliveryRecord } from "@/lib/messaging/lineNotify/deliveryStore";
+import { getReplyDraft } from "@/lib/inquiry/draftStore";
+import type { IdentifiedProductCard } from "@/lib/inquiry/types";
 import { retryDelivery, sendTestNotification } from "@/lib/messaging/lineNotify/service";
 
 /**
@@ -140,6 +142,37 @@ export async function sendTestNotificationAction(): Promise<NotifyBotActionResul
 export async function listRecentDeliveriesAction(limit = 50): Promise<NotificationDeliveryRecord[]> {
   await requireEditor();
   return listRecentDeliveries(limit);
+}
+
+/**
+ * 通知1件の根拠(§24「使用ルール」「使用ナレッジ」「対象商品」)。
+ *
+ * 一覧では返さない。50件分の evidence を毎回読むと重く、しかも大半は
+ * 開かれない —— 展開したときだけ引く。
+ */
+export async function getDeliveryEvidenceAction(replyDraftId: string): Promise<{
+  identifiedProduct: IdentifiedProductCard | null;
+  knowledgeDocuments: { id: string; title: string; fileName: string }[];
+  appliedReplyRules: { id: string; title: string; category: string; version: number }[];
+  productCandidates: { displayInventoryId: string; name: string; confidence: number }[];
+  modelName: string | null;
+  status: string | null;
+} | null> {
+  await requireEditor();
+  const draft = await getReplyDraft(replyDraftId);
+  if (!draft) return null;
+  return {
+    identifiedProduct: draft.evidence?.identifiedProduct ?? null,
+    knowledgeDocuments: draft.evidence?.knowledgeDocuments ?? [],
+    appliedReplyRules: draft.evidence?.appliedReplyRules ?? [],
+    productCandidates: (draft.evidence?.productCandidates ?? []).map((c) => ({
+      displayInventoryId: c.displayInventoryId,
+      name: c.name,
+      confidence: c.confidence,
+    })),
+    modelName: draft.modelName,
+    status: draft.status,
+  };
 }
 
 /** 失敗・停止した通知の手動再送。原因を直した後に人が流せるようにする。 */

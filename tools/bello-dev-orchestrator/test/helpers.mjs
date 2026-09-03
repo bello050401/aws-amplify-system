@@ -54,7 +54,14 @@ export function makeConfig(overrides = {}) {
     dashboard: { enabled: false, host: "127.0.0.1", port: 4399, lanAccess: false, lanAccessTokenEnvVar: "BELLO_DASHBOARD_TOKEN" },
     logging: { level: "error", retentionDays: 30, maxFileBytes: 1024 * 1024, maxFiles: 3 },
     timezone: "Asia/Tokyo",
-    git: { autoCommit: false, allowPush: false, protectedBranches: ["main"] },
+    git: {
+      autoCommit: false,
+      allowPush: false,
+      protectedBranches: ["main"],
+      isolation: "worktree",
+      allowInPlaceFallback: true,
+      removeWorktreeWhenSafe: false,
+    },
     ...overrides,
   };
 }

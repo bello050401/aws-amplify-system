@@ -1,7 +1,7 @@
 import "server-only";
 import { fetchMercariNotificationMails, GmailError } from "@/lib/messaging/email/gmailClient";
 import { recordIncomingWebhookMessage } from "@/lib/messaging/webhookStore";
-import { processInquiryAndNotify } from "@/lib/inquiry/autoReply";
+import { processInquiryAndNotifyUnauthenticated } from "@/lib/inquiry/autoReply";
 import {
   buildProductLookupText,
   parseMercariNotificationMail,
@@ -133,7 +133,7 @@ export async function ingestMercariNotificationMails(params: { maxResults?: numb
       // 商品特定は既存の productResolver に任せる(§15 の優先順位も
       // そちらが実装済み)。メールから取れた商品URL・商品名は
       // productLookupHint として渡し、**本文とは別扱い**にする。
-      await processInquiryAndNotify({
+      await processInquiryAndNotifyUnauthenticated({
         conversationId: stored.conversationId,
         sourceMessageId: stored.messageId,
         who: params.who,

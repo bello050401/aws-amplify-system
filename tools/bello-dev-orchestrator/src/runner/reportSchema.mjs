@@ -101,7 +101,13 @@ export const COMPLETION_REPORT_SCHEMA = {
 /**
  * すべてのタスク指示の先頭に自動付加する共通実行契約 (指示書 §6-4)。
  */
-export function buildExecutionContract({ taskId, repoPath, branch }) {
+export function buildExecutionContract({ taskId, repoPath, branch, workDir, isolation, baseCommit }) {
+  const isWorktree = isolation === "worktree";
+  const placeNote = isWorktree
+    ? `- 作業場所: ${workDir}\n` +
+      `  ここは **このタスク専用の git worktree** です。基準コミット ${baseCommit ?? "(不明)"} の複製から始まっています。\n` +
+      `  本体リポジトリ (${repoPath}) には触らないでください。ここでの変更だけが、このタスクの成果として扱われます。`
+    : `- 作業場所: ${workDir ?? repoPath}（本体リポジトリと共有しています）`;
   return `# 実行契約（BELLO 自律開発管理システム）
 
 あなたは BELLO の開発タスクを 1 件担当します。以下は例外なく守ってください。
@@ -109,11 +115,15 @@ export function buildExecutionContract({ taskId, repoPath, branch }) {
 - タスクID: ${taskId}
 - リポジトリ: ${repoPath}
 - 想定ブランチ: ${branch ?? "(現在のブランチ)"}
+${placeNote}
 
 ## 守ること
 
 1. 既存実装を推測で重複実装しない。必ず検索・読解・実測してから変更する。
 2. ユーザーの未コミット変更を保存する。git reset --hard、無差別な削除、履歴改変、既存変更の上書きをしない。
+   \`git add\` と \`git commit\` は禁止されています（ツール側で拒否されます）。**コミットはこのシステムが、
+   あなたが変更したと確認できたファイルだけを明示指定して行います。** あなたはファイルを直すことに集中してください。
+   完了報告の git.commitCreated は false のままで構いません。
 3. 危険操作・本人操作（認証、MFA、OAuth、CAPTCHA、課金、本番デプロイ、本番データ破壊、保護ブランチへのマージ、IAM 等の権限拡大）は自分で実行せず、完了報告の userActions として報告し、それ以外の作業は続行する。
 4. 調査 → 設計 → 実装 → テスト → 修正 → 再テストまで行う。「実装したが未検証」を完了と呼ばない。
 5. 完了条件を満たすまで、途中報告だけで終了しない。

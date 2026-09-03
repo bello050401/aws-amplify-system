@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.join(HERE, "schema.sql");
 
-export const SCHEMA_VERSION = "2";
+export const SCHEMA_VERSION = "3";
 
 /**
  * 追記のみのマイグレーション。既存のタスク・TODO・文書を壊さないよう、
@@ -22,6 +22,12 @@ const MIGRATIONS = [
   "ALTER TABLE todos ADD COLUMN kind TEXT NOT NULL DEFAULT 'action'",
   // v2: 審査が連続で失敗した回数。再起動しても数え直しにならないよう DB に持つ
   "ALTER TABLE tasks ADD COLUMN review_failures INTEGER NOT NULL DEFAULT 0",
+  // v3: タスク専用の作業場所。どこで何を触ったかを後から追えるようにする
+  "ALTER TABLE tasks ADD COLUMN worktree_path TEXT",
+  "ALTER TABLE tasks ADD COLUMN worktree_branch TEXT",
+  "ALTER TABLE tasks ADD COLUMN base_commit TEXT",
+  "ALTER TABLE tasks ADD COLUMN base_branch TEXT",
+  "ALTER TABLE tasks ADD COLUMN isolation TEXT NOT NULL DEFAULT 'in-place'",
 ];
 
 /**

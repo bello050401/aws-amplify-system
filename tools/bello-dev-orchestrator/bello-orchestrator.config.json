@@ -39,8 +39,6 @@
       "Bash(git show:*)",
       "Bash(git branch:*)",
       "Bash(git rev-parse:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(head:*)",
@@ -53,13 +51,24 @@
       "Bash(pwd:*)"
     ],
     "disallowedTools": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git add -A:*)",
+      "Bash(git add --all:*)",
+      "Bash(git add .:*)",
+      "Bash(git add -u:*)",
+      "Bash(git commit -a:*)",
+      "Bash(git commit --all:*)",
+      "Bash(git commit --amend:*)",
       "Bash(git push:*)",
       "Bash(git reset:*)",
       "Bash(git checkout:*)",
+      "Bash(git restore:*)",
       "Bash(git stash:*)",
       "Bash(git clean:*)",
       "Bash(git rebase:*)",
       "Bash(git filter-branch:*)",
+      "Bash(git worktree:*)",
       "Bash(rm:*)",
       "Bash(rmdir:*)",
       "Bash(del:*)",
@@ -126,6 +135,9 @@
       "main",
       "master",
       "production"
-    ]
+    ],
+    "isolation": "worktree",
+    "allowInPlaceFallback": true,
+    "removeWorktreeWhenSafe": false
   }
 }

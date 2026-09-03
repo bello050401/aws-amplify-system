@@ -6,7 +6,7 @@ import { fetchLineMessageContent } from "@/lib/messaging/line/content";
 import { saveIncomingAttachment } from "@/lib/messaging/attachmentStore";
 import { parseLineWebhookBody } from "@/lib/messaging/line/adapter";
 import { recordIncomingWebhookMessage, classifyWebhookStoreFailure, type WebhookStoreFailure } from "@/lib/messaging/webhookStore";
-import { processInquiryAndNotify } from "@/lib/inquiry/autoReply";
+import { processInquiryAndNotifyUnauthenticated } from "@/lib/inquiry/autoReply";
 import type { LineWebhookBody } from "@/lib/messaging/line/types";
 
 /**
@@ -185,7 +185,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   // 延々と走ることになる。
   for (const target of processed) {
     try {
-      await processInquiryAndNotify({
+      await processInquiryAndNotifyUnauthenticated({
         conversationId: target.conversationId,
         sourceMessageId: target.messageId,
         who: null,

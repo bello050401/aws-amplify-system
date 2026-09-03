@@ -7,6 +7,12 @@
 import crypto from "node:crypto";
 import { STATES, ACTIVE_STATES } from "./states.mjs";
 import * as git from "./git.mjs";
+import {
+  createTaskWorktree,
+  removeWorktreeIfSafe,
+  canRemoveWorktree,
+  branchNameFor,
+} from "./worktree.mjs";
 import { evaluateEvidence } from "../review/evidenceGate.mjs";
 import { ReviewUnavailableError, REVIEW_FAILURE, NEEDS_USER_ACTION, describeFailure } from "../review/errors.mjs";
 import {
@@ -228,25 +234,50 @@ export class Orchestrator {
         return this.#failTask(task, `repoPath が git 作業ツリーではありません: ${repoPath}`, "preflight");
       }
 
+      // 本体リポジトリの開始時点の状態を必ず記録する。
+      // 「開始前から存在した未コミット変更」を後から証明できるようにするため。
       const snapshot = git.snapshotWorkingTree(repoPath);
       this.snapshots.set(task.id, snapshot);
       this.repo.checkpoint(task.id, "preflight", snapshot);
-      this.repo.updateTask(task.id, {
-        branch: snapshot.branch,
-        git_start_commit: snapshot.headCommit,
-        attempts: task.attempts + 1,
-      });
       if (snapshot.dirty) {
-        this.logger.info("開始時に未コミット変更があります。自動コミット対象から除外します。", {
+        this.logger.info("開始時に本体リポジトリへ未コミット変更があります。一切触りません。", {
           taskId: task.id,
           count: snapshot.entries.length,
+          files: snapshot.entries.slice(0, 20),
         });
       }
+
+      // タスク専用の作業場所を用意する。
+      const place = this.#prepareWorkspace(task, snapshot);
+      if (!place.ok) {
+        return this.#failTask(task, place.reason, "preflight");
+      }
+
+      this.repo.updateTask(task.id, {
+        branch: place.branch,
+        git_start_commit: place.baseCommit,
+        base_commit: place.baseCommit,
+        base_branch: place.baseBranch,
+        worktree_path: place.isolation === "worktree" ? place.workDir : null,
+        worktree_branch: place.isolation === "worktree" ? place.branch : null,
+        work_dir: place.workDir,
+        isolation: place.isolation,
+        attempts: task.attempts + 1,
+      });
+      this.repo.checkpoint(task.id, "workspace", {
+        isolation: place.isolation,
+        workDir: place.workDir,
+        branch: place.branch,
+        baseCommit: place.baseCommit,
+        baseBranch: place.baseBranch,
+        reused: place.reused ?? false,
+      });
 
       // --- running -------------------------------------------------------
       const running = this.repo.setState(task.id, STATES.RUNNING, "Claude Runner 実行", "system");
       const instruction = this.#buildInstruction(running);
 
+      // 実装担当は work_dir (= 専用 worktree) で動く。本体リポジトリには触れない。
       const result = await this.runner.run({
         task: running,
         instruction,
@@ -288,18 +319,24 @@ export class Orchestrator {
 
       // --- verifying (証拠ゲート: AI を使わない機械的突合) -----------------
       this.repo.setState(task.id, STATES.VERIFYING, "証拠を検証", "system");
+      const workDir = place.workDir;
       const gitFacts = {
-        startCommit: snapshot.headCommit,
-        headCommit: git.headCommit(repoPath),
-        branch: git.currentBranch(repoPath),
+        startCommit: place.baseCommit,
+        headCommit: git.headCommit(workDir),
+        branch: git.currentBranch(workDir),
         protectedBranchTouched:
-          git.isProtectedBranch(git.currentBranch(repoPath), this.config.git.protectedBranches) &&
-          git.headCommit(repoPath) !== snapshot.headCommit,
+          git.isProtectedBranch(git.currentBranch(workDir), this.config.git.protectedBranches) &&
+          git.headCommit(workDir) !== place.baseCommit,
       };
-      const evidence = evaluateEvidence({ report: result.report, gitFacts, repoPath });
+      const evidence = evaluateEvidence({ report: result.report, gitFacts, repoPath: workDir });
       this.repo.checkpoint(task.id, "evidence_gate", evidence);
 
-      const changed = git.changedFilesSince(repoPath, snapshot.headCommit);
+      // worktree 方式では、ここで出るファイルは「このタスクが作ったもの」だけ。
+      // 基準コミットのきれいな複製から始めているので、他人の変更は入りようがない。
+      const changed =
+        place.isolation === "worktree"
+          ? git.taskChangedFilesInWorktree(workDir, place.baseCommit)
+          : git.changedFilesSince(workDir, place.baseCommit).filter((f) => !git.preexistingPaths(snapshot).has(f));
       this.repo.updateTask(task.id, {
         changed_files: JSON.stringify(changed.slice(0, 500)),
         test_summary: JSON.stringify(result.report.tests ?? []),
@@ -317,13 +354,16 @@ export class Orchestrator {
       }
       if (todoIds.length) this.repo.updateTask(task.id, { todo_ids: JSON.stringify(todoIds) });
 
-      // 自動コミット (保護ブランチ・ユーザー変更は除外)
+      // 自動コミット。stage するのは「このタスクが作ったと証明できるファイル」だけ。
       if (this.config.git.autoCommit && evidence.passed) {
         const commit = git.commitTaskChanges({
-          repoPath,
+          repoPath: workDir,
           branch: gitFacts.branch,
-          message: `chore(orchestrator): ${task.title}\n\nTask: ${task.id}`,
-          snapshot,
+          message:
+            `chore(orchestrator): ${task.title}\n\n` +
+            `Task: ${task.id}\nIsolation: ${place.isolation}\nBase: ${place.baseCommit}`,
+          snapshot: place.isolation === "worktree" ? { entries: [] } : snapshot,
+          allowedFiles: changed,
           protectedBranches: this.config.git.protectedBranches,
         });
         this.repo.checkpoint(task.id, "auto_commit", commit);
@@ -331,7 +371,16 @@ export class Orchestrator {
           this.repo.updateTask(task.id, { git_end_commit: commit.commit });
           gitFacts.headCommit = commit.commit;
         }
+        if (commit.skipped?.length) {
+          this.logger.info("コミット対象から除外したファイル", {
+            taskId: task.id,
+            skipped: commit.skipped.slice(0, 20),
+          });
+        }
       }
+
+      // 別セッションが同じファイルを触っていないか調べる。自動マージはしない。
+      this.#checkCrossSessionConflicts(task, place, changed);
 
       this.repo.setState(task.id, STATES.AWAITING_AI_REVIEW, "AI 審査へ", "system", { report_id: reportId });
       await this.#doReview(this.repo.getTask(task.id), { evidence, gitFacts });
@@ -361,12 +410,12 @@ export class Orchestrator {
       evaluateEvidence({
         report,
         gitFacts: {
-          startCommit: task.git_start_commit,
-          headCommit: git.headCommit(task.repo_path),
+          startCommit: task.base_commit || task.git_start_commit,
+          headCommit: git.headCommit(task.work_dir || task.repo_path),
           branch: task.branch,
           protectedBranchTouched: false,
         },
-        repoPath: task.repo_path,
+        repoPath: task.work_dir || task.repo_path,
       });
 
     const provider = this.reviewProvider;
@@ -397,7 +446,7 @@ export class Orchestrator {
       reviewResult = await engine.review({
         task,
         report,
-        gitStat: git.diffStat(task.repo_path, task.git_start_commit),
+        gitStat: git.diffStat(task.work_dir || task.repo_path, task.base_commit || task.git_start_commit),
         testSummary: report.tests ?? [],
         priorReviews: this.repo.reviewsFor(task.id),
       });
@@ -542,6 +591,140 @@ export class Orchestrator {
         });
         return;
     }
+  }
+
+  // ------------------------------------------------- 作業場所の用意と後始末
+  /**
+   * タスク専用の作業場所を用意する。
+   *
+   * 既定は worktree 方式。基準コミットのきれいな複製から始めるので、
+   * 開始前の未コミット変更は複製されず、触ることも巻き込むこともできない。
+   * worktree を作れない環境では、設定次第で同一ツリー方式へ落ちる。
+   */
+  #prepareWorkspace(task, snapshot) {
+    const repoPath = task.repo_path;
+    const wantWorktree = (this.config.git.isolation ?? "worktree") === "worktree";
+
+    if (wantWorktree) {
+      const created = createTaskWorktree({
+        repoPath,
+        worktreeRoot: this.paths.worktreeRoot,
+        taskId: task.id,
+        logger: this.logger,
+      });
+      if (created.ok) {
+        return {
+          ok: true,
+          isolation: "worktree",
+          workDir: created.path,
+          branch: created.branch,
+          baseCommit: created.baseCommit,
+          baseBranch: created.baseBranch,
+          reused: created.reused,
+        };
+      }
+      this.repo.audit("system", "workspace.worktree_failed", task.id, "error", created.reason);
+      if (!this.config.git.allowInPlaceFallback) {
+        return { ok: false, reason: `専用 worktree を作れませんでした: ${created.reason}` };
+      }
+      this.logger.warn("worktree を作れないため同一ツリーで作業します", {
+        taskId: task.id,
+        reason: created.reason,
+      });
+    }
+
+    return {
+      ok: true,
+      isolation: "in-place",
+      workDir: repoPath,
+      branch: snapshot.branch,
+      baseCommit: snapshot.headCommit,
+      baseBranch: snapshot.branch,
+    };
+  }
+
+  /**
+   * 別セッションが同じファイルを触っていないか調べる。
+   * 触っていれば自動マージせず、人に判断してもらう TODO を出す。
+   */
+  #checkCrossSessionConflicts(task, place, changedFiles) {
+    if (!changedFiles?.length) return { conflicts: [] };
+
+    const result = git.detectCrossSessionConflicts({
+      repoPath: task.repo_path,
+      baseCommit: place.baseCommit,
+      taskFiles: changedFiles,
+    });
+    this.repo.checkpoint(task.id, "conflict_check", result);
+
+    if (result.conflicts.length === 0) return result;
+
+    this.logger.warn("別セッションが同じファイルを触っています。自動マージはしません。", {
+      taskId: task.id,
+      conflicts: result.conflicts,
+    });
+    this.repo.audit("system", "conflict.detected", task.id, `${result.conflicts.length} 件`, null);
+
+    const list = result.conflicts.map((c) => `  ・${c.file}（${c.why}）`).join("\n");
+    this.todoManager.createFromUserAction(
+      {
+        category: "approval",
+        kind: "merge_conflict",
+        title: `別セッションと同じファイルを変更しました: ${task.title}`,
+        reason:
+          "このタスクが変更したファイルを、本体リポジトリ側でも別のセッションまたはご本人が変更しています。\n" +
+          "取り違えると片方の作業が消えるため、自動でのマージは行いません。\n\n" +
+          `【重なっているファイル】\n${list}\n\n` +
+          `【このタスクの成果】\n  ブランチ: ${place.branch}\n  作業場所: ${place.workDir}`,
+        steps: [
+          `差分を見る: git log --oneline ${place.baseBranch ?? "HEAD"}..${place.branch}`,
+          `内容を見る: git diff ${place.baseCommit}..${place.branch}`,
+          "どちらを採るか決めてから、手作業でマージする",
+          "取り込まない場合は、このブランチを残したまま TODO を完了にしてよい",
+        ],
+        completionCondition: "マージするか、取り込まないと決めたこと",
+        answerFormat: "text",
+        answerRequired: true,
+        canUseIPhone: false,
+        estimatedMinutes: 15,
+        priority: "urgent",
+      },
+      { waitingTaskIds: [task.id], source: "system" },
+    );
+    return result;
+  }
+
+  /**
+   * タスク終了後の後始末。
+   * 既定では worktree もブランチも残す（証拠として保持する）。
+   * 設定で削除を有効にしても、安全確認を通ったときだけ消す。
+   */
+  cleanupWorkspace(taskId) {
+    const task = this.repo.getTask(taskId);
+    if (!task?.worktree_path) return { removed: false, reasons: ["worktree はありません"] };
+
+    if (!this.config.git.removeWorktreeWhenSafe) {
+      return { removed: false, reasons: ["設定により worktree は残します（証拠として保持）"] };
+    }
+    return removeWorktreeIfSafe({
+      repoPath: task.repo_path,
+      worktreePath: task.worktree_path,
+      branch: task.worktree_branch,
+      baseBranch: task.base_branch,
+      logger: this.logger,
+    });
+  }
+
+  /** worktree を消してよいかだけを調べる（消さない）。 */
+  inspectWorkspace(taskId) {
+    const task = this.repo.getTask(taskId);
+    if (!task?.worktree_path) return { removable: false, reasons: ["worktree はありません"] };
+    return canRemoveWorktree({
+      repoPath: task.repo_path,
+      worktreePath: task.worktree_path,
+      branch: task.worktree_branch,
+      baseBranch: task.base_branch,
+    });
   }
 
   // --------------------------------------------------------- 審査の失敗

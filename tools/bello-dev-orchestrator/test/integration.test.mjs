@@ -26,11 +26,24 @@ async function harnessWithRepo(overrides = {}) {
   const repoPath = initRepo(tempDir("bello-repo-"));
   const h = await buildHarness({ repoPath, ...overrides });
   h.repoPath = repoPath;
-  h.commitSomething = (fileName = `change-${Date.now()}.txt`) => {
-    fs.writeFileSync(path.join(repoPath, fileName), "changed\n");
-    spawnSync("git", ["add", "-A"], { cwd: repoPath });
-    spawnSync("git", ["commit", "-q", "-m", "claude change"], { cwd: repoPath });
+  /**
+   * 実装担当がファイルを作ってコミットしたことにする。
+   * 既定ではタスクの作業場所 (worktree) で行う。本体リポジトリで行いたい場合は
+   * dir を明示する（別セッションの変更を模すときに使う）。
+   *
+   * 明示パスで add する。git add -A は gitGuard が禁止しており、
+   * テストでも本番と同じ作法にそろえる。
+   */
+  h.commitSomething = (fileName = `change-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.txt`, dir = repoPath) => {
+    fs.writeFileSync(path.join(dir, fileName), "changed\n");
+    spawnSync("git", ["add", "--", fileName], { cwd: dir });
+    spawnSync("git", ["commit", "-q", "-m", "claude change"], { cwd: dir });
     return fileName;
+  };
+  /** タスクの作業場所（worktree があればそこ）。 */
+  h.workDirOf = (taskId) => {
+    const t = h.repo.getTask(taskId);
+    return t?.work_dir || repoPath;
   };
   return h;
 }
@@ -55,7 +68,7 @@ test("シナリオ1: 登録→Claude成功→審査合格→完了", async () =>
     let changed = null;
     h.runner.setDefault({
       kind: "success",
-      effect: () => { changed = h.commitSomething(); },
+      effect: () => { changed = h.commitSomething(undefined, h.workDirOf(task.id)); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
     h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
@@ -87,7 +100,7 @@ test("シナリオ2: 修正指示で再実行し完了する", async () => {
     let changed = null;
     h.runner.setDefault({
       kind: "success",
-      effect: () => { changed = h.commitSomething(); },
+      effect: () => { changed = h.commitSomething(undefined, h.workDirOf(task.id)); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
     h.reviewEngine.script = [
@@ -119,7 +132,7 @@ test("シナリオ3: 本人操作をTODO化し、完了で再開する", async (
     let changed = null;
     h.runner.setDefault({
       kind: "success",
-      effect: () => { changed = h.commitSomething(); },
+      effect: () => { changed = h.commitSomething(undefined, h.workDirOf(task.id)); },
       report: makeReport(task.id, {
         status: "blocked",
         changes: [],
@@ -340,7 +353,7 @@ test("シナリオ8: 審査API障害では状態を失わず、復旧後に流�
     let changed = null;
     h.runner.setDefault({
       kind: "success",
-      effect: () => { changed = h.commitSomething(); },
+      effect: () => { changed = h.commitSomething(undefined, h.workDirOf(task.id)); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
     h.reviewEngine.script = [{ kind: "unavailable", reason: "transient", message: "500" }];
@@ -375,7 +388,7 @@ test("シナリオ8b: 審査に必要な設定が無くてもシステムは止�
     let changed = null;
     h.runner.setDefault({
       kind: "success",
-      effect: () => { changed = h.commitSomething(); },
+      effect: () => { changed = h.commitSomething(undefined, h.workDirOf(task.id)); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
     h.reviewEngine.script = [{ kind: "unavailable", reason: "not_configured", message: "審査方式に必要な設定がありません" }];
@@ -462,7 +475,7 @@ test("シナリオ9c: 低い確信度はレビュー待ちにする", async () =
     let changed = null;
     h.runner.setDefault({
       kind: "success",
-      effect: () => { changed = h.commitSomething(); },
+      effect: () => { changed = h.commitSomething(undefined, h.workDirOf(task.id)); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
     h.reviewEngine.setDefault({
@@ -582,7 +595,7 @@ test("審査不能時: 同じタスクを掴み続けてループが空転しな
     let changed = null;
     h.runner.setDefault({
       kind: "success",
-      effect: () => { changed = h.commitSomething(); },
+      effect: () => { changed = h.commitSomething(undefined, h.workDirOf(task.id)); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
     h.reviewEngine.setDefault({ kind: "unavailable", reason: "not_configured", message: "審査方式に必要な設定がありません" });
@@ -616,7 +629,7 @@ test("シナリオ7c: 審査待ちのタスクは復旧で作り直さない（�
     let changed = null;
     h.runner.setDefault({
       kind: "success",
-      effect: () => { changed = h.commitSomething(); },
+      effect: () => { changed = h.commitSomething(undefined, h.workDirOf(task.id)); },
       get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
     });
     h.reviewEngine.setDefault({ kind: "unavailable", reason: "not_configured", message: "審査方式に必要な設定がありません" });
@@ -697,13 +710,16 @@ function orchestratorWithProviders(h, reviewEngines = {}) {
   });
 }
 
-/** 実行中にコミットする実装担当の振る舞い。実 Claude と同じ順序を再現する。 */
+/**
+ * 実行中にコミットする実装担当の振る舞い。実 Claude と同じ順序を再現する。
+ * コミット先は「そのタスクの作業場所」。worktree 方式ならその中で完結する。
+ */
 function committingRunner(h, task, overrides = {}) {
   let changed = null;
   return {
     kind: "success",
     effect: () => {
-      changed = h.commitSomething();
+      changed = h.commitSomething(undefined, h.workDirOf(task.id));
     },
     get report() {
       return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }], ...overrides });
@@ -915,6 +931,343 @@ test("自動修正は最大 3 回で止まる（既定値）", async () => {
     assert.equal(after.state, STATES.AWAITING_USER);
     assert.ok(after.revision_count > h.config.review.maxRevisions, "修正回数 " + after.revision_count);
     assert.equal(h.runner.calls.length, h.config.review.maxRevisions + 1, "実装は 1 回 + 修正 3 回 = 4 回まで");
+  } finally {
+    h.cleanup();
+  }
+});
+
+// ================================================ Git の作業分離
+import * as wt from "../src/core/worktree.mjs";
+import { assertGitCommandAllowed, ForbiddenGitCommandError } from "../src/core/gitGuard.mjs";
+
+test("Git ガード: 無差別ステージと破壊的コマンドを実行前に落とす", () => {
+  const forbidden = [
+    ["add", "-A"],
+    ["add", "--all"],
+    ["add", "."],
+    ["add", "-u"],
+    ["add"],
+    ["commit", "-am", "x"],
+    ["commit", "-a"],
+    ["commit", "--amend"],
+    ["reset", "--hard"],
+    ["stash"],
+    ["stash", "push"],
+    ["clean", "-fd"],
+    ["push", "origin", "main"],
+    ["rebase", "main"],
+    ["checkout", "--", "file.txt"],
+    ["-C", "/somewhere", "add", "-A"],
+  ];
+  for (const args of forbidden) {
+    assert.throws(() => assertGitCommandAllowed(args), ForbiddenGitCommandError, `許してはいけない: git ${args.join(" ")}`);
+  }
+
+  const allowed = [
+    ["status", "--porcelain"],
+    ["diff", "--name-only"],
+    ["log", "--oneline", "-3"],
+    ["add", "--", "a.txt", "b.txt"],
+    ["add", "a.txt"],
+    ["commit", "-m", "msg"],
+    ["reset", "--", "a.txt"],
+    ["worktree", "add", "/path", "-b", "br", "HEAD"],
+    ["worktree", "remove", "/path"],
+  ];
+  for (const args of allowed) {
+    assert.doesNotThrow(() => assertGitCommandAllowed(args), `通すべき: git ${args.join(" ")}`);
+  }
+});
+
+test("Git ガード: runGit 経由でも禁止コマンドは実行されない", async () => {
+  const gitmod = await import("../src/core/git.mjs");
+  const res = gitmod.runGit(process.cwd(), ["add", "-A"]);
+  assert.equal(res.ok, false);
+  assert.equal(res.forbidden, true);
+  assert.match(res.stderr, /禁止/);
+});
+
+test("分離1: タスクは専用 worktree と専用ブランチで動く", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+
+    await h.orchestrator.tick();
+    const after = h.repo.getTask(task.id);
+
+    assert.equal(after.isolation, "worktree");
+    assert.ok(after.worktree_path, "worktree の場所が記録される");
+    assert.equal(after.worktree_branch, wt.branchNameFor(task.id));
+    assert.ok(after.base_commit, "基準コミットが記録される");
+    assert.ok(after.base_branch, "基準ブランチが記録される");
+    assert.notEqual(after.work_dir, h.repoPath, "本体リポジトリでは作業しない");
+    assert.ok(fs.existsSync(after.worktree_path), "worktree が実在する");
+
+    // worktree はデータ置き場の下（リポジトリの外）
+    assert.ok(after.worktree_path.startsWith(h.paths.worktreeRoot), "worktree はリポジトリの外に置く");
+
+    // 成果はタスク専用ブランチに入り、本体ブランチは動かない
+    const list = wt.listWorktrees(h.repoPath);
+    assert.ok(list.some((w) => w.branch === after.worktree_branch), "worktree 一覧に出る");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("分離2: 並行 2 タスクは互いのファイルを見ない", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const a = addTask(h, "タスクA", "A をやる");
+    const b = addTask(h, "タスクB", "B をやる");
+
+    const madeIn = {};
+    h.runner.setDefault({
+      kind: "success",
+      effect: ({ task }) => {
+        const dir = h.workDirOf(task.id);
+        madeIn[task.id] = h.commitSomething(`only-${task.id}.txt`, dir);
+      },
+      get report() {
+        return makeReport("placeholder");
+      },
+    });
+    // report は taskId が要るので、実行のたびに作り直す
+    h.runner.run = async function run({ task, onHeartbeat = () => {} }) {
+      onHeartbeat();
+      const dir = h.workDirOf(task.id);
+      madeIn[task.id] = h.commitSomething(`only-${task.id}.txt`, dir);
+      this.calls.push({ taskId: task.id, instruction: "", resumeSessionId: null, at: new Date().toISOString() });
+      return {
+        ok: true,
+        terminationReason: "completed",
+        exitCode: 0,
+        durationMs: 5,
+        report: makeReport(task.id, { changes: [{ path: madeIn[task.id], purpose: "変更" }] }),
+        reportErrors: [],
+        sessionId: `sess-${task.id}`,
+      };
+    };
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+
+    await h.orchestrator.tick();
+    await h.orchestrator.tick();
+
+    const ta = h.repo.getTask(a.id);
+    const tb = h.repo.getTask(b.id);
+    assert.notEqual(ta.work_dir, tb.work_dir, "作業場所が別");
+    assert.notEqual(ta.worktree_branch, tb.worktree_branch, "ブランチが別");
+
+    // A の worktree に B のファイルは存在しない（その逆も）
+    assert.ok(fs.existsSync(path.join(ta.work_dir, madeIn[a.id])));
+    assert.ok(!fs.existsSync(path.join(ta.work_dir, madeIn[b.id])), "A の作業場所に B の成果は無い");
+    assert.ok(fs.existsSync(path.join(tb.work_dir, madeIn[b.id])));
+    assert.ok(!fs.existsSync(path.join(tb.work_dir, madeIn[a.id])), "B の作業場所に A の成果は無い");
+
+    // それぞれの変更ファイル記録も混ざらない
+    assert.deepEqual(ta.changedFiles, [madeIn[a.id]]);
+    assert.deepEqual(tb.changedFiles, [madeIn[b.id]]);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("分離3: 開始前から dirty でも、その変更には一切触れない", async () => {
+  const h = await harnessWithRepo({ git: { autoCommit: true, allowPush: false, protectedBranches: ["main"], isolation: "worktree", allowInPlaceFallback: true, removeWorktreeWhenSafe: false } });
+  try {
+    spawnSync("git", ["checkout", "-q", "-b", "work"], { cwd: h.repoPath });
+
+    // ユーザーの未コミット変更（追跡中の変更と、新規の未追跡ファイル）
+    fs.writeFileSync(path.join(h.repoPath, "README.md"), "ユーザーが編集中\n");
+    fs.writeFileSync(path.join(h.repoPath, "user-scratch.txt"), "ユーザーの作業メモ\n");
+    const beforeStatus = spawnSync("git", ["status", "--porcelain"], { cwd: h.repoPath, encoding: "utf8" }).stdout;
+
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+
+    await h.orchestrator.tick();
+
+    // 開始時点のスナップショットが記録されている
+    const cp = h.repo.store.get(
+      "SELECT data FROM checkpoints WHERE task_id=? AND phase='preflight' ORDER BY id DESC LIMIT 1",
+      [task.id],
+    );
+    const snap = JSON.parse(cp.data);
+    assert.equal(snap.dirty, true);
+    assert.ok(snap.entries.some((e) => e.includes("README.md")));
+    assert.ok(snap.entries.some((e) => e.includes("user-scratch.txt")));
+
+    // 本体リポジトリの未コミット変更は 1 バイトも変わっていない
+    const afterStatus = spawnSync("git", ["status", "--porcelain"], { cwd: h.repoPath, encoding: "utf8" }).stdout;
+    assert.equal(afterStatus, beforeStatus, "本体の未コミット変更が動いていない");
+    assert.equal(fs.readFileSync(path.join(h.repoPath, "README.md"), "utf8"), "ユーザーが編集中\n");
+    assert.equal(fs.readFileSync(path.join(h.repoPath, "user-scratch.txt"), "utf8"), "ユーザーの作業メモ\n");
+
+    // タスクの成果には、ユーザーのファイルが一切含まれない
+    const after = h.repo.getTask(task.id);
+    assert.ok(!after.changedFiles.includes("README.md"));
+    assert.ok(!after.changedFiles.includes("user-scratch.txt"));
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("分離4: 同じファイルを別セッションが触っていたら自動マージせず TODO にする", async () => {
+  const h = await harnessWithRepo();
+  try {
+    spawnSync("git", ["checkout", "-q", "-b", "work"], { cwd: h.repoPath });
+    const shared = "shared.txt";
+    fs.writeFileSync(path.join(h.repoPath, shared), "もとの内容\n");
+    spawnSync("git", ["add", "--", shared], { cwd: h.repoPath });
+    spawnSync("git", ["commit", "-q", "-m", "add shared"], { cwd: h.repoPath });
+
+    const task = addTask(h);
+    h.runner.run = async function run({ task: t, onHeartbeat = () => {} }) {
+      onHeartbeat();
+      const dir = h.workDirOf(t.id);
+      // タスクが shared.txt を変更する
+      fs.writeFileSync(path.join(dir, shared), "タスクが直した内容\n");
+      spawnSync("git", ["add", "--", shared], { cwd: dir });
+      spawnSync("git", ["commit", "-q", "-m", "task change"], { cwd: dir });
+      // 同じ頃、別セッションが本体側で同じファイルを触る
+      fs.writeFileSync(path.join(h.repoPath, shared), "別セッションが直した内容\n");
+      this.calls.push({ taskId: t.id, instruction: "", resumeSessionId: null, at: new Date().toISOString() });
+      return {
+        ok: true,
+        terminationReason: "completed",
+        exitCode: 0,
+        durationMs: 5,
+        report: makeReport(t.id, { changes: [{ path: shared, purpose: "変更" }] }),
+        reportErrors: [],
+        sessionId: "s",
+      };
+    };
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+
+    await h.orchestrator.tick();
+
+    const cp = h.repo.store.get(
+      "SELECT data FROM checkpoints WHERE task_id=? AND phase='conflict_check' ORDER BY id DESC LIMIT 1",
+      [task.id],
+    );
+    assert.ok(cp, "競合検査の記録が残る");
+    const conflict = JSON.parse(cp.data);
+    assert.equal(conflict.conflicts.length, 1);
+    assert.equal(conflict.conflicts[0].file, shared);
+
+    const todo = h.repo.listTodos({ status: "open" }).find((t) => t.kind === "merge_conflict");
+    assert.ok(todo, "競合を知らせる TODO が出る");
+    assert.equal(todo.priority, "urgent");
+    assert.ok(todo.reason.includes(shared));
+    assert.ok(h.repo.listAudit().some((a) => a.action === "conflict.detected"));
+
+    // 自動マージしていない: 本体側の内容はそのまま
+    assert.equal(fs.readFileSync(path.join(h.repoPath, shared), "utf8"), "別セッションが直した内容\n");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("分離5: 異常終了しても worktree とブランチは消えず、復旧後も同じ場所を使う", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+    h.reviewEngine.setDefault({ kind: "unavailable", reason: "transient", message: "後で" });
+
+    await h.orchestrator.tick();
+    const first = h.repo.getTask(task.id);
+    const worktreePath = first.worktree_path;
+    const branch = first.worktree_branch;
+    assert.ok(fs.existsSync(worktreePath));
+
+    // 「実行中に落ちた」状態を作って復旧させる
+    h.repo.updateTask(task.id, { retry_after: null });
+    h.repo.setState(task.id, STATES.REVISION_REQUIRED, "試験", "system");
+    h.repo.setState(task.id, STATES.QUEUED, "試験", "system");
+    h.repo.setState(task.id, STATES.PREFLIGHT, "試験", "system");
+    h.repo.setState(task.id, STATES.RUNNING, "試験: 実行中に落ちた", "system");
+
+    const fresh = new Orchestrator({
+      config: h.config, paths: h.paths, repo: h.repo, logger: h.logger,
+      runner: h.runner, reviewEngine: h.reviewEngine, todoManager: h.todoManager,
+    });
+    await fresh.recover();
+
+    assert.ok(fs.existsSync(worktreePath), "復旧処理は worktree を消さない");
+    const afterRecover = h.repo.getTask(task.id);
+    assert.equal(afterRecover.worktree_path, worktreePath, "作業場所の記録が残る");
+    assert.equal(afterRecover.worktree_branch, branch, "ブランチの記録が残る");
+
+    // 再実行しても同じ worktree を引き継ぐ（成果を捨てない）
+    h.repo.updateTask(task.id, { retry_after: new Date(Date.now() - 1000).toISOString() });
+    h.repo.releaseDueRetries();
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+    await fresh.tick();
+    assert.equal(h.repo.getTask(task.id).worktree_path, worktreePath, "同じ作業場所を再利用する");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("分離6: worktree の削除は安全確認を通ったときだけ", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    h.runner.setDefault(committingRunner(h, task));
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+    await h.orchestrator.tick();
+
+    const after = h.repo.getTask(task.id);
+
+    // 未マージのコミットがあるので消せない
+    const check = h.orchestrator.inspectWorkspace(task.id);
+    assert.equal(check.removable, false);
+    assert.ok(check.reasons.some((r) => r.includes("取り込まれていないコミット")));
+
+    // 既定では削除しない（証拠として残す）
+    const cleanup = h.orchestrator.cleanupWorkspace(task.id);
+    assert.equal(cleanup.removed, false);
+    assert.ok(fs.existsSync(after.worktree_path), "worktree は残る");
+
+    // 未コミットの変更があるだけでも消せない
+    fs.writeFileSync(path.join(after.worktree_path, "leftover.txt"), "まだ途中\n");
+    const check2 = h.orchestrator.inspectWorkspace(task.id);
+    assert.equal(check2.removable, false);
+    assert.ok(check2.reasons.some((r) => r.includes("未コミットの変更")));
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("分離7: 自動コミットは証明できるファイルだけを stage する", async () => {
+  const gitmod = await import("../src/core/git.mjs");
+  const h = await harnessWithRepo();
+  try {
+    spawnSync("git", ["checkout", "-q", "-b", "work"], { cwd: h.repoPath });
+    fs.writeFileSync(path.join(h.repoPath, "mine.txt"), "task\n");
+    fs.writeFileSync(path.join(h.repoPath, "not-mine.txt"), "someone else\n");
+    fs.writeFileSync(path.join(h.repoPath, ".env"), "OPENAI_API_KEY=secret\n");
+
+    const result = gitmod.commitTaskChanges({
+      repoPath: h.repoPath,
+      branch: "work",
+      message: "test",
+      snapshot: { entries: [] },
+      allowedFiles: ["mine.txt", ".env"], // .env は許可リストにあっても除外される
+      protectedBranches: ["main"],
+    });
+
+    assert.equal(result.committed, true, result.reason);
+    assert.deepEqual(result.files, ["mine.txt"]);
+    assert.ok(result.skipped.some((s) => s.file === "not-mine.txt" && s.why.includes("証明できない")));
+    assert.ok(result.skipped.some((s) => s.file === ".env" && s.why.includes("秘密")));
+
+    const status = spawnSync("git", ["status", "--porcelain"], { cwd: h.repoPath, encoding: "utf8" }).stdout;
+    assert.ok(status.includes("not-mine.txt"), "他人のファイルは未コミットのまま");
+    assert.ok(status.includes(".env"), ".env は未コミットのまま");
   } finally {
     h.cleanup();
   }

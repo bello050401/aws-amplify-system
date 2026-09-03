@@ -30,8 +30,8 @@ const DEFAULTS = {
     model: "sonnet",
     permissionMode: "acceptEdits",
     permissionPrompts: "none",
-    allowedTools: ["Read","Grep","Glob","Edit","Write","TodoWrite","WebFetch","WebSearch","Bash(node:*)","Bash(npx tsx:*)","Bash(npm run lint:*)","Bash(npm run typecheck:*)","Bash(npm run build:*)","Bash(npm run test:*)","Bash(npm run verify:*)","Bash(npm test:*)","Bash(npm ci:*)","Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git branch:*)","Bash(git rev-parse:*)","Bash(git add:*)","Bash(git commit:*)","Bash(ls:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(grep:*)","Bash(rg:*)","Bash(find:*)","Bash(wc:*)","Bash(cd:*)","Bash(pwd:*)"],
-    disallowedTools: ["Bash(git push:*)","Bash(git reset:*)","Bash(git checkout:*)","Bash(git stash:*)","Bash(git clean:*)","Bash(git rebase:*)","Bash(git filter-branch:*)","Bash(rm:*)","Bash(rmdir:*)","Bash(del:*)","Bash(format:*)","Bash(npx ampx:*)","Bash(ampx:*)","Bash(aws:*)","Bash(gh:*)","Bash(npm publish:*)","Bash(npm install:*)","Bash(curl:*)","Bash(Invoke-WebRequest:*)"],
+    allowedTools: ["Read","Grep","Glob","Edit","Write","TodoWrite","WebFetch","WebSearch","Bash(node:*)","Bash(npx tsx:*)","Bash(npm run lint:*)","Bash(npm run typecheck:*)","Bash(npm run build:*)","Bash(npm run test:*)","Bash(npm run verify:*)","Bash(npm test:*)","Bash(npm ci:*)","Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git branch:*)","Bash(git rev-parse:*)","Bash(ls:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(grep:*)","Bash(rg:*)","Bash(find:*)","Bash(wc:*)","Bash(cd:*)","Bash(pwd:*)"],
+    disallowedTools: ["Bash(git add:*)","Bash(git commit:*)","Bash(git add -A:*)","Bash(git add --all:*)","Bash(git add .:*)","Bash(git add -u:*)","Bash(git commit -a:*)","Bash(git commit --all:*)","Bash(git commit --amend:*)","Bash(git push:*)","Bash(git reset:*)","Bash(git checkout:*)","Bash(git restore:*)","Bash(git stash:*)","Bash(git clean:*)","Bash(git rebase:*)","Bash(git filter-branch:*)","Bash(git worktree:*)","Bash(rm:*)","Bash(rmdir:*)","Bash(del:*)","Bash(format:*)","Bash(npx ampx:*)","Bash(ampx:*)","Bash(aws:*)","Bash(gh:*)","Bash(npm publish:*)","Bash(npm install:*)","Bash(curl:*)","Bash(Invoke-WebRequest:*)"],
     maxBudgetUsd: 5,
     timeoutSeconds: 3600,
     idleTimeoutSeconds: 900,
@@ -78,7 +78,19 @@ const DEFAULTS = {
   },
   logging: { level: "info", retentionDays: 30, maxFileBytes: 5242880, maxFiles: 10 },
   timezone: "Asia/Tokyo",
-  git: { autoCommit: true, allowPush: false, protectedBranches: ["main", "master", "production"] },
+  git: {
+    autoCommit: true,
+    allowPush: false,
+    protectedBranches: ["main", "master", "production"],
+    // worktree: タスクごとに専用 worktree + 専用ブランチ（既定・推奨）
+    // in-place: 対象リポジトリで直接作業する（worktree を作れない環境向けの退避策）
+    isolation: "worktree",
+    // worktree を作れなかったときに in-place へ落ちてよいか。
+    // false にすると、作れない場合はタスクを失敗させる（混入リスクを一切取らない）。
+    allowInPlaceFallback: true,
+    // タスク完了後に worktree を消してよいか。既定は消さない（証拠として残す）。
+    removeWorktreeWhenSafe: false,
+  },
 };
 
 function isPlainObject(v) {
@@ -99,6 +111,8 @@ function deepMerge(base, override) {
 const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
 /** 審査方式。claude = 別セッションの Claude Code（追加課金なし・既定）。 */
 export const REVIEW_PROVIDERS = ["claude", "openai", "manual"];
+/** 作業場所の分離方式。 */
+export const GIT_ISOLATIONS = ["worktree", "in-place"];
 const PERMISSION_PROMPTS = ["host", "none"];
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 
@@ -198,6 +212,16 @@ export function validateConfig(cfg) {
       );
     }
   }
+  if (!GIT_ISOLATIONS.includes(cfg.git.isolation)) {
+    errors.push(`git.isolation は ${GIT_ISOLATIONS.join(" / ")} のいずれかです。`);
+  }
+  if (cfg.git.isolation === "in-place") {
+    warnings.push(
+      "git.isolation=in-place では、対象リポジトリを他のセッションと共有したまま作業します。" +
+        "開始前の未コミット変更は除外しますが、作業中に他セッションが作った新規ファイルまでは切り分けられません。" +
+        "通常は worktree を使ってください。",
+    );
+  }
   if (!LOG_LEVELS.includes(cfg.logging.level)) {
     errors.push(`logging.level は ${LOG_LEVELS.join(" / ")} のいずれかです。`);
   }
@@ -221,6 +245,7 @@ export function derivePaths(cfg) {
     uploadsDir: path.join(root, "uploads"),
     evidenceDir: path.join(root, "evidence"),
     runsDir: path.join(root, "runs"),
+    worktreeRoot: path.join(root, "worktrees"),
     pidFile: path.join(root, "state", "orchestrator.pid"),
     stopFlag: path.join(root, "state", "stop.flag"),
     crashLoopFlag: path.join(root, "state", "crashloop.flag"),
@@ -238,6 +263,7 @@ export function ensureDirs(paths) {
     "uploadsDir",
     "evidenceDir",
     "runsDir",
+    "worktreeRoot",
   ]) {
     fs.mkdirSync(paths[key], { recursive: true });
   }

@@ -21,7 +21,6 @@ import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
 import { PhotoProfilePanel } from "./PhotoProfilePanel";
-import { KnowledgeSettingsPanel } from "./KnowledgeSettingsPanel";
 import { ProductDescriptionPanel } from "./ProductDescriptionPanel";
 
 interface SettingsTabsProps {
@@ -101,7 +100,6 @@ export function SettingsTabs({
     | "pricing"
     | "shipping"
     | "line"
-    | "knowledge"
     | "systemAudit"
     | "photoProfile"
     | "productDescription"
@@ -164,8 +162,9 @@ export function SettingsTabs({
           </button>
         )}
         {/* 2026-09-02 追加仕様§1: 商品説明文を独立した設定項目として置く。
-            AI返信ナレッジ(返信の文体)の隣に並べる —— どちらも
-            「AIが何を参照して書くか」の設定なので、探す場所が同じになる。 */}
+            2026-09-03 指示書§2でAI返信ナレッジの入口はメッセージ画面へ一本化した
+            ため、以前ここにあった「AI返信ナレッジ」タブは無い(機能・データ・
+            KnowledgeSettingsPanel自体は残っており、メッセージ ＞ ナレッジが使う)。 */}
         <button
           type="button"
           onClick={() => setTab("productDescription")}
@@ -173,11 +172,6 @@ export function SettingsTabs({
         >
           商品説明文
         </button>
-        {isAdmin && (
-          <button type="button" onClick={() => setTab("knowledge")} className={tabClass(tab === "knowledge")}>
-            AI返信ナレッジ
-          </button>
-        )}
         {isAdmin && (
           <button type="button" onClick={() => setTab("systemAudit")} className={tabClass(tab === "systemAudit")}>
             System Audit
@@ -246,7 +240,6 @@ export function SettingsTabs({
         )}
         {tab === "shipping" && isAdmin && <ShippingRatePanel />}
         {tab === "line" && isAdmin && <LineSettingsPanel lineConnected={lineConnected} lineTokenSource={lineTokenSource} />}
-        {tab === "knowledge" && isAdmin && <KnowledgeSettingsPanel />}
         {tab === "systemAudit" && isAdmin && <SystemAuditPanel />}
         {tab === "photoProfile" && isAdmin && <PhotoProfilePanel />}
         {tab === "productDescription" && <ProductDescriptionPanel readOnly={readOnly} />}

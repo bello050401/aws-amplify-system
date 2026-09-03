@@ -565,3 +565,16 @@ test("Claude審査: 記録するモデル名は、実際に審査を書いたモ
   assert.equal(expected, "claude-sonnet-5");
   assert.ok(typeof mod.ClaudeReviewEngine === "function");
 });
+
+test("porcelain 解析: 先頭が空白の行でもファイル名を壊さない", async () => {
+  const g = await import("../src/core/git.mjs");
+  // " M file" は「未ステージの変更」。trim すると 1 文字ずれる形。
+  assert.equal(g.porcelainPath(" M shared.txt"), "shared.txt");
+  assert.equal(g.porcelainPath("M  staged.txt"), "staged.txt");
+  assert.equal(g.porcelainPath("?? untracked.txt"), "untracked.txt");
+  assert.equal(g.porcelainPath("MM both.txt"), "both.txt");
+  assert.equal(g.porcelainPath("R  old.txt -> new.txt"), "new.txt");
+  assert.equal(g.porcelainPath('?? "日本語 ファイル.txt"'), "日本語 ファイル.txt");
+  assert.equal(g.porcelainPath(""), null);
+  assert.equal(g.porcelainPath(null), null);
+});

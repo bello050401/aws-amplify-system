@@ -19,7 +19,13 @@ import { KnowledgeEditor } from "./KnowledgeEditor";
 import { MarkdownPreview } from "./MarkdownPreview";
 
 /**
- * §5/§42 設定 > AI返信ナレッジ。ADMIN専用。
+ * §5/§42 ナレッジ管理。ADMIN専用。
+ *
+ * 【置き場所】2026-09-03 追加指示§2で入口を「メッセージ ＞ ナレッジ」へ
+ * 一本化したため、このコンポーネントは settings/ に置かれたまま
+ * app/inventory/(protected)/messages/MessagesCenter.tsx から使われている。
+ * ファイルを移動していないのは、移動しても得るものが無く、既存の
+ * import パスを壊すだけだから(機能・データ・改訂履歴は一切変えていない)。
  *
  * 【ダウンロードの経路】署名付きURLもS3のURLもブラウザへ渡さない。
  * Server Actionが中身を返し、ここでBlobを作ってダウンロードさせる
@@ -241,7 +247,7 @@ export function KnowledgeSettingsPanel() {
   return (
     <div className="space-y-6 py-4">
       <section>
-        <h2 className="text-[13px] font-bold text-gray-900">AI返信ナレッジ</h2>
+        <h2 className="text-[13px] font-bold text-gray-900">ナレッジ</h2>
         <p className="mt-1 text-[12px] text-gray-500">
           問い合わせ返信のときにAIが参照する社内文書です。関連する文書の必要な箇所だけがAIへ渡されます（全文書を毎回渡すことはしません）。
           対応形式は {KNOWLEDGE_ALLOWED_EXTENSIONS.join(" / ")}、1ファイル {Math.floor(KNOWLEDGE_MAX_FILE_BYTES / 1024)}KB まで。

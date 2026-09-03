@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { ConversationRecord } from "@/lib/messaging/types";
 import type { ReplyRuleRecord } from "@/lib/inquiry/replyRuleSelection";
 import type { NotificationDeliveryRecord } from "@/lib/messaging/lineNotify/deliveryStore";
 import type { NotifyBotStatus } from "@/app/actions/lineNotify";
 import type { GmailStatus } from "@/app/actions/mercariMail";
-import { MessagesInbox } from "./MessagesInbox";
 import { LineNotifyBotPanel } from "./LineNotifyBotPanel";
 import { ReplyRulesPanel } from "./ReplyRulesPanel";
 import { AiProcessingLogPanel } from "./AiProcessingLogPanel";
@@ -14,30 +12,34 @@ import { MercariMailPanel } from "./MercariMailPanel";
 import { KnowledgeSettingsPanel } from "../settings/KnowledgeSettingsPanel";
 
 /**
- * 2026-09-03 指示書 §5: メッセージ画面のセクション。
+ * 2026-09-03 追加指示 §1/§3: メッセージ画面のセクション。
  *
- * ── 旧チャットUIを消さない ──────────────────────────────────────
+ * ── 「お問い合わせ」タブを外した理由 ────────────────────────────
  *
- * §30が「いきなり物理削除しない」「UIとして不要とバックエンドとして不要を
- * 混同しない」と明示している。加えて実務上の理由がある: 問い合わせ一覧
- * (MessagesInbox)には**対象商品カードとAI返信パネル**が乗っていて、
- * 「なぜこの返信案になったか」を確認できる唯一の画面。ここを消すと、
- * LINEに届いた提案の根拠を追う手段が無くなる。
+ * 運用が「BELLO内でチャットを読んで返す」から
  *
- * そこで旧一覧は「問い合わせ」タブとして残し、指示書§5が求める4セクション
- * (LINE Bot / 返信ルール / ナレッジ / AI処理ログ)を足す。既定で開くのは
- * 問い合わせ —— 日々いちばん多く使うのはここなので。
+ *   受信 → 商品特定 → 分類 → ルール/ナレッジ参照 → AI返信案
+ *        → 社内LINEへ通知 → 各販売チャネル側で人が返信
+ *
+ * へ変わったため、会話をBELLO内で閲覧・返信するUIは目的から外れた。
+ * **UIだけを外し、バックエンドは一切消していない** —— Conversation /
+ * Message / 受信処理 / 商品特定 / 分類 / AI生成 / 通知は新しい経路が
+ * そのまま使っている(§1の削除禁止リスト)。
+ *
+ * 返信案の根拠は「AI処理ログ」タブで追える。実際に送った1通目・2通目の
+ * 本文と、特定した商品カードをそこに出しているので、
+ * 「なぜこの提案になったか」は引き続き確認できる。
  *
  * ── ナレッジは既存パネルをそのまま使う ──────────────────────────
  *
- * 設定画面の KnowledgeSettingsPanel は props を取らず自分でデータを読む
- * ので、そのまま置ける。同じ機能を2つ実装すると、片方だけ直す事故が起きる。
+ * 設定画面にあった KnowledgeSettingsPanel は props を取らず自分でデータを
+ * 読むので、そのまま置ける。§2で設定画面側の入口は外し、ここへ一本化した
+ * (機能・データ・改訂履歴・AI参照はすべて維持)。
  */
 
-type TabKey = "inbox" | "linebot" | "mail" | "rules" | "knowledge" | "logs";
+type TabKey = "linebot" | "mail" | "rules" | "knowledge" | "logs";
 
 const TABS: { key: TabKey; label: string }[] = [
-  { key: "inbox", label: "問い合わせ" },
   { key: "linebot", label: "LINE Bot" },
   { key: "mail", label: "メール取込" },
   { key: "rules", label: "返信ルール" },
@@ -46,23 +48,19 @@ const TABS: { key: TabKey; label: string }[] = [
 ];
 
 export function MessagesCenter({
-  conversations,
-  canEdit,
   isAdmin,
   notifyStatus,
   gmailStatus,
   replyRules,
   deliveries,
 }: {
-  conversations: ConversationRecord[];
-  canEdit: boolean;
   isAdmin: boolean;
   notifyStatus: NotifyBotStatus | null;
   gmailStatus: GmailStatus | null;
   replyRules: ReplyRuleRecord[];
   deliveries: NotificationDeliveryRecord[];
 }) {
-  const [tab, setTab] = useState<TabKey>("inbox");
+  const [tab, setTab] = useState<TabKey>("linebot");
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -99,12 +97,6 @@ export function MessagesCenter({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* 問い合わせ一覧だけは自前でスクロール領域を持つので、ラッパを挟まない。 */}
-        {tab === "inbox" && (
-          <div className="h-full">
-            <MessagesInbox initialConversations={conversations} canEdit={canEdit} isAdmin={isAdmin} />
-          </div>
-        )}
         {tab === "linebot" &&
           (notifyStatus ? (
             <LineNotifyBotPanel status={notifyStatus} isAdmin={isAdmin} />
