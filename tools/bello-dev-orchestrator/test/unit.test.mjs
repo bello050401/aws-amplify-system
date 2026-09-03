@@ -389,3 +389,31 @@ test("秘密情報の除去: 真偽値・数値は落とさない (診断表示�
   assert.equal(out.tokenCount, 42);
   assert.equal(out.apiKey, "[REDACTED]", "文字列の秘密は必ず落とす");
 });
+
+// ------------------------------------------------- Claude Runner の引数組み立て
+test("Claude Runner: 許可リスト / 拒否リストを引数へ渡す", async () => {
+  const { ClaudeRunner } = await import("../src/runner/claudeRunner.mjs");
+  const config = makeConfig();
+  const runner = new ClaudeRunner({ config, paths: { runsDir: tempDir("runs-") }, logger: new Logger({ dir: tempDir("l-"), echo: false }) });
+  const args = runner.buildArgs({ resumeSessionId: null });
+
+  assert.ok(args.includes("-p"), "非対話実行");
+  assert.equal(args[args.indexOf("--output-format") + 1], "json");
+  assert.ok(args.includes("--json-schema"));
+  assert.equal(args[args.indexOf("--permission-mode") + 1], "acceptEdits");
+  assert.equal(args[args.indexOf("--permission-prompts") + 1], "none");
+  // 実測: --permission-prompts none だけでは Bash が自動拒否される。許可リストが要る。
+  assert.equal(args[args.indexOf("--allowedTools") + 1], "Read,Bash(node:*)");
+  assert.equal(args[args.indexOf("--disallowedTools") + 1], "Bash(git push:*)");
+  assert.ok(!args.includes("--resume"));
+
+  const resumed = runner.buildArgs({ resumeSessionId: "abc-123" });
+  assert.equal(resumed[resumed.indexOf("--resume") + 1], "abc-123");
+});
+
+test("設定検証: allowedTools が空 + prompts=none は警告する", () => {
+  const cfg = makeConfig();
+  cfg.claude.allowedTools = [];
+  const { warnings } = validateConfig(cfg);
+  assert.ok(warnings.some((w) => w.includes("自動拒否")), "Bash が動かない組み合わせを黙認しない");
+});

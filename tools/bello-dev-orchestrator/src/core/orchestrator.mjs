@@ -13,6 +13,9 @@ import { redactText } from "../log/redact.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 審査できなかったタスクを次に見に行くまでの間隔。キー設定後 1 分以内に流れる。 */
+const REVIEW_RECHECK_MS = 60_000;
+
 function failureSignature(parts) {
   return crypto.createHash("sha256").update(parts.filter(Boolean).join("|")).digest("hex").slice(0, 24);
 }
@@ -137,7 +140,9 @@ export class Orchestrator {
     if (this.paused) return false;
 
     // 1) AI 審査待ちを先に片付ける。API 復旧後に自動で流れるようにするため。
-    const awaitingReview = this.repo.listTasks({ state: STATES.AWAITING_AI_REVIEW, limit: 1 })[0];
+    //    claimNextReview は retry_after を尊重するので、キーが無い間や API 障害中に
+    //    同じタスクを掴み続けてループが空転することはない。
+    const awaitingReview = this.repo.claimNextReview();
     if (awaitingReview) {
       await this.#doReview(awaitingReview);
       return true;
@@ -316,26 +321,45 @@ export class Orchestrator {
         priorReviews: this.repo.reviewsFor(task.id),
       });
     } catch (err) {
+      // どちらの経路でも retry_after を必ず入れる。入れないと次の tick で
+      // 同じタスクを掴み直し、ループが眠らずに回り続ける。
+      const firstTime = !task.retry_after;
       if (err instanceof ReviewUnavailableError && err.reason === "no_api_key") {
         // キーが無くてもシステムは止めない (§7-1)。TODO を出して待つ。
         this.todoManager.ensureEnvironmentTodos();
         this.repo.updateTask(task.id, {
-          blocked_reason: "OPENAI_API_KEY 未設定のため AI 審査待ちです。",
+          blocked_reason: "OPENAI_API_KEY 未設定のため AI 審査待ちです。キーを設定すれば自動で審査へ進みます。",
+          retry_after: new Date(Date.now() + REVIEW_RECHECK_MS).toISOString(),
         });
-        this.repo.audit("review_engine", "review.unavailable", task.id, "no_api_key", null);
-        this.logger.warn("AI 審査を実行できません (APIキー未設定)。タスクは審査待ちのままにします。", {
-          taskId: task.id,
-        });
+        if (firstTime) {
+          this.repo.audit("review_engine", "review.unavailable", task.id, "no_api_key", null);
+          this.logger.warn("AI 審査を実行できません (APIキー未設定)。審査待ちのまま保持し、1 分ごとに再確認します。", {
+            taskId: task.id,
+          });
+        }
         return;
       }
       // API 障害は指数バックオフ後に再試行。ここでは審査待ちのまま置く。
+      const waitMs = Math.min(
+        this.config.review.baseBackoffSeconds * 1000 * 2 ** Math.min(task.revision_count, 6),
+        this.config.review.maxBackoffSeconds * 1000,
+      ) || REVIEW_RECHECK_MS;
       this.repo.audit("review_engine", "review.failed", task.id, "api_failure", err.message);
-      this.logger.error("AI 審査に失敗しました", { taskId: task.id, error: err.message });
-      this.repo.updateTask(task.id, { last_error: redactText(err.message) });
+      this.logger.error("AI 審査に失敗しました。バックオフして再試行します。", {
+        taskId: task.id,
+        error: err.message,
+        retryInSeconds: Math.round(waitMs / 1000),
+      });
+      this.repo.updateTask(task.id, {
+        last_error: redactText(err.message),
+        retry_after: new Date(Date.now() + waitMs).toISOString(),
+      });
       return;
     }
 
     const { review, meta } = reviewResult;
+    // 審査できたので待機指示は消す。残したまま次の状態へ行くと、後の再試行判定を狂わせる。
+    this.repo.updateTask(task.id, { retry_after: null, last_error: null });
     const reviewId = this.repo.saveReview(task.id, task.report_id, review, meta);
 
     // ---- 証拠ゲートが AI より強い (§7-4) --------------------------------

@@ -30,6 +30,8 @@ const DEFAULTS = {
     model: "sonnet",
     permissionMode: "acceptEdits",
     permissionPrompts: "none",
+    allowedTools: ["Read","Grep","Glob","Edit","Write","TodoWrite","WebFetch","WebSearch","Bash(node:*)","Bash(npx tsx:*)","Bash(npm run lint:*)","Bash(npm run typecheck:*)","Bash(npm run build:*)","Bash(npm run test:*)","Bash(npm run verify:*)","Bash(npm test:*)","Bash(npm ci:*)","Bash(git status:*)","Bash(git diff:*)","Bash(git log:*)","Bash(git show:*)","Bash(git branch:*)","Bash(git rev-parse:*)","Bash(git add:*)","Bash(git commit:*)","Bash(ls:*)","Bash(cat:*)","Bash(head:*)","Bash(tail:*)","Bash(grep:*)","Bash(rg:*)","Bash(find:*)","Bash(wc:*)","Bash(cd:*)","Bash(pwd:*)"],
+    disallowedTools: ["Bash(git push:*)","Bash(git reset:*)","Bash(git checkout:*)","Bash(git stash:*)","Bash(git clean:*)","Bash(git rebase:*)","Bash(git filter-branch:*)","Bash(rm:*)","Bash(rmdir:*)","Bash(del:*)","Bash(format:*)","Bash(npx ampx:*)","Bash(ampx:*)","Bash(aws:*)","Bash(gh:*)","Bash(npm publish:*)","Bash(npm install:*)","Bash(curl:*)","Bash(Invoke-WebRequest:*)"],
     maxBudgetUsd: 5,
     timeoutSeconds: 3600,
     idleTimeoutSeconds: 900,
@@ -131,6 +133,13 @@ export function validateConfig(cfg) {
     warnings.push("claude.idleTimeoutSeconds が timeoutSeconds より大きいため、無出力判定は効きません。");
   }
   if (!Array.isArray(cfg.claude.extraArgs)) errors.push("claude.extraArgs は配列である必要があります。");
+  if (!Array.isArray(cfg.claude.allowedTools)) errors.push("claude.allowedTools は配列である必要があります。");
+  if (!Array.isArray(cfg.claude.disallowedTools)) errors.push("claude.disallowedTools は配列である必要があります。");
+  if (cfg.claude.permissionPrompts === "none" && cfg.claude.allowedTools.length === 0 && cfg.claude.permissionMode !== "bypassPermissions") {
+    warnings.push(
+      "claude.allowedTools が空で permissionPrompts=none です。この組み合わせでは Bash が自動拒否され、テストもビルドも実行できません (実測済み)。",
+    );
+  }
 
   if (!Number.isInteger(cfg.review.maxRevisions) || cfg.review.maxRevisions < 1) {
     errors.push("review.maxRevisions は 1 以上の整数である必要があります (無限修正ループ防止)。");

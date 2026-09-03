@@ -29,6 +29,8 @@ export function makeConfig(overrides = {}) {
       model: "sonnet",
       permissionMode: "acceptEdits",
       permissionPrompts: "none",
+      allowedTools: ["Read", "Bash(node:*)"],
+      disallowedTools: ["Bash(git push:*)"],
       maxBudgetUsd: 1,
       timeoutSeconds: 120,
       idleTimeoutSeconds: 60,

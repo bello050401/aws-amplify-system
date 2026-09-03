@@ -350,8 +350,13 @@ test("シナリオ8: 審査API障害では状態を失わず、復旧後に流�
     let after = h.repo.getTask(task.id);
     assert.equal(after.state, STATES.AWAITING_AI_REVIEW, "審査待ちのまま保持する");
     assert.ok(after.last_error);
+    assert.ok(after.retry_after, "バックオフ時刻が入る (すぐ再試行して空転しない)");
 
-    // API 復旧後、次の tick で審査が流れる
+    // バックオフ中は掴まない
+    assert.equal(await h.orchestrator.tick(), false, "バックオフ中は審査を呼び直さない");
+
+    // 時刻が来て API も復旧していれば審査が流れる
+    h.repo.updateTask(task.id, { retry_after: new Date(Date.now() - 1000).toISOString() });
     await h.orchestrator.tick();
     after = h.repo.getTask(task.id);
     assert.equal(after.state, STATES.COMPLETED);
@@ -554,6 +559,41 @@ test("一時停止中はタスクを開始しない", async () => {
     assert.equal(await h.orchestrator.tick(), false);
     h.orchestrator.resume();
     assert.equal(await h.orchestrator.tick(), true);
+  } finally {
+    h.cleanup();
+  }
+});
+
+// ---------------------------------------- 審査不能時にループが空転しないこと
+test("審査不能時: 同じタスクを掴み続けてループが空転しない", async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    let changed = null;
+    h.runner.setDefault({
+      kind: "success",
+      effect: () => { changed = h.commitSomething(); },
+      get report() { return makeReport(task.id, { changes: [{ path: changed, purpose: "変更" }] }); },
+    });
+    h.reviewEngine.setDefault({ kind: "unavailable", reason: "no_api_key", message: "キーがありません" });
+
+    await h.orchestrator.tick();
+    const after = h.repo.getTask(task.id);
+    assert.equal(after.state, STATES.AWAITING_AI_REVIEW);
+    assert.ok(after.retry_after, "次に見る時刻が入っている");
+    assert.ok(new Date(after.retry_after).getTime() > Date.now(), "未来の時刻である");
+
+    const reviewCallsBefore = h.reviewEngine.calls.length;
+    // 直後の tick では掴まない = 空転しない
+    assert.equal(await h.orchestrator.tick(), false, "すぐに再試行しない");
+    assert.equal(h.reviewEngine.calls.length, reviewCallsBefore, "審査を呼び直していない");
+
+    // 時刻が来れば再び審査へ進む
+    h.repo.updateTask(task.id, { retry_after: new Date(Date.now() - 1000).toISOString() });
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+    assert.equal(await h.orchestrator.tick(), true);
+    assert.equal(h.repo.getTask(task.id).state, STATES.COMPLETED);
+    assert.equal(h.repo.getTask(task.id).retry_after, null, "成功したら待機指示を消す");
   } finally {
     h.cleanup();
   }

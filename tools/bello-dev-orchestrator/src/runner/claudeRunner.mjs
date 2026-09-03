@@ -123,6 +123,19 @@ export class ClaudeRunner {
       c.permissionPrompts,
     ];
     if (c.model) args.push("--model", c.model);
+
+    // 実測 (docs/ADR-0001 §4): --permission-prompts none だけでは Bash が
+    // 「承認できる主体が居ない」として自動拒否され、テストもビルドも走らない。
+    // bypassPermissions で全部素通しにするのは指示書 §12 に反するので、
+    // 許可したいコマンドだけを明示する最小権限方式にする。
+    if (Array.isArray(c.allowedTools) && c.allowedTools.length > 0) {
+      args.push("--allowedTools", c.allowedTools.join(","));
+    }
+    // 拒否リストは許可リストより強い。破壊的・不可逆な操作をここで塞ぐ。
+    if (Array.isArray(c.disallowedTools) && c.disallowedTools.length > 0) {
+      args.push("--disallowedTools", c.disallowedTools.join(","));
+    }
+
     if (Number.isFinite(c.maxBudgetUsd) && c.maxBudgetUsd > 0) {
       args.push("--max-budget-usd", String(c.maxBudgetUsd));
     }

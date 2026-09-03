@@ -4,10 +4,8 @@
     "APIキー・トークン・認証情報は絶対にここへ書かない。環境変数のみを使う。",
     "実行時データ (DB/ログ/inbox/アップロード) の場所は dataRoot で決まり、既定は %LOCALAPPDATA%\\BELLO\\dev-orchestrator。"
   ],
-
   "repoPath": "C:\\Users\\win\\Documents\\GitHub\\aws-amplify-system",
   "dataRoot": "",
-
   "claude": {
     "executable": "",
     "model": "sonnet",
@@ -16,9 +14,66 @@
     "maxBudgetUsd": 5,
     "timeoutSeconds": 3600,
     "idleTimeoutSeconds": 900,
-    "extraArgs": []
+    "extraArgs": [],
+    "allowedTools": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write",
+      "TodoWrite",
+      "WebFetch",
+      "WebSearch",
+      "Bash(node:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run test:*)",
+      "Bash(npm run verify:*)",
+      "Bash(npm test:*)",
+      "Bash(npm ci:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(cd:*)",
+      "Bash(pwd:*)"
+    ],
+    "disallowedTools": [
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
+      "Bash(git clean:*)",
+      "Bash(git rebase:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(rm:*)",
+      "Bash(rmdir:*)",
+      "Bash(del:*)",
+      "Bash(format:*)",
+      "Bash(npx ampx:*)",
+      "Bash(ampx:*)",
+      "Bash(aws:*)",
+      "Bash(gh:*)",
+      "Bash(npm publish:*)",
+      "Bash(npm install:*)",
+      "Bash(curl:*)",
+      "Bash(Invoke-WebRequest:*)"
+    ]
   },
-
   "review": {
     "provider": "openai",
     "model": "",
@@ -30,7 +85,6 @@
     "maxDiffChars": 60000,
     "minConfidenceToAccept": 0.5
   },
-
   "queue": {
     "maxAttempts": 3,
     "retryBaseSeconds": 30,
@@ -38,14 +92,12 @@
     "heartbeatWarnSeconds": 900,
     "pollIntervalSeconds": 5
   },
-
   "intake": {
     "maxFileBytes": 26214400,
     "stableChecks": 3,
     "stableIntervalMs": 1500,
     "pollIntervalSeconds": 10
   },
-
   "dashboard": {
     "enabled": true,
     "host": "127.0.0.1",
@@ -53,19 +105,20 @@
     "lanAccess": false,
     "lanAccessTokenEnvVar": "BELLO_DASHBOARD_TOKEN"
   },
-
   "logging": {
     "level": "info",
     "retentionDays": 30,
     "maxFileBytes": 5242880,
     "maxFiles": 10
   },
-
   "timezone": "Asia/Tokyo",
-
   "git": {
     "autoCommit": true,
     "allowPush": false,
-    "protectedBranches": ["main", "master", "production"]
+    "protectedBranches": [
+      "main",
+      "master",
+      "production"
+    ]
   }
 }
