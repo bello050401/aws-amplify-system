@@ -123,6 +123,16 @@ export function decideUrlRequest(params: {
    * それを理由にURLの再送を頼むのは、内部の失敗を顧客へ転嫁している。
    */
   customerCanProvideUrl?: boolean;
+  /**
+   * 顧客が**もう商品URLを送ってきている**か。
+   *
+   * 送ってきているのに特定できないなら、それは在庫データ側の問題で、
+   * もう一度URLを求めても同じ結果にしかならない。実機で
+   * 「https://…/items/156144635 こちら3万円になりませんか」に対して
+   * 「商品のURLをお送りいただけますでしょうか」と返す返信案が出た。
+   * 顧客から見ると、送ったものを見ていないと受け取られる。
+   */
+  customerAlreadySentUrl?: boolean;
 }): UrlRequestDecision {
   const { basis, status, candidateCount, requiresProduct } = params;
   const customerCanProvideUrl = params.customerCanProvideUrl ?? true;
@@ -142,6 +152,16 @@ export function decideUrlRequest(params: {
   }
   if (canAnswerProductSpecifics(basis)) {
     return { requestUrl: false, basis, reason: "商品を一意に特定できているため、確認は不要です。" };
+  }
+  // 既に送られているものを、もう一度送ってくれとは言わない。
+  // 特定できないのは在庫データ側の問題なので、社内で確認する。
+  if (params.customerAlreadySentUrl) {
+    return {
+      requestUrl: false,
+      basis,
+      reason:
+        "お客様は既に商品URLを送っています。特定できないのは在庫データ側の問題のため、URLの再送は依頼せず社内で確認してください。",
+    };
   }
   if (basis === "NAME_ONLY") {
     return {

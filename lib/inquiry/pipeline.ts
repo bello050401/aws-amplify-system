@@ -151,6 +151,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     // §4 メルカリShopsはメール経由で、顧客は商品ページから問い合わせている。
     // 商品URLを送ってもらう導線がそもそも無いので、依頼しない。
     customerCanProvideUrl: request.channel !== "MERCARI_SHOPS",
+    // 既にURLが本文にあるなら、再送を頼んでも結果は変わらない。
+    customerAlreadySentUrl: resolution.references.urls.some((u) => isBaseUrl(u)),
   });
 
   const unresolved: UnresolvedFact[] = [];
@@ -542,7 +544,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     context: request.additionalContext ?? null,
     // §4 顧客が商品を指し示せない経路(メール由来)では、商品特定の失敗を
     // 顧客への質問に変換させない。urlRequest の判定と同じ条件を使う。
-    customerCanIdentifyProduct: request.channel !== "MERCARI_SHOPS",
+    customerCanIdentifyProduct:
+      request.channel !== "MERCARI_SHOPS" && !resolution.references.urls.some((u) => isBaseUrl(u)),
     customerMessage: messageText,
     history: request.history.slice(-10),
     negotiation: negotiationResult

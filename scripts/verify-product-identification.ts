@@ -288,9 +288,48 @@ function testLinkedBaseProduct() {
   assertEqual(unlinked("NAME_ONLY", []), 0, "未結合件数: URLが無ければ0件");
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 3-2. 既に送られたURLを、もう一度送ってくれとは言わない
+ *
+ * 実機で「https://…/items/156144635 こちら3万円になりませんか」に対し、
+ * 「商品のURLをお送りいただけますでしょうか」と返す返信案が出た。
+ * 顧客から見れば、送ったものを見ていないと受け取られる。特定できないのは
+ * 在庫データ側の問題なので、顧客の手間に変換しない。
+ * ══════════════════════════════════════════════════════════════════ */
+function testUrlAlreadySent() {
+  const d = (over: Partial<Parameters<typeof decideUrlRequest>[0]>) =>
+    decideUrlRequest({
+      basis: "NONE",
+      status: "NOT_FOUND",
+      candidateCount: 0,
+      requiresProduct: true,
+      ...over,
+    });
+
+  assertEqual(d({ customerAlreadySentUrl: true }).requestUrl, false, "URL依頼: 既に送られていれば再送を依頼しない");
+  assertTrue(
+    d({ customerAlreadySentUrl: true }).reason.includes("社内で確認"),
+    "URL依頼: 特定できないことを社内側の確認として扱う",
+  );
+  assertEqual(d({ customerAlreadySentUrl: false }).requestUrl, true, "URL依頼: URLが無ければ従来どおり依頼する");
+  assertEqual(d({}).requestUrl, true, "URL依頼: 未指定なら従来どおり依頼する(既存の挙動を変えない)");
+  assertEqual(
+    d({ basis: "BASE_ITEM_ID", customerAlreadySentUrl: true }).requestUrl,
+    false,
+    "URL依頼: 特定できていればそもそも尋ねない",
+  );
+  // 商品が要らない問い合わせでは、URLの有無にかかわらず尋ねない。
+  assertEqual(
+    d({ requiresProduct: false, customerAlreadySentUrl: true }).requestUrl,
+    false,
+    "URL依頼: 商品が決まらなくても答えられるなら尋ねない",
+  );
+}
+
 testUrlExtraction();
 testBasis();
 testUrlRequest();
+testUrlAlreadySent();
 testNoUrlRequestWhereImpossible();
 testTemplate();
 testLinkedBaseProduct();
