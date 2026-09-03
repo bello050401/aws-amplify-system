@@ -1006,6 +1006,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       knownDestinationPrefecture: shipping?.destinationPrefecture ?? destinationPrefecture ?? null,
       // ご希望に沿えるのに断る返信を出さない。
       requestIsWithinOffer: (negotiationResult?.staffCard?.differenceFromRequestedYen ?? -1) >= 0,
+      // 受け取っていない写真に言及させない。
+      customerSentAttachment: request.customerSentAttachment,
       externalTexts: research.documentTexts,
       allowedDimensionText,
       // 根拠として認めた文章。住所のように「出典があれば出してよいが

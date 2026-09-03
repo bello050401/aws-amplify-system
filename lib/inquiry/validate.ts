@@ -29,7 +29,9 @@ export type ReplyValidationCode =
   /** 回答せずにSNS・ホームページへ誘導している。 */
   | "DEFLECTS_TO_EXTERNAL_CHANNEL"
   /** ご希望に沿えるのに、お断り・お詫びを書いている。 */
-  | "UNNECESSARY_REFUSAL";
+  | "UNNECESSARY_REFUSAL"
+  /** 受け取っていない添付(写真等)を受け取った前提で書いている。 */
+  | "CLAIMS_UNSENT_ATTACHMENT";
 
 export interface ReplyValidationViolation {
   code: ReplyValidationCode;
@@ -88,6 +90,16 @@ export function validateReplyDraft(params: {
    * 押さえる —— プロンプトへ判断結果を渡すだけでは従わなかった。
    */
   requestIsWithinOffer?: boolean;
+  /**
+   * 今回のメッセージに添付が実際にあったか(2026-09-03 実測)。
+   *
+   * false のとき、「お送りいただいた写真」のように受け取った前提で書いては
+   * いけない。実機で、写真の無い問い合わせ(メルカリShopsの取引メッセージ)に
+   * 対して「お送りいただいた写真を確認し、商品の状態を詳しく調査いたします」
+   * と返す返信案が出た。お客様は写真を送っていないので、読んだ側は話が
+   * 通じていないと受け取る。
+   */
+  customerSentAttachment?: boolean;
   /** 外部から取得した本文(sanitize済み)。長文の引き写し検査に使う。 */
   externalTexts: string[];
   /** 生成文に出てよい寸法の文字列(在庫DBの寸法・外部調査で確認できた寸法)。 */
@@ -163,6 +175,23 @@ export function validateReplyDraft(params: {
         detail:
           `お届け先は既に「${params.knownDestinationPrefecture}」と分かっています。都道府県を尋ねてはいけません。` +
           "お届け先が分かっている前提で書き、送料や金額が確定していない場合は「確認のうえ改めてご案内いたします」としてください。",
+      });
+    }
+  }
+
+  // ── 受け取っていない添付に言及していないか ──────────────────
+  if (params.customerSentAttachment === false) {
+    // 「写真を送ってください」と依頼する形は弾かない。**受け取った前提**の
+    // 書き方だけを見る。
+    const claimsAttachment =
+      /(?:お送り|ご送付|添付|ご提供)いただ(?:いた|きました)[^。\n]{0,10}(?:写真|画像|お写真|動画)/.test(output) ||
+      /(?:写真|画像|お写真|動画)[^。\n]{0,8}(?:を)?(?:拝見|確認)(?:いた)?し(?:ました|、|た)/.test(output);
+    if (claimsAttachment) {
+      violations.push({
+        code: "CLAIMS_UNSENT_ATTACHMENT",
+        detail:
+          "このお問い合わせに写真・画像の添付はありません。受け取った前提で書いてはいけません。" +
+          "必要なら「お写真をお送りいただけますでしょうか」と依頼する形にしてください。",
       });
     }
   }

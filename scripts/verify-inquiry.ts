@@ -929,6 +929,7 @@ async function main() {
   testUncertainFactsAreNotGivenToAi();
   testAsksKnownFact();
   testUnnecessaryRefusal();
+  testClaimsUnsentAttachment();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
@@ -1006,4 +1007,35 @@ function testUnnecessaryRefusal() {
 
   const invented = validate("特別に40,000円でいかがでしょうか。", { allowedMoneyYen: [46128] });
   assertTrue(invented.codes.includes("FABRICATED_SHIPPING_FEE"), "検査: 許可していない金額は弾く");
+}
+
+/**
+ * 受け取っていない写真に言及しない(2026-09-03 実測)。
+ *
+ * メルカリShopsの取引メッセージ「本日到着しましたが、全体的に傷だらけで…」
+ * に対し、「お送りいただいた写真を確認し、商品の状態を詳しく調査いたします」
+ * と返す返信案が出た。お客様は写真を送っていない。
+ */
+function testClaimsUnsentAttachment() {
+  const claimed = validate("お送りいただいた写真を確認し、商品の状態を詳しく調査いたします。", {
+    customerSentAttachment: false,
+  });
+  assertTrue(claimed.codes.includes("CLAIMS_UNSENT_ATTACHMENT"), "検査: 送られていない写真に言及したら弾く");
+
+  const seen = validate("画像を確認しました。", { customerSentAttachment: false });
+  assertTrue(seen.codes.includes("CLAIMS_UNSENT_ATTACHMENT"), "検査: 「画像を確認しました」も弾く");
+
+  // 依頼する形は弾かない。
+  const asks = validate("お手数ですが、状態が分かるお写真をお送りいただけますでしょうか。", {
+    customerSentAttachment: false,
+  });
+  assertTrue(!asks.codes.includes("CLAIMS_UNSENT_ATTACHMENT"), "検査: 写真の送付を依頼する形は弾かない");
+
+  // 実際に添付があるなら言及してよい。
+  const real = validate("お送りいただいた写真を確認いたしました。", { customerSentAttachment: true });
+  assertTrue(!real.codes.includes("CLAIMS_UNSENT_ATTACHMENT"), "検査: 添付があれば言及してよい");
+
+  // 未指定なら従来どおり(既存の呼び出しの挙動を変えない)。
+  const omitted = validate("お送りいただいた写真を確認いたしました。");
+  assertTrue(!omitted.codes.includes("CLAIMS_UNSENT_ATTACHMENT"), "検査: 未指定なら判定しない");
 }

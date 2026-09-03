@@ -204,6 +204,10 @@ export async function processInquiryAndNotify(params: {
           conversationId: conversation.id,
           messageId: target.id,
           messageText: target.body,
+          // 添付が実際にあったか。無いのに「お送りいただいた写真を確認し」と
+          // 書く返信案が実機で出た(2026-09-03)。お客様は写真を送っていない
+          // ので、返信を読んだ側は話が通じていないと受け取る。
+          customerSentAttachment: target.attachmentStatus === "STORED",
           history,
           context: loadedContext.context,
           conversationInventoryId: conversation.relatedInventoryId,

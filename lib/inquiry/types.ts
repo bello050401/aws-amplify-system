@@ -419,6 +419,14 @@ export interface InquiryReplyRequest {
   conversationId: string;
   messageId: string;
   messageText: string;
+  /**
+   * 今回のメッセージに添付(画像等)が実際にあったか(2026-09-03 実測)。
+   *
+   * 無いのに「お送りいただいた写真を確認し、商品の状態を詳しく調査
+   * いたします」と書く返信案が出た。お客様は写真を送っていないので、
+   * 読んだ側は話が通じていないと受け取る。
+   */
+  customerSentAttachment?: boolean;
   /** 会話の直近のやり取り(古い順)。 */
   history: { direction: "INBOUND" | "OUTBOUND"; body: string }[];
   /** 人が候補から選び直した場合の在庫ID。指定されたら自動特定より優先する(§34)。 */
