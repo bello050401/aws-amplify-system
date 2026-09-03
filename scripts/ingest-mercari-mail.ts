@@ -28,12 +28,17 @@ async function main() {
   console.log(`[ingest-mercari-mail] 開始 ${new Date().toISOString()}`);
 
   try {
-    const result = await ingestMercariNotificationMails({ who: "scheduled-ingest" });
+    // --reprocess: 取り込み済みのメールも解析・通知をやり直す(§10)。
+    // パーサや商品照合を直した後に、既存ログを正しい内容へ更新するために使う。
+    const reprocess = process.argv.includes("--reprocess");
+    if (reprocess) console.log("  (やり直しモード: 取り込み済みのメールも再処理します)");
+    const result = await ingestMercariNotificationMails({ who: "scheduled-ingest", reprocess });
     console.log(
       [
         `  取得            : ${result.fetched}件`,
         `  新規取り込み    : ${result.ingested}件`,
         `  取り込み済み    : ${result.duplicated}件`,
+        `  再処理          : ${result.reprocessed}件`,
         `  対象外          : ${result.skipped}件`,
         `  解析失敗(保存済): ${result.parseFailed}件`,
         `  エラー          : ${result.failed}件`,

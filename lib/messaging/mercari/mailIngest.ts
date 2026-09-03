@@ -35,6 +35,8 @@ export interface MailIngestResult {
   ingested: number;
   /** 既に取り込み済みだった数(高速SKIP)。 */
   duplicated: number;
+  /** 取り込み済みだが、修正後の処理でやり直した数(§10)。 */
+  reprocessed: number;
   /** 本文を抽出できなかったが保存した数(§3)。 */
   parseFailed: number;
   /** 問い合わせ通知ではなかった数。 */
@@ -82,11 +84,24 @@ function contextFor(parsed: MercariMailParseResult): string | null {
  * 例外を投げるのは Gmail へ到達できないときだけ。個々のメールの失敗は
  * 結果に数えて続ける —— 1通の異常で残り全部を取りこぼさない。
  */
-export async function ingestMercariNotificationMails(params: { maxResults?: number; who: string | null }): Promise<MailIngestResult> {
+export async function ingestMercariNotificationMails(params: {
+  maxResults?: number;
+  who: string | null;
+  /**
+   * 取り込み済みのメールも解析・通知をやり直す(§10)。
+   *
+   * パーサや商品照合を直した後に、既存のログを正しい内容へ更新するために使う。
+   * **会話もメッセージも新しく作らない** —— 既存の行をそのまま使い、
+   * 返信案と通知の内容だけが最新の処理結果で置き換わる
+   * (通知は dedupeKey が同じなので更新され、重複しない)。
+   */
+  reprocess?: boolean;
+}): Promise<MailIngestResult> {
   const result: MailIngestResult = {
     fetched: 0,
     ingested: 0,
     duplicated: 0,
+    reprocessed: 0,
     parseFailed: 0,
     skipped: 0,
     failed: 0,
@@ -129,16 +144,27 @@ export async function ingestMercariNotificationMails(params: { maxResults?: numb
         contentKind: "TEXT",
       });
 
+      let conversationId: string;
+      let messageId: string;
       if ("deduped" in stored) {
         // §6 2回目以降は高速SKIP。AIも呼ばない。
-        result.duplicated++;
-        continue;
+        if (!params.reprocess || !stored.conversationId || !stored.messageId) {
+          result.duplicated++;
+          continue;
+        }
+        // §10 やり直しモード。既存の行をそのまま使う(新規に作らない)。
+        conversationId = stored.conversationId;
+        messageId = stored.messageId;
+        result.reprocessed++;
+      } else {
+        conversationId = stored.conversationId;
+        messageId = stored.messageId;
+        result.ingested++;
       }
-      result.ingested++;
 
       await processInquiryAndNotifyUnauthenticated({
-        conversationId: stored.conversationId,
-        sourceMessageId: stored.messageId,
+        conversationId,
+        sourceMessageId: messageId,
         who: params.who,
         // §4 メールに商品URLは無い。出品タイトルをそのまま高信頼の照合へ渡す。
         productLookupHint: buildProductLookupText(parsed),
