@@ -10,13 +10,13 @@ Node.js v24.20.0 / npm 11.19.0 / git 2.55.0 / Claude Code 2.1.259
 
 ```
 node --test "test/*.test.mjs"
-→ tests 58 / pass 58 / fail 0   (約 9.7 秒)
-   内訳: unit 34 件、integration 24 件
+→ tests 71 / pass 71 / fail 0   (約 15.1 秒)
+   内訳: unit 40 件、integration 31 件
 ```
 
 実 Claude・実 OpenAI は呼びません。`FakeClaudeRunner` と `FakeReviewEngine` を使います。
 
-### 単体テスト (34 件) が守っていること
+### 単体テスト (40 件) が守っていること
 
 | 対象 | 検証内容 |
 |---|---|
@@ -35,7 +35,7 @@ node --test "test/*.test.mjs"
 | 依存関係 | 未解決の依存があるタスクは優先度が高くても選ばない |
 | Claude Runner | 引数の組み立て（許可リスト / 拒否リスト / resume） |
 
-### 統合テスト (24 件) — 指示書 §14-2 の 10 シナリオ + 追加
+### 統合テスト (31 件) — 指示書 §14-2 の 10 シナリオ + 追加
 
 | # | シナリオ | 結果 |
 |---|---|---|
@@ -187,6 +187,85 @@ changes: []   git.commitCreated: false
 
 ---
 
+## 4.5 Claude 審査（追加課金なし）の実機 E2E
+
+測定日: 2026-09-03。**OPENAI_API_KEY は未設定**（`process.env` / PowerShell / ユーザー環境変数のいずれにも無し）。
+審査方式は `claude`（既定）。OpenAI API は 1 度も呼んでいません。
+
+### E2E-1 実装 → 審査 → 完了
+
+タスク: 「TEST-RESULTS.md のテスト件数を実測値に直す」（`task_8a6a3aa10d6bddfffd`）
+
+```
+05:11:07  queued -> preflight -> running        実装担当 session 37aad087-b748-4404-9be5-d9e4e67548a6
+05:12:35  running -> verifying -> awaiting_ai_review
+05:14:18  awaiting_ai_review -> completed       [review_engine]
+```
+
+| 項目 | 実測値 |
+|---|---|
+| 実装担当 session_id | `37aad087-b748-4404-9be5-d9e4e67548a6` |
+| 審査担当 session_id | `f0f1dd49-b0ad-456b-bdb1-4fbef8d56599` |
+| `sessionsAreSeparate` | **true**（別セッション） |
+| 審査の判定 | `accept_and_continue` / confidence 0.92 |
+| 審査の所要 | 102.6 秒 / 9 ターン |
+| 審査担当が拒否されたツール使用 | **2 件**（`git log` をパス外の形で叩こうとして CLI に拒否された） |
+| 証拠ゲート | passed / failures なし |
+
+審査担当は完了報告を鵜呑みにせず、**自分でコマンドを実行して裏を取りました**（審査結果の evidence より）。
+
+- `node --test "test/*.test.mjs"` → tests 71 / pass 71 / fail 0 を自分で確認し、報告値と一致することを検証
+- `node --test test/unit.test.mjs` → 40/40/0、`node --test test/integration.test.mjs` → 31/31/0、40+31=71 の内訳一致まで確認
+- `git diff -- .../TEST-RESULTS.md` で差分の中身を確認
+- `git status --porcelain` で変更範囲を確認し、**タスク開始前から dirty だった別件ファイルを正しく切り分けた**
+- `git diff --stat b38232b..HEAD` が空であることから `commitCreated:false` の申告を裏取り
+
+さらに、指示していないのに **未コミットの設定変更が将来のコミットに紛れ込む危険**を riskFlags で指摘しました。
+
+### E2E-2 実装 → 修正指示 → 再実装 → Claude 審査 → 完了
+
+タスク: 「OPERATIONS.md に審査方式の節を追加する」（`task_61e06b24f7692001f8`）
+
+```
+05:16:20  queued -> preflight -> running          実装担当 1 回目
+05:17:50  running -> verifying -> awaiting_ai_review
+05:18:11  awaiting_ai_review -> revision_required  [review_engine] 手動審査で修正が必要と判定
+05:18:11  revision_required -> queued              修正指示で再実行
+05:18:15  queued -> preflight -> running           実装担当 2 回目 session d92ee7fc-de5d-4ff9-98fc-07b1af03a94b
+05:19:58  running -> verifying -> awaiting_ai_review
+05:21:52  awaiting_ai_review -> completed          [review_engine] Claude 審査が合格
+```
+
+| 項目 | 実測値 |
+|---|---|
+| 1 回目の審査 | `manual` / decision `revision_required`（修正指示を投入） |
+| 再実装 | 実装担当が修正指示どおり追記し、`node --test` で 72/72/0 を確認 |
+| 2 回目の審査 | `claude` / session `32223063-945b-4a48-8ddb-fe2dd211c264` / model `claude-sonnet-5` |
+| `sessionsAreSeparate` | **true** |
+| 判定 | `accept_and_continue` / confidence 0.92 / 所要 113.5 秒 / 10 ターン |
+| `revision_count` | 1（上限 3） |
+
+2 回目の審査担当も自分で `git diff` / `git status` / `git log` / `node --test` を実行し、
+**72 pass / 0 fail を自分の環境で確認**したうえで合格にしています。
+また、変更が `docs/OPERATIONS.md` のみであること、HEAD が開始コミットのままであることも自分で裏取りしました。
+
+### 追加課金が発生していないことの根拠
+
+- `OPENAI_API_KEY` は未設定（3 経路すべてで確認）。OpenAI エンドポイントへのリクエストは 0 件。
+- 審査は `claude.exe -p` の子プロセスとして実行され、お使いの Claude Code の枠内で動く。
+- 審査 1 回あたりの内部計測値は `costUsd` として記録されるが、これは Claude Code が返す参考値であり、
+  API キー課金ではない。`review.claude.maxBudgetUsd`（既定 1）で上限も掛けている。
+
+### 記録される分離の証拠
+
+審査のたびに、`reviews.usage` へ次を保存します（ダッシュボードのタスク詳細で確認できます）。
+
+```json
+{ "reviewerSessionId": "...", "implementerSessionId": "...", "sessionsAreSeparate": true,
+  "numTurns": 9, "costUsd": 0.2076, "durationMs": 102616, "deniedToolUses": [...] }
+```
+---
+
 ## 5. リポジトリ全体の品質ゲート
 
 | コマンド | 結果 |
@@ -204,7 +283,7 @@ changes: []   git.commitCreated: false
 
 | # | 制約 | 影響 | 対応 |
 |---|---|---|---|
-| 1 | **実 OpenAI API は未検証** | 審査の実接続は未確認。全分岐はモックで検証済み | `OPENAI_API_KEY` を設定すると有効になる。ユーザー TODO を生成済み |
+| 1 | **実 OpenAI API は未検証** | OpenAI審査を選んだ場合の実接続は未確認。全分岐はモックで検証済み | 既定は Claude審査なので運用に影響なし。使う場合のみ `OPENAI_API_KEY` を設定 |
 | 2 | **PC 再起動後の自動復帰は未検証** | ログオントリガの実発火は実際にログオンしないと確認できない | ユーザー TODO 化（`docs/RECOVERY.md` §5） |
 | 3 | 誰もログオンしていない状態では起動しない | PC 再起動後、サインインするまで動かない | 対話ログオン方式でパスワードを保存しないための意図的な仕様 |
 | 4 | 画像内の文字を読まない | 画像だけに要件がある Word は取りこぼす | 画像がある文書では警告を出し、ユーザーに確認を促す |
@@ -213,6 +292,8 @@ changes: []   git.commitCreated: false
 | 7 | 許可リストは対象リポジトリ向けの既定値 | 別のコマンドが必要なタスクは拒否される | `claude.allowedTools` に追記する。拒否は完了報告に残るので気づける |
 | 8 | Claude セッションの再開は行わない | 中断したタスクは新しいセッションでやり直す | 同じ外部操作の二重実行を避けるための意図的な仕様 |
 | 9 | ダッシュボードに認証が無い（localhost 時） | 同一 PC の他ユーザーからは見える | LAN 公開時のみトークン必須。既定は localhost 限定 |
+| 10 | 審査担当も Claude Code の利用枠を使う | 実装と審査で枠の消費が増える | 利用上限に達したら状態を保存して TODO を出し、回復後に自動で進む。急ぐ場合は手動審査へ切替 |
+| 11 | 審査担当が読めるのは対象リポジトリ内のみ | 外部仕様書などは参照できない | 受入条件は開発指示に書く。不明なら審査担当は pause_for_user_review にする |
 
 ---
 
@@ -233,3 +314,6 @@ changes: []   git.commitCreated: false
 | 9 | `bello.ps1 start` が停止フラグを解除せず何も起きない | 実機操作 | `resume` を追加して start/restart から呼ぶ |
 | 10 | `bello.ps1` の出力が関数戻り値に飲まれて画面に出ない | 実機操作 | `Out-Host` を通す |
 | 11 | 日本語を含む `.ps1` が Shift-JIS 解釈で構文エラー | 実機実行 | UTF-8 BOM + `.gitattributes` |
+| 12 | `repo.mjs` に生の NUL バイトが混入し Git がバイナリ扱い | コミット時の numstat | 同じ文字のエスケープ表記へ置換（ハッシュ結果は不変） |
+| 13 | 審査結果に記録するモデル名が補助モデルになる | Claude審査の実機 E2E | 出力トークンが最多のモデルを主モデルとして記録 |
+| 14 | TODO 完了 API が手動審査の判定結果を返さない | 修正ループの実機 E2E | 応答に `manualReview` を追加 |

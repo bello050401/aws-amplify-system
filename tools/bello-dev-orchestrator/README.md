@@ -22,7 +22,8 @@
   │                       [ 証拠ゲート ] テスト結果 / exit code / Git 差分を機械的に突合
   │                                    │
   │                                    ▼
-  │                    [ OpenAI 審査 ] accept / revision / user_action / pause / fail
+  │              [ 審査 ] 別セッションの Claude / OpenAI / 人 のいずれか
+  │                     accept / revision / user_action / pause / fail
   │                          │                 │
   │                          │                 └─→ [ ユーザーTODO ] 本人操作だけ
   │                          │                            │ 完了
@@ -30,7 +31,12 @@
 ```
 
 **AI が「完了しました」と書いただけでは合格になりません。** 証拠ゲート (`src/review/evidenceGate.mjs`) が
-テスト結果・コマンドの終了コード・Git の実際の差分を突合し、そこで落ちれば AI の accept を採用しません。
+テスト結果・コマンドの終了コード・Git の実際の差分を突合し、そこで落ちれば accept を採用しません。
+
+**既定の審査は「別の Claude Code セッション」が行います。追加の API 課金はありません。**
+審査担当は実装セッションを継承せず（別 session_id）、編集系ツールを CLI の権限で塞いであるため
+実装はできません。完了報告を鵜呑みにせず、自分で `git diff` とテストを実行して裏を取ります。
+ダッシュボードから **Claude審査 / OpenAI審査 / 手動審査** を切り替えられます（既定は Claude審査）。
 
 ---
 
@@ -84,7 +90,7 @@ inbox フォルダの場所はダッシュボードの「設定」画面に表�
 | `src/app.mjs` | 単一起動・復旧・ループ・inbox 監視・ダッシュボードの組み立て |
 | `src/core/` | 状態機械 / Orchestrator / Git 安全策 / スキーマ検証 |
 | `src/runner/` | Claude Runner と完了報告スキーマ、テスト用 fake |
-| `src/review/` | OpenAI 審査、審査スキーマ、証拠ゲート、テスト用 fake |
+| `src/review/` | Claude審査 / OpenAI審査 / 手動審査、審査スキーマ、証拠ゲート、失敗分類、テスト用 fake |
 | `src/todo/` | ユーザー TODO |
 | `src/intake/` | Word 取込 (最小 ZIP リーダー + docx 抽出 + 監視) |
 | `src/dashboard/` | ローカルダッシュボード (node:http + 素の HTML/CSS/JS) |
@@ -101,7 +107,8 @@ Git 管理外です。リポジトリには入りません。
 ## 5. 秘密情報の扱い
 
 - 設定ファイルにキーを書きません。**環境変数のみ**です。
-- `OPENAI_API_KEY` … AI 審査に使います。未設定でもシステムは動き、審査待ちとユーザー TODO になります。
+- **既定の運用に API キーは要りません。** Claude審査はお使いの Claude Code の枠内で動きます。
+- `OPENAI_API_KEY` … 「OpenAI審査」を選ぶ場合だけ必要です。未設定でもエラーにも TODO にもなりません。
 - `OPENAI_MODEL` … 省略可。
 - `BELLO_DASHBOARD_TOKEN` … LAN 公開を有効にする場合のみ必須。
 - ログ・API 応答・完了報告・審査への送信内容は、すべて `src/log/redact.mjs` を通します。

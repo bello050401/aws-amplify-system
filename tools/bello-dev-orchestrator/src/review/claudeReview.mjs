@@ -94,6 +94,27 @@ function killTree(pid) {
   }
 }
 
+/**
+ * 実際に審査を書いたモデルを選ぶ。
+ * modelUsage には補助的な呼び出し (要約用の小さいモデル等) も混ざるので、
+ * 先頭のキーを取ると実際より小さいモデル名が記録されてしまう。
+ * 出力トークンが最も多いものを「主に使われたモデル」とみなす。
+ */
+function pickMainModel(envelope) {
+  const usage = envelope?.modelUsage;
+  if (!usage || typeof usage !== "object") return null;
+  let best = null;
+  let bestTokens = -1;
+  for (const [name, u] of Object.entries(usage)) {
+    const tokens = Number(u?.outputTokens ?? 0);
+    if (tokens > bestTokens) {
+      bestTokens = tokens;
+      best = name;
+    }
+  }
+  return best;
+}
+
 export class ClaudeReviewEngine {
   constructor({ config, paths, logger }) {
     this.config = config;
@@ -292,7 +313,7 @@ export class ClaudeReviewEngine {
     return {
       review: parsed,
       meta: {
-        model: envelope.modelUsage ? Object.keys(envelope.modelUsage)[0] : (this.settings.model ?? null),
+        model: pickMainModel(envelope) ?? this.settings.model ?? null,
         promptVersion: REVIEW_PROMPT_VERSION,
         provider: this.provider,
         usage: redactValue({

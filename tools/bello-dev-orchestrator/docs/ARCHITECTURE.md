@@ -7,7 +7,7 @@
 | 1 | Supervisor | `Start-BelloOrchestrator.ps1` + Scheduled Task | Windows 起動、単一起動、子プロセス監視、異常終了時の再起動 |
 | 2 | Orchestrator | `src/core/orchestrator.mjs` | 状態遷移、キュー制御、依存関係、再試行、承認境界、停止/再開 |
 | 3 | Claude Runner | `src/runner/claudeRunner.mjs` | Claude Code CLI の安全な起動、構造化完了報告の取得 |
-| 4 | Review Engine | `src/review/openaiReview.mjs` + `evidenceGate.mjs` | 完了報告の審査。証拠ゲートが AI より強い |
+| 4 | Review Engine | `src/review/claudeReview.mjs` / `openaiReview.mjs` / `manualReview.mjs` + `evidenceGate.mjs` | 完了報告の審査。既定は別セッションの Claude（追加課金なし）。証拠ゲートが審査者より強い |
 | 5 | User TODO Manager | `src/todo/todoManager.mjs` | 本人操作の分離、完了検証、依存タスクの再開 |
 | 6 | Document Intake | `src/intake/` | .docx の安全な取込、抽出、重複排除、タスク化 |
 | 7 | Local Dashboard | `src/dashboard/` | 進捗・TODO・ログ・停止再開。既定 localhost 限定 |
@@ -82,9 +82,28 @@ completed ──► (終端。ここからは戻りません)
    指示本文は**コマンドライン引数ではなく標準入力**で渡します。stdout / stderr は時刻付きの別ファイルへ。
 3. **verifying** — 証拠ゲート。テスト結果・exit code・変更ファイルの実在・Git の HEAD 変化・保護ブランチを突合。
    合格していれば、作業開始前から dirty だったファイルを**除いて**自動コミット。
-4. **awaiting_ai_review** — OpenAI に構造化審査を依頼。API キーが無ければここで待機し、TODO を出します。
+4. **awaiting_ai_review** — 選ばれている方式で審査を依頼します。既定は別セッションの Claude。
+   審査できない場合（利用上限・ログイン切れ・設定不足）は、状態をこのまま保持したうえで
+   ユーザー TODO を出し、時間をおいて再確認します。回復すればそのまま審査へ進みます。
 5. 審査結果に応じて completed / revision_required / awaiting_user / paused / failed へ。
-   **証拠ゲートが落ちていれば、AI が accept でも accept にしません。**
+   **証拠ゲートが落ちていれば、AI が accept でも人が「合格」と打っても accept にしません。**
+   revision_required なら `nextClaudeInstruction` を次の実装指示に載せて自動で再実行します（最大 3 回）。
+
+## 5.5 審査担当の分離（既定の Claude審査）
+
+```
+Orchestrator
+  ├─ claude.exe -p ... (実装担当)   session A / Edit・Write・テスト・コミットが可能
+  └─ claude.exe -p ... (審査担当)   session B / 読み取りと git 読み取り系とテストのみ
+                                     Edit・Write・git add/commit/push・rm は CLI が拒否
+```
+
+- 審査担当は `--resume` しない。実装セッションの会話履歴も思考過程も見ない。
+- 分離は指示ではなく **CLI の権限** で担保する。`--disallowedTools` は `--allowedTools` より強い。
+- 審査担当には「完了報告は自己申告である」と明示し、`git diff` / `git log` / `git status` /
+  `node --test` / `npm run lint` / `npm run typecheck` / `ls` / `cat` を自分で実行させる。
+- 確認できなかった受入条件は `result: "unknown"` にさせ、`confidence` は自分で確認できた割合に応じて付けさせる。
+- 実行のたびに `reviewerSessionId` / `implementerSessionId` / `sessionsAreSeparate` を記録する。
 
 ## 6. 暴走防止
 
@@ -97,6 +116,8 @@ completed ──► (終端。ここからは戻りません)
 | 指数バックオフ | Orchestrator / 監督プロセス / OpenAI 呼び出し | 連打しない |
 | crash-loop 停止 | 監督プロセス（10 分に 5 回） | 無限再起動を止め、30 分クールダウン |
 | 低確信度の保留 | `review.minConfidenceToAccept` | 自信が無い合格を人へ回す |
+| 審査者の権限分離 | `claudeReview.mjs` の拒否リスト | 審査担当が「自分で直して合格」にできない |
+| 失敗の種類分け | `review/errors.mjs` | 利用上限・認証切れは初回から人へ、一時障害は待って再試行 |
 | 予算上限 | `claude.maxBudgetUsd` | 1 タスクの API 費用に上限 |
 
 ## 7. 秘密情報の流れ

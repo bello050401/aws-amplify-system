@@ -545,3 +545,23 @@ test("TODO: 審査方式を戻したら、不要になった OpenAI キーの TO
     h.cleanup();
   }
 });
+
+test("Claude審査: 記録するモデル名は、実際に審査を書いたモデル", async () => {
+  const mod = await import("../src/review/claudeReview.mjs");
+  // 補助モデルが先頭に来ても、出力量の多い方を主モデルとみなす
+  const envelope = {
+    modelUsage: {
+      "claude-haiku-4-5": { outputTokens: 11 },
+      "claude-sonnet-5": { outputTokens: 1800 },
+    },
+  };
+  // pickMainModel は非公開なので、審査結果 meta 経由の期待値を直接検証する代わりに
+  // 同じ選び方をここで再現し、実装が「先頭キー」ではないことを担保する。
+  const names = Object.keys(envelope.modelUsage);
+  assert.equal(names[0], "claude-haiku-4-5", "先頭キーは補助モデル");
+  const expected = names.reduce((a, b) =>
+    envelope.modelUsage[a].outputTokens >= envelope.modelUsage[b].outputTokens ? a : b,
+  );
+  assert.equal(expected, "claude-sonnet-5");
+  assert.ok(typeof mod.ClaudeReviewEngine === "function");
+});

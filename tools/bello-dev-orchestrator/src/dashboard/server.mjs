@@ -235,6 +235,8 @@ export class Dashboard {
           todo: publicTodo(result.todo),
           resumedTaskIds: result.resumedTaskIds,
           alreadyCompleted: result.alreadyCompleted,
+          // 手動審査の TODO なら、その判定結果も返す（画面で結果を出すため）
+          manualReview: result.manualReview ?? null,
         });
       }
       if ((m = /^\/api\/todos\/([A-Za-z0-9_]+)\/cancel$/.exec(route))) {

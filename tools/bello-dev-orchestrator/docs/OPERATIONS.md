@@ -26,18 +26,24 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 status
 
 - `プロセス      : 稼働中 (pid …)` と表示される
 - ブラウザで <http://127.0.0.1:4319/> が開き、「接続 正常」と出る
-- `bello.ps1 diagnose` がすべて `[ OK ]`（OpenAI だけは未設定でも構いません）
+- `bello.ps1 diagnose` がすべて `[ OK ]`
 
-### 1.4 OpenAI API キー（任意・後からで可）
+**API キーは要りません。** 既定の審査方式は「Claude審査」で、いまお使いの Claude Code の枠内で動きます。
 
-未設定でもシステムは動きます。設定するまで、完了報告は `AI審査待ち` で止まり、ユーザー TODO が 1 件出ます。
+### 1.4 OpenAI API キー（任意。設定しなくて構いません）
+
+**設定は不要です。** 既定の Claude審査は OpenAI を使わないため、`OPENAI_API_KEY` が無くても
+エラーにもユーザー TODO にもなりません。診断では「任意のオプション」として表示されるだけです。
+
+OpenAI で審査したい場合（API 利用量に応じた課金が発生します）だけ、次を設定してください。
 
 ```powershell
 [Environment]::SetEnvironmentVariable('OPENAI_API_KEY','<キー>','User')
 powershell -ExecutionPolicy Bypass -File .\bello.ps1 restart
 ```
 
-**確認方法**: `bello.ps1 diagnose` で `[ OK ] OpenAI 審査 設定済み` と出ること。
+**確認方法**: `bello.ps1 diagnose` で `[INFO] OpenAI 連携 設定済み` と出ること。
+そのうえでダッシュボードの「設定」画面から「OpenAI審査」を選ぶと使われます。
 キーの値はダッシュボードにもログにも出ません。
 
 ---
@@ -190,7 +196,11 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 repair
 
 | 項目 | 既定 | 意味 |
 |---|---|---|
-| `claude.model` | `sonnet` | 使用モデル |
+| `review.provider` | `claude` | 既定の審査方式。実際に使う値はダッシュボードの選択が優先されます |
+| `review.claude.model` | `sonnet` | 審査担当のモデル |
+| `review.claude.maxBudgetUsd` | 1 | 1 回の審査の費用上限 |
+| `review.claude.timeoutSeconds` | 900 | 審査のタイムアウト |
+| `claude.model` | `sonnet` | 実装担当のモデル |
 | `claude.permissionMode` | `acceptEdits` | ファイル編集は自動 |
 | `claude.allowedTools` | 35 項目 | **実行を許可するコマンドの列挙**。ここに無い Bash コマンドは自動拒否されます。実測: 許可リストが空だとテストもビルドも一切走りません |
 | `claude.disallowedTools` | 19 項目 | 許可リストより強い拒否。`git push` / `reset` / `checkout` / `stash` / `clean`、`rm`、`ampx`、`aws`、`gh`、`npm publish`、`curl` |
@@ -202,6 +212,21 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 repair
 | `git.autoCommit` | true | 証拠ゲート合格時に作業ブランチへコミット |
 | `git.protectedBranches` | main / master / production | ここでは絶対に自動コミットしません |
 | `dashboard.lanAccess` | false | LAN 公開。有効にするには認証トークン必須 |
+
+### 審査方式の選び方
+
+審査方式には **Claude審査 / OpenAI審査 / 手動審査** の 3 つがあり、既定は **Claude審査** です。
+
+| 方式 | 内容 |
+|---|---|
+| Claude審査（既定） | 実装を担当したセッションとは別の、まっさらな Claude Code セッションが審査します。OpenAI API は使わず、**追加の API 課金は発生しません** |
+| OpenAI審査 | `OPENAI_API_KEY` を使って審査します。キー未設定のままだと審査待ちで止まり、ユーザー TODO が出ます（[1.4](#14-openai-api-キー任意後からで可) 参照） |
+| 手動審査 | 人が完了報告を確認して判定します |
+
+切り替えはダッシュボードの **「設定」画面**で行います。選ぶとその場で反映され、**再起動は不要**です
+（`bello.ps1 restart` は不要。次に審査が走るときから新しい方式が使われます）。
+
+Claude審査中に利用中の Claude Code セッションの認証が切れた場合は、タスクの状態を保存したまま審査待ちで停止し、ユーザー TODO（分類: 認証、緊急）が出ます。`/login` でログインし直せば、そのタスクは最初からやり直しにはならず、審査待ちの続きから自動で再開します。
 
 ### LAN（iPhone）から見る場合
 

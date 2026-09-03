@@ -115,7 +115,49 @@ let xssTaskId = null;
   const settings = (await json("/api/settings")).body;
   const system = (await json("/api/system")).body;
   check("設定 API に apiKey の値が含まれない", !/sk-[A-Za-z0-9]/.test(settings), "");
-  check("システム API は apiKeyConfigured の真偽だけを返す", /"apiKeyConfigured":(true|false)/.test(system) && !/sk-[A-Za-z0-9]/.test(system), "");
+  check("システム API は鍵の有無だけを真偽で返す", /"openaiKeyConfigured":(true|false)/.test(system) && !/sk-[A-Za-z0-9]/.test(system), system.slice(0,200));
+}
+
+// 10) 日本語 (非 ASCII) が壊れずに往復すること
+//     修正指示や TODO の回答は日本語で入るので、ここが壊れると実装担当へ
+//     読めない指示が渡る。
+{
+  const sample = "日本語の修正指示です。テストを追加してください。①②③ ✓";
+  const created = await json("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-BELLO-Request": "1" },
+    body: JSON.stringify({ title: "文字コード検証（自動で取り消します）", instruction: sample, priority: 1 }),
+  });
+  const id = JSON.parse(created.body).task?.id;
+  if (!id) {
+    check("日本語が壊れずに往復する", false, "タスクを登録できませんでした");
+  } else {
+    const detail = JSON.parse((await json("/api/tasks/" + id)).body);
+    check("日本語が壊れずに往復する", detail.instruction === sample, JSON.stringify(detail.instruction));
+    await json("/api/tasks/" + id + "/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-BELLO-Request": "1" },
+      body: JSON.stringify({ reason: "文字コード検証の後片付け" }),
+    });
+  }
+}
+
+// 11) 審査方式の切り替えが検証されること
+{
+  const bad = await json("/api/settings/review-provider", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-BELLO-Request": "1" },
+    body: JSON.stringify({ provider: "gemini" }),
+  });
+  check("審査方式: 未知の値を 400 で拒否", bad.status === 400, "status=" + bad.status);
+
+  const current = JSON.parse((await json("/api/settings")).body).reviewProvider;
+  check(
+    "審査方式: claude / openai / manual の 3 つが選べる",
+    (current.options || []).map((o) => o.value).join(",") === "claude,openai,manual",
+    JSON.stringify((current.options || []).map((o) => o.value)),
+  );
+  check("審査方式: 秘密の値を返さない", !/sk-[A-Za-z0-9]/.test(JSON.stringify(current)), "");
 }
 
 // 後片付け: XSS 試験タスクを取り消す
