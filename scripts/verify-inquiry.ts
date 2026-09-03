@@ -927,9 +927,44 @@ async function main() {
   await testNoSearchWhenAnswerable();
   testSpecNounDetection();
   testUncertainFactsAreNotGivenToAi();
+  testAsksKnownFact();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }
 
 main();
+
+/**
+ * 既に分かっていることを尋ねない / 外部チャネルへ逃がさない。
+ *
+ * 実機(2026-09-03)で「埼玉県でこちら2脚で6万円になりませんか」に対し、
+ * 「まずは配送先の都道府県を教えていただけますでしょうか」と返し、さらに
+ * 「BELLOのホームページやSNSアカウントにて最新のセール情報やキャンペーン
+ * 情報をご確認ください」と続ける返信案が出た。前者はお客様が書いたことを
+ * 読んでいないと受け取られ、後者は回答の回避かつ実在未確認の販促の示唆。
+ */
+function testAsksKnownFact() {
+  const asked = validate("お値段のご相談を承っております。まずは配送先の都道府県を教えていただけますでしょうか。", {
+    knownDestinationPrefecture: "埼玉県",
+  });
+  assertTrue(asked.codes.includes("ASKS_KNOWN_FACT"), "検査: 配送先が分かっているのに都道府県を尋ねたら弾く");
+
+  // 地名に触れるだけの文は弾かない(「埼玉県への配送ですね」)。
+  const mentions = validate("埼玉県への配送ですね。送料を確認のうえご案内いたします。", {
+    knownDestinationPrefecture: "埼玉県",
+  });
+  assertTrue(!mentions.codes.includes("ASKS_KNOWN_FACT"), "検査: 配送先に触れるだけの文は弾かない");
+
+  // 配送先が本当に不明なら、尋ねてよい。
+  const unknown = validate("まずは配送先の都道府県を教えていただけますでしょうか。", {
+    knownDestinationPrefecture: null,
+  });
+  assertTrue(!unknown.codes.includes("ASKS_KNOWN_FACT"), "検査: 配送先が不明なら尋ねてよい");
+
+  const deflect = validate("詳しくはBELLOのホームページやSNSアカウントをご確認ください。");
+  assertTrue(deflect.codes.includes("DEFLECTS_TO_EXTERNAL_CHANNEL"), "検査: SNS・ホームページへ誘導したら弾く");
+
+  const plain = validate("ご希望の金額を承りました。送料の確認ができ次第、改めてご連絡いたします。");
+  assertTrue(!plain.codes.includes("DEFLECTS_TO_EXTERNAL_CHANNEL"), "検査: 通常の返信は誘導とみなさない");
+}

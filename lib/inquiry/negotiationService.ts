@@ -8,7 +8,7 @@ import {
   type DiscountOffer,
 } from "./discount";
 import { listShippingRates, lookupShippingRate } from "@/lib/shipping/service";
-import { calculateShippingRankFromDimensionsDetailed } from "@/lib/shipping/rank";
+import { calculateShippingRankFromDimensionsDetailed, SHIPPING_RANKS, type ShippingRank } from "@/lib/shipping/rank";
 import { DISCOUNT_RULES_TITLE } from "@/lib/knowledge/businessRules";
 import type { NegotiationEvidence, NegotiationStaffCard } from "./types";
 import type { NegotiationContext } from "./negotiation";
@@ -59,6 +59,14 @@ export interface ResolveNegotiationParams {
   /** 会話のチャネル。公式LINE条件の判定に使う。 */
   channel: string;
   baseProduct: { baseItemId: string; title: string; price: number | null; itemUrl: string | null } | null;
+  /**
+   * BELLOが商品説明へ明記した配送ランク(2026-09-03 利用者指示)。
+   *
+   * **寸法からの推定より優先する。** 人が形状・梱包・実際の配送方法まで
+   * 考慮して決めた値なので、3辺合計より信頼度が高い。3辺で表せない商品
+   * (円形スツール等)では、これが無いと送料も値引き可否も出せない。
+   */
+  declaredShippingRank?: string | null;
 }
 
 export interface ResolveNegotiationResult {
@@ -105,6 +113,7 @@ export function evaluateOfficialLinePaymentCondition(channel: string): {
 }
 
 export async function resolveNegotiation(params: ResolveNegotiationParams): Promise<ResolveNegotiationResult> {
+  // 型の都合でここに置く(params を分割代入した後だと使えないため)。
   const { context, inventory, destinationPrefecture, channel, baseProduct } = params;
 
   const missing: string[] = [];
@@ -144,19 +153,37 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
     };
   }
 
-  // ── 送料判定用の最大外形3辺 ──────────────────────────────────
+  // ── 送料判定用の配送ランク ────────────────────────────────────
+  //
+  // 優先順位は問い合わせ全体と同じ(2026-09-03 利用者指示):
+  //   1. BELLOが明記した配送ランク  2. 寸法からの推定  3. 不明
+  //
+  // 以前はここで3辺が揃わないと必ず「外形寸法が足りない」を未確定項目へ
+  // 積んでいた。円形スツール(座面直径34cm / 脚幅44cm / 高さ75cm)のように
+  // 3辺で表せない商品では永久に揃わず、**送料も値引き可否も出せないまま**
+  // 「寸法を確認中です」という返信になっていた。実際には同じ商品説明に
+  // 「家財おまかせ便Bランク」と明記されており、送料は確定できる。
   const dims = calculateShippingRankFromDimensionsDetailed(inventory.width, inventory.depth, inventory.height);
-  const hasRank = "rank" in dims;
-  const rank = hasRank ? dims.rank : null;
-  const shippingDimensionText = hasRank
+  const hasDims = "rank" in dims;
+  // 料金マスタが知っているランクだけを通す。未知の文字列をそのまま渡すと
+  // 料金が引けずに「未登録」と報告され、原因が表記ゆれかマスタ不足か
+  // 分からなくなる。
+  const declaredRank: ShippingRank | null =
+    params.declaredShippingRank && (SHIPPING_RANKS as string[]).includes(params.declaredShippingRank)
+      ? (params.declaredShippingRank as ShippingRank)
+      : null;
+  const rank = declaredRank ?? (hasDims ? dims.rank : null);
+  const shippingDimensionText = hasDims
     ? `幅${dims.widthCm} × 奥行${dims.depthCm} × 高さ${dims.heightCm} cm`
     : null;
-  const shippingSumCm = hasRank ? dims.sumCm : null;
-  if (!hasRank) {
+  const shippingSumCm = hasDims ? dims.sumCm : null;
+  if (declaredRank) {
+    decisionNotes.push(`配送ランクはBASEの商品説明に明記された${declaredRank}ランクを使用した(寸法からの推定より優先)。`);
+  } else if (!hasDims) {
     const why = dims.missingAxes.map((a) => a.label).join("・");
     missing.push(`送料判定用の外形寸法(${why})`);
     decisionNotes.push(
-      `送料判定に使える外形寸法が揃っていない(${why})。座面寸法・SH・AHは送料判定に使えないため、外形の寸法を登録する必要がある。`,
+      `送料判定に使える外形寸法が揃っていない(${why})。座面寸法・SH・AHは送料判定に使えないため、外形の寸法を登録するか、商品説明へ配送ランクを明記する必要がある。`,
     );
   }
 

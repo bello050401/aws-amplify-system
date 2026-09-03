@@ -23,7 +23,11 @@ export type ReplyValidationCode =
   | "ASSERTED_UNRESOLVED_FACT"
   | "EXTERNAL_VERBATIM_COPY"
   | "FABRICATED_DIMENSION"
-  | "FACT_SAFETY";
+  | "FACT_SAFETY"
+  /** 既に分かっていることを顧客へ尋ねている。 */
+  | "ASKS_KNOWN_FACT"
+  /** 回答せずにSNS・ホームページへ誘導している。 */
+  | "DEFLECTS_TO_EXTERNAL_CHANNEL";
 
 export interface ReplyValidationViolation {
   code: ReplyValidationCode;
@@ -52,6 +56,16 @@ export function validateReplyDraft(params: {
   allowedShippingFeeYen: number | null;
   /** 分からないままにした項目。 */
   unresolved: UnresolvedFact[];
+  /**
+   * 既に確定している配送先都道府県(2026-09-03 実測の不具合)。
+   *
+   * 実機で「埼玉県でこちら2脚で6万円になりませんか」に対し、
+   * 「まずは配送先の都道府県を教えていただけますでしょうか」と返す返信案が
+   * 出た。お客様が書いたことを読んでいないと受け取られる。
+   * 返信ルール(「配送先が不明な値下げ交渉」)が意図と違う場面で効いていた
+   * ためだが、原因がどこであれ**既に分かっていることを尋ねる返信は出さない**。
+   */
+  knownDestinationPrefecture?: string | null;
   /** 外部から取得した本文(sanitize済み)。長文の引き写し検査に使う。 */
   externalTexts: string[];
   /** 生成文に出てよい寸法の文字列(在庫DBの寸法・外部調査で確認できた寸法)。 */
@@ -107,6 +121,34 @@ export function validateReplyDraft(params: {
     if (v.code === "PERSONAL_DATA" && isPersonalDataGrounded(output, params.groundedTexts ?? [])) continue;
 
     violations.push({ code: "FACT_SAFETY", detail: describeFactSafety(v) });
+  }
+
+  // ── 既に分かっていることを尋ねていないか ────────────────────
+  if (params.knownDestinationPrefecture) {
+    // 「都道府県を教えてください」系。地名そのものを含む文(「埼玉県への
+    // 配送ですね」)は弾かないよう、**尋ねる形**だけを見る。
+    const asksPrefecture =
+      /(?:お届け先|配送先|発送先|送り先)[^。\n]{0,20}(?:都道府県|地域|エリア)[^。\n]{0,20}(?:教え|お伺い|ご記入|ご連絡|お知らせ)/.test(output) ||
+      /(?:都道府県|配送先の地域)[^。\n]{0,15}(?:を)?[^。\n]{0,10}(?:教えて|お伺いし|ご教示)/.test(output);
+    if (asksPrefecture) {
+      violations.push({
+        code: "ASKS_KNOWN_FACT",
+        detail: `お届け先(${params.knownDestinationPrefecture})は既に分かっているのに、都道府県を尋ねています。`,
+      });
+    }
+  }
+
+  // ── 回答せずに外部チャネルへ誘導していないか ────────────────
+  //
+  // 「SNSやホームページへ誘導して回答を避けない」はプロンプトで禁じて
+  // いるが、実機で「BELLOのホームページやSNSアカウントにて最新のセール
+  // 情報やキャンペーン情報をご確認ください」という文が出た。実在を
+  // 確認していないキャンペーンの示唆でもあり、二重に良くない。
+  if (/(?:SNS|ホームページ|公式サイト|インスタ|Instagram|X(旧Twitter)|Twitter)/i.test(output)) {
+    violations.push({
+      code: "DEFLECTS_TO_EXTERNAL_CHANNEL",
+      detail: "SNS・ホームページへ誘導しています。問い合わせにはこの返信の中で答えてください。",
+    });
   }
 
   // ── 不明としたはずの項目の断定 ──────────────────────────────

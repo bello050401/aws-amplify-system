@@ -657,6 +657,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       destinationPrefecture,
       channel: request.channel,
       baseProduct: resolution.baseProducts[0] ?? null,
+      // 明記された配送ランクは寸法推定より優先する。これが無いと、
+      // 3辺で表せない商品では送料も値引き可否も永久に出せない。
+      declaredShippingRank: productContext.shipping.declaredRank?.rank ?? null,
     });
     for (const m of negotiationResult.missing) {
       if (unresolved.some((u) => u.field === m)) continue;
@@ -972,6 +975,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       sku,
       allowedShippingFeeYen: allowedShippingFee,
       unresolved,
+      // 既に分かっている配送先を、もう一度尋ねる返信を出さない。
+      knownDestinationPrefecture: shipping?.destinationPrefecture ?? destinationPrefecture ?? null,
       externalTexts: research.documentTexts,
       allowedDimensionText,
       // 根拠として認めた文章。住所のように「出典があれば出してよいが
