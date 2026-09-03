@@ -199,6 +199,32 @@ function testStep2(step1: ConversationContext) {
   // ── 送料を計算できる状態になっている ─────────────────────
   eq(context.shipping.estimatedShippingCostYen, 8600, "STEP2: 埼玉県への送料が入る");
 
+  // ── BASEを引けなくても、顧客が送ったURLは残る(実機で見つけた抜け) ──
+  //
+  // BASE APIのトークンが無効で商品を取得できないと baseProducts が空になり、
+  // 会話文脈にURLが1つも残らなかった。その結果2通目で「商品のURLをお送り
+  // いただけますでしょうか」——顧客は1通目で送っている。
+  // BASEを引けたかと、顧客がURLを送ったかは別の事実として持つ。
+  const baseUnavailable = mergeConversationContext(emptyConversationContext(), {
+    identifiedProduct: {
+      baseItemId: "156144635",
+      baseItemUrl: BASE_URL,
+      baseStatus: "NOT_FOUND",
+      baseProductName: null,
+    },
+  });
+  eq(baseUnavailable.identifiedProduct.baseItemId, "156144635", "BASEを引けなくても商品IDは残る");
+  eq(baseUnavailable.identifiedProduct.baseStatus, "NOT_FOUND", "「URLはあるが商品を取得できない」を区別できる");
+  const stillNoAsk = decideUrlRequest({
+    basis: "NONE",
+    status: "NOT_FOUND",
+    candidateCount: 0,
+    requiresProduct: true,
+    customerCanProvideUrl: true,
+    customerAlreadySentUrl: baseUnavailable.identifiedProduct.baseItemId != null,
+  });
+  check(!stillNoAsk.requestUrl, "BASEを引けなくても商品URLを聞き直さない", stillNoAsk.reason);
+
   // ── 引き継いだ情報が通知に出る(§27) ──────────────────────
   const facts = knownFacts(context);
   const labels = facts.map((f) => f.label);

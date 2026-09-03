@@ -500,6 +500,19 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // 出典ごとに上書きするのではなく、足りない項目を別の出典で補う。
   // チャネルでは分岐しない —— 公式LINEでもメルカリShopsでも同じ文脈を使う(§34)。
   const linkedBaseForContext = linkedBaseProduct(basis, resolution.baseProducts) ?? resolution.baseProducts[0] ?? null;
+
+  // 顧客が実際に送ってきたBASE URL。BASEを引けたかどうかとは独立した事実として持つ。
+  const customerSentBaseItemId =
+    resolution.references.baseItemIds[0] ?? incomingContext.identifiedProduct.baseItemId ?? null;
+  const customerSentBaseUrl =
+    resolution.references.urls.find((u) => isBaseUrl(u)) ?? incomingContext.identifiedProduct.baseItemUrl ?? null;
+  if (customerSentBaseItemId && !linkedBaseForContext) {
+    // §23 内部の照合失敗を顧客への質問に変換しない。社内の確認事項にする。
+    unresolved.push({
+      field: "BASE商品の取得",
+      reason: `お客様が送られた商品URL(${customerSentBaseItemId})からBASE商品を取得できませんでした。BASEの接続状態を確認してください。`,
+    });
+  }
   const productContext: ResolvedProductContext = await buildResolvedProductContext({
     inventory: inventory
       ? {
@@ -700,13 +713,21 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     channel: request.channel,
     intents,
     identifiedProduct: {
-      baseItemId: identifiedBase?.baseItemId ?? undefined,
-      baseItemUrl: productContext.identity.baseItemUrl ?? undefined,
+      // §23/§24 **顧客が送ってきたBASE URLそのものは、BASEを引けなくても確定情報**。
+      //
+      // 実機で見つけた抜け: BASE APIのトークンが無効で商品を取得できず、
+      // baseProducts が空になり、会話文脈にURLが1つも残らなかった。その結果
+      // 2通目で「商品のURLをお送りいただけますでしょうか」——顧客は1通目で
+      // 送っている。BASEを引けたかどうかと、顧客がURLを送ったかどうかは
+      // 別の事実なので、別々に記録する。
+      baseItemId: identifiedBase?.baseItemId ?? customerSentBaseItemId ?? undefined,
+      baseItemUrl: productContext.identity.baseItemUrl ?? customerSentBaseUrl ?? undefined,
       baseProductName: identifiedBase?.title ?? undefined,
       baseListedPriceYen: identifiedBase?.price ?? undefined,
       // §24 BASE商品と在庫で段階を分ける。BASEが特定できていれば、
-      // 在庫が絞れなくてもそのことは失わない。
-      baseStatus: identifiedBase ? "RESOLVED" : undefined,
+      // 在庫が絞れなくてもそのことは失わない。URLは分かるが商品を取得
+      // できなかった場合は NOT_FOUND —— 「URLすら無い」と区別する。
+      baseStatus: identifiedBase ? "RESOLVED" : customerSentBaseItemId ? "NOT_FOUND" : undefined,
       inventoryId: resolution.resolved?.inventoryId ?? undefined,
       displayInventoryId: resolution.resolved?.displayInventoryId ?? undefined,
       inventoryName: resolution.resolved?.name ?? undefined,
