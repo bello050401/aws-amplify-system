@@ -222,6 +222,14 @@ export interface ReplyEvidence {
    * **顧客向けの返信本文には渡らない**（仕入価格・販売開始日時を含むため）。
    */
   identifiedProduct?: IdentifiedProductCard | null;
+  /**
+   * この返信で実際に適用した返信ルール(§24「使用ルール」)。
+   *
+   * idとversionを持つのは、後からルールを編集しても**そのとき何が効いて
+   * いたか**を追えるようにするため。タイトルだけだと、ルールを直した後で
+   * 過去のログを見ても当時の内容が分からない。
+   */
+  appliedReplyRules?: { id: string; title: string; category: string; version: number }[];
   /** 値下げ交渉の判定結果。 */
   negotiation?: NegotiationEvidence | null;
   /** 管理者向けの値下げ判断カード(顧客本文へは渡らない)。 */

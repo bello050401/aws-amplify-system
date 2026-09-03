@@ -26,6 +26,9 @@ import { createAgentCoreSearchProvider } from "./research/agentCoreProvider";
 import { brandsInText, officialDomainsForBrands } from "./research/officialDomains";
 import { nameCore } from "./scoring";
 import { extractBaseItemId, isBaseUrl } from "./references";
+import { selectReplyRules, type ReplyRuleRecord } from "./replyRuleSelection";
+import { listActiveReplyRules } from "./replyRuleStore";
+import type { MessageChannel } from "@/lib/messaging/types";
 import type {
   ExternalResearchFact,
   InquiryIntent,
@@ -479,10 +482,45 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     };
   }
 
+  // ── 返信ルール(§16/§19) ───────────────────────────────────────
+  //
+  // 「どう判断するか」はナレッジ文書ではなく ReplyRule が持つ。ここで
+  // 全件を渡さず、この問い合わせに関係するものだけへ絞る(§22) ——
+  // 関係の無い指示が混ざるほど、本来効くべきルールが薄まる。
+  //
+  // 読み込みに失敗しても返信案の生成そのものは止めない。ルールが無ければ
+  // 既存の挙動(ナレッジ＋コードの判断)へ素直に落ちるだけで、止めるより
+  // 返せるほうが運用上まし。
+  let appliedRules: ReplyRuleRecord[] = [];
+  try {
+    appliedRules = selectReplyRules({
+      rules: await listActiveReplyRules(),
+      intents,
+      channel: request.channel as MessageChannel,
+      productCategoryId: inventory?.categoryId ?? null,
+    });
+  } catch (err) {
+    console.warn("[inquiry] 返信ルールを読めませんでした。ルール無しで続行します。", err instanceof Error ? err.message : String(err));
+  }
+  // 何が効いたかを根拠へ残す(§24「使用ルール」)。URLを尋ねて早期returnした
+  // 経路ではルールを1件も読んでいないので、ここには来ない = 空のまま。
+  evidence.appliedReplyRules = appliedRules.map((r) => ({
+    id: r.id,
+    title: r.title,
+    category: r.category,
+    version: r.version,
+  }));
+
   // ── 生成 ──────────────────────────────────────────────────────
   const systemPrompt = buildInquirySystemPrompt();
   const userPrompt = buildInquiryUserPrompt({
     intents,
+    replyRules: appliedRules.map((r) => ({
+      title: r.title,
+      category: r.category,
+      conditions: r.conditions,
+      instruction: r.instruction,
+    })),
     // 交渉で確定した金額だけを事実として足す。配送先が未確定なら
     // customerSafeFacts は空なので、AIが提示できる金額が存在しない。
     trustedProductFacts: [...trustedProductFacts, ...(negotiationResult?.customerSafeFacts ?? [])],

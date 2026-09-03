@@ -1,33 +1,61 @@
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listConversationsAction } from "@/app/actions/messaging";
+import { getNotifyBotStatusAction, listRecentDeliveriesAction, type NotifyBotStatus } from "@/app/actions/lineNotify";
+import { listReplyRulesAction } from "@/app/actions/replyRules";
+import type { ReplyRuleRecord } from "@/lib/inquiry/replyRuleSelection";
+import type { NotificationDeliveryRecord } from "@/lib/messaging/lineNotify/deliveryStore";
 import { InventoryHeader } from "../../InventoryHeader";
-import { MessagesInbox } from "./MessagesInbox";
+import { MessagesCenter } from "./MessagesCenter";
 
 export const metadata = { title: "メッセージ | BELLO 在庫管理" };
 
 /**
- * BELLO統合業務OS指示書(2026-08-30) §38-50: 統合メッセージ受信箱。
- * 左サイドバーの「メッセージ」(EC出品の直下、InventoryNavRail.tsx
- * 参照)から遷移。
+ * 2026-09-03 指示書 §3/§4/§5: 問い合わせAI管理センター。
  *
- * 【現状の実装範囲、正直に】このラウンドでは実チャネル(Mercari問い
- * 合わせAPI/Yahoo!オークションストア/LINE公式アカウント/Email)の
- * どれからもメッセージを受信する経路を実装していない(§51以降=
- * Priority 6、各外部サービスの実API調査が別途必要なため) —
- * 受信箱UI・会話タイムライン・返信下書き・送信前確認・送信・
- * 「返信済み」判定ロジックの骨組みまでを実装し、ADMIN限定の
- * 「テスト会話を作成」機能で実際に一通り動作を確認できるようにして
- * いる(lib/messaging/service.tsのファイル冒頭コメント参照)。
+ * 左サイドバーの「メッセージ」から遷移する画面。§3が「URL変更は必要性が
+ * ない限り行わない」としているので、ルートは /inventory/messages のまま
+ * 中身だけを入れ替える。
  *
- * 権限: 閲覧・下書き・送信・解決はADMIN/EDITOR/VIEWERの既存の権限
- * モデルに合わせる(閲覧は全員、書き込みはADMIN/EDITOR) —
- * app/actions/messaging.ts参照。
+ * 【旧チャットUIの扱い】§30に従い削除しない。問い合わせ一覧は
+ * MessagesCenter の1タブとして残る(理由は MessagesCenter.tsx のコメント)。
+ *
+ * 【1つの失敗で画面を落とさない】通知Bot・返信ルール・処理ログは
+ * それぞれ独立した機能。片方が読めなくても他は使えるべきなので、
+ * Promise.allSettled で個別に受ける —— 通知Botが未設定なだけで
+ * 問い合わせ一覧まで見られなくなるのは困る。
  */
 export default async function MessagesPage() {
   const role = await getInventoryRole();
   if (!role) return null;
 
-  const conversations = await listConversationsAction();
+  const [conversationsResult, notifyResult, rulesResult, deliveriesResult] = await Promise.allSettled([
+    listConversationsAction(),
+    getNotifyBotStatusAction(),
+    listReplyRulesAction(),
+    listRecentDeliveriesAction(50),
+  ]);
+
+  const conversations = conversationsResult.status === "fulfilled" ? conversationsResult.value : [];
+  const notifyStatus: NotifyBotStatus | null = notifyResult.status === "fulfilled" ? notifyResult.value : null;
+  const replyRules: ReplyRuleRecord[] =
+    rulesResult.status === "fulfilled" && rulesResult.value.ok ? rulesResult.value.data : [];
+  const deliveries: NotificationDeliveryRecord[] =
+    deliveriesResult.status === "fulfilled" ? deliveriesResult.value : [];
+
+  // 読めなかったものはログへ残す。画面上は空で表示されるので、
+  // 「0件」と「読めなかった」をサーバー側では区別できるようにしておく。
+  for (const [label, result] of [
+    ["会話一覧", conversationsResult],
+    ["通知Bot状態", notifyResult],
+    ["返信ルール", rulesResult],
+    ["通知履歴", deliveriesResult],
+  ] as const) {
+    if (result.status === "rejected") {
+      console.error(`[messages] ${label}を読めませんでした`, result.reason instanceof Error ? result.reason.message : result.reason);
+    }
+  }
+
+  const needsReplyCount = conversations.filter((c) => c.needsReply).length;
 
   return (
     <div className="flex h-full flex-col">
@@ -36,15 +64,22 @@ export default async function MessagesPage() {
         center={
           <h1 className="text-base font-bold text-gray-900">
             メッセージ
-            {conversations.filter((c) => c.needsReply).length > 0 && (
+            {needsReplyCount > 0 && (
               <span className="ml-2 rounded-full bg-red-600 px-2 py-0.5 text-[11px] font-bold text-white">
-                {conversations.filter((c) => c.needsReply).length}
+                {needsReplyCount}
               </span>
             )}
           </h1>
         }
       />
-      <MessagesInbox initialConversations={conversations} canEdit={canEditInventory(role)} isAdmin={role === "ADMIN"} />
+      <MessagesCenter
+        conversations={conversations}
+        canEdit={canEditInventory(role)}
+        isAdmin={role === "ADMIN"}
+        notifyStatus={notifyStatus}
+        replyRules={replyRules}
+        deliveries={deliveries}
+      />
     </div>
   );
 }

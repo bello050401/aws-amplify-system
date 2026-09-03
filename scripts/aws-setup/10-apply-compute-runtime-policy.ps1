@@ -100,10 +100,37 @@ if ($computeRole -notlike "*/$RoleName") {
 }
 Write-Host ("Verified: app " + $AppId + " runs as " + $computeRole)
 
+# ─────────────────────────────────────────────────────────────────────
+# WARNING - this script has DRIFTED from the live policy (2026-09-03).
+#
+# put-role-policy REPLACES the whole inline policy. The live
+# BelloComputeRuntimeAccess on BelloAmplifyStagingComputeRole currently
+# also grants things this script does NOT reproduce:
+#
+#   - secret bello/mercari-relay-??????
+#   - secret bello/base-app-credentials-??????
+#   - s3:PutObject/GetObject on the messaging attachments prefix
+#     (Sid BelloMessagingAttachments)
+#
+# Running this script as-is would REMOVE those and break Mercari relay,
+# BASE OAuth, and LINE attachment storage. Read the live policy first:
+#
+#   aws iam get-role-policy --role-name BelloAmplifyStagingComputeRole `
+#     --policy-name BelloComputeRuntimeAccess
+#
+# and fold any missing statements in before applying. Left in place
+# rather than deleted because the surrounding role/compute-role discovery
+# logic is still correct and worth keeping.
+# ─────────────────────────────────────────────────────────────────────
+
 # The ?????? suffix matches Secrets Manager's random 6-character version
 # suffix, the same convention the existing ZAICO policy uses.
 $mercariArn = "arn:aws:secretsmanager:${Region}:${acct}:secret:bello/mercari-access-token-??????"
 $lineArn = "arn:aws:secretsmanager:${Region}:${acct}:secret:bello/line-channel-secret-??????"
+# 2026-09-03: the internal notification LINE Bot (lib/messaging/lineNotify/
+# secretStore.ts). A SEPARATE channel from the customer-facing official
+# LINE account above - see that file's header for why they are not shared.
+$notifyBotArn = "arn:aws:secretsmanager:${Region}:${acct}:secret:bello/line-notify-bot-??????"
 $logsArn = "arn:aws:logs:${Region}:${acct}:log-group:/aws/amplify/*"
 
 # CreateSecret and DeleteSecret are deliberately NOT granted: both secrets
@@ -122,7 +149,8 @@ $policyDocument = @"
       ],
       "Resource": [
         "$mercariArn",
-        "$lineArn"
+        "$lineArn",
+        "$notifyBotArn"
       ]
     },
     {

@@ -7,7 +7,22 @@
  * する」パターン)。
  */
 
-export type MessageChannel = "MERCARI_SHOPS" | "YAHOO_AUCTION" | "LINE" | "EMAIL" | "TEST";
+export type MessageChannel = "MERCARI_SHOPS" | "YAHOO_AUCTION" | "LINE" | "EMAIL" | "BASE" | "TEST";
+
+/**
+ * チャネルの表示名。**社内LINE通知の1通目の先頭にもこれを使う**
+ * (2026-09-03 指示書 §7-1 が【公式LINE】【BASE】【メルカリShops】という
+ * 表記を指定している)。画面と通知で別々の名前を持つと、通知を見た人が
+ * 画面のどのチャネルの話か分からなくなるので、正本を1つにする。
+ */
+export const MESSAGE_CHANNEL_LABEL: Record<MessageChannel, string> = {
+  LINE: "公式LINE",
+  BASE: "BASE",
+  MERCARI_SHOPS: "メルカリShops",
+  YAHOO_AUCTION: "Yahoo!オークション",
+  EMAIL: "メール",
+  TEST: "テスト",
+};
 
 export type ConversationStatus = "OPEN" | "WAITING_FOR_REPLY" | "REPLIED" | "RESOLVED" | "ARCHIVED";
 

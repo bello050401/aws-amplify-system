@@ -65,7 +65,9 @@
     "verify:zaico-delta": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-delta.ts",
     "measure:zaico-delta": "node scripts/with-server-only-stub.cjs scripts/measure-zaico-delta-impact.ts",
     "probe:base-url": "node scripts/with-server-only-stub.cjs scripts/probe-base-url-resolution.ts",
-    "verify:product-identification": "node scripts/with-server-only-stub.cjs scripts/verify-product-identification.ts"
+    "verify:product-identification": "node scripts/with-server-only-stub.cjs scripts/verify-product-identification.ts",
+    "verify:line-notify": "node scripts/with-server-only-stub.cjs scripts/verify-line-notify.ts",
+    "verify:reply-rules": "node scripts/with-server-only-stub.cjs scripts/verify-reply-rules.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

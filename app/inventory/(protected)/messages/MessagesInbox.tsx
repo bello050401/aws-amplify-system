@@ -18,6 +18,7 @@ import {
   CONVERSATION_FILTERS,
   CONVERSATION_FILTER_LABEL,
   DEFAULT_CONVERSATION_FILTER,
+  MESSAGE_CHANNEL_LABEL,
   SELECTABLE_WORKFLOW_STATUSES,
   WORKFLOW_STATUS_LABEL,
   type ConversationFilter,
@@ -47,13 +48,10 @@ import type { ConversationRecord, MessageRecord } from "@/lib/messaging/types";
  */
 const FILTER_ORDER = CONVERSATION_FILTERS;
 
-const CHANNEL_LABEL: Record<ConversationRecord["channel"], string> = {
-  MERCARI_SHOPS: "Mercari",
-  YAHOO_AUCTION: "Yahoo!オークション",
-  LINE: "LINE",
-  EMAIL: "Email",
-  TEST: "テスト",
-};
+// 表示名は lib/messaging/types.ts の MESSAGE_CHANNEL_LABEL が正本
+// (社内LINE通知の見出しと同じ名前にする — 別々に持つと、通知を見た人が
+//  画面のどのチャネルの話か分からなくなる)。
+const CHANNEL_LABEL = MESSAGE_CHANNEL_LABEL;
 
 const STATUS_LABEL: Record<ConversationRecord["status"], string> = {
   OPEN: "新規",

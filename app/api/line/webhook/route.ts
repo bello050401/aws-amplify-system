@@ -6,6 +6,7 @@ import { fetchLineMessageContent } from "@/lib/messaging/line/content";
 import { saveIncomingAttachment } from "@/lib/messaging/attachmentStore";
 import { parseLineWebhookBody } from "@/lib/messaging/line/adapter";
 import { recordIncomingWebhookMessage, classifyWebhookStoreFailure, type WebhookStoreFailure } from "@/lib/messaging/webhookStore";
+import { processInquiryAndNotify } from "@/lib/inquiry/autoReply";
 import type { LineWebhookBody } from "@/lib/messaging/line/types";
 
 /**
@@ -64,6 +65,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const normalized = parseLineWebhookBody(body);
+  // 保存に成功した受信メッセージ。保存ループの後でまとめて解析・通知する。
+  const processed: { conversationId: string; messageId: string }[] = [];
   let failedCount = 0;
   // 何で失敗したのかの種別だけを集める（中身は持たない）。
   const failures = new Set<WebhookStoreFailure>();
@@ -125,7 +128,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
       }
 
-      await recordIncomingWebhookMessage({
+      const stored = await recordIncomingWebhookMessage({
         channel: "LINE",
         externalCustomerId: msg.externalCustomerId,
         externalMessageId: msg.externalMessageId,
@@ -137,11 +140,51 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         contentKind: msg.contentKind,
         ...attachment,
       });
+
+      // ── 解析 → 返信案 → 社内LINE通知(2026-09-03 指示書 §1/§7) ──
+      //
+      // **保存が終わってから**行う。ここから先が失敗しても、問い合わせ
+      // そのものは既にDBにあるので失われない(§8)。
+      //
+      // 再送(deduped)のときは何もしない。既に一度処理しているので、
+      // ここで走らせると同じ問い合わせをもう一度解析することになる
+      // (通知側の dedupeKey でも止まるが、AIの呼び出しは無駄になる)。
+      //
+      // 【同期実行の理由】Next.js 14 には `after()` が無く、レスポンス後に
+      // 処理を続ける安全な口が無い。awaitせずに投げるとLambdaの凍結で
+      // 処理が消え、「通知したつもりで届いていない」状態になる。
+      // 詳細は lib/inquiry/autoReply.ts の冒頭コメント参照。
+      if (!("deduped" in stored)) {
+        processed.push(stored);
+      }
     } catch (err) {
       // 1件の失敗で他のイベントの処理を止めない — 残りは処理を続ける。
       failedCount++;
       failures.add(classifyWebhookStoreFailure(err));
       console.error("[line webhook] 受信メッセージの保存に失敗:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  // ── 解析と通知 ──────────────────────────────────────────────
+  //
+  // 保存ループとは**別のループ**にする。解析は1件あたり数秒かかるので、
+  // 保存の途中に挟むと、後続メッセージの保存がその分だけ遅れる。
+  // 保存を全部終わらせてから解析へ入れば、少なくとも受信の取りこぼしは
+  // 解析の遅さの影響を受けない。
+  //
+  // ここでの失敗は 500 にしない。メッセージは保存済みで、通知は
+  // NotificationDelivery に失敗として残り画面から再送できる。
+  // 500を返すとLINEが全イベントを再送し、保存済みメッセージの再解析が
+  // 延々と走ることになる。
+  for (const target of processed) {
+    try {
+      await processInquiryAndNotify({
+        conversationId: target.conversationId,
+        sourceMessageId: target.messageId,
+        who: null,
+      });
+    } catch (err) {
+      console.error("[line webhook] 解析・通知に失敗:", err instanceof Error ? err.message : err);
     }
   }
 

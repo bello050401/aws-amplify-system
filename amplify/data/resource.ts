@@ -1028,7 +1028,7 @@ const schema = a.schema({
   // る。実チャネルからの受信(recordIncomingMessage相当)は、各チャネル
   // のWebhook/pollingハンドラが将来これを呼び出す形で接続する。
   // ─────────────────────────────────────────────────────────────────────
-  MessageChannel: a.enum(["MERCARI_SHOPS", "YAHOO_AUCTION", "LINE", "EMAIL", "TEST"]), // TEST = ADMIN限定のテスト会話作成専用(§166 Message Definition of Doneの動作確認用)。実チャネルと混同しないよう一覧では明示的に区別する。
+  MessageChannel: a.enum(["MERCARI_SHOPS", "YAHOO_AUCTION", "LINE", "EMAIL", "BASE", "TEST"]), // TEST = ADMIN限定のテスト会話作成専用(§166 Message Definition of Doneの動作確認用)。実チャネルと混同しないよう一覧では明示的に区別する。
 
   ConversationStatus: a.enum(["OPEN", "WAITING_FOR_REPLY", "REPLIED", "RESOLVED", "ARCHIVED"]),
 
@@ -1592,6 +1592,175 @@ const schema = a.schema({
       knowledgeEnabled: a.boolean().default(true),
       /** 顧客への自動送信(§41 常にfalse始まり。今回のUIからtrueにはできない)。 */
       autoSendEnabled: a.boolean().default(false),
+      updatedBy: a.string(),
+    })
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  // ─────────────────────────────────────────────────────────────────
+  // 問い合わせAI管理センター(2026-09-03 指示書 §16/§8/§6)。
+  //
+  // 【なぜ Inquiry モデルを新設しないか】指示書§9は共通の問い合わせ形式を
+  // 求めているが、Conversation + Message が既にその形を持っている
+  // (channel / externalConversationId / externalCustomerId /
+  //  customerDisplayName / relatedInventoryId / relatedBaseItemId、
+  //  Message 側に externalMessageId と本文)。もう1つ Inquiry を作ると
+  // 同じ事実が2箇所に書かれ、どちらが正かが曖昧になる。指示書§20
+  // 「既存資産を捨てない」と§30「旧モデルを消さない」に従い、
+  // Conversation/Message を問い合わせの正本として使い続け、足りない
+  // 「返信ルール」「通知の配送状態」「通知先」だけをここで足す。
+  // ─────────────────────────────────────────────────────────────────
+
+  /** §16-1 返信ルールの分類。 */
+  ReplyRuleCategory: a.enum([
+    "DISCOUNT",
+    "SHIPPING",
+    "DELIVERY_DATE",
+    "PRODUCT_CONDITION",
+    "RESERVATION",
+    "STOCK",
+    "RETURN",
+    "CANCELLATION",
+    "RECEIPT",
+    "PAYMENT",
+    "SIZE",
+    "REPAIR",
+    "OTHER",
+  ]),
+
+  /**
+   * §16 返信ルール — 「どう判断するか」。
+   *
+   * 【ナレッジ文書と混ぜない】§19が明確に分けている。
+   *   ReplyRule : どう判断するか(配送先が不明な値下げ交渉では都道府県を訊く)
+   *   Knowledge : 判断に必要な情報(らくらく家財便のサイズ別送料)
+   * KnowledgeDocument は S3 の原本を持つ文書置き場で、改訂履歴もファイル
+   * 差し替えを前提にしている。ルールは1件が短く、優先度・チャネル・
+   * カテゴリーで絞って**必要なものだけ**AIへ渡したい(§22「全DBを毎回
+   * 丸ごと渡さない」)。性質が違うので別モデルにする。
+   *
+   * 【コードから移さないもの】金額計算・14日判定・商品特定は引き続き
+   * コードが持つ(lib/knowledge/businessRules.ts の方針を継承)。ここに
+   * 入るのは判断方針と言い回しであって、事実の確定ではない。
+   */
+  ReplyRule: a
+    .model({
+      title: a.string().required(),
+      category: a.ref("ReplyRuleCategory").required(),
+      /** 一覧で何のルールか分かるようにする短い説明。AIへは渡さない。 */
+      description: a.string(),
+      /** どんなときに適用するか。人が読む条件文で、AIへもそのまま渡す。 */
+      conditions: a.string(),
+      /** どう判断し、どう返すか。AIへ渡る本体。 */
+      instruction: a.string().required(),
+      /** 小さいほど先に適用する。同点なら title 順で安定させる。 */
+      priority: a.integer().default(100),
+      enabled: a.boolean().default(true),
+      /**
+       * 適用チャネル(MessageChannel の値の配列をJSONで持つ)。
+       * 未設定・空配列は「全チャネル」。a.ref().array() が Amplify Data で
+       * 扱えないため、ReplyDraft.intents と同じくJSONで持つ。
+       */
+      channelScope: a.json(),
+      /** 適用する商品カテゴリー(Category.id の配列)。未設定・空は全部。 */
+      productCategoryScope: a.json(),
+      /** 編集のたびに +1。どの版で生成したかをAI処理ログから追える。 */
+      version: a.integer().default(1),
+      /**
+       * ソフトデリート(§26)。過去のAI処理ログが「どのルールを使ったか」で
+       * このidを参照するため、物理削除しない。
+       */
+      deletedAt: a.datetime(),
+      deletedBy: a.string(),
+      createdBy: a.string(),
+      updatedBy: a.string(),
+    })
+    .secondaryIndexes((index) => [index("category")])
+    .authorization((allow) => [
+      // 編集はADMINのみ。返信の判断基準そのもので、誤編集の影響が大きい。
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /** §8 通知の配送状態。 */
+  NotificationDeliveryStatus: a.enum(["PENDING", "PROCESSING", "SENT", "FAILED", "DEAD_LETTER"]),
+
+  /** §33 通知の優先度。1通目の先頭へ【要確認】を出すかの判断に使う。 */
+  NotificationPriority: a.enum(["NORMAL", "ATTENTION", "URGENT", "PARSE_ERROR"]),
+
+  /**
+   * §8 社内LINE Botへの通知1件。
+   *
+   * 【問い合わせ本体と分ける理由】§8が明示している。LINE送信の失敗で
+   * 問い合わせデータ自体を失ってはいけない。受信・解析・返信案生成までは
+   * Conversation/Message/ReplyDraft に確定させ、通知はここで独立に
+   * 再試行する。送れなくても問い合わせは残る。
+   *
+   * 【無限に通知しない】§8末尾。dedupeKey で同じ問い合わせの通知を1件に
+   * 固定し、attemptCount が上限に達したら DEAD_LETTER で止める。
+   */
+  NotificationDelivery: a
+    .model({
+      /**
+       * 重複送信防止キー。"<channel>:<conversationId>:<sourceMessageId>" の形。
+       * Webhookの再送やリトライで2件目を作らないための一意キー(§10 冪等性)。
+       */
+      dedupeKey: a.string().required(),
+      conversationId: a.string(),
+      sourceMessageId: a.string(),
+      /** 生成元の返信案。AI処理ログから通知結果へ辿るために持つ。 */
+      replyDraftId: a.string(),
+      channel: a.ref("MessageChannel"),
+      priority: a.ref("NotificationPriority"),
+      status: a.ref("NotificationDeliveryStatus").required(),
+      /** 1通目(問い合わせ内容・判断材料)。送った文面そのもの。 */
+      summaryText: a.string(),
+      /** 2通目(返信提案)。顧客へそのまま貼れる完成文。 */
+      replyText: a.string(),
+      attemptCount: a.integer().default(0),
+      lastAttemptAt: a.datetime(),
+      sentAt: a.datetime(),
+      /** 失敗理由。短い日本語で、トークン等の秘密値は入れない(§6-1)。 */
+      errorMessage: a.string(),
+      createdBy: a.string(),
+    })
+    .secondaryIndexes((index) => [index("dedupeKey"), index("status"), index("conversationId")])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * §4-3/§6 社内通知用LINE Botの接続設定。1行だけ(id: "singleton")。
+   *
+   * 【トークンはここに入れない】Channel access token / Channel secret は
+   * AWS Secrets Manager(bello/line-notify-bot)にのみ置く。このモデルが
+   * 持つのは「誰へ送るか」「画面に何を出すか」という秘密でない情報だけ。
+   *
+   * 【targetUserId を手入力させない】LINEのユーザーIDは人が見て分かる値では
+   * なく、コンソールからの転記はほぼ確実に間違える。Botを友だち追加した
+   * ときの follow イベントで自動登録する
+   * (app/api/line/notify-webhook/route.ts)。
+   */
+  LineNotifySettings: a
+    .model({
+      /** 通知先のLINEユーザーID。follow イベントで自動登録する。 */
+      targetUserId: a.string(),
+      targetDisplayName: a.string(),
+      followedAt: a.datetime(),
+      /** 友だち追加用のURL。QRが未設定でもこれがあれば案内できる。 */
+      addFriendUrl: a.string(),
+      /** 友だち追加QRの画像URL(§4-3 コードへベタ書きしない)。 */
+      qrImageUrl: a.string(),
+      botDisplayName: a.string(),
+      lastNotifiedAt: a.datetime(),
+      /** 直近の通知結果(§6 表示項目)。NotificationDeliveryStatus の文字列。 */
+      lastNotifyStatus: a.string(),
       updatedBy: a.string(),
     })
     .authorization((allow) => [
