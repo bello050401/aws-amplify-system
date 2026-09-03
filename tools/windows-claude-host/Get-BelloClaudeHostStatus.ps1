@@ -131,10 +131,61 @@ try {
     Write-Host "  Task $TaskPath$TaskName is NOT registered." -ForegroundColor Yellow
 }
 
+Section 'Recovery watchdog'
+foreach ($m in @(
+        @{ File = 'stop.flag';      Text = 'Deliberate stop is in effect - the watchdog will NOT restart the host. Run Start-BelloClaudeHost.ps1 to resume.' },
+        @{ File = 'crashloop.flag'; Text = 'Crash-loop cooldown is in effect - the watchdog is standing down. Check the log for the FATAL lines.' })) {
+    $mp = Join-Path $stateDir $m.File
+    if (Test-Path -LiteralPath $mp) {
+        Write-Host ("  {0} (set {1})" -f $m.Text, (Get-Item -LiteralPath $mp).LastWriteTime) -ForegroundColor Yellow
+    }
+}
+if (-not (Test-Path -LiteralPath (Join-Path $stateDir 'stop.flag'))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $stateDir 'crashloop.flag'))) {
+        Write-Host '  Armed - no stop flag, no crash-loop cooldown.' -ForegroundColor Green
+    }
+}
+
 Section 'Last recorded state'
 $statePath = Join-Path $stateDir 'state.json'
 if (Test-Path -LiteralPath $statePath) {
-    Get-Content -LiteralPath $statePath -Raw | Write-Host
+    # The recorded status is only meaningful while the supervisor that wrote it
+    # is alive and its heartbeat is fresh. A host killed with its console window
+    # never gets to write a final status, so never report the file at face value.
+    $stateRaw = Get-Content -LiteralPath $statePath -Raw
+    $effective = 'unknown'
+    try {
+        $stateObj = $stateRaw | ConvertFrom-Json
+        $recorded = if ($stateObj.PSObject.Properties['status']) { [string]$stateObj.status } else { 'unknown' }
+
+        $statePid = 0
+        if ($stateObj.PSObject.Properties['supervisorPid']) {
+            [void][int]::TryParse([string]$stateObj.supervisorPid, [ref]$statePid)
+        }
+        $stateProc = $null
+        if ($statePid -gt 0) { $stateProc = Get-Process -Id $statePid -ErrorAction SilentlyContinue }
+        $pidAlive = ($null -ne $stateProc) -and (@('powershell', 'pwsh') -contains $stateProc.ProcessName)
+
+        $beatAge = [double]::PositiveInfinity
+        if ($stateObj.PSObject.Properties['heartbeatAt']) {
+            try { $beatAge = ((Get-Date) - [datetime]::Parse([string]$stateObj.heartbeatAt)).TotalSeconds } catch { }
+        }
+
+        if (@('running', 'backoff') -contains $recorded) {
+            if ($pidAlive -and $beatAge -lt 120) {
+                $effective = "$recorded (live)"
+            } else {
+                $effective = "STALE - recorded '$recorded', but the supervisor is gone. The host is NOT running."
+            }
+        } else {
+            $effective = $recorded
+        }
+    } catch {
+        $effective = 'state.json is unreadable'
+    }
+    $colour = if ($effective -like 'STALE*') { 'Yellow' } elseif ($effective -like '*(live)') { 'Green' } else { 'Gray' }
+    Write-Host ("  Effective status: {0}" -f $effective) -ForegroundColor $colour
+    Write-Host $stateRaw
 } else {
     Write-Host '  No state file yet.'
 }

@@ -26,6 +26,12 @@
     MaxRestarts        = 5
     CrashWindowMinutes = 10
 
+    # After crash-loop protection has stopped the supervisor, the 1-minute
+    # recovery watchdog stands down for this long instead of restarting a
+    # host that is known to be broken. A manual Start-BelloClaudeHost.ps1
+    # clears the cooldown immediately.
+    CrashLoopCooldownMinutes = 30
+
     # A child process that stayed up at least this long is considered a
     # healthy run; the failure counter resets when it later exits.
     HealthySeconds = 120

@@ -37,6 +37,12 @@ param(
     # Seconds to wait after logon before starting (lets the network come up).
     [int] $StartDelaySeconds = 45,
 
+    # How often the recovery watchdog re-checks that the host is up. This is
+    # what makes the host come back without logging off and on again, so keep
+    # it small; 1 minute is the shortest interval Task Scheduler accepts.
+    [ValidateRange(1, 60)]
+    [int] $WatchdogIntervalMinutes = 1,
+
     # never | auto (default, installs only when Claude Code is missing or
     # reachable through npx only) | always
     [ValidateSet('never', 'auto', 'always')]
@@ -340,7 +346,10 @@ if (-not (Test-Path -LiteralPath $psExe)) {
 Write-Info "Task host: $psExe"
 
 $windowStyle = if ($Hidden) { 'Hidden' } else { 'Minimized' }
-$argLine = '-NoProfile -ExecutionPolicy Bypass -WindowStyle {0} -File "{1}" -ConfigPath "{2}"' -f `
+# -Watchdog tells the supervisor it was started by the scheduler rather than by
+# a human: it then obeys stop.flag and the crash-loop cooldown, and stays silent
+# when a host is already running (which is what every recovery tick sees).
+$argLine = '-NoProfile -ExecutionPolicy Bypass -WindowStyle {0} -File "{1}" -ConfigPath "{2}" -Watchdog' -f `
     $windowStyle, $supervisor, $ConfigPath
 if ($Hidden) { $argLine += ' -Hidden' }
 
@@ -353,9 +362,33 @@ if ($ReportOnly) {
 
     $action = New-ScheduledTaskAction -Execute $psExe -Argument $argLine -WorkingDirectory $BelloScriptDir
 
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
     # Let the network stack settle before the first connection attempt.
-    $trigger.Delay = ('PT{0}S' -f $StartDelaySeconds)
+    $logonTrigger.Delay = ('PT{0}S' -f $StartDelaySeconds)
+
+    # Recovery watchdog. The logon trigger alone only helps after a logon, so a
+    # host that dies while you stay signed in (console window closed, supervisor
+    # killed) would stay down until the next logon. This repeating trigger
+    # re-checks every $WatchdogIntervalMinutes minute(s), starting immediately.
+    #
+    # It can never produce a second host: MultipleInstances=IgnoreNew makes the
+    # scheduler skip the tick while the previous instance is still running, and
+    # the supervisor's named mutex refuses a second instance even if one is
+    # started by hand at the same moment.
+    $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(-1) `
+        -RepetitionInterval (New-TimeSpan -Minutes $WatchdogIntervalMinutes)
+    try {
+        # "Indefinitely" in the Task Scheduler UI. Some builds reject
+        # TimeSpan.MaxValue on the constructor, so it is set afterwards.
+        $watchdogTrigger.Repetition.Duration = ''
+        # The supervisor is meant to run forever once started. StopAtDurationEnd
+        # is the one setting that could make the scheduler stop a healthy host.
+        $watchdogTrigger.Repetition.StopAtDurationEnd = $false
+    } catch {
+        Write-Warn 'Could not set an indefinite repetition duration; the watchdog will use the default duration.'
+    }
+
+    $trigger = @($logonTrigger, $watchdogTrigger)
 
     # LogonType Interactive + RunLevel Limited: runs as you, without elevation,
     # and no password is stored anywhere.
@@ -379,11 +412,13 @@ if ($ReportOnly) {
         try {
             Register-ScheduledTask -TaskName $TaskName -TaskPath $path `
                 -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
-                -Description 'Starts and supervises the BELLO Claude Code Remote Control host at logon.' `
+                -Description ('Starts and supervises the BELLO Claude Code Remote Control host at logon, and re-starts it within {0} minute(s) if it dies while you stay signed in.' -f $WatchdogIntervalMinutes) `
                 -Force | Out-Null
             $ourFullName = ($path.TrimEnd('\') + '\' + $TaskName)
             Write-Ok "Scheduled task registered: $ourFullName"
-            Write-Info ('Trigger: at logon of this user, delayed {0}s. Multiple instances: IgnoreNew. Time limit: none.' -f $StartDelaySeconds)
+            Write-Info ('Trigger 1: at logon of this user, delayed {0}s.' -f $StartDelaySeconds)
+            Write-Info ('Trigger 2: recovery watchdog, every {0} minute(s), indefinitely.' -f $WatchdogIntervalMinutes)
+            Write-Info 'Multiple instances: IgnoreNew (plus a named mutex in the supervisor). Time limit: none.'
             $registered = $true
             break
         } catch {

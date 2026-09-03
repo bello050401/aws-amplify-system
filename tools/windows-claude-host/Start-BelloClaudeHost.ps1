@@ -50,7 +50,14 @@ param(
     [switch] $Hidden,
 
     # Print what would be launched, then exit without starting anything.
-    [switch] $WhatIfLaunch
+    [switch] $WhatIfLaunch,
+
+    # Started by the recovery watchdog (the scheduled task's repeating
+    # trigger), not by a human. A watchdog run OBEYS stop.flag and the
+    # crash-loop cooldown instead of clearing them, and stays silent when
+    # there is nothing to do - otherwise a deliberate stop would be undone
+    # within a minute and the log would gain a line every minute.
+    [switch] $Watchdog
 )
 
 # ---------------------------------------------------------------------------
@@ -115,6 +122,7 @@ $config = @{
     LogRoot            = ''
     MaxRestarts        = 5
     CrashWindowMinutes = 10
+    CrashLoopCooldownMinutes = 30
     HealthySeconds     = 120
     BaseBackoffSeconds = 5
     MaxBackoffSeconds  = 300
@@ -158,6 +166,19 @@ $statePath = Join-Path $stateDir 'state.json'
 $pidPath   = Join-Path $stateDir 'supervisor.pid'
 $stopFlag  = Join-Path $stateDir 'stop.flag'
 
+# Markers used by the 1-minute recovery watchdog. The .ack files exist only so
+# that a watchdog run which stands down logs its reason once, not once a minute.
+$stopAck       = Join-Path $stateDir 'stop.flag.ack'
+$crashLoopFlag = Join-Path $stateDir 'crashloop.flag'
+$crashLoopAck  = Join-Path $stateDir 'crashloop.flag.ack'
+
+# Set when this instance exits without having done anything (watchdog stand-down).
+# Such a run must not write the usual start/stop pair to the log.
+$script:QuietExit       = $false
+$script:LastSavedStatus = ''
+# Set by Write-HostLog when the console this process was started in has died.
+$script:ConsoleLost     = $false
+
 foreach ($dir in @($config.LogRoot, $logDir, $stateDir)) {
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 }
@@ -176,23 +197,158 @@ function Write-HostLog {
     )
     $line = '{0} [{1,-5}] (pid {2}) {3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $PID, $Message
     try { Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8 } catch { }
-    switch ($Level) {
-        'ERROR' { Write-Host $line -ForegroundColor Red }
-        'FATAL' { Write-Host $line -ForegroundColor Red }
-        'WARN'  { Write-Host $line -ForegroundColor Yellow }
-        'START' { Write-Host $line -ForegroundColor Green }
-        'STOP'  { Write-Host $line -ForegroundColor Cyan }
-        default { Write-Host $line }
+    # When the console window is closed the host keeps running for a moment
+    # with no console attached, and every Write-Host then throws a Win32 0xE9
+    # ("no process on the other end of the pipe"). That must never be mistaken
+    # for a supervisor failure - the file log above is the record that matters.
+    try {
+        switch ($Level) {
+            'ERROR' { Write-Host $line -ForegroundColor Red }
+            'FATAL' { Write-Host $line -ForegroundColor Red }
+            'WARN'  { Write-Host $line -ForegroundColor Yellow }
+            'START' { Write-Host $line -ForegroundColor Green }
+            'STOP'  { Write-Host $line -ForegroundColor Cyan }
+            default { Write-Host $line }
+        }
+    } catch {
+        # The console this supervisor was started in is gone (conhost crashed,
+        # or the window was closed without the process being signalled). Claude
+        # Code cannot run without it - every child dies instantly - so the
+        # supervisor must step aside and let the watchdog start a fresh one
+        # rather than burn its restart budget against a broken console.
+        $script:ConsoleLost = $true
+    }
+}
+
+function Write-QuietOnce {
+    # Logs $Message only when the marker file is older than the condition that
+    # caused it, so a watchdog that stands down every minute writes one line
+    # per stop / per crash loop instead of 1440 lines a day.
+    param(
+        [Parameter(Mandatory)][string] $Marker,
+        [string] $Source,
+        [Parameter(Mandatory)][string] $Message,
+        [ValidateSet('INFO', 'WARN', 'ERROR', 'FATAL', 'START', 'STOP')]
+        [string] $Level = 'INFO'
+    )
+    $shouldLog = $true
+    try {
+        if (Test-Path -LiteralPath $Marker) {
+            $markerTime = (Get-Item -LiteralPath $Marker).LastWriteTime
+            $sourceTime = [datetime]::MinValue
+            if ((-not [string]::IsNullOrWhiteSpace($Source)) -and (Test-Path -LiteralPath $Source)) {
+                $sourceTime = (Get-Item -LiteralPath $Source).LastWriteTime
+            }
+            if ($markerTime -ge $sourceTime) { $shouldLog = $false }
+        }
+    } catch { }
+    if ($shouldLog) {
+        Write-HostLog -Level $Level -Message $Message
+        try { Set-Content -LiteralPath $Marker -Value ((Get-Date).ToString('o')) -Encoding UTF8 } catch { }
     }
 }
 
 function Save-HostState {
     param([hashtable] $State)
     try {
-        $State['updatedAt'] = (Get-Date).ToString('o')
+        $now = (Get-Date).ToString('o')
+        $State['updatedAt'] = $now
+        # heartbeatAt + supervisorPid are what let a reader tell a live host
+        # from one that was killed before it could record a final status.
+        $State['heartbeatAt'] = $now
+        if (-not $State.ContainsKey('supervisorPid')) { $State['supervisorPid'] = $PID }
         $State | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding UTF8
+        if ($State.ContainsKey('status')) { $script:LastSavedStatus = [string]$State['status'] }
     } catch {
         Write-HostLog -Level WARN -Message ("Could not write state file: {0}" -f $_.Exception.Message)
+    }
+}
+
+function Update-HostHeartbeat {
+    # Refreshes only the timestamps in state.json. A supervisor that is killed
+    # (console window closed, taskkill /F) never reaches its finally block, so
+    # "status": "running" would otherwise stay in the file forever. A heartbeat
+    # older than a couple of minutes marks that status as stale.
+    try {
+        if (-not (Test-Path -LiteralPath $statePath)) { return }
+        $raw = Get-Content -LiteralPath $statePath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return }
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+        $now = (Get-Date).ToString('o')
+        $obj | Add-Member -NotePropertyName 'heartbeatAt' -NotePropertyValue $now -Force
+        $obj | Add-Member -NotePropertyName 'updatedAt'   -NotePropertyValue $now -Force
+        $obj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding UTF8
+    } catch { }
+}
+
+function Repair-StaleState {
+    # Runs at startup. If the previous supervisor died without a clean shutdown,
+    # state.json still claims "running" (or "backoff") for a pid that is gone.
+    # Rewrite it as "interrupted" so nothing ever reports a host that is not there.
+    try {
+        if (-not (Test-Path -LiteralPath $statePath)) { return }
+        $raw = Get-Content -LiteralPath $statePath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return }
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+        if (-not $obj.PSObject.Properties['status']) { return }
+        $previous = [string]$obj.status
+        if (@('running', 'backoff') -notcontains $previous) { return }
+
+        $oldPid = 0
+        if ($obj.PSObject.Properties['supervisorPid']) {
+            [void][int]::TryParse([string]$obj.supervisorPid, [ref]$oldPid)
+        }
+        if ($oldPid -eq $PID) { return }
+        if ($oldPid -gt 0) {
+            # A recycled pid must not be mistaken for the old supervisor, so the
+            # process also has to still be a PowerShell host to count as alive.
+            $still = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+            if ($still -and @('powershell', 'pwsh') -contains $still.ProcessName) { return }
+        }
+
+        $now = (Get-Date).ToString('o')
+        $obj | Add-Member -NotePropertyName 'status'              -NotePropertyValue 'interrupted' -Force
+        $obj | Add-Member -NotePropertyName 'interruptedPid'      -NotePropertyValue $oldPid -Force
+        $obj | Add-Member -NotePropertyName 'interruptedFrom'     -NotePropertyValue $previous -Force
+        $obj | Add-Member -NotePropertyName 'interruptionNotedAt' -NotePropertyValue $now -Force
+        $obj | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $statePath -Encoding UTF8
+        Write-HostLog -Level WARN -Message ('Previous supervisor (pid {0}) ended without a clean shutdown - state.json corrected from "{1}" to "interrupted".' -f $oldPid, $previous)
+    } catch { }
+}
+
+function Stop-OrphanedRemoteControl {
+    # Only ever reached by the instance that owns the mutex, which means no
+    # other supervisor is alive. Any `claude remote-control --name <ours>` still
+    # running at that point is an orphan: its supervisor was killed on its own
+    # (taskkill, Stop-Process) and the child survived. Leaving it would put two
+    # hosts with the same name in front of claude.ai/code, so it is stopped
+    # together with its session children before a fresh one is started.
+    param([Parameter(Mandatory)][string] $SessionName)
+
+    try {
+        $all = @(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" -ErrorAction Stop)
+        $orphans = @($all | Where-Object {
+            $_.CommandLine -and
+            $_.CommandLine -match 'remote-control' -and
+            $_.CommandLine -match [regex]::Escape($SessionName)
+        })
+        if ($orphans.Count -eq 0) { return }
+
+        foreach ($o in $orphans) {
+            Write-HostLog -Level WARN -Message ('Orphaned Remote Control host found (pid {0}); its supervisor is gone. Stopping it so only one host ever runs.' -f $o.ProcessId)
+            foreach ($child in @($all | Where-Object { $_.ParentProcessId -eq $o.ProcessId })) {
+                try { Stop-Process -Id $child.ProcessId -Force -ErrorAction Stop } catch { }
+            }
+            try {
+                Stop-Process -Id $o.ProcessId -Force -ErrorAction Stop
+            } catch {
+                Write-HostLog -Level WARN -Message ('Could not stop orphan pid {0}: {1}' -f $o.ProcessId, $_.Exception.Message)
+            }
+        }
+        # Give the bridge a moment to release its named pipes before relaunching.
+        Start-Sleep -Seconds 2
+    } catch {
+        Write-HostLog -Level WARN -Message ("Orphan check failed: {0}" -f $_.Exception.Message)
     }
 }
 
@@ -410,16 +566,52 @@ try {
     }
 
     if (-not $mutexOwned) {
+        # The healthy steady state for the watchdog: a host is already up, so
+        # there is nothing to do and nothing worth logging. Task Scheduler's
+        # IgnoreNew policy normally stops us before we get here; the mutex is
+        # the second line of defence that also covers a manually started host.
+        if ($Watchdog) {
+            $script:QuietExit = $true
+            exit 0
+        }
         $other = 'unknown'
         if (Test-Path -LiteralPath $pidPath) { $other = (Get-Content -LiteralPath $pidPath -Raw).Trim() }
         Write-HostLog -Level WARN -Message ("Another BELLO Claude Code host is already running (pid {0}). Exiting without starting a second one." -f $other)
         exit 0
     }
 
+    # ---- Deliberate stop / crash-loop cooldown ---------------------------
+    # A manual run is an explicit "start it now", so it clears both markers.
+    # A watchdog run must obey them: otherwise Stop-BelloClaudeHost.ps1 would be
+    # undone within a minute, and a crash-looping host would be restarted every
+    # minute forever instead of stopping and waiting for a human.
+    if ($Watchdog) {
+        if (Test-Path -LiteralPath $stopFlag) {
+            Write-QuietOnce -Marker $stopAck -Source $stopFlag -Message 'Stop flag present (deliberate stop). The recovery watchdog is standing down until Start-BelloClaudeHost.ps1 is run manually.'
+            $script:QuietExit = $true
+            exit 0
+        }
+        if (Test-Path -LiteralPath $crashLoopFlag) {
+            $cooldownEnd = (Get-Item -LiteralPath $crashLoopFlag).LastWriteTime.AddMinutes($config.CrashLoopCooldownMinutes)
+            if ((Get-Date) -lt $cooldownEnd) {
+                Write-QuietOnce -Marker $crashLoopAck -Source $crashLoopFlag -Level WARN -Message ('Crash-loop cooldown active until {0}. The recovery watchdog is standing down; fix the cause or start the host manually.' -f $cooldownEnd.ToString('yyyy-MM-dd HH:mm:ss'))
+                $script:QuietExit = $true
+                exit 0
+            }
+            Write-HostLog -Message 'Crash-loop cooldown has expired; clearing the marker and trying again.'
+            Remove-Item -LiteralPath $crashLoopFlag -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $crashLoopAck -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        foreach ($marker in @($stopFlag, $stopAck, $crashLoopFlag, $crashLoopAck)) {
+            if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
     Set-Content -LiteralPath $pidPath -Value $PID -Encoding ASCII
 
-    # A stop flag left over from a previous deliberate stop must not block startup.
-    if (Test-Path -LiteralPath $stopFlag) { Remove-Item -LiteralPath $stopFlag -Force -ErrorAction SilentlyContinue }
+    # Correct a "running" record left behind by a supervisor that was killed.
+    Repair-StaleState
 
     Write-HostLog -Level START -Message '=== BELLO Claude Code host starting ==='
 
@@ -456,6 +648,10 @@ try {
     }
 
     Update-SleepInhibition
+
+    # Single-host guarantee, part 2: the mutex stops a second supervisor, this
+    # stops a Remote Control host that outlived its supervisor.
+    Stop-OrphanedRemoteControl -SessionName $config.SessionName
 
     $attempt = 0
     while ($true) {
@@ -508,6 +704,7 @@ try {
                 [void]$proc.WaitForExit(15000)
                 if ($proc.HasExited) { break }
                 Update-SleepInhibition
+                Update-HostHeartbeat
                 if (Test-Path -LiteralPath $stopFlag) {
                     Write-HostLog -Level STOP -Message 'Stop flag detected; stopping Claude Code.'
                     try { $proc.CloseMainWindow() | Out-Null } catch { }
@@ -521,10 +718,33 @@ try {
         }
 
         $ranSeconds = [int]((Get-Date) - $startedAt).TotalSeconds
-        $childExit  = 1
-        if ($null -ne $proc -and $proc.HasExited) { $childExit = $proc.ExitCode }
+        # Default 1 = "unknown, treat as a crash and restart". A child killed
+        # with its console can report a null exit code, and [int]$null would be
+        # 0 - which the clean-exit rule below reads as "the operator meant to
+        # stop", leaving the host down. Only a real code is ever taken.
+        $childExit = 1
+        if ($null -ne $proc) {
+            try {
+                if ($proc.HasExited -and $null -ne $proc.ExitCode) { $childExit = [int]$proc.ExitCode }
+            } catch { }
+        }
 
         Write-HostLog -Level STOP -Message ('Claude Code exited with code {0} after {1}s.' -f $childExit, $ranSeconds)
+
+        if ($script:ConsoleLost) {
+            # Exit non-zero and WITHOUT arming the crash-loop cooldown: this is
+            # a broken console, not a broken Claude Code, so the watchdog should
+            # start a replacement on its next tick (within a minute).
+            Write-HostLog -Level ERROR -Message 'The console this host was started in no longer exists, so Claude Code cannot stay up here. Exiting so the recovery watchdog can start a fresh host.'
+            Save-HostState -State @{
+                status       = 'console-lost'
+                lastExitCode = $childExit
+                ranSeconds   = $ranSeconds
+                logFile      = $script:LogFile
+            }
+            $exitCode = 6
+            break
+        }
 
         if (Test-Path -LiteralPath $stopFlag) {
             Write-HostLog -Level STOP -Message 'Deliberate stop requested. Supervisor exiting without restart.'
@@ -552,6 +772,9 @@ try {
                 Write-HostLog -Message ('Previous run lasted {0}s (healthy); resetting the failure counter.' -f $ranSeconds)
             }
             $failureTimes.Clear()
+            foreach ($marker in @($crashLoopFlag, $crashLoopAck)) {
+                if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
+            }
         }
 
         [void]$failureTimes.Add((Get-Date))
@@ -563,6 +786,13 @@ try {
         if ($failureTimes.Count -ge $config.MaxRestarts) {
             Write-HostLog -Level FATAL -Message ('Claude Code failed {0} times within {1} minutes (last exit code {2}). Stopping to avoid a restart loop. Investigate {3} and the Claude debug log {4}, then start the host again manually or log off and back on.' -f $failureTimes.Count, $config.CrashWindowMinutes, $childExit, $script:LogFile, $debugLog)
             Write-HostLog -Level FATAL -Message 'Common causes: not signed in (run `claude` in the repo and use /login), workspace trust not accepted yet, or no network.'
+            # Tell the 1-minute recovery watchdog to stand down for a while, so
+            # crash-loop protection is not defeated by the watchdog itself.
+            try {
+                Set-Content -LiteralPath $crashLoopFlag -Value ((Get-Date).ToString('o')) -Encoding UTF8
+                Remove-Item -LiteralPath $crashLoopAck -Force -ErrorAction SilentlyContinue
+                Write-HostLog -Level WARN -Message ('Recovery watchdog suspended for {0} minutes (marker: {1}).' -f $config.CrashLoopCooldownMinutes, $crashLoopFlag)
+            } catch { }
             Save-HostState -State @{
                 status         = 'crash-loop-stopped'
                 failures       = $failureTimes.Count
@@ -604,7 +834,20 @@ finally {
         try { $mutex.ReleaseMutex() } catch { }
     }
     if ($null -ne $mutex) { $mutex.Dispose() }
-    Write-HostLog -Level STOP -Message ('=== BELLO Claude Code host stopped (exit {0}) ===' -f $exitCode)
+
+    if (-not $script:QuietExit) {
+        # An exit that leaves "running"/"backoff" on disk (an unhandled error,
+        # or Ctrl+C during backoff) must not keep claiming the host is up.
+        if (@('running', 'backoff') -contains $script:LastSavedStatus) {
+            Save-HostState -State @{
+                status       = 'stopped'
+                lastExitCode = $exitCode
+                endedAt      = (Get-Date).ToString('o')
+                logFile      = $script:LogFile
+            }
+        }
+        Write-HostLog -Level STOP -Message ('=== BELLO Claude Code host stopped (exit {0}) ===' -f $exitCode)
+    }
 }
 
 exit $exitCode
