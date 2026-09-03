@@ -7,152 +7,188 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header class="topbar">
-      <h1>BELLO 開発管理</h1>
-      <div class="topbar-status">
-        <span id="conn-state" class="chip chip-unknown">接続確認中</span>
-        <span id="last-updated" class="muted">最終更新: —</span>
-      </div>
-    </header>
-
-    <nav class="tabs" id="tabs" aria-label="画面切り替え">
-      <button type="button" class="tab" data-view="home" aria-current="page">ホーム</button>
-      <button type="button" class="tab" data-view="todos">ユーザーTODO</button>
-      <button type="button" class="tab" data-view="tasks">タスク一覧</button>
-      <button type="button" class="tab" data-view="documents">レビュー文書</button>
-      <button type="button" class="tab" data-view="system">システム状態</button>
-      <button type="button" class="tab" data-view="settings">設定</button>
-      <button type="button" class="tab" data-view="audit">監査ログ</button>
-    </nav>
-
-    <main id="main">
-      <!-- ホーム -->
-      <section id="view-home" class="view">
-        <div id="todo-banner" class="banner banner-hidden" role="status">
-          <h2>今、ユーザー様が行う必要があること</h2>
-          <p id="todo-banner-count"></p>
-          <ul id="todo-banner-list" class="banner-list"></ul>
-          <button type="button" class="link-button" data-view-link="todos">TODO 画面を開く</button>
+    <div class="layout">
+      <!-- PC: 左サイドメニュー -->
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-name">BELLO</span>
+          <span class="brand-sub">開発管理</span>
         </div>
+        <nav class="side-nav" aria-label="メニュー">
+          <button type="button" class="nav-item" data-view="home" aria-current="page">
+            <span class="nav-label">ホーム</span>
+          </button>
+          <button type="button" class="nav-item" data-view="history">
+            <span class="nav-label">開発履歴</span>
+          </button>
+          <button type="button" class="nav-item" data-view="add">
+            <span class="nav-label">指示を追加</span>
+          </button>
+          <button type="button" class="nav-item" data-view="settings">
+            <span class="nav-label">設定</span>
+          </button>
+        </nav>
+        <div class="side-foot">
+          <span id="conn-state" class="chip chip-unknown">接続確認中</span>
+          <span id="last-updated" class="muted">—</span>
+        </div>
+      </aside>
 
-        <div class="cards">
-          <article class="card">
-            <h3>稼働状態</h3>
-            <p id="run-state" class="big">—</p>
-            <div class="row">
-              <button type="button" id="btn-pause">一時停止</button>
-              <button type="button" id="btn-resume">再開</button>
-              <button type="button" id="btn-stop-current" class="danger">現在タスクを安全に停止</button>
+      <main class="content" id="main">
+        <!-- ============================ ホーム ============================ -->
+        <section id="view-home" class="view">
+          <h1 class="page-title">ホーム</h1>
+
+          <!-- ユーザーTODO: 最も目立つ位置 -->
+          <section id="todo-zone" class="panel panel-todo" aria-live="polite">
+            <h2 class="panel-title" id="todo-zone-title">ユーザー様の作業</h2>
+            <div id="todo-zone-body"></div>
+          </section>
+
+          <!-- 稼働状態 -->
+          <section class="panel">
+            <div class="status-row">
+              <div>
+                <div class="label">稼働状態</div>
+                <div class="status-line">
+                  <span id="run-chip" class="chip chip-unknown">確認中</span>
+                  <span id="run-note" class="muted"></span>
+                </div>
+              </div>
+              <div class="status-actions">
+                <button type="button" id="btn-pause" class="btn btn-quiet">一時停止</button>
+                <button type="button" id="btn-resume" class="btn btn-quiet">再開</button>
+                <button type="button" id="btn-stop-current" class="btn btn-quiet">この作業を止める</button>
+              </div>
             </div>
-          </article>
-          <article class="card">
-            <h3>現在のタスク</h3>
-            <p id="current-task" class="big">なし</p>
-            <p id="current-heartbeat" class="muted"></p>
-          </article>
-          <article class="card">
-            <h3>次のタスク</h3>
-            <p id="next-task" class="big">なし</p>
-          </article>
-          <article class="card">
-            <h3>キュー内訳</h3>
-            <ul id="counts" class="kv"></ul>
-          </article>
-          <article class="card">
-            <h3>審査方式</h3>
-            <p id="home-review-provider" class="big">—</p>
-            <p class="muted" id="home-review-note"></p>
-            <button type="button" class="link-button" data-view-link="settings">変更する</button>
-          </article>
-        </div>
+          </section>
 
-        <article class="card">
-          <h3>新しい開発指示を登録</h3>
-          <form id="new-task-form">
-            <label for="nt-title">件名</label>
-            <input id="nt-title" name="title" required maxlength="200" />
-            <label for="nt-instruction">指示内容</label>
-            <textarea id="nt-instruction" name="instruction" rows="6" required></textarea>
-            <label for="nt-priority">優先度（大きいほど先に実行）</label>
-            <input id="nt-priority" name="priority" type="number" value="50" min="0" max="100" />
-            <button type="submit">キューに登録</button>
-          </form>
-        </article>
-      </section>
+          <!-- 現在の作業 -->
+          <section class="panel">
+            <h2 class="panel-title">いま進めている作業</h2>
+            <div id="current-empty" class="empty">現在、実行中の作業はありません。</div>
+            <div id="current-body" class="hidden">
+              <p id="current-title" class="big"></p>
+              <dl class="facts">
+                <div><dt>開始時刻</dt><dd id="current-started">—</dd></div>
+                <div><dt>経過時間</dt><dd id="current-elapsed">—</dd></div>
+                <div><dt>現在の工程</dt><dd id="current-phase">—</dd></div>
+              </dl>
+              <ol id="pipeline" class="pipeline" aria-label="進行状況"></ol>
+              <p id="pipeline-note" class="muted"></p>
+            </div>
+          </section>
 
-      <!-- TODO -->
-      <section id="view-todos" class="view hidden">
-        <h2>ユーザーTODO</h2>
-        <p class="muted">本人にしかできない操作だけがここに出ます。完了条件を満たしてから完了にしてください。</p>
-        <div id="todo-list"></div>
-      </section>
+          <div class="two-col">
+            <!-- 次の作業 -->
+            <section class="panel">
+              <h2 class="panel-title">次に実行する作業</h2>
+              <ol id="next-list" class="plain-list"></ol>
+            </section>
 
-      <!-- タスク -->
-      <section id="view-tasks" class="view hidden">
-        <h2>タスク一覧</h2>
-        <div class="table-scroll">
-          <table id="task-table">
-            <thead>
-              <tr>
-                <th>状態</th><th>件名</th><th>作成元</th><th>優先</th><th>試行</th><th>修正</th><th>更新</th><th>操作</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <div id="task-detail" class="card hidden"></div>
-      </section>
+            <!-- 直近の完了 -->
+            <section class="panel">
+              <h2 class="panel-title">直近の完了結果</h2>
+              <ul id="recent-list" class="plain-list"></ul>
+            </section>
+          </div>
+        </section>
 
-      <!-- 文書 -->
-      <section id="view-documents" class="view hidden">
-        <h2>レビュー文書（Word 取込）</h2>
-        <article class="card">
-          <h3>.docx をアップロード</h3>
-          <input type="file" id="doc-file" accept=".docx" />
-          <button type="button" id="btn-upload">アップロードして取り込む</button>
-          <p class="muted" id="upload-status"></p>
-          <p class="muted">inbox フォルダに置く方法でも取り込めます。場所は「設定」画面に表示されます。</p>
-        </article>
-        <div id="document-list"></div>
-      </section>
+        <!-- ========================== 開発履歴 ========================== -->
+        <section id="view-history" class="view hidden">
+          <h1 class="page-title">開発履歴</h1>
+          <div class="filter-row" id="history-filter" role="group" aria-label="状態でしぼり込む">
+            <button type="button" class="pill pill-on" data-filter="all">すべて</button>
+            <button type="button" class="pill" data-filter="active">実行中</button>
+            <button type="button" class="pill" data-filter="review">審査中</button>
+            <button type="button" class="pill" data-filter="revision">修正中</button>
+            <button type="button" class="pill" data-filter="completed">完了</button>
+            <button type="button" class="pill" data-filter="failed">失敗</button>
+          </div>
+          <div id="history-list" class="panel panel-flush"></div>
+          <div id="history-detail" class="panel hidden"></div>
+        </section>
 
-      <!-- システム -->
-      <section id="view-system" class="view hidden">
-        <h2>システム状態</h2>
-        <button type="button" id="btn-diagnose">診断を実行</button>
-        <pre id="system-report" class="pre"></pre>
-      </section>
+        <!-- ========================= 指示を追加 ========================= -->
+        <section id="view-add" class="view hidden">
+          <h1 class="page-title">指示を追加</h1>
 
-      <!-- 設定 -->
-      <section id="view-settings" class="view hidden">
-        <h2>設定</h2>
+          <section class="panel">
+            <h2 class="panel-title">Word 文書を投入する</h2>
+            <div id="dropzone" class="dropzone" tabindex="0" role="button"
+                 aria-label="Word ファイルを選ぶか、ここにドラッグしてください">
+              <p class="dropzone-main">ここに Word ファイル（.docx）をドラッグ</p>
+              <p class="dropzone-sub">またはクリックしてファイルを選ぶ</p>
+              <input type="file" id="doc-file" accept=".docx" hidden />
+            </div>
+            <p class="notice">現在の作業が終わり次第、自動的に内容を読み取って開始します。</p>
+            <p id="upload-status" class="muted"></p>
+          </section>
 
-        <article class="card">
-          <h3>審査方式</h3>
-          <p class="muted">
-            完了報告を誰が審査するかを選びます。変更は即座に反映され、審査待ちのタスクは新しい方式で審査されます。
-            再起動は不要です。
-          </p>
-          <div id="review-provider-options"></div>
-          <p id="review-provider-status" class="muted"></p>
-        </article>
+          <section class="panel">
+            <h2 class="panel-title">取り込んだ文書</h2>
+            <div id="document-list"></div>
+          </section>
 
-        <h3>その他の設定（表示のみ）</h3>
-        <p class="muted">秘密情報は表示しません。変更は bello-orchestrator.config.json を編集して再起動してください。</p>
-        <pre id="settings-report" class="pre"></pre>
-      </section>
+          <section class="panel">
+            <h2 class="panel-title">文章で指示する</h2>
+            <form id="new-task-form">
+              <label for="nt-title">件名</label>
+              <input id="nt-title" name="title" required maxlength="200" />
+              <label for="nt-instruction">指示内容</label>
+              <textarea id="nt-instruction" name="instruction" rows="6" required></textarea>
+              <details class="sub">
+                <summary>詳しい設定</summary>
+                <label for="nt-priority">優先度（大きいほど先に実行）</label>
+                <input id="nt-priority" name="priority" type="number" value="50" min="0" max="100" />
+              </details>
+              <button type="submit" class="btn btn-primary">この内容で追加する</button>
+            </form>
+          </section>
+        </section>
 
-      <!-- 監査 -->
-      <section id="view-audit" class="view hidden">
-        <h2>監査ログ</h2>
-        <div class="table-scroll">
-          <table id="audit-table">
-            <thead><tr><th>日時</th><th>主体</th><th>操作</th><th>対象</th><th>結果</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-    </main>
+        <!-- ============================ 設定 ============================ -->
+        <section id="view-settings" class="view hidden">
+          <h1 class="page-title">設定</h1>
+
+          <section class="panel">
+            <h2 class="panel-title">審査方法</h2>
+            <p class="muted">完了した作業を誰が確認するかを選びます。変更はすぐ反映され、再起動は要りません。</p>
+            <div id="review-provider-options"></div>
+            <p id="review-provider-status" class="muted"></p>
+          </section>
+
+          <details class="panel panel-details">
+            <summary class="panel-title">高度な設定と診断</summary>
+            <div class="details-body">
+              <div class="row">
+                <button type="button" id="btn-diagnose" class="btn btn-quiet">診断を実行</button>
+              </div>
+              <h3 class="sub-title">システム状態</h3>
+              <pre id="system-report" class="pre">「診断を実行」を押すと表示します。</pre>
+              <h3 class="sub-title">設定内容（表示のみ）</h3>
+              <p class="muted">変更は bello-orchestrator.config.json を編集して再起動してください。秘密情報は表示しません。</p>
+              <pre id="settings-report" class="pre"></pre>
+              <h3 class="sub-title">監査ログ</h3>
+              <div class="table-scroll">
+                <table id="audit-table">
+                  <thead><tr><th>日時</th><th>主体</th><th>操作</th><th>対象</th><th>結果</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+        </section>
+      </main>
+    </div>
+
+    <!-- スマートフォン: 下部 4 項目 -->
+    <nav class="bottom-nav" aria-label="メニュー">
+      <button type="button" class="bnav-item" data-view="home" aria-current="page">ホーム</button>
+      <button type="button" class="bnav-item" data-view="history">履歴</button>
+      <button type="button" class="bnav-item" data-view="add">追加</button>
+      <button type="button" class="bnav-item" data-view="settings">設定</button>
+    </nav>
 
     <script src="/app.js"></script>
   </body>

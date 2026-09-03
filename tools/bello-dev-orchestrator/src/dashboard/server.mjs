@@ -124,7 +124,12 @@ export class Dashboard {
         case "/api/todos":
           return this.#json(res, 200, { todos: this.repo.listTodos().map(publicTodo) });
         case "/api/documents":
-          return this.#json(res, 200, { documents: this.repo.listDocuments(100).map(publicDocument) });
+          return this.#json(res, 200, {
+            documents: this.repo.listDocuments(100).map(publicDocument),
+            // 取込済み文書から作られたタスクが、いつ実行されるかを見せるため
+            queue: this.#queueAhead(20),
+            inboxDir: this.paths.inboxDir,
+          });
         case "/api/audit":
           return this.#json(res, 200, { entries: this.repo.listAudit(300) });
         case "/api/system":
@@ -258,7 +263,9 @@ export class Dashboard {
   #home() {
     const counts = this.repo.countByState();
     const openTodos = this.repo.listTodos({ status: "open" }).map(publicTodo);
-    const current = this.orchestrator.currentTaskId ? this.repo.getTask(this.orchestrator.currentTaskId) : null;
+    // いま進んでいる作業。プロセス内のフラグを優先しつつ、無ければ DB から拾う。
+    // 審査待ちや再起動直後もホームで見えるようにするため（フラグはプロセス内にしか無い）。
+    const current = this.#currentTask();
     const nextTask = this.repo.claimNextTask();
     return {
       now: new Date().toISOString(),
@@ -274,7 +281,47 @@ export class Dashboard {
       openTodos,
       lastHeartbeat: current?.heartbeat_at ?? null,
       reviewProvider: this.#reviewProviderState(),
+      // ホーム画面が「見るだけで分かる」ようにするための追加情報
+      pipeline: current ? pipelineOf(current) : null,
+      recentFinished: this.repo
+        .listTasks({ limit: 200 })
+        .filter((t) => ["completed", "failed", "cancelled"].includes(t.state))
+        .sort((a, b) => String(b.finished_at ?? "").localeCompare(String(a.finished_at ?? "")))
+        .slice(0, 5)
+        .map(publicTask),
+      queueAhead: this.#queueAhead(),
     };
+  }
+
+  /**
+   * ホームに出す「いま進めている作業」。
+   *
+   * orchestrator.currentTaskId は実行中プロセスの中でしか立たないので、
+   * 審査待ちや再起動直後は空になる。ホームだけ見て状況が分かるように、
+   * DB 上の進行中状態からも拾う。工程の進んでいるものを優先する。
+   */
+  #currentTask() {
+    if (this.orchestrator.currentTaskId) {
+      const t = this.repo.getTask(this.orchestrator.currentTaskId);
+      if (t) return t;
+    }
+    const order = [STATES.RUNNING, STATES.VERIFYING, STATES.AWAITING_AI_REVIEW, STATES.PREFLIGHT];
+    for (const st of order) {
+      const found = this.repo.listTasks({ state: st, limit: 1 })[0];
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /**
+   * これから実行する順番。依存が未解決のものは後ろに回る実際の順序に合わせる。
+   */
+  #queueAhead(limit = 5) {
+    return this.repo
+      .listTasks({ state: STATES.QUEUED, limit: 100 })
+      .filter((t) => this.repo.unmetDependencies(t).length === 0)
+      .slice(0, limit)
+      .map(publicTask);
   }
 
   /** 画面に出す審査方式の状態。秘密は含めない。 */
@@ -403,6 +450,61 @@ export class Dashboard {
     });
     res.end(body);
   }
+}
+
+/**
+ * 「実装Claude → 審査Claude → 完了・次へ」のどこにいるかを返す。
+ * 画面側で状態名を解釈させず、サーバで 1 か所に決める。
+ */
+export function pipelineOf(task) {
+  const state = task?.state;
+  const steps = [
+    { key: "implement", label: "実装Claude" },
+    { key: "review", label: "審査Claude" },
+    { key: "done", label: "完了・次へ" },
+  ];
+  let activeIndex = 0;
+  let note = "";
+
+  if (["queued", "preflight", "retry_wait"].includes(state)) {
+    activeIndex = 0;
+    note = state === "retry_wait" ? "再試行を待っています" : "実装の準備をしています";
+  } else if (state === "running") {
+    activeIndex = 0;
+    note = "実装Claudeが作業しています";
+  } else if (state === "verifying") {
+    activeIndex = 1;
+    note = "変更内容と証拠を確認しています";
+  } else if (state === "awaiting_ai_review") {
+    activeIndex = 1;
+    note = "審査Claudeが確認しています";
+  } else if (state === "revision_required") {
+    activeIndex = 0;
+    note = "審査の指摘を受けて実装へ戻ります";
+  } else if (state === "completed") {
+    activeIndex = 2;
+    note = "完了しました";
+  } else if (["failed", "cancelled"].includes(state)) {
+    activeIndex = 2;
+    note = state === "failed" ? "失敗しました" : "取り消されました";
+  } else if (state === "awaiting_user") {
+    activeIndex = 1;
+    note = "ユーザー様の操作を待っています";
+  } else if (state === "paused") {
+    activeIndex = 1;
+    note = "一時停止しています";
+  }
+
+  return {
+    steps: steps.map((s, i) => ({
+      ...s,
+      status: i < activeIndex ? "done" : i === activeIndex ? "active" : "todo",
+    })),
+    activeIndex,
+    note,
+    revisionCount: task?.revision_count ?? 0,
+    maxRevisions: task?.max_revisions ?? 3,
+  };
 }
 
 // --------------------------------------------------------------- mappers
