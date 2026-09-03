@@ -168,5 +168,84 @@ Conversation へ相乗りさせなかった理由は §53:
 
 ## 回帰テスト
 
-`npm run verify:mercari-order-context`(59件、ネットワーク・AWS不要)。
+`npm run verify:mercari-order-context`(60件、ネットワーク・AWS不要)。
 ケースA〜Hをすべて含む。
+
+## Staging実測(2026-09-03 デプロイ後)
+
+### バックフィル(§59/§67)
+
+```
+npm run backfill:mercari-orders -- --limit 300
+  対象メール          : 300件
+  購入通知            : (Gmail内の「発送をお願いします」メール)
+  注文番号あり        : 148件
+  対応表へ登録        : 84件
+  うち在庫まで特定    : 43件
+  注文の実数          : 61件
+```
+
+登録後の `MercariOrderContext`:
+
+| 項目 | 件数 |
+| --- | --- |
+| 注文 | 61 |
+| 商品名あり | 61 |
+| 在庫まで特定(RESOLVED) | 43 |
+| 購入通知由来 | 32 |
+| うち問い合わせスレッドが1つも無い注文 | 23 |
+
+購入通知だけの注文が23件あり、そのどれにも Conversation は作られていない
+(§63)。バックフィル前後で Conversation / Message / NotificationDelivery /
+ReplyDraft はいずれも増えていない。
+
+### 新着3件の再処理(§57/§68)
+
+`npm run verify:mercari-order-live -- --reprocess`
+
+| Gmail ID | inquiryId | orderId | 処理前 | 処理後 |
+| --- | --- | --- | --- | --- |
+| 1a066b29d3ea7441 | 2JW3nvubFxXmjVXzDbNEkr | order_2JW2rNd9i7WdFrivCjhfpw | `inventoryStatus=NOT_FOUND` 商品名なし | `RESOLVED` 在庫 **72235169** |
+| 1a066dbcf343566c | 同上 | 同上 | 同上 | 同上 |
+| 1a066e472c5fc35c | 同上 | 同上 | 同上 | 同上 |
+
+- 同一orderIdの既存メール: **5件**(いずれも取引メッセージ。この注文の
+  購入通知はGmailに存在しない)。商品名は5件すべてから取得できる。
+- Inventory照合: `72235169`(0.96)/ 次点 `69878144`(0.70) —— 差が
+  十分あるので候補が割れない。
+- BASE照合: 該当なし(メールに商品URLが無いため手がかりが無い)。
+
+社内通知の「対象商品」欄:
+
+```
+送信済み(当時)          いま作った場合
+■ 対象商品              ■ 対象商品
+特定できませんでした     商品名：EDI登録済【9/3午前中】BoConcept Lugo / …
+                        在庫ID：72235169
+```
+
+既存の通知は再送も書き換えもしていない(`status=SENT` のものは
+`canSend` が送信前に止める)。会話Contextには
+`order.orderId` / `identifiedProduct` が保存され、以後の短いメッセージでも
+商品・注文を引き継げる状態になった。
+
+### 通常の取り込み(§70 ケースG)
+
+`npm run ingest:mercari-mail`
+
+```
+取得 30件 / 新規取り込み 1件 / 取り込み済み 29件 / 購入通知 0件 / エラー 0件
+```
+
+購入通知は `purchaseMailGmailIds` により「取り込み済み」として弾かれ、
+対応表も通知も増えない。新規1件は本物の商品問い合わせで、こちらは
+従来どおり会話が作られている(mercari会話 23 → 24)。
+
+## 既知の残件(この作業の範囲外)
+
+3通目「メールにて写真をお送りいたしました。」は、返信案の生成が
+`CLAIMS_UNSENT_ATTACHMENT` で3回とも不合格になり、返信案が作られない。
+お客様は**メルカリShopsの外(メール)で**写真を送っており、BELLO側の
+会話には添付が届いていないため、直前のコミット(d8e6fc5)の検査が
+「受け取っていない写真に言及している」として弾いている。商品Contextの
+復元とは別の問題なので、ここでは変更していない(社内通知は【要確認】)。
