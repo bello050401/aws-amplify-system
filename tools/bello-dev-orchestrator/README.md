@@ -33,6 +33,10 @@
 **AI が「完了しました」と書いただけでは合格になりません。** 証拠ゲート (`src/review/evidenceGate.mjs`) が
 テスト結果・コマンドの終了コード・Git の実際の差分を突合し、そこで落ちれば accept を採用しません。
 
+**タスクは専用の git worktree と専用ブランチで動きます。** 本体リポジトリの未コミット変更や、
+別セッションが同時に触っているファイルを巻き込みません。自動コミットは、そのタスクが作ったと
+確認できたファイルだけを 1 つずつ明示して stage します（`git add -A` は実行前に落とされます）。
+
 **既定の審査は「別の Claude Code セッション」が行います。追加の API 課金はありません。**
 審査担当は実装セッションを継承せず（別 session_id）、編集系ツールを CLI の権限で塞いであるため
 実装はできません。完了報告を鵜呑みにせず、自分で `git diff` とテストを実行して裏を取ります。
@@ -73,6 +77,7 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 status
 | 一時停止 / 再開 | ダッシュボードのホーム、またはタスクの停止ボタン |
 | 止める | `bello.ps1 stop`（実行中の Claude タスクの終了を待ちます） |
 | 調子を見る | `bello.ps1 diagnose` |
+| 作業場所と成果ブランチを見る | `node src\cli.mjs worktrees` |
 
 inbox フォルダの場所はダッシュボードの「設定」画面に表示されます（既定
 `%LOCALAPPDATA%\BELLO\dev-orchestrator\inbox`）。
@@ -88,7 +93,7 @@ inbox フォルダの場所はダッシュボードの「設定」画面に表�
 | `bello-orchestrator.config.json` | 非秘密の設定。**認証情報は絶対に書かない** |
 | `src/cli.mjs` | Node 側の入口 |
 | `src/app.mjs` | 単一起動・復旧・ループ・inbox 監視・ダッシュボードの組み立て |
-| `src/core/` | 状態機械 / Orchestrator / Git 安全策 / スキーマ検証 |
+| `src/core/` | 状態機械 / Orchestrator / Git 安全策 / worktree 分離 / Git ガード / スキーマ検証 |
 | `src/runner/` | Claude Runner と完了報告スキーマ、テスト用 fake |
 | `src/review/` | Claude審査 / OpenAI審査 / 手動審査、審査スキーマ、証拠ゲート、失敗分類、テスト用 fake |
 | `src/todo/` | ユーザー TODO |
@@ -145,6 +150,7 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 restart
 | [docs/ADR-0001-technology-choices.md](docs/ADR-0001-technology-choices.md) | 技術選定と実測根拠 |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | セットアップ、日常運用、TODO の処理、Word 投入、ログの見方 |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | 障害復旧手順と実測した復旧時間 |
+| [docs/GIT-ISOLATION.md](docs/GIT-ISOLATION.md) | **タスクごとの作業分離**。worktree、明示 stage、Git ガード、競合時の扱い |
 | [docs/SECURITY-BOUNDARIES.md](docs/SECURITY-BOUNDARIES.md) | 安全境界、秘密情報、自動化しない操作 |
 | [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) | テスト結果と既知の制約 |
 

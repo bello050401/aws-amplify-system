@@ -32,6 +32,22 @@
 
 ### 3.1 Git
 
+**タスクは専用の git worktree で動きます。** 本体リポジトリの未コミット変更は複製されないため、
+触ることも巻き込むこともできません。詳細は [GIT-ISOLATION.md](GIT-ISOLATION.md)。
+
+`src/core/gitGuard.mjs` が、次の git 実行を**実行前に落とします**（`runGit` が唯一の入口）。
+
+- `git add -A` / `--all` / `.` / `-u` / パス指定なしの `add`
+- `git commit -a` / `--all` / `--amend`
+- `git reset --hard` / `--merge` / `--keep`
+- `git checkout --` / `git restore --`
+- `git stash` / `git clean` / `git rebase` / `git filter-branch` / `git push`
+- `git worktree remove --force`
+
+同じ操作は実装 Claude の `--disallowedTools` でも塞いであります。
+**実装 Claude は `git add` も `git commit` もできません。**
+コミットはシステムが、変更したと確認できたファイルだけを明示指定して行います。
+
 `src/core/git.mjs` には次の関数が**存在しません**。実装しないことが安全策です。
 
 - `git reset --hard`
@@ -43,11 +59,14 @@
 自動コミットは次を必ず行います。
 
 1. 保護ブランチ (`git.protectedBranches`) では**コミットしない**
-2. 作業開始時点で既に変更されていたファイルは `git add` の対象に**しない**
-3. `.env` / `.env.local` / `*.pem` / `*.key` / `*.pfx` / `*.p12` を除外
-4. `*.db` / `*.sqlite` / `*.log` を除外
-5. inbox / processed / uploads 配下の `.docx` を除外
-6. コミットに失敗したらインデックスだけ戻す（作業ツリーには触らない）
+2. 許可リスト（そのタスクが作ったと確認できたファイル）に無いものは stage **しない**
+3. 作業開始時点で既に変更されていたファイルは `git add` の対象に**しない**
+4. stage 後に `git diff --cached --name-only` を読み直し、意図しないファイルが混ざっていれば外す。外せなければコミットを中止する
+5. `.env` / `.env.local` / `*.pem` / `*.key` / `*.pfx` / `*.p12` を除外
+6. `*.db` / `*.sqlite` / `*.log` を除外
+7. inbox / processed / uploads 配下の `.docx` を除外
+8. コミットに失敗したらインデックスだけ戻す（作業ツリーには触らない）
+9. 基準ブランチへ**自動マージしない**。同じファイルを別セッションも触っていれば緊急 TODO を出す
 
 push は行いません（`git.allowPush` は既定 false で、実装も呼び出していません）。
 

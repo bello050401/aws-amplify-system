@@ -176,6 +176,16 @@ Node、node:sqlite、リポジトリ、Claude Code、OpenAI 設定の有無、�
 > (Task Scheduler の Operational ログではイベント ID 322)。
 > 実行中を表す `0x41301`、正常終了の `0x0` と並んで、健全な値です。
 
+### 作業場所と成果ブランチ
+
+```powershell
+node src\cli.mjs worktrees        # タスクごとの作業場所・ブランチ・削除可否
+node src\cli.mjs prune-worktrees  # 安全確認を通ったものだけ削除（ブランチは残す）
+```
+
+成果は `bello/task/<taskId>` ブランチに入ります。**基準ブランチへの自動マージはしません。**
+取り込むかどうかはご自身の判断で、`git merge bello/task/<taskId>` を実行してください。
+
 ### 修復
 
 ```powershell
@@ -209,7 +219,10 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 repair
 | `claude.idleTimeoutSeconds` | 900 | 無出力の判定閾値（CPU と子プロセスも見てから止めます） |
 | `review.maxRevisions` | 3 | 自動修正の上限 |
 | `queue.maxAttempts` | 3 | 異常終了時の再試行上限 |
-| `git.autoCommit` | true | 証拠ゲート合格時に作業ブランチへコミット |
+| `git.isolation` | `worktree` | タスクごとに専用 worktree + 専用ブランチ。`in-place` は非推奨 |
+| `git.allowInPlaceFallback` | true | worktree を作れないとき同一ツリーへ落ちてよいか |
+| `git.removeWorktreeWhenSafe` | false | 既定では worktree を残します（証拠として保持） |
+| `git.autoCommit` | true | 証拠ゲート合格時に**専用ブランチ**へコミット |
 | `git.protectedBranches` | main / master / production | ここでは絶対に自動コミットしません |
 | `dashboard.lanAccess` | false | LAN 公開。有効にするには認証トークン必須 |
 

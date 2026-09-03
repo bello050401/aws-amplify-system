@@ -613,13 +613,18 @@ export class Orchestrator {
         logger: this.logger,
       });
       if (created.ok) {
+        // 再利用のときは、最初に作ったときの基準コミットを引き継ぐ。
+        // 取り直すと、その間に本体へ入った他人のコミットまで
+        // 「このタスクの変更」に見えてしまう（実測で誤検知 4 件が出た）。
+        const baseCommit = created.reused && task.base_commit ? task.base_commit : created.baseCommit;
+        const baseBranch = created.reused && task.base_branch ? task.base_branch : created.baseBranch;
         return {
           ok: true,
           isolation: "worktree",
           workDir: created.path,
           branch: created.branch,
-          baseCommit: created.baseCommit,
-          baseBranch: created.baseBranch,
+          baseCommit,
+          baseBranch,
           reused: created.reused,
         };
       }

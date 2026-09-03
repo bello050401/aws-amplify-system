@@ -231,6 +231,87 @@ async function cmdAddTask(loaded, args) {
   return EXIT.OK;
 }
 
+/**
+ * タスクごとの作業場所を一覧する。証拠がどこにあるかを人が追えるようにする。
+ */
+async function cmdWorktrees(loaded) {
+  const { listWorktrees, canRemoveWorktree } = await import("./core/worktree.mjs");
+
+  say("=== 登録されている worktree ===");
+  for (const w of listWorktrees(loaded.config.repoPath)) {
+    const kind = w.path === loaded.config.repoPath ? "（本体リポジトリ）" : "";
+    say(`  ${w.branch ?? "(detached)"}`.padEnd(42) + ` ${w.path} ${kind}`);
+  }
+
+  if (!fs.existsSync(loaded.paths.dbFile)) return EXIT.OK;
+  const store = await Store.open(loaded.paths.dbFile);
+  const repo = new Repo(store);
+
+  say("");
+  say("=== タスクごとの作業場所 ===");
+  let shown = 0;
+  for (const task of repo.listTasks({ limit: 200 })) {
+    if (!task.worktree_path) continue;
+    shown += 1;
+    const exists = fs.existsSync(task.worktree_path);
+    const check = exists
+      ? canRemoveWorktree({
+          repoPath: task.repo_path,
+          worktreePath: task.worktree_path,
+          branch: task.worktree_branch,
+          baseBranch: task.base_branch,
+        })
+      : { removable: false, reasons: ["フォルダがありません"] };
+    say(`  ${task.id}  [${(STATE_LABELS_JA[task.state] ?? task.state)}] ${task.title.slice(0, 40)}`);
+    say(`      ブランチ  : ${task.worktree_branch}`);
+    say(`      作業場所  : ${task.worktree_path}${exists ? "" : "（既にありません）"}`);
+    say(`      基準      : ${task.base_branch ?? "-"} @ ${String(task.base_commit ?? "-").slice(0, 10)}`);
+    say(`      削除可否  : ${check.removable ? "安全に削除できます" : "残します — " + check.reasons.join(" / ")}`);
+  }
+  if (shown === 0) say("  （専用 worktree を使ったタスクはまだありません）");
+  say("");
+  say("安全に削除できるものだけを消すには: node src/cli.mjs prune-worktrees");
+  store.close();
+  return EXIT.OK;
+}
+
+/** 安全確認を通った worktree だけを消す。ブランチは証拠として残す。 */
+async function cmdPruneWorktrees(loaded) {
+  const { removeWorktreeIfSafe, pruneWorktreeRegistrations } = await import("./core/worktree.mjs");
+  if (!fs.existsSync(loaded.paths.dbFile)) {
+    say("まだタスクがありません。");
+    return EXIT.OK;
+  }
+  const store = await Store.open(loaded.paths.dbFile);
+  const repo = new Repo(store);
+
+  let removed = 0;
+  let kept = 0;
+  for (const task of repo.listTasks({ limit: 200 })) {
+    if (!task.worktree_path || !fs.existsSync(task.worktree_path)) continue;
+    const result = removeWorktreeIfSafe({
+      repoPath: task.repo_path,
+      worktreePath: task.worktree_path,
+      branch: task.worktree_branch,
+      baseBranch: task.base_branch,
+      logger: null,
+    });
+    if (result.removed) {
+      say(`  削除: ${task.worktree_path}（ブランチ ${task.worktree_branch} は残します）`);
+      repo.audit("user", "worktree.removed", task.id, task.worktree_branch, null);
+      removed += 1;
+    } else {
+      say(`  残す: ${task.worktree_path} — ${result.reasons.join(" / ")}`);
+      kept += 1;
+    }
+  }
+  pruneWorktreeRegistrations(loaded.config.repoPath);
+  say("");
+  say(`削除 ${removed} 件 / 残した ${kept} 件。ブランチは 1 つも消していません。`);
+  store.close();
+  return EXIT.OK;
+}
+
 async function cmdListTasks(loaded) {
   if (!fs.existsSync(loaded.paths.dbFile)) {
     say("まだタスクはありません。");
@@ -290,6 +371,8 @@ async function main() {
     say('  add-task --title "件名" --file 指示.txt [--priority 50]');
     say("  list-tasks");
     say("  ingest     inbox の .docx を今すぐ取り込む");
+    say("  worktrees        タスクごとの作業場所とブランチを一覧する");
+    say("  prune-worktrees  安全確認を通った worktree だけを削除する（ブランチは残す）");
     return EXIT.OK;
   }
 
@@ -319,6 +402,10 @@ async function main() {
       return cmdListTasks(loaded);
     case "ingest":
       return cmdIngest(loaded);
+    case "worktrees":
+      return cmdWorktrees(loaded);
+    case "prune-worktrees":
+      return cmdPruneWorktrees(loaded);
     default:
       warn(`不明なコマンドです: ${command}`);
       warn("使い方は: node src/cli.mjs help");

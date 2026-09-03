@@ -44,7 +44,7 @@ Scheduled Task \BELLO\BelloDevOrchestrator
 
 | テーブル | 内容 |
 |---|---|
-| `tasks` | 開発タスク。冪等性キーに UNIQUE 制約があり、同じ指示は二重登録されません |
+| `tasks` | 開発タスク。冪等性キーに UNIQUE 制約。作業場所 (worktree_path / worktree_branch / base_commit / isolation) も持ちます |
 | `task_state_history` | すべての状態遷移（誰が・なぜ） |
 | `reports` | Claude の構造化完了報告（秘密除去済み） |
 | `reviews` | 審査結果、モデル名、プロンプト版、使用量 |
@@ -89,6 +89,25 @@ completed ──► (終端。ここからは戻りません)
    **証拠ゲートが落ちていれば、AI が accept でも人が「合格」と打っても accept にしません。**
    revision_required なら `nextClaudeInstruction` を次の実装指示に載せて自動で再実行します（最大 3 回）。
 
+## 5.4 作業場所の分離（既定の worktree 方式）
+
+```
+本体リポジトリ                     ← ユーザー / 別セッション / Remote Control が使う。触らない
+  └─ git worktree add
+       worktrees/<taskId>          ← 実装 Claude と 審査 Claude はここだけで動く
+         branch: bello/task/<taskId>
+         base:   タスク開始時の HEAD
+```
+
+worktree は基準コミットのきれいな複製から始まる。したがって
+**「そこで dirty なファイル = このタスクが作ったもの」** が構造的に保証される。
+開始前の未コミット変更は複製されないので、触ることも巻き込むこともできない。
+
+再実行で worktree を再利用するときは、最初の基準コミットを引き継ぐ。取り直すと、
+その間に本体へ入った他人のコミットまで「このタスクの変更」に見えてしまう。
+
+詳細は [GIT-ISOLATION.md](GIT-ISOLATION.md)。
+
 ## 5.5 審査担当の分離（既定の Claude審査）
 
 ```
@@ -117,6 +136,8 @@ Orchestrator
 | crash-loop 停止 | 監督プロセス（10 分に 5 回） | 無限再起動を止め、30 分クールダウン |
 | 低確信度の保留 | `review.minConfidenceToAccept` | 自信が無い合格を人へ回す |
 | 審査者の権限分離 | `claudeReview.mjs` の拒否リスト | 審査担当が「自分で直して合格」にできない |
+| 作業場所の分離 | `worktree.mjs` | 他人のファイルがそもそも視界に入らない |
+| Git ガード | `gitGuard.mjs` | `git add -A` / `commit -a` / `reset --hard` / `stash` を実行前に落とす |
 | 失敗の種類分け | `review/errors.mjs` | 利用上限・認証切れは初回から人へ、一時障害は待って再試行 |
 | 予算上限 | `claude.maxBudgetUsd` | 1 タスクの API 費用に上限 |
 

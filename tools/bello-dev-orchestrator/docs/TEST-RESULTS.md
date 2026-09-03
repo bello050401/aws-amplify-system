@@ -10,13 +10,13 @@ Node.js v24.20.0 / npm 11.19.0 / git 2.55.0 / Claude Code 2.1.259
 
 ```
 node --test "test/*.test.mjs"
-→ tests 71 / pass 71 / fail 0   (約 15.1 秒)
-   内訳: unit 40 件、integration 31 件
+→ tests 83 / pass 83 / fail 0
+   内訳: unit 42 件、integration 41 件
 ```
 
 実 Claude・実 OpenAI は呼びません。`FakeClaudeRunner` と `FakeReviewEngine` を使います。
 
-### 単体テスト (40 件) が守っていること
+### 単体テスト (42 件) が守っていること
 
 | 対象 | 検証内容 |
 |---|---|
@@ -35,7 +35,7 @@ node --test "test/*.test.mjs"
 | 依存関係 | 未解決の依存があるタスクは優先度が高くても選ばない |
 | Claude Runner | 引数の組み立て（許可リスト / 拒否リスト / resume） |
 
-### 統合テスト (31 件) — 指示書 §14-2 の 10 シナリオ + 追加
+### 統合テスト (41 件) — 指示書 §14-2 の 10 シナリオ + 審査方式 + 作業分離
 
 | # | シナリオ | 結果 |
 |---|---|---|
@@ -266,6 +266,92 @@ changes: []   git.commitCreated: false
 ```
 ---
 
+## 4.6 Git の作業分離の実機 E2E（並行セッションあり）
+
+測定日: 2026-09-03。**別の Claude Code セッションが同じリポジトリで実際に作業している最中**に実施しました。
+作り物の状況ではなく、本当に競合する相手がいる状態での測定です。
+
+タスク: 「docs/WORKTREE-E2E.md を新規作成する」（`task_5b2967c1fbb7dad7ee`）
+
+### 実行の流れ
+
+```
+06:07:43  running                実装 Claude（専用 worktree 内）
+06:10:31  awaiting_ai_review
+06:12:27  revision_required      Claude 審査 reviewer=e5b3b0a0 conf=0.85
+06:12:27  queued                 修正指示で再実行（worktree を再利用）
+06:14:52  awaiting_ai_review
+06:17:06  completed              Claude 審査 reviewer=702674f1 conf=0.92
+```
+
+1 回目の審査は、成果物そのものは要件を満たしていると自分で確認したうえで、
+**完了報告が中身のないプレースホルダー（summary が "test"、tests が空）である**ことを見抜いて
+差し戻しました。自己申告を信用しない仕組みが実際に働いています。
+
+### 分離の実測結果
+
+| 検証 | 結果 |
+|---|---|
+| 作業場所 | `%LOCALAPPDATA%\BELLO\dev-orchestrator\worktrees\task_5b2967c1fbb7dad7ee`（リポジトリの外） |
+| 専用ブランチ | `bello/task/task_5b2967c1fbb7dad7ee` |
+| **本体ブランチへの自動コミット** | **0 件**（HEAD を動かしたのは別セッションの 2 コミットだけ） |
+| **自動コミットに入ったファイル** | **1 件のみ**: `tools/bello-dev-orchestrator/docs/WORKTREE-E2E.md`（`skipped: []`） |
+| 別セッションのファイルの混入 | **なし**（`verify-line-notify-live.ts` も作業中の `cli.mjs` も入っていない） |
+| 開始前からあった未コミット変更 | **1 バイトも変わらず**（内容の SHA-256 が一致） |
+| `git stash` の使用 | **0 回**（stash list は空のまま） |
+| worktree の削除 | されず。「基準ブランチに取り込まれていないコミットが 1 件」として保持 |
+
+実行中、別セッションは本体へ 2 回コミットし、うち 1 つは
+`revert(tools): 別セッション作業中のファイルを私のコミットから戻す` というものでした。
+**相手が実際に巻き込みを起こしている状況でも、本システム側の成果は 1 ファイルに収まっています。**
+
+### 検証コマンドと出力
+
+```
+$ git log --oneline 963339d..bello/task/task_5b2967c1fbb7dad7ee
+80dddd6 chore(orchestrator): 作業分離の実機E2E: WORKTREE-E2E.md を作る
+
+$ git diff --name-only 963339d..bello/task/task_5b2967c1fbb7dad7ee
+tools/bello-dev-orchestrator/docs/WORKTREE-E2E.md
+
+auto_commit チェックポイント:
+{"committed":true,"commit":"80dddd6…","files":["tools/bello-dev-orchestrator/docs/WORKTREE-E2E.md"],"skipped":[]}
+```
+
+### この E2E で見つけて直した不具合
+
+再実行で worktree を再利用する際、基準コミットを本体の現在 HEAD から取り直していました。
+その結果、間に別セッションが入れたコミットまで「このタスクの変更」に見え、
+**競合を 4 件誤検知**して不要な TODO を作っていました（コミット内容自体は 1 ファイルのままで、
+混入は起きていません）。再利用時は最初の基準コミットを引き継ぐよう直し、回帰テストを追加しました。
+
+---
+
+## 4.7 作業分離の自動テスト（統合 9 件）
+
+| # | 検証 | 結果 |
+|---|---|---|
+| ガード1 | `git add -A` / `.` / `-u` / パス無し、`commit -a` / `--amend`、`reset --hard`、`checkout --`、`stash`、`clean`、`rebase`、`push`、`worktree remove --force` を実行前に落とす | pass |
+| ガード2 | `runGit` 経由でも禁止コマンドが実行されない | pass |
+| 分離1 | タスクが専用 worktree と専用ブランチで動き、場所がリポジトリの外である | pass |
+| 分離2 | **並行 2 タスク**が互いのファイルを見ない（作業場所・ブランチ・変更記録がすべて別） | pass |
+| 分離3 | **開始前 dirty** な本体の未コミット変更に一切触れない（status も内容も不変） | pass |
+| 分離4 | **同一ファイル競合**を検知し、自動マージせず緊急 TODO を出す | pass |
+| 分離5 | **異常終了・復旧**で worktree もブランチも消えず、再実行で同じ場所を引き継ぐ | pass |
+| 分離6 | worktree の削除は安全確認（未コミットなし・マージ済み）を通ったときだけ | pass |
+| 分離7 | 自動コミットが証明できるファイルだけを stage し、`.env` と他人のファイルを外す | pass |
+| 分離8 | worktree 再利用時に基準コミットを取り直さない（誤検知しない） | pass |
+| 単体 | porcelain の先頭空白行でファイル名を壊さない | pass |
+
+### この作業で見つけた既存バグ
+
+`runGit` が stdout を `trim()` していたため、`git status --porcelain` の 1 行目が
+` M file`（先頭が空白）のとき、`slice(3)` が 1 文字ずれて **ファイル名が壊れていました**
+（`shared.txt` → `hared.txt`）。未追跡ファイルは `?? file` で先頭が空白でないため、
+これまで表面化していませんでした。ユーザーの変更ファイルを取り違える可能性のある不具合です。
+porcelain の解析を `porcelainPath` / `porcelainFiles` の 1 箇所へ集約して直し、回帰テストを追加しました。
+---
+
 ## 5. リポジトリ全体の品質ゲート
 
 | コマンド | 結果 |
@@ -294,6 +380,9 @@ changes: []   git.commitCreated: false
 | 9 | ダッシュボードに認証が無い（localhost 時） | 同一 PC の他ユーザーからは見える | LAN 公開時のみトークン必須。既定は localhost 限定 |
 | 10 | 審査担当も Claude Code の利用枠を使う | 実装と審査で枠の消費が増える | 利用上限に達したら状態を保存して TODO を出し、回復後に自動で進む。急ぐ場合は手動審査へ切替 |
 | 11 | 審査担当が読めるのは対象リポジトリ内のみ | 外部仕様書などは参照できない | 受入条件は開発指示に書く。不明なら審査担当は pause_for_user_review にする |
+| 12 | 成果は専用ブランチに残り、自動マージしない | 取り込むには人の操作が要る | 意図的な仕様。`git merge bello/task/<taskId>` で取り込む |
+| 13 | worktree は既定で消さない | ディスクを消費する | `node src/cli.mjs prune-worktrees` で安全なものだけ削除できる |
+| 14 | worktree は基準コミットの複製なので、本体の未コミット変更を前提にした作業はできない | 未コミット状態に依存するタスクは失敗する | 依存する変更は先にコミットしてからタスクを投入する |
 
 ---
 
@@ -317,3 +406,5 @@ changes: []   git.commitCreated: false
 | 12 | `repo.mjs` に生の NUL バイトが混入し Git がバイナリ扱い | コミット時の numstat | 同じ文字のエスケープ表記へ置換（ハッシュ結果は不変） |
 | 13 | 審査結果に記録するモデル名が補助モデルになる | Claude審査の実機 E2E | 出力トークンが最多のモデルを主モデルとして記録 |
 | 14 | TODO 完了 API が手動審査の判定結果を返さない | 修正ループの実機 E2E | 応答に `manualReview` を追加 |
+| 15 | `git status --porcelain` の先頭空白行でファイル名が 1 文字欠ける | 作業分離の統合テスト | porcelain 解析を 1 箇所へ集約 |
+| 16 | worktree 再利用時に基準コミットを取り直し、他人のコミットを誤検知 | 作業分離の実機 E2E | 最初の基準コミットを引き継ぐ |

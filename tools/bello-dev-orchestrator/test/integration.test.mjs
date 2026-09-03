@@ -1272,3 +1272,58 @@ test("分離7: 自動コミットは証明できるファイルだけを stage �
     h.cleanup();
   }
 });
+
+test("分離8: worktree を再利用しても基準コミットを取り直さない（他人のコミットを誤検知しない）", async () => {
+  const h = await harnessWithRepo();
+  try {
+    spawnSync("git", ["checkout", "-q", "-b", "work"], { cwd: h.repoPath });
+    const task = addTask(h);
+
+    // 1 回目: 実行して審査待ちで止める
+    h.runner.setDefault(committingRunner(h, task));
+    h.reviewEngine.setDefault({ kind: "unavailable", reason: "transient", message: "あとで" });
+    await h.orchestrator.tick();
+
+    const first = h.repo.getTask(task.id);
+    const originalBase = first.base_commit;
+    assert.ok(originalBase);
+
+    // その間に別セッションが本体へコミットする
+    fs.writeFileSync(path.join(h.repoPath, "other-session.txt"), "別セッションの成果\n");
+    spawnSync("git", ["add", "--", "other-session.txt"], { cwd: h.repoPath });
+    spawnSync("git", ["commit", "-q", "-m", "other session commit"], { cwd: h.repoPath });
+    const movedHead = spawnSync("git", ["rev-parse", "HEAD"], { cwd: h.repoPath, encoding: "utf8" }).stdout.trim();
+    assert.notEqual(movedHead, originalBase, "本体の HEAD が動いた状況を作れている");
+
+    // 2 回目: 修正指示で再実行（worktree を再利用する）
+    h.repo.updateTask(task.id, { retry_after: null });
+    h.repo.setState(task.id, STATES.REVISION_REQUIRED, "試験", "review_engine");
+    h.repo.setState(task.id, STATES.QUEUED, "修正指示で再実行", "review_engine");
+    h.reviewEngine.setDefault({ kind: "review", review: makeReview("accept_and_continue") });
+    await h.orchestrator.tick();
+
+    const second = h.repo.getTask(task.id);
+    assert.equal(second.base_commit, originalBase, "基準コミットを取り直していない");
+
+    // 別セッションのファイルが「このタスクの変更」に混ざっていない
+    assert.ok(
+      !second.changedFiles.includes("other-session.txt"),
+      `別セッションのファイルが混入: ${JSON.stringify(second.changedFiles)}`,
+    );
+
+    // 誤検知の競合 TODO も出ていない
+    const cp = h.repo.store.get(
+      "SELECT data FROM checkpoints WHERE task_id=? AND phase='conflict_check' ORDER BY id DESC LIMIT 1",
+      [task.id],
+    );
+    const conflict = JSON.parse(cp.data);
+    assert.equal(conflict.conflicts.length, 0, `誤検知: ${JSON.stringify(conflict.conflicts)}`);
+    assert.equal(
+      h.repo.listTodos({ status: "open" }).filter((t) => t.kind === "merge_conflict").length,
+      0,
+      "誤検知の競合 TODO を出さない",
+    );
+  } finally {
+    h.cleanup();
+  }
+});
