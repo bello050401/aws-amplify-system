@@ -22,6 +22,7 @@
  */
 import { INQUIRY_INTENT_LABEL, type InquiryIntent, type ReplyEvidence } from "@/lib/inquiry/types";
 import { MESSAGE_CHANNEL_LABEL, type MessageChannel } from "@/lib/messaging/types";
+import { SHIPPING_RANK_SOURCE_LABEL } from "@/lib/shipping/rank";
 
 /** 値が無いときの表記。§7-2。 */
 const UNKNOWN = "不明";
@@ -152,6 +153,24 @@ function stockRowLabel(name: string): string {
 }
 
 /**
+ * 在庫が特定できていないときの「■ 商品情報」。
+ *
+ * 在庫が無いからといって何も出さないのは、持っている情報を捨てている。
+ * BASEから取れる販売価格は出し、**在庫にしか無い項目(仕入価格・販売開始日・
+ * 在庫期間)は「不明」と明示する**(2026-09-03 利用者指示)。推測はしない。
+ */
+function baseOnlyFacts(evidence: ReplyEvidence | null | undefined): string | null {
+  const base = (evidence?.baseProducts ?? [])[0] ?? null;
+  if (!base) return null;
+  return section("商品情報", [
+    `販売価格：${yen(base.price)}（BASEの掲載価格）`,
+    `仕入れ価格：${UNKNOWN}（販売中の在庫が特定できていません）`,
+    `販売開始日：${UNKNOWN}（同上）`,
+    `在庫期間：${UNKNOWN}（同上）`,
+  ]);
+}
+
+/**
  * ■対象商品 の中身。
  *
  * 【1件に決めつけない】在庫を1件に絞れていないときに候補の1つを載せると、
@@ -208,16 +227,29 @@ function productLines(evidence: ReplyEvidence | null | undefined): (string | nul
   }
 
   // 販売ページは確実。書けるものは書く。
+  //
+  // 【状態を分けて出す】BASE商品と在庫は別の特定対象(2026-09-03 利用者指示)。
+  // 「対象商品を特定できませんでした」に潰すと、手元にある商品名・出品価格・
+  // サイズ・配送ランクまで捨てることになる。BASEは特定済みと明示し、
+  // 未確定なのは在庫だけであることが読めるようにする。
   const ids = candidates
     .map((c) => c.displayInventoryId)
     .filter((v): v is string => Boolean(v));
+  const syncNote =
+    evidence?.inventorySyncSuspected === true
+      ? "　（ZAICO同期の未反映の可能性があるため、販売中以外からも候補を探しました）"
+      : evidence?.onSaleCategoryResolved === false
+        ? "　（在庫カテゴリ「販売中」を解決できなかったため、在庫の照合を行っていません）"
+        : "";
   return [
-    `販売ページ：${base.title}`,
+    "BASE商品：特定できました",
+    `商品名：${base.title}`,
+    `BASE商品ID：${base.baseItemId}`,
     base.price == null ? null : `出品価格：${yen(base.price)}`,
     base.itemUrl ? `URL：${base.itemUrl}` : null,
     ids.length > 0
-      ? `在庫：特定できていません（候補${candidates.length}件：${ids.join(" / ")}）`
-      : "在庫：特定できていません",
+      ? `在庫：特定できていません（候補${candidates.length}件：${ids.join(" / ")}）${syncNote}`
+      : `在庫：該当する在庫が見つかりません${syncNote}`,
   ];
 }
 
@@ -263,11 +295,24 @@ export function buildSummaryMessage(input: NotificationInput): string {
           `仕入れ価格：${yen(product.purchasePriceYen)}`,
           `販売開始日：${jaDate(product.saleStartedAt)}`,
           `在庫期間：${ageDays == null ? UNKNOWN : `${ageDays}日`}`,
+          // 統合した行で値が違う項目は出せない。なぜ出せないかを書く ——
+          // 「不明」とだけ書くと、取得に失敗したのか行ごとに違うのか
+          // 区別できない(2026-09-03 利用者指示)。
+          (product.ambiguousAcrossRows ?? []).length > 0
+            ? `※ ${(product.ambiguousAcrossRows ?? []).join("・")}は在庫の行ごとに異なるため、商品全体の値としては出していません。`
+            : null,
         ])
-      : null,
+      : baseOnlyFacts(input.evidence),
     section("配送情報", [
       `配送先：${shipping?.destinationPrefecture ?? UNKNOWN}`,
+      // ランクと出所も出す。同じ「Cランク」でも、BELLOが商品説明に明記した
+      // ものと3辺合計から推定したものでは、担当者が確認すべきことが違う。
+      shipping?.rank
+        ? `配送ランク：${shipping.rank}${shipping.rankSource ? `（${SHIPPING_RANK_SOURCE_LABEL[shipping.rankSource]}）` : ""}`
+        : null,
       `想定送料：${yen(shipping?.feeYen ?? null)}`,
+      // 金額を出せなかった理由・参考値である旨は隠さない。
+      shipping?.note ? `　${shipping.note}` : null,
     ]),
     // §9 取引メッセージなら注文番号を1通目に出す。担当者が管理画面で
     // 注文を引くときにそのまま使える。

@@ -310,6 +310,7 @@ export function mergeSameProduct(scored: ProductMatch[]): ProductMatch[] {
       // 統合したことを理由にも残す。担当者が「なぜ1件になったか」を追える。
       reasons: [...head.reasons, `同一商品の在庫${sorted.length}行を1件にまとめました`],
       mergedRows: sorted.map((m) => ({
+        inventoryId: m.inventoryId,
         displayInventoryId: m.displayInventoryId,
         name: m.name,
         quantity: m.quantity ?? null,

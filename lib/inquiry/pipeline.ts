@@ -322,6 +322,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     // 【要確認】として扱う。
     customerAlreadySentUrl:
       resolution.references.urls.some((u) => isBaseUrl(u)) || incomingContext.identifiedProduct.baseItemId != null,
+    // BASE商品が特定できていれば、どの商品かは分かっている。
+    // 在庫との紐付けが未確定なだけなので、顧客へは尋ねない。
+    baseProductResolved: resolution.baseProducts.length > 0,
   });
 
   const unresolved: UnresolvedFact[] = [];
@@ -333,6 +336,48 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   let dimensionTexts: string[] = [];
 
   const inventory = resolution.resolved ? await getInventoryDetail(resolution.resolved.inventoryId) : null;
+
+  // ── 統合した在庫行のうち、代表以外も読む(2026-09-03 利用者指示) ──
+  //
+  // 数量は合算してよいが、**仕入価格・販売開始日・状態は行ごとに違いうる**。
+  // 傷の有無で分けた行は仕入れた時期も値段も別なので、代表1件の値を商品
+  // 全体の値として出すと、担当者はそれを「この商品の原価」と読んでしまう。
+  // 食い違う項目は出さずに、食い違っていること自体を伝える。
+  const mergedRows = resolution.resolved?.mergedRows ?? [];
+  const siblingInventories =
+    mergedRows.length > 1
+      ? (
+          await Promise.all(
+            mergedRows
+              .filter((r) => r.inventoryId !== resolution.resolved?.inventoryId)
+              .map((r) => getInventoryDetail(r.inventoryId)),
+          )
+        ).filter((v): v is NonNullable<typeof v> => v != null)
+      : [];
+
+  // ── 統合した行で食い違う項目は、商品全体の値として使わない ────────
+  //
+  // 数量は合算してよい(同じ商品の在庫数)。しかし仕入価格・販売開始日・
+  // 状態は行ごとに違いうるので、代表1件の値を商品全体の値にすると
+  // 担当者はそれを「この商品の原価」と読んでしまう。値下げ判断に直結する
+  // ため、食い違う項目は出さずに食い違っていること自体を伝える。
+  const ambiguousAcrossRows: string[] = [];
+  const siblingStatusNames: (string | null)[] = await Promise.all(
+    siblingInventories.map(async (s) => (await resolveMasterLabels(s.categoryId, s.statusId))[1]),
+  );
+  function agreed<T>(
+    label: string,
+    head: T,
+    pick: (sibling: (typeof siblingInventories)[number]) => T,
+    precomputed?: (T | null)[],
+  ): T | null {
+    if (siblingInventories.length === 0) return head;
+    const others = precomputed ?? siblingInventories.map(pick);
+    const same = others.every((v) => v === head);
+    if (same) return head;
+    ambiguousAcrossRows.push(label);
+    return null;
+  }
   // 対象商品カード。**一意に特定できたときだけ**組み立てる —— 候補の1つを
   // 載せると、担当者がそれを確定した商品だと思い込む
   // (AMBIGUOUS のとき resolution.resolved は null なので、ここは通らない)。
@@ -374,15 +419,21 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       // 交渉のために作ったカードが肝心の場面で「—」になる
       // (Staging実測: plannedSalePrice しか無い在庫が265件)。
       // 値下げ判定側(下の unitSalePriceYen)と同じ選び方に揃える。
-      salePriceYen: inventory.salePrice ?? inventory.plannedSalePrice ?? null,
+      salePriceYen: agreed(
+        "販売価格",
+        inventory.salePrice ?? inventory.plannedSalePrice ?? null,
+        (s) => s.salePrice ?? s.plannedSalePrice ?? null,
+      ),
       salePriceSource:
         inventory.salePrice != null ? "salePrice" : inventory.plannedSalePrice != null ? "plannedSalePrice" : null,
-      purchasePriceYen: inventory.purchasePrice ?? null,
-      saleStartedAt: inventory.saleStartDate ?? null,
-      statusName,
+      // 仕入価格・販売開始日・状態は行ごとに違いうる。食い違うなら出さない。
+      purchasePriceYen: agreed("仕入れ価格", inventory.purchasePrice ?? null, (s) => s.purchasePrice ?? null),
+      saleStartedAt: agreed("販売開始日", inventory.saleStartDate ?? null, (s) => s.saleStartDate ?? null),
+      statusName: agreed("在庫ステータス", statusName, () => null, siblingStatusNames),
       quantity: inventory.quantity ?? null,
       // 同一商品としてまとめた行の内訳。まとめていなければ空。
       stockRows: top.mergedRows ?? [],
+      ambiguousAcrossRows,
       totalQuantity: top.mergedRows
         ? top.mergedRows.reduce<number | null>(
             // 1行でも数量不明があれば合計を出さない。足りない数を
@@ -558,6 +609,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
 
   const mergedDimensions = shippingDimensionsOf(productContext);
 
+
+
   let shipping: ShippingEvidence | null = null;
   if (intents.includes("SHIPPING") || negotiation.isNegotiation) {
     shipping = await resolveShipping({
@@ -690,6 +743,16 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
         }
       : null,
     productStatus: resolution.status,
+    // BASE商品の状態は在庫と分けて持つ。販売中の在庫が0件でも、
+    // 顧客が送ってきたURLからBASE商品自体は確実に特定できている。
+    baseProductStatus: resolution.baseProducts.length > 0
+      ? "RESOLVED"
+      : customerSentBaseItemId
+        ? "NOT_FOUND"
+        : "NOT_REFERENCED",
+    inventorySyncSuspected: resolution.inventorySyncSuspected,
+    zaicoLastSyncedAt: resolution.zaicoLastSyncedAt,
+    onSaleCategoryResolved: resolution.onSaleCategoryResolved,
     productCandidates: resolution.candidates,
     inventoryFieldsUsed,
     knowledgeDocuments: knowledgeHits.map((k) => ({ id: k.id, title: k.title, fileName: k.fileName })),
@@ -856,8 +919,13 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     context: request.additionalContext ?? null,
     // §4 顧客が商品を指し示せない経路(メール由来)では、商品特定の失敗を
     // 顧客への質問に変換させない。urlRequest の判定と同じ条件を使う。
+    // §4 商品特定の失敗を顧客への質問に変換しない。
+    // BASE商品が特定できている場合も、URLが本文にある場合も尋ねない。
     customerCanIdentifyProduct:
-      request.channel !== "MERCARI_SHOPS" && !resolution.references.urls.some((u) => isBaseUrl(u)),
+      request.channel !== "MERCARI_SHOPS" &&
+      !resolution.references.urls.some((u) => isBaseUrl(u)) &&
+      resolution.baseProducts.length === 0 &&
+      incomingContext.identifiedProduct.baseItemId == null,
     // §23 会話ですでに分かっていること。**今回の更新を反映した後の文脈**を
     // 使う —— 「埼玉です」への返信を作る時点で、配送先はもう分かっている。
     knownFacts: knownFacts(workingContext),

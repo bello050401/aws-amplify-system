@@ -82,7 +82,7 @@ export interface ProductMatch {
    *
    * 統合していない(1行だけの)場合は undefined。
    */
-  mergedRows?: { displayInventoryId: string; name: string; quantity: number | null }[];
+  mergedRows?: { inventoryId: string; displayInventoryId: string; name: string; quantity: number | null }[];
 }
 
 /**
@@ -216,7 +216,34 @@ export interface NegotiationStaffCard {
 /** §33 参照情報。管理画面にだけ出す(顧客へは送らない)。 */
 export interface ReplyEvidence {
   product: { inventoryId: string; displayInventoryId: string; name: string; confidence: number } | null;
+  /**
+   * **在庫(Inventory)の**特定状態。BASE商品の特定状態とは別物。
+   *
+   * 2026-09-03 利用者指示: 販売中Inventoryが0件でも、BASE商品自体は
+   * URLから確実に特定できている。両者を1つの状態に潰すと
+   * 「対象商品を特定できませんでした」となり、実際には持っている
+   * 商品名・価格・サイズ・配送ランクまで捨ててしまう。
+   */
   productStatus: ProductResolutionStatus;
+  /**
+   * **BASE商品の**特定状態。在庫が見つからなくても RESOLVED になりうる。
+   */
+  baseProductStatus?: ProductResolutionStatus;
+  /**
+   * ZAICO同期の未反映が疑われる状態で在庫を拾ったか。
+   *
+   * 「販売中カテゴリに無い」ことだけを理由に候補を0件にせず、BASE商品名の
+   * 強い一致がある場合だけ範囲を広げて拾う。拾ったことは隠さない ——
+   * 同期不具合をフォールバックで覆い隠さないため(利用者指示)。
+   */
+  inventorySyncSuspected?: boolean;
+  /** 最後にZAICO同期が完了した時刻。担当者の判断材料。 */
+  zaicoLastSyncedAt?: string | null;
+  /**
+   * 「販売中」カテゴリを解決できたか。false は内部エラーで、
+   * 商品が見つからないのとは意味が違う。
+   */
+  onSaleCategoryResolved?: boolean;
   productCandidates: ProductMatch[];
   /** 在庫DBのどの項目を根拠に使ったか(値ではなく項目名)。 */
   inventoryFieldsUsed: string[];
@@ -293,6 +320,15 @@ export interface IdentifiedProductCard {
    * ので内訳は残す。1行しか無い場合は空配列。
    */
   stockRows: { displayInventoryId: string; name: string; quantity: number | null }[];
+  /**
+   * 統合した行で値が食い違うため、商品全体の値として使えない項目
+   * (2026-09-03 利用者指示)。
+   *
+   * 傷の有無で分けた行は仕入価格や販売開始日が違うことがある。代表1件の値を
+   * 商品全体の値として出すと、担当者はそれを「この商品の原価」と読んでしまう。
+   * 食い違う項目は null にしたうえで、ここに項目名を残して理由を示す。
+   */
+  ambiguousAcrossRows: string[];
   /** 内訳を合計した点数。行が1つなら quantity と同じ。 */
   totalQuantity: number | null;
   /**

@@ -133,6 +133,14 @@ export function decideUrlRequest(params: {
    * 顧客から見ると、送ったものを見ていないと受け取られる。
    */
   customerAlreadySentUrl?: boolean;
+  /**
+   * BASE商品自体は特定できているか(2026-09-03 利用者指示)。
+   *
+   * 特定できているなら、どの商品の話かは**分かっている**。在庫との紐付けが
+   * 未確定なだけで、それは社内の問題。顧客へURLや商品名を尋ねるのは
+   * 内部の失敗を顧客の手間に変換しているだけで、答えも変わらない。
+   */
+  baseProductResolved?: boolean;
 }): UrlRequestDecision {
   const { basis, status, candidateCount, requiresProduct } = params;
   const customerCanProvideUrl = params.customerCanProvideUrl ?? true;
@@ -152,6 +160,16 @@ export function decideUrlRequest(params: {
   }
   if (canAnswerProductSpecifics(basis)) {
     return { requestUrl: false, basis, reason: "商品を一意に特定できているため、確認は不要です。" };
+  }
+  // BASE商品が特定できているなら、どの商品かは分かっている。
+  // 在庫との紐付けが未確定なだけなので、顧客へは尋ねない。
+  if (params.baseProductResolved) {
+    return {
+      requestUrl: false,
+      basis,
+      reason:
+        "BASE商品は特定できています。在庫との紐付けが未確定なだけなので、お客様へ商品URLや商品名を尋ねず社内で確認してください。",
+    };
   }
   // 既に送られているものを、もう一度送ってくれとは言わない。
   // 特定できないのは在庫データ側の問題なので、社内で確認する。

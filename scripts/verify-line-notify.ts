@@ -77,6 +77,7 @@ function evidenceWithProduct(): ReplyEvidence {
       name: "COR Arthe サイドテーブル",
       imageKey: null,
       stockRows: [],
+      ambiguousAcrossRows: [],
       totalQuantity: 1,
       salePriceYen: 98000,
       salePriceSource: "salePrice",
@@ -533,7 +534,9 @@ function testAmbiguousInventoryKeepsBaseFacts() {
     orderNumber: null,
   } as never);
 
-  assertTrue(msg.includes("販売ページ：BoConcept Elba Lounge Chair"), "対象商品: 販売ページは確実なので出す");
+  assertTrue(msg.includes("BASE商品：特定できました"), "対象商品: BASEは特定できたと明示する");
+  assertTrue(msg.includes("商品名：BoConcept Elba Lounge Chair"), "対象商品: 商品名は確実なので出す");
+  assertTrue(msg.includes("BASE商品ID：156144635"), "対象商品: BASE商品IDを出す");
   assertTrue(msg.includes("出品価格：54,800円"), "対象商品: 出品価格を出す");
   assertTrue(msg.includes("73445666") && msg.includes("72179017"), "対象商品: 在庫の候補IDを全部出す");
   assertTrue(msg.includes("在庫：特定できていません"), "対象商品: どの在庫かは断定しない");
@@ -555,7 +558,7 @@ function testNothingKnownStaysUnchanged() {
     orderNumber: null,
   } as never);
   assertTrue(msg.includes("特定できませんでした"), "対象商品: 何も分からなければ従来どおり");
-  assertTrue(!msg.includes("販売ページ："), "対象商品: 無い情報の行は作らない");
+  assertTrue(!msg.includes("BASE商品：特定できました"), "対象商品: 無い情報の行は作らない");
 }
 
 /** 同一商品をまとめたときの在庫内訳。担当者は行ごとの点数で出荷を判断する。 */
