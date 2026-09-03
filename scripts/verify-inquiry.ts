@@ -928,6 +928,7 @@ async function main() {
   testSpecNounDetection();
   testUncertainFactsAreNotGivenToAi();
   testAsksKnownFact();
+  testUnnecessaryRefusal();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
@@ -967,4 +968,42 @@ function testAsksKnownFact() {
 
   const plain = validate("ご希望の金額を承りました。送料の確認ができ次第、改めてご連絡いたします。");
   assertTrue(!plain.codes.includes("DEFLECTS_TO_EXTERNAL_CHANNEL"), "検査: 通常の返信は誘導とみなさない");
+}
+
+/**
+ * ご希望に沿えるのに断らない(2026-09-03 実測)。
+ *
+ * 「埼玉県でこちら2脚で6万円になりませんか」に対し、こちらの提示額は
+ * 46,128円＋送料4,510円 = 50,638円。**希望より安い**のに
+ * 「お客様のご希望に沿えないことをお詫び申し上げます」と返す返信案が
+ * 3回続けて出た。プロンプトへ判断結果を渡すだけでは従わなかったため、
+ * 文面の検査でも押さえる。
+ */
+function testUnnecessaryRefusal() {
+  const refused = validate("お客様のご希望に沿えないことをお詫び申し上げます。", { requestIsWithinOffer: true });
+  assertTrue(refused.codes.includes("UNNECESSARY_REFUSAL"), "検査: 沿えるのに断ったら弾く");
+
+  const cantOffer = validate("ご希望の金額でのご提示はできません。", { requestIsWithinOffer: true });
+  assertTrue(cantOffer.codes.includes("UNNECESSARY_REFUSAL"), "検査: 「ご提示できません」も弾く");
+
+  const ok = validate("2脚で46,128円でご提供可能です。ご希望に沿える金額となっております。", {
+    requestIsWithinOffer: true,
+    allowedMoneyYen: [46128],
+  });
+  assertTrue(!ok.codes.includes("UNNECESSARY_REFUSAL"), "検査: 沿える旨の案内は弾かない");
+  assertTrue(!ok.codes.includes("FABRICATED_SHIPPING_FEE"), "検査: 許可した確定金額は書いてよい");
+
+  // 実際に沿えない場合は、従来どおり断ってよい。
+  const genuinely = validate("ご希望の金額には沿えません。", { requestIsWithinOffer: false });
+  assertTrue(!genuinely.codes.includes("UNNECESSARY_REFUSAL"), "検査: 本当に沿えないなら断ってよい");
+
+  // 値下げ交渉で提示してよい金額が複数あっても全部通る。
+  const multi = validate("1点あたり23,064円、2点合計で46,128円です。送料は4,510円です。", {
+    allowedShippingFeeYen: 4510,
+    allowedMoneyYen: [23064, 46128],
+  });
+  assertTrue(!multi.codes.includes("FABRICATED_SHIPPING_FEE"), "検査: 単価・合計・送料をまとめて許可できる");
+
+  const invented = validate("特別に40,000円でいかがでしょうか。", { allowedMoneyYen: [46128] });
+  assertTrue(invented.codes.includes("FABRICATED_SHIPPING_FEE"), "検査: 許可していない金額は弾く");
 }

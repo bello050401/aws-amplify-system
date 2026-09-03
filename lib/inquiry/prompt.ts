@@ -106,6 +106,17 @@ export interface InquiryUserPromptInput {
     quantity: number | null;
     requestedTotalPriceYen: number | null;
     customerQuestions: string[];
+    /**
+     * ご希望額と、こちらから提示できる金額の関係(2026-09-03 実測の不具合)。
+     *
+     * これを渡していなかったため、**ご希望額の方が高いのに断る**返信案が
+     * 出た。実機の例: ご希望6万円 / 提示できる金額は46,128円＋送料4,510円
+     * = 50,638円。断る理由が無いのに「現時点ではご提示いただけません。
+     * 価格は日々変動しており…」と、根拠の無い言い訳まで付いていた。
+     *
+     * 金額はコード側で確定しているので、**判断結果も渡す**。
+     */
+    requestedComparison?: "REQUEST_ABOVE_OFFER" | "REQUEST_BELOW_OFFER" | "UNKNOWN";
   } | null;
 }
 
@@ -188,7 +199,16 @@ export function buildInquiryUserPrompt(input: InquiryUserPromptInput): string {
     const lines: string[] = [];
     lines.push("このお問い合わせはお値段のご相談です。次の方針で返信してください。");
     lines.push("- 「値引き交渉は承っておりません」のようにお断りしない。BELLOはお値段のご相談をお受けしている。");
-    if (n.quantity != null) lines.push(`- お客様は${n.quantity}点でのご希望として書かれている。数量を勝手に変えない。`);
+    if (n.quantity != null) {
+      lines.push(`- お客様は${n.quantity}点でのご希望として書かれている。数量を勝手に変えない。`);
+      if (n.quantity > 1) {
+        // 単価を合計として書く誤りが実機で出た。どちらの金額かを必ず区別させる。
+        lines.push(
+          `- 金額を書くときは、1点あたりの金額と${n.quantity}点の合計金額を混同しない。` +
+            "TRUSTED_FACTS のラベルどおりに、どちらの金額かを明記する。",
+        );
+      }
+    }
     if (n.awaitingDestination) {
       lines.push("- **お届け先の都道府県がまだ分かっていない。** 送料によってご案内できる金額が変わるため、まずお届け先の都道府県をお伺いする内容にする。");
       lines.push("- この返信では、お値引きの可否・金額・割引率を一切書かない。「できます」「できません」のどちらも書かない。");
@@ -198,6 +218,22 @@ export function buildInquiryUserPrompt(input: InquiryUserPromptInput): string {
       lines.push("- お届け先は判明している。TRUSTED_FACTS に確定値がある場合のみ、その金額をそのまま案内する。");
       lines.push("- TRUSTED_FACTS に金額が無い場合は、金額を書かず「確認のうえご案内いたします」にとどめる。");
       lines.push("- 自分で計算し直さない。割引率を自分で決めない。");
+      // ご希望額との関係を明示する。これが無いと、断る必要が無い場面で
+      // 断り、しかも根拠の無い理由を添えてしまう(実機で発生)。
+      if (n.requestedComparison === "REQUEST_ABOVE_OFFER") {
+        lines.push(
+          "- **お客様のご希望額は、こちらからご提示できる金額を上回っている。お断りしない。**" +
+            "TRUSTED_FACTS の確定値でそのままご案内でき、ご希望に沿えることを伝える。",
+        );
+        lines.push("- 「ご提示できません」「お受けできません」と書かない。値引きできない理由を書かない。");
+      } else if (n.requestedComparison === "REQUEST_BELOW_OFFER") {
+        lines.push(
+          "- お客様のご希望額は、こちらからご提示できる金額を下回っている。" +
+            "TRUSTED_FACTS の確定値をご案内し、それ以上のお値引きは担当者が判断するため確約しない。",
+        );
+        lines.push("- お断りの言葉は使わない。ご案内できる金額を示すにとどめる。");
+      }
+      lines.push("- 価格の変動・在庫の変動など、確認していないことを理由にしない。");
     }
     lines.push("- 実在を確認していないセール・キャンペーンを案内しない。");
     lines.push("- SNSやホームページへ誘導して回答を避けない。");

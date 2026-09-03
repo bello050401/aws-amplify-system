@@ -199,6 +199,51 @@ testEnabledAndScope();
 testOrderAndCap();
 testPromptFormat();
 testLabels();
+testDestinationKnownFilter();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures > 0 ? 1 : 0);
+
+/**
+ * 配送先が分かっているときに「配送先が不明なとき用」のルールを渡さない。
+ *
+ * 実機(2026-09-03)で、配送先が判明しているのに
+ * 「まずは配送先の都道府県を教えていただけますでしょうか」と返す返信案が
+ * 出た。ルールは種別とチャネルでしか絞っておらず、会話の状態を知らない。
+ */
+function testDestinationKnownFilter() {
+  const rules = [
+    rule({ title: "配送先が不明な値下げ交渉", category: "DISCOUNT", priority: 1 }),
+    rule({ title: "値下げ交渉の基本方針", category: "DISCOUNT", priority: 2 }),
+    rule({ title: "お届け先が未確定のときの送料案内", category: "SHIPPING", priority: 3, conditions: null }),
+  ];
+
+  const known = selectReplyRules({
+    rules,
+    intents: ["NEGOTIATION", "SHIPPING"],
+    channel: "LINE",
+    productCategoryId: null,
+    destinationKnown: true,
+  }).map((r) => r.title);
+  assertTrue(!known.includes("配送先が不明な値下げ交渉"), "ルール選択: 配送先が分かっていれば不明時用ルールを渡さない");
+  assertTrue(!known.includes("お届け先が未確定のときの送料案内"), "ルール選択: 表現が違っても不明時用と判定する");
+  assertTrue(known.includes("値下げ交渉の基本方針"), "ルール選択: 通常のルールは従来どおり渡す");
+
+  const unknown = selectReplyRules({
+    rules,
+    intents: ["NEGOTIATION", "SHIPPING"],
+    channel: "LINE",
+    productCategoryId: null,
+    destinationKnown: false,
+  }).map((r) => r.title);
+  assertTrue(unknown.includes("配送先が不明な値下げ交渉"), "ルール選択: 配送先が不明なら従来どおり渡す");
+
+  // 省略時は既存の挙動(=不明扱い)を変えない。
+  const omitted = selectReplyRules({
+    rules,
+    intents: ["NEGOTIATION"],
+    channel: "LINE",
+    productCategoryId: null,
+  }).map((r) => r.title);
+  assertTrue(omitted.includes("配送先が不明な値下げ交渉"), "ルール選択: 未指定なら既存の挙動を変えない");
+}

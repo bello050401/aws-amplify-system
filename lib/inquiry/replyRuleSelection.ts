@@ -106,6 +106,20 @@ export interface SelectRulesInput {
   channel: MessageChannel;
   /** 特定できた商品のカテゴリーID。特定できていなければ null。 */
   productCategoryId: string | null;
+  /**
+   * 配送先の都道府県が既に分かっているか(2026-09-03 実測の不具合)。
+   *
+   * ルール「配送先が不明な値下げ交渉」は、配送先が判明している場面でも
+   * 選ばれていた。ルールは種別(DISCOUNT)とチャネルでしか絞っておらず、
+   * 会話の状態を知らないため。結果、
+   *
+   *   顧客: 埼玉県でこちら2脚で6万円になりませんか
+   *   返信案: まずは配送先の都道府県を教えていただけますでしょうか
+   *
+   * という、お客様が書いたことを読んでいない返信になっていた。
+   * 省略時は false(=不明)。既存の呼び出しの挙動は変わらない。
+   */
+  destinationKnown?: boolean;
 }
 
 function matchesChannel(rule: ReplyRuleRecord, channel: MessageChannel): boolean {
@@ -113,6 +127,18 @@ function matchesChannel(rule: ReplyRuleRecord, channel: MessageChannel): boolean
   // 作ったルールが黙って無視される。
   if (rule.channelScope.length === 0) return true;
   return rule.channelScope.includes(channel);
+}
+
+/**
+ * 「配送先が分からないとき用」のルールか。
+ *
+ * ルールの適用条件は自由記述なので、機械的に評価できるのはこの一点だけ。
+ * **判定できるものだけを判定し、それ以外は従来どおり通す** —— 条件文を
+ * 無理に解釈して落とすと、書いたルールが黙って効かなくなる。
+ */
+function isDestinationUnknownRule(rule: ReplyRuleRecord): boolean {
+  const text = `${rule.title} ${rule.conditions ?? ""}`;
+  return /(?:配送先|お届け先|発送先)[^。\n]{0,6}(?:が)?[^。\n]{0,4}(?:不明|未確定|分からな|わからな)/.test(text);
 }
 
 function matchesCategory(rule: ReplyRuleRecord, productCategoryId: string | null): boolean {
@@ -145,6 +171,9 @@ export function selectReplyRules(input: SelectRulesInput): ReplyRuleRecord[] {
     .filter((r) => wanted.has(r.category))
     .filter((r) => matchesChannel(r, input.channel))
     .filter((r) => matchesCategory(r, input.productCategoryId))
+    // 配送先が分かっているなら、「配送先が不明なとき用」のルールは渡さない。
+    // 渡すと、既に聞いたことをもう一度尋ねる返信になる。
+    .filter((r) => !(input.destinationKnown === true && isDestinationUnknownRule(r)))
     .sort((a, b) => a.priority - b.priority || a.title.localeCompare(b.title, "ja"))
     .slice(0, MAX_RULES_PER_REPLY);
 }

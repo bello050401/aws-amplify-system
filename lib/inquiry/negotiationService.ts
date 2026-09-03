@@ -285,13 +285,16 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
   // しない(指示書§4の禁止事項)。
   const customerSafeFacts: { label: string; value: string }[] = [];
   if (!awaitingDestination && offer?.determined && offer.referenceOffer != null) {
+    // ラベルは**単価と合計が絶対に混ざらない**書き方にする。実機で
+    // 「2点セットの価格は23,064円」(実際は単価)と誤記した返信案が出た。
+    // 「単価」という語だけでは足りず、数量を明示した言い方にする。
     customerSafeFacts.push({
-      label: "お値引き後のご提示価格(単価・確定値)",
+      label: quantity > 1 ? "1点あたりのご提示価格(確定値)" : "お値引き後のご提示価格(確定値)",
       value: `${offer.referenceOffer.toLocaleString("ja-JP")}円`,
     });
     if (quantity > 1) {
       customerSafeFacts.push({
-        label: `${quantity}点合計のご提示価格(確定値)`,
+        label: `${quantity}点ご購入の場合の合計金額(確定値・お客様へ案内するのはこの金額)`,
         value: `${(offer.referenceOffer * quantity).toLocaleString("ja-JP")}円`,
       });
     }

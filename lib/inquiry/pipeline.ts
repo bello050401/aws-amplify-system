@@ -889,6 +889,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       intents,
       channel: request.channel as MessageChannel,
       productCategoryId: inventory?.categoryId ?? null,
+      // 配送先が分かっているなら「配送先が不明なとき用」のルールは渡さない。
+      destinationKnown: Boolean(shipping?.destinationPrefecture ?? destinationPrefecture),
     });
   } catch (err) {
     console.warn("[inquiry] 返信ルールを読めませんでした。ルール無しで続行します。", err instanceof Error ? err.message : String(err));
@@ -940,11 +942,35 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
           quantity: negotiationResult.evidence.quantity,
           requestedTotalPriceYen: negotiationResult.evidence.requestedTotalPriceYen,
           customerQuestions: negotiationResult.customerQuestions,
+          // 判断結果も渡す。金額だけ渡して判断を任せると、断る必要が無い
+          // 場面で断り、根拠の無い理由まで添えてしまう(実測)。
+          requestedComparison: (() => {
+            const diff = negotiationResult.staffCard?.differenceFromRequestedYen ?? null;
+            if (diff == null) return "UNKNOWN" as const;
+            return diff >= 0 ? ("REQUEST_ABOVE_OFFER" as const) : ("REQUEST_BELOW_OFFER" as const);
+          })(),
         }
       : null,
   });
 
+  // ── 顧客向けに書いてよい金額 ──────────────────────────────────
+  //
+  // 送料と、値下げ交渉で提示してよい確定金額(7%引き後の単価・数量合計)。
+  // **どちらもコード側で計算した値だけ**を通す —— AIに金額を計算させない
+  // という方針(lib/inquiry/discount.ts)は変えない。
+  //
+  // 交渉での提示可否を決めるのは negotiationService の customerSafeFacts で、
+  // そこは「確定値」としてのみ金額を積む。以前は検査が送料1件しか許可して
+  // いなかったため、運用どおりに書いた返信が「根拠のない金額」として弾かれ、
+  // 3回作り直して返信案が1つも作られない状態になっていた(実測)。
   const allowedShippingFee = shipping?.feeYen ?? null;
+  const allowedMoneyYen = [
+    ...(negotiationResult?.customerSafeFacts ?? []).map((f) => Number(f.value.replace(/[^0-9]/g, ""))),
+    // お客様ご自身が書かれた金額。復唱は事実の確認なので許す ——
+    // ここを弾くと「ご希望の6万円について」と書けず、話が通じなくなる。
+    negotiationResult?.evidence.requestedTotalPriceYen ?? Number.NaN,
+    negotiationResult?.evidence.requestedUnitPriceYen ?? Number.NaN,
+  ].filter((n) => Number.isFinite(n) && n > 0);
   const allowedDimensionText = [...dimensionTexts, ...research.facts.map((f) => f.value ?? "")];
 
   let lastViolations: string[] = [];
@@ -974,9 +1000,12 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       stockQuantity,
       sku,
       allowedShippingFeeYen: allowedShippingFee,
+      allowedMoneyYen,
       unresolved,
       // 既に分かっている配送先を、もう一度尋ねる返信を出さない。
       knownDestinationPrefecture: shipping?.destinationPrefecture ?? destinationPrefecture ?? null,
+      // ご希望に沿えるのに断る返信を出さない。
+      requestIsWithinOffer: (negotiationResult?.staffCard?.differenceFromRequestedYen ?? -1) >= 0,
       externalTexts: research.documentTexts,
       allowedDimensionText,
       // 根拠として認めた文章。住所のように「出典があれば出してよいが
@@ -1002,6 +1031,10 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       attempt,
       codes: validation.violations.map((v) => v.code),
       conversationId: request.conversationId,
+      // 生成文は残さない(§32)。ただしローカルの調査時だけは中身を見たい ——
+      // 何を書いて弾かれたのか分からないと、プロンプトを直せない。
+      // 明示的にopt-inした場合に限る(本番では立たない)。
+      ...(process.env.INQUIRY_DEBUG_OUTPUT === "true" ? { output } : {}),
     });
   }
 

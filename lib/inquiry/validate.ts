@@ -27,7 +27,9 @@ export type ReplyValidationCode =
   /** 既に分かっていることを顧客へ尋ねている。 */
   | "ASKS_KNOWN_FACT"
   /** 回答せずにSNS・ホームページへ誘導している。 */
-  | "DEFLECTS_TO_EXTERNAL_CHANNEL";
+  | "DEFLECTS_TO_EXTERNAL_CHANNEL"
+  /** ご希望に沿えるのに、お断り・お詫びを書いている。 */
+  | "UNNECESSARY_REFUSAL";
 
 export interface ReplyValidationViolation {
   code: ReplyValidationCode;
@@ -54,6 +56,16 @@ export function validateReplyDraft(params: {
   sku?: string | null;
   /** 送料の金額を書いてよい場合のみ、その金額(円)。書いてはいけない場合はnull。 */
   allowedShippingFeeYen: number | null;
+  /**
+   * 送料以外に、顧客へ提示してよい確定金額(2026-09-03 実測の不具合)。
+   *
+   * 値下げ交渉では、7%引き後の単価・数量合計を**確定値として提示する**運用
+   * (lib/inquiry/negotiationService.ts の customerSafeFacts)。ところが検査は
+   * 送料1件しか許可していなかったため、運用どおりに書いた返信が
+   * 「根拠のない金額」として弾かれ、3回作り直して**返信案が1つも作られ
+   * なかった**。金額はコード側で確定させているので、その値だけを通す。
+   */
+  allowedMoneyYen?: number[];
   /** 分からないままにした項目。 */
   unresolved: UnresolvedFact[];
   /**
@@ -66,6 +78,16 @@ export function validateReplyDraft(params: {
    * ためだが、原因がどこであれ**既に分かっていることを尋ねる返信は出さない**。
    */
   knownDestinationPrefecture?: string | null;
+  /**
+   * お客様のご希望額が、こちらの提示額を上回っているか(2026-09-03 実測)。
+   *
+   * true のとき、お断りする理由が無い。実機では「ご希望6万円 / 提示
+   * 46,128円＋送料4,510円」という**希望より安い**状況で、
+   * 「お客様のご希望に沿えないことをお詫び申し上げます」と返す返信案が
+   * 3回続けて出た。金額はコード側で確定しているので、判断を文面の検査でも
+   * 押さえる —— プロンプトへ判断結果を渡すだけでは従わなかった。
+   */
+  requestIsWithinOffer?: boolean;
   /** 外部から取得した本文(sanitize済み)。長文の引き写し検査に使う。 */
   externalTexts: string[];
   /** 生成文に出てよい寸法の文字列(在庫DBの寸法・外部調査で確認できた寸法)。 */
@@ -82,9 +104,14 @@ export function validateReplyDraft(params: {
 
   // ── 送料の創作 ────────────────────────────────────────────────
   const moneyMentions = output.match(MONEY_PATTERN) ?? [];
-  const allowed = params.allowedShippingFeeYen;
-  const allowedForms =
-    allowed == null ? [] : [allowed.toLocaleString("ja-JP"), String(allowed)].flatMap((n) => [n, `${n}円`, `¥${n}`, `￥${n}`]);
+  // 送料と、値下げ交渉で提示してよい確定金額。どちらもコード側で計算した
+  // 値だけで、AIに計算させた数字は1つも入らない。
+  const allowedAmounts = [params.allowedShippingFeeYen, ...(params.allowedMoneyYen ?? [])].filter(
+    (v): v is number => v != null,
+  );
+  const allowedForms = allowedAmounts.flatMap((amount) =>
+    [amount.toLocaleString("ja-JP"), String(amount)].flatMap((n) => [n, `${n}円`, `¥${n}`, `￥${n}`]),
+  );
   const unauthorizedMoney = moneyMentions.filter((mention) => {
     const normalized = mention.replace(/[¥￥\s]/g, "");
     return !allowedForms.some((form) => normalized === form.replace(/[¥￥\s]/g, ""));
@@ -107,7 +134,7 @@ export function validateReplyDraft(params: {
     // 目的で、その金額は配送データベースから引いた確定値だからだ。
     // 根拠のある金額しか書かれていないことは、すぐ上で既に確かめている
     // —— そのうえでPRICE_CLAIMを立てると、正しい回答が永久に通らない。
-    if (v.code === "PRICE_CLAIM" && allowed != null && unauthorizedMoney.length === 0) continue;
+    if (v.code === "PRICE_CLAIM" && allowedAmounts.length > 0 && unauthorizedMoney.length === 0) continue;
 
     // 住所も同じ理由で扱いが変わる。出品コピーに住所が出るのは、
     // 商品メモに紛れ込んだ**顧客の住所**が漏れた場合しかない。一方、
@@ -133,7 +160,25 @@ export function validateReplyDraft(params: {
     if (asksPrefecture) {
       violations.push({
         code: "ASKS_KNOWN_FACT",
-        detail: `お届け先(${params.knownDestinationPrefecture})は既に分かっているのに、都道府県を尋ねています。`,
+        detail:
+          `お届け先は既に「${params.knownDestinationPrefecture}」と分かっています。都道府県を尋ねてはいけません。` +
+          "お届け先が分かっている前提で書き、送料や金額が確定していない場合は「確認のうえ改めてご案内いたします」としてください。",
+      });
+    }
+  }
+
+  // ── 断る必要が無いのに断っていないか ────────────────────────
+  if (params.requestIsWithinOffer) {
+    const refuses =
+      /(?:ご希望|ご要望)[^。\n]{0,12}(?:沿え|添え|応じられ|お受けでき|承れ|対応でき)(?:ず|ない|ませ)/.test(output) ||
+      /(?:ご提示|ご案内|お値引き)[^。\n]{0,10}(?:できません|いたしかねます|difficult)/.test(output) ||
+      /(?:誠に|大変)?申し訳(?:ございません|ありません)[^。\n]{0,20}(?:ご希望|ご要望|お値引き)/.test(output);
+    if (refuses) {
+      violations.push({
+        code: "UNNECESSARY_REFUSAL",
+        detail:
+          "お客様のご希望額は、こちらからご提示できる金額を上回っています。お断りやお詫びを書いてはいけません。" +
+          "ご希望の範囲でご案内できることを、確定値そのままで伝えてください。",
       });
     }
   }
@@ -147,7 +192,9 @@ export function validateReplyDraft(params: {
   if (/(?:SNS|ホームページ|公式サイト|インスタ|Instagram|X(旧Twitter)|Twitter)/i.test(output)) {
     violations.push({
       code: "DEFLECTS_TO_EXTERNAL_CHANNEL",
-      detail: "SNS・ホームページへ誘導しています。問い合わせにはこの返信の中で答えてください。",
+      detail:
+        "SNS・ホームページ・SNSアカウントへの誘導を書いてはいけません。" +
+        "お問い合わせにはこの返信の中で答え、答えられないことは「確認のうえ改めてご案内いたします」としてください。",
     });
   }
 
@@ -273,5 +320,13 @@ function describeFactSafety(v: FactSafetyViolation): string {
   return `${v.code}: ${v.detail}`;
 }
 
-/** §40 bounded regeneration。無限に作り直さない。 */
-export const REPLY_MAX_GENERATION_ATTEMPTS = 2;
+/**
+ * §40 bounded regeneration。無限に作り直さない。
+ *
+ * 2→3。検査項目を増やした(ASKS_KNOWN_FACT / DEFLECTS_TO_EXTERNAL_CHANNEL)
+ * ぶん、1回の生成が通る確率が下がる。実測(2026-09-03)では値下げ交渉で
+ * 2回とも別の理由で弾かれ、**返信案が1つも作られない**ところまで行った。
+ * 検査を緩めるのではなく、作り直しの回数を1回増やして対応する ——
+ * 弾いた理由は次の試行へ渡しているので、回数を増やすほど通りやすくなる。
+ */
+export const REPLY_MAX_GENERATION_ATTEMPTS = 3;
