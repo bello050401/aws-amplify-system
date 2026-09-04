@@ -216,3 +216,39 @@ Secretを増やしたら、そのポリシーへの追記が別途必要です�
 | `npm run verify:notification-claim-live` | 通知の二重送信防止（実DynamoDB） |
 | `npm run verify:http` | 外部呼び出しのタイムアウト（外部につながない） |
 | `BELLO_QUERY_TIMING=1` | リクエスト内のデータアクセスを Server-Timing で収集（既定は無効） |
+
+---
+
+## 9. デプロイ後の最低限の確認（smoke test）
+
+Amplify のジョブが SUCCEED になったあと、ログインせずに外から確かめられる範囲です。
+**2026-09-04 の最終デプロイで実測した結果**を併記します。
+
+| 確認 | 期待 | 実測 |
+|---|---|---|
+| `GET /` | 307（リダイレクト） | 307 |
+| `GET /inventory` | 307 → `/inventory/login`（未ログインを弾いている） | 307 → `/inventory/login` |
+| `GET /inventory/login` | 200（画面が出る） | 200 / 427ms |
+| `GET /admin/login` | 200 | 200 / 275ms |
+| `POST /api/line/webhook`（署名なし） | **401 Invalid signature**（署名検証が生きている） | 401 |
+
+最後の1つが重要です。ここが200や500を返すようになったら、
+**署名検証が壊れているか設定が落ちている**ことを意味します。
+
+データ層は次で確かめられます（いずれも読み取り中心・後片付け付き）:
+
+```bash
+AWS_PROFILE=Bello npm run verify:data-integrity          # 孤児・重複・途中状態
+AWS_PROFILE=Bello npm run verify:inventory-count         # 件数の新旧一致
+AWS_PROFILE=Bello npm run verify:inventory-search-fast   # 検索結果の新旧一致
+AWS_PROFILE=Bello npm run verify:notification-claim-live # 二重送信防止（検証行は自動削除）
+```
+
+環境の差で見るべき点:
+
+- Amplifyコンソールに設定した環境変数は**ビルドには渡るが、SSRランタイムの
+  `process.env` には現れない**（実測）。そのため `CONVERSATION_TABLE_NAME` /
+  `MESSAGE_TABLE_NAME` は `next.config.js` の `env` でビルド時に埋め込んでいます。
+  新しい環境変数を足すときは同じ扱いが要ります。
+- Secretを足したら、SSR実行ロール `BelloAmplifyStagingComputeRole` の
+  インラインポリシーへARNの追記が別途必要です（`Resource:"*"` ではないため）。
