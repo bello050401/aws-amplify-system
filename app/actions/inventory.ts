@@ -292,6 +292,7 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
   // 件数の集計はプロセス内に60秒だけ持つ（lib/inventory/inventoryPage.ts）。
   // 追加・削除の直後に古い件数を出し続けないよう、ここで捨てる。
   clearInventoryCountCache();
+  clearInventoryCountCache(); // 2026-09-04: 件数キャッシュも一緒に捨てる(在庫が増減した)
   revalidatePath("/inventory");
   if (options?.skipRedirect) return { id: created.id };
   redirect(`/inventory/${created.id}`);
@@ -419,6 +420,7 @@ export async function updateInventory(
   // 件数の集計はプロセス内に60秒だけ持つ（lib/inventory/inventoryPage.ts）。
   // 追加・削除の直後に古い件数を出し続けないよう、ここで捨てる。
   clearInventoryCountCache();
+  clearInventoryCountCache(); // 2026-09-04: 件数キャッシュも一緒に捨てる(在庫が増減した)
   revalidatePath("/inventory");
   revalidatePath(`/inventory/${inventoryId}`);
   if (options?.skipRedirect) return { id: inventoryId };
@@ -464,6 +466,7 @@ export async function deleteInventory(inventoryId: string): Promise<never> {
   // 件数の集計はプロセス内に60秒だけ持つ（lib/inventory/inventoryPage.ts）。
   // 追加・削除の直後に古い件数を出し続けないよう、ここで捨てる。
   clearInventoryCountCache();
+  clearInventoryCountCache(); // 2026-09-04: 件数キャッシュも一緒に捨てる(在庫が増減した)
   revalidatePath("/inventory");
   redirect("/inventory");
 }

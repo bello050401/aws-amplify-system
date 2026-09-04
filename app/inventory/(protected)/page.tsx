@@ -69,6 +69,20 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   // せるUIは今回のスコープ外、混乱を避けるため)。
   const searchMode: "advanced" | "quick" | "plain" = advancedQuery ? "advanced" : hasQuickSearchText ? "quick" : "plain";
 
+  // 2026-09-04 性能総点検: マスタ4種と在庫の取得を**同時に**始める。
+  //
+  // 以前はマスタを待ってから在庫を取りに行っていた。この2つには依存が
+  // 無い(在庫の絞り込み条件はURLのクエリだけで決まる)ので、直列に
+  // 並べていたぶんがそのまま待ち時間になっていた ——
+  // マスタ側は4本を並列に投げていたのに、その全体が在庫の前に挟まって
+  // いたため、画面は「マスタの最遅 + 在庫」を待っていた。
+  //
+  // 通常の一覧(検索していない)だけを先に走らせる。検索経路は
+  // fieldDefs(=マスタから作る検索フィールド定義)に依存するので、
+  // マスタを待たないと投げられない —— そちらは下でこれまでどおり。
+  const filters = { categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId };
+  const plainPagePromise = searchMode === "plain" ? listInventoryOffsetPage(filters, { offset, limit }) : null;
+
   const [categories, locations, statuses, customFieldDefs] = await Promise.all([
     listCategories(),
     listLocations(),
@@ -86,8 +100,8 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   // テキスト検索・詳細検索は、条件がDynamoDBのKeyCondition/Filterだけ
   // では表現できない（部分一致・AND/OR混在）ので従来経路のまま。
   // 検索は利用者が明示的に行う操作で、一覧を開くたびに走るものではない。
-  const filters = { categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId };
-  const pagedResult = searchMode === "plain" ? await listInventoryOffsetPage(filters, { offset, limit }) : null;
+  // マスタと同時に走らせておいた結果をここで受け取る(上の Promise 参照)。
+  const pagedResult = plainPagePromise ? await plainPagePromise : null;
 
   // GSIに1件も出てこない場合（バックフィル未完了など）は、黙って0件と
   // 表示せず従来経路へ落とす。§13.2「エラーや取りこぼしを0件と混同しない」。

@@ -1,4 +1,5 @@
 import "server-only";
+import { invalidateMasterCache } from "./masterCache";
 import { randomUUID } from "crypto";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { Schema } from "@/amplify/data/resource";
@@ -37,6 +38,10 @@ export interface CustomFieldInput {
 }
 
 export async function createCustomFieldDefinition(input: CustomFieldInput): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const label = input.label.trim();
   if (!label) throw new Error("項目名を入力してください。");
   const options = input.options.map((o) => o.trim()).filter(Boolean);
@@ -77,6 +82,10 @@ export async function createCustomFieldDefinition(input: CustomFieldInput): Prom
  * 運用を想定する。
  */
 export async function updateCustomFieldDefinition(id: string, input: { label: string; required: boolean; options: string[] }): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const label = input.label.trim();
   if (!label) throw new Error("項目名を入力してください。");
 
@@ -116,6 +125,10 @@ export async function updateCustomFieldDefinition(id: string, input: { label: st
  * 限り)引き続き読み取れる。
  */
 export async function setCustomFieldDefinitionActive(id: string, isActive: boolean): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const { errors } = await serverDataClient.models.CustomFieldDefinition.update({ id, isActive }, inventoryAuthMode);
   if (errors) {
     console.error("[setCustomFieldDefinitionActive] update failed:", errors);
@@ -125,6 +138,10 @@ export async function setCustomFieldDefinitionActive(id: string, isActive: boole
 
 /** lib/inventory/masters.tsのreorderMasterEntriesと同じ形 — 完全な新しい並び順を受け取り、実際に変わった行だけ書き込む。 */
 export async function reorderCustomFieldDefinitions(orderedIds: string[]): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const current = await listAllCustomFieldDefinitions();
   const currentById = new Map(current.map((e) => [e.id, e]));
   const updates = orderedIds

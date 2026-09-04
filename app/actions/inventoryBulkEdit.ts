@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { clearInventoryCountCache } from "@/lib/inventory/inventoryPage";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { diffField, logInventoryHistory, type HistoryFieldChange } from "@/lib/inventory/history";
@@ -105,6 +106,7 @@ export async function bulkUpdateInventoryListFields(items: BulkInventoryEditItem
     }
   }
 
+  clearInventoryCountCache(); // 2026-09-04: 件数キャッシュも一緒に捨てる(在庫が増減した)
   revalidatePath("/inventory");
   return results;
 }

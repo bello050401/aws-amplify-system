@@ -1,5 +1,6 @@
 import "server-only";
 import { requestCache } from "@/lib/amplify/requestCache";
+import { cachedMaster } from "./masterCache";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages } from "@/lib/amplify/listAll";
 import { INVENTORY_SEARCH_SELECTION_SET } from "./searchProjection";
@@ -603,25 +604,38 @@ export interface MasterOption {
  * ── cache() ─────────────────────────────────────────────────────
  *
  * マスタは1画面の中で複数の場所から要求される(ページ本体・フォーム・
- * Suspense下の子)。リクエスト内の重複だけを排除する。リクエストを
- * またいでは保持しない ——「設定でカテゴリーを直したのに一覧に出ない」
- * を作らないため。
+ * Suspense下の子)。requestCache がリクエスト内の重複を排除する。
+ *
+ * 2026-09-04 性能総点検: **リクエストを跨いでも保持する**ようにした。
+ * 以前は「設定でカテゴリーを直したのに一覧に出ない」を避けるため毎回
+ * 取り直していたが、その代償として全画面が毎回4往復していた(実測)。
+ * いまは書き込み側が必ず捨て(lib/inventory/masterCache.ts の
+ * invalidateMasterCache)、加えて60秒のTTLで別インスタンスの変更にも
+ * 追いつく。古い値を見せないための仕組みは残したまま、往復だけを減らす。
  */
 export const listCategories = requestCache(async function listCategories(includeInactiveId?: string | null): Promise<MasterOption[]> {
   if (isE2EFixtureModeActive()) return E2E_CATEGORIES; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const data = await listAllPages(
-    (nextToken) =>
-      serverDataClient.models.Category.list({
-        filter: { isActive: { eq: true } },
-        limit: 1000,
-        nextToken,
-        ...inventoryAuthMode,
-      }),
-    { label: "カテゴリーマスタ" },
-  );
-  const options = data
-    .map((c) => ({ id: c.id, name: c.name, parentId: c.parentId ?? null, sortOrder: c.sortOrder ?? 0 }))
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
+  // 2026-09-04 性能総点検: 有効なカテゴリーの一覧だけをリクエスト跨ぎで
+  // 保持する(lib/inventory/masterCache.ts)。無効化済みの1件を足す下の
+  // 分岐はキャッシュに載せない —— 商品ごとに違う値で、載せると
+  // カテゴリーの数だけ別のキャッシュができてしまう。
+  const options = (
+    await cachedMaster("Category", async () => {
+      const data = await listAllPages(
+        (nextToken) =>
+          serverDataClient.models.Category.list({
+            filter: { isActive: { eq: true } },
+            limit: 1000,
+            nextToken,
+            ...inventoryAuthMode,
+          }),
+        { label: "カテゴリーマスタ" },
+      );
+      return data
+        .map((c) => ({ id: c.id, name: c.name, parentId: c.parentId ?? null, sortOrder: c.sortOrder ?? 0 }))
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
+    })
+  ).slice(); // キャッシュ本体を呼び出し側が書き換えないよう複製して渡す。
 
   if (includeInactiveId && !options.some((o) => o.id === includeInactiveId)) {
     const { data: inactive } = await serverDataClient.models.Category.get({ id: includeInactiveId }, inventoryAuthMode);
@@ -634,19 +648,24 @@ export const listCategories = requestCache(async function listCategories(include
 
 export const listLocations = requestCache(async function listLocations(includeInactiveId?: string | null): Promise<MasterOption[]> {
   if (isE2EFixtureModeActive()) return E2E_LOCATIONS; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const data = await listAllPages(
-    (nextToken) =>
-      serverDataClient.models.Location.list({
-        filter: { isActive: { eq: true } },
-        limit: 1000,
-        nextToken,
-        ...inventoryAuthMode,
-      }),
-    { label: "保管場所マスタ" },
-  );
-  const options = data
-    .map((l) => ({ id: l.id, name: l.name, parentId: l.parentId ?? null, sortOrder: l.sortOrder ?? 0 }))
-    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
+  // 2026-09-04 性能総点検: カテゴリーと同じ理由でリクエスト跨ぎに保持する。
+  const options = (
+    await cachedMaster("Location", async () => {
+      const data = await listAllPages(
+        (nextToken) =>
+          serverDataClient.models.Location.list({
+            filter: { isActive: { eq: true } },
+            limit: 1000,
+            nextToken,
+            ...inventoryAuthMode,
+          }),
+        { label: "保管場所マスタ" },
+      );
+      return data
+        .map((l) => ({ id: l.id, name: l.name, parentId: l.parentId ?? null, sortOrder: l.sortOrder ?? 0 }))
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
+    })
+  ).slice();
 
   if (includeInactiveId && !options.some((o) => o.id === includeInactiveId)) {
     const { data: inactive } = await serverDataClient.models.Location.get({ id: includeInactiveId }, inventoryAuthMode);
@@ -693,19 +712,22 @@ export interface StatusOption {
 
 export const listStatuses = requestCache(async function listStatuses(): Promise<StatusOption[]> {
   if (isE2EFixtureModeActive()) return E2E_STATUSES; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const data = await listAllPages(
-    (nextToken) =>
-      serverDataClient.models.StatusMaster.list({
-        filter: { isActive: { eq: true } },
-        limit: 1000,
-        nextToken,
-        ...inventoryAuthMode,
-      }),
-    { label: "ステータスマスタ" },
-  );
-  return data
-    .map((s) => ({ id: s.id, code: s.code, label: s.label, sortOrder: s.sortOrder ?? 0 }))
-    .sort((a, b) => a.sortOrder - b.sortOrder);
+  // 2026-09-04 性能総点検: カテゴリーと同じ理由でリクエスト跨ぎに保持する。
+  return cachedMaster("StatusMaster", async () => {
+    const data = await listAllPages(
+      (nextToken) =>
+        serverDataClient.models.StatusMaster.list({
+          filter: { isActive: { eq: true } },
+          limit: 1000,
+          nextToken,
+          ...inventoryAuthMode,
+        }),
+      { label: "ステータスマスタ" },
+    );
+    return data
+      .map((s) => ({ id: s.id, code: s.code, label: s.label, sortOrder: s.sortOrder ?? 0 }))
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+  });
 });
 
 export interface CustomFieldDefinitionRow {
@@ -744,17 +766,20 @@ function toCustomFieldDefinitionRow(f: {
 /** 新規登録/編集フォーム・検索・Import/Export等、実際にユーザーへ入力・表示させる側が使う — 無効化された追加項目は含まない。 */
 export const listCustomFieldDefinitions = requestCache(async function listCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
   if (isE2EFixtureModeActive()) return E2E_CUSTOM_FIELD_DEFS; // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const data = await listAllPages(
-    (nextToken) =>
-      serverDataClient.models.CustomFieldDefinition.list({
-        filter: { isActive: { eq: true } },
-        limit: 1000,
-        nextToken,
-        ...inventoryAuthMode,
-      }),
-    { label: "追加項目の定義" },
-  );
-  return data.map(toCustomFieldDefinitionRow).sort((a, b) => a.sortOrder - b.sortOrder);
+  // 2026-09-04 性能総点検: カテゴリーと同じ理由でリクエスト跨ぎに保持する。
+  return cachedMaster("CustomFieldDefinition", async () => {
+    const data = await listAllPages(
+      (nextToken) =>
+        serverDataClient.models.CustomFieldDefinition.list({
+          filter: { isActive: { eq: true } },
+          limit: 1000,
+          nextToken,
+          ...inventoryAuthMode,
+        }),
+      { label: "追加項目の定義" },
+    );
+    return data.map(toCustomFieldDefinitionRow).sort((a, b) => a.sortOrder - b.sortOrder);
+  });
 });
 
 /** 設定画面の追加項目管理タブ専用 — 無効化済みも含めた全件(ADMINが再度有効化できるように、lib/inventory/masters.tsのlistAllMasterEntriesと同じ考え方)。 */

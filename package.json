@@ -88,7 +88,11 @@
     "verify:mercari-order-live": "node scripts/with-server-only-stub.cjs scripts/verify-mercari-order-context-live.ts",
     "verify:listing-description": "node scripts/with-server-only-stub.cjs scripts/verify-listing-description.ts",
     "verify:listing-description-live": "node scripts/with-server-only-stub.cjs scripts/verify-listing-description-live.ts",
-    "rename:shipping-service": "node scripts/with-server-only-stub.cjs scripts/rename-shipping-service.ts"
+    "rename:shipping-service": "node scripts/with-server-only-stub.cjs scripts/rename-shipping-service.ts",
+    "measure:performance": "node scripts/with-server-only-stub.cjs scripts/measure-performance.ts",
+    "measure:staging-http": "node scripts/with-server-only-stub.cjs scripts/measure-staging-http.ts",
+    "measure:page-loads": "node scripts/with-server-only-stub.cjs scripts/measure-page-loads.ts",
+    "verify:inventory-count": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-count.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

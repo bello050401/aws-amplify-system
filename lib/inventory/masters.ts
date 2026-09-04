@@ -1,4 +1,5 @@
 import "server-only";
+import { invalidateMasterCache } from "./masterCache";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { unwrapList } from "@/lib/amplify/listAll";
 
@@ -97,6 +98,10 @@ export async function listAllMasterEntries(model: MasterModelName): Promise<Mast
  * lib/inventory/masterDedupe.ts for cleaning up what's already there).
  */
 export async function createMasterEntry(model: MasterModelName, name: string): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("名称を入力してください。");
   const existing = await listAllMasterEntries(model);
@@ -119,6 +124,10 @@ export async function createMasterEntry(model: MasterModelName, name: string): P
 }
 
 export async function renameMasterEntry(model: MasterModelName, id: string, name: string): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("名称を入力してください。");
   const existing = await listAllMasterEntries(model);
@@ -140,6 +149,10 @@ export async function renameMasterEntry(model: MasterModelName, id: string, name
 }
 
 export async function setMasterEntryActive(model: MasterModelName, id: string, isActive: boolean): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const { errors } =
     model === "Category"
       ? await serverDataClient.models.Category.update({ id, isActive }, inventoryAuthMode)
@@ -160,6 +173,10 @@ async function updateSortOrder(model: MasterModelName, id: string, sortOrder: nu
 
 /** Persists a full reorder — `orderedIds` is the complete new top-to-bottom order, so sortOrder becomes each id's index. Only entries whose sortOrder actually changed are written. */
 export async function reorderMasterEntries(model: MasterModelName, orderedIds: string[]): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const current = await listAllMasterEntries(model);
   const currentById = new Map(current.map((e) => [e.id, e]));
   const updates = orderedIds
@@ -249,6 +266,10 @@ async function countInventoryReferences(model: MasterModelName, id: string): Pro
  * here means "any Inventory row has this id", full stop.
  */
 export async function deleteMasterEntry(model: MasterModelName, id: string): Promise<void> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const inUseCount = await countInventoryReferences(model, id);
   if (inUseCount > 0) {
     throw new Error(`${inUseCount}件の在庫がこの${masterLabel(model)}を使用しているため削除できません。無効化してください。`);
@@ -275,6 +296,10 @@ export async function deleteMasterEntry(model: MasterModelName, id: string): Pro
  * category/place already exists in BELLO.
  */
 export async function findOrCreateMasterEntryByName(model: MasterModelName, name: string): Promise<{ id: string; created: boolean }> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("名称が空です。");
   const existing = await listAllMasterEntries(model);
@@ -323,6 +348,10 @@ export interface BulkDeleteResult {
  * concern, not a backend one.
  */
 export async function bulkDeleteMasterEntries(model: MasterModelName, ids: string[]): Promise<BulkDeleteResult> {
+  // 2026-09-04 性能総点検: マスタを変えたらキャッシュを必ず捨てる。
+  // 書き込み関数の側に置くのは、Server Action を足した人が呼び忘れても
+  // 効くようにするため(lib/inventory/masterCache.ts のコメント参照)。
+  invalidateMasterCache();
   const result: BulkDeleteResult = { deletedIds: [], deactivatedIds: [], failed: [] };
   for (const id of ids) {
     try {
