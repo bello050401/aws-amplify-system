@@ -1,6 +1,7 @@
 import "server-only";
 import ExcelJS from "exceljs";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { clearInventoryCountCache } from "./inventoryCountCache";
 import type { Schema } from "@/amplify/data/resource";
 import { listAllMasterEntries, normalizeMasterName } from "./masters";
 import { listCustomFieldDefinitions, listStatuses } from "./queries";
@@ -662,6 +663,9 @@ export async function executeImportRows(
           inventoryAuthMode,
         );
         if (errors || !created) throw new Error(`作成に失敗しました: ${JSON.stringify(errors)}`);
+        // 在庫が1件増えた。総件数のキャッシュを捨てないと、取込直後の
+        // 一覧が古い件数を最大60秒表示し続ける(PHASE 6)。
+        clearInventoryCountCache();
 
         await logInventoryHistory(created.id, who, [{ fieldName: "登録", oldValue: null, newValue: `${sourceLabel}により新規登録 (SKU ${sku})` }]);
         results.push({ ...outcome, inventoryId: created.id });

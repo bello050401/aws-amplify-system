@@ -1,6 +1,7 @@
 import "server-only";
 import type { Schema } from "@/amplify/data/resource";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { clearInventoryCountCache } from "./inventoryCountCache";
 import { findOrCreateMasterEntryByName } from "./masters";
 import { logInventoryHistory, type HistoryFieldChange } from "./history";
 import { downloadAndImportInventoryImage, removeInventoryImage } from "./imageServerOps";
@@ -340,6 +341,9 @@ export function createServerSyncPort(): ZaicoSyncPort {
         inventoryAuthMode,
       );
       if (errors || !created) throw new Error(`在庫の作成に失敗しました: ${JSON.stringify(errors)}`);
+      // 在庫が1件増えた。総件数のキャッシュを捨てないと、同期直後の
+      // 一覧が古い件数を最大60秒表示し続ける(PHASE 6)。
+      clearInventoryCountCache();
       return created;
     },
     async updateInventory(input) {

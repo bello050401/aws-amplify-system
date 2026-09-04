@@ -4,6 +4,7 @@ import { toListRow, type InventoryListRow } from "./queries";
 import { isE2EFixtureModeActive, e2eListPage } from "./e2eFixtures";
 import type { InventoryCursorListFilters } from "./inventoryCursorList";
 import { countActiveInventoryFast } from "./inventoryCountFast";
+import { inventoryCountCacheKey, readInventoryCount, writeInventoryCount } from "./inventoryCountCache";
 
 /**
  * 在庫一覧の取得を「必要なページだけ」にする。
@@ -147,26 +148,15 @@ export async function listInventoryOffsetPage(
  * ので長く持たない。60秒なら、同じ画面を続けて開き直しても1回で済み、
  * かつ「登録したのに件数が増えない」が長く続くことはない。
  */
-const COUNT_TTL_MS = 60_000;
-const countCache = new Map<string, { at: number; value: number }>();
-
-export function inventoryCountCacheKey(filters: InventoryCursorListFilters): string {
-  return JSON.stringify({
-    c: [...(filters.categoryIds ?? [])].sort(),
-    l: filters.locationId ?? null,
-    s: filters.statusId ?? null,
-  });
-}
-
-/** 在庫を書き換えたあとに呼ぶ。古い件数を表示し続けないため。 */
-export function clearInventoryCountCache(): void {
-  countCache.clear();
-}
+// キャッシュ本体は lib/inventory/inventoryCountCache.ts。書き込み側から
+// 「捨てる」ためだけにこの重いモジュールを読み込ませないための分離
+// (2026-09-04 健全化 PHASE 6 — 詳細はそちらのファイル冒頭)。
+export { clearInventoryCountCache, inventoryCountCacheKey } from "./inventoryCountCache";
 
 export async function countActiveInventory(filters: InventoryCursorListFilters): Promise<number> {
   const key = inventoryCountCacheKey(filters);
-  const hit = countCache.get(key);
-  if (hit && Date.now() - hit.at < COUNT_TTL_MS) return hit.value;
+  const hit = readInventoryCount(key);
+  if (hit !== null) return hit;
 
   // 2026-09-04 性能総点検: まず DynamoDB の Select:COUNT で数える。
   // 行を読まずに件数だけを受け取るので、実測で 16.3秒/11.83MB →
@@ -175,7 +165,7 @@ export async function countActiveInventory(filters: InventoryCursorListFilters):
   try {
     const fast = await countActiveInventoryFast(filters);
     if (fast !== null) {
-      countCache.set(key, { at: Date.now(), value: fast });
+      writeInventoryCount(key, fast);
       return fast;
     }
   } catch (err) {
@@ -209,6 +199,6 @@ export async function countActiveInventory(filters: InventoryCursorListFilters):
     pages++;
   } while (nextToken && pages < MAX_PAGES);
 
-  countCache.set(key, { at: Date.now(), value: total });
+  writeInventoryCount(key, total);
   return total;
 }
