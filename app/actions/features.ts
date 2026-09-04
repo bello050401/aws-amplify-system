@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { isAdmin } from "@/lib/amplify/requireAdmin";
 import { redirect } from "next/navigation";
 import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { fetchAndCacheItems } from "@/lib/features/baseSync";
@@ -18,7 +19,23 @@ import { unwrapList, unwrapWrite } from "@/lib/amplify/listAll";
  * satisfies their public *read* rule but not `allow.group("Admins")`,
  * so writes need the caller's actual Cognito session.
  */
+/**
+ * Server Action は「その関数を呼ぶPOSTエンドポイント」として外部へ公開
+ * される。ページのlayoutにある認証はページの描画を守るだけで、Actionの
+ * 呼び出しは守らない（2026-09-04 健全化 PHASE 12）。
+ *
+ * 実際には、この下の処理はいずれもBASEのトークンを adminAuthMode で読む
+ * ため、未ログインの呼び出しはAppSyncの認可で弾かれる。ただしその守りは
+ * **下位レイヤに1本だけ**ぶら下がっていて、認可モードを変えたり、トークン
+ * 読み取りより前に処理を足したりすると黙って消える。他の28個のaction
+ * ファイルと同じように、入口で明示的に確かめる。
+ */
+async function requireAdmin(): Promise<void> {
+  if (!(await isAdmin())) throw new Error("この操作にはAdmins権限が必要です。");
+}
+
 export async function generateFeature(itemIds: string[], templateOverride?: TemplateType) {
+  await requireAdmin();
   if (itemIds.length === 0) throw new Error("商品が選択されていません。");
 
   const items = await fetchAndCacheItems(itemIds);
@@ -80,6 +97,7 @@ export interface FeatureFieldPatch {
 }
 
 export async function updateFeature(featureId: string, patch: FeatureFieldPatch) {
+  await requireAdmin();
   const { data: existing } = await serverDataClient.models.Feature.get({ id: featureId }, adminAuthMode);
   if (!existing) throw new Error("特集が見つかりません。");
 
@@ -115,6 +133,7 @@ export async function updateFeature(featureId: string, patch: FeatureFieldPatch)
 
 /** Full re-generation (Phase 1). Per-section regeneration is Phase 2 — see lib/ai/provider regenerateSection, already wired for when that UI lands. */
 export async function regenerateWholeFeature(featureId: string) {
+  await requireAdmin();
   const { data: feature } = await serverDataClient.models.Feature.get({ id: featureId }, adminAuthMode);
   if (!feature) throw new Error("特集が見つかりません。");
 
@@ -148,6 +167,7 @@ export async function regenerateWholeFeature(featureId: string) {
 }
 
 export async function removeFeatureItem(featureItemRowId: string, featureId: string) {
+  await requireAdmin();
   unwrapWrite(
     await serverDataClient.models.FeatureItem.delete({ id: featureItemRowId }, adminAuthMode),
     "掲載商品の削除",
@@ -156,6 +176,7 @@ export async function removeFeatureItem(featureItemRowId: string, featureId: str
 }
 
 export async function publishFeature(featureId: string) {
+  await requireAdmin();
   // Refresh the public-facing cache one more time right before this
   // feature goes live, so the first visitor sees current price/stock/images.
   const { data: rows } = await serverDataClient.models.FeatureItem.list({
@@ -177,12 +198,14 @@ export async function publishFeature(featureId: string) {
 }
 
 export async function unpublishFeature(featureId: string) {
+  await requireAdmin();
   await serverDataClient.models.Feature.update({ id: featureId, status: "DRAFT" }, adminAuthMode);
   revalidatePath("/admin");
   revalidatePath(`/admin/features/${featureId}`);
 }
 
 export async function archiveFeature(featureId: string) {
+  await requireAdmin();
   await serverDataClient.models.Feature.update(
     {
       id: featureId,
@@ -196,6 +219,7 @@ export async function archiveFeature(featureId: string) {
 }
 
 export async function deleteFeature(featureId: string) {
+  await requireAdmin();
   // 子(FeatureItem)を消してから親(Feature)を消す。ここで一覧の取得が
   // 失敗して0件が返ると、**子を1件も消さないまま親だけ消える** ——
   // 存在しない特集を指す行が残り、あとから辿れなくなる。

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { isAdmin } from "@/lib/amplify/requireAdmin";
 import { getBaseClient, BaseNotConfiguredError, type BaseItem } from "@/lib/base";
 import { BaseApiError } from "@/lib/base/client";
 import { BaseNotConnectedError, BaseTokenExchangeError, disconnectBase } from "@/lib/base/oauth";
@@ -66,7 +67,34 @@ function describeBaseFailure(err: unknown): { error: string; code: BaseFailureCo
 }
 
 /** Powers the search box (spec §2/§3). Runs server-side so BASE credentials never reach the browser. */
+/**
+ * Server Action は「その関数を呼ぶPOSTエンドポイント」として外部へ公開
+ * される。ページのlayoutにある認証はページの描画を守るだけで、Actionの
+ * 呼び出しは守らない（2026-09-04 健全化 PHASE 12）。
+ *
+ * 実際には、この下の処理はいずれもBASEのトークンを adminAuthMode で読む
+ * ため、未ログインの呼び出しはAppSyncの認可で弾かれる。ただしその守りは
+ * **下位レイヤに1本だけ**ぶら下がっていて、認可モードを変えたり、トークン
+ * 読み取りより前に処理を足したりすると黙って消える。他の28個のaction
+ * ファイルと同じように、入口で明示的に確かめる。
+ */
+async function requireAdmin(): Promise<void> {
+  if (!(await isAdmin())) throw new Error("この操作にはAdmins権限が必要です。");
+}
+
+/**
+ * 検索系はこのファイルの方針どおり **throwせず戻り値で** 伝える
+ * （production buildではthrowしたmessageが英語の定型文へ丸められる
+ *  ——このファイル冒頭の説明を参照）。
+ */
+async function adminGate(): Promise<BaseSearchActionResult | null> {
+  if (await isAdmin()) return null;
+  return { ok: false, error: "この操作にはAdmins権限が必要です。ログインし直してください。", code: "UNKNOWN" };
+}
+
 export async function searchBaseItems(query: string): Promise<BaseSearchActionResult> {
+  const denied = await adminGate();
+  if (denied) return denied;
   if (!query.trim()) return { ok: true, items: [] };
   try {
     const result = await getBaseClient().search({ query });
@@ -84,6 +112,8 @@ export async function searchBaseItems(query: string): Promise<BaseSearchActionRe
  * per line (or comma/space-separated) so a batch paste works too.
  */
 export async function resolveBaseItemsFromUrls(text: string): Promise<BaseSearchActionResult> {
+  const denied = await adminGate();
+  if (denied) return denied;
   const ids = Array.from(new Set(Array.from(text.matchAll(/items\/(\d+)/g)).map((m) => m[1])));
   if (ids.length === 0) return { ok: true, items: [] };
   try {
@@ -96,6 +126,7 @@ export async function resolveBaseItemsFromUrls(text: string): Promise<BaseSearch
 }
 
 export async function disconnectBaseAction() {
+  await requireAdmin();
   await disconnectBase();
   revalidatePath("/admin/settings");
 }
