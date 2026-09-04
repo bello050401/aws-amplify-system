@@ -10,7 +10,7 @@
  * scriptと呼び出し方を揃えるため同じ経路にしてある。)
  */
 import { deriveNeedsReply, deriveConversationStatus, buildMessagePreview, sortConversations } from "@/lib/messaging/conversationStatus";
-import { recordIncomingWebhookMessageWith, type WebhookStoreDeps } from "@/lib/messaging/webhookStore";
+import { deterministicMessageId, recordIncomingWebhookMessageWith, type WebhookStoreDeps } from "@/lib/messaging/webhookStore";
 import type { ConversationRecord } from "@/lib/messaging/types";
 import {
   CONVERSATION_FILTERS,
@@ -141,7 +141,7 @@ async function testWebhookStoreCreatesConversation() {
   const { deps, sent } = fakeDynamo({ conversation: null });
   const result = await recordIncomingWebhookMessageWith(deps, incoming);
 
-  assertEqual(result, { conversationId: "id-1", messageId: "id-2" }, "webhookStore: 新規顧客なら会話とメッセージを1件ずつ作る");
+  assertEqual(result, { conversationId: "id-1", messageId: deterministicMessageId(incoming.externalMessageId) }, "webhookStore: 新規顧客なら会話とメッセージを1件ずつ作る");
   assertEqual(
     sent.map((c) => c.name),
     ["QueryCommand", "ScanCommand", "PutCommand", "PutCommand"],
@@ -178,7 +178,7 @@ async function testWebhookStoreAppendsToExistingConversation() {
   });
   const result = await recordIncomingWebhookMessageWith(deps, incoming);
 
-  assertEqual(result, { conversationId: "conv-existing", messageId: "id-1" }, "webhookStore: 既存会話があれば新しい会話を作らず、その会話へ足す");
+  assertEqual(result, { conversationId: "conv-existing", messageId: deterministicMessageId(incoming.externalMessageId) }, "webhookStore: 既存会話があれば新しい会話を作らず、その会話へ足す");
   assertEqual(
     sent.map((c) => c.name),
     ["QueryCommand", "ScanCommand", "UpdateCommand", "PutCommand"],
@@ -203,6 +203,73 @@ async function testWebhookStoreKeepsManuallyResolvedStatus() {
     sent[2].input.ExpressionAttributeValues[":s"],
     "RESOLVED",
     "webhookStore: 人が解決済みにした会話を受信だけで差し戻さない(deriveConversationStatusの取り決めをこの経路でも守る)",
+  );
+}
+
+/**
+ * 2026-09-04 健全化 PHASE 9: 「調べてから書く」の隙間で追い越されても
+ * 二重登録しないこと。冒頭のGSI照会をすり抜けた(＝同時に届いた)場合、
+ * 最後の砦はDynamoDBの条件付き書き込みだけになる。
+ */
+async function testWebhookStoreMessagePutIsConditional() {
+  const { deps, sent } = fakeDynamo({ conversation: null });
+  await recordIncomingWebhookMessageWith(deps, incoming);
+  const messagePut = sent[sent.length - 1].input;
+  assertEqual(
+    messagePut.ConditionExpression,
+    "attribute_not_exists(id)",
+    "webhookStore: メッセージの書き込みは条件付き(同時受信でも2件目を書かない)",
+  );
+  assertEqual(
+    messagePut.Item.id,
+    deterministicMessageId(incoming.externalMessageId),
+    "webhookStore: メッセージのidはexternalMessageIdから決まる(条件が効くのはidが同じになるからこそ)",
+  );
+}
+
+async function testWebhookStoreTreatsConditionFailureAsDuplicate() {
+  const { deps } = fakeDynamo({ conversation: null });
+  const inner = deps.send;
+  deps.send = async (command: any) => {
+    const name = command?.constructor?.name ?? "Unknown";
+    // メッセージ側のPutだけ、同時実行に負けた状況を再現する。
+    if (name === "PutCommand" && command.input.TableName === "Message-test") {
+      const err = new Error("The conditional request failed");
+      err.name = "ConditionalCheckFailedException";
+      throw err;
+    }
+    return inner(command);
+  };
+  const result = await recordIncomingWebhookMessageWith(deps, incoming);
+  assertEqual(
+    (result as { deduped?: true }).deduped,
+    true,
+    "webhookStore: 条件付き書き込みに負けたら重複として扱う(例外で500にしない)",
+  );
+  assertEqual(
+    (result as { messageId?: string }).messageId,
+    deterministicMessageId(incoming.externalMessageId),
+    "webhookStore: 負けた側もメッセージIDを返す(解析・通知のやり直しに使う)",
+  );
+}
+
+function testDeterministicMessageId() {
+  assertEqual(
+    deterministicMessageId("line-msg-1"),
+    deterministicMessageId("line-msg-1"),
+    "deterministicMessageId: 同じ入力なら必ず同じid",
+  );
+  assertTrue(
+    deterministicMessageId("a") !== deterministicMessageId("b"),
+    "deterministicMessageId: 違う入力なら違うid",
+  );
+  assertTrue(
+    deterministicMessageId("gmail:" + "x".repeat(400)).length < 200,
+    "deterministicMessageId: 長い外部IDでもキーとして扱える長さに収まる",
+  );
+  assertTrue(
+    deterministicMessageId("日本語/含む?id") !== deterministicMessageId("日本語_含む_id"),
+    "deterministicMessageId: 文字を丸めても別々の外部IDが同じidにならない(ハッシュで打ち消す)",
   );
 }
 
@@ -312,6 +379,9 @@ async function main() {
   await testWebhookStoreAppendsToExistingConversation();
   await testWebhookStoreKeepsManuallyResolvedStatus();
   await testWebhookStoreDedupesResentMessage();
+  await testWebhookStoreMessagePutIsConditional();
+  await testWebhookStoreTreatsConditionFailureAsDuplicate();
+  testDeterministicMessageId();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

@@ -1,5 +1,5 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, QueryCommand, ScanCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 // 純粋ロジックのみを取り込む。service.ts は "server-only" と
@@ -148,6 +148,30 @@ export interface WebhookStoreDeps {
   messageTable: string;
   newId: () => string;
   now: () => string;
+}
+
+/**
+ * externalMessageId から決まるMessageのid（2026-09-04 健全化 PHASE 9）。
+ *
+ * 純粋関数。`attribute_not_exists(id)` と組み合わせて、同じ外部メッセージが
+ * 2件書き込まれないことをDB側で保証するために使う。
+ *
+ * externalMessageId は "LINEのmessage.id" や "gmail:<id>" のように、
+ * チャネル側で採番された値をそのまま入れている。LINEのidは英数字、
+ * Gmail由来は "gmail:" 接頭辞付きなので、チャネルをまたいでも衝突しない。
+ *
+ * 長さと文字種だけ丸める（キーとして扱いにくい文字を `_` にし、120文字で
+ * 切る）。丸めると別々の値が同じ文字列になりうるので、**元の値の
+ * ハッシュを末尾に足して**それを打ち消す。
+ *
+ * 既存のMessageはランダムUUIDのままだが、重複判定は冒頭の
+ * findExistingMessage（externalMessageIdのGSI）が新旧どちらも拾うので、
+ * 移行作業は要らない。
+ */
+export function deterministicMessageId(externalMessageId: string): string {
+  const safe = externalMessageId.replace(/[^A-Za-z0-9:_-]/g, "_").slice(0, 120);
+  const digest = createHash("sha256").update(externalMessageId).digest("hex").slice(0, 16);
+  return `msg_${safe}_${digest}`;
 }
 
 /**
@@ -459,34 +483,57 @@ export async function recordIncomingWebhookMessageWith(
     );
   }
 
-  const messageId = deps.newId();
-  await deps.send(
-    new PutCommand({
-      TableName: deps.messageTable,
-      Item: {
-        id: messageId,
-        __typename: "Message",
-        conversationId,
-        externalMessageId: params.externalMessageId,
-        direction: "INBOUND",
-        senderType: "CUSTOMER",
-        body: params.body,
-        contentType: params.contentKind === "IMAGE" ? "image" : "text",
-        contentKind: params.contentKind ?? "TEXT",
-        attachmentStorageKey: params.attachmentStorageKey ?? null,
-        attachmentContentType: params.attachmentContentType ?? null,
-        attachmentSizeBytes: params.attachmentSizeBytes ?? null,
-        attachmentStatus: params.attachmentStatus ?? "NONE",
-        attachmentError: params.attachmentError ?? null,
-        externalSentAt: params.externalSentAt,
-        deliveryStatus: "RECEIVED",
-        aiGenerated: false,
-        createdBy: "LINE受信",
-        createdAt: now,
-        updatedAt: now,
-      },
-    }),
-  );
+  // **メッセージの取り込みはDB側の条件で一意にする（2026-09-04 健全化 PHASE 9）。**
+  //
+  // 冒頭の findExistingMessage は「調べてから書く」形なので、調べてから
+  // 書くまでの間に同じWebhookがもう一度届くと**両方が「まだ無い」と判断
+  // して2件書く**。LINEは再送するし、この関数の下流(解析・AI生成)は数秒
+  // かかるので追い越しは起こりうる。
+  //
+  // idを externalMessageId から決まる値にし、`attribute_not_exists(id)` を
+  // 付ける。2件目を書こうとした側は必ず失敗し、重複として扱える。
+  // (AppSyncのcreateリゾルバと同じ条件。lib/amplify/directData.ts の
+  //  modelCreate も同じ理由で条件付きに揃えてある。)
+  const messageId = deterministicMessageId(params.externalMessageId);
+  try {
+    await deps.send(
+      new PutCommand({
+        TableName: deps.messageTable,
+        ConditionExpression: "attribute_not_exists(id)",
+        Item: {
+          id: messageId,
+          __typename: "Message",
+          conversationId,
+          externalMessageId: params.externalMessageId,
+          direction: "INBOUND",
+          senderType: "CUSTOMER",
+          body: params.body,
+          contentType: params.contentKind === "IMAGE" ? "image" : "text",
+          contentKind: params.contentKind ?? "TEXT",
+          attachmentStorageKey: params.attachmentStorageKey ?? null,
+          attachmentContentType: params.attachmentContentType ?? null,
+          attachmentSizeBytes: params.attachmentSizeBytes ?? null,
+          attachmentStatus: params.attachmentStatus ?? "NONE",
+          attachmentError: params.attachmentError ?? null,
+          externalSentAt: params.externalSentAt,
+          deliveryStatus: "RECEIVED",
+          aiGenerated: false,
+          createdBy: "LINE受信",
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+  } catch (err) {
+    // 条件不成立 = 同じメッセージが既に取り込まれている。冒頭の
+    // findExistingMessage と同じ扱いにして、後続(解析・通知)へは
+    // 「重複だがIDは分かる」として返す —— 通知が作られないまま
+    // 終わることのないよう、再送をやり直しの機会として使える。
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      return { deduped: true, conversationId, messageId };
+    }
+    throw err;
+  }
 
   return { conversationId, messageId };
 }
