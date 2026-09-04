@@ -77,11 +77,14 @@ export default async function InventorySettingsPage() {
   const requestHeaders = headers();
   const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
 
-  const [categories, locations, units, customFields, zaicoTokenSource, mercariState, lineTokenSource, baseConnection] =
+  const [categories, locations, units, statuses, customFields, zaicoTokenSource, mercariState, lineTokenSource, baseConnection] =
     await Promise.all([
       listAllMasterEntries("Category"),
       listAllMasterEntries("Location"),
       listAllMasterEntries("Unit"),
+      // 状態マスタ。StatusMaster は登録画面が無いまま0件で放置されていた
+      // (2026-09-04 性能改善 第2フェーズ§5)。登録できるようにするだけで、データは1件も入れない。
+      listAllMasterEntries("Status"),
       listAllCustomFieldDefinitions(),
       getZaicoTokenSource(),
       getMercariConnectionState(),
@@ -107,6 +110,7 @@ export default async function InventorySettingsPage() {
           categories={categories}
           locations={locations}
           units={units}
+          statuses={statuses}
           customFields={customFields}
           readOnly={role !== "ADMIN"}
           isAdmin={role === "ADMIN"}

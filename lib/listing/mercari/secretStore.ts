@@ -38,7 +38,9 @@ import {
  * MERCARI_ACCESS_TOKENへフォールバックする。
  */
 
-const SECRET_NAME = "bello/mercari-access-token";
+/** Secrets Manager 上の名前。計測ハーネス(scripts/measure-performance.ts)からも参照するので、名前を2箇所に書かない。 */
+export const MERCARI_SECRET_NAME = "bello/mercari-access-token";
+const SECRET_NAME = MERCARI_SECRET_NAME;
 
 const SECRET_DESCRIPTION =
   "BELLO在庫管理システム — Mercari Shops Personal API Access Token(EC出品機能専用)。設定画面(ADMIN限定)から読み書きする。";

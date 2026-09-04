@@ -1,6 +1,6 @@
 import "server-only";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { directTableName } from "@/lib/amplify/directData";
 import type { InventoryCursorListFilters } from "./inventoryCursorList";
 
@@ -15,15 +15,28 @@ import type { InventoryCursorListFilters } from "./inventoryCursorList";
  * それは AppSync が返す項目を絞るだけで、**DynamoDB は行の中身を全部
  * 読んでいる**(射影は読んだ後に効く)。
  *
- * Staging 実測(在庫5,329件、同じ条件・同じGSI):
+ * Staging 実測(在庫5,329件、同じ条件):
  *
- *   行を読んで数える      16.3秒 / 11.83MB を転送
- *   Select: COUNT          3.7秒 /  0MB を転送
+ *   行を読んで数える(GSI)        16.3秒 / 11.83MB を転送
+ *   Select: COUNT(GSI・直列)      3.7秒 /  0MB を転送
+ *   Select: COUNT(Scan・並列8)  0.35〜0.72秒 / 0MB を転送   ← 現在
  *
  * 件数しか要らないのに12MBを運んでいた。COUNT なら DynamoDB が数えて
  * 数値だけを返すので、転送もJSONの組み立ても消える。
  * (往復数は COUNT のほうが多い —— COUNT は「走査した1MBごと」に返る
- *  ため。それでも上のとおり4倍以上速い。)
+ *  ため。それでも上のとおり速い。)
+ *
+ * ── 2026-09-04 第2フェーズ: GSIのQueryから並列Scanへ ─────────────
+ *
+ * COUNT は往復回数を減らせない(1MBごとに返る)ので、残る手は「直列に
+ * 待つ段数を減らす」ことだけ。Scan は TotalSegments で分割できるが、
+ * GSIへのQueryはできない。数える対象は同じ —— GSIのキー条件
+ * (listingPartition="ACTIVE")は、非削除行すべてに listingPartition が
+ * 入っている前提(バックフィル済み、実測5,329/5,329)で
+ * `attribute_not_exists(deletedAt)` と同じ集合を指す。むしろ
+ * listingPartition を持たない行が将来できても Scan なら数え落とさない。
+ * 新旧が同数になることは scripts/verify-inventory-count.ts が実データで
+ * 突き合わせる(比較相手は従来どおりGSIを辿って行を数えた結果)。
  *
  * ── なぜ AppSync を通さないのか ──────────────────────────────────
  *
@@ -42,7 +55,12 @@ import type { InventoryCursorListFilters } from "./inventoryCursorList";
  */
 
 const REGION = process.env.AWS_REGION || process.env.BEDROCK_REGION || "us-west-2";
-const INDEX_NAME = "inventoriesByListingPartitionAndListUpdatedAt";
+/**
+ * COUNT を割る並列セグメント数。lib/inventory/inventorySearchFast.ts と同じ理由。
+ * 実測(5,329件): GSIへの直列COUNT 3,727ms → 並列8のScan COUNT 345〜715ms。
+ * 数える対象・結果は同じで、直列に待つ段数だけが減る。
+ */
+const COUNT_SEGMENTS = 8;
 /** listInventoryOffsetPage / countActiveInventory と同じ安全弁。 */
 const MAX_PAGES = 60;
 
@@ -107,31 +125,36 @@ export async function countActiveInventoryFast(filters: InventoryCursorListFilte
   }
 
   const { filterExpression, names, values } = buildCountExpression(filters);
-  let total = 0;
-  let key: Record<string, unknown> | undefined;
-  let pages = 0;
 
-  do {
-    const res = await ddb().send(
-      new QueryCommand({
-        TableName: table,
-        IndexName: INDEX_NAME,
-        KeyConditionExpression: "#partition = :partition",
-        ExpressionAttributeNames: { "#partition": "listingPartition", ...names },
-        ExpressionAttributeValues: { ":partition": "ACTIVE", ...values },
-        FilterExpression: filterExpression,
-        // ここが本題。行を返さず、DynamoDB側で数えた件数だけを受け取る。
-        Select: "COUNT",
-        ExclusiveStartKey: key,
-      }),
-    );
-    total += res.Count ?? 0;
-    key = res.LastEvaluatedKey;
-    pages++;
-  } while (key && pages < MAX_PAGES);
+  // 1セグメントぶんを最後まで数える。数え切れなければ null。
+  async function countSegment(segment: number): Promise<number | null> {
+    let total = 0;
+    let key: Record<string, unknown> | undefined;
+    let pages = 0;
+    do {
+      const res = await ddb().send(
+        new ScanCommand({
+          TableName: table,
+          Segment: segment,
+          TotalSegments: COUNT_SEGMENTS,
+          // ここが本題。行を返さず、DynamoDB側で数えた件数だけを受け取る。
+          Select: "COUNT",
+          FilterExpression: filterExpression,
+          ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
+          ...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
+          ExclusiveStartKey: key,
+        }),
+      );
+      total += res.Count ?? 0;
+      key = res.LastEvaluatedKey;
+      pages++;
+    } while (key && pages < MAX_PAGES);
+    // 打ち切った場合は「数え切れなかった」ので、途中までの数を総数として
+    // 返さない —— 実際より少ない件数を平然と出すほうが有害。
+    return key ? null : total;
+  }
 
-  // 打ち切った場合は「数え切れなかった」ので、途中までの数を総数として
-  // 返さない —— 実際より少ない件数を平然と出すほうが有害。
-  if (key) return null;
-  return total;
+  const parts = await Promise.all(Array.from({ length: COUNT_SEGMENTS }, (_, i) => countSegment(i)));
+  if (parts.some((p) => p === null)) return null;
+  return parts.reduce((sum: number, p) => sum + (p ?? 0), 0);
 }

@@ -114,6 +114,11 @@ export async function dedupeMasterEntries(model: MasterModelName): Promise<void>
   // のコメント参照)。createMasterEntry自体は今後もUnitの重複作成を
   // normalizeMasterNameで防ぐため、実害はない。
   if (model === "Unit") return;
+  // Status(2026-09-04 性能改善 第2フェーズ§5で登録画面を用意した)も同様に
+  // 未対応 —— そもそも0件から始まるので過去の表記ゆれ重複が存在せず、
+  // 付け替え先(reassignInventoryReferences)のStatus分岐も無い。
+  // 今後この関数をStatusで呼ぶ場合は、先に付け替えの実装を足すこと。
+  if (model === "Status") return;
 
   const entries = await listAllMasterEntries(model);
   const groups = new Map<string, MasterEntry[]>();

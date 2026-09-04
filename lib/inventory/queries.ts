@@ -10,6 +10,7 @@ import type { InventoryExtendedFields } from "./extendedFields";
 import { effectiveListThumbnailKey, normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
 import { resolveDisplayInventoryId } from "./inventoryId";
 import { evaluateQuery, matchesQuickSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
+import { searchInventoryFast, type FastSearchInput } from "./inventorySearchFast";
 import {
   isE2EFixtureModeActive,
   E2E_CATEGORIES,
@@ -453,6 +454,38 @@ export interface SearchPage<T> {
 }
 
 /**
+ * 「検索に要る列だけを読む」経路を試す(2026-09-04 性能改善 第2フェーズ§1)。
+ *
+ * 使えない環境・安全弁に当たった場合、および何らかの理由で失敗した場合は
+ * null を返し、呼び出し側が従来の全件走査へ落ちる。**検索結果が空になる
+ * のと、経路が使えないのを取り違えない** —— 0件は 0件として返る。
+ *
+ * 返す行は従来とまったく同じ toSearchRecord を通しているので、
+ * 呼び出し側から見た型も中身も変わらない。
+ */
+async function trySearchFast(
+  input: FastSearchInput,
+  options: { offset: number; limit: number },
+): Promise<SearchPage<InventoryListRow> | null> {
+  try {
+    const fast = await searchInventoryFast(input, options);
+    if (!fast) return null;
+    return {
+      items: fast.rawItems.map((raw) => toSearchRecord(raw as unknown as InventoryModel)),
+      total: fast.total,
+      offset: fast.offset,
+      limit: fast.limit,
+    };
+  } catch (err) {
+    // 速い経路が落ちても検索そのものは諦めない。理由だけ残して従来経路へ。
+    console.warn("[inventory] 検索の高速経路が失敗したため従来経路で検索します", {
+      error: err instanceof Error ? `${err.name}: ${err.message}`.slice(0, 300) : "unknown",
+    });
+    return null;
+  }
+}
+
+/**
  * クイック検索(商品検索ボックスの`q`)専用 — 在庫ID/SKU/物品名への
  * case-insensitive部分一致。カテゴリ/保管場所/状態はDynamoDBへ実際に
  * 絞り込み条件として渡す(既存listInventoryと同じ条件組み立て)。
@@ -471,6 +504,16 @@ export async function listInventorySimpleSearch(
   }
   if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
+
+  // 2026-09-04 性能改善 第2フェーズ§1: まず「検索に要る列だけ」を並列Scan
+  // で読む経路を試す。判定・並び順・件数は下の従来経路とまったく同じ関数で
+  // 決まる(lib/inventory/inventorySearchFast.ts)。使えない環境では null が
+  // 返るので、そのまま従来経路へ落ちる。
+  const fast = await trySearchFast(
+    { filters: { categoryIds: filters.categoryIds, locationId: filters.locationId, statusId: filters.statusId }, q: filters.q },
+    options,
+  );
+  if (fast) return fast;
 
   const all = await fetchAllInventoryRecords(conditions);
   const q = filters.q?.trim();
@@ -496,6 +539,10 @@ export async function listInventoryAdvanced(
   options: { offset: number; limit: number },
 ): Promise<SearchPage<InventoryListRow>> {
   if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
+  // 2026-09-04 性能改善 第2フェーズ§1(クイック検索と同じ理由・同じ扱い)。
+  const fast = await trySearchFast({ advanced: { query, fieldsByKey } }, options);
+  if (fast) return fast;
+
   const all = await fetchAllInventoryRecords();
   const filtered = all.filter((r) => evaluateQuery(r as unknown as SearchableRecord, query, fieldsByKey));
 

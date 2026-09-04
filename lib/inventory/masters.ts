@@ -25,12 +25,51 @@ import { unwrapList } from "@/lib/amplify/listAll";
  * assignability (`TS2321: Excessive stack depth`) on every call.
  * Branching per call keeps each branch's type fully concrete instead.
  */
-export type MasterModelName = "Category" | "Location" | "Unit";
+export type MasterModelName = "Category" | "Location" | "Unit" | "Status";
 
 function masterLabel(model: MasterModelName): string {
   if (model === "Category") return "カテゴリ";
   if (model === "Location") return "保管場所";
+  if (model === "Status") return "状態";
   return "単位";
+}
+
+/**
+ * StatusMaster の `code`(schema上 required)を label から作る
+ * (2026-09-04 性能改善 第2フェーズ §5)。
+ *
+ * ── なぜここで生成するのか ──────────────────────────────────────
+ *
+ * StatusMaster は ZAICO の `state` に対応する構造として作られたが、
+ * 実データの `state` が空で写像が見送られ(lib/inventory/zaicoMapping.ts
+ * の該当コメント)、**登録画面も作られなかった**。結果、Staging 実測で
+ * StatusMaster 0件 / statusId を持つ在庫 0件 —— 一覧の「状態」列・
+ * サイドバーの状態絞り込み・登録/編集フォームの状態選択が、構造だけ
+ * 生きたまま永久に空になっていた。
+ *
+ * ここで直すのは「登録できるようにする」ことだけで、**データは1件も
+ * 入れない**。何を状態として持つかは運用が決めることで、こちらが
+ * それらしい値を入れてよいものではない。
+ *
+ * `code` は外部連携用の識別子だが、現時点で読む側がどこにも無い
+ * (ZAICO の state は未写像のまま)。利用者に意味の無い入力を1つ増やす
+ * より、label から機械的に決めて隠しておくほうがよい。名称を変えても
+ * code は変えない —— code は識別子で、表示名ではない。
+ */
+function statusCodeFromLabel(label: string, existingCodes: Set<string>): string {
+  const base =
+    label
+      .normalize("NFKC")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "status";
+  if (!existingCodes.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base}-${i}`;
+    if (!existingCodes.has(candidate)) return candidate;
+  }
+  return `${base}-${Date.now()}`;
 }
 
 export interface MasterEntry {
@@ -55,6 +94,12 @@ export function normalizeMasterName(name: string): string {
   return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+/** 既存の状態コード。code は識別子なので、重複させない。 */
+async function existingStatusCodes(): Promise<Set<string>> {
+  const data = unwrapList(await serverDataClient.models.StatusMaster.list(inventoryAuthMode), "状態マスタ");
+  return new Set(data.map((d) => d.code));
+}
+
 /** Every entry regardless of isActive — the settings screen needs to show (and let ADMIN re-enable) disabled ones too, unlike listCategories()/listLocations() in queries.ts which only ever return active entries for the registration/edit forms' dropdowns. */
 export async function listAllMasterEntries(model: MasterModelName): Promise<MasterEntry[]> {
   if (model === "Unit") {
@@ -74,6 +119,14 @@ export async function listAllMasterEntries(model: MasterModelName): Promise<Mast
       console.warn("[listAllMasterEntries] UnitMasterの取得に失敗しました(AWS側の再デプロイが未実施の可能性があります):", err);
       return [];
     }
+  }
+
+  if (model === "Status") {
+    // 「状態」は label が表示名。code は識別子なのでここでは扱わない。
+    const data = unwrapList(await serverDataClient.models.StatusMaster.list(inventoryAuthMode), "状態マスタ");
+    return data
+      .map((d) => ({ id: d.id, name: d.label, sortOrder: d.sortOrder ?? 0, isActive: d.isActive ?? true }))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
   }
 
   // この結果は seedModel の「まだ無い名前」判定に使われる。空に化けると
@@ -116,7 +169,12 @@ export async function createMasterEntry(model: MasterModelName, name: string): P
       ? await serverDataClient.models.Category.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
       : model === "Location"
         ? await serverDataClient.models.Location.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
-        : await serverDataClient.models.UnitMaster.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
+        : model === "Status"
+          ? await serverDataClient.models.StatusMaster.create(
+              { code: statusCodeFromLabel(trimmed, await existingStatusCodes()), label: trimmed, sortOrder: nextSortOrder, isActive: true },
+              inventoryAuthMode,
+            )
+          : await serverDataClient.models.UnitMaster.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
   if (errors) {
     console.error(`[createMasterEntry] ${model} create failed:`, errors);
     throw new Error(`追加に失敗しました: ${JSON.stringify(errors)}`);
@@ -141,7 +199,10 @@ export async function renameMasterEntry(model: MasterModelName, id: string, name
       ? await serverDataClient.models.Category.update({ id, name: trimmed }, inventoryAuthMode)
       : model === "Location"
         ? await serverDataClient.models.Location.update({ id, name: trimmed }, inventoryAuthMode)
-        : await serverDataClient.models.UnitMaster.update({ id, name: trimmed }, inventoryAuthMode);
+        : model === "Status"
+          ? // code は識別子なので名称変更では触らない（外部連携の参照先が変わらないようにする）。
+            await serverDataClient.models.StatusMaster.update({ id, label: trimmed }, inventoryAuthMode)
+          : await serverDataClient.models.UnitMaster.update({ id, name: trimmed }, inventoryAuthMode);
   if (errors) {
     console.error(`[renameMasterEntry] ${model} update failed:`, errors);
     throw new Error(`名称の変更に失敗しました: ${JSON.stringify(errors)}`);
@@ -158,7 +219,9 @@ export async function setMasterEntryActive(model: MasterModelName, id: string, i
       ? await serverDataClient.models.Category.update({ id, isActive }, inventoryAuthMode)
       : model === "Location"
         ? await serverDataClient.models.Location.update({ id, isActive }, inventoryAuthMode)
-        : await serverDataClient.models.UnitMaster.update({ id, isActive }, inventoryAuthMode);
+        : model === "Status"
+          ? await serverDataClient.models.StatusMaster.update({ id, isActive }, inventoryAuthMode)
+          : await serverDataClient.models.UnitMaster.update({ id, isActive }, inventoryAuthMode);
   if (errors) {
     console.error(`[setMasterEntryActive] ${model} update failed:`, errors);
     throw new Error(`更新に失敗しました: ${JSON.stringify(errors)}`);
@@ -168,6 +231,7 @@ export async function setMasterEntryActive(model: MasterModelName, id: string, i
 async function updateSortOrder(model: MasterModelName, id: string, sortOrder: number) {
   if (model === "Category") return serverDataClient.models.Category.update({ id, sortOrder }, inventoryAuthMode);
   if (model === "Location") return serverDataClient.models.Location.update({ id, sortOrder }, inventoryAuthMode);
+  if (model === "Status") return serverDataClient.models.StatusMaster.update({ id, sortOrder }, inventoryAuthMode);
   return serverDataClient.models.UnitMaster.update({ id, sortOrder }, inventoryAuthMode);
 }
 
@@ -238,6 +302,24 @@ async function countInventoryReferences(model: MasterModelName, id: string): Pro
     } while (nextToken);
     return total;
   }
+  if (model === "Status") {
+    // 状態には専用のGSIが無いのでfilter付きScanで数える。「使われて
+    // いるか」を数える処理なので、取得失敗を0件と取り違えない
+    // （unwrapListが投げる）。
+    let total = 0;
+    let nextToken: string | null | undefined;
+    do {
+      const res = await serverDataClient.models.Inventory.list({
+        filter: { statusId: { eq: id } },
+        limit: 200,
+        nextToken: nextToken ?? undefined,
+        ...inventoryAuthMode,
+      });
+      total += unwrapList(res, "状態の使用件数").length;
+      nextToken = res.nextToken;
+    } while (nextToken);
+    return total;
+  }
   const { data: unitEntry } = await serverDataClient.models.UnitMaster.get({ id }, inventoryAuthMode);
   if (!unitEntry) return 0;
   let total = 0;
@@ -279,7 +361,9 @@ export async function deleteMasterEntry(model: MasterModelName, id: string): Pro
       ? await serverDataClient.models.Category.delete({ id }, inventoryAuthMode)
       : model === "Location"
         ? await serverDataClient.models.Location.delete({ id }, inventoryAuthMode)
-        : await serverDataClient.models.UnitMaster.delete({ id }, inventoryAuthMode);
+        : model === "Status"
+          ? await serverDataClient.models.StatusMaster.delete({ id }, inventoryAuthMode)
+          : await serverDataClient.models.UnitMaster.delete({ id }, inventoryAuthMode);
   if (errors) {
     console.error(`[deleteMasterEntry] ${model} delete failed:`, errors);
     throw new Error(`削除に失敗しました: ${JSON.stringify(errors)}`);
@@ -313,7 +397,12 @@ export async function findOrCreateMasterEntryByName(model: MasterModelName, name
       ? await serverDataClient.models.Category.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
       : model === "Location"
         ? await serverDataClient.models.Location.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode)
-        : await serverDataClient.models.UnitMaster.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
+        : model === "Status"
+          ? await serverDataClient.models.StatusMaster.create(
+              { code: statusCodeFromLabel(trimmed, await existingStatusCodes()), label: trimmed, sortOrder: nextSortOrder, isActive: true },
+              inventoryAuthMode,
+            )
+          : await serverDataClient.models.UnitMaster.create({ name: trimmed, sortOrder: nextSortOrder, isActive: true }, inventoryAuthMode);
   if (errors || !data) {
     console.error(`[findOrCreateMasterEntryByName] ${model} create failed:`, errors);
     throw new Error(`${masterLabel(model)}の作成に失敗しました: ${JSON.stringify(errors)}`);
