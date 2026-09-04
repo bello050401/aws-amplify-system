@@ -10,7 +10,7 @@ import type { ShippingRank } from "./rank";
 export interface ShippingRateRecord {
   id: string;
   provider: string; // 例: "アートセッティングデリバリー"
-  service: string; // 例: "家財おまかせ便"
+  service: string; // 「らくらく家財便」(呼称は lib/shipping/serviceName.ts が唯一の出所)
   originPrefecture: string; // 常に"埼玉県"(§61) — それでもDBに持たせておくのは、将来複数拠点になった場合に備えるため
   originArea: string | null; // 地域細分(例: "地域Ⅳ" — §66調査では実際の地域区分表までは確認できなかったため現状常にnull)
   destinationPrefecture: string;

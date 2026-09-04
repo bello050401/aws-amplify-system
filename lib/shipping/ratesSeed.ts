@@ -1,5 +1,6 @@
 import "server-only";
 import type { ShippingRank } from "./rank";
+import { KAZAI_PROVIDER_NAME, KAZAI_SERVICE_NAME } from "./serviceName";
 
 /**
  * 家財おまかせ便 全国料金マスター(埼玉県発送)。
@@ -42,8 +43,10 @@ export const SHIPPING_RATE_SEED_SOURCE_REFERENCE =
 
 export const SHIPPING_RATE_SEED_VERIFIED_AT = "2026-08-30T00:00:00.000Z";
 
-export const SHIPPING_RATE_SEED_PROVIDER = "アートセッティングデリバリー";
-export const SHIPPING_RATE_SEED_SERVICE = "家財おまかせ便";
+// 呼称は lib/shipping/serviceName.ts を唯一の出所にする(2026-09-04)。
+// ここへ文字列を書き写すと、画面と料金マスタで名前が分岐する。
+export const SHIPPING_RATE_SEED_PROVIDER = KAZAI_PROVIDER_NAME;
+export const SHIPPING_RATE_SEED_SERVICE = KAZAI_SERVICE_NAME;
 export const SHIPPING_RATE_SEED_ORIGIN_PREFECTURE = "埼玉県";
 
 /**

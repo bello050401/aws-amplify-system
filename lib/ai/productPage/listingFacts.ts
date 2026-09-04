@@ -25,6 +25,7 @@ import {
 } from "@/lib/inventory/maintenance";
 import { resolveSeatDimensions, type SeatDimensions } from "@/lib/inventory/seatDimensions";
 import { calculateShippingRankFromDimensionsDetailed, type ShippingRank } from "@/lib/shipping/rank";
+import { KAZAI_SERVICE_NAME } from "@/lib/shipping/serviceName";
 import { resolveSagawaSize, type SagawaSizeResult } from "@/lib/shipping/sagawaSize";
 
 /** 生成へ渡す在庫の生データ(呼び出し側が Inventory から詰める)。 */
@@ -64,7 +65,7 @@ export interface ListingFacts {
   maintenance: MaintenanceResult;
   /** ファブリックが明らかに無いか(§12)。 */
   nonFabric: boolean;
-  /** 家財おまかせ便のランク。判定できなければ null(§10)。 */
+  /** らくらく家財便のランク。判定できなければ null(§10)。 */
   shippingRank: ShippingRank | null;
   /** ランクを判定できなかった理由(担当者向け)。 */
   shippingRankReason: string | null;
@@ -160,7 +161,7 @@ export function buildListingFacts(input: ListingFactsInput): ListingFacts {
   const material = usableMaterial(input.material);
   const nonFabric = looksNonFabric({ name: input.name, material, categoryName: input.categoryName });
 
-  // ── 家財おまかせ便のランク(§8 既存ロジックを再利用) ────────────
+  // ── らくらく家財便のランク(§8 既存ロジックを再利用) ────────────
   //
   // 送料計算(lib/shipping/service.ts)と同じ関数を通す。別ロジックを
   // 書くと、送料の表示と商品説明が食い違う状態になる。
@@ -171,7 +172,7 @@ export function buildListingFacts(input: ListingFactsInput): ListingFacts {
     "missingAxes" in rankResult
       ? `送料判定に使える外形寸法を読み取れませんでした（${rankResult.missingAxes.map((a) => a.label).join("・")}）。`
       : shippingRank === "OVERSIZE"
-        ? "3辺合計が家財おまかせ便のランク表の範囲外（451cm〜）のため、個別見積りが必要です。"
+        ? `3辺合計が${KAZAI_SERVICE_NAME}のランク表の範囲外（451cm〜）のため、個別見積りが必要です。`
         : null;
 
   // 追加指示 §2 重量は見ない。3辺合計 + 20cm だけで確定させる。

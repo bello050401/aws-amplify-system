@@ -67,7 +67,7 @@ export function ShippingEstimateSection({
 
   return (
     <div className="mt-4 border border-gray-200 p-4">
-      <p className="mb-2 text-[12px] font-bold text-gray-700">送料見積り（家財おまかせ便）</p>
+      <p className="mb-2 text-[12px] font-bold text-gray-700">送料見積り（らくらく家財便）</p>
       <p className="mb-2 text-[11px] text-gray-500">
         発送元は{SHIPPING_ORIGIN_PREFECTURE}固定です。発送先は実際の購入者住所ではなく、見積り確認用の代表都道府県を選んでください。
       </p>

@@ -153,7 +153,7 @@ export function SettingsTabs({
         )}
         {isAdmin && (
           <button type="button" onClick={() => setTab("shipping")} className={tabClass(tab === "shipping")}>
-            配送料金（家財おまかせ便）
+            配送料金（らくらく家財便）
           </button>
         )}
         {isAdmin && (

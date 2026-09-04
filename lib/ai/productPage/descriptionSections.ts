@@ -117,14 +117,15 @@ export function buildProductDetailSection(input: ProductDetailInput): string {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * 家財便のサービス名称(2026-09-04 追加指示 §1)。
+ * 家財便のサービス名称。
  *
- * 顧客向けの表記は利用者の指定どおり「らくらく家財便」。
- * 社内の設定画面・送料見積りは「家財おまかせ便(アートセッティング
- * デリバリー)」という呼称のままだが、指すサービスは同じ。
- * 顧客が目にする文面を1箇所で決められるよう、ここを唯一の出所にする。
+ * 呼称の出所は lib/shipping/serviceName.ts の1箇所だけ(2026-09-04)。
+ * 以前はここに文字列を持っていたが、設定画面・送料見積り・料金マスタが
+ * それぞれ別の文字列を持っていて、画面をまたぐと呼び名が2つ見えていた。
+ * 再輸出して、既存の import 元(ここ)からも使えるようにしてある。
  */
-export const KAZAI_SERVICE_NAME = "らくらく家財便";
+export { KAZAI_SERVICE_NAME } from "@/lib/shipping/serviceName";
+import { KAZAI_SERVICE_NAME } from "@/lib/shipping/serviceName";
 
 export interface ShippingSectionInput {
   /**

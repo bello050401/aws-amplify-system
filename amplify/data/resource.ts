@@ -1376,7 +1376,7 @@ const schema = a.schema({
   ShippingRate: a
     .model({
       provider: a.string().required(), // 例: "アートセッティングデリバリー"
-      service: a.string().required(), // 例: "家財おまかせ便"
+      service: a.string().required(), // 「らくらく家財便」(呼称は lib/shipping/serviceName.ts が唯一の出所。2026-09-04に旧称「家財おまかせ便」450行を移行済み)
       originPrefecture: a.string().required(), // 常に"埼玉県"(§61) — 将来複数拠点になった場合に備えてDBには持たせる
       originArea: a.string(), // 地域細分(§66調査では未確認のため現状常にnull)
       destinationPrefecture: a.string().required(),

@@ -14,6 +14,7 @@ import {
   type GetShippingReferencePriceResult,
 } from "@/lib/shipping/service";
 import { buildShippingCsv, parseShippingCsv, selectChangedRows } from "@/lib/shipping/csv";
+import { KAZAI_SERVICE_NAME } from "@/lib/shipping/serviceName";
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 
@@ -153,7 +154,7 @@ export async function importShippingRatesCsvAction(csvText: string): Promise<Shi
         current?.id ?? null,
         {
           provider: current?.provider ?? "アートセッティングデリバリー",
-          service: current?.service ?? "家財おまかせ便",
+          service: current?.service ?? KAZAI_SERVICE_NAME,
           destinationPrefecture: row.destinationPrefecture,
           destinationArea: row.destinationArea,
           rank: row.rank,

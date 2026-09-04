@@ -85,7 +85,7 @@ export function ShippingReferencePriceSection({ inventoryId }: { inventoryId: st
       <dl className="mt-1 grid grid-cols-2 gap-y-0.5 text-[11px] text-gray-400">
         <dt>販売予定金額</dt>
         <dd>¥{view.plannedPrice.toLocaleString("ja-JP")}</dd>
-        <dt>家財おまかせ便</dt>
+        <dt>らくらく家財便</dt>
         <dd>{SHIPPING_RANK_LABEL[view.rank]}</dd>
         <dt>送料中央値</dt>
         <dd>¥{view.medianShipping.toLocaleString("ja-JP")}</dd>
@@ -218,7 +218,7 @@ function MeasurementBlock({ measurement }: { measurement: ShippingMeasurementEvi
         </dd>
         <dt>3辺合計</dt>
         <dd className="tabular-nums">{measurement.sumCm} cm</dd>
-        <dt>家財おまかせ便ランク</dt>
+        <dt>らくらく家財便ランク</dt>
         <dd>{SHIPPING_RANK_LABEL[measurement.rank]}</dd>
         <dt>使用したInventory項目</dt>
         <dd>{measurement.inventoryFieldsUsed.join(" / ")}</dd>

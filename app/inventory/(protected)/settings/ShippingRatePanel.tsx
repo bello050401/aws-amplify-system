@@ -11,10 +11,12 @@ import {
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 import { SHIPPING_RANKS, SHIPPING_RANK_LABEL, type ShippingRank } from "@/lib/shipping/rank";
 import { JAPAN_PREFECTURES, SHIPPING_ORIGIN_PREFECTURE } from "@/lib/shipping/prefectures";
+import { KAZAI_PROVIDER_NAME, KAZAI_SERVICE_NAME } from "@/lib/shipping/serviceName";
 
 const EMPTY_FORM = {
-  provider: "アートセッティングデリバリー",
-  service: "家財おまかせ便",
+  // 呼称は lib/shipping/serviceName.ts が唯一の出所(2026-09-04)。
+  provider: KAZAI_PROVIDER_NAME,
+  service: KAZAI_SERVICE_NAME,
   destinationPrefecture: "東京都",
   rank: "B" as ShippingRank,
   price: 0,
@@ -64,7 +66,7 @@ export function ShippingRatePanel() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `配送料金_家財おまかせ便_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `配送料金_${KAZAI_SERVICE_NAME}_${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
       setCsvResult({ kind: "success", text: `${result.rows}件を書き出しました。` });
