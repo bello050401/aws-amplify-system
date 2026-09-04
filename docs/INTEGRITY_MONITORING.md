@@ -167,7 +167,7 @@ BELLO Data Integrity Alert
 |---|---|---|
 | PASS → 通知しない | Lambdaを通常実行（`overall: PASS`） | メトリクス **0** を記録、アラームは **OK** のまま |
 | FAIL → 通知経路が発火 | テスト用ログ行にEMFで 1 を1回だけ書き込み | メトリクス **1** を記録、アラームが **ALARM** へ遷移<br>`Threshold Crossed: 1 datapoint [1.0] was greater than or equal to the threshold (1.0)` |
-| 異常のあと自動で戻る | そのまま放置 | 次の期間で 0 になり **OK** へ復帰（張り付かない） |
+| 異常のあと自動で戻る | そのまま放置 | データの無い期間は `NOT_BREACHING` により OK として扱われる（張り付かない）。履歴上も INSUFFICIENT_DATA → OK → ALARM の3遷移だけで、往復していない |
 | WARNING → 通知しない | 単体テスト（基準値の減少） | メトリクス **0** |
 | ERROR → 通知経路が発火 | 単体テスト（取得エラー） | メトリクス **1** |
 
@@ -176,6 +176,30 @@ BELLO Data Integrity Alert
 Staging（`d4hkkg7dty2du`）側は作成済み・稼働中です。
 
 **購読先は0件**（登録していないことを確認済み）。
+
+### アラームの状態を確認するとき（注意）
+
+**`--alarm-name-prefix` ではなく `--alarm-names` で、名前を完全一致で指定してください。**
+
+```bash
+aws cloudwatch describe-alarms --region us-west-2 \
+  --alarm-names "bello-integrity-alert-<スタック名>" \
+  --query 'MetricAlarms[0].StateValue' --output text
+```
+
+prefix 一致の `MetricAlarms[0]` を見ると、**デプロイ中に誤った状態を読みます**。
+CloudFormation がスタックを更新する間、一致するアラームが一時的に2つ
+（更新前のものと、作成中の新しいもの）存在し、`[0]` がどちらを指すかが揺れるためです。
+実際にこれで「ALARM → INSUFFICIENT_DATA → ALARM と往復している」と誤認しました。
+
+状態の履歴が正本です。遷移を確かめるにはこちらを見てください。
+
+```bash
+aws cloudwatch describe-alarm-history --region us-west-2 \
+  --alarm-name "bello-integrity-alert-<スタック名>" \
+  --history-item-type StateUpdate --max-records 10 \
+  --query 'AlarmHistoryItems[].{t:Timestamp,s:HistorySummary}' --output text
+```
 
 ### メトリクスフィルタではなくEMFを使っている理由
 
