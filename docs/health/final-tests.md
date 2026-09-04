@@ -1,4 +1,4 @@
-# 最終回帰試験 (2026-09-04T08:52:47Z)
+# 最終回帰試験 (2026-09-04T11:29:09Z)
 
 | verify | 結果 |
 |---|---|
@@ -15,7 +15,7 @@
 | verify:inventory-search-fast |  合格 46 / 失敗 0  |
 | verify:http |  9 passed, 0 failed  |
 | verify:cache |  17 passed, 0 failed  |
-| verify:data-integrity |  検査 24項目 / 指摘 0件  |
+| verify:integrity-monitor |  44 passed, 0 failed  |
 | verify:zaico |  80 passed, 0 failed  |
 | verify:zaico-pagination |  76 passed, 0 failed  |
 | verify:zaico-delta |  39 passed, 0 failed  |
