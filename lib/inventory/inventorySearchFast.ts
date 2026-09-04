@@ -1,6 +1,6 @@
 import "server-only";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { BatchGetCommand, DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { directTableName } from "@/lib/amplify/directData";
 import { buildCountExpression } from "./inventoryCountFast";
 import { buildScanProjection } from "./searchScanProjection";
@@ -35,7 +35,7 @@ import { recordQuery } from "@/lib/perf/queryTiming";
  *     evaluateQuery)へそのまま渡す —— 検索仕様は1文字も変えない。
  *
  *   第2段(表示する行の実体化): 絞り込み後に**表示する50件だけ**を
- *     BatchGetItem で全列取得する。ここは1往復。
+ *     GetItem で全列取得する(同時に投げるので待ちは1往復ぶん)。
  *
  * Staging 実測(同一条件・同一データ・5,329件):
  *
@@ -60,7 +60,7 @@ import { recordQuery } from "@/lib/perf/queryTiming";
  *
  * inventoryCountFast.ts と同じ扱い。呼び出し元は在庫一覧ページで、
  * ページ側がすでに認証・権限を確かめている。AppSync を通さないのは
- * ProjectionExpression / 並列Scan / BatchGetItem が Amplify Data の
+ * ProjectionExpression と並列Scan(TotalSegments)が Amplify Data の
  * クライアントからは指定できないため。
  */
 
@@ -76,8 +76,8 @@ const REGION = process.env.AWS_REGION || process.env.BEDROCK_REGION || "us-west-
 const SCAN_SEGMENTS = 8;
 /** queries.ts の SEARCH_MAX_SCAN_ITEMS と同じ安全弁。超えたら従来経路へ返す。 */
 const MAX_SCAN_ITEMS = 20000;
-/** BatchGetItem の1回あたり上限。一覧の1ページ(50件)はこれに収まる。 */
-const BATCH_GET_LIMIT = 100;
+/** 実体化を同時に投げる本数。一覧の1ページ(50件)は1回で収まる。 */
+const HYDRATE_CONCURRENCY = 100;
 
 let cachedClient: DynamoDBDocumentClient | null = null;
 function ddb(): DynamoDBDocumentClient {
@@ -159,24 +159,36 @@ async function scanSegment(
   return items;
 }
 
-/** 表示する行だけを全列で取り直す。 */
+/**
+ * 表示する行だけを全列で取り直す。
+ *
+ * ── なぜ BatchGetItem ではなく GetItem を並べるのか ──────────────
+ *
+ * SSR の実行ロール(BelloAmplifyStagingComputeRole)に許可されている
+ * DynamoDB の操作は GetItem / Query / Scan の3つで、BatchGetItem は
+ * 入っていない。BatchGetItem を使うとここが AccessDenied で落ち、
+ * 検索が毎回**従来の全件経路へフォールバックする**(= 速くならない)。
+ *
+ * 1ページぶん(50件)の GetItem を同時に投げれば、待ち時間は1往復ぶん
+ * で済み、読み取り容量(RCU)も BatchGetItem と同じ。権限追加という
+ * AWS管理者作業も要らない。
+ */
 async function hydrate(table: string, ids: string[]): Promise<Map<string, RawItem>> {
   const byId = new Map<string, RawItem>();
-  for (let i = 0; i < ids.length; i += BATCH_GET_LIMIT) {
-    let keys = ids.slice(i, i + BATCH_GET_LIMIT).map((id) => ({ id }));
-    // UnprocessedKeys はスロットリング時に返る。取りこぼしたまま
-    // 「その行だけ表示されない」一覧にしないため、必ず拾い直す。
-    let attempts = 0;
-    while (keys.length > 0 && attempts < 5) {
-      const startedAt = Date.now();
-      const res = await ddb().send(new BatchGetCommand({ RequestItems: { [table]: { Keys: keys } } }));
-      recordQuery({ model: "Inventory", op: "search-hydrate", ms: Date.now() - startedAt, items: res.Responses?.[table]?.length ?? 0 });
-      for (const item of (res.Responses?.[table] ?? []) as RawItem[]) byId.set(item.id as string, item);
-      keys = ((res.UnprocessedKeys?.[table]?.Keys ?? []) as { id: string }[]).map((k) => ({ id: k.id }));
-      attempts++;
-    }
-    if (keys.length > 0) {
-      throw new Error("表示する在庫の取得が完了しませんでした（DynamoDBの未処理キーが残りました）");
+  for (let i = 0; i < ids.length; i += HYDRATE_CONCURRENCY) {
+    const chunk = ids.slice(i, i + HYDRATE_CONCURRENCY);
+    const startedAt = Date.now();
+    const results = await Promise.all(
+      chunk.map((id) => ddb().send(new GetCommand({ TableName: table, Key: { id } }))),
+    );
+    recordQuery({
+      model: "Inventory",
+      op: `search-hydrate[x${chunk.length}]`,
+      ms: Date.now() - startedAt,
+      items: results.filter((r) => r.Item).length,
+    });
+    for (const res of results) {
+      if (res.Item) byId.set(res.Item.id as string, res.Item as RawItem);
     }
   }
   return byId;
