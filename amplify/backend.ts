@@ -1,5 +1,8 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { RemovalPolicy, SecretValue } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, SecretValue } from "aws-cdk-lib";
+import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
+import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
+import { Topic } from "aws-cdk-lib/aws-sns";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
@@ -517,3 +520,78 @@ for (const [model, envName] of Object.entries(INTEGRITY_MONITOR_TABLES)) {
   table.grantReadData(backend.integrityMonitor.resources.lambda);
   backend.integrityMonitor.addEnvironment(envName, table.tableName);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 整合性監視の異常通知（2026-09-04 最終クローズ Phase B）。
+//
+// ── なぜアプリ本体へ通知コードを足さないのか ──────────────────────
+//
+// 既存のLINE通知（lib/messaging/lineNotify/）は「問い合わせに対する通知」
+// 専用で、重複防止のキーが `channel:conversationId:sourceMessageId` の形に
+// 固定されている。監視結果はこの形に当てはまらないため、そこへ相乗りすると
+// 通知履歴の意味と冪等性の設計を壊す。
+//
+// 代わりに、Lambdaが出すログ行をCloudWatchが拾う経路にする。
+//
+//   Lambda が `[integrity-monitor] ALERT` を出力
+//     → メトリクスフィルタが 1 を記録
+//       → アラームが ALARM へ遷移
+//         → SNS トピックへ通知
+//
+// ── 何が通知され、何が通知されないか ────────────────────────────
+//
+// Lambda が ALERT を出すのは `shouldNotify` が真のときだけで、それは
+//   FAIL   … 基準値より増えた（新しい異常）
+//   ERROR  … 検査そのものができなかった
+// の2つに限られる。**PASS は何も出さず、WARNING（基準値の減少）も出さない**
+// （lib/integrity/compare.ts）。つまり正常時は静かなまま。
+//
+// ── 二重送信について ────────────────────────────────────────────
+//
+// アラームは「状態が変わったとき」にしか通知しない。メトリクスは一致が無い
+// 期間に 0 を記録する（defaultValue）ので、異常の直後に必ず OK へ戻る。
+// 同じ実行から2通飛ぶことはなく、翌日また異常が出れば改めて1通飛ぶ。
+//
+// ── 宛先 ────────────────────────────────────────────────────────
+//
+// SNSトピックまでを用意する。**購読先はここでは登録しない** ——
+// メールアドレスやエンドポイントは利用者が決めるもので、こちらが勝手に
+// 登録してよいものではない。必要な操作は docs/INTEGRITY_MONITORING.md に
+// 記載してある。
+// ─────────────────────────────────────────────────────────────────────
+const integrityAlarmStack = backend.createStack("IntegrityAlarmStack");
+
+const integrityAlertTopic = new Topic(integrityAlarmStack, "IntegrityAlertTopic", {
+  displayName: "BELLO Data Integrity Alert",
+});
+
+// メトリクスは**Lambda自身がEMF(Embedded Metric Format)で出す**。
+//
+// メトリクスフィルタ(AWS::Logs::MetricFilter)を使わないのは、その作成に
+// **ロググループが既に存在していること**が要るため。ロググループはLambdaが
+// 初回実行時に作るので、まだ一度も走っていないアプリ(本番側)では
+// ResourceNotFoundException でスタック全体がロールバックする。
+// このファイルの ZAICO Secret のコメントにある「CDK管理外の実体にCFNが
+// 触ろうとして落ちる」のと同じ形の事故になる。
+//
+// EMF は決まった形のJSONをログへ出すだけでCloudWatchが自動でメトリクス化
+// するので、CFN側にロググループへの依存が生まれない。handler.ts が毎回
+// 0 か 1 を出すため、データ欠損でアラームが張り付くこともない。
+new Alarm(integrityAlarmStack, "IntegrityAlertAlarm", {
+  alarmName: `bello-integrity-alert-${backend.stack.stackName}`,
+  alarmDescription:
+    "BELLOのデータ整合性監視が新しい異常[FAIL]を検知したか、検査を完了できなかった[ERROR]場合に発火する。PASSとWARNINGでは発火しない。",
+  metric: new Metric({
+    namespace: "BELLO/Integrity",
+    metricName: "IntegrityAlert",
+    statistic: "Sum",
+    // 監視は1日1回なので、その実行が入る1時間だけ値が立つ。
+    period: Duration.hours(1),
+  }),
+  threshold: 1,
+  evaluationPeriods: 1,
+  comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+  // 実行が無い時間帯はデータが無い。そこを異常にしない(次の実行で必ず
+  // 0 か 1 が入るので、異常のあとは自動的に OK へ戻る)。
+  treatMissingData: TreatMissingData.NOT_BREACHING,
+}).addAlarmAction(new SnsAction(integrityAlertTopic));
