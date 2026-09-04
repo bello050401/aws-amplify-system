@@ -4,6 +4,7 @@ import { collectIntegrityMetrics } from "../../../lib/integrity/collect";
 import { compareIntegrity, formatRunResult, toHistoryEntry } from "../../../lib/integrity/compare";
 import { appendHistory, loadBaseline, saveBaseline } from "../../../lib/integrity/store";
 import { INTEGRITY_TABLE_ENV } from "../../../lib/integrity/tables";
+import { buildAlertLog, buildAlertMetricLine } from "../../../lib/integrity/alert";
 
 /**
  * データ整合性の日次監視（resource.ts のファイル冒頭コメント参照）。
@@ -51,56 +52,15 @@ export const handler = async (_event: unknown, context?: { awsRequestId?: string
   // CloudWatch Logs へ人が読める形で残す。秘密値は含まない（件数とIDのみ）。
   console.log(formatRunResult(result));
 
-  // ── アラーム用のメトリクスを毎回出す ────────────────────────────
-  //
-  // EMF（Embedded Metric Format）。決まった形のJSONをログへ出すだけで
-  // CloudWatchが `BELLO/Integrity / IntegrityAlert` として拾う。
-  // AWS::Logs::MetricFilter を使わないのは、その作成にロググループの
-  // 実在が要り、まだ一度も走っていないアプリでデプロイが落ちるため
-  // （amplify/backend.ts の該当コメント参照）。
-  //
-  // **正常時も 0 を出す。** 出さないとデータ欠損になり、異常のあと
-  // アラームが ALARM のまま張り付いて次の異常に気づけなくなる。
-  console.log(
-    JSON.stringify({
-      _aws: {
-        Timestamp: Date.now(),
-        CloudWatchMetrics: [
-          { Namespace: "BELLO/Integrity", Dimensions: [[]], Metrics: [{ Name: "IntegrityAlert", Unit: "Count" }] },
-        ],
-      },
-      IntegrityAlert: result.shouldNotify ? 1 : 0,
-      overall: result.overall,
-    }),
-  );
+  // アラーム用のメトリクス（EMF）。正常時も 0 を出す —— 出さないとデータ
+  // 欠損になり、異常のあとアラームが張り付いて次に気づけなくなる。
+  console.log(buildAlertMetricLine(result, Date.now()));
 
   if (result.shouldNotify) {
-    // ── 異常だけを、決まった形で1行目に出す ────────────────────────
-    //
-    // この `[integrity-monitor] ALERT` をCloudWatch Logsのメトリクスフィルタが
-    // 拾い、アラーム経由で通知へ渡す。通知の送信そのものはここでは行わない
-    // （アプリ本体へ通知コードを足さない方針）。
-    //
-    // **PASS と WARNING はここへ来ない。** shouldNotify が真になるのは
-    // FAIL（新しい異常が増えた）と ERROR（検査できなかった）だけで、
-    // 基準値の減少（WARNING）は記録に残るだけで通知しない
-    // （lib/integrity/compare.ts のコメント参照）。
-    //
-    // 中身は「異常だけ」。正常な項目を並べると、本当に見るべき行が埋もれる。
-    const lines = [
-      `[integrity-monitor] ALERT ${result.overall}`,
-      `BELLO Data Integrity Alert`,
-      `発生日時: ${runAt}`,
-      `判定: ${result.overall}`,
-      // どの実行かを後から辿れるようにする。履歴テーブルの id は "run#<runAt>"。
-      `実行ID: ${context?.awsRequestId ?? "(不明)"}`,
-      `履歴: ${logTable} / id=run#${runAt}`,
-      "",
-      result.notificationText ?? "",
-    ];
-    console.warn(lines.join("\n"));
+    // ここへ来るのは FAIL（新しい異常が増えた）と ERROR（検査できなかった）だけ。
+    // PASS と WARNING（基準値の減少）は通知しない（lib/integrity/compare.ts）。
+    console.warn(buildAlertLog({ result, requestId: context?.awsRequestId ?? null, historyTable: logTable }));
   }
-
   return {
     overall: result.overall,
     runAt,

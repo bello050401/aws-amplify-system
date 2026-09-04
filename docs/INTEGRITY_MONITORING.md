@@ -48,7 +48,7 @@
 | スケジュール | EventBridge Scheduler `cron(0 0 * * ? *)` UTC = **日本時間 毎朝9時**、ENABLED |
 | 保存先 | DynamoDB `IntegrityCheckLogTable`（生CDK、`RemovalPolicy.RETAIN`） |
 | 権限 | 監視対象12テーブルは **read-only**。書き込みは自分の記録用テーブルだけ（IAMで強制） |
-| 通知 | 現時点では CloudWatch Logs へ `[integrity-monitor] ALERT` の形で出力（後述） |
+| 通知 | CloudWatch アラーム → SNS トピック（購読先の登録だけ人手が要る。§5） |
 
 新しいサービスは追加していません。`pricing-scheduler` / `image-processing-worker` /
 `zaico-sync-worker` と同じ、既存の仕組みです。
@@ -111,35 +111,85 @@ AWS_PROFILE=Bello npm run verify:data-integrity -- --diff --save # 基準値と�
 
 ---
 
-## 5. 通知について
+## 5. 異常通知
 
-いまは **CloudWatch Logs への出力まで**です。新しい異常（FAIL）または検査できなかった
-（ERROR）ときだけ、次の形で出ます。正常時は記録のみで、毎回は通知しません。
+### 経路
+
+```
+Lambda が異常を検知
+  ├─ ログへ  [integrity-monitor] ALERT <判定> …（人が読む用）
+  └─ EMFで   BELLO/Integrity / IntegrityAlert = 1（機械が読む用）
+       ↓
+CloudWatch アラーム  bello-integrity-alert-<スタック名>
+       ↓
+SNS トピック  BELLO Data Integrity Alert
+       ↓
+   （購読先は未登録 — 下記「必要な操作」）
+```
+
+### 発火する条件
+
+| 判定 | 意味 | メトリクス | 通知 |
+|---|---|---:|---|
+| PASS | 前回と同じ | 0 | **しない** |
+| WARNING | 基準値より減った（314→313など） | 0 | **しない**（記録には残る） |
+| **FAIL** | 基準値より増えた（314→315、重複0→1など） | **1** | **する** |
+| **ERROR** | 検査そのものができなかった | **1** | **する** |
+
+### 二重送信しない仕組み
+
+アラームは**状態が変わったとき**にしか通知しません。正常時も 0 を出しているので
+データ欠損にならず、異常の直後に必ず OK へ戻ります。同じ実行から2通飛ぶことはなく、
+翌日また異常が出れば改めて1通飛びます。
+
+### 通知に入る内容
 
 ```
 [integrity-monitor] ALERT FAIL
+BELLO Data Integrity Alert
+発生日時: 2026-09-05T00:00:12.345Z
+判定: FAIL
+実行ID: c65fb15c-54c1-4049-b03a-b64f9db15297
+履歴: <IntegrityCheckLogTable> / id=run#2026-09-05T00:00:12.345Z
+
 整合性の異常を検知しました（1項目）
 ・削除記録の無い在庫を指す履歴（在庫数）: 314 → 315（+1）
 ```
 
-### 既存のLINE通知基盤へ繋ぐ場合（未実施）
+正常な項目は載せません（本当に見るべき行が埋もれるため）。
 
-`lib/messaging/lineNotify/` が既にあり、`notifyInquiry()` は問い合わせ専用の
-`dedupeKey`（`channel:conversationId:sourceMessageId`）で重複を防ぐ作りです。
-監視結果はこの形に当てはまらないため、繋ぐには次のどちらかが要ります。
+### メトリクスフィルタではなくEMFを使っている理由
 
-1. **CloudWatch アラーム経由**（推奨・小さい）
-   ロググループにメトリクスフィルタ（`[integrity-monitor] ALERT`）を1つ置き、
-   アラームからSNS→既存の通知経路へ流す。**アプリのコード変更は不要**。
-2. **Lambda から直接LINEへ送る**（大きい）
-   実行ロールへ `bello/line-notify-bot` Secret の読み取り権限を追加し、
-   `NotificationDelivery` を監視用の `dedupeKey` 体系で使えるよう拡張する必要があります。
-   通知履歴の意味（「問い合わせに対する通知」）が変わるので、影響が広い。
+`AWS::Logs::MetricFilter` の作成には**ロググループが既に存在していること**が要ります。
+ロググループはLambdaが初回実行時に作るので、まだ一度も走っていないアプリ（本番側）では
+`ResourceNotFoundException` でスタック全体がロールバックします。
+EMF なら決まった形のJSONをログへ出すだけなので、CloudFormation側に依存が生まれません。
 
-指示書§18の「大きな改修になる場合は監視結果保存までに留め、通知方法を報告する」に
-従い、**今回は1も2も実施していません**。1であれば小さいので、必要なら次に着手できます。
+### 必要な操作（人が行うもの）
 
----
+**購読先はこちらでは登録していません。** 宛先は利用者が決めるもので、勝手に登録して
+よいものではないためです。いちばん簡単なのはメール購読です。
+
+```bash
+aws sns list-topics --region us-west-2 \
+  --query "Topics[?contains(TopicArn,'IntegrityAlertTopic')].TopicArn" --output text
+
+aws sns subscribe --region us-west-2 \
+  --topic-arn <上で出たARN> --protocol email --notification-endpoint <宛先アドレス>
+```
+
+実行するとAWSから確認メールが届くので、本文のリンクを開けば有効になります。
+以降、FAIL / ERROR のときだけ届きます。
+
+### 既存のLINE通知基盤へ繋ぐ場合
+
+SNSからLINEへ直接は送れないため、間にひとつ必要です。
+
+| 方式 | 必要な作業 | 判断 |
+|---|---|---|
+| SNS → メール | 上のコマンド1回 | **推奨**。今すぐ使える |
+| SNS → Chatbot 等の既存連携 | 連携先の設定 | 契約・既存連携次第 |
+| SNS → 小さなLambda → LINE | 新規Lambda＋`bello/line-notify-bot` の読み取り権限付与 | **今回は実施していない**。既存の通知履歴（`NotificationDelivery`）は「問い合わせに対する通知」専用で、重複防止キーが `channel:conversationId:sourceMessageId` に固定されている。監視結果を相乗りさせると通知履歴の意味と冪等性の設計が壊れるため、別作業とすべき |
 
 ## 6. 現在の基準値（2026-09-04 時点）
 

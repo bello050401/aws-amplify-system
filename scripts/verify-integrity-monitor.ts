@@ -17,6 +17,7 @@ import { compareIntegrity, formatRunResult, toHistoryEntry, type IntegrityBaseli
 import { collectIntegrityMetrics } from "@/lib/integrity/collect";
 import { INTEGRITY_MONITORED_MODELS, INTEGRITY_TABLE_ENV } from "@/lib/integrity/tables";
 import { readFileSync } from "node:fs";
+import { ALERT_LOG_PREFIX, ALERT_METRIC_NAME, ALERT_METRIC_NAMESPACE, buildAlertLog, buildAlertMetricLine } from "@/lib/integrity/alert";
 
 let failures = 0;
 let passes = 0;
@@ -217,6 +218,74 @@ function testBackendMatchesSharedTableMap() {
   check(extra.length === 0, "backend.ts にだけあるモデルが無い", extra.join(","));
 }
 
+
+/**
+ * 通知の「形」（2026-09-04 最終クローズ §15）。
+ *
+ * 判定そのもの（PASS/WARNING/FAIL/ERROR）は上のテスト群で固定してある。
+ * ここで固定するのは、その判定が**アラームを動かす値**と**人が読む本文**へ
+ * どう出るか。ここが崩れると、
+ *   ・正常なのに毎日通知が飛ぶ（すぐ誰も読まなくなる）
+ *   ・異常なのに何も飛ばない（気づけない）
+ * のどちらかになる。
+ */
+function metricValue(line: string): number {
+  return JSON.parse(line)[ALERT_METRIC_NAME] as number;
+}
+
+function testAlertMetricPassAndWarning() {
+  const pass = compareIntegrity([metric("orphanHistory", 315)], baselineOf({ orphanHistory: 315 }), RUN_AT);
+  check(metricValue(buildAlertMetricLine(pass, 0)) === 0, "PASS → メトリクス0（アラームは発火しない）");
+
+  const warn = compareIntegrity([metric("orphanHistory", 314)], baselineOf({ orphanHistory: 315 }), RUN_AT);
+  check(metricValue(buildAlertMetricLine(warn, 0)) === 0, "WARNING（基準値の減少）→ メトリクス0（原則通知しない）");
+
+  const first = compareIntegrity([metric("orphanHistory", 315)], null, RUN_AT);
+  check(metricValue(buildAlertMetricLine(first, 0)) === 0, "初回（NEW）→ メトリクス0");
+}
+
+function testAlertMetricFailAndError() {
+  const fail = compareIntegrity([metric("orphanHistory", 316)], baselineOf({ orphanHistory: 315 }), RUN_AT);
+  check(metricValue(buildAlertMetricLine(fail, 0)) === 1, "FAIL → メトリクス1（アラームが発火する）");
+
+  const err = compareIntegrity([metric("orphanHistory", null, "AccessDeniedException")], baselineOf({ orphanHistory: 315 }), RUN_AT);
+  check(metricValue(buildAlertMetricLine(err, 0)) === 1, "ERROR → メトリクス1（検査できなかったことも知らせる）");
+}
+
+function testAlertMetricShape() {
+  const fail = compareIntegrity([metric("orphanHistory", 316)], baselineOf({ orphanHistory: 315 }), RUN_AT);
+  const parsed = JSON.parse(buildAlertMetricLine(fail, 1757030400000));
+  const cw = parsed._aws?.CloudWatchMetrics?.[0];
+  check(parsed._aws?.Timestamp === 1757030400000, "EMF: タイムスタンプが入る");
+  check(cw?.Namespace === ALERT_METRIC_NAMESPACE, "EMF: 名前空間がアラームと一致する", String(cw?.Namespace));
+  check(cw?.Metrics?.[0]?.Name === ALERT_METRIC_NAME, "EMF: メトリクス名がアラームと一致する", String(cw?.Metrics?.[0]?.Name));
+}
+
+function testAlertLogContents() {
+  const fail = compareIntegrity(
+    [metric("orphanHistory", 316), metric("dupNotification", 0)],
+    baselineOf({ orphanHistory: 315, dupNotification: 0 }),
+    RUN_AT,
+  );
+  const log = buildAlertLog({ result: fail, requestId: "req-123", historyTable: "IntegrityCheckLogTable-x" });
+
+  check(log.startsWith(ALERT_LOG_PREFIX + " FAIL"), "1行目が決まった目印と判定で始まる");
+  check(log.includes("発生日時: " + RUN_AT), "発生日時が入る");
+  check(log.includes("実行ID: req-123"), "実行IDが入る（後からログを辿れる）");
+  check(log.includes("id=run#" + RUN_AT), "履歴の参照先が入る");
+  check(log.includes("315 → 316"), "基準値と現在値が入る");
+  check(log.includes("+1"), "差分が入る");
+  check(!log.includes("dupNotification"), "正常な項目は入れない（見るべき行が埋もれる）");
+}
+
+function testAlertLogWithoutRequestId() {
+  const err = compareIntegrity([metric("orphanHistory", null, "Throttling")], baselineOf({ orphanHistory: 315 }), RUN_AT);
+  const log = buildAlertLog({ result: err, requestId: null, historyTable: "T" });
+  check(log.startsWith(ALERT_LOG_PREFIX + " ERROR"), "ERRORも同じ形で出る");
+  check(log.includes("実行ID: (不明)"), "実行IDが取れなくても本文は壊れない");
+  check(log.includes("完了しませんでした"), "検査できなかったと分かる文言が入る");
+}
+
 async function main() {
   testSameAsBaseline();
   testIncreased();
@@ -231,6 +300,11 @@ async function main() {
   testFormatting();
   testTableEnvMapIsShared();
   testBackendMatchesSharedTableMap();
+  testAlertMetricPassAndWarning();
+  testAlertMetricFailAndError();
+  testAlertMetricShape();
+  testAlertLogContents();
+  testAlertLogWithoutRequestId();
   await testOneFailingScanDoesNotBreakOthers();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
