@@ -283,6 +283,16 @@ async function modelIndexQuery(
         KeyConditionExpression: "#k = :v",
         ExpressionAttributeNames: { "#k": hashKey },
         ExpressionAttributeValues: { ":v": hashValue },
+        // 2026-09-04 性能総点検: DynamoDB側にも件数の上限を渡す。
+        //
+        // これまで Limit を渡していなかったため、1往復で1MB分(実測で
+        // 769件)を読んでから、下のループが「out.length >= limit」で
+        // 打ち切っていた。**返す件数は変わらないのに、読む量だけが
+        // 10倍以上**になっていた(取り込み・問い合わせ処理の経路が該当)。
+        //
+        // ループは今までどおり「必要な件数が集まるまで」続くので、
+        // フィルタ適用後に足りなければ次のページを取りに行く。
+        Limit: limit,
         ExclusiveStartKey: key,
       }),
     );
