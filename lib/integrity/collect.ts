@@ -26,6 +26,12 @@ import type { IntegrityMetric } from "./compare";
 const SEGMENTS = 8;
 /** 途中状態を「止まっている」とみなすまでの時間。どの処理も通常は数分で終わる。 */
 const STUCK_AFTER_MS = 60 * 60 * 1000;
+/**
+ * 「同じ在庫の同じ項目を、別の担当が続けて書き換えた」とみなす時間差。
+ * 10分。編集フォームを開いてから保存するまでの現実的な長さで、これより
+ * 離れていれば相手の変更を見たうえでの上書きと考えてよい。
+ */
+const CONCURRENT_EDIT_WINDOW_MS = 10 * 60 * 1000;
 
 export interface CollectDeps {
   ddb: DynamoDBDocumentClient;
@@ -179,6 +185,49 @@ export async function collectIntegrityMetrics(deps: CollectDeps): Promise<Collec
         return { count: unexplained.length, examples: unexplained.slice(0, 5).map((id) => `inventoryId=${id}`) };
       }),
     ),
+    safely("concurrentEdits", "同じ在庫の同じ項目を別の担当が短時間に書き換えた回数", async () => {
+      // ── 同時編集（lost update）の**跡**を数える ────────────────────
+      //
+      // 在庫の更新には楽観ロックが無い（AppSyncのconflict resolutionも
+      // 使っていない）。AがフォームB を開いたまま、Bが保存し、あとから
+      // Aが保存すると、**Bの変更は黙って消える**。
+      //
+      // 防ぐには「競合したときに画面でどう見せるか」という仕様判断が要る
+      // ので、ここでは**起きた事実だけを数える**。同じ在庫の同じ項目を、
+      // 異なる書き手が短時間のうちに書き換えていたら、後の人は前の人の
+      // 変更を見ないまま上書きした可能性が高い。
+      //
+      // 実測(2026-09-04、履歴28,423件): 0件。人の利用者が実質1名のため。
+      // ただし**ZAICO同期(バックグラウンド)と人**は今日でも同時に書きうる
+      // ので、その組み合わせもここに出る。
+      const history = await scanAll(deps, "InventoryHistory", ["inventoryId", "fieldName", "changedAt", "changedBy"]);
+      const byTarget = new Map<string, Row[]>();
+      for (const r of history) {
+        const inv = str(r.inventoryId);
+        const field = str(r.fieldName);
+        if (!inv || !field) continue;
+        const k = `${inv}|${field}`;
+        const list = byTarget.get(k);
+        if (list) list.push(r);
+        else byTarget.set(k, [r]);
+      }
+      let count = 0;
+      const examples: string[] = [];
+      for (const [k, list] of byTarget) {
+        if (list.length < 2) continue;
+        list.sort((a, b) => String(a.changedAt).localeCompare(String(b.changedAt)));
+        for (let i = 1; i < list.length; i++) {
+          const gap = Date.parse(String(list[i].changedAt)) - Date.parse(String(list[i - 1].changedAt));
+          if (!Number.isFinite(gap) || gap > CONCURRENT_EDIT_WINDOW_MS) continue;
+          if (list[i].changedBy === list[i - 1].changedBy) continue; // 同じ人の連続操作は競合ではない
+          count++;
+          if (examples.length < 5) {
+            examples.push(`${k} ${String(list[i - 1].changedBy)} → ${String(list[i].changedBy)} (${Math.round(gap / 1000)}秒)`);
+          }
+        }
+      }
+      return { count, examples };
+    }),
     ...(
       [
         ["orphanListingDrafts", "存在しない在庫を指す出品下書き", "ListingDraft", "inventoryId"],
