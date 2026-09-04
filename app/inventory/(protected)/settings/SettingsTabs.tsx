@@ -27,8 +27,6 @@ interface SettingsTabsProps {
   categories: MasterEntry[];
   locations: MasterEntry[];
   units: MasterEntry[];
-  /** 状態マスタ。StatusMaster は登録画面が無いまま0件で放置されていた（2026-09-04 性能改善 第2フェーズ§5）。 */
-  statuses: MasterEntry[];
   customFields: CustomFieldDefinitionRow[];
   readOnly: boolean;
   /** ZAICO同期タブはADMINにのみ表示する（spec §19: UIレベルのADMIN制限）。実際の書き込み可否はServer Action側（app/actions/zaicoSync.ts）で独立に強制されるため、これは表示上のガードに過ぎない。 */
@@ -67,7 +65,6 @@ export function SettingsTabs({
   categories,
   locations,
   units,
-  statuses,
   customFields,
   readOnly,
   isAdmin,
@@ -93,7 +90,6 @@ export function SettingsTabs({
   const [tab, setTab] = useState<
     | "category"
     | "unit"
-    | "status"
     | "location"
     | "customFields"
     | "columns"
@@ -123,9 +119,6 @@ export function SettingsTabs({
         </button>
         <button type="button" onClick={() => setTab("location")} className={tabClass(tab === "location")}>
           保管場所
-        </button>
-        <button type="button" onClick={() => setTab("status")} className={tabClass(tab === "status")}>
-          状態
         </button>
         <button type="button" onClick={() => setTab("customFields")} className={tabClass(tab === "customFields")}>
           追加項目
@@ -195,7 +188,6 @@ export function SettingsTabs({
         {tab === "category" && <MasterList model="Category" label="カテゴリ" entries={categories} readOnly={readOnly} />}
         {tab === "unit" && <MasterList model="Unit" label="単位" entries={units} readOnly={readOnly} />}
         {tab === "location" && <MasterList model="Location" label="保管場所" entries={locations} readOnly={readOnly} />}
-        {tab === "status" && <MasterList model="Status" label="状態" entries={statuses} readOnly={readOnly} />}
         {tab === "customFields" && <CustomFieldSettings fields={customFields} readOnly={readOnly} />}
         {/* 一覧表示設定の列候補には無効化された追加項目を含めない(新規登録/編集/詳細検索から消えるのと同じ扱い)。 */}
         {tab === "columns" && <ListColumnSettings customFieldDefs={customFields.filter((f) => f.isActive)} />}
