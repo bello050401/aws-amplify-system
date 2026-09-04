@@ -1,0 +1,22 @@
+  EC出品             合計  1491ms / 往復  9回 / 15KB
+  設定               合計  1508ms / 往復  8回 / 228KB
+
+══ 遅い順(中央値) ══
+   12151ms  [Scan] 在庫一覧(検索) / Inventory 全件走査(fetchAllInventoryRecords) — 往復14 5329件 12113KB
+    2426ms  [Scan] 在庫一覧 / 総件数の集計(全件走査) — 往復14 5329件 239KB
+     405ms  [Network] 共通 / AppSync エンドポイントへの往復(認可前で弾かれる=純粋な往復) — 往復1 0件 0KB
+     349ms  [Scan] 設定 / ShippingRate(全件走査) — 往復1 450件 217KB
+     336ms  [Query] 在庫一覧 / Inventory GSI(listingPartition, 50件) — 往復1 50件 155KB
+     199ms  [Secret] メッセージ / Gmail認証情報(Secrets Manager) — 往復1 1件 0KB
+     198ms  [Secret] メッセージ / LINE通知Botの設定(Secrets Manager) — 往復1 1件 0KB
+     180ms  [Secret] EC出品 / Mercari TOKEN(Secrets Manager) — 往復1 1件 0KB
+     176ms  [Scan] メッセージ / NotificationDelivery 直近50件(全件走査) — 往復1 63件 71KB
+     170ms  [Scan] 在庫一覧 / Category.list(全件走査) — 往復1 20件 4KB
+     168ms  [Scan] メッセージ / Conversation.list(全件走査) — 往復1 32件 28KB
+     167ms  [Scan] 在庫一覧 / StatusMaster.list(全件走査) — 往復1 0件 0KB
+     167ms  [Scan] メッセージ / ReplyRule.list(全件走査) — 往復1 1件 1KB
+     167ms  [Scan] 設定 / PricingRule(全件走査) — 往復1 0件 0KB
+     166ms  [Scan] 在庫一覧 / Location.list(全件走査) — 往復1 13件 2KB
+
+※ ここに出るのは DynamoDB / Secrets Manager の時間だけです。
+  実際の画面はこれに AppSync の往復と Amplify SSR(Lambda)の時間、React の描画が加わります。

@@ -218,13 +218,19 @@ async function measureInventoryList() {
   await measure("在庫一覧", "Inventory GSI(listingPartition, 50件)", "Query", () =>
     queryIndex("Inventory", "inventoriesByListingPartitionAndListUpdatedAt", "listingPartition", "ACTIVE", { limit: 50 }),
   );
-  // 検索・詳細検索・GSI失敗時のフォールバックが通る経路。
-  await measure("在庫一覧(検索)", "Inventory 全件走査(fetchAllInventoryRecords)", "Scan", () =>
+  // **これは現在の検索の値ではない。** 2026-09-04 の第2フェーズで、検索は
+  // 「参照する列だけを並列Scanで読む」経路(lib/inventory/inventorySearchFast.ts)へ
+  // 変わっており、実測 0.5〜1.4秒 / 1.95MB。ここに残しているのは
+  //   ・GSIが使えないときに落ちる従来経路がまだ生きていること
+  //   ・全列を全件読むとどれだけかかるか(改善の基準線)
+  // を測り続けるため。現在の検索そのものは npm run measure:inventory-search で測る。
+  await measure("在庫一覧(旧・全件走査の基準線)", "全列を全件読む場合(現在の検索経路ではない)", "Scan", () =>
     scanAll("Inventory", {
       filter: "attribute_not_exists(deletedAt)",
     }),
   );
-  await measure("在庫一覧", "総件数の集計(全件走査)", "Scan", () =>
+  // こちらも基準線。現在の件数集計は Select:COUNT の並列Scan(実測0.35〜0.72秒)。
+  await measure("在庫一覧(旧・件数の基準線)", "行を読んで数える場合(現在の経路ではない)", "Scan", () =>
     scanAll("Inventory", { filter: "attribute_not_exists(deletedAt)", projection: "id" }),
   );
 }
