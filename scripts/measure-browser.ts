@@ -218,6 +218,131 @@ function renderTable(results: RouteResult[]): string {
   return lines.join("\n");
 }
 
+/**
+ * 業務フローを1本通して、画面遷移ごとの体感速度を測る（指示書§5）。
+ *
+ *   在庫一覧 → 検索 → 検索結果 → 商品詳細 → 在庫一覧へ戻る
+ *            → メッセージ → EC出品 → 在庫一覧
+ *
+ * 単独ページの読み込みと違い、ここで見たいのは**利用者が操作してから
+ * 次の画面が使えるまで**。検索は実際に入力してEnterを押す。
+ *
+ * ログイン状態が要る。無ければこの計測は行わない。
+ */
+interface FlowStep {
+  name: string;
+  /** この操作をしてから doneSelector が見えるまでを測る。 */
+  act: (page: Page) => Promise<void>;
+  doneSelector: string;
+}
+
+export interface FlowRow {
+  name: string;
+  ms: number | null;
+  note: string;
+}
+
+const INVENTORY_ROW = "table tbody tr, [data-testid='inventory-card']";
+
+async function measureFlow(context: BrowserContext): Promise<FlowRow[]> {
+  const page = await context.newPage();
+  const out: FlowRow[] = [];
+  try {
+    // 最初の1件のIDを実行時に拾う。固定IDを埋め込むと、その在庫が消えた日に
+    // 測れなくなる。
+    await page.goto(ORIGIN + "/inventory", { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.locator(INVENTORY_ROW).first().waitFor({ state: "visible", timeout: 30_000 });
+    const href = await page
+      .locator('a[href^="/inventory/"]')
+      .first()
+      .getAttribute("href")
+      .catch(() => null);
+    const detailPath = href && /^\/inventory\/[0-9a-fA-F-]{8,}$/.test(href) ? href : null;
+    if (!detailPath) {
+      out.push({ name: "商品詳細 / EC出品", ms: null, note: "一覧から在庫のリンクを取得できませんでした" });
+    }
+
+    const steps: FlowStep[] = [
+      {
+        name: "在庫一覧を開く",
+        act: async (p) => {
+          await p.goto(ORIGIN + "/inventory", { waitUntil: "domcontentloaded" });
+        },
+        doneSelector: INVENTORY_ROW,
+      },
+      {
+        name: "検索する（商品名で絞り込み）",
+        act: async (p) => {
+          await p.fill('input[name="q"]', "ソファ");
+          await p.press('input[name="q"]', "Enter");
+        },
+        doneSelector: INVENTORY_ROW,
+      },
+      ...(detailPath
+        ? [
+            {
+              name: "商品詳細を開く",
+              act: async (p: Page) => {
+                await p.goto(ORIGIN + detailPath, { waitUntil: "domcontentloaded" });
+              },
+              doneSelector: "main",
+            },
+            {
+              name: "EC出品を開く",
+              act: async (p: Page) => {
+                await p.goto(ORIGIN + detailPath + "/listing", { waitUntil: "domcontentloaded" });
+              },
+              doneSelector: "#listing-title, textarea, main",
+            },
+          ]
+        : []),
+      {
+        name: "在庫一覧へ戻る",
+        act: async (p) => {
+          await p.goto(ORIGIN + "/inventory", { waitUntil: "domcontentloaded" });
+        },
+        doneSelector: INVENTORY_ROW,
+      },
+      {
+        name: "メッセージを開く",
+        act: async (p) => {
+          await p.goto(ORIGIN + "/inventory/messages", { waitUntil: "domcontentloaded" });
+        },
+        doneSelector: "main",
+      },
+      {
+        name: "在庫一覧へ戻る（2回目）",
+        act: async (p) => {
+          await p.goto(ORIGIN + "/inventory", { waitUntil: "domcontentloaded" });
+        },
+        doneSelector: INVENTORY_ROW,
+      },
+    ];
+
+    for (const step of steps) {
+      const startedAt = Date.now();
+      try {
+        await step.act(page);
+        await page.locator(step.doneSelector).first().waitFor({ state: "visible", timeout: 30_000 });
+        out.push({ name: step.name, ms: Date.now() - startedAt, note: "" });
+      } catch (err) {
+        // 失敗しても 0 では埋めない。測れなかったことが分かる形で残す。
+        out.push({ name: step.name, ms: null, note: err instanceof Error ? err.message.slice(0, 60) : "失敗" });
+      }
+    }
+  } finally {
+    await page.close();
+  }
+  return out;
+}
+
+function renderFlowTable(rows: FlowRow[]): string {
+  if (rows.length === 0) return "";
+  const lines = ["", "### 業務フロー（画面遷移ごと）", "", "| 操作 | 所要 | 備考 |", "|---|---:|---|"];
+  for (const r of rows) lines.push(`| ${r.name} | ${r.ms === null ? "—" : `${r.ms}ms`} | ${r.note} |`);
+  return lines.join("\n");
+}
+
 async function main() {
   const { hasSavedState, STAGING_STATE_FILE } = await import("../e2e/auth/stagingAuth");
   const authenticated = hasSavedState();
@@ -236,6 +361,7 @@ async function main() {
   }
 
   const results: RouteResult[] = [];
+  let flowRows: FlowRow[] = [];
   const browser = await chromium.launch({ headless: true });
   try {
     if (WANT_COLD) {
@@ -261,15 +387,29 @@ async function main() {
       const failures = res.samples.flatMap((s) => s.failed);
       if (failures.length > 0) console.log(`    失敗したリクエスト: ${[...new Set(failures)].slice(0, 3).join(" / ")}`);
     }
+
+    // ── 業務フローを1本通す（指示書§5） ──────────────────────────
+    if (authenticated) {
+      console.log("\n■ 業務フロー（画面遷移ごとの体感速度）");
+      flowRows = await measureFlow(ctx);
+      for (const r of flowRows) {
+        console.log(`  ${r.name.padEnd(26)} ${r.ms === null ? "—" : `${r.ms}ms`} ${r.note}`);
+      }
+    } else {
+      console.log("\n（業務フローの計測にはログイン状態が要ります。上の案内を参照してください）");
+    }
+
     await ctx.close();
   } finally {
     await browser.close();
   }
 
   const table = renderTable(results);
+  const flowTable = renderFlowTable(flowRows);
   console.log("\n" + table);
   if (OUT) {
-    writeFileSync(OUT, `# 実ブラウザ計測 (${new Date().toISOString()})\n\n認証: ${authenticated ? "あり" : "なし（公開画面のみ）"}\n\n${table}\n`, "utf8");
+    const body = `# 実ブラウザ計測 (${new Date().toISOString()})\n\n認証: ${authenticated ? "あり" : "なし（公開画面のみ）"}\n\n${table}\n${flowTable}\n`;
+    writeFileSync(OUT, body, "utf8");
     console.log(`\n${OUT} に保存しました。`);
   }
 }
