@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { defineConfig } from "@playwright/test";
 
 /**
@@ -15,6 +16,9 @@ import { defineConfig } from "@playwright/test";
  * amplify.yml/Amplify Consoleには一切登場しない。
  */
 const E2E_AUTH_TOKEN = "e2e-local-test-token-not-a-real-secret-32c";
+
+/** Linuxコンテナに事前installされているChromium。開発機には存在しない。 */
+const CONTAINER_CHROMIUM = "/opt/pw-browsers/chromium";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -47,9 +51,15 @@ export default defineConfig({
     // によりnpm install時の再ダウンロードを止めている)ため、それを
     // 明示的に指す — @playwright/testが探すデフォルトキャッシュ
     // パスと食い違ってもこのconfigだけで完結する。
-    launchOptions: {
-      executablePath: "/opt/pw-browsers/chromium",
-    },
+    //
+    // 2026-09-04: **そのパスが存在するときだけ**指すようにした。
+    // このパスはLinuxコンテナ用の絶対パスで、Windowsの開発機には無い
+    // (実際に `Failed to launch chromium because executable doesn't
+    // exist at /opt/pw-browsers/chromium` を踏んだ)。無いパスを常に
+    // 指していると、ローカルでE2Eを一度も動かせない —— 動かせない
+    // テストは書かれなくなる。存在しなければ Playwright の既定の
+    // キャッシュ(`npx playwright install chromium`の置き場)へ委ねる。
+    launchOptions: existsSync(CONTAINER_CHROMIUM) ? { executablePath: CONTAINER_CHROMIUM } : {},
   },
   webServer: {
     command: "npm run dev -- --port 3100",

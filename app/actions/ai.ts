@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { generateCanonicalProductPage, toListingDraftCopy, type ListingDraftCopy } from "@/lib/ai/productPage/canonical";
+import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
 import { saveGeneratedProductPage } from "@/lib/ai/productPage/history";
 
 /**
@@ -91,6 +92,21 @@ export type GenerateListingCopyActionResult =
       completionNotes: string[];
       /** 生成履歴として保存できたか。保存できていればそのid。 */
       savedId: string | null;
+      /**
+       * データ不足の警告(2026-09-04 EC出品改修指示書 §21)。
+       * 座面寸法が無い・配送ランクを確定できない等。**生成は止めず**、
+       * 何が確定できなかったかを担当者へ出す。
+       */
+      warnings: string[];
+      /** どのメンテナンス文・状態文をどの根拠で入れたか(§29 報告用)。 */
+      ruleNotes: string[];
+      /** ルールで確定した配送判定(画面に出して送料計算と突き合わせられるようにする)。 */
+      shipping: {
+        kazaiRank: string | null;
+        kazaiSumCm: number | null;
+        sagawaSize: string | null;
+        sagawaNote: string;
+      };
     }
   | { ok: false; error: string; correlationId: string };
 
@@ -167,6 +183,14 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
       introSanitized: result.introSanitized ?? false,
       completionNotes: result.completionNotes,
       savedId: history.savedId,
+      warnings: result.warnings,
+      ruleNotes: result.ruleNotes,
+      shipping: {
+        kazaiRank: result.facts.shippingRank,
+        kazaiSumCm: result.facts.shippingSumCm,
+        sagawaSize: formatSagawaSize(result.facts.sagawa),
+        sagawaNote: result.facts.sagawa.note,
+      },
     };
   } catch (err) {
     logActionFailure("generateListingCopyAction", correlationId, { inventoryId }, err);

@@ -3,6 +3,7 @@ import { getAccessToken, isBaseConnected, BaseNotConnectedError } from "@/lib/ba
 import { BaseListingApiError, classifyBaseHttpStatus } from "./errors";
 import { assertExternalWriteAllowed } from "@/lib/integrations/writeGuard";
 import type { ListingDraftRecord } from "../types";
+import { formatDescriptionForChannel } from "../descriptionFormat";
 
 /**
  * BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASE
@@ -89,7 +90,12 @@ export interface BaseListingResult {
 /** §4: items/add — 商品を新規作成する。確認済みフィールド名(title/detail/price/stock/visible)のみ送る。 */
 export async function createBaseProduct(input: BaseListingInput): Promise<BaseListingResult> {
   const title = input.overrideTitle?.trim() || input.draft.title;
-  const detail = input.overrideDescription?.trim() || input.draft.description || "";
+  // §25 チャネル別formatter を通す。共通の商品説明は書き換えず、送信用の
+  // 文字列だけをここで作る(改行の正規化・制御文字の除去)。
+  const detail = formatDescriptionForChannel(
+    input.overrideDescription?.trim() || input.draft.description || "",
+    "BASE",
+  ).text;
   const price = input.overridePrice ?? input.draft.price;
   if (!title) throw new BaseListingApiError("REMOTE_VALIDATION_ERROR", "タイトルが空です。");
   if (price == null || price <= 0) throw new BaseListingApiError("REMOTE_VALIDATION_ERROR", "価格が未設定です。");

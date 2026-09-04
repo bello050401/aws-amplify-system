@@ -9,6 +9,12 @@ import { generateProductPage, type ProductPageResult } from "./service";
 import { buildGuidanceBlock, listActiveGuidance, type GuidanceRule } from "./guidance";
 import { resolveLinkedBaseItem, type BaseLink } from "./baseLink";
 import { buildResolvedProductContext, type ResolvedProductContext } from "@/lib/inquiry/productContext";
+import { buildListingFacts, type ListingFacts } from "./listingFacts";
+import {
+  buildConditionSection,
+  buildProductDetailSection,
+  buildShippingSection,
+} from "./descriptionSections";
 
 /**
  * 商品説明生成の**正本**(2026-09-02 指示書§2/§10)。
@@ -123,6 +129,20 @@ export interface CanonicalGenerationResult extends ProductPageResult {
   baseLink: BaseLink | null;
   /** 在庫に無くBASEから補った項目の記録(§33 出典を必ず持つ)。 */
   completionNotes: string[];
+  /**
+   * ルールで確定させた事実一式(2026-09-04 EC出品改修指示書 §20/§21)。
+   *
+   * 画面の右パネル・警告表示・監査で使う。生成に失敗しても、ここまでは
+   * 必ず確定しているので返す。
+   */
+  facts: ListingFacts;
+  /**
+   * 担当者へ出す警告(§21)。座面寸法が無い・配送ランクを確定できない等。
+   * 生成そのものは止めない —— 分からないことを分からないまま渡す。
+   */
+  warnings: string[];
+  /** どのメンテナンス文・状態文をどの根拠で入れたか(監査用)。 */
+  ruleNotes: string[];
 }
 
 /**
@@ -213,6 +233,56 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
   const depth = completed(item.depth ? String(item.depth) : null, dims?.depth?.value ?? null, "奥行");
   const height = completed(item.height ? String(item.height) : null, dims?.height?.value ?? null, "高さ");
 
+  // ── ルールで確定させる領域(2026-09-04 §19) ────────────────────
+  //
+  // 寸法・座面寸法・配送ランク・佐川サイズ・メンテナンス内容・傷汚れは
+  // 在庫データから機械的に決まる。AIに渡すのは「◎商品のご紹介」に必要な
+  // ものだけで、確定した文章は生成後に差し替えるのではなく**最初から
+  // ルール側で作る** —— 差し替え方式にすると、AIが書いた誤った寸法が
+  // どこかの経路で残る余地ができる。
+  const brand = completed(baseBrandHint(item.name), productContext?.details.brand?.value ?? null, "ブランド");
+  const customFields = (item.customFields ?? {}) as Record<string, unknown>;
+  const customFieldText = (key: string): string | null => {
+    const v = customFields[key];
+    return typeof v === "string" && v.trim() ? v.trim() : null;
+  };
+
+  const facts = buildListingFacts({
+    name: item.name,
+    categoryName,
+    brand,
+    width,
+    depth,
+    height,
+    overallLength: item.overallLength ?? null,
+    seatDimensionsField: customFieldText("seatDimensions"),
+    material: customFieldText("material"),
+    conditionRating: item.conditionRating ?? null,
+    damageNotes: item.damageNotes ?? null,
+    note: item.note ?? null,
+    listingNotes: item.listingNotes ?? null,
+    adminMemo: item.adminMemo ?? null,
+  });
+
+  const conditionSection = buildConditionSection({
+    maintenance: facts.maintenance,
+    nonFabric: facts.nonFabric,
+    conditionDisclosure: facts.safe.conditionDisclosure,
+    goodConditionEvidence: facts.goodConditionEvidence,
+  });
+
+  const ruleSections = {
+    productDetail: buildProductDetailSection({
+      width: facts.width,
+      depth: facts.depth,
+      height: facts.height,
+      overallLength: facts.overallLength,
+      seat: facts.seat,
+    }),
+    shipping: buildShippingSection({ rank: facts.shippingRank, unresolvedReason: facts.shippingRankReason }),
+    condition: conditionSection.text,
+  };
+
   const result = await generateProductPage({
     inventoryId: item.id,
     name: item.name,
@@ -220,6 +290,8 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
     width,
     depth,
     height,
+    ruleSections,
+    extraFacts: { brand, material: facts.material },
     damageNotes: item.damageNotes ?? null,
     note: item.note ?? null,
     conditionRating: item.conditionRating ?? null,
@@ -229,11 +301,9 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
     // ブランドは在庫の商品名から機械的に導いたものを優先し、無ければ
     // BASEの商品説明に「ブランド：」と明示されているものを使う。
     // どちらも無ければ null のまま —— 推測して書かせない。
-    brand: completed(
-      baseBrandHint(item.name),
-      productContext?.details.brand?.value ?? null,
-      "ブランド",
-    ),
+    // (上の facts 組み立てで既に解決済みの値を使い回す。同じ補完を
+    //  2回走らせると completionNotes に同じ行が2つ並ぶ。)
+    brand,
     archive,
     styleProfile: styleProfile?.profile ?? null,
     styleProfileVersion: styleProfile?.version ?? null,
@@ -250,6 +320,9 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
     activeGuidance: guidance,
     baseLink,
     completionNotes,
+    facts,
+    warnings: [...facts.warnings, ...conditionSection.warnings],
+    ruleNotes: conditionSection.notes,
   };
 }
 

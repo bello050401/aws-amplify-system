@@ -19,6 +19,7 @@ import {
   PRODUCT_PAGE_TOOL,
   type ProductPageSections,
 } from "./prompt";
+import { composeListingDescription } from "./descriptionSections";
 
 /**
  * 在庫1件から、BASE掲載用の商品ページを作る。
@@ -72,6 +73,27 @@ export interface ProductPageGenerationInput {
   appliedGuidance?: string[];
   price?: number | null;
   brand?: string | null;
+  /**
+   * ルールで確定させたセクション(2026-09-04 EC出品改修指示書 §19)。
+   *
+   * 渡された場合、掲載用本文は「AIの◎商品のご紹介 + ここで確定した
+   * ◎商品詳細/◎発送について/◎コンディション + 固定の返品・お取り置き」で
+   * 組み立てる。**寸法・配送ランク・メンテナンス内容をAIに書かせない**
+   * ための境界がここ。
+   *
+   * 省略された場合は従来どおり、AIが返したセクションをそのまま並べる
+   * (改善指示のA/Bテスト等、紹介文の品質だけを見たい呼び出し用)。
+   */
+  ruleSections?: RuleBasedSections | null;
+  /** §20 AIへ渡す追加の事実(ブランド・素材)。 */
+  extraFacts?: { brand?: string | null; material?: string | null } | null;
+}
+
+/** §19 ルールベース領域。descriptionSections.ts が作る。 */
+export interface RuleBasedSections {
+  productDetail: string;
+  shipping: string;
+  condition: string;
 }
 
 export interface ProductPageResult {
@@ -132,6 +154,23 @@ export function composeFullDescription(sections: ProductPageSections, shippingBo
     .join("\n\n");
 }
 
+/**
+ * 掲載用本文を組み立てる。**AIとルールの境界がここ**(§19)。
+ *
+ * ruleSections が渡されていれば、AIから採るのは「◎商品のご紹介」だけ。
+ * 寸法・配送・コンディション・返品・お取り置きは確定した文字列で置き換える。
+ * 渡されていなければ従来どおり(改善指示のA/Bテスト等が使う)。
+ */
+function buildDescription(sections: ProductPageSections, input: ProductPageGenerationInput): string {
+  if (!input.ruleSections) return composeFullDescription(sections, input.shippingBoilerplate);
+  return composeListingDescription({
+    introduction: sections.introduction ?? null,
+    productDetail: input.ruleSections.productDetail,
+    shipping: input.ruleSections.shipping,
+    condition: input.ruleSections.condition,
+  });
+}
+
 export async function generateProductPage(input: ProductPageGenerationInput): Promise<ProductPageResult> {
   // 1. 事実を顧客向けに安全な形へ整える(社内スコア・個人情報を落とす)。
   //    ここは既存の仕組みをそのまま使う —— 検査を二重に作らない。
@@ -169,6 +208,14 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     similar,
     shippingBoilerplate: input.shippingBoilerplate ?? null,
     guidanceBlock: input.guidanceBlock ?? null,
+    extra: {
+      brand: input.extraFacts?.brand ?? input.brand ?? null,
+      material: input.extraFacts?.material ?? null,
+      // §19 ルールで確定済みのセクション。AIには書かせない。
+      fixedSections: input.ruleSections
+        ? ["◎商品詳細", "◎発送について", "◎コンディション", "◎返品・返金対応について", "◎お取り置きについて"]
+        : [],
+    },
   });
 
   let result;
@@ -239,7 +286,7 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         ...base,
         ok: false,
         sections,
-        fullDescription: composeFullDescription(sections, input.shippingBoilerplate),
+        fullDescription: buildDescription(sections, input),
         violations: introViolations.map((v) => ({
           code: "INTRO_CONTAINS_DIMENSIONS" as const,
           detail: `「◎商品のご紹介」に寸法が含まれています(${v.matched})。寸法は「◎サイズ」へ書いてください。`,
@@ -252,7 +299,7 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     }
   }
 
-  const fullDescription = composeFullDescription(sections, input.shippingBoilerplate);
+  const fullDescription = buildDescription(sections, input);
 
   // 一般的なECテンプレート表現に偏っていないか(指示書§7/§22)。
   // 1つ2つは日本語として自然なので、多すぎる場合だけ問題として挙げる。

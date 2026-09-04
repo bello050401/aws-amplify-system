@@ -89,6 +89,12 @@ export function ListingForm({
     completionNotes: string[];
     savedId: string | null;
     introSanitized: boolean;
+    /** §21 データ不足の警告(座面寸法が無い・配送ランクを確定できない等)。 */
+    warnings: string[];
+    /** どのメンテナンス文・状態文をどの根拠で入れたか。 */
+    ruleNotes: string[];
+    /** ルールで確定した配送判定。送料計算と突き合わせられるように出す(§8)。 */
+    shipping: { kazaiRank: string | null; kazaiSumCm: number | null; sagawaSize: string | null; sagawaNote: string };
   } | null>(null);
 
   const [categoryId, setCategoryId] = useState(initialChannelListing?.categoryMapping?.mercariCategoryId ?? "");
@@ -135,7 +141,24 @@ export function ListingForm({
    * は「Server Actionそのものの呼び出しが失敗する」極めて稀なケース
    * (ネットワーク切断等)だけを拾う——業務エラーはもう例外経路を通らない。
    */
+  /**
+   * §22 人が編集した説明文を、AI再生成で黙って消さない。
+   *
+   * これまでは無条件で上書きしていた。長文の商品説明を手直しした直後に
+   * 生成ボタンを押すと、その編集が取り返しなく消える(下書きを保存する
+   * 前なら復元手段が無い)。**最後に画面へ入れた文面と違う**ときだけ
+   * 確認する —— 生成直後にもう一度押す場合や、未編集の下書きを作り直す
+   * 場合は、確認を挟まない(毎回聞くと惰性で「はい」を押すようになる)。
+   */
+  const [lastAppliedDescription, setLastAppliedDescription] = useState(initialDraft?.description ?? "");
+
   async function handleGenerateWithAi() {
+    if (description.trim() && description !== lastAppliedDescription) {
+      const ok = window.confirm(
+        "説明文を編集されています。AIで生成し直すと、この内容は置き換えられます。よろしいですか？",
+      );
+      if (!ok) return;
+    }
     setAiBusy(true);
     setDraftError(null);
     setAiQuality(null);
@@ -152,6 +175,7 @@ export function ListingForm({
       // ◎コンディション / ◎発送について」が既に入っているので、
       // 足すと二重になる。
       setDescription(result.data.description);
+      setLastAppliedDescription(result.data.description);
       setAiQuality({
         violations: result.violations,
         missingFacts: result.missingFacts,
@@ -160,6 +184,9 @@ export function ListingForm({
         completionNotes: result.completionNotes,
         savedId: result.savedId,
         introSanitized: result.introSanitized,
+        warnings: result.warnings,
+        ruleNotes: result.ruleNotes,
+        shipping: result.shipping,
       });
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "AI生成に失敗しました。");
@@ -236,7 +263,12 @@ export function ListingForm({
   }
 
   return (
-    <div className="max-w-2xl">
+    // 2026-09-04 EC出品改修指示書 §2: PC(xl以上)では右パネルと2カラムに
+    // なるので、フォーム側の上限を広げる。max-w-2xl(672px)のままだと
+    // フォームと右パネルの間に300px以上の死んだ余白が残り、
+    // 「画面の左半分しか使っていない」という元の問題が形を変えて残る。
+    // 広げすぎると1行が長くなって読みにくいので 4xl(896px)で止める。
+    <div className="max-w-2xl xl:max-w-4xl">
       <p className="mb-4 text-[12px] text-gray-500">
         「{inventoryName}」をECチャネルへ出品するための下書き・設定です。Inventory本体（在庫マスタ）のデータは一切変更されません。
       </p>
@@ -270,9 +302,39 @@ export function ListingForm({
             {aiBusy ? "生成中…" : "AIで下書きを生成"}
           </button>
         </div>
+        {/* §21 データ不足は生成を止めずに知らせる。「⚠ 座面寸法が登録されて
+            いません」「⚠ 配送ランクを確定できません」がここに出る。 */}
+        {aiQuality && aiQuality.warnings.length > 0 && (
+          <div className="mb-2 border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
+            <p className="font-bold">確認が必要な項目</p>
+            <ul className="mt-1">
+              {aiQuality.warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {aiQuality && (
           <div className="mb-2 border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-600">
             <p className="font-bold text-gray-700">生成の内訳（担当者向け）</p>
+            {/* §8 送料計算と商品説明で判定が食い違っていないかを、その場で
+                見比べられるようにする(どちらも lib/shipping/rank.ts の
+                同じ関数を通しているが、見えないと確かめようが無い)。 */}
+            <p>
+              配送判定: 家財おまかせ便{aiQuality.shipping.kazaiRank ?? "（未確定）"}
+              {aiQuality.shipping.kazaiRank ? "ランク" : ""}
+              {aiQuality.shipping.kazaiSumCm != null ? `（3辺合計${aiQuality.shipping.kazaiSumCm}cm）` : ""}
+              {" ／ 佐川: "}
+              {aiQuality.shipping.sagawaSize ?? "（判定不可）"}
+            </p>
+            <p className="text-gray-400">{aiQuality.shipping.sagawaNote}</p>
+            {aiQuality.ruleNotes.length > 0 && (
+              <ul className="mt-1">
+                {aiQuality.ruleNotes.map((n, i) => (
+                  <li key={i}>・{n}</li>
+                ))}
+              </ul>
+            )}
             <p>
               文体プロファイル: {aiQuality.styleProfileVersion != null ? `v${aiQuality.styleProfileVersion}` : "未設定"} ／ 参考にした過去BASE商品:{" "}
               {aiQuality.referencedBaseItemIds.length}件
@@ -313,13 +375,25 @@ export function ListingForm({
             />
           </div>
           <div>
-            <label className="block text-[12px] text-gray-600">説明文</label>
+            {/* label と textarea を id で結び付ける。以前は結び付いておらず、
+                支援技術からもE2Eからも「説明文」という名前で辿れなかった。 */}
+            <label htmlFor="listing-description" className="block text-[12px] text-gray-600">
+              説明文
+            </label>
+            {/* 2026-09-04 EC出品改修指示書 §1-1: 初期高さを約4倍(4行→16行)。
+                リサイズ機能はそのまま残す —— `resize-y` を明示するのは、
+                Tailwindのpreflightに任せると将来 `resize-none` を足した
+                誰かが気づかずに機能を消せてしまうため。横方向は固定
+                (`resize-y`)にして、右パネルとの2カラムレイアウトを
+                ユーザー操作で壊せないようにする。 */}
             <textarea
+              id="listing-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              rows={4}
-              className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
+              rows={16}
+              className="mt-0.5 w-full resize-y border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
             />
+            <p className="mt-0.5 text-right text-[11px] text-gray-400">{description.length.toLocaleString("ja-JP")}文字</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

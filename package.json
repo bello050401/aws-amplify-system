@@ -85,7 +85,9 @@
     "verify:inquiry-e2e-live": "node scripts/with-server-only-stub.cjs scripts/verify-inquiry-e2e-live.ts",
     "verify:mercari-order-context": "node scripts/with-server-only-stub.cjs scripts/verify-mercari-order-context.ts",
     "backfill:mercari-orders": "node scripts/with-server-only-stub.cjs scripts/backfill-mercari-order-context.ts",
-    "verify:mercari-order-live": "node scripts/with-server-only-stub.cjs scripts/verify-mercari-order-context-live.ts"
+    "verify:mercari-order-live": "node scripts/with-server-only-stub.cjs scripts/verify-mercari-order-context-live.ts",
+    "verify:listing-description": "node scripts/with-server-only-stub.cjs scripts/verify-listing-description.ts",
+    "verify:listing-description-live": "node scripts/with-server-only-stub.cjs scripts/verify-listing-description-live.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

@@ -106,6 +106,11 @@ export function e2eInventoryDetail(id: string): InventoryDetail | null {
   if (!row) return null;
   return {
     ...row,
+    // 2026-09-04 EC出品改修指示書 §26: EC出品画面の右パネル(在庫詳細)を
+    // 実際に描画して確かめるための値。座面寸法と材質は CustomField 由来で、
+    // 実データ(ZAICO「⚪︎座面寸法」「⚪︎材質」)と同じ書き方にしてある。
+    // 一覧の行(makeRow)は変更していないので、既存のモバイルE2Eには影響しない。
+    customFields: { seatDimensions: "幅46 奥行41 高さ46.5", material: "木材" },
     firstMarkdownPrice: null,
     secondMarkdownPrice: null,
     thirdMarkdownPrice: null,

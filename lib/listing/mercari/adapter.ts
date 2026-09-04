@@ -15,6 +15,7 @@ import { shippingDurationToMercariValue } from "./mapper/shippingDuration";
 import { internalStatusToMercariApiStatus } from "./mapper/productStatus";
 import type { ChannelListingRecord, ListingDraftRecord, ShippingPayerCode } from "../types";
 import { resolveEffectiveListingFields } from "../types";
+import { formatDescriptionForChannel } from "../descriptionFormat";
 
 /**
  * BELLO統合改修 master指示書 Phase D — Mercari Shopsアダプタ。
@@ -210,7 +211,11 @@ export async function createMercariProduct(input: MercariListingInput): Promise<
 
   const apiInput: CreateProductInput = {
     name: effective.title,
-    description: effective.description,
+    // 2026-09-04 EC出品改修指示書 §25: チャネル別formatterを通す。
+    // 共通の商品説明(下書き)は書き換えず、送信用の文字列だけを整える
+    // ——改行の正規化と制御文字の除去。文字数上限が判明したら
+    // lib/listing/descriptionFormat.ts の表へ入れるだけでここは変えない。
+    description: formatDescriptionForChannel(effective.description, "MERCARI_SHOPS").text,
     price: effective.price,
     categoryId: channelListing.categoryMapping.mercariCategoryId,
     condition: conditionToMercariValue(draft.condition),

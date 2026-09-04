@@ -1,12 +1,13 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { getInventoryDetail } from "@/lib/inventory/queries";
+import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
 import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/service";
 import { isMercariConnected } from "@/lib/listing/mercari/tokenAccess";
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingForm } from "./ListingForm";
+import { InventoryFactsPanel } from "./InventoryFactsPanel";
 
 /**
  * BELLO統合改修 master指示書 Phase D — 在庫詳細画面(app/inventory/
@@ -35,11 +36,17 @@ export default async function ListingPage({ params }: { params: { id: string } }
   const item = await getInventoryDetail(params.id);
   if (!item) notFound();
 
-  const [draft, channelListing, mercariConnected] = await Promise.all([
+  const [draft, channelListing, mercariConnected, categories, statuses] = await Promise.all([
     getListingDraftForInventory(item.id),
     getChannelListing(item.id, "MERCARI_SHOPS"),
     isMercariConnected(),
+    // 2026-09-04 EC出品改修指示書 §2-1: 右パネルのカテゴリ/在庫ステータス。
+    // 在庫詳細ページと同じクエリを使う —— 表示名の解決を2通り持たない。
+    listCategories(item.categoryId),
+    listStatuses(),
   ]);
+  const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
+  const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
 
   // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: Inventory
   // Masterの商品画像をEC出品詳細へ表示する——画像データをEC Listing側へ
@@ -56,7 +63,9 @@ export default async function ListingPage({ params }: { params: { id: string } }
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">EC出品</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <div className="mx-auto mb-3 max-w-2xl">
+        {/* 2026-09-04 §2: 2カラム化に伴い mx-auto を外した。中央寄せのままだと
+            戻り導線だけが本文と揃わない位置へ動く。 */}
+        <div className="mb-3 max-w-2xl">
           {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §10: EC出品
               詳細から元のBELLO在庫詳細へ戻れる導線。inventoryId(一意キー)
               による直接リンクで、商品名/SKUの曖昧検索は使わない。 */}
@@ -64,18 +73,39 @@ export default async function ListingPage({ params }: { params: { id: string } }
             ← 在庫詳細を開く
           </Link>
         </div>
-        <ListingForm
-          inventoryId={item.id}
-          inventoryName={item.name}
-          images={orderedNormalImages}
-          initialDraft={draft}
-          initialChannelListing={channelListing}
-          mercariConnected={mercariConnected}
-        />
-        {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
-            ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
-            役割が重複していたので消した。生成エンジン・生成履歴の保存・
-            BASEからの情報補完は、そちらへ引き取ってある(消したのはUIだけ)。 */}
+        {/* 2026-09-04 EC出品改修指示書 §2/§3: PCでは右側に在庫詳細を出す。
+            以前はここが `max-w-2xl` の1カラムで、PC表示でも画面の左半分
+            しか使っていなかった。
+
+            【なぜ xl(1280px) で切るのか】出品フォームは max-w-2xl(672px)、
+            右パネルは 320px、間隔とページの左右余白(px-6)を足すと
+            約1,064px 必要になる。ナビレール(w-16=64px)がその外側にあるので、
+            lg(1024px)では右パネルが潰れて読めない。§3の「タブレット等に
+            ついては適切なブレークポイントを設定」に対する答えがこれで、
+            iPhone・iPadは従来どおり1カラム、そこから先で2カラムになる。
+
+            【モバイルで下へ回さない】§3が明示している。右パネルはPC作業を
+            効率化するためのもので、狭い画面では出品フォームの操作を
+            邪魔するだけ。`hidden xl:block` で**描画ごと**落とす。 */}
+        <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
+          <div className="min-w-0 flex-1">
+            <ListingForm
+              inventoryId={item.id}
+              inventoryName={item.name}
+              images={orderedNormalImages}
+              initialDraft={draft}
+              initialChannelListing={channelListing}
+              mercariConnected={mercariConnected}
+            />
+            {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
+                ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
+                役割が重複していたので消した。生成エンジン・生成履歴の保存・
+                BASEからの情報補完は、そちらへ引き取ってある(消したのはUIだけ)。 */}
+          </div>
+          <div className="hidden w-80 shrink-0 xl:block">
+            <InventoryFactsPanel item={item} categoryName={categoryName} statusName={statusName} />
+          </div>
+        </div>
       </div>
     </div>
   );

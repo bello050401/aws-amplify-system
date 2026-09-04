@@ -143,9 +143,31 @@ export function buildProductPageSystemPrompt(profile: BelloStyleProfile | null):
   return lines.join("\n");
 }
 
+/**
+ * §20 AIへ渡す追加の事実。
+ *
+ * 既存の CustomerSafeFacts(商品名・寸法・カテゴリ・状態・備考)に無い
+ * もので、**「◎商品のご紹介」を書くのに役立つもの**だけを足す。
+ *
+ * 配送ランク・佐川サイズ・座面寸法は**渡さない** —— それらのセクションは
+ * ルール側で確定済み(descriptionSections.ts)で、AIが書く必要が無い。
+ * 数値を渡せば渡すほど紹介文へ混ざる(実測で12件中2件)ので、紹介文に
+ * 必要のない数値はプロンプトへ入れない、という既存の方針に沿う。
+ */
+export interface ExtraProductFacts {
+  /** ブランド/メーカー。商品名から機械的に導いたもの、またはBASE由来。 */
+  brand?: string | null;
+  /** 素材(CustomField `material` / ZAICO「⚪︎材質」)。 */
+  material?: string | null;
+  /** システム側で確定済みのセクション名。ここへ書かせないために渡す。 */
+  fixedSections?: string[];
+}
+
 export function buildProductPageUserPrompt(input: {
   facts: CustomerSafeFacts;
   similar: SimilarityHit[];
+  /** §20 追加のProduct Context。 */
+  extra?: ExtraProductFacts | null;
   /** 発送についての定型文(ナレッジ由来)。無ければ省略。 */
   shippingBoilerplate?: string | null;
   /**
@@ -162,9 +184,22 @@ export function buildProductPageUserPrompt(input: {
 
   blocks.push(
     "==== 今回の商品の事実情報(ここに書かれていることだけが根拠) ====",
-    factsBlock(input.facts),
+    factsBlock(input.facts, input.extra ?? null),
     "==== 事実情報ここまで ====",
   );
+
+  // §19 ルールで確定済みのセクションは書かせない。書かせても捨てるので、
+  // 生成の手間とトークンが無駄になるうえ、紹介文へ滲み出す原因になる。
+  const fixed = input.extra?.fixedSections ?? [];
+  if (fixed.length > 0) {
+    blocks.push(
+      "",
+      "==== システム側で確定済みのセクション(書かないこと) ====",
+      `次のセクションは在庫データから機械的に確定しており、あなたの出力は使いません: ${fixed.join(" / ")}`,
+      "「商品のご紹介」の中でも、寸法・配送方法・送料・返品条件・お取り置き条件には触れないでください。",
+      "==== ここまで ====",
+    );
+  }
 
   if (input.similar.length > 0) {
     blocks.push(
@@ -195,13 +230,15 @@ export function buildProductPageUserPrompt(input: {
   return blocks.join("\n");
 }
 
-function factsBlock(facts: CustomerSafeFacts): string {
+function factsBlock(facts: CustomerSafeFacts, extra: ExtraProductFacts | null): string {
   const lines: string[] = [];
   const push = (label: string, value: string | null | undefined) => {
     if (value && String(value).trim()) lines.push(`${label}: ${String(value).trim()}`);
   };
   push("商品名", facts.name);
+  push("ブランド/メーカー", extra?.brand);
   push("カテゴリ", facts.categoryName);
+  push("素材", extra?.material);
   push("寸法", facts.dimensions);
   push("コンディション", facts.conditionDisclosure);
   push("備考", facts.publicNote);
