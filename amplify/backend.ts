@@ -10,6 +10,8 @@ import { generateSku } from "./functions/generate-sku/resource";
 import { pricingScheduler } from "./functions/pricing-scheduler/resource";
 import { imageProcessingWorker } from "./functions/image-processing-worker/resource";
 import { zaicoSyncWorker } from "./functions/zaico-sync-worker/resource";
+import { integrityMonitor } from "./functions/integrity-monitor/resource";
+import { INTEGRITY_MONITORED_MODELS, INTEGRITY_TABLE_ENV } from "../lib/integrity/tables";
 
 /**
  * Amplify Gen2 backend definition.
@@ -37,6 +39,7 @@ const backend = defineBackend({
   pricingScheduler,
   imageProcessingWorker,
   zaicoSyncWorker,
+  integrityMonitor,
 });
 
 // SKU counter table for amplify/functions/generate-sku. This is
@@ -455,3 +458,41 @@ backend.zaicoSyncWorker.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJob
 backend.zaicoSyncWorker.addEnvironment("ZAICO_SOURCE_LINK_TABLE_NAME", zaicoSourceLinkTable.tableName);
 backend.zaicoSyncWorker.addEnvironment("STORAGE_BUCKET_NAME", backend.storage.resources.bucket.bucketName);
 backend.zaicoSyncWorker.addEnvironment("GENERATE_SKU_FUNCTION_NAME", backend.generateSku.resources.lambda.functionName);
+
+// ─────────────────────────────────────────────────────────────────────
+// データ整合性の日次監視（2026-09-04 最終フェーズ Phase B）。
+// amplify/functions/integrity-monitor/resource.ts のファイル冒頭コメント参照。
+//
+// 権限の考え方（handler.ts の実装と対になる境界）:
+//   - 監視対象のテーブルはすべて **read-only**。孤児・重複・途中状態を
+//     数えるだけで、1バイトも書かない。**自動修復はしない**という方針を、
+//     コードだけでなく IAM でも強制する。
+//   - 書き込みを許すのは、自分の記録（基準値と実行履歴）を置く
+//     IntegrityCheckLog テーブルだけ。
+//
+// テーブルは生CDK（skuCounterTable / priceExecutionLogTable と同じ判断）:
+// 画面から直接読み書きするものではなく、GraphQL API へ露出する理由が無い。
+// removalPolicy は RETAIN — 基準値が失われると「増えたかどうか」を
+// 判定できなくなり、次の実行がすべて NEW に戻ってしまう。
+// ─────────────────────────────────────────────────────────────────────
+const integrityLogStack = backend.createStack("IntegrityCheckLogStack");
+const integrityLogTable = new Table(integrityLogStack, "IntegrityCheckLogTable", {
+  partitionKey: { name: "id", type: AttributeType.STRING },
+  billingMode: BillingMode.PAY_PER_REQUEST,
+  // 実行履歴は1日1行。1年で自然に消えるよう handler 側が expiresAt を入れる
+  // （基準値の行には入れないので消えない）。
+  timeToLiveAttribute: "expiresAt",
+  removalPolicy: RemovalPolicy.RETAIN,
+});
+integrityLogTable.grantReadWriteData(backend.integrityMonitor.resources.lambda);
+backend.integrityMonitor.addEnvironment("INTEGRITY_LOG_TABLE_NAME", integrityLogTable.tableName);
+
+// 監視対象。すべて read-only で渡す。
+for (const model of INTEGRITY_MONITORED_MODELS) {
+  const table = backend.data.resources.tables[model];
+  table.grantReadData(backend.integrityMonitor.resources.lambda);
+  // 環境変数名は handler.ts と**同じ1つの表**（lib/integrity/tables.ts）から取る。
+  // ここで名前を組み立て直すと、規則がずれた日にそのモデルだけが静かに
+  // 検査対象から抜け落ちる。
+  backend.integrityMonitor.addEnvironment(INTEGRITY_TABLE_ENV[model], table.tableName);
+}

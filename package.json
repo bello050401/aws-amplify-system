@@ -99,7 +99,8 @@
     "verify:data-integrity": "node scripts/with-server-only-stub.cjs scripts/verify-data-integrity.ts",
     "verify:http": "node scripts/with-server-only-stub.cjs scripts/verify-http.ts",
     "verify:cache": "node scripts/with-server-only-stub.cjs scripts/verify-cache.ts",
-    "measure:browser": "node scripts/with-server-only-stub.cjs scripts/measure-browser.ts"
+    "measure:browser": "node scripts/with-server-only-stub.cjs scripts/measure-browser.ts",
+    "verify:integrity-monitor": "node scripts/with-server-only-stub.cjs scripts/verify-integrity-monitor.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",
