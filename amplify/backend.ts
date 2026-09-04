@@ -11,7 +11,6 @@ import { pricingScheduler } from "./functions/pricing-scheduler/resource";
 import { imageProcessingWorker } from "./functions/image-processing-worker/resource";
 import { zaicoSyncWorker } from "./functions/zaico-sync-worker/resource";
 import { integrityMonitor } from "./functions/integrity-monitor/resource";
-import { INTEGRITY_MONITORED_MODELS, INTEGRITY_TABLE_ENV } from "../lib/integrity/tables";
 
 /**
  * Amplify Gen2 backend definition.
@@ -488,11 +487,33 @@ integrityLogTable.grantReadWriteData(backend.integrityMonitor.resources.lambda);
 backend.integrityMonitor.addEnvironment("INTEGRITY_LOG_TABLE_NAME", integrityLogTable.tableName);
 
 // 監視対象。すべて read-only で渡す。
-for (const model of INTEGRITY_MONITORED_MODELS) {
+//
+// **lib/ から import しない。** amplify/backend.ts は ampx が独自の
+// ESM文脈で評価するため、lib/ の named export を解決できずデプロイが
+// 落ちる。実際に job#233 が次のエラーで失敗した:
+//   [SyntaxError] The requested module '../lib/integrity/tables'
+//   does not provide an export named 'INTEGRITY_MONITORED_MODELS'
+// ローカルの synth:check は別の解決経路を通るため通ってしまう
+// （＝ここは実デプロイでしか分からない。同じ轍を踏まないこと）。
+// そこでモデル名と環境変数名はここに直接書き、handler.ts が使う
+// lib/integrity/tables.ts と食い違っていないことは
+// scripts/verify-integrity-monitor.ts がこのファイルを読んで照合する。
+const INTEGRITY_MONITOR_TABLES: Record<string, string> = {
+  Inventory: "INVENTORY_TABLE_NAME",
+  InventoryHistory: "INVENTORY_HISTORY_TABLE_NAME",
+  ListingDraft: "LISTING_DRAFT_TABLE_NAME",
+  ChannelListing: "CHANNEL_LISTING_TABLE_NAME",
+  ProcessingJob: "PROCESSING_JOB_TABLE_NAME",
+  ImageProcessingVersion: "IMAGE_PROCESSING_VERSION_TABLE_NAME",
+  ZaicoSourceLink: "ZAICO_SOURCE_LINK_TABLE_NAME",
+  MercariOrderContext: "MERCARI_ORDER_CONTEXT_TABLE_NAME",
+  Conversation: "CONVERSATION_TABLE_NAME",
+  Message: "MESSAGE_TABLE_NAME",
+  NotificationDelivery: "NOTIFICATION_DELIVERY_TABLE_NAME",
+  ZaicoSyncJob: "ZAICO_SYNC_JOB_TABLE_NAME",
+};
+for (const [model, envName] of Object.entries(INTEGRITY_MONITOR_TABLES)) {
   const table = backend.data.resources.tables[model];
   table.grantReadData(backend.integrityMonitor.resources.lambda);
-  // 環境変数名は handler.ts と**同じ1つの表**（lib/integrity/tables.ts）から取る。
-  // ここで名前を組み立て直すと、規則がずれた日にそのモデルだけが静かに
-  // 検査対象から抜け落ちる。
-  backend.integrityMonitor.addEnvironment(INTEGRITY_TABLE_ENV[model], table.tableName);
+  backend.integrityMonitor.addEnvironment(envName, table.tableName);
 }

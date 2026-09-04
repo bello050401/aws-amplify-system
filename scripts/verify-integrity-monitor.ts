@@ -16,6 +16,7 @@
 import { compareIntegrity, formatRunResult, toHistoryEntry, type IntegrityBaseline, type IntegrityMetric } from "@/lib/integrity/compare";
 import { collectIntegrityMetrics } from "@/lib/integrity/collect";
 import { INTEGRITY_MONITORED_MODELS, INTEGRITY_TABLE_ENV } from "@/lib/integrity/tables";
+import { readFileSync } from "node:fs";
 
 let failures = 0;
 let passes = 0;
@@ -191,6 +192,31 @@ function testTableEnvMapIsShared() {
   check(!dup, "環境変数名が重複していない（別モデルが同じテーブルを見に行かない）");
 }
 
+/**
+ * backend.ts と handler.ts が同じ環境変数名を使っていること。
+ *
+ * backend.ts からは lib/ を import できない（ampx のESM文脈で named export を
+ * 解決できず、実デプロイだけが落ちる。job#233 で実際に踏んだ）。そのため
+ * backend.ts は同じ表を直接持っている。**ファイルを読んで突き合わせる**ことで、
+ * 片方にモデルを足してもう片方に足し忘れる、という静かな抜けを防ぐ。
+ */
+function testBackendMatchesSharedTableMap() {
+  const backendSource = readFileSync("amplify/backend.ts", "utf8");
+  const missing = INTEGRITY_MONITORED_MODELS.filter(
+    (m) => !backendSource.includes(`${m}: "${INTEGRITY_TABLE_ENV[m]}"`),
+  );
+  check(
+    missing.length === 0,
+    "backend.ts の監視対象が lib/integrity/tables.ts と一致する",
+    missing.length > 0 ? `backend.ts に無い: ${missing.join(", ")}` : `${INTEGRITY_MONITORED_MODELS.length}モデル`,
+  );
+  // 逆向き: backend.ts にあって共有マップに無いモデル。
+  const extra = [...backendSource.matchAll(/^  ([A-Z][A-Za-z]+): "([A-Z0-9_]+_TABLE_NAME)",$/gm)]
+    .map((mm) => mm[1])
+    .filter((m) => !(m in INTEGRITY_TABLE_ENV));
+  check(extra.length === 0, "backend.ts にだけあるモデルが無い", extra.join(","));
+}
+
 async function main() {
   testSameAsBaseline();
   testIncreased();
@@ -204,6 +230,7 @@ async function main() {
   testHistoryEntry();
   testFormatting();
   testTableEnvMapIsShared();
+  testBackendMatchesSharedTableMap();
   await testOneFailingScanDoesNotBreakOthers();
   console.log(`\n${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
