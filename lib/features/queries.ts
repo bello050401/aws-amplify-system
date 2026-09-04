@@ -3,7 +3,7 @@ import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { BaseItem } from "@/lib/base";
 import { fetchAndCacheItems } from "./baseSync";
 import { parseFeatureContent, type FeatureContent } from "./contentCodec";
-import { unwrapGet, unwrapList } from "@/lib/amplify/listAll";
+import { listAllPages, unwrapGet } from "@/lib/amplify/listAll";
 
 export interface FeatureDashboardRow {
   id: string;
@@ -25,8 +25,18 @@ export interface FeatureDashboardRow {
 export async function listFeaturesForDashboard(): Promise<FeatureDashboardRow[]> {
   // 取得に失敗すると「特集が1件も無い」画面になる。作ったはずのものが
   // 消えたように見えるので、0件と失敗を区別する。
-  const features = unwrapList(await serverDataClient.models.Feature.list(adminAuthMode), "特集");
-  const allItems = unwrapList(await serverDataClient.models.FeatureItem.list(adminAuthMode), "特集の掲載商品");
+  // **最後のページまで辿る。** 1ページ分だけで止めると、件数が増えた時点で
+  // 一覧から静かに消える（2026-09-04 健全化 PHASE 25）。
+  const [features, allItems] = await Promise.all([
+    listAllPages<Omit<FeatureDashboardRow, "itemCount">>(
+      (nextToken) => serverDataClient.models.Feature.list({ ...adminAuthMode, limit: 200, nextToken }) as never,
+      { label: "特集" },
+    ),
+    listAllPages<{ featureId: string }>(
+      (nextToken) => serverDataClient.models.FeatureItem.list({ ...adminAuthMode, limit: 500, nextToken }) as never,
+      { label: "特集の掲載商品" },
+    ),
+  ]);
 
   return features
     .map((f) => ({
@@ -64,12 +74,17 @@ export async function getFeatureWithItems(featureId: string): Promise<FeatureWit
 
   // 掲載商品が空に化けると、編集画面から商品が消えたように見える。
   // そのまま保存すると本当に消える。
-  const featureItemRows = unwrapList(
-    await serverDataClient.models.FeatureItem.list({
-      filter: { featureId: { eq: featureId } },
-      ...adminAuthMode,
-    }),
-    "特集の掲載商品",
+  // ここも最後のページまで辿る。1ページで切れると、編集画面に出なかった
+  // 掲載商品が保存時に**本当に消える**（PHASE 25）。
+  const featureItemRows = await listAllPages<{ id: string; featureId: string; baseItemId: string; sortOrder: number; isVisible?: boolean | null }>(
+    (nextToken) =>
+      serverDataClient.models.FeatureItem.list({
+        filter: { featureId: { eq: featureId } },
+        limit: 500,
+        nextToken,
+        ...adminAuthMode,
+      }) as never,
+    { label: "特集の掲載商品" },
   );
   const sortedRows = [...featureItemRows].sort((a, b) => a.sortOrder - b.sortOrder);
 

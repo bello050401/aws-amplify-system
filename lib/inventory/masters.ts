@@ -1,7 +1,7 @@
 import "server-only";
 import { invalidateMasterCache } from "./masterCache";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { unwrapList } from "@/lib/amplify/listAll";
+import { listAllPages, unwrapList } from "@/lib/amplify/listAll";
 
 /**
  * Category / Location / Unit share an identical shape (name/sortOrder/
@@ -96,7 +96,10 @@ export function normalizeMasterName(name: string): string {
 
 /** 既存の状態コード。code は識別子なので、重複させない。 */
 async function existingStatusCodes(): Promise<Set<string>> {
-  const data = unwrapList(await serverDataClient.models.StatusMaster.list(inventoryAuthMode), "状態マスタ");
+  const data = await listAllPages<{ code: string }>(
+    (nextToken) => serverDataClient.models.StatusMaster.list({ ...inventoryAuthMode, limit: 200, nextToken }),
+    { label: "状態マスタ" },
+  );
   return new Set(data.map((d) => d.code));
 }
 
@@ -111,7 +114,10 @@ export async function listAllMasterEntries(model: MasterModelName): Promise<Mast
     // 「まだ何も登録されていない」として空配列を返す(再デプロイ後は
     // 通常通り動く)。
     try {
-      const { data } = await serverDataClient.models.UnitMaster.list(inventoryAuthMode);
+      const data = await listAllPages<{ id: string; name: string; sortOrder?: number | null; isActive?: boolean | null }>(
+        (nextToken) => serverDataClient.models.UnitMaster.list({ ...inventoryAuthMode, limit: 200, nextToken }),
+        { label: "単位マスタ" },
+      );
       return (data ?? [])
         .map((d) => ({ id: d.id, name: d.name, sortOrder: d.sortOrder ?? 0, isActive: d.isActive ?? true }))
         .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
@@ -123,7 +129,10 @@ export async function listAllMasterEntries(model: MasterModelName): Promise<Mast
 
   if (model === "Status") {
     // 「状態」は label が表示名。code は識別子なのでここでは扱わない。
-    const data = unwrapList(await serverDataClient.models.StatusMaster.list(inventoryAuthMode), "状態マスタ");
+    const data = await listAllPages<{ id: string; label: string; sortOrder?: number | null; isActive?: boolean | null }>(
+      (nextToken) => serverDataClient.models.StatusMaster.list({ ...inventoryAuthMode, limit: 200, nextToken }),
+      { label: "状態マスタ" },
+    );
     return data
       .map((d) => ({ id: d.id, name: d.label, sortOrder: d.sortOrder ?? 0, isActive: d.isActive ?? true }))
       .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
@@ -131,12 +140,21 @@ export async function listAllMasterEntries(model: MasterModelName): Promise<Mast
 
   // この結果は seedModel の「まだ無い名前」判定に使われる。空に化けると
   // **全件をもう一度seedして重複マスタを作る**。取得の失敗は0件ではない。
-  const data = unwrapList(
+  // **必ず最後のページまで辿る。** 1ページ分だけのまま
+  // 使うと、マスタが100件を超えた時点で静かに切り捨てられる —— この
+  // 結果は seedModel の「まだ無い名前」判定に使われるので、切り捨ては
+  // **既にある名前をもう一度seedして重複マスタを作る**ことに直結する
+  // (2026-09-04 健全化 PHASE 25)。
+  const data =
     model === "Category"
-      ? await serverDataClient.models.Category.list(inventoryAuthMode)
-      : await serverDataClient.models.Location.list(inventoryAuthMode),
-    model === "Category" ? "カテゴリーマスタ" : "保管場所マスタ",
-  );
+      ? await listAllPages<{ id: string; name: string; sortOrder?: number | null; isActive?: boolean | null }>(
+          (nextToken) => serverDataClient.models.Category.list({ ...inventoryAuthMode, limit: 200, nextToken }),
+          { label: "カテゴリーマスタ" },
+        )
+      : await listAllPages<{ id: string; name: string; sortOrder?: number | null; isActive?: boolean | null }>(
+          (nextToken) => serverDataClient.models.Location.list({ ...inventoryAuthMode, limit: 200, nextToken }),
+          { label: "保管場所マスタ" },
+        );
   return data
     .map((d) => ({ id: d.id, name: d.name, sortOrder: d.sortOrder ?? 0, isActive: d.isActive ?? true }))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ja"));
