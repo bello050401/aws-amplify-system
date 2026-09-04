@@ -46,6 +46,7 @@ async function assertNoHorizontalOverflow(page: Page, context: string) {
 
 const panel = (page: Page) => page.getByRole("complementary", { name: "在庫詳細・基本情報" });
 const description = (page: Page) => page.getByLabel("説明文");
+const shippingMethod = (page: Page) => page.getByLabel("配送方法");
 
 test.describe("EC出品画面のレイアウト", () => {
   test("PC幅: 右側に在庫詳細が表示され、出品フォームと2カラムになる", async ({ page }) => {
@@ -66,7 +67,7 @@ test.describe("EC出品画面のレイアウト", () => {
     expect(panelBox.y, "右パネルは出品フォームと同じ高さから始まる(下へ回っていない)").toBeLessThan(formBox.y + 200);
 
     // §2-1 表示すべき情報が実際に出ていること。
-    for (const label of ["商品名", "カテゴリ", "在庫ステータス", "座面寸法", "材質", "家財おまかせ便", "佐川急便サイズ"]) {
+    for (const label of ["商品名", "カテゴリ", "在庫ステータス", "座面寸法", "材質", "らくらく家財便", "佐川急便サイズ"]) {
       await expect(panel(page).getByText(label, { exact: true }), `右パネルに「${label}」が出る`).toBeVisible();
     }
     // §6-1 座面寸法はZAICOの実データ形式から読めていること。
@@ -121,6 +122,52 @@ test.describe("EC出品画面のレイアウト", () => {
     // §1-1 リサイズ機能は維持する。縦は可、横は不可(2カラムを壊さない)。
     const resize = await description(page).evaluate((el) => getComputedStyle(el).resize);
     expect(resize, "説明文を縦方向にリサイズできる").toBe("vertical");
+  });
+
+  /**
+   * 2026-09-04 追加指示 §1: 配送方法の選択。
+   *
+   * 「らくらく家財便が既定で、必要な商品だけ佐川へ変える」という運用を
+   * 画面で実際に確かめる。切り替えたときに他の入力が消えないことまで見る
+   * ——選択の付け替えでタイトルや説明文が飛ぶと、担当者は二度と触らない。
+   */
+  test("配送方法: 既定はらくらく家財便で、佐川急便へ切り替えて戻せる", async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page);
+    await page.setViewportSize(DESKTOP);
+    await page.goto(LISTING_URL);
+    await expect(shippingMethod(page)).toBeVisible();
+
+    // 開いた時点での既定。
+    await expect(shippingMethod(page)).toHaveValue("KAZAI");
+    await expect(page.getByText("既存の送料計算と同じらくらく家財便のランクを入れます", { exact: false })).toBeVisible();
+
+    // 他の入力を埋めてから切り替え、消えないことを見る。
+    const titleBefore = await page.getByLabel("出品タイトル").inputValue();
+    await description(page).fill("担当者が書いた説明文");
+
+    await shippingMethod(page).selectOption("SAGAWA");
+    await expect(shippingMethod(page)).toHaveValue("SAGAWA");
+    await expect(page.getByText("3辺合計＋20cmで判定した佐川急便のサイズを入れます", { exact: false })).toBeVisible();
+    await expect(description(page)).toHaveValue("担当者が書いた説明文");
+    await expect(page.getByLabel("出品タイトル")).toHaveValue(titleBefore);
+
+    // 戻せる。
+    await shippingMethod(page).selectOption("KAZAI");
+    await expect(shippingMethod(page)).toHaveValue("KAZAI");
+    await expect(description(page)).toHaveValue("担当者が書いた説明文");
+  });
+
+  test("配送方法: iPhone幅でも操作できる", async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page);
+    await page.setViewportSize(IPHONE);
+    await page.goto(LISTING_URL);
+    await expect(shippingMethod(page)).toBeVisible();
+    await expect(shippingMethod(page)).toHaveValue("KAZAI");
+    await shippingMethod(page).selectOption("SAGAWA");
+    await expect(shippingMethod(page)).toHaveValue("SAGAWA");
+    await assertNoHorizontalOverflow(page, "iPhone幅で配送方法を切り替えた後");
   });
 
   test("長文を入れてもレイアウトが崩れない", async ({ page }) => {

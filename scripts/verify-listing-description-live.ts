@@ -19,6 +19,9 @@ import { ensureConversationTableName } from "./lib/resolveStagingTables";
 
 async function main() {
   const key = process.argv[2];
+  // 追加指示 §1: 配送方法を指定して、説明文の「◎発送について」が
+  // 切り替わることを実データで確かめる。省略時は保存済みの下書きの値。
+  const methodArg = process.argv.includes("--sagawa") ? "SAGAWA" : process.argv.includes("--kazai") ? "KAZAI" : undefined;
   if (!key) {
     console.error("使い方: npm run verify:listing-description-live -- <inventoryId または SKU>");
     process.exit(1);
@@ -45,7 +48,7 @@ async function main() {
     }
 
     console.log(`[verify-listing-description-live] 在庫 ${inventoryId} で生成します`);
-    const result = await generateCanonicalProductPage(inventoryId);
+    const result = await generateCanonicalProductPage(inventoryId, { shippingMethod: methodArg });
 
     console.log("\n════ 確定した事実(ルール側) ════");
     console.log(`商品名        : ${result.inventoryName}`);
@@ -59,6 +62,7 @@ async function main() {
       `家財おまかせ便: ${result.facts.shippingRank ?? "判定不可"}${result.facts.shippingSumCm != null ? ` (3辺合計${result.facts.shippingSumCm}cm)` : ""}`,
     );
     console.log(`佐川急便      : ${formatSagawaSize(result.facts.sagawa) ?? "判定不可"} — ${result.facts.sagawa.note}`);
+    console.log(`配送方法(選択): ${result.shippingMethod === "SAGAWA" ? "佐川急便" : "らくらく家財便"}`);
     console.log(
       `メンテナンス  : ${
         result.facts.maintenance.hasAny

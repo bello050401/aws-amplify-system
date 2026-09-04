@@ -9,7 +9,14 @@ import {
   saveChannelOverrideAction,
   saveListingDraftAction,
 } from "@/app/actions/listing";
-import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, ShippingPayerCode } from "@/lib/listing/types";
+import type {
+  ChannelListingRecord,
+  ListingConditionCode,
+  ListingDraftRecord,
+  ListingShippingMethod,
+  ShippingPayerCode,
+} from "@/lib/listing/types";
+import { DEFAULT_LISTING_SHIPPING_METHOD, LISTING_SHIPPING_METHODS } from "@/lib/listing/types";
 import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 import { AutoPricingSection } from "./AutoPricingSection";
@@ -70,6 +77,10 @@ export function ListingForm({
   const [description, setDescription] = useState(initialDraft?.description ?? "");
   const [price, setPrice] = useState(initialDraft?.price != null ? String(initialDraft.price) : "");
   const [condition, setCondition] = useState<ListingConditionCode>(initialDraft?.condition ?? "NO_NOTABLE_DAMAGE");
+  // §1 既定は「らくらく家財便」。保存済みの下書きがあればその選択を復元する。
+  const [shippingMethod, setShippingMethod] = useState<ListingShippingMethod>(
+    initialDraft?.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD,
+  );
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
@@ -94,7 +105,14 @@ export function ListingForm({
     /** どのメンテナンス文・状態文をどの根拠で入れたか。 */
     ruleNotes: string[];
     /** ルールで確定した配送判定。送料計算と突き合わせられるように出す(§8)。 */
-    shipping: { kazaiRank: string | null; kazaiSumCm: number | null; sagawaSize: string | null; sagawaNote: string };
+    shipping: {
+      /** 実際に本文へ入れた配送方法(§1)。画面の選択と一致しているか確かめられる。 */
+      method: ListingShippingMethod;
+      kazaiRank: string | null;
+      kazaiSumCm: number | null;
+      sagawaSize: string | null;
+      sagawaNote: string;
+    };
   } | null>(null);
 
   const [categoryId, setCategoryId] = useState(initialChannelListing?.categoryMapping?.mercariCategoryId ?? "");
@@ -163,7 +181,8 @@ export function ListingForm({
     setDraftError(null);
     setAiQuality(null);
     try {
-      const result = await generateListingCopyAction(inventoryId);
+      // §1 画面で選択中の配送方法をそのまま渡す(保存前でも反映する)。
+      const result = await generateListingCopyAction(inventoryId, shippingMethod);
       if (!result.ok) {
         setDraftError(result.error);
         return;
@@ -209,6 +228,9 @@ export function ListingForm({
         description,
         price: price ? Number(price) : 0,
         condition,
+        // §1 配送方法も一緒に保存する。次に開いたときも、説明文を
+        // 再生成したときも同じ選択が使われる。
+        shippingMethod,
       });
       setDraft(result);
       setDraftSaved(true);
@@ -320,11 +342,19 @@ export function ListingForm({
             {/* §8 送料計算と商品説明で判定が食い違っていないかを、その場で
                 見比べられるようにする(どちらも lib/shipping/rank.ts の
                 同じ関数を通しているが、見えないと確かめようが無い)。 */}
+            {/* §1 本文へ入れた配送方法を先頭に出す。選択と本文がずれていない
+                ことを、生成のたびに目で確かめられるようにする。 */}
             <p>
-              配送判定: 家財おまかせ便{aiQuality.shipping.kazaiRank ?? "（未確定）"}
+              本文へ入れた配送方法:{" "}
+              <span className="font-bold text-gray-700">
+                {aiQuality.shipping.method === "SAGAWA" ? "佐川急便" : "らくらく家財便"}
+              </span>
+            </p>
+            <p>
+              らくらく家財便: {aiQuality.shipping.kazaiRank ?? "（未確定）"}
               {aiQuality.shipping.kazaiRank ? "ランク" : ""}
               {aiQuality.shipping.kazaiSumCm != null ? `（3辺合計${aiQuality.shipping.kazaiSumCm}cm）` : ""}
-              {" ／ 佐川: "}
+              {" ／ 佐川急便: "}
               {aiQuality.shipping.sagawaSize ?? "（判定不可）"}
             </p>
             <p className="text-gray-400">{aiQuality.shipping.sagawaNote}</p>
@@ -365,10 +395,11 @@ export function ListingForm({
         )}
         <div className="grid grid-cols-1 gap-3">
           <div>
-            <label className="block text-[12px] text-gray-600">
+            <label htmlFor="listing-title" className="block text-[12px] text-gray-600">
               出品タイトル <span className="text-red-500">*</span>
             </label>
             <input
+              id="listing-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
@@ -394,6 +425,34 @@ export function ListingForm({
               className="mt-0.5 w-full resize-y border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
             />
             <p className="mt-0.5 text-right text-[11px] text-gray-400">{description.length.toLocaleString("ja-JP")}文字</p>
+          </div>
+          {/* 2026-09-04 追加指示 §1: 配送方法。既定は「らくらく家財便」で、
+              必要な商品だけ担当者が「佐川急便」へ変える運用。
+              **サイズやAIから自動で切り替えない** —— この選択が
+              「◎発送について」の内容をそのまま決める。
+              選択値は下書き(ListingDraft.shippingMethod)へ保存され、
+              説明文を再生成しても維持される。 */}
+          <div>
+            <label htmlFor="listing-shipping-method" className="block text-[12px] text-gray-600">
+              配送方法
+            </label>
+            <select
+              id="listing-shipping-method"
+              value={shippingMethod}
+              onChange={(e) => setShippingMethod(e.target.value as ListingShippingMethod)}
+              className="mt-0.5 w-56 border border-gray-300 bg-white px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
+            >
+              {LISTING_SHIPPING_METHODS.map((m) => (
+                <option key={m.code} value={m.code}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-0.5 text-[11px] text-gray-400">
+              {shippingMethod === "SAGAWA"
+                ? "商品説明の「◎発送について」に、3辺合計＋20cmで判定した佐川急便のサイズを入れます。"
+                : "商品説明の「◎発送について」に、既存の送料計算と同じらくらく家財便のランクを入れます。"}
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

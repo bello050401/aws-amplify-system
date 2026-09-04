@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { generateCanonicalProductPage, toListingDraftCopy, type ListingDraftCopy } from "@/lib/ai/productPage/canonical";
 import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
+import type { ListingShippingMethod } from "@/lib/listing/types";
 import { saveGeneratedProductPage } from "@/lib/ai/productPage/history";
 
 /**
@@ -105,6 +106,8 @@ export type GenerateListingCopyActionResult =
         kazaiRank: string | null;
         kazaiSumCm: number | null;
         sagawaSize: string | null;
+        /** 実際に使った配送方法(§1)。画面の選択と本文が一致していることを確かめられる。 */
+        method: ListingShippingMethod;
         sagawaNote: string;
       };
     }
@@ -114,7 +117,18 @@ export type GenerateListingCopyActionResult =
  * §57: Inventoryの事実情報のみをAIへ渡す — adminMemo(自社内での連絡
  * 事項)はこの関数が一切読み書きしていないことがその境界の証拠。
  */
-export async function generateListingCopyAction(inventoryId: string): Promise<GenerateListingCopyActionResult> {
+export async function generateListingCopyAction(
+  inventoryId: string,
+  /**
+   * 画面で選択中の配送方法(2026-09-04 追加指示 §1)。
+   *
+   * **保存前の選択も反映する。** 担当者が佐川へ変えてすぐ生成ボタンを
+   * 押したとき、下書きを保存していないという理由で家財便の文面が出ると、
+   * 画面の選択と本文が食い違う。省略された場合は保存済みの下書きの値
+   * (canonical.ts が読む)。
+   */
+  shippingMethod?: ListingShippingMethod,
+): Promise<GenerateListingCopyActionResult> {
   const correlationId = randomUUID();
   try {
     await requireEditPermission();
@@ -133,7 +147,7 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
     // 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」の
     // UIを消し、生成の入口をここへ一本化した。あちら側にだけあった
     // 生成履歴の保存も、一緒に消えないようここへ引き取っている(§47)。
-    const result = await generateCanonicalProductPage(inventoryId);
+    const result = await generateCanonicalProductPage(inventoryId, { shippingMethod });
     const who = await getCurrentInventoryUserEmail();
     const history = await saveGeneratedProductPage(result, who);
     if (history.reason) {
@@ -189,6 +203,7 @@ export async function generateListingCopyAction(inventoryId: string): Promise<Ge
         kazaiRank: result.facts.shippingRank,
         kazaiSumCm: result.facts.shippingSumCm,
         sagawaSize: formatSagawaSize(result.facts.sagawa),
+        method: result.shippingMethod,
         sagawaNote: result.facts.sagawa.note,
       },
     };

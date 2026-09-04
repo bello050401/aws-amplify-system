@@ -10,6 +10,9 @@ import { buildGuidanceBlock, listActiveGuidance, type GuidanceRule } from "./gui
 import { resolveLinkedBaseItem, type BaseLink } from "./baseLink";
 import { buildResolvedProductContext, type ResolvedProductContext } from "@/lib/inquiry/productContext";
 import { buildListingFacts, type ListingFacts } from "./listingFacts";
+import { getListingDraftForInventory } from "@/lib/listing/service";
+import { DEFAULT_LISTING_SHIPPING_METHOD, type ListingShippingMethod } from "@/lib/listing/types";
+import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
 import {
   buildConditionSection,
   buildProductDetailSection,
@@ -136,6 +139,8 @@ export interface CanonicalGenerationResult extends ProductPageResult {
    * 必ず確定しているので返す。
    */
   facts: ListingFacts;
+  /** 実際に使った配送方法(§1)。画面へ返して、選択と本文が一致していることを確かめられるようにする。 */
+  shippingMethod: ListingShippingMethod;
   /**
    * 担当者へ出す警告(§21)。座面寸法が無い・配送ランクを確定できない等。
    * 生成そのものは止めない —— 分からないことを分からないまま渡す。
@@ -156,9 +161,25 @@ export interface CanonicalGenerationResult extends ProductPageResult {
  * が入る(指示書§10)。どれを使ったかは戻り値に載るので、管理者が
  * 追跡できる。
  */
-export async function generateCanonicalProductPage(inventoryId: string): Promise<CanonicalGenerationResult> {
+export async function generateCanonicalProductPage(
+  inventoryId: string,
+  options: { shippingMethod?: ListingShippingMethod } = {},
+): Promise<CanonicalGenerationResult> {
   const item = await getInventoryDetail(inventoryId);
   if (!item) throw new Error("対象の在庫が見つかりません。");
+
+  // ── 配送方法(2026-09-04 追加指示 §1) ───────────────────────────
+  //
+  // 呼び出し側(画面)が選択中の値を渡す。渡されなければ**保存済みの
+  // 下書きの値**を読む —— 説明文を再生成しても選択が維持される、という
+  // 要件はここで満たしている。下書きがまだ無ければ既定の家財便。
+  //
+  // **サイズやAIから自動で決めない。** ここに推測を入れると、担当者が
+  // 佐川を選んでいるのに家財便の文面が出る、という食い違いが起きる。
+  const shippingMethod =
+    options.shippingMethod ??
+    (await getListingDraftForInventory(inventoryId))?.shippingMethod ??
+    DEFAULT_LISTING_SHIPPING_METHOD;
 
   const [archiveRows, styleProfile, categories, guidance] = await Promise.all([
     loadArchiveRows(),
@@ -279,7 +300,13 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
       overallLength: facts.overallLength,
       seat: facts.seat,
     }),
-    shipping: buildShippingSection({ rank: facts.shippingRank, unresolvedReason: facts.shippingRankReason }),
+    shipping: buildShippingSection({
+      // §1 担当者が選んだ配送方法。渡されなければ既定(らくらく家財便)。
+      method: shippingMethod,
+      rank: facts.shippingRank,
+      sagawaSizeLabel: formatSagawaSize(facts.sagawa),
+      unresolvedReason: facts.shippingRankReason,
+    }),
     condition: conditionSection.text,
   };
 
@@ -321,6 +348,7 @@ export async function generateCanonicalProductPage(inventoryId: string): Promise
     baseLink,
     completionNotes,
     facts,
+    shippingMethod,
     warnings: [...facts.warnings, ...conditionSection.warnings],
     ruleNotes: conditionSection.notes,
   };

@@ -860,6 +860,29 @@ const schema = a.schema({
       price: a.integer(),
       condition: a.ref("ListingCondition"),
       images: a.json(), // Inventory.images由来のstorageKeyを並び替えたもの([{storageKey, sortOrder}] 相当) — 出品用に画像を再アップロードすることはない、既存のInventory画像をそのまま参照する
+      /**
+       * 2026-09-04 EC出品改修 追加指示 §1: 配送方法("KAZAI" | "SAGAWA")。
+       *
+       * ── なぜ担当者が選ぶのか ────────────────────────────────
+       *
+       * どの商品を佐川で送るかは、寸法だけでは決まらない(形状・梱包の
+       * しやすさ・数量・納期)。**サイズから自動で切り替えない**という
+       * 指示なので、システムは推測せず、選ばれた方法に応じて説明文の
+       * 「◎発送について」を切り替えるだけにする。
+       *
+       * ── なぜ ListingDraft に置くのか ────────────────────────
+       *
+       * 商品説明(description)と同じ「共通項目」で、チャネルごとに変わる
+       * ものではない。ChannelListing へ置くと、Mercari用とBASE用で
+       * 別々の配送方法を持ててしまい、同じ商品の説明文が食い違う。
+       * ここに置けば、説明文を再生成しても選択が残る(下書きを読み直す
+       * だけで前回の選択が手に入る)。
+       *
+       * 未設定(null)は「らくらく家財便」として扱う —— 既存の下書きは
+       * すべて null なので、既定値をコード側(DEFAULT_LISTING_SHIPPING_METHOD)
+       * で決め、マイグレーションを不要にする。
+       */
+      shippingMethod: a.string(),
       createdBy: a.string(),
       updatedBy: a.string(),
       deletedAt: a.datetime(), // ソフトデリート — Inventory本体と同じ規約

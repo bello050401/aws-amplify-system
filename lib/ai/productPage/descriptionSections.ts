@@ -20,6 +20,7 @@
 import type { SeatDimensions } from "@/lib/inventory/seatDimensions";
 import { formatSeatDimensionsLine } from "@/lib/inventory/seatDimensions";
 import type { MaintenanceResult } from "@/lib/inventory/maintenance";
+import { normalizeConditionDisclosure } from "@/lib/inventory/conditionPhrasing";
 import type { ShippingRank } from "@/lib/shipping/rank";
 
 /* ══════════════════════════════════════════════════════════════════
@@ -116,37 +117,49 @@ export function buildProductDetailSection(input: ProductDetailInput): string {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * 家財おまかせ便のサービス名称。
+ * 家財便のサービス名称(2026-09-04 追加指示 §1)。
  *
- * §7の注記「実際のサービス名称については、現在システム内で使用している
- * 正式な名称・表記と整合させてください」。システム内の呼称は
- * lib/shipping/rank.ts / amplify/data/resource.ts のコメントにあるとおり
- * 「家財おまかせ便(アートセッティングデリバリー)」で、UI・通知では
- * 「家財おまかせ便」を使っている。顧客向けにはそちらを使う。
+ * 顧客向けの表記は利用者の指定どおり「らくらく家財便」。
+ * 社内の設定画面・送料見積りは「家財おまかせ便(アートセッティング
+ * デリバリー)」という呼称のままだが、指すサービスは同じ。
+ * 顧客が目にする文面を1箇所で決められるよう、ここを唯一の出所にする。
  */
-export const KAZAI_SERVICE_NAME = "家財おまかせ便";
+export const KAZAI_SERVICE_NAME = "らくらく家財便";
 
 export interface ShippingSectionInput {
-  /** 家財おまかせ便のランク。判定できなければ null(§10)。 */
+  /**
+   * 担当者が選んだ配送方法(§1)。**サイズから自動で切り替えない。**
+   * 未指定は既定の家財便として扱う。
+   */
+  method?: "KAZAI" | "SAGAWA";
+  /** らくらく家財便のランク。判定できなければ null(§10)。 */
   rank: ShippingRank | null;
+  /** 佐川急便のサイズ区分表記(「佐川急便160サイズ」)。判定できなければ null。 */
+  sagawaSizeLabel?: string | null;
   /** 判定できなかった理由(担当者向け)。 */
   unresolvedReason?: string | null;
 }
 
 /**
- * §7 ◎発送について。
+ * §7/§1 ◎発送について。
  *
- * ランクが決まっていれば「家財おまかせ便Cランク」を差し込む。
- * 決まっていなければ**推測しない**(§10) —— 印を残して人へ回す。
+ * 選ばれた配送方法に応じて、差し込む文言だけを切り替える。
  *
- * OVERSIZE(規格外候補)はランク表の範囲外なので、ランク名を書かない。
- * 「Gランクの上」ではなく「個別見積り」であって、書くと誤案内になる。
+ *   KAZAI  → 「らくらく家財便Cランク」(既存の rank.ts の判定結果)
+ *   SAGAWA → 「佐川急便160サイズ」(3辺合計+20cmの判定結果)
+ *
+ * どちらも決まっていなければ**推測しない**(§10) —— 印を残して人へ回す。
+ *
+ * 家財便の OVERSIZE(規格外候補)はランク表の範囲外なので、ランク名を
+ * 書かない。「Gランクの上」ではなく「個別見積り」であって、書くと誤案内。
  */
 export function buildShippingSection(input: ShippingSectionInput): string {
   const method =
-    input.rank && input.rank !== "OVERSIZE"
-      ? `${KAZAI_SERVICE_NAME}${input.rank}ランク`
-      : SHIPPING_UNDETERMINED_MARKER;
+    (input.method ?? "KAZAI") === "SAGAWA"
+      ? (input.sagawaSizeLabel ?? SHIPPING_UNDETERMINED_MARKER)
+      : input.rank && input.rank !== "OVERSIZE"
+        ? `${KAZAI_SERVICE_NAME}${input.rank}ランク`
+        : SHIPPING_UNDETERMINED_MARKER;
   return [`埼玉県より、${method}、または、自社での配送を予定しております。`, REMOTE_AREA_NOTICE].join("\n");
 }
 
@@ -259,10 +272,19 @@ export function buildConditionSection(input: ConditionSectionInput): ConditionSe
   // 記録があるならそれを出し、無い場合は「良好」と書ける根拠があるとき
   // だけ良好の文を使う。どちらも無ければ状態については書かない ——
   // 書かないほうが、根拠の無い「良好」より正確。
-  const disclosure = input.conditionDisclosure?.trim() || null;
+  //
+  // §5 社内向けの短い断片(「小傷あり」)はそのまま出さず、事実を変えない
+  // 範囲で文章へ整える。場所・程度・影響は足さない(normalizeConditionDisclosure)。
+  const normalized = normalizeConditionDisclosure(input.conditionDisclosure);
+  const disclosure = normalized?.text ?? null;
   if (disclosure) {
     paragraphs.push(disclosure);
-    notes.push("状態の説明は在庫の「傷汚れ箇所等メモ」をそのまま使いました。");
+    notes.push(
+      normalized?.rewritten
+        ? "状態の説明は在庫の「傷汚れ箇所等メモ」を、事実を変えずに文章へ整えて使いました。"
+        : "状態の説明は在庫の「傷汚れ箇所等メモ」をそのまま使いました。",
+    );
+    if (normalized?.hasDamage) notes.push("傷・汚れ等があるため、お写真の確認をご案内する一文を添えました。");
     if (input.goodConditionEvidence) {
       notes.push("社内評価は良好ですが、傷・汚れの記録があるため「良好」の定型文は使っていません。");
     }

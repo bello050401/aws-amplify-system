@@ -2,7 +2,7 @@ import type { InventoryDetail } from "@/lib/inventory/queries";
 import { buildListingFacts } from "@/lib/ai/productPage/listingFacts";
 import { formatSeatDimensionsLine } from "@/lib/inventory/seatDimensions";
 import { MAINTENANCE_LABEL } from "@/lib/inventory/maintenance";
-import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
+import { formatSagawaSizeShort } from "@/lib/shipping/sagawaSize";
 import { SHIPPING_RANK_LABEL } from "@/lib/shipping/rank";
 import { baseBrandHint } from "@/lib/base/archive/similar";
 
@@ -16,7 +16,7 @@ import { baseBrandHint } from "@/lib/base/archive/similar";
  * `getInventoryDetail` が既に返している値だけを読む。**別DBへ重複保存
  * しない**(ページ自体のREAD ONLY境界と同じ)。
  *
- * 配送判定(家財おまかせ便ランク・佐川サイズ)とメンテナンス判定は、
+ * 配送判定(らくらく家財便ランク・佐川サイズ)とメンテナンス判定は、
  * 商品説明の生成で使うのと**同じ関数**(buildListingFacts)を通す ——
  * §8「既存の送料計算機能と商品説明文で判定結果が食い違う状態は絶対に
  * 避けてください」。画面と本文で別々に計算すると必ずずれる。
@@ -68,7 +68,7 @@ export function InventoryFactsPanel({
   ).map((k) => MAINTENANCE_LABEL[k]);
 
   const seatLine = formatSeatDimensionsLine(facts.seat);
-  const sagawa = formatSagawaSize(facts.sagawa);
+  const sagawa = formatSagawaSizeShort(facts.sagawa);
 
   return (
     <aside className="w-full text-[12px] text-gray-700" aria-label="在庫詳細・基本情報">
@@ -103,7 +103,7 @@ export function InventoryFactsPanel({
               value={facts.shippingSumCm != null ? `${facts.shippingSumCm}cm` : null}
             />
             <Row
-              label="家財おまかせ便"
+              label="らくらく家財便"
               value={facts.shippingRank ? SHIPPING_RANK_LABEL[facts.shippingRank] : null}
             />
             <Row label="佐川急便サイズ" value={sagawa} />

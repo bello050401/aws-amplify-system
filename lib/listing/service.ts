@@ -28,8 +28,10 @@ import type {
   ListingConditionCode,
   ListingDraftRecord,
   ListingImageRef,
+  ListingShippingMethod,
   ShippingPayerCode,
 } from "./types";
+import { DEFAULT_LISTING_SHIPPING_METHOD, parseListingShippingMethod } from "./types";
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §12: 「これは単なるfrontend
@@ -98,6 +100,7 @@ function toListingDraftRecord(row: {
   description?: string | null;
   price?: number | null;
   condition?: ListingConditionCode | null;
+  shippingMethod?: string | null;
   images?: unknown;
   createdBy?: string | null;
   updatedBy?: string | null;
@@ -112,6 +115,9 @@ function toListingDraftRecord(row: {
     description: row.description ?? null,
     price: row.price ?? null,
     condition: row.condition ?? null,
+    // 未設定(この項目より前に作られた下書き)は既定値として読む。
+    // マイグレーションを不要にするための片側の約束。
+    shippingMethod: parseListingShippingMethod(row.shippingMethod),
     images,
     createdBy: row.createdBy ?? null,
     updatedBy: row.updatedBy ?? null,
@@ -431,6 +437,8 @@ export interface ListingDraftInput {
   description: string;
   price: number;
   condition: ListingConditionCode;
+  /** 配送方法(§1)。省略時は既存の下書きの値、それも無ければ既定値。 */
+  shippingMethod?: ListingShippingMethod;
 }
 
 /**
@@ -475,6 +483,9 @@ export async function saveListingDraft(
     description: input.description.trim() || undefined,
     price: input.price,
     condition: input.condition,
+    // §1 未指定なら既存の選択を保つ。保存のたびに既定値へ戻すと、
+    // 佐川を選んだ商品がタイトル修正だけで家財便へ戻ってしまう。
+    shippingMethod: input.shippingMethod ?? existing?.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD,
     images: stringifyListingJson(images),
     updatedBy: who ?? undefined,
   };

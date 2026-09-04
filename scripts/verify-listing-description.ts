@@ -51,6 +51,16 @@ import {
 } from "@/lib/ai/productPage/descriptionSections";
 import { buildListingFacts, hasGoodConditionEvidence } from "@/lib/ai/productPage/listingFacts";
 import { formatDescriptionForChannel, normalizeDescription } from "@/lib/listing/descriptionFormat";
+import {
+  DEFAULT_LISTING_SHIPPING_METHOD,
+  LISTING_SHIPPING_METHODS,
+  parseListingShippingMethod,
+} from "@/lib/listing/types";
+import {
+  isDamageFragment,
+  normalizeConditionDisclosure,
+  PHOTO_REFERENCE_SENTENCE,
+} from "@/lib/inventory/conditionPhrasing";
 
 let failures = 0;
 let passes = 0;
@@ -123,7 +133,7 @@ function testSagawaPackingAllowance() {
   assertEqual(r.productSumCm, 130, "§9-1 商品の3辺合計は130cm");
   assertEqual(r.judgedSumCm, 150, "§9-1 判定値は150cm(梱包余裕+20)");
   assertEqual(r.sizeClass?.size, 160, "§9-1 判定は160サイズ(150サイズを作らない)");
-  assertEqual(formatSagawaSize(r), "飛脚宅配便160サイズ", "§9-1 表記は飛脚宅配便160サイズ");
+  assertEqual(formatSagawaSize(r), "佐川急便160サイズ", "§1 表記は「佐川急便160サイズ」(追加指示の例文どおり)");
 
   // 商品の3辺合計をそのまま使っていないこと。使っていれば140サイズになる。
   assertTrue(r.sizeClass?.size !== 140, "§9 商品の3辺合計をそのまま区分に使わない");
@@ -132,21 +142,32 @@ function testSagawaPackingAllowance() {
 function testSagawaLargeService() {
   const r = resolveSagawaSizeFromCm({ widthCm: 70, depthCm: 60, heightCm: 40 }); // 170 + 20 = 190 → 200
   assertEqual(r.sizeClass?.size, 200, "飛脚ラージ: 判定値190 → 200サイズ");
-  assertEqual(formatSagawaSize(r), "飛脚ラージサイズ宅配便200サイズ", "170以上はラージサイズ宅配便として表記する");
+  assertEqual(
+    formatSagawaSize(r),
+    "佐川急便（飛脚ラージサイズ宅配便）200サイズ",
+    "170以上は別サービスなので、その名前が分かる表記にする",
+  );
 }
 
-function testSagawaWeight() {
-  // 寸法では60サイズだが、重量8kgなら100サイズ(重量上限10kg)。
-  const heavy = resolveSagawaSizeFromCm({ widthCm: 15, depthCm: 15, heightCm: 10, weightKg: 8 });
-  assertEqual(heavy.sizeClass?.size, 100, "§26 重量が寸法より大きい区分を要求するとき、重量側を採る");
-  assertTrue(heavy.note.includes("重量8kg"), "重量で区分が上がったことを説明に残す");
-
-  const light = resolveSagawaSizeFromCm({ widthCm: 15, depthCm: 15, heightCm: 10, weightKg: 1 });
-  assertEqual(light.sizeClass?.size, 60, "重量が軽ければ寸法どおりの区分");
-
-  const tooHeavy = resolveSagawaSizeFromCm({ widthCm: 15, depthCm: 15, heightCm: 10, weightKg: 51 });
-  assertEqual(tooHeavy.sizeClass, null, "§26 50kg超は判定不可");
-  assertEqual(tooHeavy.unavailableReason, "OVER_MAX_WEIGHT", "50kg超の理由を返す");
+/**
+ * 追加指示 §2: 重量は一切見ない。
+ *
+ * BELLOには重量の項目が無く、運用もサイズ基準。**重量の有無で判定が
+ * 変わらない**ことを型と実測の両方で固定する(型に weightKg が残っていると
+ * いつか誰かが渡し、渡されないことを前提にした説明文と食い違う)。
+ */
+function testSagawaIgnoresWeight() {
+  const r = resolveSagawaSizeFromCm({ widthCm: 15, depthCm: 15, heightCm: 10 });
+  assertEqual(r.sizeClass?.size, 60, "§2 小さい荷物は重量に関わらず60サイズ(40+20=60)");
+  assertTrue(!/重量|kg/.test(r.note), "§2 説明に重量へ触れる文言を出さない");
+  assertTrue(
+    !Object.keys(r).includes("weightKg"),
+    "§2 判定結果に重量の項目を持たない(重量を見ていないことを型で示す)",
+  );
+  // 追加指示前は 3辺合計40cm + 重量8kg で100サイズになっていた。
+  // いまは寸法だけで決まるので、同じ寸法なら常に同じ区分。
+  const again = resolveSagawaSizeFromCm({ widthCm: 15, depthCm: 15, heightCm: 10 });
+  assertEqual(again.sizeClass?.size, r.sizeClass?.size, "§2 同じ寸法なら常に同じ区分");
 }
 
 function testSagawaUnavailable() {
@@ -325,7 +346,12 @@ function testMaintenanceOnlyDamageNotesEndToEnd() {
     goodConditionEvidence: withDamage.goodConditionEvidence,
   });
   assertTrue(!withDamageSection.text.includes(GOOD_CONDITION_SENTENCE), "傷の記述があれば良好と書かない");
-  assertTrue(withDamageSection.text.includes("一部小傷・使用感あり"), "傷の記述は必ず出す");
+  // §5 断片は文章へ整えられる(事実は変えない)。
+  assertTrue(
+    withDamageSection.text.includes("一部に小傷や使用感がございます。"),
+    "傷の記述は文章へ整えたうえで必ず出す",
+  );
+  assertTrue(withDamageSection.text.includes("詳細はお写真をご確認ください。"), "§5 傷がある商品には写真の案内を添える");
 }
 
 function testNonFabric() {
@@ -504,7 +530,10 @@ function testProductDetailSection() {
 
 function testShippingSection() {
   const c = buildShippingSection({ rank: "C" });
-  assertTrue(c.includes("埼玉県より、家財おまかせ便Cランク、または、自社での配送を予定しております。"), "§7 発送の本文");
+  assertTrue(
+    c.includes("埼玉県より、らくらく家財便Cランク、または、自社での配送を予定しております。"),
+    "§1/§7 らくらく家財便を選んだときの発送の本文",
+  );
   assertTrue(c.includes("＜九州・沖縄・北海道・離島への発送をご希望の方へ＞"), "§7 遠方地域の案内が入る");
 
   // §10 判定できないときに配送方法を作らない。
@@ -516,6 +545,116 @@ function testShippingSection() {
   // 規格外はランク表の外なので、ランク名を書かない。
   const oversize = buildShippingSection({ rank: "OVERSIZE" });
   assertTrue(oversize.includes(SHIPPING_UNDETERMINED_MARKER), "規格外候補はランク名を書かず未確定として扱う");
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 追加指示 §1 配送方法の選択
+ * ══════════════════════════════════════════════════════════════════ */
+
+function testShippingMethodSwitching() {
+  // 既定は らくらく家財便。
+  assertEqual(DEFAULT_LISTING_SHIPPING_METHOD, "KAZAI", "§1 既定の配送方法はらくらく家財便");
+  assertEqual(
+    LISTING_SHIPPING_METHODS.map((m) => `${m.code}:${m.label}`),
+    ["KAZAI:らくらく家財便", "SAGAWA:佐川急便"],
+    "§1 選択肢は2つ、既定が先頭",
+  );
+  assertEqual(parseListingShippingMethod(null), "KAZAI", "§1 未設定はらくらく家財便として読む(既存下書きの互換)");
+  assertEqual(parseListingShippingMethod("SAGAWA"), "SAGAWA", "§1 保存済みの佐川を読み戻せる");
+  assertEqual(parseListingShippingMethod("なにか他の値"), "KAZAI", "§1 未知の値は既定へ倒す");
+
+  // 同じ商品(3辺合計177cm → 家財B / 佐川197cm → 200サイズ)で、
+  // 選択によって「◎発送について」だけが切り替わること。
+  const facts = buildListingFacts({ ...CHAIR_INPUT, width: "47", depth: "50", height: "80" });
+  const kazai = buildShippingSection({
+    method: "KAZAI",
+    rank: facts.shippingRank,
+    sagawaSizeLabel: formatSagawaSize(facts.sagawa),
+  });
+  const sagawa = buildShippingSection({
+    method: "SAGAWA",
+    rank: facts.shippingRank,
+    sagawaSizeLabel: formatSagawaSize(facts.sagawa),
+  });
+
+  assertTrue(kazai.includes("らくらく家財便Bランク"), "§1 らくらく家財便を選ぶと既存のランク判定が入る");
+  assertTrue(!kazai.includes("佐川"), "§1 らくらく家財便のときに佐川のサイズを書かない");
+  assertTrue(sagawa.includes("佐川急便（飛脚ラージサイズ宅配便）200サイズ"), "§1 佐川急便を選ぶと3辺合計+20cmの判定が入る");
+  assertTrue(!sagawa.includes("らくらく家財便"), "§1 佐川のときに家財便のランクを書かない");
+  // 遠方地域の案内はどちらでも出す。
+  for (const text of [kazai, sagawa]) {
+    assertTrue(text.includes("＜九州・沖縄・北海道・離島への発送をご希望の方へ＞"), "§1 遠方地域の案内はどちらの方法でも出す");
+  }
+
+  // 未指定は既定(らくらく家財便)として扱う。
+  const omitted = buildShippingSection({ rank: facts.shippingRank, sagawaSizeLabel: formatSagawaSize(facts.sagawa) });
+  assertEqual(omitted, kazai, "§1 配送方法を渡さなければ既定のらくらく家財便として組み立てる");
+
+  // §10 サイズ不足で確定できないときは、どちらを選んでも推測しない。
+  const noDims = buildListingFacts({ ...CHAIR_INPUT, width: null, depth: null, height: null });
+  const kazaiUnknown = buildShippingSection({ method: "KAZAI", rank: noDims.shippingRank, sagawaSizeLabel: formatSagawaSize(noDims.sagawa) });
+  const sagawaUnknown = buildShippingSection({ method: "SAGAWA", rank: noDims.shippingRank, sagawaSizeLabel: formatSagawaSize(noDims.sagawa) });
+  assertTrue(kazaiUnknown.includes(SHIPPING_UNDETERMINED_MARKER), "§10 寸法不足なら家財便でも未確定の印");
+  assertTrue(sagawaUnknown.includes(SHIPPING_UNDETERMINED_MARKER), "§10 寸法不足なら佐川でも未確定の印");
+  assertTrue(!/ランク|サイズ/.test(sagawaUnknown.split("\n")[0]), "§10 誤ったサイズ・ランクを書かない");
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 追加指示 §5 コンディション表現の正規化
+ * ══════════════════════════════════════════════════════════════════ */
+
+function testConditionPhrasing() {
+  // 指示書§5に挙げられた4つの例をそのまま。
+  const cases: [string, string][] = [
+    ["小傷あり", "使用に伴う小傷がございます。詳細はお写真をご確認ください。"],
+    ["擦れあり", "使用に伴う擦れがございます。詳細はお写真をご確認ください。"],
+    ["汚れあり", "一部に汚れがございます。詳細はお写真をご確認ください。"],
+    ["小傷・擦れあり", "使用に伴う小傷や擦れがございます。詳細はお写真をご確認ください。"],
+  ];
+  for (const [input, expected] of cases) {
+    assertEqual(normalizeConditionDisclosure(input)?.text, expected, `§5 「${input}」→「${expected}」`);
+  }
+
+  // §5 元情報に無いことを足さない。
+  const one = normalizeConditionDisclosure("小傷あり")!.text;
+  for (const forbidden of ["脚部", "背もたれ", "目立たない", "使用には問題", "程度"]) {
+    assertTrue(!one.includes(forbidden), `§5 「${forbidden}」のような推測を足さない`);
+  }
+
+  // 既に文章になっているものは書き換えない(事実を保持する)。
+  const sentence = "アームや脚部、フレームに一部使用感や小傷が見られますが、いずれも使用時に大きく目立つものではありません。";
+  const kept = normalizeConditionDisclosure(sentence)!;
+  assertTrue(kept.text.startsWith(sentence), "§5 既に文章になっているものは書き換えない");
+  assertEqual(kept.rewritten, false, "§5 書き換えていないことを記録する");
+  assertTrue(kept.text.includes(PHOTO_REFERENCE_SENTENCE), "§5 文章の場合も写真の案内は添える");
+
+  // 写真に触れている文章へ二重に足さない。
+  const withPhoto = normalizeConditionDisclosure("傷の状態はお写真をご確認ください。")!;
+  assertEqual(
+    withPhoto.text.split(PHOTO_REFERENCE_SENTENCE).length - 1,
+    0,
+    "§5 既に写真へ触れているなら案内を重ねない",
+  );
+
+  // 傷が無い記述には写真の案内を足さない。
+  const noDamage = normalizeConditionDisclosure("座面は張り替え済みです。")!;
+  assertEqual(noDamage.hasDamage, false, "§5 傷の語が無ければ写真の案内は入れない");
+  assertTrue(!noDamage.text.includes(PHOTO_REFERENCE_SENTENCE), "§5 傷が無ければ案内を足さない");
+
+  // 断片の判定。
+  assertTrue(isDamageFragment("小傷あり"), "断片: 語の羅列だけ");
+  assertTrue(isDamageFragment("一部小傷・擦れあり"), "断片: 付随語が付いていても断片");
+  assertTrue(!isDamageFragment("天板の右手前に長さ3cmの傷があります"), "断片ではない: 場所や大きさが書かれている");
+  assertTrue(!isDamageFragment("背面に傷"), "断片ではない: 場所が書かれている(削ると事実が減る)");
+
+  // 場所が書かれているものは、その事実を保ったまま句点だけ整える。
+  const located = normalizeConditionDisclosure("背面に傷")!;
+  assertTrue(located.text.startsWith("背面に傷"), "§5 場所の情報を落とさない");
+  assertTrue(located.text.includes(PHOTO_REFERENCE_SENTENCE), "§5 傷があるので写真の案内は添える");
+
+  assertEqual(normalizeConditionDisclosure(null), null, "未登録なら何も返さない");
+  // メンテナンスだけの記述はここへ来ない(呼び出し前に落ちている)。
+  assertEqual(stripMaintenanceOnlyLines("リンサー"), null, "§5 メンテナンス情報のみは傷情報として扱わない");
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -664,7 +803,7 @@ function main() {
   testSagawaBoundaries();
   testSagawaPackingAllowance();
   testSagawaLargeService();
-  testSagawaWeight();
+  testSagawaIgnoresWeight();
   testSagawaUnavailable();
   testSagawaUsesOuterDimensionsOnly();
 
@@ -687,6 +826,12 @@ function main() {
   console.log("\n── §6/§7/§10 ◎商品詳細 / ◎発送について ────────────");
   testProductDetailSection();
   testShippingSection();
+
+  console.log("\n── 追加指示 §1 配送方法の選択 ─────────────────────");
+  testShippingMethodSwitching();
+
+  console.log("\n── 追加指示 §5 コンディション表現の正規化 ─────────");
+  testConditionPhrasing();
 
   console.log("\n── §20/§21 Product Context ─────────────────────────");
   testListingFacts();

@@ -46,8 +46,6 @@ export interface ListingFactsInput {
   note: string | null;
   listingNotes: string | null;
   adminMemo: string | null;
-  /** 重量(kg)。BELLOには現在この項目が無いので通常は null。 */
-  weightKg?: number | null;
 }
 
 export interface ListingFacts {
@@ -176,12 +174,8 @@ export function buildListingFacts(input: ListingFactsInput): ListingFacts {
         ? "3辺合計が家財おまかせ便のランク表の範囲外（451cm〜）のため、個別見積りが必要です。"
         : null;
 
-  const sagawa = resolveSagawaSize({
-    width: input.width,
-    depth: input.depth,
-    height: input.height,
-    weightKg: input.weightKg ?? null,
-  });
+  // 追加指示 §2 重量は見ない。3辺合計 + 20cm だけで確定させる。
+  const sagawa = resolveSagawaSize({ width: input.width, depth: input.depth, height: input.height });
 
   const warnings: string[] = [];
   if (!input.width?.trim() || !input.depth?.trim() || !input.height?.trim()) {
