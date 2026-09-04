@@ -5,7 +5,7 @@ import type { MessageChannel } from "@/lib/messaging/types";
 import { LineNotifyError, sendNotifyPush } from "./client";
 import { buildDedupeKey, canSend, decideAfterFailure, MAX_DELIVERY_ATTEMPTS } from "./deliveryPolicy";
 import {
-  createPendingDelivery,
+  claimPendingDelivery,
   findDeliveryByDedupeKey,
   markDeliveryFailed,
   markDeliveryProcessing,
@@ -163,7 +163,10 @@ export async function notifyInquiry(params: NotifyInquiryParams): Promise<Notify
         replyDraftId: params.replyDraftId,
       });
     } else {
-      delivery = await createPendingDelivery({
+      // 「無いことを確かめてから作る」の隙間で追い越されると2通送る。
+      // dedupeKey を id にした条件付き作成で、勝った側だけが送る
+      // (PHASE 9 — deliveryStore.ts の claimPendingDelivery のコメント)。
+      const claim = await claimPendingDelivery({
         dedupeKey,
         conversationId: params.conversationId,
         sourceMessageId: params.sourceMessageId,
@@ -177,6 +180,18 @@ export async function notifyInquiry(params: NotifyInquiryParams): Promise<Notify
         inquiryKind: params.inquiryKind ?? null,
         orderNumber: params.orderNumber ?? null,
       });
+      if (!claim.claimed) {
+        // 追い越された。勝った側が送るので、こちらは送らない。
+        // 勝った側が送信前に落ちても、次の再送・再実行が PENDING の
+        // この行を見つけて再試行する(canSend が PENDING を通す)。
+        return {
+          sent: false,
+          status: claim.record.status,
+          reason: "別の処理が同じ通知を作成済みです。重複して送りません。",
+          deliveryId: claim.record.id,
+        };
+      }
+      delivery = claim.record;
     }
 
     return await dispatch(delivery, messages.summary, messages.reply);

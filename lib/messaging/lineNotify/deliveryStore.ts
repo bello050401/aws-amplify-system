@@ -114,7 +114,30 @@ export async function findDeliveryByDedupeKey(dedupeKey: string): Promise<Notifi
   return toRecord(sorted[0]);
 }
 
-export async function createPendingDelivery(params: {
+/**
+ * 通知レコードを**原子的に**確保する（2026-09-04 健全化 PHASE 9）。
+ *
+ * ── なぜ「作る」ではなく「確保する」なのか ──────────────────────
+ *
+ * 以前は `findDeliveryByDedupeKey` で無いことを確かめてから作っていた。
+ * 確かめてから作るまでの間に別の処理が同じことをすると、**両方が
+ * 「まだ無い」と判断して2件作り、2通送る**。LINEはWebhookを再送するし、
+ * この経路はAI生成を挟むので数秒かかる —— 追い越しは起こりうる。
+ *
+ * `id` を dedupeKey そのものにする。Amplify の create は
+ * `attribute_not_exists(id)` 付きの条件付き書き込みなので、**同じキーで
+ * 2件目を作ろうとした側は必ず失敗する**。これは ZaicoSourceLink の
+ * claim（lib/inventory/zaicoSyncPorts.ts の claimSourceLink）と同じ形で、
+ * このリポジトリで既に実績のあるやり方。
+ *
+ * 失敗を文字列一致で判定しない。作れなかったら実際に読みに行き、
+ * 「同時実行に負けた（＝行がある）」と「予期しないエラー（＝行が無い）」
+ * を区別する。後者は握りつぶさず投げる。
+ *
+ * 既存の行は id がUUIDのまま残っているが、`findDeliveryByDedupeKey` は
+ * GSIで引くので新旧どちらも見つかる。移行作業は要らない。
+ */
+export async function claimPendingDelivery(params: {
   dedupeKey: string;
   conversationId: string | null;
   sourceMessageId: string | null;
@@ -127,30 +150,32 @@ export async function createPendingDelivery(params: {
   analysisStatus?: string | null;
   inquiryKind?: string | null;
   orderNumber?: string | null;
-}): Promise<NotificationDeliveryRecord> {
-  const row = unwrapWriteRequired(
-    await serverDataClient.models.NotificationDelivery.create(
-      {
-        dedupeKey: params.dedupeKey,
-        conversationId: params.conversationId ?? undefined,
-        sourceMessageId: params.sourceMessageId ?? undefined,
-        replyDraftId: params.replyDraftId ?? undefined,
-        channel: params.channel,
-        priority: params.priority,
-        status: "PENDING",
-        summaryText: params.summaryText,
-        replyText: params.replyText ?? undefined,
-        attemptCount: 0,
-        createdBy: params.createdBy ?? undefined,
-        analysisStatus: params.analysisStatus ?? undefined,
-        inquiryKind: params.inquiryKind ?? undefined,
-        orderNumber: params.orderNumber ?? undefined,
-      },
-      inventoryAuthMode,
-    ),
-    "通知履歴の作成",
-  ) as unknown as DeliveryRow;
-  return toRecord(row);
+}): Promise<{ claimed: boolean; record: NotificationDeliveryRecord }> {
+  const { data: created, errors } = await serverDataClient.models.NotificationDelivery.create(
+    {
+      id: params.dedupeKey,
+      dedupeKey: params.dedupeKey,
+      conversationId: params.conversationId ?? undefined,
+      sourceMessageId: params.sourceMessageId ?? undefined,
+      replyDraftId: params.replyDraftId ?? undefined,
+      channel: params.channel,
+      priority: params.priority,
+      status: "PENDING",
+      summaryText: params.summaryText,
+      replyText: params.replyText ?? undefined,
+      attemptCount: 0,
+      createdBy: params.createdBy ?? undefined,
+      analysisStatus: params.analysisStatus ?? undefined,
+      inquiryKind: params.inquiryKind ?? undefined,
+      orderNumber: params.orderNumber ?? undefined,
+    },
+    inventoryAuthMode,
+  );
+  if (created && !errors) return { claimed: true, record: toRecord(created as unknown as DeliveryRow) };
+
+  const existing = await findDeliveryByDedupeKey(params.dedupeKey);
+  if (existing) return { claimed: false, record: existing };
+  throw new Error(`通知履歴の作成に失敗しました: ${JSON.stringify(errors)}`);
 }
 
 async function patch(id: string, fields: Record<string, unknown>): Promise<NotificationDeliveryRecord> {

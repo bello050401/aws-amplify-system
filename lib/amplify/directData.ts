@@ -323,7 +323,40 @@ async function modelCreate(model: string, input: Record<string, unknown>): Promi
   };
   // undefined は DynamoDB が受け付けない。AppSyncは省略として扱うので同じにする。
   for (const k of Object.keys(item)) if (item[k] === undefined) delete item[k];
-  await ddb().send(new PutCommand({ TableName: tableFor(model), Item: item }));
+  try {
+    await ddb().send(
+      new PutCommand({
+        TableName: tableFor(model),
+        Item: item,
+        // **AppSync の create と同じ条件を付ける（2026-09-04 健全化 PHASE 9）。**
+        //
+        // AppSync が自動生成する create リゾルバは
+        // `attribute_not_exists(id)` 付きの条件付き書き込みで、既存行が
+        // あれば必ず失敗する。ここが無条件の Put だったため、この経路
+        // (LINE Webhook / メール取込のように未認証で動く側)だけが
+        // **既存行を黙って上書き**していた。
+        //
+        // 実害は2つ。
+        //   1. 「明示的な id で create して、失敗＝既に誰かが確保済み」と
+        //      いう重複防止の型(ZaicoSourceLink の claimSourceLink、
+        //      通知の claimPendingDelivery)が、この経路では**常に成功して
+        //      しまい機能しない**。
+        //   2. 同じ id で作り直すと、送信済みの通知が PENDING へ巻き戻る
+        //      ような「復活」が起きる。
+        //
+        // ランダムUUIDで作る通常の create には影響しない(衝突しないため)。
+        ConditionExpression: "attribute_not_exists(#idField)",
+        ExpressionAttributeNames: { "#idField": idField },
+      }),
+    );
+  } catch (err) {
+    // 条件不成立は「既にある」。AppSync と同じく errors として返し、
+    // 呼び出し側が「同時実行に負けた」と判断できるようにする。
+    if (err instanceof Error && err.name === "ConditionalCheckFailedException") {
+      return { data: null, errors: [{ message: `${model} は既に存在します（${idField}=${String(item[idField])}）。` }] };
+    }
+    throw err;
+  }
   return { data: item };
 }
 

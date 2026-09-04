@@ -94,7 +94,8 @@
     "measure:page-loads": "node scripts/with-server-only-stub.cjs scripts/measure-page-loads.ts",
     "verify:inventory-count": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-count.ts",
     "verify:inventory-search-fast": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-search-fast.ts",
-    "measure:inventory-search": "node scripts/with-server-only-stub.cjs scripts/measure-inventory-search.ts"
+    "measure:inventory-search": "node scripts/with-server-only-stub.cjs scripts/measure-inventory-search.ts",
+    "verify:notification-claim-live": "node scripts/with-server-only-stub.cjs scripts/verify-notification-claim-live.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",
