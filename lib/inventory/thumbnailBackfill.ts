@@ -1,5 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { unwrapList } from "@/lib/amplify/listAll";
 import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
 import { generateInventoryThumbnail } from "./thumbnail";
 
@@ -94,12 +95,16 @@ export interface ThumbnailBackfillProgress {
 }
 
 export async function advanceThumbnailBackfill(nextToken: string | null): Promise<ThumbnailBackfillProgress> {
-  const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+  const res = await serverDataClient.models.Inventory.list({
     filter: { deletedAt: { attributeExists: false } },
     nextToken: nextToken ?? undefined,
     limit: RECORDS_PER_ADVANCE,
     ...inventoryAuthMode,
   });
+  // 取得エラーを0件と取り違えない。空に化けると nextToken も消え、
+  // サムネイル未生成の行を残したまま「完了」と表示されてしまう。
+  const data = unwrapList(res, "サムネイル生成対象の在庫");
+  const nt = res.nextToken;
 
   let attempted = 0;
   let generated = 0;

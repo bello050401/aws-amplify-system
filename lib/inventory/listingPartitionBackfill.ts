@@ -1,5 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { unwrapList, unwrapWrite } from "@/lib/amplify/listAll";
 
 /**
  * 第六ラウンドP0-5: 真のサーバー側cursor pagination用GSI
@@ -52,12 +53,18 @@ export async function advanceListingPartitionBackfill(nextToken: string | null):
   // フラグはあるが実際の削除経路は物理削除のみ」という既存の仕様
   // (app/actions/inventory.tsのdeleteInventory参照)との整合を保つため
   // だけの防御的フィルタ(現状は常にtrueになる)。
-  const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+  const res = await serverDataClient.models.Inventory.list({
     filter: { deletedAt: { attributeExists: false } },
     nextToken: nextToken ?? undefined,
     limit: RECORDS_PER_ADVANCE,
     ...inventoryAuthMode,
   });
+  // 取得エラーを0件と取り違えない。空に化けると nextToken も消えるため、
+  // **バックフィルが「完了」と表示されたまま未設定の行が残る**。
+  // listingPartition が無い行はGSIに現れない＝一覧に出てこないので、
+  // 「取りこぼしを完了と誤認する」ことの実害が大きい。
+  const data = unwrapList(res, "バックフィル対象の在庫");
+  const nt = res.nextToken;
 
   let backfilled = 0;
   for (const item of data) {
@@ -67,9 +74,14 @@ export async function advanceListingPartitionBackfill(nextToken: string | null):
     // 複製する——「今」を入れてしまうと、このバックフィル自身が
     // thumbnailBackfillと同種の「一覧の並び順を勝手に押し上げる」
     // 不具合を再現してしまう(このファイル冒頭コメント参照)。
-    await serverDataClient.models.Inventory.update(
-      { id: item.id, listingPartition: "ACTIVE", listUpdatedAt: item.updatedAt },
-      inventoryAuthMode,
+    // 書き込みの失敗も握りつぶさない。失敗を数えないと backfilled が
+    // 実際より多く出て、やはり「完了した」ことになってしまう。
+    unwrapWrite(
+      await serverDataClient.models.Inventory.update(
+        { id: item.id, listingPartition: "ACTIVE", listUpdatedAt: item.updatedAt },
+        inventoryAuthMode,
+      ),
+      "listingPartitionのバックフィル",
     );
     backfilled++;
   }

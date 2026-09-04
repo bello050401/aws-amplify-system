@@ -1,5 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { unwrapList } from "@/lib/amplify/listAll";
 import { listInventories } from "@/lib/zaico/client";
 import { syncOneZaicoItem } from "./zaicoSync";
 import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaicoSyncPorts";
@@ -516,11 +517,15 @@ async function findMissingZaicoManagedInventory(seenSourceIds: Set<string>): Pro
   const missing: string[] = [];
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+    const res = await serverDataClient.models.Inventory.list({
       filter: { sourceSystem: { eq: "ZAICO" } },
       nextToken: nextToken ?? undefined,
       ...inventoryAuthMode,
     });
+    // 取得エラーを0件と取り違えない。空に化けると「ZAICO側から消えた
+    // 商品は無い」と報告してしまう(実際には確認できていないだけ)。
+    const data = unwrapList(res, "ZAICO連携在庫の突き合わせ");
+    const nt = res.nextToken;
     for (const item of data) {
       if (item.deletedAt || !item.sourceInventoryId) continue;
       if (!seenSourceIds.has(item.sourceInventoryId)) missing.push(item.sourceInventoryId);

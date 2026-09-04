@@ -1,6 +1,8 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import { unwrapList, unwrapWrite } from "@/lib/amplify/listAll";
 import { logInventoryHistory } from "./history";
+import { clearInventoryCountCache } from "./inventoryCountCache";
 import { buildZaicoSourceLinkId } from "./zaicoSyncEngine";
 
 /**
@@ -91,12 +93,16 @@ export async function runZaicoDuplicateAudit(): Promise<ZaicoDuplicateAuditSumma
   const zaicoLinked: ZaicoLinkedInventorySummary[] = [];
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+    const res = await serverDataClient.models.Inventory.list({
       filter: { deletedAt: { attributeExists: false } },
       nextToken: nextToken ?? undefined,
       limit: 200,
       ...inventoryAuthMode,
     });
+    // 取得エラーを0件と取り違えない。空に化けると「重複は無い」と報告して
+    // しまう（lib/amplify/listAll.ts の unwrapList のコメント参照）。
+    const data = unwrapList(res, "重複監査の在庫一覧");
+    const nt = res.nextToken;
     totalInventoryRecords += data.length;
     for (const item of data) {
       if (item.sourceSystem === "ZAICO" && item.sourceInventoryId) {
@@ -148,13 +154,19 @@ async function reassignInventoryHistory(fromId: string, toId: string): Promise<n
   let count = 0;
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.InventoryHistory.list({
+    const res = await serverDataClient.models.InventoryHistory.list({
       filter: { inventoryId: { eq: fromId } },
       nextToken: nextToken ?? undefined,
       limit: 200,
       ...inventoryAuthMode,
     });
-    await Promise.all(data.map((row) => serverDataClient.models.InventoryHistory.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 取得エラーを0件と取り違えない。空に化けると「付け替える行は無い」と
+    // 判断したまま、この直後に重複レコードが物理削除され、参照が孤児になる。
+    const data = unwrapList(res, "付け替え対象の在庫履歴");
+    const nt = res.nextToken;
+    const updates = await Promise.all(data.map((row) => serverDataClient.models.InventoryHistory.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 付け替えの失敗も同じ理由で握りつぶさない。
+    for (const u of updates) unwrapWrite(u, "付け替え対象の在庫履歴の付け替え");
     count += data.length;
     nextToken = nt;
   } while (nextToken);
@@ -165,13 +177,19 @@ async function reassignListingDraft(fromId: string, toId: string): Promise<numbe
   let count = 0;
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.ListingDraft.list({
+    const res = await serverDataClient.models.ListingDraft.list({
       filter: { inventoryId: { eq: fromId } },
       nextToken: nextToken ?? undefined,
       limit: 200,
       ...inventoryAuthMode,
     });
-    await Promise.all(data.map((row) => serverDataClient.models.ListingDraft.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 取得エラーを0件と取り違えない。空に化けると「付け替える行は無い」と
+    // 判断したまま、この直後に重複レコードが物理削除され、参照が孤児になる。
+    const data = unwrapList(res, "付け替え対象の出品下書き");
+    const nt = res.nextToken;
+    const updates = await Promise.all(data.map((row) => serverDataClient.models.ListingDraft.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 付け替えの失敗も同じ理由で握りつぶさない。
+    for (const u of updates) unwrapWrite(u, "付け替え対象の出品下書きの付け替え");
     count += data.length;
     nextToken = nt;
   } while (nextToken);
@@ -182,13 +200,19 @@ async function reassignChannelListing(fromId: string, toId: string): Promise<num
   let count = 0;
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.ChannelListing.list({
+    const res = await serverDataClient.models.ChannelListing.list({
       filter: { inventoryId: { eq: fromId } },
       nextToken: nextToken ?? undefined,
       limit: 200,
       ...inventoryAuthMode,
     });
-    await Promise.all(data.map((row) => serverDataClient.models.ChannelListing.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 取得エラーを0件と取り違えない。空に化けると「付け替える行は無い」と
+    // 判断したまま、この直後に重複レコードが物理削除され、参照が孤児になる。
+    const data = unwrapList(res, "付け替え対象のチャネル出品");
+    const nt = res.nextToken;
+    const updates = await Promise.all(data.map((row) => serverDataClient.models.ChannelListing.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 付け替えの失敗も同じ理由で握りつぶさない。
+    for (const u of updates) unwrapWrite(u, "付け替え対象のチャネル出品の付け替え");
     count += data.length;
     nextToken = nt;
   } while (nextToken);
@@ -199,13 +223,19 @@ async function reassignProcessingJob(fromId: string, toId: string): Promise<numb
   let count = 0;
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.ProcessingJob.list({
+    const res = await serverDataClient.models.ProcessingJob.list({
       filter: { inventoryId: { eq: fromId } },
       nextToken: nextToken ?? undefined,
       limit: 200,
       ...inventoryAuthMode,
     });
-    await Promise.all(data.map((row) => serverDataClient.models.ProcessingJob.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 取得エラーを0件と取り違えない。空に化けると「付け替える行は無い」と
+    // 判断したまま、この直後に重複レコードが物理削除され、参照が孤児になる。
+    const data = unwrapList(res, "付け替え対象の画像処理ジョブ");
+    const nt = res.nextToken;
+    const updates = await Promise.all(data.map((row) => serverDataClient.models.ProcessingJob.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 付け替えの失敗も同じ理由で握りつぶさない。
+    for (const u of updates) unwrapWrite(u, "付け替え対象の画像処理ジョブの付け替え");
     count += data.length;
     nextToken = nt;
   } while (nextToken);
@@ -216,13 +246,19 @@ async function reassignImageProcessingVersion(fromId: string, toId: string): Pro
   let count = 0;
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.ImageProcessingVersion.list({
+    const res = await serverDataClient.models.ImageProcessingVersion.list({
       filter: { inventoryId: { eq: fromId } },
       nextToken: nextToken ?? undefined,
       limit: 200,
       ...inventoryAuthMode,
     });
-    await Promise.all(data.map((row) => serverDataClient.models.ImageProcessingVersion.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 取得エラーを0件と取り違えない。空に化けると「付け替える行は無い」と
+    // 判断したまま、この直後に重複レコードが物理削除され、参照が孤児になる。
+    const data = unwrapList(res, "付け替え対象の画像処理履歴");
+    const nt = res.nextToken;
+    const updates = await Promise.all(data.map((row) => serverDataClient.models.ImageProcessingVersion.update({ id: row.id, inventoryId: toId }, inventoryAuthMode)));
+    // 付け替えの失敗も同じ理由で握りつぶさない。
+    for (const u of updates) unwrapWrite(u, "付け替え対象の画像処理履歴の付け替え");
     count += data.length;
     nextToken = nt;
   } while (nextToken);
@@ -233,13 +269,19 @@ async function reassignConversation(fromId: string, toId: string): Promise<numbe
   let count = 0;
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.Conversation.list({
+    const res = await serverDataClient.models.Conversation.list({
       filter: { relatedInventoryId: { eq: fromId } },
       nextToken: nextToken ?? undefined,
       limit: 200,
       ...inventoryAuthMode,
     });
-    await Promise.all(data.map((row) => serverDataClient.models.Conversation.update({ id: row.id, relatedInventoryId: toId }, inventoryAuthMode)));
+    // 取得エラーを0件と取り違えない。空に化けると「付け替える行は無い」と
+    // 判断したまま、この直後に重複レコードが物理削除され、参照が孤児になる。
+    const data = unwrapList(res, "付け替え対象の会話");
+    const nt = res.nextToken;
+    const updates = await Promise.all(data.map((row) => serverDataClient.models.Conversation.update({ id: row.id, relatedInventoryId: toId }, inventoryAuthMode)));
+    // 付け替えの失敗も同じ理由で握りつぶさない。
+    for (const u of updates) unwrapWrite(u, "付け替え対象の会話の付け替え");
     count += data.length;
     nextToken = nt;
   } while (nextToken);
@@ -331,6 +373,8 @@ export async function mergeZaicoDuplicate(sourceInventoryId: string, canonicalIn
   if (deleteErrors) {
     throw new Error(`重複レコードの削除に失敗しました(関連データの付け替えは完了済みです): ${JSON.stringify(deleteErrors)}`);
   }
+  // 在庫が1件減った。総件数のキャッシュを捨てる(PHASE 6)。
+  clearInventoryCountCache();
 
   return {
     sourceInventoryId,
