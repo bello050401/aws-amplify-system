@@ -51,6 +51,39 @@ Scanベースです。同一顧客から同時に2通届くと、会話が2件�
 
 ---
 
+## 利用者判断待ち — Next.js のメジャーアップグレード
+
+`npm audit` で **4件（high 2 / moderate 2）**。内訳と、この構成で実際に成立するかの評価:
+
+| 対象 | 状態 |
+|---|---|
+| `next` 14.2.35 | **すでに14系の最新**。残る指摘を消すには Next 16 への移行が必要（破壊的変更） |
+| `postcss`（nextの依存） | 同上。next の更新でしか上がらない |
+| `uuid`（exceljs の依存） | 「v3/v5/v6 で `buf` を渡したときの境界チェック漏れ」。exceljs はCSV/Excelの入出力にだけ使い、`buf` を渡す使い方はしていない。**実際には成立しない** |
+
+Next.js の指摘のうち、**この構成では成立しないもの**:
+
+- Middleware / Proxy 系（キャッシュポイズニング、バイパス）→ `middleware.ts` が無い
+- Pages Router + i18n のバイパス → App Router のみ、i18n 未使用
+- カスタムサーバーのSSRF → Amplify Hosting、カスタムサーバー無し
+- Edge runtime の Server Action ペイロード → edge runtime を使っていない
+- rewrites 経由のSSRF / スマグリング → rewrites を定義していない
+
+**成立しうるもの**:
+
+- Server Actions のDoS、内部Server Function エンドポイントの露出
+- Image Optimizer 関連（`next.config` の `remotePatterns` は
+  `baseec-img-mng.akamaized.net` / `base-ec2.akamaized.net` の**完全一致2件**で、
+  ワイルドカードではないため露出は限定的）
+- React Server Components のキャッシュ混同
+
+**判断をお願いしたい点**: Next 14 → 16 は破壊的変更で、App Router の挙動・Server Actions・
+キャッシュ戦略に影響します。今回の健全化の範囲（既存を壊さない）を超えるため、
+**こちらでは実施していません**。実施する場合は、この2,814件の回帰試験を通したうえで
+Stagingで主要画面を確認する形になります。
+
+---
+
 ## P3 — 記録のみ
 
 ### 6. Mercari API の暫定値（[UNVERIFIED]）
