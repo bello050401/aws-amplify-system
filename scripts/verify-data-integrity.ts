@@ -326,13 +326,45 @@ async function main() {
   }
 
   // ── 途中状態で止まっているもの ────────────────────────────────
+  //
+  // 「開始したが終わっていない」行は、プロセスが途中で落ちた跡。放置すると
+  // 次の処理が「別の処理が進行中」と判断して永久に進まなくなることがある。
+  // ただし**今まさに走っている最中**の行も同じ見た目なので、時間で切る。
   console.log("\n■ 途中状態で止まっている行");
+  const STUCK_AFTER_MS = 60 * 60 * 1000; // 1時間。どの処理も通常は数分で終わる。
+  const now = Date.now();
+  const isStale = (v: unknown) => {
+    const t = Date.parse(str(v) ?? "");
+    return Number.isFinite(t) && now - t > STUCK_AFTER_MS;
+  };
+
   const stuckDeliveries = deliveries.filter((r) => str(r.status) === "PROCESSING");
   report(
     "通知: PROCESSING のまま残っている行がない（送信中にプロセスが落ちた跡）",
     { count: stuckDeliveries.length, examples: stuckDeliveries.map((r) => `id=${String(r.id)}`) },
     "なし",
   );
+
+  const stuckChecks: { model: string; label: string; statuses: string[]; timeField: string }[] = [
+    { model: "ZaicoSyncJob", label: "ZAICO同期ジョブ", statuses: ["RUNNING"], timeField: "updatedAt" },
+    { model: "ProcessingJob", label: "画像処理ジョブ", statuses: ["PROCESSING"], timeField: "updatedAt" },
+    { model: "ListingDraft", label: "出品下書き", statuses: ["PUBLISHING", "QUEUED"], timeField: "updatedAt" },
+  ];
+  for (const { model, label, statuses, timeField } of stuckChecks) {
+    let rows: Record<string, unknown>[];
+    try {
+      rows = await scanAll(t(model), ["id", "status", timeField]);
+    } catch (err) {
+      console.warn(`  （${label}: 読み取れませんでした — ${err instanceof Error ? err.name : "unknown"}）`);
+      continue;
+    }
+    const stuck = rows.filter((r) => statuses.includes(str(r.status) ?? "") && isStale(r[timeField]));
+    report(
+      `${label}: ${statuses.join("/")} のまま1時間以上動いていない行がない（${rows.length}件中）`,
+      { count: stuck.length, examples: stuck.map((r) => `id=${String(r.id)} status=${String(r.status)} ${timeField}=${String(r[timeField])}`) },
+      "なし",
+    );
+  }
 
   console.log(`\n検査 ${checks}項目 / 指摘 ${findings}件`);
   // 指摘があっても異常終了にはしない —— 「今どうなっているか」を出すのが
