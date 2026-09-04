@@ -2,6 +2,16 @@ import "server-only";
 import { suggestSlug } from "./templateHeuristic";
 import { buildSystemPrompt, buildUserPrompt } from "./prompt";
 import type { AIProvider, FeatureCopy, FeatureCopySection, FeatureGenerationInput } from "./types";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "OpenAI API" });
+
 
 /**
  * Secondary provider (spec §18: "OpenAI API等も利用できるよう抽象化").
@@ -17,7 +27,7 @@ async function chat(messages: { role: string; content: string }[], jsonMode: boo
     );
   }
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetchExternal("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -5,6 +5,16 @@ import { BaseNotConfiguredError } from "./errors";
 import { resolveRedirectUri } from "./redirectUri";
 import { createSingleFlight, shouldRetryToken, tokenRetryDelayMs } from "./tokenRetry";
 import { resolveScope } from "./scope";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "BASEの認証エンドポイント" });
+
 
 /**
  * BASE OAuth2 — authorization-code flow + refresh, with the token
@@ -126,7 +136,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function requestTokenOnce(params: Record<string, string>, grant: TokenGrantKind): Promise<RawTokenResponse> {
   let res: Response;
   try {
-    res = await fetch(TOKEN_ENDPOINT, {
+    res = await fetchExternal(TOKEN_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(params),

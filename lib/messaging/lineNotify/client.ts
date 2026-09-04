@@ -1,5 +1,15 @@
 import "server-only";
 import { getNotifyBotAccessToken } from "./secretStore";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "LINE Messaging API" });
+
 
 /**
  * 2026-09-03 指示書 §6/§7/§35: 社内通知用LINE Botへの送信。
@@ -125,7 +135,7 @@ export async function sendNotifyPush(targetUserId: string, texts: string[]): Pro
 
   let res: Response;
   try {
-    res = await fetch(`${LINE_API_BASE}/v2/bot/message/push`, {
+    res = await fetchExternal(`${LINE_API_BASE}/v2/bot/message/push`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ to: targetUserId, messages: messages.map((text) => ({ type: "text", text })) }),
@@ -161,7 +171,7 @@ export interface NotifyBotInfo {
 export async function validateNotifyBotConnection(accessToken: string): Promise<{ ok: boolean; message: string; info: NotifyBotInfo | null }> {
   if (!accessToken.trim()) return { ok: false, message: "Channel Access Tokenを入力してください。", info: null };
   try {
-    const res = await fetch(`${LINE_API_BASE}/v2/bot/info`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const res = await fetchExternal(`${LINE_API_BASE}/v2/bot/info`, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       return { ok: false, message: classifyStatus(res.status, text).message, info: null };
@@ -190,7 +200,7 @@ export async function fetchNotifyTargetProfile(userId: string): Promise<{ displa
   const accessToken = await getNotifyBotAccessToken();
   if (!accessToken) return { displayName: null };
   try {
-    const res = await fetch(`${LINE_API_BASE}/v2/bot/profile/${encodeURIComponent(userId)}`, {
+    const res = await fetchExternal(`${LINE_API_BASE}/v2/bot/profile/${encodeURIComponent(userId)}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) return { displayName: null };

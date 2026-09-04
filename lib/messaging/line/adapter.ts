@@ -2,6 +2,16 @@ import "server-only";
 import { getLineAccessToken } from "./tokenAccess";
 import { assertLineOutboundAllowed } from "./outboundGuard";
 import type { LineWebhookBody, LineWebhookEvent, NormalizedLineIncomingMessage, LineContentKind } from "./types";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "LINE Messaging API" });
+
 
 /**
  * BELLO統合業務OS指示書(2026-08-30) §51-52: LINE Messaging APIの実際の
@@ -53,7 +63,7 @@ async function callLineApi(path: string, accessToken: string, body: unknown): Pr
 
   let res: Response;
   try {
-    res = await fetch(`${LINE_API_BASE}${path}`, {
+    res = await fetchExternal(`${LINE_API_BASE}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
@@ -100,7 +110,7 @@ export async function validateLineConnection(params: { channelSecret: string; ac
   if (!params.accessToken.trim()) return { ok: false, message: "Channel Access Tokenを入力してください。" };
 
   try {
-    const res = await fetch(`${LINE_API_BASE}/v2/bot/info`, { headers: { Authorization: `Bearer ${params.accessToken}` } });
+    const res = await fetchExternal(`${LINE_API_BASE}/v2/bot/info`, { headers: { Authorization: `Bearer ${params.accessToken}` } });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       const err = classifyLineHttpStatus(res.status, text);

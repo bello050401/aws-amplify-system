@@ -4,6 +4,16 @@ import { getUrl } from "aws-amplify/storage/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { serverDataClient, inventoryAuthMode } from "@/lib/amplify/dataClient";
 import { computeOriginalHash } from "@/lib/imageProcessing/pipeline";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "画像の取得元" });
+
 
 /**
  * 夜間長時間・全課題解決指示書 §5 の根本修正。
@@ -68,7 +78,7 @@ async function fetchOwnObjectBytes(storageKey: string): Promise<Buffer | null> {
       nextServerContext: { cookies },
       operation: (contextSpec) => getUrl(contextSpec, { path: storageKey }),
     });
-    const res = await fetch(url);
+    const res = await fetchExternal(url);
     if (!res.ok) return null;
     return Buffer.from(await res.arrayBuffer());
   } catch {

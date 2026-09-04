@@ -1,5 +1,15 @@
 import "server-only";
 import { getLineAccessToken } from "./tokenAccess";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "LINEのプロフィール取得" });
+
 
 /**
  * LINEの表示名を取得する。
@@ -72,7 +82,7 @@ export async function fetchLineProfile(userId: string): Promise<LineProfileResul
 
   let res: Response;
   try {
-    res = await fetch(`${LINE_API_BASE}/v2/bot/profile/${encodeURIComponent(userId)}`, {
+    res = await fetchExternal(`${LINE_API_BASE}/v2/bot/profile/${encodeURIComponent(userId)}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: "no-store",
     });

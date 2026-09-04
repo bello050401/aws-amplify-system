@@ -1,6 +1,16 @@
 import "server-only";
 import { getGmailCredentials, type GmailOAuthCredentials } from "./gmailSecretStore";
 import type { MercariMailInput } from "@/lib/messaging/mercari/notificationMailParser";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "Gmail API" });
+
 
 /**
  * 2026-09-03 指示書 §13-2: Gmail APIからメールを読む。
@@ -38,7 +48,7 @@ export class GmailError extends Error {
 async function getAccessToken(creds: GmailOAuthCredentials): Promise<string> {
   let res: Response;
   try {
-    res = await fetch(TOKEN_ENDPOINT, {
+    res = await fetchExternal(TOKEN_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -70,7 +80,7 @@ async function getAccessToken(creds: GmailOAuthCredentials): Promise<string> {
 async function apiGet<T>(path: string, accessToken: string): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${GMAIL_API}${path}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    res = await fetchExternal(`${GMAIL_API}${path}`, { headers: { Authorization: `Bearer ${accessToken}` } });
   } catch (err) {
     throw new GmailError("NETWORK_ERROR", `Gmail APIへ接続できませんでした: ${err instanceof Error ? err.message : String(err)}`);
   }

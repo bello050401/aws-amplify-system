@@ -4,6 +4,16 @@ import { BaseListingApiError, classifyBaseHttpStatus } from "./errors";
 import { assertExternalWriteAllowed } from "@/lib/integrations/writeGuard";
 import type { ListingDraftRecord } from "../types";
 import { formatDescriptionForChannel } from "../descriptionFormat";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "BASE API" });
+
 
 /**
  * BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASE
@@ -55,7 +65,7 @@ async function baseApiCall<T>(path: string, params: Record<string, string | numb
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
+    res = await fetchExternal(`${API_BASE}${path}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))),

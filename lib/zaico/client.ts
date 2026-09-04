@@ -1,5 +1,15 @@
 import "server-only";
 import { getZaicoTokenFromSecretsManager } from "./secretStore";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "ZAICO API" });
+
 
 /**
  * GET-only ZAICO API client. This file has NO write methods — not "we
@@ -131,7 +141,7 @@ async function getJson<T>(
     await throttle();
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await fetchExternal(url, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
       });

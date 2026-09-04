@@ -3,6 +3,16 @@ import { cookies } from "next/headers";
 import sharp from "sharp";
 import { copy, getUrl, uploadData } from "aws-amplify/storage/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "画像の取得元" });
+
 
 /**
  * BELLO統合改修 master指示書 Phase B(画像パフォーマンス優先度1-3:
@@ -122,7 +132,7 @@ export async function generateInventoryThumbnail(sourcePath: string): Promise<st
       nextServerContext: { cookies },
       operation: (contextSpec) => getUrl(contextSpec, { path: sourcePath }),
     });
-    const res = await fetch(url);
+    const res = await fetchExternal(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching own object "${sourcePath}"`);
     const sourceBuffer = Buffer.from(await res.arrayBuffer());
     return await generateThumbnailFromBytes(sourceBuffer);

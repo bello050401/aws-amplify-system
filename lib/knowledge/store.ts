@@ -8,6 +8,16 @@ import { KNOWLEDGE_SEARCH_TEXT_MAX_CHARS } from "./limits";
 import { markdownToPlainText } from "./markdown";
 import { extensionOf, validateKnowledgeUpload } from "./validation";
 import type { SearchableKnowledgeDocument } from "./retrieval";
+import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+
+/**
+ * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
+ * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
+ * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
+ */
+const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
+  fetchWithTimeout(input, init, { label: "ナレッジの取得元" });
+
 
 /**
  * §5 ナレッジ文書の唯一の読み書き窓口(lib/messaging/service.tsと同じ
@@ -315,7 +325,7 @@ export async function readKnowledgeContent(id: string): Promise<{ fileName: stri
     nextServerContext: { cookies },
     operation: (contextSpec) => getUrl(contextSpec, { path: doc.storageKey }),
   });
-  const res = await fetch(url);
+  const res = await fetchExternal(url);
   if (!res.ok) throw new Error(`ナレッジ文書の原本を取得できませんでした (HTTP ${res.status})。`);
   const bytes = Buffer.from(await res.arrayBuffer());
   return { fileName: doc.originalFileName, mimeType: doc.mimeType, content: bytes.toString("utf8") };
