@@ -167,9 +167,20 @@ BELLO Data Integrity Alert
 |---|---|---|
 | PASS → 通知しない | Lambdaを通常実行（`overall: PASS`） | メトリクス **0** を記録、アラームは **OK** のまま |
 | FAIL → 通知経路が発火 | テスト用ログ行にEMFで 1 を1回だけ書き込み | メトリクス **1** を記録、アラームが **ALARM** へ遷移<br>`Threshold Crossed: 1 datapoint [1.0] was greater than or equal to the threshold (1.0)` |
-| 異常のあと自動で戻る | そのまま放置 | データの無い期間は `NOT_BREACHING` により OK として扱われる（張り付かない）。履歴上も INSUFFICIENT_DATA → OK → ALARM の3遷移だけで、往復していない |
+| 異常のあと自動で戻る | 次のPASS実行（メトリクス 0） | **ALARM → OK へ自動復帰**（張り付かない） |
 | WARNING → 通知しない | 単体テスト（基準値の減少） | メトリクス **0** |
 | ERROR → 通知経路が発火 | 単体テスト（取得エラー） | メトリクス **1** |
+
+アラームの状態遷移の全履歴（`describe-alarm-history`。これが正本です）:
+
+```
+22:35 JST  INSUFFICIENT_DATA → OK     PASS実行がメトリクス 0 を出した
+22:43 JST  OK → ALARM                 テスト用のFAILがメトリクス 1 を出した（通知が飛ぶ）
+23:43 JST  ALARM → OK                 次のPASS実行の 0 で自動復帰
+```
+
+**1回の異常につきALARMへの遷移は1回だけ**で、その後は自動的に OK へ戻ります。
+翌日また異常が出れば、改めて1通だけ飛びます。
 
 本番アプリ（`d1uy61lbnqm8ae` / main）側にはまだアラームとトピックがありません。
 このブランチの変更が main へ入って backend が再デプロイされた時点で作られます。
