@@ -43,8 +43,36 @@ const args = process.argv.slice(2);
 const WANT_DIFF = args.includes("--diff");
 const WANT_SAVE = args.includes("--save");
 
-/** 監視ログのテーブルは生CDK製で名前が `<Model>-<apiId>-<env>` ではない。名前で探す。 */
+/**
+ * 監視ログのテーブル名を、**日次Lambda自身の設定から**取る。
+ *
+ * このテーブルは生CDK製で `<Model>-<apiId>-<env>` の形をしておらず、
+ * さらに backend.ts が全アプリ共有なので**本番とStagingの2つ存在する**。
+ * 名前の部分一致で選ぶと、手元の実行とスケジュール実行が別の基準値を
+ * 見る事故になる（そうなると差分判定そのものが意味を失う）。
+ *
+ * Lambda の環境変数を読めば「スケジュール実行が実際に使っているテーブル」
+ * が一意に決まる。同じ store を共有していることが保証される。
+ */
 async function findIntegrityLogTable(): Promise<string | null> {
+  const { LambdaClient, ListFunctionsCommand, GetFunctionConfigurationCommand } = await import("@aws-sdk/client-lambda");
+  const lambda = new LambdaClient({ region: REGION });
+  const appId = process.env.BELLO_AMPLIFY_APP_ID ?? "d4hkkg7dty2du"; // Staging
+  let marker: string | undefined;
+  do {
+    const res = await lambda.send(new ListFunctionsCommand({ Marker: marker }));
+    for (const fn of res.Functions ?? []) {
+      const name = fn.FunctionName ?? "";
+      if (!name.includes("integritymonitor") || !name.includes(appId)) continue;
+      const cfg = await lambda.send(new GetFunctionConfigurationCommand({ FunctionName: name }));
+      const table = cfg.Environment?.Variables?.INTEGRITY_LOG_TABLE_NAME;
+      if (table) return table;
+    }
+    marker = res.NextMarker;
+  } while (marker);
+
+  // Lambda が見つからない環境（デプロイ前など）では、テーブル名の一致で
+  // 一意に決まる場合だけ受け入れる。複数あるなら諦める（取り違えない）。
   const names: string[] = [];
   let start: string | undefined;
   do {
@@ -52,7 +80,7 @@ async function findIntegrityLogTable(): Promise<string | null> {
     names.push(...(res.TableNames ?? []));
     start = res.LastEvaluatedTableName;
   } while (start);
-  const hits = names.filter((n) => n.includes("IntegrityCheckLog"));
+  const hits = names.filter((n) => n.includes("IntegrityCheckLog") && n.includes(appId));
   return hits.length === 1 ? hits[0] : null;
 }
 

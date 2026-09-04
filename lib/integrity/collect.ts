@@ -148,6 +148,21 @@ export async function collectIntegrityMetrics(deps: CollectDeps): Promise<Collec
     inventoryError = err instanceof Error ? err.name : "unknown";
   }
 
+  // 在庫履歴は2つの指標（孤児・同時編集）が使う。**1回だけ読む。**
+  // 別々に読むと 28,000件超の走査が2回走り、日次実行の読み取り量が倍になる
+  // （実測: Lambda 3,618ms のうち大半がこの走査）。
+  let history: Row[] | null = null;
+  let historyError: string | null = null;
+  try {
+    history = await scanAll(deps, "InventoryHistory", ["inventoryId", "fieldName", "changedAt", "changedBy"]);
+  } catch (err) {
+    historyError = err instanceof Error ? err.name : "unknown";
+  }
+  const needHistory = (): Row[] => {
+    if (history === null) throw new Error(historyError ?? "在庫履歴を読めませんでした");
+    return history;
+  };
+
   const needInventory = <T>(run: (rows: Row[], ids: Set<string>) => Promise<T>) => async (): Promise<T> => {
     if (live === null) throw new Error(inventoryError ?? "在庫を読めませんでした");
     return run(live, liveIds);
@@ -172,10 +187,9 @@ export async function collectIntegrityMetrics(deps: CollectDeps): Promise<Collec
       "orphanHistoryInventories",
       "削除記録の無い在庫を指す履歴（在庫数）",
       needInventory(async (_rows, ids) => {
-        const history = await scanAll(deps, "InventoryHistory", ["id", "inventoryId", "fieldName"]);
         const orphan = new Set<string>();
         const deleted = new Set<string>();
-        for (const r of history) {
+        for (const r of needHistory()) {
           const ref = str(r.inventoryId);
           if (!ref) continue;
           if (str(r.fieldName) === "削除") deleted.add(ref);
@@ -200,9 +214,8 @@ export async function collectIntegrityMetrics(deps: CollectDeps): Promise<Collec
       // 実測(2026-09-04、履歴28,423件): 0件。人の利用者が実質1名のため。
       // ただし**ZAICO同期(バックグラウンド)と人**は今日でも同時に書きうる
       // ので、その組み合わせもここに出る。
-      const history = await scanAll(deps, "InventoryHistory", ["inventoryId", "fieldName", "changedAt", "changedBy"]);
       const byTarget = new Map<string, Row[]>();
-      for (const r of history) {
+      for (const r of needHistory()) {
         const inv = str(r.inventoryId);
         const field = str(r.fieldName);
         if (!inv || !field) continue;
