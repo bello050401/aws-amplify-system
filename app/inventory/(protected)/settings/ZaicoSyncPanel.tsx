@@ -168,7 +168,7 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
     unmountedRef.current = false;
     (async () => {
       try {
-        const job = await getZaicoBackgroundSyncStatusAction();
+        const { job } = await getZaicoBackgroundSyncStatusAction();
         if (unmountedRef.current || !job) return;
         setBgJob(job);
         if (job.status === "PENDING" || job.status === "RUNNING") {
@@ -201,9 +201,17 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
   // 無駄な同時リクエストを避ける)。
   async function runAdvance() {
     try {
-      const { job, shouldContinue } = await advanceZaicoBackgroundSyncAction();
+      const { job, shouldContinue, reason } = await advanceZaicoBackgroundSyncAction();
       if (unmountedRef.current) return;
-      setBgJob(job);
+      if (job) setBgJob(job);
+      if (reason) {
+        // 画面からの続行は止めるが、ジョブ自体は PENDING/RUNNING のまま
+        // 残る —— zaico-sync-worker Lambda が5分毎に引き継いで最後まで
+        // 進めるので、「同期が丸ごと失われた」わけではないことを書く。
+        setBgPolling(false);
+        setBgError(`${reason}（この画面からの続行は止めました。同期ジョブは残っており、5分毎の自動実行が引き継ぎます。）`);
+        return;
+      }
       setBgError(null);
       if (shouldContinue) {
         scheduleAdvance(300);
@@ -253,10 +261,15 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
   async function cancelBackground() {
     setBgBusy("cancelling");
     try {
-      await cancelZaicoBackgroundSyncAction();
+      const { reason } = await cancelZaicoBackgroundSyncAction();
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
       setBgPolling(false);
-      setBgJob(await getZaicoBackgroundSyncStatusAction());
+      if (reason) {
+        setBgError(reason);
+        return;
+      }
+      const { job } = await getZaicoBackgroundSyncStatusAction();
+      setBgJob(job);
     } catch (err) {
       setBgError(err instanceof Error ? err.message : "中止に失敗しました。");
     } finally {

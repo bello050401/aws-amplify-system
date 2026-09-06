@@ -193,16 +193,27 @@ export interface ZaicoSyncPort {
   releaseSourceLink(sourceInventoryId: string): Promise<void>;
 }
 
-/** Same scan semantics as lib/inventory/zaicoSync.ts's previous fetchAllZaicoManagedInventory - unchanged. */
+/**
+ * Same scan semantics as lib/inventory/zaicoSync.ts's previous fetchAllZaicoManagedInventory.
+ *
+ * 取得エラーを「0件」と取り違えない(2026-09-07 不具合調査)。ここは
+ * 同期の**最も危険な**取りこぼし箇所 —— この Map が空に化けると、
+ * syncOneZaicoItem は ZAICO の全商品を「BELLO にまだ無い」と判断して
+ * 新規作成へ進む。commit 17d1edc で同じ規約違反を塞いだときに、この
+ * 1箇所だけ残っていた(あちらは突き合わせ用の読み取り、こちらは
+ * 作成判断そのものの入力なので、影響はこちらの方が大きい)。
+ */
 async function serverFetchAllZaicoManaged(): Promise<Map<string, InventoryModel>> {
   const map = new Map<string, InventoryModel>();
   let nextToken: string | null | undefined;
   do {
-    const { data, nextToken: nt } = await serverDataClient.models.Inventory.list({
+    const res = await serverDataClient.models.Inventory.list({
       filter: { sourceSystem: { eq: "ZAICO" } },
       nextToken: nextToken ?? undefined,
       ...inventoryAuthMode,
     });
+    const data = unwrapList(res, "ZAICO連携済み在庫の一覧");
+    const nt = res.nextToken;
     for (const item of data) {
       if (item.deletedAt || !item.sourceInventoryId) continue;
       map.set(item.sourceInventoryId, item);
@@ -281,7 +292,14 @@ export function createServerSyncPort(): ZaicoSyncPort {
       // create失敗——文字列一致に頼らず、実際に既存行を読みに行くことで
       // 「同時実行による既存claim」と「その他の予期しないエラー」を
       // 区別する(予期しないエラーは握りつぶさずthrowする)。
-      const { data: existingLink } = await serverDataClient.models.ZaicoSourceLink.get({ id: linkId }, inventoryAuthMode);
+      // ここで errors を見ないと、「読めなかった」が「既存claimは無い」に
+      // 化ける。下の throw へ落ちるので結果は fail closed のままだが、
+      // 出るメッセージが create の errors になり、実際の原因（読み取りの
+      // 失敗）が消える。読めなかったことは読めなかったと言う。
+      const existingLink = unwrapGet(
+        await serverDataClient.models.ZaicoSourceLink.get({ id: linkId }, inventoryAuthMode),
+        "ZAICO重複防止リンク",
+      );
       if (existingLink) return { claimed: false, existingInventoryId: existingLink.inventoryId };
       throw new Error(`ZAICO在庫ID ${sourceInventoryId} の重複防止claimに失敗しました: ${JSON.stringify(errors)}`);
     },

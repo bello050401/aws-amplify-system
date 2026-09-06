@@ -241,9 +241,21 @@ export function toPublicJob(row: {
   };
 }
 
-/** Read-only — used by the settings UI to render current progress, and by start/advance to decide what to do next. */
+/**
+ * Read-only — used by the settings UI to render current progress, and by start/advance to decide what to do next.
+ *
+ * 取得エラーを「ジョブが無い」と取り違えない(2026-09-07 不具合調査)。
+ * `.get()` はGraphQLエラーでも throw せず `data: null` を返すので、
+ * errors を見ないと**読めなかっただけ**が「未実行」に化ける。
+ * 化けた結果は静かではない —— startは「実行中のジョブは無い」と判断して
+ * 走っている同期の行を上書きし、advanceは「進めるものが無い」と判断して
+ * ポーリングを止める。
+ */
 export async function getZaicoBackgroundSyncStatus(): Promise<ZaicoBackgroundSyncJob | null> {
-  const { data } = await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode);
+  const data = unwrapGet(
+    await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode),
+    "同期ジョブの状態",
+  );
   if (!data) return null;
   return toPublicJob(data);
 }
@@ -313,6 +325,42 @@ export async function startZaicoBackgroundSyncJob(
   return { started: true };
 }
 
+/**
+ * 同期操作が投げた例外を、**ジョブ行に痕跡として残す**(2026-09-07)。
+ *
+ * ── なぜ必要か ──────────────────────────────────────────────────
+ *
+ * Staging の SSR(Server Component / Server Action)の console 出力は
+ * CloudWatch へ届かない(commit d44d8e0 で調査済み。IAMのlogs権限は
+ * 付いているが、ログ グループ自体が作られない)。そのため Server Action
+ * が投げると、ブラウザには本番ビルド既定の
+ * 「An error occurred in the Server Components render.」しか出ず、
+ * **どこにも実際の例外が残らない**。2026-09-06 15:02:53 UTC の
+ * `POST /inventory/settings 500` がまさにこれで、CloudFrontアクセスログに
+ * 500の事実は残っていたのに、原因を示すものが1バイトも残らなかった。
+ *
+ * ── status は変えない ───────────────────────────────────────────
+ *
+ * ここで FAILED にしてはいけない。zaico-sync-worker Lambda は
+ * PENDING/RUNNING のときだけ引き継ぐので、ブラウザ側の1回の失敗で
+ * FAILED にすると、**Lambdaが最後まで進めてくれる現在の動作を壊す**
+ * (実際 15:02 の失敗のあと、15:05 のLambdaが同じジョブを完了させている)。
+ * 記録するのは lastError と updatedAt だけ。
+ *
+ * 失敗しても投げない —— 記録できないことを理由に、呼び出し元へ返す
+ * メッセージまで失うほうが悪い。
+ */
+export async function recordZaicoSyncJobError(message: string): Promise<void> {
+  try {
+    await serverDataClient.models.ZaicoSyncJob.update(
+      { id: ZAICO_SYNC_JOB_SINGLETON_ID, lastError: message.slice(0, 2000), updatedAt: new Date().toISOString() },
+      inventoryAuthMode,
+    );
+  } catch (err) {
+    console.error("[recordZaicoSyncJobError] 失敗の記録自体に失敗しました(非致命):", err);
+  }
+}
+
 /** ADMIN-triggered stop. Checked at the top of every `advance` call and between items within a batch, so an in-progress run stops promptly, not just before its next scheduled start. */
 export async function cancelZaicoBackgroundSyncJob(): Promise<void> {
   const existing = await getZaicoBackgroundSyncStatus();
@@ -342,7 +390,13 @@ export interface AdvanceResult {
  * this function's logic.
  */
 export async function advanceZaicoBackgroundSyncJob(who: string | null, port: ZaicoSyncPort = getServerSyncPort()): Promise<AdvanceResult> {
-  const { data: row } = await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode);
+  // getZaicoBackgroundSyncStatus と同じ理由で errors を必ず見る ——
+  // 読めなかっただけなのに「進めるものが無い」と返すと、UIはポーリングを
+  // 止め、まだ PENDING のジョブが取り残される。
+  const row = unwrapGet(
+    await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode),
+    "同期ジョブ",
+  );
   if (!row || (row.status !== "PENDING" && row.status !== "RUNNING")) {
     return { job: row ? toPublicJob(row) : toPublicJob({ status: "COMPLETED" }), shouldContinue: false };
   }
@@ -383,7 +437,10 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
     // Re-check cancellation right before writing — a cancel requested
     // while this batch's ZAICO fetch/sync was in flight still takes
     // effect at the very next checkpoint, not after a further page.
-    const { data: freshRow } = await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode);
+    const freshRow = unwrapGet(
+      await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode),
+      "同期ジョブ(中止確認)",
+    );
     if (!freshRow || freshRow.status === "CANCELLED") {
       return { job: freshRow ? toPublicJob(freshRow) : toPublicJob({ status: "CANCELLED" }), shouldContinue: false };
     }
