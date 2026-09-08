@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { MasterOption } from "@/lib/inventory/queries";
+import { buildSidebarFilterHref } from "@/lib/inventory/sidebarFilterHref";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
 
 interface CategoryFilterListProps {
@@ -9,15 +10,10 @@ interface CategoryFilterListProps {
   activeCategoryIds: string[];
   activeLocationId?: string;
   q?: string;
-}
-
-function buildHref(params: { q?: string; categoryIds?: string[]; locationId?: string }) {
-  const sp = new URLSearchParams();
-  if (params.q) sp.set("q", params.q);
-  if (params.categoryIds && params.categoryIds.length > 0) sp.set("categoryIds", params.categoryIds.join(","));
-  if (params.locationId) sp.set("locationId", params.locationId);
-  const qs = sp.toString();
-  return qs ? `/inventory?${qs}` : "/inventory";
+  /** QA-006: InventorySidebar.tsxの同名propと同じ — lib/inventory/sidebarFilterHref.ts参照。 */
+  advanced?: string;
+  adv?: string;
+  limit?: string;
 }
 
 /**
@@ -31,7 +27,7 @@ function buildHref(params: { q?: string; categoryIds?: string[]; locationId?: st
  * 襲）。実際の絞り込みはサーバー側(lib/inventory/queries.ts)のOR条件
  * で行われ、ここは見た目のトグルではない。
  */
-export function CategoryFilterList({ categories, activeCategoryIds, activeLocationId, q }: CategoryFilterListProps) {
+export function CategoryFilterList({ categories, activeCategoryIds, activeLocationId, q, advanced, adv, limit }: CategoryFilterListProps) {
   const { isDirty, guardedNavigate } = useUnsavedChanges();
 
   function toggledIds(id: string): string[] {
@@ -44,7 +40,10 @@ export function CategoryFilterList({ categories, activeCategoryIds, activeLocati
     guardedNavigate(href);
   }
 
-  const clearHref = buildHref({ q, categoryIds: [], locationId: activeLocationId });
+  // QA-006: 「すべて解除」はカテゴリだけを外す既存の意図(q/保管場所は
+  // 元々ここでも維持されていた)を変えない——新たに引き継ぐのは
+  // advanced/adv/limitだけ。
+  const clearHref = buildSidebarFilterHref({ q, categoryIds: [], locationId: activeLocationId, advanced, adv, limit });
 
   return (
     <div>
@@ -52,7 +51,7 @@ export function CategoryFilterList({ categories, activeCategoryIds, activeLocati
       <ul>
         {categories.map((cat) => {
           const checked = activeCategoryIds.includes(cat.id);
-          const href = buildHref({ q, categoryIds: toggledIds(cat.id), locationId: activeLocationId });
+          const href = buildSidebarFilterHref({ q, categoryIds: toggledIds(cat.id), locationId: activeLocationId, advanced, adv, limit });
           return (
             <li key={cat.id}>
               <Link

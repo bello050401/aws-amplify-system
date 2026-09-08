@@ -3,12 +3,15 @@
 import Link from "next/link";
 import type { InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { InventoryThumbnail } from "../InventoryThumbnail";
+import { buildDetailHref } from "@/lib/inventory/listReturnParams";
 
 interface InventoryCardListProps {
   rows: InventoryListRow[];
   categoriesById: Record<string, MasterOption>;
   locationsById: Record<string, MasterOption>;
   statusesById: Record<string, StatusOption>;
+  /** QA005: InventoryTable.tsxの同名propと同じ — lib/inventory/listReturnParams.ts参照。 */
+  listReturnQuery: string;
 }
 
 function formatYen(value: number | null): string {
@@ -27,7 +30,7 @@ function formatYen(value: number | null): string {
  * 前提 — 391pxの画面へ列選択・インライン編集グリッドを持ち込むのは
  * 現実的な操作性にならないため、意図的なスコープ外)。
  */
-export function InventoryCardList({ rows, categoriesById, locationsById, statusesById }: InventoryCardListProps) {
+export function InventoryCardList({ rows, categoriesById, locationsById, statusesById, listReturnQuery }: InventoryCardListProps) {
   if (rows.length === 0) {
     return <p className="p-6 text-sm text-gray-400">該当する在庫がありません。</p>;
   }
@@ -44,7 +47,7 @@ export function InventoryCardList({ rows, categoriesById, locationsById, statuse
                 thumbnail 56px→40px(spec目標36〜44px)、行の縦padding
                 を詰め(spec目標: 行高48〜58px)、leading-tightで行間を
                 詰める——「above-the-fold 4〜6行以上」を達成する。 */}
-            <Link href={`/inventory/${row.id}`} className="flex items-center gap-2.5 px-3 py-1.5 active:bg-gray-50">
+            <Link href={buildDetailHref(row.id, listReturnQuery)} className="flex items-center gap-2.5 px-3 py-1.5 active:bg-gray-50">
               <div className="h-10 w-10 shrink-0">
                 <InventoryThumbnail storageKey={row.mainImageThumbnailKey} alt={row.name} size="list" loading="lazy" />
               </div>

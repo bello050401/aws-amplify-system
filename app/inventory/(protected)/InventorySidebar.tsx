@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { MasterOption } from "@/lib/inventory/queries";
+import { buildSidebarFilterHref } from "@/lib/inventory/sidebarFilterHref";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { CategoryFilterList } from "./CategoryFilterList";
 
@@ -12,19 +13,21 @@ interface InventorySidebarProps {
   activeCategoryIds: string[];
   activeLocationId?: string;
   q?: string;
-}
-
-function buildHref(params: { q?: string; categoryIds?: string[]; locationId?: string }) {
-  const sp = new URLSearchParams();
-  if (params.q) sp.set("q", params.q);
-  if (params.categoryIds && params.categoryIds.length > 0) sp.set("categoryIds", params.categoryIds.join(","));
-  if (params.locationId) sp.set("locationId", params.locationId);
-  const qs = sp.toString();
-  return qs ? `/inventory?${qs}` : "/inventory";
+  /**
+   * QA-006: 詳細検索パネルの開閉状態(searchParams.advancedをそのまま)。
+   * サイドバー操作(カテゴリ/保管場所)自体はこれを判定しない——ただ
+   * 「絞り込みを変えても詳細検索の表示状態を黙って捨てない」ために
+   * 遷移先へそのまま引き継ぐだけ(lib/inventory/sidebarFilterHref.ts参照)。
+   */
+  advanced?: string;
+  /** QA-006: 詳細検索の実際の条件(searchParams.advをそのまま)。同上、サイドバー操作では素通しするだけ。 */
+  adv?: string;
+  /** QA-006: 表示件数("100"のみ意味を持つ)。同上、サイドバー操作では素通しするだけ。 */
+  limit?: string;
 }
 
 /** すべての在庫/保管場所/カテゴリの中身 — デスクトップの常設サイドバーとモバイルのボトムシートで全く同じものを表示する。 */
-function FilterContent({ categories, locations, activeCategoryIds, activeLocationId, q, onNavigate }: InventorySidebarProps & { onNavigate?: () => void }) {
+function FilterContent({ categories, locations, activeCategoryIds, activeLocationId, q, advanced, adv, limit, onNavigate }: InventorySidebarProps & { onNavigate?: () => void }) {
   const isAll = activeCategoryIds.length === 0 && !activeLocationId;
   const { isDirty, guardedNavigate } = useUnsavedChanges();
 
@@ -35,12 +38,19 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
     guardedNavigate(href);
   }
 
+  // 「すべての在庫」はカテゴリ/保管場所だけを解除する既存の意図(qは
+  // 元々ここでも維持されていた)を変えない——QA-006で新たに引き継ぐのは
+  // advanced/adv/limitだけ。詳細検索の明示的な全解除は
+  // InventoryAdvancedSearchPanelの「リセット」ボタン(素の"/inventory"
+  // へ遷移)が別途担っており、そちらは今回変更しない。
+  const allHref = buildSidebarFilterHref({ q, advanced, adv, limit });
+
   return (
     <>
       <div className="border-b border-gray-100 p-2">
         <Link
-          href={buildHref({ q })}
-          onClick={(e) => handleClick(e, buildHref({ q }))}
+          href={allHref}
+          onClick={(e) => handleClick(e, allHref)}
           className={`block px-2 py-1.5 text-[13px] ${isAll ? "bg-gray-100 font-bold text-gray-900" : "text-gray-700 hover:bg-gray-50"}`}
         >
           すべての在庫
@@ -52,7 +62,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
         <ul>
           {locations.length === 0 && <li className="px-2 py-1 text-[12px] text-gray-300">未登録</li>}
           {locations.map((loc) => {
-            const href = buildHref({ q, categoryIds: activeCategoryIds, locationId: loc.id });
+            const href = buildSidebarFilterHref({ q, categoryIds: activeCategoryIds, locationId: loc.id, advanced, adv, limit });
             return (
               <li key={loc.id}>
                 <Link
@@ -73,7 +83,15 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
 
       <div className="p-2">
         <p className="px-2 py-1 text-[11px] font-bold text-gray-400">カテゴリ</p>
-        <CategoryFilterList categories={categories} activeCategoryIds={activeCategoryIds} activeLocationId={activeLocationId} q={q} />
+        <CategoryFilterList
+          categories={categories}
+          activeCategoryIds={activeCategoryIds}
+          activeLocationId={activeLocationId}
+          q={q}
+          advanced={advanced}
+          adv={adv}
+          limit={limit}
+        />
       </div>
     </>
   );
@@ -93,7 +111,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
  * 設計)。
  */
 export function InventorySidebar(props: InventorySidebarProps) {
-  const { categories, locations, activeCategoryIds, activeLocationId, q } = props;
+  const { categories, locations, activeCategoryIds, activeLocationId, q, advanced, adv, limit } = props;
   const [sheetOpen, setSheetOpen] = useState(false);
   const filterKey = JSON.stringify({ activeCategoryIds, activeLocationId, q });
 
@@ -140,7 +158,16 @@ export function InventorySidebar(props: InventorySidebarProps) {
               閉じる
             </button>
           </div>
-          <FilterContent categories={categories} locations={locations} activeCategoryIds={activeCategoryIds} activeLocationId={activeLocationId} q={q} />
+          <FilterContent
+            categories={categories}
+            locations={locations}
+            activeCategoryIds={activeCategoryIds}
+            activeLocationId={activeLocationId}
+            q={q}
+            advanced={advanced}
+            adv={adv}
+            limit={limit}
+          />
         </div>
       </div>
     </>

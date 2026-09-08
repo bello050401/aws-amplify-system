@@ -532,18 +532,40 @@ export async function listInventorySimpleSearch(
  * 経路は非削除フィルタ以外をDynamoDBへ渡さず、全件走査後にアプリケー
  * ションコード側で判定する — 既存のexport/import機能と同じ「全件を
  * 一度読んで判定する」設計を踏襲)。
+ *
+ * `extraFilters`(QA-006): 一覧サイドバーのカテゴリ/保管場所絞り込み。
+ * 詳細検索の条件(query/combinator)を置き換えるのではなく、常にANDで
+ * 追加する——「詳細検索の結果、かつ選択中のカテゴリ/保管場所」になる。
+ * query自身のcombinator(AND/OR)には一切手を触れない(詳細検索内部の
+ * 条件同士の組み合わせ方はそのまま — サイドバーの絞り込みはその外側に
+ * もう1段ANDを足すだけ)。
  */
 export async function listInventoryAdvanced(
   query: AdvancedSearchQuery,
   fieldsByKey: Map<string, SearchFieldDef>,
   options: { offset: number; limit: number },
+  extraFilters: { categoryIds?: string[]; locationId?: string } = {},
 ): Promise<SearchPage<InventoryListRow>> {
   if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   // 2026-09-04 性能改善 第2フェーズ§1(クイック検索と同じ理由・同じ扱い)。
-  const fast = await trySearchFast({ advanced: { query, fieldsByKey } }, options);
+  // QA-006: extraFiltersはsearchInventoryFast内部で詳細検索(advanced)
+  // とは独立にDynamoDBのFilterExpressionへ押し下げられる
+  // (lib/inventory/inventorySearchFast.ts参照) — listInventorySimpleSearch
+  // が同じ`filters`引数をqと組み合わせているのと同じ仕組みで、ここでは
+  // advancedと組み合わせる。
+  const fast = await trySearchFast(
+    { filters: { categoryIds: extraFilters.categoryIds, locationId: extraFilters.locationId }, advanced: { query, fieldsByKey } },
+    options,
+  );
   if (fast) return fast;
 
-  const all = await fetchAllInventoryRecords();
+  const conditions: Record<string, unknown>[] = [];
+  if (extraFilters.categoryIds && extraFilters.categoryIds.length > 0) {
+    conditions.push({ or: extraFilters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
+  }
+  if (extraFilters.locationId) conditions.push({ locationId: { eq: extraFilters.locationId } });
+
+  const all = await fetchAllInventoryRecords(conditions);
   const filtered = all.filter((r) => evaluateQuery(r as unknown as SearchableRecord, query, fieldsByKey));
 
   const total = filtered.length;

@@ -6,6 +6,7 @@ import type { CustomFieldDefinitionRow, InventoryListRow, MasterOption, StatusOp
 import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
 import { isInlineEditableColumn, type InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
 import { formatJstDate } from "@/lib/inventory/formatJst";
+import { buildDetailHref } from "@/lib/inventory/listReturnParams";
 import { useInventoryListColumns } from "../useInventoryListColumns";
 import { InventoryThumbnail } from "../InventoryThumbnail";
 import { useDirectEdit } from "./DirectEditProvider";
@@ -21,6 +22,13 @@ interface InventoryTableProps {
   statusesById: Record<string, StatusOption>;
   /** 追加項目(CustomFieldDefinition)を動的な一覧列として表示するため(夜間開発指示書 §11)。 */
   customFieldDefs: CustomFieldDefinitionRow[];
+  /**
+   * QA005: 現在の検索条件/ページングを正規化したクエリ文字列
+   * (lib/inventory/listReturnParams.ts参照)。商品リンクに `from` として
+   * 埋め込み、詳細画面の「在庫一覧へ戻る」がこの一覧の状態へ戻れるよう
+   * にする。空文字列(検索条件無し)なら `from` を付けない。
+   */
+  listReturnQuery: string;
 }
 
 /** `cf:<fieldKey>`列(動的なCustomField列)の値をrow.customFieldsから読む — 静的列と混在した同じレンダリングループから、どちらの種類の列かをkeyの接頭辞だけで判定できる。 */
@@ -296,7 +304,7 @@ function renderEditableCell(
  * never visually diverge: this is the only place either one renders a
  * row.
  */
-export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById, customFieldDefs }: InventoryTableProps) {
+export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById, customFieldDefs, listReturnQuery }: InventoryTableProps) {
   // 追加項目(CustomFieldDefinition)を動的な一覧列として扱う(夜間開発
   // 指示書 §11) — customFieldDefsが変わらない限りuseMemoで同じ配列参照
   // を保つ(useInventoryListColumns内のuseEffectの依存に使われるため)。
@@ -338,7 +346,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
           InventoryCardList(カード型一覧)を表示する — 列表示設定・
           一覧直接編集を持ち込まないシンプルな縦一列ビュー。 */}
       <div className="h-full md:hidden">
-        <InventoryCardList rows={rows} categoriesById={categoriesById} locationsById={locationsById} statusesById={statusesById} />
+        <InventoryCardList rows={rows} categoriesById={categoriesById} locationsById={locationsById} statusesById={statusesById} listReturnQuery={listReturnQuery} />
       </div>
       <div className="hidden h-full overflow-auto md:block">
       {/* table-layout: fixed + 明示的なtable幅(全可視列の合計) — これが
@@ -389,7 +397,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
         </thead>
         <tbody>
           {rows.map((row) => {
-            const href = `/inventory/${row.id}`;
+            const href = buildDetailHref(row.id, listReturnQuery);
             const dirty = directEditEnabled && isRowDirty(row.id);
             return (
               <tr key={row.id} className={`border-b border-gray-100 ${dirty ? "bg-amber-50" : directEditEnabled ? "" : "hover:bg-gray-50"}`}>

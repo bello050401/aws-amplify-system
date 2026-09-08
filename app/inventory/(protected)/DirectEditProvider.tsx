@@ -31,6 +31,15 @@ interface DirectEditContextValue {
   dirtyCount: number;
   saving: boolean;
   lastResult: { successCount: number; failCount: number; errors: { id: string; name: string; error: string }[] } | null;
+  /**
+   * QA-004: bulkUpdateInventoryListFields自体の呼び出しが例外で落ちた場合
+   * (読み取り専用proxyのPOST拒否など、個々の商品の処理まで届かない通信
+   * 失敗)のメッセージ。lastResultは「何件中何件失敗したか」という
+   * per-item結果の器であり、そこへ届く前の失敗はここで別に持つ — 両者
+   * を混ぜると「0件処理された」のか「何も送れなかった」のか区別できなく
+   * なる。
+   */
+  saveError: string | null;
   saveDirty: () => Promise<void>;
   saveAndExit: () => Promise<void>;
   discardAndExit: () => void;
@@ -59,6 +68,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
   const [edits, setEdits] = useState<Record<string, InlineEditChanges>>({});
   const [saving, setSaving] = useState(false);
   const [lastResult, setLastResult] = useState<DirectEditContextValue["lastResult"]>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const rowsById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
@@ -131,6 +141,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
     if (items.length === 0) return { success: true };
 
     setSaving(true);
+    setSaveError(null);
     try {
       const results: BulkInventoryEditItemResult[] = await bulkUpdateInventoryListFields(items);
       const failed = results.filter((r) => !r.success);
@@ -150,6 +161,24 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
       });
 
       return { success: failed.length === 0 };
+    } catch (err) {
+      // QA-004 P2: bulkUpdateInventoryListFields自体の呼び出しが例外で
+      // 落ちた場合(読み取り専用proxyのPOST拒否(405)など、個々の商品の
+      // 処理まで届いていない通信失敗)。ここでerr.messageをそのまま画面
+      // に出すと、"Cannot read properties of undefined (reading
+      // 'filter')" のような技術的な文言(実際に発生: 405で戻り値がresults
+      // ではなくなり、直後のresults.filter(...)がそのTypeErrorを投げて
+      // ここで拾われていた)がスタッフに理解不能な形で見えてしまう。また
+      // 通信が途切れたタイミング次第ではサーバー側の処理は実は届いていた
+      // 可能性もあるため、「一切保存されていない」と断定する文言にもし
+      // ない — 保存結果を確認できなかった旨と、入力保持・再試行の案内に
+      // 統一する。詳細は開発者向けにconsoleへ残す。editsは一切変更しな
+      // い — 何も確認できていないので全行dirtyのまま保持し、再試行可能
+      // にする。
+      console.error("[DirectEdit] performSave failed", err);
+      setLastResult(null);
+      setSaveError("保存結果を確認できませんでした。通信状態を確認して、もう一度お試しください。入力内容は保持されています。");
+      return { success: false };
     } finally {
       setSaving(false);
     }
@@ -167,6 +196,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
   function discardAndExit() {
     setEdits({});
     setLastResult(null);
+    setSaveError(null);
     setEnabled(false);
   }
 
@@ -181,6 +211,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
   function toggleEnabled() {
     setEnabled((v) => !v);
     setLastResult(null);
+    setSaveError(null);
   }
 
   useEffect(() => {
@@ -205,6 +236,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
     dirtyCount,
     saving,
     lastResult,
+    saveError,
     saveDirty,
     saveAndExit,
     discardAndExit,

@@ -94,7 +94,20 @@ export function UnsavedChangesProvider({ children }: { children: React.ReactNode
     if (!dialog) return;
     setDialog((d) => (d ? { ...d, saving: true } : d));
     const fn = saveHandlerRef.current;
-    const result = fn ? await fn() : { success: true };
+    let result: AttemptSaveResult;
+    try {
+      result = fn ? await fn() : { success: true };
+    } catch {
+      // 保存処理自体が例外を投げた場合(ネットワーク断など、フォーム側が
+      // { success: false } を返す通常の失敗とは違い、そもそもawaitが
+      // 完了しない経路)。ここでcatchしないとこの関数がrejectしたまま
+      // 終わり、ダイアログがsaving:trueに固定され(3ボタンとも
+      // disabled)、ユーザーがキャンセルすら押せなくなる。通常の保存
+      // 失敗(I-3のコメント参照)と同じ扱い — 移動せずダイアログを
+      // 閉じて現在画面に留まる。
+      setDialog(null);
+      return;
+    }
     if (result.success) {
       // I-3: 保存成功 → dirty解除 → 元々向かっていた先へ移動。
       setIsDirtyState(false);

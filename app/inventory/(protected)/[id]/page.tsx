@@ -22,6 +22,7 @@ import {
   USED_GOODS_LEDGER_SECTION_ID,
 } from "@/lib/inventory/extendedFields";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
+import { appendReturnParam, buildBackToListHref } from "@/lib/inventory/listReturnParams";
 
 /** "60000" → "60,000円" — every price on this page (readable Japanese yen, not a bare number). */
 function formatYen(value: number | null): string {
@@ -97,7 +98,18 @@ function historyChangeSummary(h: { fieldName: string; oldValue: string | null; n
  * グリッド列幅を明示的に380pxへ戻すことで指示書の「以前の画像領域を
  * 基準に戻す」を数値としても満たす。
  */
-export default async function InventoryDetailPage({ params }: { params: { id: string } }) {
+export default async function InventoryDetailPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  /**
+   * QA005: 一覧から遷移した際に付く `from` — 一覧の検索条件/ページング
+   * を正規化したクエリ文字列(lib/inventory/listReturnParams.ts参照)。
+   * 直リンク・改ざんされた値・存在しない場合は無視して通常一覧へ戻る。
+   */
+  searchParams: { from?: string };
+}) {
   const role = await getInventoryRole();
   if (!role) return null;
 
@@ -127,6 +139,12 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
   const status = item.statusId ? statuses.find((s) => s.id === item.statusId) : undefined;
   const canEdit = canEditInventory(role);
   const canDelete = canHardDeleteInventory(role);
+
+  // QA005: 一覧から来た場合はその検索条件/ページングへ、直リンクの
+  // 場合は通常一覧へ。編集画面へも同じ `from` を引き継ぎ、編集の
+  // キャンセル/保存後にこの詳細へ戻ってきた際も条件を失わないようにする。
+  const backToListHref = buildBackToListHref(searchParams.from);
+  const editHref = appendReturnParam(`/inventory/${item.id}/edit`, searchParams.from);
 
   // 追加項目 (CustomFieldDefinition) — 常に全項目表示、未入力は"-"
   // (spec A-4)。socketType/legHeight/seatDimensions/packageSize/
@@ -225,7 +243,7 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫詳細</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <Link href="/inventory" className="text-[12px] text-gray-500 hover:text-gray-900">
+        <Link href={backToListHref} className="text-[12px] text-gray-500 hover:text-gray-900">
           ← 在庫一覧へ戻る
         </Link>
 
@@ -242,7 +260,7 @@ export default async function InventoryDetailPage({ params }: { params: { id: st
           <div className="flex items-center gap-3">
             {canEdit && (
               <div className="flex gap-2">
-                <Link href={`/inventory/${item.id}/edit`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                <Link href={editHref} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   編集
                 </Link>
                 <Link href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">

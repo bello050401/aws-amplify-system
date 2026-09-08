@@ -17,7 +17,7 @@ import { useDirectEdit } from "./DirectEditProvider";
  *   made while dirty) — they're this mode's own always-visible controls.
  */
 export function DirectEditControls() {
-  const { enabled, toggleEnabled, dirtyCount, saving, lastResult, saveDirty, saveAndExit, discardAndExit } = useDirectEdit();
+  const { enabled, toggleEnabled, dirtyCount, saving, lastResult, saveError, saveDirty, saveAndExit, discardAndExit } = useDirectEdit();
 
   if (!enabled) {
     return (
@@ -43,7 +43,22 @@ export function DirectEditControls() {
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
+      {saveError && (
+        // QA-004 P2: bulkUpdateInventoryListFieldsの呼び出しそのものが
+        // 例外で落ちた(通信エラー・読み取り専用proxyのPOST拒否など、
+        // 個々の商品まで処理が届いていない可能性が高い)場合の明示。
+        // saveErrorはDirectEditProvider側で既にスタッフ向けの完成した
+        // 日本語文(確認できなかった旨・入力保持・再試行の案内)に統一さ
+        // れている — ここで生の例外メッセージや「保存に失敗しました」の
+        // ような断定的な接頭辞を重ねて出さない(サーバー側には届いてい
+        // た可能性もあるため)。lastResultのfailCount(既存の部分失敗表
+        // 示、すぐ下)とは別枠 — hoverしないと分からないtitle頼みにせ
+        // ず、常時表示にして見落としを防ぐ。
+        <span className="w-full text-[12px] font-bold text-red-600" role="alert">
+          {saveError}
+        </span>
+      )}
       <span className="text-[11px] text-gray-500">{dirtyCount}件未保存</span>
       <button
         type="button"

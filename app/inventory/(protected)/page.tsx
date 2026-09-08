@@ -10,6 +10,7 @@ import {
 } from "@/lib/inventory/queries";
 import { buildSearchFieldDefs, completeConditions, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
 import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
+import { buildListReturnQuery } from "@/lib/inventory/listReturnParams";
 import { InventoryTotalCount } from "./InventoryTotalCount";
 import { InventoryHeader } from "../InventoryHeader";
 import { DirectEditProvider } from "./DirectEditProvider";
@@ -64,9 +65,20 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   const advancedQuery: AdvancedSearchQuery | null =
     advancedQueryRaw && advancedConditions.length > 0 ? { ...advancedQueryRaw, conditions: advancedConditions } : null;
   const hasQuickSearchText = Boolean(searchParams.q?.trim());
-  // 詳細検索が有効な間はサイドバー/クイック検索の単純条件を無視する
-  // (詳細検索は既存の単純フィルタを置き換える — 両方を同時に組み合わ
-  // せるUIは今回のスコープ外、混乱を避けるため)。
+  // 詳細検索が有効な間はクイック検索(q)の単純条件を無視する(詳細検索
+  // は商品検索ボックスのqを置き換える — 両方を同時に組み合わせるUIは
+  // 今回のスコープ外、混乱を避けるため)。
+  //
+  // QA-006 P2: 一方でサイドバーのカテゴリ/保管場所は無視しない —
+  // 修正前はここでも「詳細検索中は無視」だったため、詳細検索の結果を
+  // 表示中にサイドバーでカテゴリ/保管場所をクリックすると、adv/advanced
+  // がURLごと消え、詳細検索条件も表示状態も黙って失われていた(実機
+  // 再現: /inventory?q=B000002→詳細検索→在庫ID/含む/B000002→左カテゴリ
+  // 『チェア』クリック→categoryIds=cat-chairだけの通常一覧に化ける)。
+  // カテゴリ/保管場所は下のlistInventoryAdvanced呼び出しへAND条件として
+  // 渡し(lib/inventory/queries.ts参照)、結果が両方の条件に一致するよう
+  // にする——URLだけadv/advancedを保持して結果には反映しない、という
+  // 見せかけの修正はしない。
   const searchMode: "advanced" | "quick" | "plain" = advancedQuery ? "advanced" : hasQuickSearchText ? "quick" : "plain";
 
   // 2026-09-04 性能総点検: マスタ4種と在庫の取得を**同時に**始める。
@@ -77,11 +89,32 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   // マスタ側は4本を並列に投げていたのに、その全体が在庫の前に挟まって
   // いたため、画面は「マスタの最遅 + 在庫」を待っていた。
   //
-  // 通常の一覧(検索していない)だけを先に走らせる。検索経路は
-  // fieldDefs(=マスタから作る検索フィールド定義)に依存するので、
-  // マスタを待たないと投げられない —— そちらは下でこれまでどおり。
+  // 通常の一覧(検索していない)だけを先に走らせる…はずだったが、QA-002の
+  // 調査で分かった原因候補: クイック検索(商品検索ボックスのq、詳細検索
+  // ではない方)もfieldDefs(=マスタから作る検索フィールド定義)には
+  // 依存していない — listInventorySimpleSearchの引数はfilters/offset/
+  // limitだけで、fieldsByKeyを渡す先はlistInventoryAdvancedだけ
+  // (lib/inventory/queries.ts参照)。マスタを待たないと投げられないのは
+  // 詳細検索(advanced)だけなので、quickもplainと同じくここで先に走らせる。
   const filters = { categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId };
   const plainPagePromise = searchMode === "plain" ? listInventoryOffsetPage(filters, { offset, limit }) : null;
+  const quickSearchPromise =
+    searchMode === "quick"
+      ? listInventorySimpleSearch(
+          { q: searchParams.q, categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId },
+          { offset, limit },
+        )
+      : null;
+  // listInventoryOffsetPageは内部で自分のエラーを飲み込んで常にresolve
+  // するが、listInventorySimpleSearchは(trySearchFastが失敗した後の)
+  // フルスキャン経路でDynamoDBの例外をそのまま投げうる。ここでは
+  // Promise.all(マスタ4種)の完了を待ってから初めてawaitするため、
+  // マスタ取得中にこれが先に失敗すると、その時点ではまだ誰も
+  // rejectionを見ていない — Node既定の`--unhandled-rejections=throw`
+  // (v15+)ではプロセスごと落ちる。空のcatchで「見ている」ことにして
+  // 黙らせつつ、本来のエラー処理は下のawait時点(unwrap後)にそのまま
+  // 委ねる(rethrowはしない — 同じpromiseをawaitする側に届く)。
+  quickSearchPromise?.catch(() => {});
 
   const [categories, locations, statuses, customFieldDefs] = await Promise.all([
     listCategories(),
@@ -109,12 +142,9 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
 
   const listResult =
     searchMode === "advanced" && advancedQuery
-      ? await listInventoryAdvanced(advancedQuery, fieldsByKey, { offset, limit })
-      : searchMode === "quick"
-        ? await listInventorySimpleSearch(
-            { q: searchParams.q, categoryIds, locationId: searchParams.locationId, statusId: searchParams.statusId },
-            { offset, limit },
-          )
+      ? await listInventoryAdvanced(advancedQuery, fieldsByKey, { offset, limit }, { categoryIds, locationId: searchParams.locationId })
+      : quickSearchPromise
+        ? await quickSearchPromise
         : fallbackNeeded
           ? await listInventory(filters, { offset, limit })
           : null;
@@ -141,6 +171,19 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
     advanced: searchParams.advanced,
     adv: searchParams.adv,
   };
+
+  // QA005: 一覧→詳細→(一覧へ戻る)で検索条件が消える不具合の修正。
+  // baseParamsに offset/limit を加えたものを1本のクエリ文字列にまとめ、
+  // 商品リンク(InventoryTable/InventoryCardList)へ `from` として渡す。
+  // offset/limitは既定値(0/50)の時は省く — InventoryPaginationの
+  // hrefForと同じ「既定値はURLに出さない」流儀に合わせる。検索条件・
+  // ページングが何も無ければ空文字列になり、詳細URLに `from` を付けない
+  // (従来どおりの素の "/inventory/{id}")。
+  const listReturnQuery = buildListReturnQuery({
+    ...baseParams,
+    offset: offset > 0 ? String(offset) : undefined,
+    limit: limit !== 50 ? String(limit) : undefined,
+  });
 
   // BELLO統合改修 master指示書 §8修正後: 3経路すべてがlib/inventory/
   // queries.tsのfetchAllInventoryRecordsベースのSearchPage(常に
@@ -209,6 +252,9 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
             activeCategoryIds={categoryIds}
             activeLocationId={searchParams.locationId}
             q={searchParams.q}
+            advanced={searchParams.advanced}
+            adv={searchParams.adv}
+            limit={limit !== 50 ? String(limit) : undefined}
           />
           {advancedOpen ? (
             <InventoryAdvancedSearchPanel fieldDefs={fieldDefs} initialQuery={advancedQueryRaw} />
@@ -223,6 +269,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
                 locationsById={locationsById}
                 statusesById={statusesById}
                 customFieldDefs={customFieldDefs}
+                listReturnQuery={listReturnQuery}
               />
             </div>
             <InventoryPagination

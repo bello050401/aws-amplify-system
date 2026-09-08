@@ -1,18 +1,29 @@
 import { notFound, redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses, listUnits } from "@/lib/inventory/queries";
+import { appendReturnParam } from "@/lib/inventory/listReturnParams";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { EditInventoryForm } from "./EditInventoryForm";
 
-export default async function EditInventoryPage({ params }: { params: { id: string } }) {
+export default async function EditInventoryPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  /** QA005: 詳細画面から引き継いだ `from` — 詳細ページの同名propと同じ(lib/inventory/listReturnParams.ts参照)。 */
+  searchParams: { from?: string };
+}) {
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects a signed-out/unauthorized visitor
+  // QA005: 保存後/キャンセル時に戻る詳細URL。`from` を引き継いだまま
+  // 詳細へ戻ることで、その後の「在庫一覧へ戻る」でも検索条件を失わない。
+  const detailHref = appendReturnParam(`/inventory/${params.id}`, searchParams.from);
   // Same reasoning as new/page.tsx: the Data layer already rejects a
   // VIEWER's update, but bouncing here (to the detail page, which does
   // show a VIEWER-facing explanation) is a better experience than a
   // filled-out form failing only at submit time.
   if (!canEditInventory(role)) {
-    redirect(`/inventory/${params.id}`);
+    redirect(detailHref);
   }
 
   // item に依存しない3つ(ステータス・追加項目の定義・単位)は、item の
@@ -40,7 +51,7 @@ export default async function EditInventoryPage({ params }: { params: { id: stri
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫編集</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <EditInventoryForm item={item} categories={categories} locations={locations} statuses={statuses} customFieldDefs={customFieldDefs} units={units} />
+        <EditInventoryForm item={item} categories={categories} locations={locations} statuses={statuses} customFieldDefs={customFieldDefs} units={units} returnTo={detailHref} />
       </div>
     </div>
   );

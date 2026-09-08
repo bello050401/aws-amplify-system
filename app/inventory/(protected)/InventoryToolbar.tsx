@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { InventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { DirectEditControls } from "./DirectEditControls";
@@ -40,14 +41,33 @@ interface InventoryToolbarProps {
  * to be) because 商品検索/詳細検索/新規登録 now all need to go through
  * the shared 未保存変更ガード when 一覧直接編集 has dirty rows pending
  * (統合改善指示書 §13) — see each one's onClick/onSubmit below. When
- * nothing is dirty these are functionally identical to a plain
- * Link/native form GET submit; guardedNavigate degrades to a plain
- * `router.push` in that case (see UnsavedChangesProvider).
+ * nothing is dirty, 詳細検索/新規登録 (plain `<Link>`s) are functionally
+ * identical to a plain Link click; guardedNavigate degrades to a plain
+ * `router.push` in that case (see UnsavedChangesProvider). The 商品検索
+ * form (handleSearchSubmit) always does its own `router.push` — QA-002:
+ * it used to let the native GET submit through whenever nothing was
+ * dirty, which reloaded the whole document (auth/assets included) on
+ * every search.
  */
 export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, advancedOpen, advancedActive, advRaw, totalLabel }: InventoryToolbarProps) {
   const canEdit = role === "ADMIN" || role === "EDITOR";
   const { isDirty, guardedNavigate } = useUnsavedChanges();
   const [importOpen, setImportOpen] = useState(false);
+  const router = useRouter();
+  // QA-002: 商品検索(通常検索)専用のクライアント遷移。未保存変更が無い
+  // 間、以前はnative GETのform submitをそのまま許しており、検索の
+  // たびにブラウザがドキュメント全体(認証初期化・アセットを含む)を
+  // 読み直していた——1件だけの結果を出すのに毎回フルリロードしていた
+  // のがQA-002の実体。router.pushでのSPA遷移に統一し、他のツールバー
+  // 操作(詳細検索トグル・ページング・サイドバーの絞り込み、いずれも
+  // 既存のLink/guardedNavigate経由)と同じ経路に揃える。
+  const [isSearchPending, startSearchTransition] = useTransition();
+  // Enter連打などで同一の検索先が処理中に重ねて送られても、
+  // 進行中の遷移を使い回す(重複でrouter.pushを積まない)。
+  const pendingSearchHrefRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isSearchPending) pendingSearchHrefRef.current = null;
+  }, [isSearchPending]);
 
   function buildHref(overrides: Partial<{ q: string; advanced: string }> = {}) {
     const sp = new URLSearchParams();
@@ -73,7 +93,10 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   }
 
   function handleSearchSubmit(e: React.FormEvent<HTMLFormElement>) {
-    if (!isDirty) return; // let the native GET form submission proceed normally
+    // 常にnative GETを止め、client-side遷移(router.push)へ統一する
+    // (QA-002)。isDirtyの有無にかかわらずここでpreventDefaultする —
+    // native送信を許していたのは「未保存変更が無い間だけ」で、それが
+    // 検索のたびにドキュメント全体を読み直す原因だった。
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const sp = new URLSearchParams();
@@ -81,7 +104,21 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
       if (typeof value === "string" && value) sp.set(key, value);
     }
     const qs = sp.toString();
-    guardedNavigate(qs ? `/inventory?${qs}` : "/inventory");
+    const href = qs ? `/inventory?${qs}` : "/inventory";
+
+    if (isDirty) {
+      // 未保存の直接編集がある間は既存の3択ガードへ委ねる(保存して
+      // 移動/保存せず移動/キャンセル)。guardedNavigate自身がdirtyで
+      // なければrouter.pushへdegradeするが、ここでは既にisDirtyと
+      // 分かっているので毎回ダイアログを経由する。
+      guardedNavigate(href);
+      return;
+    }
+    if (isSearchPending && pendingSearchHrefRef.current === href) return; // 同一検索の連打で遷移を重ねない
+    pendingSearchHrefRef.current = href;
+    startSearchTransition(() => {
+      router.push(href);
+    });
   }
 
   return (
@@ -124,6 +161,15 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               商品検索
             </label>
             <input
+              // qが外部から変わった時(検索送信・戻る/進む・サイドバーの
+              // 「すべての在庫」等、自分の入力以外での変化)だけ入力欄を
+              // 作り直して表示を同期させる — defaultValueはmount時にしか
+              // 効かないuncontrolled inputなので、keyを変えない限り
+              // 「検索文字とURL・結果が一致しない」ままになる(QA-002の
+              // 期待挙動: 戻る/進むでも整合する)。ユーザーの入力中は
+              // qが変わらないのでkeyも変わらず、キー入力やIME変換を
+              // 妨げない。
+              key={q ?? ""}
               id="inventory-search-q"
               type="text"
               name="q"
@@ -132,6 +178,15 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               className="w-28 border-none px-1.5 py-1 text-[13px] outline-none placeholder:text-gray-400 md:w-48"
             />
           </form>
+          {/* 検索受付がすぐ分かる表示(QA-002)。router.pushの直後に同期
+              でtrueになる自前のuseTransitionを使っており、Suspenseの
+              loading.tsx(ツールバーごと骨格に差し替わる、もっと遅れて
+              出る方のフィードバック)より先に出る。 */}
+          {isSearchPending && (
+            <span aria-live="polite" className="whitespace-nowrap text-[11px] font-medium text-gray-400">
+              検索中…
+            </span>
+          )}
           <Link
             href={advancedHref}
             onClick={(e) => handleGuardedLinkClick(e, advancedHref)}

@@ -27,6 +27,12 @@ interface EditInventoryFormProps {
   customFieldDefs: CustomFieldDefinitionRow[];
   /** 単位マスタ(夜間開発指示書 §10)の有効な名称一覧 — 単位欄のdatalist候補。 */
   units: string[];
+  /**
+   * QA005: 保存成功時/キャンセル時に戻る詳細URL。呼び出し元(page.tsx)が
+   * 一覧から引き継いだ `from` を付けたまま構築済み — ここでは
+   * `/inventory/${item.id}` を組み立て直さず、そのまま使う。
+   */
+  returnTo: string;
 }
 
 /**
@@ -103,7 +109,7 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
  * component and config NewInventoryForm uses, so those field
  * definitions exist in exactly one place (spec §5).
  */
-export function EditInventoryForm({ item, categories, locations, statuses, customFieldDefs, units }: EditInventoryFormProps) {
+export function EditInventoryForm({ item, categories, locations, statuses, customFieldDefs, units, returnTo }: EditInventoryFormProps) {
   const router = useRouter();
   const [name, setName] = useState(item.name);
   const [categoryId, setCategoryId] = useState(item.categoryId ?? "");
@@ -243,7 +249,7 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
     e.preventDefault();
     const result = await attemptSave();
     if (result.success) {
-      router.push(`/inventory/${item.id}`);
+      router.push(returnTo);
     }
   }
 
@@ -399,7 +405,7 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
           </button>
           <button
             type="button"
-            onClick={() => guardedNavigate(`/inventory/${item.id}`)}
+            onClick={() => guardedNavigate(returnTo)}
             className="border border-gray-300 px-5 py-3 text-[15px] text-gray-700"
           >
             キャンセル
