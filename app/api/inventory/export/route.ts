@@ -35,8 +35,12 @@ export async function GET(request: NextRequest) {
           statusId: sp.get("statusId") ?? undefined,
         };
 
-  // 詳細検索(adv)が有効な場合はfiltersを無視してこちらだけ使う —
-  // lib/inventory/inventoryExport.tsのbuildInventoryExportコメント参照。
+  // 詳細検索(adv)が有効な場合、`filters.q`は無視してこちら(advanced)を
+  // 使う。`filters.categoryIds`/`filters.locationId`は無視しない——
+  // buildInventoryExport側がANDで組み合わせる(QA-006追加レビュー、
+  // lib/inventory/inventoryExport.tsのbuildInventoryExportコメント参照)
+  // ので、ここで`filters`自体を空にする必要は無い(scope==="filtered"
+  // であればこれまでどおりsearchParamsからそのまま組み立てる)。
   let advanced: Parameters<typeof buildInventoryExport>[2];
   if (scope === "filtered" && advRaw) {
     try {

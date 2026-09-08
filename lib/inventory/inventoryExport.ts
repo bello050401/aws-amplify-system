@@ -23,6 +23,31 @@ type InventoryModel = Schema["Inventory"]["type"];
  */
 
 /**
+ * QA-006 追加レビュー: カテゴリ/保管場所だけを取り出してAppSyncの
+ * filter条件へ変換する、依存ゼロの純粋関数。詳細検索(advanced)使用時
+ * に単純フィルタのうち「この2つだけ」をANDで追加するのに使う——
+ * lib/inventory/queries.tsのlistInventoryAdvancedがextraFiltersとして
+ * 受け取り、AND結合する範囲(categoryIds/locationIdのみ、statusId/qは
+ * 含めない)と一字一句揃えてある。一覧側と出力側で「AND対象は何か」が
+ * ズレると、この関数を直接importして両側から使わない限り再発しうる
+ * ため、意図的にこの1関数だけを両方の入口(下のbuildFilterConditions/
+ * buildInventoryExport)が経由する形にしている。
+ *
+ * AWS SDK/server-onlyに一切依存しないため、node_modulesの無い環境でも
+ * scripts/qa006-verify-export-advanced-and.tsから直接importしてテスト
+ * できる(このファイル自体はexceljs/server-only依存があり直接importで
+ * きないため、この関数だけを切り出した意味はそこにある)。
+ */
+export function buildCategoryLocationConditions(filters: Pick<InventoryListFilters, "categoryIds" | "locationId">): Record<string, unknown>[] {
+  const conditions: Record<string, unknown>[] = [];
+  if (filters.categoryIds && filters.categoryIds.length > 0) {
+    conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
+  }
+  if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
+  return conditions;
+}
+
+/**
  * 検索/絞り込み結果のエクスポート用に、lib/inventory/queries.tsの
  * listInventoryと同じフィルタ条件を再構築する — filterのビルドロジッ
  * クそのものは重複させず、その関数と同じ形の`filters`をそのまま
@@ -36,11 +61,7 @@ type InventoryModel = Schema["Inventory"]["type"];
  * に絞り込む(buildInventoryExport参照)。
  */
 function buildFilterConditions(filters: InventoryListFilters): Record<string, unknown>[] {
-  const conditions: Record<string, unknown>[] = [{ deletedAt: { attributeExists: false } }];
-  if (filters.categoryIds && filters.categoryIds.length > 0) {
-    conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
-  }
-  if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
+  const conditions: Record<string, unknown>[] = [{ deletedAt: { attributeExists: false } }, ...buildCategoryLocationConditions(filters)];
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
   return conditions;
 }
@@ -51,13 +72,18 @@ function buildFilterConditions(filters: InventoryListFilters): Record<string, un
  * データでもブラウザ/APIを詰まらせない) — the same chunked-prefetch
  * shape lib/inventory/zaicoSync.ts's fetchAllZaicoManagedInventory
  * already uses for a full scan.
+ *
+ * QA-006追加レビュー: 引数を`InventoryListFilters`ではなく組み立て済み
+ * の`conditions`配列にした——単純検索/詳細検索のどちらでも同じ関数を
+ * 経由させ、「詳細検索時はconditionsが空になる」という以前の暗黙の分岐
+ * をbuildInventoryExport側の1箇所に集約するため。
  */
-async function fetchAllForExport(filters: InventoryListFilters): Promise<InventoryModel[]> {
+async function fetchAllForExport(conditions: Record<string, unknown>[]): Promise<InventoryModel[]> {
   const items: InventoryModel[] = [];
   let nextToken: string | null | undefined;
   do {
     const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.list({
-      filter: { and: buildFilterConditions(filters) },
+      filter: { and: conditions },
       limit: 200,
       nextToken: nextToken ?? undefined,
       ...inventoryAuthMode,
@@ -107,21 +133,43 @@ function toSearchableRecordFromRaw(item: InventoryModel): SearchableRecord {
  * 間に「現在の検索・絞り込み結果」をエクスポートすると、詳細検索の条
  * 件(q/categoryIds/locationId/statusId経由では表現できないAND/OR・
  * 演算子つきの条件)が無視され、意図しない全件エクスポートになってし
- * まうバグがあった — 詳細検索が有効なときはこちらを渡し、`filters`は
- * 無視してlib/inventory/advancedSearch.tsのevaluateQueryで絞り込む
+ * まうバグがあった — 詳細検索が有効なときはこちらを渡し、
+ * lib/inventory/advancedSearch.tsのevaluateQueryで絞り込む
  * (queries.tsのlistInventoryAdvancedと同じ設計)。
+ *
+ * QA-006 追加レビュー(2026-09-09): 上の設計だけでは`filters`を丸ごと
+ * 無視していたため、一覧画面(lib/inventory/queries.tsのlistInventory
+ * Advanced、extraFilters引数)が詳細検索とカテゴリ/保管場所絞り込みを
+ * ANDで組み合わせるようになった後も、このエクスポートだけは詳細検索
+ * 中はカテゴリ/保管場所を無視したままだった——画面には「チェア かつ
+ * B000002を含む」の行だけが出ているのに、エクスポートすると「B000002
+ * を含む」全カテゴリの行が出力される不一致になっていた。
+ * `filters.categoryIds`/`filters.locationId`(呼び出し元のroute.tsは
+ * scope="filtered"であれば詳細検索中でも常にこの2つをそのまま渡して
+ * いる——ExportMenu.tsxのcurrentFilterParamsが両方含むため、呼び出し元
+ * 側の変更は不要だった)を`buildCategoryLocationConditions`でAND条件化
+ * し、DB側フィルタに足すよう修正した。`filters.statusId`と`filters.q`
+ * は一覧側のextraFiltersと同じ範囲(categoryIds/locationIdのみ)に揃え、
+ * 意図的にこれまでどおり無視する(詳細検索モードでは商品検索ボックス
+ * のqを置き換える既存仕様、statusIdは一覧側もまだAND対象にしていない
+ * ——docs/qa006-sidebar-loses-advanced-search-20260909.mdの「限界」参照)。
  */
 export async function buildInventoryExport(
   format: "csv" | "xlsx",
   filters: InventoryListFilters,
   advanced?: { query: AdvancedSearchQuery; fieldsByKey: Map<string, SearchFieldDef> },
 ): Promise<InventoryExportResult> {
+  // QA-006追加レビュー: 詳細検索が有効でも、DB側フィルタは空にせず
+  // deletedAt除外+カテゴリ/保管場所(あれば)だけを積む——statusId/qは
+  // 上のコメントのとおり意図的に含めない。詳細検索が無効なときは従来
+  // どおりbuildFilterConditions(deletedAt+カテゴリ/保管場所/状態すべて)。
+  const conditions = advanced ? [{ deletedAt: { attributeExists: false } }, ...buildCategoryLocationConditions(filters)] : buildFilterConditions(filters);
   const [categories, locations, statuses, customFieldDefs, items] = await Promise.all([
     listCategories(),
     listLocations(),
     listStatuses(),
     listCustomFieldDefinitions(),
-    fetchAllForExport(advanced ? {} : filters),
+    fetchAllForExport(conditions),
   ]);
   const categoriesById = new Map(categories.map((c) => [c.id, c]));
   const locationsById = new Map(locations.map((l) => [l.id, l]));
