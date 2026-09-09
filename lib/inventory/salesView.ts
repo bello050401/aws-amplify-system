@@ -1,7 +1,7 @@
 import "server-only";
 import { listAllInventory, listInventoryBySaleMonth } from "./queries";
 import { formatYearMonth, totalsFromAggregate, type SalesTotals } from "./salesAggregate";
-import { getMonthlyAggregates } from "./salesAggregateStore";
+import { getMonthlyAggregates, type StoredAggregate } from "./salesAggregateStore";
 import { summarizeSales, shiftYearMonth, type MonthlyTrendPoint, type SalesSummary } from "./sales";
 
 /**
@@ -47,24 +47,28 @@ export async function loadSalesView(year: number, month: number): Promise<SalesV
   for (let i = 11; i >= 0; i--) months.push(shiftYearMonth(year, month, -i));
   const keys = months.map((m) => formatYearMonth(m.year, m.month));
 
-  let aggregates: Awaited<ReturnType<typeof getMonthlyAggregates>>;
-  try {
-    aggregates = await getMonthlyAggregates(keys);
-  } catch (err) {
-    // 集計テーブルがまだデプロイされていない/読めない場合も、画面は
-    // 従来どおり出さなければならない。黙って0にしない。
-    console.warn("[sales] 集計テーブルを読めなかったため、その場で計算します", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    aggregates = new Map();
-  }
+  // 2026-09-09 追加指示(§5 速度): 集計テーブル(SalesMonthlyAggregate)の
+  // GetItemと、明細(Inventoryのその月ぶん)の読み取りは別テーブル・
+  // 互いに依存しない読み取りなので、直列awaitを並列化する。エラー処理は
+  // 従来どおり集計側だけに掛ける(明細取得が失敗した場合は例外がそのまま
+  // 呼び出し元へ伝播する、という挙動も変えない)。
+  const [aggregates, monthRecords] = await Promise.all([
+    getMonthlyAggregates(keys).catch((err) => {
+      // 集計テーブルがまだデプロイされていない/読めない場合も、画面は
+      // 従来どおり出さなければならない。黙って0にしない。
+      console.warn("[sales] 集計テーブルを読めなかったため、その場で計算します", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Map<string, StoredAggregate>();
+    }),
+    // 明細(その月に売れた商品の一覧)は集計に持てないので在庫を読む。
+    // ただし**その月のぶんだけ**。以前はここで全件(5,313件)読んでいた。
+    listInventoryBySaleMonth(year, month),
+  ]);
 
   const currentKey = formatYearMonth(year, month);
   const currentAggregate = aggregates.get(currentKey) ?? null;
 
-  // 明細(その月に売れた商品の一覧)は集計に持てないので在庫を読む。
-  // ただし**その月のぶんだけ**。以前はここで全件(5,313件)読んでいた。
-  const monthRecords = await listInventoryBySaleMonth(year, month);
   const live = summarizeSales(monthRecords, year, month);
 
   if (!currentAggregate) {

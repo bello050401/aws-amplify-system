@@ -71,9 +71,11 @@ export function InventoryFactsPanel({
   const sagawa = formatSagawaSizeShort(facts.sagawa);
 
   return (
-    <aside className="w-full text-[12px] text-gray-700" aria-label="在庫詳細・基本情報">
+    // 2026-09-09 追加指示: 「少し拡大」— 12px→13pxへ(過度な拡大は右
+    // パネル自体の実用面積を圧迫するため、控えめな1段階のみ)。
+    <aside className="w-full text-[13px] text-gray-700" aria-label="在庫詳細・基本情報">
       <div className="border border-gray-200">
-        <p className="border-b border-gray-200 bg-gray-50 px-3 py-2 text-[12px] font-bold text-gray-700">
+        <p className="border-b border-gray-200 bg-gray-50 px-3 py-2 text-[13px] font-bold text-gray-700">
           在庫詳細・基本情報
         </p>
         <div className="divide-y divide-gray-100">
@@ -151,7 +153,7 @@ export function InventoryFactsPanel({
 
       {/* §21 データ不足は隠さない。生成前でも「何が足りないか」が分かる。 */}
       {facts.warnings.length > 0 && (
-        <div className="mt-3 border border-amber-300 bg-amber-50 p-3 text-[11px] text-amber-800">
+        <div className="mt-3 border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">
           <p className="font-bold">商品説明の生成に足りない情報</p>
           <ul className="mt-1">
             {facts.warnings.map((w, i) => (
@@ -171,7 +173,7 @@ function yen(v: number | null | undefined): string | null {
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="py-1">
-      <p className="px-3 pt-1 text-[11px] font-bold text-gray-400">{title}</p>
+      <p className="px-3 pt-1 text-[12px] font-bold text-gray-400">{title}</p>
       <dl>{children}</dl>
     </div>
   );
@@ -186,7 +188,9 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 function Row({ label, value, multiline }: { label: string; value: string | null | undefined; multiline?: boolean }) {
   if (!value || !String(value).trim()) return null;
   return (
-    <div className="grid grid-cols-[7.5rem_1fr] gap-x-2 px-3 py-0.5">
+    // 2026-09-09: パネル幅を320px→384pxへ広げたぶん、ラベル列も
+    // 7.5rem→8rem(値側の折り返しを減らして読みやすくする)。
+    <div className="grid grid-cols-[8rem_1fr] gap-x-2 px-3 py-1">
       <dt className="text-gray-500">{label}</dt>
       <dd className={multiline ? "whitespace-pre-wrap break-words" : "break-words"}>{value}</dd>
     </div>

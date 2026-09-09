@@ -37,7 +37,10 @@ export type FactSafetyViolationCode =
   // 事実の捏造ではないが、どちらも「そのまま採用してはいけない」種類の
   // 問題なので、同じ violations の仕組みで扱う。
   | "INTRO_CONTAINS_DIMENSIONS"
-  | "GENERIC_PHRASING";
+  | "GENERIC_PHRASING"
+  // 2026-09-09 追加指示: 「◎商品のご紹介」に傷・錆・汚れ等のコンディション
+  // 説明が混入している(◎コンディションへ分離すべき情報)。
+  | "INTRO_CONTAINS_CONDITION";
 
 export interface FactSafetyViolation {
   code: FactSafetyViolationCode;

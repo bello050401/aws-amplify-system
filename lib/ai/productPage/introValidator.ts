@@ -172,3 +172,181 @@ export function findGenericPhrases(text: string): string[] {
 
 /** 紹介文で許容する一般表現の数。これを超えたら「テンプレ寄り」とみなす。 */
 export const MAX_GENERIC_PHRASES = 2;
+
+/**
+ * ── 「◎商品のご紹介」への状態(コンディション)混入の検査(2026-09-09 追加指示) ──
+ *
+ * 報告: ◎商品のご紹介に「傷」「錆」等の状態説明が書かれ、コンディション欄
+ * (buildConditionSection / conditionSection)へ分離されていない。寸法混入と
+ * 同じ構造の不具合 —— プロンプトで「書くな」と指示するだけでは守られない
+ * ことがある(寸法検査の実測がすでにそれを示している)ので、同じ形で
+ * 機械検査を用意する。
+ *
+ * ── 2026-09-10 再検収での修正(表記ゆれ・情報欠損時の創作・誤削除の3件) ──
+ *
+ * 初版は「TRUSTED_FACTS(conditionDisclosure)に**同じ表記**で現れている
+ * 語だけを違反とする」実装だった。実測で3つの不具合が見つかった。
+ *
+ *   1. 表記ゆれですり抜ける: 紹介文「脚にサビがあります」/開示文
+ *      「脚に錆」——カタカナと漢字で表記が違うだけで、disclosure側の
+ *      「錆」とintro側の「サビ」が文字列として一致せず、検出できない。
+ *   2. 情報欠損なのに検出できない: 紹介文「天板に小傷があります。」で
+ *      disclosureが空の場合、旧実装は比較対象が無いので無条件に合格に
+ *      していた。これは「確認していない状態を紹介文が言い切っている」
+ *      という**創作**であり、disclosureが空だからこそ危険 —— 本来
+ *      個体の状態説明は(開示の有無によらず)紹介文に書いてはならず、
+ *      コンディション欄でだけ扱う。
+ *   3. 素材の一般的な性質まで誤って状態説明として弾く:
+ *      「傷に強い素材を採用しています。」はこの個体の状態(傷がある)を
+ *      述べているのではなく、素材の耐久性という一般的な性質の説明。
+ *      disclosureに「傷」があるかどうかとは無関係に、これは削除すべき
+ *      情報ではない。
+ *
+ * ── 新しい判定方法 ──────────────────────────────────────────────
+ *
+ * disclosureとの文字列一致ではなく、**紹介文自身の言い回し**を見る。
+ *
+ *   - 「keyword + が/も + あり/ある/見られ/見受けられ/見つかり/目立ち/
+ *     生じ/出て/付いて/残って...」のように、その個体に実際にその状態が
+ *     存在する(または存在しない)と言い切っている形だけを「状態の主張」
+ *     とみなす。この形であれば、disclosureが空でも(=まだ何も確認して
+ *     いなくても)紹介文がそれを言い切ってよい理由にはならないので、常に
+ *     違反として扱う(不具合2の修正)。
+ *   - 「keyword + に強い/がつきにくい/を防ぐ/耐◯◯」のように、素材や
+ *     加工の一般的な性質を述べている形は状態の主張ではないため、
+ *     除外する(不具合3の修正)。
+ *   - 判定はkeywordの見た目の表記そのもの(CONDITION_VOCABに登録済みの
+ *     カタカナ/ひらがな/漢字いずれの表記でも)に対して行うため、
+ *     disclosure側の表記と一致している必要がない(不具合1の修正)。
+ *
+ * conditionDisclosureは引数として残す(呼び出し側・テストとの互換、
+ * および将来の監査用途のため)が、上記のとおり判定そのものはintro単体の
+ * 言い回しだけで完結する —— 「確認していない状態を作り出さない」という
+ * 目的の方が「disclosureとの重複」を見る目的より優先度が高いため。
+ */
+export type ConditionKeyword =
+  | "傷"
+  | "キズ"
+  | "汚れ"
+  | "シミ"
+  | "染み"
+  | "錆"
+  | "サビ"
+  | "スレ"
+  | "擦れ"
+  | "破れ"
+  | "ひび"
+  | "亀裂"
+  | "変色"
+  | "色あせ"
+  | "色褪せ"
+  | "剥がれ"
+  | "はがれ"
+  | "へこみ"
+  | "凹み"
+  | "欠け"
+  | "割れ"
+  | "焼け"
+  | "日焼け"
+  | "カビ"
+  | "におい"
+  | "臭い";
+
+const CONDITION_VOCAB: ConditionKeyword[] = [
+  "傷", "キズ", "汚れ", "シミ", "染み", "錆", "サビ", "スレ", "擦れ",
+  "破れ", "ひび", "亀裂", "変色", "色あせ", "色褪せ", "剥がれ", "はがれ",
+  "へこみ", "凹み", "欠け", "割れ", "焼け", "日焼け", "カビ", "におい", "臭い",
+];
+
+/**
+ * keywordの直後に続けば「その個体に実在する(/しない)状態」を言い切って
+ * いるとみなす語。否定形(「〜ありません」)も「あり」を含むため一緒に
+ * 拾う —— 状態の有無を断定している点では同じ扱いにする(文意の肯定/
+ * 否定までは判定しない軽量な検査である、という既存方針を踏襲)。
+ */
+const STATE_EXISTENCE_MARKERS = /(?:あり|ある|ございます|ございません|見られ|見受けられ|見つかり|目立ち|生じ|出て|付いて|ついて|残って|残り)/;
+
+/**
+ * keywordの前後がこれに当たれば、個体の状態ではなく素材・加工の一般的な
+ * 性質を述べていると判定し、状態の主張として扱わない
+ * (例: 「傷に強い素材」「汚れがつきにくい加工」「耐傷仕様」)。
+ */
+const GENERAL_PROPERTY_AFTER = /(?:に強|につよ|がつきにく|つきにく|つきづら|しにく|しづら|目立ちにく|目立ちづら|を防|防止|抗菌|抗ウイルス)/;
+const GENERAL_PROPERTY_BEFORE = /(?:耐|防)$/;
+
+/** keyword出現位置の直後、次の句読点までの短い window だけを見る。 */
+function afterContext(text: string, endIndex: number): string {
+  const raw = text.slice(endIndex, endIndex + 16);
+  const stop = raw.search(/[。\n]/);
+  return stop >= 0 ? raw.slice(0, stop) : raw;
+}
+
+export interface IntroConditionViolation {
+  keyword: ConditionKeyword;
+}
+
+/**
+ * 紹介文に、その個体の状態(傷・錆・汚れ等)を言い切っている箇所が
+ * ないかを検査する。
+ *
+ * conditionDisclosure は監査用に受け取るが、判定そのものはintroの
+ * 言い回しだけで行う —— disclosureが空/不一致であっても、紹介文が
+ * 個体の状態を言い切っていれば違反にする(「情報が無いのに創作した」
+ * ケースを見逃さないため。上のコメント参照)。
+ */
+export function findIntroConditionViolations(
+  intro: string | null | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- 監査用の引数。判定には使わない(コメント参照)。
+  conditionDisclosure?: string | null | undefined,
+): IntroConditionViolation[] {
+  if (!intro) return [];
+  const found: IntroConditionViolation[] = [];
+  const seen = new Set<ConditionKeyword>();
+  for (const keyword of CONDITION_VOCAB) {
+    let searchFrom = 0;
+    for (;;) {
+      const idx = intro.indexOf(keyword, searchFrom);
+      if (idx < 0) break;
+      const end = idx + keyword.length;
+      searchFrom = end;
+
+      const before = intro.slice(Math.max(0, idx - 2), idx);
+      const after = afterContext(intro, end);
+      if (GENERAL_PROPERTY_BEFORE.test(before) || GENERAL_PROPERTY_AFTER.test(after)) continue;
+      if (!STATE_EXISTENCE_MARKERS.test(after)) continue;
+
+      if (seen.has(keyword)) continue;
+      seen.add(keyword);
+      found.push({ keyword });
+    }
+  }
+  return found;
+}
+
+export interface IntroConditionSanitizeResult {
+  /** コンディション語を含む文を除いた紹介文。 */
+  text: string;
+  /** 実際に落とした文(監査用)。 */
+  removedSentences: string[];
+  /** 除去後も残っているか。 */
+  stillViolating: IntroConditionViolation[];
+}
+
+/**
+ * コンディションの語を含む文だけを落として紹介文を組み直す
+ * (stripDimensionSentences と同じ考え方。文ごと落とし、部分的に切り取らない)。
+ */
+export function stripConditionSentences(
+  intro: string,
+  conditionDisclosure: string | null | undefined,
+): IntroConditionSanitizeResult {
+  const sentences = splitSentences(intro);
+  const removed: string[] = [];
+  const kept = sentences.filter((s) => {
+    if (findIntroConditionViolations(s, conditionDisclosure).length === 0) return true;
+    removed.push(s.trim());
+    return false;
+  });
+  const text = kept.join("").replace(/\n{3,}/g, "\n\n").trim();
+  return { text, removedSentences: removed, stillViolating: findIntroConditionViolations(text, conditionDisclosure) };
+}

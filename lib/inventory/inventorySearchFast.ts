@@ -87,17 +87,29 @@ function ddb(): DynamoDBDocumentClient {
 
 type RawItem = Record<string, unknown>;
 
-/** queries.ts の parseCustomFields と同じ扱い(AWSJSON文字列 / 既にオブジェクト / 壊れた値)。 */
+/**
+ * queries.ts / customFieldsCodec.ts の parseCustomFields と同じ扱い
+ * (AWSJSON文字列 / 既にオブジェクト / 壊れた値)。二重JSONエンコード
+ * (文字列をparseした結果がまだ文字列)も再parseして復元する — 復元
+ * できない場合はnullに落とし、旧来どおり検索対象から静かに外れる
+ * (文字を0,1..キーの項目として誤って見せることはしない)。
+ */
 function parseCustomFieldsValue(raw: unknown): Record<string, unknown> | null {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw === "object") return raw as Record<string, unknown>;
-  if (typeof raw !== "string" || raw.trim() === "") return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
+  let value: unknown = raw;
+  let guard = 0;
+  while (typeof value === "string" && guard < 5) {
+    const trimmed = value.trim();
+    if (trimmed === "") return null;
+    try {
+      value = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+    guard++;
   }
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 /** 判定にかけられる形へ整える。列を絞っている以外は従来の行と同じ意味になるようにする。 */

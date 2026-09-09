@@ -101,17 +101,45 @@ export function stringifyCustomFields(fields: Record<string, unknown> | null | u
   return JSON.stringify(fields);
 }
 
+/**
+ * lib/inventory/customFieldsCodec.ts の parseCustomFields と同じ実装
+ * (複製の理由はファイル冒頭コメント参照)。ログには型・理由だけを出す
+ * (customFieldsは商品の追加項目という利用者データそのものなので、生の
+ * 値をログへ丸ごと吐かない。2026-09-10 再検収指示)。
+ */
 export function parseCustomFields(raw: unknown): Record<string, unknown> | null {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw === "string") {
+  // Keep in sync with lib/inventory/customFieldsCodec.ts's parseCustomFields
+  // (duplicated here on purpose — see the file-header note above; this file
+  // must stay import-free of "server-only" so the Lambda handler can use it).
+  // Re-parses while the result is still a string, bounded, to tolerate a
+  // double/triple-JSON-encoded stored value — otherwise a leftover string
+  // gets spread/`Object.entries()`'d downstream and produces "0"/"1"/...
+  // character-indexed rows instead of the real field keys.
+  let value: unknown = raw;
+  let guard = 0;
+  while (typeof value === "string" && guard < 5) {
+    const trimmed = value.trim();
+    if (trimmed === "") return null;
     try {
-      return JSON.parse(raw) as Record<string, unknown>;
+      value = JSON.parse(trimmed);
     } catch (err) {
-      console.error("[Inventory.customFields] failed to JSON.parse stored value:", raw, err);
+      console.error("[Inventory.customFields] failed to JSON.parse stored value", {
+        rawType: typeof raw,
+        reason: err instanceof Error ? err.message : String(err),
+      });
       return null;
     }
+    guard++;
   }
-  return raw as Record<string, unknown>;
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    console.error("[Inventory.customFields] stored value is not an object after decoding", {
+      rawType: typeof raw,
+      decodedType: Array.isArray(value) ? "array" : typeof value,
+    });
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
 
 // ── masters.tsから複製した純粋関数 ────────────────────────────────────

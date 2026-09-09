@@ -6,10 +6,13 @@ import type { BelloStyleProfile } from "@/lib/ai/productIntro/styleProfile";
 import { findSimilarArchivedProducts, type ArchivedStyleReference, type SimilarityHit } from "@/lib/base/archive/similar";
 import {
   findGenericPhrases,
+  findIntroConditionViolations,
   findIntroDimensionViolations,
   isIntroStillUsable,
+  stripConditionSentences,
   stripDimensionSentences,
   MAX_GENERIC_PHRASES,
+  type IntroConditionViolation,
   type IntroDimensionViolation,
 } from "./introValidator";
 import {
@@ -43,9 +46,10 @@ import { composeListingDescription } from "./descriptionSections";
 const MAX_ATTEMPTS = 2;
 
 /**
- * 紹介文の寸法検査は lib/ai/productPage/introValidator.ts が持つ。
- * SH/AH/座面高/肘高/cm/mm/3辺合計まで見るようになったので、この
- * ファイル内に別の正規表現を置かない(検査を2箇所に分けない)。
+ * 紹介文の寸法検査・コンディション混入検査は lib/ai/productPage/introValidator.ts
+ * が持つ。寸法はSH/AH/座面高/肘高/cm/mm/3辺合計まで、コンディションは
+ * TRUSTED_FACTS(conditionDisclosure)に実在する傷・錆等の語を見る。この
+ * ファイル内に別の正規表現やキーワード判定を置かない(検査を2箇所に分けない)。
  */
 
 export interface ProductPageGenerationInput {
@@ -221,19 +225,29 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
   let result;
   let sections: ProductPageSections;
   let introViolations: IntroDimensionViolation[] = [];
+  let conditionViolations: IntroConditionViolation[] = [];
 
-  // 「紹介文に寸法を書かない」はプロンプトで指示しても守られないことがある
-  // (実測: 12件中2件で W/D/H が紹介文へ入った)。守られたかどうかは
-  // 機械的に判定できるので、判定して1回だけ書き直させる。
+  // 「紹介文に寸法・コンディションを書かない」はプロンプトで指示しても守ら
+  // れないことがある(寸法は実測: 12件中2件で W/D/H が紹介文へ入った。
+  // コンディションも同じ構造の不具合として2026-09-09に報告された)。
+  // 守られたかどうかは機械的に判定できるので、判定して1回だけ書き直させる。
   // 何度も投げてもコストが増えるだけなので、試行は2回まで。
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let retryNote = "";
+    if (attempt > 1) {
+      const issues: string[] = [];
+      if (introViolations.length > 0) {
+        issues.push("- 「商品のご紹介」に寸法(W/D/H・幅・奥行・高さ・○×○)が書かれていました。寸法はサイズのセクションだけに書き、紹介文からは完全に取り除いてください。");
+      }
+      if (conditionViolations.length > 0) {
+        issues.push("- 「商品のご紹介」に傷・錆・汚れ等のコンディション(状態)の説明が書かれていました。状態の説明はコンディションのセクションだけに書き、紹介文からは完全に取り除いてください。");
+      }
+      retryNote = `\n\n【前回の出力で検出された問題(必ず直すこと)】\n${issues.join("\n")}`;
+    }
     try {
       result = await generateStructured<ProductPageSections & Record<string, unknown>>({
         task: "LISTING_DESCRIPTION_GENERATION",
-        systemPrompt:
-          attempt === 1
-            ? systemPrompt
-            : `${systemPrompt}\n\n【前回の出力で検出された問題(必ず直すこと)】\n- 「商品のご紹介」に寸法(W/D/H・幅・奥行・高さ・○×○)が書かれていました。寸法はサイズのセクションだけに書き、紹介文からは完全に取り除いてください。`,
+        systemPrompt: attempt === 1 ? systemPrompt : `${systemPrompt}${retryNote}`,
         userPrompt,
         toolSchema: PRODUCT_PAGE_TOOL,
         tier: "STANDARD",
@@ -255,31 +269,46 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
 
     sections = result.output;
     introViolations = findIntroDimensionViolations(sections.introduction ?? "");
-    if (introViolations.length === 0) break;
-    console.warn("[productPage] 紹介文に寸法が含まれていたため書き直します", {
+    conditionViolations = findIntroConditionViolations(sections.introduction ?? "", facts.conditionDisclosure);
+    if (introViolations.length === 0 && conditionViolations.length === 0) break;
+    console.warn("[productPage] 紹介文に寸法/コンディションが含まれていたため書き直します", {
       attempt,
       inventoryId: input.inventoryId,
-      matched: introViolations.map((v) => v.matched),
+      matchedDimensions: introViolations.map((v) => v.matched),
+      matchedCondition: conditionViolations.map((v) => v.keyword),
     });
   }
 
   sections = result!.output;
 
-  // ── 書き直しても残っていたら、機械的に落とす(指示書§5) ────────
+  // ── 書き直しても残っていたら、機械的に落とす(指示書§5。コンディション
+  //    混入も同じ扱いにする) ──────────────────────────────────────
   //
-  // 「再生成して駄目だったのでそのまま採用」は禁止されている。寸法を
-  // 含む**文ごと**落とし、残りで紹介文が成立するなら採用する。
-  // 成立しなければ失敗として返す —— 黙って通さない。
+  // 「再生成して駄目だったのでそのまま採用」は禁止されている。寸法・
+  // コンディションを含む**文ごと**落とし、残りで紹介文が成立するなら
+  // 採用する。成立しなければ失敗として返す —— 黙って通さない。
   let introSanitized = false;
-  if (introViolations.length > 0) {
-    const stripped = stripDimensionSentences(sections.introduction ?? "");
-    if (stripped.stillViolating.length === 0 && isIntroStillUsable(stripped.text)) {
-      sections = { ...sections, introduction: stripped.text };
+  if (introViolations.length > 0 || conditionViolations.length > 0) {
+    let text = sections.introduction ?? "";
+    let removedCount = 0;
+    if (introViolations.length > 0) {
+      const stripped = stripDimensionSentences(text);
+      text = stripped.text;
+      removedCount += stripped.removedSentences.length;
+      introViolations = stripped.stillViolating;
+    }
+    if (conditionViolations.length > 0) {
+      const stripped = stripConditionSentences(text, facts.conditionDisclosure);
+      text = stripped.text;
+      removedCount += stripped.removedSentences.length;
+      conditionViolations = stripped.stillViolating;
+    }
+    if (introViolations.length === 0 && conditionViolations.length === 0 && isIntroStillUsable(text)) {
+      sections = { ...sections, introduction: text };
       introSanitized = true;
-      introViolations = [];
-      console.warn("[productPage] 紹介文から寸法を含む文を除去しました", {
+      console.warn("[productPage] 紹介文から寸法/コンディションを含む文を除去しました", {
         inventoryId: input.inventoryId,
-        removed: stripped.removedSentences.length,
+        removed: removedCount,
       });
     } else {
       return {
@@ -287,14 +316,20 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         ok: false,
         sections,
         fullDescription: buildDescription(sections, input),
-        violations: introViolations.map((v) => ({
-          code: "INTRO_CONTAINS_DIMENSIONS" as const,
-          detail: `「◎商品のご紹介」に寸法が含まれています(${v.matched})。寸法は「◎サイズ」へ書いてください。`,
-        })),
+        violations: [
+          ...introViolations.map((v) => ({
+            code: "INTRO_CONTAINS_DIMENSIONS" as const,
+            detail: `「◎商品のご紹介」に寸法が含まれています(${v.matched})。寸法は「◎サイズ」へ書いてください。`,
+          })),
+          ...conditionViolations.map((v) => ({
+            code: "INTRO_CONTAINS_CONDITION" as const,
+            detail: `「◎商品のご紹介」にコンディションの説明が含まれています(${v.keyword})。状態の説明は「◎コンディション」へ書いてください。`,
+          })),
+        ],
         modelProvider: result!.providerId,
         modelName: result!.modelId,
         failureReason:
-          "「◎商品のご紹介」から寸法を取り除けませんでした。寸法は「◎サイズ」のセクションにだけ書きます。再生成してください。",
+          "「◎商品のご紹介」から寸法/コンディションを取り除けませんでした。寸法は「◎サイズ」、状態は「◎コンディション」のセクションにだけ書きます。再生成してください。",
       };
     }
   }

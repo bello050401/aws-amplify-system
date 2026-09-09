@@ -102,7 +102,8 @@ export default async function ListingPage({ params }: { params: { id: string } }
                 役割が重複していたので消した。生成エンジン・生成履歴の保存・
                 BASEからの情報補完は、そちらへ引き取ってある(消したのはUIだけ)。 */}
           </div>
-          <div className="hidden w-80 shrink-0 xl:block">
+          {/* xlでは従来幅320pxを維持。フォームの最大幅896pxを確保できる2xl以上だけ384pxへ拡張する。追従パネルの内部スクロールで下部項目にもアクセスできる。 */}
+          <div className="hidden w-80 shrink-0 2xl:w-96 xl:sticky xl:top-4 xl:block xl:max-h-[calc(100vh_-_96px_-_2rem)] xl:overflow-y-auto">
             <InventoryFactsPanel item={item} categoryName={categoryName} statusName={statusName} />
           </div>
         </div>
@@ -110,3 +111,5 @@ export default async function ListingPage({ params }: { params: { id: string } }
     </div>
   );
 }
+
+
