@@ -72,11 +72,23 @@ export async function loadSalesView(year: number, month: number): Promise<SalesV
     // が、12ヶ月推移だけは他の月のデータが要る。集計がある月はそれを
     // 使い、無い月だけ全件走査へ落ちる —— 「集計が無いから0円」には
     // 絶対にしない。
-    const missingTrendMonths = months.filter((m) => !aggregates.has(formatYearMonth(m.year, m.month)));
+    //
+    // 当月ぶんは上ですでに monthRecords を取得・集計済み(= live)なので、
+    // 走査要否の判定(と、実際の推移値の穴埋め)からは当月を除く ——
+    // 除かないと「当月の集計だけ無い」というごく普通のケース(集計バッチ
+    // はまだ回っていない)でも毎回、全在庫(5,313件)を余分に読みに行って
+    // しまう(当月分は live で足りているのに)。過去月にも集計欠損が
+    // 残っている場合だけ、その埋め合わせとして全件走査へ落ちる。
+    const missingTrendMonths = months.filter(
+      (m) => (m.year !== year || m.month !== month) && !aggregates.has(formatYearMonth(m.year, m.month)),
+    );
     const allRecords = missingTrendMonths.length > 0 ? await listAllInventory() : [];
     return {
       summary: live,
       trend: months.map((m) => {
+        if (m.year === year && m.month === month) {
+          return { year: m.year, month: m.month, totalSales: live.totalSales, totalGrossProfit: live.totalProfit };
+        }
         const agg = aggregates.get(formatYearMonth(m.year, m.month));
         if (agg) return { year: m.year, month: m.month, totalSales: agg.totalSales, totalGrossProfit: agg.totalProfit };
         const one = summarizeSales(allRecords, m.year, m.month);
