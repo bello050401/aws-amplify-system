@@ -647,7 +647,8 @@ function testConditionPhrasing() {
   assertTrue(!isDamageFragment("天板の右手前に長さ3cmの傷があります"), "断片ではない: 場所や大きさが書かれている");
   assertTrue(!isDamageFragment("背面に傷"), "断片ではない: 場所が書かれている(削ると事実が減る)");
 
-  // 場所が書かれているものは、その事実を保ったまま句点だけ整える。
+  // 場所が書かれているものは、その事実を保ったまま句点だけ整える
+  // (今回の改善で「がございます」文末になったが、場所の文字列は変わらない)。
   const located = normalizeConditionDisclosure("背面に傷")!;
   assertTrue(located.text.startsWith("背面に傷"), "§5 場所の情報を落とさない");
   assertTrue(located.text.includes(PHOTO_REFERENCE_SENTENCE), "§5 傷があるので写真の案内は添える");
@@ -655,6 +656,82 @@ function testConditionPhrasing() {
   assertEqual(normalizeConditionDisclosure(null), null, "未登録なら何も返さない");
   // メンテナンスだけの記述はここへ来ない(呼び出し前に落ちている)。
   assertEqual(stripMaintenanceOnlyLines("リンサー"), null, "§5 メンテナンス情報のみは傷情報として扱わない");
+}
+
+/**
+ * 追加指示 §5 の再改善: 「天板小傷、脚にサビ」のような、場所と傷語が
+ * 「、」で並ぶだけの断片。
+ *
+ * これは isDamageFragment(場所があれば断片ではないと判定)には引っかからず、
+ * 改善前は「天板小傷、脚にサビ。」のように体言止めの断片へ句点を付けるだけ
+ * だった(このテストで固定するのは改善後の挙動)。
+ */
+function testConditionPhrasingLocatedFragments() {
+  // 助詞「に」の有無が混在していても、場所ごとの事実を保ったまま1文にする。
+  assertEqual(
+    normalizeConditionDisclosure("天板小傷、脚にサビ")?.text,
+    "天板に小傷、脚にサビがございます。詳細はお写真をご確認ください。",
+    "§5 場所+傷語が「、」で並ぶ断片を自然文にする(助詞が無い側にも「に」を補う)",
+  );
+  assertEqual(
+    normalizeConditionDisclosure("天板に小傷、脚部にサビあり")?.text,
+    "天板に小傷、脚部にサビがございます。詳細はお写真をご確認ください。",
+    "§5 「あり」等の付随語が付いていても同様に整える",
+  );
+
+  // サビは新規に追加した語彙。使用に伴うと断定できないので「使用に伴う」を付けない。
+  assertEqual(
+    normalizeConditionDisclosure("サビあり")?.text,
+    "一部にサビがございます。詳細はお写真をご確認ください。",
+    "§5 サビは原因を断定できないため「使用に伴う」を付けない",
+  );
+  assertEqual(
+    normalizeConditionDisclosure("小傷・サビあり")?.text,
+    "一部に小傷やサビがございます。詳細はお写真をご確認ください。",
+    "§5 使用由来の語(小傷)とサビが混ざれば「使用に伴う」は付けない",
+  );
+
+  // §21 重大な欠け/破損を軽微に見せない: 程度・大きさの語が前置きに
+  // 混ざっているものは場所と決めつけて書き換えず、そのまま残す。
+  assertEqual(
+    normalizeConditionDisclosure("座面に大きな欠けあり")?.text,
+    "座面に大きな欠けあり。詳細はお写真をご確認ください。",
+    "§21 「大きな」を場所扱いで素通りさせず、書き換え自体を諦めて事実を残す",
+  );
+  assertTrue(
+    normalizeConditionDisclosure("座面に大きな欠けあり")!.text.includes("大きな"),
+    "§21 重大な欠けを軽微な表現に弱めない",
+  );
+
+  // 清掃・研磨等のメンテナンス言及と傷の記述が同じ行に既にある場合、
+  // 元々「、」でつながった1文であればそのまま(=既に文を繋げた状態)を保つ。
+  assertEqual(
+    normalizeConditionDisclosure("研磨済み、天板に小傷あり")?.text,
+    "研磨済み、天板に小傷あり。詳細はお写真をご確認ください。",
+    "§5 メンテナンス言及と傷の記述が既に1文でつながっていれば、そのまま維持する",
+  );
+
+  // 既存の§26実例(寸法・配送・返品固定文)には影響しないことの確認は
+  // testShippingSection / testComposeListingDescription 側で別途固定済み。
+
+  // ── canonical経路(buildConditionSection)での確認 ──────────────
+  //
+  // §5のプロンプト側(lib/ai/productPage/prompt.ts)ではなく、実際に本番で
+  // 使われる descriptionSections.ts の buildConditionSection → その内部で
+  // normalizeConditionDisclosure が呼ばれる経路をそのまま通す(架空の在庫入力)。
+  const fictionalMaintenance = detectMaintenance({});
+  const before = "天板小傷、脚にサビ。詳細はお写真をご確認ください。"; // 改善前の生の出力(このテストの直前の assertEqual で確認済み)。
+  const canonical = buildConditionSection({
+    maintenance: fictionalMaintenance,
+    nonFabric: false,
+    conditionDisclosure: "天板小傷、脚にサビ",
+    goodConditionEvidence: false,
+  });
+  assertTrue(
+    canonical.text.includes("天板に小傷、脚にサビがございます。"),
+    "§5 canonical経路(buildConditionSection)でも自然文になる(before: 「" + before.split("。")[0] + "。」)",
+  );
+  assertTrue(!canonical.text.includes(GOOD_CONDITION_SENTENCE), "§5 傷の記述があるので良好の定型文は使わない");
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -832,6 +909,7 @@ function main() {
 
   console.log("\n── 追加指示 §5 コンディション表現の正規化 ─────────");
   testConditionPhrasing();
+  testConditionPhrasingLocatedFragments();
 
   console.log("\n── §20/§21 Product Context ─────────────────────────");
   testListingFacts();
