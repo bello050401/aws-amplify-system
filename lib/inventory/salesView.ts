@@ -113,14 +113,27 @@ export async function loadSalesView(year: number, month: number): Promise<SalesV
   };
 
   // 推移。集計が無い月だけ、その月ぶんを引いて埋める(0で埋めない)。
-  const trend: MonthlyTrendPoint[] = await Promise.all(
-    months.map(async (m) => {
-      const agg = aggregates.get(formatYearMonth(m.year, m.month));
-      if (agg) return { year: m.year, month: m.month, totalSales: agg.totalSales, totalGrossProfit: agg.totalProfit };
-      const one = summarizeSales(await listInventoryBySaleMonth(m.year, m.month), m.year, m.month);
-      return { year: m.year, month: m.month, totalSales: one.totalSales, totalGrossProfit: one.totalProfit };
-    }),
-  );
+  //
+  // 2026-09-10 追加修正(§速度): 以前はここを Promise.all で「月ごとに
+  // listInventoryBySaleMonth(=在庫全件Scan)を個別に呼ぶ」形にしていた
+  // ——集計テーブルの再構築バッチがまだ追いついておらず、推移対象の
+  // 12ヶ月のうち複数が集計欠損だと、**欠損月の数だけ在庫全件Scanが
+  // 並列で走る**(5,313件 × 欠損月数、同期中にDynamoDBの
+  // 負荷が重なる可能性がある。実エラーとの因果は未確認)。
+  // 上の「当月の集計が無い」分岐(2abfc95で先に直した側)と同じ考え方
+  // ——欠損月が1つでもあれば listAllInventory を1回だけ呼び、その1回の
+  // 結果から欠損月ぶんをまとめて計算する。DBへの往復も転送量も
+  // 「欠損月の数」に比例しなくなる(常に高々1回)。並列awaitが不要に
+  // なったため同期のPromise.allも外した。
+  const missingPastMonths = months.filter((m) => !aggregates.has(formatYearMonth(m.year, m.month)));
+  const allRecordsForTrend = missingPastMonths.length > 0 ? await listAllInventory() : [];
+  const trend: MonthlyTrendPoint[] = months.map((m) => {
+    const agg = aggregates.get(formatYearMonth(m.year, m.month));
+    if (agg) return { year: m.year, month: m.month, totalSales: agg.totalSales, totalGrossProfit: agg.totalProfit };
+    const one = summarizeSales(allRecordsForTrend, m.year, m.month);
+    return { year: m.year, month: m.month, totalSales: one.totalSales, totalGrossProfit: one.totalProfit };
+  });
 
   return { summary, trend, servedFromAggregate: true, aggregateRebuiltAt: currentAggregate.rebuiltAt };
 }
+
