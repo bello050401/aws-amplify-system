@@ -967,6 +967,7 @@ async function main() {
   testSpecNounDetection();
   testUncertainFactsAreNotGivenToAi();
   testAsksKnownFact();
+  testAsksKnownDeliveryDate();
   testUnnecessaryRefusal();
   testClaimsUnsentAttachment();
   testModelNumberMismatchDetection();
@@ -1009,6 +1010,67 @@ function testAsksKnownFact() {
 
   const plain = validate("ご希望の金額を承りました。送料の確認ができ次第、改めてご連絡いたします。");
   assertTrue(!plain.codes.includes("DEFLECTS_TO_EXTERNAL_CHANNEL"), "検査: 通常の返信は誘導とみなさない");
+}
+
+/**
+ * 既に分かっているお届け日を尋ねていないか(2026-09-11 QA是正)。
+ *
+ * task_9a818ec1788ec5315c のQAが、実際のvalidateReplyDraftへ
+ * knownDeliveryDate="2026-09-20" を渡して直接実行したところ、受領確認の
+ * 文「ご希望のお届け日は既にお知らせいただいております。」がASKS_KNOWN_FACT
+ * として誤検出された(これは質問ではなく確認の報告)。一方、対照の
+ * 「ご希望のお届け日を教えていただけますか。」は正しく検出された。
+ * 語幹(教え/お知らせ等)の有無だけでなく、依頼の語尾が続く場合だけを
+ * 「尋ねている」とみなすよう修正した後も、この非対称(受領確認は通す・
+ * 真の再質問は弾く)が保たれることを固定する。
+ */
+function testAsksKnownDeliveryDate() {
+  // QAが実際に誤検出した受領確認の文。尋ねているのではなく、既に答えを
+  // もらった旨の報告なので弾いてはいけない。
+  const received = validate("ご希望のお届け日は既にお知らせいただいております。", {
+    knownDeliveryDate: "2026-09-20",
+  });
+  assertTrue(!received.codes.includes("ASKS_KNOWN_FACT"), "検査: お届け日の受領確認は再質問とみなさない");
+
+  // 対照。同じ知識状態で、こちらは実際に尋ねている。
+  const asked = validate("ご希望のお届け日を教えていただけますか。", { knownDeliveryDate: "2026-09-20" });
+  assertTrue(asked.codes.includes("ASKS_KNOWN_FACT"), "検査: お届け日が分かっているのに尋ねたら弾く");
+
+  // 丁寧形の言い換え(真の再質問)。
+  const askedPolite = validate("お手数をおかけしますが、ご希望のお届け日をあらためてお知らせいただけますでしょうか。", {
+    knownDeliveryDate: "2026-09-20",
+  });
+  assertTrue(askedPolite.codes.includes("ASKS_KNOWN_FACT"), "検査: 言い換えた再質問も弾く");
+
+  // 既知の日付を承知した文(質問でも報告でもない、ただの確認)。
+  const acknowledged = validate("ご希望のお届け日、9月20日で承知いたしました。手配のうえご案内いたします。", {
+    knownDeliveryDate: "2026-09-20",
+  });
+  assertTrue(!acknowledged.codes.includes("ASKS_KNOWN_FACT"), "検査: 既知日を承知しただけの文は弾かない");
+
+  // 「教えていただいた」旨(過去形の受領報告)。
+  const toldAlready = validate("お届け日については先ほど教えていただき、ありがとうございます。", {
+    knownDeliveryDate: "2026-09-20",
+  });
+  assertTrue(!toldAlready.codes.includes("ASKS_KNOWN_FACT"), "検査: 「教えていただいた」旨の報告は弾かない");
+
+  // お知らせ不要という文(語幹はあるが依頼形ではない)。
+  const noticeUnnecessary = validate("お届け日について、追加のお知らせは不要です。このまま手配いたします。", {
+    knownDeliveryDate: "2026-09-20",
+  });
+  assertTrue(!noticeUnnecessary.codes.includes("ASKS_KNOWN_FACT"), "検査: 「お知らせ不要」という文は弾かない");
+
+  // 日付が未知なら、尋ねてよい。
+  const unknownDate = validate("ご希望のお届け日を教えていただけますか。", { knownDeliveryDate: null });
+  assertTrue(!unknownDate.codes.includes("ASKS_KNOWN_FACT"), "検査: お届け日が不明なら尋ねてよい");
+
+  // 必要な代替日確認(指定日に配送できないため、別の候補日を尋ねる)。
+  // 既知の日付そのものを尋ね直しているわけではないので弾かない。
+  const alternative = validate(
+    "恐れ入りますが、ご指定のお届け日には配送できかねるため、別のお届け日をあらためて教えていただけますか。",
+    { knownDeliveryDate: "2026-09-20" },
+  );
+  assertTrue(!alternative.codes.includes("ASKS_KNOWN_FACT"), "検査: 必要な代替お届け日の確認は弾かない");
 }
 
 /**

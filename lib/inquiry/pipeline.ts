@@ -1143,6 +1143,11 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       unresolved,
       // 既に分かっている配送先を、もう一度尋ねる返信を出さない。
       knownDestinationPrefecture: shipping?.destinationPrefecture ?? destinationPrefecture ?? null,
+      // 既に分かっているお届け日を、もう一度尋ねる返信を出さない(配送先と
+      // 同じ理由・同じ追跡経路: conversationContext.ts の PendingQuestion)。
+      // workingContext は既にマージ済み(上のmergeConversationContext呼び出し
+      // 後)なので、今回答えた分・以前の会話で分かっていた分の両方を拾える。
+      knownDeliveryDate: workingContext.order.requestedDeliveryDate ?? null,
       // ご希望に沿えるのに断る返信を出さない。
       requestIsWithinOffer: (negotiationResult?.staffCard?.differenceFromRequestedYen ?? -1) >= 0,
       // 受け取っていない写真に言及させない。
