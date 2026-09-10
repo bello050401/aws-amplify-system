@@ -6,8 +6,7 @@ import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/se
 import { isMercariConnected } from "@/lib/listing/mercari/tokenAccess";
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
-import { ListingForm } from "./ListingForm";
-import { InventoryFactsPanel } from "./InventoryFactsPanel";
+import { ListingWorkspace } from "./ListingWorkspace";
 
 /**
  * BELLO統合改修 master指示書 Phase D — 在庫詳細画面(app/inventory/
@@ -86,27 +85,21 @@ export default async function ListingPage({ params }: { params: { id: string } }
 
             【モバイルで下へ回さない】§3が明示している。右パネルはPC作業を
             効率化するためのもので、狭い画面では出品フォームの操作を
-            邪魔するだけ。`hidden xl:block` で**描画ごと**落とす。 */}
-        <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
-          <div className="min-w-0 flex-1">
-            <ListingForm
-              inventoryId={item.id}
-              inventoryName={item.name}
-              images={orderedNormalImages}
-              initialDraft={draft}
-              initialChannelListing={channelListing}
-              mercariConnected={mercariConnected}
-            />
-            {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
-                ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
-                役割が重複していたので消した。生成エンジン・生成履歴の保存・
-                BASEからの情報補完は、そちらへ引き取ってある(消したのはUIだけ)。 */}
-          </div>
-          {/* xlでは従来幅320pxを維持。フォームの最大幅896pxを確保できる2xl以上だけ384pxへ拡張する。追従パネルの内部スクロールで下部項目にもアクセスできる。 */}
-          <div className="hidden w-80 shrink-0 2xl:w-96 xl:sticky xl:top-4 xl:block xl:max-h-[calc(100vh_-_96px_-_2rem)] xl:overflow-y-auto">
-            <InventoryFactsPanel item={item} categoryName={categoryName} statusName={statusName} />
-          </div>
-        </div>
+            邪魔するだけ。`hidden xl:block` で**描画ごと**落とす(具体的な
+            幅の割り振り・レイアウトはListingWorkspace.tsx側に集約した)。 */}
+        <ListingWorkspace
+          item={item}
+          categoryName={categoryName}
+          statusName={statusName}
+          images={orderedNormalImages}
+          initialDraft={draft}
+          initialChannelListing={channelListing}
+          mercariConnected={mercariConnected}
+        />
+        {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
+            ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
+            役割が重複していたので消した。生成エンジン・生成履歴の保存・
+            BASEからの情報補完は、そちらへ引き取ってある(消したのはUIだけ)。 */}
       </div>
     </div>
   );

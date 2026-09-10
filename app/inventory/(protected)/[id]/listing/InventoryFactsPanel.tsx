@@ -1,3 +1,5 @@
+"use client";
+
 import type { InventoryDetail } from "@/lib/inventory/queries";
 import { buildListingFacts } from "@/lib/ai/productPage/listingFacts";
 import { formatSeatDimensionsLine } from "@/lib/inventory/seatDimensions";
@@ -5,6 +7,7 @@ import { MAINTENANCE_LABEL } from "@/lib/inventory/maintenance";
 import { formatSagawaSizeShort } from "@/lib/shipping/sagawaSize";
 import { SHIPPING_RANK_LABEL } from "@/lib/shipping/rank";
 import { baseBrandHint } from "@/lib/base/archive/similar";
+import type { ListingShippingMethod } from "@/lib/listing/types";
 
 /**
  * EC出品画面の右側「在庫詳細・基本情報」(2026-09-04 EC出品改修指示書 §2)。
@@ -23,17 +26,31 @@ import { baseBrandHint } from "@/lib/base/archive/similar";
  *
  * ── モバイルでは出さない(§3) ────────────────────────────────────
  *
- * 表示/非表示は呼び出し側(page.tsx)が `hidden xl:block` で決める。
- * このコンポーネント自体は幅の判断をしない。
+ * 表示/非表示・幅は呼び出し側(ListingWorkspace.tsx)が `hidden xl:block`
+ * で決める。このコンポーネント自体は幅の判断をしない。
+ *
+ * ── なぜ Client Component なのか(2026-09-10追加指示) ──────────────
+ *
+ * 座面寸法・配送ランク・佐川サイズの警告は、担当者が選択中の配送方法
+ * (ListingForm.tsx の配送方法セレクト)によって変わる(§下の
+ * shippingMethod 参照)。選択を切り替えた瞬間にこのパネルの警告も
+ * 変わってほしい —— Server Componentのままだと初回描画時の値で固定
+ * されてしまい、切り替えても反映されない。状態自体は親の
+ * ListingWorkspace.tsx が持ち、ここへは値だけ渡す。buildListingFacts は
+ * DBにも外部にも触らない純粋関数なので、クライアント側で呼んでも
+ * 二重の取得・書き込みは発生しない。
  */
 export function InventoryFactsPanel({
   item,
   categoryName,
   statusName,
+  shippingMethod,
 }: {
   item: InventoryDetail;
   categoryName: string | null;
   statusName: string | null;
+  /** 担当者が選択中の配送方法(ListingForm.tsxと共有)。 */
+  shippingMethod: ListingShippingMethod;
 }) {
   const customFields = (item.customFields ?? {}) as Record<string, unknown>;
   const cf = (key: string): string | null => {
@@ -56,6 +73,7 @@ export function InventoryFactsPanel({
     note: item.note ?? null,
     listingNotes: item.listingNotes ?? null,
     adminMemo: item.adminMemo ?? null,
+    shippingMethod,
   });
 
   const maintenanceLabels = (
@@ -71,11 +89,12 @@ export function InventoryFactsPanel({
   const sagawa = formatSagawaSizeShort(facts.sagawa);
 
   return (
-    // 2026-09-09 追加指示: 「少し拡大」— 12px→13pxへ(過度な拡大は右
-    // パネル自体の実用面積を圧迫するため、控えめな1段階のみ)。
-    <aside className="w-full text-[13px] text-gray-700" aria-label="在庫詳細・基本情報">
+    // 2026-09-09 追加指示: 「少し拡大」— 12px→13pxへ。
+    // 2026-09-10追加指示: パネルの実用幅が広がった(ListingWorkspace.tsx
+    // 参照)ぶん、本文をさらに13px→14pxへ(妥当な本文サイズの目安)。
+    <aside className="w-full text-[14px] text-gray-700" aria-label="在庫詳細・基本情報">
       <div className="border border-gray-200">
-        <p className="border-b border-gray-200 bg-gray-50 px-3 py-2 text-[13px] font-bold text-gray-700">
+        <p className="border-b border-gray-200 bg-gray-50 px-3 py-2 text-[14px] font-bold text-gray-700">
           在庫詳細・基本情報
         </p>
         <div className="divide-y divide-gray-100">
@@ -153,7 +172,7 @@ export function InventoryFactsPanel({
 
       {/* §21 データ不足は隠さない。生成前でも「何が足りないか」が分かる。 */}
       {facts.warnings.length > 0 && (
-        <div className="mt-3 border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">
+        <div className="mt-3 border border-amber-300 bg-amber-50 p-3 text-[13px] text-amber-800">
           <p className="font-bold">商品説明の生成に足りない情報</p>
           <ul className="mt-1">
             {facts.warnings.map((w, i) => (
@@ -173,7 +192,7 @@ function yen(v: number | null | undefined): string | null {
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="py-1">
-      <p className="px-3 pt-1 text-[12px] font-bold text-gray-400">{title}</p>
+      <p className="px-3 pt-1 text-[13px] font-bold text-gray-400">{title}</p>
       <dl>{children}</dl>
     </div>
   );

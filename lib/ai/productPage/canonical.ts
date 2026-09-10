@@ -283,6 +283,8 @@ export async function generateCanonicalProductPage(
     note: item.note ?? null,
     listingNotes: item.listingNotes ?? null,
     adminMemo: item.adminMemo ?? null,
+    // 2026-09-10追加指示: 座面・配送の警告を選択中の配送方法に合わせる。
+    shippingMethod,
   });
 
   const conditionSection = buildConditionSection({

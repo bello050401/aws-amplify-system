@@ -29,6 +29,7 @@ import {
 import {
   formatSeatDimensionsLine,
   parseSeatDimensionsText,
+  requiresSeatDimensions,
   resolveSeatDimensions,
 } from "@/lib/inventory/seatDimensions";
 import { detectMaintenance, looksNonFabric, stripMaintenanceOnlyLines } from "@/lib/inventory/maintenance";
@@ -795,6 +796,147 @@ function testListingFacts() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 2026-09-10追加指示: 警告の適用条件(座面・配送方法・材質)
+ * ══════════════════════════════════════════════════════════════════ */
+
+function testRequiresSeatDimensions() {
+  // カテゴリがあればカテゴリだけで決める。
+  assertEqual(requiresSeatDimensions({ categoryName: "ダイニングチェア" }), true, "椅子カテゴリは座面必須");
+  assertEqual(requiresSeatDimensions({ categoryName: "ソファ" }), true, "ソファカテゴリは座面必須");
+  assertEqual(requiresSeatDimensions({ categoryName: "スツール" }), true, "スツールカテゴリは座面必須");
+  assertEqual(requiresSeatDimensions({ categoryName: "デスク" }), false, "デスクカテゴリは座面対象外");
+  assertEqual(requiresSeatDimensions({ categoryName: "テーブル" }), false, "テーブルカテゴリは座面対象外");
+  assertEqual(requiresSeatDimensions({ categoryName: "照明" }), false, "照明カテゴリは座面対象外");
+
+  // 商品名の「チェア」等の語だけを無条件の根拠にしない —— カテゴリが
+  // デスクなら、商品名にチェアらしき語が混ざっていても対象外を優先する。
+  assertEqual(
+    requiresSeatDimensions({ categoryName: "デスク", name: "チェアサイドデスク" }),
+    false,
+    "カテゴリがデスクなら商品名にチェアの語があっても座面対象外",
+  );
+
+  // カテゴリ未設定のときだけ商品名を見る。
+  assertEqual(requiresSeatDimensions({ categoryName: null, name: "北欧モダンチェア" }), true, "カテゴリ未設定: 商品名から椅子と判定");
+  assertEqual(requiresSeatDimensions({ categoryName: null, name: "ナチュラルデスク" }), false, "カテゴリ未設定: 商品名からデスクと判定");
+  // 商品名にデスク/テーブル/照明を示す語があれば、座面を示す語より優先して対象外にする。
+  assertEqual(
+    requiresSeatDimensions({ categoryName: null, name: "チェアサイドテーブル" }),
+    false,
+    "カテゴリ未設定: 商品名にテーブルの語があれば対象外を優先する",
+  );
+  assertEqual(requiresSeatDimensions({ categoryName: null, name: null }), false, "カテゴリ・商品名どちらも無ければ対象外");
+}
+
+const DESK_INPUT = {
+  name: "北欧モダン ワークデスク",
+  categoryName: "デスク",
+  brand: null,
+  width: null,
+  depth: null,
+  height: null,
+  overallLength: null,
+  seatDimensionsField: null,
+  material: null,
+  conditionRating: null,
+  damageNotes: null,
+  note: null,
+  listingNotes: null,
+  adminMemo: null,
+};
+
+function testSeatWarningScopedToSeatedFurniture() {
+  // デスク: 座面寸法が無くても座面の警告を出さない(実際のユーザー報告)。
+  const desk = buildListingFacts(DESK_INPUT);
+  assertTrue(
+    !desk.warnings.some((w) => w.includes("座面寸法")),
+    "デスクは座面が無くて当然なので座面寸法の警告を出さない",
+  );
+
+  // 照明・テーブルも同様。
+  const lighting = buildListingFacts({ ...DESK_INPUT, name: "北欧モダン フロアランプ", categoryName: "照明" });
+  assertTrue(!lighting.warnings.some((w) => w.includes("座面寸法")), "照明は座面寸法の警告を出さない");
+  const table = buildListingFacts({ ...DESK_INPUT, name: "北欧モダン ダイニングテーブル", categoryName: "テーブル" });
+  assertTrue(!table.warnings.some((w) => w.includes("座面寸法")), "テーブルは座面寸法の警告を出さない");
+
+  // 椅子・ソファは座面寸法が無ければ引き続き警告する。
+  const chairNoSeat = buildListingFacts({ ...CHAIR_INPUT, seatDimensionsField: null, width: null, depth: null, height: null });
+  assertTrue(
+    chairNoSeat.warnings.some((w) => w.includes("座面寸法が登録されていません")),
+    "椅子は座面寸法が全欠なら引き続き警告する",
+  );
+  const sofa = buildListingFacts({ ...CHAIR_INPUT, categoryName: "ソファ", seatDimensionsField: null });
+  assertTrue(sofa.warnings.some((w) => w.includes("座面寸法が登録されていません")), "ソファも同様に警告する");
+
+  // 一部だけ登録: 椅子・ソファでは「一部だけ」の警告。
+  const partialSeat = buildListingFacts({ ...CHAIR_INPUT, seatDimensionsField: "高さ38" });
+  assertTrue(
+    partialSeat.warnings.some((w) => w.includes("座面寸法の一部だけが登録されています")),
+    "座面寸法が一部だけなら一部警告を出す(椅子)",
+  );
+  assertTrue(partialSeat.warnings.some((w) => w.includes("幅・奥行")), "欠けている軸(幅・奥行)を名指しする");
+
+  // 商品名に関連語(チェア等)が入っていても、カテゴリがデスクなら対象外。
+  const deskWithChairWord = buildListingFacts({ ...DESK_INPUT, name: "チェアサイド ワークデスク" });
+  assertTrue(
+    !deskWithChairWord.warnings.some((w) => w.includes("座面寸法")),
+    "商品名にチェアの語があってもカテゴリがデスクなら座面の警告を出さない",
+  );
+
+  // 全軸そろっている椅子は座面の警告そのものが出ない。
+  const fullSeat = buildListingFacts(CHAIR_INPUT);
+  assertTrue(!fullSeat.warnings.some((w) => w.includes("座面寸法")), "座面寸法が3軸そろっていれば警告なし");
+}
+
+function testShippingWarningFollowsSelectedMethod() {
+  // 寸法が無い(=どちらの配送方法でも確定できない)商品で、選択中の方法
+  // だけに合わせて警告を出し分ける。
+  const noDims = { ...CHAIR_INPUT, width: null, depth: null, height: null };
+
+  const kazaiSelected = buildListingFacts({ ...noDims, shippingMethod: "KAZAI" });
+  assertTrue(
+    kazaiSelected.warnings.some((w) => w.includes("配送ランクを確定できません")),
+    "らくらく家財便を選択中: 家財便の警告を出す",
+  );
+  assertTrue(
+    !kazaiSelected.warnings.some((w) => w.includes("佐川急便のサイズを判定できません")),
+    "らくらく家財便を選択中: 佐川の警告は出さない",
+  );
+
+  const sagawaSelected = buildListingFacts({ ...noDims, shippingMethod: "SAGAWA" });
+  assertTrue(
+    sagawaSelected.warnings.some((w) => w.includes("佐川急便のサイズを判定できません")),
+    "佐川急便を選択中: 佐川の警告を出す",
+  );
+  assertTrue(
+    !sagawaSelected.warnings.some((w) => w.includes("配送ランクを確定できません")),
+    "佐川急便を選択中: 家財便の警告は出さない",
+  );
+
+  // 未指定は既定(らくらく家財便)として扱う —— canonical.ts の配送方法解決と同じ既定。
+  const omitted = buildListingFacts(noDims);
+  assertEqual(omitted.warnings, kazaiSelected.warnings, "配送方法を渡さなければ既定(らくらく家財便)として扱う");
+
+  // ランク・サイズ自体はどちらの選択でも常に確定させる(表示・監査用)。
+  // 切り替えても取り消し線にならないことを確かめる。
+  const dims = { ...CHAIR_INPUT }; // 3辺合計178.5cm → 家財B / 佐川200
+  const kazaiWithDims = buildListingFacts({ ...dims, shippingMethod: "KAZAI" });
+  const sagawaWithDims = buildListingFacts({ ...dims, shippingMethod: "SAGAWA" });
+  assertEqual(kazaiWithDims.shippingRank, sagawaWithDims.shippingRank, "配送方法の選択に関わらず家財便ランクは同じ値を返す");
+  assertEqual(kazaiWithDims.sagawa.sizeClass?.size, sagawaWithDims.sagawa.sizeClass?.size, "配送方法の選択に関わらず佐川サイズは同じ値を返す");
+}
+
+function testMaterialUnknownDoesNotWarn() {
+  const noMaterial = buildListingFacts({ ...CHAIR_INPUT, material: null });
+  assertEqual(noMaterial.material, null, "材質未登録は値としてnullのまま(推測しない)");
+  assertTrue(!noMaterial.warnings.some((w) => w.includes("材質")), "材質未登録は警告を出さない");
+
+  const unknownMaterial = buildListingFacts({ ...CHAIR_INPUT, material: "不明" });
+  assertEqual(unknownMaterial.material, null, "「不明」は値として採らない(既存挙動を維持)");
+  assertTrue(!unknownMaterial.warnings.some((w) => w.includes("材質")), "材質「不明」も警告を出さない");
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * §4/§27 商品説明全体
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -913,6 +1055,12 @@ function main() {
 
   console.log("\n── §20/§21 Product Context ─────────────────────────");
   testListingFacts();
+
+  console.log("\n── 2026-09-10追加指示: 警告の適用条件 ─────────────");
+  testRequiresSeatDimensions();
+  testSeatWarningScopedToSeatedFurniture();
+  testShippingWarningFollowsSelectedMethod();
+  testMaterialUnknownDoesNotWarn();
 
   console.log("\n── §4/§27 商品説明全体 ─────────────────────────────");
   testComposeListingDescription();

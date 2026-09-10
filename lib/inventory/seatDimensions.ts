@@ -168,6 +168,44 @@ export function resolveSeatDimensions(input: {
 }
 
 /**
+ * 座面寸法の警告(未登録・一部欠け)を出してよい商品か(2026-09-10追加指示)。
+ *
+ * ── なぜ要る判定なのか ──────────────────────────────────────────
+ *
+ * 座面寸法の警告はこれまで**無条件**に出ていた。座面が無いのが普通の
+ * 商品(デスク・テーブル・照明)にまで「⚠ 座面寸法が登録されていません」
+ * が出て、実測でユーザーが指摘した(デスクの商品ページに座面不足の警告)。
+ * 座面のある商品(チェア・ソファ・スツール等)に限定する。
+ *
+ * ── カテゴリを優先する・商品名だけで決めない ──────────────────────
+ *
+ * 商品名の「チェア」等の語だけを無条件の根拠にしない —— 「チェアサイド
+ * テーブル」のような名前を持つテーブルを椅子と誤判定しうる。カテゴリが
+ * 判定できるならそちらを使い、机・テーブル・照明のカテゴリは商品名に
+ * 座面を示す語があっても対象外にする。カテゴリが無い（未設定）ときだけ
+ * 商品名を見るが、そのときも机・テーブル・照明を示す語が先にあれば
+ * 対象外とする。
+ */
+const SEAT_REQUIRING_WORDS = /チェア|椅子|ソファ|スツール|オットマン|ベンチ/;
+const SEAT_EXCLUDED_WORDS = /テーブル|デスク|照明|ランプ|シェルフ|キャビネット|収納|ミラー|ラグ|ワゴン|ベッド|棚/;
+
+export function requiresSeatDimensions(input: { categoryName?: string | null; name?: string | null }): boolean {
+  const category = input.categoryName?.trim();
+  if (category) {
+    // カテゴリがある場合はカテゴリだけで決める。商品名は見ない
+    // (「デスク」カテゴリの商品名に「チェア」が混ざっていても対象外)。
+    if (SEAT_EXCLUDED_WORDS.test(category)) return false;
+    return SEAT_REQUIRING_WORDS.test(category);
+  }
+  // カテゴリ未設定のときだけ商品名を見る。机/テーブル/照明を示す語が
+  // あれば、座面を示す語が同居していても対象外を優先する。
+  const name = input.name?.trim();
+  if (!name) return false;
+  if (SEAT_EXCLUDED_WORDS.test(name)) return false;
+  return SEAT_REQUIRING_WORDS.test(name);
+}
+
+/**
  * 商品説明へ書く1行(§6-1)。「座面寸法:幅46×奥行41×高さ46.5cm」。
  *
  * 取れなかった軸は書かない。3軸そろっていなければ、そろっている分だけを

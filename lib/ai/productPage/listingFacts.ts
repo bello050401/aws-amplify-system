@@ -23,10 +23,11 @@ import {
   stripMaintenanceOnlyLines,
   type MaintenanceResult,
 } from "@/lib/inventory/maintenance";
-import { resolveSeatDimensions, type SeatDimensions } from "@/lib/inventory/seatDimensions";
+import { requiresSeatDimensions, resolveSeatDimensions, type SeatDimensions } from "@/lib/inventory/seatDimensions";
 import { calculateShippingRankFromDimensionsDetailed, type ShippingRank } from "@/lib/shipping/rank";
 import { KAZAI_SERVICE_NAME } from "@/lib/shipping/serviceName";
 import { resolveSagawaSize, type SagawaSizeResult } from "@/lib/shipping/sagawaSize";
+import { DEFAULT_LISTING_SHIPPING_METHOD, type ListingShippingMethod } from "@/lib/listing/types";
 
 /** 生成へ渡す在庫の生データ(呼び出し側が Inventory から詰める)。 */
 export interface ListingFactsInput {
@@ -47,6 +48,15 @@ export interface ListingFactsInput {
   note: string | null;
   listingNotes: string | null;
   adminMemo: string | null;
+  /**
+   * 担当者が選択中の配送方法(2026-09-10追加指示)。
+   *
+   * 警告の適用条件だけに使う —— らくらく家財便のランクと佐川サイズは
+   * どちらも常に確定させる(表示・監査用に両方欲しい呼び出し元がいる)。
+   * 「確定できません」の警告だけを、選択中の方法に合わせて出し分ける。
+   * 未指定なら既定(らくらく家財便)として扱う。
+   */
+  shippingMethod?: ListingShippingMethod;
 }
 
 export interface ListingFacts {
@@ -178,23 +188,38 @@ export function buildListingFacts(input: ListingFactsInput): ListingFacts {
   // 追加指示 §2 重量は見ない。3辺合計 + 20cm だけで確定させる。
   const sagawa = resolveSagawaSize({ width: input.width, depth: input.depth, height: input.height });
 
+  const shippingMethod = input.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD;
+
   const warnings: string[] = [];
   if (!input.width?.trim() || !input.depth?.trim() || !input.height?.trim()) {
     warnings.push("⚠ 幅・奥行・高さのいずれかが登録されていません。");
   }
-  if (!seat.hasAny) {
-    // 座面が無い商品(テーブル・照明)では正常なので、警告の文言を断定しない。
-    warnings.push("⚠ 座面寸法が登録されていません（座面のある商品の場合はZAICOをご確認ください）。");
-  } else if (!seat.hasAll) {
-    warnings.push(
-      `⚠ 座面寸法の一部だけが登録されています（${[seat.width ? null : "幅", seat.depth ? null : "奥行", seat.height ? null : "高さ"]
-        .filter(Boolean)
-        .join("・")}が不明）。`,
-    );
+  // 座面寸法の警告は、座面のある商品(チェア・ソファ・スツール等)に限る
+  // (2026-09-10追加指示)。机・テーブル・照明では座面自体が無いのが正常
+  // で、無条件に警告すると実際に無関係な商品にまで出てしまっていた。
+  if (requiresSeatDimensions({ categoryName: input.categoryName, name: input.name })) {
+    if (!seat.hasAny) {
+      warnings.push("⚠ 座面寸法が登録されていません（ZAICOをご確認ください）。");
+    } else if (!seat.hasAll) {
+      warnings.push(
+        `⚠ 座面寸法の一部だけが登録されています（${[seat.width ? null : "幅", seat.depth ? null : "奥行", seat.height ? null : "高さ"]
+          .filter(Boolean)
+          .join("・")}が不明）。`,
+      );
+    }
   }
-  if (shippingRankReason) warnings.push(`⚠ 配送ランクを確定できません：${shippingRankReason}`);
-  if (sagawa.unavailableReason) warnings.push(`⚠ 佐川急便のサイズを判定できません：${sagawa.note}`);
-  if (!material) warnings.push("⚠ 材質が登録されていません。");
+  // 配送の警告も、担当者が選んでいる方法にだけ出す(2026-09-10追加指示)。
+  // 佐川を選んでいないのに「佐川のサイズを判定できません」と出ると、
+  // 実際には使わない配送方法の警告に気を取られる。ランク・サイズ自体は
+  // どちらも上で確定済みなので、選択を切り替えれば警告も即座に変わる。
+  if (shippingMethod === "SAGAWA") {
+    if (sagawa.unavailableReason) warnings.push(`⚠ 佐川急便のサイズを判定できません：${sagawa.note}`);
+  } else if (shippingRankReason) {
+    warnings.push(`⚠ 配送ランクを確定できません：${shippingRankReason}`);
+  }
+  // 材質未登録・不明は警告にしない(2026-09-10追加指示)。値・事実として
+  // は残す(material フィールドはそのまま null/文字列を返す)が、生成を
+  // 妨げるほどの不足ではないので担当者への警告からは外す。
   if (!maintenance.hasAny) warnings.push("⚠ メンテナンスの記録が見つかりませんでした。");
 
   return {

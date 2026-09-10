@@ -16,7 +16,7 @@ import type {
   ListingShippingMethod,
   ShippingPayerCode,
 } from "@/lib/listing/types";
-import { DEFAULT_LISTING_SHIPPING_METHOD, LISTING_SHIPPING_METHODS } from "@/lib/listing/types";
+import { LISTING_SHIPPING_METHODS } from "@/lib/listing/types";
 import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 import { AutoPricingSection } from "./AutoPricingSection";
@@ -61,6 +61,8 @@ export function ListingForm({
   initialDraft,
   initialChannelListing,
   mercariConnected,
+  shippingMethod,
+  onShippingMethodChange,
 }: {
   inventoryId: string;
   inventoryName: string;
@@ -69,6 +71,14 @@ export function ListingForm({
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
   mercariConnected: boolean;
+  /**
+   * 配送方法(2026-09-10追加指示)。右パネル(InventoryFactsPanel)の
+   * 座面・配送警告と同じ選択を共有するため、状態はこのコンポーネントの
+   * 外(親のListingWorkspace)へ上げてある —— ここだけで持つと、選択を
+   * 変えても右パネルの表示が変わらない(即時反映できない)。
+   */
+  shippingMethod: ListingShippingMethod;
+  onShippingMethodChange: (method: ListingShippingMethod) => void;
 }) {
   const [draft, setDraft] = useState(initialDraft);
   const [channelListing, setChannelListing] = useState(initialChannelListing);
@@ -77,10 +87,6 @@ export function ListingForm({
   const [description, setDescription] = useState(initialDraft?.description ?? "");
   const [price, setPrice] = useState(initialDraft?.price != null ? String(initialDraft.price) : "");
   const [condition, setCondition] = useState<ListingConditionCode>(initialDraft?.condition ?? "NO_NOTABLE_DAMAGE");
-  // §1 既定は「らくらく家財便」。保存済みの下書きがあればその選択を復元する。
-  const [shippingMethod, setShippingMethod] = useState<ListingShippingMethod>(
-    initialDraft?.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD,
-  );
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
@@ -439,7 +445,7 @@ export function ListingForm({
             <select
               id="listing-shipping-method"
               value={shippingMethod}
-              onChange={(e) => setShippingMethod(e.target.value as ListingShippingMethod)}
+              onChange={(e) => onShippingMethodChange(e.target.value as ListingShippingMethod)}
               className="mt-0.5 w-56 border border-gray-300 bg-white px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
             >
               {LISTING_SHIPPING_METHODS.map((m) => (
