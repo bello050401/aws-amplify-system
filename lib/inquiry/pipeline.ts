@@ -43,7 +43,12 @@ import {
 } from "./conversationContext";
 import type { PendingQuestion, PendingQuestionField } from "./conversationContext";
 import { resolvePendingAnswers } from "./pendingAnswer";
-import { buildResolvedProductContext, shippingDimensionsOf, type ResolvedProductContext } from "./productContext";
+import {
+  buildResolvedProductContext,
+  shippingDimensionsOf,
+  PRODUCT_FIELD_SOURCE_LABEL,
+  type ResolvedProductContext,
+} from "./productContext";
 import { selectReplyRules, type ReplyRuleRecord } from "./replyRuleSelection";
 import { listActiveReplyRules } from "./replyRuleStore";
 import type { MessageChannel } from "@/lib/messaging/types";
@@ -635,6 +640,78 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     unresolved.push({ field: "商品サイズの確認", reason });
   }
 
+  // ── 商品説明から補完した属性(2026-09-10 追加指示§2/§4) ────────────
+  //
+  // 在庫DBにはサイズ以外の属性(素材・重量・型番・色)を持つ項目が無い。
+  // 統合Product Context(productContext.ts)はBASE商品説明から**ラベル付き
+  // の記載だけ**を拾う(推測はしない)。これはBELLO自身が書いた一次情報
+  // なので、外部Web(UNTRUSTED_EXTERNAL_FACTS)とは扱いを分けてTRUSTED_FACTS
+  // へ入れる。
+  //
+  // 【なぜ今まで無かったか】ここを素通りしていたため、BASE説明文に
+  // 「素材：スチール」と書いてあっても、素材を聞かれるたびに外部Web検索
+  // (課金対象)を呼ぶか、答えられずUNRESOLVEDのままだった —— 手元に
+  // 答えがあるのに使っていなかった。knownFieldsFromContextは、この項目
+  // について外部調査(identifyResearchableFields)を重ねて発動させない
+  // ためにも使う。
+  const knownFieldsFromContext = new Set<string>();
+  let ownModelNumberFromContext: string | null = null;
+  let weightFromContext: string | null = null;
+  const PRODUCT_CONTEXT_DETAIL_FIELDS = [
+    { key: "material", label: "素材", nouns: ["素材"] },
+    { key: "weight", label: "重量", nouns: ["重量", "重さ"] },
+    { key: "modelNumber", label: "型番", nouns: ["型番", "品番"] },
+    { key: "color", label: "カラー", nouns: ["色", "カラー"] },
+    { key: "condition", label: "状態", nouns: ["状態"] },
+  ] as const;
+  for (const { key, label, nouns } of PRODUCT_CONTEXT_DETAIL_FIELDS) {
+    const field = productContext.details[key];
+    if (!field) continue;
+    // 在庫DBの状態説明(damageNotes由来)を既に出しているなら、BASE説明文の
+    // 状態を重ねて出さない(出典を混ぜない)。
+    if (key === "condition" && facts.conditionDisclosure) continue;
+    trustedProductFacts.push({ label: `${label}(${PRODUCT_FIELD_SOURCE_LABEL[field.source]}記載)`, value: field.value });
+    for (const noun of nouns) knownFieldsFromContext.add(noun);
+    if (key === "modelNumber") ownModelNumberFromContext = field.value;
+    if (key === "weight") weightFromContext = field.value;
+  }
+
+  // ── 型番の食い違い(2026-09-10 追加指示§2「製品名と実物ラベルが食い違う
+  // 場合は実物確認が必要」) ─────────────────────────────────────────
+  //
+  // 顧客が本文で挙げた型番が、こちらが把握している型番(商品名 / BASE説明文)
+  // のどれとも一致しない場合、**AIに確認を装わせない**。実物のラベルと
+  // 出品データが食い違っている可能性があり、架空の確認で埋めると誤情報の
+  // 断定になる。UNRESOLVED経由の「確認が必要」として扱う —— fieldを
+  // "型番"にすることで、validateReplyDraftの既存検査
+  // (ASSERTED_UNRESOLVED_FACT: 未解決の項目をヘッジ無しで断定していないか)
+  // にもそのまま掛かる。
+  const productNameCore = inventory ? nameCore(inventory.name) : "";
+  const ownModelNumbers = [
+    ...extractModelHintsFromName(productNameCore),
+    ...(ownModelNumberFromContext ? [ownModelNumberFromContext] : []),
+  ];
+  if (
+    inventory &&
+    detectModelNumberMismatch({
+      customerModelNumbers: resolution.references.modelNumbers,
+      // 2026-09-10 QA是正: ラベル付きで明示的に抽出された値は短くても
+      // 比較対象にする(「型番：A2」のような短い型番の食い違いを、3文字
+      // 未満という理由だけで見逃さないため)。ラベル無しの短いトークンは
+      // 引き続き除外する(普通の英単語と衝突しやすいため)。
+      customerLabelledModelNumbers: resolution.references.labelledModelNumbers,
+      ownModelNumbers,
+      ownLabelledModelNumbers: ownModelNumberFromContext ? [ownModelNumberFromContext] : [],
+    })
+  ) {
+    unresolved.push({
+      field: "型番",
+      reason:
+        `お客様が挙げた型番(${resolution.references.modelNumbers.join(", ")})が、把握している型番と一致しません。` +
+        "実物のラベルと出品データが食い違っている可能性があるため、お客様へ一致すると答えず、社内で現物を確認してください。",
+    });
+  }
+
   const mergedDimensions = shippingDimensionsOf(productContext);
 
   // 販売チャネル側で確定している商品名(§55)。今回のメールで分かったものを
@@ -704,13 +781,15 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   //
   // ここへ来るまでに在庫DB・ナレッジ・配送DBを見終えている。
   // identifyResearchableFieldsが空を返せば、外部へは1リクエストも出ない。
-  const researchFields = settings.webResearchEnabled ? identifyResearchableFields(intents, inventory != null, facts, messageText) : [];
+  const researchFields = settings.webResearchEnabled
+    ? identifyResearchableFields(intents, inventory != null, facts, messageText, knownFieldsFromContext)
+    : [];
   const availability = getWebResearchAvailability();
 
   // 型番・ブランドの手がかりは、問い合わせ本文と**商品名の両方**から集める。
   // 「この商品の耐荷重は?」のように、本文にブランドが出てこない問い合わせが
   // 普通にあるため。商品名の「検:」以降は他社の検索用キーワードなので落とす。
-  const productNameCore = inventory ? nameCore(inventory.name) : "";
+  // productNameCore は上の型番食い違いチェックで既に計算済みのものを使う。
   const brandHints = [...new Set([...resolution.references.brandNames, ...brandsInText(productNameCore)])];
   // 型番だけを同定の手がかりにする。ブランド名を混ぜると、そのブランドの
   // 公式サイトにある**別商品**のページを「対象商品のもの」と誤認する。
@@ -1026,6 +1105,12 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     negotiationResult?.evidence.requestedUnitPriceYen ?? Number.NaN,
   ].filter((n) => Number.isFinite(n) && n > 0);
   const allowedDimensionText = [...dimensionTexts, ...research.facts.map((f) => f.value ?? "")];
+  // §4「重量不明を性別や一般論で安全断定しない」。BASE商品説明から読み取った
+  // 重量と、外部調査で確認できた重量だけを許可する。
+  const allowedWeightText = [
+    ...(weightFromContext ? [weightFromContext] : []),
+    ...research.facts.filter((f) => f.field === "重量" || f.field === "重さ").map((f) => f.value ?? ""),
+  ];
 
   let lastViolations: string[] = [];
   let modelProvider: string | null = null;
@@ -1064,6 +1149,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       customerSentAttachment: request.customerSentAttachment,
       externalTexts: research.documentTexts,
       allowedDimensionText,
+      allowedWeightText,
       // 根拠として認めた文章。住所のように「出典があれば出してよいが
       // 出典が無ければ個人情報」という記述の判定に使う。
       groundedTexts: [...knowledgeHits.map((k) => k.excerpt), ...trustedProductFacts.map((f) => f.value)],
@@ -1293,23 +1379,94 @@ export function identifyResearchableFields(
   hasProduct: boolean,
   facts: CustomerSafeFacts,
   messageText = "",
+  /**
+   * 統合Product Context(BASE商品説明から補完済み)で既に分かっている項目
+   * (2026-09-10 追加指示: 費用面の調査で判明した無駄な外部調査を止める)。
+   *
+   * これを渡す前は、在庫DBに無い項目(素材・重量・型番・色)は、BASE商品
+   * 説明に書いてあっても常に外部Web検索(課金対象)を呼んでいた。答えが
+   * 既に手元にあるのに毎回課金するのは、月300円以下という費用方針と
+   * 相性が悪い。
+   */
+  knownFields: ReadonlySet<string> = new Set(),
 ): string[] {
   if (!hasProduct) return [];
   const fields: string[] = [];
+  // 質問の具体的な属性(寸法・素材等)がknownFieldsで満たされて調査不要に
+  // なったか。これがtrueなら、下のPRODUCT_SPEC用フォールバック(「仕様」)を
+  // 発動させない(2026-09-10 QA是正: knownFieldsで素材を除外した直後に
+  // PRODUCT_SPECが「仕様」を再追加し、不要な外部調査(課金)が残っていた)。
+  let satisfiedByKnownFields = false;
 
   // 質問文に仕様項目が書かれていれば、それを最優先で調べる。
   for (const noun of specNounsInQuestion(messageText)) {
     // 在庫DBに寸法があるなら、寸法は調べない(§9.1 発動条件)。
-    if ((noun === "寸法" || noun === "サイズ") && facts.dimensions) continue;
+    if ((noun === "寸法" || noun === "サイズ") && facts.dimensions) {
+      satisfiedByKnownFields = true;
+      continue;
+    }
+    if (knownFields.has(noun)) {
+      satisfiedByKnownFields = true;
+      continue;
+    }
     fields.push(noun);
   }
 
-  if (intents.includes("SIZE") && !facts.dimensions) fields.push("寸法");
-  if (intents.includes("MATERIAL")) fields.push("素材");
-  if (intents.includes("PRODUCT_SPEC") && fields.length === 0) fields.push("仕様");
+  if (intents.includes("SIZE")) {
+    if (facts.dimensions) satisfiedByKnownFields = true;
+    else fields.push("寸法");
+  }
+  if (intents.includes("MATERIAL")) {
+    if (knownFields.has("素材")) satisfiedByKnownFields = true;
+    else fields.push("素材");
+  }
+  if (intents.includes("PRODUCT_SPEC") && fields.length === 0 && !satisfiedByKnownFields) fields.push("仕様");
   if (intents.includes("COMPATIBILITY")) fields.push("適合");
   // 同じ項目を2回調べない(そのぶん課金される)。
-  return [...new Set(fields)];
+  return [...new Set(fields)].filter((f) => !knownFields.has(f));
+}
+
+/**
+ * 顧客が本文で挙げた型番が、こちらが把握している型番のどれとも一致しないか。
+ *
+ * 2026-09-10 追加指示§2「製品名と実物ラベルが食い違う場合は実物確認が
+ * 必要」。表記ゆれ(ハイフン・大文字小文字)を吸収するため、英数字以外を
+ * 落として比較する。
+ *
+ * 【短いトークンの扱い(2026-09-10 QA是正)】ラベル無しの短いトークン
+ * (2文字以下)は「gu」「to」のような普通語・単位付き略語と衝突しやすい
+ * ため引き続き除外するが、「型番：A2」のように**ラベルが明示されている**
+ * 値は、短くても衝突の心配が無いので比較対象にする。これを分けないと、
+ * 家具にもある短い型番(例: "A2")の食い違いを、旧実装が一律「3文字未満」
+ * という理由だけで見逃していた。
+ *
+ * こちらの型番情報が1つも無い(own側が空)ときは判定しない ——
+ * 「知らない」と「食い違っている」は別の状態で、知らないものを食い違い
+ * として扱うと、型番を尋ねられただけの問い合わせまで社内確認扱いになる。
+ */
+export function detectModelNumberMismatch(params: {
+  customerModelNumbers: string[];
+  /** 顧客本文からラベル付きで明示的に抽出された型番だけの部分集合。 */
+  customerLabelledModelNumbers?: string[];
+  ownModelNumbers: string[];
+  /** こちら側の型番のうち、ラベル付きで明示的に確認できたものだけの部分集合。 */
+  ownLabelledModelNumbers?: string[];
+}): boolean {
+  const normalize = (t: string) => t.toUpperCase().replace(/[^0-9A-Z]/g, "");
+  // ラベル無しの短すぎるトークンは誤検出が多いため除外する基準。
+  const MIN_BARE_LENGTH = 3;
+
+  const ownBare = params.ownModelNumbers.map(normalize).filter((t) => t.length >= MIN_BARE_LENGTH);
+  const ownLabelled = (params.ownLabelledModelNumbers ?? []).map(normalize).filter((t) => t.length > 0);
+  const own = new Set([...ownBare, ...ownLabelled]);
+  if (own.size === 0) return false;
+
+  const customerBare = params.customerModelNumbers.map(normalize).filter((t) => t.length >= MIN_BARE_LENGTH);
+  const customerLabelled = (params.customerLabelledModelNumbers ?? []).map(normalize).filter((t) => t.length > 0);
+  const customer = [...new Set([...customerBare, ...customerLabelled])];
+  if (customer.length === 0) return false;
+
+  return !customer.some((m) => own.has(m));
 }
 
 /**

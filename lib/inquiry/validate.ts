@@ -23,6 +23,8 @@ export type ReplyValidationCode =
   | "ASSERTED_UNRESOLVED_FACT"
   | "EXTERNAL_VERBATIM_COPY"
   | "FABRICATED_DIMENSION"
+  /** 根拠の無い重量(§4「重量不明を性別や一般論で安全断定しない」)。 */
+  | "FABRICATED_WEIGHT"
   | "FACT_SAFETY"
   /** 既に分かっていることを顧客へ尋ねている。 */
   | "ASKS_KNOWN_FACT"
@@ -49,6 +51,38 @@ const MONEY_PATTERN = /(?:¥|￥)?\s?\d{1,3}(?:,\d{3})+\s?円?|\d{3,7}\s?円/g;
 
 /** 寸法らしき記述。「幅120cm」「120×80cm」等。 */
 const DIMENSION_PATTERN = /\d{2,4}(?:\.\d+)?\s*(?:cm|センチ|ｃｍ|mm|ミリ)/gi;
+
+/**
+ * 重量らしき記述。「1.2kg」「500g」等。
+ *
+ * 在庫DBに重量の項目は無く、これまでvalidateReplyDraftには重量の検査が
+ * 無かった(§4「重量不明を性別や一般論で安全断定しない」への対応で追加)。
+ * 「g」は前に数字が直接つながる場合だけを見る —— 英単語中の"g"を拾わない。
+ */
+const WEIGHT_PATTERN = /\d{1,4}(?:\.\d+)?\s*(?:kg|ｋｇ|キログラム|グラム|g(?![A-Za-z]))/gi;
+
+/**
+ * 重量の記述をグラム単位の数値へ正規化する。
+ *
+ * 2026-09-10 QA是正: 単位を無視して数値だけをSetにしていたため、
+ * 「500g」を根拠にしても単位違いの「500kg」(実際は1000倍重い)が
+ * 通ってしまい、逆に同じ重さの言い換えである「500g」→「0.5kg」は
+ * 数値表記が違うという理由だけで拒否されていた。重量は単位を伴う値として
+ * 読み、グラムへ揃えてから比較する。WEIGHT_PATTERNに一致しない(kg/gの
+ * 単位が読めない)場合はnull —— 寸法(mm/cm)等の別の単位の数値を重量として
+ * 拾わないようにするため、ここでも同じ単位限定のパターンを使う。
+ */
+function parseWeightToGrams(mention: string): number | null {
+  const m = /(\d{1,4}(?:\.\d+)?)\s*(kg|ｋｇ|キログラム|グラム|g)/i.exec(mention);
+  if (!m) return null;
+  const value = Number(m[1]);
+  if (!Number.isFinite(value)) return null;
+  const unit = m[2];
+  const isKg = unit.toLowerCase() === "kg" || unit === "ｋｇ" || unit === "キログラム";
+  const grams = isKg ? value * 1000 : value;
+  // 浮動小数点誤差(0.1kg*1000など)を丸めて、表記違いの同値判定を安定させる。
+  return Math.round(grams * 1000) / 1000;
+}
 
 export function validateReplyDraft(params: {
   output: string;
@@ -104,6 +138,11 @@ export function validateReplyDraft(params: {
   externalTexts: string[];
   /** 生成文に出てよい寸法の文字列(在庫DBの寸法・外部調査で確認できた寸法)。 */
   allowedDimensionText: string[];
+  /**
+   * 生成文に出てよい重量の文字列(BASE商品説明から読み取った重量・外部調査で
+   * 確認できた重量)。§4「重量不明を性別や一般論で安全断定しない」。
+   */
+  allowedWeightText?: string[];
   /**
    * 返信の根拠として認めた文章(ナレッジ文書の抜粋・商品の事実)。
    * 「その記述が根拠に書いてあるか」を判定するために使う。
@@ -261,6 +300,34 @@ export function validateReplyDraft(params: {
         violations.push({
           code: "FABRICATED_DIMENSION",
           detail: `根拠のない寸法が含まれています: ${mention.trim()}`,
+        });
+      }
+    }
+  }
+
+  // ── 重量の創作(§4「重量不明を性別や一般論で安全断定しない」) ────
+  //
+  // 2026-09-10 QA是正: 単位を無視して数値だけをSetにしていたため、
+  // 「500g」を根拠にしても「500kg」(1000倍違う)が通ってしまい、逆に
+  // 「500g」→「0.5kg」(同じ重さの言い換え)は数値表記が違うという理由で
+  // 拒否されていた。重量は単位を伴う値として正規化(グラムに統一)してから
+  // 比較する。allowedWeightText側の数値抽出もWEIGHT_PATTERN(単位が
+  // kg/gのものだけ)に揃え、根拠文中に紛れた別の寸法(mm/cm等)の数値を
+  // 重量として拾わないようにする。
+  const weightMentions = output.match(WEIGHT_PATTERN) ?? [];
+  if (weightMentions.length > 0) {
+    const allowedWeightGrams = new Set(
+      (params.allowedWeightText ?? [])
+        .flatMap((t) => t.match(WEIGHT_PATTERN) ?? [])
+        .map(parseWeightToGrams)
+        .filter((g): g is number => g != null),
+    );
+    for (const mention of weightMentions) {
+      const grams = parseWeightToGrams(mention);
+      if (grams != null && !allowedWeightGrams.has(grams)) {
+        violations.push({
+          code: "FABRICATED_WEIGHT",
+          detail: `根拠のない重量が含まれています: ${mention.trim()}`,
         });
       }
     }

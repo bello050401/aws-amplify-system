@@ -136,10 +136,85 @@ function testDeliveryDateInquiryScenario() {
   assertTrue(!/[0-9０-９]+\s*(?:日|営業日)/.test(user), "納期: 日数・日付の具体的な数値が一切プロンプトに現れない(捏造の材料が無い)");
 }
 
+// ── シナリオ4: 架空の複数質問(型番の食い違い・重量・追加写真・送料)────
+//
+// 2026-09-10 追加指示への対応。1通に複数質問が来る実際のパターンを模した
+// 架空fixture(原文・識別情報は含まない)。
+//
+//   「型番はXYZ999と書かれていますが、届いた実物のラベルはABC123でした。
+//    重量はどれくらいですか？ あと、追加で写真をいただけますか？
+//    送料も知りたいです。」
+//
+// 改善前は、システムプロンプトに型番食い違い・重量の一般論断定・追加写真の
+// 断定を禁じる指示が無かった(このコミットのprompt.ts差分で追加した)。
+// このテストは「複数質問に個別に答える指示」と「新設した4つの断定禁止」が
+// 同時に効く形でプロンプトへ入ることを確認する。
+function testMultiQuestionWithModelMismatchScenario() {
+  const system = buildInquirySystemPrompt();
+  const user = buildInquiryUserPrompt({
+    intents: ["PRODUCT_SPEC", "SHIPPING"],
+    trustedProductFacts: [{ label: "型番(BASE商品ページ記載)", value: "XYZ999" }],
+    knowledgeExcerpts: [],
+    shipping: {
+      destinationPrefecture: null,
+      rank: "C",
+      rankSource: null,
+      feeYen: null,
+      note: "お届け先が未確定のため金額を確定できません。",
+      missingCustomerInfo: ["お届け先の都道府県"],
+    },
+    externalFacts: [],
+    unresolved: [
+      {
+        field: "型番",
+        reason: "お客様が挙げた型番(ABC123)が、把握している型番(XYZ999)と一致しません。社内で現物を確認してください。",
+      },
+      { field: "重量", reason: "在庫DB・商品説明のどちらにも記載がありません。" },
+      { field: "追加の写真", reason: "追加写真の可否は在庫DB・商品説明に記載がありません。" },
+      { field: "送料(お届け先未確定)", reason: "都道府県が分からず金額を確定できない" },
+    ],
+    customerMessage:
+      "型番はXYZ999と書かれていますが、届いた実物のラベルはABC123でした。重量はどれくらいですか？あと追加で写真をいただけますか？送料も知りたいです。",
+    history: [],
+  });
+
+  // (a) 複数質問のそれぞれに触れる事実・UNRESOLVEDが入っている。
+  assertTrue(user.includes("UNRESOLVED:\n- 型番"), "複数質問: UNRESOLVEDに型番の食い違いが入る");
+  assertTrue(user.includes("- 重量"), "複数質問: UNRESOLVEDに重量が入る");
+  assertTrue(user.includes("- 追加の写真"), "複数質問: UNRESOLVEDに追加の写真が入る");
+  assertTrue(user.includes("- 送料(お届け先未確定)"), "複数質問: UNRESOLVEDに送料が入る");
+  assertTrue(
+    system.includes("お客様の質問が複数ある場合は、それぞれに漏れなく具体的に答える"),
+    "複数質問: 複数質問へ個別対応する既存ガードがある",
+  );
+
+  // (b) 2026-09-10 に新設した4つの断定禁止ガードが実際に入っている。
+  assertTrue(
+    system.includes("食い違う場合、一致する・間違いないと書かない") && system.includes("社内で現物を確認する旨"),
+    "複数質問: 型番食い違いを架空の確認で埋めさせないガードがある",
+  );
+  assertTrue(
+    system.includes("性別や体格についての一般論") && system.includes("安全性を断定しない"),
+    "複数質問: 重量不明を性別・一般論で断定させないガードがある",
+  );
+  assertTrue(
+    system.includes("写真の送付可否・写真番号・枚数・清掃状況"),
+    "複数質問: 追加写真の可否・枚数・清掃状況を断定させないガードがある",
+  );
+  assertTrue(
+    system.includes("過去の個別対応") && system.includes("今回の商品にも同じように適用できると仮定しない"),
+    "複数質問: 過去の個別対応を全商品方針へ転用させないガードがある",
+  );
+  // 重量の値・型番の正誤いずれも確定値を渡していないので、プロンプトに
+  // 具体的な重量(kg/g)が現れないことを確認する(捏造の材料が無い)。
+  assertTrue(!/\d+(?:\.\d+)?\s*(?:kg|g)\b/i.test(user), "複数質問: 重量の具体的な数値が一切プロンプトに現れない");
+}
+
 function main() {
   testShippingInquiryScenario();
   testConditionInquiryScenario();
   testDeliveryDateInquiryScenario();
+  testMultiQuestionWithModelMismatchScenario();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

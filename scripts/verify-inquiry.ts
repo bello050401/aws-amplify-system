@@ -36,7 +36,13 @@ import { buildResearchCacheKey, isResearchCacheFresh, researchTtlMs } from "@/li
 import { compareBySourcePriority, downgradeIfUncertain, evaluateModelEvidence } from "@/lib/inquiry/research/port";
 import { buildInquiryUserPrompt, buildInquirySystemPrompt } from "@/lib/inquiry/prompt";
 import { assertsUnresolvedField, isPersonalDataGrounded, validateReplyDraft } from "@/lib/inquiry/validate";
-import { extractModelHintsFromName, identifyResearchableFields, normalizeMessage, specNounsInQuestion } from "@/lib/inquiry/pipeline";
+import {
+  detectModelNumberMismatch,
+  extractModelHintsFromName,
+  identifyResearchableFields,
+  normalizeMessage,
+  specNounsInQuestion,
+} from "@/lib/inquiry/pipeline";
 import { classifySource, extractFieldValue, isFetchableExternalUrl, isGuidanceText, researchMissingFacts } from "@/lib/inquiry/research/service";
 import { buildSearchQuery, parseWebSearchResults, WEB_SEARCH_QUERY_MAX_CHARS } from "@/lib/inquiry/research/agentCoreProvider";
 import { allOfficialDomains, brandsInText, officialDomainsForBrands } from "@/lib/inquiry/research/officialDomains";
@@ -403,6 +409,39 @@ function testResearchTriggering() {
   assertEqual(kept.status, "FOUND", "モデル同定: 根拠があればFOUNDのまま");
 
   assertEqual(extractFieldValue("耐荷重: 100kg\n素材: スチール", "耐荷重"), "100kg", "値の抽出: ラベル付きの値を取り出す");
+
+  // ── 2026-09-10 追加指示: BASE商品説明から既に分かっている項目は
+  // 重ねて外部調査(課金)を発動しない ────────────────────────────
+  assertEqual(
+    identifyResearchableFields(["MATERIAL"], true, FACTS_WITH_DIMENSIONS),
+    ["素材"],
+    "調査発動: 素材が既知でなければ従来どおり調べる",
+  );
+  assertEqual(
+    identifyResearchableFields(["MATERIAL"], true, FACTS_WITH_DIMENSIONS, "", new Set(["素材"])),
+    [],
+    "調査発動: BASE商品説明から素材が分かっていれば重ねて調べない(費用削減)",
+  );
+  assertEqual(
+    identifyResearchableFields(["PRODUCT_SPEC"], true, FACTS_WITH_DIMENSIONS, "重量はどれくらいですか", new Set(["重量"])),
+    [],
+    "調査発動: 質問文からの項目(重量)も既知なら調べない",
+  );
+  assertTrue(
+    identifyResearchableFields(["PRODUCT_SPEC"], true, FACTS_WITH_DIMENSIONS, "耐荷重はどのくらいですか", new Set(["重量"])).includes(
+      "耐荷重",
+    ),
+    "調査発動: 既知集合に無い項目(耐荷重)は引き続き調べる",
+  );
+  // 2026-09-10 QA是正: 質問の具体的な属性(素材)がknownFieldsで既に満たされて
+  // いる場合、PRODUCT_SPEC意図があっても抽象的な「仕様」へfallbackしない
+  // (満たされているのに fields.length===0 という理由だけで再度「仕様」を
+  // 追加し、不要な外部調査が残っていた不具合)。
+  assertEqual(
+    identifyResearchableFields(["MATERIAL", "PRODUCT_SPEC"], true, FACTS_WITH_DIMENSIONS, "素材は何ですか", new Set(["素材"])),
+    [],
+    "調査発動(QA是正): 素材が既知の場合、PRODUCT_SPECが付いていても「仕様」へfallbackしない",
+  );
   assertEqual(extractFieldValue("この商品はとても丈夫です", "耐荷重"), null, "値の抽出: 書いていなければnull(創作しない)");
 
   assertTrue(!isFetchableExternalUrl("http://127.0.0.1/admin"), "取得先: ループバックアドレスは取得しない");
@@ -930,6 +969,7 @@ async function main() {
   testAsksKnownFact();
   testUnnecessaryRefusal();
   testClaimsUnsentAttachment();
+  testModelNumberMismatchDetection();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
@@ -1038,4 +1078,65 @@ function testClaimsUnsentAttachment() {
   // 未指定なら従来どおり(既存の呼び出しの挙動を変えない)。
   const omitted = validate("お送りいただいた写真を確認いたしました。");
   assertTrue(!omitted.codes.includes("CLAIMS_UNSENT_ATTACHMENT"), "検査: 未指定なら判定しない");
+}
+
+/**
+ * §4「型番矛盾は架空確認で補わず内部確認へ」(2026-09-10 追加指示)。
+ *
+ * 実物ラベルの型番と、こちらが把握している型番が食い違う場合に、
+ * pipeline.ts の detectModelNumberMismatch が正しく判定することを確認する。
+ */
+function testModelNumberMismatchDetection() {
+  assertTrue(
+    detectModelNumberMismatch({ customerModelNumbers: ["XYZ999"], ownModelNumbers: ["SS226B"] }),
+    "型番食い違い: 手持ちの型番と一致しなければ食い違いと判定する",
+  );
+  assertTrue(
+    !detectModelNumberMismatch({ customerModelNumbers: ["SS-226B"], ownModelNumbers: ["SS226B"] }),
+    "型番食い違い: ハイフンの有無だけの表記ゆれは食い違いと判定しない(誤検出を避ける)",
+  );
+  assertTrue(
+    !detectModelNumberMismatch({ customerModelNumbers: ["ss226b"], ownModelNumbers: ["SS226B"] }),
+    "型番食い違い: 大文字小文字の違いだけは食い違いと判定しない",
+  );
+  assertTrue(
+    !detectModelNumberMismatch({ customerModelNumbers: ["ABC123"], ownModelNumbers: [] }),
+    "型番食い違い: こちらが型番を把握していなければ「知らない」であり「食い違い」ではない",
+  );
+  assertTrue(
+    !detectModelNumberMismatch({ customerModelNumbers: [], ownModelNumbers: ["SS226B"] }),
+    "型番食い違い: 顧客が型番を挙げていなければ判定しない",
+  );
+  // 顧客が挙げた複数の型番のうち1つでも一致すれば食い違いではない
+  // (例: 本文中に型番以外の英数字トークンを誤って拾った場合の過検出防止)。
+  assertTrue(
+    !detectModelNumberMismatch({ customerModelNumbers: ["A1", "SS226B"], ownModelNumbers: ["SS226B"] }),
+    "型番食い違い: 複数候補のうち1つでも一致すれば食い違いと判定しない",
+  );
+
+  // ── 2026-09-10 QA是正: ラベル付きの短い型番(家具にもある)を見逃さない ──
+  assertTrue(
+    detectModelNumberMismatch({
+      customerModelNumbers: [],
+      customerLabelledModelNumbers: ["A3"],
+      ownModelNumbers: [],
+      ownLabelledModelNumbers: ["A2"],
+    }),
+    "型番食い違い(QA是正): ラベル付きの短い型番(A2 vs A3)の食い違いを見逃さない",
+  );
+  assertTrue(
+    !detectModelNumberMismatch({
+      customerModelNumbers: [],
+      customerLabelledModelNumbers: ["A2"],
+      ownModelNumbers: [],
+      ownLabelledModelNumbers: ["A2"],
+    }),
+    "型番食い違い(QA是正): ラベル付きの短い型番が一致していれば食い違いと判定しない",
+  );
+  // ラベル無しの短い一般語(例: "P2")は、3文字未満のため引き続き型番として
+  // 扱わない(誤検出を増やさない)。
+  assertTrue(
+    !detectModelNumberMismatch({ customerModelNumbers: ["P2"], ownModelNumbers: ["SS226B"] }),
+    "型番食い違い(QA是正): ラベル無しの短い語(P2)は型番として扱わず誤検出しない",
+  );
 }

@@ -122,10 +122,31 @@ export function extractInventoryIds(text: string): string[] {
  * 純粋な数字だけ・純粋な英字だけは型番として扱わない —— それぞれ
  * 金額・寸法や普通の英単語と衝突するため。
  */
+/** 型番ラベル(「型番」「品番」「モデル(番号)」「model」)の直後を拾う。 */
+const LABELLED_MODEL_NUMBER_RE = /(?:型番|品番|モデル(?:番号)?|model)\s*[:：#＃]?\s*([0-9A-Za-z][0-9A-Za-z\-/.]{1,19})/gi;
+
+/**
+ * 型番ラベルが明示されている箇所**だけ**を拾う。
+ *
+ * 2026-09-10 QA是正: detectModelNumberMismatch(lib/inquiry/pipeline.ts)は
+ * これまで、ラベルの有無を区別せず「3文字未満のトークンは誤検出が多い」
+ * という理由で一律に除外していた。そのため「型番：A2」のように**明示的に
+ * ラベル付きで書かれた**短い型番(家具にもある)まで見逃していた。
+ * ラベルという明示的な文脈がある値は、普通の英単語と衝突する心配が
+ * 無いので、短くても型番として信頼できる。ラベル無しの短いトークンは
+ * 引き続き除外したいので、呼び出し側でこの関数の結果と
+ * extractModelNumbers の結果を別々の長さ基準で扱えるよう、ここだけを
+ * 独立して公開する。
+ */
+export function extractLabelledModelNumbers(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(LABELLED_MODEL_NUMBER_RE)) out.push(m[1]);
+  return unique(out.map((t) => t.toUpperCase()));
+}
+
 export function extractModelNumbers(text: string): string[] {
   const out: string[] = [];
-  const labelled = text.matchAll(/(?:型番|品番|モデル(?:番号)?|model)\s*[:：#＃]?\s*([0-9A-Za-z][0-9A-Za-z\-/.]{1,19})/gi);
-  for (const m of labelled) out.push(m[1]);
+  for (const m of text.matchAll(LABELLED_MODEL_NUMBER_RE)) out.push(m[1]);
 
   // 空白で区切って探すだけでは足りない。日本語の問い合わせでは
   // 「AW-0573の素材は何ですか」のように、型番の直後にそのまま助詞が続く。
@@ -219,6 +240,10 @@ export function extractProductReferences(text: string, knownBrands: readonly str
     skus: extractSkus(text),
     inventoryIds: extractInventoryIds(text),
     modelNumbers: extractModelNumbers(text),
+    // ラベル付きで抽出できた型番だけの部分集合(2026-09-10 QA是正)。
+    // detectModelNumberMismatch が、ラベル無しの短いトークンと区別して
+    // 扱うために使う。
+    labelledModelNumbers: extractLabelledModelNumbers(text),
     brandNames: extractBrandNames(text, knownBrands),
     productNameFragments: extractProductNameFragments(text),
   };
@@ -231,6 +256,7 @@ export type ProductReferenceResult = {
   skus: string[];
   inventoryIds: string[];
   modelNumbers: string[];
+  labelledModelNumbers: string[];
   brandNames: string[];
   productNameFragments: string[];
 };
