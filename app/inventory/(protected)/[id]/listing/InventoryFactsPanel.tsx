@@ -128,7 +128,20 @@ export function InventoryFactsPanel({
               value={facts.shippingRank ? SHIPPING_RANK_LABEL[facts.shippingRank] : null}
             />
             <Row label="佐川急便サイズ" value={sagawa} />
-            <p className="px-3 pb-2 text-[11px] text-gray-400">{facts.sagawa.note}</p>
+            {/* レビュー対応(2026-09-10): 説明文も選択中の配送方法に限定する。
+                3辺合計・らくらく家財便ランク・佐川サイズの行自体はどちらも
+                常に確定させて出す(§8監査用、送料計算と食い違いが無いか
+                その場で見比べられるように)。その下の説明文だけを選択に
+                合わせないと、「らくらく家財便」を選んでいるのに
+                「佐川急便のサイズを判定できません」が残ってしまう
+                (buildListingFacts の警告と同じ出し分けをここでも行う)。 */}
+            {shippingMethod === "SAGAWA" ? (
+              <p className="px-3 pb-2 text-[11px] text-gray-400">{facts.sagawa.note}</p>
+            ) : (
+              facts.shippingRankReason && (
+                <p className="px-3 pb-2 text-[11px] text-gray-400">{facts.shippingRankReason}</p>
+              )
+            )}
           </Group>
 
           <Group title="コンディション">

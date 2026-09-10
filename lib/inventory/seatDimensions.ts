@@ -177,32 +177,58 @@ export function resolveSeatDimensions(input: {
  * が出て、実測でユーザーが指摘した(デスクの商品ページに座面不足の警告)。
  * 座面のある商品(チェア・ソファ・スツール等)に限定する。
  *
- * ── カテゴリを優先する・商品名だけで決めない ──────────────────────
+ * ── カテゴリは「商品種別を示しているときだけ」優先する(レビュー対応) ──
+ *
+ * BELLOの `categoryName` の実データは「販売中」「撮影待ち」「川越移動
+ * 予定,五十嵐さん」のような**業務区分**であって、商品種別ではないことが
+ * 多い。以前の実装は「カテゴリがあれば商品名を一切見ない」だったため、
+ * こうした業務区分が付いているだけで椅子の座面警告まで消えてしまって
+ * いた(椅子でも `categoryName` は「販売中」等になりうる)。
+ *
+ * 直すのは「カテゴリを信用する条件」であって、優先順位そのものではない
+ * —— カテゴリが座面を要求する語・除外する語のどちらかに実際に一致した
+ * ときだけそのカテゴリで確定し、商品名は見ない(「デスク」カテゴリの
+ * 商品名に「チェア」が混ざっていても対象外、は従来どおり維持)。
+ * カテゴリがどちらにも一致しない(=商品種別を示していない業務区分)なら、
+ * 商品名で判定する。
  *
  * 商品名の「チェア」等の語だけを無条件の根拠にしない —— 「チェアサイド
- * テーブル」のような名前を持つテーブルを椅子と誤判定しうる。カテゴリが
- * 判定できるならそちらを使い、机・テーブル・照明のカテゴリは商品名に
- * 座面を示す語があっても対象外にする。カテゴリが無い（未設定）ときだけ
- * 商品名を見るが、そのときも机・テーブル・照明を示す語が先にあれば
- * 対象外とする。
+ * テーブル」のような名前を持つテーブルを椅子と誤判定しうる。机・テーブル
+ * ・照明を示す語が先にあれば、座面を示す語が同居していても対象外を
+ * 優先する。商品名の末尾に付く「関連:チェア」のような検索参考語(実際の
+ * 商品種別ではない)は判定材料から外す。
  */
-const SEAT_REQUIRING_WORDS = /チェア|椅子|ソファ|スツール|オットマン|ベンチ/;
-const SEAT_EXCLUDED_WORDS = /テーブル|デスク|照明|ランプ|シェルフ|キャビネット|収納|ミラー|ラグ|ワゴン|ベッド|棚/;
+const SEAT_REQUIRING_WORDS = /チェア|椅子|(?<!ア)イス|ソファ|スツール|オットマン|ベンチ/;
+const SEAT_EXCLUDED_WORDS = /テーブル|デスク|机|照明|ランプ|シェルフ|キャビネット|収納|ミラー|ラグ|ワゴン|ベッド|棚/;
+
+/**
+ * 商品名の末尾に付く検索参考語(「関連:チェア」「関連：デスク,チェア」等)
+ * を判定対象から除く。実データにある付与形式で、類似商品の検索用に
+ * 付いているだけであり、その商品自体の種別ではない。
+ */
+function stripSearchReferenceHints(name: string): string {
+  return name.replace(/関連[:：][\s\S]*$/, "").trim();
+}
 
 export function requiresSeatDimensions(input: { categoryName?: string | null; name?: string | null }): boolean {
   const category = input.categoryName?.trim();
   if (category) {
-    // カテゴリがある場合はカテゴリだけで決める。商品名は見ない
+    // カテゴリが実際に商品種別(座面の要否)を示しているときだけ、
+    // カテゴリだけで決める。商品名は見ない
     // (「デスク」カテゴリの商品名に「チェア」が混ざっていても対象外)。
     if (SEAT_EXCLUDED_WORDS.test(category)) return false;
-    return SEAT_REQUIRING_WORDS.test(category);
+    if (SEAT_REQUIRING_WORDS.test(category)) return true;
+    // ここに来るのは「販売中」「撮影待ち」のような業務区分 ——
+    // 商品種別を示していないので、商品名で判定する(下へフォールスルー)。
   }
-  // カテゴリ未設定のときだけ商品名を見る。机/テーブル/照明を示す語が
-  // あれば、座面を示す語が同居していても対象外を優先する。
   const name = input.name?.trim();
   if (!name) return false;
-  if (SEAT_EXCLUDED_WORDS.test(name)) return false;
-  return SEAT_REQUIRING_WORDS.test(name);
+  const searchableName = stripSearchReferenceHints(name);
+  if (!searchableName) return false;
+  // 机/テーブル/照明を示す語があれば、座面を示す語が同居していても
+  // 対象外を優先する。
+  if (SEAT_EXCLUDED_WORDS.test(searchableName)) return false;
+  return SEAT_REQUIRING_WORDS.test(searchableName);
 }
 
 /**

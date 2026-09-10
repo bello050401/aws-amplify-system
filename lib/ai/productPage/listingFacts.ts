@@ -26,7 +26,7 @@ import {
 import { requiresSeatDimensions, resolveSeatDimensions, type SeatDimensions } from "@/lib/inventory/seatDimensions";
 import { calculateShippingRankFromDimensionsDetailed, type ShippingRank } from "@/lib/shipping/rank";
 import { KAZAI_SERVICE_NAME } from "@/lib/shipping/serviceName";
-import { resolveSagawaSize, type SagawaSizeResult } from "@/lib/shipping/sagawaSize";
+import { resolveSagawaSize, type SagawaSizeResult, type SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
 import { DEFAULT_LISTING_SHIPPING_METHOD, type ListingShippingMethod } from "@/lib/listing/types";
 
 /** 生成へ渡す在庫の生データ(呼び出し側が Inventory から詰める)。 */
@@ -117,6 +117,52 @@ export function hasGoodConditionEvidence(conditionRating: string | null | undefi
   // 傷・汚れが「ある」と読める記述があれば良好ではない。
   if (/(傷|汚れ|ダメージ|破れ|欠け|割れ|ヘタり|使用感|打痕|色褪せ|補修)/.test(normalized)) return false;
   return /(良好|美品|きれい|綺麗)/.test(normalized);
+}
+
+/**
+ * 配送警告のメッセージの先頭部分。クライアント側(ListingForm.tsx)が
+ * 「配送方法だけを生成後に切り替えた」ときに、古い方の警告を判別して
+ * 差し替えるためのプレフィックスとして共有する(下の関数群を参照)。
+ */
+export const SAGAWA_UNAVAILABLE_WARNING_PREFIX = "⚠ 佐川急便のサイズを判定できません";
+export const KAZAI_RANK_UNAVAILABLE_WARNING_PREFIX = "⚠ 配送ランクを確定できません";
+
+/**
+ * 配送の警告(担当者が選んでいる方法にだけ出す)を1つ組み立てる共通関数
+ * (2026-09-10追加指示・レビュー対応)。
+ *
+ * buildListingFacts(生成時点)と ListingForm.tsx(生成後に画面の配送方法
+ * だけを切り替えたとき)の両方から呼ぶ。ここを2箇所に別々に書くと、
+ * 生成直後の警告と、切り替え後にクライアントが作り直す警告の文言が
+ * ずれる恐れがある。
+ */
+export function buildShippingWarning(input: {
+  shippingMethod: ListingShippingMethod;
+  sagawaUnavailableReason: SagawaUnavailableReason | null;
+  sagawaNote: string;
+  shippingRankReason: string | null;
+}): string | null {
+  if (input.shippingMethod === "SAGAWA") {
+    return input.sagawaUnavailableReason ? `${SAGAWA_UNAVAILABLE_WARNING_PREFIX}：${input.sagawaNote}` : null;
+  }
+  return input.shippingRankReason ? `${KAZAI_RANK_UNAVAILABLE_WARNING_PREFIX}：${input.shippingRankReason}` : null;
+}
+
+/**
+ * 生成時に確定した警告一覧のうち、配送警告だけを現在選択中の配送方法
+ * 向けへ差し替える。座面寸法・メンテナンス等、配送方法に関係ない警告は
+ * そのまま残す(§21 警告を手抜きで全部消さない)。
+ *
+ * 生成ボタンを押した後に画面の配送方法だけを切り替えても、
+ * サーバーへ再度問い合わせずにこの関数で警告を作り直せる —— 元の
+ * 配送警告(例:「らくらく家財便」選択時に出た「配送ランクを確定できま
+ * せん」)を、選んでいない方法の警告として残さない。
+ */
+export function withCurrentShippingWarning(warnings: string[], currentShippingWarning: string | null): string[] {
+  const rest = warnings.filter(
+    (w) => !w.startsWith(SAGAWA_UNAVAILABLE_WARNING_PREFIX) && !w.startsWith(KAZAI_RANK_UNAVAILABLE_WARNING_PREFIX),
+  );
+  return currentShippingWarning ? [...rest, currentShippingWarning] : rest;
 }
 
 /** 素材の値として使える文字列か。ZAICOには "-" や "不明" が入ることがある。 */
@@ -212,11 +258,13 @@ export function buildListingFacts(input: ListingFactsInput): ListingFacts {
   // 佐川を選んでいないのに「佐川のサイズを判定できません」と出ると、
   // 実際には使わない配送方法の警告に気を取られる。ランク・サイズ自体は
   // どちらも上で確定済みなので、選択を切り替えれば警告も即座に変わる。
-  if (shippingMethod === "SAGAWA") {
-    if (sagawa.unavailableReason) warnings.push(`⚠ 佐川急便のサイズを判定できません：${sagawa.note}`);
-  } else if (shippingRankReason) {
-    warnings.push(`⚠ 配送ランクを確定できません：${shippingRankReason}`);
-  }
+  const shippingWarning = buildShippingWarning({
+    shippingMethod,
+    sagawaUnavailableReason: sagawa.unavailableReason,
+    sagawaNote: sagawa.note,
+    shippingRankReason,
+  });
+  if (shippingWarning) warnings.push(shippingWarning);
   // 材質未登録・不明は警告にしない(2026-09-10追加指示)。値・事実として
   // は残す(material フィールドはそのまま null/文字列を返す)が、生成を
   // 妨げるほどの不足ではないので担当者への警告からは外す。

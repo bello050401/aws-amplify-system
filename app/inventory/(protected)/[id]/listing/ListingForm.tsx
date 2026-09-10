@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   getChannelListingAction,
   getListingDraftAction,
@@ -19,6 +19,8 @@ import type {
 import { LISTING_SHIPPING_METHODS } from "@/lib/listing/types";
 import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
+import { buildShippingWarning, withCurrentShippingWarning } from "@/lib/ai/productPage/listingFacts";
+import type { SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
 import { AutoPricingSection } from "./AutoPricingSection";
 import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
@@ -115,11 +117,39 @@ export function ListingForm({
       /** 実際に本文へ入れた配送方法(§1)。画面の選択と一致しているか確かめられる。 */
       method: ListingShippingMethod;
       kazaiRank: string | null;
+      /** 家財便ランクを確定できなかった理由。レビュー対応: 生成後に配送方法だけを切り替えたときの警告作り直しに使う。 */
+      kazaiRankReason: string | null;
       kazaiSumCm: number | null;
       sagawaSize: string | null;
+      /** 佐川サイズを判定できなかった理由。判定できていれば null。 */
+      sagawaUnavailableReason: SagawaUnavailableReason | null;
       sagawaNote: string;
     };
   } | null>(null);
+
+  /**
+   * §21 データ不足の警告を、生成後に配送方法だけ切り替えても追従させる
+   * (レビュー対応: 2026-09-10追加指示)。
+   *
+   * `aiQuality.warnings` は生成した瞬間の配送方法(`aiQuality.shipping.method`)
+   * に対して確定した配列で、以後は固定値のまま — 画面の配送方法セレクトを
+   * 切り替えても、これまではその古い配送警告が消えずに残っていた
+   * (「らくらく家財便」を選び直しても「佐川急便のサイズを判定できません」
+   * が残る)。座面寸法・メンテナンス等、配送に関係ない警告はそのまま
+   * 残す(§21 警告を手抜きで全部消さない) —— 配送警告だけを
+   * buildShippingWarning で選択中の方法向けに作り直し、
+   * withCurrentShippingWarning で差し替える。
+   */
+  const displayedWarnings = useMemo(() => {
+    if (!aiQuality) return [];
+    const currentShippingWarning = buildShippingWarning({
+      shippingMethod,
+      sagawaUnavailableReason: aiQuality.shipping.sagawaUnavailableReason,
+      sagawaNote: aiQuality.shipping.sagawaNote,
+      shippingRankReason: aiQuality.shipping.kazaiRankReason,
+    });
+    return withCurrentShippingWarning(aiQuality.warnings, currentShippingWarning);
+  }, [aiQuality, shippingMethod]);
 
   const [categoryId, setCategoryId] = useState(initialChannelListing?.categoryMapping?.mercariCategoryId ?? "");
   const [categoryName, setCategoryName] = useState(initialChannelListing?.categoryMapping?.mercariCategoryName ?? "");
@@ -331,12 +361,15 @@ export function ListingForm({
           </button>
         </div>
         {/* §21 データ不足は生成を止めずに知らせる。「⚠ 座面寸法が登録されて
-            いません」「⚠ 配送ランクを確定できません」がここに出る。 */}
-        {aiQuality && aiQuality.warnings.length > 0 && (
+            いません」「⚠ 配送ランクを確定できません」がここに出る。
+            配送関連の警告だけは displayedWarnings 側で選択中の配送方法に
+            合わせて作り直したもの(レビュー対応: 生成後に配送方法を
+            切り替えても追従する)。 */}
+        {aiQuality && displayedWarnings.length > 0 && (
           <div className="mb-2 border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
             <p className="font-bold">確認が必要な項目</p>
             <ul className="mt-1">
-              {aiQuality.warnings.map((w, i) => (
+              {displayedWarnings.map((w, i) => (
                 <li key={i}>{w}</li>
               ))}
             </ul>

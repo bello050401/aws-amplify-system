@@ -50,7 +50,14 @@ import {
   RINSER_SENTENCE,
   SHIPPING_UNDETERMINED_MARKER,
 } from "@/lib/ai/productPage/descriptionSections";
-import { buildListingFacts, hasGoodConditionEvidence } from "@/lib/ai/productPage/listingFacts";
+import {
+  buildListingFacts,
+  buildShippingWarning,
+  hasGoodConditionEvidence,
+  KAZAI_RANK_UNAVAILABLE_WARNING_PREFIX,
+  SAGAWA_UNAVAILABLE_WARNING_PREFIX,
+  withCurrentShippingWarning,
+} from "@/lib/ai/productPage/listingFacts";
 import { formatDescriptionForChannel, normalizeDescription } from "@/lib/listing/descriptionFormat";
 import {
   DEFAULT_LISTING_SHIPPING_METHOD,
@@ -826,6 +833,42 @@ function testRequiresSeatDimensions() {
     "カテゴリ未設定: 商品名にテーブルの語があれば対象外を優先する",
   );
   assertEqual(requiresSeatDimensions({ categoryName: null, name: null }), false, "カテゴリ・商品名どちらも無ければ対象外");
+
+  // ── レビュー対応(2026-09-10): BELLO実カテゴリは業務区分 ────────────
+  //
+  // 実データの categoryName は「販売中」「撮影待ち」「川越移動予定,
+  // 五十嵐さん」のような業務区分で、商品種別を示さない。椅子でも
+  // categoryName はこの形になりうるので、こうした値は商品種別の根拠に
+  // せず商品名へフォールバックする(=カテゴリを無視するのではなく、
+  // 「そのカテゴリが商品種別を示していない」ときだけ商品名を見る)。
+  assertEqual(
+    requiresSeatDimensions({ categoryName: "販売中", name: "北欧モダン チェア" }),
+    true,
+    "業務区分カテゴリ(販売中)+商品名の椅子: 商品名で座面必須と判定",
+  );
+  assertEqual(
+    requiresSeatDimensions({ categoryName: "撮影待ち", name: "北欧イスセット" }),
+    true,
+    "業務区分カテゴリ(撮影待ち)+商品名のイス(実表記): 座面必須",
+  );
+  assertEqual(
+    requiresSeatDimensions({ categoryName: "川越移動予定,五十嵐さん", name: "北欧モダン デスク 関連:チェア" }),
+    false,
+    "業務区分カテゴリ+デスク(「関連:チェア」は検索参考語なので無視): 座面対象外",
+  );
+  // カテゴリが実表記の商品種別を示していれば、従来どおりカテゴリだけで決める。
+  assertEqual(requiresSeatDimensions({ categoryName: "椅子" }), true, "椅子カテゴリ(実表記)は座面必須");
+  assertEqual(
+    requiresSeatDimensions({ categoryName: "机", name: "北欧机 関連:チェア" }),
+    false,
+    "机カテゴリ(実表記)は座面対象外。商品名に関連語のチェアがあっても見ない",
+  );
+  // 「イス」の実装は「アイス」を誤検出しない(ア+イスの並びを除く)。
+  assertEqual(
+    requiresSeatDimensions({ categoryName: null, name: "アイスグレーの鏡" }),
+    false,
+    "商品名の「アイス」に含まれる「イス」を椅子と誤検出しない",
+  );
 }
 
 const DESK_INPUT = {
@@ -886,6 +929,15 @@ function testSeatWarningScopedToSeatedFurniture() {
   // 全軸そろっている椅子は座面の警告そのものが出ない。
   const fullSeat = buildListingFacts(CHAIR_INPUT);
   assertTrue(!fullSeat.warnings.some((w) => w.includes("座面寸法")), "座面寸法が3軸そろっていれば警告なし");
+
+  // レビュー対応: categoryName が実データどおりの業務区分(商品種別を
+  // 示さない)でも、商品名から椅子と判定できれば座面警告が出ることを
+  // buildListingFacts経由(実際に画面が使う経路)でも確認する。
+  const businessCategoryChair = buildListingFacts({ ...CHAIR_INPUT, categoryName: "撮影待ち", seatDimensionsField: null });
+  assertTrue(
+    businessCategoryChair.warnings.some((w) => w.includes("座面寸法が登録されていません")),
+    "業務区分カテゴリ(撮影待ち)でも商品名から椅子と判定して座面警告を出す",
+  );
 }
 
 function testShippingWarningFollowsSelectedMethod() {
@@ -924,6 +976,82 @@ function testShippingWarningFollowsSelectedMethod() {
   const sagawaWithDims = buildListingFacts({ ...dims, shippingMethod: "SAGAWA" });
   assertEqual(kazaiWithDims.shippingRank, sagawaWithDims.shippingRank, "配送方法の選択に関わらず家財便ランクは同じ値を返す");
   assertEqual(kazaiWithDims.sagawa.sizeClass?.size, sagawaWithDims.sagawa.sizeClass?.size, "配送方法の選択に関わらず佐川サイズは同じ値を返す");
+}
+
+/**
+ * レビュー対応: ListingForm.tsx が生成後に画面の配送方法だけを切り替えた
+ * ときに使う共通関数(buildShippingWarning / withCurrentShippingWarning)。
+ * サーバーへ再問い合わせせずに、選んでいない方法の古い配送警告を残さない
+ * ことをここで固定する(座面寸法等、配送に関係ない警告は残す)。
+ */
+function testShippingWarningReplacementFollowsMethodSwitch() {
+  const noDims = { ...CHAIR_INPUT, width: null, depth: null, height: null, seatDimensionsField: null };
+
+  // 生成時(らくらく家財便を選択中)は家財便の警告が入る。
+  const generatedWithKazai = buildListingFacts({ ...noDims, shippingMethod: "KAZAI" });
+  assertTrue(
+    generatedWithKazai.warnings.some((w) => w.startsWith(KAZAI_RANK_UNAVAILABLE_WARNING_PREFIX)),
+    "生成時(家財便選択): 家財便の警告が入る",
+  );
+
+  // 生成後に画面だけ佐川へ切り替えた場合を模す(buildListingFactsを
+  // 呼び直さない —— ListingForm.tsx と同じ経路)。
+  const switchedToSagawa = buildShippingWarning({
+    shippingMethod: "SAGAWA",
+    sagawaUnavailableReason: generatedWithKazai.sagawa.unavailableReason,
+    sagawaNote: generatedWithKazai.sagawa.note,
+    shippingRankReason: generatedWithKazai.shippingRankReason,
+  });
+  const afterSwitch = withCurrentShippingWarning(generatedWithKazai.warnings, switchedToSagawa);
+
+  assertTrue(
+    !afterSwitch.some((w) => w.startsWith(KAZAI_RANK_UNAVAILABLE_WARNING_PREFIX)),
+    "配送方法切り替え後: 家財便の古い警告は残らない",
+  );
+  assertTrue(
+    afterSwitch.some((w) => w.startsWith(SAGAWA_UNAVAILABLE_WARNING_PREFIX)),
+    "配送方法切り替え後: 佐川の警告に差し替わる",
+  );
+  assertTrue(
+    afterSwitch.some((w) => w.includes("座面寸法が登録されていません")),
+    "配送方法切り替え後も配送に関係ない警告(座面寸法)はそのまま残す(警告を手抜きで全部消さない)",
+  );
+
+  // 逆方向(佐川 → 家財便)でも同様に差し替わる。
+  const generatedWithSagawa = buildListingFacts({ ...noDims, shippingMethod: "SAGAWA" });
+  const switchedToKazai = buildShippingWarning({
+    shippingMethod: "KAZAI",
+    sagawaUnavailableReason: generatedWithSagawa.sagawa.unavailableReason,
+    sagawaNote: generatedWithSagawa.sagawa.note,
+    shippingRankReason: generatedWithSagawa.shippingRankReason,
+  });
+  const afterSwitchBack = withCurrentShippingWarning(generatedWithSagawa.warnings, switchedToKazai);
+  assertTrue(
+    !afterSwitchBack.some((w) => w.startsWith(SAGAWA_UNAVAILABLE_WARNING_PREFIX)),
+    "逆方向(佐川→家財便)切り替え後: 佐川の古い警告は残らない",
+  );
+  assertTrue(
+    afterSwitchBack.some((w) => w.startsWith(KAZAI_RANK_UNAVAILABLE_WARNING_PREFIX)),
+    "逆方向(佐川→家財便)切り替え後: 家財便の警告に差し替わる",
+  );
+
+  // 寸法がそろっている商品は、切り替えてもどちらの配送警告も出ない。
+  const generatedWithDims = buildListingFacts({ ...CHAIR_INPUT, shippingMethod: "KAZAI" });
+  const noWarningAfterSwitch = withCurrentShippingWarning(
+    generatedWithDims.warnings,
+    buildShippingWarning({
+      shippingMethod: "SAGAWA",
+      sagawaUnavailableReason: generatedWithDims.sagawa.unavailableReason,
+      sagawaNote: generatedWithDims.sagawa.note,
+      shippingRankReason: generatedWithDims.shippingRankReason,
+    }),
+  );
+  assertTrue(
+    !noWarningAfterSwitch.some(
+      (w) => w.startsWith(KAZAI_RANK_UNAVAILABLE_WARNING_PREFIX) || w.startsWith(SAGAWA_UNAVAILABLE_WARNING_PREFIX),
+    ),
+    "寸法が確定していれば、配送方法を切り替えても配送警告は出ない",
+  );
 }
 
 function testMaterialUnknownDoesNotWarn() {
@@ -1060,6 +1188,7 @@ function main() {
   testRequiresSeatDimensions();
   testSeatWarningScopedToSeatedFurniture();
   testShippingWarningFollowsSelectedMethod();
+  testShippingWarningReplacementFollowsMethodSwitch();
   testMaterialUnknownDoesNotWarn();
 
   console.log("\n── §4/§27 商品説明全体 ─────────────────────────────");

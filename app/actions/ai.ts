@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { generateCanonicalProductPage, toListingDraftCopy, type ListingDraftCopy } from "@/lib/ai/productPage/canonical";
-import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
+import { formatSagawaSize, type SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
 import type { ListingShippingMethod } from "@/lib/listing/types";
 import { saveGeneratedProductPage } from "@/lib/ai/productPage/history";
 
@@ -104,8 +104,12 @@ export type GenerateListingCopyActionResult =
       /** ルールで確定した配送判定(画面に出して送料計算と突き合わせられるようにする)。 */
       shipping: {
         kazaiRank: string | null;
+        /** 家財便ランクを確定できなかった理由(レビュー対応: クライアント側で警告を作り直すために必要)。 */
+        kazaiRankReason: string | null;
         kazaiSumCm: number | null;
         sagawaSize: string | null;
+        /** 佐川サイズを判定できなかった理由(同上)。判定できていれば null。 */
+        sagawaUnavailableReason: SagawaUnavailableReason | null;
         /** 実際に使った配送方法(§1)。画面の選択と本文が一致していることを確かめられる。 */
         method: ListingShippingMethod;
         sagawaNote: string;
@@ -201,8 +205,10 @@ export async function generateListingCopyAction(
       ruleNotes: result.ruleNotes,
       shipping: {
         kazaiRank: result.facts.shippingRank,
+        kazaiRankReason: result.facts.shippingRankReason,
         kazaiSumCm: result.facts.shippingSumCm,
         sagawaSize: formatSagawaSize(result.facts.sagawa),
+        sagawaUnavailableReason: result.facts.sagawa.unavailableReason,
         method: result.shippingMethod,
         sagawaNote: result.facts.sagawa.note,
       },
