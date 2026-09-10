@@ -1,5 +1,5 @@
 import "server-only";
-import { listAllInventory, listInventoryBySaleMonth } from "./queries";
+import { listAllInventory, listInventoryBySaleMonth, type InventorySearchRecord } from "./queries";
 import { formatYearMonth, totalsFromAggregate, type SalesTotals } from "./salesAggregate";
 import { getMonthlyAggregates, type StoredAggregate } from "./salesAggregateStore";
 import { summarizeSales, shiftYearMonth, type MonthlyTrendPoint, type SalesSummary } from "./sales";
@@ -48,45 +48,66 @@ export async function loadSalesView(year: number, month: number): Promise<SalesV
   const keys = months.map((m) => formatYearMonth(m.year, m.month));
 
   // 2026-09-09 追加指示(§5 速度): 集計テーブル(SalesMonthlyAggregate)の
-  // GetItemと、明細(Inventoryのその月ぶん)の読み取りは別テーブル・
-  // 互いに依存しない読み取りなので、直列awaitを並列化する。エラー処理は
-  // 従来どおり集計側だけに掛ける(明細取得が失敗した場合は例外がそのまま
-  // 呼び出し元へ伝播する、という挙動も変えない)。
-  const [aggregates, monthRecords] = await Promise.all([
-    getMonthlyAggregates(keys).catch((err) => {
-      // 集計テーブルがまだデプロイされていない/読めない場合も、画面は
-      // 従来どおり出さなければならない。黙って0にしない。
-      console.warn("[sales] 集計テーブルを読めなかったため、その場で計算します", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return new Map<string, StoredAggregate>();
-    }),
-    // 明細(その月に売れた商品の一覧)は集計に持てないので在庫を読む。
-    // ただし**その月のぶんだけ**。以前はここで全件(5,313件)読んでいた。
-    listInventoryBySaleMonth(year, month),
-  ]);
+  // GetItemは、明細(Inventory)の読み取りとは別テーブル・互いに依存し
+  // ない読み取り。ただし2026-09-10 追加修正(§速度、下のコメント参照)で
+  // 「明細読み取りのどちらを呼ぶか」自体が集計の結果に依存するように
+  // なったため、ここは先に集計だけを待つ(集計はyearMonthを主キーに
+  // した点読みGetItem×12で、在庫Scanより桁違いに軽い)。
+  const aggregates = await getMonthlyAggregates(keys).catch((err) => {
+    // 集計テーブルがまだデプロイされていない/読めない場合も、画面は
+    // 従来どおり出さなければならない。黙って0にしない。
+    console.warn("[sales] 集計テーブルを読めなかったため、その場で計算します", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Map<string, StoredAggregate>();
+  });
 
   const currentKey = formatYearMonth(year, month);
   const currentAggregate = aggregates.get(currentKey) ?? null;
 
+  // 過去月(当月を除く)に集計欠損が残っているか。残っていれば、その
+  // 埋め合わせとして在庫全件走査(listAllInventory)がどのみち必要になる
+  // ——当月の集計が有る/無いに関わらない(推移12ヶ月ぶんの判定なので)。
+  const missingPastMonths = months.filter(
+    (m) => (m.year !== year || m.month !== month) && !aggregates.has(formatYearMonth(m.year, m.month)),
+  );
+  const needsFullScan = missingPastMonths.length > 0;
+
+  // 2026-09-10 追加修正(§速度、当月欠損時の重複Scan): 以前はここで
+  // 「明細(その月に売れた商品の一覧、listInventoryBySaleMonth)」を
+  // 常に無条件で呼んだうえで、過去月の集計欠損があれば別途
+  // listAllInventory も呼んでいた。しかし lib/inventory/queries.ts の
+  // listInventoryBySaleMonth 自身のコメントにある通り、DynamoDBは
+  // フィルタを適用する前に行を読むため「月で絞っても往復回数は
+  // listAllInventory と同じ」——つまり過去月にも欠損があるケースでは、
+  // 実質「全件相当のScan」を同じリクエスト内で二重に(月フィルタ付き
+  // 1回+フィルタ無し1回)行っていた。
+  //
+  // 全件走査がどのみち必要(needsFullScan)なら、その1回の結果を明細にも
+  // 転用する(summarizeSalesは受け取った配列を年月でさらに絞り込むので、
+  // 全件を渡しても月フィルタ付きの結果と同じ値になる) —— 全件走査が
+  // 不要なとき(推移12ヶ月すべて集計がそろっている)だけ、従来どおり
+  // 月フィルタ付きの1回で済ませる。どちらの分岐でも在庫の読み取りは
+  // 高々1回。
+  let allRecords: InventorySearchRecord[] = [];
+  let monthRecords: InventorySearchRecord[];
+  if (needsFullScan) {
+    allRecords = await listAllInventory();
+    monthRecords = allRecords;
+  } else {
+    // 明細(その月に売れた商品の一覧)は集計に持てないので在庫を読む。
+    // ただし**その月のぶんだけ**。以前はここで全件(5,313件)読んでいた。
+    monthRecords = await listInventoryBySaleMonth(year, month);
+  }
+
   const live = summarizeSales(monthRecords, year, month);
 
   if (!currentAggregate) {
-    // 当月の集計が無い場合。合計と明細は monthRecords から正しく出せる
-    // が、12ヶ月推移だけは他の月のデータが要る。集計がある月はそれを
-    // 使い、無い月だけ全件走査へ落ちる —— 「集計が無いから0円」には
-    // 絶対にしない。
-    //
-    // 当月ぶんは上ですでに monthRecords を取得・集計済み(= live)なので、
-    // 走査要否の判定(と、実際の推移値の穴埋め)からは当月を除く ——
-    // 除かないと「当月の集計だけ無い」というごく普通のケース(集計バッチ
-    // はまだ回っていない)でも毎回、全在庫(5,313件)を余分に読みに行って
-    // しまう(当月分は live で足りているのに)。過去月にも集計欠損が
-    // 残っている場合だけ、その埋め合わせとして全件走査へ落ちる。
-    const missingTrendMonths = months.filter(
-      (m) => (m.year !== year || m.month !== month) && !aggregates.has(formatYearMonth(m.year, m.month)),
-    );
-    const allRecords = missingTrendMonths.length > 0 ? await listAllInventory() : [];
+    // 当月の集計が無い場合。合計と明細は monthRecords(または全件走査の
+    // 結果)から正しく出せる。12ヶ月推移は、集計がある月はそれを使い、
+    // 無い月(=missingPastMonths、上ですでに全件走査済み)だけ
+    // allRecords から実数を埋める —— 「集計が無いから0円」には絶対に
+    // しない。
     return {
       summary: live,
       trend: months.map((m) => {
@@ -112,25 +133,13 @@ export async function loadSalesView(year: number, month: number): Promise<SalesV
     items: live.items,
   };
 
-  // 推移。集計が無い月だけ、その月ぶんを引いて埋める(0で埋めない)。
-  //
-  // 2026-09-10 追加修正(§速度): 以前はここを Promise.all で「月ごとに
-  // listInventoryBySaleMonth(=在庫全件Scan)を個別に呼ぶ」形にしていた
-  // ——集計テーブルの再構築バッチがまだ追いついておらず、推移対象の
-  // 12ヶ月のうち複数が集計欠損だと、**欠損月の数だけ在庫全件Scanが
-  // 並列で走る**(5,313件 × 欠損月数、同期中にDynamoDBの
-  // 負荷が重なる可能性がある。実エラーとの因果は未確認)。
-  // 上の「当月の集計が無い」分岐(2abfc95で先に直した側)と同じ考え方
-  // ——欠損月が1つでもあれば listAllInventory を1回だけ呼び、その1回の
-  // 結果から欠損月ぶんをまとめて計算する。DBへの往復も転送量も
-  // 「欠損月の数」に比例しなくなる(常に高々1回)。並列awaitが不要に
-  // なったため同期のPromise.allも外した。
-  const missingPastMonths = months.filter((m) => !aggregates.has(formatYearMonth(m.year, m.month)));
-  const allRecordsForTrend = missingPastMonths.length > 0 ? await listAllInventory() : [];
+  // 推移。集計が無い月(= missingPastMonths、上ですでに全件走査済みか
+  // どうかが決まっている)だけ、allRecords から引いて埋める(0で埋め
+  // ない)。過去に欠損月が何ヶ月あっても、在庫の読み取りは上の1回のみ。
   const trend: MonthlyTrendPoint[] = months.map((m) => {
     const agg = aggregates.get(formatYearMonth(m.year, m.month));
     if (agg) return { year: m.year, month: m.month, totalSales: agg.totalSales, totalGrossProfit: agg.totalProfit };
-    const one = summarizeSales(allRecordsForTrend, m.year, m.month);
+    const one = summarizeSales(allRecords, m.year, m.month);
     return { year: m.year, month: m.month, totalSales: one.totalSales, totalGrossProfit: one.totalProfit };
   });
 

@@ -3,15 +3,28 @@
  *
  * ── 何を確かめるか ──────────────────────────────────────────────
  *
- * 修正前は「当月の集計はある」が「12ヶ月推移のうち過去の何ヶ月かは集計が
- * 欠損している」場合、欠損月**ごと**に listInventoryBySaleMonth(=在庫の
- * 全件Scan)を個別に呼んでいた —— 欠損月が2つあれば全件Scanが2回、5つ
- * あれば5回、それぞれ並列に走る。売上画面を開くたびに起きるうえ、ZAICO
- * 同期でDynamoDBへの書き込みが重なる時間帯には往復回数が余分に増える
- * ぶんスロットリングに当たりやすくなる**はず**だが、これは実装から導ける
- * 推論であって、参照番号つきエラー画面との因果関係を実測で確認したもの
- * ではない(スロットリング発生の実測ログは無い)。この検証が確認できるのは
- * 「欠損月ごとの個別Scanが1回にまとまったこと」という往復回数の性質のみ。
+ * (旧)修正前は「当月の集計はある」が「12ヶ月推移のうち過去の何ヶ月かは
+ * 集計が欠損している」場合、欠損月**ごと**に listInventoryBySaleMonth
+ * (=在庫の全件Scan)を個別に呼んでいた —— 欠損月が2つあれば全件Scanが
+ * 2回、5つあれば5回、それぞれ並列に走る。
+ *
+ * (新)上の重複は1回のlistAllInventoryにまとめ済み(2abfc95/7e5cc21)
+ * だったが、それでも「月フィルタ付きの明細取得(listInventoryBySaleMonth)」
+ * は過去月の欠損有無に関わらず常に無条件で呼ばれており、過去月に欠損が
+ * あるケースでは同じリクエスト内で listInventoryBySaleMonth と
+ * listAllInventory が両方走っていた —— listInventoryBySaleMonth は
+ * フィルタを適用する前にDynamoDBが全件を読む(lib/inventory/queries.ts
+ * の該当コメント参照)ため、実質「全件相当のScanを2回」していたのと同じ。
+ * 今回の修正は、全件走査がどのみち必要な場合はその結果を明細にも転用し、
+ * 在庫の読み取りをリクエストあたり高々1回に統一した。
+ *
+ * 売上画面を開くたびに起きるうえ、ZAICO同期でDynamoDBへの書き込みが重なる
+ * 時間帯には往復回数が余分に増えるぶんスロットリングに当たりやすくなる
+ * **はず**だが、これは実装から導ける推論であって、参照番号つきエラー画面
+ * との因果関係を実測で確認したものではない(スロットリング発生の実測ログは
+ * 無い)。この検証が確認できるのは「在庫の読み取りが高々1回にまとまった
+ * こと」という往復回数の性質のみ(実ブラウザでの体感速度はQAの再検証まで
+ * 未確認)。
  *
  * この検証は本物の lib/inventory/salesView.ts / lib/inventory/sales.ts /
  * lib/inventory/salesAggregate.ts を実際に呼び出し、AWS依存の2箇所
@@ -132,8 +145,10 @@ async function main() {
   const expectedLive = (year: number, month: number) => salesLib.summarizeSales(FIXTURE_RECORDS, year, month);
 
   // ── シナリオA: 当月の集計はある。過去の推移12ヶ月のうち2ヶ月
-  //    (2025-11, 2026-02)だけ集計が欠損 —— 修正前はこの2ヶ月ぶん
-  //    listInventoryBySaleMonth(全件Scan)が個別に走っていた。
+  //    (2025-11, 2026-02)だけ集計が欠損 —— 過去に欠損があるので全件
+  //    Scan(listAllInventory)がどのみち要る。今回の修正で、当月の明細
+  //    もその1回から転用し、月フィルタ付きのlistInventoryBySaleMonthは
+  //    呼ばれなくなる(以前はここでも二重に呼んでいた)。
   console.log("── シナリオA: 当月の集計あり・過去2ヶ月の集計が欠損 ──────");
   {
     const aggregates = new Map<string, ReturnType<typeof buildAggregateRow>>();
@@ -156,14 +171,13 @@ async function main() {
     check(view.summary.items.length === 2, "当月の商品一覧は在庫からの実数(2件)", String(view.summary.items.length));
 
     check(
-      queriesMock.calls.listInventoryBySaleMonth.length === 1 &&
-        queriesMock.calls.listInventoryBySaleMonth[0] === "2026-9",
-      "listInventoryBySaleMonthは当月ぶん1回だけ(欠損月ごとには呼ばない)",
+      queriesMock.calls.listInventoryBySaleMonth.length === 0,
+      "過去月に欠損があるときはlistInventoryBySaleMonthを呼ばない(全件Scanの結果を明細にも転用する)",
       JSON.stringify(queriesMock.calls.listInventoryBySaleMonth),
     );
     check(
       queriesMock.calls.listAllInventory === 1,
-      "欠損月が2つあっても全件Scan(listAllInventory)は1回だけ",
+      "欠損月が2つあっても在庫の読み取り(listAllInventory)は1回だけ(月フィルタ付きの別Scanと合わせて二重にならない)",
       String(queriesMock.calls.listAllInventory),
     );
 
@@ -242,19 +256,28 @@ async function main() {
     const view = await salesView.loadSalesView(2026, 9);
 
     check(view.servedFromAggregate === false, "当月集計が無ければservedFromAggregate=false");
-    check(view.summary.totalSales === 40000, "当月合計はlistInventoryBySaleMonthからの実数(40000)", String(view.summary.totalSales));
+    check(view.summary.totalSales === 40000, "当月合計は全件Scanの結果からの実数(40000)", String(view.summary.totalSales));
     check(
       queriesMock.calls.listAllInventory === 1,
       "当月集計が無い分岐でも、欠損月ぶんの全件Scanはまとめて1回(既存修正の回帰なし)",
       String(queriesMock.calls.listAllInventory),
     );
+    check(
+      queriesMock.calls.listInventoryBySaleMonth.length === 0,
+      "過去月にも欠損があるため、月フィルタ付きの別Scan(listInventoryBySaleMonth)は呼ばない(当月の明細も全件Scanの結果から転用する)",
+      JSON.stringify(queriesMock.calls.listInventoryBySaleMonth),
+    );
   }
 
-  // ── シナリオD: 明細取得(listInventoryBySaleMonth)が失敗した場合は
-  //    例外がそのまま呼び出し元へ伝播する(既存の設計を維持しているか)。
-  console.log("\n── シナリオD: 明細取得の失敗は握りつぶさず伝播する ───────");
+  // ── シナリオD1: 過去月の集計欠損が無い(=月フィルタ付きの
+  //    listInventoryBySaleMonthだけが呼ばれる)場合、その失敗が例外として
+  //    そのまま呼び出し元へ伝播する(既存の設計を維持しているか)。
+  console.log("\n── シナリオD1: 明細取得(月フィルタ付き)の失敗は握りつぶさず伝播する ───");
   {
     const aggregates = new Map<string, ReturnType<typeof buildAggregateRow>>();
+    for (const ym of ["2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08"]) {
+      aggregates.set(ym, buildAggregateRow(ym, 0, 0, 0));
+    }
     aggregates.set("2026-09", buildAggregateRow("2026-09", 40000, 15000, 2));
     aggMock.__setAggregates(aggregates);
     queriesMock.__reset(FIXTURE_RECORDS);
@@ -268,7 +291,29 @@ async function main() {
       threw = true;
       message = err instanceof Error ? err.message : String(err);
     }
-    check(threw && message.includes("スロットリング"), "在庫Scanの失敗は例外としてそのまま伝わる(黙って0にしない)", message);
+    check(threw && message.includes("スロットリング"), "在庫Scan(月フィルタ付き)の失敗は例外としてそのまま伝わる(黙って0にしない)", message);
+  }
+
+  // ── シナリオD2: 過去月に集計欠損がある(=全件走査listAllInventoryが
+  //    明細も兼ねる)場合も、その失敗が例外としてそのまま呼び出し元へ
+  //    伝播する —— 今回の修正で明細の取得元が変わった分岐の回帰確認。
+  console.log("\n── シナリオD2: 明細取得(全件走査兼用)の失敗も握りつぶさず伝播する ───");
+  {
+    const aggregates = new Map<string, ReturnType<typeof buildAggregateRow>>();
+    aggregates.set("2026-09", buildAggregateRow("2026-09", 40000, 15000, 2));
+    aggMock.__setAggregates(aggregates);
+    queriesMock.__reset(FIXTURE_RECORDS);
+    queriesMock.__failNext("listAllInventory", "DynamoDBがスロットリングされました(模擬)");
+
+    let threw = false;
+    let message = "";
+    try {
+      await salesView.loadSalesView(2026, 9);
+    } catch (err) {
+      threw = true;
+      message = err instanceof Error ? err.message : String(err);
+    }
+    check(threw && message.includes("スロットリング"), "在庫Scan(全件走査兼用)の失敗も例外としてそのまま伝わる(黙って0にしない)", message);
   }
 
   // ── シナリオE: 集計テーブル自体が読めない(GetItem失敗)場合は、
@@ -281,6 +326,30 @@ async function main() {
     const view = await salesView.loadSalesView(2026, 9);
     check(view.servedFromAggregate === false, "集計テーブル障害時はその場計算に落ちる(例外を投げない)");
     check(view.summary.totalSales === 40000, "その場計算でも当月合計は正しい(40000)", String(view.summary.totalSales));
+    check(
+      queriesMock.calls.listAllInventory === 1 && queriesMock.calls.listInventoryBySaleMonth.length === 0,
+      "集計が全滅(=全月欠損扱い)でも在庫の読み取りはlistAllInventory1回にまとまる(二重Scanなし)",
+      `listAllInventory=${queriesMock.calls.listAllInventory} listInventoryBySaleMonth=${JSON.stringify(queriesMock.calls.listInventoryBySaleMonth)}`,
+    );
+  }
+
+  // ── シナリオF: 在庫データが1件も無い(空データ)。集計も無い。
+  //    0円表示がクラッシュせず、呼び出し回数も他シナリオと同じ性質を保つか。
+  console.log("\n── シナリオF: 在庫・集計とも空データ ─────────────────────");
+  {
+    aggMock.__setAggregates(new Map());
+    queriesMock.__reset([]);
+
+    const view = await salesView.loadSalesView(2026, 9);
+    check(view.servedFromAggregate === false, "集計が無ければservedFromAggregate=false(空データでも同じ)");
+    check(view.summary.totalSales === 0 && view.summary.totalProfit === 0, "空データなら合計0円(例外にならない)", `sales=${view.summary.totalSales} profit=${view.summary.totalProfit}`);
+    check(view.summary.items.length === 0, "対象商品0件", String(view.summary.items.length));
+    check(view.trend.length === 12 && view.trend.every((t) => t.totalSales === 0 && t.totalGrossProfit === 0), "推移12ヶ月すべて0円(欠落や例外なし)");
+    check(
+      queriesMock.calls.listAllInventory === 1 && queriesMock.calls.listInventoryBySaleMonth.length === 0,
+      "空データでも在庫の読み取りはlistAllInventory1回にまとまる(二重Scanなし)",
+      `listAllInventory=${queriesMock.calls.listAllInventory} listInventoryBySaleMonth=${JSON.stringify(queriesMock.calls.listInventoryBySaleMonth)}`,
+    );
   }
 
   console.log(`\n${passes} passed, ${failures} failed`);
