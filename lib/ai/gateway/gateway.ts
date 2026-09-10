@@ -79,31 +79,54 @@ export interface GatewayTextRequest {
 /**
  * §3.2 generateText — プレーンテキスト生成。品質ゲート判定→
  * 必要ならescalation→AIUsageLog記録まで、この1関数で完結する。
+ *
+ * 【記録タイミングの補正】以前はrouteGenerateTextが返す最終結果1件だけ
+ * をrecordAIUsageへ渡していた。品質ゲート不合格でescalationした場合、
+ * 最終結果はPREMIUM側の1回分のusageしか持たないため、ECONOMY/STANDARD
+ * 側で実際に発生した初回usage(=実際に課金される)が記録から漏れて
+ * いた。さらにescalation呼出自体が例外を投げた場合は初回成功分の記録
+ * すら残らなかった。
+ *
+ * 今はrouter.tsのonAttempt/onFailureで「provider呼出が完了する度」に
+ * 記録する — 初回のみで完了すれば1件、escalationすれば2件(各々その
+ * モデルのmodelId/usageで個別にestimateCostする。異なるモデルの単価を
+ * 合算しない)。onAttemptが受け取るresultは、router.ts側で既に品質
+ * ゲート判定(checkTextQuality)を適用し終えた値なので、providerが返す
+ * 固定qualityGatePassed(=true固定)がそのまま記録に残ることはない。
+ * escalation呼出だけが例外になった場合も、初回成功分はonAttempt側で
+ * 既に記録済みなので失われない。この関数自体はもうtry/catchしない —
+ * routeGenerateTextが自分でonFailureを呼んでから元の例外を
+ * re-throwするので、そのままcallerへ伝播させれば良い。最終的な戻り値
+ * (本文/モデル/品質ゲート結果の契約)は変えていない。
  */
 export async function generateText(req: GatewayTextRequest): Promise<AIGenerateResult<string>> {
   const provider = getProvider();
-  let result: AIGenerateResult<string> | null = null;
-  try {
-    result = await routeGenerateText(provider, {
-      task: req.task,
-      systemPrompt: req.systemPrompt,
-      userPrompt: req.userPrompt,
-      policy: { initialTier: req.tier, promptVersion: req.promptVersion },
-      qualityRules: req.qualityRules,
-    });
-    const estimatedCostUsd = provider.estimateCost(result.modelId, result.usage);
-    await recordAIUsage({ task: req.task, promptVersion: req.promptVersion, result, success: true, estimatedCostUsd });
-    return result;
-  } catch (err) {
-    await recordAIUsage({
-      task: req.task,
-      promptVersion: req.promptVersion,
-      result,
-      success: false,
-      errorMessage: err instanceof Error ? err.message : String(err),
-    });
-    throw err;
-  }
+  return routeGenerateText(provider, {
+    task: req.task,
+    systemPrompt: req.systemPrompt,
+    userPrompt: req.userPrompt,
+    policy: { initialTier: req.tier, promptVersion: req.promptVersion },
+    qualityRules: req.qualityRules,
+    onAttempt: async ({ result, escalated }) => {
+      const estimatedCostUsd = provider.estimateCost(result.modelId, result.usage);
+      // §4.1補正: providerが返すresult.fallbackOccurredは常にfalse固定
+      // (providerはescalationの概念を知らない — 発行元はrouter.ts)。
+      // ここでescalated(このprovider呼出がescalation呼出かどうか、
+      // routerが伝えるフックのフラグ)で上書きしてから記録することで、
+      // escalation呼出のAIUsageLog行がfallbackOccurred:trueで残る
+      // (providerの固定falseをそのまま記録に流用しない)。
+      await recordAIUsage({ task: req.task, promptVersion: req.promptVersion, result: { ...result, fallbackOccurred: escalated }, success: true, estimatedCostUsd });
+    },
+    onFailure: async ({ error }) => {
+      await recordAIUsage({
+        task: req.task,
+        promptVersion: req.promptVersion,
+        result: null,
+        success: false,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
 }
 
 export interface GatewayStructuredRequest<T extends Record<string, unknown>> {
@@ -116,31 +139,32 @@ export interface GatewayStructuredRequest<T extends Record<string, unknown>> {
   requiredNonEmptyFields: (keyof T)[];
 }
 
+/** 記録タイミングの補正内容はgenerateText側のコメント参照(同じ理由・同じ形)。 */
 export async function generateStructured<T extends Record<string, unknown>>(req: GatewayStructuredRequest<T>): Promise<AIGenerateResult<T>> {
   const provider = getProvider();
-  let result: AIGenerateResult<T> | null = null;
-  try {
-    result = await routeGenerateStructured<T>(provider, {
-      task: req.task,
-      systemPrompt: req.systemPrompt,
-      userPrompt: req.userPrompt,
-      toolSchema: req.toolSchema,
-      policy: { initialTier: req.tier, promptVersion: req.promptVersion },
-      requiredNonEmptyFields: req.requiredNonEmptyFields,
-    });
-    const estimatedCostUsd = provider.estimateCost(result.modelId, result.usage);
-    await recordAIUsage({ task: req.task, promptVersion: req.promptVersion, result, success: true, estimatedCostUsd });
-    return result;
-  } catch (err) {
-    await recordAIUsage({
-      task: req.task,
-      promptVersion: req.promptVersion,
-      result,
-      success: false,
-      errorMessage: err instanceof Error ? err.message : String(err),
-    });
-    throw err;
-  }
+  return routeGenerateStructured<T>(provider, {
+    task: req.task,
+    systemPrompt: req.systemPrompt,
+    userPrompt: req.userPrompt,
+    toolSchema: req.toolSchema,
+    policy: { initialTier: req.tier, promptVersion: req.promptVersion },
+    requiredNonEmptyFields: req.requiredNonEmptyFields,
+    onAttempt: async ({ result, escalated }) => {
+      const estimatedCostUsd = provider.estimateCost(result.modelId, result.usage);
+      // §4.1補正: generateText側と同じ理由(コメント参照) — providerの
+      // 固定fallbackOccurred(常にfalse)をそのまま記録に流用しない。
+      await recordAIUsage({ task: req.task, promptVersion: req.promptVersion, result: { ...result, fallbackOccurred: escalated }, success: true, estimatedCostUsd });
+    },
+    onFailure: async ({ error }) => {
+      await recordAIUsage({
+        task: req.task,
+        promptVersion: req.promptVersion,
+        result: null,
+        success: false,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
 }
 
 export async function healthCheck(): Promise<{ ok: boolean; message: string }> {
