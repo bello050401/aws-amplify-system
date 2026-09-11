@@ -26,6 +26,14 @@ import { getAIReplySettings } from "./settings";
 import { extractShippingDestination, missingShippingInfo } from "./shippingIntent";
 import { buildInquirySystemPrompt, buildInquiryUserPrompt, INQUIRY_PROMPT_VERSION } from "./prompt";
 import { REPLY_MAX_GENERATION_ATTEMPTS, validateReplyDraft } from "./validate";
+import {
+  buildAnswerPlan,
+  buildAnswerPlanGuidance,
+  detectInternalLeak,
+  detectUngroundedPromises,
+  inspectAnswerPlanCoverage,
+  type AnswerPlanEvidence,
+} from "./answerPlan";
 import { createDirectUrlProvider, getAgentCoreGatewayUrl, getWebResearchAvailability, researchMissingFacts } from "./research/service";
 import { createAgentCoreSearchProvider } from "./research/agentCoreProvider";
 import { brandsInText, officialDomainsForBrands } from "./research/officialDomains";
@@ -52,6 +60,7 @@ import {
 import { selectReplyRules, type ReplyRuleRecord } from "./replyRuleSelection";
 import { listActiveReplyRules } from "./replyRuleStore";
 import type { MessageChannel } from "@/lib/messaging/types";
+import { INQUIRY_INTENT_LABEL } from "./types";
 import type {
   ExternalResearchFact,
   InquiryIntent,
@@ -1037,10 +1046,25 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     version: r.version,
   }));
 
+  // ── 質問単位の回答計画(AnswerPlan) ──────────────────────────────
+  //
+  // ここまでに確定した unresolved・trustedProductFacts・workingContext を
+  // そのまま入力にする(新しく「何が未解決か」を判定し直さない —— 既存の
+  // unresolved判定・knownFacts判定をそのまま再利用する。lib/inquiry/
+  // answerPlan.ts のファイル冒頭コメント参照)。新しいAI呼び出しは無い。
+  const answerPlan = buildAnswerPlan({
+    messageText,
+    hasProduct: inventory != null,
+    trustedFactLabels: trustedProductFacts.map((f) => f.label),
+    knownFactLabels: knownFacts(workingContext).map((f) => f.label),
+    unresolved,
+  });
+
   // ── 生成 ──────────────────────────────────────────────────────
   const systemPrompt = buildInquirySystemPrompt();
   const userPrompt = buildInquiryUserPrompt({
     intents,
+    answerPlanGuidance: buildAnswerPlanGuidance(answerPlan),
     replyRules: appliedRules.map((r) => ({
       title: r.title,
       category: r.category,
@@ -1104,6 +1128,28 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     negotiationResult?.evidence.requestedTotalPriceYen ?? Number.NaN,
     negotiationResult?.evidence.requestedUnitPriceYen ?? Number.NaN,
   ].filter((n) => Number.isFinite(n) && n > 0);
+  // ── 値引きの根拠(§9 根拠の無い約束を検出する) ────────────────────
+  //
+  // allowedMoneyYen には「お客様ご自身が書かれた金額の復唱」も混ざる
+  // (上のコメント参照)。復唱を許すことと、「値引きします」と断定して
+  // よいことは別で、allowedMoneyYen.length > 0 だけを見ると、配送先が
+  // まだ分からず値引きの可否そのものを書いてはいけない場面
+  // (awaitingDestination)でも、お客様が金額を提示しただけで「値引きの
+  // 根拠あり」と誤認してしまう。negotiationServiceが実際に確定した
+  // 値引き後価格(customerSafeFacts)がある場合だけを根拠として扱う
+  // (isApprovedDiscountGroundedは純粋関数として切り出し、
+  // scripts/verify-inquiry-answer-plan.tsから直接検証できるようにする)。
+  const hasApprovedDiscountOffer = isApprovedDiscountGrounded(negotiationResult?.customerSafeFacts ?? []);
+  // ── 状態の程度の根拠(§9 根拠の無い約束と既存trusted factsとの整合) ──
+  //
+  // trustedProductFactsの「状態」ラベルは、在庫DBのdamageNotes(またはその
+  // 補助のconditionRating文字列)由来の事実(§ trustedProductFacts.push
+  // 呼び出し箇所を参照)。この事実が既にある状態で生成文がその内容を
+  // 述べただけでも、UNGROUNDED_PROMISE_PATTERNSの「状態の程度の断定」は
+  // 無条件だと反応してしまい、根拠のある回答を根拠なしとして再試行し
+  // 続ける(答案が変わっても同じ事実を書く限り毎回落ちる)。値引きと同じ
+  // 形でtrustedProductFactsに「状態」の事実があるときだけ許可する。
+  const hasGroundedConditionFact = trustedProductFacts.some((f) => f.label === "状態" || f.label.startsWith("状態("));
   const allowedDimensionText = [...dimensionTexts, ...research.facts.map((f) => f.value ?? "")];
   // §4「重量不明を性別や一般論で安全断定しない」。BASE商品説明から読み取った
   // 重量と、外部調査で確認できた重量だけを許可する。
@@ -1160,16 +1206,63 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       groundedTexts: [...knowledgeHits.map((k) => k.excerpt), ...trustedProductFacts.map((f) => f.value)],
     });
     if (validation.ok) {
-      return finish({
-        status: deriveStatus(resolution.status, unresolved, research.facts),
-        draftText: output,
-        evidence,
-        intents,
-        unresolvedFacts: unresolved,
-        modelProvider,
-        modelName,
-        failureReason: null,
+      // ── AnswerPlan固有の生成後検査(既存の検査枠をそのまま使う) ──────
+      //
+      // 内部用語の漏洩・根拠の無い約束は、既存のFABRICATED系検査と同じ
+      // 「安全性の検査に落ちた」として扱い、同じ再試行(REPLY_MAX_GENERATION_
+      // ATTEMPTS)の中で直させる。**再試行回数は増やさない** —— 新しい
+      // AI呼び出しが増えるのは、ここが原因で3回目まで使い切るときだけで、
+      // 既存の検査だけでも起こりうる挙動と同じ枠に収まる。
+      const internalLeaks = detectInternalLeak(output);
+      const ungroundedPromises = detectUngroundedPromises(output, {
+        groundedDiscount: hasApprovedDiscountOffer,
+        groundedCondition: hasGroundedConditionFact,
       });
+      if (internalLeaks.length === 0 && ungroundedPromises.length === 0) {
+        // ── 答え漏れの疑い(§7 生成後の照合) ──────────────────────
+        //
+        // ここでMISSINGが見つかっても**作り直さない**(§コスト最優先)。
+        // 「スタッフ確認付き下書き」として、既存のunresolvedFacts経由で
+        // 担当者へ知らせるだけにする —— deriveStatusは既存のロジックの
+        // ままで、unresolvedが増えれば自然にRESEARCH_INCOMPLETEへ倒れる。
+        const coverage = inspectAnswerPlanCoverage(output, answerPlan);
+        for (const gap of coverage.items.filter((i) => i.coverage === "MISSING")) {
+          unresolved.push({
+            field: `${INQUIRY_INTENT_LABEL[gap.topic]}への回答`,
+            reason: "生成文にこの質問への言及が見当たりません。送信前に内容を確認してください(自動検査は完全ではないため、実際に答えていれば問題ありません)。",
+          });
+        }
+        const answerPlanEvidence: AnswerPlanEvidence = {
+          items: answerPlan.items,
+          coverage: coverage.items,
+          ungroundedPromises: [],
+        };
+        evidence.answerPlan = answerPlanEvidence;
+        return finish({
+          status: deriveStatus(resolution.status, unresolved, research.facts),
+          draftText: output,
+          evidence,
+          intents,
+          unresolvedFacts: unresolved,
+          modelProvider,
+          modelName,
+          failureReason: null,
+        });
+      }
+      lastViolations = [
+        ...internalLeaks.map((t) => `- 内部用語「${t}」が出力にそのまま含まれています。削除してください。`),
+        ...ungroundedPromises.map((p) => `- 根拠の無い約束(${p})を書いています。TRUSTED_FACTSに無い場合は書かないでください。`),
+      ];
+      // §32: 検査に落ちたことは構造化ログに残す。生成文そのものは残さない
+      // (顧客本文・生成文には個人情報が混ざりうる)。conversationId等の
+      // 識別子も残さない(§識別情報の新規記録禁止)—— attempt番号と検査結果
+      // だけで、このプロセス内でのデバッグには十分足りる。
+      console.warn("[inquiryReply] AnswerPlanの生成後検査で不合格", {
+        attempt,
+        internalLeaks,
+        ungroundedPromises,
+      });
+      continue;
     }
     lastViolations = validation.violations.map((v) => `- ${v.detail}`);
     // §32: 検査に落ちたことは構造化ログに残す。生成文そのものは残さない
@@ -1195,6 +1288,21 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     modelName,
     failureReason: `生成結果が安全性・事実整合性の検査に${REPLY_MAX_GENERATION_ATTEMPTS}回続けて不合格でした: ${lastViolations.join(" ")}`,
   });
+}
+
+/**
+ * 「値引きします」を根拠ありとして扱ってよいか(§9)。
+ *
+ * **金額の存在そのものは根拠にしない。** allowedMoneyYen には顧客自身が
+ * 書いた希望額の復唱も混ざる(呼び出し側のコメント参照)ため、
+ * `allowedMoneyYen.length > 0` を根拠にすると、配送先が未確定で値引き
+ * 可否そのものを書いてはいけない場面でも「根拠あり」と誤認する
+ * (実際に承認された値下げが無くても、お客様が金額を書いただけで
+ * 通ってしまっていた)。negotiationServiceが実際に計算した値引き後価格
+ * (customerSafeFacts)がある場合だけを根拠として扱う。
+ */
+export function isApprovedDiscountGrounded(customerSafeFacts: { label: string; value: string }[]): boolean {
+  return customerSafeFacts.length > 0;
 }
 
 /**

@@ -140,6 +140,15 @@ export interface InquiryUserPromptInput {
      */
     requestedComparison?: "REQUEST_ABOVE_OFFER" | "REQUEST_BELOW_OFFER" | "UNKNOWN";
   } | null;
+  /**
+   * 質問単位のAnswerPlan(lib/inquiry/answerPlan.ts)から作った、分量・
+   * 食い違いの扱いについての指示文(2026-09-11 追加)。
+   *
+   * **AnswerPlanそのものは渡さない。** questionId・status・evidenceRefsと
+   * いった内部の言葉が生成文にそのまま出るのを防ぐため、渡すのは
+   * buildAnswerPlanGuidanceが日本語の指示文として組み立てた結果だけにする。
+   */
+  answerPlanGuidance?: string | null;
 }
 
 export function buildInquiryUserPrompt(input: InquiryUserPromptInput): string {
@@ -209,6 +218,12 @@ export function buildInquiryUserPrompt(input: InquiryUserPromptInput): string {
 
   const unresolved = input.unresolved.map((u) => `- ${u.field}`);
   sections.push(`UNRESOLVED:\n${unresolved.length > 0 ? unresolved.join("\n") : "(なし)"}`);
+
+  // §8 質問数に応じた分量制御。AnswerPlanが作った日本語の指示文だけを渡す
+  // (内部の言葉は含まれない。lib/inquiry/answerPlan.ts参照)。
+  if (input.answerPlanGuidance?.trim()) {
+    sections.push(`ANSWER_LENGTH_GUIDANCE:\n${input.answerPlanGuidance.trim()}`);
+  }
 
   // ── 値下げ交渉の進め方(指示書§4) ────────────────────────────
   //

@@ -293,6 +293,15 @@ export interface ReplyEvidence {
   staffCard?: NegotiationStaffCard | null;
   /** どの生成ルートを通ったか(「参照情報を表示」の診断用)。 */
   generationRoute?: string;
+  /**
+   * 質問単位の回答計画と、生成後の照合結果(lib/inquiry/answerPlan.ts)。
+   *
+   * 管理画面の参照情報にのみ出す。**顧客向けの返信本文の組み立て関数
+   * (buildInquiryUserPrompt)には、この値そのものは渡らない** ——
+   * 渡るのはbuildAnswerPlanGuidanceが作る指示文(分量・食い違いの扱い)
+   * だけで、questionIdやstatusといった内部の言葉は含まない。
+   */
+  answerPlan?: import("./answerPlan").AnswerPlanEvidence | null;
 }
 
 /**
