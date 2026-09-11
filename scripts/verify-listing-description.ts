@@ -742,6 +742,198 @@ function testConditionPhrasingLocatedFragments() {
   assertTrue(!canonical.text.includes(GOOD_CONDITION_SENTENCE), "§5 傷の記述があるので良好の定型文は使わない");
 }
 
+/**
+ * ── 常体の物語メモの書き換え(2026-09-11 追加指示、2026-09-12 事実区分の修正) ──
+ *
+ * 報告された実例そのもの:「カップの内側に錆があった。取ったけど跡あり。」
+ * のような、句点はあるが常体で書かれた口語メモ。§5「既に文章になって
+ * いるものは書き換えない」の対象は**丁寧語で書かれた**完成文であって、
+ * 常体のメモまで対象外にしてはいけない。
+ *
+ * 2026-09-12 QAが指摘した2件は、いずれも「処置内容/実施事実が書き換えで
+ * 変わる」という事実保持違反だった。このテストはその2件の再発防止を含む。
+ */
+function testConditionPhrasingTreatmentNarrative() {
+  // 報告された実例そのもの: 処置済み(除去した) + 跡が残っている。
+  assertEqual(
+    normalizeConditionDisclosure("カップの内側に錆があった。取ったけど跡あり。")?.text,
+    "カップの内側のサビは除去しておりますが、処理後の跡が残っています。詳細はお写真をご確認ください。",
+    "報告された実例: 錆除去済み・跡ありを丁寧語の1文に整える",
+  );
+
+  // 処置済みで跡も残っていない。
+  assertEqual(
+    normalizeConditionDisclosure("天板に汚れがあった。拭いたらきれいになった。")?.text,
+    "天板の汚れは清掃しており、跡も残っておりません。詳細はお写真をご確認ください。",
+    "処置済み・跡なしも同様に整える",
+  );
+
+  // 否定文(未着手)を処置済みと取り違えない。
+  {
+    const r = normalizeConditionDisclosure("錆があった。まだ取っていない。")!;
+    assertTrue(r.text.includes("除去は行っておりません"), "否定文: 未着手(取っていない)を処置済みと誤読しない");
+    assertTrue(!r.text.includes("除去しております"), "否定文: 未着手なのに除去したと書かない");
+  }
+  assertEqual(
+    normalizeConditionDisclosure("錆未除去")?.text,
+    "サビがございますが、除去は行っておりません。詳細はお写真をご確認ください。",
+    "短いメモでも未着手(未除去)を正しく読む",
+  );
+
+  // 2026-09-12 QA指摘その1: 「取れなかった」(除去を試みたが取りきれず
+  // 残った)は「取っていない」(未着手)と同じ事実ではない。「除去は行って
+  // おりません」と書くと試みた事実が消えるので、別の文にする。
+  {
+    const r = normalizeConditionDisclosure("カップの内側に錆があった。取ったけど取れなかった。")!;
+    assertTrue(!r.text.includes("除去は行っておりません"), "試行後残存: 未着手扱いにしない(試みた事実を消さない)");
+    assertTrue(!r.text.includes("除去しております。"), "試行後残存: 完了したとも書かない(取りきれていない)");
+    assertTrue(r.text.includes("試みました") && r.text.includes("取りきれておりません"), "試行後残存: 試みたが取りきれていない、の両方を書く");
+  }
+
+  // 予定(まだ実施していない)を完了と断定しない。
+  {
+    const r = normalizeConditionDisclosure("錆あり。除去予定。")!;
+    assertTrue(r.text.includes("予定"), "予定: まだ実施していないことを明示する");
+    assertTrue(!r.text.includes("除去しております"), "予定: 完了したと断定しない");
+  }
+
+  // 2026-09-12 QA指摘その2: 予定の動作(清掃/研磨)を一律「除去」に
+  // 変換しない。処置内容そのものが変わってしまうため。
+  assertEqual(
+    normalizeConditionDisclosure("汚れあり。清掃予定。")?.text,
+    "汚れがございます。清掃を予定しておりますが、現状は未対応です。詳細はお写真をご確認ください。",
+    "予定の動作区別: 清掃予定を除去予定にすり替えない",
+  );
+  assertEqual(
+    normalizeConditionDisclosure("天板に傷あり。研磨予定。")?.text,
+    "天板に傷がございます。研磨を予定しておりますが、現状は未対応です。詳細はお写真をご確認ください。",
+    "予定の動作区別: 研磨予定を除去予定にすり替えない",
+  );
+
+  // 処置の有無が読み取れないものは、処置済みと創作せず元の記述を保つ。
+  {
+    const r = normalizeConditionDisclosure("汚れあり。清掃未確認")!;
+    assertTrue(!r.text.includes("清掃しております"), "処置不明: 処置済みと創作しない");
+  }
+
+  // 程度の根拠が無いのに強さを表す語を補わない(§5の既存方針を維持)。
+  {
+    const r = normalizeConditionDisclosure("傷あり、程度不明")!;
+    assertTrue(!/わずか|目立たない|問題なく使える|清掃済み/.test(r.text), "程度不明: 根拠の無い強さの語を補わない");
+  }
+
+  // 複数箇所・複数の傷語は対応関係を特定できないため書き換えを諦め、
+  // 元の記述を保ったまま(事実を消さない・誤った対応も作らない)。
+  {
+    const r = normalizeConditionDisclosure("天板に傷、脚にサビあり。両方とも取った。")!;
+    assertTrue(r.text.includes("天板に傷") && r.text.includes("脚にサビ"), "複数箇所: 場所ごとの事実を落とさない");
+  }
+
+  // 無関係な処置の記述が同じ行に混ざっている場合、誤った対応関係を作らない
+  // (「コーティング除去済み」は天板の小傷の処置ではない)。
+  {
+    const r = normalizeConditionDisclosure("コーティング除去済み、天板に小傷あり")!;
+    assertTrue(!r.text.includes("小傷は除去して"), "無関係処置混入: 天板の小傷を誤って除去済みと書かない");
+  }
+
+  // 既に丁寧語で書かれた文章は対象外(§5を維持)。
+  assertEqual(
+    normalizeConditionDisclosure("錆がございましたが、除去しております。")?.rewritten,
+    false,
+    "既に丁寧語の完成文は書き換えの対象にしない(§5を維持)",
+  );
+
+  // ユーザー報告例(そのまま): 別の傷(跡)へ処置を結び付けない。
+  // 「跡あり」は錆を取った処理後の残存として読めるため、書き換え後も
+  // 別の傷として新規の事実(例えば「跡に汚れがある」等)を作文しない。
+  {
+    const r = normalizeConditionDisclosure("カップの内側に錆があった。取ったけど跡あり。")!;
+    assertTrue(!/汚れ|傷み|色褪せ/.test(r.text), "ユーザー例: 跡を錆以外の別の傷に結び付けて作文しない");
+  }
+}
+
+/**
+ * ── 改行で分かれた物語メモの結合(2026-09-12 実測に基づく追加修正) ──
+ *
+ * 隔離ブラウザでの実測により、改行なしの「カップの内側に錆があった。
+ * 取ったけど跡あり。」は自然文になる一方、ユーザーの元例のように**改行あり**
+ * (「カップの内側に錆があった。\n取ったけど跡あり。」)だと生の改行が
+ * そのまま残ることが判明した。tryMergeAdjacentTreatmentLines による
+ * 限定的な行結合の検証。
+ */
+function testConditionPhrasingTreatmentNarrativeAcrossLines() {
+  // ユーザー元例そのもの(LF): 改行があっても自然文になり、事実(除去済み・
+  // 跡が残っている)を保つ。生の改行が残らないことを確認する。
+  {
+    const r = normalizeConditionDisclosure("カップの内側に錆があった。\n取ったけど跡あり。")!;
+    assertEqual(
+      r.text,
+      "カップの内側のサビは除去しておりますが、処理後の跡が残っています。詳細はお写真をご確認ください。",
+      "ユーザー元例(LF): 改行ありでも自然文になり、事実を保つ",
+    );
+    assertTrue(!r.text.includes("\n"), "ユーザー元例(LF): 生の改行が残らない");
+  }
+
+  // 同じ例をCRLFで受け取っても同じ結果になる。
+  {
+    const r = normalizeConditionDisclosure("カップの内側に錆があった。\r\n取ったけど跡あり。")!;
+    assertEqual(
+      r.text,
+      "カップの内側のサビは除去しておりますが、処理後の跡が残っています。詳細はお写真をご確認ください。",
+      "ユーザー元例(CRLF): LFと同じ結果になる",
+    );
+  }
+
+  // 試行後残存(取ったけど取れなかった)も改行ありで同様に結合される。
+  {
+    const r = normalizeConditionDisclosure("カップの内側に錆があった。\n取ったけど取れなかった。")!;
+    assertTrue(r.text.includes("試みました") && r.text.includes("取りきれておりません"), "改行あり: 試行後残存の区別も維持する");
+    assertTrue(!r.text.includes("除去は行っておりません"), "改行あり: 試行後残存を未着手扱いにしない");
+  }
+
+  // 未着手(取っていない)も改行ありで結合される。
+  {
+    const r = normalizeConditionDisclosure("錆があった。\nまだ取っていない。")!;
+    assertTrue(r.text.includes("除去は行っておりません"), "改行あり: 未着手の区別も維持する");
+    assertTrue(!r.text.includes("除去しております"), "改行あり: 未着手なのに除去したと書かない");
+  }
+
+  // 予定(まだ未実施)も改行ありで結合される。動作(研磨)もすり替えない。
+  {
+    const r = normalizeConditionDisclosure("天板に傷があった。\n研磨予定。")!;
+    assertTrue(r.text.includes("研磨を予定しておりますが、現状は未対応です"), "改行あり: 予定の動作区別も維持する");
+    assertTrue(!r.text.includes("\n"), "改行あり: 予定の結合でも生の改行が残らない");
+  }
+
+  // 別箇所・別の傷は結合しない(対応関係を捏造しない)。改行はそのまま
+  // 残る(「改行を全消去するだけの修正」を禁止する既存方針の確認)。
+  {
+    const r = normalizeConditionDisclosure("天板に傷があった。\n脚にサビがあった。")!;
+    assertTrue(r.text.includes("\n"), "別箇所別傷: 対応関係が特定できないので改行を残す");
+    assertTrue(r.text.includes("天板に傷があった。") && r.text.includes("脚にサビがあった。"), "別箇所別傷: どちらの事実も保つ");
+  }
+
+  // 空行(連続する改行)を挟んでも壊れない。
+  {
+    const r = normalizeConditionDisclosure("カップの内側に錆があった。\n\n取ったけど跡あり。")!;
+    assertTrue(!r.text.includes("\n"), "空行を挟んでも結合が壊れない");
+    assertTrue(r.text.includes("処理後の跡が残っています"), "空行を挟んでも事実は保たれる");
+  }
+
+  // 箇条書き(・)を挟んでもクラッシュせず、事実(サビ・除去した旨)を落とさない。
+  {
+    const r = normalizeConditionDisclosure("・錆あり\n・取った跡が残っている")!;
+    assertTrue(/サビ/.test(r.text), "箇条書き: 傷の事実を落とさない");
+    assertTrue(!/汚れ|傷み|色褪せ/.test(r.text), "箇条書き: 別の傷を捏造しない");
+  }
+
+  // 既に丁寧語の行が隣接していても書き換えの対象にしない(§5維持)。
+  {
+    const r = normalizeConditionDisclosure("錆がございます。\n除去しております。")!;
+    assertTrue(r.text.includes("錆がございます。") && r.text.includes("除去しております。"), "丁寧文が隣接していても書き換えず保持する");
+  }
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * §20/§21 Product Context
  * ══════════════════════════════════════════════════════════════════ */
@@ -1180,6 +1372,8 @@ function main() {
   console.log("\n── 追加指示 §5 コンディション表現の正規化 ─────────");
   testConditionPhrasing();
   testConditionPhrasingLocatedFragments();
+  testConditionPhrasingTreatmentNarrative();
+  testConditionPhrasingTreatmentNarrativeAcrossLines();
 
   console.log("\n── §20/§21 Product Context ─────────────────────────");
   testListingFacts();

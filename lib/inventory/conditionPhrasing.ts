@@ -251,6 +251,278 @@ function locatedFragmentToSentence(clauses: FragmentClause[]): string {
   return `${parts.join("、")}がございます。`;
 }
 
+/**
+ * 「取った/除去した」のように、**その場でメモ書きされた口語の物語文**
+ * (2026-09-11 追加指示、2026-09-12 事実区分の修正)。
+ *
+ * ── 何が足りなかったか(実データで報告された例) ────────────────────
+ *
+ *   「カップの内側に錆があった。取ったけど跡あり。」
+ *
+ * この文字列には句点(。)があるため、上の isDamageFragment /
+ * parseLocatedFragmentLine のどちらも「文として成立している」と判定して
+ * 素通りさせていた —— しかしこれは丁寧語で書かれた完成文ではなく、
+ * 担当者がその場で書いた口語のメモ(「あった」「取った」「あり」という
+ * 常体の羅列)であり、そのまま顧客向けに出すのは§5の要求(丁寧語)を
+ * 満たさない。
+ *
+ * ── 何を書き換え、何を書き換えないか ──────────────────────────────
+ *
+ * すでに「です/ます/ございます/しております」等の丁寧語で書かれている
+ * 文は対象にしない(§5「既に文章になっているものは書き換えない」を維持)。
+ * 対象にするのは常体のメモだけ。
+ *
+ * 場所(「カップの内側」)・元の問題(「錆」)・処置の有無(取った/取って
+ * いない/取れなかった/取る予定)・残存状態(跡あり/跡なし)を分けて読み取り、
+ * **読み取れた範囲だけ**を丁寧語へ組み直す。処置の有無が読み取れない、
+ * または傷語が複数(=どの処置がどの箇所に対応するか特定できない)場合は
+ * 書き換えを諦め、呼び出し元の「そのまま句点だけ整える」経路へ委ねる —
+ * 不明な対応関係を機械的に決め打ちすると、元に無い事実を作ることになる。
+ *
+ * ── 処置内容と実施事実を変えない(2026-09-12 QA指摘の修正) ──────────
+ *
+ * 当初の実装には次の2つの不具合があった。
+ *
+ *   1. PLANNED(予定)を一律「除去を予定」と書いていた。「清掃予定」
+ *      「研磨予定」も除去に置き換わり、**予定している処置内容**が
+ *      元のメモと変わってしまう。→ 予定の語から実際の動作(清掃/研磨/
+ *      除去/対応)を読み取り、その語をそのまま使う(TREATMENT_PLANNED_ACTIONS)。
+ *   2. 「取れなかった」(除去を試みたが取りきれず残った)を「取っていない」
+ *      (そもそも着手していない)と同じ NOT_DONE 扱いにし、どちらも
+ *      「除去は行っておりません」と書いていた。前者は**試みた**という
+ *      事実が消え、後者と真逆の印象になる。→ 試行後残存(TRIED_NOT_REMOVED)
+ *      を未着手(NOT_DONE)から分離する。
+ */
+
+type TreatmentStatus = "DONE" | "TRIED_NOT_REMOVED" | "NOT_DONE" | "PLANNED";
+
+/**
+ * 除去を試みたが取りきれなかった(=残存している)ことを示す語。
+ *
+ * 「取っていない」等の未着手とは異なり、**処置を行った事実がある**。
+ * この事実を「除去は行っておりません」と書くと、試みた事実そのものを
+ * 消してしまう(2026-09-12 QA指摘)。未着手の語より先に見る必要は無い
+ * (語彙が重ならないため)が、DONEの動詞(「取った」等)より先に見る —
+ * 「取ったけど取れなかった」のように両方の語が混在する行では、
+ * 最終的な事実である「取りきれず残った」を優先するため。
+ */
+const TREATMENT_TRIED_NOT_REMOVED =
+  /(取れなかった|取りきれなかった|取れきらなかった|落ちなかった|落ちきらなかった|除去できなかった|除去しきれなかった)/;
+
+/** 未着手(そもそも処置を行っていない)を示す語。 */
+const TREATMENT_NOT_DONE =
+  /(未対応|未処置|未除去|取れていない|取っていない|除去していない|対応していない|処置していない|そのままに?なって(?:い)?(?:る|ます))/;
+
+/**
+ * 予定(まだ実施していない)を示す語と、その動作名。
+ *
+ * 動作ごとに配列を分けるのは、「清掃予定」「研磨予定」を「除去予定」と
+ * 同じ語へ丸めない(§5/§21 処置内容を書き換えて事実を変えない)ため。
+ * 具体的な動作語が書かれていない汎用の言い回し(「予定です」等)だけは
+ * 動作名を確定できないので action は null にし、呼び出し側で中立の
+ * 「対応」を補う(=新しい処置内容を作文するのではなく、最小限の
+ * 汎用語で留める)。
+ */
+const TREATMENT_PLANNED_ACTIONS: { pattern: RegExp; action: string | null }[] = [
+  { pattern: /清掃(?:する)?予定/, action: "清掃" },
+  { pattern: /研磨(?:する)?予定/, action: "研磨" },
+  { pattern: /除去(?:する)?予定/, action: "除去" },
+  { pattern: /(?:対応|処置)(?:する)?予定/, action: "対応" },
+  { pattern: /(?:する予定|予定です|予定しております)/, action: null },
+];
+
+/**
+ * 処置済みを示す語。動詞ごとに文章化するときの動作名を変える
+ * (すべて「除去」に寄せると、磨いた/クリーニングしたのような処置内容を
+ * 誤って言い換えることになる)。
+ */
+const TREATMENT_DONE_ACTIONS: { pattern: RegExp; action: string }[] = [
+  { pattern: /(取り除いた|除去した|除去済み|取った|落とした)/, action: "除去" },
+  { pattern: /研磨した/, action: "研磨" },
+  { pattern: /(磨いた|クリーニングした|洗浄した|拭いた|清掃した)/, action: "清掃" },
+  { pattern: /(対応した|処置した)/, action: "対応" },
+];
+
+interface TreatmentDetection {
+  status: TreatmentStatus;
+  /** 実際に処置(または予定)した動作名。読み取れない場合は null。 */
+  action: string | null;
+  /** 判定の根拠になった、文中の一致部分(残差チェック用)。 */
+  matched: string;
+}
+
+/**
+ * 文から処置の状態を読み取る。優先順位は
+ * 「試行後残存 → 未着手 → 予定 → 完了」。
+ *
+ * 試行後残存を最初に見るのは、「取ったけど取れなかった」のように
+ * DONE語(取った)と TRIED_NOT_REMOVED語(取れなかった)が同じ文に
+ * 混在する場合、**最終的な事実**(取りきれず残った)を優先するため
+ * (試みた過程ではなく結果を書く)。
+ */
+function detectTreatment(text: string): TreatmentDetection | null {
+  const tried = text.match(TREATMENT_TRIED_NOT_REMOVED);
+  if (tried) return { status: "TRIED_NOT_REMOVED", action: null, matched: tried[0] };
+  const notDone = text.match(TREATMENT_NOT_DONE);
+  if (notDone) return { status: "NOT_DONE", action: null, matched: notDone[0] };
+  for (const { pattern, action } of TREATMENT_PLANNED_ACTIONS) {
+    const m = text.match(pattern);
+    if (m) return { status: "PLANNED", action, matched: m[0] };
+  }
+  for (const { pattern, action } of TREATMENT_DONE_ACTIONS) {
+    const m = text.match(pattern);
+    if (m) return { status: "DONE", action, matched: m[0] };
+  }
+  return null;
+}
+
+/** 跡が残っていないことを示す語。「跡が残っている」と部分一致で誤検出しないよう、否定形を先に見る。 */
+const REMAIN_ABSENT = /(跡は残って?いな|跡は残らな|跡もな|跡なし|きれいに(?:取れた|なった)|完全に取れた|残らなかった)/;
+/** 跡が残っていることを示す語。 */
+const REMAIN_PRESENT = /(跡あり|跡が残|跡は残って|シミが残|痕が残|跡が薄く残|多少跡)/;
+
+function detectRemainState(text: string): boolean | null {
+  if (REMAIN_ABSENT.test(text)) return false;
+  if (REMAIN_PRESENT.test(text)) return true;
+  return null;
+}
+
+/** 傷語の直前を場所とみなせるか(parseFragmentClauseと同じ判断基準)。 */
+function extractLocationBeforeTerm(text: string, term: DamageTerm): string | null {
+  const m = text.match(term.pattern);
+  if (!m || m.index === undefined) return null;
+  const prefixStart = Math.max(text.lastIndexOf("。", m.index), text.lastIndexOf("\n", m.index)) + 1;
+  const prefix = text.slice(prefixStart, m.index);
+  const core = prefix.replace(/(に|の)$/, "").trim();
+  if (!core || core.length > 10 || SEVERITY_HINT.test(prefix) || /\d/.test(prefix)) return null;
+  return core;
+}
+
+/**
+ * 助詞・活用語尾・句読点だけの「つなぎ」の語。読み取った要素(場所/傷語/
+ * 処置/残存状態)をすべて取り除いたあとにこれらしか残っていなければ、
+ * メモの中身を取りこぼさずに読めたとみなす。
+ */
+const NARRATIVE_CONNECTIVE_FILLER = /(あった|けど|けれど|ので|でも|まだ|が|は|の|に|も|し|て|た|、|。|\s|　)/g;
+
+/**
+ * 読み取った処置の語が、本当にこの傷語について述べたものかを確かめる。
+ *
+ * detectTreatment は文字列全体を正規表現で見ているだけなので、
+ * 「コーティング除去済み、天板に小傷あり」のように**無関係な処置の記述**
+ * と傷語がたまたま同じ行にあるだけでも DONE と誤判定しうる —— この場合
+ * 「除去済み」はコーティングの話であって天板の小傷とは無関係なのに、
+ * 「天板の小傷は除去しております」と書くと事実を捏造したことになる。
+ *
+ * 場所・傷語・処置語・残存状態語を全て取り除いたあとの残り(つなぎの
+ * 助詞・句読点を除く)がほぼ無ければ「これで全部読み取れた」とみなし、
+ * 何か実質的な文字列が残るなら「読み取れていない部分がある」と判断して
+ * 書き換えを諦める(誤った対応関係を作らない)。
+ */
+function residueAfterNarrativeParse(text: string, consumed: (string | null)[]): string {
+  let residue = text;
+  for (const c of consumed) {
+    if (!c) continue;
+    residue = residue.replace(c, "");
+  }
+  return residue.replace(NARRATIVE_CONNECTIVE_FILLER, "");
+}
+
+/**
+ * 常体の物語メモを丁寧語の1文へ書き換える。書き換えられない(=処置の
+ * 有無が読み取れない/傷語が複数ある/読み取った要素だけでは説明しきれない
+ * 記述が混ざっている)場合は null を返し、呼び出し元が元の文をそのまま使う。
+ */
+function tryRewriteTreatmentNarrative(text: string): string | null {
+  if (/(です|ます|ございます|ました|しております)/.test(text)) return null; // 既に丁寧語なら対象外(§5)
+  const terms = extractDamageTerms(text);
+  if (terms.length !== 1) return null; // 複数箇所は対応関係を特定できないため対象外
+  const term = terms[0];
+
+  const detection = detectTreatment(text);
+  if (!detection) return null; // 処置の有無が読み取れないものは書き換えない
+  const { status, action, matched } = detection;
+
+  const location = extractLocationBeforeTerm(text, term);
+  const termMatch = text.match(term.pattern);
+  const remain = status === "DONE" ? detectRemainState(text) : null;
+  const remainMatch = remain === true ? text.match(REMAIN_PRESENT) : remain === false ? text.match(REMAIN_ABSENT) : null;
+
+  // 読み取れた要素だけで文の中身を説明しきれているかを確かめる。
+  // 説明しきれない記述が残るなら、無関係な処置の混入を疑い書き換えを諦める。
+  const residue = residueAfterNarrativeParse(text, [location, termMatch?.[0] ?? null, matched, remainMatch?.[0] ?? null]);
+  if (residue.length > 2) return null;
+
+  if (status === "NOT_DONE") {
+    return `${location ? `${location}に` : ""}${term.noun}がございますが、除去は行っておりません。`;
+  }
+  if (status === "TRIED_NOT_REMOVED") {
+    // 「取れなかった」は除去を試みた事実がある。「行っておりません」
+    // (未着手)と書くと試みた事実が消えるため、試行と残存の両方を書く。
+    return `${location ? `${location}に` : ""}${term.noun}がございます。除去を試みましたが、取りきれておりません。`;
+  }
+  if (status === "PLANNED") {
+    // 動作を特定できた場合はその語を使う(除去に丸めない)。特定できない
+    // 汎用の言い回し(「予定です」等)だけは中立の「対応」で留める。
+    const label = action ?? "対応";
+    return `${location ? `${location}に` : ""}${term.noun}がございます。${label}を予定しておりますが、現状は未対応です。`;
+  }
+  // DONE
+  const subject = location ? `${location}の${term.noun}` : term.noun;
+  if (remain === true) return `${subject}は${action}しておりますが、処理後の跡が残っています。`;
+  if (remain === false) return `${subject}は${action}しており、跡も残っておりません。`;
+  return `${subject}は${action}しております。`;
+}
+
+/**
+ * 隣接する2行が「傷の発見」+「処置の結果」に分かれているだけの限定ケースを
+ * 検出し、1文へ結合する(2026-09-12 改行ありの物語メモ対応)。
+ *
+ * ── なぜ隣接行だけを見るのか ────────────────────────────────────
+ *
+ * 実データには「カップの内側に錆があった。\n取ったけど跡あり。」のように、
+ * 発見と処置結果が改行で分かれた書き方がある。tryRewriteTreatmentNarrative
+ * は1行分の文字列しか見ないため、改行で分断されたままだと結合できず、
+ * 生の改行が商品説明にそのまま残ってしまう(改行なしなら自然文になるのに、
+ * 改行ありだけ要件未達になっていた実測結果への対応)。
+ *
+ * ── 結合してよい条件(限定ケース) ──────────────────────────────
+ *
+ *   1. current行に傷語がちょうど1つだけあり、処置の語は無い
+ *      (=「傷が見つかった」という事実だけを述べている)。
+ *   2. next行に傷語が無く、処置の語がある
+ *      (=「処置した/しなかった/する予定」という事実だけを述べている)。
+ *   3. どちらも既に丁寧語の完成文ではない(§5「既に文章になっているものは
+ *      書き換えない」を維持)。
+ *   4. 結合した文字列を tryRewriteTreatmentNarrative に渡し、実際に
+ *      書き換えられる(=読み取れた要素だけで説明しきれる)場合だけ採用する。
+ *
+ * これらを1つでも満たさなければ結合しない。特に next行に傷語がある場合
+ * (=別の箇所・別の傷の可能性)は結合を諦め、2行のまま(改行を残したまま)
+ * それぞれ個別に処理させる —— 別の傷の処置を誤って結び付けない(§5/§21
+ * 事実の捏造禁止)ための安全弁であり、「改行を全消去する」だけの修正には
+ * しない。
+ */
+function tryMergeAdjacentTreatmentLines(current: string, next: string): string | null {
+  const isAlreadyPolite = (t: string) => /(です|ます|ございます|ました|しております)/.test(t);
+  if (isAlreadyPolite(current) || isAlreadyPolite(next)) return null;
+
+  const currentTerms = extractDamageTerms(current);
+  if (currentTerms.length !== 1) return null;
+  // 発見行に処置の言及が既にあるなら、単独行の書き換え経路に任せる
+  // (そちらで既に解決できているはず。ここで重ねて扱うと二重処理になる)。
+  if (detectTreatment(current)) return null;
+
+  const nextTerms = extractDamageTerms(next);
+  // next行に傷語があるなら、別の箇所・別の傷の可能性がある。
+  // 機械的に結び付けず、行を分けたまま個別に処理させる。
+  if (nextTerms.length !== 0) return null;
+  if (!detectTreatment(next)) return null;
+
+  const sep = /[。！？]$/.test(current) ? "" : "。";
+  return tryRewriteTreatmentNarrative(`${current}${sep}${next}`);
+}
+
 export interface NormalizedCondition {
   /** 商品説明へ入れる文章。 */
   text: string;
@@ -277,7 +549,8 @@ export function normalizeConditionDisclosure(disclosure: string | null | undefin
   let hasDamage = false;
   const out: string[] = [];
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const terms = extractDamageTerms(line);
     if (terms.length > 0) hasDamage = true;
     if (isDamageFragment(line) && terms.length > 0) {
@@ -292,6 +565,27 @@ export function normalizeConditionDisclosure(disclosure: string | null | undefin
       out.push(locatedFragmentToSentence(locatedClauses));
       rewritten = true;
       continue;
+    }
+    // 常体の物語メモ(「錆があった。取ったけど跡あり。」等)は、句点が
+    // あるだけで丁寧語の完成文とは限らない。読み取れる範囲でだけ書き換える。
+    const narrative = tryRewriteTreatmentNarrative(line);
+    if (narrative) {
+      out.push(narrative);
+      rewritten = true;
+      continue;
+    }
+    // 「カップの内側に錆があった。\n取ったけど跡あり。」のように、発見と
+    // 処置結果が改行で分かれているだけの限定ケース。結合できたときだけ
+    // 次の行を読み飛ばす(結合できなければ、この行はそのまま個別に扱う)。
+    const nextLine = lines[i + 1];
+    if (nextLine !== undefined) {
+      const merged = tryMergeAdjacentTreatmentLines(line, nextLine);
+      if (merged) {
+        out.push(merged);
+        rewritten = true;
+        i += 1;
+        continue;
+      }
     }
     // 断片でない(=説明が書かれている)ものは触らない。句点だけ整える。
     out.push(/[。！？]$/.test(line) ? line : `${line}。`);
