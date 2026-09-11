@@ -233,6 +233,113 @@ function testOtherPolicies() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 5.5 販売価格(成約) — MANUAL_REVIEWでも既存の空欄は補完する
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * QAが実データで確認した事故: salePrice は MANUAL_REVIEW のため、
+ * BELLOが空欄・ZAICOが数値でも一律CONFLICTになり、APPLYされなかった。
+ * 「レビューに出すべき既存の判断」が無いのに人へ確認を求め続け、公開
+ * 画面の価格欠損が同期を何度回しても直らなかった(2026-09-11 修正)。
+ *
+ * 直した後も、**両方に値があって食い違う場合は従来どおりCONFLICT**
+ * (ZAICO_ALWAYSへは緩めない — 成約価格は売上集計の元になるため)。
+ */
+function testSalePriceManualReviewFillsBlank() {
+  // 既存空欄 + 有効なZAICO価格 → 補完する。
+  const blank = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 46220,
+    belloValue: null,
+    lastZaicoValue: undefined,
+  });
+  assertEqual(blank.action, "APPLY", "販売価格: 既存が空欄ならMANUAL_REVIEWでも補完する");
+  assertEqual((blank as { value: unknown }).value, 46220, "販売価格: 補完される値");
+
+  // 空文字も空欄として扱う。
+  const blankString = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 46220,
+    belloValue: "",
+    lastZaicoValue: undefined,
+  });
+  assertEqual(blankString.action, "APPLY", "販売価格: 空文字も空欄として補完する");
+
+  // 0 は有効な値。空欄と混同せず、そのまま補完してよい。
+  const zeroFromZaico = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 0,
+    belloValue: null,
+    lastZaicoValue: undefined,
+  });
+  assertEqual(zeroFromZaico.action, "APPLY", "販売価格: ZAICOが0でも(0は空欄ではないので)補完する");
+  assertEqual((zeroFromZaico as { value: unknown }).value, 0, "販売価格: 補完される値は0");
+
+  // 既存が0円(有効な入力)なら、それは「空欄」ではない——食い違いは従来どおりCONFLICT。
+  const zeroInBello = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 46220,
+    belloValue: 0,
+    lastZaicoValue: undefined,
+  });
+  assertEqual(zeroInBello.action, "CONFLICT", "販売価格: BELLO側の0円入力は空欄扱いせず、食い違いとして人へ出す");
+
+  // ZAICO側が空なら、どの分岐に行く前に共通規則で既存値を消さない。
+  const zaicoEmpty = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: null,
+    belloValue: 46222,
+    lastZaicoValue: 46222,
+  });
+  assertEqual(zaicoEmpty.action, "KEEP", "販売価格: ZAICO側が空なら既存値を消さない");
+
+  // 同値なら書き込む必要が無い。
+  const same = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 46220,
+    belloValue: 46220,
+    lastZaicoValue: undefined,
+  });
+  assertEqual(same.action, "KEEP", "販売価格: 同値なら書き込まない");
+
+  // 既存に値があって食い違う場合は、前回スナップショットの有無に関わらず
+  // 従来どおりCONFLICT(ZAICO_ALWAYSへは緩めない)。
+  const conflictNoSnapshot = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 46220,
+    belloValue: 46222,
+    lastZaicoValue: undefined,
+  });
+  assertEqual(conflictNoSnapshot.action, "CONFLICT", "販売価格: 前回値が無くても既存非空の食い違いはCONFLICT");
+
+  const conflictWithSnapshot = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 46220,
+    belloValue: 46222,
+    lastZaicoValue: 46220, // 前回はBELLOと一致していた=人が変えた可能性がある値
+  });
+  assertEqual(conflictWithSnapshot.action, "CONFLICT", "販売価格: 前回値があっても既存非空の食い違いはCONFLICT");
+
+  // 新規作成では他項目と同じくZAICOをそのまま入れる。
+  const created = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 46220,
+    belloValue: null,
+    lastZaicoValue: undefined,
+    isNewRecord: true,
+  });
+  assertEqual(created.action, "APPLY", "販売価格: 新規作成では常にZAICOを入れる");
+
+  // 同期再実行(冪等性): 補完した直後の2回目は同値なのでKEEP(再書き込みしない)。
+  const rerun = resolveFieldUpdate({
+    field: "salePrice",
+    zaicoValue: 46220,
+    belloValue: (blank as { value: unknown }).value,
+    lastZaicoValue: undefined,
+  });
+  assertEqual(rerun.action, "KEEP", "販売価格: 補完直後に同期を再実行しても書き込みは発生しない");
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * 6. 全方針に共通の安全規則
  * ══════════════════════════════════════════════════════════════════ */
 function testUniversalSafety() {
@@ -364,6 +471,38 @@ function testMergeIntegration() {
   assertEqual(conflict.conflicts.length, 1, "結線: 食い違いが1件報告される");
   assertEqual(conflict.conflicts[0].field, "salePrice", "結線: 食い違いの項目名");
 
+  // 販売価格: 既存が空欄なら、MANUAL_REVIEWでもmergeZaicoUpdate経由で
+  // 補完される(QAが確認した実事故 — 名称/aliasのマッピング修正だけでは
+  // この経路は直らない)。conflictsには出ず、updatesに直接入る。
+  const salePriceBlank = mergeZaicoUpdate({
+    zaico: { salePrice: 24800, extendedFields: {}, customFields: {} },
+    bello: { salePrice: null, extendedFields: {}, customFields: {} },
+    snapshotJson: null,
+    isNewRecord: false,
+  });
+  assertEqual(salePriceBlank.updates.salePrice, 24800, "結線: 既存空欄の販売価格をZAICOで補完する");
+  assertEqual(salePriceBlank.conflicts.length, 0, "結線: 空欄補完はCONFLICTとして報告しない");
+  assertTrue(salePriceBlank.hasChanges, "結線: 空欄補完は書き込みが必要と判定される");
+
+  // 0円のZAICO値でも(0は空欄ではないので)空欄のBELLOへ補完される。
+  const salePriceZeroFill = mergeZaicoUpdate({
+    zaico: { salePrice: 0, extendedFields: {}, customFields: {} },
+    bello: { salePrice: null, extendedFields: {}, customFields: {} },
+    snapshotJson: null,
+    isNewRecord: false,
+  });
+  assertEqual(salePriceZeroFill.updates.salePrice, 0, "結線: ZAICOの0円も空欄補完の対象になる");
+
+  // 補完直後に同期を再実行しても(値が一致するので)再書き込みされない。
+  const salePriceRerun = mergeZaicoUpdate({
+    zaico: { salePrice: 24800, extendedFields: {}, customFields: {} },
+    bello: { salePrice: 24800, extendedFields: {}, customFields: {} },
+    snapshotJson: salePriceBlank.nextSnapshotJson,
+    isNewRecord: false,
+  });
+  assertEqual(salePriceRerun.updates.salePrice, undefined, "結線: 補完直後の再同期では販売価格を書き込まない");
+  assertEqual(salePriceRerun.hasChanges, false, "結線: 補完直後の再同期は書き込み不要と判定される");
+
   // スナップショットは「ZAICOが言ってきた値」。2回目でも据え置かれる。
   const snap = JSON.parse(incident.nextSnapshotJson);
   assertEqual(snap.categoryId, "cat-shipped", "結線: スナップショットにはZAICOの値が入る");
@@ -421,6 +560,7 @@ function main() {
   testMergeIntegration();
   testCategoryRevertIncident();
   testPlannedSalePrice();
+  testSalePriceManualReviewFillsBlank();
   testDimensions();
   testCustomFields();
   testOtherPolicies();

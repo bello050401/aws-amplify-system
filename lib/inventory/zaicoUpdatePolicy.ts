@@ -145,11 +145,15 @@ export const ZAICO_FIELD_RULES: ZaicoFieldRule[] = [
   // ── 個別判断 ──────────────────────────────────────────────────
   {
     field: "salePrice",
-    label: "販売価格(成約)",
+    label: "販売価格",
     policy: "MANUAL_REVIEW",
     reason:
-      "成約後の実売価格で、売上集計の元になる。ZAICOが台帳の正本だが、食い違いは" +
-      "「どちらかが誤り」を意味するので黙って上書きも据え置きもしない。差分を人へ出す。",
+      "成約後の実売価格で、売上集計の元になる。ZAICOが台帳の正本だが、既存に値がある" +
+      "うえでの食い違いは「どちらかが誤り」を意味するので黙って上書きも据え置きもしない、" +
+      "差分を人へ出す(resolveFieldUpdateのMANUAL_REVIEW分岐参照)。" +
+      "一方、BELLO側が空欄なら守るべき既存の判断が無いので、他の空欄向け方針と同様に" +
+      "ZAICOの値で補完する(2026-09-11: 空欄が同期のたびCONFLICT扱いで据え置かれ続け、" +
+      "既存空欄を補完できないコード経路への修正)。",
   },
 
   // ── ZAICO常時優先(明示しておきたいもの) ──────────────────────
@@ -352,6 +356,25 @@ export function resolveFieldUpdate(input: ResolveInput): UpdateDecision {
     }
 
     case "MANUAL_REVIEW":
+      // BELLO側が空欄なら、レビューに出すべき既存の判断がそもそも無い。
+      // ここを一律CONFLICTにしていたため、名称/alias側のマッピング修正
+      // (task_b550)だけでは、既存在庫の空欄が同期のたびにCONFLICT扱いで
+      // 据え置かれ続け、公開画面の価格欠損が直らなかった(2026-09-11
+      // コード確認。個々の実データ原因は未照合)。他の空欄向け方針(FILL_IF_EMPTY/HUMAN_WINSの空欄枝)
+      // と同じく、守るべき既存値が無いときは補完する。0は空欄ではない
+      // (isEmptyValueが数値0をfalseにする)ので、0円という入力を補完対象
+      // と誤認しない。
+      //
+      // 既存に値がある場合の食い違いは、従来どおりCONFLICTのまま人へ
+      // 提示する——ZAICO_ALWAYSへ緩めない。金額を扱う項目で、食い違いは
+      // 「どちらかが誤り」を意味するため、安易に自動選択しない。
+      if (isEmptyValue(belloValue)) {
+        return {
+          action: "APPLY",
+          value: zaicoValue,
+          reason: "BELLO側が空欄。埋めるべき既存の判断が無いため補完する。",
+        };
+      }
       return {
         action: "CONFLICT",
         belloValue,

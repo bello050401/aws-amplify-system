@@ -185,7 +185,7 @@ export default async function InventoryDetailPage({
   // spec-mandated section (販売情報's「販売価格」) via the same
   // section-id key the New/Edit forms use for the identical placement.
   const extendedExtra: Partial<Record<string, ExtraSectionField[]>> = {
-    [SALES_SECTION_ID]: [{ label: "販売価格（成約）", rawValue: item.salePrice, display: formatYen(item.salePrice) }],
+    [SALES_SECTION_ID]: [{ label: "販売価格", rawValue: item.salePrice, display: formatYen(item.salePrice) }],
   };
 
   // D. 古物台帳・仕入情報 — この9項目の順序は仕様上固定 (「必ずこの順

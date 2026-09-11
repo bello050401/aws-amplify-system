@@ -375,7 +375,7 @@ export function EditInventoryForm({ item, categories, locations, statuses, custo
             columns={1}
             extra={
               section.id === SALES_SECTION_ID ? (
-                <LabeledInput label="販売価格（成約）" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" size="large" />
+                <LabeledInput label="販売価格" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" size="large" />
               ) : section.id === USED_GOODS_LEDGER_SECTION_ID ? (
                 // 追加修正指示 §9-§11: NewInventoryForm.tsxと同じ理由でラ
                 // ベルのみ「購入価格」→「原価」に変更(フィールド/値/schema

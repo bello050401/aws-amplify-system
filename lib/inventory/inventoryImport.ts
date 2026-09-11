@@ -118,7 +118,8 @@ const IMPORT_HEADER_ALIASES: { alias: string; key: string }[] = [
   { alias: "バーコード", key: "barcode" }, // ZAICOの正式列名は「QRコード・バーコードの値」
   { alias: "仕入原価", key: "purchasePrice" }, // 一覧列の表記(ZAICOの正式列名は「⚫︎購入価格」)
   { alias: "仕入単価", key: "purchasePrice" },
-  { alias: "販売価格（成約）", key: "salePrice" }, // 一覧列の表記(ZAICOの正式列名は「⚫︎販売価格」)
+  { alias: "販売価格（成約）", key: "salePrice" }, // 旧・一覧列/詳細画面の表記(2026-09-10に「販売価格」へ表示統一。ZAICOの正式列名は「⚫︎販売価格」)。過去にエクスポートしたCSVを読めるよう残す。
+  { alias: "販売価格", key: "salePrice" }, // 現行の一覧列/詳細画面の表記(ZAICOの正式列名は「⚫︎販売価格」)
   { alias: "カテゴリー", key: "categoryName" }, // 長音有無の表記ゆれ
   { alias: "ステータス", key: "statusLabel" },
 ];

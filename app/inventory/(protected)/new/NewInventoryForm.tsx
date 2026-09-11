@@ -412,7 +412,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
           onChange={handleExtendedFieldChange}
           extra={
             section.id === SALES_SECTION_ID ? (
-              <LabeledInput label="販売価格（成約）" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
+              <LabeledInput label="販売価格" type="number" value={salePrice} onChange={setSalePrice} placeholder="円" />
             ) : section.id === USED_GOODS_LEDGER_SECTION_ID ? (
               // 追加修正指示 §9-§11: この欄のラベルを「購入価格」から
               // 「原価」へ変更 — フィールド自体(purchasePrice, schema

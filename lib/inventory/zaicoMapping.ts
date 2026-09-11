@@ -78,8 +78,20 @@ export function normalizeZaicoAttributeName(name: string): string {
 
 export type ZaicoValueType = "number" | "date" | "text";
 
+/**
+ * `lowerPriority` exists for exactly one case: "販売価格" (plain, no
+ * bullet) is a defensive alias onto the same `salePrice` coreField as
+ * the canonical "⚫︎販売価格" entry below (see the map entry's own
+ * comment for why). It is intentionally typed only on the `coreField`
+ * variant — this is not a general "any two ZAICO names may collide"
+ * mechanism, it exists to resolve *this one, explicitly named* alias
+ * pair without changing how every other already-working field (where
+ * two independent ZAICO names have always both legitimately targeted
+ * the same extended/custom field, last-one-wins by attrs array order)
+ * is resolved. See `mapZaicoOptionalAttributes` for where this is used.
+ */
 export type ZaicoAttributeTarget =
-  | { kind: "coreField"; field: "purchasePrice" | "salePrice"; valueType: "number" }
+  | { kind: "coreField"; field: "purchasePrice" | "salePrice"; valueType: "number"; lowerPriority?: boolean }
   | { kind: "extendedField"; field: ExtendedFieldKey; valueType: ZaicoValueType; createOnly?: boolean }
   | { kind: "customField"; fieldKey: string; valueType: ZaicoValueType }
   | { kind: "unmapped" };
@@ -197,6 +209,27 @@ export const ZAICO_ATTRIBUTE_MAP: Record<string, ZaicoAttributeTarget> = {
   "⚫︎手元に入ってきた売上金": { kind: "customField", fieldKey: "netSaleProceeds", valueType: "number" },
   "⚪︎振込日": { kind: "customField", fieldKey: "transferDate", valueType: "text" },
   "⚫︎記入メモ": { kind: "customField", fieldKey: "entryMemo", valueType: "text" },
+
+  // 2026-09-10 利用者指摘: ZAICO側の販売価格とBELLOの表示が食い違って
+  // 見えるとの報告への対応。
+  // 過去の実データ監査(2026-09-02、73116696/73116698含む全件走査)で
+  // 確認済みなのはここまで: 正式な optional_attribute 名は常に
+  // 「⚫︎販売価格」(上のcoreField行)で、そちらは最初からsalePriceへ
+  // 正しく届いていた。装飾記号の無い「販売価格」という名前は、その監査
+  // 時に1件だけ、ZAICO側のテンプレート見出し行がラベル文字列自体を値
+  // として複製したもの(値="販売価格"、実際の金額ではない)として観測
+  // されており、対応表に無かったため unmapped 警告の原因になっていた。
+  // 一方、「plain名の食い違いが今回の売上未反映の原因かどうか」は今回
+  // 未確認・未監査(§2)——このエントリの追加とUI表示統一だけで実売上の
+  // 復旧を主張しない。将来もし実際の金額付きでこの装飾無し名がZAICOから
+  // 届いた場合に備え、salePriceへの防御的aliasとして追加する。
+  // 正式名「⚫︎販売価格」と同じ書き込み先(salePrice)を持つため、両方が
+  // 同時に異なる値で来た場合の優先順位を明示する必要がある——
+  // `lowerPriority: true` は正式名を常に勝たせるためのフラグで、
+  // mapZaicoOptionalAttributes側のsalePrice専用の合流処理でのみ参照
+  // される(他のcoreField/extendedField/customFieldの重複処理には一切
+  // 影響しない)。
+  "販売価格": { kind: "coreField", field: "salePrice", valueType: "number", lowerPriority: true },
 };
 
 /**
@@ -358,6 +391,12 @@ export interface MappedOptionalAttributes {
   unmapped: { name: string; value: string | null }[];
 }
 
+/** A resolved `salePrice` candidate, set aside during the main loop below so the canonical/alias conflict can be resolved after all of an item's attrs are seen — never by array order. Scoped to salePrice only; every other field is applied immediately in the loop, unchanged from before. */
+interface SalePriceCandidate {
+  lowerPriority: boolean;
+  value: number;
+}
+
 /**
  * `isNewRecord`: true only on first create for this ZAICO item — that's
  * the one and only moment "★市川メモ" is allowed to seed adminMemo (see
@@ -367,6 +406,18 @@ export interface MappedOptionalAttributes {
  */
 export function mapZaicoOptionalAttributes(attrs: ZaicoOptionalAttribute[] | null | undefined, isNewRecord: boolean): MappedOptionalAttributes {
   const result: MappedOptionalAttributes = { extendedFields: {}, coreFields: {}, customFields: {}, warnings: [], unmapped: [] };
+
+  // Deliberately narrow: only the two ZAICO names that explicitly target
+  // salePrice (canonical "⚫︎販売価格" and its plain alias, see
+  // ZAICO_ATTRIBUTE_MAP) are deferred here for priority resolution.
+  // Every other coreField/extendedField/customField keeps applying
+  // directly in the loop below, in attrs array order, exactly as before
+  // this fix — including legitimate cases where two independent ZAICO
+  // names have always both targeted the same field (last one in the
+  // array wins, same as pre-existing behavior). That wider behavior is
+  // out of scope for this fix and must not change.
+  const salePriceCandidates: SalePriceCandidate[] = [];
+
   for (const attr of attrs ?? []) {
     const target = resolveZaicoAttributeTarget(attr.name);
     if (target.kind === "unmapped") {
@@ -388,7 +439,10 @@ export function mapZaicoOptionalAttributes(attrs: ZaicoOptionalAttribute[] | nul
     if (parsed.warning) result.warnings.push(parsed.warning);
     if (parsed.value === null) continue;
 
-    if (target.kind === "coreField") {
+    if (target.kind === "coreField" && target.field === "salePrice") {
+      // Deferred, not applied here — see salePriceCandidates comment above.
+      salePriceCandidates.push({ lowerPriority: target.lowerPriority === true, value: parsed.value as number });
+    } else if (target.kind === "coreField") {
       result.coreFields[target.field] = parsed.value as number;
     } else if (target.kind === "extendedField") {
       // Which of string/number `parsed.value` actually is was decided by
@@ -402,5 +456,41 @@ export function mapZaicoOptionalAttributes(attrs: ZaicoOptionalAttribute[] | nul
       result.customFields[target.fieldKey] = parsed.value;
     }
   }
+
+  if (salePriceCandidates.length > 0) {
+    // Priority class first (canonical beats plain alias, regardless of
+    // array order), *then* last-write within whichever class actually
+    // supplied the winner — same last-one-in-attrs-wins rule every other
+    // duplicate-name field already follows (§12 of the regression
+    // fixture). This must not degrade to "first canonical wins": if
+    // ZAICO ever sends "⚫︎販売価格" twice in one sync, the second one
+    // should win, exactly as it would for any other coreField/
+    // extendedField/customField.
+    const canonicalCandidates = salePriceCandidates.filter((c) => !c.lowerPriority);
+    const aliasCandidates = salePriceCandidates.filter((c) => c.lowerPriority);
+    const winner = canonicalCandidates.length > 0 ? canonicalCandidates[canonicalCandidates.length - 1] : aliasCandidates[aliasCandidates.length - 1];
+    result.coreFields.salePrice = winner.value;
+
+    // A conflict warning only fires when the canonical name's priority
+    // actually changed the outcome — i.e. both the canonical entry and
+    // the plain alias were present and disagreed in value. Plain
+    // duplicate names within the same priority class (two "⚫︎販売価格"
+    // entries, or two plain "販売価格" entries with no canonical present)
+    // are resolved by last-write with no warning, same as every other
+    // field's duplicate-name handling — warning here would wrongly claim
+    // "the official name's value was prioritized" when no alias was even
+    // involved in picking the winner.
+    if (canonicalCandidates.length > 0 && aliasCandidates.length > 0) {
+      const aliasDisagrees = aliasCandidates.some((c) => c.value !== winner.value);
+      if (aliasDisagrees) {
+        // Names the field and states that a conflict was resolved — it
+        // never includes either side's actual value or the raw ZAICO
+        // attribute name, since customField-adjacent data can carry
+        // personal information and warnings may end up in sync logs.
+        result.warnings.push("「販売価格」がZAICO側の複数の項目名で食い違っています。正式な項目名の値を優先しました。");
+      }
+    }
+  }
+
   return result;
 }

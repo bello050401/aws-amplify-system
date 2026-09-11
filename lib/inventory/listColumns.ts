@@ -60,7 +60,7 @@ export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
   // off-by-default column below rather than being repurposed, since it's
   // a different real value that existing records may already have set.
   { key: "plannedSalePrice", label: "販売予定価格", defaultVisible: true, defaultWidth: 100 },
-  { key: "salePrice", label: "販売価格（成約）", defaultVisible: false, defaultWidth: 100 },
+  { key: "salePrice", label: "販売価格", defaultVisible: false, defaultWidth: 100 },
   { key: "note", label: "備考", defaultVisible: false, defaultWidth: 200 },
   { key: "updatedAt", label: "更新日", defaultVisible: true, defaultWidth: 96 },
   // 統合改善指示書 §10で追加された列候補 — すべて既存のInventoryフィー
