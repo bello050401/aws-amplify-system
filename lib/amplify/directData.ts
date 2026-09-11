@@ -97,8 +97,11 @@ function pluralize(model: string): string {
  */
 const CUSTOM_IDENTIFIERS: Record<string, string> = {
   BaseItemCache: "baseItemId",
-  BaseProductArchive: "baseItemId",
   SalesMonthlyAggregate: "yearMonth",
+  BaseProductArchive: "baseItemId",
+  // SalesMonthlyAggregate(yearMonth主キー)は2026-09-11世代整合性修正で
+  // SalesAggregateSnapshot(id="current"固定、既定の"id"主キー)へ置き換え
+  // られたため削除——このmapは既定"id"以外の識別子だけを列挙する。
   ExternalResearchCache: "cacheKey",
   MercariOrderContext: "orderId",
 };

@@ -232,6 +232,36 @@ export function nowInJst(referenceDate: Date = new Date()): JstDate {
 }
 
 /**
+ * ISO(UTC)日時文字列を「YYYY/MM/DD HH:MM JST」表示へ変換する
+ * (2026-09-11 世代整合性修正 §4: 「日時表示はJSTに変換しUTC文字列
+ * 切出しを避ける」)。
+ *
+ * 以前の売上画面は `isoString.slice(0, 16).replace("T", " ")` という
+ * UTC文字列の単純な切り出しで「集計は○○時点」を表示していた——これは
+ * サーバーが返すISO文字列がUTCであるにもかかわらず、あたかもJST表示で
+ * あるかのように見せてしまう(実際の日本時間より9時間遅れて表示される)
+ * バグで、nowInJst と同じ理由(§5)により修正対象。日付だけでなく
+ * 時刻も要るため nowInJst(年月日のみ)とは別関数として持つ。
+ */
+export function formatJstDateTime(isoString: string): string {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return isoString;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  // hour12:falseでも24時ちょうどを"24"と返す実装があるため"00"へ正規化する。
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  return `${get("year")}/${get("month")}/${get("day")} ${hour}:${get("minute")}`;
+}
+
+/**
  * 指定年月の実際の日数(28/29/30/31)。固定値(30等)は一切使わず(§4:
  * 「平均売上×30のような固定値計算は禁止」)、「その月の翌月の0日目 =
  * 当月の末日」というDate仕様を利用して求める — 閏年の2月29日も

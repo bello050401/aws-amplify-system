@@ -1,119 +1,156 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { listAllPages } from "@/lib/amplify/listAll";
+import { deserializeSnapshotMonths, monthsToMap, SALES_AGGREGATE_SNAPSHOT_ID } from "./salesAggregateSnapshot";
 import type { SalesMonthlyAggregateRow } from "./salesAggregate";
 
 /**
- * 売上月次集計の読み書き。
+ * 売上月次集計の読み取り(2026-09-11 世代整合性修正、2026-09-11
+ * task_e509 引継ぎ完了対応)。
  *
- * 読み出しは「月を指定した GetItem」か「全件」の2通りだけ。
- * identifier が yearMonth なので、月指定は Scan にならない。
+ * 書き込みはこのファイルの責務ではない——amplify/functions/
+ * sales-aggregate-scheduler/handler.ts(定期実行、IAM生DynamoDB API)と
+ * scripts/rebuild-sales-aggregate.ts(手動再構築)が、どちらも同じ
+ * lib/inventory/salesAggregateSnapshot.ts のロジックに沿って
+ * SalesAggregateSnapshot(id="current"固定の1行)へ直接書く
+ * (SalesAggregateRunStatusと同じ「SSR側は読み取り専用」の境界)。
+ *
+ * 読み出しは常に GetItem 1回("current"固定)——何ヶ月要求しても、月数分
+ * GetItemを繰り返していた旧設計(SalesMonthlyAggregate、月ごとに1行)
+ * より読み取りコストが低く、かつ返る値は必ず同じ1回の読み取り
+ * (=同じ世代)からのものになる。
+ *
+ * ── 2026-09-11 task_e509 引継ぎ完了対応: 2つの修正 ─────────────────
+ *
+ * 1. GraphQL errors を無視しない。`serverDataClient...get()` は
+ *    `{ data, errors }` を返すが、`data` だけを見て `errors` を無視する
+ *    と、権限不足・一時障害等で `data` が null になったケースが「行が
+ *    まだ無い(neverRun)」と区別できなくなる——実障害が「未集計」という
+ *    正常状態に化けてしまう。ここでは `errors` を明示的に見て、あれば
+ *    例外を投げる(呼び出し側の getMonthlyAggregates が catch し、
+ *    要求された月すべてを failedMonths に積む=error 扱いにする)。
+ * 2. 「スナップショットが存在するが指定月が無い」と「スナップショット
+ *    自体が存在しない」を区別する。前者は「集計した結果、その月の対象
+ *    売上が0件だった」ことが確定している(定期実行は毎回、在庫全件から
+ *    全月を作り直すため——lib/inventory/salesAggregate.tsの
+ *    buildMonthlyAggregates参照)ので、0埋めの行を作って返す(status=ok、
+ *    値0)。後者(スナップショット自体が無い)だけが真の「未集計」
+ *    (missing)になる。
  */
-
-type Row = {
-  yearMonth: string;
-  count: number;
-  totalSales: number;
-  totalPurchase: number;
-  totalShipping: number;
-  totalCost: number;
-  totalProfit: number;
-  sourceRecordCount?: number | null;
-  rebuiltAt: string;
-  rebuiltBy?: string | null;
-};
 
 export interface StoredAggregate extends SalesMonthlyAggregateRow {
   sourceRecordCount: number | null;
   rebuiltAt: string;
   rebuiltBy: string | null;
+  /** どの世代(定期実行の開始時刻)から得られた値か。 */
+  generation: string;
 }
 
-function toStored(row: Row): StoredAggregate {
-  return {
-    yearMonth: row.yearMonth,
-    count: row.count,
-    totalSales: row.totalSales,
-    totalPurchase: row.totalPurchase,
-    totalShipping: row.totalShipping,
-    totalCost: row.totalCost,
-    totalProfit: row.totalProfit,
-    sourceRecordCount: row.sourceRecordCount ?? null,
-    rebuiltAt: row.rebuiltAt,
-    rebuiltBy: row.rebuiltBy ?? null,
-  };
-}
-
-/** 1ヶ月ぶん。主キー指定なので1回の GetItem。 */
-export async function getMonthlyAggregate(yearMonth: string): Promise<StoredAggregate | null> {
-  const { data } = await serverDataClient.models.SalesMonthlyAggregate.get({ yearMonth }, inventoryAuthMode);
-  return data ? toStored(data as unknown as Row) : null;
+interface SnapshotData {
+  generation: string;
+  rebuiltAt: string;
+  rebuiltBy: string | null;
+  sourceRecordCount: number;
+  months: SalesMonthlyAggregateRow[];
 }
 
 /**
- * 複数月ぶん(推移グラフ用)。
- *
- * 12ヶ月なら GetItem 12回。全件 Scan して 12回集計し直すのとは桁が違う。
- * 存在しない月は結果に含まれない(呼び出し側が0として扱う)。
+ * SalesAggregateSnapshot を1回のGetItemで読む。モジュールレベルの
+ * キャッシュは持たない——SSRの1リクエスト内で複数回呼ばれても
+ * (getMonthlyAggregate→getMonthlyAggregatesの内部呼び出し程度)実害の
+ * 無い回数であり、リクエストをまたいで古い値を握り続ける事故の方が害が
+ * 大きい。
  */
-export async function getMonthlyAggregates(yearMonths: string[]): Promise<Map<string, StoredAggregate>> {
-  const rows = await Promise.all(yearMonths.map((ym) => getMonthlyAggregate(ym)));
-  const map = new Map<string, StoredAggregate>();
-  for (const r of rows) if (r) map.set(r.yearMonth, r);
-  return map;
-}
-
-/** 保存済みの全件(drift検査・再構築で使う)。 */
-export async function listAllMonthlyAggregates(): Promise<StoredAggregate[]> {
-  const rows = await listAllPages<Row>(
-    async (nextToken) => {
-      const res = await serverDataClient.models.SalesMonthlyAggregate.list({ limit: 500, nextToken, ...inventoryAuthMode });
-      return { data: res.data as unknown as Row[], nextToken: res.nextToken, errors: res.errors };
-    },
-    { label: "売上月次集計" },
-  );
-  return rows.map(toStored).sort((a, b) => (a.yearMonth < b.yearMonth ? -1 : 1));
-}
-
-/**
- * 集計を書き込む(upsert)。
- *
- * 「作り直し」が唯一の更新手段なので、加算はしない。同じ入力なら何度
- * 実行しても同じ結果になる。
- */
-export async function putMonthlyAggregate(
-  row: SalesMonthlyAggregateRow,
-  meta: { sourceRecordCount: number; rebuiltBy: string | null },
-): Promise<void> {
-  const fields = {
-    yearMonth: row.yearMonth,
-    count: row.count,
-    totalSales: row.totalSales,
-    totalPurchase: row.totalPurchase,
-    totalShipping: row.totalShipping,
-    totalCost: row.totalCost,
-    totalProfit: row.totalProfit,
-    sourceRecordCount: meta.sourceRecordCount,
-    rebuiltAt: new Date().toISOString(),
-    rebuiltBy: meta.rebuiltBy ?? undefined,
-  };
-  const { data: existing } = await serverDataClient.models.SalesMonthlyAggregate.get(
-    { yearMonth: row.yearMonth },
+async function fetchSnapshot(): Promise<SnapshotData | null> {
+  const { data, errors } = await serverDataClient.models.SalesAggregateSnapshot.get(
+    { id: SALES_AGGREGATE_SNAPSHOT_ID },
     inventoryAuthMode,
   );
-  const { errors } = existing
-    ? await serverDataClient.models.SalesMonthlyAggregate.update(fields, inventoryAuthMode)
-    : await serverDataClient.models.SalesMonthlyAggregate.create(fields, inventoryAuthMode);
-  if (errors) throw new Error(`売上集計の保存に失敗しました(${row.yearMonth}): ${JSON.stringify(errors)}`);
+  // errorsを無視して「data無し」と一律neverRun扱いにしない——権限不足・
+  // 一時障害等の実障害と「まだ一度もPutItemされていない」を区別する。
+  if (errors) {
+    throw new Error(`SalesAggregateSnapshotの取得に失敗しました: ${JSON.stringify(errors)}`);
+  }
+  if (!data) return null;
+  return {
+    generation: data.generation,
+    rebuiltAt: data.rebuiltAt,
+    rebuiltBy: data.rebuiltBy ?? null,
+    sourceRecordCount: data.sourceRecordCount,
+    months: deserializeSnapshotMonths(data.monthsJson),
+  };
+}
+
+function toStored(row: SalesMonthlyAggregateRow, snapshot: SnapshotData): StoredAggregate {
+  return {
+    ...row,
+    sourceRecordCount: snapshot.sourceRecordCount,
+    rebuiltAt: snapshot.rebuiltAt,
+    rebuiltBy: snapshot.rebuiltBy,
+    generation: snapshot.generation,
+  };
+}
+
+/** スナップショットは存在するが対象月の行が無い場合の「実0件」の行。 */
+function zeroRow(yearMonth: string): SalesMonthlyAggregateRow {
+  return { yearMonth, count: 0, totalSales: 0, totalPurchase: 0, totalShipping: 0, totalCost: 0, totalProfit: 0 };
+}
+
+/** 1ヶ月ぶん。内部的には getMonthlyAggregates と同じ1回のGetItem。 */
+export async function getMonthlyAggregate(yearMonth: string): Promise<StoredAggregate | null> {
+  const { aggregates } = await getMonthlyAggregates([yearMonth]);
+  return aggregates.get(yearMonth) ?? null;
+}
+
+export interface MonthlyAggregatesResult {
+  aggregates: Map<string, StoredAggregate>;
+  failedMonths: string[];
 }
 
 /**
- * 集計に残っているが、いま作り直したら存在しない月を消す。
+ * 複数月ぶん(推移グラフ用)。GetItem 1回("current"固定)のみ。
  *
- * 全件取消などで月ごとまるごと売上が無くなった場合、消さないと
- * 古い数字が残り続ける。
+ * ・スナップショット自体が存在しない(neverRun) → 要求した月は全て結果
+ *   に含めない(=missing、呼び出し側が「未集計」として扱う)。
+ * ・スナップショットは存在するが、要求した月の行が無い → 「集計した
+ *   結果、その月の対象売上が0件だった」ことが確定しているので、0埋めの
+ *   行を結果に含める(=ok、値は0——「未集計」と「実0件」の区別が
+ *   ここで初めて生まれる)。
+ * ・GetItem自体が例外を投げた場合(未デプロイ・スロットリング・
+ *   monthsJsonの破損・GraphQL errors等)は、要求された月**全部**を
+ *   failedMonths として返す——読み取りが単一アイテムになった以上、
+ *   「一部の月だけ取得失敗」という状態はもう存在しない(全部成功するか
+ *   全部失敗するかのどちらか)。
+ *
+ * 呼び出し側(lib/inventory/salesView.ts)は引き続き
+ * {aggregates, failedMonths} という同じ形を受け取るため、この内部実装の
+ * 変更は呼び出し側に影響しない。
  */
-export async function deleteMonthlyAggregate(yearMonth: string): Promise<void> {
-  const { errors } = await serverDataClient.models.SalesMonthlyAggregate.delete({ yearMonth }, inventoryAuthMode);
-  if (errors) throw new Error(`売上集計の削除に失敗しました(${yearMonth}): ${JSON.stringify(errors)}`);
+export async function getMonthlyAggregates(yearMonths: string[]): Promise<MonthlyAggregatesResult> {
+  let snapshot: SnapshotData | null;
+  try {
+    snapshot = await fetchSnapshot();
+  } catch (err) {
+    console.warn("[sales] SalesAggregateSnapshotの取得に失敗しました(要求した月すべてをerror扱い)", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { aggregates: new Map(), failedMonths: [...yearMonths] };
+  }
+  if (!snapshot) return { aggregates: new Map(), failedMonths: [] }; // neverRun → 全月missing(errorではない)
+
+  const byMonth = monthsToMap(snapshot.months);
+  const aggregates = new Map<string, StoredAggregate>();
+  for (const ym of yearMonths) {
+    // スナップショットは存在するので、行が無い月は「実0件」——欠損
+    // (missing)として消さず、0埋めの確定値として含める。
+    const row = byMonth.get(ym) ?? zeroRow(ym);
+    aggregates.set(ym, toStored(row, snapshot));
+  }
+  return { aggregates, failedMonths: [] };
+}
+
+/** 保存済みスナップショットの全月(drift検査・手動再構築スクリプトのdry-run表示で使う)。 */
+export async function listAllMonthlyAggregates(): Promise<StoredAggregate[]> {
+  const snapshot = await fetchSnapshot();
+  if (!snapshot) return [];
+  return snapshot.months.map((row) => toStored(row, snapshot)).sort((a, b) => (a.yearMonth < b.yearMonth ? -1 : 1));
 }

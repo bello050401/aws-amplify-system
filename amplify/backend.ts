@@ -14,6 +14,7 @@ import { pricingScheduler } from "./functions/pricing-scheduler/resource";
 import { imageProcessingWorker } from "./functions/image-processing-worker/resource";
 import { zaicoSyncWorker } from "./functions/zaico-sync-worker/resource";
 import { integrityMonitor } from "./functions/integrity-monitor/resource";
+import { salesAggregateScheduler } from "./functions/sales-aggregate-scheduler/resource";
 
 /**
  * Amplify Gen2 backend definition.
@@ -42,6 +43,7 @@ const backend = defineBackend({
   imageProcessingWorker,
   zaicoSyncWorker,
   integrityMonitor,
+  salesAggregateScheduler,
 });
 
 // SKU counter table for amplify/functions/generate-sku. This is
@@ -595,3 +597,28 @@ new Alarm(integrityAlarmStack, "IntegrityAlertAlarm", {
   // 0 か 1 が入るので、異常のあとは自動的に OK へ戻る)。
   treatMissingData: TreatMissingData.NOT_BREACHING,
 }).addAlarmAction(new SnsAction(integrityAlertTopic));
+
+// ─────────────────────────────────────────────────────────────────────
+// 売上月次集計の定期再構築(2026-09-11 世代整合性修正)。
+// amplify/functions/sales-aggregate-scheduler/resource.ts のファイル
+// 冒頭コメント参照 —— pricing-scheduler / integrity-monitor と同じ
+// `defineFunction({ schedule })` + `backend.data.resources.tables[...]`
+// のIAM直接付与パターン。新しいAWSサービスの導入にはならない。
+//
+// 権限の考え方:
+//   - Inventory: read-only。全在庫をScanして集計を作り直すだけで、
+//     在庫そのものは一切書き換えない。
+//   - SalesAggregateSnapshot: read+write(唯一の書き手。世代1行を
+//     ConditionExpression付きPutItemで原子的に差し替える)。
+//   - SalesAggregateRunStatus: read+write(実行状態の記録専用)。
+// ─────────────────────────────────────────────────────────────────────
+const salesAggregateSnapshotTable = backend.data.resources.tables["SalesAggregateSnapshot"];
+const salesAggregateRunStatusTable = backend.data.resources.tables["SalesAggregateRunStatus"];
+
+inventoryTable.grantReadData(backend.salesAggregateScheduler.resources.lambda);
+salesAggregateSnapshotTable.grantReadWriteData(backend.salesAggregateScheduler.resources.lambda);
+salesAggregateRunStatusTable.grantReadWriteData(backend.salesAggregateScheduler.resources.lambda);
+
+backend.salesAggregateScheduler.addEnvironment("INVENTORY_TABLE_NAME", inventoryTable.tableName);
+backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_SNAPSHOT_TABLE_NAME", salesAggregateSnapshotTable.tableName);
+backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_RUN_STATUS_TABLE_NAME", salesAggregateRunStatusTable.tableName);

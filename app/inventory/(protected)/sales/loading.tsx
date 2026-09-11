@@ -4,10 +4,15 @@
  *
  * app/inventory/(protected)/loading.tsx(在庫一覧側)は既に同じ理由で
  * 用意されているが、売上ページ(app/inventory/(protected)/sales)には
- * 無く、当月データの取得(集計テーブルが欠損している場合は在庫の
- * 月次走査へフォールバックする — lib/inventory/salesView.ts)が終わる
- * まで、画面には何のフィードバックも出ないまま応答を待つだけになって
- * いた。データや検索条件は一切変えず、遷移が始まったことだけを伝える。
+ * 無く、当月データの取得が終わるまで画面には何のフィードバックも出ない
+ * まま応答を待つだけになっていた。データや検索条件は一切変えず、遷移が
+ * 始まったことだけを伝える。
+ *
+ * 2026-09-11追加修正: ページ本体(page.tsx)が呼ぶlib/inventory/salesView.ts
+ * のloadSalesSummaryは集計テーブルへのGetItem(1回)のみで、Inventoryへの
+ * 走査は行わない——このloading表示が出ている間の実処理は従来より大幅に
+ * 軽い(対象商品一覧は別途ユーザーが明示的に開くまで取得しない、
+ * SalesItemsSection.tsx参照)。
  */
 export default function SalesLoading() {
   return (

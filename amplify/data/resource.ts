@@ -28,6 +28,8 @@ import { generateSku } from "../functions/generate-sku/resource";
 const schema = a.schema({
   TemplateType: a.enum(["COLLECTION", "BRAND", "FEATURE"]),
   FeatureStatus: a.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]),
+  /** amplify/functions/sales-aggregate-scheduler の実行状態(下の SalesAggregateRunStatus 参照)。 */
+  SalesAggregateRunState: a.enum(["RUNNING", "SUCCESS", "FAILED"]),
 
   // Structured AI-generated copy, kept as one JSON blob per feature so
   // individual sections (headline / intro / color variation copy / CTA…)
@@ -2044,16 +2046,45 @@ const schema = a.schema({
     ]),
 
   /**
-   * 売上の月次集計(2026-09-02 指示書§15〜§20)。
+   * 売上の月次集計(2026-09-02 指示書§15〜§20、2026-09-11 世代整合性
+   * 修正で SalesMonthlyAggregate から置き換え)。
    *
    * **派生データ**。正本は今までどおり Inventory で、この表はいつでも
-   * 捨てて作り直せる。加算していく設計にしていないのは、加算はイベントを
-   * 1つ取りこぼしただけで静かにズレ、しかも気づけないから。対象月の
-   * レコードから毎回作り直すので、二重計上も取消の取りこぼしも起きない。
+   * 捨てて作り直せる。
    *
-   * identifier を yearMonth にしてあるので、月を指定した読み出しは
-   * Scan ではなく GetItem 1回で済む。
+   * ── なぜ月ごとの行(旧 SalesMonthlyAggregate)をやめたか ──────────
+   *
+   * 旧設計は月(yearMonth)を主キーにした行を月の数だけ持ち、定期再構築が
+   * 月ごとに個別の PutItem/DeleteItem を発行していた。この形では「1月→
+   * 2月へ売上を訂正」のような、複数月にまたがる訂正の反映中に一部の
+   * PutItem/DeleteItem だけが失敗すると、読み手が「1月は新世代・2月は
+   * 旧世代」という**複数世代が混在した状態**を読んでしまい得る
+   * (1月だけ更新成功・2月失敗なら100円が欠落、逆なら二重計上)。
+   * 「月ごとの1行は常にそれ単体としては正しい値」という理由で実害無しと
+   * 判断されていたが、複数月を横断した合計(=画面が実際に表示するもの)
+   * の整合性までは保証しない誤りだった(docs/
+   * sales-aggregate-snapshot-consistency-20260911.md 参照)。
+   *
+   * ── この表の設計 ────────────────────────────────────────────────
+   *
+   * 全月ぶんの集計を**1行(1アイテム)にまとめて**持つ("current"固定の
+   * シングルトン)。`monthsJson` に全月の SalesMonthlyAggregateRow[] を
+   * JSON文字列として格納する。DynamoDBの1アイテムへのPutItemはそれ自体が
+   * 原子的(all-or-nothing)なので、「複数の書き込みのうち一部だけ成功
+   * する」という状態が構造的に発生しない——月ごとに公開ポインタを揃える
+   * 仕組みを別途持つ必要がなく、このモデル自体が既に「世代別保存→全件
+   * 成功後の公開」を体現している。
+   *
+   * `generation`(定期実行の開始時刻ISO文字列)は、同時実行時に古い世代が
+   * 新しい世代を上書きしないための楽観的排他制御に使う
+   * (amplify/functions/sales-aggregate-scheduler/handler.ts の
+   * ConditionExpression参照)。
+   *
+   * 母集団は在庫約5,300件・月数十件規模で、全月分をまとめても数十KB
+   * ("低コスト方式"の見積りは上記docs参照)——DynamoDBアイテムの400KB
+   * 上限に対して十分小さい。
    */
+  // 既存テーブルと旧配信中APIを保全する。削除移行は本変更に含めない。
   SalesMonthlyAggregate: a
     .model({
       /** "2026-09" 形式。集計の単位であり主キー。 */
@@ -2071,6 +2102,73 @@ const schema = a.schema({
       rebuiltBy: a.string(),
     })
     .identifier(["yearMonth"])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  SalesAggregateSnapshot: a
+    .model({
+      /** 常に "current"。この表は最新世代のスナップショット1行だけを持つ。 */
+      id: a.string().required(),
+      /** この世代を作った定期実行の開始時刻(ISO文字列)。新しい世代ほど文字列として大きい(=楽観的排他制御の比較キー)。 */
+      generation: a.string().required(),
+      /** 全月ぶんの SalesMonthlyAggregateRow[] を JSON.stringify したもの。 */
+      monthsJson: a.string().required(),
+      /** 何件の在庫レコードから作ったか(母集団の大きさ)。 */
+      sourceRecordCount: a.integer().required(),
+      /** いつ作り直したか(= generation と同じ値)。画面に「○○時点の集計」と出すため。 */
+      rebuiltAt: a.datetime().required(),
+      rebuiltBy: a.string(),
+    })
+    .identifier(["id"])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR"),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
+  /**
+   * 売上月次集計の定期再構築(amplify/functions/sales-aggregate-scheduler)
+   * の実行状態(2026-09-11 指示書: 更新をバックグラウンドの定期実行へ
+   * 移し、画面には「最終集計時刻」と「更新中/未集計」を明示する)。
+   *
+   * 常に1行だけ(id固定 "current")。Lambda自身がGetItemで既存行を読んで
+   * から関係するフィールドだけ更新するため、"RUNNING" への遷移時に
+   * lastSuccessAt 等の実績を消さない(lib/inventory/salesAggregateFreshness.ts
+   * / amplify/functions/sales-aggregate-scheduler/handler.ts 参照)。
+   *
+   * このLambdaの実行はIAM(生DynamoDB API)からのみで、Cognitoセッション
+   * を経由しない — 書き込みはamplify/backend.tsのgrantReadWriteDataで
+   * 許可された、このLambdaの実行ロールだけができる。ここでの
+   * `.authorization`はNext.js SSR側(画面表示)がGraphQL経由で読む/管理者
+   * が読む場合の権限で、SalesAggregateSnapshotと同じ区分に揃えてある。
+   */
+  SalesAggregateRunStatus: a
+    .model({
+      /** 常に "current"。この表は最新の実行状態1行だけを持つ。 */
+      id: a.string().required(),
+      state: a.ref("SalesAggregateRunState").required(),
+      /** 直近に開始した実行の時刻。 */
+      startedAt: a.datetime().required(),
+      /** 直近の実行が完了した時刻(成功/失敗いずれも)。実行中は null。 */
+      completedAt: a.datetime(),
+      /** 直近に**成功**した実行の完了時刻。失敗が続いても上書きしない
+       *  —— 画面に「前回正常完了はいつか」を出し続けるため。 */
+      lastSuccessAt: a.datetime(),
+      /** 直近成功時に SalesAggregateSnapshot へ書いた世代(generation)。 */
+      publishedGeneration: a.string(),
+      /** 直近成功時のスナップショットに含まれていた月数。 */
+      monthsInSnapshot: a.integer(),
+      /** 直近成功時、集計の元にした在庫件数(母集団の大きさ)。 */
+      sourceRecordCount: a.integer(),
+      /** 直近の試行が失敗した場合のエラーメッセージ(成功時は null)。 */
+      errorMessage: a.string(),
+      /** 直近実行の所要時間(ms)。 */
+      durationMs: a.integer(),
+    })
+    .identifier(["id"])
     .authorization((allow) => [
       allow.group("ADMIN"),
       allow.group("EDITOR"),
