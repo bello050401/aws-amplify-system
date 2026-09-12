@@ -110,7 +110,9 @@
     "verify:http": "node scripts/with-server-only-stub.cjs scripts/verify-http.ts",
     "verify:cache": "node scripts/with-server-only-stub.cjs scripts/verify-cache.ts",
     "measure:browser": "node scripts/with-server-only-stub.cjs scripts/measure-browser.ts",
-    "verify:integrity-monitor": "node scripts/with-server-only-stub.cjs scripts/verify-integrity-monitor.ts"
+    "verify:integrity-monitor": "node scripts/with-server-only-stub.cjs scripts/verify-integrity-monitor.ts",
+    "verify:inventory-history": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-history-resilience.ts",
+    "verify:inventory-history-boundary": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-history-boundary.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.33.3",

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { canEditInventory, canHardDeleteInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
@@ -12,6 +13,7 @@ import { InventoryImageGallery } from "../../InventoryImageGallery";
 import { ImageProcessingPanel } from "../../ImageProcessingPanel";
 import { InventoryHeader } from "../../InventoryHeader";
 import { DeleteInventoryButton } from "./DeleteInventoryButton";
+import { InventoryHistoryTable } from "./InventoryHistoryTable";
 import { DetailSection } from "./DetailSection";
 import { ExtendedFieldsSummary, type ExtraSectionField } from "./ExtendedFieldsSummary";
 import { DetailInfoTable, type DetailInfoRow } from "./DetailInfoTable";
@@ -59,31 +61,24 @@ function formatItemTypeAndQuantity(itemType: string | null, quantity: number | n
 }
 
 /**
- * The history log (lib/inventory/history.ts) writes one row per changed
- * field, `fieldName` doing double duty as either an actual field label
- * ("商品名") or, for create/delete, the operation itself ("登録"/"削除")
- * — there's no separate stored "operation type" column. spec F wants a
- * ZAICO-style 日時/操作/変更内容/実行者 table, so these two helpers
- * derive that split from what's already stored rather than needing a
- * schema change.
- */
-function historyOperationLabel(fieldName: string): string {
-  if (fieldName === "登録" || fieldName === "削除") return fieldName;
-  return "編集";
-}
-
-function historyChangeSummary(h: { fieldName: string; oldValue: string | null; newValue: string | null }): string {
-  if (h.fieldName === "登録" || h.fieldName === "削除") return h.newValue ?? h.oldValue ?? "-";
-  return `${h.fieldName} ${h.oldValue ?? "-"} → ${h.newValue ?? "-"}`;
-}
-
-/**
  * 在庫詳細画面 = PC「左：商品画像／右：商品情報」の2列構成（2026-08-28
  * 付の最新統合指示書 §15/§32で、直前の「画像を含めた全体1列縦スクロー
  * ル」から明示的に変更・優先された仕様）。新規登録/編集画面で保存でき
  * る項目はすべてここで確認できることが要件 —この画面のデータ取得は
  * 編集画面と同じ full InventoryDetail (拡張フィールド全項目・両方の
  * 画像タイプ・isPrimary・CustomFields)。
+ *
+ * P1 詳細遷移の待ち時間短縮(2026-09-12): 唯一の例外が更新履歴
+ * (InventoryHistory)——本体(基本情報〜追加項目)はどれも「今すぐ
+ * 見えないと画面として成立しない」情報だが、更新履歴だけはページ
+ * 最下部の補助情報で、本体の描画を1往復ぶん遅らせてまで先に待つ理由が
+ * ない。<Suspense>で分離し、InventoryHistoryTable(別コンポーネント、
+ * lib/inventory/queries.tsのgetInventoryHistoryを個別に呼ぶ)側で
+ * 遅延取得する——本体はgetInventoryDetail(historyを含まない、
+ * Inventory.getのみ)の完了を待つだけで描画できる。履歴の取得が失敗
+ * しても(InventoryHistoryTable内でcatchするため)このSuspense境界の
+ * 外——本体やページ全体のerror境界(app/inventory/error.tsx)へは
+ * 波及しない。
  *
  * 左カラム=商品画像1列、右カラム=基本情報→販売情報→サイズ情報→コン
  * ディション→古物台帳・仕入情報→管理情報→追加項目の縦積み1列。
@@ -336,38 +331,14 @@ export default async function InventoryDetailPage({
             認する。日時/操作/変更内容/実行者の高密度テーブル。 */}
         <div className="mt-8 max-w-4xl border-t border-gray-100 pt-3">
           <p className="mb-1.5 text-[11px] font-bold text-gray-400">更新履歴</p>
-          {item.history.length === 0 ? (
-            <p className="text-[12px] text-gray-400">変更履歴はまだありません。</p>
-          ) : (
-            // BELLO統合業務OS指示書(2026-08-30) §70/§165: 390px幅で
-            // 「変更内容」列(自由長テキスト、折り返さない)が原因で
-            // page body自体が横スクロールしないよう、この表だけの
-            // overflow-x-autoで横スクロールを閉じ込める(§78「body自体は
-            // 横スクロールしない」の binding要件 — テーブル自体が幅を
-            // 持つのは許容範囲、ページ全体が伸びるのは不可)。
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[480px] border-collapse text-[12px]">
-                <thead className="text-left text-gray-400">
-                  <tr className="border-b border-gray-200">
-                    <th className="py-1 px-2 font-normal">日時</th>
-                    <th className="py-1 px-2 font-normal">操作</th>
-                    <th className="py-1 px-2 font-normal">変更内容</th>
-                    <th className="py-1 px-2 font-normal">実行者</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {item.history.map((h) => (
-                    <tr key={h.id} className="border-b border-gray-100 text-gray-700">
-                      <td className="whitespace-nowrap py-1 px-2 align-top">{formatDateTime(h.changedAt)}</td>
-                      <td className="whitespace-nowrap py-1 px-2 align-top">{historyOperationLabel(h.fieldName)}</td>
-                      <td className="py-1 px-2 align-top">{historyChangeSummary(h)}</td>
-                      <td className="whitespace-nowrap py-1 px-2 align-top">{h.changedBy ?? "-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {/* P1 詳細遷移の待ち時間短縮: 本体の描画をInventoryHistoryの
+              クエリで足止めしないためのSuspense境界。fallbackは本体側と
+              同じインデント・フォントサイズの単純なテキストのみ
+              (テーブル自体を先に描くとヘッダー確定前に列幅が変わって
+              しまうため、テーブルごとfallback側に含める)。 */}
+          <Suspense fallback={<p className="text-[12px] text-gray-400">読み込み中…</p>}>
+            <InventoryHistoryTable inventoryId={item.id} />
+          </Suspense>
         </div>
       </div>
     </div>

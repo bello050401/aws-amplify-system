@@ -158,11 +158,44 @@ async function simAdvancedSearch(table: MockRecord[], categoryId: string, locati
 }
 
 /**
- * 商品詳細ページ: Inventory.get()(単一get、常にO(1)) +
- * InventoryHistory(第五ラウンドP0-Bで実GSI Query化済み、対象商品の
- * 履歴行だけを読む——テーブル全体には比例しない)。
+ * 商品詳細ページ本体(基本情報〜追加項目・画像): Inventory.get()単体
+ * (常にO(1))。
+ *
+ * P1 詳細遷移の待ち時間短縮(2026-09-12)より前は、この直後に
+ * InventoryHistory GSI Queryを直列で待ってから本体を返していた——
+ * 本体側は履歴の値を一切使わないのに、履歴クエリの往復ぶんだけ画面が
+ * 遅れて描画されていた。getInventoryDetail/getInventoryHistoryへ分割し、
+ * 商品詳細ページ側はgetInventoryHistoryをSuspense境界の中で個別に
+ * 呼ぶよう変更した(app/inventory/(protected)/[id]/page.tsx +
+ * InventoryHistoryTable.tsx)ので、本体の所要時間からは
+ * InventoryHistory往復ぶんが完全に消える。
  */
-async function simGetInventoryDetail(historyRowsForThisItem: number): Promise<{ elapsedMs: number }> {
+async function simGetInventoryDetailBody(): Promise<{ elapsedMs: number }> {
+  const t0 = performance.now();
+  await simulatedNetworkDelay(); // Inventory.get()
+  return { elapsedMs: performance.now() - t0 };
+}
+
+/**
+ * 更新履歴セクション(ページ最下部、Suspenseで遅延取得): 対象商品の
+ * 履歴行だけを読む実GSI Query(第五ラウンドP0-Bで.list({filter})の
+ * Scanから切り替え済み、テーブル全体の行数には比例しない)。本体の
+ * 描画を待たせないので、この所要時間は商品詳細ページのSLO
+ * (「商品詳細ページ」行)には計上しない——別枠で計測する。
+ */
+async function simGetInventoryHistoryStreamed(historyRowsForThisItem: number): Promise<{ elapsedMs: number }> {
+  const t0 = performance.now();
+  await simulatedNetworkDelay(); // InventoryHistory GSI Query(1回、対象商品分だけ)
+  await sleep(historyRowsForThisItem * SIM.perRecordMapMs);
+  return { elapsedMs: performance.now() - t0 };
+}
+
+/**
+ * 分割前(比較用の旧経路): Inventory.get() → InventoryHistory GSI Query
+ * を直列で待ってから本体を返す、変更前のgetInventoryDetailそのままの形。
+ * 「削減できた往復」を数値で示すための比較対象としてのみ残す。
+ */
+async function simGetInventoryDetailPreP1(historyRowsForThisItem: number): Promise<{ elapsedMs: number }> {
   const t0 = performance.now();
   await simulatedNetworkDelay(); // Inventory.get()
   await simulatedNetworkDelay(); // InventoryHistory GSI Query(1回、対象商品分だけ)
@@ -223,7 +256,9 @@ async function runTier(size: number) {
   const backTimes: number[] = [];
   const searchTimes: number[] = [];
   const advancedTimes: number[] = [];
-  const detailTimes: number[] = [];
+  const detailBodyTimes: number[] = [];
+  const detailHistoryTimes: number[] = [];
+  const detailPreP1Times: number[] = [];
   let listCalls = 0;
 
   for (let i = 0; i < TRIALS; i++) {
@@ -243,8 +278,13 @@ async function runTier(size: number) {
     const advanced = await simAdvancedSearch(table, "cat-A", "loc-3");
     advancedTimes.push(advanced.elapsedMs);
 
-    const detail = await simGetInventoryDetail(12); // 典型的な編集履歴行数の仮定(実測ではない、平均的な運用を想定した目安)
-    detailTimes.push(detail.elapsedMs);
+    // 典型的な編集履歴行数の仮定(実測ではない、平均的な運用を想定した目安)
+    const detailBody = await simGetInventoryDetailBody();
+    detailBodyTimes.push(detailBody.elapsedMs);
+    const detailHistory = await simGetInventoryHistoryStreamed(12);
+    detailHistoryTimes.push(detailHistory.elapsedMs);
+    const detailPreP1 = await simGetInventoryDetailPreP1(12);
+    detailPreP1Times.push(detailPreP1.elapsedMs);
   }
 
   console.log(`  1回のlist系呼び出し(全件取得)あたりのAppSyncコール回数: ${listCalls}(200件/pageのnextTokenループ、この件数では全て同じ)`);
@@ -255,9 +295,18 @@ async function runTier(size: number) {
     { op: "戻る(前ページ)", p50: percentile(backTimes, 50), p95: percentile(backTimes, 95), sloP50: 300, sloP95: 600 },
     { op: "クイック検索", p50: percentile(searchTimes, 50), p95: percentile(searchTimes, 95), sloP50: 500, sloP95: 1000 },
     { op: "詳細検索(AND/OR)", p50: percentile(advancedTimes, 50), p95: percentile(advancedTimes, 95), sloP50: 500, sloP95: 1000 },
-    { op: "商品詳細ページ", p50: percentile(detailTimes, 50), p95: percentile(detailTimes, 95), sloP50: 500, sloP95: 1000 },
+    { op: "商品詳細ページ本体(P1後、historyを待たない)", p50: percentile(detailBodyTimes, 50), p95: percentile(detailBodyTimes, 95), sloP50: 500, sloP95: 1000 },
   ]);
   results.forEach((l) => console.log(l));
+  console.log(
+    `  参考: 更新履歴(Suspenseで遅延取得、本体のSLOには含めない) p50=${percentile(detailHistoryTimes, 50).toFixed(1)}ms / p95=${percentile(detailHistoryTimes, 95).toFixed(1)}ms`,
+  );
+  console.log(
+    `  参考: P1前の商品詳細ページ(本体+historyを直列に待っていた旧経路) p50=${percentile(detailPreP1Times, 50).toFixed(1)}ms / p95=${percentile(detailPreP1Times, 95).toFixed(1)}ms`,
+  );
+  console.log(
+    `  → P1での短縮幅(本体p50): ${(percentile(detailPreP1Times, 50) - percentile(detailBodyTimes, 50)).toFixed(1)}ms(往復1回ぶん、SIM.appsyncCallMs=${SIM.appsyncCallMs}msの理論値に一致)`,
+  );
 
   return { size, listCalls };
 }
@@ -276,6 +325,7 @@ async function main() {
   console.log("  - 「次ページ」「戻る」は、offsetが違うだけで内部的には毎回fetchAllInventoryRecordsを再実行しており、初回一覧と全く同じ「全件取得+ソート」コストを毎回払う。DynamoDBレベルのoffsetページングにはなっていない(offsetはメモリ上のslice位置に過ぎない)。");
   console.log("  - 「戻る」のSLO(p50<300ms)は一覧本体(p50<1.0s)より厳しいが、実装上「戻る」だけを軽くする仕組みは無い——上のtier別結果で件数が増えるとp50<300msを満たせなくなるタイミングが、まさにこの設計上の限界を示す。");
   console.log("  - 商品詳細ページは第五ラウンドP0-BのInventoryHistory GSI化により、件数(全InventoryHistory行数)に依らず定数時間に近い——一覧/検索とは性質が異なる。");
+  console.log("  - P1 詳細遷移の待ち時間短縮(2026-09-12): 本体(基本情報〜追加項目・画像)はInventoryHistoryの値を一切使わないのに、以前はInventory.get→InventoryHistory GSI Queryを直列で待ってから返していた。getInventoryDetail(本体のみ)/getInventoryHistory(履歴のみ、Suspenseで遅延取得)へ分割し、本体の描画からAppSync往復1回ぶん(仮定70±30ms)を除去した。加えて、getInventoryDetailを呼ぶ他14箇所(編集画面・EC出品・値付け・問い合わせAI・複製元読み込み等——history フィールドをどこも読んでいなかった)も同じ分割で1往復ずつ減っている。");
   console.log("  - サムネイル配信: 一覧の各行が独立してクライアント側でgetUrl()を呼ぶ設計(N行=N並列呼び出し)だったのを、第五ラウンドP0-Cでモジュールスコープの10分TTLキャッシュに変更済み(app/inventory/useInventoryImageUrl.ts)——同一storageKeyへの再訪問(戻る等)は再署名を避ける。ただし初回描画時のN並列呼び出し自体は変更していない(仮想化されていないテーブルの全行が同時にmountするため)。");
 }
 

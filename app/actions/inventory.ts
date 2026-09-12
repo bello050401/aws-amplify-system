@@ -10,7 +10,7 @@ import {
   getCurrentInventoryUserEmail,
   getInventoryRole,
 } from "@/lib/amplify/requireInventoryUser";
-import { getInventoryDetail, listCategories, listLocations, listStatuses } from "@/lib/inventory/queries";
+import { getInventoryDetail, getInventoryHistory, listCategories, listLocations, listStatuses, type InventoryHistoryRow } from "@/lib/inventory/queries";
 import { stringifyCustomFields } from "@/lib/inventory/customFieldsCodec";
 import { computeOriginalHashForPath, copyInventoryImage, removeInventoryImage } from "@/lib/inventory/imageServerOps";
 import { copyInventoryMedium, copyInventoryThumbnail, generateInventoryDerivatives, generateInventoryMedium, generateInventoryThumbnail } from "@/lib/inventory/thumbnail";
@@ -503,4 +503,40 @@ export async function deleteInventory(inventoryId: string): Promise<never> {
   clearInventoryCountCache();
   revalidatePath("/inventory");
   redirect("/inventory");
+}
+
+/**
+ * 商品詳細ページの更新履歴セクション専用の再試行エンドポイント
+ * (局所エラー処理レビュー補正、2026-09-12)。
+ *
+ * InventoryHistoryTable.tsx(Server Component、SSR初回描画)は
+ * getInventoryHistory の失敗を自分でcatchして「取得エラー」を
+ * InventoryHistorySection.tsx(Client Component)へ渡すだけで、それ以上
+ * 何もしない——再試行の実行主体はこちら側。Server Actionはページの
+ * レンダリング経路とは別の独立したエンドポイント——ページ側で
+ * getInventoryRoleを確認していても、このAction自身が直接呼ばれ得る
+ * 以上、ここでも同じ認可チェックをやり直す(getSalesItemsActionと同じ
+ * 考え方、§4「認可を保ち」)。
+ *
+ * 例外を投げずに`{ok:false}`を返すのは、他のServer Actionと同じ理由——
+ * production buildではthrowしたメッセージがNext.jsにマスクされ、
+ * 利用者に何も伝わらない(app/actions/salesItems.ts冒頭のコメント参照)。
+ * 呼び出し側(InventoryHistorySection)はこれを見て「取得エラー・再試行」
+ * を出し続ける。
+ */
+export async function getInventoryHistoryAction(
+  inventoryId: string,
+): Promise<{ ok: true; rows: InventoryHistoryRow[] } | { ok: false }> {
+  try {
+    const role = await getInventoryRole();
+    if (!role) return { ok: false };
+    const rows = await getInventoryHistory(inventoryId);
+    return { ok: true, rows };
+  } catch (err) {
+    // ログは識別情報(inventoryId・changedBy等)を出さない — エラー種別のみ。
+    console.warn("[getInventoryHistoryAction] 更新履歴の再取得に失敗しました", {
+      error: err instanceof Error ? err.name : "unknown",
+    });
+    return { ok: false };
+  }
 }

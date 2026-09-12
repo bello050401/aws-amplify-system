@@ -19,6 +19,7 @@ import {
   E2E_CUSTOM_FIELD_DEFS,
   e2eListPage,
   e2eInventoryDetail,
+  e2eInventoryHistory,
 } from "./e2eFixtures";
 
 type InventoryModel = Schema["Inventory"]["type"];
@@ -587,30 +588,37 @@ export interface InventoryDetail extends InventoryListRow, ExtendedFieldsAsNulla
   customFields: Record<string, unknown> | null;
   createdBy: string | null;
   updatedBy: string | null;
-  history: InventoryHistoryRow[];
 }
 
+/**
+ * P1 詳細遷移の待ち時間短縮(2026-09-12): `history` はもともとこの型の
+ * フィールドだったが、実際に読んでいたのは商品詳細ページ
+ * (app/inventory/(protected)/[id]/page.tsx)一箇所だけだった——編集画面・
+ * EC出品・値付け・問い合わせAI・複製元読み込みなど、getInventoryDetail
+ * を呼ぶ残り十数箇所はどれも `.history` に触れない。それでも
+ * getInventoryDetail は毎回 Inventory.get の直後に
+ * InventoryHistory クエリを直列で待っており、使われない箇所でも
+ * 「呼ぶたびに2往復」を払っていた。
+ *
+ * ここを2つに割る:
+ *   - getInventoryDetail: Inventory.get だけ(1往復)。history を読まない
+ *     14箇所は素通しで速くなり、返り値の形も変わらない
+ *     (`history` を参照している唯一の呼び出し元が下のInventoryHistoryTable
+ *     経由に変わっただけ)。
+ *   - getInventoryHistory: 従来どおりのGSI Query。商品詳細ページからは
+ *     Suspense境界(InventoryHistoryTable.tsx)の中で呼ぶことで、本体
+ *     (基本情報・画像・販売情報等)の描画をこのクエリの完了で待たせない
+ *     ——履歴は仕様上ページ最下部の補助情報であり、本体より遅れて
+ *     表示されても実害がない(spec: 更新履歴は左右カラムの外、ページ
+ *     下部に独立配置)。
+ *
+ * 計測: scripts/benchmark-inventory-queries.ts のsimGetInventoryDetail系
+ * 参照。
+ */
 export async function getInventoryDetail(id: string): Promise<InventoryDetail | null> {
   if (isE2EFixtureModeActive()) return e2eInventoryDetail(id); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const { data: item } = await serverDataClient.models.Inventory.get({ id }, inventoryAuthMode);
   if (!item || item.deletedAt) return null;
-
-  // 第五ラウンド§6(P0-B) GSI/Scan監査: このモデルはsecondaryIndexes
-  // (inventoryId + changedAt sort key)を実際に宣言済みだが、以前は他の
-  // モデルの慣例(lib/imageProcessing/jobService.tsのlistVersions等)に
-  // 合わせて`.list({filter})`——DynamoDB Scan相当、テーブル全体の行数に
-  // 比例したコスト——で呼んでいた。InventoryHistoryは「一度書いたら
-  // 消さない追記専用の監査ログ」で件数が無制限に増え続け(モデル定義の
-  // コメント参照)、かつこの呼び出しは商品詳細ページを開くたび=高頻度
-  // に発生するため、他のGSI未使用箇所より優先度が高い(監査結果は
-  // docs/gsi-scan-audit.md参照)。生成されたクエリField名は
-  // synth出力のmodel-schema.graphqlで実測確認済み
-  // (`listInventoryHistoryByInventoryIdAndChangedAt`)——真のDynamoDB
-  // Query(該当inventoryIdの行だけを読む)に切り替える。
-  const { data: historyRows } = await serverDataClient.models.InventoryHistory.listInventoryHistoryByInventoryIdAndChangedAt(
-    { inventoryId: id },
-    { ...inventoryAuthMode },
-  );
 
   return {
     ...toListRow(item),
@@ -619,17 +627,58 @@ export async function getInventoryDetail(id: string): Promise<InventoryDetail | 
     customFields: parseCustomFields(item.customFields),
     createdBy: item.createdBy ?? null,
     updatedBy: item.updatedBy ?? null,
-    history: historyRows
-      .map((h) => ({
-        id: h.id,
-        changedAt: h.changedAt,
-        changedBy: h.changedBy ?? null,
-        fieldName: h.fieldName,
-        oldValue: h.oldValue ?? null,
-        newValue: h.newValue ?? null,
-      }))
-      .sort((a, b) => b.changedAt.localeCompare(a.changedAt)),
   };
+}
+
+/**
+ * 更新履歴のみを取得する(上のgetInventoryDetailのコメント参照)。
+ *
+ * 第五ラウンド§6(P0-B) GSI/Scan監査: このモデルはsecondaryIndexes
+ * (inventoryId + changedAt sort key)を実際に宣言済みだが、以前は他の
+ * モデルの慣例(lib/imageProcessing/jobService.tsのlistVersions等)に
+ * 合わせて`.list({filter})`——DynamoDB Scan相当、テーブル全体の行数に
+ * 比例したコスト——で呼んでいた。InventoryHistoryは「一度書いたら
+ * 消さない追記専用の監査ログ」で件数が無制限に増え続け(モデル定義の
+ * コメント参照)、かつこの呼び出しは商品詳細ページを開くたび=高頻度
+ * に発生するため、他のGSI未使用箇所より優先度が高い(監査結果は
+ * docs/gsi-scan-audit.md参照)。生成されたクエリField名は
+ * synth出力のmodel-schema.graphqlで実測確認済み
+ * (`listInventoryHistoryByInventoryIdAndChangedAt`)——真のDynamoDB
+ * Query(該当inventoryIdの行だけを読む)を維持する。
+ *
+ * P1後の局所エラー処理レビュー補正(2026-09-12): 以前は
+ * `const { data: historyRows } = await ...` と `errors` を無視していた
+ * ——DynamoDB Queryが権限不足・一時障害等の GraphQL errors を返すと
+ * `data` は空配列になり、「本当に0件」と「取得に失敗した」が呼び出し
+ * 側で区別できなくなる(cf. lib/inventory/salesAggregateStore.tsの
+ * fetchSnapshotで既に確立済みの同じ考え方)。ここでは `errors` を明示的
+ * に見て、あれば例外を投げる——呼び出し側
+ * (app/inventory/(protected)/[id]/InventoryHistoryTable.tsx)がこれを
+ * catchして「取得エラー・再試行」表示に倒し、「変更履歴はまだありませ
+ * ん」という正常系の空表示とは別扱いにする。非GraphQLエラー(ネット
+ * ワーク断・認証失効等、そのまま例外として上がってくるもの——
+ * docs/server-components-render-error-static-20260902.md 1-2 参照)も
+ * 同じ try/catch でまとめて「取得エラー」に倒される。
+ */
+export async function getInventoryHistory(id: string): Promise<InventoryHistoryRow[]> {
+  if (isE2EFixtureModeActive()) return e2eInventoryHistory(id); // 第五ラウンド§7/P1-Aと同じ安全ゲート
+  const { data: historyRows, errors } = await serverDataClient.models.InventoryHistory.listInventoryHistoryByInventoryIdAndChangedAt(
+    { inventoryId: id },
+    { ...inventoryAuthMode },
+  );
+  if (errors) {
+    throw new Error(`InventoryHistoryの取得に失敗しました: ${JSON.stringify(errors)}`);
+  }
+  return historyRows
+    .map((h) => ({
+      id: h.id,
+      changedAt: h.changedAt,
+      changedBy: h.changedBy ?? null,
+      fieldName: h.fieldName,
+      oldValue: h.oldValue ?? null,
+      newValue: h.newValue ?? null,
+    }))
+    .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
 }
 
 export interface MasterOption {

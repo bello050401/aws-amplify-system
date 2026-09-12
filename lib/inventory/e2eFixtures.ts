@@ -28,7 +28,7 @@ export function isE2EFixtureModeActive(): boolean {
   return process.env.NODE_ENV !== "production" && process.env.INVENTORY_E2E_FIXTURES === "1";
 }
 
-import type { InventoryListRow, InventoryDetail, MasterOption, StatusOption, SearchPage, CustomFieldDefinitionRow } from "./queries";
+import type { InventoryListRow, InventoryDetail, InventoryHistoryRow, MasterOption, StatusOption, SearchPage, CustomFieldDefinitionRow } from "./queries";
 import type { InventoryImageRecord } from "./imageTypes";
 
 const now = "2026-08-30T09:00:00.000Z";
@@ -195,8 +195,74 @@ export function e2eInventoryDetail(id: string): InventoryDetail | null {
     images: E2E_GALLERY_FIXTURE_IMAGES[row.id] ?? [],
     createdBy: "e2e-fixture",
     updatedBy: "e2e-fixture",
-    history: [
-      { id: "h1", changedAt: now, changedBy: "e2e-fixture", fieldName: "statusId", oldValue: "st-photo", newValue: "st-listing" },
-    ],
   };
+}
+
+/**
+ * getInventoryHistory の E2E fixture 版。history は元々 e2eInventoryDetail に
+ * 埋め込まれていたが、実装側(queries.ts)がgetInventoryDetail/
+ * getInventoryHistoryへ分割されたのに合わせてここも分離——正常系の値は
+ * 変更していない。
+ *
+ * P1後の局所エラー処理レビュー補正(2026-09-12): `INVENTORY_E2E_HISTORY_
+ * FAILURE=1` を立てると常に例外を投げる——本体(getInventoryDetail/
+ * e2eInventoryDetail)は影響を受けないので、InventoryHistoryTableの
+ * エラー表示/再試行導線を実際のReactツリー・Suspense境界を通して
+ * ブラウザで確認できる(商品を問わず再現する、読み取り専用の追加
+ * opt-in)。既存のe2e-fixtureゲート(isE2EFixtureModeActive、NODE_ENV!==
+ * "production" かつ INVENTORY_E2E_FIXTURES==="1")の内側でしか意味を
+ * 持たない。
+ *
+ * 詳細履歴の実境界試験(2026-09-12、task_a748ee69c990317c24)で追加した
+ * 商品別シナリオ。E2E_GALLERY_FIXTURE_IMAGES(画像の段階読込QA)と同じ
+ * 「特定のidだけに専用の挙動を持たせる」設計に倣う——グローバルな
+ * INVENTORY_E2E_HISTORY_FAILURE(商品を問わず常に失敗)とは独立に、
+ * 個別のidを行き来しながら本体先行描画・空表示・再試行復帰・別商品への
+ * 切替を1つのdevサーバーで作り分けられるようにする:
+ *   - e2e-inv-6: 空配列(0件) — 「取得エラー」ではなく正常系の空表示。
+ *   - e2e-inv-7: 取得に約2秒の遅延 — 本体(基本情報・画像)がその往復を
+ *     待たずに先に描画され、更新履歴だけがSuspense fallback→テーブルの
+ *     順で遅れて表示されることを確認する。別商品への切替中に古い応答が
+ *     紛れ込まないかの確認にも使う(遅延中に他の商品へ移動する)。
+ *   - e2e-inv-8: 直近の失敗回数をこのプロセス内で数え、商品ごとに1回だけ
+ *     例外を投げて以降は成功する — SSR初回は失敗表示、再試行ボタンを
+ *     押すと成功する回復シナリオを固定手順で再現する(実際のGraphQL
+ *     一時障害の代わり)。
+ *   - e2e-inv-9: 常に例外を投げる(e2e-inv-8と違い回復しない) —
+ *     「失敗表示のまま別商品へ切り替えても、その失敗状態を引きずらない」
+ *     ことを確認する用途専用。e2e-inv-8は1回retryすると成功に変わって
+ *     しまうため、この確認には使えない(同じdevサーバープロセス内で
+ *     状態が変わってしまう)。
+ * 上記以外のid(既存のe2e-inv-1等を含む)は元のまま1件の履歴行を返す。
+ */
+const historyFailOnceCounts = new Map<string, number>();
+
+export async function e2eInventoryHistory(id: string): Promise<InventoryHistoryRow[]> {
+  if (process.env.INVENTORY_E2E_HISTORY_FAILURE === "1") {
+    throw new Error("[e2e-fixture] simulated InventoryHistory fetch failure");
+  }
+  if (id === "e2e-inv-6") return [];
+  if (id === "e2e-inv-9") {
+    throw new Error("[e2e-fixture] simulated InventoryHistory permanent failure (does not recover)");
+  }
+  if (id === "e2e-inv-7") {
+    // 本物のGSI Query往復を模した非同期遅延——Nodeはシングルスレッドの
+    // イベントループなので、ここを同期busy-waitにすると同じプロセスが
+    // 処理する他のリクエスト(本体側の描画等)まで巻き込んで止めてしまう。
+    // setTimeout+Promiseで待つことで、この1回のawaitだけが遅れ、他の
+    // リクエスト/このリクエスト内の本体側の描画は影響を受けない。
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    return [{ id: "h1", changedAt: now, changedBy: "e2e-fixture", fieldName: "statusId", oldValue: "st-photo", newValue: "st-listing" }];
+  }
+  if (id === "e2e-inv-8") {
+    const failuresSoFar = historyFailOnceCounts.get(id) ?? 0;
+    if (failuresSoFar === 0) {
+      historyFailOnceCounts.set(id, failuresSoFar + 1);
+      throw new Error("[e2e-fixture] simulated InventoryHistory transient failure (recovers on retry)");
+    }
+    return [{ id: "h1", changedAt: now, changedBy: "e2e-fixture", fieldName: "statusId", oldValue: "st-photo", newValue: "st-listing" }];
+  }
+  const row = E2E_INVENTORY_ROWS.find((r) => r.id === id) ?? E2E_INVENTORY_ROWS[0];
+  if (!row) return [];
+  return [{ id: "h1", changedAt: now, changedBy: "e2e-fixture", fieldName: "statusId", oldValue: "st-photo", newValue: "st-listing" }];
 }
