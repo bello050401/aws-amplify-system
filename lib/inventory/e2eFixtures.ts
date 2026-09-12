@@ -29,6 +29,7 @@ export function isE2EFixtureModeActive(): boolean {
 }
 
 import type { InventoryListRow, InventoryDetail, MasterOption, StatusOption, SearchPage, CustomFieldDefinitionRow } from "./queries";
+import type { InventoryImageRecord } from "./imageTypes";
 
 const now = "2026-08-30T09:00:00.000Z";
 
@@ -72,8 +73,16 @@ function makeRow(i: number, overrides: Partial<InventoryListRow> = {}): Inventor
     salePrice: null,
     plannedSalePrice: 24800 + i * 100,
     note: "モバイル表示検証用の長めのメモ文字列。テーブル/カードのはみ出しが無いか確認するために意図的に長くしてある。",
-    mainImageStorageKey: null,
-    mainImageThumbnailKey: null,
+    // 画像表示高速化・段階読込 QA是正 — 一覧の全行に合成画像キーを持たせ、
+    // InventoryThumbnail(app/inventory/InventoryThumbnail.tsx)の
+    // IntersectionObserverによる画面外解決抑制を実ブラウザで検証できる
+    // ようにする(以前はnullで「No Image」placeholderのみだったため、
+    // 画面外の行が本当に署名解決を遅らせているかを一覧画面では確認
+    // できなかった)。全行同じ合成キーを使う——e2e-fixtureキーは
+    // useInventoryImageUrl側で意図的にキャッシュされない
+    // (常に解決をやり直す)ので、行ごとに独立したイベントとして観測できる。
+    mainImageStorageKey: "e2e-fixture:original",
+    mainImageThumbnailKey: "e2e-fixture:small",
     createdAt: now,
     updatedAt: now,
     barcode: null,
@@ -101,6 +110,62 @@ export function e2eListPage(offset: number, limit: number): SearchPage<Inventory
   return { items, total: E2E_INVENTORY_ROWS.length, offset, limit };
 }
 
+/**
+ * 画像表示高速化・段階読込(P1) QA是正 — 完全合成画像でのCodexブラウザ
+ * QA用フィクスチャ。storageKey/thumbnailKey/mediumKeyの`"e2e-fixture:"`
+ * 接頭辞はapp/inventory/useInventoryImageUrl.tsが実S3/Cognitoを一切
+ * 経由せず解決する専用の合成キー(詳細はそのファイルのコメント参照)。
+ * e2e-inv-1〜5だけに実データを持たせ、他の行は従来通りimages:[]。
+ */
+function e2eFixtureImage(overrides: Pick<InventoryImageRecord, "storageKey"> & Partial<InventoryImageRecord>): InventoryImageRecord {
+  return {
+    sortOrder: 0,
+    type: "NORMAL",
+    isPrimary: true,
+    sourceSystem: null,
+    sourceUrl: null,
+    thumbnailKey: null,
+    mediumKey: null,
+    originalHash: null,
+    classification: null,
+    ...overrides,
+  };
+}
+
+const E2E_GALLERY_FIXTURE_IMAGES: Record<string, InventoryImageRecord[]> = {
+  // 正常系: small先行表示 → medium(署名+本体とも約1.2秒遅延)へ差し替え、
+  // ライトボックスの原本も約0.9秒遅延——小/中/原本の切り替わりが実際の
+  // ブラウザで目視できる。
+  "e2e-inv-1": [e2eFixtureImage({ storageKey: "e2e-fixture:original-delayed", thumbnailKey: "e2e-fixture:small", mediumKey: "e2e-fixture:medium-delayed" })],
+  // medium本体失敗: signは即成功するがURL先のオブジェクトが実在しない
+  // (本物の404) → medium onErrorが発火し、smallの表示を維持し続ける。
+  "e2e-inv-2": [e2eFixtureImage({ storageKey: "e2e-fixture:original", thumbnailKey: "e2e-fixture:small", mediumKey: "e2e-fixture:medium-broken" })],
+  // 原本本体失敗→再試行で回復: ライトボックスを開いた1回目は本体404で
+  // 再試行UIが出る。「再試行」を押す(forceRefresh)と2回目以降は成功する。
+  "e2e-inv-3": [e2eFixtureImage({ storageKey: "e2e-fixture:original-recovers", thumbnailKey: "e2e-fixture:small", mediumKey: "e2e-fixture:medium-delayed" })],
+  // 既存データ互換: thumbnailKey/mediumKeyともnullの旧レコード相当 —
+  // effectiveHeroKey/effectiveListThumbnailKeyがstorageKey(原本)へ
+  // フォールbackし、表示は壊れない(劣化するのは速度だけ)。
+  "e2e-inv-4": [e2eFixtureImage({ storageKey: "e2e-fixture:original" })],
+  // 画像切替競合(実React境界)専用: 1枚目はmedium本体が1.2秒遅延、
+  // 2枚目はmediumKeyを持たない(small止まり)。1枚目選択直後・medium
+  // 到着前に2枚目へ切り替えると、1枚目向けに裏で進んでいたmedium
+  // プリロードのonloadが遅れて届く——これがreduceBodyLoadStateの
+  // key一致チェックを迂回して2枚目の表示へ誤反映しないことを、
+  // 実タイマー・実DOM経由で確認する(app/inventory/
+  // inventoryImageLoadState.tsの純粋関数試験とは別に、実際の
+  // InventoryImageGallery配線を通した回帰試験として)。2枚目は
+  // mediumKey無しなのでsmall.svgのまま変化しないのが正しい——もし
+  // 1枚目のmedium.svgへ化けたら競合が再発している。
+  // storageKeyはInventoryImageGallery側でReactの`key`にも使われるため、
+  // 未知のvariant名(originalへフォールバックする、上のresolveE2E
+  // FixtureUrl参照)でも1枚目・2枚目を別の文字列にしてある。
+  "e2e-inv-5": [
+    e2eFixtureImage({ storageKey: "e2e-fixture:original-switch-a", thumbnailKey: "e2e-fixture:small", mediumKey: "e2e-fixture:medium-delayed", sortOrder: 0, isPrimary: true }),
+    e2eFixtureImage({ storageKey: "e2e-fixture:original-switch-b", thumbnailKey: "e2e-fixture:small", mediumKey: null, sortOrder: 1, isPrimary: false }),
+  ],
+};
+
 export function e2eInventoryDetail(id: string): InventoryDetail | null {
   const row = E2E_INVENTORY_ROWS.find((r) => r.id === id) ?? E2E_INVENTORY_ROWS[0];
   if (!row) return null;
@@ -127,7 +192,7 @@ export function e2eInventoryDetail(id: string): InventoryDetail | null {
     counterpartyAddress: null,
     shippingCost: null,
     dailyPurchaseTotal: null,
-    images: [],
+    images: E2E_GALLERY_FIXTURE_IMAGES[row.id] ?? [],
     createdBy: "e2e-fixture",
     updatedBy: "e2e-fixture",
     history: [

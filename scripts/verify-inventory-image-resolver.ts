@@ -332,6 +332,57 @@ async function testReloadRestoresWithoutResigning() {
   assert("url" in result, "シナリオ8: reload後の結果はurlを含む(stale扱いにならない)");
 }
 
+// ---------------------------------------------------------------------
+// 9. forceRefresh(画像表示高速化・段階読込 P1 QA修正) — getUrl自体は
+//    成功したが画像本体の読み込みが失敗した後の手動再試行は、キャッシュ
+//    (メモリ/永続とも)を無視して必ず新しい署名を取り直す。
+// ---------------------------------------------------------------------
+async function testForceRefreshBypassesMemoryCache() {
+  let signUrlCallCount = 0;
+  const resolver = new ImageUrlResolver({
+    fetchAuthContext: async () => authContext(),
+    signUrl: async (k) => {
+      signUrlCallCount++;
+      return signedUrlFor(k, { url: `https://example.test/${k}-attempt-${signUrlCallCount}` });
+    },
+    storage: makeFakeStorage(),
+  });
+
+  const first = await resolver.resolve("K");
+  assertEqual(signUrlCallCount, 1, "シナリオ9a: 通常のresolveは署名を1回行う");
+  assert("url" in first && first.url === "https://example.test/K-attempt-1", "シナリオ9a: 初回はattempt-1のURLを受け取る");
+
+  const secondNormal = await resolver.resolve("K");
+  assertEqual(signUrlCallCount, 1, "シナリオ9a: forceRefreshなしの再解決はキャッシュを使い、signUrlを呼び直さない(本体失敗のUXでは効かないURL)");
+  assert("url" in secondNormal && secondNormal.url === "https://example.test/K-attempt-1", "シナリオ9a: forceRefreshなしはキャッシュされた同じURLを返す");
+
+  const forced = await resolver.resolve("K", { forceRefresh: true });
+  assertEqual(signUrlCallCount, 2, "シナリオ9b: forceRefreshはキャッシュがfreshでもsignUrlを呼び直す");
+  assert("url" in forced && forced.url === "https://example.test/K-attempt-2", "シナリオ9b: forceRefreshは新しい署名結果を受け取る");
+  assertEqual(resolver.getCachedUrl("K"), "https://example.test/K-attempt-2", "シナリオ9b: forceRefreshの結果は以後の通常解決のためにキャッシュを上書きする");
+}
+
+async function testForceRefreshBypassesPersistedCache() {
+  const storage = makeFakeStorage();
+  let signUrlCallCount = 0;
+  const fetchAuthContext = async () => authContext({ identityId: "user-a" });
+  const signUrl = async (k: string) => {
+    signUrlCallCount++;
+    return signedUrlFor(k, { url: `https://example.test/${k}-attempt-${signUrlCallCount}` });
+  };
+
+  const beforeReload = new ImageUrlResolver({ fetchAuthContext, signUrl, storage });
+  await beforeReload.resolve("K");
+  assertEqual(signUrlCallCount, 1, "シナリオ9c: reload前は署名を1回行う");
+
+  // reload相当(新しいインスタンス、同じsessionStorage) — 通常解決は
+  // 永続キャッシュから復元して再署名しないが、forceRefreshは無視する。
+  const afterReload = new ImageUrlResolver({ fetchAuthContext, signUrl, storage });
+  const forced = await afterReload.resolve("K", { forceRefresh: true });
+  assertEqual(signUrlCallCount, 2, "シナリオ9d: forceRefreshはsessionStorageの永続キャッシュも無視して再署名する");
+  assert("url" in forced && forced.url === "https://example.test/K-attempt-2", "シナリオ9d: forceRefreshは新しい署名結果を受け取る(永続キャッシュの古いURLではない)");
+}
+
 async function main() {
   await testStaleResolveAfterAuthChangeIsNotSavedOrReturned();
   await testAuthChangeWhileWaitingForSlotIsDetected();
@@ -343,6 +394,8 @@ async function main() {
   await testDifferentKeysNeverShareUrls();
   await testConcurrentSameKeyCallsSignOnce();
   await testReloadRestoresWithoutResigning();
+  await testForceRefreshBypassesMemoryCache();
+  await testForceRefreshBypassesPersistedCache();
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }

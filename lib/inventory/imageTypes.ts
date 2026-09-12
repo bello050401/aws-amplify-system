@@ -34,6 +34,20 @@ export interface InventoryImageRecord {
    */
   thumbnailKey: string | null;
   /**
+   * 画像表示高速化・段階読込(P1、2026-09-12指示書) — `storageKey`
+   * (原本)と`thumbnailKey`(一覧用320px)の間を埋める、長辺960px程度の
+   * 派生画像のS3キー。詳細ページ/EC参照ギャラリーのメイン画像が
+   * 「原本を先読みしない」ために最初に表示する版。生成できなかった/
+   * まだ生成していない画像はnull — effectiveHeroKey(下記)がその場合
+   * thumbnailKey→storageKeyの順にフォールバックするので、既存の全
+   * レコード・生成に失敗した画像も表示自体は壊れない(劣化するのは
+   * 速度だけ、thumbnailKeyと全く同じ安全側の設計)。生成はthumbnailKey
+   * と同じ場所・同じタイミング(lib/inventory/thumbnail.tsのsharp)で
+   * 一度だけ行う — 既存画像への遡及生成はこのラウンドでは行わない
+   * (thumbnailKeyのbackfillと同じ仕組みを将来必要なら別途用意する)。
+   */
+  mediumKey: string | null;
+  /**
    * BELLO画像自動加工システム(2026-08-30指示書)— アップロード時点の
    * オリジナルバイト列のSHA-256(lib/imageProcessing/pipeline.ts の
    * computeOriginalHash)。ProcessingJobの冪等性キー計算に使う。一度
@@ -54,6 +68,7 @@ export interface RawInventoryImage {
   sourceSystem?: string | null;
   sourceUrl?: string | null;
   thumbnailKey?: string | null;
+  mediumKey?: string | null;
   originalHash?: string | null;
   classification?: string | null;
 }
@@ -68,6 +83,7 @@ export function normalizeImageRecord(img: RawInventoryImage): InventoryImageReco
     sourceSystem: img.sourceSystem ?? null,
     sourceUrl: img.sourceUrl ?? null,
     thumbnailKey: img.thumbnailKey ?? null,
+    mediumKey: img.mediumKey ?? null,
     originalHash: img.originalHash ?? null,
     classification: (img.classification as ImageClassificationName | undefined) ?? null,
   };
@@ -76,6 +92,23 @@ export function normalizeImageRecord(img: RawInventoryImage): InventoryImageReco
 /** The key the list view should actually fetch for this image — its small thumbnail when one exists, the original otherwise (pre-backfill records, or a thumbnail generation failure that was swallowed at upload time — see thumbnail.ts). The detail page / gallery / edit preview must NEVER call this; they always use `storageKey` directly, by design (master指示書 Phase B: 詳細画面は高解像度のまま). */
 export function effectiveListThumbnailKey(img: InventoryImageRecord): string {
   return img.thumbnailKey ?? img.storageKey;
+}
+
+/**
+ * 画像表示高速化・段階読込(P1) — 詳細/EC参照ギャラリーの「メイン画像」
+ * が拡大操作より前に表示すべきキー: mediumKey(960px)があればそれ、
+ * 無ければthumbnailKey(320px、既存の一覧サムネイルと同じもの——多くの
+ * 場合ユーザーが直前に一覧画面で見ていて既にsessionStorageへ署名済み
+ * URLがキャッシュされている)、どちらも無ければ最後の手段としてのみ
+ * storageKey(原本)——thumbnailKey同様、生成失敗/未生成のレコードでも
+ * 表示自体は壊れないための安全側フォールバックであり、原本を先読み
+ * しないという原則の例外はここだけ(かつ既存データにのみ発生する)。
+ * `storageKey`(原本)は`InventoryImageGallery`が拡大操作時にだけ
+ * 別途要求する — このヘルパーは絶対に原本を「積極的に選ぶ」ことは
+ * ない、選ばれるのは他に何も無い場合だけ。
+ */
+export function effectiveHeroKey(img: InventoryImageRecord): string {
+  return img.mediumKey ?? img.thumbnailKey ?? img.storageKey;
 }
 
 export function splitImagesByType(images: InventoryImageRecord[]): { normal: InventoryImageRecord[]; damage: InventoryImageRecord[] } {

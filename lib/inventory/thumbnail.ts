@@ -46,37 +46,86 @@ const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
 export const THUMBNAIL_MAX_DIMENSION = 320;
 const THUMBNAIL_JPEG_QUALITY = 72;
 
-/** Keys under `inventory/` are UUID-random and never overwritten in place (a new upload always gets a fresh key — see newInventoryImageKey) — so every object this app ever serves is genuinely immutable, and caching it "forever" client-side is always safe, never a staleness risk. Applied to every new upload/copy (originals and thumbnails alike) — master指示書 Phase B優先度9. */
+/**
+ * 画像表示高速化・段階読込(P1) — 一覧サムネイル(320px)と原画像の間を
+ * 埋める「中画像」の長辺上限。詳細ページのメイン画像(380px高だが物理
+ * ピクセルでは高DPI×object-containで実質もっと要る)・EC参照画面が
+ * 「原本を先読みしない」ためにまず表示する解像度。960は
+ * 「380pxのCSS高さを3倍out DPIで表示しても十分」かつ「一覧の320pxより
+ * 明確に大きい」を満たす、既存THUMBNAIL_MAX_DIMENSIONと同じ考え方の
+ * キリのいい値(実画像PoCが無いためThumbnail同様の初期値、後日の実測で
+ * 調整可)。JPEG品質はサムネイルより少し高め(78) — 拡大鏡ではなく
+ * 「原本より先に見せる版」なので、サムネイルよりブロックノイズが
+ * 目立ちやすい分だけ上げてある。
+ */
+export const MEDIUM_MAX_DIMENSION = 960;
+const MEDIUM_JPEG_QUALITY = 78;
+
+/** Keys under `inventory/` are UUID-random and never overwritten in place (a new upload always gets a fresh key — see newInventoryImageKey) — so every object this app ever serves is genuinely immutable, and caching it "forever" client-side is always safe, never a staleness risk. Applied to every new upload/copy (originals, thumbnails and medium derivatives alike) — master指示書 Phase B優先度9。 */
 export const INVENTORY_IMAGE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
-function thumbnailKeyFor(): string {
-  // Namespaced under inventory/thumbnails/ rather than mixed in with
-  // originals — purely organizational (nothing in this app enumerates
-  // `inventory/*` by listing the bucket; every reference is by exact
-  // stored key), but keeps a human skimming the bucket in the S3 console
-  // able to tell the two apart at a glance.
-  return `inventory/thumbnails/${crypto.randomUUID()}.jpg`;
+/** Namespaced under `inventory/<prefix>/` rather than mixed in with originals — purely organizational (nothing in this app enumerates `inventory/*` by listing the bucket; every reference is by exact stored key), but keeps a human skimming the bucket in the S3 console able to tell originals/thumbnails/medium derivatives apart at a glance. */
+function derivedImageKeyFor(prefix: "thumbnails" | "medium"): string {
+  return `inventory/${prefix}/${crypto.randomUUID()}.jpg`;
 }
 
 /**
  * The pure image-processing step (sharp only — no Amplify/S3 access at
- * all), split out so scripts/verify-zaico-sync.ts can unit-test the
- * actual resize behavior (dimensions, format, "never upscale") directly,
- * without needing a live Storage backend. Throws on genuinely
- * undecodable input — the caller (generateThumbnailFromBytes) is what
- * turns that into this module's usual "null, never throw" contract.
+ * all), parametrized over the long-edge cap/quality so the thumbnail
+ * (320px) and medium (960px) derivatives share the exact same resize
+ * semantics (EXIF-safe, never-crop, never-upscale) rather than risking
+ * the two drifting apart. Split out so scripts/verify-zaico-sync.ts can
+ * unit-test the actual resize behavior directly, without needing a live
+ * Storage backend. Throws on genuinely undecodable input — the callers
+ * (generateThumbnailFromBytes/generateMediumFromBytes) turn that into
+ * this module's usual "null, never throw" contract.
  */
-export async function resizeToThumbnailJpeg(sourceBuffer: Buffer): Promise<Buffer> {
+async function resizeJpeg(sourceBuffer: Buffer, maxDimension: number, quality: number): Promise<Buffer> {
   return sharp(sourceBuffer)
     .rotate() // apply EXIF orientation before resizing — otherwise a portrait phone photo can end up sideways once EXIF metadata is dropped
     .resize({
-      width: THUMBNAIL_MAX_DIMENSION,
-      height: THUMBNAIL_MAX_DIMENSION,
-      fit: "inside", // preserve aspect ratio, never crop — cropping is InventoryThumbnail's job (object-cover/-contain), not the stored thumbnail's
+      width: maxDimension,
+      height: maxDimension,
+      fit: "inside", // preserve aspect ratio, never crop — cropping is InventoryThumbnail's/the gallery's job (object-cover/-contain), not the stored derivative's
       withoutEnlargement: true, // a source already smaller than the cap is kept as-is, never upscaled
     })
-    .jpeg({ quality: THUMBNAIL_JPEG_QUALITY })
+    .jpeg({ quality })
     .toBuffer();
+}
+
+export async function resizeToThumbnailJpeg(sourceBuffer: Buffer): Promise<Buffer> {
+  return resizeJpeg(sourceBuffer, THUMBNAIL_MAX_DIMENSION, THUMBNAIL_JPEG_QUALITY);
+}
+
+/** Exported for scripts/verify-zaico-sync.ts's resize test — same rationale as resizeToThumbnailJpeg. */
+export async function resizeToMediumJpeg(sourceBuffer: Buffer): Promise<Buffer> {
+  return resizeJpeg(sourceBuffer, MEDIUM_MAX_DIMENSION, MEDIUM_JPEG_QUALITY);
+}
+
+/** Shared upload step for both derivative kinds — resize, then upload under the right prefix with the same immutable cache-control every inventory object gets. Returns null (never throws) on any failure, the contract every caller below relies on. */
+async function generateDerivedFromBytes(
+  sourceBuffer: Buffer,
+  resize: (buf: Buffer) => Promise<Buffer>,
+  prefix: "thumbnails" | "medium",
+  label: string,
+): Promise<string | null> {
+  try {
+    const derivedBuffer = await resize(sourceBuffer);
+    const derivedPath = derivedImageKeyFor(prefix);
+    await runWithAmplifyServerContext({
+      nextServerContext: { cookies },
+      operation: (contextSpec) =>
+        uploadData(contextSpec, {
+          path: derivedPath,
+          data: derivedBuffer,
+          options: { contentType: "image/jpeg", cacheControl: INVENTORY_IMAGE_CACHE_CONTROL },
+        }).result,
+    });
+    return derivedPath;
+  } catch (err) {
+    console.error(`[generateDerivedFromBytes:${label}] failed:`, err);
+    return null;
+  }
 }
 
 /**
@@ -92,24 +141,16 @@ export async function resizeToThumbnailJpeg(sourceBuffer: Buffer): Promise<Buffe
  * why that's the right contract here.
  */
 export async function generateThumbnailFromBytes(sourceBuffer: Buffer): Promise<string | null> {
-  try {
-    const thumbnailBuffer = await resizeToThumbnailJpeg(sourceBuffer);
+  return generateDerivedFromBytes(sourceBuffer, resizeToThumbnailJpeg, "thumbnails", "thumbnail");
+}
 
-    const thumbnailPath = thumbnailKeyFor();
-    await runWithAmplifyServerContext({
-      nextServerContext: { cookies },
-      operation: (contextSpec) =>
-        uploadData(contextSpec, {
-          path: thumbnailPath,
-          data: thumbnailBuffer,
-          options: { contentType: "image/jpeg", cacheControl: INVENTORY_IMAGE_CACHE_CONTROL },
-        }).result,
-    });
-    return thumbnailPath;
-  } catch (err) {
-    console.error(`[generateThumbnailFromBytes] failed:`, err);
-    return null;
-  }
+/**
+ * 画像表示高速化・段階読込(P1) — thumbnail版と対になる「中画像」版。
+ * generateThumbnailFromBytesと全く同じ理由・同じ契約(null=失敗、
+ * 例外を投げない)で、既にメモリ上にあるバイト列から生成する。
+ */
+export async function generateMediumFromBytes(sourceBuffer: Buffer): Promise<string | null> {
+  return generateDerivedFromBytes(sourceBuffer, resizeToMediumJpeg, "medium", "medium");
 }
 
 /**
@@ -143,6 +184,62 @@ export async function generateInventoryThumbnail(sourcePath: string): Promise<st
 }
 
 /**
+ * 画像表示高速化・段階読込(P1) — generateInventoryThumbnailの中画像版。
+ * 同じ理由(サーバー側にオリジナルのバイト列が無い手動アップロード経路
+ * 用に、自分がアップロードしたばかりのオブジェクトを署名URL経由で
+ * 読み直す)・同じ契約で動く。呼び出し元(app/actions/inventory.ts's
+ * resolveImages)がサムネイルと並行してではなく順番に呼ぶことで、
+ * 同じsourcePathに対して署名URL取得+fetchが2回走る(サムネイル用/
+ * 中画像用)——1枚のアップロードにつき2回の追加往復は、サムネイルの
+ * 導入時から許容されている「必須ではない」コストと同じ性質のもの
+ * (失敗しても保存自体は止まらない)。
+ */
+export async function generateInventoryMedium(sourcePath: string): Promise<string | null> {
+  try {
+    const { url } = await runWithAmplifyServerContext({
+      nextServerContext: { cookies },
+      operation: (contextSpec) => getUrl(contextSpec, { path: sourcePath }),
+    });
+    const res = await fetchExternal(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching own object "${sourcePath}"`);
+    const sourceBuffer = Buffer.from(await res.arrayBuffer());
+    return await generateMediumFromBytes(sourceBuffer);
+  } catch (err) {
+    console.error(`[generateInventoryMedium] failed for "${sourcePath}":`, err);
+    return null;
+  }
+}
+
+/**
+ * app/actions/inventory.ts's resolveImagesが「サムネイルが無い/中画像が
+ * 無い」を同時に検知した場合の入口 — generateInventoryThumbnailと
+ * generateInventoryMediumを別々に呼ぶと同じsourcePathへ署名URL取得+
+ * fetchが2回走ってしまう(このファイルのgenerateInventoryMediumの
+ * コメント参照)。ここは1回だけfetchし、同じバイト列から両方を
+ * 生成する — ZAICO同期経路(downloadAndImportInventoryImage)が既に
+ * 実践している「1回のダウンロードで両方作る」原則を、手動アップロード
+ * 経路にも揃える。個別のgenerateInventoryThumbnail/generateInventoryMedium
+ * は引き続きthumbnailBackfill.ts等の「片方だけ欲しい」呼び出し元向けに
+ * 残す。
+ */
+export async function generateInventoryDerivatives(sourcePath: string): Promise<{ thumbnailKey: string | null; mediumKey: string | null }> {
+  try {
+    const { url } = await runWithAmplifyServerContext({
+      nextServerContext: { cookies },
+      operation: (contextSpec) => getUrl(contextSpec, { path: sourcePath }),
+    });
+    const res = await fetchExternal(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching own object "${sourcePath}"`);
+    const sourceBuffer = Buffer.from(await res.arrayBuffer());
+    const [thumbnailKey, mediumKey] = await Promise.all([generateThumbnailFromBytes(sourceBuffer), generateMediumFromBytes(sourceBuffer)]);
+    return { thumbnailKey, mediumKey };
+  } catch (err) {
+    console.error(`[generateInventoryDerivatives] failed for "${sourcePath}":`, err);
+    return { thumbnailKey: null, mediumKey: null };
+  }
+}
+
+/**
  * Used only when duplicating an Inventory record (ImageEditor.tsx's
  * "copy" slot kind, resolved in app/actions/inventory.ts's resolveImages)
  * — the original is S3-copied to a new key (copyInventoryImage), and if
@@ -155,7 +252,7 @@ export async function generateInventoryThumbnail(sourcePath: string): Promise<st
  * falls back to generating a fresh one from the newly-copied original.
  */
 export async function copyInventoryThumbnail(sourceThumbnailPath: string): Promise<string | null> {
-  const destinationPath = thumbnailKeyFor();
+  const destinationPath = derivedImageKeyFor("thumbnails");
   try {
     await runWithAmplifyServerContext({
       nextServerContext: { cookies },
@@ -164,6 +261,21 @@ export async function copyInventoryThumbnail(sourceThumbnailPath: string): Promi
     return destinationPath;
   } catch (err) {
     console.error(`[copyInventoryThumbnail] copy failed: "${sourceThumbnailPath}" -> "${destinationPath}"`, err);
+    return null;
+  }
+}
+
+/** copyInventoryThumbnailの中画像版 — 複製元が既に中画像を持っていれば(中身はバイト単位で複製元と同一なので)コピーで済ませ、無ければ呼び出し元(resolveImages)が新しくコピーされた原本から生成し直す。 */
+export async function copyInventoryMedium(sourceMediumPath: string): Promise<string | null> {
+  const destinationPath = derivedImageKeyFor("medium");
+  try {
+    await runWithAmplifyServerContext({
+      nextServerContext: { cookies },
+      operation: (contextSpec) => copy(contextSpec, { source: { path: sourceMediumPath }, destination: { path: destinationPath } }),
+    });
+    return destinationPath;
+  } catch (err) {
+    console.error(`[copyInventoryMedium] copy failed: "${sourceMediumPath}" -> "${destinationPath}"`, err);
     return null;
   }
 }

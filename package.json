@@ -37,6 +37,7 @@
     "verify:zaico-duplicate-audit": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-duplicate-audit.ts",
     "verify:inventory-image-cache": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-image-cache.ts",
     "verify:inventory-image-resolver": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-image-resolver.ts",
+    "verify:inventory-image-load-state": "node scripts/with-server-only-stub.cjs scripts/verify-inventory-image-load-state.ts",
     "test:e2e": "playwright test",
     "synth:check": "node scripts/with-server-only-stub.cjs scripts/synth-check.ts",
     "benchmark:images": "node scripts/with-server-only-stub.cjs scripts/benchmark-image-processing.ts",

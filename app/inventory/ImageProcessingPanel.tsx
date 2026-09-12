@@ -122,7 +122,36 @@ function BeforeAfterToggle({ originalKey, processedKey, label }: { originalKey: 
   );
 }
 
-export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: string; images: ImagePanelRow[] }) {
+/**
+ * 画像段階読込QA是正(2026-09-12、Codexブラウザ実描画エラー切分け) —
+ * `lib/inventory/e2eFixtures.ts`が返す合成画像("e2e-fixture:"接頭辞、
+ * app/inventory/useInventoryImageUrl.tsのコメント参照)はS3/DynamoDBに
+ * 実体が無いため、本物のImageProcessingVersion/ProcessingJobは存在し
+ * 得ない——このパネルの対象から除外する。
+ *
+ * 【実機で確認した根本原因】この除外が無いと、詳細画面(ADMIN/EDITOR)
+ * を開くたびにrefresh()がこの合成キーで実Amplify Data(Server Action
+ * 経由のAppSync)へ問い合わせに行っていた。通常のブラウザ直アクセスでは
+ * この問い合わせ自体の失敗(未デプロイ/到達不可)がPromiseの通常の
+ * rejectionとして返るため、下のrefresh().catch()がsetErrorで安全に
+ * 吸収していた。ところがCodex CUAが使うGET専用proxy(POSTを405で拒否)
+ * 経由だと、Next.jsのServer Action呼び出しがこの405応答を正常な
+ * rejectionとして扱わず、listPendingImageProcessingJobStatusesAction
+ * の戻り値が`undefined`のまま`setPendingJobs(undefined)`されてしまう
+ * ことを実機(合成GET専用proxyとの比較)で確認した。次のrenderで
+ * `pendingJobs[img.storageKey]`が`undefined`への添字アクセスとなり
+ * `TypeError: Cannot read properties of undefined (reading '<key>')`が
+ * render中に(catchで守られていない場所で)投げられ、
+ * app/inventory/error.tsxの境界まで届いていた
+ * (「画面の表示中に問題が発生しました」の直接原因)。
+ * fixture画像をそもそも対象から外せば、この経路自体が発生しない。
+ */
+function isE2EFixtureStorageKey(storageKey: string): boolean {
+  return storageKey.startsWith("e2e-fixture:");
+}
+
+export function ImageProcessingPanel({ inventoryId, images: allImages }: { inventoryId: string; images: ImagePanelRow[] }) {
+  const images = allImages.filter((img) => !isE2EFixtureStorageKey(img.storageKey));
   const [byKey, setByKey] = useState<Record<string, ImageProcessingVersionSummary[]> | null>(null);
   const [pendingJobs, setPendingJobs] = useState<Record<string, "PENDING" | "PROCESSING">>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -135,7 +164,14 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
       listPendingImageProcessingJobStatusesAction(images.map((img) => img.storageKey)),
     ]);
     setByKey(Object.fromEntries(entries));
-    setPendingJobs(jobStatuses);
+    // 防御的措置(上記コメント参照) — Server Action呼び出しがネットワーク
+    // 層の異常(GET専用proxy等)で期待した形の値を返さなかった場合でも、
+    // 以後のrender(pendingJobs[key]という添字アクセス)が
+    // 「undefinedへの添字アクセスで例外」というエラーバウンダリ行きの
+    // 壊れ方をしないようにする——実際のジョブ状態を偽装するのではなく、
+    // 「取得できなかった」を空オブジェクト(=全画像が状態不明のまま)
+    // として扱うだけで、書き込み系には一切影響しない。
+    setPendingJobs(jobStatuses && typeof jobStatuses === "object" ? jobStatuses : {});
   }
 
   useEffect(() => {
@@ -144,7 +180,7 @@ export function ImageProcessingPanel({ inventoryId, images }: { inventoryId: str
     // eslint-disable-next-line react-hooks/exhaustive-deps -- imagesは親から毎レンダー新配列で渡り得るため、storageKeyの並びをJSON化した依存にする
   }, [JSON.stringify(images.map((i) => i.storageKey))]);
 
-  const statusOf = (img: ImagePanelRow) => currentStatus(byKey?.[img.storageKey] ?? [], pendingJobs[img.storageKey]);
+  const statusOf = (img: ImagePanelRow) => currentStatus(byKey?.[img.storageKey] ?? [], pendingJobs?.[img.storageKey]);
   const anyBusyGlobally = images.some((img) => BUSY_STATUSES.has(statusOf(img)));
 
   // 2026-08-31フィードバック対応: 予約中/処理中の画像が1件でもある間

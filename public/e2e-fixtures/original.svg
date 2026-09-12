@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="2000" viewBox="0 0 2000 2000">
+  <!-- 画像表示高速化・段階読込QA是正: 完全合成fixture(顧客画像は一切使わない)。
+       原本(storageKey)段階を表す。ライトボックスを開いた時だけ要求される。 -->
+  <rect width="2000" height="2000" fill="#fee2e2"/>
+  <rect x="40" y="40" width="1920" height="1920" fill="none" stroke="#dc2626" stroke-width="20"/>
+  <text x="1000" y="940" font-family="sans-serif" font-size="160" fill="#7f1d1d" text-anchor="middle">ORIGINAL</text>
+  <text x="1000" y="1100" font-family="sans-serif" font-size="90" fill="#7f1d1d" text-anchor="middle">full resolution fixture</text>
+</svg>

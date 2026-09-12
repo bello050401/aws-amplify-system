@@ -24,8 +24,8 @@ import type { ZaicoSyncPort, InventoryModel, NewInventoryInput, UpdateInventoryI
 import type { HistoryFieldChange } from "@/lib/inventory/history";
 import { parseSeenSourceIds, toPublicJob } from "@/lib/inventory/zaicoBackgroundSync";
 import { summarizeSales, summarizeMonthlyTrend, calculateItemGrossProfit } from "@/lib/inventory/sales";
-import { resizeToThumbnailJpeg, THUMBNAIL_MAX_DIMENSION } from "@/lib/inventory/thumbnail";
-import { effectiveListThumbnailKey, type InventoryImageRecord } from "@/lib/inventory/imageTypes";
+import { resizeToThumbnailJpeg, resizeToMediumJpeg, THUMBNAIL_MAX_DIMENSION, MEDIUM_MAX_DIMENSION } from "@/lib/inventory/thumbnail";
+import { effectiveHeroKey, effectiveListThumbnailKey, type InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import { compareByUpdatedAtDesc } from "@/lib/inventory/queries";
 import sharp from "sharp";
 import type { ZaicoInventory } from "@/lib/zaico/client";
@@ -588,6 +588,62 @@ async function testThumbnailResize() {
   assertEqual(smallMeta.height, 60, "thumbnail resize: a source already smaller than the cap is never upscaled (height)");
 }
 
+async function testMediumResize() {
+  // 画像表示高速化・段階読込(P1) — resizeToMediumJpegはresizeToThumbnailJpeg
+  // と全く同じresizeJpeg実装を共有するので、ここでは「thumbnailと違う
+  // 定数(MEDIUM_MAX_DIMENSION)が実際に効いているか」だけを確認する
+  // (EXIF回転・fit:inside・never-upscaleの回帰はtestThumbnailResizeが
+  // 既に見ている——同じ共有関数なのでここで重複させない)。
+  const large = await sharp({ create: { width: 2000, height: 1200, channels: 3, background: { r: 80, g: 120, b: 200 } } })
+    .jpeg()
+    .toBuffer();
+  const resized = await resizeToMediumJpeg(large);
+  const meta = await sharp(resized).metadata();
+  assertTrue((meta.width ?? 0) <= MEDIUM_MAX_DIMENSION, "medium resize: width is capped at MEDIUM_MAX_DIMENSION");
+  assertTrue((meta.height ?? 0) <= MEDIUM_MAX_DIMENSION, "medium resize: height is capped at MEDIUM_MAX_DIMENSION");
+  assertTrue(MEDIUM_MAX_DIMENSION > THUMBNAIL_MAX_DIMENSION, "medium resize: MEDIUM_MAX_DIMENSION is meaningfully larger than THUMBNAIL_MAX_DIMENSION");
+  assertEqual(meta.format, "jpeg", "medium resize: output format is JPEG");
+  assertTrue(resized.length < large.length, "medium resize: output is smaller than the original");
+
+  const small = await sharp({ create: { width: 100, height: 60, channels: 3, background: { r: 10, g: 10, b: 10 } } })
+    .jpeg()
+    .toBuffer();
+  const resizedSmall = await resizeToMediumJpeg(small);
+  const smallMeta = await sharp(resizedSmall).metadata();
+  assertEqual(smallMeta.width, 100, "medium resize: a source already smaller than the cap is never upscaled (width)");
+  assertEqual(smallMeta.height, 60, "medium resize: a source already smaller than the cap is never upscaled (height)");
+}
+
+function testEffectiveHeroKey() {
+  // 画像表示高速化・段階読込(P1) — 詳細ギャラリーのメイン画像が最初に
+  // 使うキーの優先順位: mediumKey > thumbnailKey > storageKey(原本、
+  // 最後の手段)。原本を「積極的に選ぶ」ケースが無いことがこのテストの
+  // 本体。
+  const base: InventoryImageRecord = {
+    storageKey: "inventory/original.jpg",
+    sortOrder: 0,
+    type: "NORMAL",
+    isPrimary: true,
+    sourceSystem: null,
+    sourceUrl: null,
+    thumbnailKey: null,
+    mediumKey: null,
+    originalHash: null,
+    classification: null,
+  };
+  assertEqual(effectiveHeroKey(base), "inventory/original.jpg", "effectiveHeroKey: falls back to the original when neither medium nor thumbnail exists");
+  assertEqual(
+    effectiveHeroKey({ ...base, thumbnailKey: "inventory/thumbnails/small.jpg" }),
+    "inventory/thumbnails/small.jpg",
+    "effectiveHeroKey: falls back to the thumbnail when no medium exists",
+  );
+  assertEqual(
+    effectiveHeroKey({ ...base, thumbnailKey: "inventory/thumbnails/small.jpg", mediumKey: "inventory/medium/mid.jpg" }),
+    "inventory/medium/mid.jpg",
+    "effectiveHeroKey: prefers the medium derivative when one exists, even if a thumbnail also exists",
+  );
+}
+
 function testEffectiveListThumbnailKey() {
   const base: InventoryImageRecord = {
     storageKey: "inventory/original.jpg",
@@ -597,6 +653,7 @@ function testEffectiveListThumbnailKey() {
     sourceSystem: null,
     sourceUrl: null,
     thumbnailKey: null,
+    mediumKey: null,
     originalHash: null,
     classification: null,
   };
@@ -644,6 +701,8 @@ async function main() {
   testCalculateItemGrossProfit();
   testSummarizeMonthlyTrend();
   await testThumbnailResize();
+  await testMediumResize();
+  testEffectiveHeroKey();
   testEffectiveListThumbnailKey();
   testUpdatedAtSort();
 

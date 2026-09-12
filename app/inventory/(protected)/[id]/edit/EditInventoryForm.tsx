@@ -54,6 +54,7 @@ function slotsFromExistingImages(images: InventoryImageRecord[]): ImageEditorSlo
     sourceSystem: img.sourceSystem,
     sourceUrl: img.sourceUrl,
     thumbnailKey: img.thumbnailKey,
+    mediumKey: img.mediumKey,
     originalHash: img.originalHash,
     classification: img.classification,
   }));
@@ -73,6 +74,7 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
           sourceSystem: slot.sourceSystem,
           sourceUrl: slot.sourceUrl,
           sourceThumbnailKey: slot.sourceThumbnailKey,
+          sourceMediumKey: slot.sourceMediumKey,
           sourceOriginalHash: slot.sourceOriginalHash,
           sourceClassification: slot.sourceClassification,
         }
@@ -85,6 +87,7 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
           sourceSystem: slot.sourceSystem,
           sourceUrl: slot.sourceUrl,
           thumbnailKey: slot.thumbnailKey,
+          mediumKey: slot.mediumKey,
           originalHash: slot.originalHash,
           classification: slot.classification,
         };

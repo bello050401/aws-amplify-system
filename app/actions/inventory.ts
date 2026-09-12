@@ -13,7 +13,7 @@ import {
 import { getInventoryDetail, listCategories, listLocations, listStatuses } from "@/lib/inventory/queries";
 import { stringifyCustomFields } from "@/lib/inventory/customFieldsCodec";
 import { computeOriginalHashForPath, copyInventoryImage, removeInventoryImage } from "@/lib/inventory/imageServerOps";
-import { copyInventoryThumbnail, generateInventoryThumbnail } from "@/lib/inventory/thumbnail";
+import { copyInventoryMedium, copyInventoryThumbnail, generateInventoryDerivatives, generateInventoryMedium, generateInventoryThumbnail } from "@/lib/inventory/thumbnail";
 import { diffField, logInventoryHistory } from "@/lib/inventory/history";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import type { InventoryImageRecord, InventoryImageType } from "@/lib/inventory/imageTypes";
@@ -63,6 +63,8 @@ export type ImageSlotInput =
        * regenerated.
        */
       thumbnailKey: string | null;
+      /** thumbnailKeyと全く同じ判定(画像表示高速化・段階読込 P1) — nullは「まだ中画像が無い、今生成する」を意味する。 */
+      mediumKey: string | null;
       /** BELLO画像自動加工システム: 既存(未変更)スロットはこの画像の現在のoriginalHash/classificationをそのまま持ち回る(thumbnailKeyと同じ考え方)。真に新規のアップロード(thumbnailKey===nullの場合)は常にnull——resolveImagesがここでハッシュを計算する。 */
       originalHash: string | null;
       classification: string | null;
@@ -77,6 +79,8 @@ export type ImageSlotInput =
       sourceUrl: string | null;
       /** The SOURCE record's thumbnail key, if it has one — resolveImages copies this alongside the original rather than paying for a fresh resize of an image that's by definition unchanged from its source. null means the source has none yet (pre-backfill) — a fresh one is generated from the newly-copied original instead. */
       sourceThumbnailKey: string | null;
+      /** thumbnailKeyと同じ考え方の中画像版(画像表示高速化・段階読込 P1)。 */
+      sourceMediumKey: string | null;
       /** BELLO画像自動加工システム: 複製元画像のoriginalHash/classification。中身は複製元と同一バイト列なので、そのまま引き継ぐ(再計算しない)。 */
       sourceOriginalHash: string | null;
       sourceClassification: string | null;
@@ -104,8 +108,22 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
         // generate one now (see the ImageSlotInput comment above for why
         // this single check correctly covers both "brand new upload" and
         // "self-heal a pre-backfill existing image").
-        const thumbnailKey = img.thumbnailKey ?? (await generateInventoryThumbnail(img.storageKey));
+        // thumbnailKey/mediumKeyのどちらも無ければ、1回のfetchで両方を
+        // 生成する(generateInventoryDerivatives — 画像表示高速化・段階
+        // 読込 P1)。片方だけ既存(通常は起きないが、旧バージョンの
+        // 自己修復途中でthumbnailKeyだけ付いた既存レコード等)の場合は
+        // 個別関数で欠けている方だけ生成し、無駄な二重fetchを避ける。
+        let thumbnailKey = img.thumbnailKey;
+        let mediumKey = img.mediumKey;
+        if (!thumbnailKey && !mediumKey) {
+          const derived = await generateInventoryDerivatives(img.storageKey);
+          thumbnailKey = derived.thumbnailKey;
+          mediumKey = derived.mediumKey;
+        } else if (!mediumKey) {
+          mediumKey = await generateInventoryMedium(img.storageKey);
+        }
         if (!img.thumbnailKey && thumbnailKey) createdKeys.push(thumbnailKey);
+        if (!img.mediumKey && mediumKey) createdKeys.push(mediumKey);
         // BELLO画像自動加工システム: thumbnailKeyと全く同じ判定
         // (nullなら「真に新規、または自己修復対象の既存画像」)で
         // originalHashも未計算なら今ここで計算する——新規アップロード
@@ -119,6 +137,7 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
           sourceSystem: img.sourceSystem,
           sourceUrl: img.sourceUrl,
           thumbnailKey,
+          mediumKey,
           originalHash,
           classification: (img.classification as InventoryImageRecord["classification"]) ?? null,
         });
@@ -126,10 +145,27 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
       }
       const newKey = await copyInventoryImage(img.sourceStorageKey);
       createdKeys.push(newKey);
-      const thumbnailKey = img.sourceThumbnailKey
-        ? await copyInventoryThumbnail(img.sourceThumbnailKey)
-        : await generateInventoryThumbnail(newKey);
+      const thumbnailKey = img.sourceThumbnailKey ? await copyInventoryThumbnail(img.sourceThumbnailKey) : null;
       if (thumbnailKey) createdKeys.push(thumbnailKey);
+      const mediumKey = img.sourceMediumKey ? await copyInventoryMedium(img.sourceMediumKey) : null;
+      if (mediumKey) createdKeys.push(mediumKey);
+      // 複製元に欠けている方だけ、新しくコピーされた原本から生成し
+      // 直す。両方欠けている場合は1回のfetchで両方を生成する
+      // (generateInventoryDerivativesの二重fetch回避——上のuploaded
+      // 分岐と同じ理由)。どちらも既にコピー済みなら何もしない。
+      let finalThumbnailKey = thumbnailKey;
+      let finalMediumKey = mediumKey;
+      if (!finalThumbnailKey && !finalMediumKey) {
+        const derived = await generateInventoryDerivatives(newKey);
+        finalThumbnailKey = derived.thumbnailKey;
+        finalMediumKey = derived.mediumKey;
+      } else if (!finalThumbnailKey) {
+        finalThumbnailKey = await generateInventoryThumbnail(newKey);
+      } else if (!finalMediumKey) {
+        finalMediumKey = await generateInventoryMedium(newKey);
+      }
+      if (finalThumbnailKey && finalThumbnailKey !== thumbnailKey) createdKeys.push(finalThumbnailKey);
+      if (finalMediumKey && finalMediumKey !== mediumKey) createdKeys.push(finalMediumKey);
       resolved.push({
         storageKey: newKey,
         sortOrder: img.sortOrder,
@@ -137,7 +173,8 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
         isPrimary: img.isPrimary,
         sourceSystem: img.sourceSystem,
         sourceUrl: img.sourceUrl,
-        thumbnailKey,
+        thumbnailKey: finalThumbnailKey,
+        mediumKey: finalMediumKey,
         // 複製元と全く同じバイト列なのでoriginalHashもそのまま引き継ぐ
         // (§11.4 冪等性——複製直後に再加工ジョブが二重で走ることはない)。
         originalHash: img.sourceOriginalHash,
@@ -151,9 +188,9 @@ async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRe
   }
 }
 
-/** Every S3 object a set of images actually owns — original AND thumbnail (when present) — flattened for a single Promise.allSettled cleanup call. Used by every "these images are gone now, delete their objects" site below (create/update rollback, an edit's removed images, hard delete) so none of them forget the thumbnail half of Phase B's original/thumbnail pair. */
+/** Every S3 object a set of images actually owns — original, thumbnail, AND medium derivative (each when present) — flattened for a single Promise.allSettled cleanup call. Used by every "these images are gone now, delete their objects" site below (create/update rollback, an edit's removed images, hard delete) so none of them forget the thumbnail/medium half of the original/derivative set. */
 function allImageStorageKeys(images: InventoryImageRecord[]): string[] {
-  return images.flatMap((img) => (img.thumbnailKey ? [img.storageKey, img.thumbnailKey] : [img.storageKey]));
+  return images.flatMap((img) => [img.storageKey, img.thumbnailKey, img.mediumKey].filter((key): key is string => Boolean(key)));
 }
 
 /**

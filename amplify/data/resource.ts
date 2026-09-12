@@ -257,6 +257,19 @@ const schema = a.schema({
     // が別途、ADMINが設定画面から任意のタイミングで走らせるバックフィ
     // ルとして行う。
     thumbnailKey: a.string(),
+    // 画像表示高速化・段階読込(P1、2026-09-12指示書) — thumbnailKey
+    // (一覧用320px)と storageKey(原本)の間を埋める、長辺960px程度の
+    // 派生画像のS3キー。詳細画面/EC参照ギャラリーのメイン画像だけが
+    // これを使う(拡大時は引き続きstorageKey=原本)。生成できなかった/
+    // まだ生成していない画像はnull — lib/inventory/imageTypes.tsの
+    // effectiveHeroKeyがthumbnailKey→storageKeyの順にフォールバック
+    // するので、thumbnailKeyと同じく表示自体は壊れない。生成は
+    // lib/inventory/thumbnail.ts(sharp)がthumbnailKeyと同時に、手動
+    // アップロード経由の新規/自己修復画像に対してのみ行う——ZAICO同期
+    // 経路(amplify/functions/zaico-sync-worker、このラウンドでは
+    // 触れない)からインポートされた画像は現状thumbnailKeyのみで
+    // mediumKeyは付かない(既知の適用範囲外、完了報告に明記)。
+    mediumKey: a.string(),
     // ─────────────────────────────────────────────────────────────────
     // BELLO画像自動加工システム(2026-08-30指示書)— このcustomTypeへは
     // originalHashだけを足す。処理結果(status/classification/採用

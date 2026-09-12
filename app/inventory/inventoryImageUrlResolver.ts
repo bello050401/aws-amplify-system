@@ -192,20 +192,31 @@ export class ImageUrlResolver {
    * どこかでinvalidateAll()が挟まったということ — 呼び出し側(hook)は
    * setUrlを呼ばず、キャッシュへの書き込みも既にこのメソッド内で
    * スキップ済み。
+   *
+   * `forceRefresh`(画像表示高速化・段階読込 P1 QA修正) — getUrl()自体
+   * (署名)は成功したがその実体(バイト列)の読み込みが失敗した後の
+   * 手動再試行専用。urlCache/persistentCacheのどちらも参照せず必ず
+   * signUrlを呼び直す — 同じ壊れたURLをキャッシュから返しても意味が
+   * 無いため。取得できた新しい結果は(forceRefreshでない通常の解決と
+   * 同様に)両キャッシュへ書き込み、以後の通常解決がその新しいURLを
+   * 使えるようにする。
    */
-  resolve(storageKey: string): Promise<ResolveResult> {
+  resolve(storageKey: string, opts?: { forceRefresh?: boolean }): Promise<ResolveResult> {
     const generationAtStart = this.generation;
+    const forceRefresh = opts?.forceRefresh ?? false;
 
-    const cached = this.urlCache.get(storageKey);
-    if (isFresh(cached, this.now())) {
-      return Promise.resolve({ url: cached.url });
+    if (!forceRefresh) {
+      const cached = this.urlCache.get(storageKey);
+      if (isFresh(cached, this.now())) {
+        return Promise.resolve({ url: cached.url });
+      }
     }
 
     return this.inFlight.run(storageKey, async () => {
       const auth = await this.getAuthContext();
       const identityKey = auth ? identityKeyFor(auth) : null;
 
-      if (identityKey) {
+      if (identityKey && !forceRefresh) {
         const persisted = this.persistentCache.get(storageKey);
         if (persisted && isSameIdentity(persisted, identityKey) && isFresh(persisted, this.now())) {
           if (this.generation !== generationAtStart) return { stale: true } as const;

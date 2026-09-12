@@ -219,6 +219,12 @@ async function mergeZaicoImage(existingImages: InventoryImageRecord[], newSource
     sourceSystem: "ZAICO",
     sourceUrl: newSourceUrl,
     thumbnailKey: newThumbnailKey,
+    // ZAICO同期経路は中画像を生成しない(画像表示高速化・段階読込 P1
+    // — amplify/functions/zaico-sync-worker/未公開差分には触れない
+    // という今回の作業指示により、sync worker側のdownloadAndImportImage
+    // port実装を変更しない選択をした)。effectiveHeroKeyがthumbnailKey
+    // → storageKeyへフォールバックするので表示は壊れない。
+    mediumKey: null,
     originalHash: newOriginalHash,
     classification: null,
   };

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
+  <!-- 画像表示高速化・段階読込QA是正: 完全合成fixture(顧客画像は一切使わない)。
+       一覧サムネイル/ギャラリーのsmall段階(320px相当)を表す。 -->
+  <rect width="320" height="320" fill="#dbeafe"/>
+  <rect x="8" y="8" width="304" height="304" fill="none" stroke="#2563eb" stroke-width="4"/>
+  <text x="160" y="150" font-family="sans-serif" font-size="28" fill="#1e3a8a" text-anchor="middle">SMALL</text>
+  <text x="160" y="185" font-family="sans-serif" font-size="16" fill="#1e3a8a" text-anchor="middle">320px fixture</text>
+</svg>
