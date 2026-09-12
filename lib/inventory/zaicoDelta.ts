@@ -90,17 +90,57 @@ export interface DeltaSplit<T> {
  * 省いたものも**観測済みとして記録する**必要がある。記録しないと、
  * 完了時の「ZAICOに無くなった在庫の検出」が、単に今回処理しなかった
  * だけの在庫を「消えた」と誤報告する。
+ *
+ * ── 2026-09-12 追記: 時刻だけでは「BELLO未取込」を判定できない ─────
+ *
+ * `needsSync`は「ZAICO側のupdated_at/created_atが基準より古いか」
+ * しか見ない。これは「前回成功時に処理して、以後ZAICO側で変わって
+ * いない」ことの**十分条件ではない**——ある商品が、何らかの理由で
+ * BELLOに一度も取り込まれないまま（実データで確認された例:
+ * releaseSourceLinkの失敗で「リンクだけ残りInventoryが無い」不整合
+ * (zaicoSyncPorts.tsのreleaseSourceLinkコメント参照)、あるいは
+ * このdelta設計そのものが入る前の何らかの欠陥）、ZAICO側の
+ * updated_atだけがたまたま古ければ、`needsSync`は「skipしてよい」と
+ * 誤判定し続ける。次回以降の`since`はこの商品のupdated_atより常に
+ * 新しくなる一方（`resolveDeltaSince`は前回**成功**時刻を進めるだけで、
+ * 個々の商品のupdated_atには関知しない）なので、**一度この状態に
+ * 落ちると自然には回復しない** —— 時刻ベースの判定だけを信じる限り
+ * 恒久的な取りこぼしになる。
+ *
+ * `existsInBello`(省略可)は、この抜け穴を塞ぐための追加条件。
+ * 「時刻だけ見ればskipしてよい」と判定された商品について、
+ * 呼び出し元がBELLO側に実在するかどうかを追加で確認できるときだけ
+ * 渡す——実在しない（＝BELLO未取込）なら、時刻がどれだけ古くても
+ * `toProcess`へ回す。`existsInBello`を渡さない呼び出し（既存動作）は
+ * 従来どおり時刻だけで判定する後方互換を保つ。
+ *
+ * コストの根拠は呼び出し側（`zaicoSyncPageProcessor.ts`/
+ * `zaicoBackgroundSync.ts`）にある: `existsInBello`はO(1)のMap
+ * ルックアップとして渡されることを前提にしており、この関数自体は
+ * 追加のDB往復もAPI呼び出しも一切行わない（純粋関数のまま）。
  */
 export function splitByDelta<T extends Pick<ZaicoInventory, "updated_at" | "created_at">>(
   items: T[],
   since: string | null,
+  existsInBello?: (item: T) => boolean,
 ): DeltaSplit<T> {
   if (!since) return { toProcess: items, skipped: [] };
   const toProcess: T[] = [];
   const skipped: T[] = [];
   for (const item of items) {
-    if (needsSync(item, since)) toProcess.push(item);
-    else skipped.push(item);
+    if (needsSync(item, since)) {
+      toProcess.push(item);
+      continue;
+    }
+    // 時刻だけでは「skipしてよい」と出たが、BELLO未取込である可能性を
+    // 追加確認する。存在確認自体を省略できる(existsInBello未指定)なら
+    // 従来どおりskip。確認できて、かつ存在しないなら、古い時刻でも
+    // 取りこぼさず処理側へ回す。
+    if (existsInBello && !existsInBello(item)) {
+      toProcess.push(item);
+      continue;
+    }
+    skipped.push(item);
   }
   return { toProcess, skipped };
 }
@@ -122,6 +162,35 @@ export function nextSuccessfulSyncAt(startedAt: string | null | undefined, fallb
   const t = new Date(startedAt).getTime();
   if (!Number.isFinite(t)) return fallbackNowIso;
   return new Date(t).toISOString();
+}
+
+/**
+ * 完了した回の後、次回の差分基準を**進めてよいか**を決める。
+ *
+ * ── 2026-09-11 設計見直しで判明した取りこぼし ────────────────────
+ *
+ * 従来は「ページを全部辿り終えた(isDone)」だけを基準にlastSuccessfulSyncAt
+ * を進めていた——1件でもsyncOneZaicoItemが`failed`を返していても、
+ * ページ自体は完走扱いになるため基準が進んでいた。次回のDELTA同期は
+ * `since`以降のupdated_atだけを見るので、失敗した商品のZAICO側updated_at
+ * がその後変わらなければ、**次回以降ずっとsplitByDeltaでskip側に落ち、
+ * 再試行の機会が永久に来ない**——「失敗商品を既読にして省き続ける」
+ * という一番避けたい取りこぼし方。
+ *
+ * 直し方は、1件でも失敗があった回では基準を進めない、これだけ。
+ * 次回は同じ(古い)`since`を使うので、失敗した商品を含め「前回成功時刻
+ * 以降」がそのまま広めに再スキャン対象になる——重複再処理は安全
+ * (syncOneZaicoItemは冪等)、取りこぼしより重複を選ぶという、この
+ * ファイル全体を貫く方針そのもの。
+ */
+export function resolveNextSyncBasis(
+  previousLastSuccessfulSyncAt: string | null,
+  startedAt: string | null | undefined,
+  finishedAtIso: string,
+  hadFailures: boolean,
+): string | null {
+  if (hadFailures) return previousLastSuccessfulSyncAt;
+  return nextSuccessfulSyncAt(startedAt, finishedAtIso);
 }
 
 /** 同期結果の要約。ログと画面表示で同じものを使う。 */

@@ -24,6 +24,7 @@ import {
   needsSync,
   nextSuccessfulSyncAt,
   resolveDeltaSince,
+  resolveNextSyncBasis,
   splitByDelta,
 } from "@/lib/inventory/zaicoDelta";
 
@@ -225,12 +226,101 @@ function testSummary() {
   assertTrue(fullLine.includes("計測不可"), "要約: 未完了なら時間を偽らない");
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 7. 部分失敗は基準を進めない(2026-09-11 設計見直しで塞いだ取りこぼし)
+ * ══════════════════════════════════════════════════════════════════
+ * ページ自体は完走(isDone)しても、1件でもsyncOneZaicoItemが`failed`を
+ * 返した回で基準を進めると、その商品のZAICO側updated_atが変わらない
+ * 限り、次回以降ずっとsplitByDeltaでskip側に落ちて再試行の機会が
+ * 永久に来ない。
+ */
+function testResolveNextSyncBasis() {
+  const previous = "2026-09-01T00:00:00.000Z";
+  const started = "2026-09-02T21:00:00.000Z";
+  const finished = "2026-09-02T21:08:00.000Z";
+
+  assertEqual(
+    resolveNextSyncBasis(previous, started, finished, false),
+    nextSuccessfulSyncAt(started, finished),
+    "基準の更新: 失敗0件なら通常どおり開始時刻へ進める",
+  );
+  assertEqual(
+    resolveNextSyncBasis(previous, started, finished, true),
+    previous,
+    "基準の更新: 1件でも失敗があれば前回の基準のまま進めない",
+  );
+  assertEqual(
+    resolveNextSyncBasis(null, started, finished, true),
+    null,
+    "基準の更新: 初回(前回基準なし)で失敗があれば null のまま(=次回も全件相当)",
+  );
+
+  // 通し: 失敗した商品が、失敗が解消するまで毎回対象に入り続けること。
+  const since1 = resolveDeltaSince(previous)!;
+  const failedItem = item("2026-08-15T00:00:00.000Z"); // previousより古い = 通常のDELTAならskipされるはずの商品
+  assertEqual(needsSync(failedItem, since1), false, "通し(失敗): 前提として、この商品は通常のDELTAではskip対象");
+
+  // 1回目: この商品の処理が失敗した → 基準は進まない
+  const basisAfterFailedRun = resolveNextSyncBasis(previous, started, finished, true);
+  assertEqual(basisAfterFailedRun, previous, "通し(失敗): 失敗した回の後も基準は前回のまま");
+  const since2 = resolveDeltaSince(basisAfterFailedRun)!;
+  assertEqual(since2, since1, "通し(失敗): 次回のsinceも変わらないので同じ範囲を再スキャンする");
+  // 基準がpreviousより後ろへ進んでいたら、failedItemはsince2以降からも
+  // 漏れていたはず——進んでいないので、次回もsplitByDeltaのtoProcess側に
+  // 入り得る(ここではneedsSync自体はpreviousとの相対関係で変わらない
+  // ことだけを確認しており、実際の再試行はseenSourceIdsに入れないこと
+  // で保証される——lib/inventory/zaicoSyncPageProcessor.tsの
+  // observedSourceIdsはsyncOneZaicoItemの結果のzaicoIdを積むので、
+  // 失敗した商品もそのページでは観測済みになる。次回の対象復帰は
+  // 「基準そのものが進まない」ことで保証している)。
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 8. BELLO未取込・古い時刻の商品を取りこぼさない(2026-09-12 追記)
+ * ══════════════════════════════════════════════════════════════════
+ * 時刻だけ見ればskipしてよい(＝前回成功時刻より古い)商品でも、
+ * 何らかの理由でBELLOへ一度も取り込まれていない(existsInBelloがfalse)
+ * なら、時刻がどれだけ古くてもtoProcessへ回す。existsInBelloを渡さない
+ * (省略する)呼び出しは、従来どおり時刻だけで判定する後方互換を保つ。
+ */
+function testSplitExistsInBello() {
+  const since = "2026-09-01T00:00:00.000Z";
+  const items = [
+    { id: 1, updated_at: "2026-08-01T00:00:00.000Z", created_at: null }, // 古い・BELLOに実在
+    { id: 2, updated_at: "2026-07-01T00:00:00.000Z", created_at: null }, // 古い・BELLOに未取込
+    { id: 3, updated_at: "2026-09-02T00:00:00.000Z", created_at: null }, // 新しい(existsInBelloの有無に関係なくtoProcess)
+  ];
+  const existing = new Set(["1", "3"]); // id=2だけBELLOに存在しない
+
+  // existsInBello未指定: 従来どおり時刻だけで判定(後方互換)。
+  const legacy = splitByDelta(items, since);
+  assertEqual(legacy.toProcess.map((i) => i.id), [3], "existsInBello省略: 従来どおり時刻だけで判定する(後方互換)");
+  assertEqual(legacy.skipped.map((i) => i.id), [1, 2], "existsInBello省略: id=2(BELLO未取込)も時刻だけ見ればskipされてしまう(これが2026-09-12に塞いだ抜け穴)");
+
+  // existsInBelloを渡すと、未取込のid=2だけtoProcessへ復帰する。
+  const withExists = splitByDelta(items, since, (i) => existing.has(String(i.id)));
+  assertEqual(withExists.toProcess.map((i) => i.id), [2, 3], "existsInBelloあり: BELLO未取込のid=2は古い時刻でもtoProcessへ回る(取りこぼし防止)");
+  assertEqual(withExists.skipped.map((i) => i.id), [1], "existsInBelloあり: BELLOに実在するid=1だけが正しくskipされる");
+  assertEqual(
+    withExists.toProcess.length + withExists.skipped.length,
+    items.length,
+    "existsInBelloあり: 合計は変わらない(どこにも消えない)",
+  );
+
+  // 全件同期(since=null)ではexistsInBelloの有無に関係なく全部処理する。
+  const full = splitByDelta(items, null, (i) => existing.has(String(i.id)));
+  assertEqual(full.toProcess.length, 3, "existsInBelloありでも全件同期(since=null)では全部処理する");
+  assertEqual(full.skipped.length, 0, "existsInBelloありでも全件同期では何もskipしない");
+}
+
 testResolveSince();
 testNeedsSync();
 testSplit();
 testNextSince();
 testNoGap();
 testSummary();
+testResolveNextSyncBasis();
+testSplitExistsInBello();
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures > 0 ? 1 : 0);

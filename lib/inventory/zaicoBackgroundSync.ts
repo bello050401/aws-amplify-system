@@ -7,7 +7,7 @@ import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaico
 import type { Schema } from "@/amplify/data/resource";
 import { ZAICO_SYNC_JOB_ID } from "./zaicoSyncJobId";
 import { unwrapGet, unwrapWriteRequired } from "@/lib/amplify/listAll";
-import { resolveDeltaSince, splitByDelta, nextSuccessfulSyncAt, type ZaicoSyncMode } from "./zaicoDelta";
+import { resolveDeltaSince, splitByDelta, resolveNextSyncBasis, type ZaicoSyncMode } from "./zaicoDelta";
 
 type ZaicoSyncJobModel = Schema["ZaicoSyncJob"]["type"];
 
@@ -475,8 +475,16 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
     // 省いたものも観測済みとして記録する。記録しないと、完了時の
     // 「ZAICOから無くなった在庫の検出」が、単に今回処理しなかっただけの
     // 在庫を「消えた」と誤報告する。
+    //
+    // 2026-09-12: 時刻だけでは「skipしてよい」と判定された商品でも、
+    // 実際にBELLOへ取り込まれているとは限らない(lib/inventory/
+    // zaicoDelta.tsのsplitByDeltaコメント参照)。このページのために
+    // 既に取得済みの`prefetched`(BELLO側の現存ZAICO連携商品Map)を
+    // そのままexistsInBello判定として渡す——追加のDB往復は無い
+    // (このMapは元々syncOneZaicoItemへ渡すために毎ページ1回取得して
+    // いたものの再利用)。
     const since = row.mode === "FULL" ? null : (row.syncSince ?? null);
-    const { toProcess, skipped } = splitByDelta(pending, since);
+    const { toProcess, skipped } = splitByDelta(pending, since, (item) => prefetched.has(String(item.id)));
     for (const item of skipped) seenSourceIds.add(String(item.id));
     const skippedByDelta = (row.skippedByDelta ?? 0) + skipped.length;
 
@@ -512,6 +520,12 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
       //
       // 記録するのは完了時刻ではなく**開始時刻**。実行中にZAICO側で
       // 更新されたものを次回が拾い直せるようにするため。
+      //
+      // 2026-09-11: ページ自体は完走(isDone)しても、途中の商品が
+      // `failed`だった回は基準を進めない(resolveNextSyncBasis)——
+      // 失敗した商品のZAICO側updated_atが変わらない限り、進めると
+      // 次回以降ずっとdelta skip側に落ちて再試行の機会が来なくなる
+      // (lib/inventory/zaicoDelta.tsのresolveNextSyncBasisコメント参照)。
       const { data: updated, errors } = await serverDataClient.models.ZaicoSyncJob.update(
         {
           id: ZAICO_SYNC_JOB_SINGLETON_ID,
@@ -523,7 +537,7 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
           missingSourceIds,
           updatedAt: now,
           finishedAt: now,
-          lastSuccessfulSyncAt: nextSuccessfulSyncAt(row.startedAt, now),
+          lastSuccessfulSyncAt: resolveNextSyncBasis(row.lastSuccessfulSyncAt ?? null, row.startedAt, now, counts.failed > 0),
         },
         inventoryAuthMode,
       );
