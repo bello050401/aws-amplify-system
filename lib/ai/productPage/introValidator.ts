@@ -323,6 +323,85 @@ export function findIntroConditionViolations(
   return found;
 }
 
+/**
+ * ── カテゴリと矛盾する一般名称の検査(2026-09-11 追加指示) ──────────
+ *
+ * 報告: 照明(在庫のカテゴリは「照明」)をAIが「デザイナーズ家具」と
+ * 呼んだ。カテゴリ名は既に事実としてプロンプトへ渡している(prompt.ts
+ * factsBlockの「カテゴリ」行)が、プロンプトの指示だけでは守られない
+ * ことがあるのは寸法・コンディションの既存の検査と同じ構図なので、
+ * 同じ形で機械検査を用意する。
+ *
+ * 過検出を避けるため、実際に報告された「照明→家具」方向だけを見る
+ * (家具カテゴリの商品を「照明」と呼んだ実例は無く、逆方向まで検査を
+ * 広げると未検証のまま誤検出を増やすだけになる)。
+ */
+export type ProductFamily = "FURNITURE" | "LIGHTING";
+
+const LIGHTING_CATEGORY_WORDS = ["照明", "ランプ", "ライト", "シャンデリア", "ペンダント", "シーリング"];
+const FURNITURE_CATEGORY_WORDS = [
+  "チェア", "ソファ", "テーブル", "デスク", "シェルフ", "キャビネット", "ベッド",
+  "スツール", "収納", "ワゴン", "チェスト", "ベンチ", "ラック", "タンス",
+];
+
+/** カテゴリ名から大まかな商品系統を判定する。判定できなければ null(検査自体を行わない)。 */
+export function inferProductFamily(categoryName: string | null | undefined): ProductFamily | null {
+  if (!categoryName) return null;
+  if (LIGHTING_CATEGORY_WORDS.some((w) => categoryName.includes(w))) return "LIGHTING";
+  if (FURNITURE_CATEGORY_WORDS.some((w) => categoryName.includes(w))) return "FURNITURE";
+  return null;
+}
+
+export interface CategoryMismatchViolation {
+  /** 実際に検出した文字列。 */
+  matched: string;
+}
+
+/**
+ * 「家具・什器」「家具や什器」のような、BELLOという店自体の取扱分野を
+ * 述べる自己紹介の複合語か。これは今回の商品個体を「家具」と呼んだこと
+ * にはならないので誤検出しない。
+ */
+function isStoreSelfReferenceContext(text: string, index: number): boolean {
+  const window = text.slice(Math.max(0, index - 4), index + 6);
+  return /什器/.test(window);
+}
+
+/** 紹介文に、渡されたカテゴリと矛盾する一般名称がないかを検査する。 */
+export function findCategoryMismatchViolations(
+  intro: string | null | undefined,
+  categoryName: string | null | undefined,
+): CategoryMismatchViolation[] {
+  if (!intro) return [];
+  if (inferProductFamily(categoryName) !== "LIGHTING") return [];
+  const found: CategoryMismatchViolation[] = [];
+  for (const m of intro.matchAll(/家具/g)) {
+    if (m.index === undefined) continue;
+    if (isStoreSelfReferenceContext(intro, m.index)) continue;
+    found.push({ matched: m[0] });
+  }
+  return found;
+}
+
+export interface CategoryMismatchSanitizeResult {
+  text: string;
+  removedSentences: string[];
+  stillViolating: CategoryMismatchViolation[];
+}
+
+/** カテゴリと矛盾する語を含む文だけを落として紹介文を組み直す(stripDimensionSentencesと同じ考え方)。 */
+export function stripCategoryMismatchSentences(intro: string, categoryName: string | null | undefined): CategoryMismatchSanitizeResult {
+  const sentences = splitSentences(intro);
+  const removed: string[] = [];
+  const kept = sentences.filter((s) => {
+    if (findCategoryMismatchViolations(s, categoryName).length === 0) return true;
+    removed.push(s.trim());
+    return false;
+  });
+  const text = kept.join("").replace(/\n{3,}/g, "\n\n").trim();
+  return { text, removedSentences: removed, stillViolating: findCategoryMismatchViolations(text, categoryName) };
+}
+
 export interface IntroConditionSanitizeResult {
   /** コンディション語を含む文を除いた紹介文。 */
   text: string;

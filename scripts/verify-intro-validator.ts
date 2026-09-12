@@ -23,10 +23,13 @@
 import { buildGuidanceBlock } from "../lib/ai/productPage/guidanceBlock";
 import { buildProductPageUserPrompt } from "../lib/ai/productPage/prompt";
 import {
+  findCategoryMismatchViolations,
   findGenericPhrases,
   findIntroConditionViolations,
   findIntroDimensionViolations,
+  inferProductFamily,
   isIntroStillUsable,
+  stripCategoryMismatchSentences,
   stripConditionSentences,
   stripDimensionSentences,
   MAX_GENERIC_PHRASES,
@@ -355,6 +358,41 @@ function testConditionRealWorldContrastCases() {
   );
 }
 
+/**
+ * ── カテゴリと矛盾する一般名称の検査(2026-09-11 追加指示) ──────────
+ *
+ * 報告された実例そのもの: 照明(カテゴリ「照明」)を「デザイナーズ家具」と
+ * 呼んだ。寸法・コンディションの既存検査と同じ「文ごと検出→文ごと除去、
+ * 成立しなければ失敗として扱う」の形で固定する。
+ */
+function testCategoryMismatchDetection() {
+  assertEqual(inferProductFamily("照明"), "LIGHTING", "カテゴリ分類: 照明");
+  assertEqual(inferProductFamily("ペンダントライト"), "LIGHTING", "カテゴリ分類: 照明の語のゆれ(ペンダントライト)");
+  assertEqual(inferProductFamily("ソファ"), "FURNITURE", "カテゴリ分類: ソファ");
+  assertEqual(inferProductFamily(null), null, "カテゴリ分類: 未設定なら判定しない(検査自体を行わない)");
+
+  const reported = "ヤマギワのテーブルランプです。デザイナーズ家具としても人気のシリーズです。";
+  const violations = findCategoryMismatchViolations(reported, "照明");
+  assertTrue(violations.length > 0, "報告された実例(照明を「家具」と呼ぶ)を検出する");
+  assertEqual(findCategoryMismatchViolations(reported, "ソファ"), [], "家具カテゴリなら「家具」の言及は矛盾しない");
+  assertEqual(findCategoryMismatchViolations(reported, null), [], "カテゴリ未設定では検査しない(過検知しない)");
+
+  // 店の自己紹介(「家具・什器」)は今回の商品個体を家具と呼んだことにはならない。
+  const selfReference = "BELLOは中古家具・什器を扱うショップです。今回はヤマギワのテーブルランプをご紹介します。";
+  assertEqual(findCategoryMismatchViolations(selfReference, "照明"), [], "「家具・什器」という店の自己紹介は誤検出しない");
+
+  // 文ごと落として、成立するなら採用する(stripDimensionSentencesと同じ設計)。
+  const withExtra =
+    "ヤマギワのテーブルランプです。デザイナーズ家具としても人気のシリーズです。" +
+    "存在感のある美しいフォルムが、空間にやわらかな灯りを添えます。" +
+    "傘の部分にはすりガラスが使われており、点灯時には柔らかく拡散した光が広がります。書斎の机上でも、寝室のサイドテーブルの上でも収まりの良いサイズです。";
+  const stripped = stripCategoryMismatchSentences(withExtra, "照明");
+  assertEqual(stripped.stillViolating, [], "除去後はカテゴリ矛盾が残らない");
+  assertTrue(!stripped.text.includes("家具"), "矛盾する文は消える");
+  assertTrue(stripped.text.includes("存在感のある美しいフォルム"), "無関係な文は残る");
+  assertTrue(isIntroStillUsable(stripped.text), "除去後も紹介文として成立している");
+}
+
 function main() {
   testGuidanceBlock();
   testProductPagePromptOrdering();
@@ -367,6 +405,7 @@ function main() {
   testConditionMissingInfoDoesNotFabricateViolation();
   testConditionNotationVariantAndMissingDisclosureFabrication();
   testConditionRealWorldContrastCases();
+  testCategoryMismatchDetection();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

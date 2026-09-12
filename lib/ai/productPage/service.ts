@@ -5,13 +5,16 @@ import { checkFactSafety, type FactSafetyViolation } from "@/lib/ai/productIntro
 import type { BelloStyleProfile } from "@/lib/ai/productIntro/styleProfile";
 import { findSimilarArchivedProducts, type ArchivedStyleReference, type SimilarityHit } from "@/lib/base/archive/similar";
 import {
+  findCategoryMismatchViolations,
   findGenericPhrases,
   findIntroConditionViolations,
   findIntroDimensionViolations,
   isIntroStillUsable,
+  stripCategoryMismatchSentences,
   stripConditionSentences,
   stripDimensionSentences,
   MAX_GENERIC_PHRASES,
+  type CategoryMismatchViolation,
   type IntroConditionViolation,
   type IntroDimensionViolation,
 } from "./introValidator";
@@ -46,10 +49,16 @@ import { composeListingDescription } from "./descriptionSections";
 const MAX_ATTEMPTS = 2;
 
 /**
- * 紹介文の寸法検査・コンディション混入検査は lib/ai/productPage/introValidator.ts
- * が持つ。寸法はSH/AH/座面高/肘高/cm/mm/3辺合計まで、コンディションは
- * TRUSTED_FACTS(conditionDisclosure)に実在する傷・錆等の語を見る。この
+ * 紹介文の寸法検査・コンディション混入検査・カテゴリ矛盾検査は
+ * lib/ai/productPage/introValidator.ts が持つ。寸法はSH/AH/座面高/肘高/
+ * cm/mm/3辺合計まで、コンディションはTRUSTED_FACTS(conditionDisclosure)
+ * に実在する傷・錆等の語を見る。カテゴリは渡されたcategoryNameと矛盾する
+ * 一般名称(例: 照明を「家具」と呼ぶ)を見る。この
  * ファイル内に別の正規表現やキーワード判定を置かない(検査を2箇所に分けない)。
+ *
+ * 製造国(「イタリア製」等)の未確認主張の検査は lib/ai/productIntro/
+ * factSafety.ts の checkFactSafety が持つ(ブランド・金額の未確認主張と
+ * 同じ「事実コーパスに文字どおり現れているか」の仕組みに相乗りするため)。
  */
 
 export interface ProductPageGenerationInput {
@@ -226,12 +235,15 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
   let sections: ProductPageSections;
   let introViolations: IntroDimensionViolation[] = [];
   let conditionViolations: IntroConditionViolation[] = [];
+  let categoryViolations: CategoryMismatchViolation[] = [];
 
   // 「紹介文に寸法・コンディションを書かない」はプロンプトで指示しても守ら
   // れないことがある(寸法は実測: 12件中2件で W/D/H が紹介文へ入った。
   // コンディションも同じ構造の不具合として2026-09-09に報告された)。
   // 守られたかどうかは機械的に判定できるので、判定して1回だけ書き直させる。
-  // 何度も投げてもコストが増えるだけなので、試行は2回まで。
+  // 何度も投げてもコストが増えるだけなので、試行は2回まで。カテゴリ矛盾
+  // (2026-09-11 追加指示: 照明を「家具」と呼んだ不具合)も同じ1回の
+  // 再試行枠に相乗りさせる —— 別枠を作ると呼び出し回数が増えてしまう。
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let retryNote = "";
     if (attempt > 1) {
@@ -241,6 +253,11 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
       }
       if (conditionViolations.length > 0) {
         issues.push("- 「商品のご紹介」に傷・錆・汚れ等のコンディション(状態)の説明が書かれていました。状態の説明はコンディションのセクションだけに書き、紹介文からは完全に取り除いてください。");
+      }
+      if (categoryViolations.length > 0) {
+        issues.push(
+          `- 渡されたカテゴリ(${input.categoryName ?? ""})と矛盾する一般名称(${categoryViolations.map((v) => v.matched).join("、")})で商品を呼んでいました。渡されたカテゴリに沿った呼び方に直してください。`,
+        );
       }
       retryNote = `\n\n【前回の出力で検出された問題(必ず直すこと)】\n${issues.join("\n")}`;
     }
@@ -270,25 +287,39 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     sections = result.output;
     introViolations = findIntroDimensionViolations(sections.introduction ?? "");
     conditionViolations = findIntroConditionViolations(sections.introduction ?? "", facts.conditionDisclosure);
-    if (introViolations.length === 0 && conditionViolations.length === 0) break;
-    console.warn("[productPage] 紹介文に寸法/コンディションが含まれていたため書き直します", {
+    categoryViolations = findCategoryMismatchViolations(sections.introduction ?? "", input.categoryName ?? null);
+    if (introViolations.length === 0 && conditionViolations.length === 0 && categoryViolations.length === 0) break;
+    console.warn("[productPage] 紹介文に寸法/コンディション/カテゴリ矛盾が含まれていたため書き直します", {
       attempt,
       inventoryId: input.inventoryId,
       matchedDimensions: introViolations.map((v) => v.matched),
       matchedCondition: conditionViolations.map((v) => v.keyword),
+      matchedCategory: categoryViolations.map((v) => v.matched),
     });
   }
 
   sections = result!.output;
 
   // ── 書き直しても残っていたら、機械的に落とす(指示書§5。コンディション
-  //    混入も同じ扱いにする) ──────────────────────────────────────
+  //    混入・カテゴリ矛盾も同じ扱いにする) ──────────────────────────
   //
   // 「再生成して駄目だったのでそのまま採用」は禁止されている。寸法・
-  // コンディションを含む**文ごと**落とし、残りで紹介文が成立するなら
-  // 採用する。成立しなければ失敗として返す —— 黙って通さない。
+  // コンディション・カテゴリ矛盾を含む**文ごと**落とし、残りで紹介文が
+  // 成立するなら採用する。成立しなければ失敗として返す —— 黙って通さず、
+  // 捏造しない定型文(=この場合は失敗を伝えるだけで、直せない箇所を
+  // それらしく書き換えない)として担当者へ差し戻す。
   let introSanitized = false;
-  if (introViolations.length > 0 || conditionViolations.length > 0) {
+  if (introViolations.length > 0 || conditionViolations.length > 0 || categoryViolations.length > 0) {
+    // 除去前の検出結果を控えておく。除去で紹介文自体が使い物にならなく
+    // なった(isIntroStillUsableがfalse)場合、その時点のstillViolatingは
+    // 「除去対象が何も無くなった」だけで0件になり得るが、これは「直った」
+    // ことを意味しない —— 下のelse節で握り潰さず報告するために使う
+    // (2026-09-12 実サービス境界検証で発見: 全文が矛盾語だけで構成されて
+    // いる等、除去が紹介文を空/極端に短くする場合に violations が0件の
+    // まま ok:false だけを返してしまい、何が問題だったか報告から消えていた)。
+    const originalIntroViolations = introViolations;
+    const originalConditionViolations = conditionViolations;
+    const originalCategoryViolations = categoryViolations;
     let text = sections.introduction ?? "";
     let removedCount = 0;
     if (introViolations.length > 0) {
@@ -303,33 +334,51 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
       removedCount += stripped.removedSentences.length;
       conditionViolations = stripped.stillViolating;
     }
-    if (introViolations.length === 0 && conditionViolations.length === 0 && isIntroStillUsable(text)) {
+    if (categoryViolations.length > 0) {
+      const stripped = stripCategoryMismatchSentences(text, input.categoryName ?? null);
+      text = stripped.text;
+      removedCount += stripped.removedSentences.length;
+      categoryViolations = stripped.stillViolating;
+    }
+    if (introViolations.length === 0 && conditionViolations.length === 0 && categoryViolations.length === 0 && isIntroStillUsable(text)) {
       sections = { ...sections, introduction: text };
       introSanitized = true;
-      console.warn("[productPage] 紹介文から寸法/コンディションを含む文を除去しました", {
+      console.warn("[productPage] 紹介文から寸法/コンディション/カテゴリ矛盾を含む文を除去しました", {
         inventoryId: input.inventoryId,
         removed: removedCount,
       });
     } else {
+      // 除去後になお違反が残っていればそれを報告する。除去後に0件へ
+      // 落ちていても紹介文が使い物にならなくなっている(usable=false)なら、
+      // 「直った」のではなく「消えて無くなった」だけなので、除去前の
+      // 検出結果を報告する(上のコメント参照)。
+      const usable = isIntroStillUsable(text);
+      const reportedIntroViolations = introViolations.length > 0 || usable ? introViolations : originalIntroViolations;
+      const reportedConditionViolations = conditionViolations.length > 0 || usable ? conditionViolations : originalConditionViolations;
+      const reportedCategoryViolations = categoryViolations.length > 0 || usable ? categoryViolations : originalCategoryViolations;
       return {
         ...base,
         ok: false,
         sections,
         fullDescription: buildDescription(sections, input),
         violations: [
-          ...introViolations.map((v) => ({
+          ...reportedIntroViolations.map((v) => ({
             code: "INTRO_CONTAINS_DIMENSIONS" as const,
             detail: `「◎商品のご紹介」に寸法が含まれています(${v.matched})。寸法は「◎サイズ」へ書いてください。`,
           })),
-          ...conditionViolations.map((v) => ({
+          ...reportedConditionViolations.map((v) => ({
             code: "INTRO_CONTAINS_CONDITION" as const,
             detail: `「◎商品のご紹介」にコンディションの説明が含まれています(${v.keyword})。状態の説明は「◎コンディション」へ書いてください。`,
+          })),
+          ...reportedCategoryViolations.map((v) => ({
+            code: "INTRO_CATEGORY_MISMATCH" as const,
+            detail: `「◎商品のご紹介」がカテゴリ(${input.categoryName ?? ""})と矛盾する呼び方(${v.matched})をしています。`,
           })),
         ],
         modelProvider: result!.providerId,
         modelName: result!.modelId,
         failureReason:
-          "「◎商品のご紹介」から寸法/コンディションを取り除けませんでした。寸法は「◎サイズ」、状態は「◎コンディション」のセクションにだけ書きます。再生成してください。",
+          "「◎商品のご紹介」から寸法/コンディション/カテゴリと矛盾する記述を取り除けませんでした。内容を見直してスタッフが確認のうえ再生成してください。",
       };
     }
   }
@@ -341,7 +390,8 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
   const genericPhrases = findGenericPhrases(sections.introduction ?? "");
 
   // 3. 生成後の機械検査。プロンプトで禁じただけでは守られないことがある
-  //    ので、在庫数・SKU・社内スコア・商品名に無いブランド等を実際に探す。
+  //    ので、在庫数・SKU・社内スコア・商品名に無いブランド・未確認の
+  //    製造国等を実際に探す。
   const check = checkFactSafety({
     output: fullDescription,
     facts,
@@ -349,6 +399,11 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     sku: input.sku ?? null,
     // セクション構成ぶん長くなるため、紹介文単体より大きい上限にする。
     maxLength: 4000,
+    // ブランド/製造国の裏付け判定へ、商品名から機械的に導いたブランドと
+    // 材質(ZAICO「⚪︎材質」)も合流させる。商品名に現れない形でしか
+    // ブランドを確認できない場合や、材質欄に製造国が明記されている場合を
+    // 誤って未確認扱いにしないため(検査を2箇所に分けない)。
+    extraFactsText: [input.extraFacts?.brand, input.extraFacts?.material].filter((v): v is string => Boolean(v?.trim())).join("\n") || null,
   });
 
   const violations = [...check.violations];

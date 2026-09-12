@@ -23,6 +23,7 @@
     "verify:ai-gateway": "node scripts/with-server-only-stub.cjs scripts/verify-ai-gateway.ts",
     "verify:ai-usage-recording": "node scripts/verify-ai-usage-recording.ts",
     "verify:ai-gateway-recording": "node scripts/verify-ai-gateway-recording.ts",
+    "verify:product-page-service-boundary": "node scripts/verify-product-page-service-boundary.ts",
     "verify:ai-live": "node scripts/with-server-only-stub.cjs scripts/verify-ai-live.ts",
     "verify:mercari": "node scripts/with-server-only-stub.cjs scripts/verify-mercari.ts",
     "verify:product-intro": "node scripts/with-server-only-stub.cjs scripts/verify-product-intro.ts",

@@ -51,7 +51,11 @@ const BASE_FACTS: CustomerSafeFacts = {
   publicNote: null,
 };
 
-function check(output: string, facts: CustomerSafeFacts = BASE_FACTS, extra: { stockQuantity?: number | null; sku?: string | null } = {}) {
+function check(
+  output: string,
+  facts: CustomerSafeFacts = BASE_FACTS,
+  extra: { stockQuantity?: number | null; sku?: string | null; extraFactsText?: string | null } = {},
+) {
   const r = checkFactSafety({ output, facts, ...extra });
   return { ok: r.ok, codes: r.violations.map((v) => v.code) };
 }
@@ -294,6 +298,156 @@ function testFactSafetyOtherRules() {
   assertEqual(good.codes, [], "検査: 問題の無い文章では違反が0件");
 }
 
+/**
+ * ── ブランドの本国・素材の産地と製造国の混同(2026-09-11 追加指示) ────
+ *
+ * 報告された不具合: 「イタリアのブランド」という事実だけを根拠に
+ * 「イタリア製」と書いた生成結果が、facts側にたまたま「イタリア」の
+ * 文字列があるという理由(factsText.includes(country)相当の単純一致)で
+ * 通ってしまっていた。ブランドが生まれた国・素材の産地と、この個体が
+ * 実際に作られた国は別の事実として扱い、製造国そのものの明示的な記述
+ * (「製造国は〜」「〜製」)がfacts側にある場合だけ承認する。
+ *
+ * 2026-09-12 QAレビュー指摘: 上の判定に使う正規表現(国名+「製」)は、
+ * 「イタリア製レザーを使用」「脚はイタリア製」のように部材・素材だけを
+ * 指す記述にも一致してしまい、それが完成品全体のイタリア製という主張の
+ * 根拠になり得た。完成品(個体)そのものの明示的な製造国だけを根拠とし、
+ * 部材・交換部品・素材・ブランドの国・推測・否定は根拠にしない。
+ */
+function testCountryOriginClaims() {
+  // ① facts側は「イタリアのブランド」という、ブランドの本国の言及だけ。
+  //    製造国そのものの記述ではないので、「イタリア製」の主張は不許可。
+  const italianBrandOnly: CustomerSafeFacts = {
+    name: "B&B Italia マキシマシステム ソファ",
+    dimensions: "幅220 × 奥行90 × 高さ75（cm）",
+    categoryName: "ソファ",
+    conditionDisclosure: null,
+    publicNote: "イタリアのブランドとして知られています。",
+  };
+  const brandOnlyClaim = check("B&B Italiaのマキシマシステムです。イタリア製の贅沢な素材感が魅力です。", italianBrandOnly);
+  assertTrue(!brandOnlyClaim.ok, "検査: 「イタリアのブランド」という事実だけから「イタリア製」と断定するのは不合格");
+  assertTrue(hasViolation(brandOnlyClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: 未確認の製造国主張として分類する");
+
+  // ② facts側に製造国そのものの記述(「製造国イタリア」)があれば許可する。
+  const withManufactureCountry: CustomerSafeFacts = { ...italianBrandOnly, publicNote: "製造国イタリア" };
+  const supportedClaim = check("B&B Italiaのマキシマシステムです。イタリア製の贅沢な素材感が魅力です。", withManufactureCountry);
+  assertTrue(!hasViolation(supportedClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: 製造国そのものが事実として確認できていれば合格");
+
+  // ③ facts側が「イタリア製ではない」「製造国は不明」と述べている場合は、
+  //    国名の文字列自体は含まれていても、否定・不明を肯定と読み替えない。
+  const negatedFact: CustomerSafeFacts = { ...italianBrandOnly, publicNote: "イタリア製ではない" };
+  const negatedClaim = check("B&B Italiaのマキシマシステムです。イタリア製の贅沢な素材感が魅力です。", negatedFact);
+  assertTrue(!negatedClaim.ok, "検査: facts側の否定(「イタリア製ではない」)は裏付けにしない");
+  assertTrue(hasViolation(negatedClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: 否定文からの誤った承認をしない");
+
+  const unknownFact: CustomerSafeFacts = { ...italianBrandOnly, publicNote: "製造国は不明です" };
+  const unknownClaim = check("B&B Italiaのマキシマシステムです。イタリア製の贅沢な素材感が魅力です。", unknownFact);
+  assertTrue(!unknownClaim.ok, "検査: facts側が「不明」と述べている場合も不許可");
+  assertTrue(hasViolation(unknownClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: 不明を裏付けにしない");
+
+  // ④ facts側が素材の産地(「イタリア産」)を述べているだけでは、
+  //    製品そのものの製造国の裏付けにしない。
+  const materialOriginOnly: CustomerSafeFacts = { ...italianBrandOnly, publicNote: "イタリア産のレザーを使用しています。" };
+  const materialClaim = check("B&B Italiaのマキシマシステムです。イタリア製の贅沢な素材感が魅力です。", materialOriginOnly);
+  assertTrue(!materialClaim.ok, "検査: 「イタリア産の素材」は製造国の根拠にしない");
+  assertTrue(hasViolation(materialClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: 素材の産地からの誤った承認をしない");
+
+  // ブランドの国自体への言及(「〜製」の形ではない)は誤検出しない。
+  const brandOrigin = check("B&B Italiaのマキシマシステムです。イタリアで生まれたブランドです。", italianBrandOnly);
+  assertTrue(!hasViolation(brandOrigin.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: ブランドの国への言及自体は誤検出しない(「〜製」と書いていない)");
+
+  // 出力側が断定していない(「イタリア製かは分かりません」)場合は、
+  // そもそも製造国を主張していないので検査対象にしない。
+  const hedgedOutput = check("B&B Italiaのマキシマシステムです。製造国がイタリア製かは分かりません。", italianBrandOnly);
+  assertTrue(
+    !hasViolation(hedgedOutput.codes, "UNSUPPORTED_COUNTRY_CLAIM"),
+    "検査: 断定していない記述を誤って不許可にしない",
+  );
+
+  // extraFactsText(商品名に現れないブランド・材質欄)からも、製造国そのもの
+  // の記述であれば裏付けを取れる。
+  const extraSupported = check(
+    "B&B Italiaのマキシマシステムです。イタリア製の贅沢な素材感が魅力です。",
+    italianBrandOnly,
+    { extraFactsText: "製造国: イタリア" },
+  );
+  assertTrue(!hasViolation(extraSupported.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: extraFactsText(材質欄等)の製造国記述からも裏付けを取れる");
+
+  // extraFactsTextが素材の産地(「イタリア産」)だけなら、従来どおり裏付けにしない。
+  const extraMaterialOnly = check(
+    "B&B Italiaのマキシマシステムです。イタリア製の贅沢な素材感が魅力です。",
+    italianBrandOnly,
+    { extraFactsText: "素材: イタリア産レザー" },
+  );
+  assertTrue(hasViolation(extraMaterialOnly.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: extraFactsTextの素材産地も製造国の根拠にしない");
+
+  // ⑤ 完成品そのものの製造国が明示されていれば許可する(回帰確認)。
+  const wholeProductFacts: CustomerSafeFacts = { ...italianBrandOnly, publicNote: "このソファはイタリア製です。" };
+  const wholeProductClaim = check("B&B Italiaのマキシマシステムです。このソファはイタリア製です。", wholeProductFacts);
+  assertTrue(!hasViolation(wholeProductClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: 完成品そのものの明示的な製造国は根拠にできる");
+
+  // ⑥ QAレビュー指摘: facts側の「イタリア製レザーを使用」は部材・素材の
+  //    産地でしかないので、完成品全体のイタリア製という主張の根拠にしない。
+  const leatherOnlyFacts: CustomerSafeFacts = { ...italianBrandOnly, publicNote: "イタリア製レザーを使用しています。" };
+  const leatherGroundedClaim = check("B&B Italiaのマキシマシステムです。このソファはイタリア製です。", leatherOnlyFacts);
+  assertTrue(!leatherGroundedClaim.ok, "検査: 「イタリア製レザー」は完成品全体のイタリア製の根拠にしない");
+  assertTrue(
+    hasViolation(leatherGroundedClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"),
+    "検査: 部材(レザー)の産地から完成品全体への誤った承認をしない",
+  );
+
+  // ⑦ QAレビュー指摘: facts側の「脚はイタリア製」は部材(脚)だけの製造国
+  //    でしかないので、完成品全体のイタリア製という主張の根拠にしない。
+  const legsOnlyFacts: CustomerSafeFacts = { ...italianBrandOnly, publicNote: "脚はイタリア製です。" };
+  const legsGroundedClaim = check("B&B Italiaのマキシマシステムです。このソファはイタリア製です。", legsOnlyFacts);
+  assertTrue(!legsGroundedClaim.ok, "検査: 「脚はイタリア製」は完成品全体のイタリア製の根拠にしない");
+  assertTrue(
+    hasViolation(legsGroundedClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"),
+    "検査: 部材(脚)の製造国から完成品全体への誤った承認をしない",
+  );
+
+  // ⑧ 出力側が部材・素材だけの製造国を書いている場合(完成品全体の主張を
+  //    していない)は、そもそも完成品の製造国を断定していないので検査
+  //    対象にしない —— facts側の裏付けが無くても不合格にしない。
+  const legsOnlyOutput = check("B&B Italiaのマキシマシステムです。脚はイタリア製です。", italianBrandOnly);
+  assertTrue(
+    !hasViolation(legsOnlyOutput.codes, "UNSUPPORTED_COUNTRY_CLAIM"),
+    "検査: 出力が部材(脚)だけの製造国を書いている場合は完成品全体の主張として検査しない",
+  );
+  const leatherOnlyOutput = check("B&B Italiaのマキシマシステムです。イタリア製レザーを使用しています。", italianBrandOnly);
+  assertTrue(
+    !hasViolation(leatherOnlyOutput.codes, "UNSUPPORTED_COUNTRY_CLAIM"),
+    "検査: 出力が部材(レザー)だけの製造国を書いている場合は完成品全体の主張として検査しない",
+  );
+
+  // ⑨ 部材の言及と完成品そのものの主張が同じ文章に混在する場合、完成品側の
+  //    主張はきちんと裏付けを要求する(部材の記述に埋もれて見逃さない)。
+  const mixedOutput = check(
+    "B&B Italiaのマキシマシステムです。このソファはイタリア製です。脚は交換されており、脚だけはベトナム製の部材です。",
+    italianBrandOnly,
+  );
+  assertTrue(!mixedOutput.ok, "検査: 部材の言及があっても、完成品そのものの未確認主張は見逃さない");
+  assertTrue(
+    hasViolation(mixedOutput.codes, "UNSUPPORTED_COUNTRY_CLAIM"),
+    "検査: 「このソファはイタリア製」という完成品全体の主張は部材の記述と別に検査する",
+  );
+
+  // ⑩ 推測(2026-09-12 追加指示): facts側が製造国を推測で述べているだけ
+  //    (「イタリア製と思われます」)では、完成品の製造国の裏付けにしない。
+  const speculativeFacts: CustomerSafeFacts = { ...italianBrandOnly, publicNote: "イタリア製と思われます。" };
+  const speculativeGroundedClaim = check("B&B Italiaのマキシマシステムです。このソファはイタリア製です。", speculativeFacts);
+  assertTrue(!speculativeGroundedClaim.ok, "検査: facts側の推測(「イタリア製と思われます」)は裏付けにしない");
+  assertTrue(hasViolation(speculativeGroundedClaim.codes, "UNSUPPORTED_COUNTRY_CLAIM"), "検査: 推測からの誤った承認をしない");
+
+  // 出力側が推測で述べているだけ(「おそらくイタリア製」)なら、断定して
+  // いないので検査対象にしない(否定・不明と同じ扱い)。
+  const speculativeOutput = check("B&B Italiaのマキシマシステムです。おそらくイタリア製です。", italianBrandOnly);
+  assertTrue(
+    !hasViolation(speculativeOutput.codes, "UNSUPPORTED_COUNTRY_CLAIM"),
+    "検査: 出力側の推測(「おそらくイタリア製」)は断定していないので検査対象にしない",
+  );
+}
+
 function testFactSafetyDoesNotOverBlock() {
   // 寸法の数値は「在庫数」でも「スコア」でもない。
   const dims = check("幅80 × 奥行75 × 高さ70cmのゆったりとしたサイズです。");
@@ -479,6 +633,7 @@ async function main() {
   testPersonalDataDetection();
   testFactSafetyObservedDefects();
   testFactSafetyOtherRules();
+  testCountryOriginClaims();
   testFactSafetyDoesNotOverBlock();
   testInternalMarkerRemoval();
   testPriceRedaction();

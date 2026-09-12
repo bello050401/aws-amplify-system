@@ -24,6 +24,22 @@ export type FactSafetyViolationCode =
   | "STOCK_DISCLOSURE"
   | "SKU_OR_MANAGEMENT_ID"
   | "UNSUPPORTED_BRAND"
+  // 2026-09-11 追加指示: ブランドが生まれた国と、この個体の実際の製造国は
+  // 別の事実。「イタリアのブランドだからイタリア製」のように、facts側に
+  // 単に国名の文字列が出ているだけ(ブランドの本国・素材の産地としての
+  // 言及)を製造国の裏付けとして扱わない。製造国が事実として確認できた
+  // (facts側にも「製造国は〜」「〜製」のように明示的な製造国の記述が
+  // あり、かつそれが完成品(個体)自体を指し、否定・不明・推測を述べて
+  // いない)場合だけ承認する。2026-09-12 追加指示: 「イタリア製レザー」
+  // 「脚はイタリア製」のように部材・素材だけを指す記述は、完成品全体の
+  // 製造国の主張・裏付けのどちらにも使わない(下のPART_OR_MATERIAL_WORDS
+  // 参照)。
+  | "UNSUPPORTED_COUNTRY_CLAIM"
+  // 2026-09-11 追加指示: 照明をデザイナーズ「家具」と呼ぶ等、渡された
+  // カテゴリと矛盾する一般名称。判定・除去は lib/ai/productPage/
+  // introValidator.ts (findCategoryMismatchViolations) が担当し、
+  // service.ts がここと同じ violations の並びへ載せる。
+  | "INTRO_CATEGORY_MISMATCH"
   | "PERSONAL_DATA"
   | "PERSON_NAME"
   | "PRICE_CLAIM"
@@ -112,6 +128,103 @@ const BRAND_ALIAS_GROUPS: readonly (readonly string[])[] = [
 export const KNOWN_FURNITURE_BRANDS = BRAND_ALIAS_GROUPS.flat() as readonly string[];
 
 /**
+ * 「〜製」「製造国は〜」の形で出やすい国名。網羅リストである必要はなく、
+ * BELLOが扱う家具・什器の産地として実際に出現しやすいものを押さえる
+ * (KNOWN_FURNITURE_BRANDS と同じ考え方 —— ここに無い国名の捏造は
+ * 検出できないが、それは検査が緩いだけで誤って弾くよりましという判断)。
+ */
+const COUNTRY_NAMES = [
+  "日本", "中国", "台湾", "韓国", "タイ", "ベトナム", "インドネシア", "インド",
+  "イタリア", "ドイツ", "フランス", "デンマーク", "スウェーデン", "ノルウェー", "フィンランド",
+  "イギリス", "オランダ", "ベルギー", "スペイン", "ポルトガル", "スイス", "オーストリア",
+  "アメリカ", "カナダ", "ブラジル", "メキシコ", "ポーランド",
+] as const;
+
+/**
+ * 「完成品(個体)全体」ではなく、脚・部材・交換部品・素材だけを指している
+ * 語。網羅リストである必要はない(COUNTRY_NAMES・KNOWN_FURNITURE_BRANDS
+ * と同じ考え方)。
+ *
+ * 2026-09-12 QAレビュー指摘への対応: manufactureCountryClaimPattern は
+ * 「イタリア製」という文字列にしか一致しないため、「イタリア製レザーを
+ * 使用」「脚はイタリア製」のように部材・素材だけの製造国・産地を述べた
+ * 記述までもが、完成品全体のイタリア製という主張・裏付けの両方に
+ * 使われてしまっていた。ここに挙げた語が国名+「製」の直前(主語として)・
+ * 直後(修飾する名詞として)にある場合は、完成品全体の製造国を述べたもの
+ * ではないとみなす。
+ */
+const PART_OR_MATERIAL_WORDS = [
+  "脚", "部材", "部品", "交換部品", "パーツ", "素材", "生地", "張地",
+  "レザー", "革", "天板", "座面", "背面", "フレーム", "金具", "取っ手", "ハンドル", "キャスター",
+] as const;
+
+/**
+ * 文中で国名の直後に「製造国そのもの」を述べている箇所を探す正規表現。
+ * ブランドの本国(「イタリアのブランド」)や素材の産地(「イタリア産」)は
+ * 「製」「製造国」「原産国」のいずれの語も伴わないので、ここには一致しない
+ * —— それが狙いで、この正規表現一つで両者を区別している。
+ */
+function manufactureCountryClaimPattern(country: string): RegExp {
+  return new RegExp(`${country}製|(?:製造国|原産国)\\s*(?:は|:|：)?\\s*${country}`, "g");
+}
+
+/**
+ * マッチの直前・直後を見て、部材・素材だけを指す記述でないかを確認する。
+ *
+ * - 直前: 「脚は」「レザーは」のように、部材・素材が主語としてマッチの
+ *   直前に置かれている場合(「脚はイタリア製です」)。
+ * - 直後: 「イタリア製レザー」のように、国名+「製」が直後の名詞を修飾する
+ *   複合語になっている場合(間に句読点を挟まない、この形の場合だけ)。
+ *
+ * どちらも完成品(個体)全体の製造国を述べたものではないので、国主張の
+ * 検出・裏付けのどちらにも使わない(下の呼び出し側を参照)。
+ */
+function isPartOrMaterialScopedAt(source: string, matchStart: number, matchEnd: number): boolean {
+  const partOrMaterial = PART_OR_MATERIAL_WORDS.join("|");
+  const before = source.slice(Math.max(0, matchStart - 14), matchStart);
+  if (new RegExp(`(?:${partOrMaterial})\\s*(?:は|が|も)\\s*$`).test(before)) return true;
+  const after = source.slice(matchEnd, matchEnd + 8);
+  return new RegExp(`^の?(?:${partOrMaterial})`).test(after);
+}
+
+/**
+ * マッチ直後に否定・不明・推測の語が続いていないか、直前に「おそらく」
+ * 等の推測の語が置かれていないかを見る。
+ *
+ * 「イタリア製ではない」「製造国はイタリアではありません」のように、
+ * facts側にたまたま国名+「製」の並びが出ていても、それが否定文なら
+ * 製造国イタリアを裏付ける記述ではない —— むしろ逆である。
+ * 「不明」「未確認」「おそらく〜だろう」「〜と思われる」も同様に、
+ * 確認できた事実として断定されたわけではないので裏付けにしない
+ * (2026-09-12 追加指示: 推測も承認しない)。
+ */
+function isNegatedOrUnknownAt(source: string, matchStart: number, matchEnd: number): boolean {
+  const before = source.slice(Math.max(0, matchStart - 8), matchStart);
+  if (/おそらく|たぶん|恐らく|多分/.test(before)) return true;
+  const after = source.slice(matchEnd, matchEnd + 12);
+  return /ではな|でな|じゃな|とは言えな|不明|未確認|わかりません|分かりません|と思われ|かもしれ|と推測/.test(after);
+}
+
+/**
+ * facts側(事実コーパス)に、この個体(完成品)の製造国としてcountryが
+ * 明示的に記録されているか。国名が単独で出ているだけ(ブランドの本国・
+ * 素材の産地としての言及)や、脚・部材・素材だけを指す記述では裏付けに
+ * ならない —— 「製造国は〜」「〜製」のように、完成品そのものの製造国を
+ * 述べた記述だけを裏付けとして扱う。
+ */
+function factsAssertManufactureCountry(factsText: string, country: string): boolean {
+  const re = manufactureCountryClaimPattern(country);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(factsText))) {
+    const matchEnd = m.index + m[0].length;
+    if (isNegatedOrUnknownAt(factsText, m.index, matchEnd)) continue;
+    if (isPartOrMaterialScopedAt(factsText, m.index, matchEnd)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
  * 生成文が「商品紹介」以外の定型セクションへ侵食していないかを見る見出し。
  * 実データ(Inventory.note)で確認した、BELLOが実際に使っている書式。
  */
@@ -160,12 +273,30 @@ export function checkFactSafety(params: {
   sku?: string | null;
   /** 許容する最大文字数。 */
   maxLength?: number;
+  /**
+   * CustomerSafeFacts に含まれない、事実として確認済みの追加情報
+   * (例: 商品名から機械的に導いたブランド、ZAICO「⚪︎材質」)。
+   *
+   * 2026-09-11 追加: ブランド・金額・製造国の「事実に裏付けがあるか」の
+   * 判定はここまでの factsText だけを見ていたため、商品名に現れていない
+   * 形でしかブランドを確認できない場合や、材質欄に明記された製造国
+   * (例: ZAICO備考の「イタリア製」)があっても裏付けとして扱えなかった。
+   * ここへ渡せば同じ判定へ合流する(検査を二重に作らない)。
+   */
+  extraFactsText?: string | null;
 }): FactSafetyResult {
   const violations: FactSafetyViolation[] = [];
   const output = params.output ?? "";
   const text = normalizeForMatch(output);
   const factsText = normalizeForMatch(
-    [params.facts.name, params.facts.dimensions, params.facts.categoryName, params.facts.conditionDisclosure, params.facts.publicNote]
+    [
+      params.facts.name,
+      params.facts.dimensions,
+      params.facts.categoryName,
+      params.facts.conditionDisclosure,
+      params.facts.publicNote,
+      params.extraFactsText,
+    ]
       .filter((v): v is string => Boolean(v))
       .join("\n"),
   );
@@ -232,6 +363,54 @@ export function checkFactSafety(params: {
       code: "UNSUPPORTED_BRAND",
       detail: `商品の事実に含まれないブランド名が出ています: ${invented.join(", ")}`,
     });
+  }
+
+  // ── ブランドの本国・素材の産地・部材と製造国の混同 ───────────────
+  // 「イタリアのブランドだからイタリア製」「イタリア産のレザーだから
+  // イタリア製」のように、ブランドが生まれた国・素材の産地と、この
+  // 個体が実際に作られた国は別の事実。実データには製造国を確認できる
+  // 項目が無い(ZAICO_ATTRIBUTE_MAPに該当フィールドが無い)ため、
+  // 「〜製」「製造国は〜」「原産国は〜」の形の国名主張は、その国名が
+  // 事実コーパスへ**完成品(個体)の製造国そのものとして**明示されている
+  // 場合(担当者が備考等へ「製造国は〜」「〜製」と明記した場合)だけ
+  // 裏付けありとみなす。
+  //
+  // 国名が事実コーパスに単独で出ているだけ(「イタリアのブランド」
+  // 「イタリア産」)では裏付けにしない —— factsText.includes(country) の
+  // ような単純一致だと、ブランドの本国・素材の産地の言及にまで製造国の
+  // 裏付けが成立してしまい、報告された「イタリアのブランド→イタリア製」
+  // の誤承認を防げない。
+  //
+  // 2026-09-12 QAレビュー指摘: 「イタリア製レザーを使用」「脚はイタリア製」
+  // のように部材・素材だけを指す記述も、上と同じ理由で完成品全体の製造国
+  // の主張・裏付けのどちらにも使わない(isPartOrMaterialScopedAt)。
+  //
+  // facts側の記述が否定(「イタリア製ではない」)・不明(「製造国は不明」)・
+  // 推測(「イタリア製と思われる」)を述べている場合も、裏付けにはしない
+  // (肯定として読み替えない)。
+  for (const country of COUNTRY_NAMES) {
+    const re = manufactureCountryClaimPattern(country);
+    let claimed = false;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const matchEnd = m.index + m[0].length;
+      // 出力側が否定・保留・推測(「イタリア製ではない」「不明」
+      // 「おそらくイタリア製」)を述べているだけなら、そもそも完成品の
+      // 製造国を断定していないので検査対象にしない。
+      if (isNegatedOrUnknownAt(text, m.index, matchEnd)) continue;
+      // 「イタリア製レザー」「脚はイタリア製」のように部材・素材だけを
+      // 指す記述は、完成品全体の製造国の主張にしない。
+      if (isPartOrMaterialScopedAt(text, m.index, matchEnd)) continue;
+      claimed = true;
+      break;
+    }
+    if (claimed && !factsAssertManufactureCountry(factsText, country)) {
+      violations.push({
+        code: "UNSUPPORTED_COUNTRY_CLAIM",
+        detail: `事実として確認できていない製造国の記述があります: ${country}（ブランドの国・素材の産地・部材の製造国と、完成品(個体)の製造国は別の情報です）`,
+      });
+      break;
+    }
   }
 
   // ── 個人情報 ─────────────────────────────────────────────────────
