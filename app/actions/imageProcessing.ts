@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { adoptVersion, enqueueProcessingJob, listPendingJobStatuses, listVersions, setActiveVersion } from "@/lib/imageProcessing/jobService";
+import { adoptVersion, enqueueProcessingJob, listPendingJobStatuses, listVersions, listVersionsForKeys, setActiveVersion } from "@/lib/imageProcessing/jobService";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { splitImagesByType } from "@/lib/inventory/imageTypes";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
@@ -36,10 +37,8 @@ export interface ImageProcessingVersionSummary {
   completedAt: string | null;
 }
 
-/** §13: 画像1件の加工状態一覧(全version、version昇順)。UIはこの配列からactive行を拾って現在の状態バッジを描く。 */
-export async function listImageProcessingVersionsAction(imageStorageKey: string): Promise<ImageProcessingVersionSummary[]> {
-  const versions = await listVersions(imageStorageKey);
-  return versions.map((v) => ({
+function toVersionSummary(v: Awaited<ReturnType<typeof listVersions>>[number]): ImageProcessingVersionSummary {
+  return {
     id: v.id,
     version: v.version,
     status: v.status,
@@ -51,7 +50,63 @@ export async function listImageProcessingVersionsAction(imageStorageKey: string)
     failureCode: v.failureCode ?? null,
     failureDetail: v.failureDetail ?? null,
     completedAt: v.completedAt ?? null,
-  }));
+  };
+}
+
+/** §13: 画像1件の加工状態一覧(全version、version昇順)。UIはこの配列からactive行を拾って現在の状態バッジを描く。 */
+export async function listImageProcessingVersionsAction(imageStorageKey: string): Promise<ImageProcessingVersionSummary[]> {
+  const versions = await listVersions(imageStorageKey);
+  return versions.map(toVersionSummary);
+}
+
+// "e2e-imgproc:whole-fail-once"を含むバッチ呼び出しの、これまでの
+// 呼び出し回数。1回目は必ず全体を拒否し(実際のネットワーク断・認可
+// エラー等でServer Action呼び出しそのものが失敗するケースを模す)、
+// 2回目以降(=手動の「再試行」)は成功させる——
+// ImageProcessingPanel.tsxの「初回全体失敗→byKeyがnullのまま→再試行
+// ボタンで回復する」導線を、実際のNext.jsアプリ・実ブラウザで確認する
+// ためのフィクスチャ専用カウンタ(lib/imageProcessing/e2eFixtures.tsの
+// raceCallCountsと同じ「プロセス内で保持、1回のdevサーバー起動ぶんの
+// 手動QAセッションを想定」という寿命)。
+const wholeBatchFailOnceCounts = new Map<string, number>();
+
+/**
+ * 【状態表示読取性能P2、2026-09-13】ImageProcessingPanel.tsxが商品詳細
+ * を開くたびに画像1枚ごと`listImageProcessingVersionsAction`を呼んで
+ * いた(画像N枚ならServer Action往復N回)のを1回にまとめるバッチ版。
+ * `imageStorageKey`ごとに独立して結果を返す——1枚の取得に失敗しても
+ * (`null`)、他の画像の表示を巻き込んで壊さない
+ * (`listImageProcessingVersionsAction`と違い、失敗した画像だけがUIで
+ * 「取得失敗」と区別して表示できる。「バージョン0件=未加工」と
+ * 「取得できなかった」を混同しない——§13.2の原則)。
+ */
+export async function listImageProcessingVersionsBatchAction(
+  imageStorageKeys: string[],
+): Promise<Record<string, ImageProcessingVersionSummary[] | null>> {
+  // 実React境界試験(2026-09-13)専用: "e2e-imgproc:whole-fail-once"が
+  // 含まれる呼び出しは、1回目だけこのAction呼び出しそのものを丸ごと
+  // 拒否する——lib/imageProcessing/jobService.ts側の個別キー失敗(null)
+  // とは別に、「Server Action呼び出し自体が失敗し、ImageProcessingPanel
+  // 側のPromise.allSettledがbatchResult.status==="rejected"へ倒れる」
+  // 経路を実際のNext.jsアプリで再現するためのもの。二重ゲート
+  // (isE2EFixtureModeActive)の内側でしか成立しない。
+  if (isE2EFixtureModeActive()) {
+    const sentinel = "e2e-imgproc:whole-fail-once";
+    if (imageStorageKeys.includes(sentinel)) {
+      const failuresSoFar = wholeBatchFailOnceCounts.get(sentinel) ?? 0;
+      if (failuresSoFar === 0) {
+        wholeBatchFailOnceCounts.set(sentinel, failuresSoFar + 1);
+        throw new Error("[e2e-imgproc] simulated whole-batch fetch failure (recovers on retry)");
+      }
+    }
+  }
+  const byKey = await listVersionsForKeys(imageStorageKeys);
+  const out: Record<string, ImageProcessingVersionSummary[] | null> = {};
+  for (const key of imageStorageKeys) {
+    const versions = byKey[key];
+    out[key] = versions === null ? null : versions.map(toVersionSummary);
+  }
+  return out;
 }
 
 /**

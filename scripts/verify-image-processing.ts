@@ -24,7 +24,15 @@ import {
 } from "@/lib/imageProcessing/pipeline";
 import { SharpImageProcessingProvider, ENGINE_VERSION } from "@/lib/imageProcessing/sharpProcessor";
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
-import { pickPendingReviewVersion, reprocessButtonLabel } from "@/app/inventory/ImageProcessingPanel";
+import {
+  applyRefreshResult,
+  mergePendingJobsResult,
+  mergeVersionsBatchResult,
+  pickPendingReviewVersion,
+  reprocessButtonLabel,
+  selectPendingStatusLookupKeys,
+} from "@/app/inventory/ImageProcessingPanel";
+import type { ImageProcessingVersionSummary } from "@/app/actions/imageProcessing";
 
 let failures = 0;
 let passes = 0;
@@ -259,6 +267,200 @@ function testPickPendingReviewVersion() {
 }
 
 /**
+ * 【画像状態取得の実React境界と最終統合、2026-09-13】ProcessingJob予約状況の確認を
+ * 「まだversionが0件の画像」だけに絞るロジックの回帰テスト。
+ * 画像1枚・複数・0枚、初回読込(undefined)・取得失敗(null)・
+ * 全画像取得済み(対象0件でScanを丸ごとスキップできる)の各ケースを
+ * 固定する。
+ */
+function testSelectPendingStatusLookupKeys() {
+  const v = (id: string, status: string, active = false): ImageProcessingVersionSummary =>
+    ({ id, status, active, version: Number(id), aspectRatio: null, processedMasterKey: null, webKey: null, thumbnailKey: null, failureCode: null, failureDetail: null, completedAt: null }) as ImageProcessingVersionSummary;
+  const images = [{ storageKey: "a" }, { storageKey: "b" }, { storageKey: "c" }];
+
+  assertEqual(
+    selectPendingStatusLookupKeys(images, { a: [v("1", "READY", true)], b: [v("2", "READY", true)], c: [v("3", "NEEDS_REVIEW")] }),
+    [],
+    "selectPendingStatusLookupKeys: 全画像に既にversionがあれば対象0件(ProcessingJobのScanを丸ごとスキップできる、詳細画面として最もよくある状態)",
+  );
+  assertEqual(
+    selectPendingStatusLookupKeys(images, { a: [v("1", "READY", true)], b: [], c: [v("3", "READY", true)] }),
+    ["b"],
+    "selectPendingStatusLookupKeys: versionが0件の画像(複数中の1枚)だけを対象にする",
+  );
+  assertEqual(
+    selectPendingStatusLookupKeys(images, {}),
+    ["a", "b", "c"],
+    "selectPendingStatusLookupKeys: 初回読込(未取得=undefined)は安全側で全画像を対象にする",
+  );
+  assertEqual(
+    selectPendingStatusLookupKeys(images, { a: [v("1", "READY", true)], b: null, c: [v("3", "READY", true)] }),
+    ["b"],
+    "selectPendingStatusLookupKeys: 取得失敗(null、版数不明)の画像は安全側で対象に含める",
+  );
+  assertEqual(selectPendingStatusLookupKeys([{ storageKey: "only" }], {}), ["only"], "selectPendingStatusLookupKeys: 画像1枚(未取得)は対象に含む");
+  assertEqual(selectPendingStatusLookupKeys([], {}), [], "selectPendingStatusLookupKeys: 画像が無ければ対象も無い");
+}
+
+/**
+ * バッチ取得結果の合成ロジック——「取得失敗」と「バージョン0件(未加工)」を
+ * 混同しないこと、直前の既知状態を保つこと(ボタン等の操作性を壊さ
+ * ない)の回帰テスト。`undefined`(レスポンスにキー自体が無い想定外の
+ * 欠損)や非オブジェクトのbatchも`null`と同じ「取得失敗」として扱う
+ * ことを固定する——これが無いと状態不明の画像が「未加工」と誤認され、
+ * 書込系ボタン/一括対象の除外(ImageProcessingPanel.tsx側)が効かない。
+ */
+function testMergeVersionsBatchResult() {
+  const ready: ImageProcessingVersionSummary = {
+    id: "v1", version: 1, status: "READY", active: true, aspectRatio: null,
+    processedMasterKey: "m", webKey: "w", thumbnailKey: "t", failureCode: null, failureDetail: null, completedAt: null,
+  };
+
+  const ok = mergeVersionsBatchResult(["a", "b"], { a: [ready], b: [] }, null);
+  assertEqual(ok.byKey, { a: [ready], b: [] }, "mergeVersionsBatchResult: 成功した画像はそのままbyKeyへ反映する");
+  assertEqual([...ok.failedKeys], [], "mergeVersionsBatchResult: 全て成功していればfailedKeysは空");
+
+  const partial = mergeVersionsBatchResult(["a", "b"], { a: [ready], b: null }, { a: [], b: [ready] });
+  assertEqual(partial.byKey.a, [ready], "mergeVersionsBatchResult: 成功した画像は新しい結果で上書きする");
+  assertEqual(partial.byKey.b, [ready], "mergeVersionsBatchResult: 取得失敗の画像は直前の既知状態を維持する(ボタンの活性/非活性を壊さない)");
+  assertEqual([...partial.failedKeys], ["b"], "mergeVersionsBatchResult: 取得失敗の画像だけをfailedKeysへ入れる(0件=未加工と混同しない)");
+
+  const noPrevious = mergeVersionsBatchResult(["a"], { a: null }, null);
+  assertEqual(noPrevious.byKey.a, [], "mergeVersionsBatchResult: 直前の状態も無ければ空配列にフォールバックする(未定義アクセスを起こさない)");
+  assertEqual([...noPrevious.failedKeys], ["a"], "mergeVersionsBatchResult: 直前状態が無くてもfailedKeysには入れる");
+
+  const empty = mergeVersionsBatchResult([], {}, null);
+  assertEqual(empty.byKey, {}, "mergeVersionsBatchResult: 画像0件ならbyKeyも空");
+  assertEqual([...empty.failedKeys], [], "mergeVersionsBatchResult: 画像0件ならfailedKeysも空");
+
+  // 想定外の欠損(キー自体が無い=undefined)。
+  const missingKey = mergeVersionsBatchResult(["a", "b"], { a: [ready] }, { b: [ready] });
+  assertEqual(missingKey.byKey.a, [ready], "mergeVersionsBatchResult: 欠損ケースでも正常なキーは影響を受けない");
+  assertEqual(missingKey.byKey.b, [ready], "mergeVersionsBatchResult: レスポンスにキー自体が無い(undefined)場合も直前の既知状態を維持する");
+  assertEqual([...missingKey.failedKeys], ["b"], "mergeVersionsBatchResult: undefined(欠損)もnullと同じくfailedKeysに入れる——未加工(0件)と取り違えない");
+
+  // batch自体が非オブジェクト(想定外の戻り値)。
+  const nonObjectBatch = mergeVersionsBatchResult(["a"], null as unknown as Record<string, ImageProcessingVersionSummary[] | null>, { a: [ready] });
+  assertEqual(nonObjectBatch.byKey.a, [ready], "mergeVersionsBatchResult: batch自体がnullでも直前の既知状態を維持し例外を起こさない");
+  assertEqual([...nonObjectBatch.failedKeys], ["a"], "mergeVersionsBatchResult: batch自体が非オブジェクトなら全キーを取得失敗扱いにする");
+}
+
+/**
+ * ProcessingJob予約状況(pending)の取得が失敗した場合に、直前の既知状態
+ * (PENDING/PROCESSING)を消してしまわないことの回帰テスト。以前は無条件で
+ * `{}`に戻していたため、取得失敗のたびに「予約済み」の画像がUNPROCESSED
+ * 扱いへ戻り、書込系ボタンが誤って解禁され得た。
+ */
+function testMergePendingJobsResult() {
+  const noLookup = mergePendingJobsResult([], null, { a: "PENDING" });
+  assertEqual(noLookup, { pendingJobs: {}, unavailable: false }, "mergePendingJobsResult: 対象0件なら常に空へリセットしてよい(どのkeyからも参照されないため)");
+
+  const failed = mergePendingJobsResult(["a", "b"], null, { a: "PENDING", b: "PROCESSING" });
+  assertEqual(failed, { pendingJobs: { a: "PENDING", b: "PROCESSING" }, unavailable: true }, "mergePendingJobsResult: 取得に失敗したら直前の既知状態をそのまま維持する(空へ戻さない)");
+
+  const succeeded = mergePendingJobsResult(["a", "b"], { a: "PROCESSING" }, { a: "PENDING", b: "PENDING" });
+  assertEqual(succeeded, { pendingJobs: { a: "PROCESSING" }, unavailable: false }, "mergePendingJobsResult: 成功時はlookupKeys分を新しい結果で置き換える(bはジョブ完了で消えたことを反映)");
+
+  const untouched = mergePendingJobsResult(["a"], { a: "PENDING" }, { a: "PENDING", z: "PROCESSING" });
+  assertEqual(untouched.pendingJobs.z, "PROCESSING", "mergePendingJobsResult: lookupKeysに含まれないkeyは触れない");
+}
+
+/**
+ * 【レビュー補正、2026-09-13——実React境界試験で確認した不具合の回帰テスト】
+ * refresh()の応答が届いた時点で、自分より後に発行された(=より新しい)
+ * refresh()が既に存在していたら、その応答を画面へ一切反映しないこと。
+ * `requestId`は候補(928bedf)のimagesシグネチャ比較(商品切替は検出できる
+ * が同一商品への複数回refresh()同士の新旧は区別できない欠陥があった)を
+ * 置き換えた、呼び出し順そのものを表す単調増加カウンタ。
+ */
+function testApplyRefreshResult() {
+  const ready: ImageProcessingVersionSummary = {
+    id: "v1", version: 1, status: "READY", active: true, aspectRatio: null,
+    processedMasterKey: "m", webKey: "w", thumbnailKey: "t", failureCode: null, failureDetail: null, completedAt: null,
+  };
+
+  const stale = applyRefreshResult(1, 2, ["a"], { a: [ready] }, null, [], {}, {});
+  assertEqual(stale, null, "applyRefreshResult: 応答が届いた時点で自分より新しいrequestIdが既に発行されていれば、古い応答は捨ててnullを返す(商品切替・手動連打・ポーリング重複のいずれでも同じ扱い)");
+
+  const current = applyRefreshResult(2, 2, ["a"], { a: [ready] }, null, [], {}, {});
+  assertTrue(current !== null, "applyRefreshResult: requestIdが一致していれば(最新の応答であれば)結果を返す");
+
+  const fresh = applyRefreshResult(
+    3,
+    3,
+    ["a", "b"],
+    { a: [ready], b: null },
+    { b: [ready] },
+    ["b"],
+    { b: "PENDING" },
+    {},
+  );
+  assertTrue(fresh !== null, "applyRefreshResult: requestIdが一致していれば結果を返す");
+  assertEqual(fresh?.byKey, { a: [ready], b: [ready] }, "applyRefreshResult: mergeVersionsBatchResultと同じ合成結果になる(bは取得失敗、直前値を維持)");
+  assertEqual([...(fresh?.failedKeys ?? [])], ["b"], "applyRefreshResult: 取得失敗キーもそのまま伝播する");
+  assertEqual(fresh?.pendingJobs, { b: "PENDING" }, "applyRefreshResult: mergePendingJobsResultの結果も伝播する");
+  assertEqual(fresh?.pendingStatusUnavailable, false, "applyRefreshResult: pending取得が成功していればunavailableはfalse");
+}
+
+/**
+ * 実AWSへ接続せず、DynamoDBのScan(旧実装)とQuery(GSI、新実装)の
+ * 読取コスト差を合成データで再現する。
+ *
+ * モデル化(行数ベースの単純化、実際のRCUはバイト数ベースだが桁の
+ * 違いを示すには十分):
+ *  - Scan: `lib/amplify/listAll.ts`の`listAllPages`は「合致0件の
+ *    ページでも打ち切らない」設計(コメント参照)のため、最終的に
+ *    テーブル全体を読み切る。読む行数 = テーブル総行数。
+ *  - Query(該当imageStorageKeyのGSI): 該当画像の版数だけを読む。
+ *    読む行数 = その画像の版数。
+ * ページング自体は`ceil(件数/ページサイズ)`でモデル化し、境界値
+ * (ちょうどページサイズ・ページサイズ+1・0件)も検証する。
+ */
+function pagesFor(rows: number, pageSize: number): number {
+  if (rows === 0) return 1; // 0件でも最低1ページは読む(listAllPagesのdo-whileと同じ)
+  return Math.ceil(rows / pageSize);
+}
+
+function testReadCostModel() {
+  // ページング境界値。
+  assertEqual(pagesFor(200, 200), 1, "pagesFor: ちょうどページサイズは1ページ");
+  assertEqual(pagesFor(201, 200), 2, "pagesFor: ページサイズ+1件は2ページ目に1件だけ残る");
+  assertEqual(pagesFor(0, 200), 1, "pagesFor: 0件でも最低1ページ(listAllPagesの実装と同じ)");
+
+  // 商品1件(画像8枚)の詳細を開いた場合。テーブルは全商品・全画像分の
+  // 蓄積(旧version込み、追記専用)を想定。
+  const totalTableRows = 5000; // ImageProcessingVersion全体(無界に増える)
+  const avgVersionsPerImage = 6; // 1画像あたりの版数(小規模、Query件数はここに一致)
+  const imagesOnProduct = 8;
+  const pageSize = 200;
+
+  // 旧実装: 画像ごとにScan(テーブル全体を読み切る)。
+  const beforeItemsRead = imagesOnProduct * totalTableRows;
+  const beforeRoundTrips = imagesOnProduct + 1; // listImageProcessingVersionsAction×N + pending 1回(常時呼び出し)
+
+  // 新実装: 画像ごとにQuery(該当版数だけ)。全画像が既に加工済みなら
+  // pending確認自体をスキップできる(selectPendingStatusLookupKeys)。
+  const afterItemsRead = imagesOnProduct * avgVersionsPerImage;
+  const afterRoundTrips = 1; // バッチ1回、pendingはスキップ
+
+  assertEqual(beforeItemsRead, 40_000, "合成試験: 旧実装は商品1件(画像8枚)の詳細表示でDynamoDB行を40,000件読む(5,000行×8回Scan)");
+  assertEqual(afterItemsRead, 48, "合成試験: 新実装は同じ状況で48件しか読まない(画像ごとの実際の版数のみ)");
+  assertTrue(afterItemsRead < beforeItemsRead, "合成試験: DynamoDB読取行数が実際に減っている");
+  const reduction = beforeItemsRead / afterItemsRead;
+  assertTrue(reduction > 100, `合成試験: 読取行数が${reduction.toFixed(0)}倍以上削減される(テーブルが育つほど差は開く——totalTableRowsに比例するのはScanのみ)`);
+
+  assertTrue(afterRoundTrips < beforeRoundTrips, "合成試験: Server Action往復回数もN+1回→1回へ削減される(全画像が既に加工済みの場合)");
+  assertEqual(pagesFor(totalTableRows, pageSize), 25, "合成試験: 旧実装のScan1回あたりのページ数(5,000行÷200件)");
+  assertEqual(pagesFor(avgVersionsPerImage, pageSize), 1, "合成試験: 新実装のQueryは1ページで収まる(版数がページサイズを超えない限り)");
+
+  // テーブルが育つほど旧実装との差が開く(ScanコストはtotalTableRowsに比例、Queryは画像自身の版数にしか依存しない)ことの確認。
+  const grownTableRows = 50_000;
+  const beforeItemsReadGrown = imagesOnProduct * grownTableRows;
+  const afterItemsReadGrown = imagesOnProduct * avgVersionsPerImage; // 変わらない
+  assertTrue(beforeItemsReadGrown / afterItemsReadGrown > reduction, "合成試験: テーブルが10倍に育つと旧実装との差はさらに開く(Scanコストが比例悪化、Queryは無影響)");
+}
+
+/**
  * 2026-08-31 画像自動加工完全仕様書 §8/§27 — 構図の作り直しを固定する。
  *
  * 被写体のある合成画像(明るい背景に濃い矩形)を作り、
@@ -421,6 +623,11 @@ async function main() {
   testQualityGateDecision();
   testReprocessButtonLabel();
   testPickPendingReviewVersion();
+  testSelectPendingStatusLookupKeys();
+  testMergeVersionsBatchResult();
+  testMergePendingJobsResult();
+  testApplyRefreshResult();
+  testReadCostModel();
   testBulkImageProcessingEligibleStatuses();
   testOriginalHashComputation();
   testOriginalImageMissingError();

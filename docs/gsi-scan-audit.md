@@ -75,7 +75,7 @@ ListingDraft/ChannelListing/MercariApiTokenSecret)の参照数が壊れて
 | Message | conversationId(既存)/ externalMessageId(**新規追加**) | `listMessageByConversationId` / `listMessageByExternalMessageId` | **両方とも今回使用開始**(#4, #5) |
 | ShippingRate | destinationPrefecture + rank | `listShippingRateByDestinationPrefectureAndRank` | 未使用。全3呼び出し箇所ともShippingRateテーブル自体が数十件規模の管理者用マスタで、`rank`単独条件など複合キーと一致しない条件もあるため、今回はScanのまま許容(§65のコメント通り想定規模は「数十件」) |
 | AIUsageLog | task | `listAIUsageLogByTask` | 未使用(`limit:5000`で全task横断集計する用途のため、そもそも`task`で絞り込まない。5,000件上限は既存の安全弁) |
-| ImageProcessingVersion | imageStorageKey | `listImageProcessingVersionByImageStorageKey` | 未使用、意図的(1画像あたりのバージョン数は数件〜十数件規模、コメントで既存踏襲の方針が明記済み——今回は変更せず) |
+| ImageProcessingVersion | imageStorageKey | `listImageProcessingVersionByImageStorageKey` | **2026-09-13訂正・使用開始**(画像状態取得の実React境界と最終統合)。この監査時点の「未使用、意図的」判断は「1画像あたりのバージョン数は数件〜十数件規模」という**Queryが返す件数**を根拠にしていたが、実際に走査されるのは**テーブル全体の行数**(全商品・全画像ぶん、旧versionを消さない設計で無制限に増加)であり、判断基準を取り違えていた。かつ`lib/imageProcessing/jobService.ts`の`listVersions`は商品詳細画面で画像1枚ごとに呼ばれるため、本来はこの表の優先基準(a)高頻度・(b)無界増加の両方に該当していた。詳細はdocs/image-status-read-perf-20260913.md参照。 |
 
 ## 変更しなかった主要な全件走査(意図的、正当と判断)
 
@@ -93,10 +93,15 @@ ListingDraft/ChannelListing/MercariApiTokenSecret)の参照数が壊れて
   CustomFieldDefinition/Feature/PricingRule/ShippingRate)の全件取得 —
   いずれも運用規模が数十〜数百件程度に収まることが明白な管理者設定
   テーブルであり、Scanのコストが問題になる規模ではない。
-- **`lib/imageProcessing/jobService.ts` `ProcessingJob`の重複ジョブ判定** —
-  既存コメントが「1商品あたり画像十数枚程度のジョブ」という想定規模と
-  「件数が増えた場合はGSI追加を検討する」という将来対応方針を明記済み。
-  今回のP0-B優先度基準(高頻度×無界増加)には該当しないため変更せず。
+- **`lib/imageProcessing/jobService.ts` `ProcessingJob`の重複ジョブ判定・
+  `listPendingJobStatuses`** — 既存コメントが「1商品あたり画像十数枚
+  程度のジョブ」という想定規模と「件数が増えた場合はGSI追加を検討する」
+  という将来対応方針を明記済み。今回のP0-B優先度基準(高頻度×無界増加)
+  には該当しないため変更せず。ProcessingJobは完了済み行を消さず積み上がる
+  ため、将来的にはScan対象になり得る——2026-09-13の画像状態取得の実React
+  境界と最終統合(docs/image-status-read-perf-20260913.md)では、GSI追加という
+  スキーマ変更までは行わず、呼び出し頻度自体を減らす(不要な場合は
+  呼ばない)側で対応し、GSI追加は設計案として残した。
 
 ## 結論
 

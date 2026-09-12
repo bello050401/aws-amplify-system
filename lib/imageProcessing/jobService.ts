@@ -3,6 +3,8 @@ import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages } from "@/lib/amplify/listAll";
 import type { Schema } from "@/amplify/data/resource";
 import type { ImageClassificationName } from "@/lib/inventory/imageTypes";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
+import { isImageProcessingE2EKey, e2eListVersions, e2eListPendingJobStatuses } from "./e2eFixtures";
 import { ENGINE_VERSION } from "./sharpProcessor";
 import { buildIdempotencyKey } from "./pipeline";
 
@@ -167,6 +169,11 @@ export async function triggerImageProcessingIfNeeded(input: {
  */
 export async function listPendingJobStatuses(imageStorageKeys: string[]): Promise<Record<string, "PENDING" | "PROCESSING">> {
   if (imageStorageKeys.length === 0) return {};
+  if (isE2EFixtureModeActive() && imageStorageKeys.every(isImageProcessingE2EKey)) return e2eListPendingJobStatuses(imageStorageKeys);
+  // 呼び出し元(selectPendingStatusLookupKeys)は通常すでに重複の無い
+  // storageKeyの配列を渡すが、ここでも同じkeyのOR条件を重複させない
+  // よう一度だけ絞る(filter式が無駄に長くなるのを防ぐ、実害は軽微)。
+  const uniqueKeys = [...new Set(imageStorageKeys)];
   // ★ Limit-before-Filter の再発防止(2026-09-02)。
   //
   // DynamoDBの Limit は**フィルタ適用前に読む件数**の上限。filter付きの
@@ -180,7 +187,7 @@ export async function listPendingJobStatuses(imageStorageKeys: string[]): Promis
       const res = await serverDataClient.models.ProcessingJob.list({
         filter: {
           and: [
-            { or: imageStorageKeys.map((k) => ({ imageStorageKey: { eq: k } })) },
+            { or: uniqueKeys.map((k) => ({ imageStorageKey: { eq: k } })) },
             { or: [{ status: { eq: "PENDING" } }, { status: { eq: "PROCESSING" } }] },
           ],
         },
@@ -205,35 +212,70 @@ export async function listPendingJobStatuses(imageStorageKeys: string[]): Promis
 }
 
 /**
- * その画像(imageStorageKey)の全バージョン、version昇順。schema側の
- * secondaryIndexes(index("imageStorageKey"))はDynamoDB上のGSIとしては
- * 実在するが、このリポジトリの既存コード(lib/listing/service.tsの
- * channelListingByInventoryId等)は生成されたper-index専用クエリ関数
- * ではなく`.list({filter})`を一貫して使っているため、ここでも同じ
- * 呼び出し方に揃える(呼び出し規約を1つに保つ——想定行数はこの画像の
- * 加工履歴のみなので、Scan相当のfilter付きlistでも許容範囲)。
+ * その画像(imageStorageKey)の全バージョン、version昇順。
+ *
+ * 【状態表示読取性能P2、2026-09-13】以前はここも
+ * `.list({filter:{imageStorageKey:{eq}}})`——DynamoDB Scan相当、
+ * ImageProcessingVersionテーブル全体(全商品・全画像ぶん、旧versionを
+ * 消さない追記専用設計で無制限に増える)を毎回走査していた。
+ * docs/gsi-scan-audit.md(第五ラウンド§6 P0-B)はこの箇所を「GSI宣言済み
+ * だが未使用、意図的」と記録していたが、その根拠は「1画像あたりの
+ * バージョン数は数件〜十数件規模」——**Queryが返す件数**の話であって、
+ * **Scanが走査する件数**(テーブル全体の行数、無制限に増加)の話では
+ * なかった。かつこの呼び出しはImageProcessingPanel.tsxが画像1枚ごとに
+ * 呼ぶため、商品詳細を開くたびに「画像枚数×テーブル全体Scan」が発生する
+ * ——同監査の優先基準(a)高頻度・(b)無界増加のうち実は両方に該当する。
+ * schemaのsecondaryIndexes(index("imageStorageKey"))は既に宣言済みで、
+ * 他モデル(InventoryHistory/ListingDraft/ChannelListing/Message、
+ * lib/inventory/queries.ts・lib/listing/service.ts・lib/messaging/
+ * service.ts参照)と同じく`list<Model>By<Field>`が実際に生成されている
+ * ため、スキーマ変更なしでScan→真のQueryへ切り替えられる
+ * (docs/image-status-read-perf-20260913.md参照)。
  */
 export async function listVersions(imageStorageKey: string) {
-  // 同上 —— ImageProcessingVersion も追記専用で増え続けるテーブル。
-  // 1ページだけ読むと、版が増えたある日から**加工済みの画像が画面に
-  // 出なくなる**(「未加工」と表示される)。件数が少ないうちは動いて
-  // 見えるので、増えてから気づくことになる。
+  if (isE2EFixtureModeActive() && isImageProcessingE2EKey(imageStorageKey)) return e2eListVersions(imageStorageKey);
   // 版の行そのものの型。Amplify の list の戻り値から引くと条件型が
   // 深くなりすぎて tsc が止まるので、Schema から直接取る。
   type VersionRow = Schema["ImageProcessingVersion"]["type"];
   const data = await listAllPages<VersionRow>(
     async (nextToken) => {
-      const res = await serverDataClient.models.ImageProcessingVersion.list({
-        filter: { imageStorageKey: { eq: imageStorageKey } },
-        limit: 200,
-        nextToken,
-        ...inventoryAuthMode,
-      });
+      const res = await serverDataClient.models.ImageProcessingVersion.listImageProcessingVersionByImageStorageKey(
+        { imageStorageKey },
+        { limit: 200, nextToken, ...inventoryAuthMode },
+      );
       return { data: res.data as unknown as VersionRow[], nextToken: res.nextToken, errors: res.errors };
     },
     { label: "画像加工の版" },
   );
   return data.sort((a, b) => a.version - b.version);
+}
+
+/**
+ * 【状態表示読取性能P2】ImageProcessingPanel.tsxが画像ごとに
+ * `listImageProcessingVersionsAction`を1回ずつ呼んでいた(画像N枚の
+ * 商品を開くたびにServer Action往復がN回)のを、1回のServer Action往復
+ * にまとめるためのバッチ版。DynamoDB Queryの回数自体は変わらない
+ * (画像ごとに1回、上のlistVersionsをそのまま再利用——`listAllPages`の
+ * 冪等な読取専用ヘルパーなので複数回呼んでも副作用は無い)が、
+ * ブラウザ↔Next.jsサーバー間の往復回数をN回→1回へ減らす。
+ *
+ * 同じstorageKeyが入力に複数回含まれていても(呼び出し元の重複、または
+ * 商品説明に同じ画像が複数回参照される等)Queryを重複発行しない——
+ * 一度だけ取得し、結果を全ての出現キーへ配る。
+ *
+ * 1枚の取得が失敗しても他の画像の表示を道連れにしない
+ * (Promise.allではなくallSettled) —— 失敗したキーは`null`を返し、
+ * 「取得失敗」と「バージョンが0件(未加工)」を呼び出し側が区別できる
+ * ようにする(§13.2「エラーや取りこぼしを0件と混同しない」と同じ原則)。
+ */
+export async function listVersionsForKeys(imageStorageKeys: string[]): Promise<Record<string, Awaited<ReturnType<typeof listVersions>> | null>> {
+  const uniqueKeys = [...new Set(imageStorageKeys)];
+  const results = await Promise.allSettled(uniqueKeys.map((key) => listVersions(key)));
+  const out: Record<string, Awaited<ReturnType<typeof listVersions>> | null> = {};
+  results.forEach((result, i) => {
+    out[uniqueKeys[i]] = result.status === "fulfilled" ? result.value : null;
+  });
+  return out;
 }
 
 /**

@@ -36,6 +36,10 @@ zaico-verification/output/
 # QA中に使う一時スクリプト(コミットしない)
 .*.mjs
 
+# ImageProcessingPanel実React境界試験ハーネスのesbuildビルド出力
+# (scripts/qa-image-processing-harness/build.mjsで再生成できる)
+scripts/qa-image-processing-harness/dist/
+
 # E2E用のStaging認証情報（コミット禁止・使用後は削除）
 .env.e2e.local
 

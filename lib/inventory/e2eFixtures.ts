@@ -103,7 +103,17 @@ function makeRow(i: number, overrides: Partial<InventoryListRow> = {}): Inventor
   };
 }
 
-export const E2E_INVENTORY_ROWS: InventoryListRow[] = Array.from({ length: 12 }, (_, i) => makeRow(i + 1));
+export const E2E_INVENTORY_ROWS: InventoryListRow[] = [
+  ...Array.from({ length: 12 }, (_, i) => makeRow(i + 1)),
+  // 画像状態取得の実React境界と最終統合(2026-09-13)専用: ImageProcessingPanel.tsx
+  // 自身の読取(バージョン一覧・pending job状態)を実際のアプリ・実ブラウザで
+  // 確認するための商品。下のE2E_GALLERY_FIXTURE_IMAGES["e2e-inv-20"]が
+  // 使う"e2e-imgproc:"接頭辞キー(lib/imageProcessing/e2eFixtures.ts参照)は
+  // ギャラリー用の"e2e-fixture:"接頭辞と別物 — ImageProcessingPanel.tsxの
+  // isE2EFixtureStorageKeyフィルタに引っかからず、このパネルの実際の
+  // 読取ロジックを通る。
+  makeRow(20),
+];
 
 export function e2eListPage(offset: number, limit: number): SearchPage<InventoryListRow> {
   const items = E2E_INVENTORY_ROWS.slice(offset, offset + limit);
@@ -163,6 +173,19 @@ const E2E_GALLERY_FIXTURE_IMAGES: Record<string, InventoryImageRecord[]> = {
   "e2e-inv-5": [
     e2eFixtureImage({ storageKey: "e2e-fixture:original-switch-a", thumbnailKey: "e2e-fixture:small", mediumKey: "e2e-fixture:medium-delayed", sortOrder: 0, isPrimary: true }),
     e2eFixtureImage({ storageKey: "e2e-fixture:original-switch-b", thumbnailKey: "e2e-fixture:small", mediumKey: null, sortOrder: 1, isPrimary: false }),
+  ],
+  // ImageProcessingPanel実React境界試験(2026-09-13)専用 — 各storageKeyの
+  // シナリオはlib/imageProcessing/e2eFixtures.tsのe2eListVersions/
+  // e2eListPendingJobStatusesで定義する。ギャラリー表示自体(実画像の
+  // 署名解決)はこのE2Eフィクスチャの対象外のため崩れて見えてよい——
+  // ここで検証したいのはImageProcessingPanel.tsx側の状態表示・再試行
+  // 導線であり、実画像の見た目ではない。
+  "e2e-inv-20": [
+    e2eFixtureImage({ storageKey: "e2e-imgproc:ready-1", sortOrder: 0, isPrimary: true }),
+    e2eFixtureImage({ storageKey: "e2e-imgproc:partial-fail", sortOrder: 1 }),
+    e2eFixtureImage({ storageKey: "e2e-imgproc:race", sortOrder: 2 }),
+    e2eFixtureImage({ storageKey: "e2e-imgproc:whole-fail-once", sortOrder: 3 }),
+    e2eFixtureImage({ storageKey: "e2e-imgproc:busy-processing", sortOrder: 4 }),
   ],
 };
 
