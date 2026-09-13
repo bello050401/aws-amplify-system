@@ -512,12 +512,10 @@ export interface ListingsOverviewTimedResult {
  * `listAllMasterEntries("Category")`を呼んでいた(=`categoryNames`段階と
  * 合わせて実質2回のCategory取得を別々に計測していた)。今は
  * `categoryNames`段階と同じ1個のPromise(`categoryOutcomePromise`)を
- * 待ってから対象カテゴリごとのGSI読み取りへ進む——Category取得の待ち
- * 時間は`categoryNames`段階の壁時計として1回だけ数えられ、
- * `ecEligibleInventory`段階にはそのGSI読み取り自体の待ち時間が主に乗る
- * (Category解決を待つ分だけ多少上乗せされ得るが、`Promise.all`内で
- * 全段階が同時に発火するため、その上乗せは通常ごく小さい)。総readの
- * 回数・件数への影響は無い——変わるのは壁時計の内訳だけ。
+ * 待ってから対象カテゴリごとのGSI読み取りへ進む。
+ * `ecEligibleInventory`の壁時計時間にはCategoryの待ち時間も含まれる。
+ * 各段階は重なりを持つため、その合計を総待ち時間として扱わない。
+ * Categoryの読取要求自体は1回だけであり、総待ち時間はtotalMsで確認する。
  */
 async function fetchListingsOverviewRowsTimed(): Promise<{ rows: ListingOverviewRow[]; stages: ListingsOverviewStageTiming[] }> {
   const categoryOutcomePromise = measureStage("categoryNames", () => listAllMasterEntries("Category"));
