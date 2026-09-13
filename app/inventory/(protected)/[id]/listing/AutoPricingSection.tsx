@@ -70,7 +70,7 @@ export function AutoPricingSection({
 
   useEffect(() => {
     listPriceHistoryAction(channelListing.id)
-      .then(setHistory)
+      .then((entries) => setHistory(Array.isArray(entries) ? entries : []))
       .catch(() => setHistory([])); // 履歴が読めなくても値下げ設定自体は使えるべきなので握りつぶす
   }, [channelListing.id]);
 
