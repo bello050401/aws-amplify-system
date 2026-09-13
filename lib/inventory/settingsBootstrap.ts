@@ -3,6 +3,7 @@ import { dedupeMasterEntries } from "@/lib/inventory/masterDedupe";
 import { seedInventoryMasters } from "@/lib/inventory/masterSeed";
 import { seedCustomFieldDefinitions } from "@/lib/inventory/customFieldSeed";
 import { seedShippingRates } from "@/lib/shipping/service";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 
 /**
  * 設定画面の初回ブートストラップ(マスタのdedupe + 各種seed)を、
@@ -63,6 +64,21 @@ async function runBootstrap(): Promise<void> {
  * 同時に複数リクエストが来ても、実際の処理は1つに畳まれる。
  */
 export async function ensureSettingsBootstrap(): Promise<void> {
+  // 2026-09-14 指示書レビュー: 設定画面のPlaywright E2E(fixtureモード)が
+  // dedupeMasterEntries/seedInventoryMasters/seedCustomFieldDefinitions/
+  // seedShippingRates経由でAppSyncへ実際に書き込みを試みていた
+  // (mercari-final-e2e-own.logで観測されたUnitMaster作成試行の根本原因)。
+  // isE2EFixtureModeActive()は他のe2eFixtures.tsと同じ二重ゲート
+  // (NODE_ENV!=="production" && INVENTORY_E2E_FIXTURES==="1")なので、
+  // 本番はもちろん通常のローカル開発でも一切分岐しない。fixtureモードでは
+  // 「整い済み」として扱い、実書き込みを一切行わない —— 設定画面自体は
+  // listAllMasterEntries等の各読み取り側が別途fixtureへ分岐する
+  // (lib/inventory/masters.ts等参照)ので、この関数が空振りしても画面は
+  // 正常に描画できる。
+  if (isE2EFixtureModeActive()) {
+    completed = true;
+    return;
+  }
   if (completed) return;
   if (inFlight) return inFlight;
   inFlight = runBootstrap()

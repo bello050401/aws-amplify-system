@@ -113,6 +113,14 @@ export const E2E_INVENTORY_ROWS: InventoryListRow[] = [
   // isE2EFixtureStorageKeyフィルタに引っかからず、このパネルの実際の
   // 読取ロジックを通る。
   makeRow(20),
+  // 2026-09-14 指示書レビュー修正: EC出品個別編集画面(ListingForm.tsx)の
+  // 「出品内容をコピー（手動出品用）」ボタン・AutoPricingSectionの
+  // manual-only注記を実Playwrightでクリック検証するための専用商品。
+  // lib/listing/service.tsのgetListingDraftForInventory/getChannelListing
+  // がこのidだけに下書き・ChannelListing(MERCARI_SHOPS)を合成で返す
+  // (lib/listing/e2eFixtures.ts参照)——他のe2e-inv-*行は今まで通り
+  // 「下書き無し」のまま(既存specへの影響ゼロ)。
+  makeRow(30),
 ];
 
 export function e2eListPage(offset: number, limit: number): SearchPage<InventoryListRow> {

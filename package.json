@@ -100,6 +100,7 @@
     "verify:listing-description": "node scripts/with-server-only-stub.cjs scripts/verify-listing-description.ts",
     "verify:listing-description-live": "node scripts/with-server-only-stub.cjs scripts/verify-listing-description-live.ts",
     "verify:listings-overview-service-boundary": "tsx scripts/verify-listings-overview-service-boundary.ts",
+    "verify:settings-e2e-isolation": "tsx scripts/verify-settings-e2e-isolation.ts",
     "verify:listings-overview-timing": "tsx scripts/verify-listings-overview-timing.ts",
     "verify:listings-overview-table-logic": "tsx scripts/verify-listings-overview-table-logic.ts",
     "verify:listings-overview-failure-classification": "tsx scripts/verify-listings-overview-failure-classification.ts",

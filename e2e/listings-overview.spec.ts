@@ -37,7 +37,15 @@ async function signIn(page: Page, role: "ADMIN" | "VIEWER" = "ADMIN") {
 }
 
 const heading = (page: Page) => page.getByRole("heading", { name: "EC出品" });
-const guidance = (page: Page) => page.getByText("在庫の商品をMercari", { exact: false });
+// 2026-09-14 指示書「Mercari API不可の運用と案内を一致させる」対応:
+// EXTERNAL_WRITES_ENABLED未設定(既定fail-closed、このE2E harnessの
+// webServerも設定していない)では、app/inventory/(protected)/listings/
+// page.tsxの案内文は「在庫の商品についてMercari Shops向けの出品準備...」
+// (manual-only文言)へ分岐する——以前の「在庫の商品をMercari Shopsへ
+// 出品する状況を...」は書き込みが許可されている場合のみ出る分岐に
+// なった。ここでは両分岐に共通する冒頭部分だけを見て、「一覧データ
+// 取得を待たずに案内文が先に描画される」という本来の検証意図を保つ。
+const guidance = (page: Page) => page.getByText("在庫の商品について", { exact: false });
 // Next.jsのroute announcer(__next-route-announcer__)も常時role="alert"
 // を持つため、getByRole("alert")だけだと2要素にヒットする(strict mode
 // violation、実測)。テキストで直接絞り込む。

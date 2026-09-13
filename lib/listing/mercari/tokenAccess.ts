@@ -2,6 +2,7 @@ import "server-only";
 import { getMercariConnectionFromSecretsManager, getMercariTokenFromSecretsManager, readMercariConnectionSecret } from "./secretStore";
 import { formatMercariUserAgent, MERCARI_DEFAULT_CLIENT_VERSION } from "./endpoints";
 import { isExternalWriteEnabled } from "@/lib/integrations/writeGuard";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 
 /**
  * BELLO統合改修 master指示書 Phase D — lib/zaico/client.tsの
@@ -137,7 +138,34 @@ export interface MercariConnectionState {
   writesEnabled: boolean;
 }
 
+/**
+ * 2026-09-14 指示書レビュー: 設定画面/EC出品個別編集画面のPlaywright
+ * E2E(fixtureモード)がgetMercariConnectionState経由でAWS Secrets Manager
+ * (readMercariConnectionSecret→GetSecretValue)へ実際に到達していた
+ * (mercari-final-e2e-own.logで観測)。isExternalWriteEnabled自体は環境
+ * 変数だけを見る同期関数なのでAWSへは到達しない——ここではそのまま
+ * 使い、Secret読み取りだけを合成値に差し替える。「TOKEN保存済み・
+ * 接続確認済み(verified)だが、この運用ではAPI送信は行わない
+ * (writesEnabled=false、既定fail-closed)」という実運用の状態を再現し、
+ * ListingForm.tsx/MercariSettingsPanel.tsxのmanual-only文言・「出品内容
+ * をコピー」導線を実ブラウザで検証できるようにする。
+ */
+function e2eMercariConnectionState(): MercariConnectionState {
+  return {
+    tokenSource: "secrets-manager",
+    clientName: "e2e-fixture-client",
+    clientNameSource: "secrets-manager",
+    clientVersion: MERCARI_DEFAULT_CLIENT_VERSION,
+    verification: "verified",
+    lastCheckedAt: "2026-09-14T00:00:00.000Z",
+    lastCheckCode: "200",
+    secretReadError: null,
+    writesEnabled: isExternalWriteEnabled("MERCARI_SHOPS"),
+  };
+}
+
 export async function getMercariConnectionState(): Promise<MercariConnectionState> {
+  if (isE2EFixtureModeActive()) return e2eMercariConnectionState();
   const read = await readMercariConnectionSecret();
 
   const envToken = process.env.MERCARI_ACCESS_TOKEN?.trim();

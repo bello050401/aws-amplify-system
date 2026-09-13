@@ -26,7 +26,8 @@
  * 先頭1件(index 0)には検索テスト用の一意な名前を付けてある。
  */
 import type { ListingOverviewRow } from "./service";
-import type { ChannelListingRecord, ListingStatus } from "./types";
+import type { ChannelListingRecord, ListingDraftRecord, ListingStatus } from "./types";
+import { DEFAULT_LISTING_SHIPPING_METHOD } from "./types";
 
 const ALL_STATUSES: ListingStatus[] = [
   "NOT_PREPARED",
@@ -156,4 +157,80 @@ export async function e2eListingsOverviewFetch(): Promise<ListingOverviewRow[]> 
   }
   await new Promise((resolve) => setTimeout(resolve, 5000));
   return E2E_LISTINGS_OVERVIEW_ROWS;
+}
+
+/**
+ * 2026-09-14 指示書レビュー修正: EC出品個別編集画面(app/inventory/
+ * (protected)/[id]/listing/ListingForm.tsx)の「出品内容をコピー
+ * （手動出品用）」ボタン・AutoPricingSectionのmanual-only注記は、
+ * どちらも「下書き(ListingDraft)とChannelListing(MERCARI_SHOPS)が
+ * 既に存在する」商品でしか描画されない(ボタンは`disabled={!draft}`、
+ * AutoPricingSectionは`{channelListing && (...)}`)。
+ *
+ * 従来のlib/listing/service.tsのgetListingDraftForInventory/
+ * getChannelListingは、fixtureモードでは商品を問わず常にnullを返して
+ * いた(第六ラウンドP0-1)——一覧・画像等の既存E2Eには十分だったが、
+ * このボタン・セクション自体を実ブラウザでクリックして確かめる経路が
+ * 無かった。lib/inventory/e2eFixtures.tsに専用に追加したe2e-inv-30
+ * だけ、この2つの合成レコードを返す(他のidは従来通りnull——既存の
+ * listing-layout.spec.ts等はe2e-inv-1を使っており挙動は変えない)。
+ */
+export const E2E_MANUAL_ONLY_INVENTORY_ID = "e2e-inv-30";
+
+const E2E_MANUAL_ONLY_NOW = "2026-09-14T00:00:00.000Z";
+
+export function e2eManualOnlyListingDraft(): ListingDraftRecord {
+  return {
+    id: "e2e-fixture-ld-30",
+    inventoryId: E2E_MANUAL_ONLY_INVENTORY_ID,
+    title: "【E2Eテスト】北欧デザインダイニングチェア ウォールナット材 30号",
+    description: "手動出品支援の実ブラウザ検証専用の合成下書き説明文です。",
+    price: 27800,
+    condition: "NO_NOTABLE_DAMAGE",
+    shippingMethod: DEFAULT_LISTING_SHIPPING_METHOD,
+    images: [],
+    createdBy: "e2e-fixture",
+    updatedBy: "e2e-fixture",
+    createdAt: E2E_MANUAL_ONLY_NOW,
+    updatedAt: E2E_MANUAL_ONLY_NOW,
+  };
+}
+
+export function e2eManualOnlyChannelListing(): ChannelListingRecord {
+  return {
+    id: "e2e-fixture-cl-30",
+    listingDraftId: "e2e-fixture-ld-30",
+    inventoryId: E2E_MANUAL_ONLY_INVENTORY_ID,
+    channel: "MERCARI_SHOPS",
+    categoryMapping: null,
+    overrideTitle: null,
+    overrideDescription: null,
+    overridePrice: null,
+    status: "DRAFT",
+    externalListingId: null,
+    listingUrl: null,
+    firstListedAt: null,
+    lastListedAt: null,
+    lastRelistedAt: null,
+    endedAt: null,
+    soldAt: null,
+    lastError: null,
+    autoPricingEnabled: false,
+    pricingRuleId: null,
+    originalPrice: null,
+    currentPrice: null,
+    floorPrice: null,
+    markdownCount: 0,
+    lastPriceChangeAt: null,
+    nextPriceActionAt: null,
+    automationHold: false,
+    lastAutomationResult: null,
+    shippingRank: null,
+    shippingDestinationPrefecture: null,
+    calculatedShippingFee: null,
+    confirmedShippingFee: null,
+    shippingFeeUpdatedAt: null,
+    createdAt: E2E_MANUAL_ONLY_NOW,
+    updatedAt: E2E_MANUAL_ONLY_NOW,
+  };
 }

@@ -1,6 +1,7 @@
 import "server-only";
 import { getZaicoTokenFromSecretsManager } from "./secretStore";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 
 /**
  * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
@@ -107,6 +108,14 @@ export type ZaicoTokenSource = "secrets-manager" | "env-fallback" | "unconfigure
  * るかどうかを、Secret値を一切表示せずにブラウザから確認できる。
  */
 export async function getZaicoTokenSource(): Promise<ZaicoTokenSource> {
+  // 2026-09-14 指示書レビュー: 設定画面のPlaywright E2E(fixtureモード)が
+  // ここ経由でAWS Secrets Managerへ実際に到達していた(GetSecretValue)。
+  // 設定画面はこの関数を接続状態の表示にしか使わない(値そのものは返さ
+  // ない)ので、fixtureモードでは合成値を返す——他の呼び出し元
+  // (lib/zaico/client.ts自身のgetZaicoApiToken等、実際のZAICO同期処理)は
+  // このE2Eフラグが有効な間に呼ばれることは無い(npm run test:e2eの
+  // Playwright実行時にZAICO同期を起動する経路は無い)。
+  if (isE2EFixtureModeActive()) return "secrets-manager";
   if (await getZaicoTokenFromSecretsManager()) return "secrets-manager";
   if (process.env.ZAICO_API_TOKEN) return "env-fallback";
   return "unconfigured";

@@ -2,6 +2,7 @@ import { isBaseConnected } from "./oauth";
 import { getBaseCredentialsState, type BaseCredentialsSource } from "./secretStore";
 import { buildRedirectUriFromHost } from "./redirectUri";
 import { isExternalWriteEnabled } from "@/lib/integrations/writeGuard";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 
 /**
  * BASE APIの接続状態を、設定画面が「正直に」表示できる形へまとめる
@@ -134,7 +135,39 @@ export function shouldUseBaseMock(): boolean {
  *   BASE Developersへ登録すべきコールバックURLを組み立てるためだけに使う。
  *   渡されなければ redirectUri は null になり、画面は環境変数側の値を案内する。
  */
+/**
+ * 2026-09-14 指示書レビュー: 設定画面のPlaywright E2E(fixtureモード)が
+ * getBaseCredentialsState()経由でAWS Secrets Managerへ、isBaseConnected()
+ * 経由でDynamoDB(BaseOAuthToken)へ、それぞれ実際に到達していた
+ * (isBaseMockForced()の分岐より前に無条件でgetBaseCredentialsState()を
+ * awaitしていたため、BASE_USE_MOCKを立てても素通りしなかった)。
+ *
+ * BASEは実際に接続可能な機能なので(§6「BASE退行させない」)、fixtureでも
+ * 「接続済み」の実際の画面(§9で要求される「BASEも実際の接続画面が出る
+ * ことを確認」)をPlaywrightから検証できるよう、CONNECTED状態を返す —
+ * 秘匿値は一切含まない合成データ。
+ */
+function e2eBaseConnectionState(host: string | null | undefined): BaseConnectionState {
+  return {
+    status: "CONNECTED",
+    usingRealApi: true,
+    dataSource: "REAL",
+    hasAppCredentials: true,
+    credentialsSource: "secrets-manager",
+    clientId: "e2e-fixture-client-id",
+    requestWriteItems: false,
+    credentialsUpdatedAt: "2026-09-14T00:00:00.000Z",
+    credentialsUpdatedBy: "e2e-fixture",
+    redirectUri: buildRedirectUriFromHost(host ?? null),
+    writesEnabled: isExternalWriteEnabled("BASE"),
+    hasOAuthToken: true,
+    message: "接続済み。特集ページ作成機能と商品説明分析機能は、この同じ接続を共用します（認証情報はサーバー側にのみ保存されています）。",
+    checkError: null,
+  };
+}
+
 export async function getBaseConnectionState(host?: string | null): Promise<BaseConnectionState> {
+  if (isE2EFixtureModeActive()) return e2eBaseConnectionState(host);
   const credentials = await getBaseCredentialsState();
   const hasAppCredentials = credentials.source !== "unconfigured";
   const redirectUri = buildRedirectUriFromHost(host ?? null);

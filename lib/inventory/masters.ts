@@ -2,6 +2,7 @@ import "server-only";
 import { invalidateMasterCache } from "./masterCache";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages, unwrapList } from "@/lib/amplify/listAll";
+import { isE2EFixtureModeActive } from "./e2eFixtures";
 
 /**
  * Category / Location / Unit share an identical shape (name/sortOrder/
@@ -103,8 +104,39 @@ async function existingStatusCodes(): Promise<Set<string>> {
   return new Set(data.map((d) => d.code));
 }
 
+/**
+ * 設定画面(app/inventory/(protected)/settings/page.tsx)のPlaywright
+ * E2E(fixtureモード)専用の合成データ。listCategories/listLocations/
+ * listStatuses(lib/inventory/queries.ts)がlib/inventory/e2eFixtures.tsの
+ * E2E_CATEGORIES等へ分岐しているのと同じ理由・同じ二重ゲート
+ * (isE2EFixtureModeActive — NODE_ENV!=="production" &&
+ * INVENTORY_E2E_FIXTURES==="1") — このゲートの外では絶対に通らない。
+ * 無効化済みエントリも1件含め、「全件表示(isActive問わず)」という
+ * この関数固有の挙動を実ブラウザで確認できるようにしてある。
+ */
+function e2eAllMasterEntries(model: MasterModelName): MasterEntry[] {
+  if (model === "Category") {
+    return [
+      { id: "e2e-cat-sofa", name: "ソファ", sortOrder: 1, isActive: true },
+      { id: "e2e-cat-table", name: "テーブル・デスク", sortOrder: 2, isActive: true },
+      { id: "e2e-cat-disabled", name: "廃止済みカテゴリ(E2E)", sortOrder: 99, isActive: false },
+    ];
+  }
+  if (model === "Location") {
+    return [
+      { id: "e2e-loc-a1", name: "第一倉庫 Aエリア", sortOrder: 1, isActive: true },
+      { id: "e2e-loc-b1", name: "第二倉庫", sortOrder: 2, isActive: true },
+    ];
+  }
+  if (model === "Unit") {
+    return [{ id: "e2e-unit-piece", name: "個", sortOrder: 1, isActive: true }];
+  }
+  return [{ id: "e2e-st-photo", name: "撮影待ち", sortOrder: 1, isActive: true }];
+}
+
 /** Every entry regardless of isActive — the settings screen needs to show (and let ADMIN re-enable) disabled ones too, unlike listCategories()/listLocations() in queries.ts which only ever return active entries for the registration/edit forms' dropdowns. */
 export async function listAllMasterEntries(model: MasterModelName): Promise<MasterEntry[]> {
+  if (isE2EFixtureModeActive()) return e2eAllMasterEntries(model); // 設定画面E2E外部到達ゼロ化(2026-09-14)
   if (model === "Unit") {
     // UnitMasterは今回(夜間開発)追加したschemaで、AWS側の再デプロイ
     // (ampx sandbox / hosting build)が済むまでは実際のバックエンドに

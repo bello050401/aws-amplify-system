@@ -902,6 +902,10 @@ export const listCustomFieldDefinitions = requestCache(async function listCustom
 
 /** 設定画面の追加項目管理タブ専用 — 無効化済みも含めた全件(ADMINが再度有効化できるように、lib/inventory/masters.tsのlistAllMasterEntriesと同じ考え方)。 */
 export async function listAllCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
+  // 2026-09-14 指示書レビュー: 設定画面のE2E(fixtureモード)がここを経由
+  // してAppSyncへ到達していた——listCustomFieldDefinitions(§上)と同じ
+  // 安全ゲート・同じ合成データ(E2E_CUSTOM_FIELD_DEFS)へ分岐する。
+  if (isE2EFixtureModeActive()) return E2E_CUSTOM_FIELD_DEFS;
   // filter が無いので間引きは起きないが、既定100件で**1ページ目だけ**を
   // 返すのは同じ。設定画面の管理タブは全件が出ていないと困る。
   const data = await listAllPages(

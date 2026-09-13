@@ -8,7 +8,7 @@ import { createMercariProduct } from "./mercari/adapter";
 import { createBaseProduct } from "./base/adapter";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
-import { e2eListingsOverviewFetch } from "./e2eFixtures";
+import { e2eListingsOverviewFetch, E2E_MANUAL_ONLY_INVENTORY_ID, e2eManualOnlyChannelListing, e2eManualOnlyListingDraft } from "./e2eFixtures";
 import { unwrapList, unwrapWriteRequired } from "@/lib/amplify/listAll";
 import { attachStageTimings, currentQueryTimings, getStageTimings, groupTimingsByOp, isQueryTimingEnabled, measureStage, withQueryTiming } from "@/lib/perf/queryTiming";
 import {
@@ -231,7 +231,15 @@ export async function getListingDraftForInventory(inventoryId: string): Promise<
   // 第六ラウンドP0-1: E2E fixtureモードでは常に「下書きなし」——
   // lib/inventory/e2eFixtures.tsと同じ二重ゲート(NODE_ENV!=='production'
   // かつ明示的opt-in環境変数)、読み取り専用。
-  if (isE2EFixtureModeActive()) return null;
+  //
+  // 2026-09-14 指示書レビュー修正: 「出品内容をコピー（手動出品用）」
+  // ボタンは下書きが無いと描画されない(disabled={!draft}) —— ボタン
+  // 自体を実Playwrightでクリック検証するため、専用id(e2e-inv-30)
+  // だけは合成の下書きを返す。他のidは従来通りnull(既存specは無変更)。
+  if (isE2EFixtureModeActive()) {
+    if (inventoryId === E2E_MANUAL_ONLY_INVENTORY_ID) return e2eManualOnlyListingDraft();
+    return null;
+  }
   // 取得に失敗して0件が返ると「下書きは無い」と表示され、そこから
   // 保存すると2件目の下書きができる。失敗は0件ではない。
   const data = unwrapList(
@@ -252,7 +260,14 @@ export async function getListingDraftForInventory(inventoryId: string): Promise<
  * Scanを避けつつ、宣言されていない複合キーを偽装しない。
  */
 export async function getChannelListing(inventoryId: string, channel: ListingChannel): Promise<ChannelListingRecord | null> {
-  if (isE2EFixtureModeActive()) return null; // 第六ラウンドP0-1、getListingDraftForInventoryと同じ安全ゲート
+  if (isE2EFixtureModeActive()) {
+    // 2026-09-14 指示書レビュー修正: AutoPricingSectionはchannelListingが
+    // 無いと描画されない({channelListing && (...)}) —— getListingDraft
+    // ForInventoryと同じ専用id・同じ理由で合成のChannelListing(MERCARI_
+    // SHOPS)を返す。他のid/チャネルは従来通りnull。
+    if (inventoryId === E2E_MANUAL_ONLY_INVENTORY_ID && channel === "MERCARI_SHOPS") return e2eManualOnlyChannelListing();
+    return null; // 第六ラウンドP0-1、getListingDraftForInventoryと同じ安全ゲート
+  }
   const data = unwrapList(
     await serverDataClient.models.ChannelListing.listChannelListingByInventoryId({ inventoryId }, { ...inventoryAuthMode }),
     "チャネル出品",

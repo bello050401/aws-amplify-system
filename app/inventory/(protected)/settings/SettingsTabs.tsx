@@ -93,25 +93,39 @@ export function SettingsTabs({
   // BASE OAuthのcallbackは `?tab=base` を付けてこのページへ戻る。
   // 操作を始めたタブへ結果と一緒に戻らないと、利用者は連携が成功したのか
   // どうかを確かめる場所を自分で探す羽目になる。
-  const initialTab = useSearchParams().get("tab");
+  //
+  // 2026-09-14 指示書レビュー修正: 以前は`initialTab === "base"`だけを
+  // 特別扱いしており、`?tab=mercari`等それ以外の値は黙って既定の
+  // "category"へ落ちていた——EC出品（Mercari）タブへの直接リンク・
+  // Playwright E2Eでの`?tab=mercari`ナビゲーションが実UIのuseStateへ
+  // 反映されず、初期タブ(カテゴリ)のまま描画される不具合だった
+  // (mercari-manual-e2e-own.logで観測)。VALID_TABSに含まれる値なら
+  // どれでも初期タブとして受け付ける——特定タブだけの特別扱いをやめ、
+  // クエリパラメータの意味(「このタブを開いた状態で戻す/開く」)を
+  // 全タブで一貫させる。
+  const VALID_TABS = [
+    "category",
+    "unit",
+    "location",
+    "customFields",
+    "columns",
+    "zaico",
+    "images",
+    "mercari",
+    "base",
+    "pricing",
+    "shipping",
+    "line",
+    "systemAudit",
+    "photoProfile",
+    "productDescription",
+  ] as const;
+  type Tab = (typeof VALID_TABS)[number];
 
-  const [tab, setTab] = useState<
-    | "category"
-    | "unit"
-    | "location"
-    | "customFields"
-    | "columns"
-    | "zaico"
-    | "images"
-    | "mercari"
-    | "base"
-    | "pricing"
-    | "shipping"
-    | "line"
-    | "systemAudit"
-    | "photoProfile"
-    | "productDescription"
-  >(initialTab === "base" ? "base" : "category");
+  const initialTab = useSearchParams().get("tab");
+  const isValidTab = (value: string | null): value is Tab => (VALID_TABS as readonly string[]).includes(value ?? "");
+
+  const [tab, setTab] = useState<Tab>(isValidTab(initialTab) ? initialTab : "category");
 
   const tabClass = (active: boolean) =>
     `border-b-2 px-3 py-2 text-[13px] ${active ? "border-gray-900 font-bold text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`;
