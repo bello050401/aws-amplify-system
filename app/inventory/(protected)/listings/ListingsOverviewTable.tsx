@@ -222,6 +222,7 @@ export function ListingsOverviewTable({ initialRows, canEdit }: { initialRows: L
     setState({ kind: "retrying" });
     try {
       const freshRows = await listListingsOverviewAction();
+      if (!Array.isArray(freshRows)) throw new Error("一覧の取得結果を確認できませんでした。");
       setState({ kind: "ok", rows: freshRows });
     } catch {
       setState({ kind: "error" });
