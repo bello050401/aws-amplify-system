@@ -1,0 +1,50 @@
+[perf] test-parallel-stage-2 — 合計 109ms / データアクセス 2本 計200ms
+     100ms  M.op (1件)
+     100ms  M.op (1件)
+✓ 並列2本とも成功すればok=true
+✓ 段階のelapsedMsは並列実行の壁時計(≒100ms)に近く、累積msの単純合計(≒200ms)にはならない(実測108ms)
+✓ 一方で累積ms(参考値)は単純合計のまま(実測200ms) — 両者は別の数字として区別して返す
+✓ 既定(BELLO_QUERY_TIMING未設定)は無効
+✓ 無効時もfn自体はそのまま呼ばれる(戻り値・例外を変えない契約)
+✓ 無効時、戻り値がそのまま返る
+✓ 無効時は記録が一切残らない(囲まれていないため)
+✓ attachStageTimingsは元のオブジェクトそのものへ付加する(型を変えない)
+✓ instanceof Error のまま
+✓ messageは変わらない
+✓ getStageTimingsで元の段階別計測を取り出せる
+✓ 付加されていない例外はgetStageTimingsが空配列を返す(段階情報が無いだけで失敗自体は分かる)
+✓ オブジェクトでない値(文字列throw等)を渡してもクラッシュせず空配列
+[perf] request-B — 合計 28ms / データアクセス 1本 計5ms
+       5ms  B.z (1件)
+[perf] request-A — 合計 44ms / データアクセス 2本 計30ms
+      20ms  A.y (1件)
+      10ms  A.x (1件)
+✓ ★要件: 同時に走るrequest-Aの計測はrequest-Bの記録を含まない(2本のみ、実測2本)
+✓ ★要件: request-Bの計測もrequest-Aの記録に汚染されない(常に自分の1本のみ、実測[1,1])
+✓ ゲートOFF時は{enabled:false}のみを返す
+✓ ★要件: ゲートOFF時はloadTimedOverviewを一切呼ばない(一覧の読み取りを発生させない)
+✓ 成功時はenabled:trueで200
+✓ 段階別計測をそのまま返す
+✓ 累積参考値もそのまま返す
+✓ 例外時はHTTP 500を返す
+✓ 例外時は種別ラベルだけを返す
+✓ 応答に元の例外メッセージが含まれない
+✓ 応答にAWS/テーブル名等の断片が含まれない
+✓ 応答にスタックトレースを含めない
+✓ ★要件: 失敗時も固定段階名/経過時間/成否は読み取れる(以前は汎用errorのみで失敗段階が消えていた)
+✓ 応答にrows(一覧の行)を含めない
+✓ 段階情報の無い例外でも失敗種別は返す
+✓ 段階情報が無ければ空配列(クラッシュしない)
+✓ listListingsOverviewはlistListingsOverviewWithTiming経由になっている(二重実装ではない)
+✓ EC一覧の読み取りがwithQueryTimingで計測に組み込まれている
+✓ 計測が有効なときだけ段階計測つきの経路を通る(既定は素通り)
+✓ 壁時計の段階計測(measureStage)を使っている
+✓ ListingsOverviewStageTiming の型定義が見つかる
+✓ 計測結果の型が段階名/経過時間/成否だけ(商品・顧客・認証情報のフィールドが無い)
+✓ 診断エンドポイントが画面と同じ閲覧権限でゲートされている
+✓ ★要件: 権限チェック(401)がbuildTimingResponsePayload呼び出しより先に行われる
+✓ 診断エンドポイントの応答本体組み立てがbuildTimingResponsePayload経由になっている
+✓ 診断エンドポイントの応答にrows(一覧の行)を含めていない
+✓ 診断エンドポイントの応答がno-storeを維持している
+
+40 passed, 0 failed

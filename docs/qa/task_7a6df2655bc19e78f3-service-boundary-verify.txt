@@ -1,0 +1,49 @@
+── listListingsOverview: ページtoken・要求数 ──────────────
+✓ ★要件: 250件のカテゴリはnextTokenで2ページ辿る(200件区切り) — calls=2
+✓ 10件のカテゴリは1ページで完結 — calls=1
+✓ 1ページ目はnextToken未指定
+✓ ★要件: 2ページ目は1ページ目の続き(nextToken=200)を渡す — nextToken=200
+✓ ★要件: ChannelListing.listはlimit=1000で呼ぶ(109a97e由来のP1改善を継承) — [1000]
+✓ ★要件: ListingDraft.listはlimit=1000で呼ぶ — [1000]
+✓ ★要件: 対象外カテゴリ(発送完了)はInventory GSIすら引かない
+✓ ★要件: 対象カテゴリの全件(250+10)がjoin後も残る — rows=260
+✓ 対象外カテゴリの行が紛れ込んでいない
+✓ ChannelListingが実際にjoinされている(externalListingId等)
+✓ ListingDraftの有無(hasDraft)が実際にjoinされている
+
+── 失敗の伝播: listListingsOverview vs listListingsOverviewSafe ──
+✓ ★要件: ChannelListingの取得が失敗したらlistListingsOverviewは例外を投げる(0件と混同しない)
+[lib/listing/service.ts] EC出品一覧の取得に失敗しました(ヘッダー等の表示は継続します) { error: 'Error' }
+✓ ★要件: listListingsOverviewSafeは同じ失敗を外へ投げずnullへ落とす(ページ全体のerror境界へ波及させない)
+✓ GraphQL errors(ListingDraft)経由の失敗も例外として伝播する
+[lib/listing/service.ts] EC出品一覧の取得に失敗しました(ヘッダー等の表示は継続します) { error: 'Error' }
+✓ GraphQL errors経由の失敗もlistListingsOverviewSafeはnullへ落とす
+✓ Inventory GSIの失敗(reject)も例外として伝播する
+[lib/listing/service.ts] EC出品一覧の取得に失敗しました(ヘッダー等の表示は継続します) { error: 'Error' }
+✓ Inventory GSI失敗経由もlistListingsOverviewSafeはnullへ落とす
+
+── 段階別の壁時計計測(BELLO_QUERY_TIMING=1、実service) ── elapsedMsと累積msの区別 ──
+[perf] listings-overview — 合計 190ms / データアクセス 0本 計0ms
+✓ 計測ONでも通常どおり260件返す(計測は結果を変えない) — rows=260
+✓ 4段階とも記録され、成功時はok:true
+✓ ★要件: ecEligibleInventoryの壁時計はchairの直列2往復(実測1往復≒94ms換算で≒188ms)に近く、chair+deskを完全直列に足した場合(≒282ms)には届かない — elapsedMs=189ms, 実測1往復=94ms
+✓ queryTotalsは配列として返る(このfixture経由では空配列 ── 上記コメント参照)
+✓ channelListings段階の壁時計は1往復ぶん相当に収まる(合計しても増えない) — 94ms
+✓ listingDrafts段階の壁時計も実測できる — 94ms
+
+── 途中ページ失敗(実service) ── 1本の失敗が他の段階の計測を巻き込まない ──
+[perf] listings-overview — 合計 33ms / データアクセス 0本 計0ms
+✓ ★要件: 途中ページ失敗もlistListingsOverviewは例外として投げる(既存の例外契約を維持)
+✓ ★要件: 4本すべての段階の計測が失われずに残る(以前は失敗した時点で計測結果を組み立てられなかった) — stages=[{"stage":"ecEligibleInventory","elapsedMs":33,"ok":false},{"stage":"channelListings","elapsedMs":0,"ok":true},{"stage":"listingDrafts","elapsedMs":0,"ok":true},{"stage":"categoryNames","elapsedMs":0,"ok":true}]
+✓ ★要件: 失敗した段階(ecEligibleInventory、chairの2ページ目)はok:falseとして記録される
+✓ ★要件: 失敗していない他の3段階(channelListings/listingDrafts/categoryNames)はok:trueのまま
+[perf] listings-overview — 合計 15ms / データアクセス 0本 計0ms
+[lib/listing/service.ts] EC出品一覧の取得に失敗しました(ヘッダー等の表示は継続します) { error: 'Error' }
+✓ listListingsOverviewSafeは同じ失敗を外へ投げずnullへ落とす(タイミング計測が有効でも契約は変わらない)
+[perf] listings-overview — 合計 16ms / データアクセス 0本 計0ms
+✓ 診断応答も同じ失敗を種別ラベルで返す
+✓ ★要件: 診断応答にも4段階すべての計測が乗る(以前は汎用errorのみで失敗段階が消えていた) — body.stages=[{"stage":"ecEligibleInventory","elapsedMs":15,"ok":false},{"stage":"channelListings","elapsedMs":0,"ok":true},{"stage":"listingDrafts","elapsedMs":0,"ok":true},{"stage":"categoryNames","elapsedMs":0,"ok":true}]
+✓ ★要件: 診断応答に元の例外メッセージ(GSI throttled)は含まれない
+✓ 診断応答にrows(一覧の行)を含めていない
+
+32 passed, 0 failed
