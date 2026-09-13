@@ -34,10 +34,26 @@ import type { PricingRuleRecord } from "@/lib/listing/pricing";
 export function AutoPricingSection({
   inventoryId,
   channelListing,
+  mercariApiWritesEnabled,
   onUpdated,
 }: {
   inventoryId: string;
   channelListing: ChannelListingRecord;
+  /**
+   * 2026-09-14 指示書レビュー補正: ここでの判定・記録機能自体は
+   * mercariApiWritesEnabledの値に関わらず常に安全(Mercariのupdate系
+   * ミューテーションはこのコンポーネント自体が呼ぶことはなく、lib/
+   * listing/pricingService.tsのrunPricingCheckがMercariチャネルでは
+   * 既にNOT_IMPLEMENTED固定で送信しない——ファイル冒頭コメント参照)。
+   * ただし従来の説明文は「有効にすると自動で値下げされます」と読め、
+   * ユーザーの運用(Mercari Shops APIへ実際に接続できない/manual-only)
+   * では実際に何が起きるかと食い違って見えた。ここでは能力判定
+   * (lib/integrations/writeGuard.tsのisExternalWriteEnabled
+   * ("MERCARI_SHOPS")、ListingForm.tsx経由)をUI文言に反映させるためだけ
+   * に使う——チェックボックスや保存自体は無効化しない(既存の判定・
+   * 記録・監査ログ用途は残す)。
+   */
+  mercariApiWritesEnabled: boolean;
   onUpdated: (updated: ChannelListingRecord) => void;
 }) {
   const [rules, setRules] = useState<PricingRuleRecord[]>([]);
@@ -105,7 +121,21 @@ export function AutoPricingSection({
     <div className="mt-4 border border-gray-200 p-4">
       <p className="mb-2 text-[12px] font-bold text-gray-700">自動価格設定</p>
       <p className="mb-2 text-[11px] text-gray-500">
-        有効にすると、選択したルールに従って一定期間ごとに自動で値下げされます（下限価格までで停止します）。既定は無効です。
+        有効にすると、選択したルールに従って一定期間ごとに値下げの判定・記録が行われます（下限価格までで停止します）。既定は無効です。
+      </p>
+      {/* 2026-09-14 指示書レビュー補正: mercariApiWritesEnabledの値に
+          関わらず常に表示する——Mercariチャネルの実送信自体が現状
+          NOT_IMPLEMENTED固定(lib/listing/pricingService.ts)で、
+          writesEnabledが将来trueになってもこのファイル自体を実装しない
+          限りMercari側の価格は変わらないため。「manual-only運用なら
+          使えない」という誤解ではなく「この判定機能はMercariへの実送信
+          とは独立している」ことを明示する。 */}
+      <p className="mb-2 border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-600">
+        {mercariApiWritesEnabled
+          ? "この判定・記録は行われますが、Mercariへの実際の価格変更（API送信）は現在実装されていません。"
+          : "現在の運用ではMercariへの自動出品・自動値下げ（API送信）は行っていません。"}
+        {" "}
+        ここでの設定は下限価格までの値下げ判定と「価格変更履歴」への記録のみに使われ、実際にMercari側の価格が自動で変わることはありません（「今すぐ価格チェックを実行」も送信は行いません）。
       </p>
 
       <label className="flex items-center gap-2 text-[12px] text-gray-700">

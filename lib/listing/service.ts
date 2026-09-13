@@ -29,9 +29,11 @@ import {
   publishingPatch,
   requireChannelListing,
   requireDraft,
+  requireMercariWritesEnabled,
   saveFailureMessage,
   type PublishRoute,
 } from "./publishFlow";
+import { isExternalWriteEnabled } from "@/lib/integrations/writeGuard";
 import type {
   ChannelListingRecord,
   ListingChannel,
@@ -926,6 +928,13 @@ export async function listOnMercari(
   who: string | null,
 ): Promise<ChannelListingRecord> {
   const route: PublishRoute = MERCARI_ROUTE;
+
+  // 2026-09-14 指示書: ユーザーの運用ではMercari Shops APIへ実際に接続
+  // できない(publishFlow.tsのrequireMercariWritesEnabledコメント参照)。
+  // PUBLISHINGへ進める前に最初に確認し、届く見込みが無い呼び出しのために
+  // 状態をPUBLISHING→ERRORと動かさない(lib/listing/mercari/adapter.tsの
+  // createMercariProductが送信直前でも同じ判定を行う、二重の関門)。
+  requireMercariWritesEnabled(isExternalWriteEnabled("MERCARI_SHOPS"));
 
   const draft = await getListingDraftForInventory(inventoryId);
   requireDraft(draft);

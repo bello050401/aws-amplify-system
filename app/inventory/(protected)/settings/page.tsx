@@ -120,6 +120,7 @@ export default async function InventorySettingsPage() {
           mercariVerification={mercariState.verification}
           mercariLastCheckedAt={mercariState.lastCheckedAt}
           mercariSecretReadError={mercariState.secretReadError}
+          mercariApiWritesEnabled={mercariState.writesEnabled}
           baseConnection={baseConnection}
           lineConnected={lineConnected}
           lineTokenSource={lineTokenSource}

@@ -47,6 +47,7 @@ export function MercariSettingsPanel({
   mercariVerification,
   mercariLastCheckedAt,
   mercariSecretReadError,
+  mercariApiWritesEnabled,
 }: {
   mercariConnected: boolean;
   mercariTokenSource: MercariTokenSource;
@@ -60,6 +61,15 @@ export function MercariSettingsPanel({
   mercariLastCheckedAt: string | null;
   /** Secretそのものを読めなかった場合の説明。nullでなければ「未設定」と表示してはいけない。 */
   mercariSecretReadError: string | null;
+  /**
+   * 2026-09-14 指示書: TOKEN保存/接続確認(上記)とは独立した、実際に
+   * Mercariへ出品(API送信)してよいかの判定 — lib/integrations/
+   * writeGuard.tsのisExternalWriteEnabled("MERCARI_SHOPS")をそのまま
+   * 反映する(既定false、AWS側の環境変数EXTERNAL_WRITES_ENABLEDでのみ
+   * 解除、ここから変更はできない)。BASE設定パネルのwritesEnabledと同じ
+   * 表示方針。
+   */
+  mercariApiWritesEnabled: boolean;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -166,7 +176,10 @@ export function MercariSettingsPanel({
   return (
     <div className="max-w-2xl">
       <p className="mb-4 text-[12px] text-gray-500">
-        在庫の商品をMercari Shopsへ出品する機能の接続設定です。設定すると、在庫詳細画面から「EC出品」を開いて出品下書きの作成・Mercariへの出品ができるようになります。
+        在庫の商品についてMercari Shops向けの出品準備（下書き・カテゴリー設定）を行うための接続設定です。TOKENを設定すると、在庫詳細画面から「EC出品」を開いて出品下書きの作成・カテゴリー設定ができるようになります。
+        {mercariApiWritesEnabled
+          ? "実際の出品（API送信）も行えます。"
+          : "現在の運用ではMercariへの自動出品（API送信）自体を行っておらず、TOKENを設定しても出品は実行できません — 準備した内容はMercari公式管理画面へ手動で入力して出品してください。"}
       </p>
 
       <div className="border border-gray-200 p-4">
@@ -175,6 +188,17 @@ export function MercariSettingsPanel({
           <span className={`font-bold ${statusClass}`}>
             ● {status}
             {status === "接続済み" && `（${mercariEnvironment === "production" ? "本番" : "テスト環境（sandbox）"}）`}
+          </span>
+        </p>
+
+        {/* 2026-09-14 指示書: 接続状態(TOKEN保存/検証)とは別に、実際に
+            出品を送信してよいかを常に表示する — BaseSettingsPanel.tsxの
+            writesEnabled表示と同じ方針(書き込み許可は接続確認済みでも
+            危険側の状態なのでamber、停止中が安全側なのでgreen)。 */}
+        <p className="mt-1 text-[12px]">
+          Mercariへの出品（API送信）:{" "}
+          <span className={mercariApiWritesEnabled ? "font-bold text-amber-600" : "font-bold text-green-700"}>
+            {mercariApiWritesEnabled ? "許可されています" : "停止中（手動出品のみ）"}
           </span>
         </p>
 

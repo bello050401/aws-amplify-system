@@ -28,6 +28,7 @@ export function ListingWorkspace({
   initialDraft,
   initialChannelListing,
   mercariConnected,
+  mercariApiWritesEnabled,
 }: {
   item: InventoryDetail;
   categoryName: string | null;
@@ -36,6 +37,8 @@ export function ListingWorkspace({
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
   mercariConnected: boolean;
+  /** TOKEN保存済みかどうか(mercariConnected)とは別に、実際にMercariへ出品してよいか(lib/integrations/writeGuard.tsのisExternalWriteEnabled("MERCARI_SHOPS"))。 */
+  mercariApiWritesEnabled: boolean;
 }) {
   // §1 既定は「らくらく家財便」。保存済みの下書きがあればその選択を復元する。
   const [shippingMethod, setShippingMethod] = useState<ListingShippingMethod>(
@@ -60,6 +63,7 @@ export function ListingWorkspace({
           initialDraft={initialDraft}
           initialChannelListing={initialChannelListing}
           mercariConnected={mercariConnected}
+          mercariApiWritesEnabled={mercariApiWritesEnabled}
           shippingMethod={shippingMethod}
           onShippingMethodChange={setShippingMethod}
         />

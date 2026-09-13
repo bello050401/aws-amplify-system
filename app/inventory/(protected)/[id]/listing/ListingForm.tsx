@@ -18,6 +18,7 @@ import type {
 } from "@/lib/listing/types";
 import { LISTING_SHIPPING_METHODS } from "@/lib/listing/types";
 import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
+import { buildManualListingText } from "@/lib/listing/manualListingText";
 import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 import { buildShippingWarning, withCurrentShippingWarning } from "@/lib/ai/productPage/listingFacts";
 import type { SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
@@ -63,6 +64,7 @@ export function ListingForm({
   initialDraft,
   initialChannelListing,
   mercariConnected,
+  mercariApiWritesEnabled,
   shippingMethod,
   onShippingMethodChange,
 }: {
@@ -72,7 +74,20 @@ export function ListingForm({
   images: InventoryImageRecord[];
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
+  /** TOKEN(APIクライアント名含む)が保存済みかどうか。実際に出品してよいかはmercariApiWritesEnabledを見る(下記)。 */
   mercariConnected: boolean;
+  /**
+   * 2026-09-14 指示書: TOKEN保存済み(mercariConnected)とは別に、実際に
+   * Mercariへ出品(API送信)してよいか。ユーザーの運用ではMercari Shops
+   * APIへ実際に接続できないことが分かっており、これはTOKEN未設定でも
+   * 接続未検証でもなく運用方針そのもの — `lib/integrations/writeGuard.ts`
+   * のisExternalWriteEnabled("MERCARI_SHOPS")をそのまま反映する
+   * (既定false、AWS側の環境変数でのみ解除。lib/listing/service.tsの
+   * listOnMercariが同じ判定をサーバー側でも強制する)。falseの間は
+   * 「Mercariに出品する」を無効化し、準備した内容を手動でMercari公式
+   * 管理画面へ入力してもらう。
+   */
+  mercariApiWritesEnabled: boolean;
   /**
    * 配送方法(2026-09-10追加指示)。右パネル(InventoryFactsPanel)の
    * 座面・配送警告と同じ選択を共有するため、状態はこのコンポーネントの
@@ -175,6 +190,31 @@ export function ListingForm({
       .catch(() => setCategories([]))
       .finally(() => setCategoriesLoading(false));
   }, [mercariConnected]);
+
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+
+  /**
+   * 2026-09-14 指示書「Mercariは手動出品支援を基本とする」対応。
+   * 準備した内容(タイトル・価格・コンディション・カテゴリー・説明文)を
+   * Mercari公式の出品画面へ手動で貼り付けられる形にまとめてclipboardへ
+   * コピーするだけ — 何も送信しない。mercariApiWritesEnabledの値に
+   * 関わらず、下書きさえあれば常に使える(実出品の可否とは無関係)。
+   */
+  async function handleCopyForManualListing() {
+    const text = buildManualListingText({
+      title: overrideTitle.trim() || title,
+      description: overrideDescription.trim() || description,
+      price: overridePrice ? Number(overridePrice) : price ? Number(price) : null,
+      condition,
+      categoryName: categoryName || null,
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+  }
 
   async function refreshStatus() {
     const [d, c] = await Promise.all([getListingDraftAction(inventoryId), getChannelListingAction(inventoryId)]);
@@ -340,7 +380,19 @@ export function ListingForm({
         <InventoryImageGallery images={images} alt={inventoryName} title="商品画像" />
       </div>
 
-      {!mercariConnected && (
+      {/* 2026-09-14 指示書: 「TOKEN未設定」の案内よりも先に、そもそも現在の
+          運用ではMercari Shops APIへの自動出品(API送信)を行っていない
+          ことを明示する — mercariApiWritesEnabledはTOKEN設定/接続確認とは
+          独立した判定(lib/integrations/writeGuard.ts)。「設定すれば出品
+          できる」という誤解を主導線にしないため、TOKEN未設定の案内は
+          その次に補足として出す。準備(下書き・カテゴリー設定・手動出品用
+          コピー)はどちらの状態でも行える。 */}
+      {!mercariApiWritesEnabled && (
+        <div className="mb-4 border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">
+          現在の運用ではMercari Shopsへの自動出品（API送信）は行っていません。下書き・カテゴリー設定はここで準備できます。準備ができた内容は「出品内容をコピー」からMercari公式管理画面へ手動で入力し、出品してください。
+        </div>
+      )}
+      {mercariApiWritesEnabled && !mercariConnected && (
         <div className="mb-4 border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">
           Mercari Shops API TOKENが未設定です。下書きの作成・カテゴリー設定は行えますが、「Mercariに出品」は接続設定（設定画面 → EC出品（Mercari）タブ）の完了後に使用できます。
         </div>
@@ -664,23 +716,56 @@ export function ListingForm({
           </dl>
         )}
 
-        <button
-          type="button"
-          onClick={handleListOnMercari}
-          disabled={!mercariConnected || listing || !draft || !channelListing || channelListing.status === "ACTIVE"}
-          className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 disabled:opacity-40"
-          title={!mercariConnected ? "Mercari接続（TOKEN設定）が必要です" : undefined}
-        >
-          {listing ? "出品処理中…" : channelListing?.status === "ACTIVE" ? "出品済みです" : "Mercariに出品する"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleListOnMercari}
+            disabled={!mercariApiWritesEnabled || listing || !draft || !channelListing || channelListing.status === "ACTIVE"}
+            className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 disabled:opacity-40"
+            title={!mercariApiWritesEnabled ? "現在の運用ではMercari出品（API送信）は行っていません（手動出品支援のみ提供）" : undefined}
+          >
+            {listing ? "出品処理中…" : channelListing?.status === "ACTIVE" ? "出品済みです" : "Mercariに出品する"}
+          </button>
+          {/* 2026-09-14 指示書: 手動出品支援。mercariApiWritesEnabledの
+              有無に関わらず、準備した内容をMercari公式の出品画面へ
+              貼り付けられる形でコピーできる——何も送信しない。 */}
+          <button
+            type="button"
+            onClick={handleCopyForManualListing}
+            disabled={!draft}
+            className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+            title="タイトル・価格・コンディション・カテゴリー・説明文をMercari公式の出品画面へ貼り付けられる形でコピーします（送信は行いません）"
+          >
+            出品内容をコピー（手動出品用）
+          </button>
+          {copyState === "copied" && <span className="text-[12px] text-green-700">コピーしました</span>}
+          {copyState === "error" && <span className="text-[12px] text-red-600">コピーできませんでした</span>}
+        </div>
         {listingError && <p className="mt-2 text-[12px] text-red-600">{listingError}</p>}
-        {!mercariConnected && <p className="mt-2 text-[11px] text-gray-400">Mercari未接続のため出品ボタンは無効化されています。</p>}
+        {!mercariApiWritesEnabled && (
+          <p className="mt-2 text-[11px] text-gray-400">
+            現在の運用では出品ボタンは無効化されています。準備ができた内容は上の「出品内容をコピー」からMercariの公式管理画面へ手動で入力してください。
+          </p>
+        )}
       </div>
 
       {/* BELLO統合業務OS指示書(2026-08-30) §18/§161: 自動値下げは商品
           ごとの明示的なオプトインで、既定はOFF。ChannelListingが存在
-          する(=Mercari個別設定を保存済み)商品にだけ表示する。 */}
-      {channelListing && <AutoPricingSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
+          する(=Mercari個別設定を保存済み)商品にだけ表示する。
+          2026-09-14指示書レビュー補正: ここまではchannelListingの有無
+          だけで出し分けており、Mercari APIが送信不可（manual-only運用）
+          であることをこのセクション自体は反映していなかった —
+          AutoPricingSection側にmercariApiWritesEnabledを渡し、有効/
+          無効に関わらず「Mercariへは自動反映されない」旨をUI上で常に
+          明示させる(判定・記録機能自体は既存下書き保全のため残す)。 */}
+      {channelListing && (
+        <AutoPricingSection
+          inventoryId={inventoryId}
+          channelListing={channelListing}
+          mercariApiWritesEnabled={mercariApiWritesEnabled}
+          onUpdated={setChannelListing}
+        />
+      )}
 
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
           AutoPricingSectionと同じ理由でChannelListing存在時のみ表示する。 */}

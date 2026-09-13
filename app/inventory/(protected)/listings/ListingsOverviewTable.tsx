@@ -98,7 +98,25 @@ const STATUS_BADGE_CLASS: Record<Exclude<StatusFilter, "ALL">, string> = {
  * 参照。取得失敗と実0件を混同しない、
  * app/inventory/(protected)/[id]/InventoryHistorySection.tsxと同じ設計)。
  */
-export function ListingsOverviewTable({ initialResult, canEdit }: { initialResult: ListingsOverviewLoadOutcome<ListingOverviewRow>; canEdit: boolean }) {
+export function ListingsOverviewTable({
+  initialResult,
+  canEdit,
+  mercariApiWritesEnabled,
+}: {
+  initialResult: ListingsOverviewLoadOutcome<ListingOverviewRow>;
+  canEdit: boolean;
+  /**
+   * 2026-09-14 指示書レビュー補正: 「自動値下げルールを設定」導線は
+   * この一覧(Mercariチャネル専用、lib/listing/service.tsの
+   * fetchAllChannelListings("MERCARI_SHOPS")固定コメント参照)から選んだ
+   * 商品にだけ適用されるが、実際のMercari側の価格反映(API送信)は現在
+   * NOT_IMPLEMENTED固定(lib/listing/pricingService.ts)——ルール自体は
+   * 判定・記録のためlib/integrations/writeGuard.tsのisExternalWriteEnabled
+   * ("MERCARI_SHOPS")の値に関わらず設定できる(既存の判定・監査ログ
+   * 用途を残す)が、その旨をボタン群の下に明示する。
+   */
+  mercariApiWritesEnabled: boolean;
+}) {
   const router = useRouter();
   const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(() => loadStateFromInitialRows(initialResult));
 
@@ -351,6 +369,18 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
           </div>
         )}
       </div>
+      {/* 2026-09-14 指示書レビュー補正: 上のボタン群だけを見ると「自動で
+          Mercariの価格が変わる」ように読めるが、実際にはMercariチャネルの
+          価格変更API送信は現在実装されていない(lib/listing/
+          pricingService.ts)——判定・記録は行われても、この一覧から設定
+          したルールがMercari側の実際の価格を動かすことはない。 */}
+      {canEdit && (
+        <p className="mb-2 text-[11px] text-gray-400">
+          {mercariApiWritesEnabled
+            ? "自動値下げルールは値下げの判定・記録のみを行い、Mercariへの実際の価格変更（API送信）は現在実装されていません。"
+            : "現在の運用ではMercariへの自動出品・自動値下げ（API送信）は行っていません。ルールの設定・判定・記録はここで行えますが、Mercari側の価格が自動で変わることはありません。"}
+        </p>
+      )}
 
       {resultMessage && <p className="mb-2 text-[12px] text-green-700">{resultMessage}</p>}
       {errorMessage && <p className="mb-2 text-[12px] text-red-600">{errorMessage}</p>}

@@ -22,6 +22,7 @@ import { isEcListingEligible, buildCategoryNameLookup, EXCLUDED_CATEGORY_NAMES }
 import { assertExternalWriteAllowed, isExternalWriteEnabled, listEnabledExternalWrites, ExternalWriteBlockedError } from "@/lib/integrations/writeGuard";
 import { calculateFloorPrice, calculateMarkdownPrice, calculateNextPriceActionAt, decideActionAtFloor,
   evaluatePricingSafety, type PricingRuleRecord } from "@/lib/listing/pricing";
+import { buildManualListingText } from "@/lib/listing/manualListingText";
 
 let failures = 0;
 let passes = 0;
@@ -550,6 +551,31 @@ function testExternalWriteGuard() {
   assertEqual(threw2, false, "writeGuard: 許可されていれば通す");
 }
 
+/**
+ * 2026-09-14指示書「Mercariは商品情報・文章・画像の準備と手動出品支援を
+ * 基本とする」対応 — lib/listing/manualListingText.tsのbuildManualListingText。
+ * 外部へは何も送信しない純関数(clipboardへコピーする文字列を組み立てる
+ * だけ)なので、内容がそのまま固定できる。
+ */
+function testManualListingText() {
+  const full = buildManualListingText({
+    title: "テスト商品",
+    description: "説明文です。",
+    price: 12000,
+    condition: "NO_NOTABLE_DAMAGE",
+    categoryName: "家具",
+  });
+  assertTrue(full.includes("【タイトル】\nテスト商品"), "manualListingText: タイトルを含める");
+  assertTrue(full.includes("¥12,000"), "manualListingText: 価格を3桁区切りで含める");
+  assertTrue(full.includes(conditionLabel("NO_NOTABLE_DAMAGE")), "manualListingText: コンディションのラベルを含める(コード直書きにしない)");
+  assertTrue(full.includes("【カテゴリー】\n家具"), "manualListingText: カテゴリー名があれば含める");
+  assertTrue(full.includes("【説明文】\n説明文です。"), "manualListingText: 説明文を含める");
+
+  const empty = buildManualListingText({ title: "", description: "", price: null, condition: "NO_NOTABLE_DAMAGE", categoryName: null });
+  assertTrue(empty.includes("（未入力）"), "manualListingText: 空欄は「（未入力）」と明示する(空文字を黙って出さない)");
+  assertTrue(!empty.includes("【カテゴリー】"), "manualListingText: カテゴリー未設定ならセクション自体を出さない");
+}
+
 async function main() {
   testConditionMapper();
   testShippingPayerMapper();
@@ -564,6 +590,7 @@ async function main() {
   testPricingSafety();
   testActionAtFloor();
   testExternalWriteGuard();
+  testManualListingText();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

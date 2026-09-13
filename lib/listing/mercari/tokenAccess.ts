@@ -1,6 +1,7 @@
 import "server-only";
 import { getMercariConnectionFromSecretsManager, getMercariTokenFromSecretsManager, readMercariConnectionSecret } from "./secretStore";
 import { formatMercariUserAgent, MERCARI_DEFAULT_CLIENT_VERSION } from "./endpoints";
+import { isExternalWriteEnabled } from "@/lib/integrations/writeGuard";
 
 /**
  * BELLO統合改修 master指示書 Phase D — lib/zaico/client.tsの
@@ -115,6 +116,25 @@ export interface MercariConnectionState {
    * 黙って表示する」を防ぐための情報。
    */
   secretReadError: string | null;
+  /**
+   * 2026-09-14 指示書: 「TOKENが保存されている(tokenSource)」「接続確認が
+   * 取れている(verification)」とは別に、実際にMercariへ出品(createProduct
+   * 等)を送信してよいか。
+   *
+   * `lib/integrations/writeGuard.ts`のisExternalWriteEnabled("MERCARI_SHOPS")
+   * をそのまま反映する — 既定はfalse(fail-closed)で、AWS側の環境変数
+   * `EXTERNAL_WRITES_ENABLED`にMERCARI_SHOPSを明示的に追加しない限り
+   * 変わらない。ユーザーの運用ではMercari Shops APIへ実際に接続できない
+   * ことが分かっており、これは「TOKEN未設定」や「接続未検証」とは別の
+   * 問題(=そもそも書き込みを許可しない運用方針)なので、verification
+   * (過去に接続確認が取れていたか)がverifiedであっても、この値がfalseの
+   * 間は出品を実行させてはいけない(lib/listing/publishFlow.tsの
+   * requireMercariWritesEnabled/lib/listing/mercari/adapter.tsの
+   * assertExternalWriteAllowed参照 — 同じisExternalWriteEnabledを二重の
+   * 関門として使っている)。BASEの`lib/base/connectionState.ts`の
+   * `writesEnabled`と同じ設計。
+   */
+  writesEnabled: boolean;
 }
 
 export async function getMercariConnectionState(): Promise<MercariConnectionState> {
@@ -123,6 +143,10 @@ export async function getMercariConnectionState(): Promise<MercariConnectionStat
   const envToken = process.env.MERCARI_ACCESS_TOKEN?.trim();
   const envName = process.env.MERCARI_API_CLIENT_NAME?.trim();
   const envVersion = process.env.MERCARI_API_CLIENT_VERSION?.trim() || MERCARI_DEFAULT_CLIENT_VERSION;
+  // TOKEN/検証状態(Secrets Manager)とは完全に独立した判定源 — env変数を
+  // 読めない・遅延するケースが無い同期呼び出しなので、Secret読み取りの
+  // 成否に関わらず常に同じ値を返せる。
+  const writesEnabled = isExternalWriteEnabled("MERCARI_SHOPS");
 
   if (!read.ok) {
     // Secretが読めない場合でも環境変数フォールバックがあれば動作自体は
@@ -136,6 +160,7 @@ export async function getMercariConnectionState(): Promise<MercariConnectionStat
       lastCheckedAt: null,
       lastCheckCode: null,
       secretReadError: read.errorMessage,
+      writesEnabled,
     };
   }
 
@@ -153,5 +178,6 @@ export async function getMercariConnectionState(): Promise<MercariConnectionStat
     lastCheckedAt: read.lastCheckedAt,
     lastCheckCode: read.lastCheckCode,
     secretReadError: null,
+    writesEnabled,
   };
 }

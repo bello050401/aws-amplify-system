@@ -47,6 +47,13 @@ interface SettingsTabsProps {
   mercariLastCheckedAt: string | null;
   /** Secret自体を読めなかった場合の説明 — §6.1「失敗を未設定として黙って表示しない」。 */
   mercariSecretReadError: string | null;
+  /**
+   * 2026-09-14 指示書: TOKEN保存/接続確認とは独立した、実際にMercariへ
+   * 出品(API送信)してよいかの判定(lib/integrations/writeGuard.tsの
+   * isExternalWriteEnabled("MERCARI_SHOPS")、既定false)。BASEの
+   * baseConnection.writesEnabledと同じ設計。
+   */
+  mercariApiWritesEnabled: boolean;
   /** 夜間統合指示書(2026-09-01) §4.2: 既存のBASE特集ページ連携設定の状態をそのまま表示する(新しい認証情報は作らない)。 */
   baseConnection: BaseConnectionState;
   /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
@@ -78,6 +85,7 @@ export function SettingsTabs({
   mercariVerification,
   mercariLastCheckedAt,
   mercariSecretReadError,
+  mercariApiWritesEnabled,
   baseConnection,
   lineConnected,
   lineTokenSource,
@@ -223,6 +231,7 @@ export function SettingsTabs({
             mercariVerification={mercariVerification}
             mercariLastCheckedAt={mercariLastCheckedAt}
             mercariSecretReadError={mercariSecretReadError}
+            mercariApiWritesEnabled={mercariApiWritesEnabled}
           />
         )}
         {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}

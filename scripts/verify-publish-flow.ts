@@ -21,6 +21,7 @@
  */
 import {
   BASE_ROUTE,
+  MERCARI_MANUAL_ONLY_MESSAGE,
   MERCARI_ROUTE,
   NO_DRAFT_MESSAGE,
   NO_INVENTORY_MESSAGE,
@@ -31,6 +32,7 @@ import {
   publishingPatch,
   requireChannelListing,
   requireDraft,
+  requireMercariWritesEnabled,
   saveFailureMessage,
 } from "@/lib/listing/publishFlow";
 import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/types";
@@ -116,6 +118,28 @@ function testGuards() {
   assertEqual(msgB, "先にBASEのチャネル設定を保存してください。", "ガード: BASE未設定の文言");
 
   assertEqual(NO_INVENTORY_MESSAGE, "対象の在庫が見つかりません。", "ガード: 在庫が無いときの文言");
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 1.5. Mercariは既定でAPI送信しない(manual-only運用)
+ * ══════════════════════════════════════════════════════════════════
+ * 2026-09-14指示書: ユーザーの運用ではMercari Shops APIへ実際に接続
+ * できない。判定はTOKEN保存/過去の接続確認(verified)に一切依存させず、
+ * `isExternalWriteEnabled("MERCARI_SHOPS")`(既定false)だけを見る —
+ * ここではその判定結果を受け取るだけの入口を固定する。
+ */
+function testMercariManualOnly() {
+  const msg = assertThrows(
+    () => requireMercariWritesEnabled(false),
+    "manual-only: 書き込み無効なら出品を実行させない(既定状態)",
+  );
+  assertEqual(msg, MERCARI_MANUAL_ONLY_MESSAGE, "manual-only: 手動出品を案内する文言");
+  assertTrue(msg.includes("手動"), "manual-only: 文言に手動出品の案内を含める");
+
+  assertNotThrows(
+    () => requireMercariWritesEnabled(true),
+    "manual-only: 明示的に書き込みが許可されていれば通す(将来の運用変更後)",
+  );
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -286,6 +310,7 @@ function testRoutes() {
 }
 
 testGuards();
+testMercariManualOnly();
 testDuplicateGuard();
 testPublishing();
 testPublished();

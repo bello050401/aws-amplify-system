@@ -14,7 +14,14 @@ import { ListingsOverviewTable } from "./ListingsOverviewTable";
  * 返す — EC一覧P1 実失敗分類、2026-09-13)ため、ここでtry/catchする
  * 必要はない——本体(ヘッダー)がエラー境界へ巻き込まれることはない。
  */
-export async function ListingsOverviewData({ canEdit }: { canEdit: boolean }) {
+export async function ListingsOverviewData({
+  canEdit,
+  mercariApiWritesEnabled,
+}: {
+  canEdit: boolean;
+  /** 2026-09-14 指示書: 自動値下げルールの割当導線(下記ListingsOverviewTable参照)をManual-only運用に合わせて案内するため、page.tsxから受け渡す。 */
+  mercariApiWritesEnabled: boolean;
+}) {
   const result = await listListingsOverviewSafe();
-  return <ListingsOverviewTable initialResult={result} canEdit={canEdit} />;
+  return <ListingsOverviewTable initialResult={result} canEdit={canEdit} mercariApiWritesEnabled={mercariApiWritesEnabled} />;
 }
