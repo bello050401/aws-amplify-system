@@ -35,6 +35,12 @@
  *   4. いずれかの取得が失敗した場合、listListingsOverviewは例外を
  *      投げ、listListingsOverviewSafe(page.tsx用)はそれを外へ投げず
  *      nullへ落とす。
+ *   5. (2026-09-13 EC一覧の読取量削減)Category.listは1回の
+ *      listListingsOverview呼び出しにつき1回だけ呼ばれる——以前は
+ *      listEcEligibleInventoryとloadCategoryNameLookupがそれぞれ独立に
+ *      Categoryを取得しており、実質2回叩いていた。
+ *   6. ListingDraft.listのselectionSetがinventoryIdだけを要求し、
+ *      description/imagesのような一覧に使わない大きめの列を運ばない。
  *
  */
 import { registerHooks } from "node:module";
@@ -161,6 +167,24 @@ async function main() {
       mock.calls.listingDraft.every((c: { limit: number }) => c.limit === 1000),
       "★要件: ListingDraft.listはlimit=1000で呼ぶ",
       JSON.stringify(mock.calls.listingDraft.map((c: { limit: number }) => c.limit)),
+    );
+
+    // ★要件5(2026-09-13 EC一覧の読取量削減): Categoryは1回の一覧取得に
+    // つき1回だけ——以前はlistEcEligibleInventoryとloadCategoryNameLookup
+    // が独立に取得し、実質2回叩いていた。
+    check(mock.calls.category.length === 1, "★要件: Category.listは1回のlistListingsOverviewにつき1回だけ呼ばれる(重複取得の解消)", `calls=${mock.calls.category.length}`);
+
+    // ★要件6: ListingDraft.listのselectionSetはinventoryIdだけ——
+    // description/images(a.json()の大きめの列)を一覧の存在判定のために
+    // 運ばない。
+    check(
+      mock.calls.listingDraft.every((c: { selectionSet?: string[] }) => Array.isArray(c.selectionSet) && c.selectionSet.length === 1 && c.selectionSet[0] === "inventoryId"),
+      "★要件: ListingDraft.listのselectionSetはinventoryIdだけを要求する",
+      JSON.stringify(mock.calls.listingDraft.map((c: { selectionSet?: string[] }) => c.selectionSet)),
+    );
+    check(
+      mock.calls.listingDraft.every((c: { selectionSet?: string[] }) => !c.selectionSet?.includes("description") && !c.selectionSet?.includes("images")),
+      "★要件: ListingDraft.listのselectionSetにdescription/imagesが含まれない",
     );
 
     // ★要件3: 対象外カテゴリ(「発送完了」)はGSI抽出の時点で呼ばれない

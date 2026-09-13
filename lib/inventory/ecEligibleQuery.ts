@@ -1,6 +1,6 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { listAllMasterEntries } from "@/lib/inventory/masters";
+import type { MasterEntry } from "@/lib/inventory/masters";
 import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { toListRow, type InventoryListRow } from "@/lib/inventory/queries";
 
@@ -27,6 +27,18 @@ import { toListRow, type InventoryListRow } from "@/lib/inventory/queries";
  * 絞り込み・検索**を行うため、件数を削ると検索できる範囲が狭まる。
  * 「対象だけを全部引く」なら、検索の範囲を一切狭めずに速くできる。
  *
+ * ## 2026-09-13 EC一覧の読取量削減: Categoryは呼び出し側と共有する
+ *
+ * 以前はこの関数が`listAllMasterEntries("Category")`を自分で呼んでいた。
+ * ところがEC出品一覧(lib/listing/service.tsのlistListingsOverview)は
+ * 対象外カテゴリー名の解決(buildCategoryNameLookup)にも同じCategory
+ * マスタが要るため、1回の一覧表示で**同じCategoryマスタを2回**
+ * 取得していた(件数は少ない=実害は小さいが、単純な無駄な重複)。
+ * ここでは自分で取得せず、呼び出し側が1回だけ取得した結果を受け取る
+ * ——「1回のlist要求の中でCategory取得を共有する」ことを、関数の外へ
+ * 出して呼び出し側の責務にする形。呼び出し元が1箇所(lib/listing/
+ * service.ts)しか無いことは確認済み。
+ *
  * ## 境界(正直に)
  *
  * カテゴリが未設定の在庫はカテゴリGSIに現れないため、この関数の
@@ -49,8 +61,12 @@ const PAGE_SIZE = 200;
 /** 1カテゴリが異常に大きい場合の歯止め。 */
 const MAX_PAGES_PER_CATEGORY = 20;
 
-export async function listEcEligibleInventory(): Promise<EcEligibleInventoryResult> {
-  const categories = await listAllMasterEntries("Category");
+/**
+ * `categories`は呼び出し側(lib/listing/service.ts)が1回だけ取得した
+ * Categoryマスタ全件(listAllMasterEntries("Category")の結果)——この関数
+ * 自身はCategoryを取得しない(上記コメント参照)。
+ */
+export async function listEcEligibleInventory(categories: MasterEntry[]): Promise<EcEligibleInventoryResult> {
   const eligible = categories.filter((c) => isEcListingEligible(c.name));
 
   // カテゴリごとの取得は互いに独立しているので同時に投げる。

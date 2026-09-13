@@ -294,22 +294,56 @@ async function fetchAllChannelListings(channel: ListingChannel): Promise<Channel
   return items;
 }
 
-async function fetchAllListingDrafts(): Promise<ListingDraftRecord[]> {
-  const items: ListingDraftRecord[] = [];
+/**
+ * EC一覧の「下書きの有無」(ListingOverviewRow.hasDraft)だけを求めるための
+ * 軽量版取得(2026-09-13 EC一覧の読取量削減)。
+ *
+ * ## なぜ全文/画像を運んでいたのが無駄だったか
+ *
+ * 以前は`fetchAllListingDrafts`が(下書き編集画面と同じ)ListingDraftの
+ * 全列——タイトル・説明文・価格・配送方法・images(a.json())・
+ * createdBy/updatedBy等——を取得し`ListingDraftRecord`へ変換していたが、
+ * この一覧(buildOverviewRows)が実際に使うのは`inventoryId`の集合
+ * (`hasDraft: draftInventoryIds.has(item.id)`)だけだった。
+ *
+ * AppSyncの`selectionSet`でAppSyncが**返す**列を`inventoryId`だけに絞る
+ * ——lib/inventory/searchScanProjection.tsのコメントにある通り、DynamoDB
+ * →AppSync間の転送自体は減らない(そちらを減らすには
+ * ProjectionExpressionでDynamoDBへ直結する必要がある、この一覧は
+ * ChannelListing/ListingDraftのGSI自体が未整備のためScanのまま——
+ * lib/listing/service.tsのLISTING_OVERVIEW_PAGE_SIZE付近のコメント参照)
+ * が、AppSyncが組み立てて返すJSON(images等の大きめのAWSJSON文字列を
+ * 含む)自体は小さくなる。`toListingDraftRecord`は使わない——あちらは
+ * `id`/`title`/`createdAt`/`updatedAt`等、selectionSetを絞った結果には
+ * 無いフィールドを要求する型なので、ここでは呼ばない(無理に使い回すと
+ * 型が合わない)。
+ *
+ * 削除filter(`deletedAt: { attributeExists: false }`)・全ページ追跡・
+ * 上限(LISTING_OVERVIEW_MAX_ITEMS)・エラー伝播は`fetchAllListingDrafts`
+ * と同じまま——変えたのは選択する列だけ。
+ */
+async function fetchListingDraftInventoryIds(): Promise<Set<string>> {
+  const inventoryIds = new Set<string>();
+  let fetchedCount = 0;
   let nextToken: string | null | undefined;
   do {
     const { data, nextToken: nt, errors } = await serverDataClient.models.ListingDraft.list({
       filter: { deletedAt: { attributeExists: false } },
       limit: LISTING_OVERVIEW_PAGE_SIZE,
       nextToken: nextToken ?? undefined,
+      selectionSet: ["inventoryId"],
       ...inventoryAuthMode,
     });
     if (errors) throw new Error(`出品下書き一覧の取得に失敗しました: ${JSON.stringify(errors)}`);
-    items.push(...data.map(toListingDraftRecord));
+    for (const row of data) inventoryIds.add(row.inventoryId);
+    // 件数の上限判定は(重複除去前の)取得件数そのもので行う——
+    // fetchAllListingDraftsと同じ歯止めの意味を保つ(Setのサイズだと、
+    // inventoryIdの重複がもしあった場合に上限判定がずれてしまう)。
+    fetchedCount += data.length;
     nextToken = nt;
-    if (items.length >= LISTING_OVERVIEW_MAX_ITEMS) break;
+    if (fetchedCount >= LISTING_OVERVIEW_MAX_ITEMS) break;
   } while (nextToken);
-  return items;
+  return inventoryIds;
 }
 
 /** 一覧ベースのEC出品管理画面(下記ListingOverviewRow)の1行。 */
@@ -363,15 +397,23 @@ export interface ListingOverviewRow {
  * **必要件数より多めに取ってから絞る**。取りすぎないよう上限を置き、
  * それでも足りなければ「次へ」で続きを取る。
  */
-/** Promise.allで束ねる4本の並列読み取りから、最終行を組み立てる純粋な部分。計測の有無に関わらず同じ関数を通す(二重実装を避ける)。 */
+/**
+ * Promise.allで束ねる並列読み取りから、最終行を組み立てる純粋な部分。
+ * 計測の有無に関わらず同じ関数を通す(二重実装を避ける)。
+ *
+ * `draftInventoryIds`はfetchListingDraftInventoryIdsが返す「下書きが
+ * 存在するinventoryIdの集合」——2026-09-13 EC一覧の読取量削減で
+ * `ListingDraftRecord[]`から変更(この関数が使うのは元々inventoryIdの
+ * 存在判定だけだったため、呼び出し側の取得を軽量化した分だけ型も
+ * それに合わせた)。
+ */
 function buildOverviewRows(
   inventoryPage: Awaited<ReturnType<typeof listEcEligibleInventory>>,
   channelListings: ChannelListingRecord[],
-  drafts: ListingDraftRecord[],
+  draftInventoryIds: Set<string>,
   categoryNameOf: CategoryNameLookup,
 ): ListingOverviewRow[] {
   const channelListingByInventoryId = new Map(channelListings.map((c) => [c.inventoryId, c]));
-  const draftInventoryIds = new Set(drafts.map((d) => d.inventoryId));
 
   // §12: 「initial fetch」の時点で対象外カテゴリーを除外する — 一覧
   // にすら現れなければ、検索・絞り込み・ページングのどの経路からも
@@ -393,16 +435,32 @@ function buildOverviewRows(
     }));
 }
 
-/** 計測なしの通常経路(既定)。従来の`listListingsOverview`本体そのまま — 計測が無効なときはこの関数だけが呼ばれ、余計なPromiseラップは一切増えない。 */
+/**
+ * 計測なしの通常経路(既定)。従来の`listListingsOverview`本体そのまま —
+ * 計測が無効なときはこの関数だけが呼ばれ、余計なPromiseラップは一切増えない。
+ *
+ * 2026-09-13 EC一覧の読取量削減: Category取得を1回だけ行い、
+ * `listEcEligibleInventory`(対象カテゴリのGSI抽出)と
+ * `buildCategoryNameLookup`(対象外カテゴリー名の解決)の両方へ同じ
+ * 結果を渡す——以前はこの2箇所がそれぞれ`listAllMasterEntries
+ * ("Category")`を呼んでいて、1回の一覧表示でCategoryマスタを2回
+ * 取得していた。`categoriesPromise`を他の独立readと同じ
+ * `Promise.all`に含めて即座に発火させたまま、`listEcEligibleInventory`
+ * 側はそのPromiseを`await`してから対象カテゴリごとのGSI読み取りへ進む
+ * ——Category読み取り自体はChannelListing/ListingDraftの取得と並列に
+ * 進み、GSI読み取りだけがCategory解決後に続く(カテゴリIDが無いと
+ * GSIを引けないため、そこは元から避けられない依存関係)。
+ */
 async function fetchListingsOverviewRows(): Promise<ListingOverviewRow[]> {
-  const [inventoryPage, channelListings, drafts, categoryNameOf] = await Promise.all([
+  const categoriesPromise = listAllMasterEntries("Category");
+  const [inventoryPage, channelListings, draftInventoryIds, categories] = await Promise.all([
     // 対象カテゴリだけをGSIから引く(全件スキャンしない)。
-    listEcEligibleInventory(),
+    categoriesPromise.then((categories) => listEcEligibleInventory(categories)),
     fetchAllChannelListings("MERCARI_SHOPS"),
-    fetchAllListingDrafts(),
-    loadCategoryNameLookup(),
+    fetchListingDraftInventoryIds(),
+    categoriesPromise,
   ]);
-  return buildOverviewRows(inventoryPage, channelListings, drafts, categoryNameOf);
+  return buildOverviewRows(inventoryPage, channelListings, draftInventoryIds, buildCategoryNameLookup(categories));
 }
 
 /** 一覧の計測結果 1段階ぶん。固定ラベル・壁時計経過時間・成否のみ ── 商品・顧客・認証情報は一切含まない。 */
@@ -441,13 +499,40 @@ export interface ListingsOverviewTimedResult {
  * 返し、1本でも失敗していれば、最初に失敗した段階の元の例外へ4本ぶんの
  * 計測結果を添えて投げる(一覧の「失敗したら例外を投げる」契約自体は
  * そのまま)。
+ *
+ * ## 2026-09-13 EC一覧の読取量削減: 段階定義の補正(二重計上回避)
+ *
+ * `categoryNames`段階は、以前は`loadCategoryNameLookup`(Category取得+
+ * ルックアップ関数の構築)を計測していたが、今は`listAllMasterEntries
+ * ("Category")`の取得そのものだけを計測する(ルックアップの構築は
+ * 全件成功後にO(件数)の同期処理として1回だけ行う——計測対象にするほどの
+ * 重さではない)。
+ *
+ * `ecEligibleInventory`段階は、以前は自分自身の中で独立に
+ * `listAllMasterEntries("Category")`を呼んでいた(=`categoryNames`段階と
+ * 合わせて実質2回のCategory取得を別々に計測していた)。今は
+ * `categoryNames`段階と同じ1個のPromise(`categoryOutcomePromise`)を
+ * 待ってから対象カテゴリごとのGSI読み取りへ進む——Category取得の待ち
+ * 時間は`categoryNames`段階の壁時計として1回だけ数えられ、
+ * `ecEligibleInventory`段階にはそのGSI読み取り自体の待ち時間が主に乗る
+ * (Category解決を待つ分だけ多少上乗せされ得るが、`Promise.all`内で
+ * 全段階が同時に発火するため、その上乗せは通常ごく小さい)。総readの
+ * 回数・件数への影響は無い——変わるのは壁時計の内訳だけ。
  */
 async function fetchListingsOverviewRowsTimed(): Promise<{ rows: ListingOverviewRow[]; stages: ListingsOverviewStageTiming[] }> {
+  const categoryOutcomePromise = measureStage("categoryNames", () => listAllMasterEntries("Category"));
   const [inventoryOutcome, channelOutcome, draftOutcome, categoryOutcome] = await Promise.all([
-    measureStage("ecEligibleInventory", listEcEligibleInventory),
+    measureStage("ecEligibleInventory", async () => {
+      const catOutcome = await categoryOutcomePromise;
+      // categoryNames段階が失敗していれば、この段階もそれ以上進めない
+      // ——GSI読み取りにはカテゴリIDが要るため(同じ失敗が2段階に記録
+      // されるのは二重計上ではなく、両方が実際に失敗したという事実)。
+      if (!catOutcome.ok) throw catOutcome.error;
+      return listEcEligibleInventory(catOutcome.value);
+    }),
     measureStage("channelListings", () => fetchAllChannelListings("MERCARI_SHOPS")),
-    measureStage("listingDrafts", fetchAllListingDrafts),
-    measureStage("categoryNames", loadCategoryNameLookup),
+    measureStage("listingDrafts", fetchListingDraftInventoryIds),
+    categoryOutcomePromise,
   ]);
   const outcomes = [inventoryOutcome, channelOutcome, draftOutcome, categoryOutcome];
   const stages = outcomes.map((o) => o.timing);
@@ -459,8 +544,8 @@ async function fetchListingsOverviewRowsTimed(): Promise<{ rows: ListingOverview
   const rows = buildOverviewRows(
     (inventoryOutcome as { ok: true; value: Awaited<ReturnType<typeof listEcEligibleInventory>> }).value,
     (channelOutcome as { ok: true; value: ChannelListingRecord[] }).value,
-    (draftOutcome as { ok: true; value: ListingDraftRecord[] }).value,
-    (categoryOutcome as { ok: true; value: CategoryNameLookup }).value,
+    (draftOutcome as { ok: true; value: Set<string> }).value,
+    buildCategoryNameLookup((categoryOutcome as { ok: true; value: Awaited<ReturnType<typeof listAllMasterEntries>> }).value),
   );
   return { rows, stages };
 }
