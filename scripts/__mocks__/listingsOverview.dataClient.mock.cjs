@@ -15,6 +15,12 @@
 function makePagedList(items, callLog) {
   let rejection = null;
   let forcedErrors = null;
+  // 2026-09-13 EC計測レビュー補正: 壁時計の段階待ち時間(elapsedMs)と
+  // model.opの累積往復ms(groupTimingsByOp)を区別できることを実service
+  // 経由で検証するため、1回のlist()呼び出しに合成の待ち時間を持たせ
+  // られるようにする——既定は0(遅延無し)で、既存の呼び出し側の挙動は
+  // 変わらない。
+  let delayMs = 0;
   const state = {
     /** 次の list() 呼び出しをGraphQL errors(dataは空でも通常発生する形)にする。 */
     setErrors(errors) {
@@ -26,12 +32,18 @@ function makePagedList(items, callLog) {
       rejection = err;
       forcedErrors = null;
     },
+    /** 以降のlist()呼び出し1回ごとに実際に待つms(合成遅延、setTimeout)。実測用で0が既定。 */
+    setDelayMs(ms) {
+      delayMs = ms;
+    },
     reset() {
       rejection = null;
       forcedErrors = null;
+      delayMs = 0;
     },
   };
   async function list(opts) {
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     callLog.push({ ...opts });
     if (rejection) throw rejection;
     if (forcedErrors) return { data: [], errors: forcedErrors };
@@ -87,9 +99,23 @@ const inventoryByCategory = {
   "cat-desk": Array.from({ length: 10 }, (_, i) => inventoryRow("cat-desk", i)),
 };
 let inventoryRejection = null;
+// 2026-09-13 EC計測レビュー補正: makePagedListと同じ合成遅延(実測用、既定0)。
+let inventoryDelayMs = 0;
+// 「途中ページ失敗」(2ページ目以降で初めて失敗する)を再現するための
+// 呼び出し回数カウンタ——nに達するまでの呼び出しは成功させ、n回を
+// 超えた呼び出しだけを失敗させる。カテゴリごとの並列実行と組み合わさる
+// ため「何回目の呼び出しで失敗するか」で表現する(「何ページ目」は
+// カテゴリをまたいで数えると曖昧になるため)。
+let inventoryCallCounter = 0;
+let inventoryRejectAfterCalls = null;
 async function listInventoryByCategoryId(key, opts) {
+  if (inventoryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, inventoryDelayMs));
   inventoryCalls.push({ key, opts: { ...opts } });
+  inventoryCallCounter++;
   if (inventoryRejection) throw inventoryRejection;
+  if (inventoryRejectAfterCalls !== null && inventoryCallCounter > inventoryRejectAfterCalls) {
+    throw new Error(`GSI throttled (call #${inventoryCallCounter})`);
+  }
   const items = inventoryByCategory[key.categoryId] ?? [];
   const limit = opts.limit ?? 100;
   const start = opts.nextToken ? Number(opts.nextToken) : 0;
@@ -155,6 +181,21 @@ module.exports = {
   __resetInventoryRejection() {
     inventoryRejection = null;
   },
+  /** 合成遅延(ms)。実測用、既定0。 */
+  __setInventoryDelayMs(ms) {
+    inventoryDelayMs = ms;
+  },
+  __resetInventoryDelayMs() {
+    inventoryDelayMs = 0;
+  },
+  /** n回目までのInventory.listInventoryByCategoryId呼び出しは成功させ、それ以降を失敗させる(「途中ページ失敗」の再現)。 */
+  __setInventoryRejectAfterCalls(n) {
+    inventoryRejectAfterCalls = n;
+  },
+  __resetInventoryRejectAfterCalls() {
+    inventoryRejectAfterCalls = null;
+  },
+  __categoryState: categoryMock.state,
   __channelListingState: channelListingMock.state,
   __listingDraftState: listingDraftMock.state,
   __resetCallLogs() {
@@ -162,5 +203,6 @@ module.exports = {
     inventoryCalls.length = 0;
     channelListingCalls.length = 0;
     listingDraftCalls.length = 0;
+    inventoryCallCounter = 0;
   },
 };

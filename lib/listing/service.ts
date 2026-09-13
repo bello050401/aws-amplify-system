@@ -10,6 +10,7 @@ import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { e2eListingsOverviewFetch } from "./e2eFixtures";
 import { unwrapList, unwrapWriteRequired } from "@/lib/amplify/listAll";
+import { attachStageTimings, currentQueryTimings, groupTimingsByOp, isQueryTimingEnabled, measureStage, withQueryTiming } from "@/lib/perf/queryTiming";
 import {
   BASE_ROUTE,
   MERCARI_ROUTE,
@@ -362,21 +363,13 @@ export interface ListingOverviewRow {
  * **必要件数より多めに取ってから絞る**。取りすぎないよう上限を置き、
  * それでも足りなければ「次へ」で続きを取る。
  */
-export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
-  // EC一覧P1 レビュー補正(2026-09-13): Playwright E2E専用(二重ゲート
-  // 済み — lib/listing/e2eFixtures.tsのコメント参照)。実AWSに到達
-  // できないsandboxで364件描画・5秒遅延・read rejection復帰を実ブラウザ
-  // 検証するための分岐で、本番/実データ経路には一切影響しない。
-  if (isE2EFixtureModeActive()) return e2eListingsOverviewFetch();
-
-  const [inventoryPage, channelListings, drafts, categoryNameOf] = await Promise.all([
-    // 対象カテゴリだけをGSIから引く(全件スキャンしない)。
-    listEcEligibleInventory(),
-    fetchAllChannelListings("MERCARI_SHOPS"),
-    fetchAllListingDrafts(),
-    loadCategoryNameLookup(),
-  ]);
-
+/** Promise.allで束ねる4本の並列読み取りから、最終行を組み立てる純粋な部分。計測の有無に関わらず同じ関数を通す(二重実装を避ける)。 */
+function buildOverviewRows(
+  inventoryPage: Awaited<ReturnType<typeof listEcEligibleInventory>>,
+  channelListings: ChannelListingRecord[],
+  drafts: ListingDraftRecord[],
+  categoryNameOf: CategoryNameLookup,
+): ListingOverviewRow[] {
   const channelListingByInventoryId = new Map(channelListings.map((c) => [c.inventoryId, c]));
   const draftInventoryIds = new Set(drafts.map((d) => d.inventoryId));
 
@@ -398,6 +391,146 @@ export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
       hasDraft: draftInventoryIds.has(item.id),
       channelListing: channelListingByInventoryId.get(item.id) ?? null,
     }));
+}
+
+/** 計測なしの通常経路(既定)。従来の`listListingsOverview`本体そのまま — 計測が無効なときはこの関数だけが呼ばれ、余計なPromiseラップは一切増えない。 */
+async function fetchListingsOverviewRows(): Promise<ListingOverviewRow[]> {
+  const [inventoryPage, channelListings, drafts, categoryNameOf] = await Promise.all([
+    // 対象カテゴリだけをGSIから引く(全件スキャンしない)。
+    listEcEligibleInventory(),
+    fetchAllChannelListings("MERCARI_SHOPS"),
+    fetchAllListingDrafts(),
+    loadCategoryNameLookup(),
+  ]);
+  return buildOverviewRows(inventoryPage, channelListings, drafts, categoryNameOf);
+}
+
+/** 一覧の計測結果 1段階ぶん。固定ラベル・壁時計経過時間・成否のみ ── 商品・顧客・認証情報は一切含まない。 */
+export interface ListingsOverviewStageTiming {
+  stage: string;
+  /** その段階(=1本の並列読み取り)自体の壁時計経過時間(ms)。 */
+  elapsedMs: number;
+  ok: boolean;
+}
+
+/** model.opごとの累積往復回数/所要ms(参考値 ── 並列実行された分はそのまま加算されるため、上のelapsedMsのような壁時計の待ち時間ではない。lib/perf/queryTiming.tsのgroupTimingsByOp参照)。 */
+export interface ListingsOverviewQueryTotal {
+  key: string;
+  pages: number;
+  ms: number;
+  ok: boolean;
+}
+
+export interface ListingsOverviewTimedResult {
+  rows: ListingOverviewRow[];
+  /** 4本の並列読み取りそれぞれの壁時計経過時間。計測無効(既定)時、またはE2E fixtureモード時は常に空配列。 */
+  stages: ListingsOverviewStageTiming[];
+  /** 参考値(上記コメント参照)。計測無効時は空配列。 */
+  queryTotals: ListingsOverviewQueryTotal[];
+  totalMs: number;
+}
+
+/**
+ * 4本の並列読み取りを、個別に壁時計で計測しながら実行する
+ * (2026-09-13 EC計測レビュー補正)。
+ *
+ * `measureStage`はどれか1本が失敗しても投げ直さない(lib/perf/
+ * queryTiming.tsのコメント参照)ため、4本とも必ず`Promise.all`で
+ * 揃うまで待つ ── 途中の1本が速く失敗しても、他の段階の計測が
+ * 欠けたまま終わることはない。全て成功していれば通常どおり行を組み立てて
+ * 返し、1本でも失敗していれば、最初に失敗した段階の元の例外へ4本ぶんの
+ * 計測結果を添えて投げる(一覧の「失敗したら例外を投げる」契約自体は
+ * そのまま)。
+ */
+async function fetchListingsOverviewRowsTimed(): Promise<{ rows: ListingOverviewRow[]; stages: ListingsOverviewStageTiming[] }> {
+  const [inventoryOutcome, channelOutcome, draftOutcome, categoryOutcome] = await Promise.all([
+    measureStage("ecEligibleInventory", listEcEligibleInventory),
+    measureStage("channelListings", () => fetchAllChannelListings("MERCARI_SHOPS")),
+    measureStage("listingDrafts", fetchAllListingDrafts),
+    measureStage("categoryNames", loadCategoryNameLookup),
+  ]);
+  const outcomes = [inventoryOutcome, channelOutcome, draftOutcome, categoryOutcome];
+  const stages = outcomes.map((o) => o.timing);
+
+  const firstFailure = outcomes.find((o): o is { ok: false; error: unknown; timing: ListingsOverviewStageTiming } => !o.ok);
+  if (firstFailure) throw attachStageTimings(firstFailure.error, stages);
+
+  // 全て成功 ── ここでは各outcomeがok:trueであることが上のチェックで保証済み。
+  const rows = buildOverviewRows(
+    (inventoryOutcome as { ok: true; value: Awaited<ReturnType<typeof listEcEligibleInventory>> }).value,
+    (channelOutcome as { ok: true; value: ChannelListingRecord[] }).value,
+    (draftOutcome as { ok: true; value: ListingDraftRecord[] }).value,
+    (categoryOutcome as { ok: true; value: CategoryNameLookup }).value,
+  );
+  return { rows, stages };
+}
+
+/**
+ * `listListingsOverview`と同じ処理を、段階別の壁時計経過時間・
+ * model.op別の累積参考値つきで返す(2026-09-13 EC計測レビュー補正)。
+ *
+ * `listListingsOverview`はこの関数の`rows`をそのまま返すだけの薄い
+ * ラッパー(二重実装ではない)── 計測の有無でデータの取り方・件数・
+ * 順序が変わることは無い。
+ */
+export async function listListingsOverviewWithTiming(): Promise<ListingsOverviewTimedResult> {
+  // lib/listing/service.tsのgetListingDraftForInventory等と同じ二重
+  // ゲート(isE2EFixtureModeActive)── listListingsOverviewWithTimingを
+  // 診断エンドポイントから直接呼ぶ経路でも、E2E fixtureモードでは実AWS
+  // へ触れない。
+  if (isE2EFixtureModeActive()) {
+    return { rows: await e2eListingsOverviewFetch(), stages: [], queryTotals: [], totalMs: 0 };
+  }
+
+  const startedAt = performance.now();
+  if (!isQueryTimingEnabled()) {
+    const rows = await fetchListingsOverviewRows();
+    return { rows, stages: [], queryTotals: [], totalMs: Math.round(performance.now() - startedAt) };
+  }
+
+  return withQueryTiming("listings-overview", async () => {
+    const { rows, stages } = await fetchListingsOverviewRowsTimed();
+    const queryTotals: ListingsOverviewQueryTotal[] = groupTimingsByOp(currentQueryTimings()).map((g) => ({
+      key: g.key,
+      pages: g.count,
+      ms: Math.round(g.ms),
+      ok: g.ok,
+    }));
+    return { rows, stages, queryTotals, totalMs: Math.round(performance.now() - startedAt) };
+  });
+}
+
+/**
+ * EC出品一覧。
+ *
+ * ## 2026-09-02: 開くたびに在庫を全件読んでいた
+ *
+ * 以前は `listInventory({}, { offset: 0, limit: 20000 })` を呼んでいた。
+ * その中身は在庫テーブルの**全件スキャン**で、実測すると
+ *
+ *   全件スキャン(5,313件・7往復) …… 9,246ms
+ *   GSIで50件だけ取得(1往復)     ……   173ms   ← 53倍の差
+ *
+ * だった。画面が表示するのは先頭の数十件なのに、毎回9秒ぶんの読み取りを
+ * していたことになる。在庫一覧(/inventory)では既にGSI経路へ切り替えて
+ * あったのに、この画面だけ古い経路のまま残っていた。
+ *
+ * ## 対象外カテゴリの除外と両立させる
+ *
+ * この一覧はEC出品対象外のカテゴリを落としてから表示する。ページごとに
+ * 取ってから落とすと、1ページの件数が減って穴が空く。そこで
+ * **必要件数より多めに取ってから絞る**。取りすぎないよう上限を置き、
+ * それでも足りなければ「次へ」で続きを取る。
+ */
+export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
+  // EC一覧P1 レビュー補正(2026-09-13): Playwright E2E専用(二重ゲート
+  // 済み — lib/listing/e2eFixtures.tsのコメント参照)。実AWSに到達
+  // できないsandboxで364件描画・5秒遅延・read rejection復帰を実ブラウザ
+  // 検証するための分岐で、本番/実データ経路には一切影響しない。
+  if (isE2EFixtureModeActive()) return e2eListingsOverviewFetch();
+
+  const { rows } = await listListingsOverviewWithTiming();
+  return rows;
 }
 
 /**

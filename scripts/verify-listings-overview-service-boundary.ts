@@ -237,6 +237,152 @@ async function main() {
     mock.__resetInventoryRejection();
   }
 
+  console.log("\n── 段階別の壁時計計測(BELLO_QUERY_TIMING=1、実service) ── elapsedMsと累積msの区別 ──");
+  {
+    // 2026-09-13 EC計測レビュー補正: listEcEligibleInventoryはカテゴリ
+    // ごとに`Promise.all`で並列にGSIを叩く(chairは250件で2ページ、
+    // deskは10件で1ページ)。合成遅延を与えて、ecEligibleInventory段階の
+    // 壁時計(elapsedMs)が「chairの直列2往復ぶん」に近く、「chair2往復+
+    // desk1往復を単純合計した累積ms」よりはっきり小さいことを、実際に
+    // 待つ合成遅延(setTimeout)で示す ── 数値を演算で埋めた自己申告の
+    // テストにしない。
+    process.env.BELLO_QUERY_TIMING = "1";
+    mock.__resetCallLogs();
+    mock.__resetInventoryRejection();
+    mock.__resetInventoryRejectAfterCalls();
+    mock.__channelListingState.reset();
+    mock.__listingDraftState.reset();
+    mock.__categoryState.reset();
+
+    // Windows既定のシステムタイマー分解能(≒15.6ms)により、setTimeoutの
+    // 実測待ち時間は指定msの2倍近くまで丸め上がることを実測で確認した
+    // (このsandbox環境固有の事情)。桁を1つ上げて、その揺らぎの範囲内でも
+    // 「chairの直列2往復」と「完全直列(+desk1往復)」を明確に区別できる
+    // 幅を確保する。
+    const inventoryDelayMs = 80;
+    const channelDelayMs = 80;
+    const draftDelayMs = 80;
+    mock.__setInventoryDelayMs(inventoryDelayMs);
+    mock.__channelListingState.setDelayMs(channelDelayMs);
+    mock.__listingDraftState.setDelayMs(draftDelayMs);
+
+    const { listListingsOverviewWithTiming } = await import("@/lib/listing/service");
+    const result = await listListingsOverviewWithTiming();
+
+    mock.__resetInventoryDelayMs();
+    mock.__channelListingState.reset();
+    mock.__listingDraftState.reset();
+
+    check(result.rows.length === 260, "計測ONでも通常どおり260件返す(計測は結果を変えない)", `rows=${result.rows.length}`);
+
+    const ecStage = result.stages.find((s: { stage: string }) => s.stage === "ecEligibleInventory");
+    const chanStage = result.stages.find((s: { stage: string }) => s.stage === "channelListings");
+    const draftStage = result.stages.find((s: { stage: string }) => s.stage === "listingDrafts");
+    check(!!ecStage && ecStage.ok === true && !!chanStage && !!draftStage, "4段階とも記録され、成功時はok:true");
+
+    // chairはpage1→page2が直列(≒inventoryDelayMs*2)、deskは1往復のみ。
+    // 両カテゴリはPromise.allで並列に走るので、段階全体の壁時計は
+    // 「chairの直列2往復」にほぼ一致し、desk分がそのまま上乗せされる
+    // ことはない ── 完全に直列(chair2往復+desk1往復=3往復ぶん)なら
+    // 到達するはずの値より、はっきり下回ることを確認する。
+    //
+    // 「1往復ぶんの実測コスト」はchannelListings段階(同じ80ms遅延を
+    // 1回だけ待つ)の実測値をそのまま単位として使う ── setTimeoutの
+    // 実測待ち時間はOSのタイマー分解能で指定msから増減する(Windowsの
+    // 既定は≒15.6ms刻み)ため、80という指定値そのものを基準にすると
+    // 環境差でテストが揺れる。実測1往復ぶんを基準にすれば環境差を
+    // 自動的に吸収できる。
+    const perCallCostMs = chanStage!.elapsedMs;
+    check(
+      !!ecStage && perCallCostMs > 0 && ecStage.elapsedMs >= perCallCostMs * 1.3 && ecStage.elapsedMs < perCallCostMs * 2.7,
+      `★要件: ecEligibleInventoryの壁時計はchairの直列2往復(実測1往復≒${perCallCostMs}ms換算で≒${perCallCostMs * 2}ms)に近く、chair+deskを完全直列に足した場合(≒${perCallCostMs * 3}ms)には届かない`,
+      `elapsedMs=${ecStage?.elapsedMs}ms, 実測1往復=${perCallCostMs}ms`,
+    );
+
+    // 累積参考値(queryTotals)はlib/amplify/dataClient.tsのwithTiming
+    // (serverDataClient.models.X.op()をProxyで包んでrecordQueryする既存
+    // 機構、このタスクでは変更していない)経由で埋まる。このfixtureは
+    // `@/lib/amplify/dataClient`自体を丸ごとモックへ差し替えているため
+    // (ファイル冒頭コメント参照)recordQueryは呼ばれず、常に空配列になる
+    // ── groupTimingsByOpの累積計算自体の正しさ(並列実行分がそのまま
+    // 合算されること)は、withTimingの実配線に依存しない
+    // scripts/verify-listings-overview-timing.ts側で実際に待つ合成遅延
+    // により検証済み。ここでは「戻り値の形」だけ確認する。
+    check(Array.isArray(result.queryTotals), "queryTotalsは配列として返る(このfixture経由では空配列 ── 上記コメント参照)");
+
+    check(
+      !!chanStage && chanStage.elapsedMs >= channelDelayMs * 0.7 && chanStage.elapsedMs < channelDelayMs * 3,
+      "channelListings段階の壁時計は1往復ぶん相当に収まる(合計しても増えない)",
+      `${chanStage?.elapsedMs}ms`,
+    );
+    check(!!draftStage && draftStage.elapsedMs >= draftDelayMs * 0.7, "listingDrafts段階の壁時計も実測できる", `${draftStage?.elapsedMs}ms`);
+
+    delete process.env.BELLO_QUERY_TIMING;
+  }
+
+  console.log("\n── 途中ページ失敗(実service) ── 1本の失敗が他の段階の計測を巻き込まない ──");
+  {
+    // 2026-09-13 EC計測レビュー補正の核心: 以前は「fetchがthrowすると
+    // 計測結果を組み立てず、診断GETは汎用errorのみで失敗段階が消える」
+    // 問題があった。ここではchairの1ページ目(GSI呼び出し1回目)は成功
+    // させ、2ページ目(3回目の呼び出し ── デスクの1回目と合わせて2回目
+    // までは成功させる)で初めて失敗させ、「一覧の途中(ページング中)で
+    // 失敗する」ケースを再現する。
+    process.env.BELLO_QUERY_TIMING = "1";
+    mock.__resetCallLogs();
+    mock.__resetInventoryRejection();
+    mock.__channelListingState.reset();
+    mock.__listingDraftState.reset();
+
+    const inventoryDelayMs = 15;
+    mock.__setInventoryDelayMs(inventoryDelayMs);
+    mock.__setInventoryRejectAfterCalls(2); // 1・2回目(chair page1, desk page1)は成功、3回目(chair page2)で失敗。
+
+    const { listListingsOverview, listListingsOverviewWithTiming } = await import("@/lib/listing/service");
+    const { buildTimingResponsePayload } = await import("@/lib/listing/listingsOverviewTimingResponse");
+    const { getStageTimings } = await import("@/lib/perf/queryTiming");
+
+    let caught: unknown;
+    try {
+      await listListingsOverview();
+    } catch (err) {
+      caught = err;
+    }
+    check(caught instanceof Error, "★要件: 途中ページ失敗もlistListingsOverviewは例外として投げる(既存の例外契約を維持)");
+
+    const stagesOnFailure = getStageTimings(caught);
+    check(
+      stagesOnFailure.length === 4,
+      "★要件: 4本すべての段階の計測が失われずに残る(以前は失敗した時点で計測結果を組み立てられなかった)",
+      `stages=${JSON.stringify(stagesOnFailure)}`,
+    );
+    const failedStage = stagesOnFailure.find((s) => s.stage === "ecEligibleInventory");
+    check(!!failedStage && failedStage.ok === false, "★要件: 失敗した段階(ecEligibleInventory、chairの2ページ目)はok:falseとして記録される");
+    const otherStagesOk = stagesOnFailure.filter((s) => s.stage !== "ecEligibleInventory").every((s) => s.ok === true);
+    check(otherStagesOk, "★要件: 失敗していない他の3段階(channelListings/listingDrafts/categoryNames)はok:trueのまま");
+
+    const safeResult = await (await import("@/lib/listing/service")).listListingsOverviewSafe();
+    check(safeResult === null, "listListingsOverviewSafeは同じ失敗を外へ投げずnullへ落とす(タイミング計測が有効でも契約は変わらない)");
+
+    // 診断応答(実際にroute.tsのGETが使うのと同じ関数)も同じ形で返す。
+    mock.__resetCallLogs();
+    const { status, body } = await buildTimingResponsePayload(listListingsOverviewWithTiming);
+    check(status === 500 && body.error === "listings_overview_failed", "診断応答も同じ失敗を種別ラベルで返す");
+    const bodyStages = (body.stages ?? []) as { stage: string; ok: boolean }[];
+    check(
+      Array.isArray(bodyStages) && bodyStages.length === 4,
+      "★要件: 診断応答にも4段階すべての計測が乗る(以前は汎用errorのみで失敗段階が消えていた)",
+      `body.stages=${JSON.stringify(bodyStages)}`,
+    );
+    check(!JSON.stringify(body).includes("GSI throttled"), "★要件: 診断応答に元の例外メッセージ(GSI throttled)は含まれない");
+    check(!("rows" in body), "診断応答にrows(一覧の行)を含めていない");
+
+    mock.__resetInventoryDelayMs();
+    mock.__resetInventoryRejectAfterCalls();
+    mock.__resetInventoryRejection();
+    delete process.env.BELLO_QUERY_TIMING;
+  }
+
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }
