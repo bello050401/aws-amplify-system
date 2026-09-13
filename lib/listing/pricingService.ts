@@ -1,4 +1,5 @@
 import "server-only";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { getChannelListing } from "./service";
@@ -76,6 +77,7 @@ function toPricingRuleRecord(row: {
 }
 
 export async function listPricingRules(): Promise<PricingRuleRecord[]> {
+  if (isE2EFixtureModeActive()) return [];
   const { data, errors } = await serverDataClient.models.PricingRule.list({ ...inventoryAuthMode });
   if (errors) throw new Error(`自動価格ルール一覧の取得に失敗しました: ${JSON.stringify(errors)}`);
   return data.map(toPricingRuleRecord);
@@ -405,6 +407,7 @@ export interface PriceHistoryEntry {
  * 返す(件数はUI側で必要なだけ切る)。
  */
 export async function listPriceHistory(channelListingId: string, limit = 20): Promise<PriceHistoryEntry[]> {
+  if (isE2EFixtureModeActive()) return [];
   const { data } = await serverDataClient.models.PriceHistory.listPriceHistoryByChannelListingId(
     { channelListingId },
     { ...inventoryAuthMode, limit: 200 },
