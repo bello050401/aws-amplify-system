@@ -104,6 +104,7 @@
     "verify:listings-overview-timing": "tsx scripts/verify-listings-overview-timing.ts",
     "verify:listings-overview-table-logic": "tsx scripts/verify-listings-overview-table-logic.ts",
     "verify:listings-overview-failure-classification": "tsx scripts/verify-listings-overview-failure-classification.ts",
+    "verify:inventory-auth-middleware": "tsx scripts/verify-inventory-auth-middleware.ts",
     "rename:shipping-service": "node scripts/with-server-only-stub.cjs scripts/rename-shipping-service.ts",
     "measure:performance": "node scripts/with-server-only-stub.cjs scripts/measure-performance.ts",
     "measure:staging-http": "node scripts/with-server-only-stub.cjs scripts/measure-staging-http.ts",

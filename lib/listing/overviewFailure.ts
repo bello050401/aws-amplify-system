@@ -44,6 +44,35 @@ import type { StageTiming } from "@/lib/perf/queryTiming";
  * (再ログイン案内が有効)と`"auth-forbidden"`(権限不足、再ログインでは
  * 直らない)を分け、UI側の案内もそれぞれに合わせて出し分ける
  * (app/inventory/(protected)/listings/ListingsOverviewTable.tsx参照)。
+ *
+ * ## 2026-09-13 検証・不採用(task_83af1d1b9dab4d9893、先行候補
+ * task_4e04c971153ee1eb39/commit 620a78bのreconcileAuthExpiredKind案)
+ *
+ * 先行候補は、同一リクエストの`getInventorySessionStatus`が"authorized"
+ * を返していれば"auth-expired"を"auth-transient"(再ログイン案内なしの
+ * 再試行のみ)へ格下げする関数をここに追加していた。検証の結果、この
+ * ファイルには反映していない——理由:
+ *
+ *   1. この格下げの前提("layoutは有効と判定できているのにChannelListing
+ *      だけauth-expiredになるのは、レイアウトとデータクライアントが
+ *      別々に独立してリフレッシュを試み、片方だけ失敗する競合構造による"
+ *      という仮説)自体は、middleware.ts(このタスクで新設)のコメントで
+ *      実SDKソースを引いて裏付けている——だがmiddleware.tsは**その競合が
+ *      起きる前に**単一のリフレッシュで解決する根本修正であり、これが
+ *      機能していれば"auth-expired"がそもそも発生しにくくなる。
+ *   2. 根本修正がある上に、症状(メッセージ文字列)だけを見て「本当は
+ *      無効ではない」と断定するヒューリスティックを重ねると、真に
+ *      再ログインが必要なケースを見誤るリスクが増える一方、middleware
+ *      では説明できない別の一時的問題(スロットリング等)まで
+ *      "auth-transient"へ丸めてしまう副作用がある——原因未確定のまま
+ *      安全側(再ログイン案内を弱めない)に倒す方を優先した(指示書§4
+ *      「cached authorizedだけで真のexpiredをtransient断定する変更は
+ *      不要なら除外」)。
+ *
+ * 実ユーザー環境でmiddleware.tsだけでは非対称が解消しないと再確認された
+ * 場合は、この判断を再検討すること(scripts/verify-inventory-auth-
+ * middleware.tsが実境界試験、middleware.tsのコメントが根拠のSDK/Next.js
+ * ソース引用)。
  */
 
 /** 一覧を組み立てる4本の並列読み取りのうちどれが失敗したか。lib/listing/service.tsのmeasureStage呼び出し名・fetchListingsOverviewRowsのタグ付け先と一致させる(固定ラベル、商品・顧客情報は含まない)。 */
