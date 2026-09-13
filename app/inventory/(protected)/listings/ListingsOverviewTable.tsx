@@ -1,12 +1,19 @@
 "use client";
 
 import { formatJstDateTime } from "@/lib/inventory/formatJst";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { bulkCreateListingDraftsAction } from "@/app/actions/listing";
+import { bulkCreateListingDraftsAction, listListingsOverviewAction } from "@/app/actions/listing";
 import { savePricingAssignmentSelection } from "@/lib/listing/pricingAssignmentSelection";
 import type { ListingOverviewRow } from "@/lib/listing/service";
+import {
+  LISTINGS_OVERVIEW_PAGE_SIZE,
+  loadStateFromInitialRows,
+  paginate,
+  selectableInventoryIds,
+  type ListingsLoadState,
+} from "@/lib/listing/listingsOverviewTableLogic";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
@@ -15,6 +22,10 @@ import { InventoryThumbnail } from "../../InventoryThumbnail";
 // 自由にstatusを変更しない」) — ここは表示のためのラベル/バッジ定義
 // のみ。
 type StatusFilter = "ALL" | "NOT_STARTED" | Exclude<ListingOverviewRow["channelListing"], null>["status"];
+
+// state.kindが"ok"以外の間、rowsとして使う安定した空配列参照。
+// (呼び出しのたびに新しい[]を作るとuseMemoの依存が毎回変わってしまう)
+const EMPTY_ROWS: ListingOverviewRow[] = [];
 
 /**
  * 1行の状態を、既存のListingOverviewRow(Inventory + 最大1件のChannelListing)
@@ -71,15 +82,51 @@ const STATUS_BADGE_CLASS: Record<Exclude<StatusFilter, "ALL">, string> = {
  * サーバー往復なしでこのコンポーネント内だけで完結させている
  * (サーバー側ページングはこの規模には過剰設計 — lib/inventory/queries.ts
  * のSEARCH_MAX_SCAN_ITEMS付近のコメントと同じ判断)。
+ *
+ * EC一覧P1 レビュー補正(2026-09-13): 検索・絞り込み・選択(filtered/
+ * selectableIds)は変わらず全件に対して行うが、実際にDOMへ描画する行は
+ * lib/listing/listingsOverviewTableLogic.tsのpaginateで1ページぶんへ
+ * 切り出す(364件全部を一度に<tr>化して初回描画が重くなる/固まって
+ * 見える、という実害への対応)。ページを跨いだ「すべて選択」の意味
+ * (selectableIds)自体はpaginate前のfilteredから算出するので変えて
+ * いない — ページングの導入前後で一括操作の対象範囲は変わらない。
+ *
+ * `initialRows`はServer Component側(ListingsOverviewData.tsx)から渡る
+ * 取得結果 — 成功なら行の配列、失敗ならnull(取得失敗と実0件を混同
+ * しない、app/inventory/(protected)/[id]/InventoryHistorySection.tsxと
+ * 同じ設計)。
  */
-export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverviewRow[]; canEdit: boolean }) {
+export function ListingsOverviewTable({ initialRows, canEdit }: { initialRows: ListingOverviewRow[] | null; canEdit: boolean }) {
   const router = useRouter();
+  const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(() => loadStateFromInitialRows(initialRows));
+
+  // runBulkCreate成功後のrouter.refresh()は、page.tsx→ListingsOverviewData
+  // (Server Component)を再実行して新しいinitialRowsを渡し直す——
+  // ページ全体は再読み込みしない(Suspense境界内だけがやり直る)ので、
+  // このClient ComponentはアンマウントされずuseStateの初期値は再評価
+  // されない。以前の実装(propsのrowsをそのまま使う、内部stateを
+  // 持たない)ではこれが自動的に効いていたが、取得失敗/実0件を区別する
+  // 内部stateを持たせたことで素朴には効かなくなる——ここでinitialRows
+  // (参照)が変わるたびに反映し直すことで、bulk作成後にバッジ・下書き
+  // 有無が更新される既存の挙動を保つ。
+  useEffect(() => {
+    setState(loadStateFromInitialRows(initialRows));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRows]);
+
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // useMemoで包む — 依存配列内で毎レンダー新しい[]を作る実装だと
+  // (state.kindがok以外の間)`rows`の参照が変わり続け、下のfilteredの
+  // useMemoが実質無効化される(ESLint react-hooks/exhaustive-depsが
+  // 指摘する箇所)。
+  const rows = useMemo(() => (state.kind === "ok" ? state.rows : EMPTY_ROWS), [state]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -90,11 +137,29 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
     });
   }, [rows, query, statusFilter]);
 
-  // 一括下書き作成の対象になり得るのは「まだ下書きが無い」商品だけ
-  // (既存下書きはsaveListingDraftのupsert仕様上、一括実行すると
-  // タイトル/価格が初期値へ巻き戻ってしまうため — lib/listing/service.ts
-  // のbulkCreateListingDraftsコメント参照)。
-  const selectableIds = useMemo(() => filtered.filter((r) => !r.hasDraft).map((r) => r.inventoryId), [filtered]);
+  // 検索・絞り込みが変わったら1ページ目へ戻す — 古いページ番号のまま
+  // だと、件数が減った直後に空のページを描画してしまう(paginate自体
+  // もクランプするが、それだと「絞り込んだら見たことのない別ページの
+  // 続きが出る」体感になり、直感に反する)。
+  useEffect(() => {
+    setPage(0);
+  }, [query, statusFilter]);
+
+  // paginateが返す`page`は要求値(state)をクランプ済みの実際の値 —
+  // 絞り込みで件数が減った直後、まだuseEffectの1ページ目リセットが
+  // 走っていない一瞬でも、表示・前へ/次への活性状態はこちら(クランプ
+  // 済み)を使う。stateの`page`自体は次の操作までそのまま保持する
+  // (paginateへ渡す「要求値」としての役割のみ)。
+  const { pageRows, page: currentPage, pageCount, totalCount } = useMemo(
+    () => paginate(filtered, page, LISTINGS_OVERVIEW_PAGE_SIZE),
+    [filtered, page],
+  );
+
+  // 一括下書き作成・すべて選択の対象は、ページ内だけでなく絞り込み後の
+  // 全件(filtered)から算出する — lib/listing/listingsOverviewTableLogic.ts
+  // のselectableInventoryIdsのコメント参照(ページングの導入で対象範囲
+  // が意図せず縮んだり広がったりしないため)。
+  const selectableIds = useMemo(() => selectableInventoryIds(filtered), [filtered]);
   const allSelectableSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
 
   function toggleOne(inventoryId: string) {
@@ -144,6 +209,50 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
     }
   }
 
+  /**
+   * EC一覧P1 レビュー補正: 一覧データ自体の取得に失敗した場合の再試行
+   * (「0件」と「取得失敗」を混同しない・データ欠落状態で一括操作を
+   * 有効にしない — 下のJSXでstate.kind==="error"の間は一括操作ボタン
+   * 列自体を描画しない)。app/inventory/(protected)/[id]/
+   * InventoryHistorySection.tsxのretryと同じ形——Server Actionが投げた
+   * 例外(通信断等)もcatchして再試行可能に戻す。ページ全体の再読み込み
+   * (router.refresh())ではなく、この一覧データだけをやり直す。
+   */
+  async function retryLoad() {
+    setState({ kind: "retrying" });
+    try {
+      const freshRows = await listListingsOverviewAction();
+      setState({ kind: "ok", rows: freshRows });
+    } catch {
+      setState({ kind: "error" });
+    }
+  }
+
+  if (state.kind !== "ok") {
+    return (
+      <div>
+        {state.kind === "retrying" ? (
+          <p className="text-[12px] text-gray-400" aria-live="polite">
+            読み込み中…
+          </p>
+        ) : (
+          <div>
+            <p className="text-[12px] text-red-600" role="alert">
+              EC出品一覧を読み込めませんでした。
+            </p>
+            <button
+              type="button"
+              onClick={() => void retryLoad()}
+              className="mt-1 border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50"
+            >
+              再試行
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -164,7 +273,7 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
             </option>
           ))}
         </select>
-        <span className="text-[12px] text-gray-500">{filtered.length.toLocaleString("ja-JP")}件表示</span>
+        <span className="text-[12px] text-gray-500">{totalCount.toLocaleString("ja-JP")}件表示</span>
 
         {canEdit && (
           <div className="ml-auto flex items-center gap-2">
@@ -226,14 +335,14 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 && (
+            {totalCount === 0 && (
               <tr>
                 <td colSpan={canEdit ? 8 : 7} className="px-2 py-8 text-center text-[12px] text-gray-400">
                   該当する商品がありません。
                 </td>
               </tr>
             )}
-            {filtered.map((row) => {
+            {pageRows.map((row) => {
               const status = statusOf(row);
               const canSelect = !row.hasDraft;
               return (
@@ -302,6 +411,39 @@ export function ListingsOverviewTable({ rows, canEdit }: { rows: ListingOverview
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* ページ移動 — 検索・絞り込み・選択は全件(filtered)が対象のまま、
+          DOMに描画する行だけをここで切り替える。件数が1ページに収まる
+          間(pageCount===1)は前へ/次へを常に無効表示にする(押しても
+          何も起きないボタンを常時活性化しておく方が誤解を招くため)。 */}
+      <div className="flex items-center justify-between border-t border-gray-200 px-1 py-1.5 text-[12px] text-gray-600">
+        <span>
+          {totalCount === 0
+            ? "0件"
+            : `${(currentPage * LISTINGS_OVERVIEW_PAGE_SIZE + 1).toLocaleString("ja-JP")}–${(currentPage * LISTINGS_OVERVIEW_PAGE_SIZE + pageRows.length).toLocaleString("ja-JP")}件 / 全${totalCount.toLocaleString("ja-JP")}件`}
+        </span>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setPage(Math.max(0, currentPage - 1))}
+            disabled={currentPage <= 0}
+            className="border border-gray-300 px-2 py-1 hover:bg-gray-50 disabled:border-gray-100 disabled:text-gray-300 disabled:hover:bg-transparent"
+          >
+            ← 前へ
+          </button>
+          <span>
+            {currentPage + 1} / {pageCount}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPage(Math.min(pageCount - 1, currentPage + 1))}
+            disabled={currentPage >= pageCount - 1}
+            className="border border-gray-300 px-2 py-1 hover:bg-gray-50 disabled:border-gray-100 disabled:text-gray-300 disabled:hover:bg-transparent"
+          >
+            次へ →
+          </button>
+        </div>
       </div>
     </div>
   );

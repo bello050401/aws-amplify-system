@@ -1,7 +1,8 @@
+import { Suspense } from "react";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { listListingsOverviewAction } from "@/app/actions/listing";
 import { InventoryHeader } from "../../InventoryHeader";
-import { ListingsOverviewTable } from "./ListingsOverviewTable";
+import { ListingsOverviewData } from "./ListingsOverviewData";
+import { ListingsOverviewSkeleton } from "./ListingsOverviewSkeleton";
 
 export const metadata = { title: "EC出品 | BELLO 在庫管理" };
 
@@ -19,24 +20,32 @@ export const metadata = { title: "EC出品 | BELLO 在庫管理" };
  * いない(spec: 「コンセプトだけを参考にし、UI/デザイン/コードは
  * コピーしない」)。
  *
- * データ取得はServer Component側で一括して行い(listListingsOverviewAction
- * — lib/listing/service.tsのlistListingsOverview、Inventory全件と
+ * データ取得はServer Component側で一括して行い(ListingsOverviewData.tsx
+ * 経由でlib/listing/service.tsのlistListingsOverview、Inventory全件と
  * ChannelListing/ListingDraftをメモリ上でjoinする)、検索・絞り込み・
  * 選択状態はクライアント側(ListingsOverviewTable)で完結させる —
  * この画面の想定規模(Inventory全体、既存のSEARCH_MAX_SCAN_ITEMSと同じ
  * 上限)であれば、専用の検索基盤やサーバー側ページングは過剰設計になる
- * という、このアプリ全体で一貫した判断。
+ * という、このアプリ全体で一貫した判断(ただしテーブルへの実DOM描画
+ * 自体はページングする — ListingsOverviewTable.tsx参照)。
  *
  * 権限: 閲覧はADMIN/EDITOR/VIEWERいずれも可(既存の商品詳細のEC出品
  * リンクと同じ閲覧権限モデル)。一括下書き作成の書き込みだけADMIN/EDITOR
  * 限定(app/actions/listing.tsのbulkCreateListingDraftsAction — VIEWER
  * が呼んでもServer Action側で拒否される)。
+ *
+ * EC一覧P1 レビュー補正(2026-09-13): 以前はこのServer Component自体が
+ * listListingsOverviewActionをawaitしていたため、ヘッダー・案内文まで
+ * 一覧データの取得完了(または失敗)を待たされていた——取得が遅い/
+ * 失敗すると、ヘッダーごと真っ白のまま固まって見える・またはページ
+ * 全体がapp/inventory/error.tsxの汎用エラーに差し替わる、の両方の
+ * 実害があった。ヘッダー・案内文はここで即座に返し、一覧データ本体
+ * だけを<Suspense>で分離する(app/inventory/(protected)/[id]/page.tsx
+ * の更新履歴セクションと同じパターン)。
  */
 export default async function ListingsOverviewPage() {
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects signed-out/unauthorized users
-
-  const rows = await listListingsOverviewAction();
 
   return (
     <div className="flex h-full flex-col">
@@ -46,7 +55,9 @@ export default async function ListingsOverviewPage() {
           在庫の商品をMercari
           Shopsへ出品する状況を一覧で確認・一括操作できます。個別の出品下書き編集・出品実行は、各商品の「詳細を開く」から商品詳細画面のEC出品タブで行います。
         </p>
-        <ListingsOverviewTable rows={rows} canEdit={canEditInventory(role)} />
+        <Suspense fallback={<ListingsOverviewSkeleton canEdit={canEditInventory(role)} />}>
+          <ListingsOverviewData canEdit={canEditInventory(role)} />
+        </Suspense>
       </div>
     </div>
   );

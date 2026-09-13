@@ -8,6 +8,7 @@ import { createMercariProduct } from "./mercari/adapter";
 import { createBaseProduct } from "./base/adapter";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
+import { e2eListingsOverviewFetch } from "./e2eFixtures";
 import { unwrapList, unwrapWriteRequired } from "@/lib/amplify/listAll";
 import {
   BASE_ROUTE,
@@ -253,13 +254,34 @@ export async function getChannelListing(inventoryId: string, channel: ListingCha
 /** ChannelListingを辿る上限(こちらは在庫と違い件数が小さい)。 */
 const LISTING_OVERVIEW_MAX_ITEMS = 20000;
 
+/**
+ * EC出品 遅延・画面エラー P1 優先修正(2026-09-13、task_182d944b8cc803a5af
+ * 由来 — 一覧の変更点のうちこのlimitだけを継承。個別編集画面
+ * ([id]/listing/page.tsx)側の差分はレビュー対象外のため引き継がない):
+ * ChannelListing/ListingDraftはどちらも`channel`/`deletedAt`用のGSIを
+ * 持たない(secondaryIndexesはinventoryId/listingDraftIdのみ、
+ * amplify/data/resource.ts参照)ため、この一覧の初期取得は今後も
+ * DynamoDB Scanのまま——これ自体はlistEcEligibleInventoryのようにGSI
+ * へ切り替えて解消できる種類の問題ではない。
+ *
+ * ただし往復回数は減らせる。件数が多いテーブルのScanで往復回数を
+ * 減らす効果は、lib/inventory/queries.tsのInventory全件走査で既に実測
+ * 済み(5,313件に対しlimit 200→27往復、limit 1000→7往復 —
+ * DynamoDBの1ページ1MB上限に先に当たるため、実際の総件数によらず
+ * ここが実質的な下限)。この一覧のScanもページごとの`await`が直列に
+ * 積み上がる構造は同じなので、同じ理由でlimitを200→1000へ揃える。
+ * データ・フィルタ条件・上限(LISTING_OVERVIEW_MAX_ITEMS)は変えていない
+ * ——1ページで運べる件数を増やすだけ。
+ */
+const LISTING_OVERVIEW_PAGE_SIZE = 1000;
+
 async function fetchAllChannelListings(channel: ListingChannel): Promise<ChannelListingRecord[]> {
   const items: ChannelListingRecord[] = [];
   let nextToken: string | null | undefined;
   do {
     const { data, nextToken: nt, errors } = await serverDataClient.models.ChannelListing.list({
       filter: { channel: { eq: channel } },
-      limit: 200,
+      limit: LISTING_OVERVIEW_PAGE_SIZE,
       nextToken: nextToken ?? undefined,
       ...inventoryAuthMode,
     });
@@ -277,7 +299,7 @@ async function fetchAllListingDrafts(): Promise<ListingDraftRecord[]> {
   do {
     const { data, nextToken: nt, errors } = await serverDataClient.models.ListingDraft.list({
       filter: { deletedAt: { attributeExists: false } },
-      limit: 200,
+      limit: LISTING_OVERVIEW_PAGE_SIZE,
       nextToken: nextToken ?? undefined,
       ...inventoryAuthMode,
     });
@@ -341,6 +363,12 @@ export interface ListingOverviewRow {
  * それでも足りなければ「次へ」で続きを取る。
  */
 export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
+  // EC一覧P1 レビュー補正(2026-09-13): Playwright E2E専用(二重ゲート
+  // 済み — lib/listing/e2eFixtures.tsのコメント参照)。実AWSに到達
+  // できないsandboxで364件描画・5秒遅延・read rejection復帰を実ブラウザ
+  // 検証するための分岐で、本番/実データ経路には一切影響しない。
+  if (isE2EFixtureModeActive()) return e2eListingsOverviewFetch();
+
   const [inventoryPage, channelListings, drafts, categoryNameOf] = await Promise.all([
     // 対象カテゴリだけをGSIから引く(全件スキャンしない)。
     listEcEligibleInventory(),
@@ -370,6 +398,32 @@ export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
       hasDraft: draftInventoryIds.has(item.id),
       channelListing: channelListingByInventoryId.get(item.id) ?? null,
     }));
+}
+
+/**
+ * EC一覧P1 レビュー補正(2026-09-13): 一覧画面(page.tsx→
+ * ListingsOverviewData.tsx)専用の局所エラー処理版。
+ *
+ * app/inventory/(protected)/[id]/InventoryHistoryTable.tsxと同じ設計 —
+ * 素朴にlistListingsOverviewを直接呼ぶと、その例外がSuspense境界の
+ * 外(ページ全体のerror境界、app/inventory/error.tsx)へ波及し、
+ * ヘッダー・検索欄まで巻き込んでエラー画面に差し替わってしまう
+ * (在庫一覧のInventoryTotalCount.tsxのコメントにある「Staging実機で
+ * 6回に1回、画面全体がエラーになった」と同じ失敗モード)。ここで
+ * try/catchして「取得できた行(配列)」か「取得エラー(null)」かに
+ * 落とし、実際の表示(空表示との区別・再試行導線)はクライアント側の
+ * ListingsOverviewTableに委ねる。
+ */
+export async function listListingsOverviewSafe(): Promise<ListingOverviewRow[] | null> {
+  try {
+    return await listListingsOverview();
+  } catch (err) {
+    // ログは識別情報(商品名等)を出さない — エラー種別のみ。
+    console.warn("[lib/listing/service.ts] EC出品一覧の取得に失敗しました(ヘッダー等の表示は継続します)", {
+      error: err instanceof Error ? err.name : "unknown",
+    });
+    return null;
+  }
 }
 
 /**
