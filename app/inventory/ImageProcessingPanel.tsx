@@ -38,10 +38,16 @@ const STATUS_LABELS: Record<string, { label: string; className: string }> = {
   FAILED: { label: "失敗", className: "text-red-600" },
   REPROCESSING: { label: "再加工中…", className: "text-blue-600" },
   DEAD_LETTER: { label: "失敗(リトライ上限)", className: "text-red-600" },
+  // 【状態表示読取性能P3、2026-09-13夜——表示先行】スキーマ上のstatusでは
+  // なく、このパネル内だけで作る一時的な擬似状態(サーバーへは一切送らない)。
+  // currentStatus()参照——版取得(バッチ、速い)がpending確認(ProcessingJob
+  // のScan、遅くなり得る)より先に終わったとき、versionが0件の画像は
+  // 「未加工」と決め打たず、pendingが確認できるまでこの表示に留める。
+  CHECKING: { label: "確認中…", className: "text-gray-400" },
 };
 
-/** 処理中・待機中は二重実行防止のため個別/一括ボタンとも無効化する。 */
-const BUSY_STATUSES = new Set(["QUEUED", "PROCESSING", "REPROCESSING"]);
+/** 処理中・待機中は二重実行防止のため個別/一括ボタンとも無効化する。CHECKING(pending未確認)も同じ理由で無効化対象——未確認のまま「未加工」の書込操作を許すと、実際には予約済み/処理中の画像へ二重予約し得る。 */
+const BUSY_STATUSES = new Set(["QUEUED", "PROCESSING", "REPROCESSING", "CHECKING"]);
 
 /**
  * 【状態表示読取性能P2、2026-09-13】ProcessingJobの予約状況(pending)
@@ -200,11 +206,25 @@ interface ImagePanelRow {
   originalHash: string | null;
 }
 
-/** pendingJob: ImageProcessingVersionがまだ無い間だけ意味を持つ、ProcessingJobの状態(listPendingImageProcessingJobStatusesAction由来)。 */
-function currentStatus(versions: ImageProcessingVersionSummary[], pendingJob?: "PENDING" | "PROCESSING"): string {
+/**
+ * pendingJob: ImageProcessingVersionがまだ無い間だけ意味を持つ、ProcessingJobの状態(listPendingImageProcessingJobStatusesAction由来)。
+ *
+ * 【状態表示読取性能P3、2026-09-13夜——表示先行】`pendingConfirmed`は
+ * このrefresh()内でversion0件の画像に対するpending確認が実際に一度でも
+ * 成功しているか。版取得(バッチ、GSI Query)はpending確認(ProcessingJob
+ * のScan)より速く終わり得るため、その差の間だけ`versions.length===0`
+ * の画像は「未加工」と決め打てない(実際は予約済み/処理中かもしれない)。
+ * `pendingConfirmed=false`の間は専用の"CHECKING"を返し、確定した時点で
+ * 初めてUNPROCESSED/QUEUED/PROCESSINGへ倒す——`docs/
+ * image-status-read-perf-followup-20260913.md`参照。exportは
+ * `scripts/verify-image-processing.ts`が純粋ロジックとして直接検証
+ * できるようにするため(reprocessButtonLabel等と同じ理由)。
+ */
+export function currentStatus(versions: ImageProcessingVersionSummary[], pendingJob: "PENDING" | "PROCESSING" | undefined, pendingConfirmed: boolean): string {
   const active = versions.find((v) => v.active);
   if (active) return active.status;
   if (versions.length === 0) {
+    if (!pendingConfirmed) return "CHECKING";
     // ImageProcessingVersionがまだ無い=workerがまだ拾っていない状態。
     // ProcessingJobが実際に予約されているなら、UNPROCESSEDのままにせず
     // 「予約済み/加工中」と分かる表示にする(2026-08-31フィードバック
@@ -315,6 +335,12 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
   // 無くてスキップした場合はfalseのまま——「取得しなかった」と
   // 「取得を試みて失敗した」を区別する。
   const [pendingStatusUnavailable, setPendingStatusUnavailable] = useState(false);
+  // 【状態表示読取性能P3、2026-09-13夜】pending確認(ProcessingJobの
+  // Scan)が実際に一度でも成功した画像のstorageKey。一度確認できた画像を
+  // 再び「未確認」へ戻すことはない(monotonic、取得失敗時は追加しない
+  // だけ——pendingJobs自体は失敗時に直前の既知状態を保つ既存の
+  // mergePendingJobsResultに任せる)。currentStatus()のCHECKING判定に使う。
+  const [pendingConfirmedKeys, setPendingConfirmedKeys] = useState<Set<string>>(new Set());
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -353,6 +379,24 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
   // refresh()自体は常に実行させる——こちらは重複抑制の対象ではない)。
   const inFlightCountRef = useRef(0);
 
+  /**
+   * 【状態表示読取性能P3、2026-09-13夜——表示先行】以前はここで
+   * `Promise.allSettled`により版取得(バッチ)とpending確認の両方の完了を
+   * 待ってから、まとめて1回でsetStateしていた。版取得(GSI Query、
+   * listVersionsForKeys)はpending確認(ProcessingJobのScan、テーブル
+   * 全体走査、jobService.tsのコメント参照)より先に終わり得るのに、
+   * 表示は遅い方(pending)に引きずられて止まっていた——
+   * `docs/image-status-read-perf-followup-20260913.md`参照。
+   *
+   * 両方の呼び出し自体・呼び出し回数は変更しない(根拠なくpending確認を
+   * 省略しない——`selectPendingStatusLookupKeys`による「対象0件なら
+   * 呼ばない」判定はそのまま維持)。変えるのは反映のタイミングだけ:
+   * 版取得が先に終われば先に画面へ出す。ただしversionが0件の画像の
+   * 状態はpending確認の結果が要るため、確認が済むまでは
+   * `pendingConfirmedKeys`が持たない=`currentStatus`がCHECKING(確認中)
+   * を返し、書込操作は禁止し続ける(状態不明のまま「未加工」と誤判定
+   * して二重予約させない)。
+   */
   async function refresh() {
     const requestId = ++latestRequestIdRef.current;
     inFlightCountRef.current += 1;
@@ -365,19 +409,44 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
       // 時はbyKeyがまだnullなので、全画像を対象にする(既存の「初回は
       // 必ず両方引く」という安全側の挙動を保つ)。
       const pendingLookupKeys = selectPendingStatusLookupKeys(requestImages, byKeyRef.current ?? {});
-      const [batchResult, pendingResult] = await Promise.allSettled([
-        listImageProcessingVersionsBatchAction(keys),
-        pendingLookupKeys.length > 0 ? listPendingImageProcessingJobStatusesAction(pendingLookupKeys) : Promise.resolve({} as Record<string, "PENDING" | "PROCESSING">),
-      ]);
+      // Promise.allSettledではなく、両方を即時発行(並行実行は変わらない)
+      // した上で個別にthen変換し、片方の完了をもう片方が待たないように
+      // する。reject自体は起こさない(then(onFulfilled, onRejected)で
+      // 常に解決済みの結果オブジェクトへ変換する)——下のawaitが例外で
+      // 打ち切られて、まだ発行前のもう片方の呼び出しがunhandled
+      // rejectionになる事態を避けるため。
+      const batchPromise = listImageProcessingVersionsBatchAction(keys).then(
+        (value) => ({ ok: true as const, value }),
+        (reason) => ({ ok: false as const, reason }),
+      );
+      const pendingPromise =
+        pendingLookupKeys.length > 0
+          ? listPendingImageProcessingJobStatusesAction(pendingLookupKeys).then(
+              (value) => ({ ok: true as const, value }),
+              () => ({ ok: false as const, value: null as Record<string, "PENDING" | "PROCESSING"> | null }),
+            )
+          : Promise.resolve({ ok: true as const, value: {} as Record<string, "PENDING" | "PROCESSING"> });
 
-      if (batchResult.status === "rejected") {
-        // 個別キーの話ではなく全体が届かなかった(ネットワーク断・認可
-        // 拒否等)。ただし、待っている間に自分より新しいrefresh()が
-        // 既に発行されていたら、それはこの応答の出る幕ではないので
-        // 黙って捨てる(その新しいrefresh()が自分の結果で反映し直す)。
-        if (requestId !== latestRequestIdRef.current) return;
+      const batchResult = await batchPromise;
+      // 待っている間に自分より新しいrefresh()が既に発行されていたら、
+      // それはこの応答の出る幕ではないので黙って捨てる(その新しい
+      // refresh()が自分の結果で反映し直す)。
+      if (requestId !== latestRequestIdRef.current) return;
+      if (!batchResult.ok) {
+        // 個別キーの話ではなく全体が届かなかった(ネットワーク断・認可拒否等)。
         throw batchResult.reason;
       }
+      const { byKey, failedKeys } = mergeVersionsBatchResult(keys, batchResult.value, byKeyRef.current);
+      setByKey(byKey);
+      setFailedKeys(failedKeys);
+      // 取得に成功した(=もう「全体が読み込めませんでした」ではない)ので、
+      // その旨のエラー表示は消す。個別画像の取得失敗はfailedKeys/
+      // FETCH_FAILED_METAが別枠で表示するので、ここでは上書きしない。
+      setError(null);
+
+      // ここから先はpending確認の反映——版取得の表示を巻き込まない。
+      const pendingOutcome = await pendingPromise;
+      if (requestId !== latestRequestIdRef.current) return;
       // 防御的措置(上記isE2EFixtureStorageKey手前のコメント参照) — Server
       // Action呼び出しがネットワーク層の異常(GET専用proxy等)で期待した
       // 形の値を返さなかった場合でも、以後のrender(pendingJobs[key]と
@@ -388,29 +457,25 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
       const pendingValue =
         pendingLookupKeys.length === 0
           ? ({} as Record<string, "PENDING" | "PROCESSING">)
-          : pendingResult.status === "fulfilled" && pendingResult.value && typeof pendingResult.value === "object"
-            ? pendingResult.value
+          : pendingOutcome.ok && pendingOutcome.value && typeof pendingOutcome.value === "object"
+            ? pendingOutcome.value
             : null;
-
-      const outcome = applyRefreshResult(
-        requestId,
-        latestRequestIdRef.current,
-        keys,
-        batchResult.value,
-        byKeyRef.current,
-        pendingLookupKeys,
-        pendingValue,
-        pendingJobsRef.current,
-      );
-      if (!outcome) return; // 自分より新しいrefresh()が既にある — この応答は画面へ反映しない
-      setByKey(outcome.byKey);
-      setFailedKeys(outcome.failedKeys);
-      setPendingJobs(outcome.pendingJobs);
-      setPendingStatusUnavailable(outcome.pendingStatusUnavailable);
-      // 取得に成功した(=もう「全体が読み込めませんでした」ではない)ので、
-      // その旨のエラー表示は消す。個別画像の取得失敗はfailedKeys/
-      // FETCH_FAILED_METAが別枠で表示するので、ここでは上書きしない。
-      setError(null);
+      const { pendingJobs, unavailable } = mergePendingJobsResult(pendingLookupKeys, pendingValue, pendingJobsRef.current);
+      setPendingJobs(pendingJobs);
+      setPendingStatusUnavailable(unavailable);
+      if (pendingLookupKeys.length > 0 && !unavailable) {
+        setPendingConfirmedKeys((prev) => {
+          let changed = false;
+          const next = new Set(prev);
+          for (const key of pendingLookupKeys) {
+            if (!next.has(key)) {
+              next.add(key);
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      }
     } finally {
       inFlightCountRef.current -= 1;
     }
@@ -428,7 +493,7 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
     // eslint-disable-next-line react-hooks/exhaustive-deps -- imagesは親から毎レンダー新配列で渡り得るため、storageKeyの並びをJSON化した依存にする
   }, [imagesSignature]);
 
-  const statusOf = (img: ImagePanelRow) => currentStatus(byKey?.[img.storageKey] ?? [], pendingJobs?.[img.storageKey]);
+  const statusOf = (img: ImagePanelRow) => currentStatus(byKey?.[img.storageKey] ?? [], pendingJobs?.[img.storageKey], pendingConfirmedKeys.has(img.storageKey));
   const anyBusyGlobally = images.some((img) => BUSY_STATUSES.has(statusOf(img)));
   // 状態が不明(直前のバッチ取得に失敗)な画像、またはpending確認自体が
   // 失敗している間も、busy判定と同じ枠でポーリングを続ける——そうしない
@@ -498,6 +563,9 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
   const failedCount = images.filter((img) => ["FAILED", "DEAD_LETTER"].includes(statusOf(img))).length;
   // 「状態なし(未加工)」と「取得できなかった」を見分けられるよう別枠で数える。
   const fetchFailedCount = images.filter((img) => failedKeys.has(img.storageKey)).length;
+  // 版取得が先行表示された直後、pending確認がまだ済んでいない(版0件の)
+  // 画像の件数——表示先行の可視化用(§image-status-read-perf-followup)。
+  const checkingCount = images.filter((img) => statusOf(img) === "CHECKING").length;
   // 一括ボタンの対象: 未加工・失敗・要確認(まだ完了扱いではない)の画像のみ。
   // 既にREADYの画像を一括ボタンで巻き込むと「意図せず全部再加工」に
   // なってしまう(付録B「再加工で全画像を巻き込む処理」の禁止と同じ
@@ -587,6 +655,7 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
           {failedCount > 0 && ` ・${failedCount}件失敗`}
           {/* 「状態が無い(未加工)」と「取得できなかった」の混同を防ぐ——加工の失敗件数(failedCount)とは別枠。 */}
           {fetchFailedCount > 0 && ` ・${fetchFailedCount}件状態取得失敗`}
+          {checkingCount > 0 && ` ・${checkingCount}件確認中`}
           {pendingStatusUnavailable && " ・予約状況を確認できませんでした"}
         </p>
         <div className="flex items-center gap-2">
@@ -612,7 +681,7 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
             title={bulkTargets.length === 0 ? "加工待ちの画像はありません" : undefined}
             className="bg-gray-900 px-2.5 py-1 text-[11px] font-bold text-white disabled:opacity-40"
           >
-            {bulkBusy || anyBusyGlobally ? "画像を加工中…" : "画像を自動加工"}
+            {bulkBusy ? "画像を加工中…" : checkingCount > 0 ? "画像の状態を確認中…" : anyBusyGlobally ? "画像を加工中…" : "画像を自動加工"}
           </button>
         </div>
       </div>
@@ -620,7 +689,7 @@ export function ImageProcessingPanel({ inventoryId, images: allImages }: { inven
       <ul className="space-y-1">
         {images.map((img, i) => {
           const versions = byKey[img.storageKey] ?? [];
-          const status = currentStatus(versions, pendingJobs[img.storageKey]);
+          const status = currentStatus(versions, pendingJobs[img.storageKey], pendingConfirmedKeys.has(img.storageKey));
           const fetchFailed = failedKeys.has(img.storageKey);
           // 取得失敗の画像は実際の状態が確認できていないため、STATUS_LABELS
           // (直前に分かっていた値、または未加工)ではなく専用ラベルで示す。

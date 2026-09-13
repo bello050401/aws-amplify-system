@@ -103,6 +103,54 @@ async function main() {
   const failedRow = page.locator("li", { hasText: "画像2" });
   check(await failedRow.getByRole("button", { name: "加工する" }).isDisabled(), "★要件: 部分失敗した画像2の「加工する」ボタンは無効化される");
 
+  // ── シナリオ4: 版取得が先に終わってもpending確認(遅い)を待たず表示が先行する ──
+  console.log("\n── シナリオ4: 版取得100ms相当→即表示、pending確認5秒相当は後追いで反映(表示先行・操作保護・要求数) ──");
+  await page.evaluate(() =>
+    window.__setPanelProps({
+      inventoryId: "p4",
+      images: [
+        { storageKey: "img-fast", originalHash: "h1" }, // 版取得だけで状態が確定する対照(pending不要)
+        { storageKey: "img-slow", originalHash: "h1" }, // 版0件のままpending確認待ち
+      ],
+    }),
+  );
+  await page.waitForFunction(() => window.__ipHarness.latestCallFor("batch") && window.__ipHarness.latestCallFor("pending"));
+  const batchCall4 = await page.evaluate(() => window.__ipHarness.latestCallFor("batch").id);
+  const pendingCall4 = await page.evaluate(() => window.__ipHarness.latestCallFor("pending").id);
+  const pendingCallsBefore4 = await page.evaluate(() => window.__ipHarness.callsFor("pending").length);
+  const t4Start = Date.now();
+  // 版取得(実測約100ms相当)を先に解決する。img-fastはREADY版1件、
+  // img-slowは0件のまま——pending確認が要るのはimg-slowだけ。
+  await page.waitForTimeout(100);
+  await page.evaluate(
+    (id) =>
+      window.__ipHarness.resolve(id, {
+        "img-fast": [{ id: "vfast", version: 1, status: "READY", active: true, aspectRatio: null, processedMasterKey: null, webKey: null, thumbnailKey: null, failureCode: null, failureDetail: null, completedAt: null }],
+        "img-slow": [],
+      }),
+    batchCall4,
+  );
+  await page.waitForSelector("text=加工済"); // img-fastは版取得のみで確定表示
+  const displayedAfterMs = Date.now() - t4Start;
+  check(displayedAfterMs < 4000, "★要件: 版取得(約100ms)の直後に表示が先行し、pending確認(数秒かかり得る)の完了を待たない", `${displayedAfterMs}ms`);
+
+  const pendingCallsAfterBatchResolve4 = await page.evaluate(() => window.__ipHarness.callsFor("pending").length);
+  check(pendingCallsAfterBatchResolve4 === pendingCallsBefore4, "★要件: 版取得の反映自体はpending確認を再発行しない(1リクエストにつき1回のまま、要求数)");
+
+  const slowRow4 = page.locator("li", { hasText: "画像2" });
+  check((await slowRow4.textContent()).includes("確認中"), "★要件: pending未確認・版0件の画像は「未加工」と誤判定せず専用の「確認中」を表示する");
+  check(await slowRow4.getByRole("button", { name: "加工する" }).isDisabled(), "★要件: 確認中の画像は書込系ボタンを禁止する(操作保護、誤って二重予約させない)");
+
+  // pending確認(実測約5秒相当、後から届く)が解決すると、確認中だった
+  // 画像が実際の状態(この例では予約済み=加工待ち)へ確定する。
+  await page.waitForTimeout(150);
+  await page.evaluate((id) => window.__ipHarness.resolve(id, { "img-slow": "PENDING" }), pendingCall4);
+  await page.waitForSelector("text=加工待ち");
+  check(true, "★要件: pending確認完了後、確認中だった画像が実際の状態(加工待ち)へ正しく確定する");
+
+  const totalPendingCalls4 = await page.evaluate(() => window.__ipHarness.callsFor("pending").length);
+  check(totalPendingCalls4 === pendingCallsBefore4, "★要件: pending確認の合計呼び出し回数は増えない(この商品向けに1回のまま、要求数)");
+
   await browser.close();
   server.close();
   console.log(`\n${passes} passed, ${failures} failed`);

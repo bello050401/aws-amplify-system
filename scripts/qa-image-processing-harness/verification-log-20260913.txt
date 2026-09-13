@@ -1,0 +1,200 @@
+画像状態読込 表示先行差分(task_d1d665147d15915ae3) 審査差し戻し後の再検証ログ
+実行日: 2026-09-13
+実行環境: このworktree(C:\Users\win\AppData\Local\BELLO\dev-orchestrator\worktrees\task_d1d665147d15915ae3)、
+  node_modulesは前セッションが張ったjunction経由でメインチェックアウトの実体を参照。
+
+注記: このセッションのBash実行環境には承認サーフェスが無く、`&&`等で連結したコマンドや
+シェル展開(`echo $?`等)を含むコマンドは全て自動拒否される。そのため各コマンドは単発で
+実行し、ツール側の仕様(非ゼロ終了時は自動的に "Exit code: N" 等が出力へ付与される)を
+根拠に、以下の4コマンドはいずれもその表示が無かった=終了コード0であったと判定した。
+標準出力は加工・要約せず全文をそのまま貼り付けている。
+
+================================================================================
+[1/4] node scripts/with-server-only-stub.cjs scripts/verify-image-processing.ts
+================================================================================
+✓ retention: 保持期間は14日
+✓ retention: 削除対象の状態はREADYとSUPERSEDEDだけ
+✓ retention: 採用版がある画像の古い未採用版は消える
+✓ retention: master/web/thumbの3つを削除対象にする
+✓ retention: 採用版が1つも無い画像は消さない(復旧手段が無くなる)
+✓ retention: ちょうど14日は消さない(境界)
+✓ retention: 15日経過は消す
+✓ retention: 採用済み・失敗・実行中・確認待ち・日時不明はいずれも消さない
+✓ retention: 残した理由を内訳として説明できる
+✓ retention: 対象が無ければ何も消さない
+✓ decideAspectRatio: 実測が無い(segmentation未実装)場合は安全側のLANDSCAPE_3_2
+✓ decideAspectRatio: 占有率がレンジ内かつ非edge-nearならSQUARE_1_1
+✓ decideAspectRatio: 占有率がレンジ外ならLANDSCAPE_3_2
+✓ decideAspectRatio: nearEdge=trueなら占有率に関わらずLANDSCAPE_3_2(切断回避優先、§6.1)
+✓ shouldApplyStrongComposition: TOPは強い構図補正
+✓ shouldApplyStrongComposition: FULLは強い構図補正
+✓ shouldApplyStrongComposition: DETAILは元構図優先(弱補正)
+✓ shouldApplyStrongComposition: DAMAGEは元構図優先(商品状態を絶対に改変しない)
+✓ shouldApplyStrongComposition: LABELは元構図優先
+✓ buildIdempotencyKey: 同一入力は同一キー(決定論的)
+✓ buildIdempotencyKey: originalHashが違えば別キー(画像差し替えを別ジョブ扱い)
+✓ buildIdempotencyKey: engineVersionが違えば別キー(アルゴリズム更新時の再加工を許可)
+✓ buildIdempotencyKey: requestedAdjustmentsが違えば別キー(同じ画像への異なる手動再加工依頼は別ジョブ)
+✓ computeOriginalHash: 同一バイト列は同一ハッシュ
+✓ computeOriginalHash: 異なるバイト列は異なるハッシュ
+✓ 状態遷移: UNPROCESSED→QUEUEDは有効
+✓ 状態遷移: PROCESSING→READYは有効
+✓ 状態遷移: PROCESSING→NEEDS_REVIEWは有効
+✓ 状態遷移: READY→REPROCESSING(§12の再加工)は有効
+✓ 状態遷移: NEEDS_REVIEW→READY(ADMINによる手動承認)は有効
+✓ 状態遷移: UNPROCESSED→READYへの直接遷移は無効(QUEUED/PROCESSINGを飛ばせない)
+✓ 状態遷移: SUPERSEDEDからの遷移は無い(rollbackは新しいACTIVE切替であり、この行自体は変化しない)
+✓ decideResultStatus: 読み戻し検証失敗は常にFAILED(§17「生成後のJPEG/WebP等を読み戻せる」)
+✓ decideResultStatus: confidence未計測(segmentation未実装)は常にNEEDS_REVIEW(§17「低confidenceを無理にREADYへしない」を安全側で徹底)
+✓ decideResultStatus: 読み戻しOK・confidence十分ならREADY
+✓ reprocessButtonLabel: 未加工の画像には「再加工」ではなく「加工する」と表示する(§12「何を押せば処理されるか理解できない」への対処)
+✓ reprocessButtonLabel: 失敗した画像は「再試行」
+✓ reprocessButtonLabel: リトライ上限到達も「再試行」
+✓ reprocessButtonLabel: 加工済の画像は「再加工」
+✓ reprocessButtonLabel: 要確認の画像も「再加工」
+✓ pickPendingReviewVersion: 要確認の加工結果を拾う
+✓ pickPendingReviewVersion: 複数あるときは最新を採用候補にする
+✓ pickPendingReviewVersion: READYのときは採用候補を出さない(既にACTIVEなものがある)
+✓ pickPendingReviewVersion: 要確認のversionが無ければnull
+✓ pickPendingReviewVersion: versionが1件も無ければnull
+✓ pickPendingReviewVersion: UNPROCESSED では採用候補を出さない
+✓ pickPendingReviewVersion: QUEUED では採用候補を出さない
+✓ pickPendingReviewVersion: PROCESSING では採用候補を出さない
+✓ pickPendingReviewVersion: FAILED では採用候補を出さない
+✓ pickPendingReviewVersion: DEAD_LETTER では採用候補を出さない
+✓ selectPendingStatusLookupKeys: 全画像に既にversionがあれば対象0件(ProcessingJobのScanを丸ごとスキップできる、詳細画面として最もよくある状態)
+✓ selectPendingStatusLookupKeys: versionが0件の画像(複数中の1枚)だけを対象にする
+✓ selectPendingStatusLookupKeys: 初回読込(未取得=undefined)は安全側で全画像を対象にする
+✓ selectPendingStatusLookupKeys: 取得失敗(null、版数不明)の画像は安全側で対象に含める
+✓ selectPendingStatusLookupKeys: 画像1枚(未取得)は対象に含む
+✓ selectPendingStatusLookupKeys: 画像が無ければ対象も無い
+✓ mergeVersionsBatchResult: 成功した画像はそのままbyKeyへ反映する
+✓ mergeVersionsBatchResult: 全て成功していればfailedKeysは空
+✓ mergeVersionsBatchResult: 成功した画像は新しい結果で上書きする
+✓ mergeVersionsBatchResult: 取得失敗の画像は直前の既知状態を維持する(ボタンの活性/非活性を壊さない)
+✓ mergeVersionsBatchResult: 取得失敗の画像だけをfailedKeysへ入れる(0件=未加工と混同しない)
+✓ mergeVersionsBatchResult: 直前の状態も無ければ空配列にフォールバックする(未定義アクセスを起こさない)
+✓ mergeVersionsBatchResult: 直前状態が無くてもfailedKeysには入れる
+✓ mergeVersionsBatchResult: 画像0件ならbyKeyも空
+✓ mergeVersionsBatchResult: 画像0件ならfailedKeysも空
+✓ mergeVersionsBatchResult: 欠損ケースでも正常なキーは影響を受けない
+✓ mergeVersionsBatchResult: レスポンスにキー自体が無い(undefined)場合も直前の既知状態を維持する
+✓ mergeVersionsBatchResult: undefined(欠損)もnullと同じくfailedKeysに入れる——未加工(0件)と取り違えない
+✓ mergeVersionsBatchResult: batch自体がnullでも直前の既知状態を維持し例外を起こさない
+✓ mergeVersionsBatchResult: batch自体が非オブジェクトなら全キーを取得失敗扱いにする
+✓ mergePendingJobsResult: 対象0件なら常に空へリセットしてよい(どのkeyからも参照されないため)
+✓ mergePendingJobsResult: 取得に失敗したら直前の既知状態をそのまま維持する(空へ戻さない)
+✓ mergePendingJobsResult: 成功時はlookupKeys分を新しい結果で置き換える(bはジョブ完了で消えたことを反映)
+✓ mergePendingJobsResult: lookupKeysに含まれないkeyは触れない
+✓ applyRefreshResult: 応答が届いた時点で自分より新しいrequestIdが既に発行されていれば、古い応答は捨ててnullを返す(商品切替・手動連打・ポーリング重複のいずれでも同じ扱い)
+✓ applyRefreshResult: requestIdが一致していれば(最新の応答であれば)結果を返す
+✓ applyRefreshResult: requestIdが一致していれば結果を返す
+✓ applyRefreshResult: mergeVersionsBatchResultと同じ合成結果になる(bは取得失敗、直前値を維持)
+✓ applyRefreshResult: 取得失敗キーもそのまま伝播する
+✓ applyRefreshResult: mergePendingJobsResultの結果も伝播する
+✓ applyRefreshResult: pending取得が成功していればunavailableはfalse
+✓ currentStatus: 版0件・pending未確認はUNPROCESSEDと決め打たずCHECKINGを返す(表示先行時の誤判定防止)
+✓ currentStatus: pendingJobの値が届いていても、確認済み(pendingConfirmed)でなければCHECKING優先
+✓ currentStatus: pending確認済みでジョブ無しなら従来通りUNPROCESSED
+✓ currentStatus: pending確認済みでPENDINGならQUEUED(既存挙動を維持)
+✓ currentStatus: pending確認済みでPROCESSINGならPROCESSING(既存挙動を維持)
+✓ currentStatus: versionが既にあればpending確認の有無に関わらずその状態を優先する(CHECKINGへ倒れない)
+✓ pagesFor: ちょうどページサイズは1ページ
+✓ pagesFor: ページサイズ+1件は2ページ目に1件だけ残る
+✓ pagesFor: 0件でも最低1ページ(listAllPagesの実装と同じ)
+✓ 合成試験: 旧実装は商品1件(画像8枚)の詳細表示でDynamoDB行を40,000件読む(5,000行×8回Scan)
+✓ 合成試験: 新実装は同じ状況で48件しか読まない(画像ごとの実際の版数のみ)
+✓ 合成試験: DynamoDB読取行数が実際に減っている
+✓ 合成試験: 読取行数が833倍以上削減される(テーブルが育つほど差は開く——totalTableRowsに比例するのはScanのみ)
+✓ 合成試験: Server Action往復回数もN+1回→1回へ削減される(全画像が既に加工済みの場合)
+✓ 合成試験: 旧実装のScan1回あたりのページ数(5,000行÷200件)
+✓ 合成試験: 新実装のQueryは1ページで収まる(版数がページサイズを超えない限り)
+✓ 合成試験: テーブルが10倍に育つと旧実装との差はさらに開く(Scanコストが比例悪化、Queryは無影響)
+✓ BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES: 一括加工の対象は未加工・失敗・要確認のみ(READY/QUEUED/PROCESSING/REPROCESSINGは巻き込まない——付録B「再加工で全画像を巻き込む処理」の禁止)
+✓ BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES: 既にREADYの画像は一括ボタンの対象に含まれない
+✓ computeOriginalHash: 同一バイト列は同一hashになる(再同期で別hashにならない)
+✓ computeOriginalHash: SHA-256のhex 64桁
+✓ computeOriginalHash: 異なるバイト列は異なるhash
+✓ computeOriginalHash: Lambda側と同一のSHA-256算出
+✓ OriginalImageMissingError: Errorを継承する
+✓ OriginalImageMissingError: 対象のstorageKeyを保持する
+✓ OriginalImageMissingError: 利用者向け文言に内部用語(originalHash)を出さない
+✓ OriginalImageMissingError: 「保存し直す」という無関係な操作を促さない
+✓ serializeForAwsJson: AWSJSONへは必ず文字列で送る(生の配列はAppSyncに拒否される)
+✓ parseReferenceImageKeys: 直列化した値を元の配列へ戻せる
+✓ parseReferenceImageKeys: 既に配列ならそのまま受け入れる(旧経路で書かれた値との互換)
+✓ parseReferenceImageKeys: nullは空配列
+✓ parseReferenceImageKeys: 壊れた値でも例外を投げず空配列(Profile一覧全体を落とさない)
+✓ parseReferenceImageKeys: 配列以外のJSONは空配列
+✓ parseReferenceImageKeys: 文字列以外の要素は落とす
+✓ parseReferenceImageKeys: 空配列も往復できる
+✓ Photo Profile: 基準写真2枚でも成立する(必要枚数を10枚へ勝手に引き上げない)
+✓ SharpImageProcessingProvider: TOP画像の出力3種(master/web/thumbnail)が全て読み戻し可能
+✓ SharpImageProcessingProvider: floorCleanupApplied は常にfalse(§9未実装、fake successにしない)
+✓ SharpImageProcessingProvider: 出力サイズが正の値
+✓ SharpImageProcessingProvider: masterJpegは実際にJPEG形式
+✓ SharpImageProcessingProvider: 被写体の無い一様な画像では構図を変えない(根拠なくcropしない)
+✓ SharpImageProcessingProvider: 被写体が無ければ元の幅を保つ(白帯を足さない)
+✓ SharpImageProcessingProvider: 被写体が無ければ元の高さを保つ
+✓ SharpImageProcessingProvider: webWebpは実際にWebP形式
+✓ SharpImageProcessingProvider: thumbnailJpegは既存thumbnail.tsと同じ320px上限
+✓ SharpImageProcessingProvider: DETAIL画像は元のアスペクト比を維持(強制的な全体写真ルールから除外、§7)
+✓ SharpImageProcessingProvider: brightness調整が実際に平均輝度を上げる(恒等変換で終わっていない)
+✓ SharpImageProcessingProvider: 不正な入力データはthrowする(fake successにしない)
+✓ ENGINE_VERSION: 1以上の正の整数
+✓ 構図: 被写体が小さく写っている画像では実際にcropして寄せる
+✓ 構図: cropを適用した理由がAPPLIEDとして記録される
+✓ 構図: 出力幅が元より狭い(cropしている＝白帯を足していない)
+✓ 構図: 出力の隅が純白の余白になっていない(白帯を足していない)
+✓ 構図: crop左端が被写体を切っていない
+✓ 構図: crop右端が被写体を切っていない
+✓ 構図: crop上端が被写体を切っていない
+✓ 構図: crop下端が被写体を切っていない
+✓ 構図: crop後は被写体が画面に対して大きくなる(これがBefore/Afterの主要因)
+✓ 構図: DAMAGE画像はBELLO標準構図を強制せず元の構図を保つ
+✓ トーン: 暗い画像は実際に明るくなる(恒等変換のままではない)
+✓ トーン: 明るくしすぎて白へ張り付かない
+✓ トーン: 青かぶりの背景では青を持ち上げない
+✓ トーン: WB補正には上限があり、商品色を動かすほど強く掛けない
+✓ トーン: なぜその補正になったかを説明として残す
+
+145 passed, 0 failed
+--- 終了コード: 0(ツールによる非ゼロ終了表示なし) ---
+
+================================================================================
+[2/4] node scripts/qa-image-processing-harness/build.mjs
+================================================================================
+harness bundle built
+--- 終了コード: 0(ツールによる非ゼロ終了表示なし) ---
+
+================================================================================
+[3/4] node scripts/qa-image-processing-harness/run.mjs
+================================================================================
+── シナリオ1: 初回全体失敗→再試行で回復(byKey=null早期returnの不具合修正) ──
+✓ ★要件: 初回全体失敗時にも再試行ボタンが表示される(修正前はbyKey=nullの早期returnに阻まれ到達不能だった)
+✓ ★要件: 再試行成功後はエラー表示が消える
+
+── シナリオ2: 同一商品への二重refresh、遅い方が後に届いても新しい応答を上書きしない ──
+✓ ★要件: 後発(callB)の応答が残り、先発だが遅れて届いたcallAの応答に上書きされない
+
+── シナリオ3: 部分失敗の画像は書込系ボタン禁止、画像本体(行)の表示は継続する ──
+✓ ★要件: 部分失敗でも両方の画像行(本体表示)が描画され続ける
+✓ 画像1(正常)は操作可能なまま
+✓ ★要件: 部分失敗した画像2の「加工する」ボタンは無効化される
+
+── シナリオ4: 版取得100ms相当→即表示、pending確認5秒相当は後追いで反映(表示先行・操作保護・要求数) ──
+✓ ★要件: 版取得(約100ms)の直後に表示が先行し、pending確認(数秒かかり得る)の完了を待たない — 135ms
+✓ ★要件: 版取得の反映自体はpending確認を再発行しない(1リクエストにつき1回のまま、要求数)
+✓ ★要件: pending未確認・版0件の画像は「未加工」と誤判定せず専用の「確認中」を表示する
+✓ ★要件: 確認中の画像は書込系ボタンを禁止する(操作保護、誤って二重予約させない)
+✓ ★要件: pending確認完了後、確認中だった画像が実際の状態(加工待ち)へ正しく確定する
+✓ ★要件: pending確認の合計呼び出し回数は増えない(この商品向けに1回のまま、要求数)
+
+12 passed, 0 failed
+--- 終了コード: 0(ツールによる非ゼロ終了表示なし) ---
+
+================================================================================
+[4/4] node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+================================================================================
+(標準出力・標準エラーともに空——エラー0件)
+--- 終了コード: 0(ツールによる非ゼロ終了表示なし) ---

@@ -26,6 +26,7 @@ import { SharpImageProcessingProvider, ENGINE_VERSION } from "@/lib/imageProcess
 import { BULK_IMAGE_PROCESSING_ELIGIBLE_STATUSES } from "@/lib/imageProcessing/types";
 import {
   applyRefreshResult,
+  currentStatus,
   mergePendingJobsResult,
   mergeVersionsBatchResult,
   pickPendingReviewVersion,
@@ -614,6 +615,27 @@ function testRetention() {
   assertEqual(selectExpiredVersions([], now).expired.length, 0, "retention: 対象が無ければ何も消さない");
 }
 
+/**
+ * 【状態表示読取性能P3、2026-09-13夜——表示先行】版取得(バッチ)がpending
+ * 確認より先に終わったとき、versionが0件の画像は「未加工」と決め打たず
+ * 専用のCHECKING(確認中)を返し、pending確認が実際に一度でも成功する
+ * (pendingConfirmed=true)まではそれを維持することの回帰テスト。
+ * docs/image-status-read-perf-followup-20260913.md参照。
+ */
+function testCurrentStatusChecking() {
+  const ready: ImageProcessingVersionSummary = {
+    id: "v1", version: 1, status: "READY", active: true, aspectRatio: null,
+    processedMasterKey: "m", webKey: "w", thumbnailKey: "t", failureCode: null, failureDetail: null, completedAt: null,
+  };
+
+  assertEqual(currentStatus([], undefined, false), "CHECKING", "currentStatus: 版0件・pending未確認はUNPROCESSEDと決め打たずCHECKINGを返す(表示先行時の誤判定防止)");
+  assertEqual(currentStatus([], "PENDING", false), "CHECKING", "currentStatus: pendingJobの値が届いていても、確認済み(pendingConfirmed)でなければCHECKING優先");
+  assertEqual(currentStatus([], undefined, true), "UNPROCESSED", "currentStatus: pending確認済みでジョブ無しなら従来通りUNPROCESSED");
+  assertEqual(currentStatus([], "PENDING", true), "QUEUED", "currentStatus: pending確認済みでPENDINGならQUEUED(既存挙動を維持)");
+  assertEqual(currentStatus([], "PROCESSING", true), "PROCESSING", "currentStatus: pending確認済みでPROCESSINGならPROCESSING(既存挙動を維持)");
+  assertEqual(currentStatus([ready], undefined, false), "READY", "currentStatus: versionが既にあればpending確認の有無に関わらずその状態を優先する(CHECKINGへ倒れない)");
+}
+
 async function main() {
   testRetention();
   testAspectRatioDecision();
@@ -627,6 +649,7 @@ async function main() {
   testMergeVersionsBatchResult();
   testMergePendingJobsResult();
   testApplyRefreshResult();
+  testCurrentStatusChecking();
   testReadCostModel();
   testBulkImageProcessingEligibleStatuses();
   testOriginalHashComputation();

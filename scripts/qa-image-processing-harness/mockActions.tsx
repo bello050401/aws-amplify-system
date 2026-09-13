@@ -85,12 +85,17 @@ function controllable<T>(fn: string) {
 }
 
 export const listImageProcessingVersionsBatchAction = controllable<Record<string, ImageProcessingVersionSummary[] | null>>("batch");
-// pending job状態は今回のシナリオ(初回全体失敗/再試行/同一商品race/部分
-// 失敗)の検証対象ではないため、テストの複雑化を避けて即時解決にする
-// (常に「予約なし」)——batch側だけを完全に手動制御する。
-export async function listPendingImageProcessingJobStatusesAction(_keys: string[]): Promise<Record<string, "PENDING" | "PROCESSING">> {
-  return {};
-}
+// 【状態表示読取性能P3、2026-09-13夜】以前はpending job状態を即時解決の
+// 固定値({}=常に「予約なし」)にしていた——batch側だけを手動制御すれば
+// シナリオ1〜3(初回全体失敗/再試行/同一商品race/部分失敗)は検証できた
+// ため。表示先行(版取得とpending確認の反映タイミングを分離したこと、
+// docs/image-status-read-perf-followup-20260913.md参照)を検証するには
+// pending側も独立して手動制御できる必要があるため、batchと同じ
+// controllable()へ変更した。シナリオ1〜3はpending呼び出しの解決を
+// 待たずに完了する(currentStatusのCHECKING擬似状態がデフォルトの
+// 「加工する」ボタン文言・disabled表示へ安全に倒れるため、既存の
+// アサーションは無改修で成立する)。
+export const listPendingImageProcessingJobStatusesAction = controllable<Record<string, "PENDING" | "PROCESSING">>("pending");
 export const listImageProcessingVersionsAction = controllable<ImageProcessingVersionSummary[]>("single");
 export const reprocessImageAction = controllable<{ enqueued: boolean }>("reprocess");
 export const reprocessAllImagesAction = controllable<{ enqueuedCount: number; skippedNoHashCount: number }>("reprocessAll");
