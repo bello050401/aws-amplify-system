@@ -13,9 +13,7 @@ import { useUnsavedChanges } from "./UnsavedChangesProvider";
  * 開閉する分の手間よりワンタップで切り替えられる方がBELLOの実運用
  * (スタッフが在庫一覧⇄EC出品⇄メッセージを頻繁に往復する)に合う)。
  *
- * `enabled:false`の項目(ツール)はデスクトップrailと同じく非活性表示の
- * まま残す — モバイルだけ項目数が変わると「同じアプリの別画面」に見え
- * てしまうため。
+ * デスクトップと同じ主要5項目を表示する。
  */
 export function MobileBottomNav() {
   const pathname = usePathname();
@@ -32,14 +30,6 @@ export function MobileBottomNav() {
           "flex flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-center text-[10px] leading-tight",
           isCurrent ? "font-bold text-gray-900" : item.enabled ? "text-gray-500" : "text-gray-300",
         ].join(" ");
-
-        if (!item.href) {
-          return (
-            <span key={item.key} className={className} title="今後のPhaseで実装予定">
-              {item.label}
-            </span>
-          );
-        }
         const href = item.href;
         return (
           <button key={item.key} type="button" onClick={() => guardedNavigate(href)} className={className}>

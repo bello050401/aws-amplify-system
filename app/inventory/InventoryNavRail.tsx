@@ -8,7 +8,7 @@ import { useUnsavedChanges } from "./UnsavedChangesProvider";
 /**
  * Thin fixed icon rail (spec §18) — the left-most of the three layers
  * (rail → filter sidebar → main area, spec §17). 在庫一覧 and 設定 are
- * wired up; ツール stays a placeholder for genuinely near-term BELLO work.
+ * wired up; navigation only includes available features.
  * 入庫/出庫/棚卸/受注管理/発注管理 were deliberately removed rather than
  * kept as placeholders — BELLO doesn't use them, and this system is meant
  * to stay a focused "登録する→探す→見る→編集する" tool, not grow
@@ -41,7 +41,6 @@ export const NAV_ITEMS = [
   // BELLO統合業務OS指示書(2026-08-30) §38: 「メッセージ」をEC出品の
   // 直下へ追加。
   { key: "messages", label: "メッセージ", href: "/inventory/messages", enabled: true },
-  { key: "tools", label: "ツール", href: null, enabled: false },
   { key: "settings", label: "設定", href: "/inventory/settings", enabled: true },
 ] as const;
 
@@ -131,14 +130,6 @@ export function InventoryNavRail() {
                 ? "border-l-2 border-transparent text-gray-600 hover:bg-gray-50"
                 : "border-l-2 border-transparent text-gray-300",
           ].join(" ");
-
-          if (!item.href) {
-            return (
-              <li key={item.key} className={className} title="今後のPhaseで実装予定">
-                {item.label}
-              </li>
-            );
-          }
           const href = item.href;
           return (
             <li key={item.key}>
