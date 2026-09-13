@@ -293,6 +293,11 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
             </button>
           </div>
         )}
+        {state.kind === "error" && (
+          <p className="mt-2 text-xs text-gray-500">
+            診断コード: EC-{state.failure.stage ?? "unknown"}-{state.failure.kind}
+          </p>
+        )}
       </div>
     );
   }

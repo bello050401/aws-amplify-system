@@ -34,11 +34,19 @@
  *      タグがあれば上書きしない(categoryNames失敗の伝播をecEligible
  *      Inventoryが誤って上書きしない、このタスクの本題)。
  *
- * 実行: node --import ./scripts/tmp-alias-loader.mjs scripts/verify-listings-overview-failure-classification.ts
- * (このファイル自体は@/エイリアスの解決にtsxのフックを使うが、
- * lib/listing/overviewFailure.tsの実行時依存はゼロ(type-only import)
- * なので、対象コード自体は他のverify-listings-overview-*と違いtsxを
- * 要求しない——素のNodeのTypeScript strip-only modeで足りる。)
+ * 実行: npm run verify:listings-overview-failure-classification
+ * (= `tsx scripts/verify-listings-overview-failure-classification.ts`、
+ * package.json参照。node_modulesはこのworktree専用のjunctionでメイン
+ * チェックアウトから借用——コミット対象外、[[qa-worktree-tooling-limits]]
+ * 参照。)
+ *
+ * 補足: lib/listing/overviewFailure.tsの実行時依存はゼロ(lib/perf/
+ * queryTiming.tsへの依存はtype-only importでerasedされる)なので、
+ * 対象コード自体は他のverify-listings-overview-*と違いtsxを要求しない
+ * ——素のNode(`node --import <@/エイリアス解決フック>.mjs`のような
+ * registerHooksベースのローダーを別途用意すれば)のTypeScript
+ * strip-only modeでも動く。ただしそのローダー自体はこのリポジトリに
+ * 同梱していない(tsx経由で足りるため)。
  */
 import {
   classifyListingsOverviewErrorKind,
