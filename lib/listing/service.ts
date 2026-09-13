@@ -10,7 +10,15 @@ import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { e2eListingsOverviewFetch } from "./e2eFixtures";
 import { unwrapList, unwrapWriteRequired } from "@/lib/amplify/listAll";
-import { attachStageTimings, currentQueryTimings, groupTimingsByOp, isQueryTimingEnabled, measureStage, withQueryTiming } from "@/lib/perf/queryTiming";
+import { attachStageTimings, currentQueryTimings, getStageTimings, groupTimingsByOp, isQueryTimingEnabled, measureStage, withQueryTiming } from "@/lib/perf/queryTiming";
+import {
+  classifyListingsOverviewErrorKind,
+  firstFailedStage,
+  tagListingsOverviewFailureStage,
+  taggedFailureStage,
+  type ListingsOverviewFailureInfo,
+  type ListingsOverviewLoadOutcome,
+} from "./overviewFailure";
 import {
   BASE_ROUTE,
   MERCARI_ROUTE,
@@ -436,28 +444,61 @@ function buildOverviewRows(
 }
 
 /**
- * 計測なしの通常経路(既定)。従来の`listListingsOverview`本体そのまま —
- * 計測が無効なときはこの関数だけが呼ばれ、余計なPromiseラップは一切増えない。
+ * 計測なしの通常経路(既定)。最初の取得失敗を速やかに返す、素の
+ * `Promise.all`のfail-fast契約(4本のうち1本でも失敗すれば即座に
+ * reject する ── 他の3本の決着を待たない)。
  *
- * 2026-09-13 EC一覧の読取量削減: Category取得を1回だけ行い、
- * `listEcEligibleInventory`(対象カテゴリのGSI抽出)と
- * `buildCategoryNameLookup`(対象外カテゴリー名の解決)の両方へ同じ
- * 結果を渡す——以前はこの2箇所がそれぞれ`listAllMasterEntries
- * ("Category")`を呼んでいて、1回の一覧表示でCategoryマスタを2回
- * 取得していた。`categoriesPromise`を他の独立readと同じ
- * `Promise.all`に含めて即座に発火させたまま、`listEcEligibleInventory`
- * 側はそのPromiseを`await`してから対象カテゴリごとのGSI読み取りへ進む
- * ——Category読み取り自体はChannelListing/ListingDraftの取得と並列に
- * 進み、GSI読み取りだけがCategory解決後に続く(カテゴリIDが無いと
- * GSIを引けないため、そこは元から避けられない依存関係)。
+ * ## 2026-09-13 補正(task_2c27a70778613453ed): 通常UIを「全部待ち」にしない
+ *
+ * 先行のEC一覧P1 実失敗分類タスク(task_12046ac60ecd86913c)は、この
+ * 既定経路も`fetchListingsOverviewRowsWithStages`(4本とも`measureStage`
+ * でok:falseへ潰してから`Promise.all`で待つ設計 ── `measureStage`自体は
+ * 失敗を投げ直さないため、実質「4本全部の決着を待ってから最初の失敗を
+ * 選ぶ」動きになる、lib/perf/queryTiming.tsのコメント参照)へ一本化して
+ * いた。狙いは「既定経路でも失敗段階を特定できるようにする」ことだった
+ * が、代償として本番でユーザーが実際に踏む失敗の復帰が遅れる——1本が
+ * 数百msで速く失敗しても、他の3本(特にChannelListing/ListingDraftの
+ * フルScan)の決着を待つ分だけ、ユーザーへのエラー表示が遅れる。
+ * 「4本とも数百ms」は本番実測ではなく見積もりに過ぎず、1本が長時間
+ * かかる/ハングする状況ではこの「全部待ち」がそのまま復帰の遅延になる
+ * (計測専用ON経路の`fetchListingsOverviewRowsWithStages`は、実際に
+ * 4本すべての壁時計を報告する必要があるという別の契約を持つため、
+ * そちらは「全部待ち」のままにする ── 下記参照)。
+ *
+ * 段階の特定(`ListingsOverviewFailureInfo.stage`)自体は失わない ──
+ * 各読み取りの`.catch`で、失敗した時点の段階名だけを
+ * `tagListingsOverviewFailureStage`(lib/listing/overviewFailure.ts)で
+ * 例外へ直接タグ付けする。`measureStage`のように4本ぶんの計測配列を
+ * 集めて待つ必要が無いので、fail-fastのまま段階を特定できる。
+ *
+ * ## categoryNames依存の誤表示を防ぐ
+ *
+ * `ecEligibleInventory`はcategoryNames取得(`categoriesPromise`)を
+ * 待ってから対象カテゴリのGSI読み取りへ進む。categoryNamesが失敗すると
+ * `categoriesPromise`自体がrejectし、その伝播を受けた
+ * `ecEligibleInventory`側の`.catch`にも同じ例外が来る——
+ * `tagListingsOverviewFailureStage`は既にタグが付いていれば上書き
+ * しないため、`categoriesPromise`側の`.catch`が先に付けた
+ * "categoryNames"タグがそのまま残り、"ecEligibleInventory"で上書き
+ * されない(根本原因ではなく依存先の症状を「失敗段階」と誤表示しない)。
  */
 async function fetchListingsOverviewRows(): Promise<ListingOverviewRow[]> {
-  const categoriesPromise = listAllMasterEntries("Category");
+  const categoriesPromise = listAllMasterEntries("Category").catch((err) => {
+    throw tagListingsOverviewFailureStage(err, "categoryNames");
+  });
   const [inventoryPage, channelListings, draftInventoryIds, categories] = await Promise.all([
     // 対象カテゴリだけをGSIから引く(全件スキャンしない)。
-    categoriesPromise.then((categories) => listEcEligibleInventory(categories)),
-    fetchAllChannelListings("MERCARI_SHOPS"),
-    fetchListingDraftInventoryIds(),
+    categoriesPromise
+      .then((categories) => listEcEligibleInventory(categories))
+      .catch((err) => {
+        throw tagListingsOverviewFailureStage(err, "ecEligibleInventory");
+      }),
+    fetchAllChannelListings("MERCARI_SHOPS").catch((err) => {
+      throw tagListingsOverviewFailureStage(err, "channelListings");
+    }),
+    fetchListingDraftInventoryIds().catch((err) => {
+      throw tagListingsOverviewFailureStage(err, "listingDrafts");
+    }),
     categoriesPromise,
   ]);
   return buildOverviewRows(inventoryPage, channelListings, draftInventoryIds, buildCategoryNameLookup(categories));
@@ -490,7 +531,10 @@ export interface ListingsOverviewTimedResult {
 
 /**
  * 4本の並列読み取りを、個別に壁時計で計測しながら実行する
- * (2026-09-13 EC計測レビュー補正)。
+ * (2026-09-13 EC計測レビュー補正)。**計測フラグ(`BELLO_QUERY_TIMING=1`)
+ * が立っているときの診断専用経路**——既定の通常UIはこの関数を使わない
+ * (下記`fetchListingsOverviewRows`のfail-fast版を使う、
+ * 2026-09-13 task_2c27a70778613453ed補正 参照)。
  *
  * `measureStage`はどれか1本が失敗しても投げ直さない(lib/perf/
  * queryTiming.tsのコメント参照)ため、4本とも必ず`Promise.all`で
@@ -498,7 +542,8 @@ export interface ListingsOverviewTimedResult {
  * 欠けたまま終わることはない。全て成功していれば通常どおり行を組み立てて
  * 返し、1本でも失敗していれば、最初に失敗した段階の元の例外へ4本ぶんの
  * 計測結果を添えて投げる(一覧の「失敗したら例外を投げる」契約自体は
- * そのまま)。
+ * そのまま)。この「4本全部の決着を待つ」動きは計測専用経路だからこそ
+ * 許容している契約であり、通常UIへは波及させない。
  *
  * ## 2026-09-13 EC一覧の読取量削減: 段階定義の補正(二重計上回避)
  *
@@ -517,7 +562,7 @@ export interface ListingsOverviewTimedResult {
  * 各段階は重なりを持つため、その合計を総待ち時間として扱わない。
  * Categoryの読取要求自体は1回だけであり、総待ち時間はtotalMsで確認する。
  */
-async function fetchListingsOverviewRowsTimed(): Promise<{ rows: ListingOverviewRow[]; stages: ListingsOverviewStageTiming[] }> {
+async function fetchListingsOverviewRowsWithStages(): Promise<{ rows: ListingOverviewRow[]; stages: ListingsOverviewStageTiming[] }> {
   const categoryOutcomePromise = measureStage("categoryNames", () => listAllMasterEntries("Category"));
   const [inventoryOutcome, channelOutcome, draftOutcome, categoryOutcome] = await Promise.all([
     measureStage("ecEligibleInventory", async () => {
@@ -555,6 +600,13 @@ async function fetchListingsOverviewRowsTimed(): Promise<{ rows: ListingOverview
  * `listListingsOverview`はこの関数の`rows`をそのまま返すだけの薄い
  * ラッパー(二重実装ではない)── 計測の有無でデータの取り方・件数・
  * 順序が変わることは無い。
+ *
+ * 2026-09-13 補正(task_2c27a70778613453ed): 計測フラグOFF(既定、
+ * 通常UIが通る経路)では`fetchListingsOverviewRows`(fail-fast、
+ * 段階はタグで特定)を使い、計測フラグON時のみ
+ * `fetchListingsOverviewRowsWithStages`(4本全部の決着を待つ、壁時計
+ * 報告専用)を使う——「戻り値の形」(stages/queryTotalsは計測OFF時
+ * 常に空配列)は変えていない。
  */
 export async function listListingsOverviewWithTiming(): Promise<ListingsOverviewTimedResult> {
   // lib/listing/service.tsのgetListingDraftForInventory等と同じ二重
@@ -572,7 +624,7 @@ export async function listListingsOverviewWithTiming(): Promise<ListingsOverview
   }
 
   return withQueryTiming("listings-overview", async () => {
-    const { rows, stages } = await fetchListingsOverviewRowsTimed();
+    const { rows, stages } = await fetchListingsOverviewRowsWithStages();
     const queryTotals: ListingsOverviewQueryTotal[] = groupTimingsByOp(currentQueryTimings()).map((g) => ({
       key: g.key,
       pages: g.count,
@@ -626,19 +678,41 @@ export async function listListingsOverview(): Promise<ListingOverviewRow[]> {
  * ヘッダー・検索欄まで巻き込んでエラー画面に差し替わってしまう
  * (在庫一覧のInventoryTotalCount.tsxのコメントにある「Staging実機で
  * 6回に1回、画面全体がエラーになった」と同じ失敗モード)。ここで
- * try/catchして「取得できた行(配列)」か「取得エラー(null)」かに
- * 落とし、実際の表示(空表示との区別・再試行導線)はクライアント側の
- * ListingsOverviewTableに委ねる。
+ * try/catchして「取得できた行(配列)」か「取得エラー(安全な分類情報)」
+ * かに落とし、実際の表示(空表示との区別・再試行導線・認証切れの案内)は
+ * クライアント側のListingsOverviewTableに委ねる。
+ *
+ * ## EC一覧P1 実失敗分類(2026-09-13、task_12046ac60ecd86913c)
+ *
+ * 以前はここで`null`だけを返し、ログにも`err.name`(常に`"Error"`)しか
+ * 残していなかった——実際にユーザーの手元で起きた失敗が「4本のうち
+ * どれで」「認証切れ/スロットリング/ネットワーク/想定外レスポンスの
+ * どれに近いか」を、次に同じ報告が来たときに分類できなかった。
+ * `classifyListingsOverviewErrorKind`(lib/listing/overviewFailure.ts)
+ * でメッセージ文字列から安全な種別へ分類する——固定ラベルのみで、
+ * 商品名・GraphQLメッセージ原文・トークン・IDは一切含まない。分類
+ * できない場合は"unknown"のまま返す(指示書§4「unknownをtimeoutと
+ * 決めつけない」)。ヒューリスティックである以上、根本原因(AppSync/
+ * DynamoDB側で実際に何が起きたか)自体はこの分類だけでは未確定のまま。
+ *
+ * 失敗段階(`stage`)は2つの経路を両方扱う: 計測OFF(既定、通常UI)の
+ * `fetchListingsOverviewRows`が付けた`taggedFailureStage`(fail-fast、
+ * 1段階だけの直接タグ)と、計測ON時の`fetchListingsOverviewRowsWithStages`
+ * が`attachStageTimings`で添えた4段階ぶんの計測配列
+ * (`getStageTimings`+`firstFailedStage`)——通常は前者だけが載っている。
  */
-export async function listListingsOverviewSafe(): Promise<ListingOverviewRow[] | null> {
+export async function listListingsOverviewSafe(): Promise<ListingsOverviewLoadOutcome<ListingOverviewRow>> {
   try {
-    return await listListingsOverview();
+    const rows = await listListingsOverview();
+    return { ok: true, rows };
   } catch (err) {
-    // ログは識別情報(商品名等)を出さない — エラー種別のみ。
-    console.warn("[lib/listing/service.ts] EC出品一覧の取得に失敗しました(ヘッダー等の表示は継続します)", {
-      error: err instanceof Error ? err.name : "unknown",
-    });
-    return null;
+    const failure: ListingsOverviewFailureInfo = {
+      stage: taggedFailureStage(err) ?? firstFailedStage(getStageTimings(err)),
+      kind: classifyListingsOverviewErrorKind(err),
+    };
+    // ログは固定の安全な分類コードのみ — 商品名・GraphQLメッセージ原文は出さない。
+    console.warn("[lib/listing/service.ts] EC出品一覧の取得に失敗しました(ヘッダー等の表示は継続します)", failure);
+    return { ok: false, failure };
   }
 }
 

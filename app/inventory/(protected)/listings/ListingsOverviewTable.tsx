@@ -4,9 +4,10 @@ import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { bulkCreateListingDraftsAction, listListingsOverviewAction } from "@/app/actions/listing";
+import { bulkCreateListingDraftsAction, listListingsOverviewSafeAction } from "@/app/actions/listing";
 import { savePricingAssignmentSelection } from "@/lib/listing/pricingAssignmentSelection";
 import type { ListingOverviewRow } from "@/lib/listing/service";
+import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
 import {
   LISTINGS_OVERVIEW_PAGE_SIZE,
   loadStateFromInitialRows,
@@ -91,28 +92,29 @@ const STATUS_BADGE_CLASS: Record<Exclude<StatusFilter, "ALL">, string> = {
  * (selectableIds)自体はpaginate前のfilteredから算出するので変えて
  * いない — ページングの導入前後で一括操作の対象範囲は変わらない。
  *
- * `initialRows`はServer Component側(ListingsOverviewData.tsx)から渡る
- * 取得結果 — 成功なら行の配列、失敗ならnull(取得失敗と実0件を混同
- * しない、app/inventory/(protected)/[id]/InventoryHistorySection.tsxと
- * 同じ設計)。
+ * `initialResult`はServer Component側(ListingsOverviewData.tsx)から渡る
+ * 取得結果 — 成功なら行の配列、失敗なら安全な分類情報(EC一覧P1 実失敗
+ * 分類、2026-09-13 — lib/listing/service.tsのlistListingsOverviewSafe
+ * 参照。取得失敗と実0件を混同しない、
+ * app/inventory/(protected)/[id]/InventoryHistorySection.tsxと同じ設計)。
  */
-export function ListingsOverviewTable({ initialRows, canEdit }: { initialRows: ListingOverviewRow[] | null; canEdit: boolean }) {
+export function ListingsOverviewTable({ initialResult, canEdit }: { initialResult: ListingsOverviewLoadOutcome<ListingOverviewRow>; canEdit: boolean }) {
   const router = useRouter();
-  const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(() => loadStateFromInitialRows(initialRows));
+  const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(() => loadStateFromInitialRows(initialResult));
 
   // runBulkCreate成功後のrouter.refresh()は、page.tsx→ListingsOverviewData
-  // (Server Component)を再実行して新しいinitialRowsを渡し直す——
+  // (Server Component)を再実行して新しいinitialResultを渡し直す——
   // ページ全体は再読み込みしない(Suspense境界内だけがやり直る)ので、
   // このClient ComponentはアンマウントされずuseStateの初期値は再評価
   // されない。以前の実装(propsのrowsをそのまま使う、内部stateを
   // 持たない)ではこれが自動的に効いていたが、取得失敗/実0件を区別する
-  // 内部stateを持たせたことで素朴には効かなくなる——ここでinitialRows
+  // 内部stateを持たせたことで素朴には効かなくなる——ここでinitialResult
   // (参照)が変わるたびに反映し直すことで、bulk作成後にバッジ・下書き
   // 有無が更新される既存の挙動を保つ。
   useEffect(() => {
-    setState(loadStateFromInitialRows(initialRows));
+    setState(loadStateFromInitialRows(initialResult));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialRows]);
+  }, [initialResult]);
 
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
@@ -214,18 +216,22 @@ export function ListingsOverviewTable({ initialRows, canEdit }: { initialRows: L
    * (「0件」と「取得失敗」を混同しない・データ欠落状態で一括操作を
    * 有効にしない — 下のJSXでstate.kind==="error"の間は一括操作ボタン
    * 列自体を描画しない)。app/inventory/(protected)/[id]/
-   * InventoryHistorySection.tsxのretryと同じ形——Server Actionが投げた
-   * 例外(通信断等)もcatchして再試行可能に戻す。ページ全体の再読み込み
-   * (router.refresh())ではなく、この一覧データだけをやり直す。
+   * InventoryHistorySection.tsxのretryと同じ形。
+   *
+   * EC一覧P1 実失敗分類(2026-09-13): 初回描画(ListingsOverviewData.tsx)
+   * と同じ`listListingsOverviewSafeAction`(例外を投げない・安全な分類
+   * 情報を返す版)を使う——素朴に例外を投げる版を使うと、再試行のたびに
+   * 分類情報が失われ「初回は分類できるが再試行は汎用エラーに戻る」と
+   * いう非対称が生まれる。Server Action呼び出し自体が(通信断等で)
+   * rejectした場合は分類できないので"unknown"扱いにする。
    */
   async function retryLoad() {
     setState({ kind: "retrying" });
     try {
-      const freshRows = await listListingsOverviewAction();
-      if (!Array.isArray(freshRows)) throw new Error("一覧の取得結果を確認できませんでした。");
-      setState({ kind: "ok", rows: freshRows });
+      const result = await listListingsOverviewSafeAction();
+      setState(loadStateFromInitialRows(result));
     } catch {
-      setState({ kind: "error" });
+      setState({ kind: "error", failure: { stage: null, kind: "unknown" } });
     }
   }
 
@@ -236,6 +242,43 @@ export function ListingsOverviewTable({ initialRows, canEdit }: { initialRows: L
           <p className="text-[12px] text-gray-400" aria-live="polite">
             読み込み中…
           </p>
+        ) : state.failure.kind === "auth-expired" ? (
+          // EC一覧P1 実失敗分類(2026-09-13): 認証切れ(セッション期限切れ
+          // 等)は、同じ資格情報のまま局所再試行しても直らない見込みが高い
+          // ——ボタンでの再試行ではなく、既存のログイン画面
+          // (app/inventory/InventoryHeader.tsxのログアウト導線と同じ
+          // "/inventory/login")への案内に差し替える。認証処理自体
+          // (signOut/再認証)はここでは一切行わない——ただの案内リンク。
+          <div>
+            <p className="text-[12px] text-red-600" role="alert">
+              認証の有効期限が切れている可能性があります。再度ログインしてください。
+            </p>
+            <Link
+              href="/inventory/login"
+              className="mt-1 inline-block border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50"
+            >
+              ログイン画面へ
+            </Link>
+          </div>
+        ) : state.failure.kind === "auth-forbidden" ? (
+          // 2026-09-13 補正(task_2c27a70778613453ed): "auth-expired"とは
+          // 別枝——資格情報自体は有効でも対象操作の権限が無いケース
+          // (AppSyncの@auth不一致等)。再ログインしても同じロールのまま
+          // なので直らない——ログイン画面への案内は出さず、局所再試行と
+          // 管理者への確認を促す案内にとどめる(権限変更自体はここでは
+          // 一切行わない)。
+          <div>
+            <p className="text-[12px] text-red-600" role="alert">
+              この一覧を表示する権限が確認できませんでした。管理者にご確認ください。
+            </p>
+            <button
+              type="button"
+              onClick={() => void retryLoad()}
+              className="mt-1 border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50"
+            >
+              再試行
+            </button>
+          </div>
         ) : (
           <div>
             <p className="text-[12px] text-red-600" role="alert">

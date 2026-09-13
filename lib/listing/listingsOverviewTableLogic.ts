@@ -21,6 +21,11 @@
  * 全件(filtered)に対して行いつつ、実際にDOMへ描画するのは
  * `paginate`で切り出した1ページぶんだけにする。
  */
+// `import type`はTypeScriptのstrip-only modeで完全に消える(実行時の
+// importにならない)——このファイルの「依存ゼロ」(冒頭コメント参照、
+// scripts/verify-listings-overview-table-logic.tsがhooks非対応の素の
+// Node実行環境からそのままimportできる設計)を壊さない。
+import type { ListingsOverviewFailureInfo, ListingsOverviewLoadOutcome } from "./overviewFailure";
 
 /** 1ページに描画する最大行数。364件なら4ページ程度に収まる。 */
 export const LISTINGS_OVERVIEW_PAGE_SIZE = 100;
@@ -76,20 +81,26 @@ export function selectableInventoryIds(filteredRows: readonly { inventoryId: str
   return filteredRows.filter((r) => !r.hasDraft).map((r) => r.inventoryId);
 }
 
-/** ListingsOverviewTable.tsxの読み込み状態。InventoryHistorySection.tsxのLoadStateと同じ3値設計。 */
-export type ListingsLoadState<T> = { kind: "ok"; rows: T[] } | { kind: "error" } | { kind: "retrying" };
+/**
+ * ListingsOverviewTable.tsxの読み込み状態。InventoryHistorySection.tsxの
+ * LoadStateと同じ3値設計——ただし"error"はEC一覧P1 実失敗分類
+ * (2026-09-13)で安全な分類情報(`failure`)を持つ。認証切れなら再ログイン
+ * の案内、その他は局所再試行、という振る舞いの出し分けをこの`failure`
+ * だけを見て行う(呼び出し側は元の例外・メッセージ原文には一切触れない)。
+ */
+export type ListingsLoadState<T> = { kind: "ok"; rows: T[] } | { kind: "error"; failure: ListingsOverviewFailureInfo } | { kind: "retrying" };
 
 /**
  * ListingsOverviewData.tsx(async Server Component)から渡された
- * `initialRows`(取得成功なら行の配列、失敗なら`null` —
- * lib/listing/service.tsのlistListingsOverviewSafe参照)を、
+ * `initialResult`(lib/listing/service.tsのlistListingsOverviewSafeが
+ * 返す、取得成功(行の配列)か失敗(安全な分類情報)かの判別可能な形)を、
  * useStateの初期値へ変換する。
  *
  * ★要件: 「データなし」と「取得失敗」を混同しない — 実0件
- * (initialRows === [])は`{kind:"ok", rows:[]}`として通常のテーブル
- * (0件表示)へ、取得失敗(initialRows === null)は`{kind:"error"}`
+ * (`{ok:true, rows:[]}`)は`{kind:"ok", rows:[]}`として通常のテーブル
+ * (0件表示)へ、取得失敗(`{ok:false, failure}`)は`{kind:"error", failure}`
  * として一括操作を無効化したエラー表示へ、それぞれ振り分ける。
  */
-export function loadStateFromInitialRows<T>(initialRows: T[] | null): ListingsLoadState<T> {
-  return initialRows === null ? { kind: "error" } : { kind: "ok", rows: initialRows };
+export function loadStateFromInitialRows<T>(initialResult: ListingsOverviewLoadOutcome<T>): ListingsLoadState<T> {
+  return initialResult.ok ? { kind: "ok", rows: initialResult.rows } : { kind: "error", failure: initialResult.failure };
 }

@@ -34,7 +34,13 @@
  *   3. 対象外カテゴリ(「発送完了」)がGSI抽出の時点で現れないこと。
  *   4. いずれかの取得が失敗した場合、listListingsOverviewは例外を
  *      投げ、listListingsOverviewSafe(page.tsx用)はそれを外へ投げず
- *      nullへ落とす。
+ *      `{ok:false, failure}`へ落とす(2026-09-13 EC一覧P1 実失敗分類、
+ *      task_12046ac60ecd86913c)。
+ *   4'. 2026-09-13 補正(task_2c27a70778613453ed): 既定(計測OFF)の
+ *      通常UI経路はfail-fast——1本が失敗すれば、他の1本が未解決の
+ *      Promiseのままでもlisting Overviewは速やかに失敗を返す(4本
+ *      全部の決着を待たない)。categoryNames失敗がecEligibleInventory
+ *      へ伝播しても、失敗段階は根本のcategoryNamesとして特定される。
  *   5. (2026-09-13 EC一覧の読取量削減)Category.listは1回の
  *      listListingsOverview呼び出しにつき1回だけ呼ばれる——以前は
  *      listEcEligibleInventoryとloadCategoryNameLookupがそれぞれ独立に
@@ -206,7 +212,10 @@ async function main() {
   console.log("\n── 失敗の伝播: listListingsOverview vs listListingsOverviewSafe ──");
   {
     mock.__resetCallLogs();
-    mock.__channelListingState.setRejection(new Error("network down"));
+    // Node標準fetch(undici)が接続できないときに実際に投げる形
+    // ("TypeError: fetch failed")を模す——lib/listing/overviewFailure.ts
+    // のNETWORK_PATTERNが対象にしている実際のエラー形。
+    mock.__channelListingState.setRejection(new TypeError("fetch failed"));
 
     let threw = false;
     try {
@@ -217,7 +226,20 @@ async function main() {
     check(threw, "★要件: ChannelListingの取得が失敗したらlistListingsOverviewは例外を投げる(0件と混同しない)");
 
     const safeResult = await listListingsOverviewSafe();
-    check(safeResult === null, "★要件: listListingsOverviewSafeは同じ失敗を外へ投げずnullへ落とす(ページ全体のerror境界へ波及させない)");
+    check(safeResult.ok === false, "★要件: listListingsOverviewSafeは同じ失敗を外へ投げず{ok:false}へ落とす(ページ全体のerror境界へ波及させない)");
+    // ★要件(EC一覧P1 実失敗分類、2026-09-13): BELLO_QUERY_TIMING未設定
+    // (既定、本番の通常経路)でも段階(どの4本のうちどれが失敗したか)を
+    // 特定できる——以前はここが常にnullだった(既定経路ではmeasureStage
+    // 自体が使われていなかったため)。2026-09-13補正(task_2c27a70778613453ed)
+    // では、これを`taggedFailureStage`(fail-fast、個別catchで1段階だけ
+    // タグ付け)で実現している——4本全部の決着を待つmeasureStageは既定
+    // 経路からは外れている。
+    check(
+      !safeResult.ok && safeResult.failure.stage === "channelListings",
+      "★要件: 計測フラグ未設定でも失敗段階(channelListings)を特定できる(既定経路のstage分類、fail-fastのタグ付けで実現)",
+      JSON.stringify(safeResult),
+    );
+    check(!safeResult.ok && safeResult.failure.kind === "network", "★要件: \"fetch failed\"というメッセージはkind:\"network\"へ分類される");
 
     mock.__channelListingState.reset();
   }
@@ -236,7 +258,13 @@ async function main() {
     check(threw, "GraphQL errors(ListingDraft)経由の失敗も例外として伝播する");
 
     const safeResult = await listListingsOverviewSafe();
-    check(safeResult === null, "GraphQL errors経由の失敗もlistListingsOverviewSafeはnullへ落とす");
+    check(safeResult.ok === false, "GraphQL errors経由の失敗もlistListingsOverviewSafeは{ok:false}へ落とす");
+    check(!safeResult.ok && safeResult.failure.stage === "listingDrafts", "★要件: GraphQL errors経由でも失敗段階(listingDrafts)を特定できる");
+    // ★要件(このタスクの本題、task_2c27a70778613453ed): AppSyncの
+    // "Not Authorized"は権限不足(auth-forbidden)であって、セッション
+    // 期限切れ(auth-expired)と断定しない——UIの再ログイン案内はここでは
+    // 出さない。
+    check(!safeResult.ok && safeResult.failure.kind === "auth-forbidden", "★要件: GraphQL errorsの\"Not Authorized\"はkind:\"auth-forbidden\"へ分類される(期限切れと断定しない)");
 
     mock.__listingDraftState.reset();
   }
@@ -256,9 +284,87 @@ async function main() {
     check(threw, "Inventory GSIの失敗(reject)も例外として伝播する");
 
     const safeResult = await listListingsOverviewSafe();
-    check(safeResult === null, "Inventory GSI失敗経由もlistListingsOverviewSafeはnullへ落とす");
+    check(safeResult.ok === false, "Inventory GSI失敗経由もlistListingsOverviewSafeは{ok:false}へ落とす");
+    check(!safeResult.ok && safeResult.failure.stage === "ecEligibleInventory", "★要件: Inventory GSI失敗はecEligibleInventory段階として特定できる");
+    check(!safeResult.ok && safeResult.failure.kind === "throttle", "★要件: \"GSI throttled\"はkind:\"throttle\"へ分類される");
 
     mock.__resetInventoryRejection();
+  }
+
+  {
+    // ★要件(指示書§4「unknownをtimeoutと決めつけない」): 分類できない
+    // メッセージはkind:"unknown"のまま——他の具体的な種別へ寄せない。
+    mock.__resetCallLogs();
+    mock.__channelListingState.setRejection(new Error("something unexpected happened"));
+
+    const safeResult = await listListingsOverviewSafe();
+    check(safeResult.ok === false, "分類不能な例外もlistListingsOverviewSafeは{ok:false}へ落とす");
+    check(!safeResult.ok && safeResult.failure.kind === "unknown", "★要件: 分類できないメッセージはkind:\"unknown\"のまま(timeout等へ決め打ちしない)");
+    check(!JSON.stringify(safeResult).includes("something unexpected happened"), "★要件: listListingsOverviewSafeの戻り値に元の例外メッセージ原文が含まれない");
+
+    mock.__channelListingState.reset();
+  }
+
+  console.log("\n── categoryNames失敗の誤表示防止(このタスクの本題、task_2c27a70778613453ed) ──");
+  {
+    // categoryNamesが失敗すると、ecEligibleInventory(categoryNamesの
+    // 取得結果を待ってから進む)も同じ例外を受けて失敗する——このとき
+    // 「失敗段階」は根本原因のcategoryNamesであるべきで、症状にすぎない
+    // ecEligibleInventoryを誤って表示してはいけない(lib/listing/
+    // service.tsのfetchListingsOverviewRowsのコメント参照)。
+    mock.__resetCallLogs();
+    mock.__categoryState.setRejection(new Error("Category master unavailable"));
+
+    let threw = false;
+    try {
+      await listListingsOverview();
+    } catch {
+      threw = true;
+    }
+    check(threw, "Category取得の失敗も例外として伝播する");
+
+    const safeResult = await listListingsOverviewSafe();
+    check(safeResult.ok === false, "Category取得失敗もlistListingsOverviewSafeは{ok:false}へ落とす");
+    check(
+      !safeResult.ok && safeResult.failure.stage === "categoryNames",
+      "★要件: categoryNames失敗はecEligibleInventoryへ伝播しても、根本のcategoryNamesとして特定される(依存先の症状を誤表示しない)",
+      JSON.stringify(safeResult),
+    );
+
+    mock.__categoryState.reset();
+  }
+
+  console.log("\n── fail-fast: 1本が失敗し、別の1本が未解決のままでもSafeは速やかに失敗を返す(このタスクの本題) ──");
+  {
+    // 2026-09-13補正(task_2c27a70778613453ed)の核心試験: 先行タスクが
+    // 既定経路もmeasureStage+Promise.all(4本全部の決着を待つ)へ一本化
+    // していた退行を検出する——channelListingsを意図的に「永久に未解決」
+    // にした状態でlistingDraftsだけを失敗させ、listListingsOverviewSafe
+    // が(channelListingsの決着を待たず)速やかに{ok:false}を返すことを、
+    // 実際にPromise.raceでタイムアウトと競わせて確認する。
+    mock.__resetCallLogs();
+    mock.__channelListingState.setNeverResolves();
+    mock.__listingDraftState.setErrors([{ message: "Rate exceeded" }]);
+
+    const TIMEOUT_MS = 2000;
+    const timeoutMarker = Symbol("timeout");
+    const startedAt = Date.now();
+    const result = await Promise.race([
+      listListingsOverviewSafe(),
+      new Promise((resolve) => setTimeout(() => resolve(timeoutMarker), TIMEOUT_MS)),
+    ]);
+    const elapsedMs = Date.now() - startedAt;
+
+    check(result !== timeoutMarker, `★要件: 1本(channelListings)が未解決のままでも、listListingsOverviewSafeは${TIMEOUT_MS}ms以内に決着する(全段階待ちへの退行なし)`, `elapsedMs=${elapsedMs}`);
+    if (result !== timeoutMarker) {
+      const safeResult = result as Awaited<ReturnType<typeof listListingsOverviewSafe>>;
+      check(safeResult.ok === false, "fail-fastでも{ok:false}を返す");
+      check(!safeResult.ok && safeResult.failure.stage === "listingDrafts", "★要件: 実際に失敗した段階(listingDrafts)を特定できる(未解決のchannelListingsではない)");
+      check(!safeResult.ok && safeResult.failure.kind === "throttle", "\"Rate exceeded\"はkind:\"throttle\"へ分類される");
+    }
+
+    mock.__channelListingState.reset();
+    mock.__listingDraftState.reset();
   }
 
   console.log("\n── 段階別の壁時計計測(BELLO_QUERY_TIMING=1、実service) ── elapsedMsと累積msの区別 ──");
@@ -386,7 +492,8 @@ async function main() {
     check(otherStagesOk, "★要件: 失敗していない他の3段階(channelListings/listingDrafts/categoryNames)はok:trueのまま");
 
     const safeResult = await (await import("@/lib/listing/service")).listListingsOverviewSafe();
-    check(safeResult === null, "listListingsOverviewSafeは同じ失敗を外へ投げずnullへ落とす(タイミング計測が有効でも契約は変わらない)");
+    check(safeResult.ok === false, "listListingsOverviewSafeは同じ失敗を外へ投げず{ok:false}へ落とす(タイミング計測が有効でも契約は変わらない)");
+    check(!safeResult.ok && safeResult.failure.stage === "ecEligibleInventory", "★要件: 計測フラグON時も同じ失敗段階(ecEligibleInventory)がlistListingsOverviewSafeまで届く(firstFailedStage経由)");
 
     // 診断応答(実際にroute.tsのGETが使うのと同じ関数)も同じ形で返す。
     mock.__resetCallLogs();

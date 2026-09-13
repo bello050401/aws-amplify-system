@@ -21,30 +21,46 @@ function makePagedList(items, callLog) {
   // られるようにする——既定は0(遅延無し)で、既存の呼び出し側の挙動は
   // 変わらない。
   let delayMs = 0;
+  // 2026-09-13 補正(task_2c27a70778613453ed): fail-fast試験用——
+  // 「1本が失敗する一方、別の1本は決着しないまま(ハングしたまま)」を
+  // 再現する。素朴に長いdelayMsでは有限時間で決着してしまい「本当に
+  // 待たなかったか」の証明にならないため、実際に一度も解決/拒否しない
+  // Promiseを返す。
+  let neverResolves = false;
   const state = {
     /** 次の list() 呼び出しをGraphQL errors(dataは空でも通常発生する形)にする。 */
     setErrors(errors) {
       forcedErrors = errors;
       rejection = null;
+      neverResolves = false;
     },
     /** 次の list() 呼び出しをreject(通信断等の非GraphQLエラー)にする。 */
     setRejection(err) {
       rejection = err;
       forcedErrors = null;
+      neverResolves = false;
     },
     /** 以降のlist()呼び出し1回ごとに実際に待つms(合成遅延、setTimeout)。実測用で0が既定。 */
     setDelayMs(ms) {
       delayMs = ms;
     },
+    /** 以降のlist()呼び出しを永久に未解決のままにする(fail-fast試験専用)。 */
+    setNeverResolves() {
+      neverResolves = true;
+      rejection = null;
+      forcedErrors = null;
+    },
     reset() {
       rejection = null;
       forcedErrors = null;
       delayMs = 0;
+      neverResolves = false;
     },
   };
   async function list(opts) {
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     callLog.push({ ...opts });
+    if (neverResolves) return new Promise(() => {});
     if (rejection) throw rejection;
     if (forcedErrors) return { data: [], errors: forcedErrors };
     const limit = opts.limit ?? 100;

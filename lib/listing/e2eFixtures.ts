@@ -6,8 +6,8 @@
  * listListingsOverview はCategory/Inventory(GSI)/ChannelListing/
  * ListingDraft の4本を実際に呼ぶため、そのままではE2Eで
  * `INVENTORY_E2E_FIXTURES=1` を立てても失敗する(listListingsOverviewSafe
- * がnullへ落とすので一覧はerror状態になり、364件描画・検索・絞込・
- * ページ移動・選択維持を実ブラウザで検証できない)。
+ * が`{ok:false, failure}`へ落とすので一覧はerror状態になり、364件描画・
+ * 検索・絞込・ページ移動・選択維持を実ブラウザで検証できない)。
  *
  * 【安全設計】lib/inventory/e2eFixtures.ts と同じ二重ゲート
  * (isE2EFixtureModeActive — NODE_ENV!=='production' かつ

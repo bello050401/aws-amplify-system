@@ -95,18 +95,40 @@ console.log("\n── selectableInventoryIds ──");
   check(ids.length === expectedCount, "★要件: 選択対象はページ内(100件)ではなく絞り込み後の全件(364件)から算出する", `ids=${ids.length} expected=${expectedCount}`);
 }
 
-console.log("\n── loadStateFromInitialRows ──");
+console.log("\n── loadStateFromInitialRows (EC一覧P1 実失敗分類 2026-09-13: ListingsOverviewLoadOutcome) ──");
 {
-  const ok = loadStateFromInitialRows([{ id: 1 }]);
+  const ok = loadStateFromInitialRows({ ok: true, rows: [{ id: 1 }] });
   check(ok.kind === "ok" && (ok as { rows: unknown[] }).rows.length === 1, "配列(実データあり) → ok状態");
 }
 {
-  const okEmpty = loadStateFromInitialRows([] as unknown[]);
+  const okEmpty = loadStateFromInitialRows({ ok: true, rows: [] as unknown[] });
   check(okEmpty.kind === "ok" && (okEmpty as { rows: unknown[] }).rows.length === 0, "★要件: 空配列(実0件)はerrorではなくok状態(0件表示との区別)");
 }
 {
-  const err = loadStateFromInitialRows(null);
-  check(err.kind === "error", "★要件: null(取得失敗)はerror状態——実0件と混同しない");
+  // ★要件(EC一覧P1 実失敗分類): 取得失敗はkind:"error"であって、単なる
+  // true/falseではなく安全な分類情報(stage/kind)を持つ——UIはこれを見て
+  // 認証切れ(kind:"auth-expired")/権限不足(kind:"auth-forbidden")/
+  // それ以外かで振る舞いを変える。
+  const err = loadStateFromInitialRows({ ok: false, failure: { stage: "channelListings", kind: "auth-expired" } });
+  check(err.kind === "error", "★要件: 取得失敗はerror状態——実0件と混同しない");
+  check(
+    err.kind === "error" && err.failure.stage === "channelListings" && err.failure.kind === "auth-expired",
+    "★要件: 失敗段階(stage)と種別(kind)がそのままerror状態へ引き継がれる(UIの認証案内/局所再試行の出し分けに使う)",
+  );
+}
+{
+  // 2026-09-13補正(task_2c27a70778613453ed): このタスクの本題——権限
+  // 不足(auth-forbidden)はauth-expiredと区別してそのまま引き継がれる。
+  const err = loadStateFromInitialRows({ ok: false, failure: { stage: "listingDrafts", kind: "auth-forbidden" } });
+  check(
+    err.kind === "error" && err.failure.stage === "listingDrafts" && err.failure.kind === "auth-forbidden",
+    "★要件: 権限不足(auth-forbidden)は認証切れ(auth-expired)と別のkindのまま引き継がれる(期限切れと断定しない)",
+  );
+}
+{
+  // stage不明(E2E fixture等、段階別計測が添えられていない失敗)でもerror状態自体は成立する。
+  const err = loadStateFromInitialRows({ ok: false, failure: { stage: null, kind: "unknown" } });
+  check(err.kind === "error" && err.failure.stage === null && err.failure.kind === "unknown", "★要件: 失敗段階が特定できない場合もstage:nullのままerror状態になる(timeout等へ決め打ちしない)");
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);

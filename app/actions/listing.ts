@@ -7,6 +7,7 @@ import {
   getChannelListing,
   getListingDraftForInventory,
   listListingsOverview,
+  listListingsOverviewSafe,
   saveChannelOverride,
   saveListingDraft,
   listOnMercari,
@@ -15,6 +16,7 @@ import {
   type ListingDraftInput,
   type ListingOverviewRow,
 } from "@/lib/listing/service";
+import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
 import { fetchMercariCategories } from "@/lib/listing/mercari/adapter";
 import { isMercariConnected } from "@/lib/listing/mercari/tokenAccess";
 import { isBaseConnected } from "@/lib/base/oauth";
@@ -104,6 +106,21 @@ export async function isBaseConnectedAction(): Promise<boolean> {
  */
 export async function listListingsOverviewAction(): Promise<ListingOverviewRow[]> {
   return listListingsOverview();
+}
+
+/**
+ * EC一覧P1 実失敗分類(2026-09-13): ListingsOverviewTable.tsxの再試行
+ * ボタン(retryLoad)専用。`listListingsOverviewAction`(上記、
+ * app/inventory/(protected)/listings/pricing-rules/assign/page.tsxが
+ * 未変更のまま使い続ける、失敗したら例外を投げる版)とは別に用意する —
+ * 再試行時も初回描画(ListingsOverviewData.tsx)と同じ
+ * `listListingsOverviewSafe`(安全な分類情報を返す、例外を投げない版)を
+ * 通すことで、「初回は分類できるが再試行は汎用エラーに戻る」という
+ * 非対称を避ける。戻り値は行の配列(成功)か固定の分類コード(失敗)の
+ * どちらか——GraphQLメッセージ原文・商品名・トークンは含まない。
+ */
+export async function listListingsOverviewSafeAction(): Promise<ListingsOverviewLoadOutcome<ListingOverviewRow>> {
+  return listListingsOverviewSafe();
 }
 
 /** 一覧画面からの一括下書き作成(spec §16: 一括操作) — 書き込みなのでcanEditInventory境界を課す。 */
