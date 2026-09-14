@@ -4,7 +4,6 @@ import { getInventoryDetail } from "@/lib/inventory/queries";
 import { listEcEligibleInventory } from "@/lib/inventory/ecEligibleQuery";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
-import { createMercariProduct } from "./mercari/adapter";
 import { createBaseProduct } from "./base/adapter";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
@@ -21,7 +20,6 @@ import {
 } from "./overviewFailure";
 import {
   BASE_ROUTE,
-  MERCARI_ROUTE,
   assertNotAlreadyListed,
   describePublishFailure,
   failedPatch,
@@ -29,11 +27,9 @@ import {
   publishingPatch,
   requireChannelListing,
   requireDraft,
-  requireMercariWritesEnabled,
   saveFailureMessage,
   type PublishRoute,
 } from "./publishFlow";
-import { isExternalWriteEnabled } from "@/lib/integrations/writeGuard";
 import type {
   ChannelListingRecord,
   ListingChannel,
@@ -41,7 +37,6 @@ import type {
   ListingDraftRecord,
   ListingImageRef,
   ListingShippingMethod,
-  ShippingPayerCode,
 } from "./types";
 import { DEFAULT_LISTING_SHIPPING_METHOD, parseListingShippingMethod } from "./types";
 
@@ -923,83 +918,23 @@ export async function saveChannelOverride(
 }
 
 /**
- * Mercari Shopsへ実際に出品する。冪等性/重複防止(spec要件): 既に
- * ACTIVE(externalListingIdを持つ)状態のChannelListingへ再度出品を
- * 試みることは拒否する。
+ * Mercari Shops API出品機能の撤去(2026-09-14)。
  *
- * BELLO統合業務OS指示書(2026-08-30) §21: 「自動再出品」自体
- * (旧listing ENDED→新listing作成、または同一IDでの再公開)は、
- * Mercari側のupdateProduct/再出品APIの実仕様がこのsandbox環境から
- * 確認できていない([UNVERIFIED] — lib/listing/mercari/adapter.tsの
- * ファイル冒頭コメント参照)ため今回は実装していない — 実際に呼び出す
- * 手段の無い状態を「実装済み」と称さない(§109/§155)。ACTIVE状態への
- * 再出品を試みた場合、以前と同じくエラーとして明確にブロックする
- * (状態機械上はRELIST_PENDINGを用意済みだが、そこへ遷移させる具体的
- * なトリガーはまだ無い)。
+ * 旧`listOnMercari`(Mercariへ実際に出品するServer関数)はここにあった。
+ * ユーザーの明示的な指示(P1): 「Mercari Shops API出品機能そのものを
+ * 撤去する。無効ボタンや認証待ちとして残す対応では不十分」— 単に
+ * ボタンを無効化する/`assertExternalWriteAllowed`で止めるのではなく、
+ * この関数自体・呼び出し元(`app/actions/listing.ts`の
+ * `listOnMercariAction`)・UI(`ListingForm.tsx`の「Mercariに出品する」
+ * ボタン)・アダプタ一式(`lib/listing/mercari/`)を削除した。
+ *
+ * 既存の`ChannelListing`(過去にMercariへ出品した履歴、status/
+ * externalListingId/listingUrl/lastError等)は削除していない —
+ * `getChannelListing`/`fetchAllChannelListings`は引き続き
+ * `MERCARI_SHOPS`チャネルを読み取り専用で返す(EC一覧・商品詳細の
+ * 「過去の出品履歴」表示のため)。BASEチャネル(`listOnBase`、下記)は
+ * このタスクの対象外であり、一切変更していない。
  */
-export async function listOnMercari(
-  inventoryId: string,
-  shippingPayer: ShippingPayerCode,
-  who: string | null,
-): Promise<ChannelListingRecord> {
-  const route: PublishRoute = MERCARI_ROUTE;
-
-  // 2026-09-14 指示書: ユーザーの運用ではMercari Shops APIへ実際に接続
-  // できない(publishFlow.tsのrequireMercariWritesEnabledコメント参照)。
-  // PUBLISHINGへ進める前に最初に確認し、届く見込みが無い呼び出しのために
-  // 状態をPUBLISHING→ERRORと動かさない(lib/listing/mercari/adapter.tsの
-  // createMercariProductが送信直前でも同じ判定を行う、二重の関門)。
-  requireMercariWritesEnabled(isExternalWriteEnabled("MERCARI_SHOPS"));
-
-  const draft = await getListingDraftForInventory(inventoryId);
-  requireDraft(draft);
-
-  const channelListing = await getChannelListing(inventoryId, route.channel);
-  requireChannelListing(channelListing, route);
-  assertNotAlreadyListed(channelListing, route);
-
-  // BELLO統合改修 master指示書(2026-08-29統合改修版) §17-A: variant
-  // 構造のquantityは出品実行の直前に取得した実在庫数量を使う
-  // (lib/listing/mercari/adapter.tsのMercariListingInputコメント参照
-  // — 下書き保存時点の値をコピーして古くならないよう、ここで都度取得
-  // する)。
-  const inventory = await getInventoryDetail(inventoryId);
-  if (!inventory) throw new Error("対象の在庫が見つかりません。");
-
-  // §12/§128: 出品実行の直前にも再確認する(下書き保存後にカテゴリーが
-  // 対象外へ変更された場合、実際の出品APIを叩く前にここで止める)。
-  const categoryNameOf = await loadCategoryNameLookup();
-  const categoryName = categoryNameOf(inventory.categoryId);
-  if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
-
-  // §15: PUBLISHING = 外部APIへ呼び出し中(旧QUEUEDから改称 — QUEUEDは
-  // §14の新しい語彙では「バッチ/スケジュール待ち」を指すため、この
-  // 同期的なcreateProduct呼び出し中の状態にはPUBLISHINGの方が正確)。
-  // 外部APIを叩く前に「呼び出し中」を確実に残す。ここが黙って失敗すると、
-  // 途中で落ちたときに出品済みかどうかを判断する手がかりが無くなる。
-  unwrapWriteRequired(
-    await serverDataClient.models.ChannelListing.update(publishingPatch(channelListing.id, who), inventoryAuthMode),
-    "出品状態(呼び出し中)",
-  );
-
-  try {
-    const result = await createMercariProduct({ draft, channelListing, shippingPayer, inventoryQuantity: inventory.quantity });
-    const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
-      publishedPatch({ channelListing, result, route, who, nowIso: new Date().toISOString() }),
-      inventoryAuthMode,
-    );
-    if (errors || !updated) throw new Error(saveFailureMessage(errors));
-    return toChannelListingRecord(updated);
-  } catch (err) {
-    const { data: failed } = await serverDataClient.models.ChannelListing.update(
-      failedPatch(channelListing.id, describePublishFailure(err), who),
-      inventoryAuthMode,
-    );
-    console.error(`[${route.logLabel}] inventoryId=${inventoryId} failed:`, err);
-    if (failed) return toChannelListingRecord(failed);
-    throw err;
-  }
-}
 
 /**
  * BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASEへ実際に

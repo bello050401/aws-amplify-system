@@ -286,20 +286,9 @@ async function measureListing(inventoryId: string) {
   await measure("EC出品", "ChannelListing GSI(inventoryId)", "Query", () =>
     queryIndex("ChannelListing", "channelListingsByInventoryId", "inventoryId", inventoryId, { limit: 20, maxPages: 3 }),
   );
-  // 2026-09-04 第2フェーズ§4: 第1フェーズではここに存在しない名前
-  // (bello/mercari-api-token)を書いてしまい、ResourceNotFound を
-  // 「Secretを作れば直る」と報告していた。アプリが実際に読むのは
-  // lib/listing/mercari/secretStore.ts の MERCARI_SECRET_NAME だけなので、
-  // 名前を2箇所に書かず、そこから取る。Secretの新規作成は不要。
-  const { MERCARI_SECRET_NAME } = await import("@/lib/listing/mercari/secretStore");
-  await measure("EC出品", "Mercari TOKEN(Secrets Manager)", "Secret", async () => {
-    try {
-      const res = await sm.send(new GetSecretValueCommand({ SecretId: MERCARI_SECRET_NAME }));
-      return { roundTrips: 1, items: 1, bytes: (res.SecretString ?? "").length };
-    } catch (err) {
-      return { roundTrips: 1, items: 0, bytes: 0, note: `${err instanceof Error ? err.name : "error"}` };
-    }
-  });
+  // Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
+  // lib/listing/mercari/secretStore.tsのMERCARI_SECRET_NAMEは削除済み
+  // ——このSecrets Manager計測も対応する経路が無くなったため削除した。
   await measureMasters("EC出品");
 }
 

@@ -3,7 +3,6 @@ import Link from "next/link";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
 import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/service";
-import { getMercariConnectionState } from "@/lib/listing/mercari/tokenAccess";
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
@@ -35,22 +34,14 @@ export default async function ListingPage({ params }: { params: { id: string } }
   const item = await getInventoryDetail(params.id);
   if (!item) notFound();
 
-  const [draft, channelListing, mercariConnection, categories, statuses] = await Promise.all([
+  const [draft, channelListing, categories, statuses] = await Promise.all([
     getListingDraftForInventory(item.id),
     getChannelListing(item.id, "MERCARI_SHOPS"),
-    getMercariConnectionState(),
     // 2026-09-04 EC出品改修指示書 §2-1: 右パネルのカテゴリ/在庫ステータス。
     // 在庫詳細ページと同じクエリを使う —— 表示名の解決を2通り持たない。
     listCategories(item.categoryId),
     listStatuses(),
   ]);
-  // 2026-09-14 指示書: 「TOKENが保存されている(mercariConnected)」と
-  // 「実際にMercariへ出品してよい(mercariApiWritesEnabled)」を区別する
-  // — 後者はlib/integrations/writeGuard.tsのisExternalWriteEnabledが
-  // 唯一の判定源で、TOKEN保存や過去の接続確認とは独立している
-  // (lib/listing/publishFlow.tsのrequireMercariWritesEnabled参照)。
-  const mercariConnected = mercariConnection.tokenSource !== "unconfigured";
-  const mercariApiWritesEnabled = mercariConnection.writesEnabled;
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
   const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
 
@@ -101,8 +92,6 @@ export default async function ListingPage({ params }: { params: { id: string } }
           images={orderedNormalImages}
           initialDraft={draft}
           initialChannelListing={channelListing}
-          mercariConnected={mercariConnected}
-          mercariApiWritesEnabled={mercariApiWritesEnabled}
         />
         {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
             ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
@@ -112,5 +101,3 @@ export default async function ListingPage({ params }: { params: { id: string } }
     </div>
   );
 }
-
-

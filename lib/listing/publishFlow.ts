@@ -61,14 +61,9 @@ export interface PublishRoute {
   readonly logLabel: string;
 }
 
-export const MERCARI_ROUTE: PublishRoute = {
-  channel: "MERCARI_SHOPS",
-  displayName: "Mercari Shops",
-  notConfiguredMessage: "先にMercariのカテゴリー設定を保存してください。",
-  clearsListingUrlOnPublish: true,
-  logLabel: "listOnMercari",
-};
-
+// Mercari Shops API出品機能の撤去(2026-09-14)に伴い、`MERCARI_ROUTE`
+// (旧`listOnMercari`専用の経路定義)は削除した — `PublishRoute`型と
+// `BASE_ROUTE`自体は出品先を問わない共通の型/BASE用の経路として残す。
 export const BASE_ROUTE: PublishRoute = {
   channel: "BASE",
   displayName: "BASE",
@@ -112,33 +107,12 @@ export function assertNotAlreadyListed(channelListing: ChannelListingRecord, rou
   }
 }
 
-/**
- * 2026-09-14 指示書「Mercari API不可の運用と案内/ボタン/状態を一致
- * させる」対応。
- *
- * ユーザーの運用ではMercari Shops APIへ実際に接続できないことが分かって
- * おり、これは「TOKEN未設定」でも「接続未検証」でもなく、運用として
- * 出品操作をAPIへ送信しないという方針そのもの — だから判定は
- * TOKEN保存(mercariConnected)にも過去の接続確認(verified)にも依存させず、
- * `lib/integrations/writeGuard.ts`のisExternalWriteEnabled("MERCARI_SHOPS")
- * (既定fail-closed、AWS側の環境変数でのみ解除)だけを見る。過去に接続
- * 確認が取れていた(verified)としても、この値がfalseの間は出品を実行
- * させない。
- *
- * `lib/listing/mercari/adapter.ts`のcreateMercariProductは送信直前でも
- * 同じ判定(assertExternalWriteAllowed)を通すため、ここで素通りしても
- * 実際にMercariへ届くことはない(二重の関門)。この関数をservice.tsの
- * listOnMercariの入口に置くのは、届く前提のPUBLISHING状態へ進めてから
- * ERRORへ戻す無駄な状態遷移を避け、利用者向けの文言をここで一元化する
- * ため。
- */
-export const MERCARI_MANUAL_ONLY_MESSAGE =
-  "現在の運用ではMercari Shops APIへの自動出品は行っていません。準備ができた出品下書きの内容は「出品内容をコピー」からMercari公式管理画面へ手動で入力し、出品してください。";
-
-/** 実際にMercariへ出品してよいか(=書き込みが許可されているか)。 */
-export function requireMercariWritesEnabled(writesEnabled: boolean): void {
-  if (!writesEnabled) throw new Error(MERCARI_MANUAL_ONLY_MESSAGE);
-}
+// Mercari Shops API出品機能の撤去(2026-09-14、P1)。旧`MERCARI_MANUAL_
+// ONLY_MESSAGE`/`requireMercariWritesEnabled`(TOKEN保存/接続確認とは
+// 独立に、実際にMercariへ出品してよいかをisExternalWriteEnabled経由で
+// 判定する関数)はここにあった。呼び出し元だったservice.tsのlistOnMercari
+// 自体を削除したため、この判定関数も不要になった(単に無効化するのでは
+// なく、経路自体が無くなっている)。
 
 /* ══════════════════════════════════════════════════════════════════
  * 状態遷移

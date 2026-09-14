@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import type { MasterEntry } from "@/lib/inventory/masters";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import type { ZaicoTokenSource } from "@/lib/zaico/client";
-import type { MercariTokenSource, MercariVerificationState } from "@/lib/listing/mercari/tokenAccess";
 import type { LineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import type { BaseConnectionState } from "@/lib/base/connectionState";
 import { MasterList } from "./MasterList";
@@ -15,7 +14,6 @@ import { ZaicoSyncPanel } from "./ZaicoSyncPanel";
 import { ZaicoDuplicateAuditPanel } from "./ZaicoDuplicateAuditPanel";
 import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 import { ListingPartitionBackfillPanel } from "./ListingPartitionBackfillPanel";
-import { MercariSettingsPanel } from "./MercariSettingsPanel";
 import { BaseSettingsPanel } from "./BaseSettingsPanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
@@ -35,25 +33,6 @@ interface SettingsTabsProps {
   zaicoConnected: boolean;
   /** どちらの経路でTOKENが得られているか(値は含まない) — AWS Secrets Manager経由かどうかをADMINが画面上で確認できるようにする(lib/zaico/client.tsのgetZaicoTokenSource参照)。 */
   zaicoTokenSource: ZaicoTokenSource;
-  /** BELLO統合改修 master指示書 Phase D — Mercari接続設定タブもADMINにのみ表示する。zaicoConnected/zaicoTokenSourceと同じ理由・同じ導出方法。 */
-  mercariConnected: boolean;
-  mercariTokenSource: MercariTokenSource;
-  mercariEnvironment: "sandbox" | "production";
-  /** BELLO統合業務OS指示書(2026-08-30) §24: 保存済みのAPIクライアント名(secrets-manager/env-fallbackどちらか、無ければnull) — TOKENと違い秘匿値ではないため表示してよい。 */
-  mercariClientName: string | null;
-  mercariClientNameSource: MercariTokenSource;
-  /** 夜間統合指示書(2026-09-01) §3.4: 「接続済み」と「設定済みだが未検証」を区別するための状態。 */
-  mercariVerification: MercariVerificationState;
-  mercariLastCheckedAt: string | null;
-  /** Secret自体を読めなかった場合の説明 — §6.1「失敗を未設定として黙って表示しない」。 */
-  mercariSecretReadError: string | null;
-  /**
-   * 2026-09-14 指示書: TOKEN保存/接続確認とは独立した、実際にMercariへ
-   * 出品(API送信)してよいかの判定(lib/integrations/writeGuard.tsの
-   * isExternalWriteEnabled("MERCARI_SHOPS")、既定false)。BASEの
-   * baseConnection.writesEnabledと同じ設計。
-   */
-  mercariApiWritesEnabled: boolean;
   /** 夜間統合指示書(2026-09-01) §4.2: 既存のBASE特集ページ連携設定の状態をそのまま表示する(新しい認証情報は作らない)。 */
   baseConnection: BaseConnectionState;
   /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
@@ -77,15 +56,6 @@ export function SettingsTabs({
   isAdmin,
   zaicoConnected,
   zaicoTokenSource,
-  mercariConnected,
-  mercariTokenSource,
-  mercariEnvironment,
-  mercariClientName,
-  mercariClientNameSource,
-  mercariVerification,
-  mercariLastCheckedAt,
-  mercariSecretReadError,
-  mercariApiWritesEnabled,
   baseConnection,
   lineConnected,
   lineTokenSource,
@@ -111,7 +81,6 @@ export function SettingsTabs({
     "columns",
     "zaico",
     "images",
-    "mercari",
     "base",
     "pricing",
     "shipping",
@@ -156,11 +125,6 @@ export function SettingsTabs({
         {isAdmin && (
           <button type="button" onClick={() => setTab("images")} className={tabClass(tab === "images")}>
             画像最適化
-          </button>
-        )}
-        {isAdmin && (
-          <button type="button" onClick={() => setTab("mercari")} className={tabClass(tab === "mercari")}>
-            EC出品（Mercari）
           </button>
         )}
         {isAdmin && (
@@ -234,19 +198,6 @@ export function SettingsTabs({
               <ListingPartitionBackfillPanel />
             </div>
           </div>
-        )}
-        {tab === "mercari" && isAdmin && (
-          <MercariSettingsPanel
-            mercariConnected={mercariConnected}
-            mercariTokenSource={mercariTokenSource}
-            mercariEnvironment={mercariEnvironment}
-            mercariClientName={mercariClientName}
-            mercariClientNameSource={mercariClientNameSource}
-            mercariVerification={mercariVerification}
-            mercariLastCheckedAt={mercariLastCheckedAt}
-            mercariSecretReadError={mercariSecretReadError}
-            mercariApiWritesEnabled={mercariApiWritesEnabled}
-          />
         )}
         {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側

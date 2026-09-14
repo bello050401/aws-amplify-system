@@ -15,8 +15,12 @@
  *   - lib/inventory/queries.ts の listAllCustomFieldDefinitions
  *   - lib/zaico/client.ts の getZaicoTokenSource
  *   - lib/messaging/line/tokenAccess.ts の getLineTokenSource
- *   - lib/listing/mercari/tokenAccess.ts の getMercariConnectionState
  *   - lib/base/connectionState.ts の getBaseConnectionState
+ *
+ * Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
+ * lib/listing/mercari/tokenAccess.tsのgetMercariConnectionState
+ * (旧設定画面が呼んでいたMercari接続状態取得)の検証はここから削除した
+ * ——呼び出し元(設定画面page.tsx)自体がこの関数を呼ばなくなったため。
  *
  * 各関数は「fixtureモードON」で1回、「fixtureモードOFF(比較対照)」で
  * 1回ずつ呼ぶ —— OFFの実行でSDK境界(SecretsManagerClient.send /
@@ -113,7 +117,6 @@ async function main() {
   const { listAllCustomFieldDefinitions } = await import("@/lib/inventory/queries");
   const { getZaicoTokenSource } = await import("@/lib/zaico/client");
   const { getLineTokenSource } = await import("@/lib/messaging/line/tokenAccess");
-  const { getMercariConnectionState } = await import("@/lib/listing/mercari/tokenAccess");
   const { getBaseConnectionState } = await import("@/lib/base/connectionState");
 
   const originalFixtureFlag = process.env.INVENTORY_E2E_FIXTURES;
@@ -145,10 +148,6 @@ async function main() {
     resetSpies();
     await getLineTokenSource().catch(() => {});
     check(totalCalls() > 0, "比較対照: fixture OFFでgetLineTokenSourceはSecrets Manager境界へ到達する");
-
-    resetSpies();
-    await getMercariConnectionState().catch(() => {});
-    check(totalCalls() > 0, "比較対照: fixture OFFでgetMercariConnectionStateはSecrets Manager境界へ到達する");
 
     resetSpies();
     await getBaseConnectionState("example.com").catch(() => {});
@@ -185,12 +184,6 @@ async function main() {
     const lineSource = await getLineTokenSource();
     check(totalCalls() === 0, "★要件: fixture ONでgetLineTokenSourceはSecrets Managerへ一切到達しない");
     check(lineSource === "secrets-manager", "getLineTokenSourceは合成値を返す", lineSource);
-
-    resetSpies();
-    const mercariState = await getMercariConnectionState();
-    check(totalCalls() === 0, "★要件: fixture ONでgetMercariConnectionStateはSecrets Managerへ一切到達しない");
-    check(mercariState.tokenSource === "secrets-manager" && mercariState.verification === "verified", "getMercariConnectionStateは「接続済み・検証済み」の合成状態を返す", JSON.stringify(mercariState));
-    check(typeof mercariState.writesEnabled === "boolean", "writesEnabledはisExternalWriteEnabled(環境変数のみ、AWSに触れない)由来のまま");
 
     resetSpies();
     const baseState = await getBaseConnectionState("example.com");

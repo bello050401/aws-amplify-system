@@ -29,15 +29,6 @@ export type ListingStatus =
   | "ERROR"
   | "ARCHIVED";
 
-/**
- * BELLOには「送料を誰が負担するか」を表す既存フィールドが無いため、
- * Phase Dで新設した概念(amplify/data/resource.tsのschemaには持たせて
- * いない — ChannelListing.categoryMapping/overrideXxxと違い、これは
- * Mercariアダプタの入力を組み立てる際にUIから直接受け取るだけの値で、
- * BELLO側で永続化・再利用する理由が今のところ無いため)。
- */
-export type ShippingPayerCode = "SELLER" | "BUYER";
-
 /** 1件の出品用画像 — Inventory.imagesのstorageKeyをそのまま参照する(出品用に画像を再アップロードすることはない)。 */
 export interface ListingImageRef {
   storageKey: string;

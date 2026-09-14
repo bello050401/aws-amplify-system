@@ -1,28 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import {
-  getChannelListingAction,
-  getListingDraftAction,
-  listMercariCategoriesAction,
-  listOnMercariAction,
-  saveChannelOverrideAction,
-  saveListingDraftAction,
-} from "@/app/actions/listing";
-import type {
-  ChannelListingRecord,
-  ListingConditionCode,
-  ListingDraftRecord,
-  ListingShippingMethod,
-  ShippingPayerCode,
-} from "@/lib/listing/types";
+import { useMemo, useState } from "react";
+import { saveListingDraftAction } from "@/app/actions/listing";
+import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, ListingShippingMethod } from "@/lib/listing/types";
 import { LISTING_SHIPPING_METHODS } from "@/lib/listing/types";
-import { LISTING_CONDITIONS } from "@/lib/listing/mercari/mapper/condition";
+import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
 import { buildManualListingText } from "@/lib/listing/manualListingText";
-import { SHIPPING_PAYERS } from "@/lib/listing/mercari/mapper/shippingPayer";
 import { buildShippingWarning, withCurrentShippingWarning } from "@/lib/ai/productPage/listingFacts";
 import type { SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
-import { AutoPricingSection } from "./AutoPricingSection";
 import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
@@ -49,13 +34,25 @@ const STATUS_LABEL: Record<ChannelListingRecord["status"], string> = {
 };
 
 /**
- * BELLO統合改修 master指示書 Phase D — EC出品(Mercari Shops)の編集/
- * 実行UI。3つの独立した保存単位(下書き/チャネル設定/実出品)を持つ —
- * どれもInventory本体の在庫データを一切変更しない(READ ONLY境界)。
- * Mercari未接続(TOKEN未設定)でも下書き作成・カテゴリーマッピング入力
- * 自体は行える(spec: 「認証情報が未設定の場合、そこだけを
- * BLOCKED_BY_USERにする」) — 「Mercariに出品」ボタンだけが未接続時に
- * 無効化される。
+ * BELLO統合改修 master指示書 Phase D — EC出品の編集UI。
+ *
+ * Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、このUIから
+ * Mercari固有の実行導線(カテゴリーマッピング・送料負担選択・
+ * 「Mercariに出品する」ボタン・接続状態バナー)は削除した——理由・
+ * 経緯はlib/listing/mercari/adapter.ts冒頭コメント参照。残っているのは
+ * どのチャネルにも依存しない共通の下書き編集(タイトル・説明文・価格・
+ * コンディション・配送方法・AI生成)で、Inventory本体の在庫データは
+ * 一切変更しない(READ ONLY境界)。過去にMercariへ出品した履歴
+ * (ChannelListing.status/externalListingId/lastError)は削除しておらず、
+ * 下記の読み取り専用表示でそのまま確認できる。
+ *
+ * 2026-09-14 指示書「Mercariは商品情報・文章・画像の準備と手動出品支援
+ * を基本とする」対応。ユーザーの運用ではMercari Shops APIへ実際に
+ * 接続できないため、実際の出品は公式のMercari管理画面へ人が手で入力
+ * して行う——ここでは準備した下書きの内容を1つのテキストへまとめて
+ * clipboardへコピーするだけの「出品内容をコピー」ボタンを用意し、その
+ * 入力作業をゼロから行わずに済むようにする(lib/listing/manualListingText.ts、
+ * 外部へは何も送信しない)。
  */
 export function ListingForm({
   inventoryId,
@@ -63,8 +60,6 @@ export function ListingForm({
   images,
   initialDraft,
   initialChannelListing,
-  mercariConnected,
-  mercariApiWritesEnabled,
   shippingMethod,
   onShippingMethodChange,
 }: {
@@ -74,20 +69,6 @@ export function ListingForm({
   images: InventoryImageRecord[];
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
-  /** TOKEN(APIクライアント名含む)が保存済みかどうか。実際に出品してよいかはmercariApiWritesEnabledを見る(下記)。 */
-  mercariConnected: boolean;
-  /**
-   * 2026-09-14 指示書: TOKEN保存済み(mercariConnected)とは別に、実際に
-   * Mercariへ出品(API送信)してよいか。ユーザーの運用ではMercari Shops
-   * APIへ実際に接続できないことが分かっており、これはTOKEN未設定でも
-   * 接続未検証でもなく運用方針そのもの — `lib/integrations/writeGuard.ts`
-   * のisExternalWriteEnabled("MERCARI_SHOPS")をそのまま反映する
-   * (既定false、AWS側の環境変数でのみ解除。lib/listing/service.tsの
-   * listOnMercariが同じ判定をサーバー側でも強制する)。falseの間は
-   * 「Mercariに出品する」を無効化し、準備した内容を手動でMercari公式
-   * 管理画面へ入力してもらう。
-   */
-  mercariApiWritesEnabled: boolean;
   /**
    * 配送方法(2026-09-10追加指示)。右パネル(InventoryFactsPanel)の
    * 座面・配送警告と同じ選択を共有するため、状態はこのコンポーネントの
@@ -166,47 +147,23 @@ export function ListingForm({
     return withCurrentShippingWarning(aiQuality.warnings, currentShippingWarning);
   }, [aiQuality, shippingMethod]);
 
-  const [categoryId, setCategoryId] = useState(initialChannelListing?.categoryMapping?.mercariCategoryId ?? "");
-  const [categoryName, setCategoryName] = useState(initialChannelListing?.categoryMapping?.mercariCategoryName ?? "");
-  const [overrideTitle, setOverrideTitle] = useState(initialChannelListing?.overrideTitle ?? "");
-  const [overrideDescription, setOverrideDescription] = useState(initialChannelListing?.overrideDescription ?? "");
-  const [overridePrice, setOverridePrice] = useState(initialChannelListing?.overridePrice != null ? String(initialChannelListing.overridePrice) : "");
-  const [channelBusy, setChannelBusy] = useState(false);
-  const [channelError, setChannelError] = useState<string | null>(null);
-  const [channelSaved, setChannelSaved] = useState(false);
-
-  const [shippingPayer, setShippingPayer] = useState<ShippingPayerCode>("SELLER");
-  const [listing, setListing] = useState(false);
-  const [listingError, setListingError] = useState<string | null>(null);
-
-  const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
-  const [categoriesLoading, setCategoriesLoading] = useState(false);
-
-  useEffect(() => {
-    if (!mercariConnected) return;
-    setCategoriesLoading(true);
-    listMercariCategoriesAction()
-      .then((cats) => setCategories(cats.map((c) => ({ id: c.id, name: c.name }))))
-      .catch(() => setCategories([]))
-      .finally(() => setCategoriesLoading(false));
-  }, [mercariConnected]);
-
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   /**
    * 2026-09-14 指示書「Mercariは手動出品支援を基本とする」対応。
-   * 準備した内容(タイトル・価格・コンディション・カテゴリー・説明文)を
-   * Mercari公式の出品画面へ手動で貼り付けられる形にまとめてclipboardへ
-   * コピーするだけ — 何も送信しない。mercariApiWritesEnabledの値に
-   * 関わらず、下書きさえあれば常に使える(実出品の可否とは無関係)。
+   * 準備した内容(タイトル・価格・コンディション・説明文)をMercari公式の
+   * 出品画面へ手動で貼り付けられる形にまとめてclipboardへコピーする
+   * だけ — 何も送信しない。カテゴリーマッピング自体はAPI撤去に伴い
+   * このUIから削除したため、ここでは渡さない(buildManualListingTextの
+   * categoryNameはnull許容)。
    */
   async function handleCopyForManualListing() {
     const text = buildManualListingText({
-      title: overrideTitle.trim() || title,
-      description: overrideDescription.trim() || description,
-      price: overridePrice ? Number(overridePrice) : price ? Number(price) : null,
+      title,
+      description,
+      price: price ? Number(price) : null,
       condition,
-      categoryName: categoryName || null,
+      categoryName: null,
     });
     try {
       await navigator.clipboard.writeText(text);
@@ -214,12 +171,6 @@ export function ListingForm({
     } catch {
       setCopyState("error");
     }
-  }
-
-  async function refreshStatus() {
-    const [d, c] = await Promise.all([getListingDraftAction(inventoryId), getChannelListingAction(inventoryId)]);
-    setDraft(d);
-    setChannelListing(c);
   }
 
   /**
@@ -317,49 +268,6 @@ export function ListingForm({
     }
   }
 
-  async function handleSaveChannelOverride() {
-    setChannelError(null);
-    setChannelSaved(false);
-    if (!draft) {
-      setChannelError("先に出品下書きを保存してください。");
-      return;
-    }
-    if (!categoryId.trim()) {
-      setChannelError("Mercariのカテゴリー（末端カテゴリー）を選択してください。");
-      return;
-    }
-    setChannelBusy(true);
-    try {
-      const result = await saveChannelOverrideAction(inventoryId, {
-        categoryMapping: { mercariCategoryId: categoryId.trim(), mercariCategoryName: categoryName.trim() || undefined },
-        overrideTitle: overrideTitle.trim() || null,
-        overrideDescription: overrideDescription.trim() || null,
-        overridePrice: overridePrice ? Number(overridePrice) : null,
-      });
-      setChannelListing(result);
-      setChannelSaved(true);
-    } catch (err) {
-      setChannelError(err instanceof Error ? err.message : "チャネル設定の保存に失敗しました。");
-    } finally {
-      setChannelBusy(false);
-    }
-  }
-
-  async function handleListOnMercari() {
-    setListingError(null);
-    setListing(true);
-    try {
-      const result = await listOnMercariAction(inventoryId, shippingPayer);
-      setChannelListing(result);
-      if (result.status === "ERROR") setListingError(result.lastError ?? "出品に失敗しました。");
-    } catch (err) {
-      setListingError(err instanceof Error ? err.message : "出品に失敗しました。");
-      await refreshStatus();
-    } finally {
-      setListing(false);
-    }
-  }
-
   return (
     // 2026-09-04 EC出品改修指示書 §2: PC(xl以上)では右パネルと2カラムに
     // なるので、フォーム側の上限を広げる。max-w-2xl(672px)のままだと
@@ -379,24 +287,6 @@ export function ListingForm({
       <div className="mb-4">
         <InventoryImageGallery images={images} alt={inventoryName} title="商品画像" />
       </div>
-
-      {/* 2026-09-14 指示書: 「TOKEN未設定」の案内よりも先に、そもそも現在の
-          運用ではMercari Shops APIへの自動出品(API送信)を行っていない
-          ことを明示する — mercariApiWritesEnabledはTOKEN設定/接続確認とは
-          独立した判定(lib/integrations/writeGuard.ts)。「設定すれば出品
-          できる」という誤解を主導線にしないため、TOKEN未設定の案内は
-          その次に補足として出す。準備(下書き・カテゴリー設定・手動出品用
-          コピー)はどちらの状態でも行える。 */}
-      {!mercariApiWritesEnabled && (
-        <div className="mb-4 border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">
-          現在の運用ではMercari Shopsへの自動出品（API送信）は行っていません。下書き・カテゴリー設定はここで準備できます。準備ができた内容は「出品内容をコピー」からMercari公式管理画面へ手動で入力し、出品してください。
-        </div>
-      )}
-      {mercariApiWritesEnabled && !mercariConnected && (
-        <div className="mb-4 border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">
-          Mercari Shops API TOKENが未設定です。下書きの作成・カテゴリー設定は行えますが、「Mercariに出品」は接続設定（設定画面 → EC出品（Mercari）タブ）の完了後に使用できます。
-        </div>
-      )}
 
       {/* 出品下書き(Common Listing Draft) — チャネルに依存しない共通項目。 */}
       <div className="border border-gray-200 p-4">
@@ -583,122 +473,34 @@ export function ListingForm({
           >
             {draftBusy ? "保存中…" : "下書きを保存"}
           </button>
+          {/* 2026-09-14 指示書: 手動出品支援。準備した内容をMercari公式の
+              出品画面へ貼り付けられる形でコピーできる——何も送信しない。 */}
+          <button
+            type="button"
+            onClick={handleCopyForManualListing}
+            disabled={!draft}
+            className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+            title="タイトル・価格・コンディション・説明文をMercari公式の出品画面へ貼り付けられる形でコピーします（送信は行いません）"
+          >
+            出品内容をコピー（手動出品用）
+          </button>
           {draftSaved && <span className="text-[12px] text-green-700">保存しました</span>}
+          {copyState === "copied" && <span className="text-[12px] text-green-700">コピーしました</span>}
+          {copyState === "error" && <span className="text-[12px] text-red-600">コピーできませんでした</span>}
         </div>
         {draftError && <p className="mt-2 text-[12px] text-red-600">{draftError}</p>}
       </div>
 
-      {/* チャネル別設定(Channel Listing + Channel Override) — Mercari固有のカテゴリーマッピングと、共通下書きを上書きしたい項目だけ入力する。 */}
-      <div className="mt-4 border border-gray-200 p-4">
-        <p className="mb-2 text-[12px] font-bold text-gray-700">Mercari Shops 個別設定</p>
-        <div className="grid grid-cols-1 gap-3">
-          <div>
-            <label className="block text-[12px] text-gray-600">
-              Mercariカテゴリー <span className="text-red-500">*</span>
-            </label>
-            {mercariConnected && categories.length > 0 ? (
-              <select
-                value={categoryId}
-                onChange={(e) => {
-                  setCategoryId(e.target.value);
-                  setCategoryName(categories.find((c) => c.id === e.target.value)?.name ?? "");
-                }}
-                className="mt-0.5 w-full border border-gray-300 bg-white px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
-              >
-                <option value="">未選択</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <>
-                <input
-                  value={categoryId}
-                  onChange={(e) => setCategoryId(e.target.value)}
-                  placeholder="カテゴリーID"
-                  className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
-                />
-                <p className="mt-1 text-[11px] text-gray-400">
-                  {mercariConnected
-                    ? categoriesLoading
-                      ? "カテゴリー一覧を取得中…"
-                      : "カテゴリー一覧を取得できませんでした。カテゴリーIDを直接入力してください。"
-                    : "Mercari接続後は選択肢から選べるようになります。"}
-                </p>
-              </>
-            )}
-          </div>
-          <details className="text-[12px] text-gray-600">
-            <summary className="cursor-pointer text-[11px] font-bold text-gray-400">共通下書きを上書き（任意）</summary>
-            <div className="mt-2 grid grid-cols-1 gap-3">
-              <div>
-                <label className="block text-[12px] text-gray-600">タイトル（Mercari用）</label>
-                <input
-                  value={overrideTitle}
-                  onChange={(e) => setOverrideTitle(e.target.value)}
-                  placeholder="未入力なら共通下書きのタイトルを使用"
-                  className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[12px] text-gray-600">説明文（Mercari用）</label>
-                <textarea
-                  value={overrideDescription}
-                  onChange={(e) => setOverrideDescription(e.target.value)}
-                  rows={3}
-                  placeholder="未入力なら共通下書きの説明文を使用"
-                  className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[12px] text-gray-600">価格（Mercari用）</label>
-                <input
-                  type="number"
-                  value={overridePrice}
-                  onChange={(e) => setOverridePrice(e.target.value)}
-                  placeholder="未入力なら共通下書きの価格を使用"
-                  className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
-                />
-              </div>
-            </div>
-          </details>
-        </div>
-        <div className="mt-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleSaveChannelOverride}
-            disabled={channelBusy}
-            className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
-          >
-            {channelBusy ? "保存中…" : "Mercari設定を保存"}
-          </button>
-          {channelSaved && <span className="text-[12px] text-green-700">保存しました</span>}
-        </div>
-        {channelError && <p className="mt-2 text-[12px] text-red-600">{channelError}</p>}
-      </div>
-
-      {/* 実出品(External Listing Status)。 */}
-      <div className="mt-4 border border-gray-200 p-4">
-        <p className="mb-2 text-[12px] font-bold text-gray-700">Mercari Shopsへ出品</p>
-        <div className="mb-2">
-          <label className="block text-[12px] text-gray-600">送料負担</label>
-          <select
-            value={shippingPayer}
-            onChange={(e) => setShippingPayer(e.target.value as ShippingPayerCode)}
-            className="mt-0.5 w-56 border border-gray-300 bg-white px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
-          >
-            {SHIPPING_PAYERS.map((p) => (
-              <option key={p.code} value={p.code}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {channelListing && (
-          <dl className="mb-3 grid grid-cols-4 gap-y-1 text-[12px] text-gray-700">
+      {/* Mercari Shops出品の過去履歴(External Listing Status)。
+          Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
+          カテゴリーマッピング入力・実出品ボタン・送料負担選択は削除した
+          ——過去に出品したことがある商品(ChannelListingが既に存在する)
+          についてのみ、その記録を読み取り専用で表示する。新規の商品は
+          ChannelListingがそもそも作られないため、この節自体が出ない。 */}
+      {channelListing && (
+        <div className="mt-4 border border-gray-200 p-4">
+          <p className="mb-2 text-[12px] font-bold text-gray-700">Mercari Shops 出品履歴（過去の記録・参照専用）</p>
+          <dl className="grid grid-cols-4 gap-y-1 text-[12px] text-gray-700">
             <dt className="text-gray-500">状態</dt>
             <dd className="col-span-3">{STATUS_LABEL[channelListing.status]}</dd>
             {channelListing.externalListingId && (
@@ -714,61 +516,14 @@ export function ListingForm({
               </>
             )}
           </dl>
-        )}
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleListOnMercari}
-            disabled={!mercariApiWritesEnabled || listing || !draft || !channelListing || channelListing.status === "ACTIVE"}
-            className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 disabled:opacity-40"
-            title={!mercariApiWritesEnabled ? "現在の運用ではMercari出品（API送信）は行っていません（手動出品支援のみ提供）" : undefined}
-          >
-            {listing ? "出品処理中…" : channelListing?.status === "ACTIVE" ? "出品済みです" : "Mercariに出品する"}
-          </button>
-          {/* 2026-09-14 指示書: 手動出品支援。mercariApiWritesEnabledの
-              有無に関わらず、準備した内容をMercari公式の出品画面へ
-              貼り付けられる形でコピーできる——何も送信しない。 */}
-          <button
-            type="button"
-            onClick={handleCopyForManualListing}
-            disabled={!draft}
-            className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-            title="タイトル・価格・コンディション・カテゴリー・説明文をMercari公式の出品画面へ貼り付けられる形でコピーします（送信は行いません）"
-          >
-            出品内容をコピー（手動出品用）
-          </button>
-          {copyState === "copied" && <span className="text-[12px] text-green-700">コピーしました</span>}
-          {copyState === "error" && <span className="text-[12px] text-red-600">コピーできませんでした</span>}
-        </div>
-        {listingError && <p className="mt-2 text-[12px] text-red-600">{listingError}</p>}
-        {!mercariApiWritesEnabled && (
           <p className="mt-2 text-[11px] text-gray-400">
-            現在の運用では出品ボタンは無効化されています。準備ができた内容は上の「出品内容をコピー」からMercariの公式管理画面へ手動で入力してください。
+            Mercari Shops API連携は撤去されました。出品・再出品・価格変更はMercariの管理画面で直接行ってください。
           </p>
-        )}
-      </div>
-
-      {/* BELLO統合業務OS指示書(2026-08-30) §18/§161: 自動値下げは商品
-          ごとの明示的なオプトインで、既定はOFF。ChannelListingが存在
-          する(=Mercari個別設定を保存済み)商品にだけ表示する。
-          2026-09-14指示書レビュー補正: ここまではchannelListingの有無
-          だけで出し分けており、Mercari APIが送信不可（manual-only運用）
-          であることをこのセクション自体は反映していなかった —
-          AutoPricingSection側にmercariApiWritesEnabledを渡し、有効/
-          無効に関わらず「Mercariへは自動反映されない」旨をUI上で常に
-          明示させる(判定・記録機能自体は既存下書き保全のため残す)。 */}
-      {channelListing && (
-        <AutoPricingSection
-          inventoryId={inventoryId}
-          channelListing={channelListing}
-          mercariApiWritesEnabled={mercariApiWritesEnabled}
-          onUpdated={setChannelListing}
-        />
+        </div>
       )}
 
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
-          AutoPricingSectionと同じ理由でChannelListing存在時のみ表示する。 */}
+          上の出品履歴と同じ理由でChannelListing存在時のみ表示する。 */}
       {channelListing && <ShippingEstimateSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
 
       {/* BELLO統合業務OS ZAICO級高速化・完成保証最大化版(2026-08-30) §31/§46:

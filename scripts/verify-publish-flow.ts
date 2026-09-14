@@ -17,12 +17,19 @@
  * 実装をそのまま読んで書いた。文言・キーの有無・undefinedとnullの
  * 使い分けまで、当時の挙動に一致させてある。
  *
+ * Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
+ * `MERCARI_ROUTE`/`MERCARI_MANUAL_ONLY_MESSAGE`/`requireMercariWritesEnabled`
+ * (旧`listOnMercari`専用)は`lib/listing/publishFlow.ts`から削除済み——
+ * この検証からも対応する項目を削除した。`PublishRoute`型自体は
+ * 出品先を問わない共通の構造なので、複数経路にまたがる分岐(二重出品
+ * 判定・listingUrlの扱い)は実在する`BASE_ROUTE`と、この検証専用の
+ * `TEST_ROUTE`(2つ目の経路がある場合の挙動を確かめるためだけの
+ * ダミー、外部には一切対応しない)の組み合わせで引き続き検証する。
+ *
  * Run with: npm run verify:publish-flow
  */
 import {
   BASE_ROUTE,
-  MERCARI_MANUAL_ONLY_MESSAGE,
-  MERCARI_ROUTE,
   NO_DRAFT_MESSAGE,
   NO_INVENTORY_MESSAGE,
   assertNotAlreadyListed,
@@ -32,10 +39,26 @@ import {
   publishingPatch,
   requireChannelListing,
   requireDraft,
-  requireMercariWritesEnabled,
   saveFailureMessage,
+  type PublishRoute,
 } from "@/lib/listing/publishFlow";
 import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/types";
+
+/**
+ * このファイル専用のダミー経路。BASE以外にもう1つ経路がある場合の
+ * 「経路ごとに文言・listingUrlの扱いが変わる」という汎用ロジックを
+ * 検証するためだけに存在し、実際の出品先には対応しない
+ * (`ListingChannel`型に無い値なので、実際のChannelListing.channelには
+ * 決して現れない — `as`で型を合わせているのはテスト専用のダミーである
+ * ことの裏返し)。
+ */
+const TEST_ROUTE: PublishRoute = {
+  channel: "TEST_CHANNEL" as ChannelListingRecord["channel"],
+  displayName: "テスト出品先",
+  notConfiguredMessage: "先にテスト出品先のチャネル設定を保存してください。",
+  clearsListingUrlOnPublish: true,
+  logLabel: "listOnTestChannel",
+};
 
 let failures = 0;
 let passes = 0;
@@ -83,7 +106,7 @@ function channelListing(over: Partial<ChannelListingRecord> = {}): ChannelListin
   return {
     id: "cl-1",
     inventoryId: "inv-1",
-    channel: "MERCARI_SHOPS",
+    channel: "BASE",
     status: "READY",
     externalListingId: null,
     listingUrl: null,
@@ -105,11 +128,11 @@ function testGuards() {
   assertEqual(msg1, NO_DRAFT_MESSAGE, "ガード: 下書き無しの文言");
   assertNotThrows(() => requireDraft({ id: "d1" } as ListingDraftRecord), "ガード: 下書きがあれば通す");
 
-  const msgM = assertThrows(
-    () => requireChannelListing(null, MERCARI_ROUTE),
-    "ガード: チャネル設定が無ければ出品しない(Mercari)",
+  const msgT = assertThrows(
+    () => requireChannelListing(null, TEST_ROUTE),
+    "ガード: チャネル設定が無ければ出品しない(汎用経路)",
   );
-  assertEqual(msgM, "先にMercariのカテゴリー設定を保存してください。", "ガード: Mercari未設定の文言");
+  assertEqual(msgT, "先にテスト出品先のチャネル設定を保存してください。", "ガード: 経路ごとの未設定文言");
 
   const msgB = assertThrows(
     () => requireChannelListing(null, BASE_ROUTE),
@@ -121,28 +144,6 @@ function testGuards() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
- * 1.5. Mercariは既定でAPI送信しない(manual-only運用)
- * ══════════════════════════════════════════════════════════════════
- * 2026-09-14指示書: ユーザーの運用ではMercari Shops APIへ実際に接続
- * できない。判定はTOKEN保存/過去の接続確認(verified)に一切依存させず、
- * `isExternalWriteEnabled("MERCARI_SHOPS")`(既定false)だけを見る —
- * ここではその判定結果を受け取るだけの入口を固定する。
- */
-function testMercariManualOnly() {
-  const msg = assertThrows(
-    () => requireMercariWritesEnabled(false),
-    "manual-only: 書き込み無効なら出品を実行させない(既定状態)",
-  );
-  assertEqual(msg, MERCARI_MANUAL_ONLY_MESSAGE, "manual-only: 手動出品を案内する文言");
-  assertTrue(msg.includes("手動"), "manual-only: 文言に手動出品の案内を含める");
-
-  assertNotThrows(
-    () => requireMercariWritesEnabled(true),
-    "manual-only: 明示的に書き込みが許可されていれば通す(将来の運用変更後)",
-  );
-}
-
-/* ══════════════════════════════════════════════════════════════════
  * 2. 二重出品を防ぐ
  * ══════════════════════════════════════════════════════════════════
  * 「ACTIVE かつ 外部IDがある」の**両方**が揃ったときだけ出品済みとみなす。
@@ -150,13 +151,13 @@ function testMercariManualOnly() {
  * 二度と出せなくなる。逆に両方見ないと二重出品する。
  */
 function testDuplicateGuard() {
-  const listed = channelListing({ status: "ACTIVE", externalListingId: "m-123" });
+  const listed = channelListing({ status: "ACTIVE", externalListingId: "t-123" });
   const msg = assertThrows(
-    () => assertNotAlreadyListed(listed, MERCARI_ROUTE),
+    () => assertNotAlreadyListed(listed, TEST_ROUTE),
     "二重出品: ACTIVE かつ 外部IDありなら止める",
   );
-  assertTrue(msg.includes("m-123"), "二重出品: 文言に外部の商品IDを含める(利用者が現物を確認できる)");
-  assertTrue(msg.includes("Mercari Shops"), "二重出品: 文言に出品先の名前を含める");
+  assertTrue(msg.includes("t-123"), "二重出品: 文言に外部の商品IDを含める(利用者が現物を確認できる)");
+  assertTrue(msg.includes("テスト出品先"), "二重出品: 文言に出品先の名前を含める");
   assertTrue(msg.includes("未対応"), "二重出品: 再出品が未実装であることを伝える");
 
   const msgB = assertThrows(
@@ -167,19 +168,19 @@ function testDuplicateGuard() {
 
   // 片方だけなら通す。
   assertNotThrows(
-    () => assertNotAlreadyListed(channelListing({ status: "ACTIVE", externalListingId: null }), MERCARI_ROUTE),
+    () => assertNotAlreadyListed(channelListing({ status: "ACTIVE", externalListingId: null }), TEST_ROUTE),
     "二重出品: ACTIVEでも外部IDが無ければ出品させる(状態だけ進んだ行を救済)",
   );
   assertNotThrows(
-    () => assertNotAlreadyListed(channelListing({ status: "ERROR", externalListingId: "m-1" }), MERCARI_ROUTE),
+    () => assertNotAlreadyListed(channelListing({ status: "ERROR", externalListingId: "t-1" }), TEST_ROUTE),
     "二重出品: 外部IDがあってもERRORなら再試行させる",
   );
   assertNotThrows(
-    () => assertNotAlreadyListed(channelListing({ status: "READY" }), MERCARI_ROUTE),
+    () => assertNotAlreadyListed(channelListing({ status: "READY" }), TEST_ROUTE),
     "二重出品: READY は通す",
   );
   assertNotThrows(
-    () => assertNotAlreadyListed(channelListing({ status: "PUBLISHING", externalListingId: "m-1" }), MERCARI_ROUTE),
+    () => assertNotAlreadyListed(channelListing({ status: "PUBLISHING", externalListingId: "t-1" }), TEST_ROUTE),
     "二重出品: PUBLISHING は通す(前回が途中で落ちた行を再試行できる)",
   );
 }
@@ -209,13 +210,13 @@ function testPublishing() {
 function testPublished() {
   const first = publishedPatch({
     channelListing: channelListing(),
-    result: { externalProductId: "m-777" },
-    route: MERCARI_ROUTE,
+    result: { externalProductId: "t-777" },
+    route: TEST_ROUTE,
     who: "someone@example.com",
     nowIso: NOW,
   });
   assertEqual(first.status, "ACTIVE", "成功: ACTIVE にする");
-  assertEqual(first.externalListingId, "m-777", "成功: 外部の商品IDを保存する");
+  assertEqual(first.externalListingId, "t-777", "成功: 外部の商品IDを保存する");
   assertEqual(first.firstListedAt, NOW, "成功: 初回は firstListedAt に今を入れる");
   assertEqual(first.lastListedAt, NOW, "成功: lastListedAt も今");
   assertEqual(first.lastError, undefined, "成功: 前回のエラーを消す(成功なのにエラー文が残らない)");
@@ -223,8 +224,8 @@ function testPublished() {
   // 2回目。firstListedAt は上書きしない。
   const again = publishedPatch({
     channelListing: channelListing({ firstListedAt: EARLIER }),
-    result: { externalProductId: "m-778" },
-    route: MERCARI_ROUTE,
+    result: { externalProductId: "t-778" },
+    route: TEST_ROUTE,
     who: null,
     nowIso: NOW,
   });
@@ -233,8 +234,8 @@ function testPublished() {
   assertEqual(again.updatedBy, undefined, "成功: 実行者が不明なら undefined");
 
   // listingUrl の扱いは出品先で違う。いまは揃えず、違いを明示している。
-  assertTrue("listingUrl" in first, "成功: Mercari は listingUrl を明示的に消す(応答仕様が未確認のため)");
-  assertEqual(first.listingUrl, null, "成功: Mercari の listingUrl は null");
+  assertTrue("listingUrl" in first, "成功: clearsListingUrlOnPublish=trueの経路は listingUrl を明示的に消す");
+  assertEqual(first.listingUrl, null, "成功: clearsListingUrlOnPublish=trueの経路の listingUrl は null");
 
   const basePatch = publishedPatch({
     channelListing: channelListing({ channel: "BASE", listingUrl: "https://example.test/item" }),
@@ -302,15 +303,12 @@ function testDescribeFailure() {
  * 別チャネルの行を更新してしまうので、値を固定しておく。
  */
 function testRoutes() {
-  assertEqual(MERCARI_ROUTE.channel, "MERCARI_SHOPS", "経路: Mercari の channel 値");
   assertEqual(BASE_ROUTE.channel, "BASE", "経路: BASE の channel 値");
-  assertTrue(MERCARI_ROUTE.channel !== BASE_ROUTE.channel, "経路: channel が重複していない");
-  assertEqual(MERCARI_ROUTE.logLabel, "listOnMercari", "経路: ログ接頭辞は既存のまま(Mercari)");
+  assertTrue(TEST_ROUTE.channel !== BASE_ROUTE.channel, "経路: channel が重複していない");
   assertEqual(BASE_ROUTE.logLabel, "listOnBase", "経路: ログ接頭辞は既存のまま(BASE)");
 }
 
 testGuards();
-testMercariManualOnly();
 testDuplicateGuard();
 testPublishing();
 testPublished();

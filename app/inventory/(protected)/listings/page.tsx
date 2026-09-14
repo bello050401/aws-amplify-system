@@ -1,6 +1,5 @@
 import { Suspense } from "react";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { isExternalWriteEnabled } from "@/lib/integrations/writeGuard";
 import { InventoryHeader } from "../../InventoryHeader";
 import { ListingsOverviewData } from "./ListingsOverviewData";
 import { ListingsOverviewSkeleton } from "./ListingsOverviewSkeleton";
@@ -48,24 +47,15 @@ export default async function ListingsOverviewPage() {
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects signed-out/unauthorized users
 
-  // 2026-09-14 指示書: 「出品実行は商品詳細画面で行えます」という以前の
-  // 案内は、TOKEN設定さえ済めば出品できると誤解させる — 実際に出品を
-  // APIへ送信してよいかは lib/integrations/writeGuard.ts の
-  // isExternalWriteEnabled("MERCARI_SHOPS")(既定false)のみが決める。
-  // env読み取りだけの同期チェックなのでSuspense分離は不要。
-  const mercariApiWritesEnabled = isExternalWriteEnabled("MERCARI_SHOPS");
-
   return (
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">EC出品</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <p className="mb-4 text-[12px] text-gray-500">
-          {mercariApiWritesEnabled
-            ? "在庫の商品をMercari Shopsへ出品する状況を一覧で確認・一括操作できます。個別の出品下書き編集・出品実行は、各商品の「詳細を開く」から商品詳細画面のEC出品タブで行います。"
-            : "在庫の商品についてMercari Shops向けの出品準備（下書き・カテゴリー設定）の状況を一覧で確認し、下書きの一括作成ができます。現在の運用ではMercariへの自動出品（API送信）は行っていません — 準備ができた内容は、各商品の「詳細を開く」から商品詳細画面のEC出品タブで「出品内容をコピー」し、Mercari公式管理画面へ手動で入力して出品してください。"}
+          在庫の商品の出品準備状況（出品下書き・過去の出品履歴）を一覧で確認し、出品下書きの一括作成ができます。個別の出品下書き編集は、各商品の「詳細を開く」から商品詳細画面のEC出品タブで行います。Mercari Shopsへの出品作業自体はMercariの管理画面で直接行ってください。
         </p>
         <Suspense fallback={<ListingsOverviewSkeleton canEdit={canEditInventory(role)} />}>
-          <ListingsOverviewData canEdit={canEditInventory(role)} mercariApiWritesEnabled={mercariApiWritesEnabled} />
+          <ListingsOverviewData canEdit={canEditInventory(role)} />
         </Suspense>
       </div>
     </div>

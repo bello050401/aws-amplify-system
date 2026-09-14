@@ -1,4 +1,4 @@
-import { conditionLabel } from "./mercari/mapper/condition";
+import { conditionLabel } from "./conditionOptions";
 import type { ListingConditionCode } from "./types";
 
 /**

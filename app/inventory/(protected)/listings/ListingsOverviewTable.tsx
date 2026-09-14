@@ -5,7 +5,6 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { bulkCreateListingDraftsAction, listListingsOverviewSafeAction } from "@/app/actions/listing";
-import { savePricingAssignmentSelection } from "@/lib/listing/pricingAssignmentSelection";
 import type { ListingOverviewRow } from "@/lib/listing/service";
 import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
 import {
@@ -98,25 +97,7 @@ const STATUS_BADGE_CLASS: Record<Exclude<StatusFilter, "ALL">, string> = {
  * 参照。取得失敗と実0件を混同しない、
  * app/inventory/(protected)/[id]/InventoryHistorySection.tsxと同じ設計)。
  */
-export function ListingsOverviewTable({
-  initialResult,
-  canEdit,
-  mercariApiWritesEnabled,
-}: {
-  initialResult: ListingsOverviewLoadOutcome<ListingOverviewRow>;
-  canEdit: boolean;
-  /**
-   * 2026-09-14 指示書レビュー補正: 「自動値下げルールを設定」導線は
-   * この一覧(Mercariチャネル専用、lib/listing/service.tsの
-   * fetchAllChannelListings("MERCARI_SHOPS")固定コメント参照)から選んだ
-   * 商品にだけ適用されるが、実際のMercari側の価格反映(API送信)は現在
-   * NOT_IMPLEMENTED固定(lib/listing/pricingService.ts)——ルール自体は
-   * 判定・記録のためlib/integrations/writeGuard.tsのisExternalWriteEnabled
-   * ("MERCARI_SHOPS")の値に関わらず設定できる(既存の判定・監査ログ
-   * 用途を残す)が、その旨をボタン群の下に明示する。
-   */
-  mercariApiWritesEnabled: boolean;
-}) {
+export function ListingsOverviewTable({ initialResult, canEdit }: { initialResult: ListingsOverviewLoadOutcome<ListingOverviewRow>; canEdit: boolean }) {
   const router = useRouter();
   const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(() => loadStateFromInitialRows(initialResult));
 
@@ -193,17 +174,6 @@ export function ListingsOverviewTable({
 
   function toggleAll() {
     setSelected(allSelectableSelected ? new Set() : new Set(selectableIds));
-  }
-
-  /**
-   * 第六ラウンド§14: 選択IDはクエリ文字列へ入れず(431再発防止、
-   * lib/listing/pricingAssignmentSelection.tsのコメント参照)
-   * sessionStorage経由で割当ページへ渡す。
-   */
-  function goToPricingRuleAssignment() {
-    if (selected.size === 0) return;
-    savePricingAssignmentSelection(Array.from(selected));
-    router.push("/inventory/listings/pricing-rules/assign");
   }
 
   async function runBulkCreate() {
@@ -353,34 +323,19 @@ export function ListingsOverviewTable({
             >
               {busy ? "作成中…" : "選択した商品の出品下書きを一括作成"}
             </button>
-            {/* 第六ラウンド§14/§122-124: 自動値下げルールの主導線をEC出品側へ配置。 */}
-            <button
-              type="button"
-              onClick={goToPricingRuleAssignment}
-              disabled={busy || selected.size === 0}
-              title={selected.size === 0 ? "商品を選択してください" : undefined}
-              className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 hover:bg-gray-50 disabled:opacity-50"
-            >
-              自動値下げルールを設定
-            </button>
+            {/* Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
+                EC一覧からの自動値下げルール一括割当(旧「自動値下げルールを
+                設定」ボタン→/pricing-rules/assign、対象は常にMercariの
+                ChannelListingのみだった)は削除した——遷移先ページ自体を
+                撤去済み(app/inventory/(protected)/listings/pricing-rules/
+                assign/page.tsx参照)。ルール自体の作成・一覧はチャネルに
+                依存しないため、下記リンクはそのまま残す。 */}
             <Link href="/inventory/listings/pricing-rules" className="text-[12px] text-blue-700 underline">
               ルール一覧を管理
             </Link>
           </div>
         )}
       </div>
-      {/* 2026-09-14 指示書レビュー補正: 上のボタン群だけを見ると「自動で
-          Mercariの価格が変わる」ように読めるが、実際にはMercariチャネルの
-          価格変更API送信は現在実装されていない(lib/listing/
-          pricingService.ts)——判定・記録は行われても、この一覧から設定
-          したルールがMercari側の実際の価格を動かすことはない。 */}
-      {canEdit && (
-        <p className="mb-2 text-[11px] text-gray-400">
-          {mercariApiWritesEnabled
-            ? "自動値下げルールは値下げの判定・記録のみを行い、Mercariへの実際の価格変更（API送信）は現在実装されていません。"
-            : "現在の運用ではMercariへの自動出品・自動値下げ（API送信）は行っていません。ルールの設定・判定・記録はここで行えますが、Mercari側の価格が自動で変わることはありません。"}
-        </p>
-      )}
 
       {resultMessage && <p className="mb-2 text-[12px] text-green-700">{resultMessage}</p>}
       {errorMessage && <p className="mb-2 text-[12px] text-red-600">{errorMessage}</p>}

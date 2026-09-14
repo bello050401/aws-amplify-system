@@ -1,19 +1,5 @@
-/**
- * [UNVERIFIED] 商品作成ミューテーション(BELLO統合改修 master指示書
- * Phase D — origin/claude/mercari-shops-auto-listing-ag0w6m branchの
- * integrations/mercari-shops/mutations/createProduct.tsから移植、
- * GraphQL文字列は無変更)。実Schema確認後、CreateProductInputの実
- * フィールド名に合わせて更新すること。
- */
-export const CREATE_PRODUCT_MUTATION = /* GraphQL */ `
-  mutation CreateProduct($input: CreateProductInput!) {
-    createProduct(input: $input) {
-      product {
-        id
-        status
-        createdAt
-        updatedAt
-      }
-    }
-  }
-`;
+// Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い削除。
+// [既知の制約] このセッションのサンドボックスはBash rm等の破壊的操作を
+// 承認できないため物理削除できず、中身を空にする形での撤去になっている。
+// レビュー時に `git rm` してください。
+export {};
