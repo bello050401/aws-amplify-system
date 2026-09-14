@@ -627,7 +627,7 @@ async function testDeltaPageProcessorScenarios() {
       return id <= UPDATED_COUNT ? makeZaicoItem({ id, title: `商品${id}`, category: "家具", place: "倉庫A", quantity: 999, updated_at: AFTER_SINCE }) : baseline(id);
     });
 
-    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => false, existingBySourceId);
+    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => false, existingBySourceId, new Set());
 
     assertEqual(outcome.counts.skippedByDelta, TOTAL - UPDATED_COUNT, "20件更新: 未変更の残り4,980件は差分スキップされる");
     assertEqual(outcome.counts.totalProcessed, UPDATED_COUNT, "20件更新: 実処理は更新分の20件だけ");
@@ -666,7 +666,7 @@ async function testDeltaPageProcessorScenarios() {
     let totalSkipped = 0;
     for (let p = 0; p < pages; p++) {
       const pagePending = Array.from({ length: PAGE_SIZE }, (_, i) => baseline(p * PAGE_SIZE + i + 1)).filter((_, i) => p * PAGE_SIZE + i < TOTAL);
-      const outcome = await syncPendingItemsWithDelta(pagePending, since, "tester@example.com", port, () => false, existingBySourceId);
+      const outcome = await syncPendingItemsWithDelta(pagePending, since, "tester@example.com", port, () => false, existingBySourceId, new Set());
       totalProcessed += outcome.counts.totalProcessed;
       totalSkipped += outcome.counts.skippedByDelta;
     }
@@ -690,7 +690,7 @@ async function testDeltaPageProcessorScenarios() {
     const before = { ...calls };
     const pending = Array.from({ length: TOTAL }, (_, i) => makeZaicoItem({ id: i + 1, category: "家具", place: "倉庫A", quantity: 999, updated_at: AFTER_SINCE }));
 
-    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => false, existingBySourceId);
+    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => false, existingBySourceId, new Set());
 
     assertEqual(outcome.counts.skippedByDelta, 0, "全件変更: 何もスキップしない(取りこぼし方向には倒れない)");
     assertEqual(outcome.counts.totalProcessed, TOTAL, "全件変更: 5,000件全部処理する");
@@ -704,7 +704,7 @@ async function testDeltaPageProcessorScenarios() {
     const { port } = createMockPort();
     const existingBySourceId = await port.fetchAllZaicoManaged();
     const pending = [makeZaicoItem({ id: 99001, category: "家具", place: "倉庫A", updated_at: null, created_at: null })];
-    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => false, existingBySourceId);
+    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => false, existingBySourceId, new Set());
     assertEqual(outcome.counts.skippedByDelta, 0, "日時不明: 差分スキップしない(needsSyncの「判断できないものはやる」を経由)");
     assertEqual(outcome.counts.totalProcessed, 1, "日時不明: 実処理される");
   }
@@ -723,7 +723,7 @@ async function testDeltaPageProcessorScenarios() {
       },
     };
     const pending = [makeZaicoItem({ id: 99101, category: "家具", place: "倉庫A", updated_at: AFTER_SINCE })]; // DBに無い新規商品 → createInventory経路 → generateSkuで失敗
-    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", brokenPort, () => false, existingBySourceId);
+    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", brokenPort, () => false, existingBySourceId, new Set());
     assertEqual(outcome.counts.failed, 1, "部分失敗: 1件のgenerateSku失敗はfailedとして数えられる(例外で全体を止めない)");
     assertEqual(outcome.observedSourceIds.length, 1, "部分失敗: 失敗した商品もこのページでは観測済みに入る(seenSourceIdsが二重処理しないため)");
   }
@@ -740,7 +740,7 @@ async function testDeltaPageProcessorScenarios() {
     const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => {
       checks += 1;
       return checks > 2;
-    }, existingBySourceId);
+    }, existingBySourceId, new Set());
     assertEqual(outcome.budgetExhausted, true, "時間切れ: budgetExhaustedがtrueになる");
     assertEqual(outcome.counts.totalProcessed, 2, "時間切れ: 5件のうち2件だけ処理され、残りは次回のhandler呼び出しが同じページを取り直して続ける");
   }
@@ -765,7 +765,7 @@ async function testDeltaPageProcessorScenarios() {
 
     const pending = [baseline(1), staleButMissing];
     const before = { ...calls };
-    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => false, existingBySourceId);
+    const outcome = await syncPendingItemsWithDelta(pending, since, "tester@example.com", port, () => false, existingBySourceId, new Set());
 
     assertEqual(outcome.counts.skippedByDelta, 1, "取りこぼし防止: BELLOに実在するid=1だけがskipされる");
     assertEqual(outcome.counts.totalProcessed, 1, "取りこぼし防止: BELLO未取込のid=2(古い時刻)は時刻だけでskipされず処理される");

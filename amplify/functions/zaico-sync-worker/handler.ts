@@ -4,7 +4,14 @@ import { randomUUID } from "node:crypto";
 import { listInventories } from "./zaicoApiClient";
 import { createLambdaSyncPort, findMissingZaicoManagedInventory } from "./lambdaSyncPort";
 import { syncPendingItemsWithDelta, mergeDeltaPageCounts, type DeltaPageCounts } from "@/lib/inventory/zaicoSyncPageProcessor";
-import { resolveNextSyncBasis } from "@/lib/inventory/zaicoDelta";
+import {
+  resolveNextSyncBasis,
+  nextFailedRetryIds,
+  parseFailedRetryIds,
+  hasUncapturedLegacyFailures,
+  serializeFailedRetryState,
+  nextFailedSourceIdsTrusted,
+} from "@/lib/inventory/zaicoDelta";
 import { ZAICO_SYNC_JOB_ID } from "../../../lib/inventory/zaicoSyncJobId";
 
 /**
@@ -64,6 +71,52 @@ import { ZAICO_SYNC_JOB_ID } from "../../../lib/inventory/zaicoSyncJobId";
  * 移し、他の全ての`await`と同じく失敗時にcatch/finallyを必ず通す
  * ようにする。`scripts/verify-zaico-worker-boundary.ts`の
  * 「prefetch例外」シナリオがこの回帰を再現・固定する。
+ *
+ * ── 2026-09-14 task_23b5395c49434d58b8: 恒久失敗が基準を永久固着させる不具合 ──
+ *
+ * 「1件でもfailedがあった回は基準を進めない」(resolveNextSyncBasis)は
+ * 一時的な失敗には正しいが、ある商品が**恒久的に**(データ不整合等、
+ * 再試行しても直らない理由で)失敗し続けると、基準が永久にnullのまま
+ * 固着する——「差分同期が毎回『初回のため全件』になる」不具合の根本
+ * 原因(lib/inventory/zaicoDelta.tsのresolveNextSyncBasis/
+ * nextFailedRetryIdsコメント参照)。
+ *
+ * 直し方: 失敗した商品のsourceIdを`ZaicoSyncJob.failedSourceIds`へ
+ * 永続化し(`nextFailedRetryIds`)、次回以降`syncPendingItemsWithDelta`
+ * 経由で基準に関係なく強制的に再試行する。これにより恒久失敗の商品は
+ * 成功するまで取りこぼされず、かつ他の正常な商品の基準前進を妨げない。
+ *
+ * ── 2026-09-14 移行安全性: この機能が入る前から実行中だったジョブ ────
+ *
+ * 上記の前提(「failedはfailedSourceIdsで捕捉されている」)は、この
+ * フィールドが導入される**前から実行中(RUNNING)だった**ジョブでは
+ * 成り立たない——そのジョブが既に`failed`カウントを積んでいた(旧
+ * コードのもとで発生した失敗)にも関わらず、failedSourceIds自体は
+ * まだ一度も書かれていない(`undefined`)ため、旧失敗のsourceIdは
+ * このリトライ集合に一度も入らない。にも関わらず完了時に基準を前進
+ * させると、その旧失敗商品は基準前進後の時刻ベース判定で永久にskip
+ * され、恒久失敗リストにも載っていないので強制再試行の対象にもならず、
+ * 取りこぼしたまま気づけなくなる。
+ *
+ * `parseFailedRetryIds`は未設定/破損時を`trusted: false`として区別し、
+ * `hasUncapturedLegacyFailures(trusted, 今回までのfailedカウント)`が
+ * `true`の回だけ`resolveNextSyncBasis`の第4引数へ`true`を渡して基準
+ * 前進を止める——次回、同じ(前進していない)基準で安全にもう一度
+ * スキャンされる。
+ *
+ * ── 2026-09-14 (task_ff42042dfee35233e9) checkpoint跨ぎの再修正 ─────
+ *
+ * 上記だけでは、1 invocationでジョブが完了しない(ページ内時間切れ・
+ * ページ跨ぎで複数回のLambda invocationにまたがる)場合に穴が残って
+ * いた: 中間(RUNNING)checkpointも`failedSourceIds`を毎回書き込むため、
+ * 「配列としてparseできる=trusted」という判定だと、まだ旧failedを
+ * 一切再捕捉していない段階の中間checkpoint(中身が空でも)が次回
+ * invocationから`trusted: true`と誤認され、`hasUncapturedLegacyFailures`
+ * がfalseになって基準を前進させてしまう。`trusted`は`nextFailedSourceIdsTrusted`
+ * (lib/inventory/zaicoDelta.ts)の判定に従い、`serializeFailedRetryState`
+ * で書き込む値そのものに明示的に運ぶ——「一度trustedならsticky、まだ
+ * なら`since === null`を伴う完了のときだけ新たにtrusted化」という
+ * ルールに変え、DELTAの途中/完了ではtrusted化しないようにした。
  */
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -110,6 +163,8 @@ interface JobRow {
   syncSince?: string | null;
   skippedByDelta?: number;
   lastSuccessfulSyncAt?: string | null;
+  /** task_23b5395c49434d58b8: 恒久失敗リスト。ファイル冒頭コメント参照。 */
+  failedSourceIds?: string;
 }
 
 async function getJob(): Promise<JobRow | null> {
@@ -211,6 +266,10 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
 
   let nextPage = (job.lastPage ?? 0) + 1;
   const seenSourceIds = parseSeenSourceIds(job.seenSourceIds);
+  // task_23b5395c49434d58b8: 前回までに恒久的に失敗し続けているsourceId。
+  // 基準(since)に関係なく強制的に再試行する(ファイル冒頭コメント参照)。
+  const { ids: initialFailedRetryIds, trusted: failedSourceIdsTrusted } = parseFailedRetryIds(job.failedSourceIds);
+  let failedRetryIds = initialFailedRetryIds;
   let counts: DeltaPageCounts = {
     totalProcessed: job.totalProcessed ?? 0,
     created: job.created ?? 0,
@@ -220,6 +279,12 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
     imageImported: job.imageImported ?? 0,
     skippedByDelta: job.skippedByDelta ?? 0,
   };
+  // task_8ff5754e48711a753a: このinvocation開始時点(=旧コードが積んだ
+  // 可能性のある分も含む)の累積failedカウント。isDone到達時、
+  // failedSourceIdsが導入前から実行中だったジョブ(trusted: false)で
+  // これが1件以上あれば、捕捉保証の無い既存失敗として基準前進を止める
+  // (ファイル冒頭「移行安全性」コメント参照)。
+  const initialFailedCount = counts.failed;
 
   // 実行の途中でmode/syncSinceは変わらない(browser側のstartZaicoBackgroundSyncJob
   // が開始時に決めたもの)ので、ループの外で1回だけ解決する。既存行に
@@ -285,10 +350,15 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
         port,
         () => Date.now() - startTime > TIME_BUDGET_MS,
         existingBySourceId,
+        failedRetryIds,
       );
       for (const id of outcome.observedSourceIds) seenSourceIds.add(id);
       counts = mergeDeltaPageCounts(counts, outcome.counts);
       const budgetExhausted = outcome.budgetExhausted;
+      // task_23b5395c49434d58b8: 実際に処理した分だけで恒久失敗リストを
+      // 更新する(skipされた分は含まれない——nextFailedRetryIdsのコメント
+      // 参照)。ページを跨いで蓄積し、各チェックポイントへ書き込む。
+      failedRetryIds = nextFailedRetryIds(failedRetryIds, outcome.processedOutcomes);
 
       pagesThisRun += 1;
 
@@ -300,6 +370,9 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
           lastPage: nextPage - 1,
           ...counts,
           seenSourceIds: JSON.stringify(Array.from(seenSourceIds)),
+          // task_ff42042dfee35233e9: 中間checkpointはisDone=falseで書く
+          // ——「配列が書ければtrusted」に戻さない(ファイル冒頭コメント参照)。
+          failedSourceIds: serializeFailedRetryState(failedRetryIds, nextFailedSourceIdsTrusted(failedSourceIdsTrusted, since, false)),
           updatedAt: now,
           retryCount: 0,
         });
@@ -314,15 +387,29 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
 
       if (isDone) {
         const missingSourceIds = await findMissingZaicoManagedInventoryFn(seenSourceIds);
-        // lib/inventory/zaicoBackgroundSync.tsのadvanceOnePageと同じ理由
-        // (resolveNextSyncBasisのコメント参照): 1件でもfailedがあった回は
-        // 基準を進めない。失敗商品が二度と差分対象に入らなくなるのを防ぐ。
-        const lastSuccessfulSyncAt = resolveNextSyncBasis(job.lastSuccessfulSyncAt ?? null, job.startedAt, now, counts.failed > 0);
+        // task_23b5395c49434d58b8: 失敗した商品は`failedRetryIds`へ捕捉
+        // 済み(次回以降、基準に関係なく強制再試行される)なので、通常は
+        // 基準を前進させてよい——「1件でもfailedがあれば基準を止める」は
+        // 恒久失敗1件が全件を道連れにする不具合の原因だったため廃止した。
+        //
+        // task_8ff5754e48711a753a: ただし「捕捉済み」と言えるのは
+        // failedSourceIdsが信頼できる(trusted)ときだけ——この機能が
+        // 導入される前から実行中だったジョブは、それ以前に積んだ
+        // failedカウント(initialFailedCount)のsourceIdをどこにも
+        // 持っていない。その場合だけ、基準前進を1回見送る
+        // (hasUncapturedLegacyFailures/resolveNextSyncBasisのコメント
+        // 参照)。
+        const hadUnretriedFailures = hasUncapturedLegacyFailures(failedSourceIdsTrusted, initialFailedCount);
+        const lastSuccessfulSyncAt = resolveNextSyncBasis(job.lastSuccessfulSyncAt ?? null, job.startedAt, now, hadUnretriedFailures);
         await writeCheckpoint({
           status: "COMPLETED",
           lastPage: nextPage,
           ...counts,
           seenSourceIds: JSON.stringify(Array.from(seenSourceIds)),
+          // task_ff42042dfee35233e9: isDone=trueを渡す——trustedへ新たに
+          // 昇格できるのは、このisDoneが「本物の全件完走」(since===null)
+          // のときだけ(nextFailedSourceIdsTrustedのコメント参照)。
+          failedSourceIds: serializeFailedRetryState(failedRetryIds, nextFailedSourceIdsTrusted(failedSourceIdsTrusted, since, true)),
           missingSourceIds,
           updatedAt: now,
           finishedAt: now,
@@ -330,7 +417,7 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
           lastSuccessfulSyncAt,
         });
         console.log(
-          `[zaico-sync-worker] job COMPLETED after ${pagesThisRun} page(s) this invocation. totalProcessed=${counts.totalProcessed} skippedByDelta=${counts.skippedByDelta}`,
+          `[zaico-sync-worker] job COMPLETED after ${pagesThisRun} page(s) this invocation. totalProcessed=${counts.totalProcessed} skippedByDelta=${counts.skippedByDelta} pendingRetry=${failedRetryIds.size}`,
         );
         break;
       }
@@ -340,6 +427,7 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
         lastPage: nextPage,
         ...counts,
         seenSourceIds: JSON.stringify(Array.from(seenSourceIds)),
+        failedSourceIds: serializeFailedRetryState(failedRetryIds, nextFailedSourceIdsTrusted(failedSourceIdsTrusted, since, false)),
         updatedAt: now,
         retryCount: 0,
       });
@@ -367,4 +455,3 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
 
 // Lambdaイベントをテスト用依存関係として解釈しない。
 export const handler = async () => runSyncWorker();
-

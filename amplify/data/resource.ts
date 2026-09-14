@@ -708,6 +708,64 @@ const schema = a.schema({
       leaseExpiresAt: a.datetime(), // この時刻を過ぎたleaseは失効扱い——保持者がクラッシュしても永久にブロックしない
       retryCount: a.integer().default(0), // 直近のadvance/pageで失敗した回数。上限到達でFAILEDへ(DLQ相当)
       lastHeartbeatAt: a.datetime(), // 実行中であることを示す生存確認。UIの「実行中だが最後の更新から時間が経っている」検知にも使える
+      /**
+       * task_23b5395c49434d58b8 (2026-09-14) → task_8ff5754e48711a753a
+       * (2026-09-14 境界修正) → task_ff42042dfee35233e9 (2026-09-14
+       * checkpoint跨ぎ修正): 「ZAICO差分同期が毎回『初回のため全件』
+       * になる」不具合の根本修正。
+       *
+       * 従来は「1件でもfailedがあった回は基準(lastSuccessfulSyncAt)を
+       * 進めない」(resolveNextSyncBasis)だけで失敗の取りこぼしを防いで
+       * いた。これは一時的な失敗には正しいが、ある商品が**恒久的に**
+       * 失敗し続ける場合、その商品のせいで基準が永久にnullのまま固着
+       * する——1件の恒久失敗が全件を道連れにする、実際に報告された
+       * 不具合。失敗した商品のsourceIdをこのフィールドへ永続化し、
+       * 次回以降は基準時刻に関係なく強制的に再試行し続ける方式へ変更
+       * した(lib/inventory/zaicoDelta.tsのsplitByDelta第4引数/
+       * nextFailedRetryIds参照)。
+       *
+       * wire quirk: seenSourceIds/missingSourceIdsと同じくAWSJSON。
+       * 書き込み前に必ず`serializeFailedRetryState`(lib/inventory/
+       * zaicoDelta.ts)を通す——`JSON.stringify(Array.from(ids))`を
+       * 直接渡さない。
+       *
+       * ── 保存形式: `{ ids: string[], trusted: boolean }` ──────────
+       *
+       * 裸の`string[]`ではない。`trusted`を配列自体の中に明示的に運ぶ
+       * ——理由は下記「checkpoint跨ぎの移行安全性」参照。
+       *
+       * ── 移行安全性(task_8ff5754e48711a753a) ────────────────────
+       *
+       * このフィールドが導入される**前から実行中(RUNNING)だった**
+       * ジョブは、それまでの失敗(`failed`カウントに積まれている)の
+       * sourceIdをこのフィールドへ一度も書けていない——未設定のまま
+       * 完了時にlastSuccessfulSyncAtを前進させると、その旧失敗商品は
+       * 基準前進後の時刻ベース判定で永久にskipされ、恒久失敗リストにも
+       * 載っていないので強制再試行の対象にもならない(取りこぼしたまま
+       * 気づけない)。読み取り側は`parseFailedRetryIds`で「未設定/破損/
+       * 信頼できない」を**信頼できない空集合**として区別し、その状態で
+       * `failed`が1件でも既にある回は基準を進めない(次回、同じ基準で
+       * 安全にもう一度スキャンされる)——`hasUncapturedLegacyFailures`
+       * 参照。
+       *
+       * ── checkpoint跨ぎの移行安全性(task_ff42042dfee35233e9) ───────
+       *
+       * このフィールドは中間(RUNNING)checkpointでも毎回書き込まれる
+       * (ページ内時間切れ・ページ跨ぎのいずれでも)。「配列として
+       * parseできるかどうか」だけでtrustedを判定していると、旧RUNNING
+       * jobが完了(COMPLETED)に至る**前**の中間checkpointを1回書いた
+       * だけで(中身が空でも)「有効なJSON配列」になってしまい、次の
+       * invocationがそれを`trusted: true`と誤認して、まだ一度も再捕捉
+       * していない旧failedを巻き込んで基準を前進させてしまう——これが
+       * まさにこのフィールド自身の値の**中に**明示的な`trusted`フラグを
+       * 持たせた理由。`trusted`は「既にtrustedならsticky、まだなら
+       * `since === null`を伴う完了(=時刻を無視した本物の全件完走)の
+       * ときだけ新たにtrusted化する」というルール
+       * (`nextFailedSourceIdsTrusted`)でのみ進む。DELTAの途中
+       * checkpoint・DELTAの完了はどちらもこの条件を満たさないので、
+       * 旧failedが実際に再捕捉されるまで基準前進の抑止が保たれる。
+       */
+      failedSourceIds: a.json(), // { ids: string[], trusted: boolean }。恒久的に失敗し続けているZAICO在庫IDと、その集合が信頼できるか
     })
     .authorization((allow) => [
       allow.group("ADMIN"),

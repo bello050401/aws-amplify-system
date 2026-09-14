@@ -4,7 +4,7 @@
 import type { ZaicoInventory } from "@/lib/zaico/client";
 import type { ZaicoSyncPort, MasterCache, InventoryModel } from "./zaicoSyncPorts";
 import { syncOneZaicoItem } from "./zaicoSyncEngine";
-import { splitByDelta } from "./zaicoDelta";
+import { splitByDelta, type ProcessedItemOutcome } from "./zaicoDelta";
 
 /**
  * ZAICO同期タスク(2026-09-11 設計見直し): 1ページぶんの「差分で省く/
@@ -77,6 +77,16 @@ export interface DeltaPageOutcome {
   observedSourceIds: string[];
   /** 時間切れで打ち切ったため、渡されたpendingの一部が未処理のまま残っている。 */
   budgetExhausted: boolean;
+  /**
+   * task_23b5395c49434d58b8(2026-09-14): 実際に`syncOneZaicoItem`を
+   * 呼んだ商品(=差分でskipされなかった分)だけの結果。呼び出し元が
+   * `nextFailedRetryIds`(lib/inventory/zaicoDelta.ts)へそのまま渡し、
+   * 恒久失敗リストを更新するために使う——skipされた商品は「成功も
+   * 失敗もしていない(判定していないだけ)」なので、ここには含めない
+   * (含めると、まだ再試行の機会が来ていない恒久失敗商品を誤って
+   * リストから外してしまう)。
+   */
+  processedOutcomes: ProcessedItemOutcome[];
 }
 
 /**
@@ -92,6 +102,12 @@ export interface DeltaPageOutcome {
  * - `splitByDelta`には`existingBySourceId`をexistsInBello判定として
  *   渡す。時刻だけならskipになる商品でも、BELLOにまだ実在しない
  *   (＝未取込)なら`toProcess`側へ回る——取りこぼし防止の核心。
+ * - `failedRetrySourceIds`(task_23b5395c49434d58b8、2026-09-14)は
+ *   `splitByDelta`へ`isPersistentlyFailing`判定として渡す。前回までに
+ *   恒久的に失敗し続けている商品は、時刻がどれだけ古くても強制的に
+ *   `toProcess`へ回る——1件の恒久失敗が原因で基準(lastSuccessfulSyncAt)
+ *   が永久に進まなくなる不具合(「毎回初回のため全件」)を、呼び出し元
+ *   (handler.ts)が基準を安全に前進させられるようにするための対。
  * - `isBudgetExhausted()`はアイテムを1件処理するたびに確認する
  *   (handler.ts側のLambda実行時間予算チェックと同じ粒度)。
  */
@@ -102,19 +118,26 @@ export async function syncPendingItemsWithDelta(
   port: ZaicoSyncPort,
   isBudgetExhausted: () => boolean,
   existingBySourceId: Map<string, InventoryModel>,
+  failedRetrySourceIds: ReadonlySet<string>,
 ): Promise<DeltaPageOutcome> {
-  const { toProcess, skipped } = splitByDelta(pending, since, (item) => existingBySourceId.has(String(item.id)));
+  const { toProcess, skipped } = splitByDelta(
+    pending,
+    since,
+    (item) => existingBySourceId.has(String(item.id)),
+    (item) => failedRetrySourceIds.has(String(item.id)),
+  );
   const observedSourceIds: string[] = skipped.map((item) => String(item.id));
   const counts = emptyDeltaPageCounts();
   counts.skippedByDelta = skipped.length;
 
   if (toProcess.length === 0) {
-    return { counts, observedSourceIds, budgetExhausted: false };
+    return { counts, observedSourceIds, budgetExhausted: false, processedOutcomes: [] };
   }
 
   const masterCache: MasterCache = { categories: new Map(), locations: new Map() };
 
   let budgetExhausted = false;
+  const processedOutcomes: ProcessedItemOutcome[] = [];
   for (const zaicoItem of toProcess) {
     if (isBudgetExhausted()) {
       budgetExhausted = true;
@@ -122,6 +145,7 @@ export async function syncPendingItemsWithDelta(
     }
     const result = await syncOneZaicoItem(zaicoItem, who, existingBySourceId, port, masterCache);
     observedSourceIds.push(result.zaicoId);
+    processedOutcomes.push({ zaicoId: result.zaicoId, failed: result.status === "failed" });
     counts.totalProcessed += 1;
     if (result.status === "created") counts.created += 1;
     else if (result.status === "updated") counts.updated += 1;
@@ -130,7 +154,7 @@ export async function syncPendingItemsWithDelta(
     if (result.imageImported) counts.imageImported += 1;
   }
 
-  return { counts, observedSourceIds, budgetExhausted };
+  return { counts, observedSourceIds, budgetExhausted, processedOutcomes };
 }
 
 /** 呼び出し元(handler.ts)がページをまたいでcountsを積み上げるためのヘルパー。 */

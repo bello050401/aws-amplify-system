@@ -509,10 +509,21 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
                   <span className="ml-2 text-[11px] text-gray-500">
                     {bgJob.syncSince
                       ? `${new Date(bgJob.syncSince).toLocaleString("ja-JP")} 以降`
-                      : "初回のため全件を対象"}
+                      : "差分の基準確認・未処理商品の再確認のため全件を対象（初回または復旧時）"}
                   </span>
                 )}
               </dd>
+              {bgJob.pendingRetryCount > 0 && (
+                <>
+                  <dt className="text-gray-500">持ち越し再試行</dt>
+                  <dd className="col-span-3 text-amber-700">
+                    {bgJob.pendingRetryCount.toLocaleString("ja-JP")}件
+                    <span className="ml-2 text-[11px] text-gray-500">
+                      前回以前から同期に失敗し続けている商品です。基準時刻に関係なく次回以降も再試行し続けます（成功するまでこの一覧に残ります）
+                    </span>
+                  </dd>
+                </>
+              )}
               <dt className="text-gray-500">進捗</dt>
               <dd className="col-span-3">
                 {bgJob.totalProcessed.toLocaleString("ja-JP")}件（ページ{bgJob.lastPage}）

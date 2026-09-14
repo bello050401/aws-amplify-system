@@ -7,7 +7,19 @@ import { getServerSyncPort, type ZaicoSyncPort, type MasterCache } from "./zaico
 import type { Schema } from "@/amplify/data/resource";
 import { ZAICO_SYNC_JOB_ID } from "./zaicoSyncJobId";
 import { unwrapGet, unwrapWriteRequired } from "@/lib/amplify/listAll";
-import { resolveDeltaSince, splitByDelta, resolveNextSyncBasis, type ZaicoSyncMode } from "./zaicoDelta";
+import {
+  resolveDeltaSince,
+  splitByDelta,
+  resolveNextSyncBasis,
+  nextFailedRetryIds,
+  parseFailedRetryIds,
+  hasUncapturedLegacyFailures,
+  serializeFailedRetryState,
+  nextFailedSourceIdsTrusted,
+  type ZaicoSyncMode,
+  type ProcessedItemOutcome,
+} from "./zaicoDelta";
+import { isZaicoSyncE2EFixtureModeActive, e2eZaicoBackgroundSyncStatus } from "./zaicoSyncE2eFixtures";
 
 type ZaicoSyncJobModel = Schema["ZaicoSyncJob"]["type"];
 
@@ -160,6 +172,14 @@ export interface ZaicoBackgroundSyncJob {
   skippedByDelta: number;
   /** 最後に**最後まで通った**同期の開始時刻。次回の差分はここを基準にする。 */
   lastSuccessfulSyncAt: string | null;
+  /**
+   * 前回までに恒久的に失敗し続け、次回以降も基準に関係なく強制再試行
+   * される商品の件数。0より大きい間は「基準は前進しているが、この
+   * 件数分はまだ解決していない」ことを示す——ZaicoSyncPanel.tsxの
+   * 表示で「差分改善済み」と「まだ未解決の失敗が残っている」を区別
+   * するために公開する。
+   */
+  pendingRetryCount: number;
 }
 
 /**
@@ -216,6 +236,7 @@ export function toPublicJob(row: {
   syncSince?: string | null;
   skippedByDelta?: number | null;
   lastSuccessfulSyncAt?: string | null;
+  failedSourceIds?: unknown;
 }): ZaicoBackgroundSyncJob {
   return {
     status: row.status,
@@ -233,6 +254,7 @@ export function toPublicJob(row: {
     syncSince: row.syncSince ?? null,
     skippedByDelta: row.skippedByDelta ?? 0,
     lastSuccessfulSyncAt: row.lastSuccessfulSyncAt ?? null,
+    pendingRetryCount: parseFailedRetryIds(row.failedSourceIds).ids.size,
     startedAt: row.startedAt ?? null,
     updatedAt: row.updatedAt ?? null,
     finishedAt: row.finishedAt ?? null,
@@ -252,6 +274,11 @@ export function toPublicJob(row: {
  * ポーリングを止める。
  */
 export async function getZaicoBackgroundSyncStatus(): Promise<ZaicoBackgroundSyncJob | null> {
+  // ZAICO候補3b3b8cd QA(2026-09-14): 実DynamoDBへは一切到達せず、合成
+  // COMPLETEDジョブを返す。lib/inventory/zaicoSyncE2eFixtures.tsの
+  // ファイル冒頭コメント参照(二重ゲート: NODE_ENV!=="production" かつ
+  // INVENTORY_E2E_FIXTURES==="1")。
+  if (isZaicoSyncE2EFixtureModeActive()) return e2eZaicoBackgroundSyncStatus();
   const data = unwrapGet(
     await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode),
     "同期ジョブの状態",
@@ -282,19 +309,62 @@ export async function getZaicoBackgroundSyncStatus(): Promise<ZaicoBackgroundSyn
  * lastSuccessfulSyncAt は**ここでリセットしない**。前回の値をそのまま
  * 引き継ぐ —— 開始時に消すと、この回が途中で失敗したときに基準が
  * 失われ、次回が全件へ戻ってしまう。
+ *
+ * ── failedSourceIds も**ここでリセットしない**(task_9c59e22b1e26721377) ──
+ *
+ * 以前はここで無条件に`serializeFailedRetryState(new Set(), true)`を
+ * 書いていた——「新規に開始するジョブは旧failedを引き継ぎようがない」
+ * という理屈は、行が今まさに**初めて作られる**(`existing`が無い)場合
+ * だけ正しい。既存のsingleton行を**更新**してこの回を始めるときは、
+ * 前回までに積み上がった恒久失敗リスト(`ids`)と、それが信頼できるか
+ * (`trusted`)を両方とも持ち越さなければならない——さもないと、基準
+ * (`syncSince`)より古い(＝この回のdelta走査からは外れる)失敗商品が、
+ * 次回以降二度と強制再試行されなくなる(実際に報告された退行: 「新規
+ * 同期開始時retry消失」)。
+ *
+ * `getZaicoBackgroundSyncStatus`/`toPublicJob`は`pendingRetryCount`
+ * (件数)しか公開しないため、実際に持ち越す値は**raw row**から
+ * (`serverDataClient.models.ZaicoSyncJob.get`を直接呼んで)読む。単に
+ * `failed`カウンタを0にリセットすることは、旧失敗が存在しない根拠には
+ * ならない——`trusted`が`false`(未捕捉の可能性がある)なら、`false`の
+ * まま持ち越す。`untrusted`からの復帰は`advanceOnePage`の完了判定
+ * (`nextFailedSourceIdsTrusted`: `since === null`を伴う本物の全件完走)
+ * だけが行える。
  */
 export async function startZaicoBackgroundSyncJob(
   who: string | null,
   mode: ZaicoSyncMode = "DELTA",
 ): Promise<{ started: boolean; reason?: string }> {
-  const existing = await getZaicoBackgroundSyncStatus();
+  // ZAICO候補3b3b8cd QA(2026-09-14): fixtureモードはQA用の合成COMPLETED
+  // ジョブを表示するだけの読み取り専用モード——実際の開始(=実DynamoDB
+  // 書き込み+実ZAICO API呼び出しの引き金)は一切行わない。
+  if (isZaicoSyncE2EFixtureModeActive()) {
+    return { started: false, reason: "E2Eフィクスチャモードのため、実際の同期は開始されません(合成表示専用の確認画面です)。" };
+  }
+  const existingRow = unwrapGet(
+    await serverDataClient.models.ZaicoSyncJob.get({ id: ZAICO_SYNC_JOB_SINGLETON_ID }, inventoryAuthMode),
+    "同期ジョブの状態",
+  );
+  const existing = existingRow ? toPublicJob(existingRow) : null;
   if (existing && (existing.status === "PENDING" || existing.status === "RUNNING")) {
     return { started: false, reason: "既にバックグラウンド同期が実行中です。" };
   }
 
   const now = new Date().toISOString();
   const lastSuccess = existing?.lastSuccessfulSyncAt ?? null;
-  const syncSince = mode === "FULL" ? null : resolveDeltaSince(lastSuccess);
+  // 未捕捉の旧失敗は日時で除外できないため、一度全件を再捕捉する。
+  const needsRecoveryScan = !!existingRow && !parseFailedRetryIds(existingRow.failedSourceIds).trusted;
+  const syncSince = mode === "FULL" || needsRecoveryScan ? null : resolveDeltaSince(lastSuccess);
+  // 既存行の更新なら、書かれていた値(壊れていても構わない——次回の
+  // parseFailedRetryIdsがuntrustedへ安全に倒す)をそのまま持ち越す。
+  // 行が今回初めて作られるときだけ、持ち越すものが無いので
+  // 空+trusted:trueで初期化してよい。
+  const failedSourceIds = existingRow
+    ? (() => {
+        const parsed = parseFailedRetryIds(existingRow.failedSourceIds);
+        return serializeFailedRetryState(parsed.ids, parsed.trusted);
+      })()
+    : serializeFailedRetryState(new Set(), true);
   const fields = {
     status: "PENDING" as const,
     mode,
@@ -308,6 +378,7 @@ export async function startZaicoBackgroundSyncJob(
     failed: 0,
     imageImported: 0,
     seenSourceIds: stringifySeenSourceIds([]),
+    failedSourceIds,
     missingSourceIds: [] as string[],
     startedAt: now,
     updatedAt: now,
@@ -316,7 +387,7 @@ export async function startZaicoBackgroundSyncJob(
     triggeredBy: who,
   };
 
-  const { errors } = existing
+  const { errors } = existingRow
     ? await serverDataClient.models.ZaicoSyncJob.update({ id: ZAICO_SYNC_JOB_SINGLETON_ID, ...fields }, inventoryAuthMode)
     : await serverDataClient.models.ZaicoSyncJob.create({ id: ZAICO_SYNC_JOB_SINGLETON_ID, ...fields }, inventoryAuthMode);
   if (errors) {
@@ -363,6 +434,10 @@ export async function recordZaicoSyncJobError(message: string): Promise<void> {
 
 /** ADMIN-triggered stop. Checked at the top of every `advance` call and between items within a batch, so an in-progress run stops promptly, not just before its next scheduled start. */
 export async function cancelZaicoBackgroundSyncJob(): Promise<void> {
+  // ZAICO候補3b3b8cd QA(2026-09-14): fixtureモードの合成ジョブは常に
+  // COMPLETEDなので中止できるものが無い——実DynamoDBには一切触れず
+  // 何もせず戻る。
+  if (isZaicoSyncE2EFixtureModeActive()) return;
   const existing = await getZaicoBackgroundSyncStatus();
   if (!existing || (existing.status !== "PENDING" && existing.status !== "RUNNING")) return;
   await serverDataClient.models.ZaicoSyncJob.update(
@@ -390,6 +465,13 @@ export interface AdvanceResult {
  * this function's logic.
  */
 export async function advanceZaicoBackgroundSyncJob(who: string | null, port: ZaicoSyncPort = getServerSyncPort()): Promise<AdvanceResult> {
+  // ZAICO候補3b3b8cd QA(2026-09-14): fixtureモードの合成ジョブは常に
+  // COMPLETEDを返す——実ZAICO API(listInventories)にも実DynamoDBにも
+  // 一切到達しない。shouldContinue:falseなので呼び出し元(ZaicoSyncPanel
+  // .tsxのscheduleAdvance再帰)もここで止まる。
+  if (isZaicoSyncE2EFixtureModeActive()) {
+    return { job: e2eZaicoBackgroundSyncStatus(), shouldContinue: false };
+  }
   // getZaicoBackgroundSyncStatus と同じ理由で errors を必ず見る ——
   // 読めなかっただけなのに「進めるものが無い」と返すと、UIはポーリングを
   // 止め、まだ PENDING のジョブが取り残される。
@@ -421,6 +503,10 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
 
   const nextPage = (row.lastPage ?? 0) + 1;
   const seenSourceIds = parseSeenSourceIds(row.seenSourceIds);
+  // 前回までに恒久的に失敗し続けているsourceId。基準(since)に関係なく
+  // 強制的に再試行する(zaicoDelta.tsコメント参照)。
+  const { ids: initialFailedRetryIds, trusted: failedSourceIdsTrusted } = parseFailedRetryIds(row.failedSourceIds);
+  let failedRetryIds = initialFailedRetryIds;
 
   const counts = {
     totalProcessed: row.totalProcessed ?? 0,
@@ -430,6 +516,11 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
     failed: row.failed ?? 0,
     imageImported: row.imageImported ?? 0,
   };
+  // このinvocation開始時点の累積failedカウント——failedSourceIdsが
+  // 導入前から実行中だったジョブ(trusted: false)でこれが1件以上あれば、
+  // 捕捉保証の無い既存失敗として基準前進を1回見送る(下記
+  // hasUncapturedLegacyFailures呼び出し参照)。
+  const initialFailedCount = counts.failed;
 
   try {
     const { items: zaicoItems, hasMore } = await listInventories(nextPage, ITEMS_PER_ADVANCE);
@@ -484,15 +575,27 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
     // (このMapは元々syncOneZaicoItemへ渡すために毎ページ1回取得して
     // いたものの再利用)。
     const since = row.mode === "FULL" ? null : (row.syncSince ?? null);
-    const { toProcess, skipped } = splitByDelta(pending, since, (item) => prefetched.has(String(item.id)));
+    // 恒久失敗リストに載っている商品も、existsInBelloと同じ理由で
+    // 時刻を無視して強制的に再試行へ回す。
+    const { toProcess, skipped } = splitByDelta(
+      pending,
+      since,
+      (item) => prefetched.has(String(item.id)),
+      (item) => failedRetryIds.has(String(item.id)),
+    );
     for (const item of skipped) seenSourceIds.add(String(item.id));
     const skippedByDelta = (row.skippedByDelta ?? 0) + skipped.length;
 
     const batch = toProcess.slice(0, ITEMS_PER_ADVANCE);
 
+    // 実際に処理した分だけで恒久失敗リストを更新する(skipされた分は
+    // 含まれない——nextFailedRetryIdsのコメント参照。まだ処理機会が
+    // 来ていない恒久失敗商品を誤って外さないため)。
+    const processedOutcomes: ProcessedItemOutcome[] = [];
     for (const zaicoItem of batch) {
       const result = await syncOneZaicoItem(zaicoItem, who, prefetched, port, masterCache);
       seenSourceIds.add(result.zaicoId);
+      processedOutcomes.push({ zaicoId: result.zaicoId, failed: result.status === "failed" });
       counts.totalProcessed += 1;
       if (result.status === "created") counts.created += 1;
       else if (result.status === "updated") counts.updated += 1;
@@ -500,6 +603,7 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
       else counts.failed += 1;
       if (result.imageImported) counts.imageImported += 1;
     }
+    failedRetryIds = nextFailedRetryIds(failedRetryIds, processedOutcomes);
 
     // このページにまだ未処理が残っているなら、ページ番号は進めない。
     // 差分で省いたものは「処理済み」として扱ってよい(観測済みに入れた)。
@@ -521,11 +625,18 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
       // 記録するのは完了時刻ではなく**開始時刻**。実行中にZAICO側で
       // 更新されたものを次回が拾い直せるようにするため。
       //
-      // 2026-09-11: ページ自体は完走(isDone)しても、途中の商品が
-      // `failed`だった回は基準を進めない(resolveNextSyncBasis)——
-      // 失敗した商品のZAICO側updated_atが変わらない限り、進めると
-      // 次回以降ずっとdelta skip側に落ちて再試行の機会が来なくなる
-      // (lib/inventory/zaicoDelta.tsのresolveNextSyncBasisコメント参照)。
+      // 失敗した商品は`failedRetryIds`へ捕捉済み(次回以降、基準に
+      // 関係なく強制再試行される)なので、通常は基準を前進させてよい
+      // ——「1件でもfailedがあれば基準を止める」は恒久失敗1件が全件を
+      // 道連れにする不具合の原因だったため廃止した。
+      //
+      // ただし「捕捉済み」と言えるのはfailedSourceIdsが信頼できる
+      // (trusted)ときだけ——この機能が導入される前から実行中だった
+      // ジョブは、それ以前に積んだfailedカウント(initialFailedCount)の
+      // sourceIdをどこにも持っていない。その場合だけ、基準前進を1回
+      // 見送る(hasUncapturedLegacyFailures/resolveNextSyncBasisの
+      // コメント参照)。
+      const hadUnretriedFailures = hasUncapturedLegacyFailures(failedSourceIdsTrusted, initialFailedCount);
       const { data: updated, errors } = await serverDataClient.models.ZaicoSyncJob.update(
         {
           id: ZAICO_SYNC_JOB_SINGLETON_ID,
@@ -534,10 +645,14 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
           ...counts,
           skippedByDelta,
           seenSourceIds: stringifySeenSourceIds(seenSourceIds),
+          // isDone=trueを渡す——trustedへ新たに昇格できるのは「本物の
+          // 全件完走」(since===null)のときだけ(nextFailedSourceIdsTrusted
+          // のコメント参照)。
+          failedSourceIds: serializeFailedRetryState(failedRetryIds, nextFailedSourceIdsTrusted(failedSourceIdsTrusted, since, true)),
           missingSourceIds,
           updatedAt: now,
           finishedAt: now,
-          lastSuccessfulSyncAt: resolveNextSyncBasis(row.lastSuccessfulSyncAt ?? null, row.startedAt, now, counts.failed > 0),
+          lastSuccessfulSyncAt: resolveNextSyncBasis(row.lastSuccessfulSyncAt ?? null, row.startedAt, now, hadUnretriedFailures),
         },
         inventoryAuthMode,
       );
@@ -555,6 +670,10 @@ async function advanceOnePage(row: ZaicoSyncJobModel, who: string | null, port: 
         ...counts,
         skippedByDelta,
         seenSourceIds: stringifySeenSourceIds(seenSourceIds),
+        // 中間(未完了)checkpointはisDone=falseで書く——「配列が書ければ
+        // trusted」に戻さない(zaicoDelta.tsのnextFailedSourceIdsTrusted
+        // コメント参照)。
+        failedSourceIds: serializeFailedRetryState(failedRetryIds, nextFailedSourceIdsTrusted(failedSourceIdsTrusted, since, false)),
         updatedAt: now,
       },
       inventoryAuthMode,

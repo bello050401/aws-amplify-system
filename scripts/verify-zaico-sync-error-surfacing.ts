@@ -175,5 +175,76 @@ console.log("\n── 4. 画面が理由を表示すること ──────
   );
 }
 
+console.log("\n── 5. 移行安全性(旧RUNNING job)の呼び出し規約がworker/UI両経路で一致すること ──\n");
+
+{
+  // task_8ff5754e48711a753a: advanceOnePage(UI経路、「今すぐ1ページ進める」
+  // ボタン)はhandler.ts(worker経路、5分毎スケジュール)と同じくモジュール
+  // レベルのserverDataClientを直接掴んでおり差し替え口が無い(このファイル
+  // 冒頭コメント参照)。そのため実行時の振る舞いは scripts/
+  // verify-zaico-worker-boundary.ts がworker経路のみ実DynamoDBモックで
+  // 検証している——ここではUI経路がworker経路と「同じ移行安全性の呼び出し
+  // 規約」を守っていることをソース検査で担保する。1つでも規約から外れると、
+  // 「Lambdaは旧job失敗を正しく再捕捉するのに、手動の『1ページ進める』
+  // ボタンだけ古い(捕捉保証の無い)判定のまま基準を進めてしまう」という、
+  // 経路ごとに挙動が割れる回帰になる。
+  const bgSrc = read("lib/inventory/zaicoBackgroundSync.ts");
+  const uiFn = bgSrc.slice(bgSrc.indexOf("async function advanceOnePage"));
+  const uiBody = uiFn.slice(0, uiFn.indexOf("\n}"));
+
+  const workerSrc = read("amplify/functions/zaico-sync-worker/handler.ts");
+  const workerFn = workerSrc.slice(workerSrc.indexOf("export const runSyncWorker"));
+  const workerBody = workerFn.slice(0, workerFn.indexOf("\n}"));
+
+  const routes: Array<[string, string]> = [
+    ["UI経路(advanceOnePage)", uiBody],
+    ["worker経路(runSyncWorker)", workerBody],
+  ];
+
+  for (const [label, body] of routes) {
+    check(
+      /const\s*\{\s*ids:\s*\w+,\s*trusted:\s*\w+\s*\}\s*=\s*parseFailedRetryIds\(/.test(body),
+      `${label} が parseFailedRetryIds() でfailedSourceIdsの ids/trusted を区別して読んでいる`,
+    );
+    check(
+      /hasUncapturedLegacyFailures\(/.test(body),
+      `${label} が hasUncapturedLegacyFailures() を呼んでいる(旧RUNNING job判定を省略していない)`,
+    );
+    check(
+      /resolveNextSyncBasis\([^;]*hadUnretriedFailures\)/.test(body),
+      `${label} が resolveNextSyncBasis() の第4引数に hasUncapturedLegacyFailures() の結果(hadUnretriedFailures)を渡している(counts.failed > 0 の直渡しに戻っていない)`,
+    );
+    // task_ff42042dfee35233e9: 「配列としてparseできればtrusted」という
+    // 誤判定(checkpoint跨ぎで旧RUNNING jobを誤trusted化するバグ)に戻って
+    // いないことを検査する——failedSourceIdsへの書き込みは必ず
+    // nextFailedSourceIdsTrusted()の結果をserializeFailedRetryState()へ
+    // 渡す形でなければならない。`JSON.stringify(Array.from(...))`を
+    // failedSourceIdsへ直接書いていないことも合わせて確認する。
+    check(
+      /serializeFailedRetryState\([^)]*nextFailedSourceIdsTrusted\(/.test(body),
+      `${label} が failedSourceIds の書き込みに serializeFailedRetryState(ids, nextFailedSourceIdsTrusted(...)) を使っている(「配列が書ければtrusted」の誤判定に戻っていない)`,
+    );
+    check(
+      !/failedSourceIds:\s*JSON\.stringify\(Array\.from/.test(body),
+      `${label} が failedSourceIds へ JSON.stringify(Array.from(...)) を直接書いていない(trustedフラグを運ばない裸配列書き込みへ戻っていない)`,
+    );
+
+    // failedSourceIdsとlastSuccessfulSyncAtが同一のcheckpoint書き込み
+    // (単一update()/writeCheckpoint()呼び出し)の中にあることを、
+    // COMPLETED書き込みブロックの範囲を切り出して確認する——基準だけ
+    // 先に進んで恒久失敗リストの保存が別書き込みになる(=保存原子性が
+    // 壊れる)半端な状態を作っていないことの検査。
+    const completionCallStart = body.lastIndexOf('status: "COMPLETED"');
+    check(completionCallStart >= 0, `${label} にCOMPLETED書き込みが存在する`);
+    const completionCall = body.slice(completionCallStart);
+    const completionCallEnd = completionCall.indexOf(");");
+    const completionCallBody = completionCall.slice(0, completionCallEnd < 0 ? undefined : completionCallEnd);
+    check(
+      /failedSourceIds:/.test(completionCallBody) && /lastSuccessfulSyncAt/.test(completionCallBody),
+      `${label} のCOMPLETED書き込みで failedSourceIds と lastSuccessfulSyncAt が同じ呼び出し(単一update)内にある(基準だけ先に進む半端な状態を作らない)`,
+    );
+  }
+}
+
 console.log(`\n${passes} passed, ${failures} failed\n`);
 if (failures > 0) process.exit(1);

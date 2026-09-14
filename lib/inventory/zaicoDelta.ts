@@ -118,11 +118,25 @@ export interface DeltaSplit<T> {
  * `zaicoBackgroundSync.ts`）にある: `existsInBello`はO(1)のMap
  * ルックアップとして渡されることを前提にしており、この関数自体は
  * 追加のDB往復もAPI呼び出しも一切行わない（純粋関数のまま）。
+ *
+ * ── 2026-09-14 追記: 恒久的に失敗する商品も時刻だけでは救えない ─────
+ *
+ * `isPersistentlyFailing`(省略可)は`existsInBello`と同じ形の第3の
+ * 安全弁。ある商品が同期のたびに(データ不整合等の理由で)`failed`に
+ * なり続け、かつZAICO側`updated_at`が以後変わらない場合、時刻だけの
+ * 判定ではその商品は恒久的にskip対象へ落ちる——`existsInBello`は
+ * 「BELLOに実在するか」しか見ないので、この商品はBELLOに実在する
+ * (作成済みだが更新が失敗し続けている等)ケースでは救えない。
+ * 呼び出し元が`nextFailedRetryIds`で永続化した「恒久失敗リスト」の
+ * 所属確認を渡すと、時刻がどれだけ古くても`toProcess`へ強制的に回る
+ * ——`existsInBello`と同じくO(1)のSetルックアップを前提にしており、
+ * この関数自体は追加のDB往復を行わない。
  */
 export function splitByDelta<T extends Pick<ZaicoInventory, "updated_at" | "created_at">>(
   items: T[],
   since: string | null,
   existsInBello?: (item: T) => boolean,
+  isPersistentlyFailing?: (item: T) => boolean,
 ): DeltaSplit<T> {
   if (!since) return { toProcess: items, skipped: [] };
   const toProcess: T[] = [];
@@ -137,6 +151,12 @@ export function splitByDelta<T extends Pick<ZaicoInventory, "updated_at" | "crea
     // 従来どおりskip。確認できて、かつ存在しないなら、古い時刻でも
     // 取りこぼさず処理側へ回す。
     if (existsInBello && !existsInBello(item)) {
+      toProcess.push(item);
+      continue;
+    }
+    // 恒久失敗リストに載っている商品も、同じ理由で時刻を無視して
+    // 強制的に再試行へ回す(成功するまでこのリストから外れない)。
+    if (isPersistentlyFailing && isPersistentlyFailing(item)) {
       toProcess.push(item);
       continue;
     }
@@ -177,20 +197,270 @@ export function nextSuccessfulSyncAt(startedAt: string | null | undefined, fallb
  * 再試行の機会が永久に来ない**——「失敗商品を既読にして省き続ける」
  * という一番避けたい取りこぼし方。
  *
- * 直し方は、1件でも失敗があった回では基準を進めない、これだけ。
- * 次回は同じ(古い)`since`を使うので、失敗した商品を含め「前回成功時刻
- * 以降」がそのまま広めに再スキャン対象になる——重複再処理は安全
- * (syncOneZaicoItemは冪等)、取りこぼしより重複を選ぶという、この
- * ファイル全体を貫く方針そのもの。
+ * 直し方(2026-09-11)は、1件でも失敗があった回では基準を進めない、
+ * これだけだった。次回は同じ(古い)`since`を使うので、失敗した商品を
+ * 含め「前回成功時刻以降」がそのまま広めに再スキャン対象になる——
+ * 重複再処理は安全(syncOneZaicoItemは冪等)、取りこぼしより重複を選ぶ
+ * という、このファイル全体を貫く方針そのもの。
+ *
+ * ── 2026-09-14 再修正: 「1件でも失敗があれば止める」が新たな取りこぼし方を生んだ ──
+ *
+ * ある商品が**恒久的に**(データ不整合など再試行しても直らない理由で)
+ * 失敗し続ける場合、`hadFailures`は毎回trueになり続け、**基準が永久に
+ * nullのまま固着する**——「差分同期が毎回『初回のため全件』になる」
+ * 不具合そのもの。1件の恒久失敗が全件を巻き添えにしてしまっていた。
+ *
+ * 第4引数の意味を「今回failedがあったか」から「**再試行の保証が無い
+ * failedがあったか**」へ変える。失敗した商品のsourceIdを
+ * `nextFailedRetryIds`で永続化し、次回以降`splitByDelta`の
+ * `isPersistentlyFailing`経由で基準に関係なく強制再試行する仕組みが
+ * ある場合、その失敗はこの関数にとってはもう「未解決」ではない
+ * (成功するまで確実に再試行され続けることが保証されている)——
+ * 呼び出し元はそのケースで`false`を渡してよい。基準は他の正常な商品
+ * のために前進し、恒久失敗の商品だけが個別に再試行され続ける。
+ *
+ * ── 移行安全性(`hasUncapturedLegacyFailures`) ─────────────────────
+ *
+ * 上記の「`false`を渡してよい」が成り立つのは、その失敗が実際に
+ * `failedSourceIds`へ捕捉されている場合だけ。この仕組みが導入される
+ * **前から実行中だったジョブ**は、それ以前に積んだ`failed`カウントの
+ * sourceIdを一度もこのリストへ書けていない——呼び出し元はその状態
+ * (`hasUncapturedLegacyFailures`参照)でも`false`を渡してしまうと、
+ * 捕捉保証の無い失敗を巻き込んで基準を前進させ、恒久的な取りこぼしに
+ * なる。呼び出し元は必ず`hasUncapturedLegacyFailures`の結果を第4引数へ
+ * 反映すること。
+ *
+ * ── 2026-09-14 (task_ff42042dfee35233e9) 再々修正: 「trusted」自体が
+ *    checkpointを跨いで化ける不具合 ──────────────────────────────
+ *
+ * 上記2点(移行安全性の導入)には、1 invocationでジョブが完了する
+ * ケースしか実境界試験で確認されていない、という穴があった。
+ * `failedSourceIds`は**中間(RUNNING)checkpointでも毎回書き込む**
+ * (ページ内時間切れ・ページ跨ぎのいずれでも)——このとき書く値が
+ * 「配列としてparseできるかどうか」だけでtrustedを決めていると、
+ * 旧RUNNING job(failedSourceIds未設定、既存failedカウントあり)が
+ * **完了に至る前の中間checkpoint**を1回書いただけで、その書き込み
+ * 自体が(中身が空配列であっても)「有効なJSON配列」になってしまい、
+ * 次のLambda invocation(=同じjobの続き、あるいは全くの別invocation)
+ * は`trusted: true`と誤認する。その時点では旧failedカウントの
+ * sourceIdはまだ一切捕捉されていない——にも関わらず後続のinvocation
+ * は`hasUncapturedLegacyFailures(true, ...)`が`false`を返すため、
+ * 完了時に基準を前進させてしまい、旧失敗を永久に取りこぼす
+ * (`parseFailedRetryIds`/`nextFailedSourceIdsTrusted`のコメント参照)。
+ *
+ * 直し方: 「trusted」を配列の見た目から推測せず、`failedSourceIds`の
+ * 保存形式そのものに**明示的なtrustedフラグ**として持たせ
+ * (`serializeFailedRetryState`)、そのフラグは
+ * 「既にtrusted」→そのまま維持(sticky)、「まだuntrusted」→
+ * **`since === null`(=時刻を無視して全件を強制的に処理し切った、
+ * 本物のFULL相当の完走)を伴う完了(isDone)のときだけ**新たにtrusted化
+ * する、というルールへ変更した(`nextFailedSourceIdsTrusted`)。DELTAの
+ * 途中checkpoint・DELTAの完了はどちらも「trustedを新たに立てる」条件を
+ * 満たさない——`since`ベースの再スキャンだけでは、旧failedのZAICO側
+ * `updated_at`が動いていない限り再捕捉できる保証が無いため。
  */
 export function resolveNextSyncBasis(
   previousLastSuccessfulSyncAt: string | null,
   startedAt: string | null | undefined,
   finishedAtIso: string,
-  hadFailures: boolean,
+  hadUnretriedFailures: boolean,
 ): string | null {
-  if (hadFailures) return previousLastSuccessfulSyncAt;
+  if (hadUnretriedFailures) return previousLastSuccessfulSyncAt;
   return nextSuccessfulSyncAt(startedAt, finishedAtIso);
+}
+
+/** `nextFailedRetryIds`が受け取る、1件分の処理結果。 */
+export interface ProcessedItemOutcome {
+  zaicoId: string;
+  failed: boolean;
+}
+
+/**
+ * 次回以降「時刻に関係なく強制再試行する」sourceId集合(恒久失敗リスト)
+ * を計算する純粋関数。DBにもZAICOにも触らない。
+ *
+ * - 今回`failed`だった商品は追加する(次回、基準がどれだけ進んでも
+ *   `splitByDelta`の`isPersistentlyFailing`で強制的に再試行される)。
+ * - 今回`failed`以外(created/updated/unchanged)だった商品は除去する
+ *   ——リトライが成功した(または元々問題なかった)ので、もう強制する
+ *   必要はない。
+ * - 今回**処理していない**(まだ恒久失敗リストに残っている)商品には
+ *   触れない——ページ内時間切れ等でまだ処理機会が回ってきていないだけ
+ *   なので、リストから外すと次回の強制再試行の権利ごと失われる。
+ *
+ * 呼び出し元は1 invocation内の複数ページ/複数バッチに渡って、この
+ * 関数の戻り値を次の呼び出しの`previousFailedSourceIds`としてそのまま
+ * 引き継ぐ(zaicoSyncPageProcessor.tsの`processedOutcomes`が「実際に
+ * syncOneZaicoItemを呼んだ商品」だけを返すため、skipされた商品を
+ * 誤って成功扱いで消してしまうことはない)。
+ */
+export function nextFailedRetryIds(
+  previousFailedSourceIds: ReadonlySet<string>,
+  processed: readonly ProcessedItemOutcome[],
+): Set<string> {
+  const next = new Set(previousFailedSourceIds);
+  for (const p of processed) {
+    if (p.failed) next.add(p.zaicoId);
+    else next.delete(p.zaicoId);
+  }
+  return next;
+}
+
+/** `parseFailedRetryIds`の戻り値。 */
+export interface ParsedRetryIds {
+  /** 実際にparseできたsourceId集合(未設定/破損時は空)。 */
+  ids: Set<string>;
+  /**
+   * このフィールドが「確定的に空(=既知の失敗は無い)」であることを
+   * 意味してよいか。false は「未設定/破損/信頼できない」——**空だが
+   * 信頼できない**ことを示す(下記コメント参照)。
+   */
+  trusted: boolean;
+}
+
+/**
+ * `ZaicoSyncJob.failedSourceIds`へ書き込む内部表現。バージョン管理は
+ * 意図的に持たない——このフィールド自体がまだ未公開(d95d476時点で
+ * 本番未反映)なので、旧形式との互換読み取りは「壊れず読める」以上の
+ * 保証を必要としない。
+ */
+interface StoredFailedRetryState {
+  ids: string[];
+  /**
+   * task_ff42042dfee35233e9: 「配列としてparseできた」こと自体を
+   * trustedの根拠にしない(このファイル冒頭resolveNextSyncBasisの
+   * 「再々修正」コメント参照)。trustedは常にこのフィールドの値として
+   * 明示的に運ぶ。
+   */
+  trusted: boolean;
+}
+
+/**
+ * `ids`をJSON配列として書き込む前に必ずこの関数を通す
+ * (`JSON.stringify(Array.from(ids))`を直接呼ばない)。`trusted`は
+ * `nextFailedSourceIdsTrusted`の戻り値をそのまま渡すこと。
+ */
+export function serializeFailedRetryState(ids: ReadonlySet<string>, trusted: boolean): string {
+  const state: StoredFailedRetryState = { ids: Array.from(ids), trusted };
+  return JSON.stringify(state);
+}
+
+function extractStringIds(raw: readonly unknown[]): { ids: Set<string>; allStrings: boolean } {
+  const strings = raw.filter((v): v is string => typeof v === "string");
+  return { ids: new Set(strings), allStrings: strings.length === raw.length };
+}
+
+/**
+ * `ZaicoSyncJob.failedSourceIds`の読み取り。`parseSeenSourceIds`(既存
+ * のseenSourceIds/missingSourceIdsの規約)と違い、「読めなかった」と
+ * 「確定的に空」を区別して返す——両方を空Setへ倒して構わないのは
+ * seenSourceIdsだけで、failedSourceIdsは`hasUncapturedLegacyFailures`
+ * の入力になるため、この区別自体が移行安全性の核。
+ *
+ * - `undefined`/`null`(フィールド未設定): この機能が導入される前の
+ *   行、またはこの行にまだ一度も書き込みが無い。`trusted: false`。
+ * - JSON.parseが失敗する破損文字列: 空とは違う。`trusted: false`。
+ *   (2026-09-14: raw値そのものはログに出さない——リトライ集合の中身
+ *   はZAICO在庫IDの列挙であり、エラーログへ丸ごと出す情報ではない。
+ *   長さだけを記録する。)
+ * - `{ ids, trusted }`形式以外(旧形式の裸配列を含む): `ids`は救出できる
+ *   限り取り出すが、`trusted`は常に`false`として扱う——「配列として
+ *   parseできた」だけではtrustedの根拠にしない(このファイル冒頭
+ *   resolveNextSyncBasisコメント参照)。
+ * - `ids`配列に非文字列が混じっている場合: 黙ってfilterして`trusted`を
+ *   素通りさせない——破損の兆候として`trusted: false`へ倒し、件数だけ
+ *   ログに残す(2026-09-14 (task_ff42042dfee35233e9)。中身は出さない)。
+ * - `{ ids: string[], trusted: true }`(このモジュールが書いた形): その
+ *   ままの`trusted`を返す。
+ */
+export function parseFailedRetryIds(raw: unknown): ParsedRetryIds {
+  if (raw === undefined || raw === null) return { ids: new Set(), trusted: false };
+  if (typeof raw === "string") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      console.error(`[ZaicoSyncJob.failedSourceIds] failed to JSON.parse stored value (length=${raw.length})`);
+      return { ids: new Set(), trusted: false };
+    }
+    return parseFailedRetryIds(parsed);
+  }
+  if (Array.isArray(raw)) {
+    // 旧形式(裸の配列)。中身は救出するが、trustedはこの形からは
+    // 絶対に昇格させない。
+    const { ids, allStrings } = extractStringIds(raw);
+    if (!allStrings) {
+      console.error(`[ZaicoSyncJob.failedSourceIds] stored array contains non-string entries (count=${raw.length})`);
+    }
+    return { ids, trusted: false };
+  }
+  if (typeof raw === "object" && Array.isArray((raw as { ids?: unknown }).ids)) {
+    const state = raw as { ids: unknown[]; trusted?: unknown };
+    const { ids, allStrings } = extractStringIds(state.ids);
+    if (!allStrings) {
+      // 非文字列が混じっている = 破損。黙ってfilterしてtrustedを通す
+      // (=取りこぼしを見えなくする)ことはしない——安全側でuntrusted化する。
+      console.error(`[ZaicoSyncJob.failedSourceIds] stored ids contain non-string entries (count=${state.ids.length}); treating as untrusted`);
+      return { ids, trusted: false };
+    }
+    return { ids, trusted: state.trusted === true };
+  }
+  console.error("[ZaicoSyncJob.failedSourceIds] unexpected stored shape (neither array nor {ids,trusted} object)");
+  return { ids: new Set(), trusted: false };
+}
+
+/**
+ * 次にcheckpointへ書き込む`trusted`の値。「配列としてparseできるか」
+ * では決めない(このファイル冒頭resolveNextSyncBasisコメント参照)。
+ *
+ * - 既にtrustedなら、以後もずっとtrusted(sticky)。一度確立した信頼は
+ *   後戻りしない。
+ * - まだuntrustedなら、**`since === null`を伴う完了(isDone)のとき
+ *   だけ**新たにtrusted化する。`since === null`は「時刻を無視して
+ *   今回すべての商品を強制的に処理し切った」ことを意味する
+ *   (`splitByDelta`の`!since`早期return参照)——このときだけ、旧
+ *   failedカウントのsourceIdが(もしまだ実際に失敗し続けているなら)
+ *   確実に`nextFailedRetryIds`で捕捉されたと言える。DELTAの途中
+ *   checkpoint・DELTAの完了はどちらもこの条件を満たさない——時刻ベース
+ *   の再スキャンだけでは、旧failedのZAICO側`updated_at`が動いていない
+ *   限り再捕捉できる保証が無いため、untrustedのまま基準前進を止め
+ *   続ける(次回も安全に同じ範囲を再スキャンする)。
+ */
+export function nextFailedSourceIdsTrusted(initialTrusted: boolean, since: string | null, isDone: boolean): boolean {
+  if (initialTrusted) return true;
+  return since === null && isDone;
+}
+
+/**
+ * 「捕捉保証のない既存失敗が残っているか」——`resolveNextSyncBasis`の
+ * 第4引数として渡す値そのもの。
+ *
+ * ── なぜ必要か(task_8ff5754e48711a753a、2026-09-14境界修正) ─────
+ *
+ * `failedSourceIds`が導入される前から実行中(RUNNING)だったジョブは、
+ * それ以前に積んだ`failed`カウントのsourceIdを一度もこのフィールドへ
+ * 書けていない(`parseFailedRetryIds`の`trusted: false`)。この状態を
+ * 「恒久失敗リストは空(=既知の失敗は無い)」と混同して基準を前進させると、
+ * その旧失敗商品は(基準前進後は時刻ベース判定で永久にskip、かつ
+ * 恒久失敗リストにも載っていないので強制再試行の対象にもならない)、
+ * 取りこぼしたまま気づけなくなる。
+ *
+ * 直し方: `trusted`が`false`で、かつ今回までに`failed`カウントが
+ * 1件以上ある(=捕捉できていない失敗が実在する可能性がある)ときだけ
+ * `true`を返す。呼び出し元はこの回の基準前進を見送り、次回は同じ
+ * (前進していない)`since`で安全に再スキャンする——`nextFailedSourceIdsTrusted`
+ * が定める条件を満たすまでこのフィールドは`trusted: false`のまま
+ * 書き込まれ続けるので(空でも有効なJSONだが`trusted`は立たない)、
+ * この経路は「本物の全件再捕捉」が起きるまで自己解消しない
+ * (2026-09-14 task_ff42042dfee35233e9で「配列が書ければtrusted」
+ * という誤った早期解消を修正済み)。
+ *
+ * `trusted`かつ`failed`が0件のとき(=このフィールドが未設定でも、
+ * 過去に一度も失敗が無い正常な新規ジョブ)は`false`を返す——新規
+ * ジョブまで巻き添えにして基準前進を止めない。
+ */
+export function hasUncapturedLegacyFailures(trusted: boolean, failedCountSoFar: number): boolean {
+  return !trusted && failedCountSoFar > 0;
 }
 
 /** 同期結果の要約。ログと画面表示で同じものを使う。 */
@@ -217,12 +487,21 @@ export function elapsedMs(startedAt: string | null, finishedAt: string | null): 
   return Math.max(0, b - a);
 }
 
-/** 人が読む1行。ログにも画面にも同じ文言を出す。 */
+/**
+ * 人が読む1行。ログにも画面にも同じ文言を出す。
+ *
+ * 2026-09-14: `since`がnullのケースを「初回のため全件」と断定しない。
+ * `since`は`lastSuccessfulSyncAt`(前回**成功**時刻)が無いときに常にnull
+ * になる——これは文字どおりの初回だけでなく、恒久失敗リストの導入前は
+ * 「過去に一度も完走していない(何度試みても失敗し続けた)」ケースでも
+ * 起こり得た。実行契機を確認していないのに「初回」と言い切ると、実際
+ * には過去に何度も失敗している状況を利用者が誤解しかねない。
+ */
 export function describeRun(s: SyncRunSummary): string {
   const ms = elapsedMs(s.startedAt, s.finishedAt);
   const time = ms === null ? "計測不可" : `${(ms / 1000).toFixed(1)}秒`;
   const label = s.mode === "DELTA" ? "差分同期" : "全件同期";
-  const since = s.mode === "DELTA" ? (s.since ? `（${s.since} 以降）` : "（初回のため全件）") : "";
+  const since = s.mode === "DELTA" ? (s.since ? `（${s.since} 以降）` : "（前回成功した同期の記録が無いため全件）") : "";
   return (
     `${label}${since}: ` +
     `取得${s.fetched}件 / 新規${s.created} 更新${s.updated} 変更なし${s.unchanged} ` +
