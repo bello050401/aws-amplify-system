@@ -84,6 +84,14 @@ export async function listPricingRules(): Promise<PricingRuleRecord[]> {
 }
 
 export async function getPricingRule(id: string): Promise<PricingRuleRecord | null> {
+  // QA隔離境界是正(2026-09-14、task_9944d38b7e24f0afea): 同じファイルの
+  // listPricingRules/listPriceHistoryは既にisE2EFixtureModeActiveで
+  // ゲートされていたが、この関数だけ抜けていた——setAutoPricingForListing/
+  // runPricingCheck経由でE2E fixtureモード中に呼ばれると、実PricingRule
+  // テーブルへの`.get()`が実行され、認証セッションが無いため
+  // `NoValidAuthTokens`のまま実serverDataClientへ到達してしまう
+  // (lib/amplify/dataClient.tsのe2eReadBoundarySpyで検出)。
+  if (isE2EFixtureModeActive()) return null;
   const { data } = await serverDataClient.models.PricingRule.get({ id }, inventoryAuthMode);
   return data ? toPricingRuleRecord(data) : null;
 }

@@ -82,6 +82,23 @@ export function selectableInventoryIds(filteredRows: readonly { inventoryId: str
 }
 
 /**
+ * Mercari Shops CSV出力(2026-09-14、P2)の「すべて選択」対象。
+ *
+ * 上のselectableInventoryIds(下書き一括作成向け、hasDraftが無い行のみ)
+ * とは対になる逆の条件——CSV出力(lib/listing/mercari/csv/buildExportRows.ts)
+ * は保存済みの出品下書きを土台にするため、下書きが無い行はサーバー側で
+ * 必ず「EC出品下書きが未作成です」としてブロックされる。ここで先に
+ * 対象外にしておくことで、確実に失敗する行を選ばせない
+ * (押した瞬間に理由が分かる方が、生成が全ブロックされてから知るより早い)。
+ * 売却済み/削除済み/カテゴリ未確定等、下書きがあっても弾かれうる理由は
+ * クライアント側からは分からないため、それらはサーバー側の
+ * blockedRowsで初めて分かる(黙って除外はしない)。
+ */
+export function csvExportEligibleInventoryIds(filteredRows: readonly { inventoryId: string; hasDraft: boolean }[]): string[] {
+  return filteredRows.filter((r) => r.hasDraft).map((r) => r.inventoryId);
+}
+
+/**
  * ListingsOverviewTable.tsxの読み込み状態。InventoryHistorySection.tsxの
  * LoadStateと同じ3値設計——ただし"error"はEC一覧P1 実失敗分類
  * (2026-09-13)で安全な分類情報(`failure`)を持つ。認証切れなら再ログイン

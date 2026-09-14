@@ -20,6 +20,15 @@ const E2E_AUTH_TOKEN = "e2e-local-test-token-not-a-real-secret-32c";
 /** Linuxコンテナに事前installされているChromium。開発機には存在しない。 */
 const CONTAINER_CHROMIUM = "/opt/pw-browsers/chromium";
 
+/**
+ * task_f712cf24a9fe2308cd(2026-09-14): ポートを環境変数E2E_PORTで
+ * 上書き可能にする——既定値3100は他worktree/セッションの`next dev`と
+ * 衝突しうる(実際に本タスクの検証中、別プロセスが3100で
+ * /inventory/loginへ応答しているのを確認した)。E2E_PORT未指定時の
+ * 挙動(3100固定)は変えない。
+ */
+const E2E_PORT = process.env.E2E_PORT ? Number(process.env.E2E_PORT) : 3100;
+
 export default defineConfig({
   testDir: "./e2e",
   // `next dev`は初回アクセスのルートをその場でコンパイルする
@@ -46,7 +55,7 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: "http://127.0.0.1:3100",
+    baseURL: `http://127.0.0.1:${E2E_PORT}`,
     // /opt/pw-browsers/chromiumが事前installされている(PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
     // によりnpm install時の再ダウンロードを止めている)ため、それを
     // 明示的に指す — @playwright/testが探すデフォルトキャッシュ
@@ -62,8 +71,8 @@ export default defineConfig({
     launchOptions: existsSync(CONTAINER_CHROMIUM) ? { executablePath: CONTAINER_CHROMIUM } : {},
   },
   webServer: {
-    command: "npm run dev -- --port 3100",
-    url: "http://127.0.0.1:3100/inventory/login",
+    command: `npm run dev -- --port ${E2E_PORT}`,
+    url: `http://127.0.0.1:${E2E_PORT}/inventory/login`,
     reuseExistingServer: false,
     timeout: 120_000,
     env: {

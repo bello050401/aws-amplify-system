@@ -4,7 +4,13 @@ import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { bulkCreateListingDraftsAction, listListingsOverviewSafeAction } from "@/app/actions/listing";
+import {
+  bulkCreateListingDraftsAction,
+  exportMercariShopsCsvAction,
+  getMercariCsvImageZipPlanAction,
+  listListingsOverviewSafeAction,
+} from "@/app/actions/listing";
+import { assembleZipFromPlan, downloadZipBlob } from "@/lib/listing/mercari/csv/browserImageZip";
 import type { ListingOverviewRow } from "@/lib/listing/service";
 import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
 import {
@@ -12,8 +18,10 @@ import {
   loadStateFromInitialRows,
   paginate,
   selectableInventoryIds,
+  csvExportEligibleInventoryIds,
   type ListingsLoadState,
 } from "@/lib/listing/listingsOverviewTableLogic";
+import { downloadCsvFromBase64, type MercariCsvExportOutcome } from "./mercariCsvDownload";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
@@ -123,6 +131,51 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  /**
+   * Mercari Shops CSV出力(2026-09-14、P2、API出品撤去に伴う手動運用向け)。
+   *
+   * 「下書き作成」と「CSVを作成」は対象になり得る行が排他
+   * (lib/listing/listingsOverviewTableLogic.tsのselectableInventoryIds/
+   * csvExportEligibleInventoryIdsのコメント参照——下書きの有無で完全に
+   * 分かれる)なので、チェックボックス列・「すべて選択」・実行ボタンを
+   * このmodeで出し分ける。選択状態(selected)自体は共有のSetのまま
+   * モード切替時にクリアする——切替前のモードでは選べていた行が、
+   * 切替後のモードでは対象外(かつては見えない)のまま残るのを防ぐ。
+   */
+  const [mode, setMode] = useState<"draft" | "csv">("draft");
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvOutcome, setCsvOutcome] = useState<MercariCsvExportOutcome | null>(null);
+
+  // 2026-09-14 指示書レビュー修正: MercariCategoryMappingSection.tsxの
+  // 画像ZIP保存ボタンは商品詳細ページ内で常に[inventoryId]という1要素
+  // 配列しか渡しておらず、サーバー側が想定する最大20商品/100枚の
+  // シナリオ(lib/listing/mercari/csv/imageBundle.tsのMAX_ZIP_PRODUCTS/
+  // MAX_ZIP_IMAGES)を実ブラウザから再現する導線が一覧側に無かった。
+  // CSVモードの選択(selected、csvExportEligibleInventoryIdsと同じ対象
+  // ——下書きがある商品のみ)をそのままgetMercariCsvImageZipPlanActionへ
+  // 渡す——「CSVを作成」と同じ選択導線を共有し、対象範囲の食い違いを生まない。
+  //
+  // task_f712cf24a9fe2308cd(2026-09-14是正): 画像ZIPの実体組み立ては
+  // ブラウザ側(browserImageZip.ts)に移した——ここが持つのは表示用の
+  // 結果(成功/失敗理由/失敗内訳)だけで、zipBase64のような巨大な
+  // ペイロードはもうこのコンポーネントの状態に載らない。
+  const [zipBusy, setZipBusy] = useState(false);
+  const [zipOutcome, setZipOutcome] = useState<
+    | { ok: true; fileCount: number }
+    | { ok: false; reason?: string; failures?: { inventoryId: string; displayId: string; reason: string }[] }
+    | null
+  >(null);
+
+  function switchMode(next: "draft" | "csv") {
+    if (next === mode) return;
+    setMode(next);
+    setSelected(new Set());
+    setCsvOutcome(null);
+    setZipOutcome(null);
+    setResultMessage(null);
+    setErrorMessage(null);
+  }
+
   // useMemoで包む — 依存配列内で毎レンダー新しい[]を作る実装だと
   // (state.kindがok以外の間)`rows`の参照が変わり続け、下のfilteredの
   // useMemoが実質無効化される(ESLint react-hooks/exhaustive-depsが
@@ -160,7 +213,9 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
   // 全件(filtered)から算出する — lib/listing/listingsOverviewTableLogic.ts
   // のselectableInventoryIdsのコメント参照(ページングの導入で対象範囲
   // が意図せず縮んだり広がったりしないため)。
-  const selectableIds = useMemo(() => selectableInventoryIds(filtered), [filtered]);
+  const draftSelectableIds = useMemo(() => selectableInventoryIds(filtered), [filtered]);
+  const csvSelectableIds = useMemo(() => csvExportEligibleInventoryIds(filtered), [filtered]);
+  const selectableIds = mode === "draft" ? draftSelectableIds : csvSelectableIds;
   const allSelectableSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
 
   function toggleOne(inventoryId: string) {
@@ -196,6 +251,83 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
       setErrorMessage(err instanceof Error ? err.message : "一括作成に失敗しました。");
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Mercari Shops CSV出力(2026-09-14、P2)。0件は事前にボタンを無効化
+   * するので通常は起きないが、多重クリック対策としてもガードする。
+   * 生成中は二重操作防止(csvBusy)、失敗しても選択(selected)はそのまま
+   * 保持する(★要件「失敗は入力保持+再試行」——選び直しをさせない)。
+   */
+  async function runCsvExport() {
+    if (selected.size === 0 || csvBusy) return;
+    setCsvBusy(true);
+    setCsvOutcome(null);
+    try {
+      const result = await exportMercariShopsCsvAction(Array.from(selected));
+      setCsvOutcome(result);
+      if (result.ok && result.csvBase64 && result.filename) {
+        downloadCsvFromBase64(result.csvBase64, result.filename);
+        // 成功時のみ選択をクリアする(生成=出品済みではないが、この回の
+        // 生成対象としては完了したという区切り)。失敗時は保持したまま。
+        setSelected(new Set());
+      }
+    } catch (err) {
+      setCsvOutcome({
+        ok: false,
+        requestedCount: selected.size,
+        outputCount: 0,
+        headerSource: "fallback-reconstruction",
+        headerVerified: false,
+        blockedRows: [],
+        encodingErrors: [err instanceof Error ? err.message : "CSV生成に失敗しました。"],
+      });
+    } finally {
+      setCsvBusy(false);
+    }
+  }
+
+  /**
+   * 画像まとめダウンロード(ZIP)。
+   *
+   * task_f712cf24a9fe2308cd(2026-09-14是正): 旧実装はgetMercariCsvImageZipAction
+   * (Server Action)が画像バイトを読み切ってbase64で返していたが、実写真
+   * 運用でAmplify Hosting Web Computeの応答上限(5.72MB)を超える設計
+   * だったため撤去した(根拠はlib/listing/mercari/csv/imageBundle.tsの
+   * コメント参照)。新しい流れ:
+   *   1. getMercariCsvImageZipPlanAction — 対象商品/画像の「計画」
+   *      (署名URLの一覧、数十KB程度の小さい応答)だけを取得する。
+   *      選択件数がMAX_ZIP_PRODUCTS(=20)を超える、または対象画像の
+   *      合計がMAX_ZIP_IMAGES(=100)を超える場合はここで拒否される。
+   *   2. assembleZipFromPlan(browserImageZip.ts) — ブラウザが署名URLへ
+   *      直接fetchし(このサーバーを経由しない)、ZIPを組み立てる。
+   * 上限判定はサーバー側の結果をそのまま表示するだけで、クライアント側で
+   * 先読みして黙って弾いたりしない(「押した瞬間に本当の理由が分かる」を
+   * 優先)。1件でも画像取得に失敗したら全体を止め、部分成功のZIPは作らない
+   * (failures配列でどの商品のどの画像が失敗したかを表示する)。
+   */
+  async function runImageZipDownload() {
+    if (selected.size === 0 || zipBusy) return;
+    setZipBusy(true);
+    setZipOutcome(null);
+    try {
+      const plan = await getMercariCsvImageZipPlanAction(Array.from(selected));
+      if (!plan.ok || !plan.plan || !plan.filename) {
+        setZipOutcome({ ok: false, reason: plan.reason, failures: plan.failures });
+        return;
+      }
+      const assembled = await assembleZipFromPlan(plan.filename, plan.plan);
+      if (!assembled.ok) {
+        setZipOutcome({ ok: false, reason: assembled.reason, failures: assembled.failures });
+        return;
+      }
+      downloadZipBlob(assembled.blob, assembled.filename);
+      setZipOutcome({ ok: true, fileCount: assembled.fileCount });
+    } catch (err) {
+      setZipOutcome({ ok: false, reason: err instanceof Error ? err.message : "画像のダウンロードに失敗しました。" });
+    } finally {
+      setZipBusy(false);
     }
   }
 
@@ -292,6 +424,33 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
 
   return (
     <div>
+      {canEdit && (
+        <div className="mb-2 flex items-center gap-1">
+          {/* Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
+              「CSVを作成」(公式Mercari Shops取込CSVをローカル生成する
+              だけ、アップロード・登録は行わない)を一括操作のもう一方の
+              モードとして追加した。対象になり得る行が「下書き作成」
+              (下書きが無い行)とは逆(下書きがある行)なので、チェックボックス
+              列自体をモードで出し分ける——同じ選択導線(Set<string>・
+              「すべて選択」・ページ越え選択)は両モードで共有する。 */}
+          <button
+            type="button"
+            onClick={() => switchMode("draft")}
+            aria-pressed={mode === "draft"}
+            className={`border px-2 py-1 text-[12px] ${mode === "draft" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
+          >
+            下書き作成
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode("csv")}
+            aria-pressed={mode === "csv"}
+            className={`border px-2 py-1 text-[12px] ${mode === "csv" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
+          >
+            CSVを作成
+          </button>
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input
           value={query}
@@ -315,14 +474,37 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
         {canEdit && (
           <div className="ml-auto flex items-center gap-2">
             {selected.size > 0 && <span className="text-[12px] text-gray-600">{selected.size}件選択中</span>}
-            <button
-              type="button"
-              onClick={runBulkCreate}
-              disabled={busy || selected.size === 0}
-              className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
-            >
-              {busy ? "作成中…" : "選択した商品の出品下書きを一括作成"}
-            </button>
+            {mode === "draft" ? (
+              <button
+                type="button"
+                onClick={runBulkCreate}
+                disabled={busy || selected.size === 0}
+                className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
+              >
+                {busy ? "作成中…" : "選択した商品の出品下書きを一括作成"}
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void runCsvExport()}
+                  disabled={csvBusy || selected.size === 0}
+                  className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
+                  title="Mercari Shops公式の商品一括登録CSV(88列)をローカルへダウンロードします。アップロード・登録は行いません。"
+                >
+                  {csvBusy ? "生成中…" : "CSVを作成"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runImageZipDownload()}
+                  disabled={zipBusy || selected.size === 0}
+                  className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 disabled:opacity-50"
+                  title="選択した商品の下書き画像をまとめてZIPで保存します(CSVの商品画像名列と同じファイル名——手作業でのリネームは不要です)。一度に最大20商品・合計100枚までです。"
+                >
+                  {zipBusy ? "ZIP作成中…" : "画像をまとめてZIPで保存"}
+                </button>
+              </>
+            )}
             {/* Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
                 EC一覧からの自動値下げルール一括割当(旧「自動値下げルールを
                 設定」ボタン→/pricing-rules/assign、対象は常にMercariの
@@ -337,8 +519,74 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
         )}
       </div>
 
+      {mode === "csv" && (
+        <p className="mb-2 text-[11px] text-gray-400">
+          対象: 表示中の絞り込み結果のうち、出品下書きが保存済みの商品のみ選択できます（{csvSelectableIds.length.toLocaleString("ja-JP")}件）。生成はローカルCSVのみで、Mercariへの送信・登録は行いません。
+        </p>
+      )}
+
       {resultMessage && <p className="mb-2 text-[12px] text-green-700">{resultMessage}</p>}
       {errorMessage && <p className="mb-2 text-[12px] text-red-600">{errorMessage}</p>}
+
+      {csvOutcome && (
+        <div className={`mb-2 border p-2 text-[12px] ${csvOutcome.ok ? "border-green-300 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-700"}`}>
+          {csvOutcome.ok ? (
+            <p>
+              CSVを生成しました（選択{csvOutcome.requestedCount.toLocaleString("ja-JP")}件 / 出力{csvOutcome.outputCount.toLocaleString("ja-JP")}件、
+              ヘッダー: {csvOutcome.headerVerified ? "原本と照合済み" : "未照合(fallback)"}）。ダウンロードが開始されない場合はポップアップブロックをご確認ください。
+            </p>
+          ) : (
+            <div>
+              <p className="font-bold">
+                CSVを生成できませんでした（選択{csvOutcome.requestedCount.toLocaleString("ja-JP")}件 / 出力0件——1件でも重大エラーがあると全体を止めます）。
+              </p>
+              {csvOutcome.encodingErrors && csvOutcome.encodingErrors.length > 0 && (
+                <ul className="mt-1 list-disc pl-4">
+                  {csvOutcome.encodingErrors.map((e, i) => (
+                    <li key={i}>{e}</li>
+                  ))}
+                </ul>
+              )}
+              {csvOutcome.blockedRows.length > 0 && (
+                <ul className="mt-1 list-disc pl-4">
+                  {csvOutcome.blockedRows.map((row) => (
+                    <li key={row.inventoryId}>
+                      <Link href={`/inventory/${row.inventoryId}/listing`} className="font-mono underline">
+                        {row.displayId}
+                      </Link>
+                      : {row.reasons.join(" / ")}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {zipOutcome && (
+        <div className={`mb-2 border p-2 text-[12px] ${zipOutcome.ok ? "border-green-300 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-700"}`}>
+          {zipOutcome.ok ? (
+            <p>画像ZIPを保存しました（{(zipOutcome.fileCount ?? 0).toLocaleString("ja-JP")}枚）。ダウンロードが開始されない場合はポップアップブロックをご確認ください。</p>
+          ) : (
+            <div>
+              <p className="font-bold">画像ZIPを作成できませんでした——{zipOutcome.reason ?? "不明なエラーです。"}</p>
+              {zipOutcome.failures && zipOutcome.failures.length > 0 && (
+                <ul className="mt-1 list-disc pl-4">
+                  {zipOutcome.failures.map((f, i) => (
+                    <li key={`${f.inventoryId}-${i}`}>
+                      <Link href={`/inventory/${f.inventoryId}/listing`} className="font-mono underline">
+                        {f.displayId}
+                      </Link>
+                      : {f.reason}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="overflow-x-auto border border-gray-200">
         <table className="w-full min-w-[900px] border-collapse text-[13px]">
@@ -378,7 +626,7 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
             )}
             {pageRows.map((row) => {
               const status = statusOf(row);
-              const canSelect = !row.hasDraft;
+              const canSelect = mode === "draft" ? !row.hasDraft : row.hasDraft;
               return (
                 <tr key={row.inventoryId} className="border-b border-gray-100 hover:bg-gray-50">
                   {canEdit && (
@@ -388,7 +636,7 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
                         checked={selected.has(row.inventoryId)}
                         onChange={() => toggleOne(row.inventoryId)}
                         disabled={!canSelect}
-                        title={canSelect ? undefined : "既に出品下書きがあります"}
+                        title={canSelect ? undefined : mode === "draft" ? "既に出品下書きがあります" : "出品下書きがまだありません（先に「下書き作成」で作成してください）"}
                       />
                     </td>
                   )}

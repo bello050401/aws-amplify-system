@@ -154,6 +154,19 @@ export async function listInventoryOffsetPage(
 export { clearInventoryCountCache, inventoryCountCacheKey } from "./inventoryCountCache";
 
 export async function countActiveInventory(filters: InventoryCursorListFilters): Promise<number> {
+  // QA隔離境界是正(2026-09-15、task_9944d38b7e24f0afea): 一覧ページの
+  // 総件数バッジ(getInventoryCountAction経由)はE2E fixtureモード中も
+  // この関数を呼ぶが、ここだけisE2EFixtureModeActiveのゲートが無く、
+  // countActiveInventoryFastがnullを返した後のフォールバック経路が
+  // Inventory.listInventoryByListingPartitionAndListUpdatedAt()という
+  // 実serverDataClientへ到達し、認証セッションが無いため
+  // `NoValidAuthTokens`のまま失敗していた(lib/amplify/dataClient.tsの
+  // e2eReadBoundarySpyで検出、9-spec回帰実測で再現・特定済み)。本関数
+  // より上にある一覧本体(listActiveInventoryPage)と同じくE2E_INVENTORY_ROWS
+  // の件数をそのまま返す——filtersはfixtureモードでは一覧側(e2eListPage)
+  // と同じく無視する(既存挙動を踏襲、新規の分岐を増やさない)。
+  if (isE2EFixtureModeActive()) return e2eListPage(0, 0).total;
+
   const key = inventoryCountCacheKey(filters);
   const hit = readInventoryCount(key);
   if (hit !== null) return hit;

@@ -11,6 +11,7 @@ import type { SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
 import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
+import { MercariCategoryMappingSection } from "./MercariCategoryMappingSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
 import { InventoryImageGallery } from "../../../InventoryImageGallery";
 import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
@@ -153,9 +154,9 @@ export function ListingForm({
    * 2026-09-14 指示書「Mercariは手動出品支援を基本とする」対応。
    * 準備した内容(タイトル・価格・コンディション・説明文)をMercari公式の
    * 出品画面へ手動で貼り付けられる形にまとめてclipboardへコピーする
-   * だけ — 何も送信しない。カテゴリーマッピング自体はAPI撤去に伴い
-   * このUIから削除したため、ここでは渡さない(buildManualListingTextの
-   * categoryNameはnull許容)。
+   * だけ — 何も送信しない。カテゴリーは、CSV出力向けに復元した
+   * MercariCategoryMappingSectionで選択済みならフルパスを含める
+   * (未選択ならbuildManualListingText側がセクション自体を出さない)。
    */
   async function handleCopyForManualListing() {
     const text = buildManualListingText({
@@ -163,7 +164,7 @@ export function ListingForm({
       description,
       price: price ? Number(price) : null,
       condition,
-      categoryName: null,
+      categoryName: channelListing?.categoryMapping?.mercariCategoryName ?? null,
     });
     try {
       await navigator.clipboard.writeText(text);
@@ -490,6 +491,15 @@ export function ListingForm({
         </div>
         {draftError && <p className="mt-2 text-[12px] text-red-600">{draftError}</p>}
       </div>
+
+      {/* Mercari Shops CSV出力(2026-09-14、P2)向けのカテゴリー/ブランド
+          選択。出品の実行導線ではない——公式マスタの検索・確定のみ。 */}
+      <MercariCategoryMappingSection
+        inventoryId={inventoryId}
+        hasDraft={Boolean(draft)}
+        channelListing={channelListing}
+        onUpdated={setChannelListing}
+      />
 
       {/* Mercari Shops出品の過去履歴(External Listing Status)。
           Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、

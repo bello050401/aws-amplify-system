@@ -1,5 +1,6 @@
 import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { unwrapDataResult, AmplifyDataError, type AmplifyDataResult } from "@/lib/amplify/dataResult";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { getBaseCredentials } from "./secretStore";
 import { BaseNotConfiguredError } from "./errors";
 import { resolveRedirectUri } from "./redirectUri";
@@ -312,6 +313,17 @@ export class BaseNotConnectedError extends Error {
  * 「確認できませんでした」と区別して表示する）。
  */
 export async function isBaseConnected(): Promise<boolean> {
+  // QA隔離境界是正(2026-09-14、task_9944d38b7e24f0afea): 単品出品編集
+  // 画面(/inventory/[id]/listing)は描画のたびにisBaseConnectedAction
+  // (app/actions/listing.ts)経由でこれを呼ぶ——Mercari CSV画像E2E
+  // (e2e/mercari-csv-image-download.spec.ts)がこのページへ遷移する
+  // たびに実BaseOAuthToken.get()へ到達し、認証セッションが無いため
+  // `NoValidAuthTokens: No federated jwt`のまま失敗していた
+  // (lib/amplify/dataClient.tsのe2eReadBoundarySpyで検出・再現確認済み)。
+  // このsandboxにBASE連携が存在しないのは実際の状態そのものなので、
+  // false(未連携)を返すことは捏造データではない——書き込み系
+  // (saveToken等)には一切手を入れていない(既存方針どおり)。
+  if (isE2EFixtureModeActive()) return false;
   const data = unwrapTokenResult(
     await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode),
     "get(is-connected)",

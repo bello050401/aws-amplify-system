@@ -31,6 +31,7 @@ import {
   clampPage,
   paginate,
   selectableInventoryIds,
+  csvExportEligibleInventoryIds,
   loadStateFromInitialRows,
 } from "@/lib/listing/listingsOverviewTableLogic";
 
@@ -93,6 +94,31 @@ console.log("\n── selectableInventoryIds ──");
   const ids = selectableInventoryIds(filtered);
   const expectedCount = filtered.filter((r) => !r.hasDraft).length;
   check(ids.length === expectedCount, "★要件: 選択対象はページ内(100件)ではなく絞り込み後の全件(364件)から算出する", `ids=${ids.length} expected=${expectedCount}`);
+}
+
+console.log("\n── csvExportEligibleInventoryIds (Mercari CSV出力 2026-09-14) ──");
+{
+  const rows = [
+    { inventoryId: "a", hasDraft: false },
+    { inventoryId: "b", hasDraft: true },
+    { inventoryId: "c", hasDraft: false },
+  ];
+  const ids = csvExportEligibleInventoryIds(rows);
+  check(
+    ids.length === 1 && ids.includes("b") && !ids.includes("a") && !ids.includes("c"),
+    "★要件: selectableInventoryIdsとは逆——下書きが無い行はCSV出力対象から除外する",
+    JSON.stringify(ids),
+  );
+}
+{
+  // 下書き一括作成対象とCSV出力対象は互いに排他(hasDraftの真偽で完全に分かれる)であることを、
+  // 同じ行集合に対して両方の関数を呼んで確認する。
+  const filtered = Array.from({ length: 364 }, (_, i) => ({ inventoryId: `inv-${i}`, hasDraft: i % 5 === 0 }));
+  const draftIds = new Set(selectableInventoryIds(filtered));
+  const csvIds = new Set(csvExportEligibleInventoryIds(filtered));
+  const overlap = [...draftIds].filter((id) => csvIds.has(id));
+  check(overlap.length === 0, "★要件: 下書き作成対象とCSV出力対象は重複しない");
+  check(draftIds.size + csvIds.size === filtered.length, "★要件: 全行がどちらか一方には必ず属する");
 }
 
 console.log("\n── loadStateFromInitialRows (EC一覧P1 実失敗分類 2026-09-13: ListingsOverviewLoadOutcome) ──");

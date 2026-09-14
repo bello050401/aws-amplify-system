@@ -82,13 +82,61 @@ export interface ListingDraftRecord {
   updatedAt: string;
 }
 
+/**
+ * Mercari Shops CSV(lib/listing/mercari/csv/)向けのカテゴリー/ブランド
+ * 対応付け。ChannelListing.categoryMappingはDB上ただのJSON文字列
+ * (stringifyListingJson)なのでスキーマ変更なしに任意フィールドを足せる
+ * ——ブランドは指示書§4で「任意」のため、mercariBrandId系は無くても
+ * (旧データ・未選択)動く。マスタ側の実体は
+ * lib/listing/mercari/csv/masters.tsのCategoryMasterEntry/BrandMasterEntry。
+ */
+export interface MercariCategoryMapping {
+  mercariCategoryId: string;
+  /** 表示用(選択時のフルパス)。CSVには出さない。 */
+  mercariCategoryName?: string;
+  mercariBrandId?: string;
+  /** 表示用(選択時のブランド名)。CSVには出さない。 */
+  mercariBrandName?: string;
+  /**
+   * 発送までの日数(1=1〜2/2=2〜3/3=4〜7/4=90日以内/5=8〜14)。
+   * 指示書§4「確認済み設定がなければ利用者選択必須」——BELLO側に
+   * 商品ごとの確認済み既定値が無いため、ここで人が選んだ値をそのまま
+   * 保持する。未選択のままCSV出力すると`buildExportRowForInventory`が
+   * ブロックする(黙って既定値を出さない)。
+   */
+  mercariShippingDays?: 1 | 2 | 3 | 4 | 5;
+  /**
+   * 配送料の負担(1=送料込/2=送料別)。指示書§4「既存確認済値を採用し
+   * 不明は選択」——BELLOには送料負担者を表す既存の確認済み運用値が
+   * 無い(624307eでShippingPayerCode自体を削除した経緯を参照)ため、
+   * shippingDaysと同じく人が商品ごとに選んだ値のみを使い、未選択の
+   * まま黙って送料込へ固定しない。
+   */
+  mercariShippingPayer?: 1 | 2;
+  /**
+   * 送料ID(task_ca862bd2a1f6fbf60d、2026-09-15追加)。配送料の負担が
+   * 「送料別」(2)の場合、validateMercariCsvRow(lib/listing/mercari/csv/
+   * validate.ts)がCSV生成時に必須とする値。送料IDにはMercari提供の
+   * マスタが存在しない(data/mercari-masters/には含まれない)ため、
+   * Mercari Shops管理画面の「送料設定」で出品者が作成したIDを人が
+   * MercariCategoryMappingSection.tsxの自由入力欄からそのまま転記する
+   * ——BELLO側では送料額自体を算出・変更しない。途中(未入力)保存を
+   * 許可するため任意フィールドとし、必須チェックはCSV生成時
+   * (validateMercariCsvRow)側の責務のままにする。送料込(1)へ切り替えて
+   * もこの値自体は消さない(lib/listing/mercari/csv/assembleRow.tsが
+   * shippingPayerに応じて出力有無を切り替えるため、値を保持していても
+   * 送料込のCSVへ漏れ出さない)。
+   */
+  mercariShippingFeeId?: string;
+}
+
 /** ChannelListing(Channel Listing + Channel Override + External Listing Status)のUI/Server Action向け公開シェイプ。 */
 export interface ChannelListingRecord {
   id: string;
   listingDraftId: string;
   inventoryId: string;
   channel: ListingChannel;
-  categoryMapping: { mercariCategoryId: string; mercariCategoryName?: string } | null;
+  categoryMapping: MercariCategoryMapping | null;
   overrideTitle: string | null;
   overrideDescription: string | null;
   overridePrice: number | null;

@@ -18,6 +18,10 @@ import {
 import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
 import { isBaseConnected } from "@/lib/base/oauth";
 import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/types";
+import { buildExportRowForInventory, getInventoryImageDownloadUrl, listCsvImageDownloadTargets } from "@/lib/listing/mercari/csv/buildExportRows";
+import { buildMercariCsvExport, MAX_EXPORT_ROWS } from "@/lib/listing/mercari/csv/exportCsv";
+import { resolveInventoryImageZipPlan, MAX_ZIP_IMAGES, MAX_ZIP_PRODUCTS } from "@/lib/listing/mercari/csv/imageBundle";
+import { searchBrands, searchCategories, type BrandMasterEntry, type CategoryMasterEntry } from "@/lib/listing/mercari/csv/masters";
 
 /**
  * BELLO統合改修 master指示書 Phase D — EC出品機能のServer Action層。
@@ -128,5 +132,174 @@ export async function bulkCreateListingDraftsAction(
 }
 
 // Mercari Shops API出品機能の撤去(2026-09-14、P1)。旧`listMercariCategoriesAction`
-// (Mercariのカテゴリー一覧をAPIから取得するServer Action)はここにあった。
-// 呼び出し元(ListingForm.tsxのカテゴリー選択UI)も削除済み。
+// (Mercariのカテゴリー一覧をAPIから取得するServer Action、Mercari APIから
+// 動的に取得していたもの)はここにあった。呼び出し元(ListingForm.tsxの
+// カテゴリー選択UI)も削除済み。
+//
+// 下記2つ(searchMercariCategoriesAction/searchMercariBrandsAction)は
+// それとは別物 — CSV出力機能(2026-09-14、P2)向けに、提供された
+// マスタCSV(data/mercari-masters/、外部APIへは一切到達しない)を検索
+// するだけの読み取り専用Server Action。全件を返さず結果上限つき
+// (lib/listing/mercari/csv/masters.ts参照)。閲覧権限モデルは
+// getChannelListingActionと同じ(書き込みではないためrequireEditPermission
+// を課さない)。
+
+export async function searchMercariCategoriesAction(query: string): Promise<CategoryMasterEntry[]> {
+  return searchCategories(query);
+}
+
+export async function searchMercariBrandsAction(query: string): Promise<BrandMasterEntry[]> {
+  return searchBrands(query);
+}
+
+export interface MercariCsvExportActionResult {
+  ok: boolean;
+  requestedCount: number;
+  outputCount: number;
+  headerSource: "official-file" | "fallback-reconstruction";
+  headerVerified: boolean;
+  blockedRows: { inventoryId: string; displayId: string; reasons: string[] }[];
+  encodingErrors?: string[];
+  csvBase64?: string;
+  filename?: string;
+}
+
+/**
+ * EC準備一覧からの「CSVを作成」入口(Mercari Shops公式取込CSV、API連携
+ * 撤去に伴う手動運用向け)。読み取りのみ(Inventory/ListingDraft/
+ * ChannelListingへは一切書き込まない)なので、閲覧権限モデル
+ * (listListingsOverviewActionと同じ、requireEditPermissionは課さない)
+ * を使う。1行でも重大エラーがあれば全体を止め、部分成功のCSVは返さない
+ * (`lib/listing/mercari/csv/exportCsv.ts`参照)。
+ */
+export async function exportMercariShopsCsvAction(inventoryIds: string[]): Promise<MercariCsvExportActionResult> {
+  if (inventoryIds.length === 0) {
+    return {
+      ok: false,
+      requestedCount: 0,
+      outputCount: 0,
+      headerSource: "fallback-reconstruction",
+      headerVerified: false,
+      blockedRows: [],
+      encodingErrors: ["対象商品が0件です。1件以上選択してください"],
+    };
+  }
+  if (inventoryIds.length > MAX_EXPORT_ROWS) {
+    return {
+      ok: false,
+      requestedCount: inventoryIds.length,
+      outputCount: 0,
+      headerSource: "fallback-reconstruction",
+      headerVerified: false,
+      blockedRows: [],
+      encodingErrors: [`一度に生成できるのは最大${MAX_EXPORT_ROWS}商品です(選択${inventoryIds.length}件)`],
+    };
+  }
+
+  const results = await Promise.all(inventoryIds.map((id) => buildExportRowForInventory(id)));
+  const blocked = results.filter((r) => !r.ok) as Extract<(typeof results)[number], { ok: false }>[];
+  if (blocked.length > 0) {
+    return {
+      ok: false,
+      requestedCount: inventoryIds.length,
+      outputCount: 0,
+      headerSource: "fallback-reconstruction",
+      headerVerified: false,
+      blockedRows: blocked.map((b) => ({ inventoryId: b.inventoryId, displayId: b.displayId, reasons: b.reasons })),
+    };
+  }
+
+  const rows = (results as Extract<(typeof results)[number], { ok: true }>[]).map((r) => r.fields);
+  const exportResult = buildMercariCsvExport(rows);
+  return {
+    ok: exportResult.ok,
+    requestedCount: exportResult.requestedCount,
+    outputCount: exportResult.outputCount,
+    headerSource: exportResult.headerSource,
+    headerVerified: exportResult.headerVerified,
+    blockedRows: exportResult.blockedRows,
+    encodingErrors: exportResult.encodingErrors,
+    csvBase64: exportResult.csv ? exportResult.csv.buffer.toString("base64") : undefined,
+    filename: exportResult.csv?.filename,
+  };
+}
+
+export interface MercariCsvImageDownloadLink {
+  filename: string;
+  /** Amplify Storageの短期署名URL(既定1時間)。恒久URLではない。 */
+  url: string;
+}
+
+/**
+ * 画像受渡し導線(指示書§4)の「次点」——既存BASE画像URLとの確定紐付け
+ * フィールドがInventoryに無いため自動採用せず(次工程へ送る旨は
+ * lib/listing/mercari/csv/buildExportRows.tsのlistCsvImageDownloadTargets
+ * コメント参照)、自社S3の署名URLのみを人が手元へ落とすための入口。
+ * 閲覧のみ(書き込みなし)なので他の閲覧系Actionと同じくrequireEditPermissionは課さない。
+ */
+export async function getMercariCsvImageDownloadLinksAction(
+  inventoryId: string,
+): Promise<{ ok: true; displayId: string; links: MercariCsvImageDownloadLink[] } | { ok: false; reason: string }> {
+  const targets = await listCsvImageDownloadTargets(inventoryId);
+  if (!targets.ok) return targets;
+  const links = await Promise.all(
+    targets.images.map(async (img) => ({
+      filename: img.filename,
+      // CSVの商品画像名列と同じファイル名でContent-Dispositionを強制する
+      // (buildExportRows.tsのgetInventoryImageDownloadUrlコメント参照)。
+      url: await getInventoryImageDownloadUrl(img.storageKey, img.filename),
+    })),
+  );
+  return { ok: true, displayId: targets.displayId, links };
+}
+
+export interface MercariCsvImageZipPlanItem {
+  inventoryId: string;
+  displayId: string;
+  filename: string;
+  /** Amplify Storageの短期署名URL(既定1時間)。恒久URLではない。 */
+  url: string;
+}
+
+export interface MercariCsvImageZipPlanActionResult {
+  ok: boolean;
+  reason?: string;
+  failures?: { inventoryId: string; displayId: string; reason: string }[];
+  filename?: string;
+  plan?: MercariCsvImageZipPlanItem[];
+}
+
+/**
+ * 画像まとめダウンロード(ZIP)の「計画」を返す(task_f712cf24a9fe2308cd、
+ * 2026-09-14是正——旧`getMercariCsvImageZipAction`はここで画像バイトを
+ * 読み切ってbase64化しServer Actionの戻り値として返していたが、実写真
+ * 運用でAmplify Hosting Web Computeの応答上限5.72MBを超え504(コンテンツ
+ * 無し)になる設計だったため撤去した。根拠・詳細設計は
+ * lib/listing/mercari/csv/imageBundle.tsのコメント参照)。
+ *
+ * この関数はCSVと同じ`imageFilename()`(lib/listing/mercari/csv/
+ * assembleRow.ts)で決まるファイル名をURLに対応付けて返すだけ——実際の
+ * 画像バイト取得とZIP組み立ては呼び出し元のブラウザ側
+ * (lib/listing/mercari/csv/browserImageZip.ts)が行う(S3から直接、この
+ * サーバーを経由しない)。1件でも対象解決(下書き未作成・画像0枚等)に
+ * 失敗したら全体を止める方針は維持する——画像バイト自体の取得失敗
+ * (期限切れ・通信断等)はbrowserImageZip.ts側が同じ「部分成功を返さない」
+ * 方針を引き継ぐ。読み取りのみ(書き込みなし)なので他の閲覧系Actionと
+ * 同じくrequireEditPermissionは課さない——対象storageKeyは常にサーバー
+ * 側でinventoryId→下書きから解決したものだけを使う(クライアントからの
+ * 任意キー入力は受け付けない)。
+ */
+export async function getMercariCsvImageZipPlanAction(inventoryIds: string[]): Promise<MercariCsvImageZipPlanActionResult> {
+  if (inventoryIds.length > MAX_ZIP_PRODUCTS) {
+    return { ok: false, reason: `画像まとめダウンロードは一度に最大${MAX_ZIP_PRODUCTS}商品までです(選択${inventoryIds.length}件、上限${MAX_ZIP_IMAGES}枚)` };
+  }
+  const result = await resolveInventoryImageZipPlan(inventoryIds);
+  if (!result.ok) {
+    return { ok: false, reason: result.reason, failures: result.failures };
+  }
+  return {
+    ok: true,
+    filename: result.filename,
+    plan: result.plan,
+  };
+}

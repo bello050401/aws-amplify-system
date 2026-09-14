@@ -121,6 +121,53 @@ export const E2E_INVENTORY_ROWS: InventoryListRow[] = [
   // (lib/listing/e2eFixtures.ts参照)——他のe2e-inv-*行は今まで通り
   // 「下書き無し」のまま(既存specへの影響ゼロ)。
   makeRow(30),
+  // Mercari CSV画像受渡しE2E(2026-09-14レビュー修正)専用: EC一覧
+  // (/inventory/listings)のCSVモード「すべて選択」で実際にチェック
+  // ボックスへ乗る対象は、lib/listing/e2eFixtures.tsのE2E_LISTINGS_
+  // OVERVIEW_ROWSが持つ"e2e-listing-N"というidであり、"e2e-inv-N"とは
+  // 別の名前空間 — getInventoryDetail/getListingDraftForInventory/
+  // getChannelListingはどれも一覧が渡すinventoryIdをそのまま受け取る
+  // ため、この一覧専用idにも実在するInventory行が要る(無いとフォール
+  // バック(E2E_INVENTORY_ROWS[0])に丸められ、全商品が同じdisplayId
+  // "B000001"を共有してしまい、画像ファイル名(imageFilename()、
+  // displayId起点)が商品間で衝突する——20商品分のZIPを実ブラウザで
+  // 検証する上で致命的)。DRAFT_COUNTバケット(index 20-39、20件)+
+  // 商品数上限超過検証用に1件(index 40)、displayIdだけ一覧側と揃えて
+  // 別途起こす。
+  ...Array.from({ length: 21 }, (_, i) => {
+    const n = 20 + i;
+    return makeRow(n, { id: `e2e-listing-${n}`, displayId: `LST-${String(n).padStart(4, "0")}`, sku: `LST-${String(n).padStart(4, "0")}` });
+  }),
+  // Mercari CSV画像受渡しE2E専用(単品ページ /inventory/e2e-inv-4X/listing):
+  //   41 = 1枚画像の正常系(CSV生成+ZIP保存の通し合成E2E)
+  //   42 = 101枚(MAX_ZIP_IMAGES=100超過、lib/listing/mercari/csv/imageBundle.ts)
+  //   43 = 画像取得が期限切れ相当(403)で失敗する
+  //   44 = 画像取得が権限なし相当(403)で失敗する
+  //   45 = 画像取得が対象なし相当(404)で失敗する
+  // storageKey側のシナリオ定義はlib/listing/e2eFixtures.tsのgetListingDraftForInventory分岐参照。
+  makeRow(41),
+  makeRow(42),
+  makeRow(43),
+  makeRow(44),
+  makeRow(45),
+  // 46 = MAX_ZIP_IMAGES(=100)ちょうど(境界値・accept側)。42(101枚、
+  // reject側)と対で境界の両側を実ブラウザ経由で確認する。
+  makeRow(46),
+  // 47 = task_f712cf24a9fe2308cd(2026-09-14是正): 1枚あたりの上限
+  // (MAX_ZIP_FILE_BYTES=15MB、lib/listing/mercari/csv/imageTransferLimits.ts)
+  // を超える画像(16MB)——ブラウザが実際にストリーム受信中に打ち切る
+  // ことを実ブラウザ・実ダウンロードイベントで検証する(42/101枚とは
+  // 別の軸:こちらは「枚数」ではなく「1枚のバイト数」の上限)。
+  makeRow(47),
+  // Mercari CSV編集補完(saveChannelOverrideAction)通し合成E2E
+  // (task_48c715588f96367bc9、2026-09-15)専用。詳細はlib/listing/
+  // e2eFixtures.tsのE2E_MERCARI_CSV_EDIT_ID等のコメント参照。
+  //   48 = カテゴリー/発送日数/配送料負担が未確定から実UIで埋める正常系。
+  //   49 = 保存が常に失敗する(入力保持の検証専用)。
+  //   50 = カテゴリー/発送設定は確定済みだが下書き価格が不正(価格不正拒否の検証専用)。
+  makeRow(48),
+  makeRow(49),
+  makeRow(50),
 ];
 
 export function e2eListPage(offset: number, limit: number): SearchPage<InventoryListRow> {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { fetchAuthSession } from "aws-amplify/auth/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
+import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 
 /**
  * /inventory配下専用のセッション更新境界(task_4e04c971153ee1eb39の候補を
@@ -102,6 +103,28 @@ import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
  */
 export async function middleware(request: NextRequest) {
   const response = NextResponse.next();
+  // 2026-09-14 P1修正: 非本番二重ゲート(isE2EFixtureModeActive——
+  // NODE_ENV!=='production' かつ INVENTORY_E2E_FIXTURES==='1')が
+  // 立っている間は、下のfetchAuthSessionを呼ばずそのまま素通しする。
+  //
+  // 【なぜCookie単位のresolveE2EBypassRoleではなくprocess全体のゲートか】
+  // 最初はresolveE2EBypassRole(署名済みCookie一致が必須)で個別
+  // リクエストだけ止めようとしたが、それでも到達が残った——
+  // PlaywrightのwebServer readiness probe(/inventory/loginへの素の
+  // GET)やテストの最初のnavigation(まだpage.context().addCookies()を
+  // 呼ぶ前)にはそもそもCookieが乗らないため、そこだけresolveE2E
+  // BypassRoleがnullを返し素通り(=下のfetchAuthSessionへ落ちる)して
+  // いた(実測、net.Socket.prototype.connect/tls.connect計装で
+  // cognito-identity.<region>.amazonaws.comへの接続試行として確認)。
+  // playwright.config.tsのwebServer.envはプロセス全体にINVENTORY_E2E_
+  // FIXTURES=1を立てる——このプロセス内で実Cognitoセッションが有効に
+  // なることはそもそも無いので、Cookieの有無に関わらずリフレッシュ
+  // 自体が意味を持たない。本番(NODE_ENV==='production')では
+  // isE2EFixtureModeActiveが常にfalseを返すため、この分岐は構造的に
+  // 通らず、下の実リフレッシュ経路は無変更。
+  if (isE2EFixtureModeActive()) {
+    return response;
+  }
   try {
     await runWithAmplifyServerContext({
       nextServerContext: { request, response },

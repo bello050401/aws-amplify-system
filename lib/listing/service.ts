@@ -7,7 +7,16 @@ import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { createBaseProduct } from "./base/adapter";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
-import { e2eListingsOverviewFetch, E2E_MANUAL_ONLY_INVENTORY_ID, e2eManualOnlyChannelListing, e2eManualOnlyListingDraft } from "./e2eFixtures";
+import {
+  e2eListingsOverviewFetch,
+  E2E_MANUAL_ONLY_INVENTORY_ID,
+  e2eManualOnlyChannelListing,
+  e2eManualOnlyListingDraft,
+  e2eMercariCsvListingDraft,
+  e2eMercariCsvChannelListingFor,
+  e2eChannelOverrideFor,
+  e2eSaveChannelOverride,
+} from "./e2eFixtures";
 import { unwrapList, unwrapWriteRequired } from "@/lib/amplify/listAll";
 import { attachStageTimings, currentQueryTimings, getStageTimings, groupTimingsByOp, isQueryTimingEnabled, measureStage, withQueryTiming } from "@/lib/perf/queryTiming";
 import {
@@ -37,6 +46,7 @@ import type {
   ListingDraftRecord,
   ListingImageRef,
   ListingShippingMethod,
+  MercariCategoryMapping,
 } from "./types";
 import { DEFAULT_LISTING_SHIPPING_METHOD, parseListingShippingMethod } from "./types";
 
@@ -233,6 +243,10 @@ export async function getListingDraftForInventory(inventoryId: string): Promise<
   // だけは合成の下書きを返す。他のidは従来通りnull(既存specは無変更)。
   if (isE2EFixtureModeActive()) {
     if (inventoryId === E2E_MANUAL_ONLY_INVENTORY_ID) return e2eManualOnlyListingDraft();
+    // Mercari CSV画像受渡しE2E(2026-09-14レビュー修正、lib/listing/
+    // e2eFixtures.ts参照)——該当しないidはnullのまま(上と同じ関数内)。
+    const mercariCsvDraft = e2eMercariCsvListingDraft(inventoryId);
+    if (mercariCsvDraft) return mercariCsvDraft;
     return null;
   }
   // 取得に失敗して0件が返ると「下書きは無い」と表示され、そこから
@@ -260,8 +274,18 @@ export async function getChannelListing(inventoryId: string, channel: ListingCha
     // 無いと描画されない({channelListing && (...)}) —— getListingDraft
     // ForInventoryと同じ専用id・同じ理由で合成のChannelListing(MERCARI_
     // SHOPS)を返す。他のid/チャネルは従来通りnull。
-    if (inventoryId === E2E_MANUAL_ONLY_INVENTORY_ID && channel === "MERCARI_SHOPS") return e2eManualOnlyChannelListing();
-    return null; // 第六ラウンドP0-1、getListingDraftForInventoryと同じ安全ゲート
+    // task_48c715588f96367bc9(2026-09-15): CSV編集補完(saveChannelOverride)
+    // の合成保存状態が既にあれば、静的fixtureより優先して返す
+    // (e2eChannelOverrideFor——保存されたことが一度も無いidでは常に
+    // fallbackがそのまま返るため、既存の分岐の挙動は変えていない)。
+    if (inventoryId === E2E_MANUAL_ONLY_INVENTORY_ID && channel === "MERCARI_SHOPS") {
+      return e2eChannelOverrideFor(inventoryId, channel, e2eManualOnlyChannelListing());
+    }
+    // Mercari CSV画像受渡しE2E(2026-09-14レビュー修正)——該当しないidはnull。
+    if (channel === "MERCARI_SHOPS") {
+      return e2eChannelOverrideFor(inventoryId, channel, e2eMercariCsvChannelListingFor(inventoryId));
+    }
+    return e2eChannelOverrideFor(inventoryId, channel, null); // 第六ラウンドP0-1、getListingDraftForInventoryと同じ安全ゲート
   }
   const data = unwrapList(
     await serverDataClient.models.ChannelListing.listChannelListingByInventoryId({ inventoryId }, { ...inventoryAuthMode }),
@@ -861,10 +885,71 @@ export async function saveListingDraft(
 }
 
 export interface ChannelOverrideInput {
-  categoryMapping: { mercariCategoryId: string; mercariCategoryName?: string } | null;
+  categoryMapping: MercariCategoryMapping | null;
   overrideTitle: string | null;
   overrideDescription: string | null;
   overridePrice: number | null;
+}
+
+/**
+ * CSV候補e0fe20760b7a3c2b926f03b58b0c94108b6680fb 不足項目編集→保存→CSV
+ * 再生成 未検証の是正(task_48c715588f96367bc9、2026-09-15)で追加。
+ * task_e8b97d6b40aad90fff(2026-09-15)で以下2点を是正:
+ *
+ * 1. 「mercariCategoryIdが空なら保存自体を拒否する」チェックを撤去した。
+ *    CSV不足項目(カテゴリー/発送日数/配送料負担)は段階的に埋まる運用
+ *    ——先に発送日数だけ確定し、カテゴリーは後で選ぶ——を想定しており、
+ *    ここ(下書き途中保存)でカテゴリー確定を強制する根拠が無い。
+ *    「CSV化にはカテゴリー確定が必須」という制約自体は既に
+ *    lib/listing/mercari/csv/validate.ts(buildMercariCsvExport経由)が
+ *    CSV生成の最終段で課しており、そちらと責務が重複していた
+ *    (＝下書き保存の検証とCSV最終出力の検証を分離する)。
+ * 2. mercariShippingDays/mercariShippingPayerの範囲チェックはchannel
+ *    ==="MERCARI_SHOPS"のときだけ行う。categoryMapping自体がMercari
+ *    Shops固有のフィールド(mercari*という名前が示す通り)であり、BASE
+ *    (app/actions/listing.tsのsaveBaseChannelOverrideAction経由)は
+ *    常にcategoryMapping:nullを送るため現状は実害が無いが、旧実装は
+ *    channelを一切見ておらず、将来BASE側が何らかのmapping相当を持つ
+ *    ようになった場合にMercari専用制約を誤って適用してしまう作りだった。
+ * 3. mercariShippingFeeId(task_ca862bd2a1f6fbf60d、2026-09-15追加)は
+ *    型(文字列)だけをここで確認する——「配送料の負担が送料別なら必須」
+ *    という値の組み合わせチェックはCSV生成時(validateMercariCsvRow、
+ *    lib/listing/mercari/csv/validate.ts)側の責務のままにする(ここで
+ *    強制すると、指示書§4「途中空欄保存許可」——先に送料別だけ選び、
+ *    Mercari管理画面で送料設定を作った後にIDを追記する段階的保存——が
+ *    できなくなる)。空文字列はMercariCategoryMappingSection.tsx側が
+ *    undefinedへ変換して送るため、ここに空文字列が来ること自体を
+ *    不正値として拒否する(黙って許容しない)。
+ *
+ * MercariCategoryMappingSection.tsxのUIは`<select>`の選択肢で
+ * mercariShippingDays(1〜5)/mercariShippingPayer(1〜2)を制限している
+ * が、これはあくまでクライアント側の入力補助——Server Action
+ * (saveChannelOverrideAction)は誰でも任意の値で直接叩けるため、
+ * このUIの制約に依存せずサーバー側でも同じ範囲を確認する(§12
+ * 「これは単なるfrontend filterではない」と同じ考え方)。overridePriceは
+ * 未入力(null)を許容しつつ、値がある場合は正の整数のみ受け付ける
+ * ——CSV出力時の下限(300円、lib/listing/mercari/csv/validate.ts)は
+ * ここでは課さない(そちらはMercari CSV固有の制約であり、保存時点では
+ * まだCSV化する前提とは限らないため)。overridePrice自体はchannel共通
+ * (MERCARI_SHOPS/BASEどちらでも「価格は正の整数」という制約自体は
+ * 変わらない)なのでchannelで出し分けない。
+ */
+function assertValidChannelOverrideInput(channel: ListingChannel, input: ChannelOverrideInput): void {
+  const mapping = input.categoryMapping;
+  if (mapping && channel === "MERCARI_SHOPS") {
+    if (mapping.mercariShippingDays !== undefined && ![1, 2, 3, 4, 5].includes(mapping.mercariShippingDays)) {
+      throw new Error("発送までの日数の値が不正です。");
+    }
+    if (mapping.mercariShippingPayer !== undefined && ![1, 2].includes(mapping.mercariShippingPayer)) {
+      throw new Error("配送料の負担の値が不正です。");
+    }
+    if (mapping.mercariShippingFeeId !== undefined && (typeof mapping.mercariShippingFeeId !== "string" || mapping.mercariShippingFeeId.trim() === "")) {
+      throw new Error("送料IDの値が不正です。");
+    }
+  }
+  if (input.overridePrice != null && (!Number.isInteger(input.overridePrice) || input.overridePrice <= 0)) {
+    throw new Error("価格は正の整数で入力してください。");
+  }
 }
 
 /** 指定チャネルのChannelListingを作成(無ければ)または上書き(あれば)する。重複防止: inventoryId+channelで事前に存在確認してから作成する(DynamoDBに複合ユニーク制約が無いための、このアプリ全体で一貫した対処方法)。 */
@@ -887,7 +972,22 @@ export async function saveChannelOverride(
   const categoryName = categoryNameOf(inventory.categoryId);
   if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
+  assertValidChannelOverrideInput(channel, input);
+
   const existing = await getChannelListing(inventoryId, channel);
+
+  // task_48c715588f96367bc9(2026-09-15): saveChannelOverrideActionの
+  // 非本番合成境界。上のドラフト要否判定・カテゴリー対象外判定・入力値
+  // 検証は本番と全く同じコードを通った"後"にここへ来る(検証ロジック
+  // 自体の二重実装ではない)——E2E fixtureモードでは実DynamoDBへ到達
+  // せず、プロセス内の合成保存状態へ書く(lib/listing/e2eFixtures.ts
+  // のe2eSaveChannelOverride参照)。これによりCSV編集補完UI(カテゴリー
+  // /発送日数/配送料負担)の保存→再読込→CSV再生成までを、実UI・実
+  // Server Action・実認可/検証を通して実ブラウザで確認できる。
+  if (isE2EFixtureModeActive()) {
+    return e2eSaveChannelOverride(inventoryId, channel, input, who, existing);
+  }
+
   const fields = {
     categoryMapping: stringifyListingJson(input.categoryMapping),
     overrideTitle: input.overrideTitle?.trim() || undefined,
