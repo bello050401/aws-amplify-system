@@ -96,6 +96,24 @@ async function main() {
   );
   assertTrue(afterCategory.categoryMapping?.mercariCategoryId === KNOWN_CATEGORY_ID, "カテゴリー保存直後の戻り値に選択したcategoryIdが載る");
 
+  // ── 2.5 task_d2082e63dfcee9e1bf「無操作CSV」の検証本題: カテゴリーだけ
+  //        確定させ、発送日数/配送料の負担はどちらも一度も保存していない
+  //        (=MercariCategoryMappingSectionの該当保存ボタンを一度も押して
+  //        いない)状態でも、CSV行の組み立てが既定値(3=4〜7日/1=送料込み)
+  //        で成功する——実CUAが報告した「初期値は見えるがCSV生成では
+  //        未確定扱いされる」という表示とCSVの食い違いが無いことを、
+  //        実際にbuildExportRowForInventoryが呼ぶservice.ts経由で確認する ──
+  e2eReadBoundaryLeaks.length = 0;
+  const noUserActionRow = await buildExportRowForInventory(EDIT_ID);
+  assertTrue(noUserActionRow.ok === true, "発送日数/配送料負担を一度も保存していない(無操作)状態でもCSV行の組み立てが成功する");
+  if (noUserActionRow.ok) {
+    assertTrue(noUserActionRow.fields.shippingDays === 3, "無操作時のCSV行shippingDaysは既定値3(4〜7日)");
+    assertTrue(noUserActionRow.fields.shippingPayer === 1, "無操作時のCSV行shippingPayerは既定値1(送料込み)");
+    const noUserActionExport = buildMercariCsvExport([noUserActionRow.fields]);
+    assertTrue(noUserActionExport.ok === true, "無操作のままでもCSV生成(バイト列組み立て)まで成功する");
+  }
+  assertTrue(e2eReadBoundaryLeaks.length === 0, `無操作CSV確認までSDK到達ゼロ(検出内訳: ${JSON.stringify(e2eReadBoundaryLeaks.map((l) => `${l.model}.${l.op}`))})`);
+
   // ── 3. 発送日数を保存(既存のブランド/カテゴリーは保持) ────────────
   const afterShippingDays = await saveChannelOverride(
     EDIT_ID,

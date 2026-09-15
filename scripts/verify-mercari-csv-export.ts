@@ -410,12 +410,11 @@ function testFurnitureCategoryTree() {
 }
 
 // --- 16. buildExportRowForInventoryが実際に組み立てる論理(assembleRow.ts):
-// レビュー指摘(2026-09-14)「発送までの日数を意図的な不正値のまま渡している」
-// の修正確認。ChannelListing.categoryMapping.mercariShippingDaysが
-// MercariCategoryMappingSectionの保存導線経由で入る想定の合成データで、
-// (1)未選択ならブロックする、(2)選択済みならCSV生成が最後まで成功する
-// ことを検証する(実DB/実ブラウザなしの合成fixture、ただし実際に
-// buildExportRowForInventoryが呼ぶのと同じ関数)。
+// task_d2082e63dfcee9e1bf是正確認。ChannelListing.categoryMapping.
+// mercariShippingDaysが未設定でも既定値(DEFAULT_MERCARI_SHIPPING_DAYS)が
+// 適用されCSV生成が最後まで成功すること、(2)選択済みならその実値が
+// そのまま渡ることを検証する(実DB/実ブラウザなしの合成fixture、ただし
+// 実際にbuildExportRowForInventoryが呼ぶのと同じ関数)。
 function baseSyntheticInventory(overrides: Partial<CsvSourceInventory> = {}): CsvSourceInventory {
   return { displayId: "B900001", quantity: 1, sku: "B900001", barcode: "4901234567894", ...overrides };
 }
@@ -483,21 +482,20 @@ function baseSyntheticChannelListing(overrides: Partial<ChannelListingRecord> = 
 }
 
 function testAssembleRowShippingDaysWiring() {
-  // カテゴリー確定済み・発送日数「未選択」(旧実装が意図的な不正値0を
-  // 渡していた状態と同じ入口) -> ブロックされ、理由に「発送までの日数」
-  // という文言が含まれる(黙って既定値を出さない)。
+  // task_d2082e63dfcee9e1bf: カテゴリー確定済み・発送日数「未選択」でも、
+  // 既定値(DEFAULT_MERCARI_SHIPPING_DAYS=3、4〜7日)が自動適用され、
+  // ブロックされずに成功する(ユーザー明示の既定値。旧実装は未選択を
+  // 常にブロックしていたが、この既定値が撤去される退行が起きたため
+  // 復元した)。
   const withoutShippingDays = assembleMercariCsvRowFields(
     "inv-900001",
     baseSyntheticInventory(),
     baseSyntheticDraft(),
     baseSyntheticChannelListing(),
   );
-  assertTrue(!withoutShippingDays.ok, "shippingDays未選択はブロックされる(黙って既定値を出さない)");
-  if (!withoutShippingDays.ok) {
-    assertTrue(
-      withoutShippingDays.reasons.some((r) => r.includes("発送までの日数")),
-      "ブロック理由に「発送までの日数」が含まれる",
-    );
+  assertTrue(withoutShippingDays.ok, "shippingDays未選択でも既定値(4〜7日)が適用されブロックされない");
+  if (withoutShippingDays.ok) {
+    assertEqual(withoutShippingDays.fields.shippingDays, 3, "未選択時はDEFAULT_MERCARI_SHIPPING_DAYS(3)が渡る");
   }
 
   // MercariCategoryMappingSectionの「保存」ボタンでmercariShippingDaysが
@@ -522,15 +520,43 @@ function testAssembleRowShippingDaysWiring() {
     assertTrue(exported.ok, "カテゴリー確定→発送日数選択→配送料負担選択→CSV生成が最後まで成功する(1商品)");
     assertEqual(exported.outputCount, 1, "出力件数が選択件数と一致する");
   }
+
+  // task_d2082e63dfcee9e1bf「無操作CSV」の検証本題: カテゴリーだけ確定
+  // させ、発送までの日数/配送料の負担のどちらも一度も選択・保存して
+  // いない(=MercariCategoryMappingSectionの保存ボタンを一度も押して
+  // いない、実CUAが報告した状態そのもの)状態から、CSV生成まで通しで
+  // 成功し、かつ列の実値が既定値(3/1)になっていることを確認する
+  // ——「初期値は画面に見えるだけでCSV生成時は未確定扱い」という
+  // 表示とCSVの食い違いを防ぐ。
+  const noUserActionAtAll = assembleMercariCsvRowFields(
+    "inv-900001",
+    baseSyntheticInventory(),
+    baseSyntheticDraft(),
+    baseSyntheticChannelListing({
+      categoryMapping: {
+        mercariCategoryId: "iBDxa3BbcUz8XWrr5pgq2Z",
+        mercariCategoryName: "CD・DVD・ブルーレイ > CD > K-POP・アジア",
+      },
+    }),
+  );
+  assertTrue(noUserActionAtAll.ok, "発送日数/配送料負担のどちらも未選択(無操作)でもCSV行の組み立てが成功する");
+  if (noUserActionAtAll.ok) {
+    assertEqual(noUserActionAtAll.fields.shippingDays, 3, "無操作時のshippingDaysは既定値3(4〜7日)");
+    assertEqual(noUserActionAtAll.fields.shippingPayer, 1, "無操作時のshippingPayerは既定値1(送料込み)");
+    const exported = buildMercariCsvExport([noUserActionAtAll.fields]);
+    assertTrue(exported.ok, "無操作のままでもカテゴリー確定済みならCSV生成が最後まで成功する");
+    assertEqual(mapRowToCells(noUserActionAtAll.fields)[78], "3", "CSV79列目(配列index 78、発送までの日数)に既定値3が出る");
+    assertEqual(mapRowToCells(noUserActionAtAll.fields)[80], "1", "CSV81列目(配列index 80、配送料の負担)に既定値1が出る");
+  }
 }
 
 // --- 17. レビュー指摘(2026-09-14)「shippingPayer=1固定」「salePrice=
-// Math.trunc」の修正確認。BELLOには送料負担者の既存確認済み運用値が
-// 無い(lib/listing/types.ts参照)ため、shippingDaysと同じく未選択は
-// ブロックする。価格は丸めず、非整数はvalidate.ts側でブロックさせる。
+// Math.trunc」の修正確認、およびtask_d2082e63dfcee9e1bfによる既定値化の
+// 確認。価格は丸めず、非整数はvalidate.ts側でブロックさせる。
 function testAssembleRowShippingPayerAndPriceWiring() {
-  // カテゴリー・発送日数は確定済みだが配送料の負担が未選択 -> ブロック
-  // され、理由に「配送料の負担」が含まれる(黙って送料込へ固定しない)。
+  // カテゴリー・発送日数は確定済みだが配送料の負担が未選択 -> 既定値
+  // (DEFAULT_MERCARI_SHIPPING_PAYER=1、送料込み)が自動適用されブロック
+  // されない(ユーザー明示の既定値)。
   const withoutShippingPayer = assembleMercariCsvRowFields(
     "inv-900001",
     baseSyntheticInventory(),
@@ -543,12 +569,9 @@ function testAssembleRowShippingPayerAndPriceWiring() {
       },
     }),
   );
-  assertTrue(!withoutShippingPayer.ok, "shippingPayer未選択はブロックされる(送料込へ黙って固定しない)");
-  if (!withoutShippingPayer.ok) {
-    assertTrue(
-      withoutShippingPayer.reasons.some((r) => r.includes("配送料の負担")),
-      "ブロック理由に「配送料の負担」が含まれる",
-    );
+  assertTrue(withoutShippingPayer.ok, "shippingPayer未選択でも既定値(送料込み)が適用されブロックされない");
+  if (withoutShippingPayer.ok) {
+    assertEqual(withoutShippingPayer.fields.shippingPayer, 1, "未選択時はDEFAULT_MERCARI_SHIPPING_PAYER(1)が渡る");
   }
 
   // 配送料の負担=送料別(2)を選んだ場合、選んだ実値がそのまま渡る

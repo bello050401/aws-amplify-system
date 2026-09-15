@@ -131,8 +131,14 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("未確定（CSV出力がブロックされます）")).toBeVisible();
 
-    // カテゴリー選択(家具ピッカーの家具内検索経由、task_302c7e3c24b575629d是正)
+    await expect(sectionSummary(page, "発送までの日数")).toHaveCount(0);
+    await expect(page.getByText("未設定（既定値「4〜7日で発送」を適用してCSV出力）")).toBeVisible();
+    await expect(page.getByText("未設定（既定値「送料込（出品者負担）」を適用してCSV出力）")).toBeVisible();
+    await expect(sectionSelect(page, "発送までの日数")).toHaveValue("3");
+    await expect(sectionSelect(page, "配送料の負担")).toHaveValue("1");
+
     await selectFurnitureCategoryById(page);
+
     await expect(page.getByText("保存しました。")).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(`text=${FURNITURE_CATEGORY_ID}`)).toBeVisible();
 

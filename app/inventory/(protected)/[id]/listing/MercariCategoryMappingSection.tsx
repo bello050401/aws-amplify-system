@@ -9,6 +9,7 @@ import {
   type MercariCsvImageDownloadLink,
 } from "@/app/actions/listing";
 import { assembleZipFromPlan, downloadZipBlob } from "@/lib/listing/mercari/csv/browserImageZip";
+import { DEFAULT_MERCARI_SHIPPING_DAYS, DEFAULT_MERCARI_SHIPPING_PAYER } from "@/lib/listing/mercari/csv/assembleRow";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 import type { BrandMasterEntry } from "@/lib/listing/mercari/csv/masters";
 import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker";
@@ -90,19 +91,30 @@ export function MercariCategoryMappingSection({
 
   const mapping = channelListing?.categoryMapping ?? null;
 
-  const [shippingDaysDraft, setShippingDaysDraft] = useState<string>(mapping?.mercariShippingDays ? String(mapping.mercariShippingDays) : "");
+  // task_d2082e63dfcee9e1bf: 未設定(undefined)の間は表示上もCSV生成時と
+  // 同じ既定値(4〜7日/送料込み、lib/listing/mercari/csv/assembleRow.ts
+  // のDEFAULT_MERCARI_SHIPPING_*と共有)を選択済みとして見せる——「表示
+  // だけの初期値でCSVでは未確定エラー」のような食い違いを避ける。ただし
+  // 保存済みの実値がある場合は絶対にこれで上書きしない(下のuseEffectも
+  // 同様)。この初期化・同期処理自体はDBへ一切書き込まない(保存は
+  // saveShippingDays/saveShippingPayerを押した時だけ)。
+  const [shippingDaysDraft, setShippingDaysDraft] = useState<string>(
+    String(mapping?.mercariShippingDays ?? DEFAULT_MERCARI_SHIPPING_DAYS),
+  );
   // 保存後(onUpdated経由でchannelListingプロパティが差し替わった時)に
   // 選択中の値を最新の永続値へ同期する——他の入力(検索欄)と違い、
   // ここは「保存済みの値そのもの」を表示する欄なので追随させる。
   useEffect(() => {
-    setShippingDaysDraft(mapping?.mercariShippingDays ? String(mapping.mercariShippingDays) : "");
+    setShippingDaysDraft(String(mapping?.mercariShippingDays ?? DEFAULT_MERCARI_SHIPPING_DAYS));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapping?.mercariShippingDays]);
 
-  const [shippingPayerDraft, setShippingPayerDraft] = useState<string>(mapping?.mercariShippingPayer ? String(mapping.mercariShippingPayer) : "");
+  const [shippingPayerDraft, setShippingPayerDraft] = useState<string>(
+    String(mapping?.mercariShippingPayer ?? DEFAULT_MERCARI_SHIPPING_PAYER),
+  );
   // shippingDaysDraftと同じ理由で、保存済み値の変化に追随させる。
   useEffect(() => {
-    setShippingPayerDraft(mapping?.mercariShippingPayer ? String(mapping.mercariShippingPayer) : "");
+    setShippingPayerDraft(String(mapping?.mercariShippingPayer ?? DEFAULT_MERCARI_SHIPPING_PAYER));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapping?.mercariShippingPayer]);
 
@@ -252,11 +264,14 @@ export function MercariCategoryMappingSection({
   }
 
   /**
-   * 発送までの日数の保存。§4「確認済み設定がなければ利用者選択必須」——
-   * カテゴリーと違い公式マスタが無く選択肢は固定5値のみなので検索UIは
-   * 持たず、選んで保存するだけ。カテゴリー未確定のまま保存すると
-   * saveChannelOverrideAction自体は通ってしまう(categoryMappingは
-   * mercariCategoryId必須の型のため、実際には先にカテゴリーが要る)。
+   * 発送までの日数の保存。task_d2082e63dfcee9e1bf: 未設定の間はCSV生成時に
+   * 既定値(4〜7日、DEFAULT_MERCARI_SHIPPING_DAYS)が自動で適用されるため、
+   * この保存ボタンは「既定値と異なる日数で運用したい商品だけ」明示的に
+   * 選び直すためのもの——保存しなくてもCSV出力は既定値でブロックされずに
+   * 進む。カテゴリーと違い公式マスタが無く選択肢は固定5値のみなので検索
+   * UIは持たない。カテゴリー未確定のまま保存するとsaveChannelOverrideAction
+   * 自体は通ってしまう(categoryMappingはmercariCategoryId必須の型のため、
+   * 実際には先にカテゴリーが要る)。
    */
   function saveShippingDays() {
     if (!mapping?.mercariCategoryId) {
@@ -280,11 +295,10 @@ export function MercariCategoryMappingSection({
   }
 
   /**
-   * 配送料の負担の保存。§4「既存確認済値を採用し不明は選択」——BELLOには
-   * 「送料を誰が負担するか」を表す既存の確認済み運用値が無い
-   * (lib/listing/types.tsの624307eでのShippingPayerCode削除コメント
-   * 参照)ため、発送までの日数と同じく既定値を出さず、商品ごとに人が
-   * 選んで保存する。
+   * 配送料の負担の保存。task_d2082e63dfcee9e1bf: 未設定の間はCSV生成時に
+   * 既定値(送料込み、DEFAULT_MERCARI_SHIPPING_PAYER)が自動で適用される
+   * ため、この保存ボタンは「既定値と異なる負担で運用したい商品だけ」
+   * 明示的に選び直すためのもの。
    *
    * 送料別(2)へ切り替える際に送料IDを一緒に消したり要求したりはしない
    * ——送料IDは下の専用欄・専用の保存ボタンで別途保存する(途中空欄で
@@ -505,10 +519,14 @@ export function MercariCategoryMappingSection({
               {SHIPPING_DAYS_OPTIONS.find((o) => o.value === mapping.mercariShippingDays)?.label ?? mapping.mercariShippingDays}
             </span>
           ) : (
-            <span className="text-amber-700">未選択（CSV出力がブロックされます）</span>
+            <span className="text-gray-500">
+              未設定（既定値「{SHIPPING_DAYS_OPTIONS.find((o) => o.value === DEFAULT_MERCARI_SHIPPING_DAYS)?.label}」を適用してCSV出力）
+            </span>
           )}
         </p>
-        <p className="mt-0.5 text-[11px] text-gray-400">確認済みの既定値が無いため、商品ごとに選んで保存してください。</p>
+        <p className="mt-0.5 text-[11px] text-gray-400">
+          何も変更しなければ既定値のままCSVへ出力されます。異なる日数で運用したい商品だけ選び直して保存してください。
+        </p>
         <div className="mt-1 flex gap-2">
           <select
             value={shippingDaysDraft}
@@ -540,11 +558,13 @@ export function MercariCategoryMappingSection({
           {mapping?.mercariShippingPayer ? (
             <span className="font-bold text-gray-900">{mapping.mercariShippingPayer === 1 ? "送料込（出品者負担）" : "送料別（購入者負担）"}</span>
           ) : (
-            <span className="text-amber-700">未選択（CSV出力がブロックされます）</span>
+            <span className="text-gray-500">
+              未設定（既定値「{DEFAULT_MERCARI_SHIPPING_PAYER === 1 ? "送料込（出品者負担）" : "送料別（購入者負担）"}」を適用してCSV出力）
+            </span>
           )}
         </p>
         <p className="mt-0.5 text-[11px] text-gray-400">
-          BELLOには「送料を誰が負担するか」を表す既存の確認済み運用値が無いため、既定値を出さず商品ごとに選んで保存してください。
+          何も変更しなければ既定値のままCSVへ出力されます。送料別で運用したい商品だけ選び直して保存してください。
         </p>
         <div className="mt-1 flex gap-2">
           <select
