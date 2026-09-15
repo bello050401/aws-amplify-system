@@ -365,7 +365,12 @@ export function e2eMercariCsvListingDraft(inventoryId: string): ListingDraftReco
   if (E2E_MERCARI_ZIP_BULK_IDS.includes(inventoryId)) {
     return e2eMercariCsvDraft(inventoryId, [{ storageKey: "e2e-mercari-img:ok-1" }]);
   }
-  if (inventoryId === E2E_MERCARI_CSV_EDIT_ID || inventoryId === E2E_MERCARI_CSV_SAVE_FAIL_ID) {
+  if (
+    inventoryId === E2E_MERCARI_CSV_EDIT_ID ||
+    inventoryId === E2E_MERCARI_CSV_SAVE_FAIL_ID ||
+    inventoryId === E2E_MERCARI_FURNITURE_PICKER_ID ||
+    inventoryId === E2E_MERCARI_FURNITURE_SEARCH_ID
+  ) {
     return e2eMercariCsvDraft(inventoryId, [{ storageKey: "e2e-mercari-img:ok-1" }]);
   }
   // task_e8b97d6b40aad90fff(2026-09-15): E2E_MERCARI_CSV_EDIT_ID(単品ページ)
@@ -468,6 +473,20 @@ export const E2E_MERCARI_CSV_EDIT_ID = "e2e-inv-48";
 export const E2E_MERCARI_CSV_SAVE_FAIL_ID = "e2e-inv-49";
 /** カテゴリー/発送設定は確定済みだが下書き価格が300円未満(不正値)——CSV生成時の価格不正拒否の検証専用。 */
 export const E2E_MERCARI_CSV_INVALID_PRICE_ID = "e2e-inv-50";
+/**
+ * 家具店向け効率化指示書(2026-09-15)是正 §7-1/2/6専用
+ * (task_302c7e3c24b575629d): 8入口ナビゲータ
+ * (MercariFurnitureCategoryPicker.tsx)自体の実ブラウザ検証(8入口表示→
+ * ドリルダウン→パンくず→決定ボタンの活性/非活性→再読込復元)は、
+ * E2E_MERCARI_CSV_EDIT_ID(e2e-inv-48)を使う既存spec
+ * (mercari-csv-edit-save.spec.ts)が既にこのidのcategoryMappingを
+ * process内Map(e2eChannelOverrideStore)へ保存済みにしうるため共有
+ * できない——専用の未確定id(下書きあり・categoryMapping未設定)を
+ * 別途用意する。
+ */
+export const E2E_MERCARI_FURNITURE_PICKER_ID = "e2e-inv-51";
+/** 家具内検索(task_302c7e3c24b575629d §4-D是正)専用。上のE2E_MERCARI_FURNITURE_PICKER_IDはドリルダウン保存テストが実際に保存まで行うため共有できない(コメント参照)。 */
+export const E2E_MERCARI_FURNITURE_SEARCH_ID = "e2e-inv-52";
 
 /** getChannelListing(service.ts)のE2E分岐から呼ぶ。合成保存済みの値があればそれを優先し、無ければ従来通りの静的fallback(またはnull)を返す——既存id(E2E_MANUAL_ONLY_INVENTORY_ID等)は一度も保存されないため、常にfallbackがそのまま返り挙動は変わらない。channelもキーに含める(上のchannelOverrideKey参照——別channelの保存を誤って返さない)。 */
 export function e2eChannelOverrideFor(inventoryId: string, channel: ListingChannel, fallback: ChannelListingRecord | null): ChannelListingRecord | null {

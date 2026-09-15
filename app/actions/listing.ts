@@ -21,7 +21,14 @@ import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/typ
 import { buildExportRowForInventory, getInventoryImageDownloadUrl, listCsvImageDownloadTargets } from "@/lib/listing/mercari/csv/buildExportRows";
 import { buildMercariCsvExport, MAX_EXPORT_ROWS } from "@/lib/listing/mercari/csv/exportCsv";
 import { resolveInventoryImageZipPlan, MAX_ZIP_IMAGES, MAX_ZIP_PRODUCTS } from "@/lib/listing/mercari/csv/imageBundle";
-import { searchBrands, searchCategories, type BrandMasterEntry, type CategoryMasterEntry } from "@/lib/listing/mercari/csv/masters";
+import {
+  searchBrands,
+  searchCategories,
+  getFurnitureCategoryBuckets,
+  type BrandMasterEntry,
+  type CategoryMasterEntry,
+  type FurnitureCategoryBucket,
+} from "@/lib/listing/mercari/csv/masters";
 
 /**
  * BELLO統合改修 master指示書 Phase D — EC出品機能のServer Action層。
@@ -150,6 +157,25 @@ export async function searchMercariCategoriesAction(query: string): Promise<Cate
 
 export async function searchMercariBrandsAction(query: string): Promise<BrandMasterEntry[]> {
   return searchBrands(query);
+}
+
+/**
+ * 家具店向け効率化指示書(2026-09-15) §4-A/G向け。「家具・インテリア」
+ * 配下だけの8入口カテゴリ木(7分類+その他)を1回だけ返す——読み取り
+ * 専用でDBには一切触れないため、閲覧権限モデルはsearchMercariCategoriesAction
+ * と同じ(requireEditPermissionを課さない)。クライアント側は初回の
+ * マウント時にこれを1回だけ呼び、以降の階層クリック・家具内検索は
+ * 通信なしでナビゲーションする(枝のクリック毎の再取得はしない、
+ * 指示書§4-G)。
+ *
+ * task_302c7e3c24b575629d(2026-09-15是正): 新規カテゴリ選択はこの
+ * 家具限定の木からしか行えない——MercariCategoryMappingSection.tsxは
+ * もはや全カテゴリマスタ(searchMercariCategoriesAction)を新規選択の
+ * 経路として呼ばない(旧範囲外の既存値はこのActionと無関係にそのまま
+ * 表示され続けるだけで、UI側からの新規変更はこの木の範囲に限られる)。
+ */
+export async function getMercariFurnitureCategoryTreeAction(): Promise<FurnitureCategoryBucket[]> {
+  return getFurnitureCategoryBuckets();
 }
 
 export interface MercariCsvExportActionResult {

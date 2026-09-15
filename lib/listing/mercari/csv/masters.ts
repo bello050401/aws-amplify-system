@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import iconv from "iconv-lite";
+import { buildFurnitureCategoryBuckets, type FurnitureCategoryBucket } from "./furnitureCategoryTree";
+
+export type { FurnitureCategoryBucket, FurnitureCategoryNode, FurnitureCategoryLeaf } from "./furnitureCategoryTree";
 
 /**
  * ブランド/カテゴリマスタの読み込みと検索。
@@ -130,8 +133,29 @@ export function getBrandById(brandId: string): BrandMasterEntry | null {
   return master?.find((b) => b.brandId === brandId) ?? null;
 }
 
+let furnitureBucketsCache: FurnitureCategoryBucket[] | undefined;
+
+/**
+ * 家具店向け効率化指示書(2026-09-15) §4-A/G: 「家具・インテリア」配下
+ * だけの8入口カテゴリ木。木の組み立て自体は
+ * `lib/listing/mercari/csv/furnitureCategoryTree.ts`(fs非依存の純粋関数、
+ * クライアント側のパンくず復元・家具内検索でも使い回す)に切り出して
+ * あり、ここではその結果をプロセス内で1回だけ計算してキャッシュする
+ * ——§4-G「カテゴリ木はサーバーキャッシュで軽量化、枝のクリック毎の
+ * 全件マスタ再読込を避ける」。呼び出し側(Server Action経由)はこの
+ * 結果をクライアントへ1回だけ渡し、以降のクリック操作・家具内検索は
+ * 通信なしでクライアント側だけで完結する。
+ */
+export function getFurnitureCategoryBuckets(): FurnitureCategoryBucket[] {
+  if (furnitureBucketsCache !== undefined) return furnitureBucketsCache;
+  const master = loadCategoryMaster();
+  furnitureBucketsCache = buildFurnitureCategoryBuckets(master ?? []);
+  return furnitureBucketsCache;
+}
+
 /** テスト用: キャッシュを破棄する(合成fixtureを切り替えて再読込するため)。 */
 export function resetMastersCacheForTests(): void {
   brandCache = undefined;
   categoryCache = undefined;
+  furnitureBucketsCache = undefined;
 }

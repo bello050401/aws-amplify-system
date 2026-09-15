@@ -168,6 +168,20 @@ export const E2E_INVENTORY_ROWS: InventoryListRow[] = [
   makeRow(48),
   makeRow(49),
   makeRow(50),
+  // 家具店向け効率化指示書(2026-09-15)是正 §7-1/2/6専用
+  // (task_302c7e3c24b575629d): 8入口ナビゲータ
+  // (MercariFurnitureCategoryPicker.tsx)自体の実ブラウザ検証(8入口表示→
+  // ドリルダウン→パンくず→決定ボタンの活性/非活性→再読込復元)には、
+  // 他のspec(mercari-csv-edit-save.spec.ts)がe2e-inv-48で既に家具の
+  // カテゴリを保存済みにしうる状態と干渉しない、専用の未確定id
+  // (process内Mapへ一度も書かれていない)が要る。lib/listing/
+  // e2eFixtures.tsのE2E_MERCARI_FURNITURE_PICKER_ID参照。
+  makeRow(51),
+  // 家具内検索(task_302c7e3c24b575629d §4-D是正)専用。51番はドリルダウン
+  // クリックのテストが実際に保存(saveChannelOverrideAction)まで行う
+  // ため、同じidを検索テストと共有すると先に51番へ保存された値が
+  // 検索テスト側の「初回は未確定」前提を壊す——専用idで分離する。
+  makeRow(52),
 ];
 
 export function e2eListPage(offset: number, limit: number): SearchPage<InventoryListRow> {

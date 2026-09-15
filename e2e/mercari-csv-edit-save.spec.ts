@@ -25,7 +25,17 @@ import { parseCsvIndependent } from "../lib/listing/mercari/csv/independentParse
  */
 
 const E2E_TOKEN = "e2e-local-test-token-not-a-real-secret-32c";
-const KNOWN_CATEGORY_ID = "iBDxa3BbcUz8XWrr5pgq2Z";
+// task_302c7e3c24b575629d(2026-09-15是正): カテゴリーの新規選択は
+// 「家具・インテリア」配下限定(MercariFurnitureCategoryPicker.tsx)に
+// なった——このファイルのテストは既存のID配線(保存→再読込→CSV再生成)
+// 自体の回帰確認が主目的で、以前は家具外の既知ID(K-POP)を全カテゴリ
+// 自由文字列検索経由で選んでいたが、その検索導線自体が「新規選択は
+// 家具限定」という要求と矛盾していたため削除された(MercariCategoryMappingSection.tsx
+// 参照)。ここでは実在する家具カテゴリの既知ID(getCategoryById検証済み、
+// e2e/mercari-furniture-category-picker.spec.tsと同じ値)へ差し替える
+// ——検証したいのはID配線自体であって、家具かどうかは本題ではない。
+const FURNITURE_CATEGORY_ID = "u9jzuziaZ4F9BeP8Dk3RwD";
+const FURNITURE_CATEGORY_FULL_PATH = "家具・インテリア > ライト・照明 > シーリングライト・天井照明 > シーリングライト";
 // playwright.config.tsと同じE2E_PORT上書き(他worktree/セッションの
 // next devとのポート衝突回避、task_f712cf24a9fe2308cd)。addCookiesの
 // urlはoriginが完全一致しないと効かないため、ポートを変えて走らせる
@@ -75,6 +85,24 @@ function sectionInput(page: Page, headingText: string) {
   return page.locator("xpath=//p[contains(., $t)]/following-sibling::div[1]//input".replace("$t", `'${headingText}'`));
 }
 
+/**
+ * 家具ピッカー(MercariFurnitureCategoryPicker.tsx)の家具内検索から
+ * 既知の家具カテゴリ(FURNITURE_CATEGORY_FULL_PATH)を選んで確定する。
+ * 検索結果のクリックは経路への移動だけ(即確定しない)——「このカテゴリに
+ * 決定」を押して初めて保存される、という実装方針を崩さないテストにする
+ * (task_302c7e3c24b575629d、2026-09-15是正)。
+ */
+function furniturePicker(page: Page) {
+  return page.getByTestId("mercari-furniture-category-picker");
+}
+
+async function selectFurnitureCategoryById(page: Page) {
+  const picker = furniturePicker(page);
+  await picker.getByPlaceholder("家具カテゴリ名で検索（家具・インテリア配下のみ）").fill("シーリングライト");
+  await picker.getByRole("button", { name: FURNITURE_CATEGORY_FULL_PATH, exact: true }).click();
+  await picker.getByRole("button", { name: "このカテゴリに決定" }).click();
+}
+
 async function downloadToBuffer(download: Download): Promise<Buffer> {
   const stream = await download.createReadStream();
   if (!stream) throw new Error("download stream is null");
@@ -103,12 +131,21 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("未確定（CSV出力がブロックされます）")).toBeVisible();
 
-    // カテゴリー検索→選択
-    await page.getByPlaceholder("カテゴリー名で検索").fill("K-POP");
-    await page.getByRole("button", { name: "検索" }).first().click();
-    await page.getByText(new RegExp(KNOWN_CATEGORY_ID)).first().click();
+    // カテゴリー選択(家具ピッカーの家具内検索経由、task_302c7e3c24b575629d是正)
+    await selectFurnitureCategoryById(page);
     await expect(page.getByText("保存しました。")).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator(`text=${KNOWN_CATEGORY_ID}`)).toBeVisible();
+    await expect(page.locator(`text=${FURNITURE_CATEGORY_ID}`)).toBeVisible();
+
+    // ブランド検索(家具店向け効率化指示書(2026-09-15) §4-D是正、実UI検証)。
+    // 「検索」ボタンを押さず入力だけで待つ——300msデバウンスの自動検索
+    // (MercariCategoryMappingSection.tsxのrunBrandSearch)自体を検証する。
+    // 実在する既知のブランド("Xmiss"、scripts/verify-mercari-csv-export.ts
+    // のtestMastersと同じ値、外部APIへは一切到達しない)で検索する。
+    await page.getByPlaceholder("ブランド名（和名/カナ/英語）で検索").fill("Xmiss");
+    await expect(page.getByRole("button", { name: /^Xmiss/ })).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: /^Xmiss/ }).click();
+    await expect(page.getByText("保存しました。")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("text=Xmiss").first()).toBeVisible();
 
     // 発送までの日数
     // 「保存」ボタンはgetByRole({name})が既定で部分一致するため、exact指定
@@ -130,7 +167,8 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
 
     // 再読込しても保存済みの値が保持される(=実際にサーバー側へ永続化されている、クライアント側の楽観的更新だけではない)。
     await page.reload();
-    await expect(page.locator(`text=${KNOWN_CATEGORY_ID}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${FURNITURE_CATEGORY_ID}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("text=Xmiss").first()).toBeVisible();
     await expect(sectionSummary(page, "配送料の負担")).toHaveText("送料込（出品者負担）");
     await expect(page.getByText(/未確定/)).toHaveCount(0);
   });
@@ -201,9 +239,7 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("未確定（CSV出力がブロックされます）")).toBeVisible();
 
-    await page.getByPlaceholder("カテゴリー名で検索").fill("K-POP");
-    await page.getByRole("button", { name: "検索" }).first().click();
-    await page.getByText(new RegExp(KNOWN_CATEGORY_ID)).first().click();
+    await selectFurnitureCategoryById(page);
     await expect(page.getByText("保存しました。")).toBeVisible({ timeout: 10_000 });
 
     await sectionSelect(page, "発送までの日数").selectOption("2");
@@ -244,7 +280,7 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
 
     // 再読込しても送料別+送料IDが保持される(save→reloadの確認)。
     await page.reload();
-    await expect(page.locator(`text=${KNOWN_CATEGORY_ID}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(`text=${FURNITURE_CATEGORY_ID}`)).toBeVisible({ timeout: 15_000 });
     await expect(sectionSummary(page, "配送料の負担")).toHaveText("送料別（購入者負担）");
     await expect(sectionSummary(page, "送料ID")).toHaveText(FEE_ID);
 
@@ -276,7 +312,7 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     const dataRow = rows.find((cells) => cells[24] === "LST-0040");
     expect(dataRow, `LST-0040の行がCSVに含まれる(実際の行数: ${rows.length})`).toBeTruthy();
     if (dataRow) {
-      expect(dataRow[74]).toBe(KNOWN_CATEGORY_ID);
+      expect(dataRow[74]).toBe(FURNITURE_CATEGORY_ID);
       expect(dataRow[78]).toBe("2"); // 「2〜3日で発送」のコード値
       expect(dataRow[80]).toBe("2"); // 「送料別（購入者負担）」のコード値
       expect(dataRow[81]).toBe(FEE_ID); // 送料ID

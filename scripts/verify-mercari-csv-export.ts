@@ -26,7 +26,9 @@ import {
   searchCategories,
   getBrandById,
   getCategoryById,
+  getFurnitureCategoryBuckets,
 } from "../lib/listing/mercari/csv/masters";
+import { buildFurnitureCategoryBuckets, flattenFurnitureCategoryLeaves, locateFurnitureCategoryPath } from "../lib/listing/mercari/csv/furnitureCategoryTree";
 
 let failures = 0;
 let passes = 0;
@@ -287,6 +289,123 @@ function testMasters() {
   assertTrue(
     categoryHits.every((c) => c.fullPath.length > 0),
     "every category search result carries its fullPath (caller must not decide by name alone)",
+  );
+}
+
+/**
+ * 家具店向け効率化指示書(2026-09-15) §4-A/B/C: 8入口カテゴリ木
+ * (lib/listing/mercari/csv/furnitureCategoryTree.ts)の検証。実マスタ
+ * (data/mercari-masters/category_master.csv、外部APIへは一切到達しない)
+ * から組み立てた結果を、実際の既知の値と突き合わせる——捏造ではなく
+ * 提供物からそのまま導かれることを確認する。
+ *
+ * task_302c7e3c24b575629d(2026-09-15是正): flattenFurnitureCategoryLeaves
+ * (家具内検索の基盤、追加の通信を発生させない前提そのもの)の検証も
+ * 合わせて行う。
+ */
+function testFurnitureCategoryTree() {
+  const buckets = getFurnitureCategoryBuckets();
+
+  // §4-A: 8入口(7分類+その他)ちょうど。家具・インテリア以外の
+  // ジャンルは一切含まれない。
+  assertEqual(buckets.length, 8, "家具・インテリア配下の入口は8つ(7分類+その他)");
+  assertEqual(
+    buckets.map((b) => b.label),
+    ["ライト・照明", "机・テーブル", "椅子・チェア", "ソファ・ソファベッド", "棚・ラック・シェルフ", "ベッド", "事務・店舗用品", "その他"],
+    "入口の並び・ラベルが指示書§4-Aの8分類と一致する(「ベッド」はベッド・マットレスの短縮ラベル)",
+  );
+
+  const byLabel = new Map(buckets.map((b) => [b.label, b]));
+
+  // 「ベッド」の実体は公式「ベッド・マットレス」——公式カテゴリ名自体は
+  // 変更していないことを確認する。
+  assertEqual(byLabel.get("ベッド")?.node.name, "ベッド・マットレス", "「ベッド」入口の実体は公式グループ名「ベッド・マットレス」のまま");
+
+  // 7分類の入口ノード自身は公式マスタ上では中間階層(その名前ちょうどの
+  // 行が存在しない)なので、この階層自体にはIDを持たない
+  // (指示書§4-B「経路から作った仮想親にはIDを捏造しない」)。
+  for (const label of ["ライト・照明", "机・テーブル", "椅子・チェア", "ソファ・ソファベッド", "棚・ラック・シェルフ", "事務・店舗用品"]) {
+    assertEqual(byLabel.get(label)?.node.categoryId, undefined, `入口「${label}」自体は正式カテゴリIDを持たない(下位選択が必要)`);
+    assertTrue((byLabel.get(label)?.node.children.length ?? 0) > 0, `入口「${label}」は子カテゴリを持つ`);
+  }
+
+  // 「その他」自体もID無し。子には家具・インテリア配下の残りグループ
+  // (7分類に含まれないもの)が実在する。
+  const other = byLabel.get("その他");
+  assertEqual(other?.node.categoryId, undefined, "「その他」自体は正式カテゴリIDを持たない");
+  const otherChildNames = new Set((other?.node.children ?? []).map((c) => c.name));
+  for (const expected of ["インテリア小物", "寝具", "カーテン・ブラインド", "洋服タンス・押入れ収納", "玄関・屋外収納"]) {
+    assertTrue(otherChildNames.has(expected), `「その他」から実在する家具分類「${expected}」へ到達できる`);
+  }
+  // 7分類の公式グループ名は「その他」側に重複して現れない。
+  for (const label of ["ライト・照明", "机・テーブル", "椅子・チェア", "ソファ・ソファベッド", "棚・ラック・シェルフ", "ベッド・マットレス", "事務・店舗用品"]) {
+    assertTrue(!otherChildNames.has(label), `7分類の公式グループ「${label}」は「その他」に重複して現れない`);
+  }
+
+  // 木の中に登場する全categoryIdが実際にマスタへ実在する
+  // (指示書§4-B「正式な出力可能IDがマスタに存在する時だけ確定可能」の
+  // 前提そのものを、木の全ノードについて確認する)。
+  let checkedIds = 0;
+  function walk(node: (typeof buckets)[number]["node"]) {
+    if (node.categoryId) {
+      checkedIds++;
+      assertTrue(getCategoryById(node.categoryId) !== null, `ノード「${node.fullPath}」のcategoryId(${node.categoryId})はマスタに実在する`);
+    }
+    node.children.forEach(walk);
+  }
+  buckets.forEach((b) => walk(b.node));
+  assertTrue(checkedIds > 300, `木の中に実在する正式カテゴリIDが十分な件数(>300)含まれる(実際: ${checkedIds})`);
+
+  // §4-C: 保存済みフルパス(実在する家具リーフ)からの復元。
+  const lightingLeaf = byLabel.get("ライト・照明")!.node.children.find((c) => c.name === "フロアスタンド")!;
+  assertTrue(!!lightingLeaf?.categoryId, "「フロアスタンド」は実在する末端カテゴリ(前提の健全性チェック)");
+  const located = locateFurnitureCategoryPath(buckets, lightingLeaf.fullPath);
+  assertTrue(located !== null, "実在する家具リーフのフルパスから経路を復元できる");
+  if (located) {
+    assertEqual(located.bucketKey, "lighting", "復元した経路の入口キーが「ライト・照明」と一致する");
+    assertEqual(located.path[located.path.length - 1].categoryId, lightingLeaf.categoryId, "復元した経路の末端categoryIdが一致する");
+  }
+
+  // 「その他」配下(例: 寝具)のリーフも同様に復元できる。
+  const bedLinenLeaf = byLabel.get("その他")!.node.children.find((c) => c.name === "寝具")!.children[0];
+  const locatedOther = locateFurnitureCategoryPath(buckets, bedLinenLeaf.fullPath);
+  assertTrue(locatedOther?.bucketKey === "other", "「その他」配下のリーフも入口キー「other」として復元できる");
+
+  // 家具・インテリア以外の旧カテゴリは復元できない(null)——呼び出し側
+  // (MercariFurnitureCategoryPicker)はこの場合入口一覧のまま表示し、
+  // 保存済みの値自体は消さない(指示書§4-C)。
+  const nonFurniture = locateFurnitureCategoryPath(buckets, "CD・DVD・ブルーレイ > CD > K-POP・アジア");
+  assertEqual(nonFurniture, null, "家具・インテリア以外の旧カテゴリは復元対象外としてnullになる(勝手に消さない前提)");
+
+  // マスタが空/未検出の場合は入口自体を作らない(捏造した候補を出さない)。
+  assertEqual(buildFurnitureCategoryBuckets([]), [], "空のマスタからは1件も入口を作らない");
+
+  // 指示書§4-B「子を持つ正式選択可能ノードはその階層でも確定可能」の
+  // 検証は実マスタでは再現しない経路(その階層自体が末端でもある例は
+  // 子を持たないケースしか実在しない)ため、合成マスタで直接検証する。
+  const synthetic = buildFurnitureCategoryBuckets([
+    { categoryId: "syn-desk-group", name: "机・テーブル", fullPath: "家具・インテリア > 机・テーブル" },
+    { categoryId: "syn-desk-child", name: "学習机", fullPath: "家具・インテリア > 机・テーブル > 学習机" },
+  ]);
+  const synDeskBucket = synthetic.find((b) => b.key === "table");
+  assertTrue(!!synDeskBucket, "合成マスタでも机・テーブル入口が組み立てられる");
+  assertEqual(synDeskBucket?.node.categoryId, "syn-desk-group", "自身が末端行でもあるノードはcategoryIdを保持する(子を持っていても確定可能)");
+  assertEqual(synDeskBucket?.node.children.length, 1, "同じノードが子(学習机)も持てる");
+
+  // task_302c7e3c24b575629d(2026-09-15是正) §4-D: 家具内検索
+  // (flattenFurnitureCategoryLeaves)の検証——家具外のカテゴリ(K-POP等)
+  // を一切含まず、木の中の全leaf件数と一致する(checkedIdsと同数)。
+  const leaves = flattenFurnitureCategoryLeaves(buckets);
+  assertEqual(leaves.length, checkedIds, "flattenFurnitureCategoryLeavesは木の中の全categoryId件数(checkedIds)と一致する");
+  assertTrue(
+    leaves.every((l) => l.fullPath.startsWith("家具・インテリア > ") || l.fullPath === "家具・インテリア"),
+    "flattenFurnitureCategoryLeavesの全件が家具・インテリア配下のfullPath(家具外は一切混入しない)",
+  );
+  const floorLampLeaf = leaves.find((l) => l.name === "フロアスタンド");
+  assertEqual(floorLampLeaf?.categoryId, lightingLeaf.categoryId, "flattenFurnitureCategoryLeavesの「フロアスタンド」がlocateFurnitureCategoryPathと同じcategoryIdを返す");
+  assertTrue(
+    !leaves.some((l) => l.fullPath.includes("K-POP")),
+    "flattenFurnitureCategoryLeavesの結果に家具外(K-POP等)は一切含まれない",
   );
 }
 
@@ -641,6 +760,7 @@ function testImageZipRoundTrip() {
 
 testHeader();
 testMasters();
+testFurnitureCategoryTree();
 testAssembleRowShippingDaysWiring();
 testAssembleRowShippingPayerAndPriceWiring();
 testAssembleRowShippingFeeIdWiring();

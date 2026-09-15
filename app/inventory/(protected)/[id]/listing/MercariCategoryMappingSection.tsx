@@ -1,17 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getMercariCsvImageDownloadLinksAction,
   getMercariCsvImageZipPlanAction,
   saveChannelOverrideAction,
   searchMercariBrandsAction,
-  searchMercariCategoriesAction,
   type MercariCsvImageDownloadLink,
 } from "@/app/actions/listing";
 import { assembleZipFromPlan, downloadZipBlob } from "@/lib/listing/mercari/csv/browserImageZip";
 import type { ChannelListingRecord } from "@/lib/listing/types";
-import type { BrandMasterEntry, CategoryMasterEntry } from "@/lib/listing/mercari/csv/masters";
+import type { BrandMasterEntry } from "@/lib/listing/mercari/csv/masters";
+import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker";
 
 /** 指示書§4「発送までの日数」の5値。ラベルは公式テンプレートの表記に合わせる。 */
 const SHIPPING_DAYS_OPTIONS: { value: 1 | 2 | 3 | 4 | 5; label: string }[] = [
@@ -34,12 +34,30 @@ const SHIPPING_DAYS_OPTIONS: { value: 1 | 2 | 3 | 4 | 5; label: string }[] = [
  * 事前準備としてのカテゴリー選択だけをここで復元する(実際にMercariへ
  * 送信するボタンはどこにも無い)。
  *
- * 検索はローカルのマスタCSV(data/mercari-masters/、提供物そのまま)を
- * 検索するだけ(app/actions/listing.tsのsearchMercariCategoriesAction/
- * searchMercariBrandsAction参照、外部APIへは一切到達しない)。
- * 同名の末端カテゴリが複数IDに存在しうるため、検索結果には必ず
- * フルパスを添えて表示し、AIや文字列類似だけで確定しない——選ぶのは
- * 常に人。ブランドは指示書§4のとおり任意。
+ * カテゴリー選択(task_302c7e3c24b575629d、2026-09-15是正): 新規選択は
+ * 「家具・インテリア」配下の8入口(ライト・照明/机・テーブル/椅子・
+ * チェア/ソファ・ソファベッド/棚・ラック・シェルフ/ベッド/事務・
+ * 店舗用品/その他)からの階層クリック(MercariFurnitureCategoryPicker.tsx
+ * ——木構造はlib/listing/mercari/csv/furnitureCategoryTree.tsが公式
+ * マスタのfullPathから実際に組み立てる、公式IDの捏造なし)に限定する。
+ * ピッカー内の家具内検索も、既に取得済みの家具限定の木をその場で
+ * フラット化するだけで、家具・インテリア以外のマスタへは一切到達
+ * しない。
+ *
+ * これは前回の実装(task_b1b6caa7bac795f96b)が「他のカテゴリを検索」と
+ * いう予備導線で全カテゴリマスタ(家具外を含む7,625件)を新規選択でき
+ * てしまっていた——「新規選択は家具限定」という要求と矛盾していた
+ * ——ことの是正でもある。旧範囲外(家具・インテリア以外)の既存カテゴリ
+ * は、削除も強制変更もせずそのまま表示し続ける(下の「現在のカテゴリー」
+ * 表示はmapping自体を見るだけで、ピッカーの内部状態に依存しない)——
+ * 変更したい場合は家具ピッカーから選び直すことになる(家具外へは
+ * 新規に変更できない)。
+ *
+ * ブランドはローカルのマスタCSV(data/mercari-masters/、提供物その
+ * まま)を検索するだけ(searchMercariBrandsAction参照、外部APIへは
+ * 一切到達しない)。同名の末端カテゴリが複数IDに存在しうるため、
+ * 検索結果には必ずフルパスを添えて表示し、AIや文字列類似だけで確定
+ * しない——選ぶのは常に人。ブランドは指示書§4のとおり任意。
  *
  * 送料ID(mercariShippingFeeId、task_ca862bd2a1f6fbf60d、2026-09-15是正):
  * 配送料の負担(mercariShippingPayer)が「送料別」の場合、公式仕様上
@@ -62,10 +80,10 @@ export function MercariCategoryMappingSection({
   channelListing: ChannelListingRecord | null;
   onUpdated: (updated: ChannelListingRecord) => void;
 }) {
-  const [categoryQuery, setCategoryQuery] = useState("");
-  const [categoryResults, setCategoryResults] = useState<CategoryMasterEntry[] | null>(null);
   const [brandQuery, setBrandQuery] = useState("");
   const [brandResults, setBrandResults] = useState<BrandMasterEntry[] | null>(null);
+  const [brandSearchBusy, setBrandSearchBusy] = useState(false);
+  const [brandSearchError, setBrandSearchError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -112,15 +130,49 @@ export function MercariCategoryMappingSection({
   const [zipFailures, setZipFailures] = useState<{ inventoryId: string; displayId: string; reason: string }[] | null>(null);
   const [zipDone, setZipDone] = useState(false);
 
-  async function handleSearchCategories() {
-    setError(null);
-    setCategoryResults(await searchMercariCategoriesAction(categoryQuery));
+  // 家具店向け効率化指示書(2026-09-15) §4-D: ブランド検索の改良。
+  // - 入力のたびに自動検索する(デバウンス300ms、検索語を考えず
+  //   打ち始めればよい体験に近づける)。「検索」ボタンも残し、即時実行
+  //   したい場合に使える(どちらもrunBrandSearchを共有)。
+  // - `brandSearchSeqRef`で「今表示すべき最新の検索」だけを反映する——
+  //   遅い応答が返ってきた古い検索が、後から打った新しい検索の結果を
+  //   上書きしない(指示書§4-D「遅い旧検索応答が新検索を上書きしない」)。
+  // - 検索中/0件/失敗をそれぞれ別状態で持ち、失敗時は同じ関数で再試行
+  //   できる。
+  const brandSearchSeqRef = useRef(0);
+
+  async function runBrandSearch(query: string) {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      brandSearchSeqRef.current += 1;
+      setBrandResults(null);
+      setBrandSearchError(null);
+      setBrandSearchBusy(false);
+      return;
+    }
+    const seq = ++brandSearchSeqRef.current;
+    setBrandSearchBusy(true);
+    setBrandSearchError(null);
+    try {
+      const results = await searchMercariBrandsAction(trimmed);
+      if (seq !== brandSearchSeqRef.current) return; // 新しい検索に上書き済み、古い応答は破棄
+      setBrandResults(results);
+    } catch (err) {
+      if (seq !== brandSearchSeqRef.current) return;
+      setBrandSearchError(err instanceof Error ? err.message : "ブランド検索に失敗しました。");
+      setBrandResults(null);
+    } finally {
+      if (seq === brandSearchSeqRef.current) setBrandSearchBusy(false);
+    }
   }
 
-  async function handleSearchBrands() {
-    setError(null);
-    setBrandResults(await searchMercariBrandsAction(brandQuery));
-  }
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void runBrandSearch(brandQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandQuery]);
 
   /**
    * 選んだ側の値だけを差し替え、もう片方(ブランド/カテゴリー)の既存値は
@@ -149,17 +201,25 @@ export function MercariCategoryMappingSection({
     }
   }
 
-  function selectCategory(entry: CategoryMasterEntry) {
+  /**
+   * 家具店向け効率化指示書(2026-09-15) §4-B: 8入口ナビゲータ
+   * (MercariFurnitureCategoryPicker)の「このカテゴリに決定」から呼ばれる。
+   * `categoryId`/`fullPath`はナビゲータが公式マスタから組み立てた木
+   * (lib/listing/mercari/csv/furnitureCategoryTree.ts)由来の値のみで、
+   * 自由入力は一切経由しない——既存のブランド/発送設定は保持する。
+   * task_302c7e3c24b575629d是正: 新規カテゴリ選択の経路はこの関数のみ
+   * (旧来の全カテゴリ自由文字列検索からのselectCategoryは削除済み)。
+   */
+  function confirmCategory(categoryId: string, fullPath: string) {
     void persist({
-      mercariCategoryId: entry.categoryId,
-      mercariCategoryName: entry.fullPath,
+      mercariCategoryId: categoryId,
+      mercariCategoryName: fullPath,
       mercariBrandId: mapping?.mercariBrandId,
       mercariBrandName: mapping?.mercariBrandName,
       mercariShippingDays: mapping?.mercariShippingDays,
       mercariShippingPayer: mapping?.mercariShippingPayer,
       mercariShippingFeeId: mapping?.mercariShippingFeeId,
     });
-    setCategoryResults(null);
   }
 
   function selectBrand(entry: BrandMasterEntry) {
@@ -177,6 +237,7 @@ export function MercariCategoryMappingSection({
       mercariShippingFeeId: mapping?.mercariShippingFeeId,
     });
     setBrandResults(null);
+    setBrandQuery("");
   }
 
   function clearBrand() {
@@ -367,35 +428,18 @@ export function MercariCategoryMappingSection({
             <span className="text-amber-700">未確定（CSV出力がブロックされます）</span>
           )}
         </p>
-        <div className="mt-1 flex gap-2">
-          <input
-            value={categoryQuery}
-            onChange={(e) => setCategoryQuery(e.target.value)}
-            placeholder="カテゴリー名で検索"
-            className="w-64 border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
+        <p className="mt-0.5 text-[11px] text-gray-400">
+          新規に選べるのは「家具・インテリア」配下のみです。家具・インテリア以外の既存カテゴリが設定されている場合はそのまま表示され続けます——変更する場合は下の一覧から家具のカテゴリを選び直してください。
+        </p>
+
+        <div className="mt-1">
+          <MercariFurnitureCategoryPicker
+            inventoryId={inventoryId}
+            currentFullPath={mapping?.mercariCategoryName ?? undefined}
+            busy={busy}
+            onConfirm={confirmCategory}
           />
-          <button
-            type="button"
-            onClick={() => void handleSearchCategories()}
-            disabled={busy || !categoryQuery.trim()}
-            className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-          >
-            検索
-          </button>
         </div>
-        {categoryResults && (
-          <ul className="mt-1 max-h-48 overflow-y-auto border border-gray-200 text-[12px]">
-            {categoryResults.length === 0 && <li className="px-2 py-1 text-gray-400">該当なし</li>}
-            {categoryResults.map((c) => (
-              <li key={c.categoryId} className="border-b border-gray-100 px-2 py-1 last:border-b-0">
-                <button type="button" onClick={() => selectCategory(c)} disabled={busy} className="text-left hover:underline disabled:opacity-40">
-                  {/* 同名の末端カテゴリが複数IDに存在しうるため、フルパスを必ず一緒に見せる——名前だけで選ばせない。 */}
-                  {c.fullPath} <span className="font-mono text-[11px] text-gray-400">({c.categoryId})</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
 
       <div>
@@ -424,14 +468,22 @@ export function MercariCategoryMappingSection({
           />
           <button
             type="button"
-            onClick={() => void handleSearchBrands()}
-            disabled={busy || !brandQuery.trim()}
+            onClick={() => void runBrandSearch(brandQuery)}
+            disabled={busy || brandSearchBusy || !brandQuery.trim()}
             className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
           >
-            検索
+            {brandSearchBusy ? "検索中…" : "検索"}
           </button>
         </div>
-        {brandResults && (
+        {brandSearchError && (
+          <p className="mt-1 text-[12px] text-red-600">
+            {brandSearchError}{" "}
+            <button type="button" onClick={() => void runBrandSearch(brandQuery)} className="underline">
+              再試行
+            </button>
+          </p>
+        )}
+        {!brandSearchError && brandResults && (
           <ul className="mt-1 max-h-48 overflow-y-auto border border-gray-200 text-[12px]">
             {brandResults.length === 0 && <li className="px-2 py-1 text-gray-400">該当なし</li>}
             {brandResults.map((b) => (
