@@ -172,3 +172,23 @@ CREATE TABLE IF NOT EXISTS idempotency (
   result     TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS staging_deliveries (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+  commit_id TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  state TEXT NOT NULL,
+  job_id TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notification_outbox (
+  id TEXT PRIMARY KEY,
+  event_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_at TEXT NOT NULL,
+  error TEXT,
+  sent_at TEXT
+);

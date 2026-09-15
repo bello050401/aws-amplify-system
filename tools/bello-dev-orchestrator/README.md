@@ -165,3 +165,17 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 uninstall
 Scheduled Task の登録だけを解除します。プログラム本体、DB、ログ、取込済み文書は削除しません。
 実行時データも消す場合は `%LOCALAPPDATA%\BELLO\dev-orchestrator` を手動で削除してください。
 `\BELLO\ClaudeCodeRemoteControl` には触れません。
+
+## 9. 2026-09-16 の継続開発
+
+保全・修正内容・検証範囲と残作業は [継続開発記録](docs/CONTINUATION-20260916.md) を参照してください。
+
+- worktree作成失敗時の同一ツリーへの代替実行は、既定で無効です。
+- 一時停止は現在の作業を続行し、次の作業から停止します。
+- サービス停止は実行中の保存を待ちます。監督プロセスの60秒上限を超える場合は子孫も停止し、中断復旧の対象になります。
+- dashboard.enabled=false の場合、HTTP監視は対象外です。
+- Codex実装担当、staging自動反映、外部通知は未実装です。
+
+## 10. 自動運用パイプライン
+
+独立テスト、Codex実装担当、staging反映、HTTPS外部通知の実装を追加しました。使い方・接続設定・保護対象・実接続前の条件は [自動運用パイプライン](docs/AUTONOMY-20260916.md) を参照してください。前節と継続開発記録は6ad1bea時点の履歴です。

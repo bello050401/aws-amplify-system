@@ -40,6 +40,43 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
 
 $ErrorActionPreference = 'Stop'
 
+# --- テスト用フック (QA-003 追加修正 P2) ------------------------------------
+# 単体テストは、実際の子プロセス起動・Mutex 取得・無限ループを一切伴わずに、
+# ConfigPath の解決・Mutex 名の決定・引数/環境変数の組み立てだけを検証したい。
+# これらの関数はすべてこのファイル内で定義されるため、他のテスト用スクリプトから
+# ". .\Start-BelloOrchestrator.ps1 -ConfigPath ..." のようにドットソースして
+# 関数と変数だけを読み込めるようにする。$env:BELLO_TEST_NO_RUN が立っている間だけ、
+# 単一起動・監督ループ・exit を skip する (既定は未設定 = 本番動作は一切変えない)。
+$script:BelloTestNoRun = -not [string]::IsNullOrEmpty($env:BELLO_TEST_NO_RUN)
+
+# --- 設定識別 (QA-003 追加修正 P2) ------------------------------------------
+# ConfigPath は今までここ (PS 側の dataRoot 解決) にしか効いておらず、子の
+# `node cli.mjs start --watchdog` や Test-BelloOrchestratorHealth の
+# `node cli.mjs health-check` には一切伝わっていなかった (実測: 2026-09-07
+# commit 9796618 の時点でも変わっていない)。別設定を渡しても、子プロセスと
+# ヘルスチェックは cli.mjs 側の既定設定 (env 未設定時の DEFAULT_CONFIG_PATH)
+# を見てしまい、監督プロセスの dataRoot / ログと食い違う。
+#
+# cli.mjs は既に `process.env.BELLO_ORCHESTRATOR_CONFIG` を最優先で読む
+# (loadOrExplain / configPathInUse、start・health-check を含む全コマンド共通)。
+# 新しい CLI 引数や独自のクォート規則を増やすより、この既存の環境変数を
+# 明示的に子プロセスへ渡す方が安全 (環境変数はコマンドライン引数のクォート
+# 規則に一切依存しないため、空白入り・日本語パスでもエスケープ不要で
+# そのまま渡る)。start (Start-Process) と health-check (ProcessStartInfo) の
+# 両方に同じ値を設定し、監督プロセス自身が使う $ConfigPath と必ず一致させる。
+$ResolvedConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
+# 既定設定 (引数省略時に上で組み立てたパス) と実際に絶対パス化した結果を
+# 大文字小文字を無視して比較する (Windows のパスは大文字小文字を区別しない)。
+$DefaultConfigPath = [System.IO.Path]::GetFullPath((Join-Path $BelloScriptDir 'bello-orchestrator.config.json'))
+$IsDefaultConfig = [string]::Equals($ResolvedConfigPath, $DefaultConfigPath, [System.StringComparison]::OrdinalIgnoreCase)
+# 監督プロセス自身の環境変数へ設定する。Start-Process は明示の -Environment
+# を持たない (Windows PowerShell 5.1 互換) ため、子プロセスは既定で親の
+# 環境ブロックを継承する。ここで設定しておけば start 側は追加の作業なしで
+# 同じ設定を見る。既定設定のときも常に明示しておくことで、
+# 「cli.mjs 側の既定値と PS 側の既定値がたまたま一致している」という
+# 前提に依存せず、常に一致を保証する。
+$env:BELLO_ORCHESTRATOR_CONFIG = $ResolvedConfigPath
+
 # --- UTF-8 の明示的な読み書き -----------------------------------------------
 # Windows PowerShell 5.1 の Get-Content は、-Encoding を省くと BOM が無いファイルを
 # ANSI コードページ (日本語環境では CP932) として読む。設定ファイルは BOM 無し
@@ -100,11 +137,15 @@ function Write-BelloUtf8Text {
 # protectedBranches といった安全境界もすべて外れるため。
 # ここでは「壊れている」という事実だけを持ち越し、Node 側で診断モードへ倒す。
 $dataRoot = ''
+$HealthMonitoringEnabled = $true
 $script:ConfigBroken = $false
 $script:ConfigError  = ''
 try {
     $raw = Read-BelloUtf8Text -Path $ConfigPath
     $cfg = $raw | ConvertFrom-Json
+    if ($cfg.dashboard -and $cfg.dashboard.enabled -eq $false) {
+        $HealthMonitoringEnabled = $false
+    }
     if ($cfg.PSObject.Properties['dataRoot'] -and -not [string]::IsNullOrWhiteSpace($cfg.dataRoot)) {
         $dataRoot = $cfg.dataRoot
     }
@@ -153,6 +194,15 @@ $CrashLoopCooldownMinutes = 30
 $HealthySeconds           = 120
 $BaseBackoffSeconds       = 5
 $MaxBackoffSeconds        = 300
+
+# --- HTTP ヘルス監視パラメータ (QA-003) --------------------------------------
+# PID が生きていても HTTP が応答しない状態 (2026-09-07 実測) を検出するため。
+# 単発の失敗では再起動しない。連続失敗のみを見て、誤検知で実行中のタスクを
+# 巻き込まないようにする。
+$HealthCheckIntervalSeconds  = 20   # 何秒ごとに調べるか
+$HealthCheckTimeoutMs        = 5000 # 1 回のチェックに許す時間 (有限で必ず戻る)
+$HealthFailureThreshold      = 3    # 連続でこの回数失敗したら復旧する
+$HealthStartupGraceSeconds   = 90   # 起動直後はダッシュボード初期化中のことがあるため様子見する
 
 function Write-HostLog {
     param(
@@ -268,14 +318,280 @@ function Resolve-NodeExe {
     return $null
 }
 
+# --- コマンドライン引数の安全な構築 (QA-003 追加修正 P1) ---------------------
+# ProcessStartInfo.ArgumentList は .NET Framework 4.7.2 未満では存在せず $null になる
+# (実測 2026-09-07: Windows PowerShell 5.1.19041.6456 では ArgumentList が $null)。
+# その状態で .Add() を呼ぶと「Null 値の式でメソッドを呼び出すことはできません」で
+# 例外になり、Test-BelloOrchestratorHealth が常に ok=false を返してしまう
+# (正常なサーバーでも連続失敗から強制復旧しかねない)。
+# ArgumentList の有無に頼らず、単一の Arguments 文字列を自前で組み立てる。
+# 引用符・バックスラッシュのエスケープは Win32 CommandLineToArgvW と同じ規則
+# (System.Diagnostics.Process が ArgumentList から Arguments を組むときに使う規則)
+# に従うので、空白を含むパス (CLI パスなど) も安全に渡せる。
+function ConvertTo-BelloQuotedArgument {
+    param([Parameter(Mandatory)][AllowEmptyString()][string] $Value)
+    if ($Value.Length -eq 0) { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $i = 0
+    while ($i -lt $Value.Length) {
+        $backslashes = 0
+        while ($i -lt $Value.Length -and $Value[$i] -eq '\') { $backslashes++; $i++ }
+        if ($i -eq $Value.Length) {
+            # 末尾のバックスラッシュは、閉じ引用符の前なので全て倍にする。
+            [void]$sb.Append('\' * ($backslashes * 2))
+            break
+        } elseif ($Value[$i] -eq '"') {
+            # 直後が引用符なら、バックスラッシュを倍にしたうえで引用符をエスケープする。
+            [void]$sb.Append('\' * ($backslashes * 2 + 1))
+            [void]$sb.Append('"')
+            $i++
+        } else {
+            # ただの文字の前のバックスラッシュはそのまま。
+            [void]$sb.Append('\' * $backslashes)
+            [void]$sb.Append($Value[$i])
+            $i++
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function ConvertTo-BelloArgumentString {
+    param([string[]] $Arguments)
+    return (@($Arguments) | ForEach-Object { ConvertTo-BelloQuotedArgument -Value ([string]$_) }) -join ' '
+}
+
+function Start-BelloNodeService {
+    param(
+        [Parameter(Mandatory)][string] $NodeExe,
+        [Parameter(Mandatory)][string] $CliPath,
+        [Parameter(Mandatory)][string] $WorkingDirectory
+    )
+    $arguments = ConvertTo-BelloArgumentString -Arguments @($CliPath, 'start', '--watchdog')
+    return Start-Process -FilePath $NodeExe -ArgumentList $arguments `
+        -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
+}
+
+# --- HTTP ヘルス監視の判定 (QA-003) --------------------------------------------
+# 「1 回の結果」から「復旧するかどうか」を決める部分だけを純粋関数として切り出す。
+# 実プロセスの起動・終了を一切伴わないので、合成 fixture でそのまま単体検証できる
+# (単発失敗では動かない・連続失敗のみで動く・起動猶予・明示停止の優先、を再現可能にする)。
+# 副作用 (実際の HTTP 呼び出し・プロセス終了) は呼び出し側の責務のまま分離する。
+function Get-BelloHealthDecision {
+    param(
+        [Parameter(Mandatory)][bool]  $HealthOk,
+        [Parameter(Mandatory)][int]   $UpSeconds,
+        [Parameter(Mandatory)][int]   $StartupGraceSeconds,
+        [Parameter(Mandatory)][int]   $FailureCount,      # 呼び出し前の連続失敗数
+        [Parameter(Mandatory)][int]   $FailureThreshold,
+        [Parameter(Mandatory)][bool]  $StopFlagPresent
+    )
+    # 起動直後はダッシュボード初期化中のことがあるため、判定自体をしない
+    # (連続失敗カウントにも数えない)。
+    if ($UpSeconds -lt $StartupGraceSeconds) {
+        return @{ action = 'skip'; failureCount = $FailureCount }
+    }
+    if ($HealthOk) {
+        return @{ action = 'ok'; failureCount = 0 }
+    }
+    $newCount = $FailureCount + 1
+    if ($newCount -lt $FailureThreshold) {
+        # 単発の失敗では動かない。誤検知で実行中のタスクを巻き込まないため。
+        return @{ action = 'warn'; failureCount = $newCount }
+    }
+    # しきい値に達していても、停止意思がある場合は通常の停止経路に譲る
+    # (ヘルス監視の復旧と停止フラグが競合しないようにする)。
+    if ($StopFlagPresent) {
+        return @{ action = 'deferToStop'; failureCount = $newCount }
+    }
+    return @{ action = 'recover'; failureCount = $newCount }
+}
+
+# --- HTTP ヘルス監視 (QA-003 / PS5.1 互換性修正) -------------------------------
+# PID が生きていることと、実際に HTTP へ応答することは別物 (2026-09-07 実測: PID は
+# LISTEN のまま残り続けたが、GET が 3 秒でタイムアウトした)。ここは node 側の
+# probeHealth (有限時間保証つき) を呼ぶだけにして、タイムアウトの実装を二重に持たない。
+# Node 呼び出し自体が詰まった場合に備え、プロセスレベルでも必ず有限時間で戻す。
+#
+# 引数は ArgumentList ではなく Arguments (単一文字列) で渡す。
+# ArgumentList プロパティは .NET Framework 4.7.2 以降でしか有効な値を持たず、
+# Windows PowerShell 5.1 (実測 5.1.19041.6456) では $null のままで、
+# .Add() 呼び出しが例外になり常に ok=false を返していた (稼働環境未反映のP1)。
+#
+# ConfigPath は Arguments には含めない (QA-003 追加修正 P2)。cli.mjs は
+# BELLO_ORCHESTRATOR_CONFIG 環境変数を最優先で読むため、EnvironmentVariables に
+# 設定するだけで、監督プロセスが使っているのと同じ設定ファイルを見に行く。
+# 環境変数はコマンドライン引数と違って空白・日本語パスのクォート規則に
+# 一切影響されない。
+function Test-BelloOrchestratorHealth {
+    param(
+        [Parameter(Mandatory)][string] $NodeExe,
+        [Parameter(Mandatory)][string] $CliPath,
+        [int] $TimeoutMs = 5000,
+        [string] $ConfigPath
+    )
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $NodeExe
+        $psi.Arguments = ConvertTo-BelloArgumentString -Arguments @(
+            $CliPath, 'health-check', '--json', '--timeout-ms', [string]$TimeoutMs
+        )
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+            # EnvironmentVariables は既定で親プロセスの環境を引き継いだ辞書なので、
+            # このキーだけ上書きすれば足りる (他の環境変数はそのまま子へ渡る)。
+            $psi.EnvironmentVariables['BELLO_ORCHESTRATOR_CONFIG'] = $ConfigPath
+        }
+
+        $p = [System.Diagnostics.Process]::Start($psi)
+        # node 呼び出し自体が詰まっても監督プロセスは止まらない。
+        # probeHealth の内側タイムアウトより長めの上限で必ず切り上げる。
+        $hardLimitMs = $TimeoutMs + 5000
+        $exited = $p.WaitForExit($hardLimitMs)
+        if (-not $exited) {
+            try { $p.Kill() } catch { }
+            return @{ ok = $false; reason = 'health-check コマンド自体が応答しませんでした' }
+        }
+        $out = $p.StandardOutput.ReadToEnd()
+        if ($p.ExitCode -eq 0) { return @{ ok = $true; reason = $null } }
+        $reason = $out.Trim()
+        if ([string]::IsNullOrWhiteSpace($reason)) { $reason = "終了コード $($p.ExitCode)" }
+        return @{ ok = $false; reason = $reason }
+    } catch {
+        return @{ ok = $false; reason = $_.Exception.Message }
+    }
+}
+
+# 対象 PID の子孫プロセス (子・孫...) を列挙する。孤児化と、キル後の取り違えを防ぐため
+# 復旧の直前に必ず「今の」ツリーを取り直す。
+function Get-BelloDescendantProcessIds {
+    param([Parameter(Mandatory)][int] $ParentId)
+    $result = New-Object System.Collections.Generic.List[int]
+    $frontier = New-Object System.Collections.Generic.Queue[int]
+    $frontier.Enqueue($ParentId)
+    $seen = New-Object System.Collections.Generic.HashSet[int]
+    [void]$seen.Add($ParentId)
+    while ($frontier.Count -gt 0) {
+        $pid0 = $frontier.Dequeue()
+        try {
+            $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$pid0" -ErrorAction SilentlyContinue
+        } catch { $children = $null }
+        foreach ($c in @($children)) {
+            if ($seen.Add([int]$c.ProcessId)) {
+                $result.Add([int]$c.ProcessId)
+                $frontier.Enqueue([int]$c.ProcessId)
+            }
+        }
+    }
+    return $result
+}
+
+<#
+.SYNOPSIS
+    ヘルス監視で「復旧が必要」と判断したプロセスだけを安全に終了する。
+.DESCRIPTION
+    無関係プロセスを巻き込まないため、キルの直前に PID・開始時刻・コマンドラインを
+    もう一度照合する (PID 再利用対策)。子孫プロセスも合わせて終了し、孤児化と
+    次の起動での重複実行を防ぐ。
+#>
+function Stop-BelloOrchestratorTree {
+    param(
+        [Parameter(Mandatory)] $Proc,
+        [Parameter(Mandatory)][string] $Reason
+    )
+    $pid0 = $Proc.Id
+    $expectedStart = $null
+    try { $expectedStart = $Proc.StartTime } catch { }
+
+    $cim = $null
+    try { $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$pid0" -ErrorAction SilentlyContinue } catch { }
+    if (-not $cim) {
+        Write-HostLog -Level WARN -Message ("復旧対象 (pid {0}) は既に存在しません。何もしません。" -f $pid0)
+        return
+    }
+    $cmdLine = [string]$cim.CommandLine
+    if ($cmdLine -notmatch 'cli\.mjs' -or $cmdLine -notmatch 'start') {
+        Write-HostLog -Level WARN -Message ("pid {0} はコマンドラインが一致しないため終了しません (PID 再利用の疑い): {1}" -f $pid0, $cmdLine)
+        return
+    }
+    if ($expectedStart) {
+        # Get-CimInstance (WMI ではなく CIM) の CreationDate は既に [DateTime] で返る。
+        # 文字列 (DMTF 形式) のときだけ ManagementDateTimeConverter を通す。
+        # (旧 Get-WmiObject 前提のコードをそのまま使うと ArgumentOutOfRangeException になる)
+        $actualStart = if ($cim.CreationDate -is [DateTime]) {
+            $cim.CreationDate
+        } else {
+            [Management.ManagementDateTimeConverter]::ToDateTime($cim.CreationDate)
+        }
+        if ([Math]::Abs(($actualStart - $expectedStart).TotalSeconds) -gt 5) {
+            Write-HostLog -Level WARN -Message ("pid {0} は開始時刻が一致しないため終了しません (PID 再利用の疑い)。" -f $pid0)
+            return
+        }
+    }
+
+    $descendants = Get-BelloDescendantProcessIds -ParentId $pid0
+    Write-HostLog -Level WARN -Message ("HTTP 応答なしのため復旧します (pid {0})。理由: {1}。子孫 {2} 件も終了します。" -f $pid0, $Reason, $descendants.Count)
+
+    # 孤児化・重複実行を避けるため、子孫を先に、最後に本体を終了する。
+    foreach ($childId in $descendants) {
+        try { Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    try { Stop-Process -Id $pid0 -Force -ErrorAction SilentlyContinue } catch { }
+}
+
+# --- 単一起動の名前空間 (QA-003 追加修正 P2) --------------------------------
+# Mutex 名がずっと固定 'Local\BELLO-DevOrchestrator' だったため、-ConfigPath を
+# 変えても単一起動の判定は共有のままだった。これは「既定の 1 台構成」には
+# 正しい挙動 (常駐タスクの MultipleInstances=IgnoreNew と同じ前提)。
+#
+# 一方で、別の -ConfigPath (別 dataRoot・別 port) を使ったリハーサル用の
+# 監督プロセスを、既定の本番監督プロセスと *同時に* 動かしたい場面がある
+# (task391542 が想定していた隔離リハーサル)。固定 Mutex のままでは
+# 2 つ目の起動が「二重起動」として黙って exit 0 してしまい、リハーサル側が
+# 実際には起動していないのに起動したかのように見えてしまう。
+#
+# 判断: 既定設定 (引数省略、または既定パスと一致する明示指定) では Mutex 名を
+# 一切変えない (常駐タスク・ドキュメント上の 'Local\BELLO-DevOrchestrator' との
+# 互換性を壊さない)。既定と異なる設定を明示したときだけ、その設定ファイルの
+# 絶対パス (大文字小文字を無視) から導いた短い識別子を Mutex 名へ付け足す。
+# 同じ非既定パスを指す限り識別子は毎回同じなので、「同じ設定を二重に起動しない」
+# という単一起動の性質はそのまま保たれる。異なる設定同士だけが互いを
+# ブロックしなくなる。
+function Get-BelloMutexName {
+    param(
+        [Parameter(Mandatory)][string] $ResolvedConfigPath,
+        [Parameter(Mandatory)][bool]   $IsDefaultConfig
+    )
+    if ($IsDefaultConfig) { return 'Local\BELLO-DevOrchestrator' }
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($ResolvedConfigPath.ToLowerInvariant())
+        $hashBytes = $md5.ComputeHash($bytes)
+    } finally {
+        $md5.Dispose()
+    }
+    $suffix = -join ($hashBytes[0..3] | ForEach-Object { $_.ToString('x2') })
+    return ('Local\BELLO-DevOrchestrator-{0}' -f $suffix)
+}
+
 $mutex        = $null
 $mutexOwned   = $false
 $exitCode     = 0
 $failureTimes = New-Object System.Collections.ArrayList
 
+# $script:BelloTestNoRun のときは、ここから下 (単一起動・監督ループ・exit) を
+# 一切実行しない。テストはドットソースでここまでの関数・変数だけを読み込む。
+if (-not $script:BelloTestNoRun) {
 try {
     # ---- 単一起動 ---------------------------------------------------------
-    $mutex = New-Object System.Threading.Mutex($false, 'Local\BELLO-DevOrchestrator')
+    $mutexName = Get-BelloMutexName -ResolvedConfigPath $ResolvedConfigPath -IsDefaultConfig $IsDefaultConfig
+    $mutex = New-Object System.Threading.Mutex($false, $mutexName)
     try { $mutexOwned = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $mutexOwned = $true }
 
@@ -283,7 +599,7 @@ try {
         if ($Watchdog) { $script:QuietExit = $true; exit 0 }
         $other = 'unknown'
         if (Test-Path -LiteralPath $pidPath) { $other = (Get-Content -LiteralPath $pidPath -Raw -Encoding UTF8).Trim() }
-        Write-HostLog -Level WARN -Message ("Orchestrator は既に起動しています (pid {0})。二重起動はしません。" -f $other)
+        Write-HostLog -Level WARN -Message ("Orchestrator は既に起動しています (pid {0}、設定 {1})。二重起動はしません。" -f $other, $ConfigPath)
         exit 0
     }
 
@@ -315,6 +631,7 @@ try {
     Write-HostLog -Message ('ホスト        : {0} / {1}' -f $env:COMPUTERNAME, $env:USERNAME)
     Write-HostLog -Message ('PowerShell    : {0}' -f $PSVersionTable.PSVersion)
     Write-HostLog -Message ('設定          : {0}' -f $ConfigPath)
+    Write-HostLog -Message ('Mutex         : {0}' -f $mutexName)
     Write-HostLog -Message ('データ置き場  : {0}' -f $dataRoot)
 
     $nodeExe = Resolve-NodeExe
@@ -354,9 +671,10 @@ try {
         } else {
             Write-HostLog -Level START -Message ('Orchestrator を起動します (試行 {0})' -f $attempt)
             try {
-                $proc = Start-Process -FilePath $nodeExe `
-                    -ArgumentList @($cli, 'start', '--watchdog') `
-                    -WorkingDirectory $BelloScriptDir -PassThru -NoNewWindow
+                # $env:BELLO_ORCHESTRATOR_CONFIG はスクリプト冒頭で設定済み。
+                # Start-Process は既定で親の環境ブロックを継承するので、
+                # 子の cli.mjs start も監督プロセスと同じ $ConfigPath を見る。
+                $proc = Start-BelloNodeService -NodeExe $nodeExe -CliPath $cli -WorkingDirectory $BelloScriptDir
             } catch {
                 Write-HostLog -Level ERROR -Message ("Orchestrator を起動できません: {0}" -f $_.Exception.Message)
             }
@@ -364,8 +682,10 @@ try {
 
         if ($null -ne $proc) {
             Write-HostLog -Message ('Orchestrator は pid {0} で動作中です。ダッシュボードは設定の host:port を参照してください。' -f $proc.Id)
+            $healthFailureCount = 0
+            $recoveredForHealth = $false
             while (-not $proc.HasExited) {
-                [void]$proc.WaitForExit(15000)
+                [void]$proc.WaitForExit($HealthCheckIntervalSeconds * 1000)
                 if ($proc.HasExited) { break }
                 if (Test-Path -LiteralPath $stopFlag) {
                     Write-HostLog -Level STOP -Message '停止フラグを検出しました。Orchestrator の安全停止を待ちます。'
@@ -373,10 +693,62 @@ try {
                     [void]$proc.WaitForExit(60000)
                     if (-not $proc.HasExited) {
                         Write-HostLog -Level WARN -Message '60 秒で終了しなかったため停止させます。'
-                        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+                        Stop-BelloOrchestratorTree -Proc $proc -Reason '停止待機の60秒上限'
                     }
                     break
                 }
+
+                # ---- HTTP ヘルス監視 (QA-003) ----------------------------------
+                # PID の生死だけでは「HTTP が応答しない」状態 (2026-09-07 実測) を
+                # 見逃す。起動直後は初期化中のことがあるため猶予を置き、単発の
+                # 失敗では動かず、連続失敗でだけ復旧する。判定そのものは
+                # Get-BelloHealthDecision (副作用なし) に任せ、ここは実行するだけにする。
+                if (-not $HealthMonitoringEnabled) { continue }
+                $upSeconds = [int]((Get-Date) - $startedAt).TotalSeconds
+                $health = $null
+                if ($upSeconds -ge $HealthStartupGraceSeconds) {
+                    $health = Test-BelloOrchestratorHealth -NodeExe $nodeExe -CliPath $cli -TimeoutMs $HealthCheckTimeoutMs -ConfigPath $ResolvedConfigPath
+                }
+                $previousFailureCount = $healthFailureCount
+                $decision = Get-BelloHealthDecision `
+                    -HealthOk ([bool]($health -and $health.ok)) `
+                    -UpSeconds $upSeconds `
+                    -StartupGraceSeconds $HealthStartupGraceSeconds `
+                    -FailureCount $healthFailureCount `
+                    -FailureThreshold $HealthFailureThreshold `
+                    -StopFlagPresent (Test-Path -LiteralPath $stopFlag)
+                $healthFailureCount = $decision.failureCount
+
+                switch ($decision.action) {
+                    'skip' { continue }
+                    'ok' {
+                        if ($previousFailureCount -gt 0) {
+                            Write-HostLog -Message ('HTTP 応答が回復しました (失敗 {0} 回からリセット)。' -f $previousFailureCount)
+                        }
+                        continue
+                    }
+                    'warn' {
+                        Write-HostLog -Level WARN -Message ('HTTP ヘルスチェックに失敗しました ({0}/{1}): {2}' -f $healthFailureCount, $HealthFailureThreshold, $health.reason)
+                        continue
+                    }
+                    'deferToStop' {
+                        # 停止意思とは競合しない。stop.flag が出ていれば通常の停止経路に譲る。
+                        continue
+                    }
+                    'recover' {
+                        Write-HostLog -Level WARN -Message ('HTTP ヘルスチェックに失敗しました ({0}/{1}): {2}' -f $healthFailureCount, $HealthFailureThreshold, $health.reason)
+                        Stop-BelloOrchestratorTree -Proc $proc -Reason ('HTTP 応答なしが {0} 回連続' -f $healthFailureCount)
+                        $recoveredForHealth = $true
+                        # ここで抜けたあとの再起動判定は、既存の crash-loop / バックオフに任せる
+                        # (このプロセスが「異常終了」した扱いになる = 復旧回数にも上限がかかる)。
+                    }
+                }
+                if ($recoveredForHealth) { break }
+            }
+            if ($recoveredForHealth) {
+                # 強制終了なので childExit は「異常終了」相当の非 0 として扱われる
+                # (下の $proc.ExitCode 取得が失敗するため既定値 1 のまま進む)。
+                Write-HostLog -Level WARN -Message 'HTTP 無応答のため Orchestrator を再起動します。'
             }
         }
 
@@ -450,3 +822,4 @@ finally {
 }
 
 exit $exitCode
+} # if (-not $script:BelloTestNoRun)

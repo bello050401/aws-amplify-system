@@ -209,6 +209,9 @@ details summary { cursor: pointer; font-size: 13px; padding: 8px 0; min-height: 
 .pipeline li.is-done { background: var(--stone); }
 .pipeline li.is-done .pipe-name { color: var(--muted); font-weight: 400; }
 .pipeline li.is-active { border-color: var(--ink); background: var(--paper); box-shadow: inset 3px 0 0 var(--ink); }
+/* 進行中(is-active)とは意図的に見た目を分ける: 実際には処理されていない (順番待ち/一時停止中) */
+.pipeline li.is-waiting { border-style: dashed; border-color: var(--muted); box-shadow: inset 3px 0 0 var(--muted); }
+.pipeline li.is-paused { border-style: dashed; border-color: var(--muted); background: var(--stone); }
 .pipeline li.is-todo .pipe-name { color: var(--muted); font-weight: 400; }
 
 /* --------------------------------------------------------------- TODO */

@@ -5,14 +5,31 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { probeSqlite } from "./store/db.mjs";
 import { resolveClaudeExecutable } from "./runner/claudeRunner.mjs";
 import * as git from "./core/git.mjs";
 
+/**
+ * 同期の spawnSync ではなく非同期で外部コマンドを呼ぶ (QA-003)。
+ *
+ * diagnose はダッシュボードの GET /api/system・POST /api/control/diagnose から
+ * そのまま呼ばれる。ここが spawnSync だと、コマンドが詰まった分だけ Node の
+ * イベントループそのものが止まり、同じプロセス内のダッシュボード HTTP 応答や
+ * Orchestrator の tick まで巻き込んで止まる (単一プロセス・単一スレッドのため)。
+ * 診断コマンド自体はタイムアウト付きだが、それでも「詰まっている間は何も
+ * 応答できない」ことに変わりはないので、非同期にして他の処理を妨げないようにする。
+ */
 function run(file, args, timeout = 20000) {
-  const res = spawnSync(file, args, { encoding: "utf8", timeout, windowsHide: true });
-  return { ok: res.status === 0, out: String(res.stdout ?? "").trim(), err: String(res.stderr ?? "").trim() };
+  return new Promise((resolve) => {
+    execFile(file, args, { encoding: "utf8", timeout, windowsHide: true }, (err, stdout, stderr) => {
+      resolve({
+        ok: !err,
+        out: String(stdout ?? "").trim(),
+        err: String(stderr ?? err?.message ?? "").trim(),
+      });
+    });
+  });
 }
 
 export class Diagnostics {
@@ -37,9 +54,9 @@ export class Diagnostics {
     }
   }
 
-  #scheduledTask(taskPath, taskName) {
+  async #scheduledTask(taskPath, taskName) {
     if (process.platform !== "win32") return { supported: false };
-    const ps = run("powershell.exe", [
+    const ps = await run("powershell.exe", [
       "-NoProfile",
       "-NonInteractive",
       "-ExecutionPolicy",
@@ -63,9 +80,13 @@ export class Diagnostics {
   async report() {
     const sqlite = await probeSqlite();
     const claude = resolveClaudeExecutable(this.config.claude.executable);
-    const claudeVersion = claude ? run(claude.file, ["--version"], 30000) : null;
-    const nodeOk = run(process.execPath, ["--version"]);
-    const gitVersion = run("git", ["--version"]);
+    const [claudeVersion, nodeOk, gitVersion, remoteControlTask, orchestratorTask] = await Promise.all([
+      claude ? run(claude.file, ["--version"], 30000) : Promise.resolve(null),
+      run(process.execPath, ["--version"]),
+      run("git", ["--version"]),
+      this.#scheduledTask("\\BELLO\\", "ClaudeCodeRemoteControl"),
+      this.#scheduledTask("\\BELLO\\", "BelloDevOrchestrator"),
+    ]);
 
     const repoOk = fs.existsSync(this.config.repoPath) && git.isGitRepo(this.config.repoPath);
     const branch = repoOk ? git.currentBranch(this.config.repoPath) : null;
@@ -119,8 +140,8 @@ export class Diagnostics {
         disk: this.#diskFree(),
       },
       scheduledTasks: {
-        remoteControl: this.#scheduledTask("\\BELLO\\", "ClaudeCodeRemoteControl"),
-        orchestrator: this.#scheduledTask("\\BELLO\\", "BelloDevOrchestrator"),
+        remoteControl: remoteControlTask,
+        orchestrator: orchestratorTask,
       },
       queue: { counts, openTodos },
     };

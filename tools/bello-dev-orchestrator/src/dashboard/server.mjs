@@ -117,6 +117,10 @@ export class Dashboard {
     // ---- 読み取り ------------------------------------------------------
     if (req.method === "GET") {
       switch (route) {
+        // 軽量ヘルスチェック (QA-003)。DB や git には一切触らない。
+        // ここが有限時間で 200 を返せば「イベントループと HTTP は生きている」と言える。
+        case "/api/health":
+          return this.#json(res, 200, this.#health());
         case "/api/home":
           return this.#json(res, 200, this.#home());
         case "/api/tasks":
@@ -139,6 +143,8 @@ export class Dashboard {
             config: publicConfig(this.config),
             paths: this.paths,
             reviewProvider: this.#reviewProviderState(),
+            implementationProvider: this.repo.store.getMeta("implementationProvider") || this.config.execution?.provider || "claude",
+            automation: { verification: Boolean(this.config.verification?.required), staging: Boolean(this.config.staging?.enabled), notifications: Boolean(this.config.notifications?.enabled), outbox: this.repo.store.all("SELECT status, COUNT(*) AS count FROM notification_outbox GROUP BY status") },
           });
         default:
           break;
@@ -188,6 +194,17 @@ export class Dashboard {
           }
           this.logger.info("審査方式を切り替えました", { provider });
           return this.#json(res, 200, { reviewProvider: this.#reviewProviderState() });
+        }
+        case "/api/settings/implementation-provider": {
+          if (!["claude", "codex"].includes(body.provider)) throw new Error("実装担当は Claude / Codex を選んでください。");
+          this.repo.store.setMeta("implementationProvider", body.provider);
+          this.repo.audit("user", "settings.implementationProvider", null, body.provider, null);
+          return this.#json(res, 200, { implementationProvider: body.provider });
+        }
+        case "/api/notifications/retry": {
+          this.repo.store.run("UPDATE notification_outbox SET status='pending',attempts=0,next_at=?,error=NULL WHERE status='failed'", [new Date().toISOString()]);
+          this.repo.audit("user", "notifications.retry", null, "requested", null);
+          return this.#json(res, 200, { requested: true });
         }
         case "/api/tasks": {
           if (!body.title || !body.instruction) throw new Error("title と instruction は必須です。");
@@ -260,13 +277,35 @@ export class Dashboard {
   }
 
   // ------------------------------------------------------------ payloads
+  /**
+   * 軽量ヘルスチェック (QA-003)。DB にも git にも触れない。
+   * ここまで処理が届いた時点で、node:http のリクエストハンドラ (= イベントループ)
+   * は実際に動いている。プロセスの生死だけを見る PID チェックとは別物。
+   */
+  #health() {
+    return {
+      ok: true,
+      pid: process.pid,
+      now: new Date().toISOString(),
+      uptimeSeconds: Math.round(process.uptime()),
+      dashboardStartedAt: this.startedAt,
+      paused: this.orchestrator.paused,
+    };
+  }
+
   #home() {
     const counts = this.repo.countByState();
     const openTodos = this.repo.listTodos({ status: "open" }).map(publicTodo);
     // いま進んでいる作業。プロセス内のフラグを優先しつつ、無ければ DB から拾う。
     // 審査待ちや再起動直後もホームで見えるようにするため（フラグはプロセス内にしか無い）。
     const current = this.#currentTask();
+    // 「DB 上は進行中の状態」と「いまこのプロセスが実際にそれを処理している」は別物。
+    // 一時停止中や、再起動直後でまだ tick が追いついていない間は false になる。
+    // これを混同すると、審査プロセスが起動していないのに「審査Claudeが確認しています」
+    // と表示してしまう (実際に起きた誤表示)。
+    const isActive = Boolean(current) && this.orchestrator.currentTaskId === current.id;
     const nextTask = this.repo.claimNextTask();
+    const status = this.#statusOf(current, isActive, openTodos);
     return {
       now: new Date().toISOString(),
       timezone: this.config.timezone,
@@ -275,6 +314,7 @@ export class Dashboard {
       counts,
       stateLabels: STATE_LABELS_JA,
       currentTask: current ? publicTask(current) : null,
+      currentTaskActive: isActive,
       nextTask: nextTask ? publicTask(nextTask) : null,
       openTodoCount: openTodos.length,
       urgentTodoCount: openTodos.filter((t) => t.priority === "urgent").length,
@@ -282,7 +322,9 @@ export class Dashboard {
       lastHeartbeat: current?.heartbeat_at ?? null,
       reviewProvider: this.#reviewProviderState(),
       // ホーム画面が「見るだけで分かる」ようにするための追加情報
-      pipeline: current ? pipelineOf(current) : null,
+      status,
+      lastActivity: this.#lastActivityOf(current),
+      pipeline: current ? this.#pipeline(current, { isActive, paused: this.orchestrator.paused }) : null,
       recentFinished: this.repo
         .listTasks({ limit: 200 })
         .filter((t) => ["completed", "failed", "cancelled"].includes(t.state))
@@ -296,21 +338,94 @@ export class Dashboard {
   /**
    * ホームに出す「いま進めている作業」。
    *
-   * orchestrator.currentTaskId は実行中プロセスの中でしか立たないので、
-   * 審査待ちや再起動直後は空になる。ホームだけ見て状況が分かるように、
+   * orchestrator.currentTaskId は実際に処理している間しか立たないので、
+   * 一時停止中や再起動直後は空になる。ホームだけ見て状況が分かるように、
    * DB 上の進行中状態からも拾う。工程の進んでいるものを優先する。
+   * ただし「実際に処理中か」は別途 isActive (currentTaskId との一致) で判定すること。
    */
   #currentTask() {
     if (this.orchestrator.currentTaskId) {
       const t = this.repo.getTask(this.orchestrator.currentTaskId);
       if (t) return t;
     }
-    const order = [STATES.RUNNING, STATES.VERIFYING, STATES.AWAITING_AI_REVIEW, STATES.PREFLIGHT];
+    const order = [STATES.DELIVERING, STATES.RUNNING, STATES.VERIFYING, STATES.AWAITING_AI_REVIEW, STATES.PREFLIGHT];
     for (const st of order) {
       const found = this.repo.listTasks({ state: st, limit: 1 })[0];
       if (found) return found;
     }
     return null;
+  }
+
+  /**
+   * ホーム最上部の状態表示。実行中 / 待機中 / 一時停止 / 本人対応待ち を分ける (QA-003)。
+   * DB の状態名ではなく、ここで日本語の意味まで確定する（画面側で解釈させない）。
+   */
+  #statusOf(current, isActive, openTodos) {
+    if (this.orchestrator.paused) {
+      return {
+        key: isActive ? "running" : "paused",
+        label: isActive ? "実行中（次の作業は一時停止）" : "一時停止中",
+        detail: isActive
+          ? "現在の作業は続行しています。終了後、新しい作業は始めません。"
+          : current
+          ? "新しい作業は始めません。表示中の作業は一時停止中のため進んでいません。"
+          : "新しい作業は始めません。",
+      };
+    }
+    if (current?.state === STATES.AWAITING_USER) {
+      return {
+        key: "awaiting_user",
+        label: "ユーザー様の対応待ち",
+        detail: current.blocked_reason || "ユーザー様の操作待ちのため、この作業は進んでいません。",
+      };
+    }
+    if (isActive) {
+      return {
+        key: "running",
+        label: "実行中",
+        detail: this.#pipeline(current, { isActive: true, paused: false }).note,
+      };
+    }
+    if (current) {
+      return {
+        key: "idle",
+        label: "待機中",
+        detail: "この作業は次の処理サイクルで再開します。",
+      };
+    }
+    if (openTodos.some((t) => t.status === "open")) {
+      return { key: "idle", label: "待機中", detail: "実行中の作業はありません。" };
+    }
+    return { key: "idle", label: "待機中", detail: "次の指示を待っています。" };
+  }
+
+  /**
+   * 「最終活動時刻」とその意味。DB の状態名だけでは「本当に動いているか」が
+   * 分からないという指摘 (QA-003) への対応。
+   */
+  #lastActivityOf(current) {
+    if (current?.heartbeat_at) {
+      return { at: current.heartbeat_at, meaning: "実装担当からの最終応答" };
+    }
+    if (current?.updated_at) {
+      return { at: current.updated_at, meaning: "この作業の最終更新" };
+    }
+    if (this.orchestrator.lastTickAt) {
+      return { at: this.orchestrator.lastTickAt, meaning: "システムの最終確認（処理待ちの作業はありません）" };
+    }
+    return { at: null, meaning: null };
+  }
+
+  #pipeline(task, options) {
+    const result = pipelineOf(task, options);
+    const saved = this.repo.store.get("SELECT data FROM checkpoints WHERE task_id=? AND phase='implementation_provider' ORDER BY id DESC LIMIT 1", [task.id]);
+    let provider = "claude";
+    try { provider = JSON.parse(saved?.data || "{}").provider || provider; } catch { }
+    if (provider === "codex") {
+      result.note = result.note.replaceAll("実装Claude", "実装Codex");
+      result.steps[0].label = "実装Codex";
+    }
+    return result;
   }
 
   /**
@@ -375,6 +490,8 @@ export class Dashboard {
       })),
       history: this.repo.history(taskId),
       checkpoint: this.repo.latestCheckpoint(taskId),
+      verification: this.repo.store.get("SELECT data,at FROM checkpoints WHERE task_id=? AND phase='independent_verification' ORDER BY id DESC LIMIT 1", [taskId]) ?? null,
+      staging: this.repo.store.get("SELECT state,commit_id,job_id,error,updated_at FROM staging_deliveries WHERE task_id=?", [taskId]) ?? null,
     };
   }
 
@@ -455,8 +572,16 @@ export class Dashboard {
 /**
  * 「実装Claude → 審査Claude → 完了・次へ」のどこにいるかを返す。
  * 画面側で状態名を解釈させず、サーバで 1 か所に決める。
+ *
+ * @param {object} task
+ * @param {object} [opts]
+ * @param {boolean} [opts.isActive] このプロセスがいま実際にこのタスクを処理しているか
+ *   (orchestrator.currentTaskId と一致するか)。DB の状態名だけでは分からない。
+ *   false の場合、「実装Claudeが作業しています」等の"いま動いている"表現は使わない
+ *   (実際に起きた誤表示: 一時停止中・審査プロセス未起動でも「確認しています」と出ていた)。
+ * @param {boolean} [opts.paused] タスク処理そのものが一時停止中か (orchestrator.paused)。
  */
-export function pipelineOf(task) {
+export function pipelineOf(task, { isActive = false, paused = false } = {}) {
   const state = task?.state;
   const steps = [
     { key: "implement", label: "実装Claude" },
@@ -471,13 +596,20 @@ export function pipelineOf(task) {
     note = state === "retry_wait" ? "再試行を待っています" : "実装の準備をしています";
   } else if (state === "running") {
     activeIndex = 0;
-    note = "実装Claudeが作業しています";
+    note = isActive ? "実装Claudeが作業しています" : "実装の続きを再開する順番を待っています";
   } else if (state === "verifying") {
     activeIndex = 1;
     note = "変更内容と証拠を確認しています";
   } else if (state === "awaiting_ai_review") {
     activeIndex = 1;
-    note = "審査Claudeが確認しています";
+    note = isActive
+      ? "審査Claudeが確認しています"
+      : task?.retry_after && new Date(task.retry_after) > new Date()
+        ? "審査の再試行を待っています"
+        : "審査の順番を待っています";
+  } else if (state === "delivering") {
+    activeIndex = 2;
+    note = "検証済みの変更をstagingへ反映しています";
   } else if (state === "revision_required") {
     activeIndex = 0;
     note = "審査の指摘を受けて実装へ戻ります";
@@ -495,13 +627,25 @@ export function pipelineOf(task) {
     note = "一時停止しています";
   }
 
+  const isTerminal = ["completed", "failed", "cancelled"].includes(state);
+  if (paused && !isTerminal && !isActive) {
+    note = "システムが一時停止中のため、この作業は進んでいません。";
+  } else if (paused && !isTerminal && isActive) {
+    note += " 現在の作業は続行し、次の作業から一時停止します。";
+  }
+
+  // 「進行中」を名乗ってよいのは、実際にこのプロセスが処理している手だけ。
+  // それ以外は "waiting" (順番待ち / 再開待ち) として区別する。終端状態は素直に完了扱い。
+  const activeStepStatus = isTerminal ? "done" : isActive ? "active" : paused ? "paused" : "waiting";
+
   return {
     steps: steps.map((s, i) => ({
       ...s,
-      status: i < activeIndex ? "done" : i === activeIndex ? "active" : "todo",
+      status: i < activeIndex ? "done" : i === activeIndex ? activeStepStatus : "todo",
     })),
     activeIndex,
     note,
+    isActive,
     revisionCount: task?.revision_count ?? 0,
     maxRevisions: task?.max_revisions ?? 3,
   };

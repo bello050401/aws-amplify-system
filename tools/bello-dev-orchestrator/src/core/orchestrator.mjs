@@ -22,6 +22,7 @@ import {
   toReviewRecord,
 } from "../review/manualReview.mjs";
 import { redactText } from "../log/redact.mjs";
+import { IndependentVerifier } from "../pipeline/verification.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -33,12 +34,14 @@ function failureSignature(parts) {
 }
 
 export class Orchestrator {
-  constructor({ config, paths, repo, logger, runner, reviewEngine, reviewEngines, todoManager }) {
+  constructor({ config, paths, repo, logger, runner, reviewEngine, reviewEngines, todoManager, verifier, delivery }) {
     this.config = config;
     this.paths = paths;
     this.repo = repo;
     this.logger = logger;
     this.runner = runner;
+    this.verifier = verifier ?? new IndependentVerifier({ config, paths, repo });
+    this.delivery = delivery;
     // 直接注入された 1 個のエンジン (テスト用)。あれば方式の選択より優先する。
     this.reviewEngine = reviewEngine;
     // 方式名 -> エンジン。本番はこちらを使い、ダッシュボードの選択で切り替える。
@@ -57,6 +60,9 @@ export class Orchestrator {
     this.currentTaskId = null;
     this.stopCurrentRequested = false;
     this.snapshots = new Map(); // taskId -> git snapshot
+    // tick() が最後に呼ばれた時刻。ホーム画面の「最終活動時刻」に使う。
+    // runLoop() が回っている限り、何もしなくても pollIntervalSeconds ごとに進む。
+    this.lastTickAt = null;
   }
 
   /**
@@ -180,7 +186,6 @@ export class Orchestrator {
 
   stop() {
     this.stopping = true;
-    this.stopCurrentRequested = true;
   }
 
   pause() {
@@ -205,15 +210,39 @@ export class Orchestrator {
    * 1 手進める。何かしたら true を返す。
    */
   async tick() {
+    // ホーム画面の「最終活動時刻」用。tick が呼ばれている = ループは生きている。
+    this.lastTickAt = new Date().toISOString();
     this.repo.releaseDueRetries();
-    if (this.paused) return false;
+    if (typeof this.repo.getPaused === "function") this.paused = this.repo.getPaused();
+    if (this.paused || this.stopping) return false;
+
+    const delivering = this.repo.listTasks({ state: STATES.DELIVERING, limit: 1 })[0];
+    if (delivering && this.delivery) {
+      this.currentTaskId = delivering.id;
+      try {
+        const result = await this.delivery.advance(delivering);
+        if (result.state === "succeeded") this.repo.setState(delivering.id, STATES.COMPLETED, "独立テスト・審査・staging反映が成功しました", "system");
+        else if (["blocked", "failed"].includes(result.state)) this.#deliveryBlocked(delivering, result.error);
+      } finally { this.currentTaskId = null; }
+      return false; // Poll once per configured interval, never busy-loop on a cloud job.
+    }
 
     // 1) AI 審査待ちを先に片付ける。API 復旧後に自動で流れるようにするため。
     //    claimNextReview は retry_after を尊重するので、キーが無い間や API 障害中に
     //    同じタスクを掴み続けてループが空転することはない。
     const awaitingReview = this.repo.claimNextReview();
     if (awaitingReview) {
-      await this.#doReview(awaitingReview);
+      // #runTask() と同じく、実際に処理している間だけ currentTaskId を立てる。
+      // これが無いと、審査だけを再開したタスク (recovery 後など) は
+      // 「実際に審査中」なのにダッシュボードから見分けられなくなる
+      // (DB 上は awaiting_ai_review のままの他タスクと区別が付かない)。
+      this.currentTaskId = awaitingReview.id;
+      this.stopCurrentRequested = false;
+      try {
+        await this.#doReview(awaitingReview);
+      } finally {
+        this.currentTaskId = null;
+      }
       return true;
     }
 
@@ -234,6 +263,12 @@ export class Orchestrator {
       // --- preflight -----------------------------------------------------
       this.repo.setState(task.id, STATES.PREFLIGHT, "事前確認", "system");
       const repoPath = task.repo_path;
+
+      if (this.verifier.required && !this.verifier.settings.commands.length) {
+        this.repo.setState(task.id, STATES.AWAITING_USER, "独立検証コマンドの設定が必要です", "system");
+        this.todoManager.createFromUserAction({ category: "other", title: "独立検証コマンドを設定してください", reason: "自己申告だけで完了にしないため、検証コマンドの設定が必要です。", completionCondition: "検証コマンドを設定して再開する" }, { waitingTaskIds: [task.id], source: "system" });
+        return;
+      }
 
       if (!git.isGitRepo(repoPath)) {
         return this.#failTask(task, `repoPath が git 作業ツリーではありません: ${repoPath}`, "preflight");
@@ -324,6 +359,7 @@ export class Orchestrator {
 
       // --- verifying (証拠ゲート: AI を使わない機械的突合) -----------------
       this.repo.setState(task.id, STATES.VERIFYING, "証拠を検証", "system");
+      if (this.verifier.required) await this.verifier.run(this.repo.getTask(task.id), () => this.stopCurrentRequested);
       const workDir = place.workDir;
       const gitFacts = {
         startCommit: place.baseCommit,
@@ -334,6 +370,11 @@ export class Orchestrator {
           git.headCommit(workDir) !== place.baseCommit,
       };
       const evidence = evaluateEvidence({ report: result.report, gitFacts, repoPath: workDir });
+      const independent = this.verifier.check(this.repo.getTask(task.id));
+      if (!independent.passed) {
+        evidence.passed = false;
+        evidence.failures.push(...independent.failures);
+      }
       this.repo.checkpoint(task.id, "evidence_gate", evidence);
 
       // worktree 方式では、ここで出るファイルは「このタスクが作ったもの」だけ。
@@ -407,6 +448,10 @@ export class Orchestrator {
     const report = reportRow?.report ?? null;
     if (!report) {
       return this.#retryOrFail(task, "審査対象の完了報告が見つかりません。", failureSignature(["missing_report"]));
+    }
+
+    if (!precomputed && this.verifier.required && !this.verifier.check(task).passed) {
+      await this.verifier.run(task, () => this.stopCurrentRequested);
     }
 
     const snapshot = this.snapshots.get(task.id);
@@ -484,9 +529,14 @@ export class Orchestrator {
     let decision = review.decision;
     let overrideReason = null;
 
-    if (decision === "accept_and_continue" && evidence && !evidence.passed) {
+    const independent = this.verifier.check(this.repo.getTask(task.id));
+    if (evidence && !independent.passed) {
+      evidence.passed = false;
+      evidence.failures = [...(evidence.failures ?? []), ...independent.failures];
+    }
+    if (decision === "accept_and_continue" && (!evidence || !evidence.passed || !independent.passed)) {
       decision = "revision_required";
-      overrideReason = `証拠ゲート不合格のため accept を採用しません: ${(evidence.failures ?? []).join(" / ")}`;
+      overrideReason = `証拠ゲート不合格のため accept を採用しません: ${(evidence?.failures ?? independent.failures).join(" / ")}`;
       this.repo.audit("system", "review.override", task.id, "accept->revision", overrideReason);
     }
     if (
@@ -519,6 +569,13 @@ export class Orchestrator {
 
     switch (decision) {
       case "accept_and_continue":
+        if (this.config.staging?.enabled) {
+          if (!this.delivery) return this.#deliveryBlocked(task, "staging実行処理が利用できません");
+          const prepared = this.delivery.prepare(this.repo.getTask(task.id));
+          if (prepared.state === "blocked") return this.#deliveryBlocked(task, prepared.error);
+          this.repo.setState(task.id, STATES.DELIVERING, "審査合格。検証済みコミットをstagingへ反映します", "system", { review_id: reviewId });
+          return;
+        }
         this.repo.setState(task.id, STATES.COMPLETED, reason, "review_engine", {
           review_id: reviewId,
           blocked_reason: null,
@@ -599,6 +656,11 @@ export class Orchestrator {
   }
 
   // ------------------------------------------------- 作業場所の用意と後始末
+  #deliveryBlocked(task, reason) {
+    this.repo.setState(task.id, STATES.AWAITING_USER, reason, "system", { blocked_reason: reason });
+    this.todoManager.createFromUserAction({ category: "approval", title: `staging反映の確認: ${task.title}`, reason, completionCondition: "対象設定または既存ジョブを確認し再開する" }, { waitingTaskIds: [task.id], source: "staging" });
+  }
+
   /**
    * タスク専用の作業場所を用意する。
    *
@@ -634,7 +696,7 @@ export class Orchestrator {
         };
       }
       this.repo.audit("system", "workspace.worktree_failed", task.id, "error", created.reason);
-      if (!this.config.git.allowInPlaceFallback) {
+      if (!this.config.git.allowInPlaceFallback || snapshot.dirty) {
         return { ok: false, reason: `専用 worktree を作れませんでした: ${created.reason}` };
       }
       this.logger.warn("worktree を作れないため同一ツリーで作業します", {
@@ -643,6 +705,9 @@ export class Orchestrator {
       });
     }
 
+    if (snapshot.dirty) {
+      return { ok: false, reason: "未コミット変更があるため、同一ツリーでは実行できません。専用 worktree を使用してください。" };
+    }
     return {
       ok: true,
       isolation: "in-place",
@@ -859,7 +924,7 @@ export class Orchestrator {
       this.logger.error("手動審査の適用中にエラー", { taskId: task.id, error: err.message });
     });
 
-    return { decision: review.decision, reviewId, taskId: task.id };
+    return { decision: enforced.decision, reviewId, taskId: task.id };
   }
 
   // ------------------------------------------------------------- failures

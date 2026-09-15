@@ -188,23 +188,29 @@
   }
 
   // ============================================================== ホーム
+  /** 稼働状態チップの色分け。文字でも必ず分かるようにする (色だけに頼らない)。 */
+  var STATUS_TONE = {
+    running: "warn",
+    paused: "unknown",
+    awaiting_user: "bad",
+    idle: "ok",
+  };
+
   function renderHome(data) {
     renderTodoZone(data.openTodos || []);
 
+    // 実行中 / 待機中 / 一時停止 / 本人対応待ち はサーバ側で確定させる。
+    // DB の状態名 (例: awaiting_ai_review) を画面側で「実行中」と解釈しない。
+    var status = data.status || { key: "idle", label: "待機中", detail: "" };
     var runChip = byId("run-chip");
-    if (data.paused) {
-      runChip.className = "chip chip-unknown";
-      runChip.textContent = "一時停止中";
-      byId("run-note").textContent = "新しい作業は始めません。";
-    } else if (data.currentTask) {
-      runChip.className = "chip chip-warn";
-      runChip.textContent = "作業中";
-      byId("run-note").textContent = "";
-    } else {
-      runChip.className = "chip chip-ok";
-      runChip.textContent = "待機中";
-      byId("run-note").textContent = "次の指示を待っています。";
-    }
+    runChip.className = "chip chip-" + (STATUS_TONE[status.key] || "unknown");
+    runChip.textContent = status.label;
+    byId("run-note").textContent = status.detail || "";
+
+    var lastActivity = data.lastActivity || {};
+    byId("last-activity").textContent = lastActivity.at
+      ? "最終活動: " + fmt(lastActivity.at) + (lastActivity.meaning ? "（" + lastActivity.meaning + "）" : "")
+      : "";
 
     var hasCurrent = Boolean(data.currentTask);
     byId("current-empty").classList.toggle("hidden", hasCurrent);
@@ -224,6 +230,11 @@
           "（修正 " + data.pipeline.revisionCount + " 回目 / 上限 " + data.pipeline.maxRevisions + " 回）";
       }
       byId("pipeline-note").textContent = note;
+
+      var errText = t.blockedReason || t.lastError || "";
+      var errEl = byId("current-error");
+      errEl.textContent = errText;
+      errEl.classList.toggle("hidden", !errText);
     }
 
     var nextList = clear(byId("next-list"));
@@ -256,12 +267,21 @@
     }
   }
 
+  /** 「進行中」は実際にいま処理している手だけに使う (色だけに頼らない表示)。 */
+  var PIPELINE_STEP_MARK = {
+    done: "完了",
+    active: "進行中",
+    waiting: "順番待ち",
+    paused: "一時停止中",
+    todo: "これから",
+  };
+
   function renderPipeline(pipeline) {
     var list = clear(byId("pipeline"));
     var steps = (pipeline && pipeline.steps) || [];
     steps.forEach(function (step, i) {
       var li = el("li", "is-" + step.status);
-      var mark = step.status === "done" ? "完了" : step.status === "active" ? "進行中" : "これから";
+      var mark = PIPELINE_STEP_MARK[step.status] || "これから";
       li.appendChild(el("div", "pipe-step", i + 1 + ". " + mark));
       li.appendChild(el("div", "pipe-name", step.label));
       list.appendChild(li);
@@ -475,6 +495,8 @@
       section("指示内容", data.instruction || "（なし）");
       section("変更ファイル", (task.changedFiles || []).join("\n") || "（なし）");
       section("テスト結果", (data.report && data.report.tests) || "（なし）");
+      if (data.verification) section("独立テストの実測結果", data.verification.data);
+      if (data.staging) section("staging反映", data.staging);
       section("Claude 審査の詳細", reviews.length ? reviews : "（なし）");
       section("完了報告", data.report || "（なし）");
       section(
@@ -717,6 +739,20 @@
       api("/api/settings")
         .then(function (r) {
           renderReviewProvider(r.reviewProvider || {});
+          byId("implementation-provider").value = r.implementationProvider || "claude";
+          byId("implementation-provider").onchange = function () {
+            api("/api/settings/implementation-provider", { method: "POST", body: { provider: this.value } }).then(function () {
+              byId("implementation-status").textContent = "次の作業から反映します。";
+            }).catch(function (err) { byId("implementation-status").textContent = err.message; });
+          };
+          var automation = r.automation || {};
+          byId("retry-notifications").disabled = !automation.notifications;
+          byId("retry-notifications").onclick = function () {
+            api("/api/notifications/retry", { method: "POST", body: {} }).then(refresh).catch(function (err) { byId("implementation-status").textContent = err.message; });
+          };
+          byId("automation-status").textContent = "独立テスト: " + (automation.verification ? "有効" : "無効") + " / staging: " + (automation.staging ? "有効" : "未接続") + " / 外部通知: " + (automation.notifications ? "有効" : "未接続");
+          var failedNotices = (automation.outbox || []).filter(function (row) { return row.status === "failed"; }).reduce(function (sum, row) { return sum + row.count; }, 0);
+          if (failedNotices) byId("automation-status").textContent += " / 送信失敗: " + failedNotices + "件（通知先の確認が必要です）";
           byId("settings-report").textContent = JSON.stringify(r.config, null, 2);
         })
         .catch(function () {});

@@ -19,6 +19,10 @@ import { TodoManager } from "./todo/todoManager.mjs";
 import { DocumentIntake } from "./intake/documentIntake.mjs";
 import { Dashboard } from "./dashboard/server.mjs";
 import { Diagnostics } from "./diagnostics.mjs";
+import { CodexRunner, ImplementationRouter } from "./runner/codexRunner.mjs";
+import { IndependentVerifier } from "./pipeline/verification.mjs";
+import { StagingDelivery } from "./pipeline/staging.mjs";
+import { Notifications } from "./pipeline/notifications.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -99,7 +103,13 @@ export async function buildApp({ config, paths, echoLogs = true }) {
   const store = await Store.open(paths.dbFile);
   const repo = new Repo(store);
   const todoManager = new TodoManager({ repo, logger });
-  const runner = new ClaudeRunner({ config, paths, logger });
+  const runner = new ImplementationRouter({ config, repo, runners: {
+    claude: new ClaudeRunner({ config, paths, logger }),
+    codex: new CodexRunner({ config, paths, logger }),
+  } });
+  const verifier = new IndependentVerifier({ config, paths, repo });
+  const delivery = new StagingDelivery({ config, repo, verifier });
+  const notifications = new Notifications({ config, repo });
   // 審査方式は実行時に選べる。既定は追加課金の要らない Claude 審査。
   // OpenAI は削除せず、選べば使えるオプションとして常に組み立てておく。
   const reviewEngines = {
@@ -108,15 +118,15 @@ export async function buildApp({ config, paths, echoLogs = true }) {
   };
   const intake = new DocumentIntake({ config, paths, repo, logger });
   const diagnostics = new Diagnostics({ config, paths, repo, logger });
-  const orchestrator = new Orchestrator({ config, paths, repo, logger, runner, reviewEngines, todoManager });
+  const orchestrator = new Orchestrator({ config, paths, repo, logger, runner, reviewEngines, todoManager, verifier, delivery });
 
-  return { logger, store, repo, todoManager, runner, reviewEngines, intake, diagnostics, orchestrator };
+  return { logger, store, repo, todoManager, runner, reviewEngines, intake, diagnostics, orchestrator, notifications };
 }
 
 /**
  * 常駐実行。Supervisor (Scheduled Task) から起動される想定。
  */
-export async function runService({ config, paths }) {
+export async function runService({ config, paths, appFactory = buildApp }) {
   const lock = new SingleInstanceLock(paths.pidFile);
   const acquisition = lock.acquire();
   if (!acquisition.acquired) {
@@ -126,8 +136,15 @@ export async function runService({ config, paths }) {
     return 0;
   }
 
-  const app = await buildApp({ config, paths });
+  let app;
+  try {
+    app = await appFactory({ config, paths });
+  } catch (err) {
+    lock.release();
+    throw err;
+  }
   const { logger, orchestrator, intake, repo, todoManager, diagnostics, store } = app;
+  let notificationWork = null;
 
   logger.info("BELLO Dev Orchestrator を起動します", {
     pid: process.pid,
@@ -144,7 +161,13 @@ export async function runService({ config, paths }) {
   logger.info("審査方式", { provider: repo.getReviewProvider(config.review.provider) });
 
   // 中断復旧 (§6-3)
-  await orchestrator.recover();
+  try {
+    await orchestrator.recover();
+  } catch (err) {
+    store.close();
+    lock.release();
+    throw err;
+  }
 
   let dashboard = null;
   if (config.dashboard.enabled) {
@@ -167,7 +190,8 @@ export async function runService({ config, paths }) {
   }
 
   let stopping = false;
-  const shutdown = async (why) => {
+  let inboxWork = null;
+  const requestShutdown = (why) => {
     if (stopping) return;
     stopping = true;
     logger.info("停止処理を開始します", { why });
@@ -177,34 +201,47 @@ export async function runService({ config, paths }) {
       repo.checkpoint(orchestrator.currentTaskId, "shutdown", { why, at: new Date().toISOString() });
     }
     repo.audit("system", "orchestrator.stop", null, why, null);
-    if (dashboard) await dashboard.stop();
-    store.close();
-    lock.release();
   };
 
-  process.on("SIGINT", () => shutdown("SIGINT").then(() => process.exit(0)));
-  process.on("SIGTERM", () => shutdown("SIGTERM").then(() => process.exit(0)));
-  process.on("SIGHUP", () => shutdown("SIGHUP").then(() => process.exit(0)));
+  const signalHandlers = new Map(["SIGINT", "SIGTERM", "SIGHUP"].map(signal => [signal, () => requestShutdown(signal)]));
+  for (const [signal, handler] of signalHandlers) process.on(signal, handler);
 
   // stop.flag を監視する (PowerShell 側からの安全停止)
   const stopWatcher = setInterval(() => {
     if (fs.existsSync(paths.stopFlag)) {
       logger.info("停止フラグを検出しました");
-      shutdown("stop.flag").then(() => process.exit(0));
+      requestShutdown("stop.flag");
     }
   }, 3000);
 
   // inbox 監視 (§9-1)
   const inboxTimer = setInterval(() => {
-    intake.scanInbox().catch((err) => logger.error("inbox 監視で例外", { error: err.message }));
+    if (stopping || inboxWork) return;
+    inboxWork = intake.scanInbox()
+      .catch((err) => logger.error("inbox 監視で例外", { error: err.message }))
+      .finally(() => { inboxWork = null; });
   }, config.intake.pollIntervalSeconds * 1000);
+  const notificationTimer = setInterval(() => {
+    if (stopping || notificationWork || !app.notifications) return;
+    notificationWork = app.notifications.tick().catch(err => logger.error("通知処理の失敗", { error: err.message })).finally(() => { notificationWork = null; });
+  }, 1000);
 
   try {
     await orchestrator.runLoop();
   } finally {
     clearInterval(inboxTimer);
     clearInterval(stopWatcher);
-    await shutdown("loop_exit");
+    clearInterval(notificationTimer);
+    requestShutdown("loop_exit");
+    try {
+      if (dashboard) await dashboard.stop();
+      if (inboxWork) await inboxWork;
+      if (notificationWork) await notificationWork;
+    } finally {
+      store.close();
+      lock.release();
+      for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
+    }
   }
   return 0;
 }

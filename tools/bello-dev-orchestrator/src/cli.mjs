@@ -17,6 +17,7 @@ import { readConfigFile, quarantineConfigFile, writeConfigFile, salvageConfigTex
 import { startDiagnosticDashboard, readGitVersion } from "./diagnosticMode.mjs";
 import { buildApp, runService, SingleInstanceLock, isLiveNodeProcess } from "./app.mjs";
 import { Diagnostics } from "./diagnostics.mjs";
+import { probeHealth } from "./core/healthProbe.mjs";
 import { Store } from "./store/db.mjs";
 import { Repo } from "./store/repo.mjs";
 import { STATE_LABELS_JA } from "./core/states.mjs";
@@ -272,36 +273,144 @@ async function cmdPause(loaded, paused) {
   return EXIT.OK;
 }
 
-async function cmdStatus(loaded) {
+/** --xxx-yyy / --xxx=yyy の値を取り出す。無ければ既定値。 */
+function argValue(args, name, fallback) {
+  const eq = args.find((a) => a.startsWith(`${name}=`));
+  if (eq) return eq.slice(name.length + 1);
+  const idx = args.indexOf(name);
+  if (idx >= 0 && idx + 1 < args.length) return args[idx + 1];
+  return fallback;
+}
+
+/**
+ * ダッシュボードの共有トークンを (設定済みなら) 環境変数から読む。
+ * 値そのものは絶対にログや標準出力へ出さない。
+ */
+function dashboardToken(config) {
+  return process.env[config.dashboard.lanAccessTokenEnvVar] || null;
+}
+
+/**
+ * プロセスの生死 (PID) と、実際に HTTP が応答するか (health) を分けて見る (QA-003)。
+ * 「稼働中」だけでは、PID は生きているが応答しない状態 (2026-09-07 実測) を見逃す。
+ */
+async function cmdStatus(loaded, args = []) {
+  const asJson = args.includes("--json");
+  const timeoutMs = Number.parseInt(argValue(args, "--timeout-ms", "3000"), 10) || 3000;
+
   const pid = readPid(loaded.paths.pidFile);
-  const alive = pid ? isLiveNodeProcess(pid) : false;
+  const processAlive = pid ? isLiveNodeProcess(pid) : false;
+  const health = loaded.config.dashboard.enabled ? await probeHealth({
+    host: loaded.config.dashboard.host,
+    port: loaded.config.dashboard.port,
+    token: dashboardToken(loaded.config),
+    timeoutMs,
+  }) : { ok: null, reachable: false, skipped: true, latencyMs: 0 };
+  const healthy = processAlive && (health.skipped || health.ok);
+  const stopFlag = fs.existsSync(loaded.paths.stopFlag);
+
+  let counts = {};
+  let openTodos = [];
+  let running = null;
+  if (fs.existsSync(loaded.paths.dbFile)) {
+    const store = await Store.open(loaded.paths.dbFile);
+    const repo = new Repo(store);
+    counts = repo.countByState();
+    openTodos = repo.listTodos({ status: "open" });
+    running = repo.listTasks({ state: "running", limit: 1 })[0] ?? null;
+    store.close();
+  }
+
+  if (asJson) {
+    say(
+      JSON.stringify({
+        processAlive,
+        pid: processAlive ? pid : null,
+        stopFlag,
+        dataRoot: loaded.paths.dataRoot,
+        dashboardUrl: `http://${loaded.config.dashboard.host}:${loaded.config.dashboard.port}/`,
+        health: {
+          ok: health.ok,
+          skipped: Boolean(health.skipped),
+          reachable: health.reachable,
+          status: health.status ?? null,
+          latencyMs: health.latencyMs,
+          error: health.error ?? null,
+        },
+        queueCounts: counts,
+        openTodoCount: openTodos.length,
+        runningTask: running ? { title: running.title, heartbeatAt: running.heartbeat_at ?? null } : null,
+      }),
+    );
+    return healthy ? EXIT.OK : EXIT.NOT_RUNNING;
+  }
+
   say("=== BELLO Dev Orchestrator 状態 ===");
-  say(`  プロセス      : ${alive ? `稼働中 (pid ${pid})` : "停止中"}`);
-  say(`  停止フラグ    : ${fs.existsSync(loaded.paths.stopFlag) ? "あり（意図的な停止中）" : "なし"}`);
+  say(`  プロセス      : ${processAlive ? `稼働中 (pid ${pid})` : "停止中"}`);
+  say(
+    `  HTTP応答      : ${
+      health.skipped ? "対象外（ダッシュボード無効）" : health.ok
+        ? `正常 (${health.latencyMs}ms)`
+        : health.reachable
+          ? `接続はできますが異常応答です (${health.error ?? "-"})`
+          : `応答なし (${health.error ?? "到達不可"})`
+    }`,
+  );
+  say(`  停止フラグ    : ${stopFlag ? "あり（意図的な停止中）" : "なし"}`);
   say(`  データ置き場  : ${loaded.paths.dataRoot}`);
   say(`  ダッシュボード: http://${loaded.config.dashboard.host}:${loaded.config.dashboard.port}/`);
 
   if (!fs.existsSync(loaded.paths.dbFile)) {
     say("  キュー        : DB 未作成（まだ一度も起動していません）");
-    return alive ? EXIT.OK : EXIT.NOT_RUNNING;
+    return healthy ? EXIT.OK : EXIT.NOT_RUNNING;
   }
-  const store = await Store.open(loaded.paths.dbFile);
-  const repo = new Repo(store);
-  const counts = repo.countByState();
-  const open = repo.listTodos({ status: "open" });
   say("  キュー内訳    :");
   const keys = Object.keys(counts);
   if (keys.length === 0) say("      (タスクなし)");
   for (const key of keys) say(`      ${(STATE_LABELS_JA[key] ?? key).padEnd(12)} ${counts[key]}`);
-  say(`  未完了 TODO   : ${open.length} 件${open.length ? `（緊急 ${open.filter((t) => t.priority === "urgent").length} 件）` : ""}`);
-  for (const todo of open.slice(0, 5)) say(`      - [${todo.category}] ${todo.title}`);
-  const running = repo.listTasks({ state: "running", limit: 1 })[0];
+  say(`  未完了 TODO   : ${openTodos.length} 件${openTodos.length ? `（緊急 ${openTodos.filter((t) => t.priority === "urgent").length} 件）` : ""}`);
+  for (const todo of openTodos.slice(0, 5)) say(`      - [${todo.category}] ${todo.title}`);
   if (running) {
     say(`  実行中タスク  : ${running.title}`);
     say(`  最終ハートビート: ${running.heartbeat_at ?? "—"}`);
   }
-  store.close();
-  return alive ? EXIT.OK : EXIT.NOT_RUNNING;
+  return healthy ? EXIT.OK : EXIT.NOT_RUNNING;
+}
+
+/**
+ * 監督コマンド (PowerShell) やスクリプトから叩く軽量ヘルスチェック専用コマンド。
+ * DB は開かない。有限時間で必ず戻り、終了コードだけで健全性を表す。
+ */
+async function cmdHealthCheck(loaded, args = []) {
+  const asJson = args.includes("--json");
+  if (!loaded.config.dashboard.enabled) {
+    if (asJson) say(JSON.stringify({ ok: null, reachable: false, skipped: true, reason: "dashboard disabled" }));
+    else say("HTTP監視は対象外です（ダッシュボード無効）。");
+    return EXIT.OK;
+  }
+  const timeoutMs = Number.parseInt(argValue(args, "--timeout-ms", "5000"), 10) || 5000;
+  const result = await probeHealth({
+    host: loaded.config.dashboard.host,
+    port: loaded.config.dashboard.port,
+    token: dashboardToken(loaded.config),
+    timeoutMs,
+  });
+  if (asJson) {
+    say(
+      JSON.stringify({
+        ok: result.ok,
+        reachable: result.reachable,
+        status: result.status ?? null,
+        latencyMs: result.latencyMs,
+        error: result.error ?? null,
+      }),
+    );
+  } else if (result.ok) {
+    say(`健全です (${result.latencyMs}ms)`);
+  } else {
+    warn(`健全ではありません: 到達${result.reachable ? "可" : "不可"} / ${result.error ?? "-"} (${result.latencyMs}ms)`);
+  }
+  return result.ok ? EXIT.OK : EXIT.RUNTIME;
 }
 
 async function cmdDiagnose(loaded) {
@@ -535,7 +644,8 @@ async function main() {
     say("  start      起動（常駐は Scheduled Task から呼ばれます）");
     say("  stop       安全停止");
     say("  restart    再起動");
-    say("  status     稼働状態・キュー・TODO");
+    say("  status     稼働状態・キュー・TODO（PID の生死とHTTP応答を分けて表示。--json / --timeout-ms も可）");
+    say("  health-check   HTTP ヘルスチェックのみ (監督プロセス向け)。--json / --timeout-ms 可。終了コードで健全性を表す");
     say("  diagnose   自己診断（Claude / OpenAI 設定 / DB / 権限 / タスク / ディスク）");
     say("  repair     安全に直せる設定のみ修復");
     say("  config-check   設定ファイルの文字化け / 破損を点検する（壊れていても動く）");
@@ -588,7 +698,9 @@ async function main() {
     case "unpause":
       return cmdPause(loaded, false);
     case "status":
-      return cmdStatus(loaded);
+      return cmdStatus(loaded, args);
+    case "health-check":
+      return cmdHealthCheck(loaded, args);
     case "diagnose":
       return cmdDiagnose(loaded);
     case "repair":

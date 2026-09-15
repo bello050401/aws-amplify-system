@@ -295,3 +295,21 @@ export function commitTaskChanges({
   }
   return { committed: true, commit: after, files: candidates, skipped };
 }
+
+/** A separate narrow publishing capability. General runGit still rejects every push.
+ * Only a full verified commit may fast-forward an explicitly configured staging ref.
+ * The caller must first verify the AWS DEVELOPMENT target and disable auto-build.
+ */
+export function pushVerifiedStaging({ repoPath, repository, branch, commit, previousCommit }) {
+  if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+(?:\.git)?$/.test(repository || '') || !/^(staging|stage|preview)(?:[-/][A-Za-z0-9._-]+)?$/.test(branch || '') || !/^[a-f0-9]{40}$/.test(commit || '') || !/^[a-f0-9]{40}$/.test(previousCommit || '')) return { ok:false, stderr:'Invalid staging target' };
+  const available = runGit(repoPath, ['cat-file','-e',previousCommit]);
+  if (!available.ok) {
+    const fetched = runGit(repoPath, ['fetch','--no-tags',repository,`refs/heads/${branch}`]);
+    if (!fetched.ok) return fetched;
+  }
+  if (!runGit(repoPath, ['merge-base','--is-ancestor',previousCommit,commit]).ok) return { ok:false, stderr:'Staging branch diverged; merge review required' };
+  const changes = runGit(repoPath, ['diff','--name-only',previousCommit,commit]);
+  if (!changes.ok || changes.stdout.split(/\r?\n/).some(file => /(^|\/)(amplify|migrations?|aws-setup|infra|terraform|cdk|cloudformation)(\/|$)|(^|\/)amplify\.yml$/i.test(file))) return { ok:false, stderr:'Infrastructure or migration changes require review' };
+  const result = spawnSync('git', ['push','--porcelain',repository,`${commit}:refs/heads/${branch}`], { cwd:repoPath, encoding:'utf8', timeout:60000, windowsHide:true });
+  return { ok: result.status === 0, stderr: redactText(String(result.stderr || '')) };
+}

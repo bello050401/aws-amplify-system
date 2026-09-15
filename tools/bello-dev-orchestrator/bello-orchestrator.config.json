@@ -141,7 +141,58 @@
       "production"
     ],
     "isolation": "worktree",
-    "allowInPlaceFallback": true,
+    "allowInPlaceFallback": false,
     "removeWorktreeWhenSafe": false
+  },
+  "execution": {
+    "provider": "claude"
+  },
+  "codex": {
+    "executable": "codex",
+    "model": "",
+    "timeoutSeconds": 3600
+  },
+  "verification": {
+    "required": true,
+    "commands": [
+      {
+        "name": "BELLO typecheck",
+        "file": "node",
+        "args": [
+          "node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ],
+        "cwd": ".",
+        "timeoutSeconds": 600
+      },
+      {
+        "name": "Orchestrator regression",
+        "file": "node",
+        "args": [
+          "--test",
+          "tools/bello-dev-orchestrator/test/*.test.mjs"
+        ],
+        "cwd": ".",
+        "timeoutSeconds": 300
+      }
+    ]
+  },
+  "staging": {
+    "enabled": false,
+    "accountId": "",
+    "appId": "",
+    "branch": "",
+    "region": "",
+    "profile": "",
+    "repository": "https://github.com/bello050401/aws-amplify-system.git",
+    "isolatedDataConfirmed": false,
+    "maxWaitSeconds": 1800
+  },
+  "notifications": {
+    "enabled": false,
+    "webhookUrlEnvVar": "BELLO_NOTIFICATION_WEBHOOK_URL",
+    "tokenEnvVar": "BELLO_NOTIFICATION_TOKEN",
+    "maxAttempts": 5,
+    "timeoutSeconds": 10
   }
 }

@@ -1327,3 +1327,22 @@ test("分離8: worktree を再利用しても基準コミットを取り直さ�
     h.cleanup();
   }
 });
+
+test('分離: worktree 作成失敗時も未コミット変更のある本体へフォールバックしない', async () => {
+  const h = await harnessWithRepo();
+  try {
+    const task = addTask(h);
+    const file = path.join(h.repoPath, 'user-uncommitted.txt');
+    fs.writeFileSync(file, 'preserve exactly\n');
+    // Nonempty destination forces git worktree add to fail in this disposable repository.
+    const target = path.join(h.paths.worktreeRoot, task.id);
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'occupied.txt'), 'existing work');
+    h.config.git.allowInPlaceFallback = true;
+    h.runner.run = async () => { assert.fail('runner must not start in dirty source'); };
+    await h.orchestrator.tick();
+    assert.equal(h.repo.getTask(task.id).state, STATES.FAILED);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'preserve exactly\n');
+    assert.equal(fs.readFileSync(path.join(target, 'occupied.txt'), 'utf8'), 'existing work');
+  } finally { h.cleanup(); }
+});

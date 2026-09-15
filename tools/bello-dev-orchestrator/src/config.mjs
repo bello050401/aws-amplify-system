@@ -26,6 +26,11 @@ function localAppData() {
 const DEFAULTS = {
   repoPath: "",
   dataRoot: "",
+  execution: { provider: "claude" },
+  codex: { executable: "codex", model: "", timeoutSeconds: 3600 },
+  verification: { required: true, commands: [] },
+  staging: { enabled: false, accountId: "", appId: "", branch: "", region: "", profile: "", repository: "", isolatedDataConfirmed: false, maxWaitSeconds: 1800 },
+  notifications: { enabled: false, webhookUrlEnvVar: "BELLO_NOTIFICATION_WEBHOOK_URL", tokenEnvVar: "BELLO_NOTIFICATION_TOKEN", maxAttempts: 5, timeoutSeconds: 10 },
   claude: {
     executable: "",
     model: "sonnet",
@@ -88,7 +93,7 @@ const DEFAULTS = {
     isolation: "worktree",
     // worktree を作れなかったときに in-place へ落ちてよいか。
     // false にすると、作れない場合はタスクを失敗させる（混入リスクを一切取らない）。
-    allowInPlaceFallback: true,
+    allowInPlaceFallback: false,
     // タスク完了後に worktree を消してよいか。既定は消さない（証拠として残す）。
     removeWorktreeWhenSafe: false,
   },
@@ -131,6 +136,20 @@ const LOG_LEVELS = ["debug", "info", "warn", "error"];
 export function validateConfig(cfg, { checkEnvironment = true } = {}) {
   const errors = [];
   const warnings = [];
+
+  if (cfg.execution && !["claude", "codex"].includes(cfg.execution.provider)) errors.push("execution.provider は claude / codex を指定してください。");
+  if (cfg.codex && (typeof cfg.codex.executable !== "string" || typeof cfg.codex.model !== "string" || !Number.isFinite(cfg.codex.timeoutSeconds) || cfg.codex.timeoutSeconds < 1)) errors.push("codex の実行ファイル・モデル・制限時間が不正です。");
+  if (cfg.verification) {
+    if (typeof cfg.verification.required !== "boolean" || !Array.isArray(cfg.verification.commands)) errors.push("verification.required と commands が不正です。");
+    else {
+      if (cfg.verification.required && !cfg.verification.commands.length) warnings.push("独立検証コマンドが未設定です。タスクは設定待ちになります。");
+      for (const command of cfg.verification.commands) {
+        if (!command || !command.name || typeof command.file !== "string" || !command.file || !Array.isArray(command.args) || !command.args.every(arg => typeof arg === "string") || (command.cwd && (typeof command.cwd !== "string" || path.isAbsolute(command.cwd) || command.cwd.split(/[\\/]/).includes(".."))) || !Number.isFinite(command.timeoutSeconds) || command.timeoutSeconds < 1 || command.timeoutSeconds > 7200) errors.push("独立検証コマンドの名前・実行ファイル・引数・相対パス・制限時間を確認してください。");
+      }
+    }
+  }
+  if (cfg.staging?.enabled && (!/^\d{12}$/.test(cfg.staging.accountId || "") || !/^[a-z0-9]+$/.test(cfg.staging.appId || "") || !/^(staging|stage|preview)(?:[-/][A-Za-z0-9._-]+)?$/.test(cfg.staging.branch || "") || !/^[a-z]{2}(?:-[a-z]+)+-\d+$/.test(cfg.staging.region || "") || cfg.staging.isolatedDataConfirmed !== true)) errors.push("staging専用アカウント・アプリ・ブランチ・リージョン・データ分離の設定が必要です。");
+  if (cfg.notifications?.enabled && (!/^[A-Z][A-Z0-9_]*$/.test(cfg.notifications.webhookUrlEnvVar || "") || !Number.isInteger(cfg.notifications.maxAttempts) || cfg.notifications.maxAttempts < 1 || cfg.notifications.maxAttempts > 20 || !Number.isFinite(cfg.notifications.timeoutSeconds) || cfg.notifications.timeoutSeconds < 1 || cfg.notifications.timeoutSeconds > 60)) errors.push("通知の環境変数名・再送上限・制限時間が不正です。");
 
   if (!cfg.repoPath || typeof cfg.repoPath !== "string") {
     errors.push("repoPath が設定されていません。対象リポジトリの絶対パスを指定してください。");

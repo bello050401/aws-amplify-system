@@ -5,7 +5,7 @@
  *   claude -p --output-format json --json-schema <schema> --permission-mode ... --permission-prompts none
  * 指示本文はコマンドライン引数へ埋め込まず、標準入力から渡す (§6-2)。
  */
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { COMPLETION_REPORT_SCHEMA, buildExecutionContract } from "./reportSchema.mjs";
@@ -68,6 +68,12 @@ function killTree(pid) {
 /**
  * プロセスがまだ「働いている」かを見る。無出力だけで殺さないため (§6-2)。
  * 戻り値 { alive, cpuMs, childCount }。取得できない項目は null。
+ *
+ * 非同期にしている理由 (QA-003): この Runner は Orchestrator / ダッシュボード HTTP と
+ * 同じプロセス・同じイベントループで動く。ここが spawnSync だと、PowerShell 側が
+ * (WMI の詰まり等で) 数秒〜タイムアウト上限まで遅延した分だけ、進行中のタスクと
+ * 無関係にダッシュボードの応答まで止まる。タスク実行中は 30 秒ごとに呼ばれるため、
+ * 詰まりが起きるたびに定期的にダッシュボードが無応答になり得る。
  */
 function sampleProcess(pid) {
   if (process.platform !== "win32") {
@@ -77,29 +83,33 @@ function sampleProcess(pid) {
     } catch {
       alive = false;
     }
-    return { alive, cpuMs: null, childCount: null };
+    return Promise.resolve({ alive, cpuMs: null, childCount: null });
   }
-  const ps = spawnSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue;` +
-        `if (-not $p) { '{"alive":false}' } else {` +
-        `$c = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" -ErrorAction SilentlyContinue).Count;` +
-        `$cpu = [double]($p.KernelModeTime + $p.UserModeTime) / 10000;` +
-        `'{"alive":true,"cpuMs":' + [math]::Round($cpu) + ',"childCount":' + $c + '}' }`,
-    ],
-    { encoding: "utf8", timeout: 20000 },
-  );
-  try {
-    return { childCount: null, cpuMs: null, ...JSON.parse(String(ps.stdout || "").trim()) };
-  } catch {
-    return { alive: true, cpuMs: null, childCount: null };
-  }
+  return new Promise((resolve) => {
+    execFile(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue;` +
+          `if (-not $p) { '{"alive":false}' } else {` +
+          `$c = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" -ErrorAction SilentlyContinue).Count;` +
+          `$cpu = [double]($p.KernelModeTime + $p.UserModeTime) / 10000;` +
+          `'{"alive":true,"cpuMs":' + [math]::Round($cpu) + ',"childCount":' + $c + '}' }`,
+      ],
+      { encoding: "utf8", timeout: 20000, windowsHide: true },
+      (_err, stdout) => {
+        try {
+          resolve({ childCount: null, cpuMs: null, ...JSON.parse(String(stdout || "").trim()) });
+        } catch {
+          resolve({ alive: true, cpuMs: null, childCount: null });
+        }
+      },
+    );
+  });
 }
 
 export class ClaudeRunner {
@@ -246,7 +256,11 @@ export class ClaudeRunner {
       });
       child.on("close", (code, signal) => finish({ code, signal, error: null }));
 
-      const timer = setInterval(() => {
+      // sampleProcess は非同期 (QA-003)。前回の確認が終わるまで次の確認を始めない
+      // (二重に powershell を起動して詰まりを増やさないため)。
+      let checking = false;
+      const timer = setInterval(async () => {
+        if (checking) return;
         const elapsed = (Date.now() - startedAt) / 1000;
         const idle = (Date.now() - lastOutputAt) / 1000;
 
@@ -263,7 +277,14 @@ export class ClaudeRunner {
         }
         if (idle > this.config.claude.idleTimeoutSeconds) {
           // 無出力だけでは殺さない。CPU と子プロセスを見て「本当に止まっているか」を確かめる。
-          const sample = sampleProcess(startedPid);
+          checking = true;
+          let sample;
+          try {
+            sample = await sampleProcess(startedPid);
+          } finally {
+            checking = false;
+          }
+          if (settled) return; // 確認している間に終了していた
           const cpuAdvanced = sample.cpuMs != null && lastCpuMs != null && sample.cpuMs > lastCpuMs + 50;
           const hasChildren = (sample.childCount ?? 0) > 0;
           lastCpuMs = sample.cpuMs ?? lastCpuMs;
