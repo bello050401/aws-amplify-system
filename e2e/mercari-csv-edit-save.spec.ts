@@ -103,6 +103,16 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("未確定（CSV出力がブロックされます）")).toBeVisible();
 
+    // task_d2082e63dfcee9e1bf: 発送までの日数/配送料の負担はカテゴリー
+    // 選択より前、ページを開いた直後(何も操作していない状態)から既に
+    // 既定値(4〜7日/送料込み)が見える——「初期値は画面上だけでCSV生成時は
+    // 未確定扱い」という表示とCSVの食い違いが無いことの実ブラウザ確認。
+    await expect(sectionSummary(page, "発送までの日数")).toHaveCount(0);
+    await expect(page.getByText("未設定（既定値「4〜7日で発送」を適用してCSV出力）")).toBeVisible();
+    await expect(page.getByText("未設定（既定値「送料込（出品者負担）」を適用してCSV出力）")).toBeVisible();
+    await expect(sectionSelect(page, "発送までの日数")).toHaveValue("3");
+    await expect(sectionSelect(page, "配送料の負担")).toHaveValue("1");
+
     // カテゴリー検索→選択
     await page.getByPlaceholder("カテゴリー名で検索").fill("K-POP");
     await page.getByRole("button", { name: "検索" }).first().click();

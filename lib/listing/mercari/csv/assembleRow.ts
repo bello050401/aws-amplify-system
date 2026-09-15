@@ -20,6 +20,34 @@ import type { MercariCsvRowFields } from "./types";
 /** 発送元の地域の既定値。既存運用(§4)に基づく初期設定——埼玉。 */
 export const DEFAULT_SHIPPING_ORIGIN_AREA = "jp11";
 
+/**
+ * 発送までの日数/配送料の負担の既定値(task_d2082e63dfcee9e1bf、
+ * 2026-09-15是正)。
+ *
+ * 経緯: 実CUA(tab81)が合成商品e2e-inv-48の出品編集画面を開いた際、
+ * ユーザーから「発送までの日数=4〜7日(3)/配送料の負担=送料込み(1)を
+ * 明示の既定値とする」と直接指示された。その後の候補
+ * (23b1d3e4f9dda6ebb0273baf861fe4c15c6722afに至る系列)ではこの既定値が
+ * 実装されていたが、さらに後続の候補で「BELLOには確認済みの既定値が
+ * 無い」という旧要件のコメント・テストへ差し戻され、既定値そのものが
+ * 撤去される退行が起きた。旧コメントはこの撤去の"根拠"としてコード上に
+ * 残っていたが、ユーザーが実機で明示した既定値の方が優先する
+ * (旧仕様コメントより後勝ちのユーザー指示が根拠)。
+ *
+ * MercariCategoryMappingSection.tsx(保存前の表示)とここ(CSV生成時の
+ * 実解決)が同じ定数を参照することで、表示上の初期値とCSV生成結果が
+ * 食い違う実装(表示だけ既定値でCSV生成時は未確定ブロックする、のような
+ * 状態)を避ける——保存/再読込/一括CSVのいずれでも同一の既定値解決を
+ * 共有する。
+ *
+ * 保存済みの実値(mercariShippingDays/mercariShippingPayerが明示的に
+ * 設定されている場合)は絶対に上書きしない——下の`?? DEFAULT_...`は
+ * 「未設定(undefined)の時だけ」既定値を補う分岐であり、1〜2日/送料別
+ * 等ユーザーが選んだ値をここで書き換えることはない。
+ */
+export const DEFAULT_MERCARI_SHIPPING_DAYS = 3;
+export const DEFAULT_MERCARI_SHIPPING_PAYER = 1;
+
 export interface RowBuildSuccess {
   ok: true;
   fields: MercariCsvRowFields;
@@ -61,13 +89,13 @@ export interface CsvSourceInventory {
  *   ブロックしている前提(draftはnon-nullとして受け取る)。
  * - 発送までの日数(shippingDays)は`channelListing.categoryMapping.
  *   mercariShippingDays`——MercariCategoryMappingSectionで人が選んで
- *   保存した実値のみを使い、未選択なら黙って既定値を出さずブロックする
- *   (指示書§4「確認済み設定がなければ利用者選択必須」)。
+ *   保存した実値があればそれを使い、未設定(undefined)なら
+ *   `DEFAULT_MERCARI_SHIPPING_DAYS`(=3、4〜7日)を適用する
+ *   (task_d2082e63dfcee9e1bf、ユーザー明示の既定値)。保存済みの実値が
+ *   ある場合はここで上書きしない。
  * - 配送料の負担(shippingPayer)も同様に`channelListing.categoryMapping.
- *   mercariShippingPayer`のみを使う——BELLOには既存の確認済み運用値が
- *   無い(lib/listing/types.tsのShippingPayerCode削除コメント参照)ため
- *   未選択を「送料込」へ黙って固定しない(指示書§4「既存確認済値を
- *   採用し不明は選択」)。
+ *   mercariShippingPayer`があればそれを使い、未設定なら
+ *   `DEFAULT_MERCARI_SHIPPING_PAYER`(=1、送料込み)を適用する。
  * - 販売価格(salePrice)は丸めない——非整数はここで補正せず
  *   validateMercariCsvRow(validate.ts)にそのまま渡してブロックさせる
  *   (指示書§4「価格は丸めず検証、不正なら修正要求」)。
@@ -124,29 +152,14 @@ export function assembleMercariCsvRowFields(
     };
   }
 
-  const shippingDays = channelListing?.categoryMapping?.mercariShippingDays ?? null;
-  if (!shippingDays) {
-    return {
-      ok: false,
-      inventoryId,
-      displayId,
-      reasons: ["発送までの日数が未選択です。EC出品編集画面のMercariカテゴリー欄で選択してください(確認済み設定が無いため利用者選択が必須です)"],
-    };
-  }
+  // 未設定(undefined)なら既定値(4〜7日)を適用する。保存済みの実値が
+  // あれば(1〜2日等)そちらを優先し、ここで上書きしない
+  // (task_d2082e63dfcee9e1bf、ユーザー明示の既定値)。
+  const shippingDays = channelListing?.categoryMapping?.mercariShippingDays ?? DEFAULT_MERCARI_SHIPPING_DAYS;
 
-  // 配送料の負担(shippingPayer)。BELLOには「送料を誰が負担するか」を
-  // 表す既存の確認済み運用値が無い(lib/listing/types.tsの624307eでの
-  // ShippingPayerCode削除コメント参照)ため、shippingDaysと同じく
-  // 未選択を黙って「送料込」へ固定せず、人が選んだ値のみを使う。
-  const shippingPayer = channelListing?.categoryMapping?.mercariShippingPayer ?? null;
-  if (!shippingPayer) {
-    return {
-      ok: false,
-      inventoryId,
-      displayId,
-      reasons: ["配送料の負担が未選択です。EC出品編集画面のMercariカテゴリー欄で選択してください(既存の確認済み運用値が無いため利用者選択が必須です)"],
-    };
-  }
+  // 配送料の負担(shippingPayer)。未設定(undefined)なら既定値(送料込み)
+  // を適用する。保存済みの実値(送料別等)があればそちらを優先する。
+  const shippingPayer = channelListing?.categoryMapping?.mercariShippingPayer ?? DEFAULT_MERCARI_SHIPPING_PAYER;
 
   if (draft.images.length === 0) {
     return { ok: false, inventoryId, displayId, reasons: ["下書きに画像がありません"] };
@@ -182,8 +195,9 @@ export function assembleMercariCsvRowFields(
     condition: conditionCodeToCsvValue(draft.condition),
     // 配送方法(shippingMethod)は現時点で唯一の既存確認済み運用
     // (出品者手配、指示書§4「既存出品者手配の運用を確認し1への対応を
-    // 根拠化」)のため固定値。配送料の負担(shippingPayer)は上でブロック
-    // 済みなので、ここに来る時点で1か2のどちらかが必ず選択されている。
+    // 根拠化」)のため固定値。配送料の負担(shippingPayer)は上で未設定
+    // なら既定値を補っているため、ここに来る時点で1か2のどちらかが
+    // 必ず入っている。
     shippingMethod: 1,
     shippingOriginArea: DEFAULT_SHIPPING_ORIGIN_AREA,
     shippingDays,

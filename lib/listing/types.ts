@@ -99,18 +99,21 @@ export interface MercariCategoryMapping {
   mercariBrandName?: string;
   /**
    * 発送までの日数(1=1〜2/2=2〜3/3=4〜7/4=90日以内/5=8〜14)。
-   * 指示書§4「確認済み設定がなければ利用者選択必須」——BELLO側に
-   * 商品ごとの確認済み既定値が無いため、ここで人が選んだ値をそのまま
-   * 保持する。未選択のままCSV出力すると`buildExportRowForInventory`が
-   * ブロックする(黙って既定値を出さない)。
+   * ここで人が商品ごとに選んだ実値をそのまま保持する。未設定
+   * (undefined)の場合、CSV生成側(lib/listing/mercari/csv/assembleRow.ts
+   * のDEFAULT_MERCARI_SHIPPING_DAYS)がユーザー明示の既定値(3=4〜7日)を
+   * 補う(task_d2082e63dfcee9e1bf)——ここに保存済みの実値がある場合は
+   * その既定値で上書きされない。
    */
   mercariShippingDays?: 1 | 2 | 3 | 4 | 5;
   /**
-   * 配送料の負担(1=送料込/2=送料別)。指示書§4「既存確認済値を採用し
-   * 不明は選択」——BELLOには送料負担者を表す既存の確認済み運用値が
-   * 無い(624307eでShippingPayerCode自体を削除した経緯を参照)ため、
-   * shippingDaysと同じく人が商品ごとに選んだ値のみを使い、未選択の
-   * まま黙って送料込へ固定しない。
+   * 配送料の負担(1=送料込/2=送料別)。ここで人が商品ごとに選んだ実値を
+   * そのまま保持する。未設定(undefined)の場合、CSV生成側
+   * (lib/listing/mercari/csv/assembleRow.tsのDEFAULT_MERCARI_SHIPPING_PAYER)
+   * がユーザー明示の既定値(1=送料込み)を補う(task_d2082e63dfcee9e1bf、
+   * 624307eでShippingPayerCode自体を削除した経緯とは別の、送料込/送料別
+   * のUI選択値の話)——ここに保存済みの実値がある場合はその既定値で
+   * 上書きされない。
    */
   mercariShippingPayer?: 1 | 2;
   /**
