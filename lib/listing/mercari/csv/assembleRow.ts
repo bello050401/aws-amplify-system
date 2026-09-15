@@ -48,6 +48,18 @@ export const DEFAULT_SHIPPING_ORIGIN_AREA = "jp11";
 export const DEFAULT_MERCARI_SHIPPING_DAYS = 3;
 export const DEFAULT_MERCARI_SHIPPING_PAYER = 1;
 
+/**
+ * 配送方法/CSV公開設定の既定値(task_1d6008f0c4f2ef3468、2026-09-15
+ * 追加)。実績CSV531件の共通値採用指示に基づく——配送方法は既存確認済み
+ * 運用(出品者手配)、CSV公開設定は「公開」(旧実装は指示書の既定値
+ * レビュー前の暫定値として1=非公開を固定出力していたが、実績分析の
+ * 結果2=公開が共通値だった)。どちらも保存済みの実値
+ * (mapping.mercariShippingMethod/mercariCsvProductStatus)があれば
+ * そちらを優先し、未設定の時だけこの既定値を補う。
+ */
+export const DEFAULT_MERCARI_SHIPPING_METHOD = 1;
+export const DEFAULT_MERCARI_CSV_PRODUCT_STATUS = 2;
+
 export interface RowBuildSuccess {
   ok: true;
   fields: MercariCsvRowFields;
@@ -161,6 +173,13 @@ export function assembleMercariCsvRowFields(
   // を適用する。保存済みの実値(送料別等)があればそちらを優先する。
   const shippingPayer = channelListing?.categoryMapping?.mercariShippingPayer ?? DEFAULT_MERCARI_SHIPPING_PAYER;
 
+  // 発送元/配送方法/CSV公開設定(task_1d6008f0c4f2ef3468、2026-09-15
+  // 追加)。他のmercari*フィールドと同じ解決規則: 保存済みの実値が
+  // あればそちらを優先し、未設定(undefined)の時だけ既定値を補う。
+  const shippingOriginArea = channelListing?.categoryMapping?.mercariShippingOriginArea ?? DEFAULT_SHIPPING_ORIGIN_AREA;
+  const shippingMethod = channelListing?.categoryMapping?.mercariShippingMethod ?? DEFAULT_MERCARI_SHIPPING_METHOD;
+  const productStatus = channelListing?.categoryMapping?.mercariCsvProductStatus ?? DEFAULT_MERCARI_CSV_PRODUCT_STATUS;
+
   if (draft.images.length === 0) {
     return { ok: false, inventoryId, displayId, reasons: ["下書きに画像がありません"] };
   }
@@ -193,15 +212,15 @@ export function assembleMercariCsvRowFields(
     salePrice: resolved.price,
     categoryId,
     condition: conditionCodeToCsvValue(draft.condition),
-    // 配送方法(shippingMethod)は現時点で唯一の既存確認済み運用
-    // (出品者手配、指示書§4「既存出品者手配の運用を確認し1への対応を
-    // 根拠化」)のため固定値。配送料の負担(shippingPayer)は上で未設定
-    // なら既定値を補っているため、ここに来る時点で1か2のどちらかが
-    // 必ず入っている。
-    shippingMethod: 1,
-    shippingOriginArea: DEFAULT_SHIPPING_ORIGIN_AREA,
+    // 配送方法(shippingMethod)。実績共通値は既存確認済み運用(1=出品者
+    // 手配)だが、実績には3(らくらくメルカリ便)の例外があるため商品
+    // ごとに変更できる(mapping.mercariShippingMethod)。配送料の負担
+    // (shippingPayer)は上で未設定なら既定値を補っているため、ここに
+    // 来る時点で1か2のどちらかが必ず入っている。
+    shippingMethod,
+    shippingOriginArea,
     shippingDays,
-    productStatus: 1,
+    productStatus,
     shippingPayer,
     // 送料ID(task_ca862bd2a1f6fbf60d、2026-09-15是正): 配送料の負担が
     // 「送料別」(2)の時だけmapping.mercariShippingFeeIdを渡す。送料込

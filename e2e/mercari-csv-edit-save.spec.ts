@@ -129,7 +129,7 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     await signIn(page);
     await page.goto("/inventory/e2e-inv-48/listing");
     await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("未確定（CSV出力がブロックされます）")).toBeVisible();
+    await expect(page.getByText("未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）")).toBeVisible();
 
     await expect(sectionSummary(page, "発送までの日数")).toHaveCount(0);
     await expect(page.getByText("未設定（既定値「4〜7日で発送」を適用してCSV出力）")).toBeVisible();
@@ -166,9 +166,13 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     await expect(sectionSummary(page, "発送までの日数")).toHaveText("4〜7日で発送", { timeout: 10_000 });
 
     // 配送料の負担
+    // task_1d6008f0c4f2ef3468是正: 発送元/配送方法/CSV公開設定にもそれぞれ
+    // 独立した「保存」(exact)ボタンが増えたため、「exact一致の保存ボタンは
+    // 発送日数・配送料負担の2つだけ」という前提(上のコメント)はもう成立
+    // しない——ページ全体からの最後のボタン取得は別項目を誤って押しうる。
+    // sectionSaveButton(見出し紐づけ)で確実に絞り込む。
     await sectionSelect(page, "配送料の負担").selectOption("1");
-    const payerSaveButtons = page.getByRole("button", { name: "保存", exact: true });
-    await payerSaveButtons.nth(await payerSaveButtons.count() - 1).click();
+    await sectionSaveButton(page, "配送料の負担").click();
     await expect(sectionSummary(page, "配送料の負担")).toHaveText("送料込（出品者負担）", { timeout: 10_000 });
 
     // 再読込しても保存済みの値が保持される(=実際にサーバー側へ永続化されている、クライアント側の楽観的更新だけではない)。
@@ -176,7 +180,82 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     await expect(page.locator(`text=${FURNITURE_CATEGORY_ID}`)).toBeVisible({ timeout: 15_000 });
     await expect(page.locator("text=Xmiss").first()).toBeVisible();
     await expect(sectionSummary(page, "配送料の負担")).toHaveText("送料込（出品者負担）");
-    await expect(page.getByText(/未確定/)).toHaveCount(0);
+    // task_1d6008f0c4f2ef3468是正: 常設ヘルプ文にも"未確定"という語が
+    // 含まれるようになった(下の同名コメント参照)ため、ページ全体からの
+    // 正規表現一致ではなくカテゴリー未確定バナー自体の文言だけへ絞り込む。
+    await expect(page.getByText("未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）")).toHaveCount(0);
+  });
+
+  /**
+   * task_1d6008f0c4f2ef3468(2026-09-15是正)の本題: 発送元/配送方法/CSV
+   * 公開設定はカテゴリー未確定でも独立して保存でき、既定値(発送元jp11/
+   * 配送方法1=出品者手配/CSV公開設定2=公開)と実績例外(配送方法3=
+   * らくらくメルカリ便)の両方をUIで選べる。
+   * scripts/verify-mercari-csv-edit-save.tsのtask_1d6008f0c4f2ef3468
+   * セクションが同じシナリオをNodeからservice.tsを直接叩いて検証済み
+   * ——ここでは実ブラウザ・実Server Action経路で同じ順序(発送元→
+   * 配送方法→CSV公開設定→カテゴリー後付け)を通す。専用id
+   * (E2E_MERCARI_CSV_SHIPPING_EXTRAS_ID="e2e-inv-53"、lib/listing/
+   * e2eFixtures.ts参照)を使い、48番(既存のカテゴリー/発送日数/配送料
+   * 負担の検証)と保存済み状態が混ざらないようにする。
+   */
+  test("発送元/配送方法(既定1・実績例外3)/CSV公開設定をカテゴリー未確定のまま独立保存→再読込で保持→カテゴリー後付けしても失われない", async ({ page }) => {
+    test.setTimeout(45_000);
+    await signIn(page);
+    await page.goto("/inventory/e2e-inv-53/listing");
+    await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）")).toBeVisible();
+
+    // 保存前は既定値(発送元jp11/配送方法=出品者手配/CSV公開設定=公開)が表示されている。
+    await expect(page.getByText("未設定（既定値「jp11」を適用してCSV出力）")).toBeVisible();
+    await expect(page.getByText("未設定（既定値「出品者手配」を適用してCSV出力）")).toBeVisible();
+    await expect(page.getByText("未設定（既定値「CSV出力時: 公開」を適用してCSV出力）")).toBeVisible();
+
+    // 発送元の地域(自由入力)をカテゴリー未確定のまま独立保存。
+    await sectionInput(page, "発送元の地域").fill("jp13");
+    await sectionSaveButton(page, "発送元の地域").click();
+    await expect(sectionSummary(page, "発送元の地域")).toHaveText("jp13", { timeout: 10_000 });
+
+    // 配送方法=実績例外3(らくらくメルカリ便)を独立保存。
+    await sectionSelect(page, "配送方法").selectOption("3");
+    await sectionSaveButton(page, "配送方法").click();
+    await expect(sectionSummary(page, "配送方法")).toHaveText("らくらくメルカリ便", { timeout: 10_000 });
+
+    // CSV出力時の公開設定=非公開(既定の公開から変更)を独立保存。
+    await sectionSelect(page, "CSV出力時の公開設定").selectOption("1");
+    await sectionSaveButton(page, "CSV出力時の公開設定").click();
+    await expect(sectionSummary(page, "CSV出力時の公開設定")).toHaveText("CSV出力時: 非公開", { timeout: 10_000 });
+
+    // カテゴリーはまだ未確定——最終CSV出力はまだブロックされる。
+    await expect(page.getByText("未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）")).toBeVisible();
+
+    // 再読込しても3項目とも保持される(サーバー側へ実際に永続化されている確認)。
+    await page.reload();
+    await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
+    await expect(sectionSummary(page, "発送元の地域")).toHaveText("jp13", { timeout: 15_000 });
+    await expect(sectionSummary(page, "配送方法")).toHaveText("らくらくメルカリ便");
+    await expect(sectionSummary(page, "CSV出力時の公開設定")).toHaveText("CSV出力時: 非公開");
+
+    // カテゴリーを後付けしても、先に保存した3項目が消えない(persist()のPartial patch/merge)。
+    await selectFurnitureCategoryById(page);
+    await expect(page.getByText("保存しました。")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`text=${FURNITURE_CATEGORY_ID}`)).toBeVisible();
+    await expect(sectionSummary(page, "発送元の地域")).toHaveText("jp13");
+    await expect(sectionSummary(page, "配送方法")).toHaveText("らくらくメルカリ便");
+    await expect(sectionSummary(page, "CSV出力時の公開設定")).toHaveText("CSV出力時: 非公開");
+    // task_1d6008f0c4f2ef3468是正: 「カテゴリーが未確定のままでも先に選んで
+    // 保存できます」等の常設ヘルプ文にも"未確定"という語が含まれるように
+    // なった(冒頭説明文・発送日数/送料負担セクションの説明文)ため、
+    // ページ全体からの正規表現一致では常に3件ヒットして誤検知する。
+    // カテゴリー未確定バナー自体の文言だけへ絞り込む。
+    await expect(page.getByText("未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）")).toHaveCount(0);
+
+    // 再読込しても(カテゴリー確定後も)全項目が保持される。
+    await page.reload();
+    await expect(page.locator(`text=${FURNITURE_CATEGORY_ID}`)).toBeVisible({ timeout: 15_000 });
+    await expect(sectionSummary(page, "発送元の地域")).toHaveText("jp13");
+    await expect(sectionSummary(page, "配送方法")).toHaveText("らくらくメルカリ便");
+    await expect(sectionSummary(page, "CSV出力時の公開設定")).toHaveText("CSV出力時: 非公開");
   });
 
   test("VIEWER権限では出品編集ページ自体を開けない(保存導線に到達できない)", async ({ page }) => {
@@ -240,11 +319,26 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     await signIn(page);
     const TARGET_ID = "e2e-listing-40";
     const FEE_ID = "fee-e2e-40001";
+    const BRAND_ID = "225nDaWCk4MpMbnFP6a5An";
 
     await page.goto(`/inventory/${TARGET_ID}/listing`);
     await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("未確定（CSV出力がブロックされます）")).toBeVisible();
+    await expect(page.getByText("未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）")).toBeVisible();
 
+    // Save brand and shipping settings before choosing a category, then verify
+    // the actual downloaded CSV after reload and category assignment.
+    await page.getByPlaceholder("ブランド名（和名/カナ/英語）で検索").fill("キスミス");
+    await page.getByRole("button", { name: new RegExp(BRAND_ID) }).click();
+    await expect(page.getByText("保存しました。")).toBeVisible();
+    await sectionInput(page, "発送元の地域").fill("jp13");
+    await sectionSaveButton(page, "発送元の地域").click();
+    await expect(sectionSummary(page, "発送元の地域")).toHaveText("jp13");
+    await sectionSelect(page, "CSV出力時の公開設定").selectOption("1");
+    await sectionSaveButton(page, "CSV出力時の公開設定").click();
+    await expect(sectionSummary(page, "CSV出力時の公開設定")).toHaveText("CSV出力時: 非公開");
+    await page.reload();
+    await expect(page.getByText("未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）")).toBeVisible();
+    await expect(page.getByText(BRAND_ID, { exact: false })).toBeVisible();
     await selectFurnitureCategoryById(page);
     await expect(page.getByText("保存しました。")).toBeVisible({ timeout: 10_000 });
 
@@ -318,8 +412,13 @@ test.describe("Mercari CSV編集補完の実UI保存(saveChannelOverrideAction�
     const dataRow = rows.find((cells) => cells[24] === "LST-0040");
     expect(dataRow, `LST-0040の行がCSVに含まれる(実際の行数: ${rows.length})`).toBeTruthy();
     if (dataRow) {
+      expect(dataRow).toHaveLength(88);
+      expect(dataRow[72]).toBe(BRAND_ID);
       expect(dataRow[74]).toBe(FURNITURE_CATEGORY_ID);
+      expect(dataRow[76]).toBe("1");
+      expect(dataRow[77]).toBe("jp13");
       expect(dataRow[78]).toBe("2"); // 「2〜3日で発送」のコード値
+      expect(dataRow[79]).toBe("1");
       expect(dataRow[80]).toBe("2"); // 「送料別（購入者負担）」のコード値
       expect(dataRow[81]).toBe(FEE_ID); // 送料ID
     }

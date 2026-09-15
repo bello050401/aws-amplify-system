@@ -182,6 +182,9 @@ export const E2E_INVENTORY_ROWS: InventoryListRow[] = [
   // ため、同じidを検索テストと共有すると先に51番へ保存された値が
   // 検索テスト側の「初回は未確定」前提を壊す——専用idで分離する。
   makeRow(52),
+  // 発送元/配送方法/CSV公開設定の独立保存順序検証(task_1d6008f0c4f2ef3468、
+  // 2026-09-15是正)専用。lib/listing/e2eFixtures.tsのE2E_MERCARI_CSV_SHIPPING_EXTRAS_ID参照。
+  makeRow(53),
 ];
 
 export function e2eListPage(offset: number, limit: number): SearchPage<InventoryListRow> {

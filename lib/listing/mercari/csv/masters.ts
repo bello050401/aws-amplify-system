@@ -1,31 +1,44 @@
-import fs from "node:fs";
-import path from "node:path";
-import iconv from "iconv-lite";
 import { buildFurnitureCategoryBuckets, type FurnitureCategoryBucket } from "./furnitureCategoryTree";
-
 export type { FurnitureCategoryBucket, FurnitureCategoryNode, FurnitureCategoryLeaf } from "./furnitureCategoryTree";
+import generatedBrandMaster from "./generated/brand-master.generated.json";
+import generatedCategoryMaster from "./generated/category-master.generated.json";
+
 
 /**
  * ブランド/カテゴリマスタの読み込みと検索。
  *
  * 指示書§4「全ブランド数万件を初期JSへ埋込まず必要時検索/結果上限」
- * の通り、マスタはビルド成果物へ埋め込まず、サーバー側で
- * `data/mercari-masters/*.csv` を実行時に読む(Next.jsのServer
- * Action/RSCから呼ばれる前提。ブラウザバンドルには含めない)。
+ * の通り、マスタ全量はブラウザへは送らない——ここから検索するのは
+ * サーバー側(Server Action/RSC)からのみで、返す件数自体を
+ * `SEARCH_RESULT_LIMIT`で絞る。
+ *
+ * ## 実行時fs読込をやめた理由(2026-09-15是正、実測)
+ *
+ * 以前はサーバー側で`data/mercari-masters/*.csv`を`process.cwd()`基準で
+ * 実行時に読んでいたが、公開a1a7a46配信後、本番では
+ * 「カテゴリマスタが読み込めない(category_master.csv未検出)」で失敗
+ * した(ローカルE2E/単体/buildはすべて成功)。原因はAmplify Hosting SSRの
+ * ビルド成果物選別(Next.jsのfile tracing、@vercel/nftベース)——
+ * `process.cwd()`はビルド時点で値が定まらないため、tracerがこの参照を
+ * 静的解決できず`data/mercari-masters/*.csv`が本番SSR成果物に同梱され
+ * ない(ローカルはリポジトリ直下がcwdになるので偶然動いていた)。
+ *
+ * 対策として、CSV原本(`data/mercari-masters/`、git追跡済み)を
+ * `scripts/generate-mercari-masters-data.cjs`でビルド時(prebuild/predev)
+ * にJSONへ変換し、ここでは通常の相対importとして読み込む形にした。
+ * webpackが静的にバンドルへ埋め込むため、実行時のファイル探索自体が
+ * 無くなり、Amplifyの成果物選別の影響を受けない。
  *
  * 提供元:
- *  - brand_master.csv ← 提供物 brand_master_sjis.csv(CP932)を
- *    そのまま配置。ブランドID/ブランド名/ブランド名（カナ）/
+ *  - data/mercari-masters/brand_master.csv ← 提供物 brand_master_sjis.csv
+ *    (CP932)をそのまま配置。ブランドID/ブランド名/ブランド名（カナ）/
  *    ブランド名（英語）。
- *  - category_master.csv ← 提供物 category_master_updated_sjis.csv
- *    (ファイル名に反しUTF-8)をそのまま配置。カテゴリID/カテゴリ名/
- *    カテゴリ名（フル）。
+ *  - data/mercari-masters/category_master.csv ← 提供物
+ *    category_master_updated_sjis.csv(ファイル名に反しUTF-8)をそのまま
+ *    配置。カテゴリID/カテゴリ名/カテゴリ名（フル）。
  *
- * 提供物ディレクトリから上記2ファイルをそのまま`data/mercari-masters/`へ
- * 配置済み(ブランド約52,706件、カテゴリ約7,625件、いずれも見出し行除く実
- * データ件数。`scripts/verify-mercari-csv-export.ts`のtestMasters参照)。
- * ファイルが無い環境では`hasBrandMaster`/`hasCategoryMaster`がfalseになり
- * 呼び出し側はマスタ未検出として扱う(捏造した候補を出さない)。
+ * 実件数はブランド約52,706件、カテゴリ約7,625件(いずれも見出し行除く。
+ * `scripts/verify-mercari-csv-export.ts`のtestMasters参照)。
  */
 
 export interface BrandMasterEntry {
@@ -41,46 +54,15 @@ export interface CategoryMasterEntry {
   fullPath: string;
 }
 
-const MASTERS_DIR = path.join(process.cwd(), "data", "mercari-masters");
-const BRAND_MASTER_PATH = path.join(MASTERS_DIR, "brand_master.csv");
-const CATEGORY_MASTER_PATH = path.join(MASTERS_DIR, "category_master.csv");
-
-/** ダブルクオートを含まない単純CSV前提(マスタ提供物はプレーンな列のみ)。 */
-function splitSimpleCsvLine(line: string): string[] {
-  return line.split(",");
-}
-
-function readCsvRows(filePath: string, encoding: "cp932" | "utf8"): string[][] | null {
-  if (!fs.existsSync(filePath)) return null;
-  const bytes = fs.readFileSync(filePath);
-  const text = encoding === "cp932" ? iconv.decode(bytes, "cp932") : bytes.toString("utf8").replace(/^﻿/, "");
-  const lines = text.split(/\r\n|\n/).filter((l) => l.length > 0);
-  return lines.slice(1).map(splitSimpleCsvLine); // 先頭行はヘッダーなので除く
-}
-
-let brandCache: BrandMasterEntry[] | null | undefined;
-let categoryCache: CategoryMasterEntry[] | null | undefined;
+const brandMaster = generatedBrandMaster as BrandMasterEntry[];
+const categoryMaster = generatedCategoryMaster as CategoryMasterEntry[];
 
 export function loadBrandMaster(): BrandMasterEntry[] | null {
-  if (brandCache !== undefined) return brandCache;
-  const rows = readCsvRows(BRAND_MASTER_PATH, "cp932");
-  brandCache = rows
-    ? rows
-        .filter((r) => r.length >= 4 && r[0])
-        .map((r) => ({ brandId: r[0], name: r[1] ?? "", nameKana: r[2] ?? "", nameEnglish: r[3] ?? "" }))
-    : null;
-  return brandCache;
+  return brandMaster.length > 0 ? brandMaster : null;
 }
 
 export function loadCategoryMaster(): CategoryMasterEntry[] | null {
-  if (categoryCache !== undefined) return categoryCache;
-  const rows = readCsvRows(CATEGORY_MASTER_PATH, "utf8");
-  categoryCache = rows
-    ? rows
-        .filter((r) => r.length >= 3 && r[0])
-        .map((r) => ({ categoryId: r[0], name: r[1] ?? "", fullPath: r[2] ?? "" }))
-    : null;
-  return categoryCache;
+  return categoryMaster.length > 0 ? categoryMaster : null;
 }
 
 export function hasBrandMaster(): boolean {
@@ -133,6 +115,7 @@ export function getBrandById(brandId: string): BrandMasterEntry | null {
   return master?.find((b) => b.brandId === brandId) ?? null;
 }
 
+
 let furnitureBucketsCache: FurnitureCategoryBucket[] | undefined;
 
 /**
@@ -151,11 +134,4 @@ export function getFurnitureCategoryBuckets(): FurnitureCategoryBucket[] {
   const master = loadCategoryMaster();
   furnitureBucketsCache = buildFurnitureCategoryBuckets(master ?? []);
   return furnitureBucketsCache;
-}
-
-/** テスト用: キャッシュを破棄する(合成fixtureを切り替えて再読込するため)。 */
-export function resetMastersCacheForTests(): void {
-  brandCache = undefined;
-  categoryCache = undefined;
-  furnitureBucketsCache = undefined;
 }

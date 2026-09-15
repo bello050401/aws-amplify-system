@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Request, type Response } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 /**
  * 家具店向け効率化指示書(2026-09-15)是正(task_302c7e3c24b575629d) §7-1/2/6
@@ -140,61 +140,42 @@ function entryButtons(page: Page) {
   return picker(page).getByRole("button", { name: new RegExp(`^(${EXPECTED_ENTRY_LABELS.join("|")})$`) });
 }
 
-/**
- * task_302c7e3c24b575629d是正(3回目、2026-09-15、task_a2a77378a1c45bdc3b):
- * Server Action(このNext.jsバージョンでは現在ページURLへのPOST +
- * `next-action`ヘッダ付きリクエスト)のうち、レスポンス本文に`marker`を
- * 含むものだけを数える——`marker`は対象Actionの戻り値だけに出現する
- * 固有の文字列(このファイル冒頭コメント参照)。ヘッダだけでなく実際に
- * 返ってきた内容を根拠にすることで、このページに同居する他セクション
- * (BaseListingSection等)が独自に発するServer Actionを数に混入させない。
- *
- * 2回目の是正からの変更点(実測で判明した不具合の修正、このファイル
- * 冒頭コメント参照): `page.on("response", ...)`ハンドラの中で
- * `res.text()`を`.then()`だけの非同期チェーンとして投げっぱなしにすると、
- * `waitForStableTreeFetchBaseline`が最初にcount()を読む時点でまだ
- * どの本文も解決していない(=count()===0のまま)窓が生まれうる。
- * `requestfinished`イベント(レスポンスの受信が完了した後にのみ発火する
- * ——`response`イベントより後で、本文取得のcreateReadStream/text()が
- * 安定して呼べる状態)を起点にし、本文取得のPromise自体を配列に保持
- * しておく。`count()`はその場のスナップショットではなく、保持した
- * 全Promiseを`Promise.allSettled`で解決し切ってから実際にmarkerへ
- * 一致した件数を返す——非同期の取りこぼし窓を構造的に無くす。
- * 加えて、POST+next-actionヘッダを持つが本文取得に失敗した候補
- * (ナビゲーション中断等)を`unreadableCount`として別途保持し、
- * `waitForStableTreeFetchBaseline`がタイムアウトした場合の診断に使う
- * ——「マーカーが一致しない0件」なのか「本文自体が読めていない0件」
- * なのかをエラーメッセージから区別できるようにする。
- */
-function trackTargetActionResponses(page: Page, marker: string): { count: () => Promise<number>; urls: () => Promise<string[]>; unreadableCount: () => number } {
-  const pending: Promise<{ url: string; body: string } | null>[] = [];
-  let unreadable = 0;
-  page.on("requestfinished", (req: Request) => {
-    if (req.method() !== "POST" || !req.headers()["next-action"]) return;
-    const promise = req
-      .response()
-      .then((res: Response | null) => {
-        if (!res) return null;
-        return res.text().then((body) => ({ url: req.url(), body }));
-      })
-      .catch(() => {
-        // ナビゲーション中断等でresponse/bodyが読めない場合は診断用に
-        // 件数だけ記録する——実際の対象Actionのレスポンスは通常の
-        // ページ遷移下では常に読めるため、これが増える時は判定ロジック
-        // 自体の取りこぼしを疑う診断シグナルになる。
-        unreadable++;
-        return null;
-      });
-    pending.push(promise);
-  });
+/** Capture real local Server Action responses before Chromium discards streamed bodies. */
+const observedActions = new WeakMap<Page, { responses: { url: string; body: string }[]; unreadable: number }>();
+async function trackTargetActionResponses(page: Page, marker: string) {
+  let observed = observedActions.get(page);
+  if (!observed) {
+    observed = { responses: [], unreadable: 0 };
+    observedActions.set(page, observed);
+    const state = observed;
+    // Chromium can discard streamed RSC bodies before response.text() reads
+    // them. Capture the real response before delivering the unchanged bytes.
+    // No action result is mocked; every action still reaches the local server.
+    await page.route("**/*", async (route) => {
+      const req = route.request();
+      if (req.method() !== "POST" || !(await req.headerValue("next-action"))) {
+        await route.continue();
+        return;
+      }
+      try {
+        const response = await route.fetch();
+        const body = await response.body();
+        state.responses.push({ url: req.url(), body: body.toString("utf8") });
+        await route.fulfill({ response, body });
+      } catch (error) {
+        state.unreadable++;
+        throw error;
+      }
+    });
+  }
+  const state = observed;
   async function resolveMatches(): Promise<{ url: string; body: string }[]> {
-    const settled = await Promise.all(pending);
-    return settled.filter((r): r is { url: string; body: string } => r !== null && r.body.includes(marker));
+    return state.responses.filter((r) => r.body.includes(marker));
   }
   return {
     count: async () => (await resolveMatches()).length,
     urls: async () => (await resolveMatches()).map((r) => r.url),
-    unreadableCount: () => unreadable,
+    unreadableCount: () => state.unreadable,
   };
 }
 
@@ -228,17 +209,26 @@ async function waitForStableTreeFetchBaseline(tracker: { count: () => Promise<nu
 }
 
 test.describe("Mercari 8入口カテゴリナビゲータ(MercariFurnitureCategoryPicker)の実UI検証", () => {
+  test.afterEach(async ({ page }) => {
+    // A reload can start another real action at the end of the assertions.
+    // Drain it before Playwright disposes this test's request context.
+    await page.unrouteAll({ behavior: "wait" });
+  });
   test("8入口が表示され家具外カテゴリが出ない、ドリルダウン→パンくず→決定ボタンの活性/非活性→保存→再読込で復元される", async ({ page }) => {
     test.setTimeout(45_000);
     await signIn(page);
 
     // 初回マウント時の木構造取得(getMercariFurnitureCategoryTreeAction)
     // 1回分を含めて計測を開始する(goto前からリスナーを張る)。
-    const treeFetch = trackTargetActionResponses(page, TREE_FETCH_MARKER);
-    const save = trackTargetActionResponses(page, SAVE_ACTION_MARKER);
+    const treeFetch = await trackTargetActionResponses(page, TREE_FETCH_MARKER);
+    const save = await trackTargetActionResponses(page, SAVE_ACTION_MARKER);
     await page.goto(`/inventory/${TARGET_ID}/listing`);
     await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("未確定（CSV出力がブロックされます）")).toBeVisible();
+    // task_1d6008f0c4f2ef3468是正(MercariCategoryMappingSection.tsx):
+    // カテゴリー未確定でも他項目を先に保存できるようになった案内を含めて
+    // 文言が変わった("最終CSV出力がブロックされます。他の項目は先に
+    // 保存できます")。
+    await expect(page.getByText("未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）")).toBeVisible();
 
     // 1) 8入口が表示され、家具外の分類(例: ファッション/家電等)は一切出ない。
     const buttons = entryButtons(page);
@@ -319,8 +309,8 @@ test.describe("Mercari 8入口カテゴリナビゲータ(MercariFurnitureCatego
     test.setTimeout(45_000);
     await signIn(page);
 
-    const treeFetch = trackTargetActionResponses(page, TREE_FETCH_MARKER);
-    const save = trackTargetActionResponses(page, SAVE_ACTION_MARKER);
+    const treeFetch = await trackTargetActionResponses(page, TREE_FETCH_MARKER);
+    const save = await trackTargetActionResponses(page, SAVE_ACTION_MARKER);
     await page.goto(`/inventory/${SEARCH_TARGET_ID}/listing`);
     await expect(page.getByText("Mercariカテゴリー / ブランド（CSV出力用）")).toBeVisible({ timeout: 15_000 });
     await expect(entryButtons(page)).toHaveCount(EXPECTED_ENTRY_LABELS.length, { timeout: 15_000 });

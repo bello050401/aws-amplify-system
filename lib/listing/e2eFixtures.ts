@@ -369,7 +369,8 @@ export function e2eMercariCsvListingDraft(inventoryId: string): ListingDraftReco
     inventoryId === E2E_MERCARI_CSV_EDIT_ID ||
     inventoryId === E2E_MERCARI_CSV_SAVE_FAIL_ID ||
     inventoryId === E2E_MERCARI_FURNITURE_PICKER_ID ||
-    inventoryId === E2E_MERCARI_FURNITURE_SEARCH_ID
+    inventoryId === E2E_MERCARI_FURNITURE_SEARCH_ID ||
+    inventoryId === E2E_MERCARI_CSV_SHIPPING_EXTRAS_ID
   ) {
     return e2eMercariCsvDraft(inventoryId, [{ storageKey: "e2e-mercari-img:ok-1" }]);
   }
@@ -487,6 +488,16 @@ export const E2E_MERCARI_CSV_INVALID_PRICE_ID = "e2e-inv-50";
 export const E2E_MERCARI_FURNITURE_PICKER_ID = "e2e-inv-51";
 /** 家具内検索(task_302c7e3c24b575629d §4-D是正)専用。上のE2E_MERCARI_FURNITURE_PICKER_IDはドリルダウン保存テストが実際に保存まで行うため共有できない(コメント参照)。 */
 export const E2E_MERCARI_FURNITURE_SEARCH_ID = "e2e-inv-52";
+/**
+ * 発送元/配送方法/CSV公開設定の独立保存(task_1d6008f0c4f2ef3468、
+ * 2026-09-15是正)専用。E2E_MERCARI_CSV_EDIT_ID(e2e-inv-48)と同じく
+ * カテゴリー/発送日数/配送料負担/発送元/配送方法/CSV公開設定すべて
+ * 未確定から始めるが、48番は既存のカテゴリー/発送日数/配送料負担の
+ * 保存順序を検証する専用specの本題を持つため、新規3項目の保存順序
+ * (発送元→配送方法→CSV公開設定→カテゴリー後付け、および逆順)の
+ * 検証で同じidを使うとテスト同士の保存済み状態が混ざる——分離する。
+ */
+export const E2E_MERCARI_CSV_SHIPPING_EXTRAS_ID = "e2e-inv-53";
 
 /** getChannelListing(service.ts)のE2E分岐から呼ぶ。合成保存済みの値があればそれを優先し、無ければ従来通りの静的fallback(またはnull)を返す——既存id(E2E_MANUAL_ONLY_INVENTORY_ID等)は一度も保存されないため、常にfallbackがそのまま返り挙動は変わらない。channelもキーに含める(上のchannelOverrideKey参照——別channelの保存を誤って返さない)。 */
 export function e2eChannelOverrideFor(inventoryId: string, channel: ListingChannel, fallback: ChannelListingRecord | null): ChannelListingRecord | null {

@@ -91,7 +91,17 @@ export interface ListingDraftRecord {
  * lib/listing/mercari/csv/masters.tsのCategoryMasterEntry/BrandMasterEntry。
  */
 export interface MercariCategoryMapping {
-  mercariCategoryId: string;
+  /**
+   * task_1d6008f0c4f2ef3468(2026-09-15是正): カテゴリー未確定でも他の
+   * 項目(発送日数/配送料負担/発送元/配送方法/CSV公開設定/ブランド)を
+   * 先に保存できるようにするため、必須ではなくoptionalにした。偽の
+   * カテゴリID(空文字列等)は作らない——未確定は必ずundefinedで表す。
+   * 最終CSV生成時のみvalidateMercariCsvRow(lib/listing/mercari/csv/
+   * validate.ts)がこの値の必須チェックを行う(下書き保存側では強制
+   * しない、lib/listing/service.tsのassertValidChannelOverrideInput
+   * 参照)。
+   */
+  mercariCategoryId?: string;
   /** 表示用(選択時のフルパス)。CSVには出さない。 */
   mercariCategoryName?: string;
   mercariBrandId?: string;
@@ -131,6 +141,35 @@ export interface MercariCategoryMapping {
    * 送料込のCSVへ漏れ出さない)。
    */
   mercariShippingFeeId?: string;
+  /**
+   * 発送元の地域(task_1d6008f0c4f2ef3468、2026-09-15追加)。実績CSV
+   * 531件の共通値採用指示により既定は"jp11"(埼玉、lib/listing/mercari/
+   * csv/assembleRow.tsのDEFAULT_MERCARI_SHIPPING_ORIGIN_AREAと共有)。
+   * 未設定(undefined)の間はCSV生成時にその既定値を適用し、保存済みの
+   * 実値があればそちらを優先する(mercariShippingDays等と同じ解決規則)。
+   */
+  mercariShippingOriginArea?: string;
+  /**
+   * Mercari公式配送コード(task_1d6008f0c4f2ef3468、2026-09-15追加。
+   * 1未定(出品者手配)/2クール便/3らくらくメルカリ便/4クール冷蔵/
+   * 5クール冷凍/6Biz、lib/listing/mercari/csv/types.tsのコメント参照)。
+   * lib/listing/types.tsのListingShippingMethod(KAZAI/SAGAWA、BELLO内部
+   * のらくらく家財便/佐川急便の選択でCSV出力の対象外)とは別物——名前を
+   * `mercariShippingMethod`とし、既存のListingShippingMethodと混同しない
+   * ようにする。実績には既定(1)以外に3(らくらくメルカリ便)の例外がある
+   * ため商品ごとに変更できる。未設定(undefined)の間はCSV生成時に既定値
+   * (1)を適用する。
+   */
+  mercariShippingMethod?: 1 | 2 | 3 | 4 | 5 | 6;
+  /**
+   * CSV出力時の公開設定(task_1d6008f0c4f2ef3468、2026-09-15追加。
+   * 1非公開/2公開、lib/listing/mercari/csv/types.tsのproductStatus)。
+   * 実アップロード/登録/出品操作はBELLO側で一切行わない——これは
+   * 「CSVへどちらの値を書き出すか」の選択でしかない(指示書§4-D)。
+   * 実績共通値採用指示により既定は2(公開)。未設定(undefined)の間は
+   * CSV生成時に既定値を適用する。
+   */
+  mercariCsvProductStatus?: 1 | 2;
 }
 
 /** ChannelListing(Channel Listing + Channel Override + External Listing Status)のUI/Server Action向け公開シェイプ。 */
