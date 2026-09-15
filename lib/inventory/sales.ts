@@ -284,7 +284,12 @@ export function isCurrentJstYearMonth(year: number, month: number, referenceDate
 export interface SalesForecast {
   year: number;
   month: number;
-  /** JSTでの「今日」の日(1-31) — 経過日数の算出根拠。 */
+  /**
+   * 経過日数の算出根拠にした「日」(1-31)。呼び出し側がforecastReferenceDayで
+   * 求めた値を渡す想定 — 常にJSTでの「実行時点の今日」とは限らない
+   * (集計の再構築時点のJST日を使うことがある。forecastReferenceDayの
+   * コメント参照)。
+   */
   today: number;
   /** 当月の総日数(28〜31、閏年2月は29)。 */
   totalDaysInMonth: number;
@@ -311,6 +316,74 @@ export interface SalesForecast {
  * elapsedDaysは1〜当月日数の範囲にクランプするため、todayDayにどんな
  * 値が渡ってもNaN/Infinity/0除算が発生することはない。
  */
+/**
+ * 着地予測の分母(elapsedDays)に使う「日」を求める(2026-09-15 スナップ
+ * ショット整合性修正 → 2026-09-15 異常系表示修正)。
+ *
+ * ── 見つかった不整合 ──────────────────────────────────────────────
+ *
+ * SalesAggregateSnapshot(表示中のtotalSalesの元データ)は12時間おきにし
+ * か再構築されない(salesView.tsコメント参照)。以前はcalculateMonthEnd
+ * ForecastのtodayDayに常にnowInJst()(=画面を開いた瞬間のJSTの「今日」)
+ * を渡していたため、集計の再構築時刻と画面を開いた時刻がずれるとtotal
+ * Salesと分母(経過日数)が指している時点が食い違っていた。
+ *
+ * 実測(2026-09-15 Codex公開CUA報告): 9/14 21:00 JST時点で再構築された
+ * 集計(totalSales=2,407,020円、9/14までの14日ぶん)を9/15朝に開くと、
+ * elapsedDaysには翌日の15が使われ 2,407,020 ÷ 15 = 160,468円/日という、
+ * 新しい売上が1円も増えていないのに日付が変わっただけで下がる着地予測
+ * を表示していた。正しくは2,407,020 ÷ 14 = 171,930円/日 — totalSales
+ * が実際に反映している日数(=集計の再構築時点のJST日)で割るべき。
+ *
+ * ── なぜ「今日へフォールバック」を廃止したか ────────────────────────
+ *
+ * 上記の修正の初版は、rebuiltAtの解析に失敗した場合/rebuiltAtのJST年月
+ * が表示対象と一致しない場合に「今日」(nowInJst)へフォールバックして
+ * いた。しかしこれは「根拠が不明な集計日時に対して、根拠不明の分母で
+ * 予測を計算して表示してしまう」という別の問題を残していた——不正な
+ * rebuiltAt文字列や、別月のスナップショットが誤って"ok"として返って
+ * きた場合でも、画面には何事もなかったかのように数字が出てしまう。
+ * 加えて、rebuiltAt(sales-aggregate-schedulerのhandler.tsではこの実行
+ * の開始時刻=startedAtがそのまま入る、完了時刻ではない)がクロックスキュー
+ * 等により閲覧時刻(referenceDate)より未来を指すケースも、同様に根拠が
+ * 崩れている。
+ *
+ * そのためこの関数は「日」をそのまま返さず、正常系(rebuiltAtが解析でき
+ * て、表示対象のJST年月と一致し、閲覧時刻以前)のときだけ`{ok: true, day}`
+ * を返し、それ以外(不正/別月/未来)は理由付きで`{ok: false, reason}`を
+ * 返す——呼び出し側(sales/page.tsx)はok:falseのときは着地予測そのものを
+ * 出さない(売上本体の表示は維持する)。
+ */
+export type ForecastReferenceDayResult =
+  | { ok: true; day: number }
+  | { ok: false; reason: "invalid" | "different-month" | "future" };
+
+export function forecastReferenceDay(
+  rebuiltAtIso: string,
+  year: number,
+  month: number,
+  referenceDate: Date = new Date(),
+): ForecastReferenceDayResult {
+  const rebuiltAt = new Date(rebuiltAtIso);
+  if (Number.isNaN(rebuiltAt.getTime())) {
+    // rebuiltAtが日時として解析できない——集計データの根拠自体が不明。
+    return { ok: false, reason: "invalid" };
+  }
+  if (rebuiltAt.getTime() > referenceDate.getTime()) {
+    // 集計が閲覧時刻より未来を名乗っている——クロックスキュー等の異常系
+    // (sales-aggregate-schedulerのhandler.tsはrebuiltAtに実行開始時刻を
+    // 入れる。通常は必ず閲覧時刻より過去のはず)。
+    return { ok: false, reason: "future" };
+  }
+  const rebuiltJst = nowInJst(rebuiltAt);
+  if (rebuiltJst.year !== year || rebuiltJst.month !== month) {
+    // 表示対象の年月と異なる月のスナップショットが"ok"として返ってきて
+    // いる想定外の状態——totalSalesがどの時点の値なのか保証できない。
+    return { ok: false, reason: "different-month" };
+  }
+  return { ok: true, day: rebuiltJst.day };
+}
+
 export function calculateMonthEndForecast(totalSales: number, year: number, month: number, todayDay: number): SalesForecast {
   const totalDaysInMonth = daysInMonth(year, month);
   const elapsedDays = Math.min(Math.max(Math.trunc(todayDay) || 1, 1), totalDaysInMonth);

@@ -1,7 +1,14 @@
 import Link from "next/link";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { loadSalesSummary } from "@/lib/inventory/salesView";
-import { nowInJst, isCurrentJstYearMonth, calculateMonthEndForecast, shiftYearMonth, formatJstDateTime } from "@/lib/inventory/sales";
+import {
+  nowInJst,
+  isCurrentJstYearMonth,
+  calculateMonthEndForecast,
+  forecastReferenceDay,
+  shiftYearMonth,
+  formatJstDateTime,
+} from "@/lib/inventory/sales";
 import { InventoryHeader } from "../../InventoryHeader";
 import { YearMonthPicker } from "./YearMonthPicker";
 import { SalesTrendChart } from "./SalesTrendChart";
@@ -57,7 +64,13 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
   // にnew Date()の年/月/日をそのまま使うと、日本時間の夜間~早朝
   // (UTCでは日付が進む/戻る境界)に「今月」の判定や着地予測が実際とズレ
   // うる。lib/inventory/sales.tsのnowInJstがこのズレを吸収する。
-  const jstNow = nowInJst();
+  // 2026-09-15 異常系表示修正: ページ内の「今」の判定(今月かどうか/
+  // 集計日時が閲覧時刻より未来でないか)はすべてこの1つのDateインスタンス
+  // を基準にする——isCurrentJstYearMonthとforecastReferenceDayが別々に
+  // new Date()を呼ぶと、理論上はミリ秒単位でズレた「今」を基準に判定して
+  // しまう(実害はほぼ無いが、根拠を1点に揃えるという方針そのものに反する)。
+  const now = new Date();
+  const jstNow = nowInJst(now);
   // 月と同じように年も検証する。以前は年だけ素通りで、URLを直接
   // 書き換えると「-5年8月」「99999年1月」「10000000000年3月」といった
   // 見出しがそのまま出ていた(実測)。前月/翌月リンクもその値を基準に
@@ -79,13 +92,35 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
   const next = shiftYearMonth(year, month, 1);
   const thisMonth = { year: jstNow.year, month: jstNow.month };
   const lastMonth = shiftYearMonth(thisMonth.year, thisMonth.month, -1);
-  const isCurrent = isCurrentJstYearMonth(year, month);
+  const isCurrent = isCurrentJstYearMonth(year, month, now);
 
-  // 追加修正指示 §3-§8: 今月の売上着地予測。当月が"ok"(集計テーブル
-  // から実際の値が取れている)のときにのみ計算する——"missing"/"error"
-  // の状態から0円ベースで予測を計算すると、実際にはまだ集計されて
-  // いないだけの月を「着地予測ゼロ」のように見せてしまうため。
-  const forecast = isCurrent && view.status === "ok" ? calculateMonthEndForecast(summary.totalSales, year, month, jstNow.day) : null;
+  // 追加修正指示 §3-§8 + 2026-09-15 異常系表示修正: 今月の売上着地予測。
+  // 当月が"ok"(集計テーブルから実際の値が取れている)のときにのみ計算
+  // する——"missing"/"error"の状態から0円ベースで予測を計算すると、
+  // 実際にはまだ集計されていないだけの月を「着地予測ゼロ」のように見せ
+  // てしまうため。
+  //
+  // 分母(経過日数)にはjstNow.day(画面を開いた時点の「今日」)をそのまま
+  // 使わない——SalesAggregateSnapshotは12時間おきにしか再構築されない
+  // ため、再構築時刻と閲覧時刻がずれると、totalSalesが実際に反映して
+  // いる日数と分母が食い違う(例: 前日21時に再構築された集計を翌朝見る
+  // と、売上が1円も増えていないのに日付が変わっただけで着地予測が下が
+  // って見える)。forecastReferenceDay(lib/inventory/sales.ts)が
+  // view.aggregateRebuiltAtのJST日を分母として使い、totalSalesとの時点
+  // を揃える。
+  //
+  // rebuiltAtが不正な文字列/表示対象と別月/閲覧時刻より未来—のいずれか
+  // (forecastReferenceDayがok:falseを返す異常系)では、根拠が不明な数字
+  // を出すよりは「予測なし」にする——売上高本体(summary.totalSales)の
+  // 表示はforecastの有無に関係なく維持される(下のSummaryTile参照)。
+  const referenceDay =
+    isCurrent && view.status === "ok" && view.aggregateRebuiltAt
+      ? forecastReferenceDay(view.aggregateRebuiltAt, year, month, now)
+      : null;
+  const forecast = referenceDay?.ok ? calculateMonthEndForecast(summary.totalSales, year, month, referenceDay.day) : null;
+  // 異常系のときだけ「算出不可」の簡潔な理由を出す(過去月/missing/error
+  // では着地予測欄自体を出さない——既存どおり)。
+  const forecastUnavailable = referenceDay !== null && !referenceDay.ok ? referenceDay.reason : null;
 
   const yen = (n: number) => `¥${n.toLocaleString("ja-JP")}`;
 
@@ -144,6 +179,19 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
             </div>
             <p className="mt-1 text-[11px] text-gray-400">
               {forecast.month}月{forecast.today}日時点 / {forecast.totalDaysInMonth}日間
+            </p>
+          </div>
+        )}
+        {/* 2026-09-15 異常系表示修正: 集計日時が不正/表示対象と別月/
+            閲覧時刻より未来——のいずれかで着地予測の根拠が揃わない場合、
+            数字を出さず理由だけ簡潔に示す。売上高本体は下のSummaryTileで
+            引き続き表示される(§8「0円と未集計を混同させない」と同じ
+            考え方で、予測の有無と実績の表示を分離する)。 */}
+        {forecastUnavailable && (
+          <div className="mb-6 max-w-3xl">
+            <p className="mb-1.5 text-[11px] font-bold text-gray-400">今月の売上着地予測</p>
+            <p className="text-[12px] text-gray-500">
+              集計日時を確認できないため、着地予測は算出できません(実績の売上高には影響ありません)。
             </p>
           </div>
         )}

@@ -3,6 +3,8 @@ import { listInventoryBySaleMonth } from "./queries";
 import { formatYearMonth, totalsFromAggregate, type SalesTotals } from "./salesAggregate";
 import { getMonthlyAggregates, type MonthlyAggregatesResult } from "./salesAggregateStore";
 import { summarizeSales, shiftYearMonth, type SalesTargetItem } from "./sales";
+import { isE2EFixtureModeActive } from "./e2eFixtures";
+import { e2eLoadSalesSummary } from "./salesE2eFixtures";
 
 /**
  * 売上画面が読むデータの入口(2026-09-02 指示書§20、2026-09-11 追加修正
@@ -29,6 +31,16 @@ import { summarizeSales, shiftYearMonth, type SalesTargetItem } from "./sales";
  * (SalesMonthlyAggregate)から単一スナップショット(SalesAggregateSnapshot)
  * へ置き換わったのは salesAggregateStore.ts 側だけの話(docs/
  * sales-aggregate-snapshot-consistency-20260911.md参照)。
+ *
+ * ── 2026-09-15 売上予測候補b2b385fの実ブラウザQA基盤 ─────────────
+ *
+ * loadSalesSummaryはisE2EFixtureModeActive()(NODE_ENV!=="production"かつ
+ * INVENTORY_E2E_FIXTURES==="1"、lib/inventory/e2eFixtures.ts)が真の
+ * ときだけ、getMonthlyAggregatesを一切呼ばずlib/inventory/
+ * salesE2eFixtures.tsの完全合成SalesSummaryViewを返す——集計テーブルへの
+ * GetItemそのものが発生しないため実SDK到達はゼロになる
+ * (scripts/verify-sales-summary-e2e-isolation.tsで実証)。本番分岐
+ * (このガード以降の実装)は変更していない。
  */
 
 export type MonthAggregateStatus = "ok" | "missing" | "error";
@@ -62,6 +74,13 @@ function emptyTotals(year: number, month: number): SalesTotals {
  * (SalesAggregateSnapshot)へのGetItem(1回)のみ。
  */
 export async function loadSalesSummary(year: number, month: number): Promise<SalesSummaryView> {
+  // ★要件(2026-09-15 売上予測候補b2b385fの実ブラウザQA基盤): 非本番
+  // 二重ゲート通過時は完全合成データを返し、この関数の残り(実集計
+  // テーブルへのGetItem)には一切進まない——実SDK到達ゼロを構造的に保証する。
+  if (isE2EFixtureModeActive()) {
+    return e2eLoadSalesSummary(year, month);
+  }
+
   const months: { year: number; month: number }[] = [];
   for (let i = 11; i >= 0; i--) months.push(shiftYearMonth(year, month, -i));
   const keys = months.map((m) => formatYearMonth(m.year, m.month));

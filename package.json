@@ -68,6 +68,8 @@
     "verify:custom-fields-codec": "node scripts/with-server-only-stub.cjs scripts/verify-custom-fields-codec.ts",
     "verify:search-projection": "node scripts/with-server-only-stub.cjs scripts/verify-search-projection.ts",
     "verify:sales-aggregate": "node scripts/with-server-only-stub.cjs scripts/verify-sales-aggregate.ts",
+    "verify:sales-forecast-snapshot-alignment": "tsx scripts/verify-sales-forecast-snapshot-alignment.ts",
+    "verify:sales-summary-e2e-isolation": "node scripts/with-server-only-stub.cjs scripts/verify-sales-summary-e2e-isolation.ts",
     "rebuild:sales-aggregate": "node scripts/with-server-only-stub.cjs scripts/rebuild-sales-aggregate.ts",
     "e2e:staging": "playwright test --config=playwright.staging.config.ts",
     "e2e:staging:login": "node scripts/with-server-only-stub.cjs scripts/staging-login.ts",
