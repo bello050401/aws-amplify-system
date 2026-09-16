@@ -8,6 +8,7 @@ import {
   getWebTrustedClaims,
   type PhotoRegistrationWebAdapter,
   type WebBatchDetail,
+  type WebInventoryPhotoAssets,
 } from "@/lib/photoRegistration/webAdapter";
 import type { BatchListPage, TrustedClaims } from "@/lib/photoRegistration/ports";
 import type { PhotoErrorCode, PhotoResult } from "@/lib/photoRegistration/types";
@@ -92,6 +93,12 @@ export async function getPhotoBatchDetailAction(batchId: string, page = 1, pageS
   const runtime = await requireWebRuntimeAndClaims();
   if (!runtime.ok) return runtime;
   return mapPhotoResult(await runtime.adapter.getBatchDetail(batchId, runtime.claims, { page, pageSize }));
+}
+
+export async function listInventoryPhotoAssetsAction(inventoryId: string): Promise<PhotoActionResult<WebInventoryPhotoAssets>> {
+  const runtime = await requireWebRuntimeAndClaims();
+  if (!runtime.ok) return runtime;
+  return mapPhotoResult(await runtime.adapter.listInventoryPhotoAssets(inventoryId, runtime.claims));
 }
 
 export interface PhotoRegistrationBadgeState {

@@ -144,6 +144,13 @@ export interface WebBatchDetail {
   actorRole: PhotoActorRole;
 }
 
+export interface WebInventoryPhotoAssets {
+  inventoryId: string;
+  assets: WebPhotoAssetView[];
+  batchCount: number;
+  truncated: boolean;
+}
+
 export interface PhotoRegistrationWebDeps {
   service: PhotoRegistrationService;
   repository: PhotoRegistrationRepository;
@@ -173,6 +180,18 @@ export class PhotoRegistrationWebAdapter {
     }
   }
 
+  private async toWebAsset(asset: PhotoAssetView): Promise<WebPhotoAssetView> {
+    return {
+      ...asset,
+      thumbnailUrl: await this.safePresign(
+        photoAssetS3Key(asset.photoBatchId, asset.id, "THUMBNAIL", extensionForMimeType(asset.declared.THUMBNAIL.mimeType)),
+      ),
+      processedUrl: await this.safePresign(
+        photoAssetS3Key(asset.photoBatchId, asset.id, "PROCESSED", extensionForMimeType(asset.declared.PROCESSED.mimeType)),
+      ),
+    };
+  }
+
   async listUnregisteredBatches(limit: number, cursor: string | null, claims: TrustedClaims): Promise<PhotoResult<BatchListPage>> {
     return this.deps.service.listUnregisteredBatches(limit, cursor, claims);
   }
@@ -198,19 +217,32 @@ export class PhotoRegistrationWebAdapter {
     const start = (page - 1) * pageSize;
     const pageItems = rawAssets.slice(start, start + pageSize);
 
-    const assets = await Promise.all(
-      pageItems.map(async (asset): Promise<WebPhotoAssetView> => ({
-        ...asset,
-        thumbnailUrl: await this.safePresign(
-          photoAssetS3Key(batchId, asset.id, "THUMBNAIL", extensionForMimeType(asset.declared.THUMBNAIL.mimeType)),
-        ),
-        processedUrl: await this.safePresign(
-          photoAssetS3Key(batchId, asset.id, "PROCESSED", extensionForMimeType(asset.declared.PROCESSED.mimeType)),
-        ),
-      })),
-    );
+    const assets = await Promise.all(pageItems.map((asset) => this.toWebAsset(asset)));
 
     return ok({ batch, assets, totalAssetCount, page, pageSize, actorRole: actorResult.value.role });
+  }
+
+  /** 商品詳細/Listing用。Inventoryへ紐付いた全batchをScanせずGSI経由で読む。 */
+  async listInventoryPhotoAssets(inventoryId: string, claims: TrustedClaims): Promise<PhotoResult<WebInventoryPhotoAssets>> {
+    const actorResult = this.requireStaffOrAdmin(claims);
+    if (!actorResult.ok) return actorResult;
+    const batches: PhotoBatchView[] = [];
+    let cursor: string | null = null;
+    let truncated = false;
+    do {
+      const page = await this.deps.repository.listBatchesForInventory(inventoryId, 100, cursor);
+      batches.push(...page.items);
+      cursor = page.nextCursor;
+      if (batches.length >= 300 && cursor) {
+        truncated = true;
+        break;
+      }
+    } while (cursor);
+    const rawAssets = (await Promise.all(batches.map((batch) => this.deps.repository.getAssetsForBatch(batch.id))))
+      .flat()
+      .filter((asset) => !asset.isDeleted && asset.status === "READY")
+      .sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
+    return ok({ inventoryId, assets: await Promise.all(rawAssets.map((asset) => this.toWebAsset(asset))), batchCount: batches.length, truncated });
   }
 
   /** requestPhotoAssetUploads のWeb向け薄いラッパー。ファイル名の危険拡張子だけこの層で追加検証する。 */
