@@ -1,0 +1,2746 @@
+# BELLO 画像登録基盤
+## AWS / Web 自社システム 実装指示書・仕様書
+### Claude Code投入用 最終精査版
+Version: 3.0 Final Draft
+Date: 2026-09-15
+
+> 本書は、BELLOの既存自社システムに「撮影バッチ受入 → 画像確認 → 在庫紐付け → 商品詳細表示 → EC出品画像選択」を追加するための、Claude Code向け実装指示書兼仕様書である。
+> v1 / v2の設計レビュー、DynamoDB・S3・冪等性・同時操作・大量画像・既存システム互換の開発シミュレーションを踏まえて再設計した。
+> **Claude Codeには本書を正本として渡すこと。v1 / v2は参照しない。**
+
+---
+
+# A. Claude Codeへの実行指示
+
+## A-1. 最初にやること
+
+いきなりコードを書かないこと。
+
+最初に必ず現行リポジトリを読み、以下を調査する。
+
+1. Amplify Gen2全体構成
+2. `amplify/data/resource.*`
+3. `amplify/storage/resource.*`
+4. `amplify/auth/resource.*`
+5. Inventoryモデル
+6. Inventoryの既存画像フィールド
+7. 商品詳細画面の画像表示方式
+8. EC Listing / 出品下書きモデル
+9. EC出品画面の画像選択・アップロード方式
+10. S3 / Amplify Storageの既存bucketとprefix
+11. Cognito Group / Role / Auth rule
+12. AppSync custom query / mutation / Lambda
+13. 管理画面サイドバー
+14. staging / production分岐
+15. 既存migration・seed・バックフィル方式
+16. 画像URL生成helper
+17. 監査ログ・CloudWatchログの既存方式
+
+調査完了後、コード変更前に以下を報告すること。
+
+- 現行構成要約
+- 本仕様との相違点
+- 既存機能への影響
+- 追加予定AWSリソース
+- 変更予定ファイル
+- migrationリスク
+- 認証・権限リスク
+- 破壊的変更の有無
+- 実装順序
+- staging検証方法
+
+重大な破壊的変更が必要なら、その時点で停止して承認を求めること。
+
+---
+
+## A-2. 実装方針
+
+この機能は既存Inventory / Listingを置き換えるものではない。
+**既存機能を壊さず、撮影画像の受入・確認・紐付け層を追加する。**
+
+最重要原則:
+
+- ローカルPhoto StationとAWS/Webの責務を分離
+- 1回のSD差分取込 = 1商品 = 1 PhotoBatch
+- 商品との紐付けはWeb側のみ
+- S3 object keyは登録後も移動しない
+- Inventoryとの紐付けはPhotoBatchに持つ
+- PhotoAssetにinventoryIdを複製しない
+- DynamoDB Scanを前提にしない
+- 冪等性は「検索して無ければCreate」ではなく条件付き書込みで保証
+- 300枚級バッチでも破綻しない
+- 同時操作・再送・通信断を正常系として設計
+- 既存画像は初期導入時に一括移行しない
+- 画像バイナリをNext.js API経由で中継しない
+- S3への直接uploadを基本とする
+- 本番データ削除・大規模migration・IAM変更は承認前に行わない
+
+---
+
+## A-3. 実装中のユーザー確認
+
+以下は事前承認なしに実施禁止。
+
+- production deploy
+- DynamoDB既存データ全件更新
+- 既存Inventory schemaの破壊的変更
+- 既存Listing schemaの破壊的変更
+- S3 bucket削除・置換
+- S3 Lifecycleによる既存画像削除
+- Cognito Groupの破壊的変更
+- IAM policyの大幅拡張
+- 既存画像の一括移行
+- 既存画像の削除
+- 本番データへのバックフィル
+
+それ以外の安全なstaging実装・テストは自律的に進めてよい。
+
+---
+
+## A-4. 長時間実行前の確認
+
+長時間実装の途中でユーザー操作待ちにならないようにする。
+
+必要になり得るもの:
+
+- ADMIN login
+- MFA
+- AWS login
+- Amplify deployment権限
+- browser authorization
+- external service authorization
+
+これらが必要と予測できる場合、最初にまとめて要求すること。
+
+---
+
+# B. 業務フローの確定仕様
+
+現場では以下を前提とする。
+
+```text
+商品Aを撮影
+↓
+SD-Aを撮影専用PCへ挿入
+↓
+ローカルPhoto Stationが前回取込との差分だけ検出
+↓
+その差分全体を「商品Aの撮影バッチ」として扱う
+↓
+ローカルでLightroom Classic + 自動加工
+↓
+加工済みJPEG / thumbnailをAWSへアップロード
+↓
+PhotoBatch = READY_FOR_REVIEW
+↓
+撮影担当はその間にSD-Bで商品Bを撮影
+```
+
+AWS/Web側:
+
+```text
+左メニュー「画像登録」
+↓
+未登録撮影バッチ一覧
+↓
+画像を目視確認
+↓
+不要画像削除 / 必要なら追加upload
+↓
+「撮影待ち」を中心にInventory選択
+↓
+PhotoBatchをInventoryへ紐付け
+↓
+商品詳細に画像表示
+↓
+EC出品画面で使用画像を選択
+```
+
+**撮影時点ではInventoryを選ばせない。**
+
+---
+
+# C. 境界設計
+
+## C-1. ローカルPhoto Stationの責務
+
+AWS側は以下を前提にAPIを提供するが、ローカルの実装そのものは別仕様書とする。
+
+- SD差分検出
+- ローカルcopy
+- Lightroom Classic連携
+- image processing
+- PhotoBatch作成要求
+- PhotoAsset upload URL要求
+- S3 upload
+- asset complete
+- batch complete
+- retry
+- local queue
+
+## C-2. AWS/Webの責務
+
+- PhotoBatch管理
+- PhotoAsset管理
+- upload受付
+- upload完全性検証
+- 未登録撮影バッチUI
+- Inventory候補検索
+- Inventory紐付け
+- 商品詳細画像表示
+- EC Listing画像選択
+- 権限
+- 監査ログ
+- エラー復旧
+- data integrity
+
+---
+
+
+# 1. 最重要の設計原則
+
+## 1.1 ローカルPCとAWSの責務を混在させない
+
+ローカルPCは以下のみ担当する。
+
+- SDカード検知
+- 新規画像差分検出
+- ローカルコピー
+- Lightroom Classic連携
+- 自動画像加工
+- 撮影バッチ生成
+- S3アップロード
+- AWSへアップロード完了通知
+
+ローカルPC側では在庫選択を行わない。
+在庫の紐付けはWeb自社システム側のみで行う。
+
+---
+
+## 1.2 「1回のSD取込 = 1商品 = 1撮影バッチ」
+
+業務ルールとして、1商品を撮影し終えたらSDカードをPCへ接続する。
+
+例:
+
+- 商品AをSD-Aで撮影
+- SD-AをPCへ挿入
+- 自動取込開始
+- その間にSD-Bで商品Bを撮影
+- SD-BをPCへ挿入
+- 以下繰り返し
+
+そのためローカルPC側では画像を商品ごとに分割する必要はなく、
+1回の差分取込結果全体を1つの PhotoBatch として扱う。
+
+---
+
+## 1.3 S3上のオブジェクトは登録後も原則移動しない
+
+画像を在庫へ紐付けた後でも、S3キーは変更しない。
+
+悪い例:
+
+photo-batches/batch-001/processed/001.jpg
+↓
+inventory/INV-123/001.jpg へ移動
+
+これは禁止。
+
+代わりにDB上で PhotoBatch / PhotoAsset と Inventory の関係を作る。
+
+理由:
+
+- S3コピー・削除を減らす
+- URL変更を防止
+- 冪等性を担保
+- 障害点を減らす
+- 監査履歴を維持
+- 将来の再紐付けに対応しやすい
+
+---
+
+## 1.4 PhotoBatch と PhotoAsset を分離する
+
+PhotoBatch:
+1回の撮影・取込単位
+
+PhotoAsset:
+その中の画像1枚単位
+
+Inventory:
+既存の商品 / 在庫
+
+Listing:
+EC出品
+
+関係:
+
+PhotoBatch
+  └ PhotoAsset x N
+        ↓
+     Inventory
+        ↓
+      Listing
+
+---
+
+# 2. 既存システム前提
+
+現在の基本構成:
+
+- Frontend: Next.js
+- Hosting: AWS Amplify Gen2
+- API: AppSync / GraphQL
+- DB: DynamoDB
+- Storage: S3
+- Auth: Cognito
+- Region: us-east-1
+- Inventory管理は既存自社システム内に存在
+- EC出品機能も既存
+- 在庫詳細画面あり
+- ZAICO連携あり
+- 画像はS3利用前提
+- 既存本番データを破壊しないこと
+
+Claude Codeは最初に必ず現行リポジトリを調査し、
+既存のschema、モデル、Storage、Auth、Inventory、EC Listing実装を確認すること。
+
+既存命名規則を優先し、無理に本書の名称へ統一しない。
+ただし概念として PhotoBatch / PhotoAsset / Inventory / Listing は維持する。
+
+---
+
+# 3. AWS側の論理構成
+
+推奨構成:
+
+Local Photo Station
+    |
+    | Cognito Auth / API
+    v
+AppSync / Lambda or Server Action
+    |
+    +---- DynamoDB
+    |       PhotoBatch
+    |       PhotoAsset
+    |       Inventory
+    |       Listing
+    |       PhotoAuditLog
+    |
+    +---- S3
+            photo-batches/{batchId}/original/
+            photo-batches/{batchId}/processed/
+            photo-batches/{batchId}/thumbnail/
+
+Web UI
+    |
+    v
+Next.js / Amplify
+    |
+    v
+AppSync
+
+---
+
+# 4. データモデル
+
+## 4.1 PhotoBatch
+
+目的:
+1回のSD取込・1商品の撮影単位を管理する。
+
+推奨フィールド:
+
+- id: ID!
+- batchCode: String!
+  - 人間が読めるコード
+  - 例: PHOTO-20260915-0001
+- status: PhotoBatchStatus!
+- captureStartedAt: AWSDateTime
+- captureEndedAt: AWSDateTime
+- importedAt: AWSDateTime
+- uploadedAt: AWSDateTime
+- registeredAt: AWSDateTime
+- sourceDeviceId: String
+  - ローカル撮影PC識別子
+- sourceSdCardId: String
+  - SD識別子
+- localImportSessionId: String
+  - ローカル側の冪等キー
+- imageCountOriginal: Int
+- imageCountProcessed: Int
+- imageCountUploaded: Int
+- coverPhotoAssetId: ID
+- inventoryId: ID
+- linkedByUserId: String
+- linkedAt: AWSDateTime
+- notes: String
+- errorCode: String
+- errorMessage: String
+- createdAt
+- updatedAt
+
+推奨ステータス:
+
+CREATED
+UPLOADING
+READY_FOR_REVIEW
+LINKED
+ARCHIVED
+ERROR
+
+最低限の意味:
+
+CREATED:
+PhotoBatch作成直後。まだ画像登録前。
+
+UPLOADING:
+ローカルPCからアップロード中
+
+READY_FOR_REVIEW:
+加工済み画像がクラウドへ揃い、Web上で確認可能
+
+LINKED:
+Inventoryへ登録済み
+
+ERROR:
+アップロードまたは処理異常
+
+---
+
+## 4.2 PhotoAsset
+
+目的:
+画像1枚単位の情報を管理する。
+
+推奨フィールド:
+
+- id: ID!
+- photoBatchId: ID!
+- originalS3Key: String
+- processedS3Key: String
+- thumbnailS3Key: String
+- fileNameOriginal: String
+- fileNameProcessed: String
+- fileExtension: String
+- mimeType: String
+- fileSizeOriginal: Int
+- fileSizeProcessed: Int
+- widthOriginal: Int
+- heightOriginal: Int
+- widthProcessed: Int
+- heightProcessed: Int
+- sha256Original: String
+- sha256Processed: String
+- exifCapturedAt: AWSDateTime
+- sequence: Int!
+- status: PhotoAssetStatus!
+- isDeleted: Boolean!
+- deletedAt: AWSDateTime
+- deletedBy: String
+- isCoverCandidate: Boolean
+- isQualityFlagged: Boolean
+- qualityFlags: [String]
+- processingVersion: String
+- createdAt
+- updatedAt
+
+推奨ステータス:
+
+UPLOADING
+READY
+FLAGGED
+DELETED
+FAILED
+
+論理削除を基本とする。
+S3物理削除は別ジョブまたは明示操作にする。
+
+---
+
+## 4.3 Inventoryとの関係
+
+Inventoryに直接大量の画像URLを配列として埋め込まないこと。
+
+推奨:
+
+Inventory
+  id
+
+PhotoBatch
+  inventoryId
+
+PhotoAsset
+  photoBatchId
+
+ListingImageSelection
+  listingId
+  photoAssetId
+  sequence
+
+既存Inventoryモデルに画像配列がすでに存在する場合は、
+既存互換を維持するためのアダプタ層を検討すること。
+
+---
+
+## 4.4 ListingImageSelection
+
+EC出品ごとに選択画像を変えられるようにする。
+
+推奨フィールド:
+
+- id
+- listingId
+- photoAssetId
+- sequence
+- isPrimary
+- createdAt
+- updatedAt
+
+これにより:
+
+- Yahoo!用 20枚
+- Mercari Shops用 10枚
+- BASE用 15枚
+
+などチャネル別に画像選択・順序変更が可能。
+
+既存Listingモデルに画像配列がある場合は互換性を確認して統合する。
+
+---
+
+
+# 4.5 DynamoDBアクセスパターンとインデックス（必須）
+
+DynamoDBでは「モデルを作る」だけでは不十分。
+実際の画面・APIがScanにならないよう、アクセスパターンを先に固定する。
+
+最低限必要なアクセスパターン:
+
+1. 未登録PhotoBatchをuploadedAt降順で取得
+2. Inventoryに紐づく全PhotoBatchをlinkedAt降順で取得
+3. PhotoBatchに属するPhotoAssetをsequence順で取得
+4. localImportSessionIdから既存PhotoBatchを取得
+5. 同一Batch内でsha256から重複Assetを検出
+6. Listingに属する画像選択をsequence順で取得
+7. PhotoAssetがListingで使用中か逆引き
+
+推奨インデックス例:
+
+PhotoBatch:
+- byStatusUploadedAt(status, uploadedAt)
+- byInventoryLinkedAt(inventoryId, linkedAt)
+- byLocalImportSessionId(localImportSessionId)
+
+PhotoAsset:
+- byBatchSequence(photoBatchId, sequence)
+- byBatchSha256(photoBatchId, sha256Processed)
+
+ListingImageSelection:
+- byListingSequence(listingId, sequence)
+- byPhotoAsset(photoAssetId, listingId)
+
+AuditLog:
+- byBatchCreatedAt(batchId, createdAt)
+- byInventoryCreatedAt(inventoryId, createdAt)
+
+Amplify Gen2で同等のsecondary indexを定義すること。
+未登録一覧やInventory画像取得にテーブルScanを使わない。
+
+---
+
+# 4.6 InventoryとPhotoAssetの関係を正規化する理由
+
+今回の業務ルールでは「1撮影バッチ = 1商品」である。
+よってinventoryIdはPhotoBatchにだけ保持する。
+
+PhotoAssetにinventoryIdを複製すると:
+
+- バッチ登録時に画像枚数分の更新が必要
+- 300枚級で大量書込み
+- PhotoBatchとPhotoAssetのinventoryId不一致が起こり得る
+- 再紐付けが重くなる
+- TransactionWrite上限を意識する必要が出る
+
+ため、初期設計では禁止する。
+
+Inventoryの商品画像取得:
+
+Inventory
+  ↓ byInventoryLinkedAt
+PhotoBatch x N
+  ↓ byBatchSequence
+PhotoAsset x N
+
+とする。
+
+必要になった場合のみ、後から検索用の非正規化を追加する。
+
+---
+
+# 4.7 複数撮影バッチ
+
+1つのInventoryに複数PhotoBatchを許可する。
+
+例:
+
+初回撮影
+PHOTO-001
+
+傷部分の追加撮影
+PHOTO-014
+
+再撮影
+PHOTO-081
+
+すべて同じInventoryへリンク可能。
+
+商品詳細では複数BatchのAssetを統合表示できること。
+
+
+# 5. S3設計
+
+推奨キー:
+
+photo-batches/{batchId}/original/{assetId}.{ext}
+photo-batches/{batchId}/processed/{assetId}.jpg
+photo-batches/{batchId}/thumbnail/{assetId}.jpg
+
+例:
+
+photo-batches/01JXYZ.../processed/01JABC....jpg
+
+S3オブジェクトキーに商品名・ブランド名を含めない。
+
+理由:
+
+- 商品名変更に影響しない
+- 日本語文字列を避ける
+- URL安全性
+- 参照安定性
+- 紐付け変更に強い
+
+---
+
+
+# 5.5 S3アップロード完全性
+
+presigned PUT発行時に可能な範囲で以下を固定:
+
+- Content-Type
+- Content-Length上限
+- checksum
+
+completePhotoAssetUpload時にHeadObject等で:
+
+- object存在
+- content length
+- checksum / metadata
+
+を確認してREADYへする。
+
+「クライアントが完了と言っただけ」でREADYにしない。
+
+ただしBatch finalize時に全画像へ再HEADはしない。
+検証はAsset complete時に分散して行う。
+
+---
+
+
+# 6. original RAWの保存ポリシー
+
+Phase 1のAWS側は「加工済みJPEG + thumbnail」を必須とする。
+RAWのAWS保存は必須にしない。
+
+理由:
+
+- RAWは容量が大きい
+- 通常の商品画像確認・EC出品ではprocessed JPEGで足りる
+- S3転送時間と保管費用が増える
+- Photo Stationの高速回転を阻害する可能性がある
+
+推奨初期運用:
+
+ローカルPC:
+- RAWを一時保持
+- processed JPEGのAWS登録成功後も一定期間（例7日）だけ保持
+- 期間経過後、自動クリーンアップ
+
+AWS:
+- processed JPEG: 長期保持
+- thumbnail: 長期保持
+- RAW: 高額商品等、明示設定時のみ将来対応
+
+RAW削除ルールはローカルPhoto Station側設計で最終決定する。
+AWS v1実装にS3 RAW Lifecycleを先行導入しない。
+
+---
+
+# 7. ローカルPCとのAPI契約
+
+ローカルPCがDynamoDBを直接操作することは禁止。
+
+必ずAppSync / API層を通す。
+
+必要API概念:
+
+## 7.1 Create Photo Batch
+
+入力例:
+
+{
+  "localImportSessionId": "DESKTOP01-SD02-20260915T103200",
+  "sourceDeviceId": "BELLO-PHOTO-PC-01",
+  "sourceSdCardId": "SD-A",
+  "imageCountOriginal": 24
+}
+
+返却:
+
+{
+  "batchId": "...",
+  "batchCode": "PHOTO-20260915-0001"
+}
+
+localImportSessionId を冪等キーとして扱う。
+
+重要:
+Amplifyの通常Modelだけでは「一意制約」を保証できない場合がある。
+単なるGSI検索 → Createでは競合時に重複Batchが作られ得る。
+
+実装は必ず以下のいずれかで原子的に一意性を担保する:
+
+- 専用Idempotencyレコードを条件付きPut
+- Lambda内でDynamoDB conditional write
+- localImportSessionIdを一意キーとして扱える専用テーブル
+
+同じsessionIdで再送された場合、
+新規PhotoBatchを作らず既存batchを返す。
+
+---
+
+## 7.2 Request Upload URL
+
+各画像についてpresigned URLを返す。
+
+入力:
+
+{
+  "batchId": "...",
+  "fileName": "DSC01234.JPG",
+  "sha256": "...",
+  "type": "PROCESSED"
+}
+
+返却:
+
+{
+  "photoAssetId": "...",
+  "uploadUrl": "...",
+  "s3Key": "photo-batches/.../processed/....jpg"
+}
+
+---
+
+## 7.3 Complete Asset Upload
+
+入力:
+
+{
+  "photoAssetId": "...",
+  "sha256Processed": "...",
+  "widthProcessed": 3000,
+  "heightProcessed": 2000,
+  "fileSizeProcessed": 1240000
+}
+
+サーバー側でS3 object存在確認を行ってからREADYへ更新する。
+
+---
+
+## 7.4 Complete Photo Batch
+
+入力:
+
+{
+  "batchId": "...",
+  "imageCountProcessed": 24,
+  "imageCountUploaded": 24
+}
+
+サーバー側で:
+
+- expected asset件数
+- READY件数
+- FAILED件数
+- 必須メタデータ
+
+を確認。
+
+各AssetのS3存在確認はcompletePhotoAssetUpload時に1件ずつ行う。
+completePhotoBatch時に300オブジェクトへ再度HEADを投げる設計にはしない。
+
+expected == READY件数 かつ FAILED == 0 の場合のみ READY_FOR_REVIEW。
+
+---
+
+
+# 7.5 Presigned URL発行の効率化
+
+1商品で50〜300枚を想定するため、
+画像1枚ごとにWeb UI相当の往復を強制しすぎない。
+
+初期実装では以下いずれかを採用:
+
+推奨A:
+requestPhotoAssetUploads(batchId, assets[最大25〜50件])
+で複数Assetを一括登録し、複数presigned URLを返す。
+
+代替B:
+1枚ずつ発行。ただしローカル側が最大4〜8並列で処理。
+
+一度に300件の巨大Mutationを送ることは避ける。
+25〜50件程度のchunkを基本とする。
+
+Photo Stationは各chunkを再送可能にし、
+asset単位の冪等性を保つ。
+
+
+
+# 7.6 Batch Manifest
+
+PhotoBatchには「この取込で何枚を予定しているか」を固定する。
+
+最低限:
+
+- expectedAssetCount
+- completedAssetCount
+- failedAssetCount
+
+を持つ。
+
+ローカルPCの再起動や通信断後でも、
+AWS側を見るだけで:
+
+「24枚予定 / 21枚完了 / 3枚未完了」
+
+が分かる状態にする。
+
+PhotoBatchをREADY_FOR_REVIEWへ移す条件は
+completedAssetCount == expectedAssetCount
+かつ failedAssetCount == 0。
+
+
+# 8. 冪等性
+
+この機能では冪等性を最重要とする。
+
+ローカルPCはネットワーク切断やアプリ再起動があるため、
+同じ処理が何度も送信される前提で設計する。
+
+必須冪等キー:
+
+- localImportSessionId
+- sha256Original
+- sha256Processed
+- photoAssetId
+- batchId
+
+同一batch内の同一sha256画像は重複登録を避ける。
+
+ただし同じ画像が別batchに存在することはあり得るため、
+システム全体で一意にはしない。
+
+---
+
+# 9. Web UI: 左メニュー「画像登録」
+
+既存左ナビゲーションへ:
+
+画像登録
+
+を追加する。
+
+バッジ表示推奨:
+
+画像登録  [12]
+
+12 = READY_FOR_REVIEWかつ未紐付けのPhotoBatch数
+
+---
+
+# 10. 画像登録一覧画面
+
+URL例:
+
+/admin/photo-registration
+
+表示対象:
+
+status = READY_FOR_REVIEW
+inventoryId = null
+
+カード形式を推奨。
+
+1カードにつき:
+
+- 代表サムネイル
+- 撮影日時
+- アップロード日時
+- 画像枚数
+- batchCode
+- 警告有無
+- 「確認」ボタン
+
+ユーザーはbatchCodeを読まなくても、
+画像を見れば商品を識別できるようにする。
+
+並び順:
+
+uploadedAt DESC
+
+フィルター:
+
+- 未登録
+- 確認中
+- エラー
+- 登録済み（履歴）
+
+検索:
+
+batchCode
+
+---
+
+# 11. 撮影バッチ確認画面
+
+URL例:
+
+/admin/photo-registration/{batchId}
+
+表示:
+
+- 大きめの画像グリッド
+- 画像枚数
+- batch情報
+- 処理警告
+- 撮影日時
+- アップロード日時
+
+画像操作:
+
+1. 拡大表示
+2. 削除
+3. 追加アップロード
+4. 並び替え
+5. ダウンロード
+6. メイン候補設定
+7. 将来: 再加工
+
+---
+
+# 12. 画像削除
+
+基本は論理削除。
+
+PhotoAsset:
+
+isDeleted = true
+status = DELETED
+
+削除画像は通常UIから非表示。
+
+管理者のみ復元できる余地を残す。
+
+S3物理削除は即時に行わないことを推奨。
+
+将来的に30日後にLifecycle / cleanup jobで削除可能。
+
+---
+
+# 13. 追加アップロード
+
+Web画面から画像追加可能にする。
+
+用途:
+
+- Photo Stationで抜けた画像
+- 手動修正版
+- 加工し直した画像
+- 後から追加撮影
+
+追加時もPhotoAssetとして同一PhotoBatchへ追加。
+
+既存画像の置換よりも、
+新規PhotoAsset追加 + 旧Asset論理削除の方が監査性が高い。
+
+---
+
+# 14. 画像ダウンロード
+
+以下を選択可能にしてよい。
+
+- processed JPEG
+- original（保持されている場合）
+
+複数選択ZIPは将来機能でも可。
+
+初期実装では単一画像ダウンロードで十分。
+
+---
+
+# 15. 画像並び替え
+
+PhotoAsset.sequence を更新する。
+
+ドラッグ&ドロップ対応を推奨。
+
+ただしモバイルも想定し、
+上下ボタンまたはタッチ操作も検討。
+
+sequenceは:
+
+10,20,30,...
+
+など間隔を空ける設計でも良いが、
+初期実装は0..Nで十分。
+
+---
+
+# 16. 在庫への登録フロー
+
+確認画面下部に:
+
+「商品に登録」
+
+ボタン。
+
+クリック後にInventory選択UIを表示。
+
+最初に見せる候補:
+
+第1優先:
+撮影待ち
+
+第2優先:
+補修待ち
+
+例外:
+その他を検索
+
+---
+
+# 17. Inventory選択UI
+
+デフォルト候補:
+
+撮影待ち
+----------------
+[サムネイル] 商品名 / ブランド / ZAICO ID
+[サムネイル] 商品名 / ブランド / ZAICO ID
+
+補修待ち
+----------------
+...
+
+画面下部:
+
+「その他の商品を検索」
+
+検索条件:
+
+- 商品名
+- ブランド
+- ZAICO ID
+- Inventory ID
+- 管理番号
+
+基本的に例外利用のため、
+高度な検索UIは不要。
+
+---
+
+# 18. 登録処理
+
+ユーザーがInventoryを選択して登録。
+
+重要:
+PhotoAsset全件へinventoryIdを書き込まない。
+1バッチが300枚の場合、全Asset更新は不要な大量書込みとなり、
+DynamoDB TransactionWriteの上限にも抵触し得る。
+Inventoryとの関係はPhotoBatch.inventoryIdを唯一の正とする。
+
+登録時:
+
+1. PhotoBatch.inventoryId = inventoryId
+2. PhotoBatch.status = LINKED
+3. PhotoBatch.linkedAt = now
+4. PhotoBatch.linkedByUserId = currentUser
+5. 必要ならInventory.photoStatusを更新
+6. AuditLog作成
+
+PhotoAssetはphotoBatchIdのみでPhotoBatchへ所属する。
+
+同一Inventoryへ複数PhotoBatchを紐付け可能とする。
+これは再撮影・追加撮影を想定した仕様である。
+
+リンクMutationは条件付き更新とし、
+inventoryIdが既に設定済みの場合はCONFLICTを返す。
+二人のスタッフが同じバッチを同時登録しても二重確定しないこと。
+
+---
+
+# 19. Inventory側の撮影状態
+
+Inventoryに画像関連状態を持たせる。
+
+例:
+
+photoStatus:
+
+NOT_SHOT
+WAITING_FOR_PHOTO
+PROCESSING
+REVIEW_REQUIRED
+PHOTO_REGISTERED
+
+ただし既存の在庫statusとは分離すること。
+
+既存の:
+
+補修待ち
+撮影待ち
+出品待ち
+
+等は業務工程status。
+
+photoStatusは画像処理状態。
+
+二つを混同しない。
+
+---
+
+
+# 19.5 在庫業務ステータスの自動変更
+
+画像登録成功時に、
+既存のInventory業務status（撮影待ち / 補修待ち / 出品待ち等）を
+無条件で自動変更しない。
+
+初期実装では:
+
+- PhotoBatchをLINKED
+- Inventory.photoStatusをPHOTO_REGISTERED
+
+までを画像機能の責務とする。
+
+「撮影待ち → 出品待ち」などの業務status遷移は、
+既存運用を調査した上で別ルールとして実装する。
+
+理由:
+補修待ち商品の先行撮影、追加撮影、再撮影などの例外があるため。
+
+
+# 20. 商品詳細画面への追加
+
+Inventory詳細画面に「商品画像」セクションを追加または拡張。
+
+表示:
+
+- 登録画像
+- メイン画像
+- サブ画像
+- 撮影バッチ情報
+- 撮影日時
+- 画像枚数
+
+操作:
+
+- 拡大
+- 並び替え
+- 削除
+- 追加
+- メイン画像設定
+- 元撮影バッチへ移動
+
+---
+
+# 21. EC出品との連携
+
+EC出品作成 / 編集画面で、
+新しく画像をPCから再アップロードするのを基本運用にしない。
+
+Inventoryに紐づいているPhotoAssetを表示し、
+ユーザーが出品に利用する画像だけ選択。
+
+UI例:
+
+商品画像 24枚
+
+[x] 001
+[x] 002
+[x] 003
+[ ] 004
+[x] 005
+
+選択した順序を出品順とする。
+
+---
+
+# 22. ECチャネルごとの画像制限
+
+将来を考慮し、
+チャネルごとに最大枚数などを制御できるようにする。
+
+例:
+
+Mercari Shops:
+max N
+
+Yahoo:
+max N
+
+BASE:
+max N
+
+現時点でAPI仕様が定まっていない箇所は、
+ハードコードせず設定化できる構造を推奨。
+
+---
+
+# 23. 代表画像
+
+InventoryごとにprimaryPhotoAssetIdを持つ案を推奨。
+
+用途:
+
+- 在庫一覧
+- 商品詳細
+- EC下書き初期表示
+- 画像登録済み確認
+- 将来のAI処理
+
+PhotoBatchのcoverPhotoAssetIdとは別概念。
+
+PhotoBatch cover:
+未登録一覧で何の商品か判別するため
+
+Inventory primary:
+商品としての代表画像
+
+---
+
+# 24. 画像サムネイル
+
+Web UI表示でprocessed原寸画像を毎回読み込まない。
+
+thumbnailを生成して利用。
+
+サイズ例:
+
+- 400px
+- 800px
+
+どちらか1つから開始で良い。
+
+生成方法:
+
+ローカルPhoto Stationが作成してアップロード
+または
+AWS Lambda
+
+初期設計ではローカル側で生成できるなら、
+ローカル側で生成した方が簡単。
+
+AWS側はthumbnailS3Keyを保持。
+
+---
+
+# 25. セキュリティ
+
+## 25.1 ローカルPC認証
+
+Photo Stationからのアクセスは認証必須。
+
+候補:
+
+- Cognito User Pool
+- Device専用ユーザー
+- Cognito Identity Pool
+- API用専用権限
+
+長期固定AWS Access KeyをWindowsへ埋め込むのは禁止。
+
+Photo Stationの認証情報をWindowsへ保存する場合は、
+Windows Credential Manager / DPAPI等のOS保護領域を使う。
+平文設定ファイルへrefresh tokenやsecretを保存しない。
+
+最小権限。
+
+Photo Stationに必要な権限:
+
+- PhotoBatch作成
+- PhotoAsset upload URL取得
+- upload完了通知
+- batch完了
+
+Inventory変更権限は不要。
+
+---
+
+## 25.2 S3
+
+S3 bucketはpublic禁止。
+
+presigned URLまたはCognito認証経由。
+
+画像表示は:
+
+- CloudFront signed URL
+または
+- Amplify Storage認証付きURL
+または
+- 既存システム方式
+
+現行実装へ合わせる。
+
+---
+
+# 26. 監査ログ
+
+重要操作はPhotoAuditLogへ記録。
+
+イベント例:
+
+BATCH_CREATED
+ASSET_UPLOADED
+BATCH_COMPLETED
+ASSET_DELETED
+ASSET_RESTORED
+ASSET_ADDED
+BATCH_LINKED_TO_INVENTORY
+BATCH_UNLINKED
+LISTING_IMAGE_SELECTED
+PRIMARY_IMAGE_CHANGED
+
+保持:
+
+- eventType
+- actorType USER / DEVICE / SYSTEM
+- actorId
+- batchId
+- assetId
+- inventoryId
+- listingId
+- metadata JSON
+- createdAt
+
+---
+
+# 27. 再紐付け / 誤登録対応
+
+誤って商品Aへ登録した場合を想定する。
+
+「紐付け解除」または「別商品へ変更」を管理者権限で可能にする。
+
+この際:
+
+- PhotoAssetのS3は移動しない
+- PhotoBatch.inventoryIdのみ変更
+- AuditLogを残す
+- Listingで既に使用中の場合は警告
+
+警告例:
+
+「この画像はYahoo出品下書きで使用されています。紐付け変更すると出品内容と不整合が発生する可能性があります。」
+
+---
+
+# 28. アップロード失敗時
+
+Photo Stationは再試行可能。
+
+AWS側では:
+
+UPLOADING状態のPhotoBatchが一定時間放置された場合:
+
+- STALE_UPLOAD
+などの内部フラグを付けるか
+- ERRORへ遷移
+
+ただし自動削除しない。
+
+Web管理者画面から:
+
+- 再開待ち
+- 破棄
+
+ができると良い。
+
+---
+
+# 29. バッチ完成判定
+
+Complete Photo Batch時に必ず検証。
+
+例:
+
+expected = imageCountProcessed
+ready = PhotoAsset status READY の数
+
+expected == ready
+
+でなければREADY_FOR_REVIEWへしない。
+
+---
+
+# 30. 同じSDを複数回挿した場合
+
+AWS側としてはローカル側の localImportSessionId と asset hash により
+重複バッチ作成を抑止。
+
+Photo Stationが同じ差分を再送しても
+同一batchを返す。
+
+---
+
+# 31. 画像の重複
+
+同一PhotoBatch内:
+
+sha256Processedが同じ画像は重複として拒否またはSKIP。
+
+別PhotoBatch:
+
+許容。
+
+理由:
+再撮影・同一素材利用の可能性があるため。
+
+---
+
+# 32. APIエラー設計
+
+返却エラーコードを固定化。
+
+例:
+
+AUTH_REQUIRED
+BATCH_NOT_FOUND
+BATCH_ALREADY_LINKED
+ASSET_NOT_FOUND
+UPLOAD_NOT_COMPLETE
+HASH_MISMATCH
+INVALID_STATUS_TRANSITION
+INVENTORY_NOT_FOUND
+PERMISSION_DENIED
+CONFLICT
+INTERNAL_ERROR
+
+ローカルアプリが機械的に処理できる形にする。
+
+---
+
+# 33. 状態遷移
+
+PhotoBatch:
+
+UPLOADING
+  -> READY_FOR_REVIEW
+  -> LINKED
+  -> ARCHIVED
+
+異常:
+UPLOADING -> ERROR
+READY_FOR_REVIEW -> ERROR
+
+必要ならERRORから復旧。
+
+不正遷移は禁止。
+
+例:
+LINKED -> UPLOADING は不可。
+
+---
+
+# 34. 画像品質フラグ
+
+将来用に保持。
+
+qualityFlags例:
+
+BLUR
+TOO_DARK
+TOO_BRIGHT
+WHITE_BALANCE_WARNING
+CROP_WARNING
+LOW_RESOLUTION
+PROCESSING_ERROR
+
+初期実装でAI判定を実装しなくても、
+DBフィールドだけ用意して良い。
+
+---
+
+# 35. 再加工設計
+
+初期実装ではUIのみ非表示でもよいが、
+後から実装可能な構造にする。
+
+PhotoAssetに:
+
+processingVersion
+
+を持つ。
+
+将来:
+
+- 元画像
+- processingVersion v1
+- processingVersion v2
+
+の差し替えや再処理に対応可能。
+
+---
+
+# 36. Webで手動アップロードした画像の扱い
+
+Photo Station経由でなく、
+Webの画像登録画面から追加された画像もPhotoAssetとして統一管理。
+
+sourceTypeを追加してもよい:
+
+PHOTO_STATION
+WEB_UPLOAD
+MIGRATED
+OTHER
+
+---
+
+# 37. 既存画像の移行
+
+既存Inventoryにすでに画像がある可能性がある。
+
+この新機能導入時に既存画像を破壊しないこと。
+
+選択肢:
+
+A. 新規画像だけPhotoAssetへ移行
+B. 既存画像もバックフィルでPhotoAssetへ登録
+C. 暫定的に旧画像と新画像を併存
+
+推奨:
+まずC。
+
+新規機能を安定させた後でBを検討。
+
+最初のリリースで大規模画像移行はしない。
+
+---
+
+# 38. 既存Inventoryとの互換性
+
+Claude Codeは以下を調査:
+
+- Inventoryモデル
+- 既存image/imageUrls等
+- 商品詳細の画像表示
+- EC出品画面の画像入力
+- S3キー設計
+- GraphQL schema
+- Cognito Auth rule
+- Amplify Gen2 storage rule
+
+調査後、
+最小変更で新モデルを追加。
+
+---
+
+# 39. パフォーマンス
+
+未登録PhotoBatchが数百件あっても問題なく表示できること。
+
+一覧はページネーション。
+
+画像グリッドはlazy loading。
+
+原寸画像を一覧で読み込まない。
+
+---
+
+# 40. モバイル
+
+画像登録はPC中心だが、
+iPhoneでも最低限確認できるレスポンシブ対応。
+
+PC:
+大きな画像グリッド
+
+iPhone:
+2列程度
+
+在庫選択UIはタップしやすくする。
+
+---
+
+# 41. UIで避けること
+
+- batch IDだけの一覧
+- 小さすぎるサムネイル
+- 登録前に多項目入力させる
+- 毎回高度な検索を要求
+- 画像アップロード後に別画面へ移動しすぎる
+- 既存商品名だけで判断させる
+
+---
+
+# 42. 画像登録一覧のUX
+
+理想:
+
+未登録画像 12件
+
+[ソファ写真]
+24枚
+本日 10:32
+確認 >
+
+[椅子写真]
+18枚
+本日 10:51
+確認 >
+
+撮影物を目視ですぐ判別できる。
+
+---
+
+# 43. 商品選択UX
+
+確認完了後:
+
+商品に登録
+
+↓
+
+撮影待ち 18件
+
+[画像]
+arflex MAGENTA 210
+ZAICO: 50666071
+
+[画像]
+USM Haller Cabinet
+ZAICO: 50666082
+
+...
+
+補修待ちを見る
+
+その他の商品を検索
+
+---
+
+# 44. 登録後のUX
+
+登録成功:
+
+「arflex MAGENTA 210 に24枚登録しました」
+
+ボタン:
+
+- 商品詳細を見る
+- 次の未登録画像へ
+
+ここは「次の未登録画像へ」を強く推奨。
+
+大量処理時に高速。
+
+---
+
+# 45. EC出品画面UX
+
+登録済み画像をグリッド表示。
+
+操作:
+
+- クリック / タップで選択
+- ドラッグで順番
+- 1枚目 = メイン
+- 選択枚数表示
+- チャネル上限表示
+
+例:
+
+選択中 12 / 20枚
+
+---
+
+# 46. 商品詳細画面UX
+
+以下を表示:
+
+商品画像
+メイン画像
+撮影日
+登録日
+撮影バッチ
+画像枚数
+
+必要なら:
+
+「撮影バッチを確認」
+
+---
+
+# 47. 権限
+
+Role例:
+
+ADMIN
+STAFF
+PHOTO_DEVICE
+
+PHOTO_DEVICE:
+PhotoBatch upload系のみ
+
+STAFF:
+画像確認、在庫紐付け
+
+ADMIN:
+削除、復元、再紐付け、監査
+
+既存Cognito groupへ統合。
+
+---
+
+# 48. 削除安全性
+
+以下は確認ダイアログ必須:
+
+- PhotoBatch全削除
+- 登録済みPhotoAsset削除
+- Listing使用中画像削除
+- Inventory紐付け解除
+
+---
+
+# 49. エラー表示
+
+ユーザー向け:
+
+「画像3枚のアップロードが完了していません」
+
+技術エラーをそのまま表示しない。
+
+詳細ログは管理者用。
+
+---
+
+# 50. Observability
+
+最低限:
+
+- CloudWatch logs
+- API error logs
+- PhotoBatch status counts
+- upload失敗数
+
+将来的に管理画面で:
+
+本日撮影バッチ数
+本日画像数
+未登録件数
+エラー件数
+
+を表示可能。
+
+---
+
+# 51. TTL / Lifecycle
+
+一時ファイルはS3 Lifecycle利用推奨。
+
+例:
+
+original:
+30日後削除
+
+processed:
+保持
+
+thumbnail:
+保持
+
+ただし実際の業務方針が決まるまでは削除を保守的に設定する。
+
+---
+
+# 52. バックアップ
+
+DynamoDB PITRを有効化できる場合は有効化。
+
+S3 Versioningも検討。
+
+特に画像削除事故防止のため、
+初期段階ではVersioning有効を推奨。
+
+---
+
+# 53. 画像URL
+
+DBに有効期限付きpresigned URLを保存しない。
+
+保存するのはS3 key。
+
+表示時にURL発行。
+
+---
+
+# 54. ファイル命名
+
+S3の実ファイル名はassetId主体。
+
+例:
+
+{assetId}.jpg
+
+元ファイル名はmetadataに保存。
+
+---
+
+# 55. 画像順
+
+sequenceはPhotoAssetに持つ。
+
+Inventory登録後もsequenceをそのまま商品画像順として利用可能。
+
+EC Listingは別sequence。
+
+---
+
+# 56. PhotoBatchの代表画像
+
+coverPhotoAssetIdがnullの場合:
+
+sequence最小のREADY画像を代表とする。
+
+Web確認時に変更可能。
+
+---
+
+# 57. 在庫候補取得API
+
+画像登録画面用に高速に取得。
+
+デフォルト:
+
+status = 撮影待ち
+limit 50
+
+補修待ちは別セクション。
+
+その他検索は明示検索時のみ。
+
+---
+
+# 58. 新規在庫作成
+
+今回の改訂設計では、
+画像登録画面からの「新規在庫作成」は必須機能にしない。
+
+理由:
+商品紐付けは後工程に分離され、
+基本的には撮影待ち / 補修待ちInventoryから選ぶため。
+
+ただし将来必要なら追加可能。
+
+初期実装は既存在庫への紐付けを優先。
+
+---
+
+# 59. 同時利用
+
+複数スタッフが同じPhotoBatchを開く可能性。
+
+楽観ロックまたはupdatedAt確認。
+
+登録時に:
+
+すでにinventoryIdが入っていたらCONFLICT。
+
+二重紐付けを防止。
+
+---
+
+# 60. API versioning
+
+Photo Stationとの契約は将来的に変わるため、
+API Versionを意識。
+
+例:
+
+clientVersion
+processingVersion
+
+をmetadataに持つ。
+
+---
+
+# 61. Photo Station heartbeat
+
+必須ではない。
+
+初期実装では不要。
+
+将来:
+デバイス状態確認に利用可能。
+
+---
+
+# 62. デバイス識別
+
+sourceDeviceId:
+
+BELLO-PHOTO-PC-01
+
+を設定。
+
+将来2台目追加可能。
+
+---
+
+# 63. Batch Code採番
+
+DB primary keyはUUID/ULID。
+
+batchCodeは表示用。
+
+例:
+
+PHOTO-20260915-0001
+
+採番競合を避けるため、
+厳密連番にこだわらなくて良い。
+
+例:
+PHOTO-20260915-143215-A7C
+
+でも可。
+
+---
+
+# 64. 画像登録完了後
+
+PhotoBatch.status = LINKED
+
+未登録一覧から消える。
+
+登録済み履歴から検索可能。
+
+---
+
+# 65. Archive
+
+古いPhotoBatchをARCHIVEDにできる。
+
+これは画像削除ではない。
+
+一覧整理用。
+
+---
+
+# 66. 管理画面メトリクス
+
+将来:
+
+未登録 12
+本日撮影 38
+画像 642
+エラー 1
+
+表示可能にする。
+
+初期実装では未登録件数だけでよい。
+
+---
+
+# 67. 画像の差し替え
+
+既存assetを上書きせず:
+
+旧asset -> DELETED
+新asset -> READY
+
+推奨。
+
+---
+
+# 68. Listing使用中画像
+
+PhotoAsset削除時にListingImageSelection参照を確認。
+
+使用中なら原則削除をブロックする。
+
+単なる警告だけで続行させない。
+管理者がどうしても削除する場合は、
+先にListingImageSelectionから外す明示操作を要求する。
+
+---
+
+# 69. Inventory削除時
+
+Inventoryが削除されてもPhotoAssetを即削除しない。
+
+PhotoBatchの撮影履歴を維持。
+
+---
+
+# 70. データ整合性監査
+
+管理用スクリプトを作る。
+
+チェック:
+
+- PhotoAssetに存在しないS3 key
+- S3にあるがDBにない画像
+- LINKEDなのにinventoryId null
+- asset inventoryIdとbatch inventoryId不一致
+- Listingが削除済Assetを参照
+
+本番導入後に実行可能にする。
+
+---
+
+# 71. Amplify Gen2実装方針
+
+Claude Codeは現行のAmplify Gen2構成を確認し、
+以下を既存スタイルに合わせる。
+
+- amplify/data/resource.ts
+- amplify/storage/resource.ts
+- auth rules
+- custom queries/mutations
+- Lambda利用有無
+
+既存のAppSync schema運用を優先。
+
+---
+
+# 72. カスタムMutationが必要な箇所
+
+通常CRUDだけでなく、
+以下はサーバー側ロジックを推奨。
+
+- createPhotoBatchIdempotent
+- requestPhotoAssetUpload
+- completePhotoAssetUpload
+- completePhotoBatch
+- linkPhotoBatchToInventory
+- unlinkPhotoBatchFromInventory
+- reorderPhotoAssets
+- setInventoryPrimaryPhoto
+
+---
+
+# 73. presigned upload
+
+可能ならPhoto StationからS3へ直接PUT。
+
+APIサーバーを画像バイナリが通らないようにする。
+
+利点:
+
+- 高速
+- API負荷低減
+- 大容量対応
+- 安定
+
+---
+
+# 74. MIME制限
+
+許可:
+
+image/jpeg
+image/png
+image/webp
+必要に応じてRAW
+
+processedは原則JPEG。
+
+Web uploadは危険な拡張子を拒否。
+
+---
+
+# 75. サイズ制限
+
+processed JPEG:
+
+例 25MB以下
+
+original:
+RAWを許容する場合は別上限。
+
+設定値として管理。
+
+---
+
+# 76. CORS
+
+Photo Stationからpresigned URL PUTが必要な場合、
+S3 CORSを適切に設定。
+
+過剰な "*" は避ける。
+
+---
+
+# 77. Web表示キャッシュ
+
+CloudFront / browser cacheを利用可能。
+
+asset更新では新しいassetIdを発行するため、
+キャッシュ問題を減らせる。
+
+---
+
+# 78. テスト戦略
+
+## Unit
+
+- status transition
+- idempotency
+- hash duplicate
+- inventory linking
+- sequence reorder
+
+## Integration
+
+- PhotoBatch作成
+- presigned URL
+- S3 upload
+- complete asset
+- complete batch
+- Web表示
+- Inventory link
+- Listing selection
+
+## E2E
+
+1商品:
+24枚
+アップロード
+確認
+2枚削除
+1枚追加
+Inventory紐付け
+商品詳細確認
+Listingで10枚選択
+
+---
+
+# 79. エッジケース
+
+必ずテスト:
+
+- SD差分0枚
+- 1枚のみ
+- 300枚
+- 同一ファイル再送
+- ネットワーク断
+- upload途中PC再起動
+- complete batch二重送信
+- Webで二人同時登録
+- Inventory削除済
+- Asset削除済
+- Listing利用中画像削除
+- S3 upload成功、DB更新失敗
+- DB更新成功、S3 upload失敗
+
+---
+
+# 80. 初期リリース範囲
+
+Phase 1:
+
+- PhotoBatch
+- PhotoAsset
+- S3
+- upload API
+- batch complete
+- 未登録一覧
+- 画像確認
+- 画像削除
+- Inventory紐付け
+- 商品詳細画像表示
+- EC出品画像選択
+
+これを最優先。
+
+---
+
+# 81. Phase 2
+
+- Web追加アップロード
+- 並び替え
+- メイン画像
+- 画像ダウンロード
+- 紐付け解除
+- AuditLog
+- エラー管理改善
+
+---
+
+# 82. Phase 3
+
+- 再加工要求
+- AI品質判定
+- 自動メイン画像候補
+- 自動並び順
+- 画像品質スコア
+- 背景異常検知
+
+---
+
+# 83. Phase 4
+
+- 撮影工程KPI
+- 撮影担当者別
+- 商品あたり撮影時間
+- 再撮影率
+- 画像エラー率
+- ECチャネル別自動選択
+
+---
+
+# 84. 実装順序
+
+Claude Codeは以下の順で進める。
+
+1. 現行コード調査
+2. 既存Inventory / Listing / image構造把握
+3. 変更影響分析
+4. データモデル設計確定
+5. S3設計
+6. Auth設計
+7. PhotoBatch / PhotoAsset実装
+8. upload API
+9. 未登録一覧
+10. 詳細確認
+11. Inventory紐付け
+12. 商品詳細統合
+13. EC出品統合
+14. エラー処理
+15. テスト
+16. staging確認
+17. 本番反映前レビュー
+
+---
+
+# 85. 絶対に避けること
+
+- 本番Inventory全件を書き換える
+- 既存画像を無断で削除
+- S3 public化
+- Windowsアプリへ固定AWS Access Key
+- DBにpresigned URL保存
+- S3 objectをInventory登録のたびにmove
+- PhotoBatchとInventoryを同一モデルにする
+- Listing画像とInventory画像を同じ配列で強制共用
+- local PCからDynamoDBへ直接書込
+- upload失敗を成功扱い
+- 同一API再送で重複作成
+- 破壊的migrationを一括実行
+
+---
+
+# 86. 実装前にClaude Codeが確認すべきファイル
+
+必ず探索:
+
+- amplify/data/resource.*
+- amplify/storage/resource.*
+- amplify/auth/resource.*
+- Inventory関連model
+- Listing / EC出品関連model
+- 画像表示component
+- S3 upload helper
+- admin sidebar
+- inventory detail route
+- EC listing route
+- auth helper
+- environment/secrets管理
+- staging / production分岐
+
+---
+
+# 87. 実装前レポート
+
+最初にコード変更せず、
+以下をレポートすること。
+
+1. 現在の画像保存方式
+2. Inventory画像フィールド
+3. EC出品画像フィールド
+4. Storage構成
+5. Cognito/Auth構成
+6. AppSync/GraphQL構成
+7. 新規モデル追加の影響
+8. migrationリスク
+9. 提案する具体的ファイル変更一覧
+
+重大な破壊的変更が必要なら、
+実行前に停止して承認を求める。
+
+---
+
+# 88. ユーザー承認が必要な操作
+
+以下は勝手に実行しない。
+
+- 本番DB migration
+- 既存データ一括変換
+- S3 bucket変更
+- S3 Lifecycleによる削除
+- IAM大幅変更
+- Cognito group変更
+- Production deploy
+- 既存画像削除
+- 既存Listing構造破壊
+
+---
+
+# 89. staging優先
+
+まずstagingで実装・検証。
+
+入口:
+既存Amplify staging環境
+
+本番反映はstaging成功後。
+
+---
+
+# 90. Acceptance Criteria
+
+以下を満たしたらPhase 1完了。
+
+### Upload
+
+- Photo Station想定APIからPhotoBatch作成可能
+- 画像20枚アップロード可能
+- 再送しても重複batchができない
+- upload失敗時再試行可能
+
+### 画像登録
+
+- 左メニューに「画像登録」
+- 未登録撮影バッチ一覧表示
+- サムネイル表示
+- 詳細で全画像確認
+- 削除可能
+- 撮影待ちInventory優先表示
+- 補修待ちInventory表示
+- その他Inventory検索可能
+- Inventoryへ紐付け可能
+
+### 商品詳細
+
+- 紐付け画像が表示
+- 登録枚数確認可能
+- 拡大可能
+
+### EC出品
+
+- Inventory画像一覧表示
+- 出品画像選択可能
+- 順序管理可能
+- Listing保存後も選択維持
+
+### Data safety
+
+- 既存Inventory破壊なし
+- 既存画像破壊なし
+- S3 publicなし
+- conditional writeによる実効的な冪等性あり
+- 一覧・紐付け・Asset取得がScanなしで動く
+- 同時登録競合をCONFLICTで防止
+- ログあり
+
+---
+
+# 91. 将来のPhoto Stationとの接続を考えた最小API仕様
+
+以下を将来互換の中心とする。
+
+### createPhotoBatch
+
+input:
+- localImportSessionId
+- sourceDeviceId
+- sourceSdCardId
+- imageCountOriginal
+- clientVersion
+
+output:
+- batchId
+- batchCode
+- status
+
+### requestPhotoAssetUpload / requestPhotoAssetUploads
+
+input:
+- batchId
+- assets[]（1件または25〜50件程度のchunk）
+  - clientAssetId
+  - fileName
+  - mimeType
+  - fileSize
+  - sha256
+  - assetType
+
+output:
+- uploads[]
+  - photoAssetId
+  - clientAssetId
+  - s3Key
+  - uploadUrl
+
+### completePhotoAssetUpload
+
+input:
+- photoAssetId
+- sha256
+- width
+- height
+- fileSize
+- processingVersion
+
+### completePhotoBatch
+
+input:
+- batchId
+- imageCountProcessed
+- imageCountUploaded
+
+output:
+- status
+
+---
+
+# 92. この機能の完成形
+
+現場:
+
+商品A撮影
+↓
+SD-AをPCへ
+↓
+Photo Stationが差分取込
+↓
+Lightroom Classic加工
+↓
+自動クロップ等
+↓
+PhotoBatch作成
+↓
+AWS S3アップロード
+↓
+READY_FOR_REVIEW
+
+同時に商品B撮影。
+
+Web:
+
+画像登録
+↓
+未登録撮影一覧
+↓
+写真を確認
+↓
+不要画像を削除
+↓
+撮影待ちInventoryを選択
+↓
+登録
+↓
+商品詳細に画像反映
+↓
+EC出品で必要画像を選択
+
+---
+
+# 93. 実装で最も重視する評価軸
+
+1. 現場作業が増えない
+2. 撮影中に在庫検索させない
+3. 1SD取込 = 1商品という業務ルールを最大限利用
+4. ローカルPCとWeb責務を分離
+5. 既存Inventoryを壊さない
+6. 画像をS3で安定管理
+7. API再送に強い
+8. 誤登録から復旧できる
+9. EC出品時の画像選択が簡単
+10. 将来AI画像処理を追加可能
+
+---
+
+
+# 93.5 開発シミュレーションで確認済みの主要失敗パターン
+
+## ケースA: 300枚をInventoryへ紐付け
+v1案のように全PhotoAssetへinventoryIdを書き込むと、
+大量更新・部分失敗・再紐付け負荷が発生する。
+
+v2:
+PhotoBatch.inventoryIdのみ更新。
+300 Assetは触らない。
+
+## ケースB: Photo StationがcreatePhotoBatchを二重送信
+「GSIで検索して無ければCreate」だけでは同時実行で重複し得る。
+
+v2:
+conditional write / idempotency recordで原子的に一意化。
+
+## ケースC: 300枚のfinalizeでS3 HEADを300回
+finalizeが遅くなり、Lambda timeoutやUX悪化要因になる。
+
+v2:
+各Asset complete時に1件ずつS3検証。
+Batch finalizeはDB状態集計のみ。
+
+## ケースD: 商品登録後にS3 pathをInventory pathへ移動
+URL変更・コピー中失敗・二重保存が起きる。
+
+v2:
+S3 keyは不変。DB linkだけ変更。
+
+## ケースE: 同じBatchを2人が同時登録
+後勝ちでinventoryIdが上書きされる危険。
+
+v2:
+条件付きupdate。
+既にlinkedならCONFLICT。
+
+## ケースF: Listingで使っている画像を商品詳細から削除
+出品下書きの画像参照が壊れる。
+
+v2:
+Listing利用中Assetは削除ブロック。
+
+## ケースG: 未登録一覧をDynamoDB Scan
+データ増加で遅くなり、コストも増える。
+
+v2:
+status + uploadedAt GSIを必須化。
+
+## ケースH: RAWを全てAWSへ送る
+撮影→SD→次の撮影という高速運用に対し転送ボトルネック。
+
+v2:
+Phase 1 AWSはprocessed + thumbnailを中心とし、
+RAWはローカル一時保持を基本とする。
+
+
+# 94. Claude Codeへの最終指示
+
+この文書をそのまま機械的に実装するのではなく、
+まず現行コードベースを精査し、
+既存アーキテクチャと衝突しない実装案へ落とし込むこと。
+
+既存実装が本書の想定と異なる場合:
+
+- 安全性
+- 既存互換
+- 冪等性
+- 将来拡張性
+- 運用の簡単さ
+
+を優先して変更案を提示する。
+
+重要な判断が必要な場合は、
+「どれを選ぶべきか」まで具体的な推奨案を示してから承認を求めること。
+
+単なるTODO列挙ではなく、
+実際にstagingで動くところまで実装・検証すること。
+
+ただし本番データ破壊につながる操作は、
+必ずユーザー承認前に停止する。
+
+---
+
+# 95. Claude Code 実行開始時の指示
+
+まず以下を実施すること。
+
+1. リポジトリ全体を探索
+2. Amplify Gen2構成確認
+3. Inventoryモデル確認
+4. Listing / EC出品画像実装確認
+5. 既存S3 / Storage構成確認
+6. Cognito / Auth確認
+7. 画像関連の既存処理を検索
+8. 新機能追加による競合・重複を調査
+9. 実装計画を作成
+10. リスクを列挙
+
+その後、
+安全に実装可能な部分から実装を開始すること。
+
+長時間処理の途中でユーザーに操作を求めないよう、
+ログイン・認証・MFA・外部サービス承認等、
+ユーザーしかできない作業が予測できる場合は最初にまとめて依頼すること。
+
+---
+
+# 96. 最終成果物
+
+Claude Codeは完了時に以下を提出。
+
+- 変更ファイル一覧
+- 追加AWSリソース
+- 新規データモデル
+- 新規API
+- 新規画面
+- 既存画面変更
+- staging URL
+- テスト結果
+- 未解決事項
+- 本番反映手順
+- ロールバック方法
+- Photo Station側が接続するためのAPI仕様書
+
+以上。
+
+
+
+# Z. Claude Code完了時の提出物
+
+実装完了時、必ず以下を1つの最終レポートにまとめること。
+
+## Z-1. 実装内容
+- 変更ファイル一覧
+- 追加モデル
+- 追加index
+- 追加mutation/query
+- 追加Lambda
+- 追加S3 prefix / policy
+- 追加UI
+- 変更UI
+- 追加権限
+
+## Z-2. API仕様
+ローカルPhoto Station実装担当がそのまま使える形式で以下を記載。
+
+- endpoint / GraphQL operation
+- auth方式
+- request schema
+- response schema
+- error code
+- retry可否
+- idempotency key
+- timeout想定
+- 最大batch size
+- upload chunk size
+
+## Z-3. テスト結果
+最低限:
+
+- 1枚
+- 20枚
+- 100枚
+- 300枚
+- 同一createPhotoBatch再送
+- 同一asset再送
+- upload中断
+- PC再起動想定
+- batch complete二重送信
+- 同じbatchを2ブラウザで同時link
+- Inventory紐付け後に追加撮影batchをlink
+- Listing使用中asset削除
+- deleted assetの復元
+- 既存Inventory画像が壊れていないこと
+- 既存EC出品が壊れていないこと
+
+## Z-4. staging
+- staging URL
+- テスト用手順
+- テスト用Inventory
+- テスト用PhotoBatch
+- 確認ポイント
+
+## Z-5. production移行
+- 変更されるAWS resource
+- migration有無
+- downtime有無
+- rollout手順
+- rollback手順
+- production反映前に必要なユーザー承認
+
+## Z-6. 未解決事項
+- 技術的負債
+- 将来改善
+- Phase 2へ回した項目
+- ローカルPhoto Station側に要求する事項
+
+---
+
+# AA. 最終Acceptance Gate
+
+以下を満たすまでは「完了」と報告しないこと。
+
+## AWS
+- PhotoBatchが冪等に作成できる
+- PhotoAssetを直接S3へuploadできる
+- upload後のobject存在/metadata確認ができる
+- 300枚でもbatch finalizeできる
+- DynamoDB Scanに依存しない
+- 同時link競合を防止できる
+- S3 public accessなし
+- secretの平文保存なし
+
+## Web
+- 左メニューに画像登録
+- 未登録件数badge
+- 未登録batch一覧
+- batch代表画像表示
+- batch詳細で全画像確認
+- 論理削除
+- 追加upload
+- Inventory候補選択
+- 撮影待ち優先
+- 補修待ち表示
+- その他検索
+- Inventory link
+- link後の商品詳細表示
+- EC Listing画像選択
+- 画像順序保持
+
+## Safety
+- 既存Inventory破壊なし
+- 既存Listing破壊なし
+- 既存画像破壊なし
+- production deploy前承認
+- data migration前承認
+
+---
+
+# AB. Claude Codeへの最終メッセージ
+
+本機能の目的は「高機能な画像管理画面を作ること」ではない。
+
+目的は、
+
+**撮影担当者が商品撮影後にSDを挿すだけでローカル処理を完了させ、Web側では未登録画像を目視確認して商品へ短時間で紐付け、その画像を商品詳細とEC出品へそのまま流用できる状態を作ること。**
+
+そのため、以下を常に優先する。
+
+1. 撮影現場の操作を増やさない
+2. Webの登録操作を数クリックで終わらせる
+3. 既存データを壊さない
+4. 再送・通信断・二重操作に強くする
+5. 画像枚数が増えても性能劣化しにくくする
+6. ローカルとAWSを疎結合にする
+7. 将来のAI画像処理・再加工に拡張できるようにする
+
+以上。
