@@ -373,7 +373,7 @@ export class Orchestrator {
           git.isProtectedBranch(git.currentBranch(workDir), this.config.git.protectedBranches) &&
           git.headCommit(workDir) !== place.baseCommit,
       };
-      const evidence = evaluateEvidence({ report: result.report, gitFacts, repoPath: workDir });
+      const evidence = evaluateEvidence({ report: result.report, gitFacts, repoPath: workDir, independentVerification: this.verifier.check(this.repo.getTask(task.id)) });
       const independent = this.verifier.check(this.repo.getTask(task.id));
       if (!independent.passed) {
         evidence.passed = false;
@@ -465,6 +465,7 @@ export class Orchestrator {
       precomputed?.evidence ??
       evaluateEvidence({
         report,
+        independentVerification: this.verifier.check(task),
         gitFacts: {
           startCommit: task.base_commit || task.git_start_commit,
           headCommit: git.headCommit(task.work_dir || task.repo_path),

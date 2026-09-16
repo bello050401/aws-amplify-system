@@ -1,10 +1,30 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { COMPLETION_REPORT_SCHEMA, buildExecutionContract } from './reportSchema.mjs';
 import { validate } from '../core/validate.mjs';
 import { redactText } from '../log/redact.mjs';
 import { runProcess, localEnvironment, writeEvidence } from '../pipeline/process.mjs';
+
+export function resolveCodexExecutable(configured = 'codex', { env = process.env, platform = process.platform, lookup = spawnSync } = {}) {
+  const requested = configured || 'codex';
+  // An explicit path is authoritative; never silently replace a broken custom installation.
+  if (path.isAbsolute(requested) || /[\\/]/.test(requested)) return fs.existsSync(requested) ? requested : null;
+  const found = lookup(platform === 'win32' ? 'where.exe' : 'which', [requested], { encoding:'utf8', windowsHide:true, env });
+  const candidates = found.status === 0 ? String(found.stdout || '').split(/\r?\n/).map(s=>s.trim()).filter(Boolean) : [];
+  const native = candidates.find(file=>fs.existsSync(file) && (platform !== 'win32' || /\.exe$/i.test(file)));
+  if (native) return native;
+  if (platform === 'win32' && /^codex(?:\.exe)?$/i.test(requested) && env.LOCALAPPDATA) {
+    const root=path.join(env.LOCALAPPDATA,'OpenAI','Codex','bin');
+    try {
+      const bundled=fs.readdirSync(root,{withFileTypes:true}).filter(e=>e.isDirectory()).map(e=>path.join(root,e.name,'codex.exe')).filter(file=>fs.existsSync(file));
+      bundled.sort((a,b)=>fs.statSync(b).mtimeMs-fs.statSync(a).mtimeMs || a.localeCompare(b));
+      if(bundled.length) return bundled[0];
+    } catch {}
+  }
+  return null;
+}
 
 // Structured Outputs requires every property to be listed in required.
 // Optional report fields become nullable for transport and are omitted again after decoding.
@@ -27,7 +47,7 @@ function omitNulls(value) {
   return value;
 }
 export class CodexRunner {
-  constructor({ config, paths, logger, execute = runProcess }) { this.config = config; this.paths = paths; this.logger = logger; this.execute = execute; }
+  constructor({ config, paths, logger, execute = runProcess, resolveExecutable = resolveCodexExecutable }) { this.config = config; this.paths = paths; this.logger = logger; this.execute = execute; this.resolveExecutable = resolveExecutable; }
   buildArgs({ workDir, schemaPath, reportPath }) {
     const args = ['exec', '--ignore-user-config', '--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=false', '--ephemeral', '--json', '--color', 'never', '--cd', workDir, '--output-schema', schemaPath, '--output-last-message', reportPath];
     if (process.platform === 'win32') args.push('-c', 'windows.sandbox="elevated"');
@@ -37,6 +57,8 @@ export class CodexRunner {
   async run({ task, instruction, shouldStop = () => false, onHeartbeat = () => {} }) {
     const base = { ok: false, report: null, reportErrors: [], sessionId: null, costUsd: null, terminationReason: 'spawn_failed' };
     if (task.isolation !== 'worktree' || !task.work_dir) return { ...base, error: 'Codex実装は専用worktreeが必要です。' };
+    const executable = this.resolveExecutable(this.config.codex?.executable || 'codex');
+    if (!executable) return { ...base, error: 'Codex実行ファイルが見つかりません。設定・PATH・デスクトップ同梱先を確認しました。' };
     const directory = path.join(this.paths.runsDir, task.id, `codex-${crypto.randomUUID()}`);
     fs.mkdirSync(directory, { recursive: true });
     const schemaPath = path.join(directory, 'schema.json');
@@ -44,7 +66,7 @@ export class CodexRunner {
     fs.writeFileSync(schemaPath, JSON.stringify(codexReportSchema()));
     const input = buildExecutionContract({ taskId: task.id, repoPath: task.repo_path, branch: task.branch, workDir: task.work_dir, isolation: task.isolation, baseCommit: task.base_commit }) + instruction;
     const started = Date.now();
-    const result = await this.execute({ file: this.config.codex?.executable || 'codex', args: this.buildArgs({ workDir: task.work_dir, schemaPath, reportPath }), cwd: task.work_dir, env: localEnvironment(), input, timeoutMs: (this.config.codex?.timeoutSeconds || 3600) * 1000, shouldStop, onOutput: onHeartbeat });
+    const result = await this.execute({ file: executable, args: this.buildArgs({ workDir: task.work_dir, schemaPath, reportPath }), cwd: task.work_dir, env: localEnvironment(), input, timeoutMs: (this.config.codex?.timeoutSeconds || 3600) * 1000, shouldStop, onOutput: onHeartbeat });
     const stdoutPath = writeEvidence(directory, 'events.json', result);
     const outcome = { ...base, exitCode: result.exitCode, durationMs: Date.now() - started, stdoutPath, stderrTail: result.stderr?.slice(-2000), terminationReason: result.ok ? 'completed' : result.reason || 'crashed', error: result.error };
     if (!result.ok) return outcome;

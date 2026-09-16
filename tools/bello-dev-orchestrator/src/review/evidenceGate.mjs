@@ -11,7 +11,7 @@ import path from "node:path";
 /**
  * @returns {{passed: boolean, failures: string[], warnings: string[], checks: Array}}
  */
-export function evaluateEvidence({ report, gitFacts, repoPath }) {
+export function evaluateEvidence({ report, gitFacts, repoPath, independentVerification }) {
   const failures = [];
   const warnings = [];
   const checks = [];
@@ -33,7 +33,16 @@ export function evaluateEvidence({ report, gitFacts, repoPath }) {
   const tests = Array.isArray(report?.tests) ? report.tests : [];
   const failed = tests.filter((t) => t.result === "failed");
   const passed = tests.filter((t) => t.result === "passed");
-  if (tests.length === 0) {
+  // Only the host supplies this value, after fingerprint/attempt/plan checks.
+  // A tool-restricted implementation Agent should honestly report skipped
+  // tests; that must not force a duplicate Agent invocation after host success.
+  const independent = independentVerification?.passed === true &&
+    independentVerification.receipt?.passed === true &&
+    independentVerification.receipt.results?.length > 0 &&
+    independentVerification.receipt.results.every(r => r.passed === true && r.exitCode === 0);
+  if (independent && failed.length === 0) {
+    record("独立テストがすべて成功している", "passed", `ホストが実行し現行ソースと照合した ${independentVerification.receipt.results.length} 件`);
+  } else if (tests.length === 0) {
     record("テストが実行されている", "failed", "tests が空です。テスト未実行を完了と呼ばない (§1-3)。");
   } else if (failed.length > 0) {
     record("テストがすべて成功している", "failed", `失敗 ${failed.length} 件: ${failed.map((t) => t.name).join(", ")}`);

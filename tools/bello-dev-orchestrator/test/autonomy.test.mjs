@@ -75,7 +75,7 @@ test('Codex runner passes stdin/schema/worktree sandbox, validates report and ta
       fs.writeFileSync(options.args[options.args.indexOf('--output-last-message')+1],JSON.stringify(report));
       return {ok:true,exitCode:0,stdout:'',stderr:''};
     };
-    const runner=new CodexRunner({config:{codex:{}},paths:h.paths,logger:h.logger,execute});
+    const runner=new CodexRunner({config:{codex:{}},paths:h.paths,logger:h.logger,execute,resolveExecutable:()=> 'fixture-codex.exe'});
     assert.equal((await runner.run({task,instruction:'do task'})).ok,true);
     assert.equal(seen.args.at(-1),'-');
     assert.ok(seen.input.includes('do task'));
