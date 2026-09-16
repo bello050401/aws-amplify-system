@@ -83,7 +83,14 @@ export class S3PhotoStorage implements PhotoStoragePort {
     const results: PresignedUpload[] = [];
     for (const target of targets) {
       const command = new PutObjectCommand(buildPutObjectCommandInput(this.bucketName, target));
-      const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: this.uploadUrlExpirySeconds });
+      // ChecksumSHA256をqueryへhoistすると、Node fetch/S3の組み合わせでは
+      // オブジェクトにSHA-256が保存されず既定CRC64だけになる。headerを
+      // 署名対象として残し、Photo Stationが同じ値を送ることでHEAD時に
+      // ChecksumSHA256を必ず検証できるようにする。
+      const uploadUrl = await getSignedUrl(this.s3Client, command, {
+        expiresIn: this.uploadUrlExpirySeconds,
+        unhoistableHeaders: new Set(["x-amz-checksum-sha256"]),
+      });
       results.push({ ...target, uploadUrl });
     }
     return results;

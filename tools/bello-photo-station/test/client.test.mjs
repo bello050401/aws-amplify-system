@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -35,6 +36,8 @@ test("認証付きAPI、presigned PUT、完了通知を順番に実行する", a
   assert.equal(result.status, "READY_FOR_REVIEW");
   assert.deepEqual(calls.map((c) => c.init.method), ["POST", "POST", "PUT", "PUT", "POST", "POST"]);
   assert.equal(calls[0].init.headers.authorization, "Bearer token");
+  assert.equal(calls[2].init.headers["x-amz-checksum-sha256"], createHash("sha256").update("processed").digest("base64"));
+  assert.equal(calls[3].init.headers["x-amz-checksum-sha256"], createHash("sha256").update("thumb").digest("base64"));
   assert.deepEqual(checkpoints, ["BATCH_CREATED", "ASSET_READY", "COMPLETE"]);
 });
 
@@ -43,6 +46,25 @@ test("IDEMPOTENCY_CONFLICTは再試行しない", async () => {
   const api = new PhotoRegistrationApiClient({ endpoint: "https://api.invalid", tokenProvider: async () => "token", retries: 3, fetchImpl: async () => { calls += 1; return { ok: false, status: 409, json: async () => ({ ok: false, error: { code: "IDEMPOTENCY_CONFLICT", message: "conflict" } }) }; } });
   await assert.rejects(api.call("createPhotoBatch", {}), (error) => error.code === "IDEMPOTENCY_CONFLICT");
   assert.equal(calls, 1);
+});
+
+test("checksumが署名URLのqueryにある旧形式では重複headerを送らない", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "bello-photo-query-checksum-"));
+  const filePath = path.join(dir, "p.jpg");
+  await writeFile(filePath, "processed");
+  let sentHeaders;
+  const api = new PhotoRegistrationApiClient({
+    endpoint: "https://api.invalid",
+    tokenProvider: async () => "token",
+    fetchImpl: async (_url, init) => { sentHeaders = init.headers; return { ok: true, status: 200 }; },
+  });
+  await api.upload({
+    uploadUrl: "https://s3.invalid/p?x-amz-checksum-sha256=signed",
+    expectedBytes: 9,
+    expectedMimeType: "image/jpeg",
+    expectedSha256: "00".repeat(32),
+  }, filePath);
+  assert.equal(sentHeaders["x-amz-checksum-sha256"], undefined);
 });
 
 test("checkpointは同一sessionを原子的に更新する", async () => {

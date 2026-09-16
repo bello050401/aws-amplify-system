@@ -36,16 +36,21 @@ export class PhotoRegistrationApiClient {
 
   async upload(upload, filePath) {
     const bytes = await readFile(filePath);
+    const checksumInQuery = new URL(upload.uploadUrl).searchParams.has("x-amz-checksum-sha256");
+    const headers = {
+      "content-type": upload.expectedMimeType,
+      "content-length": String(upload.expectedBytes),
+      ...(!checksumInQuery ? { "x-amz-checksum-sha256": Buffer.from(upload.expectedSha256, "hex").toString("base64") } : {}),
+    };
     const response = await this.fetch(upload.uploadUrl, {
       method: "PUT",
-      headers: {
-        "content-type": upload.expectedMimeType,
-        "content-length": String(upload.expectedBytes),
-        "x-amz-checksum-sha256": Buffer.from(upload.expectedSha256, "hex").toString("base64"),
-      },
+      headers,
       body: bytes,
     });
-    if (!response.ok) throw new Error(`S3 PUT failed: HTTP ${response.status}`);
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`S3 PUT failed: HTTP ${response.status}${detail ? ` ${detail.slice(0, 500)}` : ""}`);
+    }
   }
 }
 
