@@ -41,6 +41,7 @@ export function planTodos(todos,tasks,{currentTaskId=null}={}){
   for(const item of result){if(item.triage.canonicalId){const parent=result.find(x=>x.id===item.triage.canonicalId);parent.waitingTaskIds=[...new Set([...parent.waitingTaskIds,...item.waitingTaskIds])];(parent.triage.related??=[]).push({id:item.id,action:item.action_required,condition:item.completion_condition});if(item.triage.owner==='human')parent.triage.owner='human';}}
   for(const parent of result.filter(x=>!x.triage.canonicalId&&x.status==='open')) {
     const linked=parent.waitingTaskIds.map(id=>taskMap.get(id)).filter(Boolean);
+    if(parent.triage.owner==='human'&&parent.triage.bucket==='ai'){parent.triage.bucket='later';parent.triage.classification='later';parent.triage.reason='統合した依頼に重要承認・本人操作が含まれる';}
     if(parent.triage.owner==='human'&&linked.some(t=>!terminal.has(t.state)&&t.state!=='paused'&&(t.id===currentTaskId||active.has(t.state)))){parent.triage.bucket='now';parent.triage.classification='human';parent.triage.reason='現在の進行に関係する本人操作・重要承認';}
   }
   return result.sort((a,b)=>a.triage.priority-b.triage.priority||String(b.created_at).localeCompare(String(a.created_at)));
@@ -56,7 +57,7 @@ export class TodoTriage{
     return {todos,counts,aiRunning:todos.filter(t=>t.triage.bucket==='ai'&&t.waitingTaskIds.some(id=>this.repo.getTask(id)?.state==='running')&&this.repo.store.get('SELECT state FROM todo_ai_queue WHERE todo_id=?',[t.id])?.state==='running').length};
   }
   instructionsFor(taskId){
-    return this.reconcile().todos.filter(t=>t.triage.bucket==='ai'&&t.waitingTaskIds.includes(taskId)).map(t=>`- ${t.title}\n  ${t.action_required}\n  完了条件: ${t.completion_condition}`).join('\n');
+    return this.reconcile().todos.filter(t=>t.triage.bucket==='ai'&&t.waitingTaskIds.includes(taskId)).map(t=>`- ${t.title}\n  ${t.action_required}\n  完了条件: ${t.completion_condition}\n`+(t.triage.related||[]).map(r=>`  関連依頼: ${r.action}\n  完了条件: ${r.condition}`).join("\n")).join('\n');
   }
   markRunning(taskId){for(const t of this.reconcile().todos.filter(t=>t.triage.bucket==='ai'&&t.waitingTaskIds.includes(taskId)))this.repo.store.run("UPDATE todo_ai_queue SET state='running',updated_at=? WHERE todo_id=?",[new Date().toISOString(),t.id]);}
   completeVerified(taskId){
