@@ -9,6 +9,7 @@ import {
   selectForWork,
   verifyEvaluationEvidence,
 } from "./taskRouting.mjs";
+import { buildImplementationContext } from "./contextPackets.mjs";
 
 const zeroUsage = {
   measuredTokens: 0,
@@ -63,6 +64,8 @@ export function existingAdapters({
   delivery,
   modelAvailable,
   allowedPaths = [],
+  contextCache = null,
+  contextFactory = null,
 }) {
   const task = async (run) => {
     const value = await taskForRun(run);
@@ -140,7 +143,12 @@ export function existingAdapters({
       acIds: run.acIds,
     });
     const baseline = routeModel(run.configSnapshot, {
-      phase: work.tier === "advanced" ? "architecture" : "implementation",
+      phase:
+        work.tier === "advanced"
+          ? "architecture"
+          : work.tier === "economy" && run.configSnapshot.modelPolicy?.economy
+            ? "local_ui"
+            : "implementation",
       logicalFailures: run.logicalFailures,
     });
     const availability = new Set();
@@ -163,6 +171,8 @@ export function existingAdapters({
       evidenceVerified: (model, category, ev) =>
         verifyEvaluationEvidence(repo.store, model, category, ev),
     });
+    if (!selection.waiting)
+      selection.reason = `${selection.reason}（基準階層: ${baseline.tier}）`;
     repo.checkpoint(run.task_id, "eco_routing:" + operationKey, {
       specId: run.specId,
       selection,
@@ -175,14 +185,43 @@ export function existingAdapters({
         reason: "Selected model availability has not been verified",
       };
     const baseSHA = head(value);
+    const contextPacket =
+      contextCache && contextFactory && run.configSnapshot.contextCache
+        ? contextFactory({
+            cache: contextCache,
+            run,
+            task: value,
+            allowedPaths,
+            rereadPrevention: !!run.configSnapshot.rereadPrevention,
+          })
+        : null;
+    const boundedContext = contextPacket
+      ? buildImplementationContext({
+          spec: spec.body,
+          previousResultSummary: contextPacket.previousResultSummary,
+          packets: contextPacket.packets,
+          changedFiles: contextPacket.changedFiles,
+        })
+      : null;
+    if (boundedContext)
+      repo.checkpoint(run.task_id, "eco_context:" + operationKey, {
+        summaryText: boundedContext.summaryText,
+        limitation: boundedContext.limitation,
+        unread: boundedContext.unread,
+      });
     const instruction = [
       "Implement only this accepted specification in the isolated worktree.",
       "Do not deploy, access external services, read credentials, change infra, commit, or push.",
       "Report results in the existing completion report format. The host runs independent tests.",
+      "Completion refers only to your implementation phase: if the requested code is implemented, report status completed and honestly mark host-only tests skipped. Do not report partial merely because host testing/build/deployment is pending. Report genuine unfinished code as partial with specific remaining work. Never claim an unexecuted test passed.",
       JSON.stringify(spec.body),
       run.finalQaId
         ? "Latest QA findings: " +
           JSON.stringify(artifact(run.finalQaId).body.findings)
+        : "",
+      boundedContext?.summaryText
+        ? "Cached context summary (unchanged files already summarized, do not restate as new reads): " +
+          boundedContext.summaryText
         : "",
     ].join("\n");
     const result = await runnerForModel(selection).run({

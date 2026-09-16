@@ -15,6 +15,7 @@ export function subscriptionTextWorker({
   buildPrompt,
   makeArtifact,
   assertSubscription,
+  imagesForContext = null,
   execute = runProcess,
 }) {
   if (!model || !path.isAbsolute(directory) || !assertSubscription)
@@ -24,7 +25,7 @@ export function subscriptionTextWorker({
   fs.mkdirSync(directory, { recursive: true });
   const binding = crypto
     .createHash("sha256")
-    .update(JSON.stringify({ model, schema }))
+    .update(JSON.stringify({ model, schema, ...(imagesForContext ? { vision: true } : {}) }))
     .digest("hex");
   const files = (context) => {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(context.operationKey))
@@ -51,7 +52,7 @@ export function subscriptionTextWorker({
         };
   };
   return {
-    capabilities: ["text"],
+    capabilities: imagesForContext ? ["text", "image"] : ["text"],
     model,
     reconcile: async (context) => read(context),
     execute: async (context) => {
@@ -70,6 +71,10 @@ export function subscriptionTextWorker({
           effectCompleted: false,
         };
       const prompt = await buildPrompt(context);
+      const images = imagesForContext ? await imagesForContext(context) : [];
+      if (!Array.isArray(images) || images.length > 4 || images.some(file =>
+        !path.isAbsolute(file) || !fs.statSync(file).isFile()))
+        throw Error("Bounded host-owned image evidence required");
       const f = files(context);
       fs.mkdirSync(f.root, { recursive: true });
       const schemaFile = path.join(f.root, "schema.json"),
@@ -81,6 +86,7 @@ export function subscriptionTextWorker({
           binding,
           runId: context.run.id,
           model,
+          images: images.map(file => ({ file, digest: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') })),
           at: new Date().toISOString(),
         }),
         { flag: "wx" },
@@ -114,6 +120,7 @@ export function subscriptionTextWorker({
       ];
       if (process.platform === "win32")
         args.push("-c", 'windows.sandbox="elevated"');
+      for (const file of images) args.push("--image", file);
       args.push("-");
       const result = await execute({
         file: executable,
@@ -149,26 +156,33 @@ export function subscriptionTextWorker({
           effectCompleted: true,
         };
       else {
+        const usage = {
+          measuredTokens: parsed.totalTokens || 0,
+          estimatedTokens: parsed.totalTokens
+            ? 0
+            : Math.ceil(
+                Buffer.byteLength(prompt + JSON.stringify(parsed.answer)) / 3,
+              ),
+          costUsd: 0,
+          costKnown: false,
+        };
         try {
           receipt = {
             status: "succeeded",
             artifact: await makeArtifact(parsed.answer, context),
-            usage: {
-              measuredTokens: parsed.totalTokens || 0,
-              estimatedTokens: parsed.totalTokens
-                ? 0
-                : Math.ceil(
-                    Buffer.byteLength(prompt + JSON.stringify(parsed.answer)) /
-                      3,
-                  ),
-              costUsd: 0,
-              costKnown: false,
-            },
+            usage,
           };
         } catch (error) {
+          // The model completed a real read-only answer; only the host-side
+          // artifact shape/scope check failed. Typed so the engine can bound
+          // and auto-regenerate this instead of treating it as an unknown
+          // external effect or a communication failure.
           receipt = {
             status: "failed",
             reason: "Host artifact validation: " + error.message,
+            effectCompleted: true,
+            artifactInvalid: true,
+            usage,
           };
         }
       }

@@ -156,12 +156,28 @@
           <section class="panel" aria-labelledby="eco-title">
             <h2 id="eco-title" class="panel-title">協調エコ開発モード</h2>
             <p id="eco-status" role="status" class="muted">接続状況を確認しています。</p>
+            <div id="eco-capabilities" class="row"></div>
             <form id="eco-form">
               <label for="eco-mode">開発モード</label>
               <select id="eco-mode"><option value="claude_only">Claudeのみ</option><option value="codex_only">Codexのみ</option><option value="cooperative_eco">GPT + Claude 協調エコ</option><option value="fully_automatic">全自動</option></select>
               <div id="eco-fields"></div>
               <label for="eco-repairs">自動修正の上限（初回実装を除く）</label>
               <input id="eco-repairs" type="number" min="0" max="10" value="3" required>
+              <label for="eco-maxElapsedSeconds">1 runの最大経過時間（秒）</label>
+              <input id="eco-maxElapsedSeconds" type="number" min="1" max="86400" required>
+              <label for="eco-maxTokens">1 runの最大トークン数</label>
+              <input id="eco-maxTokens" type="number" min="1" max="10000000" required>
+              <label for="eco-maxCostUsd">1 runの最大費用（USD、API換算）</label>
+              <input id="eco-maxCostUsd" type="number" min="0" step="0.01" required>
+              <label for="eco-communicationRetries">通信エラーの再試行回数</label>
+              <input id="eco-communicationRetries" type="number" min="0" max="10" required>
+              <label for="eco-artifactRetries">成果物不正の再試行回数</label>
+              <input id="eco-artifactRetries" type="number" min="0" max="10" required>
+              <label for="eco-retentionDays">証拠の保持期間（日）</label>
+              <input id="eco-retentionDays" type="number" min="1" max="365" required>
+              <h3 class="sub-title">モデル割当（階層ごと）</h3>
+              <p class="muted">reasoning能力は、接続済みのホスト能力で確認できた場合のみ選択できます。未接続を有効として扱いません。</p>
+              <div id="eco-model-policy"></div>
               <details><summary>接続設定</summary>
                 <label for="eco-url">検証環境のURL</label><input id="eco-url" type="url">
                 <label for="eco-domains">許可ドメイン（カンマ区切り）</label><input id="eco-domains" type="text">
@@ -171,7 +187,32 @@
               <p class="muted">保存は新しいrunに適用します。停止中の作業は再開しません。本番反映の承認は常に必要です。</p>
               <button id="eco-save" type="submit" class="btn btn-primary">設定を保存</button>
             </form>
-            <details><summary>協調runの状態</summary><pre id="eco-runs" class="pre">未実行</pre></details>
+          </section>
+
+          <section class="panel" aria-labelledby="eco-register-title">
+            <h2 id="eco-register-title" class="panel-title">協調runの登録</h2>
+            <p id="eco-pause-note" class="muted"></p>
+            <form id="eco-register-form">
+              <label for="eco-run-task">対象タスク（待機中のみ）</label>
+              <select id="eco-run-task"></select>
+              <label for="eco-run-profile">許可プロファイルID</label>
+              <input id="eco-run-profile" type="text" placeholder="例: static-smoke">
+              <p id="eco-profile-note" class="muted"></p>
+              <label for="eco-run-revision">仕様のrevision</label>
+              <input id="eco-run-revision" type="text" required>
+              <label for="eco-run-acids">受入条件ID（カンマ区切り）</label>
+              <input id="eco-run-acids" type="text" required>
+              <label for="eco-run-risk">リスク区分</label>
+              <select id="eco-run-risk"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select>
+              <button id="eco-run-register" type="submit" class="btn btn-primary">この作業内容で1件だけ登録する</button>
+            </form>
+            <p id="eco-register-status" class="muted"></p>
+          </section>
+
+          <section class="panel" aria-labelledby="eco-runs-title">
+            <h2 id="eco-runs-title" class="panel-title">協調runの一覧</h2>
+            <div id="eco-runs-list" class="plain-list"></div>
+            <div id="eco-run-detail" class="hidden"></div>
           </section>
 
           <section class="panel">

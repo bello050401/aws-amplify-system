@@ -125,6 +125,9 @@ export class EcoStore {
         throw Error("Configuration version conflict");
       const valid = validateEco(config, this.capabilities());
       const version = old.version + 1;
+      const modeChanged =
+        old.config.mode !== valid.config.mode ||
+        !!old.config.enabled !== !!valid.config.enabled;
       this.store.run("INSERT INTO eco_config VALUES(?,?,?)", [
         version,
         JSON.stringify(valid.config),
@@ -135,6 +138,9 @@ export class EcoStore {
           "implementationProvider",
           valid.config.mode === "codex_only" ? "codex" : "claude",
         );
+      // モードや有効/無効の切替は legacy キューへの影響が大きいため、必ず一時停止へ
+      // 倒す (§eco queue guard)。同モードでの予算調整などは既存の一時停止状態を保つ。
+      if (modeChanged) this.store.setMeta("paused", "1");
       return { version, ...valid };
     });
   }

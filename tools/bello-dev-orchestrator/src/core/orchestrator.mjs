@@ -102,14 +102,17 @@ export class Orchestrator {
     }
 
     // 審査待ちで止まっていたものは作り直さない。待機指示だけ消して、
-    // 起動直後に審査へ進めるようにする。
+    // 起動直後に審査へ進めるようにする。eco が所有する run が非終端のタスクは
+    // legacy の状態機械へ触れない (§eco 所有権)。
     for (const waiting of this.repo.listTasks({ state: STATES.AWAITING_AI_REVIEW, limit: 500 })) {
+      if (this.repo.hasActiveEcoRun(waiting.id)) continue;
       if (waiting.retry_after) this.repo.updateTask(waiting.id, { retry_after: null });
     }
 
     // 完了報告が残っている verifying は、Claude を走らせ直さずに審査から再開する。
     let resumed = 0;
     for (const task of this.repo.listTasks({ state: STATES.VERIFYING, limit: 500 })) {
+      if (this.repo.hasActiveEcoRun(task.id)) continue;
       if (task.report_id) {
         this.repo.setState(task.id, STATES.AWAITING_AI_REVIEW, "検証中に中断。完了報告が残っているため審査から再開します。", "recovery");
         this.repo.checkpoint(task.id, "recovery", { previousState: STATES.VERIFYING, resumedFrom: "report" });
@@ -124,7 +127,7 @@ export class Orchestrator {
 
     const stranded = [];
     for (const state of ACTIVE_STATES) {
-      stranded.push(...this.repo.listTasks({ state, limit: 500 }));
+      stranded.push(...this.repo.listTasks({ state, limit: 500 }).filter((t) => !this.repo.hasActiveEcoRun(t.id)));
     }
 
     for (const task of stranded) {
@@ -208,6 +211,30 @@ export class Orchestrator {
   }
 
   /**
+   * 協調 eco モードが有効かどうか。eco_config スキーマ未導入や config 未保存なら
+   * 常に false (= 従来動作) を返す。legacy の全 claim 経路 (queued/審査/delivery) は
+   * ここが true の間、新規に何も発行してはいけない (§eco queue guard)。
+   */
+  #coopEcoModeActive() {
+    if (
+      !this.repo.store.get(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='eco_config'",
+      )
+    )
+      return false;
+    const row = this.repo.store.get(
+      "SELECT data FROM eco_config ORDER BY version DESC LIMIT 1",
+    );
+    if (!row) return false;
+    try {
+      const cfg = JSON.parse(row.data);
+      return !!cfg.enabled && ["cooperative_eco", "fully_automatic"].includes(cfg.mode);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * 1 手進める。何かしたら true を返す。
    */
   async tick() {
@@ -216,6 +243,11 @@ export class Orchestrator {
     this.repo.releaseDueRetries();
     if (typeof this.repo.getPaused === "function") this.paused = this.repo.getPaused();
     if (this.paused || this.stopping) return false;
+
+    // 協調 eco モードが有効な間、legacy キューは一切新規claimしない。
+    // tick() は 1 手ごとに await が全て解決してから戻るので、ここで止めても
+    // 実行中の処理を中断することはない (§eco queue guard)。
+    if (this.#coopEcoModeActive()) return false;
 
     const delivering = this.repo.listTasks({ state: STATES.DELIVERING, limit: 1 })[0];
     if (delivering && this.delivery) {

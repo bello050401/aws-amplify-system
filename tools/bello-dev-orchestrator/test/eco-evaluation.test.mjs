@@ -173,3 +173,25 @@ test("text worker never repeats interrupted dispatch and cannot advertise browse
   );
   assert.equal(calls, 1);
 });
+
+test("image evidence is host bounded and never grants browser capability", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "bello-vision-worker-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const screenshot = path.join(directory, "screen.png");
+  fs.writeFileSync(screenshot, "synthetic transport fixture");
+  let calls = 0;
+  const options = { model: "fixture", executable: "fixture", directory, schema: {},
+    assertSubscription: async () => true, buildPrompt: async () => "Inspect supplied evidence",
+    makeArtifact: async answer => answer, imagesForContext: async () => [screenshot],
+    execute: async ({args}) => { calls++; assert.equal(args[args.indexOf('--image') + 1], screenshot);
+      fs.writeFileSync(args[args.indexOf('--output-last-message') + 1], '{"answer":"observed"}');
+      return {ok:true,stdout:'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'};
+    } };
+  const context = {run:{id:'vision'},operationKey:'image-one'};
+  const worker = subscriptionTextWorker(options);
+  assert.deepEqual(worker.capabilities, ['text','image']);
+  assert.equal((await worker.execute(context)).status, 'succeeded');
+  assert.equal((await subscriptionTextWorker(options).reconcile(context)).status, 'succeeded');
+  await assert.rejects(subscriptionTextWorker({...options,imagesForContext:async()=>['relative.png']}).execute({...context,operationKey:'invalid'}));
+  assert.equal(calls, 1);
+});

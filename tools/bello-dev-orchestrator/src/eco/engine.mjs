@@ -20,6 +20,12 @@ const phaseAdapter = {
   STAGING_DEPLOYING: "deploy",
   QA_VERIFY: "qaVerify",
 };
+// Phases where the adapter is a read-only model call (spec text or QA
+// judgement), never a mutation of the isolated worktree. Only these phases
+// may auto-regenerate a bounded number of times on a typed invalid-artifact
+// failure without counting as a communication failure or an implementation
+// repair loop.
+const readOnlyArtifactPhases = new Set(["QA_INITIAL", "SPEC_READY", "QA_VERIFY"]);
 
 /** Durable coordinator. Adapters must reconcile the persisted operation key before
  * dispatching; an unknown external result is never retried as a new operation.
@@ -279,6 +285,34 @@ export class EcoEngine {
     }
     if (!["succeeded", "failed"].includes(result.status))
       throw Error("Unconfirmed result");
+    if (
+      result.status === "failed" &&
+      result.effectCompleted === true &&
+      result.artifactInvalid === true &&
+      readOnlyArtifactPhases.has(run.state)
+    ) {
+      const usage = { ...run.usage };
+      if (!result.usage) usage.costKnown = false;
+      else {
+        for (const key of ["measuredTokens", "estimatedTokens", "costUsd"]) {
+          if (!Number.isFinite(result.usage[key]) || result.usage[key] < 0)
+            throw Error("Invalid usage");
+          usage[key] += result.usage[key];
+        }
+        usage.costKnown = usage.costKnown && result.usage.costKnown === true;
+      }
+      const count = run.artifactFailures + 1;
+      const capped = count > run.configSnapshot.artifactRetries;
+      this.change(
+        run,
+        capped ? "HUMAN_REVIEW" : run.state,
+        { pendingEffect: null, retryAt: null, usage, artifactFailures: count },
+        capped
+          ? "Artifact retry limit reached: " + (result.reason || "invalid artifact")
+          : "Invalid artifact; regenerating: " + (result.reason || ""),
+      );
+      return true;
+    }
     let artifact;
     if (result.artifact) {
       try {

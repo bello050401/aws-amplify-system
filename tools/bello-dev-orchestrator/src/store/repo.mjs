@@ -203,6 +203,24 @@ export class Repo {
   }
 
   /**
+   * 協調eco run が非終端で紐づいているタスクかどうか。
+   *
+   * eco の移行前DB (eco_runs テーブルが無い) でも安全に false を返す。
+   * legacy UI から queued へ戻されても、eco が所有している間は
+   * claimNextTask/claimNextReview/recover がこのタスクを絶対に拾わない
+   * ようにするためのガード。
+   */
+  hasActiveEcoRun(taskId) {
+    if (!this.store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='eco_runs'")) {
+      return false;
+    }
+    return !!this.store.get(
+      "SELECT id FROM eco_runs WHERE task_id=? AND state NOT IN ('COMPLETED_STAGING','FAILED','CANCELLED') LIMIT 1",
+      [taskId],
+    );
+  }
+
+  /**
    * 次に実行すべきタスクを 1 件返す。依存が未解決のものは選ばない。
    * 並び順は決定的 (優先度降順 → 作成順)。§9-4「複数文書は決定的に並べる」。
    */
@@ -213,6 +231,7 @@ export class Repo {
     );
     for (const row of candidates) {
       const task = hydrateTask(row);
+      if (this.hasActiveEcoRun(task.id)) continue;
       const unmet = this.unmetDependencies(task);
       if (unmet.length === 0) return task;
     }
@@ -238,7 +257,7 @@ export class Repo {
   claimNextReview() {
     // 手動審査の判定待ち (open な manual_review TODO がある) タスクは掴まない。
     // 掴むと毎 tick 同じ依頼を作り直してしまう。TODO を完了 / 取消すれば再び対象になる。
-    const row = this.store.get(
+    const rows = this.store.all(
       `SELECT t.* FROM tasks t
         WHERE t.state=? AND (t.retry_after IS NULL OR t.retry_after<=?)
           AND NOT EXISTS (
@@ -246,10 +265,15 @@ export class Repo {
              WHERE d.status='open' AND d.kind='manual_review'
                AND d.waiting_task_ids LIKE '%' || t.id || '%'
           )
-        ORDER BY t.priority DESC, t.updated_at ASC LIMIT 1`,
+        ORDER BY t.priority DESC, t.updated_at ASC`,
       [STATES.AWAITING_AI_REVIEW, nowIso()],
     );
-    return hydrateTask(row);
+    for (const row of rows) {
+      const task = hydrateTask(row);
+      if (this.hasActiveEcoRun(task.id)) continue;
+      return task;
+    }
+    return null;
   }
 
   /** あるタスクに紐づく、指定種別の open な TODO。 */

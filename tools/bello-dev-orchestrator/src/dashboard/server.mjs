@@ -30,7 +30,7 @@ const STATIC_FILES = new Map([
 const MAX_JSON_BODY = 1 * 1024 * 1024;
 
 export class Dashboard {
-  constructor({ config, paths, repo, logger, orchestrator, todoManager, intake, diagnostics }) {
+  constructor({ config, paths, repo, logger, orchestrator, todoManager, intake, diagnostics, ecoRuntime = null }) {
     this.config = config;
     this.paths = paths;
     this.repo = repo;
@@ -39,7 +39,11 @@ export class Dashboard {
     this.todoManager = todoManager;
     this.intake = intake;
     this.diagnostics = diagnostics;
-    this.ecoApi = new EcoApi({ store: repo.store, operatorToken: process.env.BELLO_ECO_OPERATOR_TOKEN || '' });
+    // 常駐接続元 (ホスト) が注入していなければ、正直に未接続の EcoApi を使う
+    // (buildApp から渡されなかった既存テスト構成との互換のため)。
+    this.ecoApi = ecoRuntime
+      ? ecoRuntime.api
+      : new EcoApi({ store: repo.store, operatorToken: process.env.BELLO_ECO_OPERATOR_TOKEN || '' });
     this.server = null;
     this.startedAt = new Date().toISOString();
   }

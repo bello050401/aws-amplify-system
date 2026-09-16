@@ -10,7 +10,7 @@ import { ensureDirs } from "./config.mjs";
 import { Store } from "./store/db.mjs";
 import { Repo } from "./store/repo.mjs";
 import { Logger } from "./log/logger.mjs";
-import { registerEnvSecrets } from "./log/redact.mjs";
+import { registerEnvSecrets, registerSecret } from "./log/redact.mjs";
 import { Orchestrator } from "./core/orchestrator.mjs";
 import { ClaudeRunner } from "./runner/claudeRunner.mjs";
 import { OpenAiReviewEngine } from "./review/openaiReview.mjs";
@@ -24,6 +24,8 @@ import { IndependentVerifier } from "./pipeline/verification.mjs";
 import { StagingDelivery } from "./pipeline/staging.mjs";
 import { AmplifyStaticDelivery } from "./pipeline/staticStaging.mjs";
 import { Notifications } from "./pipeline/notifications.mjs";
+import { createEcoRuntime } from "./eco/serviceRuntime.mjs";
+import { createServiceBindings } from "./eco/serviceBindings.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -87,7 +89,7 @@ export class SingleInstanceLock {
   }
 }
 
-export async function buildApp({ config, paths, echoLogs = true }) {
+export async function buildApp({ config, paths, echoLogs = true, ecoBindings = null }) {
   registerEnvSecrets();
   ensureDirs(paths);
 
@@ -120,8 +122,37 @@ export async function buildApp({ config, paths, echoLogs = true }) {
   const intake = new DocumentIntake({ config, paths, repo, logger });
   const diagnostics = new Diagnostics({ config, paths, repo, logger });
   const orchestrator = new Orchestrator({ config, paths, repo, logger, runner, reviewEngines, todoManager, verifier, delivery });
+  // 接続元 (ホスト) は注入で差し替えられる (テスト互換)。差し替えが無ければ、この
+  // プロセス自身が唯一対応する static-smoke profile を実際に組み立てる。
+  // eco-runtime.json が無い・不一致なら createServiceBindings 自身が正直に
+  // 「未接続」を返すので、ここではそれ以上の判定をしない。
+  const resolvedEcoBindings = ecoBindings ?? createServiceBindings({ config, paths, repo, logger });
+  // 実probeは、接続に成功した (=refreshProbes を持つ) bindings に対してだけ、
+  // 起動時に一度だけ行う。失敗しても「未接続」として記録されるだけで、
+  // 起動そのものは止めない。
+  if (typeof resolvedEcoBindings?.refreshProbes === "function") {
+    resolvedEcoBindings.refreshProbes().catch((err) => {
+      logger.warn("協調eco の起動時probeに失敗しました", { error: err.message });
+    });
+  }
+  // eco operator token はここでしか読まない。BELLO_ECO_OPERATOR_TOKEN が明示されて
+  // いればそれを優先し、無ければ paths.dataRoot/eco-operator-token をホストだけが
+  // 用意するファイルとして読む。値はログにも API 応答にも出さない
+  // (registerSecret で redact 対象へ登録するのみ)。
+  let operatorToken = process.env.BELLO_ECO_OPERATOR_TOKEN || "";
+  if (!operatorToken) {
+    try {
+      operatorToken = fs.readFileSync(path.join(paths.dataRoot, "eco-operator-token"), "utf8").trim();
+    } catch {
+      operatorToken = "";
+    }
+  }
+  if (operatorToken) registerSecret(operatorToken);
+  // 旧キューの一時停止・スキーマ導入には一切触らない。bindings が無ければ
+  // 「接続不可」を正直に返す常駐接続だけを組み立てる。
+  const ecoRuntime = createEcoRuntime({ store, repo, config, paths, logger, bindings: resolvedEcoBindings, operatorToken });
 
-  return { logger, store, repo, todoManager, runner, reviewEngines, intake, diagnostics, orchestrator, notifications };
+  return { logger, store, repo, todoManager, runner, reviewEngines, intake, diagnostics, orchestrator, notifications, ecoRuntime };
 }
 
 /**
@@ -144,8 +175,9 @@ export async function runService({ config, paths, appFactory = buildApp }) {
     lock.release();
     throw err;
   }
-  const { logger, orchestrator, intake, repo, todoManager, diagnostics, store } = app;
+  const { logger, orchestrator, intake, repo, todoManager, diagnostics, store, ecoRuntime } = app;
   let notificationWork = null;
+  let ecoWork = null;
 
   logger.info("BELLO Dev Orchestrator を起動します", {
     pid: process.pid,
@@ -181,6 +213,7 @@ export async function runService({ config, paths, appFactory = buildApp }) {
       todoManager,
       intake,
       diagnostics,
+      ecoRuntime,
     });
     try {
       await dashboard.start();
@@ -192,11 +225,15 @@ export async function runService({ config, paths, appFactory = buildApp }) {
 
   let stopping = false;
   let inboxWork = null;
+  // 停止通知を受けた時点で eco の停止 signal を立てる。legacy 実行の完了待ちの
+  // 間、eco が新しい副作用を発行し続けることを防ぐため、finally まで待たない。
+  let ecoStopPromise = null;
   const requestShutdown = (why) => {
     if (stopping) return;
     stopping = true;
     logger.info("停止処理を開始します", { why });
     orchestrator.stop();
+    if (ecoRuntime) ecoStopPromise = ecoRuntime.stop();
     // シャットダウン通知時もチェックポイントを残す (§11-3)
     if (orchestrator.currentTaskId) {
       repo.checkpoint(orchestrator.currentTaskId, "shutdown", { why, at: new Date().toISOString() });
@@ -226,6 +263,12 @@ export async function runService({ config, paths, appFactory = buildApp }) {
     if (stopping || notificationWork || !app.notifications) return;
     notificationWork = app.notifications.tick().catch(err => logger.error("通知処理の失敗", { error: err.message })).finally(() => { notificationWork = null; });
   }, 1000);
+  // 常駐協調eco接続。並列tickは ecoRuntime.tick() 自身が防ぐが、ここでも
+  // 二重スケジュールしない (§inbox/notification と同じ形)。
+  const ecoTimer = setInterval(() => {
+    if (stopping || ecoWork || !ecoRuntime) return;
+    ecoWork = ecoRuntime.tick().catch(err => logger.error("協調eco tick の失敗", { error: err.message })).finally(() => { ecoWork = null; });
+  }, 2000);
 
   try {
     await orchestrator.runLoop();
@@ -233,11 +276,16 @@ export async function runService({ config, paths, appFactory = buildApp }) {
     clearInterval(inboxTimer);
     clearInterval(stopWatcher);
     clearInterval(notificationTimer);
+    clearInterval(ecoTimer);
     requestShutdown("loop_exit");
     try {
       if (dashboard) await dashboard.stop();
       if (inboxWork) await inboxWork;
       if (notificationWork) await notificationWork;
+      // stop signal は requestShutdown で既に立てている。ここでは、その同じ
+      // Promise を待ってから DB を閉じる (途中の tick が DB を掴んだまま close しない)。
+      if (ecoRuntime) await (ecoStopPromise ?? ecoRuntime.stop());
+      if (ecoWork) await ecoWork;
     } finally {
       store.close();
       lock.release();
