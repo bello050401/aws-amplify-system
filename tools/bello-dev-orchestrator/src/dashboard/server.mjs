@@ -15,6 +15,7 @@ import { STATE_LABELS_JA, STATES } from "../core/states.mjs";
 import { REVIEW_PROVIDERS } from "../config.mjs";
 import { redactValue } from "../log/redact.mjs";
 import { safeFileName } from "../intake/documentIntake.mjs";
+import { EcoApi } from "../eco/api.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +23,7 @@ const STATIC_FILES = new Map([
   ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/app.js", { file: "app.js", type: "text/javascript; charset=utf-8" }],
+  ["/eco.js", { file: "eco.js", type: "text/javascript; charset=utf-8" }],
   ["/style.css", { file: "style.css", type: "text/css; charset=utf-8" }],
 ]);
 
@@ -37,6 +39,7 @@ export class Dashboard {
     this.todoManager = todoManager;
     this.intake = intake;
     this.diagnostics = diagnostics;
+    this.ecoApi = new EcoApi({ store: repo.store, operatorToken: process.env.BELLO_ECO_OPERATOR_TOKEN || '' });
     this.server = null;
     this.startedAt = new Date().toISOString();
   }
@@ -114,6 +117,10 @@ export class Dashboard {
   }
 
   async #route(req, res, route, url) {
+    if (route.startsWith('/api/eco/')) {
+      const body = req.method === 'POST' ? await this.#readJson(req) : {};
+      return this.#json(res, 200, this.ecoApi.handle(req.method, route, body, req.headers['x-bello-eco-operator']));
+    }
     // ---- 読み取り ------------------------------------------------------
     if (req.method === "GET") {
       switch (route) {

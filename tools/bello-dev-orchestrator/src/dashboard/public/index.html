@@ -153,6 +153,27 @@
         <section id="view-settings" class="view hidden">
           <h1 class="page-title">設定</h1>
 
+          <section class="panel" aria-labelledby="eco-title">
+            <h2 id="eco-title" class="panel-title">協調エコ開発モード</h2>
+            <p id="eco-status" role="status" class="muted">接続状況を確認しています。</p>
+            <form id="eco-form">
+              <label for="eco-mode">開発モード</label>
+              <select id="eco-mode"><option value="claude_only">Claudeのみ</option><option value="codex_only">Codexのみ</option><option value="cooperative_eco">GPT + Claude 協調エコ</option><option value="fully_automatic">全自動</option></select>
+              <div id="eco-fields"></div>
+              <label for="eco-repairs">自動修正の上限（初回実装を除く）</label>
+              <input id="eco-repairs" type="number" min="0" max="10" value="3" required>
+              <details><summary>接続設定</summary>
+                <label for="eco-url">検証環境のURL</label><input id="eco-url" type="url">
+                <label for="eco-domains">許可ドメイン（カンマ区切り）</label><input id="eco-domains" type="text">
+                <label for="eco-account">テストアカウント種別（秘密情報を入力しない）</label><input id="eco-account" type="text">
+                <label for="eco-operator">設定変更用の認証トークン</label><input id="eco-operator" type="password" autocomplete="off">
+              </details>
+              <p class="muted">保存は新しいrunに適用します。停止中の作業は再開しません。本番反映の承認は常に必要です。</p>
+              <button id="eco-save" type="submit" class="btn btn-primary">設定を保存</button>
+            </form>
+            <details><summary>協調runの状態</summary><pre id="eco-runs" class="pre">未実行</pre></details>
+          </section>
+
           <section class="panel">
             <h2 class="panel-title">実装担当</h2>
             <label for="implementation-provider">次の作業を担当するエージェント</label>
@@ -202,5 +223,6 @@
     </nav>
 
     <script src="/app.js"></script>
+    <script src="/eco.js"></script>
   </body>
 </html>
