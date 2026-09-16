@@ -4,6 +4,11 @@ import { runGit } from "../core/git.mjs";
 import { fingerprint } from "../pipeline/verification.mjs";
 import { redactValue } from "../log/redact.mjs";
 import { routeModel, hash } from "./policy.mjs";
+import {
+  planWork,
+  selectForWork,
+  verifyEvaluationEvidence,
+} from "./taskRouting.mjs";
 
 const zeroUsage = {
   measuredTokens: 0,
@@ -119,9 +124,48 @@ export function existingAdapters({
   });
   const implementation = journal(async ({ run, operationKey, signal }) => {
     const value = await task(run);
-    const selection = routeModel(run.configSnapshot, {
+    const spec = artifact(run.specId);
+    if (
+      spec.runId !== run.id ||
+      spec.revision !== run.revision ||
+      spec.kind !== "spec"
+    )
+      throw Error("Specification binding mismatch");
+    const work = planWork({
+      instruction: value.instruction,
+      spec: spec.body,
       phase: "implementation",
+      files: allowedPaths,
+      risk: run.risk || "unknown",
+      acIds: run.acIds,
+    });
+    const baseline = routeModel(run.configSnapshot, {
+      phase: work.tier === "advanced" ? "architecture" : "implementation",
       logicalFailures: run.logicalFailures,
+    });
+    const availability = new Set();
+    for (const candidate of run.configSnapshot.taskRouting?.catalog || []) {
+      if (
+        candidate.provider === baseline.provider &&
+        (await modelAvailable(candidate))
+      )
+        availability.add(candidate.provider + ":" + candidate.model);
+    }
+    const selection = selectForWork({
+      policy: run.configSnapshot.taskRouting,
+      autoRouting: run.configSnapshot.modelAutoRouting,
+      work,
+      baseline,
+      logicalFailures: run.logicalFailures,
+      roleProvider: baseline.provider,
+      available: (candidate) =>
+        availability.has(candidate.provider + ":" + candidate.model),
+      evidenceVerified: (model, category, ev) =>
+        verifyEvaluationEvidence(repo.store, model, category, ev),
+    });
+    repo.checkpoint(run.task_id, "eco_routing:" + operationKey, {
+      specId: run.specId,
+      selection,
     });
     if (selection.waiting)
       return { status: "blocked", reason: selection.reason };
@@ -130,13 +174,6 @@ export function existingAdapters({
         status: "blocked",
         reason: "Selected model availability has not been verified",
       };
-    const spec = artifact(run.specId);
-    if (
-      spec.runId !== run.id ||
-      spec.revision !== run.revision ||
-      spec.kind !== "spec"
-    )
-      throw Error("Specification binding mismatch");
     const baseSHA = head(value);
     const instruction = [
       "Implement only this accepted specification in the isolated worktree.",

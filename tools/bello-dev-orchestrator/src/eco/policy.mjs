@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { DEFAULT_ROUTING, validateRouting } from "./taskRouting.mjs";
 function canonical(value) {
   return Array.isArray(value)
     ? value.map(canonical)
@@ -46,12 +47,14 @@ export const DEFAULT_ECO = Object.freeze({
   allowedDomains: [],
   testAccount: "",
   modelPolicy: { economy: null, standard: null, advanced: null },
+  taskRouting: DEFAULT_ROUTING,
 });
 export function validateEco(input, capabilities = {}) {
   if (!input || Object.keys(input).some((k) => !(k in DEFAULT_ECO)))
     throw Error("Unknown configuration field");
   const c = { ...structuredClone(DEFAULT_ECO), ...input };
   const warnings = [];
+  c.taskRouting = validateRouting(c.taskRouting);
   if (!MODES.includes(c.mode)) throw Error("Unknown development mode");
   for (const k of [
     "enabled",

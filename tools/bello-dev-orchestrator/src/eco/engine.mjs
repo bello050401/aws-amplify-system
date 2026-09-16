@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { hash, retryDelay } from "./policy.mjs";
 import { safeEvidence } from "./cache.mjs";
+import { inspectInstruction } from "./taskRouting.mjs";
 
 const terminal = new Set(["COMPLETED_STAGING", "CANCELLED", "FAILED"]);
 const suspended = new Set([
@@ -324,6 +325,18 @@ export class EcoEngine {
         break;
       case "SPEC_READY":
         if (artifact?.kind !== "spec") throw Error("Specification required");
+        patch.instructionCheck = inspectInstruction(
+          this.repo.store.get("SELECT instruction FROM tasks WHERE id=?", [
+            run.task_id,
+          ])?.instruction,
+          artifact.body,
+          run.acIds,
+        );
+        if (!patch.instructionCheck.ready) {
+          next = "HUMAN_REVIEW";
+          patch.instructionBlocker = "指示・仕様の不足を解消してから実装します";
+          break;
+        }
         patch.specId = artifact.id;
         next = "IMPLEMENTING";
         break;

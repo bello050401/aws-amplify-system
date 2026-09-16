@@ -55,7 +55,7 @@ test("eco adapters: existing runner, real independent command and scoped commit,
   installEcoSchema(h.store);
   const task = h.repo.createTask({
     title: "adapter",
-    instruction: "fixture",
+    instruction: "replace marker",
     repoPath: h.config.repoPath,
     workDir: h.config.repoPath,
   }).task;
@@ -67,6 +67,7 @@ test("eco adapters: existing runner, real independent command and scoped commit,
     specId: "spec-fixture",
     acIds: ["AC-1"],
     logicalFailures: 0,
+    risk: "low",
     configSnapshot: {
       ...DEFAULT_ECO,
       modelPolicy: {
@@ -88,9 +89,57 @@ test("eco adapters: existing runner, real independent command and scoped commit,
       kind: "spec",
       runId: run.id,
       revision: run.revision,
-      body: { requirements: ["fixture"] },
+      body: {
+        purpose: "Verify adapter behavior",
+        scope: ["README.md"],
+        requirements: ["fixture"],
+        acceptanceCriteria: ["AC-1"],
+        tests: ["independent command"],
+        unresolved: [],
+      },
     }),
   ]);
+  run.configSnapshot.taskRouting = {
+    catalog: ["fixture", "fixture-cheap"].map((model, i) => {
+      const evaluation = {
+        evaluatedAt: new Date().toISOString(),
+        samples: 30,
+        passRate: 1,
+        baselinePassRate: 1,
+        safetyFailures: 0,
+        meanAttempts: 1,
+        meanUsagePerAttempt: i ? 30 : 100,
+        usageUnit: "test-units",
+        evaluationSet: "same-tasks",
+        baselineModel: "fixture",
+      };
+      h.repo.checkpoint(task.id, "eco_model_evaluation", {
+        schemaVersion: 1,
+        origin: "host-independent-evaluation",
+        provider: "claude",
+        model,
+        category: "mechanical_edit",
+        evaluation,
+      });
+      const row = h.store.get(
+        "SELECT id FROM checkpoints WHERE task_id=? AND phase='eco_model_evaluation' ORDER BY id DESC LIMIT 1",
+        [task.id],
+      );
+      return {
+        provider: "claude",
+        model,
+        tier: i ? "economy" : "standard",
+        capabilities: ["code"],
+        evaluations: {
+          mechanical_edit: {
+            ...evaluation,
+            evidenceId: "checkpoint:" + row.id,
+          },
+        },
+      };
+    }),
+  };
+  run.configSnapshot.modelAutoRouting = true;
   let calls = 0;
   const verifier = new IndependentVerifier({
     config: h.config,
@@ -102,8 +151,9 @@ test("eco adapters: existing runner, real independent command and scoped commit,
     taskForRun: () => h.repo.getTask(task.id),
     evidenceRoot: () => path.join(h.paths.dataRoot, "proof"),
     assertIsolated: async () => {},
-    runnerForModel: () => ({
+    runnerForModel: (selection) => ({
       run: async () => {
+        assert.equal(selection.model, "fixture-cheap");
         calls++;
         fs.writeFileSync(path.join(h.config.repoPath, "README.md"), "verified");
         return { ok: true, report: makeReport(task.id), costUsd: 0 };
