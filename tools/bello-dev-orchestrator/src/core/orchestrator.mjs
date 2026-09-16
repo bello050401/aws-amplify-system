@@ -5,6 +5,7 @@
  * 実行は tick() 単位に分けてあり、テストから 1 手ずつ進められる。
  */
 import crypto from "node:crypto";
+import { requestOwner } from "../todo/triage.mjs";
 import { STATES, ACTIVE_STATES } from "./states.mjs";
 import * as git from "./git.mjs";
 import {
@@ -222,6 +223,7 @@ export class Orchestrator {
       try {
         const result = await this.delivery.advance(delivering);
         if (result.state === "succeeded") this.repo.setState(delivering.id, STATES.COMPLETED, "独立テスト・審査・staging反映が成功しました", "system", { blocked_reason: null, retry_after: null });
+        if (result.state === "succeeded" && this.verifier.required && this.verifier.check(delivering).passed) this.todoManager.triage?.completeVerified(delivering.id);
         else if (["blocked", "failed"].includes(result.state)) this.#deliveryBlocked(delivering, result.error);
       } finally { this.currentTaskId = null; }
       return false; // Poll once per configured interval, never busy-loop on a cloud job.
@@ -257,6 +259,7 @@ export class Orchestrator {
   // ------------------------------------------------------------ execution
   async #runTask(task) {
     this.currentTaskId = task.id;
+    this.repo.store.setMeta("todoFocusTaskId", task.id);
     this.stopCurrentRequested = false;
 
     try {
@@ -316,6 +319,7 @@ export class Orchestrator {
       // --- running -------------------------------------------------------
       const running = this.repo.setState(task.id, STATES.RUNNING, "Claude Runner 実行", "system");
       const instruction = this.#buildInstruction(running);
+      this.todoManager.triage?.markRunning(task.id);
 
       // 実装担当は work_dir (= 専用 worktree) で動く。本体リポジトリには触れない。
       const result = await this.runner.run({
@@ -437,6 +441,8 @@ export class Orchestrator {
 
   #buildInstruction(task) {
     const parts = [task.instruction];
+    const delegated = this.todoManager.triage?.instructionsFor(task.id);
+    if (delegated) parts.push("\n\n## AI側で処理する通常作業\n" + delegated + "\n重要承認・本人認証は代行せず、実施結果を検証して報告してください。");
     // 修正指示があれば付ける (§7-3 nextClaudeInstruction)
     if (task.blocked_reason) parts.push(`\n\n## 前回の審査からの修正指示\n\n${task.blocked_reason}`);
     return parts.join("");
@@ -581,6 +587,7 @@ export class Orchestrator {
           blocked_reason: null,
           last_error: null,
         });
+        if (this.verifier.required && this.verifier.check(this.repo.getTask(task.id)).passed) this.todoManager.triage?.completeVerified(task.id);
         this.logger.info("タスク完了", { taskId: task.id, title: task.title });
         return;
 
@@ -632,6 +639,11 @@ export class Orchestrator {
       }
 
       case "request_user_action":
+        { const requests = this.repo.openTodosForTask(task.id);
+          if (requests.length && requests.every(t => requestOwner(t) === "ai")) {
+            return this.#retryOrFail(task, "通常作業をAI側で実行してください:\n" + this.todoManager.triage.instructionsFor(task.id), failureSignature(["automatic-todo", ...requests.map(t => t.id)]));
+          }
+        }
         this.repo.setState(task.id, STATES.AWAITING_USER, reason, "review_engine", {
           review_id: reviewId,
           blocked_reason: reason,

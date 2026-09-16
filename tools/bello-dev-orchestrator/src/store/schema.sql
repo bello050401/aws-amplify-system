@@ -192,3 +192,15 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
   error TEXT,
   sent_at TEXT
 );
+
+-- Presentation and AI ownership are separate from original TODO/task status.
+CREATE TABLE IF NOT EXISTS todo_triage (
+  todo_id TEXT PRIMARY KEY REFERENCES todos(id),
+  data TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS todo_ai_queue (
+  todo_id TEXT PRIMARY KEY REFERENCES todos(id),
+  state TEXT NOT NULL DEFAULT 'pending',
+  updated_at TEXT NOT NULL
+);

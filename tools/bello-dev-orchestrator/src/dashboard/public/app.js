@@ -197,7 +197,7 @@
   };
 
   function renderHome(data) {
-    renderTodoZone(data.openTodos || []);
+    renderTodoZone(data.openTodos || [], data.todoTriage);
 
     // 実行中 / 待機中 / 一時停止 / 本人対応待ち はサーバ側で確定させる。
     // DB の状態名 (例: awaiting_ai_review) を画面側で「実行中」と解釈しない。
@@ -289,27 +289,40 @@
   }
 
   // -------------------------------------------------------------- TODO
-  function renderTodoZone(todos) {
+  function renderTodoZone(todos, triage) {
     var zone = byId("todo-zone");
     var body = clear(byId("todo-zone-body"));
-    var open = todos.filter(function (t) {
-      return t.status === "open";
+    var all = triage ? triage.todos : todos;
+    var counts = triage ? triage.counts : {now: todos.length, later:0, ai:0, archive:0};
+    var selected = localStorage.getItem("bello.todoTab") || "now";
+    if (["now","later","ai","archive"].indexOf(selected) < 0) selected = "now";
+    zone.classList.toggle("has-todo", counts.now > 0);
+    byId("todo-zone-title").textContent = "今すぐ対応が必要（" + counts.now + " 件）";
+    var tabs = el("div", "todo-actions");
+    [["now","今すぐ対応が必要"],["later","後で確認"],["ai","AI対応待ち"],["archive","アーカイブ"]].forEach(function(pair) {
+      var button = el("button", pair[0] === selected ? "btn btn-primary" : "btn btn-quiet", pair[1] + " " + counts[pair[0]] + "件");
+      button.type = "button";
+      button.setAttribute("aria-pressed", String(pair[0] === selected));
+      button.addEventListener("click", function() { localStorage.setItem("bello.todoTab", pair[0]); renderTodoZone(todos, triage); });
+      tabs.appendChild(button);
     });
-
-    if (open.length === 0) {
-      zone.classList.remove("has-todo");
-      byId("todo-zone-title").textContent = "ユーザー様の作業";
-      body.appendChild(el("p", "empty", "現在、ユーザー様の作業はありません"));
-      return;
-    }
-
-    zone.classList.add("has-todo");
-    byId("todo-zone-title").textContent = "ユーザー様にお願いしたいこと（" + open.length + " 件）";
-    open.forEach(function (todo) {
-      body.appendChild(todoCard(todo));
+    body.appendChild(tabs);
+    if (selected === "ai") body.appendChild(el("p", "muted", "対象タスクの実行時にAIが処理します。現在処理中: " + (triage ? triage.aiRunning : 0) + "件。未実行の依頼を完了扱いにはしません。"));
+    var visible = all.filter(function(t) {return t.triage ? t.triage.bucket === selected : t.status === "open" && selected === "now";});
+    if (!visible.length) body.appendChild(el("p", "empty", selected === "now" ? "今すぐ必要なユーザー操作はありません" : "該当する項目はありません"));
+    visible.forEach(function(todo) {
+      if(selected === "now") body.appendChild(todoCard(todo));
+      else {
+        var details = el("details", "todo-card");
+        details.appendChild(el("summary", null, todo.title));
+        details.appendChild(el("p", "muted", todo.triage ? todo.triage.reason : ""));
+        if(todo.triage && todo.triage.canonicalId) details.appendChild(el("p", "muted", "統合先: " + todo.triage.canonicalId));
+        if(selected === "later") details.appendChild(todoCard(todo));
+        else details.appendChild(el("p", null, todo.reason || ""));
+        body.appendChild(details);
+      }
     });
   }
-
   function todoCard(todo) {
     var card = el("div", "todo-card");
     card.appendChild(el("h3", "todo-head", todo.title));
@@ -343,6 +356,7 @@
     done.appendChild(el("span", null, todo.completionCondition || "—"));
     card.appendChild(done);
 
+    if (todo.triage && todo.triage.related) todo.triage.related.forEach(function(item) { card.appendChild(el("p", "muted", "統合した依頼: " + (item.action || "") + " / 完了条件: " + (item.condition || ""))); });
     var answer = null;
     if (todo.answerRequired || todo.answerFormat === "text" || todo.answerFormat === "choice") {
       card.appendChild(el("label", null, "回答" + (todo.answerRequired ? "（必須）" : "（任意）")));

@@ -126,7 +126,7 @@ export class Dashboard {
         case "/api/tasks":
           return this.#json(res, 200, { tasks: this.repo.listTasks({ limit: 300 }).map(publicTask) });
         case "/api/todos":
-          return this.#json(res, 200, { todos: this.repo.listTodos().map(publicTodo) });
+          { const grouped = this.todoManager.triage.reconcile(); return this.#json(res, 200, { ...grouped, todos: grouped.todos.map(publicTodo) }); }
         case "/api/documents":
           return this.#json(res, 200, {
             documents: this.repo.listDocuments(100).map(publicDocument),
@@ -248,7 +248,7 @@ export class Dashboard {
         return this.#json(res, 200, { task: publicTask(task) });
       }
       if ((m = /^\/api\/todos\/([A-Za-z0-9_]+)\/complete$/.exec(route))) {
-        const result = this.todoManager.complete(m[1], {
+        const result = this.todoManager.completeGroup(m[1], {
           answer: body.answer ?? null,
           attachmentPath: body.attachmentPath ?? null,
           actor: "user",
@@ -295,7 +295,8 @@ export class Dashboard {
 
   #home() {
     const counts = this.repo.countByState();
-    const openTodos = this.repo.listTodos({ status: "open" }).map(publicTodo);
+    const triage = this.todoManager.triage.reconcile();
+    const openTodos = triage.todos.filter(t => t.triage.bucket === "now").map(publicTodo);
     // いま進んでいる作業。プロセス内のフラグを優先しつつ、無ければ DB から拾う。
     // 審査待ちや再起動直後もホームで見えるようにするため（フラグはプロセス内にしか無い）。
     const current = this.#currentTask();
@@ -319,6 +320,7 @@ export class Dashboard {
       openTodoCount: openTodos.length,
       urgentTodoCount: openTodos.filter((t) => t.priority === "urgent").length,
       openTodos,
+      todoTriage: { counts: triage.counts, aiRunning: triage.aiRunning, todos: triage.todos.map(publicTodo) },
       lastHeartbeat: current?.heartbeat_at ?? null,
       reviewProvider: this.#reviewProviderState(),
       // ホーム画面が「見るだけで分かる」ようにするための追加情報
@@ -695,6 +697,7 @@ function publicTodo(todo) {
   return {
     id: todo.id,
     kind: todo.kind ?? "action",
+    triage: todo.triage ?? null,
     category: todo.category,
     title: todo.title,
     actionRequired: todo.action_required,

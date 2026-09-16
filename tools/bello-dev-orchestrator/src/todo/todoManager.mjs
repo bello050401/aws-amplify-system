@@ -5,6 +5,7 @@
  * 依存タスクの再開は「一度だけ」行う。
  */
 import crypto from "node:crypto";
+import { TodoTriage } from "./triage.mjs";
 import { STATES } from "../core/states.mjs";
 
 const CATEGORIES = new Set([
@@ -29,6 +30,7 @@ export class TodoValidationError extends Error {
 export class TodoManager {
   constructor({ repo, logger }) {
     this.repo = repo;
+    this.triage = new TodoTriage({ repo });
     this.logger = logger;
   }
 
@@ -79,6 +81,19 @@ export class TodoManager {
     return { todo, created };
   }
 
+  completeGroup(todoId, options) {
+    const items = this.triage.reconcile().todos;
+    const parent = items.find(t => t.id === todoId);
+    const root = parent?.triage.canonicalId || todoId;
+    const ids = items.filter(t => t.status === "open" && (t.id === root || t.triage.canonicalId === root)).map(t => t.id);
+    let result = null; const resumed = new Set();
+    for (const id of ids.length ? ids : [todoId]) {
+      const next = this.complete(id, options);
+      result ??= next;
+      for (const taskId of next.resumedTaskIds || []) resumed.add(taskId);
+    }
+    return { ...result, resumedTaskIds: [...resumed] };
+  }
   openTodos() {
     return this.repo.listTodos({ status: "open" });
   }
