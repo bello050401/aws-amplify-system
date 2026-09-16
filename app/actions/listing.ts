@@ -18,7 +18,7 @@ import {
 import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
 import { isBaseConnected } from "@/lib/base/oauth";
 import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/types";
-import { buildExportRowForInventory, getInventoryImageDownloadUrl, listCsvImageDownloadTargets } from "@/lib/listing/mercari/csv/buildExportRows";
+import { buildExportRowForInventory, listCsvImageDownloadTargets, resolveListingImageDownloadUrl } from "@/lib/listing/mercari/csv/buildExportRows";
 import { buildMercariCsvExport, MAX_EXPORT_ROWS } from "@/lib/listing/mercari/csv/exportCsv";
 import { resolveInventoryImageZipPlan, MAX_ZIP_IMAGES, MAX_ZIP_PRODUCTS } from "@/lib/listing/mercari/csv/imageBundle";
 import {
@@ -268,15 +268,20 @@ export async function getMercariCsvImageDownloadLinksAction(
 ): Promise<{ ok: true; displayId: string; links: MercariCsvImageDownloadLink[] } | { ok: false; reason: string }> {
   const targets = await listCsvImageDownloadTargets(inventoryId);
   if (!targets.ok) return targets;
-  const links = await Promise.all(
+  const resolved = await Promise.all(
     targets.images.map(async (img) => ({
       filename: img.filename,
       // CSVの商品画像名列と同じファイル名でContent-Dispositionを強制する
       // (buildExportRows.tsのgetInventoryImageDownloadUrlコメント参照)。
-      url: await getInventoryImageDownloadUrl(img.storageKey, img.filename),
+      // 保存元(source)に応じてInventory用Amplify Storage/PhotoAsset用S3の
+      // どちらで署名するかをresolveListingImageDownloadUrl側が振り分ける。
+      url: await resolveListingImageDownloadUrl(img, img.filename),
     })),
   );
-  return { ok: true, displayId: targets.displayId, links };
+  if (resolved.some((r) => r.url === null)) {
+    return { ok: false, reason: "画像URLの取得に失敗しました。時間をおいて再度お試しください。" };
+  }
+  return { ok: true, displayId: targets.displayId, links: resolved as MercariCsvImageDownloadLink[] };
 }
 
 export interface MercariCsvImageZipPlanItem {

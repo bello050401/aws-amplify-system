@@ -15,6 +15,10 @@ import { MercariCategoryMappingSection } from "./MercariCategoryMappingSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
 import { InventoryImageGallery } from "../../../InventoryImageGallery";
 import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
+import { setListingPhotoAssetSelectionAction } from "@/app/actions/photoRegistration";
+import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
+import type { ListingImageRef } from "@/lib/listing/types";
+import { ListingImageSelector } from "./ListingImageSelector";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
 // 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
@@ -59,6 +63,7 @@ export function ListingForm({
   inventoryId,
   inventoryName,
   images,
+  photoAssets,
   initialDraft,
   initialChannelListing,
   shippingMethod,
@@ -68,6 +73,7 @@ export function ListingForm({
   inventoryName: string;
   /** 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: Inventory Masterの商品画像(トップ画像が先頭に来るよう呼び出し元でソート済み) — このコンポーネント自体は画像データを一切書き込まず、表示のみ。 */
   images: InventoryImageRecord[];
+  photoAssets: WebPhotoAssetView[];
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
   /**
@@ -81,6 +87,7 @@ export function ListingForm({
 }) {
   const [draft, setDraft] = useState(initialDraft);
   const [channelListing, setChannelListing] = useState(initialChannelListing);
+  const [selectedImages, setSelectedImages] = useState<ListingImageRef[]>(initialDraft?.images ?? []);
 
   const [title, setTitle] = useState(initialDraft?.title ?? inventoryName);
   const [description, setDescription] = useState(initialDraft?.description ?? "");
@@ -259,8 +266,22 @@ export function ListingForm({
         // §1 配送方法も一緒に保存する。次に開いたときも、説明文を
         // 再生成したときも同じ選択が使われる。
         shippingMethod,
+        images: selectedImages,
       });
       setDraft(result);
+      if (photoAssets.length > 0) {
+        const photoAssetIds = selectedImages
+          .filter((ref): ref is ListingImageRef & { photoAssetId: string } => ref.source === "PHOTO_ASSET" && !!ref.photoAssetId)
+          .map((ref) => ref.photoAssetId);
+        const selectionResult = await setListingPhotoAssetSelectionAction(inventoryId, {
+          listingId: result.id,
+          photoAssetIds,
+        });
+        if (!selectionResult.ok) {
+          setDraftError(`下書きは保存されましたが、撮影画像の選択情報の更新に失敗しました: ${selectionResult.message}`);
+          return;
+        }
+      }
       setDraftSaved(true);
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "下書きの保存に失敗しました。");
@@ -287,6 +308,12 @@ export function ListingForm({
           signed URLアーキテクチャに乗る。 */}
       <div className="mb-4">
         <InventoryImageGallery images={images} alt={inventoryName} title="商品画像" />
+        <ListingImageSelector
+          images={images}
+          photoAssets={photoAssets}
+          initialImages={initialDraft?.images ?? null}
+          onChange={setSelectedImages}
+        />
       </div>
 
       {/* 出品下書き(Common Listing Draft) — チャネルに依存しない共通項目。 */}

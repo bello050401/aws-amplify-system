@@ -6,6 +6,7 @@ import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/se
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
+import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 
 /**
  * BELLO統合改修 master指示書 Phase D — 在庫詳細画面(app/inventory/
@@ -34,14 +35,16 @@ export default async function ListingPage({ params }: { params: { id: string } }
   const item = await getInventoryDetail(params.id);
   if (!item) notFound();
 
-  const [draft, channelListing, categories, statuses] = await Promise.all([
+  const [draft, channelListing, categories, statuses, photoAssetsResult] = await Promise.all([
     getListingDraftForInventory(item.id),
     getChannelListing(item.id, "MERCARI_SHOPS"),
     // 2026-09-04 EC出品改修指示書 §2-1: 右パネルのカテゴリ/在庫ステータス。
     // 在庫詳細ページと同じクエリを使う —— 表示名の解決を2通り持たない。
     listCategories(item.categoryId),
     listStatuses(),
+    listInventoryPhotoAssetsAction(item.id),
   ]);
+  const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
   const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
 
@@ -90,6 +93,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
           categoryName={categoryName}
           statusName={statusName}
           images={orderedNormalImages}
+          photoAssets={photoAssets}
           initialDraft={draft}
           initialChannelListing={channelListing}
         />

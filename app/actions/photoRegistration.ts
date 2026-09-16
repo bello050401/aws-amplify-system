@@ -1,6 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listInventorySimpleSearch } from "@/lib/inventory/queries";
 import {
@@ -10,8 +12,11 @@ import {
   type WebBatchDetail,
   type WebInventoryPhotoAssets,
 } from "@/lib/photoRegistration/webAdapter";
-import type { BatchListPage, TrustedClaims } from "@/lib/photoRegistration/ports";
-import type { PhotoErrorCode, PhotoResult } from "@/lib/photoRegistration/types";
+import { DynamoPhotoRegistrationRepository } from "@/lib/photoRegistration/awsRepository";
+import { PhotoRegistrationService } from "@/lib/photoRegistration/service";
+import type { AuthConfig } from "@/lib/photoRegistration/auth";
+import type { BatchListPage, PhotoStoragePort, TrustedClaims } from "@/lib/photoRegistration/ports";
+import { PHOTO_REGISTRATION_REGION, type PhotoErrorCode, type PhotoResult } from "@/lib/photoRegistration/types";
 
 /**
  * 画像登録Web UIのserver action境界。ここでは新しい業務判断をしない —
@@ -228,4 +233,78 @@ export async function searchInventoryCandidatesAction(query: string): Promise<{ 
     console.warn("[searchInventoryCandidatesAction] failed", { error: error instanceof Error ? error.name : "unknown" });
     return { ok: false, message: "在庫の検索に失敗しました。" };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// EC出品画像選択 (setListingImageSelection、§21/§22/§45)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * PhotoRegistrationWebAdapter (このタスクの変更対象外) はsetListingImageSelection
+ * を経由しないため、ここに専用の最小ランタイムを組み立てる。使う基盤
+ * (PhotoRegistrationService / DynamoPhotoRegistrationRepository / auth.ts)
+ * はwebAdapter.ts経由のものと完全に同じで、追加のDB/S3リソースを新設しない
+ * ——fail closedの判定基準(env変数3つ)もwebAdapter.getPhotoRegistrationWebAdapter
+ * と同一にし、「upload系は未接続なのに選択だけ接続済み」という不整合な
+ * 中間状態を作らない。setListingImageSelectionはstorageを一切呼ばない
+ * (lib/photoRegistration/service.ts参照)ため、storageには実S3接続を持たない
+ * スタブを渡す(呼ばれたらそれ自体がバグなので例外で気づけるようにする)。
+ */
+const UNUSED_PHOTO_STORAGE: PhotoStoragePort = {
+  presignUploadTargets: async () => {
+    throw new Error("listing-selection runtime does not support presignUploadTargets");
+  },
+  headObjects: async () => {
+    throw new Error("listing-selection runtime does not support headObjects");
+  },
+};
+
+let cachedListingSelectionService: PhotoRegistrationService | null | undefined;
+
+function getListingSelectionService(): PhotoRegistrationService | null {
+  if (cachedListingSelectionService !== undefined) return cachedListingSelectionService;
+  const tableName = process.env.PHOTO_REGISTRATION_TABLE_NAME;
+  const inventoryTableName = process.env.PHOTO_REGISTRATION_INVENTORY_TABLE_NAME;
+  const bucketName = process.env.PHOTO_REGISTRATION_BUCKET_NAME;
+  if (!tableName || !inventoryTableName || !bucketName) {
+    cachedListingSelectionService = null;
+    return null;
+  }
+  const region = process.env.PHOTO_REGISTRATION_AWS_REGION || PHOTO_REGISTRATION_REGION;
+  const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
+  const repository = new DynamoPhotoRegistrationRepository({ ddb, tableName, inventoryTableName, now: () => new Date() });
+  const authConfig: AuthConfig = { photoDeviceGroupDeployed: false };
+  cachedListingSelectionService = new PhotoRegistrationService({ repository, storage: UNUSED_PHOTO_STORAGE, authConfig });
+  return cachedListingSelectionService;
+}
+
+export interface SetListingPhotoAssetSelectionInput {
+  /** lib/listing/service.tsのListingDraftRecord.id。1 Inventoryにつき最大1 ListingDraftという既存制約と対応させ、下書き単位で一意に扱う。 */
+  listingId: string;
+  /** 選択順 = 出品順。先頭が主画像 (types.ts ValidatedListingImageSelection参照)。 */
+  photoAssetIds: string[];
+}
+
+/** lib/listing/service.tsのnormalizeListingImages/inventoryListingAdapter.tsのlistingRefsFromSelectionと同じ上限。 */
+const MAX_LISTING_SELECTION_IMAGES = 20;
+
+/**
+ * lib/listing/service.ts(app/actions/listing.ts経由)のListingDraft.images
+ * (既存併存フィールド)とは別に、選択されたPhotoAssetの参照カウンタ
+ * (listingSelectionCount、ASSET_IN_USE削除保護の根拠)をsetListingImageSelection
+ * の条件付きtransactionへ反映する。ListingForm.tsxはdraft保存が成功した後、
+ * このActionをdraft.idで呼ぶ——同時削除(deletePhotoAsset)と同じ参照カウンタ
+ * を挟むtransactionを経由するため、どちらか一方だけが成功する保証を迂回しない。
+ */
+export async function setListingPhotoAssetSelectionAction(
+  inventoryId: string,
+  input: SetListingPhotoAssetSelectionInput,
+): Promise<PhotoActionResult<{ listingId: string; photoAssetIds: string[] }>> {
+  const service = getListingSelectionService();
+  if (!service) return NOT_CONFIGURED;
+  const claims = await getWebTrustedClaims();
+  if (!claims) return AUTH_REQUIRED;
+  return mapPhotoResult(
+    await service.setListingImageSelection(input, inventoryId, { maxImages: MAX_LISTING_SELECTION_IMAGES }, claims),
+  );
 }

@@ -25,6 +25,8 @@ import {
 } from "@/lib/inventory/extendedFields";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { appendReturnParam, buildBackToListHref } from "@/lib/inventory/listReturnParams";
+import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
+import { PhotoAssetProductGallery } from "./PhotoAssetProductGallery";
 
 /** "60000" → "60,000円" — every price on this page (readable Japanese yen, not a bare number). */
 function formatYen(value: number | null): string {
@@ -114,12 +116,14 @@ export default async function InventoryDetailPage({
   // カテゴリー/保管場所だけを次の段へ残す —— この2つは item の
   // categoryId/locationId を渡して「無効化済みでも名前が出る」ように
   // する必要があり、item より先には投げられない。
-  const [item, statuses, fieldDefs] = await Promise.all([
+  const [item, statuses, fieldDefs, photoAssetsResult] = await Promise.all([
     getInventoryDetail(params.id),
     listStatuses(),
     listCustomFieldDefinitions(),
+    listInventoryPhotoAssetsAction(params.id),
   ]);
   if (!item) notFound();
+  const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
 
   // Same reasoning as the edit page: a deactivated category/location must
   // still resolve to its name here rather than falling back to "-", since
@@ -294,6 +298,7 @@ export default async function InventoryDetailPage({
             <div className="mt-6">
               <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
             </div>
+            <PhotoAssetProductGallery inventoryId={item.id} initialAssets={photoAssets} />
           </div>
 
           {/* 右カラム: 商品情報を1列で縦積み。基本情報→販売情報→サイズ

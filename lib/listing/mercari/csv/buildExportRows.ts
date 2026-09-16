@@ -1,10 +1,14 @@
 import "server-only";
 import { cookies, headers } from "next/headers";
 import { getUrl } from "aws-amplify/storage/server";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/service";
+import type { ListingImageRef } from "@/lib/listing/types";
+import { PHOTO_REGISTRATION_REGION } from "@/lib/photoRegistration/types";
 import { isMercariImgE2EKey, mercariImgE2EVariant } from "./e2eImageFixtureBytes";
 import { assembleMercariCsvRowFields, imageFilename } from "./assembleRow";
 import type { RowBuildResult } from "./assembleRow";
@@ -91,8 +95,79 @@ export async function getInventoryImageDownloadUrl(storageKey: string, downloadF
 }
 
 /**
+ * PhotoAsset(撮影画像)由来の出品画像は自社Storageの別バケット
+ * (PHOTO_REGISTRATION_BUCKET_NAME、lib/photoRegistration/webAdapter.ts
+ * のreadRuntimeConfigFromEnvと同じ3変数)に置かれており、Amplify Storage
+ * (Inventory用バケット)経由では解決できない。lib/photoRegistration/
+ * webAdapter.ts自体はこのタスクの変更対象外でPhotoAsset向け署名GETを
+ * 公開していないため、CSV/ZIPダウンロード専用にここで同じfail closed
+ * 規約でS3Clientだけを組み立てる(DynamoDB/repositoryは不要——S3キーは
+ * 既にListingImageRef.storageKeyとして解決済み)。
+ */
+let cachedPhotoAssetS3: { client: S3Client; bucket: string } | null | undefined;
+
+function getPhotoAssetS3Runtime(): { client: S3Client; bucket: string } | null {
+  if (cachedPhotoAssetS3 !== undefined) return cachedPhotoAssetS3;
+  const tableName = process.env.PHOTO_REGISTRATION_TABLE_NAME;
+  const inventoryTableName = process.env.PHOTO_REGISTRATION_INVENTORY_TABLE_NAME;
+  const bucketName = process.env.PHOTO_REGISTRATION_BUCKET_NAME;
+  if (!tableName || !inventoryTableName || !bucketName) {
+    cachedPhotoAssetS3 = null;
+    return null;
+  }
+  const region = process.env.PHOTO_REGISTRATION_AWS_REGION || PHOTO_REGISTRATION_REGION;
+  cachedPhotoAssetS3 = { client: new S3Client({ region }), bucket: bucketName };
+  return cachedPhotoAssetS3;
+}
+
+/** RFC 6266のfilename*(UTF-8)付きContent-Disposition。ASCII側は`"`/改行だけ潰した簡易フォールバック。 */
+function contentDispositionHeader(filename: string): string {
+  const asciiFallback = filename.replace(/["\r\n]/g, "_");
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+async function getPhotoAssetDownloadUrl(storageKey: string, downloadFilename?: string): Promise<string | null> {
+  const runtime = getPhotoAssetS3Runtime();
+  if (!runtime) return null;
+  const command = new GetObjectCommand({
+    Bucket: runtime.bucket,
+    Key: storageKey,
+    ...(downloadFilename ? { ResponseContentDisposition: contentDispositionHeader(downloadFilename) } : {}),
+  });
+  try {
+    return await getSignedUrl(runtime.client, command, { expiresIn: 3600 });
+  } catch (error) {
+    console.error("[buildExportRows] getPhotoAssetDownloadUrl failed", { storageKey, error: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
+/**
+ * `img.source`未設定(旧データ)はINVENTORYとして扱う
+ * (lib/listing/types.tsのListingImageRefコメントと同じ規約)。
+ */
+function listingImageSource(ref: ListingImageRef): "INVENTORY" | "PHOTO_ASSET" {
+  return ref.source === "PHOTO_ASSET" ? "PHOTO_ASSET" : "INVENTORY";
+}
+
+/**
+ * 1件の出品画像のダウンロードURLを、保存元(source)に応じて解決する。
+ * INVENTORY(既存Inventory画像)は従来どおりAmplify Storage、PHOTO_ASSET
+ * (撮影画像)はphoto registration用S3を使う——storageKeyの見た目だけで
+ * どちらのバケットか推測しない(保存元を混同しない)。環境未接続で
+ * 解決できない場合はnull(fail closed、呼び出し側で失敗として扱う)。
+ */
+export async function resolveListingImageDownloadUrl(
+  image: { storageKey: string; source?: "INVENTORY" | "PHOTO_ASSET" },
+  downloadFilename?: string,
+): Promise<string | null> {
+  if (image.source === "PHOTO_ASSET") return getPhotoAssetDownloadUrl(image.storageKey, downloadFilename);
+  return getInventoryImageDownloadUrl(image.storageKey, downloadFilename);
+}
+
+/**
  * CSV生成用に組み立てた画像ファイル名と、それに対応する下書き画像の
- * storageKeyの対応表を返す(署名URL発行前の一覧表示用)。
+ * storageKey/保存元の対応表を返す(署名URL発行前の一覧表示用)。
  *
  * 画像受渡し導線(指示書§4「既存BASE画像URL優先、次点で
  * getInventoryImageDownloadUrlの署名URL」)について: このtaskでは
@@ -103,20 +178,34 @@ export async function getInventoryImageDownloadUrl(storageKey: string, downloadF
  * 結合」に該当しうるため、このtaskでは自動採用しない)。そのため
  * 「次点」である自社S3署名URL方式のみを実装し、BASE画像URL優先の
  * 自動解決は次工程へ送る(完了報告に明記)。
+ *
+ * PhotoAsset(撮影画像)由来の画像が1件でも含まれる場合、photo
+ * registrationのS3接続(fail closed)が未設定なら全体をng扱いにする
+ * ——一部の画像だけ欠けたダウンロードリンク一覧を黙って返さない。
  */
 export async function listCsvImageDownloadTargets(
   inventoryId: string,
-): Promise<{ ok: true; displayId: string; images: { filename: string; storageKey: string }[] } | { ok: false; reason: string }> {
+): Promise<
+  | { ok: true; displayId: string; images: { filename: string; storageKey: string; source: "INVENTORY" | "PHOTO_ASSET" }[] }
+  | { ok: false; reason: string }
+> {
   const inventory = await getInventoryDetail(inventoryId);
   if (!inventory) return { ok: false, reason: "商品が見つかりません(削除済みの可能性があります)" };
   const draft = await getListingDraftForInventory(inventoryId);
   if (!draft) return { ok: false, reason: "EC出品下書きが未作成です" };
   if (draft.images.length === 0) return { ok: false, reason: "下書きに画像がありません" };
 
-  const images = draft.images
-    .slice()
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((img, idx) => ({ filename: imageFilename(img.storageKey, inventory.displayId, idx), storageKey: img.storageKey }));
+  const sorted = draft.images.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+  const hasPhotoAsset = sorted.some((img) => listingImageSource(img) === "PHOTO_ASSET");
+  if (hasPhotoAsset && !getPhotoAssetS3Runtime()) {
+    return { ok: false, reason: "撮影画像(PhotoAsset)のダウンロードには画像登録基盤への接続が必要です(未接続のため取得できません)" };
+  }
+
+  const images = sorted.map((img, idx) => ({
+    filename: imageFilename(img.storageKey, inventory.displayId, idx),
+    storageKey: img.storageKey,
+    source: listingImageSource(img),
+  }));
 
   return { ok: true, displayId: inventory.displayId, images };
 }

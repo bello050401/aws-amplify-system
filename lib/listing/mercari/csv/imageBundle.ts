@@ -1,5 +1,5 @@
 import "server-only";
-import { listCsvImageDownloadTargets, getInventoryImageDownloadUrl } from "./buildExportRows";
+import { listCsvImageDownloadTargets, resolveListingImageDownloadUrl } from "./buildExportRows";
 import { MAX_ZIP_PRODUCTS, MAX_ZIP_IMAGES } from "./imageTransferLimits";
 
 export { MAX_ZIP_PRODUCTS, MAX_ZIP_IMAGES } from "./imageTransferLimits";
@@ -84,7 +84,11 @@ export async function resolveInventoryImageZipPlan(inventoryIds: string[]): Prom
   }
 
   const failures: ImageBundleFailure[] = [];
-  const targetsByInventory: { inventoryId: string; displayId: string; images: { filename: string; storageKey: string }[] }[] = [];
+  const targetsByInventory: {
+    inventoryId: string;
+    displayId: string;
+    images: { filename: string; storageKey: string; source: "INVENTORY" | "PHOTO_ASSET" }[];
+  }[] = [];
 
   for (const inventoryId of inventoryIds) {
     const targets = await listCsvImageDownloadTargets(inventoryId);
@@ -106,10 +110,13 @@ export async function resolveInventoryImageZipPlan(inventoryIds: string[]): Prom
   const plan: ImageZipPlanItem[] = [];
   for (const target of targetsByInventory) {
     for (const img of target.images) {
-      // getInventoryImageDownloadUrlは常にサーバー側で解決したstorageKeyのみを対象にする
+      // resolveListingImageDownloadUrlは常にサーバー側で解決した参照のみを対象にする
       // (クライアント入力のキー/URLは一切経由しない)。ここではURLを発行するだけで、
       // 実際に取得しにいくのはブラウザ側(browserImageZip.ts)。
-      const url = await getInventoryImageDownloadUrl(img.storageKey, img.filename);
+      const url = await resolveListingImageDownloadUrl(img, img.filename);
+      if (!url) {
+        return { ok: false, reason: `画像URLを取得できませんでした: ${target.displayId}/${img.filename}` };
+      }
       plan.push({ inventoryId: target.inventoryId, displayId: target.displayId, filename: img.filename, url });
     }
   }

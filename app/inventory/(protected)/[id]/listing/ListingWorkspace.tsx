@@ -7,6 +7,7 @@ import type { ChannelListingRecord, ListingDraftRecord, ListingShippingMethod } 
 import { DEFAULT_LISTING_SHIPPING_METHOD } from "@/lib/listing/types";
 import { ListingForm } from "./ListingForm";
 import { InventoryFactsPanel } from "./InventoryFactsPanel";
+import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 
 /**
  * EC出品画面の2カラムを束ねる(2026-09-10追加指示)。
@@ -25,6 +26,7 @@ export function ListingWorkspace({
   categoryName,
   statusName,
   images,
+  photoAssets,
   initialDraft,
   initialChannelListing,
 }: {
@@ -32,6 +34,7 @@ export function ListingWorkspace({
   categoryName: string | null;
   statusName: string | null;
   images: InventoryImageRecord[];
+  photoAssets: WebPhotoAssetView[];
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
 }) {
@@ -55,6 +58,7 @@ export function ListingWorkspace({
           inventoryId={item.id}
           inventoryName={item.name}
           images={images}
+          photoAssets={photoAssets}
           initialDraft={initialDraft}
           initialChannelListing={initialChannelListing}
           shippingMethod={shippingMethod}
