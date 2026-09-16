@@ -35,3 +35,11 @@ Codexの同じタスクへ19:05 JSTに戻るheartbeatを登録（automation id: 
 - デスクトップbridgeはこのCodexセッションが担当する実worker。常時稼働する独立GPTサービスではない。
 - 主サービスのコードへ反映しても、協調モードを主DBで有効化するmigrationは別工程。未承認の稼働DB migrationは実行しない。
 - cache／全メトリクス／承認UIなど、status.mdの未完項目は実E2E成功と混同しない。
+
+## 主サービスへのコード反映（11:14 JST確認）
+
+主ブランチ `claude/inventory-management-system-5vbvc7` に `80d073b` と `356a491` を取り込み、安全停止後に既存Scheduled Taskで再起動した。HTTP healthはok、pauseは再起動前後ともfalse。新しい設定画面の表示を実ブラウザで確認した。
+
+既存未コミット `docs/health/final-tests.md` のSHA256は引き続き `A9DD1EA3A5C3878F9AD6B0A3E7302398229CD57E3FDE554F7DDDCD88261A3CF0`。主DBのeco追加schemaは未適用（installed=false）、協調モードは無効のまま。**コード反映済みと、機能有効化／実E2E完了は別である。**
+
+ユーザーに必要な現時点の操作はない。利用枠解除後に自動再開し、承認境界に達した場合だけ具体的な適用内容をまとめて確認する。
