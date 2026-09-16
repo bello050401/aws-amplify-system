@@ -268,7 +268,12 @@ export class EcoEngine {
         approval: "WAITING_APPROVAL",
         blocked: "HUMAN_REVIEW",
       }[result.status];
-      this.change(run, state, {}, result.reason || result.status);
+      this.change(
+        run,
+        state,
+        result.effectCompleted ? { pendingEffect: null } : {},
+        result.reason || result.status,
+      );
       return true;
     }
     if (!["succeeded", "failed"].includes(result.status))
@@ -345,7 +350,7 @@ export class EcoEngine {
         if (
           !result.independent ||
           !result.buildPassed ||
-          result.revision !== run.headSHA ||
+          (result.sourceRevision || result.revision) !== run.headSHA ||
           !result.evidenceRefs?.length
         )
           throw Error("Independent test/build evidence required");
@@ -353,6 +358,7 @@ export class EcoEngine {
           safeEvidence(this.evidenceRoot(run.id), ref),
         );
         patch.testRecord = result;
+        patch.headSHA = result.revision;
         next = "STAGING_DEPLOYING";
         break;
       case "STAGING_DEPLOYING":
