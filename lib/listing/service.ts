@@ -819,6 +819,32 @@ export interface ListingDraftInput {
   condition: ListingConditionCode;
   /** 配送方法(§1)。省略時は既存の下書きの値、それも無ければ既定値。 */
   shippingMethod?: ListingShippingMethod;
+  /**
+   * 担当者が確定した出品画像順。省略時だけ従来どおりInventory画像を初期値にする。
+   * 空配列は「画像を全て外した」という明示操作なのでフォールバックしない。
+   */
+  images?: ListingImageRef[];
+}
+
+export function normalizeListingImages(images: ListingImageRef[]): ListingImageRef[] {
+  if (images.length > 20) throw new Error("出品画像は20枚まで選択できます。");
+  const seenKeys = new Set<string>();
+  const seenAssets = new Set<string>();
+  return images.map((image, index) => {
+    const storageKey = String(image.storageKey ?? "").trim();
+    if (!storageKey) throw new Error("出品画像の保存先が不正です。");
+    if (seenKeys.has(storageKey)) throw new Error("同じ出品画像を重複して選択できません。");
+    seenKeys.add(storageKey);
+    const source = image.source === "PHOTO_ASSET" ? "PHOTO_ASSET" : "INVENTORY";
+    if (source === "PHOTO_ASSET") {
+      const photoAssetId = String(image.photoAssetId ?? "").trim();
+      if (!photoAssetId) throw new Error("PhotoAsset画像にはphotoAssetIdが必要です。");
+      if (seenAssets.has(photoAssetId)) throw new Error("同じPhotoAssetを重複して選択できません。");
+      seenAssets.add(photoAssetId);
+      return { storageKey, sortOrder: index, source, photoAssetId };
+    }
+    return { storageKey, sortOrder: index, source: "INVENTORY" };
+  });
 }
 
 /**
@@ -855,7 +881,7 @@ export async function saveListingDraft(
   const { normal } = splitImagesByType(inventory.images);
   const top = resolveTopImage(inventory.images);
   const ordered = top ? [top, ...normal.filter((i) => i !== top)] : normal;
-  const images: ListingImageRef[] = ordered.map((img, idx) => ({ storageKey: img.storageKey, sortOrder: idx }));
+  const inventoryImages: ListingImageRef[] = ordered.map((img, idx) => ({ storageKey: img.storageKey, sortOrder: idx }));
 
   const existing = await getListingDraftForInventory(inventoryId);
   const fields = {
@@ -866,7 +892,7 @@ export async function saveListingDraft(
     // §1 未指定なら既存の選択を保つ。保存のたびに既定値へ戻すと、
     // 佐川を選んだ商品がタイトル修正だけで家財便へ戻ってしまう。
     shippingMethod: input.shippingMethod ?? existing?.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD,
-    images: stringifyListingJson(images),
+    images: stringifyListingJson(normalizeListingImages(input.images ?? inventoryImages)),
     updatedBy: who ?? undefined,
   };
 

@@ -29,10 +29,16 @@ export type ListingStatus =
   | "ERROR"
   | "ARCHIVED";
 
-/** 1件の出品用画像 — Inventory.imagesのstorageKeyをそのまま参照する(出品用に画像を再アップロードすることはない)。 */
+/**
+ * 1件の出品用画像。既存レコードはstorageKey/sortOrderだけを持つため、
+ * source未設定はINVENTORYとして扱う。PhotoAssetもprocessed keyを直接参照し、
+ * 出品用に再アップロードしない。
+ */
 export interface ListingImageRef {
   storageKey: string;
   sortOrder: number;
+  source?: "INVENTORY" | "PHOTO_ASSET";
+  photoAssetId?: string;
 }
 
 /** ListingDraft(Common Listing Draft)のUI/Server Action向け公開シェイプ。 */
