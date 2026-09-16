@@ -2411,6 +2411,18 @@ const schema = a.schema({
       allow.group("EDITOR"),
       allow.group("VIEWER").to(["read"]),
     ]),
+  // Server-only transactional budget writes. Clients cannot reset the cap.
+  AIBudgetReservationStatus: a.enum(["RESERVED", "CONFIRMED", "CANCELLED"]),
+  AIBudgetLedger: a.model({
+    month: a.string().required(), cap: a.integer().required(), remaining: a.integer().required(),
+    priorSpent: a.integer().required(), spent: a.integer().required(), reserved: a.integer().required(),
+    callCount: a.integer().required(), updatedAt: a.datetime().required(),
+  }).identifier(["month"]).authorization((allow) => [allow.group("ADMIN").to(["read"])]),
+  AIBudgetReservation: a.model({
+    id: a.string().required(), month: a.string().required(), amount: a.integer().required(),
+    actualAmount: a.integer(), status: a.ref("AIBudgetReservationStatus").required(),
+    createdAt: a.datetime().required(), updatedAt: a.datetime().required(),
+  }).secondaryIndexes((index) => [index("month")]).authorization((allow) => [allow.group("ADMIN").to(["read"])]),
 });
 
 export type Schema = ClientSchema<typeof schema>;

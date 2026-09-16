@@ -1,5 +1,5 @@
 import "server-only";
-import { BedrockRuntimeClient, ConverseCommand, type Tool } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntimeClient, ConverseCommand, type ConverseCommandInput, type Tool } from "@aws-sdk/client-bedrock-runtime";
 import type { AIGatewayProvider, AIGeneratePolicy, AIGenerateResult, AITask, AITokenUsage, AIToolSchema } from "./types";
 
 /**
@@ -39,6 +39,21 @@ export const NOVA_MODEL_PREMIUM = process.env.BEDROCK_NOVA_MODEL_PREMIUM || "us.
 
 /** 階層ごとの出力上限。Novaの上限に合わせた保守的な値。 */
 const MAX_OUTPUT_TOKENS = 4096;
+export function novaOutputLimit(value?: number): number {
+  return Number.isSafeInteger(value) && value! > 0 ? Math.min(value!, MAX_OUTPUT_TOKENS) : MAX_OUTPUT_TOKENS;
+}
+function requestFor(systemPrompt: string, userPrompt: string, policy: AIGeneratePolicy, toolSchema?: AIToolSchema): ConverseCommandInput {
+  const tool: Tool | undefined = toolSchema ? { toolSpec: {
+    name: toolSchema.name, description: toolSchema.description,
+    inputSchema: { json: toolSchema.input_schema as unknown as Record<string, never> },
+  } } : undefined;
+  return {
+    modelId: novaModelForTier(policy.tier), system: [{ text: systemPrompt }],
+    messages: [{ role: "user", content: [{ text: userPrompt }] }],
+    ...(tool ? { toolConfig: { tools: [tool], toolChoice: { tool: { name: toolSchema!.name } } } } : {}),
+    inferenceConfig: { maxTokens: novaOutputLimit(policy.maxTokens), temperature: tool ? 0 : 0.3 },
+  };
+}
 
 export function novaModelForTier(tier: AIGeneratePolicy["tier"]): string {
   if (tier === "PREMIUM") return NOVA_MODEL_PREMIUM;
@@ -51,7 +66,7 @@ function client(): BedrockRuntimeClient {
   // 資格情報は明示的に渡さない — 実行ロール(既定の資格情報チェーン)を使う。
   if (!cached) {
     const region = process.env.BEDROCK_REGION || process.env.AWS_REGION || "us-west-2";
-    cached = new BedrockRuntimeClient({ region });
+    cached = new BedrockRuntimeClient({ region, maxAttempts: 1 });
   }
   return cached;
 }
@@ -82,12 +97,11 @@ export function describeNovaError(err: unknown): string {
 }
 
 function usageOf(res: { usage?: { inputTokens?: number; outputTokens?: number } }): AITokenUsage {
-  return { inputTokens: res.usage?.inputTokens ?? 0, outputTokens: res.usage?.outputTokens ?? 0 };
+  return { inputTokens: res.usage?.inputTokens ?? Number.NaN, outputTokens: res.usage?.outputTokens ?? Number.NaN };
 }
 
 export class NovaGatewayProvider implements AIGatewayProvider {
   readonly providerId = "nova" as const;
-
   async healthCheck(): Promise<{ ok: boolean; message: string }> {
     // 実際の推論は課金が発生するため呼び出さない(他Providerと同じ方針)。
     const region = process.env.BEDROCK_REGION || process.env.AWS_REGION;
@@ -118,12 +132,7 @@ export class NovaGatewayProvider implements AIGatewayProvider {
     let res;
     try {
       res = await client().send(
-        new ConverseCommand({
-          modelId,
-          system: [{ text: systemPrompt }],
-          messages: [{ role: "user", content: [{ text: userPrompt }] }],
-          inferenceConfig: { maxTokens: policy.maxTokens ?? MAX_OUTPUT_TOKENS, temperature: 0.3 },
-        }),
+        new ConverseCommand(requestFor(systemPrompt, userPrompt, policy)),
       );
     } catch (err) {
       // 本文は出さない。種別だけ残す。
@@ -157,27 +166,10 @@ export class NovaGatewayProvider implements AIGatewayProvider {
     const modelId = novaModelForTier(policy.tier);
     const startedAt = Date.now();
 
-    // Converse の toolConfig は Anthropic の tools と形が違うので詰め替える。
-    const tool: Tool = {
-      toolSpec: {
-        name: toolSchema.name,
-        description: toolSchema.description,
-        // Converse の inputSchema.json は DocumentType。JSON Schema を
-        // そのまま渡す用途なので、ここだけは構造を保ったまま通す。
-        inputSchema: { json: toolSchema.input_schema as unknown as Record<string, never> },
-      },
-    };
-
     let res;
     try {
       res = await client().send(
-        new ConverseCommand({
-          modelId,
-          system: [{ text: systemPrompt }],
-          messages: [{ role: "user", content: [{ text: userPrompt }] }],
-          toolConfig: { tools: [tool], toolChoice: { tool: { name: toolSchema.name } } },
-          inferenceConfig: { maxTokens: policy.maxTokens ?? MAX_OUTPUT_TOKENS, temperature: 0 },
-        }),
+        new ConverseCommand(requestFor(systemPrompt, userPrompt, policy, toolSchema)),
       );
     } catch (err) {
       console.error(`[NovaGatewayProvider.generateStructured] task=${task} failed:`, err instanceof Error ? err.name : "UnknownError");
