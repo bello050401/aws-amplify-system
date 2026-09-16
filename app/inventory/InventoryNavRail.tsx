@@ -1,7 +1,8 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { getPhotoRegistrationBadgeAction, type PhotoRegistrationBadgeState } from "@/app/actions/photoRegistration";
 import { BelloLogo } from "./BelloLogo";
 import { useUnsavedChanges } from "./UnsavedChangesProvider";
 
@@ -29,6 +30,9 @@ import { useUnsavedChanges } from "./UnsavedChangesProvider";
 // 絶対に食い違ってはいけない一次情報なので、1箇所にのみ定義する。
 export const NAV_ITEMS = [
   { key: "inventory", label: "在庫一覧", href: "/inventory", enabled: true },
+  // 画像登録Phase 1 Web境界: 未登録の撮影バッチ一覧・詳細・Web追加upload・
+  // 在庫への紐付けへの入口。badgeは未登録バッチ件数(usePhotoRegistrationBadge)。
+  { key: "photo-registration", label: "画像登録", href: "/inventory/photo-registration", enabled: true },
   // 夜間開発指示書 §12: 在庫一覧/売上/設定という主要構成。
   { key: "sales", label: "売上", href: "/inventory/sales", enabled: true },
   // BELLO統合改修 master指示書(2026-08-29統合改修版) §14: 「EC出品」を
@@ -61,10 +65,36 @@ export const NAV_ITEMS = [
  * 一覧400行の詳細リンクを一斉に先読みするような真似はしない（§17の
  * 「悪い候補」）。ここで先読みするのは、サイドバーの主要5ルートだけ。
  */
+/**
+ * 「画像登録」のbadge(未登録バッチ件数)。AWS未接続(fail closed)の間は
+ * getPhotoRegistrationBadgeActionがnullを返し、badgeは静かに非表示のまま
+ * になる — 読み込み失敗をエラー表示で出さない(他の主要ナビ項目の描画を
+ * 妨げないため)。InventoryNavRail/MobileBottomNavの両方が同じhookを使い、
+ * デスクトップ/モバイルでbadge件数が食い違わないようにする。
+ */
+export function usePhotoRegistrationBadge(): PhotoRegistrationBadgeState | null {
+  const [badge, setBadge] = useState<PhotoRegistrationBadgeState | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getPhotoRegistrationBadgeAction()
+      .then((result) => {
+        if (!cancelled) setBadge(result);
+      })
+      .catch(() => {
+        if (!cancelled) setBadge(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return badge;
+}
+
 export function InventoryNavRail() {
   const pathname = usePathname();
   const { guardedNavigate } = useUnsavedChanges();
   const router = useRouter();
+  const photoRegistrationBadge = usePhotoRegistrationBadge();
   // 同じルートを何度も先読みしない。hoverのたびにリクエストを出すと、
   // 先読みが目的の「待ち時間を減らす」の逆に働く。
   const prefetchedRef = useRef<Set<string>>(new Set());
@@ -140,7 +170,17 @@ export function InventoryNavRail() {
                 onFocus={() => prefetch(href)}
                 className={`w-full ${className}`}
               >
-                {item.label}
+                <span className="relative inline-flex">
+                  {item.label}
+                  {item.key === "photo-registration" && photoRegistrationBadge && photoRegistrationBadge.count > 0 ? (
+                    <span
+                      aria-label={`未登録の画像登録バッチが${photoRegistrationBadge.hasMore ? "99件以上" : `${photoRegistrationBadge.count}件`}あります`}
+                      className="absolute -right-3 -top-2 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[9px] font-bold leading-none text-white"
+                    >
+                      {photoRegistrationBadge.hasMore ? "99+" : photoRegistrationBadge.count}
+                    </span>
+                  ) : null}
+                </span>
               </button>
             </li>
           );

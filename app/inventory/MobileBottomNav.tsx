@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { NAV_ITEMS } from "./InventoryNavRail";
+import { NAV_ITEMS, usePhotoRegistrationBadge } from "./InventoryNavRail";
 import { useUnsavedChanges } from "./UnsavedChangesProvider";
 
 /**
@@ -13,11 +13,12 @@ import { useUnsavedChanges } from "./UnsavedChangesProvider";
  * 開閉する分の手間よりワンタップで切り替えられる方がBELLOの実運用
  * (スタッフが在庫一覧⇄EC出品⇄メッセージを頻繁に往復する)に合う)。
  *
- * デスクトップと同じ主要5項目を表示する。
+ * デスクトップと同じ主要項目(画像登録Phase 1 Web境界の追加分を含む)を表示する。
  */
 export function MobileBottomNav() {
   const pathname = usePathname();
   const { guardedNavigate } = useUnsavedChanges();
+  const photoRegistrationBadge = usePhotoRegistrationBadge();
 
   return (
     <nav
@@ -33,7 +34,17 @@ export function MobileBottomNav() {
         const href = item.href;
         return (
           <button key={item.key} type="button" onClick={() => guardedNavigate(href)} className={className}>
-            {item.label}
+            <span className="relative inline-flex">
+              {item.label}
+              {item.key === "photo-registration" && photoRegistrationBadge && photoRegistrationBadge.count > 0 ? (
+                <span
+                  aria-label={`未登録の画像登録バッチが${photoRegistrationBadge.hasMore ? "99件以上" : `${photoRegistrationBadge.count}件`}あります`}
+                  className="absolute -right-3 -top-1.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-red-600 px-1 text-[8px] font-bold leading-none text-white"
+                >
+                  {photoRegistrationBadge.hasMore ? "99+" : photoRegistrationBadge.count}
+                </span>
+              ) : null}
+            </span>
           </button>
         );
       })}
