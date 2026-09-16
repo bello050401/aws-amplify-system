@@ -221,7 +221,7 @@ export class Orchestrator {
       this.currentTaskId = delivering.id;
       try {
         const result = await this.delivery.advance(delivering);
-        if (result.state === "succeeded") this.repo.setState(delivering.id, STATES.COMPLETED, "独立テスト・審査・staging反映が成功しました", "system");
+        if (result.state === "succeeded") this.repo.setState(delivering.id, STATES.COMPLETED, "独立テスト・審査・staging反映が成功しました", "system", { blocked_reason: null, retry_after: null });
         else if (["blocked", "failed"].includes(result.state)) this.#deliveryBlocked(delivering, result.error);
       } finally { this.currentTaskId = null; }
       return false; // Poll once per configured interval, never busy-loop on a cloud job.

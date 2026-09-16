@@ -22,6 +22,7 @@ import { Diagnostics } from "./diagnostics.mjs";
 import { CodexRunner, ImplementationRouter } from "./runner/codexRunner.mjs";
 import { IndependentVerifier } from "./pipeline/verification.mjs";
 import { StagingDelivery } from "./pipeline/staging.mjs";
+import { AmplifyStaticDelivery } from "./pipeline/staticStaging.mjs";
 import { Notifications } from "./pipeline/notifications.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -108,7 +109,7 @@ export async function buildApp({ config, paths, echoLogs = true }) {
     codex: new CodexRunner({ config, paths, logger }),
   } });
   const verifier = new IndependentVerifier({ config, paths, repo });
-  const delivery = new StagingDelivery({ config, repo, verifier });
+  const delivery = new (config.staging?.mode === "static-smoke" ? AmplifyStaticDelivery : StagingDelivery)({ config, repo, verifier });
   const notifications = new Notifications({ config, repo });
   // 審査方式は実行時に選べる。既定は追加課金の要らない Claude 審査。
   // OpenAI は削除せず、選べば使えるオプションとして常に組み立てておく。

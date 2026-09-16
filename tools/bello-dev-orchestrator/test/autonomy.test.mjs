@@ -80,6 +80,7 @@ test('Codex runner passes stdin/schema/worktree sandbox, validates report and ta
     assert.equal(seen.args.at(-1),'-');
     assert.ok(seen.input.includes('do task'));
     assert.ok(seen.args.includes('workspace-write'));
+    if(process.platform==='win32')assert.ok(seen.args.includes('windows.sandbox="elevated"'));
     assert.ok(seen.args.includes('sandbox_workspace_write.network_access=false'));
     assert.ok(!seen.args.includes('--dangerously-bypass-approvals-and-sandbox'));
     assert.ok(!('AWS_SECRET_ACCESS_KEY' in seen.env));
@@ -198,7 +199,10 @@ test('end-to-end: implementation, independent test, review, staging and persiste
     assert.equal(h.repo.getTask(h.task.id).state,STATES.DELIVERING);
     await notices.tick();assert.equal(sends,0,'not completed before deployment');
     await h.orchestrator.tick();assert.equal(starts,1);
+    h.repo.updateTask(h.task.id,{blocked_reason:'old retry',retry_after:'2020-01-01T00:00:00Z'});
     await h.orchestrator.tick();assert.equal(h.repo.getTask(h.task.id).state,STATES.COMPLETED);
+    assert.equal(h.repo.getTask(h.task.id).blocked_reason,null);
+    assert.equal(h.repo.getTask(h.task.id).retry_after,null);
     await notices.tick();await notices.tick();assert.equal(sends,1);
   } finally {h.cleanup();}
 });

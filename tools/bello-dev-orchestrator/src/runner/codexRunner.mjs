@@ -30,6 +30,7 @@ export class CodexRunner {
   constructor({ config, paths, logger, execute = runProcess }) { this.config = config; this.paths = paths; this.logger = logger; this.execute = execute; }
   buildArgs({ workDir, schemaPath, reportPath }) {
     const args = ['exec', '--ignore-user-config', '--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=false', '--ephemeral', '--json', '--color', 'never', '--cd', workDir, '--output-schema', schemaPath, '--output-last-message', reportPath];
+    if (process.platform === 'win32') args.push('-c', 'windows.sandbox="elevated"');
     if (this.config.codex?.model) args.push('--model', this.config.codex.model);
     return [...args, '-'];
   }
