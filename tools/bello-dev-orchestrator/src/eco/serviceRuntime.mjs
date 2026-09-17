@@ -189,7 +189,10 @@ export function createEcoRuntime({
 
   // Recover queued/in-flight runs immediately after a service restart. Leases and
   // persisted effect keys make this restart-safe; unknown external effects are reconciled.
-  if (connected && ecoStore.installed)
+  // Do not enqueue a database read for a disabled runtime. Besides avoiding
+  // pointless work, this lets short-lived validation processes close their
+  // store immediately without a queued recovery callback racing the close.
+  if (connected && ecoStore.installed && !ecoModeDisabled())
     queueMicrotask(() => tick().catch((error) => logger?.error?.("協調eco recovery tick の失敗", { error: error.message })));
 
   async function stop() {

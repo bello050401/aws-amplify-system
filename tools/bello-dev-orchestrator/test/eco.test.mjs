@@ -402,6 +402,30 @@ test("eco: pause/resume/cancel are versioned, idempotent, no implicit resume on 
   assert.equal(await e.tick(h.run.id), false);
 });
 
+test("eco: operator can extend a suspended run budget within bounded limits", async (t) => {
+  const h = await fixture(t);
+  const e = engine(h);
+  let run = h.eco.get(h.run.id);
+  h.eco.mutate(run.id, run.version, "HUMAN_REVIEW", {}, "Execution budget exhausted");
+  run = h.eco.get(run.id);
+  const extended = e.control(
+    run.id,
+    run.version,
+    "extend_budget",
+    "extend-budget-key",
+    { maxTokens: 1000000, extendDeadlineMs: 60000 },
+  );
+  assert.equal(extended.state, "HUMAN_REVIEW");
+  assert.equal(extended.configSnapshot.maxTokens, 1000000);
+  assert.equal(extended.deadline, run.deadline + 60000);
+  assert.throws(
+    () => e.control(extended.id, extended.version, "extend_budget", "bad-extension", { maxTokens: 99999999 }),
+    /Invalid bounded budget extension/,
+  );
+  const resumed = e.control(extended.id, extended.version, "resume", "resume-after-extension");
+  assert.equal(resumed.state, "QUEUED");
+});
+
 test("eco: budgets and default safety gate stop dispatch", async (t) => {
   const h = await fixture(t);
   const e = engine(h);

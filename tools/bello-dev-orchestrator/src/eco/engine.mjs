@@ -66,11 +66,35 @@ export class EcoEngine {
     );
   }
 
-  control(id, version, action, key) {
-    return this.repo.idempotent(key, { id, version, action }, () => {
+  control(id, version, action, key, adjustment = null) {
+    return this.repo.idempotent(key, { id, version, action, adjustment }, () => {
       const run = this.repo.get(id);
       if (!run || run.version !== version || terminal.has(run.state))
         throw Error("Run version conflict or terminal run");
+      if (action === "extend_budget") {
+        const maxTokens = Number(adjustment?.maxTokens);
+        const extendDeadlineMs = Number(adjustment?.extendDeadlineMs || 0);
+        if (
+          !Number.isSafeInteger(maxTokens) ||
+          maxTokens < run.configSnapshot.maxTokens ||
+          maxTokens > 10000000 ||
+          !Number.isSafeInteger(extendDeadlineMs) ||
+          extendDeadlineMs < 0 ||
+          extendDeadlineMs > 86400000
+        )
+          throw Error("Invalid bounded budget extension");
+        return this.repo.mutate(
+          run.id,
+          run.version,
+          run.state,
+          {
+            configSnapshot: { ...run.configSnapshot, maxTokens },
+            deadline: run.deadline + extendDeadlineMs,
+          },
+          `Operator extended run budget to ${maxTokens} tokens`,
+          "operator",
+        );
+      }
       const next =
         action === "pause"
           ? "PAUSED"

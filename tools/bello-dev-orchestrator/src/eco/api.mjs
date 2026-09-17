@@ -95,6 +95,7 @@ export class EcoApi {
         body.expectedVersion,
         body.action,
         body.idempotencyKey,
+        body.adjustment,
       );
     throw Error("Operation is not connected");
   }
