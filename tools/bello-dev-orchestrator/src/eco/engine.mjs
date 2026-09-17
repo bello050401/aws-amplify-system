@@ -71,6 +71,39 @@ export class EcoEngine {
       const run = this.repo.get(id);
       if (!run || run.version !== version || terminal.has(run.state))
         throw Error("Run version conflict or terminal run");
+      if (action === "retry_safe_staging_markup") {
+        const row = this.repo.store.get(
+          "SELECT state,job_id,error,commit_id FROM staging_deliveries WHERE task_id=?",
+          [run.task_id],
+        );
+        if (
+          run.state !== "HUMAN_REVIEW" ||
+          run.resumeState !== "STAGING_DEPLOYING" ||
+          run.pendingEffect?.phase !== "STAGING_DEPLOYING" ||
+          row?.state !== "blocked" ||
+          row.job_id ||
+          row.error !== "Unsupported smoke markup" ||
+          row.commit_id !== run.headSHA
+        )
+          throw Error("Safe local staging retry prerequisites not met");
+        const reset = this.repo.mutate(
+          run.id,
+          run.version,
+          run.state,
+          { pendingEffect: null },
+          "Operator retried local text-only staging validation; no cloud job had been created",
+          "operator",
+        );
+        this.repo.store.run(
+          "UPDATE staging_deliveries SET state='ready',error=NULL,updated_at=? WHERE task_id=? AND state='blocked' AND job_id IS NULL",
+          [new Date(this.now()).toISOString(), run.task_id],
+        );
+        this.repo.store.run(
+          "INSERT INTO checkpoints(task_id,phase,data,at) VALUES(?,?,?,?)",
+          [run.task_id, "safe_staging_retry", JSON.stringify({ runId: run.id, commit: run.headSHA, priorError: row.error }), new Date(this.now()).toISOString()],
+        );
+        return reset;
+      }
       if (action === "accept_noninteractive_qa") {
         const finalQa = run.finalQaId ? this.repo.getArtifact(run.finalQaId) : null;
         const criteria = finalQa?.body?.acceptanceCriteria || [];
