@@ -41,11 +41,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SettingsStore = new EditSettingsStore(Path.Combine(_root, "settings.json"));
         RefreshCommand = new AsyncCommand(RefreshAsync, () => !_busy);
         ImportCommand = new AsyncCommand(ImportAsync, () => !_busy && _drive is not null);
-        UploadCommand = new AsyncCommand(UploadAsync, () => !_busy && _nodeScriptsDir is not null && _apiEndpoint is not null && Sessions.Any(s => s.State == ImportSessionState.LocalSecured));
+        UploadCommand = new AsyncCommand(UploadAsync, () => !_busy && _nodeScriptsDir is not null && _apiEndpoint is not null && Sessions.Any(IsUploadCandidate));
     }
 
     public IPreviewRunner? CreatePreviewRunner() =>
-        _nodeScriptsDir is null ? null : new NodePreviewRunner(_nodeExecutable, Path.Combine(_nodeScriptsDir, "previewCli.mjs"));
+        _nodeScriptsDir is null ? null : new NodePreviewRunner(_nodeExecutable, NodeScriptPath("previewCli.mjs"));
     public async Task InitializeAsync() { await _repository.InitializeAsync(); await RefreshAsync(); }
     private async Task LoadSessionsAsync()
     {
@@ -91,12 +91,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private async Task UploadAsync()
     {
         if (_nodeScriptsDir is null || _apiEndpoint is null) return;
-        var target = Sessions.FirstOrDefault(s => s.State == ImportSessionState.LocalSecured);
+        var target = Sessions.FirstOrDefault(IsUploadCandidate);
         if (target is null) return;
         _busy = true; RaiseCommands();
         try
         {
-            var runner = new NodeCliPipelineRunner(_nodeExecutable, Path.Combine(_nodeScriptsDir, "cli.mjs"), new EnvironmentTokenProvider());
+            var runner = new NodeCliPipelineRunner(_nodeExecutable, NodeScriptPath("cli.mjs"), new EnvironmentTokenProvider());
             var service = new PhotoUploadService(_repository, runner);
             var sessionRoot = Path.Combine(_root, "sessions", target.Id.ToString("D"));
             var request = new PhotoUploadRequest(
@@ -121,6 +121,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _ => "アップロード処理が終了しました：" + outcome.State,
     };
     private void RaiseCommands() { (RefreshCommand as AsyncCommand)?.RaiseCanExecuteChanged(); (ImportCommand as AsyncCommand)?.RaiseCanExecuteChanged(); (UploadCommand as AsyncCommand)?.RaiseCanExecuteChanged(); }
+    private static bool IsUploadCandidate(ImportSession session) =>
+        session.State is ImportSessionState.LocalSecured or ImportSessionState.NeedsReview;
+    private string NodeScriptPath(string fileName)
+    {
+        if (_nodeScriptsDir is null) throw new InvalidOperationException("BELLO_PHOTO_STATION_NODE_DIR is not configured");
+        var direct = Path.Combine(_nodeScriptsDir, fileName);
+        return File.Exists(direct) ? direct : Path.Combine(_nodeScriptsDir, "src", fileName);
+    }
     private static double ToGiB(long bytes) => bytes / 1024d / 1024d / 1024d;
     private static string CardGeneration(DriveInfo drive) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{drive.VolumeLabel}\0{drive.TotalSize}\0{drive.DriveFormat}"))).ToLowerInvariant();
     private static Guid StableSessionId(string generation, string manifest)

@@ -32,8 +32,8 @@ public sealed class PhotoUploadService(IStationRepository repository, IPhotoPipe
         var sessionId = Guid.Parse(request.SessionId);
         var session = await repository.FindSessionAsync(sessionId, cancellationToken)
             ?? throw new InvalidOperationException("Unknown import session: " + request.SessionId);
-        if (session.State != ImportSessionState.LocalSecured)
-            throw new InvalidOperationException($"Session must be LocalSecured before upload, was {session.State}");
+        if (session.State is not (ImportSessionState.LocalSecured or ImportSessionState.NeedsReview))
+            throw new InvalidOperationException($"Session must be LocalSecured or NeedsReview before upload, was {session.State}");
 
         session.TransitionTo(ImportSessionState.Rendering);
         await repository.SaveSessionAsync(session, cancellationToken);

@@ -75,6 +75,21 @@ public sealed class PhotoUploadServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task NeedsReviewSessionCanBeRetried()
+    {
+        var (repository, session) = await LocalSecuredSessionAsync("station-retry.sqlite");
+        session.TransitionTo(ImportSessionState.Rendering); await repository.SaveSessionAsync(session);
+        session.TransitionTo(ImportSessionState.NeedsReview, "first attempt failed"); await repository.SaveSessionAsync(session);
+        var service = new PhotoUploadService(repository, new FakeRunner(new PipelineResult("COMPLETE", "b2", "PB-2", ["a.jpg"], [], [])));
+
+        var outcome = await service.UploadAsync(Request(session), _ => { });
+
+        Assert.Equal(ImportSessionState.CloudVerifying, outcome.State);
+        var reloaded = await repository.FindSessionAsync(session.Id);
+        Assert.Equal(ImportSessionState.CloudVerifying, reloaded!.State);
+    }
+
+    [Fact]
     public async Task RejectsSessionsThatAreNotYetLocalSecured()
     {
         var repository = new SqliteStationRepository(Path.Combine(_root, "db", "station-notready.sqlite"));
