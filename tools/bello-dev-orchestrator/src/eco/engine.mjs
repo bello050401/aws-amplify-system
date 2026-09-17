@@ -82,7 +82,7 @@ export class EcoEngine {
           run.pendingEffect?.phase !== "STAGING_DEPLOYING" ||
           row?.state !== "blocked" ||
           row.job_id ||
-          row.error !== "Unsupported smoke markup" ||
+          !["Unsupported smoke markup", "Verified artifact or isolation changed"].includes(row.error) ||
           row.commit_id !== run.headSHA
         )
           throw Error("Safe local staging retry prerequisites not met");

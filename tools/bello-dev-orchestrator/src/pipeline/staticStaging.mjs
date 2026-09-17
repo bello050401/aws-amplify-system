@@ -49,6 +49,14 @@ export class AmplifyStaticDelivery {
     // be prepared again instead of turning a harmless markup issue into a
     // permanent human task. Never reset a row that has a cloud job id.
     if(existing){
+      if(existing.state==='ready'&&!existing.job_id&&existing.commit_id===task.git_end_commit){
+        try{
+          const artifact=this.artifact(task);
+          const receipt={settings:this.settings,sha256:artifact.sha256};
+          this.repo.store.run('UPDATE staging_deliveries SET config_json=?,error=NULL,updated_at=? WHERE task_id=?',[JSON.stringify(receipt),new Date().toISOString(),task.id]);
+          return this.row(task.id);
+        }catch{}
+      }
       if(existing.state==='blocked'&&!existing.job_id&&existing.commit_id===task.git_end_commit){
         try{
           const artifact=this.artifact(task);
