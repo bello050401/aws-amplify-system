@@ -60,10 +60,8 @@ function fixture(provider = "claude", category = "mechanical_edit") {
 test("instruction checks precede implementation; preparation can start from original intent", () => {
   assert.equal(inspectInstruction("replace", spec, ["AC-1"]).ready, true);
   assert.equal(inspectInstruction("", spec).ready, false);
-  assert.equal(
-    inspectInstruction("replace", { ...spec, unresolved: ["unknown"] }).ready,
-    false,
-  );
+  assert.equal(inspectInstruction("replace", { ...spec, unresolved: ["既存API契約をコードで確認する"] }).ready, true);
+  assert.equal(inspectInstruction("replace", { ...spec, unresolved: ["本人によるOAuth認証操作が必要"] }).ready, false);
   assert.equal(inspectInstruction("replace", spec, ["AC-2"]).ready, false);
   assert.equal(
     selectForWork({ ...fixture(), work: planWork({ instruction: "replace" }) })

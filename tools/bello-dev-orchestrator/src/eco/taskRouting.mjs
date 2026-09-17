@@ -121,7 +121,8 @@ export function inspectInstruction(instruction, spec, acIds = []) {
   ])
     if (!meaningful(spec?.[field])) missing.push(field);
   if (!Array.isArray(spec?.unresolved)) missing.push("unresolved_list");
-  else if (spec.unresolved.length) missing.push("unresolved_requirements");
+  else if (spec.unresolved.some((item) => /(?:ユーザー|本人).*(?:判断|選択|承認|操作)|MFA|OAuth|ログイン|認証情報|課金|本番データ|破壊的|(?:IAM|S3|Cognito).*(?:重大|権限拡大)/i.test(String(item))))
+    missing.push("human_resolution_required");
   const criteria = Array.isArray(spec?.acceptanceCriteria)
     ? spec.acceptanceCriteria
     : [];
