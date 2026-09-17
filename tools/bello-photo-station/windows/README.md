@@ -12,6 +12,7 @@
 - SQLite WAL台帳、工程状態機械、単一起動Mutex
 - staging専用画面、取込履歴、SD取外し可能表示
 - 別PCへ持ち込めるself-contained win-x64単一ファイルpublish
+- Lightroom連携用の版付き・固定IDジョブ契約と、原子的な `.ready.json` 発行（任意コマンドとroot外pathを拒否）
 
 ## 設定
 

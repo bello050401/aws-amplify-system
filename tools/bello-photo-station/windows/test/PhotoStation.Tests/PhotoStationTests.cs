@@ -91,5 +91,32 @@ public sealed class PhotoStationTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task LightroomBridgePublishesOnlyCompleteValidatedRequests()
+    {
+        var station = Path.Combine(_root, "station");
+        var source = Path.Combine(station, "sessions", "one", "source", "one.arw");
+        var output = Path.Combine(station, "sessions", "one", "render", "asset", "attempt");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        await File.WriteAllTextAsync(source, "raw");
+        var request = new LightroomRenderRequest(1, Guid.NewGuid(), Guid.NewGuid(), 1, Guid.NewGuid(),
+            "bello-raw-neutral-v1", new string('a', 64),
+            [new LightroomRenderItem(Guid.NewGuid(), source, new string('b', 64), output)]);
+        var path = await new LightroomBridgeWriter(Path.Combine(station, "bridge"), station).EnqueueAsync(request);
+        Assert.EndsWith(".ready.json", path);
+        Assert.True(File.Exists(path));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, "*.partial"));
+    }
+
+    [Fact]
+    public void LightroomBridgeRejectsPathsOutsideStationRoot()
+    {
+        var station = Path.Combine(_root, "station");
+        var request = new LightroomRenderRequest(1, Guid.NewGuid(), Guid.NewGuid(), 1, Guid.NewGuid(),
+            "bello-raw-neutral-v1", new string('a', 64),
+            [new LightroomRenderItem(Guid.NewGuid(), Path.Combine(_root, "outside.arw"), new string('b', 64), Path.Combine(station, "out"))]);
+        Assert.Throws<InvalidDataException>(() => LightroomBridgeProtocol.Validate(request, station));
+    }
+
     private static ImportSession Session() => new(Guid.NewGuid(), "staging", "STATION-1", "GEN-1", "manifest", DateTimeOffset.UtcNow);
 }
