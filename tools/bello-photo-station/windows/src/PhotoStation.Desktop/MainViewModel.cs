@@ -21,6 +21,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<ImportSession> Sessions { get; } = [];
     public string DetectedDriveText { get => _detectedDriveText; private set => Set(ref _detectedDriveText, value); }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
+    public string RecipeSummary => "原比率を維持 ・ sRGB ・ 長辺3000px ・ JPEG品質90 ・ サムネイル480px ・ GPS除去 ・ 自動クロップなし";
+    public string ProcessingAvailabilityText => "現在は検証コピーまで利用可能です。Lightroom現像・加工・Web送信は接続準備中です。";
     public ICommand RefreshCommand { get; }
     public ICommand ImportCommand { get; }
     public MainViewModel()
@@ -32,6 +34,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ImportCommand = new AsyncCommand(ImportAsync, () => !_busy && _drive is not null);
     }
     public async Task InitializeAsync() { await _repository.InitializeAsync(); await RefreshAsync(); }
+    private async Task LoadSessionsAsync()
+    {
+        Sessions.Clear();
+        foreach (var session in await _repository.ListSessionsAsync()) Sessions.Add(session);
+    }
     private async Task RefreshAsync()
     {
         var configuredRoot = Environment.GetEnvironmentVariable("BELLO_PHOTO_CARD_ROOT");
@@ -39,7 +46,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ? DriveInfo.GetDrives().FirstOrDefault(x => x.IsReady && string.Equals(x.RootDirectory.FullName, Path.GetPathRoot(configuredRoot), StringComparison.OrdinalIgnoreCase))
             : DriveInfo.GetDrives().FirstOrDefault(x => x.IsReady && x.DriveType == DriveType.Removable);
         DetectedDriveText = _drive is null ? "リムーバブルSDカードは見つかりません" : $"{_drive.Name}  {(_drive.VolumeLabel.Length == 0 ? "（ラベルなし）" : _drive.VolumeLabel)}  空き {ToGiB(_drive.AvailableFreeSpace):F1} GiB";
-        Sessions.Clear(); foreach (var session in await _repository.ListSessionsAsync()) Sessions.Add(session);
+        await LoadSessionsAsync();
         StatusText = _drive is null ? "カードを挿すと再検出できます" : "カードは読み取り専用の取込元として認識されています";
         RaiseCommands();
     }
@@ -56,8 +63,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var generation = CardGeneration(_drive);
             var sessionId = StableSessionId(generation, ImportService.ManifestHash(candidates)); StatusText = $"{candidates.Length}件をSSDへコピーして照合しています…";
             var result = await _importer.ImportAsync(new ImportRequest(sessionId, "staging", Environment.GetEnvironmentVariable("BELLO_PHOTO_STATION_ID") ?? "UNREGISTERED-STATION", generation, _drive.RootDirectory.FullName, Path.Combine(_root, "sessions", sessionId.ToString("D")), candidates));
-            StatusText = result.SafeToRemove ? $"コピーと照合完了（{result.VerifiedCount}件）：SDを取り外せます" : "取込を保留しています";
-            await RefreshAsync();
+            StatusText = result.SafeToRemove
+                ? result.VerifiedCount > 0
+                    ? $"コピーと照合完了（{result.VerifiedCount}件）：SDを取り外せます"
+                    : $"新しい画像はありません（{candidates.Length}件は取込済み）：SDを取り外せます"
+                : "取込を保留しています";
+            // 履歴だけを更新する。RefreshAsyncはカード検出文言を設定するため、
+            // ここで呼ぶと利用者が必要とする完了結果が直後に消えてしまう。
+            await LoadSessionsAsync();
         }
         catch (Exception error) { StatusText = "取込を完了できませんでした：" + error.Message; }
         finally { _busy = false; RaiseCommands(); }
