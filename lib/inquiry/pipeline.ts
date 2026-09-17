@@ -12,7 +12,12 @@ import {
 import { listSearchableKnowledge } from "@/lib/knowledge/store";
 import { retrieveKnowledge } from "@/lib/knowledge/retrieval";
 import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./intent";
-import { detectHumanHandoff } from "./humanHandoff";
+import {
+  detectHumanHandoff,
+  encodeHandoffReviewReasons,
+  mergeHumanHandoff,
+  parseHandoffFromReviewReasons,
+} from "./humanHandoff";
 import { resolveNegotiationContext } from "./negotiation";
 import { resolveNegotiation, type NegotiationInventoryFacts } from "./negotiationService";
 import { resolveProductFromInquiry } from "./productResolver";
@@ -140,7 +145,6 @@ type BaseReplyResult = Omit<
 export async function generateInquiryReplyDraft(request: InquiryReplyRequest): Promise<GenerateInquiryReplyResult> {
   const settings = await getAIReplySettings();
   const messageText = normalizeMessage(request.messageText);
-  const humanHandoff = detectHumanHandoff({ currentText: messageText, history: request.history });
 
   // ── 会話文脈(2026-09-03 追加指示 §17-§24) ─────────────────────
   //
@@ -149,6 +153,25 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // 引き継いだうえで、今回分かったことを足す。
   const incomingContext = request.context ?? emptyConversationContext();
   const carriedFacts = knownFacts(incomingContext);
+
+  // ── 人間引き継ぎ(家具・照明選び等) ───────────────────────────
+  //
+  // **history だけに頼らない。** history は呼び出し側が渡す「直近の
+  // やり取り」で、際限なく全件を保持している保証は無い。相談を依頼した
+  // メッセージが history の window から外れると、その場の検出だけでは
+  // 引き継ぎ状態を再現できず、後続メッセージで引き継ぎが消える
+  // (今回の不具合そのもの)。そこで、確定した引き継ぎ状態は
+  // ConversationContext.reviewReasons へ符号化して恒久保持し
+  // (conversationContext.ts の型は変更しない範囲での実装)、今回の
+  // history から取れる信号と合成する。一度必要になったら、以後の合成
+  // 結果は常に required のままになる(mergeHumanHandoffの不変条件)。
+  const currentHandoffSignal = detectHumanHandoff({ currentText: messageText, history: request.history });
+  const priorHandoffState = parseHandoffFromReviewReasons(incomingContext.reviewReasons);
+  const humanHandoff = mergeHumanHandoff({
+    prior: priorHandoffState,
+    current: currentHandoffSignal,
+    now: new Date().toISOString(),
+  });
 
   // 直前の確認事項への回答か(§22)。確認待ちの項目がある場合だけ読む。
   const pendingAnswers = resolvePendingAnswers({ context: incomingContext, messageText });
@@ -975,7 +998,13 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     },
     appliedReplyRuleIds: undefined,
     knowledgeDocumentIds: knowledgeHits.length > 0 ? knowledgeHits.map((k) => k.id) : undefined,
-    reviewReasons: productContext.reviewReasons.length > 0 ? productContext.reviewReasons : undefined,
+    // §人間引き継ぎの永続化: 一度確定した引き継ぎ状態を符号化して積む。
+    // mergeConversationContext の reviewReasons は uniq で積み増すだけで
+    // 消さないため、historyのwindowから元メッセージが外れても消えない。
+    reviewReasons:
+      productContext.reviewReasons.length > 0 || humanHandoff.required
+        ? [...productContext.reviewReasons, ...encodeHandoffReviewReasons(humanHandoff)]
+        : undefined,
   });
 
   // ── 商品が確実に特定できていなければ、答えずにURLを尋ねる ──────
@@ -983,20 +1012,28 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // ここは**生成より前**に置く。AIに投げてから「やっぱり分からない」と
   // 捨てるのでは、その間に商品固有の事実がプロンプトへ混ざる余地が残る。
   // 特定できていない時点で、商品の話は一切しない。
+  //
+  // ただし、**商品が無くても答えられる質問(見学・家具選び相談・営業時間等)
+  // が同じ問い合わせに含まれる場合は、それらへの回答まで捨てない。**
+  // 「このソファ2脚の見学はできますか」で商品特定に失敗しても、見学案内
+  // (受付時間・準備期間・1点への絞り込み)は商品と無関係に答えられる
+  // (§実際の不具合: 商品特定の失敗が一般案内ごと消してしまっていた)。
+  // 商品固有の部分は unresolved の「対象商品」として残し、生成後段の
+  // AnswerPlan/検査に委ねる。
   if (urlRequest.requestUrl) {
-    return finish({
-      status: "NEEDS_PRODUCT_CONFIRMATION",
-      draftText: PRODUCT_URL_REQUEST_TEMPLATE,
-      evidence,
-      intents,
-      unresolvedFacts: [
-        ...unresolved,
-        { field: "対象商品", reason: urlRequest.reason },
-      ],
-      modelProvider: null,
-      modelName: null,
-      failureReason: null,
-    });
+    unresolved.push({ field: "対象商品", reason: urlRequest.reason });
+    if (!hasProductIndependentIntent(intents)) {
+      return finish({
+        status: "NEEDS_PRODUCT_CONFIRMATION",
+        draftText: PRODUCT_URL_REQUEST_TEMPLATE,
+        evidence,
+        intents,
+        unresolvedFacts: unresolved,
+        modelProvider: null,
+        modelName: null,
+        failureReason: null,
+      });
+    }
   }
 
   // ── 生成できない条件を先に判定する ────────────────────────────

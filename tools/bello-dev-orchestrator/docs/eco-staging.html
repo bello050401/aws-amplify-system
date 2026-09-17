@@ -13,5 +13,13 @@
 <p>staging反映</p>
 <p>完了記録</p>
 <p>不可逆操作と本人認証だけ人間確認</p>
+<h2>staging検証: 問い合わせ 来店・家具選び相談・取り置き（task_d4d9d4bce21fbd475c）</h2>
+<p>npm run verify:inquiry-visit-consultation / npm run verify:inquiry / npm run verify:line-notify を実行して確認する。</p>
+<ul>
+<li>商品未特定でも来店案内（大型家具1点への絞り込み、準備約1週間、平日9-17時）を返す。</li>
+<li>家具・照明選びの相談は担当者引き継ぎとし、判定時刻・根拠・理由・現在の状態・次のアクションを社内通知に含める。</li>
+<li>相談を検出したメッセージが履歴のwindowから外れても、ConversationContext.reviewReasonsへの符号化により引き継ぎ状態を失わない。</li>
+<li>取り置き・配送目安は通常購入後約2週間、1か月超の長期取り置きは個別確認とする。</li>
+</ul>
 </body>
 </html>

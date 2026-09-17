@@ -302,7 +302,13 @@ export interface ReplyEvidence {
    * だけで、questionIdやstatusといった内部の言葉は含まない。
    */
   answerPlan?: import("./answerPlan").AnswerPlanEvidence | null;
-  /** 家具・照明選び等、人が引き継ぐ相談。後続ターンでも履歴から保持する。 */
+  /**
+   * 家具・照明選び等、人が引き継ぐ相談。
+   *
+   * 会話のConversationContext(reviewReasonsへ符号化)へ恒久保持するため、
+   * 相談を依頼したメッセージがhistoryのwindowから外れた後続ターンでも
+   * 引き継ぎ状態を失わない(lib/inquiry/humanHandoff.tsのmergeHumanHandoff)。
+   */
   humanHandoff?: import("./humanHandoff").HumanHandoffEvidence | null;
 }
 

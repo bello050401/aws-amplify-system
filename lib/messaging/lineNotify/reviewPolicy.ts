@@ -88,9 +88,19 @@ export function decideReview(input: ReviewInput): ReviewDecision {
     reasons.push("商品の候補が複数あり、1件に絞れていません。");
   }
 
-  if (input.evidence?.humanHandoff?.required) {
-    const carried = input.evidence.humanHandoff.carriedOverFromHistory ? "（過去の会話から継続）" : "";
-    reasons.push(`家具・照明選びの相談は担当者による対応が必要です。${carried}`);
+  // §人間引き継ぎ: 判断時刻・根拠・理由・現在の状態・次に行うことを
+  // 1件の通知の中に必ず含める(後続メッセージで担当者が経緯を追えるように)。
+  const handoff = input.evidence?.humanHandoff ?? null;
+  if (handoff?.required) {
+    const carried = handoff.carriedOverFromHistory ? "（過去の会話から継続）" : "";
+    const decidedAt = handoff.decidedAt ? `判定時刻：${handoff.decidedAt}。` : "";
+    const quotes = handoff.evidenceQuotes.filter((q) => q.trim().length > 0);
+    const evidenceText = quotes.length > 0 ? `根拠：${quotes.join(" / ")}。` : "";
+    const statusText = `状態：${handoff.status === "PENDING_STAFF_REVIEW" ? "担当者確認待ち" : "対応不要"}。`;
+    const nextActionText = handoff.nextAction ? `次のアクション：${handoff.nextAction}` : "";
+    reasons.push(
+      `家具・照明選びの相談は担当者による対応が必要です。${carried} ${decidedAt}${evidenceText}${statusText}${nextActionText}`.trim(),
+    );
   }
 
   return { needsHumanReview: reasons.length > 0, reasons };

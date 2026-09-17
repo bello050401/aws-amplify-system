@@ -437,6 +437,33 @@ function testReviewPolicy() {
     }).needsHumanReview,
     "要確認判定: 商品確認待ちは人が判断する",
   );
+
+  // §人間引き継ぎ: 家具・照明選びの相談は、返信案がREADYでも人が判断する。
+  // 通知には判定時刻・根拠・理由・現在の状態・次のアクションを必ず含める。
+  const handoff = {
+    ...emptyEvidence(),
+    humanHandoff: {
+      required: true,
+      reasons: ["空間全体の相談"],
+      evidenceQuotes: ["部屋全体のコーディネートをお願いしたいです"],
+      carriedOverFromHistory: true,
+      status: "PENDING_STAFF_REVIEW" as const,
+      decidedAt: "2026-09-15T00:00:00.000Z",
+      nextAction: "担当者が間取り・お部屋の状況・ご希望を確認し、提案または来店日程の調整を行ってください。",
+    },
+  };
+  const handoffReview = decideReview({
+    draftStatus: "READY",
+    evidence: handoff,
+    deliveryWindowState: null,
+    generationFailed: false,
+  });
+  assertTrue(handoffReview.needsHumanReview, "要確認判定: 家具・照明選びの相談はREADYでも人が判断する");
+  assertTrue(handoffReview.reasons.some((r) => r.includes("過去の会話から継続")), "要確認判定: 履歴から継続した旨を書く");
+  assertTrue(handoffReview.reasons.some((r) => r.includes("判定時刻：2026-09-15")), "要確認判定: 判定時刻を書く");
+  assertTrue(handoffReview.reasons.some((r) => r.includes("根拠：部屋全体")), "要確認判定: 判定根拠を書く");
+  assertTrue(handoffReview.reasons.some((r) => r.includes("状態：担当者確認待ち")), "要確認判定: 現在の状態を書く");
+  assertTrue(handoffReview.reasons.some((r) => r.includes("次のアクション：")), "要確認判定: 次のアクションを書く");
 }
 
 /**
