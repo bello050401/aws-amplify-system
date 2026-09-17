@@ -31,12 +31,16 @@ export class AmplifyStaticDelivery {
     if(task.isolation!=='worktree'||!task.work_dir||!this.verifier.required||!this.verifier.check(task).passed) throw Error('Independent worktree verification required');
     const head=runGit(task.work_dir,['rev-parse','HEAD']);const clean=runGit(task.work_dir,['status','--porcelain']);
     if(!head.ok||head.stdout.trim()!==task.git_end_commit||!clean.ok||clean.stdout.trim())throw Error('Verified commit must be clean');
-    const tree=runGit(task.work_dir,['ls-tree','-r','--name-only',task.git_end_commit]);
-    if(!tree.ok||tree.stdout.trim()!=='index.html')throw Error('Smoke repository must contain only index.html');
-    const entry=runGit(task.work_dir,['ls-tree',task.git_end_commit,'index.html']);
+    const artifactPath=s.artifactPath||'index.html';
+    if(path.isAbsolute(artifactPath)||artifactPath.split(/[\\/]/).includes('..')||!artifactPath.endsWith('.html'))throw Error('Invalid smoke artifact path');
+    if(s.sourceMode!=='bounded-main'){
+      const tree=runGit(task.work_dir,['ls-tree','-r','--name-only',task.git_end_commit]);
+      if(!tree.ok||tree.stdout.trim()!=='index.html')throw Error('Smoke repository must contain only index.html');
+    }
+    const entry=runGit(task.work_dir,['ls-tree',task.git_end_commit,artifactPath]);
     if(!entry.ok||!entry.stdout.startsWith('100644 '))throw Error('Regular committed HTML required');
-    const html=fs.readFileSync(path.join(task.work_dir,'index.html'));validateSmokeHtml(html.toString('utf8'));
-    return {html,sha256:digest(html),zip:zipOne('index.html',html)};
+    const html=fs.readFileSync(path.join(task.work_dir,artifactPath));validateSmokeHtml(html.toString('utf8'));
+    return {html,sha256:digest(html),zip:zipOne('index.html',html),artifactPath};
   }
   prepare(task){
     const existing=this.row(task.id);if(existing)return existing;

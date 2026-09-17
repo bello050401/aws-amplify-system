@@ -147,6 +147,8 @@ export function validateRuntimeConfig(raw, config) {
       !st.profile
     )
       throw Error("A bounded profile staging target must be a fully specified dedicated static-smoke deployment");
+    if (boundedMain && (st.sourceMode !== "bounded-main" || typeof st.artifactPath !== "string" || !entry.allowedPaths.includes(st.artifactPath)))
+      throw Error("A bounded-main profile must deploy an explicitly allowed static artifact");
   }
   if (!isolatedProfile && !boundedMain) {
     if (!entry.models?.claude?.model || entry.models.claude.model !== config.claude.model)
