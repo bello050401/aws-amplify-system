@@ -13,6 +13,8 @@ BELLO Development Orchestrator の開発経路として、テストタスク受�
 - Amplify deployment job: `2` / `SUCCEED`
 - HTTP: `200`、`E2E検証 成功` と `LINKED` を照合
 
+20枚の追加受入れではsession `orchestrator-e2e-20-20260917-001`、batch `8c5f6973-d54d-4b34-8056-b4940464a7a9` を使用した。同じsessionを再送して同じbatchへ収束し、20 PhotoAsset、processed/thumbnail計40 S3 object、失敗0を確認後、`inv-e2e-020`へリンクして `LINKED` を再読込確認した。
+
 ## 分離境界
 
 専用の Cognito User Pool、オンデマンド DynamoDB Photo/Inventory table、private・versioned S3 bucket、Lambda、HTTP API をCloudFormationで構築した。Amplify側にはrepository、環境変数、実行role、backend接続がなく、既存stagingやproductionから独立している。
@@ -33,8 +35,10 @@ BELLO Development Orchestrator の開発経路として、テストタスク受�
 - Web adapter/UI: 19 passed
 - Listing integration/CSV/ZIP: 10 passed
 - Photo Station client: 5 passed
+- Windows Photo Station domain/copy/SQLite: 7 passed
 - TypeScript: `tsc --noEmit` passed
 - 実AWS: Cognito認証、presigned S3 PUT、SHA-256保存、DynamoDB永続化、在庫リンク、再読込で `LINKED` を確認
+- 実AWS 20枚: 20 Asset / 40 object / duplicate batch 0 / failed 0 / `LINKED`
 - Amplify Hosting: job 2 `SUCCEED`、HTTP 200、表示内容一致
 
 ## 再起動・再読込耐性

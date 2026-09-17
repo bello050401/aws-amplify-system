@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PhotoStation.Application/PhotoStation.Application.csproj" />
+    <Project Path="src/PhotoStation.Desktop/PhotoStation.Desktop.csproj" />
+    <Project Path="src/PhotoStation.Domain/PhotoStation.Domain.csproj" />
+    <Project Path="src/PhotoStation.Infrastructure/PhotoStation.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/PhotoStation.Tests/PhotoStation.Tests.csproj" />
+  </Folder>
+</Solution>
