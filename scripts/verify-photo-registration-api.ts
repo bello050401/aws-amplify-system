@@ -718,6 +718,8 @@ test("link: 二者同時登録は実DynamoDB条件で片方だけ成功する (�
   assert.equal(oks.length, 1, "同時linkは1件だけ成功する");
   assert.equal(errs.length, 1);
   if (!errs[0].ok) assert.equal(errs[0].error, "BATCH_ALREADY_LINKED", "後から読み直した側はBATCH_ALREADY_LINKEDになる");
+  const remaining = await env.repository.listUnregisteredBatches(20, null);
+  assert.equal(remaining.items.length, 0, "紐付け済みbatchは未登録一覧用GSIから外れる");
 });
 
 test("link: 削除済みInventoryへはINVENTORY_NOT_FOUND", async () => {

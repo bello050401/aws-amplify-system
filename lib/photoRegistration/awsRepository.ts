@@ -636,7 +636,8 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
               Update: {
                 TableName: this.tableName,
                 Key: batchKey(decision.batchId),
-                UpdateExpression: "SET inventoryId = :inv, #status = :linked, linkedAt = :now, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, updatedAt = :now",
+                UpdateExpression:
+                  "SET inventoryId = :inv, #status = :linked, linkedAt = :now, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, updatedAt = :now REMOVE GSI1PK, GSI1SK",
                 ConditionExpression: "attribute_not_exists(inventoryId) AND #status = :readyStatus AND attribute_not_exists(openRevisionRevision)",
                 ExpressionAttributeNames: { "#status": "status" },
                 ExpressionAttributeValues: {
