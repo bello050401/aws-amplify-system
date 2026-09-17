@@ -9,7 +9,13 @@ import {
   type MercariCsvImageDownloadLink,
 } from "@/app/actions/listing";
 import { assembleZipFromPlan, downloadZipBlob } from "@/lib/listing/mercari/csv/browserImageZip";
-import { DEFAULT_MERCARI_SHIPPING_DAYS, DEFAULT_MERCARI_SHIPPING_PAYER } from "@/lib/listing/mercari/csv/assembleRow";
+import {
+  DEFAULT_MERCARI_CSV_PRODUCT_STATUS,
+  DEFAULT_MERCARI_SHIPPING_DAYS,
+  DEFAULT_MERCARI_SHIPPING_METHOD,
+  DEFAULT_MERCARI_SHIPPING_PAYER,
+  DEFAULT_SHIPPING_ORIGIN_AREA,
+} from "@/lib/listing/mercari/csv/assembleRow";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 import type { BrandMasterEntry } from "@/lib/listing/mercari/csv/masters";
 import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker";
@@ -21,6 +27,29 @@ const SHIPPING_DAYS_OPTIONS: { value: 1 | 2 | 3 | 4 | 5; label: string }[] = [
   { value: 3, label: "4〜7日で発送" },
   { value: 4, label: "90日以内に発送" },
   { value: 5, label: "8〜14日で発送" },
+];
+
+/**
+ * 配送方法(Mercari公式配送コード、task_1d6008f0c4f2ef3468、2026-09-15
+ * 追加)。実績共通値は1(出品者手配)、実績例外として3(らくらくメルカリ便)
+ * のみ確認されている(クール便/Biz等の新規課金サービス連携は今回対象外
+ * ——指示書§4-C「新規課金サービス連携不要」)。この2値だけを選択肢とし、
+ * 未対応の値(2/4/5/6)をUIから作れないようにする。
+ */
+const SHIPPING_METHOD_OPTIONS: { value: 1 | 3; label: string }[] = [
+  { value: 1, label: "出品者手配" },
+  { value: 3, label: "らくらくメルカリ便" },
+];
+
+/**
+ * CSV出力時の公開設定(task_1d6008f0c4f2ef3468、2026-09-15追加)。
+ * 実アップロード/登録/出品操作は行わない——CSVへどちらの値を書き出す
+ * かの選択のみ(指示書§4-D)。名称に「CSV」を含め、実際の公開操作と
+ * 誤認されないようにする。
+ */
+const CSV_PRODUCT_STATUS_OPTIONS: { value: 1 | 2; label: string }[] = [
+  { value: 1, label: "CSV出力時: 非公開" },
+  { value: 2, label: "CSV出力時: 公開" },
 ];
 
 /**
@@ -68,6 +97,14 @@ const SHIPPING_DAYS_OPTIONS: { value: 1 | 2 | 3 | 4 | 5; label: string }[] = [
  * 「送料設定」で出品者ごとに作成したIDを人が転記する以外に確定手段が
  * 無いため、検索UIではなく自由入力欄として復元する。BELLO側では送料
  * そのものを算出・変更しない(実際の送料額はMercari側の設定に従う)。
+ *
+ * カテゴリ非依存の途中保存(task_1d6008f0c4f2ef3468、2026-09-15是正):
+ * ブランド/発送日数/送料負担/送料ID/発送元/配送方法/CSV公開設定は
+ * カテゴリー未確定でも保存できる——「先にカテゴリーを選択してください」
+ * ガードはすべて撤去した(saveChannelOverrideAction/service.ts側も
+ * mercariCategoryIdを必須にしない)。searchMercariBrandsActionはカテゴリー
+ * IDに依存しない検索のため、ブランドを技術的に先に確定させる必要も
+ * 無い。カテゴリー必須はCSV生成時(validateMercariCsvRow)だけの責務。
  */
 export function MercariCategoryMappingSection({
   inventoryId,
@@ -124,6 +161,33 @@ export function MercariCategoryMappingSection({
     setShippingFeeIdDraft(mapping?.mercariShippingFeeId ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapping?.mercariShippingFeeId]);
+
+  // 発送元/配送方法/CSV公開設定(task_1d6008f0c4f2ef3468、2026-09-15
+  // 追加)。shippingDaysDraft等と同じ理由(表示上もCSV生成時と同じ既定値
+  // を選択済みとして見せる、保存済み値の変化に追随させる)。
+  const [shippingOriginAreaDraft, setShippingOriginAreaDraft] = useState<string>(
+    mapping?.mercariShippingOriginArea ?? DEFAULT_SHIPPING_ORIGIN_AREA,
+  );
+  useEffect(() => {
+    setShippingOriginAreaDraft(mapping?.mercariShippingOriginArea ?? DEFAULT_SHIPPING_ORIGIN_AREA);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapping?.mercariShippingOriginArea]);
+
+  const [shippingMethodDraft, setShippingMethodDraft] = useState<string>(
+    String(mapping?.mercariShippingMethod ?? DEFAULT_MERCARI_SHIPPING_METHOD),
+  );
+  useEffect(() => {
+    setShippingMethodDraft(String(mapping?.mercariShippingMethod ?? DEFAULT_MERCARI_SHIPPING_METHOD));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapping?.mercariShippingMethod]);
+
+  const [csvProductStatusDraft, setCsvProductStatusDraft] = useState<string>(
+    String(mapping?.mercariCsvProductStatus ?? DEFAULT_MERCARI_CSV_PRODUCT_STATUS),
+  );
+  useEffect(() => {
+    setCsvProductStatusDraft(String(mapping?.mercariCsvProductStatus ?? DEFAULT_MERCARI_CSV_PRODUCT_STATUS));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapping?.mercariCsvProductStatus]);
 
   const [imageLinksBusy, setImageLinksBusy] = useState(false);
   const [imageLinksError, setImageLinksError] = useState<string | null>(null);
@@ -187,13 +251,17 @@ export function MercariCategoryMappingSection({
   }, [brandQuery]);
 
   /**
-   * 選んだ側の値だけを差し替え、もう片方(ブランド/カテゴリー)の既存値は
-   * 保持する——カテゴリーを選び直したらブランドが消える、を防ぐ。
+   * 選んだ側の値だけを差し替え、もう片方(ブランド/カテゴリー/発送設定)の
+   * 既存値は保持する——カテゴリーを選び直したらブランドが消える、を防ぐ。
    * overrideTitle/overrideDescription/overridePriceも既存値をそのまま
    * 渡す(saveChannelOverrideはこのAction呼び出し単位で全フィールドを
    * 上書きするため、ここで渡し忘れると黙って消える)。
+   * task_1d6008f0c4f2ef3468: categoryIdは必須ではなくoptional
+   * (nextMapping.categoryIdがundefinedのままsaveChannelOverrideActionへ
+   * 渡ることを許す)——カテゴリー未確定のまま発送設定/ブランドだけを
+   * 先に保存できるようにするため。
    */
-  async function persist(nextMapping: NonNullable<ChannelListingRecord["categoryMapping"]>) {
+  async function persist(nextMapping: Partial<NonNullable<ChannelListingRecord["categoryMapping"]>>) {
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -231,35 +299,46 @@ export function MercariCategoryMappingSection({
       mercariShippingDays: mapping?.mercariShippingDays,
       mercariShippingPayer: mapping?.mercariShippingPayer,
       mercariShippingFeeId: mapping?.mercariShippingFeeId,
+      mercariShippingOriginArea: mapping?.mercariShippingOriginArea,
+      mercariShippingMethod: mapping?.mercariShippingMethod,
+      mercariCsvProductStatus: mapping?.mercariCsvProductStatus,
     });
   }
 
+  /**
+   * task_1d6008f0c4f2ef3468是正: ブランドはカテゴリー未確定でも選択保存
+   * できる(指示書§4-E「ブランド任意検索、カテゴリ未確定でも選択保存
+   * 可能に」)——searchMercariBrandsActionはカテゴリーIDに依存しない
+   * (クエリ文字列だけで検索する)ため、技術的な制約も無い。旧来の
+   * 「先にカテゴリーを選択してください」ガードは撤去した。
+   */
   function selectBrand(entry: BrandMasterEntry) {
-    if (!mapping?.mercariCategoryId) {
-      setError("先にカテゴリーを選択してください（ブランドだけを先に保存すると、カテゴリー未確定のままCSV出力がブロックされ続けます）。");
-      return;
-    }
     void persist({
-      mercariCategoryId: mapping.mercariCategoryId,
-      mercariCategoryName: mapping.mercariCategoryName,
+      mercariCategoryId: mapping?.mercariCategoryId,
+      mercariCategoryName: mapping?.mercariCategoryName,
       mercariBrandId: entry.brandId,
       mercariBrandName: entry.name,
       mercariShippingDays: mapping?.mercariShippingDays,
       mercariShippingPayer: mapping?.mercariShippingPayer,
       mercariShippingFeeId: mapping?.mercariShippingFeeId,
+      mercariShippingOriginArea: mapping?.mercariShippingOriginArea,
+      mercariShippingMethod: mapping?.mercariShippingMethod,
+      mercariCsvProductStatus: mapping?.mercariCsvProductStatus,
     });
     setBrandResults(null);
     setBrandQuery("");
   }
 
   function clearBrand() {
-    if (!mapping?.mercariCategoryId) return;
     void persist({
-      mercariCategoryId: mapping.mercariCategoryId,
-      mercariCategoryName: mapping.mercariCategoryName,
-      mercariShippingDays: mapping.mercariShippingDays,
-      mercariShippingPayer: mapping.mercariShippingPayer,
-      mercariShippingFeeId: mapping.mercariShippingFeeId,
+      mercariCategoryId: mapping?.mercariCategoryId,
+      mercariCategoryName: mapping?.mercariCategoryName,
+      mercariShippingDays: mapping?.mercariShippingDays,
+      mercariShippingPayer: mapping?.mercariShippingPayer,
+      mercariShippingFeeId: mapping?.mercariShippingFeeId,
+      mercariShippingOriginArea: mapping?.mercariShippingOriginArea,
+      mercariShippingMethod: mapping?.mercariShippingMethod,
+      mercariCsvProductStatus: mapping?.mercariCsvProductStatus,
     });
   }
 
@@ -269,28 +348,28 @@ export function MercariCategoryMappingSection({
    * この保存ボタンは「既定値と異なる日数で運用したい商品だけ」明示的に
    * 選び直すためのもの——保存しなくてもCSV出力は既定値でブロックされずに
    * 進む。カテゴリーと違い公式マスタが無く選択肢は固定5値のみなので検索
-   * UIは持たない。カテゴリー未確定のまま保存するとsaveChannelOverrideAction
-   * 自体は通ってしまう(categoryMappingはmercariCategoryId必須の型のため、
-   * 実際には先にカテゴリーが要る)。
+   * UIは持たない。
+   * task_1d6008f0c4f2ef3468是正: カテゴリー未確定でも保存できる
+   * (旧「先にカテゴリーを選択してください」ガードは撤去)——CSV生成時
+   * 必須チェック(validateMercariCsvRow)はcategoryIdだけの責務。
    */
   function saveShippingDays() {
-    if (!mapping?.mercariCategoryId) {
-      setError("先にカテゴリーを選択してください。");
-      return;
-    }
     const parsed = Number(shippingDaysDraft);
     if (![1, 2, 3, 4, 5].includes(parsed)) {
       setError("発送までの日数を選択してください。");
       return;
     }
     void persist({
-      mercariCategoryId: mapping.mercariCategoryId,
-      mercariCategoryName: mapping.mercariCategoryName,
-      mercariBrandId: mapping.mercariBrandId,
-      mercariBrandName: mapping.mercariBrandName,
+      mercariCategoryId: mapping?.mercariCategoryId,
+      mercariCategoryName: mapping?.mercariCategoryName,
+      mercariBrandId: mapping?.mercariBrandId,
+      mercariBrandName: mapping?.mercariBrandName,
       mercariShippingDays: parsed as 1 | 2 | 3 | 4 | 5,
-      mercariShippingPayer: mapping.mercariShippingPayer,
-      mercariShippingFeeId: mapping.mercariShippingFeeId,
+      mercariShippingPayer: mapping?.mercariShippingPayer,
+      mercariShippingFeeId: mapping?.mercariShippingFeeId,
+      mercariShippingOriginArea: mapping?.mercariShippingOriginArea,
+      mercariShippingMethod: mapping?.mercariShippingMethod,
+      mercariCsvProductStatus: mapping?.mercariCsvProductStatus,
     });
   }
 
@@ -306,25 +385,25 @@ export function MercariCategoryMappingSection({
    * 保存済みの送料IDは消さない(再び送料別へ戻した時に入力し直させない
    * ため)——CSV出力時にshippingPayerが1ならassembleRow.tsが送料IDを
    * 出さないので、消さずに残しても実害は無い。
+   * task_1d6008f0c4f2ef3468是正: カテゴリー未確定でも保存できる。
    */
   function saveShippingPayer() {
-    if (!mapping?.mercariCategoryId) {
-      setError("先にカテゴリーを選択してください。");
-      return;
-    }
     const parsed = Number(shippingPayerDraft);
     if (![1, 2].includes(parsed)) {
       setError("配送料の負担を選択してください。");
       return;
     }
     void persist({
-      mercariCategoryId: mapping.mercariCategoryId,
-      mercariCategoryName: mapping.mercariCategoryName,
-      mercariBrandId: mapping.mercariBrandId,
-      mercariBrandName: mapping.mercariBrandName,
-      mercariShippingDays: mapping.mercariShippingDays,
+      mercariCategoryId: mapping?.mercariCategoryId,
+      mercariCategoryName: mapping?.mercariCategoryName,
+      mercariBrandId: mapping?.mercariBrandId,
+      mercariBrandName: mapping?.mercariBrandName,
+      mercariShippingDays: mapping?.mercariShippingDays,
       mercariShippingPayer: parsed as 1 | 2,
-      mercariShippingFeeId: mapping.mercariShippingFeeId,
+      mercariShippingFeeId: mapping?.mercariShippingFeeId,
+      mercariShippingOriginArea: mapping?.mercariShippingOriginArea,
+      mercariShippingMethod: mapping?.mercariShippingMethod,
+      mercariCsvProductStatus: mapping?.mercariCsvProductStatus,
     });
   }
 
@@ -337,21 +416,97 @@ export function MercariCategoryMappingSection({
    * 「送料設定」を作成してからでないと値が存在しないため、先に空欄の
    * まま他の項目を確定させ、後からIDだけを追記する運用を妨げない。
    * 必須チェックはCSV生成時(validateMercariCsvRow)側の責務のまま。
+   * task_1d6008f0c4f2ef3468是正: カテゴリー未確定でも保存できる。
    */
   function saveShippingFeeId() {
-    if (!mapping?.mercariCategoryId) {
-      setError("先にカテゴリーを選択してください。");
-      return;
-    }
     const trimmed = shippingFeeIdDraft.trim();
     void persist({
-      mercariCategoryId: mapping.mercariCategoryId,
-      mercariCategoryName: mapping.mercariCategoryName,
-      mercariBrandId: mapping.mercariBrandId,
-      mercariBrandName: mapping.mercariBrandName,
-      mercariShippingDays: mapping.mercariShippingDays,
-      mercariShippingPayer: mapping.mercariShippingPayer,
+      mercariCategoryId: mapping?.mercariCategoryId,
+      mercariCategoryName: mapping?.mercariCategoryName,
+      mercariBrandId: mapping?.mercariBrandId,
+      mercariBrandName: mapping?.mercariBrandName,
+      mercariShippingDays: mapping?.mercariShippingDays,
+      mercariShippingPayer: mapping?.mercariShippingPayer,
       mercariShippingFeeId: trimmed || undefined,
+      mercariShippingOriginArea: mapping?.mercariShippingOriginArea,
+      mercariShippingMethod: mapping?.mercariShippingMethod,
+      mercariCsvProductStatus: mapping?.mercariCsvProductStatus,
+    });
+  }
+
+  /**
+   * 発送元の地域の保存(task_1d6008f0c4f2ef3468、2026-09-15追加)。
+   * カテゴリー未確定でも保存できる。マスタが無く自由入力のため、
+   * 空文字列での保存は拒否する(偽の値を作らない——未入力のままCSV
+   * 生成側の既定値解決に任せたい場合はここで保存しなければよい)。
+   */
+  function saveShippingOriginArea() {
+    const trimmed = shippingOriginAreaDraft.trim();
+    if (!trimmed) {
+      setError("発送元の地域を入力してください。");
+      return;
+    }
+    void persist({
+      mercariCategoryId: mapping?.mercariCategoryId,
+      mercariCategoryName: mapping?.mercariCategoryName,
+      mercariBrandId: mapping?.mercariBrandId,
+      mercariBrandName: mapping?.mercariBrandName,
+      mercariShippingDays: mapping?.mercariShippingDays,
+      mercariShippingPayer: mapping?.mercariShippingPayer,
+      mercariShippingFeeId: mapping?.mercariShippingFeeId,
+      mercariShippingOriginArea: trimmed,
+      mercariShippingMethod: mapping?.mercariShippingMethod,
+      mercariCsvProductStatus: mapping?.mercariCsvProductStatus,
+    });
+  }
+
+  /**
+   * 配送方法の保存(task_1d6008f0c4f2ef3468、2026-09-15追加)。選択肢は
+   * SHIPPING_METHOD_OPTIONS(1/3のみ)に限定しているため、それ以外の値が
+   * ここへ来ることは無い。カテゴリー未確定でも保存できる。
+   */
+  function saveShippingMethod() {
+    const parsed = Number(shippingMethodDraft);
+    if (![1, 3].includes(parsed)) {
+      setError("配送方法を選択してください。");
+      return;
+    }
+    void persist({
+      mercariCategoryId: mapping?.mercariCategoryId,
+      mercariCategoryName: mapping?.mercariCategoryName,
+      mercariBrandId: mapping?.mercariBrandId,
+      mercariBrandName: mapping?.mercariBrandName,
+      mercariShippingDays: mapping?.mercariShippingDays,
+      mercariShippingPayer: mapping?.mercariShippingPayer,
+      mercariShippingFeeId: mapping?.mercariShippingFeeId,
+      mercariShippingOriginArea: mapping?.mercariShippingOriginArea,
+      mercariShippingMethod: parsed as 1 | 3,
+      mercariCsvProductStatus: mapping?.mercariCsvProductStatus,
+    });
+  }
+
+  /**
+   * CSV出力時の公開設定の保存(task_1d6008f0c4f2ef3468、2026-09-15追加)。
+   * 実際のMercariへの公開/非公開操作は行わない(指示書§4-D)——CSVへ
+   * どちらの値を書き出すかの選択のみ。カテゴリー未確定でも保存できる。
+   */
+  function saveCsvProductStatus() {
+    const parsed = Number(csvProductStatusDraft);
+    if (![1, 2].includes(parsed)) {
+      setError("CSV出力時の公開設定を選択してください。");
+      return;
+    }
+    void persist({
+      mercariCategoryId: mapping?.mercariCategoryId,
+      mercariCategoryName: mapping?.mercariCategoryName,
+      mercariBrandId: mapping?.mercariBrandId,
+      mercariBrandName: mapping?.mercariBrandName,
+      mercariShippingDays: mapping?.mercariShippingDays,
+      mercariShippingPayer: mapping?.mercariShippingPayer,
+      mercariShippingFeeId: mapping?.mercariShippingFeeId,
+      mercariShippingOriginArea: mapping?.mercariShippingOriginArea,
+      mercariShippingMethod: mapping?.mercariShippingMethod,
+      mercariCsvProductStatus: parsed as 1 | 2,
     });
   }
 
@@ -427,7 +582,7 @@ export function MercariCategoryMappingSection({
     <div className="mt-4 border border-gray-200 p-4">
       <p className="mb-1 text-[12px] font-bold text-gray-700">Mercariカテゴリー / ブランド（CSV出力用）</p>
       <p className="mb-2 text-[11px] text-gray-400">
-        ここで選んだ内容はMercariへ自動送信されません——CSV出力(EC準備一覧の「CSVを作成」)で使う項目を、公式マスタから検索して確定するだけです。
+        ここで選んだ内容はMercariへ自動送信されません——CSV出力(EC準備一覧の「CSVを作成」)で使う項目を、公式マスタから検索して確定するだけです。カテゴリー以外の項目は、カテゴリーが未確定のままでも先に選んで保存できます。
       </p>
 
       <div className="mb-3">
@@ -439,7 +594,7 @@ export function MercariCategoryMappingSection({
               <span className="ml-1 font-mono text-[11px] text-gray-400">({mapping.mercariCategoryId})</span>
             </span>
           ) : (
-            <span className="text-amber-700">未確定（CSV出力がブロックされます）</span>
+            <span className="text-amber-700">未確定（最終CSV出力がブロックされます。他の項目は先に保存できます）</span>
           )}
         </p>
         <p className="mt-0.5 text-[11px] text-gray-400">
@@ -525,13 +680,13 @@ export function MercariCategoryMappingSection({
           )}
         </p>
         <p className="mt-0.5 text-[11px] text-gray-400">
-          何も変更しなければ既定値のままCSVへ出力されます。異なる日数で運用したい商品だけ選び直して保存してください。
+          何も変更しなければ既定値のままCSVへ出力されます。異なる日数で運用したい商品だけ選び直して保存してください（カテゴリー未確定でも保存できます）。
         </p>
         <div className="mt-1 flex gap-2">
           <select
             value={shippingDaysDraft}
             onChange={(e) => setShippingDaysDraft(e.target.value)}
-            disabled={busy || !mapping?.mercariCategoryId}
+            disabled={busy}
             className="border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none disabled:opacity-40"
           >
             <option value="">選択してください</option>
@@ -544,7 +699,7 @@ export function MercariCategoryMappingSection({
           <button
             type="button"
             onClick={saveShippingDays}
-            disabled={busy || !mapping?.mercariCategoryId || !shippingDaysDraft}
+            disabled={busy || !shippingDaysDraft}
             className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
           >
             保存
@@ -564,13 +719,13 @@ export function MercariCategoryMappingSection({
           )}
         </p>
         <p className="mt-0.5 text-[11px] text-gray-400">
-          何も変更しなければ既定値のままCSVへ出力されます。送料別で運用したい商品だけ選び直して保存してください。
+          何も変更しなければ既定値のままCSVへ出力されます。送料別で運用したい商品だけ選び直して保存してください（カテゴリー未確定でも保存できます）。
         </p>
         <div className="mt-1 flex gap-2">
           <select
             value={shippingPayerDraft}
             onChange={(e) => setShippingPayerDraft(e.target.value)}
-            disabled={busy || !mapping?.mercariCategoryId}
+            disabled={busy}
             className="border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none disabled:opacity-40"
           >
             <option value="">選択してください</option>
@@ -580,7 +735,7 @@ export function MercariCategoryMappingSection({
           <button
             type="button"
             onClick={saveShippingPayer}
-            disabled={busy || !mapping?.mercariCategoryId || !shippingPayerDraft}
+            disabled={busy || !shippingPayerDraft}
             className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
           >
             保存
@@ -599,28 +754,28 @@ export function MercariCategoryMappingSection({
                 sectionSelect/sectionSummaryヘルパー(xpath contains(., '配送料の負担'))が
                 この段落にも誤ヒットしてstrict modeで複数要素扱いになるのを防ぐため。 */}
             <p className="text-[12px] text-gray-600">
-              送料ID（送料別の場合は必須）:{" "}
+              送料ID（送料別の場合は最終CSVで必須）:{" "}
               {mapping?.mercariShippingFeeId ? (
                 <span className="font-bold text-gray-900">{mapping.mercariShippingFeeId}</span>
               ) : (
-                <span className="text-amber-700">未入力（CSV出力がブロックされます）</span>
+                <span className="text-amber-700">未入力（最終CSV出力がブロックされます）</span>
               )}
             </p>
             <p className="mt-0.5 text-[11px] text-gray-400">
-              Mercari Shops管理画面の「送料設定」で作成した送料IDをそのまま入力してください。BELLO側には送料IDの一覧・マスタが無く、送料額の算出・変更も行いません。
+              Mercari Shops管理画面の「送料設定」で作成した送料IDをそのまま入力してください。BELLO側には送料IDの一覧・マスタが無く、送料額の算出・変更も行いません。空欄のままでも保存でき、後から追記できます。
             </p>
             <div className="mt-1 flex gap-2">
               <input
                 value={shippingFeeIdDraft}
                 onChange={(e) => setShippingFeeIdDraft(e.target.value)}
                 placeholder="Mercari管理画面で確認した送料ID"
-                disabled={busy || !mapping?.mercariCategoryId}
+                disabled={busy}
                 className="w-64 border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none disabled:opacity-40"
               />
               <button
                 type="button"
                 onClick={saveShippingFeeId}
-                disabled={busy || !mapping?.mercariCategoryId}
+                disabled={busy}
                 className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
               >
                 保存
@@ -628,6 +783,119 @@ export function MercariCategoryMappingSection({
             </div>
           </div>
         )}
+      </div>
+
+      <div className="mt-3 border-t border-gray-100 pt-3">
+        <p className="text-[12px] text-gray-600">
+          発送元の地域:{" "}
+          {mapping?.mercariShippingOriginArea ? (
+            <span className="font-bold text-gray-900">{mapping.mercariShippingOriginArea}</span>
+          ) : (
+            <span className="text-gray-500">未設定（既定値「{DEFAULT_SHIPPING_ORIGIN_AREA}」を適用してCSV出力）</span>
+          )}
+        </p>
+        <p className="mt-0.5 text-[11px] text-gray-400">
+          Mercari公式の地域コードをそのまま入力してください（既定は埼玉=jp11）。何も変更しなければ既定値のままCSVへ出力されます。
+        </p>
+        <div className="mt-1 flex gap-2">
+          <input
+            value={shippingOriginAreaDraft}
+            onChange={(e) => setShippingOriginAreaDraft(e.target.value)}
+            placeholder="例: jp11"
+            disabled={busy}
+            className="w-32 border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none disabled:opacity-40"
+          />
+          <button
+            type="button"
+            onClick={saveShippingOriginArea}
+            disabled={busy || !shippingOriginAreaDraft.trim()}
+            className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            保存
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3 border-t border-gray-100 pt-3">
+        <p className="text-[12px] text-gray-600">
+          配送方法:{" "}
+          {mapping?.mercariShippingMethod ? (
+            <span className="font-bold text-gray-900">
+              {SHIPPING_METHOD_OPTIONS.find((o) => o.value === mapping.mercariShippingMethod)?.label ?? mapping.mercariShippingMethod}
+            </span>
+          ) : (
+            <span className="text-gray-500">
+              未設定（既定値「{SHIPPING_METHOD_OPTIONS.find((o) => o.value === DEFAULT_MERCARI_SHIPPING_METHOD)?.label}」を適用してCSV出力）
+            </span>
+          )}
+        </p>
+        <p className="mt-0.5 text-[11px] text-gray-400">
+          何も変更しなければ「出品者手配」のままCSVへ出力されます。らくらくメルカリ便で運用したい商品だけ選び直して保存してください。
+        </p>
+        <div className="mt-1 flex gap-2">
+          <select
+            value={shippingMethodDraft}
+            onChange={(e) => setShippingMethodDraft(e.target.value)}
+            disabled={busy}
+            className="border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none disabled:opacity-40"
+          >
+            <option value="">選択してください</option>
+            {SHIPPING_METHOD_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={saveShippingMethod}
+            disabled={busy || !shippingMethodDraft}
+            className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            保存
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3 border-t border-gray-100 pt-3">
+        <p className="text-[12px] text-gray-600">
+          CSV出力時の公開設定:{" "}
+          {mapping?.mercariCsvProductStatus ? (
+            <span className="font-bold text-gray-900">
+              {CSV_PRODUCT_STATUS_OPTIONS.find((o) => o.value === mapping.mercariCsvProductStatus)?.label ?? mapping.mercariCsvProductStatus}
+            </span>
+          ) : (
+            <span className="text-gray-500">
+              未設定（既定値「{CSV_PRODUCT_STATUS_OPTIONS.find((o) => o.value === DEFAULT_MERCARI_CSV_PRODUCT_STATUS)?.label}」を適用してCSV出力）
+            </span>
+          )}
+        </p>
+        <p className="mt-0.5 text-[11px] text-gray-400">
+          これはCSVへ書き出す値の選択だけで、実際のMercariへの公開/非公開操作はこの画面からは行いません。何も変更しなければ既定値のままCSVへ出力されます。
+        </p>
+        <div className="mt-1 flex gap-2">
+          <select
+            value={csvProductStatusDraft}
+            onChange={(e) => setCsvProductStatusDraft(e.target.value)}
+            disabled={busy}
+            className="border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none disabled:opacity-40"
+          >
+            <option value="">選択してください</option>
+            {CSV_PRODUCT_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={saveCsvProductStatus}
+            disabled={busy || !csvProductStatusDraft}
+            className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            保存
+          </button>
+        </div>
       </div>
 
       <div className="mt-3 border-t border-gray-100 pt-3">

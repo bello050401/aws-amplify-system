@@ -117,6 +117,15 @@ export async function rewriteAsKeigo(params: {
       modelProvider = result.providerId;
       modelName = result.modelId;
     } catch (err) {
+      if (err instanceof Error && err.name === "PaidAIBudgetError") {
+        const text = greeting && !original.includes(greeting) ? `${greeting}\n\n${original}` : original;
+        const check = checkKeigoFidelity({ original, rewritten: text, allowedGreeting: greeting ?? undefined });
+        return { ok: check.ok, text: check.ok ? text : null,
+          greetingApplied: Boolean(greeting) && text.includes(FIRST_REPLY_GREETING.split("\n")[0]),
+          ambiguityNotes: [...ambiguityNotes, "有料AIの予算制限のため無料処理で原文を保持しました。敬語の書き換えは行っていません。送信前に文体を確認してください。"],
+          violations: check.violations, knowledgeTitles: [], modelProvider: null, modelName: null,
+          failureReason: check.ok ? null : "原文保持の無料処理が検査に通りませんでした。手動で確認してください。" };
+      }
       return {
         ok: false,
         text: null,

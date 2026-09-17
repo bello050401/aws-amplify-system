@@ -272,6 +272,21 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         requiredNonEmptyFields: ["title", "introduction"],
       });
     } catch (err) {
+      if (err instanceof Error && err.name === "PaidAIBudgetError") {
+        // 無料処理で確認済みの事実だけを残す。紹介文の完成を装わない。
+        const fallback: ProductPageSections = {
+          title: facts.name, introduction: "", brandSection: "", designerSection: "",
+          featureSection: "", materialSection: "", dimensionsSection: facts.dimensions ?? "",
+          conditionSection: facts.conditionDisclosure ?? "", shippingSection: "",
+        };
+        const description = composeFullDescription(fallback);
+        const check = checkFactSafety({ output: [fallback.title, description].join("\n"), facts,
+          stockQuantity: input.stockQuantity ?? null, sku: input.sku ?? null, maxLength: 4000 });
+        return { ...base, ok: false, sections: check.ok ? fallback : null,
+          fullDescription: check.ok ? description : null, violations: check.violations,
+          modelProvider: null, modelName: null,
+          failureReason: "有料AIの予算制限により、確認済みの商品情報だけを無料で整理しました。紹介文は未作成です。スタッフが内容を確認・補完してください。" };
+      }
       return {
         ...base,
         ok: false,

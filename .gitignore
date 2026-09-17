@@ -46,3 +46,8 @@ scripts/qa-image-processing-harness/dist/
 # Staging E2E: 保存済みのログイン状態はリポジトリ外(%LOCALAPPDATA%\BELLO\playwright)へ
 # 置くが、万一ここへ出力した場合に備えて無視する。中身は生きたCognitoトークン。
 *storage-state*.json
+
+# Mercariブランド/カテゴリマスタのビルド成果物(scripts/generate-mercari-masters-data.cjs
+# がdata/mercari-masters/*.csv(git追跡済み)から毎回再生成する。npm run
+# build/dev/typecheckのpre*フックが自動実行するのでコミット不要)。
+lib/listing/mercari/csv/generated/

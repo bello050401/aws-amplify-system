@@ -1,4 +1,5 @@
 import "server-only";
+import { BudgetedGatewayProvider } from "./budgetedProvider";
 import { AnthropicGatewayProvider } from "./anthropicProvider";
 import { BedrockGatewayProvider } from "./bedrockProvider";
 import { NovaGatewayProvider } from "./novaProvider";
@@ -62,9 +63,9 @@ export function resolveProviderId(
 
 function getProvider() {
   const id = resolveProviderId();
-  if (id === "bedrock") return new BedrockGatewayProvider();
-  if (id === "nova") return new NovaGatewayProvider();
-  return new AnthropicGatewayProvider();
+  if (id === "bedrock") return new BudgetedGatewayProvider(new BedrockGatewayProvider());
+  if (id === "nova") return new BudgetedGatewayProvider(new NovaGatewayProvider());
+  return new BudgetedGatewayProvider(new AnthropicGatewayProvider());
 }
 
 export interface GatewayTextRequest {

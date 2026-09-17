@@ -1,4 +1,5 @@
 import "server-only";
+import { buildFreeReply, canAnswerWithoutAI } from "./freeReply";
 import { generateText } from "@/lib/ai/gateway/gateway";
 import { buildCustomerSafeFacts, type CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
 import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
@@ -40,9 +41,9 @@ import {
   inspectAnswerPlanCoverage,
   type AnswerPlanEvidence,
 } from "./answerPlan";
-import { createDirectUrlProvider, getAgentCoreGatewayUrl, getWebResearchAvailability, researchMissingFacts } from "./research/service";
-import { createAgentCoreSearchProvider } from "./research/agentCoreProvider";
-import { brandsInText, officialDomainsForBrands } from "./research/officialDomains";
+import { createDirectUrlProvider, getWebResearchAvailability, researchMissingFacts } from "./research/service";
+
+import { brandsInText } from "./research/officialDomains";
 import { nameCore } from "./scoring";
 import { extractBaseItemId, extractUrls, isBaseUrl } from "./references";
 import {
@@ -828,40 +829,14 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // 型番だけを同定の手がかりにする。ブランド名を混ぜると、そのブランドの
   // 公式サイトにある**別商品**のページを「対象商品のもの」と誤認する。
   const modelHints = [...new Set([...resolution.references.modelNumbers, ...extractModelHintsFromName(productNameCore)])];
-  const officialDomains = officialDomainsForBrands(brandHints);
 
-  // Web検索(課金対象)の呼び出し回数を数える。Providerが呼ぶたびに増える。
-  let webSearchCallCount = 0;
-  const gatewayUrl = getAgentCoreGatewayUrl();
-  const providers =
-    researchFields.length > 0
-      ? [
-          createDirectUrlProvider(resolution.references.urls),
-          ...(gatewayUrl
-            ? [
-                createAgentCoreSearchProvider({
-                  gatewayUrl,
-                  officialDomains,
-                  onSearch: (info) => {
-                    webSearchCallCount++;
-                    // §32: 何を何回検索したかは残す。顧客本文は残さない。
-                    console.info(
-                      "[inquiryReply] web search",
-                      JSON.stringify({
-                        conversationId: request.conversationId,
-                        scope: info.scope,
-                        query: info.query,
-                        resultCount: info.resultCount,
-                        callCount: webSearchCallCount,
-                      }),
-                    );
-                  },
-                }),
-              ]
-            : []),
-        ]
-      : [];
 
+  // Paid external search has no verified per-call ceiling. Keep the existing
+  // official direct-URL reader, and do not route around the common AI budget.
+  const webSearchCallCount = 0;
+  const providers = researchFields.length > 0
+    ? [createDirectUrlProvider(resolution.references.urls)]
+    : [];
   const research = await researchMissingFacts({
     fields: researchFields,
     inventoryId: resolution.resolved?.inventoryId ?? null,
@@ -1202,9 +1177,14 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   let modelProvider: string | null = null;
   let modelName: string | null = null;
 
+  let freeOnly = canAnswerWithoutAI(answerPlan, trustedProductFacts, appliedRules.length > 0 || !!request.additionalContext || request.history.length > 0, messageText);
   for (let attempt = 1; attempt <= REPLY_MAX_GENERATION_ATTEMPTS; attempt++) {
     let output: string;
     try {
+      if (freeOnly) {
+        output = buildFreeReply(answerPlan, trustedProductFacts, true);
+        evidence.generationRoute = "free_known_facts";
+      } else {
       const result = await generateText({
         task: "CUSTOMER_REPLY_DRAFT",
         systemPrompt: attempt === 1 ? systemPrompt : `${systemPrompt}\n\n【前回の出力で検出された問題(必ず直すこと)】\n${lastViolations.join("\n")}`,
@@ -1215,8 +1195,13 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       output = result.output.trim();
       modelProvider = result.providerId;
       modelName = result.modelId;
+      }
     } catch (err) {
-      return finish(failed(err instanceof Error ? err.message : "AIの呼び出しに失敗しました。", evidence, intents, unresolved));
+      if (!(err instanceof Error) || err.name !== "PaidAIBudgetError") return finish(failed("AIの呼び出しに失敗しました。", evidence, intents, unresolved));
+      freeOnly = true;
+      output = buildFreeReply(answerPlan, trustedProductFacts);
+      evidence.generationRoute = "free_budget_fallback";
+      unresolved.push({ field: "返信案", reason: "有料AIを停止しているため、担当者の確認が必要です。" });
     }
 
     const validation = validateReplyDraft({
@@ -1302,6 +1287,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
         internalLeaks,
         ungroundedPromises,
       });
+      if (freeOnly) break;
       continue;
     }
     lastViolations = validation.violations.map((v) => `- ${v.detail}`);
@@ -1310,11 +1296,10 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     console.warn("[inquiryReply] 生成結果が検査に不合格", {
       attempt,
       codes: validation.violations.map((v) => v.code),
-      conversationId: request.conversationId,
       // 生成文は残さない(§32)。ただしローカルの調査時だけは中身を見たい ——
       // 何を書いて弾かれたのか分からないと、プロンプトを直せない。
       // 明示的にopt-inした場合に限る(本番では立たない)。
-      ...(process.env.INQUIRY_DEBUG_OUTPUT === "true" ? { output } : {}),
+
     });
   }
 

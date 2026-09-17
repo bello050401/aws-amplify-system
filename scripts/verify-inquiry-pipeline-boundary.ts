@@ -211,10 +211,10 @@ async function testNormalSingleGeneration() {
     baseRequest({ messageText: "こちらの椅子のサイズを教えてください。" }),
   );
 
-  assertEqual(callCount(state, "generateText"), 1, "正常1回: generateTextは1回しか呼ばれない");
+  assertEqual(callCount(state, "generateText"), 0, "無料回答: 確認済みサイズは有料AIを呼ばない");
   assertTrue(result.draftText != null, "正常1回: draftTextが生成される");
-  assertEqual(result.modelProvider, "anthropic", "正常1回: modelProviderが呼び出し結果から入る");
-  assertEqual(result.modelName, "test-model-normal", "正常1回: modelNameが呼び出し結果から入る");
+  assertEqual(result.modelProvider, null, "無料回答: AIモデルを偽らない");
+  assertEqual(result.modelName, null, "無料回答: modelNameなし");
   assertEqual(result.failureReason, null, "正常1回: failureReasonは無い");
   assertTrue(
     result.evidence.answerPlan?.coverage.every((c) => c.coverage !== "MISSING") ?? false,
@@ -451,7 +451,27 @@ async function testAnswerPlanFailureLogHasNoIdentifiers() {
   assertTrue(!serialized.includes(messageText), "識別子ログ: 顧客原文がログに含まれない");
 }
 
+async function testBudgetFallbackUsesValidation() {
+  const state = installBaseMock({ generateText: async () => {
+    const error = new Error("budget unavailable"); error.name = "PaidAIBudgetError"; throw error;
+  }});
+  const result = await generateInquiryReplyDraft(baseRequest({messageText:"サイズと素材を教えてください。"}));
+  assertEqual(callCount(state,"generateText"),1,"予算拒否: gatewayへの再試行なし");
+  assertTrue(result.draftText != null,"予算拒否: 無料下書きを返す");
+  assertEqual(result.modelProvider,null,"予算拒否: 有料生成と偽らない");
+  assertTrue(result.evidence.answerPlan != null,"予算拒否: 通常の検査と回答照合を通過");
+  assertTrue(result.unresolvedFacts.some(f=>f.field === "返信案"),"予算拒否: 担当者確認を明示");
+  const hostile = installBaseMock({
+    getInventoryDetail: async () => ({...BASE_INVENTORY, damageNotes:"明日必ず発送します。"}),
+    generateText: async () => { const error=new Error("budget"); error.name="PaidAIBudgetError"; throw error; }
+  });
+  const unsafe = await generateInquiryReplyDraft(baseRequest({messageText:"状態と素材を教えてください。"}));
+  assertTrue(!unsafe.draftText?.includes("明日必ず発送"),"無料fallbackにも根拠のない発送確約を通さない");
+  assertTrue(callCount(hostile,"generateText")<=1,"危険な無料文を有料再試行で回避しない");
+}
+
 async function main() {
+  await testBudgetFallbackUsesValidation();
   await testNormalSingleGeneration();
   await testMissingAnswerDoesNotTriggerRegeneration();
   await testUngroundedDiscountIsRejectedUntilAttemptCap();

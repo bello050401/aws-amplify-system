@@ -6,6 +6,8 @@ import type { ReplyRuleRecord } from "@/lib/inquiry/replyRuleSelection";
 import type { NotificationDeliveryRecord } from "@/lib/messaging/lineNotify/deliveryStore";
 import { InventoryHeader } from "../../InventoryHeader";
 import { MessagesCenter } from "./MessagesCenter";
+import { Suspense } from "react";
+import { AIBudgetSummary } from "./AIBudgetSummary";
 
 export const metadata = { title: "メッセージ | BELLO 在庫管理" };
 
@@ -78,6 +80,7 @@ export default async function MessagesPage() {
           </h1>
         }
       />
+      {role === "ADMIN" && <Suspense fallback={<p className="px-6 text-sm">AI予算を確認中…</p>}><AIBudgetSummary /></Suspense>}
       <MessagesCenter
         isAdmin={role === "ADMIN"}
         notifyStatus={notifyStatus}

@@ -972,6 +972,21 @@ function assertValidChannelOverrideInput(channel: ListingChannel, input: Channel
     if (mapping.mercariShippingFeeId !== undefined && (typeof mapping.mercariShippingFeeId !== "string" || mapping.mercariShippingFeeId.trim() === "")) {
       throw new Error("送料IDの値が不正です。");
     }
+    // task_1d6008f0c4f2ef3468(2026-09-15追加): 発送元/配送方法/CSV公開
+    // 設定も、上のmercariShippingDays等と同じ理由(Server Actionは誰でも
+    // 任意の値で直接叩ける)でサーバー側でも範囲を確認する。カテゴリー
+    // 確定を要求しないのと同様、これらもカテゴリー未確定のまま保存できる
+    // ——ここでの検証は値そのものの型/範囲だけで、他フィールドとの
+    // 組み合わせは問わない。
+    if (mapping.mercariShippingOriginArea !== undefined && (typeof mapping.mercariShippingOriginArea !== "string" || mapping.mercariShippingOriginArea.trim() === "")) {
+      throw new Error("発送元の地域の値が不正です。");
+    }
+    if (mapping.mercariShippingMethod !== undefined && ![1, 2, 3, 4, 5, 6].includes(mapping.mercariShippingMethod)) {
+      throw new Error("配送方法の値が不正です。");
+    }
+    if (mapping.mercariCsvProductStatus !== undefined && ![1, 2].includes(mapping.mercariCsvProductStatus)) {
+      throw new Error("CSV公開設定の値が不正です。");
+    }
   }
   if (input.overridePrice != null && (!Number.isInteger(input.overridePrice) || input.overridePrice <= 0)) {
     throw new Error("価格は正の整数で入力してください。");

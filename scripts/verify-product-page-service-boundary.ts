@@ -48,6 +48,9 @@ registerHooks({
     // と同じ境界)。generateProductPage()自身・prompt.ts・introValidator.ts・
     // factSafety.ts・facts.ts はすべて本物のまま実行する。
     if (context.parentURL?.endsWith("/lib/ai/gateway/gateway.ts")) {
+      // These tests isolate response quality/usage logging with synthetic providers.
+      // Real budget denial/concurrency/provider bounds run in dedicated budget tests.
+      if (specifier === "./budgetedProvider") return { url: "data:text/javascript,export class BudgetedGatewayProvider { constructor(inner) { return inner; } }", shortCircuit: true };
       if (specifier === "./anthropicProvider") return { url: PROVIDER_MOCK_URL, shortCircuit: true };
       if (specifier === "./bedrockProvider") return { url: PROVIDER_MOCK_URL, shortCircuit: true };
       if (specifier === "./novaProvider") return { url: PROVIDER_MOCK_URL, shortCircuit: true };

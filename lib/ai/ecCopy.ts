@@ -188,7 +188,15 @@ export async function generateListingCopy(input: ListingCopyGenerationInput): Pr
   let lastViolations = "";
 
   for (let attempt = 1; attempt <= FACT_SAFETY_MAX_ATTEMPTS; attempt++) {
-    const candidate = await generateListingCopyOnce(withStyle);
+    let candidate: ListingCopyResult;
+    try {
+      candidate = await generateListingCopyOnce(withStyle);
+    } catch (err) {
+      if (err instanceof Error && err.name === "PaidAIBudgetError") {
+        throw new Error("有料AIの予算制限により商品紹介文は未作成です。既存の商品情報・コンディションを保持し、スタッフが手動で下書きを作成してください。");
+      }
+      throw err;
+    }
 
     // description と conditionText の両方を検査する —— どちらも顧客の目に触れる。
     const checked = checkFactSafety({
@@ -309,6 +317,7 @@ export function buildReplyUserPrompt(input: ReplyDraftInput): string {
 
 /** Strangler Pattern(上のgenerateListingCopyと同じ理由) — 入出力(ReplyDraftInput→string)は不変、内部だけgateway経由に差し替え。 */
 export async function generateReplyDraft(input: ReplyDraftInput): Promise<string> {
+  try {
   const result = await generateText({
     task: "CUSTOMER_REPLY_DRAFT",
     systemPrompt: buildReplySystemPrompt(),
@@ -322,4 +331,10 @@ export async function generateReplyDraft(input: ReplyDraftInput): Promise<string
     },
   });
   return result.output;
+  } catch (err) {
+    if (err instanceof Error && err.name === "PaidAIBudgetError") {
+      return "お問い合わせありがとうございます。いただいた内容を確認のうえ、改めてご案内いたします。";
+    }
+    throw err;
+  }
 }

@@ -369,6 +369,96 @@ async function main() {
   assertTrue(baseReloaded?.channel === "BASE" && baseReloaded?.overrideTitle === "BASE用タイトル", "BASE側を再取得してもBASE自身の保存値がそのまま返る");
   assertTrue(e2eReadBoundaryLeaks.length === 0, `channel分離の確認までSDK到達ゼロ(検出内訳: ${JSON.stringify(e2eReadBoundaryLeaks.map((l) => `${l.model}.${l.op}`))})`);
 
+  // ── 11. task_1d6008f0c4f2ef3468(2026-09-15追加): ブランド先行保存
+  //        (カテゴリー未確定のまま)、発送元/配送方法/CSV公開設定の
+  //        独立保存と既定値/実績例外の検証 ──────────────────────────
+  e2eReadBoundaryLeaks.length = 0;
+  const { E2E_MERCARI_FURNITURE_PICKER_ID } = await import("../lib/listing/e2eFixtures");
+  const FRESH_ID = E2E_MERCARI_FURNITURE_PICKER_ID;
+
+  const brandFirst = await saveChannelOverride(
+    FRESH_ID,
+    "MERCARI_SHOPS",
+    { categoryMapping: { mercariBrandId: "b-001", mercariBrandName: "IKEA" }, overrideTitle: null, overrideDescription: null, overridePrice: null },
+    "e2e-verify@example.com",
+  );
+  assertTrue(brandFirst.categoryMapping?.mercariBrandId === "b-001", "カテゴリー未確定のままブランド先行保存が成功する");
+  assertTrue(!brandFirst.categoryMapping?.mercariCategoryId, "ブランド先行保存直後もcategoryIdは未確定のまま");
+
+  const originMethodStatus = await saveChannelOverride(
+    FRESH_ID,
+    "MERCARI_SHOPS",
+    {
+      categoryMapping: {
+        mercariBrandId: brandFirst.categoryMapping?.mercariBrandId,
+        mercariBrandName: brandFirst.categoryMapping?.mercariBrandName,
+        mercariShippingOriginArea: "jp13",
+        mercariShippingMethod: 3,
+        mercariCsvProductStatus: 1,
+      },
+      overrideTitle: null,
+      overrideDescription: null,
+      overridePrice: null,
+    },
+    "e2e-verify@example.com",
+  );
+  assertTrue(originMethodStatus.categoryMapping?.mercariShippingOriginArea === "jp13", "発送元の独立保存(カテゴリー未確定)が成功する");
+  assertTrue(originMethodStatus.categoryMapping?.mercariShippingMethod === 3, "配送方法の実績例外3(らくらくメルカリ便)を独立保存できる");
+  assertTrue(originMethodStatus.categoryMapping?.mercariCsvProductStatus === 1, "CSV公開設定の独立保存が成功する");
+  assertTrue(originMethodStatus.categoryMapping?.mercariBrandId === "b-001", "発送元等の保存後もブランドが保持される(既存フィールドを失わないpatch/merge)");
+
+  const reloadedFresh = await getChannelListing(FRESH_ID, "MERCARI_SHOPS");
+  assertTrue(
+    reloadedFresh?.categoryMapping?.mercariShippingOriginArea === "jp13" &&
+      reloadedFresh?.categoryMapping?.mercariShippingMethod === 3 &&
+      reloadedFresh?.categoryMapping?.mercariCsvProductStatus === 1 &&
+      reloadedFresh?.categoryMapping?.mercariBrandId === "b-001",
+    "再読込しても発送元/配送方法/CSV公開設定/ブランドが保持される",
+  );
+
+  // カテゴリーを後付けしても既に保存した値が保持される。
+  const categoryAfter = await saveChannelOverride(
+    FRESH_ID,
+    "MERCARI_SHOPS",
+    {
+      categoryMapping: {
+        ...reloadedFresh?.categoryMapping,
+        mercariCategoryId: KNOWN_CATEGORY_ID,
+        mercariCategoryName: KNOWN_CATEGORY_NAME,
+      },
+      overrideTitle: null,
+      overrideDescription: null,
+      overridePrice: null,
+    },
+    "e2e-verify@example.com",
+  );
+  assertTrue(categoryAfter.categoryMapping?.mercariCategoryId === KNOWN_CATEGORY_ID, "カテゴリー後付け保存が成功する");
+  assertTrue(
+    categoryAfter.categoryMapping?.mercariShippingOriginArea === "jp13" && categoryAfter.categoryMapping?.mercariShippingMethod === 3,
+    "カテゴリー後付け後も先に保存した発送元/配送方法が失われない",
+  );
+
+  const freshRow = await buildExportRowForInventory(FRESH_ID);
+  assertTrue(freshRow.ok === true, "全項目確定後のCSV行組み立てが成功する");
+  if (freshRow.ok) {
+    assertTrue(freshRow.fields.shippingOriginArea === "jp13", "CSV行のshippingOriginAreaが保存値と一致する");
+    assertTrue(freshRow.fields.shippingMethod === 3, "CSV行のshippingMethodが実績例外(3)と一致する");
+    assertTrue(freshRow.fields.productStatus === 1, "CSV行のproductStatusが保存値(1=非公開)と一致する");
+  }
+  assertTrue(e2eReadBoundaryLeaks.length === 0, `新規フィールド確認までSDK到達ゼロ(検出内訳: ${JSON.stringify(e2eReadBoundaryLeaks.map((l) => `${l.model}.${l.op}`))})`);
+
+  // 既定値(無操作)確認: 発送元/配送方法/CSV公開設定を一度も保存しない
+  // 商品はDEFAULT_SHIPPING_ORIGIN_AREA/DEFAULT_MERCARI_SHIPPING_METHOD/
+  // DEFAULT_MERCARI_CSV_PRODUCT_STATUSがCSV行に適用される
+  // (task_1d6008f0c4f2ef3468、実績531件の共通値採用指示)。
+  const defaultsRow = await buildExportRowForInventory(EDIT_ID);
+  assertTrue(defaultsRow.ok === true, "既存商品(EDIT_ID)のCSV行組み立てが成功する(既定値確認用)");
+  if (defaultsRow.ok) {
+    assertTrue(defaultsRow.fields.shippingOriginArea === "jp11", "発送元は未設定なら既定値jp11が適用される");
+    assertTrue(defaultsRow.fields.shippingMethod === 1, "配送方法は未設定なら既定値1(出品者手配)が適用される");
+    assertTrue(defaultsRow.fields.productStatus === 2, "CSV公開設定は未設定なら既定値2(公開)が適用される");
+  }
+
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);
 }
