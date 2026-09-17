@@ -23,7 +23,6 @@ const waiting = [
   "CANCELLED",
 ];
 export const protectedActions = new Set([
-  "production_deploy",
   "production_data",
   "destructive_migration",
   "major_iam",
@@ -32,7 +31,6 @@ export const protectedActions = new Set([
   "real_listing",
   "zaico_production",
   "billing",
-  "production_rollback",
 ]);
 export function installEcoSchema(store) {
   store.transaction(() => {

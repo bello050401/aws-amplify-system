@@ -8,9 +8,9 @@ export function requestOwner(todo){
   // Categories alone are unreliable: legacy producers called ordinary Git work "approval".
   if(['auth','mfa','oauth','paid_action','destructive_action'].includes(todo.category))return 'human';
   if(/MFA|OAuth|ログイン|再認証|SSO|資格情報.*登録|固定IP.*登録|認証情報.*(?:入力|取得|設定)|課金|購入|支払/i.test(title))return 'human';
-  if(/(?:production|本番|mainブランチ).*(?:deploy|デプロイ|反映|公開|削除|更新|マージ)|(?:deploy|デプロイ|削除|大量更新).*(?:production|本番)|破壊的|(?:IAM|S3|Cognito).*(?:権限|ポリシー|新設|作成|変更|削除)|(?:実EC出品|実出品|実注文)|ZAICO.*(?:本番|同期実行|書き込)|(?:権限|ポリシー).*(?:IAM|S3|Cognito)/i.test(text))return 'human';
+  if(/(?:production|本番).*(?:データ|DB).*(?:削除|大量更新|破壊|移行)|(?:削除|大量更新|破壊).*(?:production|本番).*(?:データ|DB)|破壊的|(?:IAM|S3|Cognito).*(?:権限拡大|広範|全体|削除|破壊)|(?:実EC出品|実出品|実注文)|ZAICO.*(?:本番|同期実行|書き込)|(?:権限拡大|広範).*(?:IAM|S3|Cognito)|(?:MFA|OAuth|ログイン|CAPTCHA)|課金/i.test(text))return 'human';
   if(todo.kind==='manual_review')return 'later'; // An explicit manual-review selection is not an automatic acceptance.
-  if(/git|commit|コミット|cherry.pick|merge|マージ|worktree|テスト|検証|typecheck|tsc|lint|build|playwright|ログ確認|再試行|retry|軽微|ブラウザ|staging|確認済み|自動修正|型検査|ファイル.*照合/i.test(title))return 'ai';
+  if(/git|commit|コミット|cherry.pick|merge|マージ|worktree|テスト|検証|typecheck|tsc|lint|build|playwright|ログ確認|再試行|retry|軽微|ブラウザ|staging|production deploy|本番(?:へ)?(?:デプロイ|反映|公開)|mainブランチ反映|確認済み|自動修正|型検査|ファイル.*照合/i.test(title))return 'ai';
   return 'later';
 }
 export function planTodos(todos,tasks,{currentTaskId=null}={}){

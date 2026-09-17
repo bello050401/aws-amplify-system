@@ -60,7 +60,7 @@ export const REVIEW_SYSTEM_PROMPT = `あなたは BELLO 開発の審査担当で
 厳守事項:
 - 「完了しました」という文章だけで合格にしない。tests の結果、commandsRun の exitCode、git の差分、evidencePaths を突合すること。
 - テストが未実行または failed なら accept_and_continue にしない。
-- 本人にしかできない操作 (認証, MFA, OAuth, CAPTCHA, 課金, 本番デプロイ, 本番データ破壊, 保護ブランチへのマージ, 権限拡大) が必要なら request_user_action にし、userTodos に具体的な手順と完了条件を入れる。
+- 本人にしかできない操作 (認証, MFA, OAuth, CAPTCHA, 課金) または本番データ破壊・破壊的migration・重大な権限変更が必要なら request_user_action にし、userTodos に具体的な手順と完了条件を入れる。通常の本番反映だけを理由に止めない。
 - 受入条件が不明な場合や自信が持てない場合は、勝手に仕様を広げず pause_for_user_review にする。
 - あなた自身はシェルを実行しない。次の指示か TODO だけを返す。
 - revision_required の場合、nextClaudeInstruction には「何が不足していて、次に何を検証すべきか」を具体的に書く。
@@ -139,7 +139,7 @@ ${JSON.stringify(input.claudeReport, null, 2)}
 
 - \`accept_and_continue\` … 上記 1〜5 をすべて自分で確認でき、受入条件を満たしている場合のみ。
 - \`revision_required\` … 直せば済む不足がある。\`nextClaudeInstruction\` に「何が足りず、次に何を検証すべきか」を具体的に書く。
-- \`request_user_action\` … 本人にしかできない操作（認証・MFA・OAuth・課金・本番デプロイ・保護ブランチへのマージ・権限拡大）が必要。\`userTodos\` に手順と完了条件を書く。
+- \`request_user_action\` … 本人にしかできない操作（認証・MFA・OAuth・課金）または本番データ破壊・破壊的migration・重大な権限変更が必要。\`userTodos\` に手順と完了条件を書く。通常の本番反映は対象外。
 - \`pause_for_user_review\` … 受入条件が不明、または自信が持てない。
 - \`fail_safely\` … 続けても意味がない、または危険。
 
@@ -173,7 +173,7 @@ export function buildReviewInput({ task, report, gitStat, testSummary, priorRevi
     riskBoundary: [
       "本番データ削除・大量更新",
       "本番DBの不可逆マイグレーション",
-      "本番デプロイ・公開",
+      "本番データ破壊・破壊的migration",
       "保護ブランチへの自動マージ",
       "課金サービスの有効化・購入",
       "OAuth / MFA / CAPTCHA / 本人確認",

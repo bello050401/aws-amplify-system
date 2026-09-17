@@ -10,7 +10,7 @@
     contextCache: "読込要約の再利用",
     rereadPrevention: "同じファイルの再読込を抑える",
     stagingAutoDeploy: "検証環境へ自動反映",
-    productionApproval: "本番反映は人間の承認が必要（固定）",
+    productionApproval: "不可逆・破壊的な本番変更は人間の承認が必要（固定）",
   };
   const TIERS = [
     ["economy", "economy（軽い定型作業）"],
