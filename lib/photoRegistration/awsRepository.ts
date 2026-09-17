@@ -34,7 +34,6 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
-  allocatePhotoAssetId,
   assetClientIdempotencyKey,
   assetHashIdempotencyKey,
   assetKey,
