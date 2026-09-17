@@ -489,7 +489,7 @@ export function createServiceBindings({
   }
 
   function prepareTask(task, input) {
-    if (task.repo_path !== profile.repoPath) throw Error("Task repository does not match the connected profile");
+    if (path.resolve(task.repo_path) !== path.resolve(profile.repoPath)) throw Error("Task repository does not match the connected profile");
     if (!["system", "user_ui"].includes(task.source)) throw Error("Unapproved task source for a cooperative run");
     // A caller-supplied profileId is only ever a *confirmation* of which profile
     // it expects to run against; it is never a selector (SUPPORTED_PROFILE_ID is
