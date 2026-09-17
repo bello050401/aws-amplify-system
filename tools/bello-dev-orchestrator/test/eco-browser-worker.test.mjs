@@ -653,7 +653,7 @@ test("assertIsolated (via safetyGate) flags a real change outside allowedPaths, 
   }
 });
 
-test("assertIsolated rejects a task whose repo_path is not the connected static-only profile repo", async () => {
+test("assertIsolated rejects a task whose repo_path is not the connected bounded profile repo", async () => {
   const h = await buildHarnessWithRuntime();
   try {
     const bindings = createServiceBindings({
@@ -679,7 +679,7 @@ test("assertIsolated rejects a task whose repo_path is not the connected static-
       },
     });
     assert.equal(gate.allowed, false);
-    assert.match(gate.reason, /static-only profile/);
+    assert.match(gate.reason, /bounded profile/);
   } finally {
     h.cleanup();
   }
