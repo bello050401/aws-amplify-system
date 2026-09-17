@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { listInventorySimpleSearch } from "@/lib/inventory/queries";
+import { listInventorySimpleSearch, listStatuses } from "@/lib/inventory/queries";
 import {
   getPhotoRegistrationWebAdapter,
   getWebTrustedClaims,
@@ -212,7 +212,19 @@ export interface InventoryCandidateRow {
   sku: string;
   displayId: string;
   name: string;
+  statusId: string | null;
+  statusLabel: string;
+  statusPriority: number;
+  quantity: number;
+  unit: string | null;
+  plannedSalePrice: number | null;
+  locationId: string | null;
+  note: string | null;
+  imageStorageKey: string | null;
+  updatedAt: string;
 }
+
+const PHOTO_LINK_STATUS_PRIORITY = ["撮影待ち", "出品待ち", "補修待ち"] as const;
 
 /**
  * link先候補の検索は既存Inventoryシステム (lib/inventory/queries.ts) を
@@ -225,10 +237,30 @@ export async function searchInventoryCandidatesAction(query: string): Promise<{ 
   const role = await getInventoryRole();
   if (!role || role === "VIEWER") return { ok: false, message: "この操作を行う権限がありません。" };
   const trimmed = query.trim();
-  if (trimmed.length === 0) return { ok: true, items: [] };
   try {
-    const page = await listInventorySimpleSearch({ q: trimmed }, { offset: 0, limit: 20 });
-    return { ok: true, items: page.items.map((row) => ({ id: row.id, sku: row.sku, displayId: row.displayId, name: row.name })) };
+    const statuses = await listStatuses();
+    const statusById = new Map(statuses.map((status) => [status.id, status]));
+    const priorityOf = (statusId: string | null) => {
+      const label = statusId ? statusById.get(statusId)?.label : undefined;
+      const index = label ? PHOTO_LINK_STATUS_PRIORITY.indexOf(label as (typeof PHOTO_LINK_STATUS_PRIORITY)[number]) : -1;
+      return index < 0 ? PHOTO_LINK_STATUS_PRIORITY.length : index;
+    };
+    const preferredStatuses = statuses.filter((status) => PHOTO_LINK_STATUS_PRIORITY.includes(status.label as (typeof PHOTO_LINK_STATUS_PRIORITY)[number]));
+    const rows = trimmed
+      ? (await listInventorySimpleSearch({ q: trimmed }, { offset: 0, limit: 40 })).items
+      : (await Promise.all(preferredStatuses.map((status) => listInventorySimpleSearch({ statusId: status.id }, { offset: 0, limit: 20 })))).flatMap((page) => page.items);
+    const items = [...new Map(rows.map((row) => [row.id, row])).values()]
+      .sort((a, b) => priorityOf(a.statusId) - priorityOf(b.statusId) || b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, 40)
+      .map((row) => ({
+        id: row.id, sku: row.sku, displayId: row.displayId, name: row.name,
+        statusId: row.statusId,
+        statusLabel: row.statusId ? statusById.get(row.statusId)?.label ?? "状態不明" : "状態未設定",
+        statusPriority: priorityOf(row.statusId), quantity: row.quantity, unit: row.unit,
+        plannedSalePrice: row.plannedSalePrice, locationId: row.locationId, note: row.note,
+        imageStorageKey: row.mainImageThumbnailKey, updatedAt: row.updatedAt,
+      }));
+    return { ok: true, items };
   } catch (error) {
     console.warn("[searchInventoryCandidatesAction] failed", { error: error instanceof Error ? error.name : "unknown" });
     return { ok: false, message: "在庫の検索に失敗しました。" };
