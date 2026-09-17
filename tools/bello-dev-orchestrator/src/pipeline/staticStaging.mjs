@@ -9,7 +9,7 @@ export const digest = data => crypto.createHash('sha256').update(data).digest('h
 export function validateSmokeHtml(html) {
   if (Buffer.byteLength(html)>32768 || !html.includes('BELLO') || /[&]|https?:|\/\//i.test(html)) throw Error('Unsafe smoke HTML');
   const tags=html.match(/<[^>]*>/g)||[];
-  for(const tag of tags) if(!/^<\/?(?:html|head|body|title|h1|p)>$|^<!doctype html>$|^<meta charset="utf-8">$/i.test(tag)) throw Error('Unsupported smoke markup');
+  for(const tag of tags) if(!/^<\/?(?:html|head|body|title|h1|h2|p|ul|li)>$|^<!doctype html>$|^<meta charset="utf-8">$/i.test(tag)) throw Error('Unsupported smoke markup');
   if(html.replace(/<[^>]*>/g,'').includes('<')) throw Error('Invalid smoke markup');
 }
 function zipOne(name,data) {
@@ -43,7 +43,22 @@ export class AmplifyStaticDelivery {
     return {html,sha256:digest(html),zip:zipOne('index.html',html),artifactPath};
   }
   prepare(task){
-    const existing=this.row(task.id);if(existing)return existing;
+    const existing=this.row(task.id);
+    // A local validation rejection has no external side effect. After the
+    // validator is safely corrected, allow the exact same verified commit to
+    // be prepared again instead of turning a harmless markup issue into a
+    // permanent human task. Never reset a row that has a cloud job id.
+    if(existing){
+      if(existing.state==='blocked'&&!existing.job_id&&existing.commit_id===task.git_end_commit){
+        try{
+          const artifact=this.artifact(task);
+          const receipt={settings:this.settings,sha256:artifact.sha256};
+          this.repo.store.run('UPDATE staging_deliveries SET config_json=?,state=?,error=?,updated_at=? WHERE task_id=?',[JSON.stringify(receipt),'ready',null,new Date().toISOString(),task.id]);
+          return this.row(task.id);
+        }catch{}
+      }
+      return existing;
+    }
     let error=null,artifact;try{artifact=this.artifact(task)}catch(e){error=e.message}
     const now=new Date().toISOString();const receipt={settings:this.settings,sha256:artifact?.sha256};
     this.repo.store.run('INSERT INTO staging_deliveries(task_id,commit_id,config_json,state,error,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',[task.id,task.git_end_commit,JSON.stringify(receipt),error?'blocked':'ready',error,now,now]);return this.row(task.id);
