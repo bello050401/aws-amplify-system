@@ -28,6 +28,7 @@ export class EcoApi {
     engine = null,
     startRun = null,
     getRun = null,
+    onControl = null,
   }) {
     this.repo = new EcoStore({ store, capabilities });
     this.store = store;
@@ -38,6 +39,7 @@ export class EcoApi {
     // operations exist.
     this.startRun = startRun;
     this.getRun = getRun;
+    this.onControl = onControl;
   }
   handle(method, route, body = {}, token = "") {
     if (method === "GET" && route === "/api/eco/settings") {
@@ -89,14 +91,17 @@ export class EcoApi {
       return this.startRun(body);
     }
     if (!this.engine) throw Error("Cooperative worker is not connected");
-    if (route === "/api/eco/control")
-      return this.engine.control(
+    if (route === "/api/eco/control") {
+      const result = this.engine.control(
         body.runId,
         body.expectedVersion,
         body.action,
         body.idempotencyKey,
         body.adjustment,
       );
+      this.onControl?.(result);
+      return result;
+    }
     throw Error("Operation is not connected");
   }
 }

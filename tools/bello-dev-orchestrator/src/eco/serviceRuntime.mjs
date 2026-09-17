@@ -143,9 +143,23 @@ export function createEcoRuntime({
       [run.id],
     );
     const reason = lastEvent ? JSON.parse(lastEvent.data).reason : null;
-    // Reflects the outcome without rewriting task_state_history or moving the
-    // task out of paused; re-queueing stays an explicit, separate operator action.
-    repo.checkpoint(run.task_id, "eco_run", { runId: run.id, state: run.state, reason });
+    const recorded = store.get(
+      "SELECT id FROM checkpoints WHERE task_id=? AND phase='eco_run' AND data LIKE ? LIMIT 1",
+      [run.task_id, `%\"runId\":\"${run.id}\"%`],
+    );
+    if (!recorded)
+      repo.checkpoint(run.task_id, "eco_run", { runId: run.id, state: run.state, reason });
+    if (run.state === "COMPLETED_STAGING") {
+      const task = repo.getTask(run.task_id);
+      if (task?.state === STATES.PAUSED)
+        repo.setState(
+          run.task_id,
+          STATES.COMPLETED,
+          `Cooperative eco staging completed (${run.id})`,
+          "eco",
+          { git_end_commit: run.headSHA || task.git_end_commit },
+        );
+    }
   }
 
   /**
@@ -193,14 +207,22 @@ export function createEcoRuntime({
   // pointless work, this lets short-lived validation processes close their
   // store immediately without a queued recovery callback racing the close.
   if (connected && ecoStore.installed && !ecoModeDisabled())
-    queueMicrotask(() => tick().catch((error) => logger?.error?.("協調eco recovery tick の失敗", { error: error.message })));
+    queueMicrotask(async () => {
+      try {
+        for (const run of ecoStore.list().filter((item) => TERMINAL_RUN_STATES.has(item.state)))
+          reflectFinishedRun(run);
+        await tick();
+      } catch (error) {
+        logger?.error?.("協調eco recovery tick の失敗", { error: error.message });
+      }
+    });
 
   async function stop() {
     stopRequested = true;
     if (tickInFlight) await tickInFlight;
   }
 
-  const api = new EcoApi({ store, operatorToken, capabilities, engine, startRun, getRun });
+  const api = new EcoApi({ store, operatorToken, capabilities, engine, startRun, getRun, onControl: reflectFinishedRun });
 
   return {
     connected,
