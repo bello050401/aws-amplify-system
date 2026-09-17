@@ -510,16 +510,40 @@ export function createServiceBindings({
     );
     if (existing) {
       const saved = JSON.parse(existing.data);
-      if (
+      const identityChanged =
         saved.profileId !== profile.id ||
-        saved.profileHash !== profileHash ||
         saved.source !== task.source ||
         saved.revision !== (input?.revision ?? null) ||
-        saved.acIdsKey !== acIdsKey
-      )
+        saved.acIdsKey !== acIdsKey;
+      if (identityChanged)
         throw Error("Task is bound to a different profile, revision, acIds or source than at first preparation");
       const clean = runGit(saved.workDir, ["status", "--porcelain"]);
-      if (!clean.ok) throw Error("Cannot inspect the previously prepared isolated worktree");
+      if (!clean.ok || clean.stdout.trim())
+        throw Error("Cannot rebind a modified previously prepared isolated worktree");
+      if (saved.profileHash !== profileHash) {
+        const active = repo.store.get(
+          "SELECT COUNT(*) AS count FROM eco_runs WHERE task_id=? AND state NOT IN ('COMPLETED_STAGING','FAILED','CANCELLED')",
+          [task.id],
+        );
+        if (Number(active?.count) !== 1)
+          throw Error("Profile changes require exactly one newly requested cooperative run");
+        // Keep the old checkpoint as immutable history and append the corrected
+        // host profile binding. Task identity, revision, ACs and a clean
+        // isolated worktree must still match exactly.
+        repo.checkpoint(task.id, "eco_profile", {
+          profileId: profile.id,
+          profileHash,
+          source: task.source,
+          workDir: saved.workDir,
+          branch: saved.branch,
+          baseCommit: saved.baseCommit,
+          allowedPaths: profile.allowedPaths,
+          revision: input?.revision ?? null,
+          acIds: input?.acIds,
+          acIdsKey,
+          reboundFromProfileHash: saved.profileHash,
+        });
+      }
       return repo.updateTask(task.id, {
         isolation: "worktree",
         work_dir: saved.workDir,
