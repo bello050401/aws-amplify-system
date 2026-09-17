@@ -64,5 +64,32 @@ public sealed class PhotoStationTests : IDisposable
         Assert.Equal(20, result.VerifiedCount); Assert.True(result.SafeToRemove);
     }
 
+    [Fact]
+    public async Task InsertedCardCanBeReadAndCopiedWithoutChangingSource()
+    {
+        var source = Environment.GetEnvironmentVariable("BELLO_TEST_CARD_ROOT");
+        if (string.IsNullOrWhiteSpace(source)) return;
+        var dcim = Path.Combine(source, "DCIM");
+        Assert.True(Directory.Exists(dcim), "BELLO_TEST_CARD_ROOT must contain DCIM");
+        var files = Directory.EnumerateFiles(dcim, "*", SearchOption.AllDirectories)
+            .Where(path => new[] { ".arw", ".jpg", ".jpeg" }.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            .Select(path => new FileInfo(path)).ToArray();
+        Assert.NotEmpty(files);
+        var before = files.ToDictionary(file => file.FullName, file => (file.Length, file.LastWriteTimeUtc));
+        var candidates = files.Select(file => new SourceCandidate(Path.GetRelativePath(source, file.FullName), file.Length, file.LastWriteTimeUtc)).ToArray();
+        var repository = new SqliteStationRepository(Path.Combine(_root, "db", "real-card.sqlite"));
+        await repository.InitializeAsync();
+        var result = await new ImportService(repository, new VerifiedFileCopier()).ImportAsync(new ImportRequest(
+            Guid.NewGuid(), "staging", "PORTABILITY-TEST", "READ-ONLY-CARD-TEST", source,
+            Path.Combine(_root, "real-card-session"), candidates));
+        Assert.Equal(files.Length, result.VerifiedCount);
+        Assert.True(result.SafeToRemove);
+        foreach (var file in files)
+        {
+            file.Refresh();
+            Assert.Equal(before[file.FullName], (file.Length, file.LastWriteTimeUtc));
+        }
+    }
+
     private static ImportSession Session() => new(Guid.NewGuid(), "staging", "STATION-1", "GEN-1", "manifest", DateTimeOffset.UtcNow);
 }
