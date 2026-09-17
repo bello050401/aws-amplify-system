@@ -68,6 +68,22 @@ const nextConfig = {
     // AgentCore Web Search GatewayのURL。これも**秘密値ではない**
     // (認可はIAM。APIキーは存在しない)。同じ理由でビルド時に埋め込む。
     ...(process.env.AGENTCORE_GATEWAY_URL ? { AGENTCORE_GATEWAY_URL: process.env.AGENTCORE_GATEWAY_URL } : {}),
+    // 画像登録のDynamoDB/S3接続先。いずれもリソース名・リージョンであり
+    // 秘密値ではない。Amplify HostingのSSR実行環境へはApp環境変数が
+    // そのまま渡らないため、上記テーブル名と同じ方法でサーバーバンドルへ
+    // 埋め込む。認証情報はCompute Roleから取得し、ここには含めない。
+    ...(process.env.PHOTO_REGISTRATION_TABLE_NAME
+      ? { PHOTO_REGISTRATION_TABLE_NAME: process.env.PHOTO_REGISTRATION_TABLE_NAME }
+      : {}),
+    ...(process.env.PHOTO_REGISTRATION_INVENTORY_TABLE_NAME
+      ? { PHOTO_REGISTRATION_INVENTORY_TABLE_NAME: process.env.PHOTO_REGISTRATION_INVENTORY_TABLE_NAME }
+      : {}),
+    ...(process.env.PHOTO_REGISTRATION_BUCKET_NAME
+      ? { PHOTO_REGISTRATION_BUCKET_NAME: process.env.PHOTO_REGISTRATION_BUCKET_NAME }
+      : {}),
+    ...(process.env.PHOTO_REGISTRATION_AWS_REGION
+      ? { PHOTO_REGISTRATION_AWS_REGION: process.env.PHOTO_REGISTRATION_AWS_REGION }
+      : {}),
   },
 
   /**
