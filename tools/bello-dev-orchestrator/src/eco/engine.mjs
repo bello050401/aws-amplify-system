@@ -111,7 +111,8 @@ export class EcoEngine {
           run.state !== "HUMAN_REVIEW" ||
           finalQa?.body?.verdict !== "BLOCKED" ||
           !criteria.length ||
-          criteria.some((item) => item.result !== "BLOCKED") ||
+          !criteria.some((item) => item.result === "BLOCKED") ||
+          criteria.some((item) => !["PASS", "BLOCKED"].includes(item.result)) ||
           !run.testRecord?.independent ||
           !run.testRecord?.buildPassed ||
           run.testRecord?.revision !== run.headSHA ||
