@@ -404,7 +404,7 @@ export function createServiceBindings({
   // "is this dirty worktree safe" check against the orchestrator's own main repo.
   function assertIsolated(task, run) {
     if (!task || task.isolation !== "worktree" || !task.work_dir) throw Error("Isolated worktree required");
-    if (task.repo_path !== profile.repoPath)
+    if (path.resolve(task.repo_path) !== path.resolve(profile.repoPath))
       throw Error("Task repository does not match the connected bounded profile");
     const expected = fs.realpathSync(worktreePathFor(paths.worktreeRoot, task.id));
     if (fs.realpathSync(task.work_dir) !== expected) throw Error("Worktree scope mismatch");
