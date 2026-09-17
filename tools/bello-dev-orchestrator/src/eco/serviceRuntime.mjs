@@ -88,7 +88,7 @@ export function createEcoRuntime({
     const { taskId, revision, acIds, risk = "low", expectedVersion, idempotencyKey, profileId = null } = input;
     if (typeof taskId !== "string" || !taskId) throw Error("taskId required");
     if (!Number.isInteger(expectedVersion)) throw Error("expectedVersion required");
-    return ecoStore.idempotent(
+    const run = ecoStore.idempotent(
       idempotencyKey,
       { taskId, revision, acIds, risk, expectedVersion, profileId },
       () => {
@@ -114,6 +114,10 @@ export function createEcoRuntime({
         return run;
       },
     );
+    // A newly accepted run must not wait for the legacy queue's next sleep cycle.
+    // The same guarded tick function is used, so overlapping dispatch is still impossible.
+    queueMicrotask(() => tick().catch((error) => logger?.error?.("協調eco immediate tick の失敗", { error: error.message })));
+    return run;
   }
 
   function getRun(id) {
@@ -182,6 +186,11 @@ export function createEcoRuntime({
     })();
     return tickInFlight;
   }
+
+  // Recover queued/in-flight runs immediately after a service restart. Leases and
+  // persisted effect keys make this restart-safe; unknown external effects are reconciled.
+  if (connected && ecoStore.installed)
+    queueMicrotask(() => tick().catch((error) => logger?.error?.("協調eco recovery tick の失敗", { error: error.message })));
 
   async function stop() {
     stopRequested = true;
