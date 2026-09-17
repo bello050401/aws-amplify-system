@@ -11,6 +11,7 @@
  * まだ保存していない編集中の設定でプレビューできる(--settings-fileより優先)。
  */
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { mkdir } from "node:fs/promises";
 import { SettingsStore, DEFAULT_SETTINGS } from "./settings.mjs";
 import { processImage } from "./processImage.mjs";
@@ -46,7 +47,7 @@ export async function main(argv = process.argv.slice(2)) {
   return { sourcePath: path.resolve(args.source), processed: result.processed, thumbnail: result.thumbnail };
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}`;
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isDirectRun) {
   main()
     .then((result) => console.log(`RESULT_JSON:${JSON.stringify(result)}`))
