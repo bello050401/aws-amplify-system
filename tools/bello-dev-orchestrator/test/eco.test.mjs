@@ -413,10 +413,11 @@ test("eco: operator can extend a suspended run budget within bounded limits", as
     run.version,
     "extend_budget",
     "extend-budget-key",
-    { maxTokens: 1000000, extendDeadlineMs: 60000 },
+    { maxTokens: 1000000, maxRepairLoops: 4, extendDeadlineMs: 60000 },
   );
   assert.equal(extended.state, "HUMAN_REVIEW");
   assert.equal(extended.configSnapshot.maxTokens, 1000000);
+  assert.equal(extended.configSnapshot.maxRepairLoops, 4);
   assert.equal(extended.deadline, run.deadline + 60000);
   assert.throws(
     () => e.control(extended.id, extended.version, "extend_budget", "bad-extension", { maxTokens: 99999999 }),

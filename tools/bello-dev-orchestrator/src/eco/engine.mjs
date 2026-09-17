@@ -73,11 +73,17 @@ export class EcoEngine {
         throw Error("Run version conflict or terminal run");
       if (action === "extend_budget") {
         const maxTokens = Number(adjustment?.maxTokens);
+        const maxRepairLoops = Number(
+          adjustment?.maxRepairLoops ?? run.configSnapshot.maxRepairLoops,
+        );
         const extendDeadlineMs = Number(adjustment?.extendDeadlineMs || 0);
         if (
           !Number.isSafeInteger(maxTokens) ||
           maxTokens < run.configSnapshot.maxTokens ||
           maxTokens > 10000000 ||
+          !Number.isSafeInteger(maxRepairLoops) ||
+          maxRepairLoops < run.configSnapshot.maxRepairLoops ||
+          maxRepairLoops > 10 ||
           !Number.isSafeInteger(extendDeadlineMs) ||
           extendDeadlineMs < 0 ||
           extendDeadlineMs > 86400000
@@ -88,8 +94,15 @@ export class EcoEngine {
           run.version,
           run.state,
           {
-            configSnapshot: { ...run.configSnapshot, maxTokens },
+            configSnapshot: {
+              ...run.configSnapshot,
+              maxTokens,
+              maxRepairLoops,
+            },
             deadline: run.deadline + extendDeadlineMs,
+            ...(run.state === "HUMAN_REVIEW" && !run.resumeState && maxRepairLoops > run.repairCount
+              ? { resumeState: "TESTING" }
+              : {}),
           },
           `Operator extended run budget to ${maxTokens} tokens`,
           "operator",

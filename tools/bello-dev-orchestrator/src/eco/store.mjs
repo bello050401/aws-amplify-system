@@ -232,7 +232,10 @@ export class EcoStore {
       if (next === "REPAIR_PENDING" && r.state !== "REPAIR_PENDING") {
         if (r.repairCount >= r.configSnapshot.maxRepairLoops) {
           next = "HUMAN_REVIEW";
-          data.resumeState = null;
+          // Preserve the failed verification phase so an operator can fix an
+          // environmental issue, extend the bounded repair allowance, and
+          // resume without discarding the audited run.
+          data.resumeState = r.state;
           reason = "Repair limit reached";
         } else {
           data.repairCount = r.repairCount + 1;
