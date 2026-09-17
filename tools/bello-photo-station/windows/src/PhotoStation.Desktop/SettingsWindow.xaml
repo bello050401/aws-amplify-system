@@ -1,0 +1,133 @@
+<Window x:Class="PhotoStation.Desktop.SettingsWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="編集設定 - BELLO Photo Station" Height="760" Width="920" MinHeight="620" MinWidth="780" Background="#F4F6F8">
+  <Grid Margin="20">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+
+    <StackPanel Grid.Row="0" Margin="0,0,0,14">
+      <TextBlock Text="編集設定" FontSize="24" FontWeight="SemiBold" Foreground="#172033"/>
+      <TextBlock Text="{Binding CurrentSettingsSummary}" Margin="0,6,0,0" Foreground="#536171" TextWrapping="Wrap"/>
+    </StackPanel>
+
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel>
+
+        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,0,14">
+          <StackPanel>
+            <TextBlock Text="出力・トリミング" FontWeight="Bold" FontSize="15" Margin="0,0,0,4"/>
+            <TextBlock Text="縦横比の維持・色空間(sRGB)・出力形式(JPEG)は安全な初期設定として固定されており、この画面からは変更できません。" Foreground="#9A5B00" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,10,8">
+                <TextBlock Text="出力画像 長辺(px)"/>
+                <TextBox Text="{Binding LongEdgePx, UpdateSourceTrigger=PropertyChanged}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="0" Grid.Column="1" Margin="10,0,0,8">
+                <TextBlock Text="JPEG品質(1-100)"/>
+                <TextBox Text="{Binding JpegQuality, UpdateSourceTrigger=PropertyChanged}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,8">
+                <TextBlock Text="サムネイル長辺(px)"/>
+                <TextBox Text="{Binding ThumbnailLongEdgePx, UpdateSourceTrigger=PropertyChanged}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="1" Grid.Column="1" Margin="10,0,0,8">
+                <TextBlock Text="サムネイル品質(1-100)"/>
+                <TextBox Text="{Binding ThumbnailJpegQuality, UpdateSourceTrigger=PropertyChanged}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,10,0">
+                <TextBlock Text="トリミング方法"/>
+                <ComboBox ItemsSource="{Binding CropMethods}" SelectedItem="{Binding CropMethod}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="2" Grid.Column="1" Margin="10,0,0,0">
+                <CheckBox Content="画像方向を自動正規化" IsChecked="{Binding AutoRotate}" Margin="0,18,0,0"/>
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,0,14">
+          <StackPanel>
+            <TextBlock Text="トーン補正" FontWeight="Bold" FontSize="15" Margin="0,0,0,10"/>
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,10,8">
+                <TextBlock Text="明るさ(-100〜100)"/>
+                <Slider Minimum="-100" Maximum="100" Value="{Binding Brightness}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="0" Grid.Column="1" Margin="10,0,0,8">
+                <TextBlock Text="コントラスト(-100〜100)"/>
+                <Slider Minimum="-100" Maximum="100" Value="{Binding Contrast}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,8">
+                <TextBlock Text="色温度(-100〜100)"/>
+                <Slider Minimum="-100" Maximum="100" Value="{Binding ColorTemperatureShift}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="1" Grid.Column="1" Margin="10,0,0,8">
+                <TextBlock Text="彩度(-100〜100)"/>
+                <Slider Minimum="-100" Maximum="100" Value="{Binding Saturation}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,10,0">
+                <TextBlock Text="シャープネス(0〜100)"/>
+                <Slider Minimum="0" Maximum="100" Value="{Binding Sharpness}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="2" Grid.Column="1" Margin="10,0,0,0">
+                <CheckBox Content="GPS・撮影者などのメタデータを削除" IsChecked="{Binding StripMetadata}" Margin="0,18,0,0"/>
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,0,14">
+          <StackPanel>
+            <TextBlock Text="Lightroom (未接続時は無視されます)" FontWeight="Bold" FontSize="15" Margin="0,0,0,10"/>
+            <TextBlock Text="使用するLightroomプリセット名"/>
+            <TextBox Text="{Binding LightroomPresetName, UpdateSourceTrigger=PropertyChanged}"/>
+          </StackPanel>
+        </Border>
+
+        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,0,14">
+          <StackPanel>
+            <TextBlock Text="プリセット" FontWeight="Bold" FontSize="15" Margin="0,0,0,10"/>
+            <DockPanel Margin="0,0,0,10">
+              <Button DockPanel.Dock="Right" Content="この内容を名前を付けて保存" Command="{Binding SavePresetCommand}" Padding="12,7" Margin="10,0,0,0"/>
+              <TextBox Text="{Binding NewPresetName, UpdateSourceTrigger=PropertyChanged}"/>
+            </DockPanel>
+            <DockPanel>
+              <Button DockPanel.Dock="Right" Content="選択したプリセットを適用" Command="{Binding ApplyPresetCommand}" Padding="12,7" Margin="10,0,0,0"/>
+              <ComboBox ItemsSource="{Binding PresetNames}" SelectedItem="{Binding SelectedPresetName}"/>
+            </DockPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Background="White" CornerRadius="12" Padding="16">
+          <StackPanel>
+            <TextBlock Text="テスト画像によるプレビュー(適用前 / 適用後)" FontWeight="Bold" FontSize="15" Margin="0,0,0,10"/>
+            <DockPanel Margin="0,0,0,10">
+              <Button DockPanel.Dock="Right" Content="参照…" Click="BrowseTestImage_Click" Padding="12,7" Margin="10,0,0,0"/>
+              <Button DockPanel.Dock="Right" Content="プレビュー実行" Command="{Binding RunPreviewCommand}" Padding="12,7" Margin="10,0,0,0"/>
+              <TextBlock Text="{Binding TestImagePath}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+            <TextBlock Text="{Binding PreviewStatus}" Margin="0,0,0,10" Foreground="#08783E" FontWeight="SemiBold" TextWrapping="Wrap"/>
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                <TextBlock Text="適用前(原本)" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <Image Source="{Binding BeforeImage}" Stretch="Uniform" Height="220"/>
+              </StackPanel>
+              <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                <TextBlock Text="適用後" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <Image Source="{Binding AfterImage}" Stretch="Uniform" Height="220"/>
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+
+    <DockPanel Grid.Row="2" Margin="0,14,0,0">
+      <Button DockPanel.Dock="Right" Content="初期設定に戻す" Command="{Binding ResetToDefaultCommand}" Padding="18,9" Margin="10,0,0,0"/>
+      <Button DockPanel.Dock="Right" Content="保存" Command="{Binding SaveCommand}" Padding="18,9" Background="#172033" Foreground="White"/>
+    </DockPanel>
+  </Grid>
+</Window>

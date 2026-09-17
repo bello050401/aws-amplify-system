@@ -2,5 +2,6 @@
   "name": "bello-photo-station",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test test/*.test.mjs" }
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dependencies": { "sharp": "^0.35.4" }
 }

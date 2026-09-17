@@ -13,6 +13,9 @@ namespace PhotoStation.Desktop;
 public sealed class MainViewModel : INotifyPropertyChanged
 {
     private readonly string _root;
+    private readonly string? _nodeScriptsDir = Environment.GetEnvironmentVariable("BELLO_PHOTO_STATION_NODE_DIR");
+    private readonly string? _apiEndpoint = Environment.GetEnvironmentVariable("BELLO_PHOTO_STATION_API_ENDPOINT");
+    private readonly string _nodeExecutable = Environment.GetEnvironmentVariable("BELLO_PHOTO_STATION_NODE_EXE") ?? "node";
     private readonly SqliteStationRepository _repository;
     private readonly ImportService _importer;
     private DriveInfo? _drive;
@@ -22,17 +25,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string DetectedDriveText { get => _detectedDriveText; private set => Set(ref _detectedDriveText, value); }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
     public string RecipeSummary => "原比率を維持 ・ sRGB ・ 長辺3000px ・ JPEG品質90 ・ サムネイル480px ・ GPS除去 ・ 自動クロップなし";
-    public string ProcessingAvailabilityText => "現在は検証コピーまで利用可能です。Lightroom現像・加工・Web送信は接続準備中です。";
+    public string ProcessingAvailabilityText => _nodeScriptsDir is null
+        ? "現在は検証コピーまで利用可能です。編集・検証環境へのアップロードには BELLO_PHOTO_STATION_NODE_DIR (tools/bello-photo-stationのパス) の設定が必要です。"
+        : "「検証コピー開始」の後、「編集してアップロード」から検証環境へ送信できます。";
     public ICommand RefreshCommand { get; }
     public ICommand ImportCommand { get; }
+    public ICommand UploadCommand { get; }
+    public EditSettingsStore SettingsStore { get; }
+    public string PreviewOutputDir => Path.Combine(_root, "preview");
     public MainViewModel()
     {
         _root = Environment.GetEnvironmentVariable("BELLO_PHOTO_STATION_ROOT") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BELLO", "PhotoStation", "staging");
         _repository = new SqliteStationRepository(Path.Combine(_root, "db", "station.sqlite"));
         _importer = new ImportService(_repository, new VerifiedFileCopier());
+        SettingsStore = new EditSettingsStore(Path.Combine(_root, "settings.json"));
         RefreshCommand = new AsyncCommand(RefreshAsync, () => !_busy);
         ImportCommand = new AsyncCommand(ImportAsync, () => !_busy && _drive is not null);
+        UploadCommand = new AsyncCommand(UploadAsync, () => !_busy && _nodeScriptsDir is not null && _apiEndpoint is not null && Sessions.Any(s => s.State == ImportSessionState.LocalSecured));
     }
+
+    public IPreviewRunner? CreatePreviewRunner() =>
+        _nodeScriptsDir is null ? null : new NodePreviewRunner(_nodeExecutable, Path.Combine(_nodeScriptsDir, "previewCli.mjs"));
     public async Task InitializeAsync() { await _repository.InitializeAsync(); await RefreshAsync(); }
     private async Task LoadSessionsAsync()
     {
@@ -75,7 +88,39 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (Exception error) { StatusText = "取込を完了できませんでした：" + error.Message; }
         finally { _busy = false; RaiseCommands(); }
     }
-    private void RaiseCommands() { (RefreshCommand as AsyncCommand)?.RaiseCanExecuteChanged(); (ImportCommand as AsyncCommand)?.RaiseCanExecuteChanged(); }
+    private async Task UploadAsync()
+    {
+        if (_nodeScriptsDir is null || _apiEndpoint is null) return;
+        var target = Sessions.FirstOrDefault(s => s.State == ImportSessionState.LocalSecured);
+        if (target is null) return;
+        _busy = true; RaiseCommands();
+        try
+        {
+            var runner = new NodeCliPipelineRunner(_nodeExecutable, Path.Combine(_nodeScriptsDir, "cli.mjs"), new EnvironmentTokenProvider());
+            var service = new PhotoUploadService(_repository, runner);
+            var sessionRoot = Path.Combine(_root, "sessions", target.Id.ToString("D"));
+            var request = new PhotoUploadRequest(
+                target.Id.ToString("D"),
+                Path.Combine(sessionRoot, "source"),
+                sessionRoot,
+                Path.Combine(_root, "settings.json"),
+                Path.Combine(_root, "history.json"),
+                Environment.GetEnvironmentVariable("BELLO_PHOTO_STATION_ID") ?? "UNREGISTERED-STATION",
+                _apiEndpoint);
+            var outcome = await service.UploadAsync(request, stage => StatusText = stage);
+            StatusText = DescribeUploadOutcome(outcome);
+            await LoadSessionsAsync();
+        }
+        catch (Exception error) { StatusText = "アップロードを完了できませんでした：" + error.Message; }
+        finally { _busy = false; RaiseCommands(); }
+    }
+    private static string DescribeUploadOutcome(UploadOutcome outcome) => outcome.State switch
+    {
+        ImportSessionState.CloudVerifying => "検証環境へのアップロードが完了しました。BELLO画像登録画面から商品との紐付けを行えます。SDカードを取り外せます。",
+        ImportSessionState.NeedsReview => "一部またはすべての画像でアップロードに失敗しました。原本は保持したまま再実行できます：" + (outcome.Error ?? "詳細は処理履歴を確認してください"),
+        _ => "アップロード処理が終了しました：" + outcome.State,
+    };
+    private void RaiseCommands() { (RefreshCommand as AsyncCommand)?.RaiseCanExecuteChanged(); (ImportCommand as AsyncCommand)?.RaiseCanExecuteChanged(); (UploadCommand as AsyncCommand)?.RaiseCanExecuteChanged(); }
     private static double ToGiB(long bytes) => bytes / 1024d / 1024d / 1024d;
     private static string CardGeneration(DriveInfo drive) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{drive.VolumeLabel}\0{drive.TotalSize}\0{drive.DriveFormat}"))).ToLowerInvariant();
     private static Guid StableSessionId(string generation, string manifest)

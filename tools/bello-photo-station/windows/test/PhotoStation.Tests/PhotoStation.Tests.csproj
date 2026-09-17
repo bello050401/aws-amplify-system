@@ -24,4 +24,8 @@
     <ProjectReference Include="..\..\src\PhotoStation.Infrastructure\PhotoStation.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
