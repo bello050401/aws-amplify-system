@@ -223,6 +223,7 @@ export class EcoStore {
         next !== r.state &&
         !waiting.includes(next) &&
         !(edges[r.state] || []).includes(next) &&
+        !(actor === "operator" && r.state === "HUMAN_REVIEW" && next === "COMPLETED_STAGING") &&
         !(waiting.includes(r.state) && next === r.resumeState)
       )
         throw Error("Invalid transition");
@@ -286,6 +287,10 @@ export class EcoStore {
   }
   releaseEnvironment(runId) {
     this.store.run("DELETE FROM eco_environment_locks WHERE run_id=?", [runId]);
+  }
+  getArtifact(id) {
+    const row = this.store.get("SELECT id,data FROM eco_artifacts WHERE id=?", [id]);
+    return row ? { ...JSON.parse(row.data), id: row.id } : null;
   }
   artifact(id, version, a, root) {
     return this.transaction(() => {

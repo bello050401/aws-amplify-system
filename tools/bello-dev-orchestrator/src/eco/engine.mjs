@@ -71,6 +71,34 @@ export class EcoEngine {
       const run = this.repo.get(id);
       if (!run || run.version !== version || terminal.has(run.state))
         throw Error("Run version conflict or terminal run");
+      if (action === "accept_noninteractive_qa") {
+        const finalQa = run.finalQaId ? this.repo.getArtifact(run.finalQaId) : null;
+        const criteria = finalQa?.body?.acceptanceCriteria || [];
+        if (
+          run.state !== "HUMAN_REVIEW" ||
+          finalQa?.body?.verdict !== "BLOCKED" ||
+          !criteria.length ||
+          criteria.some((item) => item.result !== "BLOCKED") ||
+          !run.testRecord?.independent ||
+          !run.testRecord?.buildPassed ||
+          run.testRecord?.revision !== run.headSHA ||
+          !run.deployment?.healthPassed ||
+          run.deployment?.revision !== run.headSHA ||
+          run.deployment?.url !== run.configSnapshot.qaUrl ||
+          run.configSnapshot.testAccount !== "dedicated-static-no-account"
+        )
+          throw Error("Non-interactive QA acceptance prerequisites not met");
+        const completed = this.repo.mutate(
+          run.id,
+          run.version,
+          "COMPLETED_STAGING",
+          {},
+          "Operator accepted independently tested non-interactive criteria; staging HTTP/visual capture verified",
+          "operator",
+        );
+        this.repo.releaseEnvironment(run.id);
+        return completed;
+      }
       if (action === "extend_budget") {
         const maxTokens = Number(adjustment?.maxTokens);
         const maxRepairLoops = Number(
