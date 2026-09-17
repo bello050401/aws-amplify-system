@@ -118,6 +118,16 @@ test("isolated-profile accepts a dedicated static-only repo distinct from the ru
   assert.equal(profile.staging.mode, "static-smoke");
 });
 
+test("bounded-main accepts the running repo with independent tests and dedicated static staging", () => {
+  const mainRepo = makeGitRoot({ "index.html": "<html><body>BELLO</body></html>" });
+  const config = hostConfig(mainRepo);
+  const entry = isolatedEntry(mainRepo, { configurationScope: "bounded-main" });
+  const profile = validateRuntimeConfig(runtime(entry), config);
+  assert.equal(profile.configurationScope, "bounded-main");
+  assert.equal(profile.repoPath, mainRepo);
+  assert.equal(profile.staging.isolatedDataConfirmed, true);
+});
+
 test("isolated-profile rejects the main repoPath", () => {
   const mainRepo = makeGitRoot({});
   const config = hostConfig(mainRepo);

@@ -55,7 +55,7 @@ function validateStepShape(step) {
   return true;
 }
 
-const CONFIGURATION_SCOPES = ["strict-match", "isolated-profile"];
+const CONFIGURATION_SCOPES = ["strict-match", "isolated-profile", "bounded-main"];
 
 /** eco-runtime.json を検証する。ここを通った profile だけが実接続に使われる。
  *
@@ -74,8 +74,9 @@ export function validateRuntimeConfig(raw, config) {
   if (!entry) throw Error("No static-smoke profile is configured");
   const configurationScope = entry.configurationScope ?? "strict-match";
   if (!CONFIGURATION_SCOPES.includes(configurationScope))
-    throw Error('Profile configurationScope must be "strict-match" or "isolated-profile"');
+    throw Error('Profile configurationScope must be "strict-match", "isolated-profile" or "bounded-main"');
   const isolatedProfile = configurationScope === "isolated-profile";
+  const boundedMain = configurationScope === "bounded-main";
   if (typeof entry.repoPath !== "string" || !path.isAbsolute(entry.repoPath))
     throw Error("Profile repoPath must be an absolute path");
   if (!isolatedProfile) {
@@ -106,7 +107,7 @@ export function validateRuntimeConfig(raw, config) {
     throw Error("Profile qaUrl must be a bare HTTPS URL without credentials or query");
   if (!Array.isArray(entry.allowedDomains) || !entry.allowedDomains.length || !entry.allowedDomains.includes(qaUrl.hostname))
     throw Error("Profile allowedDomains must include the qaUrl host");
-  if (!isolatedProfile) {
+  if (!isolatedProfile && !boundedMain) {
     if (hash(entry.verification ?? null) !== hash(config.verification ?? null))
       throw Error("Profile verification must match the running configuration exactly");
   } else if (
@@ -115,9 +116,9 @@ export function validateRuntimeConfig(raw, config) {
     !Array.isArray(entry.verification.commands) ||
     !entry.verification.commands.length
   ) {
-    throw Error("An isolated-profile must declare its own required independent verification commands");
+    throw Error("A bounded profile must declare its own required independent verification commands");
   }
-  if (!isolatedProfile) {
+  if (!isolatedProfile && !boundedMain) {
     if (
       config.staging?.mode !== "static-smoke" ||
       !entry.staging ||
@@ -145,9 +146,9 @@ export function validateRuntimeConfig(raw, config) {
       typeof st.profile !== "string" ||
       !st.profile
     )
-      throw Error("An isolated-profile staging target must be a fully specified dedicated static-smoke deployment");
+      throw Error("A bounded profile staging target must be a fully specified dedicated static-smoke deployment");
   }
-  if (!isolatedProfile) {
+  if (!isolatedProfile && !boundedMain) {
     if (!entry.models?.claude?.model || entry.models.claude.model !== config.claude.model)
       throw Error("Profile models.claude.model must match the running configuration");
   } else if (entry.models?.claude?.model !== undefined && typeof entry.models.claude.model !== "string") {
@@ -382,12 +383,13 @@ export function createServiceBindings({
     };
   }
 
-  // Only "isolated-profile" profiles diverge from the host's own running config
+  // Bounded profiles may use their own verification/staging/model contract
   // (verification/staging/claude model), and only for the pieces below; the
   // main config object itself is never mutated, and executables/paths stay host-fixed.
   const isolatedProfile = profile.configurationScope === "isolated-profile";
-  const claudeModel = (isolatedProfile && profile.models?.claude?.model) || config.claude.model;
-  const effectiveConfig = isolatedProfile
+  const boundedMain = profile.configurationScope === "bounded-main";
+  const claudeModel = ((isolatedProfile || boundedMain) && profile.models?.claude?.model) || config.claude.model;
+  const effectiveConfig = isolatedProfile || boundedMain
     ? { ...config, verification: profile.verification, staging: profile.staging, claude: { ...config.claude, model: claudeModel } }
     : config;
 
@@ -401,7 +403,7 @@ export function createServiceBindings({
   function assertIsolated(task, run) {
     if (!task || task.isolation !== "worktree" || !task.work_dir) throw Error("Isolated worktree required");
     if (task.repo_path !== profile.repoPath)
-      throw Error("Task repository does not match the connected static-only profile");
+      throw Error("Task repository does not match the connected bounded profile");
     const expected = fs.realpathSync(worktreePathFor(paths.worktreeRoot, task.id));
     if (fs.realpathSync(task.work_dir) !== expected) throw Error("Worktree scope mismatch");
     const branch = runGit(task.work_dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
