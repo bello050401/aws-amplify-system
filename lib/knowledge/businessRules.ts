@@ -19,6 +19,7 @@ export const DISCOUNT_RULES_TITLE = "BELLO値引き交渉返信ルール";
 export const DELIVERY_DATE_RULES_TITLE = "BELLO配送希望日ルール";
 export const CONDITION_PHOTO_RULES_TITLE = "BELLO商品状態・追加写真ルール";
 export const LIGHTING_RULES_TITLE = "BELLO照明付属品ルール";
+export const VISIT_CONSULTATION_RULES_TITLE = "BELLO見学・家具選び・取り置きルール";
 
 /** §6.1 初回挨拶は仕様書に文言が指定されている。 */
 export const FIRST_REPLY_GREETING = [
@@ -185,6 +186,35 @@ export const LIGHTING_RULES_CONTENT = `# BELLO照明付属品ルール
 形にする。
 `;
 
+export const VISIT_CONSULTATION_RULES_CONTENT = `# BELLO見学・家具選び・取り置きルール
+
+## 見学
+
+見学は可能だが、場所は通常の店舗ではなく、メンテナンスと撮影を行う拠点である。
+見学希望の商品を先に確認する。大型家具は外部倉庫にあるため、大型家具は1点に絞っていただく。
+小物を含めた全商品を1点に制限するという意味ではない。
+
+準備には通常1週間ほど必要。見学受付は平日9時から17時、倉庫の営業時間は9時から16時であり、混同しない。
+日程と商品は担当者の確認前に確約しない。
+
+## 家具選び
+
+お部屋全体、リビング・ダイニング、家具と照明の組み合わせ、間取りや配置の相談は担当者が引き継ぐ。
+間取りと好みを確認し、配置シミュレーションを含めて提案できるが、提案の完成日を約束しない。
+この相談は、後のメッセージが配送や別商品の質問になっても会話履歴から保持する。
+
+## 取り置きと配送
+
+通常のお届け目安は購入後約2週間。1か月を超える長期取り置きは難しいことが多いが、常に不可とは断定せず個別確認とする。
+発送日と到着日を同じものとして扱わない。
+
+## 返信の組み立て
+
+商品が未確定でも、見学方法、受付時間、家具選び、通常のお届け目安など商品に依存しない質問には先に回答する。
+複数の質問にはそれぞれ回答し、ひとつの未確定事項を理由に返信全体を止めない。
+会話ですでに受け取った間取り、好み、希望日時などを再質問しない。
+`;
+
 export interface BusinessRuleSeed {
   title: string;
   fileName: string;
@@ -234,5 +264,13 @@ export const BUSINESS_RULE_SEEDS: BusinessRuleSeed[] = [
     content: LIGHTING_RULES_CONTENT,
     category: "業務ルール",
     description: "掲載写真で電球が確認できる場合のみ付属として案内する。",
+  },
+  {
+    title: VISIT_CONSULTATION_RULES_TITLE,
+    fileName: "BELLO見学・家具選び・取り置きルール.md",
+    mimeType: "text/markdown",
+    content: VISIT_CONSULTATION_RULES_CONTENT,
+    category: "業務ルール",
+    description: "見学、家具・照明選び、取り置き、配送目安と人間引き継ぎの方針。",
   },
 ];

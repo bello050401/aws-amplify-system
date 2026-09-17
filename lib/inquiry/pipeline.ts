@@ -12,6 +12,7 @@ import {
 import { listSearchableKnowledge } from "@/lib/knowledge/store";
 import { retrieveKnowledge } from "@/lib/knowledge/retrieval";
 import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./intent";
+import { detectHumanHandoff } from "./humanHandoff";
 import { resolveNegotiationContext } from "./negotiation";
 import { resolveNegotiation, type NegotiationInventoryFacts } from "./negotiationService";
 import { resolveProductFromInquiry } from "./productResolver";
@@ -139,6 +140,7 @@ type BaseReplyResult = Omit<
 export async function generateInquiryReplyDraft(request: InquiryReplyRequest): Promise<GenerateInquiryReplyResult> {
   const settings = await getAIReplySettings();
   const messageText = normalizeMessage(request.messageText);
+  const humanHandoff = detectHumanHandoff({ currentText: messageText, history: request.history });
 
   // ── 会話文脈(2026-09-03 追加指示 §17-§24) ─────────────────────
   //
@@ -907,6 +909,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     negotiation: negotiationResult?.evidence ?? null,
     staffCard: negotiationResult?.staffCard ?? null,
     generationRoute: negotiation.isNegotiation ? "negotiation" : "standard",
+    humanHandoff,
   };
 
   // ── 分かったことを会話文脈へ足す(§21) ─────────────────────────

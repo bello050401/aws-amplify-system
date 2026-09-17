@@ -32,13 +32,13 @@ const INTENT_KEYWORDS: { intent: InquiryIntent; keywords: string[] }[] = [
   { intent: "MATERIAL", keywords: ["素材", "材質", "生地", "張地", "革", "レザー", "布", "ファブリック", "木製", "無垢"] },
   { intent: "PRODUCT_CONDITION", keywords: ["状態", "コンディション", "傷", "汚れ", "使用感", "damage", "ダメージ", "きれい", "劣化", "破れ"] },
   { intent: "COMPATIBILITY", keywords: ["適合", "合いますか", "使えますか", "対応", "互換", "組み合わせ", "スタッキング", "積み重ね", "取り付け", "交換できま"] },
-  { intent: "STOCK", keywords: ["在庫", "まだあり", "売り切れ", "完売", "残って", "購入できま", "販売中"] },
+  { intent: "STOCK", keywords: ["在庫", "まだあり", "売り切れ", "完売", "残って", "購入できま", "販売中", "取り置き", "取置き", "お預かり"] },
   { intent: "PRICE", keywords: ["価格", "値段", "いくら", "金額", "税込", "税抜", "お値段"] },
   { intent: "NEGOTIATION", keywords: ["値引き", "値下げ", "おまけ", "安く", "割引", "交渉", "まけて"] },
   { intent: "RETURN_POLICY", keywords: ["返品", "キャンセル", "返金", "保証", "アフター"] },
   { intent: "BUSINESS_HOURS", keywords: ["営業時間", "何時から", "何時まで", "定休", "営業日", "やってま"] },
   { intent: "STORE_INFO", keywords: ["住所", "所在地", "場所", "どこにあり", "アクセス", "店舗", "お店"] },
-  { intent: "VISIT", keywords: ["来店", "見に行", "実物", "内覧", "下見", "伺い", "訪問"] },
+  { intent: "VISIT", keywords: ["来店", "見に行", "実物", "内覧", "見学", "下見", "伺い", "訪問", "予約"] },
   { intent: "PRODUCT_SPEC", keywords: ["仕様", "スペック", "耐荷重", "重量", "重さ", "型番", "品番", "電球", "口金", "消費電力", "何人掛け", "色", "カラー"] },
 ];
 

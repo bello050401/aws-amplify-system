@@ -88,5 +88,10 @@ export function decideReview(input: ReviewInput): ReviewDecision {
     reasons.push("商品の候補が複数あり、1件に絞れていません。");
   }
 
+  if (input.evidence?.humanHandoff?.required) {
+    const carried = input.evidence.humanHandoff.carriedOverFromHistory ? "（過去の会話から継続）" : "";
+    reasons.push(`家具・照明選びの相談は担当者による対応が必要です。${carried}`);
+  }
+
   return { needsHumanReview: reasons.length > 0, reasons };
 }

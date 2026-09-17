@@ -302,6 +302,8 @@ export interface ReplyEvidence {
    * だけで、questionIdやstatusといった内部の言葉は含まない。
    */
   answerPlan?: import("./answerPlan").AnswerPlanEvidence | null;
+  /** 家具・照明選び等、人が引き継ぐ相談。後続ターンでも履歴から保持する。 */
+  humanHandoff?: import("./humanHandoff").HumanHandoffEvidence | null;
 }
 
 /**
