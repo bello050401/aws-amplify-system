@@ -699,3 +699,23 @@ test("eco: a QA BLOCKED result stays incomplete and retains environment reservat
   assert.equal(h.eco.get(h.run.id).state, "HUMAN_REVIEW");
   assert.equal(h.store.all("SELECT * FROM eco_environment_locks").length, 1);
 });
+
+test("eco: blocked baseline QA becomes specification input instead of human work", async (t) => {
+  const h = await fixture(t);
+  const e = engine(h, {
+    qaInitial: {
+      reconcile: async () => ({ status: "absent" }),
+      execute: async ({ run }) => ({
+        status: "succeeded",
+        artifact: artifact(run, "qa", {
+          verdict: "BLOCKED",
+          acceptanceCriteria: [{ id: "AC-1", result: "NOT_RUN", steps: [], evidenceRefs: [] }],
+        }),
+      }),
+    },
+  });
+  for (let i = 0; i < 5 && h.eco.get(h.run.id).state !== "SPEC_READY"; i++) await e.tick(h.run.id);
+  const run = h.eco.get(h.run.id);
+  assert.equal(run.state, "SPEC_READY");
+  assert.ok(run.initialQaId);
+});

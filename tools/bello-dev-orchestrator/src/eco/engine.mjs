@@ -354,8 +354,10 @@ export class EcoEngine {
         if (artifact?.kind !== "qa")
           throw Error("Initial QA artifact required");
         patch.initialQaId = artifact.id;
-        next =
-          artifact.body.verdict === "BLOCKED" ? "HUMAN_REVIEW" : "SPEC_READY";
+        // Initial QA is a baseline. Missing UI/behavior is expected before implementation,
+        // and its BLOCKED/FAIL findings become specification input. Transport/auth failures
+        // arrive as typed adapter statuses earlier and still suspend the run.
+        next = "SPEC_READY";
         break;
       case "SPEC_READY":
         if (artifact?.kind !== "spec") throw Error("Specification required");
