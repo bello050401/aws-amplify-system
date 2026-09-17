@@ -29,7 +29,7 @@ const PROBE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
 // The dedicated static profile must never inherit broad tools from the business runner.
 export function scopedClaudeConfig(config, model, allowedPaths) {
-  if (!allowedPaths.length || allowedPaths.some(p => !/^[a-zA-Z0-9_./-]+$/.test(p) || p.split('/').includes('..')))
+  if (!allowedPaths.length || allowedPaths.some(p => typeof p !== 'string' || !p || path.isAbsolute(p) || p.includes('\0') || /[*?{}|<>"\r\n]/.test(p) || p.split(/[\\/]/).includes('..')))
     throw Error('Invalid scoped Claude path');
   return { ...config, claude: { ...config.claude, model,
     permissionMode: 'dontAsk',
