@@ -2,9 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { listInventorySimpleSearch, listStatuses } from "@/lib/inventory/queries";
+import { getInventoryDetail, listInventorySimpleSearch, listStatuses } from "@/lib/inventory/queries";
 import {
   getPhotoRegistrationWebAdapter,
   getWebTrustedClaims,
@@ -197,14 +197,42 @@ export async function restorePhotoAssetAction(
 // ─────────────────────────────────────────────────────────────────────────
 
 export async function linkPhotoBatchToInventoryAction(batchId: string, inventoryId: string): Promise<PhotoActionResult<{ batchId: string; status: string }>> {
-  const runtime = await requireWebRuntimeAndClaims();
-  if (!runtime.ok) return runtime;
-  const result = await runtime.adapter.linkToInventory({ batchId, inventoryId }, runtime.claims);
-  if (result.ok) {
+  const role = await getInventoryRole();
+  if (!role || role === "VIEWER") return { ok: false, code: "PERMISSION_DENIED", message: ERROR_LABELS.PERMISSION_DENIED };
+  const tableName = process.env.PHOTO_REGISTRATION_TABLE_NAME;
+  if (!tableName) return NOT_CONFIGURED;
+
+  // 在庫の存在確認は既存Inventory APIへ任せる。従来は画像用テーブルと
+  // InventoryテーブルをDynamoDB transactionで横断していたため、Hosting
+  // 実行ロールがInventoryの生テーブル権限を解決するまで長時間待った。
+  // Web検索と同じ認可済み経路で直前確認し、画像バッチ側を条件付きで1回だけ
+  // 更新することで、削除済み/存在しない在庫を拒否しつつ短時間で完了させる。
+  const inventory = await getInventoryDetail(inventoryId);
+  if (!inventory) return { ok: false, code: "INVENTORY_NOT_FOUND", message: ERROR_LABELS.INVENTORY_NOT_FOUND };
+
+  const now = new Date().toISOString();
+  const region = process.env.PHOTO_REGISTRATION_AWS_REGION || PHOTO_REGISTRATION_REGION;
+  const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region }), { marshallOptions: { removeUndefinedValues: true } });
+  try {
+    await ddb.send(new UpdateCommand({
+      TableName: tableName,
+      Key: { PK: `BATCH#${batchId}`, SK: `BATCH#${batchId}` },
+      UpdateExpression: "SET inventoryId = :inventoryId, #status = :linked, linkedAt = :now, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, updatedAt = :now REMOVE GSI1PK, GSI1SK",
+      ConditionExpression: "attribute_exists(PK) AND attribute_not_exists(inventoryId) AND #status = :ready AND attribute_not_exists(openRevisionRevision)",
+      ExpressionAttributeNames: { "#status": "status" },
+      ExpressionAttributeValues: {
+        ":inventoryId": inventoryId, ":linked": "LINKED", ":now": now, ":ready": "READY_FOR_REVIEW",
+        ":gsi2pk": `BATCH_INVENTORY#${inventoryId}`, ":gsi2sk": `${now}#${batchId}`,
+      },
+    }));
     revalidatePath("/inventory/photo-registration");
-    revalidatePath(`/inventory/photo-registration/${batchId}`);
+    return { ok: true, value: { batchId, status: "LINKED" } };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "unknown";
+    console.error("[linkPhotoBatchToInventoryAction] fast link failed", { name, batchId });
+    if (name === "ConditionalCheckFailedException") return { ok: false, code: "CONFLICT", message: ERROR_LABELS.CONFLICT };
+    return { ok: false, code: "INTERNAL_ERROR", message: ERROR_LABELS.INTERNAL_ERROR };
   }
-  return mapPhotoResult(result);
 }
 
 export interface InventoryCandidateRow {
