@@ -1,7 +1,7 @@
 "use client";
 
 import { formatJstDateTime } from "@/lib/inventory/formatJst";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -104,6 +104,7 @@ const STATUS_BADGE_CLASS: Record<Exclude<StatusFilter, "ALL">, string> = {
  * app/inventory/(protected)/[id]/InventoryHistorySection.tsxと同じ設計)。
  */
 export function ListingsOverviewTable({ initialResult, canEdit }: { initialResult: ListingsOverviewLoadOutcome<ListingOverviewRow>; canEdit: boolean }) {
+  const automaticAuthRetryStarted = useRef(false);
   const router = useRouter();
   const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(() => loadStateFromInitialRows(initialResult));
 
@@ -289,6 +290,18 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
     }
   }
 
+  // Cognitoのトークン更新と一覧の複数読取が重なったとき、一覧だけが
+  // 一時的にauth-expiredになる場合がある。最初の1回だけ新しいServer
+  // Actionリクエストで自動再取得し、同じ画面で復帰させる。無限再試行は
+  // 行わず、2回目も失敗した場合だけ従来のログイン案内を表示する。
+  useEffect(() => {
+    if (state.kind !== "error" || state.failure.kind !== "auth-expired" || automaticAuthRetryStarted.current) return;
+    automaticAuthRetryStarted.current = true;
+    void retryLoad();
+    // retryLoadはこのstate遷移専用。関数参照の変化で再実行しない。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
   if (state.kind !== "ok") {
     return (
       <div>
@@ -313,6 +326,13 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
             >
               ログイン画面へ
             </Link>
+            <button
+              type="button"
+              onClick={() => void retryLoad()}
+              className="ml-2 mt-1 inline-block border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 hover:bg-gray-50"
+            >
+              この画面で再接続
+            </button>
           </div>
         ) : state.failure.kind === "auth-forbidden" ? (
           // 2026-09-13 補正(task_2c27a70778613453ed): "auth-expired"とは
