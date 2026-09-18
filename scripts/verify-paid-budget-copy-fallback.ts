@@ -22,6 +22,7 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   try { return nextResolve(target, context); } catch { return nextResolve(target + ".ts", context); }
 } });
 
+async function main(): Promise<void> {
 const { generateProductPage } = await import("@/lib/ai/productPage/service");
 const { generateListingCopy, generateReplyDraft } = await import("@/lib/ai/ecCopy");
 const { rewriteAsKeigo } = await import("@/lib/inquiry/keigoService");
@@ -102,3 +103,9 @@ state.budget = false;
 await assert.rejects(generateReplyDraft({ channel: "test", inquiryBody: "test" }), /synthetic denial/);
 assert.equal(state.calls, 7);
 console.log("PASS: budget fallback assertions; no paid retry, deterministic non-empty listing description (all 6 headings) built from facts, manual-review status and null model metadata.");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
