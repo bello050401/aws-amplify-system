@@ -245,6 +245,53 @@ export class PhotoRegistrationWebAdapter {
     return ok({ inventoryId, assets: await Promise.all(rawAssets.map((asset) => this.toWebAsset(asset))), batchCount: batches.length, truncated });
   }
 
+  /**
+   * 在庫一覧のカード画像用。listInventoryPhotoAssetsは1件のInventoryが持つ
+   * 全Assetを署名する(サムネイル+本体の2枚/枚)ため、一覧の行数分そのまま
+   * 呼ぶとN+1になる。ここでは行ごとにトップ画像(inventoryIsPrimary優先、
+   * 無ければ先頭のNORMAL — lib/inventory/imageTypes.tsのresolveTopImageと
+   * 同じ優先順位)のサムネイルURL1枚だけを解決し、複数inventoryIdをまとめて
+   * 1回のserver actionで返せるようにする(呼び出し側は表示中のページの
+   * 行数分=最大100件程度だけを渡す設計。lib/inventory/queries.tsの
+   * fetchAllInventoryRecordsのような全件取得には絶対に使わない)。
+   * バッチの列挙は1ページ(最大20件)まで — 1在庫に紐づくバッチは通常
+   * 1〜数件で、詳細画面(listInventoryPhotoAssets)のような全ページ走査は
+   * この軽量版では行わない。
+   */
+  async listPrimaryPhotoThumbnails(inventoryIds: string[], claims: TrustedClaims): Promise<PhotoResult<Record<string, string | null>>> {
+    const actorResult = this.requireStaffOrAdmin(claims);
+    if (!actorResult.ok) return actorResult;
+    // server actionはクライアントから直接呼び出せるため、呼び出し元
+    // (表示中の一覧ページ、最大100件)を信用せず、ここでも件数上限を
+    // 強制する — 大量のinventoryIdを送りつけて並列DynamoDBクエリを
+    // 大量発火させるDoSを防ぐ (fail closed、§1.1と同じ考え方)。
+    if (!Array.isArray(inventoryIds) || inventoryIds.some((id) => typeof id !== "string")) {
+      return err("INVALID_INPUT", "inventoryIds must be a string array", "inventoryIds");
+    }
+    const MAX_IDS = 200;
+    if (inventoryIds.length > MAX_IDS) {
+      return err("INVALID_INPUT", `inventoryIds exceeds limit of ${MAX_IDS}`, "inventoryIds");
+    }
+    const uniqueIds = [...new Set(inventoryIds)];
+    const entries = await Promise.all(
+      uniqueIds.map(async (inventoryId): Promise<[string, string | null]> => {
+        const { items: batches } = await this.deps.repository.listBatchesForInventory(inventoryId, 20, null);
+        if (batches.length === 0) return [inventoryId, null];
+        const rawAssets = (await Promise.all(batches.map((batch) => this.deps.repository.getAssetsForBatch(batch.id))))
+          .flat()
+          .filter((asset) => !asset.isDeleted && asset.status === "READY" && asset.inventoryImageType !== "DAMAGE");
+        if (rawAssets.length === 0) return [inventoryId, null];
+        rawAssets.sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
+        const primary = rawAssets.find((asset) => asset.inventoryIsPrimary) ?? rawAssets[0];
+        const url = await this.safePresign(
+          photoAssetS3Key(primary.photoBatchId, primary.id, "THUMBNAIL", extensionForMimeType(primary.declared.THUMBNAIL.mimeType)),
+        );
+        return [inventoryId, url];
+      }),
+    );
+    return ok(Object.fromEntries(entries));
+  }
+
   /** requestPhotoAssetUploads のWeb向け薄いラッパー。ファイル名の危険拡張子だけこの層で追加検証する。 */
   async requestWebUploads(rawInput: unknown, claims: TrustedClaims): Promise<PhotoResult<{ batchId: string; revision: number; items: unknown[] }>> {
     const shapeCheck = checkWebUploadShape(rawInput);

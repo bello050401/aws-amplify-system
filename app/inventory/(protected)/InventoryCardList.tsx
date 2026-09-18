@@ -12,6 +12,8 @@ interface InventoryCardListProps {
   statusesById: Record<string, StatusOption>;
   /** QA005: InventoryTable.tsxの同名propと同じ — lib/inventory/listReturnParams.ts参照。 */
   listReturnQuery: string;
+  /** Photo Registrationのトップ画像URL(inventoryId→署名済みURL、無ければnull)。InventoryTable.tsxの同名propと同じ — lib/inventory/queries.tsのmainImageThumbnailKeyより優先表示する。 */
+  photoThumbnails?: Record<string, string | null>;
 }
 
 function formatYen(value: number | null): string {
@@ -30,7 +32,7 @@ function formatYen(value: number | null): string {
  * 前提 — 391pxの画面へ列選択・インライン編集グリッドを持ち込むのは
  * 現実的な操作性にならないため、意図的なスコープ外)。
  */
-export function InventoryCardList({ rows, categoriesById, locationsById, statusesById, listReturnQuery }: InventoryCardListProps) {
+export function InventoryCardList({ rows, categoriesById, locationsById, statusesById, listReturnQuery, photoThumbnails = {} }: InventoryCardListProps) {
   if (rows.length === 0) {
     return <p className="p-6 text-sm text-gray-400">該当する在庫がありません。</p>;
   }
@@ -49,7 +51,7 @@ export function InventoryCardList({ rows, categoriesById, locationsById, statuse
                 詰める——「above-the-fold 4〜6行以上」を達成する。 */}
             <Link href={buildDetailHref(row.id, listReturnQuery)} className="flex items-center gap-2.5 px-3 py-1.5 active:bg-gray-50">
               <div className="h-10 w-10 shrink-0">
-                <InventoryThumbnail storageKey={row.mainImageThumbnailKey} alt={row.name} size="list" loading="lazy" />
+                <InventoryThumbnail storageKey={row.mainImageThumbnailKey} directUrl={photoThumbnails[row.id] ?? null} alt={row.name} size="list" loading="lazy" />
               </div>
               <div className="min-w-0 flex-1 leading-tight">
                 <p className="truncate text-[12px] font-medium text-gray-900">{row.name}</p>

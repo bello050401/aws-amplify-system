@@ -35,11 +35,20 @@ const CONTAIN_SIZES: ReadonlySet<keyof typeof SIZE_CLASSES> = new Set(["list"]);
  */
 export function InventoryThumbnail({
   storageKey,
+  directUrl = null,
   alt,
   size = "small",
   loading = "lazy",
 }: {
   storageKey: string | null;
+  /**
+   * Photo Registrationで在庫に紐づけたトップ画像(inventoryIsPrimary)の
+   * 署名済みURL。すでに完成したURLなので指定時はstorageKeyのgetUrl解決を
+   * 一切行わずそのまま表示する — Inventory.images由来のstorageKeyより
+   * こちらを優先する(在庫一覧のカード画像、app/actions/photoRegistration.ts
+   * のlistInventoryPrimaryPhotoThumbnailsAction参照)。
+   */
+  directUrl?: string | null;
   alt: string;
   size?: keyof typeof SIZE_CLASSES;
   /**
@@ -68,7 +77,7 @@ export function InventoryThumbnail({
   };
 
   useEffect(() => {
-    if (loading !== "lazy" || isNearViewport || !storageKey) return;
+    if (loading !== "lazy" || isNearViewport || (!storageKey && !directUrl)) return;
     const el = elementRef.current;
     if (!el || typeof IntersectionObserver === "undefined") {
       setIsNearViewport(true);
@@ -85,15 +94,19 @@ export function InventoryThumbnail({
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [loading, isNearViewport, storageKey]);
+  }, [loading, isNearViewport, storageKey, directUrl]);
 
-  const { url, failed: resolveFailed } = useInventoryImageUrl(isNearViewport ? storageKey : null);
+  // directUrl(Photo Registrationの署名済みURL)がある間はstorageKeyの
+  // getUrl解決自体を行わない — hookは常に呼ぶ(Rules of Hooks)が、渡す
+  // キーをnullにして無駄なAmplify Storage呼び出しを避ける。
+  const { url: resolvedUrl, failed: resolveFailed } = useInventoryImageUrl(isNearViewport && !directUrl ? storageKey : null);
+  const url = directUrl ?? resolvedUrl;
   const [loadFailed, setLoadFailed] = useState(false);
-  useEffect(() => setLoadFailed(false), [storageKey]);
-  const failed = resolveFailed || loadFailed;
+  useEffect(() => setLoadFailed(false), [storageKey, directUrl]);
+  const failed = (!directUrl && resolveFailed) || loadFailed;
   const fitClass = CONTAIN_SIZES.has(size) ? "object-contain" : "object-cover";
 
-  if (!storageKey || failed) {
+  if ((!storageKey && !directUrl) || failed) {
     return (
       <div
         className={`flex ${SIZE_CLASSES[size]} shrink-0 items-center justify-center overflow-hidden border border-gray-200 bg-gray-50 text-[9px] text-gray-400`}

@@ -184,6 +184,45 @@ function buildDescription(sections: ProductPageSections, input: ProductPageGener
   });
 }
 
+/**
+ * PaidAIBudgetError時の「◎商品のご紹介」フォールバック文。
+ *
+ * 【回帰の実体】以前はここを introduction: "" のまま下のfallbackへ渡し、
+ * かつ buildDescription/composeListingDescription を経由せず旧・
+ * composeFullDescription を直接呼んでいた。その結果 ruleSections
+ * (◎商品詳細/◎発送について、常にAIとは無関係に確定済み)が丸ごと無視され、
+ * ◎商品のご紹介・◎商品詳細・◎発送について・◎返品・返金対応について・
+ * ◎お取り置きについて が軒並み欠落し、寸法・コンディション記録も無い
+ * 商品では本文がほぼ空文字列になっていた。
+ *
+ * ここではAIに一切頼らず、**facts(CustomerSafeFacts、既にcheckFactSafety
+ * の裏取り対象そのもの)にある値だけ**を使って文章を機械的に組み立てる —
+ * 新しい主張を一切増やさないので、捏造リスクを増やさずに「空」だけを防げる。
+ */
+function buildFallbackIntroduction(facts: CustomerSafeFacts): string {
+  const label = facts.categoryName?.trim() ? facts.categoryName.trim() : "商品";
+  const sentences = [`${facts.name}(${label})のご紹介です。`];
+  if (facts.dimensions?.trim()) sentences.push(`サイズは${facts.dimensions.trim()}です。`);
+  sentences.push("状態の詳細は下記コンディションを、配送方法・送料は下記発送についてをご確認ください。");
+  return sentences.join("\n");
+}
+
+/**
+ * ruleSections が渡されていない呼び出し(改善指示のA/Bテスト等)向けの
+ * 最小限のルール領域。§19の本番経路(canonical.ts)は必ずruleSectionsを
+ * 渡すため通常はここを使わないが、渡されていない場合でも「◎商品詳細」
+ * 「◎発送について」「◎コンディション」の見出しごと欠落させない
+ * (すべて空文字列を避け、facts.dimensions/conditionDisclosureがあれば
+ * それを使い、無ければ「未確定」であることが分かる定型文にする)。
+ */
+function buildFallbackRuleSections(input: ProductPageGenerationInput, facts: CustomerSafeFacts): RuleBasedSections {
+  return {
+    productDetail: facts.dimensions?.trim() ? `サイズ:${facts.dimensions.trim()}` : "詳細な寸法は確認中です。追ってご案内いたします。",
+    shipping: input.shippingBoilerplate?.trim() || "配送方法・送料は確認のうえ追ってご案内いたします。",
+    condition: facts.conditionDisclosure?.trim() || "コンディションの詳細は確認中です。追ってご案内いたします。",
+  };
+}
+
 export async function generateProductPage(input: ProductPageGenerationInput): Promise<ProductPageResult> {
   // 1. 事実を顧客向けに安全な形へ整える(社内スコア・個人情報を落とす)。
   //    ここは既存の仕組みをそのまま使う —— 検査を二重に作らない。
@@ -273,19 +312,30 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
       });
     } catch (err) {
       if (err instanceof Error && err.name === "PaidAIBudgetError") {
-        // 無料処理で確認済みの事実だけを残す。紹介文の完成を装わない。
+        // 無料処理で確認済みの事実だけを使い、AIに頼らず本文を組み立てる。
+        // 「紹介文の完成を装わない」(=良い文章のふりをしない)のはこれまで
+        // どおりだが、空文字列を返してよい理由にはならない —— 商品説明が
+        // 空のままEC出品されうる回帰を防ぐため、機械的にでも実用的な本文を
+        // 必ず作る(§課金ゲート自体は一切解除・迂回しない。生成AIは1回も
+        // 呼び出していない)。
+        const ruleSections = input.ruleSections ?? buildFallbackRuleSections(input, facts);
         const fallback: ProductPageSections = {
-          title: facts.name, introduction: "", brandSection: "", designerSection: "",
+          title: facts.name, introduction: buildFallbackIntroduction(facts), brandSection: "", designerSection: "",
           featureSection: "", materialSection: "", dimensionsSection: facts.dimensions ?? "",
           conditionSection: facts.conditionDisclosure ?? "", shippingSection: "",
         };
-        const description = composeFullDescription(fallback);
+        const description = composeListingDescription({
+          introduction: fallback.introduction,
+          productDetail: ruleSections.productDetail,
+          shipping: ruleSections.shipping,
+          condition: ruleSections.condition,
+        });
         const check = checkFactSafety({ output: [fallback.title, description].join("\n"), facts,
           stockQuantity: input.stockQuantity ?? null, sku: input.sku ?? null, maxLength: 4000 });
         return { ...base, ok: false, sections: check.ok ? fallback : null,
           fullDescription: check.ok ? description : null, violations: check.violations,
           modelProvider: null, modelName: null,
-          failureReason: "有料AIの予算制限により、確認済みの商品情報だけを無料で整理しました。紹介文は未作成です。スタッフが内容を確認・補完してください。" };
+          failureReason: "有料AIの予算制限のため、確認済みの商品情報から紹介文を自動作成しました(AIによる文章生成は行っていません)。内容を確認し、必要に応じてスタッフが手動で書き直してください。" };
       }
       return {
         ...base,

@@ -10,7 +10,6 @@ import { buildDetailHref } from "@/lib/inventory/listReturnParams";
 import { useInventoryListColumns } from "../useInventoryListColumns";
 import { InventoryThumbnail } from "../InventoryThumbnail";
 import { useDirectEdit } from "./DirectEditProvider";
-import { useInventorySelection } from "./InventorySelectionProvider";
 import { InventoryCardList } from "./InventoryCardList";
 
 interface InventoryTableProps {
@@ -29,6 +28,15 @@ interface InventoryTableProps {
    * にする。空文字列(検索条件無し)なら `from` を付けない。
    */
   listReturnQuery: string;
+  /**
+   * Photo RegistrationでこのページのInventoryに紐づけたトップ画像
+   * (inventoryIsPrimary優先)の署名済みURL — inventoryId→URL(無ければ
+   * null)。app/inventory/(protected)/page.tsxがrows全体に対して1回だけ
+   * まとめて取得する(N+1回避、lib/photoRegistration/webAdapter.tsの
+   * listPrimaryPhotoThumbnails参照)。Inventory.images由来の
+   * mainImageThumbnailKeyより優先してカード画像に表示する。
+   */
+  photoThumbnails?: Record<string, string | null>;
 }
 
 /** `cf:<fieldKey>`列(動的なCustomField列)の値をrow.customFieldsから読む — 静的列と混在した同じレンダリングループから、どちらの種類の列かをkeyの接頭辞だけで判定できる。 */
@@ -62,15 +70,13 @@ const editableCell = "overflow-hidden";
 /** 右寄せ表示する列(数値系)。幅そのものはlib/inventory/listColumns.tsのdefaultWidth + ユーザーのドラッグ操作(useInventoryListColumns.widths)へ一本化した — 列幅の初期値・保存値を二重管理しない。 */
 const RIGHT_ALIGN_COLUMNS = new Set(["quantity", "purchasePrice", "plannedSalePrice", "salePrice", "saleCommission"]);
 
-/** チェックボックス列は固定幅でよい(spec §13)。 */
-const CHECKBOX_COLUMN_WIDTH = 32;
-
 function renderReadOnlyCell(
   key: string,
   row: InventoryListRow,
   categoriesById: Record<string, MasterOption>,
   locationsById: Record<string, MasterOption>,
   statusesById: Record<string, StatusOption>,
+  photoThumbnails: Record<string, string | null>,
 ): React.ReactNode {
   if (key.startsWith("cf:")) {
     const value = customFieldValueFromRow(row, key);
@@ -90,7 +96,15 @@ function renderReadOnlyCell(
       // effectiveListThumbnailKey. This is the ONLY place in the app that
       // ever requests the thumbnail instead of the original; every other
       // screen (detail/gallery/edit preview) still uses the original.
-      return <InventoryThumbnail storageKey={row.mainImageThumbnailKey} alt={row.name} size="list" loading="lazy" />;
+      return (
+        <InventoryThumbnail
+          storageKey={row.mainImageThumbnailKey}
+          directUrl={photoThumbnails[row.id] ?? null}
+          alt={row.name}
+          size="list"
+          loading="lazy"
+        />
+      );
     case "status": {
       const status = row.statusId ? statusesById[row.statusId] : undefined;
       return status ? (
@@ -304,7 +318,7 @@ function renderEditableCell(
  * never visually diverge: this is the only place either one renders a
  * row.
  */
-export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById, customFieldDefs, listReturnQuery }: InventoryTableProps) {
+export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById, customFieldDefs, listReturnQuery, photoThumbnails = {} }: InventoryTableProps) {
   // 追加項目(CustomFieldDefinition)を動的な一覧列として扱う(夜間開発
   // 指示書 §11) — customFieldDefsが変わらない限りuseMemoで同じ配列参照
   // を保つ(useInventoryListColumns内のuseEffectの依存に使われるため)。
@@ -314,12 +328,6 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
   const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key]);
 
   const { enabled: directEditEnabled, getValue, setValue, isRowDirty } = useDirectEdit();
-  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §7: 以前は
-  // どの操作にも繋がっていなかったチェックボックス(下のtdの
-  // <input type="checkbox">参照)へ、実際の用途(選択した商品の画像を
-  // 一括自動加工——app/inventory/(protected)/InventoryToolbar.tsxの
-  // ボタン参照)を与える。
-  const { isSelected, toggle, toggleAll } = useInventorySelection();
 
   // 列幅はlib/inventory/listColumns.tsのdefaultWidth(表示設定の「初期
   // 設定に戻す」で使う既定値)を基準に、useInventoryListColumns経由の
@@ -337,7 +345,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
     return <p className="p-6 text-sm text-gray-400">該当する在庫がありません。</p>;
   }
 
-  const totalWidth = CHECKBOX_COLUMN_WIDTH + visibleColumns.reduce((sum, col) => sum + widthFor(col.key), 0);
+  const totalWidth = visibleColumns.reduce((sum, col) => sum + widthFor(col.key), 0);
 
   return (
     <>
@@ -346,7 +354,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
           InventoryCardList(カード型一覧)を表示する — 列表示設定・
           一覧直接編集を持ち込まないシンプルな縦一列ビュー。 */}
       <div className="h-full md:hidden">
-        <InventoryCardList rows={rows} categoriesById={categoriesById} locationsById={locationsById} statusesById={statusesById} listReturnQuery={listReturnQuery} />
+        <InventoryCardList rows={rows} categoriesById={categoriesById} locationsById={locationsById} statusesById={statusesById} listReturnQuery={listReturnQuery} photoThumbnails={photoThumbnails} />
       </div>
       <div className="hidden h-full overflow-auto md:block">
       {/* table-layout: fixed + 明示的なtable幅(全可視列の合計) — これが
@@ -373,15 +381,6 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
       <table className="border-collapse border-r border-gray-200 text-[13px]" style={{ tableLayout: "fixed", width: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
-            <th style={{ width: CHECKBOX_COLUMN_WIDTH }} className="px-2 py-1.5 text-center">
-              <input
-                type="checkbox"
-                className="align-middle"
-                aria-label="表示中の商品をすべて選択"
-                checked={rows.length > 0 && rows.every((row) => isSelected(row.id))}
-                onChange={() => toggleAll(rows.map((row) => row.id))}
-              />
-            </th>
             {visibleColumns.map((col) => {
               const w = widthFor(col.key);
               const align = RIGHT_ALIGN_COLUMNS.has(col.key) ? "text-right" : "text-left";
@@ -401,15 +400,6 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
             const dirty = directEditEnabled && isRowDirty(row.id);
             return (
               <tr key={row.id} className={`border-b border-gray-100 ${dirty ? "bg-amber-50" : directEditEnabled ? "" : "hover:bg-gray-50"}`}>
-                <td style={{ width: CHECKBOX_COLUMN_WIDTH }} className="px-2 py-1 text-center">
-                  <input
-                    type="checkbox"
-                    className="align-middle"
-                    aria-label={`${row.name} を選択`}
-                    checked={isSelected(row.id)}
-                    onChange={() => toggle(row.id)}
-                  />
-                </td>
                 {visibleColumns.map((col) => {
                   const editable = directEditEnabled && isInlineEditableColumn(col.key);
                   const w = widthFor(col.key);
@@ -426,10 +416,10 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                         // boolean variable, hence the assertion.
                         renderEditableCell(col.key as InlineEditFieldKey, row, categories, locations, getValue, setValue)
                       ) : directEditEnabled ? (
-                        renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById)
+                        renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails)
                       ) : (
                         <Link href={href} className="block">
-                          {renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById)}
+                          {renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails)}
                         </Link>
                       )}
                     </td>
