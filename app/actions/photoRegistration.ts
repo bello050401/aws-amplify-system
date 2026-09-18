@@ -17,6 +17,7 @@ import { PhotoRegistrationService } from "@/lib/photoRegistration/service";
 import type { AuthConfig } from "@/lib/photoRegistration/auth";
 import type { BatchListPage, PhotoStoragePort, TrustedClaims } from "@/lib/photoRegistration/ports";
 import { PHOTO_REGISTRATION_REGION, type PhotoErrorCode, type PhotoResult } from "@/lib/photoRegistration/types";
+import { assetKey } from "@/lib/photoRegistration/keys";
 
 /**
  * 画像登録Web UIのserver action境界。ここでは新しい業務判断をしない —
@@ -231,6 +232,32 @@ export async function linkPhotoBatchToInventoryAction(batchId: string, inventory
     const name = error instanceof Error ? error.name : "unknown";
     console.error("[linkPhotoBatchToInventoryAction] fast link failed", { name, batchId });
     if (name === "ConditionalCheckFailedException") return { ok: false, code: "CONFLICT", message: ERROR_LABELS.CONFLICT };
+    return { ok: false, code: "INTERNAL_ERROR", message: ERROR_LABELS.INTERNAL_ERROR };
+  }
+}
+
+export async function setPhotoAssetInventoryTypeAction(input: {
+  photoBatchId: string;
+  photoAssetId: string;
+  sequence: number;
+  type: "NORMAL" | "DAMAGE";
+}): Promise<PhotoActionResult<{ photoAssetId: string; type: "NORMAL" | "DAMAGE" }>> {
+  const role = await getInventoryRole();
+  if (!role || role === "VIEWER") return { ok: false, code: "PERMISSION_DENIED", message: ERROR_LABELS.PERMISSION_DENIED };
+  const tableName = process.env.PHOTO_REGISTRATION_TABLE_NAME;
+  if (!tableName) return NOT_CONFIGURED;
+  const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.PHOTO_REGISTRATION_AWS_REGION || PHOTO_REGISTRATION_REGION }));
+  try {
+    await ddb.send(new UpdateCommand({
+      TableName: tableName,
+      Key: assetKey(input.photoBatchId, input.sequence, input.photoAssetId),
+      UpdateExpression: "SET inventoryImageType = :type",
+      ConditionExpression: "attribute_exists(PK) AND isDeleted = :false",
+      ExpressionAttributeValues: { ":type": input.type, ":false": false },
+    }));
+    return { ok: true, value: { photoAssetId: input.photoAssetId, type: input.type } };
+  } catch (error) {
+    console.error("[setPhotoAssetInventoryTypeAction] failed", { name: error instanceof Error ? error.name : "unknown" });
     return { ok: false, code: "INTERNAL_ERROR", message: ERROR_LABELS.INTERNAL_ERROR };
   }
 }

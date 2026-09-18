@@ -4,6 +4,7 @@ import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLoc
 import { appendReturnParam } from "@/lib/inventory/listReturnParams";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { EditInventoryForm } from "./EditInventoryForm";
+import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 
 export default async function EditInventoryPage({
   params,
@@ -29,11 +30,12 @@ export default async function EditInventoryPage({
   // item に依存しない3つ(ステータス・追加項目の定義・単位)は、item の
   // 取得を待つ理由が無い。以前は item を取り切ってから5つまとめて投げて
   // いたので、独立した問い合わせが1往復ぶん後ろへずれていた。
-  const [item, statuses, customFieldDefs, units] = await Promise.all([
+  const [item, statuses, customFieldDefs, units, photoAssetsResult] = await Promise.all([
     getInventoryDetail(params.id),
     listStatuses(),
     listCustomFieldDefinitions(),
     listUnits(),
+    listInventoryPhotoAssetsAction(params.id),
   ]);
   if (!item) notFound();
 
@@ -51,7 +53,7 @@ export default async function EditInventoryPage({
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫編集</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <EditInventoryForm item={item} categories={categories} locations={locations} statuses={statuses} customFieldDefs={customFieldDefs} units={units} returnTo={detailHref} />
+        <EditInventoryForm item={item} photoAssets={photoAssetsResult.ok ? photoAssetsResult.value.assets : []} categories={categories} locations={locations} statuses={statuses} customFieldDefs={customFieldDefs} units={units} returnTo={detailHref} />
       </div>
     </div>
   );

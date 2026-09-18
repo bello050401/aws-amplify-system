@@ -279,6 +279,8 @@ export interface PhotoAssetView {
   declared: Record<PhotoAssetVariant, DeclaredObject>;
   /** どのrevisionで追加されたAssetか。追加upload失敗時に既存を巻き込まないための識別。 */
   revision: number;
+  /** Inventory画面での商品画像/傷写真の区分。未設定の撮影画像は商品画像。 */
+  inventoryImageType?: "NORMAL" | "DAMAGE";
 }
 
 /** requestUploads時にクライアントが宣言する1オブジェクト分のメタ情報。 */

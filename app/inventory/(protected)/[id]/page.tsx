@@ -124,6 +124,8 @@ export default async function InventoryDetailPage({
   ]);
   if (!item) notFound();
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
+  const normalPhotoAssets = photoAssets.filter((asset) => asset.inventoryImageType !== "DAMAGE");
+  const damagePhotoAssets = photoAssets.filter((asset) => asset.inventoryImageType === "DAMAGE");
 
   // Same reasoning as the edit page: a deactivated category/location must
   // still resolve to its name here rather than falling back to "-", since
@@ -288,7 +290,8 @@ export default async function InventoryDetailPage({
         <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-[380px_1fr]">
           {/* 左カラム: 商品画像。NORMAL/DAMAGEは明確に分離。 */}
           <div>
-            <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="商品画像" />
+            <PhotoAssetProductGallery inventoryId={item.id} initialAssets={normalPhotoAssets} title="商品画像" />
+            {normalPhotoAssets.length === 0 ? <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="商品画像" /> : null}
             {canEdit && (
               <ImageProcessingPanel
                 inventoryId={item.id}
@@ -297,8 +300,8 @@ export default async function InventoryDetailPage({
             )}
             <div className="mt-6">
               <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
+              <PhotoAssetProductGallery inventoryId={item.id} initialAssets={damagePhotoAssets} title="傷・汚れ写真" />
             </div>
-            <PhotoAssetProductGallery inventoryId={item.id} initialAssets={photoAssets} />
           </div>
 
           {/* 右カラム: 商品情報を1列で縦積み。基本情報→販売情報→サイズ

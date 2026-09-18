@@ -7,9 +7,11 @@ import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 export function PhotoAssetProductGallery({
   inventoryId,
   initialAssets,
+  title = "商品画像（撮影画像）",
 }: {
   inventoryId: string;
   initialAssets: WebPhotoAssetView[];
+  title?: string;
 }) {
   const [assets, setAssets] = useState(initialAssets);
   const [selected, setSelected] = useState(0);
@@ -35,7 +37,7 @@ export function PhotoAssetProductGallery({
 
   return (
     <div className="mt-6">
-      <p className="mb-2 text-[11px] font-bold text-gray-400">撮影画像（画像登録機能でリンク済み）</p>
+      <p className="mb-2 text-[11px] font-bold text-gray-400">{title}</p>
       <div className="flex h-[380px] w-full items-center justify-center border border-gray-200 bg-gray-50">
         {failed || !current.processedUrl ? (
           <div className="text-center text-[12px] text-gray-500">

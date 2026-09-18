@@ -161,6 +161,7 @@ interface AssetItem {
   statusBeforeDelete: PhotoAssetStatus | null;
   sourceType: PhotoAssetSourceType;
   revision: number;
+  inventoryImageType?: "NORMAL" | "DAMAGE";
   listingSelectionCount: number;
   declaredProcessedMimeType: string;
   declaredProcessedFileSize: number;
@@ -181,6 +182,7 @@ function assetViewFromItem(item: AssetItem): PhotoAssetView {
     statusBeforeDelete: item.statusBeforeDelete ?? null,
     sourceType: item.sourceType,
     revision: item.revision,
+    inventoryImageType: item.inventoryImageType === "DAMAGE" ? "DAMAGE" : "NORMAL",
     declared: {
       PROCESSED: {
         mimeType: item.declaredProcessedMimeType,
