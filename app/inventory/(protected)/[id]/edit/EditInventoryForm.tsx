@@ -300,10 +300,6 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
           <p className="mb-2 text-[11px] font-bold text-gray-400">追加アップロード画像</p>
           <ImageEditor slots={normalImageSlots} onChange={setNormalImageSlots} variant="normal" />
         </div>
-        <div className="border border-gray-200 p-4">
-          <p className="mb-2 text-[11px] font-bold text-gray-400">傷・汚れ写真</p>
-          <ImageEditor slots={damageImageSlots} onChange={setDamageImageSlots} variant="damage" />
-        </div>
       </div>
 
       {/* 中央カラム: 大きな入力欄の単一カラムフォーム(master指示書

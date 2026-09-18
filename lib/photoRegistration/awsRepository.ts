@@ -162,6 +162,7 @@ interface AssetItem {
   sourceType: PhotoAssetSourceType;
   revision: number;
   inventoryImageType?: "NORMAL" | "DAMAGE";
+  inventoryIsPrimary?: boolean;
   listingSelectionCount: number;
   declaredProcessedMimeType: string;
   declaredProcessedFileSize: number;
@@ -183,6 +184,7 @@ function assetViewFromItem(item: AssetItem): PhotoAssetView {
     sourceType: item.sourceType,
     revision: item.revision,
     inventoryImageType: item.inventoryImageType === "DAMAGE" ? "DAMAGE" : "NORMAL",
+    inventoryIsPrimary: item.inventoryIsPrimary === true,
     declared: {
       PROCESSED: {
         mimeType: item.declaredProcessedMimeType,

@@ -124,7 +124,9 @@ export default async function InventoryDetailPage({
   ]);
   if (!item) notFound();
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
-  const normalPhotoAssets = photoAssets.filter((asset) => asset.inventoryImageType !== "DAMAGE");
+  const normalPhotoAssets = photoAssets
+    .filter((asset) => asset.inventoryImageType !== "DAMAGE")
+    .sort((a, b) => Number(b.inventoryIsPrimary === true) - Number(a.inventoryIsPrimary === true));
   const damagePhotoAssets = photoAssets.filter((asset) => asset.inventoryImageType === "DAMAGE");
 
   // Same reasoning as the edit page: a deactivated category/location must

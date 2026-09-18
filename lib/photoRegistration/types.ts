@@ -281,6 +281,8 @@ export interface PhotoAssetView {
   revision: number;
   /** Inventory画面での商品画像/傷写真の区分。未設定の撮影画像は商品画像。 */
   inventoryImageType?: "NORMAL" | "DAMAGE";
+  /** Inventoryの商品画像でトップに表示する撮影画像。 */
+  inventoryIsPrimary?: boolean;
 }
 
 /** requestUploads時にクライアントが宣言する1オブジェクト分のメタ情報。 */

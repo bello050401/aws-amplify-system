@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listInventorySimpleSearch, listStatuses } from "@/lib/inventory/queries";
 import {
@@ -258,6 +258,49 @@ export async function setPhotoAssetInventoryTypeAction(input: {
     return { ok: true, value: { photoAssetId: input.photoAssetId, type: input.type } };
   } catch (error) {
     console.error("[setPhotoAssetInventoryTypeAction] failed", { name: error instanceof Error ? error.name : "unknown" });
+    return { ok: false, code: "INTERNAL_ERROR", message: ERROR_LABELS.INTERNAL_ERROR };
+  }
+}
+
+export async function setPhotoAssetPrimaryAction(input: {
+  selected: { photoBatchId: string; photoAssetId: string; sequence: number };
+  previous?: { photoBatchId: string; photoAssetId: string; sequence: number };
+}): Promise<PhotoActionResult<{ photoAssetId: string }>> {
+  const role = await getInventoryRole();
+  if (!role || role === "VIEWER") return { ok: false, code: "PERMISSION_DENIED", message: ERROR_LABELS.PERMISSION_DENIED };
+  const tableName = process.env.PHOTO_REGISTRATION_TABLE_NAME;
+  if (!tableName) return NOT_CONFIGURED;
+  const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.PHOTO_REGISTRATION_AWS_REGION || PHOTO_REGISTRATION_REGION }));
+  const selectedKey = assetKey(input.selected.photoBatchId, input.selected.sequence, input.selected.photoAssetId);
+  const previousKey = input.previous
+    ? assetKey(input.previous.photoBatchId, input.previous.sequence, input.previous.photoAssetId)
+    : null;
+  try {
+    await ddb.send(new TransactWriteCommand({
+      TransactItems: [
+        ...(previousKey && (previousKey.PK !== selectedKey.PK || previousKey.SK !== selectedKey.SK) ? [{
+          Update: {
+            TableName: tableName,
+            Key: previousKey,
+            UpdateExpression: "SET inventoryIsPrimary = :false",
+            ConditionExpression: "attribute_exists(PK) AND isDeleted = :false",
+            ExpressionAttributeValues: { ":false": false },
+          },
+        }] : []),
+        {
+          Update: {
+            TableName: tableName,
+            Key: selectedKey,
+            UpdateExpression: "SET inventoryIsPrimary = :true",
+            ConditionExpression: "attribute_exists(PK) AND isDeleted = :false AND (attribute_not_exists(inventoryImageType) OR inventoryImageType = :normal)",
+            ExpressionAttributeValues: { ":true": true, ":false": false, ":normal": "NORMAL" },
+          },
+        },
+      ],
+    }));
+    return { ok: true, value: { photoAssetId: input.selected.photoAssetId } };
+  } catch (error) {
+    console.error("[setPhotoAssetPrimaryAction] failed", { name: error instanceof Error ? error.name : "unknown" });
     return { ok: false, code: "INTERNAL_ERROR", message: ERROR_LABELS.INTERNAL_ERROR };
   }
 }
