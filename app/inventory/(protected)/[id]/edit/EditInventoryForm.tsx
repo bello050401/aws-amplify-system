@@ -133,7 +133,9 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
   const [extendedValues, setExtendedValues] = useState<Record<string, string>>(extendedValuesFromRecord(item));
   const { normal: initialNormal, damage: initialDamage } = splitImagesByType(item.images);
   const [normalImageSlots, setNormalImageSlots] = useState<ImageEditorSlot[]>(slotsFromExistingImages(initialNormal));
-  const [damageImageSlots, setDamageImageSlots] = useState<ImageEditorSlot[]>(slotsFromExistingImages(initialDamage));
+  // 既存の傷写真データは保存時に保持する。新規追加欄は撮影画像からの分類へ
+  // 統一したため、この画面では変更しない。
+  const [damageImageSlots] = useState<ImageEditorSlot[]>(slotsFromExistingImages(initialDamage));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
