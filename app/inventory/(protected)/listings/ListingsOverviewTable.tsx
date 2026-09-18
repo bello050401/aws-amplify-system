@@ -7,10 +7,8 @@ import { useRouter } from "next/navigation";
 import {
   bulkCreateListingDraftsAction,
   exportMercariShopsCsvAction,
-  getMercariCsvImageZipPlanAction,
   listListingsOverviewSafeAction,
 } from "@/app/actions/listing";
-import { assembleZipFromPlan, downloadZipBlob } from "@/lib/listing/mercari/csv/browserImageZip";
 import type { ListingOverviewRow } from "@/lib/listing/service";
 import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
 import {
@@ -146,32 +144,11 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
   const [csvBusy, setCsvBusy] = useState(false);
   const [csvOutcome, setCsvOutcome] = useState<MercariCsvExportOutcome | null>(null);
 
-  // 2026-09-14 指示書レビュー修正: MercariCategoryMappingSection.tsxの
-  // 画像ZIP保存ボタンは商品詳細ページ内で常に[inventoryId]という1要素
-  // 配列しか渡しておらず、サーバー側が想定する最大20商品/100枚の
-  // シナリオ(lib/listing/mercari/csv/imageBundle.tsのMAX_ZIP_PRODUCTS/
-  // MAX_ZIP_IMAGES)を実ブラウザから再現する導線が一覧側に無かった。
-  // CSVモードの選択(selected、csvExportEligibleInventoryIdsと同じ対象
-  // ——下書きがある商品のみ)をそのままgetMercariCsvImageZipPlanActionへ
-  // 渡す——「CSVを作成」と同じ選択導線を共有し、対象範囲の食い違いを生まない。
-  //
-  // task_f712cf24a9fe2308cd(2026-09-14是正): 画像ZIPの実体組み立ては
-  // ブラウザ側(browserImageZip.ts)に移した——ここが持つのは表示用の
-  // 結果(成功/失敗理由/失敗内訳)だけで、zipBase64のような巨大な
-  // ペイロードはもうこのコンポーネントの状態に載らない。
-  const [zipBusy, setZipBusy] = useState(false);
-  const [zipOutcome, setZipOutcome] = useState<
-    | { ok: true; fileCount: number }
-    | { ok: false; reason?: string; failures?: { inventoryId: string; displayId: string; reason: string }[] }
-    | null
-  >(null);
-
   function switchMode(next: "draft" | "csv") {
     if (next === mode) return;
     setMode(next);
     setSelected(new Set());
     setCsvOutcome(null);
-    setZipOutcome(null);
     setResultMessage(null);
     setErrorMessage(null);
   }
@@ -285,49 +262,6 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
       });
     } finally {
       setCsvBusy(false);
-    }
-  }
-
-  /**
-   * 画像まとめダウンロード(ZIP)。
-   *
-   * task_f712cf24a9fe2308cd(2026-09-14是正): 旧実装はgetMercariCsvImageZipAction
-   * (Server Action)が画像バイトを読み切ってbase64で返していたが、実写真
-   * 運用でAmplify Hosting Web Computeの応答上限(5.72MB)を超える設計
-   * だったため撤去した(根拠はlib/listing/mercari/csv/imageBundle.tsの
-   * コメント参照)。新しい流れ:
-   *   1. getMercariCsvImageZipPlanAction — 対象商品/画像の「計画」
-   *      (署名URLの一覧、数十KB程度の小さい応答)だけを取得する。
-   *      選択件数がMAX_ZIP_PRODUCTS(=20)を超える、または対象画像の
-   *      合計がMAX_ZIP_IMAGES(=100)を超える場合はここで拒否される。
-   *   2. assembleZipFromPlan(browserImageZip.ts) — ブラウザが署名URLへ
-   *      直接fetchし(このサーバーを経由しない)、ZIPを組み立てる。
-   * 上限判定はサーバー側の結果をそのまま表示するだけで、クライアント側で
-   * 先読みして黙って弾いたりしない(「押した瞬間に本当の理由が分かる」を
-   * 優先)。1件でも画像取得に失敗したら全体を止め、部分成功のZIPは作らない
-   * (failures配列でどの商品のどの画像が失敗したかを表示する)。
-   */
-  async function runImageZipDownload() {
-    if (selected.size === 0 || zipBusy) return;
-    setZipBusy(true);
-    setZipOutcome(null);
-    try {
-      const plan = await getMercariCsvImageZipPlanAction(Array.from(selected));
-      if (!plan.ok || !plan.plan || !plan.filename) {
-        setZipOutcome({ ok: false, reason: plan.reason, failures: plan.failures });
-        return;
-      }
-      const assembled = await assembleZipFromPlan(plan.filename, plan.plan);
-      if (!assembled.ok) {
-        setZipOutcome({ ok: false, reason: assembled.reason, failures: assembled.failures });
-        return;
-      }
-      downloadZipBlob(assembled.blob, assembled.filename);
-      setZipOutcome({ ok: true, fileCount: assembled.fileCount });
-    } catch (err) {
-      setZipOutcome({ ok: false, reason: err instanceof Error ? err.message : "画像のダウンロードに失敗しました。" });
-    } finally {
-      setZipBusy(false);
     }
   }
 
@@ -494,15 +428,7 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
                 >
                   {csvBusy ? "生成中…" : "CSVを作成"}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void runImageZipDownload()}
-                  disabled={zipBusy || selected.size === 0}
-                  className="border border-gray-900 px-3 py-1 text-[13px] font-bold text-gray-900 disabled:opacity-50"
-                  title="選択した商品の下書き画像をまとめてZIPで保存します(CSVの商品画像名列と同じファイル名——手作業でのリネームは不要です)。一度に最大20商品・合計100枚までです。"
-                >
-                  {zipBusy ? "ZIP作成中…" : "画像をまとめてZIPで保存"}
-                </button>
+
               </>
             )}
             {/* Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
@@ -555,30 +481,6 @@ export function ListingsOverviewTable({ initialResult, canEdit }: { initialResul
                         {row.displayId}
                       </Link>
                       : {row.reasons.join(" / ")}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {zipOutcome && (
-        <div className={`mb-2 border p-2 text-[12px] ${zipOutcome.ok ? "border-green-300 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-700"}`}>
-          {zipOutcome.ok ? (
-            <p>画像ZIPを保存しました（{(zipOutcome.fileCount ?? 0).toLocaleString("ja-JP")}枚）。ダウンロードが開始されない場合はポップアップブロックをご確認ください。</p>
-          ) : (
-            <div>
-              <p className="font-bold">画像ZIPを作成できませんでした——{zipOutcome.reason ?? "不明なエラーです。"}</p>
-              {zipOutcome.failures && zipOutcome.failures.length > 0 && (
-                <ul className="mt-1 list-disc pl-4">
-                  {zipOutcome.failures.map((f, i) => (
-                    <li key={`${f.inventoryId}-${i}`}>
-                      <Link href={`/inventory/${f.inventoryId}/listing`} className="font-mono underline">
-                        {f.displayId}
-                      </Link>
-                      : {f.reason}
                     </li>
                   ))}
                 </ul>

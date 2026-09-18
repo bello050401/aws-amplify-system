@@ -17,7 +17,7 @@ export interface MercariCsvRowFields {
   inventoryId: string;
   /** 表示用(エラー文言に出す) — 在庫ID。 */
   displayId: string;
-  images: string[]; // 商品画像名_1..20 に入れる値(ファイル名)。最大20件。
+  images: string[]; // 商品画像名_1..20 に入れる画像URL。最大20件。
   productName: string;
   productDescription: string;
   skuType: string | null;

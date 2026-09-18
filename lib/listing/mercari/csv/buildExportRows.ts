@@ -40,12 +40,30 @@ export async function buildExportRowForInventory(inventoryId: string): Promise<R
 
   const channelListing = await getChannelListing(inventoryId, "MERCARI_SHOPS");
 
-  return assembleMercariCsvRowFields(
+  const row = assembleMercariCsvRowFields(
     inventoryId,
     { displayId: inventory.displayId, quantity: inventory.quantity, sku: inventory.sku, barcode: inventory.barcode ?? null },
     draft,
     channelListing,
   );
+  if (!row.ok) return row;
+
+  // Mercari Shops は商品画像列にURLを指定すると画像を取り込めるため、
+  // 手動のZIP受け渡し用ファイル名ではなく、選択済み画像の閲覧URLを出力する。
+  // URLは自社バケット内の下書き画像からだけ発行し、バケット自体は公開しない。
+  const sortedImages = draft.images.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+  const imageUrls = await Promise.all(sortedImages.map((image) => resolveListingImageDownloadUrl(image)));
+  const failedIndex = imageUrls.findIndex((url) => !url);
+  if (failedIndex >= 0) {
+    return {
+      ok: false,
+      inventoryId,
+      displayId: inventory.displayId,
+      reasons: [`商品画像${failedIndex + 1}のURLを発行できませんでした。画像を選び直して再度CSVを作成してください`],
+    };
+  }
+  row.fields.images = imageUrls as string[];
+  return row;
 }
 
 /** 画像を人がMercari側へ手動アップロードするための一時ダウンロードURLを発行する。

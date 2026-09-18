@@ -1,14 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  getMercariCsvImageDownloadLinksAction,
-  getMercariCsvImageZipPlanAction,
-  saveChannelOverrideAction,
-  searchMercariBrandsAction,
-  type MercariCsvImageDownloadLink,
-} from "@/app/actions/listing";
-import { assembleZipFromPlan, downloadZipBlob } from "@/lib/listing/mercari/csv/browserImageZip";
+import { saveChannelOverrideAction, searchMercariBrandsAction } from "@/app/actions/listing";
 import {
   DEFAULT_MERCARI_CSV_PRODUCT_STATUS,
   DEFAULT_MERCARI_SHIPPING_DAYS,
@@ -189,22 +182,6 @@ export function MercariCategoryMappingSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapping?.mercariCsvProductStatus]);
 
-  const [imageLinksBusy, setImageLinksBusy] = useState(false);
-  const [imageLinksError, setImageLinksError] = useState<string | null>(null);
-  const [imageLinks, setImageLinks] = useState<MercariCsvImageDownloadLink[] | null>(null);
-  const [zipBusy, setZipBusy] = useState(false);
-  const [zipError, setZipError] = useState<string | null>(null);
-  // 2026-09-14 指示書レビュー修正: 以前はgetMercariCsvImageZipActionの
-  // 戻り値のうちトップレベルの`reason`(常に同じ固定文言
-  // 「一部商品の画像を取得できませんでした」)だけを表示しており、
-  // 実際にどの画像が・なぜ(期限切れ/権限なし/削除済み等、HTTPステータス
-  // ごとの理由はimageBundle.tsのfailures[].reasonにしか無い)失敗した
-  // かが画面から一切分からなかった——手動運用でこの後どう対処すべきか
-  // (再ログイン/管理者確認/別画像を選び直す)を利用者が判断できない。
-  // 一覧側の一括ZIP(ListingsOverviewTable.tsx)と同じくfailures配列を
-  // そのまま表示する。
-  const [zipFailures, setZipFailures] = useState<{ inventoryId: string; displayId: string; reason: string }[] | null>(null);
-  const [zipDone, setZipDone] = useState(false);
 
   // 家具店向け効率化指示書(2026-09-15) §4-D: ブランド検索の改良。
   // - 入力のたびに自動検索する(デバウンス300ms、検索語を考えず
@@ -508,70 +485,6 @@ export function MercariCategoryMappingSection({
       mercariShippingMethod: mapping?.mercariShippingMethod,
       mercariCsvProductStatus: parsed as 1 | 2,
     });
-  }
-
-  /**
-   * 画像受渡し(§4「次点」)。既存BASE画像URLとの確定紐付けは今回未実装
-   * (根拠: getMercariCsvImageDownloadLinksAction参照)——自社S3の署名URL
-   * (1時間有効)を人が手元へ落として、Mercari側へ手動アップロードする
-   * ための一覧だけをここで見せる。
-   */
-  async function loadImageLinks() {
-    setImageLinksBusy(true);
-    setImageLinksError(null);
-    try {
-      const result = await getMercariCsvImageDownloadLinksAction(inventoryId);
-      if (!result.ok) {
-        setImageLinksError(result.reason);
-        setImageLinks(null);
-        return;
-      }
-      setImageLinks(result.links);
-    } catch (err) {
-      setImageLinksError(err instanceof Error ? err.message : "画像リンクの取得に失敗しました。");
-    } finally {
-      setImageLinksBusy(false);
-    }
-  }
-
-  /**
-   * 画像をまとめてZIPで保存する。ZIP内のファイル名はCSVの商品画像名列
-   * (imageFilename()、lib/listing/mercari/csv/assembleRow.ts)と同じ
-   * 値なので、展開した画像をそのままCSVの指定名として使える——手作業
-   * でのリネームは不要。1枚でも取得に失敗した場合はZIP自体を作らず
-   * エラーを表示する(一部だけ欠けたZIPを黙って成功扱いにしない)。
-   *
-   * task_f712cf24a9fe2308cd(2026-09-14是正): getMercariCsvImageZipPlanAction
-   * (署名URLの一覧だけを返す小さい応答)→assembleZipFromPlan(ブラウザが
-   * S3から直接取得してZIPを組み立てる)という2段構成に変更した——理由は
-   * ListingsOverviewTable.tsxのrunImageZipDownloadと同じ
-   * (lib/listing/mercari/csv/imageBundle.tsのコメント参照)。
-   */
-  async function handleDownloadZip() {
-    setZipBusy(true);
-    setZipError(null);
-    setZipFailures(null);
-    setZipDone(false);
-    try {
-      const plan = await getMercariCsvImageZipPlanAction([inventoryId]);
-      if (!plan.ok || !plan.plan || !plan.filename) {
-        setZipError(plan.reason ?? "画像のダウンロードに失敗しました。");
-        setZipFailures(plan.failures && plan.failures.length > 0 ? plan.failures : null);
-        return;
-      }
-      const assembled = await assembleZipFromPlan(plan.filename, plan.plan);
-      if (!assembled.ok) {
-        setZipError(assembled.reason ?? "画像のダウンロードに失敗しました。");
-        setZipFailures(assembled.failures && assembled.failures.length > 0 ? assembled.failures : null);
-        return;
-      }
-      downloadZipBlob(assembled.blob, assembled.filename);
-      setZipDone(true);
-    } catch (err) {
-      setZipError(err instanceof Error ? err.message : "画像のダウンロードに失敗しました。");
-    } finally {
-      setZipBusy(false);
-    }
   }
 
   if (!hasDraft) {
@@ -896,55 +809,6 @@ export function MercariCategoryMappingSection({
             保存
           </button>
         </div>
-      </div>
-
-      <div className="mt-3 border-t border-gray-100 pt-3">
-        <p className="mb-1 text-[12px] font-bold text-gray-700">画像の受け渡し（CSV出力用）</p>
-        <p className="mb-1 text-[11px] text-gray-400">
-          CSVは画像ファイル名だけを含み、画像ファイル自体はMercari側で別途アップロードが必要です。
-          保存されるファイル名はCSVの商品画像名列と同じになるため、手作業でのリネームは不要です。
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void handleDownloadZip()}
-            disabled={zipBusy}
-            className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-            title="下書き画像をまとめてZIPで保存します（1枚でも取得に失敗した場合はZIPは作成されません）"
-          >
-            {zipBusy ? "ZIP作成中…" : "画像をまとめてZIPで保存"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void loadImageLinks()}
-            disabled={imageLinksBusy}
-            className="border border-gray-300 px-2 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-          >
-            {imageLinksBusy ? "取得中…" : "画像を1枚ずつ保存するリンクを表示"}
-          </button>
-        </div>
-        {zipDone && <p className="mt-1 text-[12px] text-green-700">ZIPを保存しました。</p>}
-        {zipError && <p className="mt-1 text-[12px] text-red-600">{zipError}</p>}
-        {zipFailures && (
-          <ul className="mt-1 list-disc pl-4 text-[12px] text-red-600">
-            {zipFailures.map((f, i) => (
-              <li key={`${f.inventoryId}-${i}`}>{f.reason}</li>
-            ))}
-          </ul>
-        )}
-        {imageLinksError && <p className="mt-1 text-[12px] text-red-600">{imageLinksError}</p>}
-        {imageLinks && (
-          <ul className="mt-1 text-[12px]">
-            {imageLinks.map((link) => (
-              <li key={link.filename}>
-                {/* Content-Dispositionをサーバー側で指定済み(CSVと同じファイル名で保存される)。download属性は同一オリジン化した場合の保険。 */}
-                <a href={link.url} download={link.filename} target="_blank" rel="noreferrer" className="text-blue-700 underline">
-                  {link.filename}
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
 
       {message && <p className="mt-2 text-[12px] text-green-700">{message}</p>}
