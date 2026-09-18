@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listInventorySimpleSearch, listStatuses } from "@/lib/inventory/queries";
 import {
@@ -276,28 +276,24 @@ export async function setPhotoAssetPrimaryAction(input: {
     ? assetKey(input.previous.photoBatchId, input.previous.sequence, input.previous.photoAssetId)
     : null;
   try {
-    await ddb.send(new TransactWriteCommand({
-      TransactItems: [
-        ...(previousKey && (previousKey.PK !== selectedKey.PK || previousKey.SK !== selectedKey.SK) ? [{
-          Update: {
-            TableName: tableName,
-            Key: previousKey,
-            UpdateExpression: "SET inventoryIsPrimary = :false",
-            ConditionExpression: "attribute_exists(PK) AND isDeleted = :false",
-            ExpressionAttributeValues: { ":false": false },
-          },
-        }] : []),
-        {
-          Update: {
-            TableName: tableName,
-            Key: selectedKey,
-            UpdateExpression: "SET inventoryIsPrimary = :true",
-            ConditionExpression: "attribute_exists(PK) AND isDeleted = :false AND (attribute_not_exists(inventoryImageType) OR inventoryImageType = :normal)",
-            ExpressionAttributeValues: { ":true": true, ":normal": "NORMAL" },
-          },
-        },
-      ],
+    // Photo Registration用Lambdaには通常のUpdateItemだけが許可されている。
+    // 選択画像を先に有効化することで、途中失敗でもトップ画像が0枚にならない。
+    await ddb.send(new UpdateCommand({
+      TableName: tableName,
+      Key: selectedKey,
+      UpdateExpression: "SET inventoryIsPrimary = :true",
+      ConditionExpression: "attribute_exists(PK) AND isDeleted = :false AND (attribute_not_exists(inventoryImageType) OR inventoryImageType = :normal)",
+      ExpressionAttributeValues: { ":true": true, ":false": false, ":normal": "NORMAL" },
     }));
+    if (previousKey && (previousKey.PK !== selectedKey.PK || previousKey.SK !== selectedKey.SK)) {
+      await ddb.send(new UpdateCommand({
+        TableName: tableName,
+        Key: previousKey,
+        UpdateExpression: "SET inventoryIsPrimary = :false",
+        ConditionExpression: "attribute_exists(PK) AND isDeleted = :false",
+        ExpressionAttributeValues: { ":false": false },
+      }));
+    }
     return { ok: true, value: { photoAssetId: input.selected.photoAssetId } };
   } catch (error) {
     console.error("[setPhotoAssetPrimaryAction] failed", { name: error instanceof Error ? error.name : "unknown" });
