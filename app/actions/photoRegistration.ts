@@ -293,7 +293,7 @@ export async function setPhotoAssetPrimaryAction(input: {
             Key: selectedKey,
             UpdateExpression: "SET inventoryIsPrimary = :true",
             ConditionExpression: "attribute_exists(PK) AND isDeleted = :false AND (attribute_not_exists(inventoryImageType) OR inventoryImageType = :normal)",
-            ExpressionAttributeValues: { ":true": true, ":false": false, ":normal": "NORMAL" },
+            ExpressionAttributeValues: { ":true": true, ":normal": "NORMAL" },
           },
         },
       ],
