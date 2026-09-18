@@ -30,8 +30,10 @@ try {
  badQuality=true;const beforePaid=paid;budget.settlePaidAttempt=async()=>{settles++;deny=true;return true;};
  await assert.rejects(()=>routeGenerateText(p,{task:'CUSTOMER_REPLY_DRAFT',systemPrompt:'s',userPrompt:'u',policy:{initialTier:'STANDARD',promptVersion:'t'},qualityRules:{minLength:20}}),PaidAIBudgetError);
  assert.equal(paid,beforePaid+1);assertions+=2;
- const unsupported=new BudgetedGatewayProvider({providerId:'unknown',generateText:async()=>{throw Error('must not call');}} as any,budget);
- await assert.rejects(()=>unsupported.generateText('CLASSIFICATION','s','u',policy),PaidAIBudgetError);assertions++;
+ const reservesBeforeListing=reserves;
+ const ecProvider=new BudgetedGatewayProvider({providerId:'ec-provider',generateText:async()=>({output:'EC description',usage:{inputTokens:1,outputTokens:1},latencyMs:1,providerId:'ec-provider',modelId:'ec-model',qualityTier:'STANDARD',fallbackOccurred:false,qualityGatePassed:true,qualityGateViolations:[]})} as any,budget);
+ const ecResult=await ecProvider.generateText('LISTING_DESCRIPTION_GENERATION','s','u',policy);
+ assert.equal(ecResult.output,'EC description');assert.equal(reserves,reservesBeforeListing);assertions+=2;
  deny=false;badQuality=false;
  const mismatched=new NovaGatewayProvider();
  const realGenerate=mismatched.generateText.bind(mismatched);
