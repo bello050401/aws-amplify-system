@@ -181,14 +181,17 @@ export class PhotoRegistrationWebAdapter {
   }
 
   private async toWebAsset(asset: PhotoAssetView): Promise<WebPhotoAssetView> {
+    // Both variants are independent signatures. Waiting for the thumbnail
+    // before starting the processed image adds an avoidable signing round
+    // trip to every photo detail view.
+    const [thumbnailUrl, processedUrl] = await Promise.all([
+      this.safePresign(photoAssetS3Key(asset.photoBatchId, asset.id, "THUMBNAIL", extensionForMimeType(asset.declared.THUMBNAIL.mimeType))),
+      this.safePresign(photoAssetS3Key(asset.photoBatchId, asset.id, "PROCESSED", extensionForMimeType(asset.declared.PROCESSED.mimeType))),
+    ]);
     return {
       ...asset,
-      thumbnailUrl: await this.safePresign(
-        photoAssetS3Key(asset.photoBatchId, asset.id, "THUMBNAIL", extensionForMimeType(asset.declared.THUMBNAIL.mimeType)),
-      ),
-      processedUrl: await this.safePresign(
-        photoAssetS3Key(asset.photoBatchId, asset.id, "PROCESSED", extensionForMimeType(asset.declared.PROCESSED.mimeType)),
-      ),
+      thumbnailUrl,
+      processedUrl,
     };
   }
 
