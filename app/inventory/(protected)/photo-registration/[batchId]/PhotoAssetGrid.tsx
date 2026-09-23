@@ -75,7 +75,7 @@ export function PhotoAssetGrid({
             <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded bg-gray-100">
               {asset.thumbnailUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- 署名付きURLは短命かつ動的なので next/image の外部ドメイン許可対象にしない
-                <img src={asset.thumbnailUrl} alt={`画像 ${asset.sequence + 1 || index + 1}`} className="h-full w-full object-cover" loading="lazy" />
+                <img src={asset.thumbnailUrl} alt={`画像 ${asset.sequence + 1 || index + 1}`} className="h-full w-full object-contain" loading="lazy" />
               ) : (
                 <span className="text-xs text-gray-400">画像を表示できません</span>
               )}

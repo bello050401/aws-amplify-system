@@ -16,13 +16,14 @@ const SIZE_CLASSES = {
   list: "h-[60px] w-[90px]",
   large: "h-20 w-full", // unused after the detail-page gallery rework, kept for any other small-preview use (e.g. ImageEditor slots)
   hero: "h-[380px] w-full", // detail page main image / no-image fallback
+  heroContain: "h-[260px] w-full", // photo-registration selection preview
 } as const;
 
 // "list" uses object-contain (never crop — letterbox on a white
 // background instead) since its whole point is showing a 3:2 photo
 // uncropped; every other size keeps the previous object-cover behavior,
 // where a cropped square/fixed box reads fine at that size.
-const CONTAIN_SIZES: ReadonlySet<keyof typeof SIZE_CLASSES> = new Set(["list"]);
+const CONTAIN_SIZES: ReadonlySet<keyof typeof SIZE_CLASSES> = new Set(["list", "heroContain"]);
 
 /**
  * Resolves an `inventory/*` Storage key to a viewable URL client-side, one
@@ -99,11 +100,15 @@ export function InventoryThumbnail({
   // directUrl(Photo Registrationの署名済みURL)がある間はstorageKeyの
   // getUrl解決自体を行わない — hookは常に呼ぶ(Rules of Hooks)が、渡す
   // キーをnullにして無駄なAmplify Storage呼び出しを避ける。
-  const { url: resolvedUrl, failed: resolveFailed } = useInventoryImageUrl(isNearViewport && !directUrl ? storageKey : null);
-  const url = directUrl ?? resolvedUrl;
-  const [loadFailed, setLoadFailed] = useState(false);
-  useEffect(() => setLoadFailed(false), [storageKey, directUrl]);
-  const failed = (!directUrl && resolveFailed) || loadFailed;
+  // A Photo Registration URL may expire between signing and image download.
+  // Fall back to the inventory thumbnail when one exists, instead of turning
+  // a product that has an image into a permanent "No Image" tile.
+  const [failedSource, setFailedSource] = useState<"direct" | "storage" | null>(null);
+  useEffect(() => setFailedSource(null), [storageKey, directUrl]);
+  const useStorage = !directUrl || failedSource === "direct";
+  const { url: resolvedUrl, failed: resolveFailed } = useInventoryImageUrl(isNearViewport && useStorage ? storageKey : null);
+  const url = useStorage ? resolvedUrl : directUrl;
+  const failed = failedSource === "storage" || (useStorage && resolveFailed) || (failedSource === "direct" && !storageKey);
   const fitClass = CONTAIN_SIZES.has(size) ? "object-contain" : "object-cover";
 
   if ((!storageKey && !directUrl) || failed) {
@@ -149,7 +154,7 @@ export function InventoryThumbnail({
         // exist at that key. Falls back to the same placeholder instead
         // of leaving a permanently broken-image icon.
         console.error(`[InventoryThumbnail] image failed to load for "${storageKey}":`, e);
-        setLoadFailed(true);
+        setFailedSource(useStorage ? "storage" : "direct");
       }}
       className={`${SIZE_CLASSES[size]} shrink-0 overflow-hidden border border-gray-200 ${fitClass} bg-gray-50`}
     />

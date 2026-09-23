@@ -83,6 +83,7 @@ function makeRow(i: number, overrides: Partial<InventoryListRow> = {}): Inventor
     // (常に解決をやり直す)ので、行ごとに独立したイベントとして観測できる。
     mainImageStorageKey: "e2e-fixture:original",
     mainImageThumbnailKey: "e2e-fixture:small",
+    imageCount: 1,
     createdAt: now,
     updatedAt: now,
     barcode: null,

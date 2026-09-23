@@ -41,7 +41,9 @@ export function PhotoAssetImageEditor({ assets: initialAssets }: { assets: WebPh
           <div className="grid grid-cols-2 gap-2">
             {group.map((asset) => (
               <div key={asset.id} className="rounded border border-gray-200 bg-white p-1.5">
-                {asset.thumbnailUrl ? <img src={asset.thumbnailUrl} alt={`撮影画像 ${asset.sequence + 1}`} className="aspect-square w-full object-cover" /> : <div className="aspect-square bg-gray-100" />}
+                {/* 署名付きS3 URLのホストは環境ごとに異なる。 */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                {asset.thumbnailUrl ? <img src={asset.thumbnailUrl} alt={`撮影画像 ${asset.sequence + 1}`} className="aspect-square w-full bg-gray-50 object-contain" /> : <div className="aspect-square bg-gray-100" />}
                 {type === "NORMAL" ? (
                   <button type="button" disabled={pendingId === asset.id || asset.inventoryIsPrimary} onClick={() => setPrimary(asset)}
                     className="mt-1 min-h-7 w-full border border-blue-300 px-1 text-[10px] text-blue-700 hover:bg-blue-50 disabled:bg-blue-50 disabled:font-bold disabled:opacity-100">

@@ -276,22 +276,38 @@ export class PhotoRegistrationWebAdapter {
       return err("INVALID_INPUT", `inventoryIds exceeds limit of ${MAX_IDS}`, "inventoryIds");
     }
     const uniqueIds = [...new Set(inventoryIds)];
-    const entries = await Promise.all(
-      uniqueIds.map(async (inventoryId): Promise<[string, string | null]> => {
-        const { items: batches } = await this.deps.repository.listBatchesForInventory(inventoryId, 20, null);
-        if (batches.length === 0) return [inventoryId, null];
-        const rawAssets = (await Promise.all(batches.map((batch) => this.deps.repository.getAssetsForBatch(batch.id))))
-          .flat()
-          .filter((asset) => !asset.isDeleted && asset.status === "READY" && asset.inventoryImageType !== "DAMAGE");
-        if (rawAssets.length === 0) return [inventoryId, null];
-        rawAssets.sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
-        const primary = rawAssets.find((asset) => asset.inventoryIsPrimary) ?? rawAssets[0];
-        const url = await this.safePresign(
-          photoAssetS3Key(primary.photoBatchId, primary.id, "THUMBNAIL", extensionForMimeType(primary.declared.THUMBNAIL.mimeType)),
-        );
-        return [inventoryId, url];
-      }),
-    );
+    // Keep the deferred lookup from turning a 100-row page into a burst of
+    // hundreds of simultaneous DynamoDB/S3 operations. A small worker pool
+    // still overlaps network latency while protecting the browser request and
+    // the shared staging backend from throttling.
+    const entries: Array<[string, string | null]> = new Array(uniqueIds.length);
+    let nextIndex = 0;
+    await Promise.all(Array.from({ length: Math.min(8, uniqueIds.length) }, async () => {
+      while (nextIndex < uniqueIds.length) {
+        const index = nextIndex++;
+        const inventoryId = uniqueIds[index];
+        try {
+          const { items: batches } = await this.deps.repository.listBatchesForInventory(inventoryId, 20, null);
+          if (batches.length === 0) { entries[index] = [inventoryId, null]; continue; }
+          const rawAssets = (await Promise.all(batches.map((batch) => this.deps.repository.getAssetsForBatch(batch.id))))
+            .flat()
+            .filter((asset) => !asset.isDeleted && asset.status === "READY" && asset.inventoryImageType !== "DAMAGE");
+          if (rawAssets.length === 0) { entries[index] = [inventoryId, null]; continue; }
+          rawAssets.sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
+          const primary = rawAssets.find((asset) => asset.inventoryIsPrimary) ?? rawAssets[0];
+          const url = await this.safePresign(
+            photoAssetS3Key(primary.photoBatchId, primary.id, "THUMBNAIL", extensionForMimeType(primary.declared.THUMBNAIL.mimeType)),
+          );
+          entries[index] = [inventoryId, url];
+        } catch (error) {
+          // One broken inventory lookup must not blank all other thumbnails
+          // in this chunk. The caller can still show its existing inventory
+          // thumbnail for this one row.
+          console.warn("Photo Registration thumbnail lookup failed", inventoryId, error instanceof Error ? error.message : String(error));
+          entries[index] = [inventoryId, null];
+        }
+      }
+    }));
     return ok(Object.fromEntries(entries));
   }
 

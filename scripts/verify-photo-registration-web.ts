@@ -179,16 +179,15 @@ class FakeDynamoDB {
   ) {}
 
   asDocumentClient(): DynamoDBDocumentClient {
-    const self = this;
     return {
-      async send(command: unknown) {
+      send: async (command: unknown) => {
         if (command instanceof GetCommand) {
           const input = command.input;
-          if (input.TableName === self.inventoryTableName) return { Item: self.inventoryTable.get((input.Key as { id: string }).id) };
-          return { Item: self.table.get(input.Key as { PK: string; SK: string }) };
+          if (input.TableName === this.inventoryTableName) return { Item: this.inventoryTable.get((input.Key as { id: string }).id) };
+          return { Item: this.table.get(input.Key as { PK: string; SK: string }) };
         }
-        if (command instanceof QueryCommand) return self.runQuery(command.input);
-        if (command instanceof TransactWriteCommand) return self.runTransactWrite(command.input.TransactItems ?? []);
+        if (command instanceof QueryCommand) return this.runQuery(command.input);
+        if (command instanceof TransactWriteCommand) return this.runTransactWrite(command.input.TransactItems ?? []);
         throw new Error(`FakeDynamoDB: unsupported command ${command?.constructor?.name}`);
       },
     } as unknown as DynamoDBDocumentClient;
@@ -274,11 +273,10 @@ class FakeS3 {
     this.objects.set(key, obj);
   }
   headClient(): S3Client {
-    const self = this;
     const client = new S3Client({ region: "us-west-2", credentials: { accessKeyId: "test-access-key-id", secretAccessKey: "test-secret-access-key" } });
     (client as unknown as { send: (command: unknown) => Promise<unknown> }).send = async (command: unknown) => {
       if (command instanceof HeadObjectCommand) {
-        const obj = self.objects.get(command.input.Key!);
+        const obj = this.objects.get(command.input.Key!);
         if (!obj) {
           const error = new Error("NotFound") as Error & { name: string };
           error.name = "NotFound";
@@ -472,6 +470,17 @@ test("一覧: listUnregisteredBatchesはREADY_FOR_REVIEWのbatchだけを返す 
   const page = expectOk(await env.adapter.listUnregisteredBatches(10, null, staffClaims()), "list");
   assert.equal(page.items.length, 1);
   assert.equal(page.items[0].id, batchId);
+});
+
+test("一覧サムネイル: 1商品の読取失敗で同じチャンク全体を失敗させない", async () => {
+  const env = buildEnv();
+  const original = env.repository.listBatchesForInventory.bind(env.repository);
+  env.repository.listBatchesForInventory = async (...args) => {
+    if (args[0] === "broken") throw new Error("simulated single-item failure");
+    return original(...args);
+  };
+  const result = expectOk(await env.adapter.listPrimaryPhotoThumbnails(["broken", "healthy"], staffClaims()), "thumbnails");
+  assert.deepEqual(result, { broken: null, healthy: null });
 });
 
 test("詳細変換: 各AssetにPROCESSED/THUMBNAILの署名URLが付き、sequence順に並ぶ", async () => {

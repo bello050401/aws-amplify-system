@@ -80,7 +80,7 @@ export function PhotoAssetProductGallery({
                 <img
                   src={asset.thumbnailUrl}
                   alt={`撮影画像 ${asset.sequence}`}
-                  className="h-[60px] w-[60px] border border-gray-200 object-cover"
+                  className="h-[60px] w-[60px] border border-gray-200 bg-gray-50 object-contain"
                 />
               ) : (
                 <div className="h-[60px] w-[60px] border border-gray-200 bg-gray-100" />

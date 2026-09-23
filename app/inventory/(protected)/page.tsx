@@ -10,7 +10,6 @@ import {
 } from "@/lib/inventory/queries";
 import { buildSearchFieldDefs, completeConditions, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
 import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
-import { listInventoryPrimaryPhotoThumbnailsAction } from "@/app/actions/photoRegistration";
 import { buildListReturnQuery } from "@/lib/inventory/listReturnParams";
 import { InventoryTotalCount } from "./InventoryTotalCount";
 import { InventoryHeader } from "../InventoryHeader";
@@ -18,7 +17,7 @@ import { DirectEditProvider } from "./DirectEditProvider";
 import { InventorySidebar } from "./InventorySidebar";
 import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryAdvancedSearchPanel } from "./InventoryAdvancedSearchPanel";
-import { InventoryTable } from "./InventoryTable";
+import { InventoryTableWithPhotos } from "./InventoryTableWithPhotos";
 import { InventoryPagination } from "./InventoryPagination";
 
 interface InventoryListPageProps {
@@ -155,21 +154,6 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   const knownTotal = listResult ? listResult.total : null;
   const hasNext = listResult ? listResult.offset + limit < listResult.total : pagedResult!.hasNext;
 
-  // Photo Registrationで在庫に紐づけたトップ画像(inventoryIsPrimary)を
-  // 一覧のカード画像にも反映する。表示中のページの行数分(最大100件)だけを
-  // まとめて1回で問い合わせる — 行ごとに個別リクエストするとN+1になる
-  // (lib/photoRegistration/webAdapter.tsのlistPrimaryPhotoThumbnails参照)。
-  // Photo Registration機能はamplify/backend.tsが未接続の間は常に
-  // NOT_CONFIGUREDで即時返る(fail closed)ため、この呼び出しは実AWS未
-  // デプロイの現状では実質ノーコスト。取得に失敗しても一覧そのものは
-  // 落とさず、従来のInventory.images由来の画像へ黙ってフォールバックする。
-  const photoThumbnails: Record<string, string | null> =
-    rows.length === 0
-      ? {}
-      : await listInventoryPrimaryPhotoThumbnailsAction(rows.map((row) => row.id))
-          .then((result) => (result.ok ? result.value : {}))
-          .catch(() => ({}));
-
   // Plain objects, not Maps — this now crosses into InventoryTable, a
   // Client Component (it needs to read the column-visibility preference
   // from localStorage), and a plain object is unambiguously serializable
@@ -275,7 +259,8 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
           ) : null}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1">
-              <InventoryTable
+              <InventoryTableWithPhotos
+                photoRegistrationEnabled={Boolean(process.env.PHOTO_REGISTRATION_TABLE_NAME && process.env.PHOTO_REGISTRATION_INVENTORY_TABLE_NAME && process.env.PHOTO_REGISTRATION_BUCKET_NAME)}
                 rows={rows}
                 categories={categories}
                 locations={locations}
@@ -284,7 +269,6 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
                 statusesById={statusesById}
                 customFieldDefs={customFieldDefs}
                 listReturnQuery={listReturnQuery}
-                photoThumbnails={photoThumbnails}
               />
             </div>
             <InventoryPagination
