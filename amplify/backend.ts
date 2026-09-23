@@ -618,7 +618,10 @@ const salesAggregateRunStatusTable = backend.data.resources.tables["SalesAggrega
 inventoryTable.grantReadData(backend.salesAggregateScheduler.resources.lambda);
 salesAggregateSnapshotTable.grantReadWriteData(backend.salesAggregateScheduler.resources.lambda);
 salesAggregateRunStatusTable.grantReadWriteData(backend.salesAggregateScheduler.resources.lambda);
+// Queue only the existing singleton ZAICO job; the worker keeps its own scoped permissions.
+zaicoSyncJobTable.grantReadWriteData(backend.salesAggregateScheduler.resources.lambda);
 
 backend.salesAggregateScheduler.addEnvironment("INVENTORY_TABLE_NAME", inventoryTable.tableName);
 backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_SNAPSHOT_TABLE_NAME", salesAggregateSnapshotTable.tableName);
 backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_RUN_STATUS_TABLE_NAME", salesAggregateRunStatusTable.tableName);
+backend.salesAggregateScheduler.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJobTable.tableName);

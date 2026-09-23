@@ -1,7 +1,9 @@
 import { ConditionalCheckFailedException, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { buildMonthlyAggregates } from "@/lib/inventory/salesAggregate";
 import type { SalesSourceRecord } from "@/lib/inventory/sales";
+import { planScheduledZaicoDelta } from "@/lib/inventory/scheduledZaicoDelta";
+import { ZAICO_SYNC_JOB_ID } from "@/lib/inventory/zaicoSyncJobId";
 import { serializeSnapshotMonths, SALES_AGGREGATE_SNAPSHOT_ID } from "@/lib/inventory/salesAggregateSnapshot";
 import {
   SALES_AGGREGATE_RUN_STATUS_ID,
@@ -35,6 +37,35 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 const INVENTORY_TABLE = process.env.INVENTORY_TABLE_NAME!;
 const SNAPSHOT_TABLE = process.env.SALES_AGGREGATE_SNAPSHOT_TABLE_NAME!;
 const RUN_STATUS_TABLE = process.env.SALES_AGGREGATE_RUN_STATUS_TABLE_NAME!;
+const ZAICO_JOB_TABLE = process.env.ZAICO_SYNC_JOB_TABLE_NAME;
+
+/** Queue one delta run after the sales refresh; the existing five-minute worker executes it. */
+export async function queueZaicoDelta(client: Pick<typeof ddb, "send"> = ddb, tableName = ZAICO_JOB_TABLE): Promise<string> {
+  if (!tableName) return "not-configured";
+  const previous = await client.send(new GetCommand({ TableName: tableName, Key: { id: ZAICO_SYNC_JOB_ID } }));
+  const plan = planScheduledZaicoDelta(previous.Item ?? null);
+  if (!plan) return "no-trusted-completed-baseline";
+  const now = new Date().toISOString();
+  try {
+    await client.send(new UpdateCommand({
+      TableName: tableName,
+      Key: { id: ZAICO_SYNC_JOB_ID },
+      ConditionExpression: "#status = :completed AND lastSuccessfulSyncAt = :baseline AND attribute_not_exists(leaseOwner)",
+      UpdateExpression: "SET #status = :pending, #mode = :delta, syncSince = :since, startedAt = :now, updatedAt = :now, finishedAt = :nil, lastError = :nil, triggeredBy = :source, lastPage = :zero, totalProcessed = :zero, created = :zero, updated = :zero, unchanged = :zero, failed = :zero, imageImported = :zero, skippedByDelta = :zero, retryCount = :zero, seenSourceIds = :seen, missingSourceIds = :missing",
+      ExpressionAttributeNames: { "#status": "status", "#mode": "mode" },
+      ExpressionAttributeValues: {
+        ":completed": "COMPLETED", ":baseline": previous.Item!.lastSuccessfulSyncAt,
+        ":pending": "PENDING", ":delta": "DELTA", ":since": plan.syncSince,
+        ":now": now, ":nil": null, ":source": "sales-aggregate-scheduler",
+        ":zero": 0, ":seen": "[]", ":missing": [],
+      },
+    }));
+    return "queued";
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) return "already-started";
+    throw error;
+  }
+}
 
 interface InvRow {
   id: string;
@@ -203,7 +234,11 @@ export const handler = async () => {
     console.log(
       `[sales-aggregate-scheduler] ✓ ${published ? "公開" : "より新しい世代が既にあるため公開スキップ"} / ${recomputed.length}ヶ月 / 在庫${records.length}件 / ${Date.now() - t0}ms`,
     );
-    return { ok: true, published, monthsInSnapshot: recomputed.length, sourceRecordCount: records.length };
+    const zaicoDelta = await queueZaicoDelta().catch((error) => {
+      console.error("[sales-aggregate-scheduler] ZAICO差分同期の予約に失敗。次回の定期実行で再試行します", error);
+      return "queue-failed";
+    });
+    return { ok: true, published, monthsInSnapshot: recomputed.length, sourceRecordCount: records.length, zaicoDelta };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[sales-aggregate-scheduler] 失敗", message);
