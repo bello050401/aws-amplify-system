@@ -63,6 +63,7 @@ const STATUS_LABEL: Record<ChannelListingRecord["status"], string> = {
  */
 export function ListingForm({
   inventoryId,
+  brandLogoAvailable,
   inventoryName,
   images,
   photoAssets,
@@ -72,6 +73,7 @@ export function ListingForm({
   onShippingMethodChange,
 }: {
   inventoryId: string;
+  brandLogoAvailable: boolean;
   inventoryName: string;
   /** 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: Inventory Masterの商品画像(トップ画像が先頭に来るよう呼び出し元でソート済み) — このコンポーネント自体は画像データを一切書き込まず、表示のみ。 */
   images: InventoryImageRecord[];
@@ -323,7 +325,7 @@ export function ListingForm({
         <div className="mt-3 border border-gray-200 p-3 text-sm">
           <p className="font-semibold">ブランドロゴ（任意）</p>
           <p className="mt-1 text-gray-600">商品編集画面で選んだブランドのロゴを、出品用トップ画像の右下に入れます。元画像は変更しません。</p>
-          <button type="button" disabled={brandLogoBusy || selectedImages.length >= 20} className="mt-2 border border-gray-400 px-3 py-2 disabled:opacity-50"
+          <button type="button" disabled={!brandLogoAvailable || brandLogoBusy || selectedImages.length >= 20} className="mt-2 border border-gray-400 px-3 py-2 disabled:opacity-50"
             onClick={async () => {
               setBrandLogoBusy(true); setBrandLogoError(null);
               try {
@@ -334,6 +336,7 @@ export function ListingForm({
               finally { setBrandLogoBusy(false); }
             }}>{brandLogoBusy ? "作成中…" : "ロゴ入りトップ画像を作る"}</button>
           {brandLogoError && <p role="alert" className="mt-2 text-red-700">{brandLogoError}</p>}
+          {!brandLogoAvailable && <p className="mt-1 text-amber-700">商品編集画面でロゴのあるブランドを選んでから作成してください。</p>}
           {selectedImages.length >= 20 && <p className="mt-1 text-amber-700">画像が20枚選ばれています。1枚外してから作成してください。</p>}
           {brandedImageKey && <div className="mt-3 max-w-md">
             <p className="mb-1 font-semibold">作成した画像の確認</p>

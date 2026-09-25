@@ -7,6 +7,7 @@ import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
+import { findBrandByName } from "@/lib/brands/catalog";
 
 /**
  * BELLO統合改修 master指示書 Phase D — 在庫詳細画面(app/inventory/
@@ -90,6 +91,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
             幅の割り振り・レイアウトはListingWorkspace.tsx側に集約した)。 */}
         <ListingWorkspace
           item={item}
+          brandLogoAvailable={Boolean(findBrandByName(typeof item.customFields?.belloBrand === "string" ? item.customFields.belloBrand : "")?.logoUrl)}
           categoryName={categoryName}
           statusName={statusName}
           images={orderedNormalImages}

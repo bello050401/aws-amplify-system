@@ -23,6 +23,7 @@ import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
  */
 export function ListingWorkspace({
   item,
+  brandLogoAvailable,
   categoryName,
   statusName,
   images,
@@ -31,6 +32,7 @@ export function ListingWorkspace({
   initialChannelListing,
 }: {
   item: InventoryDetail;
+  brandLogoAvailable: boolean;
   categoryName: string | null;
   statusName: string | null;
   images: InventoryImageRecord[];
@@ -56,6 +58,7 @@ export function ListingWorkspace({
       <div className="min-w-0 xl:w-[56rem]">
         <ListingForm
           inventoryId={item.id}
+          brandLogoAvailable={brandLogoAvailable}
           inventoryName={item.name}
           images={images}
           photoAssets={photoAssets}
