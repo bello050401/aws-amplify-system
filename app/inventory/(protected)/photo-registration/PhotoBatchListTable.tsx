@@ -40,6 +40,7 @@ export function PhotoBatchListTable({
         setError(`${batch.batchCode}: ${result.message}`);
         return;
       }
+      window.dispatchEvent(new Event("bello:photo-batches-changed"));
       router.refresh();
     } catch {
       setError(`${batch.batchCode}: 削除できませんでした。もう一度お試しください。`);

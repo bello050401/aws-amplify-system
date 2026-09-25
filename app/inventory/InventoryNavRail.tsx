@@ -76,15 +76,28 @@ export function usePhotoRegistrationBadge(): PhotoRegistrationBadgeState | null 
   const [badge, setBadge] = useState<PhotoRegistrationBadgeState | null>(null);
   useEffect(() => {
     let cancelled = false;
-    getPhotoRegistrationBadgeAction()
-      .then((result) => {
-        if (!cancelled) setBadge(result);
-      })
-      .catch(() => {
-        if (!cancelled) setBadge(null);
-      });
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshBadge = () => {
+      getPhotoRegistrationBadgeAction()
+        .then((result) => {
+          if (!cancelled) setBadge(result);
+        })
+        .catch(() => {
+          if (!cancelled) setBadge(null);
+        });
+    };
+    const onBatchChanged = () => {
+      setBadge((current) => current ? { ...current, count: Math.max(0, current.count - 1) } : current);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      // GSI1 is eventually consistent; reconcile after its index has caught up.
+      refreshTimer = setTimeout(refreshBadge, 1500);
+    };
+    refreshBadge();
+    window.addEventListener("bello:photo-batches-changed", onBatchChanged);
     return () => {
       cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      window.removeEventListener("bello:photo-batches-changed", onBatchChanged);
     };
   }, []);
   return badge;
