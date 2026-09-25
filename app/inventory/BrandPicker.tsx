@@ -11,7 +11,9 @@ export function BrandPicker({ value, onChange }: { value: string; onChange: (val
   const [open, setOpen] = useState(false);
   const [searchedQuery, setSearchedQuery] = useState("");
 
-  useEffect(() => { setQuery(value); }, [value]);
+  // Typing clears the previously selected brand in the parent. Do not let that
+  // empty value erase the user's in-progress search in the same render.
+  useEffect(() => { if (!open) setQuery(value); }, [value, open]);
   useEffect(() => {
     if (!open || query.trim().length < 2) { setMatches([]); setSearchedQuery(""); return; }
     let active = true;
