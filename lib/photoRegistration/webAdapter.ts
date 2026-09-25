@@ -199,6 +199,22 @@ export class PhotoRegistrationWebAdapter {
     return this.deps.service.listUnregisteredBatches(limit, cursor, claims);
   }
 
+  /** 一覧用に代表画像1枚だけ署名する。削除済み画像は候補から外す。 */
+  async getBatchCover(batchId: string, claims: TrustedClaims): Promise<PhotoResult<string | null>> {
+    const actorResult = this.requireStaffOrAdmin(claims);
+    if (!actorResult.ok) return actorResult;
+    const batch = await this.deps.repository.getBatchById(batchId);
+    if (!batch) return err("BATCH_NOT_FOUND", `batch ${batchId} was not found`, "batchId");
+    const assets = (await this.deps.repository.getAssetsForBatch(batchId))
+      .filter((asset) => !asset.isDeleted)
+      .sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
+    const cover = assets.find((asset) => asset.inventoryIsPrimary) ?? assets[0];
+    if (!cover) return ok(null);
+    const thumbnail = await this.safePresign(photoAssetS3Key(batchId, cover.id, "THUMBNAIL", extensionForMimeType(cover.declared.THUMBNAIL.mimeType)));
+    if (thumbnail) return ok(thumbnail);
+    return ok(await this.safePresign(photoAssetS3Key(batchId, cover.id, "PROCESSED", extensionForMimeType(cover.declared.PROCESSED.mimeType))));
+  }
+
   async getBatchDetail(
     batchId: string,
     claims: TrustedClaims,

@@ -7,12 +7,7 @@ interface PhotoRegistrationListPageProps {
   searchParams: { cursor?: string };
 }
 
-/**
- * 未登録バッチ一覧 (docs/photo-registration-api-v1.md §10)。詳細サムネイルは
- * ここでは出さない — 一覧1ページ(最大20件)ごとにbatch内の全Asset
- * (最大300件)を読むとN+1になるため、サムネイルは詳細画面
- * ([batchId]/page.tsx) のみで表示する。
- */
+/** 未登録バッチ一覧。代表写真は表示された行から各バッチの先頭画像だけ遅延取得する。 */
 export default async function PhotoRegistrationListPage({ searchParams }: PhotoRegistrationListPageProps) {
   const role = await getInventoryRole();
   // (protected) layoutが未ログインを既にredirect済みなのでnullにはならないが、型を絞るため。

@@ -158,6 +158,9 @@ class FakeTable {
   putRaw(item: Item): void {
     this.items.set(this.keyOf(item as { PK: string; SK: string }), item);
   }
+  delete(key: { PK: string; SK: string }): void {
+    this.items.delete(this.keyOf(key));
+  }
 }
 
 class FakeInventoryTable {
@@ -244,7 +247,10 @@ class FakeDynamoDB {
         reasons.push({ Code: ok ? "None" : "ConditionalCheckFailed" });
         if (!ok) anyFailed = true;
       } else if (ti.Delete) {
-        reasons.push({ Code: "None" });
+        const existing = this.table.get(ti.Delete.Key as { PK: string; SK: string }) ?? {};
+        const ok = evaluateCondition(ti.Delete.ConditionExpression, existing, ti.Delete.ExpressionAttributeNames, ti.Delete.ExpressionAttributeValues);
+        reasons.push({ Code: ok ? "None" : "ConditionalCheckFailed" });
+        if (!ok) anyFailed = true;
       }
     }
     if (anyFailed) throw new TransactionCanceledException({ message: "The conditional request failed", $metadata: {}, CancellationReasons: reasons });
@@ -255,6 +261,8 @@ class FakeDynamoDB {
       } else if (ti.Update) {
         const existing = this.table.get(ti.Update.Key as { PK: string; SK: string }) ?? (ti.Update.Key as Item);
         this.table.putRaw(applyUpdateExpression(existing, ti.Update.UpdateExpression!, ti.Update.ExpressionAttributeNames, ti.Update.ExpressionAttributeValues));
+      } else if (ti.Delete) {
+        this.table.delete(ti.Delete.Key as { PK: string; SK: string });
       }
     }
     return {};
@@ -481,6 +489,22 @@ test("一覧サムネイル: 1商品の読取失敗で同じチャンク全体�
   };
   const result = expectOk(await env.adapter.listPrimaryPhotoThumbnails(["broken", "healthy"], staffClaims()), "thumbnails");
   assert.deepEqual(result, { broken: null, healthy: null });
+});
+
+test("バッチ代表写真: 選択したトップ画像を優先し、削除済み画像を使わない", async () => {
+  const env = buildEnv();
+  const batchId = await createAndFillBatch(env, "s-web-cover", 3);
+  const original = env.repository.getAssetsForBatch.bind(env.repository);
+  env.repository.getAssetsForBatch = async (id) => {
+    const assets = await original(id);
+    assets[0].isDeleted = true;
+    assets[1].inventoryIsPrimary = true;
+    return assets;
+  };
+  const assets = await env.repository.getAssetsForBatch(batchId);
+  const cover = expectOk(await env.adapter.getBatchCover(batchId, staffClaims()), "cover");
+  assert.ok(cover && decodeURIComponent(cover).includes(assets[1].id), "選択したトップ画像のURLを返す");
+  assert.equal(cover && decodeURIComponent(cover).includes(assets[0].id), false, "削除済み画像は表示しない");
 });
 
 test("詳細変換: 各AssetにPROCESSED/THUMBNAILの署名URLが付き、sequence順に並ぶ", async () => {

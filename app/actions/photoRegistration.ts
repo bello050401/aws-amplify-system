@@ -101,6 +101,12 @@ export async function getPhotoBatchDetailAction(batchId: string, page = 1, pageS
   return mapPhotoResult(await runtime.adapter.getBatchDetail(batchId, runtime.claims, { page, pageSize }));
 }
 
+export async function getPhotoBatchCoverAction(batchId: string): Promise<PhotoActionResult<string | null>> {
+  const runtime = await requireWebRuntimeAndClaims();
+  if (!runtime.ok) return runtime;
+  return mapPhotoResult(await runtime.adapter.getBatchCover(batchId, runtime.claims));
+}
+
 export async function listInventoryPhotoAssetsAction(inventoryId: string): Promise<PhotoActionResult<WebInventoryPhotoAssets>> {
   const runtime = await requireWebRuntimeAndClaims();
   if (!runtime.ok) return runtime;
@@ -318,6 +324,32 @@ export interface InventoryCandidateRow {
   previewKey: string | null;
   imageCount: number;
   updatedAt: string;
+}
+
+/** Hide an unlinked batch while retaining its audit record and original objects. */
+export async function archiveUnlinkedPhotoBatchAction(batchId: string): Promise<PhotoActionResult<{ batchId: string }>> {
+  const role = await getInventoryRole();
+  if (!role || role === "VIEWER") return { ok: false, code: "PERMISSION_DENIED", message: ERROR_LABELS.PERMISSION_DENIED };
+  const tableName = process.env.PHOTO_REGISTRATION_TABLE_NAME;
+  if (!tableName) return NOT_CONFIGURED;
+  const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.PHOTO_REGISTRATION_AWS_REGION || PHOTO_REGISTRATION_REGION }));
+  try {
+    await ddb.send(new UpdateCommand({
+      TableName: tableName,
+      Key: { PK: `BATCH#${batchId}`, SK: `BATCH#${batchId}` },
+      UpdateExpression: "SET #status = :archived, updatedAt = :now REMOVE GSI1PK, GSI1SK",
+      ConditionExpression: "attribute_exists(PK) AND #status = :ready AND attribute_not_exists(inventoryId) AND attribute_not_exists(openRevisionRevision)",
+      ExpressionAttributeNames: { "#status": "status" },
+      ExpressionAttributeValues: { ":archived": "ARCHIVED", ":ready": "READY_FOR_REVIEW", ":now": new Date().toISOString() },
+    }));
+    revalidatePath("/inventory/photo-registration");
+    return { ok: true, value: { batchId } };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "unknown";
+    console.error("[archiveUnlinkedPhotoBatchAction] failed", { name, batchId });
+    return { ok: false, code: name === "ConditionalCheckFailedException" ? "CONFLICT" : "INTERNAL_ERROR",
+      message: name === "ConditionalCheckFailedException" ? "紐付け済み、または状態が変わったバッチは削除できません。画面を更新してください。" : ERROR_LABELS.INTERNAL_ERROR };
+  }
 }
 
 const PHOTO_LINK_CATEGORY_PRIORITY = ["撮影待ち", "補修待ち", "出品待ち"] as const;
