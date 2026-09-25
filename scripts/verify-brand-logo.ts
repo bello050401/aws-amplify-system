@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import sharp from "sharp";
 import { hasClearLogoCorner } from "../lib/brands/logoPlacement";
+import { renderBrandedImage } from "../lib/brands/renderBrandedImage";
 
 async function allowed(background: string): Promise<boolean> {
   const stats = await sharp({ create: { width: 160, height: 80, channels: 3, background } }).stats();
@@ -17,7 +18,19 @@ async function main(): Promise<void> {
     .png().toBuffer();
   const busy = await sharp(busyBytes).stats();
   assert.equal(hasClearLogoCorner(busy), false, "product entering the badge region must block placement");
-  process.stdout.write("Brand logo corner checks passed (4/4).\n");
+  const source = await sharp({ create: { width: 1200, height: 800, channels: 3, background: "#ffffff" } }).png().toBuffer();
+  const logo = await sharp({ create: { width: 300, height: 100, channels: 3, background: "#3355aa" } }).png().toBuffer();
+  const rendered = await renderBrandedImage(source, logo);
+  assert.equal((await sharp(rendered).metadata()).format, "jpeg", "generated listing image must be JPEG");
+  assert.notDeepEqual(rendered, source, "original photo bytes remain unchanged");
+  const center = await sharp(rendered).extract({ left: 1092, top: 734, width: 1, height: 1 }).raw().toBuffer();
+  assert.ok(center[2] > center[0] + 40, "logo color appears in the bottom-right badge");
+  await assert.rejects(async () => renderBrandedImage(await awaitableDark(), logo), /ロゴを重ねずに停止/);
+  process.stdout.write("Brand logo checks passed (8/8).\n");
+}
+
+async function awaitableDark(): Promise<Buffer> {
+  return sharp({ create: { width: 1200, height: 800, channels: 3, background: "#222222" } }).png().toBuffer();
 }
 
 void main().catch((error: unknown) => { console.error(error); process.exitCode = 1; });
