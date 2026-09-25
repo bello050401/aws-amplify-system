@@ -64,6 +64,7 @@
     "verify:listing-draft": "node scripts/with-server-only-stub.cjs scripts/verify-listing-draft.ts",
     "verify:brand-reference": "tsx scripts/verify-brand-reference.ts",
     "verify:brand-logo": "tsx scripts/verify-brand-logo.ts",
+    "verify:brand-catalog": "tsx scripts/verify-brand-catalog.ts",
     "verify:inquiry-live-case": "node scripts/with-server-only-stub.cjs scripts/verify-inquiry-live-case.ts",
     "verify:line-conversation-live": "node scripts/with-server-only-stub.cjs scripts/verify-line-conversation-live.ts",
     "verify:knowledge": "node scripts/with-server-only-stub.cjs scripts/verify-knowledge.ts",
