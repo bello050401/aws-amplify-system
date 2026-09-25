@@ -10,7 +10,8 @@ export async function renderBrandedImage(photo: Buffer, logo: Buffer): Promise<B
   const badgeHeight = Math.round(badgeWidth * 0.52);
   const inset = Math.round(Math.min(width, height) * 0.025);
   const left = width - badgeWidth - inset; const top = height - badgeHeight - inset;
-  const corner = await sharp(base).extract({ left, top, width: badgeWidth, height: badgeHeight }).stats();
+  const cornerBytes = await sharp(base).extract({ left, top, width: badgeWidth, height: badgeHeight }).toBuffer();
+  const corner = await sharp(cornerBytes).stats();
   if (!hasClearLogoCorner(corner))
     throw new Error("右下に商品が写っている可能性があります。ロゴを重ねずに停止しました。");
   const badge = await sharp({ create: { width: badgeWidth, height: badgeHeight, channels: 4, background: "#ffffffee" } })

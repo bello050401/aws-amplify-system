@@ -25,8 +25,13 @@ async function main(): Promise<void> {
   assert.notDeepEqual(rendered, source, "original photo bytes remain unchanged");
   const center = await sharp(rendered).extract({ left: 1092, top: 734, width: 1, height: 1 }).raw().toBuffer();
   assert.ok(center[2] > center[0] + 40, "logo color appears in the bottom-right badge");
+  const chair = await sharp({ create: { width: 500, height: 600, channels: 3, background: "#775533" } }).png().toBuffer();
+  const photoWithClearCorner = await sharp(source).composite([{ input: chair, left: 100, top: 100 }]).png().toBuffer();
+  await renderBrandedImage(photoWithClearCorner, logo);
+  const photoWithBlockedCorner = await sharp(source).composite([{ input: chair, left: 700, top: 200 }]).png().toBuffer();
+  await assert.rejects(async () => renderBrandedImage(photoWithBlockedCorner, logo), /ロゴを重ねずに停止/);
   await assert.rejects(async () => renderBrandedImage(await awaitableDark(), logo), /ロゴを重ねずに停止/);
-  process.stdout.write("Brand logo checks passed (8/8).\n");
+  process.stdout.write("Brand logo checks passed (10/10).\n");
 }
 
 async function awaitableDark(): Promise<Buffer> {
