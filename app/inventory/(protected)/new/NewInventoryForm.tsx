@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { remove } from "aws-amplify/storage";
 import { createInventory, type ImageSlotInput } from "@/app/actions/inventory";
+import { BrandPicker } from "@/app/inventory/BrandPicker";
 import { LabeledInput, LabeledSelect, CustomFieldInput } from "../FormFields";
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../ImageEditor";
 import { ExtendedFieldsSection } from "../ExtendedFieldsSection";
@@ -238,6 +239,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
     setSubmitting(true);
     try {
       const customFields: Record<string, unknown> = {};
+      if (customFieldValues.belloBrand) customFields.belloBrand = customFieldValues.belloBrand;
       for (const def of customFieldDefs) {
         const raw = customFieldValues[def.fieldKey];
         if (raw === undefined || raw === "") continue;
@@ -343,6 +345,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
           </p>
         </div>
         <LabeledInput label="物品名" required value={name} onChange={setName} />
+        <BrandPicker value={customFieldValues.belloBrand ?? ""} onChange={(value) => setCustomFieldValues((previous) => ({ ...previous, belloBrand: value }))} />
 
         <LabeledSelect label="カテゴリ" value={categoryId} onChange={setCategoryId} options={categories.map((c) => ({ value: c.id, label: c.name }))} />
         <LabeledSelect label="保管場所" value={locationId} onChange={setLocationId} options={locations.map((l) => ({ value: l.id, label: l.name }))} />

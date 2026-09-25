@@ -20,6 +20,7 @@ import { splitImagesByType, type InventoryImageRecord } from "@/lib/inventory/im
 import type { CustomFieldDefinitionRow, InventoryDetail, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 import { PhotoAssetImageEditor } from "./PhotoAssetImageEditor";
+import { BrandPicker } from "@/app/inventory/BrandPicker";
 
 interface EditInventoryFormProps {
   item: InventoryDetail;
@@ -200,6 +201,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
     setSubmitting(true);
     try {
       const customFields: Record<string, unknown> = {};
+      if (customFieldValues.belloBrand) customFields.belloBrand = customFieldValues.belloBrand;
       for (const def of customFieldDefs) {
         const raw = customFieldValues[def.fieldKey];
         if (raw === undefined || raw === "") continue;
@@ -314,6 +316,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
         <p className="mb-3 text-[11px] font-bold text-gray-400">基本情報</p>
         <div className="grid grid-cols-1 gap-4">
           <LabeledInput label="物品名" required value={name} onChange={setName} size="large" />
+          <BrandPicker value={customFieldValues.belloBrand ?? ""} onChange={(value) => handleCustomFieldChange("belloBrand", value)} />
           <LabeledSelect
             label="カテゴリ"
             value={categoryId}

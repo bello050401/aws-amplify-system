@@ -13,6 +13,7 @@ import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
 import { MercariCategoryMappingSection } from "./MercariCategoryMappingSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
+import { createBrandedListingImageAction } from "@/app/actions/brandLogo";
 import { InventoryImageGallery } from "../../../InventoryImageGallery";
 import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import { setListingPhotoAssetSelectionAction } from "@/app/actions/photoRegistration";
@@ -88,6 +89,9 @@ export function ListingForm({
   const [draft, setDraft] = useState(initialDraft);
   const [channelListing, setChannelListing] = useState(initialChannelListing);
   const [selectedImages, setSelectedImages] = useState<ListingImageRef[]>(initialDraft?.images ?? []);
+  const [brandLogoBusy, setBrandLogoBusy] = useState(false);
+  const [brandedImageKey, setBrandedImageKey] = useState<string | null>(null);
+  const [brandLogoError, setBrandLogoError] = useState<string | null>(null);
 
   const [title, setTitle] = useState(initialDraft?.title ?? inventoryName);
   const [description, setDescription] = useState(initialDraft?.description ?? "");
@@ -312,8 +316,26 @@ export function ListingForm({
           images={images}
           photoAssets={photoAssets}
           initialImages={initialDraft?.images ?? null}
+          brandedImageKey={brandedImageKey}
           onChange={setSelectedImages}
         />
+        <div className="mt-3 border border-gray-200 p-3 text-sm">
+          <p className="font-semibold">ブランドロゴ（任意）</p>
+          <p className="mt-1 text-gray-600">商品編集画面で選んだブランドのロゴを、出品用トップ画像の右下に入れます。元画像は変更しません。</p>
+          <button type="button" disabled={brandLogoBusy || selectedImages.length >= 20} className="mt-2 border border-gray-400 px-3 py-2 disabled:opacity-50"
+            onClick={async () => {
+              setBrandLogoBusy(true); setBrandLogoError(null);
+              try {
+                const result = await createBrandedListingImageAction(inventoryId);
+                setBrandedImageKey(result.storageKey);
+                setDraftSaved(false);
+              } catch (error) { setBrandLogoError(error instanceof Error ? error.message : "ロゴ画像の作成に失敗しました。"); }
+              finally { setBrandLogoBusy(false); }
+            }}>{brandLogoBusy ? "作成中…" : "ロゴ入りトップ画像を作る"}</button>
+          {brandLogoError && <p role="alert" className="mt-2 text-red-700">{brandLogoError}</p>}
+          {selectedImages.length >= 20 && <p className="mt-1 text-amber-700">画像が20枚選ばれています。1枚外してから作成してください。</p>}
+          <p className="mt-1 text-gray-500">作成後に下書きを保存すると出品画像として使えます。</p>
+        </div>
       </div>
 
       {/* 出品下書き(Common Listing Draft) — チャネルに依存しない共通項目。 */}

@@ -13,6 +13,7 @@ import { buildListingFacts, type ListingFacts } from "./listingFacts";
 import { getListingDraftForInventory } from "@/lib/listing/service";
 import { DEFAULT_LISTING_SHIPPING_METHOD, type ListingShippingMethod } from "@/lib/listing/types";
 import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
+import { findBrandByName } from "@/lib/brands/catalog";
 import {
   buildConditionSection,
   buildProductDetailSection,
@@ -261,8 +262,10 @@ export async function generateCanonicalProductPage(
   // ものだけで、確定した文章は生成後に差し替えるのではなく**最初から
   // ルール側で作る** —— 差し替え方式にすると、AIが書いた誤った寸法が
   // どこかの経路で残る余地ができる。
-  const brand = completed(baseBrandHint(item.name), productContext?.details.brand?.value ?? null, "ブランド");
   const customFields = (item.customFields ?? {}) as Record<string, unknown>;
+  const explicitBrand = typeof customFields.belloBrand === "string" ? customFields.belloBrand.trim() : "";
+  const selectedBrand = findBrandByName(explicitBrand);
+  const brand = explicitBrand || completed(baseBrandHint(item.name), productContext?.details.brand?.value ?? null, "ブランド");
   const customFieldText = (key: string): string | null => {
     const v = customFields[key];
     return typeof v === "string" && v.trim() ? v.trim() : null;
@@ -320,7 +323,7 @@ export async function generateCanonicalProductPage(
     depth,
     height,
     ruleSections,
-    extraFacts: { brand, material: facts.material },
+    extraFacts: { brand, brandReference: selectedBrand?.description ?? null, material: facts.material },
     damageNotes: item.damageNotes ?? null,
     note: item.note ?? null,
     conditionRating: item.conditionRating ?? null,

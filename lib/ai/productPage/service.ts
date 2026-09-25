@@ -99,7 +99,7 @@ export interface ProductPageGenerationInput {
    */
   ruleSections?: RuleBasedSections | null;
   /** §20 AIへ渡す追加の事実(ブランド・素材)。 */
-  extraFacts?: { brand?: string | null; material?: string | null } | null;
+  extraFacts?: { brand?: string | null; brandReference?: string | null; material?: string | null } | null;
 }
 
 /** §19 ルールベース領域。descriptionSections.ts が作る。 */
@@ -262,6 +262,7 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     guidanceBlock: input.guidanceBlock ?? null,
     extra: {
       brand: input.extraFacts?.brand ?? input.brand ?? null,
+      brandReference: input.extraFacts?.brandReference ?? null,
       material: input.extraFacts?.material ?? null,
       // §19 ルールで確定済みのセクション。AIには書かせない。
       fixedSections: input.ruleSections
