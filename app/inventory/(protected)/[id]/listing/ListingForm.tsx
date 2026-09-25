@@ -20,6 +20,7 @@ import { setListingPhotoAssetSelectionAction } from "@/app/actions/photoRegistra
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 import type { ListingImageRef } from "@/lib/listing/types";
 import { ListingImageSelector } from "./ListingImageSelector";
+import { InventoryThumbnail } from "../../../InventoryThumbnail";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
 // 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
@@ -334,6 +335,11 @@ export function ListingForm({
             }}>{brandLogoBusy ? "作成中…" : "ロゴ入りトップ画像を作る"}</button>
           {brandLogoError && <p role="alert" className="mt-2 text-red-700">{brandLogoError}</p>}
           {selectedImages.length >= 20 && <p className="mt-1 text-amber-700">画像が20枚選ばれています。1枚外してから作成してください。</p>}
+          {brandedImageKey && <div className="mt-3 max-w-md">
+            <p className="mb-1 font-semibold">作成した画像の確認</p>
+            <InventoryThumbnail storageKey={brandedImageKey} alt="ロゴ入り出品画像の確認" size="heroContain" loading="eager" />
+            <p className="mt-1 text-xs text-gray-600">商品にロゴが重なっていないか確認してください。使わない場合は出品画像一覧から外せます。</p>
+          </div>}
           <p className="mt-1 text-gray-500">作成後に下書きを保存すると出品画像として使えます。</p>
         </div>
       </div>
