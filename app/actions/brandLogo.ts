@@ -8,6 +8,7 @@ import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { findBrandByName } from "@/lib/brands/catalog";
+import { hasClearLogoCorner } from "@/lib/brands/logoPlacement";
 
 async function ownImage(path: string): Promise<Buffer> {
   const { url } = await runWithAmplifyServerContext({ nextServerContext: { cookies },
@@ -61,9 +62,10 @@ export async function createBrandedListingImageAction(inventoryId: string): Prom
   const badgeHeight = Math.round(badgeWidth * 0.52);
   const inset = Math.round(Math.min(width, height) * 0.025);
   const left = width - badgeWidth - inset; const topPos = height - badgeHeight - inset;
-  // Fail closed if the corner has detailed edges: a logo must not cover the product.
+  // A quiet dark/product-colored corner is still unsafe. Require a nearly
+  // white and low-detail background, then ask the editor to review the preview.
   const corner = await sharp(base).extract({ left, top: topPos, width: badgeWidth, height: badgeHeight }).stats();
-  if (corner.channels.slice(0, 3).some((channel) => channel.stdev > 24))
+  if (!hasClearLogoCorner(corner))
     throw new Error("右下に商品が写っている可能性があります。ロゴを重ねずに停止しました。");
   const badge = await sharp({ create: { width: badgeWidth, height: badgeHeight, channels: 4, background: "#ffffffee" } })
     .composite([{ input: await sharp(logo).resize({ width: Math.round(badgeWidth * 0.88), height: Math.round(badgeHeight * 0.86), fit: "inside" }).png().toBuffer(), gravity: "centre" }])
