@@ -9,15 +9,14 @@ import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInvento
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { renderBrandedImage } from "@/lib/brands/renderBrandedImage";
+import { readLimitedImage } from "@/lib/brands/readLimitedImage";
 
 async function ownImage(path: string): Promise<Buffer> {
   const { url } = await runWithAmplifyServerContext({ nextServerContext: { cookies },
     operation: (context) => getUrl(context, { path, options: { expiresIn: 120 } }) });
   const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new Error("画像を取得できませんでした。");
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length > 25_000_000) throw new Error("画像が大きすぎます。");
-  return bytes;
+  return readLimitedImage(response, 25_000_000);
 }
 
 async function saveImage(path: string, bytes: Buffer, contentType: string): Promise<void> {
@@ -49,8 +48,7 @@ export async function createBrandedListingImageAction(inventoryId: string): Prom
     const response = await fetch(logoUrl, { redirect: "error", signal: AbortSignal.timeout(10000) });
     const mime = (response.headers.get("content-type") ?? "").split(";")[0];
     if (!response.ok || !["image/png", "image/jpeg", "image/webp"].includes(mime)) throw new Error("ブランドロゴを取得できませんでした。");
-    const source = Buffer.from(await response.arrayBuffer());
-    if (source.length > 2_000_000) throw new Error("ブランドロゴが大きすぎます。");
+    const source = await readLimitedImage(response, 2_000_000);
     logo = await sharp(source).resize({ width: 600, height: 300, fit: "inside" }).png().toBuffer();
     await saveImage(logoKey, logo, "image/png");
   }

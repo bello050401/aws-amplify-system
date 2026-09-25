@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import sharp from "sharp";
 import { hasClearLogoCorner } from "../lib/brands/logoPlacement";
 import { renderBrandedImage } from "../lib/brands/renderBrandedImage";
+import { readLimitedImage } from "../lib/brands/readLimitedImage";
 
 async function allowed(background: string): Promise<boolean> {
   const stats = await sharp({ create: { width: 160, height: 80, channels: 3, background } }).stats();
@@ -9,6 +10,9 @@ async function allowed(background: string): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
+  assert.equal((await readLimitedImage(new Response(new Uint8Array([1, 2, 3])), 3)).length, 3);
+  await assert.rejects(() => readLimitedImage(new Response(new Uint8Array([1, 2, 3])), 2), /大きすぎ/);
+  await assert.rejects(() => readLimitedImage(new Response(new Uint8Array([1, 2, 3]), { headers: { "content-length": "999" } }), 2), /大きすぎ/);
   assert.equal(await allowed("#ffffff"), true, "white empty background may receive a badge");
   assert.equal(await allowed("#222222"), false, "uniform dark product cannot be mistaken for empty space");
   assert.equal(await allowed("#f0c0c0"), false, "uniform colored product cannot be mistaken for empty space");
@@ -31,7 +35,7 @@ async function main(): Promise<void> {
   const photoWithBlockedCorner = await sharp(source).composite([{ input: chair, left: 700, top: 200 }]).png().toBuffer();
   await assert.rejects(async () => renderBrandedImage(photoWithBlockedCorner, logo), /ロゴを重ねずに停止/);
   await assert.rejects(async () => renderBrandedImage(await awaitableDark(), logo), /ロゴを重ねずに停止/);
-  process.stdout.write("Brand logo checks passed (10/10).\n");
+  process.stdout.write("Brand logo checks passed (13/13).\n");
 }
 
 async function awaitableDark(): Promise<Buffer> {
