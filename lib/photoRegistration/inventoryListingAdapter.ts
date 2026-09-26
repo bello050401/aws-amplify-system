@@ -25,8 +25,8 @@ export function buildListingImageCandidates(
       available: true,
     }));
   const uploaded = photoAssets
-    .filter((asset) => !asset.isDeleted && asset.status === "READY")
-    .sort((a, b) => a.sequence - b.sequence)
+    .filter((asset) => !asset.isDeleted && asset.status === "READY" && asset.inventoryImageType !== "DAMAGE")
+    .sort((a, b) => Number(Boolean(b.inventoryIsPrimary)) - Number(Boolean(a.inventoryIsPrimary)) || a.sequence - b.sequence || a.id.localeCompare(b.id))
     .map((asset, index) => ({
       ref: {
         storageKey: photoAssetS3Key(
@@ -44,6 +44,16 @@ export function buildListingImageCandidates(
       available: true,
     }));
   return [...legacy, ...uploaded];
+}
+
+/** 未保存の下書きは撮影商品画像を優先する。保存済みの明示選択は維持する。 */
+export function initialListingSelection(
+  candidates: ListingImageCandidate[],
+  saved: ListingImageRef[] | null | undefined,
+): ListingImageCandidate[] {
+  if (saved?.length) return restoreListingSelection(candidates, saved).selected;
+  const photos = candidates.filter((item) => item.ref.source === "PHOTO_ASSET");
+  return (photos.length ? photos : candidates.filter((item) => item.ref.source === "INVENTORY")).slice(0, 20);
 }
 
 /**

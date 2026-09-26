@@ -5,6 +5,7 @@ import {
   buildListingImageCandidates,
   listingRefsFromSelection,
   restoreListingSelection,
+  initialListingSelection,
 } from "../lib/photoRegistration/inventoryListingAdapter";
 import { normalizeListingImages } from "../lib/listing/service";
 import type { ChannelListingRecord, ListingDraftRecord, ListingImageRef } from "../lib/listing/types";
@@ -30,6 +31,23 @@ const photoAsset = (id: string, sequence: number, overrides: Partial<WebPhotoAss
   },
   thumbnailUrl: `https://example.invalid/${id}/thumb`, processedUrl: `https://example.invalid/${id}/full`,
   ...overrides,
+});
+
+test("未保存下書きは撮影トップを優先し傷画像と旧画像を初期選択しない", () => {
+  const candidates = buildListingImageCandidates([inventoryImage("old.jpg", 0)], [
+    photoAsset("normal", 1), photoAsset("top", 2, { inventoryIsPrimary: true }),
+    photoAsset("damage", 3, { inventoryImageType: "DAMAGE" }),
+  ]);
+  assert.deepEqual(initialListingSelection(candidates, null).map(c => c.ref.photoAssetId), ["top", "normal"]);
+  assert.equal(candidates.some(c => c.ref.photoAssetId === "damage"), false);
+  assert.deepEqual(initialListingSelection(candidates, [{ storageKey: "old.jpg", sortOrder: 0 }]).map(c => c.ref.storageKey), ["old.jpg"]);
+});
+
+test("撮影画像が無い場合は旧画像を維持し初期選択は20枚まで", () => {
+  const old = buildListingImageCandidates([inventoryImage("old.jpg", 0)], []);
+  assert.equal(initialListingSelection(old, null)[0].ref.storageKey, "old.jpg");
+  const many = buildListingImageCandidates([], Array.from({ length: 25 }, (_, i) => photoAsset(`p${i}`, i)));
+  assert.equal(initialListingSelection(many, null).length, 20);
 });
 
 test("既存画像とPhotoAssetを保存元付きで統合する", () => {

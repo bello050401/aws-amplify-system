@@ -8,6 +8,7 @@ import {
   buildListingImageCandidates,
   restoreListingSelection,
   listingRefsFromSelection,
+  initialListingSelection,
   type ListingImageCandidate,
 } from "@/lib/photoRegistration/inventoryListingAdapter";
 import { InventoryThumbnail } from "../../../InventoryThumbnail";
@@ -42,12 +43,7 @@ export function ListingImageSelector({
   }
 
   const [selected, setSelected] = useState<ListingImageCandidate[]>(() => {
-    if (initialImages && initialImages.length > 0) {
-      return restoreListingSelection(candidates, initialImages).selected;
-    }
-    // 新規下書き・画像未保存: 従来どおり既存Inventory画像のみを初期選択にする
-    // (PhotoAssetは明示的に追加するまで選択されない)。
-    return candidates.filter((c) => c.ref.source === "INVENTORY");
+    return initialListingSelection(candidates, initialImages);
   });
   const [missingCount] = useState<number>(() =>
     initialImages && initialImages.length > 0 ? restoreListingSelection(candidates, initialImages).missing.length : 0,
