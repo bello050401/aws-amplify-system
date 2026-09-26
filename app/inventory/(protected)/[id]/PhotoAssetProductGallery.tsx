@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
+import { refreshGallerySelection } from "@/lib/photoRegistration/gallerySelection";
 
 export function PhotoAssetProductGallery({
   inventoryId,
@@ -27,7 +28,10 @@ export function PhotoAssetProductGallery({
     try {
       const result = await listInventoryPhotoAssetsAction(inventoryId);
       if (result.ok) {
-        setAssets(result.value.assets);
+        const damageGallery = initialAssets[0]?.inventoryImageType === "DAMAGE";
+        const refreshed = refreshGallerySelection(result.value.assets, damageGallery, current.id);
+        setAssets(refreshed.assets);
+        setSelected(refreshed.selected);
         setFailed(false);
       }
     } finally {

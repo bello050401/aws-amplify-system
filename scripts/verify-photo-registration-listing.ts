@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { refreshGallerySelection } from "../lib/photoRegistration/gallerySelection";
 import type { InventoryImageRecord } from "../lib/inventory/imageTypes";
 import type { WebPhotoAssetView } from "../lib/photoRegistration/webAdapter";
 import {
@@ -48,6 +49,16 @@ test("撮影画像が無い場合は旧画像を維持し初期選択は20枚ま
   assert.equal(initialListingSelection(old, null)[0].ref.storageKey, "old.jpg");
   const many = buildListingImageCandidates([], Array.from({ length: 25 }, (_, i) => photoAsset(`p${i}`, i)));
   assert.equal(initialListingSelection(many, null).length, 20);
+});
+
+test("再取得で傷写真を分離しトップ順と閲覧写真を維持する", () => {
+  const all = [photoAsset("normal", 1), photoAsset("top", 2, { inventoryIsPrimary: true }), photoAsset("damage", 3, { inventoryImageType: "DAMAGE" }), photoAsset("deleted", 4, { isDeleted: true })];
+  const normal = refreshGallerySelection(all, false, "normal");
+  assert.deepEqual(normal.assets.map(a => a.id), ["top", "normal"]);
+  assert.equal(normal.selected, 1);
+  assert.deepEqual(refreshGallerySelection(all, true, "damage").assets.map(a => a.id), ["damage"]);
+  assert.equal(refreshGallerySelection(all, false, "deleted").selected, 0);
+  assert.deepEqual(refreshGallerySelection([], false, "normal"), { assets: [], selected: 0 });
 });
 
 test("既存画像とPhotoAssetを保存元付きで統合する", () => {
