@@ -164,7 +164,7 @@ export interface CanonicalGenerationResult extends ProductPageResult {
  */
 export async function generateCanonicalProductPage(
   inventoryId: string,
-  options: { shippingMethod?: ListingShippingMethod } = {},
+  options: { shippingMethod?: ListingShippingMethod; listingTitle?: string } = {},
 ): Promise<CanonicalGenerationResult> {
   const item = await getInventoryDetail(inventoryId);
   if (!item) throw new Error("対象の在庫が見つかりません。");
@@ -317,6 +317,7 @@ export async function generateCanonicalProductPage(
 
   const result = await generateProductPage({
     inventoryId: item.id,
+    listingTitle: options.listingTitle?.trim() || undefined,
     name: item.name,
     categoryName,
     width,
@@ -345,6 +346,8 @@ export async function generateCanonicalProductPage(
 
   return {
     ...result,
+    // Preserve the operator title without treating it as inventory facts.
+    ...(options.listingTitle?.trim() && result.sections ? { sections: { ...result.sections, title: options.listingTitle.trim() } } : {}),
     inventoryId: item.id,
     inventoryName: item.name,
     usedStyleProfileVersion: styleProfile?.version ?? null,

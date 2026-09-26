@@ -63,6 +63,7 @@ const MAX_ATTEMPTS = 2;
 
 export interface ProductPageGenerationInput {
   inventoryId: string;
+  listingTitle?: string;
   name: string;
   categoryName?: string | null;
   width?: string | null;
@@ -257,6 +258,7 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
   const systemPrompt = buildProductPageSystemPrompt(input.styleProfile);
   const userPrompt = buildProductPageUserPrompt({
     facts,
+    listingTitle: input.listingTitle,
     similar,
     shippingBoilerplate: input.shippingBoilerplate ?? null,
     guidanceBlock: input.guidanceBlock ?? null,

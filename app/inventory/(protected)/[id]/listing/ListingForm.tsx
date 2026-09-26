@@ -224,7 +224,7 @@ export function ListingForm({
     setAiQuality(null);
     try {
       // §1 画面で選択中の配送方法をそのまま渡す(保存前でも反映する)。
-      const result = await generateListingCopyAction(inventoryId, shippingMethod);
+      const result = await generateListingCopyAction(inventoryId, shippingMethod, title.trim() !== inventoryName.trim() ? title : undefined);
       if (!result.ok) {
         setDraftError(result.error);
         return;

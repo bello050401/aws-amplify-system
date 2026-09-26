@@ -1,0 +1,11 @@
+import assert from "node:assert/strict";
+import { buildProductPageUserPrompt } from "../lib/ai/productPage/prompt";
+const facts = { name: "在庫名", dimensions: null, categoryName: "椅子", conditionDisclosure: null, publicNote: null };
+const title = '編集タイトル "試作"';
+const prompt = buildProductPageUserPrompt({ facts, similar: [], listingTitle: title });
+assert.ok(prompt.includes(JSON.stringify(title)));
+assert.ok(prompt.indexOf('==== 事実情報ここまで ====') < prompt.indexOf(JSON.stringify(title)));
+assert.ok(prompt.includes('タイトルから追加の仕様を推測しない'));
+assert.equal(facts.name, '在庫名');
+assert.ok(!buildProductPageUserPrompt({facts, similar: [], listingTitle: '  '}).includes('編集タイトルここまで'));
+console.log('Edited title prompt: 5/5 passed; no AI/AWS calls');

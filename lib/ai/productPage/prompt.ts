@@ -188,6 +188,7 @@ export interface ExtraProductFacts {
 
 export function buildProductPageUserPrompt(input: {
   facts: CustomerSafeFacts;
+  listingTitle?: string;
   similar: SimilarityHit[];
   /** §20 追加のProduct Context。 */
   extra?: ExtraProductFacts | null;
@@ -251,6 +252,10 @@ export function buildProductPageUserPrompt(input: {
   // することで、見本の文体を指示が上書きできる並びになる。
   if (input.guidanceBlock?.trim()) {
     blocks.push("", "==== BELLO担当者からの書き方の指示(事実ではない) ====", input.guidanceBlock.trim(), "==== 指示ここまで ====");
+  }
+
+  if (input.listingTitle?.trim()) {
+    blocks.push("", "==== 担当者が編集した出品タイトル（文章の参考・確定事実ではない） ====", JSON.stringify(input.listingTitle.trim()), "このタイトルに沿った紹介文にしてください。寸法・素材・ブランド等は上記の確定事実を優先し、タイトルから追加の仕様を推測しないでください。", "==== 編集タイトルここまで ====");
   }
 
   if (input.shippingBoilerplate?.trim()) {
