@@ -11,7 +11,7 @@ import type { SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
 import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
-import { MercariCategoryMappingSection } from "./MercariCategoryMappingSection";
+import { NextEngineListingSection } from "./NextEngineListingSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
 import { createBrandedListingImageAction, uploadBrandLogoAction } from "@/app/actions/brandLogo";
 import { InventoryImageGallery } from "../../../InventoryImageGallery";
@@ -564,7 +564,7 @@ export function ListingForm({
             className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-40"
             title="タイトル・価格・コンディション・説明文をMercari公式の出品画面へ貼り付けられる形でコピーします（送信は行いません）"
           >
-            出品内容をコピー（手動出品用）
+            下書き内容をコピー
           </button>
           {draftSaved && <span className="text-[12px] text-green-700">保存しました</span>}
           {copyState === "copied" && <span className="text-[12px] text-green-700">コピーしました</span>}
@@ -575,12 +575,7 @@ export function ListingForm({
 
       {/* Mercari Shops CSV出力(2026-09-14、P2)向けのカテゴリー/ブランド
           選択。出品の実行導線ではない——公式マスタの検索・確定のみ。 */}
-      <MercariCategoryMappingSection
-        inventoryId={inventoryId}
-        hasDraft={Boolean(draft)}
-        channelListing={channelListing}
-        onUpdated={setChannelListing}
-      />
+      <NextEngineListingSection title={title} description={description} price={price} imageCount={selectedImages.length} hasDraft={Boolean(draft)} />
 
       {/* Mercari Shops出品の過去履歴(External Listing Status)。
           Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
@@ -608,7 +603,7 @@ export function ListingForm({
             )}
           </dl>
           <p className="mt-2 text-[11px] text-gray-400">
-            Mercari Shops API連携は撤去されました。出品・再出品・価格変更はMercariの管理画面で直接行ってください。
+            これは過去の出品記録です。ネクストエンジン経由の新しい送信状況とは別に表示しています。
           </p>
         </div>
       )}
