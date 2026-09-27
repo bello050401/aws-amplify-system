@@ -231,14 +231,6 @@ export function ListingForm({
         setDraftError(result.error);
         return;
       }
-      setTitle(result.data.title);
-      // 2026-09-02: 本文は正本エンジンが作ったセクション付きの完成形を
-      // そのまま使う。以前はここで箇条書きと【コンディション】を継ぎ足して
-      // いたが、いまは description に「◎商品のご紹介 / ◎サイズ /
-      // ◎コンディション / ◎発送について」が既に入っているので、
-      // 足すと二重になる。
-      setDescription(result.data.description);
-      setLastAppliedDescription(result.data.description);
       setAiQuality({
         violations: result.violations,
         missingFacts: result.missingFacts,
@@ -251,6 +243,14 @@ export function ListingForm({
         ruleNotes: result.ruleNotes,
         shipping: result.shipping,
       });
+      if (result.violations.length > 0) {
+        setDraftError("生成文が品質検査を通過しなかったため、入力中の下書きは変更していません。確認事項を解消してから再生成してください。");
+        return;
+      }
+      setTitle(result.data.title);
+      // Apply the complete canonical description only after its quality gate.
+      setDescription(result.data.description);
+      setLastAppliedDescription(result.data.description);
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "AI生成に失敗しました。");
     } finally {
