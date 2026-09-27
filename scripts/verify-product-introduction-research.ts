@@ -19,3 +19,8 @@ console.log("Product research identity and source boundary checks passed.");
 assert.equal(selectReferences([document("AB-123")], "AB-123", null).length, 0);
 assert.equal(selectProductReferences([document("other product\nAB-123 different brand")], "AB-123").length, 0);
 assert.equal(selectProductReferences([document("AB-123 design。\nOther product is velvet.")], "AB-123")[0].fact, "ExampleBrand AB-123 design。");
+assert.equal(selectProductReferences([document("ＡＢ－１２３ design")], "AB-123").length, 1);
+assert.equal(selectReferences([document("AB-123", { text: "Example  Brand AB-123 design" })], "ab-123", "Example Brand").length, 1);
+assert.equal(selectReferences([document("AB-123", { text: "NotExampleBrand AB-123 design" })], "AB-123", "ExampleBrand").length, 0);
+assert.equal(selectReferences([document("AB-123", { text: "ExampleBrandExtra AB-123 design" })], "AB-123", "ExampleBrand").length, 0);
+assert.equal(selectReferences([document("AB-123", { text: "ExampleBrandより AB-123 を紹介" })], "AB-123", "ExampleBrand").length, 1);

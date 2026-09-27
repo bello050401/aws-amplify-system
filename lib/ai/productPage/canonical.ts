@@ -316,7 +316,10 @@ export async function generateCanonicalProductPage(
     condition: conditionSection.text,
   };
 
-  const productReferences = await researchProductIntroduction(brand, productContext?.details.modelNumber?.value ?? null);
+  // Prefer an explicitly entered model over an archive-derived model. Never
+  // infer identity from a generated title or a visually similar product.
+  const researchModel = customFieldText("modelNumber") ?? productContext?.details.modelNumber?.value ?? null;
+  const productReferences = await researchProductIntroduction(brand, researchModel);
   const result = await generateProductPage({
     inventoryId: item.id,
     listingTitle: options.listingTitle?.trim() || undefined,
