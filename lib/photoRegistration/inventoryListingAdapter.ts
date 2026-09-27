@@ -39,7 +39,7 @@ export function buildListingImageCandidates(
         source: "PHOTO_ASSET" as const,
         photoAssetId: asset.id,
       },
-      label: `撮影画像 ${asset.sequence}`,
+      label: `撮影画像 ${asset.sequence + 1}`,
       previewUrl: asset.thumbnailUrl,
       available: true,
     }));

@@ -62,7 +62,7 @@ export function PhotoAssetProductGallery({
           // eslint-disable-next-line @next/next/no-img-element -- 署名済みS3 URL(photo registration用バケット)
           <img
             src={current.processedUrl}
-            alt={`撮影画像 ${current.sequence}`}
+            alt={`撮影画像 ${current.sequence + 1}`}
             onError={() => setFailed(true)}
             className="h-[380px] w-full object-contain"
           />
@@ -79,14 +79,14 @@ export function PhotoAssetProductGallery({
                 setSelected(i);
                 setFailed(false);
               }}
-              aria-label={`撮影画像 ${asset.sequence}を表示`}
+              aria-label={`撮影画像 ${asset.sequence + 1}を表示`}
               className={i === selected ? "ring-2 ring-gray-900" : "opacity-80 hover:opacity-100"}
             >
               {asset.thumbnailUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- 署名済みS3 URL(photo registration用バケット)
                 <img
                   src={asset.thumbnailUrl}
-                  alt={`撮影画像 ${asset.sequence}`}
+                  alt={`撮影画像 ${asset.sequence + 1}`}
                   className="h-[60px] w-[60px] border border-gray-200 bg-gray-50 object-contain"
                 />
               ) : (
