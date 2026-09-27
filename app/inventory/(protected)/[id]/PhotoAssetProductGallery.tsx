@@ -34,6 +34,9 @@ export function PhotoAssetProductGallery({
         setSelected(refreshed.selected);
         setFailed(false);
       }
+    } catch {
+      // A transport failure must leave the current selection available for retry.
+      setFailed(true);
     } finally {
       setRefreshing(false);
     }
