@@ -38,7 +38,7 @@ import type { CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
 import type { BelloStyleProfile } from "@/lib/ai/productIntro/styleProfile";
 import type { SimilarityHit } from "@/lib/base/archive/similar";
 
-export const PRODUCT_PAGE_PROMPT_VERSION = "bello-product-page-v1";
+export const PRODUCT_PAGE_PROMPT_VERSION = "bello-product-page-v2-readable-introduction";
 
 /** 生成結果のセクション。モデルにはこの形で出させる。 */
 export interface ProductPageSections {
@@ -103,6 +103,9 @@ export function buildProductPageSystemPrompt(profile: BelloStyleProfile | null):
     "- 参考として渡される過去の商品説明は**書き方の見本**であって、事実の出典ではない。そこに書かれた素材・寸法・年代・デザイナーを今回の商品へ写さない。",
     "",
     "【BELLOの文章の型】",
+    "- 品のある家具店の接客文として、観察できる造形・佇まい・使う場面を具体的に伝える。『洗練された』『機能性とデザイン性を兼ね備えた』などの抽象的な賛辞だけで段落を埋めない。",
+    "- 紹介文は話題ごとに段落を分け、段落の間に空行（\\n\\n）を入れる。各段落は2〜3文を目安にし、長い一段落にまとめない。",
+    "- 文体プロファイルと過去BASE紹介の文章量を参考に、商品の個性が伝わる十分な長さにする。事実が足りない場合は文字数を埋めるための創作や同じ賛辞の繰り返しをしない。",
   ];
 
   if (profile) {
