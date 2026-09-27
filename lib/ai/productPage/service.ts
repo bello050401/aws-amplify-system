@@ -321,7 +321,7 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
           },
         } : PRODUCT_PAGE_TOOL,
         tier: "STANDARD",
-        promptVersion: PRODUCT_PAGE_PROMPT_VERSION,
+        promptVersion: input.ruleSections ? `${PRODUCT_PAGE_PROMPT_VERSION}-intro-only` : PRODUCT_PAGE_PROMPT_VERSION,
         requiredNonEmptyFields: ["title", "introduction"],
       });
     } catch (err) {
