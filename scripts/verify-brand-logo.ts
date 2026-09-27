@@ -33,9 +33,18 @@ async function main(): Promise<void> {
   const photoWithClearCorner = await sharp(source).composite([{ input: chair, left: 100, top: 100 }]).png().toBuffer();
   await renderBrandedImage(photoWithClearCorner, logo);
   const photoWithBlockedCorner = await sharp(source).composite([{ input: chair, left: 700, top: 200 }]).png().toBuffer();
-  await assert.rejects(async () => renderBrandedImage(photoWithBlockedCorner, logo), /ロゴを重ねずに停止/);
-  await assert.rejects(async () => renderBrandedImage(await awaitableDark(), logo), /ロゴを重ねずに停止/);
-  process.stdout.write("Brand logo checks passed (13/13).\n");
+  for (const photo of [photoWithBlockedCorner, await awaitableDark()]) {
+    const footerImage = await renderBrandedImage(photo, logo);
+    const meta = await sharp(footerImage).metadata();
+    assert.equal(meta.width, 1200);
+    assert.ok(meta.height! > 800, "blocked corner gets extra space, never an overlay on the product");
+    const pixel = await sharp(footerImage).extract({ left: 1092, top: 865, width: 1, height: 1 }).raw().toBuffer();
+    assert.ok(pixel[2] > pixel[0] + 40, "logo appears in added footer");
+    const preserved = await sharp(footerImage).extract({ left: 1100, top: 750, width: 1, height: 1 }).raw().toBuffer();
+    const original = await sharp(photo).extract({ left: 1100, top: 750, width: 1, height: 1 }).raw().toBuffer();
+    assert.ok(preserved.every((value, index) => Math.abs(value - original[index]) < 8), "product area stays visible");
+  }
+  process.stdout.write("Brand logo checks passed including safe footer placement.\n");
 }
 
 async function awaitableDark(): Promise<Buffer> {

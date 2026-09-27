@@ -3,9 +3,16 @@ import catalog from "./catalog.generated.json";
 
 export type BrandEntry = (typeof catalog)[number];
 
+function normalizeBrandKey(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase();
+}
+
 export function findBrandByName(name: string | null | undefined): BrandEntry | null {
-  const key = name?.trim().toLocaleLowerCase();
-  return key ? catalog.find((brand) => brand.name.toLocaleLowerCase() === key) ?? null : null;
+  const key = name ? normalizeBrandKey(name) : "";
+  if (!key) return null;
+  return catalog.find((brand) => normalizeBrandKey(brand.name) === key)
+    ?? catalog.find((brand) => normalizeBrandKey(brand.reading) === key)
+    ?? null;
 }
 
 export function searchBrands(query: string, limit = 20): Pick<BrandEntry, "id" | "name" | "reading">[] {

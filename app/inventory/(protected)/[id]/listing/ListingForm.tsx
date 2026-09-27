@@ -13,7 +13,7 @@ import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
 import { MercariCategoryMappingSection } from "./MercariCategoryMappingSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
-import { createBrandedListingImageAction } from "@/app/actions/brandLogo";
+import { createBrandedListingImageAction, uploadBrandLogoAction } from "@/app/actions/brandLogo";
 import { InventoryImageGallery } from "../../../InventoryImageGallery";
 import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import { setListingPhotoAssetSelectionAction } from "@/app/actions/photoRegistration";
@@ -93,6 +93,8 @@ export function ListingForm({
   const [channelListing, setChannelListing] = useState(initialChannelListing);
   const [selectedImages, setSelectedImages] = useState<ListingImageRef[]>(initialDraft?.images ?? []);
   const [brandLogoBusy, setBrandLogoBusy] = useState(false);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoSaved, setLogoSaved] = useState(false);
   const [brandedImageKey, setBrandedImageKey] = useState<string | null>(null);
   const [brandLogoError, setBrandLogoError] = useState<string | null>(null);
 
@@ -324,19 +326,40 @@ export function ListingForm({
         />
         <div className="mt-3 border border-gray-200 p-3 text-sm">
           <p className="font-semibold">ブランドロゴ（任意）</p>
-          <p className="mt-1 text-gray-600">商品編集画面で選んだブランドのロゴを、出品用トップ画像の右下に入れます。元画像は変更しません。</p>
-          <button type="button" disabled={!brandLogoAvailable || brandLogoBusy || selectedImages.length >= 20} className="mt-2 border border-gray-400 px-3 py-2 disabled:opacity-50"
+          <p className="mt-1 text-gray-600">商品編集画面で選んだブランドのロゴを、出品用トップ画像の右下に入れます。元画像は変更しません。安全な余白がない場合は写真の下に白い余白を追加します。</p>
+          <button type="button" disabled={brandLogoBusy || selectedImages.length >= 20} className="mt-2 border border-gray-400 px-3 py-2 disabled:opacity-50"
             onClick={async () => {
               setBrandLogoBusy(true); setBrandLogoError(null);
               try {
                 const result = await createBrandedListingImageAction(inventoryId);
+                if (!result.ok) { setBrandLogoError(result.message); return; }
                 setBrandedImageKey(result.storageKey);
                 setDraftSaved(false);
               } catch (error) { setBrandLogoError(error instanceof Error ? error.message : "ロゴ画像の作成に失敗しました。"); }
               finally { setBrandLogoBusy(false); }
             }}>{brandLogoBusy ? "作成中…" : "ロゴ入りトップ画像を作る"}</button>
           {brandLogoError && <p role="alert" className="mt-2 text-red-700">{brandLogoError}</p>}
-          {!brandLogoAvailable && <p className="mt-1 text-amber-700">商品編集画面でロゴのあるブランドを選んでから作成してください。</p>}
+          {!brandLogoAvailable && <p className="mt-1 text-amber-700">自動取得できるロゴがない場合は、下から登録できます。</p>}
+          <div className="mt-3 border-t pt-3">
+            <label htmlFor="brand-logo-upload" className="block">ブランドのロゴ画像を登録（PNG・JPEG・WebP、750KB以下）</label>
+            <input id="brand-logo-upload" type="file" accept="image/png,image/jpeg,image/webp" disabled={brandLogoBusy}
+              onChange={(event) => { setLogoFile(event.target.files?.[0] ?? null); setLogoSaved(false); }} className="mt-2 block" />
+            <button type="button" disabled={!logoFile || brandLogoBusy} className="mt-2 border px-3 py-2 disabled:opacity-50"
+              onClick={async () => {
+                if (!logoFile) return;
+                if (logoFile.size > 750_000) { setBrandLogoError("750KB以下のロゴ画像を選んでください。"); return; }
+                setBrandLogoBusy(true); setBrandLogoError(null); setLogoSaved(false);
+                try {
+                  const form = new FormData(); form.set("logo", logoFile);
+                  const result = await uploadBrandLogoAction(inventoryId, form);
+                  if (!result.ok) { setBrandLogoError(result.message); return; }
+                  setLogoSaved(true);
+                } catch { setBrandLogoError("ロゴの保存に失敗しました。接続を確認して再試行してください。"); }
+                finally { setBrandLogoBusy(false); }
+              }}>このブランドのロゴを保存</button>
+            <p className="mt-1 text-xs text-gray-600">保存済みのブランド名に紐づけ、同じブランドの商品で再利用します。登録済みロゴがある場合は置き換えます。</p>
+            {logoSaved && <p role="status" className="mt-1 text-green-700">ロゴを保存しました。「ロゴ入りトップ画像を作る」で使用できます。</p>}
+          </div>
           {selectedImages.length >= 20 && <p className="mt-1 text-amber-700">画像が20枚選ばれています。1枚外してから作成してください。</p>}
           {brandedImageKey && <div className="mt-3 max-w-md">
             <p className="mb-1 font-semibold">作成した画像の確認</p>
