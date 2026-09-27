@@ -1,0 +1,23 @@
+import assert from "node:assert/strict";
+import { checkGoodsUploadQueue } from "../lib/listing/nextEngine/uploadQueueClient";
+async function main() {
+  let calls = 0;
+  const request: typeof fetch = async (url, options) => {
+    calls++;
+    assert.equal(url, "https://api.next-engine.org/api_v1_system_que/search");
+    assert.equal(options?.redirect, "error");
+    assert.equal(options?.cache, "no-store");
+    assert.equal(options?.method, "POST");
+    const body = options?.body as URLSearchParams;
+    assert.equal(body.get("que_id-eq"), "189");
+    assert.equal(body.get("limit"), "2");
+    return Response.json({ result: "success", data: [{ que_id: "189", que_method_name: "SYOHIN_KIHON_CSV", que_status_id: "1" }] });
+  };
+  assert.deepEqual(await checkGoodsUploadQueue("synthetic-token", "189", request), { queueId: "189", state: "PROCESSING", publicationConfirmed: false });
+  await assert.rejects(checkGoodsUploadQueue("synthetic-token", "invalid", request));
+  await assert.rejects(checkGoodsUploadQueue("", "189", request));
+  assert.equal(calls, 1);
+  await assert.rejects(checkGoodsUploadQueue("synthetic-token", "189", async () => { throw new Error("synthetic-secret"); }), error => error instanceof Error && !error.message.includes("synthetic-secret"));
+  console.log("Queue client: one scoped read, no retries, invalid inputs blocked, errors redacted.");
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });
