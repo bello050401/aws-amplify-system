@@ -10,6 +10,8 @@ import { getInventoryDetail } from "@/lib/inventory/queries";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { renderBrandedImage } from "@/lib/brands/renderBrandedImage";
 import { readLimitedImage } from "@/lib/brands/readLimitedImage";
+import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
+import { refreshGallerySelection } from "@/lib/photoRegistration/gallerySelection";
 
 async function ownImage(path: string): Promise<Buffer> {
   const { url } = await runWithAmplifyServerContext({ nextServerContext: { cookies },
@@ -37,10 +39,21 @@ export async function createBrandedListingImageAction(inventoryId: string): Prom
   if (logoUrl.protocol !== "https:" || !["img.tabroom.jp", "dopa.co.jp", "www.dopa.co.jp"].includes(logoUrl.hostname))
     throw new Error("このブランドのロゴURLは利用できません。");
 
-  const top = item.images.find((image) => image.type === "NORMAL" && image.isPrimary)
-    ?? item.images.find((image) => image.type === "NORMAL");
-  if (!top) throw new Error("トップ画像がありません。");
-  const photo = await ownImage(top.storageKey);
+  const photos = await listInventoryPhotoAssetsAction(inventoryId);
+  if (!photos.ok) throw new Error("撮影画像を確認できませんでした。再試行してください。");
+  const shootingTop = refreshGallerySelection(photos.value.assets, false, "").assets[0];
+  let photo: Buffer;
+  if (shootingTop) {
+    if (!shootingTop.processedUrl) throw new Error("撮影トップ画像を取得できませんでした。");
+    const response = await fetch(shootingTop.processedUrl, { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error("撮影トップ画像を取得できませんでした。");
+    photo = await readLimitedImage(response, 25_000_000);
+  } else {
+    const top = item.images.find((image) => image.type === "NORMAL" && image.isPrimary)
+      ?? item.images.find((image) => image.type === "NORMAL");
+    if (!top) throw new Error("トップ画像がありません。");
+    photo = await ownImage(top.storageKey);
+  }
   const logoKey = `inventory/brand-logos/${brand.id}.png`;
   let logo: Buffer;
   try { logo = await ownImage(logoKey); }
