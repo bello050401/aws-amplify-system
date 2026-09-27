@@ -41,6 +41,7 @@ export async function createBrandedListingImageAction(inventoryId: string): Prom
 
   const photos = await listInventoryPhotoAssetsAction(inventoryId);
   if (!photos.ok) throw new Error("撮影画像を確認できませんでした。再試行してください。");
+  if (photos.value.truncated) throw new Error("撮影画像の取得が途中のため、トップ画像を確認できませんでした。");
   const shootingTop = refreshGallerySelection(photos.value.assets, false, "").assets[0];
   let photo: Buffer;
   if (shootingTop) {
