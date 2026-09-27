@@ -100,7 +100,7 @@ export interface ProductPageGenerationInput {
    */
   ruleSections?: RuleBasedSections | null;
   /** §20 AIへ渡す追加の事実(ブランド・素材)。 */
-  extraFacts?: { brand?: string | null; brandReference?: string | null; material?: string | null } | null;
+  extraFacts?: { brand?: string | null; brandReference?: string | null; material?: string | null; verifiedProductFacts?: { fact: string; sourceUrl: string }[]; photoObservations?: string[] } | null;
 }
 
 /** §19 ルールベース領域。descriptionSections.ts が作る。 */
@@ -266,6 +266,8 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
       brand: input.extraFacts?.brand ?? input.brand ?? null,
       brandReference: input.extraFacts?.brandReference ?? null,
       material: input.extraFacts?.material ?? null,
+      verifiedProductFacts: input.extraFacts?.verifiedProductFacts,
+      photoObservations: input.extraFacts?.photoObservations,
       // §19 ルールで確定済みのセクション。AIには書かせない。
       fixedSections: input.ruleSections
         ? ["◎商品詳細", "◎発送について", "◎コンディション", "◎返品・返金対応について", "◎お取り置きについて"]
