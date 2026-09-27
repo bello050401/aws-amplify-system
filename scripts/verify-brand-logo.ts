@@ -41,6 +41,12 @@ async function main(): Promise<void> {
     const pixel = await sharp(footerImage).extract({ left: 1092, top: 750, width: 1, height: 1 }).raw().toBuffer();
     assert.ok(pixel[2] > pixel[0] + 40, "logo appears directly on the bottom-right photo area");
   }
+  const transparentLogo = await sharp({ create: { width: 300, height: 100, channels: 4, background: "#00000000" } })
+    .composite([{ input: await sharp({ create: { width: 100, height: 100, channels: 4, background: "#3355aaff" } }).png().toBuffer(), left: 100, top: 0 }])
+    .png().toBuffer();
+  const transparentOverlay = await renderBrandedImage(await awaitableDark(), transparentLogo);
+  const untouched = await sharp(transparentOverlay).extract({ left: 1010, top: 750, width: 1, height: 1 }).raw().toBuffer();
+  assert.ok(untouched.every(value => Math.abs(value - 34) < 8), "transparent logo area retains the photo, without a generated white badge");
   process.stdout.write("Brand logo checks passed including direct overlay without added space.\n");
 }
 

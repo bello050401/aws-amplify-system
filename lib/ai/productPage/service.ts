@@ -308,7 +308,18 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         task: "LISTING_DESCRIPTION_GENERATION",
         systemPrompt: attempt === 1 ? systemPrompt : `${systemPrompt}${retryNote}`,
         userPrompt,
-        toolSchema: PRODUCT_PAGE_TOOL,
+        toolSchema: input.ruleSections ? {
+          ...PRODUCT_PAGE_TOOL,
+          description: "商品タイトルと商品のご紹介だけを生成する。その他の掲載セクションは確定データから組み立てる。",
+          input_schema: {
+            type: "object",
+            properties: {
+              title: PRODUCT_PAGE_TOOL.input_schema.properties.title,
+              introduction: PRODUCT_PAGE_TOOL.input_schema.properties.introduction,
+            },
+            required: ["title", "introduction"],
+          },
+        } : PRODUCT_PAGE_TOOL,
         tier: "STANDARD",
         promptVersion: PRODUCT_PAGE_PROMPT_VERSION,
         requiredNonEmptyFields: ["title", "introduction"],
@@ -352,7 +363,12 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
       };
     }
 
-    sections = result.output;
+    sections = input.ruleSections ? {
+      title: result.output.title,
+      introduction: result.output.introduction,
+      brandSection: "", designerSection: "", featureSection: "", materialSection: "",
+      dimensionsSection: "", conditionSection: "", shippingSection: "",
+    } : result.output;
     introViolations = findIntroDimensionViolations(sections.introduction ?? "");
     conditionViolations = findIntroConditionViolations(sections.introduction ?? "", facts.conditionDisclosure);
     categoryViolations = findCategoryMismatchViolations(sections.introduction ?? "", input.categoryName ?? null);
