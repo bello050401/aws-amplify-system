@@ -125,6 +125,8 @@ function testGenericPhrases() {
     "座面と背もたれを一枚の成形合板で繋いだ構造で、脚部は細いスチールに置き換えられています。" +
     "木目は縦方向に通っており、正面から見たときの輪郭がまっすぐに見えます。";
   assertTrue(findGenericPhrases(specific).length <= MAX_GENERIC_PHRASES, "商品固有の説明はテンプレ判定に引っかからない");
+  const observedInStaging = "洗練されたデザイン。使いやすさと美しさを両立。どんな空間にも馴染み、長く愛用できる一品。";
+  assertTrue(findGenericPhrases(observedInStaging).length > MAX_GENERIC_PHRASES, "検証環境で実際に出た抽象的な紹介を検出する");
 }
 
 /**
