@@ -36,6 +36,12 @@ async function main() {
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
     ...prepared, csv: prepared.csv.replace('"0","0","100"', '"1","0","100"'),
   }, request));
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
+    ...prepared, csv: prepared.csv.replace('"0","0","100"', '"0","0","999"'),
+  }, request));
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
+    ...prepared, csv: prepared.csv.replace('"0","0","100"', '"0","0","0100"'),
+  }, request));
   assert.equal(calls, 1);
   const multiline = prepareNextEngineProduct({ sku: code, title: "複数行", description: "一行目\n二行目", cost: 100, price: 300, supplierCode: "SYNTHETIC" });
   assert.deepEqual(await enqueuePrivateTestMaster(tokens, persist, code, code, multiline, async (_url, options) => {
