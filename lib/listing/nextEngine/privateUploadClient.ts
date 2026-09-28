@@ -2,6 +2,7 @@ import { parseNextEngineUploadReceipt } from "./uploadReceipt";
 import { prepareNextEngineProduct, type NextEnginePreparation } from "./preparation";
 import { assertNextEngineServerRuntime } from "./serverBoundary";
 import { resolveNextEngineTokenRotation } from "./tokenRotation";
+import { isReservedNextEngineTestCode } from "./privateTestPolicy";
 
 const CSV_HEADER = "syohin_code,sire_code,syohin_name,baika_tnk,syohin_setumei_text\r\n";
 const QUOTED_FIELD = '"(?:[^"]|"")*"';
@@ -31,7 +32,7 @@ export async function enqueuePrivateTestMaster(
 ) {
   assertNextEngineServerRuntime();
   if (!tokens.accessToken?.trim() || !tokens.refreshToken?.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
-  if (!/^BELLO-NE-TEST-[A-Za-z0-9_-]+$/.test(reservedCode) || testCode !== reservedCode)
+  if (!isReservedNextEngineTestCode(reservedCode) || testCode !== reservedCode)
     throw new Error("予約した専用テスト商品と一致しないため送信しません。");
   if (prepared.publicationState !== "NOT_PUBLISHED" || prepared.endpoint !== "/api_v1_master_goods/upload")
     throw new Error("商品登録の送信内容が不正です。");

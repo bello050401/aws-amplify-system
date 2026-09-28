@@ -20,7 +20,7 @@ const quote = (value: string | number): string => `"${String(value).replace(/"/g
 const length = (value: string): number => Array.from(value).length;
 
 export function prepareNextEngineProduct(input: NextEngineProductInput): NextEnginePreparation {
-  if (!/^[A-Za-z0-9_-]{1,49}$/.test(input.sku)) throw new Error("商品コードは49文字以内の英数字・ハイフン・アンダーバーで指定してください。");
+  if (!/^[A-Za-z0-9-]{1,49}$/.test(input.sku)) throw new Error("商品コードは49文字以内の半角英数字・ハイフンで指定してください。");
   const title = input.title.trim();
   const description = input.description.replace(/\r\n?/g, "\n").trim();
   if (!title || length(title) > 130) throw new Error("メルカリShops用商品名は130文字以内で指定してください。");

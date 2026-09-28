@@ -1,4 +1,4 @@
-import { assertPrivateTestPage } from "./privateTestPolicy";
+import { assertPrivateTestPage, isReservedNextEngineTestCode } from "./privateTestPolicy";
 import { assertNextEngineServerRuntime } from "./serverBoundary";
 import { resolveNextEngineTokenRotation } from "./tokenRotation";
 
@@ -11,7 +11,7 @@ export async function verifyNextEnginePrivateTestPage(
 ): Promise<{ productCode: string; visibility: "PRIVATE" }> {
   assertNextEngineServerRuntime();
   if (!tokens.accessToken?.trim() || !tokens.refreshToken?.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
-  if (!/^BELLO-NE-TEST-[A-Za-z0-9_-]+$/.test(testCode)) throw new Error("専用テスト商品コードが必要です。");
+  if (!isReservedNextEngineTestCode(testCode)) throw new Error("専用テスト商品コードが必要です。");
   const body = new URLSearchParams({
     access_token: tokens.accessToken,
     refresh_token: tokens.refreshToken,

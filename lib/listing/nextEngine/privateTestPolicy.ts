@@ -2,8 +2,10 @@
  * https://mrs.ne-receiver.com/manual
  * This guard is not a publication API and does not submit any product.
  */
+export const isReservedNextEngineTestCode = (code: string): boolean => /^BELLO-NE-TEST-[A-Za-z0-9-]+$/.test(code);
+
 export function assertPrivateTestPage(page: { goods_page_display_flag?: unknown; goods_page_goods_code?: unknown }, expectedTestCode: string): void {
-  if (!/^BELLO-NE-TEST-[A-Za-z0-9_-]+$/.test(expectedTestCode) || page.goods_page_goods_code !== expectedTestCode) {
+  if (!isReservedNextEngineTestCode(expectedTestCode) || page.goods_page_goods_code !== expectedTestCode) {
     throw new Error("対象が専用テスト商品と一致しないため、登録を停止しました。");
   }
   if (page.goods_page_display_flag !== 0 && page.goods_page_display_flag !== "0") {

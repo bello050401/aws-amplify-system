@@ -23,6 +23,7 @@ async function main() {
   assert.deepEqual(saved, [{ accessToken: "synthetic-new-access", refreshToken: "synthetic-new-refresh" }]);
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, "BELLO-NE-TEST-OTHER", prepared, request));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, "B005730", "B005730", prepared, request));
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, "BELLO-NE-TEST-BAD_CODE", "BELLO-NE-TEST-BAD_CODE", prepared, request));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
     ...prepared, csv: prepared.csv.replace("syohin_setumei_text", "visible_flg"),
   }, request));
