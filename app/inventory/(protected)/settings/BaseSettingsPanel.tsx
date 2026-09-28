@@ -109,6 +109,25 @@ export function BaseSettingsPanel({ state }: { state: BaseConnectionState }) {
     }
   }
 
+  async function handleSaveScopeOnly() {
+    setBusy("save");
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await updateBaseWriteScopeAction(requestWriteItems);
+      if (!result.success) { setError(result.message); return; }
+      setClientId("");
+      setClientSecret("");
+      setShowForm(false);
+      setNotice(result.message);
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "権限設定の保存に失敗しました。");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleDelete() {
     if (!window.confirm("BASEのアプリ認証情報とアカウント連携を削除します。よろしいですか？")) return;
     setBusy("delete");
@@ -330,13 +349,23 @@ export function BaseSettingsPanel({ state }: { state: BaseConnectionState }) {
                 </span>
               </label>
               <div className="flex gap-2">
+                {state.hasAppCredentials && (
+                  <button
+                    type="button"
+                    onClick={handleSaveScopeOnly}
+                    disabled={busy !== null}
+                    className="bg-gray-900 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50"
+                  >
+                    権限設定のみ保存
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleSave}
                   disabled={busy !== null}
-                  className="bg-gray-900 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50"
+                  className="border border-gray-300 px-3 py-1 text-[12px] text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                 >
-                  {busy === "save" ? "保存中…" : state.hasAppCredentials && !clientId.trim() && !clientSecret.trim() ? "権限設定のみ保存" : "保存する"}
+                  {busy === "save" ? "保存中…" : "認証情報を保存する"}
                 </button>
                 {state.hasAppCredentials && (
                   <button
