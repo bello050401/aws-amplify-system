@@ -11,7 +11,7 @@ export async function checkGoodsUploadQueue(
   assertNextEngineServerRuntime();
   if (!tokens.accessToken?.trim() || !tokens.refreshToken?.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
   if (!/^[1-9][0-9]*$/.test(queueId)) throw new Error("有効な商品登録受付番号が必要です。");
-  const body = new URLSearchParams({ access_token: tokens.accessToken,
+  const body = new URLSearchParams({ access_token: tokens.accessToken, refresh_token: tokens.refreshToken,
     fields: "que_id,que_method_name,que_status_id", "que_id-eq": queueId, offset: "0", limit: "2" });
   let payload: unknown;
   let httpOk = false;

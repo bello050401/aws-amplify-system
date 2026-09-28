@@ -23,7 +23,7 @@ export async function enqueuePrivateTestMaster(
   let httpOk = false;
   try {
     const response = await request("https://api.next-engine.org/api_v1_master_goods/upload", {
-      method: "POST", body: new URLSearchParams({ access_token: tokens.accessToken, data_type: "csv", data: prepared.csv }),
+      method: "POST", body: new URLSearchParams({ access_token: tokens.accessToken, refresh_token: tokens.refreshToken, data_type: "csv", data: prepared.csv }),
       cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000),
     });
     httpOk = response.ok;

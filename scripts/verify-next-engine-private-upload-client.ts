@@ -14,6 +14,7 @@ async function main() {
     assert.equal(options?.method, "POST");
     assert.equal(options?.redirect, "error");
     const body = options?.body as URLSearchParams;
+    assert.equal(body.get("refresh_token"), "synthetic-refresh");
     assert.equal(body.get("data_type"), "csv");
     assert.equal(body.get("data"), prepared.csv);
     return Response.json({ result: "success", que_id: "189", access_token: "synthetic-new-access", refresh_token: "synthetic-new-refresh" });

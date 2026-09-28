@@ -13,6 +13,7 @@ async function main() {
     assert.equal(options.cache, "no-store");
     assert.equal(options.redirect, "error");
     const form = options.body as URLSearchParams;
+    assert.equal(form.get("refresh_token"), "synthetic-refresh");
     assert.equal(form.get("goods_page_goods_code-eq"), code);
     assert.equal(form.get("limit"), "2");
     return new Response(JSON.stringify(payload), { status: 200 });

@@ -12,6 +12,7 @@ async function main() {
     assert.equal(options?.cache, "no-store");
     assert.equal(options?.method, "POST");
     const body = options?.body as URLSearchParams;
+    assert.equal(body.get("refresh_token"), "synthetic-refresh");
     assert.equal(body.get("que_id-eq"), "189");
     assert.equal(body.get("limit"), "2");
     return Response.json({ result: "success", data: [{ que_id: "189", que_method_name: "SYOHIN_KIHON_CSV", que_status_id: "1" }] });

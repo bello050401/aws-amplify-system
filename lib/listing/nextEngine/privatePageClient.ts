@@ -14,6 +14,7 @@ export async function verifyNextEnginePrivateTestPage(
   if (!/^BELLO-NE-TEST-[A-Za-z0-9_-]+$/.test(testCode)) throw new Error("専用テスト商品コードが必要です。");
   const body = new URLSearchParams({
     access_token: tokens.accessToken,
+    refresh_token: tokens.refreshToken,
     fields: "goods_page_goods_code,goods_page_display_flag",
     "goods_page_goods_code-eq": testCode,
     offset: "0", limit: "2",
