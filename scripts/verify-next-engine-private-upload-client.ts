@@ -39,7 +39,8 @@ async function main() {
     return Response.json({ result: "success", que_id: "190" });
   }), { queueId: "190", state: "QUEUED", publicationConfirmed: false });
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, prepared, async () => { throw new Error("synthetic-secret"); }), error => error instanceof Error && !error.message.includes("synthetic-secret"));
-  await assert.rejects(enqueuePrivateTestMaster(tokens, async () => { throw new Error("storage down"); }, code, code, prepared, request));
+  await assert.rejects(enqueuePrivateTestMaster(tokens, async () => { throw new Error("synthetic-storage-secret"); }, code, code, prepared, request), error =>
+    error instanceof Error && error.message.includes("再送信せず") && !error.message.includes("synthetic-storage-secret"));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, prepared, async () => Response.json({ result: "error", access_token: "error-access", refresh_token: "error-refresh" }))) ;
   assert.deepEqual(saved.at(-1), { accessToken: "error-access", refreshToken: "error-refresh" });
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, prepared, async () => Response.json({ result: "error", access_token: "http-error-access", refresh_token: "http-error-refresh" }, { status: 400 })));

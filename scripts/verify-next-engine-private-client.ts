@@ -35,6 +35,9 @@ async function main() {
   assert.deepEqual(saved.at(-1), { accessToken: "new-access", refreshToken: "new-refresh" });
   await assert.rejects(verifyNextEnginePrivateTestPage(tokens, persist, code, (async () => Response.json({ result: "error", access_token: "http-access", refresh_token: "http-refresh" }, { status: 400 })) as typeof fetch));
   assert.deepEqual(saved.at(-1), { accessToken: "http-access", refreshToken: "http-refresh" });
+  await assert.rejects(verifyNextEnginePrivateTestPage(tokens, async () => { throw new Error("synthetic-storage-secret"); }, code,
+    fake({ result: "success", access_token: "next-access", refresh_token: "next-refresh", data: [page] })), error =>
+    error instanceof Error && !error.message.includes("synthetic-storage-secret"));
   console.log("Read-only private page client: exact target, ambiguous results and expired auth checks passed.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

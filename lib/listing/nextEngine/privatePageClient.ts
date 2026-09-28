@@ -33,7 +33,11 @@ export async function verifyNextEnginePrivateTestPage(
   }
   const rotated = resolveNextEngineTokenRotation(tokens, result);
   if (rotated.rotated) {
-    await persistTokens({ accessToken: rotated.accessToken, refreshToken: rotated.refreshToken });
+    try {
+      await persistTokens({ accessToken: rotated.accessToken, refreshToken: rotated.refreshToken });
+    } catch {
+      throw new Error("認証情報を安全に保存できませんでした。接続を確認してください。");
+    }
   }
   if (!httpOk) throw new Error("ネクストエンジンの商品ページ確認に失敗しました。認証と接続を確認してください。");
   if (!result || typeof result !== "object") throw new Error("商品ページ確認の応答が不正です。");

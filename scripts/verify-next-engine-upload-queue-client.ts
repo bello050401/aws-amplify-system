@@ -24,6 +24,9 @@ async function main() {
   await assert.rejects(checkGoodsUploadQueue(tokens, persist, "189", async () => { throw new Error("synthetic-secret"); }), error => error instanceof Error && !error.message.includes("synthetic-secret"));
   await assert.rejects(checkGoodsUploadQueue(tokens, persist, "189", async () => Response.json({ result: "error", access_token: "queue-access", refresh_token: "queue-refresh" }, { status: 400 })));
   assert.deepEqual(saved.at(-1), { accessToken: "queue-access", refreshToken: "queue-refresh" });
+  await assert.rejects(checkGoodsUploadQueue(tokens, async () => { throw new Error("synthetic-storage-secret"); }, "189", async () =>
+    Response.json({ result: "success", access_token: "next-access", refresh_token: "next-refresh", data: [{ que_id: "189", que_method_name: "SYOHIN_KIHON_CSV", que_status_id: "2" }] })), error =>
+    error instanceof Error && !error.message.includes("synthetic-storage-secret"));
   console.log("Queue client: one scoped read, no retries, invalid inputs blocked, errors redacted.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

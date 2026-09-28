@@ -26,7 +26,11 @@ export async function checkGoodsUploadQueue(
   }
   const rotated = resolveNextEngineTokenRotation(tokens, payload);
   if (rotated.rotated) {
-    await persistTokens({ accessToken: rotated.accessToken, refreshToken: rotated.refreshToken });
+    try {
+      await persistTokens({ accessToken: rotated.accessToken, refreshToken: rotated.refreshToken });
+    } catch {
+      throw new Error("認証情報を安全に保存できませんでした。接続を確認してください。");
+    }
   }
   if (!httpOk) throw new Error("商品登録状況の確認に失敗しました。再送信せず、接続を確認してください。");
   return parseGoodsUploadQueue(payload, queueId);

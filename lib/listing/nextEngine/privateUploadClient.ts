@@ -53,7 +53,11 @@ export async function enqueuePrivateTestMaster(
   // complete pair before interpreting the upload result or making another call.
   const rotated = resolveNextEngineTokenRotation(tokens, payload);
   if (rotated.rotated) {
-    await persistTokens({ accessToken: rotated.accessToken, refreshToken: rotated.refreshToken });
+    try {
+      await persistTokens({ accessToken: rotated.accessToken, refreshToken: rotated.refreshToken });
+    } catch {
+      throw new Error("認証情報を安全に保存できませんでした。商品登録は受け付けられた可能性があります。再送信せず、登録状況を確認してください。");
+    }
   }
   if (!httpOk) throw new Error("ネクストエンジンの商品登録に失敗しました。登録状況を確認してください。");
   return parseNextEngineUploadReceipt(payload);
