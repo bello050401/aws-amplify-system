@@ -183,6 +183,24 @@ export async function saveBaseCredentials(input: {
   clearBaseCredentialsCache();
 }
 
+/** Update only the requested OAuth scope while retaining the stored secret server-side. */
+export async function updateBaseWriteScope(requestWriteItems: boolean, who: string | null): Promise<void> {
+  const existing = await readPayload();
+  if (!existing.configured || !existing.clientId || !existing.clientSecret) {
+    throw new Error("BASEのアプリ認証情報が設定されていません。");
+  }
+  await getClient().send(new PutSecretValueCommand({
+    SecretId: SECRET_NAME,
+    SecretString: JSON.stringify({
+      ...existing,
+      requestWriteItems,
+      updatedAt: new Date().toISOString(),
+      updatedBy: who ?? undefined,
+    }),
+  }));
+  clearBaseCredentialsCache();
+}
+
 /** 削除。Secretの実体は消さず、未設定の中身へ書き戻す（権限を最小にしてあるため）。 */
 export async function deleteBaseCredentials(): Promise<void> {
   await getClient().send(new PutSecretValueCommand({ SecretId: SECRET_NAME, SecretString: JSON.stringify(UNCONFIGURED_PAYLOAD) }));

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import { deleteBaseCredentials, saveBaseCredentials } from "@/lib/base/secretStore";
+import { deleteBaseCredentials, saveBaseCredentials, updateBaseWriteScope } from "@/lib/base/secretStore";
 import { getBaseClient } from "@/lib/base";
 import { BaseNotConfiguredError } from "@/lib/base/errors";
 import { BaseApiError } from "@/lib/base/client";
@@ -94,6 +94,24 @@ export async function saveBaseCredentialsAction(params: {
       message: "認証情報の保存に失敗しました。時間をおいて再度お試しください。",
       retryable: true,
     };
+  }
+}
+
+export async function updateBaseWriteScopeAction(requestWriteItems: boolean): Promise<BaseSecretActionResult> {
+  const denied = await requireAdmin();
+  if (denied) return denied;
+  if (typeof requestWriteItems !== "boolean") {
+    return { success: false, message: "権限設定が不正です。", retryable: false };
+  }
+  try {
+    let who: string | null = null;
+    try { who = await getCurrentInventoryUserEmail(); } catch { /* audit identity unavailable */ }
+    await updateBaseWriteScope(requestWriteItems, who);
+    revalidatePath("/inventory/settings");
+    return { success: true, message: "要求権限を保存しました。BASEアカウントを再連携して権限を反映してください。" };
+  } catch (err) {
+    console.error("[updateBaseWriteScopeAction] failed:", err instanceof Error ? err.name : "unknown");
+    return { success: false, message: "権限設定の保存に失敗しました。", retryable: true };
   }
 }
 

@@ -7,6 +7,7 @@ import { BaseArchivePanel } from "./BaseArchivePanel";
 import {
   deleteBaseCredentialsAction,
   saveBaseCredentialsAction,
+  updateBaseWriteScopeAction,
   testBaseConnectionAction,
   type BaseConnectionTestResult,
 } from "@/app/actions/baseSecret";
@@ -79,7 +80,8 @@ export function BaseSettingsPanel({ state }: { state: BaseConnectionState }) {
     state.status === "CONNECTED" ? "text-green-700" : state.status === "NOT_CONFIGURED" ? "text-red-600" : "text-amber-600";
 
   async function handleSave() {
-    if (!clientId.trim() || !clientSecret.trim()) {
+    const scopeOnly = state.hasAppCredentials && !clientId.trim() && !clientSecret.trim();
+    if (!scopeOnly && (!clientId.trim() || !clientSecret.trim())) {
       setError("Client IDとClient Secretの両方を入力してください。");
       return;
     }
@@ -87,7 +89,9 @@ export function BaseSettingsPanel({ state }: { state: BaseConnectionState }) {
     setError(null);
     setNotice(null);
     try {
-      const result = await saveBaseCredentialsAction({ clientId, clientSecret, requestWriteItems });
+      const result = scopeOnly
+        ? await updateBaseWriteScopeAction(requestWriteItems)
+        : await saveBaseCredentialsAction({ clientId, clientSecret, requestWriteItems });
       if (!result.success) {
         setError(result.message);
         return;
@@ -332,7 +336,7 @@ export function BaseSettingsPanel({ state }: { state: BaseConnectionState }) {
                   disabled={busy !== null}
                   className="bg-gray-900 px-3 py-1 text-[12px] font-bold text-white disabled:opacity-50"
                 >
-                  {busy === "save" ? "保存中…" : "保存する"}
+                  {busy === "save" ? "保存中…" : state.hasAppCredentials && !clientId.trim() && !clientSecret.trim() ? "権限設定のみ保存" : "保存する"}
                 </button>
                 {state.hasAppCredentials && (
                   <button
