@@ -30,6 +30,7 @@ function assertEqual(actual: unknown, expected: unknown, label: string) {
 
 function testClassifyBaseHttpStatus() {
   assertEqual(classifyBaseHttpStatus(401, "unauthorized").code, "AUTH_FAILED", "classifyBaseHttpStatus: 401 -> AUTH_FAILED");
+  assertEqual(classifyBaseHttpStatus(403, "forbidden").code, "PERMISSION_DENIED", "classifyBaseHttpStatus: 403 -> PERMISSION_DENIED");
   assertEqual(classifyBaseHttpStatus(429, "rate limited").code, "RATE_LIMITED", "classifyBaseHttpStatus: 429 -> RATE_LIMITED");
   assertEqual(classifyBaseHttpStatus(400, "bad request").code, "REMOTE_VALIDATION_ERROR", "classifyBaseHttpStatus: 400 -> REMOTE_VALIDATION_ERROR");
   assertEqual(classifyBaseHttpStatus(422, "invalid").code, "REMOTE_VALIDATION_ERROR", "classifyBaseHttpStatus: 422 -> REMOTE_VALIDATION_ERROR");
