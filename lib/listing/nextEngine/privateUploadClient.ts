@@ -17,7 +17,8 @@ export async function enqueuePrivateTestMaster(
   if (prepared.publicationState !== "NOT_PUBLISHED" || prepared.endpoint !== "/api_v1_master_goods/upload")
     throw new Error("商品登録の送信内容が不正です。");
   const rows = prepared.csv.split("\r\n").filter(Boolean);
-  if (rows.length !== 2 || !rows[1].startsWith(`"${testCode}",`))
+  if (rows.length !== 2 || rows[0] !== "syohin_code,sire_code,syohin_name,baika_tnk,syohin_setumei_text" ||
+      !rows[1].startsWith(`"${testCode}",`))
     throw new Error("専用テスト商品のCSVではありません。");
   let payload: unknown;
   let httpOk = false;

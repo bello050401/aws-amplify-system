@@ -23,6 +23,9 @@ async function main() {
   assert.deepEqual(saved, [{ accessToken: "synthetic-new-access", refreshToken: "synthetic-new-refresh" }]);
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, "BELLO-NE-TEST-OTHER", prepared, request));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, "B005730", "B005730", prepared, request));
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
+    ...prepared, csv: prepared.csv.replace("syohin_setumei_text", "visible_flg"),
+  }, request));
   assert.equal(calls, 1);
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, prepared, async () => { throw new Error("synthetic-secret"); }), error => error instanceof Error && !error.message.includes("synthetic-secret"));
   await assert.rejects(enqueuePrivateTestMaster(tokens, async () => { throw new Error("storage down"); }, code, code, prepared, request));
