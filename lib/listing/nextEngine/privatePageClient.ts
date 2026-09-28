@@ -1,32 +1,40 @@
 import { assertPrivateTestPage } from "./privateTestPolicy";
 import { assertNextEngineServerRuntime } from "./serverBoundary";
+import { resolveNextEngineTokenRotation } from "./tokenRotation";
 
 /** Read-only official page search. Never uploads or publishes a product. */
 export async function verifyNextEnginePrivateTestPage(
-  accessToken: string,
+  tokens: { accessToken: string; refreshToken: string },
+  persistTokens: (tokens: { accessToken: string; refreshToken: string }) => Promise<void>,
   testCode: string,
   request: typeof fetch = fetch,
 ): Promise<{ productCode: string; visibility: "PRIVATE" }> {
   assertNextEngineServerRuntime();
-  if (!accessToken.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
+  if (!tokens.accessToken?.trim() || !tokens.refreshToken?.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
   if (!/^BELLO-NE-TEST-[A-Za-z0-9_-]+$/.test(testCode)) throw new Error("専用テスト商品コードが必要です。");
   const body = new URLSearchParams({
-    access_token: accessToken,
+    access_token: tokens.accessToken,
     fields: "goods_page_goods_code,goods_page_display_flag",
     "goods_page_goods_code-eq": testCode,
     offset: "0", limit: "2",
   });
   let result: unknown;
+  let httpOk = false;
   try {
     const response = await request("https://api.next-engine.org/api_v1_master_goods_page/search", {
       method: "POST", body, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) throw new Error("HTTP failure");
+    httpOk = response.ok;
     result = await response.json();
   } catch {
     // JSON/network errors can contain response fragments. Never expose them.
     throw new Error("ネクストエンジンの商品ページ確認に失敗しました。認証と接続を確認してください。");
   }
+  const rotated = resolveNextEngineTokenRotation(tokens, result);
+  if (rotated.rotated) {
+    await persistTokens({ accessToken: rotated.accessToken, refreshToken: rotated.refreshToken });
+  }
+  if (!httpOk) throw new Error("ネクストエンジンの商品ページ確認に失敗しました。認証と接続を確認してください。");
   if (!result || typeof result !== "object") throw new Error("商品ページ確認の応答が不正です。");
   const payload = result as { result?: unknown; data?: unknown };
   // Do not return raw errors/tokens. An expired token requires normal reconnection.
