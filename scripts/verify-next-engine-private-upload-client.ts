@@ -3,7 +3,7 @@ import { prepareNextEngineProduct } from "../lib/listing/nextEngine/preparation"
 import { enqueuePrivateTestMaster } from "../lib/listing/nextEngine/privateUploadClient";
 async function main() {
   const code = "BELLO-NE-TEST-20260928";
-  const prepared = prepareNextEngineProduct({ sku: code, title: "合成テスト商品", description: "合成説明", price: 300, supplierCode: "SYNTHETIC" });
+  const prepared = prepareNextEngineProduct({ sku: code, title: "合成テスト商品", description: "合成説明", cost: 100, price: 300, supplierCode: "SYNTHETIC" });
   let calls = 0;
   const tokens = { accessToken: "synthetic-token", refreshToken: "synthetic-refresh" };
   const saved: typeof tokens[] = [];
@@ -33,8 +33,11 @@ async function main() {
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
     ...prepared, csv: prepared.csv.replace('"合成説明"', '"合成説明","追加列"'),
   }, request));
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
+    ...prepared, csv: prepared.csv.replace('"0","0","100"', '"1","0","100"'),
+  }, request));
   assert.equal(calls, 1);
-  const multiline = prepareNextEngineProduct({ sku: code, title: "複数行", description: "一行目\n二行目", price: 300, supplierCode: "SYNTHETIC" });
+  const multiline = prepareNextEngineProduct({ sku: code, title: "複数行", description: "一行目\n二行目", cost: 100, price: 300, supplierCode: "SYNTHETIC" });
   assert.deepEqual(await enqueuePrivateTestMaster(tokens, persist, code, code, multiline, async (_url, options) => {
     assert.equal((options?.body as URLSearchParams).get("data"), multiline.csv);
     return Response.json({ result: "success", que_id: "190" });

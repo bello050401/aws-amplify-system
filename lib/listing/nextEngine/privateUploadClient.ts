@@ -4,19 +4,20 @@ import { assertNextEngineServerRuntime } from "./serverBoundary";
 import { resolveNextEngineTokenRotation } from "./tokenRotation";
 import { isReservedNextEngineTestCode } from "./privateTestPolicy";
 
-const CSV_HEADER = "syohin_code,sire_code,syohin_name,baika_tnk,syohin_setumei_text\r\n";
+const CSV_HEADER = "syohin_code,sire_code,syohin_name,syohin_kbn,toriatukai_kbn,genka_tnk,baika_tnk,syohin_setumei_text\r\n";
 const QUOTED_FIELD = '"(?:[^"]|"")*"';
-const SINGLE_ROW = new RegExp(`^(${QUOTED_FIELD}),(${QUOTED_FIELD}),(${QUOTED_FIELD}),(${QUOTED_FIELD}),(${QUOTED_FIELD})\\r\\n$`);
+const SINGLE_ROW = new RegExp(`^${Array(8).fill(`(${QUOTED_FIELD})`).join(",")}\\r\\n$`);
 const unquote = (field: string) => field.slice(1, -1).replace(/""/g, '"');
 
 function assertCanonicalPrivateCsv(csv: string, testCode: string): void {
   if (!csv.startsWith(CSV_HEADER)) throw new Error("専用テスト商品のCSVではありません。");
   const match = SINGLE_ROW.exec(csv.slice(CSV_HEADER.length));
   if (!match) throw new Error("専用テスト商品のCSVではありません。");
-  const [sku, supplierCode, title, priceText, description] = match.slice(1).map(unquote);
+  const [sku, supplierCode, title, productType, merchandiseType, costText, priceText, description] = match.slice(1).map(unquote);
   if (sku !== testCode) throw new Error("専用テスト商品のCSVではありません。");
   try {
-    const canonical = prepareNextEngineProduct({ sku, supplierCode, title, price: Number(priceText), description });
+    if (productType !== "0" || merchandiseType !== "0") throw new Error("unexpected type");
+    const canonical = prepareNextEngineProduct({ sku, supplierCode, title, cost: Number(costText), price: Number(priceText), description });
     if (canonical.csv !== csv) throw new Error("noncanonical");
   } catch {
     throw new Error("専用テスト商品のCSVではありません。");

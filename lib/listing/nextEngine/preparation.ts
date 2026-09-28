@@ -6,6 +6,7 @@ export type NextEngineProductInput = {
   title: string;
   description: string;
   price: number;
+  cost: number;
   supplierCode: string;
 };
 
@@ -27,11 +28,15 @@ export function prepareNextEngineProduct(input: NextEngineProductInput): NextEng
   if (!description || length(description) > 3000) throw new Error("メルカリShops用商品説明は3000文字以内で指定してください。");
   if (!Number.isSafeInteger(input.price) || input.price < 300 || input.price > 9_999_999)
     throw new Error("販売価格は300〜9,999,999円の整数で指定してください。");
+  if (!Number.isSafeInteger(input.cost) || input.cost < 0 || input.cost > input.price)
+    throw new Error("原価は販売価格以下の0円以上の整数で明示してください。");
   if (!/^[A-Za-z0-9_-]+$/.test(input.supplierCode)) throw new Error("ネクストエンジンに登録した仕入先コードを指定してください。");
   // Never set stock, listing tags, visibility or publication state by implication.
   // The supplier must be selected from this company's real master, never guessed.
-  const header = ["syohin_code", "sire_code", "syohin_name", "baika_tnk", "syohin_setumei_text"];
-  const values = [input.sku, input.supplierCode, title, input.price, description];
+  // Official registration sample includes normal product (0), active handling (0),
+  // and an explicit cost. These values do not control mall publication.
+  const header = ["syohin_code", "sire_code", "syohin_name", "syohin_kbn", "toriatukai_kbn", "genka_tnk", "baika_tnk", "syohin_setumei_text"];
+  const values = [input.sku, input.supplierCode, title, 0, 0, input.cost, input.price, description];
   return {
     csv: header.join(",") + "\r\n" + values.map(quote).join(",") + "\r\n",
     endpoint: "/api_v1_master_goods/upload",
