@@ -6,7 +6,7 @@ import type { ChannelListingRecord } from "@/lib/listing/types";
 
 const STATUS_LABEL: Record<ChannelListingRecord["status"], string> = {
   NOT_PREPARED: "未準備", DRAFT: "下書き", READY: "準備完了", QUEUED: "キュー待ち",
-  PUBLISHING: "出品処理中", ACTIVE: "出品中", PAUSED: "一時停止", SOLD: "売却済み",
+  PUBLISHING: "非公開登録中", ACTIVE: "公開中", PAUSED: "非公開", SOLD: "売却済み",
   ENDED: "終了", RELIST_PENDING: "再出品待ち", ERROR: "エラー", ARCHIVED: "アーカイブ",
 };
 
@@ -51,7 +51,7 @@ export function BaseListingSection({ inventoryId, hasDraft }: { inventoryId: str
 
   return (
     <div className="mt-6 border-t border-gray-200 pt-4">
-      <p className="mb-2 text-[13px] font-bold text-gray-900">BASEへ出品</p>
+      <p className="mb-2 text-[13px] font-bold text-gray-900">BASEへ非公開で登録</p>
       {connected === false && (
         <p className="text-[12px] text-gray-400">
           BASEに接続されていません。<a href="/admin/settings" className="text-blue-700 underline">管理画面の設定</a>から接続してください。
@@ -80,13 +80,13 @@ export function BaseListingSection({ inventoryId, hasDraft }: { inventoryId: str
           <button
             type="button"
             onClick={handleListOnBase}
-            disabled={!hasDraft || busy || channelListing?.status === "ACTIVE"}
+            disabled={!hasDraft || busy || !!channelListing?.externalListingId || channelListing?.status === "PUBLISHING" || channelListing?.status === "ERROR"}
             className="border border-gray-900 px-3 py-1.5 text-[12px] font-bold text-gray-900 hover:bg-gray-50 disabled:opacity-50"
           >
-            {busy ? "出品処理中…" : channelListing?.status === "ACTIVE" ? "出品済みです" : "BASEに出品する"}
+            {busy ? "非公開登録中…" : channelListing?.externalListingId ? "BASEに登録済み" : channelListing?.status === "ERROR" ? "前回結果の確認が必要" : "BASEに非公開で登録する"}
           </button>
           {!hasDraft && <p className="mt-1 text-[11px] text-gray-400">先に出品下書き（タイトル・説明文・価格）を保存してください。</p>}
-          <p className="mt-1 text-[11px] text-gray-400">画像はBASE側にはまだ自動同期されません（テキスト情報のみ出品されます）。</p>
+          <p className="mt-1 text-[11px] text-gray-500">新規登録時はBASEへ非表示を指定し、登録後の状態も確認します。今回の検証では公開への切替を行いません。画像はまだ自動同期されません。</p>
         </>
       )}
       {error && <p className="mt-2 text-[12px] text-red-600">{error}</p>}

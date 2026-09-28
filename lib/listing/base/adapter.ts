@@ -5,6 +5,8 @@ import { assertExternalWriteAllowed } from "@/lib/integrations/writeGuard";
 import type { ListingDraftRecord } from "../types";
 import { formatDescriptionForChannel } from "../descriptionFormat";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+import { parseBaseItemVisibility } from "./visibility";
+import { assertBasePrivateTestWrite } from "./privateTestGuard";
 
 /**
  * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
@@ -47,13 +49,18 @@ const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
 
 const API_BASE = "https://api.thebase.in/1";
 
-async function baseApiCall<T>(path: string, params: Record<string, string | number>): Promise<T> {
+async function baseApiCall<T>(path: string, params: Record<string, string | number>, privateTestWrite = false): Promise<T> {
   // このファイルの呼び出しは items/add と items/edit の2つだけで、
   // どちらもBASE側の実データを変える。読み取りは lib/base/client.real.ts
   // が別に持っているので、ここを通るものは全部「書き込み」でよい。
   // 関門はトークン取得より前に置く —— 遮断されるのに認証だけ走るのは
   // 無駄だし、失敗の理由も分かりにくくなる。
-  assertExternalWriteAllowed("BASE", path.replace(/^\//, ""));
+  if (privateTestWrite) {
+    try { assertBasePrivateTestWrite(path, params); }
+    catch { throw new BaseListingApiError("CONFIG_REQUIRED", "BASEの非公開テスト登録が有効になっていません。"); }
+  } else {
+    assertExternalWriteAllowed("BASE", path.replace(/^\//, ""));
+  }
 
   let token: string;
   try {
@@ -95,6 +102,7 @@ export interface BaseListingInput {
 
 export interface BaseListingResult {
   externalProductId: string;
+  visibility: "PRIVATE" | "PUBLIC" | "UNKNOWN";
 }
 
 /** §4: items/add — 商品を新規作成する。確認済みフィールド名(title/detail/price/stock/visible)のみ送る。 */
@@ -115,11 +123,26 @@ export async function createBaseProduct(input: BaseListingInput): Promise<BaseLi
     detail,
     price,
     stock: input.quantity,
-    visible: 1,
-  });
+    // BASE defaults to visible=1 if omitted. New items must always start hidden.
+    visible: 0,
+  }, true);
   const itemId = data.item?.item_id ?? data.item_id;
   if (!itemId) throw new BaseListingApiError("UNKNOWN_REMOTE_ERROR", `item_idがレスポンスに含まれていません: ${JSON.stringify(data)}`);
-  return { externalProductId: String(itemId) };
+  const externalProductId = String(itemId);
+  let visibility: BaseListingResult["visibility"] = "UNKNOWN";
+  try {
+    if (await getBaseProductVisibility(externalProductId)) {
+      visibility = "PUBLIC";
+      // If BASE ignored visible=0, immediately request non-display again.
+      await baseApiCall("/items/edit", { item_id: externalProductId, visible: 0 }, true);
+      visibility = await getBaseProductVisibility(externalProductId) ? "PUBLIC" : "PRIVATE";
+    } else {
+      visibility = "PRIVATE";
+    }
+  } catch {
+    // Keep the returned ID so an uncertain response cannot create duplicates.
+  }
+  return { externalProductId, visibility };
 }
 
 export interface BaseUpdateInput {
@@ -136,6 +159,25 @@ export async function updateBaseProduct(input: BaseUpdateInput): Promise<void> {
   if (input.stock !== undefined) params.stock = input.stock;
   if (input.visible !== undefined) params.visible = input.visible ? 1 : 0;
   await baseApiCall<unknown>("/items/edit", params);
+}
+
+/** Read the authoritative BASE visibility after a write; unknown values never count as hidden. */
+export async function getBaseProductVisibility(itemId: string): Promise<boolean> {
+  if (!/^[1-9][0-9]*$/.test(itemId)) throw new BaseListingApiError("REMOTE_VALIDATION_ERROR", "BASE商品IDが不正です。");
+  const token = await getAccessToken();
+  let response: Response;
+  try {
+    response = await fetchExternal(`${API_BASE}/items/detail/${itemId}`, {
+      headers: { Authorization: `Bearer ${token}` }, cache: "no-store",
+    });
+  } catch {
+    throw new BaseListingApiError("NETWORK_ERROR", "BASE商品の公開状態を確認できませんでした。");
+  }
+  if (!response.ok) throw new BaseListingApiError("UNKNOWN_REMOTE_ERROR", "BASE商品の公開状態を確認できませんでした。");
+  let payload: unknown;
+  try { payload = await response.json(); } catch { throw new BaseListingApiError("UNKNOWN_REMOTE_ERROR", "BASE商品の応答が不正です。"); }
+  try { return parseBaseItemVisibility(payload, itemId); }
+  catch { throw new BaseListingApiError("UNKNOWN_REMOTE_ERROR", "BASE商品の公開状態を確認できませんでした。"); }
 }
 
 export { isBaseConnected };

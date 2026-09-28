@@ -5,6 +5,7 @@ import { listEcEligibleInventory } from "@/lib/inventory/ecEligibleQuery";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { createBaseProduct } from "./base/adapter";
+import { isBasePrivateTestEnabled } from "./base/privateTestGuard";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import {
@@ -32,7 +33,6 @@ import {
   assertNotAlreadyListed,
   describePublishFailure,
   failedPatch,
-  publishedPatch,
   publishingPatch,
   requireChannelListing,
   requireDraft,
@@ -1086,6 +1086,7 @@ export async function saveChannelOverride(
  */
 export async function listOnBase(inventoryId: string, who: string | null): Promise<ChannelListingRecord> {
   const route: PublishRoute = BASE_ROUTE;
+  if (!isBasePrivateTestEnabled()) throw new Error("BASEの非公開テスト登録がまだ有効になっていません。");
 
   const draft = await getListingDraftForInventory(inventoryId);
   requireDraft(draft);
@@ -1093,6 +1094,12 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
   const channelListing = await getChannelListing(inventoryId, route.channel);
   requireChannelListing(channelListing, route);
   assertNotAlreadyListed(channelListing, route);
+  if (channelListing.status === "PUBLISHING" || channelListing.status === "ERROR") {
+    throw new Error("BASE登録の前回結果を確認するまで再送信できません。");
+  }
+  if (channelListing.externalListingId) {
+    throw new Error("BASE商品は登録済みです。公開状態の切替から操作してください。");
+  }
 
   const inventory = await getInventoryDetail(inventoryId);
   if (!inventory) throw new Error("対象の在庫が見つかりません。");
@@ -1116,7 +1123,12 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
       quantity: inventory.quantity,
     });
     const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
-      publishedPatch({ channelListing, result, route, who, nowIso: new Date().toISOString() }),
+      { id: channelListing.id, externalListingId: result.externalProductId,
+        status: result.visibility === "PRIVATE" ? "PAUSED" : "ERROR",
+        lastError: result.visibility === "PRIVATE" ? undefined :
+          result.visibility === "PUBLIC" ? "BASEで公開状態を検出しました。非公開への変更とBASE管理画面での確認が必要です。" :
+            "BASE側の公開状態を確認できません。BASE管理画面で非公開を確認してください。",
+        updatedBy: who ?? undefined },
       inventoryAuthMode,
     );
     if (errors || !updated) throw new Error(saveFailureMessage(errors));
