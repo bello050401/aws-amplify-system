@@ -1,7 +1,26 @@
 import { parseNextEngineUploadReceipt } from "./uploadReceipt";
-import type { NextEnginePreparation } from "./preparation";
+import { prepareNextEngineProduct, type NextEnginePreparation } from "./preparation";
 import { assertNextEngineServerRuntime } from "./serverBoundary";
 import { resolveNextEngineTokenRotation } from "./tokenRotation";
+
+const CSV_HEADER = "syohin_code,sire_code,syohin_name,baika_tnk,syohin_setumei_text\r\n";
+const QUOTED_FIELD = '"(?:[^"]|"")*"';
+const SINGLE_ROW = new RegExp(`^(${QUOTED_FIELD}),(${QUOTED_FIELD}),(${QUOTED_FIELD}),(${QUOTED_FIELD}),(${QUOTED_FIELD})\\r\\n$`);
+const unquote = (field: string) => field.slice(1, -1).replace(/""/g, '"');
+
+function assertCanonicalPrivateCsv(csv: string, testCode: string): void {
+  if (!csv.startsWith(CSV_HEADER)) throw new Error("専用テスト商品のCSVではありません。");
+  const match = SINGLE_ROW.exec(csv.slice(CSV_HEADER.length));
+  if (!match) throw new Error("専用テスト商品のCSVではありません。");
+  const [sku, supplierCode, title, priceText, description] = match.slice(1).map(unquote);
+  if (sku !== testCode) throw new Error("専用テスト商品のCSVではありません。");
+  try {
+    const canonical = prepareNextEngineProduct({ sku, supplierCode, title, price: Number(priceText), description });
+    if (canonical.csv !== csv) throw new Error("noncanonical");
+  } catch {
+    throw new Error("専用テスト商品のCSVではありません。");
+  }
+}
 
 /** Upload only an explicitly reserved test SKU. A receipt is not a listing. */
 export async function enqueuePrivateTestMaster(
@@ -16,10 +35,7 @@ export async function enqueuePrivateTestMaster(
     throw new Error("予約した専用テスト商品と一致しないため送信しません。");
   if (prepared.publicationState !== "NOT_PUBLISHED" || prepared.endpoint !== "/api_v1_master_goods/upload")
     throw new Error("商品登録の送信内容が不正です。");
-  const rows = prepared.csv.split("\r\n").filter(Boolean);
-  if (rows.length !== 2 || rows[0] !== "syohin_code,sire_code,syohin_name,baika_tnk,syohin_setumei_text" ||
-      !rows[1].startsWith(`"${testCode}",`))
-    throw new Error("専用テスト商品のCSVではありません。");
+  assertCanonicalPrivateCsv(prepared.csv, testCode);
   let payload: unknown;
   let httpOk = false;
   try {

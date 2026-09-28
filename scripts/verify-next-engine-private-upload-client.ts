@@ -26,7 +26,18 @@ async function main() {
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
     ...prepared, csv: prepared.csv.replace("syohin_setumei_text", "visible_flg"),
   }, request));
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
+    ...prepared, csv: prepared.csv.replace("合成説明", `合成説明"\n"BELLO-NE-TEST-OTHER","SYNTHETIC","別商品","300","説明`),
+  }, request));
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
+    ...prepared, csv: prepared.csv.replace('"合成説明"', '"合成説明","追加列"'),
+  }, request));
   assert.equal(calls, 1);
+  const multiline = prepareNextEngineProduct({ sku: code, title: "複数行", description: "一行目\n二行目", price: 300, supplierCode: "SYNTHETIC" });
+  assert.deepEqual(await enqueuePrivateTestMaster(tokens, persist, code, code, multiline, async (_url, options) => {
+    assert.equal((options?.body as URLSearchParams).get("data"), multiline.csv);
+    return Response.json({ result: "success", que_id: "190" });
+  }), { queueId: "190", state: "QUEUED", publicationConfirmed: false });
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, prepared, async () => { throw new Error("synthetic-secret"); }), error => error instanceof Error && !error.message.includes("synthetic-secret"));
   await assert.rejects(enqueuePrivateTestMaster(tokens, async () => { throw new Error("storage down"); }, code, code, prepared, request));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, prepared, async () => Response.json({ result: "error", access_token: "error-access", refresh_token: "error-refresh" }))) ;
