@@ -53,4 +53,8 @@
 - 非公開テスト用アップロードは専用SKUだけを許容し、自動再送しない。受付番号は商品マスタの処理待ちを意味し、メルカリShopsへの出品完了を意味しない。実送信と公開出品は未実施。
 
 根拠: https://developer.next-engine.com/guides/start/ , https://developer.next-engine.com/guides/secure/ , https://developer.next-engine.com/faq/04-review-pricing/
+
+## アプリの対外説明を実態に合わせて更新（2026-09-28）
+
+本人の方針に沿い、アプリ8668の名称を「BELLO商品情報連携」に変更し、説明文も更新・保存を確認した。目的はBELLOの商品情報をネクストエンジンの商品マスタへ登録し、その処理結果を確認して、ネクストエンジンの商品管理と既存連携機能を使いやすくすること。受注・在庫・出荷管理はネクストエンジン側の機能を利用し、メルカリShopsへの出品は別途導入済みの連携アプリの機能と設定に従う予定であると明記した。アプリ名の変更は技術目標を削るものではない。BELLOからの商品連携、非公開での出品テスト、結果確認の開発は継続する。メルカリShops新規出品を本アプリが直接APIで実行できると示唆しない。
 公式キュー仕様: https://developer.next-engine.com/api/api_v1_system_que/search/
