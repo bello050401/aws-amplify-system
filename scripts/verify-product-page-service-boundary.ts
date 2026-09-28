@@ -326,6 +326,18 @@ async function testNoRealUsageLogWrite() {
   assertEqual(usageLogMock.calls.length, 1, "⑦AIUsageLog境界: 実DynamoDBではなく合成モックへ1件記録される(実書き込みなし)");
 }
 
+async function testNoGenerationWithoutProductEvidence() {
+  resetMocks();
+  providerMock.__configure([step(sections("合成応答は使われません。"))]);
+  const result = await generateProductPage({
+    inventoryId: "synthetic-no-evidence", name: "テスト商品", categoryName: "家具",
+    archive: [], styleProfile: null, price: 20000,
+  });
+  assertEqual(result.ok, false, "⑧固有の根拠なし: 成功扱いにしない");
+  assertEqual(providerMock.__callCount(), 0, "⑧固有の根拠なし: AI料金を使わない");
+  assertTrue(!!result.failureReason?.includes("商品固有の根拠"), "⑧固有の根拠なし: 必要な情報を案内する");
+}
+
 async function main() {
   await testCategoryMismatchFixedOnRetry();
   await testCategoryMismatchStrippedAfterBothAttemptsFail();
@@ -334,6 +346,7 @@ async function main() {
   await testCountryClaimGroundedByWholeProductFactPasses();
   await testConditionLeakStillRewrittenAfterCategoryCheckAdded();
   await testNoRealUsageLogWrite();
+  await testNoGenerationWithoutProductEvidence();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   console.log(

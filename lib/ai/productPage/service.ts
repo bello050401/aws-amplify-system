@@ -255,6 +255,22 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     styleProfileVersion: input.styleProfileVersion ?? null,
   };
 
+  // A name/category/price alone only invite generic sales claims. Reuse the
+  // already collected observations; do not pay for a draft with no product-
+  // specific evidence for the introduction.
+  const hasProductEvidence = Boolean(
+    facts.dimensions?.trim() || facts.conditionDisclosure?.trim()
+    || input.note?.trim() || input.damageNotes?.trim()
+    || input.extraFacts?.material?.trim() || input.extraFacts?.brandReference?.trim()
+    || input.extraFacts?.photoObservations?.some(value => value.trim())
+    || input.extraFacts?.verifiedProductFacts?.some(value => value.fact.trim()),
+  );
+  if (!hasProductEvidence) {
+    return { ...base, ok: false, sections: null, fullDescription: null, violations: [],
+      modelProvider: null, modelName: null,
+      failureReason: "商品固有の根拠がありません。写真の観察結果や確認済みの商品情報を追加してから紹介文を生成してください。" };
+  }
+
   const systemPrompt = buildProductPageSystemPrompt(input.styleProfile);
   const userPrompt = buildProductPageUserPrompt({
     facts,
