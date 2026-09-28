@@ -111,3 +111,5 @@ BELLOの管理者設定に「ネクストエンジン連携」タブと接続状
 2026-09-28、商品マスタCSVを公式アップロード例に含まれる8列へ拡張した。`syohin_kbn=0`（通常商品）、`toriatukai_kbn=0`（取扱中）と、呼出元が明示した`genka_tnk`（原価）を含める。原価を販売価格から推定せず、0円以上・販売価格以下の整数を要求する。専用テスト送信側も8列・1商品行を正規化検査し、余分な列や商品行、区分の改変を拒否する。商品準備・送信の合成検証とTypeScript型検査は成功。公式例に合わせたことは登録成功の保証ではなく、実API送信・キュー結果での受入確認は未実施。商品マスタ登録は販売先への非公開出品を保証しない。参照: https://developer.next-engine.com/api/api_v1_master_goods/upload/ 、https://developer.next-engine.com/api/api_v1_system_goodstype/info/ 、https://developer.next-engine.com/api/api_v1_system_merchandise/info/
 
 同日、キューが「全て処理成功」になった後、公式の商品マスタ検索APIで予約済み専用テストSKUを完全一致で読み返すクライアントを追加した。商品コードと空でない商品名が1件だけ返る場合に限り、商品マスタ反映を確認済みとする。認証トークン更新は応答判定前にサーバー側の保存コールバックへ渡す。合成応答で一致・不一致・重複・通信失敗を検証し型検査も成功。これはメルカリShops出品確認ではなく、実API接続・読み返しは未実施。参照: https://developer.next-engine.com/api/api_v1_master_goods/search/ 、https://developer.next-engine.com/api/api_v1_system_que/search/
+
+読み返しの一致判定を商品コードだけでなく、商品名・仕入先コード・原価・売価にも拡張した。別の内容が既存SKUへ登録されていた場合に反映完了と誤判定しない。公式APIの数値欄は文字列でも返り得るため数値として比較する。合成検証と型検査は成功したが、実API応答の確認は未実施。

@@ -1,4 +1,4 @@
-import { parsePrivateMasterReadback } from "./masterReadback";
+import { parsePrivateMasterReadback, type ExpectedPrivateMaster } from "./masterReadback";
 import { isReservedNextEngineTestCode } from "./privateTestPolicy";
 import { assertNextEngineServerRuntime } from "./serverBoundary";
 import { resolveNextEngineTokenRotation } from "./tokenRotation";
@@ -7,13 +7,13 @@ import { resolveNextEngineTokenRotation } from "./tokenRotation";
 export async function confirmPrivateTestMaster(
   tokens: { accessToken: string; refreshToken: string },
   persistTokens: (tokens: { accessToken: string; refreshToken: string }) => Promise<void>,
-  sku: string, request: typeof fetch = fetch,
+  expected: ExpectedPrivateMaster, request: typeof fetch = fetch,
 ) {
   assertNextEngineServerRuntime();
-  if (!isReservedNextEngineTestCode(sku)) throw new Error("専用テスト商品コードが必要です。");
+  if (!isReservedNextEngineTestCode(expected.sku)) throw new Error("専用テスト商品コードが必要です。");
   if (!tokens.accessToken?.trim() || !tokens.refreshToken?.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
   const body = new URLSearchParams({ access_token: tokens.accessToken, refresh_token: tokens.refreshToken,
-    fields: "goods_id,goods_name", "goods_id-eq": sku, offset: "0", limit: "2" });
+    fields: "goods_id,goods_name,goods_supplier_id,goods_cost_price,goods_selling_price", "goods_id-eq": expected.sku, offset: "0", limit: "2" });
   let payload: unknown;
   let httpOk = false;
   try {
@@ -34,5 +34,5 @@ export async function confirmPrivateTestMaster(
     }
   }
   if (!httpOk) throw new Error("商品マスタの確認に失敗しました。接続を確認してください。");
-  return parsePrivateMasterReadback(payload, sku);
+  return parsePrivateMasterReadback(payload, expected);
 }
