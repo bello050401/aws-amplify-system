@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getBaseChannelListingAction, isBaseConnectedAction, listOnBaseAction } from "@/app/actions/listing";
 import type { ChannelListingRecord } from "@/lib/listing/types";
+import { canRetryRejectedBaseCreate } from "@/lib/listing/base/retry";
 
 const STATUS_LABEL: Record<ChannelListingRecord["status"], string> = {
   NOT_PREPARED: "未準備", DRAFT: "下書き", READY: "準備完了", QUEUED: "キュー待ち",
@@ -81,10 +82,10 @@ export function BaseListingSection({ inventoryId, hasDraft }: { inventoryId: str
           <button
             type="button"
             onClick={handleListOnBase}
-            disabled={!hasDraft || busy || !!channelListing?.externalListingId || channelListing?.status === "PUBLISHING" || channelListing?.status === "ERROR"}
+            disabled={!hasDraft || busy || !!channelListing?.externalListingId || channelListing?.status === "PUBLISHING" || (channelListing?.status === "ERROR" && !canRetryRejectedBaseCreate(channelListing))}
             className="border border-gray-900 px-3 py-1.5 text-[12px] font-bold text-gray-900 hover:bg-gray-50 disabled:opacity-50"
           >
-            {busy ? "非公開登録中…" : channelListing?.externalListingId ? "BASEに登録済み" : channelListing?.status === "ERROR" ? "前回結果の確認が必要" : "BASEに非公開で登録する"}
+            {busy ? "非公開登録中…" : channelListing?.externalListingId ? "BASEに登録済み" : channelListing?.status === "ERROR" ? canRetryRejectedBaseCreate(channelListing) ? "権限設定後に再試行" : "前回結果の確認が必要" : "BASEに非公開で登録する"}
           </button>
           {!hasDraft && <p className="mt-1 text-[11px] text-gray-400">先に出品下書き（タイトル・説明文・価格）を保存してください。</p>}
           <p className="mt-1 text-[11px] text-gray-500">新規登録時はBASEへ非表示を指定し、登録後の状態も確認します。今回の検証では公開への切替を行いません。画像はまだ自動同期されません。</p>

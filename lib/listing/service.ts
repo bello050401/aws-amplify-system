@@ -1102,7 +1102,9 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
   const channelListing = await getChannelListing(inventoryId, route.channel);
   requireChannelListing(channelListing, route);
   assertNotAlreadyListed(channelListing, route);
-  if (channelListing.status === "PUBLISHING" || channelListing.status === "ERROR") {
+  const { canRetryRejectedBaseCreate } = await import("@/lib/listing/base/retry");
+  if (channelListing.status === "PUBLISHING" ||
+      (channelListing.status === "ERROR" && !canRetryRejectedBaseCreate(channelListing))) {
     throw new Error("BASE登録の前回結果を確認するまで再送信できません。");
   }
   if (channelListing.externalListingId) {

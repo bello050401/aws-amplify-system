@@ -110,6 +110,9 @@ export async function listOnBaseAction(inventoryId: string): Promise<{ ok: true;
     if (message.includes("非公開テスト登録がまだ有効になっていません")) {
       return { ok: false, error: "検証環境のBASE非公開登録設定が無効です。管理者が設定を確認してください。" };
     }
+    if (message.includes("BASEの商品登録権限が未設定")) {
+      return { ok: false, error: message };
+    }
     return { ok: false, error: "BASEへの非公開登録を完了できませんでした。再送信する前にBASE管理画面と前回の登録結果を確認してください。" };
   }
 }
