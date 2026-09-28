@@ -27,6 +27,8 @@ async function main() {
   await assert.rejects(enqueuePrivateTestMaster(tokens, async () => { throw new Error("storage down"); }, code, code, prepared, request));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, prepared, async () => Response.json({ result: "error", access_token: "error-access", refresh_token: "error-refresh" }))) ;
   assert.deepEqual(saved.at(-1), { accessToken: "error-access", refreshToken: "error-refresh" });
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, prepared, async () => Response.json({ result: "error", access_token: "http-error-access", refresh_token: "http-error-refresh" }, { status: 400 })));
+  assert.deepEqual(saved.at(-1), { accessToken: "http-error-access", refreshToken: "http-error-refresh" });
   console.log("Private upload: reserved SKU and CSV enforced; queue receipt only; ambiguous failure never retried.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

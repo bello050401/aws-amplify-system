@@ -20,12 +20,13 @@ export async function enqueuePrivateTestMaster(
   if (rows.length !== 2 || !rows[1].startsWith(`"${testCode}",`))
     throw new Error("専用テスト商品のCSVではありません。");
   let payload: unknown;
+  let httpOk = false;
   try {
     const response = await request("https://api.next-engine.org/api_v1_master_goods/upload", {
       method: "POST", body: new URLSearchParams({ access_token: tokens.accessToken, data_type: "csv", data: prepared.csv }),
       cache: "no-store", redirect: "error", signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) throw new Error("HTTP failure");
+    httpOk = response.ok;
     payload = await response.json();
   } catch {
     // Timeout is ambiguous: the server may have queued the upload. Never retry automatically.
@@ -37,5 +38,6 @@ export async function enqueuePrivateTestMaster(
   if (rotated.rotated) {
     await persistTokens({ accessToken: rotated.accessToken, refreshToken: rotated.refreshToken });
   }
+  if (!httpOk) throw new Error("ネクストエンジンの商品登録に失敗しました。登録状況を確認してください。");
   return parseNextEngineUploadReceipt(payload);
 }
