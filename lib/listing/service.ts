@@ -1088,6 +1088,14 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
   const route: PublishRoute = BASE_ROUTE;
   if (!isBasePrivateTestEnabled()) throw new Error("BASEの非公開テスト登録がまだ有効になっていません。");
 
+  // A read-only OAuth setup cannot create an item. Check before moving the
+  // listing to PUBLISHING so the operator can fix permissions without an
+  // ambiguous ERROR row or a remote request that is certain to be refused.
+  const { getBaseConnectionState } = await import("@/lib/base/connectionState");
+  const baseConnection = await getBaseConnectionState();
+  if (!baseConnection.requestWriteItems)
+    throw new Error("BASEの商品登録権限が未設定です。設定画面でwrite_itemsを有効にして公式OAuthで再連携してください。");
+
   const draft = await getListingDraftForInventory(inventoryId);
   requireDraft(draft);
 
