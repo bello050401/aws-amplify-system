@@ -14,6 +14,7 @@ import { getListingDraftForInventory } from "@/lib/listing/service";
 import { DEFAULT_LISTING_SHIPPING_METHOD, type ListingShippingMethod } from "@/lib/listing/types";
 import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
 import { findBrandByName } from "@/lib/brands/catalog";
+import { researchProductIntroduction } from "./productResearch";
 import {
   buildConditionSection,
   buildProductDetailSection,
@@ -315,6 +316,10 @@ export async function generateCanonicalProductPage(
     condition: conditionSection.text,
   };
 
+  // Prefer an explicitly entered model over an archive-derived model. Never
+  // infer identity from a generated title or a visually similar product.
+  const researchModel = customFieldText("modelNumber") ?? productContext?.details.modelNumber?.value ?? null;
+  const productReferences = await researchProductIntroduction(brand, researchModel);
   const result = await generateProductPage({
     inventoryId: item.id,
     listingTitle: options.listingTitle?.trim() || undefined,
@@ -324,7 +329,7 @@ export async function generateCanonicalProductPage(
     depth,
     height,
     ruleSections,
-    extraFacts: { brand, brandReference: selectedBrand?.description ?? null, material: facts.material },
+    extraFacts: { brand, brandReference: selectedBrand?.description ?? null, material: facts.material, verifiedProductFacts: productReferences },
     damageNotes: item.damageNotes ?? null,
     note: item.note ?? null,
     conditionRating: item.conditionRating ?? null,

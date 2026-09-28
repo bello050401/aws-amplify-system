@@ -37,14 +37,17 @@ async function main(): Promise<void> {
     const footerImage = await renderBrandedImage(photo, logo);
     const meta = await sharp(footerImage).metadata();
     assert.equal(meta.width, 1200);
-    assert.ok(meta.height! > 800, "blocked corner gets extra space, never an overlay on the product");
-    const pixel = await sharp(footerImage).extract({ left: 1092, top: 865, width: 1, height: 1 }).raw().toBuffer();
-    assert.ok(pixel[2] > pixel[0] + 40, "logo appears in added footer");
-    const preserved = await sharp(footerImage).extract({ left: 1100, top: 750, width: 1, height: 1 }).raw().toBuffer();
-    const original = await sharp(photo).extract({ left: 1100, top: 750, width: 1, height: 1 }).raw().toBuffer();
-    assert.ok(preserved.every((value, index) => Math.abs(value - original[index]) < 8), "product area stays visible");
+    assert.equal(meta.height, 800, "direct overlay preserves photo dimensions without extra space");
+    const pixel = await sharp(footerImage).extract({ left: 1092, top: 750, width: 1, height: 1 }).raw().toBuffer();
+    assert.ok(pixel[2] > pixel[0] + 40, "logo appears directly on the bottom-right photo area");
   }
-  process.stdout.write("Brand logo checks passed including safe footer placement.\n");
+  const transparentLogo = await sharp({ create: { width: 300, height: 100, channels: 4, background: "#00000000" } })
+    .composite([{ input: await sharp({ create: { width: 100, height: 100, channels: 4, background: "#3355aaff" } }).png().toBuffer(), left: 100, top: 0 }])
+    .png().toBuffer();
+  const transparentOverlay = await renderBrandedImage(await awaitableDark(), transparentLogo);
+  const untouched = await sharp(transparentOverlay).extract({ left: 1010, top: 750, width: 1, height: 1 }).raw().toBuffer();
+  assert.ok(untouched.every(value => Math.abs(value - 34) < 8), "transparent logo area retains the photo, without a generated white badge");
+  process.stdout.write("Brand logo checks passed including direct overlay without added space.\n");
 }
 
 async function awaitableDark(): Promise<Buffer> {

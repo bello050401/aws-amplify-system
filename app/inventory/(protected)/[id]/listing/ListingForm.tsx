@@ -231,14 +231,6 @@ export function ListingForm({
         setDraftError(result.error);
         return;
       }
-      setTitle(result.data.title);
-      // 2026-09-02: 本文は正本エンジンが作ったセクション付きの完成形を
-      // そのまま使う。以前はここで箇条書きと【コンディション】を継ぎ足して
-      // いたが、いまは description に「◎商品のご紹介 / ◎サイズ /
-      // ◎コンディション / ◎発送について」が既に入っているので、
-      // 足すと二重になる。
-      setDescription(result.data.description);
-      setLastAppliedDescription(result.data.description);
       setAiQuality({
         violations: result.violations,
         missingFacts: result.missingFacts,
@@ -251,6 +243,14 @@ export function ListingForm({
         ruleNotes: result.ruleNotes,
         shipping: result.shipping,
       });
+      if (result.violations.length > 0) {
+        setDraftError("生成文が品質検査を通過しなかったため、入力中の下書きは変更していません。確認事項を解消してから再生成してください。");
+        return;
+      }
+      setTitle(result.data.title);
+      // Apply the complete canonical description only after its quality gate.
+      setDescription(result.data.description);
+      setLastAppliedDescription(result.data.description);
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "AI生成に失敗しました。");
     } finally {
@@ -326,7 +326,7 @@ export function ListingForm({
         />
         <div className="mt-3 border border-gray-200 p-3 text-sm">
           <p className="font-semibold">ブランドロゴ（任意）</p>
-          <p className="mt-1 text-gray-600">商品編集画面で選んだブランドのロゴを、出品用トップ画像の右下に入れます。元画像は変更しません。安全な余白がない場合は写真の下に白い余白を追加します。</p>
+          <p className="mt-1 text-gray-600">商品編集画面で選んだブランドのロゴを、出品用トップ画像の右下に直接重ねます。余白は追加せず、元画像は変更しません。</p>
           <button type="button" disabled={brandLogoBusy || selectedImages.length >= 20} className="mt-2 border border-gray-400 px-3 py-2 disabled:opacity-50"
             onClick={async () => {
               setBrandLogoBusy(true); setBrandLogoError(null);
