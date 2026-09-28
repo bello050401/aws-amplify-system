@@ -5,6 +5,7 @@ import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { listAllCustomFieldDefinitions } from "@/lib/inventory/queries";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
 import { getBaseConnectionState } from "@/lib/base/connectionState";
+import { getNextEngineConnectionState } from "@/lib/listing/nextEngine/connectionState";
 import { getLineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
@@ -70,7 +71,7 @@ export default async function InventorySettingsPage() {
   const requestHeaders = headers();
   const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
 
-  const [categories, locations, units, customFields, zaicoTokenSource, lineTokenSource, baseConnection] =
+  const [categories, locations, units, customFields, zaicoTokenSource, lineTokenSource, baseConnection, nextEngineConnection] =
     await Promise.all([
       listAllMasterEntries("Category"),
       listAllMasterEntries("Location"),
@@ -79,6 +80,7 @@ export default async function InventorySettingsPage() {
       getZaicoTokenSource(),
       getLineTokenSource(),
       getBaseConnectionState(host),
+      role === "ADMIN" ? getNextEngineConnectionState() : Promise.resolve("CONFIGURATION_REQUIRED" as const),
     ]);
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
@@ -102,6 +104,7 @@ export default async function InventorySettingsPage() {
           zaicoConnected={zaicoConnected}
           zaicoTokenSource={zaicoTokenSource}
           baseConnection={baseConnection}
+          nextEngineConnection={nextEngineConnection}
           lineConnected={lineConnected}
           lineTokenSource={lineTokenSource}
         />

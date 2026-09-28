@@ -10,6 +10,7 @@ import { readNextEngineTokens, saveNextEngineTokens } from "@/lib/listing/nextEn
 export async function GET(request: Request) {
   const origin = resolveAppOrigin(request);
   const destination = new URL("/inventory/settings", origin);
+  destination.searchParams.set("tab", "nextEngine");
   if ((await getInventoryRole()) !== "ADMIN") {
     return NextResponse.redirect(new URL("/inventory/login", origin));
   }

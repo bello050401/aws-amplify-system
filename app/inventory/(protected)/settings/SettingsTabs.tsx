@@ -7,6 +7,7 @@ import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import type { ZaicoTokenSource } from "@/lib/zaico/client";
 import type { LineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import type { BaseConnectionState } from "@/lib/base/connectionState";
+import type { NextEngineConnectionState } from "@/lib/listing/nextEngine/connectionState";
 import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
@@ -15,6 +16,7 @@ import { ZaicoDuplicateAuditPanel } from "./ZaicoDuplicateAuditPanel";
 import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 import { ListingPartitionBackfillPanel } from "./ListingPartitionBackfillPanel";
 import { BaseSettingsPanel } from "./BaseSettingsPanel";
+import { NextEngineSettingsPanel } from "./NextEngineSettingsPanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
@@ -35,6 +37,7 @@ interface SettingsTabsProps {
   zaicoTokenSource: ZaicoTokenSource;
   /** 夜間統合指示書(2026-09-01) §4.2: 既存のBASE特集ページ連携設定の状態をそのまま表示する(新しい認証情報は作らない)。 */
   baseConnection: BaseConnectionState;
+  nextEngineConnection: NextEngineConnectionState;
   /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
   lineConnected: boolean;
   lineTokenSource: LineTokenSource;
@@ -57,6 +60,7 @@ export function SettingsTabs({
   zaicoConnected,
   zaicoTokenSource,
   baseConnection,
+  nextEngineConnection,
   lineConnected,
   lineTokenSource,
 }: SettingsTabsProps) {
@@ -82,6 +86,7 @@ export function SettingsTabs({
     "zaico",
     "images",
     "base",
+    "nextEngine",
     "pricing",
     "shipping",
     "line",
@@ -130,6 +135,11 @@ export function SettingsTabs({
         {isAdmin && (
           <button type="button" onClick={() => setTab("base")} className={tabClass(tab === "base")}>
             BASE連携
+          </button>
+        )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("nextEngine")} className={tabClass(tab === "nextEngine")}>
+            ネクストエンジン連携
           </button>
         )}
         {isAdmin && (
@@ -200,6 +210,7 @@ export function SettingsTabs({
           </div>
         )}
         {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}
+        {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} />}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側
             (/inventory/listings/pricing-rules)へ移設した。ここに残す
             ロジック付きUIを二重に持たない(同じ設定を二箇所で編集できる
