@@ -3,6 +3,7 @@ import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { resolveAppOrigin } from "@/lib/base/redirectUri";
 import { getNextEngineAppConfiguration } from "@/lib/listing/nextEngine/appConfiguration";
 import { exchangeNextEngineLaunch } from "@/lib/listing/nextEngine/authExchange";
+import { completeNextEngineLaunch } from "@/lib/listing/nextEngine/completeLaunch";
 import { readNextEngineTokens, saveNextEngineTokens } from "@/lib/listing/nextEngine/tokenStore";
 
 /** Next Engine's registered Redirect URI. Only the server sees exchanged tokens. */
@@ -22,14 +23,13 @@ export async function GET(request: Request) {
   try {
     const config = getNextEngineAppConfiguration();
     if (!config) throw new Error("App configuration missing");
-    // Fail before consuming the one-use launch state if the dedicated secret is unavailable.
-    await readNextEngineTokens();
-    const result = await exchangeNextEngineLaunch({ ...config, uid, state });
-    await saveNextEngineTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken });
-    const saved = await readNextEngineTokens();
-    if (!saved || saved.accessToken !== result.accessToken || saved.refreshToken !== result.refreshToken) {
-      throw new Error("Token read-back failed");
-    }
+    await completeNextEngineLaunch({ ...config, uid, state }, {
+      // Fail before consuming the one-use launch state if the dedicated secret is unavailable.
+      preflight: readNextEngineTokens,
+      exchange: exchangeNextEngineLaunch,
+      save: saveNextEngineTokens,
+      readBack: readNextEngineTokens,
+    });
     destination.searchParams.set("nextEngineConnected", "1");
   } catch {
     // Never return credentials, launch state, official response bodies, or storage errors.
