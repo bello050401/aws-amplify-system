@@ -63,4 +63,6 @@
 公式の `POST /api_neauth` を使うサーバー専用のトークン交換処理を追加し、9件の独立検証スクリプトを通した。uid/state とアプリ認証情報を送信し、応答のuid一致、企業ID、access/refresh tokenの存在を確認する。例外に認証情報や応答本文を含めない。これは単独の内部処理であり、Redirect URI、管理者認証、トークンの安全な永続保存・更新、アプリ画面からの接続は未実装。実認証成功と報告しない。公式資料はトークンをブラウザーへ返さず、サーバーとAPIの間だけで扱うよう求めている。
 
 根拠: https://developer.next-engine.com/api/api_neauth/ , https://developer.next-engine.com/guides/auth/
+
+公式認証フローは、通常のAPI応答だけでなくエラー応答でも access/refresh token が更新され得る。対になった新しい値のみを受け入れる純粋な判定処理と検証を追加した。現時点ではAPIクライアントや永続保存には未接続であるため、トークンの自動更新が動作すると報告しない。実接続前に、サーバー内で同一ユーザーのリクエストを直列化し、新しいトークン対を安全な保存先へ原子的に反映する必要がある。
 公式キュー仕様: https://developer.next-engine.com/api/api_v1_system_que/search/
