@@ -1,11 +1,13 @@
 import { parseNextEngineUploadReceipt } from "./uploadReceipt";
 import type { NextEnginePreparation } from "./preparation";
+import { assertNextEngineServerRuntime } from "./serverBoundary";
 
 /** Upload only an explicitly reserved test SKU. A receipt is not a listing. */
 export async function enqueuePrivateTestMaster(
   accessToken: string, testCode: string, reservedCode: string,
   prepared: NextEnginePreparation, request: typeof fetch = fetch,
 ) {
+  assertNextEngineServerRuntime();
   if (!accessToken.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
   if (!/^BELLO-NE-TEST-[A-Za-z0-9_-]+$/.test(reservedCode) || testCode !== reservedCode)
     throw new Error("予約した専用テスト商品と一致しないため送信しません。");

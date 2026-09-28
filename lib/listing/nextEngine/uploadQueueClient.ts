@@ -1,7 +1,9 @@
 import { parseGoodsUploadQueue } from "./uploadQueue";
+import { assertNextEngineServerRuntime } from "./serverBoundary";
 
 /** One read-only check per call. Caller schedules bounded checks; no blind upload retries. */
 export async function checkGoodsUploadQueue(accessToken: string, queueId: string, request: typeof fetch = fetch) {
+  assertNextEngineServerRuntime();
   if (!accessToken.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
   if (!/^[1-9][0-9]*$/.test(queueId)) throw new Error("有効な商品登録受付番号が必要です。");
   const body = new URLSearchParams({ access_token: accessToken,

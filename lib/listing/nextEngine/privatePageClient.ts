@@ -1,4 +1,5 @@
 import { assertPrivateTestPage } from "./privateTestPolicy";
+import { assertNextEngineServerRuntime } from "./serverBoundary";
 
 /** Read-only official page search. Never uploads or publishes a product. */
 export async function verifyNextEnginePrivateTestPage(
@@ -6,6 +7,7 @@ export async function verifyNextEnginePrivateTestPage(
   testCode: string,
   request: typeof fetch = fetch,
 ): Promise<{ productCode: string; visibility: "PRIVATE" }> {
+  assertNextEngineServerRuntime();
   if (!accessToken.trim()) throw new Error("ネクストエンジンの認証接続が必要です。");
   if (!/^BELLO-NE-TEST-[A-Za-z0-9_-]+$/.test(testCode)) throw new Error("専用テスト商品コードが必要です。");
   const body = new URLSearchParams({
