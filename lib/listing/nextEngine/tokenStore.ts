@@ -27,6 +27,7 @@ export async function readNextEngineTokens(
     const response = await client.send(new GetSecretValueCommand({ SecretId: configuredSecret(env) }));
     if (!response.SecretString) return null;
     const parsed: unknown = JSON.parse(response.SecretString);
+    if (parsed && typeof parsed === "object" && Object.keys(parsed).length === 0) return null;
     if (!validTokens(parsed)) throw invalid();
     return { accessToken: parsed.accessToken, refreshToken: parsed.refreshToken };
   } catch {

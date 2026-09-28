@@ -22,6 +22,8 @@ async function main() {
   assert.deepEqual(await readNextEngineTokens(client, env), tokens);
   await saveNextEngineTokens(tokens, client, env);
   assert.deepEqual(saved, tokens);
+  const empty = { send: async () => ({ SecretString: "{}" }) } as unknown as SecretsManagerClient;
+  assert.equal(await readNextEngineTokens(empty, env), null);
   await assert.rejects(readNextEngineTokens(client, {}), error => error instanceof Error && !error.message.includes("synthetic"));
   await assert.rejects(saveNextEngineTokens(tokens, client, {}), error => error instanceof Error && !error.message.includes("synthetic"));
   const malformed = { send: async () => ({ SecretString: JSON.stringify({ accessToken: "synthetic-access" }) }) } as unknown as SecretsManagerClient;
