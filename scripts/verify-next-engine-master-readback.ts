@@ -33,6 +33,12 @@ async function main() {
     await assert.rejects(confirmPrivateTestMaster(tokens, persist, expected, async () => Response.json({ result: "success", data })));
   await assert.rejects(confirmPrivateTestMaster(tokens, persist, expected, async () => { throw new Error("synthetic-secret"); }),
     error => error instanceof Error && !error.message.includes("synthetic-secret"));
+  await assert.rejects(confirmPrivateTestMaster(tokens, persist, expected, async () =>
+    Response.json({ result: "error", access_token: "error-access", refresh_token: "error-refresh" }, { status: 400 })));
+  assert.deepEqual(saved.at(-1), { accessToken: "error-access", refreshToken: "error-refresh" });
+  await assert.rejects(confirmPrivateTestMaster(tokens, async () => { throw new Error("synthetic-storage-secret"); }, expected, async () =>
+    Response.json({ result: "success", data: [row], access_token: "next-access", refresh_token: "next-refresh" })),
+    error => error instanceof Error && !error.message.includes("synthetic-storage-secret"));
   console.log("Master readback: exact reserved SKU confirmed without publication claim; bad results rejected.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
