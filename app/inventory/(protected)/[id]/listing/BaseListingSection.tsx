@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getBaseChannelListingAction, isBaseConnectedAction, listOnBaseAction, saveBaseChannelOverrideAction } from "@/app/actions/listing";
+import { getBaseChannelListingAction, isBaseConnectedAction, listOnBaseAction } from "@/app/actions/listing";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 
 const STATUS_LABEL: Record<ChannelListingRecord["status"], string> = {
@@ -36,12 +36,13 @@ export function BaseListingSection({ inventoryId, hasDraft }: { inventoryId: str
     setBusy(true);
     setError(null);
     try {
-      if (!channelListing) {
-        await saveBaseChannelOverrideAction(inventoryId, { categoryMapping: null, overrideTitle: null, overrideDescription: null, overridePrice: null });
-      }
       const result = await listOnBaseAction(inventoryId);
-      setChannelListing(result);
-      if (result.status === "ERROR" && result.lastError) setError(result.lastError);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setChannelListing(result.listing);
+      if (result.listing.status === "ERROR" && result.listing.lastError) setError(result.listing.lastError);
     } catch (err) {
       setError(err instanceof Error ? err.message : "出品に失敗しました。");
     } finally {

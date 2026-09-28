@@ -17,6 +17,7 @@ import {
 } from "@/lib/listing/service";
 import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
 import { isBaseConnected } from "@/lib/base/oauth";
+import { isBasePrivateTestEnabled } from "@/lib/listing/base/privateTestGuard";
 import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/types";
 import { buildExportRowForInventory, listCsvImageDownloadTargets, resolveListingImageDownloadUrl } from "@/lib/listing/mercari/csv/buildExportRows";
 import { buildMercariCsvExport, MAX_EXPORT_ROWS } from "@/lib/listing/mercari/csv/exportCsv";
@@ -93,11 +94,24 @@ export async function saveBaseChannelOverrideAction(inventoryId: string, input: 
   return result;
 }
 
-export async function listOnBaseAction(inventoryId: string): Promise<ChannelListingRecord> {
-  const who = await requireEditPermission();
-  const result = await listOnBase(inventoryId, who);
-  revalidatePath(`/inventory/${inventoryId}/listing`);
-  return result;
+export async function listOnBaseAction(inventoryId: string): Promise<{ ok: true; listing: ChannelListingRecord } | { ok: false; error: string }> {
+  try {
+    const who = await requireEditPermission();
+    if (!isBasePrivateTestEnabled()) throw new Error("BASEの非公開テスト登録がまだ有効になっていません。");
+    if (!(await getChannelListing(inventoryId, "BASE"))) {
+      await saveChannelOverride(inventoryId, "BASE", { categoryMapping: null, overrideTitle: null, overrideDescription: null, overridePrice: null }, who);
+    }
+    const listing = await listOnBase(inventoryId, who);
+    revalidatePath(`/inventory/${inventoryId}/listing`);
+    return { ok: true, listing };
+  } catch (error) {
+    console.error("[listOnBaseAction] BASE private registration failed:", error);
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("非公開テスト登録がまだ有効になっていません")) {
+      return { ok: false, error: "検証環境のBASE非公開登録設定が無効です。管理者が設定を確認してください。" };
+    }
+    return { ok: false, error: "BASEへの非公開登録を完了できませんでした。再送信する前にBASE管理画面と前回の登録結果を確認してください。" };
+  }
 }
 
 export async function isBaseConnectedAction(): Promise<boolean> {
