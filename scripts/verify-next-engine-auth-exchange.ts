@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { exchangeNextEngineLaunch } from "../lib/listing/nextEngine/authExchange";
 
 async function main() {
-  const input = { uid: "test-uid", state: "test-state", clientId: "test-id", clientSecret: "synthetic-secret" };
+  const input = { uid: "test-uid", state: "test-state", clientId: "test-id", clientSecret: "synthetic-secret", expectedCompanyNeId: "test-company" };
   let calls = 0;
   const request: typeof fetch = async (url, options) => {
     calls++;
@@ -26,6 +26,8 @@ async function main() {
     error => error instanceof Error && !error.message.includes("synthetic-secret"));
   await assert.rejects(exchangeNextEngineLaunch(input, async () => Response.json({ result: "success", uid: "other",
     company_ne_id: "test-company", access_token: "a", refresh_token: "b" })));
+  await assert.rejects(exchangeNextEngineLaunch(input, async () => Response.json({ result: "success", uid: input.uid,
+    company_ne_id: "other-company", access_token: "a", refresh_token: "b" })));
   console.log("Next Engine auth exchange: official POST, server-only, strict response, redacted errors.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

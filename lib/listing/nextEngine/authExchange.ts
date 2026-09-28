@@ -6,12 +6,12 @@ import { assertNextEngineServerRuntime } from "./serverBoundary";
  * https://developer.next-engine.com/api/api_neauth/
  */
 export async function exchangeNextEngineLaunch(
-  input: { uid: string; state: string; clientId: string; clientSecret: string },
+  input: { uid: string; state: string; clientId: string; clientSecret: string; expectedCompanyNeId: string },
   request: typeof fetch = fetch,
 ): Promise<{ uid: string; companyNeId: string; accessToken: string; refreshToken: string }> {
   assertNextEngineServerRuntime();
-  const { uid, state, clientId, clientSecret } = input;
-  if (![uid, state, clientId, clientSecret].every(value => typeof value === "string" && value.trim())) {
+  const { uid, state, clientId, clientSecret, expectedCompanyNeId } = input;
+  if (![uid, state, clientId, clientSecret, expectedCompanyNeId].every(value => typeof value === "string" && value.trim())) {
     throw new Error("ネクストエンジンの認証情報が不足しています。");
   }
   let payload: unknown;
@@ -31,7 +31,7 @@ export async function exchangeNextEngineLaunch(
   if (!payload || typeof payload !== "object") throw new Error("ネクストエンジンの認証応答が不正です。");
   const data = payload as Record<string, unknown>;
   if (data.result !== "success" || data.uid !== uid ||
-      typeof data.company_ne_id !== "string" || !data.company_ne_id ||
+      data.company_ne_id !== expectedCompanyNeId ||
       typeof data.access_token !== "string" || !data.access_token ||
       typeof data.refresh_token !== "string" || !data.refresh_token) {
     throw new Error("ネクストエンジンの認証結果を確認できませんでした。");
