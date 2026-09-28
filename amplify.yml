@@ -31,6 +31,10 @@ frontend:
         - npm install --cache .npm --prefer-offline
     build:
       commands:
+        # Amplify build variables are not exposed to Next.js SSR by default.
+        # This non-secret switch is enabled only on the staging branch; other
+        # branches receive 0 and cannot send BASE private test writes.
+        - echo "BASE_PRIVATE_TEST_WRITES_ENABLED=${BASE_PRIVATE_TEST_WRITES_ENABLED:-0}" >> .env.production
         - npm run build
   artifacts:
     baseDirectory: .next
