@@ -1,12 +1,16 @@
 /** Narrow staging permission: create hidden items or hide an existing item only. */
-export function isBasePrivateTestEnabled(env: Record<string, string | undefined> = process.env): boolean {
+export function isBasePrivateTestEnabled(env: Record<string, string | undefined> = {
+  BASE_PRIVATE_TEST_WRITES_ENABLED: process.env.BASE_PRIVATE_TEST_WRITES_ENABLED,
+}): boolean {
   return env.BASE_PRIVATE_TEST_WRITES_ENABLED === "1";
 }
 
 export function assertBasePrivateTestWrite(
   path: string,
   params: Record<string, string | number>,
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = {
+    BASE_PRIVATE_TEST_WRITES_ENABLED: process.env.BASE_PRIVATE_TEST_WRITES_ENABLED,
+  },
 ): void {
   const keys = Object.keys(params).sort().join(",");
   const privateAdd = path === "/items/add" && keys === "detail,price,stock,title,visible" && params.visible === 0;

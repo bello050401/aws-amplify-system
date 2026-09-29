@@ -7,5 +7,6 @@ export function canRetryRejectedBaseCreate(listing: ChannelListingRecord | null)
     BASE_LISTING_ERROR_LABEL.REMOTE_VALIDATION_ERROR,
     BASE_LISTING_ERROR_LABEL.PERMISSION_DENIED,
     BASE_LISTING_ERROR_LABEL.AUTH_FAILED,
+    BASE_LISTING_ERROR_LABEL.CONFIG_REQUIRED,
   ].includes(listing.lastError ?? "");
 }
