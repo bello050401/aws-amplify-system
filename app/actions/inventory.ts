@@ -54,18 +54,15 @@ export type ImageSlotInput =
        * ネイル再生成をスキップ) — an untouched "existing" slot (see
        * ImageEditor.tsx) carries the record's current thumbnailKey
        * through unchanged (possibly still null, for a record from before
-       * this Phase); a freshly-picked "new" file always sends null,
-       * since nothing has generated one yet. null here always means "try
-       * to generate one now" below — which is exactly right in both
-       * cases: a brand-new upload needs its first thumbnail, and an old
-       * pre-backfill image self-heals the next time it's touched. A
-       * non-null value here is always trusted as-is and never
-       * regenerated.
+       * this Phase); a freshly-picked "new" file always sends null.
+       * A saved image is reused from the existing record on edit, so a
+       * metadata-only save does not attempt S3 backfill. A new upload
+       * still generates its first thumbnail below.
        */
       thumbnailKey: string | null;
-      /** thumbnailKeyと全く同じ判定(画像表示高速化・段階読込 P1) — nullは「まだ中画像が無い、今生成する」を意味する。 */
+      /** 中画像。保存済み画像は編集時に既存レコードを再利用し、新規画像のみ生成する。 */
       mediumKey: string | null;
-      /** BELLO画像自動加工システム: 既存(未変更)スロットはこの画像の現在のoriginalHash/classificationをそのまま持ち回る(thumbnailKeyと同じ考え方)。真に新規のアップロード(thumbnailKey===nullの場合)は常にnull——resolveImagesがここでハッシュを計算する。 */
+      /** 既存画像のハッシュと分類は編集時に保存済みレコードから引き継ぐ。新規画像のみハッシュを計算する。 */
       originalHash: string | null;
       classification: string | null;
     }
@@ -96,12 +93,20 @@ export type ImageSlotInput =
  * this failing is itself handled without leaving a broken/half-created
  * record on their side either.
  */
-async function resolveImages(images: ImageSlotInput[]): Promise<InventoryImageRecord[]> {
+async function resolveImages(images: ImageSlotInput[], existingImages: InventoryImageRecord[] = []): Promise<InventoryImageRecord[]> {
   const resolved: InventoryImageRecord[] = [];
   const createdKeys: string[] = []; // every original/thumbnail object actually created (copied or freshly generated) in this call — cleaned up on a later failure
+  const existingByKey = new Map(existingImages.map((image) => [image.storageKey, image]));
   try {
     for (const img of images) {
       if (img.kind === "uploaded") {
+        const existing = existingByKey.get(img.storageKey);
+        if (existing) {
+          // An unchanged image must not make a metadata edit depend on S3
+          // derivative generation or a fresh hash read. Backfill runs separately.
+          resolved.push({ ...existing, sortOrder: img.sortOrder, type: img.type, isPrimary: img.isPrimary });
+          continue;
+        }
         // Non-null already (an untouched existing image with a thumbnail
         // from a prior save) → reuse as-is, no new object created, so
         // nothing to add to createdKeys for it. Null → attempt to
@@ -367,7 +372,7 @@ export async function updateInventory(
   if (!existing) throw new Error("対象の在庫が見つかりません。");
 
   const who = await getCurrentInventoryUserEmail();
-  const images = await resolveImages(input.images);
+  const images = await resolveImages(input.images, existing.images);
 
   const { errors } = await serverDataClient.models.Inventory.update(
     {
