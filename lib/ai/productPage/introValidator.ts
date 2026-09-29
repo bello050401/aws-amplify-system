@@ -147,6 +147,19 @@ export function stripInternalRatingSentences(intro: string): { text: string; rem
   return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
 }
 
+/** A shared colour predicate over several parts can silently change what the photo shows. */
+export function stripAmbiguousPartColorSentences(intro: string): { text: string; removedSentences: string[] } {
+  const removedSentences: string[] = [];
+  const parts = [/背もたれ|背部/, /座面|シート/, /脚部|脚/, /肘掛け|肘掛|アーム/, /天板/];
+  const color = /黒|ブラック|茶色|ブラウン|白|ホワイト|灰色|グレー|赤|レッド|青|ブルー|緑|グリーン/;
+  const kept = splitSentences(intro).filter((sentence) => {
+    if (!color.test(sentence) || parts.filter((part) => part.test(sentence)).length < 2) return true;
+    removedSentences.push(sentence.trim());
+    return false;
+  });
+  return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
+}
+
 /**
  * ── 一般的なECテンプレート表現の検出(指示書§7/§22) ────────────────
  *

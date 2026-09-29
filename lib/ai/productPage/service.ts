@@ -14,6 +14,7 @@ import {
   stripConditionSentences,
   stripDimensionSentences,
   stripInternalRatingSentences,
+  stripAmbiguousPartColorSentences,
   MAX_GENERIC_PHRASES,
   type CategoryMismatchViolation,
   type IntroConditionViolation,
@@ -495,6 +496,18 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         failureReason: "紹介文に社内評価が含まれています。" };
     }
     sections = { ...sections, introduction: ratingStripped.text };
+    introSanitized = true;
+  }
+
+  const colorStripped = stripAmbiguousPartColorSentences(sections.introduction ?? "");
+  if (colorStripped.removedSentences.length > 0) {
+    if (!isIntroStillUsable(colorStripped.text)) {
+      return { ...base, ok: false, sections, fullDescription: buildDescription(sections, input),
+        violations: [{ code: "PHOTO_PART_COLOR_AMBIGUITY", detail: "複数部位に同じ色をまとめて付けた文を除くと紹介文が短すぎます。" }],
+        modelProvider: result!.providerId, modelName: result!.modelId,
+        failureReason: "写真と部位の色の対応を確認できません。" };
+    }
+    sections = { ...sections, introduction: colorStripped.text };
     introSanitized = true;
   }
 
