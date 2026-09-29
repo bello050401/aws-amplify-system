@@ -1135,7 +1135,7 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
     const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
       { id: channelListing.id, externalListingId: result.externalProductId,
         status: result.visibility === "PRIVATE" ? "PAUSED" : "ERROR",
-        lastError: result.visibility === "PRIVATE" ? undefined :
+        lastError: result.visibility === "PRIVATE" ? null :
           result.visibility === "PUBLIC" ? "BASEで公開状態を検出しました。非公開への変更とBASE管理画面での確認が必要です。" :
             "BASE側の公開状態を確認できません。BASE管理画面で非公開を確認してください。",
         updatedBy: who ?? undefined },

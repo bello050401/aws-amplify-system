@@ -71,7 +71,7 @@ export function BaseListingSection({ inventoryId, hasDraft }: { inventoryId: str
                   <dd className="col-span-3 font-mono">{channelListing.externalListingId}</dd>
                 </>
               )}
-              {channelListing.lastError && (
+              {channelListing.status === "ERROR" && channelListing.lastError && (
                 <>
                   <dt className="text-gray-500">前回エラー</dt>
                   <dd className="col-span-3 text-red-600">{channelListing.lastError}</dd>
