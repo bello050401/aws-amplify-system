@@ -8,7 +8,11 @@ export type NextEngineAppConfiguration = {
 
 /** Server-only configuration. Missing values keep the connection disabled. */
 export function getNextEngineAppConfiguration(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = {
+    NEXT_ENGINE_CLIENT_ID: process.env.NEXT_ENGINE_CLIENT_ID,
+    NEXT_ENGINE_CLIENT_SECRET: process.env.NEXT_ENGINE_CLIENT_SECRET,
+    NEXT_ENGINE_COMPANY_NE_ID: process.env.NEXT_ENGINE_COMPANY_NE_ID,
+  },
 ): NextEngineAppConfiguration | null {
   assertNextEngineServerRuntime();
   const clientId = env.NEXT_ENGINE_CLIENT_ID?.trim();

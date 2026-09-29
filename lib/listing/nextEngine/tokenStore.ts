@@ -20,7 +20,9 @@ const validTokens = (value: unknown): value is TokenPair => {
 /** Read only from a pre-provisioned server-side secret. Never serialize this result to a client. */
 export async function readNextEngineTokens(
   client: SecretClient = new SecretsManagerClient({ region: "us-west-2" }),
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = {
+    NEXT_ENGINE_TOKEN_SECRET_ID: process.env.NEXT_ENGINE_TOKEN_SECRET_ID,
+  },
 ): Promise<TokenPair | null> {
   assertNextEngineServerRuntime();
   try {
@@ -39,7 +41,9 @@ export async function readNextEngineTokens(
 export async function saveNextEngineTokens(
   tokens: TokenPair,
   client: SecretClient = new SecretsManagerClient({ region: "us-west-2" }),
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = {
+    NEXT_ENGINE_TOKEN_SECRET_ID: process.env.NEXT_ENGINE_TOKEN_SECRET_ID,
+  },
 ): Promise<void> {
   assertNextEngineServerRuntime();
   if (!validTokens(tokens)) throw invalid();
