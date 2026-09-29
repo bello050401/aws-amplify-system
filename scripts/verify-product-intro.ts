@@ -521,6 +521,10 @@ function testPriceRedaction() {
 function testPersonNameAndPriceViolations() {
   const person = check("素敵なチェアです。林田様よりお譲りいただきました。");
   assertTrue(hasViolation(person.codes, "PERSON_NAME"), "検査: 個人名(◯◯様)の露出を検出する");
+  const grain = check("座面には茶色の木目模様が見えます。");
+  assertTrue(!hasViolation(grain.codes, "PERSON_NAME"), "検査: 木目模様を個人名と誤検出しない");
+  const grainAndPerson = check("木目模様が見えます。林田様よりお譲りいただきました。");
+  assertTrue(hasViolation(grainAndPerson.codes, "PERSON_NAME"), "検査: 木目模様の後にある実際の敬称付き名を検出する");
 
   const price = check("素敵なチェアです。定価42000円のところ18000円でご提供します。");
   assertTrue(hasViolation(price.codes, "PRICE_CLAIM"), "検査: 事実に無い金額の主張を検出する");

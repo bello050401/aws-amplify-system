@@ -428,7 +428,10 @@ export function checkFactSafety(params: {
   // 敬称の直前が「漢字/カタカナ2〜4文字」の場合だけを人名とみなす。
   // これで「お客様」「皆様」「奥様」のような一般語は自然に外れる ——
   // それらは敬称の直前が1文字(客/皆/奥)しかないため。
-  const personName = /[一-龥ァ-ヶ]{2,4}\s*(?:様|さん)/.exec(output);
+  // 「木目模様」は末尾が「模様」でも敬称ではない。最初の一致が一般語でも
+  // 後方に本当の「○○様」があれば見逃さないよう、全候補を調べる。
+  const personName = [...output.matchAll(/[一-龥ァ-ヶ]{2,4}\s*(?:様|さん)/g)]
+    .find((match) => !match[0].endsWith("模様"));
   if (personName) {
     violations.push({ code: "PERSON_NAME", detail: `個人名らしき記述が含まれています: ${JSON.stringify(personName[0])}` });
   }
