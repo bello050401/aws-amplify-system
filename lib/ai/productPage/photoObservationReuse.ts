@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import type { PhotoCacheOperation, PhotoCacheTelemetry } from "./photoObservationTelemetry";
 
 export type ObservationStore = {
-  read(key: string): Promise<string[] | null>;
-  write(key: string, observations: string[]): Promise<void>;
+  read(key: string, operation?: PhotoCacheOperation | null): Promise<string[] | null>;
+  write(key: string, observations: string[], operation?: PhotoCacheOperation | null): Promise<void>;
 };
 
 export function photoObservationKey(jpeg: Uint8Array, modelId: string, promptVersion: string): string {
@@ -11,33 +12,74 @@ export function photoObservationKey(jpeg: Uint8Array, modelId: string, promptVer
 }
 
 /** A valid empty observation is reusable; an unavailable observation is null. */
-export function createPhotoObservationReuse(store: ObservationStore, observe: (jpeg: Uint8Array) => Promise<string[] | null>) {
+export function createPhotoObservationReuse(
+  store: ObservationStore,
+  observe: (jpeg: Uint8Array, operation?: PhotoCacheOperation | null) => Promise<string[] | null>,
+  telemetry?: PhotoCacheTelemetry,
+) {
   const remembered = new Map<string, string[]>();
-  const pending = new Map<string, Promise<string[]>>();
+  type PendingResult = { observations: string[]; completed: boolean };
+  const pending = new Map<string, Promise<PendingResult>>();
   return async (jpeg: Uint8Array, modelId: string, promptVersion: string): Promise<string[]> => {
-    if (jpeg.byteLength === 0 || jpeg.byteLength > 5_000_000) return [];
+    const operation = telemetry?.start();
+    if (jpeg.byteLength === 0 || jpeg.byteLength > 5_000_000) {
+      operation?.finish("none", "failed");
+      return [];
+    }
     const key = photoObservationKey(jpeg, modelId, promptVersion);
     const hit = remembered.get(key);
-    if (hit) return hit;
+    if (hit) {
+      operation?.finish("memory", "completed");
+      return hit;
+    }
     const running = pending.get(key);
-    if (running) return running;
+    if (running) {
+      try {
+        const result = await running;
+        operation?.finish("inflight", result.completed ? "completed" : "failed");
+        return result.observations;
+      } catch (error) {
+        operation?.finish("inflight", "failed");
+        throw error;
+      }
+    }
     const work = (async () => {
       try {
-        const stored = await store.read(key);
-        if (stored) {
+        const stored = await store.read(key, operation);
+        if (stored !== null) {
+          operation?.markRead("hit");
           remember(key, stored);
-          return stored;
+          operation?.finish("persistent", "completed");
+          return { observations: stored, completed: true };
         }
-      } catch { /* Cache outages must not block observation. */ }
+        operation?.markRead("miss");
+      } catch {
+        operation?.markRead("error");
+        // Cache outages must not block observation.
+      }
       let result: string[] | null;
-      try { result = await observe(jpeg); } catch { return []; }
-      if (result === null) return [];
+      try { result = await observe(jpeg, operation); }
+      catch {
+        operation?.finish("none", "failed");
+        return { observations: [], completed: false };
+      }
+      if (result === null) {
+        operation?.finish("none", "failed");
+        return { observations: [], completed: false };
+      }
       remember(key, result);
-      try { await store.write(key, result); } catch { /* Best effort cache. */ }
-      return result;
+      try {
+        await store.write(key, result, operation);
+        operation?.markWrite("success");
+      } catch {
+        operation?.markWrite("error");
+        // Best effort cache.
+      }
+      operation?.finish("vision", "completed");
+      return { observations: result, completed: true };
     })();
     pending.set(key, work);
-    try { return await work; } finally { pending.delete(key); }
+    try { return (await work).observations; } finally { pending.delete(key); }
   };
 
   function remember(key: string, value: string[]): void {

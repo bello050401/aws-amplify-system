@@ -49,4 +49,9 @@ export async function register() {
       env: process.env.NODE_ENV,
     }),
   );
+
+  try {
+    const { photoCacheTelemetry } = await import("./lib/ai/productPage/photoObservationTelemetry");
+    photoCacheTelemetry.registerProcess();
+  } catch { /* Optional measurement must never prevent SSR startup. */ }
 }

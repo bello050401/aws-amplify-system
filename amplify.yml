@@ -35,6 +35,15 @@ frontend:
         # This non-secret switch is enabled only on the staging branch; other
         # branches receive 0 and cannot send BASE private test writes.
         - echo "BASE_PRIVATE_TEST_WRITES_ENABLED=${BASE_PRIVATE_TEST_WRITES_ENABLED:-0}" >> .env.production
+        # Temporary, non-secret photo-cache measurement. Exact staging app/branch,
+        # explicit 48h-or-shorter UTC window, release A/B and UUID are also checked in code.
+        - echo "PHOTO_CACHE_TELEMETRY_ENABLED=${PHOTO_CACHE_TELEMETRY_ENABLED:-0}" >> .env.production
+        - echo "PHOTO_CACHE_TELEMETRY_APP_ID=${AWS_APP_ID:-}" >> .env.production
+        - echo "PHOTO_CACHE_TELEMETRY_BRANCH=${AWS_BRANCH:-}" >> .env.production
+        - echo "PHOTO_CACHE_TELEMETRY_RELEASE_TAG=${PHOTO_CACHE_TELEMETRY_RELEASE_TAG:-}" >> .env.production
+        - echo "PHOTO_CACHE_TELEMETRY_EXPERIMENT_ID=${PHOTO_CACHE_TELEMETRY_EXPERIMENT_ID:-}" >> .env.production
+        - echo "PHOTO_CACHE_TELEMETRY_START_AT=${PHOTO_CACHE_TELEMETRY_START_AT:-}" >> .env.production
+        - echo "PHOTO_CACHE_TELEMETRY_END_AT=${PHOTO_CACHE_TELEMETRY_END_AT:-}" >> .env.production
         - npm run build
   artifacts:
     baseDirectory: .next

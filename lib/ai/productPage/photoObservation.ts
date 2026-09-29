@@ -6,7 +6,8 @@ import sharp from "sharp";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
-import { createPhotoObservationReuse } from "./photoObservationReuse";
+import { createPhotoObservationReuse, type ObservationStore } from "./photoObservationReuse";
+import { photoCacheTelemetry, type PhotoCacheOperation } from "./photoObservationTelemetry";
 
 /** Only visible appearance belongs here; identity, material and condition need other evidence. */
 export function parsePhotoObservations(raw: string): string[] {
@@ -25,41 +26,78 @@ const MODEL_ID = "us.amazon.nova-pro-v1:0";
 const PROMPT_VERSION = "2026-09-29.2";
 const CACHE_FIELD = "photo-observation-v1";
 
-const reuseObservation = createPhotoObservationReuse({
-  async read(cacheKey) {
-    const { data, errors } = await serverDataClient.models.ExternalResearchCache.get({ cacheKey }, inventoryAuthMode);
-    if (errors?.length || data?.field !== CACHE_FIELD || data.status !== "FOUND" || !data.value) return null;
-    const parsed = JSON.parse(data.value) as unknown;
-    if (!Array.isArray(parsed) || !parsed.every(value => typeof value === "string")) return null;
-    const safe = parsePhotoObservations(JSON.stringify({ observations: parsed }));
-    return safe.length === parsed.length ? safe : null;
-  },
-  async write(cacheKey, observations) {
+type CacheModel = typeof serverDataClient.models.ExternalResearchCache;
+
+/** Injectable only for isolated tests; production uses the authenticated userPool model. */
+export function createPhotoObservationStore(
+  model?: CacheModel,
+  modelAtCall: () => CacheModel = () => serverDataClient.models.ExternalResearchCache,
+): ObservationStore {
+  return {
+    async read(cacheKey, operation) {
+    const currentModel = model ?? modelAtCall();
+    const { data, errors } = await currentModel.get({ cacheKey }, inventoryAuthMode);
+    if (errors?.length) { operation?.markRead("error"); return null; }
+    if (!data) return null;
+    if (data.field !== CACHE_FIELD || data.status !== "FOUND" || !data.value) {
+      operation?.markRead("invalid");
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(data.value) as unknown;
+      if (!Array.isArray(parsed) || !parsed.every(value => typeof value === "string")) {
+        operation?.markRead("invalid");
+        return null;
+      }
+      const safe = parsePhotoObservations(JSON.stringify({ observations: parsed }));
+      if (safe.length !== parsed.length) operation?.markRead("invalid");
+      return safe.length === parsed.length ? safe : null;
+    } catch {
+      operation?.markRead("invalid");
+      return null;
+    }
+    },
+    async write(cacheKey, observations, operation) {
+    const currentModel = model ?? modelAtCall();
     const payload = {
       cacheKey, field: CACHE_FIELD, value: JSON.stringify(observations),
       status: "FOUND" as const, fetchedAt: new Date().toISOString(),
     };
-    const { errors } = await serverDataClient.models.ExternalResearchCache.create(payload, inventoryAuthMode);
-    if (errors?.length) await serverDataClient.models.ExternalResearchCache.update(payload, inventoryAuthMode);
-  },
-}, callVision);
+    const created = await currentModel.create(payload, inventoryAuthMode);
+    if (!operation) {
+      // Preserve the pre-measurement write path and result when the probe is off.
+      if (created.errors?.length) await currentModel.update(payload, inventoryAuthMode);
+      return;
+    }
+    const acknowledged = (data: typeof created.data) => data?.cacheKey === cacheKey &&
+      data.field === CACHE_FIELD && data.status === "FOUND" && data.value === payload.value;
+    if (!created.errors?.length && acknowledged(created.data)) return;
+    const updated = await currentModel.update(payload, inventoryAuthMode);
+    if (updated.errors?.length || !acknowledged(updated.data)) throw new Error("Cache write not acknowledged");
+    },
+  };
+}
+
+const reuseObservation = createPhotoObservationReuse(createPhotoObservationStore(), callVision, photoCacheTelemetry);
 
 /** Fail closed: a failed observation never becomes a product claim. */
 export async function observeProductPhoto(jpeg: Uint8Array): Promise<string[]> {
   return reuseObservation(jpeg, MODEL_ID, PROMPT_VERSION);
 }
 
-async function callVision(jpeg: Uint8Array): Promise<string[] | null> {
+async function callVision(jpeg: Uint8Array, operation?: PhotoCacheOperation | null): Promise<string[] | null> {
   const client = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION ?? process.env.AWS_REGION ?? "us-west-2" });
   try {
-    const response = await client.send(new ConverseCommand({
+    const command = new ConverseCommand({
       modelId: MODEL_ID,
       messages: [{ role: "user", content: [
         { image: { format: "jpeg", source: { bytes: jpeg } } },
         { text: "EC紹介文の根拠用に、写真で直接見える商品の外観だけを日本語で短く観察してください。部位ごとの色と模様を優先し、背もたれ・座面・脚などの色を取り違えないでください。『背もたれは黒い』『座面には茶色の木目模様が見える』のように、1観察につき1部位の見える特徴だけを書いてください。材質を木製・金属製等と断定せず、ブランド、年代、品質、状態の良否も推測しないでください。不明なら空配列。JSONのみ: {\"observations\":[\"観察1\",\"観察2\"]}" },
       ] }],
       inferenceConfig: { temperature: 0, maxTokens: 300 },
-    }), { abortSignal: AbortSignal.timeout(20_000) });
+    });
+    operation?.markVisionCall();
+    const response = await client.send(command, { abortSignal: AbortSignal.timeout(20_000) });
     const raw = response.output?.message?.content?.find(part => "text" in part)?.text ?? "";
     // A malformed or missing response is a failed observation, not a valid empty result.
     try {
