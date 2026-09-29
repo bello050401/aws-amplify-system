@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { refreshGallerySelection } from "../lib/photoRegistration/gallerySelection";
+import { refreshGallerySelection, resolveProductGallerySource } from "../lib/photoRegistration/gallerySelection";
 import type { InventoryImageRecord } from "../lib/inventory/imageTypes";
 import type { WebPhotoAssetView } from "../lib/photoRegistration/webAdapter";
 import {
@@ -59,6 +59,38 @@ test("再取得で傷写真を分離しトップ順と閲覧写真を維持す�
   assert.deepEqual(refreshGallerySelection(all, true, "damage").assets.map(a => a.id), ["damage"]);
   assert.equal(refreshGallerySelection(all, false, "deleted").selected, 0);
   assert.deepEqual(refreshGallerySelection([], false, "normal"), { assets: [], selected: 0 });
+});
+
+test("撮影10枚の在庫商品画像は在庫主画像を表示し出品下書き主画像は別順で保持する", () => {
+  const assets = Array.from({ length: 10 }, (_, i) => photoAsset(`photo-${i + 1}`, i, { inventoryIsPrimary: i === 0 }));
+  const gallery = resolveProductGallerySource([], assets);
+  assert.equal(gallery.kind, "PHOTO_ASSET");
+  if (gallery.kind !== "PHOTO_ASSET") return;
+  assert.equal(gallery.assets.length, 10);
+  assert.equal(gallery.assets[0].id, "photo-1");
+  const candidates = buildListingImageCandidates([], assets);
+  const saved = listingRefsFromSelection([candidates[1], candidates[0], ...candidates.slice(2)]);
+  const restored = restoreListingSelection(candidates, saved);
+  assert.equal(restored.selected.length, 10);
+  assert.equal(restored.selected[0].ref.photoAssetId, "photo-2");
+  assert.equal(gallery.assets[0].id, "photo-1", "出品順は在庫主画像を変えない");
+});
+
+test("商品画像表示は対象外撮影画像を除外し、撮影画像なしなら旧画像へ戻す", () => {
+  const legacy = [inventoryImage("old.jpg", 0)];
+  const excluded = [
+    photoAsset("damage", 1, { inventoryImageType: "DAMAGE" }),
+    photoAsset("deleted", 2, { isDeleted: true }),
+    photoAsset("uploading", 3, { status: "UPLOADING" }),
+  ];
+  const fallback = resolveProductGallerySource(legacy, excluded);
+  assert.equal(fallback.kind, "INVENTORY");
+  if (fallback.kind === "INVENTORY") assert.deepEqual(fallback.images, legacy);
+  const withNormal = resolveProductGallerySource(legacy, [
+    ...excluded, photoAsset("later", 5), photoAsset("primary", 6, { inventoryIsPrimary: true }),
+  ]);
+  assert.equal(withNormal.kind, "PHOTO_ASSET");
+  if (withNormal.kind === "PHOTO_ASSET") assert.deepEqual(withNormal.assets.map(asset => asset.id), ["primary", "later"]);
 });
 
 test("既存画像とPhotoAssetを保存元付きで統合する", () => {

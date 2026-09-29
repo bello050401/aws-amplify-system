@@ -21,6 +21,8 @@ import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 import type { ListingImageRef } from "@/lib/listing/types";
 import { ListingImageSelector } from "./ListingImageSelector";
 import { InventoryThumbnail } from "../../../InventoryThumbnail";
+import { PhotoAssetProductGallery } from "../PhotoAssetProductGallery";
+import { resolveProductGallerySource } from "@/lib/photoRegistration/gallerySelection";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
 // 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
@@ -92,6 +94,7 @@ export function ListingForm({
   const [draft, setDraft] = useState(initialDraft);
   const [channelListing, setChannelListing] = useState(initialChannelListing);
   const [selectedImages, setSelectedImages] = useState<ListingImageRef[]>(initialDraft?.images ?? []);
+  const productGallery = resolveProductGallerySource(images, photoAssets);
   const [brandLogoBusy, setBrandLogoBusy] = useState(false);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoSaved, setLogoSaved] = useState(false);
@@ -320,7 +323,11 @@ export function ListingForm({
           そのまま再利用する——画像を複製せず、既存のthumbnail/S3/
           signed URLアーキテクチャに乗る。 */}
       <div className="mb-4">
-        <InventoryImageGallery images={images} alt={inventoryName} title="商品画像" />
+        {productGallery.kind === "PHOTO_ASSET" ? (
+          <PhotoAssetProductGallery inventoryId={inventoryId} initialAssets={productGallery.assets} title="商品画像" />
+        ) : (
+          <InventoryImageGallery images={productGallery.images} alt={inventoryName} title="商品画像" />
+        )}
         <ListingImageSelector
           images={images}
           photoAssets={photoAssets}
