@@ -9,4 +9,5 @@ assert.deepEqual(
   "Only bounded appearance observations may be passed to the introduction",
 );
 assert.equal(parsePhotoObservations(JSON.stringify({ observations: ["長".repeat(121)] })).length, 0);
+assert.deepEqual(parsePhotoObservations('{"observations":["木製の座面が見える","黒い素材で覆われた背もたれ","座面には茶色の木目模様が見える"]}'), ["座面には茶色の木目模様が見える"], "Material guesses are not visual evidence");
 console.log("Photo observation boundary: 4 passed");
