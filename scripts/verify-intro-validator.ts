@@ -407,6 +407,8 @@ function main() {
   assertEqual(colorStripped.removedSentences, ["背もたれと座面は黒い素材で覆われています。"], "複数部位へ一色を広げる文を除去");
   assertTrue(colorStripped.text.includes("脚部は曲線"), "独立した外観文を保持");
   assertEqual(stripAmbiguousPartColorSentences("背もたれは黒く、緩やかな曲線です。").removedSentences, [], "単一部位の色を保持");
+  assertEqual(stripAmbiguousPartColorSentences("背もたれは黒く、座面は茶色です。", ["背もたれは黒い", "座面には茶色の木目模様が見える"]).removedSentences, [], "別々の部位と色が写真観察に一致すれば保持");
+  assertEqual(stripAmbiguousPartColorSentences("背もたれは茶色で、座面は黒いです。", ["背もたれは黒い", "座面には茶色の木目模様が見える"]).removedSentences.length, 1, "部位と色の逆転は除去");
   const ratingStripped = stripInternalRatingSentences("形の異なる部材の組み合わせが特徴です。\n\n4/5くらいのランクです。\n\n背もたれが曲線を描きます。");
   assertEqual(ratingStripped.removedSentences, ["4/5くらいのランクです。"], "社内の5段階評価文のみ除去");
   assertTrue(ratingStripped.text.includes("背もたれが曲線"), "評価以外の外観説明を保持");

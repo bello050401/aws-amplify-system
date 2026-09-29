@@ -500,7 +500,7 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     introSanitized = true;
   }
 
-  const colorStripped = stripAmbiguousPartColorSentences(sections.introduction ?? "");
+  const colorStripped = stripAmbiguousPartColorSentences(sections.introduction ?? "", input.extraFacts?.photoObservations ?? []);
   if (colorStripped.removedSentences.length > 0) {
     if (!isIntroStillUsable(colorStripped.text)) {
       return { ...base, ok: false, sections, fullDescription: buildDescription(sections, input),

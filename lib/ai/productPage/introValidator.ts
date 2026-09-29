@@ -148,12 +148,24 @@ export function stripInternalRatingSentences(intro: string): { text: string; rem
 }
 
 /** A shared colour predicate over several parts can silently change what the photo shows. */
-export function stripAmbiguousPartColorSentences(intro: string): { text: string; removedSentences: string[] } {
+export function stripAmbiguousPartColorSentences(intro: string, observations: string[] = []): { text: string; removedSentences: string[] } {
   const removedSentences: string[] = [];
   const parts = [/背もたれ|背部/, /座面|シート/, /脚部|脚/, /肘掛け|肘掛|アーム/, /天板/];
-  const color = /黒|ブラック|茶色|ブラウン|白|ホワイト|灰色|グレー|赤|レッド|青|ブルー|緑|グリーン/;
+  const colors = [/黒|ブラック/, /茶色|茶|ブラウン/, /白|ホワイト/, /灰色|グレー/, /赤|レッド/, /青|ブルー/, /緑|グリーン/];
   const kept = splitSentences(intro).filter((sentence) => {
-    if (!color.test(sentence) || parts.filter((part) => part.test(sentence)).length < 2) return true;
+    const presentParts = parts.filter((part) => part.test(sentence));
+    if (presentParts.length < 2 || !colors.some((color) => color.test(sentence))) return true;
+    // Only separate, explicit part-colour clauses may survive. A single colour
+    // attached to "back and seat" is ambiguous even if both parts are visible.
+    const clauses = sentence.split(/[、，,]/);
+    const supported = clauses.every((clause) => {
+      const clauseParts = parts.filter((part) => part.test(clause));
+      const clauseColors = colors.filter((color) => color.test(clause));
+      if (clauseParts.length === 0 || clauseColors.length === 0) return true;
+      if (clauseParts.length !== 1 || clauseColors.length !== 1) return false;
+      return observations.some((observation) => clauseParts[0].test(observation) && clauseColors[0].test(observation));
+    });
+    if (supported && clauses.length > 1) return true;
     removedSentences.push(sentence.trim());
     return false;
   });
