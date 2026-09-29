@@ -1,0 +1,802 @@
+{block:NotLoadItemsPage}
+<!DOCTYPE html><head>
+<meta charset="utf-8">
+<meta name="copyright" content="BASE">
+<meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1.0"><title>{PageTitle}</title>
+<meta name="BASE-Theme-Name" content="zenn.">
+<meta name="BASE-Theme-Version" content="12">
+{FaviconTag}
+{CanonicalTag}
+{block:Hidden}
+
+<meta name="select:BodyColorDesign Select" content="is-bodyColorDesignOption-light" title="ブラック（ライト背景向け）" label="【カラー】全体テキスト">
+<meta name="select:BodyColorDesign Select" content="is-bodyColorDesignOption-dark" title="ホワイト（ダーク背景向け）" label="【カラー】全体テキスト">
+<meta name="select:BgBaseColorDesign Select" content="is-bgBaseColorDesignOption-gray5" title="グレー透過5%" label="【カラー】一部背景">
+<meta name="select:BgBaseColorDesign Select" content="is-bgBaseColorDesignOption-gray10" title="グレー透過10%" label="【カラー】一部背景">
+<meta name="select:BgBaseColorDesign Select" content="is-bgBaseColorDesignOption-gray50" title="グレー透過50%" label="【カラー】一部背景">
+<meta name="select:BgBaseColorDesign Select" content="is-bgBaseColorDesignOption-white5" title="ホワイト透過5%" label="【カラー】一部背景">
+<meta name="select:BgBaseColorDesign Select" content="is-bgBaseColorDesignOption-white10" title="ホワイト透過10%" label="【カラー】一部背景">
+<meta name="select:BgBaseColorDesign Select" content="is-bgBaseColorDesignOption-white50" title="ホワイト透過50%" label="【カラー】一部背景">
+<meta name="select:BgBaseColorDesign Select" content="is-bgBaseColorDesignOption-none" title="なし" label="【カラー】一部背景">
+<meta name="select:HeaderColorDesign Select" content="is-headerDesignOption-dark" title="ダーク" label="【カラー】ヘッダー">
+<meta name="select:HeaderColorDesign Select" content="is-headerDesignOption-light" title="ライト" label="【カラー】ヘッダー">
+<meta name="select:BtnColorDesign Select" content="is-btnDesignOption-dark" title="ダーク" label="【カラー】ボタン">
+<meta name="select:BtnColorDesign Select" content="is-btnDesignOption-light" title="ライト" label="【カラー】ボタン">
+<meta name="select:BodyFontDesign Select" content="is-bodyFontDesignOption-gothic" title="ゴシック" label="【フォント】全体テキスト">
+<meta name="select:BodyFontDesign Select" content="is-bodyFontDesignOption-mintyo" title="明朝体" label="【フォント】全体テキスト">
+<meta name="select:BodyFontDesign Select" content="is-bodyFontDesignOption-maru" title="丸ゴシック" label="【フォント】全体テキスト">
+<meta name="select:TitleFontDesign Select" content="is-ttlFontDesignOption-gothic" title="ゴシック" label="【フォント】タイトル">
+<meta name="select:TitleFontDesign Select" content="is-ttlFontDesignOption-mintyo" title="明朝体" label="【フォント】タイトル">
+<meta name="select:TitleFontDesign Select" content="is-ttlFontDesignOption-maru" title="丸ゴシック" label="【フォント】タイトル">
+<meta name="select:AnimationFadeInShow Select" content="is-animationFadeInDesignOption-true" title="ON" label="【アニメーション】フェードインON/OFF">
+<meta name="select:AnimationFadeInShow Select" content="is-animationFadeInDesignOption-false" title="OFF" label="【アニメーション】フェードインON/OFF">
+<meta name="select:Header LogoImgHeight Select" content="is-LogoImgHeightDesignOption-medium" title="デフォルト" label="【ヘッダー】ロゴ画像高さ上限">
+<meta name="select:Header LogoImgHeight Select" content="is-LogoImgHeightDesignOption-large" title="大" label="【ヘッダー】ロゴ画像高さ上限">
+<meta name="text:Menu Home Text" content="ホーム" label="【ナビゲーション】 HOMEテキスト">
+<meta name="text:Menu About Text" content="私たちについて" label="【ナビゲーション】 ABOUTテキスト">
+<meta name="text:Menu Items Text" content="商品一覧" label="【ナビゲーション】 商品一覧テキスト">
+<meta name="text:Menu Category Text" content="CATEGORY" label="【ナビゲーション】 CATEGORYテキスト ※カテゴリ管理App">
+<meta name="text:Menu Blog Text" content="ブログ" label="【ナビゲーション】 BLOGテキスト ※Blog App">
+<meta name="text:Menu Community Text" content="コミュニティ" label="【ナビゲーション】 COMMUNITYテキスト ※コミュニティApp">
+<meta name="text:Menu Membership Text" content="インテリアコーディネート依頼" label="【ナビゲーション】 インテリアコーディネート依頼テキスト">
+<meta name="text:Menu Contact Text" content="お問い合わせ" label="【ナビゲーション】 CONTACTテキスト">
+<meta name="text:Menu Search Text" content="SEARCH" label="【ナビゲーション】 検索テキスト ※商品検索App">
+<meta name="image:Kv Image1" content="https://basefile.akamaized.net/ISHdesign-theshop-jp/61dcec84497ff/dummy.jpg" label="【スライド画像①】 PC横長画像" data-group="home">
+<meta name="image:Kv Image1 Sp" content="" label="【スライド画像①】 スマホ縦長画像" data-group="home">
+<meta name="image:Kv Image2" content="" label="【スライド画像②】 PC横長画像" data-group="home">
+<meta name="image:Kv Image2 Sp" content="" label="【スライド画像②】 スマホ縦長画像" data-group="home">
+<meta name="image:Kv Image3" content="" label="【スライド画像③】 PC横長画像" data-group="home">
+<meta name="image:Kv Image3 Sp" content="" label="【スライド画像③】 スマホ縦長画像" data-group="home">
+<meta name="select:Kv Trim Select" content="is-kvTrimDesignOption-on" title="ON" label="【スライド画像】 トリミング" data-group="home">
+<meta name="select:Kv Trim Select" content="is-kvTrimDesignOption-off" title="OFF" label="【スライド画像】 トリミング" data-group="home">
+<meta name="if:Kv Category If" content="1" label="【スライド画像上】 カテゴリを表示する(PC)" data-group="home">
+<meta name="if:TopBanner If" content="1" label="【バナーエリア】 表示する" data-group="home">
+<meta name="image:TopBanner Image" content="https://basefile.akamaized.net/ISHdesign-theshop-jp/61e502676b720/dummy3.jpg" label="【バナーエリア】 画像" data-group="home">
+<meta name="text:TopBanner Url" content="#" label="【バナーエリア】 リンクURL" data-group="home">
+<meta name="if:About If" content="1" label="【私たちについて】 表示する" data-group="home">
+<meta name="text:About MainTitle" content="私たちについて" label="【私たちについて】 見出し" data-group="home">
+<meta name="text:About Title" content="キャッチコピーが入ります" label="【私たちについて】 キャッチコピー" data-group="home">
+<meta name="text:About Text" content="お客様がサイトに初めて来た時に、どのようなサイトかがわかるように、ショップやブランドなどの説明文を自由に記載してください。" label="【私たちについて】 説明文" data-group="home">
+<meta name="select:About Text-align Select" content="is-AboutTextAlignDesignOption-left" title="左" label="【私たちについて】 説明文/文字揃え" data-group="home">
+<meta name="select:About Text-align Select" content="is-AboutTextAlignDesignOption-center" title="中央" label="【私たちについて】 説明文/文字揃え" data-group="home">
+<meta name="if:About ButtonIf" content="1" label="【私たちについて】 ボタンを表示" data-group="home">
+<meta name="text:About ButtonUrl" content="#" label="【私たちについて】 ボタンURL" data-group="home">
+<meta name="text:About ButtonText" content="もっとみる" label="【私たちについて】 ボタンテキスト" data-group="home">
+<meta name="if:Pickup If" content="1" label="【おすすめ商品】全体を表示する" data-group="home">
+<meta name="text:Pickup Title" content="おすすめ商品" label="【おすすめ商品】タイトル" data-group="home">
+<meta name="select:PickupFlexDesign Select" content="is-topPickupFlexDesignOption-false" title="OFF" label="【おすすめ商品】 文章と画像の順番を交互に表示(PC)" data-group="home">
+<meta name="select:PickupFlexDesign Select" content="is-topPickupFlexDesignOption-true" title="ON" label="【おすすめ商品】 文章と画像の順番を交互に表示(PC)" data-group="home">
+<meta name="select:PickupImgDesign Select" content="is-pickupImgDesignOption-horizon" title="横長" label="【おすすめ商品】画像トリミング" data-group="home">
+<meta name="select:PickupImgDesign Select" content="is-pickupImgDesignOption-square" title="正方形" label="【おすすめ商品】画像トリミング" data-group="home">
+<meta name="select:PickupImgDesign Select" content="is-pickupImgDesignOption-vertical" title="縦長" label="【おすすめ商品】画像トリミング" data-group="home">
+<meta name="select:PickupImgDesign Select" content="is-pickupImgDesignOption-none" title="なし" label="【おすすめ商品】画像トリミング" data-group="home">
+<meta name="if:Pickup Product1 If" content="1" label="【おすすめ商品①】 表示する" data-group="home">
+<meta name="image:Pickup Product1 Image" content="https://basefile.akamaized.net/ISHdesign-theshop-jp/625a8e9064b88/dummy.jpg" label="【おすすめ商品①】 画像" data-group="home">
+<meta name="text:Pickup Product1 Title" content="商品タイトルテキスト" label="【おすすめ商品①】 タイトル" data-group="home">
+<meta name="text:Pickup Product1 Price" content="¥1,000" label="【おすすめ商品①】 金額" data-group="home">
+<meta name="text:Pickup Product1 Text" content="商品の説明文などを記載してください。" label="【おすすめ商品①】 説明文" data-group="home">
+<meta name="if:Pickup Product1 ButtonIf" content="1" label="【おすすめ商品①】 ボタンを表示する" data-group="home">
+<meta name="text:Pickup Product1 Url" content="#" label="【おすすめ商品①】 リンクURL" data-group="home">
+<meta name="text:Pickup Product1 ButtonText" content="もっとみる" label="【おすすめ商品①】 ボタンテキスト" data-group="home">
+<meta name="if:Pickup Product2 If" content="0" label="【おすすめ商品②】 表示する" data-group="home">
+<meta name="image:Pickup Product2 Image" content="https://basefile.akamaized.net/ISHdesign-theshop-jp/625a8e9064b88/dummy.jpg" label="【おすすめ商品②】 画像" data-group="home">
+<meta name="text:Pickup Product2 Title" content="商品タイトルテキスト" label="【おすすめ商品②】 タイトル" data-group="home">
+<meta name="text:Pickup Product2 Price" content="¥1,000" label="【おすすめ商品②】 金額" data-group="home">
+<meta name="text:Pickup Product2 Text" content="商品の説明文などを記載してください。" label="【おすすめ商品②】 説明文" data-group="home">
+<meta name="if:Pickup Product2 ButtonIf" content="1" label="【おすすめ商品②】 ボタンを表示する" data-group="home">
+<meta name="text:Pickup Product2 Url" content="#" label="【おすすめ商品②】 リンクURL" data-group="home">
+<meta name="text:Pickup Product2 ButtonText" content="もっとみる" label="【おすすめ商品②】 ボタンテキスト" data-group="home">
+<meta name="if:Pickup Product3 If" content="0" label="【おすすめ商品③】 表示する" data-group="home">
+<meta name="image:Pickup Product3 Image" content="https://basefile.akamaized.net/ISHdesign-theshop-jp/625a8e9064b88/dummy.jpg" label="【おすすめ商品③】 画像" data-group="home">
+<meta name="text:Pickup Product3 Title" content="商品タイトルテキスト" label="【おすすめ商品③】 タイトル" data-group="home">
+<meta name="text:Pickup Product3 Price" content="¥1,000" label="【おすすめ商品③】 金額" data-group="home">
+<meta name="text:Pickup Product3 Text" content="商品の説明文などを記載してください。" label="【おすすめ商品③】 説明文" data-group="home">
+<meta name="if:Pickup Product3 ButtonIf" content="1" label="【おすすめ商品③】 ボタンを表示する" data-group="home">
+<meta name="text:Pickup Product3 Url" content="#" label="【おすすめ商品③】 リンクURL" data-group="home">
+<meta name="text:Pickup Product3 ButtonText" content="もっとみる" label="【おすすめ商品③】 ボタンテキスト" data-group="home">
+<meta name="select:ItemsImgDesign Select" content="is-itemsImgDesignOption-horizon" title="横長" label="【商品一覧】画像トリミング" data-group="home">
+<meta name="select:ItemsImgDesign Select" content="is-itemsImgDesignOption-square" title="正方形" label="【商品一覧】画像トリミング" data-group="home">
+<meta name="select:ItemsImgDesign Select" content="is-itemsImgDesignOption-vertical" title="縦長" label="【商品一覧】画像トリミング" data-group="home">
+<meta name="select:ItemsImgDesign Select" content="is-itemsImgDesignOption-none" title="なし" label="【商品一覧】画像トリミング" data-group="home">
+<meta name="text:Items ButtonText" content="もっとみる" label="【商品一覧】ボタンテキスト ※商品数25個以上の場合" data-group="home">
+<meta name="if:Faq If" content="1" label="【よくある質問】 表示する" data-group="home">
+<meta name="text:Faq Title" content="よくある質問" label="【よくある質問】 見出し" data-group="home">
+<meta name="text:Faq Q1" content="質問がはいります1" label="【よくある質問】 Q1" data-group="home">
+<meta name="text:Faq A1" content="回答が入ります1" label="【よくある質問】 A1" data-group="home">
+<meta name="text:Faq Q2" content="質問がはいります2" label="【よくある質問】 Q2" data-group="home">
+<meta name="text:Faq A2" content="回答が入ります2" label="【よくある質問】 A2" data-group="home">
+<meta name="text:Faq Q3" content="質問がはいります3" label="【よくある質問】 Q3" data-group="home">
+<meta name="text:Faq A3" content="回答が入ります3" label="【よくある質問】 A3" data-group="home">
+<meta name="text:Faq Q4" content="質問がはいります4" label="【よくある質問】 Q4" data-group="home">
+<meta name="text:Faq A4" content="回答が入ります4" label="【よくある質問】 A4" data-group="home">
+<meta name="text:Faq Q5" content="質問がはいります5" label="【よくある質問】 Q5" data-group="home">
+<meta name="text:Faq A5" content="回答が入ります5" label="【よくある質問】 A5" data-group="home">
+<meta name="select:BlogImgDesign Select" content="is-blogImgDesignOption-horizon" title="横長" label="【ブログ】画像トリミング ※ブログApp" data-group="home">
+<meta name="select:BlogImgDesign Select" content="is-blogImgDesignOption-square" title="正方形" label="【ブログ】画像トリミング ※ブログApp" data-group="home">
+<meta name="select:BlogImgDesign Select" content="is-blogImgDesignOption-none" title="なし" label="【ブログ】画像トリミング ※ブログApp" data-group="home">
+<meta name="text:Blog ButtonText" content="もっとみる" label="【ブログ】ボタンテキスト ※ブログApp" data-group="home">
+<meta name="if:Shop If" content="1" label="【店舗紹介エリア】 表示する" data-group="home">
+<meta name="text:Shop MainTitle" content="店舗紹介" label="【店舗紹介エリア】 見出し" data-group="home">
+<meta name="text:Shop Title" content="キャッチコピーを入れてください" label="【店舗紹介エリア】 店舗名・キャッチコピー" data-group="home">
+<meta name="text:Shop Text" content="お店の説明文などを自由に記載ください。" label="【店舗紹介エリア】 説明文" data-group="home">
+<meta name="select:Shop Text-align Select" content="is-ShopTextAlignDesignOption-left" title="左" label="【店舗紹介エリア】 説明文/文字揃え" data-group="home">
+<meta name="select:Shop Text-align Select" content="is-ShopTextAlignDesignOption-center" title="中央" label="【店舗紹介エリア】 説明文/文字揃え" data-group="home">
+<meta name="if:Shop ButtonIf" content="1" label="【店舗紹介エリア】 ボタンを表示する" data-group="home">
+<meta name="text:Shop ButtonUrl" content="#" label="【店舗紹介エリア】 ボタンURL" data-group="home">
+<meta name="text:Shop ButtonText" content="公式サイトへ" label="【店舗紹介エリア】 ボタンテキスト" data-group="home">
+<meta name="image:Shop BgImage" content="https://basefile.akamaized.net/ISHdesign-theshop-jp/61e2d32214878/dummy2.jpg" label="【店舗紹介エリア】 背景画像" data-group="home">
+<meta name="image:AboutPage MainImg" content="https://basefile.akamaized.net/ISHdesign-theshop-jp/61e2d32214878/dummy2.jpg" label="【ABOUTページ/上部画像】 画像" data-group="about">
+<meta name="select:AboutPage Text-align Select" content="is-AboutPageTextAlignDesignOption-left" title="左" label="【ABOUTページ】 説明文/文字揃え" data-group="about">
+<meta name="select:AboutPage Text-align Select" content="is-AboutPageTextAlignDesignOption-center" title="中央" label="【ABOUTページ】 説明文/文字揃え" data-group="about">
+<meta name="text:RelatedItems Title" content="関連商品" label="【関連商品】タイトル (商品詳細ページ下部)" data-group="item">
+<meta name="select:RelatedItems SpCarousel Select" content="is-RelatedItemsSpCarouselInDesignOption-true" title="ON" label="【関連商品】 スマホ時カルーセルON/OFF" data-group="item">
+<meta name="select:RelatedItems SpCarousel Select" content="is-RelatedItemsSpCarouselInDesignOption-false" title="OFF" label="【関連商品】 スマホ時カルーセルON/OFF" data-group="item">
+<meta name="text:MailmagApp Title" content="メールマガジンを受け取る" label="【メールマガジンApp】 タイトル" data-group="app">
+<meta name="text:MailmagApp Text" content="新商品やキャンペーンなどのお得な情報をお届けいたします。" label="【メールマガジンApp】 サブテキスト" data-group="app">
+<meta name="image:OgpCustom Image" content="" label="【独自OGP画像】※上級者向け" data-group="other">
+<meta name="text:CssCustom Text" content="" label="【カスタムCSS】※上級者向け" data-group="other">{/block:Hidden}
+
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700&family=Noto+Sans+JP:wght@300;400;500;700&family=Inter:wght@300;400;500&family=Noto+Serif+JP:wght@400;700&family=Lato:wght@700&family=Comfortaa:wght@700&family=Lora:wght@500&display=swap" rel="stylesheet">{block:image-OgpCustom_Image}
+{block:NotItemPage}
+
+
+<meta property="og:image" content="{image:OgpCustom Image}?imformat=generic&q=90&im=Resize,width=1200,height=1200,aspect=fit,type=normal;Crop,width=1200,height=1200,gravity=Center,allowExpansion" />{/block:NotItemPage}
+{/block:image-OgpCustom_Image}
+{block:IndexPage}
+{HeadLinkNextPrevTag}
+{/block:IndexPage}
+{block:ItemPage}
+{MetaItemInfoTag}
+{/block:ItemPage}
+{block:NotItemPage}
+{MetaShopInfoTag}
+{/block:NotItemPage}
+{block:image-OgpCustom_Image}
+{block:NotItemPage}
+
+
+<meta name="twitter:image" content="{image:OgpCustom Image}?imformat=generic&q=90&im=Resize,width=1200,height=1200,aspect=fit,type=normal;Crop,width=1200,height=1200,gravity=Center,allowExpansion" />{/block:NotItemPage}
+{/block:image-OgpCustom_Image}<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
+
+{GoogleAnalyticsTag}
+{block:AppsBlog}
+<link href="{BlogFeedPageURL}" rel="alternate" type="application/rss+xml" title="Blog | {ShopName}">{/block:AppsBlog}
+
+<link rel="stylesheet" href="https://basefile.akamaized.net/ISHdesign-theshop-jp/6258ecc7d2261/slick.css"><link rel="stylesheet" href="https://basefile.akamaized.net/ISHdesign-theshop-jp/6475d669bfdb9/style.css">
+
+{BackgroundTag}
+<style type="text/css">{text:CssCustom Text}</style>{block:Hidden}
+
+<meta name="if:Bello Random Pickup" content="1" label="BELLO｜PICK UPをランダム表示（OFFで固定4枠）" data-group="home">
+<meta name="image:Bello Hero Desktop Image" content="" label="BELLO｜PC専用メイン画像（空欄で共通画像）" data-group="home">
+<meta name="image:Bello Hero Image" content="" label="BELLO｜メイン画像" data-group="home">
+<meta name="text:Bello Hero Title 1" content="名作と、" label="BELLO｜メインコピー 1行目" data-group="home">
+<meta name="text:Bello Hero Title 2" content="新しい暮らしを。" label="BELLO｜メインコピー 2行目" data-group="home">
+<meta name="text:Bello Hero Sub 1" content="メンテナンスを施した、中古のデザイナーズ家具。" label="BELLO｜サブコピー 1行目" data-group="home">
+<meta name="text:Bello Hero Sub 2" content="自分らしい空間を、あなたに。" label="BELLO｜サブコピー 2行目" data-group="home">
+<meta name="text:Bello Category 1 URL" content="" label="BELLO｜SOFA リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Category 1 Image" content="" label="BELLO｜SOFA 画像" data-group="home">
+<meta name="text:Bello Category 2 URL" content="" label="BELLO｜CHAIR リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Category 2 Image" content="" label="BELLO｜CHAIR 画像" data-group="home">
+<meta name="text:Bello Category 3 URL" content="" label="BELLO｜STORAGE リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Category 3 Image" content="" label="BELLO｜STORAGE 画像" data-group="home">
+<meta name="text:Bello Category 4 URL" content="" label="BELLO｜LIGHTING リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Category 4 Image" content="" label="BELLO｜LIGHTING 画像" data-group="home">
+<meta name="text:Bello Feature URL" content="" label="BELLO｜特集 リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Feature Image" content="" label="BELLO｜特集画像" data-group="home">
+<meta name="text:Bello Feature Sub 1" content="いいデザインを、" label="BELLO｜特集コピー 1行目" data-group="home">
+<meta name="text:Bello Feature Sub 2" content="もっと身近に。" label="BELLO｜特集コピー 2行目" data-group="home">
+<meta name="text:Bello Brand 1 URL" content="" label="BELLO｜固定PICK UP 1 リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Brand 1 Image" content="" label="BELLO｜固定PICK UP 1 画像" data-group="home">
+<meta name="text:Bello Brand 1 Name" content="ligne roset" label="BELLO｜固定PICK UP 1 ブランド名" data-group="home">
+<meta name="text:Bello Brand 2 URL" content="" label="BELLO｜固定PICK UP 2 リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Brand 2 Image" content="" label="BELLO｜固定PICK UP 2 画像" data-group="home">
+<meta name="text:Bello Brand 2 Name" content="Fritz Hansen" label="BELLO｜固定PICK UP 2 ブランド名" data-group="home">
+<meta name="text:Bello Brand 3 URL" content="" label="BELLO｜固定PICK UP 3 リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Brand 3 Image" content="" label="BELLO｜固定PICK UP 3 画像" data-group="home">
+<meta name="text:Bello Brand 3 Name" content="USM" label="BELLO｜固定PICK UP 3 ブランド名" data-group="home">
+<meta name="text:Bello Brand 4 URL" content="" label="BELLO｜固定PICK UP 4 リンク（空欄で標準）" data-group="home">
+<meta name="image:Bello Brand 4 Image" content="" label="BELLO｜固定PICK UP 4 画像" data-group="home">
+<meta name="text:Bello Brand 4 Name" content="Cassina" label="BELLO｜固定PICK UP 4 ブランド名" data-group="home">
+<meta name="image:Bello About Storage Image" content="" label="BELLO｜ABOUT｜梱包・保管の実写写真（任意）" data-group="about">
+<meta name="text:Bello About Title 1" content="いい家具を、" label="BELLO｜ABOUT｜タイトル1行目" data-group="about">
+<meta name="text:Bello About Title 2" content="次の暮らしへ。" label="BELLO｜ABOUT｜タイトル2行目" data-group="about">
+<meta name="image:Bello About Hero Image" content="" label="BELLO｜ABOUT｜メイン写真" data-group="about">
+<meta name="image:Bello About Care Image" content="" label="BELLO｜ABOUT｜作業イメージ（横3枚組）" data-group="about">{/block:Hidden}<link id="bello-gallery-style" rel="stylesheet" href="https://basefile.akamaized.net/bellointeri-base-shop/6ab945d7d08c3/bello-theme-20260928-v2.css"></head><body id="shopTopPage" class="shop template bello-ui {block:ItemPage}bello-item{/block:ItemPage} {block:IndexPage}{block:NoIndexPageCategory}{block:NoIndexPageSearch}bello-gallery-home{/block:NoIndexPageSearch}{/block:NoIndexPageCategory}{/block:IndexPage} {select:AnimationFadeInShow Select} {select:BodyColorDesign Select} {select:BgBaseColorDesign Select} {select:HeaderColorDesign Select}  {select:BtnColorDesign Select} {select:BodyFontDesign Select} {select:TitleFontDesign Select} {select:Header LogoImgHeight Select} {select:Kv Trim Select} {select:About Text-align Select} {select:PickupImgDesign Select} {select:PickupFlexDesign Select} {select:ItemsImgDesign Select} {select:BlogImgDesign Select} {select:Shop Text-align Select} {select:AboutPage Text-align Select} {select:RelatedItems SpCarousel Select}">{block:IndexPage}
+{block:NoIndexPageCategory}{block:NoIndexPageSearch}
+<script type="text/javascript">$(function(){$(document).ready(function(){$("#shopTopPage").addClass("is-frontpage")})});</script>
+{/block:NoIndexPageSearch}{/block:NoIndexPageCategory}
+{/block:IndexPage}
+
+{block:AppsInformationBanner}
+{block:NotContactPage}
+{AppsInformationBannerTag}
+<script type="text/javascript">window.addEventListener("DOMContentLoaded",function(){const e=document.getElementsByClassName("informationBanner");if(!e||0===e.length)return;new ResizeObserver(e=>{for(let t of e){const e=t.target.offsetHeight;document.documentElement.style.setProperty("--information-banner-height",e+"px")}}).observe(e[0])});</script>
+{/block:NotContactPage}
+{/block:AppsInformationBanner}
+{block:IndexPage}
+<span id="max_page" style="display: none;">{MaxPageNumber}</span><span id="next_page" style="display: none;">{NextPageNumber}</span><span id="LoadItemsPageURL" style="display: none;">{LoadItemsPageURL}</span><span id="LoadItemsPageURLParams" style="display: none;">{LoadItemsPageURLParams}</span>{/block:IndexPage}
+
+<div class="header__snav"><div class="header__snav__open"><div class="header__snav__wrapper"><div class="header__snav__closeBtn"><div class="header__snav__closeBtn__inner"><span class="header__snav__closeBtn__line line01"></span><span class="header__snav__closeBtn__line line02"></span></div></div><div class="header__snav__navBox"><nav class="header__snav__nav"><ul class="header__snav__list"><li class="header__snav__item is-home"><a href="{IndexPageURL}" class="header__snav__link">{block:text-Menu_Home_Text}
+{text:Menu Home Text}
+{/block:text-Menu_Home_Text}
+{block:not_text-Menu_Home_Text}
+HOME
+{/block:not_text-Menu_Home_Text}</a></li><li class="header__snav__item is-about"><a href="{AboutPageURL}" class="header__snav__link">{block:text-Menu_About_Text}
+{text:Menu About Text}
+{/block:text-Menu_About_Text}
+{block:not_text-Menu_About_Text}
+ABOUT
+{/block:not_text-Menu_About_Text}</a></li><li class="header__snav__item is-topItems"><a href="{IndexPageURL}/#top-items" class="header__snav__link">{block:text-Menu_Items_Text}
+{text:Menu Items Text}
+{/block:text-Menu_Items_Text}
+{block:not_text-Menu_Items_Text}
+ITEMS
+{/block:not_text-Menu_Items_Text}</a></li><li class="header__snav__item is-media"><a href="https://ecodesign2024.com/relief-1" class="header__snav__link" target="_blank" rel="noopener noreferrer">
+メディア実績
+</a></li>{block:AppsBlog}
+<li class="header__snav__item is-blog"><a href="{BlogPageURL}" class="header__snav__link">{block:text-Menu_Blog_Text}
+{text:Menu Blog Text}
+{/block:text-Menu_Blog_Text}
+{block:not_text-Menu_Blog_Text}
+BLOG
+{/block:not_text-Menu_Blog_Text}</a></li>{/block:AppsBlog}
+{block:AppsCommunity}
+<li class="header__snav__item is-community"><a href="{CommunityPageURL}" class="header__snav__link">{block:text-Menu_Community_Text}
+{text:Menu Community Text}
+{/block:text-Menu_Community_Text}
+{block:not_text-Menu_Community_Text}
+COMMUNITY
+{/block:not_text-Menu_Community_Text}</a></li>{/block:AppsCommunity}<li class="header__snav__item is-contact"><a href="{ContactPageURL}" class="header__snav__link">{block:text-Menu_Contact_Text}
+{text:Menu Contact Text}
+{/block:text-Menu_Contact_Text}
+{block:not_text-Menu_Contact_Text}
+CONTACT
+{/block:not_text-Menu_Contact_Text}</a></li></ul></nav>{block:AppsItemCategory}
+<nav class="header__snav__nav"><div class="header__snav__smallTtlBox is-category"><h2 class="header__snav__smallTtl">{block:text-Menu_Category_Text}
+{text:Menu Category Text}
+{/block:text-Menu_Category_Text}
+{block:not_text-Menu_Category_Text}
+CATEGORY
+{/block:not_text-Menu_Category_Text}</h2></div>
+{AppsItemCategoryCategoriesTag}
+</nav>{/block:AppsItemCategory}
+{block:AppsMembership}
+<nav class="header__snav__nav is-membership"><div class="header__snav__smallTtlBox"><h2 class="header__snav__smallTtl">
+インテリアコーディネート依頼
+</h2></div><ul class="header__snav__otherNav__list is-membership"><li class="header__snav__otherNav__item is-guide"><a href="https://ecodesign2024.com/" class="header__snav__otherNav__link" target="_blank" rel="noopener noreferrer">
+Bello design-ベッロデザイン-
+</a></li></ul></nav>{/block:AppsMembership}<nav class="header__snav__nav"><ul class="header__snav__icon__list"><li class="header__snav__icon__baseitem">
+
+{block:NoAppsBaseEraser}
+<div class="is-baselogo">{/block:NoAppsBaseEraser}
+{block:AppsBaseEraser}
+<div class="is-not-baselogo">{/block:AppsBaseEraser}
+{BASEMenuTag}
+</div></li></ul></nav><div>{block:AppsSearch}
+<form id="x_itemSearchForm" class="itemSearch__form" action="{SearchPageURL}" method="get"><input class="itemSearch__field" type="text" name="q" placeholder="{text:Menu Search Text}" value="{IndexPageSearch}"><button class="itemSearch__btn" type="submit"><span id="x_iconSearch" class="si-search"><img src="https://basefile.akamaized.net/ISHdesign-theshop-jp/625c168a4ee06/icon-search.png"></span></button></form>{/block:AppsSearch}</div></div></div></div></div><div class="header__snav__overlay"></div><div class="site-wrapper"><header class="l-header" id="mainHeader"><div class="header" id="shopHeader"><div class="header__inner"><div class="header__head"><div class="header__logo"><h1 class="header__logo__title"><a href="{IndexPageURL}" class="header__logo__link">
+{LogoTag}
+</a></h1></div><div class="header__body"><div class="header__gnav"><div class="header__gnav__inner"><div class="header__gnav__list"><div class="header__gnav__item is-home is-pc"><a href="{IndexPageURL}" class="header__gnav__link">{block:text-Menu_Home_Text}
+{text:Menu Home Text}
+{/block:text-Menu_Home_Text}
+{block:not_text-Menu_Home_Text}
+HOME
+{/block:not_text-Menu_Home_Text}</a></div><div class="header__gnav__item is-about is-pc"><a href="{AboutPageURL}" class="header__gnav__link">{block:text-Menu_About_Text}
+{text:Menu About Text}
+{/block:text-Menu_About_Text}
+{block:not_text-Menu_About_Text}
+ABOUT
+{/block:not_text-Menu_About_Text}</a></div><div class="header__gnav__item is-topItems is-pc"><div class="header__gnav__cateNavBox"><a href="{IndexPageURL}/#top-items" class="header__gnav__link">{block:text-Menu_Items_Text}
+{text:Menu Items Text}
+{/block:text-Menu_Items_Text}
+{block:not_text-Menu_Items_Text}
+ITEMS
+{/block:not_text-Menu_Items_Text}</a>{block:AppsItemCategory}
+<div class="header__gnav__cateNav"><div class="header__gnav__cateNav__wrapper"><div class="header__gnav__cateNav__whiteBox"><div class="header__gnav__cateNav__smallTtlBox"><h2 class="header__gnav__cateNav__smallTtl">{block:text-Menu_Category_Text}
+{text:Menu Category Text}
+{/block:text-Menu_Category_Text}
+{block:not_text-Menu_Category_Text}
+CATEGORY
+{/block:not_text-Menu_Category_Text}</h2></div>
+{AppsItemCategoryCategoriesTag}
+</div></div></div>{/block:AppsItemCategory}</div></div>{block:AppsBlog}
+<div class="header__gnav__item is-blog is-pc"><a href="{BlogPageURL}" class="header__gnav__link">{block:text-Menu_Blog_Text}
+{text:Menu Blog Text}
+{/block:text-Menu_Blog_Text}
+{block:not_text-Menu_Blog_Text}
+BLOG
+{/block:not_text-Menu_Blog_Text}</a></div>{/block:AppsBlog}
+{block:AppsCommunity}
+<div class="header__gnav__item is-community is-pc"><a href="{CommunityPageURL}" class="header__gnav__link">{block:text-Menu_Community_Text}
+{text:Menu Community Text}
+{/block:text-Menu_Community_Text}
+{block:not_text-Menu_Community_Text}
+COMMUNITY
+{/block:not_text-Menu_Community_Text}</a></div>{/block:AppsCommunity}
+{block:AppsMembership}
+<div class="header__gnav__item is-membership is-pc"><div class="header__gnav__cateNavBox"><a href="https://ecodesign2024.com/" class="header__gnav__link" target="_blank" rel="noopener noreferrer">
+インテリアコーディネート依頼
+</a><div class="header__gnav__cateNav"><div class="header__gnav__cateNav__wrapper"><div class="header__gnav__cateNav__whiteBox"><ul class="header__gnav__cateNav__otherNav__list"><li class="header__gnav__cateNav__otherNav__item is-guide"><a href="https://ecodesign2024.com/" class="header__gnav__cateNav__otherNav__link" target="_blank" rel="noopener noreferrer">
+Bello design-ベッロデザイン-
+</a></li></ul></div></div></div></div></div>{/block:AppsMembership}<div class="header__gnav__item is-media is-pc"><a href="https://ecodesign2024.com/relief-1" class="header__gnav__link" target="_blank" rel="noopener noreferrer">
+メディア実績
+</a></div><div class="header__gnav__item is-contact is-pc"><a href="{ContactPageURL}" class="header__gnav__link">{block:text-Menu_Contact_Text}
+{text:Menu Contact Text}
+{/block:text-Menu_Contact_Text}
+{block:not_text-Menu_Contact_Text}
+CONTACT
+{/block:not_text-Menu_Contact_Text}</a></div></div><div class="header__gnav__list is-icon">{block:AppsSearch}
+<div class="header__gnav__item"><div class="header__gnav__icon is-search"><img src="https://basefile.akamaized.net/ISHdesign-theshop-jp/625c168a4ee06/icon-search.png" class="is-search is-blackIcon"><img src="https://basefile.akamaized.net/ISHdesign-theshop-jp/626bd5cd2030c/icon-search-white.png" class="is-search is-whiteIcon"><div class="header__gnav__itemSearch"><form id="x_itemSearchForm" class="itemSearch__form" action="{SearchPageURL}" method="get"><input class="itemSearch__field" type="text" name="q" placeholder="{text:Menu Search Text}" value="{IndexPageSearch}"><button class="itemSearch__btn" type="submit"><span id="x_iconSearch" class="si-search"><img src="https://basefile.akamaized.net/ISHdesign-theshop-jp/625c168a4ee06/icon-search.png"></span></button></form></div></div></div><div class="header__gnav__itemSearch__mask"></div>{/block:AppsSearch}<div class="header__gnav__item is-base">
+
+{block:NoAppsBaseEraser}
+<div class="is-baselogo">{/block:NoAppsBaseEraser}
+{block:AppsBaseEraser}
+<div class="is-not-baselogo">{/block:AppsBaseEraser}
+{BASEMenuTag}
+</div></div></div></div></div><div class="header__navBar"><div class="navBar"><div class="navBar__inner"><span class="navBar__line line01"></span><span class="navBar__line line02"></span><span class="navBar__line line03"></span></div></div></div></div></div></div></div></header>
+
+{block:IndexPage}
+{block:NoIndexPageCategory}{block:NoIndexPageSearch}
+
+<div class="bello-gallery"><section class="bello-hero" aria-label="Bello interior デザイナーズ家具"><picture class="bello-hero__picture">{block:image-Bello_Hero_Desktop_Image}<source media="(min-width:1024px)" srcset="{image:Bello Hero Desktop Image}">{/block:image-Bello_Hero_Desktop_Image}<img src="{block:image-Bello_Hero_Image}{image:Bello Hero Image}{/block:image-Bello_Hero_Image}{block:not_image-Bello_Hero_Image}https://basefile.akamaized.net/bellointeri-base-shop/6ab9139bc7e05/bello-gallery-hero.jpg{/block:not_image-Bello_Hero_Image}" class="bello-hero__image" alt="青いソファと黄色い収納、アートのあるインテリアイメージ" width="1536" height="1024" fetchpriority="high"></picture><div class="bello-hero__copy"><p class="bello-hero__brand" style="margin:0 0 .6em;font-size:1.1rem;letter-spacing:.2em;font-weight:500">Bello</p><h2 class="bello-hero__title"><span>{text:Bello Hero Title 1}</span><span>{text:Bello Hero Title 2}</span></h2><p class="bello-hero__sub">{text:Bello Hero Sub 1}<br>{text:Bello Hero Sub 2}</p><a class="bello-hero__button" href="#top-items">VIEW ALL <span aria-hidden="true">→</span></a></div></section><nav class="bello-categories" id="bello-categories" aria-label="カテゴリーから探す"><a class="bello-category bello-category--1" href="{block:text-Bello_Category_1_URL}{text:Bello Category 1 URL}{/block:text-Bello_Category_1_URL}{block:not_text-Bello_Category_1_URL}{IndexPageURL}/categories/5025007{/block:not_text-Bello_Category_1_URL}"><span class="bello-category__visual"><img src="{block:image-Bello_Category_1_Image}{image:Bello Category 1 Image}{/block:image-Bello_Category_1_Image}{block:not_image-Bello_Category_1_Image}https://baseec-img-mng.akamaized.net/images/item/origin/319d9c41e905f0edabe4593b3c0892c2.jpg?imformat=generic&amp;q=90&amp;im=Resize,width=640,type=normal{/block:not_image-Bello_Category_1_Image}" class="bello-category__image" alt="ligne roset ROSETPloum ブルーのソファ" width="640" height="640" loading="lazy"></span><strong>SOFA</strong><span>ソファ</span></a><a class="bello-category bello-category--2" href="{block:text-Bello_Category_2_URL}{text:Bello Category 2 URL}{/block:text-Bello_Category_2_URL}{block:not_text-Bello_Category_2_URL}{IndexPageURL}/categories/6355700{/block:not_text-Bello_Category_2_URL}"><span class="bello-category__visual"><img src="{block:image-Bello_Category_2_Image}{image:Bello Category 2 Image}{/block:image-Bello_Category_2_Image}{block:not_image-Bello_Category_2_Image}https://baseec-img-mng.akamaized.net/images/item/origin/9d761c826ba1f2b379484233713a5700.jpg?imformat=generic&amp;q=90&amp;im=Resize,width=640,type=normal{/block:not_image-Bello_Category_2_Image}" class="bello-category__image" alt="Carl Hansen & Søn CH24 木のYチェア" width="640" height="640" loading="lazy"></span><strong>CHAIR</strong><span>チェア</span></a><a class="bello-category bello-category--3" href="{block:text-Bello_Category_3_URL}{text:Bello Category 3 URL}{/block:text-Bello_Category_3_URL}{block:not_text-Bello_Category_3_URL}{IndexPageURL}/categories/7380575{/block:not_text-Bello_Category_3_URL}"><span class="bello-category__visual"><img src="{block:image-Bello_Category_3_Image}{image:Bello Category 3 Image}{/block:image-Bello_Category_3_Image}{block:not_image-Bello_Category_3_Image}https://baseec-img-mng.akamaized.net/images/item/origin/45a1474aba60b617cdce30b2b7ddcc0c.jpg?imformat=generic&amp;q=90&amp;im=Resize,width=640,type=normal{/block:not_image-Bello_Category_3_Image}" class="bello-category__image" alt="USM Haller ホワイトの収納" width="640" height="640" loading="lazy"></span><strong>STORAGE</strong><span>収納</span></a><a class="bello-category bello-category--4" href="{block:text-Bello_Category_4_URL}{text:Bello Category 4 URL}{/block:text-Bello_Category_4_URL}{block:not_text-Bello_Category_4_URL}{IndexPageURL}/categories/4580846{/block:not_text-Bello_Category_4_URL}"><span class="bello-category__visual"><img src="{block:image-Bello_Category_4_Image}{image:Bello Category 4 Image}{/block:image-Bello_Category_4_Image}{block:not_image-Bello_Category_4_Image}https://baseec-img-mng.akamaized.net/images/item/origin/d8e5b59fcf951d99154a4b4df12db613.jpg?imformat=generic&amp;q=90&amp;im=Resize,width=640,type=normal{/block:not_image-Bello_Category_4_Image}" class="bello-category__image" alt="Louis Poulsen PH 4/3 ペンダントライト" width="640" height="640" loading="lazy"></span><strong>LIGHTING</strong><span>照明</span></a><button class="bello-categories__more" type="button" data-bello-categories aria-haspopup="dialog">そのほかのカテゴリ <span aria-hidden="true">→</span></button></nav>
+<style>
+  .bello-brands{max-width:920px;margin:72px auto 56px;padding:0 16px;text-align:center;font-family:inherit;color:#222}
+  .bello-brands__title{font-size:13px;letter-spacing:.2em;font-weight:400;margin:0 0 4px}
+  .bello-brands__sub{font-size:11px;color:#888;margin:0 0 32px;letter-spacing:.05em}
+  .bello-brands__list{display:grid;grid-template-columns:repeat(4,1fr);gap:28px 16px;list-style:none;margin:0;padding:0}
+  .bello-brands__list a{display:block;text-decoration:none;color:#222;transition:opacity .2s}
+  .bello-brands__list a:hover{opacity:.55}
+  .bello-brands__en{display:block;font-size:13px;letter-spacing:.12em}
+  .bello-brands__ja{display:block;font-size:10px;color:#888;margin-top:6px;letter-spacing:.05em}
+  @media (max-width:640px){.bello-brands__list{grid-template-columns:repeat(2,1fr)}}
+</style>
+<section class="bello-brands" aria-labelledby="bello-brands-title">
+  <h2 class="bello-brands__title" id="bello-brands-title">BRANDS</h2>
+  <p class="bello-brands__sub">取扱ブランド</p>
+  <ul class="bello-brands__list">
+    <li><a href="https://bellointeri.base.shop/search?q=Vitra"><span class="bello-brands__en">Vitra</span><span class="bello-brands__ja">ヴィトラ</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=Cassina"><span class="bello-brands__en">Cassina</span><span class="bello-brands__ja">カッシーナ</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=ligne+roset"><span class="bello-brands__en">ligne roset</span><span class="bello-brands__ja">リーン・ロゼ</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=Time%26Style"><span class="bello-brands__en">Time&amp;Style</span><span class="bello-brands__ja">タイムアンドスタイル</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=MARUNI+COLLECTION"><span class="bello-brands__en">MARUNI COLLECTION</span><span class="bello-brands__ja">マルニコレクション</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=Herman+Miller"><span class="bello-brands__en">Herman Miller</span><span class="bello-brands__ja">ハーマンミラー</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=arflex"><span class="bello-brands__en">arflex</span><span class="bello-brands__ja">アルフレックス</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=Magis"><span class="bello-brands__en">Magis</span><span class="bello-brands__ja">マジス</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=HAY"><span class="bello-brands__en">HAY</span><span class="bello-brands__ja">ヘイ</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=BoConcept"><span class="bello-brands__en">BoConcept</span><span class="bello-brands__ja">ボーコンセプト</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=Kartell"><span class="bello-brands__en">Kartell</span><span class="bello-brands__ja">カルテル</span></a></li>
+    <li><a href="https://bellointeri.base.shop/search?q=Fritz+Hansen"><span class="bello-brands__en">Fritz Hansen</span><span class="bello-brands__ja">フリッツ・ハンセン</span></a></li>
+  </ul>
+</section>
+<a class="bello-feature" href="{block:text-Bello_Feature_URL}{text:Bello Feature URL}{/block:text-Bello_Feature_URL}{block:not_text-Bello_Feature_URL}{AboutPageURL}{/block:not_text-Bello_Feature_URL}"><img src="{block:image-Bello_Feature_Image}{image:Bello Feature Image}{/block:image-Bello_Feature_Image}{block:not_image-Bello_Feature_Image}https://basefile.akamaized.net/bellointeri-base-shop/6ab912a91bc9a/bello-gallery-feature.jpg{/block:not_image-Bello_Feature_Image}" alt="木の椅子、黄色い収納とカラフルなアートのある空間イメージ" width="1942" height="810" loading="lazy"><div class="bello-feature__copy"><h2 class="bello-feature__title"><span>DESIGN</span><span>FOR A</span><span>BETTER LIFE</span></h2><p class="bello-feature__sub">{text:Bello Feature Sub 1}<br>{text:Bello Feature Sub 2}</p><span class="bello-feature__arrow" aria-hidden="true"></span></div></a><section class="bello-pickup" aria-labelledby="bello-pickup-title"><div class="bello-section-heading"><h2 id="bello-pickup-title">PICK UP</h2></div><div class="bello-brand-grid" data-shop-url="{IndexPageURL}"><a class="bello-brand" href="{block:text-Bello_Brand_1_URL}{text:Bello Brand 1 URL}{/block:text-Bello_Brand_1_URL}{block:not_text-Bello_Brand_1_URL}{IndexPageURL}/items/159563465{/block:not_text-Bello_Brand_1_URL}"><img src="{block:image-Bello_Brand_1_Image}{image:Bello Brand 1 Image}{/block:image-Bello_Brand_1_Image}{block:not_image-Bello_Brand_1_Image}https://baseec-img-mng.akamaized.net/images/item/origin/d8ef7ef3a5b9057309f3932360ee791a.jpg?imformat=generic&amp;q=90&amp;im=Resize,width=640,type=normal{/block:not_image-Bello_Brand_1_Image}" alt="ligne rosetの家具" width="320" height="320" loading="lazy"><strong>{text:Bello Brand 1 Name}</strong></a><a class="bello-brand" href="{block:text-Bello_Brand_2_URL}{text:Bello Brand 2 URL}{/block:text-Bello_Brand_2_URL}{block:not_text-Bello_Brand_2_URL}{IndexPageURL}/items/158498070{/block:not_text-Bello_Brand_2_URL}"><img src="{block:image-Bello_Brand_2_Image}{image:Bello Brand 2 Image}{/block:image-Bello_Brand_2_Image}{block:not_image-Bello_Brand_2_Image}https://baseec-img-mng.akamaized.net/images/item/origin/6a97281875145f3cdff9add6bc7e413e.jpg?imformat=generic&amp;q=90&amp;im=Resize,width=640,type=normal{/block:not_image-Bello_Brand_2_Image}" alt="Fritz Hansenの家具" width="320" height="320" loading="lazy"><strong>{text:Bello Brand 2 Name}</strong></a><a class="bello-brand" href="{block:text-Bello_Brand_3_URL}{text:Bello Brand 3 URL}{/block:text-Bello_Brand_3_URL}{block:not_text-Bello_Brand_3_URL}{IndexPageURL}/items/156919052{/block:not_text-Bello_Brand_3_URL}"><img src="{block:image-Bello_Brand_3_Image}{image:Bello Brand 3 Image}{/block:image-Bello_Brand_3_Image}{block:not_image-Bello_Brand_3_Image}https://baseec-img-mng.akamaized.net/images/item/origin/45a1474aba60b617cdce30b2b7ddcc0c.jpg?imformat=generic&amp;q=90&amp;im=Resize,width=640,type=normal{/block:not_image-Bello_Brand_3_Image}" alt="USMの家具" width="320" height="320" loading="lazy"><strong>{text:Bello Brand 3 Name}</strong></a><a class="bello-brand" href="{block:text-Bello_Brand_4_URL}{text:Bello Brand 4 URL}{/block:text-Bello_Brand_4_URL}{block:not_text-Bello_Brand_4_URL}{IndexPageURL}/items/159399983{/block:not_text-Bello_Brand_4_URL}"><img src="{block:image-Bello_Brand_4_Image}{image:Bello Brand 4 Image}{/block:image-Bello_Brand_4_Image}{block:not_image-Bello_Brand_4_Image}https://baseec-img-mng.akamaized.net/images/item/origin/af043aeeec74a8c7f0b47c7ff400c6ab.jpg?imformat=generic&amp;q=90&amp;im=Resize,width=640,type=normal{/block:not_image-Bello_Brand_4_Image}" alt="Cassinaの家具" width="320" height="320" loading="lazy"><strong>{text:Bello Brand 4 Name}</strong></a></div>{block:if-Bello_Random_Pickup}<script>!function(){"use strict";var e=document.querySelector(".bello-brand-grid");if(e){
+var a=[["Fritz Hansen","CHAIR","6a97281875145f3cdff9add6bc7e413e.jpg","158498070"],["VITRA","TABLE","2813669562116b570e7d65078629c162.jpg","158650618"],["VITRA","CHAIR","0130058751709d83c2b5a1930f1f2e13.jpg","158704649"],["ligne roset","SOFA","d8ef7ef3a5b9057309f3932360ee791a.jpg","159563465"],["ligne roset","SOFA","319d9c41e905f0edabe4593b3c0892c2.jpg","154867644"],["ligne roset","TABLE","cbd1502795073590f12ffd7d9e7229c0.jpg","156707666"],["USM","STORAGE","45a1474aba60b617cdce30b2b7ddcc0c.jpg","156919052"],["Cassina","TABLE","af043aeeec74a8c7f0b47c7ff400c6ab.jpg","159399983"],["Cassina","SOFA","3889e4545c3cecfd1daf1822e964859c.jpg","156678297"],["Cassina","SOFA","c8751c8ee8181198f179a44035405956.jpg","152499068"],["BoConcept","STORAGE","ff855cda719a2761cc9ea92b09b947a4.jpg","157586654"],["BoConcept","LIGHTING","ddd92f007e72d67f9dad25eb28d8a85d.jpg","157386378"],["Molteni&C","STORAGE","1d37dad815e2daccf5b2fcb3b997f8ec.jpg","157405267"],["Herman Miller","CHAIR","4b0c07a5c5fc7eb78ac9d8867c6b356c.jpg","157586141"],["Herman Miller","TABLE","ee81342d5ad3576b9c3c1bb89970ae2b.jpg","156918561"],["HAY","CHAIR","af64ebae7fc4f1eaf654caa8389f7a09.jpg","158498554"],["MUUTO","CHAIR","28e0a2084bda2a01f0cb1f502a004216.jpg","156239397"],["arflex","TABLE","2099d64626486e10fccdc5d422da2721.jpg","156238817"],["arflex","CHAIR","267c25969a3e3fa5bbbb941d0c8dc4f1.jpg","145472972"],["arflex","SOFA","def632ceeb1ba630a28ad0c6e589b2a0.jpg","154841031"]]
+;e.style.visibility="hidden",e.setAttribute("aria-busy","true");var t=new Set,c=!1;document.addEventListener("bello:catalog-progress",d),document.addEventListener("bello:catalog",d)}function d(n){if(!c){n.detail.forEach(function(e){var a=String(e.id);!e.sold&&Number(e.node.dataset.belloStock)>0?t.add(a):t.delete(a)});for(var r=a.filter(function(e){return t.has(e[3])}),i=[],l=r.length-1;l>0;l--){var o=Math.floor(Math.random()*(l+1)),f=r[l];r[l]=r[o],r[o]=f}var b=function e(a,t){if(t.length>i.length&&(i=t),4===t.length)return t;for(var c=a;c<r.length;c++){var d=r[c];if(!t.some(function(e){return e[0]===d[0]||e[1]===d[1]})){var n=e(c+1,t.concat([d]));if(n)return n}}return null}(0,[])||i;if(!(b.length<4&&"bello:catalog"!==n.type)){c=!0,document.removeEventListener("bello:catalog-progress",d),document.removeEventListener("bello:catalog",d),e.closest(".bello-pickup").hidden=!b.length;var g=document.createDocumentFragment();b.forEach(function(a){var t=document.createElement("a")
+;t.className="bello-brand",t.href=e.dataset.shopUrl.replace(/\/$/,"")+"/items/"+a[3],t.dataset.brand=a[0],t.dataset.category=a[1];var c=document.createElement("img");c.loading="eager",c.decoding="async",c.src="https://baseec-img-mng.akamaized.net/images/item/origin/"+a[2]+"?imformat=generic&q=85&im=Resize,width=480,type=normal",c.alt=a[0]+" / "+a[1],c.width=320,c.height=320;var d=document.createElement("strong");d.textContent=a[0],t.appendChild(c),t.appendChild(d),g.appendChild(t)}),e.replaceChildren(g),e.style.visibility="",e.setAttribute("aria-busy","false")}}}}();</script>
+{/block:if-Bello_Random_Pickup}</section><a class="bello-line-quick" href="https://lin.ee/iaxd5z4" target="_blank" rel="noopener noreferrer"><img class="bello-line-icon" src="https://bellointeri.base.shop/img/shop/lineicon.png" alt="" width="40" height="40"><span class="bello-line-quick__copy"><strong>公式LINEで相談する</strong><span>サイズ・配送・お値段など、お気軽に</span></span><span class="bello-line-quick__arrow" aria-hidden="true">→</span></a></div><section class="top-items" id="top-items"><div class="l-wrapper wrapper04 is-sp-96">{block:ShopPublic}
+{block:HasItems}
+<div><div class="bello-section-heading"><h2>NEW ARRIVAL</h2><a href="#bello-categories">カテゴリー <span aria-hidden="true">↑</span></a></div><ul class="items-archive__list" id="top-items__list">{block:Items}
+<li class="items-archive__item fadeUp" data-bello-stock="{ItemStock}"><a href="{ItemPageURL}" class="items-archive__link"><div class="items-archive__imgBox">{block:AppsItemLabel}
+{AppsItemLabelTag}
+{/block:AppsItemLabel}<figure class="items-archive__img"><img src="{block:ItemImage1}{ItemImage1URL-640}{/block:ItemImage1}{block:NoItemImage1}{ItemNoImageURL}{/block:NoItemImage1}" alt="{ItemTitle}" title="{ItemTitle}" class="image-resize" loading="lazy" decoding="async"></figure></div>
+
+<div class="items-archive__txtBox"><h3 class="items-archive__txt-ttl">{ItemTitle}</h3><div>{block:NoItemProperPrice}
+
+<p class="items-archive__txt-price itemPrice"><span class="items-archive__txt-price-main">{ItemPrice}</span></p>{/block:NoItemProperPrice}
+{block:HasItemProperPrice}
+
+<p class="items-archive__txt-price is-red"><span class="items-archive__txt-price-main">{ItemPrice}</span><span class="items-archive__txt-price-small">{ItemDiscountRate}</span></p>{/block:HasItemProperPrice}</div><div class="items-archive__tagBox">{block:ItemWatingForSale}
+<p class="items-archive__tag is-green comingSoon">COMING SOON</p>{/block:ItemWatingForSale}
+{block:ItemNowOnSale}{block:ItemPreOrder}
+<p class="items-archive__tag is-white preOrder">{lang:PreOrderItem}</p>{/block:ItemPreOrder}{block:ItemLottery}
+<p class="items-archive__tag is-yellow lottery">{lang:LotteryItem}</p>{/block:ItemLottery}{block:ItemTakeout}
+<p class="items-archive__tag is-yellow takeout">{lang:TakeoutItem}</p>{/block:ItemTakeout}{block:ItemCommunityLimited}
+<p class="items-archive__tag is-yellow community">{lang:CommunityLimitedItem}</p>{/block:ItemCommunityLimited}{/block:ItemNowOnSale}
+{block:NoItemStock}
+{block:ItemNowOnSale}
+<p class="items-archive__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemNowOnSale}
+{/block:NoItemStock}
+{block:ItemEndOfSale}
+<p class="items-archive__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemEndOfSale}</div></div></a></li>{/block:Items}</ul></div><div class="btn-field01 fadeUp"><div id="topItemMoreButton" class="btn01 btn-moreitem is-bottom">{block:text-Items_ButtonText}
+{text:Items ButtonText}
+{/block:text-Items_ButtonText}
+{block:not_text-Items_ButtonText}
+MORE
+{/block:not_text-Items_ButtonText}</div></div><div id="loading" class="items-archive__loading" style="display: none;text-align: center;"><img src="https://basefile.akamaized.net/ISHdesign-theshop-jp/620877ae8bf21/loading.gif" style="padding: 20px 0;;"></div>{/block:HasItems}
+{block:NoItems}
+<p class="items-archive__noItemsMessage">{lang:NoItemsMessage}</p>{/block:NoItems}
+{/block:ShopPublic}
+{block:NotShopPublic}
+<p class="items-archive__noItemsMessage">{lang:NotShopPublicMessage}</p>{/block:NotShopPublic}</div></section><div class="line-container"><h2 style="font-size: 2.25rem;">Bello公式 <span style="color: #00c300;">LINE</span></h2><p style="font-size: 1.5rem;">当店商品に関する<br>お値下げ交渉･ご相談を承っております。<br>最安値でご案内いたします。<br>※営業配信等は行いません</p><a href="https://lin.ee/iaxd5z4" target="_blank" class="line-link"><img src="https://static.wixstatic.com/media/89b48e_c11b74977a8848c2b1045fba687cea08~mv2.png" alt="LINE友達追加" class="line-image"></a><br><br><br>
+</div><style>.line-container{text-align:center;margin:50px 0;opacity:0;transform:translateY(20px);transition:.8s ease-in-out}.line-container.visible{opacity:1;transform:translateY(0)}.line-container h2{font-size:2.25rem;color:#333}.line-container p{margin:10px 0 20px;font-size:1.5rem;color:#666}.line-link img{width:150px;max-width:100%;height:auto;cursor:pointer;transition:transform .3s ease-in-out}.line-link img:hover{transform:scale(1.05)}@media (max-width:768px){.line-container h2{font-size:1.65rem}.line-container p{font-size:1.1rem}.line-link img{width:25%}}</style><script>document.addEventListener("DOMContentLoaded",function(){const n=document.querySelector(".line-container");function e(){(function(n){const e=n.getBoundingClientRect();return e.top<=(window.innerHeight||document.documentElement.clientHeight)&&e.bottom>=0})(n)&&(n.classList.add("visible"),window.removeEventListener("scroll",e))}window.addEventListener("scroll",e),e()});</script>
+<style>.scroll-appear{opacity:0;transform:translateY(20px);transition:opacity .8s,transform .8s}.scroll-appear.active{opacity:1;transform:translateY(0)}.media-card{border:1px solid #ccc;border-radius:8px;padding:16px;max-width:400px;text-align:center;margin:20px auto;background-color:#f9f9f9}.media-card img{max-width:100%;border-radius:8px;cursor:pointer}.media-card-title{font-size:18px;font-weight:700;margin-bottom:12px}.media-card-description{font-size:14px;color:#666;margin-top:12px}</style><div class="media-card scroll-appear"><div class="media-card-title">《 メディア実績 》</div><a href="https://ecodesign2024.com/relief-1" target="_blank"><img src="https://static.wixstatic.com/media/89b48e_c66f605ff67e4d6bba3013241bf89257~mv2.png" alt="メディア実績"></a><div class="media-card-description">SNS、CM等、当店のメディア実績に関して</div></div><div class="media-card scroll-appear"><div class="media-card-title">《 コーディネート実績 》</div><a href="https://ecodesign2024.com/case#work" target="_blank"><img src="https://static.wixstatic.com/media/89b48e_80ea7f28b1db40eabf2c97a2220978b0~mv2.png" alt="コーディネート実績"></a><div class="media-card-description">コーディネート実例を載せています</div></div><script>document.addEventListener("DOMContentLoaded",()=>{const e=document.querySelectorAll(".scroll-appear"),t=()=>{e.forEach(e=>{((e,t=1.25)=>e.getBoundingClientRect().top<=(window.innerHeight||document.documentElement.clientHeight)/t)(e)&&e.classList.add("active")})};window.addEventListener("scroll",t),t()});</script>
+<div class="shop-links-container hidden"><div class="shop-title-container"><h2 class="shop-title">《 販売サイト一覧 》</h2><p class="shop-subtitle">他モールにて数多くの販売実績を誇っております</p></div><div class="shop-links"><a href="https://mercari-shops.com/shops/evkhihBFFNn5hukMS9s36H" target="_blank"><img src="https://static.wixstatic.com/media/89b48e_e25b9ec9775e4e5099b36958ecc5b233~mv2.jpg" alt="Mercari Shop"></a><a href="https://auctions.yahoo.co.jp/seller/6YZsHtMYECuJAYTSG6bhUrbtyFdit?user_type=c" target="_blank"><img src="https://static.wixstatic.com/media/89b48e_b7d2bd6691334c7ca6fac371ab98260b~mv2.jpg" alt="Yahoo Auctions"></a><a href="https://store.shopping.yahoo.co.jp/bello050401/" target="_blank"><img src="https://static.wixstatic.com/media/89b48e_4ca8c2024fbd4c4dba2a3f7d454c50ae~mv2.jpg" alt="Rakuma Shop"></a><a href="https://fril.jp/shop/f1a123617824769b8cf694844082e4ed" target="_blank"><img src="https://static.wixstatic.com/media/89b48e_fba41f8487bf42d283bd476605d86e38~mv2.jpg" alt="Yahoo Shopping"></a></div><p>※ 当公式ストアでは<br>最もお得な価格にてご案内しております。<br>お気軽にお値段をご相談ください。</p></div><style>.shop-links-container{text-align:center;border:1px solid #ccc;padding:20px;margin:40px auto;max-width:600px;background-color:#f9f9f9;opacity:0;transform:translateY(30px);transition:opacity .6s,transform .6s}.shop-links-container.visible{opacity:1;transform:translateY(0)}.shop-title-container{margin-bottom:10px}.shop-title{text-align:center;font-size:1.8rem;font-weight:700;margin:0}.shop-subtitle{text-align:center;font-size:14px;font-weight:400;margin-top:5px}.shop-links{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.shop-links a img{width:90%;height:auto;opacity:.7;transition:opacity .3s}.shop-links a img:hover{opacity:1}.shop-links-container p{font-size:14px;color:#555;line-height:1.8;word-break:break-word;margin-top:10px}</style><script>function onScrollFadeIn(){const n=document.querySelectorAll(".shop-links-container"),e=window.innerHeight;n.forEach(n=>{n.getBoundingClientRect().top<e-50&&n.classList.add("visible")})}window.addEventListener("scroll",onScrollFadeIn),document.addEventListener("DOMContentLoaded",onScrollFadeIn);</script>
+<div class="map-section"><h2 class="map-title">《 MAP 》</h2><div class="office-photo"><img src="https://static.wixstatic.com/media/89b48e_4be8e65e7e9a4933bcb66b922eda9f8b~mv2.jpeg" alt="事務所の写真" /></div><p class="map-address">
+359-0011 埼玉県所沢市南永井939-1
+</p><p class="map-description">
+〈見学、お引き取りについて〉<br>ECの通信販売を専門とした<br>撮影スタジオ / 倉庫となります。<br><br>
+ご希望の商品をお伝えの上、<br>公式LINEよりお問い合わせください。<br>※保管場所の関係上、対応できない場合もございます<br><br>※商品が決まっていない方は<br>当店よりご提案も可能です。<br>是非ご相談ください。
+</p><div class="google-map"><iframe
+title="Belloインテリアの地図" data-src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3235.3194869286244!2d139.52884237637247!3d35.81663632252289!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x6018c317e48a0ff1%3A0x275cef99f70a80a3!2zQmVsbG8g44Kk44Oz44OG44Oq44Ki!5e0!3m2!1sja!2sjp!4v1736258696000!5m2!1sja!2sjp"
+width="100%"
+height="300"
+style="border:0;"
+allowfullscreen=""
+loading="eager"
+referrerpolicy="no-referrer-when-downgrade"></iframe></div><p><a href="https://www.google.com/maps?cid=2836405309890265251" target="_blank" rel="noopener noreferrer">Googleマップ・口コミを見る →</a></p></div><style>.map-section{text-align:center;margin:40px auto;padding:20px;border:1px solid #ccc;max-width:800px;background-color:#f9f9f9}.map-title{font-size:1.8rem;font-weight:700;margin-bottom:20px}.office-photo img{width:70%;height:auto;border-radius:5px;margin:20px auto;display:block}.map-address{font-size:16px;font-weight:700;margin-bottom:10px}.map-description{font-size:14px;line-height:1.8;color:#555;margin-bottom:20px}.google-map iframe{border:none;border-radius:5px;margin-top:20px}</style>{block:if-Faq_If}
+<section class="top-faq bg-base" id="top-faq"><div class="l-wrapper wrapper03">{block:text-Faq_Title}
+<h2 class="ttl-main fadeUp">{text:Faq Title}</h2>{/block:text-Faq_Title}<div><dl class="top-faq__list">{block:text-Faq_Q1}
+<div class="top-faq__item faq-click fadeUp"><dt class="top-faq__q faq-click__q">{text:Faq Q1}</dt><dd class="top-faq__a faq-click__a">{text:Faq A1}</dd></div>{/block:text-Faq_Q1}
+{block:text-Faq_Q2}
+<div class="top-faq__item faq-click fadeUp"><dt class="top-faq__q faq-click__q">{text:Faq Q2}</dt><dd class="top-faq__a faq-click__a">{text:Faq A2}</dd></div>{/block:text-Faq_Q2}
+{block:text-Faq_Q3}
+<div class="top-faq__item faq-click fadeUp"><dt class="top-faq__q faq-click__q">{text:Faq Q3}</dt><dd class="top-faq__a faq-click__a">{text:Faq A3}</dd></div>{/block:text-Faq_Q3}
+{block:text-Faq_Q4}
+<div class="top-faq__item faq-click fadeUp"><dt class="top-faq__q faq-click__q">{text:Faq Q4}</dt><dd class="top-faq__a faq-click__a">{text:Faq A4}</dd></div>{/block:text-Faq_Q4}
+{block:text-Faq_Q5}
+<div class="top-faq__item faq-click fadeUp"><dt class="top-faq__q faq-click__q">{text:Faq Q5}</dt><dd class="top-faq__a faq-click__a">{text:Faq A5}</dd></div>{/block:text-Faq_Q5}</dl></div></div></section>{/block:if-Faq_If}
+{block:AppsBlog}
+<section class="top-blog" id="top-blog"><div class="l-wrapper wrapper04 is-sp-96"><h2 class="ttl-main has-paddingX fadeUp">{block:text-Menu_Blog_Text}{text:Menu Blog Text}{/block:text-Menu_Blog_Text}{block:not_text-Menu_Blog_Text}BLOG{/block:not_text-Menu_Blog_Text}</h2><div><div class="top-blog__list"></div></div><div class="btn-field01 fadeUp"><a href="{BlogPageURL}" class="btn01">{block:text-Blog_ButtonText}
+{text:Blog ButtonText}
+{/block:text-Blog_ButtonText}
+{block:not_text-Blog_ButtonText}
+MORE
+{/block:not_text-Blog_ButtonText}</a></div></div></section>{/block:AppsBlog}
+{block:if-Shop_If}
+<section class="top-shop" id="top-shop">{block:image-Shop_BgImage}
+<div class="top-shop__imgBox"><figure class="top-shop__img"><img src="{image:Shop BgImage}"></figure></div>{/block:image-Shop_BgImage}<div class="l-wrapper wrapper06"><div class="top-shop__whiteBox">{block:text-Shop_MainTitle}
+<h2 class="ttl-main fadeUp">{text:Shop MainTitle}</h2>{/block:text-Shop_MainTitle}
+{block:text-Shop_Title}
+<h3 class="ttl-txt01 fadeUp">{text:Shop Title}</h3>{/block:text-Shop_Title}<div class="top-shop__desc fadeUp">{block:text-Shop_Text}
+<p>{text:Shop Text}</p>{/block:text-Shop_Text}</div>{block:if-Shop_ButtonIf}
+{block:text-Shop_ButtonUrl}
+<div class="btn-field01 fadeUp"><a href="{text:Shop ButtonUrl}" class="btn01">{block:text-Shop_ButtonText}
+{text:Shop ButtonText}
+{/block:text-Shop_ButtonText}
+{block:not_text-Shop_ButtonText}
+MORE
+{/block:not_text-Shop_ButtonText}</a></div>{/block:text-Shop_ButtonUrl}
+{/block:if-Shop_ButtonIf}</div></div></section>{/block:if-Shop_If}
+{/block:NoIndexPageSearch}{/block:NoIndexPageCategory}
+
+{block:IndexPageSearch}
+<div class="page-main" id="search-page"><div class="l-sec06"><div class="l-wrapper wrapper04 is-sp-96"><h1 class="page-ttl01 has-mb has-paddingX">{lang:ItemSearchResult}</h1>{block:ShopPublic}
+{block:HasItems}
+<div><ul class="items-archive__list" id="search-items__list">{block:Items}
+<li class="items-archive__item" data-bello-stock="{ItemStock}"><a href="{ItemPageURL}" class="items-archive__link"><div class="items-archive__imgBox">{block:AppsItemLabel}
+{AppsItemLabelTag}
+{/block:AppsItemLabel}<figure class="items-archive__img"><img src="{block:ItemImage1}{ItemImage1URL-640}{/block:ItemImage1}{block:NoItemImage1}{ItemNoImageURL}{/block:NoItemImage1}" alt="{ItemTitle}" title="{ItemTitle}" class="image-resize" loading="lazy" decoding="async"></figure></div>
+
+<div class="items-archive__txtBox"><h3 class="items-archive__txt-ttl">{ItemTitle}</h3><div>{block:NoItemProperPrice}
+
+<p class="items-archive__txt-price itemPrice"><span class="items-archive__txt-price-main">{ItemPrice}</span></p>{/block:NoItemProperPrice}
+{block:HasItemProperPrice}
+
+<p class="items-archive__txt-price is-red"><span class="items-archive__txt-price-main">{ItemPrice}</span><span class="items-archive__txt-price-small">{ItemDiscountRate}</span></p>{/block:HasItemProperPrice}</div><div class="items-archive__tagBox">{block:ItemWatingForSale}
+<p class="items-archive__tag is-green comingSoon">COMING SOON</p>{/block:ItemWatingForSale}
+{block:ItemNowOnSale}{block:ItemPreOrder}
+<p class="items-archive__tag is-white preOrder">{lang:PreOrderItem}</p>{/block:ItemPreOrder}{block:ItemLottery}
+<p class="items-archive__tag is-yellow lottery">{lang:LotteryItem}</p>{/block:ItemLottery}{block:ItemTakeout}
+<p class="items-archive__tag is-yellow takeout">{lang:TakeoutItem}</p>{/block:ItemTakeout}{block:ItemCommunityLimited}
+<p class="items-archive__tag is-yellow community">{lang:CommunityLimitedItem}</p>{/block:ItemCommunityLimited}{/block:ItemNowOnSale}
+{block:NoItemStock}
+{block:ItemNowOnSale}
+<p class="items-archive__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemNowOnSale}
+{/block:NoItemStock}
+{block:ItemEndOfSale}
+<p class="items-archive__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemEndOfSale}</div></div></a></li>{/block:Items}</ul></div><div class="btn-field01 fadeUp"><div id="searchItemMoreButton" class="btn01 btn-moreitem is-bottom">{block:text-Items_ButtonText}
+{text:Items ButtonText}
+{/block:text-Items_ButtonText}
+{block:not_text-Items_ButtonText}
+MORE
+{/block:not_text-Items_ButtonText}</div></div><div id="loading" class="items-archive__loading" style="display: none;text-align: center;"><img src="https://basefile.akamaized.net/ISHdesign-theshop-jp/620877ae8bf21/loading.gif" style="padding: 20px 0;;"></div>{/block:HasItems}
+{block:NoItems}
+<p class="items-archive__noItemsMessage">{lang:NoItemsMessage}</p>{/block:NoItems}
+{/block:ShopPublic}
+{block:NotShopPublic}
+<p style="text-align: center;">{lang:NotShopPublicMessage}</p>{/block:NotShopPublic}</div></div></div>{/block:IndexPageSearch}
+
+{block:IndexPageCategory}
+<div class="page-main" id="category-page"><div class="l-wrapper wrapper04 is-sp-96"><div class="page-breadcrumb">
+{BreadcrumbTag}
+</div><div class="l-sec07"><h1 class="page-ttl01 has-mb has-paddingX">{IndexPageCategory}</h1><div>{block:HasAppsItemCategoryMediumCategories}
+
+<div class="items-cateList"><div class="items-cateList__line"><ul class="items-cateList__list">{block:AppsItemCategoryMediumCategories}
+
+<li class="items-cateList__item"><a href="{AppsItemCategoryMediumCategoryPageURL}" class="items-cateList__link">{AppsItemCategoryMediumCategoryName}</a></li>{/block:AppsItemCategoryMediumCategories}</ul></div></div>{/block:HasAppsItemCategoryMediumCategories}
+{block:HasAppsItemCategoryChildCategories}
+
+<div class="items-cateList"><div class="items-cateList__line"><ul class="items-cateList__list">{block:AppsItemCategoryChildCategories}
+
+<li class="items-cateList__item"><a href="{AppsItemCategoryChildCategoryPageURL}" class="items-cateList__link">{AppsItemCategoryChildCategoryName}</a></li>{/block:AppsItemCategoryChildCategories}</ul></div></div>{/block:HasAppsItemCategoryChildCategories}
+{block:ShopPublic}
+{block:HasItems}
+<div><ul class="items-archive__list" id="cate-items__list">{block:Items}
+<li class="items-archive__item" data-bello-stock="{ItemStock}"><a href="{ItemPageURL}" class="items-archive__link"><div class="items-archive__imgBox">{block:AppsItemLabel}
+{AppsItemLabelTag}
+{/block:AppsItemLabel}<figure class="items-archive__img"><img src="{block:ItemImage1}{ItemImage1URL-640}{/block:ItemImage1}{block:NoItemImage1}{ItemNoImageURL}{/block:NoItemImage1}" alt="{ItemTitle}" title="{ItemTitle}" class="image-resize" loading="lazy" decoding="async"></figure></div>
+
+<div class="items-archive__txtBox"><h3 class="items-archive__txt-ttl">{ItemTitle}</h3><div>{block:NoItemProperPrice}
+
+<p class="items-archive__txt-price itemPrice"><span class="items-archive__txt-price-main">{ItemPrice}</span></p>{/block:NoItemProperPrice}
+{block:HasItemProperPrice}
+
+<p class="items-archive__txt-price is-red"><span class="items-archive__txt-price-main">{ItemPrice}</span><span class="items-archive__txt-price-small">{ItemDiscountRate}</span></p>{/block:HasItemProperPrice}</div><div class="items-archive__tagBox">{block:ItemWatingForSale}
+<p class="items-archive__tag is-green comingSoon">COMING SOON</p>{/block:ItemWatingForSale}
+{block:ItemNowOnSale}{block:ItemPreOrder}
+<p class="items-archive__tag is-white preOrder">{lang:PreOrderItem}</p>{/block:ItemPreOrder}{block:ItemLottery}
+<p class="items-archive__tag is-yellow lottery">{lang:LotteryItem}</p>{/block:ItemLottery}{block:ItemTakeout}
+<p class="items-archive__tag is-yellow takeout">{lang:TakeoutItem}</p>{/block:ItemTakeout}{block:ItemCommunityLimited}
+<p class="items-archive__tag is-yellow community">{lang:CommunityLimitedItem}</p>{/block:ItemCommunityLimited}{/block:ItemNowOnSale}
+{block:NoItemStock}
+{block:ItemNowOnSale}
+<p class="items-archive__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemNowOnSale}
+{/block:NoItemStock}
+{block:ItemEndOfSale}
+<p class="items-archive__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemEndOfSale}</div></div></a></li>{/block:Items}</ul></div><div class="btn-field01 fadeUp"><div id="cateItemMoreButton" class="btn01 btn-moreitem is-bottom">{block:text-Items_ButtonText}
+{text:Items ButtonText}
+{/block:text-Items_ButtonText}
+{block:not_text-Items_ButtonText}
+MORE
+{/block:not_text-Items_ButtonText}</div></div><div id="loading" class="items-archive__loading" style="display: none;text-align: center;"><img src="https://basefile.akamaized.net/ISHdesign-theshop-jp/620877ae8bf21/loading.gif" style="padding: 20px 0;;"></div>{/block:HasItems}
+{block:NoItems}
+<p class="items-archive__noItemsMessage">{lang:NoItemsMessage}</p>{/block:NoItems}
+{/block:ShopPublic}
+{block:NotShopPublic}
+<p style="text-align: center;">{lang:NotShopPublicMessage}</p>{/block:NotShopPublic}</div></div></div></div>{/block:IndexPageCategory}
+{/block:IndexPage}
+
+
+
+{block:ItemPage}
+{block:NotShopPublic}
+<div class="page-main"><div class="l-sec06"><div class="l-wrapper wrapper01"><p style="text-align: center;">{lang:NotShopPublicMessage}</p></div></div></div>{/block:NotShopPublic}
+{block:ShopPublic}
+<div class="page-main" id="item-detail-page"><div class="l-sec08"><div class="item-detail"><div class="l-wrapper wrapper01"><div class="item-detail__wrapper page-wrapper is-itemDetail bg-white"><div class="item-detail__mainContents"><div class="item-detail__imgBox"><div class="item-detail__slider"><style>.item-detail__mainSlider{position:relative!important;overflow:hidden!important}.item-detail__mainSlider .slick-list,.item-detail__mainSlider__img,.item-detail__mainSlider__item,.item-detail__mainSlider__list{min-height:0!important;max-height:none!important;box-sizing:border-box!important}.item-detail__mainSlider__img{margin:0!important;padding:0!important;display:flex!important;align-items:center!important;justify-content:center!important;overflow:hidden!important;background:#fff!important}.item-detail__mainSlider__img img{display:block!important;width:100%!important;height:auto!important;max-height:100%!important;object-fit:contain!important}.item-detail__mainSlider .slick-list{overflow:hidden!important}.item-detail__mainSlider__arrow{position:absolute!important;left:0!important;right:0!important;z-index:999!important;pointer-events:none!important}.item-detail__mainSlider__arrow__icon{pointer-events:auto!important}.item-detail__mainSlider__arrow__icon.is-prev{position:
+absolute!important;left:10px!important}.item-detail__mainSlider__arrow__icon.is-next{position:absolute!important;right:10px!important}.item-detail__thumbnail{margin-top:12px!important;overflow-x:auto!important;overflow-y:hidden!important;-webkit-overflow-scrolling:touch!important}.item-detail__thumbnail__list{display:flex!important;flex-wrap:nowrap!important;gap:6px!important}.item-detail__thumbnail__item{flex:0 0 auto!important}</style><script>!function(){function e(e,t){e&&(e.style.setProperty("height",t+"px","important"),e.style.setProperty("min-height","0px","important"))}function t(){var t=document.querySelector(".item-detail__mainSlider");if(t){var i=function(e){return e.querySelector(".slick-current .item-detail__mainSlider__img img")||e.querySelector(".slick-active .item-detail__mainSlider__img img")||e.querySelector(".item-detail__mainSlider__img img")}(t);if(i){var r=t.getBoundingClientRect().width;if(r){var n=i.naturalWidth||1,o=i.naturalHeight||1,a=Math.round(r*o/n);(!a||a<120)&&(a=Math.round(.75*r)),a>.75*window.innerHeight&&(a=Math.round(.75*window.innerHeight)),e(t.querySelector(".item-detail__mainSlider__list"),a),e(t.querySelector(".slick-list"),a);for(var l=t.querySelectorAll(".item-detail__mainSlider__item, .item-detail__mainSlider__img"),m=0;m<l.length;m++)e(l[m],a);var d=t.querySelector(".item-detail__mainSlider__arrow");d&&(d.style.setProperty("top",Math.round(a/2)+"px","important"),
+d.style.setProperty("transform","translateY(-50%)","important"))}}}}document.addEventListener("DOMContentLoaded",function(){var e=document.querySelector(".item-detail__mainSlider");if(e){for(var i=e.querySelectorAll("img"),r=0;r<i.length;r++)i[r].addEventListener("load",t);t(),setTimeout(t,100),setTimeout(t,500),setTimeout(t,1e3),setTimeout(t,2e3),window.addEventListener("resize",t),document.addEventListener("click",function(e){(e.target.closest(".slider-itemDetail__arrow__icon")||e.target.closest(".slider-itemDetail__thumbnailItem"))&&(setTimeout(t,50),setTimeout(t,300))}),window.jQuery&&window.jQuery(".slider-itemDetail").on("init reInit afterChange setPosition",function(){setTimeout(t,50)})}})}();</script>
+<div class="item-detail__mainSlider">{block:AppsItemLabel}
+{AppsItemLabelTag}
+{/block:AppsItemLabel}<ul class="item-detail__mainSlider__list slider-itemDetail is-loading"><li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{block:ItemImage1}{ItemImage1URL-1280}{/block:ItemImage1}{block:NoItemImage1}{ItemNoImageURL}{/block:NoItemImage1}" data-zoom="{ItemImage1URL-origin}" alt="{ItemTitle}"></figure></li>{block:ItemImage2}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage2URL-1280}" data-zoom="{ItemImage2URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage2}
+{block:ItemImage3}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage3URL-1280}" data-zoom="{ItemImage3URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage3}
+{block:ItemImage4}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage4URL-1280}" data-zoom="{ItemImage4URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage4}
+{block:ItemImage5}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage5URL-1280}" data-zoom="{ItemImage5URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage5}
+{block:ItemImage6}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage6URL-1280}" data-zoom="{ItemImage6URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage6}
+{block:ItemImage7}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage7URL-1280}" data-zoom="{ItemImage7URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage7}
+{block:ItemImage8}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage8URL-1280}" data-zoom="{ItemImage8URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage8}
+{block:ItemImage9}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage9URL-1280}" data-zoom="{ItemImage9URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage9}
+{block:ItemImage10}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage10URL-1280}" data-zoom="{ItemImage10URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage10}
+{block:ItemImage11}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage11URL-1280}" data-zoom="{ItemImage11URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage11}
+{block:ItemImage12}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage12URL-1280}" data-zoom="{ItemImage12URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage12}
+{block:ItemImage13}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage13URL-1280}" data-zoom="{ItemImage13URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage13}
+{block:ItemImage14}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage14URL-1280}" data-zoom="{ItemImage14URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage14}
+{block:ItemImage15}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage15URL-1280}" data-zoom="{ItemImage15URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage15}
+{block:ItemImage16}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage16URL-1280}" data-zoom="{ItemImage16URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage16}
+{block:ItemImage17}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage17URL-1280}" data-zoom="{ItemImage17URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage17}
+{block:ItemImage18}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage18URL-1280}" data-zoom="{ItemImage18URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage18}
+{block:ItemImage19}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage19URL-1280}" data-zoom="{ItemImage19URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage19}
+{block:ItemImage20}<li class="item-detail__mainSlider__item"><figure class="item-detail__mainSlider__img"><img src="{ItemImage20URL-1280}" data-zoom="{ItemImage20URL-origin}" alt="{ItemTitle}"></figure></li>{/block:ItemImage20}</ul>{block:ItemImage2}
+<div class="item-detail__mainSlider__arrow"><div class="item-detail__mainSlider__arrow__icon slider-itemDetail__arrow__icon is-prev"></div><div class="item-detail__mainSlider__arrow__icon slider-itemDetail__arrow__icon is-next"></div></div>{/block:ItemImage2}</div><div class="item-detail__thumbnail"><ul class="item-detail__thumbnail__list slider-itemDetail__thumbnail"><li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{block:ItemImage1}{ItemImage1URL-146}{/block:ItemImage1}{block:NoItemImage1}{ItemNoImageURL}{/block:NoItemImage1}" alt="{ItemTitle}"></figure></li>{block:ItemImage2}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage2URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage2}
+{block:ItemImage3}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage3URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage3}
+{block:ItemImage4}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage4URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage4}
+{block:ItemImage5}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage5URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage5}
+{block:ItemImage6}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage6URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage6}
+{block:ItemImage7}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage7URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage7}
+{block:ItemImage8}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage8URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage8}
+{block:ItemImage9}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage9URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage9}
+{block:ItemImage10}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage10URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage10}
+{block:ItemImage11}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage11URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage11}
+{block:ItemImage12}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage12URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage12}
+{block:ItemImage13}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage13URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage13}
+{block:ItemImage14}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage14URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage14}
+{block:ItemImage15}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage15URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage15}
+{block:ItemImage16}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage16URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage16}
+{block:ItemImage17}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage17URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage17}
+{block:ItemImage18}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage18URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage18}
+{block:ItemImage19}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage19URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage19}
+{block:ItemImage20}<li class="item-detail__thumbnail__item slider-itemDetail__thumbnailItem"><figure class="item-detail__thumbnail__img"><img src="{ItemImage20URL-146}" alt="{ItemTitle}"></figure></li>{/block:ItemImage20}</ul></div></div></div><div class="item-detail__txtBox"><div class="item-detail__tagBox">{block:ItemWatingForSale}
+<p class="item-detail__tag is-green comingSoon">COMING SOON</p>{/block:ItemWatingForSale}
+{block:ItemNowOnSale}{block:ItemPreOrder}
+<p class="item-detail__tag is-white preOrder">{lang:PreOrderItem}</p>{/block:ItemPreOrder}{block:ItemLottery}
+<p class="item-detail__tag is-yellow lottery">{lang:LotteryItem}</p>{/block:ItemLottery}{block:ItemTakeout}
+<p class="item-detail__tag is-yellow takeout">{lang:TakeoutItem}</p>{/block:ItemTakeout}{block:ItemCommunityLimited}
+<p class="item-detail__tag is-yellow community">{lang:CommunityLimitedItem}</p>{/block:ItemCommunityLimited}{/block:ItemNowOnSale}
+{block:NoItemStock}
+{block:ItemNowOnSale}
+<p class="item-detail__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemNowOnSale}
+{/block:NoItemStock}
+{block:ItemEndOfSale}
+<p class="item-detail__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemEndOfSale}</div><div class="item-detail__ttlBox"><h1 class="item-detail__ttl">
+{ItemTitle}
+{block:AppsDownload}{block:ItemDigitalContent}({ItemDigitalContent}){/block:ItemDigitalContent}{/block:AppsDownload}</h1></div><div class="item-detail__priceBox"><div class="itemPrice {block:ItemNowOnSale}{block:NoItemStock}itemPrice_soldout{/block:NoItemStock}{/block:ItemNowOnSale} {block:ItemEndOfSale}itemPrice_soldout{/block:ItemEndOfSale}">{block:NoItemProperPrice}
+
+<p class="item-detail__price">{ItemPrice}</p>{/block:NoItemProperPrice}
+{block:HasItemProperPrice}
+
+<p class="item-detail__price has-arrow"><span class="item-detail__price__default discountPrice__default">{ItemProperPrice}</span></p><p class="item-detail__price is-discountPrice"><span class="item-detail__price__calcPrice discountPrice__calcPrice">{ItemPrice}</span><span class="item-detail__price__ratio discountPrice__ratio">{ItemDiscountRate}</span></p>{/block:HasItemProperPrice}
+
+<p class="bello-product-stock" data-stock="{ItemStock}">在庫 {ItemStock}点</p><div class="item-detail__ItemBnplBannerTag mt-2">
+{ItemBnplBannerTag}
+</div></div></div><div class="item-detail__form">{block:PurchaseForm}
+{ItemSelectTag}
+{block:AppsCommunity}
+{CommunityPurchaseButton}
+{/block:AppsCommunity}
+{AppsAgeVerificationWarningTag}
+{PurchaseButton}
+{/block:PurchaseForm}</div><div class="favorite-container"><button type="button" class="favorite-btn" data-id="{ItemId}" data-name="{ItemTitle}" data-image="{ItemImage1URL-1280}" aria-pressed="false">♡ お気に入りに追加</button></div><p class="bello-favorite-status" role="status" aria-live="polite"></p><div class="membership-button-wrapper"><a href="{IndexPageURL}#favorites" class="membership-button" aria-haspopup="dialog">お気に入りを見る →</a></div><div class="item-detail__meta">
+{ItemAttentionTag}
+</div><script>document.addEventListener("DOMContentLoaded",()=>{const e=document.querySelector(".item-detail__meta");e&&(e.innerHTML='\n<p style="font-size: 14px; line-height: 1.6; color: #555;">\n※お買い上げ合計金額1万円以上で送料無料となります。\n</p>\n<p style="font-size: 14px; line-height: 1.6; color: #555;">\n※ご購入から最短2-3営業日を目安に発送をさせていただきます。尚、土日祝日は休業日となります。\n</p>\n<p style="font-size: 14px; line-height: 1.6; color: #555;">\n※破損リスク等を考慮し、自社配送圏内の場合は自社配送に切り替えさせていただくことがございます。\n</p>\n<p style="font-size: 14px; line-height: 1.6; color: #555;">\n※梱包材や梱包箱は、リサイクル品を使用する場合がございます。\n</p>\n')});</script>
+<div class="item-detail__desc"><p>
+{ItemDetail}
+</p></div><style>.price-negotiation-container{font-size:18px;display:flex;flex-direction:column;justify-content:center;align-items:center;margin:24px auto;max-width:800px;width:100%;padding:30px;border:1px solid #ccc;background-color:#fff;border-radius:5px;box-shadow:0 2px 5px rgba(0,0,0,.1);text-align:center;position:relative;box-sizing:border-box}.price-negotiation-container h1{font-size:1.8rem;margin-bottom:20px}.price-negotiation-container p{font-size:1rem;line-height:1.8;margin-bottom:20px;padding:10px;background-color:#f5f5f5;width:100%;box-sizing:border-box;border-radius:5px}.action-box{display:flex;flex-direction:column;gap:15px;width:100%;max-width:400px}.email-box,.line-box{display:flex;align-items:center;justify-content:center;border-radius:10px;padding:15px 20px;cursor:pointer;text-decoration:none;font-weight:700;transition:background-color .3s;text-align:center;box-sizing:border-box}.line-box{border:2px solid #00c300;background-color:#f5fff5;color:#00c300}.line-box:hover{background-color:
+#e0ffe0}.email-box{border:2px solid #333;background-color:#f5f5f5;color:#333}.email-box:hover{background-color:#ddd}.action-box img{width:40px;height:40px;margin-right:15px}.action-box span{font-size:1.2rem}.action-box span strong{font-size:1.56rem;display:block;margin-bottom:5px}@media (max-width:768px){.price-negotiation-container{padding:20px}.price-negotiation-container h1{font-size:1.6rem}.price-negotiation-container p{font-size:1rem;line-height:1.6;padding:8px}.action-box{width:100%;gap:10px}.action-box img{width:30px;height:30px;margin-right:10px}.action-box span{font-size:1rem}.action-box span strong{font-size:1.3rem}}</style><div class="price-negotiation-container"><h1>《お値下げ交渉はこちら》</h1><p>
+・多くのお客様がお値段交渉をされます。<br>
+お気軽にご相談ください。<br>
+・他サイトよりお得にご案内いたします。<br>
+・複数人希望時は購入が早い方を優先させていただいております。
+</p><div class="action-box"><a href="https://lin.ee/iaxd5z4" target="_blank" class="line-box"><img src="https://static.wixstatic.com/media/89b48e_c11b74977a8848c2b1045fba687cea08~mv2.png" alt="LINEアイコン"><span><strong>LINEで交渉する</strong>
+※営業配信等は行っておらず<br>お客様とのやり取りのみに<br>使用しております
+</span></a><a href="https://thebase.com/inquiry/bellointeri-base-shop" target="_blank" class="email-box"><img src="https://cdn-icons-png.flaticon.com/512/732/732200.png" alt="メールアイコン"><span><strong>メールで交渉する</strong>
+※確認にお時間いただきます<br>LINEをご活用くださいませ
+</span></a></div></div><div class="item-detail__smallBtnBox"><div class="item-detail__sns"><ul class="shareButtons"><li>{SocialButtonTag}</li><li class="twitter"><a href="https://twitter.com/share" class="twitter-share-button" data-url="{ItemRedirectUrl}" data-lang="ja" data-hashtags="{TwitterDataHashtags}" data-via="{TwitterDataVia}">{lang:Tweet}</a></li><li class="facebook"><div class="fb-share-button" data-layout="button_count" data-size="small" data-mobile-iframe="true"><a class="fb-xfbml-parse-ignore" target="_blank" href="https://www.facebook.com/sharer/sharer.php?u&amp;src=sdkpreparse">シェア</a></div></li><li>{EmbedWidgetTag}</li></ul></div><div class="item-detail__reportAlert"><div id="reportBtn">
+{IllegalReportTag}
+</div></div></div></div></div>{block:AppsItemDetailCustom}
+<div class="item-detail__detailContents">
+{AdditionalItemDetail}
+{AdditionalItemDetailDefaultCssAndJs}
+</div>{/block:AppsItemDetailCustom}
+{block:AppsReview}
+<div class="item-detail__reviewContents">
+{AppsReviewTag}
+</div>{/block:AppsReview}</div></div>
+
+{block:HasRelatedItems}
+
+<div class="l-wrapper wrapper01 is-sp-100 bello-related-section"><div class="item-detail__relatedItemsContents"><div class="item-detail__relatedItemsContents__wrapper">{block:text-RelatedItems_Title}
+<h2 class="ttl-main is-small has-paddingX">{text:RelatedItems Title}</h2>{/block:text-RelatedItems_Title}<div class="items-archive related-items-fix-area"><ul class="items-archive__list bello-related-track">{block:RelatedItems}
+<li class="items-archive__item"><a href="{RelatedItemPageURL}" class="items-archive__link bello-image-link"><div class="items-archive__imgBox"><figure class="items-archive__img"><img src="{RelatedItemImageURL-640}" alt="{RelatedItemTitle}"></figure></div><div class="items-archive__txtBox"><h3 class="items-archive__txt-ttl">{RelatedItemTitle}</h3><p class="items-archive__txt-price"><span class="items-archive__txt-price-main">{RelatedItemPrice}</span></p></div></a></li>{/block:RelatedItems}</ul></div></div></div></div>
+
+{/block:HasRelatedItems}</div></div></div>{/block:ShopPublic}
+{/block:ItemPage}
+
+{block:MembershipPage}<main class="bello-favorites-page" aria-labelledby="favorites-page-title"><header class="bello-favorites-head"><div><h1 id="favorites-page-title">FAVORITES</h1><p>お気に入りの家具</p></div></header><div class="bello-favorites-body"><div class="bello-favorites-meta"><span data-fav-total>0 ITEMS</span><a href="{IndexPageURL}">商品を探す →</a></div><ul class="bello-favorites-grid" data-fav-list></ul><div class="bello-favorites-empty" data-fav-empty><span aria-hidden="true">♡</span><h3>気になる家具を、ここに。</h3><p>商品ページのハートを押すと<br>あとからゆっくり見比べられます。</p><a href="{IndexPageURL}">家具を探す →</a></div><p class="bello-favorites-note" data-fav-note hidden>価格は登録時の情報です。現在の価格・在庫は商品ページでご確認ください。<br>お気に入りは、このブラウザーに保存されます。</p><div class="bello-favorites-feedback"><span data-fav-status role="status" aria-live="polite"></span><button type="button" data-fav-undo hidden>元に戻す</button></div></div></main>{/block:MembershipPage}
+
+
+{block:AboutPage}<main id="about-page" class="bello-about"><section class="bello-about__hero"><div class="bello-about__hero-copy"><p class="bello-about__eyebrow">ABOUT BELLO</p><h1>{text:Bello About Title 1}<br>{text:Bello About Title 2}</h1><p class="bello-about__lead">BELLOは、イタリア語で「美しい」を意味する言葉。<br>その名に、家具が持つ美しさを見極め、<br>次の暮らしへつなぐ想いを込めました。</p><a class="bello-about__jump" href="#bello-our-care">私たちのこだわり <span aria-hidden="true">↓</span></a></div><figure class="bello-about__hero-photo"><img src="{block:image-Bello_About_Hero_Image}{image:Bello About Hero Image}{/block:image-Bello_About_Hero_Image}{block:not_image-Bello_About_Hero_Image}https://baseec-img-mng.akamaized.net/images/item/origin/319d9c41e905f0edabe4593b3c0892c2.jpg?imformat=generic&amp;q=85&amp;im=Resize,width=1000,type=normal{/block:not_image-Bello_About_Hero_Image}" alt="BELLOが取り扱うデザイナーズ家具" width="1000" height="1000" fetchpriority="high"><figcaption>デザインを、これからの暮らしへ。</figcaption></figure></section><section class="bello-about__selection bello-about-reveal" aria-labelledby="bello-selection-title"><div class="bello-about__section-copy"><p class="bello-about__eyebrow"><span>01</span> OUR SELECTION</p><h2 id="bello-selection-title">目利きで出会う、<br>長く愛せる家具。</h2><p>リユース市場を広く見渡し、一点ずつ目利きする。デザイナーが生み出したかたち、素材の魅力、使い心地。その家具ならではの価値を大切に、BELLOの視点で選んでいます。</p><p>ブランドの名前だけで選ぶのではなく、細部のつくりや現在の状態まで確かめること。次の暮らしでも心地よく使っていただける家具を届けたいと考えています。</p></div><div class="bello-about__pair"><figure><img src="https://baseec-img-mng.akamaized.net/images/item/origin/187bfb36cb22e121de859fb466f3056e.jpg?imformat=generic&amp;q=85&amp;im=Resize,width=640,type=normal" alt="BELLO取扱家具、鮮やかなピンクのligne roset TOLOZAN" width="640" height="640" loading="lazy" decoding="async"><figcaption>かたちに惹かれる。</figcaption></figure><figure><img src="https://baseec-img-mng.akamaized.net/images/item/origin/9d761c826ba1f2b379484233713a5700.jpg?imformat=generic&amp;q=85&amp;im=Resize,width=640,type=normal" alt="BELLO取扱家具、Carl Hansen &amp; Søn CH24の木のフレーム" width="640" height="640" loading="lazy" decoding="async"><figcaption>素材を、味わう。</figcaption></figure></div></section><section id="bello-our-care" class="bello-about__care" aria-labelledby="bello-care-title"><div class="bello-about__care-head bello-about-reveal"><p class="bello-about__eyebrow"><span>02</span> OUR MAINTENANCE</p><h2 id="bello-care-title">美しさは、<br>手をかけた細部に。</h2><p>選んだ家具を、そのまま次の方へ渡すのではなく。<br>素材と状態に向き合い、一点ずつ丁寧に仕上げます。</p></div><div class="bello-about__care-body"><ol class="bello-about__care-list"><li class="bello-about-reveal"><div class="bello-about__work-photo bello-about__work-photo--clean"><img src="{block:image-Bello_About_Care_Image}{image:Bello About Care Image}{/block:image-Bello_About_Care_Image}{block:not_image-Bello_About_Care_Image}https://basefile.akamaized.net/bellointeri-base-shop/6ab9459908f9b/bello-maintenance-triptych.jpg{/block:not_image-Bello_About_Care_Image}" alt="研磨・洗浄・縫い補修の作業イメージ" width="2172" height="724" loading="lazy" decoding="async"></div><span class="bello-about__step">01 / CLEANING</span><h3>素材に合わせて、洗う。</h3><p>汚れの種類や生地・素材の性質を見極め、薬剤師が洗剤を選定。素材に適した方法で、ファブリックから金属部分まで、細部に気を配ってクリーニングを行います。</p></li><li class="bello-about-reveal"><div class="bello-about__work-photo"><img src="{block:image-Bello_About_Care_Image}{image:Bello About Care Image}{/block:image-Bello_About_Care_Image}{block:not_image-Bello_About_Care_Image}https://basefile.akamaized.net/bellointeri-base-shop/6ab9459908f9b/bello-maintenance-triptych.jpg{/block:not_image-Bello_About_Care_Image}" alt="研磨・洗浄・縫い補修の作業イメージ" width="2172" height="724" loading="lazy" decoding="async"></div><span class="bello-about__step">02 / SANDING</span><h3>表面を整え、魅力を引き出す。</h3><p>木部の材質や塗膜、傷の状態を確認し、必要に応じて研磨。元のかたちや素材の風合いを大切にしながら、美しい表情へ整えます。</p></li><li class="bello-about-reveal"><div class="bello-about__work-photo bello-about__work-photo--finish"><img src="{block:image-Bello_About_Care_Image}{image:Bello About Care Image}{/block:image-Bello_About_Care_Image}{block:not_image-Bello_About_Care_Image}https://basefile.akamaized.net/bellointeri-base-shop/6ab9459908f9b/bello-maintenance-triptych.jpg{/block:not_image-Bello_About_Care_Image}" alt="研磨・洗浄・縫い補修の作業イメージ" width="2172" height="724" loading="lazy" decoding="async"></div><span class="bello-about__step">03 / FINISHING</span><h3>仕上がりまで、丁寧に。</h3><p>状態に応じた塗装や補修まで行い、細部を確認。見た目の美しさと、日々触れる家具としての心地よさを大切に仕上げています。</p></li></ol></div><p class="bello-about__note">メンテナンスの内容は、素材・塗装・コンディションに合わせて判断しています。作業画像は、実際の作業映像をもとに作成したイメージです。</p></section><section class="bello-about__storage bello-about-reveal" aria-labelledby="bello-storage-title"><div class="bello-about__storage-copy"><p class="bello-about__eyebrow"><span>03</span> CARE UNTIL DELIVERY</p><h2 id="bello-storage-title">仕上げた状態を、<br>お届けまで守る。</h2><p>メンテナンスを終えた家具は、仕上がりを確認し、梱包したうえで保管。清潔な状態を保つことまで大切にしています。</p><p>家具を選び、手をかけ、その状態を守る。お客様のもとへ届くまでが、私たちの仕事です。</p></div><div class="bello-about__storage-detail">{block:image-Bello_About_Storage_Image}<figure class="bello-about__storage-photo"><img src="{image:Bello About Storage Image}" alt="BELLOの梱包・保管" width="1000" height="750" loading="lazy" decoding="async"><figcaption>梱包・保管まで、丁寧に。</figcaption></figure>{/block:image-Bello_About_Storage_Image}<ol class="bello-about__packing"><li><span>01</span><div><h3>仕上がりを確認</h3><p>状態と細部を確かめる。</p></div></li><li><span>02</span><div><h3>丁寧に梱包</h3><p>整えた家具を保護する。</p></div></li><li><span>03</span><div><h3>清潔に保管</h3><p>次の暮らしへ届けるまで。</p></div></li></ol></div></section><section class="bello-about__contact bello-about-reveal" aria-labelledby="bello-about-contact-title"><p class="bello-about__eyebrow">FIND YOUR NEXT PIECE</p><h2 id="bello-about-contact-title">気になる家具のこと、<br>お気軽にご相談ください。</h2><p>サイズ、コンディション、配送のこと。<br>気になることは、ご購入前にお気軽にご相談ください。</p><div class="bello-about__actions"><a class="bello-about__line" href="https://lin.ee/iaxd5z4" target="_blank" rel="noopener noreferrer"><img src="https://bellointeri.base.shop/img/shop/lineicon.png" alt="" width="28" height="28">公式LINEで相談する <span aria-hidden="true">↗</span></a></div></section><details class="bello-about__company"><summary>会社情報 <span aria-hidden="true">＋</span></summary><div class="bello-about__company-info"></div></details><template id="bello-about-source">{ShopIntroduction}</template></main>{/block:AboutPage}
+
+
+{block:ContactPage}
+<div class="page-main" id="contact-page"><div class="l-sec05"><div class="l-wrapper wrapper03"><div class="page-wrapper bg-white"><h1 class="page-ttl01">{block:text-Menu_Contact_Text}{text:Menu Contact Text}{/block:text-Menu_Contact_Text}
+{block:not_text-Menu_Contact_Text}CONTACT{/block:not_text-Menu_Contact_Text}</h1><div class="contact-note" style="padding: 10px; background-color: #fff3cd; border: 1px solid #ffcc00; border-radius: 5px; margin-bottom: 15px; width: 70%; margin-left: auto; margin-right: auto;"><p style="color: #856404; font-weight: bold; text-align: center; font-size: 1rem; margin: 0;">
+⚠️ お値下げ交渉希望の方は必ず商品URLをご記載ください。
+</p></div>
+{PageContents}
+</div></div></div></div>{/block:ContactPage}
+
+{block:PrivacyPage}
+<div class="page-main" id="privacy-page"><div class="l-sec05"><div class="l-wrapper wrapper03"><div class="page-wrapper bg-white">
+{PageContents}
+</div></div></div></div>{/block:PrivacyPage}
+
+{block:LawPage}
+<div class="page-main" id="terms-page"><div class="l-sec05"><div class="l-wrapper wrapper03"><div class="page-wrapper bg-white">
+{PageContents}
+</div></div></div></div>{/block:LawPage}
+
+{block:BlogPage}
+<div class="page-main" id="blog-page"><div class="l-sec05"><div class="l-wrapper wrapper03"><div class="page-wrapper bg-white is-blog">
+{PageContents}
+</div></div></div></div>{/block:BlogPage}
+
+{block:CommunityPage}
+<div class="page-main" id="community-page"><div class="l-sec05"><div class="l-wrapper wrapper03"><div class="page-wrapper bg-white">
+{PageContents}
+</div></div></div></div>{/block:CommunityPage}
+
+{block:MembershipMyPage}
+<div class="page-main page-membership" id="membership-mypage-page"><div class="l-sec05"><div class="l-wrapper wrapper03"><div class="page-wrapper bg-white">
+{PageContents}
+</div></div></div></div>{/block:MembershipMyPage}
+
+{block:MembershipLoginPage}
+<div class="page-main page-membership" id="membership-login-page"><div class="l-sec05"><div class="l-wrapper wrapper03"><div class="page-wrapper bg-white">
+{PageContents}
+</div></div></div></div>{/block:MembershipLoginPage}
+
+<p class="bello-seo-note" style="max-width:800px;margin:40px auto 24px;padding:0 16px;font-size:11px;line-height:1.8;color:#999;text-align:center">Belloインテリアは、Cassina（カッシーナ）、Fritz Hansen（フリッツ・ハンセン）、<br>Vitra（ヴィトラ）、USM、ligne roset（リーンロゼ）などのデザイナーズ家具・中古ブランド家具・北欧家具を<br>一点ずつ洗浄・補修してお届けするリユース家具のオンラインショップです。<br>運営：株式会社BELLO（埼玉県所沢市南永井939-1）</p>
+
+<footer class="l-footer footer" id="mainFooter"><div class="footer__wrapper"><div class="footer-bottomBox"><div class="l-wrapper wrapper01"><div class="footer-suvNav"><ul class="footer-suvNav__list"><li class="footer-suvNav__item"><a href="{PrivacyPageURL}" class="footer-suvNav__link">{lang:Privacy}</a></li><li class="footer-suvNav__item"><a href="{LawPageURL}" class="footer-suvNav__link">{lang:Law}</a></li>{block:AppsMembership}
+<li class="footer-suvNav__item"><a href="https://thebase.com/pages/shop_membership_term" class="footer-suvNav__link">会員規約</a></li>{/block:AppsMembership}</ul></div><ul class="footer-sns__list">{block:ShopInstagramId}
+<li class="footer-sns__item"><a href="https://www.instagram.com/{ShopInstagramId}" target="_blank" class="footer-sns__link"><img src="/img/shop/igicon.png" alt="instagram"></a></li>{/block:ShopInstagramId}
+{block:ShopTwitterId}
+<li class="footer-sns__item"><a href="https://twitter.com/{ShopTwitterId}" target="_blank" class="footer-sns__link"><img src="/img/shop/twicon.png" alt="twitter"></a></li>{/block:ShopTwitterId}
+{block:ShopFacebookId}
+<li class="footer-sns__item"><a href="https://www.facebook.com/{ShopFacebookId}" target="_blank" class="footer-sns__link"><img src="/img/shop/fbicon.png" alt="facebook"></a></li>{/block:ShopFacebookId}
+{block:ShopYoutubeId}
+<li class="footer-sns__item"><a href="{ShopYoutubeId}" target="_blank" class="footer-sns__link"><img src="/img/shop/youtubeicon.png" alt="youtube"></a></li>{/block:ShopYoutubeId}
+{block:ShopTiktokId}
+<li class="footer-sns__item"><a href="https://tiktok.com/@{ShopTiktokId}" target="_blank" class="footer-sns__link"><img src="/img/shop/tiktokicon_black.png" alt="tiktok"></a></li>{/block:ShopTiktokId}
+{block:ShopLineId}
+<li class="footer-sns__item"><a href="https://line.me/R/ti/p/%40{ShopLineId}" target="_blank" class="footer-sns__link"><img src="/img/shop/lineicon.png" alt="line"></a></li>{/block:ShopLineId}
+{block:ShopNoteId}
+<li class="footer-sns__item"><a href="https://note.com/{ShopNoteId}" target="_blank" class="footer-sns__link"><img src="/img/shop/noteicon.png" alt="note"></a></li>{/block:ShopNoteId}
+{block:ShopAmebaId}
+<li class="footer-sns__item"><a href="https://ameblo.jp/{ShopAmebaId}" target="_blank" class="footer-sns__link"><img src="/img/shop/ambicon.png" alt="ameblo"></a></li>{/block:ShopAmebaId}</ul>
+
+{block:AppsI18n}
+<div class="footer-langage">
+{AppsI18nTag}
+</div>{/block:AppsI18n}<div class="footer-copyright"><p><small>
+&copy; {ShopName}
+</small></p></div></div></div></div></footer></div><input id="base_url" type="hidden" value="{ShopURL}"><div id="fb-root"></div><script>!function(e,t,n){var o,a=e.getElementsByTagName(t)[0];e.getElementById(n)||((o=e.createElement(t)).id=n,o.src="//connect.facebook.net/ja_JP/sdk.js#xfbml=1&appId=350947278320210&version=v2.0",a.parentNode.insertBefore(o,a))}(document,"script","facebook-jssdk");</script>
+<script>!function(t,e,r){var n,s=t.getElementsByTagName(e)[0],i=/^http:/.test(t.location)?"http":"https";t.getElementById(r)||((n=t.createElement(e)).id=r,n.src=i+"://platform.twitter.com/widgets.js",s.parentNode.insertBefore(n,s))}(document,"script","twitter-wjs");</script>
+{block:AppsBlog}
+
+{block:IndexPage}
+<script>$(function(){$.ajax({url:"{BlogFeedPageURL}",type:"GET",dataType:"xml"}).done(function(t){i=1,$("item",t).each(function(){var t=$("link",this).text(),l=$("title",this).text(),o=$("pubDate",this).text(),e=new Date(o).toISOString().split("T")[0].replaceAll("-","/"),p='<div class="top-blog__item fadeUp"><a href="'+t+'" class="top-blog__link"><div class="top-blog__imgBox"><figure class="top-blog__img"><img src="'+$("image",this).text()+'"></figure></div><div class="top-blog__txtBox"><p class="top-blog__txt-ttl">'+l+'</p><p class="top-blog__txt-date">'+e+"</p></div></a></div>";if($(".top-blog__list").append(p),i>=6)return!1;i++}),1==i&&$(".top-blog__list").append('<p class="top-blog__noPostsText">まだ記事がありません。</p>')})});</script>
+{/block:IndexPage}
+{block:BlogPage}
+<script>$(function(){$blogBtn_contents='<div class="blog-backBtn"><div class="btn-field01"><a href="{BlogPageURL}" class="btn01">一覧へもどる</a></div></div>',$(".main .blogDetail .social").append($blogBtn_contents)});</script>
+{/block:BlogPage}
+{/block:AppsBlog}
+
+<script src="https://basefile.akamaized.net/ISHdesign-theshop-jp/61e1264338edc/ofi.min.js"></script>
+<script src="https://basefile.akamaized.net/ISHdesign-theshop-jp/61e12651e1675/slick.min.js"></script>
+<script src="https://basefile.akamaized.net/ISHdesign-theshop-jp/6475d5a4d1a2c/index.js"></script>
+<nav class="bello-dock" aria-label="便利なメニュー"><a href="{IndexPageURL}" aria-label="ホーム"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 3l9 8M5 10v11h5v-7h4v7h5V10"/></svg><span>HOME</span></a><a href="{IndexPageURL}/#bello-categories" aria-label="カテゴリー" data-bello-categories aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h6v6H3zm12 0h6v6h-6zM3 15h6v6H3zm12 0h6v6h-6z"/></svg><span>CATEGORY</span></a><a href="{IndexPageURL}#favorites" aria-label="お気に入り一覧" data-bello-favorites aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.7a5.5 5.5 0 0 0-7.8 0L12 5.8l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.5a5.5 5.5 0 0 0 0-7.8Z"/></svg><span>FAVORITE</span><span data-fav-count hidden></span></a><a href="https://lin.ee/iaxd5z4" target="_blank" rel="noopener noreferrer" aria-label="公式LINEで相談"><img class="bello-line-icon" src="https://bellointeri.base.shop/img/shop/lineicon.png" alt="" width="40" height="40"><span>LINE相談</span></a></nav><a class="bello-line-floating" href="https://lin.ee/iaxd5z4" target="_blank" rel="noopener noreferrer" aria-label="公式LINEで相談"><img class="bello-line-icon" src="https://bellointeri.base.shop/img/shop/lineicon.png" alt="" width="40" height="40"><span>公式LINEで相談</span></a><dialog class="bello-category-dialog" aria-labelledby="bello-category-title"><header><h2 id="bello-category-title">カテゴリ一覧</h2><button type="button" aria-label="閉じる" onclick="this.closest('dialog').close()">×</button></header><div class="bello-category-dialog__list"></div></dialog><script>!function(){var e=document.querySelector(".bello-category-dialog");document.querySelectorAll("[data-bello-categories]").forEach(function(t){t.addEventListener("click",function(t){var o=document.querySelector(".header__snav #appsItemCategoryTag");if(o){if(t.preventDefault(),!e.querySelector("ul")){var l=o.cloneNode(!0);l.removeAttribute("id"),l.querySelectorAll("[id]").forEach(function(e){e.removeAttribute("id")}),e.querySelector(".bello-category-dialog__list").appendChild(l)}e.showModal()}})}),e.addEventListener("click",function(t){if(t.target===e){var o=e.getBoundingClientRect();(t.clientX<o.left||t.clientX>o.right||t.clientY<o.top||t.clientY>o.bottom)&&e.close()}})}();</script>
+<dialog class="bello-favorites-dialog" id="bello-favorites" aria-labelledby="favorites-title" data-shop="{IndexPageURL}"><header class="bello-favorites-head"><div><h2 id="favorites-title">FAVORITES</h2><p>お気に入りの家具</p></div><button type="button" data-fav-close aria-label="お気に入りを閉じる">×</button></header><div class="bello-favorites-body"><div class="bello-favorites-meta"><span data-fav-total>0 ITEMS</span><a href="{IndexPageURL}">商品を探す →</a></div><ul class="bello-favorites-grid" data-fav-list></ul><div class="bello-favorites-empty" data-fav-empty><span aria-hidden="true">♡</span><h3>気になる家具を、ここに。</h3><p>商品ページのハートを押すと<br>あとからゆっくり見比べられます。</p><a href="{IndexPageURL}">家具を探す →</a></div><p class="bello-favorites-note" data-fav-note hidden>価格は登録時の情報です。現在の価格・在庫は商品ページでご確認ください。<br>お気に入りは、このブラウザーに保存されます。</p><div class="bello-favorites-feedback"><span data-fav-status role="status" aria-live="polite"></span><button type="button" data-fav-undo hidden>元に戻す</button></div></div></dialog><script>!function(){if(document.body.classList.contains("bello-item")){var e=document.querySelector(".item-detail__ttl");if(e){var t=e.textContent.trim().split(/\s+\/\s+/);if(t.length>1){e.textContent=t.shift()+" ";var n=document.createElement("span");n.className="bello-product-subtitle",n.textContent=t.join(" / "),e.appendChild(n)}}var a=document.querySelector(".item-detail__mainContents"),l=document.querySelector(".item-detail__desc");if(a&&l){var o=document.createElement("section");o.className="bello-product-description";var r=document.createElement("h2");r.textContent="商品について",o.appendChild(r),o.appendChild(l),a.after(o)}var i=document.querySelector(".price-negotiation-container");o&&i&&o.after(i);var d=document.querySelector(".item-detail__relatedItemsContents .ttl-main");if(d&&d.textContent.includes("お問い合わせ")){var c=document.createElement("div");c.className="bello-product-contact",c.textContent=d.textContent.replace(/関連商品\s*$/,"").trim(),d.before(c),d.textContent="RELATED ITEMS"}
+var s=document.querySelector(".bello-related-track");if(s&&d){var m=document.createElement("div");m.className="bello-related-heading",d.before(m),m.appendChild(d);var u=document.createElement("div");u.className="bello-related-controls",m.appendChild(u),s.id="bello-related-items",s.tabIndex=0,s.setAttribute("aria-label","関連商品。左右にスクロールできます");var p=document.createElement("button"),b=document.createElement("button");function v(){p.disabled=s.scrollLeft<2,b.disabled=s.scrollLeft+s.clientWidth>=s.scrollWidth-2}[p,b].forEach(function(e,t){e.type="button",e.textContent=t?"→":"←",e.setAttribute("aria-label",t?"次の関連商品":"前の関連商品"),e.setAttribute("aria-controls",s.id),e.addEventListener("click",function(){s.scrollBy({left:(t?1:-1)*(s.firstElementChild.getBoundingClientRect().width+24),behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"})}),u.appendChild(e)}),s.addEventListener("scroll",v,{passive:!0}),window.addEventListener("resize",v),window.addEventListener("load",v),
+v()}}}();</script>
+<script>!function(){"use strict";var e=document.querySelector(".bello-favorites-dialog"),t=document.querySelector(".bello-favorites-page"),a=e.dataset.shop.replace(/\/$/,""),n=null,r=null,o=[e,t].filter(Boolean),i=Array.from(document.querySelectorAll(".favorite-btn"));function c(e,t,a){var n=document.createElement(e);return t&&(n.className=t),a&&(n.textContent=a),n}function d(e){o.forEach(function(t){t.querySelector("[data-fav-status]").textContent=e});var t=document.querySelector(".bello-favorite-status");t&&(t.textContent=e)}function l(){try{var e=JSON.parse(localStorage.getItem("favorites")||"{}");if(!e||Array.isArray(e)||"object"!=typeof e)throw Error();return e}catch(e){return d("お気に入りを読み込めません。ブラウザーの保存設定をご確認ください。"),null}}function u(e){try{return localStorage.setItem("favorites",JSON.stringify(e)),!0}catch(e){return d("保存できませんでした。ブラウザーの保存設定をご確認ください。"),!1}}function s(e){var t=e.dataset.id||"",a=location.pathname.match(/\/items\/(\d+)/);return/^\d+$/.test(t)?t:a?a[1]:""}function f(e){
+return Object.keys(e).filter(function(t){return/^\d+$/.test(t)&&e[t]&&"object"==typeof e[t]}).map(function(t){return Object.assign({},e[t],{id:t})}).sort(function(e,t){return(t.addedAt||0)-(e.addedAt||0)})}function v(){var e=l();if(e){!function(e){var t=f(e).length;i.forEach(function(t){var a=!!e[s(t)];t.classList.toggle("active",a),t.setAttribute("aria-pressed",String(a)),t.textContent=a?"♥ お気に入りに登録済み":"♡ お気に入りに追加"}),document.querySelectorAll("[data-fav-count]").forEach(function(e){e.textContent=t,e.hidden=!t})}(e);var t=f(e);o.forEach(function(e){var r=e.querySelector("[data-fav-list]");r.replaceChildren(),e.querySelector("[data-fav-total]").textContent=t.length+" ITEMS",e.querySelector("[data-fav-empty]").hidden=!!t.length,e.querySelector("[data-fav-note]").hidden=!t.length,e.querySelector("[data-fav-undo]").hidden=!n,t.forEach(function(t){var o=c("li","bello-favorite-card"),i=c("a","bello-favorite-card__link"),s=c("div","bello-favorite-card__visual"),f=String(t.name||"商品詳細を見る")
+;if(i.href=a+"/items/"+t.id,/^https:\/\//.test(t.image||"")){var p=c("img");p.src=t.image,p.alt=f,p.loading="lazy",p.addEventListener("error",function(){p.remove(),s.textContent="BELLO."},{once:!0}),s.appendChild(p)}else s.textContent="BELLO.";i.appendChild(s);var h=c("h3","",f.split(/[\/／]/)[0].trim()||f);h.title=f,i.appendChild(h);var m=String(t.price||""),g=/^[\d,¥￥\s]+$/.test(m)?Number(m.replace(/[^\d]/g,"")):0;g>0&&i.appendChild(c("p","bello-favorite-card__price","¥"+g.toLocaleString("ja-JP"))),i.appendChild(c("span","bello-favorite-card__detail","商品を見る →")),o.appendChild(i);var y=c("button","bello-favorite-card__remove","♥");y.type="button",y.setAttribute("aria-label",f+"をお気に入りから外す"),y.addEventListener("click",function(){var a=l();if(a){var r=a[t.id];delete a[t.id],u(a)&&(n={id:t.id,product:r},v(),d("お気に入りから外しました。"),e.querySelector("[data-fav-undo]").focus())}}),o.appendChild(y),r.appendChild(o)})})}}function p(t){t&&t.preventDefault(),r=t&&t.currentTarget,v(),
+e.open||e.showModal(),document.documentElement.classList.add("bello-dialog-open")}document.querySelectorAll('[data-bello-favorites],.membership-button,a[href$="/membership"]').forEach(function(e){e.addEventListener("click",p)});var h=document.querySelector(".header__body");if(h){var m=c("a","bello-header-favorite");m.href=a+"#favorites",m.setAttribute("aria-label","お気に入り一覧"),m.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.7a5.5 5.5 0 0 0-7.8 0L12 5.8l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.5a5.5 5.5 0 0 0 0-7.8Z"/></svg><span data-fav-count hidden></span>',h.appendChild(m),m.addEventListener("click",p)}i.forEach(function(e){e.type="button",e.addEventListener("click",function(){var t=l(),a=s(e);if(t)if(a){var n=!!t[a];if(n)delete t[a];else{var r=document.querySelector(".item-detail__price__calcPrice")||document.querySelector(".item-detail__price"),o=(r?r.textContent:"").match(/[¥￥]\s*([\d,]+)/);t[a]={id:a,name:e.dataset.name,image:e.dataset.image,
+price:o?o[1].replace(/,/g,""):"",tax_setting_id:e.dataset.tax,addedAt:Date.now()}}u(t)&&(v(),d(n?"お気に入りから外しました。":"お気に入りに追加しました。"))}else d("商品を確認できません。ページを再読み込みしてください。")})}),o.forEach(function(e){e.querySelector("[data-fav-undo]").addEventListener("click",function(){var e=l();e&&n&&(e[n.id]=n.product,u(e)&&(n=null,v(),d("お気に入りに戻しました。")))})}),e.querySelector("[data-fav-close]").addEventListener("click",function(){e.close()}),e.addEventListener("close",function(){document.documentElement.classList.remove("bello-dialog-open"),r&&r.focus()}),e.addEventListener("click",function(t){if(t.target===e){var a=e.getBoundingClientRect();(t.clientX<a.left||t.clientX>a.right||t.clientY<a.top||t.clientY>a.bottom)&&e.close()}}),window.addEventListener("storage",function(e){"favorites"===e.key&&v()}),window.addEventListener("pageshow",v),v(),"#favorites"===location.hash&&p()}();</script>
+<script>!function(){if("IntersectionObserver"in window&&!matchMedia("(prefers-reduced-motion: reduce)").matches){var e=new IntersectionObserver(r,{threshold:.08}),o=new IntersectionObserver(r,{root:document,rootMargin:"0px 0px 140px 0px"});document.querySelectorAll(".bello-category,.bello-brand").forEach(function(l,t){l.style.setProperty("--bello-delay",t%4*.09+"s"),(l.classList.contains("bello-brand")?o:e).observe(l)}),document.body.classList.add("bello-motion"),document.querySelectorAll("#top-items__list,#cate-items__list,#search-items__list,.bello-brand-grid").forEach(function(e){i(e),new MutationObserver(function(){i(e)}).observe(e,{childList:!0})}),document.querySelectorAll(".bello-line-quick,.line-container,.media-card,.shop-links-container,.map-section,.bello-section-heading,.bello-about-reveal").forEach(function(o){o.classList.add("bello-reveal"),e.observe(o)});var l=document.querySelector(".bello-feature");if(l){l.classList.add("bello-reveal")
+;var t=new IntersectionObserver(function(e){e.some(function(e){return e.isIntersecting&&e.intersectionRatio>=.35})&&(l.classList.add("bello-in-view"),t.disconnect())},{root:document,threshold:.35,rootMargin:"0px 0px -120px 0px"});function n(){t.observe(l)}scrollY>0?n():window.addEventListener("scroll",n,{once:!0,passive:!0})}document.querySelectorAll(".bello-gallery a,.line-link,.media-card a,.shop-links a").forEach(function(e){e.querySelector("img")&&e.classList.add("bello-image-link")}),document.addEventListener("focusin",function(o){var l=o.target.closest(".bello-reveal");l&&(l.classList.add("bello-in-view"),e.unobserve(l))})}function r(e,o){e.forEach(function(e){e.isIntersecting&&(e.target.classList.add("bello-in-view"),o.unobserve(e.target))})}function i(l){l.querySelectorAll(".items-archive__link:not(.bello-reveal),.bello-brand:not(.bello-reveal)").forEach(function(l,t){l.classList.add("bello-reveal","bello-image-link"),
+l.style.setProperty("--bello-delay",t%(innerWidth<769?2:4)*.055+"s"),(l.classList.contains("bello-brand")?o:e).observe(l)})}}();</script>
+<script>!function(){var e=document.querySelector("#top-items__list,#search-items__list,#cate-items__list");if(e&&e.children.length){var t="top-items__list"===e.id,r=document.createElement("div");r.className="bello-sortbar",r.innerHTML='<label class="bello-stock-first"><input type="checkbox"> 在庫あり優先</label><label>並び順 <select aria-label="商品の並び順"><option value="new">新着順</option><option value="low">価格の安い順</option><option value="high">価格の高い順</option><option value="discount">割引率が高い順</option></select></label><p role="status" aria-live="polite"></p>',e.before(r);var n=r.querySelector("select"),i=r.querySelector("input"),a=r.querySelector("p"),o=document.querySelector(".btn-moreitem"),l=null,c=!1,s=!1,d=24,u=t?"featured":"new",m=!1,f=[],p=!1;if(t){var h=new Option("おすすめ順","featured");n.prepend(h),n.value="featured"}n.addEventListener("change",w),i.addEventListener("change",w),o&&(o.setAttribute("role","button"),o.tabIndex=0,o.addEventListener("keydown",function(e){
+"Enter"!==e.key&&" "!==e.key||(e.preventDefault(),o.click())}),o.addEventListener("click",function(e){(c||s)&&(e.preventDefault(),e.stopImmediatePropagation(),c||(d+=24,g()))},!0)),t&&(e.classList.add("bello-initial-loading"),w())}function v(e){var t=document.getElementById(e);return t?t.textContent.trim():""}function b(e){t&&document.dispatchEvent(new CustomEvent("bello:catalog-progress",{detail:e}))}function y(e){var t=e.querySelector('a[href*="/items/"]'),r=t&&t.href.match(/\/items\/(\d+)/),n=e.querySelector(".items-archive__txt-price-main"),i=n&&n.textContent.replace(/,/g,"").match(/[\d]+(?:\.\d+)?/),a=e.querySelector(".items-archive__txt-price-small"),o=a&&parseFloat(a.textContent);return r?{node:e,id:Number(r[1]),price:i?Number(i[0]):1/0,discount:Math.abs(o)||0,sold:Array.from(e.querySelectorAll(".items-archive__tag")).some(function(e){return/SOLD\s*OUT/.test(e.textContent)})}:null}function g(){e.classList.add("bello-sorted-list");var t=document.createDocumentFragment()
+;f.slice(0,d).forEach(function(e){e.node.classList.add("active"),e.node.querySelectorAll("img").forEach(function(e){e.loading="lazy",e.decoding="async"}),t.appendChild(e.node)}),e.replaceChildren(t),o&&(o.style.display=d>=f.length?"none":""),a.textContent=f.length+"点",e.setAttribute("aria-busy","false");var r=e.parentElement.querySelector(".bello-section-heading h2");r&&(r.textContent="new"===u?"NEW ARRIVAL":"ALL ITEMS")}async function w(){if(!c){c=!0,n.disabled=!0,i.disabled=!0,e.setAttribute("aria-busy","true"),a.textContent="商品を並べ替えています…";try{if(l=await async function(){if(l)return l;var t=Number(v("max_page"))||1,r=v("LoadItemsPageURL"),n=v("LoadItemsPageURLParams"),i=Array.from(e.children).map(y).filter(Boolean);if(b(i),1===t)return i;if(!r)throw Error("missing pages");var o=new Array(t),c=2,s=1,d=new AbortController,u=setTimeout(function(){d.abort()},45e3);o[0]=i;try{await Promise.all(Array.from({length:Math.min(3,t-1)},async function(){for(;c<=t;){
+var e=c++,i=new URL(r+e+n,location.href);if(i.origin!==location.origin)throw Error("invalid source");var l=await fetch(i.href,{credentials:"same-origin",signal:d.signal});if(!l.ok)throw Error("load failed");var u=document.createElement("template");u.innerHTML=await l.text();var m=Array.from(u.content.querySelectorAll(".items-archive__item")).map(y).filter(Boolean);if(!m.length)throw Error("empty page");o[e-1]=m,b(m),a.textContent="商品を確認中 "+ ++s+" / "+t}}));var m=new Set;return o.flat().filter(function(e){return!m.has(e.id)&&(m.add(e.id),!0)})}catch(e){throw d.abort(),e}finally{clearTimeout(u)}}(),t&&!p&&(p=!0,document.dispatchEvent(new CustomEvent("bello:catalog",{detail:l}))),u=n.value,m=i.checked,f=l.slice().sort(function(e,t){return m&&e.sold!==t.sold?Number(e.sold)-Number(t.sold):("low"===u?e.price-t.price:"high"===u?t.price-e.price:"discount"===u?t.discount-e.discount:t.id-e.id)||t.id-e.id}),"featured"===u){var r=l.filter(function(e){return!e.sold}).sort(function(e,t){
+return t.price-e.price||t.id-e.id}).slice(0,8),o=new Set(r.map(function(e){return e.id}));f=r.concat(f.filter(function(e){return!o.has(e.id)}))}s=!0,d=24,g()}catch(t){n.value=u,i.checked=m,a.textContent="読み込めませんでした。並び順を選び直してお試しください。",e.setAttribute("aria-busy","false")}finally{e.classList.remove("bello-initial-loading"),c=!1,n.disabled=!1,i.disabled=!1}}}}();</script>
+<script>!function(){function t(t){t.querySelectorAll(".items-archive__txt-ttl").forEach(function(t){var e=t.dataset.belloTitle||t.textContent.trim(),o=e.split(/[\/／]/)[0].trim()||e;t.dataset.belloTitle=e,t.title=e,t.textContent!==o&&(t.textContent=o)})}document.querySelectorAll("#top-items__list,#search-items__list,#cate-items__list,.bello-related-track").forEach(function(e){t(e),new MutationObserver(function(e){e.forEach(function(e){e.addedNodes.forEach(function(e){1===e.nodeType&&t(e)})})}).observe(e,{childList:!0})})}();</script>
+<script>!function(){function e(e){return/^\d+$/.test(String(e).trim())?Number(e):null}function t(e,t){return e>=9?"在庫数:要問合せ":(t?"在庫 合計":"在庫 ")+e+"点"}var r=document.querySelector(".bello-product-stock");if(r){var o=e(r.dataset.stock),n=document.querySelector("#variationSelect");r.hidden=null===o,null!==o&&(r.textContent=t(o,n&&n.options.length>2))}var a=document.querySelector('.header__snav a[href*="/categories/6355700"]');if(a){var i=null,c=null,l=new Set,s=a.href,u="bello-chair-stock-v1",f=new IntersectionObserver(function(e){e.forEach(function(e){e.isIntersecting&&(f.unobserve(e.target),i||(i=async function(){try{var e=JSON.parse(sessionStorage.getItem(u)||"null");if(e&&e.root===s&&Date.now()-e.time<3e4)return c=e.data,void d()}catch(e){}var t=await v(s),r={},o=Number(t.querySelector("#max_page")?.textContent)||1,n=t.querySelector("#LoadItemsPageURL")?.textContent.trim(),a=t.querySelector("#LoadItemsPageURLParams")?.textContent.trim()||"";h(t,r);var i=2;await Promise.all(Array.from({
+length:Math.min(2,o-1)},async function(){for(;i<=o;){var e=i++;h(await v(n+e+a),r)}})),c=r;try{sessionStorage.setItem(u,JSON.stringify({root:s,time:Date.now(),data:r}))}catch(e){}d()}().catch(function(){i=null})))})},{rootMargin:"180px"});document.querySelectorAll("#top-items__list,#cate-items__list,#search-items__list,.bello-related-track,[data-fav-list]").forEach(function(e){S(e),new MutationObserver(function(){S(e)}).observe(e,{childList:!0})})}function m(e){var t=e.querySelector('a[href*="/items/"]'),r=t&&t.href.match(/\/items\/(\d+)/);return r&&r[1]}function d(){l.forEach(function(r){if(r.isConnected){var o=c&&c[m(r)];if(void 0!==o){var n=e(r.dataset.belloStock);!function(e,r){var o=e.querySelector(".items-archive__txt-price,.bello-favorite-card__price");if(o&&null!==r){var n=o.querySelector(".bello-chair-stock");n||((n=document.createElement("span")).className="bello-chair-stock",o.appendChild(n)),n.textContent=t(r,!1)}}(r,null===n?e(o):n)}}else l.delete(r)})}function h(t,r){
+t.querySelectorAll("#cate-items__list .items-archive__item,.items-archive__item[data-bello-stock]").forEach(function(t){var o=m(t),n=e(t.dataset.belloStock);o&&null!==n&&(r[o]=n)})}async function v(e){var t=new URL(e,location.href);if(t.origin!==location.origin)throw Error("source");var r,o,n=await fetch(t.href,{credentials:"same-origin",signal:AbortSignal.timeout(15e3)});if(!n.ok)throw Error("stock");return r=await n.text(),(o=document.createElement("template")).innerHTML=r,o.content}function S(e){e.querySelectorAll(".items-archive__item,.bello-favorite-card").forEach(function(e){l.add(e),c||f.observe(e)}),c&&d()}}();</script>
+<script>!function(){var e=document.querySelector(".slider-itemDetail");if(e){var t=e.closest(".item-detail__slider"),n=!1,i=!1,a=null,l=!1,o=null,r=0,c=Array.from(e.querySelectorAll("img")),s=matchMedia("(prefers-reduced-motion: reduce)"),d=document.createElement("div");d.className="bello-gallery-hint",d.innerHTML='<span aria-live="polite"></span>',e.closest(".item-detail__mainSlider").after(d);var u=d.querySelector("span"),m=document.createElement("dialog");m.className="bello-photo-dialog",m.setAttribute("aria-label","商品写真の拡大表示"),m.innerHTML='<header><span></span><button type="button" aria-label="拡大写真を閉じる">×</button></header><div class="bello-photo-stage"><img alt=""></div><nav><button type="button" aria-label="前の拡大写真">←</button><button type="button" aria-label="次の拡大写真">→</button></nav>',document.body.appendChild(m);var v=m.querySelector("img"),f=m.querySelector("header span"),p=m.querySelectorAll("nav button");p.forEach(function(e,t){e.addEventListener("click",function(){r+=t?1:-1,g()})}),
+m.querySelector("header button").addEventListener("click",function(){m.close()}),m.addEventListener("close",function(){document.documentElement.classList.remove("bello-dialog-open"),o&&o.focus()}),m.addEventListener("click",function(e){(e.target===m||e.target.classList.contains("bello-photo-stage"))&&m.close()}),m.addEventListener("keydown",function(e){"ArrowLeft"===e.key&&r>0&&(e.preventDefault(),r--,g()),"ArrowRight"===e.key&&r<c.length-1&&(e.preventDefault(),r++,g())}),e.querySelectorAll("figure").forEach(function(e){e.tabIndex=0,e.setAttribute("role","button"),e.setAttribute("aria-label","商品写真。1回押すと停止、もう一度押すと拡大"),e.addEventListener("pointerdown",function(e){a=[e.clientX,e.clientY],l=!1,i=!n,n||h()},{passive:!0}),e.addEventListener("pointermove",function(e){a&&Math.hypot(e.clientX-a[0],e.clientY-a[1])>10&&(l=!0)},{passive:!0}),e.addEventListener("pointercancel",function(){l=!0,a=null},{passive:!0}),e.addEventListener("click",function(t){t.preventDefault(),i||l?i=!1:n?w(e):h()}),
+e.addEventListener("keydown",function(t){"Enter"!==t.key&&" "!==t.key||(t.preventDefault(),n?w(e):h())})}),t.addEventListener("click",function(e){e.target.closest(".slider-itemDetail__arrow__icon,.slider-itemDetail__thumbnailItem")&&h()},!0),window.addEventListener("load",function(){window.jQuery&&window.jQuery(e).hasClass("slick-initialized")&&(window.jQuery(e).slick("slickSetOption",{autoplaySpeed:4500,pauseOnHover:!1,pauseOnFocus:!1},!1),n||s.matches||c.length<2?h():b("slickPlay")),y()}),(s.matches||c.length<2)&&(n=!0),y()}function b(t){window.jQuery&&window.jQuery(e).hasClass("slick-initialized")&&window.jQuery(e).slick(t)}function y(){u.textContent=n?"写真を押すと拡大":"写真を押すと停止・もう一度で拡大"}function h(){n=!0,b("slickPause"),y()}function g(){var e=c[r];v.src=e.dataset.zoom||e.currentSrc||e.src,v.alt=e.alt,f.textContent=r+1+" / "+c.length,p[0].disabled=0===r,p[1].disabled=r===c.length-1}function w(e){o=e;var t=e.querySelector("img");r=Math.max(0,c.indexOf(t)),g(),m.showModal(),
+document.documentElement.classList.add("bello-dialog-open")}}();</script>
+<script>!function(){var e,t=document.querySelector(".google-map iframe[data-src]");function n(){t.src=t.dataset.src,t.removeAttribute("data-src"),e&&e.disconnect()}t&&("IntersectionObserver"in window?(e=new IntersectionObserver(function(e){e.some(function(e){return e.isIntersecting})&&n()},{root:document,rootMargin:"1000px"})).observe(t.closest(".map-section")):n())}();</script>
+<script>!function(){var e=document.getElementById("bello-about-source");if(e){var t=document.createElement("div");t.innerHTML=e.innerHTML.replace(/<br\s*\/?\s*>/gi,"\n");var n=t.textContent.trim(),o=n.indexOf("株式会社BELLO");document.querySelector(".bello-about__company-info").textContent=o<0?n:n.slice(o)}}();</script>
+<script>!function(){var e=[{item:"/items/141832966",date:"2026-06-21",comment:"梱包の箱はボコボコしてたりウンチがついてたりしましたが商品はとても可愛かったです。中古市場での価格がバラバラで高いのか安いのか欲しがっていいのか購入を迷いましたが、やっぱり可愛かったので購入して良かったです。ありがとうございました。"},{item:"/items/144531920",date:"2026-07-15",comment:"記載の商品よりもかなり品質の悪い商品が届いてしまい、その後ご連絡させていただいても音沙汰なく、非常に困った状況になっています。購入プラットフォームの運営側から連絡を試みようと思っていますが、ご購入を検討している方はやめておいた方が良いと思います。",title:"Carl Hansen & Søn CH24",context:"2026年7月15日のレビューについて",response:"商品コンディションに不備があったため、購入者様とご連絡のうえ、返品・返金にて対応いたしました。ご迷惑をおかけしましたことを、心よりお詫び申し上げます。今後はご案内をより丁寧に行ってまいります。"}],t=document.getElementById("x_reviewAccordion");if(t){var r=document.createElement("style");r.textContent=".bello-review-response{margin-top:20px;text-align:left}.bello-review-response__label{margin:0 0 8px!important;font-size:11px!important;font-weight:500;color:#707070;line-height:1.6!important}.bello-review-response__text{margin:0!important}",document.head.appendChild(r),i(),"MutationObserver"in window&&new MutationObserver(i).observe(t,{childList:!0,
+subtree:!0})}function n(e){return(e||"").replace(/\s+/g,"")}function i(){t.querySelectorAll(".review01__listChild").forEach(function(t){var r=t.querySelector(".review01__imgWrap"),i=t.querySelector("time"),o=t.querySelector(".review01__comment");if(r&&i&&o){var a;try{a=new URL(r.getAttribute("href"),location.href).pathname}catch{return}var l=e.find(function(e){return a===e.item&&i.getAttribute("datetime")===e.date&&n(o.textContent)===n(e.comment)});if(l)if(l.response){if(t.querySelector(".bello-review-response"))return;t.querySelectorAll(".review01__comment,.review01__reply").forEach(function(e){e.hidden=!0,e.style.setProperty("display","none","important")}),t.setAttribute("data-bello-review-response","");var s=document.createElement("aside");s.className="bello-review-response",s.setAttribute("aria-label","ショップからの対応報告")
+;var c=t.querySelector(".review01__itemInfo .review01__iconImg"),m=c&&(c.classList.contains("ico--bad")?"悪い":c.classList.contains("ico--normal")?"普通":c.classList.contains("ico--good")?"良い":"");m&&(c.setAttribute("role","img"),c.setAttribute("aria-label","購入者の評価："+m)),[["label","ショップからの対応報告"],["text",l.response]].forEach(function(e){var t=document.createElement("p");t.className="bello-review-response__"+e[0]+("text"===e[0]?" review01__comment":""),t.textContent=e[1],s.appendChild(t)}),t.appendChild(s)}else t.hidden=!0,t.setAttribute("data-bello-review-hidden",""),t.style.setProperty("display","none","important")}})}}();</script>
+</body></html>{/block:NotLoadItemsPage}
+
+{block:LoadItemsPage}
+{block:Items}
+<li class="items-archive__item" data-bello-stock="{ItemStock}"><a href="{ItemPageURL}" class="items-archive__link"><div class="items-archive__imgBox">{block:AppsItemLabel}
+{AppsItemLabelTag}
+{/block:AppsItemLabel}<figure class="items-archive__img"><img src="{block:ItemImage1}{ItemImage1URL-640}{/block:ItemImage1}{block:NoItemImage1}{ItemNoImageURL}{/block:NoItemImage1}" alt="{ItemTitle}" title="{ItemTitle}" class="image-resize" loading="lazy" decoding="async"></figure></div>
+
+<div class="items-archive__txtBox"><h3 class="items-archive__txt-ttl">{ItemTitle}</h3><div>{block:NoItemProperPrice}
+
+<p class="items-archive__txt-price itemPrice"><span class="items-archive__txt-price-main">{ItemPrice}</span></p>{/block:NoItemProperPrice}
+{block:HasItemProperPrice}
+
+<p class="items-archive__txt-price is-red"><span class="items-archive__txt-price-main">{ItemPrice}</span><span class="items-archive__txt-price-small">{ItemDiscountRate}</span></p>{/block:HasItemProperPrice}</div><div class="items-archive__tagBox">{block:ItemWatingForSale}
+<p class="items-archive__tag is-green comingSoon">COMING SOON</p>{/block:ItemWatingForSale}
+{block:ItemNowOnSale}{block:ItemPreOrder}
+<p class="items-archive__tag is-white preOrder">{lang:PreOrderItem}</p>{/block:ItemPreOrder}{block:ItemLottery}
+<p class="items-archive__tag is-yellow lottery">{lang:LotteryItem}</p>{/block:ItemLottery}{block:ItemTakeout}
+<p class="items-archive__tag is-yellow takeout">{lang:TakeoutItem}</p>{/block:ItemTakeout}{block:ItemCommunityLimited}
+<p class="items-archive__tag is-yellow community">{lang:CommunityLimitedItem}</p>{/block:ItemCommunityLimited}{/block:ItemNowOnSale}
+{block:NoItemStock}
+{block:ItemNowOnSale}
+<p class="items-archive__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemNowOnSale}
+{/block:NoItemStock}
+{block:ItemEndOfSale}
+<p class="items-archive__tag is-gray comingSoon">SOLD OUT</p>{/block:ItemEndOfSale}</div></div></a></li>{/block:Items}
+{/block:LoadItemsPage}
