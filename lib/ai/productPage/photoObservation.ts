@@ -1,11 +1,12 @@
 import "server-only";
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
-import { createHash } from "node:crypto";
 import { cookies } from "next/headers";
 import { getUrl } from "aws-amplify/storage/server";
 import sharp from "sharp";
+import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+import { createPhotoObservationReuse } from "./photoObservationReuse";
 
 /** Only visible appearance belongs here; identity, material and condition need other evidence. */
 export function parsePhotoObservations(raw: string): string[] {
@@ -20,35 +21,35 @@ export function parsePhotoObservations(raw: string): string[] {
     .slice(0, 6);
 }
 
-const observationsByHash = new Map<string, string[]>();
-const pendingByHash = new Map<string, Promise<string[]>>();
 const MODEL_ID = "us.amazon.nova-pro-v1:0";
 const PROMPT_VERSION = "2026-09-29.2";
-const MAX_CACHE_ENTRIES = 100;
+const CACHE_FIELD = "photo-observation-v1";
 
-function remember(hash: string, observations: string[]): void {
-  observationsByHash.delete(hash);
-  observationsByHash.set(hash, observations);
-  if (observationsByHash.size > MAX_CACHE_ENTRIES) {
-    const oldest = observationsByHash.keys().next().value;
-    if (oldest) observationsByHash.delete(oldest);
-  }
-}
+const reuseObservation = createPhotoObservationReuse({
+  async read(cacheKey) {
+    const { data, errors } = await serverDataClient.models.ExternalResearchCache.get({ cacheKey }, inventoryAuthMode);
+    if (errors?.length || data?.field !== CACHE_FIELD || data.status !== "FOUND" || !data.value) return null;
+    const parsed = JSON.parse(data.value) as unknown;
+    if (!Array.isArray(parsed) || !parsed.every(value => typeof value === "string")) return null;
+    const safe = parsePhotoObservations(JSON.stringify({ observations: parsed }));
+    return safe.length === parsed.length ? safe : null;
+  },
+  async write(cacheKey, observations) {
+    const payload = {
+      cacheKey, field: CACHE_FIELD, value: JSON.stringify(observations),
+      status: "FOUND" as const, fetchedAt: new Date().toISOString(),
+    };
+    const { errors } = await serverDataClient.models.ExternalResearchCache.create(payload, inventoryAuthMode);
+    if (errors?.length) await serverDataClient.models.ExternalResearchCache.update(payload, inventoryAuthMode);
+  },
+}, callVision);
 
 /** Fail closed: a failed observation never becomes a product claim. */
 export async function observeProductPhoto(jpeg: Uint8Array): Promise<string[]> {
-  if (jpeg.byteLength === 0 || jpeg.byteLength > 5_000_000) return [];
-  const hash = `${MODEL_ID}|${PROMPT_VERSION}|${createHash("sha256").update(jpeg).digest("hex")}`;
-  const cached = observationsByHash.get(hash);
-  if (cached) return cached;
-  const pending = pendingByHash.get(hash);
-  if (pending) return pending;
-  const work = callVision(jpeg, hash);
-  pendingByHash.set(hash, work);
-  try { return await work; } finally { pendingByHash.delete(hash); }
+  return reuseObservation(jpeg, MODEL_ID, PROMPT_VERSION);
 }
 
-async function callVision(jpeg: Uint8Array, hash: string): Promise<string[]> {
+async function callVision(jpeg: Uint8Array): Promise<string[] | null> {
   const client = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION ?? process.env.AWS_REGION ?? "us-west-2" });
   try {
     const response = await client.send(new ConverseCommand({
@@ -60,13 +61,17 @@ async function callVision(jpeg: Uint8Array, hash: string): Promise<string[]> {
       inferenceConfig: { temperature: 0, maxTokens: 300 },
     }), { abortSignal: AbortSignal.timeout(20_000) });
     const raw = response.output?.message?.content?.find(part => "text" in part)?.text ?? "";
+    // A malformed or missing response is a failed observation, not a valid empty result.
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { observations?: unknown }).observations)) return null;
+      if ((parsed as { observations: unknown[] }).observations.length > 0 && parsePhotoObservations(raw).length === 0) return null;
+    } catch { return null; }
     const observations = parsePhotoObservations(raw);
-    remember(hash, observations);
     return observations;
   } catch (error) {
     console.warn("[photoObservation] observation unavailable", error instanceof Error ? error.name : "UnknownError");
-    remember(hash, []);
-    return [];
+    return null;
   } finally {
     client.destroy();
   }
