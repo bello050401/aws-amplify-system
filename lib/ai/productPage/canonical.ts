@@ -15,6 +15,8 @@ import { DEFAULT_LISTING_SHIPPING_METHOD, type ListingShippingMethod } from "@/l
 import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { researchProductIntroduction } from "./productResearch";
+import { resolveTopImage } from "@/lib/inventory/imageTypes";
+import { observeStoredProductPhoto } from "./photoObservation";
 import {
   buildConditionSection,
   buildProductDetailSection,
@@ -320,6 +322,10 @@ export async function generateCanonicalProductPage(
   // infer identity from a generated title or a visually similar product.
   const researchModel = customFieldText("modelNumber") ?? productContext?.details.modelNumber?.value ?? null;
   const productReferences = await researchProductIntroduction(brand, researchModel);
+  const topPhoto = resolveTopImage(item.images);
+  const photoObservations = topPhoto
+    ? await observeStoredProductPhoto(topPhoto.mediumKey ?? topPhoto.thumbnailKey ?? topPhoto.storageKey)
+    : [];
   const result = await generateProductPage({
     inventoryId: item.id,
     listingTitle: options.listingTitle?.trim() || undefined,
@@ -329,7 +335,7 @@ export async function generateCanonicalProductPage(
     depth,
     height,
     ruleSections,
-    extraFacts: { brand, brandReference: selectedBrand?.description ?? null, material: facts.material, verifiedProductFacts: productReferences },
+    extraFacts: { brand, brandReference: selectedBrand?.description ?? null, material: facts.material, verifiedProductFacts: productReferences, photoObservations },
     damageNotes: item.damageNotes ?? null,
     note: item.note ?? null,
     conditionRating: item.conditionRating ?? null,
