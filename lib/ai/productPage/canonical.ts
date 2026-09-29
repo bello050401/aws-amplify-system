@@ -129,6 +129,8 @@ export interface CanonicalGenerationResult extends ProductPageResult {
   archiveSize: number;
   /** 実写真から採用した外観観察の件数。 */
   photoObservationCount: number;
+  /** Operator-only evidence for checking whether Vision matched the visible product. */
+  photoObservationDetails: string[];
   /** 適用したACTIVEな改善指示。 */
   activeGuidance: GuidanceRule[];
   /**
@@ -366,6 +368,7 @@ export async function generateCanonicalProductPage(
     usedStyleProfileVersion: styleProfile?.version ?? null,
     archiveSize: archive.length,
     photoObservationCount: photoObservations.length,
+    photoObservationDetails: photoObservations,
     activeGuidance: guidance,
     baseLink,
     completionNotes,

@@ -119,6 +119,7 @@ export function ListingForm({
     styleProfileVersion: number | null;
     referencedBaseItemIds: string[];
     photoObservationCount: number;
+    photoObservationDetails: string[];
     completionNotes: string[];
     savedId: string | null;
     introSanitized: boolean;
@@ -238,6 +239,7 @@ export function ListingForm({
         styleProfileVersion: result.styleProfileVersion,
         referencedBaseItemIds: result.referencedBaseItemIds,
         photoObservationCount: result.photoObservationCount,
+        photoObservationDetails: result.photoObservationDetails,
         completionNotes: result.completionNotes,
         savedId: result.savedId,
         introSanitized: result.introSanitized,
@@ -435,6 +437,11 @@ export function ListingForm({
               {aiQuality.referencedBaseItemIds.length}件
             </p>
             <p>実写真から採用した外観情報: {aiQuality.photoObservationCount}件{aiQuality.photoObservationCount === 0 ? "（写真の内容は紹介文の根拠に使っていません）" : ""}</p>
+            {aiQuality.photoObservationDetails.length > 0 && (
+              <ul className="mt-1">
+                {aiQuality.photoObservationDetails.map((detail, i) => <li key={i}>・写真観察: {detail}</li>)}
+              </ul>
+            )}
             {aiQuality.introSanitized && (
               <p className="text-amber-700">「◎商品のご紹介」から根拠を確認できない文や掲載欄に合わない文を取り除きました。内容をご確認ください。</p>
             )}
