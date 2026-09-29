@@ -160,6 +160,20 @@ export function stripAmbiguousPartColorSentences(intro: string): { text: string;
   return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
 }
 
+/** A specific clear/lacquer coating needs an explicit product record, not an inference from polishing. */
+export function stripUnsupportedClearFinishSentences(intro: string, evidence: string): { text: string; removedSentences: string[] } {
+  if (/(?:艶消し|つや消し|マット)?クリア|透明(?:塗装|コーティング)|ラッカー仕上げ/.test(evidence)) {
+    return { text: intro, removedSentences: [] };
+  }
+  const removedSentences: string[] = [];
+  const kept = splitSentences(intro).filter((sentence) => {
+    if (!/(?:艶消し|つや消し|マット)?クリア|透明(?:塗装|コーティング)|ラッカー仕上げ/.test(sentence)) return true;
+    removedSentences.push(sentence.trim());
+    return false;
+  });
+  return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
+}
+
 /**
  * ── 一般的なECテンプレート表現の検出(指示書§7/§22) ────────────────
  *

@@ -34,6 +34,7 @@ import {
   stripDimensionSentences,
   stripInternalRatingSentences,
   stripAmbiguousPartColorSentences,
+  stripUnsupportedClearFinishSentences,
   MAX_GENERIC_PHRASES,
   MIN_INTRO_LENGTH_AFTER_STRIP,
 } from "../lib/ai/productPage/introValidator";
@@ -398,6 +399,10 @@ function testCategoryMismatchDetection() {
 }
 
 function main() {
+  const finishStripped = stripUnsupportedClearFinishSentences("木部分は研磨して艶消しクリアに仕上げました。\n\n背もたれは曲線です。", "木部分を研磨");
+  assertEqual(finishStripped.removedSentences, ["木部分は研磨して艶消しクリアに仕上げました。"], "研磨だけではクリア仕上げを主張しない");
+  assertTrue(finishStripped.text.includes("背もたれは曲線"), "別の外観文を保持");
+  assertEqual(stripUnsupportedClearFinishSentences("艶消しクリア仕上げです。", "艶消しクリア塗装の記録").removedSentences, [], "明示記録があれば保持");
   const colorStripped = stripAmbiguousPartColorSentences("背もたれと座面は黒い素材で覆われています。\n\n脚部は曲線を描きます。");
   assertEqual(colorStripped.removedSentences, ["背もたれと座面は黒い素材で覆われています。"], "複数部位へ一色を広げる文を除去");
   assertTrue(colorStripped.text.includes("脚部は曲線"), "独立した外観文を保持");

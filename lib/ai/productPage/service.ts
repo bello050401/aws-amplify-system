@@ -15,6 +15,7 @@ import {
   stripDimensionSentences,
   stripInternalRatingSentences,
   stripAmbiguousPartColorSentences,
+  stripUnsupportedClearFinishSentences,
   MAX_GENERIC_PHRASES,
   type CategoryMismatchViolation,
   type IntroConditionViolation,
@@ -508,6 +509,19 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         failureReason: "写真と部位の色の対応を確認できません。" };
     }
     sections = { ...sections, introduction: colorStripped.text };
+    introSanitized = true;
+  }
+  const clearFinishEvidence = [facts.publicNote, input.extraFacts?.material,
+    ...(input.extraFacts?.verifiedProductFacts?.map((entry) => entry.fact) ?? [])].filter(Boolean).join("\n");
+  const finishStripped = stripUnsupportedClearFinishSentences(sections.introduction ?? "", clearFinishEvidence);
+  if (finishStripped.removedSentences.length > 0) {
+    if (!isIntroStillUsable(finishStripped.text)) {
+      return { ...base, ok: false, sections, fullDescription: buildDescription(sections, input),
+        violations: [{ code: "UNSUPPORTED_FINISH_CLAIM", detail: "仕上げの記録にないクリア塗装の文を除くと紹介文が短すぎます。" }],
+        modelProvider: result!.providerId, modelName: result!.modelId,
+        failureReason: "仕上げについて確認できない記述が含まれています。" };
+    }
+    sections = { ...sections, introduction: finishStripped.text };
     introSanitized = true;
   }
 

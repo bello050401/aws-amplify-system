@@ -57,7 +57,8 @@ export type FactSafetyViolationCode =
   // 2026-09-09 追加指示: 「◎商品のご紹介」に傷・錆・汚れ等のコンディション
   // 説明が混入している(◎コンディションへ分離すべき情報)。
   | "INTRO_CONTAINS_CONDITION"
-  | "PHOTO_PART_COLOR_AMBIGUITY";
+  | "PHOTO_PART_COLOR_AMBIGUITY"
+  | "UNSUPPORTED_FINISH_CLAIM";
 
 export interface FactSafetyViolation {
   code: FactSafetyViolationCode;
