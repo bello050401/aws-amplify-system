@@ -127,6 +127,8 @@ export interface CanonicalGenerationResult extends ProductPageResult {
   usedStyleProfileVersion: number | null;
   /** 参照した過去BASE商品の総数(母集団の大きさ)。 */
   archiveSize: number;
+  /** 実写真から採用した外観観察の件数。 */
+  photoObservationCount: number;
   /** 適用したACTIVEな改善指示。 */
   activeGuidance: GuidanceRule[];
   /**
@@ -363,6 +365,7 @@ export async function generateCanonicalProductPage(
     inventoryName: item.name,
     usedStyleProfileVersion: styleProfile?.version ?? null,
     archiveSize: archive.length,
+    photoObservationCount: photoObservations.length,
     activeGuidance: guidance,
     baseLink,
     completionNotes,

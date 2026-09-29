@@ -118,6 +118,7 @@ export function ListingForm({
     missingFacts: string[];
     styleProfileVersion: number | null;
     referencedBaseItemIds: string[];
+    photoObservationCount: number;
     completionNotes: string[];
     savedId: string | null;
     introSanitized: boolean;
@@ -236,6 +237,7 @@ export function ListingForm({
         missingFacts: result.missingFacts,
         styleProfileVersion: result.styleProfileVersion,
         referencedBaseItemIds: result.referencedBaseItemIds,
+        photoObservationCount: result.photoObservationCount,
         completionNotes: result.completionNotes,
         savedId: result.savedId,
         introSanitized: result.introSanitized,
@@ -432,6 +434,7 @@ export function ListingForm({
               文体プロファイル: {aiQuality.styleProfileVersion != null ? `v${aiQuality.styleProfileVersion}` : "未設定"} ／ 参考にした過去BASE商品:{" "}
               {aiQuality.referencedBaseItemIds.length}件
             </p>
+            <p>実写真から採用した外観情報: {aiQuality.photoObservationCount}件{aiQuality.photoObservationCount === 0 ? "（写真の内容は紹介文の根拠に使っていません）" : ""}</p>
             {aiQuality.introSanitized && (
               <p className="text-amber-700">「◎商品のご紹介」に寸法が含まれていたため、該当の文を自動で取り除きました。</p>
             )}

@@ -84,6 +84,8 @@ export type GenerateListingCopyActionResult =
       styleProfileVersion: number | null;
       /** 文体の参考にした過去BASE商品のID(監査用)。 */
       referencedBaseItemIds: string[];
+      /** 実写真から採用できた外観観察の件数。0なら写真根拠は未使用。 */
+      photoObservationCount: number;
       /** 紹介文から寸法を含む文を機械的に除去したか。 */
       introSanitized: boolean;
       /**
@@ -199,6 +201,7 @@ export async function generateListingCopyAction(
       missingFacts: result.missingFacts,
       styleProfileVersion: result.usedStyleProfileVersion,
       referencedBaseItemIds: result.referencedBaseItemIds,
+      photoObservationCount: result.photoObservationCount,
       introSanitized: result.introSanitized ?? false,
       completionNotes: result.completionNotes,
       savedId: history.savedId,
