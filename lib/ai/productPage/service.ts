@@ -13,6 +13,7 @@ import {
   stripCategoryMismatchSentences,
   stripConditionSentences,
   stripDimensionSentences,
+  stripInternalRatingSentences,
   MAX_GENERIC_PHRASES,
   type CategoryMismatchViolation,
   type IntroConditionViolation,
@@ -483,6 +484,18 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
           "「◎商品のご紹介」から寸法/コンディション/カテゴリと矛盾する記述を取り除けませんでした。内容を見直してスタッフが確認のうえ再生成してください。",
       };
     }
+  }
+
+  const ratingStripped = stripInternalRatingSentences(sections.introduction ?? "");
+  if (ratingStripped.removedSentences.length > 0) {
+    if (!isIntroStillUsable(ratingStripped.text)) {
+      return { ...base, ok: false, sections, fullDescription: buildDescription(sections, input),
+        violations: [{ code: "INTERNAL_CONDITION_SCORE", detail: "社内評価を除くと紹介文が短すぎます。内容を確認してください。" }],
+        modelProvider: result!.providerId, modelName: result!.modelId,
+        failureReason: "紹介文に社内評価が含まれています。" };
+    }
+    sections = { ...sections, introduction: ratingStripped.text };
+    introSanitized = true;
   }
 
   const fullDescription = buildDescription(sections, input);

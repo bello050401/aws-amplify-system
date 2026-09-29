@@ -32,6 +32,7 @@ import {
   stripCategoryMismatchSentences,
   stripConditionSentences,
   stripDimensionSentences,
+  stripInternalRatingSentences,
   MAX_GENERIC_PHRASES,
   MIN_INTRO_LENGTH_AFTER_STRIP,
 } from "../lib/ai/productPage/introValidator";
@@ -396,6 +397,9 @@ function testCategoryMismatchDetection() {
 }
 
 function main() {
+  const ratingStripped = stripInternalRatingSentences("形の異なる部材の組み合わせが特徴です。\n\n4/5くらいのランクです。\n\n背もたれが曲線を描きます。");
+  assertEqual(ratingStripped.removedSentences, ["4/5くらいのランクです。"], "社内の5段階評価文のみ除去");
+  assertTrue(ratingStripped.text.includes("背もたれが曲線"), "評価以外の外観説明を保持");
   testGuidanceBlock();
   testProductPagePromptOrdering();
   testDetectsFixedFailureCase();

@@ -136,6 +136,17 @@ export function isIntroStillUsable(text: string): boolean {
   return text.trim().length >= MIN_INTRO_LENGTH_AFTER_STRIP;
 }
 
+/** 社内メモの5段階評価が紹介文へ転記された場合は、その文だけ除く。 */
+export function stripInternalRatingSentences(intro: string): { text: string; removedSentences: string[] } {
+  const removedSentences: string[] = [];
+  const kept = splitSentences(intro).filter((sentence) => {
+    if (!/\d(?:\.\d+)?\s*\/\s*5\s*(?:くらい|程度)?(?:の)?\s*(?:ランク|評価|状態)/.test(sentence)) return true;
+    removedSentences.push(sentence.trim());
+    return false;
+  });
+  return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
+}
+
 /**
  * ── 一般的なECテンプレート表現の検出(指示書§7/§22) ────────────────
  *
