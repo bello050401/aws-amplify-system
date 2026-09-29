@@ -436,7 +436,7 @@ export function ListingForm({
             </p>
             <p>実写真から採用した外観情報: {aiQuality.photoObservationCount}件{aiQuality.photoObservationCount === 0 ? "（写真の内容は紹介文の根拠に使っていません）" : ""}</p>
             {aiQuality.introSanitized && (
-              <p className="text-amber-700">「◎商品のご紹介」に寸法が含まれていたため、該当の文を自動で取り除きました。</p>
+              <p className="text-amber-700">「◎商品のご紹介」から根拠を確認できない文や掲載欄に合わない文を取り除きました。内容をご確認ください。</p>
             )}
             {aiQuality.completionNotes.length > 0 && (
               <ul className="mt-1">
