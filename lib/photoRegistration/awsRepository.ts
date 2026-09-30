@@ -330,20 +330,25 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
 
   async getListingSelectionState(listingId: string): Promise<{ selectionRevision: number; currentSelection: string[] }> {
     const { PK, skPrefix } = listingSelectionRowPrefix(listingId);
-    const [state, rows] = await Promise.all([
-      this.ddb.send(new GetCommand({ TableName: this.tableName, Key: listingSelectionStateKey(listingId) })),
-      this.ddb.send(
-        new QueryCommand({
-          TableName: this.tableName,
-          KeyConditionExpression: "PK = :pk AND begins_with(SK, :pfx)",
-          ExpressionAttributeValues: { ":pk": PK, ":pfx": skPrefix },
-        }),
-      ),
-    ]);
-    return {
-      selectionRevision: (state.Item?.selectionRevision as number | undefined) ?? 0,
-      currentSelection: (rows.Items ?? []).map((item) => item.photoAssetId as string),
-    };
+    const stateKey = listingSelectionStateKey(listingId);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // QueryとGetを並行すると、選択transactionを挟んで別の版の行を
+      // 読み合わせる可能性がある。前後の版が一致した場合だけ返す。
+      const before = await this.ddb.send(new GetCommand({ TableName: this.tableName, Key: stateKey, ConsistentRead: true }));
+      const rows = await this.ddb.send(new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :pfx)",
+        ExpressionAttributeValues: { ":pk": PK, ":pfx": skPrefix },
+        ConsistentRead: true,
+      }));
+      const after = await this.ddb.send(new GetCommand({ TableName: this.tableName, Key: stateKey, ConsistentRead: true }));
+      const beforeRevision = (before.Item?.selectionRevision as number | undefined) ?? 0;
+      const afterRevision = (after.Item?.selectionRevision as number | undefined) ?? 0;
+      if (beforeRevision === afterRevision) {
+        return { selectionRevision: afterRevision, currentSelection: (rows.Items ?? []).map((item) => item.photoAssetId as string) };
+      }
+    }
+    throw new ConditionViolationError("CONFLICT", "listing selection changed during read");
   }
 
   /**
@@ -772,30 +777,32 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
   async applyListingSelection(decision: Extract<ListingSelectionDecision, { kind: "REPLACE_SELECTION" }>): Promise<void> {
     const { PK, skPrefix } = listingSelectionRowPrefix(decision.listingId);
     const existingRows = await this.ddb.send(
-      new QueryCommand({ TableName: this.tableName, KeyConditionExpression: "PK = :pk AND begins_with(SK, :pfx)", ExpressionAttributeValues: { ":pk": PK, ":pfx": skPrefix } }),
+      new QueryCommand({ TableName: this.tableName, KeyConditionExpression: "PK = :pk AND begins_with(SK, :pfx)", ExpressionAttributeValues: { ":pk": PK, ":pfx": skPrefix }, ConsistentRead: true }),
     );
+    const existingBySk = new Map((existingRows.Items ?? []).map((item) => [item.SK as string, item]));
+    const desiredBySk = new Map(decision.rows.map((row) => {
+      const key = listingSelectionRowKey(decision.listingId, row.sequence, row.photoAssetId);
+      return [key.SK, { ...key, photoAssetId: row.photoAssetId, isPrimary: row.isPrimary }] as const;
+    }));
 
-    const transactItems: NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]["TransactItems"]> = [
-      {
-        Put: {
-          TableName: this.tableName,
-          Item: { ...listingSelectionStateKey(decision.listingId), selectionRevision: decision.nextSelectionRevision },
-          ConditionExpression: "attribute_not_exists(selectionRevision) OR selectionRevision = :readRevision",
-          ExpressionAttributeValues: { ":readRevision": decision.nextSelectionRevision - 1 },
-        },
-      },
-    ];
+    const transactItems: NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]["TransactItems"]> = [];
     for (const item of existingRows.Items ?? []) {
-      transactItems.push({ Delete: { TableName: this.tableName, Key: { PK: item.PK, SK: item.SK } } });
+      if (!desiredBySk.has(item.SK as string)) {
+        transactItems.push({ Delete: { TableName: this.tableName, Key: { PK: item.PK, SK: item.SK } } });
+      }
     }
-    for (const row of decision.rows) {
-      transactItems.push({
-        Put: {
-          TableName: this.tableName,
-          Item: { ...listingSelectionRowKey(decision.listingId, row.sequence, row.photoAssetId), photoAssetId: row.photoAssetId, isPrimary: row.isPrimary },
-        },
-      });
+    for (const [sk, item] of desiredBySk) {
+      const existing = existingBySk.get(sk);
+      if (!existing || existing.photoAssetId !== item.photoAssetId || existing.isPrimary !== item.isPrimary) {
+        transactItems.push({ Put: { TableName: this.tableName, Item: item } });
+      }
     }
+    const unchanged = transactItems.length === 0 && decision.refCountIncrements.length === 0 && decision.refCountDecrements.length === 0;
+    const revisionCondition = "attribute_not_exists(selectionRevision) OR selectionRevision = :readRevision";
+    const revisionValues = { ":readRevision": decision.nextSelectionRevision - 1 };
+    transactItems.unshift(unchanged
+      ? { ConditionCheck: { TableName: this.tableName, Key: listingSelectionStateKey(decision.listingId), ConditionExpression: revisionCondition, ExpressionAttributeValues: revisionValues } }
+      : { Put: { TableName: this.tableName, Item: { ...listingSelectionStateKey(decision.listingId), selectionRevision: decision.nextSelectionRevision }, ConditionExpression: revisionCondition, ExpressionAttributeValues: revisionValues } });
     for (const photoAssetId of decision.refCountIncrements) {
       transactItems.push(await this.selectionRefCountUpdate(photoAssetId, 1));
     }

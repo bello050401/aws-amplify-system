@@ -199,6 +199,7 @@ class FakeDynamoDB {
   readonly inventoryTableName: string;
   readonly table = new FakeTable();
   readonly inventoryTable = new FakeInventoryTable();
+  readonly transactions: NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]["TransactItems"]>[] = [];
 
   constructor(photoTableName: string, inventoryTableName: string) {
     this.photoTableName = photoTableName;
@@ -301,6 +302,7 @@ class FakeDynamoDB {
         CancellationReasons: reasons,
       });
     }
+    this.transactions.push(items);
     for (const ti of items) {
       if (ti.Put) {
         if (ti.Put.TableName === this.inventoryTableName) this.inventoryTable.put(ti.Put.Item as Item & { id: string });
@@ -784,6 +786,65 @@ test("削除×選択の競合: 選択を外した後は削除できる", async (
   expectOk(await env.service.setListingImageSelection({ listingId: "listing-2", photoAssetIds: [photoAssetId] }, "inv-unselect", { maxImages: 20 }, staffClaims()), "select");
   expectOk(await env.service.setListingImageSelection({ listingId: "listing-2", photoAssetIds: [] }, "inv-unselect", { maxImages: 20 }, staffClaims()), "unselect");
   expectOk(await env.service.deletePhotoAsset({ photoAssetId }, staffClaims()), "delete後");
+});
+
+test("撮影10枚の選択保持: 在庫画像を先頭に追加してもPhotoAsset選択行は削除・再作成しない", async () => {
+  const env = buildEnv();
+  const batchId = await createAndFillBatch(env, "s-selection-keep-ten", 10);
+  expectOk(await env.service.completePhotoBatch({ batchId, imageCountProcessed: 10, imageCountUploaded: 10 }, deviceClaims()), "finalize");
+  env.ddb.inventoryTable.put({ id: "inv-keep-ten" });
+  expectOk(await env.service.linkPhotoBatchToInventory({ batchId, inventoryId: "inv-keep-ten" }, staffClaims()), "link");
+  const ids = (await env.repository.getAssetsForBatch(batchId)).map((asset) => asset.id);
+  const listingId = "listing-keep-ten";
+  expectOk(await env.service.setListingImageSelection({ listingId, photoAssetIds: ids }, "inv-keep-ten", { maxImages: 20 }, staffClaims()), "initial select");
+  const revisionBefore = (await env.repository.getListingSelectionState(listingId)).selectionRevision;
+
+  // ListingDraft側はInventory画像を先頭に置くが、このActionへ渡すのは撮影画像IDだけ。
+  const draftImageRefs = [{ source: "INVENTORY" as const }, ...ids.map((photoAssetId) => ({ source: "PHOTO_ASSET" as const, photoAssetId }))];
+  const selectedPhotoAssetIds = draftImageRefs.flatMap((ref) => ref.source === "PHOTO_ASSET" ? [ref.photoAssetId] : []);
+  expectOk(await env.service.setListingImageSelection({ listingId, photoAssetIds: selectedPhotoAssetIds }, "inv-keep-ten", { maxImages: 20 }, staffClaims()), "same selection");
+
+  const transaction = env.ddb.transactions.at(-1)!;
+  assert.equal(transaction.filter((item) => item.Delete).length, 0, "同じ10枚ではDeleteItem権限を要しない");
+  assert.equal(transaction.filter((item) => item.Put).length, 0, "選択行を再作成しない");
+  assert.equal(transaction.filter((item) => item.Update).length, 0, "参照カウンタも増減しない");
+  assert.equal(transaction.filter((item) => item.ConditionCheck).length, 1, "版条件だけを確認する");
+  const state = await env.repository.getListingSelectionState(listingId);
+  assert.equal(state.selectionRevision, revisionBefore, "再保存は選択版も進めない");
+  assert.deepEqual(state.currentSelection, ids);
+  await assert.rejects(
+    () => env.repository.applyListingSelection({
+      kind: "REPLACE_SELECTION", listingId,
+      rows: ids.map((photoAssetId, sequence) => ({ photoAssetId, sequence, isPrimary: sequence === 0 })),
+      refCountIncrements: [], refCountDecrements: [],
+      nextSelectionRevision: revisionBefore,
+      conditions: [{ target: "stale selection revision", predicate: "selectionRevision = 0", violationError: "CONFLICT" }],
+    }),
+    (error: unknown) => error instanceof ConditionViolationError,
+    "同じ選択でも古い版からの操作は成功扱いにしない",
+  );
+});
+
+test("撮影画像の並び変更: 移動した行だけを削除・作成し同じキーへ二重操作しない", async () => {
+  const env = buildEnv();
+  const batchId = await createAndFillBatch(env, "s-selection-reorder", 3);
+  expectOk(await env.service.completePhotoBatch({ batchId, imageCountProcessed: 3, imageCountUploaded: 3 }, deviceClaims()), "finalize");
+  env.ddb.inventoryTable.put({ id: "inv-reorder" });
+  expectOk(await env.service.linkPhotoBatchToInventory({ batchId, inventoryId: "inv-reorder" }, staffClaims()), "link");
+  const ids = (await env.repository.getAssetsForBatch(batchId)).map((asset) => asset.id);
+  const listingId = "listing-reorder";
+  expectOk(await env.service.setListingImageSelection({ listingId, photoAssetIds: ids }, "inv-reorder", { maxImages: 20 }, staffClaims()), "initial select");
+  expectOk(await env.service.setListingImageSelection({ listingId, photoAssetIds: [ids[1], ids[0], ids[2]] }, "inv-reorder", { maxImages: 20 }, staffClaims()), "reorder");
+  const transaction = env.ddb.transactions.at(-1)!;
+  assert.equal(transaction.filter((item) => item.Delete).length, 2);
+  assert.equal(transaction.filter((item) => item.Put).length, 3, "状態行と移動した2行だけをPut");
+  assert.equal(transaction.filter((item) => item.Update).length, 0, "同じ画像なので参照数は不変");
+  const keys = transaction.flatMap((item) => {
+    const row = item.Put?.Item ?? item.Delete?.Key ?? item.Update?.Key;
+    return row ? [`${row.PK}/${row.SK}`] : [];
+  });
+  assert.equal(new Set(keys).size, keys.length, "同じ項目へのDeleteとPutを同一transactionで重複させない");
+  assert.deepEqual((await env.repository.getListingSelectionState(listingId)).currentSelection, [ids[1], ids[0], ids[2]]);
 });
 
 test("復元: ADMINのみ実行でき、統計 (expected/registered) が正しく戻る", async () => {

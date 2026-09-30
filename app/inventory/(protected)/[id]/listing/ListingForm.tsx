@@ -273,6 +273,7 @@ export function ListingForm({
       return;
     }
     setDraftBusy(true);
+    let draftPersisted = false;
     try {
       const result = await saveListingDraftAction(inventoryId, {
         title,
@@ -285,6 +286,7 @@ export function ListingForm({
         images: selectedImages,
       });
       setDraft(result);
+      draftPersisted = true;
       if (photoAssets.length > 0) {
         const photoAssetIds = selectedImages
           .filter((ref): ref is ListingImageRef & { photoAssetId: string } => ref.source === "PHOTO_ASSET" && !!ref.photoAssetId)
@@ -300,7 +302,8 @@ export function ListingForm({
       }
       setDraftSaved(true);
     } catch (err) {
-      setDraftError(err instanceof Error ? err.message : "下書きの保存に失敗しました。");
+      const message = err instanceof Error ? err.message : "予期しないエラーが発生しました。";
+      setDraftError(draftPersisted ? `下書きは保存されましたが、撮影画像の選択情報の更新に失敗しました: ${message}` : message);
     } finally {
       setDraftBusy(false);
     }

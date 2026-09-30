@@ -460,7 +460,14 @@ export async function setListingPhotoAssetSelectionAction(
   if (!service) return NOT_CONFIGURED;
   const claims = await getWebTrustedClaims();
   if (!claims) return AUTH_REQUIRED;
-  return mapPhotoResult(
-    await service.setListingImageSelection(input, inventoryId, { maxImages: MAX_LISTING_SELECTION_IMAGES }, claims),
-  );
+  try {
+    return mapPhotoResult(
+      await service.setListingImageSelection(input, inventoryId, { maxImages: MAX_LISTING_SELECTION_IMAGES }, claims),
+    );
+  } catch (error) {
+    // ListingDraft本体は先のActionで保存済み。選択transactionの失敗を
+    // Server Componentsの汎用エラーにせず、画面へ部分成功として返す。
+    console.error("[photoRegistration selection action]", error);
+    return { ok: false, code: "INTERNAL_ERROR", message: ERROR_LABELS.INTERNAL_ERROR };
+  }
 }
