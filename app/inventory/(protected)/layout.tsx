@@ -4,6 +4,7 @@ import { getInventorySessionStatus } from "@/lib/amplify/requireInventoryUser";
 import { InventoryNavRail } from "../InventoryNavRail";
 import { MobileBottomNav } from "../MobileBottomNav";
 import { UnsavedChangesProvider } from "../UnsavedChangesProvider";
+import { InventoryAuthTemporarilyUnavailable } from "./InventoryAuthTemporarilyUnavailable";
 
 // The root layout (app/layout.tsx) sets title: "特集ページ" for the
 // Feature system — there is only one <html>/<body> for the whole app, so
@@ -30,15 +31,7 @@ export const metadata: Metadata = {
 export default async function ProtectedInventoryLayout({ children }: { children: React.ReactNode }) {
   const status = await getInventorySessionStatus();
   if (status.kind === "temporarily-unavailable") {
-    return (
-      <div className="flex min-h-screen items-center justify-center px-6 text-center">
-        <div>
-          <h1 className="text-sm font-bold text-gray-900">認証サービスが一時的に混み合っています</h1>
-          <p className="mt-2 text-xs text-gray-600">しばらく待ってから、画面を再読み込みしてください。</p>
-          <a href="" className="mt-4 inline-block border border-gray-900 px-4 py-1.5 text-xs font-bold text-gray-900">再試行</a>
-        </div>
-      </div>
-    );
+    return <InventoryAuthTemporarilyUnavailable />;
   }
   if (status.kind !== "authorized") {
     redirect(status.kind === "signed-in-not-authorized" ? "/inventory/login?error=not_authorized" : "/inventory/login");

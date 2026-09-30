@@ -26,6 +26,8 @@ import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { appendReturnParam, buildBackToListHref } from "@/lib/inventory/listReturnParams";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { PhotoAssetProductGallery } from "./PhotoAssetProductGallery";
+import { InventoryAuthTemporarilyUnavailable } from "../InventoryAuthTemporarilyUnavailable";
+import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
 
 /** "60000" → "60,000円" — every price on this page (readable Japanese yen, not a bare number). */
 function formatYen(value: number | null): string {
@@ -115,12 +117,19 @@ export default async function InventoryDetailPage({
   // カテゴリー/保管場所だけを次の段へ残す —— この2つは item の
   // categoryId/locationId を渡して「無効化済みでも名前が出る」ように
   // する必要があり、item より先には投げられない。
-  const [item, statuses, fieldDefs, photoAssetsResult] = await Promise.all([
-    getInventoryDetail(params.id),
-    listStatuses(),
-    listCustomFieldDefinitions(),
-    listInventoryPhotoAssetsAction(params.id),
-  ]);
+  let initialRead;
+  try {
+    initialRead = await Promise.all([
+      getInventoryDetail(params.id),
+      listStatuses(),
+      listCustomFieldDefinitions(),
+      listInventoryPhotoAssetsAction(params.id),
+    ] as const);
+  } catch (error) {
+    if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
+    throw error;
+  }
+  const [item, statuses, fieldDefs, photoAssetsResult] = initialRead;
   if (!item) notFound();
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const normalPhotoAssets = photoAssets
@@ -131,10 +140,17 @@ export default async function InventoryDetailPage({
   // Same reasoning as the edit page: a deactivated category/location must
   // still resolve to its name here rather than falling back to "-", since
   // this record still legitimately references it.
-  const [categories, locations] = await Promise.all([
-    listCategories(item.categoryId),
-    listLocations(item.locationId),
-  ]);
+  let relatedRead;
+  try {
+    relatedRead = await Promise.all([
+      listCategories(item.categoryId),
+      listLocations(item.locationId),
+    ] as const);
+  } catch (error) {
+    if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
+    throw error;
+  }
+  const [categories, locations] = relatedRead;
 
   const category = item.categoryId ? categories.find((c) => c.id === item.categoryId) : undefined;
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;
