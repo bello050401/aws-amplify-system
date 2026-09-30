@@ -98,7 +98,10 @@ export function SettingsTabs({
   ] as const;
   type Tab = (typeof VALID_TABS)[number];
 
-  const initialTab = useSearchParams().get("tab");
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab");
+  const rawNextEngineResult = searchParams.get("ne_result");
+  const nextEngineResult = rawNextEngineResult === "success" || rawNextEngineResult === "failed" ? rawNextEngineResult : null;
   const isValidTab = (value: string | null): value is Tab => (VALID_TABS as readonly string[]).includes(value ?? "");
 
   const [tab, setTab] = useState<Tab>(isValidTab(initialTab) ? initialTab : "category");
@@ -212,7 +215,7 @@ export function SettingsTabs({
           </div>
         )}
         {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}
-        {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} privateTestEnabled={nextEnginePrivateTestEnabled} />}
+        {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} privateTestEnabled={nextEnginePrivateTestEnabled} callbackResult={nextEngineResult} />}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側
             (/inventory/listings/pricing-rules)へ移設した。ここに残す
             ロジック付きUIを二重に持たない(同じ設定を二箇所で編集できる

@@ -12,6 +12,7 @@ let exchanges = 0;
 let writes = 0;
 let readBack = false;
 let launchValid = true;
+const outcomes: Array<{ result: string; stage: string }> = [];
 const handlers = createNextEngineCallbackHandlers({
   origin: () => origin,
   isAdmin: async () => admin,
@@ -21,6 +22,7 @@ const handlers = createNextEngineCallbackHandlers({
   exchange: async () => { exchanges++; if (!launchValid) throw new Error("synthetic expired or replayed state"); return tokens; },
   save: async () => { writes++; readBack = true; },
   readBack: async () => readBack ? tokens : null,
+  report: (result, stage) => { outcomes.push({ result, stage }); },
 });
 const request = (method: "GET" | "POST", headerOrigin?: string) => new Request(callback, {
   method, headers: headerOrigin === undefined ? {} : { Origin: headerOrigin },
@@ -31,6 +33,7 @@ const secured = (response: Response, policy = "no-referrer") => {
   assert.equal(response.headers.get("x-frame-options"), "DENY");
   assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
   assert(!response.headers.get("location")?.includes("uid="));
+  assert(!response.headers.get("location")?.includes("state="));
 };
 
 async function main() {
@@ -52,7 +55,7 @@ async function main() {
     const response = await handlers.POST(request("POST", headerOrigin));
     secured(response);
     assert.equal(response.status, 303);
-    assert.equal(response.headers.get("location"), `${origin}/inventory/settings`);
+    assert.equal(response.headers.get("location"), `${origin}/inventory/settings?tab=nextEngine&ne_result=failed`);
   }
   assert.equal(exchanges, 0, "Missing, null or foreign Origin cannot consume state");
 
@@ -66,14 +69,16 @@ async function main() {
   const success = await handlers.POST(request("POST", origin));
   secured(success);
   assert.equal(success.status, 303);
-  assert.equal(success.headers.get("location"), `${origin}/inventory/settings`);
+  assert.equal(success.headers.get("location"), `${origin}/inventory/settings?tab=nextEngine&ne_result=success`);
   assert.equal(exchanges, 1);
   assert.equal(writes, 1);
+  assert(outcomes.some(row => row.result === "success" && row.stage === "completed"));
 
   launchValid = false;
   const expired = await handlers.POST(request("POST", origin));
   secured(expired);
   assert.equal(writes, 1, "Expired or replayed NE state must not save tokens");
+  assert(outcomes.some(row => row.result === "failed" && row.stage === "exchange"));
   launchValid = true;
 
   current = { ...config, credentialVersionId: "version-b" };
