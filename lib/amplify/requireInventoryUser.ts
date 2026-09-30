@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { fetchAuthSession } from "aws-amplify/auth/server";
 import { runWithAmplifyServerContext } from "./serverUtils";
+import { isCognitoRateLimitError } from "./cognitoTransientError";
 
 export type InventoryRole = "ADMIN" | "EDITOR" | "VIEWER";
 const INVENTORY_ROLES: InventoryRole[] = ["ADMIN", "EDITOR", "VIEWER"];
@@ -10,6 +11,7 @@ const INVENTORY_ROLES: InventoryRole[] = ["ADMIN", "EDITOR", "VIEWER"];
 export type InventorySessionStatus =
   | { kind: "authorized"; role: InventoryRole }
   | { kind: "signed-in-not-authorized" }
+  | { kind: "temporarily-unavailable" }
   | { kind: "signed-out" };
 
 /**
@@ -101,7 +103,8 @@ export const getInventorySessionStatus = requestCache(async function getInventor
         return role ? { kind: "authorized", role } : { kind: "signed-in-not-authorized" };
       },
     });
-  } catch {
+  } catch (error) {
+    if (isCognitoRateLimitError(error)) return { kind: "temporarily-unavailable" };
     return { kind: "signed-out" };
   }
 });
@@ -141,6 +144,11 @@ export const getCurrentInventoryUserEmail = requestCache(async function getCurre
 export async function requireInventoryUserOrRedirect(request: Request): Promise<NextResponse | null> {
   const status = await getInventorySessionStatus();
   if (status.kind === "authorized") return null;
+  if (status.kind === "temporarily-unavailable") {
+    return new NextResponse("認証サービスが一時的に混み合っています。しばらくして再試行してください。", {
+      status: 503,
+    });
+  }
 
   const url = new URL("/inventory/login", request.url);
   if (status.kind === "signed-in-not-authorized") url.searchParams.set("error", "not_authorized");
