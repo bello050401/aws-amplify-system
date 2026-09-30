@@ -38,6 +38,7 @@ interface SettingsTabsProps {
   /** 夜間統合指示書(2026-09-01) §4.2: 既存のBASE特集ページ連携設定の状態をそのまま表示する(新しい認証情報は作らない)。 */
   baseConnection: BaseConnectionState;
   nextEngineConnection: NextEngineConnectionState;
+  nextEngineDiagnosticEnabled: boolean;
   /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
   lineConnected: boolean;
   lineTokenSource: LineTokenSource;
@@ -61,6 +62,7 @@ export function SettingsTabs({
   zaicoTokenSource,
   baseConnection,
   nextEngineConnection,
+  nextEngineDiagnosticEnabled,
   lineConnected,
   lineTokenSource,
 }: SettingsTabsProps) {
@@ -210,7 +212,7 @@ export function SettingsTabs({
           </div>
         )}
         {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}
-        {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} />}
+        {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} diagnosticEnabled={nextEngineDiagnosticEnabled} />}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側
             (/inventory/listings/pricing-rules)へ移設した。ここに残す
             ロジック付きUIを二重に持たない(同じ設定を二箇所で編集できる
