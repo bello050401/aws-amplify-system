@@ -35,6 +35,12 @@ frontend:
         # This non-secret switch is enabled only on the staging branch; other
         # branches receive 0 and cannot send BASE private test writes.
         - echo "BASE_PRIVATE_TEST_WRITES_ENABLED=${BASE_PRIVATE_TEST_WRITES_ENABLED:-0}" >> .env.production
+        # IDs and HTTPS origin only. Never place Next Engine credentials or tokens in build artifacts.
+        - echo "NEXT_ENGINE_APP_SECRET_ID=${NEXT_ENGINE_APP_SECRET_ID:-}" >> .env.production
+        - echo "NEXT_ENGINE_TOKEN_SECRET_ID=${NEXT_ENGINE_TOKEN_SECRET_ID:-}" >> .env.production
+        - echo "NEXT_ENGINE_PUBLIC_ORIGIN=${NEXT_ENGINE_PUBLIC_ORIGIN:-}" >> .env.production
+        # Temporary staging-only probe. Absent by default; remove after synthetic IAM verification.
+        - echo "NEXT_ENGINE_DIAGNOSTIC_ENABLED=${NEXT_ENGINE_DIAGNOSTIC_ENABLED:-0}" >> .env.production
         # Temporary, non-secret photo-cache measurement. Exact staging app/branch,
         # explicit 48h-or-shorter UTC window, release A/B and UUID are also checked in code.
         - echo "PHOTO_CACHE_TELEMETRY_ENABLED=${PHOTO_CACHE_TELEMETRY_ENABLED:-0}" >> .env.production

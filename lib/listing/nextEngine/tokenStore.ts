@@ -1,58 +1,71 @@
+import "server-only";
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import type { NextEngineAppConfiguration } from "./appConfiguration";
 import { assertNextEngineServerRuntime } from "./serverBoundary";
+import { exactNextEngineSecretArn } from "./secretReference";
 
-type TokenPair = { accessToken: string; refreshToken: string };
+export type NextEngineTokenPair = { accessToken: string; refreshToken: string };
+type StoredTokens = NextEngineTokenPair & { credentialVersionId: string; companyNeId: string };
 type SecretClient = Pick<SecretsManagerClient, "send">;
+type Binding = Pick<NextEngineAppConfiguration, "credentialVersionId" | "expectedCompanyNeId">;
 
 const invalid = () => new Error("ネクストエンジンの接続情報を安全に確認できませんでした。");
 const configuredSecret = (env: Record<string, string | undefined>): string => {
-  const id = env.NEXT_ENGINE_TOKEN_SECRET_ID?.trim();
-  if (!id || /\s/.test(id)) throw new Error("ネクストエンジンの接続情報の保存先が未設定です。");
+  const id = exactNextEngineSecretArn(env.NEXT_ENGINE_TOKEN_SECRET_ID);
+  if (!id || id === env.NEXT_ENGINE_APP_SECRET_ID?.trim()) throw invalid();
   return id;
 };
-const validTokens = (value: unknown): value is TokenPair => {
-  if (!value || typeof value !== "object") return false;
+const validPair = (value: unknown): value is NextEngineTokenPair => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   return typeof row.accessToken === "string" && !!row.accessToken.trim() &&
     typeof row.refreshToken === "string" && !!row.refreshToken.trim();
 };
 
-/** Read only from a pre-provisioned server-side secret. Never serialize this result to a client. */
+/** A legacy or differently bound pair is disconnected, never usable. */
 export async function readNextEngineTokens(
+  binding: Binding,
   client: SecretClient = new SecretsManagerClient({ region: "us-west-2" }),
   env: Record<string, string | undefined> = {
     NEXT_ENGINE_TOKEN_SECRET_ID: process.env.NEXT_ENGINE_TOKEN_SECRET_ID,
+    NEXT_ENGINE_APP_SECRET_ID: process.env.NEXT_ENGINE_APP_SECRET_ID,
   },
-): Promise<TokenPair | null> {
+): Promise<NextEngineTokenPair | null> {
   assertNextEngineServerRuntime();
   try {
     const response = await client.send(new GetSecretValueCommand({ SecretId: configuredSecret(env) }));
     if (!response.SecretString) return null;
     const parsed: unknown = JSON.parse(response.SecretString);
-    if (parsed && typeof parsed === "object" && Object.keys(parsed).length === 0) return null;
-    if (!validTokens(parsed)) throw invalid();
-    return { accessToken: parsed.accessToken, refreshToken: parsed.refreshToken };
-  } catch {
-    throw invalid();
-  }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Object.keys(parsed).length === 0) return null;
+    if (!validPair(parsed)) throw invalid();
+    const stored = parsed as StoredTokens;
+    if (stored.credentialVersionId !== binding.credentialVersionId || stored.companyNeId !== binding.expectedCompanyNeId) return null;
+    if (Object.keys(stored).sort().join(",") !== "accessToken,companyNeId,credentialVersionId,refreshToken") throw invalid();
+    return { accessToken: stored.accessToken, refreshToken: stored.refreshToken };
+  } catch { throw invalid(); }
 }
 
-/** Write the complete rotated pair to an existing secret; no browser or log output. */
+/** Write the complete rotated pair to the exact pre-provisioned secret. */
 export async function saveNextEngineTokens(
-  tokens: TokenPair,
+  tokens: NextEngineTokenPair,
+  binding: Binding,
   client: SecretClient = new SecretsManagerClient({ region: "us-west-2" }),
   env: Record<string, string | undefined> = {
     NEXT_ENGINE_TOKEN_SECRET_ID: process.env.NEXT_ENGINE_TOKEN_SECRET_ID,
+    NEXT_ENGINE_APP_SECRET_ID: process.env.NEXT_ENGINE_APP_SECRET_ID,
   },
 ): Promise<void> {
   assertNextEngineServerRuntime();
-  if (!validTokens(tokens)) throw invalid();
+  if (!validPair(tokens) || !binding.credentialVersionId || !binding.expectedCompanyNeId) throw invalid();
   try {
     await client.send(new PutSecretValueCommand({
       SecretId: configuredSecret(env),
-      SecretString: JSON.stringify(tokens),
+      SecretString: JSON.stringify({
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        credentialVersionId: binding.credentialVersionId,
+        companyNeId: binding.expectedCompanyNeId,
+      }),
     }));
-  } catch {
-    throw new Error("ネクストエンジンの接続情報を保存できませんでした。");
-  }
+  } catch { throw new Error("ネクストエンジンの接続情報を保存できませんでした。"); }
 }

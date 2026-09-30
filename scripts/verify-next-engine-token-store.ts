@@ -2,35 +2,42 @@ import assert from "node:assert/strict";
 import { GetSecretValueCommand, PutSecretValueCommand, type SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { readNextEngineTokens, saveNextEngineTokens } from "../lib/listing/nextEngine/tokenStore";
 
-const env = { NEXT_ENGINE_TOKEN_SECRET_ID: "synthetic/preprovisioned" };
+const env = { NEXT_ENGINE_TOKEN_SECRET_ID: "arn:aws:secretsmanager:us-west-2:000000000000:secret:bello/next-engine-tokens-staging-z9Y8x7" };
+const binding = { credentialVersionId: "version-a", expectedCompanyNeId: "123456" };
 const tokens = { accessToken: "synthetic-access", refreshToken: "synthetic-refresh" };
-let saved: unknown = null;
+let stored = "{}";
 const client = { send: async (command: unknown) => {
   if (command instanceof GetSecretValueCommand) {
     assert.equal(command.input.SecretId, env.NEXT_ENGINE_TOKEN_SECRET_ID);
-    return { SecretString: JSON.stringify(tokens) };
+    return { SecretString: stored };
   }
   if (command instanceof PutSecretValueCommand) {
     assert.equal(command.input.SecretId, env.NEXT_ENGINE_TOKEN_SECRET_ID);
-    saved = JSON.parse(command.input.SecretString ?? "null");
+    stored = command.input.SecretString ?? "";
     return {};
   }
   throw new Error("unexpected command");
 } } as unknown as SecretsManagerClient;
 
 async function main() {
-  assert.deepEqual(await readNextEngineTokens(client, env), tokens);
-  await saveNextEngineTokens(tokens, client, env);
-  assert.deepEqual(saved, tokens);
-  const empty = { send: async () => ({ SecretString: "{}" }) } as unknown as SecretsManagerClient;
-  assert.equal(await readNextEngineTokens(empty, env), null);
-  await assert.rejects(readNextEngineTokens(client, {}), error => error instanceof Error && !error.message.includes("synthetic"));
-  await assert.rejects(saveNextEngineTokens(tokens, client, {}), error => error instanceof Error && !error.message.includes("synthetic"));
-  const malformed = { send: async () => ({ SecretString: JSON.stringify({ accessToken: "synthetic-access" }) }) } as unknown as SecretsManagerClient;
-  await assert.rejects(readNextEngineTokens(malformed, env));
-  const failed = { send: async () => { throw new Error("synthetic-secret-detail"); } } as unknown as SecretsManagerClient;
-  await assert.rejects(readNextEngineTokens(failed, env), error => error instanceof Error && !error.message.includes("synthetic-secret-detail"));
-  await assert.rejects(saveNextEngineTokens(tokens, failed, env), error => error instanceof Error && !error.message.includes("synthetic-secret-detail"));
-  console.log("Next Engine token store: scoped secret read/write, complete pair and redacted failures passed.");
+  assert.equal(await readNextEngineTokens(binding, client, env), null);
+  await saveNextEngineTokens(tokens, binding, client, env);
+  assert.deepEqual(JSON.parse(stored), { ...tokens, credentialVersionId: "version-a", companyNeId: "123456" });
+  assert.deepEqual(await readNextEngineTokens(binding, client, env), tokens);
+  assert.equal(await readNextEngineTokens({ ...binding, credentialVersionId: "version-b" }, client, env), null);
+  assert.equal(await readNextEngineTokens({ ...binding, expectedCompanyNeId: "999999" }, client, env), null);
+  stored = JSON.stringify(tokens);
+  assert.equal(await readNextEngineTokens(binding, client, env), null, "Legacy unbound pair must reconnect");
+  stored = "not-json";
+  await assert.rejects(readNextEngineTokens(binding, client, env));
+  await assert.rejects(readNextEngineTokens(binding, client, {}));
+  await assert.rejects(saveNextEngineTokens(tokens, binding, client, {}));
+  await assert.rejects(saveNextEngineTokens(tokens, binding, client, {
+    ...env, NEXT_ENGINE_APP_SECRET_ID: env.NEXT_ENGINE_TOKEN_SECRET_ID,
+  }), "Token writes cannot target the credentials secret");
+  const denied = { send: async () => { throw new Error("synthetic-secret-detail"); } } as unknown as SecretsManagerClient;
+  await assert.rejects(readNextEngineTokens(binding, denied, env), error => error instanceof Error && !error.message.includes("synthetic-secret-detail"));
+  await assert.rejects(saveNextEngineTokens(tokens, binding, denied, env), error => error instanceof Error && !error.message.includes("synthetic-secret-detail"));
+  console.log("Next Engine token store: bound pair, legacy rejection and redacted failures passed.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
