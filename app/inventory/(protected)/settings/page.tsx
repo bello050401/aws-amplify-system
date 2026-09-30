@@ -88,9 +88,6 @@ export default async function InventorySettingsPage() {
   const zaicoConnected = zaicoTokenSource !== "unconfigured";
   // 同じ理由でLINEもgetLineTokenSource()の結果から導出する(§51-52)。
   const lineConnected = lineTokenSource !== "unconfigured";
-  const nextEngineDiagnosticEnabled = role === "ADMIN"
-    && process.env.NEXT_ENGINE_DIAGNOSTIC_ENABLED === "1"
-    && process.env.NEXT_ENGINE_PUBLIC_ORIGIN === "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
 
   return (
     <div className="flex h-full flex-col">
@@ -108,7 +105,6 @@ export default async function InventorySettingsPage() {
           zaicoTokenSource={zaicoTokenSource}
           baseConnection={baseConnection}
           nextEngineConnection={nextEngineConnection}
-          nextEngineDiagnosticEnabled={nextEngineDiagnosticEnabled}
           lineConnected={lineConnected}
           lineTokenSource={lineTokenSource}
         />

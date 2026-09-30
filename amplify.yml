@@ -39,8 +39,6 @@ frontend:
         - echo "NEXT_ENGINE_APP_SECRET_ID=${NEXT_ENGINE_APP_SECRET_ID:-}" >> .env.production
         - echo "NEXT_ENGINE_TOKEN_SECRET_ID=${NEXT_ENGINE_TOKEN_SECRET_ID:-}" >> .env.production
         - echo "NEXT_ENGINE_PUBLIC_ORIGIN=${NEXT_ENGINE_PUBLIC_ORIGIN:-}" >> .env.production
-        # Temporary staging-only probe. Absent by default; remove after synthetic IAM verification.
-        - echo "NEXT_ENGINE_DIAGNOSTIC_ENABLED=${NEXT_ENGINE_DIAGNOSTIC_ENABLED:-0}" >> .env.production
         # Temporary, non-secret photo-cache measurement. Exact staging app/branch,
         # explicit 48h-or-shorter UTC window, release A/B and UUID are also checked in code.
         - echo "PHOTO_CACHE_TELEMETRY_ENABLED=${PHOTO_CACHE_TELEMETRY_ENABLED:-0}" >> .env.production
