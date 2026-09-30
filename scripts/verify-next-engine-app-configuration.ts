@@ -17,11 +17,15 @@ async function main() {
   assert.deepEqual(await getNextEngineAppConfiguration(client(valid), env), {
     clientId: "synthetic-id", clientSecret: "synthetic-secret", expectedCompanyNeId: "123456", credentialVersionId: "version-a",
   });
+  assert.deepEqual(await getNextEngineAppConfiguration(client({ ...valid, companyNeId: "tenant-BELLO" }), env), {
+    clientId: "synthetic-id", clientSecret: "synthetic-secret", expectedCompanyNeId: "tenant-BELLO", credentialVersionId: "version-a",
+  });
   await assert.rejects(getNextEngineAppConfiguration(client(valid), {
     ...env, NEXT_ENGINE_TOKEN_SECRET_ID: env.NEXT_ENGINE_APP_SECRET_ID,
   }), "App credentials and tokens must be separate secrets");
   for (const value of [
-    { ...valid, companyNeId: "BELLO" }, { ...valid, clientId: "bad id" },
+    { ...valid, companyNeId: "" }, { ...valid, companyNeId: "line\nbreak" },
+    { ...valid, clientId: "bad id" },
     { ...valid, clientSecret: "bad secret" }, { ...valid, extra: "unexpected" },
     { clientId: "synthetic-id" },
   ]) await assert.rejects(getNextEngineAppConfiguration(client(value), env), error =>

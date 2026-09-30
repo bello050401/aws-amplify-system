@@ -35,7 +35,8 @@ export async function getNextEngineAppConfiguration(
     const { clientId, clientSecret, companyNeId } = row;
     if (typeof clientId !== "string" || !clientId || /\s/.test(clientId) ||
         typeof clientSecret !== "string" || !clientSecret || /\s/.test(clientSecret) ||
-        typeof companyNeId !== "string" || !/^[0-9]+$/.test(companyNeId) ||
+        typeof companyNeId !== "string" || !companyNeId || companyNeId.length > 128 ||
+        /[\x00-\x1f\x7f\u2028\u2029]/.test(companyNeId) ||
         typeof response.VersionId !== "string" || !response.VersionId.trim()) throw invalid();
     return { clientId, clientSecret, expectedCompanyNeId: companyNeId, credentialVersionId: response.VersionId };
   } catch { throw invalid(); }
