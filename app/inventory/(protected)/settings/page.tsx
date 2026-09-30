@@ -105,6 +105,8 @@ export default async function InventorySettingsPage() {
           zaicoTokenSource={zaicoTokenSource}
           baseConnection={baseConnection}
           nextEngineConnection={nextEngineConnection}
+          nextEnginePrivateTestEnabled={process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED === "1" &&
+            process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
           lineConnected={lineConnected}
           lineTokenSource={lineTokenSource}
         />

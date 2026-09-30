@@ -1,6 +1,7 @@
 "use client";
 
 import type { NextEngineConnectionState } from "@/lib/listing/nextEngine/connectionState";
+import { NextEnginePrivateMasterTestPanel } from "./NextEnginePrivateMasterTestPanel";
 
 const labels: Record<NextEngineConnectionState, string> = {
   CONFIGURATION_REQUIRED: "アプリ認証情報の設定待ち",
@@ -9,13 +10,14 @@ const labels: Record<NextEngineConnectionState, string> = {
   CONNECTED: "接続済み",
 };
 
-export function NextEngineSettingsPanel({ state }: { state: NextEngineConnectionState }) {
+export function NextEngineSettingsPanel({ state, privateTestEnabled = false }: { state: NextEngineConnectionState; privateTestEnabled?: boolean }) {
   return (
     <section className="max-w-2xl space-y-3 rounded border border-gray-200 bg-white p-4 text-[13px] text-gray-700">
       <h2 className="font-bold text-gray-900">ネクストエンジン商品情報連携</h2>
       <p>接続状態: <strong>{labels[state]}</strong></p>
       <p>この連携はBELLOの商品情報をネクストエンジンの商品マスタへ渡すためのものです。商品画像やメルカリShopsでの公開は別途確認します。</p>
       <p className="text-amber-800">商品マスタ登録と非公開テスト商品の処理結果は、まだ確認できていません。</p>
+      {state === "CONNECTED" && privateTestEnabled && <NextEnginePrivateMasterTestPanel />}
     </section>
   );
 }
