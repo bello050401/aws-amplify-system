@@ -337,7 +337,7 @@ export function ListingForm({
         />
         <div className="mt-3 border border-gray-200 p-3 text-sm">
           <p className="font-semibold">ブランドロゴ（任意）</p>
-          <p className="mt-1 text-gray-600">商品編集画面で選んだブランドのロゴを、出品用トップ画像の右下に直接重ねます。余白は追加せず、元画像は変更しません。</p>
+          <p className="mt-1 text-gray-600">BELLOロゴを左上に、商品のブランドロゴがある場合は右下に重ねます。余白は追加せず、元画像は変更しません。</p>
           <button type="button" disabled={brandLogoBusy || selectedImages.length >= 20} className="mt-2 border border-gray-400 px-3 py-2 disabled:opacity-50"
             onClick={async () => {
               setBrandLogoBusy(true); setBrandLogoError(null);

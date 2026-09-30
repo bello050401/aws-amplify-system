@@ -22,6 +22,10 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: "2mb",
     },
+    // The listing Server Action reads the supplied BELLO INTERIOR mark from disk.
+    outputFileTracingIncludes: {
+      "/inventory/[id]/listing": ["./public/bello-interior-listing-logo.png"],
+    },
     // instrumentation.ts を有効にする。Next.js 14 では experimental 扱い。
     // 目的と出力内容は instrumentation.ts の冒頭コメントに書いてある
     // (SSRログがCloudWatchへ届いているかを確定させるための1行だけ)。

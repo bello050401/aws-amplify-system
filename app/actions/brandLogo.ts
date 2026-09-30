@@ -1,6 +1,8 @@
 "use server";
 
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { cookies } from "next/headers";
 import sharp from "sharp";
 import { getUrl, uploadData } from "aws-amplify/storage/server";
@@ -37,7 +39,6 @@ async function createBrandedImage(inventoryId: string): Promise<{ storageKey: st
   if (!item) throw new Error("商品が見つかりません。");
   const selectedName = typeof item.customFields?.belloBrand === "string" ? item.customFields.belloBrand : "";
   const brand = findBrandByName(selectedName);
-  if (!selectedName.trim()) throw new Error("商品編集画面でブランド名を選び、保存してください。");
 
   const photos = await listInventoryPhotoAssetsAction(inventoryId);
   if (!photos.ok) throw new Error("撮影画像を確認できませんでした。再試行してください。");
@@ -55,28 +56,33 @@ async function createBrandedImage(inventoryId: string): Promise<{ storageKey: st
     if (!top) throw new Error("トップ画像がありません。");
     photo = await ownImage(top.storageKey);
   }
-  let logo: Buffer;
-  try { logo = await ownImage(customLogoKey(selectedName)); }
-  catch (error) {
-    if (!(error instanceof MissingStoredImage)) throw new Error("保存済みロゴの確認に失敗しました。接続を確認して再試行してください。");
-    if (!brand?.logoUrl) throw new Error("登録済みロゴがありません。ロゴ画像をアップロードして保存してください。");
-    const logoUrl = new URL(brand.logoUrl);
-    if (logoUrl.protocol !== "https:" || !["img.tabroom.jp", "dopa.co.jp", "www.dopa.co.jp"].includes(logoUrl.hostname))
-      throw new Error("このロゴURLは利用できません。ロゴ画像をアップロードしてください。");
-    const logoKey = `inventory/brand-logos/${brand.id}.png`;
-    try { logo = await ownImage(logoKey); }
+  let productBrandLogo: Buffer | null = null;
+  if (selectedName.trim()) {
+    try { productBrandLogo = await ownImage(customLogoKey(selectedName)); }
     catch (error) {
-    if (!(error instanceof MissingStoredImage)) throw new Error("保存済みロゴを取得できませんでした。再試行してください。");
-    const response = await fetch(logoUrl, { redirect: "error", signal: AbortSignal.timeout(10000) });
-    const mime = (response.headers.get("content-type") ?? "").split(";")[0];
-    if (!response.ok || !["image/png", "image/jpeg", "image/webp"].includes(mime)) throw new Error("ブランドロゴを取得できませんでした。ロゴ画像をアップロードしてください。");
-    const source = await readLimitedImage(response, 2_000_000);
-    logo = await sharp(source).resize({ width: 600, height: 300, fit: "inside" }).png().toBuffer();
-    await saveImage(logoKey, logo, "image/png");
+      if (!(error instanceof MissingStoredImage)) throw new Error("保存済みロゴの確認に失敗しました。接続を確認して再試行してください。");
+      if (brand?.logoUrl) {
+        const logoUrl = new URL(brand.logoUrl);
+        if (logoUrl.protocol !== "https:" || !["img.tabroom.jp", "dopa.co.jp", "www.dopa.co.jp"].includes(logoUrl.hostname))
+          throw new Error("このロゴURLは利用できません。ロゴ画像をアップロードしてください。");
+        const logoKey = `inventory/brand-logos/${brand.id}.png`;
+        try { productBrandLogo = await ownImage(logoKey); }
+        catch (error) {
+          if (!(error instanceof MissingStoredImage)) throw new Error("保存済みロゴを取得できませんでした。再試行してください。");
+          const response = await fetch(logoUrl, { redirect: "error", signal: AbortSignal.timeout(10000) });
+          const mime = (response.headers.get("content-type") ?? "").split(";")[0];
+          if (!response.ok || !["image/png", "image/jpeg", "image/webp"].includes(mime)) throw new Error("ブランドロゴを取得できませんでした。ロゴ画像をアップロードしてください。");
+          const source = await readLimitedImage(response, 2_000_000);
+          productBrandLogo = await sharp(source).resize({ width: 600, height: 300, fit: "inside" }).png().toBuffer();
+          await saveImage(logoKey, productBrandLogo, "image/png");
+        }
+      }
     }
   }
 
-  const result = await renderBrandedImage(photo, logo);
+  // The supplied BELLO INTERIOR listing mark is independent of the item's product brand.
+  const belloLogo = await readFile(join(process.cwd(), "public", "bello-interior-listing-logo.png"));
+  const result = await renderBrandedImage(photo, { bello: belloLogo, productBrand: productBrandLogo });
   const storageKey = `inventory/listing-branded/${randomUUID()}.jpg`;
   await saveImage(storageKey, result, "image/jpeg");
   return { storageKey };
