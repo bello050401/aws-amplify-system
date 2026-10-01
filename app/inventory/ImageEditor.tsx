@@ -398,7 +398,7 @@ export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditor
               {slots.length > 1 ? `（全${slots.length}枚）` : ""}
             </p>
             <div className="flex shrink-0 items-center gap-2">
-              {variant === "normal" && displaySlot.id !== topSlot?.id && (
+              {variant === "normal" && !displaySlot.isPrimary && (
                 <button type="button" onClick={() => setTopImage(displaySlot.id)} className="text-[11px] text-gray-500 hover:text-gray-900">
                   トップ画像に設定
                 </button>

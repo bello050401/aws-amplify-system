@@ -26,6 +26,7 @@ import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { appendReturnParam, buildBackToListHref } from "@/lib/inventory/listReturnParams";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { PhotoAssetProductGallery } from "./PhotoAssetProductGallery";
+import { resolveProductGallerySource } from "@/lib/photoRegistration/gallerySelection";
 import { InventoryAuthTemporarilyUnavailable } from "../InventoryAuthTemporarilyUnavailable";
 import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
 
@@ -256,6 +257,7 @@ export default async function InventoryDetailPage({
   const { normal: normalImages, damage: damageImages } = splitImagesByType(item.images);
   const topImage = resolveTopImage(item.images);
   const orderedNormalImages = topImage ? [topImage, ...normalImages.filter((i) => i.storageKey !== topImage.storageKey)] : normalImages;
+  const productGallery = resolveProductGallerySource(orderedNormalImages, normalPhotoAssets);
 
   return (
     <div className="flex h-full flex-col">
@@ -307,8 +309,17 @@ export default async function InventoryDetailPage({
         <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-[380px_1fr]">
           {/* 左カラム: 商品画像。NORMAL/DAMAGEは明確に分離。 */}
           <div>
-            <PhotoAssetProductGallery inventoryId={item.id} initialAssets={normalPhotoAssets} title="商品画像" />
-            {normalPhotoAssets.length === 0 ? <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="商品画像" /> : null}
+            {productGallery.kind === "INVENTORY" ? (
+              <InventoryImageGallery images={productGallery.images} alt={item.name} title="商品画像" />
+            ) : (
+              <PhotoAssetProductGallery inventoryId={item.id} initialAssets={productGallery.assets} title="商品画像" />
+            )}
+            {productGallery.kind === "INVENTORY" && normalPhotoAssets.length > 0 ? (
+              <PhotoAssetProductGallery inventoryId={item.id} initialAssets={normalPhotoAssets} title="撮影画像" />
+            ) : null}
+            {productGallery.kind === "PHOTO_ASSET" && orderedNormalImages.length > 0 ? (
+              <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="既存画像" />
+            ) : null}
             <div className="mt-6">
               <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />
               <PhotoAssetProductGallery inventoryId={item.id} initialAssets={damagePhotoAssets} title="傷・汚れ写真" />

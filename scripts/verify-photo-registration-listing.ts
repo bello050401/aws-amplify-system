@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { refreshGallerySelection, resolveProductGallerySource } from "../lib/photoRegistration/gallerySelection";
+import { refreshGallerySelection, resolveProductGallerySource, resolveListPhotoUrl } from "../lib/photoRegistration/gallerySelection";
 import type { InventoryImageRecord } from "../lib/inventory/imageTypes";
 import type { WebPhotoAssetView } from "../lib/photoRegistration/webAdapter";
 import {
@@ -93,6 +93,26 @@ test("商品画像表示は対象外撮影画像を除外し、撮影画像な�
   if (withNormal.kind === "PHOTO_ASSET") assert.deepEqual(withNormal.assets.map(asset => asset.id), ["primary", "later"]);
 });
 
+test("混在画像は明示主画像、保存済みEC主画像、従来fallbackの順に解決する", () => {
+  const inventory = [{ ...inventoryImage("formal.jpg", 0), isPrimary: false }];
+  const plainPhoto = photoAsset("old-photo", 0);
+  const photoPrimary = photoAsset("chosen-photo", 1, { inventoryIsPrimary: true });
+  assert.equal(resolveProductGallerySource(inventory, [plainPhoto]).kind, "PHOTO_ASSET", "双方未指定は従来の撮影画像");
+  assert.equal(resolveProductGallerySource([{ ...inventory[0], isPrimary: true }], [plainPhoto]).kind, "INVENTORY");
+  assert.equal(resolveProductGallerySource(inventory, [plainPhoto, photoPrimary]).kind, "PHOTO_ASSET", "撮影主指定が優先");
+  assert.equal(resolveProductGallerySource([{ ...inventory[0], isPrimary: true }], [plainPhoto, photoPrimary]).kind, "PHOTO_ASSET", "双方指定も撮影主指定を維持");
+  assert.equal(resolveProductGallerySource(inventory, [plainPhoto], { storageKey: "formal.jpg", sortOrder: 0, source: "INVENTORY" }).kind, "INVENTORY");
+  const savedPhoto = resolveProductGallerySource(inventory, [plainPhoto, photoPrimary], { storageKey: "photo-key", sortOrder: 0, source: "PHOTO_ASSET", photoAssetId: plainPhoto.id });
+  assert.equal(savedPhoto.kind, "PHOTO_ASSET");
+  if (savedPhoto.kind === "PHOTO_ASSET") assert.equal(savedPhoto.assets[0].id, plainPhoto.id);
+  assert.equal(resolveProductGallerySource(inventory, [plainPhoto], { storageKey: "missing", sortOrder: 0, source: "INVENTORY" }).kind, "PHOTO_ASSET");
+  assert.equal(resolveProductGallerySource(inventory, []).kind, "INVENTORY");
+  assert.equal(resolveProductGallerySource([], [plainPhoto]).kind, "PHOTO_ASSET");
+  assert.equal(resolveListPhotoUrl(true, { url: "photo", explicitPrimary: false }), null);
+  assert.equal(resolveListPhotoUrl(true, { url: "photo", explicitPrimary: true }), "photo");
+  assert.equal(resolveListPhotoUrl(false, { url: "photo", explicitPrimary: false }), "photo");
+});
+
 test("既存画像とPhotoAssetを保存元付きで統合する", () => {
   const candidates = buildListingImageCandidates([inventoryImage("inventory/a.jpg", 0)], [photoAsset("asset-1", 1)]);
   assert.equal(candidates.length, 2);
@@ -100,6 +120,16 @@ test("既存画像とPhotoAssetを保存元付きで統合する", () => {
   assert.equal(candidates[1].ref.source, "PHOTO_ASSET");
   assert.equal(candidates[1].ref.photoAssetId, "asset-1");
   assert.match(candidates[1].ref.storageKey, /photo-batches\/batch-1\/processed\/asset-1\.jpg$/);
+});
+
+test("保存済みと生成直後のロゴ入り主画像は同じ候補として復元し、無関係キーは除外する", () => {
+  const branded = { storageKey: "inventory/listing-branded/preview.jpg", sortOrder: 0, source: "INVENTORY" as const };
+  const ordinary = { storageKey: "inventory/unrelated.jpg", sortOrder: 1, source: "INVENTORY" as const };
+  const saved = buildListingImageCandidates([inventoryImage("inventory/formal.jpg", 0)], [], [branded, ordinary]);
+  assert.deepEqual(restoreListingSelection(saved, [branded, ordinary]).selected.map(candidate => candidate.ref.storageKey), [branded.storageKey]);
+  const generated = buildListingImageCandidates([], [], null, branded.storageKey);
+  assert.equal(generated[0].ref.storageKey, branded.storageKey);
+  assert.equal(buildListingImageCandidates([], [], null, ordinary.storageKey).length, 0);
 });
 
 test("傷画像・削除済み・未完了PhotoAssetは出品候補へ入れない", () => {

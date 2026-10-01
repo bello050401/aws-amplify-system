@@ -9,6 +9,7 @@ import { formatJstDate } from "@/lib/inventory/formatJst";
 import { buildDetailHref } from "@/lib/inventory/listReturnParams";
 import { useInventoryListColumns } from "../useInventoryListColumns";
 import { InventoryThumbnail } from "../InventoryThumbnail";
+import { resolveListPhotoUrl, type PhotoThumbnailChoice } from "@/lib/photoRegistration/gallerySelection";
 import { useDirectEdit } from "./DirectEditProvider";
 import { InventoryCardList } from "./InventoryCardList";
 
@@ -36,7 +37,7 @@ interface InventoryTableProps {
    * listPrimaryPhotoThumbnails参照)。Inventory.images由来の
    * mainImageThumbnailKeyより優先してカード画像に表示する。
    */
-  photoThumbnails?: Record<string, string | null>;
+  photoThumbnails?: Record<string, PhotoThumbnailChoice>;
 }
 
 /** `cf:<fieldKey>`列(動的なCustomField列)の値をrow.customFieldsから読む — 静的列と混在した同じレンダリングループから、どちらの種類の列かをkeyの接頭辞だけで判定できる。 */
@@ -76,7 +77,7 @@ function renderReadOnlyCell(
   categoriesById: Record<string, MasterOption>,
   locationsById: Record<string, MasterOption>,
   statusesById: Record<string, StatusOption>,
-  photoThumbnails: Record<string, string | null>,
+  photoThumbnails: Record<string, PhotoThumbnailChoice>,
 ): React.ReactNode {
   if (key.startsWith("cf:")) {
     const value = customFieldValueFromRow(row, key);
@@ -99,7 +100,7 @@ function renderReadOnlyCell(
       return (
         <InventoryThumbnail
           storageKey={row.mainImageThumbnailKey}
-          directUrl={photoThumbnails[row.id] ?? null}
+          directUrl={resolveListPhotoUrl(row.mainImageIsPrimary, photoThumbnails[row.id])}
           alt={row.name}
           size="list"
           loading="lazy"

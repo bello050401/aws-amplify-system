@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { InventoryThumbnail } from "../InventoryThumbnail";
+import { resolveListPhotoUrl, type PhotoThumbnailChoice } from "@/lib/photoRegistration/gallerySelection";
 import { buildDetailHref } from "@/lib/inventory/listReturnParams";
 
 interface InventoryCardListProps {
@@ -13,7 +14,7 @@ interface InventoryCardListProps {
   /** QA005: InventoryTable.tsxの同名propと同じ — lib/inventory/listReturnParams.ts参照。 */
   listReturnQuery: string;
   /** Photo Registrationのトップ画像URL(inventoryId→署名済みURL、無ければnull)。InventoryTable.tsxの同名propと同じ — lib/inventory/queries.tsのmainImageThumbnailKeyより優先表示する。 */
-  photoThumbnails?: Record<string, string | null>;
+  photoThumbnails?: Record<string, PhotoThumbnailChoice>;
 }
 
 function formatYen(value: number | null): string {
@@ -51,7 +52,7 @@ export function InventoryCardList({ rows, categoriesById, locationsById, statuse
                 詰める——「above-the-fold 4〜6行以上」を達成する。 */}
             <Link href={buildDetailHref(row.id, listReturnQuery)} className="flex items-center gap-2.5 px-3 py-1.5 active:bg-gray-50">
               <div className="h-10 w-10 shrink-0">
-                <InventoryThumbnail storageKey={row.mainImageThumbnailKey} directUrl={photoThumbnails[row.id] ?? null} alt={row.name} size="small" loading="lazy" />
+                <InventoryThumbnail storageKey={row.mainImageThumbnailKey} directUrl={resolveListPhotoUrl(row.mainImageIsPrimary, photoThumbnails[row.id])} alt={row.name} size="small" loading="lazy" />
               </div>
               <div className="min-w-0 flex-1 leading-tight">
                 <p className="truncate text-[12px] font-medium text-gray-900">{row.name}</p>

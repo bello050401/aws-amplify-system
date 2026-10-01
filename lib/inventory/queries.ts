@@ -55,6 +55,8 @@ export interface InventoryListRow {
   mainImageStorageKey: string | null;
   /** BELLO統合改修 master指示書 Phase B: the key the list view should actually fetch — the top image's small thumbnail when one exists, `mainImageStorageKey` (the original) otherwise. Only ever used by the list table's InventoryThumbnail; every other screen keeps using `mainImageStorageKey`/`storageKey` directly. */
   mainImageThumbnailKey: string | null;
+  /** NORMAL Inventory画像に明示的な主画像指定がある。撮影側の既定画像より優先する。 */
+  mainImageIsPrimary: boolean;
   imageCount: number;
   createdAt: string;
   updatedAt: string;
@@ -113,6 +115,7 @@ export function toListRow(item: InventoryModel): InventoryListRow {
     // photo can never end up as the list thumbnail even if it happens to
     // sort first. See resolveTopImage's own comment.
     mainImageStorageKey: resolveTopImage(images)?.storageKey ?? null,
+    mainImageIsPrimary: resolveTopImage(images)?.isPrimary === true,
     imageCount: images.length,
     mainImageThumbnailKey: (() => {
       const top = resolveTopImage(images);

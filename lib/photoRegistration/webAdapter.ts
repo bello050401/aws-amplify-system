@@ -277,7 +277,7 @@ export class PhotoRegistrationWebAdapter {
    * 1〜数件で、詳細画面(listInventoryPhotoAssets)のような全ページ走査は
    * この軽量版では行わない。
    */
-  async listPrimaryPhotoThumbnails(inventoryIds: string[], claims: TrustedClaims): Promise<PhotoResult<Record<string, string | null>>> {
+  async listPrimaryPhotoThumbnails(inventoryIds: string[], claims: TrustedClaims): Promise<PhotoResult<Record<string, { url: string | null; explicitPrimary: boolean } | null>>> {
     const actorResult = this.requireStaffOrAdmin(claims);
     if (!actorResult.ok) return actorResult;
     // server actionはクライアントから直接呼び出せるため、呼び出し元
@@ -296,7 +296,7 @@ export class PhotoRegistrationWebAdapter {
     // hundreds of simultaneous DynamoDB/S3 operations. A small worker pool
     // still overlaps network latency while protecting the browser request and
     // the shared staging backend from throttling.
-    const entries: Array<[string, string | null]> = new Array(uniqueIds.length);
+    const entries: Array<[string, { url: string | null; explicitPrimary: boolean } | null]> = new Array(uniqueIds.length);
     let nextIndex = 0;
     await Promise.all(Array.from({ length: Math.min(8, uniqueIds.length) }, async () => {
       while (nextIndex < uniqueIds.length) {
@@ -314,7 +314,7 @@ export class PhotoRegistrationWebAdapter {
           const url = await this.safePresign(
             photoAssetS3Key(primary.photoBatchId, primary.id, "THUMBNAIL", extensionForMimeType(primary.declared.THUMBNAIL.mimeType)),
           );
-          entries[index] = [inventoryId, url];
+          entries[index] = [inventoryId, { url, explicitPrimary: primary.inventoryIsPrimary === true }];
         } catch (error) {
           // One broken inventory lookup must not blank all other thumbnails
           // in this chunk. The caller can still show its existing inventory

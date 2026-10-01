@@ -32,15 +32,7 @@ export function ListingImageSelector({
   brandedImageKey?: string | null;
   onChange: (refs: ListingImageRef[]) => void;
 }) {
-  const candidates = buildListingImageCandidates(images, photoAssets);
-  for (const ref of initialImages ?? []) {
-    if (ref.storageKey.startsWith("inventory/listing-branded/") && !candidates.some((item) => item.ref.storageKey === ref.storageKey)) {
-      candidates.push({ ref, label: "保存済みロゴ入り画像", previewUrl: null, available: true });
-    }
-  }
-  if (brandedImageKey && !candidates.some((item) => item.ref.storageKey === brandedImageKey)) {
-    candidates.push({ ref: { storageKey: brandedImageKey, sortOrder: 0, source: "INVENTORY" }, label: "ロゴ入り画像", previewUrl: null, available: true });
-  }
+  const candidates = buildListingImageCandidates(images, photoAssets, initialImages, brandedImageKey ?? null);
 
   const [selected, setSelected] = useState<ListingImageCandidate[]>(() => {
     return initialListingSelection(candidates, initialImages);

@@ -116,7 +116,7 @@ export async function listInventoryPhotoAssetsAction(inventoryId: string): Promi
 /** 在庫一覧のカード画像用。表示中の行のinventoryIdをまとめて渡し、1回でトップ画像のサムネイルURLを解決する(lib/photoRegistration/webAdapter.tsのlistPrimaryPhotoThumbnails参照)。 */
 export async function listInventoryPrimaryPhotoThumbnailsAction(
   inventoryIds: string[],
-): Promise<PhotoActionResult<Record<string, string | null>>> {
+): Promise<PhotoActionResult<Record<string, { url: string | null; explicitPrimary: boolean } | null>>> {
   const runtime = await requireWebRuntimeAndClaims();
   if (!runtime.ok) return runtime;
   return mapPhotoResult(await runtime.adapter.listPrimaryPhotoThumbnails(inventoryIds, runtime.claims));

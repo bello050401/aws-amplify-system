@@ -24,6 +24,7 @@ import { ListingImageSelector } from "./ListingImageSelector";
 import { InventoryThumbnail } from "../../../InventoryThumbnail";
 import { PhotoAssetProductGallery } from "../PhotoAssetProductGallery";
 import { resolveProductGallerySource } from "@/lib/photoRegistration/gallerySelection";
+import { buildListingImageCandidates, restoreListingSelection } from "@/lib/photoRegistration/inventoryListingAdapter";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
 // 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
@@ -95,12 +96,18 @@ export function ListingForm({
   const [draft, setDraft] = useState(initialDraft);
   const [channelListing, setChannelListing] = useState(initialChannelListing);
   const [selectedImages, setSelectedImages] = useState<ListingImageRef[]>(initialDraft?.images ?? []);
-  const productGallery = resolveProductGallerySource(images, photoAssets);
   const [brandLogoBusy, setBrandLogoBusy] = useState(false);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoSaved, setLogoSaved] = useState(false);
   const [brandedImageKey, setBrandedImageKey] = useState<string | null>(null);
   const [brandLogoError, setBrandLogoError] = useState<string | null>(null);
+  const validSelectedPrimary = restoreListingSelection(
+    buildListingImageCandidates(images, photoAssets, initialDraft?.images ?? null, brandedImageKey), selectedImages,
+  ).selected[0]?.ref ?? null;
+  const previewImages: InventoryImageRecord[] = validSelectedPrimary?.source !== "PHOTO_ASSET" && validSelectedPrimary?.storageKey.startsWith("inventory/listing-branded/")
+    ? [{ storageKey: validSelectedPrimary.storageKey, sortOrder: -1, type: "NORMAL", isPrimary: true, sourceSystem: null, sourceUrl: null, thumbnailKey: null, mediumKey: null, originalHash: null, classification: null }, ...images]
+    : images;
+  const productGallery = resolveProductGallerySource(previewImages, photoAssets, validSelectedPrimary);
 
   const [title, setTitle] = useState(initialDraft?.title ?? inventoryName);
   const [description, setDescription] = useState(initialDraft?.description ?? "");
@@ -327,10 +334,16 @@ export function ListingForm({
           signed URLアーキテクチャに乗る。 */}
       <div className="mb-4">
         {productGallery.kind === "PHOTO_ASSET" ? (
-          <PhotoAssetProductGallery inventoryId={inventoryId} initialAssets={productGallery.assets} title="商品画像" />
+          <PhotoAssetProductGallery key={productGallery.assets[0]?.id} inventoryId={inventoryId} initialAssets={productGallery.assets} title="商品画像" />
         ) : (
-          <InventoryImageGallery images={productGallery.images} alt={inventoryName} title="商品画像" />
+          <InventoryImageGallery key={productGallery.images[0]?.storageKey} images={productGallery.images} alt={inventoryName} title="商品画像" />
         )}
+        {productGallery.kind === "INVENTORY" && photoAssets.length > 0 ? (
+          <PhotoAssetProductGallery inventoryId={inventoryId} initialAssets={photoAssets.filter(asset => asset.inventoryImageType !== "DAMAGE")} title="撮影画像" />
+        ) : null}
+        {productGallery.kind === "PHOTO_ASSET" && images.length > 0 ? (
+          <InventoryImageGallery images={images} alt={inventoryName} title="既存画像" />
+        ) : null}
         <ListingImageSelector
           images={images}
           photoAssets={photoAssets}

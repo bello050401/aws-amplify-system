@@ -14,6 +14,8 @@ export type ListingImageCandidate = {
 export function buildListingImageCandidates(
   inventoryImages: InventoryImageRecord[],
   photoAssets: WebPhotoAssetView[],
+  savedImages: ListingImageRef[] | null = null,
+  brandedImageKey: string | null = null,
 ): ListingImageCandidate[] {
   const legacy = inventoryImages
     .filter((image) => image.type === "NORMAL")
@@ -43,7 +45,16 @@ export function buildListingImageCandidates(
       previewUrl: asset.thumbnailUrl,
       available: true,
     }));
-  return [...legacy, ...uploaded];
+  const candidates: ListingImageCandidate[] = [...legacy, ...uploaded];
+  for (const ref of savedImages ?? []) {
+    if (ref.source !== "PHOTO_ASSET" && ref.storageKey.startsWith("inventory/listing-branded/") && !candidates.some(item => item.ref.storageKey === ref.storageKey)) {
+      candidates.push({ ref, label: "保存済みロゴ入り画像", previewUrl: null, available: true });
+    }
+  }
+  if (brandedImageKey?.startsWith("inventory/listing-branded/") && !candidates.some(item => item.ref.storageKey === brandedImageKey)) {
+    candidates.push({ ref: { storageKey: brandedImageKey, sortOrder: 0, source: "INVENTORY" }, label: "ロゴ入り画像", previewUrl: null, available: true });
+  }
+  return candidates;
 }
 
 /** 未保存の下書きは撮影商品画像を優先する。保存済みの明示選択は維持する。 */
