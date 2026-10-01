@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { saveListingDraftAction } from "@/app/actions/listing";
+import { requireSavedDraftResult, draftSaveFailureMessage } from "@/lib/listing/draftSaveFeedback";
 import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, ListingShippingMethod } from "@/lib/listing/types";
 import { LISTING_SHIPPING_METHODS } from "@/lib/listing/types";
 import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
@@ -275,7 +276,7 @@ export function ListingForm({
     setDraftBusy(true);
     let draftPersisted = false;
     try {
-      const result = await saveListingDraftAction(inventoryId, {
+      const result = requireSavedDraftResult(await saveListingDraftAction(inventoryId, {
         title,
         description,
         price: price ? Number(price) : 0,
@@ -284,7 +285,7 @@ export function ListingForm({
         // 再生成したときも同じ選択が使われる。
         shippingMethod,
         images: selectedImages,
-      });
+      }));
       setDraft(result);
       draftPersisted = true;
       if (photoAssets.length > 0) {
@@ -302,8 +303,7 @@ export function ListingForm({
       }
       setDraftSaved(true);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "予期しないエラーが発生しました。";
-      setDraftError(draftPersisted ? `下書きは保存されましたが、撮影画像の選択情報の更新に失敗しました: ${message}` : message);
+      setDraftError(draftSaveFailureMessage(draftPersisted, err));
     } finally {
       setDraftBusy(false);
     }
