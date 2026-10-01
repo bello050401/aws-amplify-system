@@ -83,9 +83,10 @@ export async function ensureSettingsBootstrap(): Promise<void> {
   if (inFlight) return inFlight;
   inFlight = runBootstrap()
     .catch((err) => {
-      // 失敗しても completed は立てない(次回再試行する)。設定画面自体は
-      // 描画できるべきなので、ここで例外を投げてページを落とさない。
+      // 失敗を成功に変換するとADMIN設定画面が不完全なマスタで表示される。
+      // completedは立てず、呼び出し元に伝えて安全なエラー表示へ進める。
       console.error("[ensureSettingsBootstrap] 失敗:", err instanceof Error ? err.message : err);
+      throw err;
     })
     .finally(() => {
       inFlight = null;

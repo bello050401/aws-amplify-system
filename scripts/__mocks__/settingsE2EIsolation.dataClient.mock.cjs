@@ -6,9 +6,7 @@
 // getBaseConnectionState)は、isE2EFixtureModeActive()がtrueの間は
 // serverDataClient(AppSync)に一切触れてはいけない —— 触れたことを
 // 「例外を投げて検出する」だけでなく「実際に呼ばれたかどうかを記録する」
-// ことで、内部でtry/catchして例外を握りつぶす経路(例:
-// lib/inventory/settingsBootstrap.tsのensureSettingsBootstrapは失敗を
-// 常にconsole.errorへ握りつぶし、呼び出し元へは投げない)でも見逃さない。
+// ことで、内部でtry/catchして例外を処理する経路でも見逃さない。
 //
 // modelプロパティ名・メソッド名を問わず、どの`serverDataClient.models.X.y()`
 // 呼び出しも記録した上でthrowする(Proxyで動的に生成 — 実際に呼ばれた

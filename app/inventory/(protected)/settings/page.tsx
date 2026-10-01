@@ -9,6 +9,8 @@ import { getNextEngineConnectionState } from "@/lib/listing/nextEngine/connectio
 import { getLineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
+import { isCognitoInvalidLoginTokenError, isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
+import { InventoryAuthTemporarilyUnavailable } from "../InventoryAuthTemporarilyUnavailable";
 
 /**
  * Phase B — カテゴリ/保管場所マスタ管理 (spec). Reuses the existing
@@ -40,6 +42,12 @@ import { SettingsTabs } from "./SettingsTabs";
  */
 export const metadata = { title: "設定 | BELLO 在庫管理" };
 
+function settingsAuthFallback(error: unknown) {
+  if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
+  if (isCognitoInvalidLoginTokenError(error)) return <InventoryAuthTemporarilyUnavailable reason="session-check" />;
+  throw error;
+}
+
 export default async function InventorySettingsPage() {
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects signed-out/unauthorized users
@@ -51,7 +59,11 @@ export default async function InventorySettingsPage() {
     // 高確率で500になった(実測8回中7回)。ブートストラップは
     // 「一度整えば済む」作業なので、プロセス単位に畳んで描画パスから
     // 外す(lib/inventory/settingsBootstrap.ts)。
-    await ensureSettingsBootstrap();
+    try {
+      await ensureSettingsBootstrap();
+    } catch (error) {
+      return settingsAuthFallback(error);
+    }
   }
 
   // BASEの接続状態(§4.2)。既存の特集ページ連携設定をそのまま参照する
@@ -71,17 +83,24 @@ export default async function InventorySettingsPage() {
   const requestHeaders = headers();
   const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
 
-  const [categories, locations, units, customFields, zaicoTokenSource, lineTokenSource, baseConnection, nextEngineConnection] =
-    await Promise.all([
-      listAllMasterEntries("Category"),
-      listAllMasterEntries("Location"),
-      listAllMasterEntries("Unit"),
-      listAllCustomFieldDefinitions(),
-      getZaicoTokenSource(),
-      getLineTokenSource(),
-      getBaseConnectionState(host),
-      role === "ADMIN" ? getNextEngineConnectionState() : Promise.resolve("CONFIGURATION_REQUIRED" as const),
-    ]);
+  const settingsRead = await (async () => {
+    try {
+      return { ok: true as const, value: await Promise.all([
+        listAllMasterEntries("Category"),
+        listAllMasterEntries("Location"),
+        listAllMasterEntries("Unit"),
+        listAllCustomFieldDefinitions(),
+        getZaicoTokenSource(),
+        getLineTokenSource(),
+        getBaseConnectionState(host),
+        role === "ADMIN" ? getNextEngineConnectionState() : Promise.resolve("CONFIGURATION_REQUIRED" as const),
+      ]) };
+    } catch (error) {
+      return { ok: false as const, fallback: settingsAuthFallback(error) };
+    }
+  })();
+  if (!settingsRead.ok) return settingsRead.fallback;
+  const [categories, locations, units, customFields, zaicoTokenSource, lineTokenSource, baseConnection, nextEngineConnection] = settingsRead.value;
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
   // とgetZaicoTokenSource()を両方呼ぶと同じ呼び出しが2回発生していた)。

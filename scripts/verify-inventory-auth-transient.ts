@@ -24,7 +24,7 @@ registerHooks({
 });
 
 async function main() {
-  const { isCognitoRateLimitError } = await import("@/lib/amplify/cognitoTransientError");
+  const { isCognitoRateLimitError, isCognitoInvalidLoginTokenError } = await import("@/lib/amplify/cognitoTransientError");
   const { getInventorySessionStatus, getInventoryRole, requireInventoryUserOrRedirect } = await import("@/lib/amplify/requireInventoryUser");
   const mock = (await import(mocks + "inventoryAuthMiddleware.fetchAuthSession.mock.cjs")).default;
   let calls = 0;
@@ -35,6 +35,10 @@ async function main() {
   assert.equal(isCognitoRateLimitError({ name: "NoSignedUser", underlyingError: { name: "TooManyRequestsException" } }), true);
   assert.equal(isCognitoRateLimitError({ cause: { code: "TooManyRequestsException" } }), true);
   assert.equal(isCognitoRateLimitError({ name: "NotAuthorizedException", cause: { name: "AccessDeniedException" } }), false);
+  assert.equal(isCognitoInvalidLoginTokenError({ name: "NoSignedUser", underlyingError: { name: "NotAuthorizedException", message: "Invalid login token. Couldn't verify signed token." } }), true);
+  assert.equal(isCognitoInvalidLoginTokenError({ name: "NotAuthorizedException", message: "Permission denied" }), false);
+  assert.equal(isCognitoInvalidLoginTokenError({ name: "NoSignedUser", underlyingError: { name: "TooManyRequestsException", message: "Rate exceeded" } }), false);
+  assert.equal(isCognitoInvalidLoginTokenError({ name: "NoSignedUser" }), false);
 
   set(async () => ({ tokens: undefined }));
   assert.deepEqual(await getInventorySessionStatus(), { kind: "signed-out" });
