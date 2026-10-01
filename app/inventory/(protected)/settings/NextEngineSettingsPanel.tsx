@@ -2,6 +2,7 @@
 
 import type { NextEngineConnectionState } from "@/lib/listing/nextEngine/connectionState";
 import { NextEnginePrivateMasterTestPanel } from "./NextEnginePrivateMasterTestPanel";
+import { NextEngineMasterCandidatesPanel } from "./NextEngineMasterCandidatesPanel";
 
 const labels: Record<NextEngineConnectionState, string> = {
   CONFIGURATION_REQUIRED: "アプリ認証情報の設定待ち",
@@ -29,6 +30,7 @@ export function NextEngineSettingsPanel({ state, privateTestEnabled = false, cal
       <p>接続状態: <strong>{labels[state]}</strong></p>
       <p>この連携はBELLOの商品情報をネクストエンジンの商品マスタへ渡すためのものです。商品画像やメルカリShopsでの公開は別途確認します。</p>
       <p className="text-amber-800">商品マスタ登録と非公開テスト商品の処理結果は、まだ確認できていません。</p>
+      {state === "CONNECTED" && <NextEngineMasterCandidatesPanel />}
       {state === "CONNECTED" && privateTestEnabled && <NextEnginePrivateMasterTestPanel />}
     </section>
   );
