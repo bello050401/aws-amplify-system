@@ -18,7 +18,9 @@ export function NextEngineMasterCandidatesPanel() {
       <h3 className="font-semibold text-gray-900">登録済みの仕入先と店舗</h3>
       <button type="button" className="rounded border border-gray-300 px-3 py-2 disabled:opacity-50"
         disabled={pending} onClick={() => void read()}>{pending ? "確認中…" : "登録情報を確認"}</button>
-      {result && !result.ok && <p role="status" className="text-amber-800">{result.message}</p>}
+      {result && !result.ok && <p role="status" className="text-amber-800">
+        {result.message}{result.code ? `（確認コード: ${result.code}）` : ""}
+      </p>}
       {result?.ok && <div className="space-y-3" role="status">
         <div>
           <h4 className="font-medium">有効な仕入先（コード・名称）</h4>
