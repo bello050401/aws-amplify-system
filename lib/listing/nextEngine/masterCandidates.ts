@@ -19,11 +19,17 @@ export type MasterCandidatesErrorCode = "STAGING_CONFIGURATION" | "CONNECTION" |
   "SUPPLIER_TRANSPORT" | "SUPPLIER_RESPONSE" | "SUPPLIER_TOKEN" | "SUPPLIER_API" | "SUPPLIER_ROWS" |
   "SHOP_TRANSPORT" | "SHOP_RESPONSE" | "SHOP_TOKEN" | "SHOP_API" | "SHOP_ROWS";
 export class MasterCandidatesError extends Error {
-  constructor(readonly code: MasterCandidatesErrorCode) {
+  constructor(readonly code: MasterCandidatesErrorCode,
+    readonly apiCode?: string, readonly httpStatus?: number) {
     super("ネクストエンジンの登録情報を確認できませんでした。");
   }
 }
-const failure = (code: MasterCandidatesErrorCode) => new MasterCandidatesError(code);
+const failure = (code: MasterCandidatesErrorCode, apiCode?: string, httpStatus?: number) =>
+  new MasterCandidatesError(code, apiCode, httpStatus);
+const officialApiCode = (value: unknown): string | undefined =>
+  typeof value === "string" && /^[0-9]{6}$/.test(value) ? value : undefined;
+const safeHttpStatus = (value: number): number | undefined =>
+  Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 const safeText = (value: unknown, max: number): value is string =>
@@ -97,7 +103,9 @@ export async function listNextEngineMasterCandidates(overrides: Partial<Services
       try { await services.saveTokens(tokens, confirmedBinding); }
       catch { throw failure(`${kind}_TOKEN`); }
     }
-    if (!response.ok || payload.result !== "success") throw failure(`${kind}_API`);
+    if (!response.ok || payload.result !== "success") {
+      throw failure(`${kind}_API`, officialApiCode(payload.code), safeHttpStatus(response.status));
+    }
     if (!Array.isArray(payload.data) || payload.data.length > LIMIT || count(payload.count) === null) {
       throw failure(`${kind}_RESPONSE`);
     }

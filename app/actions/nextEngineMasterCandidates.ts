@@ -7,7 +7,7 @@ import { listNextEngineMasterCandidates, MasterCandidatesError,
 import { PRIVATE_MASTER_STAGING_ORIGIN } from "@/lib/listing/nextEngine/privateMasterAcceptance";
 
 export type MasterCandidatesResult = { ok: true; data: MasterCandidates } |
-  { ok: false; message: string; code?: MasterCandidatesErrorCode };
+  { ok: false; message: string; code?: MasterCandidatesErrorCode; apiCode?: string; httpStatus?: number };
 
 export async function readNextEngineMasterCandidates(): Promise<MasterCandidatesResult> {
   try {
@@ -20,7 +20,8 @@ export async function readNextEngineMasterCandidates(): Promise<MasterCandidates
     return { ok: true, data: await listNextEngineMasterCandidates() };
   } catch (error) {
     if (error instanceof MasterCandidatesError) {
-      return { ok: false, message: "登録情報を確認できませんでした。", code: error.code };
+      return { ok: false, message: "登録情報を確認できませんでした。", code: error.code,
+        apiCode: error.apiCode, httpStatus: error.httpStatus };
     }
     return { ok: false, message: "登録情報を確認できませんでした。接続状態を確認してください。" };
   }

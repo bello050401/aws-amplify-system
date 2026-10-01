@@ -73,6 +73,19 @@ async function main() {
       { supplier_id: "REAL", supplier_name: "", supplier_deleted_flag: "0" },
     ] })),
   }), { code: "SUPPLIER_ROWS" });
+  const apiFixture = {
+    env: { NEXT_ENGINE_PUBLIC_ORIGIN: origin, NEXT_ENGINE_TOKEN_SECRET_ID: secretId },
+    configuration: async () => binding,
+    readTokens: async () => original,
+  };
+  await assert.rejects(listNextEngineMasterCandidates({ ...apiFixture,
+    request: async () => new Response(JSON.stringify({ result: "error", code: "004001",
+      message: "secret-looking response text" }), { status: 200 }),
+  }), { code: "SUPPLIER_API", apiCode: "004001", httpStatus: 200,
+    message: "ネクストエンジンの登録情報を確認できませんでした。" });
+  await assert.rejects(listNextEngineMasterCandidates({ ...apiFixture,
+    request: async () => new Response(JSON.stringify({ result: "error", code: "secret-looking-code" }), { status: 403 }),
+  }), { code: "SUPPLIER_API", apiCode: undefined, httpStatus: 403 });
   assert.equal(new MasterCandidatesError("SHOP_API").message, "ネクストエンジンの登録情報を確認できませんでした。");
   console.log("Next Engine read-only master candidates: PASS");
 }
