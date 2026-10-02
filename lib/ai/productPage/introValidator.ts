@@ -234,6 +234,27 @@ export function stripUnsupportedClearFinishSentences(intro: string, evidence: st
   return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
 }
 
+/** A shape or photo cannot verify an ergonomic design or how sitting feels. */
+export function stripUnsupportedSeatingClaims(
+  intro: string,
+  verifiedProductFacts: ReadonlyArray<{ fact: string; sourceUrl: string }> = [],
+): { text: string; removedSentences: string[] } {
+  const claims = [/(?:身体|体)のラインに沿(?:う|った)/, /(?:快適な座り心地|座り心地が快適|心地よい座り心地)/];
+  // Research snippets can mention a claim while explicitly denying it. A
+  // source URL and matching words alone do not turn that mention into proof.
+  const evidence = verifiedProductFacts
+    .filter(({ fact, sourceUrl }) => fact.trim() && /^https:\/\//.test(sourceUrl) &&
+      !/(?:ない|なく|ません|不明|未確認|未検証|推測|可能性|疑い|かどうか|断定でき|保証でき|とは限|要確認|不確か|[?？])/.test(fact))
+    .map(({ fact }) => fact);
+  const removedSentences: string[] = [];
+  const kept = splitSentences(intro).filter((sentence) => {
+    if (claims.every((claim) => !claim.test(sentence) || evidence.some((fact) => claim.test(fact)))) return true;
+    removedSentences.push(sentence.trim());
+    return false;
+  });
+  return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
+}
+
 /**
  * ── 一般的なECテンプレート表現の検出(指示書§7/§22) ────────────────
  *

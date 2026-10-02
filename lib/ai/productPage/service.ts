@@ -17,6 +17,7 @@ import {
   stripAmbiguousPartColorSentences,
   stripUnverifiedPhotoColorSentences,
   stripUnsupportedClearFinishSentences,
+  stripUnsupportedSeatingClaims,
   MAX_GENERIC_PHRASES,
   type CategoryMismatchViolation,
   type IntroConditionViolation,
@@ -582,6 +583,19 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         failureReason: "仕上げについて確認できない記述が含まれています。" };
     }
     sections = { ...sections, introduction: finishStripped.text };
+    introSanitized = true;
+  }
+  const seatingStripped = stripUnsupportedSeatingClaims(
+    sections.introduction ?? "", input.extraFacts?.verifiedProductFacts ?? [],
+  );
+  if (seatingStripped.removedSentences.length > 0) {
+    if (!isIntroStillUsable(seatingStripped.text)) {
+      return { ...base, ok: false, sections, fullDescription: buildDescription(sections, input),
+        violations: [{ code: "UNSUPPORTED_SEATING_CLAIM", detail: "座り心地・身体に沿う設計の根拠がなく、除くと紹介文が短すぎます。" }],
+        modelProvider: result!.providerId, modelName: result!.modelId,
+        failureReason: "座り心地や身体に沿う設計を確認できません。" };
+    }
+    sections = { ...sections, introduction: seatingStripped.text };
     introSanitized = true;
   }
 

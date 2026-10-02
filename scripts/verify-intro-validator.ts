@@ -35,6 +35,7 @@ import {
   stripInternalRatingSentences,
   stripAmbiguousPartColorSentences,
   stripUnsupportedClearFinishSentences,
+  stripUnsupportedSeatingClaims,
   MAX_GENERIC_PHRASES,
   MIN_INTRO_LENGTH_AFTER_STRIP,
 } from "../lib/ai/productPage/introValidator";
@@ -399,6 +400,27 @@ function testCategoryMismatchDetection() {
 }
 
 function main() {
+  const seating = stripUnsupportedSeatingClaims(
+    "座面と背もたれの輪郭に丸みがあるチェアです。身体のラインに沿うように設計されています。快適な座り心地です。脚部には細い直線を用い、軽やかな外観に仕上げています。",
+  );
+  assertEqual(seating.removedSentences.length, 2, "形状だけから身体に沿う設計と座り心地を推測しない");
+  assertTrue(seating.text.includes("輪郭に丸み") && seating.text.includes("軽やかな外観"), "確認可能な形状は保持");
+  const cited = stripUnsupportedSeatingClaims("身体のラインに沿う設計です。快適な座り心地です。", [
+    { fact: "身体のラインに沿う設計です。", sourceUrl: "https://example.invalid/spec" },
+    { fact: "快適な座り心地です。", sourceUrl: "https://example.invalid/spec" },
+  ]);
+  assertEqual(cited.removedSentences, [], "対象商品の出典付き明示事実は保持");
+  assertEqual(stripUnsupportedSeatingClaims("快適な座り心地です。", [
+    { fact: "快適な座り心地かは未確認です。", sourceUrl: "https://example.invalid/spec" },
+  ]).removedSentences.length, 1, "未確認と書かれた参考文は肯定根拠にしない");
+  for (const [claim, reference] of [
+    ["快適な座り心地です。", "Vitra All Plastic Chairの快適な座り心地は確認できません。"],
+    ["快適な座り心地です。", "Vitra All Plastic Chairの快適な座り心地は保証されません。"],
+    ["身体のラインに沿う設計です。", "身体のラインに沿う設計とは限りません。"],
+  ]) {
+    assertEqual(stripUnsupportedSeatingClaims(claim, [{ fact: reference, sourceUrl: "https://example.invalid/spec" }]).removedSentences.length,
+      1, "否定・不確実な出典の同じ語を肯定根拠にしない");
+  }
   const finishStripped = stripUnsupportedClearFinishSentences("木部分は研磨して艶消しクリアに仕上げました。\n\n背もたれは曲線です。", "木部分を研磨");
   assertEqual(finishStripped.removedSentences, ["木部分は研磨して艶消しクリアに仕上げました。"], "研磨だけではクリア仕上げを主張しない");
   assertTrue(finishStripped.text.includes("背もたれは曲線"), "別の外観文を保持");

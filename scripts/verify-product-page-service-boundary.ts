@@ -419,6 +419,62 @@ async function testVerifiedBrandOverviewUsesTheNormalCompositionPath() {
   assertTrue(repeated.introSanitized === true, "⑫重複除去を監査値へ記録");
 }
 
+async function testUnsourcedSeatingClaimsInSavedQaReplay() {
+  resetMocks();
+  providerMock.__configure([step(sections(
+    "Vitra All Plastic Chairは背もたれから座面、脚部までがつながる造形のチェアです。" +
+    "身体のラインに沿うように設計され、快適な座り心地を提供します。" +
+    "丸みを帯びた背もたれとすっきりした脚の線が外観の特徴です。ダイニングや作業スペースにも置きやすい一脚です。",
+    { title: "【背面傷】Vitra All Plastic Chair" },
+  ))]);
+  const result = await generateProductPage({
+    inventoryId: "synthetic-vitra-comfort-001",
+    name: "【検証専用・販売不可・現物なし】【背面傷】Vitra All Plastic Chair",
+    categoryName: "チェア", width: "42", depth: "48", height: "75",
+    damageNotes: "背面に小傷あり。", note: null, conditionRating: null,
+    stockQuantity: 0, sku: "SYN-VITRA-COMFORT", archive: [], styleProfile: null,
+    ruleSections: { productDetail: "幅42cm", shipping: "配送は確認中です。", condition: "背面に小傷あり。" },
+    extraFacts: { brand: "Vitra", photoObservations: ["背もたれには丸みがある"] },
+  });
+  assertEqual(providerMock.__callCount(), 1, "⑬既存QA紹介の座り心地: 追加AI呼び出しなし");
+  assertTrue(result.ok, "⑬根拠のない使用感を除いても紹介文が残る");
+  assertTrue(!result.sections?.introduction.includes("身体のライン") && !result.sections?.introduction.includes("快適な座り心地"),
+    "⑬身体に沿う設計と座り心地を除去");
+  assertTrue(!!result.sections?.introduction.includes("背もたれから座面") && !!result.sections?.introduction.includes("脚の線"),
+    "⑬確認可能な外観説明は保持");
+  assertTrue(result.introSanitized === true, "⑬文の除去を監査値に記録");
+
+  providerMock.__configure([step(sections("身体のラインに沿うように設計され、快適な座り心地を提供します。"))]);
+  const unsupportedOnly = await generateProductPage({
+    inventoryId: "synthetic-vitra-comfort-short-001", name: "合成チェア", categoryName: "チェア",
+    width: "42", depth: "48", height: "75", damageNotes: null, note: null,
+    stockQuantity: 0, sku: "SYN-VITRA-COMFORT-SHORT", archive: [], styleProfile: null,
+    ruleSections: { productDetail: "幅42cm", shipping: "配送は確認中です。", condition: "確認中です。" },
+  });
+  assertTrue(!unsupportedOnly.ok && unsupportedOnly.violations.some((value) => value.code === "UNSUPPORTED_SEATING_CLAIM"),
+    "⑬使用感を除くと説明が成立しない場合は失敗を返す");
+
+  for (const [claim, reference] of [
+    ["快適な座り心地です。", "Vitra All Plastic Chairの快適な座り心地は確認できません。"],
+    ["快適な座り心地です。", "Vitra All Plastic Chairの快適な座り心地は保証されません。"],
+    ["身体のラインに沿う設計です。", "身体のラインに沿う設計とは限りません。"],
+  ]) {
+    providerMock.__configure([step(sections(
+      `Vitra All Plastic Chairは背もたれから座面、脚部までがつながる造形のチェアです。${claim}` +
+      "丸みを帯びた背もたれとすっきりした脚の線が外観の特徴です。ダイニングや作業スペースにも置きやすい一脚です。",
+    ))]);
+    const denied = await generateProductPage({
+      inventoryId: "synthetic-vitra-negated-reference", name: "Vitra All Plastic Chair", categoryName: "チェア",
+      width: "42", depth: "48", height: "75", damageNotes: null, note: null,
+      stockQuantity: 0, sku: "SYN-VITRA-NEGATED", archive: [], styleProfile: null,
+      ruleSections: { productDetail: "幅42cm", shipping: "配送は確認中です。", condition: "確認中です。" },
+      extraFacts: { brand: "Vitra", verifiedProductFacts: [{ fact: reference, sourceUrl: "https://example.invalid/spec" }] },
+    });
+    assertEqual(providerMock.__callCount(), 1, "⑬否定出典: 追加AI呼び出しなし");
+    assertTrue(denied.ok && !denied.sections?.introduction.includes(claim), "⑬否定出典の引用から使用感を承認しない");
+  }
+}
+
 function testColourEvidenceCannotBeSelfCertifiedOrNegated() {
   const commaSplit = stripUnverifiedPhotoColorSentences("背もたれには丸みがあり、黒い色です。", "背もたれは白い色です。");
   assertEqual(commaSplit.text, "", "⑪部位と色が別句でも、誤色を取り除く");
@@ -449,6 +505,7 @@ async function main() {
   await testPhotoCaptionCannotApproveWrongColourAndTitleKeepsDefect();
   testSelectedBrandReferenceIsContextOnly();
   await testVerifiedBrandOverviewUsesTheNormalCompositionPath();
+  await testUnsourcedSeatingClaimsInSavedQaReplay();
   testColourEvidenceCannotBeSelfCertifiedOrNegated();
 
   console.log(`\n${passes} passed, ${failures} failed`);

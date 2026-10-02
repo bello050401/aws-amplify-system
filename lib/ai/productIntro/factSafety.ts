@@ -60,7 +60,8 @@ export type FactSafetyViolationCode =
   | "PHOTO_PART_COLOR_AMBIGUITY"
   | "PHOTO_COLOR_UNVERIFIED"
   | "TITLE_DISCLOSURE_MISSING"
-  | "UNSUPPORTED_FINISH_CLAIM";
+  | "UNSUPPORTED_FINISH_CLAIM"
+  | "UNSUPPORTED_SEATING_CLAIM";
 
 export interface FactSafetyViolation {
   code: FactSafetyViolationCode;
