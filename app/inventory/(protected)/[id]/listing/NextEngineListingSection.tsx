@@ -15,7 +15,7 @@ export function NextEngineListingSection({ title, description, price, imageCount
         <h2 id="next-engine-heading" className="text-sm font-bold text-gray-900">ネクストエンジンへの商品情報連携</h2>
         <span className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">接続準備中</span>
       </div>
-      <p className="mt-2 text-xs text-gray-600">上の下書きから商品名・説明・価格をネクストエンジンの商品マスタに登録する準備をします。画像と販売先の設定は別途確認が必要です。</p>
+      <p className="mt-2 text-xs text-gray-600">上の下書きから商品名・説明・価格をネクストエンジンの商品マスタに登録する準備をします。出品には商品ページと画像、連携アプリの設定も必要です。</p>
       <ul className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
         {checks.map(check => <li key={check.label} className="flex items-center justify-between gap-2 rounded bg-gray-50 p-2">
           <span>{check.label} <span className={check.ready ? "text-green-700" : "text-amber-800"}>{check.ready ? "入力済み" : "要確認"}</span></span>
@@ -26,9 +26,9 @@ export function NextEngineListingSection({ title, description, price, imageCount
       <ol className="mt-4 list-inside list-decimal space-y-1 text-xs text-gray-700">
         <li>下書きを保存{hasDraft ? "（保存済みの下書きあり。変更した内容は再保存してください）" : "（まだ保存されていません）"}</li>
         <li>ネクストエンジンの商品マスタへ登録し、処理結果を確認 — 接続準備中</li>
-        <li>ネクストエンジン側で画像・販売先設定を確認し、既存のメルカリShops連携アプリを利用</li>
+        <li>ネクストエンジン側で商品ページ・画像・販売先設定を確認し、メルカリShops連携アプリから新規出品を開始</li>
       </ol>
-      <p className="mt-3 text-xs text-amber-800">現在、この画面からの商品マスタ送信はできません。入力済みの表示は、登録成功やメルカリShopsへの出品完了を意味しません。</p>
+      <p className="mt-3 text-xs text-amber-800">現在、この画面からの商品マスタ送信はできません。商品マスタ登録だけではメルカリShopsに出品されません。連携アプリの新規出品開始は、提供元が公開する自動起動手段を確認中です。</p>
       <a href="https://base.next-engine.org/" target="_blank" rel="noopener noreferrer" className="mt-3 inline-block rounded border border-gray-300 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50">ネクストエンジンを開く</a>
     </section>
   );
