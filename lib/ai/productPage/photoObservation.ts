@@ -23,7 +23,7 @@ export function parsePhotoObservations(raw: string): string[] {
 }
 
 const MODEL_ID = "us.amazon.nova-pro-v1:0";
-const PROMPT_VERSION = "2026-09-29.2";
+const PROMPT_VERSION = "2026-10-02.1";
 const CACHE_FIELD = "photo-observation-v1";
 
 type CacheModel = typeof serverDataClient.models.ExternalResearchCache;
@@ -92,7 +92,7 @@ async function callVision(jpeg: Uint8Array, operation?: PhotoCacheOperation | nu
       modelId: MODEL_ID,
       messages: [{ role: "user", content: [
         { image: { format: "jpeg", source: { bytes: jpeg } } },
-        { text: "EC紹介文の根拠用に、写真で直接見える商品の外観だけを日本語で短く観察してください。部位ごとの色と模様を優先し、背もたれ・座面・脚などの色を取り違えないでください。『背もたれは黒い』『座面には茶色の木目模様が見える』のように、1観察につき1部位の見える特徴だけを書いてください。材質を木製・金属製等と断定せず、ブランド、年代、品質、状態の良否も推測しないでください。不明なら空配列。JSONのみ: {\"observations\":[\"観察1\",\"観察2\"]}" },
+        { text: "EC紹介文の参考用に、写真で直接見える商品の外観だけを日本語で短く観察してください。部位ごとの色と模様を優先し、背もたれ・座面・脚などの色を取り違えないでください。色を答える前に、対象の部位を画像上で個別に確認してください。1観察につき1部位の見える特徴だけを書き、判断できない色は書かないでください。材質を木製・金属製等と断定せず、ブランド、年代、品質、状態の良否も推測しないでください。不明なら空配列。JSONのみ: {\"observations\":[\"観察1\",\"観察2\"]}" },
       ] }],
       inferenceConfig: { temperature: 0, maxTokens: 300 },
     });

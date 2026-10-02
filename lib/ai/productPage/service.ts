@@ -15,6 +15,7 @@ import {
   stripDimensionSentences,
   stripInternalRatingSentences,
   stripAmbiguousPartColorSentences,
+  stripUnverifiedPhotoColorSentences,
   stripUnsupportedClearFinishSentences,
   MAX_GENERIC_PHRASES,
   type CategoryMismatchViolation,
@@ -209,6 +210,23 @@ function buildFallbackIntroduction(facts: CustomerSafeFacts): string {
   if (facts.dimensions?.trim()) sentences.push(`サイズは${facts.dimensions.trim()}です。`);
   sentences.push("状態の詳細は下記コンディションを、配送方法・送料は下記発送についてをご確認ください。");
   return sentences.join("\n");
+}
+
+/** Leading condition warnings are customer-facing facts, not optional search words. */
+export function preserveCriticalTitleDisclosures(generatedTitle: string, inventoryName: string): string | null {
+  const leading = inventoryName.match(/^(?:【[^】]*】)+/)?.[0] ?? "";
+  const warnings = [...leading.matchAll(/【([^】]+)】/g)]
+    .map((match) => match[1])
+    .filter((label) => /欠品|破損|傷|キズ|汚れ|難あり|訳あり|欠け|割れ|不具合/.test(label));
+  if (warnings.some((label) => {
+    const index = generatedTitle.indexOf(label);
+    return index >= 0 && /^(?:なし|無し|ない|ありません|ではない)/.test(generatedTitle.slice(index + label.length));
+  })) return null;
+  // Only the exact warning bracket counts. A phrase such as "欠品なし" must
+  // never satisfy the obligation to disclose "【欠品】".
+  const missing = warnings.filter((label) => !generatedTitle.includes(`【${label}】`));
+  const preserved = `${missing.map((label) => `【${label}】`).join("")}${generatedTitle.trim()}`;
+  return preserved.length <= 130 ? preserved : null;
 }
 
 /**
@@ -511,6 +529,20 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     sections = { ...sections, introduction: colorStripped.text };
     introSanitized = true;
   }
+  // The photo model's own caption cannot corroborate itself. An erroneous
+  // caption such as "black back" must not make a matching false claim pass.
+  const verifiedAppearance = [facts.name, facts.publicNote, input.extraFacts?.material].filter(Boolean).join("\n");
+  const unverifiedColors = stripUnverifiedPhotoColorSentences(sections.introduction ?? "", verifiedAppearance);
+  if (unverifiedColors.removedSentences.length > 0) {
+    if (!isIntroStillUsable(unverifiedColors.text)) {
+      return { ...base, ok: false, sections, fullDescription: buildDescription(sections, input),
+        violations: [{ code: "PHOTO_COLOR_UNVERIFIED", detail: "写真の色の記述を在庫記録で確認できず、除くと紹介文が短すぎます。" }],
+        modelProvider: result!.providerId, modelName: result!.modelId,
+        failureReason: "写真の色の記述を確認できません。" };
+    }
+    sections = { ...sections, introduction: unverifiedColors.text };
+    introSanitized = true;
+  }
   const clearFinishEvidence = [facts.publicNote, input.extraFacts?.material,
     ...(input.extraFacts?.verifiedProductFacts?.map((entry) => entry.fact) ?? [])].filter(Boolean).join("\n");
   const finishStripped = stripUnsupportedClearFinishSentences(sections.introduction ?? "", clearFinishEvidence);
@@ -526,6 +558,15 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
   }
 
   const fullDescription = buildDescription(sections, input);
+
+  const safeTitle = preserveCriticalTitleDisclosures(sections.title, input.name);
+  if (!safeTitle) {
+    return { ...base, ok: false, sections, fullDescription,
+      violations: [{ code: "TITLE_DISCLOSURE_MISSING", detail: "欠品・傷などの注意書きが否定されているか、安全に保持できません。" }],
+      modelProvider: result!.providerId, modelName: result!.modelId,
+      failureReason: "商品名の欠品・傷などの注意書きをタイトルに保持できません。" };
+  }
+  sections = { ...sections, title: safeTitle };
 
   // 一般的なECテンプレート表現に偏っていないか(指示書§7/§22)。
   // 1つ2つは日本語として自然なので、多すぎる場合だけ問題として挙げる。

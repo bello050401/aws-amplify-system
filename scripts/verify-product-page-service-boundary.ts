@@ -68,7 +68,9 @@ registerHooks({
 process.env.AI_GATEWAY_PROVIDER = "nova";
 delete process.env.ANTHROPIC_API_KEY;
 
-const { generateProductPage } = await import("@/lib/ai/productPage/service");
+const { generateProductPage, preserveCriticalTitleDisclosures } = await import("@/lib/ai/productPage/service");
+const { stripUnverifiedPhotoColorSentences } = await import("@/lib/ai/productPage/introValidator");
+const { buildProductPageUserPrompt } = await import("@/lib/ai/productPage/prompt");
 const providerMock = await import(PROVIDER_MOCK_URL);
 const usageLogMock = await import(USAGE_LOG_MOCK_URL);
 
@@ -338,6 +340,51 @@ async function testNoGenerationWithoutProductEvidence() {
   assertTrue(!!result.failureReason?.includes("商品固有の根拠"), "⑧固有の根拠なし: 必要な情報を案内する");
 }
 
+async function testPhotoCaptionCannotApproveWrongColourAndTitleKeepsDefect() {
+  resetMocks();
+  providerMock.__configure([step(sections(
+    "合成チェアは背から脚へつながる一体フレームを備えた商品です。フレームの曲線と座面の形が外観の特徴です。" +
+    "背もたれは黒い色で、座面は白い色、脚は黒い色です。これらの色の組み合わせは空間に調和します。" +
+    "ダイニングで使用するチェアとして、座る人を囲むようにフレームが続いています。",
+    { title: "合成チェア 一体フレーム" },
+  ))]);
+  const result = await generateProductPage({
+    inventoryId: "synthetic-photo-title-001",
+    name: "【脚キャップ欠品】合成チェア 一体フレーム",
+    categoryName: "チェア", width: "42", depth: "48", height: "75",
+    damageNotes: "脚キャップ欠品。アームに傷あり。",
+    note: "背から脚へ続く一体フレーム。", conditionRating: null,
+    stockQuantity: 1, sku: "SYN-PHOTO-001", archive: [], styleProfile: null,
+    ruleSections: { productDetail: "幅42cm、奥行48cm、高さ75cm", shipping: "配送方法は確認中です。", condition: "脚キャップ欠品。アームに傷あり。" },
+    extraFacts: { photoObservations: ["背もたれは黒い", "座面は白い", "脚は黒い"] },
+  });
+  assertEqual(providerMock.__callCount(), 1, "⑨誤色と欠品脱落: 追加のAI呼び出しなし");
+  assertTrue(result.ok, "⑨誤色と欠品脱落: 安全に除去・補完できれば合格");
+  assertTrue(!!result.sections?.title.startsWith("【脚キャップ欠品】"), "⑨誤色と欠品脱落: タイトルに欠品を保持");
+  assertTrue(!result.sections?.introduction.includes("黒い色") && !result.sections?.introduction.includes("これらの色"), "⑨誤色と欠品脱落: 写真AIだけを根拠にした色と参照文を除去");
+  assertTrue(result.introSanitized === true, "⑨誤色と欠品脱落: 校正を監査値へ記録");
+}
+
+function testSelectedBrandReferenceIsContextOnly() {
+  const prompt = buildProductPageUserPrompt({
+    facts: { name: "合成チェア", dimensions: null, categoryName: "チェア", conditionDisclosure: null, publicNote: null },
+    similar: [], extra: { brand: "架空テストブランド", brandReference: "創業年と拠点の参考説明。", photoObservations: [] },
+  });
+  assertTrue(prompt.includes("選択ブランドの参考情報") && prompt.includes("創業年と拠点の参考説明。"), "⑩選択ブランドの参考情報がプロンプトに渡る");
+  assertTrue(prompt.includes("今回の商品個体の型番・年代・素材・製造国・デザイナー等の証拠には使わない"), "⑩ブランド一般と個体事実の境界を明示");
+}
+
+function testColourEvidenceCannotBeSelfCertifiedOrNegated() {
+  const commaSplit = stripUnverifiedPhotoColorSentences("背もたれには丸みがあり、黒い色です。", "背もたれは白い色です。");
+  assertEqual(commaSplit.text, "", "⑪部位と色が別句でも、誤色を取り除く");
+  const negated = stripUnverifiedPhotoColorSentences("背もたれは黒い色です。", "背もたれは黒ではありません。");
+  assertEqual(negated.text, "", "⑪『黒ではない』を黒の肯定根拠にしない");
+  const verified = stripUnverifiedPhotoColorSentences("背もたれのフレームは白色です。", "背もたれのフレームは白色です。");
+  assertEqual(verified.text, "背もたれのフレームは白色です。", "⑪記録と一致する複合部位の色は保持");
+  assertEqual(preserveCriticalTitleDisclosures("脚キャップ欠品なし 合成チェア", "【脚キャップ欠品】合成チェア"),
+    null, "⑪『欠品なし』を含む矛盾タイトルは不合格");
+}
+
 async function main() {
   await testCategoryMismatchFixedOnRetry();
   await testCategoryMismatchStrippedAfterBothAttemptsFail();
@@ -347,6 +394,9 @@ async function main() {
   await testConditionLeakStillRewrittenAfterCategoryCheckAdded();
   await testNoRealUsageLogWrite();
   await testNoGenerationWithoutProductEvidence();
+  await testPhotoCaptionCannotApproveWrongColourAndTitleKeepsDefect();
+  testSelectedBrandReferenceIsContextOnly();
+  testColourEvidenceCannotBeSelfCertifiedOrNegated();
 
   console.log(`\n${passes} passed, ${failures} failed`);
   console.log(

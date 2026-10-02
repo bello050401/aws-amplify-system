@@ -172,6 +172,54 @@ export function stripAmbiguousPartColorSentences(intro: string, observations: st
   return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
 }
 
+/**
+ * A vision caption is a model guess, not an independently checked product record.
+ * Keep a part/colour assertion only when the inventory text itself states that
+ * same pair. This deliberately sacrifices some photo detail when the record is
+ * silent; otherwise a wrong caption can validate its own wrong introduction.
+ */
+export function stripUnverifiedPhotoColorSentences(intro: string, inventoryText: string): { text: string; removedSentences: string[] } {
+  const parts = [
+    /背もたれ|背部|背/, /座面|シート/, /脚部|脚/, /肘掛け|肘掛|アーム/, /天板/, /フレーム/,
+  ];
+  const colors = [
+    /黒|ブラック|black/i, /白|ホワイト|white/i, /茶色|茶|ブラウン|brown/i,
+    /灰色|グレー|gray|grey/i, /赤|レッド|red/i, /青|ブルー|blue/i,
+    /緑|グリーン|green/i,
+  ];
+  const pairKey = (clause: string): string | null => {
+    const foundParts = parts.flatMap((re, index) => re.test(clause) ? [index] : []);
+    const foundColors = colors.flatMap((re, index) => re.test(clause) ? [index] : []);
+    return foundParts.length === 1 && foundColors.length === 1 ? `${foundParts[0]}:${foundColors[0]}` : null;
+  };
+  const deniesOrUncertain = (text: string) => /(?:ではない|ではありません|じゃない|でない|ではなく|でなく|なし|無し|ありません|不明|未確認)/.test(text);
+  const sourceSentences = splitSentences(inventoryText).map((sentence) => sentence.trim()).filter((sentence) => !deniesOrUncertain(sentence));
+  const verifiedPairs = new Set(sourceSentences.flatMap((sentence) => sentence.split(/[、，,]/))
+    .map(pairKey).filter((value): value is string => value !== null));
+  const normalized = (text: string) => text.replace(/[。\s]/g, "");
+  const exactVerified = new Set(sourceSentences.map(normalized));
+  const removedSentences: string[] = [];
+  const kept = splitSentences(intro).filter((sentence) => {
+    if (!colors.some((re) => re.test(sentence)) || !parts.some((re) => re.test(sentence))) return true;
+    // A full, positive inventory statement can include nested part names such
+    // as "backrest frame"; do not discard a verbatim confirmed statement.
+    if (exactVerified.has(normalized(sentence))) return true;
+    const clauses = sentence.split(/[、，,]/);
+    const unsupported = clauses.some((clause) => {
+      if (!colors.some((re) => re.test(clause))) return false;
+      const pair = pairKey(clause);
+      return !pair || !verifiedPairs.has(pair);
+    });
+    if (!unsupported) return true;
+    removedSentences.push(sentence.trim());
+    return false;
+  });
+  const withoutDanglingColourReferences = removedSentences.length > 0
+    ? kept.filter((sentence) => !/(?:これらの色|この配色|色の組み合わせ)/.test(sentence))
+    : kept;
+  return { text: withoutDanglingColourReferences.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
+}
+
 /** A specific clear/lacquer coating needs an explicit product record, not an inference from polishing. */
 export function stripUnsupportedClearFinishSentences(intro: string, evidence: string): { text: string; removedSentences: string[] } {
   if (/(?:艶消し|つや消し|マット)?クリア|透明(?:塗装|コーティング)|ラッカー仕上げ/.test(evidence)) {

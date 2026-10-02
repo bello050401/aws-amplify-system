@@ -5,7 +5,7 @@ import { getInventoryDetail } from "@/lib/inventory/queries";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { baseBrandHint, type ArchivedStyleReference } from "@/lib/base/archive/similar";
 import { inferCategory, type BelloStyleProfile } from "@/lib/ai/productIntro/styleProfile";
-import { generateProductPage, type ProductPageResult } from "./service";
+import { generateProductPage, preserveCriticalTitleDisclosures, type ProductPageResult } from "./service";
 import { buildGuidanceBlock, listActiveGuidance, type GuidanceRule } from "./guidance";
 import { resolveLinkedBaseItem, type BaseLink } from "./baseLink";
 import { buildResolvedProductContext, type ResolvedProductContext } from "@/lib/inquiry/productContext";
@@ -359,10 +359,19 @@ export async function generateCanonicalProductPage(
     appliedGuidance: guidance.map((g) => g.instruction),
   });
 
+  const requestedTitle = options.listingTitle?.trim();
+  const safeRequestedTitle = requestedTitle ? preserveCriticalTitleDisclosures(requestedTitle, item.name) : null;
   return {
     ...result,
     // Preserve the operator title without treating it as inventory facts.
-    ...(options.listingTitle?.trim() && result.sections ? { sections: { ...result.sections, title: options.listingTitle.trim() } } : {}),
+    ...(requestedTitle && result.sections ? {
+      sections: { ...result.sections, title: safeRequestedTitle ?? result.sections.title },
+      ...(!safeRequestedTitle ? {
+        ok: false,
+        violations: [...result.violations, { code: "TITLE_DISCLOSURE_MISSING" as const, detail: "欠品・傷などの注意書きが否定されているか、安全に保持できません。" }],
+        failureReason: "商品名の欠品・傷などの注意書きをタイトルに保持できません。",
+      } : {}),
+    } : {}),
     inventoryId: item.id,
     inventoryName: item.name,
     usedStyleProfileVersion: styleProfile?.version ?? null,

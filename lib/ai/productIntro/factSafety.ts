@@ -58,6 +58,8 @@ export type FactSafetyViolationCode =
   // 説明が混入している(◎コンディションへ分離すべき情報)。
   | "INTRO_CONTAINS_CONDITION"
   | "PHOTO_PART_COLOR_AMBIGUITY"
+  | "PHOTO_COLOR_UNVERIFIED"
+  | "TITLE_DISCLOSURE_MISSING"
   | "UNSUPPORTED_FINISH_CLAIM";
 
 export interface FactSafetyViolation {
