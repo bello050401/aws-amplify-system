@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { GetSecretValueCommand, PutSecretValueCommand } from "@aws-sdk/client-secrets-manager";
-import { checkPrivateMasterAcceptance, startPrivateMasterAcceptance } from "../lib/listing/nextEngine/privateMasterAcceptance";
+import { checkPrivateMasterAcceptance, startPrivateMasterAcceptance,
+  checkSecondPrivateMasterAcceptance, startSecondPrivateMasterAcceptance } from "../lib/listing/nextEngine/privateMasterAcceptance";
 import { isReservedNextEngineTestCode, isUploadablePrivateTestCode, makePrivateMasterTestSku } from "../lib/listing/nextEngine/privateTestPolicy";
 
 const origin = "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
@@ -15,7 +17,8 @@ const response = (payload: object, status = 200) => new Response(JSON.stringify(
 
 function fixture(options: { uncertainPut?: boolean; uncertainQueuePut?: boolean; delayedReadback?: boolean; uploadTimeout?: boolean;
   existingSku?: boolean; supplierMissing?: boolean; changeBindingAt?: "afterSupplier" | "afterMarker";
-  supplierResponseMode?: "errorRotated" | "invalidTokens" } = {}) {
+  supplierResponseMode?: "errorRotated" | "invalidTokens"; priorQueueStatus?: "-1" | "1" | "2";
+  priorMasterExists?: boolean } = {}) {
   const versions = new Map<string, { id: string; value: string }>();
   let uploads = 0;
   let owner = 0;
@@ -68,7 +71,9 @@ function fixture(options: { uncertainPut?: boolean; uncertainQueuePut?: boolean;
       return response({ result: "success", count: options.supplierMissing ? "0" : "1",
         data: options.supplierMissing ? [] : [{ supplier_id: "REAL_SUPPLIER", supplier_deleted_flag: "0" }] });
     }
-    if (path === "/api_v1_master_goods/count") return response({ result: "success", count: options.existingSku ? "1" : "0" });
+    if (path === "/api_v1_master_goods/count") return response({ result: "success",
+      count: body.get("goods_id-eq") === "BELLO-NE-TEST-20261002-DEE8ECFB92D2"
+        ? (options.priorMasterExists ? "1" : "0") : (options.existingSku ? "1" : "0") });
     if (path === "/api_v1_master_goods/upload") {
       uploads++;
       assert.match(body.get("data") ?? "", /^syohin_code,sire_code,/);
@@ -77,7 +82,8 @@ function fixture(options: { uncertainPut?: boolean; uncertainQueuePut?: boolean;
     }
     if (path === "/api_v1_system_que/search") {
       // Simulate token rotation before the goods-master readback.
-      return response({ result: "success", data: [{ que_id: "12345", que_method_name: "SYOHIN_KIHON_CSV", que_status_id: "2",
+      const prior = body.get("que_id-eq") === "1";
+      return response({ result: "success", data: [{ que_id: prior ? "1" : "12345", que_method_name: "SYOHIN_KIHON_CSV", que_status_id: prior ? (options.priorQueueStatus ?? "-1") : "2",
         access_token: "rotated-access", refresh_token: "rotated-refresh" }],
         access_token: "rotated-access", refresh_token: "rotated-refresh" });
     }
@@ -100,7 +106,19 @@ function fixture(options: { uncertainPut?: boolean; uncertainQueuePut?: boolean;
   return { overrides, versions, calls, get uploads() { return uploads; }, get tokens() { return tokens; } };
 }
 
+function seedFailedFirstAttempt(test: ReturnType<typeof fixture>) {
+  const owner = "first-owner";
+  const sku = "BELLO-NE-TEST-20261002-DEE8ECFB92D2";
+  test.versions.set("BELLO_NE_TEST_ONCE", { id: "ac51b1fe-4eb9-4547-89b8-b68689b5c037",
+    value: JSON.stringify({ kind: "SEND_RIGHT_CONSUMED", owner, sku, supplierCode: "REAL_SUPPLIER",
+      credentialVersionId: binding.credentialVersionId, companyNeId: binding.expectedCompanyNeId }) });
+  test.versions.set("BELLO_NE_TEST_QUEUE", { id: "72e2afaa-7d40-4879-88fa-4cf721361191",
+    value: JSON.stringify({ kind: "QUEUE_RECEIVED", owner, sku, queueId: "1" }) });
+}
+
 async function main() {
+  const amplifyBuild = readFileSync(new URL("../amplify.yml", import.meta.url), "utf8");
+  assert.ok(amplifyBuild.includes('NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED=${NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED:-0}'));
   const prefix = "BELLO-NE-TEST-20260930-";
   assert.equal(prefix.length, 23);
   assert.equal(makePrivateMasterTestSku("20260930", "ABCDEF"), `${prefix}ABCDEF`);
@@ -131,6 +149,68 @@ async function main() {
   }), /商品コードが不正/);
   assert.equal(overlong.uploads, 0);
   assert.equal(overlong.versions.size, 0);
+
+  const secondDisabled = fixture();
+  seedFailedFirstAttempt(secondDisabled);
+  await assert.rejects(startSecondPrivateMasterAcceptance("REAL_SUPPLIER", secondDisabled.overrides));
+  assert.equal(secondDisabled.calls.length, 0);
+  assert.equal(secondDisabled.uploads, 0);
+  const secondEnv = { ...env, NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED: "0", NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED: "1" };
+  await assert.rejects(startSecondPrivateMasterAcceptance("REAL_SUPPLIER", {
+    ...secondDisabled.overrides, env: { ...env, NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED: "1" },
+  }));
+  assert.equal(secondDisabled.calls.length, 0);
+  const second = fixture();
+  seedFailedFirstAttempt(second);
+  const secondOverrides = { ...second.overrides, env: secondEnv };
+  assert.equal((await checkSecondPrivateMasterAcceptance(secondOverrides)).phase, "AWAITING_UPLOAD");
+  assert.equal((await startSecondPrivateMasterAcceptance("REAL_SUPPLIER", secondOverrides)).phase, "QUEUED");
+  assert.equal(second.uploads, 1);
+  assert.equal(second.versions.size, 4);
+  assert.equal(second.versions.get("BELLO_NE_TEST_ONCE")?.id, "ac51b1fe-4eb9-4547-89b8-b68689b5c037");
+  assert.equal((await checkSecondPrivateMasterAcceptance(secondOverrides)).phase, "MASTER_CONFIRMED");
+  await assert.rejects(startSecondPrivateMasterAcceptance("REAL_SUPPLIER", secondOverrides), /既に開始/);
+  assert.equal(second.uploads, 1);
+  const secondConcurrent = fixture();
+  seedFailedFirstAttempt(secondConcurrent);
+  const concurrentOverrides = { ...secondConcurrent.overrides, env: secondEnv };
+  const secondResults = await Promise.allSettled([
+    startSecondPrivateMasterAcceptance("REAL_SUPPLIER", concurrentOverrides),
+    startSecondPrivateMasterAcceptance("REAL_SUPPLIER", concurrentOverrides),
+  ]);
+  assert.equal(secondResults.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(secondConcurrent.uploads, 1);
+  const orphanQueue = fixture();
+  seedFailedFirstAttempt(orphanQueue);
+  orphanQueue.versions.set("BELLO_NE_TEST_QUEUE_V2", { id: "6eb9939b-8a7e-47ac-8926-309438129a12",
+    value: JSON.stringify({ kind: "QUEUE_RECEIVED", owner: "other-owner", sku: "BELLO-NE-TEST-20261002-ABCDEF", queueId: "2" }) });
+  await assert.rejects(startSecondPrivateMasterAcceptance("REAL_SUPPLIER", { ...orphanQueue.overrides, env: secondEnv }), /既に開始/);
+  assert.equal(orphanQueue.uploads, 0);
+  for (const options of [{}, { priorQueueStatus: "1" as const }, { priorQueueStatus: "2" as const },
+    { priorMasterExists: true }, { existingSku: true }]) {
+    const blocked = fixture(options);
+    if (Object.keys(options).length > 0) seedFailedFirstAttempt(blocked);
+    await assert.rejects(startSecondPrivateMasterAcceptance("REAL_SUPPLIER", { ...blocked.overrides, env: secondEnv }));
+    assert.equal(blocked.uploads, 0);
+    assert.equal(blocked.versions.size, Object.keys(options).length > 0 ? 2 : 0);
+  }
+  const wrongSupplier = fixture();
+  seedFailedFirstAttempt(wrongSupplier);
+  await assert.rejects(startSecondPrivateMasterAcceptance("OTHER_SUPPLIER", { ...wrongSupplier.overrides, env: secondEnv }));
+  assert.equal(wrongSupplier.uploads, 0);
+  const wrongBinding = fixture();
+  seedFailedFirstAttempt(wrongBinding);
+  const old = wrongBinding.versions.get("BELLO_NE_TEST_ONCE")!;
+  wrongBinding.versions.set("BELLO_NE_TEST_ONCE", { ...old,
+    value: JSON.stringify({ ...JSON.parse(old.value), companyNeId: "other-company" }) });
+  await assert.rejects(startSecondPrivateMasterAcceptance("REAL_SUPPLIER", { ...wrongBinding.overrides, env: secondEnv }));
+  assert.equal(wrongBinding.uploads, 0);
+  const secondUnknown = fixture({ uploadTimeout: true });
+  seedFailedFirstAttempt(secondUnknown);
+  const unknownOverrides = { ...secondUnknown.overrides, env: secondEnv };
+  assert.equal((await startSecondPrivateMasterAcceptance("REAL_SUPPLIER", unknownOverrides)).phase, "UNKNOWN");
+  await assert.rejects(startSecondPrivateMasterAcceptance("REAL_SUPPLIER", unknownOverrides));
+  assert.equal(secondUnknown.uploads, 1);
 
   const concurrent = fixture();
   const results = await Promise.allSettled([

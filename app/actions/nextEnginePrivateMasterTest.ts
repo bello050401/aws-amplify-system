@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { checkPrivateMasterAcceptance, startPrivateMasterAcceptance,
+  checkSecondPrivateMasterAcceptance, startSecondPrivateMasterAcceptance,
   PRIVATE_MASTER_STAGING_ORIGIN, type PrivateMasterAcceptanceState } from "@/lib/listing/nextEngine/privateMasterAcceptance";
 
 export type PrivateMasterTestResult = { ok: true; state: PrivateMasterAcceptanceState } | { ok: false; message: string };
@@ -16,6 +17,10 @@ const SAFE_MESSAGES = new Set([
   "この専用テストは既に開始されています。再送しません。",
   "ネクストエンジンの確認に失敗しました。送信しません。",
   "使用できる仕入先を確認できません。送信しません。",
+  "前回の失敗記録を確認できません。送信しません。",
+  "前回の処理失敗を確認できません。送信しません。",
+  "前回の商品マスタ未登録を確認できません。送信しません。",
+  "専用テスト商品コードが不正です。送信しません。",
   "専用テスト商品コードが既に存在するか、件数を確認できません。送信しません。",
   "接続設定が変更されました。送信しません。",
 ]);
@@ -41,4 +46,22 @@ export async function checkNextEnginePrivateMasterTest(): Promise<PrivateMasterT
   if (await getInventoryRole() !== "ADMIN") return { ok: false, message: "管理者のみ操作できます。" };
   try { return { ok: true, state: await checkPrivateMasterAcceptance() }; }
   catch { return { ok: false, message: "テスト商品の状況を確認できません。再送せず担当者に確認してください。" }; }
+}
+
+export async function startNextEnginePrivateMasterRetest(supplierCode: string): Promise<PrivateMasterTestResult> {
+  if (!sameOrigin()) return { ok: false, message: "この画面から操作してください。" };
+  if (await getInventoryRole() !== "ADMIN") return { ok: false, message: "管理者のみ操作できます。" };
+  try { return { ok: true, state: await startSecondPrivateMasterAcceptance(supplierCode) }; }
+  catch (error) {
+    const message = error instanceof Error && SAFE_MESSAGES.has(error.message) ? error.message
+      : "第2試行を開始できませんでした。再送せず担当者に確認してください。";
+    return { ok: false, message };
+  }
+}
+
+export async function checkNextEnginePrivateMasterRetest(): Promise<PrivateMasterTestResult> {
+  if (!sameOrigin()) return { ok: false, message: "この画面から操作してください。" };
+  if (await getInventoryRole() !== "ADMIN") return { ok: false, message: "管理者のみ操作できます。" };
+  try { return { ok: true, state: await checkSecondPrivateMasterAcceptance() }; }
+  catch { return { ok: false, message: "第2試行の状況を確認できません。再送せず担当者に確認してください。" }; }
 }

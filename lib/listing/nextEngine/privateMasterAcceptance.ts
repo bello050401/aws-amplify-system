@@ -18,6 +18,17 @@ const QUEUE_STAGE = "BELLO_NE_TEST_QUEUE";
 // Version IDs are fixed for this one acceptance run, including across deploys and SKUs.
 const ONCE_VERSION = "ac51b1fe-4eb9-4547-89b8-b68689b5c037";
 const QUEUE_VERSION = "72e2afaa-7d40-4879-88fa-4cf721361191";
+const SECOND_ONCE_STAGE = "BELLO_NE_TEST_ONCE_V2";
+const SECOND_QUEUE_STAGE = "BELLO_NE_TEST_QUEUE_V2";
+const SECOND_ONCE_VERSION = "4ea48897-3407-472f-b997-1618ec1d982c";
+const SECOND_QUEUE_VERSION = "6eb9939b-8a7e-47ac-8926-309438129a12";
+const FIRST_FAILED_SKU = "BELLO-NE-TEST-20261002-DEE8ECFB92D2";
+const FIRST_FAILED_QUEUE_ID = "1";
+type Attempt = { onceStage: string; queueStage: string; onceVersion: string; queueVersion: string; gate: string; second: boolean };
+const FIRST_ATTEMPT: Attempt = { onceStage: ONCE_STAGE, queueStage: QUEUE_STAGE,
+  onceVersion: ONCE_VERSION, queueVersion: QUEUE_VERSION, gate: "NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED", second: false };
+const SECOND_ATTEMPT: Attempt = { onceStage: SECOND_ONCE_STAGE, queueStage: SECOND_QUEUE_STAGE,
+  onceVersion: SECOND_ONCE_VERSION, queueVersion: SECOND_QUEUE_VERSION, gate: "NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED", second: true };
 const TITLE = "BELLO 接続確認用（販売しない）";
 const DESCRIPTION = "BELLOとネクストエンジンの商品マスタ登録確認用です。販売・公開しません。";
 const COST = 0;
@@ -47,10 +58,11 @@ const defaultServices = (): Services => ({
   env: process.env,
 });
 
-function available(env: Services["env"]): boolean {
+function available(env: Services["env"], attempt: Attempt): boolean {
   return env.NEXT_ENGINE_PUBLIC_ORIGIN === PRIVATE_MASTER_STAGING_ORIGIN &&
     env.NEXT_ENGINE_TOKEN_SECRET_ID === TOKEN_SECRET_ARN &&
-    env.NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED === "1" &&
+    env[attempt.gate] === "1" &&
+    (!attempt.second || env.NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED !== "1") &&
     env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1";
 }
 
@@ -142,11 +154,46 @@ async function persistIfBound(next: NextEngineTokenPair, binding: NextEngineAppC
   await services.persistTokens(next, binding);
 }
 
+async function verifyFirstAttemptFailed(
+  supplierCode: string, binding: NextEngineAppConfiguration, tokens: NextEngineTokenPair, services: Services,
+): Promise<NextEngineTokenPair> {
+  const first = await getStage(services.secretClient, ONCE_STAGE);
+  const queued = await getStage(services.secretClient, QUEUE_STAGE);
+  if (!first || !queued || first.versionId !== ONCE_VERSION || queued.versionId !== QUEUE_VERSION ||
+      first.value.kind !== "SEND_RIGHT_CONSUMED" || queued.value.kind !== "QUEUE_RECEIVED" ||
+      first.value.sku !== FIRST_FAILED_SKU || queued.value.sku !== FIRST_FAILED_SKU ||
+      first.value.owner !== queued.value.owner || typeof first.value.owner !== "string" ||
+      first.value.supplierCode !== supplierCode || queued.value.queueId !== FIRST_FAILED_QUEUE_ID ||
+      first.value.credentialVersionId !== binding.credentialVersionId ||
+      first.value.companyNeId !== binding.expectedCompanyNeId) {
+    throw new Error("前回の失敗記録を確認できません。送信しません。");
+  }
+  const queue = await checkGoodsUploadQueue(tokens,
+    next => persistIfBound(next, binding, services), FIRST_FAILED_QUEUE_ID, services.request);
+  if (queue.state !== "FAILED") throw new Error("前回の処理失敗を確認できません。送信しません。");
+  const latestTokens = await services.readTokens(binding);
+  if (!latestTokens) throw new Error("ネクストエンジンの接続が必要です。送信しません。");
+  const existing = await postReadOnly("/api_v1_master_goods/count", new URLSearchParams({
+    access_token: latestTokens.accessToken, refresh_token: latestTokens.refreshToken, "goods_id-eq": FIRST_FAILED_SKU,
+  }), binding, latestTokens, services);
+  if (countOf(existing.payload.count) !== 0) throw new Error("前回の商品マスタ未登録を確認できません。送信しません。");
+  return existing.tokens;
+}
+
 /** One server invocation can consume the fixed send right once; no retry path exists. */
 export async function startPrivateMasterAcceptance(supplierCode: string, overrides: Partial<Services> = {}): Promise<PrivateMasterAcceptanceState> {
+  return startAttempt(supplierCode, FIRST_ATTEMPT, overrides);
+}
+
+/** A separate, permanently bounded second attempt; never reuses the first marker. */
+export async function startSecondPrivateMasterAcceptance(supplierCode: string, overrides: Partial<Services> = {}): Promise<PrivateMasterAcceptanceState> {
+  return startAttempt(supplierCode, SECOND_ATTEMPT, overrides);
+}
+
+async function startAttempt(supplierCode: string, attempt: Attempt, overrides: Partial<Services>): Promise<PrivateMasterAcceptanceState> {
   assertNextEngineServerRuntime();
   const services = { ...defaultServices(), ...overrides };
-  if (!available(services.env)) throw new Error("専用テストの安全確認が完了していません。送信しません。");
+  if (!available(services.env, attempt)) throw new Error("専用テストの安全確認が完了していません。送信しません。");
   if (!/^[A-Za-z0-9_-]{1,49}$/.test(supplierCode) || supplierCode === "SYNTHETIC") {
     throw new Error("登録済みの仕入先コードを確認してください。");
   }
@@ -155,7 +202,11 @@ export async function startPrivateMasterAcceptance(supplierCode: string, overrid
   let tokens = await services.readTokens(binding);
   if (!tokens) throw new Error("ネクストエンジンの接続が必要です。送信しません。");
   await assertCurrentExists(services.secretClient);
-  if (await getStage(services.secretClient, ONCE_STAGE)) throw new Error("この専用テストは既に開始されています。再送しません。");
+  if (await getStage(services.secretClient, attempt.onceStage) ||
+      await getStage(services.secretClient, attempt.queueStage)) {
+    throw new Error("この専用テストは既に開始されています。再送しません。");
+  }
+  if (attempt.second) tokens = await verifyFirstAttemptFailed(supplierCode, binding, tokens, services);
 
   const supplier = await postReadOnly("/api_v1_master_supplier/search", new URLSearchParams({
     access_token: tokens.accessToken, refresh_token: tokens.refreshToken,
@@ -186,7 +237,7 @@ export async function startPrivateMasterAcceptance(supplierCode: string, overrid
   const owner = services.owner();
   const marker = { kind: "SEND_RIGHT_CONSUMED", owner, sku, supplierCode, title: TITLE, cost: COST, price: PRICE,
     credentialVersionId: binding.credentialVersionId, companyNeId: binding.expectedCompanyNeId };
-  await putImmutableMarker(services.secretClient, ONCE_STAGE, ONCE_VERSION, marker);
+  await putImmutableMarker(services.secretClient, attempt.onceStage, attempt.onceVersion, marker);
   // From here, any failure is permanently non-retryable. This continuation calls upload once.
   try {
     if (!sameBinding(await services.getConfiguration(), binding) ||
@@ -201,26 +252,34 @@ export async function startPrivateMasterAcceptance(supplierCode: string, overrid
     queueId = receipt.queueId;
   } catch { return { phase: "UNKNOWN", sku, publicationConfirmed: false }; }
   try {
-    await putImmutableMarker(services.secretClient, QUEUE_STAGE, QUEUE_VERSION, { kind: "QUEUE_RECEIVED", owner, sku, queueId });
+    await putImmutableMarker(services.secretClient, attempt.queueStage, attempt.queueVersion, { kind: "QUEUE_RECEIVED", owner, sku, queueId });
   } catch { return { phase: "UNKNOWN", sku, queueId, publicationConfirmed: false }; }
   return { phase: "QUEUED", sku, queueId, publicationConfirmed: false };
 }
 
 /** Read-only progress check. The marker never authorizes a second upload. */
 export async function checkPrivateMasterAcceptance(overrides: Partial<Services> = {}): Promise<PrivateMasterAcceptanceState> {
+  return checkAttempt(FIRST_ATTEMPT, overrides);
+}
+
+export async function checkSecondPrivateMasterAcceptance(overrides: Partial<Services> = {}): Promise<PrivateMasterAcceptanceState> {
+  return checkAttempt(SECOND_ATTEMPT, overrides);
+}
+
+async function checkAttempt(attempt: Attempt, overrides: Partial<Services>): Promise<PrivateMasterAcceptanceState> {
   assertNextEngineServerRuntime();
   const services = { ...defaultServices(), ...overrides };
-  if (!available(services.env)) throw new Error("専用テストの安全確認が完了していません。");
-  const marker = await getStage(services.secretClient, ONCE_STAGE);
+  if (!available(services.env, attempt)) throw new Error("専用テストの安全確認が完了していません。");
+  const marker = await getStage(services.secretClient, attempt.onceStage);
   if (!marker) return { phase: "AWAITING_UPLOAD", publicationConfirmed: false };
   const sku = marker.value.sku;
   const supplierCode = marker.value.supplierCode;
-  if (marker.versionId !== ONCE_VERSION || marker.value.kind !== "SEND_RIGHT_CONSUMED" ||
+  if (marker.versionId !== attempt.onceVersion || marker.value.kind !== "SEND_RIGHT_CONSUMED" ||
       typeof sku !== "string" || typeof supplierCode !== "string" ||
       typeof marker.value.owner !== "string") throw new Error("専用テスト状態を確認できません。");
-  const queued = await getStage(services.secretClient, QUEUE_STAGE);
+  const queued = await getStage(services.secretClient, attempt.queueStage);
   if (!queued) return { phase: "UNKNOWN", sku, publicationConfirmed: false };
-  if (queued.versionId !== QUEUE_VERSION || queued.value.kind !== "QUEUE_RECEIVED" ||
+  if (queued.versionId !== attempt.queueVersion || queued.value.kind !== "QUEUE_RECEIVED" ||
       queued.value.owner !== marker.value.owner || queued.value.sku !== sku ||
       typeof queued.value.queueId !== "string") throw new Error("専用テスト状態を確認できません。");
   const queueId = queued.value.queueId;

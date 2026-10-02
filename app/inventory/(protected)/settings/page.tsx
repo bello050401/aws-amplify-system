@@ -126,6 +126,9 @@ export default async function InventorySettingsPage() {
           nextEngineConnection={nextEngineConnection}
           nextEnginePrivateTestEnabled={process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED === "1" &&
             process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
+          nextEnginePrivateRetestEnabled={process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED === "1" &&
+            process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED !== "1" &&
+            process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
           lineConnected={lineConnected}
           lineTokenSource={lineTokenSource}
         />

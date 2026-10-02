@@ -39,6 +39,7 @@ interface SettingsTabsProps {
   baseConnection: BaseConnectionState;
   nextEngineConnection: NextEngineConnectionState;
   nextEnginePrivateTestEnabled: boolean;
+  nextEnginePrivateRetestEnabled: boolean;
   /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
   lineConnected: boolean;
   lineTokenSource: LineTokenSource;
@@ -63,6 +64,7 @@ export function SettingsTabs({
   baseConnection,
   nextEngineConnection,
   nextEnginePrivateTestEnabled,
+  nextEnginePrivateRetestEnabled,
   lineConnected,
   lineTokenSource,
 }: SettingsTabsProps) {
@@ -215,7 +217,7 @@ export function SettingsTabs({
           </div>
         )}
         {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}
-        {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} privateTestEnabled={nextEnginePrivateTestEnabled} callbackResult={nextEngineResult} />}
+        {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} privateTestEnabled={nextEnginePrivateTestEnabled} privateRetestEnabled={nextEnginePrivateRetestEnabled} callbackResult={nextEngineResult} />}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側
             (/inventory/listings/pricing-rules)へ移設した。ここに残す
             ロジック付きUIを二重に持たない(同じ設定を二箇所で編集できる

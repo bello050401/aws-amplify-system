@@ -17,9 +17,10 @@ const labels: Record<NextEngineConnectionState, string> = {
   CONNECTED: "接続済み",
 };
 
-export function NextEngineSettingsPanel({ state, privateTestEnabled = false, callbackResult = null }: {
+export function NextEngineSettingsPanel({ state, privateTestEnabled = false, privateRetestEnabled = false, callbackResult = null }: {
   state: NextEngineConnectionState;
   privateTestEnabled?: boolean;
+  privateRetestEnabled?: boolean;
   callbackResult?: "success" | "failed" | null;
 }) {
   return (
@@ -32,6 +33,7 @@ export function NextEngineSettingsPanel({ state, privateTestEnabled = false, cal
       <p className="text-amber-800">商品マスタ登録と非公開テスト商品の処理結果は、まだ確認できていません。</p>
       {state === "CONNECTED" && <NextEngineMasterCandidatesPanel />}
       {state === "CONNECTED" && privateTestEnabled && <NextEnginePrivateMasterTestPanel />}
+      {state === "CONNECTED" && privateRetestEnabled && <NextEnginePrivateMasterTestPanel attempt="second" />}
     </section>
   );
 }
