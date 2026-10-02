@@ -374,6 +374,39 @@ function testSelectedBrandReferenceIsContextOnly() {
   assertTrue(prompt.includes("今回の商品個体の型番・年代・素材・製造国・デザイナー等の証拠には使わない"), "⑩ブランド一般と個体事実の境界を明示");
 }
 
+async function testVerifiedBrandOverviewUsesTheNormalCompositionPath() {
+  resetMocks();
+  // Replay the single unsaved B005795 UI result observed on 2026-10-02. The
+  // model response is fixed here, so this test spends no AI budget and never
+  // reads or writes the real inventory/marketplace.
+  providerMock.__configure([step(sections(
+    "Vitra（ヴィトラ）より、オールプラスチックで構成されたAll Plastic Chair（オールプラスチックチェア）のご紹介です。\n\n" +
+    "背もたれから座面、脚部まですべてプラスチックで作られた一体感のあるデザインが特徴のチェアです。\n\n" +
+    "ダイニングチェアとしてだけでなく、オフィスやミーティングスペース、来客用のサイドチェアとしても取り入れやすい一脚です。",
+    { title: "【背面傷】Vitra All Plastic Chair" },
+  ))]);
+  const input = {
+    inventoryId: "synthetic-vitra-overview-001", name: "【検証専用・販売不可・現物なし】【背面傷】Vitra All Plastic Chair",
+    categoryName: "チェア", width: "42", depth: "48", height: "75", damageNotes: "背面に小傷あり。",
+    note: null, conditionRating: null, stockQuantity: 0, sku: "SYN-VITRA-001", archive: [], styleProfile: null,
+    ruleSections: { productDetail: "幅42cm", shipping: "配送は確認中です。", condition: "背面に小傷あり。" },
+    extraFacts: { brand: "Vitra", brandOverview: "Vitraは1950年に創業し、スイスのバーゼル近郊に本拠を置く家具メーカーです。" },
+  };
+  const result = await generateProductPage(input);
+  assertTrue(result.ok, "⑫検証済みブランド紹介: 通常の生成・品質検査を通過");
+  assertTrue(!!result.sections?.title.startsWith("【検証専用・販売不可・現物なし】【背面傷】"), "⑫QA表示と背面傷を原題順に保持");
+  assertEqual(result.fullDescription?.match(/◎ブランドについて/g)?.length, 1, "⑫ブランド欄は1回だけ");
+  assertEqual(result.sections?.brandSection, input.extraFacts.brandOverview, "⑫保存履歴に残るブランド欄も本文と一致");
+  assertTrue(!!result.fullDescription?.includes("1950年に創業し、スイスのバーゼル近郊"), "⑫公式確認済みの一般情報を採用");
+  assertTrue(!result.fullDescription?.includes("スイス製"), "⑫商品の製造国へ読み替えない");
+  assertEqual(providerMock.__callCount(), 1, "⑫ブランド別枠のために追加生成しない");
+
+  providerMock.__configure([step(sections("チェアの座面と脚の形が特徴です。日常のダイニングや作業スペースにも置きやすい、すっきりした外観の椅子です。", { title: "別ブランドの椅子" }))]);
+  const changed = await generateProductPage({ ...input, name: "別ブランドの椅子", extraFacts: { brand: "別ブランド", brandOverview: null } });
+  assertTrue(!changed.fullDescription?.includes("◎ブランドについて") && !changed.fullDescription?.includes("1950年"), "⑫ブランド選択変更時に前ブランド文が残らない");
+  assertEqual(changed.sections?.brandSection, "", "⑫前ブランドの履歴欄も引き継がない");
+}
+
 function testColourEvidenceCannotBeSelfCertifiedOrNegated() {
   const commaSplit = stripUnverifiedPhotoColorSentences("背もたれには丸みがあり、黒い色です。", "背もたれは白い色です。");
   assertEqual(commaSplit.text, "", "⑪部位と色が別句でも、誤色を取り除く");
@@ -383,6 +416,13 @@ function testColourEvidenceCannotBeSelfCertifiedOrNegated() {
   assertEqual(verified.text, "背もたれのフレームは白色です。", "⑪記録と一致する複合部位の色は保持");
   assertEqual(preserveCriticalTitleDisclosures("脚キャップ欠品なし 合成チェア", "【脚キャップ欠品】合成チェア"),
     null, "⑪『欠品なし』を含む矛盾タイトルは不合格");
+  assertEqual(
+    preserveCriticalTitleDisclosures("Vitra APC 編集タイトル", "【検証専用・販売不可・現物なし】【背面傷】Vitra APC"),
+    "【検証専用・販売不可・現物なし】【背面傷】Vitra APC 編集タイトル",
+    "⑪担当者の編集タイトルにもQA表示と傷を保持",
+  );
+  assertEqual(preserveCriticalTitleDisclosures("Vitra APC 編集タイトル", "Vitra APC"),
+    "Vitra APC 編集タイトル", "⑪普通のタイトルは書き換えない");
 }
 
 async function main() {
@@ -396,6 +436,7 @@ async function main() {
   await testNoGenerationWithoutProductEvidence();
   await testPhotoCaptionCannotApproveWrongColourAndTitleKeepsDefect();
   testSelectedBrandReferenceIsContextOnly();
+  await testVerifiedBrandOverviewUsesTheNormalCompositionPath();
   testColourEvidenceCannotBeSelfCertifiedOrNegated();
 
   console.log(`\n${passes} passed, ${failures} failed`);

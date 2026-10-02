@@ -14,6 +14,7 @@ import { getListingDraftForInventory } from "@/lib/listing/service";
 import { DEFAULT_LISTING_SHIPPING_METHOD, type ListingShippingMethod } from "@/lib/listing/types";
 import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
 import { findBrandByName } from "@/lib/brands/catalog";
+import { verifiedBrandOverview } from "@/lib/brands/verifiedOverview";
 import { researchProductIntroduction } from "./productResearch";
 import { resolveTopImage } from "@/lib/inventory/imageTypes";
 import { observeStoredProductPhoto } from "./photoObservation";
@@ -339,7 +340,16 @@ export async function generateCanonicalProductPage(
     depth,
     height,
     ruleSections,
-    extraFacts: { brand, brandReference: selectedBrand?.description ?? null, material: facts.material, verifiedProductFacts: productReferences, photoObservations },
+    extraFacts: {
+      brand,
+      brandReference: selectedBrand?.description ?? null,
+      brandOverview: selectedBrand
+        ? verifiedBrandOverview(selectedBrand.name, item.name, [selectedBrand.reading])?.text ?? null
+        : null,
+      material: facts.material,
+      verifiedProductFacts: productReferences,
+      photoObservations,
+    },
     damageNotes: item.damageNotes ?? null,
     note: item.note ?? null,
     conditionRating: item.conditionRating ?? null,

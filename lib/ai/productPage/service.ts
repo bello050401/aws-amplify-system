@@ -104,7 +104,7 @@ export interface ProductPageGenerationInput {
    */
   ruleSections?: RuleBasedSections | null;
   /** §20 AIへ渡す追加の事実(ブランド・素材)。 */
-  extraFacts?: { brand?: string | null; brandReference?: string | null; material?: string | null; verifiedProductFacts?: { fact: string; sourceUrl: string }[]; photoObservations?: string[] } | null;
+  extraFacts?: { brand?: string | null; brandReference?: string | null; brandOverview?: string | null; material?: string | null; verifiedProductFacts?: { fact: string; sourceUrl: string }[]; photoObservations?: string[] } | null;
 }
 
 /** §19 ルールベース領域。descriptionSections.ts が作る。 */
@@ -183,6 +183,7 @@ function buildDescription(sections: ProductPageSections, input: ProductPageGener
   if (!input.ruleSections) return composeFullDescription(sections, input.shippingBoilerplate);
   return composeListingDescription({
     introduction: sections.introduction ?? null,
+    brandOverview: sections.brandSection,
     productDetail: input.ruleSections.productDetail,
     shipping: input.ruleSections.shipping,
     condition: input.ruleSections.condition,
@@ -217,7 +218,7 @@ export function preserveCriticalTitleDisclosures(generatedTitle: string, invento
   const leading = inventoryName.match(/^(?:【[^】]*】)+/)?.[0] ?? "";
   const warnings = [...leading.matchAll(/【([^】]+)】/g)]
     .map((match) => match[1])
-    .filter((label) => /欠品|破損|傷|キズ|汚れ|難あり|訳あり|欠け|割れ|不具合/.test(label));
+    .filter((label) => /欠品|破損|傷|キズ|汚れ|難あり|訳あり|欠け|割れ|不具合|検証専用|販売不可|現物なし|社内検証|出品禁止/.test(label));
   if (warnings.some((label) => {
     const index = generatedTitle.indexOf(label);
     return index >= 0 && /^(?:なし|無し|ない|ありません|ではない)/.test(generatedTitle.slice(index + label.length));
@@ -302,6 +303,7 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     extra: {
       brand: input.extraFacts?.brand ?? input.brand ?? null,
       brandReference: input.extraFacts?.brandReference ?? null,
+      brandOverview: input.extraFacts?.brandOverview ?? null,
       material: input.extraFacts?.material ?? null,
       verifiedProductFacts: input.extraFacts?.verifiedProductFacts,
       photoObservations: input.extraFacts?.photoObservations,
@@ -373,7 +375,7 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         // 呼び出していない)。
         const ruleSections = input.ruleSections ?? buildFallbackRuleSections(input, facts);
         const fallback: ProductPageSections = {
-          title: facts.name, introduction: buildFallbackIntroduction(facts), brandSection: "", designerSection: "",
+          title: facts.name, introduction: buildFallbackIntroduction(facts), brandSection: input.extraFacts?.brandOverview ?? "", designerSection: "",
           featureSection: "", materialSection: "", dimensionsSection: facts.dimensions ?? "",
           conditionSection: facts.conditionDisclosure ?? "", shippingSection: "",
         };
@@ -421,7 +423,13 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
     });
   }
 
-  sections = result!.output;
+  sections = {
+    ...result!.output,
+    // The rule-based path never accepts a model-written brand claim. Keep the
+    // same verified text in the section record and composed description so a
+    // saved generation can be inspected and replayed without a second AI call.
+    ...(input.ruleSections ? { brandSection: input.extraFacts?.brandOverview ?? "" } : {}),
+  };
 
   // ── 書き直しても残っていたら、機械的に落とす(指示書§5。コンディション
   //    混入・カテゴリ矛盾も同じ扱いにする) ──────────────────────────

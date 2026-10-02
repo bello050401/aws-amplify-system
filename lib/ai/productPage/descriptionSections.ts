@@ -316,6 +316,8 @@ export function buildConditionSection(input: ConditionSectionInput): ConditionSe
 export interface ComposeListingDescriptionInput {
   /** ◎商品のご紹介(AI生成)。空なら見出しごと出さない。 */
   introduction: string | null;
+  /** ブランドの公式資料で確認済みの一般情報。商品個体の証拠ではない。 */
+  brandOverview?: string | null;
   /** ◎商品詳細(ルール)。 */
   productDetail: string;
   /** ◎発送について(ルール)。 */
@@ -337,6 +339,7 @@ export interface ComposeListingDescriptionInput {
 export function composeListingDescription(input: ComposeListingDescriptionInput): string {
   const parts: { heading: string; body: string }[] = [
     { heading: "◎商品のご紹介", body: input.introduction ?? "" },
+    { heading: "◎ブランドについて", body: input.brandOverview ?? "" },
     { heading: "◎商品詳細", body: input.productDetail },
     { heading: "◎発送について", body: input.shipping },
     { heading: "◎コンディション", body: input.condition },
