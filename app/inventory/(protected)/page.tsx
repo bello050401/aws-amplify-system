@@ -19,6 +19,8 @@ import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryAdvancedSearchPanel } from "./InventoryAdvancedSearchPanel";
 import { InventoryTableWithPhotos } from "./InventoryTableWithPhotos";
 import { InventoryPagination } from "./InventoryPagination";
+import { InventorySpeedProbeLink } from "./InventorySpeedProbeLink";
+import { inventorySpeedProbeEnabled, SPEED_PROBE_INVENTORY_ID } from "@/lib/inventory/speedProbeGate";
 
 interface InventoryListPageProps {
   searchParams: {
@@ -227,6 +229,10 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
             />
           }
         />
+        {role === "ADMIN" && inventorySpeedProbeEnabled() && (
+          <InventorySpeedProbeLink href={`/inventory/${SPEED_PROBE_INVENTORY_ID}`}
+            endAt={process.env.INVENTORY_SPEED_PROBE_END_AT!} />
+        )}
         {/*
           第六ラウンド§17-18(P0-4)で実機発見・修正: この行が常時
           `flex`(=flex-row)だったため、InventorySidebarのモバイル用

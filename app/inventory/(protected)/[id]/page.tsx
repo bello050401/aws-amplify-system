@@ -29,6 +29,8 @@ import { PhotoAssetProductGallery } from "./PhotoAssetProductGallery";
 import { resolveProductGallerySource } from "@/lib/photoRegistration/gallerySelection";
 import { InventoryAuthTemporarilyUnavailable } from "../InventoryAuthTemporarilyUnavailable";
 import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
+import { inventorySpeedProbeEnabled, SPEED_PROBE_INVENTORY_ID } from "@/lib/inventory/speedProbeGate";
+import { InventorySpeedProbeResult } from "./InventorySpeedProbeResult";
 
 /** "60000" → "60,000円" — every price on this page (readable Japanese yen, not a bare number). */
 function formatYen(value: number | null): string {
@@ -258,6 +260,7 @@ export default async function InventoryDetailPage({
   const topImage = resolveTopImage(item.images);
   const orderedNormalImages = topImage ? [topImage, ...normalImages.filter((i) => i.storageKey !== topImage.storageKey)] : normalImages;
   const productGallery = resolveProductGallerySource(orderedNormalImages, normalPhotoAssets);
+  const speedProbe = role === "ADMIN" && params.id === SPEED_PROBE_INVENTORY_ID && inventorySpeedProbeEnabled();
 
   return (
     <div className="flex h-full flex-col">
@@ -299,6 +302,7 @@ export default async function InventoryDetailPage({
             {canDelete && <DeleteInventoryButton inventoryId={item.id} label={`${item.displayId} ${item.name}`} />}
           </div>
         </div>
+        {speedProbe && <InventorySpeedProbeResult endAt={process.env.INVENTORY_SPEED_PROBE_END_AT!} />}
         {role === "VIEWER" && <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>}
         {role === "EDITOR" && <p className="mt-1 text-[11px] text-gray-400">削除はADMIN権限が必要です。</p>}
 
@@ -309,16 +313,22 @@ export default async function InventoryDetailPage({
         <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-[380px_1fr]">
           {/* 左カラム: 商品画像。NORMAL/DAMAGEは明確に分離。 */}
           <div>
-            {productGallery.kind === "INVENTORY" ? (
-              <InventoryImageGallery images={productGallery.images} alt={item.name} title="商品画像" />
-            ) : (
-              <PhotoAssetProductGallery inventoryId={item.id} initialAssets={productGallery.assets} title="商品画像" />
-            )}
+            <div data-inventory-speed-gallery={speedProbe ? "primary" : undefined}>
+              {productGallery.kind === "INVENTORY" ? (
+                <InventoryImageGallery images={productGallery.images} alt={item.name} title="商品画像" speedProbe={speedProbe} />
+              ) : (
+                <PhotoAssetProductGallery inventoryId={item.id} initialAssets={productGallery.assets} title="商品画像" speedProbe={speedProbe} />
+              )}
+            </div>
             {productGallery.kind === "INVENTORY" && normalPhotoAssets.length > 0 ? (
-              <PhotoAssetProductGallery inventoryId={item.id} initialAssets={normalPhotoAssets} title="撮影画像" />
+              <div data-inventory-speed-gallery={speedProbe ? "secondary" : undefined}>
+                <PhotoAssetProductGallery inventoryId={item.id} initialAssets={normalPhotoAssets} title="撮影画像" speedProbe={speedProbe} />
+              </div>
             ) : null}
             {productGallery.kind === "PHOTO_ASSET" && orderedNormalImages.length > 0 ? (
-              <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="既存画像" />
+              <div data-inventory-speed-gallery={speedProbe ? "secondary" : undefined}>
+                <InventoryImageGallery images={orderedNormalImages} alt={item.name} title="既存画像" speedProbe={speedProbe} />
+              </div>
             ) : null}
             <div className="mt-6">
               <InventoryImageGallery images={damageImages} alt={`${item.name} 傷・汚れ`} title="傷・汚れ写真" hideIfEmpty />

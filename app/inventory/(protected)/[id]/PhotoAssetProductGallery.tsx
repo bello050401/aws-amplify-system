@@ -9,10 +9,12 @@ export function PhotoAssetProductGallery({
   inventoryId,
   initialAssets,
   title = "商品画像（撮影画像）",
+  speedProbe = false,
 }: {
   inventoryId: string;
   initialAssets: WebPhotoAssetView[];
   title?: string;
+  speedProbe?: boolean;
 }) {
   const [assets, setAssets] = useState(initialAssets);
   const [selected, setSelected] = useState(0);
@@ -45,7 +47,8 @@ export function PhotoAssetProductGallery({
   return (
     <div className="mt-6">
       <p className="mb-2 text-[11px] font-bold text-gray-400">{title}</p>
-      <div className="flex h-[380px] w-full items-center justify-center border border-gray-200 bg-gray-50">
+      <div data-inventory-speed-hero={speedProbe ? "" : undefined}
+        className="flex h-[380px] w-full items-center justify-center border border-gray-200 bg-gray-50">
         {failed || !current.processedUrl ? (
           <div className="text-center text-[12px] text-gray-500">
             <p>画像を表示できませんでした（署名URLの期限切れの可能性があります）</p>
@@ -75,6 +78,7 @@ export function PhotoAssetProductGallery({
             <button
               key={asset.id}
               type="button"
+              data-inventory-speed-thumb={speedProbe ? "" : undefined}
               onClick={() => {
                 setSelected(i);
                 setFailed(false);

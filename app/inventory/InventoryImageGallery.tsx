@@ -14,6 +14,8 @@ interface InventoryImageGalleryProps {
   title?: string;
   /** When true and `images` is empty, renders nothing at all rather than the "No Image" hero placeholder — used for the 傷・汚れ写真 group, where having none at all is the common case and a big empty placeholder box would just be clutter (spec §6/§11: don't over-build this screen). The 商品画像 group keeps the placeholder (hideIfEmpty defaults false) since every Inventory item is expected to have at least a representative photo. */
   hideIfEmpty?: boolean;
+  /** Marks only this explicit staging QA sample's image slots; no telemetry is sent. */
+  speedProbe?: boolean;
 }
 
 /**
@@ -60,7 +62,7 @@ interface InventoryImageGalleryProps {
  * component itself has no opinion on which image is "the" top one, it
  * just always shows whichever is first.
  */
-export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false }: InventoryImageGalleryProps) {
+export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false, speedProbe = false }: InventoryImageGalleryProps) {
   const [selected, setSelected] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const current = images[selected] as InventoryImageRecord | undefined;
@@ -153,6 +155,7 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false 
       {title && <p className="mb-2 text-[11px] font-bold text-gray-400">{title}</p>}
       <button
         type="button"
+        data-inventory-speed-hero={speedProbe ? "" : undefined}
         onClick={() => setLightboxOpen(true)}
         className="block w-full cursor-zoom-in border border-gray-200 bg-gray-50"
         aria-label="画像を拡大表示"
@@ -187,6 +190,7 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false 
             <button
               key={img.storageKey}
               type="button"
+              data-inventory-speed-thumb={speedProbe ? "" : undefined}
               onClick={() => setSelected(i)}
               aria-label={`${i + 1}枚目を表示`}
               className={i === selected ? "ring-2 ring-gray-900" : "opacity-80 hover:opacity-100"}

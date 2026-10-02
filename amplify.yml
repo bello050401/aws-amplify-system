@@ -54,6 +54,12 @@ frontend:
         - echo "PHOTO_CACHE_TELEMETRY_EXPERIMENT_ID=${PHOTO_CACHE_TELEMETRY_EXPERIMENT_ID:-}" >> .env.production
         - echo "PHOTO_CACHE_TELEMETRY_START_AT=${PHOTO_CACHE_TELEMETRY_START_AT:-}" >> .env.production
         - echo "PHOTO_CACHE_TELEMETRY_END_AT=${PHOTO_CACHE_TELEMETRY_END_AT:-}" >> .env.production
+        # ADMIN-only staging inventory display probe; disabled outside a bounded UTC window.
+        - echo "INVENTORY_SPEED_PROBE_ENABLED=${INVENTORY_SPEED_PROBE_ENABLED:-0}" >> .env.production
+        - echo "INVENTORY_SPEED_PROBE_APP_ID=${AWS_APP_ID:-}" >> .env.production
+        - echo "INVENTORY_SPEED_PROBE_BRANCH=${AWS_BRANCH:-}" >> .env.production
+        - echo "INVENTORY_SPEED_PROBE_START_AT=${INVENTORY_SPEED_PROBE_START_AT:-}" >> .env.production
+        - echo "INVENTORY_SPEED_PROBE_END_AT=${INVENTORY_SPEED_PROBE_END_AT:-}" >> .env.production
         - npm run build
   artifacts:
     baseDirectory: .next
