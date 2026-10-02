@@ -421,10 +421,13 @@ async function testVerifiedBrandOverviewUsesTheNormalCompositionPath() {
 
 async function testUnsourcedSeatingClaimsInSavedQaReplay() {
   resetMocks();
+  // Exact introduction already saved on B005795 before this fix. Replay the
+  // captured text through the real service; no new model call or item update.
   providerMock.__configure([step(sections(
-    "Vitra All Plastic Chairは背もたれから座面、脚部までがつながる造形のチェアです。" +
-    "身体のラインに沿うように設計され、快適な座り心地を提供します。" +
-    "丸みを帯びた背もたれとすっきりした脚の線が外観の特徴です。ダイニングや作業スペースにも置きやすい一脚です。",
+    "Vitra（ヴィトラ）より、シンプルなフォルムの All Plastic Chair（オールプラスチックチェア）のご紹介です。\n\n" +
+    "背もたれから脚部へ繋がる連続したラインが特徴のチェアです。\n\n" +
+    "シンプルなデザインながら、背もたれと座面の形状が身体のラインに沿うように設計されており、快適な座り心地を提供します。" +
+    "ダイニングチェアとしてだけでなく、オフィスやミーティングスペース、来客用のサイドチェアとしても取り入れやすい一脚です。",
     { title: "【背面傷】Vitra All Plastic Chair" },
   ))]);
   const result = await generateProductPage({
@@ -440,7 +443,8 @@ async function testUnsourcedSeatingClaimsInSavedQaReplay() {
   assertTrue(result.ok, "⑬根拠のない使用感を除いても紹介文が残る");
   assertTrue(!result.sections?.introduction.includes("身体のライン") && !result.sections?.introduction.includes("快適な座り心地"),
     "⑬身体に沿う設計と座り心地を除去");
-  assertTrue(!!result.sections?.introduction.includes("背もたれから座面") && !!result.sections?.introduction.includes("脚の線"),
+  assertTrue(!!result.sections?.introduction.includes("背もたれから脚部へ繋がる連続したライン") &&
+    !!result.sections?.introduction.includes("ダイニングチェアとしてだけでなく"),
     "⑬確認可能な外観説明は保持");
   assertTrue(result.introSanitized === true, "⑬文の除去を監査値に記録");
 
