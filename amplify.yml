@@ -43,6 +43,7 @@ frontend:
         # mall auto-sync settings and one-time acceptance have been reviewed.
         - echo "NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED=${NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED:-0}" >> .env.production
         - echo "NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED=${NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED:-0}" >> .env.production
+        - echo "NEXT_ENGINE_MASTER_UPLOAD_ENABLED=${NEXT_ENGINE_MASTER_UPLOAD_ENABLED:-0}" >> .env.production
         - echo "NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED=${NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED:-0}" >> .env.production
         # Temporary, non-secret photo-cache measurement. Exact staging app/branch,
         # explicit 48h-or-shorter UTC window, release A/B and UUID are also checked in code.

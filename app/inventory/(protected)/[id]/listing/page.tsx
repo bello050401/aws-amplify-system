@@ -8,6 +8,7 @@ import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { findBrandByName } from "@/lib/brands/catalog";
+import { getNextEngineMasterSync } from "@/lib/listing/nextEngine/masterSync";
 
 /**
  * BELLO統合改修 master指示書 Phase D — 在庫詳細画面(app/inventory/
@@ -36,7 +37,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
   const item = await getInventoryDetail(params.id);
   if (!item) notFound();
 
-  const [draft, channelListing, categories, statuses, photoAssetsResult] = await Promise.all([
+  const [draft, channelListing, categories, statuses, photoAssetsResult, nextEngineSync] = await Promise.all([
     getListingDraftForInventory(item.id),
     getChannelListing(item.id, "MERCARI_SHOPS"),
     // 2026-09-04 EC出品改修指示書 §2-1: 右パネルのカテゴリ/在庫ステータス。
@@ -44,6 +45,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
     listCategories(item.categoryId),
     listStatuses(),
     listInventoryPhotoAssetsAction(item.id),
+    getNextEngineMasterSync(item.id),
   ]);
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
@@ -98,6 +100,10 @@ export default async function ListingPage({ params }: { params: { id: string } }
           photoAssets={photoAssets}
           initialDraft={draft}
           initialChannelListing={channelListing}
+          initialNextEngineSync={nextEngineSync}
+          canSendNextEngine={role === "ADMIN"}
+          nextEngineUploadEnabled={process.env.NEXT_ENGINE_MASTER_UPLOAD_ENABLED === "1" &&
+            process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
         />
         {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
             ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と

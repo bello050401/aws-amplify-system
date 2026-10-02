@@ -13,6 +13,7 @@ import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
 import { NextEngineListingSection } from "./NextEngineListingSection";
+import type { MasterSyncView } from "@/lib/listing/nextEngine/masterSync";
 import { generateListingCopyAction } from "@/app/actions/ai";
 import { createBrandedListingImageAction, uploadBrandLogoAction } from "@/app/actions/brandLogo";
 import { InventoryImageGallery } from "../../../InventoryImageGallery";
@@ -73,6 +74,9 @@ export function ListingForm({
   photoAssets,
   initialDraft,
   initialChannelListing,
+  initialNextEngineSync,
+  canSendNextEngine,
+  nextEngineUploadEnabled,
   shippingMethod,
   onShippingMethodChange,
 }: {
@@ -84,6 +88,9 @@ export function ListingForm({
   photoAssets: WebPhotoAssetView[];
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
+  initialNextEngineSync: MasterSyncView | null;
+  canSendNextEngine: boolean;
+  nextEngineUploadEnabled: boolean;
   /**
    * 配送方法(2026-09-10追加指示)。右パネル(InventoryFactsPanel)の
    * 座面・配送警告と同じ選択を共有するため、状態はこのコンポーネントの
@@ -608,7 +615,13 @@ export function ListingForm({
 
       {/* Mercari Shops CSV出力(2026-09-14、P2)向けのカテゴリー/ブランド
           選択。出品の実行導線ではない——公式マスタの検索・確定のみ。 */}
-      <NextEngineListingSection title={title} description={description} price={price} imageCount={selectedImages.length} hasDraft={Boolean(draft)} />
+      <NextEngineListingSection inventoryId={inventoryId} title={title} description={description} price={price}
+        imageCount={selectedImages.length} hasDraft={Boolean(draft)} canSend={canSendNextEngine} initialSync={initialNextEngineSync}
+        uploadEnabled={nextEngineUploadEnabled}
+        savedMatches={Boolean(draft && title === draft.title && description === (draft.description ?? "") &&
+          price === String(draft.price ?? "") && condition === draft.condition &&
+          shippingMethod === draft.shippingMethod &&
+          JSON.stringify(selectedImages) === JSON.stringify(draft.images))} />
 
       {/* Mercari Shops出品の過去履歴(External Listing Status)。
           Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、

@@ -1049,6 +1049,29 @@ const schema = a.schema({
       allow.group("VIEWER").to(["read"]),
     ]),
 
+  /** BELLO→Next Engineの商品マスタ送信記録。販路への出品状態とは独立する。 */
+  NextEngineMasterSync: a
+    .model({
+      inventoryId: a.string().required(),
+      draftId: a.string().required(),
+      sku: a.string().required(),
+      fingerprint: a.string().required(),
+      supplierCode: a.string().required(),
+      title: a.string().required(),
+      cost: a.integer().required(),
+      price: a.integer().required(),
+      queueId: a.string(),
+      status: a.string().required(), // RESERVED / UNKNOWN / QUEUED / WAITING / PROCESSING / FAILED / MASTER_APPLIED / MASTER_CONFIRMED
+      lastError: a.string(),
+      requestedBy: a.string(),
+    })
+    .identifier(["inventoryId"])
+    .authorization((allow) => [
+      allow.group("ADMIN"),
+      allow.group("EDITOR").to(["read"]),
+      allow.group("VIEWER").to(["read"]),
+    ]),
+
   // ─────────────────────────────────────────────────────────────────────
   // BELLO統合業務OS指示書(2026-08-30) §17: Pricing Rule Engine。
   // 値下げ日数・率はBELLO独自の経営ルールとして将来変わりうるため

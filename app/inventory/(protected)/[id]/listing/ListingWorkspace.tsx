@@ -8,6 +8,7 @@ import { DEFAULT_LISTING_SHIPPING_METHOD } from "@/lib/listing/types";
 import { ListingForm } from "./ListingForm";
 import { InventoryFactsPanel } from "./InventoryFactsPanel";
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
+import type { MasterSyncView } from "@/lib/listing/nextEngine/masterSync";
 
 /**
  * EC出品画面の2カラムを束ねる(2026-09-10追加指示)。
@@ -30,6 +31,9 @@ export function ListingWorkspace({
   photoAssets,
   initialDraft,
   initialChannelListing,
+  initialNextEngineSync,
+  canSendNextEngine,
+  nextEngineUploadEnabled,
 }: {
   item: InventoryDetail;
   brandLogoAvailable: boolean;
@@ -39,6 +43,9 @@ export function ListingWorkspace({
   photoAssets: WebPhotoAssetView[];
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
+  initialNextEngineSync: MasterSyncView | null;
+  canSendNextEngine: boolean;
+  nextEngineUploadEnabled: boolean;
 }) {
   // §1 既定は「らくらく家財便」。保存済みの下書きがあればその選択を復元する。
   const [shippingMethod, setShippingMethod] = useState<ListingShippingMethod>(
@@ -64,6 +71,9 @@ export function ListingWorkspace({
           photoAssets={photoAssets}
           initialDraft={initialDraft}
           initialChannelListing={initialChannelListing}
+          initialNextEngineSync={initialNextEngineSync}
+          canSendNextEngine={canSendNextEngine}
+          nextEngineUploadEnabled={nextEngineUploadEnabled}
           shippingMethod={shippingMethod}
           onShippingMethodChange={setShippingMethod}
         />
