@@ -25,7 +25,7 @@ import { ListingImageSelector } from "./ListingImageSelector";
 import { InventoryThumbnail } from "../../../InventoryThumbnail";
 import { PhotoAssetProductGallery } from "../PhotoAssetProductGallery";
 import { resolveProductGallerySource } from "@/lib/photoRegistration/gallerySelection";
-import { buildListingImageCandidates, restoreListingSelection } from "@/lib/photoRegistration/inventoryListingAdapter";
+import { buildListingImageCandidates, restoreListingSelection, sameListingImageRefs } from "@/lib/photoRegistration/inventoryListingAdapter";
 
 // BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
 // 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
@@ -621,7 +621,7 @@ export function ListingForm({
         savedMatches={Boolean(draft && title === draft.title && description === (draft.description ?? "") &&
           price === String(draft.price ?? "") && condition === draft.condition &&
           shippingMethod === draft.shippingMethod &&
-          JSON.stringify(selectedImages) === JSON.stringify(draft.images))} />
+          sameListingImageRefs(selectedImages, draft.images))} />
 
       {/* Mercari Shops出品の過去履歴(External Listing Status)。
           Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、

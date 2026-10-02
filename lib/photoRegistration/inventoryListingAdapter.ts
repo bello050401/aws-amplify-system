@@ -99,3 +99,36 @@ export function listingRefsFromSelection(selected: ListingImageCandidate[]): Lis
   if (selected.length > 20) throw new Error("出品画像は20枚まで選択できます。");
   return selected.map((item, index) => ({ ...item.ref, sortOrder: index }));
 }
+
+/** Compare the image choice as data, not by JSON key order or legacy omitted source. */
+export function sameListingImageRefs(
+  selected: ListingImageRef[] | null | undefined,
+  saved: ListingImageRef[] | null | undefined,
+): boolean {
+  if (!Array.isArray(selected) || !Array.isArray(saved)) return false;
+  if (selected.length !== saved.length) return false;
+  const valid = (value: unknown, index: number): value is ListingImageRef => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const ref = value as Record<string, unknown>;
+    if (typeof ref.storageKey !== "string" || !ref.storageKey.trim() || ref.storageKey !== ref.storageKey.trim() ||
+        !Number.isSafeInteger(ref.sortOrder) || ref.sortOrder !== index ||
+        (ref.source !== undefined && ref.source !== "INVENTORY" && ref.source !== "PHOTO_ASSET")) return false;
+    return ref.source !== "PHOTO_ASSET" ||
+      (typeof ref.photoAssetId === "string" && !!ref.photoAssetId.trim() && ref.photoAssetId === ref.photoAssetId.trim());
+  };
+  const seenKeys = new Set<string>();
+  const seenAssets = new Set<string>();
+  for (let index = 0; index < selected.length; index++) {
+    const left = selected[index];
+    const right = saved[index];
+    if (!valid(left, index) || !valid(right, index)) return false;
+    const source = left.source ?? "INVENTORY";
+    if (left.storageKey !== right.storageKey || source !== (right.source ?? "INVENTORY") ||
+        (source === "PHOTO_ASSET" && left.photoAssetId !== right.photoAssetId) ||
+        seenKeys.has(left.storageKey) ||
+        (source === "PHOTO_ASSET" && seenAssets.has(left.photoAssetId!))) return false;
+    seenKeys.add(left.storageKey);
+    if (source === "PHOTO_ASSET") seenAssets.add(left.photoAssetId!);
+  }
+  return true;
+}
