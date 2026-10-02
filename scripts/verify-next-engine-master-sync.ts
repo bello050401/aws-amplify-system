@@ -111,6 +111,20 @@ async function main() {
   assert.equal(switched.getUploadCalls(), 0);
   assert.equal(switched.getRow(), null);
 
+  const changedAfterReservation = harness();
+  let reservationBinding = binding;
+  changedAfterReservation.overrides.configuration = async () => reservationBinding;
+  const createOriginal = changedAfterReservation.overrides.createSync;
+  changedAfterReservation.overrides.createSync = async (value: Row) => {
+    const saved = await createOriginal(value);
+    reservationBinding = otherBinding;
+    return saved;
+  };
+  await assert.rejects(startNextEngineMasterSync(inventoryId, supplierCode, null,
+    changedAfterReservation.overrides), /再送信せず/);
+  assert.equal(changedAfterReservation.getUploadCalls(), 0);
+  assert.equal(changedAfterReservation.getRow()?.status, "UNKNOWN");
+
   const differentCompany = harness();
   await startNextEngineMasterSync(inventoryId, supplierCode, null, differentCompany.overrides);
   differentCompany.overrides.configuration = async () => otherBinding;
