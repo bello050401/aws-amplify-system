@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { readNextEngineMasterCandidates, type MasterCandidatesResult } from "@/app/actions/nextEngineMasterCandidates";
+import { NextEngineOrderPreviewPanel } from "./NextEngineOrderPreviewPanel";
 
 export function NextEngineMasterCandidatesPanel() {
   const [result, setResult] = useState<MasterCandidatesResult | null>(null);
   const [pending, setPending] = useState(false);
   async function read() {
     if (pending) return;
-    setPending(true);
+    setPending(true); setResult(null);
     try { setResult(await readNextEngineMasterCandidates()); }
     catch { setResult({ ok: false, message: "登録情報を確認できませんでした。" }); }
     finally { setPending(false); }
@@ -40,6 +41,8 @@ export function NextEngineMasterCandidatesPanel() {
           {result.data.shopsMore && <p>51件目以降は表示していません。</p>}
         </div>
         <p className="text-amber-800">店舗の登録状況から、自動の商品連携設定は判定できません。各店舗・連携アプリの設定を別途確認してください。</p>
+        {result.data.shops.length > 0 && <NextEngineOrderPreviewPanel
+          key={result.data.bindingRef} shops={result.data.shops} bindingRef={result.data.bindingRef} />}
       </div>}
     </section>
   );

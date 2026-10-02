@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { listNextEngineMasterCandidates, MasterCandidatesError } from "../lib/listing/nextEngine/masterCandidates";
+import { nextEngineBindingReadRef } from "../lib/listing/nextEngine/bindingReadRef";
 
 const origin = "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
 const secretId = "arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/next-engine-tokens-staging-jAJyao";
@@ -42,6 +43,7 @@ async function exercise(changeBindingAt: "never" | "readTokens" | "afterSupplier
   if (changeBindingAt !== "never") await assert.rejects(result, { code: "BINDING_CHANGED" });
   else {
     assert.deepEqual(await result, {
+      bindingRef: nextEngineBindingReadRef(binding),
       suppliers: [{ code: "REAL", name: "Registered supplier" }],
       shops: [{ id: "7", name: "Test shop", mallId: "12" }],
       suppliersMore: false, shopsMore: false,

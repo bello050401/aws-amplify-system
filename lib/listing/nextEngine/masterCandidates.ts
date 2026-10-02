@@ -5,8 +5,10 @@ import { readNextEngineTokens, saveNextEngineTokens, type NextEngineTokenPair } 
 import { resolveNextEngineTokenRotation } from "./tokenRotation";
 import { assertNextEngineServerRuntime } from "./serverBoundary";
 import { PRIVATE_MASTER_STAGING_ORIGIN } from "./privateMasterAcceptance";
+import { nextEngineBindingReadRef } from "./bindingReadRef";
 
 export type MasterCandidates = {
+  bindingRef: string;
   suppliers: { code: string; name: string }[];
   shops: { id: string; name: string; mallId: string }[];
   suppliersMore: boolean;
@@ -133,6 +135,7 @@ export async function listNextEngineMasterCandidates(overrides: Partial<Services
     shops.push({ id, name: value.shop_name, mallId });
   }
   return {
+    bindingRef: nextEngineBindingReadRef(confirmedBinding),
     suppliers, shops,
     suppliersMore: count(supplier.count)! > (supplier.data as unknown[]).length,
     shopsMore: count(shop.count)! > (shop.data as unknown[]).length,
