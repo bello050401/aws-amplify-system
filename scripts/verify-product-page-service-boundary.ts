@@ -405,6 +405,18 @@ async function testVerifiedBrandOverviewUsesTheNormalCompositionPath() {
   const changed = await generateProductPage({ ...input, name: "別ブランドの椅子", extraFacts: { brand: "別ブランド", brandOverview: null } });
   assertTrue(!changed.fullDescription?.includes("◎ブランドについて") && !changed.fullDescription?.includes("1950年"), "⑫ブランド選択変更時に前ブランド文が残らない");
   assertEqual(changed.sections?.brandSection, "", "⑫前ブランドの履歴欄も引き継がない");
+
+  const overview = input.extraFacts.brandOverview;
+  providerMock.__configure([step(sections(
+    `${overview}\n\nVitraのAll Plastic Chairは背もたれと座面の形に特徴があります。脚の線はすっきりしており、ダイニングや作業スペースに置きやすいチェアです。座面の輪郭にはゆるやかな丸みがあり、背もたれとの間に空間を取った軽やかな外観です。`,
+    { title: "【背面傷】Vitra All Plastic Chair" },
+  ))]);
+  const repeated = await generateProductPage(input);
+  assertTrue(repeated.ok, "⑫公式文の重複を除いても商品紹介が残れば合格");
+  assertEqual(repeated.fullDescription?.split(overview).length, 2, "⑫同じ公式文は全体で1回だけ");
+  assertTrue(!repeated.sections?.introduction.includes(overview), "⑫紹介文から重複部分だけ除く");
+  assertTrue(!!repeated.sections?.introduction.includes("背もたれと座面の形"), "⑫商品固有の紹介は残す");
+  assertTrue(repeated.introSanitized === true, "⑫重複除去を監査値へ記録");
 }
 
 function testColourEvidenceCannotBeSelfCertifiedOrNegated() {

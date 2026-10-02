@@ -374,13 +374,21 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
         // 必ず作る(§課金ゲート自体は一切解除・迂回しない。生成AIは1回も
         // 呼び出していない)。
         const ruleSections = input.ruleSections ?? buildFallbackRuleSections(input, facts);
+        const fallbackTitle = preserveCriticalTitleDisclosures(facts.name || input.name, input.name);
+        if (!fallbackTitle) {
+          return { ...base, ok: false, sections: null, fullDescription: null,
+            violations: [{ code: "TITLE_DISCLOSURE_MISSING", detail: "欠品・傷・検証専用などの注意書きをタイトルに保持できません。" }],
+            modelProvider: null, modelName: null,
+            failureReason: "商品名の重要な注意書きをタイトルに保持できません。" };
+        }
         const fallback: ProductPageSections = {
-          title: facts.name, introduction: buildFallbackIntroduction(facts), brandSection: input.extraFacts?.brandOverview ?? "", designerSection: "",
+          title: fallbackTitle, introduction: buildFallbackIntroduction(facts), brandSection: input.extraFacts?.brandOverview ?? "", designerSection: "",
           featureSection: "", materialSection: "", dimensionsSection: facts.dimensions ?? "",
           conditionSection: facts.conditionDisclosure ?? "", shippingSection: "",
         };
         const description = composeListingDescription({
           introduction: fallback.introduction,
+          brandOverview: fallback.brandSection,
           productDetail: ruleSections.productDetail,
           shipping: ruleSections.shipping,
           condition: ruleSections.condition,
@@ -440,6 +448,18 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
   // 捏造しない定型文(=この場合は失敗を伝えるだけで、直せない箇所を
   // それらしく書き換えない)として担当者へ差し戻す。
   let introSanitized = false;
+  const overview = input.ruleSections ? input.extraFacts?.brandOverview?.trim() : null;
+  if (overview && sections.introduction?.includes(overview)) {
+    const withoutRepeatedOverview = sections.introduction.split(overview).join("").replace(/\n{3,}/g, "\n\n").trim();
+    if (!isIntroStillUsable(withoutRepeatedOverview)) {
+      return { ...base, ok: false, sections, fullDescription: buildDescription(sections, input),
+        violations: [{ code: "EMPTY_OUTPUT", detail: "ブランド紹介との重複を除くと、商品自体の紹介文が残りません。" }],
+        modelProvider: result!.providerId, modelName: result!.modelId,
+        failureReason: "ブランド紹介の重複を除くと、商品自体の説明が不足します。" };
+    }
+    sections = { ...sections, introduction: withoutRepeatedOverview };
+    introSanitized = true;
+  }
   if (introViolations.length > 0 || conditionViolations.length > 0 || categoryViolations.length > 0) {
     // 除去前の検出結果を控えておく。除去で紹介文自体が使い物にならなく
     // なった(isIntroStillUsableがfalse)場合、その時点のstillViolatingは

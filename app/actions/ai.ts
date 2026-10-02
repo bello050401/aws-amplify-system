@@ -184,6 +184,18 @@ export async function generateListingCopyAction(
       );
     }
 
+    // A deterministic fallback may contain readable text while deliberately
+    // reporting ok:false (for example when paid AI budget is unavailable).
+    // Do not turn that failure into an apparently approved UI draft merely
+    // because its violations array happens to be empty.
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: result.failureReason ?? "AI下書きの品質検査を通過できませんでした。",
+        correlationId,
+      };
+    }
+
     const copy = toListingDraftCopy(result);
     if (!copy) {
       return {
@@ -193,8 +205,8 @@ export async function generateListingCopyAction(
       };
     }
 
-    // 品質検査に落ちた場合も、何が出たのかを人が見られるように結果は返す
-    // ——ただし「問題なし」とは言わない。violations を添えて返す。
+    // 品質検査に通った結果だけを入力欄へ反映する。検査に落ちた原稿は
+    // 上の生成履歴に残り、担当者へは failureReason を返す。
     return {
       ok: true,
       data: copy,

@@ -52,18 +52,17 @@ assert.equal(page.modelName, null);
 assert.match(page.failureReason ?? "", /自動作成/);
 assert.equal(state.calls, 1);
 
-// 2. 2026年に実際に発生した回帰の直接再現: 寸法・傷・コンディション評価の
-//    どれも登録されていない(facts側が空の)在庫。以前はここで
-//    introduction/dimensionsSection/conditionSectionが全て空文字列になり、
-//    旧composeFullDescriptionへ直接渡していたため本文がほぼ空になっていた。
+// 2. 現行の固有根拠ゲート: 寸法・傷・備考などが完全に空の在庫では
+//    AIを呼ばず、完成した説明文として扱わない。
 const emptyFactsPage = await generateProductPage({
   inventoryId: "synthetic-empty", name: "無題の椅子", categoryName: null,
   width: null, depth: null, height: null, damageNotes: null, note: null, conditionRating: null,
   archive: [], styleProfile: null,
 });
 assert.equal(emptyFactsPage.ok, false);
-assertAllHeadingsPresent(emptyFactsPage.fullDescription, "facts全空ケース");
-assert.equal(state.calls, 2);
+assert.equal(emptyFactsPage.fullDescription, null);
+assert.equal(emptyFactsPage.sections, null);
+assert.equal(state.calls, 1);
 
 // 3. 本番経路(canonical.ts)と同じ形——ruleSectionsが渡されている場合。
 //    AIのintroductionが空でも、◎商品詳細/◎発送についてはruleSections
@@ -84,6 +83,22 @@ assert.equal(ruleSectionsPage.ok, false);
 assertAllHeadingsPresent(ruleSectionsPage.fullDescription, "ruleSectionsありケース");
 assert.match(ruleSectionsPage.fullDescription ?? "", /らくらく家財便Bランク/);
 assert.match(ruleSectionsPage.fullDescription ?? "", /目立つ傷や汚れは見受けられません/);
+assert.equal(state.calls, 2);
+
+// 4. QA表示と公式確認済みブランド文も、予算制限時に欠落させない。
+const qaFallback = await generateProductPage({
+  inventoryId: "synthetic-qa-fallback",
+  name: "【検証専用・販売不可・現物なし】【背面傷】Vitra All Plastic Chair",
+  categoryName: "チェア", width: "42", depth: "48", height: "75",
+  damageNotes: "背面に小傷あり。", archive: [], styleProfile: null,
+  ruleSections: { productDetail: "幅:42cm", shipping: "配送は確認中です。", condition: "背面に小傷あり。" },
+  extraFacts: { brand: "Vitra", brandOverview: "Vitraは1950年に創業し、スイスのバーゼル近郊に本拠を置く家具メーカーです。" },
+});
+assert.equal(qaFallback.ok, false);
+assert.match(qaFallback.sections?.title ?? "", /^【検証専用・販売不可・現物なし】【背面傷】/);
+assert.equal(qaFallback.sections?.brandSection, "Vitraは1950年に創業し、スイスのバーゼル近郊に本拠を置く家具メーカーです。");
+assert.equal(qaFallback.fullDescription?.match(/◎ブランドについて/g)?.length, 1);
+assert.match(qaFallback.fullDescription ?? "", /1950年に創業/);
 assert.equal(state.calls, 3);
 
 await assert.rejects(generateListingCopy({ name: "テーブルランプ" }), /未作成/);

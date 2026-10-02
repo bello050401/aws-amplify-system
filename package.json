@@ -27,6 +27,7 @@
     "verify:ai-usage-recording": "node scripts/verify-ai-usage-recording.ts",
     "verify:ai-gateway-recording": "node scripts/verify-ai-gateway-recording.ts",
     "verify:product-page-service-boundary": "node scripts/verify-product-page-service-boundary.ts",
+    "verify:ai-action-acceptance": "node scripts/verify-ai-action-acceptance.ts",
     "verify:ai-live": "node scripts/with-server-only-stub.cjs scripts/verify-ai-live.ts",
     "verify:mercari": "node scripts/with-server-only-stub.cjs scripts/verify-mercari.ts",
     "preverify:mercari-csv-export": "node scripts/generate-mercari-masters-data.cjs",
