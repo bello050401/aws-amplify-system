@@ -8,7 +8,7 @@ import type { MasterSyncView, NextEngineSupplierChoice } from "@/lib/listing/nex
 const statusLabel: Record<MasterSyncView["status"], string> = {
   RESERVED: "送信準備中", UNKNOWN: "結果の確認が必要", QUEUED: "NEが受付済み",
   WAITING: "NEで処理待ち", PROCESSING: "NEで処理中", FAILED: "NEで取込失敗",
-  MASTER_APPLIED: "取込済み・内容確認中", MASTER_CONFIRMED: "NE商品マスタを確認済み",
+  MASTER_APPLIED: "取込済み・内容確認中", MASTER_CONFIRMED: "NE商品マスタの基本項目を確認済み",
 };
 
 export function NextEngineListingSection({ inventoryId, title, description, price, imageCount, hasDraft,

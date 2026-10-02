@@ -30,7 +30,7 @@ export function NextEngineSettingsPanel({ state, privateTestEnabled = false, pri
       {callbackResult === "success" && state !== "CONNECTED" && <p className="text-amber-800">接続処理後の保存済み状態を確認できません。下の接続状態を確認してください。</p>}
       <p>接続状態: <strong>{labels[state]}</strong></p>
       <p>この連携はBELLOの商品情報をネクストエンジンの商品マスタへ渡すためのものです。商品画像やメルカリShopsでの公開は別途確認します。</p>
-      <p className="text-amber-800">商品マスタ登録と非公開テスト商品の処理結果は、まだ確認できていません。</p>
+      <p>商品の送信と結果確認は、各商品のEC出品画面で行います。NEの商品マスタ登録だけでは販売先への出品は完了しません。</p>
       {state === "CONNECTED" && <NextEngineMasterCandidatesPanel />}
       {state === "CONNECTED" && privateTestEnabled && <NextEnginePrivateMasterTestPanel />}
       {state === "CONNECTED" && privateRetestEnabled && <NextEnginePrivateMasterTestPanel attempt="second" />}
