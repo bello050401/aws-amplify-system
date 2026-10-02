@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { clearFailedNextEngineMasterSyncAction, listNextEngineSuppliersAction, readNextEngineMasterSyncAction,
   refreshNextEngineMasterSyncAction, startNextEngineMasterSyncAction } from "@/app/actions/nextEngineMasterSync";
+import { previewNextEngineStockAction, type NextEngineStockPreviewResult } from "@/app/actions/nextEngineStockPreview";
 import type { MasterSyncView, NextEngineSupplierChoice } from "@/lib/listing/nextEngine/masterSync";
 
 const statusLabel: Record<MasterSyncView["status"], string> = {
@@ -22,6 +23,8 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
   const [supplierError, setSupplierError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [stockPreview, setStockPreview] = useState<NextEngineStockPreviewResult | null>(null);
+  const [stockBusy, setStockBusy] = useState(false);
   const count = (value: string) => Array.from(value.trim()).length;
   const checks = [
     { label: "商品名", ready: count(title) > 0 && count(title) <= 130, detail: `${count(title)} / 130文字` },
@@ -42,6 +45,7 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
   }, [canSend, uploadEnabled, sync]);
   async function start() {
     if (busy || sync) return;
+    setStockPreview(null);
     setBusy(true); setMessage(null);
     try {
       const result = await startNextEngineMasterSyncAction(inventoryId, supplierCode.trim());
@@ -62,6 +66,7 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
   }
   async function refresh() {
     if (busy) return;
+    setStockPreview(null);
     setBusy(true); setMessage(null);
     try {
       const result = await refreshNextEngineMasterSyncAction(inventoryId);
@@ -72,6 +77,7 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
   }
   async function clearFailed() {
     if (busy) return;
+    setStockPreview(null);
     setBusy(true); setMessage(null);
     try {
       const result = await clearFailedNextEngineMasterSyncAction(inventoryId);
@@ -79,6 +85,13 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
       else setMessage(result.message);
     } catch { setMessage("失敗記録を確認できませんでした。"); }
     finally { setBusy(false); }
+  }
+  async function previewStock() {
+    if (stockBusy) return;
+    setStockBusy(true); setStockPreview(null);
+    try { setStockPreview(await previewNextEngineStockAction(inventoryId)); }
+    catch { setStockPreview({ ok: false, message: "NEの在庫数を確認できませんでした。" }); }
+    finally { setStockBusy(false); }
   }
   return (
     <section aria-labelledby="next-engine-heading" className="mt-4 rounded border border-gray-200 bg-white p-4">
@@ -103,6 +116,19 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
           onClick={() => void refresh()}>{busy ? "確認中…" : "NEの処理結果を確認"}</button>
         {sync.status === "FAILED" && sync.connectionMatches && canSend && <button type="button" className="ml-2 rounded border border-amber-400 px-3 py-2 text-amber-900 disabled:opacity-50"
           disabled={busy} onClick={() => void clearFailed()}>失敗を確認して再準備</button>}
+        {canSend && sync.status === "MASTER_CONFIRMED" && sync.connectionMatches && sync.currentMatches && <div className="mt-3 rounded border border-gray-200 p-3">
+          <p className="font-medium">在庫数の照合（表示のみ）</p>
+          <p className="mt-1 text-gray-600">BELLOとNEの数値を比較します。在庫数は変更しません。</p>
+          <button type="button" className="mt-2 rounded border border-gray-300 px-3 py-2 disabled:opacity-50"
+            disabled={stockBusy} onClick={() => void previewStock()}>{stockBusy ? "確認中…" : "NEの在庫数と比較"}</button>
+          {stockPreview && <div role="status" className="mt-2">
+            {!stockPreview.ok ? <p className="text-amber-800">{stockPreview.message}</p> :
+              stockPreview.comparison ? <p>BELLO: {stockPreview.comparison.belloQuantity}点 ／ NE在庫: {stockPreview.comparison.nextEngineQuantity}点
+                （引当: {stockPreview.comparison.nextEngineAllocatedQuantity}点、フリー: {stockPreview.comparison.nextEngineFreeQuantity}点）
+                ／ フリー在庫との差: {stockPreview.comparison.freeQuantityDifference > 0 ? "+" : ""}{stockPreview.comparison.freeQuantityDifference}点</p> :
+                <p>NEにこの商品コードの在庫記録がありません。</p>}
+          </div>}
+        </div>}
       </div> : canSend && uploadEnabled && <div className="mt-3 space-y-2 text-xs">
         <label className="block">NEに登録済みの仕入先コード
           {suppliers ? <select value={supplierCode} onChange={event => setSupplierCode(event.target.value)}

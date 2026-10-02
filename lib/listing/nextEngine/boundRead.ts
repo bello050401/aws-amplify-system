@@ -16,7 +16,8 @@ const sameBinding = (left: NextEngineAppConfiguration | null, right: NextEngineA
 
 /** Keep read-only NE queries within the current company and credential version. */
 export async function withBoundNextEngineRead<T>(
-  run: (tokens: NextEngineTokenPair, persist: (tokens: NextEngineTokenPair) => Promise<void>) => Promise<T>,
+  run: (tokens: NextEngineTokenPair, persist: (tokens: NextEngineTokenPair) => Promise<void>,
+    binding: NextEngineAppConfiguration) => Promise<T>,
   overrides: Partial<Services> = {},
 ): Promise<T> {
   assertNextEngineServerRuntime();
@@ -37,7 +38,7 @@ export async function withBoundNextEngineRead<T>(
   const result = await run(tokens, async next => {
     await assertBinding();
     await services.saveTokens(next, binding);
-  });
+  }, binding);
   await assertBinding();
   return result;
 }

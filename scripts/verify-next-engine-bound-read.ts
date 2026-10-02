@@ -36,6 +36,16 @@ async function main() {
     current = { ...binding, clientId: "different-client" };
     return "must-not-return";
   }, services));
+  current = binding;
+  let queriedWith: string | null = null;
+  await assert.rejects(withBoundNextEngineRead(async (pair, _persist, confirmedBinding) => {
+    assert.equal(confirmedBinding.expectedCompanyNeId, "synthetic-company");
+    // Simulate connection change after sync identity was checked but before NE stock search.
+    current = { ...binding, expectedCompanyNeId: "other-company" };
+    queriedWith = pair.accessToken;
+    return "must-not-return-after-switch";
+  }, services));
+  assert.equal(queriedWith, tokens.accessToken);
   console.log("Next Engine bound read: company and credential changes prevent request/save/return.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
