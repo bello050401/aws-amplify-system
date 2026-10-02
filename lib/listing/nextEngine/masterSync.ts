@@ -16,7 +16,7 @@ export type MasterSyncStatus = "RESERVED" | "UNKNOWN" | "QUEUED" | "WAITING" | "
   "FAILED" | "MASTER_APPLIED" | "MASTER_CONFIRMED";
 export type MasterSyncView = {
   sku: string; status: MasterSyncStatus; queueId: string | null;
-  publicationConfirmed: false; lastError: string | null; currentMatches: boolean;
+  publicationConfirmed: false; lastError: string | null; currentMatches: boolean; connectionMatches: boolean;
 };
 export type NextEngineSupplierChoice = { code: string; name: string };
 
@@ -78,13 +78,13 @@ const servicesDefault: Services = {
   currentMatch: matchesCurrentDraft,
 };
 const statusValues: MasterSyncStatus[] = ["RESERVED", "UNKNOWN", "QUEUED", "WAITING", "PROCESSING", "FAILED", "MASTER_APPLIED", "MASTER_CONFIRMED"];
-const view = (row: SyncRow, currentMatches: boolean): MasterSyncView => ({
+const view = (row: SyncRow, currentMatches: boolean, connectionMatches: boolean): MasterSyncView => ({
   sku: row.sku,
   status: statusValues.includes(row.status as MasterSyncStatus) ? row.status as MasterSyncStatus : "UNKNOWN",
   queueId: row.queueId ?? null,
   publicationConfirmed: false,
   lastError: row.lastError ?? null,
-  currentMatches,
+  currentMatches, connectionMatches,
 });
 const safeObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
@@ -202,13 +202,23 @@ async function matchesCurrentDraft(row: SyncRow): Promise<boolean> {
 }
 
 async function currentView(row: SyncRow, services: Services = servicesDefault): Promise<MasterSyncView> {
-  return view(row, await services.currentMatch(row));
+  const identity = parseSyncIdentity(row.fingerprint);
+  let connectionMatches = false;
+  if (identity) {
+    try {
+      const binding = await services.configuration();
+      connectionMatches = !!binding && binding.expectedCompanyNeId === identity.companyNeId &&
+        binding.credentialVersionId === identity.credentialVersionId && !!await services.readTokens(binding);
+    } catch { /* A failed connection check must not report a previous company's status as current. */ }
+  }
+  return view(row, await services.currentMatch(row), connectionMatches);
 }
 
 /** Read status only. A master upload never means a marketplace listing exists. */
-export async function getNextEngineMasterSync(inventoryId: string): Promise<MasterSyncView | null> {
-  const row = await readRow(inventoryId);
-  return row ? currentView(row) : null;
+export async function getNextEngineMasterSync(inventoryId: string, overrides: Partial<Services> = {}): Promise<MasterSyncView | null> {
+  const services = { ...servicesDefault, ...overrides };
+  const row = await services.readSync(inventoryId);
+  return row ? currentView(row, services) : null;
 }
 
 /** Supplier choices come from the connected company, so operators do not retype codes. */

@@ -84,7 +84,8 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
     <section aria-labelledby="next-engine-heading" className="mt-4 rounded border border-gray-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 id="next-engine-heading" className="text-sm font-bold text-gray-900">ネクストエンジンへの商品情報連携</h2>
-        <span className="rounded bg-blue-50 px-2 py-1 text-xs text-blue-800">{sync ? statusLabel[sync.status] : "未送信"}</span>
+        <span className="rounded bg-blue-50 px-2 py-1 text-xs text-blue-800">{sync ?
+          sync.connectionMatches ? statusLabel[sync.status] : "接続先の確認が必要" : "未送信"}</span>
       </div>
       <p className="mt-2 text-xs text-gray-600">保存済みの下書きをNEの商品マスタに登録します。商品ページ・画像の設定とメルカリShopsへの出品はNE側で行います。</p>
       <ul className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
@@ -95,11 +96,12 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
       </ul>
       {sync ? <div className="mt-3 space-y-2 text-xs">
         <p>商品コード: {sync.sku}{sync.queueId ? ` ／ NE受付番号: ${sync.queueId}` : ""}</p>
-        {!sync.currentMatches && <p className="text-amber-800">NEへ送った時点とBELLOの下書き・出品設定が異なります。現在の内容を確認してください。</p>}
+        {!sync.connectionMatches && <p className="text-amber-800">この送信履歴の接続先を現在のNE接続と照合できません。NE側で確認し、再送信しないでください。</p>}
+        {sync.connectionMatches && !sync.currentMatches && <p className="text-amber-800">NEへ送った時点とBELLOの下書き・出品設定が異なります。現在の内容を確認してください。</p>}
         {sync.lastError && <p className="text-amber-800">{sync.lastError}</p>}
         <button type="button" className="rounded border border-gray-300 px-3 py-2 disabled:opacity-50" disabled={busy}
           onClick={() => void refresh()}>{busy ? "確認中…" : "NEの処理結果を確認"}</button>
-        {sync.status === "FAILED" && canSend && <button type="button" className="ml-2 rounded border border-amber-400 px-3 py-2 text-amber-900 disabled:opacity-50"
+        {sync.status === "FAILED" && sync.connectionMatches && canSend && <button type="button" className="ml-2 rounded border border-amber-400 px-3 py-2 text-amber-900 disabled:opacity-50"
           disabled={busy} onClick={() => void clearFailed()}>失敗を確認して再準備</button>}
       </div> : canSend && uploadEnabled && <div className="mt-3 space-y-2 text-xs">
         <label className="block">NEに登録済みの仕入先コード

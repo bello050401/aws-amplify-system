@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { clearFailedNextEngineMasterSync, startNextEngineMasterSync, refreshNextEngineMasterSync } from "../lib/listing/nextEngine/masterSync";
+import { clearFailedNextEngineMasterSync, getNextEngineMasterSync, startNextEngineMasterSync,
+  refreshNextEngineMasterSync } from "../lib/listing/nextEngine/masterSync";
 import type { ListingDraftRecord } from "../lib/listing/types";
 import type { InventoryDetail } from "../lib/inventory/queries";
 
@@ -76,6 +77,7 @@ async function main() {
   assert.equal(queued.status, "QUEUED");
   assert.equal(queued.queueId, "47");
   assert.equal(queued.publicationConfirmed, false);
+  assert.equal(queued.connectionMatches, true);
   assert.equal((await refreshNextEngineMasterSync(inventoryId, success.overrides))?.status, "MASTER_CONFIRMED");
   await assert.rejects(startNextEngineMasterSync(inventoryId, supplierCode, null, success.overrides), /送信履歴/);
   assert.equal(success.getUploadCalls(), 1);
@@ -130,6 +132,23 @@ async function main() {
   differentCompany.overrides.configuration = async () => otherBinding;
   await assert.rejects(refreshNextEngineMasterSync(inventoryId, differentCompany.overrides), /異なるネクストエンジン/);
   assert.equal(differentCompany.getRow()?.status, "QUEUED");
+  const switchedView = await getNextEngineMasterSync(inventoryId, differentCompany.overrides);
+  assert.equal(switchedView?.connectionMatches, false);
+  const legacyRow = { ...differentCompany.getRow()!, fingerprint: "a".repeat(64), status: "MASTER_CONFIRMED" };
+  differentCompany.overrides.readSync = async () => legacyRow as never;
+  differentCompany.overrides.configuration = async () => binding;
+  assert.equal((await getNextEngineMasterSync(inventoryId, differentCompany.overrides))?.connectionMatches, false);
+  assert.equal((await refreshNextEngineMasterSync(inventoryId, differentCompany.overrides))?.connectionMatches, false);
+
+  const confirmedThenSwitched = harness();
+  await startNextEngineMasterSync(inventoryId, supplierCode, null, confirmedThenSwitched.overrides);
+  await refreshNextEngineMasterSync(inventoryId, confirmedThenSwitched.overrides);
+  confirmedThenSwitched.overrides.configuration = async () => otherBinding;
+  const previousCompanyView = await getNextEngineMasterSync(inventoryId, confirmedThenSwitched.overrides);
+  assert.equal(previousCompanyView?.status, "MASTER_CONFIRMED");
+  assert.equal(previousCompanyView?.connectionMatches, false);
+  assert.equal((await refreshNextEngineMasterSync(inventoryId,
+    confirmedThenSwitched.overrides))?.connectionMatches, false);
 
   for (const badCount of [null, "", false, []]) {
     const invalid = harness();
