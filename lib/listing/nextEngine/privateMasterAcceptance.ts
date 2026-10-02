@@ -9,6 +9,7 @@ import { enqueuePrivateTestMaster } from "./privateUploadClient";
 import { checkGoodsUploadQueue } from "./uploadQueueClient";
 import { confirmPrivateTestMaster } from "./masterReadbackClient";
 import { resolveNextEngineTokenRotation } from "./tokenRotation";
+import { isUploadablePrivateTestCode, makePrivateMasterTestSku } from "./privateTestPolicy";
 
 export const PRIVATE_MASTER_STAGING_ORIGIN = "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
 const TOKEN_SECRET_ARN = "arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/next-engine-tokens-staging-jAJyao";
@@ -42,7 +43,7 @@ const defaultServices = (): Services => ({
   secretClient: new SecretsManagerClient({ region: "us-west-2", maxAttempts: 1 }),
   request: fetch,
   owner: randomUUID,
-  randomSku: () => `BELLO-NE-TEST-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${randomBytes(6).toString("hex").toUpperCase()}`,
+  randomSku: () => makePrivateMasterTestSku(new Date().toISOString().slice(0, 10).replace(/-/g, ""), randomBytes(3).toString("hex").toUpperCase()),
   env: process.env,
 });
 
@@ -168,6 +169,7 @@ export async function startPrivateMasterAcceptance(supplierCode: string, overrid
   }
 
   const sku = services.randomSku();
+  if (!isUploadablePrivateTestCode(sku)) throw new Error("専用テスト商品コードが不正です。送信しません。");
   const prepared = prepareNextEngineProduct({ sku, title: TITLE, description: DESCRIPTION,
     supplierCode, cost: COST, price: PRICE });
   const existing = await postReadOnly("/api_v1_master_goods/count", new URLSearchParams({

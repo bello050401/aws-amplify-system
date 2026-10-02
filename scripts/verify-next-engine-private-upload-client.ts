@@ -24,6 +24,9 @@ async function main() {
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, "BELLO-NE-TEST-OTHER", prepared, request));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, "B005730", "B005730", prepared, request));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, "BELLO-NE-TEST-BAD_CODE", "BELLO-NE-TEST-BAD_CODE", prepared, request));
+  const overlong = "BELLO-NE-TEST-20261002-DEE8ECFB92D2";
+  const overlongPrepared = prepareNextEngineProduct({ sku: overlong, title: "合成テスト商品", description: "合成説明", cost: 100, price: 300, supplierCode: "SYNTHETIC" });
+  await assert.rejects(enqueuePrivateTestMaster(tokens, persist, overlong, overlong, overlongPrepared, request));
   await assert.rejects(enqueuePrivateTestMaster(tokens, persist, code, code, {
     ...prepared, csv: prepared.csv.replace("syohin_setumei_text", "visible_flg"),
   }, request));

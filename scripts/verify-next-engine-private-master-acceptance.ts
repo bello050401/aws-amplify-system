@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { GetSecretValueCommand, PutSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { checkPrivateMasterAcceptance, startPrivateMasterAcceptance } from "../lib/listing/nextEngine/privateMasterAcceptance";
+import { isReservedNextEngineTestCode, isUploadablePrivateTestCode, makePrivateMasterTestSku } from "../lib/listing/nextEngine/privateTestPolicy";
 
 const origin = "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
 const secretId = "arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/next-engine-tokens-staging-jAJyao";
@@ -81,7 +82,7 @@ function fixture(options: { uncertainPut?: boolean; uncertainQueuePut?: boolean;
         access_token: "rotated-access", refresh_token: "rotated-refresh" });
     }
     if (path === "/api_v1_master_goods/search") return response({ result: "success", data: [{
-      goods_id: "BELLO-NE-TEST-20260930-FIXTURE", goods_name: "BELLO 接続確認用（販売しない）",
+      goods_id: "BELLO-NE-TEST-20260930-ABCDEF", goods_name: "BELLO 接続確認用（販売しない）",
       goods_supplier_id: "REAL_SUPPLIER", goods_cost_price: "0", goods_selling_price: "300",
     }] });
     throw new Error(`unexpected path ${path}`);
@@ -94,12 +95,24 @@ function fixture(options: { uncertainPut?: boolean; uncertainQueuePut?: boolean;
     secretClient: secretClient as any,
     request,
     owner: () => `owner-${++owner}`,
-    randomSku: () => "BELLO-NE-TEST-20260930-FIXTURE",
+    randomSku: () => "BELLO-NE-TEST-20260930-ABCDEF",
   };
   return { overrides, versions, calls, get uploads() { return uploads; }, get tokens() { return tokens; } };
 }
 
 async function main() {
+  const prefix = "BELLO-NE-TEST-20260930-";
+  assert.equal(prefix.length, 23);
+  assert.equal(makePrivateMasterTestSku("20260930", "ABCDEF"), `${prefix}ABCDEF`);
+  assert.equal(makePrivateMasterTestSku("20260930", "ABCDEF").length, 29);
+  assert.throws(() => makePrivateMasterTestSku("20260930", "ABCDEFG"));
+  assert.throws(() => makePrivateMasterTestSku("20260930", "ABCDE"));
+  assert.equal(isUploadablePrivateTestCode(`${prefix}ABCDEFG`), true);
+  assert.equal(isUploadablePrivateTestCode(`${prefix}ABCDEFGH`), false);
+  assert.equal(isUploadablePrivateTestCode(`${prefix}AB_CDE`), false);
+  assert.equal(isReservedNextEngineTestCode("BELLO-NE-TEST-20261002-DEE8ECFB92D2"), true);
+  assert.equal(isUploadablePrivateTestCode("BELLO-NE-TEST-20261002-DEE8ECFB92D2"), false);
+
   const good = fixture();
   const first = await startPrivateMasterAcceptance("REAL_SUPPLIER", good.overrides);
   assert.equal(first.phase, "QUEUED");
@@ -111,6 +124,13 @@ async function main() {
   assert.equal(checked.phase, "MASTER_CONFIRMED");
   assert.equal(checked.publicationConfirmed, false);
   assert.deepEqual(good.calls.slice(-2), ["/api_v1_system_que/search", "/api_v1_master_goods/search"]);
+
+  const overlong = fixture();
+  await assert.rejects(startPrivateMasterAcceptance("REAL_SUPPLIER", {
+    ...overlong.overrides, randomSku: () => "BELLO-NE-TEST-20261002-DEE8ECFB92D2",
+  }), /商品コードが不正/);
+  assert.equal(overlong.uploads, 0);
+  assert.equal(overlong.versions.size, 0);
 
   const concurrent = fixture();
   const results = await Promise.allSettled([
