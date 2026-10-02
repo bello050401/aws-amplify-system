@@ -54,8 +54,15 @@ function harness(uploadFailure = false, queueFailure = false, shopCount = 0) {
     loadListing: async () => null,
     readSync: async () => row as never,
     createSync: async (value: Row) => { if (row) throw new Error("duplicate reservation"); row = value; return value as never; },
-    updateSync: async (_id: string, patch: Partial<Row>) => { assert.ok(row); row = { ...row, ...patch }; return row as never; },
-    deleteSync: async () => { row = null; },
+    updateSync: async (expected: Row, patch: Partial<Row>) => {
+      assert.ok(row && row.fingerprint === expected.fingerprint && row.status === expected.status);
+      row = { ...row, ...patch }; return row as never;
+    },
+    deleteSync: async (expected: Row) => {
+      assert.ok(row && row.fingerprint === expected.fingerprint && row.status === "FAILED" &&
+        row.queueId === expected.queueId);
+      row = null;
+    },
     currentMatch: async () => true,
   };
   return { overrides, getUploadCalls: () => uploadCalls, getRow: () => row };
@@ -89,7 +96,83 @@ async function main() {
   const connectedShop = harness(false, false, 1);
   await assert.rejects(startNextEngineMasterSync(inventoryId, supplierCode, null, connectedShop.overrides), /店舗が登録/);
   assert.equal(connectedShop.getUploadCalls(), 0);
-  console.log("Next Engine master sync: success/readback, duplicate block, ambiguous-response block, failed queue recovery, shop guard passed");
+
+  const switched = harness();
+  let activeBinding = binding;
+  const otherBinding = { ...binding, expectedCompanyNeId: "other-company", credentialVersionId: "other-version" };
+  const switchedRequest = switched.overrides.request;
+  switched.overrides.configuration = async () => activeBinding;
+  switched.overrides.request = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await switchedRequest(input, init);
+    if (String(input).endsWith("/api_v1_master_shop/count")) activeBinding = otherBinding;
+    return response;
+  }) as typeof fetch;
+  await assert.rejects(startNextEngineMasterSync(inventoryId, supplierCode, null, switched.overrides), /接続設定が変更/);
+  assert.equal(switched.getUploadCalls(), 0);
+  assert.equal(switched.getRow(), null);
+
+  const differentCompany = harness();
+  await startNextEngineMasterSync(inventoryId, supplierCode, null, differentCompany.overrides);
+  differentCompany.overrides.configuration = async () => otherBinding;
+  await assert.rejects(refreshNextEngineMasterSync(inventoryId, differentCompany.overrides), /異なるネクストエンジン/);
+  assert.equal(differentCompany.getRow()?.status, "QUEUED");
+
+  for (const badCount of [null, "", false, []]) {
+    const invalid = harness();
+    const original = invalid.overrides.request;
+    invalid.overrides.request = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).endsWith("/api_v1_master_goods/count")
+        ? Response.json({ result: "success", count: badCount }) : original(input, init)) as typeof fetch;
+    await assert.rejects(startNextEngineMasterSync(inventoryId, supplierCode, null, invalid.overrides), /同じ商品コード/);
+    assert.equal(invalid.getUploadCalls(), 0);
+    assert.equal(invalid.getRow(), null);
+
+    const invalidClear = harness(false, true);
+    await startNextEngineMasterSync(inventoryId, supplierCode, null, invalidClear.overrides);
+    await refreshNextEngineMasterSync(inventoryId, invalidClear.overrides);
+    const originalClear = invalidClear.overrides.request;
+    invalidClear.overrides.request = (async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).endsWith("/api_v1_master_goods/count")
+        ? Response.json({ result: "success", count: badCount }) : originalClear(input, init)) as typeof fetch;
+    await assert.rejects(clearFailedNextEngineMasterSync(inventoryId, invalidClear.overrides), /NEに商品が存在/);
+    assert.equal(invalidClear.getRow()?.status, "FAILED");
+  }
+
+  const differentCompanyClear = harness(false, true);
+  await startNextEngineMasterSync(inventoryId, supplierCode, null, differentCompanyClear.overrides);
+  await refreshNextEngineMasterSync(inventoryId, differentCompanyClear.overrides);
+  differentCompanyClear.overrides.configuration = async () => otherBinding;
+  await assert.rejects(clearFailedNextEngineMasterSync(inventoryId, differentCompanyClear.overrides), /異なるネクストエンジン/);
+  assert.equal(differentCompanyClear.getRow()?.status, "FAILED");
+
+  const race = harness(false, true);
+  await startNextEngineMasterSync(inventoryId, supplierCode, null, race.overrides);
+  await refreshNextEngineMasterSync(inventoryId, race.overrides);
+  let arrived = 0;
+  let bothArrived!: () => void;
+  const bothCounts = new Promise<void>(resolve => { bothArrived = resolve; });
+  const release: Array<() => void> = [];
+  const original = race.overrides.request;
+  race.overrides.request = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/api_v1_master_goods/count") && arrived < 2) {
+      const slot = arrived++;
+      if (arrived === 2) bothArrived();
+      await new Promise<void>(resolve => { release[slot] = resolve; });
+    }
+    return original(input, init);
+  }) as typeof fetch;
+  const firstClear = clearFailedNextEngineMasterSync(inventoryId, race.overrides);
+  const staleClear = clearFailedNextEngineMasterSync(inventoryId, race.overrides);
+  await bothCounts;
+  release[0]();
+  await firstClear;
+  await startNextEngineMasterSync(inventoryId, supplierCode, null, race.overrides);
+  release[1]();
+  await assert.rejects(staleClear);
+  assert.equal(race.getRow()?.status, "QUEUED");
+  assert.equal(race.getUploadCalls(), 2);
+
+  console.log("Next Engine master sync: readback, duplicate/UNKNOWN blocks, binding and count guards, conditional failed recovery passed");
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });
