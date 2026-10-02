@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { clearFailedNextEngineMasterSyncAction, listNextEngineSuppliersAction, readNextEngineMasterSyncAction,
   refreshNextEngineMasterSyncAction, startNextEngineMasterSyncAction } from "@/app/actions/nextEngineMasterSync";
 import { previewNextEngineStockAction, type NextEngineStockPreviewResult } from "@/app/actions/nextEngineStockPreview";
+import { checkNextEnginePrivatePageAction, type NextEnginePrivatePageCheckResult } from "@/app/actions/nextEnginePrivatePageCheck";
 import type { MasterSyncView, NextEngineSupplierChoice } from "@/lib/listing/nextEngine/masterSync";
 
 const statusLabel: Record<MasterSyncView["status"], string> = {
@@ -25,6 +26,8 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
   const [message, setMessage] = useState<string | null>(null);
   const [stockPreview, setStockPreview] = useState<NextEngineStockPreviewResult | null>(null);
   const [stockBusy, setStockBusy] = useState(false);
+  const [pageCheck, setPageCheck] = useState<NextEnginePrivatePageCheckResult | null>(null);
+  const [pageBusy, setPageBusy] = useState(false);
   const count = (value: string) => Array.from(value.trim()).length;
   const checks = [
     { label: "商品名", ready: count(title) > 0 && count(title) <= 130, detail: `${count(title)} / 130文字` },
@@ -45,7 +48,7 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
   }, [canSend, uploadEnabled, sync]);
   async function start() {
     if (busy || sync) return;
-    setStockPreview(null);
+    setStockPreview(null); setPageCheck(null);
     setBusy(true); setMessage(null);
     try {
       const result = await startNextEngineMasterSyncAction(inventoryId, supplierCode.trim());
@@ -66,7 +69,7 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
   }
   async function refresh() {
     if (busy) return;
-    setStockPreview(null);
+    setStockPreview(null); setPageCheck(null);
     setBusy(true); setMessage(null);
     try {
       const result = await refreshNextEngineMasterSyncAction(inventoryId);
@@ -77,7 +80,7 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
   }
   async function clearFailed() {
     if (busy) return;
-    setStockPreview(null);
+    setStockPreview(null); setPageCheck(null);
     setBusy(true); setMessage(null);
     try {
       const result = await clearFailedNextEngineMasterSyncAction(inventoryId);
@@ -92,6 +95,13 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
     try { setStockPreview(await previewNextEngineStockAction(inventoryId)); }
     catch { setStockPreview({ ok: false, message: "NEの在庫数を確認できませんでした。" }); }
     finally { setStockBusy(false); }
+  }
+  async function checkPrivatePage() {
+    if (pageBusy) return;
+    setPageBusy(true); setPageCheck(null);
+    try { setPageCheck(await checkNextEnginePrivatePageAction(inventoryId)); }
+    catch { setPageCheck({ ok: false, message: "NEの商品ページを確認できませんでした。" }); }
+    finally { setPageBusy(false); }
   }
   return (
     <section aria-labelledby="next-engine-heading" className="mt-4 rounded border border-gray-200 bg-white p-4">
@@ -129,6 +139,19 @@ export function NextEngineListingSection({ inventoryId, title, description, pric
                 <p>NEにこの商品コードの在庫記録がありません。</p>}
           </div>}
         </div>}
+        {canSend && sync.sku === "B005788" && sync.status === "MASTER_CONFIRMED" && sync.connectionMatches && sync.currentMatches &&
+          <div className="mt-3 rounded border border-gray-200 p-3">
+            <p className="font-medium">検証商品のNEページ公開状態</p>
+            <p className="mt-1 text-gray-600">NEの商品ページを読み取ります。メルカリShopsへの出品状態は別に確認が必要です。</p>
+            <button type="button" className="mt-2 rounded border border-gray-300 px-3 py-2 disabled:opacity-50"
+              disabled={pageBusy} onClick={() => void checkPrivatePage()}>{pageBusy ? "確認中…" : "NEページの非公開状態を確認"}</button>
+            {pageCheck && <p role="status" className="mt-2 text-amber-800">
+              {!pageCheck.ok ? pageCheck.message : pageCheck.visibility === "PRIVATE" ? "読み取り時点でNEの商品ページは非公開（0）です。メルカリShops側の非公開は未確認です。" :
+                pageCheck.visibility === "MISSING" ? "NEの商品ページはまだありません。" :
+                pageCheck.visibility === "PUBLIC" ? "NEの商品ページは公開（1）です。非公開テストには使えません。" :
+                "NEの商品ページの公開状態を判定できません。"}
+            </p>}
+          </div>}
       </div> : canSend && uploadEnabled && <div className="mt-3 space-y-2 text-xs">
         <label className="block">NEに登録済みの仕入先コード
           {suppliers ? <select value={supplierCode} onChange={event => setSupplierCode(event.target.value)}
