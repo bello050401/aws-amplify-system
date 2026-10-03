@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
 import { openDedicatedLogin } from "./session.mjs";
 import { runBelloCloudReadOnce } from "./cloudConnector.mjs";
+import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const html = (value) => String(value).replace(/[&<>"']/g, character => ({
@@ -25,7 +26,7 @@ function optionsOf(config) {
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
 }
 
-function page({ csrf, options, message, busy, belloOpen, shopsOpen, lastResult }) {
+function page({ csrf, options, message, busy, belloOpen, shopsOpen, lastResult, trafficAttempted, lastTraffic }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BELLO メルカリ照合</title><style>
@@ -39,7 +40,10 @@ ${button("bello-login", belloOpen ? "BELLOログイン画面を開いていま�
 ${button("shops-login", shopsOpen ? "Shopsログイン画面を開いています" : "Shopsにログイン", shopsOpen)}</section>
 <section><h2>2. 既存商品を1回照合</h2><p>両方のログイン後に押してください。照合できない項目は未確認のままBELLOへ報告します。</p>
 ${button("read", "この読取依頼を照合する")}
-${lastResult ? `<p>直近の結果: <strong>${html(lastResult)}</strong>。出品完了の確認ではありません。</p>` : ""}</section>
+${lastResult ? `<p>直近の結果: <strong>${html(lastResult)}</strong>。出品完了の確認ではありません。</p>` : ""}
+${trafficAttempted ? `<details><summary>Shops通信の概要（${lastTraffic.length}種類）</summary>
+<p><small>このPC画面に一時表示します。URLの値・検索条件・認証情報・本文は記録せず、BELLOにも送りません。</small></p>
+${lastTraffic.length ? `<ul>${lastTraffic.map(item => `<li><code>${html(item.method)} ${html(item.host)}${html(item.path)}</code> — ${html(item.status)}（${html(item.count)}回）</li>`).join("")}</ul>` : "<p>対象となる通信は観測されませんでした。</p>"}</details>` : ""}</section>
 <section><h2>3. BELLOで結果を見る</h2><p>照合後、BELLOの照合依頼画面で「照合結果を確認する」を押してください。</p>
 <p><a href="${html(options.origin)}/inventory/mercari-bridge?requestId=${html(options.requestId)}" target="_blank" rel="noopener noreferrer">BELLOの照合依頼画面を開く</a></p>
 ${button("shutdown", "このアプリを終了")}</section>
@@ -63,13 +67,16 @@ export async function startDesktopApp(config, {
   let busy = false;
   let message = "";
   let lastResult = "";
+  let trafficAttempted = false;
+  let lastTraffic = [];
   let belloContext = null;
   let shopsContext = null;
   let localOrigin;
   const server = createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/") {
       send(response, 200, page({ csrf, options, message, busy,
-        belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext), lastResult }));
+        belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext), lastResult,
+        trafficAttempted, lastTraffic }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/action" ||
@@ -111,10 +118,12 @@ export async function startDesktopApp(config, {
       } else if (action === "read") {
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
+        trafficAttempted = true;
+        lastTraffic = [];
         const result = await runRead({ origin: options.origin, requestId: options.requestId,
           root: options.root, belloProfileDir: options.belloProfileDir,
           shopsProfileDir: options.shopsProfileDir, playwrightModulePath: options.playwrightModulePath,
-          browserRead: true });
+          browserRead: true, onShopsTraffic: items => { lastTraffic = safeShopsTrafficSummary(items); } });
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
       } else if (action === "shutdown") {

@@ -25,12 +25,13 @@ function navigationState(actualUrl, expectedUrl) {
 
 /** A deliberately partial exact-edit read. No field is inferred by input order. */
 export function createExistingProductReader({ root, profileDir, playwrightModulePath, shopId,
-  launchPersistentContext = null }) {
+  launchPersistentContext = null, onTrafficSummary = null }) {
   return {
     async readExactProduct({ accountReference, remoteId }) {
       if (accountReference !== shopId) return { kind: "UNVERIFIED" };
-      const { context, page, state } = await openExistingProductReadSession({
+      const { context, page, state, traffic } = await openExistingProductReadSession({
         root, profileDir, playwrightModulePath, shopId, remoteId, launchPersistentContext,
+        observeTraffic: typeof onTrafficSummary === "function",
       });
       try {
         if (state === "AUTH_REQUIRED") return { kind: "AUTH_REQUIRED" };
@@ -77,6 +78,10 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
           },
         } };
       } finally {
+        if (traffic) {
+          traffic.stop();
+          try { onTrafficSummary(traffic.snapshot()); } catch { /* UI diagnostics never alter a read result. */ }
+        }
         await context.close();
       }
     },

@@ -58,3 +58,22 @@ test("a failed read never appears as a reported result", async () => {
     assert.equal(content.includes("直近の結果"), false);
   } finally { await app.close(); }
 });
+
+test("local traffic summary displays only redacted metadata and is never part of the read receipt", async () => {
+  const app = await startDesktopApp(config(), { openBrowser: async () => {},
+    runRead: async ({ onShopsTraffic }) => {
+      onShopsTraffic([{ host: "mercari-shops.com", method: "GET", type: "fetch",
+        path: "/api/v1/products/:value", status: 200, count: 1 },
+      { host: "mercari-shops.com", method: "GET", type: "fetch",
+        path: "/api/secretToken", status: 200, count: 1 }]);
+      return { status: "INCOMPLETE" };
+    } });
+  try {
+    const csrf = await token(app.url);
+    assert.equal((await post(app.url, csrf, "read")).status, 303);
+    const content = await (await fetch(app.url)).text();
+    assert.match(content, /Shops通信の概要/);
+    assert.match(content, /\/api\/v1\/products\/:value/);
+    assert.equal(content.includes("secretToken"), false);
+  } finally { await app.close(); }
+});

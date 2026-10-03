@@ -30,7 +30,7 @@ function envelope(requestId, result) {
 /** One explicitly requested existing-ID read. BELLO's authenticated browser cookie stays in its own profile. */
 export async function runBelloCloudReadOnce({ origin, requestId, root, belloProfileDir,
   shopsProfileDir, playwrightModulePath, browserRead = false, launchBelloContext = openBelloAdminContext,
-  runLocalRead = runExistingRead }) {
+  runLocalRead = runExistingRead, onShopsTraffic = null }) {
   if (!validBelloOrigin(origin) || !HASH.test(requestId) || !root || !isAbsolute(root) ||
       !belloProfileDir || !isAbsolute(belloProfileDir) ||
       (browserRead && (!shopsProfileDir || !isAbsolute(shopsProfileDir))))
@@ -51,7 +51,8 @@ export async function runBelloCloudReadOnce({ origin, requestId, root, belloProf
       inventoryCode: dispatch.inventoryCode, remoteId: dispatch.remoteId,
       expectedFields: dispatch.expectedFields });
     const reader = browserRead ? createExistingProductReader({ root,
-      profileDir: shopsProfileDir, playwrightModulePath, shopId: dispatch.accountReference }) : null;
+      profileDir: shopsProfileDir, playwrightModulePath, shopId: dispatch.accountReference,
+      onTrafficSummary: onShopsTraffic }) : null;
     const result = await runLocalRead(root, dispatch.accountReference, localJob.jobId, reader);
     const report = envelope(requestId, result);
     const posted = await context.request.post(url, { headers: { ...headers, Origin: origin,

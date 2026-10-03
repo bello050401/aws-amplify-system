@@ -3,6 +3,7 @@ import { mkdir, open, readFile, readdir } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { join } from "node:path";
 import { bindAccount } from "./queue.mjs";
+import { observeShopsTraffic } from "./trafficObservation.mjs";
 
 const SIGN_IN_URL = "https://mercari-shops.com/signin/seller";
 const PRODUCT_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -55,21 +56,24 @@ export async function openDedicatedLogin({ profileDir, playwrightModulePath, lau
 
 /** Opens only the observed exact-ID edit URL. Navigation alone never confirms identity or privacy. */
 export async function openExistingProductReadSession({ root, profileDir, playwrightModulePath,
-  shopId, remoteId, launchPersistentContext = null }) {
+  shopId, remoteId, launchPersistentContext = null, observeTraffic = false }) {
   if (!PRODUCT_ID.test(shopId) || !PRODUCT_ID.test(remoteId)) throw Error("Invalid existing Shops identity");
   if (!root || !isAbsolute(root)) throw Error("An absolute single-account queue root is required");
   await bindAccount(root, shopId);
   const expectedUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/${remoteId}/edit`;
   const context = await launchDedicatedProfile({ profileDir, playwrightModulePath, launchPersistentContext });
+  let traffic = null;
   try {
+    if (observeTraffic) traffic = observeShopsTraffic(context);
     const page = context.pages()[0] ?? await context.newPage();
     await page.goto(expectedUrl);
     const actual = new URL(page.url());
     const state = actual.origin === "https://mercari-shops.com" &&
       actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
       actual.href === expectedUrl ? "NAVIGATED_UNVERIFIED" : "UNKNOWN";
-    return { context, page, state };
+    return { context, page, state, traffic };
   } catch (error) {
+    traffic?.stop();
     await context.close();
     throw error;
   }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -193,6 +194,27 @@ test("existing product navigation reuses the separate profile but never claims r
   assert.equal(redirected.state, "AUTH_REQUIRED");
   await assert.rejects(openExistingProductReadSession({ ...input, remoteId: "../other" }));
   await assert.rejects(openExistingProductReadSession({ ...input, shopId: "other-shop" }));
+}));
+
+test("traffic observer attaches before normal exact-product navigation and keeps no raw URL", async () => withRoot(async root => {
+  const context = new EventEmitter();
+  let currentUrl = "";
+  const page = { goto: async url => {
+    currentUrl = url;
+    context.emit("response", { url: () => "https://api.mercari-shops.com/api/v1/products/privateId?token=secret",
+      status: () => 200, request: () => ({ method: () => "GET", resourceType: () => "fetch" }) });
+  }, url: () => currentUrl };
+  context.pages = () => [page];
+  context.close = async () => {};
+  const session = await openExistingProductReadSession({ root, profileDir: join(root, "traffic-profile"),
+    shopId: account, remoteId: "existing-product", observeTraffic: true,
+    launchPersistentContext: async () => context });
+  assert.equal(session.state, "NAVIGATED_UNVERIFIED");
+  assert.deepEqual(session.traffic.snapshot(), [{ host: "*.mercari-shops.com", method: "GET",
+    type: "fetch", path: "/api/v1/products/:value", status: 200, count: 1 }]);
+  assert.equal(JSON.stringify(session.traffic.snapshot()).includes("secret"), false);
+  session.traffic.stop();
+  await session.context.close();
 }));
 
 test("CLI can enqueue an existing-ID read and records a blocked result without a connector", async () => withRoot(async root => {
