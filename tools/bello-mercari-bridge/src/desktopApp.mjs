@@ -152,9 +152,10 @@ export async function startDesktopApp(config, {
 }
 
 function showLocalBrowser(url) {
-  const chrome = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
   return new Promise((resolve, reject) => {
-    const child = spawn(chrome, [url], { detached: true, stdio: "ignore", windowsHide: false });
+    // Windows opens the control page in its registered browser; the dedicated Shops
+    // sign-in still uses a separate visible Chrome profile in session.mjs.
+    const child = spawn("explorer.exe", [url], { detached: true, stdio: "ignore", windowsHide: false });
     child.once("error", reject);
     child.once("spawn", () => { child.unref(); resolve(); });
   });

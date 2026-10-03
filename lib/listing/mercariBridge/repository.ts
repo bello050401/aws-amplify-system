@@ -3,6 +3,7 @@ import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { ExistingProductBinding, ExistingReadJob, ReadRequestRepository } from "./readRequest";
 import type { ResultRepository, StoredReadResult } from "./resultAcceptance";
+import { collectReadResultPages } from "./resultPages";
 
 async function getBinding(inventoryId: string): Promise<ExistingProductBinding | null> {
   const { data, errors } = await serverDataClient.models.MercariBridgeBinding.get({ inventoryId }, inventoryAuthMode);
@@ -72,8 +73,10 @@ export const mercariBridgeResultRepository: ResultRepository = { getBinding, get
 
 /** Exact request-ID index lookup for a bounded, owner-checked ADMIN result view. */
 export async function listReadResultsForRequest(requestId: string): Promise<StoredReadResult[]> {
-  const { data, errors } = await serverDataClient.models.MercariBridgeReadResult
-    .listMercariBridgeReadResultByRequestId({ requestId }, { limit: 50, ...inventoryAuthMode });
-  if (errors?.length) throw new Error("Mercari bridge result lookup failed");
-  return data as StoredReadResult[];
+  return collectReadResultPages(async (nextToken) => {
+    const { data, errors, nextToken: continuation } = await serverDataClient.models.MercariBridgeReadResult
+      .listMercariBridgeReadResultByRequestId({ requestId }, { limit: 50, nextToken, ...inventoryAuthMode });
+    if (errors?.length) throw new Error("Mercari bridge result lookup failed");
+    return { items: data as StoredReadResult[], nextToken: continuation };
+  });
 }
