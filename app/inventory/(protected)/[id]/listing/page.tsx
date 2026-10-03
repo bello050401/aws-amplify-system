@@ -75,6 +75,10 @@ export default async function ListingPage({ params }: { params: { id: string } }
           <Link href={`/inventory/${item.id}`} className="text-[12px] text-blue-700 underline hover:text-blue-900">
             ← 在庫詳細を開く
           </Link>
+          {role === "ADMIN" && <Link href={`/inventory/mercari-bridge?inventoryId=${encodeURIComponent(item.id)}`}
+            className="ml-4 text-[12px] text-blue-700 underline hover:text-blue-900">
+            既存メルカリShops商品を照合する
+          </Link>}
         </div>
         {/* 2026-09-04 EC出品改修指示書 §2/§3: PCでは右側に在庫詳細を出す。
             以前はここが `max-w-2xl` の1カラムで、PC表示でも画面の左半分

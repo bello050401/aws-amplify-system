@@ -1072,6 +1072,53 @@ const schema = a.schema({
       allow.group("VIEWER").to(["read"]),
     ]),
 
+  /** Existing Mercari Shops product confirmed by an administrator. Never a listing/publish state. */
+  MercariBridgeBinding: a
+    .model({
+      inventoryId: a.string().required(),
+      shopId: a.string().required(),
+      remoteId: a.string().required(),
+      source: a.string().required(),
+      requestedBy: a.string().required(),
+    })
+    .identifier(["inventoryId"])
+    .authorization((allow) => [allow.group("ADMIN")]),
+
+  /** Immutable existing-product read request. */
+  MercariBridgeReadJob: a
+    .model({
+      requestId: a.string().required(),
+      inventoryId: a.string().required(),
+      shopId: a.string().required(),
+      remoteId: a.string().required(),
+      operation: a.string().required(),
+      snapshotFingerprint: a.string().required(),
+      snapshotJson: a.string().required(),
+      status: a.string().required(),
+      requestedBy: a.string().required(),
+    })
+    .identifier(["requestId"])
+    .secondaryIndexes((index) => [index("inventoryId")])
+    .authorization((allow) => [allow.group("ADMIN")]),
+
+  /** One sanitized PC observation per explicit attempt. */
+  MercariBridgeReadResult: a
+    .model({
+      resultId: a.string().required(),
+      requestId: a.string().required(),
+      attemptId: a.string().required(),
+      inventoryId: a.string().required(),
+      shopId: a.string().required(),
+      remoteId: a.string().required(),
+      status: a.string().required(),
+      comparisonJson: a.string(),
+      reasonCode: a.string(),
+      recordedAt: a.datetime().required(),
+    })
+    .identifier(["resultId"])
+    .secondaryIndexes((index) => [index("requestId")])
+    .authorization((allow) => [allow.group("ADMIN")]),
+
   // ─────────────────────────────────────────────────────────────────────
   // BELLO統合業務OS指示書(2026-08-30) §17: Pricing Rule Engine。
   // 値下げ日数・率はBELLO独自の経営ルールとして将来変わりうるため
