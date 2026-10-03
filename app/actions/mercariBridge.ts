@@ -4,7 +4,8 @@ import { getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/re
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { getChannelListing, getListingDraftForInventory } from "@/lib/listing/service";
 import { ReadRequestError, reserveExistingReadRequest, type ReviewedOverrides } from "@/lib/listing/mercariBridge/readRequest";
-import { mercariBridgeReadRepository } from "@/lib/listing/mercariBridge/repository";
+import { listReadResultsForRequest, mercariBridgeReadRepository } from "@/lib/listing/mercariBridge/repository";
+import { existingReadResultsForOwner, type ReadResultView } from "@/lib/listing/mercariBridge/resultView";
 
 export type MercariBridgeReadResult =
   | { ok: false; code: "CONNECTOR_NOT_CONFIGURED"; requestId: string; message: string }
@@ -40,5 +41,31 @@ export async function requestMercariExistingReadAction(input: {
   } catch (error) {
     if (error instanceof ReadRequestError) return { ok: false, code: error.code, message: error.message };
     return { ok: false, code: "STORAGE_UNAVAILABLE", message: "読取依頼を記録できませんでした。" };
+  }
+}
+
+/** Explicit refresh; no polling and no claim that an incomplete read proves a listing. */
+export async function getMercariExistingReadResultsAction(requestId: string): Promise<
+  { ok: true; requestId: string; results: ReadResultView[] } |
+  { ok: false; message: string }
+> {
+  if (await getInventoryRole() !== "ADMIN")
+    return { ok: false, message: "管理者のみ照合結果を確認できます。" };
+  if (!/^[a-f0-9]{64}$/.test(requestId))
+    return { ok: false, message: "読取依頼IDを確認してください。" };
+  try {
+    const principal = await getCurrentInventoryUserEmail();
+    if (!principal) return { ok: false, message: "ログイン状態を確認してください。" };
+    const job = await mercariBridgeReadRepository.getJob(requestId);
+    if (!job) return { ok: false, message: "読取依頼が見つかりません。" };
+    const binding = await mercariBridgeReadRepository.getBinding(job.inventoryId);
+    const owned = existingReadResultsForOwner(job, binding, principal, []);
+    if (!owned) return { ok: false, message: "この読取依頼を確認できません。" };
+    const rows = await listReadResultsForRequest(requestId);
+    const results = existingReadResultsForOwner(job, binding, principal, rows);
+    if (!results) return { ok: false, message: "照合結果を検証できません。" };
+    return { ok: true, requestId, results };
+  } catch {
+    return { ok: false, message: "照合結果を取得できませんでした。" };
   }
 }

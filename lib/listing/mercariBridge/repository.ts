@@ -69,3 +69,11 @@ async function createResult(row: StoredReadResult): Promise<void> {
 
 /** The ADMIN-authenticated PC route uses these same user-pool-scoped model operations. */
 export const mercariBridgeResultRepository: ResultRepository = { getBinding, getJob, getResult, createResult };
+
+/** Exact request-ID index lookup for a bounded, owner-checked ADMIN result view. */
+export async function listReadResultsForRequest(requestId: string): Promise<StoredReadResult[]> {
+  const { data, errors } = await serverDataClient.models.MercariBridgeReadResult
+    .listMercariBridgeReadResultByRequestId({ requestId }, { limit: 50, ...inventoryAuthMode });
+  if (errors?.length) throw new Error("Mercari bridge result lookup failed");
+  return data as StoredReadResult[];
+}

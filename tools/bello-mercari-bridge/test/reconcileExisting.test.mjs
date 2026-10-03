@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reconcileExistingMercariProduct } from "./reconcileExisting.ts";
+import { reconcileExistingMercariProduct } from "../src/reconcileExisting.mjs";
 
 const observed = value => ({ kind: "OBSERVED", value });
 const unobserved = { kind: "UNOBSERVED" };

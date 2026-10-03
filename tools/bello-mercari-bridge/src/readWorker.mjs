@@ -1,4 +1,4 @@
-import { reconcileExistingMercariProduct } from "../../../lib/listing/mercariDirectProbe/reconcileExisting.ts";
+import { reconcileExistingMercariProduct } from "./reconcileExisting.mjs";
 import { readExistingJob, saveReadResult, withReadLock } from "./queue.mjs";
 
 const CORE_FIELDS = ["inventoryCode", "title", "description", "priceYen", "quantity", "primaryImageIdentity"];

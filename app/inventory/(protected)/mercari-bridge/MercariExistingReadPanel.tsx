@@ -1,16 +1,36 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { requestMercariExistingReadAction } from "@/app/actions/mercariBridge";
+import { getMercariExistingReadResultsAction, requestMercariExistingReadAction } from "@/app/actions/mercariBridge";
+import type { ReadResultView } from "@/lib/listing/mercariBridge/resultView";
 
-export function MercariExistingReadPanel({ inventoryId }: { inventoryId: string }) {
+const statusLabels: Record<string, string> = {
+  CONNECTOR_NOT_CONFIGURED: "PCの読取なし", AUTH_REQUIRED: "ログインが必要", UNKNOWN: "確認できませんでした",
+  IDENTITY_MISMATCH: "店舗・商品IDが不一致", NOT_PRIVATE: "非公開ではありません",
+  DIFFERENT: "保存内容に差異あり", INCOMPLETE: "一部だけ確認済み", CORE_FIELDS_MATCH: "主要項目が一致（出品確認ではありません）",
+};
+const outcomeLabels: Record<string, string> = {
+  MATCH: "一致", DIFFERENT: "差異あり", UNOBSERVED: "未確認", NO_BELLO_EXPECTATION: "BELLO側に比較値なし",
+};
+const fieldLabels: Record<string, string> = {
+  inventoryCode: "商品管理コード", title: "商品名", description: "説明", priceYen: "販売価格",
+  quantity: "数量", categoryPath: "カテゴリー", brand: "ブランド", condition: "状態",
+  shippingMethod: "配送方法", shippingPayer: "送料負担", shippingOrigin: "発送元",
+  shippingDays: "発送日数", imageCount: "画像枚数", primaryImageIdentity: "主画像",
+};
+
+export function MercariExistingReadPanel({ inventoryId, initialRequestId }: {
+  inventoryId: string; initialRequestId: string;
+}) {
   const [shopId, setShopId] = useState("");
   const [remoteId, setRemoteId] = useState("");
   const [repeatRemoteId, setRepeatRemoteId] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
-  const [requestId, setRequestId] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(initialRequestId || null);
+  const [results, setResults] = useState<ReadResultView[] | null>(null);
+  const [resultMessage, setResultMessage] = useState<string | null>(null);
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -24,9 +44,30 @@ export function MercariExistingReadPanel({ inventoryId }: { inventoryId: string 
       try {
         const result = await requestMercariExistingReadAction({ inventoryId, shopId, remoteId });
         setMessage(result.message);
-        if (result.code === "CONNECTOR_NOT_CONFIGURED") setRequestId(result.requestId);
+        if (result.code === "CONNECTOR_NOT_CONFIGURED") {
+          setRequestId(result.requestId);
+          setResults(null);
+          const url = new URL(window.location.href);
+          url.searchParams.set("requestId", result.requestId);
+          window.history.replaceState(null, "", url);
+        }
       } catch {
         setMessage("読取依頼を記録できませんでした。通信状態を確認して再度お試しください。");
+      }
+    });
+  }
+
+  function refreshResults() {
+    if (!requestId) return;
+    setResultMessage(null);
+    startTransition(async () => {
+      try {
+        const result = await getMercariExistingReadResultsAction(requestId);
+        if (!result.ok) { setResultMessage(result.message); return; }
+        setResults(result.results);
+        setResultMessage(result.results.length ? "保存済みの照合結果を読み込みました。" : "照合結果はまだ届いていません。");
+      } catch {
+        setResultMessage("照合結果を取得できませんでした。");
       }
     });
   }
@@ -61,8 +102,22 @@ export function MercariExistingReadPanel({ inventoryId }: { inventoryId: string 
         </button>
       </form>
       {message && <p role={requestId ? "status" : "alert"} className="mt-3 text-sm">{message}</p>}
-      {requestId && <p className="mt-2 break-all text-xs text-gray-600">読取依頼ID: {requestId}</p>}
-      <p className="mt-4 text-xs text-gray-500">専用PCのログイン画面は準備中です。本人の通常ログインが必要になるまでは、この画面で追加操作をする必要はありません。</p>
+      {requestId && <div className="mt-4 border-t border-gray-200 pt-3">
+        <p className="break-all text-xs text-gray-600">読取依頼ID: {requestId}</p>
+        <button type="button" onClick={refreshResults} disabled={pending}
+          className="mt-2 rounded border border-gray-400 px-3 py-2 text-sm disabled:opacity-40">照合結果を確認する</button>
+        {resultMessage && <p role="status" className="mt-2 text-sm">{resultMessage}</p>}
+        {results?.map((result) => <div key={result.attemptId} className="mt-3 rounded border border-gray-200 p-3 text-sm">
+          <p><strong>{statusLabels[result.status] ?? "確認できませんでした"}</strong> · {result.recordedAt}</p>
+          {result.reasonCode && <p className="text-gray-600">理由コード: {result.reasonCode}</p>}
+          {result.visibility && <p className="text-gray-600">非公開状態: {result.visibility === "PRIVATE_OBSERVED" ? "確認済み" : result.visibility === "NOT_PRIVATE" ? "非公開ではありません" : "未確認"}</p>}
+          {Object.entries(result.fields).length > 0 && <ul className="mt-1 list-disc pl-5">
+            {Object.entries(result.fields).map(([field, outcome]) =>
+              <li key={field}>{fieldLabels[field] ?? field}: {outcomeLabels[outcome] ?? "未確認"}</li>)}
+          </ul>}
+        </div>)}
+      </div>}
+      <p className="mt-4 text-xs text-gray-500">PCの「BELLOメルカリ照合」を開き、BELLOとShopsへ専用ブラウザで通常ログインした後、この読取依頼IDを指定して照合します。結果は上のボタンで確認できます。ログインを済ませただけでは照合完了になりません。</p>
     </section>
   );
 }
