@@ -19,6 +19,7 @@ export type ReadResultView = {
   reasonCode: string | null;
   fields: Record<string, string>;
   visibility: "PRIVATE_OBSERVED" | "NOT_PRIVATE" | "UNOBSERVED" | null;
+  identity: "MATCH" | "DIFFERENT" | "UNOBSERVED" | null;
 };
 
 /** The UI receives only validated status codes, never persisted JSON or page text. */
@@ -36,6 +37,7 @@ export function existingReadResultsForOwner(job: ExistingReadJob | null,
         (row.reasonCode !== null && !reasons.has(row.reasonCode))) return null;
     let safeFields: Record<string, string> = {};
     let visibility: ReadResultView["visibility"] = null;
+    let identity: ReadResultView["identity"] = null;
     if (row.comparisonJson !== null) {
       let value: unknown;
       try { value = JSON.parse(row.comparisonJson); } catch { return null; }
@@ -44,6 +46,9 @@ export function existingReadResultsForOwner(job: ExistingReadJob | null,
       if (comparison.createAllowed !== false || !["PRIVATE_OBSERVED", "NOT_PRIVATE", "UNOBSERVED"].includes(String(comparison.visibility)) ||
           !comparison.fields || typeof comparison.fields !== "object" || Array.isArray(comparison.fields)) return null;
       visibility = comparison.visibility as ReadResultView["visibility"];
+      identity = comparison.account === "MATCH" && comparison.remoteId === "MATCH" ? "MATCH" :
+        comparison.account === "DIFFERENT" || comparison.remoteId === "DIFFERENT" ?
+          "DIFFERENT" : "UNOBSERVED";
       safeFields = {};
       for (const [field, outcome] of Object.entries(comparison.fields)) {
         if (!fields.has(field) || typeof outcome !== "string" || !outcomes.has(outcome)) return null;
@@ -61,7 +66,7 @@ export function existingReadResultsForOwner(job: ExistingReadJob | null,
           normalized.comparisonJson !== row.comparisonJson || normalized.reasonCode !== row.reasonCode) return null;
     } catch { return null; }
     result.push({ attemptId: row.attemptId, recordedAt: row.recordedAt,
-      status: row.status, reasonCode: row.reasonCode, fields: safeFields, visibility });
+      status: row.status, reasonCode: row.reasonCode, fields: safeFields, visibility, identity });
   }
   return result.sort((left, right) => right.recordedAt.localeCompare(left.recordedAt));
 }
