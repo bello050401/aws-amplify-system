@@ -95,6 +95,54 @@ test("reader stage diagnostics show only fixed codes in local memory", async () 
   } finally { await app.close(); }
 });
 
+test("manual observation opens the pinned dedicated product and displays only sanitized metadata", async () => {
+  const target = { shopId: "shop1", remoteId: "existing1", inventoryCode: "B005795",
+    priceYen: 90000, quantity: 0 };
+  const opened = [];
+  let saves = 0;
+  let browserClosed = false;
+  const app = await startDesktopApp({ ...config(), manualObservation: target }, {
+    openBrowser: async () => {},
+    openManualObservation: async options => {
+      opened.push(options);
+      const browserContext = context();
+      browserContext.close = async () => { browserClosed = true; browserContext.emit("close"); };
+      return { context: browserContext, observer: { stop: async () => {
+        assert.equal(browserClosed, false, "drain response before closing the browser");
+        return [{
+        order: 1, method: "POST", host: "mercari-shops.com", path: "/api/v1/products/:value",
+        bodyType: "json", fields: [{ field: "input.status", type: "string" },
+          { field: "input.secret", type: "string" }],
+        auth: { authorization: false, cookie: true, csrf: true }, httpStatus: 200,
+        id: "existing1", state: "UNOPENED", rawBody: "secret-value",
+      }]; } } };
+    },
+    runRead: async () => { saves++; throw Error("observation must not start a read"); },
+  });
+  try {
+    const csrf = await token(app.url);
+    assert.equal((await post(app.url, csrf, "observe-start")).status, 303);
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].shopId, target.shopId);
+    assert.equal(opened[0].remoteId, target.remoteId);
+    assert.equal(saves, 0);
+    assert.equal((await post(app.url, csrf, "observe-stop")).status, 303);
+    assert.equal(browserClosed, true);
+    const content = await (await fetch(app.url)).text();
+    assert.match(content, /既存商品の通信観測/);
+    assert.match(content, /B005795/);
+    assert.match(content, /90000/);
+    assert.match(content, /UNOPENED/);
+    assert.equal(content.includes("secret"), false);
+  } finally { await app.close(); }
+});
+
+test("manual observation refuses missing exact target identifiers", async () => {
+  await assert.rejects(startDesktopApp({ ...config(), manualObservation: {
+    priceYen: 90000, quantity: 0,
+  } }, { openBrowser: async () => {} }), /Invalid exact-product observation target/);
+});
+
 test("failed default-browser dispatch keeps the loopback control page available", async () => {
   const app = await startDesktopApp(config(), { openBrowser: async () => {
     throw Error("synthetic browser launch failure");

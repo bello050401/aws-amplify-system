@@ -5,10 +5,11 @@ import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
-import { openDedicatedLogin } from "./session.mjs";
+import { openDedicatedLogin, openExistingProductReadSession } from "./session.mjs";
 import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
 import { safeReadDiagnostics } from "./readDiagnostics.mjs";
+import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -25,15 +26,23 @@ function optionsOf(config) {
   const recovery = config?.recovery ?? null;
   if (recovery !== null && (!UUID.test(recovery?.jobId) || !UUID.test(recovery?.attemptId)))
     throw Error("Invalid saved read recovery configuration");
+  const manualObservation = config?.manualObservation ?? null;
+  const reference = /^[A-Za-z0-9_-]{1,100}$/;
+  if (manualObservation !== null &&
+      (["shopId", "remoteId", "inventoryCode"].some(key =>
+        typeof manualObservation?.[key] !== "string" || !reference.test(manualObservation[key])) ||
+       !Number.isSafeInteger(manualObservation?.priceYen) || manualObservation.priceYen < 0 ||
+       !Number.isSafeInteger(manualObservation?.quantity) || manualObservation.quantity < 0))
+    throw Error("Invalid exact-product observation target");
   return { origin: config.origin, requestId: config.requestId, dataDir,
-    recovery,
+    recovery, manualObservation,
     root: join(dataDir, "Queue"), belloProfileDir: join(dataDir, "BELLOChrome"),
     shopsProfileDir: join(dataDir, "ShopsChrome"),
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
 }
 
-function page({ csrf, options, message, busy, belloOpen, shopsOpen, lastResult,
-  trafficAttempted, lastTraffic, lastDiagnostics }) {
+function page({ csrf, options, message, busy, belloOpen, shopsOpen, manualOpen,
+  manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastDiagnostics }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BELLO メルカリ照合</title><style>
@@ -55,6 +64,12 @@ ${trafficAttempted ? `<details><summary>Shops通信の概要（${lastTraffic.len
 ${lastTraffic.length ? `<ul>${lastTraffic.map(item => `<li><code>${html(item.method)} ${html(item.host)}${html(item.path)}</code> — ${html(item.status)}（${html(item.count)}回）</li>`).join("")}</ul>` : "<p>対象となる通信は観測されませんでした。</p>"}</details>` : ""}</section>
 ${trafficAttempted ? `<section><h2>読取診断</h2><p><small>このPC画面に一時表示する固定コードです。値やURLは記録せず、BELLOにも送りません。</small></p>
 ${lastDiagnostics.length ? `<p><code>${lastDiagnostics.map(html).join(" / ")}</code></p>` : "<p>診断コードはありません。照合成功を意味するものではありません。</p>"}</section>` : ""}
+${options.manualObservation ? `<section><h2>既存商品の通信観測</h2>
+<p>対象は ${html(options.manualObservation.inventoryCode)} / ${html(options.manualObservation.remoteId)} です。専用Chromeで価格 ${html(options.manualObservation.priceYen)} 円、数量 ${html(options.manualObservation.quantity)}、非公開を確認してから、人が内容を変えずに非公開保存を1回だけ行います。このアプリは保存を押しません。</p>
+${button("observe-start", "観測用の専用Chromeを開く", manualOpen)}
+${manualOpen ? button("observe-stop", "観測を終了して概要を見る") : ""}
+${manualAttempted ? `<details><summary>通信観測の概要（${lastManual.length}件）</summary><p><small>このPC画面のメモリ内だけに表示します。本文・認証値・画像データを保存せず、BELLOへ送りません。HTTP成立の判定は別途必要です。</small></p>
+${lastManual.length ? `<ol>${lastManual.map(item => `<li><code>${html(item.order)}. ${html(item.method)} ${html(item.host)}${html(item.path)}</code> / ${html(item.bodyType)} / HTTP ${html(item.httpStatus ?? "未確認")} / 認証ヘッダー ${item.auth.authorization ? "あり" : "なし"}、Cookie ${item.auth.cookie ? "あり" : "なし"}、CSRF ${item.auth.csrf ? "あり" : "なし"} / 項目 ${item.fields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / ID ${html(item.id ?? "未確認")} / 状態 ${html(item.state ?? "未確認")}</li>`).join("")}</ol>` : "<p>対象となる送信は観測されませんでした。</p>"}</details>` : ""}</section>` : ""}
 <section><h2>3. BELLOで結果を見る</h2><p>照合後、BELLOの照合依頼画面で「照合結果を確認する」を押してください。</p>
 <p><a href="${html(options.origin)}/inventory/mercari-bridge?requestId=${html(options.requestId)}" target="_blank" rel="noopener noreferrer">BELLOの照合依頼画面を開く</a></p>
 ${button("shutdown", "このアプリを終了")}</section>
@@ -68,9 +83,21 @@ const send = (response, status, content, contentType = "text/html; charset=utf-8
   response.end(content);
 };
 
+async function openManualObservationForExisting({ root, profileDir, playwrightModulePath, shopId, remoteId }) {
+  const session = await openExistingProductReadSession({ root, profileDir, playwrightModulePath,
+    shopId, remoteId });
+  if (session.state !== "NAVIGATED_UNVERIFIED") {
+    await session.context.close();
+    throw Error("Exact existing Shops edit page was not reached");
+  }
+  const expectedUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/${remoteId}/edit`;
+  return { context: session.context, observer: observeManualShopsMutation(session.page, expectedUrl) };
+}
+
 /** Visible loopback UI. Every read is a deliberate click bound to one configured request ID. */
 export async function startDesktopApp(config, {
   openBello = openBelloAdminContext, openShops = openDedicatedLogin,
+  openManualObservation = openManualObservationForExisting,
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
 } = {}) {
   const options = optionsOf(config);
@@ -83,11 +110,24 @@ export async function startDesktopApp(config, {
   let lastDiagnostics = [];
   let belloContext = null;
   let shopsContext = null;
+  let manualSession = null;
+  let manualAttempted = false;
+  let lastManual = [];
+  let finishingManual = null;
+  const finishManual = () => {
+    if (finishingManual) return finishingManual;
+    if (!manualSession) return Promise.resolve();
+    return finishingManual = (async () => {
+    try { lastManual = safeManualMutationSummary(await manualSession.observer.stop()); }
+    finally { manualSession = null; manualAttempted = true; finishingManual = null; }
+    })();
+  };
   let localOrigin;
   const server = createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/") {
       send(response, 200, page({ csrf, options, message, busy,
-        belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext), lastResult,
+        belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
+        manualOpen: Boolean(manualSession), manualAttempted, lastManual, lastResult,
         trafficAttempted, lastTraffic, lastDiagnostics }));
       return;
     }
@@ -128,6 +168,7 @@ export async function startDesktopApp(config, {
         shopsContext.once("close", () => { shopsContext = null; });
         message = "Shopsの専用ブラウザを開きました。通常ログイン後、ブラウザを閉じてください。";
       } else if (action === "read") {
+        if (manualSession) throw Error("Close the manual observation browser first");
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         trafficAttempted = true;
@@ -140,6 +181,24 @@ export async function startDesktopApp(config, {
           onReadDiagnostics: codes => { lastDiagnostics = safeReadDiagnostics(codes); } });
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
+      } else if (action === "observe-start") {
+        if (!options.manualObservation || manualSession) throw Error("Manual observation is unavailable");
+        if (shopsContext) { await shopsContext.close(); shopsContext = null; }
+        manualAttempted = false;
+        lastManual = [];
+        manualSession = await openManualObservation({ root: options.root,
+          profileDir: options.shopsProfileDir, playwrightModulePath: options.playwrightModulePath,
+          shopId: options.manualObservation.shopId, remoteId: options.manualObservation.remoteId });
+        manualSession.context.once("close", () => {
+          void finishManual().catch(() => { lastManual = []; message = "通信観測の概要を取得できませんでした。"; });
+        });
+        message = "対象の専用Chromeを開きました。価格・数量・非公開を確認し、内容を変えない保存1回だけを観測します。";
+      } else if (action === "observe-stop") {
+        if (!manualSession) throw Error("No manual observation is active");
+        const session = manualSession;
+        try { await finishManual(); }
+        finally { await session.context.close(); }
+        message = "通信観測を終了しました。概要はこのPC画面にだけ表示します。";
       } else if (action === "retry-report") {
         if (!options.recovery) throw Error("No saved read selected");
         if (belloContext) { await belloContext.close(); belloContext = null; }
@@ -152,6 +211,11 @@ export async function startDesktopApp(config, {
       } else if (action === "shutdown") {
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
+        if (manualSession) {
+          const session = manualSession;
+          try { await finishManual(); }
+          finally { await session.context.close(); }
+        }
         shutdown = true;
       } else throw Error("Unknown action");
     } catch (error) {
@@ -183,6 +247,11 @@ export async function startDesktopApp(config, {
   return { url: localOrigin, close: async () => {
     if (belloContext) await belloContext.close();
     if (shopsContext) await shopsContext.close();
+    if (manualSession) {
+      const session = manualSession;
+      try { await finishManual(); }
+      finally { await session.context.close(); }
+    }
     await new Promise(resolve => server.close(resolve));
   } };
 }
