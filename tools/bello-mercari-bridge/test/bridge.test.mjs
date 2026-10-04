@@ -403,8 +403,16 @@ test("private status requires one matching title row, its private cell, and exac
       expected: "UNOBSERVED", diagnostic: "PRIVATE_STATUS_CELL_TEXT" },
     { rows: 1, badge: 1, headerStatus: "公開", returnUrl: exactUrl,
       expected: "UNOBSERVED", diagnostic: "PRIVATE_HEADER_NAME_UNVERIFIED" },
+    { rows: 1, badge: 1, headerTitlePair: "別列", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_HEADER_TITLE_PAIR" },
     { rows: 1, badge: 1, cellCount: 9, returnUrl: exactUrl,
       expected: "UNOBSERVED", diagnostic: "PRIVATE_ROW_CELL_COUNT" },
+    { rows: 1, badge: 1, imageAlt: "wrong product", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_IMAGE_ALT_UNVERIFIED" },
+    { rows: 1, badge: 1, imageCount: 2, returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_IMAGE_CELL_SHAPE" },
+    { rows: 1, badge: 1, titleParagraphCount: 2, returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_TITLE_TEXT_CELL_SHAPE" },
     { rows: 1, badge: 1, titleCellText: "other text", returnUrl: exactUrl,
       expected: "UNOBSERVED", diagnostic: "PRIVATE_TITLE_CELL_TEXT" },
     { rows: 1, badge: 1, paragraphCount: 2, returnUrl: exactUrl,
@@ -417,15 +425,22 @@ test("private status requires one matching title row, its private cell, and exac
     class FakeTable {}
     class FakeRow {}
     const headers = Array.from({ length: 10 }, (_, index) => ({ tagName: "TH", colSpan: 1, rowSpan: 1,
-      textContent: index === 0 ? "商品名" : index === 2 ? sample.headerStatus ?? "公開設定" : "" }));
+      textContent: index === 0 ? "商品名" : index === 1 ? sample.headerTitlePair ?? "" :
+        index === 2 ? sample.headerStatus ?? "公開設定" : "" }));
     const head = { rows: [{ cells: headers }] };
     head.rows[0].parentElement = head;
     const tableElement = new FakeTable();
     tableElement.tHead = head;
     const cells = Array.from({ length: sample.cellCount ?? 10 }, (_, index) => ({ tagName: "TD", colSpan: 1, rowSpan: 1,
-      textContent: index === 0 ? sample.titleCellText ?? title :
+      textContent: index === 0 ? "" : index === 1 ? sample.titleCellText ?? title :
         index === 2 ? sample.badge ? "非公開" : "公開" : "",
-      querySelectorAll: selector => selector === "p" && index === 2 ?
+      querySelectorAll: selector => selector === "img" && index === 0 ?
+        Array.from({ length: sample.imageCount ?? 1 }, () =>
+          ({ getAttribute: name => name === "alt" ? sample.imageAlt ?? title : null })) :
+        selector === "p" && index === 1 ?
+        Array.from({ length: sample.titleParagraphCount ?? 1 }, (_, paragraphIndex) =>
+          ({ textContent: paragraphIndex === 0 ? sample.titleCellText ?? title : "" })) :
+        selector === "p" && index === 2 ?
         Array.from({ length: sample.paragraphCount ?? 1 }, (_, paragraphIndex) =>
           ({ textContent: paragraphIndex === 0 ? sample.badge ? "非公開" : "公開" : "" })) : [] }));
     const rowElement = new FakeRow();
@@ -435,7 +450,7 @@ test("private status requires one matching title row, its private cell, and exac
     const row = { count: async () => sample.rows, first: () => ({ waitFor: async () => {} }),
       evaluate: async (callback, contract) => callback(rowElement, contract),
       locator: selector => { assert.equal(selector, ":scope > td"); return { nth: index => {
-        assert.equal(index, 0); return titleCell;
+        assert.equal(index, 1); return titleCell;
       } }; } };
     const table = { count: async () => 1, evaluate: async callback => callback(tableElement), getByRole: role => {
       assert.equal(role, "row");

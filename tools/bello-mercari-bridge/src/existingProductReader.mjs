@@ -65,9 +65,12 @@ async function privateFromExactListRow(page, shopId, expectedUrl, title) {
       const named = text => headers.flatMap((cell, index) => normalized(cell) === text ? [index] : []);
       const title = named("商品名");
       const status = named("公開設定");
-      return title.length === 1 && status.length === 1 && title[0] !== status[0] ?
-        { code: "READY", titleIndex: title[0], statusIndex: status[0], columnCount: headers.length } :
-        { code: "PRIVATE_HEADER_NAME_UNVERIFIED" };
+      if (title.length !== 1 || status.length !== 1 || title[0] === status[0])
+        return { code: "PRIVATE_HEADER_NAME_UNVERIFIED" };
+      if (title[0] + 1 >= headers.length || normalized(headers[title[0] + 1]) !== "" ||
+          status[0] !== title[0] + 2) return { code: "PRIVATE_HEADER_TITLE_PAIR" };
+      return { code: "READY", imageIndex: title[0], titleIndex: title[0] + 1,
+        statusIndex: status[0], columnCount: headers.length };
     });
     if (columns?.code !== "READY")
       return { value: unobserved(), diagnostic: columns?.code ?? "PRIVATE_READ_FAILED" };
@@ -85,9 +88,19 @@ async function privateFromExactListRow(page, shopId, expectedUrl, title) {
       if (cells.some(cell => cell.tagName !== "TD" || cell.colSpan !== 1 || cell.rowSpan !== 1))
         return "PRIVATE_ROW_CELL_SHAPE";
       const normalized = cell => (cell.textContent ?? "").replace(/\s+/g, "");
+      const imageCell = cells[contract.imageIndex];
       const titleCell = cells[contract.titleIndex];
       const statusCell = cells[contract.statusIndex];
+      const images = imageCell.querySelectorAll("img");
+      if (normalized(imageCell) !== "" || imageCell.querySelectorAll("p").length !== 0 ||
+          images.length !== 1) return "PRIVATE_IMAGE_CELL_SHAPE";
+      if ((images[0].getAttribute("alt") ?? "").replace(/\s+/g, "") !== contract.title)
+        return "PRIVATE_IMAGE_ALT_UNVERIFIED";
+      const titleParagraphs = titleCell.querySelectorAll("p");
+      if (titleCell.querySelectorAll("img").length !== 0 || titleParagraphs.length !== 1)
+        return "PRIVATE_TITLE_TEXT_CELL_SHAPE";
       if (normalized(titleCell) !== contract.title) return "PRIVATE_TITLE_CELL_TEXT";
+      if (normalized(titleParagraphs[0]) !== contract.title) return "PRIVATE_TITLE_PARAGRAPH_TEXT";
       if (normalized(statusCell) !== "非公開") return "PRIVATE_STATUS_CELL_TEXT";
       const paragraphs = statusCell.querySelectorAll("p");
       if (paragraphs.length !== 1) return "PRIVATE_STATUS_PARAGRAPH_COUNT";
