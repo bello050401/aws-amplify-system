@@ -392,17 +392,23 @@ test("private status requires one matching title row, its private cell, and exac
   for (const sample of [
     { rows: 1, badge: 1, returnUrl: exactUrl, expected: "PRIVATE_OBSERVED", diagnostic: null },
     { rows: 2, badge: 1, returnUrl: exactUrl, expected: "UNOBSERVED",
-      diagnostic: "PRIVATE_ROW_NOT_UNIQUE" },
+      diagnostic: "PRIVATE_ROW_MULTIPLE" },
     { rows: 1, badge: 0, returnUrl: exactUrl, expected: "UNOBSERVED",
-      diagnostic: "PRIVATE_ROW_STATUS_UNVERIFIED" },
+      diagnostic: "PRIVATE_STATUS_CELL_TEXT" },
     { rows: 1, badge: 1, returnUrl: `https://mercari-shops.com/seller/shops/${account}/products/other/edit`,
       expected: "UNOBSERVED", diagnostic: "PRIVATE_RETURN_ID_UNVERIFIED" },
     { rows: 1, badge: 1, returnUrl: exactUrl, listRedirect: true,
       expected: "UNOBSERVED", diagnostic: "PRIVATE_LIST_URL_UNVERIFIED" },
     { rows: 1, badge: 0, shopTitle: "非公開", returnUrl: exactUrl,
-      expected: "UNOBSERVED", diagnostic: "PRIVATE_ROW_STATUS_UNVERIFIED" },
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_STATUS_CELL_TEXT" },
     { rows: 1, badge: 1, headerStatus: "公開", returnUrl: exactUrl,
-      expected: "UNOBSERVED", diagnostic: "PRIVATE_TABLE_UNVERIFIED" },
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_HEADER_NAME_UNVERIFIED" },
+    { rows: 1, badge: 1, cellCount: 9, returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_ROW_CELL_COUNT" },
+    { rows: 1, badge: 1, titleCellText: "other text", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_TITLE_CELL_TEXT" },
+    { rows: 1, badge: 1, paragraphCount: 2, returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_STATUS_PARAGRAPH_COUNT" },
   ]) {
     let url = "";
     let clicks = 0;
@@ -416,10 +422,12 @@ test("private status requires one matching title row, its private cell, and exac
     head.rows[0].parentElement = head;
     const tableElement = new FakeTable();
     tableElement.tHead = head;
-    const cells = Array.from({ length: 10 }, (_, index) => ({ tagName: "TD", colSpan: 1, rowSpan: 1,
-      textContent: index === 0 ? title : index === 2 ? sample.badge ? "非公開" : "公開" : "",
+    const cells = Array.from({ length: sample.cellCount ?? 10 }, (_, index) => ({ tagName: "TD", colSpan: 1, rowSpan: 1,
+      textContent: index === 0 ? sample.titleCellText ?? title :
+        index === 2 ? sample.badge ? "非公開" : "公開" : "",
       querySelectorAll: selector => selector === "p" && index === 2 ?
-        [{ textContent: sample.badge ? "非公開" : "公開" }] : [] }));
+        Array.from({ length: sample.paragraphCount ?? 1 }, (_, paragraphIndex) =>
+          ({ textContent: paragraphIndex === 0 ? sample.badge ? "非公開" : "公開" : "" })) : [] }));
     const rowElement = new FakeRow();
     rowElement.parentElement = { tagName: "TBODY" };
     rowElement.cells = cells;
@@ -458,8 +466,9 @@ test("private status requires one matching title row, its private cell, and exac
     assert.equal(result.comparison.fields.title, "DIFFERENT");
     assert.equal(url, clicks ? sample.returnUrl :
       sample.listRedirect ? "https://mercari-shops.com/signin/seller" : listUrl);
-    assert.equal(clicks, sample.rows === 1 && sample.badge === 1 && !sample.listRedirect &&
-      sample.headerStatus !== "公開" ? 1 : 0, JSON.stringify({ sample, diagnostics }));
+    assert.equal(clicks, sample.expected === "PRIVATE_OBSERVED" ||
+      sample.diagnostic === "PRIVATE_RETURN_ID_UNVERIFIED" ? 1 : 0,
+    JSON.stringify({ sample, diagnostics }));
     assert.equal(diagnostics.includes(sample.diagnostic), Boolean(sample.diagnostic));
     assert.equal(JSON.stringify(result).includes(title), false);
   }

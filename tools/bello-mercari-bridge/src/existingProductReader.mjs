@@ -49,43 +49,56 @@ async function privateFromExactListRow(page, shopId, expectedUrl, title) {
     await page.goto(listUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
     if (page.url() !== listUrl) return { value: unobserved(), diagnostic: "PRIVATE_LIST_URL_UNVERIFIED" };
     const table = page.getByRole("table");
-    if (await uniqueVisible(table) !== "READY")
-      return { value: unobserved(), diagnostic: "PRIVATE_TABLE_UNVERIFIED" };
+    const tableReady = await uniqueVisible(table);
+    if (tableReady !== "READY")
+      return { value: unobserved(), diagnostic: tableReady === "TIMEOUT" ?
+        "PRIVATE_TABLE_NOT_FOUND" : "PRIVATE_TABLE_MULTIPLE" };
     const columns = await table.evaluate(element => {
-      if (!(element instanceof HTMLTableElement) || element.tHead?.rows.length !== 1 ||
-          element.tHead.rows[0].parentElement !== element.tHead) return null;
+      if (!(element instanceof HTMLTableElement)) return { code: "PRIVATE_TABLE_NOT_NATIVE" };
+      if (element.tHead?.rows.length !== 1 || element.tHead.rows[0].parentElement !== element.tHead)
+        return { code: "PRIVATE_HEADER_ROW_UNVERIFIED" };
       const headers = Array.from(element.tHead.rows[0].cells);
-      if (headers.length !== 10 || headers.some(cell =>
-        cell.tagName !== "TH" || cell.colSpan !== 1 || cell.rowSpan !== 1)) return null;
+      if (headers.length !== 10) return { code: "PRIVATE_HEADER_CELL_COUNT" };
+      if (headers.some(cell => cell.tagName !== "TH" || cell.colSpan !== 1 || cell.rowSpan !== 1))
+        return { code: "PRIVATE_HEADER_SHAPE" };
       const normalized = cell => (cell.textContent ?? "").replace(/\s+/g, "");
       const named = text => headers.flatMap((cell, index) => normalized(cell) === text ? [index] : []);
       const title = named("商品名");
       const status = named("公開設定");
       return title.length === 1 && status.length === 1 && title[0] !== status[0] ?
-        { titleIndex: title[0], statusIndex: status[0], columnCount: headers.length } : null;
+        { code: "READY", titleIndex: title[0], statusIndex: status[0], columnCount: headers.length } :
+        { code: "PRIVATE_HEADER_NAME_UNVERIFIED" };
     });
-    if (!columns) return { value: unobserved(), diagnostic: "PRIVATE_TABLE_UNVERIFIED" };
+    if (columns?.code !== "READY")
+      return { value: unobserved(), diagnostic: columns?.code ?? "PRIVATE_READ_FAILED" };
     const titleCellQuery = page.getByRole("cell", { name: title, exact: true });
     const row = table.getByRole("row").filter({ has: titleCellQuery });
-    if (await uniqueVisible(row) !== "READY")
-      return { value: unobserved(), diagnostic: "PRIVATE_ROW_NOT_UNIQUE" };
+    const rowReady = await uniqueVisible(row);
+    if (rowReady !== "READY")
+      return { value: unobserved(), diagnostic: rowReady === "TIMEOUT" ?
+        "PRIVATE_ROW_NOT_FOUND" : "PRIVATE_ROW_MULTIPLE" };
     const privateInStatusColumn = await row.evaluate((element, contract) => {
-      if (!(element instanceof HTMLTableRowElement) || element.parentElement?.tagName !== "TBODY") return false;
+      if (!(element instanceof HTMLTableRowElement)) return "PRIVATE_ROW_NOT_NATIVE";
+      if (element.parentElement?.tagName !== "TBODY") return "PRIVATE_ROW_PARENT_UNVERIFIED";
       const cells = Array.from(element.cells);
-      if (cells.length !== contract.columnCount || cells.some(cell =>
-        cell.tagName !== "TD" || cell.colSpan !== 1 || cell.rowSpan !== 1)) return false;
+      if (cells.length !== contract.columnCount) return "PRIVATE_ROW_CELL_COUNT";
+      if (cells.some(cell => cell.tagName !== "TD" || cell.colSpan !== 1 || cell.rowSpan !== 1))
+        return "PRIVATE_ROW_CELL_SHAPE";
       const normalized = cell => (cell.textContent ?? "").replace(/\s+/g, "");
       const titleCell = cells[contract.titleIndex];
       const statusCell = cells[contract.statusIndex];
+      if (normalized(titleCell) !== contract.title) return "PRIVATE_TITLE_CELL_TEXT";
+      if (normalized(statusCell) !== "非公開") return "PRIVATE_STATUS_CELL_TEXT";
       const paragraphs = statusCell.querySelectorAll("p");
-      return normalized(titleCell) === contract.title && normalized(statusCell) === "非公開" &&
-        paragraphs.length === 1 && normalized(paragraphs[0]) === "非公開";
+      if (paragraphs.length !== 1) return "PRIVATE_STATUS_PARAGRAPH_COUNT";
+      if (normalized(paragraphs[0]) !== "非公開") return "PRIVATE_STATUS_PARAGRAPH_TEXT";
+      return "READY";
     }, { ...columns, title: title.replace(/\s+/g, "") });
-    if (!privateInStatusColumn)
-      return { value: unobserved(), diagnostic: "PRIVATE_ROW_STATUS_UNVERIFIED" };
+    if (privateInStatusColumn !== "READY")
+      return { value: unobserved(), diagnostic: privateInStatusColumn };
     const titleCell = row.locator(":scope > td").nth(columns.titleIndex);
     if (await titleCell.count() !== 1)
-      return { value: unobserved(), diagnostic: "PRIVATE_ROW_STATUS_UNVERIFIED" };
+      return { value: unobserved(), diagnostic: "PRIVATE_TITLE_CELL_MISSING" };
     if (page.url() !== listUrl) return { value: unobserved(), diagnostic: "PRIVATE_LIST_URL_UNVERIFIED" };
     await titleCell.click({ timeout: 12000 });
     try { await page.waitForURL(expectedUrl, { timeout: 12000 }); }
