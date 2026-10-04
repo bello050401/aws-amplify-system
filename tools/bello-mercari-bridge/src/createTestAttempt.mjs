@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { safeWriteContractSummary } from "./writeContractObservation.mjs";
 
@@ -8,7 +8,7 @@ export const CREATE_TEST_TARGET = Object.freeze({
   shopId: "evkhihBFFNn5hukMS9s36H",
   sourceInventoryId: "c9ee4ea7-070f-491c-bd4c-c1547cb73436",
   inventoryCode: "B005757",
-  skuCode: "B005757-TEST-20261004",
+  skuCode: "B005757-TEST-20261004-caf445ac6e676343",
   existingRemoteId: "2JXdS6R5NNQPJadMexKmTr",
   excludedRemoteId: "2JXdS6R5NNQPJadMexKmTr",
   remoteId: null,
@@ -21,13 +21,51 @@ const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const KINDS = new Set(["MATCHED", "UNVERIFIED"]);
 const PINNED = ["shopId", "sourceInventoryId", "inventoryCode", "skuCode",
   "existingRemoteId", "expectedName", "priceYen"];
+const ATTEMPT_DIRS = ["private-create-test-once", "manual-image-once",
+  "manual-save-once", "private-image-workflow-once", "direct-read-probe-once"];
 
 function paths(root) {
   if (!isAbsolute(root)) throw Error("An absolute local queue root is required");
   const dir = join(root, "private-create-test-once");
-  const name = `${CREATE_TEST_TARGET.shopId}-${CREATE_TEST_TARGET.sourceInventoryId}`;
+  // One shop-scoped marker also excludes a concurrent candidate for another source item.
+  const name = `${CREATE_TEST_TARGET.shopId}-private-create-once`;
   return { dir, claim: join(dir, `${name}.json`),
     result: join(dir, `${name}.result.json`) };
+}
+
+/** Review every known local attempt ledger without claiming remote SKU absence. */
+export async function readCreateTestPreflight(root) {
+  paths(root);
+  let checkedRecords = 0;
+  for (const name of ATTEMPT_DIRS) {
+    let entries;
+    try { entries = await readdir(join(root, name), { withFileTypes: true }); }
+    catch (error) {
+      if (error?.code === "ENOENT") continue;
+      return { clear: false, reason: "LEDGER_UNVERIFIED", checkedRecords };
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json"))
+        return { clear: false, reason: "LEDGER_UNVERIFIED", checkedRecords };
+      // Any prior create marker or result means this one-shop test must be reconciled.
+      if (name === "private-create-test-once")
+        return { clear: false, reason: "PRIOR_CREATE_ATTEMPT", checkedRecords };
+      if (entry.name.endsWith(".result.json")) continue;
+      let record;
+      try { record = JSON.parse(await readFile(join(root, name, entry.name), "utf8")); }
+      catch { return { clear: false, reason: "LEDGER_UNVERIFIED", checkedRecords }; }
+      if (!record || typeof record !== "object" || Array.isArray(record) ||
+          typeof record.operation !== "string" || !UUID.test(record.attemptId ?? ""))
+        return { clear: false, reason: "LEDGER_UNVERIFIED", checkedRecords };
+      checkedRecords++;
+      if (record.sourceInventoryId === CREATE_TEST_TARGET.sourceInventoryId ||
+          record.skuCode === CREATE_TEST_TARGET.skuCode ||
+          (/CREATE/i.test(record.operation) &&
+            record.inventoryCode === CREATE_TEST_TARGET.inventoryCode))
+        return { clear: false, reason: "PRIOR_CREATE_ATTEMPT", checkedRecords };
+    }
+  }
+  return { clear: true, reason: "LOCAL_ATTEMPTS_CLEAR", checkedRecords };
 }
 
 async function writeOnce(path, record) {
@@ -38,6 +76,8 @@ async function writeOnce(path, record) {
 
 /** The claim is durable before any image selection or final UI save. */
 export async function claimCreateTestOnce(root) {
+  const preflight = await readCreateTestPreflight(root);
+  if (!preflight.clear) throw Error(`Private-create preflight: ${preflight.reason}`);
   const path = paths(root);
   await mkdir(path.dir, { recursive: true });
   const record = { schemaVersion: 1, operation: "CREATE_PRIVATE_TEST_ONCE",

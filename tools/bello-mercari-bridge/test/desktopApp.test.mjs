@@ -49,11 +49,10 @@ test("isolated private-create page claims before image work and records one UI o
   let armed = 0;
   let browser;
   let localPage;
-  const createConfig = { ...config(), dataDir, createTestObservationEnabled: true,
-    createTestSkuAbsentConfirmed: true };
+  const createConfig = { ...config(), dataDir, createTestObservationEnabled: true };
   try {
     await assert.rejects(startDesktopApp({ ...createConfig,
-      createTestSkuAbsentConfirmed: false }, { openBrowser: null }));
+      createTestSkuAbsentConfirmed: true }, { openBrowser: null }));
     await assert.rejects(startDesktopApp({ ...createConfig,
       manualObservation: { shopId: "shop1" } }, { openBrowser: null }));
     const start = () => startDesktopApp(createConfig, { openBrowser: null,
@@ -84,7 +83,8 @@ test("isolated private-create page claims before image work and records one UI o
     try {
       const csrf = await token(app.url);
       let content = await (await fetch(app.url)).text();
-      assert.match(content, /B005757-TEST-20261004/);
+      assert.match(content, /B005757-TEST-20261004-caf445ac6e676343/);
+      assert.match(content, /Shops内の全商品に同じ管理コードがないことまでは確認していません/);
       assert.match(content, /98,000円/);
       assert.equal(content.includes("既存商品を非公開で1回保存"), false);
       assert.equal((await post(app.url, csrf, "read")).status, 303);
@@ -123,8 +123,7 @@ test("isolated private-create page claims before image work and records one UI o
 test("unknown private-create result retains the browser until the operator closes it", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-create-unknown-"));
   let browser;
-  const createConfig = { ...config(), dataDir, createTestObservationEnabled: true,
-    createTestSkuAbsentConfirmed: true };
+  const createConfig = { ...config(), dataDir, createTestObservationEnabled: true };
   const app = await startDesktopApp(createConfig, { openBrowser: null,
     openCreateList: async ({ shopId }) => {
       browser = context();

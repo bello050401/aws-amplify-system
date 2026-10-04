@@ -19,7 +19,8 @@ import { saveExistingPrivateOnce } from "./saveExistingPrivateOnce.mjs";
 import { readManualSaveClaim, readManualSaveOutcome } from "./manualSaveAttempt.mjs";
 import { observeBoundedShopsWrite, safeWriteContractSummary } from
   "./writeContractObservation.mjs";
-import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestObservation,
+import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
+  readCreateTestObservation,
   recordCreateTestObservation } from "./createTestAttempt.mjs";
 import { addExistingImageOnce, readRetainedImageState } from "./addExistingImageOnce.mjs";
 import { readManualImageClaim, readManualImageOutcome } from "./manualImageAttempt.mjs";
@@ -39,7 +40,7 @@ const html = (value) => String(value).replace(/[&<>"']/g, character => ({
 })[character]);
 const here = dirname(fileURLToPath(import.meta.url));
 
-function createTestPage({ csrf, message, busy, claim, result, open, armed }) {
+function createTestPage({ csrf, message, busy, claim, preflight, result, open, armed }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
   const target = CREATE_TEST_TARGET;
@@ -49,9 +50,10 @@ body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#222;margin:0;paddi
 <p>既存の公開商品は変更しません。新しい非公開商品を1件だけ通常画面から登録し、その通信を観測します。このアプリは商品送信ボタンを押しません。</p>
 <p><b>対象:</b> ${html(target.expectedName)}<br><b>BELLO管理コード:</b> ${html(target.inventoryCode)}<br><b>新規テスト用コード:</b> ${html(target.skuCode)}<br><b>価格:</b> ${html(target.priceYen.toLocaleString("ja-JP"))}円<br><b>店舗:</b> <code>${html(target.shopId)}</code></p>
 <p><small>既存公開商品のID <code>${html(target.existingRemoteId)}</code> は参照だけに使い、上書きしません。画像はBELLOのこの在庫の既存EC画像を使用します。説明・カテゴリ・配送条件は既存商品の確認済み内容を参照して入力してください。公開操作は行いません。</small></p>
+<p><small>このテスト用コードは今回のために新しく生成しました。Shops画面では旧コード文字列の出品中検索0件と下書き7件の管理コード不一致を確認しました。ただし検索欄が管理コードを対象にするかは未確認で、Shops内の全商品に同じ管理コードがないことまでは確認していません。</small></p>
 ${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
-<section><h2>1. 専用Shops画面を開く</h2><p>同じテスト用コードの既存登録がないことを確認し、新規商品の内容を準備してください。画面を開く前に一回限りの記録を作り、画像選択後の再試行を防ぎます。</p>
-${button("create-test-open", "1回限りの登録準備を開始", claim.claimed || open)}
+<section><h2>1. 専用Shops画面を開く</h2><p>保存済みのPC試行記録を照合し、画面を開く前に今回の一回限りの記録を作ります。結果が不明でも新規作成を繰り返しません。過去の登録試行: ${preflight.clear ? "該当なし" : "あり・要確認"}。</p>
+${button("create-test-open", "1回限りの登録準備を開始", claim.claimed || open || !preflight.clear)}
 ${claim.claimed ? `<p>今回の試行ID: <code>${html(claim.attemptId ?? "記録未確認")}</code>。結果が不明でも再実行しません。</p>` : ""}</section>
 <section><h2>2. 最終の非公開保存を観測</h2><p>画像・商品名・テスト用コード・98,000円・説明・カテゴリ・配送設定を通常画面で確認し、「非公開で保存する」を押す直前に観測を開始してください。</p>
 ${button("create-test-arm", "非公開保存の観測を開始", !open || !claim.valid || armed || Boolean(result))}
@@ -89,10 +91,8 @@ function optionsOf(config) {
   if (typeof imageWorkflowEnabled !== "boolean" || (imageWorkflowEnabled && !imageProof))
     throw Error("Invalid private-image workflow configuration");
   const createTestObservationEnabled = config?.createTestObservationEnabled ?? false;
-  const createTestSkuAbsentConfirmed = config?.createTestSkuAbsentConfirmed ?? false;
   if (typeof createTestObservationEnabled !== "boolean" ||
-      typeof createTestSkuAbsentConfirmed !== "boolean" ||
-      (createTestObservationEnabled && !createTestSkuAbsentConfirmed) ||
+      Object.hasOwn(config, "createTestSkuAbsentConfirmed") ||
       (createTestObservationEnabled &&
         (manualObservation || imageProof || recovery || imageWorkflowEnabled)))
     throw Error("The private create test must use its isolated PC configuration");
@@ -102,7 +102,7 @@ function optionsOf(config) {
     throw Error("Invalid local PC control port");
   return { origin: config.origin, requestId: config.requestId, dataDir,
     recovery, manualObservation, imageProof, imageWorkflowEnabled,
-    createTestObservationEnabled, createTestSkuAbsentConfirmed, controlPort,
+    createTestObservationEnabled, controlPort,
     root: join(dataDir, "Queue"), belloProfileDir: join(dataDir, "BELLOChrome"),
     shopsProfileDir: join(dataDir, "ShopsChrome"),
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
@@ -116,10 +116,10 @@ function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsO
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
   lastImageReadState, workflowAttempted, lastWorkflowStatus, lastWorkflowStage,
   workflowReadbackPrivateWithImage, savedProductReadback,
-  retainedWorkflowOpen, createClaim, createResult, createOpen, createArmed }) {
+  retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed }) {
   if (options.createTestObservationEnabled)
     return createTestPage({ csrf, message, busy, claim: createClaim,
-      result: createResult, open: createOpen, armed: createArmed });
+      preflight: createPreflight, result: createResult, open: createOpen, armed: createArmed });
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${workflowRunning ? '<meta http-equiv="refresh" content="2">' : ""}<title>BELLO メルカリ照合</title><style>
@@ -212,6 +212,7 @@ export async function startDesktopApp(config, {
   openCreateList = openDedicatedProductListSession,
   observeCreate = observeBoundedShopsWrite,
   claimCreate = claimCreateTestOnce,
+  readCreatePreflight = readCreateTestPreflight,
   readCreate = readCreateTestObservation,
   recordCreate = recordCreateTestObservation,
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
@@ -221,6 +222,8 @@ export async function startDesktopApp(config, {
     await readCreate(options.root) : null;
   let createClaim = initialCreate?.claim ?? { claimed: false, valid: true,
     attemptId: null, claimedAt: null };
+  let createPreflight = options.createTestObservationEnabled ?
+    await readCreatePreflight(options.root) : null;
   let createResult = initialCreate?.result ?? null;
   let createSession = null;
   let createArmed = false;
@@ -322,7 +325,7 @@ export async function startDesktopApp(config, {
         lastImageReadState, workflowAttempted: workflowUsed, lastWorkflowStatus,
         lastWorkflowStage, workflowReadbackPrivateWithImage, savedProductReadback,
         retainedWorkflowOpen: Boolean(retainedWorkflowSession),
-        createClaim, createResult, createOpen: Boolean(createSession),
+        createClaim, createPreflight, createResult, createOpen: Boolean(createSession),
         createArmed }));
       return;
     }
@@ -356,12 +359,14 @@ export async function startDesktopApp(config, {
             .includes(action))
         throw Error("Only the pinned private-create observation is available");
       if (action === "create-test-open") {
-        if (!options.createTestObservationEnabled || createClaim.claimed || createSession ||
+        if (!options.createTestObservationEnabled || createClaim.claimed ||
+            !createPreflight.clear || createSession ||
             shopsContext || manualSession || retainedSaveSession || retainedImageSession ||
             retainedWorkflowSession)
           throw Error("The private-create observation is unavailable");
         createClaim = { claimed: true, valid: true,
           ...await claimCreate(options.root) };
+        createPreflight = { clear: false, reason: "PRIOR_CREATE_ATTEMPT" };
         const session = await openCreateList({ root: options.root,
           profileDir: options.shopsProfileDir,
           playwrightModulePath: options.playwrightModulePath,
