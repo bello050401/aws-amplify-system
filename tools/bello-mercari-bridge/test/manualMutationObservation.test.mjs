@@ -41,8 +41,11 @@ test("manual metadata preserves request order, field types and response identity
     { field: "variables.input.imageUrls[]", type: "string" },
   ]);
   assert.deepEqual(entries[0].auth, { authorization: true, cookie: true, csrf: true });
-  assert.equal(entries[0].id, "existing1");
+  assert.equal(entries[0].responseKind, "CREATE_PRODUCT");
+  assert.equal(entries[0].productMatch, "MATCH");
+  assert.equal(entries[0].shopMatch, "UNOBSERVED");
   assert.equal(entries[0].state, "UNOPENED");
+  assert.equal(entries[0].operationName, undefined, "a secret-like operation name is dropped");
   assert.deepEqual({ host: entries[1].host, path: entries[1].path },
     { host: "external-https", path: "/:value" });
   assert.equal(JSON.stringify(entries).includes("secret"), false);
@@ -84,7 +87,9 @@ test("stop keeps a late response for an accepted request within a bounded drain"
   assert.equal(await observer.waitForPrivateSaveAcknowledgement("existing1", 80), false);
   const entries = await observer.stop();
   assert.equal(entries[0].httpStatus, 200);
-  assert.equal(entries[0].id, "existing1");
+  assert.equal(entries[0].responseKind, "UPDATE_PRODUCT");
+  assert.equal(entries[0].productMatch, "MATCH");
+  assert.equal(entries[0].graphqlErrors, "NONE");
   assert.equal(entries[0].state, "UNOPENED");
 });
 
@@ -128,6 +133,56 @@ test("a same-ID private read response and external host never acknowledge a save
   }
   assert.equal(await observer.waitForPrivateSaveAcknowledgement("existing1", 25), false);
   await observer.stop();
+});
+
+test("trusted GraphQL records only safe operation and fixed error or identity classifications", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl, { drainMs: 30 });
+  const req = request("https://mercari-shops.com/graphql", {
+    operationName: "UpdateProduct", query: "mutation UpdateProduct { updateProduct { product { id } } }",
+    variables: { input: { id: "existing1", status: "UNOPENED" } },
+  });
+  browser.emit("request", req);
+  browser.emit("response", response(req, { data: { updateProduct: { product: {
+    id: "other-product", shopId: "shop1", status: "UNOPENED" } } },
+  errors: [{ message: "private secret details", extensions: { code: "BAD_USER_INPUT" } }] }));
+  const entries = await observer.stop();
+  assert.equal(entries[0].operationName, "UpdateProduct");
+  assert.equal(entries[0].responseKind, "UPDATE_PRODUCT");
+  assert.equal(entries[0].productMatch, "DIFFERENT");
+  assert.equal(entries[0].shopMatch, "MATCH");
+  assert.equal(entries[0].graphqlErrors, "PRESENT");
+  assert.equal(entries[0].graphqlErrorClass, "VALIDATION");
+  assert.equal(JSON.stringify(safeManualMutationSummary(entries)).includes("private secret"), false);
+  assert.equal(JSON.stringify(safeManualMutationSummary(entries)).includes("other-product"), false);
+});
+
+test("external GraphQL does not expose operation name, response identity or errors", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl, { drainMs: 20 });
+  const req = request("https://outside.example/graphql", {
+    operationName: "UpdateProduct", variables: { input: { id: "existing1" } } });
+  browser.emit("request", req);
+  browser.emit("response", response(req, { data: { updateProduct: { product: {
+    id: "existing1", status: "UNOPENED" } } } }));
+  const entries = await observer.stop();
+  assert.equal(entries[0].operationName, undefined);
+  assert.equal(entries[0].productMatch, undefined);
+  assert.equal(entries[0].graphqlErrors, undefined);
+});
+
+test("an image asset ID is never compared with the existing product ID", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl, { drainMs: 20 });
+  const req = request("https://mercari-shops.com/graphql", {
+    operationName: "UploadImage", query: "mutation UploadImage { uploadImage { asset { id } } }" });
+  browser.emit("request", req);
+  browser.emit("response", response(req, { data: { uploadImage: { asset: {
+    id: "different-asset-id", status: "UNOPENED" } } } }));
+  const entries = await observer.stop();
+  assert.equal(entries[0].responseKind, "UPLOAD_IMAGE");
+  assert.equal(entries[0].productMatch, "UNOBSERVED");
+  assert.equal(entries[0].state, undefined);
 });
 
 test("stop returns partial metadata if a JSON response never completes", async () => {

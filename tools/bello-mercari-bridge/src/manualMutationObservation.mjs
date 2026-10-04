@@ -8,6 +8,12 @@ const FIELDS = new Set(["operationName", "query", "variables", "input", "product
 const PATH_WORDS = new Set(["api", "v1", "v2", "v3", "seller", "shops", "products",
   "product", "images", "image", "assets", "asset", "upload", "graphql"]);
 const STATES = new Set(["OPENED", "UNOPENED", "DRAFT", "PUBLISHED", "PRIVATE", "PUBLIC"]);
+const MATCHES = new Set(["MATCH", "DIFFERENT", "UNOBSERVED"]);
+const RESPONSE_KINDS = new Set(["CREATE_PRODUCT", "UPDATE_PRODUCT", "PRODUCT",
+  "UPLOAD_IMAGE", "ASSET", "OTHER", "UNOBSERVED"]);
+const ERROR_STATES = new Set(["NONE", "PRESENT", "UNOBSERVED"]);
+const ERROR_CLASSES = new Set(["AUTH", "VALIDATION", "NOT_FOUND", "RATE_LIMIT",
+  "SERVER", "OTHER", "NONE", "UNOBSERVED"]);
 const MAX_EVENTS = 20;
 const MAX_FIELDS = 64;
 const MAX_JSON_BYTES = 128 * 1024;
@@ -66,16 +72,57 @@ function multipartFields(buffer, contentType) {
   return fields;
 }
 
-function responseIdentity(body) {
-  if (!body || typeof body !== "object") return {};
+function safeOperationName(value) {
+  return typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(value) &&
+    /(?:product|image|asset|shop|item|listing|category|brand|seller|variant)/i.test(value) &&
+    !/(?:secret|token|password|cookie|session|api.?key|email|phone)/i.test(value) ? value : null;
+}
+
+function graphqlErrorSummary(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body) ||
+      ("errors" in body && !Array.isArray(body.errors)))
+    return { graphqlErrors: "UNOBSERVED", graphqlErrorClass: "UNOBSERVED" };
+  if (!Array.isArray(body.errors) || body.errors.length === 0)
+    return { graphqlErrors: "NONE", graphqlErrorClass: "NONE" };
+  const code = body.errors[0]?.extensions?.code;
+  const category = typeof code === "string" ?
+    /^(?:UNAUTHENTICATED|FORBIDDEN|UNAUTHORIZED)$/i.test(code) ? "AUTH" :
+    /^(?:BAD_USER_INPUT|VALIDATION_ERROR|INVALID_INPUT)$/i.test(code) ? "VALIDATION" :
+    /^(?:NOT_FOUND)$/i.test(code) ? "NOT_FOUND" :
+    /^(?:RATE_LIMITED|TOO_MANY_REQUESTS)$/i.test(code) ? "RATE_LIMIT" :
+    /^(?:INTERNAL_SERVER_ERROR|SERVICE_UNAVAILABLE)$/i.test(code) ? "SERVER" : "OTHER" : "OTHER";
+  return { graphqlErrors: "PRESENT", graphqlErrorClass: category };
+}
+
+function responseIdentity(body, expectedShopId, expectedRemoteId) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
   const data = body.data ?? body;
-  const candidate = data.createProduct?.product ?? data.updateProduct?.product ??
-    data.product ?? data.uploadImage?.asset ?? data.asset ?? data.payload?.product;
-  if (!candidate || typeof candidate !== "object") return {};
+  const dataFields = data && typeof data === "object" && !Array.isArray(data) ?
+    Object.keys(data) : [];
+  const responseField = dataFields.length === 1 ? safeOperationName(dataFields[0]) : null;
+  const choices = [
+    ["CREATE_PRODUCT", data.createProduct?.product],
+    ["UPDATE_PRODUCT", data.updateProduct?.product],
+    ["PRODUCT", data.product ?? data.payload?.product],
+    ["UPLOAD_IMAGE", data.uploadImage?.asset],
+    ["ASSET", data.asset],
+  ];
+  const match = choices.find(([, value]) => value && typeof value === "object" && !Array.isArray(value));
+  if (!match) return { responseKind: data && typeof data === "object" ? "OTHER" : "UNOBSERVED",
+    ...(responseField ? { responseField } : {}),
+    productMatch: "UNOBSERVED", shopMatch: "UNOBSERVED" };
+  const [responseKind, candidate] = match;
+  const isProductResponse = ["CREATE_PRODUCT", "UPDATE_PRODUCT", "PRODUCT"].includes(responseKind);
   const id = candidate.id;
   const status = candidate.status;
-  return { ...(typeof id === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(id) ? { id } : {}),
-    ...(STATES.has(status) ? { state: status } : {}) };
+  const shopId = candidate.shopId ?? candidate.shop?.id;
+  const compare = (actual, expected) => typeof actual === "string" &&
+    /^[A-Za-z0-9_-]{1,100}$/.test(actual) ?
+      actual === expected ? "MATCH" : "DIFFERENT" : "UNOBSERVED";
+  return { responseKind, ...(responseField ? { responseField } : {}),
+    productMatch: isProductResponse ? compare(id, expectedRemoteId) : "UNOBSERVED",
+    shopMatch: isProductResponse ? compare(shopId, expectedShopId) : "UNOBSERVED",
+    ...(isProductResponse && STATES.has(status) ? { state: status } : {}) };
 }
 
 /** Recheck all observable metadata at the local UI boundary. */
@@ -90,7 +137,13 @@ export function safeManualMutationSummary(items) {
         (item.httpStatus !== null && (!Number.isInteger(item.httpStatus) || item.httpStatus < 100 || item.httpStatus > 599)) ||
         !Array.isArray(item.fields) || item.fields.length > MAX_FIELDS ||
         !item.auth || ["authorization", "cookie", "csrf"].some(key => typeof item.auth[key] !== "boolean") ||
-        (item.id !== undefined && (typeof item.id !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(item.id))) ||
+        (item.operationName !== undefined && safeOperationName(item.operationName) !== item.operationName) ||
+        (item.responseField !== undefined && safeOperationName(item.responseField) !== item.responseField) ||
+        (item.responseKind !== undefined && !RESPONSE_KINDS.has(item.responseKind)) ||
+        (item.productMatch !== undefined && !MATCHES.has(item.productMatch)) ||
+        (item.shopMatch !== undefined && !MATCHES.has(item.shopMatch)) ||
+        (item.graphqlErrors !== undefined && !ERROR_STATES.has(item.graphqlErrors)) ||
+        (item.graphqlErrorClass !== undefined && !ERROR_CLASSES.has(item.graphqlErrorClass)) ||
         (item.state !== undefined && !STATES.has(item.state))) return [];
     const fields = item.fields.flatMap(field => {
       if (!field || typeof field.field !== "string" || typeof field.type !== "string" ||
@@ -101,7 +154,14 @@ export function safeManualMutationSummary(items) {
     return [{ order: item.order, method: item.method, host: item.host, path: item.path,
       bodyType: item.bodyType, fields, auth: { authorization: item.auth.authorization,
         cookie: item.auth.cookie, csrf: item.auth.csrf }, httpStatus: item.httpStatus,
-      ...(item.id ? { id: item.id } : {}), ...(item.state ? { state: item.state } : {}) }];
+      ...(item.operationName ? { operationName: item.operationName } : {}),
+      ...(item.responseField ? { responseField: item.responseField } : {}),
+      ...(item.responseKind ? { responseKind: item.responseKind } : {}),
+      ...(item.productMatch ? { productMatch: item.productMatch } : {}),
+      ...(item.shopMatch ? { shopMatch: item.shopMatch } : {}),
+      ...(item.graphqlErrors ? { graphqlErrors: item.graphqlErrors } : {}),
+      ...(item.graphqlErrorClass ? { graphqlErrorClass: item.graphqlErrorClass } : {}),
+      ...(item.state ? { state: item.state } : {}) }];
   });
 }
 
@@ -112,6 +172,8 @@ export function observeManualShopsMutation(page, expectedEditUrl, { drainMs = 20
       !Number.isInteger(drainMs) || drainMs < 0 || drainMs > 5000)
     throw Error("An exact existing Shops edit page is required");
   const events = [];
+  const [, expectedShopId, expectedRemoteId] =
+    /^https:\/\/mercari-shops\.com\/seller\/shops\/([A-Za-z0-9_-]{1,100})\/products\/([A-Za-z0-9_-]{1,100})\/edit$/.exec(expectedEditUrl);
   const byRequest = new WeakMap();
   const pending = new Set();
   const awaiting = new Set();
@@ -144,7 +206,12 @@ export function observeManualShopsMutation(page, expectedEditUrl, { drainMs = 20
       if (/^application\/(?:json|graphql\+json)(?:;|$)/i.test(contentType) &&
           buffer && buffer.length <= MAX_JSON_BYTES) {
         bodyType = "json";
-        fields = jsonFields(request.postDataJSON());
+        const body = request.postDataJSON();
+        fields = jsonFields(body);
+        if (target.host !== "external-https" && target.path.endsWith("/graphql")) {
+          const operationName = safeOperationName(body?.operationName);
+          if (operationName) entry.operationName = operationName;
+        }
       } else if (/^multipart\/form-data(?:;|$)/i.test(contentType)) {
         bodyType = "multipart";
         fields = multipartFields(buffer, contentType);
@@ -164,9 +231,12 @@ export function observeManualShopsMutation(page, expectedEditUrl, { drainMs = 20
         const status = response.status();
         if (!stopped) entry.httpStatus = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
         const contentType = (await response.headerValue("content-type")) ?? "";
-        if (/^application\/(?:json|graphql\+json)(?:;|$)/i.test(contentType)) {
-          const identity = responseIdentity(await response.json());
-          if (!stopped) Object.assign(entry, identity);
+        if (/^application\/(?:json|graphql\+json)(?:;|$)/i.test(contentType) &&
+            entry.host !== "external-https") {
+          const body = await response.json();
+          const identity = responseIdentity(body, expectedShopId, expectedRemoteId);
+          const errors = entry.path.endsWith("/graphql") ? graphqlErrorSummary(body) : {};
+          if (!stopped) Object.assign(entry, identity, errors);
         }
         if (typeof response.finished === "function") await response.finished();
       } finally {
