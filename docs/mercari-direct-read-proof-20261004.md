@@ -25,6 +25,8 @@
 
 これで証明できるのは、このPC上の専用ブラウザと同じ認証状態での**既存商品の直接HTTP読取**である。管理画面の書込契約や新規出品、BELLO Webサーバーからの認証付き通信は未実証。
 
-## Web操作完結までの残る条件
+## 次の経路
 
-[メルカリShops公式API仕様](https://api.mercari-shops.com/docs/index.html)は管理画面内の `/graphql` と別の `https://api.mercari-shops.com/v1/graphql` を公開し、Personal API Access Token、契約時のAPI_CLIENT_NAMEを含むUser-Agent、事前申請済みの日本国内の固定送信元IPを要求する。BELLO専用の資格情報と送信元IPは確認できていない。Next Engineに入力された資格情報をBELLOに流用しない。PC上で上記検証が成功してもBELLO Webサーバーからの直接HTTPが成立するとは判定しない。
+本人の現在の方針は、正規のShopsログイン状態と管理画面の実観測HTTPによる直接連携である。この読取検証からは、既存商品に対する画像送信・非公開保存、新規出品のHTTP契約は得られない。書込は通常画面での一回限りの操作、同じ要求の応答、別セッションの正確な商品読戻しを照合してから個別に評価する。B005795の旧画像・保存操作は再送しない。次の観測条件は [直接連携の次の観測境界](mercari-first-listing-preflight-20261004.md) にまとめた。
+
+Web画面だけで完結する直接連携は未実証であり、今回成功したPCブラウザと同じ認証状態をBELLO Webサーバーが持つとは判定しない。公式API向けのToken、User-Agent、固定IPを、このログイン経路の必須条件にはしない。
