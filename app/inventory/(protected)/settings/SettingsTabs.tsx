@@ -17,6 +17,7 @@ import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
 import { ListingPartitionBackfillPanel } from "./ListingPartitionBackfillPanel";
 import { BaseSettingsPanel } from "./BaseSettingsPanel";
 import { NextEngineSettingsPanel } from "./NextEngineSettingsPanel";
+import { MercariPcConnectionPanel } from "./MercariPcConnectionPanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
@@ -91,6 +92,7 @@ export function SettingsTabs({
     "images",
     "base",
     "nextEngine",
+    "mercariBridge",
     "pricing",
     "shipping",
     "line",
@@ -147,6 +149,11 @@ export function SettingsTabs({
         {isAdmin && (
           <button type="button" onClick={() => setTab("nextEngine")} className={tabClass(tab === "nextEngine")}>
             ネクストエンジン連携
+          </button>
+        )}
+        {isAdmin && (
+          <button type="button" onClick={() => setTab("mercariBridge")} className={tabClass(tab === "mercariBridge")}>
+            メルカリShops PC連携
           </button>
         )}
         {isAdmin && (
@@ -218,6 +225,8 @@ export function SettingsTabs({
         )}
         {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}
         {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} privateTestEnabled={nextEnginePrivateTestEnabled} privateRetestEnabled={nextEnginePrivateRetestEnabled} callbackResult={nextEngineResult} />}
+        {tab === "mercariBridge" && isAdmin &&
+          <MercariPcConnectionPanel initialRequestId={searchParams.get("requestId") ?? ""} />}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側
             (/inventory/listings/pricing-rules)へ移設した。ここに残す
             ロジック付きUIを二重に持たない(同じ設定を二箇所で編集できる
