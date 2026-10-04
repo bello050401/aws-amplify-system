@@ -10,6 +10,8 @@ import { claimManualSaveOnce } from "../src/manualSaveAttempt.mjs";
 import { claimManualImageOnce } from "../src/manualImageAttempt.mjs";
 import { claimPrivateImageWorkflow } from "../src/privateImageWorkflowAttempt.mjs";
 import { saveReadTrafficEvidence } from "../src/trafficEvidence.mjs";
+import { PINNED_READ_QUERY_SHA256, runPinnedDirectReadProbeOnce } from
+  "../src/directReadProbe.mjs";
 
 const config = () => ({ origin: "https://bello.example.test", requestId: "a".repeat(64),
   dataDir: join(tmpdir(), "bello-desktop-test") });
@@ -110,6 +112,58 @@ test("a restarted desktop restores only saved safe traffic metadata", async () =
       assert.match(content, /通信概要の保存状態: <code>OBSERVED<\/code>/);
       assert.match(content, /POST mercari-shops.com\/graphql/);
       assert.equal(content.includes("private-cookie"), false);
+    } finally { await app.close(); }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("PC exposes one pinned HTTP read proof only after exact evidence and disables it after use", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-direct-read-"));
+  const target = { shopId: "shop1", remoteId: "2JXePE4ke8UCBTj6mxc4cf",
+    inventoryCode: "B005795", priceYen: 90000, quantity: 0 };
+  try {
+    await saveReadTrafficEvidence(join(dataDir, "Queue"), config().requestId,
+      "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", [], [{
+        method: "POST", host: "mercari-shops.com", path: "/graphql",
+        operationType: "query", operationName: "EditProductPage",
+        querySha256: PINNED_READ_QUERY_SHA256,
+        variableFields: [{ field: "id", type: "string" }], variableShapeComplete: true,
+        requestProductMatch: "MATCH", requestShopMatch: "UNOBSERVED",
+        responseProductMatch: "MATCH", responseShopMatch: "MATCH",
+        graphqlErrors: "NONE", httpStatus: 200, authPresenceObserved: true,
+        authPresence: { authorization: false, cookie: true, csrf: false },
+      }]);
+    let calls = 0;
+    const start = () => startDesktopApp({ ...config(), dataDir, manualObservation: target }, {
+      openBrowser: null,
+      runDirectReadProbe: options => {
+        calls++;
+        return runPinnedDirectReadProbeOnce({ ...options, probeWaitMs: 20,
+          launchPersistentContext: async () => {
+            const browser = context();
+            const page = { goto: async () => {},
+              url: () => `https://mercari-shops.com/seller/shops/${target.shopId}/products/${target.remoteId}/edit` };
+            browser.pages = () => [page];
+            browser.request = { post: async () => { throw Error("must not send"); } };
+            return browser;
+          } });
+      },
+    });
+    let app = await start();
+    try {
+      const csrf = await token(app.url);
+      assert.match(await (await fetch(app.url)).text(),
+        /<button >既存商品をHTTPで1回読取検証<\/button>/);
+      assert.equal((await post(app.url, csrf, "probe-direct-read-once")).status, 303);
+      assert.equal((await post(app.url, csrf, "probe-direct-read-once")).status, 303);
+      assert.equal(calls, 1);
+      assert.match(await (await fetch(app.url)).text(),
+        /<button disabled>既存商品をHTTPで1回読取検証<\/button>/);
+    } finally { await app.close(); }
+    app = await start();
+    try {
+      assert.match(await (await fetch(app.url)).text(),
+        /<button disabled>既存商品をHTTPで1回読取検証<\/button>/);
+      assert.equal(calls, 1);
     } finally { await app.close(); }
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });

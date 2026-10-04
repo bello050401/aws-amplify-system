@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { bindAccount } from "./queue.mjs";
 import { observeShopsTraffic } from "./trafficObservation.mjs";
 import { observeShopsReadQueries } from "./readQueryObservation.mjs";
+import { observeExactReadForDirectProbe } from "./directReadProbeObserver.mjs";
 
 const SIGN_IN_URL = "https://mercari-shops.com/signin/seller";
 const PRODUCT_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -57,7 +58,8 @@ export async function openDedicatedLogin({ profileDir, playwrightModulePath, lau
 
 /** Opens only the observed exact-ID edit URL. Navigation alone never confirms identity or privacy. */
 export async function openExistingProductReadSession({ root, profileDir, playwrightModulePath,
-  shopId, remoteId, launchPersistentContext = null, observeTraffic = false }) {
+  shopId, remoteId, launchPersistentContext = null, observeTraffic = false,
+  probeQuerySha256 = null, probeWaitMs = 12000 }) {
   if (!PRODUCT_ID.test(shopId) || !PRODUCT_ID.test(remoteId)) throw Error("Invalid existing Shops identity");
   if (!root || !isAbsolute(root)) throw Error("An absolute single-account queue root is required");
   await bindAccount(root, shopId);
@@ -65,21 +67,26 @@ export async function openExistingProductReadSession({ root, profileDir, playwri
   const context = await launchDedicatedProfile({ profileDir, playwrightModulePath, launchPersistentContext });
   let traffic = null;
   let readQueries = null;
+  let directReadProbe = null;
   try {
     const page = context.pages()[0] ?? await context.newPage();
     if (observeTraffic) {
       traffic = observeShopsTraffic(context);
       readQueries = observeShopsReadQueries(context, { shopId, remoteId, page });
     }
+    if (probeQuerySha256)
+      directReadProbe = observeExactReadForDirectProbe(context,
+        { shopId, remoteId, page, querySha256: probeQuerySha256, waitMs: probeWaitMs });
     await page.goto(expectedUrl);
     const actual = new URL(page.url());
     const state = actual.origin === "https://mercari-shops.com" &&
       actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
       actual.href === expectedUrl ? "NAVIGATED_UNVERIFIED" : "UNKNOWN";
-    return { context, page, state, traffic, readQueries };
+    return { context, page, state, traffic, readQueries, directReadProbe };
   } catch (error) {
     traffic?.stop();
     await readQueries?.stop();
+    directReadProbe?.stop();
     await context.close();
     throw error;
   }
