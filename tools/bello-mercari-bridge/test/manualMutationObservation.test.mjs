@@ -51,6 +51,32 @@ test("manual metadata preserves request order, field types and response identity
   assert.equal(JSON.stringify(entries).includes("secret"), false);
 });
 
+test("target-only observer ignores telemetry and acknowledges only a later exact private update", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl,
+    { drainMs: 20, shopsOnly: true });
+  for (let index = 0; index < 25; index++)
+    browser.emit("request", request("https://telemetry.example/collect", { value: index }));
+  assert.equal(observer.checkpoint(), 0, "unrelated traffic cannot consume the 20-event cap");
+  const earlier = request("https://mercari-shops.com/graphql", {
+    operationName: "UpdateProduct", variables: { input: { status: "UNOPENED" } },
+  });
+  browser.emit("request", earlier);
+  browser.emit("response", response(earlier, { data: { updateProduct: { product: {
+    id: "existing1", shopId: "shop1", status: "UNOPENED" } } } }));
+  const beforeClick = observer.checkpoint();
+  assert.equal(await observer.waitForExactPrivateUpdate(beforeClick, 25), false,
+    "a request started before the final click cannot acknowledge it");
+  const later = request("https://mercari-shops.com/graphql", {
+    operationName: "UpdateProduct", variables: { input: { status: "UNOPENED" } },
+  });
+  browser.emit("request", later);
+  browser.emit("response", response(later, { data: { updateProduct: { product: {
+    id: "existing1", shopId: "shop1", status: "UNOPENED" } } } }));
+  assert.equal(await observer.waitForExactPrivateUpdate(beforeClick, 100), true);
+  assert.equal((await observer.stop()).length, 2);
+});
+
 test("multipart reports only allowlisted part names and file types", async () => {
   const browser = page();
   const observer = observeManualShopsMutation(browser, editUrl, { drainMs: 50 });

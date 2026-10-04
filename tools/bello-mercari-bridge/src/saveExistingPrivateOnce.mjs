@@ -65,7 +65,7 @@ async function confirmExistingPrivate(page, target, expectedUrl, title) {
     page.url() === expectedUrl;
 }
 
-async function privateSaveControl(page, expectedUrl) {
+export async function privateSaveControl(page, expectedUrl) {
   if (page.url() !== expectedUrl) return null;
   const dialog = page.getByRole("dialog");
   if (await dialog.count() !== 1 || await dialog.getAttribute("aria-modal") !== "true" ||

@@ -8,6 +8,7 @@ import { startDesktopApp } from "../src/desktopApp.mjs";
 import { BridgeBoundaryError } from "../src/cloudConnector.mjs";
 import { claimManualSaveOnce } from "../src/manualSaveAttempt.mjs";
 import { claimManualImageOnce } from "../src/manualImageAttempt.mjs";
+import { claimPrivateImageWorkflow } from "../src/privateImageWorkflowAttempt.mjs";
 
 const config = () => ({ origin: "https://bello.example.test", requestId: "a".repeat(64),
   dataDir: join(tmpdir(), "bello-desktop-test") });
@@ -246,6 +247,66 @@ test("one PC image button uses the pinned file and stays disabled across restart
         /<button disabled>既存商品に画像を1枚追加して観測<\/button>/);
       assert.equal(calls, 1);
     } finally { await app.close(); }
+  } finally {
+    assert.equal(resolve(dataDir).startsWith(resolve(tmpdir()) + "\\"), true);
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("unified private-image action is explicit and old attempts disable it", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-unified-"));
+  const target = { shopId: "shop1", remoteId: "existing1", inventoryCode: "B005795",
+    priceYen: 90000, quantity: 0 };
+  const sha256 = "a".repeat(64);
+  const imageProof = { sha256, path: join(dataDir, "ImageProof", `B005795-${sha256.slice(0, 16)}.jpg`) };
+  let calls = 0;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const start = () => startDesktopApp({ ...config(), dataDir, manualObservation: target,
+    imageProof, imageWorkflowEnabled: true }, { openBrowser: async () => {},
+    runWorkflow: async options => {
+      calls++;
+      assert.deepEqual(options.target, target);
+      await claimPrivateImageWorkflow(options.root, target, sha256);
+      options.onStage("SAVE_CLAIMED");
+      await gate;
+      return { status: "UNKNOWN", stage: "SAVE_ACK_UNVERIFIED" };
+    } });
+  try {
+    const app = await start();
+    try {
+      const csrf = await token(app.url);
+      const before = await (await fetch(app.url)).text();
+      assert.match(before, /画像1枚を追加して非公開保存・確認/);
+      assert.equal(before.includes('value="add-image-once"'), false);
+      assert.equal(before.includes('value="save-private-once"'), false);
+      assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
+      let during = "";
+      for (let attempt = 0; attempt < 20; attempt++) {
+        during = await (await fetch(app.url)).text();
+        if (during.includes("SAVE_CLAIMED")) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.match(during, /http-equiv="refresh" content="2"/);
+      assert.match(during, /SAVE_CLAIMED/);
+      assert.equal((await post(app.url, csrf, "complete-image-private")).status, 403);
+      release();
+      for (let attempt = 0; attempt < 20; attempt++) {
+        if ((await (await fetch(app.url)).text()).includes("SAVE_ACK_UNVERIFIED")) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
+      assert.equal(calls, 1);
+      const after = await (await fetch(app.url)).text();
+      assert.match(after, /SAVE_ACK_UNVERIFIED/);
+      assert.match(after, /<button disabled>画像1枚を追加して非公開保存・確認<\/button>/);
+    } finally { release(); await app.close(); }
+    const restarted = await start();
+    try {
+      const after = await (await fetch(restarted.url)).text();
+      assert.match(after, /<button disabled>画像1枚を追加して非公開保存・確認<\/button>/);
+      assert.equal(calls, 1);
+    } finally { await restarted.close(); }
   } finally {
     assert.equal(resolve(dataDir).startsWith(resolve(tmpdir()) + "\\"), true);
     await rm(dataDir, { recursive: true, force: true });

@@ -50,7 +50,7 @@ export async function readRetainedImageState(session, target, {
   return "IMAGE_COUNT_UNVERIFIED";
 }
 
-async function exactSingleImageInput(page, expectedUrl) {
+export async function exactSingleImageInput(page, expectedUrl) {
   if (page.url() !== expectedUrl) return null;
   const inputs = page.locator('input[type="file"]');
   if (await inputs.count() !== 1) return null;

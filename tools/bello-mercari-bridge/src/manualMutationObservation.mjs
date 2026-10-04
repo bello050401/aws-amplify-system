@@ -166,10 +166,12 @@ export function safeManualMutationSummary(items) {
 }
 
 /** Passive, memory-only metadata for one exact edit page. It never sends a request or operates a form. */
-export function observeManualShopsMutation(page, expectedEditUrl, { drainMs = 2000 } = {}) {
+export function observeManualShopsMutation(page, expectedEditUrl,
+  { drainMs = 2000, shopsOnly = false } = {}) {
   if (!/^https:\/\/mercari-shops\.com\/seller\/shops\/[A-Za-z0-9_-]{1,100}\/products\/[A-Za-z0-9_-]{1,100}\/edit$/.test(expectedEditUrl) ||
       typeof page?.on !== "function" || typeof page?.off !== "function" ||
-      !Number.isInteger(drainMs) || drainMs < 0 || drainMs > 5000)
+      !Number.isInteger(drainMs) || drainMs < 0 || drainMs > 5000 ||
+      typeof shopsOnly !== "boolean")
     throw Error("An exact existing Shops edit page is required");
   const events = [];
   const [, expectedShopId, expectedRemoteId] =
@@ -189,7 +191,8 @@ export function observeManualShopsMutation(page, expectedEditUrl, { drainMs = 20
     if (!accepting || page.url() !== expectedEditUrl || events.length >= MAX_EVENTS) return;
     const method = request.method();
     const target = destination(request.url());
-    if (!METHODS.has(method) || !TYPES.has(request.resourceType()) || !target) return;
+    if (!METHODS.has(method) || !TYPES.has(request.resourceType()) || !target ||
+        (shopsOnly && (target.host !== "mercari-shops.com" || target.path !== "/graphql"))) return;
     const entry = { order: events.length + 1, method, ...target, bodyType: "unobserved",
       fields: [], auth: { authorization: false, cookie: false, csrf: false }, httpStatus: null };
     events.push(entry);
@@ -277,6 +280,22 @@ export function observeManualShopsMutation(page, expectedEditUrl, { drainMs = 20
       // Response metadata is insufficient to distinguish the save from a read.
       // Drain briefly for observation, but never promote an unverified contract.
       await new Promise(resolve => setTimeout(resolve, Math.min(timeoutMs, drainMs)));
+      return false;
+    },
+    waitForExactPrivateUpdate: async (afterOrder, timeoutMs = 12000) => {
+      if (!shopsOnly || !Number.isInteger(afterOrder) || afterOrder < 0 ||
+          afterOrder > MAX_EVENTS || !Number.isInteger(timeoutMs) ||
+          timeoutMs < 1 || timeoutMs > 30000)
+        throw Error("Invalid exact private update observation window");
+      const deadline = Date.now() + timeoutMs;
+      while (!stopped && Date.now() < deadline) {
+        if (events.some(entry => entry.order > afterOrder && entry.completedAt &&
+            entry.httpStatus === 200 && entry.responseKind === "UPDATE_PRODUCT" &&
+            entry.productMatch === "MATCH" && entry.shopMatch === "MATCH" &&
+            ["UNOPENED", "PRIVATE"].includes(entry.state) && entry.graphqlErrors === "NONE"))
+          return true;
+        await new Promise(resolve => setTimeout(resolve, Math.min(50, deadline - Date.now())));
+      }
       return false;
     },
     stop: () => stopPromise ??= (async () => {
