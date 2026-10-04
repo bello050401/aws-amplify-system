@@ -8,6 +8,7 @@ import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
 import { openDedicatedLogin, openExistingProductReadSession } from "./session.mjs";
 import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
+import { safeReadQueryCandidates } from "./readQueryObservation.mjs";
 import { latestReadTrafficEvidence } from "./trafficEvidence.mjs";
 import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
@@ -70,7 +71,8 @@ function optionsOf(config) {
 }
 
 function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsOpen, manualOpen,
-  manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastDiagnostics,
+  manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastReadQueries,
+  lastDiagnostics,
   trafficEvidenceStatus, trafficEvidenceAt,
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
@@ -98,6 +100,8 @@ ${lastResult ? `<p>直近の結果: <strong>${html(lastResult)}</strong>。出�
 ${trafficAttempted ? `<details><summary>Shops通信の概要（${lastTraffic.length}種類）</summary>
 <p><small>固定語彙の概要だけをこのPCに保存します。URLの値・検索条件・認証情報・本文は記録せず、BELLOにも送りません。</small></p>
 ${lastTraffic.length ? `<ul>${lastTraffic.map(item => `<li><code>${html(item.method)} ${html(item.host)}${html(item.path)}</code> — ${html(item.status)}（${html(item.count)}回）</li>`).join("")}</ul>` : "<p>対象となる通信は観測されませんでした。</p>"}</details>` : ""}</section>
+${trafficAttempted ? `<details><summary>読取GraphQL候補（${lastReadQueries.length}件）</summary><p><small>操作名と変数の型、対象IDとの一致結果だけです。認証欄はヘッダーの存在を示すのみで、HTTP直接通信の認証要件や実行許可を証明しません。</small></p>
+${lastReadQueries.length ? `<ol>${lastReadQueries.map(item => `<li><code>${html(item.operationName ?? "操作名未確認")}</code> / query SHA-256 ${html(item.querySha256 ?? "未確認")} / 変数 ${item.variableFields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / 変数形状 ${item.variableShapeComplete ? "観測範囲内" : "一部未確認"} / 要求商品ID ${html(item.requestProductMatch)} / 要求店舗ID ${html(item.requestShopMatch)} / 応答商品ID ${html(item.responseProductMatch)} / 応答店舗ID ${html(item.responseShopMatch)} / HTTP ${html(item.httpStatus ?? "未確認")} / GraphQLエラー ${html(item.graphqlErrors)} / 認証ヘッダー存在 ${item.authPresenceObserved ? item.authPresence.authorization ? "あり" : "なし" : "未確認"}、Cookie存在 ${item.authPresenceObserved ? item.authPresence.cookie ? "あり" : "なし" : "未確認"}、CSRF存在 ${item.authPresenceObserved ? item.authPresence.csrf ? "あり" : "なし" : "未確認"}</li>`).join("")}</ol>` : "<p>対象IDに結び付く読取query候補は観測されませんでした。</p>"}</details>` : ""}
 ${trafficAttempted ? `<section><h2>読取診断</h2><p><small>このPC画面に一時表示する固定コードです。値やURLは記録せず、BELLOにも送りません。</small></p>
 ${lastDiagnostics.length ? `<p><code>${lastDiagnostics.map(html).join(" / ")}</code></p>` : "<p>診断コードはありません。照合成功を意味するものではありません。</p>"}</section>` : ""}
 ${options.manualObservation && !options.imageWorkflowEnabled ? `<section><h2>既存商品の通信観測</h2>
@@ -189,6 +193,7 @@ export async function startDesktopApp(config, {
   const storedTrafficEvidence = await latestReadTrafficEvidence(options.root, options.requestId);
   let trafficAttempted = ["OBSERVED", "EMPTY"].includes(storedTrafficEvidence.status);
   let lastTraffic = storedTrafficEvidence.entries;
+  let lastReadQueries = storedTrafficEvidence.readQueries;
   let trafficEvidenceStatus = storedTrafficEvidence.status;
   let trafficEvidenceAt = storedTrafficEvidence.observedAt;
   let lastDiagnostics = [];
@@ -226,7 +231,8 @@ export async function startDesktopApp(config, {
       send(response, 200, page({ csrf, options, message, busy, workflowRunning,
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
         manualOpen: Boolean(manualSession), manualAttempted, lastManual, lastResult,
-        trafficAttempted, lastTraffic, lastDiagnostics, privateSaveAttempted, lastPrivateSave,
+        trafficAttempted, lastTraffic, lastReadQueries, lastDiagnostics,
+        privateSaveAttempted, lastPrivateSave,
         trafficEvidenceStatus, trafficEvidenceAt,
         lastPrivateReadback, lastPrivateDiagnostic,
         retainedSaveOpen: Boolean(retainedSaveSession), imageAttempted, lastImageStatus,
@@ -281,13 +287,17 @@ export async function startDesktopApp(config, {
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         trafficAttempted = true;
         lastTraffic = [];
+        lastReadQueries = [];
         lastDiagnostics = [];
         trafficEvidenceStatus = "READ_IN_PROGRESS";
         trafficEvidenceAt = null;
         const result = await runRead({ origin: options.origin, requestId: options.requestId,
           root: options.root, belloProfileDir: options.belloProfileDir,
           shopsProfileDir: options.shopsProfileDir, playwrightModulePath: options.playwrightModulePath,
-          browserRead: true, onShopsTraffic: items => { lastTraffic = safeShopsTrafficSummary(items); },
+          browserRead: true, onShopsTraffic: (items, queryCandidates) => {
+            lastTraffic = safeShopsTrafficSummary(items);
+            lastReadQueries = safeReadQueryCandidates(queryCandidates);
+          },
           onReadDiagnostics: codes => { lastDiagnostics = safeReadDiagnostics(codes); },
           onTrafficEvidenceStatus: (status, observedAt) => {
             trafficEvidenceStatus = status;

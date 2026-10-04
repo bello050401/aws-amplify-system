@@ -4,6 +4,7 @@ import { isAbsolute } from "node:path";
 import { join } from "node:path";
 import { bindAccount } from "./queue.mjs";
 import { observeShopsTraffic } from "./trafficObservation.mjs";
+import { observeShopsReadQueries } from "./readQueryObservation.mjs";
 
 const SIGN_IN_URL = "https://mercari-shops.com/signin/seller";
 const PRODUCT_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -63,17 +64,22 @@ export async function openExistingProductReadSession({ root, profileDir, playwri
   const expectedUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/${remoteId}/edit`;
   const context = await launchDedicatedProfile({ profileDir, playwrightModulePath, launchPersistentContext });
   let traffic = null;
+  let readQueries = null;
   try {
-    if (observeTraffic) traffic = observeShopsTraffic(context);
     const page = context.pages()[0] ?? await context.newPage();
+    if (observeTraffic) {
+      traffic = observeShopsTraffic(context);
+      readQueries = observeShopsReadQueries(context, { shopId, remoteId, page });
+    }
     await page.goto(expectedUrl);
     const actual = new URL(page.url());
     const state = actual.origin === "https://mercari-shops.com" &&
       actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
       actual.href === expectedUrl ? "NAVIGATED_UNVERIFIED" : "UNKNOWN";
-    return { context, page, state, traffic };
+    return { context, page, state, traffic, readQueries };
   } catch (error) {
     traffic?.stop();
+    await readQueries?.stop();
     await context.close();
     throw error;
   }

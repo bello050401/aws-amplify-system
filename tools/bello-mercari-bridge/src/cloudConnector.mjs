@@ -3,6 +3,7 @@ import { runExistingRead } from "./readWorker.mjs";
 import { createExistingProductReader } from "./existingProductReader.mjs";
 import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
+import { safeReadQueryCandidates } from "./readQueryObservation.mjs";
 import { saveReadTrafficEvidence } from "./trafficEvidence.mjs";
 import { isAbsolute } from "node:path";
 
@@ -135,11 +136,14 @@ export async function runBelloCloudReadOnce({ origin, requestId, root, belloProf
       inventoryCode: dispatch.inventoryCode, remoteId: dispatch.remoteId,
       expectedFields: dispatch.expectedFields });
     let trafficSnapshot = null;
+    let querySnapshot = [];
     const reader = browserRead ? createExistingProductReader({ root,
       profileDir: shopsProfileDir, playwrightModulePath, shopId: dispatch.accountReference,
-      onTrafficSummary: items => {
+      onTrafficSummary: (items, queryCandidates) => {
         trafficSnapshot = safeShopsTrafficSummary(items);
-        try { onShopsTraffic?.(trafficSnapshot); } catch { /* Display cannot alter a read. */ }
+        querySnapshot = safeReadQueryCandidates(queryCandidates);
+        try { onShopsTraffic?.(trafficSnapshot, querySnapshot); }
+        catch { /* Display cannot alter a read. */ }
       }, onReadDiagnostics }) : null;
     let result;
     try { result = await runLocalRead(root, dispatch.accountReference, localJob.jobId, reader); }
@@ -149,7 +153,7 @@ export async function runBelloCloudReadOnce({ origin, requestId, root, belloProf
         let observedAt = null;
         try {
           const evidence = await saveReadTrafficEvidence(root, requestId, localJob.jobId,
-            trafficSnapshot);
+            trafficSnapshot, querySnapshot);
           status = evidence.status;
           observedAt = evidence.observedAt;
         } catch { status = "STORE_FAILED"; }

@@ -139,7 +139,7 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
         diagnose(["ACCOUNT_MISMATCH"]);
         return { kind: "UNVERIFIED" };
       }
-      const { context, page, state, traffic } = await openExistingProductReadSession({
+      const { context, page, state, traffic, readQueries } = await openExistingProductReadSession({
         root, profileDir, playwrightModulePath, shopId, remoteId, launchPersistentContext,
         observeTraffic: typeof onTrafficSummary === "function",
       });
@@ -236,7 +236,10 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
       } finally {
         if (traffic) {
           traffic.stop();
-          try { onTrafficSummary(traffic.snapshot()); } catch { /* UI diagnostics never alter a read result. */ }
+          let queryCandidates = [];
+          try { queryCandidates = await readQueries?.stop() ?? []; } catch { /* Never promote a failed observation. */ }
+          try { onTrafficSummary(traffic.snapshot(), queryCandidates); }
+          catch { /* UI diagnostics never alter a read result. */ }
         }
         await context.close();
       }
