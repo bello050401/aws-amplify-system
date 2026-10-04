@@ -8,6 +8,28 @@
 - この後、本人が「非公開で保存した」と申告した。操作したブラウザーは未確定であり、上記13件に含まれると断定しない。専用Chromeの観測範囲外で行われた可能性もある。
 - 別の読取では、非公開一覧の対象行に「非公開 / ￥90,000 / 在庫0」が表示され、タイトルから同じ既存IDの編集画面へ戻れた。表示更新時刻は従前のまま。既存状態の保全は確認できるが、今回の保存の成功証拠ではない。
 
+## PC画面に残る13件の非秘密通信概要
+
+以下は稼働中の旧PCアプリが表示した順序・送信先の分類・HTTP状態・JSON項目名と型だけの転記。要求本文、項目値、認証キー、URLの可変部分、応答本文は含めない。全件で認証ヘッダーとCSRFヘッダーは表示上「なし」、応答内の商品ID・公開状態は「未確認」だった。`Cookieあり` はCookieの**存在フラグ**だけを示し、値は含まない。
+
+| 順序 | 送信先・状態 | Cookie | 観測されたJSON項目名と型 |
+| --- | --- | --- | --- |
+| 1 | 外部HTTPS、200 | なし | なし |
+| 2 | 外部HTTPS、204 | あり | なし |
+| 3 | Shops GraphQL、200 | あり | `operationName:string`, `variables:object`, `query:string` |
+| 4 | Shops GraphQL、200 | あり | 3の項目に加え `variables.input`, `input.name:string`, `input.description:string` |
+| 5 | 外部HTTPS、204 | なし | なし |
+| 6 | Shops GraphQL、200 | あり | 3と同じ |
+| 7 | 外部HTTPS、204 | あり | なし |
+| 8 | 外部HTTPS、204 | なし | なし |
+| 9 | 外部HTTPS、204 | なし | なし |
+| 10 | 外部HTTPS、200 | なし | なし |
+| 11 | Shops GraphQL、200 | あり | `operationName:string`, `variables:object`, `variables.input`, `input.name:string`, `input.status:string`, `input.description:string`, `input.price:number`, `input.condition:string`, `input.shippingFromStateId:string`, `input.variants:array`, `variants[]:object`, `variants[].name:string`, `variants[].skuCode:string`, `query:string` |
+| 12 | Shops GraphQL、200 | あり | 3と同じ |
+| 13 | Shops GraphQL、200 | あり | 3と同じ |
+
+順序1の外部HTTPS送信先は旧表示で `/:value` と分類された。順序11の`status`は**項目名と型**であり、値は未確認。HTTP 200も保存成功の証拠ではない。
+
 ## 今ある13件から判定できないこと
 
 現在の観測器は操作名の**値**を捨て、項目名と型だけを保持する。GraphQL応答の`errors`有無と認識外の応答キーも保持しない。観測器が返したID/状態は全件未確認だった。元のリクエスト・レスポンス本文を復元しようとせず、今回の結果は未確認として扱う。
