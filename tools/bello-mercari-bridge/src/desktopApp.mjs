@@ -10,6 +10,8 @@ import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce }
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
 import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
+import { saveExistingPrivateOnce } from "./saveExistingPrivateOnce.mjs";
+import { readManualSaveClaim, readManualSaveOutcome } from "./manualSaveAttempt.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -42,7 +44,8 @@ function optionsOf(config) {
 }
 
 function page({ csrf, options, message, busy, belloOpen, shopsOpen, manualOpen,
-  manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastDiagnostics }) {
+  manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastDiagnostics,
+  privateSaveAttempted, lastPrivateSave, lastPrivateReadback, retainedSaveOpen }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BELLO メルカリ照合</title><style>
@@ -65,14 +68,20 @@ ${lastTraffic.length ? `<ul>${lastTraffic.map(item => `<li><code>${html(item.met
 ${trafficAttempted ? `<section><h2>読取診断</h2><p><small>このPC画面に一時表示する固定コードです。値やURLは記録せず、BELLOにも送りません。</small></p>
 ${lastDiagnostics.length ? `<p><code>${lastDiagnostics.map(html).join(" / ")}</code></p>` : "<p>診断コードはありません。照合成功を意味するものではありません。</p>"}</section>` : ""}
 ${options.manualObservation ? `<section><h2>既存商品の通信観測</h2>
+<p>内容を変えず、既存商品 ${html(options.manualObservation.inventoryCode)} を非公開のまま1回保存します。対象ID・価格・数量・非公開を確認できない場合は送信しません。結果が不明でも再送しません。</p>
+${button("save-private-once", "既存商品を非公開で1回保存", privateSaveAttempted || manualOpen)}
+${privateSaveAttempted ? `<p>この商品の保存操作は実行済み、または結果不明です。再実行はできません。${lastPrivateSave ? `結果: <strong>${html(lastPrivateSave)}</strong>` : ""}</p>` : ""}
+${lastPrivateReadback ? "<p>保存後の読取で、対象商品の非公開状態と商品コード・価格・数量を確認しました。保存通信の成功判定とは別です。</p>" : ""}
+${retainedSaveOpen ? `<p>保存通信を中断しないため、専用Chromeを開いたままにしています。通信概要を更新できます。Shops画面で保存処理が終わったことを確認してからChromeを閉じてください。</p>${button("refresh-save-observation", "保存通信の概要を更新")}` : ""}
+<details><summary>手動の通信観測</summary>
 <p>対象は ${html(options.manualObservation.inventoryCode)} / ${html(options.manualObservation.remoteId)} です。専用Chromeで価格 ${html(options.manualObservation.priceYen)} 円、数量 ${html(options.manualObservation.quantity)}、非公開を確認してから、人が内容を変えずに非公開保存を1回だけ行います。このアプリは保存を押しません。</p>
-${button("observe-start", "観測用の専用Chromeを開く", manualOpen)}
+${button("observe-start", "観測用の専用Chromeを開く", manualOpen || privateSaveAttempted)}
 ${manualOpen ? button("observe-stop", "観測を終了して概要を見る") : ""}
 ${manualAttempted ? `<details><summary>通信観測の概要（${lastManual.length}件）</summary><p><small>このPC画面のメモリ内だけに表示します。本文・認証値・画像データを保存せず、BELLOへ送りません。HTTP成立の判定は別途必要です。</small></p>
-${lastManual.length ? `<ol>${lastManual.map(item => `<li><code>${html(item.order)}. ${html(item.method)} ${html(item.host)}${html(item.path)}</code> / ${html(item.bodyType)} / HTTP ${html(item.httpStatus ?? "未確認")} / 認証ヘッダー ${item.auth.authorization ? "あり" : "なし"}、Cookie ${item.auth.cookie ? "あり" : "なし"}、CSRF ${item.auth.csrf ? "あり" : "なし"} / 項目 ${item.fields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / ID ${html(item.id ?? "未確認")} / 状態 ${html(item.state ?? "未確認")}</li>`).join("")}</ol>` : "<p>対象となる送信は観測されませんでした。</p>"}</details>` : ""}</section>` : ""}
+${lastManual.length ? `<ol>${lastManual.map(item => `<li><code>${html(item.order)}. ${html(item.method)} ${html(item.host)}${html(item.path)}</code> / ${html(item.bodyType)} / HTTP ${html(item.httpStatus ?? "未確認")} / 認証ヘッダー ${item.auth.authorization ? "あり" : "なし"}、Cookie ${item.auth.cookie ? "あり" : "なし"}、CSRF ${item.auth.csrf ? "あり" : "なし"} / 項目 ${item.fields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / ID ${html(item.id ?? "未確認")} / 状態 ${html(item.state ?? "未確認")}</li>`).join("")}</ol>` : "<p>対象となる送信は観測されませんでした。</p>"}</details>` : ""}</details></section>` : ""}
 <section><h2>3. BELLOで結果を見る</h2><p>照合後、BELLOの照合依頼画面で「照合結果を確認する」を押してください。</p>
 <p><a href="${html(options.origin)}/inventory/mercari-bridge?requestId=${html(options.requestId)}" target="_blank" rel="noopener noreferrer">BELLOの照合依頼画面を開く</a></p>
-${button("shutdown", "このアプリを終了")}</section>
+${button("shutdown", "このアプリを終了", retainedSaveOpen)}</section>
 </main></body></html>`;
 }
 
@@ -98,9 +107,14 @@ async function openManualObservationForExisting({ root, profileDir, playwrightMo
 export async function startDesktopApp(config, {
   openBello = openBelloAdminContext, openShops = openDedicatedLogin,
   openManualObservation = openManualObservationForExisting,
+  runPrivateSave = saveExistingPrivateOnce,
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
 } = {}) {
   const options = optionsOf(config);
+  let privateSaveAttempted = Boolean(options.manualObservation &&
+    (await readManualSaveClaim(options.root, options.manualObservation)).claimed);
+  const savedPrivateOutcome = options.manualObservation ?
+    await readManualSaveOutcome(options.root, options.manualObservation) : null;
   const csrf = randomBytes(32).toString("hex");
   let busy = false;
   let message = "";
@@ -113,6 +127,9 @@ export async function startDesktopApp(config, {
   let manualSession = null;
   let manualAttempted = false;
   let lastManual = [];
+  let lastPrivateSave = savedPrivateOutcome?.outcome ?? "";
+  let lastPrivateReadback = savedPrivateOutcome?.postflightPrivate === true;
+  let retainedSaveSession = null;
   let finishingManual = null;
   const finishManual = () => {
     if (finishingManual) return finishingManual;
@@ -128,7 +145,8 @@ export async function startDesktopApp(config, {
       send(response, 200, page({ csrf, options, message, busy,
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
         manualOpen: Boolean(manualSession), manualAttempted, lastManual, lastResult,
-        trafficAttempted, lastTraffic, lastDiagnostics }));
+        trafficAttempted, lastTraffic, lastDiagnostics, privateSaveAttempted, lastPrivateSave,
+        lastPrivateReadback, retainedSaveOpen: Boolean(retainedSaveSession) }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/action" ||
@@ -162,13 +180,13 @@ export async function startDesktopApp(config, {
         belloContext.once("close", () => { belloContext = null; });
         message = "BELLOの専用ブラウザを開きました。通常ログイン後、ブラウザを閉じてください。";
       } else if (action === "shops-login") {
-        if (shopsContext) throw Error("Shops browser already open");
+        if (shopsContext || retainedSaveSession) throw Error("Shops browser already open");
         shopsContext = await openShops({ profileDir: options.shopsProfileDir,
           playwrightModulePath: options.playwrightModulePath });
         shopsContext.once("close", () => { shopsContext = null; });
         message = "Shopsの専用ブラウザを開きました。通常ログイン後、ブラウザを閉じてください。";
       } else if (action === "read") {
-        if (manualSession) throw Error("Close the manual observation browser first");
+        if (manualSession || retainedSaveSession) throw Error("Close the Shops browser first");
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         trafficAttempted = true;
@@ -182,7 +200,8 @@ export async function startDesktopApp(config, {
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
       } else if (action === "observe-start") {
-        if (!options.manualObservation || manualSession) throw Error("Manual observation is unavailable");
+        if (!options.manualObservation || manualSession || retainedSaveSession || privateSaveAttempted)
+          throw Error("Manual observation is unavailable");
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         manualAttempted = false;
         lastManual = [];
@@ -193,6 +212,48 @@ export async function startDesktopApp(config, {
           void finishManual().catch(() => { lastManual = []; message = "通信観測の概要を取得できませんでした。"; });
         });
         message = "対象の専用Chromeを開きました。価格・数量・非公開を確認し、内容を変えない保存1回だけを観測します。";
+      } else if (action === "save-private-once") {
+        if (!options.manualObservation || manualSession)
+          throw Error("Exact-product private save is unavailable");
+        if (privateSaveAttempted) {
+          message = "この商品の保存操作は実行済み、または結果不明です。再実行できません。";
+        } else {
+          if (shopsContext) { await shopsContext.close(); shopsContext = null; }
+          try {
+            const result = await runPrivateSave({ root: options.root,
+              profileDir: options.shopsProfileDir, playwrightModulePath: options.playwrightModulePath,
+              target: options.manualObservation,
+              onMetadata: items => { lastManual = safeManualMutationSummary(items); manualAttempted = true; } });
+            lastPrivateSave = ["CONFIRMED_PRIVATE", "UNKNOWN", "BLOCKED_BEFORE_CLICK",
+              "ALREADY_ATTEMPTED", "PREFLIGHT_BLOCKED"].includes(result?.status) ? result.status : "UNKNOWN";
+            lastPrivateReadback = result?.postflightPrivate === true;
+            if (result?.retainedSession?.context && result?.retainedSession?.observer &&
+                typeof result.retainedSession.onClose === "function") {
+              retainedSaveSession = result.retainedSession;
+              retainedSaveSession.onClose(() => {
+                const session = retainedSaveSession;
+                retainedSaveSession = null;
+                if (session) void session.observer.stop().then(items => {
+                  lastManual = safeManualMutationSummary(items);
+                  manualAttempted = true;
+                }).catch(() => {});
+              });
+            }
+            message = lastPrivateSave === "CONFIRMED_PRIVATE" ?
+              "既存商品の非公開保存を確認しました。新規出品の確認ではありません。" :
+              lastPrivateSave === "PREFLIGHT_BLOCKED" ?
+                "保存前の確認で停止しました。Shopsへの保存操作はしていません。" :
+                "保存結果を確認できませんでした。再送せず、読取で確認してください。";
+          } finally {
+            privateSaveAttempted = Boolean((await readManualSaveClaim(options.root,
+              options.manualObservation)).claimed);
+          }
+        }
+      } else if (action === "refresh-save-observation") {
+        if (!retainedSaveSession) throw Error("No retained save observation is active");
+        lastManual = safeManualMutationSummary(retainedSaveSession.observer.snapshot());
+        manualAttempted = true;
+        message = "通信概要を更新しました。保存成功の判定は保留のままです。";
       } else if (action === "observe-stop") {
         if (!manualSession) throw Error("No manual observation is active");
         const session = manualSession;
@@ -209,6 +270,7 @@ export async function startDesktopApp(config, {
         lastResult = result.status;
         message = "保存済みの読取結果をBELLOへ報告しました。Shopsの再読取は行っていません。";
       } else if (action === "shutdown") {
+        if (retainedSaveSession) throw Error("Shops browser is still open after save");
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         if (manualSession) {
@@ -222,7 +284,9 @@ export async function startDesktopApp(config, {
       const stage = error instanceof BridgeBoundaryError ?
         [error.phase, error.httpStatus ? `HTTP ${error.httpStatus}` : null, error.serverCode]
           .filter(Boolean).join(" / ") : null;
-      message = stage ? `処理を完了できませんでした（${stage}）。自動再試行はしていません。` :
+      message = form.get("action") === "save-private-once" && privateSaveAttempted ?
+        "保存結果を確認できませんでした。再送せず、読取で確認してください。" :
+        stage ? `処理を完了できませんでした（${stage}）。自動再試行はしていません。` :
         "処理を完了できませんでした。専用ブラウザのログイン状態と読取依頼を確認してください。";
     } finally { busy = false; }
     if (shutdown) {

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { startDesktopApp } from "../src/desktopApp.mjs";
 import { BridgeBoundaryError } from "../src/cloudConnector.mjs";
+import { claimManualSaveOnce } from "../src/manualSaveAttempt.mjs";
 
 const config = () => ({ origin: "https://bello.example.test", requestId: "a".repeat(64),
   dataDir: join(tmpdir(), "bello-desktop-test") });
@@ -141,6 +143,53 @@ test("manual observation refuses missing exact target identifiers", async () => 
   await assert.rejects(startDesktopApp({ ...config(), manualObservation: {
     priceYen: 90000, quantity: 0,
   } }, { openBrowser: async () => {} }), /Invalid exact-product observation target/);
+});
+
+test("one PC button invokes exact private save once and restart keeps it disabled", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-save-"));
+  const target = { shopId: "shop1", remoteId: "existing1", inventoryCode: "B005795",
+    priceYen: 90000, quantity: 0 };
+  let calls = 0;
+  const saveContext = context();
+  const saveObserver = { snapshot: () => [], stop: async () => [] };
+  const start = () => startDesktopApp({ ...config(), dataDir, manualObservation: target }, {
+    openBrowser: async () => {},
+    runPrivateSave: async options => {
+      calls++;
+      assert.deepEqual(options.target, target);
+      await claimManualSaveOnce(options.root, target);
+      return { status: "UNKNOWN", listingConfirmed: false, postflightPrivate: false,
+        metadata: [], retainedSession: { context: saveContext, observer: saveObserver,
+          onClose: callback => saveContext.once("close", callback) } };
+    },
+  });
+  try {
+    let app = await start();
+    try {
+      const csrf = await token(app.url);
+      assert.match(await (await fetch(app.url)).text(), /既存商品を非公開で1回保存/);
+      assert.equal((await post(app.url, csrf, "save-private-once")).status, 303);
+      assert.equal((await post(app.url, csrf, "save-private-once")).status, 303);
+      assert.equal(calls, 1);
+      const content = await (await fetch(app.url)).text();
+      assert.match(content, /再実行はできません/);
+      assert.match(content, /再実行できません/);
+      assert.match(content, /専用Chromeを開いたままにしています/);
+      assert.match(content, /<button disabled>このアプリを終了<\/button>/);
+      assert.equal((await post(app.url, csrf, "refresh-save-observation")).status, 303);
+      assert.match(content, /<button disabled>既存商品を非公開で1回保存<\/button>/);
+      await saveContext.close();
+    } finally { await app.close(); }
+    app = await start();
+    try {
+      const content = await (await fetch(app.url)).text();
+      assert.match(content, /<button disabled>既存商品を非公開で1回保存<\/button>/);
+      assert.equal(calls, 1);
+    } finally { await app.close(); }
+  } finally {
+    assert.equal(resolve(dataDir).startsWith(resolve(tmpdir()) + "\\"), true);
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("failed default-browser dispatch keeps the loopback control page available", async () => {

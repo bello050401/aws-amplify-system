@@ -74,14 +74,60 @@ test("observer ignores other pages and stops without operating the browser", asy
 test("stop keeps a late response for an accepted request within a bounded drain", async () => {
   const browser = page();
   const observer = observeManualShopsMutation(browser, editUrl, { drainMs: 100 });
-  const req = request("https://mercari-shops.com/api/v1/products", { status: "UNOPENED" });
+  const req = request("https://mercari-shops.com/api/v1/graphql", {
+    query: "mutation updateProduct { updateProduct { product { id status } } }",
+    variables: { input: { id: "existing1", status: "UNOPENED" } },
+  });
   browser.emit("request", req);
-  setTimeout(() => browser.emit("response", response(req, { data: { product: {
-    id: "existing1", status: "UNOPENED" } } })), 10);
+  setTimeout(() => browser.emit("response", response(req, { data: { updateProduct: { product: {
+    id: "existing1", status: "UNOPENED" } } } })), 10);
+  assert.equal(await observer.waitForPrivateSaveAcknowledgement("existing1", 80), false);
   const entries = await observer.stop();
   assert.equal(entries[0].httpStatus, 200);
   assert.equal(entries[0].id, "existing1");
   assert.equal(entries[0].state, "UNOPENED");
+});
+
+test("private save acknowledgement requires the same ID and private state", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl, { drainMs: 20 });
+  const req = request("https://mercari-shops.com/api/v1/products", { status: "OPENED" });
+  browser.emit("request", req);
+  browser.emit("response", response(req, { data: { product: {
+    id: "other", status: "UNOPENED" } } }));
+  assert.equal(await observer.waitForPrivateSaveAcknowledgement("existing1", 20), false);
+  await observer.stop();
+});
+
+test("private save acknowledgement ignores a matching response started before the final click", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl, { drainMs: 20 });
+  const earlier = request("https://mercari-shops.com/api/v1/products", { status: "UNOPENED" });
+  browser.emit("request", earlier);
+  const beforeFinalClick = observer.checkpoint();
+  browser.emit("response", response(earlier, { data: { product: {
+    id: "existing1", status: "UNOPENED" } } }));
+  assert.equal(await observer.waitForPrivateSaveAcknowledgement("existing1", 25,
+    beforeFinalClick), false);
+  await observer.stop();
+});
+
+test("a same-ID private read response and external host never acknowledge a save", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl, { drainMs: 20 });
+  const read = request("https://mercari-shops.com/api/v1/graphql", {
+    query: "query product { product { id status } }", variables: { id: "existing1" } });
+  const external = request("https://external.example/graphql", {
+    query: "mutation updateProduct { updateProduct { product { id status } } }",
+    variables: { input: { id: "existing1", status: "UNOPENED" } },
+  });
+  for (const req of [read, external]) {
+    browser.emit("request", req);
+    browser.emit("response", response(req, { data: { updateProduct: { product: {
+      id: "existing1", status: "UNOPENED" } } } }));
+  }
+  assert.equal(await observer.waitForPrivateSaveAcknowledgement("existing1", 25), false);
+  await observer.stop();
 });
 
 test("stop returns partial metadata if a JSON response never completes", async () => {

@@ -59,7 +59,7 @@ $shortcut.TargetPath = $nodePath
 $shortcut.Arguments = ('"{0}" --config "{1}"' -f (Join-Path $appDir 'src\desktopApp.mjs'), $configPath)
 $shortcut.WorkingDirectory = $appDir
 $shortcut.WindowStyle = 1
-$shortcut.Description = 'BELLOの既存メルカリShops商品を読み取り専用で照合します'
+$shortcut.Description = 'BELLOの既存メルカリShops商品を照合し、限定の非公開保存を行います'
 $shortcut.Save()
 
 Write-Output "READY: $shortcutPath"

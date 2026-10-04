@@ -159,23 +159,60 @@ export function observeManualShopsMutation(page, expectedEditUrl, { drainMs = 20
   const onResponse = response => {
     const entry = byRequest.get(response.request());
     if (!entry) return;
-    awaiting.delete(response.request());
     track(async () => {
-      const status = response.status();
-      if (!stopped) entry.httpStatus = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
-      const contentType = (await response.headerValue("content-type")) ?? "";
-      if (/^application\/(?:json|graphql\+json)(?:;|$)/i.test(contentType)) {
-        const identity = responseIdentity(await response.json());
-        if (!stopped) Object.assign(entry, identity);
+      try {
+        const status = response.status();
+        if (!stopped) entry.httpStatus = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
+        const contentType = (await response.headerValue("content-type")) ?? "";
+        if (/^application\/(?:json|graphql\+json)(?:;|$)/i.test(contentType)) {
+          const identity = responseIdentity(await response.json());
+          if (!stopped) Object.assign(entry, identity);
+        }
+        if (typeof response.finished === "function") await response.finished();
+      } finally {
+        awaiting.delete(response.request());
+        entry.completedAt = Date.now();
       }
     });
   };
+  const onRequestFailed = request => {
+    const entry = byRequest.get(request);
+    if (entry) { awaiting.delete(request); entry.completedAt = Date.now(); }
+  };
   page.on("request", onRequest);
   page.on("response", onResponse);
+  page.on("requestfailed", onRequestFailed);
   return {
+    checkpoint: () => events.length,
+    snapshot: () => events.map(entry => ({ ...entry, fields: entry.fields.map(field => ({ ...field })),
+      auth: { ...entry.auth } })),
+    waitForPostClickIdle: async (afterOrder, timeoutMs = 12000) => {
+      if (!Number.isInteger(afterOrder) || afterOrder < 0 || afterOrder > MAX_EVENTS ||
+          !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000)
+        throw Error("Invalid post-click observation window");
+      const deadline = Date.now() + timeoutMs;
+      while (!stopped && Date.now() < deadline) {
+        const later = events.filter(entry => entry.order > afterOrder);
+        if (later.length > 0 && later.every(entry => Number.isInteger(entry.completedAt)) &&
+            Date.now() - Math.max(...later.map(entry => entry.completedAt)) >= 1000) return true;
+        await new Promise(resolve => setTimeout(resolve, Math.min(50, deadline - Date.now())));
+      }
+      return false;
+    },
+    waitForPrivateSaveAcknowledgement: async (expectedId, timeoutMs = 12000, afterOrder = 0) => {
+      if (typeof expectedId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(expectedId) ||
+          !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000 ||
+          !Number.isInteger(afterOrder) || afterOrder < 0 || afterOrder > MAX_EVENTS)
+        throw Error("Invalid exact-product acknowledgement target");
+      // Response metadata is insufficient to distinguish the save from a read.
+      // Drain briefly for observation, but never promote an unverified contract.
+      await new Promise(resolve => setTimeout(resolve, Math.min(timeoutMs, drainMs)));
+      return false;
+    },
     stop: () => stopPromise ??= (async () => {
       accepting = false;
       page.off("request", onRequest);
+      page.off("requestfailed", onRequestFailed);
       const deadline = Date.now() + drainMs;
       while ((awaiting.size || pending.size) && Date.now() < deadline)
         await new Promise(resolve => setTimeout(resolve, Math.min(25, deadline - Date.now())));

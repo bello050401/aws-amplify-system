@@ -43,7 +43,7 @@ async function uniqueVisible(locator) {
   return count === 1 ? "READY" : count === 0 ? "TIMEOUT" : "NOT_UNIQUE";
 }
 
-async function privateFromExactListRow(page, shopId, expectedUrl, title) {
+export async function privateFromExactListRow(page, shopId, expectedUrl, title) {
   const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
   try {
     await page.goto(listUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
