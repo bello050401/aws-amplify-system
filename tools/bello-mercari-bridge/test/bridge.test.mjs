@@ -279,6 +279,63 @@ test("observed edit labels yield only partial field evidence, never privacy or u
   assert.ok(!JSON.stringify(await listReadResults(root, queued.jobId)).includes("should-not-return"));
 }));
 
+test("a late exact heading is awaited, while absent field values remain unobserved", async () => withRoot(async root => {
+  const queued = await job(root);
+  let url = "";
+  let headingReady = false;
+  let waitOptions;
+  let diagnostics;
+  const page = {
+    goto: async next => { url = next; }, url: () => url,
+    getByRole: role => ({
+      count: async () => role === "heading" ? Number(headingReady) : 1,
+      first: () => ({ waitFor: async options => { waitOptions = options; headingReady = true; } }),
+    }),
+    locator: () => ({ evaluateAll: async () => ({ documentUrl: url, rows: [] }) }),
+  };
+  const reader = createExistingProductReader({ root, profileDir: join(root, "late-profile"), shopId: account,
+    onReadDiagnostics: codes => { diagnostics = codes; },
+    launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+  const result = await runExistingRead(root, account, queued.jobId, reader);
+  assert.equal(result.status, "INCOMPLETE");
+  assert.deepEqual(waitOptions, { state: "visible", timeout: 12000 });
+  assert.deepEqual(diagnostics, ["TITLE_UNOBSERVED", "DESCRIPTION_UNOBSERVED",
+    "INVENTORY_CODE_UNOBSERVED", "PRICE_UNOBSERVED"]);
+  assert.equal(result.comparison.fields.title, "UNOBSERVED");
+  assert.equal(JSON.stringify(await listReadResults(root, queued.jobId)).includes("diagnostics"), false);
+}));
+
+test("a missing exact heading and a changed URL fail closed with fixed local diagnostics", async () => withRoot(async root => {
+  const queued = await job(root);
+  for (const mode of ["heading-timeout", "button-timeout", "url-changed", "signin-during-wait"]) {
+    let url = "";
+    let diagnostics;
+    const page = {
+      goto: async next => { url = next; }, url: () => url,
+      getByRole: role => ({ count: async () =>
+        (((mode === "heading-timeout" || mode === "signin-during-wait") && role === "heading") ||
+        (mode === "button-timeout" && role === "button")) ? 0 : 1,
+        first: () => ({ waitFor: async () => { const error = Error("private DOM text");
+          if (mode === "signin-during-wait") url = "https://mercari-shops.com/signin/seller";
+          error.name = "TimeoutError"; throw error; } }) }),
+      locator: () => ({ evaluateAll: async () => {
+        const documentUrl = url;
+        url = "https://mercari-shops.com/seller/shops/other/products/other/edit";
+        return { documentUrl, rows: [] };
+      } }),
+    };
+    const reader = createExistingProductReader({ root, profileDir: join(root, `${mode}-profile`), shopId: account,
+      onReadDiagnostics: codes => { diagnostics = codes; },
+      launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+    const result = await runExistingRead(root, account, queued.jobId, reader);
+    assert.equal(result.status, mode === "signin-during-wait" ? "AUTH_REQUIRED" : "UNKNOWN");
+    assert.deepEqual(diagnostics, mode === "signin-during-wait" ? undefined :
+      [mode === "heading-timeout" ? "HEADING_TIMEOUT" :
+        mode === "button-timeout" ? "NEXT_BUTTON_TIMEOUT" : "PAGE_URL_UNVERIFIED"]);
+    assert.equal(JSON.stringify(result).includes("private DOM text"), false);
+  }
+}));
+
 test("a redirect during field extraction discards target evidence", async () => withRoot(async root => {
   const queued = await job(root);
   for (const redirect of [

@@ -79,6 +79,22 @@ test("local traffic summary displays only redacted metadata and is never part of
   } finally { await app.close(); }
 });
 
+test("reader stage diagnostics show only fixed codes in local memory", async () => {
+  const app = await startDesktopApp(config(), { openBrowser: async () => {},
+    runRead: async ({ onReadDiagnostics }) => {
+      onReadDiagnostics(["HEADING_TIMEOUT", "private product title", "https://secret.example"]);
+      return { status: "UNKNOWN" };
+    } });
+  try {
+    const csrf = await token(app.url);
+    assert.equal((await post(app.url, csrf, "read")).status, 303);
+    const content = await (await fetch(app.url)).text();
+    assert.match(content, /HEADING_TIMEOUT/);
+    assert.equal(content.includes("private product title"), false);
+    assert.equal(content.includes("secret.example"), false);
+  } finally { await app.close(); }
+});
+
 test("failed default-browser dispatch keeps the loopback control page available", async () => {
   const app = await startDesktopApp(config(), { openBrowser: async () => {
     throw Error("synthetic browser launch failure");

@@ -1,4 +1,5 @@
 import { openExistingProductReadSession } from "./session.mjs";
+import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 
 const unobserved = () => ({ kind: "UNOBSERVED" });
 const observed = value => ({ kind: "OBSERVED", value });
@@ -23,25 +24,56 @@ function navigationState(actualUrl, expectedUrl) {
   } catch { return "UNVERIFIED"; }
 }
 
+async function uniqueVisible(locator) {
+  if (await locator.count() === 0) {
+    try { await locator.first().waitFor({ state: "visible", timeout: 12000 }); }
+    catch (error) {
+      if (error?.name === "TimeoutError") return "TIMEOUT";
+      throw error;
+    }
+  }
+  const count = await locator.count();
+  return count === 1 ? "READY" : count === 0 ? "TIMEOUT" : "NOT_UNIQUE";
+}
+
 /** A deliberately partial exact-edit read. No field is inferred by input order. */
 export function createExistingProductReader({ root, profileDir, playwrightModulePath, shopId,
-  launchPersistentContext = null, onTrafficSummary = null }) {
+  launchPersistentContext = null, onTrafficSummary = null, onReadDiagnostics = null }) {
   return {
     async readExactProduct({ accountReference, remoteId }) {
-      if (accountReference !== shopId) return { kind: "UNVERIFIED" };
+      const diagnose = codes => {
+        if (typeof onReadDiagnostics === "function") {
+          try { onReadDiagnostics(safeReadDiagnostics(codes)); }
+          catch { /* Local diagnostics never alter a read result. */ }
+        }
+      };
+      if (accountReference !== shopId) {
+        diagnose(["ACCOUNT_MISMATCH"]);
+        return { kind: "UNVERIFIED" };
+      }
       const { context, page, state, traffic } = await openExistingProductReadSession({
         root, profileDir, playwrightModulePath, shopId, remoteId, launchPersistentContext,
         observeTraffic: typeof onTrafficSummary === "function",
       });
       try {
         if (state === "AUTH_REQUIRED") return { kind: "AUTH_REQUIRED" };
-        if (state !== "NAVIGATED_UNVERIFIED") return { kind: "UNVERIFIED" };
+        if (state !== "NAVIGATED_UNVERIFIED") {
+          diagnose(["NAVIGATION_UNVERIFIED"]);
+          return { kind: "UNVERIFIED" };
+        }
         const expectedUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/${remoteId}/edit`;
-        const [headingCount, nextButtonCount] = await Promise.all([
-          page.getByRole("heading", { name: "商品管理", exact: true }).count(),
-          page.getByRole("button", { name: "公開設定に進む", exact: true }).count(),
-        ]);
-        if (headingCount !== 1 || nextButtonCount !== 1) return { kind: "UNVERIFIED" };
+        const notReady = code => {
+          const current = navigationState(page.url(), expectedUrl);
+          if (current === "AUTH_REQUIRED") return { kind: "AUTH_REQUIRED" };
+          diagnose([current === "EXACT" ? code : "PAGE_URL_UNVERIFIED"]);
+          return { kind: "UNVERIFIED" };
+        };
+        const heading = await uniqueVisible(page.getByRole("heading", { name: "商品管理", exact: true }));
+        if (heading !== "READY")
+          return notReady(heading === "TIMEOUT" ? "HEADING_TIMEOUT" : "HEADING_NOT_UNIQUE");
+        const nextButton = await uniqueVisible(page.getByRole("button", { name: "公開設定に進む", exact: true }));
+        if (nextButton !== "READY")
+          return notReady(nextButton === "TIMEOUT" ? "NEXT_BUTTON_TIMEOUT" : "NEXT_BUTTON_NOT_UNIQUE");
         const snapshot = await page.locator("input, textarea").evaluateAll(elements => {
           const wanted = new Set(["商品名", "商品の説明", "商品管理コード", "販売価格"]);
           const rows = elements.flatMap(element => {
@@ -59,19 +91,28 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
         const documentState = navigationState(snapshot?.documentUrl, expectedUrl);
         const finalState = navigationState(page.url(), expectedUrl);
         if (documentState === "AUTH_REQUIRED" || finalState === "AUTH_REQUIRED") return { kind: "AUTH_REQUIRED" };
-        if (documentState !== "EXACT" || finalState !== "EXACT" || !Array.isArray(snapshot.rows))
+        if (documentState !== "EXACT" || finalState !== "EXACT" || !Array.isArray(snapshot?.rows)) {
+          diagnose([...(documentState !== "EXACT" ? ["DOCUMENT_URL_UNVERIFIED"] : []),
+            ...(finalState !== "EXACT" ? ["PAGE_URL_UNVERIFIED"] : []),
+            ...(!Array.isArray(snapshot?.rows) ? ["FIELD_ROWS_INVALID"] : [])]);
           return { kind: "UNVERIFIED" };
+        }
         const rows = snapshot.rows;
+        const inventoryCode = singleValue(rows, "商品管理コード");
+        const title = singleValue(rows, "商品名");
+        const description = singleValue(rows, "商品の説明");
+        const priceYen = yenValue(rows);
+        diagnose([...(title.kind === "UNOBSERVED" ? ["TITLE_UNOBSERVED"] : []),
+          ...(description.kind === "UNOBSERVED" ? ["DESCRIPTION_UNOBSERVED"] : []),
+          ...(inventoryCode.kind === "UNOBSERVED" ? ["INVENTORY_CODE_UNOBSERVED"] : []),
+          ...(priceYen.kind === "UNOBSERVED" ? ["PRICE_UNOBSERVED"] : [])]);
         return { kind: "OBSERVED", observation: {
           exactProductReadBack: true,
           accountReference: observed(shopId), remoteId: observed(remoteId),
           // The exact edit screen has no private/public label. A separately correlated list read is required.
           visibility: unobserved(),
           fields: {
-            inventoryCode: singleValue(rows, "商品管理コード"),
-            title: singleValue(rows, "商品名"),
-            description: singleValue(rows, "商品の説明"),
-            priceYen: yenValue(rows),
+            inventoryCode, title, description, priceYen,
             // Two unlabelled spinbuttons were observed; never infer quantity by ordinal position.
             quantity: unobserved(),
             primaryImageIdentity: unobserved(),

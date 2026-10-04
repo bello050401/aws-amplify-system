@@ -120,7 +120,7 @@ export async function reportSavedReadResultOnce({ origin, requestId, root, bello
 /** One explicitly requested existing-ID read. BELLO's authenticated browser cookie stays in its own profile. */
 export async function runBelloCloudReadOnce({ origin, requestId, root, belloProfileDir,
   shopsProfileDir, playwrightModulePath, browserRead = false, launchBelloContext = openBelloAdminContext,
-  runLocalRead = runExistingRead, onShopsTraffic = null }) {
+  runLocalRead = runExistingRead, onShopsTraffic = null, onReadDiagnostics = null }) {
   if (!validBelloOrigin(origin) || !HASH.test(requestId) || !root || !isAbsolute(root) ||
       !belloProfileDir || !isAbsolute(belloProfileDir) ||
       (browserRead && (!shopsProfileDir || !isAbsolute(shopsProfileDir))))
@@ -133,7 +133,7 @@ export async function runBelloCloudReadOnce({ origin, requestId, root, belloProf
       expectedFields: dispatch.expectedFields });
     const reader = browserRead ? createExistingProductReader({ root,
       profileDir: shopsProfileDir, playwrightModulePath, shopId: dispatch.accountReference,
-      onTrafficSummary: onShopsTraffic }) : null;
+      onTrafficSummary: onShopsTraffic, onReadDiagnostics }) : null;
     const result = await runLocalRead(root, dispatch.accountReference, localJob.jobId, reader);
     return await postReadResult(context, origin, requestId, result);
   } finally { await context.close(); }

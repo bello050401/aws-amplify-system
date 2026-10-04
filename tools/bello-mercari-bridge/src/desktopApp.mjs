@@ -8,6 +8,7 @@ import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
 import { openDedicatedLogin } from "./session.mjs";
 import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
+import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -31,7 +32,8 @@ function optionsOf(config) {
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
 }
 
-function page({ csrf, options, message, busy, belloOpen, shopsOpen, lastResult, trafficAttempted, lastTraffic }) {
+function page({ csrf, options, message, busy, belloOpen, shopsOpen, lastResult,
+  trafficAttempted, lastTraffic, lastDiagnostics }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BELLO メルカリ照合</title><style>
@@ -51,6 +53,8 @@ ${lastResult ? `<p>直近の結果: <strong>${html(lastResult)}</strong>。出�
 ${trafficAttempted ? `<details><summary>Shops通信の概要（${lastTraffic.length}種類）</summary>
 <p><small>このPC画面に一時表示します。URLの値・検索条件・認証情報・本文は記録せず、BELLOにも送りません。</small></p>
 ${lastTraffic.length ? `<ul>${lastTraffic.map(item => `<li><code>${html(item.method)} ${html(item.host)}${html(item.path)}</code> — ${html(item.status)}（${html(item.count)}回）</li>`).join("")}</ul>` : "<p>対象となる通信は観測されませんでした。</p>"}</details>` : ""}</section>
+${trafficAttempted ? `<section><h2>読取診断</h2><p><small>このPC画面に一時表示する固定コードです。値やURLは記録せず、BELLOにも送りません。</small></p>
+${lastDiagnostics.length ? `<p><code>${lastDiagnostics.map(html).join(" / ")}</code></p>` : "<p>診断コードはありません。照合成功を意味するものではありません。</p>"}</section>` : ""}
 <section><h2>3. BELLOで結果を見る</h2><p>照合後、BELLOの照合依頼画面で「照合結果を確認する」を押してください。</p>
 <p><a href="${html(options.origin)}/inventory/mercari-bridge?requestId=${html(options.requestId)}" target="_blank" rel="noopener noreferrer">BELLOの照合依頼画面を開く</a></p>
 ${button("shutdown", "このアプリを終了")}</section>
@@ -76,6 +80,7 @@ export async function startDesktopApp(config, {
   let lastResult = "";
   let trafficAttempted = false;
   let lastTraffic = [];
+  let lastDiagnostics = [];
   let belloContext = null;
   let shopsContext = null;
   let localOrigin;
@@ -83,7 +88,7 @@ export async function startDesktopApp(config, {
     if (request.method === "GET" && request.url === "/") {
       send(response, 200, page({ csrf, options, message, busy,
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext), lastResult,
-        trafficAttempted, lastTraffic }));
+        trafficAttempted, lastTraffic, lastDiagnostics }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/action" ||
@@ -127,10 +132,12 @@ export async function startDesktopApp(config, {
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         trafficAttempted = true;
         lastTraffic = [];
+        lastDiagnostics = [];
         const result = await runRead({ origin: options.origin, requestId: options.requestId,
           root: options.root, belloProfileDir: options.belloProfileDir,
           shopsProfileDir: options.shopsProfileDir, playwrightModulePath: options.playwrightModulePath,
-          browserRead: true, onShopsTraffic: items => { lastTraffic = safeShopsTrafficSummary(items); } });
+          browserRead: true, onShopsTraffic: items => { lastTraffic = safeShopsTrafficSummary(items); },
+          onReadDiagnostics: codes => { lastDiagnostics = safeReadDiagnostics(codes); } });
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
       } else if (action === "retry-report") {
