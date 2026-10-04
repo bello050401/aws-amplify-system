@@ -41,8 +41,13 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
   }, []);
 
   useEffect(() => {
-    if (!REQUEST_ID.test(initialRequestId)) return;
-    void load(initialRequestId);
+    generation.current++;
+    setRequestId(initialRequestId);
+    setResults([]);
+    setCheckedRequestId(null);
+    setMessage(null);
+    setLoading(false);
+    if (REQUEST_ID.test(initialRequestId)) void load(initialRequestId);
     return () => { generation.current++; };
   }, [initialRequestId, load]);
 
