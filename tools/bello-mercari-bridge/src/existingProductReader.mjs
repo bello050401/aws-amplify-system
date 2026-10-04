@@ -9,10 +9,11 @@ function singleValue(rows, label) {
   return matches.length === 1 && matches[0].value.trim() ? observed(matches[0].value.trim()) : unobserved();
 }
 
-function yenValue(rows) {
-  const raw = singleValue(rows, "販売価格");
-  if (raw.kind === "UNOBSERVED" || !/^[0-9][0-9,]*$/.test(raw.value)) return unobserved();
-  const amount = Number(raw.value.replaceAll(",", ""));
+function yenValue(raw) {
+  if (raw.kind === "UNOBSERVED" ||
+      !/^(?:[¥￥]\s*)?(?:0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)$/.test(raw.value))
+    return unobserved();
+  const amount = Number(raw.value.replace(/[¥￥,\s]/g, ""));
   return Number.isSafeInteger(amount) ? observed(amount) : unobserved();
 }
 
@@ -101,11 +102,13 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
         const inventoryCode = singleValue(rows, "商品管理コード");
         const title = singleValue(rows, "商品名");
         const description = singleValue(rows, "商品の説明");
-        const priceYen = yenValue(rows);
+        const rawPrice = singleValue(rows, "販売価格");
+        const priceYen = yenValue(rawPrice);
         diagnose([...(title.kind === "UNOBSERVED" ? ["TITLE_UNOBSERVED"] : []),
           ...(description.kind === "UNOBSERVED" ? ["DESCRIPTION_UNOBSERVED"] : []),
           ...(inventoryCode.kind === "UNOBSERVED" ? ["INVENTORY_CODE_UNOBSERVED"] : []),
-          ...(priceYen.kind === "UNOBSERVED" ? ["PRICE_UNOBSERVED"] : [])]);
+          ...(rawPrice.kind === "UNOBSERVED" ? ["PRICE_FIELD_NOT_EXTRACTED"] :
+            priceYen.kind === "UNOBSERVED" ? ["PRICE_FORMAT_UNSUPPORTED"] : [])]);
         return { kind: "OBSERVED", observation: {
           exactProductReadBack: true,
           accountReference: observed(shopId), remoteId: observed(remoteId),

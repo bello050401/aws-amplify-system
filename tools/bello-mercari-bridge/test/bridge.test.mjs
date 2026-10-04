@@ -256,7 +256,7 @@ test("observed edit labels yield only partial field evidence, never privacy or u
         new FakeInput("商品名", "QA title"),
         new FakeInput("商品の説明 任意", "QA description"),
         new FakeInput("商品管理コード 任意", "SKU-1"),
-        new FakeInput("販売価格", "90,000"),
+        new FakeInput("販売価格", "¥90,000"),
         new FakeInput("数量", "0", "number"),
         new FakeInput("購入可能数", "0", "number"),
         new FakeInput("パスワード", "should-not-return", "password"),
@@ -300,9 +300,38 @@ test("a late exact heading is awaited, while absent field values remain unobserv
   assert.equal(result.status, "INCOMPLETE");
   assert.deepEqual(waitOptions, { state: "visible", timeout: 12000 });
   assert.deepEqual(diagnostics, ["TITLE_UNOBSERVED", "DESCRIPTION_UNOBSERVED",
-    "INVENTORY_CODE_UNOBSERVED", "PRICE_UNOBSERVED"]);
+    "INVENTORY_CODE_UNOBSERVED", "PRICE_FIELD_NOT_EXTRACTED"]);
   assert.equal(result.comparison.fields.title, "UNOBSERVED");
   assert.equal(JSON.stringify(await listReadResults(root, queued.jobId)).includes("diagnostics"), false);
+}));
+
+test("price accepts observed yen signs and distinguishes extraction from unsupported format", async () => withRoot(async root => {
+  const queued = await job(root);
+  for (const sample of [
+    { rows: [{ label: "販売価格", value: "￥90,000" }], expected: "MATCH", diagnostic: null },
+    { rows: [{ label: "販売価格", value: "¥90,000円" }], expected: "UNOBSERVED",
+      diagnostic: "PRICE_FORMAT_UNSUPPORTED" },
+    { rows: [], expected: "UNOBSERVED", diagnostic: "PRICE_FIELD_NOT_EXTRACTED" },
+    { rows: [{ label: "販売価格", value: "¥90,000" }, { label: "販売価格", value: "¥90,000" }],
+      expected: "UNOBSERVED", diagnostic: "PRICE_FIELD_NOT_EXTRACTED" },
+  ]) {
+    let url = "";
+    let diagnostics;
+    const page = { goto: async next => { url = next; }, url: () => url,
+      getByRole: () => ({ count: async () => 1 }),
+      locator: () => ({ evaluateAll: async () => ({ documentUrl: url, rows: sample.rows }) }) };
+    const reader = createExistingProductReader({ root, profileDir: join(root, `price-${sample.expected}-${sample.rows.length}`),
+      shopId: account, onReadDiagnostics: codes => { diagnostics = codes; },
+      launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+    const result = await runExistingRead(root, account, queued.jobId, reader);
+    assert.equal(result.status, "INCOMPLETE");
+    assert.equal(result.comparison.fields.priceYen, sample.expected);
+    assert.equal(diagnostics.includes("PRICE_FORMAT_UNSUPPORTED"),
+      sample.diagnostic === "PRICE_FORMAT_UNSUPPORTED");
+    assert.equal(diagnostics.includes("PRICE_FIELD_NOT_EXTRACTED"),
+      sample.diagnostic === "PRICE_FIELD_NOT_EXTRACTED");
+    assert.equal(JSON.stringify(result).includes("90,000"), false);
+  }
 }));
 
 test("a missing exact heading and a changed URL fail closed with fixed local diagnostics", async () => withRoot(async root => {
