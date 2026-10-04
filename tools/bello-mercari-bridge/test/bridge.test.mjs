@@ -300,7 +300,8 @@ test("a late exact heading is awaited, while absent field values remain unobserv
   assert.equal(result.status, "INCOMPLETE");
   assert.deepEqual(waitOptions, { state: "visible", timeout: 12000 });
   assert.deepEqual(diagnostics, ["TITLE_UNOBSERVED", "DESCRIPTION_UNOBSERVED",
-    "INVENTORY_CODE_UNOBSERVED", "PRICE_FIELD_NOT_EXTRACTED", "QUANTITY_FIELD_NOT_EXTRACTED"]);
+    "INVENTORY_CODE_UNOBSERVED", "PRICE_FIELD_NOT_EXTRACTED", "QUANTITY_FIELD_NOT_EXTRACTED",
+    "PRIVATE_TITLE_UNOBSERVED"]);
   assert.equal(result.comparison.fields.title, "UNOBSERVED");
   assert.equal(JSON.stringify(await listReadResults(root, queued.jobId)).includes("diagnostics"), false);
 }));
@@ -380,6 +381,87 @@ test("only one named variant quantity with its unique direct label is observed",
       "QUANTITY_FORMAT_UNSUPPORTED"])
       assert.equal(diagnostics.includes(code), sample.diagnostic === code);
     assert.equal(JSON.stringify(result).includes("999999"), false);
+  }
+}));
+
+test("private status requires one matching title row, its private cell, and exact-ID return", async () => withRoot(async root => {
+  const queued = await job(root);
+  const shopTitle = "Existing Shops title";
+  const exactUrl = `https://mercari-shops.com/seller/shops/${account}/products/existing-product/edit`;
+  const listUrl = `https://mercari-shops.com/seller/shops/${account}/products?tab=on_sale&visibility=unopened`;
+  for (const sample of [
+    { rows: 1, badge: 1, returnUrl: exactUrl, expected: "PRIVATE_OBSERVED", diagnostic: null },
+    { rows: 2, badge: 1, returnUrl: exactUrl, expected: "UNOBSERVED",
+      diagnostic: "PRIVATE_ROW_NOT_UNIQUE" },
+    { rows: 1, badge: 0, returnUrl: exactUrl, expected: "UNOBSERVED",
+      diagnostic: "PRIVATE_ROW_STATUS_UNVERIFIED" },
+    { rows: 1, badge: 1, returnUrl: `https://mercari-shops.com/seller/shops/${account}/products/other/edit`,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_RETURN_ID_UNVERIFIED" },
+    { rows: 1, badge: 1, returnUrl: exactUrl, listRedirect: true,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_LIST_URL_UNVERIFIED" },
+    { rows: 1, badge: 0, shopTitle: "非公開", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_ROW_STATUS_UNVERIFIED" },
+    { rows: 1, badge: 1, headerStatus: "公開", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_TABLE_UNVERIFIED" },
+  ]) {
+    let url = "";
+    let clicks = 0;
+    let diagnostics;
+    const title = sample.shopTitle ?? shopTitle;
+    class FakeTable {}
+    class FakeRow {}
+    const headers = Array.from({ length: 10 }, (_, index) => ({ tagName: "TH", colSpan: 1, rowSpan: 1,
+      textContent: index === 0 ? "商品名" : index === 2 ? sample.headerStatus ?? "公開設定" : "" }));
+    const head = { rows: [{ cells: headers }] };
+    head.rows[0].parentElement = head;
+    const tableElement = new FakeTable();
+    tableElement.tHead = head;
+    const cells = Array.from({ length: 10 }, (_, index) => ({ tagName: "TD", colSpan: 1, rowSpan: 1,
+      textContent: index === 0 ? title : index === 2 ? sample.badge ? "非公開" : "公開" : "",
+      querySelectorAll: selector => selector === "p" && index === 2 ?
+        [{ textContent: sample.badge ? "非公開" : "公開" }] : [] }));
+    const rowElement = new FakeRow();
+    rowElement.parentElement = { tagName: "TBODY" };
+    rowElement.cells = cells;
+    const titleCell = { count: async () => 1, click: async () => { clicks++; url = sample.returnUrl; } };
+    const row = { count: async () => sample.rows, first: () => ({ waitFor: async () => {} }),
+      evaluate: async (callback, contract) => callback(rowElement, contract),
+      locator: selector => { assert.equal(selector, ":scope > td"); return { nth: index => {
+        assert.equal(index, 0); return titleCell;
+      } }; } };
+    const table = { count: async () => 1, evaluate: async callback => callback(tableElement), getByRole: role => {
+      assert.equal(role, "row");
+      return { filter: ({ has }) => { assert.equal(has.name, title); return row; } };
+    } };
+    const page = { goto: async next => {
+      url = sample.listRedirect && next === listUrl ? "https://mercari-shops.com/signin/seller" : next;
+    }, url: () => url,
+      waitForURL: async expected => { if (url !== expected) throw Error("wrong target ID"); },
+      getByRole: (role, options) => role === "table" ? table : role === "cell" ?
+        { name: options.name } : { count: async () => 1 },
+      locator: () => ({ evaluateAll: async () => ({ documentUrl: url, quantityContract: "NOT_EXTRACTED",
+        rows: [{ label: "商品名", value: title }, { label: "商品の説明", value: "saved description" },
+          { label: "商品管理コード", value: "SKU-1" }, { label: "販売価格", value: "¥90,000" }] }) }) };
+    const priorTable = globalThis.HTMLTableElement;
+    const priorRow = globalThis.HTMLTableRowElement;
+    globalThis.HTMLTableElement = FakeTable;
+    globalThis.HTMLTableRowElement = FakeRow;
+    const reader = createExistingProductReader({ root,
+      profileDir: join(root, `private-${sample.rows}-${sample.badge}-${sample.expected}-${clicks}`),
+      shopId: account, onReadDiagnostics: codes => { diagnostics = codes; },
+      launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+    let result;
+    try { result = await runExistingRead(root, account, queued.jobId, reader); }
+    finally { globalThis.HTMLTableElement = priorTable; globalThis.HTMLTableRowElement = priorRow; }
+    assert.equal(result.status, "DIFFERENT");
+    assert.equal(result.comparison.visibility, sample.expected);
+    assert.equal(result.comparison.fields.title, "DIFFERENT");
+    assert.equal(url, clicks ? sample.returnUrl :
+      sample.listRedirect ? "https://mercari-shops.com/signin/seller" : listUrl);
+    assert.equal(clicks, sample.rows === 1 && sample.badge === 1 && !sample.listRedirect &&
+      sample.headerStatus !== "公開" ? 1 : 0, JSON.stringify({ sample, diagnostics }));
+    assert.equal(diagnostics.includes(sample.diagnostic), Boolean(sample.diagnostic));
+    assert.equal(JSON.stringify(result).includes(title), false);
   }
 }));
 

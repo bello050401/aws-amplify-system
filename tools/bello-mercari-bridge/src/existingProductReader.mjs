@@ -43,6 +43,61 @@ async function uniqueVisible(locator) {
   return count === 1 ? "READY" : count === 0 ? "TIMEOUT" : "NOT_UNIQUE";
 }
 
+async function privateFromExactListRow(page, shopId, expectedUrl, title) {
+  const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
+  try {
+    await page.goto(listUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
+    if (page.url() !== listUrl) return { value: unobserved(), diagnostic: "PRIVATE_LIST_URL_UNVERIFIED" };
+    const table = page.getByRole("table");
+    if (await uniqueVisible(table) !== "READY")
+      return { value: unobserved(), diagnostic: "PRIVATE_TABLE_UNVERIFIED" };
+    const columns = await table.evaluate(element => {
+      if (!(element instanceof HTMLTableElement) || element.tHead?.rows.length !== 1 ||
+          element.tHead.rows[0].parentElement !== element.tHead) return null;
+      const headers = Array.from(element.tHead.rows[0].cells);
+      if (headers.length !== 10 || headers.some(cell =>
+        cell.tagName !== "TH" || cell.colSpan !== 1 || cell.rowSpan !== 1)) return null;
+      const normalized = cell => (cell.textContent ?? "").replace(/\s+/g, "");
+      const named = text => headers.flatMap((cell, index) => normalized(cell) === text ? [index] : []);
+      const title = named("商品名");
+      const status = named("公開設定");
+      return title.length === 1 && status.length === 1 && title[0] !== status[0] ?
+        { titleIndex: title[0], statusIndex: status[0], columnCount: headers.length } : null;
+    });
+    if (!columns) return { value: unobserved(), diagnostic: "PRIVATE_TABLE_UNVERIFIED" };
+    const titleCellQuery = page.getByRole("cell", { name: title, exact: true });
+    const row = table.getByRole("row").filter({ has: titleCellQuery });
+    if (await uniqueVisible(row) !== "READY")
+      return { value: unobserved(), diagnostic: "PRIVATE_ROW_NOT_UNIQUE" };
+    const privateInStatusColumn = await row.evaluate((element, contract) => {
+      if (!(element instanceof HTMLTableRowElement) || element.parentElement?.tagName !== "TBODY") return false;
+      const cells = Array.from(element.cells);
+      if (cells.length !== contract.columnCount || cells.some(cell =>
+        cell.tagName !== "TD" || cell.colSpan !== 1 || cell.rowSpan !== 1)) return false;
+      const normalized = cell => (cell.textContent ?? "").replace(/\s+/g, "");
+      const titleCell = cells[contract.titleIndex];
+      const statusCell = cells[contract.statusIndex];
+      const paragraphs = statusCell.querySelectorAll("p");
+      return normalized(titleCell) === contract.title && normalized(statusCell) === "非公開" &&
+        paragraphs.length === 1 && normalized(paragraphs[0]) === "非公開";
+    }, { ...columns, title: title.replace(/\s+/g, "") });
+    if (!privateInStatusColumn)
+      return { value: unobserved(), diagnostic: "PRIVATE_ROW_STATUS_UNVERIFIED" };
+    const titleCell = row.locator(":scope > td").nth(columns.titleIndex);
+    if (await titleCell.count() !== 1)
+      return { value: unobserved(), diagnostic: "PRIVATE_ROW_STATUS_UNVERIFIED" };
+    if (page.url() !== listUrl) return { value: unobserved(), diagnostic: "PRIVATE_LIST_URL_UNVERIFIED" };
+    await titleCell.click({ timeout: 12000 });
+    try { await page.waitForURL(expectedUrl, { timeout: 12000 }); }
+    catch { return { value: unobserved(), diagnostic: "PRIVATE_RETURN_ID_UNVERIFIED" }; }
+    if (page.url() !== expectedUrl)
+      return { value: unobserved(), diagnostic: "PRIVATE_RETURN_ID_UNVERIFIED" };
+    return { value: observed("PRIVATE"), diagnostic: null };
+  } catch {
+    return { value: unobserved(), diagnostic: "PRIVATE_READ_FAILED" };
+  }
+}
+
 /** A deliberately partial exact-edit read. No field is inferred by input order. */
 export function createExistingProductReader({ root, profileDir, playwrightModulePath, shopId,
   launchPersistentContext = null, onTrafficSummary = null, onReadDiagnostics = null }) {
@@ -128,6 +183,9 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
         const rawQuantity = snapshot.quantityContract === "SINGLE_VARIANT_0" ?
           singleValue(rows, "数量") : unobserved();
         const quantity = quantityValue(rawQuantity);
+        const privateRead = title.kind === "OBSERVED" ?
+          await privateFromExactListRow(page, shopId, expectedUrl, title.value) :
+          { value: unobserved(), diagnostic: "PRIVATE_TITLE_UNOBSERVED" };
         diagnose([...(title.kind === "UNOBSERVED" ? ["TITLE_UNOBSERVED"] : []),
           ...(description.kind === "UNOBSERVED" ? ["DESCRIPTION_UNOBSERVED"] : []),
           ...(inventoryCode.kind === "UNOBSERVED" ? ["INVENTORY_CODE_UNOBSERVED"] : []),
@@ -135,12 +193,13 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
             priceYen.kind === "UNOBSERVED" ? ["PRICE_FORMAT_UNSUPPORTED"] : []),
           ...(snapshot.quantityContract === "MULTIPLE_VARIANTS" ? ["QUANTITY_MULTIPLE_VARIANTS"] :
             rawQuantity.kind === "UNOBSERVED" ? ["QUANTITY_FIELD_NOT_EXTRACTED"] :
-            quantity.kind === "UNOBSERVED" ? ["QUANTITY_FORMAT_UNSUPPORTED"] : [])]);
+            quantity.kind === "UNOBSERVED" ? ["QUANTITY_FORMAT_UNSUPPORTED"] : []),
+          ...(privateRead.diagnostic ? [privateRead.diagnostic] : [])]);
         return { kind: "OBSERVED", observation: {
           exactProductReadBack: true,
           accountReference: observed(shopId), remoteId: observed(remoteId),
-          // The exact edit screen has no private/public label. A separately correlated list read is required.
-          visibility: unobserved(),
+          // Only the list row whose title click returns to this exact ID can establish privacy.
+          visibility: privateRead.value,
           fields: {
             inventoryCode, title, description, priceYen,
             // The exact single-variant name and its unique direct-parent label are both required.
