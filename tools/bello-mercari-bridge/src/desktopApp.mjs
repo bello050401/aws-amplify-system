@@ -16,6 +16,8 @@ import { addExistingImageOnce, readRetainedImageState } from "./addExistingImage
 import { readManualImageClaim, readManualImageOutcome } from "./manualImageAttempt.mjs";
 import { runPrivateImageWorkflowOnce } from "./privateImageWorkflow.mjs";
 import { readPrivateImageWorkflowClaim, readPrivateImageWorkflowResult } from "./privateImageWorkflowAttempt.mjs";
+import { verifyExistingSavedProductReadOnly, readExistingSavedProductReadback } from
+  "./existingSavedProductReadback.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const WORKFLOW_STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN",
@@ -67,7 +69,7 @@ function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsO
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
   lastImageReadState, workflowAttempted, lastWorkflowStatus, lastWorkflowStage,
-  workflowReadbackPrivateWithImage,
+  workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning ? "disabled" : ""}>${label}</button></form>`;
@@ -116,6 +118,9 @@ ${workflowReadbackPrivateWithImage ? "<p>別タブで対象商品を再読込し
 ${retainedWorkflowOpen ? `<p>結果が確定していないため専用Chromeを保持しています。再送せず画面と通信を確認してください。</p>${button("refresh-workflow-observation", "工程の通信概要を更新")}${button("inspect-workflow-image", "保持中画面の画像を読取")}` : ""}
 ${options.imageWorkflowEnabled && manualAttempted ? `<details><summary>対象Shops通信の概要（${lastManual.length}件）</summary><p><small>保存クリック後の要求候補です。本文・変数値・認証情報は記録しません。要求の一致だけでは保存成功と判定しません。</small></p><ol>${lastManual.map(item => `<li><code>${html(item.order)}. ${html(item.method)} ${html(item.host)}${html(item.path)}</code> / HTTP ${html(item.httpStatus ?? "未確認")} / 操作 ${html(item.operationName ?? "未確認")} / 操作種別 ${html(item.graphqlOperationType ?? "未確認")} / query SHA-256 ${html(item.querySha256 ?? "未確認")} / 変数項目 ${item.fields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / 要求商品ID ${html(item.requestProductMatch ?? "未確認")} / 要求非公開 ${html(item.requestPrivateState ?? "未確認")} / 応答 ${html(item.responseField ?? "未確認")} / 種別 ${html(item.responseKind ?? "未確認")} / 応答商品ID ${html(item.productMatch ?? "未確認")} / 店舗ID ${html(item.shopMatch ?? "未確認")} / 状態 ${html(item.state ?? "未確認")} / GraphQLエラー ${html(item.graphqlErrors ?? "未確認")}</li>`).join("")}</ol></details>` : ""}
 ${lastImageReadState && retainedWorkflowOpen ? `<p>画面上の画像: <code>${html(lastImageReadState)}</code>。保存確認ではありません。</p>` : ""}</section>` : ""}
+${options.manualObservation && options.imageProof ? `<section><h2>保存済み商品の読取確認</h2><p>既存の画像選択・保存の試行記録に対象商品を紐付け、現在の非公開状態と画像2枚を読み直します。画像追加や保存は行いません。</p>
+${button("verify-saved-product-readonly", "既存商品を読取で再確認", shopsOpen || manualOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}
+${savedProductReadback ? `<p>現在の読取結果: <strong>${html(savedProductReadback.status)}</strong>。画像試行記録: <code>${html(savedProductReadback.imageOutcome)}</code>、保存試行記録: <code>${html(savedProductReadback.saveOutcome)}</code>。現在の表示状態であり、過去の保存要求が成功した証明ではありません。</p>` : ""}</section>` : ""}
 <section><h2>3. BELLOで結果を見る</h2><p>照合後、BELLOの照合依頼画面で「照合結果を確認する」を押してください。</p>
 <p><a href="${html(options.origin)}/inventory/mercari-bridge?requestId=${html(options.requestId)}" target="_blank" rel="noopener noreferrer">BELLOの照合依頼画面を開く</a></p>
 ${button("shutdown", "このアプリを終了", retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}</section>
@@ -147,6 +152,7 @@ export async function startDesktopApp(config, {
   runPrivateSave = saveExistingPrivateOnce, runImageAdd = addExistingImageOnce,
   inspectImage = readRetainedImageState,
   runWorkflow = runPrivateImageWorkflowOnce,
+  runSavedProductReadback = verifyExistingSavedProductReadOnly,
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
 } = {}) {
   const options = optionsOf(config);
@@ -166,6 +172,9 @@ export async function startDesktopApp(config, {
     (workflowClaim.claimed || imageAttempted || privateSaveAttempted));
   const savedWorkflowResult = options.imageWorkflowEnabled ?
     await readPrivateImageWorkflowResult(options.root, options.manualObservation) : null;
+  let savedProductReadback = options.imageProof ?
+    await readExistingSavedProductReadback(options.root, options.manualObservation,
+      options.imageProof.sha256) : null;
   const csrf = randomBytes(32).toString("hex");
   let busy = false;
   let message = "";
@@ -212,7 +221,7 @@ export async function startDesktopApp(config, {
         retainedSaveOpen: Boolean(retainedSaveSession), imageAttempted, lastImageStatus,
         lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession),
         lastImageReadState, workflowAttempted: workflowUsed, lastWorkflowStatus,
-        lastWorkflowStage, workflowReadbackPrivateWithImage,
+        lastWorkflowStage, workflowReadbackPrivateWithImage, savedProductReadback,
         retainedWorkflowOpen: Boolean(retainedWorkflowSession) }));
       return;
     }
@@ -269,6 +278,23 @@ export async function startDesktopApp(config, {
           onReadDiagnostics: codes => { lastDiagnostics = safeReadDiagnostics(codes); } });
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
+      } else if (action === "verify-saved-product-readonly") {
+        if (!options.manualObservation || !options.imageProof || shopsContext || manualSession ||
+            retainedSaveSession || retainedImageSession || retainedWorkflowSession)
+          throw Error("Saved-product readback is unavailable while Shops Chrome is open");
+        const result = await runSavedProductReadback({ root: options.root,
+          profileDir: options.shopsProfileDir,
+          playwrightModulePath: options.playwrightModulePath,
+          target: options.manualObservation, imageSha256: options.imageProof.sha256 });
+        savedProductReadback = ["OBSERVED_PRIVATE_TWO_IMAGES", "UNKNOWN", "AUTH_REQUIRED",
+          "PRIOR_ATTEMPT_MISMATCH"].includes(result?.status) ?
+          { status: result.status,
+            imageOutcome: ["UNKNOWN", "BLOCKED_BEFORE_SELECT", "UNRECORDED"].includes(
+              result.imageOutcome) ? result.imageOutcome : "UNRECORDED",
+            saveOutcome: ["CONFIRMED_PRIVATE", "UNKNOWN", "BLOCKED_BEFORE_CLICK",
+              "UNRECORDED"].includes(result.saveOutcome) ? result.saveOutcome : "UNRECORDED" } :
+          { status: "UNKNOWN", imageOutcome: "UNRECORDED", saveOutcome: "UNRECORDED" };
+        message = "既存商品の読取確認を記録しました。保存や画像追加は実行していません。";
       } else if (action === "observe-start") {
         if (!options.manualObservation || manualSession || retainedSaveSession || retainedImageSession || privateSaveAttempted)
           throw Error("Manual observation is unavailable");

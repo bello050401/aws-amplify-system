@@ -313,6 +313,44 @@ test("unified private-image action is explicit and old attempts disable it", asy
   }
 });
 
+test("existing attempts expose a separate read-only confirmation with prior outcome codes", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-readback-"));
+  const target = { shopId: "shop1", remoteId: "existing1", inventoryCode: "B005795",
+    priceYen: 90000, quantity: 0 };
+  const sha256 = "a".repeat(64);
+  const imageProof = { sha256,
+    path: join(dataDir, "ImageProof", `B005795-${sha256.slice(0, 16)}.jpg`) };
+  let reads = 0;
+  try {
+    const root = join(dataDir, "Queue");
+    await claimManualImageOnce(root, target, sha256);
+    await claimManualSaveOnce(root, target);
+    const app = await startDesktopApp({ ...config(), dataDir,
+      manualObservation: target, imageProof }, { openBrowser: async () => {},
+      runSavedProductReadback: async options => {
+        reads++;
+        assert.deepEqual(options.target, target);
+        return { status: "OBSERVED_PRIVATE_TWO_IMAGES", imageOutcome: "UNKNOWN",
+          saveOutcome: "BLOCKED_BEFORE_CLICK" };
+      } });
+    try {
+      const csrf = await token(app.url);
+      const before = await (await fetch(app.url)).text();
+      assert.match(before, /既存商品を読取で再確認/);
+      assert.match(before, /<button disabled>既存商品を非公開で1回保存<\/button>/);
+      assert.equal((await post(app.url, csrf, "verify-saved-product-readonly")).status, 303);
+      assert.equal(reads, 1);
+      const after = await (await fetch(app.url)).text();
+      assert.match(after, /OBSERVED_PRIVATE_TWO_IMAGES/);
+      assert.match(after, /BLOCKED_BEFORE_CLICK/);
+      assert.match(after, /過去の保存要求が成功した証明ではありません/);
+    } finally { await app.close(); }
+  } finally {
+    assert.equal(resolve(dataDir).startsWith(resolve(tmpdir()) + "\\"), true);
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("failed default-browser dispatch keeps the loopback control page available", async () => {
   const app = await startDesktopApp(config(), { openBrowser: async () => {
     throw Error("synthetic browser launch failure");
