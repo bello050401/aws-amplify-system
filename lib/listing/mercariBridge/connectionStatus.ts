@@ -6,6 +6,23 @@ export type MercariPcConnectionStatus = {
   recordedAt: string | null;
 };
 
+export type ConnectionLookupState = "UNFETCHED" | "LOADING" | "FAILED" | "READY";
+
+export function mercariPcConnectionLabels(lookup: ConnectionLookupState,
+  results: ReadResultView[]): { pc: string; shops: string; recordedAt: string | null } {
+  if (lookup !== "READY") {
+    const label = lookup === "LOADING" ? "確認中" : lookup === "FAILED" ?
+      "取得失敗" : "未確認（記録未取得）";
+    return { pc: label, shops: label, recordedAt: null };
+  }
+  const state = mercariPcConnectionStatus(results);
+  return { pc: state.pc === "REPORT_RECEIVED" ? "報告受信済み" :
+      "未接続（この依頼の報告なし）",
+    shops: state.shops === "REAUTH_REQUIRED" ? "再認証必要" :
+      state.shops === "READ_CONFIRMED" ? "読取確認済み" : "ログイン未確認",
+    recordedAt: state.recordedAt };
+}
+
 /** Reports prove a past PC exchange, never a live socket or listing permission. */
 export function mercariPcConnectionStatus(results: ReadResultView[]): MercariPcConnectionStatus {
   const latest = [...results].filter(result => Number.isFinite(Date.parse(result.recordedAt)))
