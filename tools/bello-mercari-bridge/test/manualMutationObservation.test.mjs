@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { observeManualShopsMutation, safeManualMutationSummary } from "../src/manualMutationObservation.mjs";
@@ -53,13 +54,18 @@ test("manual metadata preserves request order, field types and response identity
 
 test("target-only observer ignores telemetry and acknowledges only a later exact private update", async () => {
   const browser = page();
+  const query = "mutation UpdateProduct($input: UpdateProductInput!) { updateProduct(input: $input) { product { id shopId status } } }";
+  const contract = { operationName: "UpdateProduct",
+    querySha256: createHash("sha256").update(query).digest("hex"),
+    idField: "id", statusField: "status" };
   const observer = observeManualShopsMutation(browser, editUrl,
-    { drainMs: 20, shopsOnly: true });
+    { drainMs: 20, shopsOnly: true, privateSaveContract: contract });
   for (let index = 0; index < 25; index++)
     browser.emit("request", request("https://telemetry.example/collect", { value: index }));
   assert.equal(observer.checkpoint(), 0, "unrelated traffic cannot consume the 20-event cap");
   const earlier = request("https://mercari-shops.com/graphql", {
-    operationName: "UpdateProduct", variables: { input: { status: "UNOPENED" } },
+    operationName: "UpdateProduct", query,
+    variables: { input: { id: "existing1", status: "UNOPENED" } },
   });
   browser.emit("request", earlier);
   browser.emit("response", response(earlier, { data: { updateProduct: { product: {
@@ -68,13 +74,77 @@ test("target-only observer ignores telemetry and acknowledges only a later exact
   assert.equal(await observer.waitForExactPrivateUpdate(beforeClick, 25), false,
     "a request started before the final click cannot acknowledge it");
   const later = request("https://mercari-shops.com/graphql", {
-    operationName: "UpdateProduct", variables: { input: { status: "UNOPENED" } },
+    operationName: "UpdateProduct", query,
+    variables: { input: { id: "existing1", status: "UNOPENED" } },
   });
   browser.emit("request", later);
   browser.emit("response", response(later, { data: { updateProduct: { product: {
     id: "existing1", shopId: "shop1", status: "UNOPENED" } } } }));
   assert.equal(await observer.waitForExactPrivateUpdate(beforeClick, 100), true);
-  assert.equal((await observer.stop()).length, 2);
+  assert.equal((await observer.stop()).length, 1,
+    "the post-click save request has priority over earlier image traffic");
+});
+
+test("post-click Shops request records a redacted save-contract candidate", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl,
+    { drainMs: 20, shopsOnly: true });
+  for (let index = 0; index < 20; index++)
+    browser.emit("request", request("https://mercari-shops.com/graphql", {
+      operationName: "UploadImage", query: "mutation UploadImage { uploadImage { id } }" }));
+  assert.equal(observer.checkpoint(), 0);
+  const query = "mutation UpdateProduct($input: Secret!) { updateProduct(input: $input) { id } }";
+  const req = request("https://mercari-shops.com/graphql", {
+    operationName: "UpdateProduct", query,
+    variables: { input: { id: "existing1", status: "UNOPENED", name: "private title" } },
+  });
+  browser.emit("request", req);
+  browser.emit("response", response(req, { data: { updateProduct: { product: {
+    id: "existing1", shopId: "shop1", status: "UNOPENED" } } } }));
+  const safe = safeManualMutationSummary(await observer.stop());
+  assert.equal(safe.length, 1);
+  assert.equal(safe[0].graphqlOperationType, "mutation");
+  assert.equal(safe[0].querySha256, createHash("sha256").update(query).digest("hex"));
+  assert.equal(safe[0].operationName, "UpdateProduct");
+  assert.equal(safe[0].requestProductMatch, "MATCH");
+  assert.equal(safe[0].requestPrivateState, "MATCH");
+  assert.equal(safe[0].responseKind, "UPDATE_PRODUCT");
+  assert.equal(safe[0].graphqlErrors, "NONE");
+  assert.equal(JSON.stringify(safe).includes("private title"), false);
+  assert.equal(JSON.stringify(safe).includes("Secret!"), false);
+});
+
+test("private-save acknowledgement rejects unpinned query and missing request contract", async () => {
+  const browser = page();
+  const query = "mutation UpdateProduct { updateProduct { product { id shopId status } } }";
+  const contract = { operationName: "UpdateProduct",
+    querySha256: createHash("sha256").update(query).digest("hex"),
+    idField: "id", statusField: "status" };
+  const observer = observeManualShopsMutation(browser, editUrl,
+    { drainMs: 20, shopsOnly: true, privateSaveContract: contract });
+  const alias = request("https://mercari-shops.com/graphql", {
+    operationName: "UpdateProduct",
+    query: "mutation UpdateProduct { different: updateProduct { product { id shopId status } } }",
+    variables: { input: { id: "existing1", status: "UNOPENED" } },
+  });
+  browser.emit("request", alias);
+  browser.emit("response", response(alias, { data: { updateProduct: { product: {
+    id: "existing1", shopId: "shop1", status: "UNOPENED" } } } }));
+  assert.equal(await observer.waitForExactPrivateUpdate(0, 30), false);
+  await observer.stop();
+
+  const noContractBrowser = page();
+  const noContract = observeManualShopsMutation(noContractBrowser, editUrl,
+    { drainMs: 20, shopsOnly: true });
+  const sameShape = request("https://mercari-shops.com/graphql", {
+    operationName: "UpdateProduct", query,
+    variables: { input: { id: "existing1", status: "UNOPENED" } },
+  });
+  noContractBrowser.emit("request", sameShape);
+  noContractBrowser.emit("response", response(sameShape, { data: { updateProduct: { product: {
+    id: "existing1", shopId: "shop1", status: "UNOPENED" } } } }));
+  assert.equal(await noContract.waitForExactPrivateUpdate(0, 30), false);
+  await noContract.stop();
 });
 
 test("multipart reports only allowlisted part names and file types", async () => {

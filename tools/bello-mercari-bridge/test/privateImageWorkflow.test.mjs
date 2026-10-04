@@ -7,6 +7,8 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { runPrivateImageWorkflowOnce } from "../src/privateImageWorkflow.mjs";
 import { claimManualImageOnce } from "../src/manualImageAttempt.mjs";
+import { addExistingImageOnce } from "../src/addExistingImageOnce.mjs";
+import { saveExistingPrivateOnce } from "../src/saveExistingPrivateOnce.mjs";
 import { readPrivateImageWorkflowClaim, readPrivateImageWorkflowResult } from
   "../src/privateImageWorkflowAttempt.mjs";
 
@@ -30,12 +32,17 @@ async function withRoot(run) {
   }
 }
 
-function harness({ acknowledged = true, auth = false } = {}) {
+function harness({ acknowledged = true, auth = false, probeAvailable = false } = {}) {
   const actions = [];
   let selected = false;
   let closed = false;
   const context = new EventEmitter();
   context.close = async () => { closed = true; context.emit("close"); };
+  if (probeAvailable) context.newPage = async () => ({
+    url: () => editUrl,
+    goto: async url => { assert.equal(url, editUrl); actions.push("probe-reload"); },
+    close: async () => { actions.push("probe-close"); },
+  });
   const page = {
     url: () => auth ? "https://mercari-shops.com/signin/seller" : editUrl,
     goto: async url => { actions.push("reload"); assert.equal(url, editUrl); },
@@ -46,7 +53,7 @@ function harness({ acknowledged = true, auth = false } = {}) {
         click: async () => { actions.push("next"); } };
     },
   };
-  const observer = { checkpoint: () => 0,
+  const observer = { checkpoint: () => { actions.push("checkpoint"); return 0; },
     waitForExactPrivateUpdate: async () => { actions.push("ack"); return acknowledged; },
     snapshot: () => [], stop: async () => { actions.push("observer-stop"); return []; } };
   const deps = {
@@ -79,10 +86,13 @@ test("one explicit flow saves privately only after image and exact-product check
     assert.equal(fake.actions.filter(item => item === "private-save").length, 1);
     assert.ok(fake.actions.indexOf("observe") < fake.actions.indexOf("select"));
     assert.ok(fake.actions.indexOf("wait-image") < fake.actions.indexOf("next"));
+    assert.ok(fake.actions.indexOf("next") < fake.actions.indexOf("checkpoint"));
+    assert.ok(fake.actions.indexOf("checkpoint") < fake.actions.indexOf("private-save"));
     assert.ok(fake.actions.indexOf("ack") < fake.actions.indexOf("reload"));
     assert.equal(fake.closed, true);
     assert.deepEqual(await readPrivateImageWorkflowResult(root, target),
-      { status: "CONFIRMED_PRIVATE_WITH_IMAGE", stage: "PRIVATE_READBACK_CONFIRMED" });
+      { status: "CONFIRMED_PRIVATE_WITH_IMAGE", stage: "PRIVATE_READBACK_CONFIRMED",
+        observation: [], readbackPrivateWithImage: true });
     assert.equal((await runPrivateImageWorkflowOnce(args, fake.deps)).status,
       "BLOCKED_PREVIOUS_ATTEMPT");
     assert.equal(fake.actions.filter(item => item === "select").length, 1);
@@ -103,6 +113,26 @@ test("unverified save response retains Chrome and permanently blocks replay", ()
     assert.equal((await runPrivateImageWorkflowOnce(args, fake.deps)).status,
       "BLOCKED_PREVIOUS_ATTEMPT");
     assert.equal(fake.actions.filter(item => item === "private-save").length, 1);
+    assert.equal((await addExistingImageOnce(args, fake.deps)).status, "ALREADY_ATTEMPTED");
+    assert.equal((await saveExistingPrivateOnce(args, fake.deps)).status, "ALREADY_ATTEMPTED");
+    assert.equal(fake.actions.filter(item => item === "select").length, 1);
+    await result.retainedSession.observer.stop();
+    await result.retainedSession.context.close();
+  }));
+
+test("unverified save probes in a separate tab without discarding the original edit", () =>
+  withRoot(async ({ root, imagePath }) => {
+    const fake = harness({ acknowledged: false, probeAvailable: true });
+    const result = await runPrivateImageWorkflowOnce({ root, profileDir: root,
+      playwrightModulePath: root, target, imagePath, imageSha256: sha }, fake.deps);
+    assert.equal(result.status, "UNKNOWN");
+    assert.equal(result.readbackPrivateWithImage, true);
+    assert.equal(fake.actions.includes("reload"), false);
+    assert.equal(fake.actions.includes("probe-reload"), true);
+    assert.equal(fake.actions.includes("probe-close"), true);
+    assert.equal(fake.closed, false);
+    assert.equal((await readPrivateImageWorkflowResult(root, target)).readbackPrivateWithImage,
+      true);
     await result.retainedSession.observer.stop();
     await result.retainedSession.context.close();
   }));

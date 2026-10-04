@@ -2,6 +2,7 @@ import { openExistingProductReadSession } from "./session.mjs";
 import { privateFromExactListRow } from "./existingProductReader.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
 import { claimManualSaveOnce, readManualSaveClaim, writeManualSaveOutcome } from "./manualSaveAttempt.mjs";
+import { readPrivateImageWorkflowClaim } from "./privateImageWorkflowAttempt.mjs";
 
 function exactSingle(rows, label, name = null) {
   const matches = rows.filter(row => row.label === label && (name === null || row.name === name) &&
@@ -88,8 +89,11 @@ export async function saveExistingPrivateOnce({ root, profileDir, playwrightModu
     openSession = openExistingProductReadSession, readFields = readPinnedEditFields,
     checkPrivate = confirmExistingPrivate, observe = observeManualShopsMutation,
   } = {}) {
-  const prior = await readManualSaveClaim(root, target);
-  if (prior.claimed) return { status: "ALREADY_ATTEMPTED", listingConfirmed: false };
+  const [prior, workflow] = await Promise.all([
+    readManualSaveClaim(root, target), readPrivateImageWorkflowClaim(root, target),
+  ]);
+  if (prior.claimed || workflow.claimed)
+    return { status: "ALREADY_ATTEMPTED", listingConfirmed: false };
   const expectedUrl = `https://mercari-shops.com/seller/shops/${target.shopId}/products/${target.remoteId}/edit`;
   const session = await openSession({ root, profileDir, playwrightModulePath,
     shopId: target.shopId, remoteId: target.remoteId, launchPersistentContext });

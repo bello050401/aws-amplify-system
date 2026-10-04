@@ -6,6 +6,7 @@ import { readPinnedEditFields } from "./saveExistingPrivateOnce.mjs";
 import { inspectExistingImage } from "./prepareExistingImage.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
 import { claimManualImageOnce, readManualImageClaim, writeManualImageOutcome } from "./manualImageAttempt.mjs";
+import { readPrivateImageWorkflowClaim } from "./privateImageWorkflowAttempt.mjs";
 
 function digest(value) { return createHash("sha256").update(value).digest("hex"); }
 
@@ -77,8 +78,11 @@ export async function addExistingImageOnce({ root, profileDir, playwrightModuleP
     checkPrivate = privateExistingProduct, readImages = readExistingUploadedImages,
     fileInput = exactSingleImageInput, observe = observeManualShopsMutation,
   } = {}) {
-  const prior = await readManualImageClaim(root, target, imageSha256);
-  if (prior.claimed) return { status: "ALREADY_ATTEMPTED" };
+  const [prior, workflow] = await Promise.all([
+    readManualImageClaim(root, target, imageSha256),
+    readPrivateImageWorkflowClaim(root, target),
+  ]);
+  if (prior.claimed || workflow.claimed) return { status: "ALREADY_ATTEMPTED" };
   const imageBytes = await readFile(imagePath);
   const image = inspectExistingImage(imageBytes,
     { inventoryCode: target.inventoryCode, expectedSha256: imageSha256 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { safeManualMutationSummary } from "./manualMutationObservation.mjs";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -71,11 +72,15 @@ export async function claimPrivateImageSaveStage(root, target, imageAttemptId) {
   return claim;
 }
 
-export async function writePrivateImageWorkflowResult(root, target, attemptId, status, stage) {
-  if (!/^[0-9a-f-]{36}$/i.test(attemptId) || !RESULTS.has(status) || !STAGES.has(stage))
+export async function writePrivateImageWorkflowResult(root, target, attemptId, status, stage,
+  observation = [], readbackPrivateWithImage = false) {
+  if (!/^[0-9a-f-]{36}$/i.test(attemptId) || !RESULTS.has(status) || !STAGES.has(stage) ||
+      typeof readbackPrivateWithImage !== "boolean")
     throw Error("Invalid private-image workflow result");
   await writeOnce(paths(root, target).result, { schemaVersion: 1,
-    attemptId, status, stage, recordedAt: new Date().toISOString() });
+    attemptId, status, stage, observation: safeManualMutationSummary(observation),
+    readbackPrivateWithImage,
+    recordedAt: new Date().toISOString() });
 }
 
 export async function readPrivateImageWorkflowResult(root, target) {
@@ -85,6 +90,8 @@ export async function readPrivateImageWorkflowResult(root, target) {
     const value = JSON.parse(await readFile(paths(root, target).result, "utf8"));
     return value?.schemaVersion === 1 && value.attemptId === claim.attemptId &&
       RESULTS.has(value.status) && STAGES.has(value.stage) ?
-      { status: value.status, stage: value.stage } : null;
+      { status: value.status, stage: value.stage,
+        observation: safeManualMutationSummary(value.observation),
+        readbackPrivateWithImage: value.readbackPrivateWithImage === true } : null;
   } catch { return null; }
 }

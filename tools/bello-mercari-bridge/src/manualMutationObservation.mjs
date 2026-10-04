@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const METHODS = new Set(["POST", "PUT", "PATCH"]);
 const TYPES = new Set(["fetch", "xhr"]);
 const FIELDS = new Set(["operationName", "query", "variables", "input", "product", "productId",
@@ -14,6 +16,7 @@ const RESPONSE_KINDS = new Set(["CREATE_PRODUCT", "UPDATE_PRODUCT", "PRODUCT",
 const ERROR_STATES = new Set(["NONE", "PRESENT", "UNOBSERVED"]);
 const ERROR_CLASSES = new Set(["AUTH", "VALIDATION", "NOT_FOUND", "RATE_LIMIT",
   "SERVER", "OTHER", "NONE", "UNOBSERVED"]);
+const GRAPHQL_TYPES = new Set(["mutation", "query", "subscription", "UNOBSERVED"]);
 const MAX_EVENTS = 20;
 const MAX_FIELDS = 64;
 const MAX_JSON_BYTES = 128 * 1024;
@@ -144,6 +147,10 @@ export function safeManualMutationSummary(items) {
         (item.shopMatch !== undefined && !MATCHES.has(item.shopMatch)) ||
         (item.graphqlErrors !== undefined && !ERROR_STATES.has(item.graphqlErrors)) ||
         (item.graphqlErrorClass !== undefined && !ERROR_CLASSES.has(item.graphqlErrorClass)) ||
+        (item.graphqlOperationType !== undefined && !GRAPHQL_TYPES.has(item.graphqlOperationType)) ||
+        (item.querySha256 !== undefined && !/^[a-f0-9]{64}$/.test(item.querySha256)) ||
+        (item.requestProductMatch !== undefined && !MATCHES.has(item.requestProductMatch)) ||
+        (item.requestPrivateState !== undefined && !MATCHES.has(item.requestPrivateState)) ||
         (item.state !== undefined && !STATES.has(item.state))) return [];
     const fields = item.fields.flatMap(field => {
       if (!field || typeof field.field !== "string" || typeof field.type !== "string" ||
@@ -161,17 +168,26 @@ export function safeManualMutationSummary(items) {
       ...(item.shopMatch ? { shopMatch: item.shopMatch } : {}),
       ...(item.graphqlErrors ? { graphqlErrors: item.graphqlErrors } : {}),
       ...(item.graphqlErrorClass ? { graphqlErrorClass: item.graphqlErrorClass } : {}),
+      ...(item.graphqlOperationType ? { graphqlOperationType: item.graphqlOperationType } : {}),
+      ...(item.querySha256 ? { querySha256: item.querySha256 } : {}),
+      ...(item.requestProductMatch ? { requestProductMatch: item.requestProductMatch } : {}),
+      ...(item.requestPrivateState ? { requestPrivateState: item.requestPrivateState } : {}),
       ...(item.state ? { state: item.state } : {}) }];
   });
 }
 
 /** Passive, memory-only metadata for one exact edit page. It never sends a request or operates a form. */
 export function observeManualShopsMutation(page, expectedEditUrl,
-  { drainMs = 2000, shopsOnly = false } = {}) {
+  { drainMs = 2000, shopsOnly = false, privateSaveContract = null } = {}) {
   if (!/^https:\/\/mercari-shops\.com\/seller\/shops\/[A-Za-z0-9_-]{1,100}\/products\/[A-Za-z0-9_-]{1,100}\/edit$/.test(expectedEditUrl) ||
       typeof page?.on !== "function" || typeof page?.off !== "function" ||
       !Number.isInteger(drainMs) || drainMs < 0 || drainMs > 5000 ||
-      typeof shopsOnly !== "boolean")
+      typeof shopsOnly !== "boolean" ||
+      (privateSaveContract !== null && (!shopsOnly ||
+        !/^[a-f0-9]{64}$/.test(privateSaveContract?.querySha256 ?? "") ||
+        safeOperationName(privateSaveContract?.operationName) !== privateSaveContract.operationName ||
+        !["id", "productId"].includes(privateSaveContract?.idField) ||
+        privateSaveContract?.statusField !== "status")))
     throw Error("An exact existing Shops edit page is required");
   const events = [];
   const [, expectedShopId, expectedRemoteId] =
@@ -180,6 +196,7 @@ export function observeManualShopsMutation(page, expectedEditUrl,
   const pending = new Set();
   const awaiting = new Set();
   let accepting = true;
+  let saveWindowActive = false;
   let stopped = false;
   let stopPromise = null;
   const track = work => {
@@ -188,7 +205,10 @@ export function observeManualShopsMutation(page, expectedEditUrl,
     task.finally(() => pending.delete(task));
   };
   const onRequest = request => {
-    if (!accepting || page.url() !== expectedEditUrl || events.length >= MAX_EVENTS) return;
+    const sameShopAfterClick = saveWindowActive &&
+      page.url().startsWith(`https://mercari-shops.com/seller/shops/${expectedShopId}/`);
+    if (!accepting || (page.url() !== expectedEditUrl && !sameShopAfterClick) ||
+        events.length >= MAX_EVENTS) return;
     const method = request.method();
     const target = destination(request.url());
     if (!METHODS.has(method) || !TYPES.has(request.resourceType()) || !target ||
@@ -214,6 +234,29 @@ export function observeManualShopsMutation(page, expectedEditUrl,
         if (target.host !== "external-https" && target.path.endsWith("/graphql")) {
           const operationName = safeOperationName(body?.operationName);
           if (operationName) entry.operationName = operationName;
+          if (shopsOnly) {
+            const query = typeof body?.query === "string" ? body.query : null;
+            entry.graphqlOperationType = query ?
+              /^(?:\s|#[^\r\n]*(?:\r?\n|$))*(mutation|query|subscription)\b/.exec(query)?.[1] ??
+                "UNOBSERVED" : "UNOBSERVED";
+            if (query) entry.querySha256 = createHash("sha256").update(query).digest("hex");
+            const input = body?.variables?.input;
+            const requestId = input?.id ?? input?.productId;
+            entry.requestProductMatch = typeof requestId === "string" ?
+              requestId === expectedRemoteId ? "MATCH" : "DIFFERENT" : "UNOBSERVED";
+            entry.requestPrivateState = typeof input?.status === "string" ?
+              ["UNOPENED", "PRIVATE"].includes(input.status) ? "MATCH" : "DIFFERENT" :
+              "UNOBSERVED";
+          }
+          if (shopsOnly && privateSaveContract &&
+              body?.operationName === privateSaveContract.operationName &&
+              typeof body?.query === "string" &&
+              createHash("sha256").update(body.query).digest("hex") ===
+                privateSaveContract.querySha256 &&
+              body?.variables?.input?.[privateSaveContract.idField] === expectedRemoteId &&
+              ["UNOPENED", "PRIVATE"].includes(
+                body?.variables?.input?.[privateSaveContract.statusField]))
+            entry.requestSaveContractMatch = true;
         }
       } else if (/^multipart\/form-data(?:;|$)/i.test(contentType)) {
         bodyType = "multipart";
@@ -256,7 +299,14 @@ export function observeManualShopsMutation(page, expectedEditUrl,
   page.on("response", onResponse);
   page.on("requestfailed", onRequestFailed);
   return {
-    checkpoint: () => events.length,
+    checkpoint: () => {
+      if (shopsOnly) {
+        // Save the bounded post-click window even if image upload used the event budget.
+        events.splice(0);
+        saveWindowActive = true;
+      }
+      return events.length;
+    },
     snapshot: () => events.map(entry => ({ ...entry, fields: entry.fields.map(field => ({ ...field })),
       auth: { ...entry.auth } })),
     waitForPostClickIdle: async (afterOrder, timeoutMs = 12000) => {
@@ -290,7 +340,8 @@ export function observeManualShopsMutation(page, expectedEditUrl,
       const deadline = Date.now() + timeoutMs;
       while (!stopped && Date.now() < deadline) {
         if (events.some(entry => entry.order > afterOrder && entry.completedAt &&
-            entry.httpStatus === 200 && entry.responseKind === "UPDATE_PRODUCT" &&
+            entry.httpStatus === 200 && entry.requestSaveContractMatch === true &&
+            entry.responseKind === "UPDATE_PRODUCT" &&
             entry.productMatch === "MATCH" && entry.shopMatch === "MATCH" &&
             ["UNOPENED", "PRIVATE"].includes(entry.state) && entry.graphqlErrors === "NONE"))
           return true;

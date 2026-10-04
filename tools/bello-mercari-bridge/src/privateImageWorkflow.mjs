@@ -44,6 +44,25 @@ function isAuthRequired(page) {
   } catch { return false; }
 }
 
+async function probePrivateReadback(context, expectedUrl, target, title,
+  originalHash, addedHash, readFields, readImages, checkPrivate) {
+  let probe = null;
+  try {
+    probe = await context.newPage();
+    await probe.goto(expectedUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
+    for (let pass = 0; pass < 2; pass++) {
+      const fields = await readFields(probe, expectedUrl, target);
+      const images = await readImages(probe, expectedUrl);
+      if (!fields || fields.title !== title || images?.length !== 2 ||
+          images.filter(item => item.pathHash === originalHash).length !== 1 ||
+          images.filter(item => item.pathHash === addedHash).length !== 1) return false;
+      if (pass === 0 && !await checkPrivate(probe, target, expectedUrl, title)) return false;
+    }
+    return true;
+  } catch { return false; }
+  finally { if (probe) { try { await probe.close(); } catch { /* Keep original page. */ } } }
+}
+
 /** One explicit image-and-private-save action for a fresh existing product.
  * Old image/save markers always block this path; an uncertain stage is never replayed.
  */
@@ -86,6 +105,7 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
   };
   let originalHash = null;
   let addedHash = null;
+  let readbackPrivateWithImage = false;
   const retainedSession = () => ({ context: session.context, page: session.page,
     observer, originalImageHash: originalHash,
     onClose: callback => {
@@ -127,7 +147,6 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
       throw Error("Pinned product or images changed before save");
     await claimPrivateImageSaveStage(root, target, claim.attemptId);
     setStage("SAVE_CLAIMED");
-    const checkpoint = observer.checkpoint();
     const next = session.page.getByRole("button", { name: "公開設定に進む", exact: true });
     if (await next.count() !== 1 || !await next.isEnabled() || session.page.url() !== expectedUrl)
       throw Error("Private save path changed");
@@ -138,13 +157,18 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
       throw Error("Pinned product changed in save dialog");
     const privateButton = await saveControl(session.page, expectedUrl);
     if (!privateButton) throw Error("Private save dialog changed");
+    const checkpoint = observer.checkpoint();
     setStage("PRIVATE_CLICK_UNCERTAIN");
     await privateButton.click({ timeout: 12000 });
     setStage("PRIVATE_CLICK_RETURNED");
     const acknowledged = await observer.waitForExactPrivateUpdate(checkpoint);
     if (!acknowledged) {
       setStage("SAVE_ACK_UNVERIFIED");
-      throw Error("Exact private save acknowledgement unverified");
+      readbackPrivateWithImage = await probePrivateReadback(session.context, expectedUrl,
+        target, before.title, originalHash, addedHash, readFields, readImages, checkPrivate);
+      result = isAuthRequired(session.page) ? "AUTH_REQUIRED" : "UNKNOWN";
+      return { status: result, stage, readbackPrivateWithImage,
+        retainedSession: retainedSession() };
     }
     await session.page.goto(expectedUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
     if (isAuthRequired(session.page)) {
@@ -167,20 +191,25 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
         finalImages.filter(item => item.pathHash === addedHash).length !== 1)
       throw Error("Product changed after private list correlation");
     setStage("PRIVATE_READBACK_CONFIRMED");
+    readbackPrivateWithImage = true;
     result = "CONFIRMED_PRIVATE_WITH_IMAGE";
-    return { status: result, stage };
+    return { status: result, stage, readbackPrivateWithImage };
   } catch {
     if (!claim) return { status: "PREFLIGHT_BLOCKED" };
     result = isAuthRequired(session.page) ? "AUTH_REQUIRED" : "UNKNOWN";
     if (result === "AUTH_REQUIRED") setStage("AUTH_REQUIRED");
-    return { status: result, stage, retainedSession: retainedSession() };
+    return { status: result, stage, readbackPrivateWithImage,
+      retainedSession: retainedSession() };
   } finally {
     if (claim) {
       if (typeof onMetadata === "function" && observer) {
         try { onMetadata(safeManualMutationSummary(observer.snapshot())); } catch { /* UI only. */ }
       }
       try { await writePrivateImageWorkflowResult(root, target, claim.attemptId,
-        result ?? "UNKNOWN", stage); } catch { /* The claim still blocks replay. */ }
+        result ?? "UNKNOWN", stage,
+        observer ? safeManualMutationSummary(observer.snapshot()) : [],
+        readbackPrivateWithImage); }
+      catch { /* The claim still blocks replay. */ }
     }
     if (!claim || result === "CONFIRMED_PRIVATE_WITH_IMAGE") {
       if (observer) { try { await observer.stop(); } catch { /* Browser close still follows. */ } }
