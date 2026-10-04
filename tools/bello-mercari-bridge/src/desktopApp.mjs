@@ -8,6 +8,7 @@ import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
 import { openDedicatedLogin, openExistingProductReadSession } from "./session.mjs";
 import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
+import { latestReadTrafficEvidence } from "./trafficEvidence.mjs";
 import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
 import { saveExistingPrivateOnce } from "./saveExistingPrivateOnce.mjs";
@@ -70,6 +71,7 @@ function optionsOf(config) {
 
 function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsOpen, manualOpen,
   manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastDiagnostics,
+  trafficEvidenceStatus, trafficEvidenceAt,
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
   lastImageReadState, workflowAttempted, lastWorkflowStatus, lastWorkflowStage,
@@ -92,8 +94,9 @@ ${button("read", "この読取依頼を照合する")}
 ${options.recovery ? `<p>前回の保存済み読取結果を、Shopsに再アクセスせずBELLOへ報告できます。</p>
 ${button("retry-report", "前回の結果だけをBELLOへ再報告する")}` : ""}
 ${lastResult ? `<p>直近の結果: <strong>${html(lastResult)}</strong>。出品完了の確認ではありません。</p>` : ""}
+<p><small>通信概要の保存状態: <code>${html(trafficEvidenceStatus)}</code>${trafficEvidenceAt ? `（保存時刻: <time>${html(trafficEvidenceAt)}</time>）` : ""}。旧版のメモリ内だけの観測は再起動後に復元できません。保存済み概要は過去の読取分の場合があります。概要にはHTTP直接通信に必要な契約情報がなく、直接送信には使いません。</small></p>
 ${trafficAttempted ? `<details><summary>Shops通信の概要（${lastTraffic.length}種類）</summary>
-<p><small>このPC画面に一時表示します。URLの値・検索条件・認証情報・本文は記録せず、BELLOにも送りません。</small></p>
+<p><small>固定語彙の概要だけをこのPCに保存します。URLの値・検索条件・認証情報・本文は記録せず、BELLOにも送りません。</small></p>
 ${lastTraffic.length ? `<ul>${lastTraffic.map(item => `<li><code>${html(item.method)} ${html(item.host)}${html(item.path)}</code> — ${html(item.status)}（${html(item.count)}回）</li>`).join("")}</ul>` : "<p>対象となる通信は観測されませんでした。</p>"}</details>` : ""}</section>
 ${trafficAttempted ? `<section><h2>読取診断</h2><p><small>このPC画面に一時表示する固定コードです。値やURLは記録せず、BELLOにも送りません。</small></p>
 ${lastDiagnostics.length ? `<p><code>${lastDiagnostics.map(html).join(" / ")}</code></p>` : "<p>診断コードはありません。照合成功を意味するものではありません。</p>"}</section>` : ""}
@@ -183,8 +186,11 @@ export async function startDesktopApp(config, {
   let busy = false;
   let message = "";
   let lastResult = "";
-  let trafficAttempted = false;
-  let lastTraffic = [];
+  const storedTrafficEvidence = await latestReadTrafficEvidence(options.root, options.requestId);
+  let trafficAttempted = ["OBSERVED", "EMPTY"].includes(storedTrafficEvidence.status);
+  let lastTraffic = storedTrafficEvidence.entries;
+  let trafficEvidenceStatus = storedTrafficEvidence.status;
+  let trafficEvidenceAt = storedTrafficEvidence.observedAt;
   let lastDiagnostics = [];
   let belloContext = null;
   let shopsContext = null;
@@ -221,6 +227,7 @@ export async function startDesktopApp(config, {
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
         manualOpen: Boolean(manualSession), manualAttempted, lastManual, lastResult,
         trafficAttempted, lastTraffic, lastDiagnostics, privateSaveAttempted, lastPrivateSave,
+        trafficEvidenceStatus, trafficEvidenceAt,
         lastPrivateReadback, lastPrivateDiagnostic,
         retainedSaveOpen: Boolean(retainedSaveSession), imageAttempted, lastImageStatus,
         lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession),
@@ -275,11 +282,19 @@ export async function startDesktopApp(config, {
         trafficAttempted = true;
         lastTraffic = [];
         lastDiagnostics = [];
+        trafficEvidenceStatus = "READ_IN_PROGRESS";
+        trafficEvidenceAt = null;
         const result = await runRead({ origin: options.origin, requestId: options.requestId,
           root: options.root, belloProfileDir: options.belloProfileDir,
           shopsProfileDir: options.shopsProfileDir, playwrightModulePath: options.playwrightModulePath,
           browserRead: true, onShopsTraffic: items => { lastTraffic = safeShopsTrafficSummary(items); },
-          onReadDiagnostics: codes => { lastDiagnostics = safeReadDiagnostics(codes); } });
+          onReadDiagnostics: codes => { lastDiagnostics = safeReadDiagnostics(codes); },
+          onTrafficEvidenceStatus: (status, observedAt) => {
+            trafficEvidenceStatus = status;
+            trafficEvidenceAt = observedAt;
+          } });
+        if (trafficEvidenceStatus === "READ_IN_PROGRESS")
+          trafficEvidenceStatus = "STORE_STATUS_UNCONFIRMED";
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
       } else if (action === "verify-saved-product-readonly") {
@@ -508,6 +523,8 @@ export async function startDesktopApp(config, {
         shutdown = true;
       } else throw Error("Unknown action");
     } catch (error) {
+      if (form.get("action") === "read" && trafficEvidenceStatus === "READ_IN_PROGRESS")
+        trafficEvidenceStatus = "READ_FAILED_BEFORE_CAPTURE";
       const stage = error instanceof BridgeBoundaryError ?
         [error.phase, error.httpStatus ? `HTTP ${error.httpStatus}` : null, error.serverCode]
           .filter(Boolean).join(" / ") : null;

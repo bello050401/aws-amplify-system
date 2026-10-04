@@ -2,6 +2,8 @@ import { enqueueExistingRead, listReadResults, readExistingJob } from "./queue.m
 import { runExistingRead } from "./readWorker.mjs";
 import { createExistingProductReader } from "./existingProductReader.mjs";
 import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
+import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
+import { saveReadTrafficEvidence } from "./trafficEvidence.mjs";
 import { isAbsolute } from "node:path";
 
 const HASH = /^[a-f0-9]{64}$/;
@@ -120,7 +122,8 @@ export async function reportSavedReadResultOnce({ origin, requestId, root, bello
 /** One explicitly requested existing-ID read. BELLO's authenticated browser cookie stays in its own profile. */
 export async function runBelloCloudReadOnce({ origin, requestId, root, belloProfileDir,
   shopsProfileDir, playwrightModulePath, browserRead = false, launchBelloContext = openBelloAdminContext,
-  runLocalRead = runExistingRead, onShopsTraffic = null, onReadDiagnostics = null }) {
+  runLocalRead = runExistingRead, onShopsTraffic = null, onReadDiagnostics = null,
+  onTrafficEvidenceStatus = null }) {
   if (!validBelloOrigin(origin) || !HASH.test(requestId) || !root || !isAbsolute(root) ||
       !belloProfileDir || !isAbsolute(belloProfileDir) ||
       (browserRead && (!shopsProfileDir || !isAbsolute(shopsProfileDir))))
@@ -131,10 +134,29 @@ export async function runBelloCloudReadOnce({ origin, requestId, root, belloProf
     const localJob = await enqueueExistingRead(root, { accountReference: dispatch.accountReference,
       inventoryCode: dispatch.inventoryCode, remoteId: dispatch.remoteId,
       expectedFields: dispatch.expectedFields });
+    let trafficSnapshot = null;
     const reader = browserRead ? createExistingProductReader({ root,
       profileDir: shopsProfileDir, playwrightModulePath, shopId: dispatch.accountReference,
-      onTrafficSummary: onShopsTraffic, onReadDiagnostics }) : null;
-    const result = await runLocalRead(root, dispatch.accountReference, localJob.jobId, reader);
+      onTrafficSummary: items => {
+        trafficSnapshot = safeShopsTrafficSummary(items);
+        try { onShopsTraffic?.(trafficSnapshot); } catch { /* Display cannot alter a read. */ }
+      }, onReadDiagnostics }) : null;
+    let result;
+    try { result = await runLocalRead(root, dispatch.accountReference, localJob.jobId, reader); }
+    finally {
+      if (browserRead) {
+        let status;
+        let observedAt = null;
+        try {
+          const evidence = await saveReadTrafficEvidence(root, requestId, localJob.jobId,
+            trafficSnapshot);
+          status = evidence.status;
+          observedAt = evidence.observedAt;
+        } catch { status = "STORE_FAILED"; }
+        try { onTrafficEvidenceStatus?.(status, observedAt); }
+        catch { /* Evidence UI cannot alter a read. */ }
+      }
+    }
     return await postReadResult(context, origin, requestId, result);
   } finally { await context.close(); }
 }

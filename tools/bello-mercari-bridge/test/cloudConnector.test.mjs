@@ -6,6 +6,7 @@ import test from "node:test";
 import { openBelloAdminContext } from "../src/belloSession.mjs";
 import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "../src/cloudConnector.mjs";
 import { enqueueExistingRead, saveReadResult } from "../src/queue.mjs";
+import { latestReadTrafficEvidence } from "../src/trafficEvidence.mjs";
 
 const origin = "https://bello.example.test";
 const requestId = "a".repeat(64);
@@ -60,8 +61,11 @@ test("signed-in ADMIN context fetches exact read and reports only a sanitized at
     },
   }, close: async () => { closed = true; } };
   let localRun;
+  let evidenceStatus;
   const result = await runBelloCloudReadOnce({ origin, requestId, root: join(root, "queue"),
-    belloProfileDir: join(root, "bello-profile"), launchBelloContext: async () => context,
+    belloProfileDir: join(root, "bello-profile"), shopsProfileDir: join(root, "shops-profile"),
+    browserRead: true, launchBelloContext: async () => context,
+    onTrafficEvidenceStatus: status => { evidenceStatus = status; },
     runLocalRead: async (path, account, jobId, reader) => {
       localRun = { path, account, jobId, reader };
       return { attemptId: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
@@ -70,7 +74,9 @@ test("signed-in ADMIN context fetches exact read and reports only a sanitized at
     } });
   assert.equal(result.listingConfirmed, false);
   assert.equal(localRun.account, dispatch.accountReference);
-  assert.equal(localRun.reader, null);
+  assert.equal(typeof localRun.reader.readExactProduct, "function");
+  assert.equal(evidenceStatus, "NOT_CAPTURED");
+  assert.equal((await latestReadTrafficEvidence(join(root, "queue"), requestId)).directHttpAllowed, false);
   assert.equal(calls.length, 2);
   assert.equal(calls[0].options.maxRedirects, 0);
   assert.equal(calls[1].options.maxRedirects, 0);

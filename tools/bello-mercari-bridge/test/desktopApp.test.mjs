@@ -9,6 +9,7 @@ import { BridgeBoundaryError } from "../src/cloudConnector.mjs";
 import { claimManualSaveOnce } from "../src/manualSaveAttempt.mjs";
 import { claimManualImageOnce } from "../src/manualImageAttempt.mjs";
 import { claimPrivateImageWorkflow } from "../src/privateImageWorkflowAttempt.mjs";
+import { saveReadTrafficEvidence } from "../src/trafficEvidence.mjs";
 
 const config = () => ({ origin: "https://bello.example.test", requestId: "a".repeat(64),
   dataDir: join(tmpdir(), "bello-desktop-test") });
@@ -46,6 +47,7 @@ test("visible login steps use separate profiles; one explicit read binds the con
     runRead: async (options) => { calls.push(["read", options]); return { status: "INCOMPLETE" }; } });
   try {
     const csrf = await token(app.url);
+    assert.match(await (await fetch(app.url)).text(), /LEGACY_NOT_PERSISTED/);
     assert.equal((await post(app.url, csrf, "read", "https://evil.example.test")).status, 403);
     assert.equal((await post(app.url, "wrong", "read")).status, 403);
     assert.equal((await post(app.url, csrf, "bello-login")).status, 303);
@@ -58,6 +60,8 @@ test("visible login steps use separate profiles; one explicit read binds the con
     const content = await (await fetch(app.url)).text();
     assert.match(content, /INCOMPLETE/);
     assert.match(content, /出品完了の確認ではありません/);
+    assert.match(content, /STORE_STATUS_UNCONFIRMED/);
+    assert.match(content, /直接送信には使いません/);
   } finally { await app.close(); }
 });
 
@@ -91,6 +95,23 @@ test("local traffic summary displays only redacted metadata and is never part of
     assert.match(content, /\/api\/v1\/products\/:value/);
     assert.equal(content.includes("secretToken"), false);
   } finally { await app.close(); }
+});
+
+test("a restarted desktop restores only saved safe traffic metadata", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-traffic-"));
+  try {
+    await saveReadTrafficEvidence(join(dataDir, "Queue"), config().requestId,
+      "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", [{ host: "mercari-shops.com",
+        method: "POST", type: "fetch", path: "/graphql", status: 200, count: 1,
+        cookie: "private-cookie" }]);
+    const app = await startDesktopApp({ ...config(), dataDir }, { openBrowser: null });
+    try {
+      const content = await (await fetch(app.url)).text();
+      assert.match(content, /通信概要の保存状態: <code>OBSERVED<\/code>/);
+      assert.match(content, /POST mercari-shops.com\/graphql/);
+      assert.equal(content.includes("private-cookie"), false);
+    } finally { await app.close(); }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
 test("reader stage diagnostics show only fixed codes in local memory", async () => {
@@ -302,7 +323,9 @@ test("unified private-image action is explicit and old attempts disable it", asy
       assert.equal((await post(app.url, csrf, "complete-image-private")).status, 403);
       release();
       for (let attempt = 0; attempt < 20; attempt++) {
-        if ((await (await fetch(app.url)).text()).includes("SAVE_ACK_UNVERIFIED")) break;
+        const content = await (await fetch(app.url)).text();
+        if (content.includes("SAVE_ACK_UNVERIFIED") &&
+            !content.includes('http-equiv="refresh"')) break;
         await new Promise(resolve => setTimeout(resolve, 10));
       }
       assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
