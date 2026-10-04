@@ -17,6 +17,12 @@ function yenValue(raw) {
   return Number.isSafeInteger(amount) ? observed(amount) : unobserved();
 }
 
+function quantityValue(raw) {
+  if (raw.kind === "UNOBSERVED" || !/^(?:0|[1-9][0-9]*)$/.test(raw.value)) return unobserved();
+  const amount = Number(raw.value);
+  return Number.isSafeInteger(amount) ? observed(amount) : unobserved();
+}
+
 function navigationState(actualUrl, expectedUrl) {
   try {
     const actual = new URL(actualUrl);
@@ -87,7 +93,22 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
             const label = text.replace(/\s+/g, "").replace(/(任意|必須)$/, "");
             return wanted.has(label) ? [{ label, value: element.value }] : [];
           });
-          return { documentUrl: document.location.href, rows };
+          const variantQuantities = elements.filter(element => element instanceof HTMLInputElement &&
+            /^variants\.[0-9]+\.quantity$/.test(element.name));
+          let quantityContract = variantQuantities.length > 1 ? "MULTIPLE_VARIANTS" : "NOT_EXTRACTED";
+          if (variantQuantities.length === 1) {
+            const field = variantQuantities[0];
+            const container = field.parentElement;
+            const inputs = container?.querySelectorAll("input, textarea") ?? [];
+            const labels = container?.querySelectorAll("label") ?? [];
+            if (field.name === "variants.0.quantity" && field.type === "number" &&
+                container?.tagName === "DIV" && inputs.length === 1 && inputs[0] === field &&
+                labels.length === 1 && (labels[0].textContent ?? "").replace(/\s+/g, "") === "数量") {
+              quantityContract = "SINGLE_VARIANT_0";
+              rows.push({ label: "数量", value: field.value });
+            }
+          }
+          return { documentUrl: document.location.href, rows, quantityContract };
         });
         const documentState = navigationState(snapshot?.documentUrl, expectedUrl);
         const finalState = navigationState(page.url(), expectedUrl);
@@ -104,11 +125,17 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
         const description = singleValue(rows, "商品の説明");
         const rawPrice = singleValue(rows, "販売価格");
         const priceYen = yenValue(rawPrice);
+        const rawQuantity = snapshot.quantityContract === "SINGLE_VARIANT_0" ?
+          singleValue(rows, "数量") : unobserved();
+        const quantity = quantityValue(rawQuantity);
         diagnose([...(title.kind === "UNOBSERVED" ? ["TITLE_UNOBSERVED"] : []),
           ...(description.kind === "UNOBSERVED" ? ["DESCRIPTION_UNOBSERVED"] : []),
           ...(inventoryCode.kind === "UNOBSERVED" ? ["INVENTORY_CODE_UNOBSERVED"] : []),
           ...(rawPrice.kind === "UNOBSERVED" ? ["PRICE_FIELD_NOT_EXTRACTED"] :
-            priceYen.kind === "UNOBSERVED" ? ["PRICE_FORMAT_UNSUPPORTED"] : [])]);
+            priceYen.kind === "UNOBSERVED" ? ["PRICE_FORMAT_UNSUPPORTED"] : []),
+          ...(snapshot.quantityContract === "MULTIPLE_VARIANTS" ? ["QUANTITY_MULTIPLE_VARIANTS"] :
+            rawQuantity.kind === "UNOBSERVED" ? ["QUANTITY_FIELD_NOT_EXTRACTED"] :
+            quantity.kind === "UNOBSERVED" ? ["QUANTITY_FORMAT_UNSUPPORTED"] : [])]);
         return { kind: "OBSERVED", observation: {
           exactProductReadBack: true,
           accountReference: observed(shopId), remoteId: observed(remoteId),
@@ -116,8 +143,8 @@ export function createExistingProductReader({ root, profileDir, playwrightModule
           visibility: unobserved(),
           fields: {
             inventoryCode, title, description, priceYen,
-            // Two unlabelled spinbuttons were observed; never infer quantity by ordinal position.
-            quantity: unobserved(),
+            // The exact single-variant name and its unique direct-parent label are both required.
+            quantity,
             primaryImageIdentity: unobserved(),
           },
         } };

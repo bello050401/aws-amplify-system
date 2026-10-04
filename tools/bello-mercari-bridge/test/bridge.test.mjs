@@ -300,7 +300,7 @@ test("a late exact heading is awaited, while absent field values remain unobserv
   assert.equal(result.status, "INCOMPLETE");
   assert.deepEqual(waitOptions, { state: "visible", timeout: 12000 });
   assert.deepEqual(diagnostics, ["TITLE_UNOBSERVED", "DESCRIPTION_UNOBSERVED",
-    "INVENTORY_CODE_UNOBSERVED", "PRICE_FIELD_NOT_EXTRACTED"]);
+    "INVENTORY_CODE_UNOBSERVED", "PRICE_FIELD_NOT_EXTRACTED", "QUANTITY_FIELD_NOT_EXTRACTED"]);
   assert.equal(result.comparison.fields.title, "UNOBSERVED");
   assert.equal(JSON.stringify(await listReadResults(root, queued.jobId)).includes("diagnostics"), false);
 }));
@@ -331,6 +331,55 @@ test("price accepts observed yen signs and distinguishes extraction from unsuppo
     assert.equal(diagnostics.includes("PRICE_FIELD_NOT_EXTRACTED"),
       sample.diagnostic === "PRICE_FIELD_NOT_EXTRACTED");
     assert.equal(JSON.stringify(result).includes("90,000"), false);
+  }
+}));
+
+test("only one named variant quantity with its unique direct label is observed", async () => withRoot(async root => {
+  const queued = await job(root);
+  for (const sample of [
+    { value: "0", extraVariant: false, label: "数量", expected: "MATCH", diagnostic: null },
+    { value: "0", extraVariant: true, label: "数量", expected: "UNOBSERVED",
+      diagnostic: "QUANTITY_MULTIPLE_VARIANTS" },
+    { value: "0", extraVariant: false, label: "在庫", expected: "UNOBSERVED",
+      diagnostic: "QUANTITY_FIELD_NOT_EXTRACTED" },
+    { value: "0.5", extraVariant: false, label: "数量", expected: "UNOBSERVED",
+      diagnostic: "QUANTITY_FORMAT_UNSUPPORTED" },
+  ]) {
+    let url = "";
+    let diagnostics;
+    const page = { goto: async next => { url = next; }, url: () => url,
+      getByRole: () => ({ count: async () => 1 }),
+      locator: () => ({ evaluateAll: async callback => {
+        const priorInput = globalThis.HTMLInputElement;
+        const priorDocument = globalThis.document;
+        class FakeInput {
+          constructor(name, value, label) {
+            this.name = name; this.value = value; this.type = "number";
+            this.parentElement = { tagName: "DIV", querySelectorAll: selector =>
+              selector === "label" ? [{ textContent: label }] : [this],
+            parentElement: { querySelectorAll: selector =>
+              selector === "label" ? [{ textContent: label }] : [this] } };
+          }
+        }
+        globalThis.HTMLInputElement = FakeInput;
+        globalThis.document = { location: { href: url } };
+        const inputs = [new FakeInput("variants.0.quantity", sample.value, sample.label),
+          new FakeInput("variants.0.maxQuantityPerOrder", "999999", "1注文あたりの購入可能数任意")];
+        if (sample.extraVariant) inputs.push(new FakeInput("variants.1.quantity", "3", "数量"));
+        try { return callback(inputs); }
+        finally { globalThis.HTMLInputElement = priorInput; globalThis.document = priorDocument; }
+      } }) };
+    const reader = createExistingProductReader({ root,
+      profileDir: join(root, `quantity-${sample.label}-${sample.value}-${sample.extraVariant}`),
+      shopId: account, onReadDiagnostics: codes => { diagnostics = codes; },
+      launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+    const result = await runExistingRead(root, account, queued.jobId, reader);
+    assert.equal(result.status, "INCOMPLETE");
+    assert.equal(result.comparison.fields.quantity, sample.expected);
+    for (const code of ["QUANTITY_MULTIPLE_VARIANTS", "QUANTITY_FIELD_NOT_EXTRACTED",
+      "QUANTITY_FORMAT_UNSUPPORTED"])
+      assert.equal(diagnostics.includes(code), sample.diagnostic === code);
+    assert.equal(JSON.stringify(result).includes("999999"), false);
   }
 }));
 
