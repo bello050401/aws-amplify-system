@@ -8,7 +8,8 @@ const HASH = /^[a-f0-9]{64}$/;
 const REFERENCE = /^[A-Za-z0-9_-]{1,100}$/;
 const FIELDS = new Set(["title", "description", "priceYen", "quantity"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SERVER_CODES = new Set(["INVALID_RESULT", "IDENTITY_MISMATCH", "RESULT_CONFLICT", "STORAGE_UNAVAILABLE"]);
+const SERVER_CODES = new Set(["INVALID_RESULT", "IDENTITY_MISMATCH", "RESULT_CONFLICT", "STORAGE_UNAVAILABLE",
+  "ORIGIN_MISMATCH", "CONTENT_TYPE_INVALID", "NEXT_ACTION_FORBIDDEN", "OWNER_REQUIRED"]);
 
 export class BridgeBoundaryError extends Error {
   constructor(phase, httpStatus = null, serverCode = null) {

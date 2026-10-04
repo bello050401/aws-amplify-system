@@ -3,6 +3,7 @@ import { getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/re
 import { existingReadDispatchForOwner } from "@/lib/listing/mercariBridge/httpContract";
 import { mercariBridgeReadRepository, mercariBridgeResultRepository } from "@/lib/listing/mercariBridge/repository";
 import { acceptExistingReadResult, ResultAcceptanceError } from "@/lib/listing/mercariBridge/resultAcceptance";
+import { bridgePostHeaderFailure } from "@/lib/listing/mercariBridge/postGuard";
 
 export const dynamic = "force-dynamic";
 const MAX_BODY = 16000;
@@ -38,16 +39,19 @@ export async function GET(request: NextRequest) {
 /** A same-origin, authenticated ADMIN POST stores only bounded comparison codes. */
 export async function POST(request: NextRequest) {
   if (process.env.NEXT_ENGINE_ISOLATED_APP === "1") return reply({ ok: false }, 404);
-  if (request.headers.get("origin") !== request.nextUrl.origin ||
-      !request.headers.get("content-type")?.startsWith("application/json") ||
-      request.headers.has("next-action")) return reply({ ok: false }, 403);
+  const headerFailure = bridgePostHeaderFailure({
+    origin: request.headers.get("origin"), requestOrigin: request.nextUrl.origin,
+    configuredPublicOrigin: process.env.MERCARI_BRIDGE_PUBLIC_ORIGIN,
+    contentType: request.headers.get("content-type"), hasNextAction: request.headers.has("next-action"),
+  });
+  if (headerFailure) return reply({ ok: false, code: headerFailure }, 403);
   const length = request.headers.get("content-length");
   if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_BODY))
     return reply({ ok: false }, 413);
   let dispatch;
   try { dispatch = await ownedDispatch(request); }
   catch { return reply({ ok: false }, 503); }
-  if (!dispatch) return reply({ ok: false }, 403);
+  if (!dispatch) return reply({ ok: false, code: "OWNER_REQUIRED" }, 403);
   let raw: unknown;
   try {
     const body = await request.text();

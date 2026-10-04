@@ -69,6 +69,11 @@ const nextConfig = {
     // Managerにある)。Amplifyの環境変数はSSRランタイムのprocess.envへ届かない
     // ため、上の2つと同じくビルド時にここでリテラルへ埋め込む。
     ...(process.env.MERCARI_RELAY_URL ? { MERCARI_RELAY_URL: process.env.MERCARI_RELAY_URL } : {}),
+    // Staging bridge result POST の許可する公開 Origin。非秘密値のみを埋め込み、
+    // Amplify SSR がリポジトリ直下の .env.production を運ぶかに依存しない。
+    ...(process.env.MERCARI_BRIDGE_PUBLIC_ORIGIN
+      ? { MERCARI_BRIDGE_PUBLIC_ORIGIN: process.env.MERCARI_BRIDGE_PUBLIC_ORIGIN }
+      : {}),
     // AgentCore Web Search GatewayのURL。これも**秘密値ではない**
     // (認可はIAM。APIキーは存在しない)。同じ理由でビルド時に埋め込む。
     ...(process.env.AGENTCORE_GATEWAY_URL ? { AGENTCORE_GATEWAY_URL: process.env.AGENTCORE_GATEWAY_URL } : {}),
