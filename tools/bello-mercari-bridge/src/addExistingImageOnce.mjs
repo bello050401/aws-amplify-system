@@ -31,6 +31,25 @@ export async function readExistingUploadedImages(page, expectedUrl) {
   return seen.map(item => ({ pathHash: digest(item.pathname), width: item.width, height: item.height }));
 }
 
+/** Inspect the retained edit page without navigation, file input, save, or network request. */
+export async function readRetainedImageState(session, target, {
+  readFields = readPinnedEditFields, readImages = readExistingUploadedImages,
+} = {}) {
+  const expectedUrl = `https://mercari-shops.com/seller/shops/${target.shopId}/products/${target.remoteId}/edit`;
+  if (!session?.page || !/^[a-f0-9]{64}$/.test(session.originalImageHash ?? "") ||
+      session.page.url() !== expectedUrl) return "PAGE_UNVERIFIED";
+  const fields = await readFields(session.page, expectedUrl, target);
+  if (!fields) return "PAGE_UNVERIFIED";
+  const images = await readImages(session.page, expectedUrl);
+  if (!images || session.page.url() !== expectedUrl) return "IMAGES_UNVERIFIED";
+  const originalCount = images.filter(image => image.pathHash === session.originalImageHash).length;
+  if (originalCount !== 1) return "ORIGINAL_UNVERIFIED";
+  if (images.length === 1) return "ORIGINAL_ONLY_VISIBLE";
+  if (images.length === 2 && images[1].pathHash !== images[0].pathHash)
+    return "ORIGINAL_AND_ONE_ADDITION_VISIBLE";
+  return "IMAGE_COUNT_UNVERIFIED";
+}
+
 async function exactSingleImageInput(page, expectedUrl) {
   if (page.url() !== expectedUrl) return null;
   const inputs = page.locator('input[type="file"]');
@@ -130,7 +149,8 @@ export async function addExistingImageOnce({ root, profileDir, playwrightModuleP
     const status = selectionMayHaveSent ? "UNKNOWN" : "BLOCKED_BEFORE_SELECT";
     try { await writeManualImageOutcome(root, target, claim.attemptId, status, diagnostic); }
     catch { /* The durable claim still prevents replay. */ }
-    return { status, diagnostic, metadata, retainedSession: { context: session.context, observer,
+    return { status, diagnostic, metadata, retainedSession: { context: session.context,
+      page: session.page, originalImageHash: imagesBefore[0].pathHash, observer,
       onClose: callback => {
         if (contextClosed) callback();
         else closeListeners.add(callback);

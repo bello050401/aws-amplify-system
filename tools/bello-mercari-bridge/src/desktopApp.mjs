@@ -12,7 +12,7 @@ import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
 import { saveExistingPrivateOnce } from "./saveExistingPrivateOnce.mjs";
 import { readManualSaveClaim, readManualSaveOutcome } from "./manualSaveAttempt.mjs";
-import { addExistingImageOnce } from "./addExistingImageOnce.mjs";
+import { addExistingImageOnce, readRetainedImageState } from "./addExistingImageOnce.mjs";
 import { readManualImageClaim, readManualImageOutcome } from "./manualImageAttempt.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
@@ -53,7 +53,8 @@ function optionsOf(config) {
 function page({ csrf, options, message, busy, belloOpen, shopsOpen, manualOpen,
   manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastDiagnostics,
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
-  retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen }) {
+  retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
+  lastImageReadState }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BELLO メルカリ照合</title><style>
@@ -91,7 +92,8 @@ ${lastManual.length ? `<ol>${lastManual.map(item => `<li><code>${html(item.order
 ${options.imageProof ? `<section><h2>既存商品への画像1枚追加</h2><p>対象画像のハッシュを確認し、既存の非公開商品と画像を照合してから、画像ファイルを1回だけ選択します。ファイル選択で送信が始まる可能性があります。商品保存・公開は押しません。</p>
 ${button("add-image-once", "既存商品に画像を1枚追加して観測", imageAttempted || manualOpen || retainedSaveOpen || retainedImageOpen)}
 ${imageAttempted ? `<p>画像選択は試行済み、または結果不明です。再実行できません。結果: <strong>${html(lastImageStatus || "UNKNOWN")}</strong> / 段階: <code>${html(lastImageDiagnostic || "未確認")}</code></p>` : ""}
-${retainedImageOpen ? `<p>専用Chromeを開いたままにしています。既存画像が残り、追加画像が表示されたか確認してください。画像選択のみでは商品保存を確認できません。</p>${button("refresh-image-observation", "画像通信の概要を更新")}` : ""}</section>` : ""}
+${retainedImageOpen ? `<p>専用Chromeを開いたままにしています。既存画像が残り、追加画像が表示されたか確認してください。画像選択のみでは商品保存を確認できません。</p>${button("refresh-image-observation", "画像通信の概要を更新")}${button("inspect-retained-image", "開いている商品画面の画像を確認")}` : ""}
+${lastImageReadState ? `<p>画面上の画像: <code>${html(lastImageReadState)}</code>。表示の確認であり、商品保存・公開の確認ではありません。</p>` : ""}</section>` : ""}
 <section><h2>3. BELLOで結果を見る</h2><p>照合後、BELLOの照合依頼画面で「照合結果を確認する」を押してください。</p>
 <p><a href="${html(options.origin)}/inventory/mercari-bridge?requestId=${html(options.requestId)}" target="_blank" rel="noopener noreferrer">BELLOの照合依頼画面を開く</a></p>
 ${button("shutdown", "このアプリを終了", retainedSaveOpen || retainedImageOpen)}</section>
@@ -121,6 +123,7 @@ export async function startDesktopApp(config, {
   openBello = openBelloAdminContext, openShops = openDedicatedLogin,
   openManualObservation = openManualObservationForExisting,
   runPrivateSave = saveExistingPrivateOnce, runImageAdd = addExistingImageOnce,
+  inspectImage = readRetainedImageState,
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
 } = {}) {
   const options = optionsOf(config);
@@ -151,6 +154,7 @@ export async function startDesktopApp(config, {
   let retainedImageSession = null;
   let lastImageStatus = savedImageOutcome?.outcome ?? "";
   let lastImageDiagnostic = savedImageOutcome?.diagnostic ?? "";
+  let lastImageReadState = "";
   let finishingManual = null;
   const finishManual = () => {
     if (finishingManual) return finishingManual;
@@ -169,7 +173,8 @@ export async function startDesktopApp(config, {
         trafficAttempted, lastTraffic, lastDiagnostics, privateSaveAttempted, lastPrivateSave,
         lastPrivateReadback, lastPrivateDiagnostic,
         retainedSaveOpen: Boolean(retainedSaveSession), imageAttempted, lastImageStatus,
-        lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession) }));
+        lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession),
+        lastImageReadState }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/action" ||
@@ -327,6 +332,17 @@ export async function startDesktopApp(config, {
         lastManual = safeManualMutationSummary(retainedImageSession.observer.snapshot());
         manualAttempted = true;
         message = "画像通信の概要を更新しました。商品保存の判定は保留のままです。";
+      } else if (action === "inspect-retained-image") {
+        if (!retainedImageSession || !options.manualObservation)
+          throw Error("No retained image page is active");
+        try {
+          const result = await inspectImage(retainedImageSession, options.manualObservation);
+          lastImageReadState = ["PAGE_UNVERIFIED", "IMAGES_UNVERIFIED",
+            "ORIGINAL_UNVERIFIED", "ORIGINAL_ONLY_VISIBLE",
+            "ORIGINAL_AND_ONE_ADDITION_VISIBLE", "IMAGE_COUNT_UNVERIFIED"].includes(result) ?
+            result : "IMAGES_UNVERIFIED";
+        } catch { lastImageReadState = "IMAGES_UNVERIFIED"; }
+        message = "現在開いている画面だけを読み取りました。商品保存の判定は保留のままです。";
       } else if (action === "observe-stop") {
         if (!manualSession) throw Error("No manual observation is active");
         const session = manualSession;

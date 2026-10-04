@@ -5,7 +5,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { addExistingImageOnce, readExistingUploadedImages } from "../src/addExistingImageOnce.mjs";
+import { addExistingImageOnce, readExistingUploadedImages,
+  readRetainedImageState } from "../src/addExistingImageOnce.mjs";
 import { claimManualImageOnce, readManualImageClaim, readManualImageOutcome } from "../src/manualImageAttempt.mjs";
 
 const target = { shopId: "shop1", remoteId: "existing1", inventoryCode: "B005795",
@@ -141,6 +142,31 @@ test("image-read helper hashes paths and discards signed query strings", async (
   assert.equal(images[0].pathHash.length, 64);
   assert.equal(JSON.stringify(images).includes("/asset/original.jpg"), false);
   assert.equal(images[0].width, 960);
+});
+
+test("retained-page read reports only visible image state and never selects or saves", async () => {
+  const actions = [];
+  const page = { url: () => editUrl };
+  const session = { page, originalImageHash: original.pathHash };
+  const deps = { readFields: async (givenPage, url, givenTarget) => {
+    actions.push("fields");
+    assert.equal(givenPage, page);
+    assert.equal(url, editUrl);
+    assert.equal(givenTarget, target);
+    return { title: "Exact private product" };
+  }, readImages: async () => {
+    actions.push("images");
+    return [original, { pathHash: "c".repeat(64), width: 1080, height: 1080 }];
+  } };
+  assert.equal(await readRetainedImageState(session, target, deps),
+    "ORIGINAL_AND_ONE_ADDITION_VISIBLE");
+  assert.deepEqual(actions, ["fields", "images"]);
+  assert.equal(await readRetainedImageState({ ...session, page: { url: () => "https://other.example/" } },
+    target, deps), "PAGE_UNVERIFIED");
+  assert.deepEqual(actions, ["fields", "images"]);
+  assert.equal(await readRetainedImageState(session, target, {
+    ...deps, readImages: async () => [{ ...original, pathHash: "d".repeat(64) }],
+  }), "ORIGINAL_UNVERIFIED");
 });
 
 test("one durable image marker wins a race and blocks a changed image", () => withRoot(async ({ root }) => {

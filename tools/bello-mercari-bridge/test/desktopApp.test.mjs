@@ -200,10 +200,17 @@ test("one PC image button uses the pinned file and stays disabled across restart
   const sha256 = "a".repeat(64);
   const imageProof = { sha256, path: join(dataDir, "ImageProof", `B005795-${sha256.slice(0, 16)}.jpg`) };
   let calls = 0;
+  let inspections = 0;
   const imageContext = context();
   const imageObserver = { snapshot: () => [], stop: async () => [] };
   const start = () => startDesktopApp({ ...config(), dataDir,
     manualObservation: target, imageProof }, { openBrowser: async () => {},
+    inspectImage: async (session, givenTarget) => {
+      inspections++;
+      assert.equal(session.context, imageContext);
+      assert.deepEqual(givenTarget, target);
+      return "ORIGINAL_AND_ONE_ADDITION_VISIBLE";
+    },
     runImageAdd: async options => {
       calls++;
       assert.deepEqual(options.target, target);
@@ -227,6 +234,10 @@ test("one PC image button uses the pinned file and stays disabled across restart
       assert.match(content, /FILE_SELECT_RETURNED/);
       assert.match(content, /<button disabled>このアプリを終了<\/button>/);
       assert.equal((await post(app.url, csrf, "refresh-image-observation")).status, 303);
+      assert.equal((await post(app.url, csrf, "inspect-retained-image")).status, 303);
+      assert.equal(inspections, 1);
+      assert.match(await (await fetch(app.url)).text(),
+        /ORIGINAL_AND_ONE_ADDITION_VISIBLE/);
       await imageContext.close();
     } finally { await app.close(); }
     app = await start();
