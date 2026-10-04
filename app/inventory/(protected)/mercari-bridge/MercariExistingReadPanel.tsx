@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { getMercariExistingReadResultsAction, requestMercariExistingReadAction } from "@/app/actions/mercariBridge";
 import type { ReadResultView } from "@/lib/listing/mercariBridge/resultView";
 
@@ -104,6 +105,8 @@ export function MercariExistingReadPanel({ inventoryId, initialRequestId }: {
       {message && <p role={requestId ? "status" : "alert"} className="mt-3 text-sm">{message}</p>}
       {requestId && <div className="mt-4 border-t border-gray-200 pt-3">
         <p className="break-all text-xs text-gray-600">読取依頼ID: {requestId}</p>
+        <Link href={`/inventory/settings?tab=mercariBridge&requestId=${requestId}`}
+          className="mt-2 inline-block text-sm text-blue-700 underline">PC接続とShops読取状態を設定で確認</Link>
         <button type="button" onClick={refreshResults} disabled={pending}
           className="mt-2 rounded border border-gray-400 px-3 py-2 text-sm disabled:opacity-40">照合結果を確認する</button>
         {resultMessage && <p role="status" className="mt-2 text-sm">{resultMessage}</p>}
