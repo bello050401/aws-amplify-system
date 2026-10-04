@@ -12,6 +12,8 @@ import { claimPrivateImageWorkflow } from "../src/privateImageWorkflowAttempt.mj
 import { saveReadTrafficEvidence } from "../src/trafficEvidence.mjs";
 import { PINNED_READ_QUERY_SHA256, runPinnedDirectReadProbeOnce } from
   "../src/directReadProbe.mjs";
+import { CREATE_TEST_TARGET, readCreateTestObservation } from
+  "../src/createTestAttempt.mjs";
 
 const config = () => ({ origin: "https://bello.example.test", requestId: "a".repeat(64),
   dataDir: join(tmpdir(), "bello-desktop-test") });
@@ -39,6 +41,117 @@ test("fixed control port refuses a second desktop process", async () => {
       openBrowser: null,
     }), { code: "EADDRINUSE" });
   } finally { await first.close(); }
+});
+
+test("isolated private-create page claims before image work and records one UI observation", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-create-"));
+  let opened = 0;
+  let armed = 0;
+  let browser;
+  let localPage;
+  const createConfig = { ...config(), dataDir, createTestObservationEnabled: true,
+    createTestSkuAbsentConfirmed: true };
+  try {
+    await assert.rejects(startDesktopApp({ ...createConfig,
+      createTestSkuAbsentConfirmed: false }, { openBrowser: null }));
+    await assert.rejects(startDesktopApp({ ...createConfig,
+      manualObservation: { shopId: "shop1" } }, { openBrowser: null }));
+    const start = () => startDesktopApp(createConfig, { openBrowser: null,
+      openCreateList: async ({ shopId }) => {
+        opened++;
+        assert.equal(shopId, CREATE_TEST_TARGET.shopId);
+        assert.equal((await readCreateTestObservation(join(dataDir, "Queue"))).claim.claimed,
+          true, "claim must exist before opening the Shops browser");
+        browser = context();
+        let currentUrl =
+          `https://mercari-shops.com/seller/shops/${shopId}/products/2JXdS6R5NNQPJadMexKmTr/edit`;
+        localPage = { url: () => currentUrl, setUrl: value => { currentUrl = value; } };
+        browser.pages = () => [localPage];
+        return { context: browser, page: localPage, state: "LIST_OPEN" };
+      },
+      observeCreate: (_browser, { target }) => {
+        assert.equal(target.skuCode, CREATE_TEST_TARGET.skuCode);
+        assert.equal(target.priceYen, 98000);
+        return { arm: () => { armed++; }, finish: async () => ({
+          status: "MATCHED", reason: "MATCHED", expectedKind: "CREATE_PRODUCT",
+          observedKind: "CREATE_PRODUCT", operationName: "CreateProduct",
+          newRemoteId: "newPrivateProduct", httpStatus: 200,
+          requestTargetMatch: "MATCH", responseTargetMatch: "MATCH",
+        }), stop: () => ({ reason: "STOPPED", expectedKind: "CREATE_PRODUCT" }) };
+      },
+    });
+    let app = await start();
+    try {
+      const csrf = await token(app.url);
+      let content = await (await fetch(app.url)).text();
+      assert.match(content, /B005757-TEST-20261004/);
+      assert.match(content, /98,000円/);
+      assert.equal(content.includes("既存商品を非公開で1回保存"), false);
+      assert.equal((await post(app.url, csrf, "read")).status, 303);
+      assert.equal((await post(app.url, csrf, "create-test-open")).status, 303);
+      assert.equal((await post(app.url, csrf, "create-test-open")).status, 303);
+      assert.equal(opened, 1);
+      assert.equal((await readCreateTestObservation(join(dataDir, "Queue"))).claim.claimed, true);
+      assert.equal((await post(app.url, csrf, "create-test-arm")).status, 303);
+      assert.equal(armed, 0, "existing product edit page must be rejected");
+      localPage.setUrl(`https://mercari-shops.com/seller/shops/${CREATE_TEST_TARGET.shopId}/products/create`);
+      assert.equal((await post(app.url, csrf, "create-test-arm")).status, 303);
+      assert.equal(armed, 1);
+      assert.equal((await post(app.url, csrf, "create-test-finish")).status, 303);
+      content = await (await fetch(app.url)).text();
+      assert.match(content, /OBSERVED_PRIVATE_CREATE_RESPONSE/);
+      assert.match(content, /newPrivateProduct/);
+      assert.match(content, /出品完了や公開を判定しません/);
+      assert.equal((await readCreateTestObservation(join(dataDir, "Queue"))).result
+        .listingConfirmed, false);
+      assert.equal((await post(app.url, csrf, "shutdown")).status, 303);
+      await assert.rejects(app.close(), /Close the dedicated Shops browser manually/);
+      assert.equal(browser.listenerCount("close"), 1);
+    } finally {
+      if (browser) { await browser.close(); await new Promise(setImmediate); }
+      await app.close();
+    }
+    app = await start();
+    try {
+      const content = await (await fetch(app.url)).text();
+      assert.match(content, /<button disabled>1回限りの登録準備を開始<\/button>/);
+      assert.equal(opened, 1);
+    } finally { await app.close(); }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("unknown private-create result retains the browser until the operator closes it", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-create-unknown-"));
+  let browser;
+  const createConfig = { ...config(), dataDir, createTestObservationEnabled: true,
+    createTestSkuAbsentConfirmed: true };
+  const app = await startDesktopApp(createConfig, { openBrowser: null,
+    openCreateList: async ({ shopId }) => {
+      browser = context();
+      const page = { url: () =>
+        `https://mercari-shops.com/seller/shops/${shopId}/products/create` };
+      browser.pages = () => [page];
+      return { context: browser, page, state: "LIST_OPEN" };
+    },
+    observeCreate: () => ({ arm() {}, finish: async () => ({
+      status: "UNVERIFIED", reason: "TIMEOUT", expectedKind: "CREATE_PRODUCT",
+    }), stop: () => ({ reason: "STOPPED", expectedKind: "CREATE_PRODUCT" }) }),
+  });
+  try {
+    const csrf = await token(app.url);
+    await post(app.url, csrf, "create-test-open");
+    await post(app.url, csrf, "create-test-arm");
+    await post(app.url, csrf, "create-test-finish");
+    assert.equal((await readCreateTestObservation(join(dataDir, "Queue"))).result.outcome,
+      "UNVERIFIED");
+    assert.equal((await post(app.url, csrf, "shutdown")).status, 303);
+    await assert.rejects(app.close(), /Close the dedicated Shops browser manually/);
+    assert.equal(browser.listenerCount("close"), 1);
+  } finally {
+    if (browser) { await browser.close(); await new Promise(setImmediate); }
+    await app.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("visible login steps use separate profiles; one explicit read binds the configured ID", async () => {

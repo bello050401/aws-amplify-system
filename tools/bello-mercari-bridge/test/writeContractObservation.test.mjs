@@ -7,7 +7,8 @@ import { observeBoundedShopsWrite, safeWriteContractSummary } from
 const updateTarget = { kind: "UPDATE_PRODUCT", shopId: "shop1",
   remoteId: "product1", inventoryCode: "ITEM_1", skuCode: null };
 const createTarget = { kind: "CREATE_PRODUCT", shopId: "shop1",
-  remoteId: null, inventoryCode: "ITEM_2", skuCode: "ITEM_2" };
+  remoteId: null, inventoryCode: "ITEM_2", skuCode: "ITEM_2-TEST",
+  excludedRemoteId: "existing1", expectedName: "Side Table", priceYen: 98000 };
 const imageTarget = { kind: "IMAGE_ASSET", shopId: "shop1",
   remoteId: "product1", inventoryCode: "ITEM_1", skuCode: null };
 const updateQuery = "mutation SaveProduct($input: SaveInput!) { updateProduct(input: $input) { product { id shopId status } } }";
@@ -16,7 +17,7 @@ const graphUrl = "https://mercari-shops.com/graphql";
 
 function harness(target = updateTarget, options = {}) {
   const context = new EventEmitter();
-  const page = {};
+  const page = { url: () => `https://mercari-shops.com/seller/shops/shop1/products/${target.kind === "CREATE_PRODUCT" ? "create" : "new"}` };
   const observer = observeBoundedShopsWrite(context,
     { page, target, timeoutMs: 80, ...options });
   return { context, page, observer };
@@ -70,15 +71,16 @@ test("one private creation is separate from update and requires the exact SKU in
   const { context, page, observer } = harness(createTarget);
   observer.arm();
   const req = request(page, createQuery, { shopId: "shop1", status: "UNOPENED",
-    variants: [{ skuCode: "ITEM_2" }] });
+    name: "Side Table", price: 98000,
+    variants: [{ skuCode: "ITEM_2-TEST" }] });
   context.emit("request", req);
   context.emit("response", response(req, { id: "newProduct", shopId: "shop1",
-    status: "UNOPENED", variants: [{ skuCode: "ITEM_2" }] }, 200,
+    status: "UNOPENED", variants: [{ skuCode: "ITEM_2-TEST" }] }, 200,
   { field: "createProduct" }));
   const result = await observer.finish();
   assert.equal(result.status, "MATCHED");
   assert.equal(result.observedKind, "CREATE_PRODUCT");
-  assert.equal(JSON.stringify(result).includes("newProduct"), false);
+  assert.equal(result.newRemoteId, "newProduct");
 });
 
 test("image multipart is classified separately and never proves an HTTP write contract", async () => {
@@ -112,7 +114,8 @@ test("wrong target, wrong operation, malformed multiple operations and authoriza
     { query: updateQuery, input: { id: "other", status: "UNOPENED" },
       reason: "TARGET_MISMATCH" },
     { query: createQuery, input: { shopId: "shop1", status: "UNOPENED",
-      variants: [{ skuCode: "ITEM_2" }] }, reason: "OPERATION_MISMATCH" },
+      name: "Side Table", price: 98000,
+      variants: [{ skuCode: "ITEM_2-TEST" }] }, reason: "OPERATION_MISMATCH" },
     { query: updateQuery + " mutation Again { updateProduct { id } }",
       input: { id: "product1", status: "UNOPENED" }, reason: "REQUEST_UNVERIFIED" },
   ];
@@ -154,17 +157,55 @@ test("a decoy input variable cannot certify a root mutation using another variab
 
 test("a creation cannot reuse the old SKU or old remote product ID", async () => {
   assert.throws(() => harness({ ...createTarget, skuCode: "B005795" }));
+  assert.throws(() => harness({ ...createTarget, skuCode: "ITEM_2" }));
   const { context, page, observer } = harness(createTarget);
   observer.arm();
   const req = request(page, createQuery, { shopId: "shop1", status: "UNOPENED",
-    variants: [{ skuCode: "ITEM_2" }] });
+    name: "Side Table", price: 98000,
+    variants: [{ skuCode: "ITEM_2-TEST" }] });
   context.emit("request", req);
   context.emit("response", response(req, { id: "2JXePE4ke8UCBTj6mxc4cf",
-    shopId: "shop1", status: "UNOPENED", variants: [{ skuCode: "ITEM_2" }] },
+    shopId: "shop1", status: "UNOPENED", variants: [{ skuCode: "ITEM_2-TEST" }] },
   200, { field: "createProduct" }));
   const result = await observer.finish();
   assert.equal(result.status, "UNVERIFIED");
   assert.equal(result.reason, "RESPONSE_UNVERIFIED");
+});
+
+test("the private create observation refuses wrong price, title, existing ID, or shop page", async () => {
+  for (const input of [
+    { shopId: "shop1", status: "UNOPENED", name: "Side Table", price: 26500,
+      variants: [{ skuCode: "ITEM_2-TEST" }] },
+    { shopId: "shop1", status: "UNOPENED", name: "Different title", price: 98000,
+      variants: [{ skuCode: "ITEM_2-TEST" }] },
+  ]) {
+    const { context, page, observer } = harness(createTarget);
+    observer.arm();
+    const req = request(page, createQuery, input);
+    context.emit("request", req);
+    context.emit("response", response(req, { id: "newProduct", shopId: "shop1",
+      status: "UNOPENED", variants: [{ skuCode: "ITEM_2-TEST" }] }, 200,
+    { field: "createProduct" }));
+    assert.equal((await observer.finish()).status, "UNVERIFIED");
+  }
+  const { context, page, observer } = harness(createTarget);
+  observer.arm();
+  const req = request(page, createQuery, { shopId: "shop1", status: "UNOPENED",
+    name: "Side Table", price: 98000, variants: [{ skuCode: "ITEM_2-TEST" }] });
+  context.emit("request", req);
+  context.emit("response", response(req, { id: "existing1", shopId: "shop1",
+    status: "UNOPENED", variants: [{ skuCode: "ITEM_2-TEST" }] }, 200,
+  { field: "createProduct" }));
+  assert.equal((await observer.finish()).reason, "RESPONSE_UNVERIFIED");
+
+  const wrong = harness(createTarget);
+  wrong.page.url = () => "https://mercari-shops.com/seller/shops/other/products/create";
+  assert.throws(() => wrong.observer.arm());
+  wrong.observer.stop();
+  const edit = harness(createTarget);
+  edit.page.url = () => "https://mercari-shops.com/seller/shops/shop1/products/existing1/edit";
+  assert.throws(() => edit.observer.arm());
+  edit.observer.stop();
 });
 
 test("GraphQL authentication errors and a failed request cannot become matched", async () => {

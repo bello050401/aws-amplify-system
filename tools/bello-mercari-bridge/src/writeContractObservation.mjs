@@ -34,7 +34,13 @@ function validTarget(target) {
     return false;
   if (target.kind === "CREATE_PRODUCT")
     return target.remoteId === null && validSku(target.skuCode) &&
-      target.skuCode !== BLOCKED_INVENTORY;
+      target.skuCode !== BLOCKED_INVENTORY &&
+      target.skuCode !== target.inventoryCode &&
+      validId(target.excludedRemoteId) &&
+      target.excludedRemoteId !== BLOCKED_REMOTE_ID &&
+      typeof target.expectedName === "string" && target.expectedName.length > 0 &&
+      target.expectedName.length <= 130 &&
+      Number.isSafeInteger(target.priceYen) && target.priceYen > 0;
   return validId(target.remoteId) && target.remoteId !== BLOCKED_REMOTE_ID &&
     target.skuCode === null;
 }
@@ -140,6 +146,7 @@ function requestIdentity(variables, target) {
     const variants = input.variants;
     return Array.isArray(variants) && variants.length === 1 &&
       variants[0]?.skuCode === target.skuCode &&
+      input.name === target.expectedName && input.price === target.priceYen &&
       input.id === undefined && input.productId === undefined;
   }
   return false;
@@ -202,7 +209,11 @@ function inspectResponse(body, status, target) {
     "MATCHED" : "RESPONSE_UNVERIFIED";
   const variants = product.variants;
   return Array.isArray(variants) && variants.length === 1 &&
-    variants[0]?.skuCode === target.skuCode ? "MATCHED" : "RESPONSE_UNVERIFIED";
+    variants[0]?.skuCode === target.skuCode &&
+    product.id !== target.excludedRemoteId &&
+    (product.name === undefined || product.name === target.expectedName) &&
+    (product.price === undefined || product.price === target.priceYen) ?
+    "MATCHED" : "RESPONSE_UNVERIFIED";
 }
 
 function safeSummary(value) {
@@ -226,7 +237,23 @@ function safeSummary(value) {
     requestTargetMatch: MATCHES.has(value?.requestTargetMatch) ?
       value.requestTargetMatch : "UNOBSERVED",
     responseTargetMatch: MATCHES.has(value?.responseTargetMatch) ?
-      value.responseTargetMatch : "UNOBSERVED" };
+      value.responseTargetMatch : "UNOBSERVED",
+    newRemoteId: value?.status === "MATCHED" && value?.reason === "MATCHED" &&
+      value?.expectedKind === "CREATE_PRODUCT" &&
+      validId(value.newRemoteId) && value.newRemoteId !== BLOCKED_REMOTE_ID ?
+      value.newRemoteId : null };
+}
+
+function inFixedShop(page, fixed) {
+  try {
+    const url = new URL(page.url());
+    const root = `/seller/shops/${fixed.shopId}/products`;
+    if (fixed.kind === "CREATE_PRODUCT")
+      return url.origin === "https://mercari-shops.com" &&
+        url.pathname === `${root}/create` && !url.search && !url.hash;
+    return url.origin === "https://mercari-shops.com" &&
+      (url.pathname === root || url.pathname.startsWith(root + "/"));
+  } catch { return false; }
 }
 
 /** Passive only. The caller must arm immediately before one normal UI action. */
@@ -237,7 +264,8 @@ export function observeBoundedShopsWrite(context, { page, target, timeoutMs = 12
     throw Error("Invalid fixed write-observation target");
   const fixed = Object.freeze({ kind: target.kind, shopId: target.shopId,
     remoteId: target.remoteId, inventoryCode: target.inventoryCode,
-    skuCode: target.skuCode });
+    skuCode: target.skuCode, excludedRemoteId: target.excludedRemoteId ?? null,
+    expectedName: target.expectedName ?? null, priceYen: target.priceYen ?? null });
   const candidates = [];
   const byRequest = new WeakMap();
   let armed = false;
@@ -248,7 +276,7 @@ export function observeBoundedShopsWrite(context, { page, target, timeoutMs = 12
         request.url() !== GRAPHQL_URL) return;
     let requestPage;
     try { requestPage = request.frame().page(); } catch { return; }
-    if (requestPage !== page) return;
+    if (requestPage !== page || !inFixedShop(page, fixed)) return;
     let inspected;
     try { inspected = inspectRequest(request.postDataBuffer(), fixed); }
     catch { inspected = { reason: "REQUEST_UNVERIFIED" }; }
@@ -281,8 +309,13 @@ export function observeBoundedShopsWrite(context, { page, target, timeoutMs = 12
       }
       const copy = Buffer.from(bytes);
       try {
-        const reason = inspectResponse(JSON.parse(copy.toString("utf8")), status, fixed);
-        if (!ended && !entry.failed) entry.responseReason = reason;
+        const body = JSON.parse(copy.toString("utf8"));
+        const reason = inspectResponse(body, status, fixed);
+        if (!ended && !entry.failed) {
+          entry.responseReason = reason;
+          if (reason === "MATCHED" && fixed.kind === "CREATE_PRODUCT")
+            entry.newRemoteId = body.data.createProduct.product.id;
+        }
       } catch {
         if (!ended && !entry.failed) entry.responseReason = "RESPONSE_UNVERIFIED";
       }
@@ -311,6 +344,8 @@ export function observeBoundedShopsWrite(context, { page, target, timeoutMs = 12
   return {
     arm() {
       if (armed || ended) throw Error("Observation cannot be armed again");
+      if (!inFixedShop(page, fixed))
+        throw Error("Exact shop product page is not open");
       armed = true;
     },
     async finish() {
@@ -330,7 +365,8 @@ export function observeBoundedShopsWrite(context, { page, target, timeoutMs = 12
           querySha256: entry.querySha256, variableFields: entry.fields,
           httpStatus: entry.httpStatus,
           requestTargetMatch: entry.reason === null ? "MATCH" : "UNOBSERVED",
-          responseTargetMatch: reason === "MATCHED" ? "MATCH" : "UNOBSERVED" };
+          responseTargetMatch: reason === "MATCHED" ? "MATCH" : "UNOBSERVED",
+          newRemoteId: reason === "MATCHED" ? entry.newRemoteId : null };
       }
       candidates.length = 0;
       return safeSummary({ ...result, expectedKind: fixed.kind });

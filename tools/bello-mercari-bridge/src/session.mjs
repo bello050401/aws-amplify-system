@@ -56,6 +56,30 @@ export async function openDedicatedLogin({ profileDir, playwrightModulePath, lau
   }
 }
 
+/** Read-only launch to the observed product list; the user controls the normal create form. */
+export async function openDedicatedProductListSession({ root, profileDir,
+  playwrightModulePath, shopId, launchPersistentContext = null }) {
+  if (typeof shopId !== "string" || !PRODUCT_ID.test(shopId) ||
+      !root || !isAbsolute(root))
+    throw Error("Invalid exact Shops list target");
+  await bindAccount(root, shopId);
+  const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
+  const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+    launchPersistentContext });
+  try {
+    const page = context.pages()[0] ?? await context.newPage();
+    await page.goto(listUrl);
+    const actual = new URL(page.url());
+    const state = actual.origin === "https://mercari-shops.com" &&
+      actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
+      actual.href === listUrl ? "LIST_OPEN" : "UNKNOWN";
+    return { context, page, state };
+  } catch (error) {
+    await context.close();
+    throw error;
+  }
+}
+
 /** Opens only the observed exact-ID edit URL. Navigation alone never confirms identity or privacy. */
 export async function openExistingProductReadSession({ root, profileDir, playwrightModulePath,
   shopId, remoteId, launchPersistentContext = null, observeTraffic = false,

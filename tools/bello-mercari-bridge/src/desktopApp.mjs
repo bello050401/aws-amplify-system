@@ -5,7 +5,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
-import { openDedicatedLogin, openExistingProductReadSession } from "./session.mjs";
+import { openDedicatedLogin, openDedicatedProductListSession,
+  openExistingProductReadSession } from "./session.mjs";
 import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
 import { safeReadQueryCandidates } from "./readQueryObservation.mjs";
@@ -16,6 +17,10 @@ import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
 import { saveExistingPrivateOnce } from "./saveExistingPrivateOnce.mjs";
 import { readManualSaveClaim, readManualSaveOutcome } from "./manualSaveAttempt.mjs";
+import { observeBoundedShopsWrite, safeWriteContractSummary } from
+  "./writeContractObservation.mjs";
+import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestObservation,
+  recordCreateTestObservation } from "./createTestAttempt.mjs";
 import { addExistingImageOnce, readRetainedImageState } from "./addExistingImageOnce.mjs";
 import { readManualImageClaim, readManualImageOutcome } from "./manualImageAttempt.mjs";
 import { runPrivateImageWorkflowOnce } from "./privateImageWorkflow.mjs";
@@ -33,6 +38,28 @@ const html = (value) => String(value).replace(/[&<>"']/g, character => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 })[character]);
 const here = dirname(fileURLToPath(import.meta.url));
+
+function createTestPage({ csrf, message, busy, claim, result, open, armed }) {
+  const button = (action, label, disabled = false) =>
+    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
+  const target = CREATE_TEST_TARGET;
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BELLO Shops非公開テスト</title><style>
+body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#222;margin:0;padding:24px}main{max-width:680px;margin:auto;background:white;border:1px solid #d5d8de;border-radius:12px;padding:24px}h1{font-size:1.4rem;margin-top:0}section{border-top:1px solid #ddd;padding-top:16px;margin-top:20px}button{background:#0868c7;color:white;border:0;border-radius:6px;padding:12px 18px;font-size:1rem;cursor:pointer}button:disabled{opacity:.45;cursor:default}form{display:inline-block;margin:5px 8px 5px 0}small{color:#555}code{overflow-wrap:anywhere}strong{color:#7a3600}
+</style></head><body><main><h1>メルカリShops 非公開テスト登録</h1>
+<p>既存の公開商品は変更しません。新しい非公開商品を1件だけ通常画面から登録し、その通信を観測します。このアプリは商品送信ボタンを押しません。</p>
+<p><b>対象:</b> ${html(target.expectedName)}<br><b>BELLO管理コード:</b> ${html(target.inventoryCode)}<br><b>新規テスト用コード:</b> ${html(target.skuCode)}<br><b>価格:</b> ${html(target.priceYen.toLocaleString("ja-JP"))}円<br><b>店舗:</b> <code>${html(target.shopId)}</code></p>
+<p><small>既存公開商品のID <code>${html(target.existingRemoteId)}</code> は参照だけに使い、上書きしません。画像はBELLOのこの在庫の既存EC画像を使用します。説明・カテゴリ・配送条件は既存商品の確認済み内容を参照して入力してください。公開操作は行いません。</small></p>
+${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
+<section><h2>1. 専用Shops画面を開く</h2><p>同じテスト用コードの既存登録がないことを確認し、新規商品の内容を準備してください。画面を開く前に一回限りの記録を作り、画像選択後の再試行を防ぎます。</p>
+${button("create-test-open", "1回限りの登録準備を開始", claim.claimed || open)}
+${claim.claimed ? `<p>今回の試行ID: <code>${html(claim.attemptId ?? "記録未確認")}</code>。結果が不明でも再実行しません。</p>` : ""}</section>
+<section><h2>2. 最終の非公開保存を観測</h2><p>画像・商品名・テスト用コード・98,000円・説明・カテゴリ・配送設定を通常画面で確認し、「非公開で保存する」を押す直前に観測を開始してください。</p>
+${button("create-test-arm", "非公開保存の観測を開始", !open || !claim.valid || armed || Boolean(result))}
+${armed ? `<p>観測中です。専用Shops画面で「非公開で保存する」を1回だけ押した後、結果を記録してください。</p>${button("create-test-finish", "送信結果を1回記録")}` : ""}</section>
+<section><h2>3. 結果</h2>
+${result ? `<p>通常画面の作成応答: <strong>${html(result.outcome)}</strong> / ${html(result.reason)}。</p>${result.newRemoteId ? `<p>今回新たに観測した商品ID: <code>${html(result.newRemoteId)}</code></p>` : ""}<p>非公開・価格・画像は別途読み直して確認します。この結果だけで出品完了や公開を判定しません。結果が不明でも再送しません。</p>` : "<p>まだ送信結果は記録されていません。</p>"}
+${button("shutdown", "アプリを終了", open)}</section></main></body></html>`;
+}
 
 function optionsOf(config) {
   const localAppData = process.env.LOCALAPPDATA;
@@ -61,12 +88,21 @@ function optionsOf(config) {
   const imageWorkflowEnabled = config?.imageWorkflowEnabled ?? false;
   if (typeof imageWorkflowEnabled !== "boolean" || (imageWorkflowEnabled && !imageProof))
     throw Error("Invalid private-image workflow configuration");
+  const createTestObservationEnabled = config?.createTestObservationEnabled ?? false;
+  const createTestSkuAbsentConfirmed = config?.createTestSkuAbsentConfirmed ?? false;
+  if (typeof createTestObservationEnabled !== "boolean" ||
+      typeof createTestSkuAbsentConfirmed !== "boolean" ||
+      (createTestObservationEnabled && !createTestSkuAbsentConfirmed) ||
+      (createTestObservationEnabled &&
+        (manualObservation || imageProof || recovery || imageWorkflowEnabled)))
+    throw Error("The private create test must use its isolated PC configuration");
   const controlPort = config?.controlPort ?? 0;
   if (!Number.isInteger(controlPort) || controlPort < 0 || controlPort > 65535 ||
       (controlPort > 0 && controlPort < 1024))
     throw Error("Invalid local PC control port");
   return { origin: config.origin, requestId: config.requestId, dataDir,
-    recovery, manualObservation, imageProof, imageWorkflowEnabled, controlPort,
+    recovery, manualObservation, imageProof, imageWorkflowEnabled,
+    createTestObservationEnabled, createTestSkuAbsentConfirmed, controlPort,
     root: join(dataDir, "Queue"), belloProfileDir: join(dataDir, "BELLOChrome"),
     shopsProfileDir: join(dataDir, "ShopsChrome"),
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
@@ -80,7 +116,10 @@ function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsO
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
   lastImageReadState, workflowAttempted, lastWorkflowStatus, lastWorkflowStage,
   workflowReadbackPrivateWithImage, savedProductReadback,
-  retainedWorkflowOpen }) {
+  retainedWorkflowOpen, createClaim, createResult, createOpen, createArmed }) {
+  if (options.createTestObservationEnabled)
+    return createTestPage({ csrf, message, busy, claim: createClaim,
+      result: createResult, open: createOpen, armed: createArmed });
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${workflowRunning ? '<meta http-equiv="refresh" content="2">' : ""}<title>BELLO メルカリ照合</title><style>
@@ -170,9 +209,21 @@ export async function startDesktopApp(config, {
   runWorkflow = runPrivateImageWorkflowOnce,
   runSavedProductReadback = verifyExistingSavedProductReadOnly,
   runDirectReadProbe = runPinnedDirectReadProbeOnce,
+  openCreateList = openDedicatedProductListSession,
+  observeCreate = observeBoundedShopsWrite,
+  claimCreate = claimCreateTestOnce,
+  readCreate = readCreateTestObservation,
+  recordCreate = recordCreateTestObservation,
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
 } = {}) {
   const options = optionsOf(config);
+  const initialCreate = options.createTestObservationEnabled ?
+    await readCreate(options.root) : null;
+  let createClaim = initialCreate?.claim ?? { claimed: false, valid: true,
+    attemptId: null, claimedAt: null };
+  let createResult = initialCreate?.result ?? null;
+  let createSession = null;
+  let createArmed = false;
   const workflowClaim = options.manualObservation ?
     await readPrivateImageWorkflowClaim(options.root, options.manualObservation) : null;
   let privateSaveAttempted = Boolean(options.manualObservation &&
@@ -231,6 +282,21 @@ export async function startDesktopApp(config, {
   let lastWorkflowStatus = savedWorkflowResult?.status ?? "";
   let lastWorkflowStage = savedWorkflowResult?.stage ?? "";
   let workflowReadbackPrivateWithImage = savedWorkflowResult?.readbackPrivateWithImage === true;
+  let finishingCreate = null;
+  const finishCreate = (stopped = false, selectedSession = createSession) => {
+    if (finishingCreate) return finishingCreate;
+    if (!createClaim.claimed || createResult) return Promise.resolve(createResult);
+    return finishingCreate = (async () => {
+      const summary = selectedSession?.observer ?
+        stopped ? selectedSession.observer.stop() : await selectedSession.observer.finish() :
+        safeWriteContractSummary({ reason: "STOPPED", expectedKind: "CREATE_PRODUCT" });
+      const result = await recordCreate(options.root, createClaim.attemptId, summary);
+      createResult = result;
+      createArmed = false;
+      if (selectedSession) selectedSession.observer = null;
+      return result;
+    })().finally(() => { finishingCreate = null; });
+  };
   let finishingManual = null;
   const finishManual = () => {
     if (finishingManual) return finishingManual;
@@ -255,7 +321,9 @@ export async function startDesktopApp(config, {
         lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession),
         lastImageReadState, workflowAttempted: workflowUsed, lastWorkflowStatus,
         lastWorkflowStage, workflowReadbackPrivateWithImage, savedProductReadback,
-        retainedWorkflowOpen: Boolean(retainedWorkflowSession) }));
+        retainedWorkflowOpen: Boolean(retainedWorkflowSession),
+        createClaim, createResult, createOpen: Boolean(createSession),
+        createArmed }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/action" ||
@@ -283,7 +351,61 @@ export async function startDesktopApp(config, {
     let shutdown = false;
     try {
       const action = form.get("action");
-      if (action === "bello-login") {
+      if (options.createTestObservationEnabled &&
+          !["create-test-open", "create-test-arm", "create-test-finish", "shutdown"]
+            .includes(action))
+        throw Error("Only the pinned private-create observation is available");
+      if (action === "create-test-open") {
+        if (!options.createTestObservationEnabled || createClaim.claimed || createSession ||
+            shopsContext || manualSession || retainedSaveSession || retainedImageSession ||
+            retainedWorkflowSession)
+          throw Error("The private-create observation is unavailable");
+        createClaim = { claimed: true, valid: true,
+          ...await claimCreate(options.root) };
+        const session = await openCreateList({ root: options.root,
+          profileDir: options.shopsProfileDir,
+          playwrightModulePath: options.playwrightModulePath,
+          shopId: CREATE_TEST_TARGET.shopId });
+        if (session.state !== "LIST_OPEN") {
+          await session.context.close();
+          throw Error("The exact Shops product list is not open");
+        }
+        createSession = { ...session, observer: null };
+        session.context.once("close", () => {
+          const active = createSession;
+          if (active) void finishCreate(true, active).catch(() => {
+            message = "作成結果は未確認です。再送しません。";
+          }).finally(() => { if (createSession === active) createSession = null; });
+        });
+        message = "専用Shops画面を開きました。新規商品を非公開で準備してください。既存公開商品は変更しません。";
+      } else if (action === "create-test-arm") {
+        if (!options.createTestObservationEnabled || !createSession ||
+            !createClaim.claimed || !createClaim.valid || createArmed || createResult)
+          throw Error("Private-create observation cannot be armed");
+        const createPath = `/seller/shops/${CREATE_TEST_TARGET.shopId}/products/create`;
+        const pages = createSession.context.pages().filter(candidate => {
+          try {
+            const url = new URL(candidate.url());
+            return url.origin === "https://mercari-shops.com" &&
+              url.pathname === createPath && !url.search && !url.hash;
+          } catch { return false; }
+        });
+        if (pages.length !== 1) throw Error("The observed new-product form is required");
+        const observer = observeCreate(createSession.context, {
+          page: pages[0], target: CREATE_TEST_TARGET, timeoutMs: 12000 });
+        observer.arm();
+        createSession.observer = observer;
+        createArmed = true;
+        message = "観測を開始しました。内容を最終確認し、Shops画面で非公開保存を1回だけ行ってください。";
+      } else if (action === "create-test-finish") {
+        if (!options.createTestObservationEnabled || !createSession || !createArmed ||
+            !createSession.observer || createResult)
+          throw Error("No private-create observation is active");
+        const result = await finishCreate();
+        message = result?.outcome === "OBSERVED_PRIVATE_CREATE_RESPONSE" ?
+          "通常画面の新規作成応答を記録しました。非公開・価格・画像の読戻しは別途必要です。" :
+          "作成結果を確認できませんでした。再送せず、Shopsの既存商品を読取で確認してください。";
+      } else if (action === "bello-login") {
         if (belloContext) throw Error("BELLO browser already open");
         belloContext = await openBello({ origin: options.origin, profileDir: options.belloProfileDir,
           playwrightModulePath: options.playwrightModulePath, navigateToLogin: true });
@@ -558,6 +680,8 @@ export async function startDesktopApp(config, {
         lastResult = result.status;
         message = "保存済みの読取結果をBELLOへ報告しました。Shopsの再読取は行っていません。";
       } else if (action === "shutdown") {
+        if (options.createTestObservationEnabled && createSession)
+          throw Error("Close the dedicated Shops browser manually before ending the app");
         if (retainedSaveSession || retainedImageSession || retainedWorkflowSession)
           throw Error("Shops browser is still open after mutation");
         if (belloContext) { await belloContext.close(); belloContext = null; }
@@ -575,7 +699,11 @@ export async function startDesktopApp(config, {
       const stage = error instanceof BridgeBoundaryError ?
         [error.phase, error.httpStatus ? `HTTP ${error.httpStatus}` : null, error.serverCode]
           .filter(Boolean).join(" / ") : null;
-      message = form.get("action") === "add-image-once" && imageAttempted ?
+      message = options.createTestObservationEnabled ?
+        createClaim.claimed ?
+          "今回の登録試行は開始済み、または結果不明です。再送せずShops画面を確認してください。" :
+          "準備を開始できませんでした。Shopsのログインと対象店舗を確認してください。" :
+        form.get("action") === "add-image-once" && imageAttempted ?
         "画像選択の結果を確認できませんでした。再送せず、専用Chromeを確認してください。" :
         form.get("action") === "save-private-once" && privateSaveAttempted ?
         "保存結果を確認できませんでした。再送せず、読取で確認してください。" :
@@ -602,6 +730,8 @@ export async function startDesktopApp(config, {
     }
   }
   return { url: localOrigin, close: async () => {
+    if (createSession)
+      throw Error("Close the dedicated Shops browser manually before ending the app");
     if (belloContext) await belloContext.close();
     if (shopsContext) await shopsContext.close();
     if (manualSession) {
