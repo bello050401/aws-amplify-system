@@ -6,10 +6,11 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
 import { openDedicatedLogin } from "./session.mjs";
-import { runBelloCloudReadOnce } from "./cloudConnector.mjs";
+import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const html = (value) => String(value).replace(/[&<>"']/g, character => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 })[character]);
@@ -20,7 +21,11 @@ function optionsOf(config) {
   const dataDir = config?.dataDir ?? (localAppData && join(localAppData, "BELLO", "MercariBridge"));
   if (!validBelloOrigin(config?.origin) || !HASH.test(config?.requestId) ||
       !dataDir || !isAbsolute(dataDir)) throw Error("Invalid BELLO desktop configuration");
+  const recovery = config?.recovery ?? null;
+  if (recovery !== null && (!UUID.test(recovery?.jobId) || !UUID.test(recovery?.attemptId)))
+    throw Error("Invalid saved read recovery configuration");
   return { origin: config.origin, requestId: config.requestId, dataDir,
+    recovery,
     root: join(dataDir, "Queue"), belloProfileDir: join(dataDir, "BELLOChrome"),
     shopsProfileDir: join(dataDir, "ShopsChrome"),
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
@@ -40,6 +45,8 @@ ${button("bello-login", belloOpen ? "BELLOログイン画面を開いていま�
 ${button("shops-login", shopsOpen ? "Shopsログイン画面を開いています" : "Shopsにログイン", shopsOpen)}</section>
 <section><h2>2. 既存商品を1回照合</h2><p>両方のログイン後に押してください。照合できない項目は未確認のままBELLOへ報告します。</p>
 ${button("read", "この読取依頼を照合する")}
+${options.recovery ? `<p>前回の保存済み読取結果を、Shopsに再アクセスせずBELLOへ報告できます。</p>
+${button("retry-report", "前回の結果だけをBELLOへ再報告する")}` : ""}
 ${lastResult ? `<p>直近の結果: <strong>${html(lastResult)}</strong>。出品完了の確認ではありません。</p>` : ""}
 ${trafficAttempted ? `<details><summary>Shops通信の概要（${lastTraffic.length}種類）</summary>
 <p><small>このPC画面に一時表示します。URLの値・検索条件・認証情報・本文は記録せず、BELLOにも送りません。</small></p>
@@ -60,7 +67,7 @@ const send = (response, status, content, contentType = "text/html; charset=utf-8
 /** Visible loopback UI. Every read is a deliberate click bound to one configured request ID. */
 export async function startDesktopApp(config, {
   openBello = openBelloAdminContext, openShops = openDedicatedLogin,
-  runRead = runBelloCloudReadOnce, openBrowser = null,
+  runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
 } = {}) {
   const options = optionsOf(config);
   const csrf = randomBytes(32).toString("hex");
@@ -126,13 +133,26 @@ export async function startDesktopApp(config, {
           browserRead: true, onShopsTraffic: items => { lastTraffic = safeShopsTrafficSummary(items); } });
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
+      } else if (action === "retry-report") {
+        if (!options.recovery) throw Error("No saved read selected");
+        if (belloContext) { await belloContext.close(); belloContext = null; }
+        const result = await reportRead({ origin: options.origin, requestId: options.requestId,
+          root: options.root, belloProfileDir: options.belloProfileDir,
+          playwrightModulePath: options.playwrightModulePath,
+          jobId: options.recovery.jobId, attemptId: options.recovery.attemptId });
+        lastResult = result.status;
+        message = "保存済みの読取結果をBELLOへ報告しました。Shopsの再読取は行っていません。";
       } else if (action === "shutdown") {
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         shutdown = true;
       } else throw Error("Unknown action");
-    } catch {
-      message = "処理を完了できませんでした。専用ブラウザのログイン状態と読取依頼を確認してください。";
+    } catch (error) {
+      const stage = error instanceof BridgeBoundaryError ?
+        [error.phase, error.httpStatus ? `HTTP ${error.httpStatus}` : null, error.serverCode]
+          .filter(Boolean).join(" / ") : null;
+      message = stage ? `処理を完了できませんでした（${stage}）。自動再試行はしていません。` :
+        "処理を完了できませんでした。専用ブラウザのログイン状態と読取依頼を確認してください。";
     } finally { busy = false; }
     if (shutdown) {
       send(response, 200, "アプリを終了しました。", "text/plain; charset=utf-8");
@@ -149,8 +169,8 @@ export async function startDesktopApp(config, {
   if (openBrowser) {
     try { await openBrowser(localOrigin); }
     catch {
-      await new Promise(resolve => server.close(resolve));
-      throw Error("Could not open the BELLO desktop window");
+      // Keep the local page available so a failed browser dispatch does not hide the app.
+      process.stderr.write(`Could not open the browser. BELLO local page: ${localOrigin}\n`);
     }
   }
   return { url: localOrigin, close: async () => {
@@ -174,5 +194,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url).toLowerCase() === process.
   const configPath = process.argv[2] === "--config" ? process.argv[3] : null;
   if (!configPath || !isAbsolute(configPath)) throw Error("A prepared absolute configuration path is required");
   const config = JSON.parse(await readFile(configPath, "utf8"));
-  await startDesktopApp(config, { openBrowser: showLocalBrowser });
+  const app = await startDesktopApp(config, { openBrowser: showLocalBrowser });
+  process.stdout.write(`BELLO local page: ${app.url}\n`);
 }

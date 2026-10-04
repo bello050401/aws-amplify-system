@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { openBelloAdminContext } from "../src/belloSession.mjs";
-import { runBelloCloudReadOnce } from "../src/cloudConnector.mjs";
+import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "../src/cloudConnector.mjs";
+import { enqueueExistingRead, saveReadResult } from "../src/queue.mjs";
 
 const origin = "https://bello.example.test";
 const requestId = "a".repeat(64);
@@ -91,4 +92,58 @@ test("unowned request, wrong dispatch, or wrong receipt stops without success", 
   }
   await assert.rejects(runBelloCloudReadOnce({ origin: "http://bello.example.test", requestId,
     root: join(root, "queue"), belloProfileDir: join(root, "profile") }));
+}));
+
+test("one saved attempt can be reported without another Shops read or a new attempt", async () => withRoot(async root => {
+  const queueRoot = join(root, "queue");
+  const job = await enqueueExistingRead(queueRoot, { accountReference: dispatch.accountReference,
+    remoteId: dispatch.remoteId, inventoryCode: dispatch.inventoryCode,
+    expectedFields: dispatch.expectedFields });
+  const saved = await saveReadResult(queueRoot, job.jobId, { accountReference: dispatch.accountReference,
+    remoteId: dispatch.remoteId, status: "UNKNOWN", comparison: null, reasonCode: "UNVERIFIED_READ" });
+  const calls = [];
+  const context = { request: {
+    get: async () => { calls.push("GET"); return { ok: () => true,
+      json: async () => ({ ok: true, job: dispatch }) }; },
+    post: async (url, options) => {
+      calls.push("POST");
+      const report = JSON.parse(options.data);
+      assert.equal(report.attemptId, saved.attemptId);
+      assert.equal(report.status, "UNKNOWN");
+      assert.equal(report.reasonCode, "UNVERIFIED_READ");
+      assert.equal(report.comparison, null);
+      return { ok: () => true, json: async () => ({ ok: true, stored: true,
+        requestId, attemptId: saved.attemptId, readStatus: saved.status, listingConfirmed: false }) };
+    },
+  }, close: async () => {} };
+  const result = await reportSavedReadResultOnce({ origin, requestId, root: queueRoot,
+    belloProfileDir: join(root, "bello-profile"), jobId: job.jobId, attemptId: saved.attemptId,
+    launchBelloContext: async () => context });
+  assert.deepEqual(calls, ["GET", "POST"]);
+  assert.deepEqual(result, { requestId, attemptId: saved.attemptId, status: "UNKNOWN", listingConfirmed: false });
+}));
+
+test("saved result mismatch blocks POST and HTTP failure exposes only fixed diagnostics", async () => withRoot(async root => {
+  const queueRoot = join(root, "queue");
+  const job = await enqueueExistingRead(queueRoot, { accountReference: dispatch.accountReference,
+    remoteId: dispatch.remoteId, inventoryCode: dispatch.inventoryCode,
+    expectedFields: dispatch.expectedFields });
+  const saved = await saveReadResult(queueRoot, job.jobId, { accountReference: dispatch.accountReference,
+    remoteId: dispatch.remoteId, status: "UNKNOWN", comparison: null, reasonCode: "UNVERIFIED_READ" });
+  const get = async () => ({ ok: () => true, json: async () => ({ ok: true, job: dispatch }) });
+  const mismatched = { request: { get: async () => ({ ok: () => true,
+    json: async () => ({ ok: true, job: { ...dispatch, expectedFields: { ...dispatch.expectedFields, title: "changed" } } }) }),
+    post: async () => { throw Error("must not post"); } }, close: async () => {} };
+  await assert.rejects(reportSavedReadResultOnce({ origin, requestId, root: queueRoot,
+    belloProfileDir: join(root, "bello-profile"), jobId: job.jobId, attemptId: saved.attemptId,
+    launchBelloContext: async () => mismatched }), error =>
+    error instanceof BridgeBoundaryError && error.phase === "SAVED_RESULT_MISMATCH");
+  const rejected = { request: { get, post: async () => ({ ok: () => false, status: () => 409,
+    json: async () => ({ ok: false, code: "INVALID_RESULT", secret: "must not surface" }) }) }, close: async () => {} };
+  await assert.rejects(reportSavedReadResultOnce({ origin, requestId, root: queueRoot,
+    belloProfileDir: join(root, "bello-profile"), jobId: job.jobId, attemptId: saved.attemptId,
+    launchBelloContext: async () => rejected }), error =>
+    error instanceof BridgeBoundaryError && error.phase === "RESULT_POST_HTTP" &&
+    error.httpStatus === 409 && error.serverCode === "INVALID_RESULT" &&
+    !JSON.stringify(error).includes("must not surface"));
 }));

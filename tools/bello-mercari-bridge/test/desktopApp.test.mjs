@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { startDesktopApp } from "../src/desktopApp.mjs";
+import { BridgeBoundaryError } from "../src/cloudConnector.mjs";
 
 const config = () => ({ origin: "https://bello.example.test", requestId: "a".repeat(64),
   dataDir: join(tmpdir(), "bello-desktop-test") });
@@ -75,5 +76,39 @@ test("local traffic summary displays only redacted metadata and is never part of
     assert.match(content, /Shops通信の概要/);
     assert.match(content, /\/api\/v1\/products\/:value/);
     assert.equal(content.includes("secretToken"), false);
+  } finally { await app.close(); }
+});
+
+test("failed default-browser dispatch keeps the loopback control page available", async () => {
+  const app = await startDesktopApp(config(), { openBrowser: async () => {
+    throw Error("synthetic browser launch failure");
+  } });
+  try {
+    assert.equal(new URL(app.url).hostname, "127.0.0.1");
+    const response = await fetch(app.url);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /この読取依頼を照合する/);
+  } finally { await app.close(); }
+});
+
+test("saved-attempt button reports without re-reading Shops and shows only fixed failure details", async () => {
+  const recovery = { jobId: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
+    attemptId: "cccccccc-cccc-4ccc-cccc-cccccccccccc" };
+  let reportCalls = 0;
+  const app = await startDesktopApp({ ...config(), recovery }, { openBrowser: async () => {},
+    runRead: async () => { throw Error("must not read Shops"); },
+    reportRead: async (options) => {
+      reportCalls++;
+      assert.deepEqual({ jobId: options.jobId, attemptId: options.attemptId }, recovery);
+      throw new BridgeBoundaryError("RESULT_POST_HTTP", 409, "INVALID_RESULT");
+    } });
+  try {
+    const csrf = await token(app.url);
+    assert.equal((await post(app.url, csrf, "retry-report")).status, 303);
+    const content = await (await fetch(app.url)).text();
+    assert.equal(reportCalls, 1);
+    assert.match(content, /RESULT_POST_HTTP \/ HTTP 409 \/ INVALID_RESULT/);
+    assert.match(content, /Shopsに再アクセスせず/);
+    assert.equal(content.includes("must not read Shops"), false);
   } finally { await app.close(); }
 });
