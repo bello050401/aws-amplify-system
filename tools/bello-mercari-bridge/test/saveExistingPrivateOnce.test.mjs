@@ -24,7 +24,7 @@ function locator(count = 1, name = "") {
 }
 
 function harness({ ack = true, privateBefore = true, changedAfter = false,
-  closeDuringClick = false } = {}) {
+  closeDuringClick = false, nextDisabled = false, nextClickThrows = false } = {}) {
   const clicks = [];
   let closed = false;
   let checks = 0;
@@ -37,7 +37,11 @@ function harness({ ack = true, privateBefore = true, changedAfter = false,
     goto: async url => { assert.equal(url, editUrl); },
     getByRole: (_, options) => {
       if (options?.name === "公開設定に進む")
-        return { ...locator(), click: async () => clicks.push("next") };
+        return { ...locator(), isEnabled: async () => !nextDisabled,
+          click: async () => {
+            clicks.push("next");
+            if (nextClickThrows) throw Error("Next click outcome is unknown");
+          } };
       if (_ === "dialog") return {
         ...locator(), locator: () => ({ ...locator(), getByRole: (_, button) => button ? ({
           ...locator(), click: async () => {
@@ -90,6 +94,7 @@ test("exact existing product is saved once and remains permanently non-retryable
   const input = { root, profileDir: root, playwrightModulePath: root, target };
   const first = await saveExistingPrivateOnce(input, fake.dependencies);
   assert.equal(first.status, "UNKNOWN");
+  assert.equal(first.diagnostic, "PRIVATE_CLICK_RETURNED");
   assert.equal(first.listingConfirmed, false);
   assert.deepEqual(fake.clicks, ["next", "非公開で保存する"]);
   assert.equal(fake.closed, false, "the browser stays open so pending save traffic is not cancelled");
@@ -124,7 +129,8 @@ test("a title changed in the save dialog stops before the final save click", () 
   const fake = harness({ changedAfter: true });
   const result = await saveExistingPrivateOnce({ root, profileDir: root,
     playwrightModulePath: root, target }, fake.dependencies);
-  assert.equal(result.status, "BLOCKED_BEFORE_CLICK");
+  assert.equal(result.status, "UNKNOWN");
+  assert.equal(result.diagnostic, "POST_NEXT_FIELDS_CHECK");
   assert.deepEqual(fake.clicks, ["next"]);
   assert.equal((await readManualSaveClaim(root, target)).claimed, true);
   assert.equal(fake.closed, false);
@@ -139,6 +145,25 @@ test("a Chrome close during the final click is immediately visible to the caller
   let notified = false;
   result.retainedSession.onClose(() => { notified = true; });
   assert.equal(notified, true);
+  assert.equal((await readManualSaveClaim(root, target)).claimed, true);
+}));
+
+test("a blocked next control is distinct from an uncertain next click", () => withRoot(async root => {
+  const input = { root, profileDir: root, playwrightModulePath: root, target };
+  const blocked = harness({ nextDisabled: true });
+  const first = await saveExistingPrivateOnce(input, blocked.dependencies);
+  assert.equal(first.status, "BLOCKED_BEFORE_CLICK");
+  assert.equal(first.diagnostic, "NEXT_CONTROL_CHECK");
+  assert.deepEqual(blocked.clicks, []);
+}));
+
+test("a next click error is UNKNOWN because the first step may have sent a request", () => withRoot(async root => {
+  const fake = harness({ nextClickThrows: true });
+  const result = await saveExistingPrivateOnce({ root, profileDir: root,
+    playwrightModulePath: root, target }, fake.dependencies);
+  assert.equal(result.status, "UNKNOWN");
+  assert.equal(result.diagnostic, "NEXT_CLICK_UNCERTAIN");
+  assert.deepEqual(fake.clicks, ["next"]);
   assert.equal((await readManualSaveClaim(root, target)).claimed, true);
 }));
 

@@ -102,7 +102,9 @@ export async function saveExistingPrivateOnce({ root, profileDir, playwrightModu
   });
   let observer = null;
   let claim = null;
+  let nextMayHaveClicked = false;
   let clicked = false;
+  let diagnostic = "CLAIMED_BEFORE_NEXT";
   let metadata = [];
   try {
     if (session.state !== "NAVIGATED_UNVERIFIED") return { status: "PREFLIGHT_BLOCKED", listingConfirmed: false };
@@ -118,17 +120,24 @@ export async function saveExistingPrivateOnce({ root, profileDir, playwrightModu
       throw error;
     }
     try {
+      diagnostic = "NEXT_CONTROL_CHECK";
       const next = session.page.getByRole("button", { name: "公開設定に進む", exact: true });
       if (await next.count() !== 1 || !await next.isEnabled() || session.page.url() !== expectedUrl)
         throw Error("Private save control changed");
+      diagnostic = "NEXT_CLICK_UNCERTAIN";
+      nextMayHaveClicked = true;
       await next.click({ timeout: 12000 });
+      diagnostic = "POST_NEXT_FIELDS_CHECK";
       const beforeFinalSave = await readFields(session.page, expectedUrl, target, false);
       if (!beforeFinalSave || beforeFinalSave.title !== before.title)
         throw Error("Existing product values changed before save");
+      diagnostic = "PRIVATE_CONTROL_CHECK";
       const privateButton = await privateSaveControl(session.page, expectedUrl);
       if (!privateButton) throw Error("Observed private save dialog changed");
+      diagnostic = "PRIVATE_CLICK_UNCERTAIN";
       clicked = true;
       await privateButton.click({ timeout: 12000 });
+      diagnostic = "PRIVATE_CLICK_RETURNED";
     } catch {
       // A click may have reached Shops even when the local call fails. Never retry it.
     }
@@ -136,11 +145,13 @@ export async function saveExistingPrivateOnce({ root, profileDir, playwrightModu
     if (typeof onMetadata === "function") {
       try { onMetadata(metadata); } catch { /* Local display cannot change the save outcome. */ }
     }
-    const outcome = clicked ? "UNKNOWN" : "BLOCKED_BEFORE_CLICK";
-    try { await writeManualSaveOutcome(root, target, claim.attemptId, outcome); }
+    const outcome = clicked || nextMayHaveClicked ? "UNKNOWN" : "BLOCKED_BEFORE_CLICK";
+    try { await writeManualSaveOutcome(root, target, claim.attemptId, outcome,
+      { diagnostic }); }
     catch { /* The claim still prevents replay when outcome recording fails. */ }
     // Keep Chrome and the observer alive. Navigation or close could abort an in-flight save.
     return { status: outcome, listingConfirmed: false, postflightPrivate: false,
+      diagnostic,
       metadata, retainedSession: { context: session.context, observer,
         onClose: callback => {
           if (contextClosed) callback();

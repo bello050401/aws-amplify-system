@@ -25,7 +25,7 @@ test("one durable claim survives restart and a concurrent second claimant", asyn
     assert.equal(JSON.parse(await readFile(join(root, "manual-save-once",
       "shop1-existing1.result.json"), "utf8")).outcome, "UNKNOWN");
     assert.deepEqual(await readManualSaveOutcome(root, target),
-      { outcome: "UNKNOWN", postflightPrivate: false });
+      { outcome: "UNKNOWN", postflightPrivate: false, diagnostic: null });
     assert.equal((await readManualSaveClaim(root, target)).claimed, true);
     await assert.rejects(claimManualSaveOnce(root, target), { code: "EEXIST" });
   } finally {

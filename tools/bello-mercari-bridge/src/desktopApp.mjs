@@ -45,7 +45,8 @@ function optionsOf(config) {
 
 function page({ csrf, options, message, busy, belloOpen, shopsOpen, manualOpen,
   manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastDiagnostics,
-  privateSaveAttempted, lastPrivateSave, lastPrivateReadback, retainedSaveOpen }) {
+  privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
+  retainedSaveOpen }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BELLO メルカリ照合</title><style>
@@ -71,6 +72,7 @@ ${options.manualObservation ? `<section><h2>既存商品の通信観測</h2>
 <p>内容を変えず、既存商品 ${html(options.manualObservation.inventoryCode)} を非公開のまま1回保存します。対象ID・価格・数量・非公開を確認できない場合は送信しません。結果が不明でも再送しません。</p>
 ${button("save-private-once", "既存商品を非公開で1回保存", privateSaveAttempted || manualOpen)}
 ${privateSaveAttempted ? `<p>この商品の保存操作は実行済み、または結果不明です。再実行はできません。${lastPrivateSave ? `結果: <strong>${html(lastPrivateSave)}</strong>` : ""}</p>` : ""}
+${lastPrivateDiagnostic ? `<p><small>停止・観測段階: <code>${html(lastPrivateDiagnostic)}</code></small></p>` : ""}
 ${lastPrivateReadback ? "<p>保存後の読取で、対象商品の非公開状態と商品コード・価格・数量を確認しました。保存通信の成功判定とは別です。</p>" : ""}
 ${retainedSaveOpen ? `<p>保存通信を中断しないため、専用Chromeを開いたままにしています。通信概要を更新できます。Shops画面で保存処理が終わったことを確認してからChromeを閉じてください。</p>${button("refresh-save-observation", "保存通信の概要を更新")}` : ""}
 <details><summary>手動の通信観測</summary>
@@ -129,6 +131,7 @@ export async function startDesktopApp(config, {
   let lastManual = [];
   let lastPrivateSave = savedPrivateOutcome?.outcome ?? "";
   let lastPrivateReadback = savedPrivateOutcome?.postflightPrivate === true;
+  let lastPrivateDiagnostic = savedPrivateOutcome?.diagnostic ?? "";
   let retainedSaveSession = null;
   let finishingManual = null;
   const finishManual = () => {
@@ -146,7 +149,8 @@ export async function startDesktopApp(config, {
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
         manualOpen: Boolean(manualSession), manualAttempted, lastManual, lastResult,
         trafficAttempted, lastTraffic, lastDiagnostics, privateSaveAttempted, lastPrivateSave,
-        lastPrivateReadback, retainedSaveOpen: Boolean(retainedSaveSession) }));
+        lastPrivateReadback, lastPrivateDiagnostic,
+        retainedSaveOpen: Boolean(retainedSaveSession) }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/action" ||
@@ -227,6 +231,10 @@ export async function startDesktopApp(config, {
             lastPrivateSave = ["CONFIRMED_PRIVATE", "UNKNOWN", "BLOCKED_BEFORE_CLICK",
               "ALREADY_ATTEMPTED", "PREFLIGHT_BLOCKED"].includes(result?.status) ? result.status : "UNKNOWN";
             lastPrivateReadback = result?.postflightPrivate === true;
+            lastPrivateDiagnostic = ["CLAIMED_BEFORE_NEXT", "NEXT_CONTROL_CHECK",
+              "NEXT_CLICK_UNCERTAIN", "POST_NEXT_FIELDS_CHECK", "PRIVATE_CONTROL_CHECK",
+              "PRIVATE_CLICK_UNCERTAIN", "PRIVATE_CLICK_RETURNED"].includes(result?.diagnostic) ?
+              result.diagnostic : "";
             if (result?.retainedSession?.context && result?.retainedSession?.observer &&
                 typeof result.retainedSession.onClose === "function") {
               retainedSaveSession = result.retainedSession;

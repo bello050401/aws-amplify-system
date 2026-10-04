@@ -3,6 +3,9 @@ import { mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
+const DIAGNOSTICS = new Set(["CLAIMED_BEFORE_NEXT", "NEXT_CONTROL_CHECK",
+  "NEXT_CLICK_UNCERTAIN", "POST_NEXT_FIELDS_CHECK", "PRIVATE_CONTROL_CHECK",
+  "PRIVATE_CLICK_UNCERTAIN", "PRIVATE_CLICK_RETURNED"]);
 
 function attemptPath(root, target) {
   if (!root || !isAbsolute(root) ||
@@ -47,15 +50,16 @@ export async function readManualSaveClaim(root, target) {
 
 /** Results are separate; a result failure never removes the irreversible attempt marker. */
 export async function writeManualSaveOutcome(root, target, attemptId, outcome,
-  { postflightPrivate = false } = {}) {
+  { postflightPrivate = false, diagnostic = null } = {}) {
   if (!/^[0-9a-f-]{36}$/i.test(attemptId) ||
       !["CONFIRMED_PRIVATE", "UNKNOWN", "BLOCKED_BEFORE_CLICK"].includes(outcome) ||
-      typeof postflightPrivate !== "boolean")
+      typeof postflightPrivate !== "boolean" ||
+      (diagnostic !== null && !DIAGNOSTICS.has(diagnostic)))
     throw Error("Invalid save outcome");
   const path = attemptPath(root, target).replace(/\.json$/, ".result.json");
   const handle = await open(path, "wx", 0o600);
   try { await handle.writeFile(JSON.stringify({ schemaVersion: 1, attemptId, outcome,
-    postflightPrivate,
+    postflightPrivate, diagnostic,
     recordedAt: new Date().toISOString() }) + "\n", "utf8"); await handle.sync(); }
   finally { await handle.close(); }
 }
@@ -68,7 +72,10 @@ export async function readManualSaveOutcome(root, target) {
     const record = JSON.parse(await readFile(path, "utf8"));
     if (record?.schemaVersion !== 1 || record.attemptId !== claim.attemptId ||
         !["CONFIRMED_PRIVATE", "UNKNOWN", "BLOCKED_BEFORE_CLICK"].includes(record.outcome) ||
-        typeof record.postflightPrivate !== "boolean") return null;
-    return { outcome: record.outcome, postflightPrivate: record.postflightPrivate };
+        typeof record.postflightPrivate !== "boolean" ||
+        (record.diagnostic !== undefined && record.diagnostic !== null &&
+         !DIAGNOSTICS.has(record.diagnostic))) return null;
+    return { outcome: record.outcome, postflightPrivate: record.postflightPrivate,
+      diagnostic: record.diagnostic ?? null };
   } catch { return null; }
 }
