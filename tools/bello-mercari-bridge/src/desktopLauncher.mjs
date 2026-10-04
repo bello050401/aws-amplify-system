@@ -15,6 +15,12 @@ function launchError(code) {
   return error;
 }
 
+export function launchUriFromArguments(args) {
+  if (args.length !== 1 || (args[0] !== OPEN_URI && args[0] !== `${OPEN_URI}/`))
+    throw launchError("INVALID_URI");
+  return args[0];
+}
+
 export async function probeControl(fetchFn = fetch) {
   let response;
   try {
@@ -89,7 +95,7 @@ export async function openPcControlOnce(uri, {
   start = startBridge, open = openControlPage,
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
-  if (uri !== OPEN_URI) throw launchError("INVALID_URI");
+  launchUriFromArguments([uri]);
   const state = await probe();
   if (state === "AVAILABLE") { await open(); return "EXISTING"; }
   if (state !== "ABSENT") throw launchError("PORT_OCCUPIED");
@@ -108,19 +114,24 @@ export async function openPcControlOnce(uri, {
 }
 
 async function showLaunchError(error) {
-  const message = error?.code === "ALREADY_RUNNING" ?
-    "BELLOのPCアプリがすでに動いています。開いているPCアプリの画面をご確認ください。" :
-    error?.code === "NOT_INSTALLED" ?
-      "BELLOのPCアプリの更新が必要です。インストーラーを実行してください。" :
-      "BELLOのPCアプリを開けませんでした。デスクトップの「BELLO メルカリ照合」から起動してください。";
+  const code = ["INVALID_URI", "ALREADY_RUNNING", "NOT_INSTALLED", "PORT_OCCUPIED",
+    "PROCESS_CHECK_FAILED", "START_FAILED"].includes(error?.code) ? error.code : "START_FAILED";
+  const message = code === "INVALID_URI" ?
+    "BELLOの起動リンクを確認できませんでした。設定画面からもう一度開いてください。" :
+    code === "ALREADY_RUNNING" ?
+      "BELLOのPCアプリがすでに動いています。開いているPCアプリの画面をご確認ください。" :
+      code === "NOT_INSTALLED" ?
+        "BELLOのPCアプリの更新が必要です。インストーラーを実行してください。" :
+        "BELLOのPCアプリを開けませんでした。デスクトップの「BELLO メルカリ照合」から起動してください。";
+  const display = `${message}（${code}）`;
   await new Promise(resolve => {
     execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-      "-Command", `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${message}', 'BELLO メルカリ照合') | Out-Null`],
+      "-Command", `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${display}', 'BELLO メルカリ照合') | Out-Null`],
     { windowsHide: true, timeout: 30000 }, () => resolve());
   });
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url).toLowerCase() === process.argv[1].toLowerCase()) {
-  try { await openPcControlOnce(process.argv.length === 3 ? process.argv[2] : null); }
+  try { await openPcControlOnce(launchUriFromArguments(process.argv.slice(2))); }
   catch (error) { await showLaunchError(error); process.exitCode = 1; }
 }

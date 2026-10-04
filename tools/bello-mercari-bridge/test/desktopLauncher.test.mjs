@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CONTROL_URL, OPEN_URI, openPcControlOnce, probeControl } from "../src/desktopLauncher.mjs";
+import { CONTROL_URL, OPEN_URI, launchUriFromArguments, openPcControlOnce,
+  probeControl } from "../src/desktopLauncher.mjs";
 
 test("protocol opens only the verified fixed local control page", async () => {
   const calls = [];
@@ -12,10 +13,17 @@ test("protocol opens only the verified fixed local control page", async () => {
   });
   assert.equal(result, "EXISTING");
   assert.deepEqual(calls, ["open"]);
+  assert.equal(launchUriFromArguments([`${OPEN_URI}/`]), `${OPEN_URI}/`);
+  assert.equal(await openPcControlOnce(`${OPEN_URI}/`, {
+    probe: async () => "AVAILABLE", open: async () => calls.push("open"),
+  }), "EXISTING");
   await assert.rejects(openPcControlOnce(`${OPEN_URI}?requestId=secret`, {
     open: async () => calls.push("bad-open"),
   }), { code: "INVALID_URI" });
-  assert.deepEqual(calls, ["open"]);
+  assert.throws(() => launchUriFromArguments([OPEN_URI, "extra"]), { code: "INVALID_URI" });
+  assert.throws(() => launchUriFromArguments([`${OPEN_URI}/other`]), { code: "INVALID_URI" });
+  assert.throws(() => launchUriFromArguments([`${OPEN_URI}/#fragment`]), { code: "INVALID_URI" });
+  assert.deepEqual(calls, ["open", "open"]);
   assert.equal(CONTROL_URL, "http://127.0.0.1:56210/");
 });
 
