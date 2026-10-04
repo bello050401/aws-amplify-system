@@ -57,8 +57,12 @@ function optionsOf(config) {
   const imageWorkflowEnabled = config?.imageWorkflowEnabled ?? false;
   if (typeof imageWorkflowEnabled !== "boolean" || (imageWorkflowEnabled && !imageProof))
     throw Error("Invalid private-image workflow configuration");
+  const controlPort = config?.controlPort ?? 0;
+  if (!Number.isInteger(controlPort) || controlPort < 0 || controlPort > 65535 ||
+      (controlPort > 0 && controlPort < 1024))
+    throw Error("Invalid local PC control port");
   return { origin: config.origin, requestId: config.requestId, dataDir,
-    recovery, manualObservation, imageProof, imageWorkflowEnabled,
+    recovery, manualObservation, imageProof, imageWorkflowEnabled, controlPort,
     root: join(dataDir, "Queue"), belloProfileDir: join(dataDir, "BELLOChrome"),
     shopsProfileDir: join(dataDir, "ShopsChrome"),
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
@@ -523,7 +527,7 @@ export async function startDesktopApp(config, {
   });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+    server.listen(options.controlPort, "127.0.0.1", resolve);
   });
   localOrigin = `http://127.0.0.1:${server.address().port}`;
   if (openBrowser) {
@@ -559,6 +563,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url).toLowerCase() === process.
   const configPath = process.argv[2] === "--config" ? process.argv[3] : null;
   if (!configPath || !isAbsolute(configPath)) throw Error("A prepared absolute configuration path is required");
   const config = JSON.parse(await readFile(configPath, "utf8"));
-  const app = await startDesktopApp(config, { openBrowser: showLocalBrowser });
+  const app = await startDesktopApp(config, {
+    openBrowser: process.env.BELLO_MERCARI_PROTOCOL_LAUNCH === "1" ? null : showLocalBrowser,
+  });
   process.stdout.write(`BELLO local page: ${app.url}\n`);
 }

@@ -28,6 +28,16 @@ const post = (url, csrf, action, origin = url) => fetch(`${url}/action`, {
   body: new URLSearchParams({ csrf, action }),
 });
 
+test("fixed control port refuses a second desktop process", async () => {
+  const first = await startDesktopApp(config(), { openBrowser: null });
+  try {
+    const port = Number(new URL(first.url).port);
+    await assert.rejects(startDesktopApp({ ...config(), controlPort: port }, {
+      openBrowser: null,
+    }), { code: "EADDRINUSE" });
+  } finally { await first.close(); }
+});
+
 test("visible login steps use separate profiles; one explicit read binds the configured ID", async () => {
   const calls = [];
   const app = await startDesktopApp(config(), { openBrowser: async () => {},

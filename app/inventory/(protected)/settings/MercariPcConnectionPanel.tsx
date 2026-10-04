@@ -87,7 +87,14 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
         {labels.recordedAt && <p>最終報告: <time dateTime={labels.recordedAt}>{labels.recordedAt}</time></p>}
       </div>
       <p className="text-xs text-gray-600">PCの表示は、この読取依頼への報告履歴です。現在オンラインかどうかは判定できません。読取確認も出品可能・出品完了を意味しません。</p>
-      <p className="text-xs text-gray-600">Shopsへの通常ログインはPCアプリで行います。設定画面からログインを始める導線は未対応です。</p>
+      <div className="rounded border border-blue-200 bg-blue-50 p-3">
+        <a href="bello-mercari-bridge://open"
+          className="inline-block rounded bg-blue-700 px-3 py-2 text-white">
+          Shopsログイン用のPCアプリを開く
+        </a>
+        <p className="mt-2 text-xs text-gray-700">PCアプリの操作画面が開いたら「Shopsにログイン」を押してください。既に読取・保存作業中の場合は、今の作業を終えてから操作してください。</p>
+        <p className="mt-1 text-xs text-gray-700">反応しない場合は、デスクトップの「BELLO メルカリ照合」からPCアプリを起動してください。初回はPCアプリの更新が必要です。</p>
+      </div>
       <Link href={checkedRequestId ? `/inventory/mercari-bridge?requestId=${checkedRequestId}` : "/inventory/mercari-bridge"}
         className="inline-block text-blue-700 underline">既存商品の照合画面を開く</Link>
     </section>
