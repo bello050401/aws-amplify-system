@@ -7,6 +7,7 @@ import test from "node:test";
 import { startDesktopApp } from "../src/desktopApp.mjs";
 import { BridgeBoundaryError } from "../src/cloudConnector.mjs";
 import { claimManualSaveOnce } from "../src/manualSaveAttempt.mjs";
+import { claimManualImageOnce } from "../src/manualImageAttempt.mjs";
 
 const config = () => ({ origin: "https://bello.example.test", requestId: "a".repeat(64),
   dataDir: join(tmpdir(), "bello-desktop-test") });
@@ -184,6 +185,54 @@ test("one PC button invokes exact private save once and restart keeps it disable
     try {
       const content = await (await fetch(app.url)).text();
       assert.match(content, /<button disabled>既存商品を非公開で1回保存<\/button>/);
+      assert.equal(calls, 1);
+    } finally { await app.close(); }
+  } finally {
+    assert.equal(resolve(dataDir).startsWith(resolve(tmpdir()) + "\\"), true);
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("one PC image button uses the pinned file and stays disabled across restart", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-image-"));
+  const target = { shopId: "shop1", remoteId: "existing1", inventoryCode: "B005795",
+    priceYen: 90000, quantity: 0 };
+  const sha256 = "a".repeat(64);
+  const imageProof = { sha256, path: join(dataDir, "ImageProof", `B005795-${sha256.slice(0, 16)}.jpg`) };
+  let calls = 0;
+  const imageContext = context();
+  const imageObserver = { snapshot: () => [], stop: async () => [] };
+  const start = () => startDesktopApp({ ...config(), dataDir,
+    manualObservation: target, imageProof }, { openBrowser: async () => {},
+    runImageAdd: async options => {
+      calls++;
+      assert.deepEqual(options.target, target);
+      assert.equal(options.imagePath, imageProof.path);
+      assert.equal(options.imageSha256, imageProof.sha256);
+      await claimManualImageOnce(options.root, target, sha256);
+      return { status: "UNKNOWN", diagnostic: "FILE_SELECT_RETURNED", metadata: [],
+        retainedSession: { context: imageContext, observer: imageObserver,
+          onClose: callback => imageContext.once("close", callback) } };
+    } });
+  try {
+    let app = await start();
+    try {
+      const csrf = await token(app.url);
+      assert.match(await (await fetch(app.url)).text(), /既存商品に画像を1枚追加して観測/);
+      assert.equal((await post(app.url, csrf, "add-image-once")).status, 303);
+      assert.equal((await post(app.url, csrf, "add-image-once")).status, 303);
+      assert.equal(calls, 1);
+      const content = await (await fetch(app.url)).text();
+      assert.match(content, /<button disabled>既存商品に画像を1枚追加して観測<\/button>/);
+      assert.match(content, /FILE_SELECT_RETURNED/);
+      assert.match(content, /<button disabled>このアプリを終了<\/button>/);
+      assert.equal((await post(app.url, csrf, "refresh-image-observation")).status, 303);
+      await imageContext.close();
+    } finally { await app.close(); }
+    app = await start();
+    try {
+      assert.match(await (await fetch(app.url)).text(),
+        /<button disabled>既存商品に画像を1枚追加して観測<\/button>/);
       assert.equal(calls, 1);
     } finally { await app.close(); }
   } finally {

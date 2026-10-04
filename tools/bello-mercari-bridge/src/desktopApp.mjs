@@ -12,6 +12,8 @@ import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
 import { saveExistingPrivateOnce } from "./saveExistingPrivateOnce.mjs";
 import { readManualSaveClaim, readManualSaveOutcome } from "./manualSaveAttempt.mjs";
+import { addExistingImageOnce } from "./addExistingImageOnce.mjs";
+import { readManualImageClaim, readManualImageOutcome } from "./manualImageAttempt.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -36,8 +38,13 @@ function optionsOf(config) {
        !Number.isSafeInteger(manualObservation?.priceYen) || manualObservation.priceYen < 0 ||
        !Number.isSafeInteger(manualObservation?.quantity) || manualObservation.quantity < 0))
     throw Error("Invalid exact-product observation target");
+  const imageProof = config?.imageProof ?? null;
+  if (imageProof !== null && (!manualObservation || !HASH.test(imageProof?.sha256) ||
+      imageProof?.path !== join(dataDir, "ImageProof",
+        `${manualObservation.inventoryCode}-${imageProof.sha256.slice(0, 16)}.jpg`)))
+    throw Error("Invalid pinned local image proof");
   return { origin: config.origin, requestId: config.requestId, dataDir,
-    recovery, manualObservation,
+    recovery, manualObservation, imageProof,
     root: join(dataDir, "Queue"), belloProfileDir: join(dataDir, "BELLOChrome"),
     shopsProfileDir: join(dataDir, "ShopsChrome"),
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
@@ -46,7 +53,7 @@ function optionsOf(config) {
 function page({ csrf, options, message, busy, belloOpen, shopsOpen, manualOpen,
   manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastDiagnostics,
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
-  retainedSaveOpen }) {
+  retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen }) {
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy ? "disabled" : ""}>${label}</button></form>`;
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BELLO メルカリ照合</title><style>
@@ -81,9 +88,13 @@ ${button("observe-start", "観測用の専用Chromeを開く", manualOpen || pri
 ${manualOpen ? button("observe-stop", "観測を終了して概要を見る") : ""}
 ${manualAttempted ? `<details><summary>通信観測の概要（${lastManual.length}件）</summary><p><small>このPC画面のメモリ内だけに表示します。本文・認証値・画像データを保存せず、BELLOへ送りません。HTTP成立の判定は別途必要です。</small></p>
 ${lastManual.length ? `<ol>${lastManual.map(item => `<li><code>${html(item.order)}. ${html(item.method)} ${html(item.host)}${html(item.path)}</code> / ${html(item.bodyType)} / HTTP ${html(item.httpStatus ?? "未確認")} / 認証ヘッダー ${item.auth.authorization ? "あり" : "なし"}、Cookie ${item.auth.cookie ? "あり" : "なし"}、CSRF ${item.auth.csrf ? "あり" : "なし"} / 項目 ${item.fields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / 操作名 ${html(item.operationName ?? "未確認")} / 応答項目 ${html(item.responseField ?? "未確認")} / 応答種別 ${html(item.responseKind ?? "未確認")} / 商品ID一致 ${html(item.productMatch ?? "未確認")} / 店舗ID一致 ${html(item.shopMatch ?? "未確認")} / 状態 ${html(item.state ?? "未確認")} / GraphQLエラー ${html(item.graphqlErrors ?? "未確認")} ${html(item.graphqlErrorClass ?? "")}</li>`).join("")}</ol>` : "<p>対象となる送信は観測されませんでした。</p>"}</details>` : ""}</details></section>` : ""}
+${options.imageProof ? `<section><h2>既存商品への画像1枚追加</h2><p>対象画像のハッシュを確認し、既存の非公開商品と画像を照合してから、画像ファイルを1回だけ選択します。ファイル選択で送信が始まる可能性があります。商品保存・公開は押しません。</p>
+${button("add-image-once", "既存商品に画像を1枚追加して観測", imageAttempted || manualOpen || retainedSaveOpen || retainedImageOpen)}
+${imageAttempted ? `<p>画像選択は試行済み、または結果不明です。再実行できません。結果: <strong>${html(lastImageStatus || "UNKNOWN")}</strong> / 段階: <code>${html(lastImageDiagnostic || "未確認")}</code></p>` : ""}
+${retainedImageOpen ? `<p>専用Chromeを開いたままにしています。既存画像が残り、追加画像が表示されたか確認してください。画像選択のみでは商品保存を確認できません。</p>${button("refresh-image-observation", "画像通信の概要を更新")}` : ""}</section>` : ""}
 <section><h2>3. BELLOで結果を見る</h2><p>照合後、BELLOの照合依頼画面で「照合結果を確認する」を押してください。</p>
 <p><a href="${html(options.origin)}/inventory/mercari-bridge?requestId=${html(options.requestId)}" target="_blank" rel="noopener noreferrer">BELLOの照合依頼画面を開く</a></p>
-${button("shutdown", "このアプリを終了", retainedSaveOpen)}</section>
+${button("shutdown", "このアプリを終了", retainedSaveOpen || retainedImageOpen)}</section>
 </main></body></html>`;
 }
 
@@ -109,7 +120,7 @@ async function openManualObservationForExisting({ root, profileDir, playwrightMo
 export async function startDesktopApp(config, {
   openBello = openBelloAdminContext, openShops = openDedicatedLogin,
   openManualObservation = openManualObservationForExisting,
-  runPrivateSave = saveExistingPrivateOnce,
+  runPrivateSave = saveExistingPrivateOnce, runImageAdd = addExistingImageOnce,
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
 } = {}) {
   const options = optionsOf(config);
@@ -117,6 +128,10 @@ export async function startDesktopApp(config, {
     (await readManualSaveClaim(options.root, options.manualObservation)).claimed);
   const savedPrivateOutcome = options.manualObservation ?
     await readManualSaveOutcome(options.root, options.manualObservation) : null;
+  let imageAttempted = Boolean(options.imageProof &&
+    (await readManualImageClaim(options.root, options.manualObservation, options.imageProof.sha256)).claimed);
+  const savedImageOutcome = options.imageProof ?
+    await readManualImageOutcome(options.root, options.manualObservation, options.imageProof.sha256) : null;
   const csrf = randomBytes(32).toString("hex");
   let busy = false;
   let message = "";
@@ -133,6 +148,9 @@ export async function startDesktopApp(config, {
   let lastPrivateReadback = savedPrivateOutcome?.postflightPrivate === true;
   let lastPrivateDiagnostic = savedPrivateOutcome?.diagnostic ?? "";
   let retainedSaveSession = null;
+  let retainedImageSession = null;
+  let lastImageStatus = savedImageOutcome?.outcome ?? "";
+  let lastImageDiagnostic = savedImageOutcome?.diagnostic ?? "";
   let finishingManual = null;
   const finishManual = () => {
     if (finishingManual) return finishingManual;
@@ -150,7 +168,8 @@ export async function startDesktopApp(config, {
         manualOpen: Boolean(manualSession), manualAttempted, lastManual, lastResult,
         trafficAttempted, lastTraffic, lastDiagnostics, privateSaveAttempted, lastPrivateSave,
         lastPrivateReadback, lastPrivateDiagnostic,
-        retainedSaveOpen: Boolean(retainedSaveSession) }));
+        retainedSaveOpen: Boolean(retainedSaveSession), imageAttempted, lastImageStatus,
+        lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession) }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/action" ||
@@ -184,13 +203,13 @@ export async function startDesktopApp(config, {
         belloContext.once("close", () => { belloContext = null; });
         message = "BELLOの専用ブラウザを開きました。通常ログイン後、ブラウザを閉じてください。";
       } else if (action === "shops-login") {
-        if (shopsContext || retainedSaveSession) throw Error("Shops browser already open");
+        if (shopsContext || retainedSaveSession || retainedImageSession) throw Error("Shops browser already open");
         shopsContext = await openShops({ profileDir: options.shopsProfileDir,
           playwrightModulePath: options.playwrightModulePath });
         shopsContext.once("close", () => { shopsContext = null; });
         message = "Shopsの専用ブラウザを開きました。通常ログイン後、ブラウザを閉じてください。";
       } else if (action === "read") {
-        if (manualSession || retainedSaveSession) throw Error("Close the Shops browser first");
+        if (manualSession || retainedSaveSession || retainedImageSession) throw Error("Close the Shops browser first");
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         trafficAttempted = true;
@@ -204,7 +223,7 @@ export async function startDesktopApp(config, {
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
       } else if (action === "observe-start") {
-        if (!options.manualObservation || manualSession || retainedSaveSession || privateSaveAttempted)
+        if (!options.manualObservation || manualSession || retainedSaveSession || retainedImageSession || privateSaveAttempted)
           throw Error("Manual observation is unavailable");
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         manualAttempted = false;
@@ -217,11 +236,12 @@ export async function startDesktopApp(config, {
         });
         message = "対象の専用Chromeを開きました。価格・数量・非公開を確認し、内容を変えない保存1回だけを観測します。";
       } else if (action === "save-private-once") {
-        if (!options.manualObservation || manualSession)
+        if (!options.manualObservation || manualSession || retainedImageSession)
           throw Error("Exact-product private save is unavailable");
         if (privateSaveAttempted) {
           message = "この商品の保存操作は実行済み、または結果不明です。再実行できません。";
         } else {
+          if (retainedSaveSession) throw Error("Existing save observation is active");
           if (shopsContext) { await shopsContext.close(); shopsContext = null; }
           try {
             const result = await runPrivateSave({ root: options.root,
@@ -262,6 +282,51 @@ export async function startDesktopApp(config, {
         lastManual = safeManualMutationSummary(retainedSaveSession.observer.snapshot());
         manualAttempted = true;
         message = "通信概要を更新しました。保存成功の判定は保留のままです。";
+      } else if (action === "add-image-once") {
+        if (!options.imageProof || !options.manualObservation || manualSession || retainedSaveSession)
+          throw Error("Exact-product image proof is unavailable");
+        if (imageAttempted) {
+          message = "この商品の画像選択は試行済み、または結果不明です。再実行できません。";
+        } else {
+          if (retainedImageSession) throw Error("Existing image observation is active");
+          if (shopsContext) { await shopsContext.close(); shopsContext = null; }
+          try {
+            const result = await runImageAdd({ root: options.root,
+              profileDir: options.shopsProfileDir, playwrightModulePath: options.playwrightModulePath,
+              target: options.manualObservation, imagePath: options.imageProof.path,
+              imageSha256: options.imageProof.sha256,
+              onMetadata: items => { lastManual = safeManualMutationSummary(items); manualAttempted = true; } });
+            lastImageStatus = ["UNKNOWN", "BLOCKED_BEFORE_SELECT", "ALREADY_ATTEMPTED",
+              "PREFLIGHT_BLOCKED"].includes(result?.status) ? result.status : "UNKNOWN";
+            lastImageDiagnostic = ["CLAIMED_BEFORE_SELECT", "FILE_INPUT_CHECK",
+              "FINAL_TARGET_CHECK", "FILE_SELECT_UNCERTAIN", "FILE_SELECT_RETURNED",
+              "ORIGINAL_IMAGE_NOT_OBSERVED", "ADDED_IMAGE_UI_OBSERVED"].includes(result?.diagnostic) ?
+              result.diagnostic : "";
+            if (result?.retainedSession?.context && result?.retainedSession?.observer &&
+                typeof result.retainedSession.onClose === "function") {
+              retainedImageSession = result.retainedSession;
+              retainedImageSession.onClose(() => {
+                const session = retainedImageSession;
+                retainedImageSession = null;
+                if (session) void session.observer.stop().then(items => {
+                  lastManual = safeManualMutationSummary(items);
+                  manualAttempted = true;
+                }).catch(() => {});
+              });
+            }
+            message = lastImageStatus === "PREFLIGHT_BLOCKED" ?
+              "画像選択前の確認で停止しました。画像は送信していません。" :
+              "画像選択の結果は未確定です。再送せず、専用Chromeと通信概要を確認してください。";
+          } finally {
+            imageAttempted = Boolean((await readManualImageClaim(options.root,
+              options.manualObservation, options.imageProof.sha256)).claimed);
+          }
+        }
+      } else if (action === "refresh-image-observation") {
+        if (!retainedImageSession) throw Error("No retained image observation is active");
+        lastManual = safeManualMutationSummary(retainedImageSession.observer.snapshot());
+        manualAttempted = true;
+        message = "画像通信の概要を更新しました。商品保存の判定は保留のままです。";
       } else if (action === "observe-stop") {
         if (!manualSession) throw Error("No manual observation is active");
         const session = manualSession;
@@ -278,7 +343,7 @@ export async function startDesktopApp(config, {
         lastResult = result.status;
         message = "保存済みの読取結果をBELLOへ報告しました。Shopsの再読取は行っていません。";
       } else if (action === "shutdown") {
-        if (retainedSaveSession) throw Error("Shops browser is still open after save");
+        if (retainedSaveSession || retainedImageSession) throw Error("Shops browser is still open after mutation");
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
         if (manualSession) {
@@ -292,7 +357,9 @@ export async function startDesktopApp(config, {
       const stage = error instanceof BridgeBoundaryError ?
         [error.phase, error.httpStatus ? `HTTP ${error.httpStatus}` : null, error.serverCode]
           .filter(Boolean).join(" / ") : null;
-      message = form.get("action") === "save-private-once" && privateSaveAttempted ?
+      message = form.get("action") === "add-image-once" && imageAttempted ?
+        "画像選択の結果を確認できませんでした。再送せず、専用Chromeを確認してください。" :
+        form.get("action") === "save-private-once" && privateSaveAttempted ?
         "保存結果を確認できませんでした。再送せず、読取で確認してください。" :
         stage ? `処理を完了できませんでした（${stage}）。自動再試行はしていません。` :
         "処理を完了できませんでした。専用ブラウザのログイン状態と読取依頼を確認してください。";
