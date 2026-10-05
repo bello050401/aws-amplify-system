@@ -1,10 +1,11 @@
 import { open } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { CREATE_TEST_TARGET, readCreateTestClaim,
-  readCreateTestObservation } from "./createTestAttempt.mjs";
+  readCreateTestObservation, validCreateTestClaimedAt } from "./createTestAttempt.mjs";
 
 function claimRecord(claim) {
-  if (!claim.claimed || !claim.valid || !claim.attemptId || !claim.claimedAt)
+  if (!claim.claimed || !claim.valid || !claim.attemptId ||
+      !validCreateTestClaimedAt(claim.claimedAt))
     throw Error("The pinned private-create claim is unavailable");
   return { schemaVersion: 1, kind: "BELLO_PRIVATE_CREATE_CLAIM",
     attemptId: claim.attemptId, claimedAt: claim.claimedAt,

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { claimCreateTestOnce, recordCreateTestUiAttemptUnverified } from
+import { claimCreateTestOnce, readCreateTestClaim,
+  recordCreateTestUiAttemptUnverified } from
   "../src/createTestAttempt.mjs";
 import { exportSavedCreateTestClaim, exportSavedCreateTestUiResult,
   savedCreateTestClaimRecord, savedCreateTestUiResultRecord } from
@@ -33,5 +34,32 @@ test("one local create claim exports fixed target codes and an unverified UI res
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), exportedResult);
     await assert.rejects(exportSavedCreateTestClaim(root, path),
       error => error.code === "EEXIST");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("malformed claimedAt cannot enter either exported file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-private-create-invalid-date-"));
+  try {
+    const claim = await claimCreateTestOnce(root);
+    await recordCreateTestUiAttemptUnverified(root, claim.attemptId);
+    const dir = join(root, "private-create-test-once");
+    const claimName = (await readdir(dir)).find(name =>
+      name.endsWith(".json") && !name.endsWith(".result.json"));
+    assert.ok(claimName);
+    const claimPath = join(dir, claimName);
+    const record = JSON.parse(await readFile(claimPath, "utf8"));
+    for (const malformed of [
+      { authorization: "synthetic-secret", rawRequest: "synthetic-request" },
+      "2026-02-30T00:00:00.000Z",
+    ]) {
+      await writeFile(claimPath, JSON.stringify({ ...record, claimedAt: malformed }));
+      assert.equal((await readCreateTestClaim(root)).valid, false);
+      const claimOut = join(root, "claim.json");
+      const resultOut = join(root, "result.json");
+      await assert.rejects(exportSavedCreateTestClaim(root, claimOut));
+      await assert.rejects(exportSavedCreateTestUiResult(root, resultOut));
+      await assert.rejects(readFile(claimOut));
+      await assert.rejects(readFile(resultOut));
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -17,6 +17,10 @@ export const CREATE_TEST_TARGET = Object.freeze({
 });
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+export const validCreateTestClaimedAt = value =>
+  typeof value === "string" && ISO.test(value) &&
+  Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const KINDS = new Set(["MATCHED", "UNVERIFIED"]);
 const PINNED = ["shopId", "sourceInventoryId", "inventoryCode", "skuCode",
@@ -92,6 +96,7 @@ export async function readCreateTestClaim(root) {
     const record = JSON.parse(await readFile(paths(root).claim, "utf8"));
     const valid = record?.schemaVersion === 1 &&
       record.operation === "CREATE_PRIVATE_TEST_ONCE" && UUID.test(record.attemptId) &&
+      validCreateTestClaimedAt(record.claimedAt) &&
       PINNED.every(key => record[key] === CREATE_TEST_TARGET[key]);
     return { claimed: true, valid, attemptId: valid ? record.attemptId : null,
       claimedAt: valid ? record.claimedAt : null };

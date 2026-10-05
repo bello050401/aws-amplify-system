@@ -140,6 +140,20 @@ export const getCurrentInventoryUserEmail = requestCache(async function getCurre
   }
 });
 
+/** Stable Cognito owner key for owner-scoped, immutable trial events. */
+export const getCurrentInventoryUserSub = requestCache(async function getCurrentInventoryUserSub(): Promise<string | null> {
+  try {
+    return await runWithAmplifyServerContext({
+      nextServerContext: { cookies },
+      operation: async (contextSpec) => {
+        const session = await fetchAuthSession(contextSpec);
+        const sub = session.tokens?.idToken?.payload.sub ?? session.tokens?.accessToken.payload.sub;
+        return typeof sub === "string" && sub ? sub : null;
+      },
+    });
+  } catch { return null; }
+});
+
 /** For use in Route Handlers, mirroring requireAdminOrRedirect in requireAdmin.ts. */
 export async function requireInventoryUserOrRedirect(request: Request): Promise<NextResponse | null> {
   const status = await getInventorySessionStatus();

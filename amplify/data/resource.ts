@@ -1137,7 +1137,12 @@ const schema = a.schema({
       recordedAt: a.datetime().required(),
     })
     .identifier(["eventId"])
-    .authorization((allow) => [allow.group("ADMIN")]),
+    .authorization((allow) => [
+      // ADMIN may create; only the Cognito subject in requestedBy may read.
+      // No generated update/delete can reset this one-time event.
+      allow.group("ADMIN").to(["create"]),
+      allow.ownerDefinedIn("requestedBy").identityClaim("sub").to(["read"]),
+    ]),
 
   // ─────────────────────────────────────────────────────────────────────
   // BELLO統合業務OS指示書(2026-08-30) §17: Pricing Rule Engine。
