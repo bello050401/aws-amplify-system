@@ -67,5 +67,13 @@ test("probe accepts BELLO title and rejects redirects or lookalike pages", async
   assert.equal(await probeControl(async () => new Response(
     '<title>BELLO メルカリ照合</title><h1>BELLO メルカリShops既存商品照合</h1><input name="csrf">', {
     headers: { "content-type": "text/html; charset=utf-8" } })), "AVAILABLE");
+  const privatePage = '<title>BELLO Shops非公開テスト</title>' +
+    '<h1>メルカリShops 非公開テスト登録</h1>' +
+    'B005757-TEST-20261004-caf445ac6e676343<input name="csrf">';
+  assert.equal(await probeControl(async () => new Response(privatePage, {
+    headers: { "content-type": "text/html; charset=utf-8" } })), "AVAILABLE");
+  assert.equal(await probeControl(async () => new Response(privatePage.replace(
+    'B005757-TEST-20261004-caf445ac6e676343', 'another-product'), {
+    headers: { "content-type": "text/html; charset=utf-8" } })), "OTHER_SERVICE");
   assert.equal(await probeControl(async () => { throw Error("connection refused"); }), "ABSENT");
 });

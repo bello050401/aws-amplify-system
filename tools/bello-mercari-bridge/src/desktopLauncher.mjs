@@ -45,9 +45,13 @@ export async function probeControl(fetchFn = fetch) {
   } catch { return "OTHER_SERVICE"; }
   finally { await reader.cancel().catch(() => {}); }
   const html = Buffer.concat(parts).toString("utf8");
-  return html.includes("<title>BELLO メルカリ照合</title>") &&
-    html.includes("<h1>BELLO メルカリShops既存商品照合</h1>") &&
-    html.includes('name="csrf"') ? "AVAILABLE" : "OTHER_SERVICE";
+  const existingRead = html.includes("<title>BELLO メルカリ照合</title>") &&
+    html.includes("<h1>BELLO メルカリShops既存商品照合</h1>");
+  const privateCreate = html.includes("<title>BELLO Shops非公開テスト</title>") &&
+    html.includes("<h1>メルカリShops 非公開テスト登録</h1>") &&
+    html.includes("B005757-TEST-20261004-caf445ac6e676343");
+  return (existingRead || privateCreate) && html.includes('name="csrf"') ?
+    "AVAILABLE" : "OTHER_SERVICE";
 }
 
 export async function findRunningBridge() {
