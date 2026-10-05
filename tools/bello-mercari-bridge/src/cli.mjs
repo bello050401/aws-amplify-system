@@ -5,6 +5,7 @@ import { openDedicatedLogin, openExistingProductReadSession } from "./session.mj
 import { createExistingProductReader } from "./existingProductReader.mjs";
 import { openBelloAdminContext } from "./belloSession.mjs";
 import { runBelloCloudReadOnce } from "./cloudConnector.mjs";
+import { exportSavedDirectReadProof } from "./exportDirectReadProof.mjs";
 
 function argsOf(argv) {
   const [command, ...rest] = argv;
@@ -18,6 +19,11 @@ function argsOf(argv) {
 
 async function main() {
   const { command, flags } = argsOf(process.argv.slice(2));
+  if (command === "export-saved-direct-read-proof") {
+    await exportSavedDirectReadProof({ configPath: flags.config, outputPath: flags.out });
+    process.stdout.write("BELLOへ読み込む読取記録ファイルを書き出しました。Shopsへの通信は行っていません。\n");
+    return;
+  }
   if (command === "open-bello-login") {
     const context = await openBelloAdminContext({ origin: flags["bello-origin"],
       profileDir: flags["bello-profile"], playwrightModulePath: flags.playwright,
@@ -74,7 +80,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {

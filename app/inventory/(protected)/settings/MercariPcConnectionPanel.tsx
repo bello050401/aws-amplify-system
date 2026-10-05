@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getMercariExistingReadResultsAction } from "@/app/actions/mercariBridge";
 import { mercariDirectReadProofReportedAt,
   mercariPcConnectionLabels } from "@/lib/listing/mercariBridge/connectionStatus";
+import { directProofReportFromExport } from "@/lib/listing/mercariBridge/directProofImport";
 import type { ReadResultView } from "@/lib/listing/mercariBridge/resultView";
 
 const REQUEST_ID = /^[a-f0-9]{64}$/;
@@ -16,6 +17,10 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
   const [loading, setLoading] = useState(false);
   const [lookupState, setLookupState] = useState<"UNFETCHED" | "FAILED" | "READY">("UNFETCHED");
   const [message, setMessage] = useState<string | null>(null);
+  const [proofFile, setProofFile] = useState<File | null>(null);
+  const [proofPending, setProofPending] = useState(false);
+  const [proofMessage, setProofMessage] = useState<string | null>(null);
+  const proofInput = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
 
   const load = useCallback(async (id: string) => {
@@ -53,6 +58,8 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
     setCheckedRequestId(null);
     setLookupState("UNFETCHED");
     setMessage(null);
+    setProofFile(null);
+    setProofMessage(null);
     setLoading(false);
     if (REQUEST_ID.test(initialRequestId)) void load(initialRequestId);
     return () => { generation.current++; };
@@ -62,6 +69,47 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
     lookupState === "READY" && !checkedRequestId ? "UNFETCHED" : lookupState, results);
   const directProofReportedAt = lookupState === "READY" && checkedRequestId ?
     mercariDirectReadProofReportedAt(results) : null;
+
+  async function reportSavedProof() {
+    const id = requestId;
+    const file = proofFile;
+    if (!REQUEST_ID.test(id) || !file || file.size < 1 || file.size > 2048) {
+      setProofMessage("読取依頼IDと記録ファイルを確認してください。");
+      return;
+    }
+    setProofPending(true);
+    setProofMessage(null);
+    try {
+      const exportRecord: unknown = JSON.parse(await file.text());
+      const path = `/api/inventory/mercari-bridge/read?requestId=${id}`;
+      const owned = await fetch(path, { method: "GET", credentials: "same-origin",
+        headers: { "x-bello-mercari-bridge": "READ_EXISTING" },
+        cache: "no-store", redirect: "error" });
+      if (!owned.ok) throw Error("owner");
+      const dispatch = await owned.json();
+      if (dispatch?.ok !== true || exportRecord === null ||
+          typeof exportRecord !== "object" || Array.isArray(exportRecord) ||
+          (exportRecord as { requestId?: unknown }).requestId !== id)
+        throw Error("dispatch");
+      const report = directProofReportFromExport(exportRecord, dispatch.job);
+      const saved = await fetch(path, { method: "POST", credentials: "same-origin",
+        headers: { "x-bello-mercari-bridge": "READ_EXISTING",
+          "Content-Type": "application/json" },
+        body: JSON.stringify(report), cache: "no-store", redirect: "error" });
+      if (!saved.ok) throw Error("save");
+      const receipt = await saved.json();
+      if (receipt?.ok !== true || receipt.stored !== true ||
+          receipt.requestId !== id || receipt.attemptId !== report.attemptId ||
+          receipt.readStatus !== "DIRECT_HTTP_READ_CONFIRMED" ||
+          receipt.listingConfirmed !== false) throw Error("receipt");
+      setProofFile(null);
+      if (proofInput.current) proofInput.current.value = "";
+      await load(id);
+      setProofMessage("保存済みのHTTP読取記録をBELLOへ報告しました。出品・書込の確認ではありません。");
+    } catch {
+      setProofMessage("記録を報告できませんでした。BELLOへのログイン、依頼IDと対象商品、記録ファイルを確認してください。");
+    } finally { setProofPending(false); }
+  }
   return (
     <section className="max-w-2xl space-y-3 rounded border border-gray-200 bg-white p-4 text-[13px] text-gray-700">
       <h2 className="font-bold text-gray-900">メルカリShops PC連携</h2>
@@ -75,6 +123,8 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
           setLookupState("UNFETCHED");
           setResults([]);
           setMessage(null);
+          setProofFile(null);
+          setProofMessage(null);
         }} maxLength={64} autoComplete="off" spellCheck={false}
           className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 font-mono text-xs" />
       </label>
@@ -90,6 +140,22 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
         {labels.recordedAt && <p>最終報告: <time dateTime={labels.recordedAt}>{labels.recordedAt}</time></p>}
         {directProofReportedAt && <p>既存商品の直接HTTP読取: 過去の証拠を受信済み（受信時刻:
           <time dateTime={directProofReportedAt}>{directProofReportedAt}</time>）。現在のログイン状態は示しません。</p>}
+      </div>
+      <div className="rounded border border-blue-200 bg-blue-50 p-3">
+        <p className="font-semibold">保存済みのHTTP読取記録を報告</p>
+        <p className="mt-1 text-xs">PCで書き出した読取記録ファイルを選び、このログイン中のBELLO画面から報告します。Shopsへの読取は再実行しません。</p>
+        <label className="mt-2 block text-xs">読取記録ファイル（JSON）
+          <input ref={proofInput} key={requestId} type="file" accept=".json,application/json" onChange={event => {
+            setProofFile(event.target.files?.[0] ?? null);
+            setProofMessage(null);
+          }} className="mt-1 block w-full text-xs" />
+        </label>
+        <button type="button" disabled={proofPending || !REQUEST_ID.test(requestId) || !proofFile}
+          onClick={() => void reportSavedProof()}
+          className="mt-2 rounded bg-blue-700 px-3 py-2 text-white disabled:opacity-40">
+          {proofPending ? "報告中…" : "保存済み記録をBELLOへ報告"}
+        </button>
+        {proofMessage && <p role="status" className="mt-2 text-xs">{proofMessage}</p>}
       </div>
       <p className="text-xs text-gray-600">PCの表示は、この読取依頼への報告履歴です。現在オンラインかどうかは判定できません。読取確認も出品可能・出品完了を意味しません。</p>
       <div className="rounded border border-blue-200 bg-blue-50 p-3">

@@ -4,6 +4,18 @@ This independent PC module queues **read-only checks for an existing product ID*
 
 Node.js 24 or newer is required because the worker imports the shared TypeScript comparison function directly. No package installation is needed for queue tests; the optional visible browser launcher needs an existing Playwright installation and Chrome.
 
+## Report an already saved direct HTTP read in the signed-in BELLO tab
+
+For the pinned B005795 read only, the PC control page can download 「BELLO用の読取記録ファイルを保存」 after the saved normal-read metadata and one-time direct HTTP 200 record both pass local checks. This download makes no Shops request and opens no BELLO Chrome. In BELLO's Mercari PC connection settings, choose that JSON file and press 「保存済み記録をBELLOへ報告」. The page first retrieves the ADMIN-owned read request, checks the same shop, product, inventory code, request ID, and attempt ID, then posts only the fixed read status to the existing same-origin bridge. The result is a historical read receipt; it does not show current login state or prove a listing/write.
+
+For a stopped PC control page, a maintainer can export the same bounded file without opening a browser:
+
+```powershell
+node src/cli.mjs export-saved-direct-read-proof --config "C:\path\to\config.json" --out "C:\path\to\bello-direct-read-proof.json"
+```
+
+The file contains identifiers and fixed codes, not cookies, tokens, queries, response bodies, or product text. Keep it with the merchant's records. The server's existing ADMIN result boundary validates owner and target, but a local JSON file is not a cryptographic attestation of the past network request; its provenance still depends on the PC exporter's local checks and the authenticated administrator.
+
 The known B005795 proof product must be reused. Do not enqueue a new-product operation. The queue root stores one non-secret account binding, immutable read requests, and sanitized result codes/comparisons. The first account binds the root; another account is rejected. A failed read becomes `UNKNOWN`, an expired session becomes `AUTH_REQUIRED`, and both preserve the same remote ID. Runs are explicit and read-only; there is no automatic retry. The worker accepts only an exact-product observation with both account and remote ID matching before it promotes field or private-state observations.
 
 ## One-time separate login

@@ -289,6 +289,17 @@ test("saved matched HTTP proof has a separate report button and never reruns Sho
   const key = createHash("sha256").update(`${target.shopId}:${target.remoteId}`).digest("hex");
   const proofDir = join(dataDir, "Queue", "direct-read-probe-once");
   try {
+    await saveReadTrafficEvidence(join(dataDir, "Queue"), config().requestId,
+      "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", [], [{
+        method: "POST", host: "mercari-shops.com", path: "/graphql",
+        operationType: "query", operationName: "EditProductPage",
+        querySha256: PINNED_READ_QUERY_SHA256,
+        variableFields: [{ field: "id", type: "string" }], variableShapeComplete: true,
+        requestProductMatch: "MATCH", requestShopMatch: "UNOBSERVED",
+        responseProductMatch: "MATCH", responseShopMatch: "MATCH",
+        graphqlErrors: "NONE", httpStatus: 200, authPresenceObserved: true,
+        authPresence: { authorization: false, cookie: true, csrf: false },
+      }]);
     await mkdir(proofDir, { recursive: true });
     await writeFile(join(proofDir, `${key}.json`), JSON.stringify({ schemaVersion: 1,
       operation: "EXACT_READ_HTTP_PROBE_ONCE", attemptId,
@@ -309,6 +320,17 @@ test("saved matched HTTP proof has a separate report button and never reruns Sho
     try {
       const csrf = await token(app.url);
       assert.match(await (await fetch(app.url)).text(), /保存済みHTTP読取結果をBELLOへ報告/);
+      const download = await post(app.url, csrf, "download-direct-read-proof");
+      assert.equal(download.status, 200);
+      assert.equal(download.headers.get("content-disposition"),
+        'attachment; filename="bello-direct-read-proof.json"');
+      const exported = await download.json();
+      assert.deepEqual(exported, { schemaVersion: 1, kind: "BELLO_PINNED_DIRECT_READ_PROOF",
+        requestId: config().requestId, attemptId, accountReference: target.shopId,
+        remoteId: target.remoteId, inventoryCode: target.inventoryCode,
+        status: "DIRECT_HTTP_READ_CONFIRMED", reasonCode: "PINNED_HTTP_200_MATCHED",
+        listingConfirmed: false });
+      assert.equal(reports, 0);
       assert.equal((await post(app.url, csrf, "report-direct-read-proof")).status, 303);
       const content = await (await fetch(app.url)).text();
       assert.match(content, /<button disabled>保存済みHTTP読取結果をBELLOへ報告<\/button>/);

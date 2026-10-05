@@ -14,6 +14,7 @@ import { safeReadQueryCandidates } from "./readQueryObservation.mjs";
 import { latestReadTrafficEvidence } from "./trafficEvidence.mjs";
 import { directReadProbeAvailable, readDirectReadProbeOutcome,
   runPinnedDirectReadProbeOnce } from "./directReadProbe.mjs";
+import { savedDirectReadProofRecord } from "./exportDirectReadProof.mjs";
 import { safeReadDiagnostics } from "./readDiagnostics.mjs";
 import { observeManualShopsMutation, safeManualMutationSummary } from "./manualMutationObservation.mjs";
 import { saveExistingPrivateOnce } from "./saveExistingPrivateOnce.mjs";
@@ -148,7 +149,7 @@ ${directProbeAvailable || directProbeState.claimed ? `<section><h2>既存商品�
 ${button("probe-direct-read-once", "既存商品をHTTPで1回読取検証", !directProbeAvailable || directProbeState.claimed)}
 ${directProbeState.claimed ? `<p>結果: <strong>${html(directProbeState.outcome ?? "未確認")}</strong>${directProbeState.httpStatus ? ` / HTTP ${html(directProbeState.httpStatus)}` : ""}。結果が不明でも再送しません。PC内の認証での検証であり、BELLO Webサーバーからの通信成立を示すものではありません。</p>` : ""}
 ${directProbeState.outcome === "MATCHED" && directProbeState.httpStatus === 200 ?
-  `${button("report-direct-read-proof", "保存済みHTTP読取結果をBELLOへ報告", directProbeReported)}<p><small>Shopsへの読取を再実行しません。BELLOには固定の読取成功コードだけを送ります。出品・書込成功にはしません。</small></p>` : ""}</section>` : ""}
+  `${button("download-direct-read-proof", "BELLO用の読取記録ファイルを保存")}${button("report-direct-read-proof", "保存済みHTTP読取結果をBELLOへ報告", directProbeReported)}<p><small>ファイルを保存し、ログイン中のBELLO設定画面で読み込めます。Shopsへの読取を再実行しません。BELLOには固定の読取成功コードだけを送ります。出品・書込成功にはしません。</small></p>` : ""}</section>` : ""}
 ${trafficAttempted ? `<section><h2>読取診断</h2><p><small>このPC画面に一時表示する固定コードです。値やURLは記録せず、BELLOにも送りません。</small></p>
 ${lastDiagnostics.length ? `<p><code>${lastDiagnostics.map(html).join(" / ")}</code></p>` : "<p>診断コードはありません。照合成功を意味するものではありません。</p>"}</section>` : ""}
 ${options.manualObservation && !options.imageWorkflowEnabled ? `<section><h2>既存商品の通信観測</h2>
@@ -357,6 +358,7 @@ export async function startDesktopApp(config, {
     }
     busy = true;
     let shutdown = false;
+    let proofDownload = null;
     try {
       const action = form.get("action");
       if (options.createTestObservationEnabled &&
@@ -488,6 +490,12 @@ export async function startDesktopApp(config, {
           target: options.manualObservation });
         directProbeReported = true;
         message = "保存済みの直接HTTP読取結果をBELLOへ報告しました。出品や書込の確認ではありません。";
+      } else if (action === "download-direct-read-proof") {
+        if (!options.manualObservation || directProbeState.outcome !== "MATCHED" ||
+            directProbeState.httpStatus !== 200)
+          throw Error("Direct read proof is unavailable");
+        proofDownload = await savedDirectReadProofRecord(options.root, options.requestId,
+          options.manualObservation);
       } else if (action === "verify-saved-product-readonly") {
         if (!options.manualObservation || !options.imageProof || shopsContext || manualSession ||
             retainedSaveSession || retainedImageSession || retainedWorkflowSession)
@@ -732,7 +740,13 @@ export async function startDesktopApp(config, {
         stage ? `処理を完了できませんでした（${stage}）。自動再試行はしていません。` :
         "処理を完了できませんでした。専用ブラウザのログイン状態と読取依頼を確認してください。";
     } finally { busy = false; }
-    if (shutdown) {
+    if (proofDownload) {
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": "attachment; filename=\"bello-direct-read-proof.json\"",
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY" });
+      response.end(JSON.stringify(proofDownload) + "\n");
+    } else if (shutdown) {
       send(response, 200, "アプリを終了しました。", "text/plain; charset=utf-8");
       server.close();
     } else {
