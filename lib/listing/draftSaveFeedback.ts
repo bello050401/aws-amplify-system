@@ -21,7 +21,7 @@ export function requireSavedDraftResult(value: unknown): ListingDraftRecord {
 export function draftSaveNeedsFreshPage(error: unknown): boolean {
   return error instanceof UnknownDraftSaveResult ||
     error instanceof Error &&
-      /Failed to find Server Action|Server Action .* was not found|fetch failed|failed to fetch/i.test(error.message);
+      /Failed to find Server Action|Server Action .* was not found|fetch failed|failed to fetch|^Connection closed\.$/i.test(error.message);
 }
 
 export function draftSaveFailureMessage(draftPersisted: boolean, error: unknown): string {

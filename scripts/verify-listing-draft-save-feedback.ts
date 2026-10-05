@@ -14,6 +14,10 @@ assert.equal(draftSaveFailureMessage(false, new Error(unknown)), unknown);
 const stale = new Error('Failed to find Server Action "old-action-id"');
 assert.equal(draftSaveNeedsFreshPage(stale), true);
 assert.equal(draftSaveFailureMessage(false, stale), unknown);
+// Next 14.2.35's production RSC decoder emits this when the action response closes mid-stream.
+const interrupted = new Error("Connection closed.");
+assert.equal(draftSaveNeedsFreshPage(interrupted), true);
+assert.equal(draftSaveFailureMessage(false, interrupted), unknown);
 assert.equal(draftSaveNeedsFreshPage(new Error("出品タイトルを入力してください。")), false);
 assert.equal(draftSaveFailureMessage(true, new Error("photo failed")),
   "下書きは保存されましたが、撮影画像の選択情報の更新に失敗しました: photo failed");
