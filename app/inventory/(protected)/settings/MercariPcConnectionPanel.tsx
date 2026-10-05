@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getMercariExistingReadResultsAction } from "@/app/actions/mercariBridge";
 import { mercariDirectReadProofReportedAt,
   mercariPcConnectionLabels } from "@/lib/listing/mercariBridge/connectionStatus";
-import { directProofReportFromExport } from "@/lib/listing/mercariBridge/directProofImport";
+import { reportSavedDirectProofInTab } from "@/lib/listing/mercariBridge/directProofImport";
 import type { ReadResultView } from "@/lib/listing/mercariBridge/resultView";
 
 const REQUEST_ID = /^[a-f0-9]{64}$/;
@@ -22,6 +22,7 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
   const [proofMessage, setProofMessage] = useState<string | null>(null);
   const proofInput = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
+  const reportRequestEpoch = useRef(0);
 
   const load = useCallback(async (id: string) => {
     const current = ++generation.current;
@@ -53,6 +54,7 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
 
   useEffect(() => {
     generation.current++;
+    reportRequestEpoch.current++;
     setRequestId(initialRequestId);
     setResults([]);
     setCheckedRequestId(null);
@@ -62,7 +64,7 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
     setProofMessage(null);
     setLoading(false);
     if (REQUEST_ID.test(initialRequestId)) void load(initialRequestId);
-    return () => { generation.current++; };
+    return () => { generation.current++; reportRequestEpoch.current++; };
   }, [initialRequestId, load]);
 
   const labels = mercariPcConnectionLabels(loading ? "LOADING" :
@@ -77,37 +79,20 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
       setProofMessage("読取依頼IDと記録ファイルを確認してください。");
       return;
     }
+    const epoch = reportRequestEpoch.current;
+    const isCurrent = () => reportRequestEpoch.current === epoch;
     setProofPending(true);
     setProofMessage(null);
     try {
-      const exportRecord: unknown = JSON.parse(await file.text());
-      const path = `/api/inventory/mercari-bridge/read?requestId=${id}`;
-      const owned = await fetch(path, { method: "GET", credentials: "same-origin",
-        headers: { "x-bello-mercari-bridge": "READ_EXISTING" },
-        cache: "no-store", redirect: "error" });
-      if (!owned.ok) throw Error("owner");
-      const dispatch = await owned.json();
-      if (dispatch?.ok !== true || exportRecord === null ||
-          typeof exportRecord !== "object" || Array.isArray(exportRecord) ||
-          (exportRecord as { requestId?: unknown }).requestId !== id)
-        throw Error("dispatch");
-      const report = directProofReportFromExport(exportRecord, dispatch.job);
-      const saved = await fetch(path, { method: "POST", credentials: "same-origin",
-        headers: { "x-bello-mercari-bridge": "READ_EXISTING",
-          "Content-Type": "application/json" },
-        body: JSON.stringify(report), cache: "no-store", redirect: "error" });
-      if (!saved.ok) throw Error("save");
-      const receipt = await saved.json();
-      if (receipt?.ok !== true || receipt.stored !== true ||
-          receipt.requestId !== id || receipt.attemptId !== report.attemptId ||
-          receipt.readStatus !== "DIRECT_HTTP_READ_CONFIRMED" ||
-          receipt.listingConfirmed !== false) throw Error("receipt");
+      const outcome = await reportSavedDirectProofInTab({ requestId: id, file, isCurrent,
+        refresh: () => load(id) });
+      if (outcome === "STALE" || !isCurrent()) return;
       setProofFile(null);
       if (proofInput.current) proofInput.current.value = "";
-      await load(id);
       setProofMessage("保存済みのHTTP読取記録をBELLOへ報告しました。出品・書込の確認ではありません。");
     } catch {
-      setProofMessage("記録を報告できませんでした。BELLOへのログイン、依頼IDと対象商品、記録ファイルを確認してください。");
+      if (isCurrent())
+        setProofMessage("記録を報告できませんでした。BELLOへのログイン、依頼IDと対象商品、記録ファイルを確認してください。");
     } finally { setProofPending(false); }
   }
   return (
@@ -117,6 +102,7 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
       <label className="block">読取依頼ID
         <input value={requestId} onChange={event => {
           generation.current++;
+          reportRequestEpoch.current++;
           setRequestId(event.target.value.trim());
           setLoading(false);
           setCheckedRequestId(null);

@@ -40,3 +40,42 @@ export function directProofReportFromExport(value: unknown, dispatch: unknown) {
     status: "DIRECT_HTTP_READ_CONFIRMED" as const, comparison: null,
     reasonCode: "PINNED_HTTP_200_MATCHED" as const };
 }
+
+/** Stop stale reports before POST and never display a former request after switching IDs. */
+export async function reportSavedDirectProofInTab(input: {
+  requestId: string;
+  file: Pick<File, "size" | "text">;
+  isCurrent: () => boolean;
+  refresh: () => Promise<void>;
+  fetchImpl?: typeof fetch;
+}): Promise<"REPORTED" | "STALE"> {
+  const { requestId, file, isCurrent, refresh, fetchImpl = fetch } = input;
+  if (!HASH.test(requestId) || file.size < 1 || file.size > 2048)
+    throw Error("Invalid direct proof file");
+  const exportRecord: unknown = JSON.parse(await file.text());
+  if (!isCurrent()) return "STALE";
+  const path = `/api/inventory/mercari-bridge/read?requestId=${requestId}`;
+  const owned = await fetchImpl(path, { method: "GET", credentials: "same-origin",
+    headers: { "x-bello-mercari-bridge": "READ_EXISTING" },
+    cache: "no-store", redirect: "error" });
+  if (!isCurrent()) return "STALE";
+  if (!owned.ok) throw Error("Read request is unavailable");
+  const dispatch = await owned.json();
+  if (!isCurrent()) return "STALE";
+  if (dispatch?.ok !== true || !object(exportRecord) || exportRecord.requestId !== requestId)
+    throw Error("Read request and proof differ");
+  const report = directProofReportFromExport(exportRecord, dispatch.job);
+  const saved = await fetchImpl(path, { method: "POST", credentials: "same-origin",
+    headers: { "x-bello-mercari-bridge": "READ_EXISTING", "Content-Type": "application/json" },
+    body: JSON.stringify(report), cache: "no-store", redirect: "error" });
+  if (!isCurrent()) return "STALE";
+  if (!saved.ok) throw Error("Direct proof was not accepted");
+  const receipt = await saved.json();
+  if (!isCurrent()) return "STALE";
+  if (receipt?.ok !== true || receipt.stored !== true ||
+      receipt.requestId !== requestId || receipt.attemptId !== report.attemptId ||
+      receipt.readStatus !== "DIRECT_HTTP_READ_CONFIRMED" || receipt.listingConfirmed !== false)
+    throw Error("Direct proof receipt differs");
+  await refresh();
+  return isCurrent() ? "REPORTED" : "STALE";
+}
