@@ -55,7 +55,7 @@ npm run build
 
 隔離ブランチでは、対象の結果受理・投影・接続状態テスト、`npm run typecheck`、`npm run build`、`git diff --check` を実施する。ビルド成功後も外部反映は別の最終判断とし、反映時はstagingブランチだけに統合してGitHubへpushする。Amplifyの当該ブランチの自動ビルドに既存jobがあれば重複して `start-job` しない。既存の `scripts/aws-setup/7-fix-staging-iam-role.ps1` はstaging専用jobを検出・監視するが、IAM修正も可能な書込スクリプトなので、この変更だけのためには実行しない。Amplifyの `amplify.yml` はバックエンドで `npm install` と `ampx pipeline-deploy`、フロントエンドで `npm install` と `npm run build` を実行する。
 
-`MERCARI_BRIDGE_PUBLIC_ORIGIN` は `amplify.yml` がstagingのApp ID/ブランチ一致時だけ設定する既存のHTTPS Originを維持する。`NEXT_ENGINE_ISOLATED_APP=1` だと読取APIが404になるため、BELLO側には設定しない。`BASE_PRIVATE_TEST_WRITES_ENABLED`、`NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED`、`NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED`、`NEXT_ENGINE_MASTER_UPLOAD_ENABLED`、`NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED` は既定の0を維持する。PCの `createTestObservationEnabled`、`manualObservation`、`imageWorkflowEnabled` などローカル設定も触れない。
+`MERCARI_BRIDGE_PUBLIC_ORIGIN` は `amplify.yml` がstagingのApp ID/ブランチ一致時だけ設定する既存のHTTPS Originを維持する。`NEXT_ENGINE_ISOLATED_APP=1` だと読取APIが404になるため、BELLO側には設定しない。2026-10-05のAWS読取では、stagingブランチの `BASE_PRIVATE_TEST_WRITES_ENABLED=1`、`NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED=1`、残りの3つのNext Engine送信ゲートは0だった。この作業では**既存値を変更しない**。`amplify.yml` の既定値0だけを根拠に、実際のブランチ値を0と見なさない。PCの `createTestObservationEnabled`、`manualObservation`、`imageWorkflowEnabled` などローカル設定も触れない。
 
 ## GPT内タブとの接続条件
 
