@@ -69,3 +69,9 @@ PCの保存済み固定語彙の通信概要は `2026-10-05T23:23:44.716Z / OBSE
 本人が通常読取完了後にPC画面の「このアプリを終了」を押した。読取専用のOS点検では、`desktopApp.mjs` のNodeプロセス0、専用Shops/BELLO Chromeプロセス0、`127.0.0.1:56210` の待受け0、Queueのロックファイル0。設置済み `config.json` は6キーのまま、依頼IDは上記B005757と一致する。Queueにはジョブ9件・結果9件・通信概要2対象・直接読取試行ファイル2件があり、削除・移動・上書きしない。認証用の `ShopsChrome` と `BELLOChrome` も存在を確認しただけで中身を読まず、複製しない。
 
 候補コミット `ba31eb3` と設置版 `App/src` をハッシュ比較すると、今回の機能に必要な最小反映は既存 `desktopApp.mjs`、`directReadProbe.mjs`、`cloudConnector.mjs` の3ファイル差し替えと、新規 `exportDirectReadProof.mjs` の追加。全体インストーラーは他の既存ファイルも更新するため、この段階では使わない。反映時は停止状態と0ロックを再確認し、設置版の上記3ファイルと `config.json` を同じローカル領域に日時付きで保全してから、コミット `ba31eb3` の対応する4ファイルだけを配置する。設定は既存6キーを保持し、別の読取専用キー `directReadTarget` に店舗 `evkhihBFFNn5hukMS9s36H`・商品 `2JXjWPRVBxjZ2K2vgTGNqy`・在庫コード `B005757` の3値だけを追加する。`manualObservation`・`imageProof` は追加しない。配置後はファイルのハッシュ一致、設定の既存6キー一致、Queue/認証profileの同一パス、HTTP読取ボタンだけが表示されることを確認する。PCアプリの再起動、ボタン実行、BELLO報告は別工程であり、この点検では行っていない。独立レビュー合格までは設置版へ書き込まない。
+
+### PC候補反映とBELLO検証版の配布状況（2026-10-06）
+
+Astraの独立レビューで候補 `ba31eb3` にP1/P2指摘なし。PCアプリ・専用Chrome・56210待受け・Queueロックがすべて0の状態で、設置版の旧3ファイルと設定を `C:\Users\win\AppData\Local\BELLO\MercariBridge\Backup-before-b005757-direct-read-20261006` に保全した。必要な4ファイルだけを配置し、候補とのSHA-256一致を確認。設定の既存6キーは値も含めて保持し、`directReadTarget` の3値だけを追加した。Queue、ShopsChrome、BELLOChromeは同じ場所に残し、中身の複製・変更はしていない。設置済みコードの構文確認は通過し、保存済み通常読取概要からはB005757の一回限りHTTP読取が `available=true`、過去の試行 `claimed=false` と読める。これは実HTTP成功ではなく、まだ読取ボタンも押していない。
+
+Webの受理側は候補版から `directProofImport` と `resultAcceptance` の本体・試験だけを検証用worktreeへコピーし、14件の対象試験と型検査に通過した。コミット `6294041` を既存の `claude/inventory-management-system-5vbvc7` ブランチへ送信済み。検証環境へのAmplify公開はAWSログイン期限切れでジョブ開始・成否確認ができていないため、この時点では公開済みと扱わない。AWSの通常サインイン画面を表示して本人の再認証待ち。PC読取の一回限り実行とBELLOへの証明報告は、Web受理側の公開成功を確認した後に別操作で行う。
