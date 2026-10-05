@@ -18,6 +18,7 @@ import { ListingPartitionBackfillPanel } from "./ListingPartitionBackfillPanel";
 import { BaseSettingsPanel } from "./BaseSettingsPanel";
 import { NextEngineSettingsPanel } from "./NextEngineSettingsPanel";
 import { MercariPcConnectionPanel } from "./MercariPcConnectionPanel";
+import { MercariPrivateCreateTrialPanel } from "./MercariPrivateCreateTrialPanel";
 import { ShippingRatePanel } from "./ShippingRatePanel";
 import { LineSettingsPanel } from "./LineSettingsPanel";
 import { SystemAuditPanel } from "./SystemAuditPanel";
@@ -41,6 +42,7 @@ interface SettingsTabsProps {
   nextEngineConnection: NextEngineConnectionState;
   nextEnginePrivateTestEnabled: boolean;
   nextEnginePrivateRetestEnabled: boolean;
+  mercariPrivateCreateTrialEnabled: boolean;
   /** BELLO統合業務OS指示書(2026-08-30) §51-52: LINE接続設定タブもADMINにのみ表示する。mercariConnected/mercariTokenSourceと同じ理由・同じ導出方法。 */
   lineConnected: boolean;
   lineTokenSource: LineTokenSource;
@@ -66,6 +68,7 @@ export function SettingsTabs({
   nextEngineConnection,
   nextEnginePrivateTestEnabled,
   nextEnginePrivateRetestEnabled,
+  mercariPrivateCreateTrialEnabled,
   lineConnected,
   lineTokenSource,
 }: SettingsTabsProps) {
@@ -225,8 +228,10 @@ export function SettingsTabs({
         )}
         {tab === "base" && isAdmin && <BaseSettingsPanel state={baseConnection} />}
         {tab === "nextEngine" && isAdmin && <NextEngineSettingsPanel state={nextEngineConnection} privateTestEnabled={nextEnginePrivateTestEnabled} privateRetestEnabled={nextEnginePrivateRetestEnabled} callbackResult={nextEngineResult} />}
-        {tab === "mercariBridge" && isAdmin &&
-          <MercariPcConnectionPanel initialRequestId={searchParams.get("requestId") ?? ""} />}
+        {tab === "mercariBridge" && isAdmin && <div className="space-y-4">
+          <MercariPcConnectionPanel initialRequestId={searchParams.get("requestId") ?? ""} />
+          {mercariPrivateCreateTrialEnabled && <MercariPrivateCreateTrialPanel />}
+        </div>}
         {/* 第六ラウンド§13-15(P0-3): 自動値下げルールの主導線はEC出品側
             (/inventory/listings/pricing-rules)へ移設した。ここに残す
             ロジック付きUIを二重に持たない(同じ設定を二箇所で編集できる
