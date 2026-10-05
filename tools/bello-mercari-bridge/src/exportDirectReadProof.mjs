@@ -1,17 +1,14 @@
 import { open, readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
-import { readDirectReadProbeProof } from "./directReadProbe.mjs";
+import { assertPinnedDirectReadTarget, readDirectReadProbeProof } from "./directReadProbe.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const REFERENCE = /^[A-Za-z0-9_-]{1,100}$/;
-const PINNED_REMOTE_ID = "2JXePE4ke8UCBTj6mxc4cf";
-const PINNED_INVENTORY_CODE = "B005795";
 
 export async function savedDirectReadProofRecord(root, requestId, target) {
-  if (!isAbsolute(root) || !HASH.test(requestId) || !REFERENCE.test(target?.shopId) ||
-      target?.remoteId !== PINNED_REMOTE_ID ||
-      target?.inventoryCode !== PINNED_INVENTORY_CODE)
+  if (!isAbsolute(root) || !HASH.test(requestId) || !REFERENCE.test(target?.shopId))
     throw Error("The saved direct read target is invalid");
+  assertPinnedDirectReadTarget(target, requestId);
   const { attemptId } = await readDirectReadProbeProof(root, requestId, target);
   return { schemaVersion: 1, kind: "BELLO_PINNED_DIRECT_READ_PROOF",
     requestId, attemptId, accountReference: target.shopId,
@@ -26,11 +23,10 @@ export async function exportSavedDirectReadProof({ configPath, outputPath }) {
       !isAbsolute(configPath) || !isAbsolute(outputPath))
     throw Error("Absolute configuration and output paths are required");
   const config = JSON.parse(await readFile(configPath, "utf8"));
-  const target = config?.manualObservation;
-  if (!HASH.test(config?.requestId) || !REFERENCE.test(target?.shopId) ||
-      target?.remoteId !== PINNED_REMOTE_ID ||
-      target?.inventoryCode !== PINNED_INVENTORY_CODE)
+  const target = config?.directReadTarget ?? config?.manualObservation;
+  if (!HASH.test(config?.requestId) || !REFERENCE.test(target?.shopId))
     throw Error("The saved direct read target is invalid");
+  assertPinnedDirectReadTarget(target, config.requestId);
   const localAppData = process.env.LOCALAPPDATA;
   const dataDir = config.dataDir ?? (localAppData && join(localAppData, "BELLO", "MercariBridge"));
   if (!dataDir || !isAbsolute(dataDir)) throw Error("The local proof directory is invalid");

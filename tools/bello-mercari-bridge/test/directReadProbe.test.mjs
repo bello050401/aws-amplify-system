@@ -143,3 +143,45 @@ test("pinned proof needs prior evidence and keeps one durable attempt", async ()
       launchPersistentContext, probeWaitMs: 20 }), /EEXIST/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("B005757 has its own fixed request, evidence, and one-time read claim", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-b005757-direct-read-"));
+  const requestId = "7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825";
+  const target = { shopId: "evkhihBFFNn5hukMS9s36H",
+    remoteId: "2JXjWPRVBxjZ2K2vgTGNqy", inventoryCode: "B005757" };
+  try {
+    assert.equal(await directReadProbeAvailable(root, requestId, target), false);
+    await saveReadTrafficEvidence(root, requestId,
+      "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", [], [{
+        method: "POST", host: "mercari-shops.com", path: "/graphql",
+        operationType: "query", operationName: "EditProductPage",
+        querySha256: PINNED_READ_QUERY_SHA256,
+        variableFields: [{ field: "id", type: "string" }], variableShapeComplete: true,
+        requestProductMatch: "MATCH", requestShopMatch: "UNOBSERVED",
+        responseProductMatch: "MATCH", responseShopMatch: "MATCH",
+        graphqlErrors: "NONE", httpStatus: 200, authPresenceObserved: true,
+        authPresence: { authorization: false, cookie: true, csrf: false },
+      }]);
+    assert.equal(await directReadProbeAvailable(root, requestId, target), true);
+    await assert.rejects(directReadProbeAvailable(root, "a".repeat(64), target));
+    await assert.rejects(directReadProbeAvailable(root, requestId,
+      { ...target, shopId: "other-shop" }));
+    await assert.rejects(directReadProbeAvailable(root, requestId,
+      { ...target, inventoryCode: "B005795" }));
+    const result = await runPinnedDirectReadProbeOnce({ root,
+      profileDir: join(root, "ShopsChrome"), requestId, target, probeWaitMs: 20,
+      launchPersistentContext: async () => {
+        const context = new EventEmitter();
+        context.pages = () => [{ goto: async () => {},
+          url: () => `https://mercari-shops.com/seller/shops/${target.shopId}/products/${target.remoteId}/edit` }];
+        context.close = async () => {};
+        context.request = { post: async () => { throw Error("must not send"); } };
+        return context;
+      },
+    });
+    assert.deepEqual(result, { outcome: "NO_EXACT_NORMAL_READ", httpStatus: null });
+    assert.equal(await directReadProbeAvailable(root, requestId, target), false);
+    assert.deepEqual(await readDirectReadProbeOutcome(root, target),
+      { claimed: true, outcome: "NO_EXACT_NORMAL_READ", httpStatus: null });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

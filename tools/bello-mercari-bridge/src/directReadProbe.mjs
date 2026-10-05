@@ -5,9 +5,13 @@ import { openExistingProductReadSession } from "./session.mjs";
 import { latestReadTrafficEvidence } from "./trafficEvidence.mjs";
 import { safeDirectReadProbeResult } from "./directReadProbeObserver.mjs";
 
-// Pin the one existing, already observed private product and its normal read query.
-const PINNED_REMOTE_ID = "2JXePE4ke8UCBTj6mxc4cf";
-const PINNED_INVENTORY_CODE = "B005795";
+// Each target needs its own normal read evidence and durable one-time claim.
+const PINNED_TARGETS = new Map([
+  ["2JXePE4ke8UCBTj6mxc4cf", { inventoryCode: "B005795" }],
+  ["2JXjWPRVBxjZ2K2vgTGNqy", { inventoryCode: "B005757",
+    shopId: "evkhihBFFNn5hukMS9s36H",
+    requestId: "7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825" }],
+]);
 export const PINNED_READ_QUERY_SHA256 =
   "307abc058c96db65d9be11acda8b5f40bf69e91be21579e1b4fb219e7e5e05bf";
 const HASH = /^[a-f0-9]{64}$/;
@@ -18,11 +22,19 @@ const OUTCOMES = new Set(["MATCHED", "NO_EXACT_NORMAL_READ", "NORMAL_READ_UNVERI
   "DIRECT_AUTH_REQUIRED", "DIRECT_REQUEST_FAILED", "AUTH_REQUIRED",
   "NAVIGATION_UNVERIFIED", "READ_FAILED"]);
 
-function paths(root, target) {
-  if (!isAbsolute(root) || !ID.test(target?.shopId) ||
-      target.remoteId !== PINNED_REMOTE_ID ||
-      target.inventoryCode !== PINNED_INVENTORY_CODE)
+export function assertPinnedDirectReadTarget(target, requestId = null) {
+  const pinned = PINNED_TARGETS.get(target?.remoteId);
+  if (!pinned || !ID.test(target?.shopId) ||
+      target.inventoryCode !== pinned.inventoryCode ||
+      (pinned.shopId && target.shopId !== pinned.shopId) ||
+      (requestId !== null && (!HASH.test(requestId) ||
+        pinned.requestId && requestId !== pinned.requestId)))
     throw Error("Invalid pinned direct read target");
+}
+
+function paths(root, target, requestId = null) {
+  if (!isAbsolute(root)) throw Error("Invalid pinned direct read root");
+  assertPinnedDirectReadTarget(target, requestId);
   const key = createHash("sha256").update(`${target.shopId}:${target.remoteId}`).digest("hex");
   const dir = join(root, "direct-read-probe-once");
   return { dir, claim: join(dir, `${key}.json`), result: join(dir, `${key}.result.json`) };
@@ -41,7 +53,7 @@ function priorEvidenceReady(evidence) {
 }
 
 export async function directReadProbeAvailable(root, requestId, target) {
-  paths(root, target);
+  paths(root, target, requestId);
   if (!HASH.test(requestId)) throw Error("Invalid read request identity");
   const [evidence, prior] = await Promise.all([
     latestReadTrafficEvidence(root, requestId), readDirectReadProbeOutcome(root, target),
@@ -75,7 +87,7 @@ export async function readDirectReadProbeOutcome(root, target) {
  * one-time claim format has no request ID, so its exact target and the saved
  * normal-read evidence must both match the owned BELLO dispatch. */
 export async function readDirectReadProbeProof(root, requestId, target) {
-  const path = paths(root, target);
+  const path = paths(root, target, requestId);
   if (!HASH.test(requestId)) throw Error("Invalid read request identity");
   const evidence = await latestReadTrafficEvidence(root, requestId);
   if (!priorEvidenceReady(evidence)) throw Error("Normal read evidence missing");
@@ -96,7 +108,7 @@ export async function readDirectReadProbeProof(root, requestId, target) {
 /** Explicit, one-time read probe. No query, variable, URL value, or credential is saved. */
 export async function runPinnedDirectReadProbeOnce({ root, profileDir, playwrightModulePath,
   requestId, target, launchPersistentContext = null, probeWaitMs = 12000 }) {
-  const path = paths(root, target);
+  const path = paths(root, target, requestId);
   if (!HASH.test(requestId)) throw Error("Invalid read request identity");
   const evidence = await latestReadTrafficEvidence(root, requestId);
   if (!priorEvidenceReady(evidence)) throw Error("The pinned normal read is not proven");

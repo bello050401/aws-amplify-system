@@ -281,6 +281,38 @@ test("PC exposes one pinned HTTP read proof only after exact evidence and disabl
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
+test("B005757 read-only target exposes HTTP probe without private-save controls", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-b005757-read-"));
+  const requestId = "7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825";
+  const directReadTarget = { shopId: "evkhihBFFNn5hukMS9s36H",
+    remoteId: "2JXjWPRVBxjZ2K2vgTGNqy", inventoryCode: "B005757" };
+  try {
+    await saveReadTrafficEvidence(join(dataDir, "Queue"), requestId,
+      "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", [], [{
+        method: "POST", host: "mercari-shops.com", path: "/graphql",
+        operationType: "query", operationName: "EditProductPage",
+        querySha256: PINNED_READ_QUERY_SHA256,
+        variableFields: [{ field: "id", type: "string" }], variableShapeComplete: true,
+        requestProductMatch: "MATCH", requestShopMatch: "UNOBSERVED",
+        responseProductMatch: "MATCH", responseShopMatch: "MATCH",
+        graphqlErrors: "NONE", httpStatus: 200, authPresenceObserved: true,
+        authPresence: { authorization: false, cookie: true, csrf: false },
+      }]);
+    const options = { ...config(), dataDir, requestId, directReadTarget };
+    await assert.rejects(startDesktopApp({ ...options,
+      directReadTarget: { ...directReadTarget, priceYen: 98000 } },
+    { openBrowser: null }));
+    const app = await startDesktopApp(options, { openBrowser: null });
+    try {
+      const content = await (await fetch(app.url)).text();
+      assert.match(content, /<button >既存商品をHTTPで1回読取検証<\/button>/);
+      assert.equal(content.includes("既存商品の通信観測"), false);
+      assert.equal(content.includes("既存商品を非公開で1回保存"), false);
+      assert.equal(content.includes("既存商品に画像を1枚追加して観測"), false);
+    } finally { await app.close(); }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test("saved matched HTTP proof has a separate report button and never reruns Shops read", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-direct-report-"));
   const target = { shopId: "shop1", remoteId: "2JXePE4ke8UCBTj6mxc4cf",

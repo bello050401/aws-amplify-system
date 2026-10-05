@@ -12,7 +12,7 @@ import { BridgeBoundaryError, reportPinnedDirectReadProofOnce,
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
 import { safeReadQueryCandidates } from "./readQueryObservation.mjs";
 import { latestReadTrafficEvidence } from "./trafficEvidence.mjs";
-import { directReadProbeAvailable, readDirectReadProbeOutcome,
+import { assertPinnedDirectReadTarget, directReadProbeAvailable, readDirectReadProbeOutcome,
   runPinnedDirectReadProbeOnce } from "./directReadProbe.mjs";
 import { savedDirectReadProofRecord } from "./exportDirectReadProof.mjs";
 import { safeReadDiagnostics } from "./readDiagnostics.mjs";
@@ -81,6 +81,14 @@ function optionsOf(config) {
        !Number.isSafeInteger(manualObservation?.priceYen) || manualObservation.priceYen < 0 ||
        !Number.isSafeInteger(manualObservation?.quantity) || manualObservation.quantity < 0))
     throw Error("Invalid exact-product observation target");
+  const directReadTarget = config?.directReadTarget ?? manualObservation;
+  if (config?.directReadTarget !== undefined) {
+    if (!directReadTarget || Object.keys(directReadTarget).sort().join(",") !==
+        "inventoryCode,remoteId,shopId" ||
+        manualObservation)
+      throw Error("Invalid isolated direct read target");
+    assertPinnedDirectReadTarget(directReadTarget, config.requestId);
+  }
   const imageProof = config?.imageProof ?? null;
   const imagePrefix = manualObservation && HASH.test(imageProof?.sha256 ?? "") ?
     `${manualObservation.inventoryCode}-${imageProof.sha256.slice(0, 16)}` : null;
@@ -96,14 +104,14 @@ function optionsOf(config) {
   if (typeof createTestObservationEnabled !== "boolean" ||
       Object.hasOwn(config, "createTestSkuAbsentConfirmed") ||
       (createTestObservationEnabled &&
-        (manualObservation || imageProof || recovery || imageWorkflowEnabled)))
+        (manualObservation || directReadTarget || imageProof || recovery || imageWorkflowEnabled)))
     throw Error("The private create test must use its isolated PC configuration");
   const controlPort = config?.controlPort ?? 0;
   if (!Number.isInteger(controlPort) || controlPort < 0 || controlPort > 65535 ||
       (controlPort > 0 && controlPort < 1024))
     throw Error("Invalid local PC control port");
   return { origin: config.origin, requestId: config.requestId, dataDir,
-    recovery, manualObservation, imageProof, imageWorkflowEnabled,
+    recovery, manualObservation, directReadTarget, imageProof, imageWorkflowEnabled,
     createTestObservationEnabled, controlPort,
     root: join(dataDir, "Queue"), belloProfileDir: join(dataDir, "BELLOChrome"),
     shopsProfileDir: join(dataDir, "ShopsChrome"),
@@ -262,11 +270,11 @@ export async function startDesktopApp(config, {
   let directProbeAvailable = false;
   let directProbeState = { claimed: false, outcome: null, httpStatus: null };
   let directProbeReported = false;
-  if (options.manualObservation) {
+  if (options.directReadTarget) {
     try {
-      directProbeState = await readDirectReadProbeOutcome(options.root, options.manualObservation);
+      directProbeState = await readDirectReadProbeOutcome(options.root, options.directReadTarget);
       directProbeAvailable = await directReadProbeAvailable(options.root, options.requestId,
-        options.manualObservation);
+        options.directReadTarget);
     } catch { /* Other products never expose this pinned proof action. */ }
   }
   let trafficEvidenceStatus = storedTrafficEvidence.status;
@@ -455,14 +463,14 @@ export async function startDesktopApp(config, {
           } });
         if (trafficEvidenceStatus === "READ_IN_PROGRESS")
           trafficEvidenceStatus = "STORE_STATUS_UNCONFIRMED";
-        if (options.manualObservation && !directProbeState.claimed) {
+        if (options.directReadTarget && !directProbeState.claimed) {
           try { directProbeAvailable = await directReadProbeAvailable(options.root,
-            options.requestId, options.manualObservation); } catch { directProbeAvailable = false; }
+            options.requestId, options.directReadTarget); } catch { directProbeAvailable = false; }
         }
         lastResult = result.status;
         message = "照合結果をBELLOへ報告しました。BELLO画面で内容を確認してください。";
       } else if (action === "probe-direct-read-once") {
-        if (!options.manualObservation || !directProbeAvailable || directProbeState.claimed ||
+        if (!options.directReadTarget || !directProbeAvailable || directProbeState.claimed ||
             shopsContext || manualSession || retainedSaveSession || retainedImageSession ||
             retainedWorkflowSession)
           throw Error("Exact read probe is unavailable");
@@ -470,16 +478,16 @@ export async function startDesktopApp(config, {
           const result = await runDirectReadProbe({ root: options.root,
             profileDir: options.shopsProfileDir,
             playwrightModulePath: options.playwrightModulePath,
-            requestId: options.requestId, target: options.manualObservation });
+            requestId: options.requestId, target: options.directReadTarget });
           directProbeState = { claimed: true, ...result };
           message = "既存商品のHTTP読取検証を記録しました。商品は変更していません。";
         } finally {
           directProbeAvailable = false;
           directProbeState = await readDirectReadProbeOutcome(options.root,
-            options.manualObservation);
+            options.directReadTarget);
         }
       } else if (action === "report-direct-read-proof") {
-        if (!options.manualObservation || directProbeReported ||
+        if (!options.directReadTarget || directProbeReported ||
             directProbeState.outcome !== "MATCHED" || directProbeState.httpStatus !== 200 ||
             belloContext || shopsContext || manualSession || retainedSaveSession ||
             retainedImageSession || retainedWorkflowSession)
@@ -487,15 +495,15 @@ export async function startDesktopApp(config, {
         await reportDirectRead({ origin: options.origin, requestId: options.requestId,
           root: options.root, belloProfileDir: options.belloProfileDir,
           playwrightModulePath: options.playwrightModulePath,
-          target: options.manualObservation });
+          target: options.directReadTarget });
         directProbeReported = true;
         message = "保存済みの直接HTTP読取結果をBELLOへ報告しました。出品や書込の確認ではありません。";
       } else if (action === "download-direct-read-proof") {
-        if (!options.manualObservation || directProbeState.outcome !== "MATCHED" ||
+        if (!options.directReadTarget || directProbeState.outcome !== "MATCHED" ||
             directProbeState.httpStatus !== 200)
           throw Error("Direct read proof is unavailable");
         proofDownload = await savedDirectReadProofRecord(options.root, options.requestId,
-          options.manualObservation);
+          options.directReadTarget);
       } else if (action === "verify-saved-product-readonly") {
         if (!options.manualObservation || !options.imageProof || shopsContext || manualSession ||
             retainedSaveSession || retainedImageSession || retainedWorkflowSession)
