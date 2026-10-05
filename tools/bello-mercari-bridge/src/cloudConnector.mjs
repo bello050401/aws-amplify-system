@@ -6,6 +6,7 @@ import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
 import { safeReadQueryCandidates } from "./readQueryObservation.mjs";
 import { saveReadTrafficEvidence } from "./trafficEvidence.mjs";
 import { isAbsolute } from "node:path";
+import { readDirectReadProbeProof } from "./directReadProbe.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const REFERENCE = /^[A-Za-z0-9_-]{1,100}$/;
@@ -84,6 +85,32 @@ async function postReadResult(context, origin, requestId, result) {
       receipt.listingConfirmed !== false)
     throw new BridgeBoundaryError("RESULT_RECEIPT_MISMATCH", httpStatusOf(posted));
   return { requestId, attemptId: result.attemptId, status: result.status, listingConfirmed: false };
+}
+
+/** Report an already completed local HTTP read. Never opens Shops or repeats it. */
+export async function reportPinnedDirectReadProofOnce({ origin, requestId, root,
+  belloProfileDir, playwrightModulePath, target,
+  launchBelloContext = openBelloAdminContext }) {
+  if (!validBelloOrigin(origin) || !HASH.test(requestId) || !root || !isAbsolute(root) ||
+      !belloProfileDir || !isAbsolute(belloProfileDir))
+    throw new BridgeBoundaryError("DIRECT_PROOF_CONFIG_INVALID");
+  const context = await launchBelloContext({ origin, profileDir: belloProfileDir,
+    playwrightModulePath });
+  try {
+    const dispatch = await fetchOwnedDispatch(context, origin, requestId);
+    if (dispatch.accountReference !== target?.shopId ||
+        dispatch.remoteId !== target?.remoteId ||
+        dispatch.inventoryCode !== target?.inventoryCode)
+      throw new BridgeBoundaryError("DIRECT_PROOF_TARGET_MISMATCH");
+    let proof;
+    try { proof = await readDirectReadProbeProof(root, requestId, target); }
+    catch { throw new BridgeBoundaryError("DIRECT_PROOF_MISSING"); }
+    return await postReadResult(context, origin, requestId, {
+      attemptId: proof.attemptId, accountReference: dispatch.accountReference,
+      remoteId: dispatch.remoteId, status: "DIRECT_HTTP_READ_CONFIRMED",
+      comparison: null, reasonCode: "PINNED_HTTP_200_MATCHED",
+    });
+  } finally { await context.close(); }
 }
 
 function sameExpected(left, right) {

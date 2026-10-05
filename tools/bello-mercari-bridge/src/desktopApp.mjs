@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { openBelloAdminContext, validBelloOrigin } from "./belloSession.mjs";
 import { openDedicatedLogin, openDedicatedProductListSession,
   openExistingProductReadSession } from "./session.mjs";
-import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "./cloudConnector.mjs";
+import { BridgeBoundaryError, reportPinnedDirectReadProofOnce,
+  reportSavedReadResultOnce, runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { safeShopsTrafficSummary } from "./trafficObservation.mjs";
 import { safeReadQueryCandidates } from "./readQueryObservation.mjs";
 import { latestReadTrafficEvidence } from "./trafficEvidence.mjs";
@@ -110,7 +111,7 @@ function optionsOf(config) {
 
 function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsOpen, manualOpen,
   manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastReadQueries,
-  lastDiagnostics, directProbeAvailable, directProbeState,
+  lastDiagnostics, directProbeAvailable, directProbeState, directProbeReported,
   trafficEvidenceStatus, trafficEvidenceAt,
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
@@ -145,7 +146,9 @@ ${trafficAttempted ? `<details><summary>読取GraphQL候補（${lastReadQueries.
 ${lastReadQueries.length ? `<ol>${lastReadQueries.map(item => `<li><code>${html(item.operationName ?? "操作名未確認")}</code> / query SHA-256 ${html(item.querySha256 ?? "未確認")} / 変数 ${item.variableFields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / 変数形状 ${item.variableShapeComplete ? "観測範囲内" : "一部未確認"} / 要求商品ID ${html(item.requestProductMatch)} / 要求店舗ID ${html(item.requestShopMatch)} / 応答商品ID ${html(item.responseProductMatch)} / 応答店舗ID ${html(item.responseShopMatch)} / HTTP ${html(item.httpStatus ?? "未確認")} / GraphQLエラー ${html(item.graphqlErrors)} / 認証ヘッダー存在 ${item.authPresenceObserved ? item.authPresence.authorization ? "あり" : "なし" : "未確認"}、Cookie存在 ${item.authPresenceObserved ? item.authPresence.cookie ? "あり" : "なし" : "未確認"}、CSRF存在 ${item.authPresenceObserved ? item.authPresence.csrf ? "あり" : "なし" : "未確認"}</li>`).join("")}</ol>` : "<p>対象IDに結び付く読取query候補は観測されませんでした。</p>"}</details>` : ""}
 ${directProbeAvailable || directProbeState.claimed ? `<section><h2>既存商品のHTTP読取を1回検証</h2><p>通常のログイン済み読取で同じqueryと商品IDを確認してから、同じ専用ブラウザの認証状態でHTTP読取を1回だけ行います。商品は変更しません。結果はこのPCに固定コードだけを記録します。</p>
 ${button("probe-direct-read-once", "既存商品をHTTPで1回読取検証", !directProbeAvailable || directProbeState.claimed)}
-${directProbeState.claimed ? `<p>結果: <strong>${html(directProbeState.outcome ?? "未確認")}</strong>${directProbeState.httpStatus ? ` / HTTP ${html(directProbeState.httpStatus)}` : ""}。結果が不明でも再送しません。PC内の認証での検証であり、BELLO Webサーバーからの通信成立を示すものではありません。</p>` : ""}</section>` : ""}
+${directProbeState.claimed ? `<p>結果: <strong>${html(directProbeState.outcome ?? "未確認")}</strong>${directProbeState.httpStatus ? ` / HTTP ${html(directProbeState.httpStatus)}` : ""}。結果が不明でも再送しません。PC内の認証での検証であり、BELLO Webサーバーからの通信成立を示すものではありません。</p>` : ""}
+${directProbeState.outcome === "MATCHED" && directProbeState.httpStatus === 200 ?
+  `${button("report-direct-read-proof", "保存済みHTTP読取結果をBELLOへ報告", directProbeReported)}<p><small>Shopsへの読取を再実行しません。BELLOには固定の読取成功コードだけを送ります。出品・書込成功にはしません。</small></p>` : ""}</section>` : ""}
 ${trafficAttempted ? `<section><h2>読取診断</h2><p><small>このPC画面に一時表示する固定コードです。値やURLは記録せず、BELLOにも送りません。</small></p>
 ${lastDiagnostics.length ? `<p><code>${lastDiagnostics.map(html).join(" / ")}</code></p>` : "<p>診断コードはありません。照合成功を意味するものではありません。</p>"}</section>` : ""}
 ${options.manualObservation && !options.imageWorkflowEnabled ? `<section><h2>既存商品の通信観測</h2>
@@ -209,6 +212,7 @@ export async function startDesktopApp(config, {
   runWorkflow = runPrivateImageWorkflowOnce,
   runSavedProductReadback = verifyExistingSavedProductReadOnly,
   runDirectReadProbe = runPinnedDirectReadProbeOnce,
+  reportDirectRead = reportPinnedDirectReadProofOnce,
   openCreateList = openDedicatedProductListSession,
   observeCreate = observeBoundedShopsWrite,
   claimCreate = claimCreateTestOnce,
@@ -256,6 +260,7 @@ export async function startDesktopApp(config, {
   let lastReadQueries = storedTrafficEvidence.readQueries;
   let directProbeAvailable = false;
   let directProbeState = { claimed: false, outcome: null, httpStatus: null };
+  let directProbeReported = false;
   if (options.manualObservation) {
     try {
       directProbeState = await readDirectReadProbeOutcome(options.root, options.manualObservation);
@@ -316,7 +321,7 @@ export async function startDesktopApp(config, {
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
         manualOpen: Boolean(manualSession), manualAttempted, lastManual, lastResult,
         trafficAttempted, lastTraffic, lastReadQueries, lastDiagnostics,
-        directProbeAvailable, directProbeState,
+        directProbeAvailable, directProbeState, directProbeReported,
         privateSaveAttempted, lastPrivateSave,
         trafficEvidenceStatus, trafficEvidenceAt,
         lastPrivateReadback, lastPrivateDiagnostic,
@@ -471,6 +476,18 @@ export async function startDesktopApp(config, {
           directProbeState = await readDirectReadProbeOutcome(options.root,
             options.manualObservation);
         }
+      } else if (action === "report-direct-read-proof") {
+        if (!options.manualObservation || directProbeReported ||
+            directProbeState.outcome !== "MATCHED" || directProbeState.httpStatus !== 200 ||
+            belloContext || shopsContext || manualSession || retainedSaveSession ||
+            retainedImageSession || retainedWorkflowSession)
+          throw Error("Direct read proof is unavailable");
+        await reportDirectRead({ origin: options.origin, requestId: options.requestId,
+          root: options.root, belloProfileDir: options.belloProfileDir,
+          playwrightModulePath: options.playwrightModulePath,
+          target: options.manualObservation });
+        directProbeReported = true;
+        message = "保存済みの直接HTTP読取結果をBELLOへ報告しました。出品や書込の確認ではありません。";
       } else if (action === "verify-saved-product-readonly") {
         if (!options.manualObservation || !options.imageProof || shopsContext || manualSession ||
             retainedSaveSession || retainedImageSession || retainedWorkflowSession)

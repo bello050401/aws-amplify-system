@@ -4,9 +4,10 @@ import type { ExistingProductBinding, ExistingReadJob } from "./readRequest";
 import type { StoredReadResult } from "./resultAcceptance";
 
 const statuses = new Set(["CONNECTOR_NOT_CONFIGURED", "AUTH_REQUIRED", "UNKNOWN",
-  "IDENTITY_MISMATCH", "NOT_PRIVATE", "DIFFERENT", "INCOMPLETE", "CORE_FIELDS_MATCH"]);
+  "IDENTITY_MISMATCH", "NOT_PRIVATE", "DIFFERENT", "INCOMPLETE", "CORE_FIELDS_MATCH",
+  "DIRECT_HTTP_READ_CONFIRMED"]);
 const reasons = new Set(["NO_READER", "SIGN_IN_REQUIRED", "READ_FAILED",
-  "UNVERIFIED_READ", "INVALID_OBSERVATION"]);
+  "UNVERIFIED_READ", "INVALID_OBSERVATION", "PINNED_HTTP_200_MATCHED"]);
 const fields = new Set(["inventoryCode", "title", "description", "priceYen", "quantity",
   "categoryPath", "brand", "condition", "shippingMethod", "shippingPayer",
   "shippingOrigin", "shippingDays", "imageCount", "primaryImageIdentity"]);

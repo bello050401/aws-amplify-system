@@ -11,6 +11,7 @@ const PINNED_INVENTORY_CODE = "B005795";
 export const PINNED_READ_QUERY_SHA256 =
   "307abc058c96db65d9be11acda8b5f40bf69e91be21579e1b4fb219e7e5e05bf";
 const HASH = /^[a-f0-9]{64}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const OUTCOMES = new Set(["MATCHED", "NO_EXACT_NORMAL_READ", "NORMAL_READ_UNVERIFIED",
   "REQUEST_CONTEXT_UNAVAILABLE", "DIRECT_HTTP_UNVERIFIED", "DIRECT_RESPONSE_UNVERIFIED",
@@ -70,6 +71,28 @@ export async function readDirectReadProbeOutcome(root, target) {
   } catch { return { claimed: true, outcome: null, httpStatus: null }; }
 }
 
+/** Only a completed, pinned HTTP 200 read can be reported to BELLO. The older
+ * one-time claim format has no request ID, so its exact target and the saved
+ * normal-read evidence must both match the owned BELLO dispatch. */
+export async function readDirectReadProbeProof(root, requestId, target) {
+  const path = paths(root, target);
+  if (!HASH.test(requestId)) throw Error("Invalid read request identity");
+  const evidence = await latestReadTrafficEvidence(root, requestId);
+  if (!priorEvidenceReady(evidence)) throw Error("Normal read evidence missing");
+  const claim = JSON.parse(await readFile(path.claim, "utf8"));
+  const result = JSON.parse(await readFile(path.result, "utf8"));
+  if (claim?.schemaVersion !== 1 || claim.operation !== "EXACT_READ_HTTP_PROBE_ONCE" ||
+      !UUID.test(claim.attemptId) || claim.querySha256 !== PINNED_READ_QUERY_SHA256 ||
+      (claim.requestId !== undefined && claim.requestId !== requestId) ||
+      result?.schemaVersion !== 1 || result.attemptId !== claim.attemptId ||
+      result.outcome !== "MATCHED" || result.httpStatus !== 200 ||
+      !Number.isFinite(Date.parse(claim.claimedAt)) ||
+      !Number.isFinite(Date.parse(result.recordedAt)) ||
+      Date.parse(result.recordedAt) < Date.parse(claim.claimedAt))
+    throw Error("Pinned direct read proof is not confirmed");
+  return { attemptId: claim.attemptId };
+}
+
 /** Explicit, one-time read probe. No query, variable, URL value, or credential is saved. */
 export async function runPinnedDirectReadProbeOnce({ root, profileDir, playwrightModulePath,
   requestId, target, launchPersistentContext = null, probeWaitMs = 12000 }) {
@@ -82,7 +105,7 @@ export async function runPinnedDirectReadProbeOnce({ root, profileDir, playwrigh
   const handle = await open(path.claim, "wx", 0o600);
   try {
     await handle.writeFile(JSON.stringify({ schemaVersion: 1,
-      operation: "EXACT_READ_HTTP_PROBE_ONCE", attemptId,
+      operation: "EXACT_READ_HTTP_PROBE_ONCE", attemptId, requestId,
       querySha256: PINNED_READ_QUERY_SHA256, claimedAt: new Date().toISOString() }) + "\n");
     await handle.sync();
   } finally { await handle.close(); }

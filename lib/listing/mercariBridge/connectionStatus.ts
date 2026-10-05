@@ -32,6 +32,8 @@ export function mercariPcConnectionStatus(results: ReadResultView[]): MercariPcC
     (["PRIVATE_OBSERVED", "NOT_PRIVATE"].includes(latest.visibility ?? "") ||
       Object.values(latest.fields).some(value => value === "MATCH" || value === "DIFFERENT"));
   const shops = latest.status === "AUTH_REQUIRED" ? "REAUTH_REQUIRED" :
+    latest.status === "DIRECT_HTTP_READ_CONFIRMED" &&
+    latest.reasonCode === "PINNED_HTTP_200_MATCHED" ? "READ_CONFIRMED" :
     observedProduct &&
     ["NOT_PRIVATE", "DIFFERENT", "INCOMPLETE", "CORE_FIELDS_MATCH"].includes(latest.status) ?
       "READ_CONFIRMED" : "LOGIN_UNCONFIRMED";

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -276,6 +277,44 @@ test("PC exposes one pinned HTTP read proof only after exact evidence and disabl
       assert.match(await (await fetch(app.url)).text(),
         /<button disabled>既存商品をHTTPで1回読取検証<\/button>/);
       assert.equal(calls, 1);
+    } finally { await app.close(); }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("saved matched HTTP proof has a separate report button and never reruns Shops read", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-direct-report-"));
+  const target = { shopId: "shop1", remoteId: "2JXePE4ke8UCBTj6mxc4cf",
+    inventoryCode: "B005795", priceYen: 90000, quantity: 0 };
+  const attemptId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const key = createHash("sha256").update(`${target.shopId}:${target.remoteId}`).digest("hex");
+  const proofDir = join(dataDir, "Queue", "direct-read-probe-once");
+  try {
+    await mkdir(proofDir, { recursive: true });
+    await writeFile(join(proofDir, `${key}.json`), JSON.stringify({ schemaVersion: 1,
+      operation: "EXACT_READ_HTTP_PROBE_ONCE", attemptId,
+      querySha256: PINNED_READ_QUERY_SHA256, claimedAt: "2026-10-04T11:36:28.164Z" }));
+    await writeFile(join(proofDir, `${key}.result.json`), JSON.stringify({ schemaVersion: 1,
+      attemptId, outcome: "MATCHED", httpStatus: 200,
+      recordedAt: "2026-10-04T11:36:30.506Z" }));
+    let reports = 0;
+    const app = await startDesktopApp({ ...config(), dataDir, manualObservation: target }, {
+      openBrowser: null,
+      runDirectReadProbe: async () => { throw Error("must not read Shops"); },
+      reportDirectRead: async ({ target: reported }) => {
+        assert.deepEqual(reported, target);
+        reports++;
+        return { listingConfirmed: false };
+      },
+    });
+    try {
+      const csrf = await token(app.url);
+      assert.match(await (await fetch(app.url)).text(), /保存済みHTTP読取結果をBELLOへ報告/);
+      assert.equal((await post(app.url, csrf, "report-direct-read-proof")).status, 303);
+      const content = await (await fetch(app.url)).text();
+      assert.match(content, /<button disabled>保存済みHTTP読取結果をBELLOへ報告<\/button>/);
+      assert.match(content, /出品や書込の確認ではありません/);
+      assert.equal((await post(app.url, csrf, "report-direct-read-proof")).status, 303);
+      assert.equal(reports, 1);
     } finally { await app.close(); }
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
