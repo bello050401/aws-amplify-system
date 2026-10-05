@@ -58,7 +58,9 @@ export function MercariPrivateCreateTrialPanel() {
       await refresh();
       setMessage(kind === "BELLO_PRIVATE_CREATE_CLAIM" ?
         "一回限りの試行マーカーをBELLOへ保存しました。対象を確認してから通常画面へ進んでください。" :
-        "通常画面の操作を通信未確認として記録しました。新規登録や非公開保存の成功を示しません。");
+        record.reasonCode === "DRAFT_AUTOSAVE_UI_OBSERVED" ?
+          "入力中の下書き保存表示を通信未確認として記録しました。商品内容や非公開保存の成功を示しません。" :
+          "通常画面の操作を通信未確認として記録しました。新規登録や非公開保存の成功を示しません。");
       if (kind === "BELLO_PRIVATE_CREATE_CLAIM") setClaimFile(null);
       else setResultFile(null);
     } catch {
@@ -83,9 +85,10 @@ export function MercariPrivateCreateTrialPanel() {
       onClick={() => void submit("BELLO_PRIVATE_CREATE_CLAIM", claimFile)}
       className="rounded bg-blue-700 px-3 py-2 text-white disabled:opacity-40">試行マーカーをBELLOへ保存</button>
     <div className="border-t border-amber-200 pt-3">
-      <p>通常画面の操作後、PCに保存した「通信未確認」の結果だけを報告します。画面上の表示をHTTP作成成功や出品完了に読み替えません。</p>
+      <p>通常画面で入力中の下書き保存表示が出た場合も、明示保存のクリックと区別した「通信未確認」の結果だけを報告します。画面上の表示をHTTP作成成功や出品完了に読み替えません。</p>
       <p className="mt-2">結果: <strong>{trial?.result ?
-        `通信未確認（${trial.result.recordedAt}）` : "未報告"}</strong></p>
+        `${trial.result.reasonCode === "DRAFT_AUTOSAVE_UI_OBSERVED" ?
+          "入力中の下書き保存表示・通信未確認" : "通信未確認"}（${trial.result.recordedAt}）` : "未報告"}</strong></p>
       <label className="mt-2 block">PCの通信未確認結果ファイル（JSON）
         <input type="file" accept=".json,application/json" onChange={event =>
           setResultFile(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" />
