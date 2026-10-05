@@ -124,6 +124,15 @@ export async function recordCreateTestObservation(root, attemptId, summary) {
     listingConfirmed: false, reason: persisted.reason };
 }
 
+/** The GPT in-app tab has no request observer. Persist one explicit UI attempt
+ * without claiming an HTTP response, product ID, privacy, or listing success. */
+export async function recordCreateTestUiAttemptUnverified(root, attemptId) {
+  return recordCreateTestObservation(root, attemptId, {
+    status: "UNVERIFIED", reason: "NETWORK_NOT_OBSERVED",
+    expectedKind: "CREATE_PRODUCT", observedKind: null, newRemoteId: null,
+  });
+}
+
 export async function readCreateTestObservation(root) {
   const claim = await readCreateTestClaim(root);
   if (!claim.claimed || !claim.valid) return { claim, result: null };

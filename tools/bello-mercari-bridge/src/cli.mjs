@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { enqueueExistingRead, listReadResults } from "./queue.mjs";
 import { runExistingRead } from "./readWorker.mjs";
 import { openDedicatedLogin, openExistingProductReadSession } from "./session.mjs";
@@ -6,6 +7,10 @@ import { createExistingProductReader } from "./existingProductReader.mjs";
 import { openBelloAdminContext } from "./belloSession.mjs";
 import { runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { exportSavedDirectReadProof } from "./exportDirectReadProof.mjs";
+import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
+  readCreateTestObservation, recordCreateTestUiAttemptUnverified } from "./createTestAttempt.mjs";
+import { exportCreateTestRecord, savedCreateTestClaimRecord,
+  savedCreateTestUiResultRecord } from "./exportCreateTestRecord.mjs";
 
 function argsOf(argv) {
   const [command, ...rest] = argv;
@@ -22,6 +27,44 @@ async function main() {
   if (command === "export-saved-direct-read-proof") {
     await exportSavedDirectReadProof({ configPath: flags.config, outputPath: flags.out });
     process.stdout.write("BELLOへ読み込む読取記録ファイルを書き出しました。Shopsへの通信は行っていません。\n");
+    return;
+  }
+  if (command === "preflight-private-create") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root))
+      throw Error("An absolute queue root is required");
+    const preflight = await readCreateTestPreflight(flags.root);
+    const observation = await readCreateTestObservation(flags.root);
+    process.stdout.write(JSON.stringify({ preflight, claim: observation.claim,
+      result: observation.result }) + "\n");
+    return;
+  }
+  if (command === "claim-private-create-once") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root))
+      throw Error("An absolute queue root is required");
+    if (flags["confirm-sku"] !== CREATE_TEST_TARGET.skuCode)
+      throw Error("Confirm the exact private test SKU before claiming");
+    const claim = await claimCreateTestOnce(flags.root);
+    process.stdout.write(JSON.stringify({ ...claim, operation: "CREATE_PRIVATE_TEST_ONCE",
+      inventoryCode: CREATE_TEST_TARGET.inventoryCode,
+      skuCode: CREATE_TEST_TARGET.skuCode, listingConfirmed: false }) + "\n");
+    return;
+  }
+  if (command === "record-private-create-ui-unverified") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root))
+      throw Error("An absolute queue root is required");
+    if (flags["confirm-click"] !== "yes")
+      throw Error("An explicit normal-UI save attempt confirmation is required");
+    const result = await recordCreateTestUiAttemptUnverified(flags.root, flags.attempt);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    return;
+  }
+  if (command === "export-private-create-claim" ||
+      command === "export-private-create-ui-result") {
+    const record = command === "export-private-create-claim" ?
+      await savedCreateTestClaimRecord(flags.root) :
+      await savedCreateTestUiResultRecord(flags.root);
+    await exportCreateTestRecord(record, flags.out);
+    process.stdout.write("BELLO用の固定コード記録を書き出しました。Shopsへの通信は行っていません。\n");
     return;
   }
   if (command === "open-bello-login") {
@@ -80,7 +123,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {

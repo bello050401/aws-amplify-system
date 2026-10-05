@@ -1119,6 +1119,26 @@ const schema = a.schema({
     .secondaryIndexes((index) => [index("requestId")])
     .authorization((allow) => [allow.group("ADMIN")]),
 
+  /** Immutable, pinned B005757 private-create trial events. Never ChannelListing state. */
+  MercariBridgePrivateCreateEvent: a
+    .model({
+      eventId: a.string().required(),
+      trialKey: a.string().required(),
+      attemptId: a.string().required(),
+      claimedAt: a.datetime().required(),
+      kind: a.string().required(),
+      inventoryId: a.string().required(),
+      shopId: a.string().required(),
+      skuCode: a.string().required(),
+      priceYen: a.integer().required(),
+      status: a.string().required(),
+      reasonCode: a.string(),
+      requestedBy: a.string().required(),
+      recordedAt: a.datetime().required(),
+    })
+    .identifier(["eventId"])
+    .authorization((allow) => [allow.group("ADMIN")]),
+
   // ─────────────────────────────────────────────────────────────────────
   // BELLO統合業務OS指示書(2026-08-30) §17: Pricing Rule Engine。
   // 値下げ日数・率はBELLO独自の経営ルールとして将来変わりうるため

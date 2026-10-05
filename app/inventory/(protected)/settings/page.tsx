@@ -10,6 +10,7 @@ import { getLineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
 import { isCognitoInvalidLoginTokenError, isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
+import { privateCreateTrialEnabled } from "@/lib/listing/mercariBridge/privateCreateGate";
 import { InventoryAuthTemporarilyUnavailable } from "../InventoryAuthTemporarilyUnavailable";
 
 /**
@@ -129,6 +130,9 @@ export default async function InventorySettingsPage() {
           nextEnginePrivateRetestEnabled={process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED === "1" &&
             process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED !== "1" &&
             process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
+          mercariPrivateCreateTrialEnabled={privateCreateTrialEnabled(
+            process.env.MERCARI_PRIVATE_CREATE_TRIAL_ENABLED,
+            process.env.MERCARI_BRIDGE_PUBLIC_ORIGIN)}
           lineConnected={lineConnected}
           lineTokenSource={lineTokenSource}
         />

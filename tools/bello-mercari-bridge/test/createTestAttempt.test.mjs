@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestClaim,
   readCreateTestPreflight,
-  readCreateTestObservation, recordCreateTestObservation } from
+  readCreateTestObservation, recordCreateTestObservation,
+  recordCreateTestUiAttemptUnverified } from
   "../src/createTestAttempt.mjs";
 
 const matched = remoteId => ({ status: "MATCHED", reason: "MATCHED",
@@ -33,6 +34,23 @@ test("the exact B005757 private-create target is fixed and claimed once", async 
       newRemoteId: "newPrivateProduct", listingConfirmed: false, reason: "MATCHED" });
     assert.equal((await readCreateTestObservation(dir)).result.newRemoteId,
       "newPrivateProduct");
+    await assert.rejects(recordCreateTestObservation(dir, claim.attemptId,
+      matched("anotherProduct")), { code: "EEXIST" });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("GPT-tab UI attempt is recorded once as network-unobserved, never as a creation success", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bello-create-ui-once-"));
+  try {
+    const claim = await claimCreateTestOnce(dir);
+    assert.deepEqual(await recordCreateTestUiAttemptUnverified(dir, claim.attemptId), {
+      outcome: "UNVERIFIED", newRemoteId: null, listingConfirmed: false,
+      reason: "NETWORK_NOT_OBSERVED" });
+    assert.deepEqual((await readCreateTestObservation(dir)).result, {
+      outcome: "UNVERIFIED", newRemoteId: null, listingConfirmed: false,
+      reason: "NETWORK_NOT_OBSERVED" });
+    await assert.rejects(recordCreateTestUiAttemptUnverified(dir, claim.attemptId),
+      { code: "EEXIST" });
     await assert.rejects(recordCreateTestObservation(dir, claim.attemptId,
       matched("anotherProduct")), { code: "EEXIST" });
   } finally { await rm(dir, { recursive: true, force: true }); }
