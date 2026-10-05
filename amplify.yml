@@ -42,6 +42,8 @@ frontend:
         # Exact non-secret HTTPS Origin accepted for the staging Mercari read-result POST.
         # Amplify's internal Next URL may differ from the browser-visible hostname.
         - if [ "$AWS_APP_ID" = "d4hkkg7dty2du" ] && [ "$AWS_BRANCH" = "claude/inventory-management-system-5vbvc7" ]; then echo "MERCARI_BRIDGE_PUBLIC_ORIGIN=https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com" >> .env.production; fi
+        # The one-item private-create journal is also confined to this staging app/branch.
+        - if [ "$AWS_APP_ID" = "d4hkkg7dty2du" ] && [ "$AWS_BRANCH" = "claude/inventory-management-system-5vbvc7" ]; then echo "MERCARI_PRIVATE_CREATE_TRIAL_ENABLED=${MERCARI_PRIVATE_CREATE_TRIAL_ENABLED:-0}" >> .env.production; fi
         # Both non-secret gates default to off. Enable only after the test app's
         # mall auto-sync settings and one-time acceptance have been reviewed.
         - echo "NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED=${NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED:-0}" >> .env.production
