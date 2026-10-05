@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { saveListingDraftAction } from "@/app/actions/listing";
-import { requireSavedDraftResult, draftSaveFailureMessage } from "@/lib/listing/draftSaveFeedback";
+import { requireSavedDraftResult, draftSaveFailureMessage,
+  draftSaveNeedsFreshPage } from "@/lib/listing/draftSaveFeedback";
 import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, ListingShippingMethod } from "@/lib/listing/types";
 import { LISTING_SHIPPING_METHODS } from "@/lib/listing/types";
 import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
@@ -123,6 +124,7 @@ export function ListingForm({
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
+  const [draftRecoveryNeeded, setDraftRecoveryNeeded] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   /**
    * 生成の品質情報(2026-09-02 指示書§2/§10)。
@@ -317,6 +319,7 @@ export function ListingForm({
       }
       setDraftSaved(true);
     } catch (err) {
+      if (!draftPersisted && draftSaveNeedsFreshPage(err)) setDraftRecoveryNeeded(true);
       setDraftError(draftSaveFailureMessage(draftPersisted, err));
     } finally {
       setDraftBusy(false);
@@ -590,7 +593,7 @@ export function ListingForm({
           <button
             type="button"
             onClick={handleSaveDraft}
-            disabled={draftBusy}
+            disabled={draftBusy || draftRecoveryNeeded}
             className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
           >
             {draftBusy ? "保存中…" : "下書きを保存"}
@@ -611,6 +614,12 @@ export function ListingForm({
           {copyState === "error" && <span className="text-[12px] text-red-600">コピーできませんでした</span>}
         </div>
         {draftError && <p className="mt-2 text-[12px] text-red-600">{draftError}</p>}
+        {draftRecoveryNeeded && <div className="mt-2 border border-amber-300 bg-amber-50 p-3 text-[12px] text-gray-800">
+          <p>このタブの入力は残っています。別タブで保存済みの内容を確認し、必要な入力だけ移してください。元のタブから保存を再送しません。</p>
+          <a href={`/inventory/${encodeURIComponent(inventoryId)}/listing`}
+            target="_blank" rel="noopener noreferrer"
+            className="mt-2 inline-block font-bold text-blue-700 underline">最新版を別タブで開く</a>
+        </div>}
       </div>
 
       {/* Mercari Shops CSV出力(2026-09-14、P2)向けのカテゴリー/ブランド
