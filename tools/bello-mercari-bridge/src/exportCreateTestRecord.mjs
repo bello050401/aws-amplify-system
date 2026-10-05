@@ -31,7 +31,7 @@ export async function savedCreateTestUiResultRecord(root) {
     outcome: "UNVERIFIED", reasonCode: "NETWORK_NOT_OBSERVED" };
 }
 
-export async function exportCreateTestRecord(record, outputPath) {
+async function exportCreateTestRecord(record, outputPath) {
   if (typeof outputPath !== "string" || !isAbsolute(outputPath))
     throw Error("Absolute output path required");
   const handle = await open(outputPath, "wx", 0o600);
@@ -40,4 +40,12 @@ export async function exportCreateTestRecord(record, outputPath) {
     await handle.sync();
   } finally { await handle.close(); }
   return outputPath;
+}
+
+export async function exportSavedCreateTestClaim(root, outputPath) {
+  return exportCreateTestRecord(await savedCreateTestClaimRecord(root), outputPath);
+}
+
+export async function exportSavedCreateTestUiResult(root, outputPath) {
+  return exportCreateTestRecord(await savedCreateTestUiResultRecord(root), outputPath);
 }

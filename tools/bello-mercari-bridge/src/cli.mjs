@@ -9,8 +9,8 @@ import { runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { exportSavedDirectReadProof } from "./exportDirectReadProof.mjs";
 import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
   readCreateTestObservation, recordCreateTestUiAttemptUnverified } from "./createTestAttempt.mjs";
-import { exportCreateTestRecord, savedCreateTestClaimRecord,
-  savedCreateTestUiResultRecord } from "./exportCreateTestRecord.mjs";
+import { exportSavedCreateTestClaim,
+  exportSavedCreateTestUiResult } from "./exportCreateTestRecord.mjs";
 
 function argsOf(argv) {
   const [command, ...rest] = argv;
@@ -60,10 +60,9 @@ async function main() {
   }
   if (command === "export-private-create-claim" ||
       command === "export-private-create-ui-result") {
-    const record = command === "export-private-create-claim" ?
-      await savedCreateTestClaimRecord(flags.root) :
-      await savedCreateTestUiResultRecord(flags.root);
-    await exportCreateTestRecord(record, flags.out);
+    if (command === "export-private-create-claim")
+      await exportSavedCreateTestClaim(flags.root, flags.out);
+    else await exportSavedCreateTestUiResult(flags.root, flags.out);
     process.stdout.write("BELLO用の固定コード記録を書き出しました。Shopsへの通信は行っていません。\n");
     return;
   }

@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { claimCreateTestOnce, recordCreateTestUiAttemptUnverified } from
   "../src/createTestAttempt.mjs";
-import { exportCreateTestRecord, savedCreateTestClaimRecord,
-  savedCreateTestUiResultRecord } from "../src/exportCreateTestRecord.mjs";
+import { exportSavedCreateTestClaim, exportSavedCreateTestUiResult,
+  savedCreateTestClaimRecord, savedCreateTestUiResultRecord } from
+  "../src/exportCreateTestRecord.mjs";
 
 test("one local create claim exports fixed target codes and an unverified UI result separately", async () => {
   const root = await mkdtemp(join(tmpdir(), "bello-private-create-export-"));
@@ -28,9 +29,9 @@ test("one local create claim exports fixed target codes and an unverified UI res
       kind: "BELLO_PRIVATE_CREATE_UI_ATTEMPT", outcome: "UNVERIFIED",
       reasonCode: "NETWORK_NOT_OBSERVED" });
     const path = join(root, "export.json");
-    await exportCreateTestRecord(exportedResult, path);
+    await exportSavedCreateTestUiResult(root, path);
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), exportedResult);
-    await assert.rejects(exportCreateTestRecord(exportedClaim, path),
+    await assert.rejects(exportSavedCreateTestClaim(root, path),
       error => error.code === "EEXIST");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
