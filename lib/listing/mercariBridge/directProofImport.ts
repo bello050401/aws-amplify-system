@@ -1,8 +1,9 @@
 const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REFERENCE = /^[A-Za-z0-9_-]{1,100}$/;
-const REMOTE_ID = "2JXePE4ke8UCBTj6mxc4cf";
-const INVENTORY_CODE = "B005795";
+const B005757 = { requestId: "7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825",
+  accountReference: "evkhihBFFNn5hukMS9s36H", remoteId: "2JXjWPRVBxjZ2K2vgTGNqy",
+  inventoryCode: "B005757" };
 
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -26,7 +27,11 @@ export function directProofReportFromExport(value: unknown, dispatch: unknown) {
     typeof value.requestId === "string" && HASH.test(value.requestId) &&
     typeof value.attemptId === "string" && UUID.test(value.attemptId) &&
     typeof value.accountReference === "string" && REFERENCE.test(value.accountReference) &&
-    value.remoteId === REMOTE_ID && value.inventoryCode === INVENTORY_CODE &&
+    ((value.remoteId === "2JXePE4ke8UCBTj6mxc4cf" && value.inventoryCode === "B005795") ||
+      (value.requestId === B005757.requestId &&
+        value.accountReference === B005757.accountReference &&
+        value.remoteId === B005757.remoteId &&
+        value.inventoryCode === B005757.inventoryCode)) &&
     value.status === "DIRECT_HTTP_READ_CONFIRMED" &&
     value.reasonCode === "PINNED_HTTP_200_MATCHED" && value.listingConfirmed === false;
   const ownedTarget = dispatch.operation === "READ_EXISTING" &&

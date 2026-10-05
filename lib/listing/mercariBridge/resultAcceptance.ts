@@ -10,6 +10,9 @@ const TOP_LEVEL = new Set(["requestId", "attemptId", "accountReference", "remote
   "comparison", "reasonCode"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[0-9a-f]{64}$/;
+const B005757_DIRECT_READ = { requestId: "7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825",
+  shopId: "evkhihBFFNn5hukMS9s36H", remoteId: "2JXjWPRVBxjZ2K2vgTGNqy",
+  inventoryId: "c9ee4ea7-070f-491c-bd4c-c1547cb73436", inventoryCode: "B005757" };
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -78,9 +81,16 @@ export function normalizeExistingReadResult(job: ExistingReadJob, binding: Exist
   let comparisonJson: string | null = null;
   let reasonCode: string | null = null;
   if (input.comparison === null) {
-    if (input.status === "DIRECT_HTTP_READ_CONFIRMED" &&
-        (job.remoteId !== "2JXePE4ke8UCBTj6mxc4cf" ||
-          snapshot.expected.inventoryCode !== "B005795")) invalid();
+    if (input.status === "DIRECT_HTTP_READ_CONFIRMED") {
+      const legacy = job.remoteId === "2JXePE4ke8UCBTj6mxc4cf" &&
+        snapshot.expected.inventoryCode === "B005795";
+      const b005757 = job.requestId === B005757_DIRECT_READ.requestId &&
+        job.inventoryId === B005757_DIRECT_READ.inventoryId &&
+        job.shopId === B005757_DIRECT_READ.shopId &&
+        job.remoteId === B005757_DIRECT_READ.remoteId &&
+        snapshot.expected.inventoryCode === B005757_DIRECT_READ.inventoryCode;
+      if (!legacy && !b005757) invalid();
+    }
     const reasonToStatus: Record<string, string> = {
       NO_READER: "CONNECTOR_NOT_CONFIGURED", SIGN_IN_REQUIRED: "AUTH_REQUIRED",
       READ_FAILED: "UNKNOWN", UNVERIFIED_READ: "UNKNOWN", INVALID_OBSERVATION: "UNKNOWN",
