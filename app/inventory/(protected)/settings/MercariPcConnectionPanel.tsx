@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getMercariExistingReadResultsAction } from "@/app/actions/mercariBridge";
-import { mercariPcConnectionLabels } from "@/lib/listing/mercariBridge/connectionStatus";
+import { mercariDirectReadProofReportedAt,
+  mercariPcConnectionLabels } from "@/lib/listing/mercariBridge/connectionStatus";
 import type { ReadResultView } from "@/lib/listing/mercariBridge/resultView";
 
 const REQUEST_ID = /^[a-f0-9]{64}$/;
@@ -59,6 +60,8 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
 
   const labels = mercariPcConnectionLabels(loading ? "LOADING" :
     lookupState === "READY" && !checkedRequestId ? "UNFETCHED" : lookupState, results);
+  const directProofReportedAt = lookupState === "READY" && checkedRequestId ?
+    mercariDirectReadProofReportedAt(results) : null;
   return (
     <section className="max-w-2xl space-y-3 rounded border border-gray-200 bg-white p-4 text-[13px] text-gray-700">
       <h2 className="font-bold text-gray-900">メルカリShops PC連携</h2>
@@ -85,6 +88,8 @@ export function MercariPcConnectionPanel({ initialRequestId }: { initialRequestI
         <p>PC: <strong>{labels.pc}</strong></p>
         <p>Shops: <strong>{labels.shops}</strong></p>
         {labels.recordedAt && <p>最終報告: <time dateTime={labels.recordedAt}>{labels.recordedAt}</time></p>}
+        {directProofReportedAt && <p>既存商品の直接HTTP読取: 過去の証拠を受信済み（受信時刻:
+          <time dateTime={directProofReportedAt}>{directProofReportedAt}</time>）。現在のログイン状態は示しません。</p>}
       </div>
       <p className="text-xs text-gray-600">PCの表示は、この読取依頼への報告履歴です。現在オンラインかどうかは判定できません。読取確認も出品可能・出品完了を意味しません。</p>
       <div className="rounded border border-blue-200 bg-blue-50 p-3">

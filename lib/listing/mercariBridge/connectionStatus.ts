@@ -8,6 +8,14 @@ export type MercariPcConnectionStatus = {
 
 export type ConnectionLookupState = "UNFETCHED" | "LOADING" | "FAILED" | "READY";
 
+/** A delayed proof report has a BELLO receipt time, not the original HTTP observation time. */
+export function mercariDirectReadProofReportedAt(results: ReadResultView[]): string | null {
+  return results.filter(result => result.status === "DIRECT_HTTP_READ_CONFIRMED" &&
+      result.reasonCode === "PINNED_HTTP_200_MATCHED" &&
+      Number.isFinite(Date.parse(result.recordedAt)))
+    .sort((left, right) => right.recordedAt.localeCompare(left.recordedAt))[0]?.recordedAt ?? null;
+}
+
 export function mercariPcConnectionLabels(lookup: ConnectionLookupState,
   results: ReadResultView[]): { pc: string; shops: string; recordedAt: string | null } {
   if (lookup !== "READY") {
@@ -25,9 +33,16 @@ export function mercariPcConnectionLabels(lookup: ConnectionLookupState,
 
 /** Reports prove a past PC exchange, never a live socket or listing permission. */
 export function mercariPcConnectionStatus(results: ReadResultView[]): MercariPcConnectionStatus {
-  const latest = [...results].filter(result => Number.isFinite(Date.parse(result.recordedAt)))
+  const reported = [...results].filter(result => Number.isFinite(Date.parse(result.recordedAt)))
     .sort((left, right) => right.recordedAt.localeCompare(left.recordedAt))[0];
-  if (!latest) return { pc: "NO_REPORT", shops: "LOGIN_UNCONFIRMED", recordedAt: null };
+  if (!reported) return { pc: "NO_REPORT", shops: "LOGIN_UNCONFIRMED", recordedAt: null };
+  // A past HTTP proof can arrive after a newer authentication failure. It is
+  // displayed separately and cannot restore the current Shops login label.
+  const latest = [...results].filter(result => result.status !== "DIRECT_HTTP_READ_CONFIRMED" &&
+      Number.isFinite(Date.parse(result.recordedAt)))
+    .sort((left, right) => right.recordedAt.localeCompare(left.recordedAt))[0];
+  if (!latest) return { pc: "REPORT_RECEIVED", shops: "LOGIN_UNCONFIRMED",
+    recordedAt: reported.recordedAt };
   const observedProduct = latest.identity === "MATCH" &&
     (["PRIVATE_OBSERVED", "NOT_PRIVATE"].includes(latest.visibility ?? "") ||
       Object.values(latest.fields).some(value => value === "MATCH" || value === "DIFFERENT"));
@@ -35,5 +50,5 @@ export function mercariPcConnectionStatus(results: ReadResultView[]): MercariPcC
     observedProduct &&
     ["NOT_PRIVATE", "DIFFERENT", "INCOMPLETE", "CORE_FIELDS_MATCH"].includes(latest.status) ?
       "READ_CONFIRMED" : "LOGIN_UNCONFIRMED";
-  return { pc: "REPORT_RECEIVED", shops, recordedAt: latest.recordedAt };
+  return { pc: "REPORT_RECEIVED", shops, recordedAt: reported.recordedAt };
 }

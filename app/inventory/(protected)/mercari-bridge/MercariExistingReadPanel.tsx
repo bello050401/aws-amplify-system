@@ -9,6 +9,7 @@ const statusLabels: Record<string, string> = {
   CONNECTOR_NOT_CONFIGURED: "PCの読取なし", AUTH_REQUIRED: "ログインが必要", UNKNOWN: "確認できませんでした",
   IDENTITY_MISMATCH: "店舗・商品IDが不一致", NOT_PRIVATE: "非公開ではありません",
   DIFFERENT: "保存内容に差異あり", INCOMPLETE: "一部だけ確認済み", CORE_FIELDS_MATCH: "主要項目が一致（出品確認ではありません）",
+  DIRECT_HTTP_READ_CONFIRMED: "既存商品の直接HTTP読取を確認（出品確認ではありません）",
 };
 const outcomeLabels: Record<string, string> = {
   MATCH: "一致", DIFFERENT: "差異あり", UNOBSERVED: "未確認", NO_BELLO_EXPECTATION: "BELLO側に比較値なし",
@@ -112,7 +113,10 @@ export function MercariExistingReadPanel({ inventoryId, initialRequestId }: {
         {resultMessage && <p role="status" className="mt-2 text-sm">{resultMessage}</p>}
         {results?.map((result) => <div key={result.attemptId} className="mt-3 rounded border border-gray-200 p-3 text-sm">
           <p><strong>{statusLabels[result.status] ?? "確認できませんでした"}</strong> · {result.recordedAt}</p>
-          {result.reasonCode && <p className="text-gray-600">理由コード: {result.reasonCode}</p>}
+          {result.reasonCode && result.reasonCode !== "PINNED_HTTP_200_MATCHED" &&
+            <p className="text-gray-600">理由コード: {result.reasonCode}</p>}
+          {result.status === "DIRECT_HTTP_READ_CONFIRMED" &&
+            <p className="text-gray-600">PCと同じ認証状態で既存商品の読取が成功した記録です。商品内容の一致、書込、新規出品は未確認です。</p>}
           {result.visibility && <p className="text-gray-600">非公開状態: {result.visibility === "PRIVATE_OBSERVED" ? "確認済み" : result.visibility === "NOT_PRIVATE" ? "非公開ではありません" : "未確認"}</p>}
           {Object.entries(result.fields).length > 0 && <ul className="mt-1 list-disc pl-5">
             {Object.entries(result.fields).map(([field, outcome]) =>

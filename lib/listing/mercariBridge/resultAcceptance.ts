@@ -78,9 +78,13 @@ export function normalizeExistingReadResult(job: ExistingReadJob, binding: Exist
   let comparisonJson: string | null = null;
   let reasonCode: string | null = null;
   if (input.comparison === null) {
+    if (input.status === "DIRECT_HTTP_READ_CONFIRMED" &&
+        (job.remoteId !== "2JXePE4ke8UCBTj6mxc4cf" ||
+          snapshot.expected.inventoryCode !== "B005795")) invalid();
     const reasonToStatus: Record<string, string> = {
       NO_READER: "CONNECTOR_NOT_CONFIGURED", SIGN_IN_REQUIRED: "AUTH_REQUIRED",
       READ_FAILED: "UNKNOWN", UNVERIFIED_READ: "UNKNOWN", INVALID_OBSERVATION: "UNKNOWN",
+      PINNED_HTTP_200_MATCHED: "DIRECT_HTTP_READ_CONFIRMED",
     };
     if (typeof input.reasonCode !== "string" || reasonToStatus[input.reasonCode] !== input.status) invalid();
     reasonCode = input.reasonCode;
