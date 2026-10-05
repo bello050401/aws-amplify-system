@@ -6,7 +6,8 @@ import test from "node:test";
 import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestClaim,
   readCreateTestPreflight,
   readCreateTestObservation, recordCreateTestObservation,
-  recordCreateTestUiAttemptUnverified } from
+  recordCreateTestUiAttemptUnverified,
+  recordCreateTestDraftAutosaveUiUnverified } from
   "../src/createTestAttempt.mjs";
 
 const matched = remoteId => ({ status: "MATCHED", reason: "MATCHED",
@@ -53,6 +54,22 @@ test("GPT-tab UI attempt is recorded once as network-unobserved, never as a crea
       { code: "EEXIST" });
     await assert.rejects(recordCreateTestObservation(dir, claim.attemptId,
       matched("anotherProduct")), { code: "EEXIST" });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("draft autosave shown during form entry is one unverified result without a save click", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bello-create-autosave-once-"));
+  try {
+    const claim = await claimCreateTestOnce(dir);
+    assert.deepEqual(await recordCreateTestDraftAutosaveUiUnverified(dir, claim.attemptId), {
+      outcome: "UNVERIFIED", newRemoteId: null, listingConfirmed: false,
+      reason: "DRAFT_AUTOSAVE_UI_OBSERVED" });
+    assert.equal((await readCreateTestObservation(dir)).result.reason,
+      "DRAFT_AUTOSAVE_UI_OBSERVED");
+    await assert.rejects(recordCreateTestDraftAutosaveUiUnverified(dir, claim.attemptId),
+      { code: "EEXIST" });
+    await assert.rejects(recordCreateTestUiAttemptUnverified(dir, claim.attemptId),
+      { code: "EEXIST" });
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

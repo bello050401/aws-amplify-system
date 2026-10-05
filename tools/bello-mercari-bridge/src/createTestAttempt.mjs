@@ -138,6 +138,15 @@ export async function recordCreateTestUiAttemptUnverified(root, attemptId) {
   });
 }
 
+/** A normal form edit showed a draft autosave message without a final save click.
+ * This is UI evidence only and never certifies an HTTP mutation or draft contents. */
+export async function recordCreateTestDraftAutosaveUiUnverified(root, attemptId) {
+  return recordCreateTestObservation(root, attemptId, {
+    status: "UNVERIFIED", reason: "DRAFT_AUTOSAVE_UI_OBSERVED",
+    expectedKind: "CREATE_PRODUCT", observedKind: null, newRemoteId: null,
+  });
+}
+
 export async function readCreateTestObservation(root) {
   const claim = await readCreateTestClaim(root);
   if (!claim.claimed || !claim.valid) return { claim, result: null };

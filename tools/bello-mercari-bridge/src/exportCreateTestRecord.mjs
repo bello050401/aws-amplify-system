@@ -25,11 +25,12 @@ export async function savedCreateTestUiResultRecord(root) {
   const { claim, result } = await readCreateTestObservation(root);
   const base = claimRecord(claim);
   if (result?.outcome !== "UNVERIFIED" ||
-      result.reason !== "NETWORK_NOT_OBSERVED" || result.newRemoteId !== null ||
+      !["NETWORK_NOT_OBSERVED", "DRAFT_AUTOSAVE_UI_OBSERVED"].includes(result.reason) ||
+      result.newRemoteId !== null ||
       result.listingConfirmed !== false)
     throw Error("The GPT-tab UI attempt result is unavailable");
   return { ...base, kind: "BELLO_PRIVATE_CREATE_UI_ATTEMPT",
-    outcome: "UNVERIFIED", reasonCode: "NETWORK_NOT_OBSERVED" };
+    outcome: "UNVERIFIED", reasonCode: result.reason };
 }
 
 async function exportCreateTestRecord(record, outputPath) {

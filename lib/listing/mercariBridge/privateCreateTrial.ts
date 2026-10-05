@@ -13,6 +13,8 @@ const TRIAL_KEY = createHash("sha256").update(
   `MERCARI_PRIVATE_CREATE_TEST\0${TARGET.shopId}\0${TARGET.skuCode}`).digest("hex");
 const CLAIM_ID = `${TRIAL_KEY}:CLAIM`;
 const RESULT_ID = `${TRIAL_KEY}:UI_RESULT`;
+const RESULT_REASONS = ["NETWORK_NOT_OBSERVED", "DRAFT_AUTOSAVE_UI_OBSERVED"] as const;
+type ResultReason = typeof RESULT_REASONS[number];
 const CLAIM_FIELDS = ["attemptId", "claimedAt", "inventoryCode", "inventoryId",
   "kind", "listingConfirmed", "priceYen", "schemaVersion", "shopId", "skuCode"];
 const RESULT_FIELDS = [...CLAIM_FIELDS, "outcome", "reasonCode"];
@@ -45,7 +47,7 @@ export class PrivateCreateTrialError extends Error {
 }
 
 function normalizedExport(input: unknown): { kind: "CLAIM" | "UI_RESULT";
-  attemptId: string; claimedAt: string } {
+  attemptId: string; claimedAt: string; reasonCode: ResultReason | null } {
   if (!object(input) || input.schemaVersion !== 1 ||
       typeof input.kind !== "string" ||
       !["BELLO_PRIVATE_CREATE_CLAIM", "BELLO_PRIVATE_CREATE_UI_ATTEMPT"].includes(input.kind) ||
@@ -61,10 +63,12 @@ function normalizedExport(input: unknown): { kind: "CLAIM" | "UI_RESULT";
       input.listingConfirmed !== false)
     throw new PrivateCreateTrialError("INVALID_INPUT");
   if (input.kind === "BELLO_PRIVATE_CREATE_UI_ATTEMPT" &&
-      (input.outcome !== "UNVERIFIED" || input.reasonCode !== "NETWORK_NOT_OBSERVED"))
+      (input.outcome !== "UNVERIFIED" || !RESULT_REASONS.includes(input.reasonCode as ResultReason)))
     throw new PrivateCreateTrialError("INVALID_INPUT");
   return { kind: input.kind === "BELLO_PRIVATE_CREATE_CLAIM" ? "CLAIM" : "UI_RESULT",
-    attemptId: input.attemptId, claimedAt: input.claimedAt };
+    attemptId: input.attemptId, claimedAt: input.claimedAt,
+    reasonCode: input.kind === "BELLO_PRIVATE_CREATE_CLAIM" ? null :
+      input.reasonCode as ResultReason };
 }
 
 function sameEvent(left: PrivateCreateEvent, right: PrivateCreateEvent) {
@@ -119,7 +123,7 @@ export async function acceptPrivateCreateTrialEvent(input: unknown, principal: s
     shopId: TARGET.shopId, skuCode: TARGET.skuCode,
     priceYen: TARGET.priceYen,
     status: exported.kind === "CLAIM" ? "CLAIMED" : "UI_ATTEMPT_UNVERIFIED",
-    reasonCode: exported.kind === "CLAIM" ? null : "NETWORK_NOT_OBSERVED",
+    reasonCode: exported.reasonCode,
     requestedBy: principal, recordedAt,
   };
   return storedOrCreate(row, repo);
@@ -148,7 +152,7 @@ export async function privateCreateTrialForOwner(principal: string | null,
       result.attemptId !== claim.attemptId || result.kind !== "UI_RESULT" ||
       result.claimedAt !== claim.claimedAt ||
       result.status !== "UI_ATTEMPT_UNVERIFIED" ||
-      result.reasonCode !== "NETWORK_NOT_OBSERVED" ||
+      !RESULT_REASONS.includes(result.reasonCode as ResultReason) ||
       result.inventoryId !== TARGET.inventoryId || result.shopId !== TARGET.shopId ||
       result.skuCode !== TARGET.skuCode || result.priceYen !== TARGET.priceYen))
     throw new PrivateCreateTrialError("EVENT_CONFLICT");

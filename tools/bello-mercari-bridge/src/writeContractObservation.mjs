@@ -12,7 +12,8 @@ const ROOTS = { updateProduct: "UPDATE_PRODUCT", createProduct: "CREATE_PRODUCT"
 const REASONS = new Set(["MATCHED", "NO_REQUEST", "REQUEST_UNVERIFIED",
   "TARGET_MISMATCH", "OPERATION_MISMATCH", "MULTIPLE_REQUESTS",
   "RESPONSE_UNVERIFIED", "AUTH_REQUIRED", "TIMEOUT", "STOPPED",
-  "IMAGE_MULTIPART_UNSUPPORTED", "NETWORK_NOT_OBSERVED"]);
+  "IMAGE_MULTIPART_UNSUPPORTED", "NETWORK_NOT_OBSERVED",
+  "DRAFT_AUTOSAVE_UI_OBSERVED"]);
 const MATCHES = new Set(["MATCH", "DIFFERENT", "UNOBSERVED"]);
 const FIELDS = new Set(["input", "id", "productId", "shopId", "name", "description",
   "price", "condition", "status", "categoryId", "variants", "skuCode",

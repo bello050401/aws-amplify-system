@@ -40,3 +40,24 @@ test("manual GPT-tab CLI claims once and exports only unverified records", async
     assert.equal(exported.listingConfirmed, false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("autosave observation has its own explicit confirmation and cannot be rewritten as a click", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-create-autosave-cli-"));
+  const resultPath = join(root, "autosave-result.json");
+  try {
+    const claim = JSON.parse(run("claim-private-create-once", "--root", root,
+      "--confirm-sku", sku));
+    assert.throws(() => run("record-private-create-draft-autosave-unverified",
+      "--root", root, "--attempt", claim.attemptId, "--confirm-autosave", "no"));
+    const result = JSON.parse(run("record-private-create-draft-autosave-unverified",
+      "--root", root, "--attempt", claim.attemptId, "--confirm-autosave", "yes"));
+    assert.deepEqual(result, { outcome: "UNVERIFIED", newRemoteId: null,
+      listingConfirmed: false, reason: "DRAFT_AUTOSAVE_UI_OBSERVED" });
+    run("export-private-create-ui-result", "--root", root, "--out", resultPath);
+    const exported = JSON.parse(await readFile(resultPath, "utf8"));
+    assert.equal(exported.reasonCode, "DRAFT_AUTOSAVE_UI_OBSERVED");
+    assert.equal(exported.listingConfirmed, false);
+    assert.throws(() => run("record-private-create-ui-unverified", "--root", root,
+      "--attempt", claim.attemptId, "--confirm-click", "yes"));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -18,4 +18,12 @@ GPT内タブの正規Shops画面は通常UIとして操作できるが、この�
 
 既存の `MercariBridgeReadJob/ReadResult` は**既存商品読取専用**であり、`ChannelListing` は出品状態として扱われるため、新規作成の試行記録を流用しない。候補コードには、管理者と対象在庫を確認したうえで、固定店舗・SKUの試行キーを条件付きで一度だけ保存する `MercariBridgePrivateCreateEvent` と、同じ試行IDに紐付く `UI_ATTEMPT_UNVERIFIED / NETWORK_NOT_OBSERVED` の別イベントを追加した。ローカルclaimと結果は固定項目だけのJSONへ書き出し、GPT内のBELLO設定画面から取り込む。結果にはHTTP成功・商品ID確定・公開成功の属性を含めない。BELLO上のclaim保存が完了するまで通常UIの保存操作へ進まない。
 
-この新しいBELLO経路は候補コードと合成テストの段階で、**AWSには未配信、環境ゲートも無効**である。`MERCARI_PRIVATE_CREATE_TRIAL_ENABLED=1` と正確な検証環境の `MERCARI_BRIDGE_PUBLIC_ORIGIN` が揃う場合のみ、管理者画面とAPIが有効になる。独立レビューと検証環境のスキーマ反映・画面受入まで、新規作成の試行マーカーを実環境で作らない。現時点でBELLOへの新規登録試行は保存されておらず、Shopsへの新規商品送信も行っていない。
+このBELLO経路は2026-10-06に検証環境へ反映され、`MERCARI_PRIVATE_CREATE_TRIAL_ENABLED=1` と正確な検証環境の `MERCARI_BRIDGE_PUBLIC_ORIGIN` を揃えて有効にした。BELLOへのclaim保存・再読込まで確認済みである。Shopsでは入力中に予期しない下書き保存表示が生じたため追加書込を停止し、明示の非公開保存や画像選択は行っていない。以下にその観測と結果記録の境界を追記する。
+
+## 2026-10-06 入力中の下書き保存表示
+
+上記は当初の準備時点の記録である。その後、検証環境でBELLOの一回限りのclaimを保存・再読込した。同一試行IDは `6e8efef2-4836-4d11-9b98-a885fe24c3ce`。Shops新規フォームへの商品名・説明・SKU・価格の入力中、明示の保存ボタンや画像選択を行う前に「下書きに保存しました」が3回表示され、下書き一覧にも同名0円・画像0の3件が増えた。うち2件には固定SKUが見え、1件のSKUは空欄。表示された下書きIDは別の読取記録に保持するが、BELLOへの試行結果ファイルには含めない。HTTP通信、各下書きの最終内容、非公開登録の完成は未確認である。価格欄は一度98,000円を表示した後に0円へ戻った。
+
+明示保存クリックが無いので `record-private-create-ui-unverified --confirm-click yes` は使わない。今回の観測を記録する候補コマンドは `record-private-create-draft-autosave-unverified --confirm-autosave yes --attempt <保存済み試行ID>` で、既存claimに対し結果 `UNVERIFIED / DRAFT_AUTOSAVE_UI_OBSERVED` を一度だけ残す。結果作成後のexport/BELLO取込も新規作成・下書きの内容・公開状態の成功証明にはならず、同じSKUの再試行はしない。下書きの照合は読取のみで行い、削除・更新・公開しない。
+
+ローカル入力イベント画面では、商品名欄へのCUA `setValue` 1回は `input=1/change=1/Enter=0/submit=0`、Playwright `fill` 1回は `input=1/change=0/Enter=0/submit=0` だった。`focusout=1` はリセットボタン由来の可能性がある。これはローカルフォームの差であり、Shopsの下書き保存が`change`で起きた証明ではない。追加のShops新規フォーム操作は行わず、既存下書きの読取結果で照合する。

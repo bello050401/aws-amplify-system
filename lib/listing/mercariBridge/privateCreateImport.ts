@@ -26,7 +26,9 @@ export function privateCreateExportForUpload(input: unknown,
       input.skuCode !== TARGET.skuCode || input.priceYen !== TARGET.priceYen ||
       input.listingConfirmed !== false ||
       (kind === "BELLO_PRIVATE_CREATE_UI_ATTEMPT" &&
-        (input.outcome !== "UNVERIFIED" || input.reasonCode !== "NETWORK_NOT_OBSERVED")))
+        (input.outcome !== "UNVERIFIED" ||
+          !["NETWORK_NOT_OBSERVED", "DRAFT_AUTOSAVE_UI_OBSERVED"].includes(
+            input.reasonCode as string))))
     throw Error("固定した非公開テストの記録と一致しません。");
   return Object.fromEntries(Object.entries(input));
 }

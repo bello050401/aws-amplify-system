@@ -8,7 +8,8 @@ import { openBelloAdminContext } from "./belloSession.mjs";
 import { runBelloCloudReadOnce } from "./cloudConnector.mjs";
 import { exportSavedDirectReadProof } from "./exportDirectReadProof.mjs";
 import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
-  readCreateTestObservation, recordCreateTestUiAttemptUnverified } from "./createTestAttempt.mjs";
+  readCreateTestObservation, recordCreateTestUiAttemptUnverified,
+  recordCreateTestDraftAutosaveUiUnverified } from "./createTestAttempt.mjs";
 import { exportSavedCreateTestClaim,
   exportSavedCreateTestUiResult } from "./exportCreateTestRecord.mjs";
 
@@ -55,6 +56,15 @@ async function main() {
     if (flags["confirm-click"] !== "yes")
       throw Error("An explicit normal-UI save attempt confirmation is required");
     const result = await recordCreateTestUiAttemptUnverified(flags.root, flags.attempt);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    return;
+  }
+  if (command === "record-private-create-draft-autosave-unverified") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root))
+      throw Error("An absolute queue root is required");
+    if (flags["confirm-autosave"] !== "yes")
+      throw Error("An explicit draft-autosave UI observation is required");
+    const result = await recordCreateTestDraftAutosaveUiUnverified(flags.root, flags.attempt);
     process.stdout.write(JSON.stringify(result) + "\n");
     return;
   }
@@ -122,7 +132,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {

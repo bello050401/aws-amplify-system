@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { claimCreateTestOnce, readCreateTestClaim,
-  recordCreateTestUiAttemptUnverified } from
+  recordCreateTestUiAttemptUnverified,
+  recordCreateTestDraftAutosaveUiUnverified } from
   "../src/createTestAttempt.mjs";
 import { exportSavedCreateTestClaim, exportSavedCreateTestUiResult,
   savedCreateTestClaimRecord, savedCreateTestUiResultRecord } from
@@ -61,5 +62,18 @@ test("malformed claimedAt cannot enter either exported file", async () => {
       await assert.rejects(readFile(claimOut));
       await assert.rejects(readFile(resultOut));
     }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("observed draft autosave exports only the bounded unverified reason", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-private-create-autosave-export-"));
+  try {
+    const claim = await claimCreateTestOnce(root);
+    await recordCreateTestDraftAutosaveUiUnverified(root, claim.attemptId);
+    const exported = await savedCreateTestUiResultRecord(root);
+    assert.equal(exported.reasonCode, "DRAFT_AUTOSAVE_UI_OBSERVED");
+    assert.equal(exported.listingConfirmed, false);
+    assert.equal(Object.hasOwn(exported, "draftId"), false);
+    assert.equal(Object.hasOwn(exported, "remoteId"), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
