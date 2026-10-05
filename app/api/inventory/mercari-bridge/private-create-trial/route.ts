@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
+import { getCurrentInventoryUserSub, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { bridgePostHeaderFailure } from "@/lib/listing/mercariBridge/postGuard";
 import { privateCreateTrialEnabled } from "@/lib/listing/mercariBridge/privateCreateGate";
@@ -20,7 +20,7 @@ const enabled = () => privateCreateTrialEnabled(
 async function principal(request: NextRequest) {
   if (request.headers.get("x-bello-mercari-bridge") !== "PRIVATE_CREATE_TRIAL" ||
       await getInventoryRole() !== "ADMIN") return null;
-  return getCurrentInventoryUserEmail();
+  return getCurrentInventoryUserSub();
 }
 
 /** Owner-only status. Nothing here is a ChannelListing or a Shops HTTP receipt. */
