@@ -4,7 +4,7 @@
 
 この文書は**実行手順の準備**であり、PC設置版の更新、Shopsへの保存、公開・停止・再出品、Amplify配信を許可しない。候補コードの独立再レビューが合格するまで以下の「反映」は実行しない。B005659（在庫ID `dd273c1e-9b2a-4013-acc6-c445a481fab8`）は **99,999円の非公開限定テスト**で、停止・再出品の対象外。既存公開商品 `2JWp7EJx6aqKfn6dTXc5Q9` も変更しない。
 
-候補は `df7e635` 時点の作業ブランチ。停止・再出品の核は `ee11737`（状態判定）、`8c317c5`（PCの一回限りの実行）、`e33e65e`（BELLOの依頼作成）、`44876ac`（PC受信と結果読取）。`f788054` はB005659の大文字・配列IDによる保護回避を塞ぎ、`c13c50f` は停止確認後の一覧への戻り口を追加した。`df7e635` は通信観測20件上限での誤成功と、別在庫・別試行のPC結果を誤表示する問題を塞いだ。レビューは**このコード一式と設置差分**に対して行う。
+候補は `927d267` 時点の作業ブランチ。停止・再出品の核は `ee11737`（状態判定）、`8c317c5`（PCの一回限りの実行）、`e33e65e`（BELLOの依頼作成）、`44876ac`（PC受信と結果読取）。`f788054` はB005659の大文字・配列IDによる保護回避を塞ぎ、`c13c50f` は停止確認後の一覧への戻り口を追加した。`df7e635` は通信観測20件上限での誤成功と、別在庫・別試行のPC結果を誤表示する問題を塞ぎ、`927d267` は結果不明への遷移を回帰テストで固定した。レビューは**このコード一式と設置差分**に対して行う。
 
 2026-10-07の読取点検では、設置済み `App/src` は38ファイル、別フォルダー `AppPrivateCreateCandidate-20261007/src` は43ファイル。別フォルダーは**旧候補 `c13c50f` 時点のコピー**で、`df7e635` の修正前なので設置元にしない。PCアプリのNodeプロセス0、専用Chromeプロセス0、`127.0.0.1:56210` 待受けなし、`Queue/locks` 0件。現行設定は `createTestObservationEnabled=false` だが旧商品の `manualObservation` と `imageProof` があり、その操作ボタンも表示され得るため受入で押さない。これらは反映時にも改めて確認する。
 
@@ -22,12 +22,12 @@
 | 境界 | 対象 | 2026-10-07結果 |
 | --- | --- | --- |
 | BELLO依頼作成 | `lib/listing/mercariBridge/visibilityHandoff.test.mjs` | 2/2通過。管理者の保存済みデータから作る依頼がPCの厳密検証を通り、B005659・保護済み公開ID・古い記録は拒否される。 |
-| PC受信・保存済み結果 | `desktopApp.test.mjs`, `visibilityJobInbox.test.mjs` | 対象を含む33/33通過。BELLO originからの受付は `QUEUED_NO_SEND`、別originは403、ファイル読込は送信しない。保存済み結果は在庫ID・店舗・商品ID・操作・対象指紋・試行ID・公開状態を照合する。 |
-| 停止・再出品の判定と一回限り処理 | `visibilityTransitionPlan.test.mjs`, `visibilityTransitionOnce.test.mjs`, `manualMutationObservation.test.mjs` | 上記33件と通信観測の回帰試験を通過。事前・事後の同一商品読取、単一更新応答、停止証拠後の再出品、結果不明時の再実行遮断、B005659の大文字・配列ID拒否を検査。通信観測が20件に達したら、21件目を見落とし得るため成功と判定しない。 |
-| PCツール全体 | `npm test`（`tools/bello-mercari-bridge`） | 206/206通過。実Shopsへの接続・保存は含まない。 |
+| PC受信・保存済み結果 | `desktopApp.test.mjs`, `visibilityJobInbox.test.mjs` | 対象を含む34/34通過。BELLO originからの受付は `QUEUED_NO_SEND`、別originは403、ファイル読込は送信しない。保存済み結果は在庫ID・店舗・商品ID・操作・対象指紋・試行ID・公開状態を照合する。 |
+| 停止・再出品の判定と一回限り処理 | `visibilityTransitionPlan.test.mjs`, `visibilityTransitionOnce.test.mjs`, `manualMutationObservation.test.mjs` | 上記34件と通信観測の回帰試験を通過。事前・事後の同一商品読取、単一更新応答、停止証拠後の再出品、結果不明時の再実行遮断、B005659の大文字・配列ID拒否を検査。通信観測が20件に達したら、21件目を見落とし得るため成功と判定しない。 |
+| PCツール全体 | `npm test`（`tools/bello-mercari-bridge`） | 207/207通過。実Shopsへの接続・保存は含まない。 |
 | BELLO型検査 | `npm run typecheck`（リポジトリ直下） | 通過。 |
 
-検査コマンドは、PC側が `node --test test/visibilityTransitionPlan.test.mjs test/visibilityTransitionOnce.test.mjs test/visibilityJobInbox.test.mjs test/desktopApp.test.mjs`（33/33）と `node --test test/manualMutationObservation.test.mjs`、BELLO側が `node --experimental-strip-types --test lib/listing/mercariBridge/visibilityHandoff.test.mjs`（2/2）。後者のNodeモジュール形式の警告は結果に影響しなかった。
+検査コマンドは、PC側が `node --test test/visibilityTransitionPlan.test.mjs test/visibilityTransitionOnce.test.mjs test/visibilityJobInbox.test.mjs test/desktopApp.test.mjs`（34/34）と `node --test test/manualMutationObservation.test.mjs`、BELLO側が `node --experimental-strip-types --test lib/listing/mercariBridge/visibilityHandoff.test.mjs`（2/2）。後者のNodeモジュール形式の警告は結果に影響しなかった。
 
 ## 実際の公開可能商品ができた後の受入
 
