@@ -36,7 +36,7 @@ export function shopsLifecycle(
 
 export type ShopsReadback =
   | { kind: "EXACT_ABSENCE" }
-  | { kind: "EXACT_PRODUCT"; remoteId: string; visibility: "PUBLIC" | "STOPPED" };
+  | { kind: "EXACT_PRODUCT"; remoteId: string; visibility: "PUBLIC" | "PRIVATE" };
 
 /** A saved BELLO status alone never authorizes a remote mutation. */
 export function shopsActionForState(state: ShopsLifecycle,
@@ -49,7 +49,7 @@ export function shopsActionForState(state: ShopsLifecycle,
       !listing?.externalListingId || !REMOTE_ID.test(listing.externalListingId) ||
       readback.remoteId !== listing.externalListingId) return null;
   if (state === "LISTED" && readback.visibility === "PUBLIC") return "STOP";
-  if (state === "STOPPED" && readback.visibility === "STOPPED") return "RELIST";
+  if (state === "STOPPED" && readback.visibility === "PRIVATE") return "RELIST";
   return null;
 }
 
