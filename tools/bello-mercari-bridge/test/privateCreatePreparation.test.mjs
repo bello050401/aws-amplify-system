@@ -66,13 +66,14 @@ test("simultaneous preparation converges on one inventory record", () =>
     assert.deepEqual(second, first);
   }));
 
-test("missing description, zero price, duplicate images and arbitrary URLs stop before queue", () =>
+test("incomplete data, arbitrary URLs and remote draft IDs stop before queue", () =>
   withRoot(async root => {
     for (const candidate of [
       { ...input, description: "" }, { ...input, priceYen: 0 },
       { ...input, imageRefs: [...input.imageRefs, { ...input.imageRefs[0], sortOrder: 1 }] },
       { ...input, imageRefs: [{ ...input.imageRefs[0], storageKey: "https://example.test/photo" }] },
       { ...input, remoteId: "existing-product" },
+      { ...input, productDraftId: "2JXmhh6wZFnKBnhwk8zV9c" },
     ]) assert.throws(() => buildPrivateCreatePreparation(candidate));
     await assert.rejects(readFile(join(root, "private-create-prepared",
       `${inventoryId}.json`), "utf8"), { code: "ENOENT" });
