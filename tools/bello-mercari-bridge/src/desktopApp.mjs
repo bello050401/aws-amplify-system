@@ -81,6 +81,16 @@ function optionsOf(config) {
        !Number.isSafeInteger(manualObservation?.priceYen) || manualObservation.priceYen < 0 ||
        !Number.isSafeInteger(manualObservation?.quantity) || manualObservation.quantity < 0))
     throw Error("Invalid exact-product observation target");
+  if (manualObservation?.remoteId === "2JXjWPRVBxjZ2K2vgTGNqy") {
+    assertPinnedDirectReadTarget(manualObservation, config.requestId);
+    if (manualObservation.skuCode !== CREATE_TEST_TARGET.skuCode ||
+        manualObservation.priceYen !== CREATE_TEST_TARGET.priceYen ||
+        manualObservation.quantity !== 1)
+      throw Error("Invalid B005757 private-image observation target");
+  } else if (manualObservation?.skuCode !== undefined &&
+             manualObservation.skuCode !== manualObservation.inventoryCode) {
+    throw Error("Invalid exact-product observation SKU");
+  }
   const directReadTarget = config?.directReadTarget ?? manualObservation;
   if (config?.directReadTarget !== undefined) {
     if (!directReadTarget || Object.keys(directReadTarget).sort().join(",") !==

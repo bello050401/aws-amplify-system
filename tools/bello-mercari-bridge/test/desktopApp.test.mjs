@@ -313,6 +313,36 @@ test("B005757 read-only target exposes HTTP probe without private-save controls"
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
+test("B005757 private-image controls require its exact saved SKU and request", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-b005757-image-"));
+  const requestId = "7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825";
+  const manualObservation = { shopId: "evkhihBFFNn5hukMS9s36H",
+    remoteId: "2JXjWPRVBxjZ2K2vgTGNqy", inventoryCode: "B005757",
+    skuCode: CREATE_TEST_TARGET.skuCode, priceYen: 98000, quantity: 1 };
+  const sha256 = "a".repeat(64);
+  const imageProof = { sha256,
+    path: join(dataDir, "ImageProof", `B005757-${sha256.slice(0, 16)}.jpg`) };
+  const options = { ...config(), dataDir, requestId, manualObservation,
+    imageProof, imageWorkflowEnabled: true };
+  try {
+    for (const invalid of [
+      { manualObservation: { ...manualObservation, skuCode: "B005757" } },
+      { manualObservation: { ...manualObservation, priceYen: 97000 } },
+      { manualObservation: { ...manualObservation, quantity: 0 } },
+      { requestId: "a".repeat(64) },
+      { directReadTarget: { shopId: manualObservation.shopId,
+        remoteId: manualObservation.remoteId, inventoryCode: "B005757" } },
+    ]) await assert.rejects(startDesktopApp({ ...options, ...invalid }, { openBrowser: null }));
+    const app = await startDesktopApp(options, { openBrowser: null });
+    try {
+      const content = await (await fetch(app.url)).text();
+      assert.match(content, /画像1枚を追加して非公開保存・確認/);
+      assert.equal(content.includes('value="add-image-once"'), false);
+      assert.equal(content.includes('value="save-private-once"'), false);
+    } finally { await app.close(); }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test("saved matched HTTP proof has a separate report button and never reruns Shops read", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-direct-report-"));
   const target = { shopId: "shop1", remoteId: "2JXePE4ke8UCBTj6mxc4cf",

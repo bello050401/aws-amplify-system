@@ -176,6 +176,12 @@ test("field validation rejects a different SKU, price or quantity before any cli
   const page = { url: () => editUrl, getByRole: () => locator(),
     locator: () => ({ evaluateAll: async () => fields }) };
   assert.equal((await readPinnedEditFields(page, editUrl, target)).sku, "B005795");
+  const testSku = "B005757-TEST-20261004-caf445ac6e676343";
+  fields.rows[1].value = testSku;
+  assert.equal((await readPinnedEditFields(page, editUrl,
+    { ...target, skuCode: testSku })).sku, testSku);
+  assert.equal(await readPinnedEditFields(page, editUrl, target), null);
+  fields.rows[1].value = "B005795";
   for (const changed of [
     { rows: fields.rows.map(row => row.label === "商品管理コード" ? { ...row, value: "OTHER" } : row) },
     { rows: fields.rows.map(row => row.label === "販売価格" ? { ...row, value: "¥91,000" } : row) },

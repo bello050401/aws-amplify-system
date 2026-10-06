@@ -53,7 +53,7 @@ export async function readPinnedEditFields(page, expectedUrl, target, requireCon
   const title = exactSingle(snapshot.rows, "商品名");
   const sku = exactSingle(snapshot.rows, "商品管理コード", "variants.0.skuCode");
   const price = exactSingle(snapshot.rows, "販売価格", "price");
-  if (!title?.trim() || sku !== target.inventoryCode ||
+  if (!title?.trim() || sku !== (target.skuCode ?? target.inventoryCode) ||
       !/^(?:[¥￥]\s*)?(?:0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)$/.test(price ?? "") ||
       Number(price.replace(/[¥￥,\s]/g, "")) !== target.priceYen ||
       snapshot.quantity !== String(target.quantity)) return null;
