@@ -61,6 +61,11 @@ test("only exact same-product update response can acknowledge each UI action", (
     ...event("STOP"), productMatch: "DIFFERENT" }], "STOP"), false);
   assert.equal(exactVisibilityMutationAcknowledgement([{
     ...event("STOP"), graphqlErrors: "PRESENT" }], "STOP"), false);
+  const saturatedWindow = [event("STOP"), ...Array.from({ length: 19 }, (_, index) => ({
+    ...event("STOP"), order: index + 2, graphqlOperationType: "query",
+    responseField: "product", responseKind: "PRODUCT" }))];
+  assert.equal(exactVisibilityMutationAcknowledgement(saturatedWindow, "STOP"), false,
+    "the observer may have dropped a later conflicting mutation at its cap");
 });
 
 test("private-only inventory variants and array identifiers cannot enter a claim", () => {

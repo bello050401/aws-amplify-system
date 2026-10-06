@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { observeManualShopsMutation, safeManualMutationSummary } from "../src/manualMutationObservation.mjs";
+import { exactVisibilityMutationAcknowledgement } from
+  "../src/visibilityTransitionOnce.mjs";
 
 const editUrl = "https://mercari-shops.com/seller/shops/shop1/products/existing1/edit";
 const page = () => Object.assign(new EventEmitter(), { url: () => editUrl });
@@ -17,6 +19,31 @@ function response(req, body) {
   return { request: () => req, status: () => 200,
     headerValue: async () => "application/json", json: async () => body };
 }
+
+test("a 21st Shops mutation cannot be hidden by the 20-event observation cap", async () => {
+  const browser = page();
+  const observer = observeManualShopsMutation(browser, editUrl,
+    { drainMs: 100, shopsOnly: true });
+  observer.checkpoint();
+  const emit = (query, status) => {
+    const req = request("https://mercari-shops.com/graphql", {
+      operationName: status ? "UpdateProduct" : "Product",
+      query, variables: { input: { id: "existing1", status } },
+    });
+    browser.emit("request", req);
+    browser.emit("response", response(req, { data: {
+      updateProduct: { product: { id: "existing1", shopId: "shop1",
+        status: status ?? "UNOPENED" } },
+    } }));
+  };
+  emit("mutation UpdateProduct { updateProduct { product { id } } }", "UNOPENED");
+  for (let index = 0; index < 19; index++)
+    emit("query Product { product { id } }", null);
+  emit("mutation UpdateProduct { updateProduct { product { id } } }", "OPENED");
+  const captured = await observer.stop();
+  assert.equal(captured.length, 20);
+  assert.equal(exactVisibilityMutationAcknowledgement(captured, "STOP"), false);
+});
 
 test("manual metadata preserves request order, field types and response identity without values", async () => {
   const browser = page();

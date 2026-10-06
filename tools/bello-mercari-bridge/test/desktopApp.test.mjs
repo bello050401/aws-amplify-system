@@ -77,6 +77,16 @@ test("BELLO origin queues a PC visibility job without a Shops action", async () 
     const receipt = await queued.json();
     assert.equal(receipt.status, "QUEUED_NO_SEND");
     assert.equal(runs, 0);
+    const statusUrl = `${app.url}/visibility-status?inventoryId=${body.target.inventoryId}`;
+    const forbiddenStatus = await fetch(statusUrl,
+      { headers: { Origin: "https://evil.example.test" } });
+    assert.equal(forbiddenStatus.status, 403);
+    const pendingStatus = await fetch(statusUrl,
+      { headers: { Origin: config().origin } });
+    assert.equal(pendingStatus.status, 200);
+    assert.deepEqual((await pendingStatus.json()).items,
+      [{ action: "STOP", remoteId: body.target.remoteId,
+        attempted: false, outcome: null }]);
     const csrf = await token(app.url);
     const visible = await (await fetch(app.url)).text();
     assert.match(visible, /ownedProduct123/);
@@ -86,6 +96,25 @@ test("BELLO origin queues a PC visibility job without a Shops action", async () 
         jobKey: receipt.jobKey }) });
     assert.equal(run.status, 303);
     assert.equal(runs, 1);
+    const resultDir = join(dataDir, "Queue", "visibility-transition-once");
+    await mkdir(resultDir);
+    const stem = `${body.target.shopId}-${body.target.remoteId}-STOP`;
+    const targetFingerprint = createHash("sha256")
+      .update(JSON.stringify(body.target)).digest("hex");
+    const claim = { schemaVersion: 1, action: "STOP",
+      shopId: body.target.shopId, inventoryId: body.target.inventoryId,
+      remoteId: body.target.remoteId, targetFingerprint,
+      attemptId: "4c56094b-ce4a-47a2-8b1a-94c139cc29bf", outcome: "UNKNOWN" };
+    await writeFile(join(resultDir, `${stem}.claim.json`), JSON.stringify(claim));
+    await writeFile(join(resultDir, `${stem}.result.json`), JSON.stringify({
+      ...claim, title: body.target.title, outcome: "STOP_VERIFIED",
+      observedVisibility: "PRIVATE" }));
+    const verifiedStatus = await fetch(statusUrl,
+      { headers: { Origin: config().origin } });
+    assert.equal(verifiedStatus.status, 200);
+    assert.deepEqual((await verifiedStatus.json()).items,
+      [{ action: "STOP", remoteId: body.target.remoteId,
+        attempted: true, outcome: "STOP_VERIFIED" }]);
     const relistBody = { ...body, action: "RELIST" };
     const relistJob = { ...relistBody,
       fingerprint: createHash("sha256").update(JSON.stringify(relistBody)).digest("hex") };

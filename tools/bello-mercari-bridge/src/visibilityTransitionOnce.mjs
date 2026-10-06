@@ -6,7 +6,8 @@ import { openVisibilityTransitionSession } from "./session.mjs";
 import { readExactVisibilityFromList } from "./visibilityReadback.mjs";
 import { planVisibilityTransition } from "./visibilityTransitionPlan.mjs";
 import { readPinnedEditFields, privateSaveControl } from "./saveExistingPrivateOnce.mjs";
-import { observeManualShopsMutation, safeManualMutationSummary } from
+import { MAX_MANUAL_MUTATION_EVENTS, observeManualShopsMutation,
+  safeManualMutationSummary } from
   "./manualMutationObservation.mjs";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -53,7 +54,10 @@ export function exactVisibilityPcJob(value) {
 
 /** One exact mutation response, never a guessed HTTP request contract. */
 export function exactVisibilityMutationAcknowledgement(raw, action) {
-  if (!["STOP", "RELIST"].includes(action) || !Array.isArray(raw)) return false;
+  // At the observer's capacity a later request may have been dropped. Never
+  // certify a transition from a saturated or otherwise truncated window.
+  if (!["STOP", "RELIST"].includes(action) || !Array.isArray(raw) ||
+      raw.length >= MAX_MANUAL_MUTATION_EVENTS) return false;
   const events = safeManualMutationSummary(raw);
   if (events.length !== raw.length) return false;
   const mutations = events.filter(event => event.graphqlOperationType === "mutation" ||

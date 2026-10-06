@@ -17,7 +17,8 @@ const ERROR_STATES = new Set(["NONE", "PRESENT", "UNOBSERVED"]);
 const ERROR_CLASSES = new Set(["AUTH", "VALIDATION", "NOT_FOUND", "RATE_LIMIT",
   "SERVER", "OTHER", "NONE", "UNOBSERVED"]);
 const GRAPHQL_TYPES = new Set(["mutation", "query", "subscription", "UNOBSERVED"]);
-const MAX_EVENTS = 20;
+export const MAX_MANUAL_MUTATION_EVENTS = 20;
+const MAX_EVENTS = MAX_MANUAL_MUTATION_EVENTS;
 const MAX_FIELDS = 64;
 const MAX_JSON_BYTES = 128 * 1024;
 const MAX_MULTIPART_BYTES = 20 * 1024 * 1024;

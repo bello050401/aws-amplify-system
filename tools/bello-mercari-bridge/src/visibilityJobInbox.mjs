@@ -4,9 +4,33 @@ import { isAbsolute, join } from "node:path";
 import { exactVisibilityPcJob } from "./visibilityTransitionOnce.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const keyOf = job => createHash("sha256").update(
   `${job.action}\0${job.target.shopId}\0${job.target.remoteId}`).digest("hex");
 const dirOf = root => join(root, "visibility-pc-jobs");
+const targetFingerprint = job => createHash("sha256")
+  .update(JSON.stringify(job.target)).digest("hex");
+
+function verifiedOutcome(job, claim, result) {
+  if (claim?.schemaVersion !== 1 || claim.action !== job.action ||
+      claim.shopId !== job.target.shopId ||
+      claim.inventoryId !== job.target.inventoryId ||
+      claim.remoteId !== job.target.remoteId ||
+      claim.targetFingerprint !== targetFingerprint(job) ||
+      typeof claim.attemptId !== "string" || !UUID.test(claim.attemptId) ||
+      result?.schemaVersion !== 1 || result.action !== claim.action ||
+      result.shopId !== claim.shopId ||
+      result.inventoryId !== claim.inventoryId ||
+      result.remoteId !== claim.remoteId ||
+      result.title !== job.target.title ||
+      result.targetFingerprint !== claim.targetFingerprint ||
+      result.attemptId !== claim.attemptId) return "UNKNOWN";
+  if (result.outcome === "STOP_VERIFIED" && job.action === "STOP" &&
+      result.observedVisibility === "PRIVATE") return result.outcome;
+  if (result.outcome === "RELIST_VERIFIED" && job.action === "RELIST" &&
+      result.observedVisibility === "PUBLIC") return result.outcome;
+  return "UNKNOWN";
+}
 
 /** Inbox only: enqueue never opens Shops or claims a visibility transition. */
 export async function enqueueVisibilityPcJob(root, job) {
@@ -55,18 +79,18 @@ export async function listVisibilityPcJobs(root) {
     const stem = `${job.target.shopId}-${job.target.remoteId}-${job.action}`;
     let attempted = false;
     let outcome = null;
+    let claim = null;
     try {
-      await readFile(join(root, "visibility-transition-once", `${stem}.claim.json`));
+      const bytes = await readFile(join(root, "visibility-transition-once",
+        `${stem}.claim.json`));
       attempted = true;
+      try { claim = JSON.parse(bytes.toString("utf8")); } catch { /* keep UNKNOWN */ }
     } catch (error) { if (error?.code !== "ENOENT") throw error; }
     if (attempted) {
       try {
         const result = JSON.parse(await readFile(join(root,
           "visibility-transition-once", `${stem}.result.json`), "utf8"));
-        outcome = result?.remoteId === job.target.remoteId &&
-          result?.action === job.action &&
-          ["STOP_VERIFIED", "RELIST_VERIFIED", "UNKNOWN"].includes(result?.outcome) ?
-            result.outcome : "UNKNOWN";
+        outcome = verifiedOutcome(job, claim, result);
       } catch { outcome = "UNKNOWN"; }
     }
     return { key, job, attempted, outcome };
