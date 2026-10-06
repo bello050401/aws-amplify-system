@@ -115,6 +115,58 @@ test("an autosaved draft response remains UNKNOWN and cannot become a product re
   assert.deepEqual(safe.draftIds, [{ id: "draftOnly123", state: "UNKNOWN_UNATTRIBUTED" }]);
 });
 
+test("exactly 80 JSON keys are complete and the 81st marks request or response truncated", async () => {
+  const names = ["query", "operationName", "variables", "input", "data",
+    "createProduct", "updateProduct", "createProductDraft", "saveProductDraft",
+    "product", "productDraft", "id", "productId", "productDraftId", "shopId",
+    "name", "description", "price", "status", "condition"];
+  const wide = count => Object.fromEntries(names.slice(0, count).map(name => [name, 1]));
+  const body = count => ({ input: wide(20), product: wide(20),
+    data: wide(20), variables: wide(count) });
+  async function observe(requestBody, responseBody = {}) {
+    const { context, page } = fakeTraffic();
+    const observer = observeFutureCreateTraffic(context, { page, drainMs: 50 });
+    const request = { method: () => "POST", resourceType: () => "fetch",
+      frame: () => ({ page: () => page }), url: () => "https://mercari-shops.com/graphql",
+      headerValue: async () => "application/json",
+      postDataBuffer: () => Buffer.from(JSON.stringify(requestBody)) };
+    context.emit("request", request);
+    context.emit("response", { request: () => request, status: () => 200,
+      headerValue: async name => name === "content-type" ? "application/json" : "0",
+      body: async () => Buffer.from(JSON.stringify(responseBody)) });
+    return observer.stop();
+  }
+  const exact = await observe(body(16));
+  assert.equal(exact.events[0].requestJsonKeys.length, 80);
+  assert.equal(exact.captureStatus, "UNVERIFIED");
+  const requestOverflow = await observe(body(17));
+  assert.equal(requestOverflow.events[0].requestJsonKeys.length, 80);
+  assert.equal(requestOverflow.captureStatus, "TRUNCATED");
+  const responseOverflow = await observe({}, body(17));
+  assert.equal(responseOverflow.events[0].responseJsonKeys.length, 80);
+  assert.equal(responseOverflow.captureStatus, "TRUNCATED");
+});
+
+test("JSON request and response over 128 KiB mark observation truncated", async () => {
+  for (const side of ["request", "response"]) {
+    const { context, page } = fakeTraffic();
+    const observer = observeFutureCreateTraffic(context, { page, drainMs: 50 });
+    const request = { method: () => "POST", resourceType: () => "fetch",
+      frame: () => ({ page: () => page }), url: () => "https://mercari-shops.com/graphql",
+      headerValue: async () => "application/json",
+      postDataBuffer: () => side === "request" ? Buffer.alloc(128 * 1024 + 1, 65) :
+        Buffer.from("{}") };
+    context.emit("request", request);
+    context.emit("response", { request: () => request, status: () => 200,
+      headerValue: async name => name === "content-type" ? "application/json" :
+        side === "response" ? String(128 * 1024 + 1) : "2",
+      body: async () => Buffer.from("{}") });
+    const safe = await observer.stop();
+    assert.equal(safe.captureStatus, "TRUNCATED");
+    assert.equal(safe.events.length, 1);
+  }
+});
+
 test("one durable claim precedes browser navigation and retains unverified result only", () =>
   withPrepared(async root => {
     const context = new EventEmitter();
@@ -178,12 +230,25 @@ test("blocked old inventory and extra traffic values never qualify", async () =>
   await withPrepared(async root => {
     await assert.rejects(claimFutureCreateObservationOnce(root, inventoryId),
       /TARGET_BLOCKED/);
-  }, { ...input, inventoryCode: "B005795" });
+  }, { ...input, inventoryCode: "b005795" });
   assert.equal(safeFutureCreateTrafficSummary({ captureStatus: "UNVERIFIED",
     draftIds: [], events: [{ order: 1, method: "POST", host: "mercari-shops.com",
       path: "/graphql", requestJsonKeys: [], responseJsonKeys: [],
       httpStatus: 200, resultId: null, resultState: null, cookie: "secret" }] }), null);
 });
+
+test("uppercase protected inventory UUID is blocked before claim or browser launch", () =>
+  withPrepared(async root => {
+    let launched = 0;
+    await assert.rejects(openFutureCreateTrafficObservationSession({ root,
+      profileDir: join(root, "dedicated-profile"),
+      inventoryId: "C9EE4EA7-070F-491C-BD4C-C1547CB73436",
+      launchPersistentContext: async () => { launched++; throw Error("Must not launch"); } }),
+    /TARGET_BLOCKED/);
+    assert.equal(launched, 0);
+    await assert.rejects(readFile(join(root, "future-private-create-observation-once",
+      `${PRIVATE_CREATE_SHOP_ID}-once.claim.json`), "utf8"), { code: "ENOENT" });
+  }, { ...input, inventoryId: "C9EE4EA7-070F-491C-BD4C-C1547CB73436" }));
 
 test("future observer CLI errors have fixed text and never echo target values", async () => {
   const root = await mkdtemp(join(tmpdir(), "bello-future-create-cli-"));

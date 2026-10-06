@@ -33,20 +33,22 @@ function destination(raw) {
 
 function keyPaths(value) {
   const result = [];
+  let truncated = false;
   const visit = (node, prefix, depth) => {
-    if (!node || typeof node !== "object" || depth > 5 || result.length >= MAX_KEYS) return;
-    const entries = Array.isArray(node) ? node.slice(0, 1).map(item => ["[]", item]) :
+    if (!node || typeof node !== "object") return;
+    if (depth > 5) { if (Object.keys(node).length) truncated = true; return; }
+    const entries = Array.isArray(node) ? node.map(item => ["[]", item]) :
       Object.entries(node);
     for (const [key, child] of entries) {
-      if (result.length >= MAX_KEYS) break;
       if (key !== "[]" && !JSON_KEYS.has(key)) continue;
+      if (result.length >= MAX_KEYS) { truncated = true; break; }
       const path = key === "[]" ? `${prefix}[]` : prefix ? `${prefix}.${key}` : key;
       result.push(path);
       visit(child, path, depth + 1);
     }
   };
   visit(value, "", 0);
-  return result;
+  return { paths: result, truncated };
 }
 
 function responseResult(value) {
@@ -142,7 +144,7 @@ export function observeFutureCreateTraffic(context, { page, shopId = SHOP,
     }
   };
   const track = work => {
-    const task = Promise.resolve().then(work).catch(() => {});
+    const task = Promise.resolve().then(work).catch(() => { overflowed = true; });
     pending.add(task);
     task.finally(() => pending.delete(task));
   };
@@ -166,11 +168,15 @@ export function observeFutureCreateTraffic(context, { page, shopId = SHOP,
       const contentType = (await request.headerValue("content-type")) ?? "";
       if (!/^application\/(?:json|graphql\+json)(?:;|$)/i.test(contentType)) return;
       const raw = request.postDataBuffer();
-      if (!Buffer.isBuffer(raw) || raw.length > MAX_JSON_BYTES) return;
+      if (!Buffer.isBuffer(raw) || raw.length > MAX_JSON_BYTES) {
+        overflowed = true; return;
+      }
       try {
         const body = JSON.parse(raw.toString("utf8"));
-        if (!stopped) entry.requestJsonKeys = keyPaths(body);
-      } catch { /* A malformed request cannot disclose its body. */ }
+        const keys = keyPaths(body);
+        if (!stopped) entry.requestJsonKeys = keys.paths;
+        if (keys.truncated) overflowed = true;
+      } catch { overflowed = true; /* No raw request or error text leaves memory. */ }
     });
   };
   const onResponse = response => {
@@ -184,17 +190,23 @@ export function observeFutureCreateTraffic(context, { page, shopId = SHOP,
       const contentType = (await response.headerValue("content-type")) ?? "";
       if (!/^application\/(?:json|graphql\+json)(?:;|$)/i.test(contentType)) return;
       const contentLength = Number(await response.headerValue("content-length"));
-      if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BYTES) return;
+      if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BYTES) {
+        overflowed = true; return;
+      }
       const raw = await response.body();
-      if (!Buffer.isBuffer(raw) || raw.length > MAX_JSON_BYTES) return;
+      if (!Buffer.isBuffer(raw) || raw.length > MAX_JSON_BYTES) {
+        overflowed = true; return;
+      }
       try {
         const body = JSON.parse(raw.toString("utf8"));
         if (!stopped) {
-          entry.responseJsonKeys = keyPaths(body);
+          const keys = keyPaths(body);
+          entry.responseJsonKeys = keys.paths;
+          if (keys.truncated) overflowed = true;
           const result = status === 200 ? responseResult(body) : null;
           if (result) Object.assign(entry, result);
         }
-      } catch { /* No raw response or error text leaves memory. */ }
+      } catch { overflowed = true; /* No raw response or error text leaves memory. */ }
     });
   };
   const poll = setInterval(captureDraft, 100);

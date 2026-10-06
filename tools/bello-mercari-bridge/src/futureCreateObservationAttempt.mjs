@@ -43,8 +43,9 @@ export async function claimFutureCreateObservationOnce(root, inventoryId) {
   } catch { throw Error("PREPARED_PRIVATE_CREATE_UNVERIFIED"); }
   if (job.shopId !== PRIVATE_CREATE_SHOP_ID || job.inventoryId !== inventoryId ||
       job.status !== "PREPARED_NO_SEND" || job.remoteId !== null ||
-      job.listingConfirmed !== false || inventoryId === BLOCKED_INVENTORY_ID ||
-      BLOCKED_CODES.has(JSON.parse(job.snapshotJson).inventoryCode))
+      job.listingConfirmed !== false ||
+      inventoryId.toLowerCase() === BLOCKED_INVENTORY_ID ||
+      BLOCKED_CODES.has(JSON.parse(job.snapshotJson).inventoryCode.toUpperCase()))
     throw Error("FUTURE_CREATE_TARGET_BLOCKED");
   const claim = { schemaVersion: 1, operation: "OBSERVE_FUTURE_PRIVATE_CREATE_ONCE",
     attemptId: randomUUID(), shopId: PRIVATE_CREATE_SHOP_ID,
