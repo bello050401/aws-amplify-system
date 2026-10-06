@@ -32,11 +32,13 @@ export async function claimFutureCreateObservationOnce(root, inventoryId) {
   const path = paths(root, inventoryId);
   await bindAccount(root, PRIVATE_CREATE_SHOP_ID);
   let job;
+  let snapshot;
   try {
     const raw = await readFile(path.prepared, "utf8");
     if (Buffer.byteLength(raw) > 65536) throw Error("Invalid size");
     job = JSON.parse(raw);
-    const expected = buildPrivateCreatePreparation(JSON.parse(job.snapshotJson));
+    snapshot = JSON.parse(job.snapshotJson);
+    const expected = buildPrivateCreatePreparation(snapshot);
     if (Object.keys(expected).sort().join(",") !== Object.keys(job).sort().join(",") ||
         Object.keys(expected).some(key => expected[key] !== job[key]))
       throw Error("Invalid preparation");
@@ -45,7 +47,9 @@ export async function claimFutureCreateObservationOnce(root, inventoryId) {
       job.status !== "PREPARED_NO_SEND" || job.remoteId !== null ||
       job.listingConfirmed !== false ||
       inventoryId.toLowerCase() === BLOCKED_INVENTORY_ID ||
-      BLOCKED_CODES.has(JSON.parse(job.snapshotJson).inventoryCode.toUpperCase()))
+      [snapshot.inventoryCode, snapshot.sourceInventoryCode,
+        snapshot.testManagementCode].filter(code => code !== undefined).some(code =>
+        typeof code !== "string" || BLOCKED_CODES.has(code.toUpperCase())))
     throw Error("FUTURE_CREATE_TARGET_BLOCKED");
   const claim = { schemaVersion: 1, operation: "OBSERVE_FUTURE_PRIVATE_CREATE_ONCE",
     attemptId: randomUUID(), shopId: PRIVATE_CREATE_SHOP_ID,

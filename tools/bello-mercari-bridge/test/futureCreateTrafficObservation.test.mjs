@@ -25,6 +25,20 @@ const input = { schemaVersion: 1, kind: "BELLO_PRIVATE_CREATE_PREPARATION",
   quantity: 1, condition: "NO_NOTABLE_DAMAGE", shippingMethod: "KAZAI",
   imageRefs: [{ source: "INVENTORY", storageKey: "inventory/photo.jpg",
     sortOrder: 0, photoAssetId: null }] };
+const privateTestId = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
+const privateTest = {
+  schemaVersion: 2, kind: "BELLO_SEPARATE_PRIVATE_TEST_PREPARATION",
+  shopId: PRIVATE_CREATE_SHOP_ID, inventoryId: privateTestId,
+  sourceInventoryCode: "B005659", sourcePriceYen: 54200,
+  testManagementCode: "TEST_B005659_E51E4F6B7B86DD150546",
+  testPriceYen: 99999, visibility: "PRIVATE_ONLY",
+  doNotModifyProductId: "2JWp7EJx6aqKfn6dTXc5Q9",
+  contentEvidence: "BELLO_SAVED_DRAFT_ONLY",
+  draftId: input.draftId, draftUpdatedAt: input.draftUpdatedAt,
+  title: input.title, description: input.description, quantity: 1,
+  condition: "NO_NOTABLE_DAMAGE", shippingMethod: "KAZAI",
+  imageRefs: input.imageRefs,
+};
 
 async function withPrepared(run, preparedInput = input) {
   const root = await mkdtemp(join(tmpdir(), "bello-future-create-observer-"));
@@ -202,6 +216,21 @@ test("one durable claim precedes browser navigation and retains unverified resul
     await assert.rejects(recordFutureCreateObservationOnce(root, inventoryId,
       session.claim.attemptId, await session.observer.stop()), /ALREADY_RECORDED/);
   }));
+
+test("B005659 private test can be claimed once without touching the existing product", () =>
+  withPrepared(async root => {
+    const claim = await claimFutureCreateObservationOnce(root, privateTestId);
+    assert.equal(claim.shopId, PRIVATE_CREATE_SHOP_ID);
+    assert.equal(claim.outcome, "UNKNOWN");
+    assert.equal(claim.listingConfirmed, false);
+    await assert.rejects(claimFutureCreateObservationOnce(root, privateTestId),
+      /ALREADY_CLAIMED/);
+    const stored = JSON.parse(await readFile(join(root,
+      "future-private-create-observation-once",
+      `${PRIVATE_CREATE_SHOP_ID}-once.claim.json`), "utf8"));
+    assert.equal(JSON.stringify(stored).includes(privateTest.testManagementCode), false);
+    assert.equal(JSON.stringify(stored).includes(privateTest.doNotModifyProductId), false);
+  }, privateTest));
 
 test("a restored remote draft blocks new navigation and keeps the claim UNKNOWN", () =>
   withPrepared(async root => {

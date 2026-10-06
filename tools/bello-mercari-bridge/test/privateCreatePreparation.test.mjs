@@ -20,6 +20,20 @@ const input = { schemaVersion: 1, kind: "BELLO_PRIVATE_CREATE_PREPARATION",
   quantity: 1, condition: "NO_NOTABLE_DAMAGE", shippingMethod: "KAZAI",
   imageRefs: [{ source: "INVENTORY", storageKey: "inventory/photo.jpg",
     sortOrder: 0, photoAssetId: null }] };
+const privateTestId = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
+const privateTest = {
+  schemaVersion: 2, kind: "BELLO_SEPARATE_PRIVATE_TEST_PREPARATION",
+  shopId: PRIVATE_CREATE_SHOP_ID, inventoryId: privateTestId,
+  sourceInventoryCode: "B005659", sourcePriceYen: 54200,
+  testManagementCode: "TEST_B005659_E51E4F6B7B86DD150546",
+  testPriceYen: 99999, visibility: "PRIVATE_ONLY",
+  doNotModifyProductId: "2JWp7EJx6aqKfn6dTXc5Q9",
+  contentEvidence: "BELLO_SAVED_DRAFT_ONLY",
+  draftId: input.draftId, draftUpdatedAt: input.draftUpdatedAt,
+  title: input.title, description: input.description, quantity: 1,
+  condition: "NO_NOTABLE_DAMAGE", shippingMethod: "KAZAI",
+  imageRefs: input.imageRefs,
+};
 
 async function withRoot(run) {
   const root = await mkdtemp(join(tmpdir(), "bello-private-create-preparation-"));
@@ -51,6 +65,43 @@ test("changed draft or price cannot overwrite a prepared inventory", () =>
       `${inventoryId}.json`), "utf8"));
     assert.deepEqual(stored, first);
   }));
+
+test("B005659's separate private test pins source, target and existing product without sending", () =>
+  withRoot(async root => {
+    const job = await preparePrivateCreateOnce(root, privateTest);
+    const snapshot = JSON.parse(job.snapshotJson);
+    assert.equal(job.operation, "PREPARE_SEPARATE_PRIVATE_TEST_NO_SEND");
+    assert.equal(job.status, "PREPARED_NO_SEND");
+    assert.equal(job.remoteId, null);
+    assert.equal(job.listingConfirmed, false);
+    assert.equal(snapshot.sourceInventoryCode, "B005659");
+    assert.equal(snapshot.sourcePriceYen, 54200);
+    assert.equal(snapshot.testManagementCode, privateTest.testManagementCode);
+    assert.equal(snapshot.testPriceYen, 99999);
+    assert.equal(snapshot.visibility, "PRIVATE_ONLY");
+    assert.equal(snapshot.doNotModifyProductId, privateTest.doNotModifyProductId);
+    await assert.rejects(preparePrivateCreateOnce(root, privateTest), /already claimed/);
+    const stored = JSON.parse(await readFile(join(root, "private-create-prepared",
+      `${privateTestId}.json`), "utf8"));
+    assert.deepEqual(stored, job);
+  }));
+
+test("private test overrides cannot change inventory, price, code, visibility or public target", () => {
+  for (const candidate of [
+    { ...privateTest, inventoryId },
+    { ...privateTest, sourceInventoryCode: "B005757" },
+    { ...privateTest, sourcePriceYen: 99999 },
+    { ...privateTest, testManagementCode: "B005659" },
+    { ...privateTest, testPriceYen: 54200 },
+    { ...privateTest, visibility: "PUBLIC" },
+    { ...privateTest, doNotModifyProductId: "other-product" },
+    { ...privateTest, remoteId: privateTest.doNotModifyProductId },
+    { ...privateTest, quantity: 2 },
+    { ...privateTest, condition: "NEW" },
+    { ...input, inventoryId: privateTestId, inventoryCode: "B005659" },
+    { ...input, inventoryCode: "B005659" },
+  ]) assert.throws(() => buildPrivateCreatePreparation(candidate));
+});
 
 test("Amplify timestamps with a timezone offset remain valid snapshots", () => {
   const job = buildPrivateCreatePreparation({ ...input,
