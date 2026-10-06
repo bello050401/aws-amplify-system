@@ -615,7 +615,7 @@ export function ListingForm({
           shippingMethod === draft.shippingMethod &&
           sameListingImageRefs(selectedImages, draft.images))} />
 
-      <MercariShopsLifecycleSection listing={channelListing} />
+      <MercariShopsLifecycleSection inventoryId={inventoryId} listing={channelListing} />
 
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
           上の出品履歴と同じ理由でChannelListing存在時のみ表示する。 */}
