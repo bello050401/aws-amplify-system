@@ -28,10 +28,16 @@ async function main() {
   const { command, flags } = argsOf(process.argv.slice(2));
   if (command === "prepare-private-create-no-send") {
     if (typeof flags.root !== "string" || !isAbsolute(flags.root) ||
-        typeof flags.input !== "string" || !isAbsolute(flags.input) ||
-        (await stat(flags.input)).size > 65536)
+        typeof flags.input !== "string" || !isAbsolute(flags.input))
       throw Error("Absolute queue root and small BELLO preparation file required");
-    const input = JSON.parse(await readFile(flags.input, "utf8"));
+    let input;
+    try {
+      if ((await stat(flags.input)).size > 65536)
+        throw Error("File too large");
+      input = JSON.parse(await readFile(flags.input, "utf8"));
+    } catch {
+      throw Error("BELLO_PREPARATION_FILE_INVALID");
+    }
     const job = await preparePrivateCreateOnce(flags.root, input);
     process.stdout.write(JSON.stringify({ requestId: job.requestId,
       status: job.status, listingConfirmed: false }) + "\n");

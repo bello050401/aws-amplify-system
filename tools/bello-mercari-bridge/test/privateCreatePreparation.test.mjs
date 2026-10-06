@@ -96,3 +96,23 @@ test("PC CLI imports the BELLO file as a no-send preparation only", () =>
     assert.equal(receipt.listingConfirmed, false);
     assert.equal(receipt.requestId.length, 64);
   }));
+
+test("malformed BELLO file never exposes its contents or creates a preparation", () =>
+  withRoot(async root => {
+    const source = join(root, "malformed-preparation.json");
+    const secret = "SYNTHETIC_SECRET_DO_NOT_PRINT_1749";
+    await writeFile(source, `{\"description\":\"${secret}\",`, "utf8");
+    const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
+    await assert.rejects(runFile(process.execPath,
+      [cli, "prepare-private-create-no-send", "--root", root, "--input", source]),
+    error => {
+      assert.equal(error.stdout, "");
+      assert.equal(error.stderr.trim(),
+        "BELLO Mercari bridge: BELLO_PREPARATION_FILE_INVALID");
+      assert.equal(error.stderr.includes(secret), false);
+      assert.equal(error.stderr.includes(source), false);
+      return true;
+    });
+    await assert.rejects(readFile(join(root, "private-create-prepared",
+      `${inventoryId}.json`), "utf8"), { code: "ENOENT" });
+  }));
