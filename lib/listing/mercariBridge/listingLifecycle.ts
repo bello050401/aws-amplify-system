@@ -24,8 +24,9 @@ export function shopsLifecycle(
   const hasId = typeof listing.externalListingId === "string" &&
     REMOTE_ID.test(listing.externalListingId);
   if (listing.status === "ACTIVE") return hasId ? "LISTED" : "UNKNOWN";
-  if (listing.status === "PAUSED") return hasId ? "PRIVATE" : "UNKNOWN";
-  if (listing.status === "ENDED") return hasId ? "STOPPED" : "UNKNOWN";
+  // Legacy PAUSED is also used by BELLO pricing rules; ENDED is a local record.
+  // Neither proves the current Shops visibility or that relisting is possible.
+  if (listing.status === "PAUSED" || listing.status === "ENDED") return "UNKNOWN";
   if (["QUEUED", "PUBLISHING", "RELIST_PENDING"].includes(listing.status))
     return "CREATING";
   if (["NOT_PREPARED", "DRAFT", "READY"].includes(listing.status) && !hasId)
