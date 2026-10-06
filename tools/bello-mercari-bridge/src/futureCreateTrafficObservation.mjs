@@ -136,6 +136,12 @@ export function observeFutureCreateTraffic(context, { page, shopId = SHOP,
   let stopped = false;
   let stopPromise = null;
   let overflowed = false;
+  let createResponseCount = 0;
+  const createWaiters = new Set();
+  const releaseCreateWaiters = value => {
+    for (const waiter of createWaiters)
+      if (!value || createResponseCount > waiter.after) waiter.finish(value);
+  };
   const captureDraft = () => {
     const id = draftFromPage(page);
     if (id && !drafts.has(id)) {
@@ -205,6 +211,11 @@ export function observeFutureCreateTraffic(context, { page, shopId = SHOP,
           if (keys.truncated) overflowed = true;
           const result = status === 200 ? responseResult(body) : null;
           if (result) Object.assign(entry, result);
+          if (keys.paths.some(path => path === "data.createProduct" ||
+              path.startsWith("data.createProduct."))) {
+            createResponseCount++;
+            releaseCreateWaiters(true);
+          }
         }
       } catch { overflowed = true; /* No raw response or error text leaves memory. */ }
     });
@@ -213,6 +224,18 @@ export function observeFutureCreateTraffic(context, { page, shopId = SHOP,
   context.on("request", onRequest);
   context.on("response", onResponse);
   return {
+    waitForCreateProductResponse(timeoutMs = 12000) {
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000)
+        throw Error("Invalid create response timeout");
+      if (stopped || stopPromise) return Promise.resolve(false);
+      return new Promise(resolve => {
+        const waiter = { after: createResponseCount, finish: null };
+        const finish = value => { clearTimeout(timer); createWaiters.delete(waiter); resolve(value); };
+        waiter.finish = finish;
+        const timer = setTimeout(() => finish(false), timeoutMs);
+        createWaiters.add(waiter);
+      });
+    },
     async stop() {
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
@@ -225,6 +248,7 @@ export function observeFutureCreateTraffic(context, { page, shopId = SHOP,
           await new Promise(resolve => setTimeout(resolve, Math.min(25, deadline - Date.now())));
         stopped = true;
         context.off("response", onResponse);
+        releaseCreateWaiters(false);
         return safeFutureCreateTrafficSummary({ events,
           draftIds: [...drafts].map(id => ({ id, state: UNKNOWN_DRAFT })),
           captureStatus: overflowed || pending.size ? "TRUNCATED" : "UNVERIFIED" });

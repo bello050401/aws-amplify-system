@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolve } from "node:path";
 import { exactNewDraftId, exactPinnedPrivateCreateJob,
-  exactPrivateCreateResponse, runPinnedPrivateCreateUiOnce } from
+  exactPrivateCreateResponse, exactFormFieldReadback, sameUploadedAsset,
+  runPinnedPrivateCreateUiOnce } from
   "../src/privateCreateUiOnce.mjs";
 
 const createUrl = "https://mercari-shops.com/seller/shops/evkhihBFFNn5hukMS9s36H/products/create";
@@ -35,6 +36,34 @@ test("only a unique private response without competing draft IDs may be promoted
     events: [{ ...event, resultState: "OPENED" }] }), null);
   assert.equal(exactPrivateCreateResponse({ ...observed,
     events: [{ ...event, resultId: "2JWp7EJx6aqKfn6dTXc5Q9" }] }), null);
+  for (const conflicting of [
+    { ...event, resultId: "anotherPublic", resultState: "OPENED" },
+    { ...event, resultId: "2JWp7EJx6aqKfn6dTXc5Q9", resultState: "OPENED" },
+    { httpStatus: 500, resultId: null, resultState: null,
+      responseJsonKeys: ["data", "data.createProduct"] },
+  ]) {
+    assert.equal(exactPrivateCreateResponse({ ...observed,
+      events: [event, conflicting] }), null);
+  }
+});
+
+test("title and description preserve whitespace while yen price alone is normalized", () => {
+  assert.equal(exactFormFieldReadback("name", "A  B", "A  B"), true);
+  assert.equal(exactFormFieldReadback("name", "A B", "A  B"), false);
+  assert.equal(exactFormFieldReadback("description", "first\n\nsecond", "first\n\nsecond"), true);
+  assert.equal(exactFormFieldReadback("description", "first second", "first\n\nsecond"), false);
+  assert.equal(exactFormFieldReadback("price", "¥99,999", "99999"), true);
+  assert.equal(exactFormFieldReadback("price", "9 9999", "99999"), false);
+});
+
+test("a saved image must match the selected asset path and size", () => {
+  const selected = [{ pathHash: "a".repeat(64), width: 960, height: 960 }];
+  assert.equal(sameUploadedAsset(selected, structuredClone(selected)), true);
+  assert.equal(sameUploadedAsset(selected,
+    [{ ...selected[0], pathHash: "b".repeat(64) }]), false);
+  assert.equal(sameUploadedAsset(selected,
+    [{ ...selected[0], width: 100 }]), false);
+  assert.equal(sameUploadedAsset(selected, []), false);
 });
 
 test("a prepared job cannot be replaced by a shaped but different snapshot", () => {

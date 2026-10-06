@@ -91,6 +91,50 @@ test("passive create observer records only ordered allowlisted metadata and draf
   assert.equal(safe.listingConfirmed, false);
 });
 
+test("a create response delayed after the save click is awaited before stopping", async () => {
+  const { context, page } = fakeTraffic();
+  const observer = observeFutureCreateTraffic(context, { page, drainMs: 50 });
+  const request = {
+    method: () => "POST", resourceType: () => "fetch",
+    frame: () => ({ page: () => page }),
+    url: () => "https://mercari-shops.com/graphql",
+    headerValue: async () => "application/json",
+    postDataBuffer: () => Buffer.from("{}"),
+  };
+  context.emit("request", request);
+  const awaited = observer.waitForCreateProductResponse(1000);
+  setTimeout(() => context.emit("response", {
+    request: () => request, status: () => 200,
+    headerValue: async name => name === "content-type" ? "application/json" : "0",
+    body: async () => Buffer.from(JSON.stringify({ data: { createProduct: {
+      product: { id: "delayedPrivate123", shopId: PRIVATE_CREATE_SHOP_ID,
+        status: "UNOPENED" } } } })),
+  }), 200);
+  assert.equal(await awaited, true);
+  const result = await observer.stop();
+  assert.equal(result.events[0].resultId, "delayedPrivate123");
+  assert.equal(result.captureStatus, "UNVERIFIED");
+});
+
+test("a previous autosave response cannot satisfy the next create wait", async () => {
+  const { context, page } = fakeTraffic();
+  const observer = observeFutureCreateTraffic(context, { page, drainMs: 50 });
+  const request = {
+    method: () => "POST", resourceType: () => "fetch",
+    frame: () => ({ page: () => page }),
+    url: () => "https://mercari-shops.com/graphql",
+    headerValue: async () => "application/json",
+    postDataBuffer: () => Buffer.from("{}"),
+  };
+  context.emit("request", request);
+  context.emit("response", { request: () => request, status: () => 200,
+    headerValue: async name => name === "content-type" ? "application/json" : "0",
+    body: async () => Buffer.from('{"data":{"createProduct":null}}') });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(await observer.waitForCreateProductResponse(20), false);
+  await observer.stop();
+});
+
 test("sign-in, other shop, other host and multipart bytes cannot enter the record", async () => {
   const { context, page, setUrl } = fakeTraffic();
   const observer = observeFutureCreateTraffic(context, { page, drainMs: 0 });

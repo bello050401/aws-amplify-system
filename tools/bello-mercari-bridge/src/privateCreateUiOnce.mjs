@@ -71,11 +71,36 @@ export function exactPrivateCreateResponse(observation) {
       observation.draftIds.length > 1 ||
       observation.draftIds.some(item => item.id === OLD_UNATTRIBUTED_DRAFT ||
         item.id === SOURCE_PUBLIC_ID)) return null;
-  const candidates = observation.events.filter(event => event.httpStatus === 200 &&
-    ID.test(event.resultId ?? "") &&
-    ["UNOPENED", "PRIVATE"].includes(event.resultState) &&
-    event.resultId !== SOURCE_PUBLIC_ID && event.resultId !== OLD_UNATTRIBUTED_DRAFT);
-  return candidates.length === 1 ? candidates[0].resultId : null;
+  // A second createProduct response is a conflict even when it is public,
+  // protected, or unsuccessful. Never select only the convenient private one.
+  const responses = observation.events.filter(event =>
+    event.resultId !== null && event.resultId !== undefined ||
+    event.responseJsonKeys?.some(path =>
+      path === "data.createProduct" || path.startsWith("data.createProduct.")));
+  if (responses.length !== 1) return null;
+  const response = responses[0];
+  return response.httpStatus === 200 && ID.test(response.resultId ?? "") &&
+    ["UNOPENED", "PRIVATE"].includes(response.resultState) &&
+    response.resultId !== SOURCE_PUBLIC_ID &&
+    response.resultId !== OLD_UNATTRIBUTED_DRAFT ? response.resultId : null;
+}
+
+/** Text is compared byte-for-byte; only the displayed yen price may be formatted. */
+export function exactFormFieldReadback(name, actual, expected) {
+  if (typeof actual !== "string" || typeof expected !== "string") return false;
+  if (name !== "price") return actual === expected;
+  if (!/^[0-9]+$/.test(expected) ||
+      !/^(?:[¥￥]\s*)?(?:0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)$/.test(actual))
+    return false;
+  return Number(actual.replace(/[¥￥,\s]/g, "")) === Number(expected);
+}
+
+export function sameUploadedAsset(selected, saved) {
+  return selected?.length === 1 && saved?.length === 1 &&
+    /^[a-f0-9]{64}$/.test(selected[0]?.pathHash ?? "") &&
+    selected[0].pathHash === saved[0]?.pathHash &&
+    selected[0].width === saved[0]?.width &&
+    selected[0].height === saved[0]?.height;
 }
 
 async function readPrepared(root) {
@@ -147,24 +172,32 @@ async function fillOnce(page, snapshot, imageBytes, image, seenDrafts) {
   if (!(await categories.innerText()).includes("テレビ台"))
     throw Error("Exact leaf category was not selected");
   const input = page.locator('input[type="file"][multiple]');
+  const preview = page.locator('img[alt="uploaded-image"]');
+  if (await preview.count() !== 0) throw Error("Create draft already has an image");
   await (await unique(input)).setInputFiles({ name: image.filename,
     mimeType: image.mimeType, buffer: imageBytes }, { timeout: 12000 });
   checkpoint();
-  const preview = page.locator('img[alt="uploaded-image"]');
   await preview.first().waitFor({ state: "visible", timeout: 30000 });
   if (await preview.count() !== 1) throw Error("Selected image count changed");
+  const assetUrl = page.url();
+  const selectedAsset = await readExistingUploadedImages(page, assetUrl);
+  if (selectedAsset?.length !== 1) throw Error("Selected image asset unavailable");
   checkpoint();
   const values = await page.locator("input,textarea,select").evaluateAll(elements =>
     Object.fromEntries(elements.filter(element => element.name).map(element =>
       [element.name, element.value])));
   for (const [name, value] of [...fields, ...Object.entries(FIXED_SHIPPING)]) {
-    const actual = values[name]?.replace?.(/[¥￥,\s]/g, "");
-    if (actual !== value) throw Error("Shops field readback differs");
+    if (!exactFormFieldReadback(name, values[name], value))
+      throw Error("Shops field readback differs");
   }
+  if (!sameUploadedAsset(selectedAsset,
+      await readExistingUploadedImages(page, page.url())))
+    throw Error("Selected image asset changed before save");
   checkpoint();
+  return selectedAsset;
 }
 
-async function verifyReadback(context, remoteId, snapshot) {
+async function verifyReadback(context, remoteId, snapshot, selectedAsset) {
   const url = `https://mercari-shops.com/seller/shops/${PRIVATE_CREATE_SHOP_ID}/products/${remoteId}/edit`;
   const page = await context.newPage();
   try {
@@ -184,7 +217,7 @@ async function verifyReadback(context, remoteId, snapshot) {
         }).map(name => [name, field(name)])) };
     });
     if (data.name !== snapshot.title || data.description !== snapshot.description ||
-        Number(data.price?.replace?.(/[¥￥,\s]/g, "")) !== 99999 ||
+        !exactFormFieldReadback("price", data.price, String(snapshot.testPriceYen)) ||
         data.quantity !== "1" || data.sku !== CODE ||
         !data.condition?.includes("目立った傷や汚れなし") ||
         !data.category?.includes("家具・インテリア") ||
@@ -193,7 +226,7 @@ async function verifyReadback(context, remoteId, snapshot) {
         Object.entries(FIXED_SHIPPING).some(([name, value]) =>
           data.shipping[name] !== value)) return false;
     const images = await readExistingUploadedImages(page, url);
-    if (images?.length !== 1) return false;
+    if (!sameUploadedAsset(selectedAsset, images)) return false;
     const privateRow = await privateFromExactListRow(page, PRIVATE_CREATE_SHOP_ID,
       url, snapshot.title);
     return privateRow.value.kind === "OBSERVED" &&
@@ -255,7 +288,7 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
     const page = session.page;
     if (!exactNewDraftId(page.url()).valid) throw Error("Create page unavailable");
     stage = "FIELDS_UNCERTAIN";
-    await fillOnce(page, snapshot, imageBytes, image, seenDrafts);
+    const selectedAsset = await fillOnce(page, snapshot, imageBytes, image, seenDrafts);
     const next = await unique(page.getByRole("button", { name: "公開設定に進む", exact: true }));
     stage = "PRIVATE_DIALOG_UNCERTAIN";
     await next.click({ timeout: 12000 });
@@ -267,12 +300,16 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
     const privateButton = await unique(dialog.getByRole("button",
       { name: "非公開で保存する", exact: true }));
     stage = "PRIVATE_SAVE_UNCERTAIN";
+    // Attach before the click: the create response may arrive after click resolves.
+    const responseWait = session.observer.waitForCreateProductResponse(12000);
     await privateButton.click({ timeout: 12000 });
+    if (!await responseWait) throw Error("Create response timed out");
+    await new Promise(resolve => setTimeout(resolve, 500));
     observation = await session.observer.stop();
     remoteId = exactPrivateCreateResponse(observation);
     if (!remoteId) throw Error("Exact private create response unavailable");
     stage = "READBACK_UNCERTAIN";
-    if (!await verifyReadback(session.context, remoteId, snapshot))
+    if (!await verifyReadback(session.context, remoteId, snapshot, selectedAsset))
       throw Error("Independent private product readback unavailable");
     stage = "PRIVATE_CONFIRMED";
   } catch { /* The claim is permanent even when login, form, upload, or save is uncertain. */ }
