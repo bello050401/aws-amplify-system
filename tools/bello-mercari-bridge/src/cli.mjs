@@ -13,6 +13,8 @@ import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
 import { exportSavedCreateTestClaim,
   exportSavedCreateTestUiResult } from "./exportCreateTestRecord.mjs";
 import { preparePrivateCreateOnce } from "./privateCreatePreparation.mjs";
+import { openFutureCreateTrafficObservationSession } from "./session.mjs";
+import { recordFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
 
 function argsOf(argv) {
   const [command, ...rest] = argv;
@@ -41,6 +43,26 @@ async function main() {
     const job = await preparePrivateCreateOnce(flags.root, input);
     process.stdout.write(JSON.stringify({ requestId: job.requestId,
       status: job.status, listingConfirmed: false }) + "\n");
+    return;
+  }
+  if (command === "observe-future-private-create-traffic") {
+    try {
+      if (![flags.root, flags.profile, flags.playwright].every(value =>
+        typeof value === "string" && isAbsolute(value)) ||
+          typeof flags.inventory !== "string")
+        throw Error("Invalid fixed observer arguments");
+      const session = await openFutureCreateTrafficObservationSession({
+        root: flags.root, profileDir: flags.profile,
+        playwrightModulePath: flags.playwright, inventoryId: flags.inventory });
+      if (session.state === "LIST_OPEN") {
+        process.stdout.write("専用Shops画面での操作を観測中です。終了時はブラウザを閉じてください。\n");
+        await session.closed;
+      } else await session.context.close();
+      const observation = await session.observer.stop();
+      await recordFutureCreateObservationOnce(flags.root, flags.inventory,
+        session.claim.attemptId, observation);
+      process.stdout.write("通信概要を結果未確認として一回だけ記録しました。出品完了ではありません。\n");
+    } catch { throw Error("FUTURE_CREATE_OBSERVATION_UNAVAILABLE"); }
     return;
   }
   if (command === "export-saved-direct-read-proof") {
@@ -150,7 +172,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: prepare-private-create-no-send, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: prepare-private-create-no-send, observe-future-private-create-traffic, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {

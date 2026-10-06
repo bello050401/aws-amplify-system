@@ -6,6 +6,9 @@ import { bindAccount } from "./queue.mjs";
 import { observeShopsTraffic } from "./trafficObservation.mjs";
 import { observeShopsReadQueries } from "./readQueryObservation.mjs";
 import { observeExactReadForDirectProbe } from "./directReadProbeObserver.mjs";
+import { observeFutureCreateTraffic } from "./futureCreateTrafficObservation.mjs";
+import { claimFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
+import { PRIVATE_CREATE_SHOP_ID } from "./privateCreatePreparation.mjs";
 
 const SIGN_IN_URL = "https://mercari-shops.com/signin/seller";
 const PRODUCT_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -77,6 +80,43 @@ export async function openDedicatedProductListSession({ root, profileDir,
   } catch (error) {
     await context.close();
     throw error;
+  }
+}
+
+/** One future target only: claim before opening Chrome because the create UI may autosave. */
+export async function openFutureCreateTrafficObservationSession({ root, profileDir,
+  playwrightModulePath, inventoryId, launchPersistentContext = null }) {
+  const claim = await claimFutureCreateObservationOnce(root, inventoryId);
+  const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+    launchPersistentContext });
+  const closed = new Promise(resolve => context.once("close", resolve));
+  let observer = null;
+  try {
+    const existingProductForm = context.pages().some(candidate => {
+      try {
+        const url = new URL(candidate.url());
+        return url.origin === "https://mercari-shops.com" &&
+          (url.pathname === `/seller/shops/${PRIVATE_CREATE_SHOP_ID}/products/create` ||
+            /^\/seller\/shops\/[^/]+\/products\/[^/]+\/edit$/.test(url.pathname));
+      } catch { return false; }
+    });
+    if (existingProductForm) throw Error("Existing remote product form is unknown");
+    // Never navigate a restored tab that could carry a previous UNKNOWN draft or edit.
+    const page = await context.newPage();
+    await page.bringToFront?.();
+    observer = observeFutureCreateTraffic(context, { page,
+      shopId: PRIVATE_CREATE_SHOP_ID });
+    const listUrl = `https://mercari-shops.com/seller/shops/${PRIVATE_CREATE_SHOP_ID}/products?tab=on_sale&visibility=unopened`;
+    await page.goto(listUrl);
+    const actual = new URL(page.url());
+    const state = actual.origin === "https://mercari-shops.com" &&
+      actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
+      actual.href === listUrl ? "LIST_OPEN" : "UNKNOWN";
+    return { context, page, observer, claim, state, closed };
+  } catch {
+    await observer?.stop();
+    await context.close();
+    throw Error("FUTURE_CREATE_BROWSER_UNAVAILABLE");
   }
 }
 
