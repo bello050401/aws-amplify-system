@@ -56,20 +56,28 @@ export async function verifyPrivateImageWorkflowReadOnly({ root, profileDir,
     session = await openSession({ root, profileDir, playwrightModulePath,
       shopId: target.shopId, remoteId: target.remoteId, launchPersistentContext });
     if (session.state === "AUTH_REQUIRED") return { status: "AUTH_REQUIRED" };
-    if (session.state !== "NAVIGATED_UNVERIFIED") return { status: "UNVERIFIED" };
+    if (session.state !== "NAVIGATED_UNVERIFIED")
+      return { status: "UNVERIFIED", reasonCode: "NAVIGATION_UNVERIFIED" };
     const fields = await readFields(session.page, expectedUrl, target);
     const images = await readImages(session.page, expectedUrl);
-    if (!fields || !images || !await checkPrivate(session.page, target, expectedUrl,
-      fields.title)) return { status: authRequired(session.page) ? "AUTH_REQUIRED" : "UNVERIFIED" };
+    if (!fields) return authRequired(session.page) ? { status: "AUTH_REQUIRED" } :
+      { status: "UNVERIFIED", reasonCode: "FIELDS_UNVERIFIED" };
+    if (!images) return authRequired(session.page) ? { status: "AUTH_REQUIRED" } :
+      { status: "UNVERIFIED", reasonCode: "IMAGES_UNVERIFIED" };
+    if (!await checkPrivate(session.page, target, expectedUrl, fields.title))
+      return authRequired(session.page) ? { status: "AUTH_REQUIRED" } :
+        { status: "UNVERIFIED", reasonCode: "PRIVATE_STATE_UNVERIFIED" };
     const again = await readFields(session.page, expectedUrl, target);
     const imagesAgain = await readImages(session.page, expectedUrl);
     if (!again || again.title !== fields.title || !stableImages(images, imagesAgain) ||
         session.page.url() !== expectedUrl)
-      return { status: authRequired(session.page) ? "AUTH_REQUIRED" : "UNVERIFIED" };
+      return authRequired(session.page) ? { status: "AUTH_REQUIRED" } :
+        { status: "UNVERIFIED", reasonCode: "RECHECK_UNVERIFIED" };
     return { status: images.length === 1 ? "PRIVATE_ONE_IMAGE_OBSERVED" :
       "PRIVATE_TWO_IMAGES_UNATTRIBUTED" };
   } catch {
-    return { status: authRequired(session?.page) ? "AUTH_REQUIRED" : "UNVERIFIED" };
+    return authRequired(session?.page) ? { status: "AUTH_REQUIRED" } :
+      { status: "UNVERIFIED", reasonCode: "READ_FAILED" };
   } finally {
     if (session) { try { await session.context.close(); } catch { /* Read result stands. */ } }
   }

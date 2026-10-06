@@ -379,7 +379,9 @@ test("uncertain B005757 image attempt exposes only a fresh read, not another upl
         reads++;
         assert.equal(input.requestId, requestId);
         assert.deepEqual(input.target, manualObservation);
-        return { status: "PRIVATE_ONE_IMAGE_OBSERVED" };
+        return reads === 1 ? { status: "UNVERIFIED",
+          reasonCode: "IMAGES_UNVERIFIED", secret: "must-not-display" } :
+          { status: "PRIVATE_ONE_IMAGE_OBSERVED" };
       },
       runWorkflow: async () => { writes++; throw Error("must not upload again"); },
       runRecovery: async input => {
@@ -395,11 +397,16 @@ test("uncertain B005757 image attempt exposes only a fresh read, not another upl
       assert.match(before, /<button disabled>画像1枚を追加して非公開保存・確認<\/button>/);
       const csrf = await token(app.url);
       assert.equal((await post(app.url, csrf, "verify-workflow-readonly")).status, 303);
+      const uncertain = await (await fetch(app.url)).text();
+      assert.match(uncertain, /UNVERIFIED.*IMAGES_UNVERIFIED/);
+      assert.doesNotMatch(uncertain, /must-not-display/);
+      assert.doesNotMatch(uncertain, /確認後に画像追加と非公開保存を1回だけ復旧/);
+      assert.equal((await post(app.url, csrf, "verify-workflow-readonly")).status, 303);
       const after = await (await fetch(app.url)).text();
       assert.match(after, /PRIVATE_ONE_IMAGE_OBSERVED/);
       assert.match(after, /画像資産がShopsに作成されている可能性/);
       assert.match(after, /確認後に画像追加と非公開保存を1回だけ復旧/);
-      assert.equal(reads, 1);
+      assert.equal(reads, 2);
       assert.equal(writes, 0);
       assert.equal((await post(app.url, csrf, "recover-image-once")).status, 303);
       for (let attempt = 0; attempt < 20; attempt++) {

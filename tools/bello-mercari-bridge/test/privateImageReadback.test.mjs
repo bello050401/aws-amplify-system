@@ -88,19 +88,30 @@ test("missing prior claim and a changed target never open Shops", () =>
     assert.deepEqual(fake.actions, []);
   }));
 
-test("authentication, changed images, missing fields or privacy remain unverified", () =>
+test("read-only failures return fixed diagnostic codes and close the session", () =>
   withRoot(async root => {
     await recordedUncertainImage(root);
-    for (const [options, status] of [
-      [{ state: "AUTH_REQUIRED" }, "AUTH_REQUIRED"],
-      [{ changedSecondRead: true, images: [original, additional] }, "UNVERIFIED"],
-      [{ images: [{ ...original, width: 0 }] }, "UNVERIFIED"],
-      [{ privateState: false }, "UNVERIFIED"],
-      [{ fields: false }, "UNVERIFIED"],
+    for (const [options, expected] of [
+      [{ state: "AUTH_REQUIRED" }, { status: "AUTH_REQUIRED" }],
+      [{ state: "OTHER" }, { status: "UNVERIFIED", reasonCode: "NAVIGATION_UNVERIFIED" }],
+      [{ changedSecondRead: true, images: [original, additional] },
+        { status: "UNVERIFIED", reasonCode: "RECHECK_UNVERIFIED" }],
+      [{ images: [{ ...original, width: 0 }] },
+        { status: "UNVERIFIED", reasonCode: "RECHECK_UNVERIFIED" }],
+      [{ images: null }, { status: "UNVERIFIED", reasonCode: "IMAGES_UNVERIFIED" }],
+      [{ privateState: false },
+        { status: "UNVERIFIED", reasonCode: "PRIVATE_STATE_UNVERIFIED" }],
+      [{ fields: false }, { status: "UNVERIFIED", reasonCode: "FIELDS_UNVERIFIED" }],
     ]) {
       const fake = harness(options);
       assert.deepEqual(await verifyPrivateImageWorkflowReadOnly({ root, profileDir: root,
-        playwrightModulePath: root, requestId, target }, fake.deps), { status });
+        playwrightModulePath: root, requestId, target }, fake.deps), expected);
       assert.equal(fake.actions.at(-1), "close");
     }
+    const fake = harness();
+    fake.deps.readFields = async () => { throw Error("private untrusted detail"); };
+    assert.deepEqual(await verifyPrivateImageWorkflowReadOnly({ root, profileDir: root,
+      playwrightModulePath: root, requestId, target }, fake.deps),
+    { status: "UNVERIFIED", reasonCode: "READ_FAILED" });
+    assert.deepEqual(fake.actions, ["open", "close"]);
   }));

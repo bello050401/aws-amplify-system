@@ -146,7 +146,8 @@ function page({ csrf, options, message, busy, workflowRunning, recoveryRunning,
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
   lastImageReadState, workflowAttempted, lastWorkflowStatus, lastWorkflowStage,
-  lastImagePreflight, lastWorkflowReadback, recoveryAttempted, recoveryClaimed,
+  lastImagePreflight, lastWorkflowReadback, lastWorkflowReadbackReason,
+  recoveryAttempted, recoveryClaimed,
   lastRecoveryStatus, lastRecoveryStage, recoveryReadbackPrivateWithImage,
   workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed }) {
@@ -215,7 +216,7 @@ ${pinnedB005757 && workflowAttempted && lastWorkflowStatus === "UNKNOWN" &&
   lastWorkflowStage === "FILE_SELECTION_UNCERTAIN" ?
   `<p>画像選択後の結果は不明です。別の読取画面で、この商品の現在の画像枚数と非公開状態だけを確認できます。</p>
   ${button("verify-workflow-readonly", "今回の商品を読取だけで再確認", shopsOpen || manualOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}
-  ${lastWorkflowReadback ? `<p>復旧前の読取: <code>${html(lastWorkflowReadback)}</code>。画像資産の同一性や保存要求の成功は証明しません。</p>` : ""}` : ""}
+  ${lastWorkflowReadback ? `<p>復旧前の読取: <code>${html(lastWorkflowReadback)}</code>${lastWorkflowReadbackReason ? ` / <code>${html(lastWorkflowReadbackReason)}</code>` : ""}。画像資産の同一性や保存要求の成功は証明しません。</p>` : ""}` : ""}
 ${pinnedB005757 && workflowAttempted && lastWorkflowStatus === "UNKNOWN" &&
   lastWorkflowStage === "FILE_SELECTION_UNCERTAIN" &&
   lastWorkflowReadback === "PRIVATE_ONE_IMAGE_OBSERVED" ?
@@ -353,6 +354,7 @@ export async function startDesktopApp(config, {
   let lastWorkflowStage = savedWorkflowResult?.stage ?? "";
   let lastImagePreflight = null;
   let lastWorkflowReadback = "";
+  let lastWorkflowReadbackReason = "";
   let recoveryUsed = Boolean(recoveryClaim?.claimed);
   let recoveryClaimed = Boolean(recoveryClaim?.claimed);
   let lastRecoveryStatus = savedRecoveryResult?.status ?? "";
@@ -399,6 +401,7 @@ export async function startDesktopApp(config, {
         lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession),
         lastImageReadState, workflowAttempted: workflowUsed, lastWorkflowStatus,
         lastWorkflowStage, lastImagePreflight, lastWorkflowReadback,
+        lastWorkflowReadbackReason,
         recoveryAttempted: recoveryUsed, recoveryClaimed,
         lastRecoveryStatus, lastRecoveryStage,
         recoveryReadbackPrivateWithImage,
@@ -805,6 +808,10 @@ export async function startDesktopApp(config, {
         lastWorkflowReadback = ["PRIVATE_ONE_IMAGE_OBSERVED",
           "PRIVATE_TWO_IMAGES_UNATTRIBUTED", "AUTH_REQUIRED", "UNVERIFIED",
           "NO_ELIGIBLE_ATTEMPT"].includes(result?.status) ? result.status : "UNVERIFIED";
+        lastWorkflowReadbackReason = lastWorkflowReadback === "UNVERIFIED" &&
+          ["NAVIGATION_UNVERIFIED", "FIELDS_UNVERIFIED", "IMAGES_UNVERIFIED",
+            "PRIVATE_STATE_UNVERIFIED", "RECHECK_UNVERIFIED", "READ_FAILED"]
+            .includes(result?.reasonCode) ? result.reasonCode : "";
         message = "現在の非公開状態と画像枚数を読取だけで確認しました。画像選択と保存は行っていません。";
       } else if (action === "recover-image-once") {
         if (!options.imageWorkflowEnabled || !options.imageProof ||
