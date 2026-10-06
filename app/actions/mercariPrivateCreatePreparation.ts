@@ -56,7 +56,8 @@ export async function getMercariPrivateCreatePreparationAction(
       "READ_UNAVAILABLE" | "TEST_INTENT_REQUIRED" }
 > {
   if (await getInventoryRole() !== "ADMIN") return { ok: false, code: "FORBIDDEN" };
-  if (!UUID.test(inventoryId)) return { ok: false, code: "INCOMPLETE_DRAFT" };
+  if (typeof inventoryId !== "string" || !UUID.test(inventoryId))
+    return { ok: false, code: "INCOMPLETE_DRAFT" };
   const isPrivateTest = inventoryId.toLowerCase() === TEST_INVENTORY_ID;
   if ((isPrivateTest && intent !== TEST_INTENT) || (!isPrivateTest && intent !== undefined))
     return { ok: false, code: "TEST_INTENT_REQUIRED" };
@@ -67,14 +68,18 @@ export async function getMercariPrivateCreatePreparationAction(
       mercariBridgeReadRepository.getBinding(inventoryId),
     ]);
     if (channel || binding) return { ok: false, code: "EXISTING_LINK" };
-    if (!inventory || !draft || draft.inventoryId !== inventory.id ||
+    if (!inventory || !draft || typeof inventory.id !== "string" ||
+        inventory.id.toLowerCase() !== inventoryId.toLowerCase() ||
+        draft.inventoryId !== inventory.id ||
         typeof inventory.sku !== "string" || !SKU.test(inventory.sku) ||
         (!isPrivateTest && RESERVED_TEST_CODES.has(inventory.sku.toUpperCase())) ||
-        !UUID.test(draft.id) ||
+        typeof draft.id !== "string" || !UUID.test(draft.id) ||
         typeof draft.updatedAt !== "string" ||
         !ISO.test(draft.updatedAt) || !Number.isFinite(Date.parse(draft.updatedAt)) ||
-        !draft.title.trim() || draft.title.length > 130 ||
-        !draft.description?.trim() || draft.description.length > 3000 ||
+        typeof draft.title !== "string" || !draft.title.trim() ||
+        draft.title.length > 130 ||
+        typeof draft.description !== "string" || !draft.description.trim() ||
+        draft.description.length > 3000 ||
         !Number.isSafeInteger(draft.price) || (draft.price ?? 0) < 300 ||
         (draft.price ?? 0) > 9_999_999 ||
         (isPrivateTest && (inventory.sku !== "B005659" || draft.price !== 54200 ||
@@ -88,7 +93,8 @@ export async function getMercariPrivateCreatePreparationAction(
           typeof image.storageKey !== "string" || !image.storageKey ||
           image.storageKey.length > 512 || /[?#\x00-\x1f]/.test(image.storageKey) ||
           image.storageKey.includes("://") ||
-          (image.source === "PHOTO_ASSET" ? !UUID.test(image.photoAssetId ?? "") :
+          (image.source === "PHOTO_ASSET" ?
+            typeof image.photoAssetId !== "string" || !UUID.test(image.photoAssetId) :
             image.source !== undefined && image.source !== "INVENTORY")))
       return { ok: false, code: "INCOMPLETE_DRAFT" };
     const content: PreparationContent = {

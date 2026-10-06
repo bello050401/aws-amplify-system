@@ -26,6 +26,7 @@ const IMAGE_FIELDS = ["source", "storageKey", "sortOrder", "photoAssetId"];
 const keys = value => Object.keys(value).sort().join(",");
 const exact = (value, names) => value && typeof value === "object" &&
   !Array.isArray(value) && keys(value) === [...names].sort().join(",");
+const validUuid = value => typeof value === "string" && UUID.test(value);
 const digest = value => createHash("sha256").update(value).digest("hex");
 
 /** Strict, no-send snapshot. A caller must obtain it from a current BELLO admin read. */
@@ -53,9 +54,11 @@ export function buildPrivateCreatePreparation(input) {
         input.schemaVersion !== 1 ||
         input.kind !== "BELLO_PRIVATE_CREATE_PREPARATION" || reservedV1) ||
       input.shopId !== PRIVATE_CREATE_SHOP_ID ||
-      !UUID.test(input.inventoryId) || typeof sourceCode !== "string" ||
+      !validUuid(input.inventoryId) || typeof sourceCode !== "string" ||
       !SKU.test(sourceCode) ||
-      !UUID.test(input.draftId) || !ISO.test(input.draftUpdatedAt) ||
+      !validUuid(input.draftId) ||
+      typeof input.draftUpdatedAt !== "string" ||
+      !ISO.test(input.draftUpdatedAt) ||
       !Number.isFinite(Date.parse(input.draftUpdatedAt)) ||
       typeof input.title !== "string" || !input.title.trim() ||
       input.title.length > 130 || typeof input.description !== "string" ||
@@ -73,7 +76,7 @@ export function buildPrivateCreatePreparation(input) {
         typeof image.storageKey !== "string" || !image.storageKey ||
         image.storageKey.length > 512 || /[?#\x00-\x1f]/.test(image.storageKey) ||
         image.storageKey.includes("://") || image.sortOrder !== index ||
-        (image.source === "PHOTO_ASSET" ? !UUID.test(image.photoAssetId) :
+        (image.source === "PHOTO_ASSET" ? !validUuid(image.photoAssetId) :
           image.photoAssetId !== null) || seen.has(image.storageKey))
       throw Error("BELLO private-create image selection is incomplete");
     seen.add(image.storageKey);

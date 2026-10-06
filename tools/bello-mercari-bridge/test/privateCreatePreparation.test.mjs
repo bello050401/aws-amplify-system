@@ -122,6 +122,29 @@ test("v1 cannot claim B005659 or its reserved test code with case variants", () 
     }
   }));
 
+test("array IDs cannot occupy B005659's one-time preparation slot", () =>
+  withRoot(async root => {
+    const disguised = { ...input, inventoryId: [privateTestId],
+      inventoryCode: "B009999", priceYen: 300 };
+    assert.throws(() => buildPrivateCreatePreparation(disguised));
+    await assert.rejects(preparePrivateCreateOnce(root, disguised));
+    await assert.rejects(readFile(join(root, "private-create-prepared",
+      `${privateTestId}.json`), "utf8"), { code: "ENOENT" });
+    const valid = await preparePrivateCreateOnce(root, privateTest);
+    assert.equal(valid.operation, "PREPARE_SEPARATE_PRIVATE_TEST_NO_SEND");
+    assert.equal(valid.inventoryId, privateTestId);
+  }));
+
+test("UUID and timestamp snapshot fields require strings before parsing", () => {
+  for (const candidate of [
+    { ...input, inventoryId: [inventoryId] },
+    { ...input, draftId: [input.draftId] },
+    { ...input, draftUpdatedAt: [input.draftUpdatedAt] },
+    { ...input, imageRefs: [{ ...input.imageRefs[0], source: "PHOTO_ASSET",
+      photoAssetId: [input.draftId] }] },
+  ]) assert.throws(() => buildPrivateCreatePreparation(candidate));
+});
+
 test("Amplify timestamps with a timezone offset remain valid snapshots", () => {
   const job = buildPrivateCreatePreparation({ ...input,
     draftUpdatedAt: "2026-10-06T21:00:00+09:00" });

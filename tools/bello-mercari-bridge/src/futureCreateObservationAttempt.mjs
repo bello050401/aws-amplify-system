@@ -12,7 +12,8 @@ const BLOCKED_CODES = new Set(["B005757", "B005795"]);
 const digest = value => createHash("sha256").update(value).digest("hex");
 
 function paths(root, inventoryId) {
-  if (typeof root !== "string" || !isAbsolute(root) || !UUID.test(inventoryId))
+  if (typeof root !== "string" || !isAbsolute(root) ||
+      typeof inventoryId !== "string" || !UUID.test(inventoryId))
     throw Error("Valid absolute observation root and inventory ID required");
   const dir = join(root, "future-private-create-observation-once");
   const name = `${PRIVATE_CREATE_SHOP_ID}-once`;

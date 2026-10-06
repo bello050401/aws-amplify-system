@@ -234,6 +234,15 @@ test("B005659 private test can be claimed once without touching the existing pro
     assert.equal(JSON.stringify(stored).includes(privateTest.doNotModifyProductId), false);
   }, privateTest));
 
+test("array inventory ID cannot enter the observation claim", () =>
+  withPrepared(async root => {
+    await assert.rejects(claimFutureCreateObservationOnce(root, [privateTestId]),
+      /Valid absolute observation root and inventory ID required/);
+    await assert.rejects(readFile(join(root,
+      "future-private-create-observation-once",
+      `${PRIVATE_CREATE_SHOP_ID}-once.claim.json`), "utf8"), { code: "ENOENT" });
+  }, privateTest));
+
 test("legacy v1 B005659 variants cannot reach an observation claim", async () => {
   const digest = value => createHash("sha256").update(value).digest("hex");
   for (const candidate of [
