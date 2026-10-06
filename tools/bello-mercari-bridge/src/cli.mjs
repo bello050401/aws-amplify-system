@@ -16,6 +16,8 @@ import { preparePrivateCreateOnce } from "./privateCreatePreparation.mjs";
 import { openFutureCreateTrafficObservationSession } from "./session.mjs";
 import { recordFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
 import { runPinnedPrivateCreateUiOnce } from "./privateCreateUiOnce.mjs";
+import { exactVisibilityPcJob, runVisibilityTransitionOnce } from
+  "./visibilityTransitionOnce.mjs";
 
 function argsOf(argv) {
   const [command, ...rest] = argv;
@@ -79,6 +81,31 @@ async function main() {
         remoteId: result.remoteId, listingConfirmed: result.listingConfirmed }) + "\n");
       if (result.retainedSession) await result.retainedSession.closed;
     } catch { throw Error("B005659_PRIVATE_CREATE_UNAVAILABLE"); }
+    return;
+  }
+  if (command === "run-visibility-transition-once") {
+    try {
+      if (![flags.root, flags.profile, flags.playwright, flags.job].every(value =>
+          typeof value === "string" && isAbsolute(value)) ||
+          !["STOP", "RELIST"].includes(flags["confirm-action"]) ||
+          typeof flags["confirm-id"] !== "string")
+        throw Error("Invalid fixed inputs");
+      if ((await stat(flags.job)).size < 1 || (await stat(flags.job)).size > 8192)
+        throw Error("Invalid job size");
+      const job = JSON.parse(await readFile(flags.job, "utf8"));
+      if (!exactVisibilityPcJob(job) ||
+          flags["confirm-action"] !== job.action ||
+          flags["confirm-id"] !== job.target.remoteId)
+        throw Error("Invalid exact job");
+      const result = await runVisibilityTransitionOnce({ root: flags.root,
+        profileDir: flags.profile, playwrightModulePath: flags.playwright,
+        action: job.action, target: job.target, listing: job.listing });
+      process.stdout.write(JSON.stringify({ status: result.status,
+        remoteId: result.remoteId ?? job.target.remoteId,
+        observedVisibility: result.observedVisibility ?? null }) + "\n");
+      if (result.retainedSession)
+        await new Promise(resolve => result.retainedSession.context.once("close", resolve));
+    } catch { throw Error("VISIBILITY_TRANSITION_UNAVAILABLE"); }
     return;
   }
   if (command === "export-saved-direct-read-proof") {
@@ -188,7 +215,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: prepare-private-create-no-send, observe-future-private-create-traffic, run-b005659-private-create-ui-once, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: prepare-private-create-no-send, observe-future-private-create-traffic, run-b005659-private-create-ui-once, run-visibility-transition-once, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {

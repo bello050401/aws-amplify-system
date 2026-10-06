@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { exactVisibilityMutationAcknowledgement, exactVisibilityTarget,
+import { exactVisibilityMutationAcknowledgement, exactVisibilityPcJob,
+  exactVisibilityTarget,
   runVisibilityTransitionOnce } from "../src/visibilityTransitionOnce.mjs";
 
 const shopId = "evkhihBFFNn5hukMS9s36H";
@@ -67,6 +69,20 @@ test("private-only inventory variants and array identifiers cannot enter a claim
     ["dd273c1e-9b2a-4013-acc6-c445a481fab8"]])
     assert.equal(exactVisibilityTarget({ ...target, inventoryId }), false);
   assert.equal(exactVisibilityTarget({ ...target, remoteId: "2JWp7EJx6aqKfn6dTXc5Q9" }), false);
+});
+
+test("a BELLO PC handoff is fingerprinted and cannot swap target or action", () => {
+  const body = { schemaVersion: 1, action: "STOP", target, listing };
+  const fingerprint = createHash("sha256").update(JSON.stringify(body)).digest("hex");
+  assert.equal(exactVisibilityPcJob({ ...body, fingerprint }), true);
+  assert.equal(exactVisibilityPcJob({ ...body, target: { ...target, priceYen: 99999 },
+    fingerprint }), false);
+  assert.equal(exactVisibilityPcJob({ ...body, action: "RELIST", fingerprint }), false);
+  const relist = { ...body, action: "RELIST" };
+  assert.equal(exactVisibilityPcJob({ ...relist,
+    fingerprint: createHash("sha256").update(JSON.stringify(relist)).digest("hex") }), true);
+  assert.equal(exactVisibilityPcJob({ ...body, target: { ...target,
+    inventoryId: target.inventoryId.toUpperCase() }, fingerprint }), false);
 });
 
 test("one verified stop permits one later relist of the same ID", async () => {

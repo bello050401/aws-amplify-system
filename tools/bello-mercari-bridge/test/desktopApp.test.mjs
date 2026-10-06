@@ -45,6 +45,62 @@ test("fixed control port refuses a second desktop process", async () => {
   } finally { await first.close(); }
 });
 
+test("BELLO origin queues a PC visibility job without a Shops action", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-visibility-"));
+  const body = { schemaVersion: 1, action: "STOP",
+    target: { shopId: "evkhihBFFNn5hukMS9s36H",
+      inventoryId: "bd4850de-9156-4890-a821-cae75da5c8f7",
+      remoteId: "ownedProduct123", title: "Exact owned product",
+      skuCode: "B009999", priceYen: 45000, quantity: 1,
+      visibilityPolicy: "PUBLIC_ALLOWED" },
+    listing: { status: "ACTIVE", externalListingId: "ownedProduct123" } };
+  const job = { ...body,
+    fingerprint: createHash("sha256").update(JSON.stringify(body)).digest("hex") };
+  let runs = 0;
+  const app = await startDesktopApp({ ...config(), dataDir }, {
+    openBrowser: null,
+    runVisibility: async () => { runs++; return { status: "PREFLIGHT_BLOCKED" }; },
+  });
+  try {
+    const headers = { Origin: config().origin, "Content-Type": "application/json",
+      "x-bello-mercari-bridge": "VISIBILITY_JOB" };
+    const forbidden = await fetch(`${app.url}/visibility-job`, { method: "POST",
+      headers: { ...headers, Origin: "https://evil.example.test" }, body: JSON.stringify(job) });
+    assert.equal(forbidden.status, 403);
+    const preflight = await fetch(`${app.url}/visibility-job`, { method: "OPTIONS",
+      headers: { Origin: config().origin, "Access-Control-Request-Private-Network": "true" } });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("Access-Control-Allow-Origin"), config().origin);
+    const queued = await fetch(`${app.url}/visibility-job`, { method: "POST",
+      headers, body: JSON.stringify(job) });
+    assert.equal(queued.status, 200);
+    const receipt = await queued.json();
+    assert.equal(receipt.status, "QUEUED_NO_SEND");
+    assert.equal(runs, 0);
+    const csrf = await token(app.url);
+    const visible = await (await fetch(app.url)).text();
+    assert.match(visible, /ownedProduct123/);
+    const run = await fetch(`${app.url}/action`, { method: "POST", redirect: "manual",
+      headers: { Origin: app.url, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "run-visibility-job",
+        jobKey: receipt.jobKey }) });
+    assert.equal(run.status, 303);
+    assert.equal(runs, 1);
+    const relistBody = { ...body, action: "RELIST" };
+    const relistJob = { ...relistBody,
+      fingerprint: createHash("sha256").update(JSON.stringify(relistBody)).digest("hex") };
+    const upload = new FormData();
+    upload.set("csrf", csrf);
+    upload.set("job", new Blob([JSON.stringify(relistJob)],
+      { type: "application/json" }), "relist.json");
+    const imported = await fetch(`${app.url}/visibility-import`, {
+      method: "POST", redirect: "manual", headers: { Origin: app.url }, body: upload });
+    assert.equal(imported.status, 303);
+    assert.match(await (await fetch(app.url)).text(), /停止済み商品を再出品/);
+    assert.equal(runs, 1, "file import must not operate Shops");
+  } finally { await app.close(); await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test("isolated private-create page claims before image work and records one UI observation", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-create-"));
   let opened = 0;

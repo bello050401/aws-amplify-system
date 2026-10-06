@@ -35,6 +35,22 @@ export function exactVisibilityTarget(target) {
     ["PUBLIC_ALLOWED", "PRIVATE_ONLY"].includes(target.visibilityPolicy);
 }
 
+/** Validate the exact no-send job exported by the BELLO EC listing button. */
+export function exactVisibilityPcJob(value) {
+  if (!exactKeys(value, ["schemaVersion", "action", "target", "listing", "fingerprint"]) ||
+      value.schemaVersion !== 1 || !["STOP", "RELIST"].includes(value.action) ||
+      !exactVisibilityTarget(value.target) ||
+      value.target.visibilityPolicy !== "PUBLIC_ALLOWED" ||
+      !exactKeys(value.listing, ["status", "externalListingId"]) ||
+      value.listing.status !== "ACTIVE" ||
+      value.listing.externalListingId !== value.target.remoteId ||
+      typeof value.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.fingerprint))
+    return false;
+  const body = { schemaVersion: value.schemaVersion, action: value.action,
+    target: value.target, listing: value.listing };
+  return hash(JSON.stringify(body)) === value.fingerprint;
+}
+
 /** One exact mutation response, never a guessed HTTP request contract. */
 export function exactVisibilityMutationAcknowledgement(raw, action) {
   if (!["STOP", "RELIST"].includes(action) || !Array.isArray(raw)) return false;

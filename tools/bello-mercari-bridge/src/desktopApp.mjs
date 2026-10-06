@@ -36,6 +36,9 @@ import { readPrivateImageRecoveryClaim, readPrivateImageRecoveryResult } from
   "./privateImageRecoveryAttempt.mjs";
 import { verifyExistingSavedProductReadOnly, readExistingSavedProductReadback } from
   "./existingSavedProductReadback.mjs";
+import { enqueueVisibilityPcJob, listVisibilityPcJobs, readVisibilityPcJob } from
+  "./visibilityJobInbox.mjs";
+import { runVisibilityTransitionOnce } from "./visibilityTransitionOnce.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const WORKFLOW_STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN",
@@ -152,20 +155,26 @@ function page({ csrf, options, message, busy, workflowRunning, recoveryRunning,
   recoveryAttempted, recoveryClaimed,
   lastRecoveryStatus, lastRecoveryStage, recoveryReadbackPrivateWithImage,
   workflowReadbackPrivateWithImage, savedProductReadback,
-  retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed }) {
+  retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed,
+  visibilityJobs = [], retainedVisibilityOpen = false }) {
   if (options.createTestObservationEnabled)
     return createTestPage({ csrf, message, busy, claim: createClaim,
       preflight: createPreflight, result: createResult, open: createOpen, armed: createArmed });
   const button = (action, label, disabled = false) =>
-    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning || recoveryRunning ? "disabled" : ""}>${label}</button></form>`;
+    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning || recoveryRunning || retainedVisibilityOpen ? "disabled" : ""}>${label}</button></form>`;
+  const visibilityButton = item =>
+    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-visibility-job"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${item.attempted || busy || retainedVisibilityOpen || workflowRunning || recoveryRunning ? "disabled" : ""}>${item.job.action === "STOP" ? "出品停止を1回実行" : "停止済み商品を再出品"}</button></form>`;
   const pinnedB005757 = isPinnedB005757ImageTarget(options.manualObservation,
     options.requestId);
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${workflowRunning || recoveryRunning ? '<meta http-equiv="refresh" content="2">' : ""}<title>BELLO メルカリ照合</title><style>
 body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#222;margin:0;padding:24px}main{max-width:640px;margin:auto;background:white;border:1px solid #d5d8de;border-radius:12px;padding:24px}h1{font-size:1.4rem;margin-top:0}section{border-top:1px solid #ddd;padding-top:16px;margin-top:20px}button{background:#0868c7;color:white;border:0;border-radius:6px;padding:12px 18px;font-size:1rem;cursor:pointer}button:disabled{opacity:.45;cursor:default}form{display:inline-block;margin:5px 8px 5px 0}small{color:#555}code{overflow-wrap:anywhere}strong{color:#7a3600}
 </style></head><body><main><h1>BELLO メルカリShops既存商品照合</h1>
-<p>対象は既存の商品IDだけです。新規出品・公開・停止・在庫変更は行いません。</p>
+<p>読取は既存の商品IDを照合します。公開状態の変更は、下のPCジョブを選んだ場合だけ行います。</p>
 <p><small>BELLO: ${html(options.origin)}<br>読取依頼ID: <code>${html(options.requestId)}</code></small></p>
 ${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
+<section><h2>BELLO EC出品のPCジョブを読み込む</h2><p>BELLOから直接渡せなかった場合だけ、保存したJSONファイルを指定してください。読み込みではShopsを変更しません。</p><form method="post" action="/visibility-import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="file" name="job" accept=".json,application/json" required><button ${busy || retainedVisibilityOpen ? "disabled" : ""}>PCジョブを読み込む</button></form></section>
+${visibilityJobs.length ? `<section><h2>BELLO EC出品からの公開状態ジョブ</h2><p>対象IDと現在の公開状態をShopsで読み直し、1回だけ画面操作します。結果が不明なら再操作しません。再出品はこのPCに同じ商品の停止完了記録がある場合だけ可能です。</p>${visibilityJobs.map(item => `<div><p><strong>${html(item.job.action === "STOP" ? "出品停止" : "再出品")}</strong> / ${html(item.job.target.skuCode)} / 商品ID <code>${html(item.job.target.remoteId)}</code> / ${html(item.attempted ? item.outcome ?? "UNKNOWN" : "未実行")}</p>${visibilityButton(item)}</div>`).join("")}</section>` : ""}
+${retainedVisibilityOpen ? "<p>Shops操作の結果を確認できません。専用Chromeを開いたままにしています。再操作せず状態を確認してください。</p>" : ""}
 ${workflowRunning ? `<p>工程を実行中です。現在の段階: <code>${html(lastWorkflowStage || "準備中")}</code></p>` : ""}
 ${recoveryRunning ? `<p>一回限りの復旧工程を実行中です。現在の段階: <code>${html(lastRecoveryStage || "準備中")}</code></p>` : ""}
 <section><h2>1. 通常ログイン</h2><p>BELLOとShopsを、それぞれ専用のChromeで開きます。ログインが済んだらブラウザを閉じてください。ログイン情報をコピーしません。</p>
@@ -277,6 +286,8 @@ export async function startDesktopApp(config, {
   readCreate = readCreateTestObservation,
   recordCreate = recordCreateTestObservation,
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
+  enqueueVisibility = enqueueVisibilityPcJob,
+  runVisibility = runVisibilityTransitionOnce,
 } = {}) {
   const options = optionsOf(config);
   const initialCreate = options.createTestObservationEnabled ?
@@ -346,6 +357,7 @@ export async function startDesktopApp(config, {
   let retainedSaveSession = null;
   let retainedImageSession = null;
   let retainedWorkflowSession = null;
+  let retainedVisibilitySession = null;
   let lastImageStatus = savedImageOutcome?.outcome ?? "";
   let lastImageDiagnostic = savedImageOutcome?.diagnostic ?? "";
   let lastImageReadState = "";
@@ -389,7 +401,105 @@ export async function startDesktopApp(config, {
   };
   let localOrigin;
   const server = createServer(async (request, response) => {
+    if (request.url?.startsWith("/visibility-status?") &&
+        ["OPTIONS", "GET"].includes(request.method)) {
+      if (options.createTestObservationEnabled || request.headers.origin !== options.origin) {
+        response.writeHead(403); response.end(); return;
+      }
+      const headers = { "Access-Control-Allow-Origin": options.origin,
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "content-type",
+        "Access-Control-Allow-Private-Network": "true", Vary: "Origin",
+        "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" };
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, headers); response.end(); return;
+      }
+      const inventoryId = new URL(request.url, localOrigin).searchParams.get("inventoryId");
+      if (typeof inventoryId !== "string" || !UUID.test(inventoryId)) {
+        response.writeHead(400, headers); response.end('{"ok":false}'); return;
+      }
+      try {
+        const items = (await listVisibilityPcJobs(options.root))
+          .filter(item => item.job.target.inventoryId === inventoryId)
+          .map(item => ({ action: item.job.action,
+            remoteId: item.job.target.remoteId, attempted: item.attempted,
+            outcome: item.outcome }));
+        response.writeHead(200, headers);
+        response.end(JSON.stringify({ ok: true, items }));
+      } catch { response.writeHead(503, headers); response.end('{"ok":false}'); }
+      return;
+    }
+    if (request.url === "/visibility-job" &&
+        ["OPTIONS", "POST"].includes(request.method)) {
+      const allowed = !options.createTestObservationEnabled &&
+        request.headers.origin === options.origin;
+      const cors = { "Access-Control-Allow-Origin": options.origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "content-type, x-bello-mercari-bridge",
+        "Access-Control-Allow-Private-Network": "true", Vary: "Origin",
+        "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" };
+      if (!allowed) { response.writeHead(403); response.end(); return; }
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, cors); response.end(); return;
+      }
+      if (request.headers["x-bello-mercari-bridge"] !== "VISIBILITY_JOB" ||
+          !request.headers["content-type"]?.startsWith("application/json")) {
+        response.writeHead(403, cors); response.end('{"ok":false}'); return;
+      }
+      let body = "";
+      try {
+        for await (const chunk of request) {
+          body += chunk.toString("utf8");
+          if (Buffer.byteLength(body, "utf8") > 8192)
+            throw Error("Job body too large");
+        }
+        const job = JSON.parse(body);
+        const queued = await enqueueVisibility(options.root, job);
+        response.writeHead(200, cors);
+        response.end(JSON.stringify({ ok: true, status: queued.status,
+          jobKey: queued.key }));
+      } catch {
+        response.writeHead(409, cors); response.end('{"ok":false}');
+      }
+      return;
+    }
+    if (request.method === "POST" && request.url === "/visibility-import") {
+      if (options.createTestObservationEnabled || request.headers.origin !== localOrigin ||
+          !request.headers["content-type"]?.startsWith("multipart/form-data;") ||
+          busy || retainedVisibilitySession) {
+        send(response, 403, "Forbidden", "text/plain; charset=utf-8"); return;
+      }
+      try {
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of request) {
+          size += chunk.length;
+          if (size > 12288) throw Error("File too large");
+          chunks.push(chunk);
+        }
+        const upload = new Request(localOrigin + "/visibility-import", {
+          method: "POST", headers: { "Content-Type": request.headers["content-type"] },
+          body: Buffer.concat(chunks),
+        });
+        const form = await upload.formData();
+        const supplied = Buffer.from(String(form.get("csrf") ?? ""), "utf8");
+        const actual = Buffer.from(csrf, "utf8");
+        const file = form.get("job");
+        if (supplied.length !== actual.length || !timingSafeEqual(supplied, actual) ||
+            typeof file?.text !== "function" || file.size < 1 || file.size > 8192)
+          throw Error("Invalid import");
+        await enqueueVisibility(options.root, JSON.parse(await file.text()));
+        message = "PCジョブを読み込みました。Shopsはまだ変更していません。";
+      } catch {
+        message = "PCジョブを確認できませんでした。Shopsは変更していません。";
+      }
+      response.writeHead(303, { Location: "/", "Cache-Control": "no-store" });
+      response.end(); return;
+    }
     if (request.method === "GET" && request.url === "/") {
+      let visibilityJobs = [];
+      try { visibilityJobs = await listVisibilityPcJobs(options.root); }
+      catch { message = "PCジョブの保存状態を確認できません。Shops操作は行っていません。"; }
       send(response, 200, page({ csrf, options, message, busy, workflowRunning,
         recoveryRunning,
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
@@ -411,7 +521,8 @@ export async function startDesktopApp(config, {
         savedProductReadback,
         retainedWorkflowOpen: Boolean(retainedWorkflowSession),
         createClaim, createPreflight, createResult, createOpen: Boolean(createSession),
-        createArmed }));
+        createArmed, visibilityJobs,
+        retainedVisibilityOpen: Boolean(retainedVisibilitySession) }));
       return;
     }
     if (request.method !== "POST" || request.url !== "/action" ||
@@ -432,7 +543,7 @@ export async function startDesktopApp(config, {
     const supplied = Buffer.from(form.get("csrf") ?? "", "utf8");
     const actual = Buffer.from(csrf, "utf8");
     if (supplied.length !== actual.length || !timingSafeEqual(supplied, actual) ||
-        busy || workflowRunning || recoveryRunning) {
+        busy || workflowRunning || recoveryRunning || retainedVisibilitySession) {
       send(response, 403, "Forbidden", "text/plain; charset=utf-8"); return;
     }
     busy = true;
@@ -444,7 +555,32 @@ export async function startDesktopApp(config, {
           !["create-test-open", "create-test-arm", "create-test-finish", "shutdown"]
             .includes(action))
         throw Error("Only the pinned private-create observation is available");
-      if (action === "create-test-open") {
+      if (action === "run-visibility-job") {
+        const key = form.get("jobKey");
+        if (!HASH.test(key ?? "") || shopsContext || manualSession ||
+            retainedSaveSession || retainedImageSession || retainedWorkflowSession ||
+            createSession)
+          throw Error("Visibility job cannot start during another Shops session");
+        const job = await readVisibilityPcJob(options.root, key);
+        const result = await runVisibility({ root: options.root,
+          profileDir: options.shopsProfileDir,
+          playwrightModulePath: options.playwrightModulePath,
+          action: job.action, target: job.target, listing: job.listing });
+        if (result.retainedSession) {
+          retainedVisibilitySession = result.retainedSession;
+          result.retainedSession.context.once("close", () => {
+            if (retainedVisibilitySession === result.retainedSession)
+              retainedVisibilitySession = null;
+          });
+        }
+        message = result.status === "STOP_VERIFIED" ?
+          "Shopsの商品IDと非公開状態を再読込して、停止を確認しました。" :
+          result.status === "RELIST_VERIFIED" ?
+            "Shopsの商品IDと公開状態を再読込して、再出品を確認しました。" :
+            result.status === "PREFLIGHT_BLOCKED" ?
+              "停止済みの証拠または対象状態を確認できません。Shops操作は行っていません。" :
+              "結果は未確認です。同じ操作を再実行できません。Shops画面を確認してください。";
+      } else if (action === "create-test-open") {
         if (!options.createTestObservationEnabled || createClaim.claimed ||
             !createPreflight.clear || createSession ||
             shopsContext || manualSession || retainedSaveSession || retainedImageSession ||
@@ -896,7 +1032,8 @@ export async function startDesktopApp(config, {
       } else if (action === "shutdown") {
         if (options.createTestObservationEnabled && createSession)
           throw Error("Close the dedicated Shops browser manually before ending the app");
-        if (retainedSaveSession || retainedImageSession || retainedWorkflowSession)
+        if (retainedSaveSession || retainedImageSession || retainedWorkflowSession ||
+            retainedVisibilitySession)
           throw Error("Shops browser is still open after mutation");
         if (belloContext) { await belloContext.close(); belloContext = null; }
         if (shopsContext) { await shopsContext.close(); shopsContext = null; }
@@ -952,6 +1089,8 @@ export async function startDesktopApp(config, {
   return { url: localOrigin, close: async () => {
     if (createSession)
       throw Error("Close the dedicated Shops browser manually before ending the app");
+    if (retainedVisibilitySession)
+      throw Error("Close the unresolved Shops visibility browser manually before ending the app");
     if (belloContext) await belloContext.close();
     if (shopsContext) await shopsContext.close();
     if (manualSession) {
