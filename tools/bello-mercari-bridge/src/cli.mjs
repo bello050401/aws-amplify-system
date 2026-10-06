@@ -15,6 +15,7 @@ import { exportSavedCreateTestClaim,
 import { preparePrivateCreateOnce } from "./privateCreatePreparation.mjs";
 import { openFutureCreateTrafficObservationSession } from "./session.mjs";
 import { recordFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
+import { runPinnedPrivateCreateUiOnce } from "./privateCreateUiOnce.mjs";
 
 function argsOf(argv) {
   const [command, ...rest] = argv;
@@ -63,6 +64,21 @@ async function main() {
         session.claim.attemptId, observation);
       process.stdout.write("通信概要を結果未確認として一回だけ記録しました。出品完了ではありません。\n");
     } catch { throw Error("FUTURE_CREATE_OBSERVATION_UNAVAILABLE"); }
+    return;
+  }
+  if (command === "run-b005659-private-create-ui-once") {
+    try {
+      if (flags["confirm-code"] !== "TEST_B005659_E51E4F6B7B86DD150546" ||
+          ![flags.root, flags.profile, flags.playwright, flags.image].every(value =>
+            typeof value === "string" && isAbsolute(value)))
+        throw Error("Invalid fixed inputs");
+      const result = await runPinnedPrivateCreateUiOnce({ root: flags.root,
+        profileDir: flags.profile, playwrightModulePath: flags.playwright,
+        imagePath: flags.image });
+      process.stdout.write(JSON.stringify({ status: result.status,
+        remoteId: result.remoteId, listingConfirmed: result.listingConfirmed }) + "\n");
+      if (result.retainedSession) await result.retainedSession.closed;
+    } catch { throw Error("B005659_PRIVATE_CREATE_UNAVAILABLE"); }
     return;
   }
   if (command === "export-saved-direct-read-proof") {
@@ -172,7 +188,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: prepare-private-create-no-send, observe-future-private-create-traffic, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: prepare-private-create-no-send, observe-future-private-create-traffic, run-b005659-private-create-ui-once, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {
