@@ -1,28 +1,6 @@
 const HASH = /^[a-f0-9]{64}$/;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-/** The current Shops editor opens its hidden input from the visible add-image tile. */
-export async function selectPinnedImageFromVisibleBox(page, expectedUrl, image, bytes) {
-  if (page.url() !== expectedUrl || !Buffer.isBuffer(bytes) ||
-      !image || typeof image.filename !== "string" ||
-      !["image/jpeg", "image/png"].includes(image.mimeType))
-    throw Error("Invalid visible image selection target");
-  const boxes = page.getByTestId("image_box");
-  if (await boxes.count() < 1) throw Error("Visible image box is missing");
-  const box = boxes.first();
-  if (!await box.isVisible() ||
-      await box.locator('img[alt="uploaded-image"]').count() !== 0)
-    throw Error("Visible image box changed");
-  const [chooser] = await Promise.all([
-    page.waitForEvent("filechooser", { timeout: 12000 }),
-    box.click({ timeout: 12000 }),
-  ]);
-  if (page.url() !== expectedUrl || !chooser.isMultiple())
-    throw Error("Image chooser changed");
-  await chooser.setFiles({ name: image.filename, mimeType: image.mimeType,
-    buffer: bytes }, { timeout: 12000 });
-}
-
 /** Compare fixed digests only. A data: preview is never a persisted Shops asset. */
 export function matchesExactPendingPreview(slots, originalHash, selectedSha256) {
   return HASH.test(originalHash) && HASH.test(selectedSha256) &&

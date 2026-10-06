@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createHash, webcrypto } from "node:crypto";
 import test from "node:test";
 import vm from "node:vm";
-import { selectPinnedImageFromVisibleBox, readExactPendingPreview,
-  waitForVisibleImageSelection } from "../src/visibleImageSelection.mjs";
+import { readExactPendingPreview, waitForVisibleImageSelection } from
+  "../src/visibleImageSelection.mjs";
 
 const editUrl = "https://mercari-shops.com/seller/shops/shop/products/product/edit";
 const remotePath = "/product-image/original.jpg";
@@ -29,37 +29,6 @@ function imagePage(slots) {
     } };
   } };
 }
-
-test("visible image tile opens the chooser and selects pinned bytes once", async () => {
-  const actions = [];
-  let releaseChooser;
-  const page = { url: () => editUrl,
-    getByTestId: name => {
-      assert.equal(name, "image_box");
-      return { count: async () => 2, first: () => ({
-        isVisible: async () => true,
-        locator: selector => {
-          assert.equal(selector, 'img[alt="uploaded-image"]');
-          return { count: async () => 0 };
-        },
-        click: async () => { actions.push("click-visible-box");
-          releaseChooser({ isMultiple: () => true, setFiles: async file => {
-            assert.equal(file.name, "B005999-test.jpg");
-            assert.deepEqual(file.buffer, bytes);
-            actions.push("select-pinned-bytes");
-          } }); },
-      }) };
-    },
-    waitForEvent: event => {
-      assert.equal(event, "filechooser");
-      actions.push("await-chooser");
-      return new Promise(resolve => { releaseChooser = resolve; });
-    },
-  };
-  await selectPinnedImageFromVisibleBox(page, editUrl,
-    { filename: "B005999-test.jpg", mimeType: "image/jpeg" }, bytes);
-  assert.deepEqual(actions, ["await-chooser", "click-visible-box", "select-pinned-bytes"]);
-});
 
 test("a matching data preview is distinct from a persisted remote second image", async () => {
   const page = imagePage([remote, data]);

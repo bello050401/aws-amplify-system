@@ -68,13 +68,11 @@ function harness({ acknowledged = true, auth = false, probeAvailable = false,
       pendingPreview && !reloaded && currentPage === page ? null : [original, added] :
       [original]; },
     checkPrivate: async () => { actions.push("private-list"); return true; },
-    fileInput: async () => ({ verified: true }),
-    selectVisible: async (_page, url, file, pinnedBytes) => {
-      assert.equal(url, editUrl);
+    fileInput: async () => ({ setInputFiles: async file => {
       assert.equal(file.mimeType, "image/jpeg");
-      assert.deepEqual(pinnedBytes, bytes);
+      assert.deepEqual(file.buffer, bytes);
       actions.push("select"); selected = true;
-    },
+    } }),
     saveControl: async () => ({ click: async () => { actions.push("private-save"); } }),
     waitForSelection: async () => {
       actions.push("wait-image");

@@ -9,8 +9,7 @@ import { readManualImageClaim } from "./manualImageAttempt.mjs";
 import { readManualSaveClaim } from "./manualSaveAttempt.mjs";
 import { readPrivateImageWorkflowClaim, claimPrivateImageWorkflow,
   claimPrivateImageSaveStage, writePrivateImageWorkflowResult } from "./privateImageWorkflowAttempt.mjs";
-import { readExactPendingPreview, selectPinnedImageFromVisibleBox,
-  waitForVisibleImageSelection } from
+import { readExactPendingPreview, waitForVisibleImageSelection } from
   "./visibleImageSelection.mjs";
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -83,7 +82,6 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
     openSession = openExistingProductReadSession, readFields = readPinnedEditFields,
     readImages = readExistingUploadedImages, checkPrivate = privateExactProduct,
     fileInput = exactSingleImageInput, saveControl = privateSaveControl,
-    selectVisible = selectPinnedImageFromVisibleBox,
     waitForSelection = waitForVisibleImageSelection,
     verifyPendingPreview = readExactPendingPreview,
     observe = (page, url) => observeManualShopsMutation(page, url, { shopsOnly: true }),
@@ -146,9 +144,14 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
     setStage("IMAGE_CLAIMED");
     setStage("FILE_SELECTION_UNCERTAIN");
     const input = await fileInput(session.page, expectedUrl);
-    if (!input || !await readFields(session.page, expectedUrl, target))
+    const beforeSelection = await readFields(session.page, expectedUrl, target);
+    const imagesBeforeSelection = await readImages(session.page, expectedUrl);
+    if (!input || !beforeSelection || beforeSelection.title !== before.title ||
+        imagesBeforeSelection?.length !== 1 ||
+        imagesBeforeSelection[0].pathHash !== originalHash)
       throw Error("Pinned image input or product changed");
-    await selectVisible(session.page, expectedUrl, image, bytes);
+    await input.setInputFiles({ name: image.filename, mimeType: image.mimeType,
+      buffer: bytes }, { timeout: 12000 });
     setStage("FILE_SELECTION_RETURNED");
     const selection = await waitForSelection(session.page, expectedUrl, originalHash,
       imageSha256, readImages);
