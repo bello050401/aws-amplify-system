@@ -126,3 +126,22 @@ test("unknown after readback preserves the ID and permanently blocks another cli
     assert.equal(browser.state().saveClicks, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("a saturated response window records UNKNOWN even with matching readback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-visibility-saturated-"));
+  try {
+    const browser = fakeBrowser("STOP");
+    browser.deps.observe = () => ({ checkpoint: () => 0,
+      waitForPostClickIdle: async () => true,
+      stop: async () => [event("STOP"), ...Array.from({ length: 19 }, (_, index) => ({
+        ...event("STOP"), order: index + 2,
+        graphqlOperationType: "query", responseKind: "PRODUCT" }))] });
+    const result = await runVisibilityTransitionOnce(args(root, "STOP"), browser.deps);
+    assert.equal(result.status, "UNKNOWN");
+    assert.equal(result.retainedSession !== null, true);
+    const saved = JSON.parse(await readFile(join(root, "visibility-transition-once",
+      `${shopId}-${target.remoteId}-STOP.result.json`), "utf8"));
+    assert.equal(saved.outcome, "UNKNOWN");
+    assert.equal(browser.state().saveClicks, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
