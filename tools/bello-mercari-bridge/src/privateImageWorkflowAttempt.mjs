@@ -33,12 +33,29 @@ export async function readPrivateImageWorkflowClaim(root, target) {
   const path = paths(root, target).image;
   try {
     const value = JSON.parse(await readFile(path, "utf8"));
-    return { claimed: true, valid: value?.schemaVersion === 1 &&
+    const valid = value?.schemaVersion === 1 &&
       value?.operation === "SELECT_IMAGE_AND_PRIVATE_SAVE_ONCE" &&
       value.shopId === target.shopId && value.remoteId === target.remoteId &&
       value.inventoryCode === target.inventoryCode && value.priceYen === target.priceYen &&
       value.quantity === target.quantity && HASH.test(value.imageSha256) &&
-      typeof value.attemptId === "string", attemptId: value?.attemptId ?? null };
+      typeof value.attemptId === "string";
+    return { claimed: true, valid, attemptId: valid ? value.attemptId : null,
+      imageSha256: valid ? value.imageSha256 : null };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { claimed: false, valid: true };
+    return { claimed: true, valid: false };
+  }
+}
+
+export async function readPrivateImageSaveClaim(root, target) {
+  const path = paths(root, target).save;
+  try {
+    const value = JSON.parse(await readFile(path, "utf8"));
+    const source = await readPrivateImageWorkflowClaim(root, target);
+    return { claimed: true, valid: value?.schemaVersion === 1 &&
+      value.operation === "PRIVATE_SAVE_AFTER_IMAGE_ONCE" &&
+      value.shopId === target.shopId && value.remoteId === target.remoteId &&
+      source.claimed && source.valid && value.imageAttemptId === source.attemptId };
   } catch (error) {
     if (error?.code === "ENOENT") return { claimed: false, valid: true };
     return { claimed: true, valid: false };

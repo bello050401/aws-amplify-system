@@ -366,6 +366,7 @@ test("uncertain B005757 image attempt exposes only a fresh read, not another upl
     path: join(dataDir, "ImageProof", `B005757-${sha256.slice(0, 16)}.jpg`) };
   let reads = 0;
   let writes = 0;
+  let recoveries = 0;
   try {
     const claim = await claimPrivateImageWorkflow(join(dataDir, "Queue"),
       manualObservation, sha256);
@@ -381,6 +382,12 @@ test("uncertain B005757 image attempt exposes only a fresh read, not another upl
         return { status: "PRIVATE_ONE_IMAGE_OBSERVED" };
       },
       runWorkflow: async () => { writes++; throw Error("must not upload again"); },
+      runRecovery: async input => {
+        recoveries++;
+        assert.equal(input.readbackObserved, "PRIVATE_ONE_IMAGE_OBSERVED");
+        assert.equal(input.requestId, requestId);
+        return { status: "PREFLIGHT_BLOCKED" };
+      },
     });
     try {
       const before = await (await fetch(app.url)).text();
@@ -390,8 +397,22 @@ test("uncertain B005757 image attempt exposes only a fresh read, not another upl
       assert.equal((await post(app.url, csrf, "verify-workflow-readonly")).status, 303);
       const after = await (await fetch(app.url)).text();
       assert.match(after, /PRIVATE_ONE_IMAGE_OBSERVED/);
+      assert.match(after, /画像資産がShopsに作成されている可能性/);
+      assert.match(after, /確認後に画像追加と非公開保存を1回だけ復旧/);
       assert.equal(reads, 1);
       assert.equal(writes, 0);
+      assert.equal((await post(app.url, csrf, "recover-image-once")).status, 303);
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const current = await (await fetch(app.url)).text();
+        if (current.includes("PREFLIGHT_BLOCKED") &&
+            !current.includes('http-equiv="refresh"')) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.equal(recoveries, 1);
+      assert.match(await (await fetch(app.url)).text(),
+        /<button disabled>確認後に画像追加と非公開保存を1回だけ復旧<\/button>/);
+      assert.equal((await post(app.url, csrf, "recover-image-once")).status, 303);
+      assert.equal(recoveries, 1);
       assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
       assert.equal(writes, 0);
     } finally { await app.close(); }

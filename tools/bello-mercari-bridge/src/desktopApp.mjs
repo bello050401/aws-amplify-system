@@ -30,7 +30,10 @@ import { runPrivateImageWorkflowOnce } from "./privateImageWorkflow.mjs";
 import { inspectPrivateImagePreflight, isPinnedB005757ImageTarget,
   PINNED_B005757_REMOTE_ID } from "./privateImagePreflight.mjs";
 import { verifyPrivateImageWorkflowReadOnly } from "./privateImageReadback.mjs";
+import { recoverPrivateImageOnce } from "./privateImageRecovery.mjs";
 import { readPrivateImageWorkflowClaim, readPrivateImageWorkflowResult } from "./privateImageWorkflowAttempt.mjs";
+import { readPrivateImageRecoveryClaim, readPrivateImageRecoveryResult } from
+  "./privateImageRecoveryAttempt.mjs";
 import { verifyExistingSavedProductReadOnly, readExistingSavedProductReadback } from
   "./existingSavedProductReadback.mjs";
 
@@ -135,30 +138,33 @@ function optionsOf(config) {
     playwrightModulePath: join(here, "..", "node_modules", "playwright", "package.json") };
 }
 
-function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsOpen, manualOpen,
+function page({ csrf, options, message, busy, workflowRunning, recoveryRunning,
+  belloOpen, shopsOpen, manualOpen,
   manualAttempted, lastManual, lastResult, trafficAttempted, lastTraffic, lastReadQueries,
   lastDiagnostics, directProbeAvailable, directProbeState, directProbeReported,
   trafficEvidenceStatus, trafficEvidenceAt,
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
   lastImageReadState, workflowAttempted, lastWorkflowStatus, lastWorkflowStage,
-  lastImagePreflight, lastWorkflowReadback,
+  lastImagePreflight, lastWorkflowReadback, recoveryAttempted, recoveryClaimed,
+  lastRecoveryStatus, lastRecoveryStage, recoveryReadbackPrivateWithImage,
   workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed }) {
   if (options.createTestObservationEnabled)
     return createTestPage({ csrf, message, busy, claim: createClaim,
       preflight: createPreflight, result: createResult, open: createOpen, armed: createArmed });
   const button = (action, label, disabled = false) =>
-    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning ? "disabled" : ""}>${label}</button></form>`;
+    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning || recoveryRunning ? "disabled" : ""}>${label}</button></form>`;
   const pinnedB005757 = isPinnedB005757ImageTarget(options.manualObservation,
     options.requestId);
-  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${workflowRunning ? '<meta http-equiv="refresh" content="2">' : ""}<title>BELLO メルカリ照合</title><style>
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${workflowRunning || recoveryRunning ? '<meta http-equiv="refresh" content="2">' : ""}<title>BELLO メルカリ照合</title><style>
 body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#222;margin:0;padding:24px}main{max-width:640px;margin:auto;background:white;border:1px solid #d5d8de;border-radius:12px;padding:24px}h1{font-size:1.4rem;margin-top:0}section{border-top:1px solid #ddd;padding-top:16px;margin-top:20px}button{background:#0868c7;color:white;border:0;border-radius:6px;padding:12px 18px;font-size:1rem;cursor:pointer}button:disabled{opacity:.45;cursor:default}form{display:inline-block;margin:5px 8px 5px 0}small{color:#555}code{overflow-wrap:anywhere}strong{color:#7a3600}
 </style></head><body><main><h1>BELLO メルカリShops既存商品照合</h1>
 <p>対象は既存の商品IDだけです。新規出品・公開・停止・在庫変更は行いません。</p>
 <p><small>BELLO: ${html(options.origin)}<br>読取依頼ID: <code>${html(options.requestId)}</code></small></p>
 ${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
 ${workflowRunning ? `<p>工程を実行中です。現在の段階: <code>${html(lastWorkflowStage || "準備中")}</code></p>` : ""}
+${recoveryRunning ? `<p>一回限りの復旧工程を実行中です。現在の段階: <code>${html(lastRecoveryStage || "準備中")}</code></p>` : ""}
 <section><h2>1. 通常ログイン</h2><p>BELLOとShopsを、それぞれ専用のChromeで開きます。ログインが済んだらブラウザを閉じてください。ログイン情報をコピーしません。</p>
 ${button("bello-login", belloOpen ? "BELLOログイン画面を開いています" : "BELLOにログイン", belloOpen)}
 ${button("shops-login", shopsOpen ? "Shopsログイン画面を開いています" : "Shopsにログイン", shopsOpen)}</section>
@@ -209,7 +215,14 @@ ${pinnedB005757 && workflowAttempted && lastWorkflowStatus === "UNKNOWN" &&
   lastWorkflowStage === "FILE_SELECTION_UNCERTAIN" ?
   `<p>画像選択後の結果は不明です。別の読取画面で、この商品の現在の画像枚数と非公開状態だけを確認できます。</p>
   ${button("verify-workflow-readonly", "今回の商品を読取だけで再確認", shopsOpen || manualOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}
-  ${lastWorkflowReadback ? `<p>現在の読取: <code>${html(lastWorkflowReadback)}</code>。画像資産の同一性や保存要求の成功は証明しません。</p>` : ""}` : ""}
+  ${lastWorkflowReadback ? `<p>復旧前の読取: <code>${html(lastWorkflowReadback)}</code>。画像資産の同一性や保存要求の成功は証明しません。</p>` : ""}` : ""}
+${pinnedB005757 && workflowAttempted && lastWorkflowStatus === "UNKNOWN" &&
+  lastWorkflowStage === "FILE_SELECTION_UNCERTAIN" &&
+  lastWorkflowReadback === "PRIVATE_ONE_IMAGE_OBSERVED" ?
+  `<p>前回の画像資産がShopsに作成されている可能性があります。再試行すると資産が重複する場合があります。商品への画像反映が1枚と確認された場合だけ、同じ商品を非公開のまま一度だけ復旧します。</p>
+  ${button("recover-image-once", "確認後に画像追加と非公開保存を1回だけ復旧", recoveryAttempted || shopsOpen || manualOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}` : ""}
+${pinnedB005757 && recoveryAttempted ? `<p>${recoveryClaimed ? "復旧工程は試行済み、または結果不明です。再実行できません。" : "復旧前の確認で停止しました。画像は再送していません。"} 結果: <strong>${html(lastRecoveryStatus || "UNKNOWN")}</strong> / 段階: <code>${html(lastRecoveryStage || "PRECLAIM")}</code>。</p>` : ""}
+${recoveryReadbackPrivateWithImage ? "<p>別の読取画面で、対象商品が非公開で画像2枚と確認しました。保存通信の成功判定とは別です。</p>" : ""}
 ${workflowReadbackPrivateWithImage ? "<p>別タブで対象商品を再読込し、非公開と画像2枚を確認しました。保存要求の応答確認とは別の結果です。</p>" : ""}
 ${retainedWorkflowOpen ? `<p>結果が確定していないため専用Chromeを保持しています。再送せず画面と通信を確認してください。</p>${button("refresh-workflow-observation", "工程の通信概要を更新")}${button("inspect-workflow-image", "保持中画面の画像を読取")}` : ""}
 ${options.imageWorkflowEnabled && manualAttempted ? `<details><summary>対象Shops通信の概要（${lastManual.length}件）</summary><p><small>保存クリック後の要求候補です。本文・変数値・認証情報は記録しません。要求の一致だけでは保存成功と判定しません。</small></p><ol>${lastManual.map(item => `<li><code>${html(item.order)}. ${html(item.method)} ${html(item.host)}${html(item.path)}</code> / HTTP ${html(item.httpStatus ?? "未確認")} / 操作 ${html(item.operationName ?? "未確認")} / 操作種別 ${html(item.graphqlOperationType ?? "未確認")} / query SHA-256 ${html(item.querySha256 ?? "未確認")} / 変数項目 ${item.fields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / 要求商品ID ${html(item.requestProductMatch ?? "未確認")} / 要求非公開 ${html(item.requestPrivateState ?? "未確認")} / 応答 ${html(item.responseField ?? "未確認")} / 種別 ${html(item.responseKind ?? "未確認")} / 応答商品ID ${html(item.productMatch ?? "未確認")} / 店舗ID ${html(item.shopMatch ?? "未確認")} / 状態 ${html(item.state ?? "未確認")} / GraphQLエラー ${html(item.graphqlErrors ?? "未確認")}</li>`).join("")}</ol></details>` : ""}
@@ -250,6 +263,7 @@ export async function startDesktopApp(config, {
   runWorkflow = runPrivateImageWorkflowOnce,
   runImagePreflight = inspectPrivateImagePreflight,
   runWorkflowReadback = verifyPrivateImageWorkflowReadOnly,
+  runRecovery = recoverPrivateImageOnce,
   runSavedProductReadback = verifyExistingSavedProductReadOnly,
   runDirectReadProbe = runPinnedDirectReadProbeOnce,
   reportDirectRead = reportPinnedDirectReadProofOnce,
@@ -287,6 +301,13 @@ export async function startDesktopApp(config, {
     (workflowClaim.claimed || imageAttempted || privateSaveAttempted));
   const savedWorkflowResult = options.imageWorkflowEnabled ?
     await readPrivateImageWorkflowResult(options.root, options.manualObservation) : null;
+  const recoveryClaim = options.imageWorkflowEnabled &&
+    isPinnedB005757ImageTarget(options.manualObservation, options.requestId) ?
+    await readPrivateImageRecoveryClaim(options.root, options.manualObservation,
+      options.requestId) : null;
+  const savedRecoveryResult = recoveryClaim?.claimed ?
+    await readPrivateImageRecoveryResult(options.root, options.manualObservation,
+      options.requestId) : null;
   let savedProductReadback = options.imageProof ?
     await readExistingSavedProductReadback(options.root, options.manualObservation,
       options.imageProof.sha256) : null;
@@ -327,10 +348,16 @@ export async function startDesktopApp(config, {
   let lastImageReadState = "";
   let workflowUsed = workflowAttempted;
   let workflowRunning = false;
+  let recoveryRunning = false;
   let lastWorkflowStatus = savedWorkflowResult?.status ?? "";
   let lastWorkflowStage = savedWorkflowResult?.stage ?? "";
   let lastImagePreflight = null;
   let lastWorkflowReadback = "";
+  let recoveryUsed = Boolean(recoveryClaim?.claimed);
+  let recoveryClaimed = Boolean(recoveryClaim?.claimed);
+  let lastRecoveryStatus = savedRecoveryResult?.status ?? "";
+  let lastRecoveryStage = savedRecoveryResult?.stage ?? "";
+  let recoveryReadbackPrivateWithImage = savedRecoveryResult?.readbackPrivateWithImage === true;
   let workflowReadbackPrivateWithImage = savedWorkflowResult?.readbackPrivateWithImage === true;
   let finishingCreate = null;
   const finishCreate = (stopped = false, selectedSession = createSession) => {
@@ -360,6 +387,7 @@ export async function startDesktopApp(config, {
   const server = createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/") {
       send(response, 200, page({ csrf, options, message, busy, workflowRunning,
+        recoveryRunning,
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
         manualOpen: Boolean(manualSession), manualAttempted, lastManual, lastResult,
         trafficAttempted, lastTraffic, lastReadQueries, lastDiagnostics,
@@ -371,6 +399,9 @@ export async function startDesktopApp(config, {
         lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession),
         lastImageReadState, workflowAttempted: workflowUsed, lastWorkflowStatus,
         lastWorkflowStage, lastImagePreflight, lastWorkflowReadback,
+        recoveryAttempted: recoveryUsed, recoveryClaimed,
+        lastRecoveryStatus, lastRecoveryStage,
+        recoveryReadbackPrivateWithImage,
         workflowReadbackPrivateWithImage,
         savedProductReadback,
         retainedWorkflowOpen: Boolean(retainedWorkflowSession),
@@ -396,7 +427,7 @@ export async function startDesktopApp(config, {
     const supplied = Buffer.from(form.get("csrf") ?? "", "utf8");
     const actual = Buffer.from(csrf, "utf8");
     if (supplied.length !== actual.length || !timingSafeEqual(supplied, actual) ||
-        busy || workflowRunning) {
+        busy || workflowRunning || recoveryRunning) {
       send(response, 403, "Forbidden", "text/plain; charset=utf-8"); return;
     }
     busy = true;
@@ -775,6 +806,69 @@ export async function startDesktopApp(config, {
           "PRIVATE_TWO_IMAGES_UNATTRIBUTED", "AUTH_REQUIRED", "UNVERIFIED",
           "NO_ELIGIBLE_ATTEMPT"].includes(result?.status) ? result.status : "UNVERIFIED";
         message = "現在の非公開状態と画像枚数を読取だけで確認しました。画像選択と保存は行っていません。";
+      } else if (action === "recover-image-once") {
+        if (!options.imageWorkflowEnabled || !options.imageProof ||
+            !isPinnedB005757ImageTarget(options.manualObservation, options.requestId) ||
+            !workflowUsed || lastWorkflowStatus !== "UNKNOWN" ||
+            lastWorkflowStage !== "FILE_SELECTION_UNCERTAIN" ||
+            lastWorkflowReadback !== "PRIVATE_ONE_IMAGE_OBSERVED" || recoveryUsed ||
+            shopsContext || manualSession || retainedSaveSession || retainedImageSession ||
+            retainedWorkflowSession)
+          throw Error("Private-image recovery is unavailable");
+        recoveryUsed = true;
+        recoveryRunning = true;
+        lastRecoveryStatus = "";
+        lastRecoveryStage = "";
+        recoveryReadbackPrivateWithImage = false;
+        message = "同じ非公開商品について一回限りの復旧を確認しています。";
+        void (async () => {
+          try {
+            const result = await runRecovery({ root: options.root,
+              profileDir: options.shopsProfileDir,
+              playwrightModulePath: options.playwrightModulePath,
+              requestId: options.requestId, target: options.manualObservation,
+              imagePath: options.imageProof.path,
+              imageSha256: options.imageProof.sha256,
+              readbackObserved: lastWorkflowReadback,
+              onStage: stage => {
+                if (WORKFLOW_STAGES.has(stage)) lastRecoveryStage = stage;
+              },
+              onMetadata: items => {
+                lastManual = safeManualMutationSummary(items); manualAttempted = true;
+              } });
+            lastRecoveryStatus = ["CONFIRMED_PRIVATE_WITH_IMAGE", "UNKNOWN",
+              "AUTH_REQUIRED", "PREFLIGHT_BLOCKED", "BLOCKED_PREVIOUS_ATTEMPT"]
+              .includes(result?.status) ? result.status : "UNKNOWN";
+            lastRecoveryStage = WORKFLOW_STAGES.has(result?.stage) ?
+              result.stage : lastRecoveryStage;
+            recoveryReadbackPrivateWithImage = result?.readbackPrivateWithImage === true;
+            if (result?.retainedSession?.context && result.retainedSession.observer &&
+                result.retainedSession.page &&
+                typeof result.retainedSession.onClose === "function") {
+              retainedWorkflowSession = result.retainedSession;
+              retainedWorkflowSession.onClose(() => {
+                const session = retainedWorkflowSession;
+                retainedWorkflowSession = null;
+                if (session) void session.observer.stop().then(items => {
+                  lastManual = safeManualMutationSummary(items); manualAttempted = true;
+                }).catch(() => {});
+              });
+            }
+            message = lastRecoveryStatus === "CONFIRMED_PRIVATE_WITH_IMAGE" ?
+              "対象商品が非公開で画像2枚と再確認できました。" :
+              "復旧工程は停止しました。画像や保存を再送しないでください。";
+          } catch {
+            lastRecoveryStatus = "UNKNOWN";
+            message = "復旧工程を確認できませんでした。画像や保存を再送しません。";
+          } finally {
+            recoveryUsed = true;
+            try {
+              recoveryClaimed = Boolean((await readPrivateImageRecoveryClaim(options.root,
+                options.manualObservation, options.requestId)).claimed);
+            } catch { recoveryClaimed = true; }
+            recoveryRunning = false;
+          }
+        })();
       } else if (action === "observe-stop") {
         if (!manualSession) throw Error("No manual observation is active");
         const session = manualSession;
