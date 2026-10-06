@@ -27,7 +27,8 @@ import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
 import { addExistingImageOnce, readRetainedImageState } from "./addExistingImageOnce.mjs";
 import { readManualImageClaim, readManualImageOutcome } from "./manualImageAttempt.mjs";
 import { runPrivateImageWorkflowOnce } from "./privateImageWorkflow.mjs";
-import { inspectPrivateImagePreflight } from "./privateImagePreflight.mjs";
+import { inspectPrivateImagePreflight, isPinnedB005757ImageTarget,
+  PINNED_B005757_REMOTE_ID } from "./privateImagePreflight.mjs";
 import { readPrivateImageWorkflowClaim, readPrivateImageWorkflowResult } from "./privateImageWorkflowAttempt.mjs";
 import { verifyExistingSavedProductReadOnly, readExistingSavedProductReadback } from
   "./existingSavedProductReadback.mjs";
@@ -86,7 +87,7 @@ function optionsOf(config) {
        !Number.isSafeInteger(manualObservation?.priceYen) || manualObservation.priceYen < 0 ||
        !Number.isSafeInteger(manualObservation?.quantity) || manualObservation.quantity < 0))
     throw Error("Invalid exact-product observation target");
-  if (manualObservation?.remoteId === "2JXjWPRVBxjZ2K2vgTGNqy") {
+  if (manualObservation?.remoteId === PINNED_B005757_REMOTE_ID) {
     assertPinnedDirectReadTarget(manualObservation, config.requestId);
     if (manualObservation.skuCode !== CREATE_TEST_TARGET.skuCode ||
         manualObservation.priceYen !== CREATE_TEST_TARGET.priceYen ||
@@ -148,6 +149,8 @@ function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsO
       preflight: createPreflight, result: createResult, open: createOpen, armed: createArmed });
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning ? "disabled" : ""}>${label}</button></form>`;
+  const pinnedB005757 = isPinnedB005757ImageTarget(options.manualObservation,
+    options.requestId);
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${workflowRunning ? '<meta http-equiv="refresh" content="2">' : ""}<title>BELLO メルカリ照合</title><style>
 body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#222;margin:0;padding:24px}main{max-width:640px;margin:auto;background:white;border:1px solid #d5d8de;border-radius:12px;padding:24px}h1{font-size:1.4rem;margin-top:0}section{border-top:1px solid #ddd;padding-top:16px;margin-top:20px}button{background:#0868c7;color:white;border:0;border-radius:6px;padding:12px 18px;font-size:1rem;cursor:pointer}button:disabled{opacity:.45;cursor:default}form{display:inline-block;margin:5px 8px 5px 0}small{color:#555}code{overflow-wrap:anywhere}strong{color:#7a3600}
 </style></head><body><main><h1>BELLO メルカリShops既存商品照合</h1>
@@ -195,10 +198,11 @@ ${imageAttempted ? `<p>画像選択は試行済み、または結果不明です
 ${retainedImageOpen ? `<p>専用Chromeを開いたままにしています。既存画像が残り、追加画像が表示されたか確認してください。画像選択のみでは商品保存を確認できません。</p>${button("refresh-image-observation", "画像通信の概要を更新")}${button("inspect-retained-image", "開いている商品画面の画像を確認")}` : ""}
 ${lastImageReadState ? `<p>画面上の画像: <code>${html(lastImageReadState)}</code>。表示の確認であり、商品保存・公開の確認ではありません。</p>` : ""}</section>` : ""}
 ${options.imageWorkflowEnabled ? `<section><h2>既存商品の画像追加と非公開保存</h2><p>既存商品を照合し、画像1枚の追加、非公開保存、同じ商品の再読込まで1回の操作で確認します。既存の試行がある商品には再実行しません。</p>
-${button("inspect-image-preflight", "画像と非公開状態を読取だけで事前確認", manualOpen || shopsOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}
-${lastImagePreflight ? `<p>事前確認: <strong>${html(lastImagePreflight.status)}</strong> / <code>${html(lastImagePreflight.reasonCode)}</code>。画像選択や保存は行っていません。</p>` : ""}
+${pinnedB005757 ? button("inspect-image-preflight", "画像と非公開状態を読取だけで事前確認", manualOpen || shopsOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen) : ""}
+${pinnedB005757 && lastImagePreflight ? `<p>事前確認: <strong>${html(lastImagePreflight.status)}</strong> / <code>${html(lastImagePreflight.reasonCode)}</code>。画像選択や保存は行っていません。</p>` : ""}
 ${button("complete-image-private", "画像1枚を追加して非公開保存・確認", workflowAttempted || manualOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen ||
-  (options.manualObservation.remoteId === "2JXjWPRVBxjZ2K2vgTGNqy" && lastImagePreflight?.status !== "READY"))}
+  (options.manualObservation.remoteId === PINNED_B005757_REMOTE_ID &&
+    (!pinnedB005757 || lastImagePreflight?.status !== "READY")))}
 ${lastWorkflowStatus && !workflowRunning ? `<p>${workflowAttempted ? "この商品の工程は試行済み、または結果不明です。再実行できません。" : "画像選択前の事前確認で停止しました。"} 結果: <strong>${html(lastWorkflowStatus)}</strong> / 段階: <code>${html(lastWorkflowStage || "PRECLAIM")}</code></p>` : ""}
 ${workflowReadbackPrivateWithImage ? "<p>別タブで対象商品を再読込し、非公開と画像2枚を確認しました。保存要求の応答確認とは別の結果です。</p>" : ""}
 ${retainedWorkflowOpen ? `<p>結果が確定していないため専用Chromeを保持しています。再送せず画面と通信を確認してください。</p>${button("refresh-workflow-observation", "工程の通信概要を更新")}${button("inspect-workflow-image", "保持中画面の画像を読取")}` : ""}
@@ -660,14 +664,17 @@ export async function startDesktopApp(config, {
         } catch { lastImageReadState = "IMAGES_UNVERIFIED"; }
         message = "現在開いている画面だけを読み取りました。商品保存の判定は保留のままです。";
       } else if (action === "inspect-image-preflight") {
-        if (!options.imageWorkflowEnabled || !options.manualObservation || !options.imageProof ||
+        if (!options.imageWorkflowEnabled ||
+            !isPinnedB005757ImageTarget(options.manualObservation, options.requestId) ||
+            !options.imageProof ||
             shopsContext || manualSession || retainedSaveSession || retainedImageSession ||
             retainedWorkflowSession)
           throw Error("Private-image read-only preflight is unavailable");
         const result = await runImagePreflight({ root: options.root,
           profileDir: options.shopsProfileDir,
           playwrightModulePath: options.playwrightModulePath,
-          target: options.manualObservation, imagePath: options.imageProof.path,
+          requestId: options.requestId, target: options.manualObservation,
+          imagePath: options.imageProof.path,
           imageSha256: options.imageProof.sha256 });
         lastImagePreflight = (
           (result?.status === "READY" && result.reasonCode === "EXACT_PRIVATE_PRODUCT_READY") ||
@@ -680,8 +687,9 @@ export async function startDesktopApp(config, {
       } else if (action === "complete-image-private") {
         if (!options.imageWorkflowEnabled || workflowUsed || manualSession || retainedSaveSession ||
             retainedImageSession || retainedWorkflowSession || shopsContext ||
-            (options.manualObservation.remoteId === "2JXjWPRVBxjZ2K2vgTGNqy" &&
-              lastImagePreflight?.status !== "READY"))
+            (options.manualObservation?.remoteId === PINNED_B005757_REMOTE_ID &&
+              (!isPinnedB005757ImageTarget(options.manualObservation, options.requestId) ||
+                lastImagePreflight?.status !== "READY")))
           throw Error("Private-image workflow is unavailable");
         workflowRunning = true;
         workflowUsed = true;

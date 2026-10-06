@@ -5,10 +5,25 @@ import { readPinnedEditFields } from "./saveExistingPrivateOnce.mjs";
 import { readExistingUploadedImages, exactSingleImageInput } from "./addExistingImageOnce.mjs";
 import { privateFromExactListRow } from "./existingProductReader.mjs";
 import { inspectExistingImage } from "./prepareExistingImage.mjs";
+import { CREATE_TEST_TARGET } from "./createTestAttempt.mjs";
 
-const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const HASH = /^[a-f0-9]{64}$/;
+export const PINNED_B005757_REMOTE_ID = "2JXjWPRVBxjZ2K2vgTGNqy";
+const PINNED_B005757_REQUEST_ID =
+  "7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825";
 const blocked = reasonCode => ({ status: "PREFLIGHT_BLOCKED", reasonCode });
+
+export function isPinnedB005757ImageTarget(target, requestId) {
+  return requestId === PINNED_B005757_REQUEST_ID && target !== null &&
+    typeof target === "object" && !Array.isArray(target) &&
+    Object.keys(target).sort().join(",") ===
+      "inventoryCode,priceYen,quantity,remoteId,shopId,skuCode" &&
+    target.shopId === CREATE_TEST_TARGET.shopId &&
+    target.remoteId === PINNED_B005757_REMOTE_ID &&
+    target.inventoryCode === CREATE_TEST_TARGET.inventoryCode &&
+    target.skuCode === CREATE_TEST_TARGET.skuCode &&
+    target.priceYen === CREATE_TEST_TARGET.priceYen && target.quantity === 1;
+}
 
 async function exactPrivate(page, target, expectedUrl, title) {
   const result = await privateFromExactListRow(page, target.shopId, expectedUrl, title);
@@ -25,15 +40,14 @@ function authRequired(page) {
 
 /** Read-only rehearsal of the existing image workflow guards. No claim, file selection, or save. */
 export async function inspectPrivateImagePreflight({ root, profileDir, playwrightModulePath,
-  target, imagePath, imageSha256, launchPersistentContext = null }, {
+  requestId, target, imagePath, imageSha256, launchPersistentContext = null }, {
     openSession = openExistingProductReadSession, readFields = readPinnedEditFields,
     readImages = readExistingUploadedImages, checkPrivate = exactPrivate,
     fileInput = exactSingleImageInput,
   } = {}) {
   if (![root, profileDir, playwrightModulePath, imagePath].every(value =>
         typeof value === "string" && isAbsolute(value)) ||
-      ![target?.shopId, target?.remoteId, target?.inventoryCode].every(value =>
-        typeof value === "string" && ID.test(value)) || !HASH.test(imageSha256))
+      !isPinnedB005757ImageTarget(target, requestId) || !HASH.test(imageSha256))
     throw Error("Invalid exact private-image preflight target");
   try {
     inspectExistingImage(await readFile(imagePath),

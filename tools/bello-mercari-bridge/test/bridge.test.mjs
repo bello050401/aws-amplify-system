@@ -192,6 +192,27 @@ test("existing product navigation reuses the separate profile but never claims r
       goto: async () => { currentUrl = "https://mercari-shops.com/signin/seller"; }, url: () => currentUrl,
     }], close: async () => {} }) });
   assert.equal(redirected.state, "AUTH_REQUIRED");
+  let closedAfterTimeout = false;
+  const timedOutSignIn = await openExistingProductReadSession({ ...input,
+    launchPersistentContext: async () => ({ pages: () => [{
+      goto: async () => {
+        currentUrl = "https://mercari-shops.com/signin/seller?token=private";
+        throw Error("navigation timed out with a private URL");
+      }, url: () => currentUrl,
+    }], close: async () => { closedAfterTimeout = true; } }) });
+  assert.equal(timedOutSignIn.state, "AUTH_REQUIRED");
+  assert.equal(JSON.stringify(timedOutSignIn).includes("private"), false);
+  await timedOutSignIn.context.close();
+  assert.equal(closedAfterTimeout, true);
+  let closedOtherTimeout = false;
+  await assert.rejects(openExistingProductReadSession({ ...input,
+    launchPersistentContext: async () => ({ pages: () => [{
+      goto: async () => {
+        currentUrl = "https://mercari-shops.com/seller/shops/shop-one/products/product-one/edit";
+        throw Error("navigation timed out");
+      }, url: () => currentUrl,
+    }], close: async () => { closedOtherTimeout = true; } }) }));
+  assert.equal(closedOtherTimeout, true);
   await assert.rejects(openExistingProductReadSession({ ...input, remoteId: "../other" }));
   await assert.rejects(openExistingProductReadSession({ ...input, shopId: "other-shop" }));
 }));

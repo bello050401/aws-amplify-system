@@ -334,8 +334,11 @@ test("B005757 private-image controls require its exact saved SKU and request", a
         remoteId: manualObservation.remoteId, inventoryCode: "B005757" } },
     ]) await assert.rejects(startDesktopApp({ ...options, ...invalid }, { openBrowser: null }));
     const app = await startDesktopApp(options, { openBrowser: null,
-      runImagePreflight: async () => ({ status: "READY",
-        reasonCode: "EXACT_PRIVATE_PRODUCT_READY" }) });
+      runImagePreflight: async input => {
+        assert.equal(input.requestId, requestId);
+        assert.deepEqual(input.target, manualObservation);
+        return { status: "READY", reasonCode: "EXACT_PRIVATE_PRODUCT_READY" };
+      } });
     try {
       const content = await (await fetch(app.url)).text();
       assert.match(content, /画像1枚を追加して非公開保存・確認/);
@@ -606,8 +609,12 @@ test("unified private-image action is explicit and old attempts disable it", asy
       const csrf = await token(app.url);
       const before = await (await fetch(app.url)).text();
       assert.match(before, /画像1枚を追加して非公開保存・確認/);
+      assert.equal(before.includes('value="inspect-image-preflight"'), false);
       assert.equal(before.includes('value="add-image-once"'), false);
       assert.equal(before.includes('value="save-private-once"'), false);
+      assert.equal((await post(app.url, csrf, "inspect-image-preflight")).status, 303);
+      assert.equal((await fetch(app.url).then(response => response.text())).includes(
+        "事前確認: <strong>READY</strong>"), false);
       assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
       let during = "";
       for (let attempt = 0; attempt < 20; attempt++) {
@@ -662,8 +669,8 @@ test("pre-claim failures remain visible and cannot be repeated in one PC session
     try {
       const csrf = await token(app.url);
       assert.equal((await post(app.url, csrf, "inspect-image-preflight")).status, 303);
-      assert.match(await (await fetch(app.url)).text(),
-        new RegExp(`事前確認: <strong>${status}</strong>`));
+      assert.equal((await fetch(app.url).then(response => response.text())).includes(
+        'value="inspect-image-preflight"'), false);
       assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
       let content = "";
       for (let attempt = 0; attempt < 20; attempt++) {

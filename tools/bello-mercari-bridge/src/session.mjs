@@ -101,7 +101,19 @@ export async function openExistingProductReadSession({ root, profileDir, playwri
     if (probeQuerySha256)
       directReadProbe = observeExactReadForDirectProbe(context,
         { shopId, remoteId, page, querySha256: probeQuerySha256, waitMs: probeWaitMs });
-    await page.goto(expectedUrl);
+    try { await page.goto(expectedUrl); }
+    catch (error) {
+      // A sign-in redirect can finish before its load event. Keep only the fixed auth state.
+      let signIn = false;
+      try {
+        const current = new URL(page.url());
+        signIn = current.origin === "https://mercari-shops.com" &&
+          current.pathname.startsWith("/signin/");
+      } catch { /* Preserve the original navigation failure. */ }
+      if (signIn) return { context, page, state: "AUTH_REQUIRED",
+        traffic, readQueries, directReadProbe };
+      throw error;
+    }
     const actual = new URL(page.url());
     const state = actual.origin === "https://mercari-shops.com" &&
       actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
