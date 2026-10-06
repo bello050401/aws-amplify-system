@@ -7,6 +7,7 @@ export const PRIVATE_CREATE_SHOP_ID = "evkhihBFFNn5hukMS9s36H";
 const PRIVATE_TEST_INVENTORY_ID = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
 const PRIVATE_TEST_CODE = "TEST_B005659_E51E4F6B7B86DD150546";
 const EXISTING_PUBLIC_PRODUCT_ID = "2JWp7EJx6aqKfn6dTXc5Q9";
+const RESERVED_PRIVATE_TEST_CODES = new Set(["B005659", PRIVATE_TEST_CODE]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const SKU = /^[A-Za-z0-9_-]{1,40}$/;
@@ -33,6 +34,11 @@ export function buildPrivateCreatePreparation(input) {
   const fields = isPrivateTest ? PRIVATE_TEST_FIELDS : FIELDS;
   const sourceCode = isPrivateTest ? input.sourceInventoryCode : input?.inventoryCode;
   const sourcePrice = isPrivateTest ? input.sourcePriceYen : input?.priceYen;
+  const reservedV1 = !isPrivateTest && (
+    (typeof input?.inventoryId === "string" &&
+      input.inventoryId.toLowerCase() === PRIVATE_TEST_INVENTORY_ID) ||
+    (typeof sourceCode === "string" &&
+      RESERVED_PRIVATE_TEST_CODES.has(sourceCode.toUpperCase())));
   if (!exact(input, fields) ||
       (isPrivateTest ?
         input.kind !== "BELLO_SEPARATE_PRIVATE_TEST_PREPARATION" ||
@@ -45,11 +51,10 @@ export function buildPrivateCreatePreparation(input) {
         input.quantity !== 1 || input.condition !== "NO_NOTABLE_DAMAGE" ||
         input.shippingMethod !== "KAZAI" :
         input.schemaVersion !== 1 ||
-        input.kind !== "BELLO_PRIVATE_CREATE_PREPARATION" ||
-        input.inventoryId === PRIVATE_TEST_INVENTORY_ID ||
-        sourceCode === "B005659") ||
+        input.kind !== "BELLO_PRIVATE_CREATE_PREPARATION" || reservedV1) ||
       input.shopId !== PRIVATE_CREATE_SHOP_ID ||
-      !UUID.test(input.inventoryId) || !SKU.test(sourceCode) ||
+      !UUID.test(input.inventoryId) || typeof sourceCode !== "string" ||
+      !SKU.test(sourceCode) ||
       !UUID.test(input.draftId) || !ISO.test(input.draftUpdatedAt) ||
       !Number.isFinite(Date.parse(input.draftUpdatedAt)) ||
       typeof input.title !== "string" || !input.title.trim() ||

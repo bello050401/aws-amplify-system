@@ -103,6 +103,25 @@ test("private test overrides cannot change inventory, price, code, visibility or
   ]) assert.throws(() => buildPrivateCreatePreparation(candidate));
 });
 
+test("v1 cannot claim B005659 or its reserved test code with case variants", () =>
+  withRoot(async root => {
+    for (const candidate of [
+      { ...input, inventoryId: privateTestId.toUpperCase(),
+        inventoryCode: "b005659", priceYen: 300 },
+      { ...input, inventoryId: privateTestId.replace("dd", "Dd"),
+        inventoryCode: "B005659", priceYen: 300 },
+      { ...input, inventoryCode: privateTest.testManagementCode,
+        priceYen: 300 },
+      { ...input, inventoryCode: privateTest.testManagementCode.toLowerCase(),
+        priceYen: 300 },
+    ]) {
+      assert.throws(() => buildPrivateCreatePreparation(candidate));
+      await assert.rejects(preparePrivateCreateOnce(root, candidate));
+      await assert.rejects(readFile(join(root, "private-create-prepared",
+        `${candidate.inventoryId}.json`), "utf8"), { code: "ENOENT" });
+    }
+  }));
+
 test("Amplify timestamps with a timezone offset remain valid snapshots", () => {
   const job = buildPrivateCreatePreparation({ ...input,
     draftUpdatedAt: "2026-10-06T21:00:00+09:00" });

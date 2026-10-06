@@ -10,6 +10,7 @@ const TEST_INVENTORY_ID = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
 const TEST_INTENT = "B005659_SEPARATE_PRIVATE_TEST_99999";
 const TEST_MANAGEMENT_CODE = "TEST_B005659_E51E4F6B7B86DD150546";
 const EXISTING_PUBLIC_PRODUCT_ID = "2JWp7EJx6aqKfn6dTXc5Q9";
+const RESERVED_TEST_CODES = new Set(["B005659", TEST_MANAGEMENT_CODE]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const SKU = /^[A-Za-z0-9_-]{1,40}$/;
@@ -67,7 +68,9 @@ export async function getMercariPrivateCreatePreparationAction(
     ]);
     if (channel || binding) return { ok: false, code: "EXISTING_LINK" };
     if (!inventory || !draft || draft.inventoryId !== inventory.id ||
-        !SKU.test(inventory.sku) || !UUID.test(draft.id) ||
+        typeof inventory.sku !== "string" || !SKU.test(inventory.sku) ||
+        (!isPrivateTest && RESERVED_TEST_CODES.has(inventory.sku.toUpperCase())) ||
+        !UUID.test(draft.id) ||
         typeof draft.updatedAt !== "string" ||
         !ISO.test(draft.updatedAt) || !Number.isFinite(Date.parse(draft.updatedAt)) ||
         !draft.title.trim() || draft.title.length > 130 ||

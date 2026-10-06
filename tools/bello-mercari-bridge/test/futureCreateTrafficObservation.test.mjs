@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { preparePrivateCreateOnce, PRIVATE_CREATE_SHOP_ID } from
+import { buildPrivateCreatePreparation, preparePrivateCreateOnce,
+  PRIVATE_CREATE_SHOP_ID } from
   "../src/privateCreatePreparation.mjs";
 import { claimFutureCreateObservationOnce,
   recordFutureCreateObservationOnce } from "../src/futureCreateObservationAttempt.mjs";
@@ -231,6 +233,37 @@ test("B005659 private test can be claimed once without touching the existing pro
     assert.equal(JSON.stringify(stored).includes(privateTest.testManagementCode), false);
     assert.equal(JSON.stringify(stored).includes(privateTest.doNotModifyProductId), false);
   }, privateTest));
+
+test("legacy v1 B005659 variants cannot reach an observation claim", async () => {
+  const digest = value => createHash("sha256").update(value).digest("hex");
+  for (const candidate of [
+    { ...input, inventoryId: privateTestId.toUpperCase(),
+      inventoryCode: "b005659", priceYen: 300 },
+    { ...input, inventoryId: privateTestId.replace("dd", "Dd"),
+      inventoryCode: "B005659", priceYen: 300 },
+    { ...input, inventoryCode: privateTest.testManagementCode, priceYen: 300 },
+    { ...input, inventoryCode: privateTest.testManagementCode.toLowerCase(),
+      priceYen: 300 },
+  ]) {
+    const root = await mkdtemp(join(tmpdir(), "bello-future-create-legacy-"));
+    try {
+      const snapshotJson = JSON.stringify(candidate);
+      const legacyJob = { ...buildPrivateCreatePreparation(input),
+        inventoryId: candidate.inventoryId,
+        requestId: digest(`PREPARE_PRIVATE_CREATE\0${candidate.shopId}\0${candidate.inventoryId}`),
+        snapshotFingerprint: digest(snapshotJson), snapshotJson };
+      const preparedDir = join(root, "private-create-prepared");
+      await mkdir(preparedDir, { recursive: true });
+      await writeFile(join(preparedDir, `${candidate.inventoryId}.json`),
+        JSON.stringify(legacyJob), "utf8");
+      await assert.rejects(claimFutureCreateObservationOnce(root, candidate.inventoryId),
+        /PREPARED_PRIVATE_CREATE_UNVERIFIED/);
+      await assert.rejects(readFile(join(root,
+        "future-private-create-observation-once",
+        `${PRIVATE_CREATE_SHOP_ID}-once.claim.json`), "utf8"), { code: "ENOENT" });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
 
 test("a restored remote draft blocks new navigation and keeps the claim UNKNOWN", () =>
   withPrepared(async root => {
