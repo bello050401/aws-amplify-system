@@ -27,6 +27,7 @@ import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
 import { addExistingImageOnce, readRetainedImageState } from "./addExistingImageOnce.mjs";
 import { readManualImageClaim, readManualImageOutcome } from "./manualImageAttempt.mjs";
 import { runPrivateImageWorkflowOnce } from "./privateImageWorkflow.mjs";
+import { inspectPrivateImagePreflight } from "./privateImagePreflight.mjs";
 import { readPrivateImageWorkflowClaim, readPrivateImageWorkflowResult } from "./privateImageWorkflowAttempt.mjs";
 import { verifyExistingSavedProductReadOnly, readExistingSavedProductReadback } from
   "./existingSavedProductReadback.mjs";
@@ -36,6 +37,10 @@ const WORKFLOW_STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN",
   "TWO_IMAGES_VISIBLE", "SAVE_CLAIMED", "NEXT_CLICK_UNCERTAIN",
   "PRIVATE_CLICK_UNCERTAIN", "PRIVATE_CLICK_RETURNED", "SAVE_ACK_UNVERIFIED",
   "READBACK_UNVERIFIED", "PRIVATE_READBACK_CONFIRMED", "AUTH_REQUIRED"]);
+const IMAGE_PREFLIGHT_BLOCKS = new Set(["IMAGE_PROOF_UNVERIFIED",
+  "NAVIGATION_UNVERIFIED", "FIELDS_UNVERIFIED",
+  "ORIGINAL_IMAGE_UNVERIFIED", "PRIVATE_STATE_UNVERIFIED", "RECHECK_UNVERIFIED",
+  "FILE_INPUT_UNVERIFIED", "READ_FAILED"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const html = (value) => String(value).replace(/[&<>"']/g, character => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -135,6 +140,7 @@ function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsO
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
   lastImageReadState, workflowAttempted, lastWorkflowStatus, lastWorkflowStage,
+  lastImagePreflight,
   workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed }) {
   if (options.createTestObservationEnabled)
@@ -189,8 +195,11 @@ ${imageAttempted ? `<p>画像選択は試行済み、または結果不明です
 ${retainedImageOpen ? `<p>専用Chromeを開いたままにしています。既存画像が残り、追加画像が表示されたか確認してください。画像選択のみでは商品保存を確認できません。</p>${button("refresh-image-observation", "画像通信の概要を更新")}${button("inspect-retained-image", "開いている商品画面の画像を確認")}` : ""}
 ${lastImageReadState ? `<p>画面上の画像: <code>${html(lastImageReadState)}</code>。表示の確認であり、商品保存・公開の確認ではありません。</p>` : ""}</section>` : ""}
 ${options.imageWorkflowEnabled ? `<section><h2>既存商品の画像追加と非公開保存</h2><p>既存商品を照合し、画像1枚の追加、非公開保存、同じ商品の再読込まで1回の操作で確認します。既存の試行がある商品には再実行しません。</p>
-${button("complete-image-private", "画像1枚を追加して非公開保存・確認", workflowAttempted || manualOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}
-${workflowAttempted && !workflowRunning ? `<p>この商品の工程は試行済み、または結果不明です。再実行できません。結果: <strong>${html(lastWorkflowStatus || "UNKNOWN")}</strong> / 段階: <code>${html(lastWorkflowStage || "未確認")}</code></p>` : ""}
+${button("inspect-image-preflight", "画像と非公開状態を読取だけで事前確認", manualOpen || shopsOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}
+${lastImagePreflight ? `<p>事前確認: <strong>${html(lastImagePreflight.status)}</strong> / <code>${html(lastImagePreflight.reasonCode)}</code>。画像選択や保存は行っていません。</p>` : ""}
+${button("complete-image-private", "画像1枚を追加して非公開保存・確認", workflowAttempted || manualOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen ||
+  (options.manualObservation.remoteId === "2JXjWPRVBxjZ2K2vgTGNqy" && lastImagePreflight?.status !== "READY"))}
+${lastWorkflowStatus && !workflowRunning ? `<p>${workflowAttempted ? "この商品の工程は試行済み、または結果不明です。再実行できません。" : "画像選択前の事前確認で停止しました。"} 結果: <strong>${html(lastWorkflowStatus)}</strong> / 段階: <code>${html(lastWorkflowStage || "PRECLAIM")}</code></p>` : ""}
 ${workflowReadbackPrivateWithImage ? "<p>別タブで対象商品を再読込し、非公開と画像2枚を確認しました。保存要求の応答確認とは別の結果です。</p>" : ""}
 ${retainedWorkflowOpen ? `<p>結果が確定していないため専用Chromeを保持しています。再送せず画面と通信を確認してください。</p>${button("refresh-workflow-observation", "工程の通信概要を更新")}${button("inspect-workflow-image", "保持中画面の画像を読取")}` : ""}
 ${options.imageWorkflowEnabled && manualAttempted ? `<details><summary>対象Shops通信の概要（${lastManual.length}件）</summary><p><small>保存クリック後の要求候補です。本文・変数値・認証情報は記録しません。要求の一致だけでは保存成功と判定しません。</small></p><ol>${lastManual.map(item => `<li><code>${html(item.order)}. ${html(item.method)} ${html(item.host)}${html(item.path)}</code> / HTTP ${html(item.httpStatus ?? "未確認")} / 操作 ${html(item.operationName ?? "未確認")} / 操作種別 ${html(item.graphqlOperationType ?? "未確認")} / query SHA-256 ${html(item.querySha256 ?? "未確認")} / 変数項目 ${item.fields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / 要求商品ID ${html(item.requestProductMatch ?? "未確認")} / 要求非公開 ${html(item.requestPrivateState ?? "未確認")} / 応答 ${html(item.responseField ?? "未確認")} / 種別 ${html(item.responseKind ?? "未確認")} / 応答商品ID ${html(item.productMatch ?? "未確認")} / 店舗ID ${html(item.shopMatch ?? "未確認")} / 状態 ${html(item.state ?? "未確認")} / GraphQLエラー ${html(item.graphqlErrors ?? "未確認")}</li>`).join("")}</ol></details>` : ""}
@@ -229,6 +238,7 @@ export async function startDesktopApp(config, {
   runPrivateSave = saveExistingPrivateOnce, runImageAdd = addExistingImageOnce,
   inspectImage = readRetainedImageState,
   runWorkflow = runPrivateImageWorkflowOnce,
+  runImagePreflight = inspectPrivateImagePreflight,
   runSavedProductReadback = verifyExistingSavedProductReadOnly,
   runDirectReadProbe = runPinnedDirectReadProbeOnce,
   reportDirectRead = reportPinnedDirectReadProofOnce,
@@ -308,6 +318,7 @@ export async function startDesktopApp(config, {
   let workflowRunning = false;
   let lastWorkflowStatus = savedWorkflowResult?.status ?? "";
   let lastWorkflowStage = savedWorkflowResult?.stage ?? "";
+  let lastImagePreflight = null;
   let workflowReadbackPrivateWithImage = savedWorkflowResult?.readbackPrivateWithImage === true;
   let finishingCreate = null;
   const finishCreate = (stopped = false, selectedSession = createSession) => {
@@ -347,7 +358,8 @@ export async function startDesktopApp(config, {
         retainedSaveOpen: Boolean(retainedSaveSession), imageAttempted, lastImageStatus,
         lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession),
         lastImageReadState, workflowAttempted: workflowUsed, lastWorkflowStatus,
-        lastWorkflowStage, workflowReadbackPrivateWithImage, savedProductReadback,
+        lastWorkflowStage, lastImagePreflight, workflowReadbackPrivateWithImage,
+        savedProductReadback,
         retainedWorkflowOpen: Boolean(retainedWorkflowSession),
         createClaim, createPreflight, createResult, createOpen: Boolean(createSession),
         createArmed }));
@@ -647,9 +659,29 @@ export async function startDesktopApp(config, {
             result : "IMAGES_UNVERIFIED";
         } catch { lastImageReadState = "IMAGES_UNVERIFIED"; }
         message = "現在開いている画面だけを読み取りました。商品保存の判定は保留のままです。";
+      } else if (action === "inspect-image-preflight") {
+        if (!options.imageWorkflowEnabled || !options.manualObservation || !options.imageProof ||
+            shopsContext || manualSession || retainedSaveSession || retainedImageSession ||
+            retainedWorkflowSession)
+          throw Error("Private-image read-only preflight is unavailable");
+        const result = await runImagePreflight({ root: options.root,
+          profileDir: options.shopsProfileDir,
+          playwrightModulePath: options.playwrightModulePath,
+          target: options.manualObservation, imagePath: options.imageProof.path,
+          imageSha256: options.imageProof.sha256 });
+        lastImagePreflight = (
+          (result?.status === "READY" && result.reasonCode === "EXACT_PRIVATE_PRODUCT_READY") ||
+          (result?.status === "AUTH_REQUIRED" && result.reasonCode === "LOGIN_REQUIRED") ||
+          (result?.status === "PREFLIGHT_BLOCKED" && IMAGE_PREFLIGHT_BLOCKS.has(result.reasonCode))
+        ) ?
+          { status: result.status, reasonCode: result.reasonCode } :
+          { status: "PREFLIGHT_BLOCKED", reasonCode: "READ_FAILED" };
+        message = "既存商品を読取だけで事前確認しました。画像選択と保存は行っていません。";
       } else if (action === "complete-image-private") {
         if (!options.imageWorkflowEnabled || workflowUsed || manualSession || retainedSaveSession ||
-            retainedImageSession || retainedWorkflowSession || shopsContext)
+            retainedImageSession || retainedWorkflowSession || shopsContext ||
+            (options.manualObservation.remoteId === "2JXjWPRVBxjZ2K2vgTGNqy" &&
+              lastImagePreflight?.status !== "READY"))
           throw Error("Private-image workflow is unavailable");
         workflowRunning = true;
         workflowUsed = true;
@@ -691,10 +723,8 @@ export async function startDesktopApp(config, {
             lastWorkflowStatus = "UNKNOWN";
             message = "工程を確認できませんでした。画像や保存を再送しません。";
           } finally {
-            try {
-              workflowUsed = Boolean((await readPrivateImageWorkflowClaim(options.root,
-                options.manualObservation)).claimed || imageAttempted || privateSaveAttempted);
-            } catch { workflowUsed = true; }
+            // One explicit click is never repeated in the same PC session, even before a claim.
+            workflowUsed = true;
             workflowRunning = false;
           }
         })();

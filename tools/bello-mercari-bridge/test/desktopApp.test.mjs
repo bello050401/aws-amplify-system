@@ -333,12 +333,20 @@ test("B005757 private-image controls require its exact saved SKU and request", a
       { directReadTarget: { shopId: manualObservation.shopId,
         remoteId: manualObservation.remoteId, inventoryCode: "B005757" } },
     ]) await assert.rejects(startDesktopApp({ ...options, ...invalid }, { openBrowser: null }));
-    const app = await startDesktopApp(options, { openBrowser: null });
+    const app = await startDesktopApp(options, { openBrowser: null,
+      runImagePreflight: async () => ({ status: "READY",
+        reasonCode: "EXACT_PRIVATE_PRODUCT_READY" }) });
     try {
       const content = await (await fetch(app.url)).text();
       assert.match(content, /画像1枚を追加して非公開保存・確認/);
+      assert.match(content, /<button disabled>画像1枚を追加して非公開保存・確認<\/button>/);
       assert.equal(content.includes('value="add-image-once"'), false);
       assert.equal(content.includes('value="save-private-once"'), false);
+      const csrf = await token(app.url);
+      assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
+      assert.equal((await post(app.url, csrf, "inspect-image-preflight")).status, 303);
+      assert.match(await (await fetch(app.url)).text(),
+        /<button >画像1枚を追加して非公開保存・確認<\/button>/);
     } finally { await app.close(); }
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
@@ -632,6 +640,42 @@ test("unified private-image action is explicit and old attempts disable it", asy
   } finally {
     assert.equal(resolve(dataDir).startsWith(resolve(tmpdir()) + "\\"), true);
     await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("pre-claim failures remain visible and cannot be repeated in one PC session", async () => {
+  for (const status of ["AUTH_REQUIRED", "PREFLIGHT_BLOCKED"]) {
+    const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-preclaim-"));
+    const target = { shopId: "shop1", remoteId: "existing1", inventoryCode: "B005795",
+      priceYen: 90000, quantity: 0 };
+    const sha256 = "a".repeat(64);
+    const imageProof = { sha256,
+      path: join(dataDir, "ImageProof", `B005795-${sha256.slice(0, 16)}.jpg`) };
+    let runs = 0;
+    const app = await startDesktopApp({ ...config(), dataDir, manualObservation: target,
+      imageProof, imageWorkflowEnabled: true }, {
+      openBrowser: async () => {},
+      runImagePreflight: async () => ({ status, reasonCode: status === "AUTH_REQUIRED" ?
+        "LOGIN_REQUIRED" : "FIELDS_UNVERIFIED" }),
+      runWorkflow: async () => { runs++; return { status }; },
+    });
+    try {
+      const csrf = await token(app.url);
+      assert.equal((await post(app.url, csrf, "inspect-image-preflight")).status, 303);
+      assert.match(await (await fetch(app.url)).text(),
+        new RegExp(`事前確認: <strong>${status}</strong>`));
+      assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
+      let content = "";
+      for (let attempt = 0; attempt < 20; attempt++) {
+        content = await (await fetch(app.url)).text();
+        if (content.includes("PRECLAIM")) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.match(content, new RegExp(`結果: <strong>${status}</strong> / 段階: <code>PRECLAIM`));
+      assert.match(content, /<button disabled>画像1枚を追加して非公開保存・確認<\/button>/);
+      assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
+      assert.equal(runs, 1);
+    } finally { await app.close(); await rm(dataDir, { recursive: true, force: true }); }
   }
 });
 
