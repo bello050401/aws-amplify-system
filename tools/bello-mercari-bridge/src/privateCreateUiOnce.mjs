@@ -225,8 +225,23 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
     throw Error("Pinned private-create inputs required");
   const { job, snapshot, imageBytes, image } =
     await preflight({ root, imagePath, expectedImageSha256 });
-  const session = await openSession({ root, profileDir, playwrightModulePath,
-    inventoryId: INVENTORY });
+  let session;
+  try {
+    session = await openSession({ root, profileDir, playwrightModulePath,
+      inventoryId: INVENTORY });
+  } catch (error) {
+    if (!ID.test(error?.claim?.attemptId ?? "") ||
+        error.claim.shopId !== PRIVATE_CREATE_SHOP_ID) throw error;
+    const result = { schemaVersion: 1, attemptId: error.claim.attemptId,
+      shopId: PRIVATE_CREATE_SHOP_ID, inventoryFingerprint: digest(INVENTORY),
+      snapshotFingerprint: job.snapshotFingerprint, outcome: "UNKNOWN", remoteId: null,
+      visibility: null, listingConfirmed: false,
+      diagnosticStage: "BROWSER_UNAVAILABLE", observedDraftCount: 0,
+      recordedAt: new Date().toISOString() };
+    await saveResult(root, result);
+    return { status: "UNKNOWN", remoteId: null,
+      listingConfirmed: false, retainedSession: null };
+  }
   const seenDrafts = new Set();
   let stage = "CLAIMED";
   let observation = null;

@@ -73,3 +73,24 @@ test("authentication uncertainty records UNKNOWN and never enters the create UI"
   assert.equal(result.retainedSession, session);
   assert.equal(closed, false);
 });
+
+test("a consumed claim from a blocked restored browser is recorded UNKNOWN", async () => {
+  let saved = null;
+  const blocked = Error("FUTURE_CREATE_BROWSER_UNAVAILABLE");
+  blocked.claim = { attemptId: "test-attempt",
+    shopId: "evkhihBFFNn5hukMS9s36H" };
+  const result = await runPinnedPrivateCreateUiOnce({
+    root: resolve("queue"), profileDir: resolve("profile"),
+    playwrightModulePath: resolve("playwright"), imagePath: resolve("image.jpg"),
+  }, {
+    preflight: async () => ({ job: { snapshotFingerprint: "pinned" },
+      snapshot: {}, imageBytes: Buffer.from("unused"), image: {} }),
+    openSession: async () => { throw blocked; },
+    saveResult: async (_root, value) => { saved = value; },
+  });
+  assert.equal(result.status, "UNKNOWN");
+  assert.equal(result.retainedSession, null);
+  assert.equal(saved.attemptId, "test-attempt");
+  assert.equal(saved.diagnosticStage, "BROWSER_UNAVAILABLE");
+  assert.equal(saved.listingConfirmed, false);
+});

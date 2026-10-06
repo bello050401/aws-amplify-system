@@ -87,8 +87,15 @@ export async function openDedicatedProductListSession({ root, profileDir,
 export async function openFutureCreateTrafficObservationSession({ root, profileDir,
   playwrightModulePath, inventoryId, launchPersistentContext = null }) {
   const claim = await claimFutureCreateObservationOnce(root, inventoryId);
-  const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
-    launchPersistentContext });
+  let context;
+  try {
+    context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+      launchPersistentContext });
+  } catch {
+    const error = Error("FUTURE_CREATE_BROWSER_UNAVAILABLE");
+    error.claim = claim;
+    throw error;
+  }
   const closed = new Promise(resolve => context.once("close", resolve));
   let observer = null;
   try {
@@ -116,7 +123,10 @@ export async function openFutureCreateTrafficObservationSession({ root, profileD
   } catch {
     await observer?.stop();
     await context.close();
-    throw Error("FUTURE_CREATE_BROWSER_UNAVAILABLE");
+    const error = Error("FUTURE_CREATE_BROWSER_UNAVAILABLE");
+    // The caller must record UNKNOWN for this specific consumed claim.
+    error.claim = claim;
+    throw error;
   }
 }
 
