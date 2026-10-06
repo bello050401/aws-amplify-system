@@ -15,3 +15,7 @@
 新しい商品を実際に非公開作成する前に、本人が**未出品の別在庫ID・テスト価格**を指定し、保存済みEC下書きの説明・写真・状態・配送・カテゴリを確認する必要がある。現行の下書きにShopsのカテゴリ・配送設定の完全なUI対応付けはなく、推測して埋めない。実サイトの作成HTTP契約と画像関連付けが観測・レビューされるまでは、準備キューを実行キューや出品完了へ昇格させない。B005757の2件の `UNKNOWN` claimは保持し、再試行しない。公開操作は別工程とする。
 
 通常UIの項目対応と、画面を開いた後に発生した帰属不明の自動保存については[新規商品画面の観測記録](mercari-private-create-ui-observation-20261006.md)を参照。この `productDraftId` を商品IDや新規作成成功として扱わない。
+
+## PC設置反映（2026-10-06）
+
+候補HEAD `a446386` のPCツール `App/src` をローカル設置版へ反映した。反映前のバックアップは `C:\Users\win\AppData\Local\BELLO\MercariBridge\Backup-before-private-prep-observer-20261006-221548-e16e7093`。反映後の38ファイルは候補とSHA-256が一致し、`config.json`、Queue・claims、ShopsChrome/BELLOChrome profilesは変更していない。構文と主要モジュールの読込確認を通過した。アプリは起動せず、localhostポート56210は停止したまま。Shopsへの新規送信・公開やAWS変更は行っていない。次は本人指定の別の未出品在庫IDとテスト価格を待つ。
