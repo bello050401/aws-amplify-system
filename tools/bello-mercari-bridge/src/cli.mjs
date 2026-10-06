@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { enqueueExistingRead, listReadResults } from "./queue.mjs";
 import { runExistingRead } from "./readWorker.mjs";
@@ -12,6 +12,7 @@ import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
   recordCreateTestDraftAutosaveUiUnverified } from "./createTestAttempt.mjs";
 import { exportSavedCreateTestClaim,
   exportSavedCreateTestUiResult } from "./exportCreateTestRecord.mjs";
+import { preparePrivateCreateOnce } from "./privateCreatePreparation.mjs";
 
 function argsOf(argv) {
   const [command, ...rest] = argv;
@@ -25,6 +26,17 @@ function argsOf(argv) {
 
 async function main() {
   const { command, flags } = argsOf(process.argv.slice(2));
+  if (command === "prepare-private-create-no-send") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root) ||
+        typeof flags.input !== "string" || !isAbsolute(flags.input) ||
+        (await stat(flags.input)).size > 65536)
+      throw Error("Absolute queue root and small BELLO preparation file required");
+    const input = JSON.parse(await readFile(flags.input, "utf8"));
+    const job = await preparePrivateCreateOnce(flags.root, input);
+    process.stdout.write(JSON.stringify({ requestId: job.requestId,
+      status: job.status, listingConfirmed: false }) + "\n");
+    return;
+  }
   if (command === "export-saved-direct-read-proof") {
     await exportSavedDirectReadProof({ configPath: flags.config, outputPath: flags.out });
     process.stdout.write("BELLOへ読み込む読取記録ファイルを書き出しました。Shopsへの通信は行っていません。\n");
@@ -132,7 +144,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: prepare-private-create-no-send, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {
