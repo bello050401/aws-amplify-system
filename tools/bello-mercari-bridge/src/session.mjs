@@ -83,6 +83,30 @@ export async function openDedicatedProductListSession({ root, profileDir,
   }
 }
 
+/** Isolated read page for a claimed visibility transition. Never resumes an old form. */
+export async function openVisibilityTransitionSession({ root, profileDir,
+  playwrightModulePath, shopId, launchPersistentContext = null }) {
+  if (shopId !== PRIVATE_CREATE_SHOP_ID || !root || !isAbsolute(root))
+    throw Error("Invalid visibility transition account");
+  await bindAccount(root, shopId);
+  const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+    launchPersistentContext });
+  try {
+    if (context.pages().some(candidate => {
+      try {
+        const url = new URL(candidate.url());
+        return url.origin === "https://mercari-shops.com" &&
+          (url.pathname === `/seller/shops/${shopId}/products/create` ||
+            /^\/seller\/shops\/[^/]+\/products\/[^/]+\/edit$/.test(url.pathname));
+      } catch { return false; }
+    })) throw Error("Restored Shops form is unresolved");
+    return { context, page: await context.newPage() };
+  } catch {
+    await context.close().catch(() => {});
+    throw Error("VISIBILITY_BROWSER_UNAVAILABLE");
+  }
+}
+
 /** One future target only: claim before opening Chrome because the create UI may autosave. */
 export async function openFutureCreateTrafficObservationSession({ root, profileDir,
   playwrightModulePath, inventoryId, launchPersistentContext = null }) {

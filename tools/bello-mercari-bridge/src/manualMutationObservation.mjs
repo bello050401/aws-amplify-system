@@ -151,6 +151,7 @@ export function safeManualMutationSummary(items) {
         (item.querySha256 !== undefined && !/^[a-f0-9]{64}$/.test(item.querySha256)) ||
         (item.requestProductMatch !== undefined && !MATCHES.has(item.requestProductMatch)) ||
         (item.requestPrivateState !== undefined && !MATCHES.has(item.requestPrivateState)) ||
+        (item.requestPublicState !== undefined && !MATCHES.has(item.requestPublicState)) ||
         (item.state !== undefined && !STATES.has(item.state))) return [];
     const fields = item.fields.flatMap(field => {
       if (!field || typeof field.field !== "string" || typeof field.type !== "string" ||
@@ -172,6 +173,7 @@ export function safeManualMutationSummary(items) {
       ...(item.querySha256 ? { querySha256: item.querySha256 } : {}),
       ...(item.requestProductMatch ? { requestProductMatch: item.requestProductMatch } : {}),
       ...(item.requestPrivateState ? { requestPrivateState: item.requestPrivateState } : {}),
+      ...(item.requestPublicState ? { requestPublicState: item.requestPublicState } : {}),
       ...(item.state ? { state: item.state } : {}) }];
   });
 }
@@ -246,6 +248,9 @@ export function observeManualShopsMutation(page, expectedEditUrl,
               requestId === expectedRemoteId ? "MATCH" : "DIFFERENT" : "UNOBSERVED";
             entry.requestPrivateState = typeof input?.status === "string" ?
               ["UNOPENED", "PRIVATE"].includes(input.status) ? "MATCH" : "DIFFERENT" :
+              "UNOBSERVED";
+            entry.requestPublicState = typeof input?.status === "string" ?
+              ["OPENED", "PUBLIC"].includes(input.status) ? "MATCH" : "DIFFERENT" :
               "UNOBSERVED";
           }
           if (shopsOnly && privateSaveContract &&

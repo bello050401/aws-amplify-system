@@ -1,0 +1,107 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import test from "node:test";
+import { exactVisibilityMutationAcknowledgement, exactVisibilityTarget,
+  runVisibilityTransitionOnce } from "../src/visibilityTransitionOnce.mjs";
+
+const shopId = "evkhihBFFNn5hukMS9s36H";
+const target = { shopId, inventoryId: "bd4850de-9156-4890-a821-cae75da5c8f7",
+  remoteId: "ownedProduct123", title: "Exact owned product", skuCode: "B009999",
+  priceYen: 45000, quantity: 1, visibilityPolicy: "PUBLIC_ALLOWED" };
+const listing = { status: "ACTIVE", externalListingId: target.remoteId };
+const editUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/${target.remoteId}/edit`;
+const event = action => ({ order: 1, method: "POST", host: "mercari-shops.com",
+  path: "/graphql", bodyType: "json", fields: [],
+  auth: { authorization: true, cookie: true, csrf: false }, httpStatus: 200,
+  graphqlOperationType: "mutation", responseField: "updateProduct",
+  responseKind: "UPDATE_PRODUCT", requestProductMatch: "MATCH",
+  requestPrivateState: action === "STOP" ? "MATCH" : "DIFFERENT",
+  requestPublicState: action === "RELIST" ? "MATCH" : "DIFFERENT",
+  productMatch: "MATCH", shopMatch: "MATCH", graphqlErrors: "NONE",
+  state: action === "STOP" ? "UNOPENED" : "OPENED" });
+
+const args = (root, action) => ({ root, profileDir: resolve("profile"),
+  playwrightModulePath: resolve("playwright"), action, target,
+  listing: action === "STOP" ? listing : null });
+
+function fakeBrowser(action, { wrongAfter = false } = {}) {
+  let closed = false;
+  let nextClicks = 0;
+  let saveClicks = 0;
+  const page = { url: () => editUrl, getByRole: () => ({ count: async () => 1,
+    isEnabled: async () => true, click: async () => { nextClicks++; } }) };
+  const context = { newPage: async () => ({ close: async () => {} }),
+    close: async () => { closed = true; } };
+  const deps = {
+    openSession: async () => ({ context, page }),
+    readVisibility: async (current, request) => ({ kind: "OBSERVED", shopId,
+      remoteId: target.remoteId, title: target.title,
+      visibility: current === page ? request.visibility :
+        wrongAfter ? (action === "STOP" ? "PUBLIC" : "PRIVATE") : request.visibility }),
+    readFields: async () => ({ title: target.title }),
+    observe: () => ({ checkpoint: () => 0,
+      waitForPostClickIdle: async () => true,
+      stop: async () => [event(action)] }),
+    chooseSaveButton: async () => ({ click: async () => { saveClicks++; } }),
+  };
+  return { deps, state: () => ({ closed, nextClicks, saveClicks }) };
+}
+
+test("only exact same-product update response can acknowledge each UI action", () => {
+  assert.equal(exactVisibilityMutationAcknowledgement([event("STOP")], "STOP"), true);
+  assert.equal(exactVisibilityMutationAcknowledgement([event("RELIST")], "RELIST"), true);
+  assert.equal(exactVisibilityMutationAcknowledgement([event("STOP")], "RELIST"), false);
+  assert.equal(exactVisibilityMutationAcknowledgement([event("STOP"),
+    { ...event("STOP"), order: 2 }], "STOP"), false);
+  assert.equal(exactVisibilityMutationAcknowledgement([{
+    ...event("STOP"), productMatch: "DIFFERENT" }], "STOP"), false);
+  assert.equal(exactVisibilityMutationAcknowledgement([{
+    ...event("STOP"), graphqlErrors: "PRESENT" }], "STOP"), false);
+});
+
+test("private-only inventory variants and array identifiers cannot enter a claim", () => {
+  for (const inventoryId of ["dd273c1e-9b2a-4013-acc6-c445a481fab8",
+    "DD273C1E-9B2A-4013-ACC6-C445A481FAB8",
+    ["dd273c1e-9b2a-4013-acc6-c445a481fab8"]])
+    assert.equal(exactVisibilityTarget({ ...target, inventoryId }), false);
+  assert.equal(exactVisibilityTarget({ ...target, remoteId: "2JWp7EJx6aqKfn6dTXc5Q9" }), false);
+});
+
+test("one verified stop permits one later relist of the same ID", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-visibility-once-"));
+  try {
+    const stop = fakeBrowser("STOP");
+    const first = await runVisibilityTransitionOnce(args(root, "STOP"), stop.deps);
+    assert.deepEqual({ status: first.status, remoteId: first.remoteId },
+      { status: "STOP_VERIFIED", remoteId: target.remoteId });
+    assert.deepEqual(stop.state(), { closed: true, nextClicks: 1, saveClicks: 1 });
+    const relist = fakeBrowser("RELIST");
+    const second = await runVisibilityTransitionOnce(args(root, "RELIST"), relist.deps);
+    assert.equal(second.status, "RELIST_VERIFIED");
+    assert.deepEqual(relist.state(), { closed: true, nextClicks: 1, saveClicks: 1 });
+    assert.equal((await runVisibilityTransitionOnce(args(root, "RELIST"), relist.deps)).status,
+      "ALREADY_ATTEMPTED");
+    assert.equal(relist.state().saveClicks, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("unknown after readback preserves the ID and permanently blocks another click", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-visibility-unknown-"));
+  try {
+    const browser = fakeBrowser("STOP", { wrongAfter: true });
+    const first = await runVisibilityTransitionOnce(args(root, "STOP"), browser.deps);
+    assert.equal(first.status, "UNKNOWN");
+    assert.equal(first.remoteId, target.remoteId);
+    assert.equal(first.retainedSession !== null, true);
+    assert.deepEqual(browser.state(), { closed: false, nextClicks: 1, saveClicks: 1 });
+    const saved = JSON.parse(await readFile(join(root, "visibility-transition-once",
+      `${shopId}-${target.remoteId}-STOP.result.json`), "utf8"));
+    assert.equal(saved.outcome, "UNKNOWN");
+    assert.equal(saved.remoteId, target.remoteId);
+    assert.equal((await runVisibilityTransitionOnce(args(root, "STOP"), browser.deps)).status,
+      "ALREADY_ATTEMPTED");
+    assert.equal(browser.state().saveClicks, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
