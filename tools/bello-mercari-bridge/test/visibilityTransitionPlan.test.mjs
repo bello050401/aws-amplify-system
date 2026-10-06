@@ -54,4 +54,15 @@ test("B005659's protected public ID and private-only test cannot be transitioned
     inventoryId: protectedTarget.inventoryId };
   assert.deepEqual(planVisibilityTransition({ action: "RELIST", target: newPrivateTarget,
     readback: privateRead, stopProof }), { kind: "BLOCKED" });
+  for (const inventoryId of [protectedTarget.inventoryId.toUpperCase(),
+    "Dd273c1e-9b2a-4013-acc6-c445a481fab8",
+    [protectedTarget.inventoryId]]) {
+    assert.deepEqual(planVisibilityTransition({ action: "RELIST",
+      target: { ...newPrivateTarget, inventoryId }, readback: privateRead,
+      stopProof }), { kind: "BLOCKED" });
+    assert.deepEqual(planVisibilityTransition({ action: "STOP",
+      target: { ...newPrivateTarget, inventoryId }, readback: publicRead,
+      listing: { status: "ACTIVE", externalListingId: target.remoteId } }),
+    { kind: "BLOCKED" });
+  }
 });

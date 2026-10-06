@@ -11,9 +11,12 @@ export function planVisibilityTransition({ action, target, readback,
   listing = null, stopProof = null } = {}) {
   if (!["STOP", "RELIST"].includes(action) ||
       target?.shopId !== PRIVATE_CREATE_SHOP_ID ||
-      !UUID.test(target?.inventoryId ?? "") || !ID.test(target?.remoteId ?? "") ||
+      typeof target.inventoryId !== "string" || !UUID.test(target.inventoryId) ||
+      target.inventoryId.toLowerCase() === PRIVATE_ONLY_INVENTORY ||
+      typeof target.remoteId !== "string" || !ID.test(target.remoteId) ||
       target.remoteId === PROTECTED_PUBLIC_ID ||
-      !TITLE.test(target?.title ?? "") || !target.title.trim() ||
+      typeof target.title !== "string" || !TITLE.test(target.title) ||
+      !target.title.trim() ||
       readback?.kind !== "OBSERVED" || readback.shopId !== target.shopId ||
       readback.remoteId !== target.remoteId || readback.title !== target.title)
     return { kind: "BLOCKED" };
@@ -29,8 +32,7 @@ export function planVisibilityTransition({ action, target, readback,
 
   // A merely private product may be an unpublished draft. Relisting requires
   // an independently verified stop of this same product, plus public permission.
-  if (target.inventoryId === PRIVATE_ONLY_INVENTORY ||
-      target.visibilityPolicy !== "PUBLIC_ALLOWED" ||
+  if (target.visibilityPolicy !== "PUBLIC_ALLOWED" ||
       readback.visibility !== "PRIVATE" ||
       stopProof?.kind !== "STOP_VERIFIED" ||
       stopProof.shopId !== target.shopId ||
