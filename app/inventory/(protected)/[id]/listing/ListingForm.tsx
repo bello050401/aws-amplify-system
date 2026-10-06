@@ -13,6 +13,7 @@ import type { SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
 import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
+import { MercariShopsLifecycleSection } from "./MercariShopsLifecycleSection";
 import { NextEngineListingSection } from "./NextEngineListingSection";
 import type { MasterSyncView } from "@/lib/listing/nextEngine/masterSync";
 import { generateListingCopyAction } from "@/app/actions/ai";
@@ -27,24 +28,6 @@ import { InventoryThumbnail } from "../../../InventoryThumbnail";
 import { PhotoAssetProductGallery } from "../PhotoAssetProductGallery";
 import { resolveProductGallerySource } from "@/lib/photoRegistration/gallerySelection";
 import { buildListingImageCandidates, restoreListingSelection, sameListingImageRefs } from "@/lib/photoRegistration/inventoryListingAdapter";
-
-// BELLO統合業務OS指示書(2026-08-30) §14: Listing Status State Machine
-// 12値(app/inventory/(protected)/listings/ListingsOverviewTable.tsxの
-// STATUS_LABELと同じ日本語ラベル方針)。
-const STATUS_LABEL: Record<ChannelListingRecord["status"], string> = {
-  NOT_PREPARED: "未準備",
-  DRAFT: "下書き",
-  READY: "出品準備完了",
-  QUEUED: "出品待ち",
-  PUBLISHING: "出品処理中…",
-  ACTIVE: "出品済み",
-  PAUSED: "停止中",
-  SOLD: "売却済み",
-  ENDED: "終了",
-  RELIST_PENDING: "再出品待ち",
-  ERROR: "出品失敗",
-  ARCHIVED: "アーカイブ済み",
-};
 
 /**
  * BELLO統合改修 master指示書 Phase D — EC出品の編集UI。
@@ -632,36 +615,7 @@ export function ListingForm({
           shippingMethod === draft.shippingMethod &&
           sameListingImageRefs(selectedImages, draft.images))} />
 
-      {/* Mercari Shops出品の過去履歴(External Listing Status)。
-          Mercari Shops API出品機能の撤去(2026-09-14、P1)に伴い、
-          カテゴリーマッピング入力・実出品ボタン・送料負担選択は削除した
-          ——過去に出品したことがある商品(ChannelListingが既に存在する)
-          についてのみ、その記録を読み取り専用で表示する。新規の商品は
-          ChannelListingがそもそも作られないため、この節自体が出ない。 */}
-      {channelListing && (
-        <div className="mt-4 border border-gray-200 p-4">
-          <p className="mb-2 text-[12px] font-bold text-gray-700">Mercari Shops 出品履歴（過去の記録・参照専用）</p>
-          <dl className="grid grid-cols-4 gap-y-1 text-[12px] text-gray-700">
-            <dt className="text-gray-500">状態</dt>
-            <dd className="col-span-3">{STATUS_LABEL[channelListing.status]}</dd>
-            {channelListing.externalListingId && (
-              <>
-                <dt className="text-gray-500">Mercari商品ID</dt>
-                <dd className="col-span-3 font-mono">{channelListing.externalListingId}</dd>
-              </>
-            )}
-            {channelListing.lastError && (
-              <>
-                <dt className="text-gray-500">最終エラー</dt>
-                <dd className="col-span-3 text-red-600">{channelListing.lastError}</dd>
-              </>
-            )}
-          </dl>
-          <p className="mt-2 text-[11px] text-gray-400">
-            これは過去の出品記録です。ネクストエンジン経由の新しい送信状況とは別に表示しています。
-          </p>
-        </div>
-      )}
+      <MercariShopsLifecycleSection listing={channelListing} />
 
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
           上の出品履歴と同じ理由でChannelListing存在時のみ表示する。 */}
