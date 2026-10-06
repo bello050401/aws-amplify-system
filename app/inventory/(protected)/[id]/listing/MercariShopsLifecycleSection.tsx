@@ -13,7 +13,7 @@ const LABEL = {
   PRIVATE: "非公開（BELLO記録）", UNKNOWN: "結果の確認が必要",
 } as const;
 
-/** Only verified server state may make the action available. The PC executor is not connected yet. */
+/** The PC app accepts a prepared job; its explicit local action performs the transition. */
 export function MercariShopsLifecycleSection({ inventoryId, listing, operation = null }: {
   inventoryId: string;
   listing: ChannelListingRecord | null;
@@ -130,6 +130,11 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
       className="ml-2 mt-3 rounded border border-gray-300 px-3 py-2 text-xs font-bold disabled:opacity-50">
       PCの結果を確認
     </button>}
+    {(pcStatus === "STOP_VERIFIED" || pcStatus === "RELIST_VERIFIED") &&
+      <a href="/inventory/listings"
+        className="ml-2 mt-3 inline-block rounded border border-gray-300 px-3 py-2 text-xs font-bold">
+        EC出品一覧に戻る
+      </a>}
     {message && <p role="status" className="mt-2 text-xs">{message}</p>}
     <p className="mt-2 text-xs text-gray-600">{state === "UNKNOWN" ?
       "Shops側の結果を確認するまで再操作できません。" :
