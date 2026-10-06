@@ -9,6 +9,9 @@ import { readManualImageClaim } from "./manualImageAttempt.mjs";
 import { readManualSaveClaim } from "./manualSaveAttempt.mjs";
 import { readPrivateImageWorkflowClaim, claimPrivateImageWorkflow,
   claimPrivateImageSaveStage, writePrivateImageWorkflowResult } from "./privateImageWorkflowAttempt.mjs";
+import { readExactPendingPreview, selectPinnedImageFromVisibleBox,
+  waitForVisibleImageSelection } from
+  "./visibleImageSelection.mjs";
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -47,15 +50,23 @@ function isAuthRequired(page) {
 async function probePrivateReadback(context, expectedUrl, target, title,
   originalHash, addedHash, readFields, readImages, checkPrivate) {
   let probe = null;
+  let observedAddedHash = addedHash;
   try {
     probe = await context.newPage();
     await probe.goto(expectedUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
     for (let pass = 0; pass < 2; pass++) {
       const fields = await readFields(probe, expectedUrl, target);
       const images = await readImages(probe, expectedUrl);
+      if (observedAddedHash === null && images?.length === 2 &&
+          images.filter(item => item.pathHash === originalHash).length === 1) {
+        const candidate = images.find(item => item.pathHash !== originalHash);
+        observedAddedHash = /^[a-f0-9]{64}$/.test(candidate?.pathHash ?? "") ?
+          candidate.pathHash : null;
+      }
       if (!fields || fields.title !== title || images?.length !== 2 ||
           images.filter(item => item.pathHash === originalHash).length !== 1 ||
-          images.filter(item => item.pathHash === addedHash).length !== 1) return false;
+          observedAddedHash === null ||
+          images.filter(item => item.pathHash === observedAddedHash).length !== 1) return false;
       if (pass === 0 && !await checkPrivate(probe, target, expectedUrl, title)) return false;
     }
     return true;
@@ -72,7 +83,9 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
     openSession = openExistingProductReadSession, readFields = readPinnedEditFields,
     readImages = readExistingUploadedImages, checkPrivate = privateExactProduct,
     fileInput = exactSingleImageInput, saveControl = privateSaveControl,
-    waitForAddedImage = waitForExactlyOneAddedImage,
+    selectVisible = selectPinnedImageFromVisibleBox,
+    waitForSelection = waitForVisibleImageSelection,
+    verifyPendingPreview = readExactPendingPreview,
     observe = (page, url) => observeManualShopsMutation(page, url, { shopsOnly: true }),
   } = {}) {
   const prior = await Promise.all([
@@ -105,6 +118,7 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
   };
   let originalHash = null;
   let addedHash = null;
+  let pendingPreview = false;
   let readbackPrivateWithImage = false;
   const retainedSession = () => ({ context: session.context, page: session.page,
     observer, originalImageHash: originalHash,
@@ -134,16 +148,25 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
     const input = await fileInput(session.page, expectedUrl);
     if (!input || !await readFields(session.page, expectedUrl, target))
       throw Error("Pinned image input or product changed");
-    await input.setInputFiles({ name: image.filename, mimeType: image.mimeType,
-      buffer: bytes }, { timeout: 12000 });
-    addedHash = await waitForAddedImage(session.page, expectedUrl, originalHash, readImages);
-    if (!addedHash) throw Error("The second image was not uniquely visible");
-    setStage("TWO_IMAGES_VISIBLE");
+    await selectVisible(session.page, expectedUrl, image, bytes);
+    setStage("FILE_SELECTION_RETURNED");
+    const selection = await waitForSelection(session.page, expectedUrl, originalHash,
+      imageSha256, readImages);
+    pendingPreview = selection?.kind === "PENDING_PREVIEW_MATCHED";
+    if (pendingPreview) setStage("PENDING_PREVIEW_OBSERVED");
+    addedHash = selection?.kind === "REMOTE_SECOND_IMAGE" ? selection.pathHash : null;
+    if (!pendingPreview && !addedHash)
+      throw Error("The second image was not uniquely visible");
+    if (!pendingPreview) setStage("TWO_IMAGES_VISIBLE");
     const beforeSave = await readFields(session.page, expectedUrl, target);
-    const twoImages = await readImages(session.page, expectedUrl);
-    if (!beforeSave || beforeSave.title !== before.title || twoImages?.length !== 2 ||
-        twoImages.filter(item => item.pathHash === originalHash).length !== 1 ||
-        twoImages.filter(item => item.pathHash === addedHash).length !== 1)
+    const imageReady = pendingPreview ?
+      await verifyPendingPreview(session.page, expectedUrl, originalHash, imageSha256) :
+      await readImages(session.page, expectedUrl);
+    if (!beforeSave || beforeSave.title !== before.title ||
+        (pendingPreview ? imageReady !== true :
+          imageReady?.length !== 2 ||
+          imageReady.filter(item => item.pathHash === originalHash).length !== 1 ||
+          imageReady.filter(item => item.pathHash === addedHash).length !== 1))
       throw Error("Pinned product or images changed before save");
     await claimPrivateImageSaveStage(root, target, claim.attemptId);
     setStage("SAVE_CLAIMED");
@@ -155,6 +178,9 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
     const beforeFinal = await readFields(session.page, expectedUrl, target, false);
     if (!beforeFinal || beforeFinal.title !== before.title)
       throw Error("Pinned product changed in save dialog");
+    if (pendingPreview && !await verifyPendingPreview(session.page, expectedUrl,
+      originalHash, imageSha256))
+      throw Error("Exact pending image preview changed before private save");
     const privateButton = await saveControl(session.page, expectedUrl);
     if (!privateButton) throw Error("Private save dialog changed");
     const checkpoint = observer.checkpoint();
@@ -179,6 +205,12 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
     setStage("READBACK_UNVERIFIED");
     const after = await readFields(session.page, expectedUrl, target);
     const imagesAfter = await readImages(session.page, expectedUrl);
+    if (pendingPreview && imagesAfter?.length === 2 &&
+        imagesAfter.filter(item => item.pathHash === originalHash).length === 1) {
+      const candidate = imagesAfter.find(item => item.pathHash !== originalHash);
+      addedHash = /^[a-f0-9]{64}$/.test(candidate?.pathHash ?? "") ?
+        candidate.pathHash : null;
+    }
     if (!after || after.title !== before.title || imagesAfter?.length !== 2 ||
         imagesAfter.filter(item => item.pathHash === originalHash).length !== 1 ||
         imagesAfter.filter(item => item.pathHash === addedHash).length !== 1 ||
@@ -190,6 +222,18 @@ export async function runPrivateImageWorkflowOnce({ root, profileDir, playwright
         finalImages.filter(item => item.pathHash === originalHash).length !== 1 ||
         finalImages.filter(item => item.pathHash === addedHash).length !== 1)
       throw Error("Product changed after private list correlation");
+    if (pendingPreview) {
+      readbackPrivateWithImage = await probePrivateReadback(session.context, expectedUrl,
+        target, before.title, originalHash, addedHash,
+        readFields, readImages, checkPrivate);
+      if (!readbackPrivateWithImage)
+        throw Error("Independent private image readback unverified");
+      // Remote bytes/asset ID are not linked to the selected data: preview.
+      setStage("PRIVATE_TWO_IMAGES_ATTRIBUTION_UNVERIFIED");
+      result = "UNKNOWN";
+      return { status: result, stage, readbackPrivateWithImage,
+        retainedSession: retainedSession() };
+    }
     setStage("PRIVATE_READBACK_CONFIRMED");
     readbackPrivateWithImage = true;
     result = "CONFIRMED_PRIVATE_WITH_IMAGE";

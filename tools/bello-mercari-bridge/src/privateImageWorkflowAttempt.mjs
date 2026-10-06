@@ -6,10 +6,12 @@ import { safeManualMutationSummary } from "./manualMutationObservation.mjs";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const RESULTS = new Set(["CONFIRMED_PRIVATE_WITH_IMAGE", "UNKNOWN", "AUTH_REQUIRED"]);
-const STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN", "TWO_IMAGES_VISIBLE",
+const STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN",
+  "FILE_SELECTION_RETURNED", "PENDING_PREVIEW_OBSERVED", "TWO_IMAGES_VISIBLE",
   "SAVE_CLAIMED", "NEXT_CLICK_UNCERTAIN", "PRIVATE_CLICK_UNCERTAIN",
   "PRIVATE_CLICK_RETURNED", "SAVE_ACK_UNVERIFIED", "READBACK_UNVERIFIED",
-  "PRIVATE_READBACK_CONFIRMED", "AUTH_REQUIRED"]);
+  "PRIVATE_READBACK_CONFIRMED", "PRIVATE_TWO_IMAGES_ATTRIBUTION_UNVERIFIED",
+  "AUTH_REQUIRED"]);
 
 function paths(root, target) {
   if (!root || !isAbsolute(root) || ["shopId", "remoteId", "inventoryCode"].some(key =>

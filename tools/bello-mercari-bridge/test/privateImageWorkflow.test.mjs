@@ -32,9 +32,12 @@ async function withRoot(run) {
   }
 }
 
-function harness({ acknowledged = true, auth = false, probeAvailable = false } = {}) {
+function harness({ acknowledged = true, auth = false, probeAvailable = false,
+  pendingPreview = false, previewStable = true } = {}) {
   const actions = [];
   let selected = false;
+  let reloaded = false;
+  let previewChecks = 0;
   let closed = false;
   const context = new EventEmitter();
   context.close = async () => { closed = true; context.emit("close"); };
@@ -45,7 +48,8 @@ function harness({ acknowledged = true, auth = false, probeAvailable = false } =
   });
   const page = {
     url: () => auth ? "https://mercari-shops.com/signin/seller" : editUrl,
-    goto: async url => { actions.push("reload"); assert.equal(url, editUrl); },
+    goto: async url => { actions.push("reload"); assert.equal(url, editUrl);
+      reloaded = true; },
     getByRole: (role, options) => {
       assert.equal(role, "button");
       assert.equal(options.name, "公開設定に進む");
@@ -60,15 +64,28 @@ function harness({ acknowledged = true, auth = false, probeAvailable = false } =
     openSession: async () => ({ context, page,
       state: auth ? "AUTH_REQUIRED" : "NAVIGATED_UNVERIFIED" }),
     readFields: async () => { actions.push("fields"); return { title: "One exact product" }; },
-    readImages: async () => { actions.push("images"); return selected ? [original, added] : [original]; },
+    readImages: async currentPage => { actions.push("images"); return selected ?
+      pendingPreview && !reloaded && currentPage === page ? null : [original, added] :
+      [original]; },
     checkPrivate: async () => { actions.push("private-list"); return true; },
-    fileInput: async () => ({ setInputFiles: async file => {
+    fileInput: async () => ({ verified: true }),
+    selectVisible: async (_page, url, file, pinnedBytes) => {
+      assert.equal(url, editUrl);
       assert.equal(file.mimeType, "image/jpeg");
-      assert.deepEqual(file.buffer, bytes);
+      assert.deepEqual(pinnedBytes, bytes);
       actions.push("select"); selected = true;
-    } }),
+    },
     saveControl: async () => ({ click: async () => { actions.push("private-save"); } }),
-    waitForAddedImage: async () => { actions.push("wait-image"); return added.pathHash; },
+    waitForSelection: async () => {
+      actions.push("wait-image");
+      return pendingPreview ? { kind: "PENDING_PREVIEW_MATCHED" } :
+        { kind: "REMOTE_SECOND_IMAGE", pathHash: added.pathHash };
+    },
+    verifyPendingPreview: async () => {
+      previewChecks++;
+      actions.push("preview-proof");
+      return selected && (previewStable || previewChecks === 1);
+    },
     observe: () => { actions.push("observe"); return observer; },
   };
   return { deps, actions, get closed() { return closed; } };
@@ -96,6 +113,57 @@ test("one explicit flow saves privately only after image and exact-product check
     assert.equal((await runPrivateImageWorkflowOnce(args, fake.deps)).status,
       "BLOCKED_PREVIOUS_ATTEMPT");
     assert.equal(fake.actions.filter(item => item === "select").length, 1);
+  }));
+
+test("a byte-matched data preview permits one private save but not image attribution", () =>
+  withRoot(async ({ root, imagePath }) => {
+    const fake = harness({ pendingPreview: true, probeAvailable: true });
+    const args = { root, profileDir: root, playwrightModulePath: root,
+      target, imagePath, imageSha256: sha };
+    const result = await runPrivateImageWorkflowOnce(args, fake.deps);
+    assert.equal(result.status, "UNKNOWN");
+    assert.equal(result.stage, "PRIVATE_TWO_IMAGES_ATTRIBUTION_UNVERIFIED");
+    assert.equal(result.readbackPrivateWithImage, true);
+    assert.equal(fake.actions.filter(item => item === "preview-proof").length, 2);
+    assert.equal(fake.actions.filter(item => item === "private-save").length, 1);
+    assert.ok(fake.actions.lastIndexOf("preview-proof") < fake.actions.indexOf("private-save"));
+    assert.equal(fake.actions.includes("probe-reload"), true);
+    assert.equal((await readPrivateImageWorkflowResult(root, target)).stage,
+      "PRIVATE_TWO_IMAGES_ATTRIBUTION_UNVERIFIED");
+    assert.equal((await runPrivateImageWorkflowOnce(args, fake.deps)).status,
+      "BLOCKED_PREVIOUS_ATTEMPT");
+    assert.equal(fake.closed, false);
+    await result.retainedSession.observer.stop();
+    await result.retainedSession.context.close();
+  }));
+
+test("a changed pending preview stops before the private save click", () =>
+  withRoot(async ({ root, imagePath }) => {
+    const fake = harness({ pendingPreview: true, previewStable: false });
+    const result = await runPrivateImageWorkflowOnce({ root, profileDir: root,
+      playwrightModulePath: root, target, imagePath, imageSha256: sha }, fake.deps);
+    assert.equal(result.status, "UNKNOWN");
+    assert.equal(result.stage, "NEXT_CLICK_UNCERTAIN");
+    assert.equal(fake.actions.includes("private-save"), false);
+    assert.equal(fake.closed, false);
+    await result.retainedSession.observer.stop();
+    await result.retainedSession.context.close();
+  }));
+
+test("an unacknowledged preview save remains unknown despite private two-image readback", () =>
+  withRoot(async ({ root, imagePath }) => {
+    const fake = harness({ pendingPreview: true, acknowledged: false,
+      probeAvailable: true });
+    const result = await runPrivateImageWorkflowOnce({ root, profileDir: root,
+      playwrightModulePath: root, target, imagePath, imageSha256: sha }, fake.deps);
+    assert.equal(result.status, "UNKNOWN");
+    assert.equal(result.stage, "SAVE_ACK_UNVERIFIED");
+    assert.equal(result.readbackPrivateWithImage, true);
+    assert.equal(fake.actions.filter(item => item === "private-save").length, 1);
+    assert.equal(fake.actions.includes("reload"), false);
+    assert.equal(fake.closed, false);
+    await result.retainedSession.observer.stop();
+    await result.retainedSession.context.close();
   }));
 
 test("unverified save response retains Chrome and permanently blocks replay", () =>
