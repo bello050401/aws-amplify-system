@@ -9,7 +9,8 @@ import { startDesktopApp } from "../src/desktopApp.mjs";
 import { BridgeBoundaryError } from "../src/cloudConnector.mjs";
 import { claimManualSaveOnce } from "../src/manualSaveAttempt.mjs";
 import { claimManualImageOnce } from "../src/manualImageAttempt.mjs";
-import { claimPrivateImageWorkflow } from "../src/privateImageWorkflowAttempt.mjs";
+import { claimPrivateImageWorkflow, writePrivateImageWorkflowResult } from
+  "../src/privateImageWorkflowAttempt.mjs";
 import { saveReadTrafficEvidence } from "../src/trafficEvidence.mjs";
 import { PINNED_READ_QUERY_SHA256, runPinnedDirectReadProbeOnce } from
   "../src/directReadProbe.mjs";
@@ -350,6 +351,49 @@ test("B005757 private-image controls require its exact saved SKU and request", a
       assert.equal((await post(app.url, csrf, "inspect-image-preflight")).status, 303);
       assert.match(await (await fetch(app.url)).text(),
         /<button >画像1枚を追加して非公開保存・確認<\/button>/);
+    } finally { await app.close(); }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("uncertain B005757 image attempt exposes only a fresh read, not another upload", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-b005757-readback-"));
+  const requestId = "7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825";
+  const manualObservation = { shopId: "evkhihBFFNn5hukMS9s36H",
+    remoteId: "2JXjWPRVBxjZ2K2vgTGNqy", inventoryCode: "B005757",
+    skuCode: CREATE_TEST_TARGET.skuCode, priceYen: 98000, quantity: 1 };
+  const sha256 = "a".repeat(64);
+  const imageProof = { sha256,
+    path: join(dataDir, "ImageProof", `B005757-${sha256.slice(0, 16)}.jpg`) };
+  let reads = 0;
+  let writes = 0;
+  try {
+    const claim = await claimPrivateImageWorkflow(join(dataDir, "Queue"),
+      manualObservation, sha256);
+    await writePrivateImageWorkflowResult(join(dataDir, "Queue"),
+      manualObservation, claim.attemptId, "UNKNOWN", "FILE_SELECTION_UNCERTAIN");
+    const app = await startDesktopApp({ ...config(), dataDir, requestId,
+      manualObservation, imageProof, imageWorkflowEnabled: true }, {
+      openBrowser: null,
+      runWorkflowReadback: async input => {
+        reads++;
+        assert.equal(input.requestId, requestId);
+        assert.deepEqual(input.target, manualObservation);
+        return { status: "PRIVATE_ONE_IMAGE_OBSERVED" };
+      },
+      runWorkflow: async () => { writes++; throw Error("must not upload again"); },
+    });
+    try {
+      const before = await (await fetch(app.url)).text();
+      assert.match(before, /今回の商品を読取だけで再確認/);
+      assert.match(before, /<button disabled>画像1枚を追加して非公開保存・確認<\/button>/);
+      const csrf = await token(app.url);
+      assert.equal((await post(app.url, csrf, "verify-workflow-readonly")).status, 303);
+      const after = await (await fetch(app.url)).text();
+      assert.match(after, /PRIVATE_ONE_IMAGE_OBSERVED/);
+      assert.equal(reads, 1);
+      assert.equal(writes, 0);
+      assert.equal((await post(app.url, csrf, "complete-image-private")).status, 303);
+      assert.equal(writes, 0);
     } finally { await app.close(); }
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });

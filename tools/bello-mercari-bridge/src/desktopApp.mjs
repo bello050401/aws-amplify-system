@@ -29,6 +29,7 @@ import { readManualImageClaim, readManualImageOutcome } from "./manualImageAttem
 import { runPrivateImageWorkflowOnce } from "./privateImageWorkflow.mjs";
 import { inspectPrivateImagePreflight, isPinnedB005757ImageTarget,
   PINNED_B005757_REMOTE_ID } from "./privateImagePreflight.mjs";
+import { verifyPrivateImageWorkflowReadOnly } from "./privateImageReadback.mjs";
 import { readPrivateImageWorkflowClaim, readPrivateImageWorkflowResult } from "./privateImageWorkflowAttempt.mjs";
 import { verifyExistingSavedProductReadOnly, readExistingSavedProductReadback } from
   "./existingSavedProductReadback.mjs";
@@ -141,7 +142,7 @@ function page({ csrf, options, message, busy, workflowRunning, belloOpen, shopsO
   privateSaveAttempted, lastPrivateSave, lastPrivateReadback, lastPrivateDiagnostic,
   retainedSaveOpen, imageAttempted, lastImageStatus, lastImageDiagnostic, retainedImageOpen,
   lastImageReadState, workflowAttempted, lastWorkflowStatus, lastWorkflowStage,
-  lastImagePreflight,
+  lastImagePreflight, lastWorkflowReadback,
   workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed }) {
   if (options.createTestObservationEnabled)
@@ -204,6 +205,11 @@ ${button("complete-image-private", "画像1枚を追加して非公開保存・�
   (options.manualObservation.remoteId === PINNED_B005757_REMOTE_ID &&
     (!pinnedB005757 || lastImagePreflight?.status !== "READY")))}
 ${lastWorkflowStatus && !workflowRunning ? `<p>${workflowAttempted ? "この商品の工程は試行済み、または結果不明です。再実行できません。" : "画像選択前の事前確認で停止しました。"} 結果: <strong>${html(lastWorkflowStatus)}</strong> / 段階: <code>${html(lastWorkflowStage || "PRECLAIM")}</code></p>` : ""}
+${pinnedB005757 && workflowAttempted && lastWorkflowStatus === "UNKNOWN" &&
+  lastWorkflowStage === "FILE_SELECTION_UNCERTAIN" ?
+  `<p>画像選択後の結果は不明です。別の読取画面で、この商品の現在の画像枚数と非公開状態だけを確認できます。</p>
+  ${button("verify-workflow-readonly", "今回の商品を読取だけで再確認", shopsOpen || manualOpen || retainedSaveOpen || retainedImageOpen || retainedWorkflowOpen)}
+  ${lastWorkflowReadback ? `<p>現在の読取: <code>${html(lastWorkflowReadback)}</code>。画像資産の同一性や保存要求の成功は証明しません。</p>` : ""}` : ""}
 ${workflowReadbackPrivateWithImage ? "<p>別タブで対象商品を再読込し、非公開と画像2枚を確認しました。保存要求の応答確認とは別の結果です。</p>" : ""}
 ${retainedWorkflowOpen ? `<p>結果が確定していないため専用Chromeを保持しています。再送せず画面と通信を確認してください。</p>${button("refresh-workflow-observation", "工程の通信概要を更新")}${button("inspect-workflow-image", "保持中画面の画像を読取")}` : ""}
 ${options.imageWorkflowEnabled && manualAttempted ? `<details><summary>対象Shops通信の概要（${lastManual.length}件）</summary><p><small>保存クリック後の要求候補です。本文・変数値・認証情報は記録しません。要求の一致だけでは保存成功と判定しません。</small></p><ol>${lastManual.map(item => `<li><code>${html(item.order)}. ${html(item.method)} ${html(item.host)}${html(item.path)}</code> / HTTP ${html(item.httpStatus ?? "未確認")} / 操作 ${html(item.operationName ?? "未確認")} / 操作種別 ${html(item.graphqlOperationType ?? "未確認")} / query SHA-256 ${html(item.querySha256 ?? "未確認")} / 変数項目 ${item.fields.map(field => html(`${field.field}:${field.type}`)).join(", ") || "未確認"} / 要求商品ID ${html(item.requestProductMatch ?? "未確認")} / 要求非公開 ${html(item.requestPrivateState ?? "未確認")} / 応答 ${html(item.responseField ?? "未確認")} / 種別 ${html(item.responseKind ?? "未確認")} / 応答商品ID ${html(item.productMatch ?? "未確認")} / 店舗ID ${html(item.shopMatch ?? "未確認")} / 状態 ${html(item.state ?? "未確認")} / GraphQLエラー ${html(item.graphqlErrors ?? "未確認")}</li>`).join("")}</ol></details>` : ""}
@@ -243,6 +249,7 @@ export async function startDesktopApp(config, {
   inspectImage = readRetainedImageState,
   runWorkflow = runPrivateImageWorkflowOnce,
   runImagePreflight = inspectPrivateImagePreflight,
+  runWorkflowReadback = verifyPrivateImageWorkflowReadOnly,
   runSavedProductReadback = verifyExistingSavedProductReadOnly,
   runDirectReadProbe = runPinnedDirectReadProbeOnce,
   reportDirectRead = reportPinnedDirectReadProofOnce,
@@ -323,6 +330,7 @@ export async function startDesktopApp(config, {
   let lastWorkflowStatus = savedWorkflowResult?.status ?? "";
   let lastWorkflowStage = savedWorkflowResult?.stage ?? "";
   let lastImagePreflight = null;
+  let lastWorkflowReadback = "";
   let workflowReadbackPrivateWithImage = savedWorkflowResult?.readbackPrivateWithImage === true;
   let finishingCreate = null;
   const finishCreate = (stopped = false, selectedSession = createSession) => {
@@ -362,7 +370,8 @@ export async function startDesktopApp(config, {
         retainedSaveOpen: Boolean(retainedSaveSession), imageAttempted, lastImageStatus,
         lastImageDiagnostic, retainedImageOpen: Boolean(retainedImageSession),
         lastImageReadState, workflowAttempted: workflowUsed, lastWorkflowStatus,
-        lastWorkflowStage, lastImagePreflight, workflowReadbackPrivateWithImage,
+        lastWorkflowStage, lastImagePreflight, lastWorkflowReadback,
+        workflowReadbackPrivateWithImage,
         savedProductReadback,
         retainedWorkflowOpen: Boolean(retainedWorkflowSession),
         createClaim, createPreflight, createResult, createOpen: Boolean(createSession),
@@ -750,6 +759,22 @@ export async function startDesktopApp(config, {
             "IMAGE_COUNT_UNVERIFIED"].includes(readState) ? readState : "IMAGES_UNVERIFIED";
         } catch { lastImageReadState = "IMAGES_UNVERIFIED"; }
         message = "保持中の商品画面を読み取りました。未確認の保存は再送しません。";
+      } else if (action === "verify-workflow-readonly") {
+        if (!options.imageWorkflowEnabled || !options.imageProof ||
+            !isPinnedB005757ImageTarget(options.manualObservation, options.requestId) ||
+            !workflowUsed || lastWorkflowStatus !== "UNKNOWN" ||
+            lastWorkflowStage !== "FILE_SELECTION_UNCERTAIN" ||
+            shopsContext || manualSession || retainedSaveSession || retainedImageSession ||
+            retainedWorkflowSession)
+          throw Error("Private-image read-only recovery is unavailable");
+        const result = await runWorkflowReadback({ root: options.root,
+          profileDir: options.shopsProfileDir,
+          playwrightModulePath: options.playwrightModulePath,
+          requestId: options.requestId, target: options.manualObservation });
+        lastWorkflowReadback = ["PRIVATE_ONE_IMAGE_OBSERVED",
+          "PRIVATE_TWO_IMAGES_UNATTRIBUTED", "AUTH_REQUIRED", "UNVERIFIED",
+          "NO_ELIGIBLE_ATTEMPT"].includes(result?.status) ? result.status : "UNVERIFIED";
+        message = "現在の非公開状態と画像枚数を読取だけで確認しました。画像選択と保存は行っていません。";
       } else if (action === "observe-stop") {
         if (!manualSession) throw Error("No manual observation is active");
         const session = manualSession;
