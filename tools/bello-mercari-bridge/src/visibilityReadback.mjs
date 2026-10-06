@@ -58,6 +58,6 @@ export async function readExactVisibilityFromList(page, { shopId, remoteId,
     await cell.click({ timeout: 12000 });
     await page.waitForURL(expectedEditUrl, { timeout: 12000 });
     if (page.url() !== expectedEditUrl) return unobserved("PRODUCT_ID_CHANGED");
-    return { kind: "OBSERVED", remoteId, visibility };
+    return { kind: "OBSERVED", shopId, remoteId, title, visibility };
   } catch { return unobserved("VISIBILITY_READ_FAILED"); }
 }
