@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { buildPrivateCreatePreparation, PRIVATE_CREATE_SHOP_ID } from
   "../src/privateCreatePreparation.mjs";
-import { exactB005413PrivateCreateJob, exactNewDraftId,
+import { B005413_CATEGORY_PATH, exactB005413PrivateCreateJob, exactNewDraftId,
   exactPrivateCreateResponse, runB005413PrivateCreateUiOnce } from
   "../src/privateCreateB005413UiOnce.mjs";
 
@@ -15,7 +15,12 @@ const snapshot = JSON.parse(await readFile(fileURLToPath(
 const prepared = buildPrivateCreatePreparation(snapshot);
 const createUrl = `https://mercari-shops.com/seller/shops/${PRIVATE_CREATE_SHOP_ID}/products/create`;
 const protectedIds = ["2JToDtSgGowzUwnwe9hgHU", "2JWp7EJx6aqKfn6dTXc5Q9",
-  "2JXmhh6wZFnKBnhwk8zV9c"];
+  "2JXmhh6wZFnKBnhwk8zV9c", "2JXpBXSRGQW6ENrW57cri2"];
+
+test("B005413 uses the chair category confirmed in the seller UI", () => {
+  assert.deepEqual([...B005413_CATEGORY_PATH],
+    ["家具・インテリア", "椅子・チェア", "椅子"]);
+});
 
 test("only the pinned B005413 job can enter its private-create executor", () => {
   assert.ok(exactB005413PrivateCreateJob(prepared));

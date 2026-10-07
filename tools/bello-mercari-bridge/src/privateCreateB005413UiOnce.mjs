@@ -13,8 +13,9 @@ const INVENTORY = "5b0f3587-cbbb-4c09-ae78-595b2b3e353f";
 const SIMILAR_PUBLIC_ID = "2JToDtSgGowzUwnwe9hgHU";
 const OTHER_PROTECTED_PUBLIC_ID = "2JWp7EJx6aqKfn6dTXc5Q9";
 const OLD_UNATTRIBUTED_DRAFT = "2JXmhh6wZFnKBnhwk8zV9c";
+const CATEGORY_CHECK_DRAFT = "2JXpBXSRGQW6ENrW57cri2";
 const PROTECTED_IDS = new Set([SIMILAR_PUBLIC_ID,
-  OTHER_PROTECTED_PUBLIC_ID, OLD_UNATTRIBUTED_DRAFT]);
+  OTHER_PROTECTED_PUBLIC_ID, OLD_UNATTRIBUTED_DRAFT, CATEGORY_CHECK_DRAFT]);
 const CODE = "TEST_B005413_B63EF3F86211FFE0F890D81E";
 const IMAGE_SHA256 = "231abb372276c8fbafacc1acadf1c3e2542c9d3842eee004e5481d614eb2fe40";
 const PREPARED_FINGERPRINT = "4ad9da7231607cda57b6c55dfac61677ae21abc56dfceb3df90d8408c7d7dc7e";
@@ -27,6 +28,9 @@ const FIXED_SHIPPING = Object.freeze({
   "shippingFromState.id": "jp11",
   "shippingDurationType.id": "DURATION_TYPE_FOUR_TO_SEVEN_DAYS",
 });
+export const B005413_CATEGORY_PATH = Object.freeze([
+  "家具・インテリア", "椅子・チェア", "椅子",
+]);
 
 const digest = value => createHash("sha256").update(value).digest("hex");
 
@@ -187,13 +191,14 @@ async function fillOnce(page, snapshot, imageBytes, image, seenDrafts) {
   const categories = await unique(page.getByTestId("categories"));
   await categories.click({ timeout: 12000 });
   checkpoint();
-  for (const label of ["家具・インテリア", "ソファ・ソファベッド", "1人掛けソファ"]) {
+  for (const label of B005413_CATEGORY_PATH) {
     const modal = page.getByRole("dialog");
     if (await modal.count() !== 1) throw Error("Category dialog changed");
     await (await unique(modal.getByText(label, { exact: true }))).click({ timeout: 12000 });
     checkpoint();
   }
-  if (!(await categories.innerText()).includes("1人掛けソファ"))
+  if (!(await categories.innerText()).includes("椅子・チェア") ||
+      !(await categories.innerText()).includes("椅子"))
     throw Error("Exact leaf category was not selected");
   const input = page.locator('input[type="file"][multiple]');
   const preview = page.locator('img[alt="uploaded-image"]');
@@ -244,9 +249,7 @@ async function verifyReadback(context, remoteId, snapshot, selectedAsset) {
         !exactFormFieldReadback("price", data.price, String(snapshot.testPriceYen)) ||
         data.quantity !== "1" || data.sku !== CODE ||
         !data.condition?.includes("目立った傷や汚れなし") ||
-        !data.category?.includes("家具・インテリア") ||
-        !data.category?.includes("ソファ・ソファベッド") ||
-        !data.category?.includes("1人掛けソファ") ||
+        B005413_CATEGORY_PATH.some(label => !data.category?.includes(label)) ||
         Object.entries(FIXED_SHIPPING).some(([name, value]) =>
           data.shipping[name] !== value)) return false;
     const images = await readExistingUploadedImages(page, url);
