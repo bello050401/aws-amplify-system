@@ -25,7 +25,7 @@ function response(req, data = { draftProducts: [{ id: secret,
     body: async () => Buffer.from(JSON.stringify({ data, errors: [] })) };
 }
 
-test("captures query name and response structure without request or response values", async () => {
+test("captures fixed query class and response structure without request or response values", async () => {
   const context = new EventEmitter();
   const page = { url: () => listUrl };
   const observer = observeDraftReadMetadata(context, { page, shopId });
@@ -37,7 +37,8 @@ test("captures query name and response structure without request or response val
   assert.equal(result.allowFinalCreate, false);
   assert.equal(result.observations.length, 1);
   assert.equal(result.observations[0].pageKind, "DRAFT_LIST");
-  assert.equal(result.observations[0].operationName, "DraftProductsPage");
+  assert.equal(result.observations[0].operationClass, "NAMED_QUERY");
+  assert.equal(JSON.stringify(result).includes("DraftProductsPage"), false);
   assert.equal(result.observations[0].responseShape.typeCounts.array, 1);
   assert.equal(JSON.stringify(result).includes(secret), false);
   assert.equal(JSON.stringify(result).includes("private-draft-id"), false);
@@ -64,7 +65,7 @@ test("captures exact draft detail query and ignores mutations or another page", 
     skuCode: secret } }));
   const result = await observer.stop();
   assert.deepEqual(result.observations.map(item =>
-    [item.pageKind, item.operationName]), [["DRAFT_DETAIL", "EditProductPage"]]);
+    [item.pageKind, item.operationClass]), [["DRAFT_DETAIL", "NAMED_QUERY"]]);
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
@@ -79,7 +80,7 @@ test("unverified response shape remains advisory", async () => {
     body: async () => { throw Error("Response body must not be read"); } });
   const result = await observer.stop();
   assert.deepEqual(result.observations[0], { pageKind: "DRAFT_LIST",
-    operationName: "DraftProductsPage", httpStatus: 503,
+    operationClass: "NAMED_QUERY", httpStatus: 503,
     responseShape: null, hasErrors: null });
   assert.equal(result.allowFinalCreate, false);
 });
@@ -99,5 +100,20 @@ test("response alias or dynamic map keys cannot expose an ID", async () => {
   for (const hidden of ["PrivateDraftIdABC123", "TokenValueABC123",
     "dynamicSkuB005007", secret]) assert.equal(serialized.includes(hidden), false);
   assert.equal(result.observations[0].responseShape.fieldCount, 2);
+  assert.equal(result.allowFinalCreate, false);
+});
+
+test("alphabetic ID embedded in a query operation name is not returned", async () => {
+  const context = new EventEmitter();
+  const page = { url: () => listUrl };
+  const observer = observeDraftReadMetadata(context, { page, shopId });
+  const sensitiveOperation = "DraftAbcdefghijklmnopPage";
+  const req = request(page, sensitiveOperation);
+  context.emit("request", req);
+  context.emit("response", response(req));
+  const result = await observer.stop();
+  assert.equal(result.observations.length, 1);
+  assert.equal(result.observations[0].operationClass, "NAMED_QUERY");
+  assert.equal(JSON.stringify(result).includes(sensitiveOperation), false);
   assert.equal(result.allowFinalCreate, false);
 });

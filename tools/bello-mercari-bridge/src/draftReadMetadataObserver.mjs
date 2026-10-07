@@ -38,7 +38,7 @@ function queryOperation(request) {
   const prefix = new RegExp(`^\\s*query\\s+${body.operationName}\\b`);
   if (!prefix.test(source) || /\b(?:mutation|subscription)\b/i.test(source) ||
       (source.match(/\bquery\b/g) ?? []).length !== 1) return null;
-  return body.operationName;
+  return true;
 }
 
 function valueShape(value, depth = 0) {
@@ -88,8 +88,7 @@ export function observeDraftReadMetadata(context, { page, shopId,
     if (requestPage !== page) return;
     const kind = pageKind(page.url(), shopId);
     if (!kind) return;
-    const operationName = queryOperation(request);
-    if (operationName) requests.set(request, { kind, operationName });
+    if (queryOperation(request)) requests.set(request, { kind });
   };
   const onResponse = response => {
     if (detached) return;
@@ -118,7 +117,7 @@ export function observeDraftReadMetadata(context, { page, shopId,
         }
       }
       observations.push({ pageKind: metadata.kind,
-        operationName: metadata.operationName, httpStatus: status,
+        operationClass: "NAMED_QUERY", httpStatus: status,
         responseShape, hasErrors });
     });
   };
