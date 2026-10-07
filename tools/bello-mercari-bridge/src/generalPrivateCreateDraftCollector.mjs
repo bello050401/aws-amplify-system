@@ -56,7 +56,8 @@ async function readListDom(page) {
       const cells = [...row.querySelectorAll(":scope > td")];
       return { title: text(cells[1]), signature: JSON.stringify(cells.map(text)),
         cellCount: cells.length,
-        interactiveCount: row.querySelectorAll(ACTIONABLE).length +
+        interactiveCount: Number(row.matches(ACTIONABLE)) +
+          row.querySelectorAll(ACTIONABLE).length +
           cells.filter(cell => cell.matches(ACTIONABLE)).length };
     }) : [];
     return { documentUrl: document.location.href,

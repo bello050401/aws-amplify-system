@@ -111,10 +111,13 @@ test("old eight-column draft shape cannot open any detail row", async () => {
 test("observed ten-column DOM reads title from the second cell and rejects actions", async () => {
   const originalDocument = globalThis.document;
   try {
-    for (const [wrongHeader, actionableCell, expected] of [
-      [false, false, "DRAFT_DETAILS_DOM_OBSERVED"],
-      [true, false, "DRAFT_LIST_UNVERIFIED"],
-      [false, true, "DRAFT_LIST_UNVERIFIED"],
+    for (const [wrongHeader, actionableCell, rowAction, expected] of [
+      [false, false, null, "DRAFT_DETAILS_DOM_OBSERVED"],
+      [true, false, null, "DRAFT_LIST_UNVERIFIED"],
+      [false, true, null, "DRAFT_LIST_UNVERIFIED"],
+      [false, false, "button", "DRAFT_LIST_UNVERIFIED"],
+      [false, false, "menuitem", "DRAFT_LIST_UNVERIFIED"],
+      [false, false, "contenteditable", "DRAFT_LIST_UNVERIFIED"],
     ]) {
       let url = listUrl;
       let clicks = 0;
@@ -128,8 +131,14 @@ test("observed ten-column DOM reads title from the second cell and rejects actio
           matches: () => actionableCell && index === 1,
           querySelectorAll: () => [],
         }));
-        return { querySelectorAll: selector =>
-          selector === ":scope > td" ? cells : [] };
+        return {
+          matches: selector => rowAction === "button" &&
+            selector.includes('[role="button"]') ||
+            rowAction === "menuitem" && selector.includes('[role="menuitem"]') ||
+            rowAction === "contenteditable" &&
+              selector.includes('[contenteditable="true"]'),
+          querySelectorAll: selector => selector === ":scope > td" ? cells : [],
+        };
       });
       const table = { querySelectorAll: selector =>
         selector === "thead th" ? headers : selector === "tbody tr" ? rows : [] };
