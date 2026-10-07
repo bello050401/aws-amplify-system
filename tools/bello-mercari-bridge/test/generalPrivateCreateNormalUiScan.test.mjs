@@ -13,7 +13,7 @@ function snapshot(titles, { nextDisabled, prevDisabled,
   statusChipExact = true, visibilityChipExact = true } = {}) {
   return { url: saleUrl, documentUrl: saleUrl, loading: false,
     statusChipExact, visibilityChipExact, tableMatches: 1, tableIndex: 0,
-    headerCount: 10, titleColumn: 1, nextCount: 1, prevCount: 1,
+    headerCount: 10, titleColumn: 0, nextCount: 1, prevCount: 1,
     nextDisabled, prevDisabled,
     rows: titles.map(value => ({ title: value,
       signature: JSON.stringify(["image", value, "1"]),
@@ -54,9 +54,11 @@ function domButton(testId, role = null, ariaLabel = null) {
 
 function domTable(title, { dataButton = false, unknownMenu = false,
   mismatchedSuffix = false, dataCellRoleButton = false,
-  menuCellContentEditable = false } = {}) {
-  const headers = Array.from({ length: 10 }, (_, i) =>
-    ({ textContent: i === 1 ? "商品名" : `column-${i}` }));
+  menuCellContentEditable = false, wrongHeader = false } = {}) {
+  const headerTexts = ["商品名", "", "公開設定", "価格", "在庫", "いいね!",
+    "閲覧", "作成日時", "更新日時", ""];
+  if (wrongHeader) headerTexts[2] = "unexpected heading";
+  const headers = headerTexts.map(textContent => ({ textContent }));
   const suffix = "hiddenRemoteId";
   const menuButtons = [
     domButton(`product-menu-button-${suffix}`, null, "メニュー"),
@@ -261,7 +263,7 @@ test("only the exact on-sale status and visibility chips permit list reading", a
   } finally { globalThis.document = originalDocument; }
 });
 
-test("only the three known final-cell buttons are allowed; title is td[1]", async () => {
+test("observed header th[0] maps to title td[1] with only known menu buttons", async () => {
   const originalDocument = globalThis.document;
   try {
     for (const [options, expected] of [
@@ -271,6 +273,7 @@ test("only the three known final-cell buttons are allowed; title is td[1]", asyn
       [{ mismatchedSuffix: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
       [{ dataCellRoleButton: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
       [{ menuCellContentEditable: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
+      [{ wrongHeader: true }, "SALE_TABLE_UNVERIFIED"],
     ]) {
       globalThis.document = { location: { href: saleUrl },
         querySelector: () => null,
@@ -312,6 +315,7 @@ test("sale-list failures return only the expected fixed diagnostic", async () =>
     [{ ...base(), visibilityChipExact: false },
       "SALE_VISIBILITY_FILTER_UNVERIFIED"],
     [{ ...base(), tableMatches: 0 }, "SALE_TABLE_UNVERIFIED"],
+    [{ ...base(), titleColumn: 1 }, "SALE_TABLE_UNVERIFIED"],
     [{ ...base(), rows: Array.from({ length: 51 }, (_, i) =>
       ({ title: `private-title-${i}`, signature: "[]", cellCount: 10,
         dataActionCount: 0, menuControlsVerified: true })) },

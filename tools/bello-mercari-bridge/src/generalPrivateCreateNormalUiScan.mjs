@@ -26,8 +26,7 @@ function diagnoseSale(snapshot, url) {
   if (snapshot.loading !== false) return "SALE_LOADING";
   if (snapshot.tableMatches !== 1 ||
       !Number.isSafeInteger(snapshot.tableIndex) || snapshot.tableIndex < 0 ||
-      !Number.isSafeInteger(snapshot.headerCount) || snapshot.headerCount < 2 ||
-      snapshot.titleColumn !== 1)
+      snapshot.headerCount !== 10 || snapshot.titleColumn !== 0)
     return "SALE_TABLE_UNVERIFIED";
   if (!Array.isArray(snapshot.rows) || snapshot.rows.length > 50)
     return "SALE_ROW_COUNT_UNVERIFIED";
@@ -73,10 +72,13 @@ function browserAdapter(page) {
     saleSnapshot: async () => {
       const data = await page.locator("body").evaluate(() => {
         const text = node => (node?.textContent ?? "").replace(/\s+/g, " ").trim();
+        const observedHeaders = ["商品名", "", "公開設定", "価格", "在庫",
+          "いいね!", "閲覧", "作成日時", "更新日時", ""];
         const matches = [...document.querySelectorAll("table")].map((table, index) => {
           const headers = [...table.querySelectorAll("thead th")].map(text);
           return { table, index, headers };
-        }).filter(item => item.headers.filter(header => header === "商品名").length === 1);
+        }).filter(item => item.headers.length === observedHeaders.length &&
+          item.headers.every((header, index) => header === observedHeaders[index]));
         const selected = matches.length === 1 ? matches[0] : null;
         const ACTIONABLE =
           'a, button, input, select, textarea, [role="button"], [role="menuitem"], [contenteditable="true"]';
