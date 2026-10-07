@@ -192,6 +192,27 @@ test("existing product navigation reuses the separate profile but never claims r
       goto: async () => { currentUrl = "https://mercari-shops.com/signin/seller"; }, url: () => currentUrl,
     }], close: async () => {} }) });
   assert.equal(redirected.state, "AUTH_REQUIRED");
+  let closedAfterTimeout = false;
+  const timedOutSignIn = await openExistingProductReadSession({ ...input,
+    launchPersistentContext: async () => ({ pages: () => [{
+      goto: async () => {
+        currentUrl = "https://mercari-shops.com/signin/seller?token=private";
+        throw Error("navigation timed out with a private URL");
+      }, url: () => currentUrl,
+    }], close: async () => { closedAfterTimeout = true; } }) });
+  assert.equal(timedOutSignIn.state, "AUTH_REQUIRED");
+  assert.equal(JSON.stringify(timedOutSignIn).includes("private"), false);
+  await timedOutSignIn.context.close();
+  assert.equal(closedAfterTimeout, true);
+  let closedOtherTimeout = false;
+  await assert.rejects(openExistingProductReadSession({ ...input,
+    launchPersistentContext: async () => ({ pages: () => [{
+      goto: async () => {
+        currentUrl = "https://mercari-shops.com/seller/shops/shop-one/products/product-one/edit";
+        throw Error("navigation timed out");
+      }, url: () => currentUrl,
+    }], close: async () => { closedOtherTimeout = true; } }) }));
+  assert.equal(closedOtherTimeout, true);
   await assert.rejects(openExistingProductReadSession({ ...input, remoteId: "../other" }));
   await assert.rejects(openExistingProductReadSession({ ...input, shopId: "other-shop" }));
 }));
@@ -256,7 +277,7 @@ test("observed edit labels yield only partial field evidence, never privacy or u
         new FakeInput("商品名", "QA title"),
         new FakeInput("商品の説明 任意", "QA description"),
         new FakeInput("商品管理コード 任意", "SKU-1"),
-        new FakeInput("販売価格", "90,000"),
+        new FakeInput("販売価格", "¥90,000"),
         new FakeInput("数量", "0", "number"),
         new FakeInput("購入可能数", "0", "number"),
         new FakeInput("パスワード", "should-not-return", "password"),
@@ -277,6 +298,247 @@ test("observed edit labels yield only partial field evidence, never privacy or u
   assert.equal(result.comparison.visibility, "UNOBSERVED");
   assert.equal(closed, true);
   assert.ok(!JSON.stringify(await listReadResults(root, queued.jobId)).includes("should-not-return"));
+}));
+
+test("a late exact heading is awaited, while absent field values remain unobserved", async () => withRoot(async root => {
+  const queued = await job(root);
+  let url = "";
+  let headingReady = false;
+  let waitOptions;
+  let diagnostics;
+  const page = {
+    goto: async next => { url = next; }, url: () => url,
+    getByRole: role => ({
+      count: async () => role === "heading" ? Number(headingReady) : 1,
+      first: () => ({ waitFor: async options => { waitOptions = options; headingReady = true; } }),
+    }),
+    locator: () => ({ evaluateAll: async () => ({ documentUrl: url, rows: [] }) }),
+  };
+  const reader = createExistingProductReader({ root, profileDir: join(root, "late-profile"), shopId: account,
+    onReadDiagnostics: codes => { diagnostics = codes; },
+    launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+  const result = await runExistingRead(root, account, queued.jobId, reader);
+  assert.equal(result.status, "INCOMPLETE");
+  assert.deepEqual(waitOptions, { state: "visible", timeout: 12000 });
+  assert.deepEqual(diagnostics, ["TITLE_UNOBSERVED", "DESCRIPTION_UNOBSERVED",
+    "INVENTORY_CODE_UNOBSERVED", "PRICE_FIELD_NOT_EXTRACTED", "QUANTITY_FIELD_NOT_EXTRACTED",
+    "PRIVATE_TITLE_UNOBSERVED"]);
+  assert.equal(result.comparison.fields.title, "UNOBSERVED");
+  assert.equal(JSON.stringify(await listReadResults(root, queued.jobId)).includes("diagnostics"), false);
+}));
+
+test("price accepts observed yen signs and distinguishes extraction from unsupported format", async () => withRoot(async root => {
+  const queued = await job(root);
+  for (const sample of [
+    { rows: [{ label: "販売価格", value: "￥90,000" }], expected: "MATCH", diagnostic: null },
+    { rows: [{ label: "販売価格", value: "¥90,000円" }], expected: "UNOBSERVED",
+      diagnostic: "PRICE_FORMAT_UNSUPPORTED" },
+    { rows: [], expected: "UNOBSERVED", diagnostic: "PRICE_FIELD_NOT_EXTRACTED" },
+    { rows: [{ label: "販売価格", value: "¥90,000" }, { label: "販売価格", value: "¥90,000" }],
+      expected: "UNOBSERVED", diagnostic: "PRICE_FIELD_NOT_EXTRACTED" },
+  ]) {
+    let url = "";
+    let diagnostics;
+    const page = { goto: async next => { url = next; }, url: () => url,
+      getByRole: () => ({ count: async () => 1 }),
+      locator: () => ({ evaluateAll: async () => ({ documentUrl: url, rows: sample.rows }) }) };
+    const reader = createExistingProductReader({ root, profileDir: join(root, `price-${sample.expected}-${sample.rows.length}`),
+      shopId: account, onReadDiagnostics: codes => { diagnostics = codes; },
+      launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+    const result = await runExistingRead(root, account, queued.jobId, reader);
+    assert.equal(result.status, "INCOMPLETE");
+    assert.equal(result.comparison.fields.priceYen, sample.expected);
+    assert.equal(diagnostics.includes("PRICE_FORMAT_UNSUPPORTED"),
+      sample.diagnostic === "PRICE_FORMAT_UNSUPPORTED");
+    assert.equal(diagnostics.includes("PRICE_FIELD_NOT_EXTRACTED"),
+      sample.diagnostic === "PRICE_FIELD_NOT_EXTRACTED");
+    assert.equal(JSON.stringify(result).includes("90,000"), false);
+  }
+}));
+
+test("only one named variant quantity with its unique direct label is observed", async () => withRoot(async root => {
+  const queued = await job(root);
+  for (const sample of [
+    { value: "0", extraVariant: false, label: "数量", expected: "MATCH", diagnostic: null },
+    { value: "0", extraVariant: true, label: "数量", expected: "UNOBSERVED",
+      diagnostic: "QUANTITY_MULTIPLE_VARIANTS" },
+    { value: "0", extraVariant: false, label: "在庫", expected: "UNOBSERVED",
+      diagnostic: "QUANTITY_FIELD_NOT_EXTRACTED" },
+    { value: "0.5", extraVariant: false, label: "数量", expected: "UNOBSERVED",
+      diagnostic: "QUANTITY_FORMAT_UNSUPPORTED" },
+  ]) {
+    let url = "";
+    let diagnostics;
+    const page = { goto: async next => { url = next; }, url: () => url,
+      getByRole: () => ({ count: async () => 1 }),
+      locator: () => ({ evaluateAll: async callback => {
+        const priorInput = globalThis.HTMLInputElement;
+        const priorDocument = globalThis.document;
+        class FakeInput {
+          constructor(name, value, label) {
+            this.name = name; this.value = value; this.type = "number";
+            this.parentElement = { tagName: "DIV", querySelectorAll: selector =>
+              selector === "label" ? [{ textContent: label }] : [this],
+            parentElement: { querySelectorAll: selector =>
+              selector === "label" ? [{ textContent: label }] : [this] } };
+          }
+        }
+        globalThis.HTMLInputElement = FakeInput;
+        globalThis.document = { location: { href: url } };
+        const inputs = [new FakeInput("variants.0.quantity", sample.value, sample.label),
+          new FakeInput("variants.0.maxQuantityPerOrder", "999999", "1注文あたりの購入可能数任意")];
+        if (sample.extraVariant) inputs.push(new FakeInput("variants.1.quantity", "3", "数量"));
+        try { return callback(inputs); }
+        finally { globalThis.HTMLInputElement = priorInput; globalThis.document = priorDocument; }
+      } }) };
+    const reader = createExistingProductReader({ root,
+      profileDir: join(root, `quantity-${sample.label}-${sample.value}-${sample.extraVariant}`),
+      shopId: account, onReadDiagnostics: codes => { diagnostics = codes; },
+      launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+    const result = await runExistingRead(root, account, queued.jobId, reader);
+    assert.equal(result.status, "INCOMPLETE");
+    assert.equal(result.comparison.fields.quantity, sample.expected);
+    for (const code of ["QUANTITY_MULTIPLE_VARIANTS", "QUANTITY_FIELD_NOT_EXTRACTED",
+      "QUANTITY_FORMAT_UNSUPPORTED"])
+      assert.equal(diagnostics.includes(code), sample.diagnostic === code);
+    assert.equal(JSON.stringify(result).includes("999999"), false);
+  }
+}));
+
+test("private status requires one matching title row, its private cell, and exact-ID return", async () => withRoot(async root => {
+  const queued = await job(root);
+  const shopTitle = "Existing Shops title";
+  const exactUrl = `https://mercari-shops.com/seller/shops/${account}/products/existing-product/edit`;
+  const listUrl = `https://mercari-shops.com/seller/shops/${account}/products?tab=on_sale&visibility=unopened`;
+  for (const sample of [
+    { rows: 1, badge: 1, returnUrl: exactUrl, expected: "PRIVATE_OBSERVED", diagnostic: null },
+    { rows: 2, badge: 1, returnUrl: exactUrl, expected: "UNOBSERVED",
+      diagnostic: "PRIVATE_ROW_MULTIPLE" },
+    { rows: 1, badge: 0, returnUrl: exactUrl, expected: "UNOBSERVED",
+      diagnostic: "PRIVATE_STATUS_CELL_TEXT" },
+    { rows: 1, badge: 1, returnUrl: `https://mercari-shops.com/seller/shops/${account}/products/other/edit`,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_RETURN_ID_UNVERIFIED" },
+    { rows: 1, badge: 1, returnUrl: exactUrl, listRedirect: true,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_LIST_URL_UNVERIFIED" },
+    { rows: 1, badge: 0, shopTitle: "非公開", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_STATUS_CELL_TEXT" },
+    { rows: 1, badge: 1, headerStatus: "公開", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_HEADER_NAME_UNVERIFIED" },
+    { rows: 1, badge: 1, headerTitlePair: "別列", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_HEADER_TITLE_PAIR" },
+    { rows: 1, badge: 1, cellCount: 9, returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_ROW_CELL_COUNT" },
+    { rows: 1, badge: 1, imageAlt: "wrong product", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_IMAGE_ALT_UNVERIFIED" },
+    { rows: 1, badge: 1, imageCount: 2, returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_IMAGE_CELL_SHAPE" },
+    { rows: 1, badge: 1, titleParagraphCount: 2, returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_TITLE_TEXT_CELL_SHAPE" },
+    { rows: 1, badge: 1, titleCellText: "other text", returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_TITLE_CELL_TEXT" },
+    { rows: 1, badge: 1, paragraphCount: 2, returnUrl: exactUrl,
+      expected: "UNOBSERVED", diagnostic: "PRIVATE_STATUS_PARAGRAPH_COUNT" },
+  ]) {
+    let url = "";
+    let clicks = 0;
+    let diagnostics;
+    const title = sample.shopTitle ?? shopTitle;
+    class FakeTable {}
+    class FakeRow {}
+    const headers = Array.from({ length: 10 }, (_, index) => ({ tagName: "TH", colSpan: 1, rowSpan: 1,
+      textContent: index === 0 ? "商品名" : index === 1 ? sample.headerTitlePair ?? "" :
+        index === 2 ? sample.headerStatus ?? "公開設定" : "" }));
+    const head = { rows: [{ cells: headers }] };
+    head.rows[0].parentElement = head;
+    const tableElement = new FakeTable();
+    tableElement.tHead = head;
+    const cells = Array.from({ length: sample.cellCount ?? 10 }, (_, index) => ({ tagName: "TD", colSpan: 1, rowSpan: 1,
+      textContent: index === 0 ? "" : index === 1 ? sample.titleCellText ?? title :
+        index === 2 ? sample.badge ? "非公開" : "公開" : "",
+      querySelectorAll: selector => selector === "img" && index === 0 ?
+        Array.from({ length: sample.imageCount ?? 1 }, () =>
+          ({ getAttribute: name => name === "alt" ? sample.imageAlt ?? title : null })) :
+        selector === "p" && index === 1 ?
+        Array.from({ length: sample.titleParagraphCount ?? 1 }, (_, paragraphIndex) =>
+          ({ textContent: paragraphIndex === 0 ? sample.titleCellText ?? title : "" })) :
+        selector === "p" && index === 2 ?
+        Array.from({ length: sample.paragraphCount ?? 1 }, (_, paragraphIndex) =>
+          ({ textContent: paragraphIndex === 0 ? sample.badge ? "非公開" : "公開" : "" })) : [] }));
+    const rowElement = new FakeRow();
+    rowElement.parentElement = { tagName: "TBODY" };
+    rowElement.cells = cells;
+    const titleCell = { count: async () => 1, click: async () => { clicks++; url = sample.returnUrl; } };
+    const row = { count: async () => sample.rows, first: () => ({ waitFor: async () => {} }),
+      evaluate: async (callback, contract) => callback(rowElement, contract),
+      locator: selector => { assert.equal(selector, ":scope > td"); return { nth: index => {
+        assert.equal(index, 1); return titleCell;
+      } }; } };
+    const table = { count: async () => 1, evaluate: async callback => callback(tableElement), getByRole: role => {
+      assert.equal(role, "row");
+      return { filter: ({ has }) => { assert.equal(has.name, title); return row; } };
+    } };
+    const page = { goto: async next => {
+      url = sample.listRedirect && next === listUrl ? "https://mercari-shops.com/signin/seller" : next;
+    }, url: () => url,
+      waitForURL: async expected => { if (url !== expected) throw Error("wrong target ID"); },
+      getByRole: (role, options) => role === "table" ? table : role === "cell" ?
+        { name: options.name } : { count: async () => 1 },
+      locator: () => ({ evaluateAll: async () => ({ documentUrl: url, quantityContract: "NOT_EXTRACTED",
+        rows: [{ label: "商品名", value: title }, { label: "商品の説明", value: "saved description" },
+          { label: "商品管理コード", value: "SKU-1" }, { label: "販売価格", value: "¥90,000" }] }) }) };
+    const priorTable = globalThis.HTMLTableElement;
+    const priorRow = globalThis.HTMLTableRowElement;
+    globalThis.HTMLTableElement = FakeTable;
+    globalThis.HTMLTableRowElement = FakeRow;
+    const reader = createExistingProductReader({ root,
+      profileDir: join(root, `private-${sample.rows}-${sample.badge}-${sample.expected}-${clicks}`),
+      shopId: account, onReadDiagnostics: codes => { diagnostics = codes; },
+      launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+    let result;
+    try { result = await runExistingRead(root, account, queued.jobId, reader); }
+    finally { globalThis.HTMLTableElement = priorTable; globalThis.HTMLTableRowElement = priorRow; }
+    assert.equal(result.status, "DIFFERENT");
+    assert.equal(result.comparison.visibility, sample.expected);
+    assert.equal(result.comparison.fields.title, "DIFFERENT");
+    assert.equal(url, clicks ? sample.returnUrl :
+      sample.listRedirect ? "https://mercari-shops.com/signin/seller" : listUrl);
+    assert.equal(clicks, sample.expected === "PRIVATE_OBSERVED" ||
+      sample.diagnostic === "PRIVATE_RETURN_ID_UNVERIFIED" ? 1 : 0,
+    JSON.stringify({ sample, diagnostics }));
+    assert.equal(diagnostics.includes(sample.diagnostic), Boolean(sample.diagnostic));
+    assert.equal(JSON.stringify(result).includes(title), false);
+  }
+}));
+
+test("a missing exact heading and a changed URL fail closed with fixed local diagnostics", async () => withRoot(async root => {
+  const queued = await job(root);
+  for (const mode of ["heading-timeout", "button-timeout", "url-changed", "signin-during-wait"]) {
+    let url = "";
+    let diagnostics;
+    const page = {
+      goto: async next => { url = next; }, url: () => url,
+      getByRole: role => ({ count: async () =>
+        (((mode === "heading-timeout" || mode === "signin-during-wait") && role === "heading") ||
+        (mode === "button-timeout" && role === "button")) ? 0 : 1,
+        first: () => ({ waitFor: async () => { const error = Error("private DOM text");
+          if (mode === "signin-during-wait") url = "https://mercari-shops.com/signin/seller";
+          error.name = "TimeoutError"; throw error; } }) }),
+      locator: () => ({ evaluateAll: async () => {
+        const documentUrl = url;
+        url = "https://mercari-shops.com/seller/shops/other/products/other/edit";
+        return { documentUrl, rows: [] };
+      } }),
+    };
+    const reader = createExistingProductReader({ root, profileDir: join(root, `${mode}-profile`), shopId: account,
+      onReadDiagnostics: codes => { diagnostics = codes; },
+      launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) });
+    const result = await runExistingRead(root, account, queued.jobId, reader);
+    assert.equal(result.status, mode === "signin-during-wait" ? "AUTH_REQUIRED" : "UNKNOWN");
+    assert.deepEqual(diagnostics, mode === "signin-during-wait" ? undefined :
+      [mode === "heading-timeout" ? "HEADING_TIMEOUT" :
+        mode === "button-timeout" ? "NEXT_BUTTON_TIMEOUT" : "PAGE_URL_UNVERIFIED"]);
+    assert.equal(JSON.stringify(result).includes("private DOM text"), false);
+  }
 }));
 
 test("a redirect during field extraction discards target evidence", async () => withRoot(async root => {

@@ -9,6 +9,7 @@
 
 $ErrorActionPreference = 'Stop'
 $sourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $sourceDir 'InstallerProcessGuard.ps1')
 $dataDir = Join-Path $env:LOCALAPPDATA 'BELLO\MercariBridge'
 $appDir = Join-Path $dataDir 'App'
 $configPath = Join-Path $dataDir 'config.json'
@@ -35,6 +36,16 @@ if (Test-Path -LiteralPath $configPath) {
   }
 }
 
+$runningProcesses = Get-CimInstance Win32_Process -Filter "Name = 'node.exe' OR Name = 'nodew.exe' OR Name = 'chrome.exe' OR Name = 'msedge.exe'"
+foreach ($runningProcess in $runningProcesses) {
+  if ([string]::IsNullOrWhiteSpace($runningProcess.CommandLine)) {
+    throw '稼働中のブラウザまたはNode.jsを確認できません。PCアプリを停止した後に再実行してください。'
+  }
+  if (Test-BelloMercariInstallBlocker -Name $runningProcess.Name -CommandLine $runningProcess.CommandLine -DataDir $dataDir) {
+    throw 'BELLOのPCアプリまたは専用ブラウザが稼働中です。現在の作業を終えて通常終了した後に更新してください。'
+  }
+}
+
 New-Item -ItemType Directory -Path $dataDir, $appDir -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $appDir 'src') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $sourceDir 'package.json') -Destination $appDir -Force
@@ -45,13 +56,16 @@ $cmdText = $cmdText -replace "`r?`n", "`r`n"
 Get-ChildItem -LiteralPath (Join-Path $sourceDir 'src') -File | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $appDir 'src') -Force
 }
-if (-not (Test-Path -LiteralPath $configPath)) {
-  $configuration = @{ origin = $BelloOrigin; requestId = $RequestId; dataDir = $dataDir } | ConvertTo-Json -Compress
-  [IO.File]::WriteAllText($configPath, $configuration, [Text.UTF8Encoding]::new($false))
-}
-
 & npm ci --ignore-scripts --no-audit --no-fund --prefix $appDir
 if ($LASTEXITCODE -ne 0) { throw 'PCアプリの準備に失敗しました。' }
+
+if (-not $existing) {
+  $existing = [pscustomobject]@{ origin = $BelloOrigin; requestId = $RequestId; dataDir = $dataDir }
+}
+$existing | Add-Member -NotePropertyName controlPort -NotePropertyValue 56210 -Force
+$configTemporaryPath = "$configPath.tmp"
+[IO.File]::WriteAllText($configTemporaryPath, ($existing | ConvertTo-Json -Compress -Depth 30), [Text.UTF8Encoding]::new($false))
+Move-Item -LiteralPath $configTemporaryPath -Destination $configPath -Force
 
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
@@ -59,7 +73,19 @@ $shortcut.TargetPath = $nodePath
 $shortcut.Arguments = ('"{0}" --config "{1}"' -f (Join-Path $appDir 'src\desktopApp.mjs'), $configPath)
 $shortcut.WorkingDirectory = $appDir
 $shortcut.WindowStyle = 1
-$shortcut.Description = 'BELLOの既存メルカリShops商品を読み取り専用で照合します'
+$shortcut.Description = 'BELLOの既存メルカリShops商品を照合し、限定の非公開保存を行います'
 $shortcut.Save()
+
+$protocolPath = 'HKCU:\Software\Classes\bello-mercari-bridge'
+$commandPath = Join-Path $protocolPath 'shell\open\command'
+New-Item -Path $protocolPath -Force | Out-Null
+New-Item -Path (Join-Path $protocolPath 'shell') -Force | Out-Null
+New-Item -Path (Join-Path $protocolPath 'shell\open') -Force | Out-Null
+New-Item -Path $commandPath -Force | Out-Null
+Set-Item -Path $protocolPath -Value 'URL:BELLO メルカリ照合'
+New-ItemProperty -Path $protocolPath -Name 'URL Protocol' -Value '' -PropertyType String -Force | Out-Null
+$launcherPath = Join-Path $appDir 'src\desktopLauncher.mjs'
+$protocolCommand = ('"{0}" "{1}" "%1"' -f $nodePath, $launcherPath)
+Set-Item -Path $commandPath -Value $protocolCommand
 
 Write-Output "READY: $shortcutPath"

@@ -4,6 +4,11 @@ import { isAbsolute } from "node:path";
 import { join } from "node:path";
 import { bindAccount } from "./queue.mjs";
 import { observeShopsTraffic } from "./trafficObservation.mjs";
+import { observeShopsReadQueries } from "./readQueryObservation.mjs";
+import { observeExactReadForDirectProbe } from "./directReadProbeObserver.mjs";
+import { observeFutureCreateTraffic } from "./futureCreateTrafficObservation.mjs";
+import { claimFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
+import { PRIVATE_CREATE_SHOP_ID } from "./privateCreatePreparation.mjs";
 
 const SIGN_IN_URL = "https://mercari-shops.com/signin/seller";
 const PRODUCT_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -54,26 +59,144 @@ export async function openDedicatedLogin({ profileDir, playwrightModulePath, lau
   }
 }
 
+/** Read-only launch to the observed product list; the user controls the normal create form. */
+export async function openDedicatedProductListSession({ root, profileDir,
+  playwrightModulePath, shopId, launchPersistentContext = null }) {
+  if (typeof shopId !== "string" || !PRODUCT_ID.test(shopId) ||
+      !root || !isAbsolute(root))
+    throw Error("Invalid exact Shops list target");
+  await bindAccount(root, shopId);
+  const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
+  const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+    launchPersistentContext });
+  try {
+    const page = context.pages()[0] ?? await context.newPage();
+    await page.goto(listUrl);
+    const actual = new URL(page.url());
+    const state = actual.origin === "https://mercari-shops.com" &&
+      actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
+      actual.href === listUrl ? "LIST_OPEN" : "UNKNOWN";
+    return { context, page, state };
+  } catch (error) {
+    await context.close();
+    throw error;
+  }
+}
+
+/** Isolated read page for a claimed visibility transition. Never resumes an old form. */
+export async function openVisibilityTransitionSession({ root, profileDir,
+  playwrightModulePath, shopId, launchPersistentContext = null }) {
+  if (shopId !== PRIVATE_CREATE_SHOP_ID || !root || !isAbsolute(root))
+    throw Error("Invalid visibility transition account");
+  await bindAccount(root, shopId);
+  const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+    launchPersistentContext });
+  try {
+    if (context.pages().some(candidate => {
+      try {
+        const url = new URL(candidate.url());
+        return url.origin === "https://mercari-shops.com" &&
+          (url.pathname === `/seller/shops/${shopId}/products/create` ||
+            /^\/seller\/shops\/[^/]+\/products\/[^/]+\/edit$/.test(url.pathname));
+      } catch { return false; }
+    })) throw Error("Restored Shops form is unresolved");
+    return { context, page: await context.newPage() };
+  } catch {
+    await context.close().catch(() => {});
+    throw Error("VISIBILITY_BROWSER_UNAVAILABLE");
+  }
+}
+
+/** One future target only: claim before opening Chrome because the create UI may autosave. */
+export async function openFutureCreateTrafficObservationSession({ root, profileDir,
+  playwrightModulePath, inventoryId, launchPersistentContext = null }) {
+  const claim = await claimFutureCreateObservationOnce(root, inventoryId);
+  let context;
+  try {
+    context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+      launchPersistentContext });
+  } catch {
+    const error = Error("FUTURE_CREATE_BROWSER_UNAVAILABLE");
+    error.claim = claim;
+    throw error;
+  }
+  const closed = new Promise(resolve => context.once("close", resolve));
+  let observer = null;
+  try {
+    const existingProductForm = context.pages().some(candidate => {
+      try {
+        const url = new URL(candidate.url());
+        return url.origin === "https://mercari-shops.com" &&
+          (url.pathname === `/seller/shops/${PRIVATE_CREATE_SHOP_ID}/products/create` ||
+            /^\/seller\/shops\/[^/]+\/products\/[^/]+\/edit$/.test(url.pathname));
+      } catch { return false; }
+    });
+    if (existingProductForm) throw Error("Existing remote product form is unknown");
+    // Never navigate a restored tab that could carry a previous UNKNOWN draft or edit.
+    const page = await context.newPage();
+    await page.bringToFront?.();
+    observer = observeFutureCreateTraffic(context, { page,
+      shopId: PRIVATE_CREATE_SHOP_ID });
+    const listUrl = `https://mercari-shops.com/seller/shops/${PRIVATE_CREATE_SHOP_ID}/products?tab=on_sale&visibility=unopened`;
+    await page.goto(listUrl);
+    const actual = new URL(page.url());
+    const state = actual.origin === "https://mercari-shops.com" &&
+      actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
+      actual.href === listUrl ? "LIST_OPEN" : "UNKNOWN";
+    return { context, page, observer, claim, state, closed };
+  } catch {
+    await observer?.stop();
+    await context.close();
+    const error = Error("FUTURE_CREATE_BROWSER_UNAVAILABLE");
+    // The caller must record UNKNOWN for this specific consumed claim.
+    error.claim = claim;
+    throw error;
+  }
+}
+
 /** Opens only the observed exact-ID edit URL. Navigation alone never confirms identity or privacy. */
 export async function openExistingProductReadSession({ root, profileDir, playwrightModulePath,
-  shopId, remoteId, launchPersistentContext = null, observeTraffic = false }) {
+  shopId, remoteId, launchPersistentContext = null, observeTraffic = false,
+  probeQuerySha256 = null, probeWaitMs = 12000 }) {
   if (!PRODUCT_ID.test(shopId) || !PRODUCT_ID.test(remoteId)) throw Error("Invalid existing Shops identity");
   if (!root || !isAbsolute(root)) throw Error("An absolute single-account queue root is required");
   await bindAccount(root, shopId);
   const expectedUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/${remoteId}/edit`;
   const context = await launchDedicatedProfile({ profileDir, playwrightModulePath, launchPersistentContext });
   let traffic = null;
+  let readQueries = null;
+  let directReadProbe = null;
   try {
-    if (observeTraffic) traffic = observeShopsTraffic(context);
     const page = context.pages()[0] ?? await context.newPage();
-    await page.goto(expectedUrl);
+    if (observeTraffic) {
+      traffic = observeShopsTraffic(context);
+      readQueries = observeShopsReadQueries(context, { shopId, remoteId, page });
+    }
+    if (probeQuerySha256)
+      directReadProbe = observeExactReadForDirectProbe(context,
+        { shopId, remoteId, page, querySha256: probeQuerySha256, waitMs: probeWaitMs });
+    try { await page.goto(expectedUrl); }
+    catch (error) {
+      // A sign-in redirect can finish before its load event. Keep only the fixed auth state.
+      let signIn = false;
+      try {
+        const current = new URL(page.url());
+        signIn = current.origin === "https://mercari-shops.com" &&
+          current.pathname.startsWith("/signin/");
+      } catch { /* Preserve the original navigation failure. */ }
+      if (signIn) return { context, page, state: "AUTH_REQUIRED",
+        traffic, readQueries, directReadProbe };
+      throw error;
+    }
     const actual = new URL(page.url());
     const state = actual.origin === "https://mercari-shops.com" &&
       actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
       actual.href === expectedUrl ? "NAVIGATED_UNVERIFIED" : "UNKNOWN";
-    return { context, page, state, traffic };
+    return { context, page, state, traffic, readQueries, directReadProbe };
   } catch (error) {
     traffic?.stop();
+    await readQueries?.stop();
+    directReadProbe?.stop();
     await context.close();
     throw error;
   }

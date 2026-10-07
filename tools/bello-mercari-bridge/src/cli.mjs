@@ -1,10 +1,24 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { enqueueExistingRead, listReadResults } from "./queue.mjs";
 import { runExistingRead } from "./readWorker.mjs";
 import { openDedicatedLogin, openExistingProductReadSession } from "./session.mjs";
 import { createExistingProductReader } from "./existingProductReader.mjs";
 import { openBelloAdminContext } from "./belloSession.mjs";
 import { runBelloCloudReadOnce } from "./cloudConnector.mjs";
+import { exportSavedDirectReadProof } from "./exportDirectReadProof.mjs";
+import { CREATE_TEST_TARGET, claimCreateTestOnce, readCreateTestPreflight,
+  readCreateTestObservation, recordCreateTestUiAttemptUnverified,
+  recordCreateTestDraftAutosaveUiUnverified } from "./createTestAttempt.mjs";
+import { exportSavedCreateTestClaim,
+  exportSavedCreateTestUiResult } from "./exportCreateTestRecord.mjs";
+import { preparePrivateCreateOnce } from "./privateCreatePreparation.mjs";
+import { openFutureCreateTrafficObservationSession } from "./session.mjs";
+import { recordFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
+import { runPinnedPrivateCreateUiOnce } from "./privateCreateUiOnce.mjs";
+import { runB005413PrivateCreateUiOnce } from "./privateCreateB005413UiOnce.mjs";
+import { exactVisibilityPcJob, runVisibilityTransitionOnce } from
+  "./visibilityTransitionOnce.mjs";
 
 function argsOf(argv) {
   const [command, ...rest] = argv;
@@ -18,6 +32,149 @@ function argsOf(argv) {
 
 async function main() {
   const { command, flags } = argsOf(process.argv.slice(2));
+  if (command === "prepare-private-create-no-send") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root) ||
+        typeof flags.input !== "string" || !isAbsolute(flags.input))
+      throw Error("Absolute queue root and small BELLO preparation file required");
+    let input;
+    try {
+      if ((await stat(flags.input)).size > 65536)
+        throw Error("File too large");
+      input = JSON.parse(await readFile(flags.input, "utf8"));
+    } catch {
+      throw Error("BELLO_PREPARATION_FILE_INVALID");
+    }
+    const job = await preparePrivateCreateOnce(flags.root, input);
+    process.stdout.write(JSON.stringify({ requestId: job.requestId,
+      status: job.status, listingConfirmed: false }) + "\n");
+    return;
+  }
+  if (command === "observe-future-private-create-traffic") {
+    try {
+      if (![flags.root, flags.profile, flags.playwright].every(value =>
+        typeof value === "string" && isAbsolute(value)) ||
+          typeof flags.inventory !== "string")
+        throw Error("Invalid fixed observer arguments");
+      const session = await openFutureCreateTrafficObservationSession({
+        root: flags.root, profileDir: flags.profile,
+        playwrightModulePath: flags.playwright, inventoryId: flags.inventory });
+      if (session.state === "LIST_OPEN") {
+        process.stdout.write("専用Shops画面での操作を観測中です。終了時はブラウザを閉じてください。\n");
+        await session.closed;
+      } else await session.context.close();
+      const observation = await session.observer.stop();
+      await recordFutureCreateObservationOnce(flags.root, flags.inventory,
+        session.claim.attemptId, observation);
+      process.stdout.write("通信概要を結果未確認として一回だけ記録しました。出品完了ではありません。\n");
+    } catch { throw Error("FUTURE_CREATE_OBSERVATION_UNAVAILABLE"); }
+    return;
+  }
+  if (command === "run-b005659-private-create-ui-once") {
+    try {
+      if (flags["confirm-code"] !== "TEST_B005659_E51E4F6B7B86DD150546" ||
+          ![flags.root, flags.profile, flags.playwright, flags.image].every(value =>
+            typeof value === "string" && isAbsolute(value)))
+        throw Error("Invalid fixed inputs");
+      const result = await runPinnedPrivateCreateUiOnce({ root: flags.root,
+        profileDir: flags.profile, playwrightModulePath: flags.playwright,
+        imagePath: flags.image });
+      process.stdout.write(JSON.stringify({ status: result.status,
+        remoteId: result.remoteId, listingConfirmed: result.listingConfirmed }) + "\n");
+      if (result.retainedSession) await result.retainedSession.closed;
+    } catch { throw Error("B005659_PRIVATE_CREATE_UNAVAILABLE"); }
+    return;
+  }
+  if (command === "run-b005413-private-create-ui-once") {
+    try {
+      if (flags["confirm-code"] !== "TEST_B005413_B63EF3F86211FFE0F890D81E" ||
+          ![flags.root, flags.profile, flags.playwright, flags.image].every(value =>
+            typeof value === "string" && isAbsolute(value)))
+        throw Error("Invalid fixed inputs");
+      const result = await runB005413PrivateCreateUiOnce({ root: flags.root,
+        profileDir: flags.profile, playwrightModulePath: flags.playwright,
+        imagePath: flags.image });
+      process.stdout.write(JSON.stringify({ status: result.status,
+        remoteId: result.remoteId, listingConfirmed: result.listingConfirmed }) + "\n");
+      if (result.retainedSession) await result.retainedSession.closed;
+    } catch { throw Error("B005413_PRIVATE_CREATE_UNAVAILABLE"); }
+    return;
+  }
+  if (command === "run-visibility-transition-once") {
+    try {
+      if (![flags.root, flags.profile, flags.playwright, flags.job].every(value =>
+          typeof value === "string" && isAbsolute(value)) ||
+          !["STOP", "RELIST"].includes(flags["confirm-action"]) ||
+          typeof flags["confirm-id"] !== "string")
+        throw Error("Invalid fixed inputs");
+      if ((await stat(flags.job)).size < 1 || (await stat(flags.job)).size > 8192)
+        throw Error("Invalid job size");
+      const job = JSON.parse(await readFile(flags.job, "utf8"));
+      if (!exactVisibilityPcJob(job) ||
+          flags["confirm-action"] !== job.action ||
+          flags["confirm-id"] !== job.target.remoteId)
+        throw Error("Invalid exact job");
+      const result = await runVisibilityTransitionOnce({ root: flags.root,
+        profileDir: flags.profile, playwrightModulePath: flags.playwright,
+        action: job.action, target: job.target, listing: job.listing });
+      process.stdout.write(JSON.stringify({ status: result.status,
+        remoteId: result.remoteId ?? job.target.remoteId,
+        observedVisibility: result.observedVisibility ?? null }) + "\n");
+      if (result.retainedSession)
+        await new Promise(resolve => result.retainedSession.context.once("close", resolve));
+    } catch { throw Error("VISIBILITY_TRANSITION_UNAVAILABLE"); }
+    return;
+  }
+  if (command === "export-saved-direct-read-proof") {
+    await exportSavedDirectReadProof({ configPath: flags.config, outputPath: flags.out });
+    process.stdout.write("BELLOへ読み込む読取記録ファイルを書き出しました。Shopsへの通信は行っていません。\n");
+    return;
+  }
+  if (command === "preflight-private-create") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root))
+      throw Error("An absolute queue root is required");
+    const preflight = await readCreateTestPreflight(flags.root);
+    const observation = await readCreateTestObservation(flags.root);
+    process.stdout.write(JSON.stringify({ preflight, claim: observation.claim,
+      result: observation.result }) + "\n");
+    return;
+  }
+  if (command === "claim-private-create-once") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root))
+      throw Error("An absolute queue root is required");
+    if (flags["confirm-sku"] !== CREATE_TEST_TARGET.skuCode)
+      throw Error("Confirm the exact private test SKU before claiming");
+    const claim = await claimCreateTestOnce(flags.root);
+    process.stdout.write(JSON.stringify({ ...claim, operation: "CREATE_PRIVATE_TEST_ONCE",
+      inventoryCode: CREATE_TEST_TARGET.inventoryCode,
+      skuCode: CREATE_TEST_TARGET.skuCode, listingConfirmed: false }) + "\n");
+    return;
+  }
+  if (command === "record-private-create-ui-unverified") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root))
+      throw Error("An absolute queue root is required");
+    if (flags["confirm-click"] !== "yes")
+      throw Error("An explicit normal-UI save attempt confirmation is required");
+    const result = await recordCreateTestUiAttemptUnverified(flags.root, flags.attempt);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    return;
+  }
+  if (command === "record-private-create-draft-autosave-unverified") {
+    if (typeof flags.root !== "string" || !isAbsolute(flags.root))
+      throw Error("An absolute queue root is required");
+    if (flags["confirm-autosave"] !== "yes")
+      throw Error("An explicit draft-autosave UI observation is required");
+    const result = await recordCreateTestDraftAutosaveUiUnverified(flags.root, flags.attempt);
+    process.stdout.write(JSON.stringify(result) + "\n");
+    return;
+  }
+  if (command === "export-private-create-claim" ||
+      command === "export-private-create-ui-result") {
+    if (command === "export-private-create-claim")
+      await exportSavedCreateTestClaim(flags.root, flags.out);
+    else await exportSavedCreateTestUiResult(flags.root, flags.out);
+    process.stdout.write("BELLO用の固定コード記録を書き出しました。Shopsへの通信は行っていません。\n");
+    return;
+  }
   if (command === "open-bello-login") {
     const context = await openBelloAdminContext({ origin: flags["bello-origin"],
       profileDir: flags["bello-profile"], playwrightModulePath: flags.playwright,
@@ -74,7 +231,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: prepare-private-create-no-send, observe-future-private-create-traffic, run-b005659-private-create-ui-once, run-b005413-private-create-ui-once, run-visibility-transition-once, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {

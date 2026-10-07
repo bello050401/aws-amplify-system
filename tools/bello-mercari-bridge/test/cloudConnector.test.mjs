@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { openBelloAdminContext } from "../src/belloSession.mjs";
-import { BridgeBoundaryError, reportSavedReadResultOnce, runBelloCloudReadOnce } from "../src/cloudConnector.mjs";
+import { BridgeBoundaryError, reportPinnedDirectReadProofOnce,
+  reportSavedReadResultOnce, runBelloCloudReadOnce } from "../src/cloudConnector.mjs";
+import { PINNED_READ_QUERY_SHA256 } from "../src/directReadProbe.mjs";
 import { enqueueExistingRead, saveReadResult } from "../src/queue.mjs";
+import { latestReadTrafficEvidence, saveReadTrafficEvidence } from "../src/trafficEvidence.mjs";
 
 const origin = "https://bello.example.test";
 const requestId = "a".repeat(64);
@@ -60,8 +64,11 @@ test("signed-in ADMIN context fetches exact read and reports only a sanitized at
     },
   }, close: async () => { closed = true; } };
   let localRun;
+  let evidenceStatus;
   const result = await runBelloCloudReadOnce({ origin, requestId, root: join(root, "queue"),
-    belloProfileDir: join(root, "bello-profile"), launchBelloContext: async () => context,
+    belloProfileDir: join(root, "bello-profile"), shopsProfileDir: join(root, "shops-profile"),
+    browserRead: true, launchBelloContext: async () => context,
+    onTrafficEvidenceStatus: status => { evidenceStatus = status; },
     runLocalRead: async (path, account, jobId, reader) => {
       localRun = { path, account, jobId, reader };
       return { attemptId: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
@@ -70,7 +77,9 @@ test("signed-in ADMIN context fetches exact read and reports only a sanitized at
     } });
   assert.equal(result.listingConfirmed, false);
   assert.equal(localRun.account, dispatch.accountReference);
-  assert.equal(localRun.reader, null);
+  assert.equal(typeof localRun.reader.readExactProduct, "function");
+  assert.equal(evidenceStatus, "NOT_CAPTURED");
+  assert.equal((await latestReadTrafficEvidence(join(root, "queue"), requestId)).directHttpAllowed, false);
   assert.equal(calls.length, 2);
   assert.equal(calls[0].options.maxRedirects, 0);
   assert.equal(calls[1].options.maxRedirects, 0);
@@ -146,4 +155,58 @@ test("saved result mismatch blocks POST and HTTP failure exposes only fixed diag
     error instanceof BridgeBoundaryError && error.phase === "RESULT_POST_HTTP" &&
     error.httpStatus === 409 && error.serverCode === "INVALID_RESULT" &&
     !JSON.stringify(error).includes("must not surface"));
+}));
+
+test("an existing pinned HTTP 200 proof reports once without another Shops request", async () => withRoot(async root => {
+  const queueRoot = join(root, "queue");
+  const target = { shopId: dispatch.accountReference,
+    remoteId: "2JXePE4ke8UCBTj6mxc4cf", inventoryCode: "B005795" };
+  const exactDispatch = { ...dispatch, remoteId: target.remoteId };
+  const attemptId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  await saveReadTrafficEvidence(queueRoot, requestId,
+    "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", [], [{
+      method: "POST", host: "mercari-shops.com", path: "/graphql",
+      operationType: "query", operationName: "EditProductPage",
+      querySha256: PINNED_READ_QUERY_SHA256,
+      variableFields: [{ field: "id", type: "string" }], variableShapeComplete: true,
+      requestProductMatch: "MATCH", requestShopMatch: "UNOBSERVED",
+      responseProductMatch: "MATCH", responseShopMatch: "MATCH",
+      graphqlErrors: "NONE", httpStatus: 200, authPresenceObserved: true,
+      authPresence: { authorization: false, cookie: true, csrf: false },
+    }]);
+  const key = createHash("sha256").update(`${target.shopId}:${target.remoteId}`).digest("hex");
+  const proofDir = join(queueRoot, "direct-read-probe-once");
+  await mkdir(proofDir);
+  await writeFile(join(proofDir, `${key}.json`), JSON.stringify({ schemaVersion: 1,
+    operation: "EXACT_READ_HTTP_PROBE_ONCE", attemptId,
+    querySha256: PINNED_READ_QUERY_SHA256, claimedAt: "2026-10-04T11:36:28.164Z" }));
+  await writeFile(join(proofDir, `${key}.result.json`), JSON.stringify({ schemaVersion: 1,
+    attemptId, outcome: "MATCHED", httpStatus: 200,
+    recordedAt: "2026-10-04T11:36:30.506Z" }));
+  const calls = [];
+  const context = { request: {
+    get: async () => { calls.push("GET"); return { ok: () => true,
+      json: async () => ({ ok: true, job: exactDispatch }) }; },
+    post: async (_url, options) => {
+      calls.push("POST");
+      const report = JSON.parse(options.data);
+      assert.deepEqual(report, { requestId, attemptId,
+        accountReference: target.shopId, remoteId: target.remoteId,
+        status: "DIRECT_HTTP_READ_CONFIRMED", comparison: null,
+        reasonCode: "PINNED_HTTP_200_MATCHED" });
+      return { ok: () => true, json: async () => ({ ok: true, stored: true,
+        requestId, attemptId, readStatus: report.status, listingConfirmed: false }) };
+    },
+  }, close: async () => { calls.push("CLOSE"); } };
+  const args = { origin, requestId, root: queueRoot, belloProfileDir: join(root, "BELLOChrome"),
+    target, launchBelloContext: async () => context };
+  assert.deepEqual(await reportPinnedDirectReadProofOnce(args), {
+    requestId, attemptId, status: "DIRECT_HTTP_READ_CONFIRMED", listingConfirmed: false,
+  });
+  assert.deepEqual(calls, ["GET", "POST", "CLOSE"]);
+  calls.length = 0;
+  await assert.rejects(reportPinnedDirectReadProofOnce({ ...args,
+    target: { ...target, inventoryCode: "WRONG" } }), error =>
+    error instanceof BridgeBoundaryError && error.phase === "DIRECT_PROOF_TARGET_MISMATCH");
+  assert.deepEqual(calls, ["GET", "CLOSE"]);
 }));

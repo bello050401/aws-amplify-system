@@ -24,6 +24,70 @@ GPT内タブの正規Shops画面は通常UIとして操作できるが、この�
 
 検証環境でBELLOの一回限りのclaimを保存・再読込した。同一試行IDは `6e8efef2-4836-4d11-9b98-a885fe24c3ce`。Shops新規フォームへの商品名・説明・SKU・価格の入力中、明示の保存ボタンや画像選択を行う前に「下書きに保存しました」が3回表示された。読取専用で下書き一覧を照合すると、本日作成された同名の3件が増えていた。`2JXjT6f2dfWMqhhNwJqizt` と `2JXjT6ea2LkmGV5YdPKRJQ` には固定SKUが見え、`2JXjT6eEPuYNg52GsxUN4a` のSKUは空欄だった。3件とも商品名・説明1524字があり、価格0円・画像0枚・カテゴリ未選択の下書きである。BELLOへの試行結果ファイルに下書きIDや商品内容は含めない。HTTP通信と下書き保存の原因は未観測で、非公開登録の完成も未確認である。価格欄は一度98,000円を表示した後に0円へ戻った。
 
-明示保存クリックが無いので `record-private-create-ui-unverified --confirm-click yes` は使わなかった。`record-private-create-draft-autosave-unverified --confirm-autosave yes` を保存済み試行IDに対して一度だけ実行し、ローカル結果 `UNVERIFIED / DRAFT_AUTOSAVE_UI_OBSERVED` を記録した。BELLO取込用ファイルは `C:\Users\win\Documents\BELLO-B005757-private-create-ui-result-20261006.json` に書き出したが、BELLOへの結果取込はまだ行っていない。この記録は新規作成・下書きの内容・公開状態の成功証明にはならず、同じSKUの再試行はしない。下書きの照合は読取のみで行い、削除・更新・公開しない。
+明示保存クリックが無いので `record-private-create-ui-unverified --confirm-click yes` は使わなかった。`record-private-create-draft-autosave-unverified --confirm-autosave yes` を保存済み試行IDに対して一度だけ実行し、ローカル結果 `UNVERIFIED / DRAFT_AUTOSAVE_UI_OBSERVED` を記録した。BELLO取込用ファイルは `C:\Users\win\Documents\BELLO-B005757-private-create-ui-result-20261006.json` に書き出し、BELLOに一度だけ取り込んで再読込を確認した。これは入力中の下書き保存表示を報告する元の試行結果であり、後の非公開保存の成功記録には変更しない。同じSKUの新規作成を再試行しない。
 
 ローカル入力イベント画面では、商品名欄へのCUA `setValue` 1回は `input=1/change=1/Enter=0/submit=0`、Playwright `fill` 1回は `input=1/change=0/Enter=0/submit=0` だった。`focusout=1` はリセットボタン由来の可能性がある。これはローカルフォームの差であり、Shopsの下書き保存が`change`で起きた証明ではない。追加のShops新規フォーム操作は行わず、既存下書きの読取結果で照合する。
+
+## 2026-10-06 既存下書き1件の非公開保存とBELLO紐付け
+
+上記の下書き `2JXjT6f2dfWMqhhNwJqizt` だけを通常画面で補完した。BELLOに登録済みの画像1枚、カテゴリ、状態、配送、数量1、98,000円、固定SKUを確認し、「非公開で保存する」を1回押した。Shops一覧に現れた商品IDは `2JXjWPRVBxjZ2K2vgTGNqy`。一覧では「非公開」・98,000円・在庫1、編集画面の再読込では画像1枚、固定SKU、カテゴリ、状態、配送、価格を確認した。証拠は `C:\Users\win\Documents\Codex\2026-10-04\bello-b005757-private-list-accepted-20261006.jpg` と `C:\Users\win\Documents\Codex\2026-10-04\bello-b005757-private-edit-accepted-20261006.jpg`。これは**Shops通常画面の再読込で確認した非公開商品**であり、新規作成のHTTP要求・応答、直接HTTP作成、公開出品の証明ではない。元の `UI_ATTEMPT_UNVERIFIED` 記録はそのまま保持する。残る下書き `2JXjT6ea2LkmGV5YdPKRJQ` と `2JXjT6eEPuYNg52GsxUN4a` は触らない。
+
+BELLOにこの商品IDを紐付ける既存経路は、管理者用の「既存商品だけを照合する」画面で在庫ID `c9ee4ea7-070f-491c-bd4c-c1547cb73436`、店舗ID、商品IDを2回入力し、画面確認のチェックを入れて依頼する操作である。`reserveExistingReadRequest` は `MercariBridgeBinding` を在庫ID主キーで条件付き作成し、既存の異なる商品IDを上書きせず `BINDING_CONFLICT` にする。同時に `MercariBridgeReadJob` を作るが、結果の `CONNECTOR_NOT_CONFIGURED` は読取未実施を意味する。Shopsへ書込・新規作成・公開・在庫変更は送らず、`ChannelListing` も変更しない。保存後は同じ管理者で依頼IDを確認し、紐付けの店舗・商品IDを保存データから再確認する。既に別の紐付けがある場合は上書きせず停止する。
+
+今回のShops商品管理コードはテスト用接尾辞付きで、BELLO在庫コード `B005757` と文字列が異なる。既存読取依頼のスナップショットは在庫コード `B005757` を比較値にするので、将来の読取でこの項目は差異として扱う。紐付け保存だけを商品一致や自動出品の成功に格上げしない。
+
+### BELLOでの保存受入（2026-10-06）
+
+最初の紐付け操作は「保存済みの商品と下書きが必要です」で停止した。続くEC下書きの最初の保存は結果不明表示となったが、検証環境ログには旧・新デプロイ間のServer Action識別子不一致があり、読取時点の対象下書きは0件だった。画面の再読込後、同じ画面内容からEC下書きを1回保存し、「保存しました」の表示と再読込後の下書き操作が確認された。読取専用のDB照合では対象在庫の下書きは1件（`e339b6b4-eb97-4294-b96c-fa7192e31224`）、価格0円、説明未登録、選択画像1件だった。これは共通EC下書きであり、Shopsの非公開商品に表示された98,000円・説明文とは別の値である。証拠ファイルは `C:\Users\win\Documents\Codex\2026-10-04\bello-b005757-ec-draft-saved-20261006.jpg`。
+
+その後、既存の読取依頼画面で店舗 `evkhihBFFNn5hukMS9s36H` と非公開商品 `2JXjWPRVBxjZ2K2vgTGNqy` を選び、画面は「読取依頼は記録しました。Shopsの照合結果はまだ届いていません。」と依頼ID `7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825` を表示した。読取専用のDB照合でも、`MercariBridgeBinding` はこの在庫・店舗・商品IDと `USER_REVIEWED_UI` に一致し、同じ依頼IDの `MercariBridgeReadJob` は `READ_EXISTING / CONNECTOR_NOT_CONFIGURED` だった。証拠ファイルは `C:\Users\win\Documents\Codex\2026-10-04\bello-b005757-binding-accepted-20261006.jpg`。この時点でBELLOの紐付けは保存済みだが、ShopsへのPC読取・直接HTTP読取はまだ実行も報告もされていない。下書き保存と紐付けはShopsへの追加書込を発生させない。元の一回限りの試行結果は `UNVERIFIED` のまま維持する。
+
+次工程は、固定した依頼IDの読み取り専用照合で、同じ店舗・商品ID、非公開状態、価格、SKUなどを**読取結果として別に保存**すること。現在のPC通常画面読取は依頼に対して動的な商品IDを使えるが、直接HTTP読取の一回限りの証明・取込はB005795の旧商品IDに固定されている。B005757へその証拠を流用しない。まず新商品の通常画面読取とその通信候補を同じPC認証状態で観測し、要求・応答の一致と読取専用性を確認する。直接HTTP読取へ進める場合は、対象固定・一回限りの試行記録・結果取込の拡張を個別レビューしてから行う。新規作成・公開・在庫変更・残る下書き2件の操作は行わない。
+
+2026-10-06のPC設置状態では設定中の依頼IDが旧B005795で、`createTestObservationEnabled=true` のため試行用画面が表示されていた。読取ジョブのロック0件、専用Chrome0件、PCアプリの実行0件、ローカル操作画面の待受けなしを確認してから、既存設定を `C:\Users\win\AppData\Local\BELLO\MercariBridge\Backup-before-b005757-read-20261006\config.json` に保全した。設置版設定の変更は依頼IDを上記B005757依頼へ、`createTestObservationEnabled` を `false` への2項目だけで、他の4項目は一致を再確認した。`manualObservation`・`imageProof` は設定されていないので、通常画面には保存・画像変更の操作節が出ない。設置済みアプリに「この読取依頼を照合する」の汎用読取経路があることはコードで確認した。設定後もPCアプリは起動しておらず、`http://127.0.0.1:56210/` は設定上の操作画面URLだが現時点で待受けていない。専用Chrome・BELLOブラウザ・Shops読取も開始していない。読取後も商品管理コードはBELLOの `B005757` とShopsの接尾辞付きSKUで差異になるため、結果を完全一致と表示しない。
+
+### BELLO公開版の読取専用受入（2026-10-06 03:56 JST）
+
+対象はAmplifyアプリ `d4hkkg7dty2du` のブランチ `claude/inventory-management-system-5vbvc7`、ジョブ406で成功したコミット `de7263ec802afebaca27689d97c94bbd9c61192f`。管理者として `https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com/inventory/c9ee4ea7-070f-491c-bd4c-c1547cb73436/listing` を新しいタブで開いて再読込済みの画面を確認した。EC下書きのタイトルは上記BoConcept名でNE表示が88/130文字、選択された主画像は既存画像1枚、説明文は空（0文字）、価格は0円だった。「下書きを保存」は有効、「下書き内容をコピー」も有効で、通常時には「最新版を別タブで開く」復旧リンクが0件だった。画面の撮影はこのタスクのブラウザ操作記録に残した。閲覧・撮影以外は行わず、保存失敗の意図的再現、再保存、NE送信、Shops書込は行っていない。
+
+再確認が必要になるのは、対象ページを開いたまま別のAmplify版を公開した場合、下書き保存で結果不明表示が出た場合、または下書き内容を変更した場合。その際は新しいページで現在値を読み直す。今回の確認は正常表示と保存済み値の受入であり、失敗時分岐を実画面で再現した証明ではない。
+
+### 現在工程と再開条件
+
+ジョブ406のBELLO実画面受入は完了。以前のNE設定画像に戻って登録・接続確認を再開せず、この受入や保存試験も繰り返さない。残る工程は、設置版PCの通常起動・認証状態が整った後、固定済み商品 `2JXjWPRVBxjZ2K2vgTGNqy` と読取依頼 `7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825` について既存商品を読み取り専用で照合すること。PC起動に関する本人の操作待ちは既に通知済みなので、状態変化までは再依頼しない。直接HTTP読取の追加実装・試行も、通常画面読取の観測結果が得られる前には始めない。
+
+### 通常読取の結果と次の境界（2026-10-06）
+
+本人がPCアプリを通常起動した後、固定依頼の「この読取依頼を照合する」を1回実行した。BELLOには `2026-10-05T23:23:43.826Z` の結果が記録され、非公開状態、商品名・数量一致、説明・商品管理コード・価格の差異を画面で確認した。元の共通下書きは説明空・価格0円・コードB005757であり、Shopsのテスト用非公開商品は別値なので、全項目一致にはしない。証拠画面は `C:\Users\win\Documents\Codex\2026-10-04\bello-b005757-read-result-20261006.jpg`。
+
+PCの保存済み固定語彙の通信概要は `2026-10-05T23:23:44.716Z / OBSERVED`、8種類。今回の対象商品に紐付いたGraphQL `EditProductPage` queryが1件で、SHA-256は `307abc058c96db65d9be11acda8b5f40bf69e91be21579e1b4fb219e7e5e05bf`、変数形状は `id:string` のみ、要求・応答の商品IDと応答店舗IDは一致、HTTP 200、GraphQLエラーなし、Cookie存在あり。本文・認証値は保存・出力していない。これはB005757の通常読取契約候補であり、直接HTTP送信成功ではない。
+
+候補版コードはB005795の既存証明を維持し、B005757の店舗・商品・在庫コード・読取依頼IDを別の一回限り対象として追加した。読み取り専用の `directReadTarget` 設定は、非公開保存や画像変更を出す `manualObservation` と同時指定できない。既存のログイン済み通常読取で同一query・対象ID・応答をその場で確認できた場合だけ、専用ブラウザの同じ認証状態でHTTP読取を1回送る設計で、結果不明でも再送しない。BELLO側の証明取込も今回の依頼・店舗・商品・在庫に固定した。合成試験と型検査は通過したが、この変更はまだ設置版PCやAmplifyへ反映しておらず、B005757の直接HTTP試行は未実行。次は稼働中PCアプリを安全に終了した後、候補版の配置・設定とWeb側の反映を確認し、その後の別操作として一回限りの読取ボタンを扱う。
+
+### 設置版PCへの反映前点検と最小差分（2026-10-06 08:42 JST）
+
+本人が通常読取完了後にPC画面の「このアプリを終了」を押した。読取専用のOS点検では、`desktopApp.mjs` のNodeプロセス0、専用Shops/BELLO Chromeプロセス0、`127.0.0.1:56210` の待受け0、Queueのロックファイル0。設置済み `config.json` は6キーのまま、依頼IDは上記B005757と一致する。Queueにはジョブ9件・結果9件・通信概要2対象・直接読取試行ファイル2件があり、削除・移動・上書きしない。認証用の `ShopsChrome` と `BELLOChrome` も存在を確認しただけで中身を読まず、複製しない。
+
+候補コミット `ba31eb3` と設置版 `App/src` をハッシュ比較すると、今回の機能に必要な最小反映は既存 `desktopApp.mjs`、`directReadProbe.mjs`、`cloudConnector.mjs` の3ファイル差し替えと、新規 `exportDirectReadProof.mjs` の追加。全体インストーラーは他の既存ファイルも更新するため、この段階では使わない。反映時は停止状態と0ロックを再確認し、設置版の上記3ファイルと `config.json` を同じローカル領域に日時付きで保全してから、コミット `ba31eb3` の対応する4ファイルだけを配置する。設定は既存6キーを保持し、別の読取専用キー `directReadTarget` に店舗 `evkhihBFFNn5hukMS9s36H`・商品 `2JXjWPRVBxjZ2K2vgTGNqy`・在庫コード `B005757` の3値だけを追加する。`manualObservation`・`imageProof` は追加しない。配置後はファイルのハッシュ一致、設定の既存6キー一致、Queue/認証profileの同一パス、HTTP読取ボタンだけが表示されることを確認する。PCアプリの再起動、ボタン実行、BELLO報告は別工程であり、この点検では行っていない。独立レビュー合格までは設置版へ書き込まない。
+
+### PC候補反映とBELLO検証版の配布状況（2026-10-06）
+
+Astraの独立レビューで候補 `ba31eb3` にP1/P2指摘なし。PCアプリ・専用Chrome・56210待受け・Queueロックがすべて0の状態で、設置版の旧3ファイルと設定を `C:\Users\win\AppData\Local\BELLO\MercariBridge\Backup-before-b005757-direct-read-20261006` に保全した。必要な4ファイルだけを配置し、候補とのSHA-256一致を確認。設定の既存6キーは値も含めて保持し、`directReadTarget` の3値だけを追加した。Queue、ShopsChrome、BELLOChromeは同じ場所に残し、中身の複製・変更はしていない。設置済みコードの構文確認は通過し、保存済み通常読取概要からはB005757の一回限りHTTP読取が `available=true`、過去の試行 `claimed=false` と読める。これは実HTTP成功ではなく、まだ読取ボタンも押していない。
+
+Webの受理側は候補版から `directProofImport` と `resultAcceptance` の本体・試験だけを検証用worktreeへコピーし、14件の対象試験と型検査に通過した。コミット `62940412ab58c9cfe13b23a7c2a47960155656c5` を既存の `claude/inventory-management-system-5vbvc7` ブランチへ送信済み。指定されたAWS `Bello` プロファイルで確認すると、Amplifyジョブ407がこのコミットに対して自動起動し、2026-10-06 08:53:22 JSTにBUILD/DEPLOY/VERIFYのすべて `SUCCEED` で終了した。重複ジョブは起動していない。既定プロファイルの期限切れにより一度誤って表示したAWSサインイン画面は閉じ、再認証依頼も取り消した。PC読取の一回限り実行とBELLOへの証明報告はまだ別操作であり、今回の公開だけでHTTP読取成功とは扱わない。
+
+公開成功後の通常UI手順は、(1) デスクトップの「BELLO メルカリ照合」からPCアプリを起動し、固定依頼IDと「既存商品をHTTPで1回読取検証」が有効なことを確認する。(2) そのボタンを**1回だけ**押す。専用Shops画面の同一query・対象応答を確認できた場合に限り、同じ認証状態で一回限りのHTTP読取が送られる。結果不明・認証待ち・HTTP失敗でも再実行しない。(3) PC結果が `MATCHED / HTTP 200` の場合だけ「BELLO用の読取記録ファイルを保存」を押す。(4) GPT内のBELLO `inventory/settings?tab=mercariBridge&requestId=7ecb7f7837d93390fe5f701abdc62e9acfaf5b35b4b751789c4183a2a376e825` で「読取記録ファイル（JSON）」を選び、「保存済み記録をBELLOへ報告」を1回押す。(5) 同じ依頼の照合画面で「照合結果を確認する」を押し、新しい「既存商品の直接HTTP読取を確認（出品確認ではありません）」が、既存の `DIFFERENT` 結果とは別に記録されたことを確認する。PC側の直接報告ボタンとファイル取込を二重に行わない。ここまでは読取証明だけで、新規出品・公開・在庫変更は行わない。
+
+### 直接HTTP読取の実画面受入と次工程（2026-10-06）
+
+本人が更新済みPCアプリを通常起動し、上記の一回限りのHTTP読取ボタンを1回だけ押した。PC画面は対象B005757について `MATCHED / HTTP 200` を表示した。続けて「保存済みHTTP読取結果をBELLOへ報告」を1回だけ押し、PC画面で報告済みを確認した。BELLO設定画面を再読込して同じ依頼IDの「既存商品の直接HTTP読取の証拠を受信済み（受信時刻 `2026-10-06T00:11:31.737Z`）」を確認した。PC画面の証拠は `C:\Users\win\Documents\Codex\2026-10-04\bello-b005757-http-read-success-20261006.jpg`、BELLO受信画面は同じディレクトリの `bello-b005757-http-read-received-20261006.jpg`。HTTP読取とBELLO報告は再実行しない。この証拠はPC認証での既存商品読取とBELLOへの結果受理であり、画像追加・非公開保存・新規出品・公開の成功を示さない。
+
+次の候補は、同じ既存非公開商品に画像1枚を追加し、その商品を非公開のまま保存する**通常画面の通信観測**。既存の一回限りの `imageWorkflowEnabled` 経路を再利用できるが、従来の編集画面照合はShopsの管理コードがBELLO在庫コードと同じ場合しか通らない。B005757のShops管理コードは固定の `B005757-TEST-20261004-caf445ac6e676343` なので、候補コードはこの既知の差だけを許容し、固定の店舗・商品・依頼・価格98,000円・数量1を起動時に照合する。B005795等の旧対象は従来の照合を維持する。直接HTTP読取専用設定 `directReadTarget` と書込観測設定 `manualObservation` の同時指定は引き続き拒否する。
+
+現時点でB005757の追加用画像はPCの `ImageProof` に準備されていない。候補コードと合成試験だけを準備し、稼働中PCアプリのファイル・設定・Queue・認証プロファイルは変更しない。通常のBELLO読取経路から既存画像のバイト列とSHA-256を確認し、固定ファイルを準備してから設定を移す必要がある。画像選択と非公開保存は別の一回限りの通常UI試行とし、観測された要求の形・対象ID・応答を確認する。未観測のURLや変数を推測して直接HTTP書込を組み立てない。結果不明でも繰り返さず、公開状態へ切り替えない。
+
+### 画像工程の事前停止と診断候補（2026-10-06）
+
+レビュー済み候補のPC反映後、正規PC画面の画像追加・非公開保存ボタンを1回押したが「工程は停止しました」となった。対象商品の `private-image-workflow-once` の画像・保存・結果ファイルは0件で、旧 `manual-image-once` / `manual-save-once` の対象claimも0件。画像ファイル選択と非公開保存クリックより前に停止した。元のPC画面はclaim前停止時の固定statusを表示しないので、ログイン切れ (`AUTH_REQUIRED`) と事前照合停止 (`PREFLIGHT_BLOCKED`) はこの記録だけでは区別できない。書込ボタンは再クリックしない。「既存商品を読取で再確認」は旧画像claimと保存claimの両方が必要で、現状ではShopsへの読取前に `PRIOR_ATTEMPT_MISMATCH` となる。
+
+次の候補差分は、claim前停止の固定statusをPC画面に表示し、商品変更を一切行わない独立の事前読取ボタンを設ける。固定理由はログイン、移動先、編集項目、既存画像1枚、非公開一覧、再確認、ファイル入力形状、ローカル画像証跡のどこで止まったかだけ。B005757の書込ボタンは事前読取が `READY` になるまで無効にする。この候補は稼働中PCには未反映で、実Shopsへの再試行も行っていない。
