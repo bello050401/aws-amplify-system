@@ -87,6 +87,13 @@ test("BELLO origin queues a PC visibility job without a Shops action", async () 
     assert.deepEqual((await pendingStatus.json()).items,
       [{ action: "STOP", remoteId: body.target.remoteId,
         attempted: false, outcome: null }]);
+    const gapUrl = `${app.url}/listing-send-window`;
+    assert.equal((await fetch(gapUrl, { headers: {
+      Origin: "https://evil.example.test" } })).status, 403);
+    const gap = await fetch(gapUrl, { headers: { Origin: config().origin } });
+    assert.equal(gap.status, 200);
+    assert.deepEqual(await gap.json(), { ok: true, remainingSeconds: 0,
+      nextAllowedAt: null });
     const csrf = await token(app.url);
     const visible = await (await fetch(app.url)).text();
     assert.match(visible, /ownedProduct123/);

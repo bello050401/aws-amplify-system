@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { searchMercariBrandsAction } from "@/app/actions/listing";
 import { prepareMercariManualListingPackAction,
   type MercariManualListingPack } from "@/app/actions/mercariManualListingPack";
@@ -19,7 +19,37 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pack, setPack] = useState<MercariManualListingPack | null>(null);
+  const [nextAllowedAt, setNextAllowedAt] = useState<string | null | undefined>(undefined);
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const available = hasDraft && !hasShopsRecord && availableQuantity > 0;
+  useEffect(() => {
+    let disposed = false;
+    async function refresh() {
+      try {
+        const response = await fetch("http://127.0.0.1:56210/listing-send-window", {
+          mode: "cors", credentials: "omit", cache: "no-store",
+          signal: AbortSignal.timeout(4000),
+        });
+        const data = response.ok ? await response.json() : null;
+        if (!disposed) setNextAllowedAt(data?.ok === true &&
+          (data.nextAllowedAt === null ||
+            (typeof data.nextAllowedAt === "string" &&
+              Number.isFinite(Date.parse(data.nextAllowedAt)))) ?
+          data.nextAllowedAt : undefined);
+      } catch { if (!disposed) setNextAllowedAt(undefined); }
+    }
+    void refresh();
+    const poll = setInterval(() => void refresh(), 10_000);
+    return () => { disposed = true; clearInterval(poll); };
+  }, []);
+  useEffect(() => {
+    const tick = () => setSecondsLeft(nextAllowedAt === undefined ? null :
+      nextAllowedAt === null ? 0 :
+        Math.max(0, Math.ceil((Date.parse(nextAllowedAt) - Date.now()) / 1000)));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [nextAllowedAt]);
   async function searchBrand() {
     if (!brandQuery.trim() || busy) return;
     setBusy(true);
@@ -69,6 +99,11 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <dt>発送まで</dt><dd>4〜7日</dd>
     </dl>
     <p className="mt-2 text-xs text-gray-600">送料込み参考価格を確認し、実際の販売価格を入力してください。参考価格は自動入力しません。</p>
+    <p className="mt-2 text-xs text-gray-600" role="status">
+      {secondsLeft === null ? "PCアプリに接続すると次の出品までの時間を表示します。" :
+        secondsLeft > 0 ? `次の出品まで ${secondsLeft} 秒` :
+          "出品間隔の待機はありません。"}
+    </p>
     {!available ? <p className="mt-3 text-amber-700">保存済みの下書き・在庫数・Shops出品記録を確認してください。新規出品準備は現在できません。</p> : <>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs">販売価格（円）<input type="number" min={300} max={9999999}

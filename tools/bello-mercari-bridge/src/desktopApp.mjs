@@ -412,6 +412,25 @@ export async function startDesktopApp(config, {
   };
   let localOrigin;
   const server = createServer(async (request, response) => {
+    if (request.url === "/listing-send-window" &&
+        ["OPTIONS", "GET"].includes(request.method)) {
+      if (options.createTestObservationEnabled || request.headers.origin !== options.origin) {
+        response.writeHead(403); response.end(); return;
+      }
+      const headers = { "Access-Control-Allow-Origin": options.origin,
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Private-Network": "true", Vary: "Origin",
+        "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" };
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, headers); response.end(); return;
+      }
+      try {
+        const window = await readShopListingWindow(options.root, CREATE_TEST_TARGET.shopId);
+        response.writeHead(200, headers);
+        response.end(JSON.stringify({ ok: true, ...window }));
+      } catch { response.writeHead(503, headers); response.end('{"ok":false}'); }
+      return;
+    }
     if (request.url?.startsWith("/visibility-status?") &&
         ["OPTIONS", "GET"].includes(request.method)) {
       if (options.createTestObservationEnabled || request.headers.origin !== options.origin) {
