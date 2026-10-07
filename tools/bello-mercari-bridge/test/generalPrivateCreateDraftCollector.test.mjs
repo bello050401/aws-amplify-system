@@ -192,14 +192,21 @@ test("observed ten-column DOM reads title from the second cell and rejects actio
         },
       };
       const page = {
-        goto: async target => { url = target; },
+        goto: async (target, options) => {
+          assert.equal(options.timeout, 12_000);
+          url = target;
+        },
         url: () => url,
         waitForTimeout: async () => {},
         locator: selector => selector === "body" ?
-          { evaluate: async callback => callback() } : selector === "table" ?
+          { evaluate: async (callback, _arg, options) => {
+            assert.equal(options.timeout, 12_000);
+            return callback();
+          } } : selector === "table" ?
             { nth: index => { assert.equal(index, 0); return {
               locator: child => { assert.equal(child, "tbody tr"); return {
-                nth: rowIndex => ({ click: async () => {
+                nth: rowIndex => ({ click: async options => {
+                  assert.equal(options.timeout, 12_000);
                   clicks++;
                   url = `https://mercari-shops.com/seller/shops/${shopId}/products/create?productDraftId=${details[rowIndex].id}`;
                 } }),
