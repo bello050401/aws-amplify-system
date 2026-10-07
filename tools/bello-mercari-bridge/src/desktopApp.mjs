@@ -39,6 +39,7 @@ import { verifyExistingSavedProductReadOnly, readExistingSavedProductReadback } 
 import { enqueueVisibilityPcJob, listVisibilityPcJobs, readVisibilityPcJob } from
   "./visibilityJobInbox.mjs";
 import { runVisibilityTransitionOnce } from "./visibilityTransitionOnce.mjs";
+import { readShopListingWindow } from "./listingSendGate.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const WORKFLOW_STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN",
@@ -156,14 +157,22 @@ function page({ csrf, options, message, busy, workflowRunning, recoveryRunning,
   lastRecoveryStatus, lastRecoveryStage, recoveryReadbackPrivateWithImage,
   workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed,
-  visibilityJobs = [], retainedVisibilityOpen = false }) {
+  visibilityJobs = [], retainedVisibilityOpen = false,
+  listingWindow = { remainingSeconds: 0, nextAllowedAt: null } }) {
   if (options.createTestObservationEnabled)
     return createTestPage({ csrf, message, busy, claim: createClaim,
       preflight: createPreflight, result: createResult, open: createOpen, armed: createArmed });
   const button = (action, label, disabled = false) =>
     `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning || recoveryRunning || retainedVisibilityOpen ? "disabled" : ""}>${label}</button></form>`;
-  const visibilityButton = item =>
-    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-visibility-job"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${item.attempted || busy || retainedVisibilityOpen || workflowRunning || recoveryRunning ? "disabled" : ""}>${item.job.action === "STOP" ? "出品停止を1回実行" : "停止済み商品を再出品"}</button></form>`;
+  const visibilityButton = item => {
+    const baseDisabled = item.attempted || busy || retainedVisibilityOpen ||
+      workflowRunning || recoveryRunning ||
+      (item.job.action === "RELIST" && listingWindow.remainingSeconds === null);
+    const waiting = item.job.action === "RELIST" &&
+      Number.isInteger(listingWindow.remainingSeconds) &&
+      listingWindow.remainingSeconds > 0;
+    return `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-visibility-job"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${item.job.action === "RELIST" ? `data-relist-button data-base-disabled="${baseDisabled ? "1" : "0"}"` : ""} ${baseDisabled || waiting ? "disabled" : ""}>${item.job.action === "STOP" ? "出品停止を1回実行" : "停止済み商品を再出品"}</button></form>`;
+  };
   const pinnedB005757 = isPinnedB005757ImageTarget(options.manualObservation,
     options.requestId);
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${workflowRunning || recoveryRunning ? '<meta http-equiv="refresh" content="2">' : ""}<title>BELLO メルカリ照合</title><style>
@@ -174,6 +183,8 @@ body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#222;margin:0;paddi
 ${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
 <section><h2>BELLO EC出品のPCジョブを読み込む</h2><p>BELLOから直接渡せなかった場合だけ、保存したJSONファイルを指定してください。読み込みではShopsを変更しません。</p><form method="post" action="/visibility-import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="file" name="job" accept=".json,application/json" required><button ${busy || retainedVisibilityOpen ? "disabled" : ""}>PCジョブを読み込む</button></form></section>
 ${visibilityJobs.length ? `<section><h2>BELLO EC出品からの公開状態ジョブ</h2><p>対象IDと現在の公開状態をShopsで読み直し、1回だけ画面操作します。結果が不明なら再操作しません。再出品はこのPCに同じ商品の停止完了記録がある場合だけ可能です。</p>${visibilityJobs.map(item => `<div><p><strong>${html(item.job.action === "STOP" ? "出品停止" : "再出品")}</strong> / ${html(item.job.target.skuCode)} / 商品ID <code>${html(item.job.target.remoteId)}</code> / ${html(item.attempted ? item.outcome ?? "UNKNOWN" : "未実行")}</p>${visibilityButton(item)}</div>`).join("")}</section>` : ""}
+${visibilityJobs.some(item => item.job.action === "RELIST") ? `<p data-listing-countdown data-next-at="${html(listingWindow.nextAllowedAt ?? "")}">${listingWindow.remainingSeconds === null ? "出品間隔の記録を確認できません。再出品はできません。" : listingWindow.remainingSeconds > 0 ? `次の出品まで ${html(listingWindow.remainingSeconds)} 秒` : "出品間隔: 実行可能"}</p><script>/* Only the display changes here; the PC runner enforces the interval again. */
+(() => { const label = document.querySelector('[data-listing-countdown]'); const until = Date.parse(label.dataset.nextAt || ''); if (!Number.isFinite(until)) return; const tick = () => { const seconds = Math.max(0, Math.ceil((until - Date.now()) / 1000)); label.textContent = seconds ? '次の出品まで ' + seconds + ' 秒' : '出品間隔: 実行可能'; document.querySelectorAll('[data-relist-button]').forEach(button => { if (button.dataset.baseDisabled === '0') button.disabled = seconds > 0; }); }; tick(); setInterval(tick, 1000); })();</script>` : ""}
 ${retainedVisibilityOpen ? "<p>Shops操作の結果を確認できません。専用Chromeを開いたままにしています。再操作せず状態を確認してください。</p>" : ""}
 ${workflowRunning ? `<p>工程を実行中です。現在の段階: <code>${html(lastWorkflowStage || "準備中")}</code></p>` : ""}
 ${recoveryRunning ? `<p>一回限りの復旧工程を実行中です。現在の段階: <code>${html(lastRecoveryStage || "準備中")}</code></p>` : ""}
@@ -500,6 +511,9 @@ export async function startDesktopApp(config, {
       let visibilityJobs = [];
       try { visibilityJobs = await listVisibilityPcJobs(options.root); }
       catch { message = "PCジョブの保存状態を確認できません。Shops操作は行っていません。"; }
+      let listingWindow;
+      try { listingWindow = await readShopListingWindow(options.root, CREATE_TEST_TARGET.shopId); }
+      catch { listingWindow = { remainingSeconds: null, nextAllowedAt: null }; }
       send(response, 200, page({ csrf, options, message, busy, workflowRunning,
         recoveryRunning,
         belloOpen: Boolean(belloContext), shopsOpen: Boolean(shopsContext),
@@ -521,7 +535,7 @@ export async function startDesktopApp(config, {
         savedProductReadback,
         retainedWorkflowOpen: Boolean(retainedWorkflowSession),
         createClaim, createPreflight, createResult, createOpen: Boolean(createSession),
-        createArmed, visibilityJobs,
+        createArmed, visibilityJobs, listingWindow,
         retainedVisibilityOpen: Boolean(retainedVisibilitySession) }));
       return;
     }

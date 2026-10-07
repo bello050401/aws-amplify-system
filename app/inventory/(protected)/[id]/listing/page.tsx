@@ -6,7 +6,7 @@ import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/se
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
-import { MercariPrivateCreatePreparationPanel } from "./MercariPrivateCreatePreparationPanel";
+import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { getNextEngineMasterSync } from "@/lib/listing/nextEngine/masterSync";
@@ -110,7 +110,16 @@ export default async function ListingPage({ params }: { params: { id: string } }
           nextEngineUploadEnabled={process.env.NEXT_ENGINE_MASTER_UPLOAD_ENABLED === "1" &&
             process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
         />
-        {role === "ADMIN" && <MercariPrivateCreatePreparationPanel inventoryId={item.id} />}
+        {role === "ADMIN" && (
+          ["dd273c1e-9b2a-4013-acc6-c445a481fab8",
+            "5b0f3587-cbbb-4c09-ae78-595b2b3e353f"].includes(item.id.toLowerCase()) ?
+            <p className="mt-5 max-w-2xl rounded border border-amber-300 bg-amber-50 p-4 text-sm">
+              この非公開テストは結果の確認中です。重複操作を防ぐため、ここから出品準備を繰り返せません。
+            </p> :
+            <MercariManualListingPackPanel inventoryId={item.id}
+              availableQuantity={item.quantity} hasDraft={Boolean(draft)}
+              hasShopsRecord={Boolean(channelListing)} />
+        )}
         {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
             ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
             役割が重複していたので消した。生成エンジン・生成履歴の保存・

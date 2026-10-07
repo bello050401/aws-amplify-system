@@ -14,10 +14,12 @@ const LABEL = {
 } as const;
 
 /** The PC app accepts a prepared job; its explicit local action performs the transition. */
-export function MercariShopsLifecycleSection({ inventoryId, listing, operation = null }: {
+export function MercariShopsLifecycleSection({ inventoryId, listing, operation = null,
+  canPrepare = false }: {
   inventoryId: string;
   listing: ChannelListingRecord | null;
   operation?: ShopsOperation | null;
+  canPrepare?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [preparedActions, setPreparedActions] = useState<ReadonlySet<"STOP" | "RELIST">>(new Set());
@@ -112,13 +114,19 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
       商品ID: <code>{listing.externalListingId}</code> ／ <a href={url}
         target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">商品管理画面</a>
     </p>}
-    <button type="button" disabled={!stopHandoffEnabled || busy || preparedActions.has("STOP")}
+    {state === "NOT_LISTED" && canPrepare && !listing && ![
+      "dd273c1e-9b2a-4013-acc6-c445a481fab8",
+      "5b0f3587-cbbb-4c09-ae78-595b2b3e353f",
+    ].includes(inventoryId.toLowerCase()) ? <a href="#mercari-manual-preparation"
+      className="mt-3 inline-block rounded border border-gray-300 px-3 py-2 text-xs font-bold">
+      出品準備へ
+    </a> : <button type="button" disabled={!stopHandoffEnabled || busy || preparedActions.has("STOP")}
       aria-disabled={!stopHandoffEnabled || busy || preparedActions.has("STOP")}
       onClick={() => void prepareHandoff("STOP")}
       className="mt-3 rounded border border-gray-300 px-3 py-2 text-xs font-bold disabled:opacity-50">
       {stopHandoffEnabled ? busy ? "準備中…" :
         preparedActions.has("STOP") ? "停止ジョブを保存済み" : "出品停止のPCジョブを作る" : button}
-    </button>
+    </button>}
     {pcFeatureEnabled && <button type="button"
       disabled={!relistHandoffEnabled || busy || preparedActions.has("RELIST")}
       onClick={() => void prepareHandoff("RELIST")}

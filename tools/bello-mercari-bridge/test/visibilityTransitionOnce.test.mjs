@@ -110,6 +110,12 @@ test("one verified stop permits one later relist of the same ID", async () => {
     const second = await runVisibilityTransitionOnce(args(root, "RELIST"), relist.deps);
     assert.equal(second.status, "RELIST_VERIFIED");
     assert.deepEqual(relist.state(), { closed: true, nextClicks: 1, saveClicks: 1 });
+    const relistClaim = JSON.parse(await readFile(join(root, "visibility-transition-once",
+      `${shopId}-${target.remoteId}-RELIST.claim.json`), "utf8"));
+    const marker = JSON.parse(await readFile(join(root, "listing-send-attempts",
+      `${shopId}-${relistClaim.attemptId}.json`), "utf8"));
+    assert.equal(marker.operation, "RELIST");
+    assert.equal(marker.minimumGapSeconds, 30);
     assert.equal((await runVisibilityTransitionOnce(args(root, "RELIST"), relist.deps)).status,
       "ALREADY_ATTEMPTED");
     assert.equal(relist.state().saveClicks, 1);

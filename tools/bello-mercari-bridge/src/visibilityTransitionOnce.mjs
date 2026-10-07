@@ -9,6 +9,7 @@ import { readPinnedEditFields, privateSaveControl } from "./saveExistingPrivateO
 import { MAX_MANUAL_MUTATION_EVENTS, observeManualShopsMutation,
   safeManualMutationSummary } from
   "./manualMutationObservation.mjs";
+import { reserveShopListingSend } from "./listingSendGate.mjs";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -143,6 +144,7 @@ export async function runVisibilityTransitionOnce({ root, profileDir,
     chooseSaveButton = exactSaveButton,
     readStopProof = readVerifiedStop,
     writeResult = saveResult,
+    reserveListingSend = reserveShopListingSend,
   } = {}) {
   if (![root, profileDir, playwrightModulePath].every(value =>
       typeof value === "string" && isAbsolute(value)) ||
@@ -193,6 +195,12 @@ export async function runVisibilityTransitionOnce({ root, profileDir,
       throw Error("Fields changed before save");
     const button = await chooseSaveButton(session.page, expectedEditUrl, action);
     if (!button) throw Error("Observed visibility dialog changed");
+    if (action === "RELIST") {
+      stage = "LISTING_INTERVAL_UNCERTAIN";
+      await reserveListingSend(root, { shopId: target.shopId,
+        inventoryId: target.inventoryId, operation: "RELIST",
+        attemptId: marker.attemptId });
+    }
     postClickOrder = observer.checkpoint();
     stage = "SAVE_CLICK_UNCERTAIN";
     await button.click({ timeout: 12000 });
