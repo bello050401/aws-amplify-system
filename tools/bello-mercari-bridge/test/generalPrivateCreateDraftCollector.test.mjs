@@ -62,7 +62,8 @@ test("reads a named and blank draft twice without a save/create action", async (
 });
 
 test("row count or title change prevents a complete result", async () => {
-  const count = fakeAdapter({ mutateList: reads => reads >= 3 ? details.slice(0, 1) : details });
+  const count = fakeAdapter({ mutateList: reads => reads >= 3 ?
+    [...details, { id: "transient-C", title: "", skuCode: "" }] : details });
   const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
     shopId, expectedRowCount: 2, adapter: count.adapter });
   assert.equal(result.status, "DRAFT_LIST_CHANGED");
@@ -90,4 +91,19 @@ test("duplicate draft ID, wrong detail URL and loading state fail closed", async
   assert.equal((await collectGeneralPrivateCreateDraftDetailsReadOnly({
     shopId, expectedRowCount: 2, adapter: loading.adapter })).status,
   "DRAFT_LIST_UNVERIFIED");
+});
+
+test("blank rows with unchanged table text still require identical IDs on a second pass", async () => {
+  const entries = details.map(item => ({ ...item }));
+  const { adapter } = fakeAdapter({ entries });
+  const click = adapter.clickRow;
+  let clicks = 0;
+  adapter.clickRow = async (...args) => {
+    if (++clicks === 3) entries[0].id = "another-draft";
+    return click(...args);
+  };
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter });
+  assert.equal(result.status, "DRAFT_LIST_CHANGED");
+  assert.deepEqual(result.rows, []);
 });
