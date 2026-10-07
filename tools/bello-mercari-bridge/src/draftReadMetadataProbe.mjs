@@ -109,14 +109,11 @@ export async function probeDraftReadMetadataOnce({ root, profileDir,
     } catch { try { await route.abort(); } catch { /* Closing the page also stops routing. */ } }
   };
   try {
-    session = await openSession({ root, profileDir, playwrightModulePath, shopId });
+    session = await openSession({ root, profileDir, playwrightModulePath, shopId,
+      requestGuard: readOnlyRoute });
     closeStatus = "CLOSE_UNVERIFIED";
-    if (typeof session.page.route !== "function" ||
-        typeof session.page.routeWebSocket !== "function")
-      throw Error("Read-only routing unavailable");
-    await session.page.route("**/*", readOnlyRoute);
-    await session.page.routeWebSocket("**/*", ws => ws.close());
     observer = observe(session.context, { page: session.page, shopId });
+    await session.context.setOffline(false);
     await session.page.goto(listUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
     if (session.page.url().startsWith(`${ORIGIN}/signin/`)) status = "AUTH_REQUIRED";
     else {
@@ -150,10 +147,10 @@ export async function probeDraftReadMetadataOnce({ root, profileDir,
     }
   } catch { status = "READ_UNAVAILABLE"; }
   finally {
+    try { await session?.context.setOffline(true); }
+    catch { status = "OFFLINE_RESTORE_UNVERIFIED"; }
     try { metadata = await observer?.stop(); }
     catch { status = "METADATA_UNVERIFIED"; }
-    try { await session?.page.unroute?.("**/*", readOnlyRoute); }
-    catch { status = "ROUTE_CLEANUP_UNVERIFIED"; }
     try { if (session) { await session.context.close(); closeStatus = "CLOSED"; } }
     catch { closeStatus = "CLOSE_UNVERIFIED"; }
   }
@@ -163,5 +160,6 @@ export async function probeDraftReadMetadataOnce({ root, profileDir,
       metadata?.status === "METADATA_TRUNCATED") status = "METADATA_TRUNCATED";
   if (status === "DRAFT_UI_READ_OBSERVED" && observations.length === 0)
     status = "NO_QUERY_METADATA";
+  if (closeStatus === "CLOSE_UNVERIFIED") status = "BROWSER_CLOSE_UNVERIFIED";
   return { status, observations, closeStatus, allowFinalCreate: false };
 }

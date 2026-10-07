@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { openDraftMetadataReadSession } from "../src/session.mjs";
 
 const shopId = "evkhihBFFNn5hukMS9s36H";
+const requestGuard = async () => {};
 
 test("uses only the bound dedicated profile with service workers blocked", async () => {
   const temp = await mkdtemp(join(tmpdir(), "bello-draft-metadata-session-"));
@@ -19,21 +20,35 @@ test("uses only the bound dedicated profile with service workers blocked", async
     let launched = false;
     await assert.rejects(openDraftMetadataReadSession({ root, profileDir,
       playwrightModulePath: join(temp, "playwright", "package.json"), shopId,
+      requestGuard,
       launchPersistentContext: async () => { launched = true; } }));
     assert.equal(launched, false);
     await writeFile(join(profileDir, ".bello-mercari-bridge-profile.json"),
       JSON.stringify({ schemaVersion: 1, purpose: "BELLO_MERCARI_DEDICATED" }));
     let options = null;
-    const context = { serviceWorkers: () => [], pages: () => [],
+    let startupWritePossible = false;
+    const lifecycle = [];
+    const context = { serviceWorkers: () => [],
+      route: async () => lifecycle.push("route"),
+      routeWebSocket: async () => lifecycle.push("websocket-route"),
+      pages: () => { lifecycle.push("inspect-pages"); return []; },
       newPage: async () => ({ url: () => "about:blank" }),
+      setOffline: async () => {},
       close: async () => {} };
     const session = await openDraftMetadataReadSession({ root, profileDir,
       playwrightModulePath: join(temp, "playwright", "package.json"), shopId,
+      requestGuard,
       launchPersistentContext: async (_profile, launchOptions) => {
-        options = launchOptions; return context;
+        options = launchOptions;
+        startupWritePossible = launchOptions.offline !== true;
+        return context;
       } });
     assert.equal(session.context, context);
     assert.equal(options.serviceWorkers, "block");
+    assert.equal(options.offline, true);
+    assert.equal(startupWritePossible, false);
+    assert.deepEqual(lifecycle.slice(0, 3),
+      ["route", "websocket-route", "inspect-pages"]);
     assert.equal(options.headless, false);
     await context.close();
     let closed = false;
@@ -42,11 +57,13 @@ test("uses only the bound dedicated profile with service workers blocked", async
     close: async () => { closed = true; } };
     await assert.rejects(openDraftMetadataReadSession({ root, profileDir,
       playwrightModulePath: join(temp, "playwright", "package.json"), shopId,
+      requestGuard,
       launchPersistentContext: async () => restored }));
     assert.equal(closed, true);
     let restoredListClosed = false;
     await assert.rejects(openDraftMetadataReadSession({ root, profileDir,
       playwrightModulePath: join(temp, "playwright", "package.json"), shopId,
+      requestGuard,
       launchPersistentContext: async () => ({ ...context,
         pages: () => [{ url: () =>
           `https://mercari-shops.com/seller/shops/${shopId}/products?tab=draft` }],
@@ -55,6 +72,7 @@ test("uses only the bound dedicated profile with service workers blocked", async
     let workerContextClosed = false;
     await assert.rejects(openDraftMetadataReadSession({ root, profileDir,
       playwrightModulePath: join(temp, "playwright", "package.json"), shopId,
+      requestGuard,
       launchPersistentContext: async () => ({ ...context,
         serviceWorkers: () => [{}],
         close: async () => { workerContextClosed = true; } }) }));

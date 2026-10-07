@@ -33,7 +33,8 @@ async function ensureDedicatedProfile(profileDir) {
 }
 
 async function launchDedicatedProfile({ profileDir, playwrightModulePath,
-  launchPersistentContext, serviceWorkersBlock = false }) {
+  launchPersistentContext, serviceWorkersBlock = false,
+  startOffline = false }) {
   if (!profileDir || !isAbsolute(profileDir)) throw Error("An absolute dedicated profile directory is required");
   await ensureDedicatedProfile(profileDir);
   let launch = launchPersistentContext;
@@ -45,7 +46,8 @@ async function launchDedicatedProfile({ profileDir, playwrightModulePath,
     launch = playwright.chromium.launchPersistentContext.bind(playwright.chromium);
   }
   return launch(profileDir, { channel: "chrome", headless: false,
-    ...(serviceWorkersBlock ? { serviceWorkers: "block" } : {}) });
+    ...(serviceWorkersBlock ? { serviceWorkers: "block" } : {}),
+    ...(startOffline ? { offline: true } : {}) });
 }
 
 /** Opens a dedicated, visible Chrome profile. The merchant signs in; no existing IAB session is read or copied. */
@@ -87,9 +89,11 @@ export async function openDedicatedProductListSession({ root, profileDir,
 
 /** Opens a fresh tab in the existing dedicated profile for one metadata-only draft read. */
 export async function openDraftMetadataReadSession({ root, profileDir,
-  playwrightModulePath, shopId, launchPersistentContext = null }) {
+  playwrightModulePath, shopId, requestGuard,
+  launchPersistentContext = null }) {
   if (typeof shopId !== "string" || !PRODUCT_ID.test(shopId) ||
-      !root || !isAbsolute(root)) throw Error("Invalid draft metadata target");
+      !root || !isAbsolute(root) || typeof requestGuard !== "function")
+    throw Error("Invalid draft metadata target");
   const bound = JSON.parse(await readFile(join(root, "account.json"), "utf8"));
   if (bound?.schemaVersion !== 1 || bound.accountReference !== shopId)
     throw Error("Draft metadata account mismatch");
@@ -97,14 +101,26 @@ export async function openDraftMetadataReadSession({ root, profileDir,
   if (marker?.schemaVersion !== 1 || marker.purpose !== "BELLO_MERCARI_DEDICATED")
     throw Error("Existing dedicated profile required");
   const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
-    launchPersistentContext, serviceWorkersBlock: true });
+    launchPersistentContext, serviceWorkersBlock: true, startOffline: true });
   try {
+    if (typeof context.setOffline !== "function")
+      throw Error("Draft metadata offline guard unavailable");
     if (typeof context.serviceWorkers !== "function" ||
         context.serviceWorkers().length !== 0)
       throw Error("Draft metadata service worker state unavailable");
-    if (context.pages().some(candidate => candidate.url() !== "about:blank"))
+    if (typeof context.route !== "function" ||
+        typeof context.routeWebSocket !== "function")
+      throw Error("Draft metadata context routing unavailable");
+    await context.route("**/*", requestGuard);
+    await context.routeWebSocket("**/*", ws => ws.close());
+    const restoredPages = context.pages();
+    if (restoredPages.some(candidate => candidate.url() !== "about:blank"))
       throw Error("Restored Shops page is unresolved");
-    return { context, page: await context.newPage() };
+    const page = await context.newPage();
+    for (const restored of restoredPages) await restored.close();
+    if (context.pages().some(candidate => candidate !== page))
+      throw Error("Unexpected dedicated browser page");
+    return { context, page };
   } catch {
     await context.close().catch(() => {});
     throw Error("Draft metadata browser unavailable");
