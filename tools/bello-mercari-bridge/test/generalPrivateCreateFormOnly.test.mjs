@@ -76,6 +76,7 @@ test("BELLO source is re-read before the claim and form fill never saves", async
     const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
     let url = listUrl;
     const page = { url: () => url,
+      evaluate: async () => ({ href: url, timeOrigin: 123456789 }),
       getByRole(role, options) {
         assert.equal(role, "link");
         assert.deepEqual(options, { name: "商品登録", exact: true });
@@ -98,12 +99,13 @@ test("BELLO source is re-read before the claim and form fill never saves", async
         assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, true);
         return { state: "LIST_OPEN", page, context: {} };
       },
-      fillForm: async (_page, current, files, { onStage }) => {
+      fillForm: async (_page, current, files, { onStage, beforeWrite }) => {
         order.push("form-fill");
         assert.equal(current.priceYen, 99999);
         assert.equal(current.quantity, 1);
         assert.equal(files[0].sha256, imageFile().sha256);
-        onStage("CATEGORY_MISMATCH");
+        await onStage("CATEGORY_MISMATCH");
+        await beforeWrite();
         return [{ pathHash: "a".repeat(64), width: 960, height: 960 }];
       },
     });
@@ -136,18 +138,106 @@ test("an uncertain create page consumes the claim and cannot retry", async () =>
   });
 });
 
+function simulatedReadyForm(fillForm) {
+  const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
+  const createUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/create`;
+  let url = listUrl;
+  let timeOrigin = 123456789;
+  const page = { url: () => url,
+    evaluate: async () => ({ href: url, timeOrigin }),
+    getByRole(role) {
+      assert.equal(role, "link");
+      return { count: async () => 1, isEnabled: async () => true,
+        getAttribute: async () => createUrl,
+        click: async () => { url = createUrl; } };
+    } };
+  return { page, createUrl,
+    setUrl: value => { url = value; },
+    setTimeOrigin: value => { timeOrigin = value; },
+    dependencies: { remotePreflight: async () => ({
+      status: "NO_MATCH_IN_OBSERVED_UI", allowFinalCreate: false }),
+    fetchImages: async () => [imageFile()],
+    openSession: async () => ({ state: "LIST_OPEN", page, context: {} }),
+    fillForm } };
+}
+
+test("document or draft identity changes stop the claimed form before another write", async () => {
+  for (const kind of ["document", "draft"]) {
+    await withQueue(async root => {
+      let simulation;
+      simulation = simulatedReadyForm(async (_page, _pack, _files,
+        { beforeWrite }) => {
+        await beforeWrite();
+        if (kind === "document") simulation.setTimeOrigin(123456790);
+        else simulation.setUrl(`${simulation.createUrl}?productDraftId=changedDraft`);
+        await beforeWrite();
+        assert.fail("Changed target must not reach a form write");
+      });
+      if (kind === "draft") {
+        // A first draft ID is pinned by the checkpoint immediately after the link.
+        const originalClick = simulation.page.getByRole;
+        simulation.page.getByRole = (...args) => {
+          const link = originalClick(...args);
+          return { ...link, click: async () => {
+            await link.click();
+            simulation.setUrl(`${simulation.createUrl}?productDraftId=firstDraft`);
+          } };
+        };
+      }
+      const result = await fillGeneralPrivateCreateFormOnly({ root, inventoryId },
+        simulation.dependencies);
+      assert.equal(result.status, "UNKNOWN");
+      assert.equal(result.diagnostic, kind === "document" ?
+        "CREATE_DOCUMENT_UNVERIFIED" : "MULTIPLE_DRAFT_IDS_OBSERVED");
+      assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, true);
+    });
+  }
+});
+
+test("arbitrary uppercase errors and remote statuses never become diagnostics", async () => {
+  for (const message of ["UNTRUSTED_SECRET_VALUE", "FORM_READY_NO_SAVE"]) {
+    await withQueue(async root => {
+      const simulation = simulatedReadyForm(async () => {
+        throw Error(message);
+      });
+      const result = await fillGeneralPrivateCreateFormOnly({ root, inventoryId },
+        simulation.dependencies);
+      assert.equal(result.diagnostic, "FORM_FIELDS_UNCERTAIN");
+      assert.equal((await listGeneralPrivateCreateJobs(root))[0].outcome, "UNKNOWN");
+    });
+  }
+  await withQueue(async root => {
+    const result = await fillGeneralPrivateCreateFormOnly({ root, inventoryId }, {
+      remotePreflight: async () => ({ status: "UNTRUSTED_SECRET_VALUE",
+        allowFinalCreate: false }),
+    });
+    assert.equal(result.diagnostic, "REMOTE_SCAN_UNVERIFIED");
+    assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, false);
+  });
+});
+
 test("dedicated session refuses restored pages after the durable claim", async () => {
   await withQueue(async root => {
     const claim = await claimGeneralPrivateCreateOnce(root, inventoryId);
     let closed = false;
+    let enabledConnection = 0;
+    let newPages = 0;
     await assert.rejects(openGeneralPrivateCreateFormSession({ root,
       profileDir: join(root, "shops-profile"), shopId, claim,
-      launchPersistentContext: async () => ({
+      launchPersistentContext: async (_profile, options) => {
+        assert.equal(options.offline, true);
+        assert.equal(options.serviceWorkers, "block");
+        return {
         pages: () => [{ url: () => `https://mercari-shops.com/seller/shops/${shopId}/products/create` }],
+        newPage: async () => { newPages++; throw Error("Unexpected page"); },
+        serviceWorkers: () => [],
+        setOffline: async value => { if (value === false) enabledConnection++; },
         close: async () => { closed = true; },
-      }),
+      }; },
     }), /GENERAL_FORM_BROWSER_UNAVAILABLE/);
     assert.equal(closed, true);
+    assert.equal(enabledConnection, 0);
+    assert.equal(newPages, 0);
   });
 });
 
@@ -159,35 +249,50 @@ test("dedicated session opens a fresh exact-shop list after the claim", async ()
     const page = { url: () => currentUrl,
       goto: async value => { currentUrl = value; } };
     const context = { pages: () => openPages,
+      serviceWorkers: () => [], setOffline: async value => {
+        assert.equal(value, false); },
       newPage: async () => { openPages = [page]; return page; },
       close: async () => { throw Error("Unexpected close"); } };
     const session = await openGeneralPrivateCreateFormSession({ root,
       profileDir: join(root, "shops-profile"), shopId, claim,
-      launchPersistentContext: async () => context });
+      launchPersistentContext: async (_profile, options) => {
+        assert.equal(options.offline, true);
+        assert.equal(options.serviceWorkers, "block");
+        return context;
+      } });
     assert.equal(session.state, "LIST_OPEN");
     assert.equal(session.page.url(),
       `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`);
   });
 });
 
-function fakeObservedForm(categoryLeafOverride = null) {
+function fakeObservedForm(categoryLeafOverride = null,
+  { navigateOnFirstEnabled = false } = {}) {
+  const createUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/create`;
+  let url = createUrl;
   const state = { fields: {}, shipping: {}, imageCount: 0,
     condition: "新品、未使用", category: "", leaf: "選択してください",
     categorySteps: [], saveClicks: 0 };
-  const control = name => ({ count: async () => 1, isEnabled: async () => true,
+  const withHandle = value => ({ ...value, elementHandle: async () => value });
+  const control = name => withHandle({ count: async () => 1,
+    isEnabled: async () => {
+      if (navigateOnFirstEnabled && name === "name")
+        url = "https://mercari-shops.com/seller/shops/another/products/create";
+      return true;
+    },
     fill: async value => { state.fields[name] = value; },
     selectOption: async value => { state.shipping[name] = value; },
     inputValue: async () => state.fields[name] ?? state.shipping[name] ?? "",
   });
   const page = {
-    url: () => `https://mercari-shops.com/seller/shops/${shopId}/products/create`,
+    url: () => url,
     locator(selector) {
       const field = selector.match(/^\[name="(.+)"\]$/)?.[1];
       const shipping = selector.match(/^select\[name="(.+)"\]$/)?.[1];
       if (field || shipping) return control(field ?? shipping);
       if (selector === 'input[type="file"][multiple]')
-        return { count: async () => 1, isEnabled: async () => true,
-          setInputFiles: async files => { state.imageCount = files.length; } };
+        return withHandle({ count: async () => 1, isEnabled: async () => true,
+          setInputFiles: async files => { state.imageCount = files.length; } });
       if (selector === 'img[alt="uploaded-image"]')
         return { count: async () => state.imageCount,
           first: () => ({ waitFor: async () => {
@@ -202,24 +307,24 @@ function fakeObservedForm(categoryLeafOverride = null) {
     },
     getByTestId(id) {
       if (id === "condition-select-box")
-        return { count: async () => 1, isEnabled: async () => true,
-          innerText: async () => state.condition, click: async () => {} };
+        return withHandle({ count: async () => 1, isEnabled: async () => true,
+          innerText: async () => state.condition, click: async () => {} });
       if (id === "categories")
-        return { count: async () => 1, isEnabled: async () => true,
-          innerText: async () => state.leaf, click: async () => {} };
+        return withHandle({ count: async () => 1, isEnabled: async () => true,
+          innerText: async () => state.leaf, click: async () => {} });
       throw Error(`Unexpected test id: ${id}`);
     },
-    getByText(label) { return { count: async () => 1,
-      isEnabled: async () => true, click: async () => { state.condition = label; } }; },
+    getByText(label) { return withHandle({ count: async () => 1,
+      isEnabled: async () => true, click: async () => { state.condition = label; } }); },
     getByRole(role) {
       assert.equal(role, "dialog");
       return { count: async () => 1,
-        getByText(label) { return { count: async () => 1,
+        getByText(label) { return withHandle({ count: async () => 1,
           isEnabled: async () => true, click: async () => {
             state.categorySteps.push(label);
             state.leaf = categoryLeafOverride ?? label;
             state.category = `カテゴリー${state.categorySteps.join(">")}`;
-          } }; } };
+          } }); } };
     },
   };
   return { page, state };
@@ -230,6 +335,7 @@ test("observed DOM adapter fills exact values and checks the leaf, without save"
   const stages = [];
   const assets = await fillGeneralPrivateCreateFormOnce(page, pack(),
     [imageFile()], { onStage: code => stages.push(code),
+      beforeWrite: async () => {},
       readImages: async () => [{ pathHash: "a".repeat(64),
         width: 960, height: 960 }] });
   assert.equal(assets.length, 1);
@@ -240,7 +346,20 @@ test("observed DOM adapter fills exact values and checks the leaf, without save"
   assert.ok(stages.includes("IMAGE_PROOF_UNVERIFIED"));
   const changed = fakeObservedForm("別のカテゴリ");
   await assert.rejects(fillGeneralPrivateCreateFormOnce(changed.page, pack(),
-    [imageFile()], { readImages: async () => [] }),
+    [imageFile()], { beforeWrite: async () => {},
+      readImages: async () => [] }),
   { code: "CATEGORY_MISMATCH" });
   assert.equal(changed.state.imageCount, 0);
+});
+
+test("navigation during locator enablement causes zero field writes", async () => {
+  const { page, state } = fakeObservedForm(null,
+    { navigateOnFirstEnabled: true });
+  const expected = `https://mercari-shops.com/seller/shops/${shopId}/products/create`;
+  await assert.rejects(fillGeneralPrivateCreateFormOnce(page, pack(),
+    [imageFile()], { beforeWrite: async () => {
+      if (page.url() !== expected) throw Error("CREATE_URL_UNVERIFIED");
+    } }), /CREATE_URL_UNVERIFIED/);
+  assert.deepEqual(state.fields, {});
+  assert.equal(state.imageCount, 0);
 });

@@ -97,8 +97,12 @@ export async function openGeneralPrivateCreateFormSession({ root, profileDir,
     throw Error("GENERAL_FORM_SESSION_UNVERIFIED");
   await bindAccount(root, shopId);
   const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
-    launchPersistentContext });
+    launchPersistentContext, serviceWorkersBlock: true, startOffline: true });
   try {
+    if (typeof context.setOffline !== "function" ||
+        typeof context.serviceWorkers !== "function" ||
+        context.serviceWorkers().length !== 0)
+      throw Error("GENERAL_FORM_OFFLINE_GUARD_UNAVAILABLE");
     const restored = context.pages();
     if (restored.some(candidate => candidate.url() !== "about:blank"))
       throw Error("RESTORED_SHOPS_PAGE_UNRESOLVED");
@@ -106,6 +110,7 @@ export async function openGeneralPrivateCreateFormSession({ root, profileDir,
     for (const blank of restored) await blank.close();
     if (context.pages().some(candidate => candidate !== page))
       throw Error("UNEXPECTED_DEDICATED_BROWSER_PAGE");
+    await context.setOffline(false);
     const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
     await page.goto(listUrl);
     const actual = new URL(page.url());

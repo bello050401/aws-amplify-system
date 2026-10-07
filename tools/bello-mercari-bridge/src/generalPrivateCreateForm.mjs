@@ -45,7 +45,10 @@ export function diagnoseGeneralPrivateCreateForm(pack, view) {
 async function unique(locator, code) {
   if (await locator.count() !== 1 || !await locator.isEnabled())
     throw new GeneralFormMismatch(code);
-  return locator;
+  const handle = await locator.elementHandle();
+  if (!handle || !await handle.isEnabled())
+    throw new GeneralFormMismatch(code);
+  return handle;
 }
 
 const FORM_FIELDS = [
@@ -58,9 +61,11 @@ const FORM_FIELDS = [
 
 /** Only observed normal UI controls are used. No guessed Shops HTTP request. */
 export async function fillGeneralPrivateCreateFormOnce(page, input, imageFiles,
-  { onStage = () => {}, readImages = readExistingUploadedImages } = {}) {
+  { onStage = () => {}, beforeWrite, readImages = readExistingUploadedImages } = {}) {
   const pack = exactGeneralPrivateCreatePack(input);
   if (!pack) throw new GeneralFormMismatch("PACK_UNVERIFIED");
+  if (typeof beforeWrite !== "function")
+    throw new GeneralFormMismatch("TARGET_CHECK_UNAVAILABLE");
   if (pack.brandId !== null) throw new GeneralFormMismatch("BRAND_CONTROL_UNVERIFIED");
   if (!Array.isArray(imageFiles) || imageFiles.length !== pack.imageRefs.length ||
       imageFiles.some((file, index) => file?.storageKey !== pack.imageRefs[index].storageKey ||
@@ -70,52 +75,69 @@ export async function fillGeneralPrivateCreateFormOnce(page, input, imageFiles,
         !["image/jpeg", "image/png"].includes(file.mimeType)))
     throw new GeneralFormMismatch("IMAGE_PROOF_UNVERIFIED");
   for (const [name, field, code] of FORM_FIELDS) {
-    onStage(code);
+    await onStage(code);
     const control = await unique(page.locator(`[name="${name}"]`), code);
+    await beforeWrite();
     await control.fill(String(pack[field]), { timeout: 12000 });
+    await beforeWrite();
     const actual = await control.inputValue();
     if (name === "price" ? !matchesPrice(actual, pack.priceYen) :
         actual !== String(pack[field])) throw new GeneralFormMismatch(code);
   }
   for (const [name, value] of Object.entries(SHIPPING)) {
-    onStage("SHIPPING_MISMATCH");
+    await onStage("SHIPPING_MISMATCH");
     const control = await unique(page.locator(`select[name="${name}"]`),
       "SHIPPING_MISMATCH");
+    await beforeWrite();
     await control.selectOption(value, { timeout: 12000 });
+    await beforeWrite();
     if (await control.inputValue() !== value)
       throw new GeneralFormMismatch("SHIPPING_MISMATCH");
   }
-  onStage("CONDITION_MISMATCH");
+  await onStage("CONDITION_MISMATCH");
   const condition = await unique(page.getByTestId("condition-select-box"),
     "CONDITION_MISMATCH");
   if (normalize(await condition.innerText()) !== normalize(CONDITION_LABEL[pack.condition])) {
+    await beforeWrite();
     await condition.click({ timeout: 12000 });
-    await (await unique(page.getByText(CONDITION_LABEL[pack.condition], { exact: true }),
-      "CONDITION_MISMATCH")).click({ timeout: 12000 });
+    const option = await unique(page.getByText(CONDITION_LABEL[pack.condition],
+      { exact: true }), "CONDITION_MISMATCH");
+    await beforeWrite();
+    await option.click({ timeout: 12000 });
   }
-  if (normalize(await condition.innerText()) !== normalize(CONDITION_LABEL[pack.condition]))
+  await beforeWrite();
+  if (normalize(await page.getByTestId("condition-select-box").innerText()) !==
+      normalize(CONDITION_LABEL[pack.condition]))
     throw new GeneralFormMismatch("CONDITION_MISMATCH");
-  onStage("CATEGORY_MISMATCH");
+  await onStage("CATEGORY_MISMATCH");
   const categories = await unique(page.getByTestId("categories"), "CATEGORY_MISMATCH");
+  await beforeWrite();
   await categories.click({ timeout: 12000 });
   for (const label of pack.categoryPath.split(" > ")) {
     const dialog = page.getByRole("dialog");
     if (await dialog.count() !== 1) throw new GeneralFormMismatch("CATEGORY_MISMATCH");
-    await (await unique(dialog.getByText(label, { exact: true }),
-      "CATEGORY_MISMATCH")).click({ timeout: 12000 });
+    const option = await unique(dialog.getByText(label, { exact: true }),
+      "CATEGORY_MISMATCH");
+    await beforeWrite();
+    await option.click({ timeout: 12000 });
   }
-  if (normalize(await categories.innerText()) !==
+  await beforeWrite();
+  if (normalize(await page.getByTestId("categories").innerText()) !==
       normalize(pack.categoryPath.split(" > ").at(-1)))
     throw new GeneralFormMismatch("CATEGORY_MISMATCH");
-  onStage("IMAGE_PROOF_UNVERIFIED");
+  await onStage("IMAGE_PROOF_UNVERIFIED");
   if (await page.locator('img[alt="uploaded-image"]').count() !== 0)
     throw new GeneralFormMismatch("IMAGE_PROOF_UNVERIFIED");
-  await (await unique(page.locator('input[type="file"][multiple]'),
-    "IMAGE_PROOF_UNVERIFIED")).setInputFiles(imageFiles.map(file => ({
+  const fileInput = await unique(page.locator('input[type="file"][multiple]'),
+    "IMAGE_PROOF_UNVERIFIED");
+  await beforeWrite();
+  await fileInput.setInputFiles(imageFiles.map(file => ({
       name: file.filename, mimeType: file.mimeType, buffer: file.buffer,
     })), { timeout: 12000 });
+  await beforeWrite();
   await page.locator('img[alt="uploaded-image"]').first().waitFor({
     state: "visible", timeout: 30000 });
+  await beforeWrite();
   const view = await page.locator("body").evaluate(() => {
     const field = name => document.querySelector(`[name="${name}"]`)?.value ?? null;
     return { name: field("name"), description: field("description"),

@@ -12,6 +12,21 @@ import { openGeneralPrivateCreateFormSession } from "./session.mjs";
 
 const SHOPS = "https://mercari-shops.com";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
+const REMOTE_DIAGNOSTICS = new Set(["REMOTE_SCAN_UNVERIFIED",
+  "REMOTE_SCAN_UNAVAILABLE", "REMOTE_SCAN_INCOMPLETE",
+  "REMOTE_DUPLICATE_POSSIBLE", "REMOTE_DRAFT_AMBIGUOUS",
+  "LOCAL_CLAIM_UNKNOWN_NO_RETRY"]);
+const FORM_DIAGNOSTICS = new Set(["PACK_UNVERIFIED",
+  "BRAND_CONTROL_UNVERIFIED", "TARGET_CHECK_UNAVAILABLE",
+  "IMAGE_PROOF_UNVERIFIED", "NAME_MISMATCH", "DESCRIPTION_MISMATCH",
+  "PRICE_MISMATCH", "QUANTITY_MISMATCH", "MANAGEMENT_CODE_MISMATCH",
+  "SHIPPING_MISMATCH", "CONDITION_MISMATCH", "CATEGORY_MISMATCH",
+  "IMAGE_COUNT_MISMATCH", "IMAGE_ASSET_UNVERIFIED"]);
+const ATTEMPT_DIAGNOSTICS = new Set([...FORM_DIAGNOSTICS,
+  "BROWSER_UNAVAILABLE", "EXACT_SHOP_LIST_UNAVAILABLE",
+  "CREATE_LINK_UNVERIFIED", "CREATE_PAGE_UNCERTAIN",
+  "CREATE_URL_UNVERIFIED", "CREATE_DOCUMENT_UNVERIFIED",
+  "MULTIPLE_DRAFT_IDS_OBSERVED", "FORM_FIELDS_UNCERTAIN"]);
 
 /** The only allowed create URL is the fixed shop path and at most one draft ID. */
 export function inspectGeneralPrivateCreateUrl(raw, shopId) {
@@ -66,8 +81,9 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
     captureReadOnlyScan });
   if (remote?.status !== "NO_MATCH_IN_OBSERVED_UI" ||
       remote.allowFinalCreate !== false)
-    return { status: "BLOCKED", diagnostic: remote?.status ??
-      "REMOTE_SCAN_UNVERIFIED" };
+    return { status: "BLOCKED", diagnostic:
+      REMOTE_DIAGNOSTICS.has(remote?.status) ? remote.status :
+        "REMOTE_SCAN_UNVERIFIED" };
   let files;
   try {
     files = await fetchImages({ origin, belloProfileDir,
@@ -83,12 +99,26 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
   let session = null;
   let diagnostic = "BROWSER_UNAVAILABLE";
   let observedDraftId = null;
-  const seenDraftIds = new Set();
-  const checkpoint = () => {
-    const current = inspectGeneralPrivateCreateUrl(session.page.url(), pack.shopId);
+  let pinnedDocumentTimeOrigin = null;
+  let pinnedDraftId = null;
+  const checkpoint = async () => {
+    const beforeUrl = session.page.url();
+    const document = await session.page.evaluate(() => ({
+      href: globalThis.document.location.href,
+      timeOrigin: globalThis.performance.timeOrigin,
+    }));
+    if (beforeUrl !== session.page.url() || document?.href !== beforeUrl ||
+        !Number.isFinite(document.timeOrigin) || document.timeOrigin <= 0 ||
+        (pinnedDocumentTimeOrigin !== null &&
+          document.timeOrigin !== pinnedDocumentTimeOrigin))
+      throw Error("CREATE_DOCUMENT_UNVERIFIED");
+    if (pinnedDocumentTimeOrigin === null)
+      pinnedDocumentTimeOrigin = document.timeOrigin;
+    const current = inspectGeneralPrivateCreateUrl(beforeUrl, pack.shopId);
     if (!current.valid) throw Error("CREATE_URL_UNVERIFIED");
-    if (current.draftId) seenDraftIds.add(current.draftId);
-    if (seenDraftIds.size > 1) throw Error("MULTIPLE_DRAFT_IDS_OBSERVED");
+    if (pinnedDraftId !== null && current.draftId !== pinnedDraftId)
+      throw Error("MULTIPLE_DRAFT_IDS_OBSERVED");
+    if (current.draftId && !pinnedDraftId) pinnedDraftId = current.draftId;
     observedDraftId = current.draftId;
   };
   try {
@@ -109,19 +139,24 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
       throw Error("CREATE_LINK_UNVERIFIED");
     diagnostic = "CREATE_PAGE_UNCERTAIN";
     await link.click({ timeout: 12000 });
-    checkpoint();
+    await checkpoint();
     diagnostic = "FORM_FIELDS_UNCERTAIN";
     const assets = await fillForm(session.page, pack, files, {
-      onStage: code => { checkpoint(); diagnostic = code; },
+      onStage: async code => {
+        await checkpoint();
+        diagnostic = FORM_DIAGNOSTICS.has(code) ? code :
+          "FORM_FIELDS_UNCERTAIN";
+      },
+      beforeWrite: checkpoint,
     });
-    checkpoint();
+    await checkpoint();
     if (!Array.isArray(assets) || assets.length !== pack.imageRefs.length)
       throw Error("IMAGE_ASSET_UNVERIFIED");
     diagnostic = "FORM_READY_NO_SAVE";
   } catch (error) {
-    if (error instanceof GeneralFormMismatch ||
-        /^[A-Z][A-Z0-9_]+$/.test(error?.message ?? ""))
-      diagnostic = error.code ?? error.message;
+    const code = error instanceof GeneralFormMismatch ?
+      error.code : error?.message;
+    if (ATTEMPT_DIAGNOSTICS.has(code)) diagnostic = code;
   }
   await recordResult(root, inventoryId, { attemptId: claim.attemptId,
     outcome: "UNKNOWN", listingConfirmed: false, observedRemoteId: null,
