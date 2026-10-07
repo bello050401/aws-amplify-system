@@ -8,6 +8,13 @@ const EMPTY_TEXT = "現在、登録している商品はありません";
 const READ_LIMIT = 12;
 const WAIT_MS = 600;
 const TIMEOUT = 12_000;
+const STAGE_FAILURES = new Set([
+  "SALE_SKU_SEARCH_NAVIGATION_UNAVAILABLE",
+  "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE",
+  "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE",
+  "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE",
+  "SALE_SKU_SEARCH_CONTROL_ROW_CLICK_UNAVAILABLE",
+]);
 const fixed = diagnostic => ({ diagnostic, allowFinalCreate: false });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -92,12 +99,13 @@ async function stableControlDetail(ui, shopId, prefix) {
 function browserAdapter(page) {
   return {
     goto: url => page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT }),
-    search: async query => {
+    search: async (query, markStage) => {
       const textbox = page.getByRole("textbox", { name: SEARCH_LABEL });
       // Match the observed working UI action; count still requires one control.
       const button = page.getByRole("button", { name: "search" });
       if (await textbox.count() !== 1 || await button.count() !== 1)
         throw Error("Search controls unavailable");
+      markStage?.("SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE");
       await textbox.fill(query, { timeout: TIMEOUT });
       await button.click({ timeout: TIMEOUT });
     },
@@ -193,18 +201,29 @@ export async function searchGeneralPrivateCreateSaleSkuReadOnly({ page, shopId,
   const baseUrl = `${ORIGIN}/seller/shops/${shopId}/products?tab=on_sale`;
   const controlUrl = searchUrl(shopId, positiveControlPrefix);
   const exactUrl = searchUrl(shopId, managementCode);
+  let stage = "SALE_SKU_SEARCH_NAVIGATION_UNAVAILABLE";
+  const markStage = value => {
+    if (STAGE_FAILURES.has(value)) stage = value;
+  };
   try {
     await ui.goto(baseUrl);
-    await ui.search(positiveControlPrefix);
+    stage = "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE";
+    await ui.search(positiveControlPrefix, markStage);
+    stage = "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE";
     const control = await stableSearch(ui, controlUrl,
       positiveControlPrefix, "positive");
     if (!control) return fixed("SALE_SKU_SEARCH_CONTROL_UNVERIFIED");
+    stage = "SALE_SKU_SEARCH_CONTROL_ROW_CLICK_UNAVAILABLE";
     await ui.clickControlRow(control.tableIndex);
+    stage = "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE";
     if (!await stableControlDetail(ui, shopId, positiveControlPrefix))
       return fixed("SALE_SKU_SEARCH_CONTROL_UNVERIFIED");
     for (let pass = 0; pass < 2; pass++) {
+      stage = "SALE_SKU_SEARCH_NAVIGATION_UNAVAILABLE";
       await ui.goto(baseUrl);
-      await ui.search(managementCode);
+      stage = "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE";
+      await ui.search(managementCode, markStage);
+      stage = "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE";
       const exact = await stableSearch(ui, exactUrl, managementCode, "empty");
       if (exact?.matchPossible === true)
         return fixed("SALE_SKU_SEARCH_MATCH_POSSIBLE");
@@ -217,5 +236,5 @@ export async function searchGeneralPrivateCreateSaleSkuReadOnly({ page, shopId,
       }
     }
     return fixed("SALE_SKU_SEARCH_NO_MATCH_OBSERVED");
-  } catch { return fixed("SALE_SKU_SEARCH_READ_UNAVAILABLE"); }
+  } catch { return fixed(stage); }
 }

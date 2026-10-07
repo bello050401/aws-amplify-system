@@ -124,8 +124,48 @@ test("invalid input and UI error produce fixed results without private data", as
   const readError = await searchGeneralPrivateCreateSaleSkuReadOnly({ shopId,
     managementCode, positiveControlPrefix,
     adapter: { goto: async () => { throw Error("private-data"); } } });
-  assert.equal(readError.diagnostic, "SALE_SKU_SEARCH_READ_UNAVAILABLE");
+  assert.equal(readError.diagnostic, "SALE_SKU_SEARCH_NAVIGATION_UNAVAILABLE");
   assert.equal(JSON.stringify(readError).includes("private-data"), false);
+});
+
+test("read errors reveal only the failed stage, never the exception", async () => {
+  const cases = [
+    [{ search: async () => { throw Error("private-control"); } },
+      "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE"],
+    [{ search: async (_query, markStage) => {
+      markStage("SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE");
+      throw Error("private-action");
+    } }, "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE"],
+    [{ searchSnapshot: async () => { throw Error("private-dom"); } },
+      "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE"],
+    [{ clickControlRow: async () => { throw Error("private-row"); } },
+      "SALE_SKU_SEARCH_CONTROL_ROW_CLICK_UNAVAILABLE"],
+    [{ controlDetail: async () => { throw Error("private-detail"); } },
+      "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE"],
+  ];
+  for (const [override, diagnostic] of cases) {
+    const adapter = { ...fakeUi(), ...override };
+    const result = await searchGeneralPrivateCreateSaleSkuReadOnly({ shopId,
+      managementCode, positiveControlPrefix, adapter });
+    assert.deepEqual(result, { diagnostic, allowFinalCreate: false });
+    assert.equal(JSON.stringify(result).includes("private"), false);
+  }
+});
+
+test("browser adapter distinguishes missing search controls from fill failure", async () => {
+  const textbox = { count: async () => 1,
+    fill: async () => { throw Error("private-fill"); } };
+  let buttonCount = 0;
+  const page = { goto: async () => {},
+    getByRole: role => role === "textbox" ? textbox :
+      { count: async () => buttonCount, click: async () => {} } };
+  const options = { page, shopId, managementCode, positiveControlPrefix };
+  const missing = await searchGeneralPrivateCreateSaleSkuReadOnly(options);
+  assert.equal(missing.diagnostic, "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE");
+  buttonCount = 1;
+  const fillFailure = await searchGeneralPrivateCreateSaleSkuReadOnly(options);
+  assert.equal(fillFailure.diagnostic, "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE");
+  assert.equal(JSON.stringify(fillFailure).includes("private-fill"), false);
 });
 
 test("normal scan integrates only allowlisted search results", async () => {
@@ -151,6 +191,17 @@ test("normal scan integrates only allowlisted search results", async () => {
       allowFinalCreate: false }) });
   assert.deepEqual(observed, { status: "REMOTE_SCAN_INCOMPLETE",
     diagnostic: "SALE_SKU_SEARCH_NO_MATCH_OBSERVED", allowFinalCreate: false });
+  for (const diagnostic of ["SALE_SKU_SEARCH_NAVIGATION_UNAVAILABLE",
+    "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE",
+    "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE",
+    "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE",
+    "SALE_SKU_SEARCH_CONTROL_ROW_CLICK_UNAVAILABLE"]) {
+    page = 0;
+    const staged = await scanGeneralPrivateCreateNormalUiReadOnly({ ...options,
+      searchSaleSku: async () => ({ diagnostic, allowFinalCreate: false }) });
+    assert.deepEqual(staged, { status: "REMOTE_SCAN_INCOMPLETE", diagnostic,
+      allowFinalCreate: false });
+  }
   page = 0;
   const malicious = await scanGeneralPrivateCreateNormalUiReadOnly({ ...options,
     searchSaleSku: async () => ({ diagnostic: "private-data",
