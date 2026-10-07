@@ -27,14 +27,14 @@ function diagnoseSale(snapshot, url) {
   if (snapshot.tableMatches !== 1 ||
       !Number.isSafeInteger(snapshot.tableIndex) || snapshot.tableIndex < 0 ||
       !Number.isSafeInteger(snapshot.headerCount) || snapshot.headerCount < 2 ||
-      !Number.isSafeInteger(snapshot.titleColumn) || snapshot.titleColumn < 0 ||
-      snapshot.titleColumn >= snapshot.headerCount)
+      snapshot.titleColumn !== 1)
     return "SALE_TABLE_UNVERIFIED";
   if (!Array.isArray(snapshot.rows) || snapshot.rows.length > 50)
     return "SALE_ROW_COUNT_UNVERIFIED";
   if (snapshot.rows.some(row => typeof row.title !== "string" ||
-      row.title.length > 130 || row.cellCount !== snapshot.headerCount ||
-      row.interactiveCount !== 0 || typeof row.signature !== "string" ||
+      row.title.length > 130 || row.cellCount !== 10 ||
+      row.dataActionCount !== 0 || row.menuControlsVerified !== true ||
+      typeof row.signature !== "string" ||
       row.signature.length > 3000)) return "SALE_ROW_SHAPE_UNVERIFIED";
   if (snapshot.nextCount !== 1 || snapshot.prevCount !== 1)
     return "SALE_PAGINATION_CONTROLS_UNVERIFIED";
@@ -78,12 +78,41 @@ function browserAdapter(page) {
           return { table, index, headers };
         }).filter(item => item.headers.filter(header => header === "商品名").length === 1);
         const selected = matches.length === 1 ? matches[0] : null;
+        const ACTIONABLE =
+          'a, button, input, select, textarea, [role="button"], [role="menuitem"], [contenteditable="true"]';
+        const menuKinds = [
+          { prefix: "product-menu-button-", role: null, label: "メニュー" },
+          { prefix: "copy-product-menu-item-", role: "menuitem", label: null },
+          { prefix: "product-page-menu-item-", role: "menuitem", label: null },
+        ];
         const rows = selected ? [...selected.table.querySelectorAll("tbody tr")].map(row => {
           const cells = [...row.querySelectorAll(":scope > td")];
-          return { title: text(cells[selected.headers.indexOf("商品名")]),
+          const dataActionCount = cells.slice(0, -1).reduce((count, cell) =>
+            count + cell.querySelectorAll(ACTIONABLE).length, 0);
+          const menuActions = cells.length === 10 ?
+            [...cells[9].querySelectorAll(ACTIONABLE)] : [];
+          const suffixes = [];
+          const menuControlsVerified = menuActions.length === 3 &&
+            menuKinds.every(kind => {
+              const matches = menuActions.filter(action =>
+                action.getAttribute("data-testid")?.startsWith(kind.prefix));
+              if (matches.length !== 1 || matches[0].tagName !== "BUTTON")
+                return false;
+              const action = matches[0];
+              const suffix = action.getAttribute("data-testid").slice(kind.prefix.length);
+              if (!/^[A-Za-z0-9_-]{1,100}$/.test(suffix) ||
+                  action.getAttribute("role") !== kind.role ||
+                  (kind.label !== null &&
+                    action.getAttribute("aria-label") !== kind.label) ||
+                  (kind.prefix === "product-page-menu-item-" &&
+                    (action.innerText !== "" ||
+                      action.getAttribute("aria-label") !== null))) return false;
+              suffixes.push(suffix);
+              return true;
+            }) && suffixes.every(suffix => suffix === suffixes[0]);
+          return { title: text(cells[1]),
             signature: JSON.stringify(cells.map(text)), cellCount: cells.length,
-            interactiveCount: row.querySelectorAll(
-              'a, button, input, select, textarea, [role="button"], [contenteditable="true"]').length };
+            dataActionCount, menuControlsVerified };
         }) : [];
         const next = [...document.querySelectorAll('[data-testid="pagination-next-button"]')];
         const prev = [...document.querySelectorAll('[data-testid="pagination-prev-button"]')];

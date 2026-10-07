@@ -13,10 +13,11 @@ function snapshot(titles, { nextDisabled, prevDisabled,
   statusChipExact = true, visibilityChipExact = true } = {}) {
   return { url: saleUrl, documentUrl: saleUrl, loading: false,
     statusChipExact, visibilityChipExact, tableMatches: 1, tableIndex: 0,
-    headerCount: 2, titleColumn: 0, nextCount: 1, prevCount: 1,
+    headerCount: 10, titleColumn: 1, nextCount: 1, prevCount: 1,
     nextDisabled, prevDisabled,
-    rows: titles.map(value => ({ title: value, signature: JSON.stringify([value, "1"]),
-      cellCount: 2, interactiveCount: 0 })) };
+    rows: titles.map(value => ({ title: value,
+      signature: JSON.stringify(["image", value, "1"]),
+      cellCount: 10, dataActionCount: 0, menuControlsVerified: true })) };
 }
 
 function fakeAdapter(pages, { transient = false, stuck = false } = {}) {
@@ -44,6 +45,35 @@ const drafts = rows => async () => ({ status: "DRAFT_DETAILS_DOM_OBSERVED",
   rows, allowFinalCreate: false });
 const emptyDrafts = drafts(Array.from({ length: 12 }, () =>
   ({ title: "", skuCode: null })));
+
+function domButton(testId, role = null, ariaLabel = null) {
+  return { tagName: "BUTTON", innerText: "", textContent: "",
+    getAttribute: name => name === "data-testid" ? testId :
+      name === "role" ? role : name === "aria-label" ? ariaLabel : null };
+}
+
+function domTable(title, { dataButton = false, unknownMenu = false,
+  mismatchedSuffix = false } = {}) {
+  const headers = Array.from({ length: 10 }, (_, i) =>
+    ({ textContent: i === 1 ? "商品名" : `column-${i}` }));
+  const suffix = "hiddenRemoteId";
+  const menuButtons = [
+    domButton(`product-menu-button-${suffix}`, null, "メニュー"),
+    domButton(`copy-product-menu-item-${mismatchedSuffix ? "anotherId" : suffix}`,
+      "menuitem"),
+    domButton(unknownMenu ? `unexpected-${suffix}` :
+      `product-page-menu-item-${suffix}`, "menuitem"),
+  ];
+  const cells = Array.from({ length: 10 }, (_, i) => ({
+    textContent: i === 1 ? title : i === 0 ? "image" : "",
+    querySelectorAll: () => i === 9 ? menuButtons :
+      i === 1 && dataButton ? [domButton("unexpected-data-action")] : [],
+  }));
+  const row = { querySelectorAll: selector =>
+    selector === ":scope > td" ? cells : [] };
+  return { querySelectorAll: selector => selector === "thead th" ? headers :
+    selector === "tbody tr" ? [row] : [] };
+}
 
 test("normal UI scan waits through stale 51 rows and detects a later-page title", async () => {
   const adapter = fakeAdapter([
@@ -155,12 +185,7 @@ test("first-page both-disabled controls cannot prove the last page", async () =>
 
 test("a selected unrelated すべて option is not visibility evidence", async () => {
   const originalDocument = globalThis.document;
-  const header = [{ textContent: "商品名" }, { textContent: "価格" }];
-  const cells = [{ textContent: "Other item" }, { textContent: "1" }];
-  const row = { querySelectorAll: selector => selector === ":scope > td" ?
-    cells : [] };
-  const table = { querySelectorAll: selector => selector === "thead th" ?
-    header : selector === "tbody tr" ? [row] : [] };
+  const table = domTable("Other item");
   const next = { disabled: false, getAttribute: () => null };
   const prev = { disabled: true, getAttribute: () => null };
   let unrelatedSeen = false;
@@ -197,18 +222,12 @@ test("a selected unrelated すべて option is not visibility evidence", async (
 test("only the exact on-sale status and visibility chips permit list reading", async () => {
   const originalDocument = globalThis.document;
   let pageIndex = 0;
-  const header = [{ textContent: "商品名" }, { textContent: "価格" }];
   const names = ["Other first item", "Other second item"];
-  const table = { querySelectorAll: selector => selector === "thead th" ?
-    header : selector === "tbody tr" ? [{ querySelectorAll: cellSelector =>
-      cellSelector === ":scope > td" ? [
-        { textContent: names[pageIndex] }, { textContent: "1" },
-      ] : [] }] : [] };
   const control = disabled => ({ disabled, getAttribute: () => null });
   globalThis.document = { location: { href: saleUrl },
     querySelector: () => null,
     querySelectorAll: selector => {
-      if (selector === "table") return [table];
+      if (selector === "table") return [domTable(names[pageIndex])];
       if (selector === '[data-testid="pagination-next-button"]')
         return [control(pageIndex === 1)];
       if (selector === '[data-testid="pagination-prev-button"]')
@@ -237,6 +256,42 @@ test("only the exact on-sale status and visibility chips permit list reading", a
   } finally { globalThis.document = originalDocument; }
 });
 
+test("only the three known final-cell buttons are allowed; title is td[1]", async () => {
+  const originalDocument = globalThis.document;
+  try {
+    for (const [options, expected] of [
+      [{}, "SALE_TITLE_MATCH"],
+      [{ dataButton: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
+      [{ unknownMenu: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
+      [{ mismatchedSuffix: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
+    ]) {
+      globalThis.document = { location: { href: saleUrl },
+        querySelector: () => null,
+        querySelectorAll: selector => {
+          if (selector === "table") return [domTable(title, options)];
+          if (selector === '[data-testid="pagination-next-button"]')
+            return [{ disabled: false, getAttribute: () => null }];
+          if (selector === '[data-testid="pagination-prev-button"]')
+            return [{ disabled: true, getAttribute: () => null }];
+          if (selector === 'button[data-testid="product-status-chip"]')
+            return [{ textContent: "ステータス: 出品中" }];
+          if (selector === 'button[data-testid="visibility-chip"]')
+            return [{ textContent: "公開状態: すべて" }];
+          return [];
+        } };
+      const page = { goto: async () => {}, url: () => saleUrl,
+        locator: selector => { assert.equal(selector, "body");
+          return { evaluate: async callback => callback() }; },
+        waitForTimeout: async () => {} };
+      const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+        page, collectDrafts: async () => { throw Error("Must not read drafts"); } });
+      assert.equal(result.diagnostic, expected);
+      assert.equal(result.allowFinalCreate, false);
+      assert.equal(JSON.stringify(result).includes("hiddenRemoteId"), false);
+    }
+  } finally { globalThis.document = originalDocument; }
+});
+
 test("sale-list failures return only the expected fixed diagnostic", async () => {
   const base = () => snapshot(["private-title"],
     { nextDisabled: false, prevDisabled: true });
@@ -251,8 +306,9 @@ test("sale-list failures return only the expected fixed diagnostic", async () =>
       "SALE_VISIBILITY_FILTER_UNVERIFIED"],
     [{ ...base(), tableMatches: 0 }, "SALE_TABLE_UNVERIFIED"],
     [{ ...base(), rows: Array.from({ length: 51 }, (_, i) =>
-      ({ title: `private-title-${i}`, signature: "[]", cellCount: 2,
-        interactiveCount: 0 })) }, "SALE_ROW_COUNT_UNVERIFIED"],
+      ({ title: `private-title-${i}`, signature: "[]", cellCount: 10,
+        dataActionCount: 0, menuControlsVerified: true })) },
+      "SALE_ROW_COUNT_UNVERIFIED"],
     [{ ...base(), nextCount: 0 },
       "SALE_PAGINATION_CONTROLS_UNVERIFIED"],
     [{ ...base(), nextDisabled: null },
