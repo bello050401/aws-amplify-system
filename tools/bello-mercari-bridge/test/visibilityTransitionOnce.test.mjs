@@ -122,6 +122,26 @@ test("one verified stop permits one later relist of the same ID", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("a blocked listing interval records UNKNOWN without opening or retrying Shops", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-visibility-interval-"));
+  try {
+    const stop = fakeBrowser("STOP");
+    assert.equal((await runVisibilityTransitionOnce(args(root, "STOP"),
+      stop.deps)).status, "STOP_VERIFIED");
+    const relist = fakeBrowser("RELIST");
+    const blocked = { ...relist.deps,
+      withListingSend: async () => { throw Error("Legacy listing send is active"); } };
+    const result = await runVisibilityTransitionOnce(args(root, "RELIST"), blocked);
+    assert.equal(result.status, "UNKNOWN");
+    assert.deepEqual(relist.state(), { closed: false, nextClicks: 0, saveClicks: 0 });
+    const saved = JSON.parse(await readFile(join(root, "visibility-transition-once",
+      `${shopId}-${target.remoteId}-RELIST.result.json`), "utf8"));
+    assert.equal(saved.diagnosticStage, "LISTING_INTERVAL_UNCERTAIN");
+    assert.equal((await runVisibilityTransitionOnce(args(root, "RELIST"),
+      relist.deps)).status, "ALREADY_ATTEMPTED");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("unknown after readback preserves the ID and permanently blocks another click", async () => {
   const root = await mkdtemp(join(tmpdir(), "bello-visibility-unknown-"));
   try {

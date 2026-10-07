@@ -9,7 +9,7 @@ import { readPinnedEditFields, privateSaveControl } from "./saveExistingPrivateO
 import { MAX_MANUAL_MUTATION_EVENTS, observeManualShopsMutation,
   safeManualMutationSummary } from
   "./manualMutationObservation.mjs";
-import { reserveShopListingSend } from "./listingSendGate.mjs";
+import { withShopListingSend } from "./listingSendGate.mjs";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -144,7 +144,7 @@ export async function runVisibilityTransitionOnce({ root, profileDir,
     chooseSaveButton = exactSaveButton,
     readStopProof = readVerifiedStop,
     writeResult = saveResult,
-    reserveListingSend = reserveShopListingSend,
+    withListingSend = withShopListingSend,
   } = {}) {
   if (![root, profileDir, playwrightModulePath].every(value =>
       typeof value === "string" && isAbsolute(value)) ||
@@ -161,6 +161,7 @@ export async function runVisibilityTransitionOnce({ root, profileDir,
     if (error?.code === "EEXIST") return { status: "ALREADY_ATTEMPTED" };
     throw error;
   }
+  const performTransition = async () => {
   const expectedEditUrl = `https://mercari-shops.com/seller/shops/${target.shopId}/products/${target.remoteId}/edit`;
   const beforeVisibility = action === "STOP" ? "PUBLIC" : "PRIVATE";
   const afterVisibility = action === "STOP" ? "PRIVATE" : "PUBLIC";
@@ -195,12 +196,6 @@ export async function runVisibilityTransitionOnce({ root, profileDir,
       throw Error("Fields changed before save");
     const button = await chooseSaveButton(session.page, expectedEditUrl, action);
     if (!button) throw Error("Observed visibility dialog changed");
-    if (action === "RELIST") {
-      stage = "LISTING_INTERVAL_UNCERTAIN";
-      await reserveListingSend(root, { shopId: target.shopId,
-        inventoryId: target.inventoryId, operation: "RELIST",
-        attemptId: marker.attemptId });
-    }
     postClickOrder = observer.checkpoint();
     stage = "SAVE_CLICK_UNCERTAIN";
     await button.click({ timeout: 12000 });
@@ -241,4 +236,28 @@ export async function runVisibilityTransitionOnce({ root, profileDir,
   return { status: result.outcome, remoteId: target.remoteId,
     observedVisibility: result.observedVisibility,
     retainedSession: mayHaveClicked && !verified ? session : null };
+  };
+  if (action !== "RELIST") return performTransition();
+  let transitionStarted = false;
+  try {
+    return await withListingSend(root, { shopId: target.shopId,
+      inventoryId: target.inventoryId, operation: "RELIST",
+      attemptId: marker.attemptId }, () => {
+      transitionStarted = true;
+      return performTransition();
+    });
+  } catch (error) {
+    // The claim remains durable even when the interval/legacy lock cannot be acquired.
+    if (transitionStarted) throw error;
+    await writeResult(root, target, action, {
+      schemaVersion: 1, action, shopId: target.shopId,
+      inventoryId: target.inventoryId, remoteId: target.remoteId, title: target.title,
+      targetFingerprint: marker.targetFingerprint, attemptId: marker.attemptId,
+      outcome: "UNKNOWN", observedVisibility: null,
+      diagnosticStage: "LISTING_INTERVAL_UNCERTAIN",
+      recordedAt: new Date().toISOString(),
+    });
+    return { status: "UNKNOWN", remoteId: target.remoteId,
+      observedVisibility: null, retainedSession: null };
+  }
 }
