@@ -16,6 +16,7 @@ import { preparePrivateCreateOnce } from "./privateCreatePreparation.mjs";
 import { openFutureCreateTrafficObservationSession } from "./session.mjs";
 import { recordFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
 import { runPinnedPrivateCreateUiOnce } from "./privateCreateUiOnce.mjs";
+import { runB005413PrivateCreateUiOnce } from "./privateCreateB005413UiOnce.mjs";
 import { exactVisibilityPcJob, runVisibilityTransitionOnce } from
   "./visibilityTransitionOnce.mjs";
 
@@ -81,6 +82,21 @@ async function main() {
         remoteId: result.remoteId, listingConfirmed: result.listingConfirmed }) + "\n");
       if (result.retainedSession) await result.retainedSession.closed;
     } catch { throw Error("B005659_PRIVATE_CREATE_UNAVAILABLE"); }
+    return;
+  }
+  if (command === "run-b005413-private-create-ui-once") {
+    try {
+      if (flags["confirm-code"] !== "TEST_B005413_B63EF3F86211FFE0F890D81E" ||
+          ![flags.root, flags.profile, flags.playwright, flags.image].every(value =>
+            typeof value === "string" && isAbsolute(value)))
+        throw Error("Invalid fixed inputs");
+      const result = await runB005413PrivateCreateUiOnce({ root: flags.root,
+        profileDir: flags.profile, playwrightModulePath: flags.playwright,
+        imagePath: flags.image });
+      process.stdout.write(JSON.stringify({ status: result.status,
+        remoteId: result.remoteId, listingConfirmed: result.listingConfirmed }) + "\n");
+      if (result.retainedSession) await result.retainedSession.closed;
+    } catch { throw Error("B005413_PRIVATE_CREATE_UNAVAILABLE"); }
     return;
   }
   if (command === "run-visibility-transition-once") {
@@ -215,7 +231,7 @@ async function main() {
     process.stdout.write(JSON.stringify(results.map(({ recordedAt, status, reasonCode }) => ({ recordedAt, status, reasonCode }))) + "\n");
     return;
   }
-  throw Error("Commands: prepare-private-create-no-send, observe-future-private-create-traffic, run-b005659-private-create-ui-once, run-visibility-transition-once, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
+  throw Error("Commands: prepare-private-create-no-send, observe-future-private-create-traffic, run-b005659-private-create-ui-once, run-b005413-private-create-ui-once, run-visibility-transition-once, preflight-private-create, claim-private-create-once, record-private-create-ui-unverified, record-private-create-draft-autosave-unverified, export-private-create-claim, export-private-create-ui-result, export-saved-direct-read-proof, open-bello-login, run-cloud-read, open-login, open-existing, enqueue-read, run-read, results");
 }
 
 main().catch(error => {

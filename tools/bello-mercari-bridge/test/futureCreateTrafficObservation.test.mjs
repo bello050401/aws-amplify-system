@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { buildPrivateCreatePreparation, preparePrivateCreateOnce,
-  PRIVATE_CREATE_SHOP_ID } from
+  PRIVATE_CREATE_SHOP_ID, NEXT_PRIVATE_TEST_INVENTORY_ID } from
   "../src/privateCreatePreparation.mjs";
 import { claimFutureCreateObservationOnce,
   recordFutureCreateObservationOnce } from "../src/futureCreateObservationAttempt.mjs";
@@ -28,6 +28,8 @@ const input = { schemaVersion: 1, kind: "BELLO_PRIVATE_CREATE_PREPARATION",
   imageRefs: [{ source: "INVENTORY", storageKey: "inventory/photo.jpg",
     sortOrder: 0, photoAssetId: null }] };
 const privateTestId = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
+const nextPrivateTest = JSON.parse(await readFile(fileURLToPath(
+  new URL("./fixtures/b005413-snapshot.json", import.meta.url)), "utf8"));
 const privateTest = {
   schemaVersion: 2, kind: "BELLO_SEPARATE_PRIVATE_TEST_PREPARATION",
   shopId: PRIVATE_CREATE_SHOP_ID, inventoryId: privateTestId,
@@ -277,6 +279,27 @@ test("B005659 private test can be claimed once without touching the existing pro
     assert.equal(JSON.stringify(stored).includes(privateTest.testManagementCode), false);
     assert.equal(JSON.stringify(stored).includes(privateTest.doNotModifyProductId), false);
   }, privateTest));
+
+test("B005413 has its own one-time claim and cannot reuse B005659's slot", () =>
+  withPrepared(async root => {
+    await preparePrivateCreateOnce(root, privateTest);
+    const oldClaim = await claimFutureCreateObservationOnce(root, privateTestId);
+    const nextClaim = await claimFutureCreateObservationOnce(root,
+      NEXT_PRIVATE_TEST_INVENTORY_ID);
+    assert.notEqual(nextClaim.attemptId, oldClaim.attemptId);
+    assert.equal(nextClaim.outcome, "UNKNOWN");
+    assert.equal(nextClaim.listingConfirmed, false);
+    const oldPath = join(root, "future-private-create-observation-once",
+      `${PRIVATE_CREATE_SHOP_ID}-once.claim.json`);
+    const newPath = join(root, "future-private-create-observation-once",
+      `${PRIVATE_CREATE_SHOP_ID}-B005413-once.claim.json`);
+    assert.equal(JSON.parse(await readFile(oldPath, "utf8")).attemptId,
+      oldClaim.attemptId);
+    assert.equal(JSON.parse(await readFile(newPath, "utf8")).attemptId,
+      nextClaim.attemptId);
+    await assert.rejects(claimFutureCreateObservationOnce(root,
+      NEXT_PRIVATE_TEST_INVENTORY_ID), /ALREADY_CLAIMED/);
+  }, nextPrivateTest));
 
 test("array inventory ID cannot enter the observation claim", () =>
   withPrepared(async root => {

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "kind": "BELLO_SEPARATE_PRIVATE_TEST_PREPARATION",
+  "shopId": "evkhihBFFNn5hukMS9s36H",
+  "inventoryId": "5b0f3587-cbbb-4c09-ae78-595b2b3e353f",
+  "sourceInventoryCode": "B005413",
+  "sourcePriceYen": 30000,
+  "testManagementCode": "TEST_B005413_B63EF3F86211FFE0F890D81E",
+  "testPriceYen": 99999,
+  "visibility": "PRIVATE_ONLY",
+  "doNotModifyProductId": null,
+  "contentEvidence": "BELLO_SAVED_DRAFT_ONLY",
+  "draftId": "7bbdd5b7-5df6-4b93-97ba-dd7f675feab9",
+  "draftUpdatedAt": "2026-09-02T00:53:48.206Z",
+  "title": "Anonymous Lounge Chair",
+  "description": "Anonymous Lounge Chair / プロ仕上げ モダン パーソナルチェア ラウンジチェア 1人掛けソファ。幅72 × 奥行71 × 高さ81（cm）のサイズで、ゆったりとくつろげるデザインです。プロ仕上げのモダンなスタイルは、リビングやラウンジにぴったり。1人掛けソファとしても使用でき、くつろぎの時間を演出します。\n\n・プロ仕上げのモダンなデザイン\n・ゆったりとくつろげるサイズ\n・1人掛けソファとしても使用可能\n・リビングやラウンジにぴったり\n\n【コンディション】コンディションはリンサーです。",
+  "quantity": 1,
+  "condition": "NO_NOTABLE_DAMAGE",
+  "shippingMethod": "KAZAI",
+  "imageRefs": [
+    {
+      "source": "INVENTORY",
+      "storageKey": "inventory/16fd3352-1e54-4b5e-a2ab-8e20ef4bafa9.jpg",
+      "sortOrder": 0,
+      "photoAssetId": null
+    }
+  ]
+}

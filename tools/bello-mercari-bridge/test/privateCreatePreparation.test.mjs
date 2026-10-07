@@ -8,7 +8,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { bindAccount } from "../src/queue.mjs";
 import { buildPrivateCreatePreparation, preparePrivateCreateOnce,
-  PRIVATE_CREATE_SHOP_ID } from "../src/privateCreatePreparation.mjs";
+  PRIVATE_CREATE_SHOP_ID, NEXT_PRIVATE_TEST_INVENTORY_ID,
+  NEXT_PRIVATE_TEST_CODE } from "../src/privateCreatePreparation.mjs";
+
+const nextPrivateTest = JSON.parse(await readFile(fileURLToPath(
+  new URL("./fixtures/b005413-snapshot.json", import.meta.url)), "utf8"));
 
 const inventoryId = "bd4850de-9156-4890-a821-cae75da5c8f7";
 const runFile = promisify(execFile);
@@ -85,6 +89,48 @@ test("B005659's separate private test pins source, target and existing product w
       `${privateTestId}.json`), "utf8"));
     assert.deepEqual(stored, job);
   }));
+
+test("B005413 has a separate pinned no-send snapshot and never reuses B005659", () =>
+  withRoot(async root => {
+    const job = await preparePrivateCreateOnce(root, nextPrivateTest);
+    assert.equal(job.inventoryId, NEXT_PRIVATE_TEST_INVENTORY_ID);
+    assert.equal(job.snapshotFingerprint,
+      "4ad9da7231607cda57b6c55dfac61677ae21abc56dfceb3df90d8408c7d7dc7e");
+    assert.equal(job.status, "PREPARED_NO_SEND");
+    assert.equal(job.remoteId, null);
+    assert.equal(job.listingConfirmed, false);
+    assert.equal(nextPrivateTest.sourcePriceYen, 30000);
+    assert.equal(nextPrivateTest.testPriceYen, 99999);
+    assert.equal(nextPrivateTest.testManagementCode, NEXT_PRIVATE_TEST_CODE);
+    assert.equal(nextPrivateTest.doNotModifyProductId, null);
+    const stored = JSON.parse(await readFile(join(root, "private-create-prepared",
+      `${NEXT_PRIVATE_TEST_INVENTORY_ID}.json`), "utf8"));
+    assert.deepEqual(stored, job);
+    await assert.rejects(readFile(join(root, "private-create-prepared",
+      `${privateTestId}.json`), "utf8"), { code: "ENOENT" });
+    await assert.rejects(preparePrivateCreateOnce(root, nextPrivateTest),
+      /already claimed/);
+  }));
+
+test("B005413 cannot change saved content, image, price, privacy, or identity", () => {
+  for (const candidate of [
+    { ...nextPrivateTest, inventoryId: privateTestId },
+    { ...nextPrivateTest, sourceInventoryCode: "B005659" },
+    { ...nextPrivateTest, sourcePriceYen: 30004 },
+    { ...nextPrivateTest, testManagementCode: "B005413" },
+    { ...nextPrivateTest, testPriceYen: 30000 },
+    { ...nextPrivateTest, visibility: "PUBLIC" },
+    { ...nextPrivateTest, doNotModifyProductId: "2JToDtSgGowzUwnwe9hgHU" },
+    { ...nextPrivateTest, description: nextPrivateTest.description + " changed" },
+    { ...nextPrivateTest, draftUpdatedAt: "2026-10-07T00:00:00.000Z" },
+    { ...nextPrivateTest, imageRefs: [{ ...nextPrivateTest.imageRefs[0],
+      storageKey: "inventory/other.jpg" }] },
+    { ...nextPrivateTest, shippingMethod: "SAGAWA" },
+    { ...input, inventoryId: NEXT_PRIVATE_TEST_INVENTORY_ID,
+      inventoryCode: "B005413" },
+    { ...input, inventoryCode: NEXT_PRIVATE_TEST_CODE.toLowerCase() },
+  ]) assert.throws(() => buildPrivateCreatePreparation(candidate));
+});
 
 test("private test overrides cannot change inventory, price, code, visibility or public target", () => {
   for (const candidate of [

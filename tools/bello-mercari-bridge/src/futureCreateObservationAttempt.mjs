@@ -2,13 +2,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { bindAccount } from "./queue.mjs";
-import { buildPrivateCreatePreparation, PRIVATE_CREATE_SHOP_ID } from
+import { buildPrivateCreatePreparation, PRIVATE_CREATE_SHOP_ID,
+  NEXT_PRIVATE_TEST_INVENTORY_ID, NEXT_PRIVATE_TEST_CODE } from
   "./privateCreatePreparation.mjs";
 import { safeFutureCreateTrafficSummary } from "./futureCreateTrafficObservation.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BLOCKED_INVENTORY_ID = "c9ee4ea7-070f-491c-bd4c-c1547cb73436";
 const BLOCKED_CODES = new Set(["B005757", "B005795"]);
+const NEXT_SNAPSHOT_FINGERPRINT = "4ad9da7231607cda57b6c55dfac61677ae21abc56dfceb3df90d8408c7d7dc7e";
 const digest = value => createHash("sha256").update(value).digest("hex");
 
 function paths(root, inventoryId) {
@@ -16,7 +18,8 @@ function paths(root, inventoryId) {
       typeof inventoryId !== "string" || !UUID.test(inventoryId))
     throw Error("Valid absolute observation root and inventory ID required");
   const dir = join(root, "future-private-create-observation-once");
-  const name = `${PRIVATE_CREATE_SHOP_ID}-once`;
+  const name = inventoryId.toLowerCase() === NEXT_PRIVATE_TEST_INVENTORY_ID ?
+    `${PRIVATE_CREATE_SHOP_ID}-B005413-once` : `${PRIVATE_CREATE_SHOP_ID}-once`;
   return { prepared: join(root, "private-create-prepared", `${inventoryId}.json`),
     dir, claim: join(dir, `${name}.claim.json`),
     result: join(dir, `${name}.result.json`) };
@@ -51,6 +54,14 @@ export async function claimFutureCreateObservationOnce(root, inventoryId) {
       [snapshot.inventoryCode, snapshot.sourceInventoryCode,
         snapshot.testManagementCode].filter(code => code !== undefined).some(code =>
         typeof code !== "string" || BLOCKED_CODES.has(code.toUpperCase())))
+    throw Error("FUTURE_CREATE_TARGET_BLOCKED");
+  if (inventoryId === NEXT_PRIVATE_TEST_INVENTORY_ID &&
+      (job.schemaVersion !== 2 ||
+        job.snapshotFingerprint !== NEXT_SNAPSHOT_FINGERPRINT ||
+        snapshot.testManagementCode !== NEXT_PRIVATE_TEST_CODE ||
+        snapshot.testPriceYen !== 99999 ||
+        snapshot.visibility !== "PRIVATE_ONLY" ||
+        snapshot.doNotModifyProductId !== null))
     throw Error("FUTURE_CREATE_TARGET_BLOCKED");
   const claim = { schemaVersion: 1, operation: "OBSERVE_FUTURE_PRIVATE_CREATE_ONCE",
     attemptId: randomUUID(), shopId: PRIVATE_CREATE_SHOP_ID,

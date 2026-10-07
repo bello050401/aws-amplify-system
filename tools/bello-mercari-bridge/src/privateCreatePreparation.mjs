@@ -6,8 +6,16 @@ import { bindAccount } from "./queue.mjs";
 export const PRIVATE_CREATE_SHOP_ID = "evkhihBFFNn5hukMS9s36H";
 const PRIVATE_TEST_INVENTORY_ID = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
 const PRIVATE_TEST_CODE = "TEST_B005659_E51E4F6B7B86DD150546";
+export const NEXT_PRIVATE_TEST_INVENTORY_ID = "5b0f3587-cbbb-4c09-ae78-595b2b3e353f";
+export const NEXT_PRIVATE_TEST_CODE = "TEST_B005413_B63EF3F86211FFE0F890D81E";
+const NEXT_DRAFT_ID = "7bbdd5b7-5df6-4b93-97ba-dd7f675feab9";
+const NEXT_DRAFT_UPDATED_AT = "2026-09-02T00:53:48.206Z";
+const NEXT_TITLE = "Anonymous Lounge Chair";
+const NEXT_DESCRIPTION_SHA256 = "c1b95825120d1851f698fc2f4095d627ce3639f2791c88265a7466328dbb8586";
+const NEXT_IMAGE_KEY = "inventory/16fd3352-1e54-4b5e-a2ab-8e20ef4bafa9.jpg";
 const EXISTING_PUBLIC_PRODUCT_ID = "2JWp7EJx6aqKfn6dTXc5Q9";
-const RESERVED_PRIVATE_TEST_CODES = new Set(["B005659", PRIVATE_TEST_CODE]);
+const RESERVED_PRIVATE_TEST_CODES = new Set(["B005659", PRIVATE_TEST_CODE,
+  "B005413", NEXT_PRIVATE_TEST_CODE]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const SKU = /^[A-Za-z0-9_-]{1,40}$/;
@@ -37,20 +45,41 @@ export function buildPrivateCreatePreparation(input) {
   const sourcePrice = isPrivateTest ? input.sourcePriceYen : input?.priceYen;
   const reservedV1 = !isPrivateTest && (
     (typeof input?.inventoryId === "string" &&
-      input.inventoryId.toLowerCase() === PRIVATE_TEST_INVENTORY_ID) ||
+      [PRIVATE_TEST_INVENTORY_ID, NEXT_PRIVATE_TEST_INVENTORY_ID].includes(
+        input.inventoryId.toLowerCase())) ||
     (typeof sourceCode === "string" &&
       RESERVED_PRIVATE_TEST_CODES.has(sourceCode.toUpperCase())));
+  const oldPrivateTest = input?.kind === "BELLO_SEPARATE_PRIVATE_TEST_PREPARATION" &&
+    input.inventoryId === PRIVATE_TEST_INVENTORY_ID &&
+    sourceCode === "B005659" && sourcePrice === 54200 &&
+    input.testManagementCode === PRIVATE_TEST_CODE &&
+    input.testPriceYen === 99999 && input.visibility === "PRIVATE_ONLY" &&
+    input.doNotModifyProductId === EXISTING_PUBLIC_PRODUCT_ID &&
+    input.contentEvidence === "BELLO_SAVED_DRAFT_ONLY" &&
+    input.quantity === 1 && input.condition === "NO_NOTABLE_DAMAGE" &&
+    input.shippingMethod === "KAZAI";
+  const nextPrivateTest = input?.kind === "BELLO_SEPARATE_PRIVATE_TEST_PREPARATION" &&
+    input.inventoryId === NEXT_PRIVATE_TEST_INVENTORY_ID &&
+    sourceCode === "B005413" && sourcePrice === 30000 &&
+    input.testManagementCode === NEXT_PRIVATE_TEST_CODE &&
+    input.testPriceYen === 99999 && input.visibility === "PRIVATE_ONLY" &&
+    input.doNotModifyProductId === null &&
+    input.contentEvidence === "BELLO_SAVED_DRAFT_ONLY" &&
+    input.draftId === NEXT_DRAFT_ID &&
+    input.draftUpdatedAt === NEXT_DRAFT_UPDATED_AT &&
+    input.title === NEXT_TITLE &&
+    typeof input.description === "string" &&
+    digest(input.description) === NEXT_DESCRIPTION_SHA256 &&
+    input.quantity === 1 && input.condition === "NO_NOTABLE_DAMAGE" &&
+    input.shippingMethod === "KAZAI" &&
+    input.imageRefs?.length === 1 &&
+    input.imageRefs[0]?.source === "INVENTORY" &&
+    input.imageRefs[0]?.storageKey === NEXT_IMAGE_KEY &&
+    input.imageRefs[0]?.sortOrder === 0 &&
+    input.imageRefs[0]?.photoAssetId === null;
   if (!exact(input, fields) ||
       (isPrivateTest ?
-        input.kind !== "BELLO_SEPARATE_PRIVATE_TEST_PREPARATION" ||
-        input.inventoryId !== PRIVATE_TEST_INVENTORY_ID ||
-        sourceCode !== "B005659" || sourcePrice !== 54200 ||
-        input.testManagementCode !== PRIVATE_TEST_CODE ||
-        input.testPriceYen !== 99999 || input.visibility !== "PRIVATE_ONLY" ||
-        input.doNotModifyProductId !== EXISTING_PUBLIC_PRODUCT_ID ||
-        input.contentEvidence !== "BELLO_SAVED_DRAFT_ONLY" ||
-        input.quantity !== 1 || input.condition !== "NO_NOTABLE_DAMAGE" ||
-        input.shippingMethod !== "KAZAI" :
+        !oldPrivateTest && !nextPrivateTest :
         input.schemaVersion !== 1 ||
         input.kind !== "BELLO_PRIVATE_CREATE_PREPARATION" || reservedV1) ||
       input.shopId !== PRIVATE_CREATE_SHOP_ID ||
