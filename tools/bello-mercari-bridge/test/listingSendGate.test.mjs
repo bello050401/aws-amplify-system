@@ -13,7 +13,7 @@ const secondId = "22222222-2222-4222-8222-222222222222";
 const target = (attemptId, operation = "RELIST") =>
   ({ shopId: SHOP, inventoryId, operation, attemptId });
 
-test("old PowerShell lock file is preserved and a live send owns a separate lock", async () => {
+test("a private CREATE and later RELIST share one 30-second shop gate", async () => {
   const root = await mkdtemp(join(tmpdir(), "bello-listing-legacy-"));
   const dir = join(root, "listing-send-attempts");
   try {
@@ -21,7 +21,7 @@ test("old PowerShell lock file is preserved and a live send owns a separate lock
     const legacy = join(dir, `${SHOP}.lock`);
     await writeFile(legacy, "");
     let mono = 1000;
-    await withShopListingSend(root, target(firstId), async () => {
+    await withShopListingSend(root, target(firstId, "CREATE"), async () => {
       assert.equal((await readShopListingWindow(root, SHOP, mono)).remainingSeconds,
         null, "a concurrent UI must see the active lock");
       await assert.rejects(withShopListingSend(root, target(secondId),
@@ -40,6 +40,8 @@ test("old PowerShell lock file is preserved and a live send owns a separate lock
     assert.equal((await readdir(dir)).filter(name => name.endsWith(".json")).length, 2);
     assert.equal(JSON.parse(await readFile(join(dir, `${SHOP}-${secondId}.json`),
       "utf8")).status, "POTENTIAL_SEND_ONCE");
+    assert.equal(JSON.parse(await readFile(join(dir, `${SHOP}-${firstId}.json`),
+      "utf8")).operation, "CREATE");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

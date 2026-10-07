@@ -8,6 +8,7 @@ import { openFutureCreateTrafficObservationSession } from "./session.mjs";
 import { recordFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
 import { readExistingUploadedImages } from "./addExistingImageOnce.mjs";
 import { privateFromExactListRow } from "./existingProductReader.mjs";
+import { withShopListingSend } from "./listingSendGate.mjs";
 
 const INVENTORY = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
 const SOURCE_PUBLIC_ID = "2JWp7EJx6aqKfn6dTXc5Q9";
@@ -398,23 +399,29 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
       throw Error("Private save dialog changed");
     const privateButton = await unique(dialog.getByRole("button",
       { name: "非公開で保存する", exact: true }));
-    stage = "PRIVATE_SAVE_UNCERTAIN";
-    reasonCode = "PRIVATE_SAVE_CLICK_UNCERTAIN";
-    // Attach before the click: the create response may arrive after click resolves.
-    const responseWait = session.observer.waitForCreateProductResponse(12000);
-    attempted.privateSaveClick = true;
-    await privateButton.click({ timeout: 12000 });
-    if (!await responseWait) throw Error("Create response timed out");
-    await new Promise(resolve => setTimeout(resolve, 500));
-    observation = await session.observer.stop();
-    remoteId = exactPrivateCreateResponse(observation);
-    if (!remoteId) throw Error("Exact private create response unavailable");
-    stage = "READBACK_UNCERTAIN";
-    reasonCode = "READBACK_UNCERTAIN";
-    if (!await verifyReadback(session.context, remoteId, snapshot, selectedAsset))
-      throw Error("Independent private product readback unavailable");
-    stage = "PRIVATE_CONFIRMED";
-    reasonCode = "PRIVATE_CONFIRMED";
+    stage = "SEND_GATE_UNCERTAIN";
+    reasonCode = "SEND_GATE_UNAVAILABLE";
+    await withShopListingSend(root, { shopId: PRIVATE_CREATE_SHOP_ID,
+      inventoryId: INVENTORY, operation: "CREATE",
+      attemptId: session.claim.attemptId }, async () => {
+      stage = "PRIVATE_SAVE_UNCERTAIN";
+      reasonCode = "PRIVATE_SAVE_CLICK_UNCERTAIN";
+      // Attach after the 30-second gate, directly before the only final click.
+      const responseWait = session.observer.waitForCreateProductResponse(12000);
+      attempted.privateSaveClick = true;
+      await privateButton.click({ timeout: 12000 });
+      if (!await responseWait) throw Error("Create response timed out");
+      await new Promise(resolve => setTimeout(resolve, 500));
+      observation = await session.observer.stop();
+      remoteId = exactPrivateCreateResponse(observation);
+      if (!remoteId) throw Error("Exact private create response unavailable");
+      stage = "READBACK_UNCERTAIN";
+      reasonCode = "READBACK_UNCERTAIN";
+      if (!await verifyReadback(session.context, remoteId, snapshot, selectedAsset))
+        throw Error("Independent private product readback unavailable");
+      stage = "PRIVATE_CONFIRMED";
+      reasonCode = "PRIVATE_CONFIRMED";
+    });
   } catch { /* The claim is permanent even when login, form, upload, or save is uncertain. */ }
   finally {
     if (!observation) observation = await session.observer?.stop().catch(() => null);
