@@ -11,6 +11,7 @@ $cases = @(
   @{ Name='chrome.exe'; Line=('chrome.exe --user-data-dir=' + (Join-Path $dataDir 'ShopsChrome') + '\'); Expected=$true },
   @{ Name='msedge.exe'; Line=('msedge.exe --user-data-dir=' + (Join-Path $dataDir 'BELLOChrome')); Expected=$true },
   @{ Name='node.exe'; Line='node unrelated.js'; Expected=$false },
+  @{ Name='node.exe'; Line='node src/cli.mjs start'; Expected=$false },
   @{ Name='chrome.exe'; Line=('chrome.exe --user-data-dir=' + (Join-Path $dataDir 'ShopsChromeBackup')); Expected=$false },
   @{ Name='chrome.exe'; Line=('chrome.exe --user-data-dir=' + (Join-Path $dataDir 'ShopsChrome') + '\other'); Expected=$false }
 )
