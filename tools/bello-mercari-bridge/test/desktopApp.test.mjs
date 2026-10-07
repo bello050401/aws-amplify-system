@@ -133,6 +133,18 @@ test("BELLO origin queues a PC visibility job without a Shops action", async () 
       method: "POST", redirect: "manual", headers: { Origin: app.url }, body: upload });
     assert.equal(imported.status, 303);
     assert.match(await (await fetch(app.url)).text(), /停止済み商品を再出品/);
+    const attempts = join(dataDir, "Queue", "listing-send-attempts");
+    await mkdir(attempts);
+    await writeFile(join(attempts, `${body.target.shopId}-prior.json`), JSON.stringify({
+      schemaVersion: 1, shopId: body.target.shopId,
+      potentialSendAt: new Date().toISOString(), minimumGapSeconds: 30,
+      status: "POTENTIAL_SEND_ONCE" }));
+    const gapAfter = await fetch(gapUrl, { headers: { Origin: config().origin } });
+    const gapView = await gapAfter.json();
+    assert.equal(gapAfter.status, 200);
+    assert.equal(gapView.ok, true);
+    assert.equal(gapView.remainingSeconds > 0 && gapView.remainingSeconds <= 30, true);
+    assert.match(await (await fetch(app.url)).text(), /次の出品まで/);
     assert.equal(runs, 1, "file import must not operate Shops");
   } finally { await app.close(); await rm(dataDir, { recursive: true, force: true }); }
 });
