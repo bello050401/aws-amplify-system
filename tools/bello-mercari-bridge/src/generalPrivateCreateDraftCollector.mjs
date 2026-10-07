@@ -19,7 +19,7 @@ function validList(snapshot, listUrl, expectedRowCount) {
   return snapshot?.url === listUrl && snapshot.documentUrl === listUrl &&
     snapshot.loading === false && snapshot.paginationControls === 0 &&
     Number.isSafeInteger(snapshot.tableIndex) && snapshot.tableIndex >= 0 &&
-    snapshot.headerCount === 8 && snapshot.titleColumn === 0 &&
+    snapshot.headerCount === 10 && snapshot.titleColumn === 0 &&
     Array.isArray(snapshot.rows) && snapshot.rows.length === expectedRowCount &&
     snapshot.rows.every(row => row.interactiveCount === 0 &&
       typeof row.title === "string" &&
@@ -41,20 +41,23 @@ function validDetail(snapshot, shopId) {
 async function readListDom(page) {
   const data = await page.locator("body").evaluate(() => {
     const text = element => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+    const observedHeaders = ["商品名", "", "公開設定", "価格", "在庫",
+      "いいね!", "閲覧", "作成日時", "更新日時", ""];
     const tables = [...document.querySelectorAll("table")];
     const matches = tables.map((table, index) => {
       const headers = [...table.querySelectorAll("thead th")].map(text);
       return { table, index, headers };
-    }).filter(item => item.headers.length === 8 &&
-      item.headers[0] === "商品名" && item.headers.includes("作成日時") &&
-      item.headers.includes("更新日時"));
+    }).filter(item => item.headers.length === observedHeaders.length &&
+      item.headers.every((header, index) => header === observedHeaders[index]));
     const selected = matches.length === 1 ? matches[0] : null;
+    const ACTIONABLE =
+      'a, button, input, select, textarea, [role="button"], [role="menuitem"], [contenteditable="true"]';
     const rows = selected ? [...selected.table.querySelectorAll("tbody tr")].map(row => {
       const cells = [...row.querySelectorAll(":scope > td")];
-      return { title: text(cells[0]), signature: JSON.stringify(cells.map(text)),
+      return { title: text(cells[1]), signature: JSON.stringify(cells.map(text)),
         cellCount: cells.length,
-        interactiveCount: row.querySelectorAll(
-          'a, button, input, select, textarea, [role="button"], [contenteditable="true"]').length };
+        interactiveCount: row.querySelectorAll(ACTIONABLE).length +
+          cells.filter(cell => cell.matches(ACTIONABLE)).length };
     }) : [];
     return { documentUrl: document.location.href,
       loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),
@@ -111,7 +114,7 @@ export async function collectGeneralPrivateCreateDraftDetailsReadOnly({ page,
     const second = await ui.list();
     if (!validList(first, listUrl, expectedRowCount) ||
         !validList(second, listUrl, expectedRowCount) || !same(first, second) ||
-        first.tableMatches !== 1 || first.rows.some(row => row.cellCount !== 8))
+        first.tableMatches !== 1 || first.rows.some(row => row.cellCount !== 10))
       return fixed("DRAFT_LIST_UNVERIFIED");
     const rows = [];
     for (let pass = 0; pass < 2; pass++) {

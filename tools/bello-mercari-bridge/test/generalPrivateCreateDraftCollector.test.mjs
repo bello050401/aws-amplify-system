@@ -24,11 +24,11 @@ function fakeAdapter({ entries = details, mutateList = null,
         listReads++;
         const current = mutateList?.(listReads, entries) ?? entries;
         return { url, documentUrl: url, loading: false,
-          paginationControls: 0, tableIndex: 0, headerCount: 8,
+          paginationControls: 0, tableIndex: 0, headerCount: 10,
           titleColumn: 0, tableMatches: 1,
           rows: current.map(entry => ({ title: entry.title,
-            signature: JSON.stringify([entry.title, "", "¥0", "0", "", "", "", ""]),
-            cellCount: 8, interactiveCount: 0 })) };
+            signature: JSON.stringify(["", entry.title, "", "¥0", "0", "", "", "", "", ""]),
+            cellCount: 10, interactiveCount: 0 })) };
       },
       async clickRow(tableIndex, index) {
         calls.push(["clickRow", tableIndex, index]);
@@ -86,11 +86,94 @@ test("duplicate draft ID, wrong detail URL and loading state fail closed", async
   "DRAFT_DETAIL_UNVERIFIED");
   const loading = fakeAdapter({ mutateList: () => details });
   loading.adapter.list = async () => ({ url: listUrl, documentUrl: listUrl,
-    loading: true, paginationControls: 0, tableIndex: 0, headerCount: 8,
+    loading: true, paginationControls: 0, tableIndex: 0, headerCount: 10,
     titleColumn: 0, tableMatches: 1, rows: [] });
   assert.equal((await collectGeneralPrivateCreateDraftDetailsReadOnly({
     shopId, expectedRowCount: 2, adapter: loading.adapter })).status,
   "DRAFT_LIST_UNVERIFIED");
+});
+
+test("old eight-column draft shape cannot open any detail row", async () => {
+  const { adapter, calls } = fakeAdapter();
+  const list = adapter.list;
+  adapter.list = async () => {
+    const snapshot = await list();
+    snapshot.headerCount = 8;
+    snapshot.rows = snapshot.rows.map(row => ({ ...row, cellCount: 8 }));
+    return snapshot;
+  };
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter });
+  assert.equal(result.status, "DRAFT_LIST_UNVERIFIED");
+  assert.equal(calls.some(item => item[0] === "clickRow"), false);
+});
+
+test("observed ten-column DOM reads title from the second cell and rejects actions", async () => {
+  const originalDocument = globalThis.document;
+  try {
+    for (const [wrongHeader, actionableCell, expected] of [
+      [false, false, "DRAFT_DETAILS_DOM_OBSERVED"],
+      [true, false, "DRAFT_LIST_UNVERIFIED"],
+      [false, true, "DRAFT_LIST_UNVERIFIED"],
+    ]) {
+      let url = listUrl;
+      let clicks = 0;
+      const headerTexts = ["商品名", "", "公開設定", "価格", "在庫",
+        "いいね!", "閲覧", "作成日時", "更新日時", ""];
+      if (wrongHeader) headerTexts[2] = "unknown";
+      const headers = headerTexts.map(textContent => ({ textContent }));
+      const rows = details.map(entry => {
+        const cells = Array.from({ length: 10 }, (_, index) => ({
+          textContent: index === 1 ? entry.title : "",
+          matches: () => actionableCell && index === 1,
+          querySelectorAll: () => [],
+        }));
+        return { querySelectorAll: selector =>
+          selector === ":scope > td" ? cells : [] };
+      });
+      const table = { querySelectorAll: selector =>
+        selector === "thead th" ? headers : selector === "tbody tr" ? rows : [] };
+      globalThis.document = {
+        location: { get href() { return url; } },
+        querySelector: () => null,
+        querySelectorAll: selector => {
+          if (selector === "table") return url === listUrl ? [table] : [];
+          if (selector === 'input[name="name"]') {
+            const id = new URL(url).searchParams.get("productDraftId");
+            return id ? [{ value: details.find(item => item.id === id)?.title ?? "" }] : [];
+          }
+          if (selector === 'input[name="variants.0.skuCode"]') {
+            const id = new URL(url).searchParams.get("productDraftId");
+            return id ? [{ value: details.find(item => item.id === id)?.skuCode ?? "" }] : [];
+          }
+          return [];
+        },
+      };
+      const page = {
+        goto: async target => { url = target; },
+        url: () => url,
+        waitForTimeout: async () => {},
+        locator: selector => selector === "body" ?
+          { evaluate: async callback => callback() } : selector === "table" ?
+            { nth: index => { assert.equal(index, 0); return {
+              locator: child => { assert.equal(child, "tbody tr"); return {
+                nth: rowIndex => ({ click: async () => {
+                  clicks++;
+                  url = `https://mercari-shops.com/seller/shops/${shopId}/products/create?productDraftId=${details[rowIndex].id}`;
+                } }),
+              }; },
+            }; } } : { click: async () => { throw Error("Unexpected action"); } },
+      };
+      const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+        page, shopId, expectedRowCount: 2 });
+      assert.equal(result.status, expected);
+      assert.equal(clicks, expected === "DRAFT_DETAILS_DOM_OBSERVED" ? 4 : 0);
+      if (expected === "DRAFT_DETAILS_DOM_OBSERVED") {
+        assert.equal(result.rows[0].title, details[0].title);
+        assert.equal(result.rows[1].title, "");
+      }
+    }
+  } finally { globalThis.document = originalDocument; }
 });
 
 test("blank rows with unchanged table text still require identical IDs on a second pass", async () => {
