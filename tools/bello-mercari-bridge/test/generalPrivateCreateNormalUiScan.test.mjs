@@ -123,6 +123,21 @@ test("no visible match remains incomplete because sale SKUs are unverified", asy
     diagnostic: "SALE_SKU_UNVERIFIED", allowFinalCreate: false });
 });
 
+test("remote list titles of 131 through 500 characters remain readable", async () => {
+  for (const length of [131, 500]) {
+    const adapter = fakeAdapter([
+      snapshot(["x".repeat(length)],
+        { nextDisabled: false, prevDisabled: true }),
+      snapshot([title], { nextDisabled: true, prevDisabled: false }),
+    ]);
+    const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+      adapter, collectDrafts: async () => { throw Error("Duplicate stops early"); } });
+    assert.equal(result.status, "REMOTE_DUPLICATE_POSSIBLE");
+    assert.equal(result.diagnostic, "SALE_TITLE_MATCH");
+    assert.equal(result.allowFinalCreate, false);
+  }
+});
+
 test("unstable pagination and unproved visibility fail closed", async () => {
   const first = snapshot(["first"], { nextDisabled: false, prevDisabled: true });
   const second = snapshot(["second"], { nextDisabled: true, prevDisabled: false });
@@ -325,7 +340,10 @@ test("sale-list failures return only the expected fixed diagnostic", async () =>
       ({ title: `private-title-${i}`, signature: "[]", cellCount: 10,
         dataActionCount: 0, menuControlsVerified: true })) },
       "SALE_ROW_COUNT_UNVERIFIED"],
-    [changedRow({ title: "x".repeat(131) }),
+    [changedRow({ title: "x".repeat(501) }),
+      "SALE_TITLE_LENGTH_UNVERIFIED"],
+    [changedRow({ title: " " }), "SALE_TITLE_LENGTH_UNVERIFIED"],
+    [changedRow({ title: "読み込み中" }),
       "SALE_TITLE_LENGTH_UNVERIFIED"],
     [changedRow({ cellCount: 9 }), "SALE_CELL_COUNT_UNVERIFIED"],
     [changedRow({ dataActionCount: 1 }), "SALE_DATA_ACTION_UNVERIFIED"],

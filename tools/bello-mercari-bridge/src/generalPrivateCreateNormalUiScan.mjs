@@ -7,6 +7,9 @@ const fixed = (status, diagnostic) => ({ status, diagnostic,
   allowFinalCreate: false });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const titleKey = value => value.normalize("NFKC").replace(/\s+/g, "").trim();
+const REMOTE_TITLE_MAX = 500;
+const TITLE_PLACEHOLDERS = new Set(["", "-", "--", "---", "—", "…",
+  "...", "商品名未設定", "読み込み中"]);
 
 function authUrl(value) {
   try { const url = new URL(value);
@@ -15,7 +18,9 @@ function authUrl(value) {
 }
 
 function diagnoseSaleRow(row) {
-  if (typeof row?.title !== "string" || row.title.length > 130)
+  if (typeof row?.title !== "string" ||
+      row.title.length > REMOTE_TITLE_MAX ||
+      TITLE_PLACEHOLDERS.has(titleKey(row.title)))
     return "SALE_TITLE_LENGTH_UNVERIFIED";
   if (row.cellCount !== 10) return "SALE_CELL_COUNT_UNVERIFIED";
   if (row.dataActionCount !== 0) return "SALE_DATA_ACTION_UNVERIFIED";
