@@ -107,6 +107,42 @@ test("an unstable draft list stops after bounded reads without opening details",
   assert.deepEqual(result.rows, []);
 });
 
+test("detail fields may appear after URL transition before stable readback", async () => {
+  const { adapter, calls } = fakeAdapter();
+  const clickRow = adapter.clickRow;
+  const detail = adapter.detail;
+  let firstAfterClick = false;
+  adapter.clickRow = async (...args) => {
+    await clickRow(...args);
+    firstAfterClick = true;
+  };
+  adapter.detail = async () => {
+    const snapshot = await detail();
+    if (!firstAfterClick) return snapshot;
+    firstAfterClick = false;
+    return { ...snapshot, nameFieldCount: 0, skuFieldCount: 0,
+      title: null, skuCode: null };
+  };
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter });
+  assert.equal(result.status, "DRAFT_DETAILS_DOM_OBSERVED");
+  assert.equal(calls.filter(item => item[0] === "clickRow").length, 4);
+  assert.equal(calls.filter(item => item[0] === "detail").length, 16);
+});
+
+test("detail fields that never appear stop before the next draft row", async () => {
+  const { adapter, calls } = fakeAdapter();
+  const detail = adapter.detail;
+  adapter.detail = async () => ({ ...await detail(),
+    nameFieldCount: 0, skuFieldCount: 0, title: null, skuCode: null });
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter });
+  assert.equal(result.status, "DRAFT_DETAIL_UNVERIFIED");
+  assert.equal(calls.filter(item => item[0] === "detail").length, 12);
+  assert.equal(calls.filter(item => item[0] === "clickRow").length, 1);
+  assert.deepEqual(result.rows, []);
+});
+
 test("duplicate draft ID, wrong detail URL and loading state fail closed", async () => {
   const duplicate = fakeAdapter({ entries: [details[0], { ...details[1], id: details[0].id }] });
   assert.equal((await collectGeneralPrivateCreateDraftDetailsReadOnly({

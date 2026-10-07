@@ -6,6 +6,8 @@ const clean = value => value.replace(/\s+/g, " ").trim();
 const LIST_READ_LIMIT = 12;
 const LIST_STABLE_READS = 3;
 const LIST_WAIT_MS = 600;
+const DETAIL_READ_LIMIT = 12;
+const DETAIL_STABLE_READS = 3;
 const UI_OPERATION_TIMEOUT_MS = 12_000;
 
 function exactDraftId(url, shopId) {
@@ -66,6 +68,26 @@ function validDetail(snapshot, shopId) {
     snapshot.title.length <= 130 && typeof snapshot.skuCode === "string" &&
     snapshot.skuCode.length <= 100 &&
     (!snapshot.skuCode || ID.test(snapshot.skuCode)) ? id : null;
+}
+
+async function stableDetail(ui, shopId, expectedTitle) {
+  let previous = null;
+  let stableReads = 0;
+  for (let attempt = 0; attempt < DETAIL_READ_LIMIT; attempt++) {
+    const current = await ui.detail();
+    const id = validDetail(current, shopId);
+    if (id && clean(current.title) === clean(expectedTitle)) {
+      stableReads = previous && same(previous, current) ? stableReads + 1 : 1;
+      previous = current;
+      if (stableReads === DETAIL_STABLE_READS)
+        return { detail: current, draftId: id };
+    } else {
+      previous = null;
+      stableReads = 0;
+    }
+    if (attempt < DETAIL_READ_LIMIT - 1) await ui.wait(LIST_WAIT_MS);
+  }
+  return null;
 }
 
 /** DOM-only observation of the exact draft table. No form field is changed. */
@@ -152,13 +174,10 @@ export async function collectGeneralPrivateCreateDraftDetailsReadOnly({ page,
         if (!await stableList(ui, listUrl, expectedRowCount, first))
           return fixed("DRAFT_LIST_CHANGED");
         await ui.clickRow(first.tableIndex, index);
-        const detail = await ui.detail();
-        await ui.wait(LIST_WAIT_MS);
-        const stable = await ui.detail();
-        const id = validDetail(detail, shopId);
-        if (!id || !same(detail, stable) ||
-            clean(detail.title) !== clean(first.rows[index].title) ||
-            seen.has(id)) return fixed("DRAFT_DETAIL_UNVERIFIED");
+        const observed = await stableDetail(ui, shopId, first.rows[index].title);
+        if (!observed || seen.has(observed.draftId))
+          return fixed("DRAFT_DETAIL_UNVERIFIED");
+        const { detail, draftId: id } = observed;
         seen.add(id);
         const row = { draftId: id, title: detail.title,
           skuCode: detail.skuCode || null };
