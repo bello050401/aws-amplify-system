@@ -1,7 +1,8 @@
 const ORIGIN = "https://mercari-shops.com";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const PREFIX = /^[A-Za-z0-9_-]{2,20}$/;
-const SEARCH_LABEL = "商品管理コード（前方一致）、商品名検索";
+// The seller UI's search input was observed with this placeholder fragment.
+const SEARCH_INPUT_SELECTOR = 'input[placeholder*="商品管理コード"]';
 const HEADERS = ["商品名", "", "公開設定", "価格", "在庫", "いいね!",
   "閲覧", "作成日時", "更新日時", ""];
 const EMPTY_TEXT = "現在、登録している商品はありません";
@@ -104,8 +105,14 @@ function browserAdapter(page) {
   return {
     goto: url => page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT }),
     search: async (query, markStage) => {
-      const textbox = page.getByRole("textbox", { name: SEARCH_LABEL });
-      const textboxCount = await textbox.count();
+      const textbox = page.locator(SEARCH_INPUT_SELECTOR);
+      let textboxCount = await textbox.count();
+      if (textboxCount === 0) {
+        // A direct navigation can finish before the seller UI hydrates.
+        try { await textbox.waitFor({ state: "visible", timeout: TIMEOUT }); }
+        catch { /* The final count below decides the fixed failure code. */ }
+        textboxCount = await textbox.count();
+      }
       if (textboxCount !== 1) {
         if (textboxCount === 0) markStage?.("SALE_SKU_SEARCH_TEXTBOX_ZERO");
         else if (Number.isSafeInteger(textboxCount) && textboxCount > 1)
@@ -126,7 +133,7 @@ function browserAdapter(page) {
       await button.click({ timeout: TIMEOUT });
     },
     searchSnapshot: async () => {
-      const textbox = page.getByRole("textbox", { name: SEARCH_LABEL });
+      const textbox = page.locator(SEARCH_INPUT_SELECTOR);
       const queryCount = await textbox.count();
       const query = queryCount === 1 ?
         await textbox.evaluate(element => element.value, undefined,

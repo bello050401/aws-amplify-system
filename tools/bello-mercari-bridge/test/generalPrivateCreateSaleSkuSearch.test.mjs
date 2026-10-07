@@ -157,12 +157,17 @@ test("browser adapter reports only fixed search-control counts or lookup excepti
   let buttonCount = 1;
   let lookupThrows = false;
   const textbox = { count: async () => textboxCount,
+    waitFor: async () => {},
     fill: async () => { throw Error("private-fill"); } };
   const page = { goto: async () => {},
     getByRole: role => {
       if (lookupThrows) throw Error("private-lookup");
-      return role === "textbox" ? textbox :
-        { count: async () => buttonCount, click: async () => {} };
+      return { count: async () => buttonCount, click: async () => {} };
+    },
+    locator: selector => {
+      if (lookupThrows) throw Error("private-lookup");
+      assert.equal(selector, 'input[placeholder*="商品管理コード"]');
+      return textbox;
     } };
   const options = { page, shopId, managementCode, positiveControlPrefix };
   for (const [textboxes, buttons, expected] of [
@@ -183,6 +188,13 @@ test("browser adapter reports only fixed search-control counts or lookup excepti
   assert.equal(lookup.diagnostic, "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE");
   assert.equal(JSON.stringify(lookup).includes("private-lookup"), false);
   lookupThrows = false;
+  let hydrated = false;
+  textboxCount = 0;
+  textbox.waitFor = async () => { textboxCount = 1; hydrated = true; };
+  const afterHydration = await searchGeneralPrivateCreateSaleSkuReadOnly(options);
+  assert.equal(hydrated, true);
+  assert.equal(afterHydration.diagnostic,
+    "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE");
   const fillFailure = await searchGeneralPrivateCreateSaleSkuReadOnly(options);
   assert.equal(fillFailure.diagnostic, "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE");
   assert.equal(JSON.stringify(fillFailure).includes("private-fill"), false);
@@ -285,12 +297,13 @@ test("browser adapter reads the observed table through locator.evaluate(element,
     click: async () => { currentUrl = url(query); actions.push("search-click"); } };
   const page = { goto: async target => { currentUrl = target; actions.push("goto"); },
     url: () => currentUrl,
-    getByRole: (role, options) => role === "textbox" &&
-      options.name === "商品管理コード（前方一致）、商品名検索" ? textbox :
+    getByRole: (role, options) => role === "textbox" ?
+      { count: async () => 0 } :
       role === "button" && options.name === "search" &&
         options.exact === undefined ? button :
         { count: async () => 0 },
-    locator: selector => selector === "body" ?
+    locator: selector => selector === 'input[placeholder*="商品管理コード"]' ?
+      textbox : selector === "body" ?
       { evaluate: async (callback, arg) => callback({}, arg) } :
       selector === "table" ? { nth: index => {
         assert.equal(index, 0);
@@ -301,6 +314,9 @@ test("browser adapter reads the observed table through locator.evaluate(element,
     waitForTimeout: async ms => { assert.equal(ms, 600); },
   };
   try {
+    assert.equal(await page.getByRole("textbox",
+      { name: "商品管理コード（前方一致）、商品名検索" }).count(), 0);
+    assert.equal(await page.locator('input[placeholder*="商品管理コード"]').count(), 1);
     const result = await searchGeneralPrivateCreateSaleSkuReadOnly({ page,
       shopId, managementCode, positiveControlPrefix });
     assert.equal(result.diagnostic, "SALE_SKU_SEARCH_NO_MATCH_OBSERVED");
