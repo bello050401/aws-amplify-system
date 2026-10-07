@@ -12,6 +12,7 @@ import { PRIVATE_CREATE_SHOP_ID } from "./privateCreatePreparation.mjs";
 
 const SIGN_IN_URL = "https://mercari-shops.com/signin/seller";
 const PRODUCT_ID = /^[A-Za-z0-9_-]{1,100}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PROFILE_MARKER = ".bello-mercari-bridge-profile.json";
 
 async function ensureDedicatedProfile(profileDir) {
@@ -84,6 +85,37 @@ export async function openDedicatedProductListSession({ root, profileDir,
   } catch (error) {
     await context.close();
     throw error;
+  }
+}
+
+/** A fresh page for a previously claimed generic form fill; restored tabs are never resumed. */
+export async function openGeneralPrivateCreateFormSession({ root, profileDir,
+  playwrightModulePath, shopId, claim, launchPersistentContext = null }) {
+  if (shopId !== PRIVATE_CREATE_SHOP_ID || !root || !isAbsolute(root) ||
+      claim?.status !== "UNKNOWN" || claim.shopId !== shopId ||
+      !UUID.test(claim.inventoryId ?? "") || !UUID.test(claim.attemptId ?? ""))
+    throw Error("GENERAL_FORM_SESSION_UNVERIFIED");
+  await bindAccount(root, shopId);
+  const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+    launchPersistentContext });
+  try {
+    const restored = context.pages();
+    if (restored.some(candidate => candidate.url() !== "about:blank"))
+      throw Error("RESTORED_SHOPS_PAGE_UNRESOLVED");
+    const page = await context.newPage();
+    for (const blank of restored) await blank.close();
+    if (context.pages().some(candidate => candidate !== page))
+      throw Error("UNEXPECTED_DEDICATED_BROWSER_PAGE");
+    const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
+    await page.goto(listUrl);
+    const actual = new URL(page.url());
+    const state = actual.origin === "https://mercari-shops.com" &&
+      actual.pathname.startsWith("/signin/") ? "AUTH_REQUIRED" :
+      actual.href === listUrl ? "LIST_OPEN" : "UNKNOWN";
+    return { context, page, state };
+  } catch {
+    await context.close().catch(() => {});
+    throw Error("GENERAL_FORM_BROWSER_UNAVAILABLE");
   }
 }
 

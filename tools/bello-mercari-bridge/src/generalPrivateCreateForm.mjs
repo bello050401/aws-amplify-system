@@ -58,7 +58,7 @@ const FORM_FIELDS = [
 
 /** Only observed normal UI controls are used. No guessed Shops HTTP request. */
 export async function fillGeneralPrivateCreateFormOnce(page, input, imageFiles,
-  { onStage = () => {} } = {}) {
+  { onStage = () => {}, readImages = readExistingUploadedImages } = {}) {
   const pack = exactGeneralPrivateCreatePack(input);
   if (!pack) throw new GeneralFormMismatch("PACK_UNVERIFIED");
   if (pack.brandId !== null) throw new GeneralFormMismatch("BRAND_CONTROL_UNVERIFIED");
@@ -104,6 +104,9 @@ export async function fillGeneralPrivateCreateFormOnce(page, input, imageFiles,
     await (await unique(dialog.getByText(label, { exact: true }),
       "CATEGORY_MISMATCH")).click({ timeout: 12000 });
   }
+  if (normalize(await categories.innerText()) !==
+      normalize(pack.categoryPath.split(" > ").at(-1)))
+    throw new GeneralFormMismatch("CATEGORY_MISMATCH");
   onStage("IMAGE_PROOF_UNVERIFIED");
   if (await page.locator('img[alt="uploaded-image"]').count() !== 0)
     throw new GeneralFormMismatch("IMAGE_PROOF_UNVERIFIED");
@@ -128,7 +131,7 @@ export async function fillGeneralPrivateCreateFormOnce(page, input, imageFiles,
   });
   const issue = diagnoseGeneralPrivateCreateForm(pack, view);
   if (issue) throw new GeneralFormMismatch(issue);
-  const assets = await readExistingUploadedImages(page, page.url());
+  const assets = await readImages(page, page.url());
   if (!assets || assets.length !== pack.imageRefs.length)
     throw new GeneralFormMismatch("IMAGE_ASSET_UNVERIFIED");
   return assets;
