@@ -38,7 +38,7 @@ test("captures query name and response structure without request or response val
   assert.equal(result.observations.length, 1);
   assert.equal(result.observations[0].pageKind, "DRAFT_LIST");
   assert.equal(result.observations[0].operationName, "DraftProductsPage");
-  assert.equal(result.observations[0].responseShape.fields.draftProducts.type, "array");
+  assert.equal(result.observations[0].responseShape.typeCounts.array, 1);
   assert.equal(JSON.stringify(result).includes(secret), false);
   assert.equal(JSON.stringify(result).includes("private-draft-id"), false);
   assert.equal(context.listenerCount("request"), 0);
@@ -81,5 +81,23 @@ test("unverified response shape remains advisory", async () => {
   assert.deepEqual(result.observations[0], { pageKind: "DRAFT_LIST",
     operationName: "DraftProductsPage", httpStatus: 503,
     responseShape: null, hasErrors: null });
+  assert.equal(result.allowFinalCreate, false);
+});
+
+test("response alias or dynamic map keys cannot expose an ID", async () => {
+  const context = new EventEmitter();
+  const page = { url: () => detailUrl };
+  const observer = observeDraftReadMetadata(context, { page, shopId });
+  const req = request(page, "EditProductPage");
+  context.emit("request", req);
+  context.emit("response", response(req, {
+    PrivateDraftIdABC123: { TokenValueABC123: secret },
+    dynamicSkuB005007: { title: secret },
+  }));
+  const result = await observer.stop();
+  const serialized = JSON.stringify(result);
+  for (const hidden of ["PrivateDraftIdABC123", "TokenValueABC123",
+    "dynamicSkuB005007", secret]) assert.equal(serialized.includes(hidden), false);
+  assert.equal(result.observations[0].responseShape.fieldCount, 2);
   assert.equal(result.allowFinalCreate, false);
 });

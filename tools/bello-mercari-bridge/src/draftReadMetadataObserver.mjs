@@ -1,9 +1,11 @@
 const GRAPHQL_URL = "https://mercari-shops.com/graphql";
 const ORIGIN = "https://mercari-shops.com";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
-const NAME = /^[A-Za-z_][A-Za-z0-9_]{0,79}$/;
+const OPERATION_NAME = /^[A-Za-z_]{1,80}$/;
 const MAX_BODY_BYTES = 512 * 1024;
 const MAX_SHAPE_KEYS = 24;
+const valueType = value => value === null ? "null" :
+  Array.isArray(value) ? "array" : typeof value;
 
 function pageKind(url, shopId) {
   try {
@@ -28,7 +30,9 @@ function queryOperation(request) {
   let body;
   try { body = JSON.parse(bytes.toString("utf8")); } catch { return null; }
   if (!body || typeof body !== "object" || Array.isArray(body) ||
-      !NAME.test(body.operationName ?? "") || typeof body.query !== "string" ||
+      !OPERATION_NAME.test(body.operationName ?? "") ||
+      /(?:token|secret|cookie|auth|session|password|credential|key)/i
+        .test(body.operationName) || typeof body.query !== "string" ||
       body.query.length > 200_000) return null;
   const source = body.query.replace(/#[^\r\n]*/g, "");
   const prefix = new RegExp(`^\\s*query\\s+${body.operationName}\\b`);
@@ -43,11 +47,15 @@ function valueShape(value, depth = 0) {
     { type: "array", item: value.length ? valueShape(value[0], depth + 1) : "unknown" };
   if (typeof value !== "object") return typeof value;
   if (depth >= 3) return "object";
-  const keys = Object.keys(value).filter(key => NAME.test(key)).sort();
-  const entries = keys.slice(0, MAX_SHAPE_KEYS).map(key =>
-    [key, valueShape(value[key], depth + 1)]);
-  return { type: "object", fields: Object.fromEntries(entries),
-    truncated: keys.length > MAX_SHAPE_KEYS };
+  const values = Object.values(value);
+  const types = { null: 0, array: 0, object: 0, string: 0,
+    number: 0, boolean: 0 };
+  for (const item of values.slice(0, MAX_SHAPE_KEYS)) {
+    const type = valueType(item);
+    if (Object.hasOwn(types, type)) types[type]++;
+  }
+  return { type: "object", fieldCount: Math.min(values.length, MAX_SHAPE_KEYS),
+    typeCounts: types, overLimit: values.length > MAX_SHAPE_KEYS };
 }
 
 /**

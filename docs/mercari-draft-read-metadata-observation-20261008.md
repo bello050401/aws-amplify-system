@@ -7,10 +7,10 @@
 対象は `https://mercari-shops.com/graphql` の `fetch` / `xhr`、POSTで、対象ページが正確な `?tab=draft` または `?productDraftId=...` のときに送られた、本文のGraphQL定義が明示的な単一の `query` である通信だけ。メモリ内で本文を解析し、結果には次の情報だけを残す。
 
 - 一覧か詳細かの種別、GraphQL `operationName`、HTTPステータス
-- JSON応答のフィールド名・型・配列かどうか（深さと件数に上限あり）、GraphQLエラーの有無
+- JSON応答の型・フィールド数・型別件数・配列かどうか（上限あり）、GraphQLエラーの有無。応答のキー名は返さない
 - 観測件数の上限超過状態、および常に `allowFinalCreate: false`
 
-Cookie、認証ヘッダー、URLの下書きID、GraphQL変数値、商品の値、通信本文、エラーメッセージ、アクセストークンは保存・返却・表示しない。観測器はファイルも作らない。応答が大きすぎる、JSONでない、通信が失敗した場合は構造を未確認とする。匿名query、mutation、subscription、対象外ページは採用しない。
+Cookie、認証ヘッダー、URLの下書きID、GraphQL変数値、商品の値、応答のキー名や別名、通信本文、エラーメッセージ、アクセストークンは保存・返却・表示しない。観測器はファイルも作らない。応答が大きすぎる、JSONでない、通信が失敗した場合は構造を未確認とする。匿名query、mutation、subscription、対象外ページは採用しない。
 
 ## 読取証明の限界
 
