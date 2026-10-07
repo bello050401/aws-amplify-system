@@ -60,10 +60,14 @@ async function stableList(ui, listUrl, expectedRowCount, reference = null) {
   return null;
 }
 
-function validDetail(snapshot, shopId) {
+function detailUrlId(snapshot, shopId) {
   const id = exactDraftId(snapshot?.url, shopId);
-  return id && exactDraftId(snapshot.documentUrl, shopId) === id &&
-    snapshot.loading === false && snapshot.nameFieldCount === 1 &&
+  return id && exactDraftId(snapshot.documentUrl, shopId) === id ? id : null;
+}
+
+function validDetail(snapshot, shopId) {
+  const id = detailUrlId(snapshot, shopId);
+  return id && snapshot.loading === false && snapshot.nameFieldCount === 1 &&
     snapshot.skuFieldCount === 1 && typeof snapshot.title === "string" &&
     snapshot.title.length <= 130 && typeof snapshot.skuCode === "string" &&
     snapshot.skuCode.length <= 100 &&
@@ -73,10 +77,15 @@ function validDetail(snapshot, shopId) {
 async function stableDetail(ui, shopId, expectedTitle) {
   let previous = null;
   let stableReads = 0;
+  let pinnedId = null;
   for (let attempt = 0; attempt < DETAIL_READ_LIMIT; attempt++) {
     const current = await ui.detail();
+    const observedId = detailUrlId(current, shopId);
+    if (pinnedId && observedId !== pinnedId) return null;
+    if (!pinnedId && observedId) pinnedId = observedId;
     const id = validDetail(current, shopId);
-    if (id && clean(current.title) === clean(expectedTitle)) {
+    if (id === pinnedId && id &&
+        clean(current.title) === clean(expectedTitle)) {
       stableReads = previous && same(previous, current) ? stableReads + 1 : 1;
       previous = current;
       if (stableReads === DETAIL_STABLE_READS)

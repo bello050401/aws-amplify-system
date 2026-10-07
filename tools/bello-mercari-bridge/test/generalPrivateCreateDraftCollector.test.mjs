@@ -143,6 +143,27 @@ test("detail fields that never appear stop before the next draft row", async () 
   assert.deepEqual(result.rows, []);
 });
 
+test("a draft ID switch after the first matching URL stops immediately", async () => {
+  const { adapter, calls } = fakeAdapter();
+  const detail = adapter.detail;
+  let reads = 0;
+  adapter.detail = async () => {
+    const snapshot = await detail();
+    if (++reads === 1) return { ...snapshot,
+      nameFieldCount: 0, skuFieldCount: 0, title: null, skuCode: null };
+    const switchedUrl =
+      `https://mercari-shops.com/seller/shops/${shopId}/products/create?productDraftId=another-draft`;
+    return { ...snapshot, url: switchedUrl, documentUrl: switchedUrl,
+      title: details[0].title, skuCode: details[0].skuCode };
+  };
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter });
+  assert.equal(result.status, "DRAFT_DETAIL_UNVERIFIED");
+  assert.equal(calls.filter(item => item[0] === "detail").length, 2);
+  assert.equal(calls.filter(item => item[0] === "clickRow").length, 1);
+  assert.deepEqual(result.rows, []);
+});
+
 test("duplicate draft ID, wrong detail URL and loading state fail closed", async () => {
   const duplicate = fakeAdapter({ entries: [details[0], { ...details[1], id: details[0].id }] });
   assert.equal((await collectGeneralPrivateCreateDraftDetailsReadOnly({
