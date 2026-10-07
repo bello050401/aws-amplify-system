@@ -8,38 +8,62 @@ const fixed = (status, diagnostic) => ({ status, diagnostic,
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const titleKey = value => value.normalize("NFKC").replace(/\s+/g, "").trim();
 
-function validSale(snapshot, url) {
-  return snapshot?.url === url && snapshot.documentUrl === url &&
-    snapshot.loading === false && snapshot.allVisibilitySelected === true &&
-    snapshot.tableMatches === 1 &&
-    Number.isSafeInteger(snapshot.tableIndex) && snapshot.tableIndex >= 0 &&
-    Number.isSafeInteger(snapshot.headerCount) && snapshot.headerCount >= 2 &&
-    Number.isSafeInteger(snapshot.titleColumn) && snapshot.titleColumn >= 0 &&
-    snapshot.titleColumn < snapshot.headerCount &&
-    snapshot.nextCount === 1 && snapshot.prevCount === 1 &&
-    typeof snapshot.nextDisabled === "boolean" &&
-    typeof snapshot.prevDisabled === "boolean" &&
-    Array.isArray(snapshot.rows) && snapshot.rows.length <= 50 &&
-    snapshot.rows.every(row => typeof row.title === "string" &&
-      row.title.length <= 130 && row.cellCount === snapshot.headerCount &&
-      row.interactiveCount === 0 && typeof row.signature === "string" &&
-      row.signature.length <= 3000);
+function authUrl(value) {
+  try { const url = new URL(value);
+    return url.origin === ORIGIN && url.pathname.startsWith("/signin/"); }
+  catch { return false; }
+}
+
+function diagnoseSale(snapshot, url) {
+  if (authUrl(snapshot?.url) || authUrl(snapshot?.documentUrl))
+    return "AUTH_SCREEN";
+  if (snapshot?.url !== url || snapshot.documentUrl !== url)
+    return "SALE_URL_UNEXPECTED";
+  if (snapshot.statusChipExact !== true)
+    return "SALE_STATUS_FILTER_UNVERIFIED";
+  if (snapshot.visibilityChipExact !== true)
+    return "SALE_VISIBILITY_FILTER_UNVERIFIED";
+  if (snapshot.loading !== false) return "SALE_LOADING";
+  if (snapshot.tableMatches !== 1 ||
+      !Number.isSafeInteger(snapshot.tableIndex) || snapshot.tableIndex < 0 ||
+      !Number.isSafeInteger(snapshot.headerCount) || snapshot.headerCount < 2 ||
+      !Number.isSafeInteger(snapshot.titleColumn) || snapshot.titleColumn < 0 ||
+      snapshot.titleColumn >= snapshot.headerCount)
+    return "SALE_TABLE_UNVERIFIED";
+  if (!Array.isArray(snapshot.rows) || snapshot.rows.length > 50)
+    return "SALE_ROW_COUNT_UNVERIFIED";
+  if (snapshot.rows.some(row => typeof row.title !== "string" ||
+      row.title.length > 130 || row.cellCount !== snapshot.headerCount ||
+      row.interactiveCount !== 0 || typeof row.signature !== "string" ||
+      row.signature.length > 3000)) return "SALE_ROW_SHAPE_UNVERIFIED";
+  if (snapshot.nextCount !== 1 || snapshot.prevCount !== 1)
+    return "SALE_PAGINATION_CONTROLS_UNVERIFIED";
+  if (typeof snapshot.nextDisabled !== "boolean" ||
+      typeof snapshot.prevDisabled !== "boolean")
+    return "SALE_PAGINATION_STATE_UNVERIFIED";
+  return "SALE_READY";
 }
 
 async function stableSale(ui, url, previousRows = null) {
   let previous = null;
   let stable = 0;
+  let diagnostic = "SALE_UNSTABLE";
   for (let attempt = 0; attempt < 12; attempt++) {
     const current = await ui.saleSnapshot();
-    if (validSale(current, url) &&
+    const reason = diagnoseSale(current, url);
+    if (reason === "SALE_READY" &&
         (previousRows === null || !same(current.rows, previousRows))) {
+      diagnostic = "SALE_UNSTABLE";
       stable = previous && same(previous, current) ? stable + 1 : 1;
       previous = current;
-      if (stable === 3) return current;
-    } else { previous = null; stable = 0; }
+      if (stable === 3) return { snapshot: current, diagnostic: null };
+    } else {
+      diagnostic = reason === "SALE_READY" ? "SALE_ROW_SET_UNCHANGED" : reason;
+      previous = null; stable = 0;
+    }
     await ui.wait(600);
   }
-  return null;
+  return { snapshot: null, diagnostic };
 }
 
 function browserAdapter(page) {
@@ -69,13 +93,13 @@ function browserAdapter(page) {
           'button[data-testid="product-status-chip"]')];
         const visibilityChips = [...document.querySelectorAll(
           'button[data-testid="visibility-chip"]')];
-        const allSelected = statusChips.length === 1 &&
-          text(statusChips[0]) === "ステータス: 出品中" &&
-          visibilityChips.length === 1 &&
+        const statusChipExact = statusChips.length === 1 &&
+          text(statusChips[0]) === "ステータス: 出品中";
+        const visibilityChipExact = visibilityChips.length === 1 &&
           text(visibilityChips[0]) === "公開状態: すべて";
         return { documentUrl: document.location.href,
           loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),
-          allVisibilitySelected: allSelected, tableMatches: matches.length,
+          statusChipExact, visibilityChipExact, tableMatches: matches.length,
           tableIndex: selected?.index ?? -1,
           headerCount: selected?.headers.length ?? 0,
           titleColumn: selected?.headers.indexOf("商品名") ?? -1,
@@ -108,9 +132,9 @@ export async function scanGeneralPrivateCreateNormalUiReadOnly({ page, shopId,
     await ui.gotoSale(saleUrl);
     let previousRows = null;
     for (let pageIndex = 0; pageIndex < 50; pageIndex++) {
-      const current = await stableSale(ui, saleUrl, previousRows);
-      if (!current) return fixed("REMOTE_SCAN_INCOMPLETE",
-        pageIndex === 0 ? "SALE_TABLE_UNVERIFIED" : "SALE_PAGINATION_UNVERIFIED");
+      const settled = await stableSale(ui, saleUrl, previousRows);
+      const current = settled.snapshot;
+      if (!current) return fixed("REMOTE_SCAN_INCOMPLETE", settled.diagnostic);
       if (pageIndex === 0 && (current.prevDisabled !== true ||
           current.nextDisabled !== false) ||
           pageIndex > 0 && current.prevDisabled !== false)

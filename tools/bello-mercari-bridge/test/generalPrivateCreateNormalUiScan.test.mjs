@@ -10,9 +10,9 @@ const saleUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=o
 const input = { shopId, title, managementCode, expectedDraftRowCount: 12 };
 
 function snapshot(titles, { nextDisabled, prevDisabled,
-  allVisibilitySelected = true } = {}) {
+  statusChipExact = true, visibilityChipExact = true } = {}) {
   return { url: saleUrl, documentUrl: saleUrl, loading: false,
-    allVisibilitySelected, tableMatches: 1, tableIndex: 0,
+    statusChipExact, visibilityChipExact, tableMatches: 1, tableIndex: 0,
     headerCount: 2, titleColumn: 0, nextCount: 1, prevCount: 1,
     nextDisabled, prevDisabled,
     rows: titles.map(value => ({ title: value, signature: JSON.stringify([value, "1"]),
@@ -93,13 +93,13 @@ test("unstable pagination and unproved visibility fail closed", async () => {
   const unchanged = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
     adapter: stuck, collectDrafts: emptyDrafts });
   assert.equal(unchanged.status, "REMOTE_SCAN_INCOMPLETE");
-  assert.equal(unchanged.diagnostic, "SALE_PAGINATION_UNVERIFIED");
+  assert.equal(unchanged.diagnostic, "SALE_ROW_SET_UNCHANGED");
   assert.equal(stuck.calls().nextClicks, 1);
   const hiddenFilter = fakeAdapter([snapshot(["other"], {
-    nextDisabled: true, prevDisabled: true, allVisibilitySelected: false })]);
+    nextDisabled: true, prevDisabled: true, visibilityChipExact: false })]);
   const filtered = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
     adapter: hiddenFilter, collectDrafts: emptyDrafts });
-  assert.equal(filtered.diagnostic, "SALE_TABLE_UNVERIFIED");
+  assert.equal(filtered.diagnostic, "SALE_VISIBILITY_FILTER_UNVERIFIED");
   assert.equal(hiddenFilter.calls().nextClicks, 0);
 });
 
@@ -131,14 +131,14 @@ test("unknown visibility control keeps the default browser adapter unverified", 
       return { evaluate: async () => { calls.push("read-body");
         const { url, ...data } = snapshot(["Other item"],
           { nextDisabled: false, prevDisabled: true,
-            allVisibilitySelected: false });
+            visibilityChipExact: false });
         return data;
       } }; },
     waitForTimeout: async ms => { assert.equal(ms, 600); },
   };
   const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
     page, collectDrafts: emptyDrafts });
-  assert.equal(result.diagnostic, "SALE_TABLE_UNVERIFIED");
+  assert.equal(result.diagnostic, "SALE_VISIBILITY_FILTER_UNVERIFIED");
   assert.equal(calls[0], "goto");
   assert.equal(calls.filter(call => call === "read-body").length, 12);
 });
@@ -189,7 +189,7 @@ test("a selected unrelated すべて option is not visibility evidence", async (
       waitForTimeout: async () => {} };
     const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
       page, collectDrafts: async () => { throw Error("Must not read drafts"); } });
-    assert.equal(result.diagnostic, "SALE_TABLE_UNVERIFIED");
+    assert.equal(result.diagnostic, "SALE_VISIBILITY_FILTER_UNVERIFIED");
     assert.equal(unrelatedSeen, false);
   } finally { globalThis.document = originalDocument; }
 });
@@ -235,4 +235,37 @@ test("only the exact on-sale status and visibility chips permit list reading", a
     assert.equal(result.diagnostic, "SALE_SKU_UNVERIFIED");
     assert.equal(pageIndex, 1);
   } finally { globalThis.document = originalDocument; }
+});
+
+test("sale-list failures return only the expected fixed diagnostic", async () => {
+  const base = () => snapshot(["private-title"],
+    { nextDisabled: false, prevDisabled: true });
+  const cases = [
+    [{ ...base(), url: "https://mercari-shops.com/signin/seller" },
+      "AUTH_SCREEN"],
+    [{ ...base(), url: "https://example.invalid/private-id" },
+      "SALE_URL_UNEXPECTED"],
+    [{ ...base(), statusChipExact: false },
+      "SALE_STATUS_FILTER_UNVERIFIED"],
+    [{ ...base(), visibilityChipExact: false },
+      "SALE_VISIBILITY_FILTER_UNVERIFIED"],
+    [{ ...base(), tableMatches: 0 }, "SALE_TABLE_UNVERIFIED"],
+    [{ ...base(), rows: Array.from({ length: 51 }, (_, i) =>
+      ({ title: `private-title-${i}`, signature: "[]", cellCount: 2,
+        interactiveCount: 0 })) }, "SALE_ROW_COUNT_UNVERIFIED"],
+    [{ ...base(), nextCount: 0 },
+      "SALE_PAGINATION_CONTROLS_UNVERIFIED"],
+    [{ ...base(), nextDisabled: null },
+      "SALE_PAGINATION_STATE_UNVERIFIED"],
+  ];
+  for (const [view, diagnostic] of cases) {
+    const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+      adapter: fakeAdapter([view]),
+      collectDrafts: async () => { throw Error("Must not read drafts"); } });
+    assert.equal(result.status, "REMOTE_SCAN_INCOMPLETE");
+    assert.equal(result.diagnostic, diagnostic);
+    assert.equal(result.allowFinalCreate, false);
+    assert.equal(JSON.stringify(result).includes("private-title"), false);
+    assert.equal(JSON.stringify(result).includes("private-id"), false);
+  }
 });
