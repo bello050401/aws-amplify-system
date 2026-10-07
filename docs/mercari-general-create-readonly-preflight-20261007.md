@@ -68,3 +68,5 @@ PlaywrightのDOM読取adapter引数の独立レビュー指摘を修正した `3
 段階別診断版 `0654dd4` の独立レビューPASS後、対象1件の読取専用実行は `REMOTE_SCAN_INCOMPLETE / SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE`、`allowFinalCreate: false`、ブラウザー正常終了となった。検索欄または検索ボタンの特定・個数確認段階で止まり、正例検索の入力・クリックにも進まなかった。この固定コードだけでは、どちらの要素が見つからなかったか、個数が0か複数か、例外が起きたかは分からない。実行前後のQueue 46ファイルとプロフィール識別ファイルはSHA-256で一致し、専用Chrome・PC操作画面の待受けは0だった。追加の実画面再試行やCREATE送信は行わない。
 
 次候補は検索欄と検索ボタンを順番に数え、それぞれ0件・複数件を別の固定コードで返す。ロケーター生成・個数読取の例外だけ従来の `SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE` とする。検索欄が一つと確認できなければボタンを調べず、入力・クリックには進まない。返り値に要素の名前、画面内容、例外文、URLや商品情報を含めず、`allowFinalCreate: false` を維持する。独立レビュー前に実画面では実行しない。
+
+個数別診断版 `bbcd183` の独立レビューPASS後、対象1件の読取専用実行は `REMOTE_SCAN_INCOMPLETE / SALE_SKU_SEARCH_TEXTBOX_ZERO`、`allowFinalCreate: false`、ブラウザー正常終了となった。専用Chromeで検索欄のrole/nameロケーターが0件で、検索欄への入力や検索ボタンのクリックには進まなかった。これは対象商品の重複有無を示さない。実行前後のQueue 46ファイルとプロフィール識別ファイルはSHA-256で一致し、専用Chrome・PC操作画面の待受けは0だった。追加の実画面再試行やCREATE送信は行わない。
