@@ -117,3 +117,18 @@ test("alphabetic ID embedded in a query operation name is not returned", async (
   assert.equal(JSON.stringify(result).includes(sensitiveOperation), false);
   assert.equal(result.allowFinalCreate, false);
 });
+
+test("array operationName cannot be coerced into a read query", async () => {
+  const context = new EventEmitter();
+  const page = { url: () => listUrl };
+  const observer = observeDraftReadMetadata(context, { page, shopId });
+  const req = request(page);
+  const payload = { operationName: ["DraftProductsPage"],
+    query: "query DraftProductsPage { draftProducts { id } }" };
+  req.postDataBuffer = () => Buffer.from(JSON.stringify(payload));
+  context.emit("request", req);
+  context.emit("response", response(req));
+  const result = await observer.stop();
+  assert.deepEqual(result.observations, []);
+  assert.equal(result.allowFinalCreate, false);
+});

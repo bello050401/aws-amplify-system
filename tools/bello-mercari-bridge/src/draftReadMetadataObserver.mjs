@@ -30,7 +30,8 @@ function queryOperation(request) {
   let body;
   try { body = JSON.parse(bytes.toString("utf8")); } catch { return null; }
   if (!body || typeof body !== "object" || Array.isArray(body) ||
-      !OPERATION_NAME.test(body.operationName ?? "") ||
+      typeof body.operationName !== "string" ||
+      !OPERATION_NAME.test(body.operationName) ||
       /(?:token|secret|cookie|auth|session|password|credential|key)/i
         .test(body.operationName) || typeof body.query !== "string" ||
       body.query.length > 200_000) return null;
