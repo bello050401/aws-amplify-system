@@ -14,6 +14,18 @@ function authUrl(value) {
   catch { return false; }
 }
 
+function diagnoseSaleRow(row) {
+  if (typeof row?.title !== "string" || row.title.length > 130)
+    return "SALE_TITLE_LENGTH_UNVERIFIED";
+  if (row.cellCount !== 10) return "SALE_CELL_COUNT_UNVERIFIED";
+  if (row.dataActionCount !== 0) return "SALE_DATA_ACTION_UNVERIFIED";
+  if (row.menuControlsVerified !== true)
+    return "SALE_MENU_CONTROLS_UNVERIFIED";
+  if (typeof row.signature !== "string" || row.signature.length > 3000)
+    return "SALE_SIGNATURE_LENGTH_UNVERIFIED";
+  return "SALE_ROW_READY";
+}
+
 function diagnoseSale(snapshot, url) {
   if (authUrl(snapshot?.url) || authUrl(snapshot?.documentUrl))
     return "AUTH_SCREEN";
@@ -30,11 +42,9 @@ function diagnoseSale(snapshot, url) {
     return "SALE_TABLE_UNVERIFIED";
   if (!Array.isArray(snapshot.rows) || snapshot.rows.length > 50)
     return "SALE_ROW_COUNT_UNVERIFIED";
-  if (snapshot.rows.some(row => typeof row.title !== "string" ||
-      row.title.length > 130 || row.cellCount !== 10 ||
-      row.dataActionCount !== 0 || row.menuControlsVerified !== true ||
-      typeof row.signature !== "string" ||
-      row.signature.length > 3000)) return "SALE_ROW_SHAPE_UNVERIFIED";
+  const rowReason = snapshot.rows.map(diagnoseSaleRow)
+    .find(reason => reason !== "SALE_ROW_READY");
+  if (rowReason) return rowReason;
   if (snapshot.nextCount !== 1 || snapshot.prevCount !== 1)
     return "SALE_PAGINATION_CONTROLS_UNVERIFIED";
   if (typeof snapshot.nextDisabled !== "boolean" ||

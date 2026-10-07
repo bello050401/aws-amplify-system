@@ -268,11 +268,11 @@ test("observed header th[0] maps to title td[1] with only known menu buttons", a
   try {
     for (const [options, expected] of [
       [{}, "SALE_TITLE_MATCH"],
-      [{ dataButton: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
-      [{ unknownMenu: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
-      [{ mismatchedSuffix: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
-      [{ dataCellRoleButton: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
-      [{ menuCellContentEditable: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
+      [{ dataButton: true }, "SALE_DATA_ACTION_UNVERIFIED"],
+      [{ unknownMenu: true }, "SALE_MENU_CONTROLS_UNVERIFIED"],
+      [{ mismatchedSuffix: true }, "SALE_MENU_CONTROLS_UNVERIFIED"],
+      [{ dataCellRoleButton: true }, "SALE_DATA_ACTION_UNVERIFIED"],
+      [{ menuCellContentEditable: true }, "SALE_MENU_CONTROLS_UNVERIFIED"],
       [{ wrongHeader: true }, "SALE_TABLE_UNVERIFIED"],
     ]) {
       globalThis.document = { location: { href: saleUrl },
@@ -305,6 +305,11 @@ test("observed header th[0] maps to title td[1] with only known menu buttons", a
 test("sale-list failures return only the expected fixed diagnostic", async () => {
   const base = () => snapshot(["private-title"],
     { nextDisabled: false, prevDisabled: true });
+  const changedRow = fields => {
+    const view = base();
+    view.rows[0] = { ...view.rows[0], ...fields };
+    return view;
+  };
   const cases = [
     [{ ...base(), url: "https://mercari-shops.com/signin/seller" },
       "AUTH_SCREEN"],
@@ -320,6 +325,14 @@ test("sale-list failures return only the expected fixed diagnostic", async () =>
       ({ title: `private-title-${i}`, signature: "[]", cellCount: 10,
         dataActionCount: 0, menuControlsVerified: true })) },
       "SALE_ROW_COUNT_UNVERIFIED"],
+    [changedRow({ title: "x".repeat(131) }),
+      "SALE_TITLE_LENGTH_UNVERIFIED"],
+    [changedRow({ cellCount: 9 }), "SALE_CELL_COUNT_UNVERIFIED"],
+    [changedRow({ dataActionCount: 1 }), "SALE_DATA_ACTION_UNVERIFIED"],
+    [changedRow({ menuControlsVerified: false }),
+      "SALE_MENU_CONTROLS_UNVERIFIED"],
+    [changedRow({ signature: "x".repeat(3001) }),
+      "SALE_SIGNATURE_LENGTH_UNVERIFIED"],
     [{ ...base(), nextCount: 0 },
       "SALE_PAGINATION_CONTROLS_UNVERIFIED"],
     [{ ...base(), nextDisabled: null },
