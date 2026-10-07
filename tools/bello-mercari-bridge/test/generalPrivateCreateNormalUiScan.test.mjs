@@ -207,6 +207,21 @@ test("only allowlisted draft collector failures pass through without row data", 
     } });
   assert.equal(thrown.diagnostic, "DRAFT_READ_UNAVAILABLE");
   assert.equal(JSON.stringify(thrown).includes("private-draft-id"), false);
+  let statusReads = 0;
+  const changingStatus = { rows: [], allowFinalCreate: false,
+    get status() { statusReads++;
+      return statusReads === 1 ? "DRAFT_LIST_CHANGED" : "private-draft-id"; } };
+  const changed = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+    adapter: salePages(), collectDrafts: async () => changingStatus });
+  assert.equal(statusReads, 1);
+  assert.equal(changed.diagnostic, "DRAFT_LIST_CHANGED");
+  assert.equal(JSON.stringify(changed).includes("private-draft-id"), false);
+  const throwingStatus = { rows: [], allowFinalCreate: false,
+    get status() { throw Error("private-draft-id"); } };
+  const getterFailure = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+    adapter: salePages(), collectDrafts: async () => throwingStatus });
+  assert.equal(getterFailure.diagnostic, "DRAFT_RESULT_UNVERIFIED");
+  assert.equal(JSON.stringify(getterFailure).includes("private-draft-id"), false);
 });
 
 test("unknown visibility control keeps the default browser adapter unverified", async () => {

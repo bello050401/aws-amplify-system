@@ -203,19 +203,27 @@ export async function scanGeneralPrivateCreateNormalUiReadOnly({ page, shopId,
     try { drafts = await collectDrafts({ page, shopId,
       expectedRowCount: expectedDraftRowCount }); }
     catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_READ_UNAVAILABLE"); }
-    if (drafts?.allowFinalCreate !== false)
+    let draftStatus;
+    let draftRows;
+    let draftAllowFinalCreate;
+    try {
+      draftStatus = drafts?.status;
+      draftRows = drafts?.rows;
+      draftAllowFinalCreate = drafts?.allowFinalCreate;
+    } catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_RESULT_UNVERIFIED"); }
+    if (draftAllowFinalCreate !== false)
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_RESULT_UNVERIFIED");
-    if (drafts.status !== "DRAFT_DETAILS_DOM_OBSERVED")
+    if (draftStatus !== "DRAFT_DETAILS_DOM_OBSERVED")
       return fixed("REMOTE_SCAN_INCOMPLETE",
-        DRAFT_FAILURES.has(drafts.status) && Array.isArray(drafts.rows) &&
-          drafts.rows.length === 0 ? drafts.status : "DRAFT_RESULT_UNVERIFIED");
-    if (!Array.isArray(drafts.rows) ||
-        drafts.rows.length !== expectedDraftRowCount)
+        DRAFT_FAILURES.has(draftStatus) && Array.isArray(draftRows) &&
+          draftRows.length === 0 ? draftStatus : "DRAFT_RESULT_UNVERIFIED");
+    if (!Array.isArray(draftRows) ||
+        draftRows.length !== expectedDraftRowCount)
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_RESULT_UNVERIFIED");
-    if (drafts.rows.some(row => row?.skuCode &&
+    if (draftRows.some(row => row?.skuCode &&
         row.skuCode.toUpperCase() === managementCode.toUpperCase()))
       return fixed("REMOTE_DUPLICATE_POSSIBLE", "DRAFT_SKU_MATCH");
-    if (drafts.rows.some(row => typeof row?.title === "string" &&
+    if (draftRows.some(row => typeof row?.title === "string" &&
         row.title && titleKey(row.title) === titleKey(title)))
       return fixed("REMOTE_DUPLICATE_POSSIBLE", "DRAFT_TITLE_MATCH");
     // On-sale SKU identity has not been verified by the observed list contract.
