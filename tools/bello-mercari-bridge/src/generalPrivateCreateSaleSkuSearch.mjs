@@ -37,7 +37,8 @@ function validSearch(snapshot, url, query, kind) {
       snapshot.nextCount === 1 && snapshot.prevCount === 1 &&
       snapshot.prevDisabled === true);
   return snapshot.rows.length === 0 && snapshot.emptyCount === 1 &&
-    snapshot.nonProductRowCount === 1 && snapshot.nextCount === 0 &&
+    snapshot.emptyShapeExact === true && snapshot.nonProductRowCount === 2 &&
+    snapshot.nextCount === 0 &&
     snapshot.prevCount === 0;
 }
 
@@ -144,6 +145,9 @@ function browserAdapter(page) {
         const emptyCount = allRows
           .filter(row => text(row) === emptyText &&
             row.querySelectorAll(":scope > td").length !== 10).length;
+        const emptyShapeExact = allRows.length === 2 &&
+          allRows.every(row => row.querySelectorAll(":scope > td").length === 1) &&
+          text(allRows[0]) === "" && text(allRows[1]) === emptyText;
         return { documentUrl: document.location.href,
           loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),
           statusChipExact: status.length === 1 && text(status[0]) === "ステータス: 出品中",
@@ -151,7 +155,7 @@ function browserAdapter(page) {
             text(visibility[0]) === "公開状態: すべて",
           tableMatches: matches.length, tableIndex: matches.length === 1 ? matches[0].index : -1,
           headerCount: table ? headers.length : 0,
-          titleColumn: table ? 0 : -1, rows, emptyCount,
+          titleColumn: table ? 0 : -1, rows, emptyCount, emptyShapeExact,
           nonProductRowCount: allRows.length - rows.length,
           nextCount: next.length, prevCount: prev.length,
           prevDisabled: prev.length === 1 ?
@@ -197,21 +201,20 @@ export async function searchGeneralPrivateCreateSaleSkuReadOnly({ page, shopId,
     await ui.clickControlRow(control.tableIndex);
     if (!await stableControlDetail(ui, shopId, positiveControlPrefix))
       return fixed("SALE_SKU_SEARCH_CONTROL_UNVERIFIED");
-    await ui.goto(baseUrl);
-    await ui.search(managementCode);
-    const exact = await stableSearch(ui, exactUrl, managementCode, "empty");
-    if (exact?.matchPossible === true)
-      return fixed("SALE_SKU_SEARCH_MATCH_POSSIBLE");
-    if (exact) return fixed("SALE_SKU_SEARCH_NO_MATCH_OBSERVED");
-    // A product row or an unstable/unknown screen must never authorize create.
-    const observed = await ui.searchSnapshot();
-    if (observed?.url === exactUrl && observed.documentUrl === exactUrl &&
-        observed.query === managementCode && observed.queryCount === 1 &&
-        observed.statusChipExact === true &&
-        observed.visibilityChipExact === true &&
-        observed.loading === false && Array.isArray(observed.rows) &&
-        observed.rows.length > 0)
-      return fixed("SALE_SKU_SEARCH_MATCH_POSSIBLE");
-    return fixed("SALE_SKU_SEARCH_UNVERIFIED");
+    for (let pass = 0; pass < 2; pass++) {
+      await ui.goto(baseUrl);
+      await ui.search(managementCode);
+      const exact = await stableSearch(ui, exactUrl, managementCode, "empty");
+      if (exact?.matchPossible === true)
+        return fixed("SALE_SKU_SEARCH_MATCH_POSSIBLE");
+      if (!exact) {
+        // An unstable screen cannot establish a negative search result.
+        const observed = await ui.searchSnapshot();
+        if (validSearch(observed, exactUrl, managementCode, "positive"))
+          return fixed("SALE_SKU_SEARCH_MATCH_POSSIBLE");
+        return fixed("SALE_SKU_SEARCH_UNVERIFIED");
+      }
+    }
+    return fixed("SALE_SKU_SEARCH_NO_MATCH_OBSERVED");
   } catch { return fixed("SALE_SKU_SEARCH_READ_UNAVAILABLE"); }
 }

@@ -20,7 +20,8 @@ function searchView(query, kind, overrides = {}) {
     rows: positive ? [{ cellCount: 10, signature: "visible-row",
       dataActionCount: 0, menuControlsVerified: true }] : [],
     emptyCount: positive ? 0 : 1,
-    nonProductRowCount: positive ? 0 : 1,
+    emptyShapeExact: !positive,
+    nonProductRowCount: positive ? 0 : 2,
     nextCount: positive ? 1 : 0, prevCount: positive ? 1 : 0,
     prevDisabled: positive ? true : null, ...overrides };
 }
@@ -58,9 +59,10 @@ test("positive SKU control and three stable empty reads are advisory only", asyn
   assert.deepEqual(result, { diagnostic: "SALE_SKU_SEARCH_NO_MATCH_OBSERVED",
     allowFinalCreate: false });
   assert.deepEqual(adapter.calls.filter(call => call.startsWith("search:")),
-    [`search:${positiveControlPrefix}`, `search:${managementCode}`]);
+    [`search:${positiveControlPrefix}`, `search:${managementCode}`,
+      `search:${managementCode}`]);
   assert.equal(adapter.reads().controlReads, 3);
-  assert.equal(adapter.reads().exactReads, 3);
+  assert.equal(adapter.reads().exactReads, 6);
   assert.equal(adapter.calls.filter(call => call === "open-control").length, 1);
   assert.equal(JSON.stringify(result).includes(managementCode), false);
 });
@@ -74,13 +76,25 @@ test("a transient empty state followed by rows cannot count as no match", async 
   assert.equal(result.allowFinalCreate, false);
 });
 
+test("a product appearing on the second independent query blocks a negative result", async () => {
+  const empty = searchView(managementCode, "empty");
+  const found = searchView(managementCode, "positive", {
+    nextCount: 0, prevCount: 0, prevDisabled: null });
+  const adapter = fakeUi({ exactViews: [empty, empty, empty, found] });
+  const result = await searchGeneralPrivateCreateSaleSkuReadOnly({ shopId,
+    managementCode, positiveControlPrefix, adapter });
+  assert.equal(result.diagnostic, "SALE_SKU_SEARCH_MATCH_POSSIBLE");
+  assert.equal(adapter.calls.filter(call => call === `search:${managementCode}`).length, 2);
+});
+
 test("filter, URL, query and loading mismatches reject empty results", async () => {
   for (const field of ["url", "documentUrl", "query", "queryCount",
     "statusChipExact", "visibilityChipExact", "loading", "nextCount",
-    "nonProductRowCount"]) {
+    "nonProductRowCount", "emptyShapeExact"]) {
     const bad = searchView(managementCode, "empty", { [field]:
-      field === "loading" ? true : field === "nextCount" ||
-      field === "nonProductRowCount" || field === "queryCount" ? 2 :
+      field === "loading" ? true : field === "emptyShapeExact" ? false :
+      field === "nextCount" || field === "queryCount" ? 2 :
+      field === "nonProductRowCount" ? 3 :
       field.endsWith("Exact") ? false : "unexpected" });
     const adapter = fakeUi({ exactViews: Array.from({ length: 13 }, () => bad) });
     const result = await searchGeneralPrivateCreateSaleSkuReadOnly({ shopId,
