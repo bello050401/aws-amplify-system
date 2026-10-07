@@ -75,6 +75,11 @@ export async function runB005396GeneralPreparation(selected: Selection, readers:
     priceYen: B005396_REVIEW_PRICE_YEN, ...selected,
   });
   if (!current.ok) return { ok: false as const, code: current.code };
+  if (current.pack.quantity !== selected.quantity ||
+      current.pack.categoryId !== selected.categoryId ||
+      current.pack.brandId !== selected.brandId)
+    return { ok: false as const,
+      code: "SOURCE_CHANGED_OR_UNVERIFIED" as const };
   const evidence = inspectB005396GeneralPreparation(source.preparation, current.pack);
   if (!evidence) return { ok: false as const,
     code: "SOURCE_CHANGED_OR_UNVERIFIED" as const };
