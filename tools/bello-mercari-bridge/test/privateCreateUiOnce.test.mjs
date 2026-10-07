@@ -3,8 +3,11 @@ import test from "node:test";
 import { resolve } from "node:path";
 import { exactNewDraftId, exactPinnedPrivateCreateJob,
   exactPrivateCreateResponse, exactFormFieldReadback, sameUploadedAsset,
+  classifyPrivateCreateListEntry, eligibleForPinnedPrivateCreateNotSent,
   runPinnedPrivateCreateUiOnce } from
   "../src/privateCreateUiOnce.mjs";
+
+const listUrl = "https://mercari-shops.com/seller/shops/evkhihBFFNn5hukMS9s36H/products?tab=on_sale&visibility=unopened";
 
 const createUrl = "https://mercari-shops.com/seller/shops/evkhihBFFNn5hukMS9s36H/products/create";
 
@@ -98,9 +101,139 @@ test("authentication uncertainty records UNKNOWN and never enters the create UI"
   assert.equal(saved.outcome, "UNKNOWN");
   assert.equal(saved.remoteId, null);
   assert.equal(saved.listingConfirmed, false);
+  assert.equal(saved.entryDiagnostic, "AUTH_REQUIRED");
+  assert.equal(saved.reasonCode, "LIST_UNAVAILABLE");
+  assert.deepEqual(saved.attempted, { createClick: false, fieldsOrFile: false,
+    privateSaveClick: false });
   assert.equal(result.status, "UNKNOWN");
   assert.equal(result.retainedSession, session);
   assert.equal(closed, false);
+});
+
+test("fixed list classification omits raw URLs and secret query values", () => {
+  assert.equal(classifyPrivateCreateListEntry("UNKNOWN", listUrl), "EXACT_LIST");
+  assert.equal(classifyPrivateCreateListEntry("UNKNOWN", `${listUrl}&token=secret`),
+    "LIST_FILTER_CHANGED");
+  assert.equal(classifyPrivateCreateListEntry("UNKNOWN", "https://mercari-shops.com/signin/seller?token=secret"),
+    "SIGN_IN");
+  assert.equal(classifyPrivateCreateListEntry("UNKNOWN", "https://example.com/?token=secret"),
+    "OTHER_ORIGIN");
+});
+
+test("late list navigation is rechecked before the single create-link click", async () => {
+  let url = "about:blank";
+  let clicked = 0;
+  let saved;
+  const createLink = { waitFor: async () => {}, count: async () => 1,
+    isEnabled: async () => true,
+    click: async () => { clicked += 1; throw Error("simulated uncertain click"); } };
+  const session = { state: "UNKNOWN",
+    page: { url: () => url, waitForURL: async expected => {
+      assert.equal(expected, listUrl); url = listUrl;
+    }, getByRole: () => createLink },
+    claim: { attemptId: "test-attempt" },
+    observer: { stop: async () => ({ captureStatus: "UNVERIFIED",
+      events: [], draftIds: [] }) } };
+  const result = await runPinnedPrivateCreateUiOnce({
+    root: resolve("queue"), profileDir: resolve("profile"),
+    playwrightModulePath: resolve("playwright"), imagePath: resolve("image.jpg"),
+  }, {
+    preflight: async () => ({ job: { snapshotFingerprint: "pinned" },
+      snapshot: {}, imageBytes: Buffer.from("unused"), image: {} }),
+    openSession: async () => session,
+    recordObservation: async () => {},
+    saveResult: async (_root, value) => { saved = value; },
+  });
+  assert.equal(clicked, 1);
+  assert.equal(saved.entryDiagnostic, "EXACT_LIST");
+  assert.equal(saved.diagnosticStage, "CREATE_PAGE_UNCERTAIN");
+  assert.equal(saved.attempted.createClick, true);
+  assert.equal(result.status, "UNKNOWN");
+});
+
+test("a missing create link records a fixed pre-click reason", async () => {
+  let saved;
+  const session = { state: "LIST_OPEN",
+    page: { url: () => listUrl, getByRole: () => ({
+      waitFor: async () => { throw Error("not rendered"); },
+    }) }, claim: { attemptId: "test-attempt" },
+    observer: { stop: async () => ({ captureStatus: "UNVERIFIED",
+      events: [], draftIds: [] }) } };
+  await runPinnedPrivateCreateUiOnce({
+    root: resolve("queue"), profileDir: resolve("profile"),
+    playwrightModulePath: resolve("playwright"), imagePath: resolve("image.jpg"),
+  }, {
+    preflight: async () => ({ job: { snapshotFingerprint: "pinned" },
+      snapshot: {}, imageBytes: Buffer.from("unused"), image: {} }),
+    openSession: async () => session,
+    recordObservation: async () => {},
+    saveResult: async (_root, value) => { saved = value; },
+  });
+  assert.equal(saved.diagnosticStage, "CLAIMED");
+  assert.equal(saved.entryDiagnostic, "LINK_UNAVAILABLE");
+  assert.equal(saved.reasonCode, "LINK_UNAVAILABLE");
+  assert.equal(saved.attempted.createClick, false);
+});
+
+test("duplicate or disabled create links remain pre-click", async () => {
+  for (const [count, enabled] of [[2, true], [1, false]]) {
+    let saved;
+    const session = { state: "LIST_OPEN",
+      page: { url: () => listUrl, getByRole: () => ({
+        waitFor: async () => {}, count: async () => count,
+        isEnabled: async () => enabled,
+      }) }, claim: { attemptId: "test-attempt" },
+      observer: { stop: async () => ({ captureStatus: "UNVERIFIED",
+        events: [], draftIds: [] }) } };
+    await runPinnedPrivateCreateUiOnce({
+      root: resolve("queue"), profileDir: resolve("profile"),
+      playwrightModulePath: resolve("playwright"), imagePath: resolve("image.jpg"),
+    }, {
+      preflight: async () => ({ job: { snapshotFingerprint: "pinned" },
+        snapshot: {}, imageBytes: Buffer.from("unused"), image: {} }),
+      openSession: async () => session,
+      recordObservation: async () => {},
+      saveResult: async (_root, value) => { saved = value; },
+    });
+    assert.equal(saved.diagnosticStage, "CLAIMED");
+    assert.equal(saved.reasonCode, "LINK_UNAVAILABLE");
+    assert.equal(saved.attempted.createClick, false);
+  }
+});
+
+test("NOT_SENT eligibility requires complete no-click and no-traffic proof", () => {
+  const claim = { operation: "OBSERVE_FUTURE_PRIVATE_CREATE_ONCE",
+    shopId: "evkhihBFFNn5hukMS9s36H", attemptId: "test-attempt",
+    outcome: "UNKNOWN", listingConfirmed: false,
+    inventoryFingerprint: "inventory", snapshotFingerprint: "snapshot",
+    claimedAt: "2026-10-07T00:00:00.000Z" };
+  const result = { attemptId: claim.attemptId, shopId: claim.shopId,
+    inventoryFingerprint: claim.inventoryFingerprint,
+    snapshotFingerprint: claim.snapshotFingerprint,
+    outcome: "UNKNOWN", remoteId: null, listingConfirmed: false,
+    diagnosticStage: "CLAIMED", reasonCode: "LINK_UNAVAILABLE",
+    attempted: { createClick: false, fieldsOrFile: false,
+      privateSaveClick: false }, observationCaptureStatus: "UNVERIFIED",
+    recordedAt: "2026-10-07T00:01:00.000Z" };
+  const observation = { attemptId: claim.attemptId,
+    outcome: "OBSERVED_UNVERIFIED", captureStatus: "UNVERIFIED",
+    events: [], draftIds: [] };
+  const empty = { complete: true, managementCodeMatches: 0,
+    titleMatches: 0, price99999Matches: 0 };
+  const readback = { shopId: claim.shopId,
+    inventoryId: "dd273c1e-9b2a-4013-acc6-c445a481fab8",
+    managementCode: "TEST_B005659_E51E4F6B7B86DD150546", priceYen: 99999,
+    onSaleAllVisibility: empty, draftAllPages: empty,
+    observedAt: "2026-10-07T00:02:00.000Z" };
+  assert.equal(eligibleForPinnedPrivateCreateNotSent({ claim, result,
+    observation, readback }), true);
+  assert.equal(eligibleForPinnedPrivateCreateNotSent({ claim, result: {
+    ...result, attempted: undefined }, observation, readback }), false);
+  assert.equal(eligibleForPinnedPrivateCreateNotSent({ claim, result,
+    observation: { ...observation, events: [{ method: "POST" }] }, readback }), false);
+  assert.equal(eligibleForPinnedPrivateCreateNotSent({ claim, result,
+    observation, readback: { ...readback, draftAllPages: { ...empty,
+      complete: false } } }), false);
 });
 
 test("a consumed claim from a blocked restored browser is recorded UNKNOWN", async () => {
@@ -121,5 +254,8 @@ test("a consumed claim from a blocked restored browser is recorded UNKNOWN", asy
   assert.equal(result.retainedSession, null);
   assert.equal(saved.attemptId, "test-attempt");
   assert.equal(saved.diagnosticStage, "BROWSER_UNAVAILABLE");
+  assert.equal(saved.reasonCode, "BROWSER_UNAVAILABLE");
+  assert.equal(saved.attempted.createClick, false);
+  assert.equal(saved.observationCaptureStatus, "MISSING");
   assert.equal(saved.listingConfirmed, false);
 });

@@ -26,6 +26,69 @@ const FIXED_SHIPPING = Object.freeze({
 });
 
 const digest = value => createHash("sha256").update(value).digest("hex");
+
+/** Fixed labels only: never persist a browser URL or its query values. */
+export function classifyPrivateCreateListEntry(state, rawUrl) {
+  if (state === "AUTH_REQUIRED") return "AUTH_REQUIRED";
+  try {
+    const url = new URL(rawUrl);
+    if (url.href === LIST_URL) return "EXACT_LIST";
+    if (url.origin !== "https://mercari-shops.com") return "OTHER_ORIGIN";
+    if (url.pathname.startsWith("/signin/")) return "SIGN_IN";
+    if (url.pathname === `/seller/shops/${PRIVATE_CREATE_SHOP_ID}/products`)
+      return "LIST_FILTER_CHANGED";
+    return "OTHER_SHOPS_PAGE";
+  } catch { return "INVALID_URL"; }
+}
+
+/** Review aid only. This never changes a claim or authorizes another attempt. */
+export function eligibleForPinnedPrivateCreateNotSent({ claim, result,
+  observation, readback } = {}) {
+  const after = (later, earlier) => typeof later === "string" &&
+    typeof earlier === "string" && Number.isFinite(Date.parse(later)) &&
+    Number.isFinite(Date.parse(earlier)) && Date.parse(later) > Date.parse(earlier);
+  const zeroSearch = value => value?.complete === true &&
+    value?.managementCodeMatches === 0 && value?.titleMatches === 0 &&
+    value?.price99999Matches === 0;
+  return claim?.shopId === PRIVATE_CREATE_SHOP_ID &&
+    claim.operation === "OBSERVE_FUTURE_PRIVATE_CREATE_ONCE" &&
+    claim.outcome === "UNKNOWN" &&
+    claim.listingConfirmed === false &&
+    typeof claim.attemptId === "string" && ID.test(claim.attemptId) &&
+    result?.attemptId === claim.attemptId &&
+    result.shopId === claim.shopId &&
+    result.inventoryFingerprint === claim.inventoryFingerprint &&
+    result.snapshotFingerprint === claim.snapshotFingerprint &&
+    result.outcome === "UNKNOWN" && result.remoteId === null &&
+    result.listingConfirmed === false && result.diagnosticStage === "CLAIMED" &&
+    ["LIST_UNAVAILABLE", "LINK_UNAVAILABLE", "LIST_CHANGED"].includes(result.reasonCode) &&
+    result.attempted?.createClick === false &&
+    result.attempted.fieldsOrFile === false &&
+    result.attempted.privateSaveClick === false &&
+    result.observationCaptureStatus === "UNVERIFIED" &&
+    observation?.attemptId === claim.attemptId &&
+    observation.outcome === "OBSERVED_UNVERIFIED" &&
+    observation.captureStatus === "UNVERIFIED" &&
+    Array.isArray(observation.events) && observation.events.length === 0 &&
+    Array.isArray(observation.draftIds) && observation.draftIds.length === 0 &&
+    readback?.shopId === claim.shopId &&
+    readback.inventoryId === INVENTORY &&
+    readback.managementCode === CODE &&
+    readback.priceYen === 99999 &&
+    zeroSearch(readback.onSaleAllVisibility) &&
+    zeroSearch(readback.draftAllPages) &&
+    after(result.recordedAt, claim.claimedAt) &&
+    after(readback.observedAt, result.recordedAt);
+}
+
+async function waitForExactPrivateCreateList(session) {
+  if (session.state === "AUTH_REQUIRED") return "AUTH_REQUIRED";
+  if (classifyPrivateCreateListEntry(session.state, session.page.url()) !== "EXACT_LIST") {
+    try { await session.page.waitForURL(LIST_URL, { timeout: 8000 }); }
+    catch { /* A failed or changing navigation remains a no-click result. */ }
+  }
+  return classifyPrivateCreateListEntry(session.state, session.page.url());
+}
 const keys = value => Object.keys(value).sort().join(",");
 const sameJob = (left, right) => keys(left) === keys(right) &&
   Object.keys(left).every(key => left[key] === right[key]);
@@ -270,6 +333,10 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
       snapshotFingerprint: job.snapshotFingerprint, outcome: "UNKNOWN", remoteId: null,
       visibility: null, listingConfirmed: false,
       diagnosticStage: "BROWSER_UNAVAILABLE", observedDraftCount: 0,
+      entryDiagnostic: "BROWSER_UNAVAILABLE",
+      reasonCode: "BROWSER_UNAVAILABLE",
+      attempted: { createClick: false, fieldsOrFile: false,
+        privateSaveClick: false }, observationCaptureStatus: "MISSING",
       recordedAt: new Date().toISOString() };
     await saveResult(root, result);
     return { status: "UNKNOWN", remoteId: null,
@@ -277,20 +344,50 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
   }
   const seenDrafts = new Set();
   let stage = "CLAIMED";
+  let entryDiagnostic = "NOT_CHECKED";
+  let reasonCode = "PRE_CLICK_UNVERIFIED";
+  const attempted = { createClick: false, fieldsOrFile: false,
+    privateSaveClick: false };
   let observation = null;
   let remoteId = null;
   try {
-    if (session.state !== "LIST_OPEN" || session.page.url() !== LIST_URL)
+    entryDiagnostic = await waitForExactPrivateCreateList(session);
+    if (entryDiagnostic !== "EXACT_LIST") {
+      reasonCode = "LIST_UNAVAILABLE";
       throw Error("Dedicated Shops login or list unavailable");
-    const create = await unique(session.page.getByRole("link", { name: "商品登録", exact: true }));
+    }
+    const createLink = session.page.getByRole("link", { name: "商品登録", exact: true });
+    try { await createLink.waitFor({ state: "visible", timeout: 8000 }); }
+    catch {
+      entryDiagnostic = "LINK_UNAVAILABLE";
+      reasonCode = "LINK_UNAVAILABLE";
+      throw Error("Dedicated Shops create link unavailable");
+    }
+    entryDiagnostic = classifyPrivateCreateListEntry(session.state, session.page.url());
+    if (entryDiagnostic !== "EXACT_LIST") {
+      reasonCode = "LIST_CHANGED";
+      throw Error("Dedicated Shops list changed before create");
+    }
+    let create;
+    try { create = await unique(createLink); }
+    catch {
+      entryDiagnostic = "LINK_UNAVAILABLE";
+      reasonCode = "LINK_UNAVAILABLE";
+      throw Error("Dedicated Shops create link unavailable");
+    }
     stage = "CREATE_PAGE_UNCERTAIN";
+    reasonCode = "CREATE_CLICK_UNCERTAIN";
+    attempted.createClick = true;
     await create.click({ timeout: 12000 });
     const page = session.page;
     if (!exactNewDraftId(page.url()).valid) throw Error("Create page unavailable");
     stage = "FIELDS_UNCERTAIN";
+    reasonCode = "FIELDS_OR_FILE_UNCERTAIN";
+    attempted.fieldsOrFile = true;
     const selectedAsset = await fillOnce(page, snapshot, imageBytes, image, seenDrafts);
     const next = await unique(page.getByRole("button", { name: "公開設定に進む", exact: true }));
     stage = "PRIVATE_DIALOG_UNCERTAIN";
+    reasonCode = "PRIVATE_DIALOG_UNCERTAIN";
     await next.click({ timeout: 12000 });
     if (!exactNewDraftId(page.url()).valid) throw Error("Create URL changed before private save");
     const dialog = page.getByRole("dialog");
@@ -300,8 +397,10 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
     const privateButton = await unique(dialog.getByRole("button",
       { name: "非公開で保存する", exact: true }));
     stage = "PRIVATE_SAVE_UNCERTAIN";
+    reasonCode = "PRIVATE_SAVE_CLICK_UNCERTAIN";
     // Attach before the click: the create response may arrive after click resolves.
     const responseWait = session.observer.waitForCreateProductResponse(12000);
+    attempted.privateSaveClick = true;
     await privateButton.click({ timeout: 12000 });
     if (!await responseWait) throw Error("Create response timed out");
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -309,9 +408,11 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
     remoteId = exactPrivateCreateResponse(observation);
     if (!remoteId) throw Error("Exact private create response unavailable");
     stage = "READBACK_UNCERTAIN";
+    reasonCode = "READBACK_UNCERTAIN";
     if (!await verifyReadback(session.context, remoteId, snapshot, selectedAsset))
       throw Error("Independent private product readback unavailable");
     stage = "PRIVATE_CONFIRMED";
+    reasonCode = "PRIVATE_CONFIRMED";
   } catch { /* The claim is permanent even when login, form, upload, or save is uncertain. */ }
   finally {
     if (!observation) observation = await session.observer?.stop().catch(() => null);
@@ -327,7 +428,9 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
     outcome: confirmed ? "PRIVATE_CONFIRMED" : "UNKNOWN",
     remoteId: confirmed ? remoteId : null,
     visibility: confirmed ? "PRIVATE" : null,
-    listingConfirmed: confirmed, diagnosticStage: stage,
+    listingConfirmed: confirmed, diagnosticStage: stage, entryDiagnostic,
+    reasonCode, attempted, observationCaptureStatus:
+      observation?.captureStatus ?? "MISSING",
     observedDraftCount: seenDrafts.size, recordedAt: new Date().toISOString() };
   await saveResult(root, result);
   if (confirmed) await session.context.close().catch(() => {});
