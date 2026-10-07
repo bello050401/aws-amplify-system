@@ -11,6 +11,8 @@ import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { getNextEngineMasterSync } from "@/lib/listing/nextEngine/masterSync";
+import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
+import { InventoryAuthTemporarilyUnavailable } from "../../InventoryAuthTemporarilyUnavailable";
 
 /**
  * BELLO統合改修 master指示書 Phase D — 在庫詳細画面(app/inventory/
@@ -36,19 +38,32 @@ export default async function ListingPage({ params }: { params: { id: string } }
     notFound();
   }
 
-  const item = await getInventoryDetail(params.id);
+  let item;
+  try {
+    item = await getInventoryDetail(params.id);
+  } catch (error) {
+    if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
+    throw error;
+  }
   if (!item) notFound();
 
-  const [draft, channelListing, categories, statuses, photoAssetsResult, nextEngineSync] = await Promise.all([
-    getListingDraftForInventory(item.id),
-    getChannelListing(item.id, "MERCARI_SHOPS"),
-    // 2026-09-04 EC出品改修指示書 §2-1: 右パネルのカテゴリ/在庫ステータス。
-    // 在庫詳細ページと同じクエリを使う —— 表示名の解決を2通り持たない。
-    listCategories(item.categoryId),
-    listStatuses(),
-    listInventoryPhotoAssetsAction(item.id),
-    getNextEngineMasterSync(item.id),
-  ]);
+  let detailRead;
+  try {
+    detailRead = await Promise.all([
+      getListingDraftForInventory(item.id),
+      getChannelListing(item.id, "MERCARI_SHOPS"),
+      // 2026-09-04 EC出品改修指示書 §2-1: 右パネルのカテゴリ/在庫ステータス。
+      // 在庫詳細ページと同じクエリを使う —— 表示名の解決を2通り持たない。
+      listCategories(item.categoryId),
+      listStatuses(),
+      listInventoryPhotoAssetsAction(item.id),
+      getNextEngineMasterSync(item.id),
+    ] as const);
+  } catch (error) {
+    if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
+    throw error;
+  }
+  const [draft, channelListing, categories, statuses, photoAssetsResult, nextEngineSync] = detailRead;
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
   const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
