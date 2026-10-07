@@ -40,6 +40,8 @@ import { enqueueVisibilityPcJob, listVisibilityPcJobs, readVisibilityPcJob } fro
   "./visibilityJobInbox.mjs";
 import { runVisibilityTransitionOnce } from "./visibilityTransitionOnce.mjs";
 import { readShopListingWindow } from "./listingSendGate.mjs";
+import { enqueueGeneralPrivateCreate, listGeneralPrivateCreateJobs } from
+  "./generalPrivateCreateJob.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const WORKFLOW_STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN",
@@ -157,7 +159,7 @@ function page({ csrf, options, message, busy, workflowRunning, recoveryRunning,
   lastRecoveryStatus, lastRecoveryStage, recoveryReadbackPrivateWithImage,
   workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed,
-  visibilityJobs = [], retainedVisibilityOpen = false,
+  visibilityJobs = [], retainedVisibilityOpen = false, generalCreateJobs = [],
   listingWindow = { remainingSeconds: 0, nextAllowedAt: null } }) {
   if (options.createTestObservationEnabled)
     return createTestPage({ csrf, message, busy, claim: createClaim,
@@ -185,6 +187,7 @@ ${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
 ${visibilityJobs.length ? `<section><h2>BELLO EC出品からの公開状態ジョブ</h2><p>対象IDと現在の公開状態をShopsで読み直し、1回だけ画面操作します。結果が不明なら再操作しません。再出品はこのPCに同じ商品の停止完了記録がある場合だけ可能です。</p>${visibilityJobs.map(item => `<div><p><strong>${html(item.job.action === "STOP" ? "出品停止" : "再出品")}</strong> / ${html(item.job.target.skuCode)} / 商品ID <code>${html(item.job.target.remoteId)}</code> / ${html(item.attempted ? item.outcome ?? "UNKNOWN" : "未実行")}</p>${visibilityButton(item)}</div>`).join("")}</section>` : ""}
 ${visibilityJobs.some(item => item.job.action === "RELIST") ? `<p data-listing-countdown data-remaining-seconds="${html(listingWindow.remainingSeconds ?? "")}">${listingWindow.remainingSeconds === null ? "出品間隔の記録を確認できません。再出品はできません。" : listingWindow.remainingSeconds > 0 ? `次の出品まで ${html(listingWindow.remainingSeconds)} 秒` : "出品間隔: 実行可能"}</p><script>/* Display uses a monotonic clock; the PC runner checks the gate again. */
 (() => { const label = document.querySelector('[data-listing-countdown]'); const initial = Number(label.dataset.remainingSeconds); if (!Number.isInteger(initial) || initial < 0 || !label.dataset.remainingSeconds) return; const until = performance.now() + initial * 1000; const tick = () => { const seconds = Math.max(0, Math.ceil((until - performance.now()) / 1000)); label.textContent = seconds ? '次の出品まで ' + seconds + ' 秒' : '出品間隔: 実行可能'; document.querySelectorAll('[data-relist-button]').forEach(button => { if (button.dataset.baseDisabled === '0') button.disabled = seconds > 0; }); }; tick(); setInterval(tick, 1000); })();</script>` : ""}
+${generalCreateJobs.length ? `<section><h2>BELLOから受け取った新規非公開出品の準備</h2><p>保存された準備内容はShopsへ未送信です。既存商品の重複照合と画像・全項目の照合が完了するまで送信できません。</p>${generalCreateJobs.map(item => `<p><code>${html(item.managementCode)}</code> ／ ${html(item.outcome ?? (item.claimed ? "結果の確認が必要" : "未送信"))}</p>`).join("")}</section>` : ""}
 ${retainedVisibilityOpen ? "<p>Shops操作の結果を確認できません。専用Chromeを開いたままにしています。再操作せず状態を確認してください。</p>" : ""}
 ${workflowRunning ? `<p>工程を実行中です。現在の段階: <code>${html(lastWorkflowStage || "準備中")}</code></p>` : ""}
 ${recoveryRunning ? `<p>一回限りの復旧工程を実行中です。現在の段階: <code>${html(lastRecoveryStage || "準備中")}</code></p>` : ""}
@@ -493,6 +496,39 @@ export async function startDesktopApp(config, {
       }
       return;
     }
+    if (request.url === "/general-private-create-job" &&
+        ["OPTIONS", "POST"].includes(request.method)) {
+      const cors = { "Access-Control-Allow-Origin": options.origin,
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "content-type, x-bello-mercari-bridge",
+        "Access-Control-Allow-Private-Network": "true", Vary: "Origin",
+        "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" };
+      if (options.createTestObservationEnabled || request.headers.origin !== options.origin) {
+        response.writeHead(403); response.end(); return;
+      }
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, cors); response.end(); return;
+      }
+      if (request.headers["x-bello-mercari-bridge"] !==
+            "GENERAL_PRIVATE_CREATE_NO_SEND" ||
+          !request.headers["content-type"]?.startsWith("application/json")) {
+        response.writeHead(403, cors); response.end('{"ok":false}'); return;
+      }
+      let body = "";
+      try {
+        for await (const chunk of request) {
+          body += chunk.toString("utf8");
+          if (Buffer.byteLength(body, "utf8") > 65536)
+            throw Error("Preparation body too large");
+        }
+        const queued = await enqueueGeneralPrivateCreate(options.root, JSON.parse(body));
+        response.writeHead(200, cors);
+        response.end(JSON.stringify({ ok: true, ...queued }));
+      } catch {
+        response.writeHead(409, cors); response.end('{"ok":false}');
+      }
+      return;
+    }
     if (request.method === "POST" && request.url === "/visibility-import") {
       if (options.createTestObservationEnabled || request.headers.origin !== localOrigin ||
           !request.headers["content-type"]?.startsWith("multipart/form-data;") ||
@@ -530,6 +566,9 @@ export async function startDesktopApp(config, {
       let visibilityJobs = [];
       try { visibilityJobs = await listVisibilityPcJobs(options.root); }
       catch { message = "PCジョブの保存状態を確認できません。Shops操作は行っていません。"; }
+      let generalCreateJobs = [];
+      try { generalCreateJobs = await listGeneralPrivateCreateJobs(options.root); }
+      catch { message = "新規出品の準備記録を確認できません。Shops操作は行っていません。"; }
       let listingWindow;
       try { listingWindow = await readShopListingWindow(options.root, CREATE_TEST_TARGET.shopId); }
       catch { listingWindow = { remainingSeconds: null, nextAllowedAt: null }; }
@@ -554,7 +593,7 @@ export async function startDesktopApp(config, {
         savedProductReadback,
         retainedWorkflowOpen: Boolean(retainedWorkflowSession),
         createClaim, createPreflight, createResult, createOpen: Boolean(createSession),
-        createArmed, visibilityJobs, listingWindow,
+        createArmed, visibilityJobs, generalCreateJobs, listingWindow,
         retainedVisibilityOpen: Boolean(retainedVisibilitySession) }));
       return;
     }

@@ -108,7 +108,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         return;
       }
       setPack(result.pack);
-      setMessage("準備内容を作成しました。メルカリShopsへの送信はしていません。");
+      await handoffToPc(result.pack, revision);
     } catch { setMessage("準備内容を作成できませんでした。再度内容を確認してください。"); }
     finally { setBusy(false); }
   }
@@ -118,6 +118,48 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       await navigator.clipboard.writeText(copyText);
       setMessage("出品内容をコピーしました。Shopsへの送信はしていません。");
     } catch { setMessage("コピーできませんでした。下の内容を選択してコピーしてください。"); }
+  }
+  function downloadForPc() {
+    if (!pack) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(pack, null, 2) + "\n"],
+      { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `bello-shops-private-preparation-${pack.inventoryId}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMessage("PC用の準備ファイルを保存しました。メルカリShopsへの送信はしていません。");
+  }
+  async function handoffToPc(selectedPack: MercariManualListingPack,
+    revision: number) {
+    try {
+      const response = await fetch("http://127.0.0.1:56210/general-private-create-job", {
+        method: "POST", mode: "cors", credentials: "omit", cache: "no-store",
+        headers: { "Content-Type": "application/json",
+          "X-Bello-Mercari-Bridge": "GENERAL_PRIVATE_CREATE_NO_SEND" },
+        body: JSON.stringify(selectedPack), signal: AbortSignal.timeout(10000),
+      });
+      const result = response.ok ? await response.json() : null;
+      if (revision !== selectionRevision.current) {
+        setMessage("入力が変わりました。現在の内容で確認し直してください。");
+      } else if (result?.ok === true && result.status === "PREPARED_NO_SEND") {
+        setMessage("PCに出品準備を渡しました。Shopsへの送信はまだ行っていません。");
+      } else {
+        setMessage("PCが準備内容を受け付けられませんでした。PCアプリで保存状態を確認してください。");
+      }
+    } catch {
+      setMessage("PCアプリに接続できません。PCアプリを起動してからもう一度押すか、準備ファイルを保存してください。");
+    }
+  }
+  async function sendPreparationToPc() {
+    if (!pack || busy) return;
+    const revision = selectionRevision.current;
+    setBusy(true);
+    setMessage(null);
+    try { await handoffToPc(pack, revision); }
+    finally { setBusy(false); }
   }
   return <section id="mercari-manual-preparation"
     className="mt-5 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
@@ -176,7 +218,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         disabled={busy || !category || !/^[0-9]+$/.test(price) ||
           !/^[0-9]+$/.test(quantity)}
         className="mt-4 rounded bg-blue-700 px-4 py-2 font-bold text-white disabled:opacity-40">
-        {busy ? "確認中…" : "出品内容を確認する"}
+        {busy ? "準備中…" : "出品準備をPCに渡す"}
       </button>
     </>}
     {message && <p role="status" className="mt-2 text-xs">{message}</p>}
@@ -192,6 +234,11 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       </label>
       <button type="button" onClick={() => void copy()}
         className="mt-2 rounded border border-gray-300 px-3 py-1">出品内容をまとめてコピー</button>
+      <button type="button" onClick={() => void sendPreparationToPc()} disabled={busy}
+        className="ml-2 mt-2 rounded bg-blue-700 px-3 py-1 font-bold text-white disabled:opacity-40">
+        {busy ? "PCへ送信中…" : "PCに出品準備を渡す"}</button>
+      <button type="button" onClick={downloadForPc}
+        className="ml-2 mt-2 rounded border border-gray-300 px-3 py-1">PC用の準備ファイルを保存</button>
       <textarea readOnly value={copyText} aria-label="Shops出品準備内容"
         className="mt-2 h-40 w-full rounded border border-gray-200 p-2 text-xs" />
     </div>}
