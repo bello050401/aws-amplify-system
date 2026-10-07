@@ -53,7 +53,8 @@ function domButton(testId, role = null, ariaLabel = null) {
 }
 
 function domTable(title, { dataButton = false, unknownMenu = false,
-  mismatchedSuffix = false } = {}) {
+  mismatchedSuffix = false, dataCellRoleButton = false,
+  menuCellContentEditable = false } = {}) {
   const headers = Array.from({ length: 10 }, (_, i) =>
     ({ textContent: i === 1 ? "商品名" : `column-${i}` }));
   const suffix = "hiddenRemoteId";
@@ -66,6 +67,10 @@ function domTable(title, { dataButton = false, unknownMenu = false,
   ];
   const cells = Array.from({ length: 10 }, (_, i) => ({
     textContent: i === 1 ? title : i === 0 ? "image" : "",
+    matches: selector => i === 1 && dataCellRoleButton &&
+      selector.includes('[role="button"]') ||
+      i === 9 && menuCellContentEditable &&
+      selector.includes('[contenteditable="true"]'),
     querySelectorAll: () => i === 9 ? menuButtons :
       i === 1 && dataButton ? [domButton("unexpected-data-action")] : [],
   }));
@@ -264,6 +269,8 @@ test("only the three known final-cell buttons are allowed; title is td[1]", asyn
       [{ dataButton: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
       [{ unknownMenu: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
       [{ mismatchedSuffix: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
+      [{ dataCellRoleButton: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
+      [{ menuCellContentEditable: true }, "SALE_ROW_SHAPE_UNVERIFIED"],
     ]) {
       globalThis.document = { location: { href: saleUrl },
         querySelector: () => null,

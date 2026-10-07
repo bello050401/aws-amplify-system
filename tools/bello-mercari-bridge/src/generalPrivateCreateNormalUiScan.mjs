@@ -88,11 +88,13 @@ function browserAdapter(page) {
         const rows = selected ? [...selected.table.querySelectorAll("tbody tr")].map(row => {
           const cells = [...row.querySelectorAll(":scope > td")];
           const dataActionCount = cells.slice(0, -1).reduce((count, cell) =>
-            count + cell.querySelectorAll(ACTIONABLE).length, 0);
+            count + Number(cell.matches(ACTIONABLE)) +
+              cell.querySelectorAll(ACTIONABLE).length, 0);
           const menuActions = cells.length === 10 ?
             [...cells[9].querySelectorAll(ACTIONABLE)] : [];
           const suffixes = [];
-          const menuControlsVerified = menuActions.length === 3 &&
+          const menuControlsVerified = cells.length === 10 &&
+            !cells[9].matches(ACTIONABLE) && menuActions.length === 3 &&
             menuKinds.every(kind => {
               const matches = menuActions.filter(action =>
                 action.getAttribute("data-testid")?.startsWith(kind.prefix));
