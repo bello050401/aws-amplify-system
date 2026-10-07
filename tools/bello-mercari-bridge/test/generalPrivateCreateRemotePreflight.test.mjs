@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { enqueueGeneralPrivateCreate, claimGeneralPrivateCreateOnce } from
   "../src/generalPrivateCreateJob.mjs";
 import { inspectGeneralPrivateCreateRemoteScan,
@@ -110,5 +110,10 @@ test("a local UNKNOWN claim blocks the remote scan without reading Shops", async
     assert.equal(result.status, "LOCAL_CLAIM_UNKNOWN_NO_RETRY");
     assert.equal(result.allowFinalCreate, false);
     assert.equal(called, false);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    if (dirname(resolve(root)) !== resolve(tmpdir()) ||
+        !basename(root).startsWith("bello-remote-preflight-"))
+      throw Error("Unexpected temporary test directory");
+    await rm(root, { recursive: true, force: true });
+  }
 });
