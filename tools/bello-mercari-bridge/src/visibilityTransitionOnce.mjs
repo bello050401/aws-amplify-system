@@ -12,8 +12,14 @@ import { MAX_MANUAL_MUTATION_EVENTS, observeManualShopsMutation,
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PROTECTED_PUBLIC_ID = "2JWp7EJx6aqKfn6dTXc5Q9";
-const PRIVATE_ONLY_INVENTORY = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
+const PROTECTED_PUBLIC_IDS = new Set(["2JWp7EJx6aqKfn6dTXc5Q9",
+  "2JToDtSgGowzUwnwe9hgHU"]);
+const PRIVATE_ONLY_INVENTORIES = new Set([
+  "dd273c1e-9b2a-4013-acc6-c445a481fab8",
+  "5b0f3587-cbbb-4c09-ae78-595b2b3e353f",
+]);
+const RESERVED_TEST_CODES = new Set(["B005659", "TEST_B005659_E51E4F6B7B86DD150546",
+  "B005413", "TEST_B005413_B63EF3F86211FFE0F890D81E"]);
 const TARGET_KEYS = ["shopId", "inventoryId", "remoteId", "title", "skuCode",
   "priceYen", "quantity", "visibilityPolicy"];
 const hash = value => createHash("sha256").update(value).digest("hex");
@@ -23,17 +29,18 @@ const exactKeys = (value, keys) => value && typeof value === "object" &&
 export function exactVisibilityTarget(target) {
   return exactKeys(target, TARGET_KEYS) && target.shopId === PRIVATE_CREATE_SHOP_ID &&
     typeof target.inventoryId === "string" && UUID.test(target.inventoryId) &&
-    target.inventoryId.toLowerCase() !== PRIVATE_ONLY_INVENTORY &&
+    !PRIVATE_ONLY_INVENTORIES.has(target.inventoryId.toLowerCase()) &&
     typeof target.remoteId === "string" && ID.test(target.remoteId) &&
-    target.remoteId !== PROTECTED_PUBLIC_ID &&
+    !PROTECTED_PUBLIC_IDS.has(target.remoteId) &&
     typeof target.title === "string" && target.title === target.title.trim() &&
     target.title.length >= 1 && target.title.length <= 130 &&
     !/[\x00-\x1f\x7f]/.test(target.title) &&
     typeof target.skuCode === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(target.skuCode) &&
+    !RESERVED_TEST_CODES.has(target.skuCode.toUpperCase()) &&
     Number.isSafeInteger(target.priceYen) && target.priceYen >= 300 &&
     target.priceYen <= 9_999_999 && Number.isSafeInteger(target.quantity) &&
     target.quantity >= 0 &&
-    ["PUBLIC_ALLOWED", "PRIVATE_ONLY"].includes(target.visibilityPolicy);
+    target.visibilityPolicy === "PUBLIC_ALLOWED";
 }
 
 /** Validate the exact no-send job exported by the BELLO EC listing button. */

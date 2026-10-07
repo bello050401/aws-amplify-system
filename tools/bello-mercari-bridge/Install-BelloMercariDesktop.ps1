@@ -9,6 +9,7 @@
 
 $ErrorActionPreference = 'Stop'
 $sourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $sourceDir 'InstallerProcessGuard.ps1')
 $dataDir = Join-Path $env:LOCALAPPDATA 'BELLO\MercariBridge'
 $appDir = Join-Path $dataDir 'App'
 $configPath = Join-Path $dataDir 'config.json'
@@ -35,13 +36,13 @@ if (Test-Path -LiteralPath $configPath) {
   }
 }
 
-$nodeProcesses = Get-CimInstance Win32_Process -Filter "Name = 'node.exe' OR Name = 'nodew.exe'"
-foreach ($nodeProcess in $nodeProcesses) {
-  if ([string]::IsNullOrWhiteSpace($nodeProcess.CommandLine)) {
-    throw '稼働中のNode.jsを確認できません。PCアプリを停止した後に再実行してください。'
+$runningProcesses = Get-CimInstance Win32_Process -Filter "Name = 'node.exe' OR Name = 'nodew.exe' OR Name = 'chrome.exe' OR Name = 'msedge.exe'"
+foreach ($runningProcess in $runningProcesses) {
+  if ([string]::IsNullOrWhiteSpace($runningProcess.CommandLine)) {
+    throw '稼働中のブラウザまたはNode.jsを確認できません。PCアプリを停止した後に再実行してください。'
   }
-  if ($nodeProcess.CommandLine -match 'desktopApp\.mjs') {
-    throw 'BELLOのPCアプリが稼働中です。現在の作業を終えてアプリを終了した後に更新してください。'
+  if (Test-BelloMercariInstallBlocker -Name $runningProcess.Name -CommandLine $runningProcess.CommandLine -DataDir $dataDir) {
+    throw 'BELLOのPCアプリまたは専用ブラウザが稼働中です。現在の作業を終えて通常終了した後に更新してください。'
   }
 }
 

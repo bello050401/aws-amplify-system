@@ -71,9 +71,17 @@ test("only exact same-product update response can acknowledge each UI action", (
 test("private-only inventory variants and array identifiers cannot enter a claim", () => {
   for (const inventoryId of ["dd273c1e-9b2a-4013-acc6-c445a481fab8",
     "DD273C1E-9B2A-4013-ACC6-C445A481FAB8",
-    ["dd273c1e-9b2a-4013-acc6-c445a481fab8"]])
+    ["dd273c1e-9b2a-4013-acc6-c445a481fab8"],
+    "5b0f3587-cbbb-4c09-ae78-595b2b3e353f",
+    "5B0F3587-CBBB-4C09-AE78-595B2B3E353F",
+    ["5b0f3587-cbbb-4c09-ae78-595b2b3e353f"]])
     assert.equal(exactVisibilityTarget({ ...target, inventoryId }), false);
-  assert.equal(exactVisibilityTarget({ ...target, remoteId: "2JWp7EJx6aqKfn6dTXc5Q9" }), false);
+  for (const remoteId of ["2JWp7EJx6aqKfn6dTXc5Q9", "2JToDtSgGowzUwnwe9hgHU"])
+    assert.equal(exactVisibilityTarget({ ...target, remoteId }), false);
+  for (const skuCode of ["B005659", "B005413",
+    "TEST_B005413_B63EF3F86211FFE0F890D81E"])
+    assert.equal(exactVisibilityTarget({ ...target, skuCode }), false);
+  assert.equal(exactVisibilityTarget({ ...target, visibilityPolicy: "PRIVATE_ONLY" }), false);
 });
 
 test("a BELLO PC handoff is fingerprinted and cannot swap target or action", () => {

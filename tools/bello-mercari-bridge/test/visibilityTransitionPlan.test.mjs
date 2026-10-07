@@ -5,7 +5,7 @@ import { planVisibilityTransition } from "../src/visibilityTransitionPlan.mjs";
 const shopId = "evkhihBFFNn5hukMS9s36H";
 const target = { shopId, inventoryId: "bd4850de-9156-4890-a821-cae75da5c8f7",
   remoteId: "newOwnedProduct123", title: "An exact owned product",
-  visibilityPolicy: "PUBLIC_ALLOWED" };
+  skuCode: "B009999", visibilityPolicy: "PUBLIC_ALLOWED" };
 const publicRead = { kind: "OBSERVED", shopId,
   remoteId: target.remoteId, title: target.title, visibility: "PUBLIC" };
 const privateRead = { ...publicRead, visibility: "PRIVATE" };
@@ -41,7 +41,7 @@ test("relist needs the same product's verified stop and public permission", () =
     readback: privateRead, stopProof }), { kind: "BLOCKED" });
 });
 
-test("B005659's protected public ID and private-only test cannot be transitioned", () => {
+test("both private test inventories and protected public IDs cannot be transitioned", () => {
   const protectedTarget = { ...target,
     inventoryId: "dd273c1e-9b2a-4013-acc6-c445a481fab8",
     remoteId: "2JWp7EJx6aqKfn6dTXc5Q9" };
@@ -56,7 +56,10 @@ test("B005659's protected public ID and private-only test cannot be transitioned
     readback: privateRead, stopProof }), { kind: "BLOCKED" });
   for (const inventoryId of [protectedTarget.inventoryId.toUpperCase(),
     "Dd273c1e-9b2a-4013-acc6-c445a481fab8",
-    [protectedTarget.inventoryId]]) {
+    [protectedTarget.inventoryId],
+    "5b0f3587-cbbb-4c09-ae78-595b2b3e353f",
+    "5B0F3587-CBBB-4C09-AE78-595B2B3E353F",
+    ["5b0f3587-cbbb-4c09-ae78-595b2b3e353f"]]) {
     assert.deepEqual(planVisibilityTransition({ action: "RELIST",
       target: { ...newPrivateTarget, inventoryId }, readback: privateRead,
       stopProof }), { kind: "BLOCKED" });
@@ -65,4 +68,16 @@ test("B005659's protected public ID and private-only test cannot be transitioned
       listing: { status: "ACTIVE", externalListingId: target.remoteId } }),
     { kind: "BLOCKED" });
   }
+  for (const remoteId of ["2JWp7EJx6aqKfn6dTXc5Q9", "2JToDtSgGowzUwnwe9hgHU"]) {
+    assert.deepEqual(planVisibilityTransition({ action: "STOP",
+      target: { ...target, remoteId },
+      readback: { ...publicRead, remoteId },
+      listing: { status: "ACTIVE", externalListingId: remoteId } }),
+    { kind: "BLOCKED" });
+  }
+  for (const skuCode of ["B005659", "B005413",
+    "TEST_B005413_B63EF3F86211FFE0F890D81E"])
+    assert.deepEqual(planVisibilityTransition({ action: "RELIST",
+      target: { ...target, skuCode }, readback: privateRead, stopProof }),
+    { kind: "BLOCKED" });
 });
