@@ -40,3 +40,5 @@
 見出し修正版の一回限りの読取は再び `SALE_ROW_SHAPE_UNVERIFIED` で停止した。別のログイン済み通常画面では、観測した50行が行数・末尾メニューボタン・商品データ欄の操作要素・文字数の条件を満たしていた。専用ブラウザーとの違いや一時表示の可能性が残るため、行形状の失敗理由だけを `SALE_TITLE_LENGTH_UNVERIFIED`、`SALE_CELL_COUNT_UNVERIFIED`、`SALE_DATA_ACTION_UNVERIFIED`、`SALE_MENU_CONTROLS_UNVERIFIED`、`SALE_SIGNATURE_LENGTH_UNVERIFIED` に分ける。商品値、行番号、メニューIDの接尾辞は返さない。許容条件は変えず、独立レビューまで再実行しない。
 
 行別診断版の一回限りの読取は `SALE_TITLE_LENGTH_UNVERIFIED` で停止した。候補コードでは出品用のタイトル上限130文字を既存商品一覧の読取値にも適用していた。通常画面の `textContent` には非表示の文字列が混ざる可能性もあり、一覧値を出品入力と同じ長さで制限する根拠はない。次候補は読取専用の上限を500文字に分け、空欄・固定の読込表示を拒否し、行全体のsignature上限3000文字と他の厳格条件を維持する。出品用130文字の上限と `allowFinalCreate: false` は変更しない。独立レビュー前に実画面では再実行しない。
+
+読取用タイトル上限の修正版では出品中一覧の終端確認まで進み、下書き確認で `DRAFT_UNVERIFIED` となった。下書きcollectorには既に `DRAFT_LIST_UNVERIFIED`、`DRAFT_LIST_CHANGED`、`DRAFT_DETAIL_UNVERIFIED`、`DRAFT_READ_UNAVAILABLE` 等の固定失敗コードがある。次候補は既知コードだけを上位結果へ引き継ぎ、未知コード・不正な行情報・出品許可フラグは `DRAFT_RESULT_UNVERIFIED` に畳む。下書きの商品名・管理コード・URL・IDや行番号は返さず、`allowFinalCreate: false` を維持する。レビュー前の実画面再実行はしない。

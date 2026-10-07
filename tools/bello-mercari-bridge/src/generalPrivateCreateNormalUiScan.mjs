@@ -10,6 +10,9 @@ const titleKey = value => value.normalize("NFKC").replace(/\s+/g, "").trim();
 const REMOTE_TITLE_MAX = 500;
 const TITLE_PLACEHOLDERS = new Set(["", "-", "--", "---", "—", "…",
   "...", "商品名未設定", "読み込み中"]);
+const DRAFT_FAILURES = new Set(["DRAFT_INPUT_UNVERIFIED",
+  "DRAFT_LIST_UNVERIFIED", "DRAFT_LIST_CHANGED",
+  "DRAFT_DETAIL_UNVERIFIED", "DRAFT_READ_UNAVAILABLE"]);
 
 function authUrl(value) {
   try { const url = new URL(value);
@@ -196,13 +199,19 @@ export async function scanGeneralPrivateCreateNormalUiReadOnly({ page, shopId,
       previousRows = current.rows;
       await ui.clickNext();
     }
-    const drafts = await collectDrafts({ page, shopId,
-      expectedRowCount: expectedDraftRowCount });
-    if (drafts?.status !== "DRAFT_DETAILS_DOM_OBSERVED" ||
-        !Array.isArray(drafts.rows) ||
-        drafts.rows.length !== expectedDraftRowCount ||
-        drafts.allowFinalCreate !== false)
-      return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_UNVERIFIED");
+    let drafts;
+    try { drafts = await collectDrafts({ page, shopId,
+      expectedRowCount: expectedDraftRowCount }); }
+    catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_READ_UNAVAILABLE"); }
+    if (drafts?.allowFinalCreate !== false)
+      return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_RESULT_UNVERIFIED");
+    if (drafts.status !== "DRAFT_DETAILS_DOM_OBSERVED")
+      return fixed("REMOTE_SCAN_INCOMPLETE",
+        DRAFT_FAILURES.has(drafts.status) && Array.isArray(drafts.rows) &&
+          drafts.rows.length === 0 ? drafts.status : "DRAFT_RESULT_UNVERIFIED");
+    if (!Array.isArray(drafts.rows) ||
+        drafts.rows.length !== expectedDraftRowCount)
+      return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_RESULT_UNVERIFIED");
     if (drafts.rows.some(row => row?.skuCode &&
         row.skuCode.toUpperCase() === managementCode.toUpperCase()))
       return fixed("REMOTE_DUPLICATE_POSSIBLE", "DRAFT_SKU_MATCH");

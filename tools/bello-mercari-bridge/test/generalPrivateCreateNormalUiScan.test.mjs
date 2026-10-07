@@ -161,7 +161,7 @@ test("draft collector failure, read error and invalid input are fixed failures",
   const unverified = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
     adapter: fakeAdapter([page, last]), collectDrafts: async () =>
       ({ status: "DRAFT_LIST_UNVERIFIED", rows: [], allowFinalCreate: false }) });
-  assert.equal(unverified.diagnostic, "DRAFT_UNVERIFIED");
+  assert.equal(unverified.diagnostic, "DRAFT_LIST_UNVERIFIED");
   const unavailable = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
     adapter: { gotoSale: async () => { throw Error("private token"); } },
     collectDrafts: emptyDrafts });
@@ -170,6 +170,43 @@ test("draft collector failure, read error and invalid input are fixed failures",
   const invalid = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
     shopId: [shopId], adapter: fakeAdapter([page, last]), collectDrafts: emptyDrafts });
   assert.equal(invalid.diagnostic, "INPUT_UNVERIFIED");
+});
+
+test("only allowlisted draft collector failures pass through without row data", async () => {
+  const salePages = () => fakeAdapter([
+    snapshot(["Other first item"], { nextDisabled: false, prevDisabled: true }),
+    snapshot(["Other last item"], { nextDisabled: true, prevDisabled: false }),
+  ]);
+  for (const status of ["DRAFT_INPUT_UNVERIFIED", "DRAFT_LIST_UNVERIFIED",
+    "DRAFT_LIST_CHANGED", "DRAFT_DETAIL_UNVERIFIED",
+    "DRAFT_READ_UNAVAILABLE"]) {
+    const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+      adapter: salePages(), collectDrafts: async () =>
+        ({ status, rows: [], allowFinalCreate: false }) });
+    assert.equal(result.status, "REMOTE_SCAN_INCOMPLETE");
+    assert.equal(result.diagnostic, status);
+    assert.equal(result.allowFinalCreate, false);
+  }
+  const invalid = [
+    { status: "private-draft-id", rows: [], allowFinalCreate: false },
+    { status: "DRAFT_LIST_CHANGED", rows: [{ title: "private title" }],
+      allowFinalCreate: false },
+    { status: "DRAFT_DETAILS_DOM_OBSERVED", rows: [],
+      allowFinalCreate: false },
+    { status: "DRAFT_LIST_UNVERIFIED", rows: [], allowFinalCreate: true },
+  ];
+  for (const value of invalid) {
+    const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+      adapter: salePages(), collectDrafts: async () => value });
+    assert.equal(result.diagnostic, "DRAFT_RESULT_UNVERIFIED");
+    assert.equal(JSON.stringify(result).includes("private"), false);
+  }
+  const thrown = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+    adapter: salePages(), collectDrafts: async () => {
+      throw Error("private-draft-id");
+    } });
+  assert.equal(thrown.diagnostic, "DRAFT_READ_UNAVAILABLE");
+  assert.equal(JSON.stringify(thrown).includes("private-draft-id"), false);
 });
 
 test("unknown visibility control keeps the default browser adapter unverified", async () => {
