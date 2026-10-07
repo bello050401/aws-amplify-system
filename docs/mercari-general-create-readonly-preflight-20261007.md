@@ -72,3 +72,5 @@ PlaywrightのDOM読取adapter引数の独立レビュー指摘を修正した `3
 個数別診断版 `bbcd183` の独立レビューPASS後、対象1件の読取専用実行は `REMOTE_SCAN_INCOMPLETE / SALE_SKU_SEARCH_TEXTBOX_ZERO`、`allowFinalCreate: false`、ブラウザー正常終了となった。専用Chromeで検索欄のrole/nameロケーターが0件で、検索欄への入力や検索ボタンのクリックには進まなかった。これは対象商品の重複有無を示さない。実行前後のQueue 46ファイルとプロフィール識別ファイルはSHA-256で一致し、専用Chrome・PC操作画面の待受けは0だった。追加の実画面再試行やCREATE送信は行わない。
 
 通常画面の先行読取では `input[placeholder*="商品管理コード"]` で検索欄の値が確認できた。次候補はこの観測済みplaceholderを持つinputだけを検索欄として選び、DOM描画直後に0件なら最大12秒の表示待ち後に再度数える。最終的に1件でなければ固定の0件・複数件診断で止まり、入力・クリックしない。検索結果のDOM読取も同じ欄を使う。既存role/nameロケーターが0件でも観測済みplaceholderロケーターが1件なら読めるadapter層の模擬回帰を追加する。候補は独立レビュー前に実画面で実行しない。
+
+placeholder修正版 `5ee77b2` の独立レビューPASS後、対象1件の読取専用実行は `REMOTE_SCAN_INCOMPLETE / SALE_SKU_SEARCH_UNVERIFIED`、`allowFinalCreate: false`、ブラウザー正常終了となった。検索欄の特定と既知接頭辞の正例検索・詳細管理コード確認を通過し、対象コード検索までは進んだが、安定した空表示または実商品行という厳格条件を満たせなかった。重複不在の証明ではない。実行前後のQueue 46ファイルとプロフィール識別ファイルはSHA-256で一致し、専用Chrome・PC操作画面の待受けは0だった。追加の実画面再試行やCREATE送信は行わない。
