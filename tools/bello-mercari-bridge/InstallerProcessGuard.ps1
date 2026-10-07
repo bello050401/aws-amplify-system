@@ -5,13 +5,15 @@ function Test-BelloMercariInstallBlocker {
     [Parameter(Mandatory = $true)][string]$DataDir
   )
   if ($Name -in @('node.exe', 'nodew.exe')) {
-    return $CommandLine -match '(?i)(?:^|[\\/\s])(?:desktopApp|cli)\.mjs(?="|\s|$)'
+    return $CommandLine -match '(?i)(?:^|[\\/\s"''])(?:desktopApp|cli)\.mjs(?=$|[\s"''])'
   }
   if ($Name -in @('chrome.exe', 'msedge.exe')) {
+    $normalizedLine = $CommandLine.Replace('\', '/')
     foreach ($profile in @('ShopsChrome', 'BELLOChrome')) {
-      $path = Join-Path $DataDir $profile
-      $pattern = '(?i)--user-data-dir=(?:")?' + [regex]::Escape($path) + '(?:"|\s|$)'
-      if ($CommandLine -match $pattern) { return $true }
+      $path = (Join-Path $DataDir $profile).Replace('\', '/').TrimEnd('/')
+      $pattern = '(?i)(?:^|[\s"''])--user-data-dir=(?:["''])?' +
+        [regex]::Escape($path) + '/*(?=$|[\s"''])'
+      if ($normalizedLine -match $pattern) { return $true }
     }
   }
   return $false
