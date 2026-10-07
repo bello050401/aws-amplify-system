@@ -7,6 +7,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
+    "postinstall": "node scripts/ensure-amplify-bundled-deps.cjs",
     "predev": "node scripts/generate-mercari-masters-data.cjs",
     "dev": "next dev",
     "prebuild": "node scripts/generate-mercari-masters-data.cjs",
@@ -178,6 +179,7 @@
     "autoprefixer": "^10.4.20",
     "aws-cdk": "^2.160.0",
     "aws-cdk-lib": "^2.160.0",
+    "bello-lock-otel-core": "npm:@opentelemetry/core@2.0.0",
     "constructs": "^10.3.0",
     "esbuild": "^0.23.1",
     "eslint": "^8.57.0",
