@@ -5,6 +5,7 @@ import { searchMercariBrandsAction } from "@/app/actions/listing";
 import { prepareMercariManualListingPackAction,
   type MercariManualListingPack } from "@/app/actions/mercariManualListingPack";
 import type { BrandMasterEntry } from "@/lib/listing/mercari/csv/masters";
+import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
 import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker";
 
 export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
@@ -22,6 +23,22 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const [nextAllowedAt, setNextAllowedAt] = useState<string | null | undefined>(undefined);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const available = hasDraft && !hasShopsRecord && availableQuantity > 0;
+  const conditionLabel = pack ? LISTING_CONDITIONS.find(item =>
+    item.code === pack.condition)?.label ?? pack.condition : "";
+  const copyText = pack ? [
+    `商品名: ${pack.title}`,
+    `販売価格: ${pack.priceYen.toLocaleString("ja-JP")}円`,
+    `カテゴリー: ${pack.categoryPath}`,
+    `ブランド: ${pack.brandName ?? "指定なし"}`,
+    `状態: ${conditionLabel}`,
+    `数量: ${pack.quantity}`,
+    `管理コード: ${pack.managementCode}`,
+    "配送方法: 未定（出品者手配）",
+    "送料: 送料込み（出品者負担）",
+    "発送元: 埼玉県",
+    "発送まで: 4〜7日",
+    "", "商品説明:", pack.description,
+  ].join("\n") : "";
   useEffect(() => {
     let disposed = false;
     async function refresh() {
@@ -84,8 +101,8 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   async function copy() {
     if (!pack) return;
     try {
-      await navigator.clipboard.writeText(JSON.stringify(pack, null, 2));
-      setMessage("準備内容をコピーしました。Shopsへの送信はしていません。");
+      await navigator.clipboard.writeText(copyText);
+      setMessage("出品内容をコピーしました。Shopsへの送信はしていません。");
     } catch { setMessage("コピーできませんでした。下の内容を選択してコピーしてください。"); }
   }
   return <section id="mercari-manual-preparation"
@@ -150,16 +167,16 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <p className="font-bold">{pack.title}</p>
       <p>管理コード: <code>{pack.managementCode}</code></p>
       <p>価格 ¥{pack.priceYen.toLocaleString("ja-JP")} ／ 数量 {pack.quantity} ／ {pack.categoryPath}</p>
-      <p>状態: {pack.condition} ／ ブランド: {pack.brandName ?? "指定なし"}</p>
+      <p>状態: {conditionLabel} ／ ブランド: {pack.brandName ?? "指定なし"}</p>
       <p className="mt-1">保存済み写真 {pack.imageRefs.length} 枚。送信前に写真もShops画面で確認してください。</p>
       <label className="mt-2 block">保存済みの商品説明
         <textarea readOnly value={pack.description}
           className="mt-1 h-32 w-full rounded border border-gray-200 p-2 text-xs" />
       </label>
       <button type="button" onClick={() => void copy()}
-        className="mt-2 rounded border border-gray-300 px-3 py-1">準備内容をコピー</button>
-      <textarea readOnly value={JSON.stringify(pack, null, 2)} aria-label="Shops出品準備内容"
-        className="mt-2 h-40 w-full rounded border border-gray-200 p-2 font-mono text-xs" />
+        className="mt-2 rounded border border-gray-300 px-3 py-1">出品内容をまとめてコピー</button>
+      <textarea readOnly value={copyText} aria-label="Shops出品準備内容"
+        className="mt-2 h-40 w-full rounded border border-gray-200 p-2 text-xs" />
     </div>}
   </section>;
 }
