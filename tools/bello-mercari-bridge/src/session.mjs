@@ -90,6 +90,7 @@ export async function openDedicatedProductListSession({ root, profileDir,
 /** Opens a fresh tab in the existing dedicated profile for one metadata-only draft read. */
 export async function openDraftMetadataReadSession({ root, profileDir,
   playwrightModulePath, shopId, requestGuard,
+  onWebSocketBlocked = null,
   launchPersistentContext = null }) {
   if (typeof shopId !== "string" || !PRODUCT_ID.test(shopId) ||
       !root || !isAbsolute(root) || typeof requestGuard !== "function")
@@ -112,7 +113,10 @@ export async function openDraftMetadataReadSession({ root, profileDir,
         typeof context.routeWebSocket !== "function")
       throw Error("Draft metadata context routing unavailable");
     await context.route("**/*", requestGuard);
-    await context.routeWebSocket("**/*", ws => ws.close());
+    await context.routeWebSocket("**/*", ws => {
+      try { onWebSocketBlocked?.(); } catch { /* Keep the socket blocked. */ }
+      return ws.close();
+    });
     const restoredPages = context.pages();
     if (restoredPages.some(candidate => candidate.url() !== "about:blank"))
       throw Error("Restored Shops page is unresolved");

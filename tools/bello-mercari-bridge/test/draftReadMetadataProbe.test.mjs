@@ -49,9 +49,12 @@ function fakeSession({ count = 12, auth = false, tableCount = 1,
     rowClicks: () => rowClicks, closed: () => closed, lifecycle };
 }
 
-async function openFakeSession(session, { requestGuard }) {
+async function openFakeSession(session, { requestGuard, onWebSocketBlocked }) {
   await session.context.route("**/*", requestGuard);
-  await session.context.routeWebSocket("**/*", ws => ws.close());
+  await session.context.routeWebSocket("**/*", ws => {
+    onWebSocketBlocked();
+    return ws.close();
+  });
   return session;
 }
 
@@ -72,6 +75,7 @@ test("one opt-in probe observes only metadata and always closes", async () => {
   assert.equal(result.status, "DRAFT_UI_READ_OBSERVED");
   assert.equal(result.diagnostic, null);
   assert.equal(result.routeDiagnostic, "NO_ROUTE_BLOCK");
+  assert.deepEqual(result.routeBlockReasons, []);
   assert.equal(result.closeStatus, "CLOSED");
   assert.equal(result.allowFinalCreate, false);
   assert.equal(session.rowClicks(), 1);
@@ -203,8 +207,51 @@ test("a blocked request is reported only as a fixed code", async () => {
     observe: () => ({ stop: async () => ({ observations: [] }) }) });
   assert.equal(aborted, true);
   assert.equal(result.routeDiagnostic, "ROUTE_BLOCKED");
+  assert.deepEqual(result.routeBlockReasons, ["GRAPHQL_WRITE_OPERATION"]);
   assert.equal(result.diagnostic, "ROW_COUNT_MISMATCH");
   assert.equal(JSON.stringify(result).includes("SaveHiddenDraft"), false);
+});
+
+test("a blocked bootstrap request cannot result in a successful read", async () => {
+  const session = fakeSession({ onGoto: async handler => {
+    await handler({ request: () => ({ method: () => "POST",
+      url: () => "https://mercari-shops.com/graphql",
+      resourceType: () => "fetch",
+      postDataBuffer: () => Buffer.from(JSON.stringify({
+        extensions: { persistedQuery: { sha256Hash: "private-draft-id" } },
+      })) }), abort: async () => {},
+    continue: async () => { throw Error("Blocked request must not continue"); } });
+  } });
+  const result = await probeDraftReadMetadataOnce({ ...options,
+    openSession: args => openFakeSession(session, args),
+    observe: () => ({ stop: async () => ({ observations: [{
+      pageKind: "DRAFT_LIST", operationClass: "NAMED_QUERY",
+      httpStatus: 200, responseShape: "null", hasErrors: false,
+    }] }) }) });
+  assert.equal(result.status, "READ_UNAVAILABLE");
+  assert.equal(result.diagnostic, "ROUTE_BLOCKED");
+  assert.equal(result.routeDiagnostic, "ROUTE_BLOCKED");
+  assert.deepEqual(result.routeBlockReasons, ["GRAPHQL_PERSISTED_QUERY"]);
+  assert.deepEqual(result.observations, []);
+  assert.equal(result.closeStatus, "CLOSED");
+  assert.equal(result.allowFinalCreate, false);
+  assert.equal(JSON.stringify(result).includes("private-draft-id"), false);
+});
+
+test("a blocked WebSocket is fixed-code evidence and cannot report read success", async () => {
+  let socketClosed = false;
+  const session = fakeSession({ onGoto: async () => {
+    await session.websocketHandler()({ close: async () => {
+      socketClosed = true;
+    } });
+  } });
+  const result = await probeDraftReadMetadataOnce({ ...options,
+    openSession: args => openFakeSession(session, args),
+    observe: () => ({ stop: async () => ({ observations: [] }) }) });
+  assert.equal(socketClosed, true);
+  assert.equal(result.status, "READ_UNAVAILABLE");
+  assert.equal(result.diagnostic, "ROUTE_BLOCKED");
+  assert.deepEqual(result.routeBlockReasons, ["WEBSOCKET_BLOCKED"]);
 });
 
 test("list navigation timeout returns a fixed code without error details", async () => {

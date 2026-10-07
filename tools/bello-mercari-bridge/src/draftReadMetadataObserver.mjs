@@ -51,6 +51,33 @@ export function isExplicitDraftReadQueryRequest(request) {
   } catch { return false; }
 }
 
+/** Fixed reason for a request that the read-only route already rejected. */
+export function classifyDraftReadRouteBlock(request) {
+  try {
+    if (request.method() !== "POST") return "NON_READ_METHOD";
+    if (request.url() !== GRAPHQL_URL) return "POST_OTHER_ENDPOINT";
+    if (!["fetch", "xhr"].includes(request.resourceType()))
+      return "GRAPHQL_RESOURCE_UNVERIFIED";
+    const bytes = request.postDataBuffer?.();
+    if (!Buffer.isBuffer(bytes) || bytes.length < 1 ||
+        bytes.length > MAX_BODY_BYTES) return "GRAPHQL_BODY_UNVERIFIED";
+    let body;
+    try { body = JSON.parse(bytes.toString("utf8")); }
+    catch { return "GRAPHQL_BODY_UNVERIFIED"; }
+    if (Array.isArray(body)) return "GRAPHQL_BATCH_UNVERIFIED";
+    if (!body || typeof body !== "object")
+      return "GRAPHQL_BODY_UNVERIFIED";
+    if (typeof body.query !== "string")
+      return body.extensions?.persistedQuery ? "GRAPHQL_PERSISTED_QUERY" :
+        "GRAPHQL_QUERY_MISSING";
+    const source = body.query.replace(/#[^\r\n]*/g, "");
+    if (/^\s*(?:mutation|subscription)\b/i.test(source))
+      return "GRAPHQL_WRITE_OPERATION";
+    if (/^\s*query\s*\{/.test(source)) return "GRAPHQL_UNNAMED_QUERY";
+    return "GRAPHQL_QUERY_UNVERIFIED";
+  } catch { return "GUARD_INSPECTION_FAILED"; }
+}
+
 function valueShape(value, depth = 0) {
   if (value === null) return "null";
   if (Array.isArray(value)) return depth >= 3 ? "array" :

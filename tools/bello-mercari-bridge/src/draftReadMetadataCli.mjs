@@ -7,7 +7,8 @@ const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const expectedOrigin =
   "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
 const fixed = status => ({ status, diagnostic: null,
-  routeDiagnostic: "NO_ROUTE_BLOCK", observations: [],
+  routeDiagnostic: "NO_ROUTE_BLOCK", routeBlockReasons: [],
+  observations: [],
   closeStatus: "NOT_OPENED", allowFinalCreate: false });
 
 /** CLI takes no shop or draft ID argument; both stay within the dedicated PC. */

@@ -27,17 +27,22 @@ test("uses only the bound dedicated profile with service workers blocked", async
       JSON.stringify({ schemaVersion: 1, purpose: "BELLO_MERCARI_DEDICATED" }));
     let options = null;
     let startupWritePossible = false;
+    let websocketHandler;
+    let socketBlocks = 0;
     const lifecycle = [];
     const context = { serviceWorkers: () => [],
       route: async () => lifecycle.push("route"),
-      routeWebSocket: async () => lifecycle.push("websocket-route"),
+      routeWebSocket: async (_pattern, handler) => {
+        lifecycle.push("websocket-route");
+        websocketHandler = handler;
+      },
       pages: () => { lifecycle.push("inspect-pages"); return []; },
       newPage: async () => ({ url: () => "about:blank" }),
       setOffline: async () => {},
       close: async () => {} };
     const session = await openDraftMetadataReadSession({ root, profileDir,
       playwrightModulePath: join(temp, "playwright", "package.json"), shopId,
-      requestGuard,
+      requestGuard, onWebSocketBlocked: () => { socketBlocks++; },
       launchPersistentContext: async (_profile, launchOptions) => {
         options = launchOptions;
         startupWritePossible = launchOptions.offline !== true;
@@ -50,6 +55,10 @@ test("uses only the bound dedicated profile with service workers blocked", async
     assert.deepEqual(lifecycle.slice(0, 3),
       ["route", "websocket-route", "inspect-pages"]);
     assert.equal(options.headless, false);
+    let socketClosed = false;
+    await websocketHandler({ close: async () => { socketClosed = true; } });
+    assert.equal(socketClosed, true);
+    assert.equal(socketBlocks, 1);
     await context.close();
     let closed = false;
     const restored = { ...context, pages: () => [{ url: () =>

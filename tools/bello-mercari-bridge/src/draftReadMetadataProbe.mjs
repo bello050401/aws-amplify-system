@@ -1,13 +1,21 @@
 import { isAbsolute } from "node:path";
 import { openDraftMetadataReadSession } from "./session.mjs";
 import { observeDraftReadMetadata,
-  isExplicitDraftReadQueryRequest } from "./draftReadMetadataObserver.mjs";
+  isExplicitDraftReadQueryRequest,
+  classifyDraftReadRouteBlock } from "./draftReadMetadataObserver.mjs";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const ORIGIN = "https://mercari-shops.com";
 const TYPES = ["null", "array", "object", "string", "number", "boolean"];
+const ROUTE_BLOCK_REASONS = ["NON_READ_METHOD", "POST_OTHER_ENDPOINT",
+  "GRAPHQL_RESOURCE_UNVERIFIED", "GRAPHQL_BODY_UNVERIFIED",
+  "GRAPHQL_BATCH_UNVERIFIED", "GRAPHQL_PERSISTED_QUERY",
+  "GRAPHQL_QUERY_MISSING", "GRAPHQL_WRITE_OPERATION",
+  "GRAPHQL_UNNAMED_QUERY", "GRAPHQL_QUERY_UNVERIFIED",
+  "GUARD_INSPECTION_FAILED", "GUARD_FAILURE", "WEBSOCKET_BLOCKED"];
 const fixed = (status, closeStatus = "NOT_OPENED") => ({ status,
   diagnostic: null, routeDiagnostic: "NO_ROUTE_BLOCK",
+  routeBlockReasons: [],
   observations: [], closeStatus, allowFinalCreate: false });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -115,21 +123,30 @@ export async function probeDraftReadMetadataOnce({ root, profileDir,
   let closeStatus = "NOT_OPENED";
   let diagnostic = null;
   let routeBlocked = false;
+  const routeBlockReasons = new Set();
   let phase = "LAUNCH";
   const readOnlyRoute = async route => {
     try {
       const request = route.request();
       if (["GET", "HEAD", "OPTIONS"].includes(request.method()) ||
           isExplicitDraftReadQueryRequest(request)) await route.continue();
-      else { routeBlocked = true; await route.abort(); }
+      else {
+        routeBlocked = true;
+        routeBlockReasons.add(classifyDraftReadRouteBlock(request));
+        await route.abort();
+      }
     } catch {
       routeBlocked = true;
+      routeBlockReasons.add("GUARD_FAILURE");
       try { await route.abort(); } catch { /* Closing the page also stops routing. */ }
     }
   };
   try {
     session = await openSession({ root, profileDir, playwrightModulePath, shopId,
-      requestGuard: readOnlyRoute });
+      requestGuard: readOnlyRoute, onWebSocketBlocked: () => {
+        routeBlocked = true;
+        routeBlockReasons.add("WEBSOCKET_BLOCKED");
+      } });
     closeStatus = "CLOSE_UNVERIFIED";
     phase = "OBSERVER_SETUP";
     observer = observe(session.context, { page: session.page, shopId });
@@ -202,11 +219,18 @@ export async function probeDraftReadMetadataOnce({ root, profileDir,
       metadata?.status === "METADATA_TRUNCATED") status = "METADATA_TRUNCATED";
   if (status === "DRAFT_UI_READ_OBSERVED" && observations.length === 0)
     status = "NO_QUERY_METADATA";
+  if (routeBlocked && ["DRAFT_UI_READ_OBSERVED", "NO_QUERY_METADATA"].includes(status)) {
+    status = "READ_UNAVAILABLE";
+    diagnostic = "ROUTE_BLOCKED";
+  }
   if (closeStatus === "CLOSE_UNVERIFIED") {
     status = "BROWSER_CLOSE_UNVERIFIED";
     diagnostic = "BROWSER_CLOSE_UNVERIFIED";
   }
   return { status, diagnostic,
     routeDiagnostic: routeBlocked ? "ROUTE_BLOCKED" : "NO_ROUTE_BLOCK",
-    observations, closeStatus, allowFinalCreate: false };
+    routeBlockReasons: ROUTE_BLOCK_REASONS.filter(reason =>
+      routeBlockReasons.has(reason)),
+    observations: routeBlocked ? [] : observations,
+    closeStatus, allowFinalCreate: false };
 }

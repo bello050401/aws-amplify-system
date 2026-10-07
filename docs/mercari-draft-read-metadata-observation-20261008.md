@@ -24,8 +24,14 @@ Cookie、認証ヘッダー、URLの下書きID、GraphQLの生のoperationName�
 
 専用セッションは起動時からオフラインにし、Service Workerを遮断する。ブラウザー全体にHTTP制限とWebSocket遮断を付けてから復元タブを検査するため、後から開くタブにも同じ制限が掛かる。観測listenerを付け終えた後だけオンラインに戻す。HTTPはGET/HEAD/OPTIONSと、本文が明示的な単一GraphQL queryであるPOSTだけを通し、それ以外を中断する。通ったqueryでもリクエスト本文・応答本文・operationName・応答キー名を記録しない。終了時には先に再びオフラインにして観測listenerを外し、通信制限を維持したまま専用ブラウザーを閉じる。閉じられなければ成功扱いにせず、通信制限を残す。画面件数が一時的に13行になる、認証が切れている、詳細に遷移しない、通信が捕まらない、終了処理を確認できない場合は、それぞれ固定の未確認状態にする。結果は常に `allowFinalCreate: false`。
 
-この入口はまだPC設置版にもBELLO画面にも接続していない。レビュー済み版を実ブラウザーで一度だけ実行した結果は `DRAFT_LIST_UNVERIFIED`・メタデータ0件で、詳細行を開かず正常終了した。下記の診断追加版は独立レビューまで再実行しない。読取通信を観測できても、下書きの不存在や新規出品の安全性を証明したことにはならない。
+この入口はまだPC設置版にもBELLO画面にも接続していない。レビュー済み版を実ブラウザーで二度実行し、いずれも `DRAFT_LIST_UNVERIFIED`・メタデータ0件で、詳細行を開かず終了した。二度目の固定診断は `TABLE_ABSENT` と `ROUTE_BLOCKED`。同じ入口の再実行は停止し、遮断理由の分類を独立レビューする。読取通信を観測できても、下書きの不存在や新規出品の安全性を証明したことにはならない。
 
 ## 一覧失敗時の固定診断
 
 最初の実機読取では一覧の安定条件が成立せず、`DRAFT_LIST_UNVERIFIED` で詳細行を開く前に停止した。次の候補は、原因を `TABLE_ABSENT`、`HEADERS_MISMATCH`、`LOADING_INDICATOR`、`PAGINATION_PRESENT`、`ROW_COUNT_MISMATCH`、`INTERACTIVE_ROW`、`COLUMN_COUNT_MISMATCH`、`ROW_SHAPE_UNVERIFIED`、`LIST_UNSTABLE`、`LIST_TIMEOUT` などの固定コードから一つだけ返す。別の固定コード `ROUTE_BLOCKED` / `NO_ROUTE_BLOCK` は、通信制限により何かを遮断したかだけを示す。画面の文章、行数の実値、URL、下書きID、商品名、通信本文、operationNameは診断に入らない。これらのコードも出品可否を決める証拠ではない。
+
+## 通信遮断の分類と次の判断
+
+遮断された通信について、GET等以外の方法、GraphQL以外へのPOST、GraphQL本文の欠落・複数化・persisted query・mutation等、WebSocket、ガード処理失敗を固定コードの集合として返す。URL、HTTP本文、ヘッダー、operationName、ID、実際の件数は返さない。何かを遮断した場合は、画面が見えても読取成功にしない。通信許可条件は広げない。
+
+`TABLE_ABSENT` と `ROUTE_BLOCKED` が同時に出たことから、通常画面の読み込みに必要な通信を遮断した可能性がある。ただし、遮断が表不在の原因と確定したわけではない。Playwrightの経路設定はHTTPキャッシュを無効にし、この入口はService Workerも遮断しているため、通常の画面と読み込み条件が異なる可能性もある。分類版のレビュー後も根拠なく通信を許可しない。通常の専用ブラウザー上で保存操作を伴わない画面読取へ切り替える場合は、通信観測とは別の読取証拠として設計・レビューし、出品許可には用いない。

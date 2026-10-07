@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { observeDraftReadMetadata } from "../src/draftReadMetadataObserver.mjs";
+import { observeDraftReadMetadata,
+  classifyDraftReadRouteBlock } from "../src/draftReadMetadataObserver.mjs";
 
 const shopId = "evkhihBFFNn5hukMS9s36H";
 const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=draft`;
@@ -131,4 +132,36 @@ test("array operationName cannot be coerced into a read query", async () => {
   const result = await observer.stop();
   assert.deepEqual(result.observations, []);
   assert.equal(result.allowFinalCreate, false);
+});
+
+test("blocked request reasons are fixed categories without request values", () => {
+  const blocked = (method, url, payload, resource = "fetch") => ({
+    method: () => method, url: () => url, resourceType: () => resource,
+    postDataBuffer: () => Buffer.from(JSON.stringify(payload)),
+  });
+  const cases = [
+    [blocked("DELETE", secret, {}), "NON_READ_METHOD"],
+    [blocked("POST", secret, {}), "POST_OTHER_ENDPOINT"],
+    [blocked("POST", "https://mercari-shops.com/graphql", {}, "document"),
+      "GRAPHQL_RESOURCE_UNVERIFIED"],
+    [blocked("POST", "https://mercari-shops.com/graphql", [{}]),
+      "GRAPHQL_BATCH_UNVERIFIED"],
+    [blocked("POST", "https://mercari-shops.com/graphql",
+      { extensions: { persistedQuery: { sha256Hash: secret } } }),
+      "GRAPHQL_PERSISTED_QUERY"],
+    [blocked("POST", "https://mercari-shops.com/graphql",
+      { operationName: "SaveDraft", query: "mutation SaveDraft { saveDraft { id } }" }),
+      "GRAPHQL_WRITE_OPERATION"],
+    [blocked("POST", "https://mercari-shops.com/graphql",
+      { query: "query { draftProducts { id } }" }),
+      "GRAPHQL_UNNAMED_QUERY"],
+  ];
+  for (const [req, expected] of cases) {
+    const reason = classifyDraftReadRouteBlock(req);
+    assert.equal(reason, expected);
+    assert.equal(reason.includes(secret), false);
+  }
+  assert.equal(classifyDraftReadRouteBlock({ method: () => {
+    throw Error(secret);
+  } }), "GUARD_INSPECTION_FAILED");
 });
