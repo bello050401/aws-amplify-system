@@ -21,7 +21,8 @@ function validList(snapshot, listUrl, expectedRowCount) {
     Number.isSafeInteger(snapshot.tableIndex) && snapshot.tableIndex >= 0 &&
     snapshot.headerCount === 8 && snapshot.titleColumn === 0 &&
     Array.isArray(snapshot.rows) && snapshot.rows.length === expectedRowCount &&
-    snapshot.rows.every(row => typeof row.title === "string" &&
+    snapshot.rows.every(row => row.interactiveCount === 0 &&
+      typeof row.title === "string" &&
       row.title.length <= 130 && typeof row.signature === "string" &&
       row.signature.length <= 3000);
 }
@@ -51,7 +52,9 @@ async function readListDom(page) {
     const rows = selected ? [...selected.table.querySelectorAll("tbody tr")].map(row => {
       const cells = [...row.querySelectorAll(":scope > td")];
       return { title: text(cells[0]), signature: JSON.stringify(cells.map(text)),
-        cellCount: cells.length };
+        cellCount: cells.length,
+        interactiveCount: row.querySelectorAll(
+          'a, button, input, select, textarea, [role="button"], [contenteditable="true"]').length };
     }) : [];
     return { documentUrl: document.location.href,
       loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),

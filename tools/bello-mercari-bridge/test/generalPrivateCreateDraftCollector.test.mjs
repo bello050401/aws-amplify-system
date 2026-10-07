@@ -28,7 +28,7 @@ function fakeAdapter({ entries = details, mutateList = null,
           titleColumn: 0, tableMatches: 1,
           rows: current.map(entry => ({ title: entry.title,
             signature: JSON.stringify([entry.title, "", "¥0", "0", "", "", "", ""]),
-            cellCount: 8 })) };
+            cellCount: 8, interactiveCount: 0 })) };
       },
       async clickRow(tableIndex, index) {
         calls.push(["clickRow", tableIndex, index]);
@@ -106,4 +106,18 @@ test("blank rows with unchanged table text still require identical IDs on a seco
     shopId, expectedRowCount: 2, adapter });
   assert.equal(result.status, "DRAFT_LIST_CHANGED");
   assert.deepEqual(result.rows, []);
+});
+
+test("a newly added actionable control inside a row prevents row click", async () => {
+  const { adapter, calls } = fakeAdapter();
+  const list = adapter.list;
+  adapter.list = async () => {
+    const snapshot = await list();
+    snapshot.rows[0].interactiveCount = 1;
+    return snapshot;
+  };
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter });
+  assert.equal(result.status, "DRAFT_LIST_UNVERIFIED");
+  assert.equal(calls.some(item => item[0] === "clickRow"), false);
 });
