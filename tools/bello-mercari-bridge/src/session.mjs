@@ -32,7 +32,8 @@ async function ensureDedicatedProfile(profileDir) {
   finally { await handle.close(); }
 }
 
-async function launchDedicatedProfile({ profileDir, playwrightModulePath, launchPersistentContext }) {
+async function launchDedicatedProfile({ profileDir, playwrightModulePath,
+  launchPersistentContext, serviceWorkersBlock = false }) {
   if (!profileDir || !isAbsolute(profileDir)) throw Error("An absolute dedicated profile directory is required");
   await ensureDedicatedProfile(profileDir);
   let launch = launchPersistentContext;
@@ -43,7 +44,8 @@ async function launchDedicatedProfile({ profileDir, playwrightModulePath, launch
     if (!playwright?.chromium?.launchPersistentContext) throw Error("Playwright persistent Chrome is unavailable");
     launch = playwright.chromium.launchPersistentContext.bind(playwright.chromium);
   }
-  return launch(profileDir, { channel: "chrome", headless: false });
+  return launch(profileDir, { channel: "chrome", headless: false,
+    ...(serviceWorkersBlock ? { serviceWorkers: "block" } : {}) });
 }
 
 /** Opens a dedicated, visible Chrome profile. The merchant signs in; no existing IAB session is read or copied. */
@@ -80,6 +82,32 @@ export async function openDedicatedProductListSession({ root, profileDir,
   } catch (error) {
     await context.close();
     throw error;
+  }
+}
+
+/** Opens a fresh tab in the existing dedicated profile for one metadata-only draft read. */
+export async function openDraftMetadataReadSession({ root, profileDir,
+  playwrightModulePath, shopId, launchPersistentContext = null }) {
+  if (typeof shopId !== "string" || !PRODUCT_ID.test(shopId) ||
+      !root || !isAbsolute(root)) throw Error("Invalid draft metadata target");
+  const bound = JSON.parse(await readFile(join(root, "account.json"), "utf8"));
+  if (bound?.schemaVersion !== 1 || bound.accountReference !== shopId)
+    throw Error("Draft metadata account mismatch");
+  const marker = JSON.parse(await readFile(join(profileDir, PROFILE_MARKER), "utf8"));
+  if (marker?.schemaVersion !== 1 || marker.purpose !== "BELLO_MERCARI_DEDICATED")
+    throw Error("Existing dedicated profile required");
+  const context = await launchDedicatedProfile({ profileDir, playwrightModulePath,
+    launchPersistentContext, serviceWorkersBlock: true });
+  try {
+    if (typeof context.serviceWorkers !== "function" ||
+        context.serviceWorkers().length !== 0)
+      throw Error("Draft metadata service worker state unavailable");
+    if (context.pages().some(candidate => candidate.url() !== "about:blank"))
+      throw Error("Restored Shops page is unresolved");
+    return { context, page: await context.newPage() };
+  } catch {
+    await context.close().catch(() => {});
+    throw Error("Draft metadata browser unavailable");
   }
 }
 

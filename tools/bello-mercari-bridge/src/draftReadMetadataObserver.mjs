@@ -42,6 +42,15 @@ function queryOperation(request) {
   return true;
 }
 
+/** A normal, explicit GraphQL query is the only non-GET request this probe permits. */
+export function isExplicitDraftReadQueryRequest(request) {
+  try {
+    return request.method() === "POST" && request.url() === GRAPHQL_URL &&
+      ["fetch", "xhr"].includes(request.resourceType()) &&
+      queryOperation(request) === true;
+  } catch { return false; }
+}
+
 function valueShape(value, depth = 0) {
   if (value === null) return "null";
   if (Array.isArray(value)) return depth >= 3 ? "array" :
@@ -89,7 +98,7 @@ export function observeDraftReadMetadata(context, { page, shopId,
     if (requestPage !== page) return;
     const kind = pageKind(page.url(), shopId);
     if (!kind) return;
-    if (queryOperation(request)) requests.set(request, { kind });
+    if (isExplicitDraftReadQueryRequest(request)) requests.set(request, { kind });
   };
   const onResponse = response => {
     if (detached) return;
