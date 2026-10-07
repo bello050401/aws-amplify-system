@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { exactNewDraftId, exactPinnedPrivateCreateJob,
   exactPrivateCreateResponse, exactFormFieldReadback, sameUploadedAsset,
@@ -202,10 +203,13 @@ test("duplicate or disabled create links remain pre-click", async () => {
 });
 
 test("NOT_SENT eligibility requires complete no-click and no-traffic proof", () => {
+  const inventoryFingerprint = createHash("sha256")
+    .update("dd273c1e-9b2a-4013-acc6-c445a481fab8").digest("hex");
   const claim = { operation: "OBSERVE_FUTURE_PRIVATE_CREATE_ONCE",
     shopId: "evkhihBFFNn5hukMS9s36H", attemptId: "test-attempt",
     outcome: "UNKNOWN", listingConfirmed: false,
-    inventoryFingerprint: "inventory", snapshotFingerprint: "snapshot",
+    inventoryFingerprint,
+    snapshotFingerprint: "63ec8ca8b8a390fb58f67b5fac09cd3d0fd8641aa82aee164bc67b07d55c81be",
     claimedAt: "2026-10-07T00:00:00.000Z" };
   const result = { attemptId: claim.attemptId, shopId: claim.shopId,
     inventoryFingerprint: claim.inventoryFingerprint,
@@ -234,6 +238,13 @@ test("NOT_SENT eligibility requires complete no-click and no-traffic proof", () 
   assert.equal(eligibleForPinnedPrivateCreateNotSent({ claim, result,
     observation, readback: { ...readback, draftAllPages: { ...empty,
       complete: false } } }), false);
+  for (const changed of [undefined, "bogus"]) {
+    const wrongClaim = { ...claim, inventoryFingerprint: changed,
+      snapshotFingerprint: changed };
+    assert.equal(eligibleForPinnedPrivateCreateNotSent({ claim: wrongClaim,
+      result: { ...result, inventoryFingerprint: changed,
+        snapshotFingerprint: changed }, observation, readback }), false);
+  }
 });
 
 test("a consumed claim from a blocked restored browser is recorded UNKNOWN", async () => {

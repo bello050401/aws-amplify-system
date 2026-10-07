@@ -55,6 +55,8 @@ export function eligibleForPinnedPrivateCreateNotSent({ claim, result,
     claim.outcome === "UNKNOWN" &&
     claim.listingConfirmed === false &&
     typeof claim.attemptId === "string" && ID.test(claim.attemptId) &&
+    claim.inventoryFingerprint === digest(INVENTORY) &&
+    claim.snapshotFingerprint === PREPARED_FINGERPRINT &&
     result?.attemptId === claim.attemptId &&
     result.shopId === claim.shopId &&
     result.inventoryFingerprint === claim.inventoryFingerprint &&
