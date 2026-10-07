@@ -3,6 +3,10 @@ const SHOP_ORIGIN = "https://mercari-shops.com";
 const fixed = status => ({ status, rows: [], allowFinalCreate: false });
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const clean = value => value.replace(/\s+/g, " ").trim();
+const LIST_READ_LIMIT = 12;
+const LIST_STABLE_READS = 3;
+const LIST_WAIT_MS = 600;
+const SCAN_TIME_LIMIT_MS = 80_000;
 
 function exactDraftId(url, shopId) {
   try {
@@ -25,6 +29,37 @@ function validList(snapshot, listUrl, expectedRowCount) {
       typeof row.title === "string" &&
       row.title.length <= 130 && typeof row.signature === "string" &&
       row.signature.length <= 3000);
+}
+
+function strictList(snapshot, listUrl, expectedRowCount) {
+  return validList(snapshot, listUrl, expectedRowCount) &&
+    snapshot.tableMatches === 1 &&
+    snapshot.rows.every(row => row.cellCount === 10);
+}
+
+async function stableList(ui, listUrl, expectedRowCount, deadline,
+  reference = null) {
+  let previous = null;
+  let stableReads = 0;
+  for (let attempt = 0; attempt < LIST_READ_LIMIT; attempt++) {
+    if (performance.now() >= deadline) return null;
+    const current = await ui.list();
+    if (performance.now() >= deadline) return null;
+    if (strictList(current, listUrl, expectedRowCount) &&
+        (reference === null || same(current, reference))) {
+      stableReads = previous && same(previous, current) ? stableReads + 1 : 1;
+      previous = current;
+      if (stableReads === LIST_STABLE_READS) return current;
+    } else {
+      previous = null;
+      stableReads = 0;
+    }
+    if (attempt < LIST_READ_LIMIT - 1) {
+      if (performance.now() + LIST_WAIT_MS >= deadline) return null;
+      await ui.wait(LIST_WAIT_MS);
+    }
+  }
+  return null;
 }
 
 function validDetail(snapshot, shopId) {
@@ -108,30 +143,26 @@ export async function collectGeneralPrivateCreateDraftDetailsReadOnly({ page,
     return fixed("DRAFT_INPUT_UNVERIFIED");
   const ui = adapter ?? browserAdapter(page);
   const listUrl = `${SHOP_ORIGIN}/seller/shops/${shopId}/products?tab=draft`;
+  const deadline = performance.now() + SCAN_TIME_LIMIT_MS;
   try {
     await ui.goto(listUrl);
-    const first = await ui.list();
-    await ui.wait(600);
-    const second = await ui.list();
-    if (!validList(first, listUrl, expectedRowCount) ||
-        !validList(second, listUrl, expectedRowCount) || !same(first, second) ||
-        first.tableMatches !== 1 || first.rows.some(row => row.cellCount !== 10))
-      return fixed("DRAFT_LIST_UNVERIFIED");
+    const first = await stableList(ui, listUrl, expectedRowCount, deadline);
+    if (!first) return fixed("DRAFT_LIST_UNVERIFIED");
     const rows = [];
     for (let pass = 0; pass < 2; pass++) {
       const seen = new Set();
       for (let index = 0; index < expectedRowCount; index++) {
+        if (performance.now() >= deadline) return fixed("DRAFT_READ_UNAVAILABLE");
         await ui.goto(listUrl);
-        const before = await ui.list();
-        await ui.wait(600);
-        const settled = await ui.list();
-        if (!validList(before, listUrl, expectedRowCount) ||
-            !same(before, settled) || !same(settled, first))
-          return fixed("DRAFT_LIST_CHANGED");
+        if (!await stableList(ui, listUrl, expectedRowCount,
+          deadline, first)) return fixed("DRAFT_LIST_CHANGED");
+        if (performance.now() >= deadline) return fixed("DRAFT_READ_UNAVAILABLE");
         await ui.clickRow(first.tableIndex, index);
         const detail = await ui.detail();
-        await ui.wait(600);
+        await ui.wait(LIST_WAIT_MS);
+        if (performance.now() >= deadline) return fixed("DRAFT_READ_UNAVAILABLE");
         const stable = await ui.detail();
+        if (performance.now() >= deadline) return fixed("DRAFT_READ_UNAVAILABLE");
         const id = validDetail(detail, shopId);
         if (!id || !same(detail, stable) ||
             clean(detail.title) !== clean(first.rows[index].title) ||
@@ -143,10 +174,9 @@ export async function collectGeneralPrivateCreateDraftDetailsReadOnly({ page,
         else if (!same(rows[index], row)) return fixed("DRAFT_LIST_CHANGED");
       }
     }
+    if (performance.now() >= deadline) return fixed("DRAFT_READ_UNAVAILABLE");
     await ui.goto(listUrl);
-    const last = await ui.list();
-    await ui.wait(600);
-    if (!same(last, first) || !same(await ui.list(), first))
+    if (!await stableList(ui, listUrl, expectedRowCount, deadline, first))
       return fixed("DRAFT_LIST_CHANGED");
     return { status: "DRAFT_DETAILS_DOM_OBSERVED", rows,
       allowFinalCreate: false };

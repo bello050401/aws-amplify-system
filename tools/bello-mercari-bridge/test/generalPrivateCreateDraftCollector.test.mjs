@@ -62,7 +62,7 @@ test("reads a named and blank draft twice without a save/create action", async (
 });
 
 test("row count or title change prevents a complete result", async () => {
-  const count = fakeAdapter({ mutateList: reads => reads >= 3 ?
+  const count = fakeAdapter({ mutateList: reads => reads >= 4 ?
     [...details, { id: "transient-C", title: "", skuCode: "" }] : details });
   const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
     shopId, expectedRowCount: 2, adapter: count.adapter });
@@ -72,6 +72,39 @@ test("row count or title change prevents a complete result", async () => {
   assert.equal((await collectGeneralPrivateCreateDraftDetailsReadOnly({
     shopId, expectedRowCount: 2, adapter: title.adapter })).status,
   "DRAFT_DETAIL_UNVERIFIED");
+});
+
+test("transient 13-row draft list settles before any detail row is opened", async () => {
+  const { adapter, calls } = fakeAdapter();
+  const goto = adapter.goto;
+  const list = adapter.list;
+  let firstAfterNavigation = false;
+  adapter.goto = async url => { await goto(url); firstAfterNavigation = true; };
+  adapter.list = async () => {
+    const snapshot = await list();
+    if (firstAfterNavigation) {
+      firstAfterNavigation = false;
+      snapshot.rows.push({ title: "", signature: "[]",
+        cellCount: 10, interactiveCount: 0 });
+    }
+    return snapshot;
+  };
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter });
+  assert.equal(result.status, "DRAFT_DETAILS_DOM_OBSERVED");
+  assert.equal(calls.filter(item => item[0] === "clickRow").length, 4);
+  assert.equal(calls.filter(item => item[0] === "wait").length >= 2 * 5, true);
+});
+
+test("an unstable draft list stops after bounded reads without opening details", async () => {
+  const { adapter, calls } = fakeAdapter({ mutateList: reads => reads % 2 ?
+    details : [...details, { id: "transient-C", title: "", skuCode: "" }] });
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter });
+  assert.equal(result.status, "DRAFT_LIST_UNVERIFIED");
+  assert.equal(calls.filter(item => item[0] === "list").length, 12);
+  assert.equal(calls.filter(item => item[0] === "clickRow").length, 0);
+  assert.deepEqual(result.rows, []);
 });
 
 test("duplicate draft ID, wrong detail URL and loading state fail closed", async () => {
