@@ -65,9 +65,14 @@ function browserAdapter(page) {
         const prev = [...document.querySelectorAll('[data-testid="pagination-prev-button"]')];
         const disabled = control => control.disabled === true ||
           control.getAttribute("aria-disabled") === "true";
-        // The exact visibility-filter control has not been mapped in the UI.
-        // A selected "すべて" elsewhere on the page is never evidence.
-        const allSelected = false;
+        const statusChips = [...document.querySelectorAll(
+          'button[data-testid="product-status-chip"]')];
+        const visibilityChips = [...document.querySelectorAll(
+          'button[data-testid="visibility-chip"]')];
+        const allSelected = statusChips.length === 1 &&
+          text(statusChips[0]) === "ステータス: 出品中" &&
+          visibilityChips.length === 1 &&
+          text(visibilityChips[0]) === "公開状態: すべて";
         return { documentUrl: document.location.href,
           loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),
           allVisibilitySelected: allSelected, tableMatches: matches.length,

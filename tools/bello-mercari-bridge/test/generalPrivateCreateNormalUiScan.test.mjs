@@ -170,6 +170,12 @@ test("a selected unrelated すべて option is not visibility evidence", async (
       if (selector === "table") return [table];
       if (selector === '[data-testid="pagination-next-button"]') return [next];
       if (selector === '[data-testid="pagination-prev-button"]') return [prev];
+      if (selector === 'button[data-testid="product-status-chip"]')
+        return [{ textContent: "ステータス: 出品中" }];
+      if (selector === 'button[data-testid="visibility-chip"]')
+        return [{ textContent: "公開状態: 非公開" }];
+      if (selector === 'button[data-testid="stock-condition-chip"]')
+        return [{ textContent: "在庫: すべて" }];
       if (selector.includes("aria-selected") || selector.includes("option:checked")) {
         unrelatedSeen = true;
         return [{ textContent: "すべて", getAttribute: () => "true" }];
@@ -185,5 +191,48 @@ test("a selected unrelated すべて option is not visibility evidence", async (
       page, collectDrafts: async () => { throw Error("Must not read drafts"); } });
     assert.equal(result.diagnostic, "SALE_TABLE_UNVERIFIED");
     assert.equal(unrelatedSeen, false);
+  } finally { globalThis.document = originalDocument; }
+});
+
+test("only the exact on-sale status and visibility chips permit list reading", async () => {
+  const originalDocument = globalThis.document;
+  let pageIndex = 0;
+  const header = [{ textContent: "商品名" }, { textContent: "価格" }];
+  const names = ["Other first item", "Other second item"];
+  const table = { querySelectorAll: selector => selector === "thead th" ?
+    header : selector === "tbody tr" ? [{ querySelectorAll: cellSelector =>
+      cellSelector === ":scope > td" ? [
+        { textContent: names[pageIndex] }, { textContent: "1" },
+      ] : [] }] : [] };
+  const control = disabled => ({ disabled, getAttribute: () => null });
+  globalThis.document = { location: { href: saleUrl },
+    querySelector: () => null,
+    querySelectorAll: selector => {
+      if (selector === "table") return [table];
+      if (selector === '[data-testid="pagination-next-button"]')
+        return [control(pageIndex === 1)];
+      if (selector === '[data-testid="pagination-prev-button"]')
+        return [control(pageIndex === 0)];
+      if (selector === 'button[data-testid="product-status-chip"]')
+        return [{ textContent: "ステータス: 出品中" }];
+      if (selector === 'button[data-testid="visibility-chip"]')
+        return [{ textContent: "公開状態: すべて" }];
+      if (selector === 'button[data-testid="stock-condition-chip"]')
+        return [{ textContent: "在庫: すべて" }];
+      return [];
+    } };
+  try {
+    const page = { goto: async () => {}, url: () => saleUrl,
+      locator: selector => selector === "body" ?
+        { evaluate: async callback => callback() } :
+        selector === '[data-testid="pagination-next-button"]' ?
+          { click: async () => { pageIndex++; } } :
+          { click: async () => { throw Error("Unexpected click"); } },
+      waitForTimeout: async () => {} };
+    const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+      page, collectDrafts: emptyDrafts });
+    assert.equal(result.status, "REMOTE_SCAN_INCOMPLETE");
+    assert.equal(result.diagnostic, "SALE_SKU_UNVERIFIED");
+    assert.equal(pageIndex, 1);
   } finally { globalThis.document = originalDocument; }
 });
