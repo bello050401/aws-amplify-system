@@ -97,6 +97,10 @@ test("matched SKU or title blocks, and unattributed blank drafts stay ambiguous"
   blank.tabs[1].pages[0].settled.rowIdsOnSecondRead = [null];
   assert.equal(inspectGeneralPrivateCreateRemoteScan(pack(), blank, now).status,
     "REMOTE_DRAFT_AMBIGUOUS");
+  const identifiedBlank = completeScan();
+  identifiedBlank.tabs[1].pages[0].rows[0] = row("draft1", "", null);
+  assert.equal(inspectGeneralPrivateCreateRemoteScan(pack(), identifiedBlank, now).status,
+    "REMOTE_DRAFT_AMBIGUOUS");
 });
 
 test("a local UNKNOWN claim blocks the remote scan without reading Shops", async () => {
