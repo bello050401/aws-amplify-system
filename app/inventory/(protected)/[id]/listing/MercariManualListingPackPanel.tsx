@@ -4,16 +4,22 @@ import { useEffect, useRef, useState } from "react";
 import { searchMercariBrandsAction } from "@/app/actions/listing";
 import { prepareMercariManualListingPackAction,
   type MercariManualListingPack } from "@/app/actions/mercariManualListingPack";
+import { prepareB005396GeneralPreparationAction } from
+  "@/app/actions/mercariB005396GeneralPreparation";
+import { B005396_INVENTORY_ID,
+  type B005396GeneralReviewEvidence } from
+  "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import type { BrandMasterEntry } from "@/lib/listing/mercari/csv/masters";
 import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
-import { sameManualPackSelection,
+import { b005396ReviewSelectionReady, sameManualPackSelection,
   type ManualPackSelection } from "@/lib/listing/mercariBridge/manualPackSelection";
 import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker";
 
 export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   hasDraft, hasShopsRecord }: { inventoryId: string; availableQuantity: number;
   hasDraft: boolean; hasShopsRecord: boolean }) {
-  const [price, setPrice] = useState("");
+  const isB005396 = inventoryId.toLowerCase() === B005396_INVENTORY_ID;
+  const [price, setPrice] = useState(isB005396 ? "99999" : "");
   const [quantity, setQuantity] = useState("");
   const [category, setCategory] = useState<{ id: string; path: string } | null>(null);
   const [brandQuery, setBrandQuery] = useState("");
@@ -22,13 +28,19 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pack, setPack] = useState<MercariManualListingPack | null>(null);
+  const [reviewEvidence, setReviewEvidence] =
+    useState<B005396GeneralReviewEvidence | null>(null);
+  const [shippingReviewed, setShippingReviewed] = useState(false);
   const [deadlineMono, setDeadlineMono] = useState<number | null | undefined>(undefined);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const selectionRevision = useRef(0);
   const selectionRef = useRef<ManualPackSelection>({
-    price: "", quantity: "", categoryId: null, brandId: null,
+    price: isB005396 ? "99999" : "", quantity: "", categoryId: null,
+    brandId: null,
   });
   const available = hasDraft && !hasShopsRecord && availableQuantity > 0;
+  const reviewReady = b005396ReviewSelectionReady(selectionRef.current,
+    availableQuantity);
   const conditionLabel = pack ? LISTING_CONDITIONS.find(item =>
     item.code === pack.condition)?.label ?? pack.condition : "";
   const copyText = pack ? [
@@ -82,14 +94,38 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   }
   async function prepare() {
     if (!available || busy || !category || !/^[0-9]+$/.test(price) ||
-        !/^[0-9]+$/.test(quantity)) return;
+        !/^[0-9]+$/.test(quantity) ||
+        (isB005396 && !reviewReady)) return;
     setBusy(true);
     setMessage(null);
     setPack(null);
+    setReviewEvidence(null);
+    setShippingReviewed(false);
     const revision = selectionRevision.current;
     const requested: ManualPackSelection = { price, quantity,
       categoryId: category.id, brandId: brand?.brandId ?? null };
     try {
+      if (isB005396) {
+        const result = await prepareB005396GeneralPreparationAction({
+          quantity: Number(quantity), categoryId: category.id,
+          brandId: brand?.brandId ?? null,
+        });
+        if (revision !== selectionRevision.current ||
+            !sameManualPackSelection(requested, selectionRef.current)) {
+          setMessage("入力が変わりました。現在の内容で確認し直してください。");
+          return;
+        }
+        if (!result.ok) {
+          setMessage(result.code === "EXISTING_LINK" ?
+            "この在庫にはShops出品の記録があります。準備を中止しました。" :
+            "BELLOの保存内容・カテゴリー・数量を確認できませんでした。内容を確認してからやり直してください。");
+          return;
+        }
+        setPack(result.pack);
+        setReviewEvidence(result.evidence);
+        setMessage("現在のEC下書きを読み取りました。配送条件を確認してください。Shopsへの送信はできません。");
+        return;
+      }
       const result = await prepareMercariManualListingPackAction(inventoryId, {
         priceYen: Number(price), quantity: Number(quantity),
         categoryId: category.id, brandId: brand?.brandId ?? null,
@@ -113,14 +149,14 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     finally { setBusy(false); }
   }
   async function copy() {
-    if (!pack) return;
+    if (!pack || isB005396) return;
     try {
       await navigator.clipboard.writeText(copyText);
       setMessage("出品内容をコピーしました。Shopsへの送信はしていません。");
     } catch { setMessage("コピーできませんでした。下の内容を選択してコピーしてください。"); }
   }
   function downloadForPc() {
-    if (!pack) return;
+    if (!pack || isB005396) return;
     const url = URL.createObjectURL(new Blob([JSON.stringify(pack, null, 2) + "\n"],
       { type: "application/json" }));
     const link = document.createElement("a");
@@ -134,6 +170,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   }
   async function handoffToPc(selectedPack: MercariManualListingPack,
     revision: number) {
+    if (isB005396) return;
     try {
       const response = await fetch("http://127.0.0.1:56210/general-private-create-job", {
         method: "POST", mode: "cors", credentials: "omit", cache: "no-store",
@@ -156,7 +193,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     }
   }
   async function sendPreparationToPc() {
-    if (!pack || busy) return;
+    if (!pack || busy || isB005396) return;
     const revision = selectionRevision.current;
     setBusy(true);
     setMessage(null);
@@ -165,8 +202,13 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   }
   return <section id="mercari-manual-preparation"
     className="mt-5 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
-    <h2 className="font-bold">メルカリShops 出品準備</h2>
-    <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。価格、カテゴリー、数量はこの商品について選んでください。</p>
+    <h2 className="font-bold">メルカリShops {isB005396 ? "出品内容の確認" : "出品準備"}</h2>
+    <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isB005396 ?
+      "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
+      "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
+    {isB005396 && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+      B005396は価格99,999円で内容確認のみ行います。独立した出品可否確認が完了するまで、PCへの送信はできません。
+    </p>}
     <dl className="mt-3 grid grid-cols-2 gap-1 rounded bg-gray-50 p-3 text-xs">
       <dt>配送方法</dt><dd>未定（出品者手配）</dd>
       <dt>送料</dt><dd>送料込み（出品者負担）</dd>
@@ -183,19 +225,19 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     {!available ? <p className="mt-3 text-amber-700">保存済みの下書き・在庫数・Shops出品記録を確認してください。新規出品準備は現在できません。</p> : <>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs">販売価格（円）<input type="number" min={300} max={9999999}
-          step={1} value={price} disabled={busy}
+          step={1} value={price} disabled={busy || isB005396}
           onChange={event => { selectionRevision.current++; selectionRef.current.price = event.target.value; setPrice(event.target.value); setPack(null); }}
           className="mt-1 w-full rounded border border-gray-300 p-2" /></label>
         <label className="text-xs">出品数量（在庫上限 {availableQuantity}）<input type="number"
           min={1} max={availableQuantity} step={1} value={quantity} disabled={busy}
-          onChange={event => { selectionRevision.current++; selectionRef.current.quantity = event.target.value; setQuantity(event.target.value); setPack(null); }}
+          onChange={event => { selectionRevision.current++; selectionRef.current.quantity = event.target.value; setQuantity(event.target.value); setPack(null); setReviewEvidence(null); setShippingReviewed(false); }}
           className="mt-1 w-full rounded border border-gray-300 p-2" /></label>
       </div>
       <div className="mt-4">
         <p className="mb-2 font-bold">カテゴリーを選択</p>
         <MercariFurnitureCategoryPicker inventoryId={inventoryId}
           currentFullPath={undefined} busy={busy}
-          onConfirm={(id, path) => { selectionRevision.current++; selectionRef.current.categoryId = id; setCategory({ id, path }); setPack(null); }} />
+          onConfirm={(id, path) => { selectionRevision.current++; selectionRef.current.categoryId = id; setCategory({ id, path }); setPack(null); setReviewEvidence(null); setShippingReviewed(false); }} />
         <p className="mt-2 text-xs">選択中: {category?.path ?? "未選択"}</p>
       </div>
       <div className="mt-4">
@@ -208,19 +250,20 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         {brandResults.length > 0 && <ul className="mt-1 max-h-40 overflow-auto border border-gray-200">
           {brandResults.map(item => <li key={item.brandId}><button type="button" disabled={busy}
             className="w-full px-2 py-1 text-left hover:bg-gray-50"
-            onClick={() => { selectionRevision.current++; selectionRef.current.brandId = item.brandId; setBrand(item); setBrandResults([]); setPack(null); }}>
+            onClick={() => { selectionRevision.current++; selectionRef.current.brandId = item.brandId; setBrand(item); setBrandResults([]); setPack(null); setReviewEvidence(null); setShippingReviewed(false); }}>
             {item.name}</button></li>)}
         </ul>}
         <p className="mt-1 text-xs">選択中: {brand?.name ?? "指定なし"}</p>
         {brand && <button type="button" disabled={busy}
-          onClick={() => { selectionRevision.current++; selectionRef.current.brandId = null; setBrand(null); setPack(null); }}
+          onClick={() => { selectionRevision.current++; selectionRef.current.brandId = null; setBrand(null); setPack(null); setReviewEvidence(null); setShippingReviewed(false); }}
           className="text-xs text-blue-700 underline">ブランド指定を外す</button>}
       </div>
       <button type="button" onClick={() => void prepare()}
         disabled={busy || !category || !/^[0-9]+$/.test(price) ||
-          !/^[0-9]+$/.test(quantity)}
+          !/^[0-9]+$/.test(quantity) || (isB005396 && !reviewReady)}
         className="mt-4 rounded bg-blue-700 px-4 py-2 font-bold text-white disabled:opacity-40">
-        {busy ? "準備中…" : "出品準備をPCに渡す"}
+        {busy ? isB005396 ? "確認中…" : "準備中…" :
+          isB005396 ? "現在のEC下書きを確認" : "出品準備をPCに渡す"}
       </button>
     </>}
     {message && <p role="status" className="mt-2 text-xs">{message}</p>}
@@ -229,12 +272,38 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <p>管理コード: <code>{pack.managementCode}</code></p>
       <p>価格 ¥{pack.priceYen.toLocaleString("ja-JP")} ／ 数量 {pack.quantity} ／ {pack.categoryPath}</p>
       <p>状態: {conditionLabel} ／ ブランド: {pack.brandName ?? "指定なし"}</p>
-      <p className="mt-1">保存済み写真 {pack.imageRefs.length} 枚。送信前に写真もShops画面で確認してください。</p>
+      <p className="mt-1">保存済み写真 {pack.imageRefs.length} 枚。{isB005396 ?
+        "画像自体は未確認です。" : "送信前に写真もShops画面で確認してください。"}</p>
+      {isB005396 && reviewEvidence && <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3">
+        <p className="font-bold">BELLO保存内容とShops設定の確認</p>
+        {reviewEvidence.shippingReviewRequired && <p className="mt-1 text-amber-900">
+          配送条件の確認が必要です。
+        </p>}
+        <dl className="mt-2 grid grid-cols-2 gap-1">
+          <dt>在庫コード</dt><dd>{reviewEvidence.sourceInventoryCode}</dd>
+          <dt>EC下書き価格</dt><dd>¥{reviewEvidence.sourcePriceYen.toLocaleString("ja-JP")}</dd>
+          <dt>現在の在庫数</dt><dd>{reviewEvidence.sourceQuantity}</dd>
+          <dt>EC配送方法</dt><dd>{reviewEvidence.sourceShippingMethod === "KAZAI" ? "家財便" : "佐川急便"}</dd>
+          <dt>選択したShopsカテゴリー</dt><dd>{reviewEvidence.selectedCategoryPath}</dd>
+          <dt>Shops配送方法</dt><dd>未定（出品者手配）</dd>
+          <dt>Shops送料・発送元</dt><dd>出品者負担・埼玉県</dd>
+          <dt>Shops発送まで</dt><dd>4〜7日</dd>
+        </dl>
+        <p className="mt-2">写真{reviewEvidence.imageCount}枚は保存先の参照を照合しました。画像自体の確認は未完了です。</p>
+        <label className="mt-3 flex items-start gap-2">
+          <input type="checkbox" checked={shippingReviewed}
+            onChange={event => setShippingReviewed(event.target.checked)} />
+          <span>EC配送方法とShopsの配送設定の違いを確認しました</span>
+        </label>
+        <p className="mt-2">{shippingReviewed ?
+          "配送条件を確認済みです。出品可否の独立確認は未完了です。" :
+          "配送条件の確認が必要です。"}</p>
+      </div>}
       <label className="mt-2 block">保存済みの商品説明
         <textarea readOnly value={pack.description}
           className="mt-1 h-32 w-full rounded border border-gray-200 p-2 text-xs" />
       </label>
-      <button type="button" onClick={() => void copy()}
+      {!isB005396 && <><button type="button" onClick={() => void copy()}
         className="mt-2 rounded border border-gray-300 px-3 py-1">出品内容をまとめてコピー</button>
       <button type="button" onClick={() => void sendPreparationToPc()} disabled={busy}
         className="ml-2 mt-2 rounded bg-blue-700 px-3 py-1 font-bold text-white disabled:opacity-40">
@@ -243,6 +312,11 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         className="ml-2 mt-2 rounded border border-gray-300 px-3 py-1">PC用の準備ファイルを保存</button>
       <textarea readOnly value={copyText} aria-label="Shops出品準備内容"
         className="mt-2 h-40 w-full rounded border border-gray-200 p-2 text-xs" />
+      </>}
+      {isB005396 && <button type="button" disabled
+        className="mt-3 rounded bg-gray-400 px-3 py-1 font-bold text-white">
+        PCへの送信（出品可否の独立確認待ち）
+      </button>}
     </div>}
   </section>;
 }
