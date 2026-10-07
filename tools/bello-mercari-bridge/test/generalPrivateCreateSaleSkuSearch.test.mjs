@@ -214,7 +214,8 @@ test("browser adapter reads the observed table through locator.evaluate(element,
     url: () => currentUrl,
     getByRole: (role, options) => role === "textbox" &&
       options.name === "商品管理コード（前方一致）、商品名検索" ? textbox :
-      role === "button" && options.name === "search" ? button :
+      role === "button" && options.name === "search" &&
+        options.exact === undefined ? button :
         { count: async () => 0 },
     locator: selector => selector === "body" ?
       { evaluate: async (callback, arg) => callback({}, arg) } :

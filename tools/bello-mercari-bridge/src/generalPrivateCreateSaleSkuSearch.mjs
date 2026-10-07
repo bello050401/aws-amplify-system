@@ -94,7 +94,8 @@ function browserAdapter(page) {
     goto: url => page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT }),
     search: async query => {
       const textbox = page.getByRole("textbox", { name: SEARCH_LABEL });
-      const button = page.getByRole("button", { name: "search", exact: true });
+      // Match the observed working UI action; count still requires one control.
+      const button = page.getByRole("button", { name: "search" });
       if (await textbox.count() !== 1 || await button.count() !== 1)
         throw Error("Search controls unavailable");
       await textbox.fill(query, { timeout: TIMEOUT });
