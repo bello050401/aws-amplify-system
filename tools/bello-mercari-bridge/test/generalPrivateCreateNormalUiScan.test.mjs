@@ -62,7 +62,8 @@ test("normal UI scan waits through stale 51 rows and detects a later-page title"
 
 test("draft detail SKU match is advisory and never permits create", async () => {
   const adapter = fakeAdapter([
-    snapshot(["Other item"], { nextDisabled: true, prevDisabled: true }),
+    snapshot(["Other item"], { nextDisabled: false, prevDisabled: true }),
+    snapshot(["Another item"], { nextDisabled: true, prevDisabled: false }),
   ]);
   const rows = Array.from({ length: 12 }, () => ({ title: "", skuCode: null }));
   rows[3] = { title: "Different title", skuCode: managementCode.toLowerCase() };
@@ -76,7 +77,8 @@ test("draft detail SKU match is advisory and never permits create", async () => 
 
 test("no visible match remains incomplete because sale SKUs are unverified", async () => {
   const adapter = fakeAdapter([
-    snapshot(["Other item"], { nextDisabled: true, prevDisabled: true }),
+    snapshot(["Other item"], { nextDisabled: false, prevDisabled: true }),
+    snapshot(["Another item"], { nextDisabled: true, prevDisabled: false }),
   ]);
   const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
     adapter, collectDrafts: emptyDrafts });
@@ -102,9 +104,10 @@ test("unstable pagination and unproved visibility fail closed", async () => {
 });
 
 test("draft collector failure, read error and invalid input are fixed failures", async () => {
-  const page = snapshot(["other"], { nextDisabled: true, prevDisabled: true });
+  const page = snapshot(["other"], { nextDisabled: false, prevDisabled: true });
+  const last = snapshot(["different"], { nextDisabled: true, prevDisabled: false });
   const unverified = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
-    adapter: fakeAdapter([page]), collectDrafts: async () =>
+    adapter: fakeAdapter([page, last]), collectDrafts: async () =>
       ({ status: "DRAFT_LIST_UNVERIFIED", rows: [], allowFinalCreate: false }) });
   assert.equal(unverified.diagnostic, "DRAFT_UNVERIFIED");
   const unavailable = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
@@ -113,11 +116,11 @@ test("draft collector failure, read error and invalid input are fixed failures",
   assert.equal(unavailable.diagnostic, "UI_READ_UNAVAILABLE");
   assert.equal(JSON.stringify(unavailable).includes("private token"), false);
   const invalid = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
-    shopId: [shopId], adapter: fakeAdapter([page]), collectDrafts: emptyDrafts });
+    shopId: [shopId], adapter: fakeAdapter([page, last]), collectDrafts: emptyDrafts });
   assert.equal(invalid.diagnostic, "INPUT_UNVERIFIED");
 });
 
-test("default browser adapter only navigates and reads the normal UI", async () => {
+test("unknown visibility control keeps the default browser adapter unverified", async () => {
   const calls = [];
   const page = {
     goto: async (url, options) => { calls.push("goto");
@@ -127,13 +130,60 @@ test("default browser adapter only navigates and reads the normal UI", async () 
     locator: selector => { assert.equal(selector, "body");
       return { evaluate: async () => { calls.push("read-body");
         const { url, ...data } = snapshot(["Other item"],
-          { nextDisabled: true, prevDisabled: true });
+          { nextDisabled: false, prevDisabled: true,
+            allVisibilitySelected: false });
         return data;
       } }; },
     waitForTimeout: async ms => { assert.equal(ms, 600); },
   };
   const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
     page, collectDrafts: emptyDrafts });
-  assert.equal(result.diagnostic, "SALE_SKU_UNVERIFIED");
-  assert.deepEqual(calls, ["goto", "read-body", "read-body", "read-body"]);
+  assert.equal(result.diagnostic, "SALE_TABLE_UNVERIFIED");
+  assert.equal(calls[0], "goto");
+  assert.equal(calls.filter(call => call === "read-body").length, 12);
+});
+
+test("first-page both-disabled controls cannot prove the last page", async () => {
+  const adapter = fakeAdapter([snapshot(["Other item"],
+    { nextDisabled: true, prevDisabled: true })]);
+  const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+    adapter, collectDrafts: async () => { throw Error("Drafts must not be read"); } });
+  assert.equal(result.status, "REMOTE_SCAN_INCOMPLETE");
+  assert.equal(result.diagnostic, "SALE_PAGINATION_UNVERIFIED");
+  assert.equal(adapter.calls().nextClicks, 0);
+});
+
+test("a selected unrelated すべて option is not visibility evidence", async () => {
+  const originalDocument = globalThis.document;
+  const header = [{ textContent: "商品名" }, { textContent: "価格" }];
+  const cells = [{ textContent: "Other item" }, { textContent: "1" }];
+  const row = { querySelectorAll: selector => selector === ":scope > td" ?
+    cells : [] };
+  const table = { querySelectorAll: selector => selector === "thead th" ?
+    header : selector === "tbody tr" ? [row] : [] };
+  const next = { disabled: false, getAttribute: () => null };
+  const prev = { disabled: true, getAttribute: () => null };
+  let unrelatedSeen = false;
+  globalThis.document = { location: { href: saleUrl },
+    querySelector: () => null,
+    querySelectorAll: selector => {
+      if (selector === "table") return [table];
+      if (selector === '[data-testid="pagination-next-button"]') return [next];
+      if (selector === '[data-testid="pagination-prev-button"]') return [prev];
+      if (selector.includes("aria-selected") || selector.includes("option:checked")) {
+        unrelatedSeen = true;
+        return [{ textContent: "すべて", getAttribute: () => "true" }];
+      }
+      return [];
+    } };
+  try {
+    const page = { goto: async () => {}, url: () => saleUrl,
+      locator: selector => { assert.equal(selector, "body");
+        return { evaluate: async callback => callback() }; },
+      waitForTimeout: async () => {} };
+    const result = await scanGeneralPrivateCreateNormalUiReadOnly({ ...input,
+      page, collectDrafts: async () => { throw Error("Must not read drafts"); } });
+    assert.equal(result.diagnostic, "SALE_TABLE_UNVERIFIED");
+    assert.equal(unrelatedSeen, false);
+  } finally { globalThis.document = originalDocument; }
 });

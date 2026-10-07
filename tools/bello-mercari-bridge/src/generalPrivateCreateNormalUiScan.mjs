@@ -65,9 +65,9 @@ function browserAdapter(page) {
         const prev = [...document.querySelectorAll('[data-testid="pagination-prev-button"]')];
         const disabled = control => control.disabled === true ||
           control.getAttribute("aria-disabled") === "true";
-        const allSelected = [...document.querySelectorAll(
-          '[aria-selected="true"], [aria-checked="true"], [aria-pressed="true"], select option:checked')]
-          .filter(node => text(node) === "すべて").length === 1;
+        // The exact visibility-filter control has not been mapped in the UI.
+        // A selected "すべて" elsewhere on the page is never evidence.
+        const allSelected = false;
         return { documentUrl: document.location.href,
           loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),
           allVisibilitySelected: allSelected, tableMatches: matches.length,
@@ -106,7 +106,8 @@ export async function scanGeneralPrivateCreateNormalUiReadOnly({ page, shopId,
       const current = await stableSale(ui, saleUrl, previousRows);
       if (!current) return fixed("REMOTE_SCAN_INCOMPLETE",
         pageIndex === 0 ? "SALE_TABLE_UNVERIFIED" : "SALE_PAGINATION_UNVERIFIED");
-      if (pageIndex === 0 && current.prevDisabled !== true ||
+      if (pageIndex === 0 && (current.prevDisabled !== true ||
+          current.nextDisabled !== false) ||
           pageIndex > 0 && current.prevDisabled !== false)
         return fixed("REMOTE_SCAN_INCOMPLETE", "SALE_PAGINATION_UNVERIFIED");
       if (current.rows.some(row => row.title &&
