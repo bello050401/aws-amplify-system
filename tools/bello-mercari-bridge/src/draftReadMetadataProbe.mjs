@@ -7,6 +7,7 @@ const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const ORIGIN = "https://mercari-shops.com";
 const TYPES = ["null", "array", "object", "string", "number", "boolean"];
 const fixed = (status, closeStatus = "NOT_OPENED") => ({ status,
+  diagnostic: null, routeDiagnostic: "NO_ROUTE_BLOCK",
   observations: [], closeStatus, allowFinalCreate: false });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -36,7 +37,9 @@ async function listSnapshot(page) {
         interactiveCount: row.querySelectorAll(
           'a, button, input, select, textarea, [role="button"], [contenteditable="true"]').length };
     }) : [];
-    return { documentUrl: document.location.href, tableMatches: matches.length,
+    return { documentUrl: document.location.href,
+      tableCount: document.querySelectorAll("table").length,
+      tableMatches: matches.length,
       tableIndex: selected?.index ?? -1, rows,
       loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),
       paginationControls: document.querySelectorAll(
@@ -45,15 +48,25 @@ async function listSnapshot(page) {
   return { ...data, url: page.url() };
 }
 
-function validList(snapshot, listUrl, expectedRowCount) {
-  return snapshot?.url === listUrl && snapshot.documentUrl === listUrl &&
-    snapshot.tableMatches === 1 && Number.isSafeInteger(snapshot.tableIndex) &&
-    snapshot.tableIndex >= 0 && snapshot.loading === false &&
-    snapshot.paginationControls === 0 && Array.isArray(snapshot.rows) &&
-    snapshot.rows.length === expectedRowCount &&
-    snapshot.rows.every(row => row.cellCount === 8 &&
-      row.interactiveCount === 0 && typeof row.signature === "string" &&
-      row.signature.length <= 3000);
+function diagnoseList(snapshot, listUrl, expectedRowCount) {
+  if (snapshot?.url !== listUrl || snapshot.documentUrl !== listUrl)
+    return "LIST_URL_UNEXPECTED";
+  if (!Number.isSafeInteger(snapshot.tableCount) || snapshot.tableCount < 1)
+    return "TABLE_ABSENT";
+  if (snapshot.tableMatches !== 1 ||
+      !Number.isSafeInteger(snapshot.tableIndex) || snapshot.tableIndex < 0)
+    return "HEADERS_MISMATCH";
+  if (snapshot.loading !== false) return "LOADING_INDICATOR";
+  if (snapshot.paginationControls !== 0) return "PAGINATION_PRESENT";
+  if (!Array.isArray(snapshot.rows) ||
+      snapshot.rows.length !== expectedRowCount) return "ROW_COUNT_MISMATCH";
+  if (snapshot.rows.some(row => row.interactiveCount !== 0))
+    return "INTERACTIVE_ROW";
+  if (snapshot.rows.some(row => row.cellCount !== 8))
+    return "COLUMN_COUNT_MISMATCH";
+  if (snapshot.rows.some(row => typeof row.signature !== "string" ||
+      row.signature.length > 3000)) return "ROW_SHAPE_UNVERIFIED";
+  return "LIST_READY";
 }
 
 function safeObservation(value) {
@@ -100,37 +113,55 @@ export async function probeDraftReadMetadataOnce({ root, profileDir,
   let status = "READ_UNAVAILABLE";
   let metadata = null;
   let closeStatus = "NOT_OPENED";
+  let diagnostic = null;
+  let routeBlocked = false;
+  let phase = "LAUNCH";
   const readOnlyRoute = async route => {
     try {
       const request = route.request();
       if (["GET", "HEAD", "OPTIONS"].includes(request.method()) ||
           isExplicitDraftReadQueryRequest(request)) await route.continue();
-      else await route.abort();
-    } catch { try { await route.abort(); } catch { /* Closing the page also stops routing. */ } }
+      else { routeBlocked = true; await route.abort(); }
+    } catch {
+      routeBlocked = true;
+      try { await route.abort(); } catch { /* Closing the page also stops routing. */ }
+    }
   };
   try {
     session = await openSession({ root, profileDir, playwrightModulePath, shopId,
       requestGuard: readOnlyRoute });
     closeStatus = "CLOSE_UNVERIFIED";
+    phase = "OBSERVER_SETUP";
     observer = observe(session.context, { page: session.page, shopId });
     await session.context.setOffline(false);
+    phase = "LIST_NAVIGATION";
     await session.page.goto(listUrl, { waitUntil: "domcontentloaded", timeout: 12000 });
-    if (session.page.url().startsWith(`${ORIGIN}/signin/`)) status = "AUTH_REQUIRED";
+    if (session.page.url().startsWith(`${ORIGIN}/signin/`)) {
+      status = "AUTH_REQUIRED";
+      diagnostic = "AUTH_SCREEN";
+    }
     else {
+      phase = "LIST_DOM";
       const first = await listSnapshot(session.page);
       await session.page.waitForTimeout(600);
       const second = await listSnapshot(session.page);
       await session.page.waitForTimeout(600);
       const third = await listSnapshot(session.page);
-      if (!validList(first, listUrl, expectedRowCount) ||
-          !same(first, second) || !same(second, third))
+      const listStates = [first, second, third].map(snapshot =>
+        diagnoseList(snapshot, listUrl, expectedRowCount));
+      if (listStates.some(state => state !== "LIST_READY") ||
+          !same(first, second) || !same(second, third)) {
         status = "DRAFT_LIST_UNVERIFIED";
-      else {
+        diagnostic = listStates.find(state => state !== "LIST_READY") ??
+          "LIST_UNSTABLE";
+      } else {
+        phase = "DETAIL_NAVIGATION";
         await session.page.locator("table").nth(first.tableIndex)
           .locator("tbody tr").nth(rowIndex).click({ timeout: 12000 });
         if (!exactDraftDetail(session.page.url(), shopId))
           status = "DRAFT_DETAIL_UNVERIFIED";
         else {
+          phase = "DETAIL_DOM";
           await session.page.locator('input[name="variants.0.skuCode"]')
             .waitFor({ state: "visible", timeout: 12000 });
           await session.page.waitForTimeout(600);
@@ -145,12 +176,23 @@ export async function probeDraftReadMetadataOnce({ root, profileDir,
         }
       }
     }
-  } catch { status = "READ_UNAVAILABLE"; }
+  } catch (error) {
+    status = "READ_UNAVAILABLE";
+    diagnostic = error?.name === "TimeoutError" &&
+      ["LIST_NAVIGATION", "LIST_DOM"].includes(phase) ? "LIST_TIMEOUT" :
+      phase === "LIST_NAVIGATION" ? "LIST_NAVIGATION_UNAVAILABLE" :
+      phase === "LIST_DOM" ? "LIST_DOM_UNAVAILABLE" :
+      phase === "DETAIL_NAVIGATION" ? "DETAIL_NAVIGATION_UNAVAILABLE" :
+      phase === "DETAIL_DOM" ? "DETAIL_DOM_UNAVAILABLE" :
+      "BROWSER_SETUP_UNAVAILABLE";
+  }
   finally {
     try { await session?.context.setOffline(true); }
-    catch { status = "OFFLINE_RESTORE_UNVERIFIED"; }
+    catch { status = "OFFLINE_RESTORE_UNVERIFIED";
+      diagnostic = "OFFLINE_RESTORE_UNVERIFIED"; }
     try { metadata = await observer?.stop(); }
-    catch { status = "METADATA_UNVERIFIED"; }
+    catch { status = "METADATA_UNVERIFIED";
+      diagnostic = "METADATA_UNVERIFIED"; }
     try { if (session) { await session.context.close(); closeStatus = "CLOSED"; } }
     catch { closeStatus = "CLOSE_UNVERIFIED"; }
   }
@@ -160,6 +202,11 @@ export async function probeDraftReadMetadataOnce({ root, profileDir,
       metadata?.status === "METADATA_TRUNCATED") status = "METADATA_TRUNCATED";
   if (status === "DRAFT_UI_READ_OBSERVED" && observations.length === 0)
     status = "NO_QUERY_METADATA";
-  if (closeStatus === "CLOSE_UNVERIFIED") status = "BROWSER_CLOSE_UNVERIFIED";
-  return { status, observations, closeStatus, allowFinalCreate: false };
+  if (closeStatus === "CLOSE_UNVERIFIED") {
+    status = "BROWSER_CLOSE_UNVERIFIED";
+    diagnostic = "BROWSER_CLOSE_UNVERIFIED";
+  }
+  return { status, diagnostic,
+    routeDiagnostic: routeBlocked ? "ROUTE_BLOCKED" : "NO_ROUTE_BLOCK",
+    observations, closeStatus, allowFinalCreate: false };
 }

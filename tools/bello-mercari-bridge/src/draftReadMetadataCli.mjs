@@ -6,8 +6,9 @@ import { probeDraftReadMetadataOnce } from "./draftReadMetadataProbe.mjs";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const expectedOrigin =
   "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
-const fixed = status => ({ status, observations: [], closeStatus: "NOT_OPENED",
-  allowFinalCreate: false });
+const fixed = status => ({ status, diagnostic: null,
+  routeDiagnostic: "NO_ROUTE_BLOCK", observations: [],
+  closeStatus: "NOT_OPENED", allowFinalCreate: false });
 
 /** CLI takes no shop or draft ID argument; both stay within the dedicated PC. */
 export async function runDraftReadMetadataCli(args, { read = readFile,

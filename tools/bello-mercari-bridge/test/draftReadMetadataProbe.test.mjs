@@ -9,7 +9,9 @@ const options = { root: "C:\\Queue", profileDir: "C:\\ShopsChrome",
   playwrightModulePath: "C:\\App\\node_modules\\playwright\\package.json",
   shopId, confirmReadOnly: true, expectedRowCount: 12, rowIndex: 0 };
 
-function fakeSession({ count = 12, auth = false } = {}) {
+function fakeSession({ count = 12, auth = false, tableCount = 1,
+  tableMatches = 1, interactiveCount = 0, paginationControls = 0,
+  loading = false, unstable = false, onGoto = null } = {}) {
   let url = "about:blank";
   let routeHandler;
   let websocketHandler;
@@ -18,14 +20,20 @@ function fakeSession({ count = 12, auth = false } = {}) {
   let closed = false;
   const lifecycle = [];
   const page = {
-    goto: async () => { url = auth ? "https://mercari-shops.com/signin/seller" : listUrl; },
+    goto: async () => {
+      if (onGoto && routeHandler) await onGoto(routeHandler);
+      url = auth ? "https://mercari-shops.com/signin/seller" : listUrl;
+    },
     url: () => url, waitForTimeout: async () => {},
-    locator: selector => selector === "body" ? { evaluate: async () => ({
-      documentUrl: url, tableMatches: 1, tableIndex: 0,
-      loading: false, paginationControls: 0,
-      rows: Array.from({ length: typeof count === "function" ? count(++reads) : count }, () => ({ cellCount: 8,
-        signature: '["","","¥0","0","","","",""]', interactiveCount: 0 })),
-    }) } : selector === "table" ? { nth: () => ({ locator: () => ({
+    locator: selector => selector === "body" ? { evaluate: async () => {
+      const read = ++reads;
+      return { documentUrl: url, tableCount, tableMatches, tableIndex: 0,
+        loading, paginationControls,
+        rows: Array.from({ length: typeof count === "function" ? count(read) : count }, () => ({ cellCount: 8,
+          signature: unstable ? `row-state-${read}` :
+            '["","","¥0","0","","","",""]', interactiveCount })),
+      };
+    } } : selector === "table" ? { nth: () => ({ locator: () => ({
       nth: () => ({ click: async () => { rowClicks++; url = detailUrl; } }),
     }) }) } : { waitFor: async () => {}, count: async () => 1 },
   };
@@ -62,6 +70,8 @@ test("one opt-in probe observes only metadata and always closes", async () => {
       }] }; } }),
   });
   assert.equal(result.status, "DRAFT_UI_READ_OBSERVED");
+  assert.equal(result.diagnostic, null);
+  assert.equal(result.routeDiagnostic, "NO_ROUTE_BLOCK");
   assert.equal(result.closeStatus, "CLOSED");
   assert.equal(result.allowFinalCreate, false);
   assert.equal(session.rowClicks(), 1);
@@ -105,6 +115,7 @@ test("opt-in, transient row count, and auth uncertainty fail closed", async () =
     openSession: args => openFakeSession(transient, args),
     observe: () => ({ stop: async () => ({ observations: [] }) }) });
   assert.equal(result.status, "DRAFT_LIST_UNVERIFIED");
+  assert.equal(result.diagnostic, "ROW_COUNT_MISMATCH");
   assert.equal(transient.rowClicks(), 0);
   assert.equal(transient.closed(), true);
   const changing = fakeSession({ count: read => read === 2 ? 13 : 12 });
@@ -112,12 +123,14 @@ test("opt-in, transient row count, and auth uncertainty fail closed", async () =
     openSession: args => openFakeSession(changing, args),
     observe: () => ({ stop: async () => ({ observations: [] }) }) });
   assert.equal(changed.status, "DRAFT_LIST_UNVERIFIED");
+  assert.equal(changed.diagnostic, "ROW_COUNT_MISMATCH");
   assert.equal(changing.rowClicks(), 0);
   const auth = fakeSession({ auth: true });
   const redirected = await probeDraftReadMetadataOnce({ ...options,
     openSession: args => openFakeSession(auth, args),
     observe: () => ({ stop: async () => ({ observations: [] }) }) });
   assert.equal(redirected.status, "AUTH_REQUIRED");
+  assert.equal(redirected.diagnostic, "AUTH_SCREEN");
   assert.equal(auth.closed(), true);
   const unguarded = fakeSession();
   unguarded.context.routeWebSocket = undefined;
@@ -146,9 +159,66 @@ test("a failed close never reports read success and leaves offline guard active"
     observe: () => ({ stop: async () => ({ status: "METADATA_ONLY",
       observations: [] }) }) });
   assert.equal(result.status, "BROWSER_CLOSE_UNVERIFIED");
+  assert.equal(result.diagnostic, "BROWSER_CLOSE_UNVERIFIED");
   assert.equal(result.closeStatus, "CLOSE_UNVERIFIED");
   assert.equal(result.allowFinalCreate, false);
   assert.equal(session.lifecycle.includes("offline:true"), true);
   assert.equal(session.lifecycle.at(-1), "close-failed");
+  assert.equal(JSON.stringify(result).includes("hiddenDraft123"), false);
+});
+
+test("list failures return fixed enums without DOM or URL values", async () => {
+  const cases = [
+    [{ tableCount: 0, tableMatches: 0 }, "TABLE_ABSENT"],
+    [{ tableMatches: 0 }, "HEADERS_MISMATCH"],
+    [{ paginationControls: 2 }, "PAGINATION_PRESENT"],
+    [{ interactiveCount: 1 }, "INTERACTIVE_ROW"],
+    [{ unstable: true }, "LIST_UNSTABLE"],
+  ];
+  for (const [setup, expected] of cases) {
+    const session = fakeSession(setup);
+    const result = await probeDraftReadMetadataOnce({ ...options,
+      openSession: args => openFakeSession(session, args),
+      observe: () => ({ stop: async () => ({ observations: [] }) }) });
+    assert.equal(result.status, "DRAFT_LIST_UNVERIFIED");
+    assert.equal(result.diagnostic, expected);
+    assert.equal(session.rowClicks(), 0);
+    assert.equal(JSON.stringify(result).includes(shopId), false);
+  }
+});
+
+test("a blocked request is reported only as a fixed code", async () => {
+  let aborted = false;
+  const session = fakeSession({ count: 13, onGoto: async handler => {
+    await handler({ request: () => ({ method: () => "POST",
+      url: () => "https://mercari-shops.com/graphql",
+      resourceType: () => "fetch", postDataBuffer: () => Buffer.from(
+        JSON.stringify({ operationName: "SaveHiddenDraft",
+          query: "mutation SaveHiddenDraft { saveDraft { id } }" })) }),
+    abort: async () => { aborted = true; },
+    continue: async () => { throw Error("Mutation must not continue"); } });
+  } });
+  const result = await probeDraftReadMetadataOnce({ ...options,
+    openSession: args => openFakeSession(session, args),
+    observe: () => ({ stop: async () => ({ observations: [] }) }) });
+  assert.equal(aborted, true);
+  assert.equal(result.routeDiagnostic, "ROUTE_BLOCKED");
+  assert.equal(result.diagnostic, "ROW_COUNT_MISMATCH");
+  assert.equal(JSON.stringify(result).includes("SaveHiddenDraft"), false);
+});
+
+test("list navigation timeout returns a fixed code without error details", async () => {
+  const session = fakeSession({ onGoto: async () => {
+    const error = Error("private draft identifier hiddenDraft123");
+    error.name = "TimeoutError";
+    throw error;
+  } });
+  const result = await probeDraftReadMetadataOnce({ ...options,
+    openSession: args => openFakeSession(session, args),
+    observe: () => ({ stop: async () => ({ observations: [] }) }) });
+  assert.equal(result.status, "READ_UNAVAILABLE");
+  assert.equal(result.diagnostic, "LIST_TIMEOUT");
+  assert.equal(result.closeStatus, "CLOSED");
+  assert.equal(session.rowClicks(), 0);
   assert.equal(JSON.stringify(result).includes("hiddenDraft123"), false);
 });
