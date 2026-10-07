@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { buildPrivateCreatePreparation, PRIVATE_CREATE_SHOP_ID } from
   "../src/privateCreatePreparation.mjs";
-import { B005413_CATEGORY_PATH, exactB005413PrivateCreateJob, exactNewDraftId,
+import { B005413_CATEGORY_PATH, exactB005413CategoryReadback,
+  exactB005413PrivateCreateJob, exactNewDraftId,
   exactPrivateCreateResponse, runB005413PrivateCreateUiOnce } from
   "../src/privateCreateB005413UiOnce.mjs";
 
@@ -20,6 +21,18 @@ const protectedIds = ["2JToDtSgGowzUwnwe9hgHU", "2JWp7EJx6aqKfn6dTXc5Q9",
 test("B005413 uses the chair category confirmed in the seller UI", () => {
   assert.deepEqual([...B005413_CATEGORY_PATH],
     ["家具・インテリア", "椅子・チェア", "椅子"]);
+  assert.equal(exactB005413CategoryReadback("椅子",
+    "カテゴリー家具・インテリア >椅子・チェア >椅子"), true);
+  assert.equal(exactB005413CategoryReadback("椅子・チェア",
+    "カテゴリー家具・インテリア >椅子・チェア"), false);
+  assert.equal(exactB005413CategoryReadback("椅子",
+    "カテゴリー家具・インテリア >椅子・チェア"), false);
+  assert.equal(exactB005413CategoryReadback("座椅子",
+    "カテゴリー家具・インテリア >椅子・チェア >座椅子"), false);
+  assert.equal(exactB005413CategoryReadback("椅子",
+    "カテゴリー家具・インテリア >ソファ・ソファベッド >椅子"), false);
+  assert.equal(exactB005413CategoryReadback("椅子",
+    "カテゴリー家具・インテリア >椅子・チェア >椅子 >その他"), false);
 });
 
 test("only the pinned B005413 job can enter its private-create executor", () => {

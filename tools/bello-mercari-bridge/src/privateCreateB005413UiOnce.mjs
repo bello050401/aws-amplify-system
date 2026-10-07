@@ -31,6 +31,15 @@ const FIXED_SHIPPING = Object.freeze({
 export const B005413_CATEGORY_PATH = Object.freeze([
   "家具・インテリア", "椅子・チェア", "椅子",
 ]);
+const CATEGORY_READBACK = "カテゴリー家具・インテリア>椅子・チェア>椅子";
+
+/** The seller UI shows the leaf and the whole breadcrumb in separate elements. */
+export function exactB005413CategoryReadback(leaf, groupText) {
+  return typeof leaf === "string" && leaf.trim() === "椅子" &&
+    typeof groupText === "string" &&
+    groupText.replace(/\s+/g, "").replace(/＞/g, ">").replace(/&gt;/g, ">") ===
+      CATEGORY_READBACK;
+}
 
 const digest = value => createHash("sha256").update(value).digest("hex");
 
@@ -197,8 +206,11 @@ async function fillOnce(page, snapshot, imageBytes, image, seenDrafts) {
     await (await unique(modal.getByText(label, { exact: true }))).click({ timeout: 12000 });
     checkpoint();
   }
-  if (!(await categories.innerText()).includes("椅子・チェア") ||
-      !(await categories.innerText()).includes("椅子"))
+  const categoryGroup = page.locator('label[for="category"]');
+  if (await categoryGroup.count() !== 1 ||
+      !exactB005413CategoryReadback(await categories.innerText(),
+        await categoryGroup.evaluate(label =>
+          label.closest('[role="group"]')?.textContent ?? null)))
     throw Error("Exact leaf category was not selected");
   const input = page.locator('input[type="file"][multiple]');
   const preview = page.locator('img[alt="uploaded-image"]');
@@ -240,6 +252,7 @@ async function verifyReadback(context, remoteId, snapshot, selectedAsset) {
         sku: field("variants.0.skuCode"),
         condition: document.querySelector('[data-testid="condition-select-box"]')?.textContent ?? null,
         category: group?.textContent ?? null,
+        categoryLeaf: document.querySelector('[data-testid="categories"]')?.innerText ?? null,
         shipping: Object.fromEntries(Object.keys({
           "shippingMethodType.id": 1, "shippingPayerType.id": 1,
           "shippingFromState.id": 1, "shippingDurationType.id": 1,
@@ -249,7 +262,7 @@ async function verifyReadback(context, remoteId, snapshot, selectedAsset) {
         !exactFormFieldReadback("price", data.price, String(snapshot.testPriceYen)) ||
         data.quantity !== "1" || data.sku !== CODE ||
         !data.condition?.includes("目立った傷や汚れなし") ||
-        B005413_CATEGORY_PATH.some(label => !data.category?.includes(label)) ||
+        !exactB005413CategoryReadback(data.categoryLeaf, data.category) ||
         Object.entries(FIXED_SHIPPING).some(([name, value]) =>
           data.shipping[name] !== value)) return false;
     const images = await readExistingUploadedImages(page, url);
