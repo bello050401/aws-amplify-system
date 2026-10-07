@@ -1,5 +1,7 @@
 import { collectGeneralPrivateCreateDraftDetailsReadOnly } from
   "./generalPrivateCreateDraftCollector.mjs";
+import { searchGeneralPrivateCreateSaleSkuReadOnly } from
+  "./generalPrivateCreateSaleSkuSearch.mjs";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const ORIGIN = "https://mercari-shops.com";
@@ -169,13 +171,16 @@ function browserAdapter(page) {
 /** Advisory normal-UI read. No request routing, capture, form edits or save clicks. */
 export async function scanGeneralPrivateCreateNormalUiReadOnly({ page, shopId,
   managementCode, title, expectedDraftRowCount = 12, adapter = null,
-  collectDrafts = collectGeneralPrivateCreateDraftDetailsReadOnly } = {}) {
+  collectDrafts = collectGeneralPrivateCreateDraftDetailsReadOnly,
+  positiveControlPrefix = null,
+  searchSaleSku = searchGeneralPrivateCreateSaleSkuReadOnly } = {}) {
   if (typeof shopId !== "string" || !ID.test(shopId) ||
       typeof managementCode !== "string" || !ID.test(managementCode) ||
       typeof title !== "string" || !title.trim() || title.length > 130 ||
       !Number.isSafeInteger(expectedDraftRowCount) ||
       expectedDraftRowCount < 1 || expectedDraftRowCount > 50 ||
-      !adapter && !page || typeof collectDrafts !== "function")
+      !adapter && !page || typeof collectDrafts !== "function" ||
+      positiveControlPrefix !== null && typeof searchSaleSku !== "function")
     return fixed("REMOTE_SCAN_INCOMPLETE", "INPUT_UNVERIFIED");
   const ui = adapter ?? browserAdapter(page);
   const saleUrl = `${ORIGIN}/seller/shops/${shopId}/products?tab=on_sale`;
@@ -226,7 +231,28 @@ export async function scanGeneralPrivateCreateNormalUiReadOnly({ page, shopId,
     if (draftRows.some(row => typeof row?.title === "string" &&
         row.title && titleKey(row.title) === titleKey(title)))
       return fixed("REMOTE_DUPLICATE_POSSIBLE", "DRAFT_TITLE_MATCH");
-    // On-sale SKU identity has not been verified by the observed list contract.
+    if (positiveControlPrefix !== null) {
+      let search;
+      try { search = await searchSaleSku({ page, shopId, managementCode,
+        positiveControlPrefix }); }
+      catch { return fixed("REMOTE_SCAN_INCOMPLETE", "SALE_SKU_SEARCH_READ_UNAVAILABLE"); }
+      let diagnostic;
+      let allowFinalCreate;
+      try { diagnostic = search?.diagnostic;
+        allowFinalCreate = search?.allowFinalCreate; }
+      catch { return fixed("REMOTE_SCAN_INCOMPLETE", "SALE_SKU_SEARCH_RESULT_UNVERIFIED"); }
+      if (allowFinalCreate !== false)
+        return fixed("REMOTE_SCAN_INCOMPLETE", "SALE_SKU_SEARCH_RESULT_UNVERIFIED");
+      if (diagnostic === "SALE_SKU_SEARCH_MATCH_POSSIBLE")
+        return fixed("REMOTE_DUPLICATE_POSSIBLE", diagnostic);
+      if (new Set(["SALE_SKU_SEARCH_NO_MATCH_OBSERVED",
+        "SALE_SKU_SEARCH_INPUT_UNVERIFIED", "SALE_SKU_SEARCH_CONTROL_UNVERIFIED",
+        "SALE_SKU_SEARCH_UNVERIFIED", "SALE_SKU_SEARCH_READ_UNAVAILABLE"])
+        .has(diagnostic))
+        return fixed("REMOTE_SCAN_INCOMPLETE", diagnostic);
+      return fixed("REMOTE_SCAN_INCOMPLETE", "SALE_SKU_SEARCH_RESULT_UNVERIFIED");
+    }
+    // Without a controlled search, on-sale SKU identity remains unverified.
     return fixed("REMOTE_SCAN_INCOMPLETE", "SALE_SKU_UNVERIFIED");
   } catch { return fixed("REMOTE_SCAN_INCOMPLETE", "UI_READ_UNAVAILABLE"); }
 }
