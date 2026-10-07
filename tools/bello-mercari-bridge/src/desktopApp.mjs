@@ -42,6 +42,8 @@ import { runVisibilityTransitionOnce } from "./visibilityTransitionOnce.mjs";
 import { readShopListingWindow } from "./listingSendGate.mjs";
 import { enqueueGeneralPrivateCreate, listGeneralPrivateCreateJobs } from
   "./generalPrivateCreateJob.mjs";
+import { readGeneralPrivateCreateRequestJson } from
+  "./generalPrivateCreateRequest.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const WORKFLOW_STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN",
@@ -514,18 +516,16 @@ export async function startDesktopApp(config, {
           !request.headers["content-type"]?.startsWith("application/json")) {
         response.writeHead(403, cors); response.end('{"ok":false}'); return;
       }
-      let body = "";
       try {
-        for await (const chunk of request) {
-          body += chunk.toString("utf8");
-          if (Buffer.byteLength(body, "utf8") > 65536)
-            throw Error("Preparation body too large");
-        }
-        const queued = await enqueueGeneralPrivateCreate(options.root, JSON.parse(body));
+        const body = await readGeneralPrivateCreateRequestJson(request);
+        const queued = await enqueueGeneralPrivateCreate(options.root, body);
         response.writeHead(200, cors);
         response.end(JSON.stringify({ ok: true, ...queued }));
-      } catch {
-        response.writeHead(409, cors); response.end('{"ok":false}');
+      } catch (error) {
+        const unknown = error?.message === "GENERAL_PRIVATE_CREATE_UNKNOWN_NO_RETRY";
+        response.writeHead(409, cors);
+        response.end(JSON.stringify({ ok: false,
+          code: unknown ? "UNKNOWN_NO_RETRY" : "PREPARATION_REJECTED" }));
       }
       return;
     }

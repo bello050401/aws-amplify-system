@@ -8,6 +8,8 @@ import { enqueueGeneralPrivateCreate, claimGeneralPrivateCreateOnce,
   writeGeneralPrivateCreateResultOnce } from "../src/generalPrivateCreateJob.mjs";
 import { diagnoseGeneralPrivateCreateForm } from
   "../src/generalPrivateCreateForm.mjs";
+import { readGeneralPrivateCreateRequestJson } from
+  "../src/generalPrivateCreateRequest.mjs";
 
 const inventoryId = "98765432-1234-4234-8234-987654321abc";
 const pack = () => ({ schemaVersion: 1,
@@ -36,6 +38,8 @@ test("one immutable generic pack can be queued, claimed once, and retain an unce
     const claim = await claimGeneralPrivateCreateOnce(root, inventoryId);
     await assert.rejects(claimGeneralPrivateCreateOnce(root, inventoryId),
       /ALREADY_CLAIMED/);
+    await assert.rejects(enqueueGeneralPrivateCreate(root, pack()),
+      /UNKNOWN_NO_RETRY/);
     await writeGeneralPrivateCreateResultOnce(root, inventoryId, {
       attemptId: claim.attemptId, outcome: "UNKNOWN", listingConfirmed: false,
       observedRemoteId: "observedOnly123", observedDraftId: "draftOnly123",
@@ -76,7 +80,7 @@ test("each saved Shops field is checked before a final private save", () => {
   const view = { name: input.title, description: input.description,
     price: "¥99,999", quantity: "1", sku: input.managementCode,
     condition: "目立った傷や汚れなし",
-    category: "家具・インテリア ソファ・ソファベッド 2人掛けソファ",
+    category: "カテゴリー 家具・インテリア > ソファ・ソファベッド > 2人掛けソファ",
     shipping: { "shippingMethodType.id": "METHOD_TYPE_UNDECIDED",
       "shippingPayerType.id": "PAYER_TYPE_SELLER",
       "shippingFromState.id": "jp11",
@@ -86,8 +90,35 @@ test("each saved Shops field is checked before a final private save", () => {
   assert.equal(diagnoseGeneralPrivateCreateForm(input,
     { ...view, price: "¥100,000" }), "PRICE_MISMATCH");
   assert.equal(diagnoseGeneralPrivateCreateForm(input,
-    { ...view, category: "家具・インテリア ソファ・ソファベッド" }),
+    { ...view, category: "カテゴリー 家具・インテリア > ソファ・ソファベッド" }),
   "CATEGORY_MISMATCH");
   assert.equal(diagnoseGeneralPrivateCreateForm(input,
     { ...view, imageCount: 0 }), "IMAGE_COUNT_MISMATCH");
+  const chair = { ...input,
+    categoryPath: "家具・インテリア > 椅子・チェア > 椅子" };
+  assert.equal(diagnoseGeneralPrivateCreateForm(chair,
+    { ...view, category: "カテゴリー 家具・インテリア > 椅子・チェア > 椅子" }), null);
+  assert.equal(diagnoseGeneralPrivateCreateForm(chair,
+    { ...view, category: "カテゴリー 家具・インテリア > 椅子・チェア > 座椅子" }),
+  "CATEGORY_MISMATCH");
+  const damaged = { ...input, condition: "DAMAGE" };
+  assert.equal(diagnoseGeneralPrivateCreateForm(damaged,
+    { ...view, condition: "傷や汚れあり" }), null);
+  assert.equal(diagnoseGeneralPrivateCreateForm(damaged,
+    { ...view, condition: "やや傷や汚れあり" }), "CONDITION_MISMATCH");
+});
+
+test("a Japanese field split across HTTP chunks remains byte exact", async () => {
+  const expected = { ...pack(), title: "和箪笥" };
+  const bytes = Buffer.from(JSON.stringify(expected), "utf8");
+  const split = bytes.indexOf(Buffer.from("和", "utf8")) + 1;
+  assert.ok(split > 0);
+  const request = async function* () {
+    yield bytes.subarray(0, split);
+    yield bytes.subarray(split);
+  };
+  assert.deepEqual(await readGeneralPrivateCreateRequestJson(request()), expected);
+  await assert.rejects(readGeneralPrivateCreateRequestJson((async function* () {
+    yield Buffer.alloc(65537);
+  })()), /BODY_TOO_LARGE/);
 });

@@ -141,11 +141,13 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
           "X-Bello-Mercari-Bridge": "GENERAL_PRIVATE_CREATE_NO_SEND" },
         body: JSON.stringify(selectedPack), signal: AbortSignal.timeout(10000),
       });
-      const result = response.ok ? await response.json() : null;
+      const result = await response.json().catch(() => null);
       if (revision !== selectionRevision.current) {
         setMessage("入力が変わりました。現在の内容で確認し直してください。");
       } else if (result?.ok === true && result.status === "PREPARED_NO_SEND") {
         setMessage("PCに出品準備を渡しました。Shopsへの送信はまだ行っていません。");
+      } else if (result?.code === "UNKNOWN_NO_RETRY") {
+        setMessage("この商品の出品試行はPCに記録済みで、結果を確認できません。重複防止のため再送しません。");
       } else {
         setMessage("PCが準備内容を受け付けられませんでした。PCアプリで保存状態を確認してください。");
       }

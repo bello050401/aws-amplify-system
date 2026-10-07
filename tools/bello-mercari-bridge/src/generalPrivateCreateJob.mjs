@@ -111,6 +111,9 @@ export async function enqueueGeneralPrivateCreate(root, input) {
     if (prior.fingerprint !== record.fingerprint)
       throw Error("GENERAL_PRIVATE_CREATE_PACK_CHANGED");
   }
+  // A consumed claim stays consumed even when the same BELLO pack is sent again.
+  if (await readGeneralPrivateCreateClaim(root, pack.inventoryId))
+    throw Error("GENERAL_PRIVATE_CREATE_UNKNOWN_NO_RETRY");
   return { inventoryId: pack.inventoryId, managementCode: pack.managementCode,
     status: "PREPARED_NO_SEND" };
 }

@@ -14,6 +14,7 @@ const SHIPPING = {
   "shippingDurationType.id": "DURATION_TYPE_FOUR_TO_SEVEN_DAYS",
 };
 const normalize = value => typeof value === "string" ? value.replace(/\s+/g, "") : "";
+const normalizeCategory = value => normalize(value).replace(/＞/g, ">").replace(/&gt;/g, ">");
 const matchesPrice = (actual, expected) =>
   typeof actual === "string" && /^(?:[¥￥]\s*)?(?:0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)$/.test(actual) &&
   Number(actual.replace(/[¥￥,\s]/g, "")) === expected;
@@ -29,16 +30,11 @@ export function diagnoseGeneralPrivateCreateForm(pack, view) {
   if (!matchesPrice(view.price, pack.priceYen)) return "PRICE_MISMATCH";
   if (view.quantity !== String(pack.quantity)) return "QUANTITY_MISMATCH";
   if (view.sku !== pack.managementCode) return "MANAGEMENT_CODE_MISMATCH";
-  if (!normalize(view.condition).includes(normalize(CONDITION_LABEL[pack.condition])))
+  if (normalize(view.condition) !== normalize(CONDITION_LABEL[pack.condition]))
     return "CONDITION_MISMATCH";
   const path = pack.categoryPath.split(" > ").map(normalize);
-  const category = normalize(view.category);
-  let cursor = 0;
-  for (const segment of path) {
-    const index = category.indexOf(segment, cursor);
-    if (index < 0) return "CATEGORY_MISMATCH";
-    cursor = index + segment.length;
-  }
+  if (normalizeCategory(view.category) !== `カテゴリー${path.join(">")}`)
+    return "CATEGORY_MISMATCH";
   for (const [name, value] of Object.entries(SHIPPING)) {
     if (view.shipping?.[name] !== value) return "SHIPPING_MISMATCH";
   }
@@ -92,12 +88,12 @@ export async function fillGeneralPrivateCreateFormOnce(page, input, imageFiles,
   onStage("CONDITION_MISMATCH");
   const condition = await unique(page.getByTestId("condition-select-box"),
     "CONDITION_MISMATCH");
-  if (!normalize(await condition.innerText()).includes(normalize(CONDITION_LABEL[pack.condition]))) {
+  if (normalize(await condition.innerText()) !== normalize(CONDITION_LABEL[pack.condition])) {
     await condition.click({ timeout: 12000 });
     await (await unique(page.getByText(CONDITION_LABEL[pack.condition], { exact: true }),
       "CONDITION_MISMATCH")).click({ timeout: 12000 });
   }
-  if (!normalize(await condition.innerText()).includes(normalize(CONDITION_LABEL[pack.condition])))
+  if (normalize(await condition.innerText()) !== normalize(CONDITION_LABEL[pack.condition]))
     throw new GeneralFormMismatch("CONDITION_MISMATCH");
   onStage("CATEGORY_MISMATCH");
   const categories = await unique(page.getByTestId("categories"), "CATEGORY_MISMATCH");
