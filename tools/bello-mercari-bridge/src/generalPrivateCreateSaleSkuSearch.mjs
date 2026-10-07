@@ -54,6 +54,29 @@ function validSearch(snapshot, url, query, kind) {
     snapshot.prevCount === 0;
 }
 
+function diagnoseTargetShape(snapshot, url, query) {
+  if (snapshot?.url !== url || snapshot.documentUrl !== url ||
+      snapshot.query !== query || snapshot.queryCount !== 1)
+    return "SALE_SKU_TARGET_CONTEXT_UNVERIFIED";
+  if (snapshot.loading !== false) return "SALE_SKU_TARGET_LOADING";
+  if (snapshot.statusChipExact !== true ||
+      snapshot.visibilityChipExact !== true ||
+      snapshot.tableMatches !== 1 ||
+      !Number.isSafeInteger(snapshot.tableIndex) || snapshot.tableIndex < 0 ||
+      snapshot.headerCount !== 10 || snapshot.titleColumn !== 0 ||
+      !Array.isArray(snapshot.rows) || snapshot.rows.length > 50)
+    return "SALE_SKU_TARGET_CONTEXT_UNVERIFIED";
+  if (snapshot.rows.length > 0)
+    return "SALE_SKU_TARGET_PRODUCT_ROWS_UNVERIFIED";
+  if (snapshot.nextCount !== 0 || snapshot.prevCount !== 0)
+    return "SALE_SKU_TARGET_PAGER_UNVERIFIED";
+  if (snapshot.nonProductRowCount !== 2)
+    return "SALE_SKU_TARGET_EMPTY_ROW_COUNT_UNVERIFIED";
+  if (snapshot.emptyCount !== 1 || snapshot.emptyShapeExact !== true)
+    return "SALE_SKU_TARGET_EMPTY_SHAPE_UNVERIFIED";
+  return "SALE_SKU_TARGET_UNSTABLE";
+}
+
 async function stableSearch(ui, url, query, kind) {
   let previous = null;
   let stable = 0;
@@ -255,7 +278,8 @@ export async function searchGeneralPrivateCreateSaleSkuReadOnly({ page, shopId,
         const observed = await ui.searchSnapshot();
         if (validSearch(observed, exactUrl, managementCode, "positive"))
           return fixed("SALE_SKU_SEARCH_MATCH_POSSIBLE");
-        return fixed("SALE_SKU_SEARCH_UNVERIFIED");
+        return fixed(diagnoseTargetShape(observed, exactUrl,
+          managementCode));
       }
     }
     return fixed("SALE_SKU_SEARCH_NO_MATCH_OBSERVED");

@@ -99,9 +99,43 @@ test("filter, URL, query and loading mismatches reject empty results", async () 
     const adapter = fakeUi({ exactViews: Array.from({ length: 13 }, () => bad) });
     const result = await searchGeneralPrivateCreateSaleSkuReadOnly({ shopId,
       managementCode, positiveControlPrefix, adapter });
-    assert.equal(result.diagnostic, "SALE_SKU_SEARCH_UNVERIFIED", field);
+    const expected = field === "loading" ? "SALE_SKU_TARGET_LOADING" :
+      field === "nextCount" ? "SALE_SKU_TARGET_PAGER_UNVERIFIED" :
+      field === "nonProductRowCount" ?
+        "SALE_SKU_TARGET_EMPTY_ROW_COUNT_UNVERIFIED" :
+      field === "emptyShapeExact" ?
+        "SALE_SKU_TARGET_EMPTY_SHAPE_UNVERIFIED" :
+        "SALE_SKU_TARGET_CONTEXT_UNVERIFIED";
+    assert.equal(result.diagnostic, expected, field);
     assert.equal(result.allowFinalCreate, false);
   }
+});
+
+test("unverified product rows and unstable empty reads remain incomplete", async () => {
+  const stillLoading = searchView(managementCode, "empty",
+    { loading: true, tableMatches: 0 });
+  const pending = await searchGeneralPrivateCreateSaleSkuReadOnly({ shopId,
+    managementCode, positiveControlPrefix,
+    adapter: fakeUi({ exactViews: Array.from({ length: 13 }, () => stillLoading) }) });
+  assert.deepEqual(pending, { diagnostic: "SALE_SKU_TARGET_LOADING",
+    allowFinalCreate: false });
+  const malformed = searchView(managementCode, "positive",
+    { rows: [{ cellCount: 10, signature: "row",
+      dataActionCount: 0, menuControlsVerified: false }] });
+  const rows = await searchGeneralPrivateCreateSaleSkuReadOnly({ shopId,
+    managementCode, positiveControlPrefix,
+    adapter: fakeUi({ exactViews: Array.from({ length: 13 }, () => malformed) }) });
+  assert.deepEqual(rows, { diagnostic: "SALE_SKU_TARGET_PRODUCT_ROWS_UNVERIFIED",
+    allowFinalCreate: false });
+  const empty = searchView(managementCode, "empty");
+  const loading = searchView(managementCode, "empty", { loading: true });
+  const alternating = Array.from({ length: 13 }, (_, index) =>
+    index % 3 === 2 ? loading : empty);
+  const unstable = await searchGeneralPrivateCreateSaleSkuReadOnly({ shopId,
+    managementCode, positiveControlPrefix,
+    adapter: fakeUi({ exactViews: alternating }) });
+  assert.deepEqual(unstable, { diagnostic: "SALE_SKU_TARGET_UNSTABLE",
+    allowFinalCreate: false });
 });
 
 test("positive control must display a SKU matching the tested prefix", async () => {
@@ -229,7 +263,13 @@ test("normal scan integrates only allowlisted search results", async () => {
     "SALE_SKU_SEARCH_BUTTON_ZERO", "SALE_SKU_SEARCH_BUTTON_MULTIPLE",
     "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE",
     "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE",
-    "SALE_SKU_SEARCH_CONTROL_ROW_CLICK_UNAVAILABLE"]) {
+    "SALE_SKU_SEARCH_CONTROL_ROW_CLICK_UNAVAILABLE",
+    "SALE_SKU_TARGET_CONTEXT_UNVERIFIED", "SALE_SKU_TARGET_LOADING",
+    "SALE_SKU_TARGET_PRODUCT_ROWS_UNVERIFIED",
+    "SALE_SKU_TARGET_PAGER_UNVERIFIED",
+    "SALE_SKU_TARGET_EMPTY_ROW_COUNT_UNVERIFIED",
+    "SALE_SKU_TARGET_EMPTY_SHAPE_UNVERIFIED",
+    "SALE_SKU_TARGET_UNSTABLE"]) {
     page = 0;
     const staged = await scanGeneralPrivateCreateNormalUiReadOnly({ ...options,
       searchSaleSku: async () => ({ diagnostic, allowFinalCreate: false }) });
