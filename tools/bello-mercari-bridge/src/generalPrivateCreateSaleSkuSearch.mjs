@@ -106,7 +106,7 @@ function browserAdapter(page) {
       const query = queryCount === 1 ?
         await textbox.evaluate(element => element.value, undefined,
           { timeout: TIMEOUT }) : null;
-      const data = await page.locator("body").evaluate(({ headers, emptyText }) => {
+      const data = await page.locator("body").evaluate((_body, { headers, emptyText }) => {
         const text = node => (node?.textContent ?? "").replace(/\s+/g, " ").trim();
         const matches = [...document.querySelectorAll("table")].map((table, index) =>
           ({ table, index, headers: [...table.querySelectorAll("thead th")].map(text) }))

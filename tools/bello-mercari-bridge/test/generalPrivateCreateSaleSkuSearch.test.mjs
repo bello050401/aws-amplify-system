@@ -162,3 +162,77 @@ test("normal scan integrates only allowlisted search results", async () => {
       get diagnostic() { throw Error("private-data"); } }) });
   assert.equal(changed.diagnostic, "SALE_SKU_SEARCH_RESULT_UNVERIFIED");
 });
+
+test("browser adapter reads the observed table through locator.evaluate(element, arg)", async () => {
+  const originalDocument = globalThis.document;
+  const headers = ["商品名", "", "公開設定", "価格", "在庫", "いいね!",
+    "閲覧", "作成日時", "更新日時", ""];
+  const textNode = textContent => ({ textContent });
+  const menu = prefix => ({ tagName: "BUTTON",
+    getAttribute: name => name === "data-testid" ? `${prefix}exampleId` : null });
+  const productCells = Array.from({ length: 10 }, (_, index) => ({
+    textContent: index === 1 ? "Known control" : "",
+    matches: () => false,
+    querySelectorAll: () => index === 9 ? [
+      menu("product-menu-button-"), menu("copy-product-menu-item-"),
+      menu("product-page-menu-item-")] : [],
+  }));
+  const productRow = { textContent: "Known control",
+    querySelectorAll: selector => selector === ":scope > td" ? productCells : [] };
+  const blankRow = { textContent: "",
+    querySelectorAll: selector => selector === ":scope > td" ? [textNode("")] : [] };
+  const emptyRow = { textContent: "現在、登録している商品はありません",
+    querySelectorAll: selector => selector === ":scope > td" ?
+      [textNode("現在、登録している商品はありません")] : [] };
+  let currentUrl = baseUrl;
+  let query = "";
+  const actions = [];
+  const table = { querySelectorAll: selector => selector === "thead th" ?
+    headers.map(textNode) : selector === "tbody tr" ?
+      currentUrl === url(positiveControlPrefix) ? [productRow] :
+      currentUrl === url(managementCode) ? [blankRow, emptyRow] : [] : [] };
+  globalThis.document = { location: { get href() { return currentUrl; } },
+    querySelector: () => null,
+    querySelectorAll: selector => {
+      if (selector === "table") return [table];
+      if (selector === '[data-testid="pagination-next-button"]' ||
+          selector === '[data-testid="pagination-prev-button"]') return [];
+      if (selector === 'button[data-testid="product-status-chip"]')
+        return [textNode("ステータス: 出品中")];
+      if (selector === 'button[data-testid="visibility-chip"]')
+        return [textNode("公開状態: すべて")];
+      if (selector === 'input[name="variants.0.skuCode"]')
+        return currentUrl === detailUrl ? [{ value: "B00199" }] : [];
+      return [];
+    } };
+  const textbox = { count: async () => 1,
+    fill: async value => { query = value; actions.push("search-fill"); },
+    evaluate: async (callback, arg) => callback({ value: query }, arg) };
+  const button = { count: async () => 1,
+    click: async () => { currentUrl = url(query); actions.push("search-click"); } };
+  const page = { goto: async target => { currentUrl = target; actions.push("goto"); },
+    url: () => currentUrl,
+    getByRole: (role, options) => role === "textbox" &&
+      options.name === "商品管理コード（前方一致）、商品名検索" ? textbox :
+      role === "button" && options.name === "search" ? button :
+        { count: async () => 0 },
+    locator: selector => selector === "body" ?
+      { evaluate: async (callback, arg) => callback({}, arg) } :
+      selector === "table" ? { nth: index => {
+        assert.equal(index, 0);
+        return { locator: child => { assert.equal(child, "tbody tr");
+          return { first: () => ({ click: async () => {
+            currentUrl = detailUrl; actions.push("open-control"); } }) }; } };
+      } } : { count: async () => 0 },
+    waitForTimeout: async ms => { assert.equal(ms, 600); },
+  };
+  try {
+    const result = await searchGeneralPrivateCreateSaleSkuReadOnly({ page,
+      shopId, managementCode, positiveControlPrefix });
+    assert.equal(result.diagnostic, "SALE_SKU_SEARCH_NO_MATCH_OBSERVED");
+    assert.equal(result.allowFinalCreate, false);
+    assert.equal(actions.filter(action => action === "open-control").length, 1);
+    assert.equal(actions.filter(action => action === "search-click").length, 3);
+    assert.equal(actions.filter(action => action === "search-fill").length, 3);
+  } finally { globalThis.document = originalDocument; }
+});
