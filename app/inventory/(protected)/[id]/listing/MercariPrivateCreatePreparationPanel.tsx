@@ -16,31 +16,38 @@ export function MercariPrivateCreatePreparationPanel({ inventoryId }: { inventor
   const isPrivateTest = isOldPrivateTest || isNextPrivateTest;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [preparationText, setPreparationText] = useState<string | null>(null);
+  const intent = isOldPrivateTest ? OLD_TEST_INTENT :
+    isNextPrivateTest ? NEXT_TEST_INTENT : undefined;
+  async function readPreparation() {
+    const result = await getMercariPrivateCreatePreparationAction(inventoryId, intent);
+    if (!result.ok) {
+      setMessage(result.code === "INCOMPLETE_DRAFT" ?
+        "説明文・価格・画像など、保存済み下書きの必須項目を確認してください。" :
+        result.code === "EXISTING_LINK" ?
+          "この在庫にはメルカリShopsとの紐付けまたは出品記録があります。新規作成は準備できません。" :
+          result.code === "TEST_INTENT_REQUIRED" ?
+            "この在庫は専用の非公開テストとしてのみ準備できます。" :
+          "準備内容を確認できませんでした。ログイン状態と商品を確認してください。");
+      return null;
+    }
+    return result.preparation;
+  }
   async function prepare() {
     if (busy) return;
     setBusy(true);
     setMessage(null);
+    setPreparationText(null);
     try {
-      const result = await getMercariPrivateCreatePreparationAction(
-        inventoryId, isOldPrivateTest ? OLD_TEST_INTENT :
-          isNextPrivateTest ? NEXT_TEST_INTENT : undefined);
-      if (!result.ok) {
-        setMessage(result.code === "INCOMPLETE_DRAFT" ?
-          "説明文・価格・画像など、保存済み下書きの必須項目を確認してください。" :
-          result.code === "EXISTING_LINK" ?
-            "この在庫にはメルカリShopsとの紐付けまたは出品記録があります。新規作成は準備できません。" :
-            result.code === "TEST_INTENT_REQUIRED" ?
-              "この在庫は専用の非公開テストとしてのみ準備できます。" :
-            "準備内容を確認できませんでした。ログイン状態と商品を確認してください。");
-        return;
-      }
-      const blob = new Blob([JSON.stringify(result.preparation, null, 2) + "\n"],
+      const preparation = await readPreparation();
+      if (!preparation) return;
+      const blob = new Blob([JSON.stringify(preparation, null, 2) + "\n"],
         { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      const code = "testManagementCode" in result.preparation ?
-        result.preparation.testManagementCode : result.preparation.inventoryCode;
+      const code = "testManagementCode" in preparation ?
+        preparation.testManagementCode : preparation.inventoryCode;
       link.download = `bello-mercari-private-create-${code}.json`;
       document.body.appendChild(link);
       link.click();
@@ -51,6 +58,26 @@ export function MercariPrivateCreatePreparationPanel({ inventoryId }: { inventor
         "保存済み下書きの準備ファイルを作成しました。メルカリShopsへの送信は行っていません。");
     } catch {
       setMessage("準備ファイルを作成できませんでした。ログイン状態を確認してください。");
+    } finally { setBusy(false); }
+  }
+  async function copy() {
+    if (busy) return;
+    setBusy(true);
+    setMessage(null);
+    setPreparationText(null);
+    try {
+      const preparation = await readPreparation();
+      if (!preparation) return;
+      const json = JSON.stringify(preparation, null, 2) + "\n";
+      setPreparationText(json);
+      try {
+        await navigator.clipboard.writeText(json);
+        setMessage("保存済み下書きの準備内容をコピーしました。Shopsへの送信は行っていません。");
+      } catch {
+        setMessage("自動コピーできませんでした。下の欄から準備内容をコピーしてください。Shopsへの送信は行っていません。");
+      }
+    } catch {
+      setMessage("準備内容を取得できませんでした。ログイン状態を確認してください。");
     } finally { setBusy(false); }
   }
   return <section className="mt-6 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
@@ -67,6 +94,13 @@ export function MercariPrivateCreatePreparationPanel({ inventoryId }: { inventor
         isNextPrivateTest ? "B005413の非公開テスト準備ファイルを作る" :
         "保存済み内容から準備ファイルを作る"}
     </button>
+    <button type="button" disabled={busy} onClick={() => void copy()}
+      className="ml-2 mt-3 rounded border border-blue-700 px-3 py-2 text-blue-700 disabled:opacity-40">
+      準備内容をコピーする
+    </button>
+    {preparationText && <textarea readOnly aria-label="準備内容（コピー用）"
+      className="mt-3 block h-32 w-full rounded border border-gray-300 p-2"
+      value={preparationText} />}
     {message && <p role="status" className="mt-2">{message}</p>}
   </section>;
 }
