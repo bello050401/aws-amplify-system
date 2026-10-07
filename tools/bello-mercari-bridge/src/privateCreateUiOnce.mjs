@@ -8,7 +8,8 @@ import { openFutureCreateTrafficObservationSession } from "./session.mjs";
 import { recordFutureCreateObservationOnce } from "./futureCreateObservationAttempt.mjs";
 import { readExistingUploadedImages } from "./addExistingImageOnce.mjs";
 import { privateFromExactListRow } from "./existingProductReader.mjs";
-import { withShopListingSend } from "./listingSendGate.mjs";
+import { exactPrivateCreateFinalView, readPrivateCreateFinalView,
+  withVerifiedPrivateCreateSend } from "./privateCreateFinalCheck.mjs";
 
 const INVENTORY = "dd273c1e-9b2a-4013-acc6-c445a481fab8";
 const SOURCE_PUBLIC_ID = "2JWp7EJx6aqKfn6dTXc5Q9";
@@ -401,9 +402,27 @@ export async function runPinnedPrivateCreateUiOnce({ root, profileDir,
       { name: "非公開で保存する", exact: true }));
     stage = "SEND_GATE_UNCERTAIN";
     reasonCode = "SEND_GATE_UNAVAILABLE";
-    await withShopListingSend(root, { shopId: PRIVATE_CREATE_SHOP_ID,
+    await withVerifiedPrivateCreateSend(root, { shopId: PRIVATE_CREATE_SHOP_ID,
       inventoryId: INVENTORY, operation: "CREATE",
       attemptId: session.claim.attemptId }, async () => {
+      const before = exactNewDraftId(page.url());
+      if (!before.valid || seenDrafts.size > 1 ||
+          (before.id === null ? seenDrafts.size !== 0 :
+            !seenDrafts.has(before.id)) || await dialog.count() !== 1 ||
+          await dialog.getByRole("button", { name: "公開する", exact: true }).count() !== 1 ||
+          await privateButton.count() !== 1 || !await privateButton.isEnabled())
+        return false;
+      const view = await readPrivateCreateFinalView(page);
+      if (!exactPrivateCreateFinalView(snapshot, view,
+          ["家具・インテリア", "リビング収納", "テレビ台"], FIXED_SHIPPING))
+        return false;
+      const images = await readExistingUploadedImages(page, page.url());
+      const after = exactNewDraftId(page.url());
+      return after.valid && after.id === before.id &&
+        await dialog.count() === 1 && await privateButton.count() === 1 &&
+        await privateButton.isEnabled() &&
+        sameUploadedAsset(selectedAsset, images);
+    }, async () => {
       stage = "PRIVATE_SAVE_UNCERTAIN";
       reasonCode = "PRIVATE_SAVE_CLICK_UNCERTAIN";
       // Attach after the 30-second gate, directly before the only final click.
