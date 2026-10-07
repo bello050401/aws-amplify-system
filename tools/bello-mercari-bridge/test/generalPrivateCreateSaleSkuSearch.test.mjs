@@ -152,17 +152,37 @@ test("read errors reveal only the failed stage, never the exception", async () =
   }
 });
 
-test("browser adapter distinguishes missing search controls from fill failure", async () => {
-  const textbox = { count: async () => 1,
+test("browser adapter reports only fixed search-control counts or lookup exception", async () => {
+  let textboxCount = 1;
+  let buttonCount = 1;
+  let lookupThrows = false;
+  const textbox = { count: async () => textboxCount,
     fill: async () => { throw Error("private-fill"); } };
-  let buttonCount = 0;
   const page = { goto: async () => {},
-    getByRole: role => role === "textbox" ? textbox :
-      { count: async () => buttonCount, click: async () => {} } };
+    getByRole: role => {
+      if (lookupThrows) throw Error("private-lookup");
+      return role === "textbox" ? textbox :
+        { count: async () => buttonCount, click: async () => {} };
+    } };
   const options = { page, shopId, managementCode, positiveControlPrefix };
-  const missing = await searchGeneralPrivateCreateSaleSkuReadOnly(options);
-  assert.equal(missing.diagnostic, "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE");
+  for (const [textboxes, buttons, expected] of [
+    [0, 1, "SALE_SKU_SEARCH_TEXTBOX_ZERO"],
+    [2, 1, "SALE_SKU_SEARCH_TEXTBOX_MULTIPLE"],
+    [1, 0, "SALE_SKU_SEARCH_BUTTON_ZERO"],
+    [1, 2, "SALE_SKU_SEARCH_BUTTON_MULTIPLE"],
+  ]) {
+    textboxCount = textboxes;
+    buttonCount = buttons;
+    const result = await searchGeneralPrivateCreateSaleSkuReadOnly(options);
+    assert.deepEqual(result, { diagnostic: expected, allowFinalCreate: false });
+  }
+  textboxCount = 1;
   buttonCount = 1;
+  lookupThrows = true;
+  const lookup = await searchGeneralPrivateCreateSaleSkuReadOnly(options);
+  assert.equal(lookup.diagnostic, "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE");
+  assert.equal(JSON.stringify(lookup).includes("private-lookup"), false);
+  lookupThrows = false;
   const fillFailure = await searchGeneralPrivateCreateSaleSkuReadOnly(options);
   assert.equal(fillFailure.diagnostic, "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE");
   assert.equal(JSON.stringify(fillFailure).includes("private-fill"), false);
@@ -193,6 +213,8 @@ test("normal scan integrates only allowlisted search results", async () => {
     diagnostic: "SALE_SKU_SEARCH_NO_MATCH_OBSERVED", allowFinalCreate: false });
   for (const diagnostic of ["SALE_SKU_SEARCH_NAVIGATION_UNAVAILABLE",
     "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE",
+    "SALE_SKU_SEARCH_TEXTBOX_ZERO", "SALE_SKU_SEARCH_TEXTBOX_MULTIPLE",
+    "SALE_SKU_SEARCH_BUTTON_ZERO", "SALE_SKU_SEARCH_BUTTON_MULTIPLE",
     "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE",
     "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE",
     "SALE_SKU_SEARCH_CONTROL_ROW_CLICK_UNAVAILABLE"]) {

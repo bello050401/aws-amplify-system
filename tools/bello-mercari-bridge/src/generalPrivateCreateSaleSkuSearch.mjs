@@ -11,6 +11,10 @@ const TIMEOUT = 12_000;
 const STAGE_FAILURES = new Set([
   "SALE_SKU_SEARCH_NAVIGATION_UNAVAILABLE",
   "SALE_SKU_SEARCH_CONTROL_LOOKUP_UNAVAILABLE",
+  "SALE_SKU_SEARCH_TEXTBOX_ZERO",
+  "SALE_SKU_SEARCH_TEXTBOX_MULTIPLE",
+  "SALE_SKU_SEARCH_BUTTON_ZERO",
+  "SALE_SKU_SEARCH_BUTTON_MULTIPLE",
   "SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE",
   "SALE_SKU_SEARCH_DOM_READ_UNAVAILABLE",
   "SALE_SKU_SEARCH_CONTROL_ROW_CLICK_UNAVAILABLE",
@@ -101,10 +105,22 @@ function browserAdapter(page) {
     goto: url => page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT }),
     search: async (query, markStage) => {
       const textbox = page.getByRole("textbox", { name: SEARCH_LABEL });
-      // Match the observed working UI action; count still requires one control.
+      const textboxCount = await textbox.count();
+      if (textboxCount !== 1) {
+        if (textboxCount === 0) markStage?.("SALE_SKU_SEARCH_TEXTBOX_ZERO");
+        else if (Number.isSafeInteger(textboxCount) && textboxCount > 1)
+          markStage?.("SALE_SKU_SEARCH_TEXTBOX_MULTIPLE");
+        throw Error("Search textbox count unavailable");
+      }
+      // Match the observed working UI action; count still requires one button.
       const button = page.getByRole("button", { name: "search" });
-      if (await textbox.count() !== 1 || await button.count() !== 1)
-        throw Error("Search controls unavailable");
+      const buttonCount = await button.count();
+      if (buttonCount !== 1) {
+        if (buttonCount === 0) markStage?.("SALE_SKU_SEARCH_BUTTON_ZERO");
+        else if (Number.isSafeInteger(buttonCount) && buttonCount > 1)
+          markStage?.("SALE_SKU_SEARCH_BUTTON_MULTIPLE");
+        throw Error("Search button count unavailable");
+      }
       markStage?.("SALE_SKU_SEARCH_CONTROL_ACTION_UNAVAILABLE");
       await textbox.fill(query, { timeout: TIMEOUT });
       await button.click({ timeout: TIMEOUT });
