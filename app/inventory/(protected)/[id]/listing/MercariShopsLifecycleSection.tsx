@@ -2,8 +2,6 @@
 
 import { useRef, useState } from "react";
 import { prepareMercariVisibilityPcJobAction } from "@/app/actions/mercariVisibilityHandoff";
-import { B005396_INVENTORY_ID } from
-  "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import type { ChannelListingRecord } from "@/lib/listing/types";
 import { shopsAdminUrl, shopsLifecycle,
   type ShopsOperation } from "@/lib/listing/mercariBridge/listingLifecycle";
@@ -183,11 +181,9 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
     {state === "NOT_LISTED" && canPrepare && !listing && ![
       "dd273c1e-9b2a-4013-acc6-c445a481fab8",
       "5b0f3587-cbbb-4c09-ae78-595b2b3e353f",
-    ].includes(inventoryId.toLowerCase()) ? <a href={inventoryId.toLowerCase() ===
-      B005396_INVENTORY_ID ? "#mercari-http-listing" : "#mercari-manual-preparation"}
+    ].includes(inventoryId.toLowerCase()) ? <a href="#mercari-http-listing"
       className="mt-3 inline-block rounded border border-gray-300 px-3 py-2 text-xs font-bold">
-      {inventoryId.toLowerCase() === B005396_INVENTORY_ID ?
-        "HTTP方式の出品欄へ" : "出品準備へ"}
+      HTTP方式の出品欄へ
     </a> : <button type="button"
       disabled={!control.enabled || busy ||
         (control.action !== null && preparedActions.has(control.action))}

@@ -15,8 +15,6 @@ import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
 import { MercariShopsLifecycleSection } from "./MercariShopsLifecycleSection";
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
-import { B005396_INVENTORY_ID } from
-  "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import { NextEngineListingSection } from "./NextEngineListingSection";
 import type { MasterSyncView } from "@/lib/listing/nextEngine/masterSync";
 import { generateListingCopyAction } from "@/app/actions/ai";
@@ -623,10 +621,10 @@ export function ListingForm({
       <MercariShopsLifecycleSection inventoryId={inventoryId} listing={channelListing}
         canPrepare={canSendNextEngine} />
 
-      {canSendNextEngine && inventoryId.toLowerCase() === B005396_INVENTORY_ID &&
+      {canSendNextEngine &&
         <MercariManualListingPackPanel inventoryId={inventoryId}
           availableQuantity={availableQuantity} hasDraft={Boolean(draft)}
-          hasShopsRecord={Boolean(channelListing)} />}
+          hasShopsRecord={Boolean(channelListing)} mode="HTTP" />}
 
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
           上の出品履歴と同じ理由でChannelListing存在時のみ表示する。 */}

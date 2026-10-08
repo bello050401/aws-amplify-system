@@ -138,7 +138,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
           item.id.toLowerCase() === B005396_INVENTORY_ID ? null :
             <MercariManualListingPackPanel inventoryId={item.id}
               availableQuantity={item.quantity} hasDraft={Boolean(draft)}
-              hasShopsRecord={Boolean(channelListing)} />
+              hasShopsRecord={Boolean(channelListing)} mode="PC" />
         )}
         {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
             ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
