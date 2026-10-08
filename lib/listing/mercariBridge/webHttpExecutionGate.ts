@@ -31,6 +31,8 @@ type BeginEvent = { type: "BEGIN"; nowMs: number; checks: WebHttpSendChecks;
   attemptId: string };
 type WebHttpExecutionEvent = CheckEvent | BeginEvent |
   { type: "AUTH_EXPIRED" } |
+  { type: "USER_REAUTHENTICATED"; verifiedByUser: boolean;
+    reauthenticatedAtMs: number } |
   { type: "RESULT_UNKNOWN"; attemptId: string };
 
 const validTime = (value: number) => Number.isSafeInteger(value) && value >= 0;
@@ -110,6 +112,13 @@ export function transitionWebHttpExecution(state: WebHttpExecutionState,
   if (state.phase === "BLOCKED_EXISTING_LINK") return state;
   if (event.type === "AUTH_EXPIRED")
     return { ...state, phase: "AUTH_REQUIRED", nextEligibleAtMs: null };
+  if (state.phase === "AUTH_REQUIRED") {
+    if (event.type !== "USER_REAUTHENTICATED" ||
+        event.verifiedByUser !== true ||
+        !validTime(event.reauthenticatedAtMs)) return state;
+    return { ...state, phase: "PREPARED", nextEligibleAtMs: null };
+  }
+  if (event.type === "USER_REAUTHENTICATED") return state;
   if (event.type === "RESULT_UNKNOWN") return state;
   const checked = checkedPhase(state, event);
   if (event.type === "CHECK" || checked.phase !== "READY") return checked;

@@ -1117,6 +1117,35 @@ const schema = a.schema({
     .identifier(["requestId"])
     .authorization((allow) => [allow.group("ADMIN").to(["create", "read"])]),
 
+  /** One conditional 30-second reservation cursor for the Shops HTTP sender. */
+  MercariBridgeHttpShopSendSlot: a
+    .model({
+      shopId: a.string().required(),
+      revision: a.integer().required(),
+      lastStartedAt: a.datetime().required(),
+      requestId: a.string().required(),
+      attemptId: a.string().required(),
+      requestedBy: a.string().required(),
+    })
+    .identifier(["shopId"])
+    .authorization((allow) => [allow.group("ADMIN").to(["create", "read", "update"])]),
+
+  /** One immutable start claim per Web draft; unknown outcomes cannot be retried. */
+  MercariBridgeHttpSendAttempt: a
+    .model({
+      requestId: a.string().required(),
+      inventoryId: a.string().required(),
+      shopId: a.string().required(),
+      snapshotFingerprint: a.string().required(),
+      attemptId: a.string().required(),
+      slotRevision: a.integer().required(),
+      reservedAt: a.datetime().required(),
+      requestedBy: a.string().required(),
+      status: a.string().required(),
+    })
+    .identifier(["requestId"])
+    .authorization((allow) => [allow.group("ADMIN").to(["create", "read"])]),
+
   /** One sanitized PC observation per explicit attempt. */
   MercariBridgeReadResult: a
     .model({
