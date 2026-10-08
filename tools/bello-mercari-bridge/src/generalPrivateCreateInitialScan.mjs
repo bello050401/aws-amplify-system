@@ -5,6 +5,7 @@ import { generalPrivateSaleBrowserAdapter,
 
 const ORIGIN = "https://mercari-shops.com";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
+const REMOTE_TITLE_MAX = 500;
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const titleKey = value => value.normalize("NFKC").replace(/\s+/g, "").trim();
 
@@ -17,7 +18,7 @@ function exactSaleDetail(view, shopId, row) {
       view.documentUrl === view.url && view.loading === false &&
       view.nameFieldCount === 1 && view.skuFieldCount === 1 &&
       view.priceFieldCount === 1 && view.quantityFieldCount === 1 &&
-      typeof view.title === "string" && view.title.length <= 130 &&
+      typeof view.title === "string" && view.title.length <= REMOTE_TITLE_MAX &&
       titleKey(view.title) === titleKey(row.title) &&
       typeof view.skuCode === "string" &&
       (view.skuCode === "" || ID.test(view.skuCode)) &&
@@ -84,7 +85,7 @@ export async function captureGeneralPrivateInitialScanReadOnly({ page, shopId,
     if (!first || pageIndex === 0 && first.prevDisabled !== true ||
         pageIndex > 0 && first.prevDisabled !== false ||
         first.rows.some(row => !ID.test(row.remoteId ?? "") ||
-          typeof row.title !== "string" || row.title.length > 130))
+          typeof row.title !== "string" || row.title.length > REMOTE_TITLE_MAX))
       throw Error("SALE_PAGE_UNVERIFIED");
     await ui.wait(600);
     const second = await ui.saleSnapshot();

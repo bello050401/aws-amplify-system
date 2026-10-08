@@ -120,6 +120,16 @@ test("only the one approved sold-out public title is a private-test exception", 
     now + 120_001), null);
 });
 
+test("unrelated existing sale titles may exceed 130 characters", () => {
+  const scan = knownScan();
+  scan.tabs[0].pages[1].rows[0].title = "既存商品".repeat(35);
+  assert.equal(inspectB005396KnownExistingPrivateTest(knownPack(), scan, now)
+    .status, "B005396_PRIVATE_TEST_EXCEPTION");
+  scan.tabs[0].pages[1].rows[0].title = "既存商品".repeat(126);
+  assert.equal(inspectB005396KnownExistingPrivateTest(knownPack(), scan, now)
+    .status, "REMOTE_SCAN_UNVERIFIED");
+});
+
 test("a changed existing title cannot become a B005396 no-match", () => {
   const scan = knownScan();
   scan.tabs[0].pages[0].rows[0].title = "HUKLA KASTOR title changed";

@@ -7,6 +7,7 @@ import { exactB005396ReviewedPack } from
   "./b005396ReviewedValues.mjs";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
+const REMOTE_SALE_TITLE_MAX = 500;
 const TABS = ["ON_SALE_ALL", "DRAFT_ALL"];
 const fixed = (status, onSaleRows = 0, draftRows = 0) => ({
   status, onSaleRows, draftRows, allowFinalCreate: false,
@@ -101,7 +102,8 @@ export function inspectGeneralPrivateCreateRemoteScan(input, scan,
               (typeof row.remoteId !== "string" || !ID.test(row.remoteId) ||
                 allIds.has(row.remoteId))) ||
             (tabIndex === 0 && row.remoteId === null) ||
-            typeof row.title !== "string" || row.title.length > 130 ||
+            typeof row.title !== "string" || row.title.length >
+              (tabIndex === 0 ? REMOTE_SALE_TITLE_MAX : 130) ||
             (row.skuCode !== null &&
               (typeof row.skuCode !== "string" ||
                 !ID.test(row.skuCode))) ||

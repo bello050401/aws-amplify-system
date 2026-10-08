@@ -83,6 +83,22 @@ test("changed detail title fails closed before draft read", async () => {
   assert.equal(ui.getDraftReads(), 0);
 });
 
+test("existing sale titles over 130 characters are checked against their details", async () => {
+  const ui = fixture({ saleTitle: "既存商品".repeat(35) });
+  const scan = await captureGeneralPrivateInitialScanReadOnly({ shopId,
+    managementCode, title: "対象商品", expectedDraftRowCount: 1, ...ui });
+  assert.equal(scan.tabs[0].pages[0].rows[0].title.length, 140);
+  assert.equal(ui.getDraftReads(), 2);
+});
+
+test("unreasonably long existing sale titles still fail closed", async () => {
+  const ui = fixture({ saleTitle: "既存商品".repeat(126) });
+  await assert.rejects(captureGeneralPrivateInitialScanReadOnly({ shopId,
+    managementCode, title: "対象商品", expectedDraftRowCount: 1, ...ui }),
+  /SALE_PAGE_UNVERIFIED/);
+  assert.equal(ui.getDraftReads(), 0);
+});
+
 test("observed blank sale SKU remains distinct from an unread detail", async () => {
   const ui = fixture({ saleTitle: "対象商品", skuCode: "",
     quantity: 0, priceYen: 89_800 });
