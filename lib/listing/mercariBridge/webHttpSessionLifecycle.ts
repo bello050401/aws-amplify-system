@@ -17,10 +17,11 @@ export type WebHttpSessionStore = {
   write: (record: WebHttpSessionRecord) => Promise<void>;
 };
 export type WebHttpSessionProbe = (opaqueMaterial: string) =>
-  Promise<"VALID" | "EXPIRED" | "UNKNOWN">;
+  Promise<"VALID" | "EXPIRED" | "ADDITIONAL_AUTH" | "UNKNOWN">;
 export type WebHttpSessionDecision = {
   status: "READY_FOR_READONLY_PREFLIGHT" | "AUTH_REQUIRED" |
-    "AUTH_UNVERIFIED" | "STORAGE_UNAVAILABLE" | "INVALID_INPUT";
+    "ADDITIONAL_AUTH_REQUIRED" | "AUTH_UNVERIFIED" |
+    "STORAGE_UNAVAILABLE" | "INVALID_INPUT";
   allowHttpWrite: false;
   reauthenticationRequired: boolean;
 };
@@ -28,7 +29,8 @@ export type WebHttpSessionDecision = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const decision = (status: WebHttpSessionDecision["status"]):
   WebHttpSessionDecision => ({ status, allowHttpWrite: false,
-    reauthenticationRequired: status === "AUTH_REQUIRED" });
+    reauthenticationRequired: status === "AUTH_REQUIRED" ||
+      status === "ADDITIONAL_AUTH_REQUIRED" });
 const validClock = (value: number) => Number.isSafeInteger(value) && value >= 0;
 const validIso = (value: string) => typeof value === "string" &&
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
@@ -48,7 +50,8 @@ function validRecord(row: WebHttpSessionRecord): boolean {
 async function checkProbe(probe: WebHttpSessionProbe, material: string) {
   try {
     const value = await probe(material);
-    return value === "VALID" || value === "EXPIRED" ? value : "UNKNOWN";
+    return value === "VALID" || value === "EXPIRED" ||
+      value === "ADDITIONAL_AUTH" ? value : "UNKNOWN";
   } catch { return "UNKNOWN"; }
 }
 
@@ -78,7 +81,9 @@ clock: () => number = Date.now): Promise<WebHttpSessionDecision> {
     return decision("INVALID_INPUT");
   const proof = await checkProbe(probe, row.opaqueMaterial);
   if (proof !== "VALID")
-    return decision(proof === "EXPIRED" ? "AUTH_REQUIRED" : "AUTH_UNVERIFIED");
+    return decision(proof === "EXPIRED" ? "AUTH_REQUIRED" :
+      proof === "ADDITIONAL_AUTH" ? "ADDITIONAL_AUTH_REQUIRED" :
+        "AUTH_UNVERIFIED");
   // A probe can be slow. Never store a session after its known expiry.
   const afterProbe = clock();
   if (!validClock(afterProbe) || row.expiresAt !== null &&
@@ -107,6 +112,7 @@ export async function checkWebHttpSession(shopId: string, ownerSub: string,
     return decision("AUTH_REQUIRED");
   const proof = await checkProbe(probe, row.opaqueMaterial);
   if (proof === "EXPIRED") return decision("AUTH_REQUIRED");
+  if (proof === "ADDITIONAL_AUTH") return decision("ADDITIONAL_AUTH_REQUIRED");
   if (proof !== "VALID") return decision("AUTH_UNVERIFIED");
   const afterProbe = clock();
   if (!validClock(afterProbe) || row.expiresAt !== null &&

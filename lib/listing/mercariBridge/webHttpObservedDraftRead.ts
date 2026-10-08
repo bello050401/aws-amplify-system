@@ -22,13 +22,18 @@ type GraphqlRequest = { operationName: "GetProductDraft"; query: string;
   variables: { id: string } };
 export type AuthenticatedDraftReadTransport = {
   /** Must be supplied by a separately verified authenticated context. */
-  post: (request: GraphqlRequest) => Promise<{ status: number; body: unknown }>;
+  post: (request: GraphqlRequest) => Promise<{
+    status: number; body: unknown;
+    /** Set only by a trusted adapter that has identified an additional auth step. */
+    additionalAuthRequired?: true;
+  }>;
 };
 type Result = { ok: true; code: "EXISTING_DRAFT_OBSERVED_NO_SEND";
   draftId: typeof B005396_CORRECT_DRAFT_ID; duplicateDraftObserved: true;
   imageIdentityVerified: false; listingConfirmed: false;
   allowCreate: false; allowUpdate: false } |
   { ok: false; code: "INVALID_JOB" | "AUTH_TRANSPORT_UNAVAILABLE" |
+    "AUTH_REQUIRED_NO_SEND" | "ADDITIONAL_AUTH_REQUIRED_NO_SEND" |
     "REMOTE_READ_UNVERIFIED" | "DRAFT_MISMATCH";
     allowCreate: false; allowUpdate: false };
 
@@ -61,17 +66,28 @@ export async function readObservedB005396Draft(job: WebHttpDraftJob,
     return { ok: false, code: "INVALID_JOB", allowCreate: false,
       allowUpdate: false };
   }
-  let correctResult: { status: number; body: unknown };
-  let emptyResult: { status: number; body: unknown };
+  let correctResult: Awaited<ReturnType<AuthenticatedDraftReadTransport["post"]>>;
+  let emptyResult: Awaited<ReturnType<AuthenticatedDraftReadTransport["post"]>>;
   try {
     correctResult = await transport.post({ operationName: "GetProductDraft",
       query: GET_PRODUCT_DRAFT, variables: { id: B005396_CORRECT_DRAFT_ID } });
+    if (correctResult.status === 401 || correctResult.additionalAuthRequired === true)
+      return { ok: false, code: correctResult.additionalAuthRequired === true ?
+        "ADDITIONAL_AUTH_REQUIRED_NO_SEND" : "AUTH_REQUIRED_NO_SEND",
+        allowCreate: false, allowUpdate: false };
+    if (correctResult.status !== 200)
+      return { ok: false, code: "REMOTE_READ_UNVERIFIED",
+        allowCreate: false, allowUpdate: false };
     emptyResult = await transport.post({ operationName: "GetProductDraft",
       query: GET_PRODUCT_DRAFT, variables: { id: B005396_EMPTY_DRAFT_ID } });
   } catch {
     return { ok: false, code: "REMOTE_READ_UNVERIFIED",
       allowCreate: false, allowUpdate: false };
   }
+  if (emptyResult.status === 401 || emptyResult.additionalAuthRequired === true)
+    return { ok: false, code: emptyResult.additionalAuthRequired === true ?
+      "ADDITIONAL_AUTH_REQUIRED_NO_SEND" : "AUTH_REQUIRED_NO_SEND",
+      allowCreate: false, allowUpdate: false };
   const correct = readDraft(correctResult, B005396_CORRECT_DRAFT_ID);
   const empty = readDraft(emptyResult, B005396_EMPTY_DRAFT_ID);
   if (!correct || !empty)
