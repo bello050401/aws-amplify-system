@@ -17,6 +17,7 @@ import { PINNED_READ_QUERY_SHA256, runPinnedDirectReadProbeOnce } from
 import { CREATE_TEST_TARGET, readCreateTestObservation } from
   "../src/createTestAttempt.mjs";
 import { claimGeneralPrivateCreateOnce,
+  readGeneralPrivateCreateClaim,
   writeGeneralPrivateCreateResultOnce } from
   "../src/generalPrivateCreateJob.mjs";
 
@@ -84,6 +85,20 @@ test("B005396 PC draft action stays review-held and keeps BELLO listing state", 
     assert.equal(attempt.status, 303);
     assert.equal(runs, 0);
   } finally { await app.close(); }
+  const dryEnabled = await startDesktopApp({ ...config(), dataDir }, {
+    openBrowser: null, offlineDraftActionEnabled: true });
+  try {
+    const csrf = await token(dryEnabled.url);
+    const attempt = await fetch(`${dryEnabled.url}/action`, { method: "POST",
+      redirect: "manual", headers: { Origin: dryEnabled.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "run-general-private-draft",
+        inventoryId }) });
+    assert.equal(attempt.status, 303);
+    assert.equal(await readGeneralPrivateCreateClaim(join(dataDir, "Queue"),
+      inventoryId), null, "the flag alone cannot claim or save a draft");
+    assert.equal(runs, 0);
+  } finally { await dryEnabled.close(); }
   const offline = await startDesktopApp({ ...config(), dataDir }, {
     openBrowser: null, offlineDraftActionEnabled: true,
     runGeneralDraft: async args => { runs++;
