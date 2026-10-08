@@ -63,7 +63,7 @@ function diagnoseSale(snapshot, url) {
   return "SALE_READY";
 }
 
-async function stableSale(ui, url, previousRows = null) {
+export async function stableGeneralPrivateSaleList(ui, url, previousRows = null) {
   let previous = null;
   let stable = 0;
   let diagnostic = "SALE_UNSTABLE";
@@ -85,7 +85,7 @@ async function stableSale(ui, url, previousRows = null) {
   return { snapshot: null, diagnostic };
 }
 
-function browserAdapter(page) {
+export function generalPrivateSaleBrowserAdapter(page) {
   return {
     gotoSale: url => page.goto(url, { waitUntil: "domcontentloaded",
       timeout: 12000 }),
@@ -135,6 +135,7 @@ function browserAdapter(page) {
               return true;
             }) && suffixes.every(suffix => suffix === suffixes[0]);
           return { title: text(cells[1]),
+            remoteId: menuControlsVerified ? suffixes[0] : null,
             signature: JSON.stringify(cells.map(text)), cellCount: cells.length,
             dataActionCount, menuControlsVerified };
         }) : [];
@@ -164,6 +165,20 @@ function browserAdapter(page) {
     },
     clickNext: () => page.locator('[data-testid="pagination-next-button"]')
       .click({ timeout: 12000 }),
+    clickSaleRow: (tableIndex, index) => page.locator("table").nth(tableIndex)
+      .locator("tbody tr").nth(index).click({ timeout: 12000 }),
+    saleDetail: async () => {
+      const data = await page.locator("body").evaluate(() => {
+        const names = document.querySelectorAll('input[name="name"]');
+        const codes = document.querySelectorAll('input[name="variants.0.skuCode"]');
+        return { documentUrl: document.location.href,
+          loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),
+          nameFieldCount: names.length, skuFieldCount: codes.length,
+          title: names.length === 1 ? names[0].value : null,
+          skuCode: codes.length === 1 ? codes[0].value : null };
+      });
+      return { ...data, url: page.url() };
+    },
     wait: ms => page.waitForTimeout(ms),
   };
 }
@@ -182,13 +197,13 @@ export async function scanGeneralPrivateCreateNormalUiReadOnly({ page, shopId,
       !adapter && !page || typeof collectDrafts !== "function" ||
       positiveControlPrefix !== null && typeof searchSaleSku !== "function")
     return fixed("REMOTE_SCAN_INCOMPLETE", "INPUT_UNVERIFIED");
-  const ui = adapter ?? browserAdapter(page);
+  const ui = adapter ?? generalPrivateSaleBrowserAdapter(page);
   const saleUrl = `${ORIGIN}/seller/shops/${shopId}/products?tab=on_sale`;
   try {
     await ui.gotoSale(saleUrl);
     let previousRows = null;
     for (let pageIndex = 0; pageIndex < 50; pageIndex++) {
-      const settled = await stableSale(ui, saleUrl, previousRows);
+      const settled = await stableGeneralPrivateSaleList(ui, saleUrl, previousRows);
       const current = settled.snapshot;
       if (!current) return fixed("REMOTE_SCAN_INCOMPLETE", settled.diagnostic);
       if (pageIndex === 0 && (current.prevDisabled !== true ||
