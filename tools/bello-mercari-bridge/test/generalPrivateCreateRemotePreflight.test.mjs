@@ -181,6 +181,10 @@ test("known-title basis is recorded once and never overrides a local claim", asy
     const ordinary = await preflightGeneralPrivateCreateRemote({ root,
       inventoryId: knownInventoryId, captureReadOnlyScan: captureOrdinary });
     assert.equal(ordinary.status, "REMOTE_DUPLICATE_POSSIBLE");
+    const missingBaseline = await preflightGeneralPrivateCreateRemote({ root,
+      inventoryId: knownInventoryId, captureReadOnlyScan: captureOrdinary,
+      allowKnownExistingPrivateTest: true });
+    assert.equal(missingBaseline.status, "REMOTE_SCAN_UNVERIFIED");
     const permitted = await preflightGeneralPrivateCreateRemote({ root,
       inventoryId: knownInventoryId, captureReadOnlyScan,
       allowKnownExistingPrivateTest: true });

@@ -169,13 +169,20 @@ test("dry runner reads but cannot enter form, image upload or save path", async 
     const result = await runB005396ReviewedDraft({ root, inventoryId,
       origin: "https://bello.example.invalid", belloProfileDir: root,
       shopsProfileDir: root, playwrightModulePath: root }, {
-      evidence, fetchSnapshot, captureInitialScan: async () => ({}),
-      remotePreflight: async () => ({ status: "NO_MATCH_IN_OBSERVED_UI" }),
+      evidence, fetchSnapshot,
+      captureInitialScan: async () => ({ draftBaseline }),
+      remotePreflight: async ({ captureReadOnlyScan,
+        allowKnownExistingPrivateTest }) => {
+        assert.equal(allowKnownExistingPrivateTest, true);
+        assert.equal((await captureReadOnlyScan()).draftBaseline,
+          draftBaseline);
+        return { status: "B005396_PRIVATE_TEST_EXCEPTION" };
+      },
       flow: async () => { flowCalls++; } });
     assert.equal(result.status, "BLOCKED");
     assert.equal(result.diagnostic, "DRY_READ_ONLY");
     assert.equal(result.reviewMatched, true);
-    assert.equal(result.remoteStatus, "NO_MATCH_IN_OBSERVED_UI");
+    assert.equal(result.remoteStatus, "B005396_PRIVATE_TEST_EXCEPTION");
     assert.equal(flowCalls, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

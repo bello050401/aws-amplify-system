@@ -188,7 +188,8 @@ export async function runB005396ReviewedDraft(args, {
     const reviewed = await reviewGate({ inventoryId: INVENTORY, pack });
     let remote;
     try { remote = await remotePreflight({ root: args.root,
-      inventoryId: INVENTORY, captureReadOnlyScan: capture }); }
+      inventoryId: INVENTORY, captureReadOnlyScan: capture,
+      allowKnownExistingPrivateTest: true }); }
     catch { remote = { status: "REMOTE_SCAN_UNAVAILABLE" }; }
     return { ...fixed(reviewed ? "DRY_READ_ONLY" : "REVIEW_HOLD"),
       reviewMatched: reviewed, remoteStatus: remote.status };
