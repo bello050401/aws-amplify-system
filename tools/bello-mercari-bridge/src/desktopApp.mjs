@@ -44,8 +44,8 @@ import { enqueueGeneralPrivateCreate, listGeneralPrivateCreateJobs } from
   "./generalPrivateCreateJob.mjs";
 import { readGeneralPrivateCreateRequestJson } from
   "./generalPrivateCreateRequest.mjs";
-import { runB005396PrivateDraftPcFlow } from
-  "./generalPrivateDraftPcFlow.mjs";
+import { runB005396ReviewedDraft } from
+  "./b005396ReviewedDraftRunner.mjs";
 import { capturePublicVisibilityProofReadOnly,
   readCurrentPublicVisibilityProof } from "./visibilityPublicProof.mjs";
 import { generalPrivateDraftOccupationActive,
@@ -316,7 +316,8 @@ export async function startDesktopApp(config, {
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
   enqueueVisibility = enqueueVisibilityPcJob,
   runVisibility = runVisibilityTransitionOnce,
-  runGeneralDraft = runB005396PrivateDraftPcFlow,
+  runGeneralDraft = args => runB005396ReviewedDraft(args, {
+    mode: "DRY_READ_ONLY" }),
   offlineDraftActionEnabled = false,
   verifyPublicVisibility = capturePublicVisibilityProofReadOnly,
   readPublicVisibility = readCurrentPublicVisibilityProof,

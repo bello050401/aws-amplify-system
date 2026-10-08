@@ -135,6 +135,9 @@ export async function captureGeneralPrivateInitialScanReadOnly({ page, shopId,
     return { remoteId: row.draftId, title: row.title,
       skuCode: row.skuCode, detailVerified: true };
   });
+  // The long detail walk must end with the original on-sale page sets intact.
+  for (const pageIndex of salePages.keys())
+    await returnToPage(ui, saleUrl, pageIndex, salePages);
   const rawPages = salePages.map(({ listRows, tableIndex, ...raw }) => raw);
   return { shopId, managementCode, observedAt: new Date().toISOString(),
     tabs: [
