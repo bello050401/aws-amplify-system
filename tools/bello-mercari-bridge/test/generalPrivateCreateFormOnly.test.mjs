@@ -70,6 +70,38 @@ test("an incomplete remote read blocks before BELLO fetch or claim", async () =>
   });
 });
 
+test("remote status is read once and changing or throwing getters fail closed", async () => {
+  await withQueue(async root => {
+    let reads = 0;
+    const result = await fillGeneralPrivateCreateFormOnly({ root, inventoryId }, {
+      remotePreflight: async () => ({
+        get status() { return ++reads === 1 ?
+          "REMOTE_SCAN_INCOMPLETE" : "TOKEN_ABC123_PRIVATE"; },
+        allowFinalCreate: false,
+      }),
+    });
+    assert.deepEqual(result,
+      { status: "BLOCKED", diagnostic: "REMOTE_SCAN_INCOMPLETE" });
+    assert.equal(reads, 1);
+    assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, false);
+  });
+  for (const failingProperty of ["status", "allowFinalCreate"]) {
+    await withQueue(async root => {
+      const remote = { status: "REMOTE_SCAN_INCOMPLETE",
+        allowFinalCreate: false };
+      Object.defineProperty(remote, failingProperty, {
+        get() { throw Error("TOKEN_ABC123_PRIVATE"); },
+      });
+      const result = await fillGeneralPrivateCreateFormOnly({ root, inventoryId }, {
+        remotePreflight: async () => remote,
+      });
+      assert.deepEqual(result,
+        { status: "BLOCKED", diagnostic: "REMOTE_SCAN_UNVERIFIED" });
+      assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, false);
+    });
+  }
+});
+
 test("BELLO source is re-read before the claim and form fill never saves", async () => {
   await withQueue(async root => {
     const order = [];

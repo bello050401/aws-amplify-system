@@ -77,12 +77,20 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
     return { status: "BLOCKED", diagnostic: "PACK_OR_BRAND_UNVERIFIED" };
   if (await readGeneralPrivateCreateClaim(root, inventoryId))
     return { status: "BLOCKED", diagnostic: "LOCAL_CLAIM_UNKNOWN_NO_RETRY" };
-  const remote = await remotePreflight({ root, inventoryId,
-    captureReadOnlyScan });
-  if (remote?.status !== "NO_MATCH_IN_OBSERVED_UI" ||
-      remote.allowFinalCreate !== false)
+  let remoteStatus;
+  let allowFinalCreate;
+  try {
+    const remote = await remotePreflight({ root, inventoryId,
+      captureReadOnlyScan });
+    remoteStatus = remote?.status;
+    allowFinalCreate = remote?.allowFinalCreate;
+  } catch {
+    return { status: "BLOCKED", diagnostic: "REMOTE_SCAN_UNVERIFIED" };
+  }
+  if (remoteStatus !== "NO_MATCH_IN_OBSERVED_UI" ||
+      allowFinalCreate !== false)
     return { status: "BLOCKED", diagnostic:
-      REMOTE_DIAGNOSTICS.has(remote?.status) ? remote.status :
+      REMOTE_DIAGNOSTICS.has(remoteStatus) ? remoteStatus :
         "REMOTE_SCAN_UNVERIFIED" };
   let files;
   try {
