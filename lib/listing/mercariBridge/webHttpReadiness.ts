@@ -59,19 +59,26 @@ export async function checkWebHttpReadiness(job: WebHttpDraftJob,
       !ports.sessionStore || !validTime(clock())) return result("INVALID_INPUT");
 
   let transport: AuthenticatedDraftReadTransport | null = null;
-  const session = await checkWebHttpSession(job.shopId, ownerSub,
-    ports.sessionStore, async material => {
+  let verifiedMaterial: string | null = null;
+  const probe = async (material: string) => {
       try {
+        if (verifiedMaterial !== null && material !== verifiedMaterial)
+          return "UNKNOWN" as const;
         transport = ports.transportForSession(material);
         const read = await readObservedB005396Draft(knownDraftJob, transport);
-        if (read.ok) return "VALID";
-        if (read.code === "AUTH_REQUIRED_NO_SEND") return "EXPIRED";
+        if (read.ok) {
+          verifiedMaterial = material;
+          return "VALID" as const;
+        }
+        if (read.code === "AUTH_REQUIRED_NO_SEND") return "EXPIRED" as const;
         if (read.code === "ADDITIONAL_AUTH_REQUIRED_NO_SEND")
-          return "ADDITIONAL_AUTH";
+          return "ADDITIONAL_AUTH" as const;
       } catch { /* Unverified access must stop without exposing auth material. */ }
       transport = null;
-      return "UNKNOWN";
-    }, clock);
+      return "UNKNOWN" as const;
+    };
+  const session = await checkWebHttpSession(job.shopId, ownerSub,
+    ports.sessionStore, probe, clock);
   if (session.status !== "READY_FOR_READONLY_PREFLIGHT")
     return result(session.status);
   if (!transport) return result("AUTH_UNVERIFIED");
@@ -103,6 +110,13 @@ export async function checkWebHttpReadiness(job: WebHttpDraftJob,
       evidence.checks.lastGlobalSendAtMs !== null &&
         !validTime(evidence.checks.lastGlobalSendAtMs))
     return result("PREFLIGHT_UNVERIFIED");
+
+  // The target read may outlast the saved session. Check its known expiry and
+  // read access again with the same opaque session before evaluating READY.
+  const finalSession = await checkWebHttpSession(job.shopId, ownerSub,
+    ports.sessionStore, probe, clock);
+  if (finalSession.status !== "READY_FOR_READONLY_PREFLIGHT")
+    return result(finalSession.status);
 
   const checked = transitionWebHttpExecution(initial, { type: "CHECK", nowMs,
     checks: { ...evidence.checks, auth: "VALID" } });
