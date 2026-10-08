@@ -1,6 +1,5 @@
 "use server";
 
-import { createHash } from "node:crypto";
 import { getCurrentInventoryUserEmail, getInventoryRole } from
   "@/lib/amplify/requireInventoryUser";
 import { prepareB005396GeneralPreparationAction } from
@@ -12,10 +11,12 @@ import { prepareMercariManualListingPackAction,
   "@/app/actions/mercariManualListingPack";
 import { B005396_INVENTORY_ID } from
   "@/lib/listing/mercariBridge/b005396GeneralPreparation";
-import { WEB_HTTP_SHOP_ID, inspectGeneralWebHttpPreparation,
+import { inspectGeneralWebHttpPreparation,
   reserveWebHttpDraftJob, webHttpDraftRequestId, webHttpDraftTargetAllowed,
   WebHttpDraftJobError, type WebHttpReviewEvidence } from
   "@/lib/listing/mercariBridge/webHttpDraftJob";
+import { initialWebHttpExecutionState } from
+  "@/lib/listing/mercariBridge/webHttpExecutionGate";
 import { webHttpDraftJobRepository } from
   "@/lib/listing/mercariBridge/webHttpDraftJobRepository";
 
@@ -105,12 +106,9 @@ export async function getMercariWebHttpDraftJobStatusAction(inventoryId: string)
     const job = await webHttpDraftJobRepository.getJob(requestId);
     if (!job) return { ok: true, status: "NOT_PREPARED",
       requestId: null, recordedAt: null };
-    if (job.requestId !== requestId ||
+    if (!initialWebHttpExecutionState(job) ||
+        job.requestId !== requestId ||
         job.inventoryId.toLowerCase() !== inventoryId.toLowerCase() ||
-        job.shopId !== WEB_HTTP_SHOP_ID ||
-        job.status !== "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" ||
-        job.snapshotFingerprint !== createHash("sha256")
-          .update(job.snapshotJson).digest("hex") ||
         !Number.isFinite(Date.parse(job.recordedAt)))
       return { ok: false, code: "STORAGE_UNAVAILABLE" };
     return { ok: true, status: job.status, requestId: job.requestId,
