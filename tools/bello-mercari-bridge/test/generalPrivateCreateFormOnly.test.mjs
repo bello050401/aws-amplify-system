@@ -36,7 +36,9 @@ const knownPack = () => ({ ...pack(), inventoryId: knownInventoryId,
   managementCode: `BELLO_${knownInventoryId.replace(/-/g, "").toUpperCase()}`,
   title: knownTitle, categoryPath:
     "家具・インテリア > ソファ・ソファベッド > 2人掛け・3人掛けソファ" });
-const knownEvidence = current => ({ schemaVersion: 1,
+const knownEvidence = current => {
+  const observedAt = new Date().toISOString();
+  return { schemaVersion: 1,
   kind: "B005396_KNOWN_EXISTING_PRIVATE_TEST_EXCEPTION",
   approvalBasis: "USER_APPROVED_ONE_NEW_PRIVATE_TEST_B005396_PRICE_99999",
   shopId: current.shopId, inventoryId: current.inventoryId,
@@ -47,8 +49,15 @@ const knownEvidence = current => ({ schemaVersion: 1,
   knownExistingTitle: knownTitle, knownExistingSkuCode: null,
   knownExistingVisibility: "PUBLIC", knownExistingQuantity: 0,
   knownExistingPriceYen: 89_800, onSaleRows: 2, draftRows: 12,
-  observedAt: new Date().toISOString(), noOtherCodeOrTitleMatch: true,
-  allowPublic: false });
+  observedAt, noOtherCodeOrTitleMatch: true,
+  allowPublic: false,
+  draftBaseline: { schemaVersion: 1, kind: "B005396_DRAFT_BASELINE",
+    shopId: current.shopId, rowCount: 12,
+    rows: Array.from({ length: 12 }, (_, index) => ({
+      draftId: `draft${String(index + 1).padStart(2, "0")}`,
+      fingerprint: (index + 1).toString(16).padStart(64, "0") })),
+    observedAt } };
+};
 
 const imageFile = () => {
   const buffer = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3, 0xff, 0xd9]);
