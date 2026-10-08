@@ -135,3 +135,23 @@ test("a supplied network proof must cover every draft and cannot admit blank DOM
       complete: true, allowFinalCreate: false, rowCount: 1 }) }),
   /DRAFT_DETAIL_AMBIGUOUS/);
 });
+
+test("approved B005396 scan retains blank prior draft identity as UNKNOWN", async () => {
+  const ui = fixture();
+  const original = ui.collectDrafts;
+  ui.collectDrafts = async args => {
+    const result = await original(args);
+    result.rows[0].title = "";
+    result.rows[0].skuCode = null;
+    return result;
+  };
+  const scan = await captureGeneralPrivateInitialScanReadOnly({ shopId,
+    managementCode, title: "対象商品", expectedDraftRowCount: 1,
+    ...ui, allowUnknownExistingDrafts: true,
+    verifyDraftRows: async () => ({
+      status: "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN", complete: true,
+      allowFinalCreate: false, rowCount: 1 }) });
+  assert.deepEqual(scan.tabs[1].pages[0].rows[0], {
+    remoteId: "draft1", title: "", skuCode: null,
+    detailVerified: true });
+});

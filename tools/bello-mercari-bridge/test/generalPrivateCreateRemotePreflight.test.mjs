@@ -109,7 +109,6 @@ test("only the one approved sold-out public title is a private-test exception", 
     value => { value.tabs[0].pages[1].rows[0].skuCode = input.managementCode; },
     value => { value.tabs[1].pages[0].rows[0].skuCode = input.managementCode; },
     value => { value.tabs[1].pages[0].rows[0].title = knownTitle; },
-    value => { value.tabs[1].pages[0].rows[0].skuCode = null; },
     value => { value.tabs[0].pages[1].nextDisabled = false;
       value.tabs[0].pages[1].settled.nextDisabledOnSecondRead = false; },
     value => { value.tabs[1].pages[0].rows.pop();
@@ -122,6 +121,13 @@ test("only the one approved sold-out public title is a private-test exception", 
     assert.notEqual(inspectB005396KnownExistingPrivateTest(input,
       candidate, now).status, "B005396_PRIVATE_TEST_EXCEPTION");
   }
+  const priorUnknown = knownScan();
+  priorUnknown.tabs[1].pages[0].rows[0].title = "";
+  priorUnknown.tabs[1].pages[0].rows[0].skuCode = null;
+  const approved = inspectB005396KnownExistingPrivateTest(input,
+    priorUnknown, now);
+  assert.equal(approved.status, "B005396_PRIVATE_TEST_EXCEPTION");
+  assert.equal(approved.evidence.priorDraftAttribution, "UNKNOWN");
   assert.equal(exactB005396KnownExistingEvidence(input,
     { ...result.evidence, knownExistingQuantity: 1 }, now), null);
   assert.equal(exactB005396KnownExistingEvidence(input, result.evidence,

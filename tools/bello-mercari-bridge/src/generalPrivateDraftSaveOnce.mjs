@@ -79,7 +79,7 @@ export function inspectB005396DraftSaveInput(pack, form) {
   return null;
 }
 
-/** No producer is wired yet; a read-only scan must prove exactly this draft. */
+/** Only the approved fresh ID may pass the prior-draft UNKNOWN exception. */
 export function inspectB005396DraftDuplicateProof(pack, form, proof,
   now = Date.now(), baseline = null) {
   let status, shopId, managementCode, ownDraftId, observedAt,
@@ -88,9 +88,11 @@ export function inspectB005396DraftDuplicateProof(pack, form, proof,
     complete, allowFinalCreate, networkBoundVerified,
     baselineFingerprint } = proof ?? {}); }
   catch { return false; }
-  return status === "NO_OTHER_MATCH_OBSERVED" && complete === true &&
+  return status === "APPROVED_PRIVATE_TEST_PRIOR_UNKNOWN" &&
+    complete === true &&
     allowFinalCreate === false && networkBoundVerified === true &&
     exactDraftBaseline(baseline, pack.shopId, 12) &&
+    !baseline.rows.some(row => row.draftId === ownDraftId) &&
     baselineFingerprint === createHash("sha256")
       .update(JSON.stringify(baseline)).digest("hex") &&
     shopId === pack.shopId &&
@@ -171,8 +173,8 @@ export async function exactFormStillOpen(pack, form, page,
 }
 
 /**
- * Unwired draft-save pathway. The default duplicate reader is absent, so a
- * live call stops before the draft button. No public control is addressed.
+ * A live call requires the separately bound duplicate reader; direct calls
+ * without it stop before the draft button. No public control is addressed.
  */
 export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
   origin, belloProfileDir, playwrightModulePath }, {
@@ -185,9 +187,8 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
   const { pack, fingerprint } = await readGeneralPrivateCreate(root, inventoryId);
   const issue = inspectB005396DraftSaveInput(pack, form);
   if (issue) return fixed("BLOCKED", issue);
-  if (expectedImageSha256 !== null &&
-      (!HASH.test(expectedImageSha256) ||
-        form.selectedImageSha256s[0] !== expectedImageSha256))
+  if (!HASH.test(expectedImageSha256 ?? "") ||
+      form.selectedImageSha256s[0] !== expectedImageSha256)
     return fixed("BLOCKED", "REVIEWED_IMAGE_CHANGED");
   const path = paths(root, inventoryId);
   const formClaim = await readGeneralPrivateCreateClaim(root, inventoryId);
@@ -222,6 +223,8 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
       knownEvidence.knownExistingPriceYen !== 89_800 ||
       knownEvidence.noOtherCodeOrTitleMatch !== true ||
       knownEvidence.allowPublic !== false ||
+      knownEvidence.priorDraftAttribution !== "UNKNOWN" ||
+      baseline?.rows?.some(row => row.draftId === form.observedDraftId) ||
       !exactDraftBaseline(baseline, pack.shopId, 12))
     return fixed("BLOCKED", "DRAFT_BASELINE_UNVERIFIED");
   let source;
@@ -229,7 +232,6 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
     playwrightModulePath, pack }); }
   catch { return fixed("BLOCKED", "SOURCE_CHANGED"); }
   if (!exactSourceSnapshot(source, pack, form) ||
-      expectedImageSha256 !== null &&
       source.files[0].sha256 !== expectedImageSha256)
     return fixed("BLOCKED", "SOURCE_CHANGED");
 
@@ -253,7 +255,6 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
       const current = await fetchSnapshot({ origin, belloProfileDir,
         playwrightModulePath, pack });
       if (!exactSourceSnapshot(current, pack, form) ||
-          expectedImageSha256 !== null &&
           current.files[0].sha256 !== expectedImageSha256)
         throw Error("SOURCE_CHANGED");
       reasonCode = "REMOTE_DUPLICATE_UNVERIFIED";

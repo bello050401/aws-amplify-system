@@ -201,7 +201,7 @@ function exactOwn(item, reviewed, managementCode, title, priceYen) {
 export function evaluateBoundDraftReadProof({ list, details, failed, rows,
   managementCode, title, priceYen, expectedRowCount, ownDraftId = null,
   reviewed = null, listReadCount = 0, detailReadCounts = new Map(),
-  shopId = null, baseline = null }) {
+  shopId = null, baseline = null, allowUnknownExistingDrafts = false }) {
   if (failed) return fixed("READ_RESPONSE_CHANGED_OR_INVALID");
   if (!Array.isArray(list)) return fixed("LIST_RESPONSE_MISSING");
   if (listReadCount < 2) return fixed("LIST_FRESH_READ_MISSING");
@@ -218,6 +218,9 @@ export function evaluateBoundDraftReadProof({ list, details, failed, rows,
       (!exactDraftBaseline(baseline, shopId, baseline?.rowCount) ||
         expectedRowCount !== baseline.rowCount + 1))
     return fixed("DRAFT_BASELINE_UNVERIFIED");
+  if (allowUnknownExistingDrafts !== false &&
+      allowUnknownExistingDrafts !== true)
+    return fixed("UNKNOWN_DRAFT_POLICY_UNVERIFIED");
   const listed = new Map(list.map(row => [row.id, row]));
   if (listed.size !== expectedRowCount)
     return fixed("ROW_SET_UNVERIFIED");
@@ -257,10 +260,11 @@ export function evaluateBoundDraftReadProof({ list, details, failed, rows,
         detail.title && titleKey(detail.title) === titleKey(title))
       return { status: "REMOTE_DUPLICATE_POSSIBLE", complete: false,
         allowFinalCreate: false };
-    if (!titleKey(detail.title)) {
-      // A blank draft is only distinct from the prepared product when its
-      // remote response has no management code, price, or image.
-      if (!exactAnonymous(detail.item))
+    if (!titleKey(detail.title) ||
+        allowUnknownExistingDrafts && detail.skuCode === null) {
+      // The approved private test preserves unidentified prior drafts as
+      // UNKNOWN; ordinary scans still require an exact empty draft.
+      if (!allowUnknownExistingDrafts && !exactAnonymous(detail.item))
         return fixed("ANONYMOUS_DRAFT_UNVERIFIED");
       anonymous++;
     }
@@ -282,8 +286,10 @@ export function evaluateBoundDraftReadProof({ list, details, failed, rows,
           baseline.rowCount)
       return fixed("DRAFT_BASELINE_CHANGED");
   }
-  return { status: ownDraftId === null ? "DRAFT_NETWORK_BOUND_NO_MATCH" :
-    "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH", complete: true,
+  return { status: allowUnknownExistingDrafts ?
+    "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN" :
+    ownDraftId === null ? "DRAFT_NETWORK_BOUND_NO_MATCH" :
+      "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH", complete: true,
       allowFinalCreate: false, rowCount: seen.size,
       anonymousVerified: anonymous,
       ...(ownDraftId === null ? { baseline: {
@@ -384,7 +390,8 @@ export function observeBoundDraftReads(context, { page, shopId,
       active = null;
     },
     async stop(rows, { managementCode, title, priceYen,
-    ownDraftId = null, reviewed = null, baseline = null } = {}) {
+    ownDraftId = null, reviewed = null, baseline = null,
+    allowUnknownExistingDrafts = false } = {}) {
     stopped = true;
     context.off("request", onRequest);
     context.off("response", onResponse);
@@ -393,6 +400,7 @@ export function observeBoundDraftReads(context, { page, shopId,
     if (active || !exactCompletedReadCycles(cycles)) failed = true;
     return evaluateBoundDraftReadProof({ list, details, failed, rows,
       managementCode, title, priceYen, expectedRowCount, ownDraftId,
-      reviewed, listReadCount, detailReadCounts, shopId, baseline });
+      reviewed, listReadCount, detailReadCounts, shopId, baseline,
+      allowUnknownExistingDrafts });
   } };
 }

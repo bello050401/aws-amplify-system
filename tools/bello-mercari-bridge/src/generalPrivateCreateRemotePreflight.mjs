@@ -160,7 +160,8 @@ export function inspectB005396KnownExistingPrivateTest(input, scan,
     return fixed("B005396_KNOWN_EXISTING_UNVERIFIED",
       ordinary.onSaleRows, ordinary.draftRows);
   if (!pack || pack.title !== KNOWN_EXISTING_TITLE ||
-      ordinary.status !== "REMOTE_DUPLICATE_POSSIBLE" ||
+      !["REMOTE_DUPLICATE_POSSIBLE", "REMOTE_DRAFT_AMBIGUOUS"]
+        .includes(ordinary.status) ||
       ordinary.draftRows !== 12) return ordinary;
   const rows = scan.tabs.flatMap((tab, tabIndex) => tab.pages.flatMap(page =>
     page.rows.map(row => ({ tabIndex, row }))));
@@ -184,6 +185,7 @@ export function inspectB005396KnownExistingPrivateTest(input, scan,
     knownExistingPriceYen: 89_800, onSaleRows: ordinary.onSaleRows,
     draftRows: ordinary.draftRows, observedAt: scan.observedAt,
     noOtherCodeOrTitleMatch: true, allowPublic: false,
+    priorDraftAttribution: "UNKNOWN",
     draftBaseline };
   return { status: "B005396_PRIVATE_TEST_EXCEPTION",
     onSaleRows: ordinary.onSaleRows, draftRows: ordinary.draftRows,
@@ -199,7 +201,8 @@ export function exactB005396KnownExistingEvidence(input, evidence,
         "knownExistingRemoteId", "knownExistingTitle", "knownExistingSkuCode",
         "knownExistingVisibility", "knownExistingQuantity",
       "knownExistingPriceYen", "onSaleRows", "draftRows", "observedAt",
-      "noOtherCodeOrTitleMatch", "allowPublic", "draftBaseline"]) ||
+      "noOtherCodeOrTitleMatch", "allowPublic",
+      "priorDraftAttribution", "draftBaseline"]) ||
       evidence.schemaVersion !== 1 || evidence.kind !== EXCEPTION_KIND ||
       evidence.approvalBasis !== APPROVAL_BASIS ||
       evidence.shopId !== pack.shopId ||
@@ -216,6 +219,7 @@ export function exactB005396KnownExistingEvidence(input, evidence,
       evidence.onSaleRows < 1 || evidence.draftRows !== 12 ||
       evidence.noOtherCodeOrTitleMatch !== true ||
       evidence.allowPublic !== false ||
+      evidence.priorDraftAttribution !== "UNKNOWN" ||
       !exactDraftBaseline(evidence.draftBaseline, pack.shopId, 12) ||
       Date.parse(evidence.draftBaseline.observedAt) >
         Date.parse(evidence.observedAt) ||

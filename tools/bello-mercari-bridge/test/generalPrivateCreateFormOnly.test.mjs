@@ -50,7 +50,7 @@ const knownEvidence = current => {
   knownExistingVisibility: "PUBLIC", knownExistingQuantity: 0,
   knownExistingPriceYen: 89_800, onSaleRows: 2, draftRows: 12,
   observedAt, noOtherCodeOrTitleMatch: true,
-  allowPublic: false,
+  allowPublic: false, priorDraftAttribution: "UNKNOWN",
   draftBaseline: { schemaVersion: 1, kind: "B005396_DRAFT_BASELINE",
     shopId: current.shopId, rowCount: 12,
     rows: Array.from({ length: 12 }, (_, index) => ({
@@ -133,6 +133,43 @@ test("known existing exception needs exact evidence before the permanent claim",
       }
     } finally { await rm(root, { recursive: true, force: true }); }
   }
+});
+
+test("approved form claim never writes into one of the twelve prior draft IDs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-known-old-id-"));
+  try {
+    const current = knownPack();
+    await enqueueGeneralPrivateCreate(root, current);
+    const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale&visibility=unopened`;
+    let url = listUrl;
+    let writes = 0;
+    const page = { url: () => url,
+      evaluate: async () => ({ href: url, timeOrigin: 123456789 }),
+      getByRole: () => ({ count: async () => 1,
+        isEnabled: async () => true,
+        getAttribute: async () => `/seller/shops/${shopId}/products/create`,
+        click: async () => { url = `https://mercari-shops.com/seller/shops/${shopId}/products/create?productDraftId=draft01`; } }) };
+    const dependencies = {
+      remotePreflight: async () => ({
+        status: "B005396_PRIVATE_TEST_EXCEPTION",
+        allowFinalCreate: false, evidence: knownEvidence(current) }),
+      fetchImages: async () => [imageFile()],
+      recordKnownExisting: async () => {},
+      openSession: async () => ({ state: "LIST_OPEN", page, context: {} }),
+      fillForm: async () => { writes++; },
+    };
+    const first = await fillGeneralPrivateCreateFormOnly({ root,
+      inventoryId: knownInventoryId,
+      allowKnownExistingPrivateTest: true }, dependencies);
+    assert.equal(first.status, "UNKNOWN");
+    assert.equal(first.diagnostic, "CREATE_DRAFT_ID_NOT_NEW");
+    assert.equal(writes, 0);
+    assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, true);
+    const second = await fillGeneralPrivateCreateFormOnly({ root,
+      inventoryId: knownInventoryId,
+      allowKnownExistingPrivateTest: true }, dependencies);
+    assert.equal(second.diagnostic, "LOCAL_CLAIM_UNKNOWN_NO_RETRY");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("B005396 exception mode rejects ordinary no-match before claim or create", async () => {

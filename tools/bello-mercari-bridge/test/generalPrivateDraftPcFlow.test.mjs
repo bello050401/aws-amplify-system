@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { enqueueGeneralPrivateCreate, claimGeneralPrivateCreateOnce,
@@ -153,6 +153,22 @@ test("real save preflight AUTH_REQUIRED keeps the claimed form browser occupied"
     const retainedSession = { context: { close: async () => {} },
       page: { url: () => "https://mercari-shops.com" } };
     const claim = await claimGeneralPrivateCreateOnce(args.root, inventoryId);
+    await writeFile(join(args.root, "general-private-create-once",
+      `${inventoryId}.known-existing-private-test.json`), JSON.stringify({
+      schemaVersion: 1,
+      kind: "B005396_KNOWN_EXISTING_PRIVATE_TEST_EXCEPTION",
+      inventoryId, shopId, packFingerprint: claim.fingerprint,
+      knownExistingRemoteId: "2JVJtFhb6kB5JBGkDbi2nm",
+      knownExistingTitle: pack().title, knownExistingSkuCode: null,
+      knownExistingVisibility: "PUBLIC", knownExistingQuantity: 0,
+      knownExistingPriceYen: 89_800, noOtherCodeOrTitleMatch: true,
+      allowPublic: false, priorDraftAttribution: "UNKNOWN",
+      draftBaseline: { schemaVersion: 1,
+        kind: "B005396_DRAFT_BASELINE", shopId, rowCount: 12,
+        rows: Array.from({ length: 12 }, (_, index) => ({
+          draftId: `prior${String(index).padStart(2, "0")}`,
+          fingerprint: (index + 1).toString(16).padStart(64, "0") })),
+        observedAt: new Date().toISOString() } }), "utf8");
     await writeGeneralPrivateCreateResultOnce(args.root, inventoryId, {
       attemptId: claim.attemptId, outcome: "UNKNOWN",
       listingConfirmed: false, observedRemoteId: null,

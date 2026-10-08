@@ -160,9 +160,10 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
     const reviewed = { description, categoryId, condition, shipping,
       quantity, imageCount };
     try { proofStopped = true; bound = await observer.stop(draftRows, {
-      managementCode, title, priceYen, ownDraftId, reviewed, baseline }); }
+      managementCode, title, priceYen, ownDraftId, reviewed, baseline,
+      allowUnknownExistingDrafts: true }); }
     catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_NETWORK_BOUND_UNVERIFIED"); }
-    if (bound?.status !== "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH" ||
+    if (bound?.status !== "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN" ||
         bound.complete !== true || bound.allowFinalCreate !== false ||
         bound.rowCount !== countValue)
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_NETWORK_BOUND_UNVERIFIED");
@@ -191,10 +192,7 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
     if (own.length !== 1 || own[0].code?.toUpperCase() !==
         managementCode.toUpperCase() || titleKey(own[0].title) !== expectedTitle)
       return fixed("REMOTE_SCAN_INCOMPLETE", "OWN_DRAFT_UNVERIFIED");
-    if (rows.some(row => row.id !== ownDraftId &&
-        (row.code === null || !row.title.trim())))
-      return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_IDENTITY_UNVERIFIED");
-    return { status: "NO_OTHER_MATCH_OBSERVED", complete: true,
+    return { status: "APPROVED_PRIVATE_TEST_PRIOR_UNKNOWN", complete: true,
       allowFinalCreate: false, networkBoundVerified: true,
       baselineFingerprint: createHash("sha256")
         .update(JSON.stringify(baseline)).digest("hex"),

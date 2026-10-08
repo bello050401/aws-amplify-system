@@ -73,14 +73,15 @@ function ownItem(id = "draft1") {
 function proof({ first = item("draft1", "別の商品", "OTHER_1", 20_000),
   second = item("draft2", "", "", 0), domRows = rows,
   list = null, detailReadCounts = null, ownDraftId = null,
-  reviewed = null, baseline = null } = {}) {
+  reviewed = null, baseline = null,
+  allowUnknownExistingDrafts = false } = {}) {
   const details = new Map([["draft1", entry(first)],
     ["draft2", entry(second)]]);
   return evaluateBoundDraftReadProof({ list: list ?? [rowOf(first), rowOf(second)],
     details, failed: false, rows: domRows, ...target, expectedRowCount: 2,
     listReadCount: 2, detailReadCounts: detailReadCounts ??
       new Map([["draft1", 2], ["draft2", 2]]), ownDraftId, reviewed,
-      baseline });
+      baseline, allowUnknownExistingDrafts });
 }
 
 test("two fresh bound reads of every draft establish only an advisory no match", () => {
@@ -151,6 +152,37 @@ test("blank title with any remaining product content is unresolved", () => {
     assert.equal(proof({ second, domRows }).status,
       "DRAFT_NETWORK_BOUND_UNVERIFIED");
   }
+});
+
+test("approved private test freezes content-bearing anonymous drafts as UNKNOWN", () => {
+  const unknown = item("draft2", "", "", 0);
+  unknown.description = " ";
+  unknown.categories = [{ id: "legacyCategory" }];
+  assert.equal(proof({ second: unknown }).status,
+    "DRAFT_NETWORK_BOUND_UNVERIFIED");
+  const initial = proof({ second: unknown,
+    allowUnknownExistingDrafts: true });
+  assert.equal(initial.status, "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN");
+  assert.equal(initial.allowFinalCreate, false);
+  assert.equal(initial.anonymousVerified, 1);
+  assert.equal(exactDraftBaseline(initial.baseline, shopId, 2), true);
+  const prior = item("draft1", "別の商品", "OTHER_1", 20_000);
+  const own = ownItem("newDraft");
+  const current = [prior, unknown, own];
+  const evaluate = values => evaluateBoundDraftReadProof({
+    list: values.map(rowOf), details: new Map(values.map(value =>
+      [value.id, entry(value)])), failed: false,
+    rows: values.map(value => ({ draftId: value.id,
+      title: value.name, skuCode: value.variants[0].skuCode || null })),
+    ...target, expectedRowCount: 3, listReadCount: 2,
+    detailReadCounts: new Map(values.map(value => [value.id, 2])),
+    ownDraftId: own.id, reviewed: reviewedOwn,
+    baseline: initial.baseline, allowUnknownExistingDrafts: true });
+  assert.equal(evaluate(current).status, "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN");
+  const changed = structuredClone(unknown);
+  changed.categories = [{ id: "anotherCategory" }];
+  assert.equal(evaluate([prior, changed, own]).diagnostic,
+    "DRAFT_BASELINE_CHANGED");
 });
 
 test("target identity in another draft blocks, while own draft requires all reviewed fields", () => {

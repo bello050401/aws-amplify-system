@@ -10,7 +10,7 @@ import { enqueueGeneralPrivateCreate, claimGeneralPrivateCreateOnce,
   "../src/generalPrivateCreateJob.mjs";
 import { inspectB005396DraftSaveInput,
   inspectB005396DraftDuplicateProof, exactFormStillOpen,
-  saveB005396PrivateDraftOnce,
+  saveB005396PrivateDraftOnce as saveReviewedDraft,
   reconcileB005396PrivateDraftSaveUnknown } from
   "../src/generalPrivateDraftSaveOnce.mjs";
 import { fetchCurrentGeneralPrivateCreateSnapshot } from
@@ -21,6 +21,8 @@ const shopId = "evkhihBFFNn5hukMS9s36H";
 const draftId = "sourceDraft123";
 const remoteDraftId = "shopsDraft123";
 const sha256 = "a".repeat(64);
+const saveB005396PrivateDraftOnce = (args, options = {}) =>
+  saveReviewedDraft(args, { expectedImageSha256: sha256, ...options });
 const imagePath = "/asset/sofa.jpg";
 const asset = { pathHash: createHash("sha256").update(imagePath).digest("hex"),
   width: 960, height: 960 };
@@ -62,7 +64,8 @@ async function withClaimedForm(action, description) {
       knownExistingTitle: pack().title, knownExistingSkuCode: null,
       knownExistingVisibility: "PUBLIC", knownExistingQuantity: 0,
       knownExistingPriceYen: 89_800, noOtherCodeOrTitleMatch: true,
-      allowPublic: false, draftBaseline: baseline }), "utf8");
+      allowPublic: false, priorDraftAttribution: "UNKNOWN",
+      draftBaseline: baseline }), "utf8");
     await writeGeneralPrivateCreateResultOnce(root, inventoryId, {
       attemptId: claim.attemptId, outcome: "UNKNOWN",
       listingConfirmed: false, observedRemoteId: null,
@@ -129,7 +132,8 @@ async function withClaimedForm(action, description) {
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
-const proof = () => ({ status: "NO_OTHER_MATCH_OBSERVED", complete: true,
+const proof = () => ({ status: "APPROVED_PRIVATE_TEST_PRIOR_UNKNOWN",
+  complete: true,
   allowFinalCreate: false, networkBoundVerified: true,
   baselineFingerprint,
   shopId, managementCode: pack().managementCode,
@@ -190,10 +194,25 @@ test("save rejects a form SHA outside the reviewed image before the gate or clic
   });
 });
 
+test("save requires the independently reviewed image SHA", async () => {
+  await withClaimedForm(async ({ root, form, clicks }) => {
+    const result = await saveReviewedDraft({ root, inventoryId, form }, {
+      fetchSnapshot: async () => snapshot(),
+      captureDuplicateProof: async () => proof() });
+    assert.equal(result.status, "BLOCKED");
+    assert.equal(result.diagnostic, "REVIEWED_IMAGE_CHANGED");
+    assert.equal(clicks(), 0);
+  });
+});
+
 test("duplicate proof must be recent, exact-shop and own-draft bound", () => {
   const form = { observedDraftId: remoteDraftId };
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form, proof(),
     Date.now(), baseline), true);
+  assert.equal(inspectB005396DraftDuplicateProof(pack(),
+    { observedDraftId: baseline.rows[0].draftId },
+    { ...proof(), ownDraftId: baseline.rows[0].draftId },
+    Date.now(), baseline), false);
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form,
     { ...proof(), ownDraftId: "otherDraft" }, Date.now(), baseline), false);
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form,

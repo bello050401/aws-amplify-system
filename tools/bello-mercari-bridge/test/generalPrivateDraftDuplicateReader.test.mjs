@@ -28,7 +28,7 @@ const target = { shopId, managementCode, ownDraftId, title, baseline,
     payer: "PAYER_TYPE_SELLER", origin: "jp11",
     duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" } };
 const observeDraftReads = () => ({ stop: async () => ({
-  status: "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH", complete: true,
+  status: "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN", complete: true,
   allowFinalCreate: false, rowCount: 13 }) });
 function listSnapshot(rowCount) {
   return { url: listUrl, documentUrl: listUrl, loading: false,
@@ -92,7 +92,7 @@ test("exact sale SKU absence and complete draft details prove only own draft", a
       return details; },
     observeDraftReads,
   });
-  assert.equal(proof.status, "NO_OTHER_MATCH_OBSERVED");
+  assert.equal(proof.status, "APPROVED_PRIVATE_TEST_PRIOR_UNKNOWN");
   assert.equal(proof.complete, true);
   assert.equal(proof.allowFinalCreate, false);
   assert.equal(proof.shopId, shopId);
@@ -110,7 +110,7 @@ test("explicit save callback binds the retained browser context", async () => {
       readDraftCount: async () => countTwo,
       collectDrafts: async () => details, observeDraftReads });
   const result = await captureDuplicateProof(target);
-  assert.equal(result.status, "NO_OTHER_MATCH_OBSERVED");
+  assert.equal(result.status, "APPROVED_PRIVATE_TEST_PRIOR_UNKNOWN");
   assert.equal(result.allowFinalCreate, false);
   assert.equal(wasClosed(), true);
 });
@@ -173,14 +173,11 @@ test("sale match, unavailable scan and stable empty draft remain non-authorizing
   }
 });
 
-test("other matching or unidentified drafts cannot prove uniqueness", async () => {
+test("other matching drafts block; unidentified prior drafts remain UNKNOWN", async () => {
   for (const [rows, status, diagnostic] of [
     [[draftRows[0], { ...draftRows[1], skuCode: managementCode },
       ...draftRows.slice(2)],
       "REMOTE_DUPLICATE_POSSIBLE", "DRAFT_MATCH_POSSIBLE"],
-    [[draftRows[0], { ...draftRows[1], skuCode: null },
-      ...draftRows.slice(2)],
-      "REMOTE_SCAN_INCOMPLETE", "DRAFT_IDENTITY_UNVERIFIED"],
     [[draftRows[1], { ...draftRows[1], draftId: "anotherDraft" },
       ...draftRows.slice(2)],
       "REMOTE_SCAN_INCOMPLETE", "OWN_DRAFT_UNVERIFIED"],
@@ -196,4 +193,13 @@ test("other matching or unidentified drafts cannot prove uniqueness", async () =
     assert.equal(result.diagnostic, diagnostic);
     assert.equal(result.allowFinalCreate, false);
   }
+  const { context } = fakeContext();
+  const unknown = await captureB005396PrivateDraftDuplicateProof({
+    context, ...target }, {
+    searchSaleSku: async () => noSale,
+    readDraftCount: async () => countTwo,
+    collectDrafts: async () => ({ ...details, rows: [draftRows[0],
+      { ...draftRows[1], title: "", skuCode: null },
+      ...draftRows.slice(2)] }), observeDraftReads });
+  assert.equal(unknown.status, "APPROVED_PRIVATE_TEST_PRIOR_UNKNOWN");
 });

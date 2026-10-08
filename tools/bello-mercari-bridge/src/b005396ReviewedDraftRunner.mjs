@@ -145,16 +145,18 @@ export function bindB005396InitialScan({ root, shopsProfileDir,
       await session.context.setOffline(false);
       const result = await scan({ page: session.page, shopId,
         managementCode, title, expectedDraftRowCount: 12,
-        draftReadCycle: observer,
+        draftReadCycle: observer, allowUnknownExistingDrafts: true,
         verifyDraftRows: async rows => {
           if (proofStopped) throw Error("DRAFT_PROOF_REUSED");
           proofStopped = true;
           draftProof = await observer.stop(rows, { managementCode, title,
-            priceYen: 99_999 });
+            priceYen: 99_999, allowUnknownExistingDrafts: true });
           return draftProof;
         } });
       if (blocked) throw Error("SCAN_NETWORK_GUARD_BLOCKED");
-      if (!proofStopped || !exactDraftBaseline(draftProof?.baseline,
+      if (!proofStopped ||
+        draftProof?.status !== "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN" ||
+        !exactDraftBaseline(draftProof?.baseline,
         shopId, 12)) throw Error("DRAFT_PROOF_NOT_OBSERVED");
       return { ...result, draftBaseline: draftProof.baseline };
     } finally {

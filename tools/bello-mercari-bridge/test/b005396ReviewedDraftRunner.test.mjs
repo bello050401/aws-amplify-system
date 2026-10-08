@@ -95,7 +95,7 @@ test("read-only scan binder closes the session and blocks non-query writes", asy
   const scan = bindB005396InitialScan({ root: "r", shopsProfileDir: "s",
     playwrightModulePath: "p" }, {
     observeDraftReads: () => ({ stop: async () => ({
-      status: "DRAFT_NETWORK_BOUND_NO_MATCH", complete: true,
+      status: "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN", complete: true,
       allowFinalCreate: false, rowCount: 12,
       baseline: draftBaseline }) }),
     openSession: async options => { guard = options.requestGuard;
@@ -137,7 +137,7 @@ test("read-only scan binder admits only the pinned Self account query", async ()
   const scan = bindB005396InitialScan({ root: "r", shopsProfileDir: "s",
     playwrightModulePath: "p" }, {
     observeDraftReads: () => ({ stop: async () => ({
-      status: "DRAFT_NETWORK_BOUND_NO_MATCH", complete: true,
+      status: "DRAFT_NETWORK_BOUND_PRIOR_UNKNOWN", complete: true,
       allowFinalCreate: false, rowCount: 12,
       baseline: draftBaseline }) }),
     openSession: async options => { guard = options.requestGuard;

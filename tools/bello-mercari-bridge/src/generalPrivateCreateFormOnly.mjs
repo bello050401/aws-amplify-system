@@ -30,6 +30,7 @@ const ATTEMPT_DIAGNOSTICS = new Set([...FORM_DIAGNOSTICS,
   "BROWSER_UNAVAILABLE", "EXACT_SHOP_LIST_UNAVAILABLE",
   "CREATE_LINK_UNVERIFIED", "CREATE_PAGE_UNCERTAIN",
   "CREATE_URL_UNVERIFIED", "CREATE_DOCUMENT_UNVERIFIED",
+  "CREATE_DRAFT_ID_NOT_NEW",
   "MULTIPLE_DRAFT_IDS_OBSERVED", "FORM_FIELDS_UNCERTAIN"]);
 
 /** The only allowed create URL is the fixed shop path and at most one draft ID. */
@@ -109,6 +110,8 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
         "B005396_KNOWN_EXISTING_UNVERIFIED" :
       REMOTE_DIAGNOSTICS.has(remoteStatus) ? remoteStatus :
         "REMOTE_SCAN_UNVERIFIED" };
+  const existingDraftIds = knownExistingApproved ? new Set(
+    knownExistingEvidence.draftBaseline.rows.map(row => row.draftId)) : null;
   let files;
   try {
     files = await fetchImages({ origin, belloProfileDir,
@@ -152,6 +155,9 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
       pinnedDocumentTimeOrigin = document.timeOrigin;
     const current = inspectGeneralPrivateCreateUrl(beforeUrl, pack.shopId);
     if (!current.valid) throw Error("CREATE_URL_UNVERIFIED");
+    if (existingDraftIds && (!current.draftId ||
+        existingDraftIds.has(current.draftId)))
+      throw Error("CREATE_DRAFT_ID_NOT_NEW");
     if (pinnedDraftId !== null && current.draftId !== pinnedDraftId)
       throw Error("MULTIPLE_DRAFT_IDS_OBSERVED");
     if (current.draftId && !pinnedDraftId) pinnedDraftId = current.draftId;
