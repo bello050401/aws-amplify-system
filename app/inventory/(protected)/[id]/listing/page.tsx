@@ -8,6 +8,8 @@ import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
 import { MercariPrivateCreatePreparationPanel } from "./MercariPrivateCreatePreparationPanel";
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
+import { B005396_INVENTORY_ID } from
+  "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { getNextEngineMasterSync } from "@/lib/listing/nextEngine/masterSync";
@@ -133,6 +135,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
             <p className="mt-5 max-w-2xl rounded border border-amber-300 bg-amber-50 p-4 text-sm">
               この非公開テストは結果の確認中です。重複操作を防ぐため、ここから出品準備を繰り返せません。
             </p> :
+          item.id.toLowerCase() === B005396_INVENTORY_ID ? null :
             <MercariManualListingPackPanel inventoryId={item.id}
               availableQuantity={item.quantity} hasDraft={Boolean(draft)}
               hasShopsRecord={Boolean(channelListing)} />

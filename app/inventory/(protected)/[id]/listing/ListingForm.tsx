@@ -14,6 +14,9 @@ import { ShippingEstimateSection } from "./ShippingEstimateSection";
 import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
 import { MercariShopsLifecycleSection } from "./MercariShopsLifecycleSection";
+import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
+import { B005396_INVENTORY_ID } from
+  "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import { NextEngineListingSection } from "./NextEngineListingSection";
 import type { MasterSyncView } from "@/lib/listing/nextEngine/masterSync";
 import { generateListingCopyAction } from "@/app/actions/ai";
@@ -52,6 +55,7 @@ import { buildListingImageCandidates, restoreListingSelection, sameListingImageR
  */
 export function ListingForm({
   inventoryId,
+  availableQuantity,
   brandLogoAvailable,
   inventoryName,
   images,
@@ -65,6 +69,7 @@ export function ListingForm({
   onShippingMethodChange,
 }: {
   inventoryId: string;
+  availableQuantity: number;
   brandLogoAvailable: boolean;
   inventoryName: string;
   /** 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: Inventory Masterの商品画像(トップ画像が先頭に来るよう呼び出し元でソート済み) — このコンポーネント自体は画像データを一切書き込まず、表示のみ。 */
@@ -617,6 +622,11 @@ export function ListingForm({
 
       <MercariShopsLifecycleSection inventoryId={inventoryId} listing={channelListing}
         canPrepare={canSendNextEngine} />
+
+      {canSendNextEngine && inventoryId.toLowerCase() === B005396_INVENTORY_ID &&
+        <MercariManualListingPackPanel inventoryId={inventoryId}
+          availableQuantity={availableQuantity} hasDraft={Boolean(draft)}
+          hasShopsRecord={Boolean(channelListing)} />}
 
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
           上の出品履歴と同じ理由でChannelListing存在時のみ表示する。 */}

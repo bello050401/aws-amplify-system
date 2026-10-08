@@ -6,8 +6,11 @@ import { prepareB005396GeneralPreparationAction } from
   "@/app/actions/mercariB005396GeneralPreparation";
 import type { MercariManualListingPack } from
   "@/app/actions/mercariManualListingPack";
-import { reserveWebHttpDraftJob, WebHttpDraftJobError } from
+import { B005396_WEB_HTTP_REQUEST_ID, B005396_WEB_HTTP_SHOP_ID,
+  reserveWebHttpDraftJob, WebHttpDraftJobError } from
   "@/lib/listing/mercariBridge/webHttpDraftJob";
+import { B005396_INVENTORY_ID } from
+  "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import { webHttpDraftJobRepository } from
   "@/lib/listing/mercariBridge/webHttpDraftJobRepository";
 
@@ -44,4 +47,28 @@ export async function reserveB005396WebHttpDraftJobAction(
       return { ok: false, code: error.code };
     return { ok: false, code: "STORAGE_UNAVAILABLE" };
   }
+}
+
+/** Display the persisted Web request state; this performs no Shops read. */
+export async function getB005396WebHttpDraftJobStatusAction(): Promise<
+  { ok: true; status: "NOT_PREPARED"; requestId: null; recordedAt: null } |
+  { ok: true; status: "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT";
+    requestId: string; recordedAt: string } |
+  { ok: false; code: "FORBIDDEN" | "STORAGE_UNAVAILABLE" }
+> {
+  if (await getInventoryRole() !== "ADMIN") return { ok: false, code: "FORBIDDEN" };
+  try {
+    const job = await webHttpDraftJobRepository.getJob(B005396_WEB_HTTP_REQUEST_ID);
+    if (!job) return { ok: true, status: "NOT_PREPARED",
+      requestId: null, recordedAt: null };
+    if (job.requestId !== B005396_WEB_HTTP_REQUEST_ID ||
+        job.inventoryId.toLowerCase() !== B005396_INVENTORY_ID ||
+        job.shopId !== B005396_WEB_HTTP_SHOP_ID ||
+        job.status !== "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" ||
+        !/^[a-f0-9]{64}$/.test(job.snapshotFingerprint) ||
+        !Number.isFinite(Date.parse(job.recordedAt)))
+      return { ok: false, code: "STORAGE_UNAVAILABLE" };
+    return { ok: true, status: job.status, requestId: job.requestId,
+      recordedAt: job.recordedAt };
+  } catch { return { ok: false, code: "STORAGE_UNAVAILABLE" }; }
 }

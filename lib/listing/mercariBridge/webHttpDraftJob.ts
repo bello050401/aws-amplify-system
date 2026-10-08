@@ -5,6 +5,9 @@ import { B005396_INVENTORY_ID, B005396_REVIEW_PRICE_YEN,
   "./b005396GeneralPreparation.ts";
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+export const B005396_WEB_HTTP_SHOP_ID = "evkhihBFFNn5hukMS9s36H";
+export const B005396_WEB_HTTP_REQUEST_ID = digest(
+  `BELLO_SHOPS_WEB_HTTP_CREATE\0${B005396_WEB_HTTP_SHOP_ID}\0${B005396_INVENTORY_ID}`);
 
 export type WebHttpDraftJob = {
   requestId: string;
@@ -38,6 +41,7 @@ export function buildWebHttpDraftJob(pack: MercariManualListingPack,
   if (!pack || pack.kind !== "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK" ||
       pack.status !== "PREPARED_NO_SEND" ||
       pack.inventoryId.toLowerCase() !== B005396_INVENTORY_ID ||
+      pack.shopId !== B005396_WEB_HTTP_SHOP_ID ||
       pack.priceYen !== B005396_REVIEW_PRICE_YEN || pack.quantity !== 1 ||
       !pack.shopId || !pack.managementCode || !pack.draftId ||
       !evidence || evidence.status !== "REVIEW_REQUIRED_NO_SEND" ||
@@ -56,7 +60,7 @@ export function buildWebHttpDraftJob(pack: MercariManualListingPack,
     throw new WebHttpDraftJobError("INVALID_INPUT");
   const snapshotJson = JSON.stringify({ schemaVersion: 1,
     transport: "BELLO_SERVER_HTTP", shippingReviewed: true, pack, evidence });
-  return { requestId: digest(`BELLO_SHOPS_WEB_HTTP_CREATE\0${pack.shopId}\0${pack.inventoryId}`),
+  return { requestId: B005396_WEB_HTTP_REQUEST_ID,
     inventoryId: pack.inventoryId, shopId: pack.shopId,
     managementCode: pack.managementCode,
     snapshotFingerprint: digest(snapshotJson), snapshotJson,

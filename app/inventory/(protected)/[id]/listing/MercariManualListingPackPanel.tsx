@@ -6,7 +6,8 @@ import { prepareMercariManualListingPackAction,
   type MercariManualListingPack } from "@/app/actions/mercariManualListingPack";
 import { prepareB005396GeneralPreparationAction } from
   "@/app/actions/mercariB005396GeneralPreparation";
-import { reserveB005396WebHttpDraftJobAction } from
+import { getB005396WebHttpDraftJobStatusAction,
+  reserveB005396WebHttpDraftJobAction } from
   "@/app/actions/mercariWebHttpDraftJob";
 import { B005396_INVENTORY_ID,
   type B005396GeneralReviewEvidence } from
@@ -29,6 +30,10 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const [brandResults, setBrandResults] = useState<BrandMasterEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [httpStatus, setHttpStatus] = useState<"CHECKING" | "NOT_PREPARED" |
+    "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" | "UNAVAILABLE">("CHECKING");
+  const [httpRequestId, setHttpRequestId] = useState<string | null>(null);
+  const httpStatusEpoch = useRef(0);
   const [pack, setPack] = useState<MercariManualListingPack | null>(null);
   const [reviewEvidence, setReviewEvidence] =
     useState<B005396GeneralReviewEvidence | null>(null);
@@ -64,6 +69,18 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     "発送まで: 4〜7日",
     "", "商品説明:", pack.description,
   ].join("\n") : "";
+  useEffect(() => {
+    if (!isB005396) return;
+    let disposed = false;
+    const epoch = ++httpStatusEpoch.current;
+    void getB005396WebHttpDraftJobStatusAction().then(result => {
+      if (disposed || epoch !== httpStatusEpoch.current) return;
+      if (!result.ok) setHttpStatus("UNAVAILABLE");
+      else { setHttpStatus(result.status); setHttpRequestId(result.requestId); }
+    }).catch(() => { if (!disposed && epoch === httpStatusEpoch.current)
+      setHttpStatus("UNAVAILABLE"); });
+    return () => { disposed = true; };
+  }, [isB005396]);
   useEffect(() => {
     if (isB005396) return;
     let disposed = false;
@@ -216,13 +233,17 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   async function reserveWebHttpJob() {
     if (!isB005396 || !pack || busy || !available || !reviewedHandoffReady) return;
     const revision = selectionRevision.current;
+    httpStatusEpoch.current++;
     setBusy(true);
     setMessage(null);
     try {
       const result = await reserveB005396WebHttpDraftJobAction(pack, shippingReviewed);
+      if (!result.ok && httpStatus === "CHECKING") setHttpStatus("UNAVAILABLE");
       if (revision !== selectionRevision.current) {
         setMessage("入力が変わりました。現在の内容で確認し直してください。");
       } else if (result.ok) {
+        setHttpStatus(result.status);
+        setHttpRequestId(result.requestId);
         setMessage(`Web側に出品依頼を記録しました（ID: ${result.requestId.slice(0, 12)}）。認証と新規出品のHTTP仕様を確認するまでShopsには送信しません。`);
       } else if (result.code === "JOB_CONFLICT") {
         setMessage("この在庫には異なる内容のWeb出品依頼が記録済みです。重複を防ぐため送信しません。");
@@ -232,18 +253,27 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         setMessage("Web側に出品依頼を記録できませんでした。Shopsへの送信は行っていません。");
       }
     } catch {
+      if (httpStatus === "CHECKING") setHttpStatus("UNAVAILABLE");
       setMessage("Web側に出品依頼を記録できませんでした。Shopsへの送信は行っていません。");
     } finally { setBusy(false); }
   }
-  return <section id="mercari-manual-preparation"
+  return <section id={isB005396 ? "mercari-http-listing" : "mercari-manual-preparation"}
     className="mt-5 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
-    <h2 className="font-bold">メルカリShops {isB005396 ? "出品内容の確認" : "出品準備"}</h2>
+    <h2 className="font-bold">メルカリShops {isB005396 ? "HTTP方式での出品" : "出品準備"}</h2>
     <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isB005396 ?
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
       "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
     {isB005396 && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-      B005396は価格99,999円で確認します。Web側に出品依頼を記録します。Shopsの非公開下書き保存は認証とHTTP仕様が確認できるまで保留します。
+      B005396は価格99,999円で確認します。ボタンはWeb側に出品指示を記録します。ShopsへのHTTP送信は認証と新規出品の仕様を確認するまで保留します。
     </p>}
+    {isB005396 && <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs" role="status">
+      <p>HTTP方式の依頼状態: {httpStatus === "CHECKING" ? "確認中" :
+        httpStatus === "NOT_PREPARED" ? "未登録" :
+        httpStatus === "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" ?
+          "登録済み・認証と書込仕様の確認待ち" : "取得できません"}</p>
+      {httpRequestId && <p>依頼ID: <code>{httpRequestId.slice(0, 12)}</code></p>}
+      <p>このHTTP依頼の結果: 未送信（出品成立は未確認）</p>
+    </div>}
     <dl className="mt-3 grid grid-cols-2 gap-1 rounded bg-gray-50 p-3 text-xs">
       <dt>配送方法</dt><dd>未定（出品者手配）</dd>
       <dt>送料</dt><dd>送料込み（出品者負担）</dd>
@@ -351,7 +381,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       {isB005396 && <button type="button" onClick={() => void reserveWebHttpJob()}
         disabled={busy || !available || !reviewedHandoffReady}
         className="mt-3 rounded bg-blue-700 px-3 py-1 font-bold text-white disabled:opacity-40">
-        {busy ? "記録中…" : "Web側に出品依頼を記録"}
+        {busy ? "記録中…" : "HTTP方式で出品を指示（準備登録）"}
       </button>}
     </div>}
   </section>;
