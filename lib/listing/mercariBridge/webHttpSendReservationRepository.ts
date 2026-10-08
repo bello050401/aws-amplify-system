@@ -55,7 +55,8 @@ export class DynamoWebHttpSendReservationRepository
     next: WebHttpShopSendSlot, attempt: WebHttpSendAttempt,
     nowIso: string): Promise<void> {
     const names = {
-      "#shopId": "shopId", "#revision": "revision",
+      ...(!previous ? { "#shopId": "shopId" } : {}),
+      "#revision": "revision",
       "#lastStartedAt": "lastStartedAt", "#sendBeforeAt": "sendBeforeAt",
       "#nextEligibleAt": "nextEligibleAt", "#requestId": "requestId",
       "#attemptId": "attemptId", "#requestedBy": "requestedBy",
