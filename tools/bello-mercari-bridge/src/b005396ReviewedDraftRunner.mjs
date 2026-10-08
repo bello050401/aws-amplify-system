@@ -27,7 +27,7 @@ const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const fixed = diagnostic => ({ status: "BLOCKED", diagnostic,
   listingConfirmed: false, allowPublic: false });
 
-function fixedPack(pack) {
+export function exactB005396ReviewedPack(pack) {
   const exact = exactGeneralPrivateCreatePack(pack);
   return exact?.shopId === SHOP && exact.inventoryId === INVENTORY &&
     exact.priceYen === 99_999 && exact.quantity === 1 &&
@@ -45,7 +45,7 @@ export async function readB005396ImageByteProof(args, {
   try { ({ pack, fingerprint } = await readGeneralPrivateCreate(
     args.root, INVENTORY)); }
   catch { return fixed("PACK_UNVERIFIED"); }
-  if (!fixedPack(pack)) return fixed("REVIEWED_VALUES_CHANGED");
+  if (!exactB005396ReviewedPack(pack)) return fixed("REVIEWED_VALUES_CHANGED");
   let snapshot;
   try { snapshot = await fetchSnapshot({ origin: args.origin,
     belloProfileDir: args.belloProfileDir,
@@ -79,7 +79,7 @@ export async function reviewB005396PrivateDraft({ inventoryId, pack }, {
   evidence = null, origin, belloProfileDir, playwrightModulePath,
   fetchSnapshot = fetchCurrentGeneralPrivateCreateSnapshot,
 } = {}) {
-  const exact = fixedPack(pack);
+  const exact = exactB005396ReviewedPack(pack);
   if (inventoryId !== INVENTORY || !exact ||
       !evidence || Object.keys(evidence).sort().join() !== [
         "categoryPath", "description", "draftId", "imageSha256",

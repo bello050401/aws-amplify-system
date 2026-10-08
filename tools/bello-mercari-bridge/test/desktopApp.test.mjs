@@ -83,11 +83,26 @@ test("B005396 file fallback imports only the exact reviewed pack without Shops a
     assert.equal(wrongCsrf.status, 303);
     await assert.rejects(readGeneralPrivateCreate(join(dataDir, "Queue"),
       b005396Pack().inventoryId), { code: "ENOENT" });
-    const wrongTarget = await fileImport({ ...b005396Pack(),
-      inventoryId: "dd273c1e-9b2a-4013-acc6-c445a481fab8" }, csrf);
-    assert.equal(wrongTarget.status, 303);
-    assert.match(await (await fetch(app.url)).text(),
-      /B005396の準備ファイルを確認できませんでした/);
+    const base = b005396Pack();
+    const unreviewed = [
+      { ...base, inventoryId: "dd273c1e-9b2a-4013-acc6-c445a481fab8" },
+      { ...base, priceYen: 100000 },
+      { ...base, quantity: 2 },
+      { ...base, condition: "NEW" },
+      { ...base, categoryPath: "家具・インテリア > ソファ・ソファベッド > その他" },
+      { ...base, brandId: "brand123", brandName: "別ブランド" },
+      { ...base, imageRefs: [...base.imageRefs,
+        { ...base.imageRefs[0], storageKey: "inventory/other.jpg",
+          sortOrder: 1 }] },
+    ];
+    for (const changed of unreviewed) {
+      const rejected = await fileImport(changed, csrf);
+      assert.equal(rejected.status, 303);
+      assert.match(await (await fetch(app.url)).text(),
+        /B005396の準備ファイルを確認できませんでした/);
+      await assert.rejects(readGeneralPrivateCreate(join(dataDir, "Queue"),
+        base.inventoryId), { code: "ENOENT" });
+    }
     const imported = await fileImport(b005396Pack(), csrf);
     assert.equal(imported.status, 303);
     const page = await (await fetch(app.url)).text();

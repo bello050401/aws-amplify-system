@@ -44,7 +44,7 @@ import { enqueueGeneralPrivateCreate, listGeneralPrivateCreateJobs } from
   "./generalPrivateCreateJob.mjs";
 import { readGeneralPrivateCreateRequestJson } from
   "./generalPrivateCreateRequest.mjs";
-import { runB005396ReviewedDraft } from
+import { exactB005396ReviewedPack, runB005396ReviewedDraft } from
   "./b005396ReviewedDraftRunner.mjs";
 import { capturePublicVisibilityProofReadOnly,
   readCurrentPublicVisibilityProof } from "./visibilityPublicProof.mjs";
@@ -592,8 +592,8 @@ export async function startDesktopApp(config, {
           throw Error("Invalid import");
         const pack = JSON.parse(new TextDecoder("utf-8", { fatal: true })
           .decode(await file.arrayBuffer()));
-        if (pack?.inventoryId !== B005396_INVENTORY)
-          throw Error("Wrong inventory");
+        if (!exactB005396ReviewedPack(pack))
+          throw Error("Unreviewed B005396 values");
         await enqueueGeneralPrivateCreate(options.root, pack);
         message = "B005396の準備内容をPCに読み込みました。Shopsへの送信・保存・公開は行っていません。";
       } catch {
