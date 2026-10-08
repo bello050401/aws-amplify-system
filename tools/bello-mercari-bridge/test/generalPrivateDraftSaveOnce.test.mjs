@@ -113,7 +113,8 @@ async function withClaimedForm(action, description) {
 }
 
 const proof = () => ({ status: "NO_OTHER_MATCH_OBSERVED", complete: true,
-  allowFinalCreate: false, shopId, managementCode: pack().managementCode,
+  allowFinalCreate: false, networkBoundVerified: true,
+  shopId, managementCode: pack().managementCode,
   ownDraftId: remoteDraftId, observedAt: new Date().toISOString() });
 const image = () => [{ storageKey: "inventory/sofa.jpg", sha256 }];
 const snapshot = () => ({ files: image(), sourcePriceYen: 50000,
@@ -180,6 +181,8 @@ test("duplicate proof must be recent, exact-shop and own-draft bound", () => {
     { ...proof(), observedAt: "2026-01-01T00:00:00.000Z" }), false);
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form,
     { ...proof(), status: "REMOTE_DUPLICATE_POSSIBLE" }), false);
+  assert.equal(inspectB005396DraftDuplicateProof(pack(), form,
+    { ...proof(), networkBoundVerified: false }), false);
 });
 
 test("exact form readback checks every saved field, leaf, document and image", async () => {

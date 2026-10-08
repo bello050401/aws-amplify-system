@@ -82,12 +82,13 @@ export function inspectB005396DraftSaveInput(pack, form) {
 export function inspectB005396DraftDuplicateProof(pack, form, proof,
   now = Date.now()) {
   let status, shopId, managementCode, ownDraftId, observedAt,
-    complete, allowFinalCreate;
+    complete, allowFinalCreate, networkBoundVerified;
   try { ({ status, shopId, managementCode, ownDraftId, observedAt,
-    complete, allowFinalCreate } = proof ?? {}); }
+    complete, allowFinalCreate, networkBoundVerified } = proof ?? {}); }
   catch { return false; }
   return status === "NO_OTHER_MATCH_OBSERVED" && complete === true &&
-    allowFinalCreate === false && shopId === pack.shopId &&
+    allowFinalCreate === false && networkBoundVerified === true &&
+    shopId === pack.shopId &&
     managementCode === pack.managementCode &&
     ownDraftId === form.observedDraftId &&
     typeof observedAt === "string" &&
@@ -232,7 +233,11 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
       reasonCode = "REMOTE_DUPLICATE_UNVERIFIED";
       const proof = await captureDuplicateProof({ shopId: pack.shopId,
         managementCode: pack.managementCode,
-        ownDraftId: form.observedDraftId, title: pack.title });
+        ownDraftId: form.observedDraftId, title: pack.title,
+        priceYen: pack.priceYen, description: pack.description,
+        categoryId: pack.categoryId, condition: pack.condition,
+        shipping: pack.shipping, quantity: pack.quantity,
+        imageCount: pack.imageRefs.length });
       if (!inspectB005396DraftDuplicateProof(pack, form, proof))
         throw Error("REMOTE_DUPLICATE_UNVERIFIED");
       reasonCode = "FORM_CHANGED";

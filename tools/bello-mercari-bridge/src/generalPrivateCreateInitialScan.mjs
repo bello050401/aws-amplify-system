@@ -65,12 +65,14 @@ async function returnToPage(ui, url, pageIndex, pages) {
  */
 export async function captureGeneralPrivateInitialScanReadOnly({ page, shopId,
   managementCode, title, expectedDraftRowCount = 12, adapter = null,
-  collectDrafts = collectGeneralPrivateCreateDraftDetailsReadOnly } = {}) {
+  collectDrafts = collectGeneralPrivateCreateDraftDetailsReadOnly,
+  verifyDraftRows = null } = {}) {
   if (!ID.test(shopId ?? "") || !ID.test(managementCode ?? "") ||
       typeof title !== "string" || !title.trim() || title.length > 130 ||
       !Number.isSafeInteger(expectedDraftRowCount) ||
       expectedDraftRowCount < 1 || expectedDraftRowCount > 50 ||
-      !adapter && !page || typeof collectDrafts !== "function")
+      !adapter && !page || typeof collectDrafts !== "function" ||
+      verifyDraftRows !== null && typeof verifyDraftRows !== "function")
     throw Error("INITIAL_SCAN_INPUT_UNVERIFIED");
   const ui = adapter ?? generalPrivateSaleBrowserAdapter(page);
   const saleUrl = `${ORIGIN}/seller/shops/${shopId}/products?tab=on_sale`;
@@ -136,6 +138,13 @@ export async function captureGeneralPrivateInitialScanReadOnly({ page, shopId,
       secondDrafts.allowFinalCreate !== false ||
       !same(secondDrafts.rows, drafts.rows))
     throw Error("DRAFT_SECOND_READ_CHANGED");
+  if (verifyDraftRows !== null) {
+    const proof = await verifyDraftRows(drafts.rows);
+    if (proof?.status !== "DRAFT_NETWORK_BOUND_NO_MATCH" ||
+        proof.complete !== true || proof.allowFinalCreate !== false ||
+        proof.rowCount !== expectedDraftRowCount)
+      throw Error("DRAFT_NETWORK_BOUND_UNVERIFIED");
+  }
   const draftRows = drafts.rows.map(row => {
     if (!ID.test(row?.draftId ?? "") ||
         typeof row.title !== "string" || !row.title.trim() ||

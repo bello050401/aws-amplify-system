@@ -10,7 +10,15 @@ const managementCode = "BELLO_2C53F36A7A604E34801D8ABC24F6CFC0";
 const ownDraftId = "shopsDraft123";
 const title = "ソファ";
 const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=draft`;
-const target = { shopId, managementCode, ownDraftId, title };
+const target = { shopId, managementCode, ownDraftId, title,
+  priceYen: 99_999, description: "対象説明", categoryId: "cat1",
+  condition: "NO_NOTABLE_DAMAGE", quantity: 1, imageCount: 1,
+  shipping: { method: "METHOD_TYPE_UNDECIDED",
+    payer: "PAYER_TYPE_SELLER", origin: "jp11",
+    duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" } };
+const observeDraftReads = () => ({ stop: async () => ({
+  status: "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH", complete: true,
+  allowFinalCreate: false, rowCount: 2 }) });
 const draftRows = [{ draftId: ownDraftId, title, skuCode: managementCode },
   { draftId: "otherDraft", title: "椅子", skuCode: "OTHER_SKU" }];
 function listSnapshot(rowCount) {
@@ -73,6 +81,7 @@ test("exact sale SKU absence and complete draft details prove only own draft", a
       return countTwo; },
     collectDrafts: async args => { calls.push(["drafts", args]);
       return details; },
+    observeDraftReads,
   });
   assert.equal(proof.status, "NO_OTHER_MATCH_OBSERVED");
   assert.equal(proof.complete, true);
@@ -90,10 +99,26 @@ test("explicit save callback binds the retained browser context", async () => {
   const captureDuplicateProof = bindB005396PrivateDraftDuplicateReader(
     context, { searchSaleSku: async () => noSale,
       readDraftCount: async () => countTwo,
-      collectDrafts: async () => details });
+      collectDrafts: async () => details, observeDraftReads });
   const result = await captureDuplicateProof(target);
   assert.equal(result.status, "NO_OTHER_MATCH_OBSERVED");
   assert.equal(result.allowFinalCreate, false);
+  assert.equal(wasClosed(), true);
+});
+
+test("a missing fresh detail response stops before a save proof", async () => {
+  const { context, wasClosed } = fakeContext();
+  const result = await captureB005396PrivateDraftDuplicateProof({
+    context, ...target }, {
+    searchSaleSku: async () => noSale,
+    readDraftCount: async () => countTwo,
+    collectDrafts: async () => details,
+    observeDraftReads: () => ({ stop: async () => ({
+      status: "DRAFT_NETWORK_BOUND_UNVERIFIED", complete: false,
+      allowFinalCreate: false }) }),
+  });
+  assert.equal(result.status, "REMOTE_SCAN_INCOMPLETE");
+  assert.equal(result.diagnostic, "DRAFT_NETWORK_BOUND_UNVERIFIED");
   assert.equal(wasClosed(), true);
 });
 
@@ -114,7 +139,7 @@ test("sale match, unavailable scan and stable empty draft remain non-authorizing
       context, ...target }, {
       searchSaleSku: async () => sale,
       readDraftCount: async () => count,
-      collectDrafts: async () => details });
+      collectDrafts: async () => details, observeDraftReads });
     assert.equal(result.status, status);
     assert.equal(result.diagnostic, diagnostic);
     assert.equal(result.allowFinalCreate, false);
@@ -136,7 +161,8 @@ test("other matching or unidentified drafts cannot prove uniqueness", async () =
       context, ...target }, {
       searchSaleSku: async () => noSale,
       readDraftCount: async () => countTwo,
-      collectDrafts: async () => ({ ...details, rows }) });
+      collectDrafts: async () => ({ ...details, rows }),
+      observeDraftReads });
     assert.equal(result.status, status);
     assert.equal(result.diagnostic, diagnostic);
     assert.equal(result.allowFinalCreate, false);

@@ -19,6 +19,7 @@ import { openDraftMetadataReadSession } from "./session.mjs";
 import { isExplicitDraftReadQueryRequest,
   isPinnedShopsSelfReadQueryRequest } from
   "./draftReadMetadataObserver.mjs";
+import { observeBoundDraftReads } from "./draftBoundReadProof.mjs";
 
 const INVENTORY = B005396_INVENTORY;
 const SHOP = B005396_SHOP;
@@ -112,6 +113,7 @@ export function bindB005396InitialScan({ root, shopsProfileDir,
   playwrightModulePath }, {
   openSession = openDraftMetadataReadSession,
   scan = captureGeneralPrivateInitialScanReadOnly,
+  observeDraftReads = observeBoundDraftReads,
 } = {}) {
   return async ({ shopId, managementCode, title }) => {
     if (shopId !== SHOP || typeof scan !== "function")
@@ -133,13 +135,28 @@ export function bindB005396InitialScan({ root, shopsProfileDir,
     const session = await openSession({ root, profileDir: shopsProfileDir,
       playwrightModulePath, shopId, requestGuard,
       onWebSocketBlocked: () => { blocked = true; } });
+    let observer = null;
+    let proofStopped = false;
     try {
+      observer = observeDraftReads(session.context, { page: session.page,
+        shopId, expectedRowCount: 12 });
       await session.context.setOffline(false);
       const result = await scan({ page: session.page, shopId,
-        managementCode, title, expectedDraftRowCount: 12 });
+        managementCode, title, expectedDraftRowCount: 12,
+        verifyDraftRows: async rows => {
+          if (proofStopped) throw Error("DRAFT_PROOF_REUSED");
+          proofStopped = true;
+          return observer.stop(rows, { managementCode, title,
+            priceYen: 99_999 });
+        } });
       if (blocked) throw Error("SCAN_NETWORK_GUARD_BLOCKED");
+      if (!proofStopped) throw Error("DRAFT_PROOF_NOT_OBSERVED");
       return result;
-    } finally { await session.context.close().catch(() => {}); }
+    } finally {
+      if (observer && !proofStopped) await observer.stop([], { managementCode, title,
+        priceYen: 99_999 }).catch(() => {});
+      await session.context.close().catch(() => {});
+    }
   };
 }
 

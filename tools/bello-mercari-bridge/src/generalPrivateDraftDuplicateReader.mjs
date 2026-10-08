@@ -3,6 +3,7 @@ import { searchGeneralPrivateCreateSaleSkuReadOnly } from
 import { collectGeneralPrivateCreateDraftDetailsReadOnly,
   readGeneralPrivateDraftListDom } from
   "./generalPrivateCreateDraftCollector.mjs";
+import { observeBoundDraftReads } from "./draftBoundReadProof.mjs";
 
 const ORIGIN = "https://mercari-shops.com";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -71,21 +72,32 @@ export async function readStableGeneralPrivateDraftCount({ page, shopId,
  * complete double-read of every draft. No result is public-create permission.
  */
 export async function captureB005396PrivateDraftDuplicateProof({ context,
-  shopId, managementCode, ownDraftId, title,
+  shopId, managementCode, ownDraftId, title, priceYen,
+  description, categoryId, condition, shipping, quantity, imageCount,
   positiveControlPrefix = "B00" }, {
     searchSaleSku = searchGeneralPrivateCreateSaleSkuReadOnly,
     readDraftCount = readStableGeneralPrivateDraftCount,
     collectDrafts = collectGeneralPrivateCreateDraftDetailsReadOnly,
+    observeDraftReads = observeBoundDraftReads,
   } = {}) {
   if (!context || typeof context.newPage !== "function" ||
       !ID.test(shopId ?? "") || !ID.test(managementCode ?? "") ||
       !ID.test(ownDraftId ?? "") || typeof title !== "string" ||
       !title.trim() || title.length > 130 ||
+      priceYen !== 99_999 ||
+      typeof description !== "string" || !ID.test(categoryId ?? "") ||
+      condition !== "NO_NOTABLE_DAMAGE" || quantity !== 1 ||
+      imageCount !== 1 || shipping?.method !== "METHOD_TYPE_UNDECIDED" ||
+      shipping.payer !== "PAYER_TYPE_SELLER" ||
+      shipping.origin !== "jp11" ||
+      shipping.duration !== "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" ||
       typeof positiveControlPrefix !== "string" ||
       !/^[A-Za-z0-9_-]{2,20}$/.test(positiveControlPrefix) ||
       managementCode.startsWith(positiveControlPrefix))
     return fixed("REMOTE_SCAN_INCOMPLETE", "DUPLICATE_INPUT_UNVERIFIED");
   let page;
+  let observer = null;
+  let proofStopped = false;
   try { page = await context.newPage(); }
   catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DUPLICATE_PAGE_UNAVAILABLE"); }
   try {
@@ -122,6 +134,9 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
     if (countValue === 0)
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_ZERO_ROWS_OBSERVED");
 
+    try { observer = observeDraftReads(context, { page, shopId,
+      expectedRowCount: countValue }); }
+    catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_NETWORK_BOUND_UNVERIFIED"); }
     let draftResult;
     try { draftResult = await collectDrafts({ page, shopId,
       expectedRowCount: countValue }); }
@@ -135,6 +150,16 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
     if (draftStatus !== "DRAFT_DETAILS_DOM_OBSERVED" || draftAllow !== false ||
         !Array.isArray(draftRows) || draftRows.length !== countValue)
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_DETAILS_UNVERIFIED");
+    let bound;
+    const reviewed = { description, categoryId, condition, shipping,
+      quantity, imageCount };
+    try { proofStopped = true; bound = await observer.stop(draftRows, {
+      managementCode, title, priceYen, ownDraftId, reviewed }); }
+    catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_NETWORK_BOUND_UNVERIFIED"); }
+    if (bound?.status !== "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH" ||
+        bound.complete !== true || bound.allowFinalCreate !== false ||
+        bound.rowCount !== countValue)
+      return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_NETWORK_BOUND_UNVERIFIED");
     const rows = [];
     const seen = new Set();
     try {
@@ -164,9 +189,14 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
         (row.code === null || !row.title.trim())))
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_IDENTITY_UNVERIFIED");
     return { status: "NO_OTHER_MATCH_OBSERVED", complete: true,
-      allowFinalCreate: false, shopId, managementCode, ownDraftId,
+      allowFinalCreate: false, networkBoundVerified: true,
+      shopId, managementCode, ownDraftId,
       observedAt: new Date().toISOString() };
-  } finally { try { await page.close(); } catch { /* read-only page cleanup */ } }
+  } finally {
+    if (observer && !proofStopped) await observer.stop([], {
+      managementCode, title, priceYen, ownDraftId }).catch(() => {});
+    try { await page.close(); } catch { /* read-only page cleanup */ }
+  }
 }
 
 /** Explicit callback adapter for the save pathway; never installed by default. */

@@ -113,3 +113,25 @@ test("observed blank sale SKU remains distinct from an unread detail", async () 
     managementCode, title: "対象商品", expectedDraftRowCount: 1,
     ...changed }), /SALE_DETAIL_UNVERIFIED/);
 });
+
+test("a supplied network proof must cover every draft and cannot admit blank DOM identity", async () => {
+  const ui = fixture();
+  await assert.rejects(captureGeneralPrivateInitialScanReadOnly({ shopId,
+    managementCode, title: "対象商品", expectedDraftRowCount: 1, ...ui,
+    verifyDraftRows: async () => ({ status: "DRAFT_NETWORK_BOUND_UNVERIFIED",
+      complete: false, allowFinalCreate: false }) }),
+  /DRAFT_NETWORK_BOUND_UNVERIFIED/);
+  const blank = fixture();
+  const original = blank.collectDrafts;
+  blank.collectDrafts = async args => {
+    const result = await original(args);
+    result.rows[0].title = "";
+    result.rows[0].skuCode = null;
+    return result;
+  };
+  await assert.rejects(captureGeneralPrivateInitialScanReadOnly({ shopId,
+    managementCode, title: "対象商品", expectedDraftRowCount: 1, ...blank,
+    verifyDraftRows: async () => ({ status: "DRAFT_NETWORK_BOUND_NO_MATCH",
+      complete: true, allowFinalCreate: false, rowCount: 1 }) }),
+  /DRAFT_DETAIL_AMBIGUOUS/);
+});

@@ -88,6 +88,9 @@ test("read-only scan binder closes the session and blocks non-query writes", asy
   let guard;
   const scan = bindB005396InitialScan({ root: "r", shopsProfileDir: "s",
     playwrightModulePath: "p" }, {
+    observeDraftReads: () => ({ stop: async () => ({
+      status: "DRAFT_NETWORK_BOUND_NO_MATCH", complete: true,
+      allowFinalCreate: false, rowCount: 12 }) }),
     openSession: async options => { guard = options.requestGuard;
       return { context: { setOffline: async () => {},
         close: async () => { closed++; } }, page: {} }; },
@@ -126,10 +129,14 @@ test("read-only scan binder admits only the pinned Self account query", async ()
   let guard;
   const scan = bindB005396InitialScan({ root: "r", shopsProfileDir: "s",
     playwrightModulePath: "p" }, {
+    observeDraftReads: () => ({ stop: async () => ({
+      status: "DRAFT_NETWORK_BOUND_NO_MATCH", complete: true,
+      allowFinalCreate: false, rowCount: 12 }) }),
     openSession: async options => { guard = options.requestGuard;
       return { context: { setOffline: async () => {}, close: async () => {} },
         page: {} }; },
-    scan: async () => {
+    scan: async ({ verifyDraftRows }) => {
+      await verifyDraftRows([]);
       const request = body => ({ method: () => "POST",
         url: () => "https://mercari-shops.com/graphql",
         resourceType: () => "fetch",
