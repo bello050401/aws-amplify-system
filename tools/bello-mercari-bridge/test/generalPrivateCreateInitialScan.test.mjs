@@ -2,8 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { captureGeneralPrivateInitialScanReadOnly } from
   "../src/generalPrivateCreateInitialScan.mjs";
+import { inspectGeneralPrivateCreateRemoteScan } from
+  "../src/generalPrivateCreateRemotePreflight.mjs";
 
 const shopId = "evkhihBFFNn5hukMS9s36H";
+const inventoryId = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
+const managementCode = `BELLO_${inventoryId.replace(/-/g, "").toUpperCase()}`;
 const saleUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=on_sale`;
 const detailUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/sale1/edit`;
 function fixture({ changedDetail = false } = {}) {
@@ -38,7 +42,7 @@ function fixture({ changedDetail = false } = {}) {
 test("initial UI scan connects independently read sale and draft identities to raw preflight shape", async () => {
   const ui = fixture();
   const scan = await captureGeneralPrivateInitialScanReadOnly({ shopId,
-    managementCode: "BELLO_123", title: "対象商品",
+    managementCode, title: "対象商品",
     expectedDraftRowCount: 1, ...ui });
   assert.deepEqual(scan.tabs[0].pages[0].rows, [{ remoteId: "sale1",
     title: "別の商品", skuCode: "OTHER_1", detailVerified: true }]);
@@ -48,12 +52,27 @@ test("initial UI scan connects independently read sale and draft identities to r
     ["draft1"]);
   assert.equal(scan.tabs[1].pages[0].settled.firstIdBefore, "sale1");
   assert.equal(ui.getDraftReads(), 2);
+  const pack = { schemaVersion: 1,
+    kind: "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK", shopId, inventoryId,
+    draftId: "12345678-1234-4234-8234-123456789abc",
+    draftUpdatedAt: "2026-10-08T00:00:00.000Z", title: "対象商品",
+    description: "説明", condition: "NO_NOTABLE_DAMAGE",
+    imageRefs: [{ source: "INVENTORY", storageKey: "inventory/sofa.jpg",
+      sortOrder: 0, photoAssetId: null }], priceYen: 99999, quantity: 1,
+    categoryId: "12345", categoryPath:
+      "家具・インテリア > ソファ・ソファベッド > 2人掛け・3人掛けソファ",
+    brandId: null, brandName: null, managementCode,
+    shipping: { method: "METHOD_TYPE_UNDECIDED", payer: "PAYER_TYPE_SELLER",
+      origin: "jp11", duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" },
+    status: "PREPARED_NO_SEND" };
+  assert.equal(inspectGeneralPrivateCreateRemoteScan(pack, scan).status,
+    "NO_MATCH_IN_OBSERVED_UI");
 });
 
 test("changed detail title fails closed before draft read", async () => {
   const ui = fixture({ changedDetail: true });
   await assert.rejects(captureGeneralPrivateInitialScanReadOnly({ shopId,
-    managementCode: "BELLO_123", title: "対象商品",
+    managementCode, title: "対象商品",
     expectedDraftRowCount: 1, ...ui }), /SALE_DETAIL_UNVERIFIED/);
   assert.equal(ui.getDraftReads(), 0);
 });
