@@ -48,6 +48,9 @@ import { runB005396PrivateDraftPcFlow } from
   "./generalPrivateDraftPcFlow.mjs";
 import { capturePublicVisibilityProofReadOnly,
   readCurrentPublicVisibilityProof } from "./visibilityPublicProof.mjs";
+import { generalPrivateDraftOccupationActive,
+  recordGeneralPrivateDraftScreenRecovery } from
+  "./generalPrivateDraftOccupancy.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const B005396_INVENTORY = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
@@ -167,22 +170,23 @@ function page({ csrf, options, message, busy, workflowRunning, recoveryRunning,
   workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed,
   visibilityJobs = [], retainedVisibilityOpen = false, generalCreateJobs = [],
-  offlineDraftActionEnabled = false,
+  offlineDraftActionEnabled = false, retainedGeneralDraftOpen = false,
   listingWindow = { remainingSeconds: 0, nextAllowedAt: null } }) {
   if (options.createTestObservationEnabled)
     return createTestPage({ csrf, message, busy, claim: createClaim,
       preflight: createPreflight, result: createResult, open: createOpen, armed: createArmed });
   const button = (action, label, disabled = false) =>
-    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning || recoveryRunning || retainedVisibilityOpen ? "disabled" : ""}>${label}</button></form>`;
+    `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="${action}"><button ${disabled || busy || workflowRunning || recoveryRunning || retainedVisibilityOpen || retainedGeneralDraftOpen ? "disabled" : ""}>${label}</button></form>`;
   const visibilityButton = item => {
     const baseDisabled = item.attempted || busy || retainedVisibilityOpen ||
+      retainedGeneralDraftOpen ||
       workflowRunning || recoveryRunning ||
       (item.job.action === "STOP" && !item.publicVerified) ||
       item.job.action === "RELIST"; // Public modal controls await read-only observation.
     const waiting = item.job.action === "RELIST" &&
       Number.isInteger(listingWindow.remainingSeconds) &&
       listingWindow.remainingSeconds > 0;
-    return `${item.job.action === "STOP" && !item.attempted ? `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="verify-public-visibility"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${busy || retainedVisibilityOpen ? "disabled" : ""}>既存Shops商品の公開状態を読取確認</button></form>` : ""}<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-visibility-job"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${item.job.action === "RELIST" ? `data-relist-button data-base-disabled="1"` : ""} ${baseDisabled || waiting ? "disabled" : ""}>${item.job.action === "STOP" ? "出品停止を1回実行" : "出品（同じ商品ID・公開UI確認待ち）"}</button></form>`;
+    return `${item.job.action === "STOP" && !item.attempted ? `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="verify-public-visibility"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${busy || retainedVisibilityOpen || retainedGeneralDraftOpen ? "disabled" : ""}>既存Shops商品の公開状態を読取確認</button></form>` : ""}<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-visibility-job"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${item.job.action === "RELIST" ? `data-relist-button data-base-disabled="1"` : ""} ${baseDisabled || waiting ? "disabled" : ""}>${item.job.action === "STOP" ? "出品停止を1回実行" : "出品（同じ商品ID・公開UI確認待ち）"}</button></form>`;
   };
   const pinnedB005757 = isPinnedB005757ImageTarget(options.manualObservation,
     options.requestId);
@@ -192,11 +196,12 @@ body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#222;margin:0;paddi
 <p>読取は既存の商品IDを照合します。公開状態の変更は、下のPCジョブを選んだ場合だけ行います。</p>
 <p><small>BELLO: ${html(options.origin)}<br>読取依頼ID: <code>${html(options.requestId)}</code></small></p>
 ${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
-<section><h2>BELLO EC出品のPCジョブを読み込む</h2><p>BELLOから直接渡せなかった場合だけ、保存したJSONファイルを指定してください。読み込みではShopsを変更しません。</p><form method="post" action="/visibility-import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="file" name="job" accept=".json,application/json" required><button ${busy || retainedVisibilityOpen ? "disabled" : ""}>PCジョブを読み込む</button></form></section>
+${retainedGeneralDraftOpen ? `<section><h2>未解決の非公開下書き画面</h2><p>認証切れまたは結果不明のため、他のPCジョブを停止しています。Shops画面を確認し、このPC上で明示的に回収してください。元の保存操作は再実行できません。</p><form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="recover-general-draft-session"><button>未解決画面を回収</button></form></section>` : ""}
+<section><h2>BELLO EC出品のPCジョブを読み込む</h2><p>BELLOから直接渡せなかった場合だけ、保存したJSONファイルを指定してください。読み込みではShopsを変更しません。</p><form method="post" action="/visibility-import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="file" name="job" accept=".json,application/json" required><button ${busy || retainedVisibilityOpen || retainedGeneralDraftOpen ? "disabled" : ""}>PCジョブを読み込む</button></form></section>
 ${visibilityJobs.length ? `<section><h2>BELLO EC出品からの公開状態ジョブ</h2><p>対象IDと現在の公開状態をShopsで読み直し、1回だけ画面操作します。結果が不明なら再操作しません。再出品はこのPCに同じ商品の停止完了記録がある場合だけ可能です。</p>${visibilityJobs.map(item => `<div><p><strong>${html(item.job.action === "STOP" ? "出品停止" : "再出品")}</strong> / ${html(item.job.target.skuCode)} / 商品ID <code>${html(item.job.target.remoteId)}</code> / ${html(item.attempted ? item.outcome ?? "UNKNOWN" : "未実行")}</p>${visibilityButton(item)}</div>`).join("")}</section>` : ""}
 ${visibilityJobs.some(item => item.job.action === "RELIST") ? `<p data-listing-countdown data-remaining-seconds="${html(listingWindow.remainingSeconds ?? "")}">${listingWindow.remainingSeconds === null ? "出品間隔の記録を確認できません。再出品はできません。" : listingWindow.remainingSeconds > 0 ? `次の出品まで ${html(listingWindow.remainingSeconds)} 秒` : "出品間隔: 実行可能"}</p><script>/* Display uses a monotonic clock; the PC runner checks the gate again. */
 (() => { const label = document.querySelector('[data-listing-countdown]'); const initial = Number(label.dataset.remainingSeconds); if (!Number.isInteger(initial) || initial < 0 || !label.dataset.remainingSeconds) return; const until = performance.now() + initial * 1000; const tick = () => { const seconds = Math.max(0, Math.ceil((until - performance.now()) / 1000)); label.textContent = seconds ? '次の出品まで ' + seconds + ' 秒' : '出品間隔: 実行可能'; document.querySelectorAll('[data-relist-button]').forEach(button => { if (button.dataset.baseDisabled === '0') button.disabled = seconds > 0; }); }; tick(); setInterval(tick, 1000); })();</script>` : ""}
-${generalCreateJobs.length ? `<section><h2>BELLOから受け取った新規非公開出品の準備</h2><p>保存された準備内容はShopsへ未送信です。既存商品の重複照合と画像・全項目の照合が完了するまで送信できません。</p>${generalCreateJobs.map(item => `<div><p><code>${html(item.managementCode)}</code> ／ ${html(item.outcome ?? (item.claimed ? "結果の確認が必要" : "未送信"))}</p>${item.inventoryId === B005396_INVENTORY ? `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-general-private-draft"><input type="hidden" name="inventoryId" value="${html(item.inventoryId)}"><button ${offlineDraftActionEnabled && !item.claimed && !busy ? "" : "disabled"}>非公開下書きの保存を1回実行</button></form><p><small>${offlineDraftActionEnabled ? "保存前にBELLO、Shopsの重複と画面内容を再確認します。結果不明なら再実行できません。" : "独立レビュー中のため保存操作は保留しています。"}</small></p>` : ""}</div>`).join("")}</section>` : ""}
+${generalCreateJobs.length ? `<section><h2>BELLOから受け取った新規非公開出品の準備</h2><p>保存された準備内容はShopsへ未送信です。既存商品の重複照合と画像・全項目の照合が完了するまで送信できません。</p>${generalCreateJobs.map(item => `<div><p><code>${html(item.managementCode)}</code> ／ ${html(item.outcome ?? (item.claimed ? "結果の確認が必要" : "未送信"))}</p>${item.inventoryId === B005396_INVENTORY ? `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-general-private-draft"><input type="hidden" name="inventoryId" value="${html(item.inventoryId)}"><button ${offlineDraftActionEnabled && !item.claimed && !busy && !retainedGeneralDraftOpen ? "" : "disabled"}>非公開下書きの保存を1回実行</button></form><p><small>${offlineDraftActionEnabled ? "保存前にBELLO、Shopsの重複と画面内容を再確認します。結果不明なら再実行できません。" : "独立レビュー中のため保存操作は保留しています。"}</small></p>` : ""}</div>`).join("")}</section>` : ""}
 ${retainedVisibilityOpen ? "<p>Shops操作の結果を確認できません。専用Chromeを開いたままにしています。再操作せず状態を確認してください。</p>" : ""}
 ${workflowRunning ? `<p>工程を実行中です。現在の段階: <code>${html(lastWorkflowStage || "準備中")}</code></p>` : ""}
 ${recoveryRunning ? `<p>一回限りの復旧工程を実行中です。現在の段階: <code>${html(lastRecoveryStage || "準備中")}</code></p>` : ""}
@@ -317,6 +322,7 @@ export async function startDesktopApp(config, {
   readPublicVisibility = readCurrentPublicVisibilityProof,
 } = {}) {
   const options = optionsOf(config);
+  let persistedGeneralDraftHold = await generalPrivateDraftOccupationActive(options.root);
   const initialCreate = options.createTestObservationEnabled ?
     await readCreate(options.root) : null;
   let createClaim = initialCreate?.claim ?? { claimed: false, valid: true,
@@ -487,6 +493,7 @@ export async function startDesktopApp(config, {
     if (request.url === "/visibility-job" &&
         ["OPTIONS", "POST"].includes(request.method)) {
       const allowed = !options.createTestObservationEnabled &&
+        !persistedGeneralDraftHold && !retainedGeneralDraftSession &&
         request.headers.origin === options.origin;
       const cors = { "Access-Control-Allow-Origin": options.origin,
         "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -525,7 +532,9 @@ export async function startDesktopApp(config, {
         "Access-Control-Allow-Headers": "content-type, x-bello-mercari-bridge",
         "Access-Control-Allow-Private-Network": "true", Vary: "Origin",
         "Cache-Control": "no-store", "Content-Type": "application/json; charset=utf-8" };
-      if (options.createTestObservationEnabled || request.headers.origin !== options.origin) {
+      if (options.createTestObservationEnabled ||
+          persistedGeneralDraftHold || retainedGeneralDraftSession ||
+          request.headers.origin !== options.origin) {
         response.writeHead(403); response.end(); return;
       }
       if (request.method === "OPTIONS") {
@@ -550,7 +559,9 @@ export async function startDesktopApp(config, {
       return;
     }
     if (request.method === "POST" && request.url === "/visibility-import") {
-      if (options.createTestObservationEnabled || request.headers.origin !== localOrigin ||
+      if (options.createTestObservationEnabled ||
+          persistedGeneralDraftHold || retainedGeneralDraftSession ||
+          request.headers.origin !== localOrigin ||
           !request.headers["content-type"]?.startsWith("multipart/form-data;") ||
           busy || retainedVisibilitySession) {
         send(response, 403, "Forbidden", "text/plain; charset=utf-8"); return;
@@ -619,6 +630,8 @@ export async function startDesktopApp(config, {
         createClaim, createPreflight, createResult, createOpen: Boolean(createSession),
         createArmed, visibilityJobs, generalCreateJobs, listingWindow,
         offlineDraftActionEnabled,
+        retainedGeneralDraftOpen: Boolean(retainedGeneralDraftSession) ||
+          persistedGeneralDraftHold,
         retainedVisibilityOpen: Boolean(retainedVisibilitySession) }));
       return;
     }
@@ -637,11 +650,13 @@ export async function startDesktopApp(config, {
       }
     } catch { send(response, 400, "Invalid request", "text/plain; charset=utf-8"); return; }
     const form = new URLSearchParams(body);
+    const requestedAction = form.get("action");
     const supplied = Buffer.from(form.get("csrf") ?? "", "utf8");
     const actual = Buffer.from(csrf, "utf8");
     if (supplied.length !== actual.length || !timingSafeEqual(supplied, actual) ||
         busy || workflowRunning || recoveryRunning || retainedVisibilitySession ||
-        retainedGeneralDraftSession) {
+        ((retainedGeneralDraftSession || persistedGeneralDraftHold) &&
+          requestedAction !== "recover-general-draft-session")) {
       send(response, 403, "Forbidden", "text/plain; charset=utf-8"); return;
     }
     busy = true;
@@ -653,7 +668,16 @@ export async function startDesktopApp(config, {
           !["create-test-open", "create-test-arm", "create-test-finish", "shutdown"]
             .includes(action))
         throw Error("Only the pinned private-create observation is available");
-      if (action === "verify-public-visibility") {
+      if (action === "recover-general-draft-session") {
+        if (!retainedGeneralDraftSession && !persistedGeneralDraftHold)
+          throw Error("No unresolved draft screen");
+        if (retainedGeneralDraftSession)
+          await retainedGeneralDraftSession.context.close();
+        await recordGeneralPrivateDraftScreenRecovery(options.root);
+        retainedGeneralDraftSession = null;
+        persistedGeneralDraftHold = false;
+        message = "未解決のShops画面を回収しました。元の下書き保存は再実行できません。";
+      } else if (action === "verify-public-visibility") {
         const key = form.get("jobKey");
         if (!HASH.test(key ?? "") || shopsContext || manualSession ||
             retainedSaveSession || retainedImageSession || retainedWorkflowSession ||
@@ -713,11 +737,9 @@ export async function startDesktopApp(config, {
           playwrightModulePath: options.playwrightModulePath });
         if (result?.retainedSession?.context) {
           retainedGeneralDraftSession = result.retainedSession;
-          result.retainedSession.context.once?.("close", () => {
-            if (retainedGeneralDraftSession === result.retainedSession)
-              retainedGeneralDraftSession = null;
-          });
         }
+        persistedGeneralDraftHold = await generalPrivateDraftOccupationActive(
+          options.root);
         message = result?.diagnostic === "REVIEW_HOLD" ?
           "独立レビュー中のため、Shopsへの保存は実行していません。" :
           result?.status === "BLOCKED" ?

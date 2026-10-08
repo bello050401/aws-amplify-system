@@ -24,6 +24,7 @@ export async function runB005396PrivateDraftPcFlow({ root, inventoryId,
     fillForm = fillGeneralPrivateCreateFormOnly,
     bindDuplicateReader = bindB005396PrivateDraftDuplicateReader,
     saveDraft = saveB005396PrivateDraftOnce,
+    saveDraftOptions = {},
   } = {}) {
   if (inventoryId !== INVENTORY) return blocked("TARGET_UNVERIFIED");
   let pack;
@@ -68,8 +69,15 @@ export async function runB005396PrivateDraftPcFlow({ root, inventoryId,
   if (typeof captureDuplicateProof !== "function")
     return { ...unknown("DUPLICATE_READER_UNAVAILABLE"),
       retainedSession: form.retainedSession };
-  try { return await saveDraft({ root, inventoryId, form, origin,
-    belloProfileDir, playwrightModulePath }, { captureDuplicateProof }); }
+  try { const result = await saveDraft({ root, inventoryId, form, origin,
+    belloProfileDir, playwrightModulePath }, {
+    ...saveDraftOptions, captureDuplicateProof });
+    if (!result || !["BLOCKED", "UNKNOWN"].includes(result.status))
+      return { ...unknown("DRAFT_SAVE_UNKNOWN_NO_RETRY"),
+        retainedSession: form.retainedSession };
+    return { ...result,
+      retainedSession: result?.retainedSession ?? form.retainedSession };
+  }
   catch { return { ...unknown("DRAFT_SAVE_UNKNOWN_NO_RETRY"),
     retainedSession: form.retainedSession }; }
 }

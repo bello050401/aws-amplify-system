@@ -16,6 +16,9 @@ import { PINNED_READ_QUERY_SHA256, runPinnedDirectReadProbeOnce } from
   "../src/directReadProbe.mjs";
 import { CREATE_TEST_TARGET, readCreateTestObservation } from
   "../src/createTestAttempt.mjs";
+import { claimGeneralPrivateCreateOnce,
+  writeGeneralPrivateCreateResultOnce } from
+  "../src/generalPrivateCreateJob.mjs";
 
 const config = () => ({ origin: "https://bello.example.test", requestId: "a".repeat(64),
   dataDir: join(tmpdir(), "bello-desktop-test") });
@@ -85,7 +88,13 @@ test("B005396 PC draft action stays review-held and keeps BELLO listing state", 
     openBrowser: null, offlineDraftActionEnabled: true,
     runGeneralDraft: async args => { runs++;
       assert.equal(args.inventoryId, inventoryId);
-      return { status: "BLOCKED", diagnostic: "REVIEW_HOLD" }; } });
+      const claim = await claimGeneralPrivateCreateOnce(args.root, inventoryId);
+      await writeGeneralPrivateCreateResultOnce(args.root, inventoryId, {
+        attemptId: claim.attemptId, outcome: "UNKNOWN",
+        listingConfirmed: false, observedRemoteId: null,
+        observedDraftId: "shopsDraft123", reasonCode: "FORM_READY_NO_SAVE" });
+      return { status: "BLOCKED", diagnostic: "SOURCE_CHANGED",
+        retainedSession: { context: context(), page: {} } }; } });
   try {
     const csrf = await token(offline.url);
     const attempt = await fetch(`${offline.url}/action`, { method: "POST",
@@ -96,8 +105,37 @@ test("B005396 PC draft action stays review-held and keeps BELLO listing state", 
     assert.equal(attempt.status, 303);
     assert.equal(runs, 1);
     assert.match(await (await fetch(offline.url)).text(),
-      /独立レビュー中のため、Shopsへの保存は実行していません/);
-  } finally { await offline.close();
+      /未解決の非公開下書き画面/);
+    const otherJob = await fetch(`${offline.url}/action`, { method: "POST",
+      redirect: "manual", headers: { Origin: offline.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "run-visibility-job",
+        jobKey: "b".repeat(64) }) });
+    assert.equal(otherJob.status, 403);
+  } finally { await offline.close(); }
+  const restarted = await startDesktopApp({ ...config(), dataDir }, {
+    openBrowser: null,
+    runGeneralDraft: async () => { runs++; } });
+  try {
+    assert.match(await (await fetch(restarted.url)).text(),
+      /<h2>未解決の非公開下書き画面<\/h2>/);
+    const csrf = await token(restarted.url);
+    const otherJob = await fetch(`${restarted.url}/action`, { method: "POST",
+      redirect: "manual", headers: { Origin: restarted.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "run-visibility-job",
+        jobKey: "b".repeat(64) }) });
+    assert.equal(otherJob.status, 403);
+    const recovered = await fetch(`${restarted.url}/action`, { method: "POST",
+      redirect: "manual", headers: { Origin: restarted.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf,
+        action: "recover-general-draft-session" }) });
+    assert.equal(recovered.status, 303);
+    assert.doesNotMatch(await (await fetch(restarted.url)).text(),
+      /<h2>未解決の非公開下書き画面<\/h2>/);
+    assert.equal(runs, 1);
+  } finally { await restarted.close();
     await rm(dataDir, { recursive: true, force: true }); }
 });
 

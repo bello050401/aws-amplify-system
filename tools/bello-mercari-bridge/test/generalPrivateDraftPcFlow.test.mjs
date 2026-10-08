@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { enqueueGeneralPrivateCreate } from
+import { enqueueGeneralPrivateCreate, claimGeneralPrivateCreateOnce,
+  writeGeneralPrivateCreateResultOnce } from
   "../src/generalPrivateCreateJob.mjs";
 import { runB005396PrivateDraftPcFlow } from
   "../src/generalPrivateDraftPcFlow.mjs";
@@ -96,6 +98,56 @@ test("authentication expiry or unknown form stops before duplicate and save", as
     assert.equal(result.status, "UNKNOWN");
     assert.equal(result.retryAllowed, false);
     assert.equal(later, 0);
+  });
+});
+
+test("BELLO auth loss after form fill retains the unresolved Shops browser", async () => {
+  await withJob(async args => {
+    const retainedSession = { context: { close: async () => {} }, page: {} };
+    const result = await runB005396PrivateDraftPcFlow(args, {
+      reviewGate: async () => true,
+      captureInitialScan: async () => ({}),
+      fillForm: async () => ({ status: "FORM_READY_NO_SAVE",
+        allowSave: false, listingConfirmed: false, retainedSession }),
+      bindDuplicateReader: () => async () => ({}),
+      saveDraft: async () => ({ status: "BLOCKED",
+        diagnostic: "SOURCE_CHANGED", listingConfirmed: false,
+        allowPublic: false }),
+    });
+    assert.equal(result.status, "BLOCKED");
+    assert.equal(result.diagnostic, "SOURCE_CHANGED");
+    assert.equal(result.retainedSession, retainedSession);
+  });
+});
+
+test("real save preflight AUTH_REQUIRED keeps the claimed form browser occupied", async () => {
+  await withJob(async args => {
+    const remoteDraftId = "shopsDraft123";
+    const retainedSession = { context: { close: async () => {} },
+      page: { url: () => "https://mercari-shops.com" } };
+    const claim = await claimGeneralPrivateCreateOnce(args.root, inventoryId);
+    await writeGeneralPrivateCreateResultOnce(args.root, inventoryId, {
+      attemptId: claim.attemptId, outcome: "UNKNOWN",
+      listingConfirmed: false, observedRemoteId: null,
+      observedDraftId: remoteDraftId, reasonCode: "FORM_READY_NO_SAVE" });
+    const form = { status: "FORM_READY_NO_SAVE", allowSave: false,
+      listingConfirmed: false, attemptId: claim.attemptId,
+      observedDraftId: remoteDraftId, documentTimeOrigin: 123456789,
+      selectedImageSha256s: ["a".repeat(64)],
+      selectedAssets: [{ pathHash: createHash("sha256")
+        .update("/asset/sofa.jpg").digest("hex"),
+        width: 960, height: 960 }], retainedSession };
+    const result = await runB005396PrivateDraftPcFlow(args, {
+      reviewGate: async () => true,
+      captureInitialScan: async () => ({}),
+      fillForm: async () => form,
+      bindDuplicateReader: () => async () => ({}),
+      saveDraftOptions: { fetchSnapshot: async () => {
+        throw Error("AUTH_REQUIRED"); } },
+    });
+    assert.equal(result.status, "BLOCKED");
+    assert.equal(result.diagnostic, "SOURCE_CHANGED");
+    assert.equal(result.retainedSession, retainedSession);
   });
 });
 
