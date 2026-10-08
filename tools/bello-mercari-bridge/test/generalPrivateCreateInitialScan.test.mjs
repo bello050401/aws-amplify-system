@@ -83,6 +83,20 @@ test("changed detail title fails closed before draft read", async () => {
   assert.equal(ui.getDraftReads(), 0);
 });
 
+test("Shops sign-in redirect is identified before any seller detail read", async () => {
+  for (const navigationThrows of [false, true]) {
+    let detailReads = 0;
+    const page = { url: () => "https://mercari-shops.com/signin/seller" };
+    const adapter = { gotoSale: async () => {
+      if (navigationThrows) throw Error("navigation interrupted");
+    }, saleSnapshot: async () => { detailReads++; return null; } };
+    await assert.rejects(captureGeneralPrivateInitialScanReadOnly({
+      page, adapter, shopId, managementCode, title: "対象商品",
+      expectedDraftRowCount: 1 }), /AUTH_REQUIRED/);
+    assert.equal(detailReads, 0);
+  }
+});
+
 test("existing sale titles over 130 characters are checked against their details", async () => {
   const ui = fixture({ saleTitle: "既存商品".repeat(35) });
   const scan = await captureGeneralPrivateInitialScanReadOnly({ shopId,

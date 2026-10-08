@@ -98,6 +98,23 @@ test("an incomplete remote read blocks before BELLO fetch or claim", async () =>
   });
 });
 
+test("Shops authentication requirement blocks before image read or claim", async () => {
+  await withQueue(async root => {
+    let later = 0;
+    const result = await fillGeneralPrivateCreateFormOnly({ root,
+      inventoryId }, {
+      remotePreflight: async () => ({ status: "AUTH_REQUIRED",
+        allowFinalCreate: false }),
+      fetchImages: async () => { later++; return [imageFile()]; },
+      claimOnce: async () => { later++; },
+    });
+    assert.deepEqual(result, { status: "BLOCKED",
+      diagnostic: "AUTH_REQUIRED" });
+    assert.equal(later, 0);
+    assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, false);
+  });
+});
+
 test("known existing exception needs exact evidence before the permanent claim", async () => {
   for (const mode of ["disabled", "invalid", "valid"]) {
     const root = await mkdtemp(join(tmpdir(), "bello-known-form-"));

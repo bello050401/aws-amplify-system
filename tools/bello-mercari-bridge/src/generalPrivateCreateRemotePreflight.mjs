@@ -261,5 +261,6 @@ export async function preflightGeneralPrivateCreateRemote({ root, inventoryId,
     return allowKnownExistingPrivateTest === true ?
       inspectB005396KnownExistingPrivateTest(pack, scan) :
       inspectGeneralPrivateCreateRemoteScan(pack, scan);
-  } catch { return fixed("REMOTE_SCAN_UNAVAILABLE"); }
+  } catch (error) { return fixed(error?.message === "AUTH_REQUIRED" ?
+    "AUTH_REQUIRED" : "REMOTE_SCAN_UNAVAILABLE"); }
 }

@@ -9,6 +9,14 @@ const REMOTE_TITLE_MAX = 500;
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const titleKey = value => value.normalize("NFKC").replace(/\s+/g, "").trim();
 
+function shopsSignInPage(page) {
+  try {
+    const url = new URL(page?.url?.());
+    return url.origin === ORIGIN &&
+      (url.pathname === "/signin" || url.pathname.startsWith("/signin/"));
+  } catch { return false; }
+}
+
 function exactSaleDetail(view, shopId, row) {
   try {
     const url = new URL(view?.url);
@@ -80,13 +88,19 @@ export async function captureGeneralPrivateInitialScanReadOnly({ page, shopId,
   const ui = adapter ?? generalPrivateSaleBrowserAdapter(page);
   const saleUrl = `${ORIGIN}/seller/shops/${shopId}/products?tab=on_sale`;
   const draftUrl = `${ORIGIN}/seller/shops/${shopId}/products?tab=draft`;
-  await ui.gotoSale(saleUrl);
+  try { await ui.gotoSale(saleUrl); }
+  catch (error) {
+    if (shopsSignInPage(page)) throw Error("AUTH_REQUIRED");
+    throw error;
+  }
+  if (shopsSignInPage(page)) throw Error("AUTH_REQUIRED");
   const salePages = [];
   let previousRows = null;
   let priorFirstId = null;
   for (let pageIndex = 0; pageIndex < 50; pageIndex++) {
     const { snapshot: first } = await stableGeneralPrivateSaleList(
       ui, saleUrl, previousRows);
+    if (shopsSignInPage(page)) throw Error("AUTH_REQUIRED");
     if (!first || pageIndex === 0 && first.prevDisabled !== true ||
         pageIndex > 0 && first.prevDisabled !== false ||
         first.rows.some(row => !ID.test(row.remoteId ?? "") ||

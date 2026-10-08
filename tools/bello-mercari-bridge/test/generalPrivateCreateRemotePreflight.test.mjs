@@ -216,6 +216,25 @@ test("known-title basis is recorded once and never overrides a local claim", asy
   }
 });
 
+test("DRY preflight reports Shops authentication without claiming or sending", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-auth-preflight-"));
+  try {
+    await enqueueGeneralPrivateCreate(root, knownPack());
+    const auth = await preflightGeneralPrivateCreateRemote({ root,
+      inventoryId: knownInventoryId,
+      allowKnownExistingPrivateTest: true,
+      captureReadOnlyScan: async () => { throw Error("AUTH_REQUIRED"); } });
+    assert.equal(auth.status, "AUTH_REQUIRED");
+    assert.equal(auth.allowFinalCreate, false);
+    const other = await preflightGeneralPrivateCreateRemote({ root,
+      inventoryId: knownInventoryId,
+      allowKnownExistingPrivateTest: true,
+      captureReadOnlyScan: async () => { throw Error("unknown response"); } });
+    assert.equal(other.status, "REMOTE_SCAN_UNAVAILABLE");
+    assert.equal(other.allowFinalCreate, false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("only a settled complete UI scan reports a read-only no-match", () => {
   const result = inspectGeneralPrivateCreateRemoteScan(pack(), completeScan(), now);
   assert.equal(result.status, "NO_MATCH_IN_OBSERVED_UI");
