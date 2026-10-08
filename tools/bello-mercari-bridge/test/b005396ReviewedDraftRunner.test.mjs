@@ -5,7 +5,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { enqueueGeneralPrivateCreate } from "../src/generalPrivateCreateJob.mjs";
-import { reviewB005396PrivateDraft, bindB005396InitialScan,
+import { readB005396ImageByteProof, reviewB005396PrivateDraft,
+  bindB005396InitialScan,
   runB005396ReviewedDraft } from "../src/b005396ReviewedDraftRunner.mjs";
 
 const inventoryId = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
@@ -26,7 +27,10 @@ const pack = { schemaVersion: 1, kind: "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK"
     origin: "jp11", duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" },
   status: "PREPARED_NO_SEND" };
 const evidence = { shopId, inventoryId, draftId: pack.draftId,
+  packFingerprint: createHash("sha256").update(JSON.stringify(pack)).digest("hex"),
   managementCode: pack.managementCode, title: pack.title,
+  description: pack.description, categoryPath: pack.categoryPath,
+  shipping: pack.shipping,
   priceYen: 99999, quantity: 1, imageSha256,
   privateOnly: true, shippingReviewRequired: true };
 const fetchSnapshot = async () => ({ files: [{ buffer: bytes, imageSha256,
@@ -41,12 +45,35 @@ test("review gate checks exact target, values, private flag and current image by
     { ...evidence, privateOnly: false },
     { ...evidence, shippingReviewRequired: false },
     { ...evidence, imageSha256: "a".repeat(64) },
+    { ...evidence, description: "changed" },
+    { ...evidence, categoryPath: "changed" },
+    { ...evidence, shipping: { ...pack.shipping, origin: "jp13" } },
+    { ...evidence, packFingerprint: "a".repeat(64) },
     { ...evidence, draftId: "other" }])
     assert.equal(await reviewB005396PrivateDraft(target, {
       evidence: changed, fetchSnapshot }), false);
   assert.equal(await reviewB005396PrivateDraft(target, { evidence,
     fetchSnapshot: async () => ({ ...(await fetchSnapshot()),
       files: [{ ...(await fetchSnapshot()).files[0], buffer: Buffer.from("changed") }] }) }), false);
+});
+
+test("image-byte proof is source-backed and contains no image bytes or signed URL", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-image-byte-proof-"));
+  try {
+    await enqueueGeneralPrivateCreate(root, pack);
+    const args = { root, inventoryId, origin: "https://bello.example.invalid",
+      belloProfileDir: root, playwrightModulePath: root };
+    const result = await readB005396ImageByteProof(args, { fetchSnapshot });
+    assert.equal(result.status, "IMAGE_BYTES_READ_ONLY_VERIFIED");
+    assert.equal(result.proof.imageSha256, imageSha256);
+    assert.equal(result.proof.packFingerprint, evidence.packFingerprint);
+    assert.equal(result.proof.description, pack.description);
+    assert.equal(JSON.stringify(result).includes("reviewed image bytes"), false);
+    assert.equal(JSON.stringify(result).includes("https://"), false);
+    const blocked = await readB005396ImageByteProof(args, {
+      fetchSnapshot: async () => { throw Error("BELLO_ADMIN_LOGIN_REQUIRED"); } });
+    assert.equal(blocked.diagnostic, "BELLO_ADMIN_LOGIN_REQUIRED");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("read-only scan binder closes the session and blocks non-query writes", async () => {
