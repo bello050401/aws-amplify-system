@@ -5,7 +5,8 @@ import { prepareMercariVisibilityPcJobAction } from "@/app/actions/mercariVisibi
 import type { ChannelListingRecord } from "@/lib/listing/types";
 import { shopsAdminUrl, shopsLifecycle,
   type ShopsOperation } from "@/lib/listing/mercariBridge/listingLifecycle";
-import { pcTargetKey, pinnedPublicProofForTarget,
+import { pcTargetKey, pcRecordCurrent, pcStopJobHandoffEnabled,
+  pinnedPublicProofForTarget,
   samePcTargetEpoch, type PinnedPublicProof } from
   "@/lib/listing/mercariBridge/lifecyclePcState";
 
@@ -32,21 +33,26 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
     targetEpoch.current = { key: targetKey, value: targetEpoch.current.value + 1 };
   const started = { ...targetEpoch.current };
   const isCurrent = () => samePcTargetEpoch(targetEpoch.current, started);
-  const [busyRecord, setBusyRecord] = useState({ key: targetKey, value: false });
-  const busy = busyRecord.key === targetKey && busyRecord.value;
+  const [busyRecord, setBusyRecord] = useState({ key: targetKey, epoch: started.value,
+    value: false });
+  const busy = pcRecordCurrent(busyRecord, started) && busyRecord.value;
   const [preparedRecord, setPreparedRecord] = useState<{
-    key: string; actions: ReadonlySet<"STOP" | "RELIST"> }>({
-    key: targetKey, actions: new Set() });
-  const preparedActions = preparedRecord.key === targetKey ?
+    key: string; epoch: number; actions: ReadonlySet<"STOP" | "RELIST"> }>({
+    key: targetKey, epoch: started.value, actions: new Set() });
+  const preparedActions = pcRecordCurrent(preparedRecord, started) ?
     preparedRecord.actions : new Set<"STOP" | "RELIST">();
   const [pcRecord, setPcRecord] = useState<{
-    key: string; status: PcStatus; proof: PinnedPublicProof | null }>({
-    key: targetKey, status: "UNREAD", proof: null });
-  const pcStatus = pcRecord.key === targetKey ? pcRecord.status : "UNREAD";
+    key: string; epoch: number; status: PcStatus; proof: PinnedPublicProof | null }>({
+    key: targetKey, epoch: started.value, status: "UNREAD", proof: null });
+  const pcStatus = pcRecordCurrent(pcRecord, started) ?
+    pcRecord.status : "UNREAD";
   const [messageRecord, setMessageRecord] = useState({ key: targetKey,
+    epoch: started.value,
     value: null as string | null });
-  const message = messageRecord.key === targetKey ? messageRecord.value : null;
-  const pinnedProof = pinnedPublicProofForTarget(pcRecord,
+  const message = pcRecordCurrent(messageRecord, started) ?
+    messageRecord.value : null;
+  const pinnedProof = pinnedPublicProofForTarget(pcRecordCurrent(pcRecord, started) ?
+    pcRecord : { key: "", status: "UNREAD", proof: null },
     inventoryId, listing?.externalListingId);
   const publicProof = pinnedProof ?
     { kind: "EXACT_PRODUCT" as const, remoteId: pinnedProof.remoteId,
@@ -58,22 +64,24 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
     listing?.status === "ACTIVE" && Boolean(url) &&
     inventoryId.toLowerCase() !== "dd273c1e-9b2a-4013-acc6-c445a481fab8";
   const stopHandoffEnabled = pcFeatureEnabled && publicProof !== null;
+  const handoffEnabled = pcStopJobHandoffEnabled(pcFeatureEnabled,
+    pcStatus, stopHandoffEnabled);
   const relistHandoffEnabled = false; // Public relist control awaits read-only UI observation.
   const button = pcStatus === "STOP_VERIFIED" ? "出品" :
     pcStatus === "PUBLIC_VERIFIED" || pcStatus === "RELIST_VERIFIED" ?
       "出品停止" : state === "NOT_LISTED" ? "出品" :
         "Shops公開状態の確認待ち";
   async function prepareHandoff(action: "STOP" | "RELIST") {
-    if (!(action === "STOP" ? stopHandoffEnabled : relistHandoffEnabled) ||
+    if (!(action === "STOP" ? handoffEnabled : relistHandoffEnabled) ||
         busy || preparedActions.has(action)) return;
     const remoteId = listing?.externalListingId;
     if (!remoteId) return;
-    setBusyRecord({ key: targetKey, value: true });
-    setMessageRecord({ key: targetKey, value: null });
+    setBusyRecord({ key: targetKey, epoch: started.value, value: true });
+    setMessageRecord({ key: targetKey, epoch: started.value, value: null });
     try {
       const result = await prepareMercariVisibilityPcJobAction(inventoryId, action);
       if (!isCurrent()) return;
-      if (!result.ok) { setMessageRecord({ key: targetKey,
+      if (!result.ok) { setMessageRecord({ key: targetKey, epoch: started.value,
         value: result.message }); return; }
       if (result.job.target.inventoryId.toLowerCase() !== inventoryId.toLowerCase() ||
           result.job.target.remoteId !== remoteId ||
@@ -90,9 +98,10 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
         if (!isCurrent()) return;
         if (receipt?.ok === true && /^[a-f0-9]{64}$/.test(receipt.jobKey) &&
             ["QUEUED_NO_SEND", "ALREADY_QUEUED_NO_SEND"].includes(receipt.status)) {
-          setPreparedRecord(previous => ({ key: targetKey,
-            actions: new Set(previous.key === targetKey ? previous.actions : []).add(action) }));
-          setMessageRecord({ key: targetKey,
+          setPreparedRecord(previous => ({ key: targetKey, epoch: started.value,
+            actions: new Set(previous.key === targetKey &&
+              previous.epoch === started.value ? previous.actions : []).add(action) }));
+          setMessageRecord({ key: targetKey, epoch: started.value,
             value: "PCアプリへ依頼を渡しました。PC画面で対象を確認して実行してください。Shopsの商品はまだ変更していません。" });
           return;
         }
@@ -108,19 +117,21 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-      setPreparedRecord(previous => ({ key: targetKey,
-        actions: new Set(previous.key === targetKey ? previous.actions : []).add(action) }));
-      setMessageRecord({ key: targetKey,
+      setPreparedRecord(previous => ({ key: targetKey, epoch: started.value,
+        actions: new Set(previous.key === targetKey &&
+          previous.epoch === started.value ? previous.actions : []).add(action) }));
+      setMessageRecord({ key: targetKey, epoch: started.value,
         value: "PCアプリに接続できなかったため、ジョブファイルを保存しました。PCアプリで読み込むまでShopsの商品は変更されません。" });
-    } catch { if (isCurrent()) setMessageRecord({ key: targetKey,
+    } catch { if (isCurrent()) setMessageRecord({ key: targetKey, epoch: started.value,
       value: "PC作業用ジョブを準備できませんでした。Shopsの商品は変更していません。" }); }
-    finally { if (isCurrent()) setBusyRecord({ key: targetKey, value: false }); }
+    finally { if (isCurrent()) setBusyRecord({ key: targetKey,
+      epoch: started.value, value: false }); }
   }
   async function checkPcStatus() {
     if (!pcFeatureEnabled || busy || !listing?.externalListingId) return;
     const remoteId = listing.externalListingId;
-    setBusyRecord({ key: targetKey, value: true });
-    setMessageRecord({ key: targetKey, value: null });
+    setBusyRecord({ key: targetKey, epoch: started.value, value: true });
+    setMessageRecord({ key: targetKey, epoch: started.value, value: null });
     try {
       const response = await fetch(`http://127.0.0.1:56210/visibility-status?inventoryId=${encodeURIComponent(inventoryId)}`, {
         mode: "cors", credentials: "omit", cache: "no-store",
@@ -150,12 +161,13 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
       else if (stop?.attempted || relist?.attempted) status = "UNKNOWN";
       else if (proof) status = "PUBLIC_VERIFIED";
       else status = "PENDING";
-      setPcRecord({ key: targetKey, status, proof });
-      setMessageRecord({ key: targetKey,
+      setPcRecord({ key: targetKey, epoch: started.value, status, proof });
+      setMessageRecord({ key: targetKey, epoch: started.value,
         value: "PCの保存済み結果を読み取りました。Shopsへの操作はしていません。" });
-    } catch { if (isCurrent()) setMessageRecord({ key: targetKey,
+    } catch { if (isCurrent()) setMessageRecord({ key: targetKey, epoch: started.value,
       value: "PCの結果を確認できませんでした。PCアプリを開いて確認してください。" }); }
-    finally { if (isCurrent()) setBusyRecord({ key: targetKey, value: false }); }
+    finally { if (isCurrent()) setBusyRecord({ key: targetKey,
+      epoch: started.value, value: false }); }
   }
   return <section aria-labelledby="mercari-shops-lifecycle-heading"
     className="mt-4 rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
@@ -178,11 +190,11 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
     ].includes(inventoryId.toLowerCase()) ? <a href="#mercari-manual-preparation"
       className="mt-3 inline-block rounded border border-gray-300 px-3 py-2 text-xs font-bold">
       出品準備へ
-    </a> : <button type="button" disabled={!stopHandoffEnabled || busy || preparedActions.has("STOP")}
-      aria-disabled={!stopHandoffEnabled || busy || preparedActions.has("STOP")}
+    </a> : <button type="button" disabled={!handoffEnabled || busy || preparedActions.has("STOP")}
+      aria-disabled={!handoffEnabled || busy || preparedActions.has("STOP")}
       onClick={() => void prepareHandoff("STOP")}
       className="mt-3 rounded border border-gray-300 px-3 py-2 text-xs font-bold disabled:opacity-50">
-      {stopHandoffEnabled ? busy ? "準備中…" :
+      {handoffEnabled ? busy ? "準備中…" :
         preparedActions.has("STOP") ? "確認ジョブをPCへ保存済み" :
           pcStatus === "PUBLIC_VERIFIED" ? "出品停止のPCジョブを作る" :
             "既存Shops商品の確認ジョブをPCへ渡す" : button}

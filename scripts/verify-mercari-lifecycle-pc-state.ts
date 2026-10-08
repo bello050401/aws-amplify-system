@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { pcTargetKey, pinnedPublicProofForTarget,
+import { pcTargetKey, pcRecordCurrent, pcStopJobHandoffEnabled,
+  pinnedPublicProofForTarget,
   samePcTargetEpoch } from
   "../lib/listing/mercariBridge/lifecyclePcState";
 
@@ -21,4 +22,15 @@ assert.equal(samePcTargetEpoch({ key: b, value: 1 }, oldRequest), false,
 assert.equal(samePcTargetEpoch({ key: a, value: 2 }, oldRequest), false,
   "a delayed A response is discarded after A to B to A");
 assert.equal(samePcTargetEpoch({ key: a, value: 0 }, oldRequest), true);
+const oldBusy = { key: a, epoch: 0, value: true };
+assert.equal(pcRecordCurrent(oldBusy, { key: b, value: 1 }), false);
+assert.equal(pcRecordCurrent(oldBusy, { key: a, value: 2 }), false,
+  "A's old busy state must not survive A to B to A");
+assert.equal(pcRecordCurrent({ key: a, epoch: 2 },
+  { key: a, value: 2 }), true);
+assert.equal(pcStopJobHandoffEnabled(true, "UNREAD", false), true,
+  "first read-only confirmation job must be available without public proof");
+assert.equal(pcStopJobHandoffEnabled(true, "PUBLIC_VERIFIED", false), false,
+  "a STOP handoff needs the current target's public proof");
+assert.equal(pcStopJobHandoffEnabled(true, "PUBLIC_VERIFIED", true), true);
 process.stdout.write("Mercari lifecycle PC target isolation verified\n");
