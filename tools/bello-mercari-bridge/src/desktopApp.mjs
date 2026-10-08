@@ -46,6 +46,8 @@ import { readGeneralPrivateCreateRequestJson } from
   "./generalPrivateCreateRequest.mjs";
 import { runB005396PrivateDraftPcFlow } from
   "./generalPrivateDraftPcFlow.mjs";
+import { capturePublicVisibilityProofReadOnly,
+  readCurrentPublicVisibilityProof } from "./visibilityPublicProof.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
 const B005396_INVENTORY = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
@@ -175,11 +177,12 @@ function page({ csrf, options, message, busy, workflowRunning, recoveryRunning,
   const visibilityButton = item => {
     const baseDisabled = item.attempted || busy || retainedVisibilityOpen ||
       workflowRunning || recoveryRunning ||
-      (item.job.action === "RELIST" && listingWindow.remainingSeconds === null);
+      (item.job.action === "STOP" && !item.publicVerified) ||
+      item.job.action === "RELIST"; // Public modal controls await read-only observation.
     const waiting = item.job.action === "RELIST" &&
       Number.isInteger(listingWindow.remainingSeconds) &&
       listingWindow.remainingSeconds > 0;
-    return `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-visibility-job"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${item.job.action === "RELIST" ? `data-relist-button data-base-disabled="${baseDisabled ? "1" : "0"}"` : ""} ${baseDisabled || waiting ? "disabled" : ""}>${item.job.action === "STOP" ? "出品停止を1回実行" : "停止済み商品を再出品"}</button></form>`;
+    return `${item.job.action === "STOP" && !item.attempted ? `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="verify-public-visibility"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${busy || retainedVisibilityOpen ? "disabled" : ""}>既存Shops商品の公開状態を読取確認</button></form>` : ""}<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-visibility-job"><input type="hidden" name="jobKey" value="${html(item.key)}"><button ${item.job.action === "RELIST" ? `data-relist-button data-base-disabled="1"` : ""} ${baseDisabled || waiting ? "disabled" : ""}>${item.job.action === "STOP" ? "出品停止を1回実行" : "出品（同じ商品ID・公開UI確認待ち）"}</button></form>`;
   };
   const pinnedB005757 = isPinnedB005757ImageTarget(options.manualObservation,
     options.requestId);
@@ -310,6 +313,8 @@ export async function startDesktopApp(config, {
   runVisibility = runVisibilityTransitionOnce,
   runGeneralDraft = runB005396PrivateDraftPcFlow,
   offlineDraftActionEnabled = false,
+  verifyPublicVisibility = capturePublicVisibilityProofReadOnly,
+  readPublicVisibility = readCurrentPublicVisibilityProof,
 } = {}) {
   const options = optionsOf(config);
   const initialCreate = options.createTestObservationEnabled ?
@@ -461,13 +466,21 @@ export async function startDesktopApp(config, {
         response.writeHead(400, headers); response.end('{"ok":false}'); return;
       }
       try {
-        const items = (await listVisibilityPcJobs(options.root))
+        const jobs = (await listVisibilityPcJobs(options.root))
           .filter(item => item.job.target.inventoryId === inventoryId)
-          .map(item => ({ action: item.job.action,
+        const items = jobs.map(item => ({ action: item.job.action,
             remoteId: item.job.target.remoteId, attempted: item.attempted,
             outcome: item.outcome }));
+        const stop = jobs.find(item => item.job.action === "STOP");
+        const proof = stop ? await readPublicVisibility(options.root,
+          stop.job.target) : null;
+        const publicProof = proof?.status === "PUBLIC_CONFIRMED" &&
+          proof.allowStop === true &&
+          proof.remoteId === stop?.job.target.remoteId ?
+          { remoteId: proof.remoteId, status: "PUBLIC_CONFIRMED",
+            observedAt: proof.observedAt } : null;
         response.writeHead(200, headers);
-        response.end(JSON.stringify({ ok: true, items }));
+        response.end(JSON.stringify({ ok: true, items, publicProof }));
       } catch { response.writeHead(503, headers); response.end('{"ok":false}'); }
       return;
     }
@@ -571,7 +584,11 @@ export async function startDesktopApp(config, {
     }
     if (request.method === "GET" && request.url === "/") {
       let visibilityJobs = [];
-      try { visibilityJobs = await listVisibilityPcJobs(options.root); }
+      try { visibilityJobs = await Promise.all((await listVisibilityPcJobs(
+        options.root)).map(async item => ({ ...item,
+          publicVerified: item.job.action === "STOP" &&
+            (await readPublicVisibility(options.root, item.job.target))
+              .allowStop === true }))); }
       catch { message = "PCジョブの保存状態を確認できません。Shops操作は行っていません。"; }
       let generalCreateJobs = [];
       try { generalCreateJobs = await listGeneralPrivateCreateJobs(options.root); }
@@ -636,13 +653,35 @@ export async function startDesktopApp(config, {
           !["create-test-open", "create-test-arm", "create-test-finish", "shutdown"]
             .includes(action))
         throw Error("Only the pinned private-create observation is available");
-      if (action === "run-visibility-job") {
+      if (action === "verify-public-visibility") {
+        const key = form.get("jobKey");
+        if (!HASH.test(key ?? "") || shopsContext || manualSession ||
+            retainedSaveSession || retainedImageSession || retainedWorkflowSession ||
+            createSession)
+          throw Error("Public visibility read cannot start during another Shops session");
+        const job = await readVisibilityPcJob(options.root, key);
+        if (job.action !== "STOP") throw Error("Only STOP targets need public proof");
+        const observed = await verifyPublicVisibility({ root: options.root,
+          profileDir: options.shopsProfileDir,
+          playwrightModulePath: options.playwrightModulePath,
+          target: job.target });
+        message = observed?.status === "PUBLIC_CONFIRMED" &&
+          observed.remoteId === job.target.remoteId ?
+          "同じShops商品IDの公開状態を読み取りました。停止操作はしていません。" :
+          "Shopsの商品IDと公開状態を確認できませんでした。停止操作はできません。";
+      } else if (action === "run-visibility-job") {
         const key = form.get("jobKey");
         if (!HASH.test(key ?? "") || shopsContext || manualSession ||
             retainedSaveSession || retainedImageSession || retainedWorkflowSession ||
             createSession)
           throw Error("Visibility job cannot start during another Shops session");
         const job = await readVisibilityPcJob(options.root, key);
+        if (job.action === "RELIST")
+          throw Error("Relist UI is under read-only review");
+        if (job.action === "STOP" &&
+            (await readPublicVisibility(options.root, job.target))
+              .allowStop !== true)
+          throw Error("Exact public product proof is required before STOP");
         const result = await runVisibility({ root: options.root,
           profileDir: options.shopsProfileDir,
           playwrightModulePath: options.playwrightModulePath,

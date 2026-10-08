@@ -143,6 +143,10 @@ export async function runVisibilityTransitionOnce({ root, profileDir,
     observe = observeManualShopsMutation,
     chooseSaveButton = exactSaveButton,
     readStopProof = readVerifiedStop,
+    readPublicProof = async (root, target) =>
+      (await import("./visibilityPublicProof.mjs"))
+        .readCurrentPublicVisibilityProof(root, target),
+    relistUiObserved = false,
     writeResult = saveResult,
     withListingSend = withShopListingSend,
   } = {}) {
@@ -150,11 +154,25 @@ export async function runVisibilityTransitionOnce({ root, profileDir,
       typeof value === "string" && isAbsolute(value)) ||
       !["STOP", "RELIST"].includes(action) || !exactVisibilityTarget(target))
     throw Error("Invalid exact visibility transition inputs");
+  if (action === "RELIST" && relistUiObserved !== true)
+    return { status: "PREFLIGHT_BLOCKED" };
   const priorStop = action === "RELIST" ? await readStopProof(root, target) : null;
   if (action === "RELIST" && !priorStop) return { status: "PREFLIGHT_BLOCKED" };
   if (action === "STOP" && (listing?.status !== "ACTIVE" ||
       listing.externalListingId !== target.remoteId))
     return { status: "PREFLIGHT_BLOCKED" };
+  if (action === "STOP") {
+    let proof;
+    try { proof = await readPublicProof(root, target); }
+    catch { return { status: "PREFLIGHT_BLOCKED" }; }
+    if (proof?.status !== "PUBLIC_CONFIRMED" ||
+        proof.allowStop !== true || proof.shopId !== target.shopId ||
+        proof.remoteId !== target.remoteId ||
+        !Number.isFinite(Date.parse(proof.observedAt)) ||
+        Date.parse(proof.observedAt) > Date.now() ||
+        Date.now() - Date.parse(proof.observedAt) > 120_000)
+      return { status: "PREFLIGHT_BLOCKED" };
+  }
   let marker;
   try { marker = await claim(root, action, target); }
   catch (error) {

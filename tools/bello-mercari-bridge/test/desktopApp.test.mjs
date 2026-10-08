@@ -123,9 +123,19 @@ test("BELLO origin queues a PC visibility job without a Shops action", async () 
   const job = { ...body,
     fingerprint: createHash("sha256").update(JSON.stringify(body)).digest("hex") };
   let runs = 0;
+  let publicVerified = false;
   const app = await startDesktopApp({ ...config(), dataDir }, {
     openBrowser: null,
     runVisibility: async () => { runs++; return { status: "PREFLIGHT_BLOCKED" }; },
+    readPublicVisibility: async () => publicVerified ?
+      { status: "PUBLIC_CONFIRMED", allowStop: true,
+        remoteId: body.target.remoteId,
+        observedAt: new Date().toISOString() } :
+      { status: "UNVERIFIED", allowStop: false },
+    verifyPublicVisibility: async () => { publicVerified = true;
+      return { status: "PUBLIC_CONFIRMED", allowStop: true,
+        remoteId: body.target.remoteId,
+        observedAt: new Date().toISOString() }; },
   });
   try {
     const headers = { Origin: config().origin, "Content-Type": "application/json",
@@ -163,6 +173,21 @@ test("BELLO origin queues a PC visibility job without a Shops action", async () 
     const csrf = await token(app.url);
     const visible = await (await fetch(app.url)).text();
     assert.match(visible, /ownedProduct123/);
+    assert.match(visible, /既存Shops商品の公開状態を読取確認/);
+    const beforeProof = await fetch(`${app.url}/action`, { method: "POST",
+      redirect: "manual", headers: { Origin: app.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "run-visibility-job",
+        jobKey: receipt.jobKey }) });
+    assert.equal(beforeProof.status, 303);
+    assert.equal(runs, 0);
+    const verify = await fetch(`${app.url}/action`, { method: "POST",
+      redirect: "manual", headers: { Origin: app.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "verify-public-visibility",
+        jobKey: receipt.jobKey }) });
+    assert.equal(verify.status, 303);
+    assert.equal(publicVerified, true);
     const run = await fetch(`${app.url}/action`, { method: "POST", redirect: "manual",
       headers: { Origin: app.url, "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ csrf, action: "run-visibility-job",
@@ -198,7 +223,17 @@ test("BELLO origin queues a PC visibility job without a Shops action", async () 
     const imported = await fetch(`${app.url}/visibility-import`, {
       method: "POST", redirect: "manual", headers: { Origin: app.url }, body: upload });
     assert.equal(imported.status, 303);
-    assert.match(await (await fetch(app.url)).text(), /停止済み商品を再出品/);
+    assert.match(await (await fetch(app.url)).text(),
+      /出品（同じ商品ID・公開UI確認待ち）/);
+    const relistKey = createHash("sha256").update(
+      `RELIST\0${body.target.shopId}\0${body.target.remoteId}`).digest("hex");
+    const unobservedRelist = await fetch(`${app.url}/action`, {
+      method: "POST", redirect: "manual", headers: { Origin: app.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "run-visibility-job",
+        jobKey: relistKey }) });
+    assert.equal(unobservedRelist.status, 303);
+    assert.equal(runs, 1);
     const attempts = join(dataDir, "Queue", "listing-send-attempts");
     await mkdir(attempts);
     await writeFile(join(attempts, `${body.target.shopId}-prior.json`), JSON.stringify({

@@ -23,20 +23,26 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
 }) {
   const [busy, setBusy] = useState(false);
   const [preparedActions, setPreparedActions] = useState<ReadonlySet<"STOP" | "RELIST">>(new Set());
-  const [pcStatus, setPcStatus] = useState<"UNREAD" | "PENDING" | "STOP_VERIFIED" |
+  const [pcStatus, setPcStatus] = useState<"UNREAD" | "PENDING" | "PUBLIC_VERIFIED" | "STOP_VERIFIED" |
     "RELIST_VERIFIED" | "UNKNOWN">("UNREAD");
   const [message, setMessage] = useState<string | null>(null);
-  const state = shopsLifecycle(listing, operation);
+  const publicProof = pcStatus === "PUBLIC_VERIFIED" ||
+    pcStatus === "RELIST_VERIFIED" ?
+    listing?.externalListingId ? { kind: "EXACT_PRODUCT" as const,
+      remoteId: listing.externalListingId, visibility: "PUBLIC" as const } : null : null;
+  const state = shopsLifecycle(listing, operation, publicProof);
   const url = listing && state !== "NOT_LISTED" ?
     shopsAdminUrl(SHOP_ID, listing.externalListingId) : null;
   const pcFeatureEnabled = process.env.NEXT_PUBLIC_MERCARI_VISIBILITY_PC_JOB_ENABLED === "1" &&
-    state === "LISTED" && Boolean(url) &&
+    listing?.status === "ACTIVE" && Boolean(url) &&
     inventoryId.toLowerCase() !== "dd273c1e-9b2a-4013-acc6-c445a481fab8";
   const stopHandoffEnabled = pcFeatureEnabled &&
     !["STOP_VERIFIED", "RELIST_VERIFIED", "UNKNOWN"].includes(pcStatus);
-  const relistHandoffEnabled = pcFeatureEnabled && pcStatus === "STOP_VERIFIED";
-  const button = state === "NOT_LISTED" ? "出品" : state === "LISTED" ?
-    "出品停止" : state === "STOPPED" ? "再出品" : LABEL[state];
+  const relistHandoffEnabled = false; // Public relist control awaits read-only UI observation.
+  const button = pcStatus === "STOP_VERIFIED" ? "出品" :
+    pcStatus === "PUBLIC_VERIFIED" || pcStatus === "RELIST_VERIFIED" ?
+      "出品停止" : state === "NOT_LISTED" ? "出品" :
+        "Shops公開状態の確認待ち";
   async function prepareHandoff(action: "STOP" | "RELIST") {
     if (!(action === "STOP" ? stopHandoffEnabled : relistHandoffEnabled) ||
         busy || preparedActions.has(action)) return;
@@ -91,11 +97,19 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
         throw Error("PC result mismatch");
       const stop = payload.items.find((item: { action?: string }) => item.action === "STOP");
       const relist = payload.items.find((item: { action?: string }) => item.action === "RELIST");
+      const publicProof = payload.publicProof;
+      if (publicProof !== null && publicProof !== undefined &&
+          (publicProof.status !== "PUBLIC_CONFIRMED" ||
+            publicProof.remoteId !== listing.externalListingId ||
+            !Number.isFinite(Date.parse(publicProof.observedAt))))
+        throw Error("PC public proof mismatch");
       if (relist?.outcome === "RELIST_VERIFIED") setPcStatus("RELIST_VERIFIED");
       else if (stop?.outcome === "STOP_VERIFIED" &&
           (!relist?.attempted || relist?.outcome === null))
         setPcStatus(relist?.attempted ? "UNKNOWN" : "STOP_VERIFIED");
       else if (stop?.attempted || relist?.attempted) setPcStatus("UNKNOWN");
+      else if (publicProof?.status === "PUBLIC_CONFIRMED")
+        setPcStatus("PUBLIC_VERIFIED");
       else setPcStatus("PENDING");
       setMessage("PCの保存済み結果を読み取りました。Shopsへの操作はしていません。");
     } catch { setMessage("PCの結果を確認できませんでした。PCアプリを開いて確認してください。"); }
@@ -105,10 +119,12 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
     className="mt-4 rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h2 id="mercari-shops-lifecycle-heading" className="font-bold">メルカリShops</h2>
-      <span className="rounded bg-gray-100 px-2 py-1 text-xs">{pcStatus === "STOP_VERIFIED" ?
+      <span className="rounded bg-gray-100 px-2 py-1 text-xs">{pcStatus === "PUBLIC_VERIFIED" ?
+        "公開確認済み（PC読取）" : pcStatus === "STOP_VERIFIED" ?
         "停止確認済み（PC読取）" : pcStatus === "RELIST_VERIFIED" ?
           "再出品確認済み（PC読取）" : pcStatus === "UNKNOWN" ?
-            "PC結果の確認が必要" : LABEL[state]}</span>
+          "PC結果の確認が必要" : state === "UNKNOWN" && listing?.status === "ACTIVE" ?
+            "Shops公開状態の確認待ち" : LABEL[state]}</span>
     </div>
     {listing?.externalListingId && url && <p className="mt-2 text-xs">
       商品ID: <code>{listing.externalListingId}</code> ／ <a href={url}
@@ -125,13 +141,15 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
       onClick={() => void prepareHandoff("STOP")}
       className="mt-3 rounded border border-gray-300 px-3 py-2 text-xs font-bold disabled:opacity-50">
       {stopHandoffEnabled ? busy ? "準備中…" :
-        preparedActions.has("STOP") ? "停止ジョブを保存済み" : "出品停止のPCジョブを作る" : button}
+        preparedActions.has("STOP") ? "確認ジョブをPCへ保存済み" :
+          pcStatus === "PUBLIC_VERIFIED" ? "出品停止のPCジョブを作る" :
+            "既存Shops商品の確認ジョブをPCへ渡す" : button}
     </button>}
     {pcFeatureEnabled && <button type="button"
       disabled={!relistHandoffEnabled || busy || preparedActions.has("RELIST")}
       onClick={() => void prepareHandoff("RELIST")}
       className="ml-2 mt-3 rounded border border-gray-300 px-3 py-2 text-xs font-bold disabled:opacity-50">
-      {preparedActions.has("RELIST") ? "再出品ジョブを保存済み" : "停止確認後の再出品ジョブを作る"}
+      {preparedActions.has("RELIST") ? "出品ジョブを保存済み" : "出品（同じ商品IDを再開）"}
     </button>}
     {pcFeatureEnabled && <button type="button" disabled={busy}
       onClick={() => void checkPcStatus()}

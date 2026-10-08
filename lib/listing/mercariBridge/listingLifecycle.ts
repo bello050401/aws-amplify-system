@@ -15,6 +15,7 @@ const REMOTE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 export function shopsLifecycle(
   listing: Pick<ChannelListingRecord, "status" | "externalListingId"> | null,
   operation: ShopsOperation | null = null,
+  readback: ShopsReadback | null = null,
 ): ShopsLifecycle {
   if (operation) {
     if (operation.phase === "UNKNOWN") return "UNKNOWN";
@@ -23,7 +24,10 @@ export function shopsLifecycle(
   if (!listing) return "NOT_LISTED";
   const hasId = typeof listing.externalListingId === "string" &&
     REMOTE_ID.test(listing.externalListingId);
-  if (listing.status === "ACTIVE") return hasId ? "LISTED" : "UNKNOWN";
+  if (listing.status === "ACTIVE") return hasId &&
+    readback?.kind === "EXACT_PRODUCT" &&
+    readback.remoteId === listing.externalListingId &&
+    readback.visibility === "PUBLIC" ? "LISTED" : "UNKNOWN";
   // Legacy PAUSED is also used by BELLO pricing rules; ENDED is a local record.
   // Neither proves the current Shops visibility or that relisting is possible.
   if (listing.status === "PAUSED" || listing.status === "ENDED") return "UNKNOWN";

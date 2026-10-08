@@ -37,6 +37,10 @@ function fakeBrowser(action, { wrongAfter = false } = {}) {
   const context = { newPage: async () => ({ close: async () => {} }),
     close: async () => { closed = true; } };
   const deps = {
+    relistUiObserved: true,
+    readPublicProof: async () => ({ status: "PUBLIC_CONFIRMED",
+      allowStop: true, shopId, remoteId: target.remoteId,
+      observedAt: new Date().toISOString() }),
     openSession: async () => ({ context, page }),
     readVisibility: async (current, request) => ({ kind: "OBSERVED", shopId,
       remoteId: target.remoteId, title: target.title,
@@ -96,6 +100,32 @@ test("a BELLO PC handoff is fingerprinted and cannot swap target or action", () 
     fingerprint: createHash("sha256").update(JSON.stringify(relist)).digest("hex") }), true);
   assert.equal(exactVisibilityPcJob({ ...body, target: { ...target,
     inventoryId: target.inventoryId.toUpperCase() }, fingerprint }), false);
+});
+
+test("STOP without a fresh stored public proof never opens or claims Shops", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-visibility-no-proof-"));
+  try {
+    const browser = fakeBrowser("STOP");
+    const result = await runVisibilityTransitionOnce(args(root, "STOP"), {
+      ...browser.deps,
+      readPublicProof: async () => ({ status: "UNVERIFIED",
+        allowStop: false }),
+    });
+    assert.equal(result.status, "PREFLIGHT_BLOCKED");
+    assert.deepEqual(browser.state(), { closed: false,
+      nextClicks: 0, saveClicks: 0 });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("unobserved public relist UI is disabled before a claim", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-relist-ui-hold-"));
+  try {
+    const browser = fakeBrowser("RELIST");
+    const result = await runVisibilityTransitionOnce(args(root, "RELIST"), {
+      ...browser.deps, relistUiObserved: false });
+    assert.equal(result.status, "PREFLIGHT_BLOCKED");
+    assert.equal(browser.state().saveClicks, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("one verified stop permits one later relist of the same ID", async () => {
