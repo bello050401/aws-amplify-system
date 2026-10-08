@@ -133,6 +133,9 @@ async function readListDom(page) {
   return { ...data, url: page.url() };
 }
 
+/** Reuse the observed draft-table DOM shape for a count-only preflight. */
+export const readGeneralPrivateDraftListDom = readListDom;
+
 /** Reads only the two observed form fields; never fills, saves, or creates. */
 async function readDetailDom(page) {
   const data = await page.locator("body").evaluate(() => {

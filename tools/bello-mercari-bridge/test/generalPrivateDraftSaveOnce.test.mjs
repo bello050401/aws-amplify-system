@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { enqueueGeneralPrivateCreate, claimGeneralPrivateCreateOnce,
   writeGeneralPrivateCreateResultOnce } from
   "../src/generalPrivateCreateJob.mjs";
@@ -19,7 +21,9 @@ const shopId = "evkhihBFFNn5hukMS9s36H";
 const draftId = "sourceDraft123";
 const remoteDraftId = "shopsDraft123";
 const sha256 = "a".repeat(64);
-const asset = { pathHash: "b".repeat(64), width: 960, height: 960 };
+const imagePath = "/asset/sofa.jpg";
+const asset = { pathHash: createHash("sha256").update(imagePath).digest("hex"),
+  width: 960, height: 960 };
 const pack = (description = "らくらく家財便Eまたは自社配送で発送します。") => ({
   schemaVersion: 1, kind: "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK",
   shopId, inventoryId,
@@ -49,12 +53,51 @@ async function withClaimedForm(action, description) {
     });
     let clicks = 0;
     const url = `https://mercari-shops.com/seller/shops/${shopId}/products/create?productDraftId=${remoteDraftId}`;
+    const current = pack(description);
+    const fields = { name: current.title, description: current.description,
+      price: "¥99,999", "variants.0.quantity": "1",
+      "variants.0.skuCode": current.managementCode,
+      "shippingMethodType.id": "METHOD_TYPE_UNDECIDED",
+      "shippingPayerType.id": "PAYER_TYPE_SELLER",
+      "shippingFromState.id": "jp11",
+      "shippingDurationType.id": "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" };
+    class FakeImage {
+      complete = true;
+      naturalWidth = 960;
+      naturalHeight = 960;
+      currentSrc = `https://cdn.example.invalid${imagePath}`;
+    }
+    const document = { location: { href: url },
+      querySelector(selector) {
+        const name = /^\[name="([^"]+)"\]$/.exec(selector)?.[1];
+        if (name) return { value: fields[name] ?? null };
+        if (selector === '[data-testid="condition-select-box"]')
+          return { textContent: "目立った傷や汚れなし" };
+        if (selector === '[data-testid="categories"]')
+          return { textContent: "2人掛け・3人掛けソファ" };
+        if (selector === 'label[for="category"]')
+          return { closest: () => ({ textContent:
+            `カテゴリー${current.categoryPath.replaceAll(" > ", ">")}` }) };
+        return null;
+      },
+      querySelectorAll(selector) {
+        return selector === 'img[alt="uploaded-image"]' ? [new FakeImage()] : [];
+      } };
+    let onHandleEnabled = null;
     const page = { url: () => url,
       evaluate: async () => ({ href: url, timeOrigin: 123456789 }),
+      locator(selector) {
+        assert.equal(selector, "body");
+        return { evaluate: async fn => runInNewContext(`(${fn.toString()})()`,
+          { document, performance: { timeOrigin: 123456789 },
+            HTMLImageElement: FakeImage, URL }) };
+      },
       getByRole(role, options) {
         assert.equal(role, "button");
         assert.deepEqual(options, { name: "下書きへ保存する", exact: true });
-        const handle = { isEnabled: async () => true,
+        const handle = { isEnabled: async () => {
+          onHandleEnabled?.(); return true;
+        },
           click: async () => { clicks++; } };
         return { count: async () => 1, isEnabled: async () => true,
           elementHandle: async () => handle };
@@ -64,7 +107,8 @@ async function withClaimedForm(action, description) {
       observedDraftId: remoteDraftId, documentTimeOrigin: 123456789,
       selectedImageSha256s: [sha256], selectedAssets: [asset],
       retainedSession: { page, context: {} } };
-    return await action({ root, form, page, clicks: () => clicks });
+    return await action({ root, form, page, fields, clicks: () => clicks,
+      onHandleEnabled: callback => { onHandleEnabled = callback; } });
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
@@ -134,18 +178,31 @@ test("exact form readback checks every saved field, leaf, document and image", a
       "shippingPayerType.id": "PAYER_TYPE_SELLER",
       "shippingFromState.id": "jp11",
       "shippingDurationType.id": "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" };
-    const view = { fields, condition: "目立った傷や汚れなし",
+    const view = { href: page.url(), timeOrigin: 123456789,
+      fields, assets: [asset], condition: "目立った傷や汚れなし",
       categoryLeaf: "2人掛け・3人掛けソファ",
       categoryGroup: `カテゴリー${current.categoryPath.replaceAll(" > ", ">")}` };
-    const options = { readView: async () => view,
-      readImages: async () => [asset] };
+    const options = { readSnapshot: async () => view };
     assert.equal(await exactFormStillOpen(current, form, page, options), true);
     assert.equal(await exactFormStillOpen(current, form, page,
-      { ...options, readView: async () => ({ ...view,
+      { readSnapshot: async () => ({ ...view,
         fields: { ...fields, price: "¥100,000" } }) }), false);
     assert.equal(await exactFormStillOpen(current, form, page,
-      { ...options, readImages: async () => [{ ...asset,
-        pathHash: "c".repeat(64) }] }), false);
+      { readSnapshot: async () => ({ ...view, assets: [{ ...asset,
+        pathHash: "c".repeat(64) }] }) }), false);
+  });
+});
+
+test("default atomic DOM readback stops when price changes before draft click", async () => {
+  await withClaimedForm(async ({ root, form, fields, clicks,
+    onHandleEnabled }) => {
+    onHandleEnabled(() => { fields.price = "¥100,000"; });
+    const result = await saveB005396PrivateDraftOnce({ root, inventoryId,
+      form }, { fetchSnapshot: async () => snapshot(),
+      captureDuplicateProof: async () => proof() });
+    assert.equal(result.status, "UNKNOWN");
+    assert.equal(result.diagnostic, "DRAFT_BUTTON_UNVERIFIED");
+    assert.equal(clicks(), 0);
   });
 });
 

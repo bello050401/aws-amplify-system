@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { exactGeneralPrivateCreatePack, readGeneralPrivateCreate,
@@ -9,8 +9,6 @@ import { diagnoseGeneralPrivateCreateForm } from
   "./generalPrivateCreateForm.mjs";
 import { inspectGeneralPrivateCreateUrl } from
   "./generalPrivateCreateFormOnly.mjs";
-import { readExistingUploadedImages } from "./addExistingImageOnce.mjs";
-import { readPrivateCreateFinalView } from "./privateCreateFinalCheck.mjs";
 import { withShopListingSend } from "./listingSendGate.mjs";
 
 const INVENTORY = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
@@ -98,36 +96,71 @@ export function inspectB005396DraftDuplicateProof(pack, form, proof,
     now - Date.parse(observedAt) <= 120_000;
 }
 
+/** One synchronous DOM evaluation pins every field and image to one page state. */
+export async function readAtomicGeneralPrivateDraftFormSnapshot(page) {
+  const beforeUrl = page.url();
+  const raw = await page.locator("body").evaluate(() => {
+    const names = ["name", "description", "price", "variants.0.quantity",
+      "variants.0.skuCode", "shippingMethodType.id",
+      "shippingPayerType.id", "shippingFromState.id",
+      "shippingDurationType.id"];
+    const fields = Object.fromEntries(names.map(name =>
+      [name, document.querySelector(`[name="${name}"]`)?.value ?? null]));
+    const images = [...document.querySelectorAll('img[alt="uploaded-image"]')]
+      .map(image => {
+        if (!(image instanceof HTMLImageElement) || !image.complete ||
+            image.naturalWidth < 1 || image.naturalHeight < 1) return null;
+        try { const url = new URL(image.currentSrc || image.src);
+          return url.protocol === "https:" ? { pathname: url.pathname,
+            width: image.naturalWidth, height: image.naturalHeight } : null;
+        } catch { return null; }
+      });
+    return { href: document.location.href,
+      timeOrigin: performance.timeOrigin, fields, images,
+      condition: document.querySelector('[data-testid="condition-select-box"]')
+        ?.textContent ?? null,
+      categoryLeaf: document.querySelector('[data-testid="categories"]')
+        ?.textContent ?? null,
+      categoryGroup: document.querySelector('label[for="category"]')
+        ?.closest('[role="group"]')?.textContent ?? null };
+  });
+  if (page.url() !== beforeUrl || raw?.href !== beforeUrl ||
+      !Array.isArray(raw.images) || raw.images.length < 1 ||
+      raw.images.length > 20 || raw.images.some(image => !image ||
+        typeof image.pathname !== "string" ||
+        !image.pathname.startsWith("/") ||
+        !Number.isSafeInteger(image.width) || image.width < 1 ||
+        !Number.isSafeInteger(image.height) || image.height < 1))
+    return null;
+  return { ...raw, assets: raw.images.map(image => ({
+    pathHash: createHash("sha256").update(image.pathname).digest("hex"),
+    width: image.width, height: image.height,
+  })) };
+}
+
 export async function exactFormStillOpen(pack, form, page,
-  { readView = readPrivateCreateFinalView,
-    readImages = readExistingUploadedImages } = {}) {
+  { readSnapshot = readAtomicGeneralPrivateDraftFormSnapshot } = {}) {
   const beforeUrl = page.url();
   const url = inspectGeneralPrivateCreateUrl(beforeUrl, pack.shopId);
   if (!url.valid || url.draftId !== form.observedDraftId)
     return false;
-  let document;
-  try { document = await page.evaluate(() => ({
-    href: globalThis.document.location.href,
-    timeOrigin: globalThis.performance.timeOrigin,
-  })); } catch { return false; }
-  if (document?.href !== beforeUrl ||
-      document.timeOrigin !== form.documentTimeOrigin ||
-      page.url() !== beforeUrl) return false;
-  const finalView = await readView(page);
-  const assets = await readImages(page, beforeUrl);
-  if (!assets || !same(assets, form.selectedAssets) ||
+  let snapshot;
+  try { snapshot = await readSnapshot(page); } catch { return false; }
+  if (!snapshot || snapshot.href !== beforeUrl ||
+      snapshot.timeOrigin !== form.documentTimeOrigin ||
+      !same(snapshot.assets, form.selectedAssets) ||
       page.url() !== beforeUrl ||
-      finalView?.categoryLeaf?.trim() !== pack.categoryPath.split(" > ").at(-1))
+      snapshot.categoryLeaf?.trim() !== pack.categoryPath.split(" > ").at(-1))
     return false;
-  const fields = finalView.fields ?? {};
+  const fields = snapshot.fields ?? {};
   const view = { name: fields.name, description: fields.description,
     price: fields.price, quantity: fields["variants.0.quantity"],
-    sku: fields["variants.0.skuCode"], condition: finalView.condition,
-    category: finalView.categoryGroup,
+    sku: fields["variants.0.skuCode"], condition: snapshot.condition,
+    category: snapshot.categoryGroup,
     shipping: Object.fromEntries(Object.keys({
       "shippingMethodType.id": 1, "shippingPayerType.id": 1,
       "shippingFromState.id": 1, "shippingDurationType.id": 1,
-    }).map(name => [name, fields[name]])), imageCount: assets.length };
+    }).map(name => [name, fields[name]])), imageCount: snapshot.assets.length };
   return diagnoseGeneralPrivateCreateForm(pack, view) === null;
 }
 
