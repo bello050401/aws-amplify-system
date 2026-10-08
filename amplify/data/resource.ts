@@ -1101,6 +1101,22 @@ const schema = a.schema({
     .secondaryIndexes((index) => [index("inventoryId")])
     .authorization((allow) => [allow.group("ADMIN")]),
 
+  /** Immutable BELLO Web HTTP preparation; does not authorize a Shops request. */
+  MercariBridgeHttpDraftJob: a
+    .model({
+      requestId: a.string().required(),
+      inventoryId: a.string().required(),
+      shopId: a.string().required(),
+      managementCode: a.string().required(),
+      snapshotFingerprint: a.string().required(),
+      snapshotJson: a.string().required(),
+      status: a.string().required(),
+      requestedBy: a.string().required(),
+      recordedAt: a.datetime().required(),
+    })
+    .identifier(["requestId"])
+    .authorization((allow) => [allow.group("ADMIN").to(["create", "read"])]),
+
   /** One sanitized PC observation per explicit attempt. */
   MercariBridgeReadResult: a
     .model({

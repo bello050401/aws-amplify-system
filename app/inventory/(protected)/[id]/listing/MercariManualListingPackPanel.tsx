@@ -6,6 +6,8 @@ import { prepareMercariManualListingPackAction,
   type MercariManualListingPack } from "@/app/actions/mercariManualListingPack";
 import { prepareB005396GeneralPreparationAction } from
   "@/app/actions/mercariB005396GeneralPreparation";
+import { reserveB005396WebHttpDraftJobAction } from
+  "@/app/actions/mercariWebHttpDraftJob";
 import { B005396_INVENTORY_ID,
   type B005396GeneralReviewEvidence } from
   "@/lib/listing/mercariBridge/b005396GeneralPreparation";
@@ -63,6 +65,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     "", "商品説明:", pack.description,
   ].join("\n") : "";
   useEffect(() => {
+    if (isB005396) return;
     let disposed = false;
     async function refresh() {
       try {
@@ -81,7 +84,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     void refresh();
     const poll = setInterval(() => void refresh(), 10_000);
     return () => { disposed = true; clearInterval(poll); };
-  }, []);
+  }, [isB005396]);
   useEffect(() => {
     const tick = () => setSecondsLeft(deadlineMono === undefined ? null :
       deadlineMono === null ? -1 :
@@ -128,7 +131,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         }
         setPack(result.pack);
         setReviewEvidence(result.evidence);
-        setMessage("現在のEC下書きを読み取りました。配送条件を確認すると、PCへ準備内容を渡せます。Shopsへの送信は行いません。");
+        setMessage("現在のEC下書きを読み取りました。配送条件を確認すると、Web側に出品依頼を記録できます。Shopsへの送信は行いません。");
         return;
       }
       const result = await prepareMercariManualListingPackAction(inventoryId, {
@@ -210,6 +213,28 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     try { await handoffToPc(pack, revision); }
     finally { setBusy(false); }
   }
+  async function reserveWebHttpJob() {
+    if (!isB005396 || !pack || busy || !available || !reviewedHandoffReady) return;
+    const revision = selectionRevision.current;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await reserveB005396WebHttpDraftJobAction(pack, shippingReviewed);
+      if (revision !== selectionRevision.current) {
+        setMessage("入力が変わりました。現在の内容で確認し直してください。");
+      } else if (result.ok) {
+        setMessage(`Web側に出品依頼を記録しました（ID: ${result.requestId.slice(0, 12)}）。認証と新規出品のHTTP仕様を確認するまでShopsには送信しません。`);
+      } else if (result.code === "JOB_CONFLICT") {
+        setMessage("この在庫には異なる内容のWeb出品依頼が記録済みです。重複を防ぐため送信しません。");
+      } else if (result.code === "PACK_CHANGED") {
+        setMessage("BELLOの保存内容が変わりました。現在の下書きを確認し直してください。");
+      } else {
+        setMessage("Web側に出品依頼を記録できませんでした。Shopsへの送信は行っていません。");
+      }
+    } catch {
+      setMessage("Web側に出品依頼を記録できませんでした。Shopsへの送信は行っていません。");
+    } finally { setBusy(false); }
+  }
   return <section id="mercari-manual-preparation"
     className="mt-5 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
     <h2 className="font-bold">メルカリShops {isB005396 ? "出品内容の確認" : "出品準備"}</h2>
@@ -217,7 +242,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
       "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
     {isB005396 && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-      B005396は価格99,999円で確認します。PCへ渡すのは準備内容だけです。Shopsの非公開下書き保存は独立レビューが完了するまで保留します。
+      B005396は価格99,999円で確認します。Web側に出品依頼を記録します。Shopsの非公開下書き保存は認証とHTTP仕様が確認できるまで保留します。
     </p>}
     <dl className="mt-3 grid grid-cols-2 gap-1 rounded bg-gray-50 p-3 text-xs">
       <dt>配送方法</dt><dd>未定（出品者手配）</dd>
@@ -226,12 +251,12 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <dt>発送まで</dt><dd>4〜7日</dd>
     </dl>
     <p className="mt-2 text-xs text-gray-600">送料込み参考価格を確認し、実際の販売価格を入力してください。参考価格は自動入力しません。</p>
-    <p className="mt-2 text-xs text-gray-600" role="status">
+    {!isB005396 && <p className="mt-2 text-xs text-gray-600" role="status">
       {secondsLeft === null ? "PCアプリに接続すると次の出品までの時間を表示します。" :
         secondsLeft < 0 ? "PC側で出品操作が進行中、または記録の確認が必要です。" :
         secondsLeft > 0 ? `次の出品まで ${secondsLeft} 秒` :
           "出品間隔の待機はありません。"}
-    </p>
+    </p>}
     {!available ? <p className="mt-3 text-amber-700">保存済みの下書き・在庫数・Shops出品記録を確認してください。新規出品準備は現在できません。</p> : <>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs">販売価格（円）<input type="number" min={300} max={9999999}
@@ -306,7 +331,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
           <span>EC配送方法とShopsの配送設定の違いを確認しました</span>
         </label>
         <p className="mt-2">{shippingReviewed ?
-          "配送条件を確認済みです。準備内容をPCへ渡せます。Shopsへの保存は保留中です。" :
+          "配送条件を確認済みです。Web側に出品依頼を記録できます。Shopsへの保存は保留中です。" :
           "配送条件の確認が必要です。"}</p>
       </div>}
       <label className="mt-2 block">保存済みの商品説明
@@ -323,15 +348,10 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <textarea readOnly value={copyText} aria-label="Shops出品準備内容"
         className="mt-2 h-40 w-full rounded border border-gray-200 p-2 text-xs" />
       </>}
-      {isB005396 && <button type="button" onClick={() => void sendPreparationToPc()}
+      {isB005396 && <button type="button" onClick={() => void reserveWebHttpJob()}
         disabled={busy || !available || !reviewedHandoffReady}
         className="mt-3 rounded bg-blue-700 px-3 py-1 font-bold text-white disabled:opacity-40">
-        {busy ? "PCへ送信中…" : "非公開下書きの準備をPCへ渡す"}
-      </button>}
-      {isB005396 && <button type="button" onClick={downloadForPc}
-        disabled={busy || !available || !reviewedHandoffReady}
-        className="ml-2 mt-3 rounded border border-gray-300 px-3 py-1 disabled:opacity-40">
-        PC用の準備ファイルを保存
+        {busy ? "記録中…" : "Web側に出品依頼を記録"}
       </button>}
     </div>}
   </section>;
