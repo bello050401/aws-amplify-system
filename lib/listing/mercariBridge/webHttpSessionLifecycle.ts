@@ -2,7 +2,7 @@ import "server-only";
 
 import { WEB_HTTP_SHOP_ID } from "./webHttpDraftJob.ts";
 
-/** Opaque material from a future, human-operated browser login adapter. */
+/** Opaque material from a future verified HTTP-only login adapter. */
 export type WebHttpSessionRecord = {
   schemaVersion: 1;
   shopId: string;
