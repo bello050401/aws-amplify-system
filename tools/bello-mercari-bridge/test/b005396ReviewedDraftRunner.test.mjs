@@ -87,3 +87,33 @@ test("dry runner reads but cannot enter form, image upload or save path", async 
     assert.equal(flowCalls, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("LIVE entry requires explicit enable and current reviewed evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-reviewed-live-gate-"));
+  try {
+    await enqueueGeneralPrivateCreate(root, pack);
+    const args = { root, inventoryId, origin: "https://bello.example.invalid",
+      belloProfileDir: root, shopsProfileDir: root,
+      playwrightModulePath: root };
+    let flowCalls = 0;
+    const flow = async (_args, deps) => {
+      flowCalls++;
+      assert.equal(typeof deps.captureInitialScan, "function");
+      assert.equal(await deps.reviewGate({ inventoryId, pack }), true);
+      return { status: "BLOCKED", diagnostic: "TEST_FLOW_NO_SAVE" };
+    };
+    const missingFlag = await runB005396ReviewedDraft(args, {
+      mode: "LIVE", evidence, fetchSnapshot, flow });
+    assert.equal(missingFlag.diagnostic, "LIVE_REVIEW_HOLD");
+    const missingReview = await runB005396ReviewedDraft(args, {
+      mode: "LIVE", allowLiveAfterReview: true,
+      fetchSnapshot, flow });
+    assert.equal(missingReview.diagnostic, "REVIEW_HOLD");
+    assert.equal(flowCalls, 0);
+    const enabled = await runB005396ReviewedDraft(args, {
+      mode: "LIVE", allowLiveAfterReview: true, evidence,
+      fetchSnapshot, flow });
+    assert.equal(enabled.diagnostic, "TEST_FLOW_NO_SAVE");
+    assert.equal(flowCalls, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
