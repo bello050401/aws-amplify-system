@@ -44,8 +44,11 @@ import { enqueueGeneralPrivateCreate, listGeneralPrivateCreateJobs } from
   "./generalPrivateCreateJob.mjs";
 import { readGeneralPrivateCreateRequestJson } from
   "./generalPrivateCreateRequest.mjs";
+import { runB005396PrivateDraftPcFlow } from
+  "./generalPrivateDraftPcFlow.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
+const B005396_INVENTORY = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
 const WORKFLOW_STAGES = new Set(["IMAGE_CLAIMED", "FILE_SELECTION_UNCERTAIN",
   "FILE_SELECTION_RETURNED", "PENDING_PREVIEW_OBSERVED",
   "TWO_IMAGES_VISIBLE", "SAVE_CLAIMED", "NEXT_CLICK_UNCERTAIN",
@@ -162,6 +165,7 @@ function page({ csrf, options, message, busy, workflowRunning, recoveryRunning,
   workflowReadbackPrivateWithImage, savedProductReadback,
   retainedWorkflowOpen, createClaim, createPreflight, createResult, createOpen, createArmed,
   visibilityJobs = [], retainedVisibilityOpen = false, generalCreateJobs = [],
+  offlineDraftActionEnabled = false,
   listingWindow = { remainingSeconds: 0, nextAllowedAt: null } }) {
   if (options.createTestObservationEnabled)
     return createTestPage({ csrf, message, busy, claim: createClaim,
@@ -189,7 +193,7 @@ ${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
 ${visibilityJobs.length ? `<section><h2>BELLO EC出品からの公開状態ジョブ</h2><p>対象IDと現在の公開状態をShopsで読み直し、1回だけ画面操作します。結果が不明なら再操作しません。再出品はこのPCに同じ商品の停止完了記録がある場合だけ可能です。</p>${visibilityJobs.map(item => `<div><p><strong>${html(item.job.action === "STOP" ? "出品停止" : "再出品")}</strong> / ${html(item.job.target.skuCode)} / 商品ID <code>${html(item.job.target.remoteId)}</code> / ${html(item.attempted ? item.outcome ?? "UNKNOWN" : "未実行")}</p>${visibilityButton(item)}</div>`).join("")}</section>` : ""}
 ${visibilityJobs.some(item => item.job.action === "RELIST") ? `<p data-listing-countdown data-remaining-seconds="${html(listingWindow.remainingSeconds ?? "")}">${listingWindow.remainingSeconds === null ? "出品間隔の記録を確認できません。再出品はできません。" : listingWindow.remainingSeconds > 0 ? `次の出品まで ${html(listingWindow.remainingSeconds)} 秒` : "出品間隔: 実行可能"}</p><script>/* Display uses a monotonic clock; the PC runner checks the gate again. */
 (() => { const label = document.querySelector('[data-listing-countdown]'); const initial = Number(label.dataset.remainingSeconds); if (!Number.isInteger(initial) || initial < 0 || !label.dataset.remainingSeconds) return; const until = performance.now() + initial * 1000; const tick = () => { const seconds = Math.max(0, Math.ceil((until - performance.now()) / 1000)); label.textContent = seconds ? '次の出品まで ' + seconds + ' 秒' : '出品間隔: 実行可能'; document.querySelectorAll('[data-relist-button]').forEach(button => { if (button.dataset.baseDisabled === '0') button.disabled = seconds > 0; }); }; tick(); setInterval(tick, 1000); })();</script>` : ""}
-${generalCreateJobs.length ? `<section><h2>BELLOから受け取った新規非公開出品の準備</h2><p>保存された準備内容はShopsへ未送信です。既存商品の重複照合と画像・全項目の照合が完了するまで送信できません。</p>${generalCreateJobs.map(item => `<p><code>${html(item.managementCode)}</code> ／ ${html(item.outcome ?? (item.claimed ? "結果の確認が必要" : "未送信"))}</p>`).join("")}</section>` : ""}
+${generalCreateJobs.length ? `<section><h2>BELLOから受け取った新規非公開出品の準備</h2><p>保存された準備内容はShopsへ未送信です。既存商品の重複照合と画像・全項目の照合が完了するまで送信できません。</p>${generalCreateJobs.map(item => `<div><p><code>${html(item.managementCode)}</code> ／ ${html(item.outcome ?? (item.claimed ? "結果の確認が必要" : "未送信"))}</p>${item.inventoryId === B005396_INVENTORY ? `<form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="run-general-private-draft"><input type="hidden" name="inventoryId" value="${html(item.inventoryId)}"><button ${offlineDraftActionEnabled && !item.claimed && !busy ? "" : "disabled"}>非公開下書きの保存を1回実行</button></form><p><small>${offlineDraftActionEnabled ? "保存前にBELLO、Shopsの重複と画面内容を再確認します。結果不明なら再実行できません。" : "独立レビュー中のため保存操作は保留しています。"}</small></p>` : ""}</div>`).join("")}</section>` : ""}
 ${retainedVisibilityOpen ? "<p>Shops操作の結果を確認できません。専用Chromeを開いたままにしています。再操作せず状態を確認してください。</p>" : ""}
 ${workflowRunning ? `<p>工程を実行中です。現在の段階: <code>${html(lastWorkflowStage || "準備中")}</code></p>` : ""}
 ${recoveryRunning ? `<p>一回限りの復旧工程を実行中です。現在の段階: <code>${html(lastRecoveryStage || "準備中")}</code></p>` : ""}
@@ -304,6 +308,8 @@ export async function startDesktopApp(config, {
   runRead = runBelloCloudReadOnce, reportRead = reportSavedReadResultOnce, openBrowser = null,
   enqueueVisibility = enqueueVisibilityPcJob,
   runVisibility = runVisibilityTransitionOnce,
+  runGeneralDraft = runB005396PrivateDraftPcFlow,
+  offlineDraftActionEnabled = false,
 } = {}) {
   const options = optionsOf(config);
   const initialCreate = options.createTestObservationEnabled ?
@@ -374,6 +380,7 @@ export async function startDesktopApp(config, {
   let retainedImageSession = null;
   let retainedWorkflowSession = null;
   let retainedVisibilitySession = null;
+  let retainedGeneralDraftSession = null;
   let lastImageStatus = savedImageOutcome?.outcome ?? "";
   let lastImageDiagnostic = savedImageOutcome?.diagnostic ?? "";
   let lastImageReadState = "";
@@ -594,6 +601,7 @@ export async function startDesktopApp(config, {
         retainedWorkflowOpen: Boolean(retainedWorkflowSession),
         createClaim, createPreflight, createResult, createOpen: Boolean(createSession),
         createArmed, visibilityJobs, generalCreateJobs, listingWindow,
+        offlineDraftActionEnabled,
         retainedVisibilityOpen: Boolean(retainedVisibilitySession) }));
       return;
     }
@@ -615,7 +623,8 @@ export async function startDesktopApp(config, {
     const supplied = Buffer.from(form.get("csrf") ?? "", "utf8");
     const actual = Buffer.from(csrf, "utf8");
     if (supplied.length !== actual.length || !timingSafeEqual(supplied, actual) ||
-        busy || workflowRunning || recoveryRunning || retainedVisibilitySession) {
+        busy || workflowRunning || recoveryRunning || retainedVisibilitySession ||
+        retainedGeneralDraftSession) {
       send(response, 403, "Forbidden", "text/plain; charset=utf-8"); return;
     }
     busy = true;
@@ -652,6 +661,29 @@ export async function startDesktopApp(config, {
             result.status === "PREFLIGHT_BLOCKED" ?
               "停止済みの証拠または対象状態を確認できません。Shops操作は行っていません。" :
               "結果は未確認です。同じ操作を再実行できません。Shops画面を確認してください。";
+      } else if (action === "run-general-private-draft") {
+        if (!offlineDraftActionEnabled ||
+            form.get("inventoryId") !== B005396_INVENTORY ||
+            shopsContext || manualSession || retainedSaveSession ||
+            retainedImageSession || retainedWorkflowSession || createSession)
+          throw Error("General private draft action is under review");
+        const result = await runGeneralDraft({ root: options.root,
+          inventoryId: B005396_INVENTORY, origin: options.origin,
+          belloProfileDir: options.belloProfileDir,
+          shopsProfileDir: options.shopsProfileDir,
+          playwrightModulePath: options.playwrightModulePath });
+        if (result?.retainedSession?.context) {
+          retainedGeneralDraftSession = result.retainedSession;
+          result.retainedSession.context.once?.("close", () => {
+            if (retainedGeneralDraftSession === result.retainedSession)
+              retainedGeneralDraftSession = null;
+          });
+        }
+        message = result?.diagnostic === "REVIEW_HOLD" ?
+          "独立レビュー中のため、Shopsへの保存は実行していません。" :
+          result?.status === "BLOCKED" ?
+            "保存前の照合で停止しました。Shopsへの保存は実行していません。" :
+            "下書き保存の結果は未確認です。同じ操作は再実行せず、専用画面と保存記録を確認してください。";
       } else if (action === "create-test-open") {
         if (!options.createTestObservationEnabled || createClaim.claimed ||
             !createPreflight.clear || createSession ||

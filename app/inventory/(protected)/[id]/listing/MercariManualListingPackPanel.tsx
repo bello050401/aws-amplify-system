@@ -123,7 +123,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         }
         setPack(result.pack);
         setReviewEvidence(result.evidence);
-        setMessage("現在のEC下書きを読み取りました。配送条件を確認してください。Shopsへの送信はできません。");
+        setMessage("現在のEC下書きを読み取りました。配送条件を確認すると、PCへ準備内容を渡せます。Shopsへの送信は行いません。");
         return;
       }
       const result = await prepareMercariManualListingPackAction(inventoryId, {
@@ -170,7 +170,6 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   }
   async function handoffToPc(selectedPack: MercariManualListingPack,
     revision: number) {
-    if (isB005396) return;
     try {
       const response = await fetch("http://127.0.0.1:56210/general-private-create-job", {
         method: "POST", mode: "cors", credentials: "omit", cache: "no-store",
@@ -181,8 +180,12 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       const result = await response.json().catch(() => null);
       if (revision !== selectionRevision.current) {
         setMessage("入力が変わりました。現在の内容で確認し直してください。");
-      } else if (result?.ok === true && result.status === "PREPARED_NO_SEND") {
-        setMessage("PCに出品準備を渡しました。Shopsへの送信はまだ行っていません。");
+      } else if (result?.ok === true && result.status === "PREPARED_NO_SEND" &&
+          result.inventoryId === selectedPack.inventoryId &&
+          result.managementCode === selectedPack.managementCode) {
+        setMessage(isB005396 ?
+          "PCに非公開下書きの準備内容を渡しました。Shopsへの保存・公開は行っていません。" :
+          "PCに出品準備を渡しました。Shopsへの送信はまだ行っていません。");
       } else if (result?.code === "UNKNOWN_NO_RETRY") {
         setMessage("この商品の出品試行はPCに記録済みで、結果を確認できません。重複防止のため再送しません。");
       } else {
@@ -193,7 +196,11 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     }
   }
   async function sendPreparationToPc() {
-    if (!pack || busy || isB005396) return;
+    if (!pack || busy || !available ||
+        (isB005396 && (!reviewEvidence || !shippingReviewed ||
+          !reviewReady || pack.priceYen !== 99_999 || pack.quantity !== 1 ||
+          pack.categoryId !== selectionRef.current.categoryId ||
+          pack.brandId !== selectionRef.current.brandId))) return;
     const revision = selectionRevision.current;
     setBusy(true);
     setMessage(null);
@@ -207,7 +214,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
       "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
     {isB005396 && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-      B005396は価格99,999円で内容確認のみ行います。独立した出品可否確認が完了するまで、PCへの送信はできません。
+      B005396は価格99,999円で確認します。PCへ渡すのは準備内容だけです。Shopsの非公開下書き保存は独立レビューが完了するまで保留します。
     </p>}
     <dl className="mt-3 grid grid-cols-2 gap-1 rounded bg-gray-50 p-3 text-xs">
       <dt>配送方法</dt><dd>未定（出品者手配）</dd>
@@ -296,7 +303,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
           <span>EC配送方法とShopsの配送設定の違いを確認しました</span>
         </label>
         <p className="mt-2">{shippingReviewed ?
-          "配送条件を確認済みです。出品可否の独立確認は未完了です。" :
+          "配送条件を確認済みです。準備内容をPCへ渡せます。Shopsへの保存は保留中です。" :
           "配送条件の確認が必要です。"}</p>
       </div>}
       <label className="mt-2 block">保存済みの商品説明
@@ -313,9 +320,13 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <textarea readOnly value={copyText} aria-label="Shops出品準備内容"
         className="mt-2 h-40 w-full rounded border border-gray-200 p-2 text-xs" />
       </>}
-      {isB005396 && <button type="button" disabled
-        className="mt-3 rounded bg-gray-400 px-3 py-1 font-bold text-white">
-        PCへの送信（出品可否の独立確認待ち）
+      {isB005396 && <button type="button" onClick={() => void sendPreparationToPc()}
+        disabled={busy || !available || !reviewEvidence || !shippingReviewed ||
+          !reviewReady || pack.priceYen !== 99_999 || pack.quantity !== 1 ||
+          pack.categoryId !== selectionRef.current.categoryId ||
+          pack.brandId !== selectionRef.current.brandId}
+        className="mt-3 rounded bg-blue-700 px-3 py-1 font-bold text-white disabled:opacity-40">
+        {busy ? "PCへ送信中…" : "非公開下書きの準備をPCへ渡す"}
       </button>}
     </div>}
   </section>;

@@ -35,6 +35,72 @@ const post = (url, csrf, action, origin = url) => fetch(`${url}/action`, {
   body: new URLSearchParams({ csrf, action }),
 });
 
+test("B005396 PC draft action stays review-held and keeps BELLO listing state", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-draft-hold-"));
+  const inventoryId = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
+  const pack = { schemaVersion: 1,
+    kind: "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK",
+    shopId: "evkhihBFFNn5hukMS9s36H", inventoryId,
+    draftId: "12345678-1234-4234-8234-123456789abc",
+    draftUpdatedAt: "2026-10-08T00:00:00.000Z",
+    title: "ソファ", description: "配送地域はご相談ください。",
+    condition: "NO_NOTABLE_DAMAGE",
+    imageRefs: [{ source: "INVENTORY", storageKey: "inventory/sofa.jpg",
+      sortOrder: 0, photoAssetId: null }],
+    priceYen: 99999, quantity: 1, categoryId: "12345",
+    categoryPath: "家具・インテリア > ソファ・ソファベッド > 2人掛け・3人掛けソファ",
+    brandId: null, brandName: null,
+    managementCode: `BELLO_${inventoryId.replace(/-/g, "").toUpperCase()}`,
+    shipping: { method: "METHOD_TYPE_UNDECIDED",
+      payer: "PAYER_TYPE_SELLER", origin: "jp11",
+      duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" },
+    status: "PREPARED_NO_SEND" };
+  let runs = 0;
+  const app = await startDesktopApp({ ...config(), dataDir }, {
+    openBrowser: null,
+    runGeneralDraft: async () => { runs++; return { status: "BLOCKED",
+      diagnostic: "REVIEW_HOLD" }; } });
+  try {
+    const queued = await fetch(`${app.url}/general-private-create-job`, {
+      method: "POST", headers: { Origin: config().origin,
+        "Content-Type": "application/json",
+        "x-bello-mercari-bridge": "GENERAL_PRIVATE_CREATE_NO_SEND" },
+      body: JSON.stringify(pack) });
+    assert.equal(queued.status, 200);
+    assert.deepEqual(await queued.json(), { ok: true, inventoryId,
+      managementCode: pack.managementCode, status: "PREPARED_NO_SEND" });
+    const body = await (await fetch(app.url)).text();
+    assert.match(body, /非公開下書きの保存を1回実行/);
+    assert.match(body, /独立レビュー中のため保存操作は保留/);
+    const csrf = await token(app.url);
+    const attempt = await fetch(`${app.url}/action`, { method: "POST",
+      redirect: "manual", headers: { Origin: app.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "run-general-private-draft",
+        inventoryId }) });
+    assert.equal(attempt.status, 303);
+    assert.equal(runs, 0);
+  } finally { await app.close(); }
+  const offline = await startDesktopApp({ ...config(), dataDir }, {
+    openBrowser: null, offlineDraftActionEnabled: true,
+    runGeneralDraft: async args => { runs++;
+      assert.equal(args.inventoryId, inventoryId);
+      return { status: "BLOCKED", diagnostic: "REVIEW_HOLD" }; } });
+  try {
+    const csrf = await token(offline.url);
+    const attempt = await fetch(`${offline.url}/action`, { method: "POST",
+      redirect: "manual", headers: { Origin: offline.url,
+        "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf, action: "run-general-private-draft",
+        inventoryId }) });
+    assert.equal(attempt.status, 303);
+    assert.equal(runs, 1);
+    assert.match(await (await fetch(offline.url)).text(),
+      /独立レビュー中のため、Shopsへの保存は実行していません/);
+  } finally { await offline.close();
+    await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test("fixed control port refuses a second desktop process", async () => {
   const first = await startDesktopApp(config(), { openBrowser: null });
   try {
