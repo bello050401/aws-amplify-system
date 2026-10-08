@@ -113,12 +113,26 @@ export async function checkWebHttpReadiness(job: WebHttpDraftJob,
 
   // The target read may outlast the saved session. Check its known expiry and
   // read access again with the same opaque session before evaluating READY.
+  let finalExpiresAt: string | null | undefined;
   const finalSession = await checkWebHttpSession(job.shopId, ownerSub,
-    ports.sessionStore, probe, clock);
+    { read: async () => {
+      const row = await ports.sessionStore.read();
+      finalExpiresAt = row?.expiresAt;
+      return row;
+    }, write: ports.sessionStore.write }, probe, clock);
   if (finalSession.status !== "READY_FOR_READONLY_PREFLIGHT")
     return result(finalSession.status);
+  const finalNowMs = clock();
+  if (!validTime(finalNowMs) || finalExpiresAt === undefined)
+    return result("PREFLIGHT_UNVERIFIED");
+  if (finalExpiresAt !== null && Date.parse(finalExpiresAt) <= finalNowMs)
+    return result("AUTH_REQUIRED");
+  if (evidence.observedAtMs > finalNowMs ||
+      finalNowMs - evidence.observedAtMs > 30_000)
+    return result("PREFLIGHT_UNVERIFIED");
 
-  const checked = transitionWebHttpExecution(initial, { type: "CHECK", nowMs,
+  const checked = transitionWebHttpExecution(initial, { type: "CHECK",
+    nowMs: finalNowMs,
     checks: { ...evidence.checks, auth: "VALID" } });
   if (checked.phase === "BLOCKED_EXISTING_LINK")
     return result("BLOCKED_EXISTING_DRAFT");
