@@ -168,27 +168,35 @@ function browserAdapter(page) {
  * not prove that a remote read response belongs to the URL draft ID.
  */
 export async function collectGeneralPrivateCreateDraftDetailsReadOnly({ page,
-  shopId, expectedRowCount, adapter = null }) {
+  shopId, expectedRowCount, adapter = null, readCycle = null }) {
   if (!ID.test(shopId ?? "") || !Number.isSafeInteger(expectedRowCount) ||
-      expectedRowCount < 1 || expectedRowCount > 50 || !adapter && !page)
+      expectedRowCount < 1 || expectedRowCount > 50 || !adapter && !page ||
+      readCycle !== null && (typeof readCycle.begin !== "function" ||
+        typeof readCycle.end !== "function"))
     return fixed("DRAFT_INPUT_UNVERIFIED");
   const ui = adapter ?? browserAdapter(page);
   const listUrl = `${SHOP_ORIGIN}/seller/shops/${shopId}/products?tab=draft`;
   try {
+    let cycle = readCycle?.begin("LIST");
     await ui.goto(listUrl);
     const first = await stableList(ui, listUrl, expectedRowCount);
     if (!first) return fixed("DRAFT_LIST_UNVERIFIED");
+    if (readCycle) await readCycle.end(cycle);
     const rows = [];
     for (let pass = 0; pass < 2; pass++) {
       const seen = new Set();
       for (let index = 0; index < expectedRowCount; index++) {
+        cycle = readCycle?.begin("LIST");
         await ui.goto(listUrl);
         if (!await stableList(ui, listUrl, expectedRowCount, first))
           return fixed("DRAFT_LIST_CHANGED");
+        if (readCycle) await readCycle.end(cycle);
+        cycle = readCycle?.begin("DETAIL");
         await ui.clickRow(first.tableIndex, index);
         const observed = await stableDetail(ui, shopId, first.rows[index].title);
         if (!observed || seen.has(observed.draftId))
           return fixed("DRAFT_DETAIL_UNVERIFIED");
+        if (readCycle) await readCycle.end(cycle, observed.draftId);
         const { detail, draftId: id } = observed;
         seen.add(id);
         const row = { draftId: id, title: detail.title,
@@ -197,9 +205,11 @@ export async function collectGeneralPrivateCreateDraftDetailsReadOnly({ page,
         else if (!same(rows[index], row)) return fixed("DRAFT_LIST_CHANGED");
       }
     }
+    cycle = readCycle?.begin("LIST");
     await ui.goto(listUrl);
     if (!await stableList(ui, listUrl, expectedRowCount, first))
       return fixed("DRAFT_LIST_CHANGED");
+    if (readCycle) await readCycle.end(cycle);
     return { status: "DRAFT_DETAILS_DOM_OBSERVED", rows,
       allowFinalCreate: false };
   } catch { return fixed("DRAFT_READ_UNAVAILABLE"); }

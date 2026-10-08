@@ -66,7 +66,7 @@ async function returnToPage(ui, url, pageIndex, pages) {
 export async function captureGeneralPrivateInitialScanReadOnly({ page, shopId,
   managementCode, title, expectedDraftRowCount = 12, adapter = null,
   collectDrafts = collectGeneralPrivateCreateDraftDetailsReadOnly,
-  verifyDraftRows = null } = {}) {
+  verifyDraftRows = null, draftReadCycle = null } = {}) {
   if (!ID.test(shopId ?? "") || !ID.test(managementCode ?? "") ||
       typeof title !== "string" || !title.trim() || title.length > 130 ||
       !Number.isSafeInteger(expectedDraftRowCount) ||
@@ -126,14 +126,14 @@ export async function captureGeneralPrivateInitialScanReadOnly({ page, shopId,
     }
   }
   const drafts = await collectDrafts({ page, shopId,
-    expectedRowCount: expectedDraftRowCount });
+    expectedRowCount: expectedDraftRowCount, readCycle: draftReadCycle });
   if (drafts?.status !== "DRAFT_DETAILS_DOM_OBSERVED" ||
       drafts.allowFinalCreate !== false ||
       drafts.rows?.length !== expectedDraftRowCount)
     throw Error("DRAFT_DETAILS_UNVERIFIED");
   await ui.wait(600);
   const secondDrafts = await collectDrafts({ page, shopId,
-    expectedRowCount: expectedDraftRowCount });
+    expectedRowCount: expectedDraftRowCount, readCycle: draftReadCycle });
   if (secondDrafts?.status !== "DRAFT_DETAILS_DOM_OBSERVED" ||
       secondDrafts.allowFinalCreate !== false ||
       !same(secondDrafts.rows, drafts.rows))

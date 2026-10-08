@@ -10,7 +10,18 @@ const managementCode = "BELLO_2C53F36A7A604E34801D8ABC24F6CFC0";
 const ownDraftId = "shopsDraft123";
 const title = "ソファ";
 const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=draft`;
-const target = { shopId, managementCode, ownDraftId, title,
+const draftRows = [{ draftId: ownDraftId, title, skuCode: managementCode },
+  ...Array.from({ length: 12 }, (_, index) => ({
+    draftId: `otherDraft${index + 1}`, title: `椅子${index + 1}`,
+    skuCode: `OTHER_SKU_${index + 1}` }))];
+const baseline = { schemaVersion: 1,
+  kind: "B005396_DRAFT_BASELINE", shopId, rowCount: 12,
+  rows: draftRows.slice(1).map((row, index) => ({
+    draftId: row.draftId,
+    fingerprint: (index + 1).toString(16).padStart(64, "0") }))
+    .sort((a, b) => a.draftId < b.draftId ? -1 : 1),
+  observedAt: new Date().toISOString() };
+const target = { shopId, managementCode, ownDraftId, title, baseline,
   priceYen: 99_999, description: "対象説明", categoryId: "cat1",
   condition: "NO_NOTABLE_DAMAGE", quantity: 1, imageCount: 1,
   shipping: { method: "METHOD_TYPE_UNDECIDED",
@@ -18,9 +29,7 @@ const target = { shopId, managementCode, ownDraftId, title,
     duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" } };
 const observeDraftReads = () => ({ stop: async () => ({
   status: "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH", complete: true,
-  allowFinalCreate: false, rowCount: 2 }) });
-const draftRows = [{ draftId: ownDraftId, title, skuCode: managementCode },
-  { draftId: "otherDraft", title: "椅子", skuCode: "OTHER_SKU" }];
+  allowFinalCreate: false, rowCount: 13 }) });
 function listSnapshot(rowCount) {
   return { url: listUrl, documentUrl: listUrl, loading: false,
     paginationControls: 0, tableMatches: 1, tableIndex: 0,
@@ -42,7 +51,7 @@ function fakeContext() {
 }
 const noSale = { diagnostic: "SALE_SKU_SEARCH_NO_MATCH_OBSERVED",
   allowFinalCreate: false };
-const countTwo = { status: "DRAFT_COUNT_OBSERVED", count: 2,
+const countTwo = { status: "DRAFT_COUNT_OBSERVED", count: 13,
   allowFinalCreate: false };
 const details = { status: "DRAFT_DETAILS_DOM_OBSERVED", rows: draftRows,
   allowFinalCreate: false };
@@ -90,7 +99,7 @@ test("exact sale SKU absence and complete draft details prove only own draft", a
   assert.equal(proof.ownDraftId, ownDraftId);
   assert.equal(calls[0][1].positiveControlPrefix, "B00");
   assert.equal(calls[0][1].managementCode, managementCode);
-  assert.equal(calls[2][1].expectedRowCount, 2);
+  assert.equal(calls[2][1].expectedRowCount, 13);
   assert.equal(wasClosed(), true);
 });
 
@@ -122,6 +131,23 @@ test("a missing fresh detail response stops before a save proof", async () => {
   assert.equal(wasClosed(), true);
 });
 
+test("initial twelve plus claim and another new draft stops before detail reads", async () => {
+  const { context, wasClosed } = fakeContext();
+  let collected = false;
+  const result = await captureB005396PrivateDraftDuplicateProof({
+    context, ...target }, {
+    searchSaleSku: async () => noSale,
+    readDraftCount: async () => ({ status: "DRAFT_COUNT_OBSERVED",
+      count: 14, allowFinalCreate: false }),
+    collectDrafts: async () => { collected = true; return details; },
+    observeDraftReads,
+  });
+  assert.equal(result.status, "REMOTE_SCAN_INCOMPLETE");
+  assert.equal(result.diagnostic, "DRAFT_BASELINE_CHANGED");
+  assert.equal(collected, false);
+  assert.equal(wasClosed(), true);
+});
+
 test("sale match, unavailable scan and stable empty draft remain non-authorizing", async () => {
   for (const [sale, count, status, diagnostic] of [
     [{ diagnostic: "SALE_SKU_SEARCH_MATCH_POSSIBLE",
@@ -149,11 +175,14 @@ test("sale match, unavailable scan and stable empty draft remain non-authorizing
 
 test("other matching or unidentified drafts cannot prove uniqueness", async () => {
   for (const [rows, status, diagnostic] of [
-    [[draftRows[0], { ...draftRows[1], skuCode: managementCode }],
+    [[draftRows[0], { ...draftRows[1], skuCode: managementCode },
+      ...draftRows.slice(2)],
       "REMOTE_DUPLICATE_POSSIBLE", "DRAFT_MATCH_POSSIBLE"],
-    [[draftRows[0], { ...draftRows[1], skuCode: null }],
+    [[draftRows[0], { ...draftRows[1], skuCode: null },
+      ...draftRows.slice(2)],
       "REMOTE_SCAN_INCOMPLETE", "DRAFT_IDENTITY_UNVERIFIED"],
-    [[draftRows[1], { ...draftRows[1], draftId: "anotherDraft" }],
+    [[draftRows[1], { ...draftRows[1], draftId: "anotherDraft" },
+      ...draftRows.slice(2)],
       "REMOTE_SCAN_INCOMPLETE", "OWN_DRAFT_UNVERIFIED"],
   ]) {
     const { context } = fakeContext();

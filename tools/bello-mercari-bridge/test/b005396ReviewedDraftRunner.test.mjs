@@ -18,6 +18,12 @@ import { fillGeneralPrivateCreateFormOnly } from
 
 const inventoryId = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
 const shopId = "evkhihBFFNn5hukMS9s36H";
+const draftBaseline = { schemaVersion: 1,
+  kind: "B005396_DRAFT_BASELINE", shopId, rowCount: 12,
+  rows: Array.from({ length: 12 }, (_, index) => ({
+    draftId: `draft${String(index).padStart(2, "0")}`,
+    fingerprint: (index + 1).toString(16).padStart(64, "0") })),
+  observedAt: new Date().toISOString() };
 const bytes = Buffer.from("reviewed image bytes");
 const imageSha256 = createHash("sha256").update(bytes).digest("hex");
 const pack = { schemaVersion: 1, kind: "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK",
@@ -90,7 +96,8 @@ test("read-only scan binder closes the session and blocks non-query writes", asy
     playwrightModulePath: "p" }, {
     observeDraftReads: () => ({ stop: async () => ({
       status: "DRAFT_NETWORK_BOUND_NO_MATCH", complete: true,
-      allowFinalCreate: false, rowCount: 12 }) }),
+      allowFinalCreate: false, rowCount: 12,
+      baseline: draftBaseline }) }),
     openSession: async options => { guard = options.requestGuard;
       return { context: { setOffline: async () => {},
         close: async () => { closed++; } }, page: {} }; },
@@ -131,7 +138,8 @@ test("read-only scan binder admits only the pinned Self account query", async ()
     playwrightModulePath: "p" }, {
     observeDraftReads: () => ({ stop: async () => ({
       status: "DRAFT_NETWORK_BOUND_NO_MATCH", complete: true,
-      allowFinalCreate: false, rowCount: 12 }) }),
+      allowFinalCreate: false, rowCount: 12,
+      baseline: draftBaseline }) }),
     openSession: async options => { guard = options.requestGuard;
       return { context: { setOffline: async () => {}, close: async () => {} },
         page: {} }; },

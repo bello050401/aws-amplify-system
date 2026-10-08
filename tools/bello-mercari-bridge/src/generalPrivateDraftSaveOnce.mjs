@@ -9,6 +9,7 @@ import { diagnoseGeneralPrivateCreateForm } from
   "./generalPrivateCreateForm.mjs";
 import { inspectGeneralPrivateCreateUrl } from
   "./generalPrivateCreateFormOnly.mjs";
+import { exactDraftBaseline } from "./draftBoundReadProof.mjs";
 import { withShopListingSend } from "./listingSendGate.mjs";
 
 const INVENTORY = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
@@ -80,14 +81,18 @@ export function inspectB005396DraftSaveInput(pack, form) {
 
 /** No producer is wired yet; a read-only scan must prove exactly this draft. */
 export function inspectB005396DraftDuplicateProof(pack, form, proof,
-  now = Date.now()) {
+  now = Date.now(), baseline = null) {
   let status, shopId, managementCode, ownDraftId, observedAt,
-    complete, allowFinalCreate, networkBoundVerified;
+    complete, allowFinalCreate, networkBoundVerified, baselineFingerprint;
   try { ({ status, shopId, managementCode, ownDraftId, observedAt,
-    complete, allowFinalCreate, networkBoundVerified } = proof ?? {}); }
+    complete, allowFinalCreate, networkBoundVerified,
+    baselineFingerprint } = proof ?? {}); }
   catch { return false; }
   return status === "NO_OTHER_MATCH_OBSERVED" && complete === true &&
     allowFinalCreate === false && networkBoundVerified === true &&
+    exactDraftBaseline(baseline, pack.shopId, 12) &&
+    baselineFingerprint === createHash("sha256")
+      .update(JSON.stringify(baseline)).digest("hex") &&
     shopId === pack.shopId &&
     managementCode === pack.managementCode &&
     ownDraftId === form.observedDraftId &&
@@ -198,6 +203,27 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
     return fixed("BLOCKED", "DRAFT_SAVE_ALREADY_CLAIMED");
   if (typeof captureDuplicateProof !== "function")
     return fixed("BLOCKED", "REMOTE_DUPLICATE_UNVERIFIED");
+  let knownEvidence;
+  try { knownEvidence = await readOptional(join(root,
+    "general-private-create-once",
+    `${inventoryId}.known-existing-private-test.json`)); }
+  catch { return fixed("BLOCKED", "DRAFT_BASELINE_UNVERIFIED"); }
+  const baseline = knownEvidence?.draftBaseline;
+  if (knownEvidence?.schemaVersion !== 1 ||
+      knownEvidence.kind !== "B005396_KNOWN_EXISTING_PRIVATE_TEST_EXCEPTION" ||
+      knownEvidence.inventoryId !== inventoryId ||
+      knownEvidence.shopId !== pack.shopId ||
+      knownEvidence.packFingerprint !== fingerprint ||
+      knownEvidence.knownExistingRemoteId !== "2JVJtFhb6kB5JBGkDbi2nm" ||
+      knownEvidence.knownExistingTitle !== pack.title ||
+      knownEvidence.knownExistingSkuCode !== null ||
+      knownEvidence.knownExistingVisibility !== "PUBLIC" ||
+      knownEvidence.knownExistingQuantity !== 0 ||
+      knownEvidence.knownExistingPriceYen !== 89_800 ||
+      knownEvidence.noOtherCodeOrTitleMatch !== true ||
+      knownEvidence.allowPublic !== false ||
+      !exactDraftBaseline(baseline, pack.shopId, 12))
+    return fixed("BLOCKED", "DRAFT_BASELINE_UNVERIFIED");
   let source;
   try { source = await fetchSnapshot({ origin, belloProfileDir,
     playwrightModulePath, pack }); }
@@ -237,8 +263,9 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
         priceYen: pack.priceYen, description: pack.description,
         categoryId: pack.categoryId, condition: pack.condition,
         shipping: pack.shipping, quantity: pack.quantity,
-        imageCount: pack.imageRefs.length });
-      if (!inspectB005396DraftDuplicateProof(pack, form, proof))
+        imageCount: pack.imageRefs.length, baseline });
+      if (!inspectB005396DraftDuplicateProof(pack, form, proof,
+        Date.now(), baseline))
         throw Error("REMOTE_DUPLICATE_UNVERIFIED");
       reasonCode = "FORM_CHANGED";
       const page = form.retainedSession.page;

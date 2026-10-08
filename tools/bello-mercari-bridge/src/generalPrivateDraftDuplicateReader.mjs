@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { searchGeneralPrivateCreateSaleSkuReadOnly } from
   "./generalPrivateCreateSaleSkuSearch.mjs";
 import { collectGeneralPrivateCreateDraftDetailsReadOnly,
   readGeneralPrivateDraftListDom } from
   "./generalPrivateCreateDraftCollector.mjs";
-import { observeBoundDraftReads } from "./draftBoundReadProof.mjs";
+import { observeBoundDraftReads, exactDraftBaseline } from
+  "./draftBoundReadProof.mjs";
 
 const ORIGIN = "https://mercari-shops.com";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -74,6 +76,7 @@ export async function readStableGeneralPrivateDraftCount({ page, shopId,
 export async function captureB005396PrivateDraftDuplicateProof({ context,
   shopId, managementCode, ownDraftId, title, priceYen,
   description, categoryId, condition, shipping, quantity, imageCount,
+  baseline,
   positiveControlPrefix = "B00" }, {
     searchSaleSku = searchGeneralPrivateCreateSaleSkuReadOnly,
     readDraftCount = readStableGeneralPrivateDraftCount,
@@ -91,6 +94,7 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
       shipping.payer !== "PAYER_TYPE_SELLER" ||
       shipping.origin !== "jp11" ||
       shipping.duration !== "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" ||
+      !exactDraftBaseline(baseline, shopId, 12) ||
       typeof positiveControlPrefix !== "string" ||
       !/^[A-Za-z0-9_-]{2,20}$/.test(positiveControlPrefix) ||
       managementCode.startsWith(positiveControlPrefix))
@@ -133,13 +137,15 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_LIST_UNVERIFIED");
     if (countValue === 0)
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_ZERO_ROWS_OBSERVED");
+    if (countValue !== baseline.rowCount + 1)
+      return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_BASELINE_CHANGED");
 
     try { observer = observeDraftReads(context, { page, shopId,
       expectedRowCount: countValue }); }
     catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_NETWORK_BOUND_UNVERIFIED"); }
     let draftResult;
     try { draftResult = await collectDrafts({ page, shopId,
-      expectedRowCount: countValue }); }
+      expectedRowCount: countValue, readCycle: observer }); }
     catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_DETAILS_UNVERIFIED"); }
     let draftStatus, draftRows, draftAllow;
     try { draftStatus = draftResult?.status; draftRows = draftResult?.rows;
@@ -154,7 +160,7 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
     const reviewed = { description, categoryId, condition, shipping,
       quantity, imageCount };
     try { proofStopped = true; bound = await observer.stop(draftRows, {
-      managementCode, title, priceYen, ownDraftId, reviewed }); }
+      managementCode, title, priceYen, ownDraftId, reviewed, baseline }); }
     catch { return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_NETWORK_BOUND_UNVERIFIED"); }
     if (bound?.status !== "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH" ||
         bound.complete !== true || bound.allowFinalCreate !== false ||
@@ -190,6 +196,8 @@ export async function captureB005396PrivateDraftDuplicateProof({ context,
       return fixed("REMOTE_SCAN_INCOMPLETE", "DRAFT_IDENTITY_UNVERIFIED");
     return { status: "NO_OTHER_MATCH_OBSERVED", complete: true,
       allowFinalCreate: false, networkBoundVerified: true,
+      baselineFingerprint: createHash("sha256")
+        .update(JSON.stringify(baseline)).digest("hex"),
       shopId, managementCode, ownDraftId,
       observedAt: new Date().toISOString() };
   } finally {

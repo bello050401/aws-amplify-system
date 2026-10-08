@@ -61,6 +61,28 @@ test("reads a named and blank draft twice without a save/create action", async (
     .includes(item[0])), true);
 });
 
+test("every list and detail navigation requires its own completed read cycle", async () => {
+  const { adapter } = fakeAdapter();
+  const ended = { LIST: 0, DETAIL: 0 };
+  const readCycle = {
+    begin: kind => ({ kind }),
+    end: async (cycle, draftId) => {
+      if (cycle.kind === "DETAIL") assert.ok(draftId);
+      ended[cycle.kind]++;
+    },
+  };
+  const result = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter, readCycle });
+  assert.equal(result.status, "DRAFT_DETAILS_DOM_OBSERVED");
+  assert.deepEqual(ended, { LIST: 6, DETAIL: 4 });
+  const unavailable = await collectGeneralPrivateCreateDraftDetailsReadOnly({
+    shopId, expectedRowCount: 2, adapter: fakeAdapter().adapter,
+    readCycle: { begin: kind => ({ kind }), end: async cycle => {
+      if (cycle.kind === "DETAIL") throw Error("REQUEST_FAILED");
+    } } });
+  assert.equal(unavailable.status, "DRAFT_READ_UNAVAILABLE");
+});
+
 test("row count or title change prevents a complete result", async () => {
   const count = fakeAdapter({ mutateList: reads => reads >= 4 ?
     [...details, { id: "transient-C", title: "", skuCode: "" }] : details });

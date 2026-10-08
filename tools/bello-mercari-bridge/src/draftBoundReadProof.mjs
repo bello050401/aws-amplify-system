@@ -5,11 +5,14 @@ import { isExplicitDraftReadQueryRequest } from
 const ORIGIN = "https://mercari-shops.com";
 const GRAPHQL = `${ORIGIN}/graphql`;
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
+const SHA = /^[a-f0-9]{64}$/;
 const LIST_SHA =
   "035b93384798e16e4a71bfdab8fa0e95bc0db9ae1a602e7ce832e016cebc147e";
 const DETAIL_SHA =
   "f6a841578f2199faec359e918c169f2ecbbdf0ceaa71fbe439588016c598d5b0";
 const MAX_BODY_BYTES = 512 * 1024;
+const BODY_TIMEOUT_MS = 10_000;
+const CYCLE_TIMEOUT_MS = 12_000;
 const LIST_FIELDS = ["id", "name", "description", "price",
   "shippingPayerType", "thumbnails", "updatedAt",
   "channelListingScope", "__typename"];
@@ -25,8 +28,38 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const keys = (value, names) => value && typeof value === "object" &&
   !Array.isArray(value) && same(Object.keys(value).sort(), names.slice().sort());
 const titleKey = value => value.normalize("NFKC").replace(/\s+/g, "").trim();
+const fingerprint = (node, item) => createHash("sha256")
+  .update(JSON.stringify({ node, item })).digest("hex");
 const fixed = diagnostic => ({ status: "DRAFT_NETWORK_BOUND_UNVERIFIED",
   diagnostic, complete: false, allowFinalCreate: false });
+async function boundedResponseBody(response) {
+  let timer;
+  try { return await Promise.race([response.body(), new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Error("DRAFT_RESPONSE_TIMEOUT")),
+      BODY_TIMEOUT_MS);
+  })]); }
+  finally { clearTimeout(timer); }
+}
+
+export function exactCompletedReadCycles(cycles) {
+  return Array.isArray(cycles) && cycles.length > 0 && cycles.every(cycle =>
+    cycle?.complete === true && ["LIST", "DETAIL"].includes(cycle.kind) &&
+    Array.isArray(cycle.requests) && cycle.requests.length > 0 &&
+    cycle.requests.every(record => record?.state === "SUCCESS"));
+}
+
+export function exactDraftBaseline(value, shopId, expectedRowCount = 12) {
+  return value?.schemaVersion === 1 &&
+    value.kind === "B005396_DRAFT_BASELINE" &&
+    value.shopId === shopId && ID.test(shopId ?? "") &&
+    Number.isSafeInteger(expectedRowCount) && expectedRowCount > 0 &&
+    value.rowCount === expectedRowCount &&
+    Number.isFinite(Date.parse(value.observedAt ?? "")) &&
+    Array.isArray(value.rows) && value.rows.length === expectedRowCount &&
+    value.rows.every((row, index) => ID.test(row?.draftId ?? "") &&
+      SHA.test(row?.fingerprint ?? "") &&
+      (index === 0 || value.rows[index - 1].draftId < row.draftId));
+}
 
 /** Pinned query plus the visible shop/draft URL must name the same read. */
 export function classifyBoundDraftReadTarget({ operationName, querySha256,
@@ -167,7 +200,8 @@ function exactOwn(item, reviewed, managementCode, title, priceYen) {
 /** The result remains advisory: even a complete proof never enables a send. */
 export function evaluateBoundDraftReadProof({ list, details, failed, rows,
   managementCode, title, priceYen, expectedRowCount, ownDraftId = null,
-  reviewed = null, listReadCount = 0, detailReadCounts = new Map() }) {
+  reviewed = null, listReadCount = 0, detailReadCounts = new Map(),
+  shopId = null, baseline = null }) {
   if (failed) return fixed("READ_RESPONSE_CHANGED_OR_INVALID");
   if (!Array.isArray(list)) return fixed("LIST_RESPONSE_MISSING");
   if (listReadCount < 2) return fixed("LIST_FRESH_READ_MISSING");
@@ -175,10 +209,15 @@ export function evaluateBoundDraftReadProof({ list, details, failed, rows,
       !Array.isArray(rows) || rows.length !== expectedRowCount ||
       list.length !== expectedRowCount ||
       !ID.test(managementCode ?? "") ||
+      !ID.test(shopId ?? "") ||
       (ownDraftId !== null && !ID.test(ownDraftId)) ||
       typeof title !== "string" || !title.trim() ||
       !Number.isSafeInteger(priceYen) || priceYen < 1)
     return fixed("READ_OR_INPUT_UNVERIFIED");
+  if (ownDraftId !== null &&
+      (!exactDraftBaseline(baseline, shopId, baseline?.rowCount) ||
+        expectedRowCount !== baseline.rowCount + 1))
+    return fixed("DRAFT_BASELINE_UNVERIFIED");
   const listed = new Map(list.map(row => [row.id, row]));
   if (listed.size !== expectedRowCount)
     return fixed("ROW_SET_UNVERIFIED");
@@ -230,10 +269,27 @@ export function evaluateBoundDraftReadProof({ list, details, failed, rows,
     return fixed("ROW_SET_UNVERIFIED");
   if (ownDraftId !== null && !seen.has(ownDraftId))
     return fixed("OWN_DRAFT_RESPONSE_UNVERIFIED");
+  const snapshotRows = [...seen].map(id => ({ draftId: id,
+    fingerprint: fingerprint(listed.get(id).node, details.get(id).item) }))
+    .sort((a, b) => a.draftId < b.draftId ? -1 :
+      a.draftId > b.draftId ? 1 : 0);
+  if (ownDraftId !== null) {
+    const prior = new Map(baseline.rows.map(row =>
+      [row.draftId, row.fingerprint]));
+    if (snapshotRows.some(row => row.draftId !== ownDraftId &&
+        prior.get(row.draftId) !== row.fingerprint) ||
+        snapshotRows.filter(row => row.draftId !== ownDraftId).length !==
+          baseline.rowCount)
+      return fixed("DRAFT_BASELINE_CHANGED");
+  }
   return { status: ownDraftId === null ? "DRAFT_NETWORK_BOUND_NO_MATCH" :
     "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH", complete: true,
       allowFinalCreate: false, rowCount: seen.size,
-      anonymousVerified: anonymous };
+      anonymousVerified: anonymous,
+      ...(ownDraftId === null ? { baseline: {
+        schemaVersion: 1, kind: "B005396_DRAFT_BASELINE",
+        shopId, rowCount: seen.size, rows: snapshotRows,
+        observedAt: new Date().toISOString() } } : {}) };
 }
 
 /** Passive proof of the observed Shops list/detail read contract. Raw bodies stay in memory. */
@@ -246,6 +302,8 @@ export function observeBoundDraftReads(context, { page, shopId,
     throw Error("DRAFT_BOUND_READ_INPUT_UNVERIFIED");
   const requests = new WeakMap();
   const pending = new Set();
+  const cycles = [];
+  let active = null;
   let list = null;
   let listReadCount = 0;
   const details = new Map();
@@ -255,18 +313,24 @@ export function observeBoundDraftReads(context, { page, shopId,
   const onRequest = request => {
     if (stopped) return;
     const info = requestKind(request, page, shopId);
-    if (info) requests.set(request, info);
+    if (!info) return;
+    if (!active || active.kind !== info.kind) { failed = true; return; }
+    const record = { info, cycle: active, state: "PENDING" };
+    active.requests.push(record);
+    requests.set(request, record);
   };
   const onResponse = response => {
     if (stopped) return;
-    const info = requests.get(response.request());
-    if (!info) return;
+    const record = requests.get(response.request());
+    if (!record) return;
+    const info = record.info;
     const work = (async () => {
       try {
-        if (response.status() !== 200) { failed = true; return; }
-        const bytes = await response.body();
+        if (response.status() !== 200) { failed = true;
+          record.state = "FAILED"; return; }
+        const bytes = await boundedResponseBody(response);
         if (!Buffer.isBuffer(bytes) || bytes.length > MAX_BODY_BYTES) {
-          failed = true; return;
+          failed = true; record.state = "FAILED"; return;
         }
         const body = JSON.parse(bytes.toString("utf8"));
         if (info.kind === "LIST") {
@@ -281,21 +345,54 @@ export function observeBoundDraftReads(context, { page, shopId,
             detailReadCounts.set(info.id,
               (detailReadCounts.get(info.id) ?? 0) + 1); }
         }
-      } catch { failed = true; }
+        record.state = failed ? "FAILED" : "SUCCESS";
+      } catch { failed = true; record.state = "FAILED"; }
     })();
     pending.add(work);
     work.finally(() => pending.delete(work));
   };
+  const onRequestFailed = request => {
+    const record = requests.get(request);
+    if (record) { record.state = "FAILED"; failed = true; }
+  };
   context.on("request", onRequest);
   context.on("response", onResponse);
-  return { async stop(rows, { managementCode, title, priceYen,
-    ownDraftId = null, reviewed = null } = {}) {
+  context.on("requestfailed", onRequestFailed);
+  return {
+    begin(kind) {
+      if (stopped || active || !["LIST", "DETAIL"].includes(kind))
+        throw Error("DRAFT_READ_CYCLE_UNVERIFIED");
+      active = { kind, requests: [], complete: false };
+      cycles.push(active);
+      return active;
+    },
+    async end(cycle, draftId = null) {
+      if (stopped || cycle !== active ||
+          cycle.kind === "DETAIL" && !ID.test(draftId ?? ""))
+        throw Error("DRAFT_READ_CYCLE_UNVERIFIED");
+      if (cycle.requests.length === 0) { failed = true;
+        throw Error("DRAFT_READ_REQUEST_MISSING"); }
+      const deadline = Date.now() + CYCLE_TIMEOUT_MS;
+      while (cycle.requests.some(record => record.state === "PENDING") &&
+          Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 100));
+      if (failed || cycle.requests.some(record => record.state !== "SUCCESS" ||
+          cycle.kind === "DETAIL" && record.info.id !== draftId)) {
+        failed = true; throw Error("DRAFT_READ_RESPONSE_UNVERIFIED");
+      }
+      cycle.complete = true;
+      active = null;
+    },
+    async stop(rows, { managementCode, title, priceYen,
+    ownDraftId = null, reviewed = null, baseline = null } = {}) {
     stopped = true;
     context.off("request", onRequest);
     context.off("response", onResponse);
+    context.off("requestfailed", onRequestFailed);
     await Promise.allSettled([...pending]);
+    if (active || !exactCompletedReadCycles(cycles)) failed = true;
     return evaluateBoundDraftReadProof({ list, details, failed, rows,
       managementCode, title, priceYen, expectedRowCount, ownDraftId,
-      reviewed, listReadCount, detailReadCounts });
+      reviewed, listReadCount, detailReadCounts, shopId, baseline });
   } };
 }

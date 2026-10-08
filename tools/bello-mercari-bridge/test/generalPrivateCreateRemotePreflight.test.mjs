@@ -76,13 +76,21 @@ function knownScan() {
   scan.tabs[1].pages[0] = page(1, Array.from({ length: 12 }, (_, index) =>
     row(`draft${index + 1}`, `Other draft ${index + 1}`,
       `OTHER_DRAFT_${index + 1}`)), null, "TAB_CHANGED_ROW_SET", "remote2");
+  scan.draftBaseline = { schemaVersion: 1,
+    kind: "B005396_DRAFT_BASELINE", shopId, rowCount: 12,
+    rows: scan.tabs[1].pages[0].rows.map((value, index) => ({
+      draftId: value.remoteId,
+      fingerprint: (index + 1).toString(16).padStart(64, "0") }))
+      .sort((a, b) => a.draftId < b.draftId ? -1 : 1),
+    observedAt: scan.observedAt };
   return scan;
 }
 
 test("only the one approved sold-out public title is a private-test exception", () => {
   const input = knownPack();
   const scan = knownScan();
-  assert.equal(inspectGeneralPrivateCreateRemoteScan(input, scan, now).status,
+  const { draftBaseline: _baseline, ...rawScan } = scan;
+  assert.equal(inspectGeneralPrivateCreateRemoteScan(input, rawScan, now).status,
     "REMOTE_DUPLICATE_POSSIBLE");
   const result = inspectB005396KnownExistingPrivateTest(input, scan, now);
   assert.equal(result.status, "B005396_PRIVATE_TEST_EXCEPTION");
@@ -133,7 +141,8 @@ test("unrelated existing sale titles may exceed 130 characters", () => {
 test("a changed existing title cannot become a B005396 no-match", () => {
   const scan = knownScan();
   scan.tabs[0].pages[0].rows[0].title = "HUKLA KASTOR title changed";
-  assert.equal(inspectGeneralPrivateCreateRemoteScan(knownPack(), scan, now).status,
+  const { draftBaseline: _baseline, ...rawScan } = scan;
+  assert.equal(inspectGeneralPrivateCreateRemoteScan(knownPack(), rawScan, now).status,
     "NO_MATCH_IN_OBSERVED_UI");
   const result = inspectB005396KnownExistingPrivateTest(knownPack(), scan, now);
   assert.equal(result.status, "B005396_KNOWN_EXISTING_UNVERIFIED");
@@ -147,7 +156,8 @@ test("an omitted existing ID cannot become a B005396 no-match", () => {
     [saleRow("otherId", "Other sofa", "OTHER_1")], false,
     "TAB_NAVIGATION", null);
   scan.tabs[0].pages[1].settled.firstIdBefore = "otherId";
-  assert.equal(inspectGeneralPrivateCreateRemoteScan(knownPack(), scan, now).status,
+  const { draftBaseline: _baseline, ...rawScan } = scan;
+  assert.equal(inspectGeneralPrivateCreateRemoteScan(knownPack(), rawScan, now).status,
     "NO_MATCH_IN_OBSERVED_UI");
   const result = inspectB005396KnownExistingPrivateTest(knownPack(), scan, now);
   assert.equal(result.status, "B005396_KNOWN_EXISTING_UNVERIFIED");
@@ -162,9 +172,14 @@ test("known-title basis is recorded once and never overrides a local claim", asy
     await enqueueGeneralPrivateCreate(root, input);
     const scan = knownScan();
     scan.observedAt = new Date().toISOString();
+    scan.draftBaseline.observedAt = scan.observedAt;
     const captureReadOnlyScan = async () => scan;
+    const captureOrdinary = async () => {
+      const { draftBaseline: _baseline, ...rawScan } = scan;
+      return rawScan;
+    };
     const ordinary = await preflightGeneralPrivateCreateRemote({ root,
-      inventoryId: knownInventoryId, captureReadOnlyScan });
+      inventoryId: knownInventoryId, captureReadOnlyScan: captureOrdinary });
     assert.equal(ordinary.status, "REMOTE_DUPLICATE_POSSIBLE");
     const permitted = await preflightGeneralPrivateCreateRemote({ root,
       inventoryId: knownInventoryId, captureReadOnlyScan,

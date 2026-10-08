@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -24,6 +24,13 @@ const sha256 = "a".repeat(64);
 const imagePath = "/asset/sofa.jpg";
 const asset = { pathHash: createHash("sha256").update(imagePath).digest("hex"),
   width: 960, height: 960 };
+const baseline = { schemaVersion: 1, kind: "B005396_DRAFT_BASELINE",
+  shopId, rowCount: 12, rows: Array.from({ length: 12 }, (_, index) => ({
+    draftId: `prior${String(index).padStart(2, "0")}`,
+    fingerprint: (index + 1).toString(16).padStart(64, "0") })),
+  observedAt: new Date().toISOString() };
+const baselineFingerprint = createHash("sha256")
+  .update(JSON.stringify(baseline)).digest("hex");
 const pack = (description = "らくらく家財便Eまたは自社配送で発送します。") => ({
   schemaVersion: 1, kind: "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK",
   shopId, inventoryId,
@@ -46,6 +53,16 @@ async function withClaimedForm(action, description) {
   try {
     await enqueueGeneralPrivateCreate(root, pack(description));
     const claim = await claimGeneralPrivateCreateOnce(root, inventoryId);
+    await writeFile(join(root, "general-private-create-once",
+      `${inventoryId}.known-existing-private-test.json`), JSON.stringify({
+      schemaVersion: 1,
+      kind: "B005396_KNOWN_EXISTING_PRIVATE_TEST_EXCEPTION",
+      inventoryId, shopId, packFingerprint: claim.fingerprint,
+      knownExistingRemoteId: "2JVJtFhb6kB5JBGkDbi2nm",
+      knownExistingTitle: pack().title, knownExistingSkuCode: null,
+      knownExistingVisibility: "PUBLIC", knownExistingQuantity: 0,
+      knownExistingPriceYen: 89_800, noOtherCodeOrTitleMatch: true,
+      allowPublic: false, draftBaseline: baseline }), "utf8");
     await writeGeneralPrivateCreateResultOnce(root, inventoryId, {
       attemptId: claim.attemptId, outcome: "UNKNOWN",
       listingConfirmed: false, observedRemoteId: null,
@@ -114,6 +131,7 @@ async function withClaimedForm(action, description) {
 
 const proof = () => ({ status: "NO_OTHER_MATCH_OBSERVED", complete: true,
   allowFinalCreate: false, networkBoundVerified: true,
+  baselineFingerprint,
   shopId, managementCode: pack().managementCode,
   ownDraftId: remoteDraftId, observedAt: new Date().toISOString() });
 const image = () => [{ storageKey: "inventory/sofa.jpg", sha256 }];
@@ -174,15 +192,22 @@ test("save rejects a form SHA outside the reviewed image before the gate or clic
 
 test("duplicate proof must be recent, exact-shop and own-draft bound", () => {
   const form = { observedDraftId: remoteDraftId };
-  assert.equal(inspectB005396DraftDuplicateProof(pack(), form, proof()), true);
+  assert.equal(inspectB005396DraftDuplicateProof(pack(), form, proof(),
+    Date.now(), baseline), true);
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form,
-    { ...proof(), ownDraftId: "otherDraft" }), false);
+    { ...proof(), ownDraftId: "otherDraft" }, Date.now(), baseline), false);
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form,
-    { ...proof(), observedAt: "2026-01-01T00:00:00.000Z" }), false);
+    { ...proof(), observedAt: "2026-01-01T00:00:00.000Z" },
+    Date.now(), baseline), false);
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form,
-    { ...proof(), status: "REMOTE_DUPLICATE_POSSIBLE" }), false);
+    { ...proof(), status: "REMOTE_DUPLICATE_POSSIBLE" },
+    Date.now(), baseline), false);
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form,
-    { ...proof(), networkBoundVerified: false }), false);
+    { ...proof(), networkBoundVerified: false },
+    Date.now(), baseline), false);
+  assert.equal(inspectB005396DraftDuplicateProof(pack(), form,
+    { ...proof(), baselineFingerprint: "f".repeat(64) },
+    Date.now(), baseline), false);
 });
 
 test("exact form readback checks every saved field, leaf, document and image", async () => {

@@ -5,6 +5,7 @@ import { exactGeneralPrivateCreatePack, readGeneralPrivateCreate,
   readGeneralPrivateCreateClaim } from "./generalPrivateCreateJob.mjs";
 import { exactB005396ReviewedPack } from
   "./b005396ReviewedValues.mjs";
+import { exactDraftBaseline } from "./draftBoundReadProof.mjs";
 
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const REMOTE_SALE_TITLE_MAX = 500;
@@ -137,7 +138,22 @@ export function inspectGeneralPrivateCreateRemoteScan(input, scan,
 export function inspectB005396KnownExistingPrivateTest(input, scan,
   now = Date.now()) {
   const pack = exactB005396ReviewedPack(input);
-  const ordinary = inspectGeneralPrivateCreateRemoteScan(input, scan, now);
+  if (!exactDraftBaseline(scan?.draftBaseline, pack?.shopId, 12))
+    return fixed("REMOTE_SCAN_UNVERIFIED");
+  const { draftBaseline, ...rawScan } = scan;
+  const draftIds = rawScan.tabs?.[1]?.pages?.[0]?.rows?.map(row =>
+    row.remoteId)?.sort();
+  if (!sameKeys(rawScan, ["shopId", "managementCode", "observedAt", "tabs"]) ||
+      !Array.isArray(draftIds) ||
+      !sameKeys(draftBaseline, ["schemaVersion", "kind", "shopId",
+        "rowCount", "rows", "observedAt"]) ||
+      Date.parse(draftBaseline.observedAt) > Date.parse(rawScan.observedAt) ||
+      Date.parse(rawScan.observedAt) -
+        Date.parse(draftBaseline.observedAt) > 120_000 ||
+      JSON.stringify(draftIds) !== JSON.stringify(
+        draftBaseline.rows.map(row => row.draftId)))
+    return fixed("REMOTE_SCAN_UNVERIFIED");
+  const ordinary = inspectGeneralPrivateCreateRemoteScan(input, rawScan, now);
   // The approved exception depends on this one existing product. Its
   // disappearance or changed title must never become ordinary no-match.
   if (ordinary.status === "NO_MATCH_IN_OBSERVED_UI")
@@ -167,7 +183,8 @@ export function inspectB005396KnownExistingPrivateTest(input, scan,
     knownExistingVisibility: "PUBLIC", knownExistingQuantity: 0,
     knownExistingPriceYen: 89_800, onSaleRows: ordinary.onSaleRows,
     draftRows: ordinary.draftRows, observedAt: scan.observedAt,
-    noOtherCodeOrTitleMatch: true, allowPublic: false };
+    noOtherCodeOrTitleMatch: true, allowPublic: false,
+    draftBaseline };
   return { status: "B005396_PRIVATE_TEST_EXCEPTION",
     onSaleRows: ordinary.onSaleRows, draftRows: ordinary.draftRows,
     allowFinalCreate: false, evidence };
@@ -181,8 +198,8 @@ export function exactB005396KnownExistingEvidence(input, evidence,
         "shopId", "inventoryId", "managementCode", "packFingerprint",
         "knownExistingRemoteId", "knownExistingTitle", "knownExistingSkuCode",
         "knownExistingVisibility", "knownExistingQuantity",
-        "knownExistingPriceYen", "onSaleRows", "draftRows", "observedAt",
-        "noOtherCodeOrTitleMatch", "allowPublic"]) ||
+      "knownExistingPriceYen", "onSaleRows", "draftRows", "observedAt",
+      "noOtherCodeOrTitleMatch", "allowPublic", "draftBaseline"]) ||
       evidence.schemaVersion !== 1 || evidence.kind !== EXCEPTION_KIND ||
       evidence.approvalBasis !== APPROVAL_BASIS ||
       evidence.shopId !== pack.shopId ||
@@ -199,6 +216,11 @@ export function exactB005396KnownExistingEvidence(input, evidence,
       evidence.onSaleRows < 1 || evidence.draftRows !== 12 ||
       evidence.noOtherCodeOrTitleMatch !== true ||
       evidence.allowPublic !== false ||
+      !exactDraftBaseline(evidence.draftBaseline, pack.shopId, 12) ||
+      Date.parse(evidence.draftBaseline.observedAt) >
+        Date.parse(evidence.observedAt) ||
+      Date.parse(evidence.observedAt) -
+        Date.parse(evidence.draftBaseline.observedAt) > 120_000 ||
       typeof evidence.observedAt !== "string" ||
       !Number.isFinite(Date.parse(evidence.observedAt)) ||
       Date.parse(evidence.observedAt) > now ||

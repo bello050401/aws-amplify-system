@@ -1,12 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { classifyBoundDraftReadTarget,
-  evaluateBoundDraftReadProof } from
+  evaluateBoundDraftReadProof, exactCompletedReadCycles,
+  exactDraftBaseline } from
   "../src/draftBoundReadProof.mjs";
 
 const shopId = "evkhihBFFNn5hukMS9s36H";
 const managementCode = "BELLO_2C53F36A7A604E34801D8ABC24F6CFC0";
-const target = { managementCode, title: "対象商品", priceYen: 99_999 };
+const target = { shopId, managementCode, title: "対象商品",
+  priceYen: 99_999 };
 const rows = [
   { draftId: "draft1", title: "別の商品", skuCode: "OTHER_1" },
   { draftId: "draft2", title: "", skuCode: null },
@@ -43,22 +46,51 @@ function entry(item) {
     skuCode: item.variants[0].skuCode || null, priceYen: item.price,
     imageCount: item.thumbnails.length, item };
 }
+const hashRow = value => createHash("sha256").update(JSON.stringify({
+  node: rowOf(value).node, item: value })).digest("hex");
+const baselineFor = values => ({ schemaVersion: 1,
+  kind: "B005396_DRAFT_BASELINE", shopId, rowCount: values.length,
+  rows: values.map(value => ({ draftId: value.id,
+    fingerprint: hashRow(value) })).sort((a, b) =>
+      a.draftId < b.draftId ? -1 : a.draftId > b.draftId ? 1 : 0),
+  observedAt: new Date().toISOString() });
+const reviewedOwn = { description: "対象説明", categoryId: "cat1",
+  condition: "NO_NOTABLE_DAMAGE", quantity: 1, imageCount: 1,
+  shipping: { method: "METHOD_TYPE_UNDECIDED",
+    payer: "PAYER_TYPE_SELLER", origin: "jp11",
+    duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" } };
+function ownItem(id = "draft1") {
+  const own = item(id, target.title, managementCode, target.priceYen);
+  own.description = reviewedOwn.description;
+  own.condition.id = reviewedOwn.condition;
+  own.categories = [{ id: reviewedOwn.categoryId }];
+  own.thumbnails = [{}];
+  own.shippingMethodType.id = reviewedOwn.shipping.method;
+  own.shippingDurationType.id = reviewedOwn.shipping.duration;
+  own.shippingFromState = { id: reviewedOwn.shipping.origin };
+  return own;
+}
 function proof({ first = item("draft1", "別の商品", "OTHER_1", 20_000),
   second = item("draft2", "", "", 0), domRows = rows,
   list = null, detailReadCounts = null, ownDraftId = null,
-  reviewed = null } = {}) {
+  reviewed = null, baseline = null } = {}) {
   const details = new Map([["draft1", entry(first)],
     ["draft2", entry(second)]]);
   return evaluateBoundDraftReadProof({ list: list ?? [rowOf(first), rowOf(second)],
     details, failed: false, rows: domRows, ...target, expectedRowCount: 2,
     listReadCount: 2, detailReadCounts: detailReadCounts ??
-      new Map([["draft1", 2], ["draft2", 2]]), ownDraftId, reviewed });
+      new Map([["draft1", 2], ["draft2", 2]]), ownDraftId, reviewed,
+      baseline });
 }
 
 test("two fresh bound reads of every draft establish only an advisory no match", () => {
-  assert.deepEqual(proof(), { status: "DRAFT_NETWORK_BOUND_NO_MATCH",
-    complete: true, allowFinalCreate: false, rowCount: 2,
-    anonymousVerified: 1 });
+  const result = proof();
+  assert.equal(result.status, "DRAFT_NETWORK_BOUND_NO_MATCH");
+  assert.equal(result.complete, true);
+  assert.equal(result.allowFinalCreate, false);
+  assert.equal(result.rowCount, 2);
+  assert.equal(result.anonymousVerified, 1);
+  assert.equal(exactDraftBaseline(result.baseline, shopId, 2), true);
 });
 
 test("observed query hashes bind the account list and exact URL draft ID", () => {
@@ -94,6 +126,16 @@ test("missing or changed reads fail closed", () => {
     draftId: "other" }] }).status, "DRAFT_NETWORK_BOUND_UNVERIFIED");
 });
 
+test("a later uncompleted read blocks after two successful reads", () => {
+  const good = { kind: "DETAIL", complete: true,
+    requests: [{ state: "SUCCESS" }] };
+  assert.equal(exactCompletedReadCycles([good, good]), true);
+  assert.equal(exactCompletedReadCycles([good, good, { kind: "DETAIL",
+    complete: false, requests: [{ state: "PENDING" }] }]), false);
+  assert.equal(exactCompletedReadCycles([good, good, { kind: "DETAIL",
+    complete: true, requests: [{ state: "FAILED" }] }]), false);
+});
+
 test("blank title with any remaining product content is unresolved", () => {
   for (const change of [
     value => { value.description = "説明あり"; },
@@ -116,24 +158,53 @@ test("target identity in another draft blocks, while own draft requires all revi
   assert.equal(proof({ first: other,
     domRows: [{ ...rows[0], skuCode: managementCode }, rows[1]] }).status,
   "REMOTE_DUPLICATE_POSSIBLE");
-  const own = item("draft1", target.title, managementCode, target.priceYen);
-  own.description = "対象説明";
-  own.condition.id = "NO_NOTABLE_DAMAGE";
-  own.categories = [{ id: "cat1" }];
-  own.thumbnails = [{}];
-  own.shippingMethodType.id = "METHOD_TYPE_UNDECIDED";
-  own.shippingDurationType.id = "DURATION_TYPE_FOUR_TO_SEVEN_DAYS";
-  own.shippingFromState = { id: "jp11" };
-  const reviewed = { description: "対象説明", categoryId: "cat1",
-    condition: "NO_NOTABLE_DAMAGE", quantity: 1, imageCount: 1,
-    shipping: { method: "METHOD_TYPE_UNDECIDED",
-      payer: "PAYER_TYPE_SELLER", origin: "jp11",
-      duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" } };
+  const own = ownItem();
   const domRows = [{ draftId: "draft1", title: target.title,
     skuCode: managementCode }, rows[1]];
-  assert.equal(proof({ first: own, domRows, ownDraftId: "draft1",
-    reviewed }).status, "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH");
+  const second = item("draft2", "", "", 0);
+  const baseline = baselineFor([second]);
+  assert.equal(proof({ first: own, second, domRows, ownDraftId: "draft1",
+    reviewed: reviewedOwn, baseline }).status,
+  "DRAFT_NETWORK_BOUND_NO_OTHER_MATCH");
   own.description = "変化した説明";
-  assert.equal(proof({ first: own, domRows, ownDraftId: "draft1",
-    reviewed }).status, "DRAFT_NETWORK_BOUND_UNVERIFIED");
+  assert.equal(proof({ first: own, second, domRows, ownDraftId: "draft1",
+    reviewed: reviewedOwn, baseline }).status,
+  "DRAFT_NETWORK_BOUND_UNVERIFIED");
+});
+
+test("initial twelve cannot become own draft plus another new draft", () => {
+  const initial = Array.from({ length: 12 }, (_, index) =>
+    item(`prior${String(index).padStart(2, "0")}`,
+      `別の商品${index}`, `OTHER_${index}`, 1000 + index));
+  const baseline = baselineFor(initial);
+  const current = [...initial, ownItem("claimDraft"),
+    item("unrelatedNew", "別の新規", "OTHER_NEW", 1000)];
+  assert.equal(evaluateBoundDraftReadProof({
+    list: current.map(rowOf), details: new Map(current.map(value =>
+      [value.id, entry(value)])), failed: false,
+    rows: current.map(value => ({ draftId: value.id, title: value.name,
+      skuCode: value.variants[0].skuCode })),
+    ...target, expectedRowCount: 14, listReadCount: 2,
+    detailReadCounts: new Map(current.map(value => [value.id, 2])),
+    ownDraftId: "claimDraft", reviewed: reviewedOwn, baseline,
+  }).diagnostic, "DRAFT_BASELINE_UNVERIFIED");
+});
+
+test("a changed description on an existing ID breaks the fixed baseline", () => {
+  const old = item("prior", "別の商品", "OTHER_1", 20_000);
+  const baseline = baselineFor([old]);
+  const changed = structuredClone(old);
+  changed.description = "changed after initial read";
+  const own = ownItem("claimDraft");
+  assert.equal(evaluateBoundDraftReadProof({ list: [rowOf(changed), rowOf(own)],
+    details: new Map([[changed.id, entry(changed)], [own.id, entry(own)]]),
+    failed: false, rows: [
+      { draftId: changed.id, title: changed.name,
+        skuCode: changed.variants[0].skuCode },
+      { draftId: own.id, title: own.name,
+        skuCode: own.variants[0].skuCode }],
+    ...target, expectedRowCount: 2, listReadCount: 2,
+    detailReadCounts: new Map([[changed.id, 2], [own.id, 2]]),
+    ownDraftId: own.id, reviewed: reviewedOwn, baseline,
+  }).diagnostic, "DRAFT_BASELINE_CHANGED");
 });
