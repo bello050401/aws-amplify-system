@@ -21,7 +21,8 @@ const FORM_DIAGNOSTICS = new Set(["PACK_UNVERIFIED",
   "IMAGE_PROOF_UNVERIFIED", "NAME_MISMATCH", "DESCRIPTION_MISMATCH",
   "PRICE_MISMATCH", "QUANTITY_MISMATCH", "MANAGEMENT_CODE_MISMATCH",
   "SHIPPING_MISMATCH", "CONDITION_MISMATCH", "CATEGORY_MISMATCH",
-  "IMAGE_COUNT_MISMATCH", "IMAGE_ASSET_UNVERIFIED"]);
+  "IMAGE_COUNT_MISMATCH", "IMAGE_ASSET_UNVERIFIED",
+  "REVIEWED_IMAGE_CHANGED"]);
 const ATTEMPT_DIAGNOSTICS = new Set([...FORM_DIAGNOSTICS,
   "BROWSER_UNAVAILABLE", "EXACT_SHOP_LIST_UNAVAILABLE",
   "CREATE_LINK_UNVERIFIED", "CREATE_PAGE_UNCERTAIN",
@@ -63,7 +64,7 @@ function exactImageFiles(pack, files) {
  */
 export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
   origin, belloProfileDir, shopsProfileDir, playwrightModulePath,
-  captureReadOnlyScan = null }, {
+  captureReadOnlyScan = null, expectedImageSha256 = null }, {
     remotePreflight = preflightGeneralPrivateCreateRemote,
     fetchImages = fetchCurrentGeneralPrivateCreateImages,
     claimOnce = claimGeneralPrivateCreateOnce,
@@ -101,6 +102,10 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
   }
   if (!exactImageFiles(pack, files))
     return { status: "BLOCKED", diagnostic: "BELLO_IMAGE_PROOF_UNVERIFIED" };
+  if (expectedImageSha256 !== null &&
+      (!/^[a-f0-9]{64}$/.test(expectedImageSha256) ||
+        files.length !== 1 || files[0].sha256 !== expectedImageSha256))
+    return { status: "BLOCKED", diagnostic: "REVIEWED_IMAGE_CHANGED" };
 
   // From this point a remote auto-draft is possible, even without a save click.
   const claim = await claimOnce(root, inventoryId);
@@ -157,6 +162,7 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
           "FORM_FIELDS_UNCERTAIN";
       },
       beforeWrite: checkpoint,
+      expectedImageSha256,
     });
     await checkpoint();
     if (!Array.isArray(assets) || assets.length !== pack.imageRefs.length)

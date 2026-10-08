@@ -741,7 +741,9 @@ export async function startDesktopApp(config, {
         }
         persistedGeneralDraftHold = await generalPrivateDraftOccupationActive(
           options.root);
-        message = result?.diagnostic === "REVIEW_HOLD" ?
+        message = result?.status === "PRIVATE_DRAFT_READBACK_CONFIRMED" ?
+          "Shopsの同じ商品IDと非公開下書き状態を別ページで再読込して確認しました。公開はしていません。" :
+          result?.diagnostic === "REVIEW_HOLD" ?
           "独立レビュー中のため、Shopsへの保存は実行していません。" :
           result?.status === "BLOCKED" ?
             "保存前の照合で停止しました。Shopsへの保存は実行していません。" :

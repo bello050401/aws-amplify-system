@@ -4,10 +4,17 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { enqueueGeneralPrivateCreate } from "../src/generalPrivateCreateJob.mjs";
+import { enqueueGeneralPrivateCreate, readGeneralPrivateCreateClaim } from
+  "../src/generalPrivateCreateJob.mjs";
 import { readB005396ImageByteProof, reviewB005396PrivateDraft,
-  bindB005396InitialScan,
+  bindB005396InitialScan, createB005396ReviewedLiveDesktopInjection,
   runB005396ReviewedDraft } from "../src/b005396ReviewedDraftRunner.mjs";
+import { bindB005396PrivateDraftReadback } from
+  "../src/generalPrivateDraftReadback.mjs";
+import { runB005396PrivateDraftPcFlow } from
+  "../src/generalPrivateDraftPcFlow.mjs";
+import { fillGeneralPrivateCreateFormOnly } from
+  "../src/generalPrivateCreateFormOnly.mjs";
 
 const inventoryId = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
 const shopId = "evkhihBFFNn5hukMS9s36H";
@@ -142,5 +149,136 @@ test("LIVE entry requires explicit enable and current reviewed evidence", async 
       fetchSnapshot, flow });
     assert.equal(enabled.diagnostic, "TEST_FLOW_NO_SAVE");
     assert.equal(flowCalls, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("desktop LIVE injection cannot be constructed without the independent review gate", () => {
+  const imageByteProof = { schemaVersion: 1,
+    kind: "B005396_IMAGE_BYTES_READ_ONLY", ...evidence,
+    sourcePriceYen: 50000, sourceShippingMethod: "KAZAI",
+    observedAt: new Date().toISOString() };
+  assert.throws(() => createB005396ReviewedLiveDesktopInjection({ imageByteProof }),
+    /B005396_LIVE_REVIEW_HOLD/);
+  assert.throws(() => createB005396ReviewedLiveDesktopInjection({
+    independentReviewPassed: true }), /B005396_LIVE_REVIEW_HOLD/);
+  const injection = createB005396ReviewedLiveDesktopInjection({
+    independentReviewPassed: true, imageByteProof });
+  assert.equal(injection.offlineDraftActionEnabled, true);
+  assert.equal(typeof injection.runGeneralDraft, "function");
+});
+
+test("fresh draft page proves same ID, private list membership and every form field", async () => {
+  const draftId = "draft123";
+  const assets = [{ pathHash: "a".repeat(64), width: 960, height: 960 }];
+  const detailUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/create?productDraftId=${draftId}`;
+  let url = "about:blank";
+  let closed = 0;
+  const page = { route: async () => {}, routeWebSocket: async () => {},
+    waitForTimeout: async () => {},
+    goto: async target => { url = target; }, url: () => url,
+    close: async () => { closed++; } };
+  const snapshot = { href: detailUrl, categoryLeaf: "2人掛け・3人掛けソファ",
+    categoryGroup: "カテゴリー家具・インテリア>ソファ・ソファベッド>2人掛け・3人掛けソファ",
+    condition: "目立った傷や汚れなし", assets,
+    fields: { name: pack.title, description: pack.description,
+      price: "99999", "variants.0.quantity": "1",
+      "variants.0.skuCode": pack.managementCode,
+      "shippingMethodType.id": pack.shipping.method,
+      "shippingPayerType.id": pack.shipping.payer,
+      "shippingFromState.id": pack.shipping.origin,
+      "shippingDurationType.id": pack.shipping.duration } };
+  const bind = (readForm = async () => snapshot) =>
+    bindB005396PrivateDraftReadback({ newPage: async () => page }, pack, {
+      readCount: async () => ({ status: "DRAFT_COUNT_OBSERVED",
+        count: 1, allowFinalCreate: false }),
+      collectDrafts: async () => ({ status: "DRAFT_DETAILS_DOM_OBSERVED",
+        allowFinalCreate: false, rows: [{ draftId, title: pack.title,
+          skuCode: pack.managementCode }] }), readForm });
+  const target = { shopId, draftId, managementCode: pack.managementCode,
+    selectedAssets: assets };
+  const proof = await bind()(target);
+  assert.equal(proof.status, "PRIVATE_DRAFT_READBACK_CONFIRMED");
+  assert.equal(proof.visibility, "DRAFT_PRIVATE");
+  assert.equal(proof.public, false);
+  assert.equal(closed, 1);
+  assert.equal(await bind(async () => ({ ...snapshot, fields: {
+    ...snapshot.fields, description: "changed" } }))(target), null);
+  assert.equal(closed, 2);
+});
+
+test("a non-read request during separate draft readback blocks confirmation", async () => {
+  let guard;
+  let aborted = 0;
+  const page = { route: async (_pattern, callback) => { guard = callback; },
+    routeWebSocket: async () => {}, close: async () => {} };
+  const readDraft = bindB005396PrivateDraftReadback({
+    newPage: async () => page }, pack, {
+    readCount: async () => {
+      await guard({ request: () => ({ method: () => "DELETE" }),
+        abort: async () => { aborted++; } });
+      return { status: "DRAFT_COUNT_OBSERVED", count: 1,
+        allowFinalCreate: false };
+    } });
+  assert.equal(await readDraft({ shopId, draftId: "draft123",
+    managementCode: pack.managementCode,
+    selectedAssets: [{ pathHash: "a".repeat(64), width: 960,
+      height: 960 }] }), null);
+  assert.equal(aborted, 1);
+});
+
+test("LIVE wrapper reconciles a clicked UNKNOWN only through separate readback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-live-readback-"));
+  try {
+    await enqueueGeneralPrivateCreate(root, pack);
+    let readbackCalls = 0;
+    const result = await runB005396ReviewedDraft({ root, inventoryId,
+      origin: "https://bello.example.invalid", belloProfileDir: root,
+      shopsProfileDir: root, playwrightModulePath: root }, {
+      mode: "LIVE", allowLiveAfterReview: true, evidence, fetchSnapshot,
+      captureInitialScan: async () => ({}),
+      flow: async () => ({ status: "UNKNOWN", clicked: true,
+        observedDraftId: "draft123",
+        retainedSession: { context: {} } }),
+      bindReadback: () => { readbackCalls++; return async () => ({}); },
+      reconcile: async ({ readDraft }) => {
+        assert.equal(typeof readDraft, "function");
+        return { status: "PRIVATE_DRAFT_READBACK_CONFIRMED",
+          diagnostic: "PRIVATE_DRAFT_READBACK_CONFIRMED" };
+      } });
+    assert.equal(result.status, "PRIVATE_DRAFT_READBACK_CONFIRMED");
+    assert.equal(result.allowPublic, false);
+    assert.equal(readbackCalls, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("reviewed A image changing to B before form gives zero upload and zero claim", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-sha-boundary-"));
+  try {
+    await enqueueGeneralPrivateCreate(root, pack);
+    let claims = 0;
+    let uploads = 0;
+    const changed = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3, 0xff, 0xd9]);
+    const changedSha = createHash("sha256").update(changed).digest("hex");
+    const result = await runB005396ReviewedDraft({ root, inventoryId,
+      origin: "https://bello.example.invalid", belloProfileDir: root,
+      shopsProfileDir: root, playwrightModulePath: root }, {
+      mode: "LIVE", allowLiveAfterReview: true, evidence, fetchSnapshot,
+      captureInitialScan: async () => ({}),
+      flow: (args, deps) => runB005396PrivateDraftPcFlow(args, {
+        ...deps, fillForm: input => fillGeneralPrivateCreateFormOnly(input, {
+          remotePreflight: async () => ({ status: "NO_MATCH_IN_OBSERVED_UI",
+            allowFinalCreate: false }),
+          fetchImages: async () => [{ storageKey: pack.imageRefs[0].storageKey,
+            index: 0, buffer: changed, sha256: changedSha,
+            filename: "changed.jpg", mimeType: "image/jpeg" }],
+          claimOnce: async () => { claims++; },
+          fillForm: async () => { uploads++; },
+        }),
+      }),
+    });
+    assert.equal(result.status, "UNKNOWN");
+    assert.equal(claims, 0);
+    assert.equal(uploads, 0);
+    assert.equal(await readGeneralPrivateCreateClaim(root, inventoryId), null);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

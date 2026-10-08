@@ -156,6 +156,25 @@ test("BELLO source is re-read before the claim and form fill never saves", async
   });
 });
 
+test("changed current image bytes stop before claim, browser open or upload", async () => {
+  await withQueue(async root => {
+    let later = 0;
+    const result = await fillGeneralPrivateCreateFormOnly({ root,
+      inventoryId, expectedImageSha256: "b".repeat(64) }, {
+      remotePreflight: async () => ({ status: "NO_MATCH_IN_OBSERVED_UI",
+        allowFinalCreate: false }),
+      fetchImages: async () => [imageFile()],
+      claimOnce: async () => { later++; },
+      openSession: async () => { later++; },
+      fillForm: async () => { later++; },
+    });
+    assert.deepEqual(result, { status: "BLOCKED",
+      diagnostic: "REVIEWED_IMAGE_CHANGED" });
+    assert.equal(later, 0);
+    assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, false);
+  });
+});
+
 test("an uncertain create page consumes the claim and cannot retry", async () => {
   await withQueue(async root => {
     const dependencies = { remotePreflight: async () => ({
@@ -397,4 +416,17 @@ test("navigation during locator enablement causes zero field writes", async () =
     } }), /CREATE_URL_UNVERIFIED/);
   assert.deepEqual(state.fields, {});
   assert.equal(state.imageCount, 0);
+});
+
+test("reviewed bytes are checked again at the actual file input boundary", async () => {
+  const { page, state } = fakeObservedForm();
+  const file = imageFile();
+  const reviewed = file.sha256;
+  await assert.rejects(fillGeneralPrivateCreateFormOnce(page, pack(),
+    [file], { expectedImageSha256: reviewed,
+      beforeWrite: async () => {},
+      onStage: code => { if (code === "IMAGE_PROOF_UNVERIFIED")
+        file.buffer.fill(0); } }), { code: "REVIEWED_IMAGE_CHANGED" });
+  assert.equal(state.imageCount, 0, "setInputFiles was never called");
+  assert.equal(state.saveClicks, 0);
 });

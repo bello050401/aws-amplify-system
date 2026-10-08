@@ -9,6 +9,10 @@ import { preflightGeneralPrivateCreateRemote } from
   "./generalPrivateCreateRemotePreflight.mjs";
 import { runB005396PrivateDraftPcFlow } from
   "./generalPrivateDraftPcFlow.mjs";
+import { reconcileB005396PrivateDraftSaveUnknown } from
+  "./generalPrivateDraftSaveOnce.mjs";
+import { bindB005396PrivateDraftReadback } from
+  "./generalPrivateDraftReadback.mjs";
 import { openDraftMetadataReadSession } from "./session.mjs";
 import { isExplicitDraftReadQueryRequest } from
   "./draftReadMetadataObserver.mjs";
@@ -153,6 +157,8 @@ export async function runB005396ReviewedDraft(args, {
   captureInitialScan = null,
   flow = runB005396PrivateDraftPcFlow,
   remotePreflight = preflightGeneralPrivateCreateRemote,
+  bindReadback = bindB005396PrivateDraftReadback,
+  reconcile = reconcileB005396PrivateDraftSaveUnknown,
 } = {}) {
   if (args?.inventoryId !== INVENTORY) return fixed("TARGET_UNVERIFIED");
   const capture = captureInitialScan ?? bindB005396InitialScan(args);
@@ -176,5 +182,50 @@ export async function runB005396ReviewedDraft(args, {
     return fixed("LIVE_REVIEW_HOLD");
   if (!await reviewGate({ inventoryId: INVENTORY, pack }))
     return fixed("REVIEW_HOLD");
-  return flow(args, { reviewGate, captureInitialScan: capture });
+  const result = await flow(args, { reviewGate, captureInitialScan: capture,
+    expectedImageSha256: evidence.imageSha256 });
+  if (result?.status !== "UNKNOWN" || result.clicked !== true ||
+      !result.retainedSession?.context ||
+      result.observedDraftId == null) return result;
+  try {
+    const readDraft = bindReadback(result.retainedSession.context, pack);
+    const confirmed = await reconcile({ root: args.root,
+      inventoryId: INVENTORY, readDraft });
+    return confirmed?.status === "PRIVATE_DRAFT_READBACK_CONFIRMED" ?
+      { ...result, status: confirmed.status,
+        diagnostic: confirmed.diagnostic, listingConfirmed: false,
+        allowPublic: false, shippingReviewRequired: true } : result;
+  } catch { return result; }
+}
+
+/** Inject into startDesktopApp only after an independent review is recorded. */
+export function createB005396ReviewedLiveDesktopInjection({ imageByteProof,
+  independentReviewPassed = false } = {}) {
+  if (independentReviewPassed !== true ||
+      imageByteProof?.schemaVersion !== 1 ||
+      imageByteProof.kind !== "B005396_IMAGE_BYTES_READ_ONLY" ||
+      imageByteProof.shopId !== SHOP ||
+      imageByteProof.inventoryId !== INVENTORY ||
+      !SHA.test(imageByteProof.packFingerprint ?? "") ||
+      !SHA.test(imageByteProof.imageSha256 ?? "") ||
+      imageByteProof.sourcePriceYen !== 50_000 ||
+      imageByteProof.sourceShippingMethod !== "KAZAI" ||
+      !Number.isFinite(Date.parse(imageByteProof.observedAt ?? "")) ||
+      Date.parse(imageByteProof.observedAt) > Date.now())
+    throw Error("B005396_LIVE_REVIEW_HOLD");
+  const evidence = { shopId: imageByteProof.shopId,
+    inventoryId: imageByteProof.inventoryId,
+    draftId: imageByteProof.draftId,
+    packFingerprint: imageByteProof.packFingerprint,
+    managementCode: imageByteProof.managementCode,
+    title: imageByteProof.title, description: imageByteProof.description,
+    categoryPath: imageByteProof.categoryPath,
+    shipping: imageByteProof.shipping,
+    priceYen: imageByteProof.priceYen, quantity: imageByteProof.quantity,
+    imageSha256: imageByteProof.imageSha256, privateOnly: true,
+    shippingReviewRequired: true };
+  return { offlineDraftActionEnabled: true,
+    runGeneralDraft: args => runB005396ReviewedDraft(args, {
+      evidence, mode: "LIVE", allowLiveAfterReview: true }),
+  };
 }

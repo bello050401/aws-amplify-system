@@ -174,10 +174,15 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
     captureDuplicateProof = null,
     gate = withShopListingSend,
     verifyForm = exactFormStillOpen,
+    expectedImageSha256 = null,
   } = {}) {
   const { pack, fingerprint } = await readGeneralPrivateCreate(root, inventoryId);
   const issue = inspectB005396DraftSaveInput(pack, form);
   if (issue) return fixed("BLOCKED", issue);
+  if (expectedImageSha256 !== null &&
+      (!HASH.test(expectedImageSha256) ||
+        form.selectedImageSha256s[0] !== expectedImageSha256))
+    return fixed("BLOCKED", "REVIEWED_IMAGE_CHANGED");
   const path = paths(root, inventoryId);
   const formClaim = await readGeneralPrivateCreateClaim(root, inventoryId);
   const formResult = await readOptional(path.formResult);
@@ -196,7 +201,9 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
   try { source = await fetchSnapshot({ origin, belloProfileDir,
     playwrightModulePath, pack }); }
   catch { return fixed("BLOCKED", "SOURCE_CHANGED"); }
-  if (!exactSourceSnapshot(source, pack, form))
+  if (!exactSourceSnapshot(source, pack, form) ||
+      expectedImageSha256 !== null &&
+      source.files[0].sha256 !== expectedImageSha256)
     return fixed("BLOCKED", "SOURCE_CHANGED");
 
   await mkdir(path.dir, { recursive: true });
@@ -218,7 +225,9 @@ export async function saveB005396PrivateDraftOnce({ root, inventoryId, form,
       reasonCode = "SOURCE_CHANGED";
       const current = await fetchSnapshot({ origin, belloProfileDir,
         playwrightModulePath, pack });
-      if (!exactSourceSnapshot(current, pack, form))
+      if (!exactSourceSnapshot(current, pack, form) ||
+          expectedImageSha256 !== null &&
+          current.files[0].sha256 !== expectedImageSha256)
         throw Error("SOURCE_CHANGED");
       reasonCode = "REMOTE_DUPLICATE_UNVERIFIED";
       const proof = await captureDuplicateProof({ shopId: pack.shopId,
@@ -281,7 +290,8 @@ export async function reconcileB005396PrivateDraftSaveUnknown({ root,
     return fixed("UNKNOWN", "DRAFT_SAVE_READBACK_UNVERIFIED");
   let proof;
   try { proof = await readDraft({ shopId: claim.shopId,
-    draftId: claim.draftId, managementCode: pack.managementCode }); }
+    draftId: claim.draftId, managementCode: pack.managementCode,
+    selectedAssets: claim.selectedAssets }); }
   catch { return fixed("UNKNOWN", "DRAFT_SAVE_READBACK_UNVERIFIED"); }
   let observed;
   try { observed = { status: proof?.status, shopId: proof?.shopId,

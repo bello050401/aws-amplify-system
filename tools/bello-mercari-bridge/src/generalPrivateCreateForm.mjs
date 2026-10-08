@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readExistingUploadedImages } from "./addExistingImageOnce.mjs";
 import { exactGeneralPrivateCreatePack } from "./generalPrivateCreateJob.mjs";
 
@@ -61,7 +62,8 @@ const FORM_FIELDS = [
 
 /** Only observed normal UI controls are used. No guessed Shops HTTP request. */
 export async function fillGeneralPrivateCreateFormOnce(page, input, imageFiles,
-  { onStage = () => {}, beforeWrite, readImages = readExistingUploadedImages } = {}) {
+  { onStage = () => {}, beforeWrite, readImages = readExistingUploadedImages,
+    expectedImageSha256 = null } = {}) {
   const pack = exactGeneralPrivateCreatePack(input);
   if (!pack) throw new GeneralFormMismatch("PACK_UNVERIFIED");
   if (typeof beforeWrite !== "function")
@@ -131,9 +133,16 @@ export async function fillGeneralPrivateCreateFormOnce(page, input, imageFiles,
   const fileInput = await unique(page.locator('input[type="file"][multiple]'),
     "IMAGE_PROOF_UNVERIFIED");
   await beforeWrite();
-  await fileInput.setInputFiles(imageFiles.map(file => ({
-      name: file.filename, mimeType: file.mimeType, buffer: file.buffer,
-    })), { timeout: 12000 });
+  const uploads = imageFiles.map(file => ({ name: file.filename,
+    mimeType: file.mimeType, buffer: Buffer.from(file.buffer) }));
+  if (expectedImageSha256 !== null &&
+      (uploads.length !== 1 ||
+        !/^[a-f0-9]{64}$/.test(expectedImageSha256) ||
+        createHash("sha256").update(uploads[0].buffer).digest("hex") !==
+          expectedImageSha256 ||
+        imageFiles[0].sha256 !== expectedImageSha256))
+    throw new GeneralFormMismatch("REVIEWED_IMAGE_CHANGED");
+  await fileInput.setInputFiles(uploads, { timeout: 12000 });
   await beforeWrite();
   await page.locator('img[alt="uploaded-image"]').first().waitFor({
     state: "visible", timeout: 30000 });

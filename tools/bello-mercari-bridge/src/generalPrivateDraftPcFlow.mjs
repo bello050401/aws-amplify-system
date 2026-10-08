@@ -21,6 +21,7 @@ export async function runB005396PrivateDraftPcFlow({ root, inventoryId,
   origin, belloProfileDir, shopsProfileDir, playwrightModulePath }, {
     reviewGate = () => false,
     captureInitialScan = null,
+    expectedImageSha256 = null,
     fillForm = fillGeneralPrivateCreateFormOnly,
     bindDuplicateReader = bindB005396PrivateDraftDuplicateReader,
     saveDraft = saveB005396PrivateDraftOnce,
@@ -44,6 +45,8 @@ export async function runB005396PrivateDraftPcFlow({ root, inventoryId,
   try { reviewed = await reviewGate({ inventoryId, pack }); }
   catch { return blocked("REVIEW_HOLD"); }
   if (reviewed !== true) return blocked("REVIEW_HOLD");
+  if (!/^[a-f0-9]{64}$/.test(expectedImageSha256 ?? ""))
+    return blocked("REVIEWED_IMAGE_UNVERIFIED");
   if (typeof captureInitialScan !== "function" ||
       typeof fillForm !== "function" ||
       typeof bindDuplicateReader !== "function" ||
@@ -53,13 +56,18 @@ export async function runB005396PrivateDraftPcFlow({ root, inventoryId,
   let form;
   try { form = await fillForm({ root, inventoryId, origin,
     belloProfileDir, shopsProfileDir, playwrightModulePath,
-    captureReadOnlyScan: captureInitialScan }); }
+    captureReadOnlyScan: captureInitialScan,
+    expectedImageSha256 }); }
   catch { return unknown("FORM_RESULT_UNKNOWN_NO_RETRY"); }
   if (form?.status !== "FORM_READY_NO_SAVE" ||
       form.allowSave !== false || form.listingConfirmed !== false ||
       !form.retainedSession?.context)
     return { ...unknown("FORM_RESULT_UNKNOWN_NO_RETRY"),
       retainedSession: form?.retainedSession ?? null };
+  if (form.selectedImageSha256s?.length !== 1 ||
+      form.selectedImageSha256s[0] !== expectedImageSha256)
+    return { ...unknown("REVIEWED_IMAGE_CHANGED_NO_RETRY"),
+      retainedSession: form.retainedSession };
 
   let captureDuplicateProof;
   try { captureDuplicateProof = bindDuplicateReader(
@@ -71,7 +79,7 @@ export async function runB005396PrivateDraftPcFlow({ root, inventoryId,
       retainedSession: form.retainedSession };
   try { const result = await saveDraft({ root, inventoryId, form, origin,
     belloProfileDir, playwrightModulePath }, {
-    ...saveDraftOptions, captureDuplicateProof });
+    ...saveDraftOptions, expectedImageSha256, captureDuplicateProof });
     if (!result || !["BLOCKED", "UNKNOWN"].includes(result.status))
       return { ...unknown("DRAFT_SAVE_UNKNOWN_NO_RETRY"),
         retainedSession: form.retainedSession };

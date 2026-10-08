@@ -63,17 +63,21 @@ test("offline assembly passes reviewed pack through form and exact duplicate cal
         assert.equal(reviewed.quantity, 1);
         assert.equal(reviewed.shipping.origin, "jp11");
         return true;
-      }, captureInitialScan,
+      }, captureInitialScan, expectedImageSha256: "a".repeat(64),
       fillForm: async input => { calls.push("form");
         assert.equal(input.captureReadOnlyScan, captureInitialScan);
+        assert.equal(input.expectedImageSha256, "a".repeat(64));
         assert.equal(input.shopsProfileDir, args.shopsProfileDir);
         return { status: "FORM_READY_NO_SAVE", allowSave: false,
-          listingConfirmed: false, retainedSession: { context } }; },
+          listingConfirmed: false,
+          selectedImageSha256s: ["a".repeat(64)],
+          retainedSession: { context } }; },
       bindDuplicateReader: bound => { calls.push("bind");
         assert.equal(bound, context);
         return async target => ({ ...target, complete: true }); },
       saveDraft: async (input, deps) => { calls.push("save");
         assert.equal(input.inventoryId, inventoryId);
+        assert.equal(deps.expectedImageSha256, "a".repeat(64));
         assert.equal(typeof deps.captureDuplicateProof, "function");
         return { status: "UNKNOWN", diagnostic: "DRAFT_SAVE_READBACK_UNVERIFIED",
           listingConfirmed: false, allowPublic: false }; },
@@ -89,6 +93,7 @@ test("authentication expiry or unknown form stops before duplicate and save", as
     let later = 0;
     const result = await runB005396PrivateDraftPcFlow(args, {
       reviewGate: async () => true,
+      expectedImageSha256: "a".repeat(64),
       captureInitialScan: async () => ({}),
       fillForm: async () => ({ status: "UNKNOWN", diagnostic: "AUTH_REQUIRED",
         retainedSession: { context: {} } }),
@@ -101,14 +106,35 @@ test("authentication expiry or unknown form stops before duplicate and save", as
   });
 });
 
+test("a form image SHA different from review never reaches duplicate or save", async () => {
+  await withJob(async args => {
+    let later = 0;
+    const result = await runB005396PrivateDraftPcFlow(args, {
+      reviewGate: async () => true,
+      expectedImageSha256: "a".repeat(64),
+      captureInitialScan: async () => ({}),
+      fillForm: async () => ({ status: "FORM_READY_NO_SAVE",
+        allowSave: false, listingConfirmed: false,
+        selectedImageSha256s: ["b".repeat(64)],
+        retainedSession: { context: {} } }),
+      bindDuplicateReader: () => { later++; return async () => ({}); },
+      saveDraft: async () => { later++; },
+    });
+    assert.equal(result.diagnostic, "REVIEWED_IMAGE_CHANGED_NO_RETRY");
+    assert.equal(later, 0);
+  });
+});
+
 test("BELLO auth loss after form fill retains the unresolved Shops browser", async () => {
   await withJob(async args => {
     const retainedSession = { context: { close: async () => {} }, page: {} };
     const result = await runB005396PrivateDraftPcFlow(args, {
       reviewGate: async () => true,
+      expectedImageSha256: "a".repeat(64),
       captureInitialScan: async () => ({}),
       fillForm: async () => ({ status: "FORM_READY_NO_SAVE",
-        allowSave: false, listingConfirmed: false, retainedSession }),
+        allowSave: false, listingConfirmed: false,
+        selectedImageSha256s: ["a".repeat(64)], retainedSession }),
       bindDuplicateReader: () => async () => ({}),
       saveDraft: async () => ({ status: "BLOCKED",
         diagnostic: "SOURCE_CHANGED", listingConfirmed: false,
@@ -139,6 +165,7 @@ test("real save preflight AUTH_REQUIRED keeps the claimed form browser occupied"
         width: 960, height: 960 }], retainedSession };
     const result = await runB005396PrivateDraftPcFlow(args, {
       reviewGate: async () => true,
+      expectedImageSha256: "a".repeat(64),
       captureInitialScan: async () => ({}),
       fillForm: async () => form,
       bindDuplicateReader: () => async () => ({}),

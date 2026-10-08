@@ -157,6 +157,20 @@ test("B005396 fixed draft values retain shipping review for before public", asyn
   });
 });
 
+test("save rejects a form SHA outside the reviewed image before the gate or click", async () => {
+  await withClaimedForm(async ({ root, form, clicks }) => {
+    let gateCalls = 0;
+    const result = await saveB005396PrivateDraftOnce({ root,
+      inventoryId, form }, { expectedImageSha256: "b".repeat(64),
+      fetchSnapshot: async () => snapshot(),
+      gate: async () => { gateCalls++; } });
+    assert.equal(result.status, "BLOCKED");
+    assert.equal(result.diagnostic, "REVIEWED_IMAGE_CHANGED");
+    assert.equal(gateCalls, 0);
+    assert.equal(clicks(), 0);
+  });
+});
+
 test("duplicate proof must be recent, exact-shop and own-draft bound", () => {
   const form = { observedDraftId: remoteDraftId };
   assert.equal(inspectB005396DraftDuplicateProof(pack(), form, proof()), true);
