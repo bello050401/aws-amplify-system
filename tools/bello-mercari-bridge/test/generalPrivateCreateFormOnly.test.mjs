@@ -30,6 +30,25 @@ const pack = () => ({ schemaVersion: 1,
   shipping: { method: "METHOD_TYPE_UNDECIDED", payer: "PAYER_TYPE_SELLER",
     origin: "jp11", duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" },
   status: "PREPARED_NO_SEND" });
+const knownInventoryId = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
+const knownTitle = "HUKLA KASTOR 2Pソファ / モダン 北欧 デザイナーズ ソファ 2人掛け フクラ カストール 片アームソファ";
+const knownPack = () => ({ ...pack(), inventoryId: knownInventoryId,
+  managementCode: `BELLO_${knownInventoryId.replace(/-/g, "").toUpperCase()}`,
+  title: knownTitle, categoryPath:
+    "家具・インテリア > ソファ・ソファベッド > 2人掛け・3人掛けソファ" });
+const knownEvidence = current => ({ schemaVersion: 1,
+  kind: "B005396_KNOWN_EXISTING_PRIVATE_TEST_EXCEPTION",
+  approvalBasis: "USER_APPROVED_ONE_NEW_PRIVATE_TEST_B005396_PRICE_99999",
+  shopId: current.shopId, inventoryId: current.inventoryId,
+  managementCode: current.managementCode,
+  packFingerprint: createHash("sha256")
+    .update(JSON.stringify(current)).digest("hex"),
+  knownExistingRemoteId: "2JVJtFhb6kB5JBGkDbi2nm",
+  knownExistingTitle: knownTitle, knownExistingSkuCode: null,
+  knownExistingVisibility: "PUBLIC", knownExistingQuantity: 0,
+  knownExistingPriceYen: 89_800, onSaleRows: 2, draftRows: 12,
+  observedAt: new Date().toISOString(), noOtherCodeOrTitleMatch: true,
+  allowPublic: false });
 
 const imageFile = () => {
   const buffer = Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3, 0xff, 0xd9]);
@@ -68,6 +87,43 @@ test("an incomplete remote read blocks before BELLO fetch or claim", async () =>
     assert.equal(fetches, 0);
     assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, false);
   });
+});
+
+test("known existing exception needs exact evidence before the permanent claim", async () => {
+  for (const mode of ["disabled", "invalid", "valid"]) {
+    const root = await mkdtemp(join(tmpdir(), "bello-known-form-"));
+    try {
+      const current = knownPack();
+      await enqueueGeneralPrivateCreate(root, current);
+      const evidence = knownEvidence(current);
+      if (mode === "invalid") evidence.knownExistingQuantity = 1;
+      const order = [];
+      const result = await fillGeneralPrivateCreateFormOnly({ root,
+        inventoryId: knownInventoryId,
+        allowKnownExistingPrivateTest: mode !== "disabled" }, {
+        remotePreflight: async () => ({
+          status: "B005396_PRIVATE_TEST_EXCEPTION", allowFinalCreate: false,
+          evidence }),
+        fetchImages: async () => { order.push("image-read");
+          return [imageFile()]; },
+        recordKnownExisting: async () => { order.push("record-basis"); },
+        claimOnce: async (...args) => { order.push("claim");
+          return claimGeneralPrivateCreateOnce(...args); },
+        openSession: async () => { order.push("open");
+          throw Error("browser unavailable"); },
+      });
+      if (mode === "valid") {
+        assert.deepEqual(order, ["image-read", "record-basis", "claim",
+          "open"]);
+        assert.equal(result.status, "UNKNOWN");
+        assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, true);
+      } else {
+        assert.deepEqual(order, []);
+        assert.equal(result.status, "BLOCKED");
+        assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, false);
+      }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test("remote status is read once and changing or throwing getters fail closed", async () => {

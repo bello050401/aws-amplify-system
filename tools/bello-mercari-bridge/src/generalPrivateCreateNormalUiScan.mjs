@@ -31,6 +31,10 @@ function diagnoseSaleRow(row) {
   if (row.dataActionCount !== 0) return "SALE_DATA_ACTION_UNVERIFIED";
   if (row.menuControlsVerified !== true)
     return "SALE_MENU_CONTROLS_UNVERIFIED";
+  if (!["PUBLIC", "PRIVATE"].includes(row.visibility) ||
+      !Number.isSafeInteger(row.quantity) || row.quantity < 0 ||
+      !Number.isSafeInteger(row.priceYen) || row.priceYen < 1)
+    return "SALE_LIST_VALUES_UNVERIFIED";
   if (typeof row.signature !== "string" || row.signature.length > 3000)
     return "SALE_SIGNATURE_LENGTH_UNVERIFIED";
   return "SALE_ROW_READY";
@@ -109,6 +113,13 @@ export function generalPrivateSaleBrowserAdapter(page) {
         ];
         const rows = selected ? [...selected.table.querySelectorAll("tbody tr")].map(row => {
           const cells = [...row.querySelectorAll(":scope > td")];
+          const visibilityText = text(cells[2]);
+          const quantityText = text(cells[4]);
+          const priceMatch = text(cells[3]).match(/^[￥¥]\s*([0-9][0-9,]*)/);
+          const quantity = /^[0-9][0-9,]*$/.test(quantityText) ?
+            Number(quantityText.replaceAll(",", "")) : null;
+          const priceYen = priceMatch ?
+            Number(priceMatch[1].replaceAll(",", "")) : null;
           const dataActionCount = cells.slice(0, -1).reduce((count, cell) =>
             count + Number(cell.matches(ACTIONABLE)) +
               cell.querySelectorAll(ACTIONABLE).length, 0);
@@ -136,6 +147,9 @@ export function generalPrivateSaleBrowserAdapter(page) {
             }) && suffixes.every(suffix => suffix === suffixes[0]);
           return { title: text(cells[1]),
             remoteId: menuControlsVerified ? suffixes[0] : null,
+            visibility: visibilityText === "公開" ? "PUBLIC" :
+              visibilityText === "非公開" ? "PRIVATE" : null,
+            quantity, priceYen,
             signature: JSON.stringify(cells.map(text)), cellCount: cells.length,
             dataActionCount, menuControlsVerified };
         }) : [];
@@ -171,11 +185,17 @@ export function generalPrivateSaleBrowserAdapter(page) {
       const data = await page.locator("body").evaluate(() => {
         const names = document.querySelectorAll('input[name="name"]');
         const codes = document.querySelectorAll('input[name="variants.0.skuCode"]');
+        const prices = document.querySelectorAll('input[name="price"]');
+        const quantities = document.querySelectorAll(
+          'input[name="variants.0.quantity"]');
         return { documentUrl: document.location.href,
           loading: !!document.querySelector('[aria-busy="true"], [role="progressbar"]'),
           nameFieldCount: names.length, skuFieldCount: codes.length,
+          priceFieldCount: prices.length, quantityFieldCount: quantities.length,
           title: names.length === 1 ? names[0].value : null,
-          skuCode: codes.length === 1 ? codes[0].value : null };
+          skuCode: codes.length === 1 ? codes[0].value : null,
+          price: prices.length === 1 ? prices[0].value : null,
+          quantity: quantities.length === 1 ? quantities[0].value : null };
       });
       return { ...data, url: page.url() };
     },

@@ -17,6 +17,7 @@ function snapshot(titles, { nextDisabled, prevDisabled,
     nextDisabled, prevDisabled,
     rows: titles.map(value => ({ title: value,
       signature: JSON.stringify(["image", value, "1"]),
+      visibility: "PUBLIC", quantity: 1, priceYen: 30_000,
       cellCount: 10, dataActionCount: 0, menuControlsVerified: true })) };
 }
 
@@ -68,7 +69,8 @@ function domTable(title, { dataButton = false, unknownMenu = false,
       `product-page-menu-item-${suffix}`, "menuitem"),
   ];
   const cells = Array.from({ length: 10 }, (_, i) => ({
-    textContent: i === 1 ? title : i === 0 ? "image" : "",
+    textContent: i === 1 ? title : i === 0 ? "image" :
+      i === 2 ? "公開" : i === 3 ? "￥30,000" : i === 4 ? "1" : "",
     matches: selector => i === 1 && dataCellRoleButton &&
       selector.includes('[role="button"]') ||
       i === 9 && menuCellContentEditable &&

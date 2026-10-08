@@ -16,9 +16,15 @@ function exactSaleDetail(view, shopId, row) {
       url.pathname === `/seller/shops/${shopId}/products/${row.remoteId}/edit` &&
       view.documentUrl === view.url && view.loading === false &&
       view.nameFieldCount === 1 && view.skuFieldCount === 1 &&
+      view.priceFieldCount === 1 && view.quantityFieldCount === 1 &&
       typeof view.title === "string" && view.title.length <= 130 &&
       titleKey(view.title) === titleKey(row.title) &&
-      typeof view.skuCode === "string" && ID.test(view.skuCode);
+      typeof view.skuCode === "string" &&
+      (view.skuCode === "" || ID.test(view.skuCode)) &&
+      typeof view.price === "string" && /^[0-9]+$/.test(view.price) &&
+      Number(view.price) === row.priceYen &&
+      typeof view.quantity === "string" && /^[0-9]+$/.test(view.quantity) &&
+      Number(view.quantity) === row.quantity;
   } catch { return false; }
 }
 
@@ -111,7 +117,9 @@ export async function captureGeneralPrivateInitialScanReadOnly({ page, shopId,
       const detail = await stableDetail(ui, shopId, row);
       if (!detail) throw Error("SALE_DETAIL_UNVERIFIED");
       captured.rows.push({ remoteId: row.remoteId, title: detail.title,
-        skuCode: detail.skuCode, detailVerified: true });
+        skuCode: detail.skuCode || null, detailVerified: true,
+        visibility: row.visibility, quantity: row.quantity,
+        priceYen: row.priceYen });
     }
   }
   const drafts = await collectDrafts({ page, shopId,

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { exactGeneralPrivateCreatePack, readGeneralPrivateCreate } from
-  "./generalPrivateCreateJob.mjs";
+import { readGeneralPrivateCreate } from "./generalPrivateCreateJob.mjs";
+import { B005396_INVENTORY, B005396_SHOP,
+  exactB005396ReviewedPack } from
+  "./b005396ReviewedValues.mjs";
 import { fetchCurrentGeneralPrivateCreateSnapshot } from
   "./generalPrivateCreateImages.mjs";
 import { captureGeneralPrivateInitialScanReadOnly } from
@@ -17,24 +19,12 @@ import { openDraftMetadataReadSession } from "./session.mjs";
 import { isExplicitDraftReadQueryRequest } from
   "./draftReadMetadataObserver.mjs";
 
-const INVENTORY = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
-const SHOP = "evkhihBFFNn5hukMS9s36H";
+const INVENTORY = B005396_INVENTORY;
+const SHOP = B005396_SHOP;
 const SHA = /^[a-f0-9]{64}$/;
-const CATEGORY = "家具・インテリア > ソファ・ソファベッド > 2人掛け・3人掛けソファ";
-const SHIPPING = { method: "METHOD_TYPE_UNDECIDED", payer: "PAYER_TYPE_SELLER",
-  origin: "jp11", duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" };
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const fixed = diagnostic => ({ status: "BLOCKED", diagnostic,
   listingConfirmed: false, allowPublic: false });
-
-export function exactB005396ReviewedPack(pack) {
-  const exact = exactGeneralPrivateCreatePack(pack);
-  return exact?.shopId === SHOP && exact.inventoryId === INVENTORY &&
-    exact.priceYen === 99_999 && exact.quantity === 1 &&
-    exact.categoryPath === CATEGORY && exact.condition === "NO_NOTABLE_DAMAGE" &&
-    exact.brandId === null && exact.brandName === null &&
-    exact.imageRefs.length === 1 && same(exact.shipping, SHIPPING) ? exact : null;
-}
 
 /** Reads the current BELLO bytes and reports only a hash and pinned pack facts. */
 export async function readB005396ImageByteProof(args, {

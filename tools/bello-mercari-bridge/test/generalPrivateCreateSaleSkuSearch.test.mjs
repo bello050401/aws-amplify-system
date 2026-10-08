@@ -239,6 +239,7 @@ test("normal scan integrates only allowlisted search results", async () => {
     statusChipExact: true, visibilityChipExact: true, tableMatches: 1,
     tableIndex: 0, headerCount: 10, titleColumn: 0,
     rows: [{ title: "Other", signature: "other", cellCount: 10,
+      visibility: "PUBLIC", quantity: 1, priceYen: 30_000,
       dataActionCount: 0, menuControlsVerified: true }],
     nextCount: 1, prevCount: 1, nextDisabled: false, prevDisabled: true };
   const last = { ...first, rows: [{ ...first.rows[0], title: "Another",

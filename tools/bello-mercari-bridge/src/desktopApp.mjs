@@ -44,7 +44,9 @@ import { enqueueGeneralPrivateCreate, listGeneralPrivateCreateJobs } from
   "./generalPrivateCreateJob.mjs";
 import { readGeneralPrivateCreateRequestJson } from
   "./generalPrivateCreateRequest.mjs";
-import { exactB005396ReviewedPack, runB005396ReviewedDraft } from
+import { exactB005396ReviewedPack } from
+  "./b005396ReviewedValues.mjs";
+import { runB005396ReviewedDraft } from
   "./b005396ReviewedDraftRunner.mjs";
 import { capturePublicVisibilityProofReadOnly,
   readCurrentPublicVisibilityProof } from "./visibilityPublicProof.mjs";

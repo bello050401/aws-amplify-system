@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { exactGeneralPrivateCreatePack, readGeneralPrivateCreate,
   readGeneralPrivateCreateClaim, claimGeneralPrivateCreateOnce,
   writeGeneralPrivateCreateResultOnce } from "./generalPrivateCreateJob.mjs";
-import { preflightGeneralPrivateCreateRemote } from
+import { exactB005396KnownExistingEvidence,
+  preflightGeneralPrivateCreateRemote,
+  recordB005396KnownExistingEvidence } from
   "./generalPrivateCreateRemotePreflight.mjs";
 import { fetchCurrentGeneralPrivateCreateImages } from
   "./generalPrivateCreateImages.mjs";
@@ -15,7 +17,7 @@ const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const REMOTE_DIAGNOSTICS = new Set(["REMOTE_SCAN_UNVERIFIED",
   "REMOTE_SCAN_UNAVAILABLE", "REMOTE_SCAN_INCOMPLETE",
   "REMOTE_DUPLICATE_POSSIBLE", "REMOTE_DRAFT_AMBIGUOUS",
-  "LOCAL_CLAIM_UNKNOWN_NO_RETRY"]);
+  "LOCAL_CLAIM_UNKNOWN_NO_RETRY", "B005396_PRIVATE_TEST_EXCEPTION"]);
 const FORM_DIAGNOSTICS = new Set(["PACK_UNVERIFIED",
   "BRAND_CONTROL_UNVERIFIED", "TARGET_CHECK_UNAVAILABLE",
   "IMAGE_PROOF_UNVERIFIED", "NAME_MISMATCH", "DESCRIPTION_MISMATCH",
@@ -64,13 +66,15 @@ function exactImageFiles(pack, files) {
  */
 export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
   origin, belloProfileDir, shopsProfileDir, playwrightModulePath,
-  captureReadOnlyScan = null, expectedImageSha256 = null }, {
+  captureReadOnlyScan = null, expectedImageSha256 = null,
+  allowKnownExistingPrivateTest = false }, {
     remotePreflight = preflightGeneralPrivateCreateRemote,
     fetchImages = fetchCurrentGeneralPrivateCreateImages,
     claimOnce = claimGeneralPrivateCreateOnce,
     openSession = openGeneralPrivateCreateFormSession,
     fillForm = fillGeneralPrivateCreateFormOnce,
     recordResult = writeGeneralPrivateCreateResultOnce,
+    recordKnownExisting = recordB005396KnownExistingEvidence,
   } = {}) {
   const record = await readGeneralPrivateCreate(root, inventoryId);
   const pack = exactGeneralPrivateCreatePack(record.pack);
@@ -80,16 +84,23 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
     return { status: "BLOCKED", diagnostic: "LOCAL_CLAIM_UNKNOWN_NO_RETRY" };
   let remoteStatus;
   let allowFinalCreate;
+  let knownExistingEvidence;
   try {
     const remote = await remotePreflight({ root, inventoryId,
-      captureReadOnlyScan });
+      captureReadOnlyScan, allowKnownExistingPrivateTest });
     remoteStatus = remote?.status;
     allowFinalCreate = remote?.allowFinalCreate;
+    knownExistingEvidence = remote?.evidence;
   } catch {
     return { status: "BLOCKED", diagnostic: "REMOTE_SCAN_UNVERIFIED" };
   }
-  if (remoteStatus !== "NO_MATCH_IN_OBSERVED_UI" ||
-      allowFinalCreate !== false)
+  let knownExistingApproved = false;
+  try { knownExistingApproved = allowKnownExistingPrivateTest === true &&
+    remoteStatus === "B005396_PRIVATE_TEST_EXCEPTION" &&
+    Boolean(exactB005396KnownExistingEvidence(pack, knownExistingEvidence)); }
+  catch { return { status: "BLOCKED", diagnostic: "REMOTE_SCAN_UNVERIFIED" }; }
+  if ((remoteStatus !== "NO_MATCH_IN_OBSERVED_UI" &&
+      !knownExistingApproved) || allowFinalCreate !== false)
     return { status: "BLOCKED", diagnostic:
       REMOTE_DIAGNOSTICS.has(remoteStatus) ? remoteStatus :
         "REMOTE_SCAN_UNVERIFIED" };
@@ -106,6 +117,12 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
       (!/^[a-f0-9]{64}$/.test(expectedImageSha256) ||
         files.length !== 1 || files[0].sha256 !== expectedImageSha256))
     return { status: "BLOCKED", diagnostic: "REVIEWED_IMAGE_CHANGED" };
+
+  if (knownExistingApproved) {
+    try { await recordKnownExisting(root, pack, knownExistingEvidence); }
+    catch { return { status: "BLOCKED",
+      diagnostic: "B005396_KNOWN_EXISTING_EVIDENCE_UNVERIFIED" }; }
+  }
 
   // From this point a remote auto-draft is possible, even without a save click.
   const claim = await claimOnce(root, inventoryId);

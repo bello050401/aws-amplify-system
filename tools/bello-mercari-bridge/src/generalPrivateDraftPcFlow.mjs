@@ -57,7 +57,7 @@ export async function runB005396PrivateDraftPcFlow({ root, inventoryId,
   try { form = await fillForm({ root, inventoryId, origin,
     belloProfileDir, shopsProfileDir, playwrightModulePath,
     captureReadOnlyScan: captureInitialScan,
-    expectedImageSha256 }); }
+    expectedImageSha256, allowKnownExistingPrivateTest: true }); }
   catch { return unknown("FORM_RESULT_UNKNOWN_NO_RETRY"); }
   if (form?.status !== "FORM_READY_NO_SAVE" ||
       form.allowSave !== false || form.listingConfirmed !== false ||

@@ -66,6 +66,7 @@ test("offline assembly passes reviewed pack through form and exact duplicate cal
       }, captureInitialScan, expectedImageSha256: "a".repeat(64),
       fillForm: async input => { calls.push("form");
         assert.equal(input.captureReadOnlyScan, captureInitialScan);
+        assert.equal(input.allowKnownExistingPrivateTest, true);
         assert.equal(input.expectedImageSha256, "a".repeat(64));
         assert.equal(input.shopsProfileDir, args.shopsProfileDir);
         return { status: "FORM_READY_NO_SAVE", allowSave: false,
