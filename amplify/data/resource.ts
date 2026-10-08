@@ -1123,6 +1123,8 @@ const schema = a.schema({
       shopId: a.string().required(),
       revision: a.integer().required(),
       lastStartedAt: a.datetime().required(),
+      sendBeforeAt: a.datetime().required(),
+      nextEligibleAt: a.datetime().required(),
       requestId: a.string().required(),
       attemptId: a.string().required(),
       requestedBy: a.string().required(),
@@ -1140,6 +1142,7 @@ const schema = a.schema({
       attemptId: a.string().required(),
       slotRevision: a.integer().required(),
       reservedAt: a.datetime().required(),
+      sendBeforeAt: a.datetime().required(),
       requestedBy: a.string().required(),
       status: a.string().required(),
     })

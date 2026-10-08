@@ -1,11 +1,20 @@
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import { initialWebHttpExecutionState, transitionWebHttpExecution,
-  type WebHttpSendChecks } from "./webHttpExecutionGate.ts";
+  WEB_HTTP_MIN_SEND_INTERVAL_MS, type WebHttpSendChecks } from
+  "./webHttpExecutionGate.ts";
+
+// A later sender must begin its HTTP call before sendBeforeAt. The extra second
+// between that deadline and lease end is a scheduling margin. The next product
+// can reserve only 30 seconds after lease end, not 30 seconds after reservation.
+export const WEB_HTTP_SEND_LEASE_MS = 5_000;
+export const WEB_HTTP_SEND_DEADLINE_MS = 4_000;
 
 export type WebHttpShopSendSlot = {
   shopId: string;
   revision: number;
   lastStartedAt: string;
+  sendBeforeAt: string;
+  nextEligibleAt: string;
   requestId: string;
   attemptId: string;
   requestedBy: string;
@@ -18,16 +27,18 @@ export type WebHttpSendAttempt = {
   attemptId: string;
   slotRevision: number;
   reservedAt: string;
+  sendBeforeAt: string;
   requestedBy: string;
   status: "RESERVED_NO_SEND";
 };
 export type WebHttpSendReservationRepository = {
+  /** Both reads must be strongly consistent; the transaction remains authoritative. */
   getSlot: (shopId: string) => Promise<WebHttpShopSendSlot | null>;
-  createSlot: (slot: WebHttpShopSendSlot) => Promise<void>;
-  updateSlot: (previous: WebHttpShopSendSlot,
-    next: WebHttpShopSendSlot) => Promise<void>;
   getAttempt: (requestId: string) => Promise<WebHttpSendAttempt | null>;
-  createAttempt: (attempt: WebHttpSendAttempt) => Promise<void>;
+  /** One DynamoDB transaction: conditional shop update + conditional attempt put. */
+  transactReserve: (previous: WebHttpShopSendSlot | null,
+    next: WebHttpShopSendSlot, attempt: WebHttpSendAttempt,
+    nowIso: string) => Promise<void>;
 };
 export type WebHttpReservationPreflight = Pick<WebHttpSendChecks,
   "auth" | "writeContractVerified" | "remoteDuplicate" | "existingBinding"> & {
@@ -37,33 +48,43 @@ export type WebHttpReservationPreflight = Pick<WebHttpSendChecks,
 
 export type WebHttpSendReservationResult =
   { ok: true; status: "RESERVED_NO_SEND"; requestId: string;
-    attemptId: string; slotRevision: number; reservedAt: string } |
+    attemptId: string; slotRevision: number; reservedAt: string;
+    sendBeforeMs: number } |
   { ok: false; code: "INVALID_JOB" | "AUTH_REQUIRED" |
     "BLOCKED_EXISTING_LINK" | "PRECHECK_NOT_READY" | "WAIT_INTERVAL" |
     "ALREADY_CLAIMED_NO_SEND" | "STORAGE_UNAVAILABLE" |
-    "RESERVATION_UNCONFIRMED_NO_SEND" | "ATTEMPT_UNCONFIRMED_NO_SEND";
+    "RESERVATION_UNCONFIRMED_NO_SEND" | "RESERVATION_EXPIRED_NO_SEND";
     nextEligibleAtMs?: number };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validTime = (value: number) => Number.isSafeInteger(value) && value >= 0;
 function validSlot(slot: WebHttpShopSendSlot, job: WebHttpDraftJob) {
   const startedAt = Date.parse(slot.lastStartedAt);
+  const sendBefore = Date.parse(slot.sendBeforeAt);
+  const nextEligible = Date.parse(slot.nextEligibleAt);
   return slot.shopId === job.shopId &&
     Number.isSafeInteger(slot.revision) && slot.revision >= 1 &&
     slot.revision < 2_147_483_647 &&
-    validTime(startedAt) && UUID.test(slot.attemptId) &&
-    /^[a-f0-9]{64}$/.test(slot.requestId) &&
+    validTime(startedAt) && validTime(sendBefore) &&
+    validTime(nextEligible) && sendBefore > startedAt &&
+    nextEligible - sendBefore >= WEB_HTTP_MIN_SEND_INTERVAL_MS &&
+    UUID.test(slot.attemptId) && /^[a-f0-9]{64}$/.test(slot.requestId) &&
     typeof slot.requestedBy === "string" && Boolean(slot.requestedBy);
 }
 
-/**
- * Both conditional writes must be confirmed before any caller may send.
- * A failed or ambiguous phase returns no-send and is never retried here.
- */
+/** A sender must check this immediately before beginning its HTTP call. */
+export function webHttpSendPermitFresh(result: WebHttpSendReservationResult,
+  nowMs: number): boolean {
+  return result.ok === true && validTime(nowMs) &&
+    nowMs >= Date.parse(result.reservedAt) && nowMs < result.sendBeforeMs;
+}
+
+/** No Shops request is made here. Unknown transaction outcomes never return success. */
 export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
   preflight: WebHttpReservationPreflight, attemptId: string,
   repo: WebHttpSendReservationRepository,
-  nowMs = Date.now()): Promise<WebHttpSendReservationResult> {
+  clock: () => number = Date.now): Promise<WebHttpSendReservationResult> {
+  const nowMs = clock();
   const initial = initialWebHttpExecutionState(job);
   if (!initial || !UUID.test(attemptId) || !validTime(nowMs) ||
       !preflight || typeof preflight.existingBinding !== "boolean" ||
@@ -93,6 +114,9 @@ export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
   };
   const candidate = transitionWebHttpExecution(initial, {
     type: "BEGIN", nowMs, checks, attemptId });
+  const nextEligibleAtMs = previous ? Date.parse(previous.nextEligibleAt) : null;
+  if (nextEligibleAtMs !== null && nowMs < nextEligibleAtMs)
+    return { ok: false, code: "WAIT_INTERVAL", nextEligibleAtMs };
   if (candidate.phase === "WAIT_INTERVAL")
     return { ok: false, code: "WAIT_INTERVAL",
       nextEligibleAtMs: candidate.nextEligibleAtMs ?? undefined };
@@ -100,23 +124,31 @@ export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
     return { ok: false, code: candidate.phase === "AUTH_REQUIRED" ?
       "AUTH_REQUIRED" : candidate.phase === "BLOCKED_EXISTING_LINK" ?
         "BLOCKED_EXISTING_LINK" : "PRECHECK_NOT_READY" };
+  const sendBeforeMs = nowMs + WEB_HTTP_SEND_DEADLINE_MS;
+  const nextEligibleMs = nowMs + WEB_HTTP_SEND_LEASE_MS +
+    WEB_HTTP_MIN_SEND_INTERVAL_MS;
+  if (!validTime(sendBeforeMs) || !validTime(nextEligibleMs))
+    return { ok: false, code: "PRECHECK_NOT_READY" };
   const reservedAt = new Date(nowMs).toISOString();
+  const sendBeforeAt = new Date(sendBeforeMs).toISOString();
   const next: WebHttpShopSendSlot = { shopId: job.shopId,
     revision: previous ? previous.revision + 1 : 1,
-    lastStartedAt: reservedAt, requestId: job.requestId, attemptId,
-    requestedBy: job.requestedBy };
-  try {
-    if (previous) await repo.updateSlot(previous, next);
-    else await repo.createSlot(next);
-  } catch { return { ok: false, code: "RESERVATION_UNCONFIRMED_NO_SEND" }; }
+    lastStartedAt: reservedAt, sendBeforeAt,
+    nextEligibleAt: new Date(nextEligibleMs).toISOString(),
+    requestId: job.requestId, attemptId, requestedBy: job.requestedBy };
   const attempt: WebHttpSendAttempt = { requestId: job.requestId,
     inventoryId: job.inventoryId, shopId: job.shopId,
     snapshotFingerprint: job.snapshotFingerprint, attemptId,
-    slotRevision: next.revision, reservedAt,
+    slotRevision: next.revision, reservedAt, sendBeforeAt,
     requestedBy: job.requestedBy, status: "RESERVED_NO_SEND" };
-  try { await repo.createAttempt(attempt); }
-  catch { return { ok: false, code: "ATTEMPT_UNCONFIRMED_NO_SEND" }; }
+  try { await repo.transactReserve(previous, next, attempt, reservedAt); }
+  catch { return { ok: false, code: "RESERVATION_UNCONFIRMED_NO_SEND" }; }
+  // A transaction may commit while its response is delayed. An expired A must not
+  // return sendable after B has acquired the next shop slot.
+  const returnedAtMs = clock();
+  if (!validTime(returnedAtMs) || returnedAtMs >= sendBeforeMs)
+    return { ok: false, code: "RESERVATION_EXPIRED_NO_SEND" };
   return { ok: true, status: "RESERVED_NO_SEND",
-    requestId: job.requestId, attemptId,
-    slotRevision: next.revision, reservedAt };
+    requestId: job.requestId, attemptId, slotRevision: next.revision,
+    reservedAt, sendBeforeMs };
 }

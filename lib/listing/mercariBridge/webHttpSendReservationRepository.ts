@@ -1,77 +1,105 @@
 import "server-only";
 
-import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import type { WebHttpShopSendSlot, WebHttpSendAttempt,
-  WebHttpSendReservationRepository } from "./webHttpSendReservation";
+import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from "@aws-sdk/lib-dynamodb";
+import type {
+  WebHttpSendAttempt,
+  WebHttpSendReservationRepository,
+  WebHttpShopSendSlot,
+} from "./webHttpSendReservation.ts";
 
-async function getSlot(shopId: string): Promise<WebHttpShopSendSlot | null> {
-  const { data, errors } = await serverDataClient.models.MercariBridgeHttpShopSendSlot
-    .get({ shopId }, inventoryAuthMode);
-  if (errors?.length) throw Error("Shops HTTP send slot lookup failed");
-  return data as WebHttpShopSendSlot | null;
-}
-
-async function createSlot(slot: WebHttpShopSendSlot): Promise<void> {
-  const result = await serverDataClient.graphql({
-    query: `mutation CreateMercariBridgeHttpShopSendSlot($input: CreateMercariBridgeHttpShopSendSlotInput!, $condition: ModelMercariBridgeHttpShopSendSlotConditionInput) {
-      createMercariBridgeHttpShopSendSlot(input: $input, condition: $condition) { shopId revision attemptId }
-    }`,
-    variables: { input: slot,
-      condition: { revision: { attributeExists: false } } },
-    authMode: "userPool",
-  });
-  const response = result as { data?: { createMercariBridgeHttpShopSendSlot?:
-    { shopId: string; revision: number; attemptId: string } | null }; errors?: unknown };
-  const saved = response.data?.createMercariBridgeHttpShopSendSlot;
-  if (response.errors || saved?.shopId !== slot.shopId ||
-      saved.revision !== slot.revision || saved.attemptId !== slot.attemptId)
-    throw Error("Shops HTTP send slot conditional create failed");
-}
-
-async function updateSlot(previous: WebHttpShopSendSlot,
-  next: WebHttpShopSendSlot): Promise<void> {
-  const result = await serverDataClient.graphql({
-    query: `mutation UpdateMercariBridgeHttpShopSendSlot($input: UpdateMercariBridgeHttpShopSendSlotInput!, $condition: ModelMercariBridgeHttpShopSendSlotConditionInput) {
-      updateMercariBridgeHttpShopSendSlot(input: $input, condition: $condition) { shopId revision attemptId }
-    }`,
-    variables: { input: next, condition: {
-      revision: { eq: previous.revision },
-      attemptId: { eq: previous.attemptId },
-    } },
-    authMode: "userPool",
-  });
-  const response = result as { data?: { updateMercariBridgeHttpShopSendSlot?:
-    { shopId: string; revision: number; attemptId: string } | null }; errors?: unknown };
-  const saved = response.data?.updateMercariBridgeHttpShopSendSlot;
-  if (response.errors || saved?.shopId !== next.shopId ||
-      saved.revision !== next.revision || saved.attemptId !== next.attemptId)
-    throw Error("Shops HTTP send slot conditional update failed");
-}
-
-async function getAttempt(requestId: string): Promise<WebHttpSendAttempt | null> {
-  const { data, errors } = await serverDataClient.models.MercariBridgeHttpSendAttempt
-    .get({ requestId }, inventoryAuthMode);
-  if (errors?.length) throw Error("Shops HTTP send attempt lookup failed");
-  return data as WebHttpSendAttempt | null;
-}
-
-async function createAttempt(attempt: WebHttpSendAttempt): Promise<void> {
-  const result = await serverDataClient.graphql({
-    query: `mutation CreateMercariBridgeHttpSendAttempt($input: CreateMercariBridgeHttpSendAttemptInput!, $condition: ModelMercariBridgeHttpSendAttemptConditionInput) {
-      createMercariBridgeHttpSendAttempt(input: $input, condition: $condition) { requestId attemptId }
-    }`,
-    variables: { input: attempt,
-      condition: { attemptId: { attributeExists: false } } },
-    authMode: "userPool",
-  });
-  const response = result as { data?: { createMercariBridgeHttpSendAttempt?:
-    { requestId: string; attemptId: string } | null }; errors?: unknown };
-  const saved = response.data?.createMercariBridgeHttpSendAttempt;
-  if (response.errors || saved?.requestId !== attempt.requestId ||
-      saved.attemptId !== attempt.attemptId)
-    throw Error("Shops HTTP send attempt conditional create failed");
-}
-
-export const webHttpSendReservationRepository: WebHttpSendReservationRepository = {
-  getSlot, createSlot, updateSlot, getAttempt, createAttempt,
+type Tables = {
+  slotTableName: string;
+  attemptTableName: string;
 };
+
+/** Table names and the client are injected; this adapter does not enable sending. */
+export class DynamoWebHttpSendReservationRepository
+  implements WebHttpSendReservationRepository {
+  private readonly ddb: DynamoDBDocumentClient;
+  private readonly tables: Tables;
+
+  constructor(
+    ddb: DynamoDBDocumentClient,
+    tables: Tables,
+  ) {
+    if (!tables.slotTableName?.trim() || !tables.attemptTableName?.trim() ||
+        tables.slotTableName === tables.attemptTableName)
+      throw new Error("Distinct reservation table names are required");
+    this.ddb = ddb;
+    this.tables = tables;
+  }
+
+  async getSlot(shopId: string): Promise<WebHttpShopSendSlot | null> {
+    const response = await this.ddb.send(new GetCommand({
+      TableName: this.tables.slotTableName,
+      Key: { shopId },
+      ConsistentRead: true,
+    }));
+    return (response.Item as WebHttpShopSendSlot | undefined) ?? null;
+  }
+
+  async getAttempt(requestId: string): Promise<WebHttpSendAttempt | null> {
+    const response = await this.ddb.send(new GetCommand({
+      TableName: this.tables.attemptTableName,
+      Key: { requestId },
+      ConsistentRead: true,
+    }));
+    return (response.Item as WebHttpSendAttempt | undefined) ?? null;
+  }
+
+  async transactReserve(previous: WebHttpShopSendSlot | null,
+    next: WebHttpShopSendSlot, attempt: WebHttpSendAttempt,
+    nowIso: string): Promise<void> {
+    const names = {
+      "#shopId": "shopId", "#revision": "revision",
+      "#lastStartedAt": "lastStartedAt", "#sendBeforeAt": "sendBeforeAt",
+      "#nextEligibleAt": "nextEligibleAt", "#requestId": "requestId",
+      "#attemptId": "attemptId", "#requestedBy": "requestedBy",
+      "#createdAt": "createdAt", "#updatedAt": "updatedAt",
+    };
+    const values: Record<string, string | number> = {
+      ":revision": next.revision,
+      ":lastStartedAt": next.lastStartedAt,
+      ":sendBeforeAt": next.sendBeforeAt,
+      ":nextEligibleAt": next.nextEligibleAt,
+      ":requestId": next.requestId,
+      ":attemptId": next.attemptId,
+      ":requestedBy": next.requestedBy,
+      ":now": nowIso,
+    };
+    if (previous) {
+      values[":previousRevision"] = previous.revision;
+      values[":previousAttemptId"] = previous.attemptId;
+    }
+    await this.ddb.send(new TransactWriteCommand({
+      ClientRequestToken: next.attemptId,
+      TransactItems: [
+        { Update: {
+          TableName: this.tables.slotTableName,
+          Key: { shopId: next.shopId },
+          UpdateExpression: "SET #revision = :revision, #lastStartedAt = :lastStartedAt, " +
+            "#sendBeforeAt = :sendBeforeAt, #nextEligibleAt = :nextEligibleAt, " +
+            "#requestId = :requestId, #attemptId = :attemptId, " +
+            "#requestedBy = :requestedBy, " +
+            "#createdAt = if_not_exists(#createdAt, :now), #updatedAt = :now",
+          ConditionExpression: previous ?
+            "#revision = :previousRevision AND #attemptId = :previousAttemptId " +
+              "AND #nextEligibleAt <= :now" :
+            "attribute_not_exists(#shopId)",
+          ExpressionAttributeNames: names,
+          ExpressionAttributeValues: values,
+        } },
+        { Put: {
+          TableName: this.tables.attemptTableName,
+          Item: { ...attempt, createdAt: nowIso, updatedAt: nowIso },
+          ConditionExpression: "attribute_not_exists(#requestId)",
+          ExpressionAttributeNames: { "#requestId": "requestId" },
+        } },
+      ],
+    }));
+  }
+}
