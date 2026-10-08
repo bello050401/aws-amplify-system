@@ -4,7 +4,7 @@
 
 - 既存商品B005795の通常管理画面読取で得たGraphQL queryを、同じPCのログイン済みコンテキストから一度HTTP送信し、同じ商品・店舗の読取結果をHTTP 200で確認した。BELLO Webサーバーからの認証付き送信ではない。詳細は[認証付きHTTP読取検証](mercari-direct-read-proof-20261004.md)。
 - 下書き一覧 `productDrafts` と詳細 `GetProductDraft` の `POST https://mercari-shops.com/graphql` 読取は、PCの管理画面で対象IDと要求・応答を照合した。作成履歴や新規作成の証明ではない。詳細は[下書き読取観測](mercari-draft-read-metadata-observation-20261008.md)。
-- 既存画像操作では `createImageAsset` multipartのHTTP 200・GraphQLエラーなしを観測したが、要求形式、商品への紐付け、バイト同一性は未確認。新規出品のHTTP書込要求・応答契約は未観測。詳細は[最初の出品に向けた境界](mercari-first-listing-preflight-20261004.md)。
+- B005396のHARでは `CreateProductDraft` が同じ名称・SKUで2回成功して別々の下書きを作り、`UpdateProductDraft` により一方だけ価格99,999円・画像1件へ更新された。画像アップロードの要求本文とBELLOサーバー用の認証方法は未確認。詳細は[限定観測](mercari-b005396-http-draft-har-evidence-20261009.md)。
 
 ## 今回実装したWeb側の工程
 
@@ -20,4 +20,4 @@ Web HTTP実行ゲートは、準備ジョブのID・スナップショット指�
 
 ## Webからの出品を完了する条件
 
-公式API経路には、この店舗のBELLO用Personal API Access Token、API_CLIENT_NAME、承認済みの日本国内固定送信元IPが必要とされるが、利用可能な設定は未確認。通常の管理画面ログインやNext Engine用トークンはその代わりにならない。公式APIの `createProduct` 入力にはHTTPS画像URLが必要であり、BELLO保存画像をその方式で安全に渡す準備も要る。これらを確認し、読取実証・非公開作成・同じSKU/商品IDの読戻しをつないで初めてWeb出品を完了と判定する。内部の管理画面GraphQLを採る場合も、BELLOサーバーで使える認証と新規作成要求の正確な契約が別途必要。いずれも現時点では推測して送信しない。
+公式API経路には、この店舗のBELLO用Personal API Access Token、API_CLIENT_NAME、承認済みの日本国内固定送信元IPが必要とされるが、利用可能な設定は未確認。通常の管理画面ログインやNext Engine用トークンはその代わりにならない。公式APIの `createProduct` 入力にはHTTPS画像URLが必要であり、BELLO保存画像をその方式で安全に渡す準備も要る。これらを確認し、読取実証・非公開作成・同じSKU/商品IDの読戻しをつないで初めてWeb出品を完了と判定する。内部の管理画面GraphQLは下書き作成・更新の通信を観測したが、BELLOサーバーで使える認証と画像アップロード要求本文が不明である。同じ名称・SKUの二重作成も実際に起きたため、既存IDと固定ジョブの照合ができるまで新規作成を再送しない。
