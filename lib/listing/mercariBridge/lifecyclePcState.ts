@@ -16,10 +16,27 @@ export function pcRecordCurrent(record: { key: string; epoch: number },
   return record.key === current.key && record.epoch === current.value;
 }
 
-export function pcStopJobHandoffEnabled(featureEnabled: boolean,
-  status: string, hasTargetPublicProof: boolean) {
-  return featureEnabled && (hasTargetPublicProof ||
-    status === "UNREAD" || status === "PENDING");
+export type PcVisibilityStatus = "UNREAD" | "PENDING" | "PUBLIC_VERIFIED" |
+  "STOP_VERIFIED" | "RELIST_VERIFIED" | "UNKNOWN";
+
+/** Choose the one visible action without treating a BELLO record as Shops proof. */
+export function pcVisibilityControl(featureEnabled: boolean,
+  status: PcVisibilityStatus, hasTargetPublicProof: boolean,
+  relistUiObserved = false): {
+    action: "STOP" | "RELIST" | null; enabled: boolean; label: string;
+  } {
+  if (!featureEnabled)
+    return { action: null, enabled: false, label: "Shops公開状態の確認待ち" };
+  if (status === "UNREAD" || status === "PENDING")
+    return { action: "STOP", enabled: true,
+      label: "既存Shops商品の確認ジョブをPCへ渡す" };
+  if (status === "PUBLIC_VERIFIED" || status === "RELIST_VERIFIED")
+    return { action: "STOP", enabled: hasTargetPublicProof,
+      label: hasTargetPublicProof ? "出品停止" : "Shops公開状態の確認待ち" };
+  if (status === "STOP_VERIFIED")
+    return { action: "RELIST", enabled: relistUiObserved,
+      label: "出品" };
+  return { action: null, enabled: false, label: "Shops側の結果確認待ち" };
 }
 
 export function pinnedPublicProofForTarget(record: {

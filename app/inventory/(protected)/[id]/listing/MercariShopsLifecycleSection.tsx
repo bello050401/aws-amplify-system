@@ -5,9 +5,9 @@ import { prepareMercariVisibilityPcJobAction } from "@/app/actions/mercariVisibi
 import type { ChannelListingRecord } from "@/lib/listing/types";
 import { shopsAdminUrl, shopsLifecycle,
   type ShopsOperation } from "@/lib/listing/mercariBridge/listingLifecycle";
-import { pcTargetKey, pcRecordCurrent, pcStopJobHandoffEnabled,
-  pinnedPublicProofForTarget,
-  samePcTargetEpoch, type PinnedPublicProof } from
+import { pcTargetKey, pcRecordCurrent, pcVisibilityControl,
+  pinnedPublicProofForTarget, samePcTargetEpoch,
+  type PcVisibilityStatus, type PinnedPublicProof } from
   "@/lib/listing/mercariBridge/lifecyclePcState";
 
 const SHOP_ID = "evkhihBFFNn5hukMS9s36H";
@@ -16,9 +16,6 @@ const LABEL = {
   STOPPING: "停止処理中", STOPPED: "停止済み（BELLO記録）",
   PRIVATE: "非公開（BELLO記録）", UNKNOWN: "結果の確認が必要",
 } as const;
-type PcStatus = "UNREAD" | "PENDING" | "PUBLIC_VERIFIED" | "STOP_VERIFIED" |
-  "RELIST_VERIFIED" | "UNKNOWN";
-
 /** The PC app accepts a prepared job; its explicit local action performs the transition. */
 export function MercariShopsLifecycleSection({ inventoryId, listing, operation = null,
   canPrepare = false }: {
@@ -42,7 +39,8 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
   const preparedActions = pcRecordCurrent(preparedRecord, started) ?
     preparedRecord.actions : new Set<"STOP" | "RELIST">();
   const [pcRecord, setPcRecord] = useState<{
-    key: string; epoch: number; status: PcStatus; proof: PinnedPublicProof | null }>({
+    key: string; epoch: number; status: PcVisibilityStatus;
+    proof: PinnedPublicProof | null }>({
     key: targetKey, epoch: started.value, status: "UNREAD", proof: null });
   const pcStatus = pcRecordCurrent(pcRecord, started) ?
     pcRecord.status : "UNREAD";
@@ -61,19 +59,15 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
   const url = listing && state !== "NOT_LISTED" ?
     shopsAdminUrl(SHOP_ID, listing.externalListingId) : null;
   const pcFeatureEnabled = process.env.NEXT_PUBLIC_MERCARI_VISIBILITY_PC_JOB_ENABLED === "1" &&
-    listing?.status === "ACTIVE" && Boolean(url) &&
+    operation === null && listing?.status === "ACTIVE" && Boolean(url) &&
     inventoryId.toLowerCase() !== "dd273c1e-9b2a-4013-acc6-c445a481fab8";
   const stopHandoffEnabled = pcFeatureEnabled && publicProof !== null;
-  const handoffEnabled = pcStopJobHandoffEnabled(pcFeatureEnabled,
-    pcStatus, stopHandoffEnabled);
-  const relistHandoffEnabled = false; // Public relist control awaits read-only UI observation.
-  const button = pcStatus === "STOP_VERIFIED" ? "出品" :
-    pcStatus === "PUBLIC_VERIFIED" || pcStatus === "RELIST_VERIFIED" ?
-      "出品停止" : state === "NOT_LISTED" ? "出品" :
-        "Shops公開状態の確認待ち";
+  // The Shops public relist UI still needs read-only observation.
+  const control = pcVisibilityControl(pcFeatureEnabled, pcStatus,
+    stopHandoffEnabled, false);
   async function prepareHandoff(action: "STOP" | "RELIST") {
-    if (!(action === "STOP" ? handoffEnabled : relistHandoffEnabled) ||
-        busy || preparedActions.has(action)) return;
+    if (action !== control.action || !control.enabled || busy ||
+        preparedActions.has(action)) return;
     const remoteId = listing?.externalListingId;
     if (!remoteId) return;
     setBusyRecord({ key: targetKey, epoch: started.value, value: true });
@@ -153,7 +147,7 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
         throw Error("PC public proof mismatch");
       const proof = publicProof?.status === "PUBLIC_CONFIRMED" ?
         { inventoryId, remoteId, observedAt: publicProof.observedAt } : null;
-      let status: PcStatus;
+      let status: PcVisibilityStatus;
       if (relist?.outcome === "RELIST_VERIFIED") status = "RELIST_VERIFIED";
       else if (stop?.outcome === "STOP_VERIFIED" &&
           (!relist?.attempted || relist?.outcome === null))
@@ -190,20 +184,16 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
     ].includes(inventoryId.toLowerCase()) ? <a href="#mercari-manual-preparation"
       className="mt-3 inline-block rounded border border-gray-300 px-3 py-2 text-xs font-bold">
       出品準備へ
-    </a> : <button type="button" disabled={!handoffEnabled || busy || preparedActions.has("STOP")}
-      aria-disabled={!handoffEnabled || busy || preparedActions.has("STOP")}
-      onClick={() => void prepareHandoff("STOP")}
+    </a> : <button type="button"
+      disabled={!control.enabled || busy ||
+        (control.action !== null && preparedActions.has(control.action))}
+      aria-disabled={!control.enabled || busy ||
+        (control.action !== null && preparedActions.has(control.action))}
+      onClick={() => { if (control.action) void prepareHandoff(control.action); }}
       className="mt-3 rounded border border-gray-300 px-3 py-2 text-xs font-bold disabled:opacity-50">
-      {handoffEnabled ? busy ? "準備中…" :
-        preparedActions.has("STOP") ? "確認ジョブをPCへ保存済み" :
-          pcStatus === "PUBLIC_VERIFIED" ? "出品停止のPCジョブを作る" :
-            "既存Shops商品の確認ジョブをPCへ渡す" : button}
-    </button>}
-    {pcFeatureEnabled && <button type="button"
-      disabled={!relistHandoffEnabled || busy || preparedActions.has("RELIST")}
-      onClick={() => void prepareHandoff("RELIST")}
-      className="ml-2 mt-3 rounded border border-gray-300 px-3 py-2 text-xs font-bold disabled:opacity-50">
-      {preparedActions.has("RELIST") ? "出品ジョブを保存済み" : "出品（同じ商品IDを再開）"}
+      {busy ? "準備中…" : control.action && preparedActions.has(control.action) ?
+        "PCジョブを保存済み" : pcFeatureEnabled ? control.label :
+          state === "NOT_LISTED" ? "出品" : "Shops公開状態の確認待ち"}
     </button>}
     {pcFeatureEnabled && <button type="button" disabled={busy}
       onClick={() => void checkPcStatus()}
@@ -216,7 +206,9 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
         EC出品一覧に戻る
       </a>}
     {message && <p role="status" className="mt-2 text-xs">{message}</p>}
-    <p className="mt-2 text-xs text-gray-600">{state === "UNKNOWN" ?
+    <p className="mt-2 text-xs text-gray-600">{pcStatus === "STOP_VERIFIED" ?
+      "停止はPCで確認済みです。再出品はShopsの公開操作を確認するまで利用できません。" :
+      state === "UNKNOWN" ?
       "Shops側の結果を確認するまで再操作できません。" :
       state === "CREATING" || state === "STOPPING" ?
         "Shops側の結果を確認中です。重複操作を防ぐため再操作できません。" :

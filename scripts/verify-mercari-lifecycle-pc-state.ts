@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { pcTargetKey, pcRecordCurrent, pcStopJobHandoffEnabled,
+import { pcTargetKey, pcRecordCurrent, pcVisibilityControl,
   pinnedPublicProofForTarget,
   samePcTargetEpoch } from
   "../lib/listing/mercariBridge/lifecyclePcState";
@@ -28,9 +28,12 @@ assert.equal(pcRecordCurrent(oldBusy, { key: a, value: 2 }), false,
   "A's old busy state must not survive A to B to A");
 assert.equal(pcRecordCurrent({ key: a, epoch: 2 },
   { key: a, value: 2 }), true);
-assert.equal(pcStopJobHandoffEnabled(true, "UNREAD", false), true,
+assert.equal(pcVisibilityControl(true, "UNREAD", false).enabled, true,
   "first read-only confirmation job must be available without public proof");
-assert.equal(pcStopJobHandoffEnabled(true, "PUBLIC_VERIFIED", false), false,
+assert.equal(pcVisibilityControl(true, "PUBLIC_VERIFIED", false).enabled, false,
   "a STOP handoff needs the current target's public proof");
-assert.equal(pcStopJobHandoffEnabled(true, "PUBLIC_VERIFIED", true), true);
+assert.equal(pcVisibilityControl(true, "PUBLIC_VERIFIED", true).enabled, true);
+assert.deepEqual(pcVisibilityControl(true, "STOP_VERIFIED", false),
+  { action: "RELIST", enabled: false, label: "出品" },
+  "a verified stop changes the UI to 出品, but relist stays blocked");
 process.stdout.write("Mercari lifecycle PC target isolation verified\n");
