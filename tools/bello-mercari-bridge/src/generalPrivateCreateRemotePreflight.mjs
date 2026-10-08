@@ -136,6 +136,11 @@ export function inspectB005396KnownExistingPrivateTest(input, scan,
   now = Date.now()) {
   const pack = exactB005396ReviewedPack(input);
   const ordinary = inspectGeneralPrivateCreateRemoteScan(input, scan, now);
+  // The approved exception depends on this one existing product. Its
+  // disappearance or changed title must never become ordinary no-match.
+  if (ordinary.status === "NO_MATCH_IN_OBSERVED_UI")
+    return fixed("B005396_KNOWN_EXISTING_UNVERIFIED",
+      ordinary.onSaleRows, ordinary.draftRows);
   if (!pack || pack.title !== KNOWN_EXISTING_TITLE ||
       ordinary.status !== "REMOTE_DUPLICATE_POSSIBLE" ||
       ordinary.draftRows !== 12) return ordinary;

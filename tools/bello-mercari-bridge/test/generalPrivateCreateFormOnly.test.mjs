@@ -126,6 +126,29 @@ test("known existing exception needs exact evidence before the permanent claim",
   }
 });
 
+test("B005396 exception mode rejects ordinary no-match before claim or create", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bello-known-no-match-"));
+  try {
+    await enqueueGeneralPrivateCreate(root, knownPack());
+    const actions = [];
+    const result = await fillGeneralPrivateCreateFormOnly({ root,
+      inventoryId: knownInventoryId, allowKnownExistingPrivateTest: true }, {
+      remotePreflight: async () => ({ status: "NO_MATCH_IN_OBSERVED_UI",
+        allowFinalCreate: false }),
+      fetchImages: async () => { actions.push("image-read");
+        return [imageFile()]; },
+      claimOnce: async () => { actions.push("claim");
+        throw Error("claim must not occur"); },
+      openSession: async () => { actions.push("create-open");
+        throw Error("create must not open"); },
+    });
+    assert.deepEqual(result, { status: "BLOCKED",
+      diagnostic: "B005396_KNOWN_EXISTING_UNVERIFIED" });
+    assert.deepEqual(actions, []);
+    assert.equal((await listGeneralPrivateCreateJobs(root))[0].claimed, false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("remote status is read once and changing or throwing getters fail closed", async () => {
   await withQueue(async root => {
     let reads = 0;

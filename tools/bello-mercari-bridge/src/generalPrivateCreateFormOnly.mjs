@@ -17,7 +17,8 @@ const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const REMOTE_DIAGNOSTICS = new Set(["REMOTE_SCAN_UNVERIFIED",
   "REMOTE_SCAN_UNAVAILABLE", "REMOTE_SCAN_INCOMPLETE",
   "REMOTE_DUPLICATE_POSSIBLE", "REMOTE_DRAFT_AMBIGUOUS",
-  "LOCAL_CLAIM_UNKNOWN_NO_RETRY", "B005396_PRIVATE_TEST_EXCEPTION"]);
+  "LOCAL_CLAIM_UNKNOWN_NO_RETRY", "B005396_PRIVATE_TEST_EXCEPTION",
+  "B005396_KNOWN_EXISTING_UNVERIFIED"]);
 const FORM_DIAGNOSTICS = new Set(["PACK_UNVERIFIED",
   "BRAND_CONTROL_UNVERIFIED", "TARGET_CHECK_UNAVAILABLE",
   "IMAGE_PROOF_UNVERIFIED", "NAME_MISMATCH", "DESCRIPTION_MISMATCH",
@@ -99,9 +100,13 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
     remoteStatus === "B005396_PRIVATE_TEST_EXCEPTION" &&
     Boolean(exactB005396KnownExistingEvidence(pack, knownExistingEvidence)); }
   catch { return { status: "BLOCKED", diagnostic: "REMOTE_SCAN_UNVERIFIED" }; }
-  if ((remoteStatus !== "NO_MATCH_IN_OBSERVED_UI" &&
-      !knownExistingApproved) || allowFinalCreate !== false)
+  const remoteAccepted = allowKnownExistingPrivateTest === true ?
+    knownExistingApproved : remoteStatus === "NO_MATCH_IN_OBSERVED_UI";
+  if (!remoteAccepted || allowFinalCreate !== false)
     return { status: "BLOCKED", diagnostic:
+      allowKnownExistingPrivateTest === true &&
+        remoteStatus === "NO_MATCH_IN_OBSERVED_UI" ?
+        "B005396_KNOWN_EXISTING_UNVERIFIED" :
       REMOTE_DIAGNOSTICS.has(remoteStatus) ? remoteStatus :
         "REMOTE_SCAN_UNVERIFIED" };
   let files;

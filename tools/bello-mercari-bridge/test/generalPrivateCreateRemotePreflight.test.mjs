@@ -120,6 +120,31 @@ test("only the one approved sold-out public title is a private-test exception", 
     now + 120_001), null);
 });
 
+test("a changed existing title cannot become a B005396 no-match", () => {
+  const scan = knownScan();
+  scan.tabs[0].pages[0].rows[0].title = "HUKLA KASTOR title changed";
+  assert.equal(inspectGeneralPrivateCreateRemoteScan(knownPack(), scan, now).status,
+    "NO_MATCH_IN_OBSERVED_UI");
+  const result = inspectB005396KnownExistingPrivateTest(knownPack(), scan, now);
+  assert.equal(result.status, "B005396_KNOWN_EXISTING_UNVERIFIED");
+  assert.equal(result.allowFinalCreate, false);
+  assert.equal(Object.hasOwn(result, "evidence"), false);
+});
+
+test("an omitted existing ID cannot become a B005396 no-match", () => {
+  const scan = knownScan();
+  scan.tabs[0].pages[0] = page(1,
+    [saleRow("otherId", "Other sofa", "OTHER_1")], false,
+    "TAB_NAVIGATION", null);
+  scan.tabs[0].pages[1].settled.firstIdBefore = "otherId";
+  assert.equal(inspectGeneralPrivateCreateRemoteScan(knownPack(), scan, now).status,
+    "NO_MATCH_IN_OBSERVED_UI");
+  const result = inspectB005396KnownExistingPrivateTest(knownPack(), scan, now);
+  assert.equal(result.status, "B005396_KNOWN_EXISTING_UNVERIFIED");
+  assert.equal(result.allowFinalCreate, false);
+  assert.equal(Object.hasOwn(result, "evidence"), false);
+});
+
 test("known-title basis is recorded once and never overrides a local claim", async () => {
   const root = await mkdtemp(join(tmpdir(), "bello-known-title-"));
   try {
