@@ -147,6 +147,9 @@ test("BELLO source is re-read before the claim and form fill never saves", async
     assert.equal(result.allowSave, false);
     assert.equal(result.listingConfirmed, false);
     assert.equal(result.observedDraftId, "draft123");
+    assert.equal(result.documentTimeOrigin, 123456789);
+    assert.deepEqual(result.selectedImageSha256s, [imageFile().sha256]);
+    assert.equal(result.selectedAssets[0].pathHash, "a".repeat(64));
     assert.equal((await listGeneralPrivateCreateJobs(root))[0].outcome, "UNKNOWN");
     const again = await fillGeneralPrivateCreateFormOnly({ root, inventoryId });
     assert.equal(again.diagnostic, "LOCAL_CLAIM_UNKNOWN_NO_RETRY");

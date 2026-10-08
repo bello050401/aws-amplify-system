@@ -109,6 +109,7 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
   let observedDraftId = null;
   let pinnedDocumentTimeOrigin = null;
   let pinnedDraftId = null;
+  let selectedAssets = null;
   const checkpoint = async () => {
     const beforeUrl = session.page.url();
     const document = await session.page.evaluate(() => ({
@@ -160,6 +161,7 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
     await checkpoint();
     if (!Array.isArray(assets) || assets.length !== pack.imageRefs.length)
       throw Error("IMAGE_ASSET_UNVERIFIED");
+    selectedAssets = assets;
     diagnostic = "FORM_READY_NO_SAVE";
   } catch (error) {
     const code = error instanceof GeneralFormMismatch ?
@@ -172,5 +174,8 @@ export async function fillGeneralPrivateCreateFormOnly({ root, inventoryId,
   return { status: diagnostic === "FORM_READY_NO_SAVE" ?
     "FORM_READY_NO_SAVE" : "UNKNOWN", diagnostic,
     listingConfirmed: false, allowSave: false,
-    observedDraftId, retainedSession: session };
+    attemptId: claim.attemptId, observedDraftId,
+    documentTimeOrigin: selectedAssets ? pinnedDocumentTimeOrigin : null,
+    selectedImageSha256s: selectedAssets ? files.map(file => file.sha256) : null,
+    selectedAssets, retainedSession: session };
 }

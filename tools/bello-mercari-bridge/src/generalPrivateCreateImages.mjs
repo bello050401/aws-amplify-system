@@ -24,7 +24,7 @@ export function inspectGeneralPrivateCreateImage(bytes, storageKey, index) {
 }
 
 /** Fetches current BELLO images in memory before the one-time Shops claim. */
-export async function fetchCurrentGeneralPrivateCreateImages({ origin,
+export async function fetchCurrentGeneralPrivateCreateSnapshot({ origin,
   belloProfileDir, playwrightModulePath, pack }, {
     openContext = openBelloAdminContext,
   } = {}) {
@@ -47,6 +47,12 @@ export async function fetchCurrentGeneralPrivateCreateImages({ origin,
         payload.draftId !== exact.draftId || !Array.isArray(payload.images) ||
         payload.images.length !== exact.imageRefs.length)
       throw Error("GENERAL_IMAGE_PROOF_UNVERIFIED");
+    if (!(payload.sourcePriceYen === null &&
+          payload.sourceShippingMethod === null) &&
+        (!Number.isSafeInteger(payload.sourcePriceYen) ||
+          payload.sourcePriceYen < 300 ||
+          !["KAZAI", "SAGAWA"].includes(payload.sourceShippingMethod)))
+      throw Error("GENERAL_SOURCE_PROOF_UNVERIFIED");
     const files = [];
     for (const [index, image] of payload.images.entries()) {
       if (image?.index !== index ||
@@ -64,6 +70,11 @@ export async function fetchCurrentGeneralPrivateCreateImages({ origin,
       const bytes = await imageResponse.body();
       files.push(inspectGeneralPrivateCreateImage(bytes, image.storageKey, index));
     }
-    return files;
+    return { files, sourcePriceYen: payload.sourcePriceYen,
+      sourceShippingMethod: payload.sourceShippingMethod };
   } finally { await context.close().catch(() => {}); }
+}
+
+export async function fetchCurrentGeneralPrivateCreateImages(options, dependencies) {
+  return (await fetchCurrentGeneralPrivateCreateSnapshot(options, dependencies)).files;
 }
