@@ -103,6 +103,49 @@ test("read-only scan binder closes the session and blocks non-query writes", asy
   assert.equal(aborted, 1);
 });
 
+test("read-only scan binder admits only the pinned Self account query", async () => {
+  const query = `query Self {
+  self {
+    nickname
+    picture
+    accountId
+    customerId
+    mercariId
+    externalId
+    picture
+    roles
+    email
+    token {
+      expiresIn
+      audience
+    }
+  }
+}`;
+  let continued = 0;
+  let aborted = 0;
+  let guard;
+  const scan = bindB005396InitialScan({ root: "r", shopsProfileDir: "s",
+    playwrightModulePath: "p" }, {
+    openSession: async options => { guard = options.requestGuard;
+      return { context: { setOffline: async () => {}, close: async () => {} },
+        page: {} }; },
+    scan: async () => {
+      const request = body => ({ method: () => "POST",
+        url: () => "https://mercari-shops.com/graphql",
+        resourceType: () => "fetch",
+        postDataBuffer: () => Buffer.from(JSON.stringify(body)) });
+      await guard({ request: () => request({ query }),
+        continue: async () => { continued++; },
+        abort: async () => { aborted++; } });
+      return { tabs: [] };
+    },
+  });
+  await scan({ shopId, managementCode: pack.managementCode,
+    title: pack.title });
+  assert.equal(continued, 1);
+  assert.equal(aborted, 0);
+});
+
 test("dry runner reads but cannot enter form, image upload or save path", async () => {
   const root = await mkdtemp(join(tmpdir(), "bello-reviewed-dry-"));
   try {

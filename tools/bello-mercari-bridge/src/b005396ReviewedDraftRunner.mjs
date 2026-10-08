@@ -16,7 +16,8 @@ import { reconcileB005396PrivateDraftSaveUnknown } from
 import { bindB005396PrivateDraftReadback } from
   "./generalPrivateDraftReadback.mjs";
 import { openDraftMetadataReadSession } from "./session.mjs";
-import { isExplicitDraftReadQueryRequest } from
+import { isExplicitDraftReadQueryRequest,
+  isPinnedShopsSelfReadQueryRequest } from
   "./draftReadMetadataObserver.mjs";
 
 const INVENTORY = B005396_INVENTORY;
@@ -120,7 +121,9 @@ export function bindB005396InitialScan({ root, shopsProfileDir,
       try {
         const request = route.request();
         if (["GET", "HEAD", "OPTIONS"].includes(request.method()) ||
-            isExplicitDraftReadQueryRequest(request)) await route.continue();
+            isExplicitDraftReadQueryRequest(request) ||
+            isPinnedShopsSelfReadQueryRequest(request))
+          await route.continue();
         else { blocked = true; await route.abort(); }
       } catch {
         blocked = true;

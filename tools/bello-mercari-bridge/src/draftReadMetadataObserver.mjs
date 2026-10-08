@@ -1,8 +1,14 @@
+import { createHash } from "node:crypto";
+
 const GRAPHQL_URL = "https://mercari-shops.com/graphql";
 const ORIGIN = "https://mercari-shops.com";
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const OPERATION_NAME = /^[A-Za-z_]{1,80}$/;
 const MAX_BODY_BYTES = 512 * 1024;
+// Observed 2026-10-08: query Self reads account metadata with no variables.
+// This exact body is distinct from POST /auth/token/refresh, which stays blocked.
+const PINNED_SELF_QUERY_SHA256 =
+  "538102eb17c9893927784ac466e8e08ec010f7ec8db30bc908c51356761c0184";
 const MAX_SHAPE_KEYS = 24;
 const valueType = value => value === null ? "null" :
   Array.isArray(value) ? "array" : typeof value;
@@ -48,6 +54,25 @@ export function isExplicitDraftReadQueryRequest(request) {
     return request.method() === "POST" && request.url() === GRAPHQL_URL &&
       ["fetch", "xhr"].includes(request.resourceType()) &&
       queryOperation(request) === true;
+  } catch { return false; }
+}
+
+/** Only the observed variable-free account read used to load seller pages. */
+export function isPinnedShopsSelfReadQueryRequest(request) {
+  try {
+    if (request.method() !== "POST" || request.url() !== GRAPHQL_URL ||
+        !["fetch", "xhr"].includes(request.resourceType())) return false;
+    const bytes = request.postDataBuffer?.();
+    if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > 4096)
+      return false;
+    const body = JSON.parse(bytes.toString("utf8"));
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).length !== 1 || !Object.hasOwn(body, "query") ||
+        typeof body.query !== "string" || body.query.length !== 191 ||
+        !/^query Self \{/.test(body.query) ||
+        /\b(?:mutation|subscription)\b/i.test(body.query)) return false;
+    return createHash("sha256").update(body.query).digest("hex") ===
+      PINNED_SELF_QUERY_SHA256;
   } catch { return false; }
 }
 

@@ -2,12 +2,53 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { observeDraftReadMetadata,
-  classifyDraftReadRouteBlock } from "../src/draftReadMetadataObserver.mjs";
+  classifyDraftReadRouteBlock,
+  isPinnedShopsSelfReadQueryRequest } from
+  "../src/draftReadMetadataObserver.mjs";
 
 const shopId = "evkhihBFFNn5hukMS9s36H";
 const listUrl = `https://mercari-shops.com/seller/shops/${shopId}/products?tab=draft`;
 const detailUrl = `https://mercari-shops.com/seller/shops/${shopId}/products/create?productDraftId=draftABC`;
 const secret = "secret-cookie-token-value";
+const observedSelfQuery = `query Self {
+  self {
+    nickname
+    picture
+    accountId
+    customerId
+    mercariId
+    externalId
+    picture
+    roles
+    email
+    token {
+      expiresIn
+      audience
+    }
+  }
+}`;
+
+test("only the pinned variable-free Self query passes the seller-page read guard", () => {
+  const make = (body, method = "POST", url =
+    "https://mercari-shops.com/graphql", resourceType = "fetch") => ({
+    method: () => method, url: () => url, resourceType: () => resourceType,
+    postDataBuffer: () => Buffer.from(JSON.stringify(body)),
+  });
+  assert.equal(isPinnedShopsSelfReadQueryRequest(
+    make({ query: observedSelfQuery })), true);
+  for (const request of [
+    make({ query: observedSelfQuery, variables: {} }),
+    make({ query: observedSelfQuery, operationName: null }),
+    make({ query: observedSelfQuery.replace("nickname", "email") }),
+    make({ query: "mutation Self { save { id } }" }),
+    make({ query: observedSelfQuery }, "GET"),
+    make({ query: observedSelfQuery }, "POST",
+      "https://mercari-shops.com/auth/token/refresh"),
+    make({ query: observedSelfQuery }, "POST",
+      "https://mercari-shops.com/graphql", "document"),
+    make([{ query: observedSelfQuery }]),
+  ]) assert.equal(isPinnedShopsSelfReadQueryRequest(request), false);
+});
 
 function request(page, operationName = "DraftProductsPage", type = "query") {
   const payload = { operationName,
