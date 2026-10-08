@@ -41,6 +41,11 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const available = hasDraft && !hasShopsRecord && availableQuantity > 0;
   const reviewReady = b005396ReviewSelectionReady(selectionRef.current,
     availableQuantity);
+  const reviewedHandoffReady = !isB005396 || Boolean(reviewEvidence &&
+    shippingReviewed && reviewReady && pack?.priceYen === 99_999 &&
+    pack.quantity === 1 &&
+    pack.categoryId === selectionRef.current.categoryId &&
+    pack.brandId === selectionRef.current.brandId);
   const conditionLabel = pack ? LISTING_CONDITIONS.find(item =>
     item.code === pack.condition)?.label ?? pack.condition : "";
   const copyText = pack ? [
@@ -156,7 +161,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     } catch { setMessage("コピーできませんでした。下の内容を選択してコピーしてください。"); }
   }
   function downloadForPc() {
-    if (!pack || isB005396) return;
+    if (!pack || !reviewedHandoffReady) return;
     const url = URL.createObjectURL(new Blob([JSON.stringify(pack, null, 2) + "\n"],
       { type: "application/json" }));
     const link = document.createElement("a");
@@ -166,7 +171,9 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setMessage("PC用の準備ファイルを保存しました。メルカリShopsへの送信はしていません。");
+    setMessage(isB005396 ?
+      "PC用の準備ファイルを保存しました。PCアプリのB005396読み込み欄で選んでください。Shopsへの保存・公開は行っていません。" :
+      "PC用の準備ファイルを保存しました。メルカリShopsへの送信はしていません。");
   }
   async function handoffToPc(selectedPack: MercariManualListingPack,
     revision: number) {
@@ -196,11 +203,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     }
   }
   async function sendPreparationToPc() {
-    if (!pack || busy || !available ||
-        (isB005396 && (!reviewEvidence || !shippingReviewed ||
-          !reviewReady || pack.priceYen !== 99_999 || pack.quantity !== 1 ||
-          pack.categoryId !== selectionRef.current.categoryId ||
-          pack.brandId !== selectionRef.current.brandId))) return;
+    if (!pack || busy || !available || !reviewedHandoffReady) return;
     const revision = selectionRevision.current;
     setBusy(true);
     setMessage(null);
@@ -321,12 +324,14 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         className="mt-2 h-40 w-full rounded border border-gray-200 p-2 text-xs" />
       </>}
       {isB005396 && <button type="button" onClick={() => void sendPreparationToPc()}
-        disabled={busy || !available || !reviewEvidence || !shippingReviewed ||
-          !reviewReady || pack.priceYen !== 99_999 || pack.quantity !== 1 ||
-          pack.categoryId !== selectionRef.current.categoryId ||
-          pack.brandId !== selectionRef.current.brandId}
+        disabled={busy || !available || !reviewedHandoffReady}
         className="mt-3 rounded bg-blue-700 px-3 py-1 font-bold text-white disabled:opacity-40">
         {busy ? "PCへ送信中…" : "非公開下書きの準備をPCへ渡す"}
+      </button>}
+      {isB005396 && <button type="button" onClick={downloadForPc}
+        disabled={busy || !available || !reviewedHandoffReady}
+        className="ml-2 mt-3 rounded border border-gray-300 px-3 py-1 disabled:opacity-40">
+        PC用の準備ファイルを保存
       </button>}
     </div>}
   </section>;

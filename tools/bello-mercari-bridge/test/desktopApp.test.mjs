@@ -17,7 +17,7 @@ import { PINNED_READ_QUERY_SHA256, runPinnedDirectReadProbeOnce } from
 import { CREATE_TEST_TARGET, readCreateTestObservation } from
   "../src/createTestAttempt.mjs";
 import { claimGeneralPrivateCreateOnce,
-  readGeneralPrivateCreateClaim,
+  readGeneralPrivateCreate, readGeneralPrivateCreateClaim,
   writeGeneralPrivateCreateResultOnce } from
   "../src/generalPrivateCreateJob.mjs";
 
@@ -39,10 +39,9 @@ const post = (url, csrf, action, origin = url) => fetch(`${url}/action`, {
   body: new URLSearchParams({ csrf, action }),
 });
 
-test("B005396 PC draft action stays review-held and keeps BELLO listing state", async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-draft-hold-"));
+function b005396Pack() {
   const inventoryId = "2c53f36a-7a60-4e34-801d-8abc24f6cfc0";
-  const pack = { schemaVersion: 1,
+  return { schemaVersion: 1,
     kind: "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK",
     shopId: "evkhihBFFNn5hukMS9s36H", inventoryId,
     draftId: "12345678-1234-4234-8234-123456789abc",
@@ -59,6 +58,52 @@ test("B005396 PC draft action stays review-held and keeps BELLO listing state", 
       payer: "PAYER_TYPE_SELLER", origin: "jp11",
       duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" },
     status: "PREPARED_NO_SEND" };
+}
+
+test("B005396 file fallback imports only the exact reviewed pack without Shops action", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-file-import-"));
+  let runs = 0;
+  const app = await startDesktopApp({ ...config(), dataDir }, {
+    openBrowser: null, runGeneralDraft: async () => { runs++; } });
+  const fileImport = async (pack, csrf, origin = app.url) => {
+    const form = new FormData();
+    form.set("csrf", csrf);
+    form.set("job", new Blob([JSON.stringify(pack)],
+      { type: "application/json" }), "b005396.json");
+    return fetch(`${app.url}/general-private-create-import`, {
+      method: "POST", redirect: "manual", headers: { Origin: origin },
+      body: form });
+  };
+  try {
+    const csrf = await token(app.url);
+    const wrongOrigin = await fileImport(b005396Pack(), csrf,
+      "https://another.example.test");
+    assert.equal(wrongOrigin.status, 403);
+    const wrongCsrf = await fileImport(b005396Pack(), "0".repeat(csrf.length));
+    assert.equal(wrongCsrf.status, 303);
+    await assert.rejects(readGeneralPrivateCreate(join(dataDir, "Queue"),
+      b005396Pack().inventoryId), { code: "ENOENT" });
+    const wrongTarget = await fileImport({ ...b005396Pack(),
+      inventoryId: "dd273c1e-9b2a-4013-acc6-c445a481fab8" }, csrf);
+    assert.equal(wrongTarget.status, 303);
+    assert.match(await (await fetch(app.url)).text(),
+      /B005396の準備ファイルを確認できませんでした/);
+    const imported = await fileImport(b005396Pack(), csrf);
+    assert.equal(imported.status, 303);
+    const page = await (await fetch(app.url)).text();
+    assert.match(page, /B005396の準備内容をPCに読み込みました/);
+    assert.match(page, /BELLO_2C53F36A7A604E34801D8ABC24F6CFC0/);
+    assert.equal(await readGeneralPrivateCreateClaim(join(dataDir, "Queue"),
+      b005396Pack().inventoryId), null);
+    assert.equal(runs, 0);
+  } finally { await app.close();
+    await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test("B005396 PC draft action stays review-held and keeps BELLO listing state", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bello-desktop-draft-hold-"));
+  const pack = b005396Pack();
+  const inventoryId = pack.inventoryId;
   let runs = 0;
   const app = await startDesktopApp({ ...config(), dataDir }, {
     openBrowser: null,

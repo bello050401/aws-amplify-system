@@ -198,6 +198,7 @@ body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#222;margin:0;paddi
 ${message ? `<p role="status"><strong>${html(message)}</strong></p>` : ""}
 ${retainedGeneralDraftOpen ? `<section><h2>未解決の非公開下書き画面</h2><p>認証切れまたは結果不明のため、他のPCジョブを停止しています。Shops画面を確認し、このPC上で明示的に回収してください。元の保存操作は再実行できません。</p><form method="post" action="/action"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="hidden" name="action" value="recover-general-draft-session"><button>未解決画面を回収</button></form></section>` : ""}
 <section><h2>BELLO EC出品のPCジョブを読み込む</h2><p>BELLOから直接渡せなかった場合だけ、保存したJSONファイルを指定してください。読み込みではShopsを変更しません。</p><form method="post" action="/visibility-import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="file" name="job" accept=".json,application/json" required><button ${busy || retainedVisibilityOpen || retainedGeneralDraftOpen ? "disabled" : ""}>PCジョブを読み込む</button></form></section>
+<section><h2>B005396の出品準備ファイルを読み込む</h2><p>BELLO画面で配送条件を確認して保存したJSONファイルを選んでください。読み込みではShopsへの送信・保存・公開を行いません。</p><form method="post" action="/general-private-create-import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="${html(csrf)}"><input type="file" name="job" accept=".json,application/json" required><button ${busy || retainedVisibilityOpen || retainedGeneralDraftOpen ? "disabled" : ""}>B005396の準備ファイルを読み込む</button></form></section>
 ${visibilityJobs.length ? `<section><h2>BELLO EC出品からの公開状態ジョブ</h2><p>対象IDと現在の公開状態をShopsで読み直し、1回だけ画面操作します。結果が不明なら再操作しません。再出品はこのPCに同じ商品の停止完了記録がある場合だけ可能です。</p>${visibilityJobs.map(item => `<div><p><strong>${html(item.job.action === "STOP" ? "出品停止" : "再出品")}</strong> / ${html(item.job.target.skuCode)} / 商品ID <code>${html(item.job.target.remoteId)}</code> / ${html(item.attempted ? item.outcome ?? "UNKNOWN" : "未実行")}</p>${visibilityButton(item)}</div>`).join("")}</section>` : ""}
 ${visibilityJobs.some(item => item.job.action === "RELIST") ? `<p data-listing-countdown data-remaining-seconds="${html(listingWindow.remainingSeconds ?? "")}">${listingWindow.remainingSeconds === null ? "出品間隔の記録を確認できません。再出品はできません。" : listingWindow.remainingSeconds > 0 ? `次の出品まで ${html(listingWindow.remainingSeconds)} 秒` : "出品間隔: 実行可能"}</p><script>/* Display uses a monotonic clock; the PC runner checks the gate again. */
 (() => { const label = document.querySelector('[data-listing-countdown]'); const initial = Number(label.dataset.remainingSeconds); if (!Number.isInteger(initial) || initial < 0 || !label.dataset.remainingSeconds) return; const until = performance.now() + initial * 1000; const tick = () => { const seconds = Math.max(0, Math.ceil((until - performance.now()) / 1000)); label.textContent = seconds ? '次の出品まで ' + seconds + ' 秒' : '出品間隔: 実行可能'; document.querySelectorAll('[data-relist-button]').forEach(button => { if (button.dataset.baseDisabled === '0') button.disabled = seconds > 0; }); }; tick(); setInterval(tick, 1000); })();</script>` : ""}
@@ -558,6 +559,48 @@ export async function startDesktopApp(config, {
           code: unknown ? "UNKNOWN_NO_RETRY" : "PREPARATION_REJECTED" }));
       }
       return;
+    }
+    if (request.method === "POST" &&
+        request.url === "/general-private-create-import") {
+      if (options.createTestObservationEnabled ||
+          persistedGeneralDraftHold || retainedGeneralDraftSession ||
+          request.headers.origin !== localOrigin ||
+          !request.headers["content-type"]?.startsWith("multipart/form-data;") ||
+          busy || retainedVisibilitySession) {
+        send(response, 403, "Forbidden", "text/plain; charset=utf-8"); return;
+      }
+      try {
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of request) {
+          size += chunk.length;
+          if (size > 70000) throw Error("File too large");
+          chunks.push(chunk);
+        }
+        const upload = new Request(localOrigin + request.url, {
+          method: "POST", headers: { "Content-Type": request.headers["content-type"] },
+          body: Buffer.concat(chunks),
+        });
+        const form = await upload.formData();
+        const supplied = Buffer.from(String(form.get("csrf") ?? ""), "utf8");
+        const actual = Buffer.from(csrf, "utf8");
+        const file = form.get("job");
+        if (supplied.length !== actual.length || !timingSafeEqual(supplied, actual) ||
+            [...form.keys()].sort().join() !== "csrf,job" ||
+            typeof file?.arrayBuffer !== "function" ||
+            file.size < 1 || file.size > 65536)
+          throw Error("Invalid import");
+        const pack = JSON.parse(new TextDecoder("utf-8", { fatal: true })
+          .decode(await file.arrayBuffer()));
+        if (pack?.inventoryId !== B005396_INVENTORY)
+          throw Error("Wrong inventory");
+        await enqueueGeneralPrivateCreate(options.root, pack);
+        message = "B005396の準備内容をPCに読み込みました。Shopsへの送信・保存・公開は行っていません。";
+      } catch {
+        message = "B005396の準備ファイルを確認できませんでした。Shopsへの送信・保存・公開は行っていません。";
+      }
+      response.writeHead(303, { Location: "/", "Cache-Control": "no-store" });
+      response.end(); return;
     }
     if (request.method === "POST" && request.url === "/visibility-import") {
       if (options.createTestObservationEnabled ||
