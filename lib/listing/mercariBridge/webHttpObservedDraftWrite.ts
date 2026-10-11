@@ -54,7 +54,9 @@ export type ObservedDraftWritePorts = {
   repository: Repository;
   /** Fresh BELLO InventoryItem read by UUID; sku is the current source code. */
   readCurrentInventory: (inventoryId: string) => Promise<{
-    id: string; sku: string } | null>;
+    id: string; sku: string; quantity: number;
+    categoryName: string | null; market: string | null;
+    saleEndDate: string | null } | null>;
   hasExistingBinding: (job: WebHttpDraftJob) => Promise<boolean | null>;
   /** Must use the same authenticated session and exhaust all pages. */
   duplicatePreflight: DuplicatePreflight;
@@ -91,6 +93,32 @@ const nonempty = (value: unknown): value is string =>
 const stringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.length > 0 && value.every(nonempty);
 const validClock = (value: number) => Number.isSafeInteger(value) && value >= 0;
+const excludedCategories = new Set(["補修待ち", "発送完了", "事務所備品",
+  "コーディネート用", "無償提供", "破棄", "売り切れ"]);
+const normalizedCategory = (value: string) =>
+  value.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+
+function validCurrentInventory(job: WebHttpDraftJob, frozenCode: string | null,
+  minimumQuantity: number,
+  inventory: Awaited<ReturnType<ObservedDraftWritePorts["readCurrentInventory"]>>)
+  : boolean {
+  return Boolean(inventory && typeof inventory.id === "string" &&
+    inventory.id.toLowerCase() === job.inventoryId.toLowerCase() &&
+    typeof inventory.sku === "string" && frozenCode &&
+    inventory.sku === frozenCode && inventory.sku !== "B005396" &&
+    job.managementCode ===
+      `BELLO_${inventory.id.replace(/-/g, "").toUpperCase()}` &&
+    Number.isSafeInteger(minimumQuantity) && minimumQuantity > 0 &&
+    Number.isSafeInteger(inventory.quantity) &&
+    inventory.quantity >= minimumQuantity &&
+    nonempty(inventory.categoryName) &&
+    !excludedCategories.has(normalizedCategory(inventory.categoryName)) &&
+    inventory.saleEndDate === null &&
+    (inventory.market === null ||
+      typeof inventory.market === "string" &&
+        Boolean(inventory.market.trim()) &&
+        !/メルカリ|mercari/i.test(inventory.market)));
+}
 
 function frozenSourceCode(job: WebHttpDraftJob): string | null {
   try {
@@ -227,8 +255,9 @@ async function postGraphql(ports: ObservedDraftWritePorts, clock: () => number,
 }
 
 /**
- * Prepared but intentionally unwired to routes/actions. An asset verifier,
- * input mapper and duplicate reader do not yet exist in production.
+ * Prepared but intentionally unwired to routes/actions. The input mapper and
+ * stored update bridge have only injected test ports; asset, target, auth,
+ * contract and complete duplicate readers do not exist in production.
  */
 export async function executeObservedDraftWriteOnce(
   job: WebHttpDraftJob, reservation: WebHttpSendReservationResult,
@@ -264,16 +293,14 @@ export async function executeObservedDraftWriteOnce(
   } catch { return result("RESERVATION_UNVERIFIED_NO_SEND"); }
   if (!validStoredClaim(job, reservation, attempt, slot, now))
     return result("RESERVATION_UNVERIFIED_NO_SEND");
-  let inventory: { id: string; sku: string } | null;
+  let inventory: Awaited<ReturnType<ObservedDraftWritePorts["readCurrentInventory"]>>;
   try { inventory = await ports.readCurrentInventory(job.inventoryId); }
   catch { inventory = null; }
   const frozenCode = frozenSourceCode(job);
-  if (!inventory || typeof inventory.id !== "string" ||
-      inventory.id.toLowerCase() !== job.inventoryId.toLowerCase() ||
-      typeof inventory.sku !== "string" || !frozenCode ||
-      inventory.sku !== frozenCode || inventory.sku === "B005396" ||
-      job.managementCode !==
-        `BELLO_${inventory.id.replace(/-/g, "").toUpperCase()}`)
+  let minimumQuantity: number;
+  try { minimumQuantity = JSON.parse(job.snapshotJson).pack.quantity; }
+  catch { return result("INVALID_JOB_NO_SEND"); }
+  if (!validCurrentInventory(job, frozenCode, minimumQuantity, inventory))
     return result("INVENTORY_MISMATCH_NO_SEND");
   if (!assetProof || assetProof.status !== "VERIFIED_SAME_IMAGE_BYTES" ||
       assetProof.shopId !== job.shopId ||
@@ -320,6 +347,12 @@ export async function executeObservedDraftWriteOnce(
           duplicate.status !== "TARGET_ONLY_COMPLETE" ||
           duplicate.draftId !== mutation.input.id))
     return result("DUPLICATE_OR_READ_UNVERIFIED_NO_SEND");
+  // The remote scan can take time. Reject stock/sale/category changes just
+  // before claiming the one allowed mutation attempt.
+  try { inventory = await ports.readCurrentInventory(job.inventoryId); }
+  catch { inventory = null; }
+  if (!validCurrentInventory(job, frozenCode, minimumQuantity, inventory))
+    return result("INVENTORY_MISMATCH_NO_SEND");
   try {
     attempt = await ports.repository.getAttempt(job.requestId);
     slot = await ports.repository.getSlot(job.shopId);
