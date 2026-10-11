@@ -42,6 +42,7 @@ export type VerifiedDraftUpdateSession = {
   /** These three adapters must use this one authenticated session. */
   fetchPort: typeof fetch;
   duplicatePreflight: ObservedDraftInputMapperPorts["readRemoteDuplicate"];
+  reverifyAuth: ObservedDraftWritePorts["verifyAuthFresh"];
   readback: WebHttpDraftReadback;
 };
 export type StoredDraftUpdatePorts = {
@@ -143,6 +144,7 @@ export async function updateStoredWebHttpDraftOnce(requestId: string,
       /[\r\n\0]/.test(session.cookieHeader) ||
       typeof session.fetchPort !== "function" ||
       typeof session.duplicatePreflight !== "function" ||
+      typeof session.reverifyAuth !== "function" ||
       !session.readback ||
       typeof session.readback.verifyTargetShop !== "function" ||
       typeof session.readback.listDraftCandidates !== "function")
@@ -157,6 +159,19 @@ export async function updateStoredWebHttpDraftOnce(requestId: string,
   if (!mapped.ok || mapped.mutation.kind !== "UPDATE")
     return result("SOURCE_OR_TARGET_UNVERIFIED_NO_SEND",
       mapped.ok ? "NOT_UPDATE" : mapped.code);
+  // The full remote scan may outlive the initial 30-second auth proof.
+  let refreshed: Awaited<ReturnType<VerifiedDraftUpdateSession["reverifyAuth"]>>;
+  try { refreshed = await session.reverifyAuth(); }
+  catch { return result("AUTH_UNVERIFIED_NO_SEND"); }
+  const reserveNow = clock();
+  if (refreshed?.status !== "VALID" ||
+      typeof refreshed.verifiedAtMs !== "number" ||
+      !validClock(refreshed.verifiedAtMs) ||
+      !validClock(reserveNow) ||
+      refreshed.verifiedAtMs > reserveNow ||
+      reserveNow - refreshed.verifiedAtMs > 30_000 ||
+      session.cookieExpiresAtMs <= reserveNow + 4_000)
+    return result("AUTH_UNVERIFIED_NO_SEND");
   const reservation = await reserveWebHttpSendStart(job, {
     auth: "VALID", userReauthenticatedByHuman: true,
     writeContractVerified: true,
@@ -181,6 +196,7 @@ export async function updateStoredWebHttpDraftOnce(requestId: string,
         return binding === false && channel === false ? false : true;
       },
       duplicatePreflight: session.duplicatePreflight,
+      verifyAuthFresh: session.reverifyAuth,
       readback: session.readback,
     }, clock); }
   catch {

@@ -60,6 +60,10 @@ export type ObservedDraftWritePorts = {
   hasExistingBinding: (job: WebHttpDraftJob) => Promise<boolean | null>;
   /** Must use the same authenticated session and exhaust all pages. */
   duplicatePreflight: DuplicatePreflight;
+  /** Read-only proof from the same session, checked after the duplicate scan. */
+  verifyAuthFresh: () => Promise<{
+    status: "VALID" | "AUTH_REQUIRED" | "UNKNOWN";
+    verifiedAtMs: number | null }>;
   /** Read-only recovery; absence never permits another create. */
   readback: WebHttpDraftReadback;
 };
@@ -67,7 +71,8 @@ export type ObservedDraftWriteResult = {
   status: "INVALID_JOB_NO_SEND" | "RESERVATION_UNVERIFIED_NO_SEND" |
     "INVENTORY_MISMATCH_NO_SEND" |
     "ASSET_UNVERIFIED_NO_SEND" | "MAPPING_UNVERIFIED_NO_SEND" |
-    "AUTH_REQUIRED_NO_SEND" | "SHOP_UNVERIFIED_NO_SEND" |
+    "AUTH_REQUIRED_NO_SEND" | "AUTH_UNVERIFIED_NO_SEND" |
+    "SHOP_UNVERIFIED_NO_SEND" |
     "DUPLICATE_OR_READ_UNVERIFIED_NO_SEND" |
     "CREATE_ACKNOWLEDGED_NEEDS_UPDATE" |
     "UPDATE_ACKNOWLEDGED_NEEDS_READBACK" |
@@ -276,7 +281,8 @@ export async function executeObservedDraftWriteOnce(
       typeof ports.fetchPort !== "function" ||
       typeof ports.readCurrentInventory !== "function" ||
       typeof ports.hasExistingBinding !== "function" ||
-      typeof ports.duplicatePreflight !== "function" || !ports.readback ||
+      typeof ports.duplicatePreflight !== "function" ||
+      typeof ports.verifyAuthFresh !== "function" || !ports.readback ||
       typeof ports.cookieHeader !== "string" ||
       ports.cookieHeader.length < 1 || ports.cookieHeader.length > 32_768 ||
       /[\r\n\0]/.test(ports.cookieHeader) ||
@@ -353,6 +359,20 @@ export async function executeObservedDraftWriteOnce(
   catch { inventory = null; }
   if (!validCurrentInventory(job, frozenCode, minimumQuantity, inventory))
     return result("INVENTORY_MISMATCH_NO_SEND");
+  let auth: Awaited<ReturnType<ObservedDraftWritePorts["verifyAuthFresh"]>>;
+  try { auth = await ports.verifyAuthFresh(); }
+  catch { return result("AUTH_UNVERIFIED_NO_SEND"); }
+  if (auth?.status === "AUTH_REQUIRED")
+    return result("AUTH_REQUIRED_NO_SEND");
+  const authNow = clock();
+  if (auth?.status !== "VALID" || !validClock(authNow) ||
+      typeof auth.verifiedAtMs !== "number" ||
+      !validClock(auth.verifiedAtMs) ||
+      auth.verifiedAtMs > authNow ||
+      authNow - auth.verifiedAtMs > 30_000 ||
+      ports.cookieExpiresAtMs === null ||
+      ports.cookieExpiresAtMs <= authNow)
+    return result("AUTH_UNVERIFIED_NO_SEND");
   try {
     attempt = await ports.repository.getAttempt(job.requestId);
     slot = await ports.repository.getSlot(job.shopId);
@@ -370,6 +390,24 @@ export async function executeObservedDraftWriteOnce(
       reservation.attemptId, new Date(claimedAt).toISOString());
   } catch { return result("RESERVATION_UNVERIFIED_NO_SEND"); }
   if (!webHttpSendPermitFresh(reservation, clock())) {
+    const readback = await reconcileReservedWebHttpDraft(job,
+      ports.repository, ports.readback);
+    return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
+  }
+  // The claim is irreversible. Recheck the same session immediately before
+  // the mutation, including time spent by the claim and repository reads.
+  let sendAuth: Awaited<ReturnType<ObservedDraftWritePorts["verifyAuthFresh"]>>;
+  try { sendAuth = await ports.verifyAuthFresh(); }
+  catch { sendAuth = { status: "UNKNOWN", verifiedAtMs: null }; }
+  const sendNow = clock();
+  if (sendAuth?.status !== "VALID" ||
+      typeof sendAuth.verifiedAtMs !== "number" ||
+      !validClock(sendAuth.verifiedAtMs) || !validClock(sendNow) ||
+      sendAuth.verifiedAtMs > sendNow ||
+      sendNow - sendAuth.verifiedAtMs > 30_000 ||
+      ports.cookieExpiresAtMs === null ||
+      ports.cookieExpiresAtMs <= sendNow ||
+      !webHttpSendPermitFresh(reservation, sendNow)) {
     const readback = await reconcileReservedWebHttpDraft(job,
       ports.repository, ports.readback);
     return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
