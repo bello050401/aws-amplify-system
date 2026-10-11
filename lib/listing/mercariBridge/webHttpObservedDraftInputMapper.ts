@@ -122,7 +122,8 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       inventory.sku.toUpperCase() === "B005396" ||
       job.managementCode !==
         `BELLO_${inventory.id.replace(/-/g, "").toUpperCase()}` ||
-      !Number.isSafeInteger(inventory.quantity))
+      !Number.isSafeInteger(inventory.quantity) ||
+      inventory.market !== null && !complete(inventory.market))
     return fail("CURRENT_SOURCE_UNVERIFIED");
   if (!complete(inventory.categoryName) ||
       EXCLUDED_CATEGORIES.has(normalizeCategory(inventory.categoryName)) ||
@@ -177,7 +178,10 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
   if (!image || image.status !== "VERIFIED_SAME_IMAGE_BYTES" ||
       image.shopId !== job.shopId || image.inventoryId !== job.inventoryId ||
       image.snapshotFingerprint !== job.snapshotFingerprint ||
-      image.imageRefCount !== 1 || !REMOTE_ID.test(image.remoteAssetId) ||
+      image.imageRefCount !== 1 ||
+      typeof image.remoteAssetId !== "string" ||
+      !REMOTE_ID.test(image.remoteAssetId) ||
+      typeof image.sourceImageSha256 !== "string" ||
       !SHA256.test(image.sourceImageSha256)) return fail("IMAGE_UNVERIFIED");
   let currentImageHash: string | null;
   try { currentImageHash = await ports.readCurrentImageSha256(pack.imageRefs[0]); }
@@ -189,6 +193,7 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       target.status !== "VERIFIED_SAME_JOB_DRAFT" ||
       target.shopId !== job.shopId || target.inventoryId !== job.inventoryId ||
       target.snapshotFingerprint !== job.snapshotFingerprint ||
+      typeof target.draftId !== "string" ||
       !REMOTE_ID.test(target.draftId))) return fail("TARGET_UNVERIFIED");
   let duplicate: Duplicate;
   try { duplicate = await ports.readRemoteDuplicate(job,
