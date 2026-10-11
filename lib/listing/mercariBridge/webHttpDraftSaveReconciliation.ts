@@ -100,8 +100,10 @@ export async function reconcileReservedWebHttpDraft(
   if (sameSku.length > 1) return result("MULTIPLE_DRAFTS_NO_RESEND");
   if (sameSku.length === 0) return result("NO_MATCH_NO_RESEND");
   const candidate = sameSku[0];
-  if (!/^[A-Za-z0-9]{1,64}$/.test(candidate.id) ||
-      candidate.name !== pack.title ||
+  if (typeof candidate.id !== "string" ||
+      !/^[A-Za-z0-9]{1,64}$/.test(candidate.id))
+    return result("READ_UNVERIFIED_NO_RESEND");
+  if (candidate.name !== pack.title ||
       candidate.description !== pack.description ||
       candidate.price !== pack.priceYen ||
       candidate.quantity !== pack.quantity ||

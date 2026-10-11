@@ -17,4 +17,19 @@
 
 `webHttpDraftSaveReconciliation.ts` は既存の永続予約を確認し、同じサーバー認証状態で対象店舗を照合してから、将来の下書き一覧読取アダプターが全ページを読み切った結果だけを比較する。対象SKUが1件でも、名称・説明・価格・数量・画像件数まで合致した下書きを「観測した」と返すだけで、当該予約による作成成功とは認定しない。0件、複数件、認証切れ、店舗不一致、一覧未完了、結果不明ではすべて再送不可とする。新規作成・更新・公開の許可はどの結果でも返さない。
 
+独立レビューで、読取候補IDの文字列化により `undefined` 等を正規表現が受け入れる問題を修正した。IDの型と形式が不正な場合は読取未確認で停止する。
+
 画像multipart本文、完全な下書き作成/更新入力、全ページ読取アダプター、停止操作の契約はまだない。従って予約から実際の下書き保存へのHTTP書込器は接続していない。BASEと既存PC操作経路は変更していない。
+
+## 指定された2つのHARの再走査
+
+Desktop `mercari-shops.com.har`（593 entry）とDownloads `mercari-shops.com.har`（536 entry）だけを再走査した。前者はGraphQL 11件、商品操作に関係するmutation 0件。後者はGraphQL 104件で、`CreateProductDraft` 2件、`UpdateProductDraft` 7件、`GetProductDraft` 3件、`productDrafts` 2件、multipartの `createImageAsset` 応答1件を確認した。後者のmutation名は `CreateProductDraft`、`UpdateProductDraft`、商品操作ではない `LaplaceLog` のみ。両HARに停止・公開切替を示すoperation名や該当RESTパスは見つからなかった。これは**この2ファイルの範囲内**の不在である。
+
+| Downloads HARの順序 | 送信先と入力形（値は記録しない） | 応答形 |
+| --- | --- | --- |
+| entry 101→107 | `POST https://mercari-shops.com/graphql`、JSON `CreateProductDraft`。変数宣言は `$input: CreateProductDraftInput!`、`$idempotencyKeySeed: Float!`。`input` は `name/shopId/description:string`、`price/assetIds/categoryIds/brandIds/condition/shippingFromStateId/shippingDurationType/shippingMethodType:null`、`shippingPayerType/countryRestrictionTemplateId/channelListingScope:string`、`isRefurbished:boolean`、`variants:[{name/skuCode/janCode:string, quantity:number, catalogSkuId/maxQuantityPerOrder:null}]`。seedはnumber。 | 両方HTTP 200、GraphQLエラーなし、`data.createProductDraft.id:string` あり。別IDであることは既存証拠に記録済み。 |
+| entry 108→124→142→149→154→247 | `GetProductDraft(id:String!)` で最初の下書きを読み、その後 `UpdateProductDraft(input:UpdateProductDraftInput!)` を段階的に送信。更新inputは既存下書き `id:string` と上記商品項目を持ち、カテゴリ・配送・状態・価格が段階的に `null` から配列/string/numberへ変わる。 | `data.productDraft.id:string` と `data.updateProductDraft.id:string` あり。 |
+| entry 357→359→368 | `POST /graphql` multipartの要求本文はHARにない。HTTP 200応答 `data.createImageAsset.id:string` あり。直後のJSON `UpdateProductDraft` は `assetIds:[string]` を含む。後者のvariantsには `catalogSkuId:string` と `attributes:array` もある。 | 更新応答に `data.updateProductDraft.id:string` あり。画像本体・multipart part・asset IDの値は記録しない。 |
+| entry 386→470 | JSON `productDrafts(shopId:String!, cursor:String, first:Int)`。変数は `shopId:string`、`first:number`。 | 一覧応答。既存証拠では対象の2下書きが別行。 |
+
+この順序は**2回の作成と複数回の自動更新**を示し、一回の完全な商品保存要求を示さない。特に画像multipart本文と停止契約は依然として不足する。停止を確認するには、別の適切な公開済みテスト商品で通常Chromeのネットワーク記録を開始し、対象IDを確認したうえで「非公開で保存する」を**1回だけ**操作してHARをエクスポートする必要がある。この追加観測は本作業では実行していない。画像multipartの欠落を補うには、画像1枚を伴う下書き保存を通常画面で一回観測し、multipart要求本文が記録されることを確認する別試行が要る。既存B005396への再送はしない。
