@@ -13,8 +13,8 @@ const EXACT_HOSTS = new Set([
   "www.mercari.jp",
 ]);
 const SAFE_PATH_PARTS = new Set([
-  "api", "auth", "callback", "challenge", "confirm", "graphql",
-  "login", "logout", "oauth", "products", "refresh", "seller",
+  "api", "auth", "authorize", "callback", "challenge", "confirm",
+  "graphql", "idp", "login", "logout", "oauth", "products", "refresh", "seller",
   "session", "shops", "signin", "signup", "sms", "token", "v1",
   "v2", "verification", "verify",
 ]);
@@ -64,6 +64,12 @@ function safeHeaderNames(headers, allowed) {
   return [...new Set(headers.map(header =>
     typeof header?.name === "string" ? header.name.toLowerCase() : "")
     .filter(name => allowed.has(name)))].sort();
+}
+
+function hasHeader(headers, predicate) {
+  return Array.isArray(headers) && headers.some(header =>
+    typeof header?.name === "string" &&
+    predicate(header.name.toLowerCase()));
 }
 
 function safeMediaType(headers, fallback) {
@@ -128,6 +134,18 @@ export function summarizeMercariHar(har) {
         SAFE_REQUEST_HEADERS),
       responseHeaderNames: safeHeaderNames(response?.headers,
         SAFE_RESPONSE_HEADERS),
+      cookieHeaderPresent: hasHeader(request?.headers,
+        name => name === "cookie"),
+      authorizationHeaderPresent: hasHeader(request?.headers,
+        name => name === "authorization"),
+      csrfHeaderPresent: hasHeader(request?.headers,
+        name => name.includes("csrf") || name.includes("xsrf")),
+      setCookieHeaderPresent: hasHeader(response?.headers,
+        name => name === "set-cookie"),
+      requestCookieCount: Array.isArray(request?.cookies) ?
+        request.cookies.length : null,
+      responseCookieCount: Array.isArray(response?.cookies) ?
+        response.cookies.length : null,
       graphqlOperationName: path === "/graphql" ?
         safeOperationName(request) : null,
     });
