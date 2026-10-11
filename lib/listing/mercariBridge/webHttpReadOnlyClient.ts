@@ -3,6 +3,8 @@ import "server-only";
 import { WEB_HTTP_SHOP_ID } from "./webHttpDraftJob.ts";
 import { B005396_CORRECT_DRAFT_ID, B005396_EMPTY_DRAFT_ID } from
   "./webHttpObservedDraftRead.ts";
+import type { WebHttpDraftReadback,
+  WebHttpDraftCandidate } from "./webHttpDraftSaveReconciliation.ts";
 
 const ORIGIN = "https://mercari-shops.com";
 const IDP_URL = `${ORIGIN}/auth/signin/idp`;
@@ -12,6 +14,64 @@ const SHOPS_QUERY = `query OwnShops { ownShops { id } }`;
 const DRAFT_QUERY = `query GetProductDraft($id: String!) {
   productDraft(id: $id) { id }
 }`;
+// Exact list/detail selections observed in the existing Shops HAR.
+const DRAFT_LIST_QUERY = `query productDrafts($shopId: String!, $cursor: String, $first: Int) {
+  productDrafts(after: $cursor, first: $first, shopId: $shopId) {
+    pageInfo { ...PageInfo __typename }
+    edges { node { ...ProductDraftListItem __typename } __typename }
+    __typename
+  }
+}
+fragment PageInfo on PageInfo { hasNextPage endCursor __typename }
+fragment ProductDraftListItem on ProductDraft {
+  id name description price
+  shippingPayerType { id name __typename }
+  thumbnails { id imageUrl(options: {presets: [Small]}) __typename }
+  updatedAt channelListingScope __typename
+}`;
+const DRAFT_DETAIL_QUERY = `query GetProductDraft($id: String!) {
+  productDraft(id: $id) {
+    ... on ProductDraft {
+      id name description price
+      condition { id name __typename }
+      brands { id name __typename }
+      categories { category { id name mercariCategoryId __typename } __typename }
+      thumbnails { id imageUrl(options: {presets: [Large]}) contentType __typename }
+      variants {
+        name quantity janCode skuCode catalogSkuId
+        maxQuantityPerOrderConfig { configuredValue actualValue __typename }
+        attributes {
+          id title required type flags
+          options { id title legacyId __typename }
+          inputValue __typename
+        }
+        __typename
+      }
+      shippingMethodType { id name __typename }
+      shippingPayerType { id name __typename }
+      shippingDurationType { id name __typename }
+      shippingFromState { id name __typename }
+      shippingConfiguration { id __typename }
+      mercariBinForBusinessSetting {
+        id
+        mercaribinForBusinessCoolType { id name __typename }
+        mercaribinForBusinessShippingFeeType { id name __typename }
+        __typename
+      }
+      preOrder {
+        releaseDate
+        acceptancePeriod { from to __typename }
+        cancellationDeadline deliveryTiming __typename
+      }
+      isRefurbished channelListingScope __typename
+    }
+    countryRestrictionTemplateId __typename
+  }
+}`;
+const MAX_DRAFT_PAGES = 100;
+const MAX_DRAFT_IDS = 5_000;
+const MAX_DRAFT_CANDIDATES = 10_000;
+const DRAFT_ID = /^[A-Za-z0-9]{1,64}$/;
 
 type FetchPort = typeof fetch;
 type Status = "READY" | "AUTH_REQUIRED" | "COOKIE_UNVERIFIED" |
@@ -32,6 +92,9 @@ export type WebHttpReadOnlyClient = {
     status: ReadStatus; correctDraftMatched: boolean;
     emptyDraftMatched: boolean;
   }>;
+  listDraftCandidates: WebHttpDraftReadback["listDraftCandidates"];
+  /** Same session, adapted to the reconciliation result vocabulary. */
+  reconciliationReadback: WebHttpDraftReadback;
 };
 export type WebHttpOpenResult = { status: Status;
   client: WebHttpReadOnlyClient | null;
@@ -159,7 +222,7 @@ export async function openMercariWebHttpReadOnly(
 
   let shopVerified = false;
   const post = async (operationName: string, query: string,
-    variables?: Record<string, string>): Promise<GraphqlResult> => {
+    variables?: Record<string, string | number>): Promise<GraphqlResult> => {
     const current = clock();
     if (!Number.isSafeInteger(current) || cookies.some(cookie =>
         cookie.expiresAt !== null && cookie.expiresAt <= current)) return null;
@@ -172,13 +235,22 @@ export async function openMercariWebHttpReadOnly(
             `${cookie.name}=${cookie.value}`).join("; ") },
         body: JSON.stringify({ operationName, query, ...(variables ?
           { variables } : {}) }) });
-      if (result.redirected || result.status >= 300 && result.status < 400)
+      const completed = clock();
+      if (!Number.isSafeInteger(completed) || completed < current ||
+          cookies.some(cookie => cookie.expiresAt !== null &&
+            cookie.expiresAt <= completed) ||
+          result.redirected || result.status >= 300 && result.status < 400)
         return null;
       // Authentication failures often have empty or HTML bodies. Keep their
       // status before attempting GraphQL JSON parsing.
       if (result.status === 401 || result.status === 403)
         return { status: result.status, body: null };
-      return { status: result.status, body: await result.json() };
+      const responseBody: unknown = await result.json();
+      const parsed = clock();
+      if (!Number.isSafeInteger(parsed) || parsed < completed ||
+          cookies.some(cookie => cookie.expiresAt !== null &&
+            cookie.expiresAt <= parsed)) return null;
+      return { status: result.status, body: responseBody };
     } catch { return null; }
   };
   const selfResult = await post("Self", SELF_QUERY);
@@ -187,7 +259,7 @@ export async function openMercariWebHttpReadOnly(
   const self = validGraphql(selfResult);
   if (!self || !object(self.self)) return failed("REMOTE_UNVERIFIED");
 
-  const client: WebHttpReadOnlyClient = {
+  const core: Omit<WebHttpReadOnlyClient, "reconciliationReadback"> = {
     verifyTargetShop: async () => {
       shopVerified = false;
       const result = await post("OwnShops", SHOPS_QUERY);
@@ -220,8 +292,89 @@ export async function openMercariWebHttpReadOnly(
       }
       return result("VERIFIED", true, true);
     },
+    listDraftCandidates: async shopId => {
+      const unknown = (status: "UNKNOWN" | "AUTH_REQUIRED" = "UNKNOWN") =>
+        ({ status, complete: false, candidates: [] as WebHttpDraftCandidate[] });
+      if (!shopVerified || shopId !== WEB_HTTP_SHOP_ID)
+        return unknown();
+      const ids: string[] = [];
+      const seenIds = new Set<string>();
+      const seenCursors = new Set<string>();
+      let cursor: string | null = null;
+      let complete = false;
+      for (let page = 0; page < MAX_DRAFT_PAGES; page++) {
+        const variables: Record<string, string | number> =
+          { shopId, first: 50 };
+        if (cursor !== null) variables.cursor = cursor;
+        const read = await post("productDrafts", DRAFT_LIST_QUERY, variables);
+        if (read?.status === 401 || read?.status === 403)
+          return unknown("AUTH_REQUIRED");
+        const data = validGraphql(read);
+        const connection = data?.productDrafts;
+        if (!object(connection) || !object(connection.pageInfo) ||
+            typeof connection.pageInfo.hasNextPage !== "boolean" ||
+            typeof connection.pageInfo.endCursor !== "string" ||
+            !Array.isArray(connection.edges)) return unknown();
+        for (const edge of connection.edges) {
+          const node = object(edge) ? edge.node : null;
+          if (!object(node) || typeof node.id !== "string" ||
+              !DRAFT_ID.test(node.id) || seenIds.has(node.id) ||
+              ids.length >= MAX_DRAFT_IDS) return unknown();
+          seenIds.add(node.id);
+          ids.push(node.id);
+        }
+        if (!connection.pageInfo.hasNextPage) {
+          complete = true;
+          break;
+        }
+        const next = connection.pageInfo.endCursor;
+        if (!next || seenCursors.has(next) ||
+            connection.edges.length === 0) return unknown();
+        seenCursors.add(next);
+        cursor = next;
+      }
+      if (!complete) return unknown();
+      const candidates: WebHttpDraftCandidate[] = [];
+      for (const id of ids) {
+        const read = await post("GetProductDraft", DRAFT_DETAIL_QUERY, { id });
+        if (read?.status === 401 || read?.status === 403)
+          return unknown("AUTH_REQUIRED");
+        const data = validGraphql(read);
+        const draft = data?.productDraft;
+        if (!object(draft) || draft.id !== id ||
+            typeof draft.name !== "string" ||
+            typeof draft.description !== "string" ||
+            !Number.isSafeInteger(draft.price) ||
+            (draft.price as number) < 0 ||
+            !Array.isArray(draft.thumbnails) ||
+            !draft.thumbnails.every(thumbnail => object(thumbnail) &&
+              typeof thumbnail.id === "string" && thumbnail.id.length > 0) ||
+            !Array.isArray(draft.variants)) return unknown();
+        for (const variant of draft.variants) {
+          if (!object(variant) || typeof variant.skuCode !== "string" ||
+              !Number.isSafeInteger(variant.quantity) ||
+              (variant.quantity as number) < 0 ||
+              candidates.length >= MAX_DRAFT_CANDIDATES) return unknown();
+          candidates.push({ id, shopId, name: draft.name,
+            description: draft.description, price: draft.price as number,
+            quantity: variant.quantity as number,
+            skuCode: variant.skuCode,
+            thumbnailCount: draft.thumbnails.length });
+        }
+      }
+      return { status: "OK", complete: true, candidates };
+    },
   };
-  return { status: "READY", client,
+  const reconciliationReadback: WebHttpDraftReadback = {
+    verifyTargetShop: async () => {
+      const shop = await core.verifyTargetShop();
+      return { status: shop.status === "VERIFIED" ? "VERIFIED" :
+        shop.status === "AUTH_REQUIRED" ? "AUTH_REQUIRED" : "UNKNOWN",
+      shopMatched: shop.shopMatched };
+    },
+    listDraftCandidates: core.listDraftCandidates,
+  };
+  return { status: "READY", client: { ...core, reconciliationReadback },
     cookieExpiryKnown: cookies.find(cookie => cookie.name === "id_token")!
       .expiresAt !== null, cookieIssue: null };
 }
