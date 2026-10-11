@@ -17,6 +17,8 @@
 
 `UpdateProductDraft` は `UpdateProductDraftInput!` に既存下書きID、商品名、説明、価格、asset ID配列、category ID配列、ブランド、状態、発送元、発送期間、配送方法、送料負担、販売範囲、バリエーション内の数量・SKU等を渡していた。未設定項目はnullとして送られ、入力途中で何度も更新された。これは一回の完全入力が成功する証拠ではない。`GetProductDraft` は `id: String!`、`productDrafts` は `shopId: String!` とページ指定を使う。
 
+同じB005396の最終更新入力では、状態enumが `CONDITION_CLEAN`、カテゴリID配列が1件、ブランドIDがnull、画像asset ID配列が1件だった。前日の[BELLO画面観測](mercari-general-private-form-only-20261008.md)で、この商品の状態表示は「目立った傷や汚れなし」（BELLOの `NO_NOTABLE_DAMAGE`）。この一組は限定マッピングの根拠になるが、他の状態コードとの対応までは示さない。
+
 ## 認証と実装の境界
 
 HARの対象要求には認証ヘッダー値・Cookieが含まれていない。ブラウザーのログイン済み通信が成功した事実から、BELLOサーバーで同じ通信を認証する方法は確定しない。画像アップロード要求本文も欠けるため、BELLO画像をHTTPでアップロードする契約を確定できない。したがって実通信の書込処理は接続しない。

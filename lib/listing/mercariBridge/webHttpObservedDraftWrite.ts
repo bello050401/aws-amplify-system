@@ -21,17 +21,20 @@ const UPDATE_QUERY = `mutation UpdateProductDraft($input: UpdateProductDraftInpu
 const DRAFT_ID = /^[A-Za-z0-9]{1,64}$/;
 
 type RecordValue = Record<string, unknown>;
-type TargetDraftProof = { status: "VERIFIED_SAME_JOB_DRAFT";
+export type ObservedDraftTargetProof = { status: "VERIFIED_SAME_JOB_DRAFT";
   shopId: string; inventoryId: string; snapshotFingerprint: string;
   draftId: string };
-type Mutation = { kind: "CREATE"; input: RecordValue;
+export type ObservedDraftMutation = { kind: "CREATE"; input: RecordValue;
   idempotencyKeySeed: number } | { kind: "UPDATE"; input: RecordValue;
-    targetDraftProof: TargetDraftProof };
-type AssetProof = { status: "VERIFIED_SAME_IMAGE_BYTES";
+    targetDraftProof: ObservedDraftTargetProof };
+export type ObservedDraftAssetProof = { status: "VERIFIED_SAME_IMAGE_BYTES";
   shopId: string; inventoryId: string; snapshotFingerprint: string;
   remoteAssetId: string; imageRefCount: 1 };
-type MappingProof = { status: "OBSERVED_INPUT_MAPPING_VERIFIED";
+export type ObservedDraftMappingProof = { status: "OBSERVED_INPUT_MAPPING_VERIFIED";
   snapshotFingerprint: string };
+type Mutation = ObservedDraftMutation;
+type AssetProof = ObservedDraftAssetProof;
+type MappingProof = ObservedDraftMappingProof;
 type Repository = {
   getAttempt: (requestId: string) => Promise<WebHttpSendAttempt | null>;
   getSlot: (shopId: string) => Promise<WebHttpShopSendSlot | null>;
