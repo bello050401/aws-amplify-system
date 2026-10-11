@@ -48,7 +48,11 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     price: isB005396 ? "99999" : "", quantity: "", categoryId: null,
     brandId: null,
   });
-  const available = hasDraft && !hasShopsRecord && availableQuantity > 0;
+  // The HTTP panel lives below the PC panel on the server page. A draft saved
+  // in ListingForm after that render must remain usable without a page reload;
+  // the HTTP preparation action reads and validates the current draft again.
+  const available = (hasDraft || isHttp) && !hasShopsRecord &&
+    availableQuantity > 0;
   const reviewReady = b005396ReviewSelectionReady(selectionRef.current,
     availableQuantity);
   const reviewedHandoffReady = !isHttp || Boolean(reviewEvidence &&
@@ -130,7 +134,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   async function prepare() {
     if (!available || busy || !category || !/^[0-9]+$/.test(price) ||
         !/^[0-9]+$/.test(quantity) ||
-        (isHttp && httpStatus === "BLOCKED_TARGET") ||
+        (isHttp && httpStatus !== "NOT_PREPARED") ||
         (isHttp && isB005396 && !reviewReady)) return;
     setBusy(true);
     setMessage(null);
@@ -152,13 +156,13 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         }
         if (!result.ok) {
           setMessage(result.code === "BLOCKED_TARGET" ?
-            "既存商品または過去テストの対象です。新規出品依頼は作成できません。" :
+            "販売済み・既存商品・過去テストなどの対象です。準備登録はできません。" :
             "BELLOの保存内容・カテゴリー・数量を確認できませんでした。内容を確認してからやり直してください。");
           return;
         }
         setPack(result.pack);
         setReviewEvidence(result.evidence);
-        setMessage("現在のEC下書きを読み取りました。配送条件を確認すると、Web側に出品依頼を記録できます。Shopsへの送信は行いません。");
+        setMessage("現在のEC下書きを読み取りました。配送条件を確認すると、準備登録できます。Shopsへの送信は行いません。");
         return;
       }
       const result = await prepareMercariManualListingPackAction(inventoryId, {
@@ -237,44 +241,44 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     finally { setBusy(false); }
   }
   async function reserveWebHttpJob() {
-    if (!isHttp || !pack || busy || !available || !reviewedHandoffReady) return;
+    if (!isHttp || !pack || busy || !available ||
+        httpStatus !== "NOT_PREPARED" || !reviewedHandoffReady) return;
     const revision = selectionRevision.current;
     httpStatusEpoch.current++;
     setBusy(true);
     setMessage(null);
     try {
       const result = await reserveMercariWebHttpDraftJobAction(pack, shippingReviewed);
-      if (!result.ok && httpStatus === "CHECKING") setHttpStatus("UNAVAILABLE");
       if (revision !== selectionRevision.current) {
         setMessage("入力が変わりました。現在の内容で確認し直してください。");
       } else if (result.ok) {
         setHttpStatus(result.status);
         setHttpRequestId(result.requestId);
         setHttpRecordedAt(result.recordedAt);
-        setMessage(`Web側に出品依頼を記録しました（ID: ${result.requestId.slice(0, 12)}）。認証と新規出品のHTTP仕様を確認するまでShopsには送信しません。`);
+        setMessage(`HTTP方式の準備を登録しました（ID: ${result.requestId.slice(0, 12)}）。Shopsには送信していません。`);
       } else if (result.code === "JOB_CONFLICT") {
-        setMessage("この在庫には異なる内容のWeb出品依頼が記録済みです。重複を防ぐため送信しません。");
+        setMessage("この在庫には異なる内容のHTTP準備が登録済みです。重複を防ぐため送信しません。");
       } else if (result.code === "PACK_CHANGED") {
         setMessage("BELLOの保存内容が変わりました。現在の下書きを確認し直してください。");
       } else {
-        setMessage("Web側に出品依頼を記録できませんでした。Shopsへの送信は行っていません。");
+        setMessage("HTTP方式の準備を登録できませんでした。Shopsへの送信は行っていません。");
       }
     } catch {
-      if (httpStatus === "CHECKING") setHttpStatus("UNAVAILABLE");
-      setMessage("Web側に出品依頼を記録できませんでした。Shopsへの送信は行っていません。");
+      setHttpStatus("UNAVAILABLE");
+      setMessage("HTTP方式の準備を登録できませんでした。Shopsへの送信は行っていません。");
     } finally { setBusy(false); }
   }
   return <section id={isHttp ? "mercari-http-listing" : "mercari-manual-preparation"}
     className="mt-5 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
-    <h2 className="font-bold">メルカリShops {isHttp ? "HTTP方式での出品" : "PC方式の出品準備"}</h2>
+    <h2 className="font-bold">メルカリShops {isHttp ? "HTTP方式の準備登録" : "PC方式の出品準備"}</h2>
     <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isHttp && isB005396 ?
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
       "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
     {isHttp && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-      ボタンはWeb側に出品指示を記録します。ShopsへのHTTP送信は認証・新規出品の仕様・Shops上の重複を確認するまで保留します。
+      BELLO内に準備内容を記録します。操作時に保存済みEC下書きを読み直します。メルカリShopsへの送信や出品は行いません。
     </p>}
     {isHttp && <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs" role="status">
-      <p>HTTP方式の依頼状態: {httpStatus === "CHECKING" ? "確認中" :
+      <p>HTTP方式の準備状態: {httpStatus === "CHECKING" ? "確認中" :
         httpStatus === "NOT_PREPARED" ? "未登録" :
         httpStatus === "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" ?
           "登録済み・認証と書込仕様の確認待ち" :
@@ -297,7 +301,9 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         secondsLeft > 0 ? `次の出品まで ${secondsLeft} 秒` :
           "出品間隔の待機はありません。"}
     </p>}
-    {!available ? <p className="mt-3 text-amber-700">保存済みの下書き・在庫数・Shops出品記録を確認してください。新規出品準備は現在できません。</p> : <>
+    {!available ? <p className="mt-3 text-amber-700">保存済みの下書き・在庫数・Shops出品記録を確認してください。新規出品準備は現在できません。</p> :
+      isHttp && httpStatus !== "NOT_PREPARED" ?
+        <p className="mt-3 text-amber-700">準備状態を確認できるまで、新しい準備登録はできません。登録済みの場合は上の依頼状態を確認してください。</p> : <>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs">販売価格（円）<input type="number" min={300} max={9999999}
           step={1} value={price} disabled={busy || isB005396}
@@ -336,7 +342,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <button type="button" onClick={() => void prepare()}
         disabled={busy || !category || !/^[0-9]+$/.test(price) ||
           !/^[0-9]+$/.test(quantity) ||
-          (isHttp && httpStatus === "BLOCKED_TARGET") ||
+          (isHttp && httpStatus !== "NOT_PREPARED") ||
           (isHttp && isB005396 && !reviewReady)}
         className="mt-4 rounded bg-blue-700 px-4 py-2 font-bold text-white disabled:opacity-40">
         {busy ? isHttp ? "確認中…" : "準備中…" :
@@ -373,7 +379,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
           <span>EC配送方法とShopsの配送設定の違いを確認しました</span>
         </label>
         <p className="mt-2">{shippingReviewed ?
-          "配送条件を確認済みです。Web側に出品依頼を記録できます。Shopsへの保存は保留中です。" :
+          "配送条件を確認済みです。準備登録できます。Shopsへの保存は保留中です。" :
           "配送条件の確認が必要です。"}</p>
       </div>}
       <label className="mt-2 block">保存済みの商品説明
@@ -391,9 +397,10 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         className="mt-2 h-40 w-full rounded border border-gray-200 p-2 text-xs" />
       </>}
       {isHttp && <button type="button" onClick={() => void reserveWebHttpJob()}
-        disabled={busy || !available || !reviewedHandoffReady}
+        disabled={busy || !available || !reviewedHandoffReady ||
+          httpStatus !== "NOT_PREPARED"}
         className="mt-3 rounded bg-blue-700 px-3 py-1 font-bold text-white disabled:opacity-40">
-        {busy ? "記録中…" : "HTTP方式で出品を指示（準備登録）"}
+        {busy ? "登録中…" : "準備登録"}
       </button>}
     </div>}
   </section>;

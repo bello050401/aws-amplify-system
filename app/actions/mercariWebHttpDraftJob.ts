@@ -2,8 +2,8 @@
 
 import { getCurrentInventoryUserEmail, getInventoryRole } from
   "@/lib/amplify/requireInventoryUser";
-import { prepareB005396GeneralPreparationAction } from
-  "@/app/actions/mercariB005396GeneralPreparation";
+import { getInventoryDetail, listCategories } from "@/lib/inventory/queries";
+import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { getMercariPrivateCreatePreparationAction } from
   "@/app/actions/mercariPrivateCreatePreparation";
 import { prepareMercariManualListingPackAction,
@@ -35,17 +35,22 @@ type PreparationResult = { ok: true; pack: MercariManualListingPack;
 export async function prepareMercariWebHttpDraftJobAction(inventoryId: string,
   selected: Selection): Promise<PreparationResult> {
   if (await getInventoryRole() !== "ADMIN") return { ok: false, code: "FORBIDDEN" };
-  if (!webHttpDraftTargetAllowed(inventoryId))
+  if (!webHttpDraftTargetAllowed(inventoryId) ||
+      inventoryId.toLowerCase() === B005396_INVENTORY_ID)
     return { ok: false, code: "BLOCKED_TARGET" };
   try {
-    if (inventoryId.toLowerCase() === B005396_INVENTORY_ID) {
-      const special = await prepareB005396GeneralPreparationAction({
-        quantity: selected.quantity, categoryId: selected.categoryId,
-        brandId: selected.brandId });
-      return special.ok && selected.priceYen === special.pack.priceYen ?
-        { ok: true, pack: special.pack, evidence: special.evidence } :
-        { ok: false, code: "PREPARATION_UNAVAILABLE" };
-    }
+    const inventory = await getInventoryDetail(inventoryId);
+    if (!inventory || inventory.id.toLowerCase() !== inventoryId.toLowerCase() ||
+        inventory.sku.toUpperCase() === "B005396" ||
+        inventory.saleEndDate !== null || inventory.quantity < 1 ||
+        inventory.market !== null &&
+          (!inventory.market.trim() || /メルカリ|mercari/i.test(inventory.market)))
+      return { ok: false, code: "BLOCKED_TARGET" };
+    const category = (await listCategories(inventory.categoryId)).find(
+      entry => entry.id === inventory.categoryId)?.name ?? null;
+    if (!category || !isEcListingEligible(category) ||
+        category.normalize("NFKC").trim() === "売り切れ")
+      return { ok: false, code: "BLOCKED_TARGET" };
     const source = await getMercariPrivateCreatePreparationAction(inventoryId);
     if (!source.ok) return { ok: false, code: "PREPARATION_UNAVAILABLE" };
     const current = await prepareMercariManualListingPackAction(inventoryId, selected);
@@ -69,7 +74,8 @@ export async function reserveMercariWebHttpDraftJobAction(
   if (shippingReviewed !== true || !reviewedPack ||
       reviewedPack.kind !== "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK")
     return { ok: false, code: "INVALID_INPUT" };
-  if (!webHttpDraftTargetAllowed(reviewedPack.inventoryId))
+  if (!webHttpDraftTargetAllowed(reviewedPack.inventoryId) ||
+      reviewedPack.inventoryId.toLowerCase() === B005396_INVENTORY_ID)
     return { ok: false, code: "BLOCKED_TARGET" };
   try {
     const principal = await getCurrentInventoryUserEmail();
@@ -99,7 +105,8 @@ export async function getMercariWebHttpDraftJobStatusAction(inventoryId: string)
   { ok: false; code: "FORBIDDEN" | "BLOCKED_TARGET" | "STORAGE_UNAVAILABLE" }
 > {
   if (await getInventoryRole() !== "ADMIN") return { ok: false, code: "FORBIDDEN" };
-  if (!webHttpDraftTargetAllowed(inventoryId))
+  if (!webHttpDraftTargetAllowed(inventoryId) ||
+      inventoryId.toLowerCase() === B005396_INVENTORY_ID)
     return { ok: false, code: "BLOCKED_TARGET" };
   try {
     const requestId = webHttpDraftRequestId(inventoryId);

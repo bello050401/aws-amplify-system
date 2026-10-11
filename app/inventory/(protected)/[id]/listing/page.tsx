@@ -10,6 +10,9 @@ import { MercariPrivateCreatePreparationPanel } from "./MercariPrivateCreatePrep
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
 import { B005396_INVENTORY_ID } from
   "@/lib/listing/mercariBridge/b005396GeneralPreparation";
+import { webHttpDraftTargetAllowed } from
+  "@/lib/listing/mercariBridge/webHttpDraftJob";
+import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { getNextEngineMasterSync } from "@/lib/listing/nextEngine/masterSync";
@@ -69,6 +72,12 @@ export default async function ListingPage({ params }: { params: { id: string } }
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
   const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
+  const httpPreparationEligible = webHttpDraftTargetAllowed(item.id) &&
+    categoryName !== null && isEcListingEligible(categoryName) &&
+    categoryName.normalize("NFKC").trim() !== "売り切れ" &&
+    item.saleEndDate === null &&
+    (item.market === null || item.market.trim() !== "" &&
+      !item.market.includes("メルカリ"));
 
   // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: Inventory
   // Masterの商品画像をEC出品詳細へ表示する——画像データをEC Listing側へ
@@ -135,10 +144,22 @@ export default async function ListingPage({ params }: { params: { id: string } }
             <p className="mt-5 max-w-2xl rounded border border-amber-300 bg-amber-50 p-4 text-sm">
               この非公開テストは結果の確認中です。重複操作を防ぐため、ここから出品準備を繰り返せません。
             </p> :
-          item.id.toLowerCase() === B005396_INVENTORY_ID ? null :
-            <MercariManualListingPackPanel inventoryId={item.id}
-              availableQuantity={item.quantity} hasDraft={Boolean(draft)}
-              hasShopsRecord={Boolean(channelListing)} mode="PC" />
+          item.id.toLowerCase() === B005396_INVENTORY_ID ?
+            <p className="mt-5 max-w-2xl rounded border border-amber-300 bg-amber-50 p-4 text-sm">
+              この商品は販売済みです。HTTP方式の準備登録はできません。
+            </p> :
+            <>
+              <MercariManualListingPackPanel inventoryId={item.id}
+                availableQuantity={item.quantity} hasDraft={Boolean(draft)}
+                hasShopsRecord={Boolean(channelListing)} mode="PC" />
+              {httpPreparationEligible ?
+                <MercariManualListingPackPanel inventoryId={item.id}
+                  availableQuantity={item.quantity} hasDraft={Boolean(draft)}
+                  hasShopsRecord={Boolean(channelListing)} mode="HTTP" /> :
+                <p className="mt-5 max-w-2xl rounded border border-amber-300 bg-amber-50 p-4 text-sm">
+                  この商品は販売状況または既存の登録を確認できないため、HTTP方式の準備登録はできません。
+                </p>}
+            </>
         )}
         {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
             ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と

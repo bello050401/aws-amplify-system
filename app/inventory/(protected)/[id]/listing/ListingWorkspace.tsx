@@ -65,7 +65,6 @@ export function ListingWorkspace({
       <div className="min-w-0 xl:w-[56rem]">
         <ListingForm
           inventoryId={item.id}
-          availableQuantity={item.quantity}
           brandLogoAvailable={brandLogoAvailable}
           inventoryName={item.name}
           images={images}
