@@ -3,6 +3,7 @@ import "server-only";
 import {
   GetCommand,
   TransactWriteCommand,
+  UpdateCommand,
   type DynamoDBDocumentClient,
 } from "@aws-sdk/lib-dynamodb";
 import type {
@@ -49,6 +50,24 @@ export class DynamoWebHttpSendReservationRepository
       ConsistentRead: true,
     }));
     return (response.Item as WebHttpSendAttempt | undefined) ?? null;
+  }
+
+  /** A second call with the same reservation fails its status condition. */
+  async claimMutationStart(requestId: string, attemptId: string,
+    nowIso: string): Promise<void> {
+    await this.ddb.send(new UpdateCommand({
+      TableName: this.tables.attemptTableName,
+      Key: { requestId },
+      UpdateExpression: "SET #status = :claimed, #startedAt = :now, " +
+        "#updatedAt = :now",
+      ConditionExpression: "#status = :reserved AND #attemptId = :attemptId",
+      ExpressionAttributeNames: { "#status": "status",
+        "#attemptId": "attemptId", "#startedAt": "startedAt",
+        "#updatedAt": "updatedAt" },
+      ExpressionAttributeValues: { ":reserved": "RESERVED_NO_SEND",
+        ":claimed": "SEND_CLAIMED_RESULT_UNKNOWN",
+        ":attemptId": attemptId, ":now": nowIso },
+    }));
   }
 
   async transactReserve(previous: WebHttpShopSendSlot | null,

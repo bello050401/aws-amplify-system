@@ -29,7 +29,7 @@ export type WebHttpSendAttempt = {
   reservedAt: string;
   sendBeforeAt: string;
   requestedBy: string;
-  status: "RESERVED_NO_SEND";
+  status: "RESERVED_NO_SEND" | "SEND_CLAIMED_RESULT_UNKNOWN";
 };
 export type WebHttpSendReservationRepository = {
   /** Both reads must be strongly consistent; the transaction remains authoritative. */

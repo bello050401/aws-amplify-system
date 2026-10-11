@@ -48,7 +48,8 @@ const result = (status: WebHttpDraftReconciliation["status"],
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const sameAttempt = (attempt: WebHttpSendAttempt, job: WebHttpDraftJob) =>
-  attempt.status === "RESERVED_NO_SEND" &&
+  (attempt.status === "RESERVED_NO_SEND" ||
+    attempt.status === "SEND_CLAIMED_RESULT_UNKNOWN") &&
   attempt.requestId === job.requestId &&
   attempt.inventoryId === job.inventoryId &&
   attempt.shopId === job.shopId &&
