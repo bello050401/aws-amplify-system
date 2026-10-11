@@ -49,6 +49,9 @@ export type ObservedDraftWritePorts = {
   cookieExpiresAtMs: number | null;
   fetchPort: typeof fetch;
   repository: Repository;
+  /** Fresh BELLO InventoryItem read by UUID; sku is the current source code. */
+  readCurrentInventory: (inventoryId: string) => Promise<{
+    id: string; sku: string } | null>;
   hasExistingBinding: (job: WebHttpDraftJob) => Promise<boolean | null>;
   /** Must use the same authenticated session and exhaust all pages. */
   duplicatePreflight: DuplicatePreflight;
@@ -57,6 +60,7 @@ export type ObservedDraftWritePorts = {
 };
 export type ObservedDraftWriteResult = {
   status: "INVALID_JOB_NO_SEND" | "RESERVATION_UNVERIFIED_NO_SEND" |
+    "INVENTORY_MISMATCH_NO_SEND" |
     "ASSET_UNVERIFIED_NO_SEND" | "MAPPING_UNVERIFIED_NO_SEND" |
     "AUTH_REQUIRED_NO_SEND" | "SHOP_UNVERIFIED_NO_SEND" |
     "DUPLICATE_OR_READ_UNVERIFIED_NO_SEND" |
@@ -84,6 +88,17 @@ const nonempty = (value: unknown): value is string =>
 const stringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.length > 0 && value.every(nonempty);
 const validClock = (value: number) => Number.isSafeInteger(value) && value >= 0;
+
+function frozenSourceCode(job: WebHttpDraftJob): string | null {
+  try {
+    const snapshot: unknown = JSON.parse(job.snapshotJson);
+    if (!object(snapshot) || !object(snapshot.evidence) ||
+        typeof snapshot.evidence.sourceInventoryCode !== "string" ||
+        !/^[A-Za-z0-9_-]{1,40}$/.test(snapshot.evidence.sourceInventoryCode))
+      return null;
+    return snapshot.evidence.sourceInventoryCode;
+  } catch { return null; }
+}
 
 function validPayload(job: WebHttpDraftJob, mutation: Mutation,
   assetId: string): boolean {
@@ -227,6 +242,7 @@ export async function executeObservedDraftWriteOnce(
   if (!ports || !ports.repository ||
       typeof ports.repository.claimMutationStart !== "function" ||
       typeof ports.fetchPort !== "function" ||
+      typeof ports.readCurrentInventory !== "function" ||
       typeof ports.hasExistingBinding !== "function" ||
       typeof ports.duplicatePreflight !== "function" || !ports.readback ||
       typeof ports.cookieHeader !== "string" ||
@@ -245,6 +261,17 @@ export async function executeObservedDraftWriteOnce(
   } catch { return result("RESERVATION_UNVERIFIED_NO_SEND"); }
   if (!validStoredClaim(job, reservation, attempt, slot, now))
     return result("RESERVATION_UNVERIFIED_NO_SEND");
+  let inventory: { id: string; sku: string } | null;
+  try { inventory = await ports.readCurrentInventory(job.inventoryId); }
+  catch { inventory = null; }
+  const frozenCode = frozenSourceCode(job);
+  if (!inventory || typeof inventory.id !== "string" ||
+      inventory.id.toLowerCase() !== job.inventoryId.toLowerCase() ||
+      typeof inventory.sku !== "string" || !frozenCode ||
+      inventory.sku !== frozenCode || inventory.sku === "B005396" ||
+      job.managementCode !==
+        `BELLO_${inventory.id.replace(/-/g, "").toUpperCase()}`)
+    return result("INVENTORY_MISMATCH_NO_SEND");
   if (!assetProof || assetProof.status !== "VERIFIED_SAME_IMAGE_BYTES" ||
       assetProof.shopId !== job.shopId ||
       assetProof.inventoryId !== job.inventoryId ||
