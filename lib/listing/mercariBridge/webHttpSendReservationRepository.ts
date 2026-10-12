@@ -70,6 +70,34 @@ export class DynamoWebHttpSendReservationRepository
     }));
   }
 
+  /** Persist the exact asset acknowledgement; a second or changed result fails. */
+  async acknowledgeImageAsset(requestId: string, attemptId: string,
+    remoteAssetId: string, preparedJpegSha256: string,
+    nowIso: string): Promise<void> {
+    if (!/^[a-f0-9]{64}$/.test(requestId) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(attemptId) ||
+        !/^[A-Za-z0-9_-]{1,128}$/.test(remoteAssetId) ||
+        !/^[a-f0-9]{64}$/.test(preparedJpegSha256) ||
+        !Number.isFinite(Date.parse(nowIso)))
+      throw new Error("INVALID_IMAGE_ACKNOWLEDGEMENT");
+    await this.ddb.send(new UpdateCommand({
+      TableName: this.tables.attemptTableName,
+      Key: { requestId },
+      UpdateExpression: "SET #status = :ack, #remoteAssetId = :assetId, " +
+        "#preparedJpegSha256 = :sha, #updatedAt = :now",
+      ConditionExpression: "#status = :claimed AND #attemptId = :attemptId " +
+        "AND attribute_not_exists(#remoteAssetId)",
+      ExpressionAttributeNames: { "#status": "status",
+        "#attemptId": "attemptId", "#remoteAssetId": "remoteAssetId",
+        "#preparedJpegSha256": "preparedJpegSha256",
+        "#updatedAt": "updatedAt" },
+      ExpressionAttributeValues: { ":claimed": "SEND_CLAIMED_RESULT_UNKNOWN",
+        ":ack": "IMAGE_ACKNOWLEDGED", ":attemptId": attemptId,
+        ":assetId": remoteAssetId, ":sha": preparedJpegSha256,
+        ":now": nowIso },
+    }));
+  }
+
   async transactReserve(previous: WebHttpShopSendSlot | null,
     next: WebHttpShopSendSlot, attempt: WebHttpSendAttempt,
     nowIso: string): Promise<void> {
