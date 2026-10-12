@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import { initialWebHttpExecutionState, transitionWebHttpExecution,
   WEB_HTTP_MIN_SEND_INTERVAL_MS, type WebHttpSendChecks } from
@@ -8,6 +9,32 @@ import { initialWebHttpExecutionState, transitionWebHttpExecution,
 // can reserve only 30 seconds after lease end, not 30 seconds after reservation.
 export const WEB_HTTP_SEND_LEASE_MS = 5_000;
 export const WEB_HTTP_SEND_DEADLINE_MS = 4_000;
+
+/** Each observed write gets one durable attempt, even within the same job.
+ * A stage key is a reservation identity, not proof that a remote write is safe.
+ */
+export type WebHttpObservedSendStage =
+  { kind: "IMAGE_UPLOAD"; preparedJpegSha256: string } |
+  { kind: "DRAFT_CREATE" } |
+  { kind: "DRAFT_UPDATE"; draftId: string };
+
+export function webHttpStageRequestId(job: WebHttpDraftJob,
+  stage: WebHttpObservedSendStage): string | null {
+  if (!initialWebHttpExecutionState(job) || !stage) return null;
+  let discriminator: string;
+  if (stage.kind === "IMAGE_UPLOAD" &&
+      /^[a-f0-9]{64}$/.test(stage.preparedJpegSha256))
+    discriminator = `IMAGE_UPLOAD\0${stage.preparedJpegSha256}`;
+  else if (stage.kind === "DRAFT_CREATE")
+    discriminator = "DRAFT_CREATE";
+  else if (stage.kind === "DRAFT_UPDATE" &&
+      /^[A-Za-z0-9]{1,64}$/.test(stage.draftId))
+    discriminator = `DRAFT_UPDATE\0${stage.draftId}`;
+  else return null;
+  return createHash("sha256")
+    .update(`BELLO_SHOPS_HTTP_STAGE\0${job.requestId}\0${discriminator}`)
+    .digest("hex");
+}
 
 export type WebHttpShopSendSlot = {
   shopId: string;
@@ -83,10 +110,15 @@ export function webHttpSendPermitFresh(result: WebHttpSendReservationResult,
 export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
   preflight: WebHttpReservationPreflight, attemptId: string,
   repo: WebHttpSendReservationRepository,
-  clock: () => number = Date.now): Promise<WebHttpSendReservationResult> {
+  clock: () => number = Date.now,
+  // Existing callers keep the original one-send key. A staged sender must
+  // separately prove the image bytes or draft target before using this key.
+  stage?: WebHttpObservedSendStage): Promise<WebHttpSendReservationResult> {
   const nowMs = clock();
   const initial = initialWebHttpExecutionState(job);
+  const requestId = stage ? webHttpStageRequestId(job, stage) : job.requestId;
   if (!initial || !UUID.test(attemptId) || !validTime(nowMs) ||
+      !requestId ||
       !preflight || typeof preflight.existingBinding !== "boolean" ||
       typeof preflight.writeContractVerified !== "boolean")
     return { ok: false, code: "INVALID_JOB" };
@@ -98,7 +130,7 @@ export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
   let priorAttempt: WebHttpSendAttempt | null;
   let previous: WebHttpShopSendSlot | null;
   try {
-    priorAttempt = await repo.getAttempt(job.requestId);
+    priorAttempt = await repo.getAttempt(requestId);
     if (priorAttempt) return { ok: false, code: "ALREADY_CLAIMED_NO_SEND" };
     previous = await repo.getSlot(job.shopId);
   } catch { return { ok: false, code: "STORAGE_UNAVAILABLE" }; }
@@ -135,8 +167,8 @@ export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
     revision: previous ? previous.revision + 1 : 1,
     lastStartedAt: reservedAt, sendBeforeAt,
     nextEligibleAt: new Date(nextEligibleMs).toISOString(),
-    requestId: job.requestId, attemptId, requestedBy: job.requestedBy };
-  const attempt: WebHttpSendAttempt = { requestId: job.requestId,
+    requestId, attemptId, requestedBy: job.requestedBy };
+  const attempt: WebHttpSendAttempt = { requestId,
     inventoryId: job.inventoryId, shopId: job.shopId,
     snapshotFingerprint: job.snapshotFingerprint, attemptId,
     slotRevision: next.revision, reservedAt, sendBeforeAt,
@@ -149,6 +181,6 @@ export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
   if (!validTime(returnedAtMs) || returnedAtMs >= sendBeforeMs)
     return { ok: false, code: "RESERVATION_EXPIRED_NO_SEND" };
   return { ok: true, status: "RESERVED_NO_SEND",
-    requestId: job.requestId, attemptId, slotRevision: next.revision,
+    requestId, attemptId, slotRevision: next.revision,
     reservedAt, sendBeforeMs };
 }
