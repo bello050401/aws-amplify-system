@@ -3,7 +3,9 @@ import "server-only";
 import { initialWebHttpExecutionState } from "./webHttpExecutionGate.ts";
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import type { WebHttpSendAttempt,
-  WebHttpSendReservationRepository } from "./webHttpSendReservation.ts";
+  WebHttpSendReservationRepository,
+  WebHttpObservedSendStage } from "./webHttpSendReservation.ts";
+import { webHttpStageRequestId } from "./webHttpSendReservation.ts";
 
 export type WebHttpDraftCandidate = {
   id: string;
@@ -47,10 +49,12 @@ const result = (status: WebHttpDraftReconciliation["status"],
 });
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
-const sameAttempt = (attempt: WebHttpSendAttempt, job: WebHttpDraftJob) =>
+const sameAttempt = (attempt: WebHttpSendAttempt, job: WebHttpDraftJob,
+  requestId: string) =>
   (attempt.status === "RESERVED_NO_SEND" ||
-    attempt.status === "SEND_CLAIMED_RESULT_UNKNOWN") &&
-  attempt.requestId === job.requestId &&
+    attempt.status === "SEND_CLAIMED_RESULT_UNKNOWN" ||
+    attempt.status === "DRAFT_ACKNOWLEDGED") &&
+  attempt.requestId === requestId &&
   attempt.inventoryId === job.inventoryId &&
   attempt.shopId === job.shopId &&
   attempt.snapshotFingerprint === job.snapshotFingerprint;
@@ -63,16 +67,20 @@ export async function reconcileReservedWebHttpDraft(
   job: WebHttpDraftJob,
   repository: Pick<WebHttpSendReservationRepository, "getAttempt">,
   readback: WebHttpDraftReadback,
+  stage?: Extract<WebHttpObservedSendStage,
+    { kind: "DRAFT_CREATE" | "DRAFT_UPDATE" }>,
 ): Promise<WebHttpDraftReconciliation> {
+  const requestId = stage ? webHttpStageRequestId(job, stage) : job.requestId;
   if (!initialWebHttpExecutionState(job) ||
+      !requestId ||
       !repository || typeof repository.getAttempt !== "function" ||
       !readback || typeof readback.verifyTargetShop !== "function" ||
       typeof readback.listDraftCandidates !== "function")
     return result("INVALID_JOB");
   let attempt: WebHttpSendAttempt | null;
-  try { attempt = await repository.getAttempt(job.requestId); }
+  try { attempt = await repository.getAttempt(requestId); }
   catch { return result("ATTEMPT_UNKNOWN_NO_RESEND"); }
-  if (!attempt || !sameAttempt(attempt, job))
+  if (!attempt || !sameAttempt(attempt, job, requestId))
     return result("ATTEMPT_UNKNOWN_NO_RESEND");
   let shop: Awaited<ReturnType<WebHttpDraftReadback["verifyTargetShop"]>>;
   try { shop = await readback.verifyTargetShop(); }

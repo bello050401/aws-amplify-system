@@ -57,9 +57,11 @@ export type WebHttpSendAttempt = {
   sendBeforeAt: string;
   requestedBy: string;
   status: "RESERVED_NO_SEND" | "SEND_CLAIMED_RESULT_UNKNOWN" |
-    "IMAGE_ACKNOWLEDGED";
+    "IMAGE_ACKNOWLEDGED" | "DRAFT_ACKNOWLEDGED";
   remoteAssetId?: string;
   preparedJpegSha256?: string;
+  remoteDraftId?: string;
+  draftMutationKind?: "CREATE" | "UPDATE";
 };
 export type WebHttpSendReservationRepository = {
   /** Both reads must be strongly consistent; the transaction remains authoritative. */

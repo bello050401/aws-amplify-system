@@ -98,6 +98,33 @@ export class DynamoWebHttpSendReservationRepository
     }));
   }
 
+  /** An acknowledged create/update becomes usable only after durable storage. */
+  async acknowledgeDraftMutation(requestId: string, attemptId: string,
+    kind: "CREATE" | "UPDATE", remoteDraftId: string,
+    nowIso: string): Promise<void> {
+    if (!/^[a-f0-9]{64}$/.test(requestId) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(attemptId) ||
+        !["CREATE", "UPDATE"].includes(kind) ||
+        !/^[A-Za-z0-9]{1,64}$/.test(remoteDraftId) ||
+        !Number.isFinite(Date.parse(nowIso)))
+      throw new Error("INVALID_DRAFT_ACKNOWLEDGEMENT");
+    await this.ddb.send(new UpdateCommand({
+      TableName: this.tables.attemptTableName,
+      Key: { requestId },
+      UpdateExpression: "SET #status = :ack, #remoteDraftId = :draftId, " +
+        "#draftMutationKind = :kind, #updatedAt = :now",
+      ConditionExpression: "#status = :claimed AND #attemptId = :attemptId " +
+        "AND attribute_not_exists(#remoteDraftId)",
+      ExpressionAttributeNames: { "#status": "status",
+        "#attemptId": "attemptId", "#remoteDraftId": "remoteDraftId",
+        "#draftMutationKind": "draftMutationKind",
+        "#updatedAt": "updatedAt" },
+      ExpressionAttributeValues: { ":claimed": "SEND_CLAIMED_RESULT_UNKNOWN",
+        ":ack": "DRAFT_ACKNOWLEDGED", ":attemptId": attemptId,
+        ":draftId": remoteDraftId, ":kind": kind, ":now": nowIso },
+    }));
+  }
+
   async transactReserve(previous: WebHttpShopSendSlot | null,
     next: WebHttpShopSendSlot, attempt: WebHttpSendAttempt,
     nowIso: string): Promise<void> {

@@ -177,7 +177,8 @@ export async function updateStoredWebHttpDraftOnce(requestId: string,
     writeContractVerified: true,
     // The mapper's complete scan already found this target and no other match.
     remoteDuplicate: "ABSENT", existingBinding: false,
-  }, randomUUID(), ports.sendRepository, clock);
+  }, randomUUID(), ports.sendRepository, clock,
+  { kind: "DRAFT_UPDATE", draftId: mapped.mutation.input.id as string });
   if (!reservation.ok)
     return result("RESERVATION_BLOCKED_NO_SEND", reservation.code);
   let write: ObservedDraftWriteResult;
@@ -202,7 +203,8 @@ export async function updateStoredWebHttpDraftOnce(requestId: string,
   catch {
     // A reservation may already have been claimed. Read back, but never resend.
     const readback = await reconcileReservedWebHttpDraft(job,
-      ports.sendRepository, session.readback);
+      ports.sendRepository, session.readback,
+      { kind: "DRAFT_UPDATE", draftId: mapped.mutation.input.id as string });
     write = { status: "RESULT_UNKNOWN_NO_RESEND", draftId: null,
       readbackStatus: readback.status, allowRetry: false,
       listingConfirmed: false };

@@ -5,7 +5,8 @@ import { initialWebHttpExecutionState } from "./webHttpExecutionGate.ts";
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import { reconcileReservedWebHttpDraft,
   type WebHttpDraftReadback } from "./webHttpDraftSaveReconciliation.ts";
-import { webHttpSendPermitFresh, type WebHttpSendAttempt,
+import { webHttpSendPermitFresh, webHttpStageRequestId,
+  type WebHttpObservedSendStage, type WebHttpSendAttempt,
   type WebHttpSendReservationResult,
   type WebHttpShopSendSlot } from "./webHttpSendReservation.ts";
 
@@ -40,6 +41,9 @@ type Repository = {
   getSlot: (shopId: string) => Promise<WebHttpShopSendSlot | null>;
   /** Conditional, durable transition. An unknown outcome must never send. */
   claimMutationStart: (requestId: string, attemptId: string,
+    nowIso: string) => Promise<void>;
+  acknowledgeDraftMutation: (requestId: string, attemptId: string,
+    kind: "CREATE" | "UPDATE", remoteDraftId: string,
     nowIso: string) => Promise<void>;
 };
 type DuplicatePreflight = (job: WebHttpDraftJob,
@@ -197,7 +201,7 @@ function validPayload(job: WebHttpDraftJob, mutation: Mutation,
     Array.isArray(variant.attributes);
 }
 
-function validStoredClaim(job: WebHttpDraftJob,
+function validStoredClaim(job: WebHttpDraftJob, stageRequestId: string,
   reservation: WebHttpSendReservationResult,
   attempt: WebHttpSendAttempt | null,
   slot: WebHttpShopSendSlot | null, now: number): boolean {
@@ -206,7 +210,7 @@ function validStoredClaim(job: WebHttpDraftJob,
       !webHttpSendPermitFresh(reservation, now) ||
       !attempt || !slot) return false;
   return attempt.status === "RESERVED_NO_SEND" &&
-    attempt.requestId === job.requestId &&
+    attempt.requestId === stageRequestId &&
     attempt.inventoryId === job.inventoryId &&
     attempt.shopId === job.shopId &&
     attempt.snapshotFingerprint === job.snapshotFingerprint &&
@@ -214,7 +218,7 @@ function validStoredClaim(job: WebHttpDraftJob,
     attempt.slotRevision === reservation.slotRevision &&
     attempt.reservedAt === reservation.reservedAt &&
     attempt.sendBeforeAt === new Date(reservation.sendBeforeMs).toISOString() &&
-    slot.shopId === job.shopId && slot.requestId === job.requestId &&
+    slot.shopId === job.shopId && slot.requestId === stageRequestId &&
     slot.attemptId === reservation.attemptId &&
     slot.revision === reservation.slotRevision &&
     slot.lastStartedAt === reservation.reservedAt &&
@@ -276,8 +280,17 @@ export async function executeObservedDraftWriteOnce(
   if (!mutation || mutation.kind !== "CREATE" &&
       mutation.kind !== "UPDATE")
     return result("MAPPING_UNVERIFIED_NO_SEND");
+  const stage: Extract<WebHttpObservedSendStage,
+    { kind: "DRAFT_CREATE" | "DRAFT_UPDATE" }> =
+    mutation.kind === "CREATE" ? { kind: "DRAFT_CREATE" } :
+      { kind: "DRAFT_UPDATE", draftId: String(mutation.input?.id ?? "") };
+  const stageRequestId = webHttpStageRequestId(job, stage);
+  if (!stageRequestId || !reservation.ok ||
+      reservation.requestId !== stageRequestId)
+    return result("RESERVATION_UNVERIFIED_NO_SEND");
   if (!ports || !ports.repository ||
       typeof ports.repository.claimMutationStart !== "function" ||
+      typeof ports.repository.acknowledgeDraftMutation !== "function" ||
       typeof ports.fetchPort !== "function" ||
       typeof ports.readCurrentInventory !== "function" ||
       typeof ports.hasExistingBinding !== "function" ||
@@ -294,10 +307,10 @@ export async function executeObservedDraftWriteOnce(
   let attempt: WebHttpSendAttempt | null;
   let slot: WebHttpShopSendSlot | null;
   try {
-    attempt = await ports.repository.getAttempt(job.requestId);
+    attempt = await ports.repository.getAttempt(stageRequestId);
     slot = await ports.repository.getSlot(job.shopId);
   } catch { return result("RESERVATION_UNVERIFIED_NO_SEND"); }
-  if (!validStoredClaim(job, reservation, attempt, slot, now))
+  if (!validStoredClaim(job, stageRequestId, reservation, attempt, slot, now))
     return result("RESERVATION_UNVERIFIED_NO_SEND");
   let inventory: Awaited<ReturnType<ObservedDraftWritePorts["readCurrentInventory"]>>;
   try { inventory = await ports.readCurrentInventory(job.inventoryId); }
@@ -374,10 +387,11 @@ export async function executeObservedDraftWriteOnce(
       ports.cookieExpiresAtMs <= authNow)
     return result("AUTH_UNVERIFIED_NO_SEND");
   try {
-    attempt = await ports.repository.getAttempt(job.requestId);
+    attempt = await ports.repository.getAttempt(stageRequestId);
     slot = await ports.repository.getSlot(job.shopId);
   } catch { return result("RESERVATION_UNVERIFIED_NO_SEND"); }
-  if (!validStoredClaim(job, reservation, attempt, slot, clock()) ||
+  if (!validStoredClaim(job, stageRequestId,
+    reservation, attempt, slot, clock()) ||
       ports.cookieExpiresAtMs !== null &&
         ports.cookieExpiresAtMs <= clock())
     return result("RESERVATION_UNVERIFIED_NO_SEND");
@@ -386,12 +400,12 @@ export async function executeObservedDraftWriteOnce(
   if (!webHttpSendPermitFresh(reservation, claimedAt))
     return result("RESERVATION_UNVERIFIED_NO_SEND");
   try {
-    await ports.repository.claimMutationStart(job.requestId,
+    await ports.repository.claimMutationStart(stageRequestId,
       reservation.attemptId, new Date(claimedAt).toISOString());
   } catch { return result("RESERVATION_UNVERIFIED_NO_SEND"); }
   if (!webHttpSendPermitFresh(reservation, clock())) {
     const readback = await reconcileReservedWebHttpDraft(job,
-      ports.repository, ports.readback);
+      ports.repository, ports.readback, stage);
     return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
   }
   // The claim is irreversible. Recheck the same session immediately before
@@ -409,7 +423,7 @@ export async function executeObservedDraftWriteOnce(
       ports.cookieExpiresAtMs <= sendNow ||
       !webHttpSendPermitFresh(reservation, sendNow)) {
     const readback = await reconcileReservedWebHttpDraft(job,
-      ports.repository, ports.readback);
+      ports.repository, ports.readback, stage);
     return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
   }
   const operationName = mutation.kind === "CREATE" ?
@@ -428,11 +442,21 @@ export async function executeObservedDraftWriteOnce(
   const item = sent?.data?.[responseKey];
   if (sent?.status === 200 && object(item) &&
       typeof item.id === "string" && DRAFT_ID.test(item.id) &&
-      (mutation.kind === "CREATE" || item.id === mutation.input.id))
+      (mutation.kind === "CREATE" || item.id === mutation.input.id)) {
+    try {
+      await ports.repository.acknowledgeDraftMutation(stageRequestId,
+        reservation.attemptId, mutation.kind, item.id,
+        new Date(clock()).toISOString());
+    } catch {
+      const readback = await reconcileReservedWebHttpDraft(job,
+        ports.repository, ports.readback, stage);
+      return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
+    }
     return result(mutation.kind === "CREATE" ?
       "CREATE_ACKNOWLEDGED_NEEDS_UPDATE" :
       "UPDATE_ACKNOWLEDGED_NEEDS_READBACK", item.id);
+  }
   const readback = await reconcileReservedWebHttpDraft(job,
-    ports.repository, ports.readback);
+    ports.repository, ports.readback, stage);
   return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
 }
