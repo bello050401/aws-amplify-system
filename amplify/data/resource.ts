@@ -1117,6 +1117,20 @@ const schema = a.schema({
     .identifier(["requestId"])
     .authorization((allow) => [allow.group("ADMIN").to(["create", "read"])]),
 
+  /** Verified private HTTPS draft link. This is never a published listing. */
+  MercariBridgeHttpDraftLink: a
+    .model({
+      inventoryId: a.string().required(),
+      shopId: a.string().required(),
+      remoteDraftId: a.string().required(),
+      requestId: a.string().required(),
+      snapshotFingerprint: a.string().required(),
+      status: a.string().required(),
+      verifiedAt: a.datetime().required(),
+    })
+    .identifier(["inventoryId"])
+    .authorization((allow) => [allow.group("ADMIN").to(["create", "read"])]),
+
   /** One conditional 30-second reservation cursor for the Shops HTTP sender. */
   MercariBridgeHttpShopSendSlot: a
     .model({
