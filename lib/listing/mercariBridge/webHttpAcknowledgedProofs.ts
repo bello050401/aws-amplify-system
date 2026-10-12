@@ -19,6 +19,21 @@ export type VerifiedCreatedDraftReadback = (draftId: string) => Promise<{
   name: string | null;
   description: string | null;
 }>;
+export type VerifiedUpdatedDraftReadback = (draftId: string) => Promise<{
+  status: "VERIFIED" | "AUTH_REQUIRED" | "UNKNOWN";
+  shopId: string | null; draftId: string | null;
+  skuCode: string | null; name: string | null;
+  description: string | null; price: number | null;
+  quantity: number | null; categoryId: string | null;
+  conditionId: string | null; imageAssetIds: string[] | null;
+  shippingMethodId: string | null; shippingPayerId: string | null;
+  shippingDurationId: string | null; shippingFromStateId: string | null;
+}>;
+export type VerifiedUpdatedDraftProof = {
+  status: "VERIFIED_PRIVATE_DRAFT_CONTENT";
+  inventoryId: string; shopId: string; draftId: string;
+  snapshotFingerprint: string;
+};
 const REMOTE_ID = /^[A-Za-z0-9]{1,64}$/;
 
 function sameJob(attempt: WebHttpSendAttempt | null,
@@ -94,4 +109,63 @@ export async function readAcknowledgedDraftTargetProof(
     shopId: job.shopId, inventoryId: job.inventoryId,
     snapshotFingerprint: job.snapshotFingerprint,
     draftId: attempt.remoteDraftId };
+}
+
+/** An update acknowledgement is only a send result. Confirm every required
+ * field in a new authenticated read before recording a private draft link.
+ * This never grants publication or an ACTIVE listing status.
+ */
+export async function readAcknowledgedUpdatedDraftProof(
+  job: WebHttpDraftJob, draftId: string, preparedJpegSha256: string,
+  repository: Repository, readback: VerifiedUpdatedDraftReadback):
+  Promise<VerifiedUpdatedDraftProof | null> {
+  if (!initialWebHttpExecutionState(job) || !REMOTE_ID.test(draftId) ||
+      !/^[a-f0-9]{64}$/.test(preparedJpegSha256) || !repository ||
+      typeof repository.getAttempt !== "function" ||
+      typeof readback !== "function") return null;
+  const image = await readAcknowledgedImageAssetProof(job,
+    preparedJpegSha256, repository);
+  if (!image) return null;
+  const requestId = webHttpStageRequestId(job,
+    { kind: "DRAFT_UPDATE", draftId });
+  if (!requestId) return null;
+  let attempt: WebHttpSendAttempt | null;
+  try { attempt = await repository.getAttempt(requestId); }
+  catch { return null; }
+  if (!sameJob(attempt, job, requestId) ||
+      attempt?.status !== "DRAFT_ACKNOWLEDGED" ||
+      attempt.draftMutationKind !== "UPDATE" ||
+      attempt.remoteDraftId !== draftId) return null;
+  let pack: Record<string, unknown>;
+  try { pack = JSON.parse(job.snapshotJson).pack; }
+  catch { return null; }
+  const shipping = pack.shipping as Record<string, unknown> | null;
+  if (!shipping || typeof pack.title !== "string" ||
+      typeof pack.description !== "string" ||
+      typeof pack.priceYen !== "number" ||
+      typeof pack.quantity !== "number" ||
+      typeof pack.categoryId !== "string" ||
+      pack.condition !== "NO_NOTABLE_DAMAGE") return null;
+  let remote: Awaited<ReturnType<VerifiedUpdatedDraftReadback>>;
+  try { remote = await readback(draftId); }
+  catch { return null; }
+  if (remote?.status !== "VERIFIED" ||
+      remote.shopId !== job.shopId || remote.draftId !== draftId ||
+      remote.skuCode !== job.managementCode ||
+      remote.name !== pack.title ||
+      remote.description !== pack.description ||
+      remote.price !== pack.priceYen ||
+      remote.quantity !== pack.quantity ||
+      remote.categoryId !== pack.categoryId ||
+      remote.conditionId !== "CONDITION_CLEAN" ||
+      !Array.isArray(remote.imageAssetIds) ||
+      remote.imageAssetIds.length !== 1 ||
+      remote.imageAssetIds[0] !== image.remoteAssetId ||
+      remote.shippingMethodId !== shipping.method ||
+      remote.shippingPayerId !== shipping.payer ||
+      remote.shippingDurationId !== shipping.duration ||
+      remote.shippingFromStateId !== shipping.origin) return null;
+  return { status: "VERIFIED_PRIVATE_DRAFT_CONTENT",
+    inventoryId: job.inventoryId, shopId: job.shopId, draftId,
+    snapshotFingerprint: job.snapshotFingerprint };
 }

@@ -5,7 +5,7 @@ import { B005396_CORRECT_DRAFT_ID, B005396_EMPTY_DRAFT_ID } from
   "./webHttpObservedDraftRead.ts";
 import type { WebHttpDraftReadback,
   WebHttpDraftCandidate } from "./webHttpDraftSaveReconciliation.ts";
-import type { VerifiedCreatedDraftReadback } from
+import type { VerifiedCreatedDraftReadback, VerifiedUpdatedDraftReadback } from
   "./webHttpAcknowledgedProofs.ts";
 
 const ORIGIN = "https://mercari-shops.com";
@@ -96,6 +96,7 @@ export type WebHttpReadOnlyClient = {
   }>;
   listDraftCandidates: WebHttpDraftReadback["listDraftCandidates"];
   readVerifiedCreatedDraft: VerifiedCreatedDraftReadback;
+  readVerifiedUpdatedDraft: VerifiedUpdatedDraftReadback;
   /** Same session, adapted to the reconciliation result vocabulary. */
   reconciliationReadback: WebHttpDraftReadback;
 };
@@ -296,6 +297,58 @@ export async function openMercariWebHttpReadOnly(
       return { status: "VERIFIED" as const, shopId: WEB_HTTP_SHOP_ID,
         draftId, skuCode: draft.variants[0].skuCode,
         name: draft.name, description: draft.description };
+    },
+    readVerifiedUpdatedDraft: async draftId => {
+      const unknown = (status: "UNKNOWN" | "AUTH_REQUIRED" = "UNKNOWN") =>
+        ({ status, shopId: null, draftId: null, skuCode: null,
+          name: null, description: null, price: null, quantity: null,
+          categoryId: null, conditionId: null, imageAssetIds: null,
+          shippingMethodId: null, shippingPayerId: null,
+          shippingDurationId: null, shippingFromStateId: null });
+      if (!shopVerified || !DRAFT_ID.test(draftId)) return unknown();
+      const read = await post("GetProductDraft", DRAFT_DETAIL_QUERY,
+        { id: draftId });
+      if (read?.status === 401 || read?.status === 403)
+        return unknown("AUTH_REQUIRED");
+      const data = validGraphql(read);
+      const draft = data?.productDraft;
+      if (!object(draft) || draft.id !== draftId ||
+          typeof draft.name !== "string" ||
+          typeof draft.description !== "string" ||
+          typeof draft.price !== "number" ||
+          !Array.isArray(draft.variants) || draft.variants.length !== 1 ||
+          !object(draft.variants[0]) ||
+          typeof draft.variants[0].skuCode !== "string" ||
+          typeof draft.variants[0].quantity !== "number" ||
+          !Array.isArray(draft.categories) ||
+          draft.categories.length !== 1 ||
+          !object(draft.categories[0]) ||
+          !object(draft.categories[0].category) ||
+          typeof draft.categories[0].category.id !== "string" ||
+          !Array.isArray(draft.thumbnails) ||
+          !draft.thumbnails.every(image => object(image) &&
+            typeof image.id === "string") ||
+          !object(draft.condition) ||
+          typeof draft.condition.id !== "string" ||
+          !object(draft.shippingMethodType) ||
+          typeof draft.shippingMethodType.id !== "string" ||
+          !object(draft.shippingPayerType) ||
+          typeof draft.shippingPayerType.id !== "string" ||
+          !object(draft.shippingDurationType) ||
+          typeof draft.shippingDurationType.id !== "string" ||
+          !object(draft.shippingFromState) ||
+          typeof draft.shippingFromState.id !== "string") return unknown();
+      return { status: "VERIFIED" as const, shopId: WEB_HTTP_SHOP_ID,
+        draftId, skuCode: draft.variants[0].skuCode,
+        name: draft.name, description: draft.description,
+        price: draft.price, quantity: draft.variants[0].quantity,
+        categoryId: draft.categories[0].category.id,
+        conditionId: draft.condition.id,
+        imageAssetIds: draft.thumbnails.map(image => image.id),
+        shippingMethodId: draft.shippingMethodType.id,
+        shippingPayerId: draft.shippingPayerType.id,
+        shippingDurationId: draft.shippingDurationType.id,
+        shippingFromStateId: draft.shippingFromState.id };
     },
     readKnownB005396Drafts: async () => {
       const result = (status: ReadStatus, correctDraftMatched = false,
