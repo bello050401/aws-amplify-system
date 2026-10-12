@@ -5,6 +5,8 @@ import { B005396_CORRECT_DRAFT_ID, B005396_EMPTY_DRAFT_ID } from
   "./webHttpObservedDraftRead.ts";
 import type { WebHttpDraftReadback,
   WebHttpDraftCandidate } from "./webHttpDraftSaveReconciliation.ts";
+import type { VerifiedCreatedDraftReadback } from
+  "./webHttpAcknowledgedProofs.ts";
 
 const ORIGIN = "https://mercari-shops.com";
 const IDP_URL = `${ORIGIN}/auth/signin/idp`;
@@ -93,6 +95,7 @@ export type WebHttpReadOnlyClient = {
     emptyDraftMatched: boolean;
   }>;
   listDraftCandidates: WebHttpDraftReadback["listDraftCandidates"];
+  readVerifiedCreatedDraft: VerifiedCreatedDraftReadback;
   /** Same session, adapted to the reconciliation result vocabulary. */
   reconciliationReadback: WebHttpDraftReadback;
 };
@@ -272,6 +275,27 @@ export async function openMercariWebHttpReadOnly(
         object(shop) && shop.id === WEB_HTTP_SHOP_ID);
       return { status: shopVerified ? "VERIFIED" : "SHOP_MISMATCH",
         shopMatched: shopVerified };
+    },
+    readVerifiedCreatedDraft: async draftId => {
+      const unknown = (status: "UNKNOWN" | "AUTH_REQUIRED" = "UNKNOWN") =>
+        ({ status, shopId: null, draftId: null, skuCode: null,
+          name: null, description: null });
+      if (!shopVerified || !DRAFT_ID.test(draftId)) return unknown();
+      const read = await post("GetProductDraft", DRAFT_DETAIL_QUERY,
+        { id: draftId });
+      if (read?.status === 401 || read?.status === 403)
+        return unknown("AUTH_REQUIRED");
+      const data = validGraphql(read);
+      if (!data || !object(data.productDraft)) return unknown();
+      const draft = data.productDraft;
+      if (draft.id !== draftId || typeof draft.name !== "string" ||
+          typeof draft.description !== "string" ||
+          !Array.isArray(draft.variants) || draft.variants.length !== 1 ||
+          !object(draft.variants[0]) ||
+          typeof draft.variants[0].skuCode !== "string") return unknown();
+      return { status: "VERIFIED" as const, shopId: WEB_HTTP_SHOP_ID,
+        draftId, skuCode: draft.variants[0].skuCode,
+        name: draft.name, description: draft.description };
     },
     readKnownB005396Drafts: async () => {
       const result = (status: ReadStatus, correctDraftMatched = false,

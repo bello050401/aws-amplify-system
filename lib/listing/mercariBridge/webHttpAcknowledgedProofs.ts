@@ -11,6 +11,14 @@ type Repository = {
   /** Must be a strongly consistent read of the durable attempt table. */
   getAttempt(requestId: string): Promise<WebHttpSendAttempt | null>;
 };
+export type VerifiedCreatedDraftReadback = (draftId: string) => Promise<{
+  status: "VERIFIED" | "AUTH_REQUIRED" | "UNKNOWN";
+  shopId: string | null;
+  draftId: string | null;
+  skuCode: string | null;
+  name: string | null;
+  description: string | null;
+}>;
 const REMOTE_ID = /^[A-Za-z0-9]{1,64}$/;
 
 function sameJob(attempt: WebHttpSendAttempt | null,
@@ -45,12 +53,17 @@ export async function readAcknowledgedImageAssetProof(
     remoteAssetId: attempt.remoteAssetId, imageRefCount: 1 };
 }
 
-/** Only an acknowledged create for this frozen job can name its update target. */
+/** Both the durable create acknowledgement and a fresh authenticated read are
+ * required before the next stage may address a remote draft.
+ */
 export async function readAcknowledgedDraftTargetProof(
   job: WebHttpDraftJob,
-  repository: Repository): Promise<ObservedDraftTargetProof | null> {
+  repository: Repository,
+  readback: VerifiedCreatedDraftReadback):
+  Promise<ObservedDraftTargetProof | null> {
   if (!initialWebHttpExecutionState(job) || !repository ||
-      typeof repository.getAttempt !== "function") return null;
+      typeof repository.getAttempt !== "function" ||
+      typeof readback !== "function") return null;
   const requestId = webHttpStageRequestId(job, { kind: "DRAFT_CREATE" });
   if (!requestId) return null;
   let attempt: WebHttpSendAttempt | null;
@@ -61,6 +74,22 @@ export async function readAcknowledgedDraftTargetProof(
       attempt.draftMutationKind !== "CREATE" ||
       typeof attempt.remoteDraftId !== "string" ||
       !REMOTE_ID.test(attempt.remoteDraftId)) return null;
+  let frozen: { name: string; description: string };
+  try {
+    const pack = JSON.parse(job.snapshotJson).pack;
+    if (typeof pack?.title !== "string" ||
+        typeof pack?.description !== "string") return null;
+    frozen = { name: pack.title, description: pack.description };
+  } catch { return null; }
+  let remote: Awaited<ReturnType<VerifiedCreatedDraftReadback>>;
+  try { remote = await readback(attempt.remoteDraftId); }
+  catch { return null; }
+  if (remote?.status !== "VERIFIED" ||
+      remote.shopId !== job.shopId ||
+      remote.draftId !== attempt.remoteDraftId ||
+      remote.skuCode !== job.managementCode ||
+      remote.name !== frozen.name ||
+      remote.description !== frozen.description) return null;
   return { status: "VERIFIED_SAME_JOB_DRAFT",
     shopId: job.shopId, inventoryId: job.inventoryId,
     snapshotFingerprint: job.snapshotFingerprint,
