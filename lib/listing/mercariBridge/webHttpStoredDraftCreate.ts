@@ -15,6 +15,7 @@ import { executeObservedDraftWriteOnce,
   type ObservedDraftWritePorts,
   type ObservedDraftWriteResult } from "./webHttpObservedDraftWrite.ts";
 import { reserveWebHttpSendStart,
+  WEB_HTTP_SEND_DEADLINE_MS,
   type WebHttpSendReservationRepository } from
   "./webHttpSendReservation.ts";
 import type { VerifiedDraftUpdateSession } from
@@ -107,7 +108,7 @@ export async function createStoredWebHttpDraftOnce(requestId: string,
       !validClock(now) || !validClock(session.verifiedAtMs) ||
       session.verifiedAtMs > now || now - session.verifiedAtMs > 30_000 ||
       !validClock(session.cookieExpiresAtMs) ||
-      session.cookieExpiresAtMs <= now + 4_000 ||
+      session.cookieExpiresAtMs <= now + WEB_HTTP_SEND_DEADLINE_MS + 10_000 ||
       typeof session.cookieHeader !== "string" ||
       !session.cookieHeader || session.cookieHeader.length > 32_768 ||
       /[\r\n\0]/.test(session.cookieHeader) ||
@@ -136,7 +137,7 @@ export async function createStoredWebHttpDraftOnce(requestId: string,
       !validClock(reserveNow) ||
       refreshed.verifiedAtMs > reserveNow ||
       reserveNow - refreshed.verifiedAtMs > 30_000 ||
-      session.cookieExpiresAtMs <= reserveNow + 4_000)
+      session.cookieExpiresAtMs <= reserveNow + WEB_HTTP_SEND_DEADLINE_MS + 10_000)
     return result("AUTH_UNVERIFIED_NO_SEND");
   const stage = { kind: "DRAFT_CREATE" } as const;
   const reservation = await reserveWebHttpSendStart(job,

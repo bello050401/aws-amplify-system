@@ -7,6 +7,7 @@ import { buildObservedImageAssetRequest,
   type PreparedObservedJpeg } from "./webHttpObservedImageAsset.ts";
 import type { ObservedDraftAssetProof } from "./webHttpObservedDraftWrite.ts";
 import { webHttpSendPermitFresh, webHttpStageRequestId,
+  WEB_HTTP_SEND_DEADLINE_MS,
   type WebHttpSendAttempt, type WebHttpSendReservationResult,
   type WebHttpShopSendSlot } from "./webHttpSendReservation.ts";
 
@@ -145,7 +146,7 @@ export async function executeObservedImageUploadOnce(job: WebHttpDraftJob,
       !validTime(now) || !validTime(auth.verifiedAtMs ?? -1) ||
       (auth.verifiedAtMs ?? -1) > now ||
       now - (auth.verifiedAtMs ?? -1) > 30_000 ||
-      ports.cookieExpiresAtMs <= now)
+      ports.cookieExpiresAtMs <= now + WEB_HTTP_SEND_DEADLINE_MS + 10_000)
     return result("AUTH_UNVERIFIED_NO_SEND");
   let attempt: WebHttpSendAttempt | null;
   let slot: WebHttpShopSendSlot | null;
