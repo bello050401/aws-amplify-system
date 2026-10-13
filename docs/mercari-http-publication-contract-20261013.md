@@ -43,3 +43,47 @@
 - 通信応答の受信だけでは成功としない。停止状態と画像・数量・価格・説明等の一致を再読取し、保存できた場合だけSTOP_VERIFIED。認証切れ・読込失敗を削除済みと扱わない。
 - 関連67試験と型検査に合格。独立レビューでも停止試験11件とリンク変更時の送信抑止を確認。すべて模擬通信であり、実商品への操作はゼロ。
 - ECボタン・本番サーバーへの接続と反映はまだ行っていない。認証用 `C:/Users/win/Desktop/mercari-auth.har` は未保存。実行器に渡す認証の実確認、サーバー秘密保管への接続、公開の実行器・実画面受入が未完了。新たな定期指示は作成していない。
+
+## 2026-10-14 01:48 JST: 本人の追加HARでAWSからのHTTPS読取に成功
+
+本人がDesktopの同名HARを更新した。1,658,352 bytes、SHA-256
+`3f03331645404015b29686adc4b422856de4d4dc56c37cb7d0671fd3e266c749`。
+今回は対象ホストへの認証Cookieが含まれていた。ファイル名は
+`mercari-auth.har` ではないが、認証情報がないという以前の阻害は解消した。
+本人とSYSTEMだけがアクセスできるローカル証拠フォルダ
+`%LOCALAPPDATA%/BELLO/MercariHttpEvidence/20261014-013836-session/`
+に保全。認証値はコード・チャット・通常ログへ出していない。
+
+### 実通信で確認した範囲
+
+- 01:40 JST: ローカルNodeから、観測済みCookieを使った `Self` →
+  `OwnShops` → `EditProductPage` がすべてHTTP 200、店舗一致、商品読取成功。
+- 01:48 JST: 同一アカウントのAWS us-west-2に、一時的な読取専用Lambdaと
+  専用Secrets Manager保管先を作成。Lambdaの権限はこのSecretの
+  `GetSecretValue` だけ。公開URL・スケジュールは作っていない。
+- AWS Lambdaからも同じ3要求がすべてHTTP 200、HTMLやchallengeはなし。
+  商品 `2JY73FTGtBSag2c9khYw5E` の出品停止、99,999円、数量0、画像2枚を確認。
+  ブラウザは起動・操作していない。3要求は固定HTTPS先への読取queryだけ。
+- 認証状態はこの実証時点で有効。今回のCookieの既知期限は02:35 JST。
+  3件のGraphQL応答にはid_tokenの再発行が記録されておらず、長期更新・
+  refresh・HTTPだけの再ログイン成立は依然未実証。
+
+### 実装と残作業
+
+- `webHttpReadOnlyProbe.ts` を追加。既存の読取クライアントに固定先・
+  queryのみの送信制限を重ね、戻り値を状態・HTTP番号・数量等に限定した。
+  challengeは認証切れと区別し、自動再試行しない。
+- `scripts/mercari-http-readonly-cloud-probe.ts` は一時Lambdaの入口。
+  認証情報・接続先・商品IDを呼出しpayloadから受け取らず、専用Secretと
+  設定済みの読取対象だけを使う。12件の関連試験とTypeScript検査を通過。
+- AWS上の読取成功は、AmplifyのEC出品画面からの一貫実行、商品書込、
+  長期認証維持の成功を意味しない。これらの実行経路は未接続。
+- 検証時点でAWS us-west-2の `MercariBridgeHttp` を含むDynamoDBテーブルは0件。
+  作業ブランチのモデル定義・永続化実装をデプロイ済みと扱わないこと。
+- 公開前の本人確認、再公開契約の未観測、架空テスト商品の公開禁止を維持。
+  認証なしという古い理由で再エクスポートを依頼しないこと。
+
+非秘密の実測結果は同じローカル証拠フォルダの `readonly-result.json` と
+`cloud-readonly-result.json` に保存した。AWSの一時検証リソースは実証後に
+片付け、継続課金する検証機を残さない。BASE・Next Engine・既存Amplifyの
+デプロイ設定は変更していない。
