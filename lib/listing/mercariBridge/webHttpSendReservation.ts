@@ -4,11 +4,12 @@ import { initialWebHttpExecutionState, transitionWebHttpExecution,
   WEB_HTTP_MIN_SEND_INTERVAL_MS, type WebHttpSendChecks } from
   "./webHttpExecutionGate.ts";
 
-// A later sender must begin its HTTP call before sendBeforeAt. The extra second
-// between that deadline and lease end is a scheduling margin. The next product
-// can reserve only 30 seconds after lease end, not 30 seconds after reservation.
-export const WEB_HTTP_SEND_LEASE_MS = 5_000;
-export const WEB_HTTP_SEND_DEADLINE_MS = 4_000;
+// BELLO and Shops are both rechecked after the durable claim. Allow those
+// bounded reads to finish before sendBeforeAt; a four-second permit could
+// consume the one-use claim before the HTTPS request even began. The next
+// product can reserve only 30 seconds after the lease ends.
+export const WEB_HTTP_SEND_LEASE_MS = 31_000;
+export const WEB_HTTP_SEND_DEADLINE_MS = 30_000;
 
 /** Each observed write gets one durable attempt, even within the same job.
  * A stage key is a reservation identity, not proof that a remote write is safe.
