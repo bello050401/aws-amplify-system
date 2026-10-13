@@ -2,7 +2,8 @@ import "server-only";
 
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import { initialWebHttpExecutionState } from "./webHttpExecutionGate.ts";
-import { readAcknowledgedUpdatedDraftProof,
+import { readAcknowledgedDraftTargetProof,
+  readAcknowledgedUpdatedDraftProof,
   type VerifiedUpdatedDraftReadback } from
   "./webHttpAcknowledgedProofs.ts";
 import type { WebHttpSendAttempt } from "./webHttpSendReservation.ts";
@@ -38,6 +39,14 @@ export async function recordVerifiedPrivateDraftLink(
       !Number.isFinite(Date.parse(nowIso)) ||
       typeof links?.createIfAbsent !== "function" ||
       typeof links?.get !== "function") return fail("UNVERIFIED");
+  const created = await readAcknowledgedDraftTargetProof(job, attempts,
+    async id => {
+      const remote = await readback(id);
+      return { status: remote.status, shopId: remote.shopId,
+        draftId: remote.draftId, skuCode: remote.skuCode,
+        name: remote.name, description: remote.description };
+    });
+  if (!created || created.draftId !== draftId) return fail("UNVERIFIED");
   const proof = await readAcknowledgedUpdatedDraftProof(job, draftId,
     preparedJpegSha256, attempts, readback);
   if (!proof) return fail("UNVERIFIED");
