@@ -128,6 +128,7 @@ export async function reconcileObservedWebHttpProductStop(requestId: string,
   try { attempt = await ports.repository.getAttempt(requestId); }
   catch { return result("STORAGE_UNAVAILABLE", requestId); }
   if (!attempt || attempt.requestId !== requestId || attempt.requestedBy !== requestedBy ||
+      attempt.desiredProductStatus === "STATUS_OPENED" ||
       attempt.shopId !== WEB_HTTP_SHOP_ID || !attempt.productContentFingerprint ||
       !attempt.remoteProductId) return result("RESERVATION_BLOCKED", requestId);
   const binding = await bindingFor(attempt.inventoryId, ports);
@@ -145,7 +146,7 @@ export async function reconcileObservedWebHttpProductStop(requestId: string,
 }
 
 /** Server-only stop executor. It never creates, publishes or reopens a product.
- * The HTTP contract is observed; real sending is not enabled in a route yet.
+ * The caller enforces ADMIN access and obtains the session from the secret store.
  */
 export async function stopObservedWebHttpProductOnce(inventoryId: string,
   requestedBy: string, ports: WebHttpProductStopPorts, clock: () => number = Date.now):

@@ -143,10 +143,20 @@ export function buildObservedStopProductRequestFromRead(product: ObservedProduct
   idempotencyKeySeed: number) {
   if (!product || product.status !== "STATUS_OPENED" ||
       !seedValid(idempotencyKeySeed)) return null;
+  return buildObservedProductVisibilityRequest(product, "STATUS_UNOPENED", idempotencyKeySeed);
+}
+
+/** Same UpdateProductV2 schema; reopening must receive a separate, fresh review.
+ * Live reopening acceptance remains distinct from the recorded stopping trace.
+ */
+export function buildObservedProductVisibilityRequest(product: ObservedProductRead,
+  desiredStatus: "STATUS_OPENED" | "STATUS_UNOPENED", idempotencyKeySeed: number) {
+  if (!product || !seedValid(idempotencyKeySeed) ||
+      !["STATUS_OPENED", "STATUS_UNOPENED"].includes(desiredStatus)) return null;
   return { operationName: "UpdateProductV2" as const,
     query: UPDATE_PRODUCT_QUERY, variables: { input: {
       ...product.fields, id: product.id, shopId: product.shopId,
-      status: "STATUS_UNOPENED", productSnapshotId: product.snapshotId,
+      status: desiredStatus, productSnapshotId: product.snapshotId,
       variants: product.variants,
     }, idempotencyKeySeed } };
 }
@@ -157,7 +167,8 @@ export function buildObservedStopProductRequestFromRead(product: ObservedProduct
 export function observedProductContentFingerprint(product: ObservedProductRead): string {
   return createHash("sha256").update(JSON.stringify({
     id: product.id, shopId: product.shopId, fields: product.fields,
-    variants: product.variants.map(({ stockSnapshotId: _revision, ...variant }) => variant),
+    variants: product.variants.map(variant => Object.fromEntries(
+      Object.entries(variant).filter(([key]) => key !== "stockSnapshotId"))),
   })).digest("hex");
 }
 

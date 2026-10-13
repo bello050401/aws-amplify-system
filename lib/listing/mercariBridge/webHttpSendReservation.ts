@@ -18,6 +18,7 @@ export const WEB_HTTP_SEND_DEADLINE_MS = 30_000;
 export type WebHttpObservedSendStage =
   { kind: "IMAGE_UPLOAD"; preparedJpegSha256: string } |
   { kind: "DRAFT_CREATE" } |
+  { kind: "PRODUCT_CREATE"; draftId: string } |
   { kind: "DRAFT_UPDATE"; draftId: string };
 
 export function webHttpStageRequestId(job: WebHttpDraftJob,
@@ -29,6 +30,8 @@ export function webHttpStageRequestId(job: WebHttpDraftJob,
     discriminator = `IMAGE_UPLOAD\0${stage.preparedJpegSha256}`;
   else if (stage.kind === "DRAFT_CREATE")
     discriminator = "DRAFT_CREATE";
+  else if (stage.kind === "PRODUCT_CREATE" && /^[A-Za-z0-9]{1,64}$/.test(stage.draftId))
+    discriminator = `PRODUCT_CREATE\0${stage.draftId}`;
   else if (stage.kind === "DRAFT_UPDATE" &&
       /^[A-Za-z0-9]{1,64}$/.test(stage.draftId))
     discriminator = `DRAFT_UPDATE\0${stage.draftId}`;
@@ -59,8 +62,8 @@ export type WebHttpSendAttempt = {
   sendBeforeAt: string;
   requestedBy: string;
   status: "RESERVED_NO_SEND" | "SEND_CLAIMED_RESULT_UNKNOWN" |
-    "IMAGE_ACKNOWLEDGED" | "DRAFT_ACKNOWLEDGED" | "PRODUCT_STOP_VERIFIED" |
-    "CANCELLED_NO_SEND";
+    "IMAGE_ACKNOWLEDGED" | "DRAFT_ACKNOWLEDGED" | "PRODUCT_ACKNOWLEDGED" | "PRODUCT_STOP_VERIFIED" |
+    "PRODUCT_REOPEN_VERIFIED" | "CANCELLED_NO_SEND";
   remoteAssetId?: string;
   preparedJpegSha256?: string;
   remoteDraftId?: string;
@@ -68,12 +71,15 @@ export type WebHttpSendAttempt = {
   remoteProductId?: string;
   productSnapshotId?: string;
   productContentFingerprint?: string;
+  productCreateRequestJson?: string;
+  desiredProductStatus?: "STATUS_OPENED" | "STATUS_UNOPENED";
 };
 
 export type WebHttpProductStopIdentity = {
   inventoryId: string; shopId: string; requestedBy: string;
   remoteProductId: string; productSnapshotId: string;
   productContentFingerprint: string;
+  desiredProductStatus?: "STATUS_OPENED" | "STATUS_UNOPENED";
 };
 type SendIdentity = Pick<WebHttpDraftJob,
   "inventoryId" | "shopId" | "requestedBy" | "snapshotFingerprint">;
@@ -192,13 +198,14 @@ export async function reserveWebHttpProductStopStart(identity: WebHttpProductSto
       remoteProductId: identity.remoteProductId,
       productSnapshotId: identity.productSnapshotId,
       productContentFingerprint: identity.productContentFingerprint,
+      ...(identity.desiredProductStatus ? { desiredProductStatus: identity.desiredProductStatus } : {}),
     });
 }
 
 async function reservePreparedSend(job: SendIdentity, requestId: string,
   attemptId: string, repo: WebHttpSendReservationRepository, clock: () => number,
   product?: Pick<WebHttpSendAttempt,
-    "remoteProductId" | "productSnapshotId" | "productContentFingerprint">,
+    "remoteProductId" | "productSnapshotId" | "productContentFingerprint" | "desiredProductStatus">,
 ): Promise<WebHttpSendReservationResult> {
   const nowMs = clock();
   if (!validTime(nowMs)) return { ok: false, code: "INVALID_JOB" };

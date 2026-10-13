@@ -5,7 +5,7 @@ import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
-import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { Effect, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
 import { data } from "./data/resource";
 import { storage } from "./storage/resource";
@@ -45,6 +45,27 @@ const backend = defineBackend({
   integrityMonitor,
   salesAggregateScheduler,
 });
+
+// Runtime permissions are restricted to the already authorized staging host.
+// Cookie values are written directly to Secrets Manager, never to outputs or builds.
+if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
+    process.env.AWS_BRANCH === "claude/inventory-management-system-5vbvc7") {
+  const httpStack = backend.createStack("MercariHttpsRuntime");
+  const session = new Secret(httpStack, "Session", {
+    secretName: "bello/mercari-web-session-staging",
+    description: "Owner-authorized Mercari Shops HTTPS session; never browser automation",
+    removalPolicy: RemovalPolicy.RETAIN,
+  });
+  const runtimeRole = Role.fromRoleName(httpStack, "StagingRuntimeRole", "BelloAmplifyStagingComputeRole");
+  session.grantRead(runtimeRole);
+  const slot = backend.data.resources.tables["MercariBridgeHttpShopSendSlot"];
+  const attempt = backend.data.resources.tables["MercariBridgeHttpSendAttempt"];
+  const link = backend.data.resources.tables["MercariBridgeHttpProductLink"];
+  for (const table of [slot, attempt, link]) table.grantReadWriteData(runtimeRole);
+  backend.addOutput({ custom: { mercariHttps: { region: httpStack.region,
+    secretArn: session.secretArn, slotTable: slot.tableName,
+    attemptTable: attempt.tableName, linkTable: link.tableName } } });
+}
 
 // SKU counter table for amplify/functions/generate-sku. This is
 // deliberately a plain CDK-provisioned table, not an `a.model()` in

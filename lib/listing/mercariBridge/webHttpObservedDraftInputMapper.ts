@@ -43,6 +43,7 @@ export type ObservedDraftSelectedProof = {
 };
 export type ObservedDraftImageProof = ObservedDraftAssetProof & {
   sourceImageSha256: string;
+  sourceImageSha256s?: string[];
 };
 export type ObservedDraftSeedProof = {
   status: "VERIFIED_OBSERVED_SEED_STRATEGY";
@@ -142,8 +143,8 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       !Array.isArray(draft.images) ||
       JSON.stringify(draft.images.map(normalizedRef)) !==
         JSON.stringify(pack.imageRefs.map(normalizedRef)) ||
-      pack.imageRefs.length !== 1 ||
-      evidence.imageCount !== 1 || evidence.sourceQuantity < pack.quantity)
+      pack.imageRefs.length < 1 || pack.imageRefs.length > 20 ||
+      evidence.imageCount !== pack.imageRefs.length || evidence.sourceQuantity < pack.quantity)
     return fail("DRAFT_CHANGED");
   if (!category || category.categoryId !== pack.categoryId ||
       category.fullPath !== pack.categoryPath ||
@@ -169,7 +170,8 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       proofs.selected.adminPriceYen !== pack.priceYen ||
       proofs.selected.adminQuantity !== pack.quantity ||
       proofs.selected.variantDefaultsVerified !== true ||
-      !complete(proofs.selected.countryRestrictionTemplateId) ||
+      // The 2026-10-13 update sends an empty restriction ID for this shop.
+      typeof proofs.selected.countryRestrictionTemplateId !== "string" ||
       !complete(proofs.selected.channelListingScope))
     return fail("SELECTION_UNVERIFIED");
   if (binding !== false || channel !== false)
@@ -178,16 +180,22 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
   if (!image || image.status !== "VERIFIED_SAME_IMAGE_BYTES" ||
       image.shopId !== job.shopId || image.inventoryId !== job.inventoryId ||
       image.snapshotFingerprint !== job.snapshotFingerprint ||
-      image.imageRefCount !== 1 ||
+      image.imageRefCount !== pack.imageRefs.length ||
       typeof image.remoteAssetId !== "string" ||
       !REMOTE_ID.test(image.remoteAssetId) ||
       typeof image.sourceImageSha256 !== "string" ||
       !SHA256.test(image.sourceImageSha256)) return fail("IMAGE_UNVERIFIED");
-  let currentImageHash: string | null;
-  try { currentImageHash = await ports.readCurrentImageSha256(pack.imageRefs[0]); }
-  catch { return fail("IMAGE_UNVERIFIED"); }
-  if (currentImageHash !== image.sourceImageSha256)
-    return fail("IMAGE_UNVERIFIED");
+  const assetIds = image.remoteAssetIds ?? [image.remoteAssetId];
+  const imageHashes = image.sourceImageSha256s ?? [image.sourceImageSha256];
+  if (assetIds.length !== pack.imageRefs.length || imageHashes.length !== assetIds.length ||
+      new Set(assetIds).size !== assetIds.length || assetIds.some(id => !REMOTE_ID.test(id)) ||
+      imageHashes.some(hash => !SHA256.test(hash)) || assetIds[0] !== image.remoteAssetId ||
+      imageHashes[0] !== image.sourceImageSha256) return fail("IMAGE_UNVERIFIED");
+  for (let index = 0; index < pack.imageRefs.length; index++) {
+    try { if (await ports.readCurrentImageSha256(pack.imageRefs[index]) !== imageHashes[index])
+      return fail("IMAGE_UNVERIFIED"); }
+    catch { return fail("IMAGE_UNVERIFIED"); }
+  }
   const target = kind === "UPDATE" ? proofs.targetDraft : undefined;
   if (kind === "UPDATE" && (!target ||
       target.status !== "VERIFIED_SAME_JOB_DRAFT" ||
@@ -227,7 +235,7 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
   } : {
     kind, targetDraftProof: target!,
     input: { ...common, id: target!.draftId, price: pack.priceYen,
-      assetIds: [image.remoteAssetId], categoryIds: [pack.categoryId],
+      assetIds, categoryIds: [pack.categoryId],
       condition: selected.shopsConditionEnum,
       shippingFromStateId: pack.shipping.origin,
       shippingDurationType: pack.shipping.duration,
@@ -238,7 +246,8 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
     status: "VERIFIED_SAME_IMAGE_BYTES", shopId: image.shopId,
     inventoryId: image.inventoryId,
     snapshotFingerprint: image.snapshotFingerprint,
-    remoteAssetId: image.remoteAssetId, imageRefCount: 1,
+    remoteAssetId: image.remoteAssetId, imageRefCount: assetIds.length,
+    ...(assetIds.length > 1 ? { remoteAssetIds: assetIds } : {}),
   };
   return { ok: true, status: "MAPPED_NO_SEND", allowHttpWrite: false,
     mutation, assetProof,

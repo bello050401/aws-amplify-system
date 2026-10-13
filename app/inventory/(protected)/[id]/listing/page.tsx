@@ -8,6 +8,7 @@ import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
 import { MercariPrivateCreatePreparationPanel } from "./MercariPrivateCreatePreparationPanel";
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
+import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
 import { B005396_INVENTORY_ID } from
   "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import { webHttpDraftTargetAllowed } from
@@ -161,6 +162,13 @@ export default async function ListingPage({ params }: { params: { id: string } }
                 </p>}
             </>
         )}
+        {role === "ADMIN" && (!httpPreparationEligible || [
+          "5b0f3587-cbbb-4c09-ae78-595b2b3e353f", "dd273c1e-9b2a-4013-acc6-c445a481fab8",
+          B005396_INVENTORY_ID,
+        ].includes(item.id.toLowerCase())) && <section className="mt-5 max-w-2xl rounded border bg-white p-4">
+          <h2 className="font-bold">メルカリShops HTTPS出品</h2>
+          <MercariHttpExecutionPanel inventoryId={item.id} requestId={null} />
+        </section>}
         {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
             ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
             役割が重複していたので消した。生成エンジン・生成履歴の保存・

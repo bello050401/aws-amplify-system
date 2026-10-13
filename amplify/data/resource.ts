@@ -1131,6 +1131,15 @@ const schema = a.schema({
     .identifier(["inventoryId"])
     .authorization((allow) => [allow.group("ADMIN").to(["create", "read"])]),
 
+  /** Only the server writes a binding after an authenticated HTTPS readback. */
+  MercariBridgeHttpProductLink: a.model({
+    inventoryId: a.string().required(), shopId: a.string().required(),
+    remoteProductId: a.string().required(), managementCode: a.string().required(),
+    requestId: a.string().required(), verifiedAt: a.datetime().required(),
+    remoteStatus: a.string().required(),
+  }).identifier(["inventoryId"])
+    .authorization((allow) => [allow.group("ADMIN").to(["read"])]),
+
   /** One conditional 30-second reservation cursor for the Shops HTTP sender. */
   MercariBridgeHttpShopSendSlot: a
     .model({
@@ -1144,7 +1153,7 @@ const schema = a.schema({
       requestedBy: a.string().required(),
     })
     .identifier(["shopId"])
-    .authorization((allow) => [allow.group("ADMIN").to(["create", "read", "update"])]),
+    .authorization((allow) => [allow.group("ADMIN").to(["read"])]),
 
   /** One immutable start claim per Web draft; unknown outcomes cannot be retried. */
   MercariBridgeHttpSendAttempt: a
@@ -1161,7 +1170,7 @@ const schema = a.schema({
       status: a.string().required(),
     })
     .identifier(["requestId"])
-    .authorization((allow) => [allow.group("ADMIN").to(["create", "read"])]),
+    .authorization((allow) => [allow.group("ADMIN").to(["read"])]),
 
   /** One sanitized PC observation per explicit attempt. */
   MercariBridgeReadResult: a

@@ -116,16 +116,18 @@ export async function readAcknowledgedDraftTargetProof(
  * This never grants publication or an ACTIVE listing status.
  */
 export async function readAcknowledgedUpdatedDraftProof(
-  job: WebHttpDraftJob, draftId: string, preparedJpegSha256: string,
+  job: WebHttpDraftJob, draftId: string, preparedJpegSha256: string | string[],
   repository: Repository, readback: VerifiedUpdatedDraftReadback):
   Promise<VerifiedUpdatedDraftProof | null> {
+  const hashes = Array.isArray(preparedJpegSha256) ? preparedJpegSha256 : [preparedJpegSha256];
   if (!initialWebHttpExecutionState(job) || !REMOTE_ID.test(draftId) ||
-      !/^[a-f0-9]{64}$/.test(preparedJpegSha256) || !repository ||
+      hashes.length < 1 || hashes.length > 20 || hashes.some(hash => !/^[a-f0-9]{64}$/.test(hash)) || !repository ||
       typeof repository.getAttempt !== "function" ||
       typeof readback !== "function") return null;
-  const image = await readAcknowledgedImageAssetProof(job,
-    preparedJpegSha256, repository);
-  if (!image) return null;
+  const images = await Promise.all(hashes.map(hash => readAcknowledgedImageAssetProof(job, hash, repository)));
+  if (images.some(image => !image)) return null;
+  const assetIds = images.map(image => image!.remoteAssetId);
+  if (new Set(assetIds).size !== assetIds.length) return null;
   const requestId = webHttpStageRequestId(job,
     { kind: "DRAFT_UPDATE", draftId });
   if (!requestId) return null;
@@ -145,7 +147,8 @@ export async function readAcknowledgedUpdatedDraftProof(
       typeof pack.priceYen !== "number" ||
       typeof pack.quantity !== "number" ||
       typeof pack.categoryId !== "string" ||
-      pack.condition !== "NO_NOTABLE_DAMAGE") return null;
+      pack.condition !== "NO_NOTABLE_DAMAGE" || !Array.isArray(pack.imageRefs) ||
+      pack.imageRefs.length !== assetIds.length) return null;
   let remote: Awaited<ReturnType<VerifiedUpdatedDraftReadback>>;
   try { remote = await readback(draftId); }
   catch { return null; }
@@ -159,8 +162,7 @@ export async function readAcknowledgedUpdatedDraftProof(
       remote.categoryId !== pack.categoryId ||
       remote.conditionId !== "CONDITION_CLEAN" ||
       !Array.isArray(remote.imageAssetIds) ||
-      remote.imageAssetIds.length !== 1 ||
-      remote.imageAssetIds[0] !== image.remoteAssetId ||
+      JSON.stringify(remote.imageAssetIds) !== JSON.stringify(assetIds) ||
       remote.shippingMethodId !== shipping.method ||
       remote.shippingPayerId !== shipping.payer ||
       remote.shippingDurationId !== shipping.duration ||

@@ -53,7 +53,7 @@ const result = (status: ObservedImageUploadResult["status"],
   ({ status, assetProof, allowRetry: false });
 const validTime = (value: number) => Number.isSafeInteger(value) && value >= 0;
 
-function frozenImageKey(job: WebHttpDraftJob): string | null {
+function frozenImageKey(job: WebHttpDraftJob, expectedKey: string): string | null {
   try {
     const snapshot: unknown = JSON.parse(job.snapshotJson);
     if (!snapshot || typeof snapshot !== "object" ||
@@ -61,8 +61,10 @@ function frozenImageKey(job: WebHttpDraftJob): string | null {
         typeof snapshot.pack !== "object" ||
         !("imageRefs" in snapshot.pack) ||
         !Array.isArray(snapshot.pack.imageRefs) ||
-        snapshot.pack.imageRefs.length !== 1) return null;
-    const image = snapshot.pack.imageRefs[0];
+        snapshot.pack.imageRefs.length < 1 || snapshot.pack.imageRefs.length > 20) return null;
+    const matches = snapshot.pack.imageRefs.filter(image => image?.storageKey === expectedKey);
+    if (matches.length !== 1) return null;
+    const image = matches[0];
     return image && typeof image.storageKey === "string" ?
       image.storageKey : null;
   } catch { return null; }
@@ -117,7 +119,7 @@ export async function executeObservedImageUploadOnce(job: WebHttpDraftJob,
   if (!sourceProof || !prepared ||
       sourceProof.inventoryId !== job.inventoryId ||
       sourceProof.snapshotFingerprint !== job.snapshotFingerprint ||
-      sourceProof.storageKey !== frozenImageKey(job) ||
+      sourceProof.storageKey !== frozenImageKey(job, sourceProof.storageKey) ||
       !/^[a-f0-9]{64}$/.test(sourceProof.originalSha256) ||
       prepared.originalSha256 !== sourceProof.originalSha256 ||
       prepared.preparedJpegSha256 !== sourceProof.preparedJpegSha256)

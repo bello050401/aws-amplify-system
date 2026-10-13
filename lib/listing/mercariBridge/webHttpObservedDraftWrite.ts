@@ -30,7 +30,7 @@ export type ObservedDraftMutation = { kind: "CREATE"; input: RecordValue;
     targetDraftProof: ObservedDraftTargetProof };
 export type ObservedDraftAssetProof = { status: "VERIFIED_SAME_IMAGE_BYTES";
   shopId: string; inventoryId: string; snapshotFingerprint: string;
-  remoteAssetId: string; imageRefCount: 1 };
+  remoteAssetId: string; imageRefCount: number; remoteAssetIds?: string[] };
 export type ObservedDraftMappingProof = { status: "OBSERVED_INPUT_MAPPING_VERIFIED";
   snapshotFingerprint: string };
 type Mutation = ObservedDraftMutation;
@@ -141,7 +141,7 @@ function frozenSourceCode(job: WebHttpDraftJob): string | null {
 }
 
 function validPayload(job: WebHttpDraftJob, mutation: Mutation,
-  assetId: string): boolean {
+  assetIds: string[]): boolean {
   if (!mutation || mutation.kind !== "CREATE" &&
       mutation.kind !== "UPDATE") return false;
   let pack: RecordValue;
@@ -150,7 +150,7 @@ function validPayload(job: WebHttpDraftJob, mutation: Mutation,
     if (!object(snapshot) || !object(snapshot.pack)) return false;
     pack = snapshot.pack;
   } catch { return false; }
-  if (!Array.isArray(pack.imageRefs) || pack.imageRefs.length !== 1)
+  if (!Array.isArray(pack.imageRefs) || pack.imageRefs.length !== assetIds.length)
     return false;
   if (!object(mutation?.input)) return false;
   const input = mutation.input;
@@ -188,8 +188,7 @@ function validPayload(job: WebHttpDraftJob, mutation: Mutation,
   return sameKeys(input, [...common, "id"]) &&
     typeof input.id === "string" && DRAFT_ID.test(input.id) &&
     input.price === pack.priceYen &&
-    Array.isArray(input.assetIds) && input.assetIds.length === 1 &&
-    input.assetIds[0] === assetId &&
+    JSON.stringify(input.assetIds) === JSON.stringify(assetIds) &&
     stringArray(input.categoryIds) &&
     typeof pack.categoryId === "string" &&
     input.categoryIds.includes(pack.categoryId) &&
@@ -325,14 +324,18 @@ export async function executeObservedDraftWriteOnce(
       assetProof.shopId !== job.shopId ||
       assetProof.inventoryId !== job.inventoryId ||
       assetProof.snapshotFingerprint !== job.snapshotFingerprint ||
-      assetProof.imageRefCount !== 1 ||
+      !Number.isInteger(assetProof.imageRefCount) || assetProof.imageRefCount < 1 || assetProof.imageRefCount > 20 ||
       typeof assetProof.remoteAssetId !== "string" ||
       !DRAFT_ID.test(assetProof.remoteAssetId))
+    return result("ASSET_UNVERIFIED_NO_SEND");
+  const assetIds = assetProof.remoteAssetIds ?? [assetProof.remoteAssetId];
+  if (assetIds.length !== assetProof.imageRefCount || assetIds[0] !== assetProof.remoteAssetId ||
+      assetIds.some(id => !DRAFT_ID.test(id)) || new Set(assetIds).size !== assetIds.length)
     return result("ASSET_UNVERIFIED_NO_SEND");
   if (!mappingProof ||
       mappingProof.status !== "OBSERVED_INPUT_MAPPING_VERIFIED" ||
       mappingProof.snapshotFingerprint !== job.snapshotFingerprint ||
-      !validPayload(job, mutation, assetProof.remoteAssetId))
+      !validPayload(job, mutation, assetIds))
     return result("MAPPING_UNVERIFIED_NO_SEND");
   if (mutation.kind === "UPDATE" &&
       (!mutation.targetDraftProof ||

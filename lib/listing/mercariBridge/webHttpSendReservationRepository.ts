@@ -65,6 +65,38 @@ export class DynamoWebHttpSendReservationRepository
     return response.Item.linkedRequestId;
   }
 
+  /** Save a create receipt before linking it to an inventory or reporting success. */
+  async acknowledgeProduct(requestId: string, attemptId: string,
+    remoteProductId: string, nowIso: string): Promise<void> {
+    if (!/^[a-f0-9]{64}$/.test(requestId) || !/^[A-Za-z0-9]{1,64}$/.test(remoteProductId) ||
+        !Number.isFinite(Date.parse(nowIso))) throw Error("INVALID_PRODUCT_RECEIPT");
+    await this.ddb.send(new UpdateCommand({
+      TableName: this.tables.attemptTableName, Key: { requestId },
+      UpdateExpression: "SET #s = :ack, remoteProductId = :id, updatedAt = :now",
+      ConditionExpression: "#s = :claimed AND attemptId = :attempt AND attribute_not_exists(remoteProductId)",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: { ":ack": "PRODUCT_ACKNOWLEDGED",
+        ":claimed": "SEND_CLAIMED_RESULT_UNKNOWN", ":attempt": attemptId,
+        ":id": remoteProductId, ":now": nowIso },
+    }));
+  }
+
+  /** Record the reviewed, non-secret payload atomically with the one-use claim.
+   * CreateProduct can consume its draft, so recovery cannot depend on that draft.
+   */
+  async claimProductStart(requestId: string, attemptId: string,
+    requestJson: string, nowIso: string): Promise<void> {
+    if (Buffer.byteLength(requestJson, "utf8") > 100_000) throw Error("INVALID_PRODUCT_INPUT");
+    await this.ddb.send(new UpdateCommand({
+      TableName: this.tables.attemptTableName, Key: { requestId },
+      UpdateExpression: "SET #s = :claimed, productCreateRequestJson = :request, startedAt = :now, updatedAt = :now",
+      ConditionExpression: "#s = :reserved AND attemptId = :attempt AND attribute_not_exists(productCreateRequestJson)",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: { ":claimed": "SEND_CLAIMED_RESULT_UNKNOWN", ":reserved": "RESERVED_NO_SEND",
+        ":attempt": attemptId, ":request": requestJson, ":now": nowIso },
+    }));
+  }
+
   /** A second call with the same reservation fails its status condition. */
   async claimMutationStart(requestId: string, attemptId: string,
     nowIso: string): Promise<void> {
@@ -143,7 +175,7 @@ export class DynamoWebHttpSendReservationRepository
    */
   async verifyProductStop(requestId: string, attemptId: string, shopId: string,
     remoteProductId: string, productContentFingerprint: string,
-    nowIso: string): Promise<void> {
+    nowIso: string, desiredStatus: "STATUS_OPENED" | "STATUS_UNOPENED" = "STATUS_UNOPENED"): Promise<void> {
     if (!/^[a-f0-9]{64}$/.test(requestId) ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(attemptId) ||
         !/^[A-Za-z0-9]{1,64}$/.test(remoteProductId) ||
@@ -154,12 +186,14 @@ export class DynamoWebHttpSendReservationRepository
       UpdateExpression: "SET #status = :verified, #updatedAt = :now",
       ConditionExpression: "#status = :claimed " +
         "AND #attemptId = :attemptId AND #productId = :productId " +
-        "AND #fingerprint = :fingerprint",
+        "AND #fingerprint = :fingerprint" + (desiredStatus === "STATUS_OPENED" ? " AND desiredProductStatus = :desired" :
+          " AND (attribute_not_exists(desiredProductStatus) OR desiredProductStatus = :desired)"),
       ExpressionAttributeNames: { "#status": "status", "#updatedAt": "updatedAt",
         "#attemptId": "attemptId", "#productId": "remoteProductId",
         "#fingerprint": "productContentFingerprint" },
       ExpressionAttributeValues: { ":claimed": "SEND_CLAIMED_RESULT_UNKNOWN",
-        ":verified": "PRODUCT_STOP_VERIFIED", ":now": nowIso,
+        ":verified": desiredStatus === "STATUS_OPENED" ? "PRODUCT_REOPEN_VERIFIED" : "PRODUCT_STOP_VERIFIED",
+        ":desired": desiredStatus, ":now": nowIso,
         ":attemptId": attemptId, ":productId": remoteProductId,
         ":fingerprint": productContentFingerprint },
     } }, { Delete: {

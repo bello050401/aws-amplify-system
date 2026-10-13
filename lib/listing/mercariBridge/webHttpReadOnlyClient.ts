@@ -93,6 +93,8 @@ type CookieIssue = "HEADER_API_UNAVAILABLE" | "ID_COOKIE_MISSING" |
 
 export type WebHttpIdpCredentials = { idToken: string; refreshToken: string };
 export type WebHttpReadOnlyClient = {
+  /** Server-internal full draft read, for comparing every field before publication. */
+  readDraftBody: (draftId: string) => Promise<unknown | null>;
   verifyTargetShop: () => Promise<{ status: ReadStatus; shopMatched: boolean }>;
   readKnownB005396Drafts: () => Promise<{
     status: ReadStatus; correctDraftMatched: boolean;
@@ -332,6 +334,11 @@ async function openReadOnlyWithCookies(cookies: Cookie[], fetchPort: FetchPort,
       selfResult?.status ?? null);
 
   const core: Omit<WebHttpReadOnlyClient, "reconciliationReadback"> = {
+    readDraftBody: async draftId => {
+      if (!shopVerified || !DRAFT_ID.test(draftId)) return null;
+      const read = await post("GetProductDraft", DRAFT_DETAIL_QUERY, { id: draftId });
+      return validGraphql(read) ? read!.body : null;
+    },
     readProduct: async productId => {
       const unknown = (status: "UNKNOWN" | "AUTH_REQUIRED" = "UNKNOWN") =>
         ({ status, product: null });

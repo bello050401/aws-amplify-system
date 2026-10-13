@@ -29,7 +29,7 @@ export type PrivateDraftLinkResult =
  * second Shops write; the same durable ACK can be reconciled again locally.
  */
 export async function recordVerifiedPrivateDraftLink(
-  job: WebHttpDraftJob, draftId: string, preparedJpegSha256: string,
+  job: WebHttpDraftJob, draftId: string, preparedJpegSha256: string | string[],
   attempts: Attempts, readback: VerifiedUpdatedDraftReadback,
   links: PrivateDraftLinkRepository,
   nowIso = new Date().toISOString()): Promise<PrivateDraftLinkResult> {

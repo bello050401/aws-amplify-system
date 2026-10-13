@@ -4,6 +4,7 @@ import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { getChannelListing, getListingDraftForInventory } from "@/lib/listing/service";
 import { mercariBridgeReadRepository } from "@/lib/listing/mercariBridge/repository";
+import { createMercariHttpsRuntime } from "@/lib/listing/mercariBridge/webHttpRuntime";
 import { B005413_INVENTORY_ID, B005413_TEST_CODE, B005413_TEST_INTENT,
   buildB005413PrivatePreparation } from
   "@/lib/listing/mercariBridge/b005413PrivatePreparation";
@@ -75,7 +76,8 @@ export async function getMercariPrivateCreatePreparationAction(
       getChannelListing(inventoryId, "MERCARI_SHOPS"),
       mercariBridgeReadRepository.getBinding(inventoryId),
     ]);
-    if (channel || binding) return { ok: false, code: "EXISTING_LINK" };
+    const httpBinding = await createMercariHttpsRuntime()?.readBinding(inventoryId);
+    if (channel || binding || httpBinding) return { ok: false, code: "EXISTING_LINK" };
     if (!inventory || !draft || typeof inventory.id !== "string" ||
         inventory.id.toLowerCase() !== inventoryId.toLowerCase() ||
         draft.inventoryId !== inventory.id ||

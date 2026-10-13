@@ -22,7 +22,7 @@ export type InventoryImageSourcePorts = {
  * the observed HTTPS upload. This only reads BELLO; it never contacts Shops.
  */
 export async function prepareInventoryImageForObservedUpload(
-  job: WebHttpDraftJob, ports: InventoryImageSourcePorts,
+  job: WebHttpDraftJob, ports: InventoryImageSourcePorts, imageIndex = 0,
 ): Promise<{ prepared: PreparedObservedJpeg;
   sourceProof: ObservedImageSourceProof } | null> {
   if (!initialWebHttpExecutionState(job) || !ports ||
@@ -33,8 +33,9 @@ export async function prepareInventoryImageForObservedUpload(
     const snapshot = JSON.parse(job.snapshotJson);
     if (snapshot?.pack?.inventoryId !== job.inventoryId ||
         !Array.isArray(snapshot.pack.imageRefs) ||
-        snapshot.pack.imageRefs.length !== 1) return null;
-    imageRef = snapshot.pack.imageRefs[0];
+        snapshot.pack.imageRefs.length < 1 || snapshot.pack.imageRefs.length > 20 ||
+        !Number.isInteger(imageIndex) || imageIndex < 0 || imageIndex >= snapshot.pack.imageRefs.length) return null;
+    imageRef = snapshot.pack.imageRefs[imageIndex];
   } catch { return null; }
   if (imageRef?.source !== "INVENTORY" ||
       typeof imageRef.storageKey !== "string" || !imageRef.storageKey)

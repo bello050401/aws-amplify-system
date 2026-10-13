@@ -51,10 +51,10 @@ async function readOwnStorageBytes(storageKey: string,
 
 /** Production BELLO source adapter. It deliberately has no Shops transport. */
 export function prepareBelloInventoryImageForObservedUpload(
-  job: WebHttpDraftJob,
+  job: WebHttpDraftJob, imageIndex = 0,
 ) {
   return prepareInventoryImageForObservedUpload(job, {
     readInventory: getInventoryDetail,
     readStorageBytes: readOwnStorageBytes,
-  });
+  }, imageIndex);
 }

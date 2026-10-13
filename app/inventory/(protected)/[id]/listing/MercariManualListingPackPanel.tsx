@@ -17,6 +17,7 @@ import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
 import { b005396ReviewSelectionReady, sameManualPackSelection,
   type ManualPackSelection } from "@/lib/listing/mercariBridge/manualPackSelection";
 import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker";
+import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
 
 export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   hasDraft, hasShopsRecord, mode }: { inventoryId: string; availableQuantity: number;
@@ -274,12 +275,13 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   }
   return <section id={isHttp ? "mercari-http-listing" : "mercari-manual-preparation"}
     className="mt-5 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
-    <h2 className="font-bold">メルカリShops {isHttp ? "HTTP方式の準備登録" : "PC方式の出品準備"}</h2>
+    <h2 className="font-bold">メルカリShops {isHttp ? "HTTPS出品" : "PC方式の出品準備"}</h2>
+    {isHttp && <MercariHttpExecutionPanel inventoryId={inventoryId} requestId={httpRequestId} />}
     <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isHttp && isB005396 ?
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
       "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
     {isHttp && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-      BELLO内に準備内容を記録します。操作時に保存済みEC下書きを読み直します。メルカリShopsへの送信や出品は行いません。
+      下の「準備登録」で内容を保存し、上の「Shopsに下書きを保存」で写真と商品情報を送信します。公開は出品内容の確認後に行います。
     </p>}
     {isHttp && <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs" role="status">
       <p>HTTP方式の準備状態: {httpStatus === "CHECKING" ? "確認中" :
