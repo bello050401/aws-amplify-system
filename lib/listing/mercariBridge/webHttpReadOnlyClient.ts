@@ -1,6 +1,10 @@
 import "server-only";
 
 import { WEB_HTTP_SHOP_ID } from "./webHttpDraftJob.ts";
+import { observedCategoryLeafIds } from "./webHttpObservedCategory.ts";
+import { READ_PRODUCT_QUERY } from "./webHttpObservedProductQueries.ts";
+import { parseObservedProductRead,
+  type ObservedProductRead } from "./webHttpObservedProductContract.ts";
 import { B005396_CORRECT_DRAFT_ID, B005396_EMPTY_DRAFT_ID } from
   "./webHttpObservedDraftRead.ts";
 import type { WebHttpDraftReadback,
@@ -97,6 +101,10 @@ export type WebHttpReadOnlyClient = {
   listDraftCandidates: WebHttpDraftReadback["listDraftCandidates"];
   readVerifiedCreatedDraft: VerifiedCreatedDraftReadback;
   readVerifiedUpdatedDraft: VerifiedUpdatedDraftReadback;
+  readProduct: (productId: string) => Promise<{
+    status: "VERIFIED" | "AUTH_REQUIRED" | "UNKNOWN";
+    product: ObservedProductRead | null;
+  }>;
   /** Same session, adapted to the reconciliation result vocabulary. */
   reconciliationReadback: WebHttpDraftReadback;
 };
@@ -112,6 +120,44 @@ const object = (value: unknown): value is Record<string, unknown> =>
 const safeToken = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length < 32_768 &&
   !/[\r\n\0]/.test(value);
+
+const openFailure = (status: Status,
+  failureStage: WebHttpOpenResult["failureStage"] = null,
+  httpStatus: number | null = null): WebHttpOpenResult =>
+  ({ status, client: null, failureStage, httpStatus,
+    cookieExpiryKnown: false, cookieIssue: null });
+
+/** Accept only a trusted server-side cookie for the observed Shops origin.
+ * This avoids repeating IDP login when the owner's existing session is valid.
+ * Nothing is persisted or refreshed here; Self still verifies access first.
+ */
+export async function openMercariWebHttpCookieReadOnly(
+  session: { cookieHeader: string; expiresAtMs: number | null },
+  options: { fetchPort?: FetchPort; clock?: () => number } = {},
+): Promise<WebHttpOpenResult> {
+  const clock = options.clock ?? Date.now;
+  const now = clock();
+  if (!safeToken(session?.cookieHeader) ||
+      !Number.isSafeInteger(now) || now < 0 ||
+      session.expiresAtMs !== null &&
+        (!Number.isSafeInteger(session.expiresAtMs) || session.expiresAtMs <= now))
+    return openFailure("AUTH_REQUIRED", "INPUT");
+  const cookies: Cookie[] = [];
+  const names = new Set<string>();
+  for (const item of session.cookieHeader.split(";")) {
+    const value = item.trim();
+    const split = value.indexOf("=");
+    const name = value.slice(0, split);
+    const token = value.slice(split + 1);
+    if (split < 1 || !/^[A-Za-z0-9_-]+$/.test(name) ||
+        !token || /[\x00-\x20;,\\]/.test(token) || names.has(name))
+      return openFailure("AUTH_REQUIRED", "INPUT");
+    names.add(name);
+    cookies.push({ name, value: token, expiresAt: session.expiresAtMs });
+  }
+  if (!names.has("id_token")) return openFailure("AUTH_REQUIRED", "INPUT");
+  return openReadOnlyWithCookies(cookies, options.fetchPort ?? fetch, clock);
+}
 
 function parseCookie(header: string, now: number):
   { cookie: Cookie; issue: null } | { cookie: null; issue: CookieIssue } {
@@ -187,11 +233,7 @@ export async function openMercariWebHttpReadOnly(
   credentials: WebHttpIdpCredentials,
   options: { fetchPort?: FetchPort; clock?: () => number } = {},
 ): Promise<WebHttpOpenResult> {
-  const failed = (status: Status,
-    failureStage: WebHttpOpenResult["failureStage"] = null,
-    httpStatus: number | null = null): WebHttpOpenResult =>
-    ({ status, client: null, failureStage, httpStatus,
-      cookieExpiryKnown: false, cookieIssue: null });
+  const failed = openFailure;
   if (!safeToken(credentials?.idToken) ||
       !safeToken(credentials?.refreshToken)) return failed("AUTH_REQUIRED", "INPUT");
   const fetchPort = options.fetchPort ?? fetch;
@@ -242,6 +284,12 @@ export async function openMercariWebHttpReadOnly(
         "ID_COOKIE_DUPLICATE" : idCookieHeaderCount === 1 ? idCookieIssue :
           "ID_COOKIE_MISSING" };
 
+  return openReadOnlyWithCookies(cookies, fetchPort, clock);
+}
+
+async function openReadOnlyWithCookies(cookies: Cookie[], fetchPort: FetchPort,
+  clock: () => number): Promise<WebHttpOpenResult> {
+  const failed = openFailure;
   let shopVerified = false;
   const post = async (operationName: string, query: string,
     variables?: Record<string, string | number>): Promise<GraphqlResult> => {
@@ -284,6 +332,16 @@ export async function openMercariWebHttpReadOnly(
       selfResult?.status ?? null);
 
   const core: Omit<WebHttpReadOnlyClient, "reconciliationReadback"> = {
+    readProduct: async productId => {
+      const unknown = (status: "UNKNOWN" | "AUTH_REQUIRED" = "UNKNOWN") =>
+        ({ status, product: null });
+      if (!shopVerified || !DRAFT_ID.test(productId)) return unknown();
+      const read = await post("EditProductPage", READ_PRODUCT_QUERY, { id: productId });
+      if (authRequired(read)) return unknown("AUTH_REQUIRED");
+      if (!validGraphql(read)) return unknown();
+      const product = parseObservedProductRead(read!.body, productId);
+      return product ? { status: "VERIFIED", product } : unknown();
+    },
     verifyTargetShop: async () => {
       shopVerified = false;
       const result = await post("OwnShops", SHOPS_QUERY);
@@ -332,6 +390,7 @@ export async function openMercariWebHttpReadOnly(
         return unknown("AUTH_REQUIRED");
       const data = validGraphql(read);
       const draft = data?.productDraft;
+      const categoryIds = object(draft) ? observedCategoryLeafIds(draft.categories) : null;
       if (!object(draft) || draft.id !== draftId ||
           typeof draft.name !== "string" ||
           typeof draft.description !== "string" ||
@@ -340,11 +399,7 @@ export async function openMercariWebHttpReadOnly(
           !object(draft.variants[0]) ||
           typeof draft.variants[0].skuCode !== "string" ||
           typeof draft.variants[0].quantity !== "number" ||
-          !Array.isArray(draft.categories) ||
-          draft.categories.length !== 1 ||
-          !object(draft.categories[0]) ||
-          !object(draft.categories[0].category) ||
-          typeof draft.categories[0].category.id !== "string" ||
+          categoryIds?.length !== 1 ||
           !Array.isArray(draft.thumbnails) ||
           !draft.thumbnails.every(image => object(image) &&
             typeof image.id === "string") ||
@@ -362,7 +417,7 @@ export async function openMercariWebHttpReadOnly(
         draftId, skuCode: draft.variants[0].skuCode,
         name: draft.name, description: draft.description,
         price: draft.price, quantity: draft.variants[0].quantity,
-        categoryId: draft.categories[0].category.id,
+        categoryId: categoryIds[0],
         conditionId: draft.condition.id,
         imageAssetIds: draft.thumbnails.map(image => image.id),
         shippingMethodId: draft.shippingMethodType.id,

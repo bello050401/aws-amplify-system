@@ -1,5 +1,7 @@
 # メルカリShops下書きHTTP書込部の準備境界（2026-10-12）
 
+> 最新状態: 2026-10-13 23:24 JSTの本人提供HARで公開・停止の実通信が追加された。[最新の実測と再開地点](mercari-http-publication-contract-20261013.md)を優先する。この文書の「公開・停止は未観測」は当時の記録。
+
 Downloadsの既存HARから値を出さずにGraphQL文書の宣言とフィールド引数を再確認した。作成は `CreateProductDraft($input: CreateProductDraftInput!, $idempotencyKeySeed: Float!)` → `createProductDraft(createProductDraftInput: $input, idempotencyKeySeed: $idempotencyKeySeed)`、更新は `UpdateProductDraft($input: UpdateProductDraftInput!)` → `updateProductDraft(updateProductDraftInput: $input)`。画像asset登録はHTTP 200応答を観測済みだが、multipart要求本文はHARにない。これらは管理画面の観測であり、公開API契約ではない。
 
 `webHttpObservedDraftWrite.ts` に、サーバー専用・送信先固定の**一回のGraphQL mutation**を準備した。BELLOの通常画面、Server Action、API route、ジョブ実行器からは呼ばない。`fetch` と認証Cookieは信頼できるサーバー呼出元からのみ渡す設計で、このリポジトリには本番呼出元と画像asset証明の作成器がない。画像ファイル送信処理もない。
