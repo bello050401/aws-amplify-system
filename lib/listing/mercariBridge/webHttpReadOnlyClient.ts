@@ -102,6 +102,9 @@ export type WebHttpReadOnlyClient = {
 };
 export type WebHttpOpenResult = { status: Status;
   client: WebHttpReadOnlyClient | null;
+  failureStage: "INPUT" | "IDP_NETWORK" | "IDP_HTTP" |
+    "IDP_COOKIE" | "SELF_READ" | null;
+  httpStatus: number | null;
   cookieExpiryKnown: boolean; cookieIssue: CookieIssue | null };
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -175,14 +178,18 @@ export async function openMercariWebHttpReadOnly(
   credentials: WebHttpIdpCredentials,
   options: { fetchPort?: FetchPort; clock?: () => number } = {},
 ): Promise<WebHttpOpenResult> {
-  const failed = (status: Status): WebHttpOpenResult =>
-    ({ status, client: null, cookieExpiryKnown: false, cookieIssue: null });
+  const failed = (status: Status,
+    failureStage: WebHttpOpenResult["failureStage"] = null,
+    httpStatus: number | null = null): WebHttpOpenResult =>
+    ({ status, client: null, failureStage, httpStatus,
+      cookieExpiryKnown: false, cookieIssue: null });
   if (!safeToken(credentials?.idToken) ||
-      !safeToken(credentials?.refreshToken)) return failed("AUTH_REQUIRED");
+      !safeToken(credentials?.refreshToken)) return failed("AUTH_REQUIRED", "INPUT");
   const fetchPort = options.fetchPort ?? fetch;
   const clock = options.clock ?? Date.now;
   const now = clock();
-  if (!Number.isSafeInteger(now) || now < 0) return failed("REMOTE_UNVERIFIED");
+  if (!Number.isSafeInteger(now) || now < 0)
+    return failed("REMOTE_UNVERIFIED", "INPUT");
   const body = new URLSearchParams();
   // Public seller code percent-encodes each raw token before form encoding.
   body.set("idToken", encodeURIComponent(credentials.idToken));
@@ -193,20 +200,21 @@ export async function openMercariWebHttpReadOnly(
       credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/x-www-form-urlencoded",
         Accept: "text/plain" }, body: body.toString() });
-  } catch { return failed("REMOTE_UNVERIFIED"); }
+  } catch { return failed("REMOTE_UNVERIFIED", "IDP_NETWORK"); }
   if (response.status === 401 || response.status === 403)
-    return failed("AUTH_REQUIRED");
+    return failed("AUTH_REQUIRED", "IDP_HTTP", response.status);
   if (response.status !== 200 || response.redirected)
-    return failed("REMOTE_UNVERIFIED");
+    return failed("REMOTE_UNVERIFIED", "IDP_HTTP", response.status);
   // Never use a combined Set-Cookie string: Expires commas are ambiguous.
   const getSetCookie = (response.headers as Headers & {
     getSetCookie?: () => string[] }).getSetCookie;
-  if (typeof getSetCookie !== "function") return { ...failed("COOKIE_UNVERIFIED"),
+  if (typeof getSetCookie !== "function") return { ...failed("COOKIE_UNVERIFIED",
+    "IDP_COOKIE", response.status),
     cookieIssue: "HEADER_API_UNAVAILABLE" };
   const headers = getSetCookie.call(response.headers);
   const cookieNow = clock();
   if (!Number.isSafeInteger(cookieNow) || cookieNow < now)
-    return failed("COOKIE_UNVERIFIED");
+    return failed("COOKIE_UNVERIFIED", "IDP_COOKIE", response.status);
   const cookies: Cookie[] = [];
   let idCookieHeaderCount = 0;
   let idCookieIssue: CookieIssue = "ID_COOKIE_MISSING";
@@ -219,7 +227,8 @@ export async function openMercariWebHttpReadOnly(
   }
   if (idCookieHeaderCount !== 1 ||
       cookies.filter(cookie => cookie.name === "id_token").length !== 1)
-    return { ...failed("COOKIE_UNVERIFIED"), cookieIssue:
+    return { ...failed("COOKIE_UNVERIFIED", "IDP_COOKIE",
+      response.status), cookieIssue:
       idCookieHeaderCount > 1 ?
         "ID_COOKIE_DUPLICATE" : idCookieHeaderCount === 1 ? idCookieIssue :
           "ID_COOKIE_MISSING" };
@@ -259,9 +268,11 @@ export async function openMercariWebHttpReadOnly(
   };
   const selfResult = await post("Self", SELF_QUERY);
   if (selfResult?.status === 401 || selfResult?.status === 403)
-    return failed("AUTH_REQUIRED");
+    return failed("AUTH_REQUIRED", "SELF_READ", selfResult.status);
   const self = validGraphql(selfResult);
-  if (!self || !object(self.self)) return failed("REMOTE_UNVERIFIED");
+  if (!self || !object(self.self))
+    return failed("REMOTE_UNVERIFIED", "SELF_READ",
+      selfResult?.status ?? null);
 
   const core: Omit<WebHttpReadOnlyClient, "reconciliationReadback"> = {
     verifyTargetShop: async () => {
@@ -452,6 +463,7 @@ export async function openMercariWebHttpReadOnly(
     listDraftCandidates: core.listDraftCandidates,
   };
   return { status: "READY", client: { ...core, reconciliationReadback },
+    failureStage: null, httpStatus: null,
     cookieExpiryKnown: cookies.find(cookie => cookie.name === "id_token")!
       .expiresAt !== null, cookieIssue: null };
 }
