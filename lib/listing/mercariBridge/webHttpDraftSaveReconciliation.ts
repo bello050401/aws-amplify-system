@@ -112,12 +112,18 @@ export async function reconcileReservedWebHttpDraft(
   if (typeof candidate.id !== "string" ||
       !/^[A-Za-z0-9]{1,64}$/.test(candidate.id))
     return result("READ_UNVERIFIED_NO_RESEND");
+  // The observed CreateProductDraft readback has price 0 and no thumbnail;
+  // UpdateProductDraft fills those fields later. This is observation only:
+  // even a unique match does not prove this attempt created the draft.
+  const expectedInitialCreate = stage?.kind === "DRAFT_CREATE" &&
+    candidate.price === 0 && candidate.thumbnailCount === 0;
+  const expectedCompletedDraft = candidate.price === pack.priceYen &&
+    candidate.thumbnailCount ===
+      (Array.isArray(pack.imageRefs) ? pack.imageRefs.length : -1);
   if (candidate.name !== pack.title ||
       candidate.description !== pack.description ||
-      candidate.price !== pack.priceYen ||
       candidate.quantity !== pack.quantity ||
-      candidate.thumbnailCount !==
-        (Array.isArray(pack.imageRefs) ? pack.imageRefs.length : -1))
+      !expectedInitialCreate && !expectedCompletedDraft)
     return result("NO_MATCH_NO_RESEND");
   return result("MATCHING_DRAFT_OBSERVED_NO_RESEND", candidate.id);
 }
