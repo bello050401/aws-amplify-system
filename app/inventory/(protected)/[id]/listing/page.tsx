@@ -165,7 +165,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
         {role === "ADMIN" && (!httpPreparationEligible || [
           "5b0f3587-cbbb-4c09-ae78-595b2b3e353f", "dd273c1e-9b2a-4013-acc6-c445a481fab8",
           B005396_INVENTORY_ID,
-        ].includes(item.id.toLowerCase())) && <section className="mt-5 max-w-2xl rounded border bg-white p-4">
+        ].includes(item.id.toLowerCase())) && <section id="mercari-http-listing" className="mt-5 max-w-2xl rounded border bg-white p-4">
           <h2 className="font-bold">メルカリShops HTTPS出品</h2>
           <MercariHttpExecutionPanel inventoryId={item.id} requestId={null} />
         </section>}

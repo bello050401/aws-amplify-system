@@ -52,7 +52,7 @@ export default async function ListingsOverviewPage() {
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">EC出品</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <p className="mb-4 text-[12px] text-gray-500">
-          在庫の商品の出品準備状況（出品下書き・過去の出品履歴）を一覧で確認し、出品下書きの一括作成ができます。個別の出品下書き編集は、各商品の「詳細を開く」から商品詳細画面のEC出品タブで行います。Mercari Shopsへの出品作業自体はMercariの管理画面で直接行ってください。
+          在庫の商品の出品準備状況（出品下書き・過去の出品履歴）を一覧で確認し、出品下書きの一括作成ができます。個別の出品下書き編集やメルカリShopsへの出品は、商品名から開くEC出品画面で行います。
         </p>
         <Suspense fallback={<ListingsOverviewSkeleton canEdit={canEditInventory(role)} />}>
           <ListingsOverviewData canEdit={canEditInventory(role)} />

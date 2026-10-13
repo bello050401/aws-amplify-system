@@ -213,6 +213,6 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
       state === "CREATING" || state === "STOPPING" ?
         "Shops側の結果を確認中です。重複操作を防ぐため再操作できません。" :
         pcFeatureEnabled ? "PC側で対象IDと公開状態を再確認します。再出品は同じ商品の停止完了記録がある場合のみ行えます。" :
-        "BELLOに記録がなくてもShops側に既存商品がある場合があります。画面操作と結果確認を接続するまで、このボタンは実行できません。"}</p>
+        "HTTPS方式は下の出品欄から操作できます。BELLOに記録がなくてもShops側に既存商品がある場合があるため、登録済みの商品を確認してから出品します。"}</p>
   </section>;
 }
