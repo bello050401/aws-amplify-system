@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 
 import { WEB_HTTP_SHOP_ID } from "./webHttpDraftJob.ts";
 import { observedCategoryLeafIds } from "./webHttpObservedCategory.ts";
@@ -134,6 +135,12 @@ export function parseObservedProductRead(body: unknown,
 export function buildObservedStopProductRequest(body: unknown,
   expectedProductId: string, idempotencyKeySeed: number) {
   const product = parseObservedProductRead(body, expectedProductId);
+  return product ? buildObservedStopProductRequestFromRead(product, idempotencyKeySeed) : null;
+}
+
+/** Only accepts the normalized result of the authenticated product reader. */
+export function buildObservedStopProductRequestFromRead(product: ObservedProductRead,
+  idempotencyKeySeed: number) {
   if (!product || product.status !== "STATUS_OPENED" ||
       !seedValid(idempotencyKeySeed)) return null;
   return { operationName: "UpdateProductV2" as const,
@@ -142,6 +149,16 @@ export function buildObservedStopProductRequest(body: unknown,
       status: "STATUS_UNOPENED", productSnapshotId: product.snapshotId,
       variants: product.variants,
     }, idempotencyKeySeed } };
+}
+
+/** Exclude revisions and visibility, which legitimately change on stopping.
+ * All content, quantities and variant identities must survive the operation.
+ */
+export function observedProductContentFingerprint(product: ObservedProductRead): string {
+  return createHash("sha256").update(JSON.stringify({
+    id: product.id, shopId: product.shopId, fields: product.fields,
+    variants: product.variants.map(({ stockSnapshotId: _revision, ...variant }) => variant),
+  })).digest("hex");
 }
 
 /** Publication contract observed after ValidateProductInfo returned true.

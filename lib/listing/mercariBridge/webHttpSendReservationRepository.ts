@@ -11,6 +11,7 @@ import type {
   WebHttpSendReservationRepository,
   WebHttpShopSendSlot,
 } from "./webHttpSendReservation.ts";
+import { webHttpProductStopGuardId } from "./webHttpSendReservation.ts";
 
 type Tables = {
   slotTableName: string;
@@ -50,6 +51,18 @@ export class DynamoWebHttpSendReservationRepository
       ConsistentRead: true,
     }));
     return (response.Item as WebHttpSendAttempt | undefined) ?? null;
+  }
+
+  async getPendingProductStop(shopId: string, productId: string): Promise<string | null> {
+    const response = await this.ddb.send(new GetCommand({
+      TableName: this.tables.attemptTableName,
+      Key: { requestId: webHttpProductStopGuardId(shopId, productId) },
+      ConsistentRead: true,
+    }));
+    if (!response.Item) return null;
+    if (response.Item.status !== "PRODUCT_STOP_PENDING" ||
+        !/^[a-f0-9]{64}$/.test(response.Item.linkedRequestId)) throw Error("INVALID_STOP_GUARD");
+    return response.Item.linkedRequestId;
   }
 
   /** A second call with the same reservation fails its status condition. */
@@ -125,6 +138,58 @@ export class DynamoWebHttpSendReservationRepository
     }));
   }
 
+  /** Only a fresh, matching readback may record a stop as verified. An ACK or
+   * failed/unauthenticated read alone never changes the persisted result.
+   */
+  async verifyProductStop(requestId: string, attemptId: string, shopId: string,
+    remoteProductId: string, productContentFingerprint: string,
+    nowIso: string): Promise<void> {
+    if (!/^[a-f0-9]{64}$/.test(requestId) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(attemptId) ||
+        !/^[A-Za-z0-9]{1,64}$/.test(remoteProductId) ||
+        !/^[a-f0-9]{64}$/.test(productContentFingerprint) ||
+        !Number.isFinite(Date.parse(nowIso))) throw Error("INVALID_PRODUCT_STOP_RESULT");
+    await this.ddb.send(new TransactWriteCommand({ TransactItems: [{ Update: {
+      TableName: this.tables.attemptTableName, Key: { requestId },
+      UpdateExpression: "SET #status = :verified, #updatedAt = :now",
+      ConditionExpression: "#status = :claimed " +
+        "AND #attemptId = :attemptId AND #productId = :productId " +
+        "AND #fingerprint = :fingerprint",
+      ExpressionAttributeNames: { "#status": "status", "#updatedAt": "updatedAt",
+        "#attemptId": "attemptId", "#productId": "remoteProductId",
+        "#fingerprint": "productContentFingerprint" },
+      ExpressionAttributeValues: { ":claimed": "SEND_CLAIMED_RESULT_UNKNOWN",
+        ":verified": "PRODUCT_STOP_VERIFIED", ":now": nowIso,
+        ":attemptId": attemptId, ":productId": remoteProductId,
+        ":fingerprint": productContentFingerprint },
+    } }, { Delete: {
+      TableName: this.tables.attemptTableName,
+      Key: { requestId: webHttpProductStopGuardId(shopId, remoteProductId) },
+      ConditionExpression: "#linkedRequestId = :requestId",
+      ExpressionAttributeNames: { "#linkedRequestId": "linkedRequestId" },
+      ExpressionAttributeValues: { ":requestId": requestId },
+    } }] }));
+  }
+
+  /** This can release a reservation only if no sender ever claimed it. */
+  async cancelUnclaimedProductStop(attempt: WebHttpSendAttempt): Promise<void> {
+    if (!attempt.remoteProductId) throw Error("INVALID_STOP_ATTEMPT");
+    await this.ddb.send(new TransactWriteCommand({ TransactItems: [{ Update: {
+      TableName: this.tables.attemptTableName, Key: { requestId: attempt.requestId },
+      UpdateExpression: "SET #status = :cancelled",
+      ConditionExpression: "#status = :reserved AND #attemptId = :attemptId",
+      ExpressionAttributeNames: { "#status": "status", "#attemptId": "attemptId" },
+      ExpressionAttributeValues: { ":reserved": "RESERVED_NO_SEND",
+        ":cancelled": "CANCELLED_NO_SEND", ":attemptId": attempt.attemptId },
+    } }, { Delete: {
+      TableName: this.tables.attemptTableName,
+      Key: { requestId: webHttpProductStopGuardId(attempt.shopId, attempt.remoteProductId) },
+      ConditionExpression: "#linkedRequestId = :requestId",
+      ExpressionAttributeNames: { "#linkedRequestId": "linkedRequestId" },
+      ExpressionAttributeValues: { ":requestId": attempt.requestId },
+    } }] }));
+  }
+
   async transactReserve(previous: WebHttpShopSendSlot | null,
     next: WebHttpShopSendSlot, attempt: WebHttpSendAttempt,
     nowIso: string): Promise<void> {
@@ -171,9 +236,26 @@ export class DynamoWebHttpSendReservationRepository
         { Put: {
           TableName: this.tables.attemptTableName,
           Item: { ...attempt, createdAt: nowIso, updatedAt: nowIso },
+          ConditionExpression: attempt.remoteProductId ?
+            "attribute_not_exists(#requestId) OR #status = :cancelled" :
+            "attribute_not_exists(#requestId)",
+          ExpressionAttributeNames: { "#requestId": "requestId",
+            ...(attempt.remoteProductId ? { "#status": "status" } : {}) },
+          ...(attempt.remoteProductId ? {
+            ExpressionAttributeValues: { ":cancelled": "CANCELLED_NO_SEND" },
+          } : {}),
+        } },
+        ...(attempt.remoteProductId ? [{ Put: {
+          TableName: this.tables.attemptTableName,
+          // Same physical table, separate hashed key. Keep the model's required
+          // fields so an administrative GraphQL list cannot fail on this row.
+          Item: { ...attempt,
+            requestId: webHttpProductStopGuardId(attempt.shopId, attempt.remoteProductId),
+            status: "PRODUCT_STOP_PENDING", linkedRequestId: attempt.requestId,
+            createdAt: nowIso, updatedAt: nowIso },
           ConditionExpression: "attribute_not_exists(#requestId)",
           ExpressionAttributeNames: { "#requestId": "requestId" },
-        } },
+        } }] : []),
       ],
     }));
   }

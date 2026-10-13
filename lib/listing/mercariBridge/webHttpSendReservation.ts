@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
+import { WEB_HTTP_SHOP_ID } from "./webHttpDraftJob.ts";
 import { initialWebHttpExecutionState, transitionWebHttpExecution,
   WEB_HTTP_MIN_SEND_INTERVAL_MS, type WebHttpSendChecks } from
   "./webHttpExecutionGate.ts";
@@ -58,12 +59,47 @@ export type WebHttpSendAttempt = {
   sendBeforeAt: string;
   requestedBy: string;
   status: "RESERVED_NO_SEND" | "SEND_CLAIMED_RESULT_UNKNOWN" |
-    "IMAGE_ACKNOWLEDGED" | "DRAFT_ACKNOWLEDGED";
+    "IMAGE_ACKNOWLEDGED" | "DRAFT_ACKNOWLEDGED" | "PRODUCT_STOP_VERIFIED" |
+    "CANCELLED_NO_SEND";
   remoteAssetId?: string;
   preparedJpegSha256?: string;
   remoteDraftId?: string;
   draftMutationKind?: "CREATE" | "UPDATE";
+  remoteProductId?: string;
+  productSnapshotId?: string;
+  productContentFingerprint?: string;
 };
+
+export type WebHttpProductStopIdentity = {
+  inventoryId: string; shopId: string; requestedBy: string;
+  remoteProductId: string; productSnapshotId: string;
+  productContentFingerprint: string;
+};
+type SendIdentity = Pick<WebHttpDraftJob,
+  "inventoryId" | "shopId" | "requestedBy" | "snapshotFingerprint">;
+
+/** A stop is keyed by the linked product revision, not a new draft job.
+ * Retry/reconciliation must retain this key after a request becomes uncertain.
+ */
+export function webHttpProductStopRequestId(identity: WebHttpProductStopIdentity): string | null {
+  if (!identity || !UUID.test(identity.inventoryId) ||
+      identity.shopId !== WEB_HTTP_SHOP_ID ||
+      typeof identity.requestedBy !== "string" || !identity.requestedBy.trim() ||
+      !/^[A-Za-z0-9]{1,64}$/.test(identity.remoteProductId) ||
+      typeof identity.productSnapshotId !== "string" ||
+      !identity.productSnapshotId || identity.productSnapshotId.length > 512 ||
+      /[\s\x00-\x1f]/.test(identity.productSnapshotId) ||
+      !/^[a-f0-9]{64}$/.test(identity.productContentFingerprint)) return null;
+  return createHash("sha256").update(JSON.stringify([
+    "BELLO_SHOPS_HTTP_STOP", identity.shopId, identity.inventoryId.toLowerCase(),
+    identity.remoteProductId, identity.productSnapshotId,
+  ])).digest("hex");
+}
+
+export const webHttpProductStopGuardId = (shopId: string, productId: string) =>
+  createHash("sha256").update(JSON.stringify([
+    "BELLO_SHOPS_HTTP_STOP_PENDING", shopId, productId,
+  ])).digest("hex");
 export type WebHttpSendReservationRepository = {
   /** Both reads must be strongly consistent; the transaction remains authoritative. */
   getSlot: (shopId: string) => Promise<WebHttpShopSendSlot | null>;
@@ -91,7 +127,7 @@ export type WebHttpSendReservationResult =
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validTime = (value: number) => Number.isSafeInteger(value) && value >= 0;
-function validSlot(slot: WebHttpShopSendSlot, job: WebHttpDraftJob) {
+function validSlot(slot: WebHttpShopSendSlot, job: SendIdentity) {
   const startedAt = Date.parse(slot.lastStartedAt);
   const sendBefore = Date.parse(slot.sendBeforeAt);
   const nextEligible = Date.parse(slot.nextEligibleAt);
@@ -133,35 +169,54 @@ export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
   if (preflight.auth !== "VALID" ||
       preflight.userReauthenticatedByHuman !== true)
     return { ok: false, code: "AUTH_REQUIRED" };
+  const candidate = transitionWebHttpExecution(initial, {
+    type: "BEGIN", nowMs, attemptId, checks: { ...preflight,
+      globalSendHistoryKnown: true, lastGlobalSendAtMs: null },
+  });
+  if (candidate.phase !== "IN_FLIGHT")
+    return { ok: false, code: "PRECHECK_NOT_READY" };
+  return reservePreparedSend(job, requestId, attemptId, repo, clock);
+}
+
+/** Only use after reading the persisted BELLO link and the current Shops
+ * product with the same authenticated session. No creation gate is disabled.
+ */
+export async function reserveWebHttpProductStopStart(identity: WebHttpProductStopIdentity,
+  attemptId: string, repo: WebHttpSendReservationRepository,
+  clock: () => number = Date.now): Promise<WebHttpSendReservationResult> {
+  const requestId = webHttpProductStopRequestId(identity);
+  if (!requestId || !UUID.test(attemptId)) return { ok: false, code: "INVALID_JOB" };
+  return reservePreparedSend({ ...identity,
+    snapshotFingerprint: identity.productContentFingerprint }, requestId,
+    attemptId, repo, clock, {
+      remoteProductId: identity.remoteProductId,
+      productSnapshotId: identity.productSnapshotId,
+      productContentFingerprint: identity.productContentFingerprint,
+    });
+}
+
+async function reservePreparedSend(job: SendIdentity, requestId: string,
+  attemptId: string, repo: WebHttpSendReservationRepository, clock: () => number,
+  product?: Pick<WebHttpSendAttempt,
+    "remoteProductId" | "productSnapshotId" | "productContentFingerprint">,
+): Promise<WebHttpSendReservationResult> {
+  const nowMs = clock();
+  if (!validTime(nowMs)) return { ok: false, code: "INVALID_JOB" };
   let priorAttempt: WebHttpSendAttempt | null;
   let previous: WebHttpShopSendSlot | null;
   try {
     priorAttempt = await repo.getAttempt(requestId);
-    if (priorAttempt) return { ok: false, code: "ALREADY_CLAIMED_NO_SEND" };
+    if (priorAttempt && !(product && priorAttempt.status === "CANCELLED_NO_SEND" &&
+        priorAttempt.remoteProductId === product.remoteProductId &&
+        priorAttempt.inventoryId === job.inventoryId && priorAttempt.shopId === job.shopId))
+      return { ok: false, code: "ALREADY_CLAIMED_NO_SEND" };
     previous = await repo.getSlot(job.shopId);
   } catch { return { ok: false, code: "STORAGE_UNAVAILABLE" }; }
   if (previous && !validSlot(previous, job))
     return { ok: false, code: "STORAGE_UNAVAILABLE" };
-  const priorMs = previous ? Date.parse(previous.lastStartedAt) : null;
-  const checks: WebHttpSendChecks = {
-    auth: preflight.auth,
-    writeContractVerified: preflight.writeContractVerified,
-    remoteDuplicate: preflight.remoteDuplicate,
-    existingBinding: preflight.existingBinding,
-    globalSendHistoryKnown: true, lastGlobalSendAtMs: priorMs,
-  };
-  const candidate = transitionWebHttpExecution(initial, {
-    type: "BEGIN", nowMs, checks, attemptId });
   const nextEligibleAtMs = previous ? Date.parse(previous.nextEligibleAt) : null;
   if (nextEligibleAtMs !== null && nowMs < nextEligibleAtMs)
     return { ok: false, code: "WAIT_INTERVAL", nextEligibleAtMs };
-  if (candidate.phase === "WAIT_INTERVAL")
-    return { ok: false, code: "WAIT_INTERVAL",
-      nextEligibleAtMs: candidate.nextEligibleAtMs ?? undefined };
-  if (candidate.phase !== "IN_FLIGHT")
-    return { ok: false, code: candidate.phase === "AUTH_REQUIRED" ?
-      "AUTH_REQUIRED" : candidate.phase === "BLOCKED_EXISTING_LINK" ?
-        "BLOCKED_EXISTING_LINK" : "PRECHECK_NOT_READY" };
   const sendBeforeMs = nowMs + WEB_HTTP_SEND_DEADLINE_MS;
   const nextEligibleMs = nowMs + WEB_HTTP_SEND_LEASE_MS +
     WEB_HTTP_MIN_SEND_INTERVAL_MS;
@@ -178,7 +233,7 @@ export async function reserveWebHttpSendStart(job: WebHttpDraftJob,
     inventoryId: job.inventoryId, shopId: job.shopId,
     snapshotFingerprint: job.snapshotFingerprint, attemptId,
     slotRevision: next.revision, reservedAt, sendBeforeAt,
-    requestedBy: job.requestedBy, status: "RESERVED_NO_SEND" };
+    requestedBy: job.requestedBy, status: "RESERVED_NO_SEND", ...product };
   try { await repo.transactReserve(previous, next, attempt, reservedAt); }
   catch { return { ok: false, code: "RESERVATION_UNCONFIRMED_NO_SEND" }; }
   // A transaction may commit while its response is delayed. An expired A must not
