@@ -19,6 +19,8 @@ import { initialWebHttpExecutionState } from
   "@/lib/listing/mercariBridge/webHttpExecutionGate";
 import { webHttpDraftJobRepository } from
   "@/lib/listing/mercariBridge/webHttpDraftJobRepository";
+import { webHttpPrivateDraftLinkRepository } from
+  "@/lib/listing/mercariBridge/webHttpPrivateDraftLinkRepository";
 
 const canonical = (value: unknown): unknown => Array.isArray(value) ?
   value.map(canonical) : value !== null && typeof value === "object" ?
@@ -99,9 +101,12 @@ export async function reserveMercariWebHttpDraftJobAction(
 
 /** Read only BELLO's persisted request; no Shops result is inferred. */
 export async function getMercariWebHttpDraftJobStatusAction(inventoryId: string): Promise<
-  { ok: true; status: "NOT_PREPARED"; requestId: null; recordedAt: null } |
+  { ok: true; status: "NOT_PREPARED"; requestId: null;
+    recordedAt: null; remoteDraftId: null } |
   { ok: true; status: "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT";
-    requestId: string; recordedAt: string } |
+    requestId: string; recordedAt: string; remoteDraftId: null } |
+  { ok: true; status: "PRIVATE_DRAFT_VERIFIED";
+    requestId: string; recordedAt: string; remoteDraftId: string } |
   { ok: false; code: "FORBIDDEN" | "BLOCKED_TARGET" | "STORAGE_UNAVAILABLE" }
 > {
   if (await getInventoryRole() !== "ADMIN") return { ok: false, code: "FORBIDDEN" };
@@ -112,13 +117,24 @@ export async function getMercariWebHttpDraftJobStatusAction(inventoryId: string)
     const requestId = webHttpDraftRequestId(inventoryId);
     const job = await webHttpDraftJobRepository.getJob(requestId);
     if (!job) return { ok: true, status: "NOT_PREPARED",
-      requestId: null, recordedAt: null };
+      requestId: null, recordedAt: null, remoteDraftId: null };
     if (!initialWebHttpExecutionState(job) ||
         job.requestId !== requestId ||
         job.inventoryId.toLowerCase() !== inventoryId.toLowerCase() ||
         !Number.isFinite(Date.parse(job.recordedAt)))
       return { ok: false, code: "STORAGE_UNAVAILABLE" };
-    return { ok: true, status: job.status, requestId: job.requestId,
-      recordedAt: job.recordedAt };
+    const link = await webHttpPrivateDraftLinkRepository.get(inventoryId);
+    if (link && (link.inventoryId !== job.inventoryId ||
+        link.shopId !== job.shopId ||
+        link.requestId !== job.requestId ||
+        link.snapshotFingerprint !== job.snapshotFingerprint ||
+        link.status !== "PRIVATE_DRAFT_VERIFIED" ||
+        !/^[A-Za-z0-9]{1,64}$/.test(link.remoteDraftId)))
+      return { ok: false, code: "STORAGE_UNAVAILABLE" };
+    return link ? { ok: true, status: "PRIVATE_DRAFT_VERIFIED",
+      requestId: job.requestId, recordedAt: job.recordedAt,
+      remoteDraftId: link.remoteDraftId } :
+      { ok: true, status: job.status, requestId: job.requestId,
+        recordedAt: job.recordedAt, remoteDraftId: null };
   } catch { return { ok: false, code: "STORAGE_UNAVAILABLE" }; }
 }

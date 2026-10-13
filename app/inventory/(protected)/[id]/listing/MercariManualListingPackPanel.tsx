@@ -32,10 +32,12 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [httpStatus, setHttpStatus] = useState<"CHECKING" | "NOT_PREPARED" |
-    "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" | "BLOCKED_TARGET" |
+    "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" | "PRIVATE_DRAFT_VERIFIED" |
+    "BLOCKED_TARGET" |
     "UNAVAILABLE">("CHECKING");
   const [httpRequestId, setHttpRequestId] = useState<string | null>(null);
   const [httpRecordedAt, setHttpRecordedAt] = useState<string | null>(null);
+  const [httpRemoteDraftId, setHttpRemoteDraftId] = useState<string | null>(null);
   const httpStatusEpoch = useRef(0);
   const [pack, setPack] = useState<MercariManualListingPack | null>(null);
   const [reviewEvidence, setReviewEvidence] =
@@ -85,12 +87,14 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     setHttpStatus("CHECKING");
     setHttpRequestId(null);
     setHttpRecordedAt(null);
+    setHttpRemoteDraftId(null);
     void getMercariWebHttpDraftJobStatusAction(inventoryId).then(result => {
       if (disposed || epoch !== httpStatusEpoch.current) return;
       if (!result.ok) setHttpStatus(result.code === "BLOCKED_TARGET" ?
         "BLOCKED_TARGET" : "UNAVAILABLE");
       else { setHttpStatus(result.status); setHttpRequestId(result.requestId);
-        setHttpRecordedAt(result.recordedAt); }
+        setHttpRecordedAt(result.recordedAt);
+        setHttpRemoteDraftId(result.remoteDraftId); }
     }).catch(() => { if (!disposed && epoch === httpStatusEpoch.current)
       setHttpStatus("UNAVAILABLE"); });
     return () => { disposed = true; };
@@ -282,11 +286,18 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         httpStatus === "NOT_PREPARED" ? "未登録" :
         httpStatus === "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" ?
           "登録済み・認証と書込仕様の確認待ち" :
+          httpStatus === "PRIVATE_DRAFT_VERIFIED" ?
+            "Shops非公開下書きの内容を確認済み（未出品）" :
           httpStatus === "BLOCKED_TARGET" ? "既存商品・テスト対象のため受付不可" :
             "取得できません"}</p>
       {httpRequestId && <p>依頼ID: <code>{httpRequestId.slice(0, 12)}</code></p>}
       {httpRecordedAt && <p>記録日時: {new Date(httpRecordedAt).toLocaleString("ja-JP")}</p>}
-      <p>このHTTP依頼の結果: 未送信（出品成立は未確認）</p>
+      {httpRemoteDraftId && <p>Shops下書きID: <code>{httpRemoteDraftId}</code></p>}
+      <p>このHTTP依頼の結果: {httpStatus === "PRIVATE_DRAFT_VERIFIED" ?
+        "非公開下書きまで確認済み。公開・出品成立は未確認" :
+        httpStatus === "NOT_PREPARED" ?
+          "準備未登録（出品成立は未確認）" :
+          "Shops送信結果・出品成立は未確認"}</p>
     </div>}
     <dl className="mt-3 grid grid-cols-2 gap-1 rounded bg-gray-50 p-3 text-xs">
       <dt>配送方法</dt><dd>未定（出品者手配）</dd>
