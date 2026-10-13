@@ -5,7 +5,7 @@ import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
-import { Effect, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
+import { Effect, ManagedPolicy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
 import { data } from "./data/resource";
 import { storage } from "./storage/resource";
@@ -51,17 +51,29 @@ const backend = defineBackend({
 if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
     process.env.AWS_BRANCH === "claude/inventory-management-system-5vbvc7") {
   const httpStack = backend.createStack("MercariHttpsRuntime");
-  const session = new Secret(httpStack, "Session", {
-    secretName: "bello/mercari-web-session-staging",
-    description: "Owner-authorized Mercari Shops HTTPS session; never browser automation",
-    removalPolicy: RemovalPolicy.RETAIN,
-  });
+  // Job 418 created this RETAIN secret before its IAM update rolled back.
+  // Import its exact existing ARN: never replace credentials or create a
+  // duplicate secret when retrying the deployment.
+  const session = Secret.fromSecretCompleteArn(httpStack, "Session",
+    "arn:aws:secretsmanager:us-west-2:203918843421:secret:bello/mercari-web-session-staging-nH5fLy");
   const runtimeRole = Role.fromRoleName(httpStack, "StagingRuntimeRole", "BelloAmplifyStagingComputeRole");
-  session.grantRead(runtimeRole);
   const slot = backend.data.resources.tables["MercariBridgeHttpShopSendSlot"];
   const attempt = backend.data.resources.tables["MercariBridgeHttpSendAttempt"];
   const link = backend.data.resources.tables["MercariBridgeHttpProductLink"];
-  for (const table of [slot, attempt, link]) table.grantReadWriteData(runtimeRole);
+  // The existing SSR role is near IAM's total inline-policy size limit.
+  // An independently managed, narrowly scoped policy avoids enlarging its
+  // inline policies; existing BASE/other integrations are left untouched.
+  new ManagedPolicy(httpStack, "RuntimeAccess", {
+    roles: [runtimeRole],
+    statements: [
+      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [session.secretArn] }),
+      new PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem", "dynamodb:ConditionCheckItem"],
+        resources: [slot.tableArn, attempt.tableArn, link.tableArn],
+      }),
+    ],
+  });
   backend.addOutput({ custom: { mercariHttps: { region: httpStack.region,
     secretArn: session.secretArn, slotTable: slot.tableName,
     attemptTable: attempt.tableName, linkTable: link.tableName } } });
