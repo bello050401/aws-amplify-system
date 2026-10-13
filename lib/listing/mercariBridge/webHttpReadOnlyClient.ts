@@ -169,6 +169,15 @@ function validGraphql(result: GraphqlResult): Record<string, unknown> | null {
   return result.body.data;
 }
 
+function authRequired(result: GraphqlResult): boolean {
+  if (result?.status === 401 || result?.status === 403) return true;
+  if (!result || !object(result.body) || !Array.isArray(result.body.errors))
+    return false;
+  return result.body.errors.some(error => object(error) &&
+    object(error.extensions) &&
+    ["UNAUTHENTICATED", "FORBIDDEN"].includes(String(error.extensions.code)));
+}
+
 /**
  * An observed IDP handoff and a short-lived, process-local, read-only session.
  * Inputs must be raw token strings supplied by a trusted server caller. This
@@ -267,8 +276,8 @@ export async function openMercariWebHttpReadOnly(
     } catch { return null; }
   };
   const selfResult = await post("Self", SELF_QUERY);
-  if (selfResult?.status === 401 || selfResult?.status === 403)
-    return failed("AUTH_REQUIRED", "SELF_READ", selfResult.status);
+  if (authRequired(selfResult))
+    return failed("AUTH_REQUIRED", "SELF_READ", selfResult?.status ?? null);
   const self = validGraphql(selfResult);
   if (!self || !object(self.self))
     return failed("REMOTE_UNVERIFIED", "SELF_READ",
@@ -278,7 +287,7 @@ export async function openMercariWebHttpReadOnly(
     verifyTargetShop: async () => {
       shopVerified = false;
       const result = await post("OwnShops", SHOPS_QUERY);
-      if (result?.status === 401 || result?.status === 403)
+      if (authRequired(result))
         return { status: "AUTH_REQUIRED", shopMatched: false };
       const data = validGraphql(result);
       if (!data || !Array.isArray(data.ownShops))
@@ -295,7 +304,7 @@ export async function openMercariWebHttpReadOnly(
       if (!shopVerified || !DRAFT_ID.test(draftId)) return unknown();
       const read = await post("GetProductDraft", DRAFT_DETAIL_QUERY,
         { id: draftId });
-      if (read?.status === 401 || read?.status === 403)
+      if (authRequired(read))
         return unknown("AUTH_REQUIRED");
       const data = validGraphql(read);
       if (!data || !object(data.productDraft)) return unknown();
@@ -319,7 +328,7 @@ export async function openMercariWebHttpReadOnly(
       if (!shopVerified || !DRAFT_ID.test(draftId)) return unknown();
       const read = await post("GetProductDraft", DRAFT_DETAIL_QUERY,
         { id: draftId });
-      if (read?.status === 401 || read?.status === 403)
+      if (authRequired(read))
         return unknown("AUTH_REQUIRED");
       const data = validGraphql(read);
       const draft = data?.productDraft;
@@ -370,7 +379,7 @@ export async function openMercariWebHttpReadOnly(
       const matched: boolean[] = [];
       for (const id of ids) {
         const read = await post("GetProductDraft", DRAFT_QUERY, { id });
-        if (read?.status === 401 || read?.status === 403)
+        if (authRequired(read))
           return result("AUTH_REQUIRED", matched[0] ?? false);
         const data = validGraphql(read);
         if (!data || !object(data.productDraft) ||
@@ -395,7 +404,7 @@ export async function openMercariWebHttpReadOnly(
           { shopId, first: 50 };
         if (cursor !== null) variables.cursor = cursor;
         const read = await post("productDrafts", DRAFT_LIST_QUERY, variables);
-        if (read?.status === 401 || read?.status === 403)
+        if (authRequired(read))
           return unknown("AUTH_REQUIRED");
         const data = validGraphql(read);
         const connection = data?.productDrafts;
@@ -425,7 +434,7 @@ export async function openMercariWebHttpReadOnly(
       const candidates: WebHttpDraftCandidate[] = [];
       for (const id of ids) {
         const read = await post("GetProductDraft", DRAFT_DETAIL_QUERY, { id });
-        if (read?.status === 401 || read?.status === 403)
+        if (authRequired(read))
           return unknown("AUTH_REQUIRED");
         const data = validGraphql(read);
         const draft = data?.productDraft;
