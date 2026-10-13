@@ -426,6 +426,20 @@ export async function executeObservedDraftWriteOnce(
       ports.repository, ports.readback, stage);
     return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
   }
+  // A sale or stock change can occur during the final auth check. The claim
+  // is already durable, so a changed source stops this attempt permanently.
+  try { inventory = await ports.readCurrentInventory(job.inventoryId); }
+  catch { inventory = null; }
+  if (!validCurrentInventory(job, frozenCode, minimumQuantity, inventory)) {
+    const readback = await reconcileReservedWebHttpDraft(job,
+      ports.repository, ports.readback, stage);
+    return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
+  }
+  if (!webHttpSendPermitFresh(reservation, clock())) {
+    const readback = await reconcileReservedWebHttpDraft(job,
+      ports.repository, ports.readback, stage);
+    return result("RESULT_UNKNOWN_NO_RESEND", null, readback.status);
+  }
   const operationName = mutation.kind === "CREATE" ?
     "CreateProductDraft" : "UpdateProductDraft";
   const query = mutation.kind === "CREATE" ? CREATE_QUERY : UPDATE_QUERY;
