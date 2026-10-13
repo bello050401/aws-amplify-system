@@ -164,6 +164,11 @@ export async function executeObservedImageUploadOnce(job: WebHttpDraftJob,
   // No retry after this point, including an expired permit before fetch.
   try { auth = await ports.verifyAuthFresh(); }
   catch { return result("RESULT_UNKNOWN_NO_RESEND"); }
+  // Stock or the saved image can change while the authenticated check runs.
+  // After the durable claim, an unverified source must stop without a resend.
+  try { current = await ports.verifyCurrentJob(job); }
+  catch { current = false; }
+  if (!current) return result("RESULT_UNKNOWN_NO_RESEND");
   now = clock();
   if (auth.status !== "VALID" || auth.shopId !== job.shopId ||
       !validTime(now) || !validTime(auth.verifiedAtMs ?? -1) ||
