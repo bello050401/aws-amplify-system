@@ -48,7 +48,9 @@ frontend:
         - echo "INVENTORY_SPEED_PROBE_BRANCH=${AWS_BRANCH:-}" >> .env.production
         - echo "INVENTORY_SPEED_PROBE_START_AT=${INVENTORY_SPEED_PROBE_START_AT:-}" >> .env.production
         - echo "INVENTORY_SPEED_PROBE_END_AT=${INVENTORY_SPEED_PROBE_END_AT:-}" >> .env.production
-        - npm run build
+        # The generated Amplify schema exceeds Node's default 2 GiB heap during
+        # Next.js type checking. Keep every check enabled within the 8 GiB builder.
+        - NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=4096" npm run build
   artifacts:
     baseDirectory: .next
     files:
