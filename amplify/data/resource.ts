@@ -924,6 +924,16 @@ const schema = a.schema({
     "ARCHIVED",
   ]),
 
+  /** Personal Yahoo Auctions preparation only; no remote listing status or credentials. */
+  YahooAuctionPreparation: a.model({
+    inventoryId: a.string().required(),
+    payload: a.json().required(),
+    revision: a.integer().required(),
+    updatedBy: a.string().required(),
+  }).identifier(["inventoryId"]).authorization((allow) => [
+    allow.group("ADMIN"), allow.group("EDITOR"), allow.group("VIEWER").to(["read"]),
+  ]),
+
   /** チャネルに依存しない共通の出品下書き — 1つのInventoryにつき0または1件。 */
   ListingDraft: a
     .model({

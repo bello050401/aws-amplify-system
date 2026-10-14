@@ -9,6 +9,7 @@ import { ListingWorkspace } from "./ListingWorkspace";
 import { MercariPrivateCreatePreparationPanel } from "./MercariPrivateCreatePreparationPanel";
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
 import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
+import { YahooAuctionListingSection } from "./YahooAuctionListingSection";
 import { B005396_INVENTORY_ID } from
   "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import { webHttpDraftTargetAllowed } from
@@ -169,6 +170,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
           <h2 className="font-bold">メルカリShops HTTPS出品</h2>
           <MercariHttpExecutionPanel inventoryId={item.id} requestId={null} />
         </section>}
+        <YahooAuctionListingSection key={item.id} inventoryId={item.id} />
         {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
             ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
             役割が重複していたので消した。生成エンジン・生成履歴の保存・
