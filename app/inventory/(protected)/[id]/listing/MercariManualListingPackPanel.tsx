@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { searchMercariBrandsAction } from "@/app/actions/listing";
 import { prepareMercariManualListingPackAction,
   type MercariManualListingPack } from "@/app/actions/mercariManualListingPack";
@@ -40,6 +40,8 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const [httpRecordedAt, setHttpRecordedAt] = useState<string | null>(null);
   const [httpRemoteDraftId, setHttpRemoteDraftId] = useState<string | null>(null);
   const httpStatusEpoch = useRef(0);
+  const [httpStatusRefresh, setHttpStatusRefresh] = useState(0);
+  const refreshHttpStatus = useCallback(() => setHttpStatusRefresh(value => value + 1), []);
   const [pack, setPack] = useState<MercariManualListingPack | null>(null);
   const [reviewEvidence, setReviewEvidence] =
     useState<WebHttpReviewEvidence | null>(null);
@@ -99,7 +101,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     }).catch(() => { if (!disposed && epoch === httpStatusEpoch.current)
       setHttpStatus("UNAVAILABLE"); });
     return () => { disposed = true; };
-  }, [isHttp, inventoryId]);
+  }, [isHttp, inventoryId, httpStatusRefresh]);
   useEffect(() => {
     if (isHttp) return;
     let disposed = false;
@@ -276,7 +278,8 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   return <section id={isHttp ? "mercari-http-listing" : "mercari-manual-preparation"}
     className="mt-5 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
     <h2 className="font-bold">メルカリShops {isHttp ? "HTTPS出品" : "PC方式の出品準備"}</h2>
-    {isHttp && <MercariHttpExecutionPanel inventoryId={inventoryId} requestId={httpRequestId} />}
+    {isHttp && <MercariHttpExecutionPanel inventoryId={inventoryId} requestId={httpRequestId}
+      onDraftSaved={refreshHttpStatus} />}
     <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isHttp && isB005396 ?
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
       "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
@@ -287,16 +290,16 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <p>HTTP方式の準備状態: {httpStatus === "CHECKING" ? "確認中" :
         httpStatus === "NOT_PREPARED" ? "未登録" :
         httpStatus === "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" ?
-          "登録済み・認証と書込仕様の確認待ち" :
+          "準備登録済み・Shops下書きは未保存" :
           httpStatus === "PRIVATE_DRAFT_VERIFIED" ?
-            "Shops非公開下書きの内容を確認済み（未出品）" :
+            "Shops非公開下書きの内容を確認済み" :
           httpStatus === "BLOCKED_TARGET" ? "既存商品・テスト対象のため受付不可" :
             "取得できません"}</p>
       {httpRequestId && <p>依頼ID: <code>{httpRequestId.slice(0, 12)}</code></p>}
       {httpRecordedAt && <p>記録日時: {new Date(httpRecordedAt).toLocaleString("ja-JP")}</p>}
       {httpRemoteDraftId && <p>Shops下書きID: <code>{httpRemoteDraftId}</code></p>}
       <p>このHTTP依頼の結果: {httpStatus === "PRIVATE_DRAFT_VERIFIED" ?
-        "非公開下書きまで確認済み。公開・出品成立は未確認" :
+        "下書き保存・照合済み。現在の出品状態は上欄を確認してください。" :
         httpStatus === "NOT_PREPARED" ?
           "準備未登録（出品成立は未確認）" :
           "Shops送信結果・出品成立は未確認"}</p>

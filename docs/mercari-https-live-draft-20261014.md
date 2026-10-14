@@ -7,6 +7,7 @@
 - The BELLO server uploaded one inventory image, created a draft, updated it, verified its full readback, and persisted the private-draft link. These were server-side HTTPS operations; the Shops browser was used only to view the result afterward.
 - Image receipt: `2JY8AHwXRsbmcyECAhHGhZ`, reserved 2026-10-14T00:49:05.415Z.
 - Draft receipt: `2JY8ARTArbB7xQFktaAXRK`, creation reserved 2026-10-14T00:50:19.836Z. The workflow enforced the shared interval between writes.
+- Update receipt: the same draft, reserved 2026-10-14T00:51:33.433Z, acknowledged. Consecutive reservations were approximately 74 seconds apart.
 - BELLO displayed “Shopsに下書きを保存し、内容を確認しました。” Shops showed the same image, title, description, JPY 99,999, quantity 1, category and fixed shipping values, with “この商品は下書きです”. No public listing was created.
 - Local screenshot: `C:/Users/win/Documents/Codex/2026-10-14/mercari-https-proof/shops-private-draft.png`.
 
@@ -15,6 +16,8 @@
 The live new draft returned `maxQuantityPerOrderConfig: null`. The publication request builder required an object with `configuredValue: null`, as found in the older product capture, and rejected the new draft. The builder now accepts an explicit null for drafts only. Missing, malformed or configured purchase limits remain rejected. Published-product parsing remains unchanged.
 
 The contract, publication, stopping and reopening suites passed (33 tests), and TypeScript checking passed. Deployment and live publication-review acceptance of this fix remain to be recorded.
+
+The review builder also succeeded against a fresh HTTPS read of the actual saved draft after the fix (read-only; no publication request sent). A separate UI correction refreshes the preparation receipt after successful draft saving, removes obsolete “authentication/contract waiting” text, and distinguishes review failures without claiming an uncertain prior operation never happened.
 
 ## Remaining acceptance
 

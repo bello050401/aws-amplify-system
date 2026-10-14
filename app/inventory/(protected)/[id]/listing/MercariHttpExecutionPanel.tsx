@@ -12,8 +12,8 @@ const labels: Record<HttpListingState["status"], string> = {
   NOT_PREPARED: "出品内容を入力してください", PREPARED: "準備登録済み・Shops下書きは未保存です",
   DRAFT_READY: "下書き保存済み・出品内容を確認できます", LISTED: "出品中", STOPPED: "出品停止中",
 };
-export function MercariHttpExecutionPanel({ inventoryId, requestId }: {
-  inventoryId: string; requestId: string | null }) {
+export function MercariHttpExecutionPanel({ inventoryId, requestId, onDraftSaved }: {
+  inventoryId: string; requestId: string | null; onDraftSaved?: () => void }) {
   const [state, setState] = useState<HttpListingState | null>(null);
   const [preview, setPreview] = useState<PublishPreview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -54,7 +54,10 @@ export function MercariHttpExecutionPanel({ inventoryId, requestId }: {
             value.status === "SOURCE_CHANGED" ? "EC下書きまたは在庫の内容が変わりました。確認してください。" :
             "保存結果を確認できません。送信済みの処理は繰り返しません。");
           const latest = await getMercariHttpListingStateAction(inventoryId);
-          if (active) setState(latest);
+          if (active) {
+            setState(latest);
+            if (value.status === "DRAFT_READY") onDraftSaved?.();
+          }
           return;
         }
         if (active) setMessage("保存処理を中断しました。状態を確認してください。");
@@ -62,7 +65,7 @@ export function MercariHttpExecutionPanel({ inventoryId, requestId }: {
       finally { if (active) { setBusy(false); setSavingDraft(false); } }
     })();
     return () => { active = false; };
-  }, [savingDraft, requestId, inventoryId]);
+  }, [savingDraft, requestId, inventoryId, onDraftSaved]);
   async function act(operation: "check" | "review" | "publish" | "stop") {
     if (busy || seconds > 0) return;
     setBusy(true); setMessage("");
@@ -84,6 +87,9 @@ export function MercariHttpExecutionPanel({ inventoryId, requestId }: {
           result.status === "CONFIRMATION_CHANGED" ? "内容が変わりました。確認し直してください。" :
           result.status === "WAIT_INTERVAL" ? "前の送信からの間隔を空けています。" :
           result.status === "AUTH_REQUIRED" ? "再認証が必要です。" :
+          result.status === "DRAFT_UNVERIFIED" ? "Shops下書きと保存済みの出品内容を照合できませんでした。今回の公開送信は行っていません。" :
+          result.status === "SOURCE_CHANGED" ? "EC下書きまたは在庫の内容が変わりました。今回の公開送信は行っていません。" :
+          result.status === "VALIDATION_FAILED" ? "Shopsが商品内容の確認を受け付けませんでした。今回の公開送信は行っていません。" :
           "出品結果または準備内容を確認できません。重複防止のため自動再送は行いません。");
         if (result.status === "PUBLISHED" || result.status === "EXISTING_PRODUCT") setState(await getMercariHttpListingStateAction(inventoryId));
       }
