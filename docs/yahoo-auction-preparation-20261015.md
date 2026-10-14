@@ -13,6 +13,9 @@ The desired integration remains server-side HTTPS. No desktop browser or
 resident-PC fallback was introduced. The user was asked whether they have Yahoo
 listing API permission/contract and connection specifications; no answer has yet
 been received. Public product endpoints and authentication must not be guessed.
+Future public-listing tests require the user's target confirmation. Preserve the
+requested minimum 30-second interval between listing submissions and account for
+Yahoo-specific bid/cancellation rules before implementing stop and relist.
 
 Primary references checked:
 - Yahoo official detailed rules, A26: https://guide-ec.yahoo.co.jp/notice/rules/auc/detailed_regulations.html
@@ -47,8 +50,13 @@ Primary references checked:
   persisted 99,999 yen / quantity 1 and restored after reload, but incorrectly
   reported a conflict because JSON object key ordering changed. This failure was
   reproduced by a regression test and fixed by semantic comparison retaining
-  array/photo order. Final deployment and live acknowledgement verification are
-  pending for the final combined build (427 was cancelled before deployment to
-  include the category UI clarification).
+  array/photo order. Build 427 was cancelled before deployment to include the
+  category UI clarification. Final code `cf3103d` deployed successfully in build
+  428 (BUILD / DEPLOY / VERIFY all SUCCEED).
+- Final live save returned the explicit success message at 2026-10-15 08:51:21
+  JST. After a full page reload, 99,999 yen, quantity 1 and the category memo
+  "家具・椅子" were restored with that same saved timestamp. The remote listing
+  button remained disabled. Mercari's existing stop state remained visible.
+- Screenshot: `C:/Users/win/Documents/Codex/2026-10-15/yahoo-auction-proof/yahoo-listing-saved.png`.
 - Test inventory: `57b4b2b5-d6ad-435a-b303-5d412405a44c` (B005105 chair).
   Category and desired end time intentionally blank; no Yahoo listing was made.
