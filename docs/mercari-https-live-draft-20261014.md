@@ -21,12 +21,16 @@ The review builder also succeeded against a fresh HTTPS read of the actual saved
 
 UI commit `7d33a9f` was deployed in staging job 422, also BUILD/DEPLOY/VERIFY all SUCCEED. The publication-review screenshot is `C:/Users/win/Documents/Codex/2026-10-14/mercari-https-proof/bello-publication-review.png`.
 
-An explicit action-time question is pending for B005105 at JPY 99,999, quantity 1: publish, stop, reopen the same product, stop again, at least 30 seconds apart, ending non-public. Silence is not approval. Preserve this draft and image; do not repeat creation on resumption.
+The user explicitly approved B005105 at JPY 99,999, quantity 1: publish, stop, reopen the same product, stop again, at least 30 seconds apart, ending non-public. The reply was “この商品・価格でテストしてよい”. This approval remains valid for this exact test; do not ask for it again. Preserve this draft and image; do not repeat creation on resumption.
+
+On resumption, the clock was 2026-10-14T12:27:24Z (21:27 JST), after the stored session's expiry. BELLO's read-only status check returned “メルカリShopsの再認証が必要です”. The supplied HAR still had its 09:44:08 JST modification time. No public write was attempted. DynamoDB receipts still contained only the acknowledged image, draft creation, and draft update above, with no public-product receipt. The user was asked once to refresh the authenticated HAR locally. Resume the already-approved cycle after safe import and shop verification; the block is expired authentication, not missing test approval.
+
+Local screenshot: `C:/Users/win/Documents/Codex/2026-10-14/mercari-https-proof/bello-approved-test-auth-required.png`.
 
 ## Remaining acceptance
 
 - Review this existing draft; do not create it again.
-- Public listing requires the user's immediate confirmation of the actual product and price. Publish, stop, and reopen have not yet been demonstrated end-to-end through BELLO.
+- The exact public lifecycle test above is approved and awaits refreshed authentication. Publish, stop, and reopen have not yet been demonstrated end-to-end through BELLO.
 - Long-term session renewal is not established. The new HAR contains no sign-in/token-refresh requests and no refresh token. The displayed expiry is a real limit, not proof of sustained login.
 - Other condition mappings and optional brand submission remain disabled by the current runtime. Do not silently replace the user's selections.
 - Automation remains paused. BASE and Next Engine were not changed.
