@@ -77,12 +77,13 @@ function commonFields(product: RecordValue): ObservedProductFields | null {
     isRefurbished: product.isRefurbished, channelListingScope: product.channelListingScope };
 }
 
-function baseVariant(value: unknown): ObservedProductVariant | null {
+function baseVariant(value: unknown, allowUnsetPurchaseLimit = false): ObservedProductVariant | null {
   if (!object(value) || !text(value.name) || !quantity(value.quantity) ||
       !text(value.skuCode) || !text(value.janCode) ||
       !Array.isArray(value.attributes) || value.attributes.length !== 0 ||
-      !object(value.maxQuantityPerOrderConfig) ||
-      value.maxQuantityPerOrderConfig.configuredValue !== null) return null;
+      !(allowUnsetPurchaseLimit && value.maxQuantityPerOrderConfig === null ||
+        object(value.maxQuantityPerOrderConfig) &&
+        value.maxQuantityPerOrderConfig.configuredValue === null)) return null;
   return { name: value.name, quantity: value.quantity,
     skuCode: value.skuCode, janCode: value.janCode,
     attributes: [], maxQuantityPerOrder: null };
@@ -186,7 +187,9 @@ export function buildObservedCreateProductRequest(draftBody: unknown,
       draft.shippingConfiguration !== null || draft.mercariBinForBusinessSetting !== null)
     return null;
   const fields = commonFields(draft);
-  const variant = baseVariant(draft.variants[0]);
+  // A newly saved draft returns null for an unset purchase limit (live read,
+  // 2026-10-14); published products use { configuredValue: null, ... }.
+  const variant = baseVariant(draft.variants[0], true);
   if (!fields || !variant) return null;
   return { operationName: "CreateProduct" as const,
     query: CREATE_PRODUCT_QUERY, variables: { input: {
