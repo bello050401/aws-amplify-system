@@ -48,6 +48,8 @@ Proof directory: `C:/Users/win/Documents/Codex/2026-10-14/mercari-https-proof/`;
 
 The older PC section's generic “BELLO出品記録なし” label was misleading after a successful HTTPS listing. Its heading and empty label now explicitly identify PC records and direct HTTPS status checks to the HTTPS section. This is a display-only correction; the legacy PC workflow remains available.
 
+Display correction commit `7b81916` passed `tsc --noEmit` and `git diff --check`, then deployed to staging in Amplify job 423 (BUILD/DEPLOY/VERIFY all SUCCEED). The actual reloaded BELLO page showed “メルカリShops PC方式の出品記録” and the separate HTTPS status instructions. No listing operation was repeated for this text-only deployment.
+
 ## Remaining acceptance
 
 - Review this existing draft; do not create it again.
