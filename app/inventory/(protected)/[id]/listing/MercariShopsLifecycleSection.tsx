@@ -12,7 +12,7 @@ import { pcTargetKey, pcRecordCurrent, pcVisibilityControl,
 
 const SHOP_ID = "evkhihBFFNn5hukMS9s36H";
 const LABEL = {
-  NOT_LISTED: "BELLO出品記録なし", CREATING: "出品処理中", LISTED: "出品済み（BELLO記録）",
+  NOT_LISTED: "PC方式の出品記録なし", CREATING: "出品処理中", LISTED: "出品済み（BELLO記録）",
   STOPPING: "停止処理中", STOPPED: "停止済み（BELLO記録）",
   PRIVATE: "非公開（BELLO記録）", UNKNOWN: "結果の確認が必要",
 } as const;
@@ -166,7 +166,7 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
   return <section aria-labelledby="mercari-shops-lifecycle-heading"
     className="mt-4 rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h2 id="mercari-shops-lifecycle-heading" className="font-bold">メルカリShops</h2>
+      <h2 id="mercari-shops-lifecycle-heading" className="font-bold">メルカリShops PC方式の出品記録</h2>
       <span className="rounded bg-gray-100 px-2 py-1 text-xs">{pcStatus === "PUBLIC_VERIFIED" ?
         "公開確認済み（PC読取）" : pcStatus === "STOP_VERIFIED" ?
         "停止確認済み（PC読取）" : pcStatus === "RELIST_VERIFIED" ?
@@ -213,6 +213,6 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
       state === "CREATING" || state === "STOPPING" ?
         "Shops側の結果を確認中です。重複操作を防ぐため再操作できません。" :
         pcFeatureEnabled ? "PC側で対象IDと公開状態を再確認します。再出品は同じ商品の停止完了記録がある場合のみ行えます。" :
-        "HTTPS方式は下の出品欄から操作できます。BELLOに記録がなくてもShops側に既存商品がある場合があるため、登録済みの商品を確認してから出品します。"}</p>
+        "HTTPS方式の出品状態は、下の「メルカリShops HTTPS出品」欄で確認・操作できます。この欄はPC方式の記録を表示しています。"}</p>
   </section>;
 }

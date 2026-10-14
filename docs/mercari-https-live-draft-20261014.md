@@ -27,10 +27,31 @@ On resumption, the clock was 2026-10-14T12:27:24Z (21:27 JST), after the stored 
 
 Local screenshot: `C:/Users/win/Documents/Codex/2026-10-14/mercari-https-proof/bello-approved-test-auth-required.png`.
 
+## Approved live publication lifecycle — completed
+
+The user provided a refreshed HAR saved at 2026-10-14 21:29:31 JST. Its session was verified against the exact shop, then imported into the existing staging-only secret (expiry 22:28:49 JST). This capture has no token/refresh endpoint request or refresh-token grant. No authentication material was printed or committed.
+
+All four approved writes were initiated from the deployed BELLO EC listing UI and executed by the server over HTTPS. Shops UI was used only for reading the result. Product `2JY9REopKfLdpCfQKvU4yf` was created once and reused for the entire cycle:
+
+| Operation | Reservation time (UTC) | Persisted receipt |
+| --- | --- | --- |
+| Publish | 2026-10-14T12:31:04.878Z | PRODUCT_ACKNOWLEDGED |
+| Stop | 2026-10-14T12:32:56.118Z | PRODUCT_STOP_VERIFIED |
+| Reopen | 2026-10-14T12:34:08.334Z | PRODUCT_REOPEN_VERIFIED |
+| Final stop | 2026-10-14T12:35:34.937Z | PRODUCT_STOP_VERIFIED |
+
+Reservation intervals were 111.240, 72.216, and 86.603 seconds. An earlier stop click was blocked by the shared send window and made no write; after the window elapsed, the stop succeeded. The reservation deadline plus minimum interval intentionally provides a conservative separation.
+
+The UI changed to “出品中 / 出品停止”, then “出品停止中 / 出品内容を確認”, then repeated these states on reopening and stopping. After a full page reload it still showed “出品停止中”. A separate fresh HTTPS read at 2026-10-14T12:36:44.081Z returned VERIFIED, STATUS_UNOPENED, JPY 99,999, quantity 1, one image, and the correct BELLO management code. The persisted product link also has STATUS_UNOPENED. The final product is non-public.
+
+Proof directory: `C:/Users/win/Documents/Codex/2026-10-14/mercari-https-proof/`; `lifecycle-receipts.json`, `bello-published.png`, `bello-reopened.png`, and `bello-final-stopped.png` contain no authentication data. No additional public cycle is needed for this acceptance item.
+
+The older PC section's generic “BELLO出品記録なし” label was misleading after a successful HTTPS listing. Its heading and empty label now explicitly identify PC records and direct HTTPS status checks to the HTTPS section. This is a display-only correction; the legacy PC workflow remains available.
+
 ## Remaining acceptance
 
 - Review this existing draft; do not create it again.
-- The exact public lifecycle test above is approved and awaits refreshed authentication. Publish, stop, and reopen have not yet been demonstrated end-to-end through BELLO.
+- The exact approved public lifecycle test is complete, including final non-public readback and persistence. Do not repeat it without a new reason.
 - Long-term session renewal is not established. The new HAR contains no sign-in/token-refresh requests and no refresh token. The displayed expiry is a real limit, not proof of sustained login.
 - Other condition mappings and optional brand submission remain disabled by the current runtime. Do not silently replace the user's selections.
 - Automation remains paused. BASE and Next Engine were not changed.
