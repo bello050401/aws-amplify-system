@@ -68,9 +68,24 @@ export function yahooPreparationIssues(input: YahooAuctionInput, imageCount: num
   return issues;
 }
 
+// AWSJSON/DynamoDB maps may return object keys in a different order. Arrays
+// retain their order because photo ordering is part of the saved selection.
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (value && typeof value === "object") return Object.fromEntries(
+    Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([key, item]) => [key, canonicalJsonValue(item)]));
+  return value;
+}
+
+export function yahooPayloadsMatch(a: YahooAuctionPayload, b: YahooAuctionPayload): boolean {
+  return JSON.stringify(canonicalJsonValue(a)) === JSON.stringify(canonicalJsonValue(b));
+}
+
 export function yahooSourceMatches(source: YahooAuctionPayload["source"], draft: ListingDraftRecord): boolean {
   return source.draftId === draft.id && source.draftUpdatedAt === draft.updatedAt &&
-    source.shippingMethod === draft.shippingMethod && JSON.stringify(source.images) === JSON.stringify(draft.images);
+    source.shippingMethod === draft.shippingMethod &&
+    JSON.stringify(canonicalJsonValue(source.images)) === JSON.stringify(canonicalJsonValue(draft.images));
 }
 
 export function parseYahooSaved(value: unknown): YahooAuctionSaved | null {

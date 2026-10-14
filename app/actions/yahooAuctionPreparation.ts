@@ -5,7 +5,7 @@ import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getInventoryDetail, listCategories } from "@/lib/inventory/queries";
 import { getListingDraftForInventory } from "@/lib/listing/service";
 import { isEcListingEligible } from "@/lib/listing/ecEligibility";
-import { parseYahooAuctionInput, parseYahooSaved, yahooInventoryIdValid,
+import { parseYahooAuctionInput, parseYahooSaved, yahooInventoryIdValid, yahooPayloadsMatch,
   type YahooAuctionPayload, type YahooAuctionSaved } from "@/lib/listing/yahooAuction/preparation";
 import type { ListingDraftRecord } from "@/lib/listing/types";
 
@@ -72,12 +72,12 @@ export async function saveYahooAuctionPreparationAction(inventoryId: string, inp
       authMode: "userPool",
     }) as { data?: Record<string, unknown>; errors?: unknown };
     const record = result.errors ? null : parseYahooSaved(result.data?.[action]);
-    if (record && record.revision === revision && JSON.stringify(record.payload) === JSON.stringify(payload))
+    if (record && record.revision === revision && yahooPayloadsMatch(record.payload, payload))
       return { ok: true, saved: record };
   } catch { /* Read back once after an uncertain acknowledgement; never repeat the write. */ }
   try {
     const current = await readSaved(inventoryId);
-    if (current?.revision === revision && JSON.stringify(current.payload) === JSON.stringify(payload))
+    if (current?.revision === revision && yahooPayloadsMatch(current.payload, payload))
       return { ok: true, saved: current };
     if ((current?.revision ?? null) !== expectedRevision) return { ok: false, code: "CONFLICT" };
   } catch { /* Preserve the input on the client. */ }
