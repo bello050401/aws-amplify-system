@@ -15,9 +15,13 @@
 
 The live new draft returned `maxQuantityPerOrderConfig: null`. The publication request builder required an object with `configuredValue: null`, as found in the older product capture, and rejected the new draft. The builder now accepts an explicit null for drafts only. Missing, malformed or configured purchase limits remain rejected. Published-product parsing remains unchanged.
 
-The contract, publication, stopping and reopening suites passed (33 tests), and TypeScript checking passed. Deployment and live publication-review acceptance of this fix remain to be recorded.
+The contract, publication, stopping and reopening suites passed (33 tests), and TypeScript checking passed. Commit `c44127f` was deployed to staging in Amplify job 421 (BUILD/DEPLOY/VERIFY all SUCCEED). The actual BELLO screen subsequently reached the publication review showing the correct title, JPY 99,999, quantity 1 and one image, with “この内容で出品する”. No public write was sent.
 
 The review builder also succeeded against a fresh HTTPS read of the actual saved draft after the fix (read-only; no publication request sent). A separate UI correction refreshes the preparation receipt after successful draft saving, removes obsolete “authentication/contract waiting” text, and distinguishes review failures without claiming an uncertain prior operation never happened.
+
+UI commit `7d33a9f` was deployed in staging job 422, also BUILD/DEPLOY/VERIFY all SUCCEED. The publication-review screenshot is `C:/Users/win/Documents/Codex/2026-10-14/mercari-https-proof/bello-publication-review.png`.
+
+An explicit action-time question is pending for B005105 at JPY 99,999, quantity 1: publish, stop, reopen the same product, stop again, at least 30 seconds apart, ending non-public. Silence is not approval. Preserve this draft and image; do not repeat creation on resumption.
 
 ## Remaining acceptance
 
