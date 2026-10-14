@@ -2,6 +2,7 @@ import "server-only";
 
 import { B005396_INVENTORY_ID } from "./b005396GeneralPreparation.ts";
 import { initialWebHttpExecutionState } from "./webHttpExecutionGate.ts";
+import { shopsConditionFor, shopsBrandIdsFor } from "./webHttpSelection.ts";
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import { reconcileReservedWebHttpDraft,
   type WebHttpDraftReadback } from "./webHttpDraftSaveReconciliation.ts";
@@ -150,6 +151,8 @@ function validPayload(job: WebHttpDraftJob, mutation: Mutation,
     if (!object(snapshot) || !object(snapshot.pack)) return false;
     pack = snapshot.pack;
   } catch { return false; }
+  const condition = shopsConditionFor(pack.condition), brandIds = shopsBrandIdsFor(pack);
+  if (!condition || !brandIds) return false;
   if (!Array.isArray(pack.imageRefs) || pack.imageRefs.length !== assetIds.length)
     return false;
   if (!object(mutation?.input)) return false;
@@ -167,7 +170,7 @@ function validPayload(job: WebHttpDraftJob, mutation: Mutation,
       typeof input.countryRestrictionTemplateId !== "string" ||
       typeof input.channelListingScope !== "string" ||
       typeof input.isRefurbished !== "boolean" ||
-      input.brandIds !== null || variant.maxQuantityPerOrder !== null)
+      variant.maxQuantityPerOrder !== null)
     return false;
   const common = ["name", "description", "price", "assetIds", "categoryIds",
     "brandIds", "condition", "shippingFromStateId",
@@ -177,6 +180,7 @@ function validPayload(job: WebHttpDraftJob, mutation: Mutation,
   if (mutation.kind === "CREATE") {
     return sameKeys(input, [...common, "shopId"]) &&
       input.shopId === job.shopId &&
+      input.brandIds === null &&
       ["price", "assetIds", "categoryIds", "condition",
         "shippingFromStateId", "shippingDurationType",
         "shippingMethodType"].every(key => input[key] === null) &&
@@ -188,6 +192,8 @@ function validPayload(job: WebHttpDraftJob, mutation: Mutation,
   return sameKeys(input, [...common, "id"]) &&
     typeof input.id === "string" && DRAFT_ID.test(input.id) &&
     input.price === pack.priceYen &&
+    input.condition === condition &&
+    JSON.stringify(input.brandIds) === JSON.stringify(brandIds.length ? brandIds : null) &&
     JSON.stringify(input.assetIds) === JSON.stringify(assetIds) &&
     stringArray(input.categoryIds) &&
     typeof pack.categoryId === "string" &&

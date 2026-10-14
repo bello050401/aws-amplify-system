@@ -2,6 +2,7 @@ import "server-only";
 
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import { initialWebHttpExecutionState } from "./webHttpExecutionGate.ts";
+import { shopsConditionFor, shopsBrandIdsFor } from "./webHttpSelection.ts";
 import type { ObservedDraftAssetProof,
   ObservedDraftTargetProof } from "./webHttpObservedDraftWrite.ts";
 import { webHttpStageRequestId,
@@ -26,6 +27,7 @@ export type VerifiedUpdatedDraftReadback = (draftId: string) => Promise<{
   description: string | null; price: number | null;
   quantity: number | null; categoryId: string | null;
   conditionId: string | null; imageAssetIds: string[] | null;
+  brandIds: string[] | null;
   shippingMethodId: string | null; shippingPayerId: string | null;
   shippingDurationId: string | null; shippingFromStateId: string | null;
 }>;
@@ -142,12 +144,13 @@ export async function readAcknowledgedUpdatedDraftProof(
   try { pack = JSON.parse(job.snapshotJson).pack; }
   catch { return null; }
   const shipping = pack.shipping as Record<string, unknown> | null;
+  const condition = shopsConditionFor(pack.condition), brandIds = shopsBrandIdsFor(pack);
   if (!shipping || typeof pack.title !== "string" ||
       typeof pack.description !== "string" ||
       typeof pack.priceYen !== "number" ||
       typeof pack.quantity !== "number" ||
       typeof pack.categoryId !== "string" ||
-      pack.condition !== "NO_NOTABLE_DAMAGE" || !Array.isArray(pack.imageRefs) ||
+      !condition || !brandIds || !Array.isArray(pack.imageRefs) ||
       pack.imageRefs.length !== assetIds.length) return null;
   let remote: Awaited<ReturnType<VerifiedUpdatedDraftReadback>>;
   try { remote = await readback(draftId); }
@@ -160,7 +163,8 @@ export async function readAcknowledgedUpdatedDraftProof(
       remote.price !== pack.priceYen ||
       remote.quantity !== pack.quantity ||
       remote.categoryId !== pack.categoryId ||
-      remote.conditionId !== "CONDITION_CLEAN" ||
+      remote.conditionId !== condition ||
+      JSON.stringify(remote.brandIds) !== JSON.stringify(brandIds) ||
       !Array.isArray(remote.imageAssetIds) ||
       JSON.stringify(remote.imageAssetIds) !== JSON.stringify(assetIds) ||
       remote.shippingMethodId !== shipping.method ||

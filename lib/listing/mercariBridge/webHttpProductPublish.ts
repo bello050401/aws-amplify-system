@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { MercariManualListingPack } from "../../../app/actions/mercariManualListingPack";
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import { initialWebHttpExecutionState } from "./webHttpExecutionGate.ts";
+import { shopsConditionFor, shopsBrandIdsFor } from "./webHttpSelection.ts";
 import { openMercariWebHttpCookieReadOnly } from "./webHttpReadOnlyClient.ts";
 import { buildObservedCreateProductRequest, buildObservedProductValidationRequest,
   observedProductValidationSucceeded, parseObservedCreateProductAck,
@@ -46,8 +47,8 @@ const digest = (request: Request) => createHash("sha256")
 function matchesPack(request: Request, job: WebHttpDraftJob, assetIds: string[]) {
   const pack: MercariManualListingPack = JSON.parse(job.snapshotJson).pack;
   const input = request.variables.input;
-  // Only the BELLO condition mapping established by the observed draft is enabled.
-  return pack.condition === "NO_NOTABLE_DAMAGE" && input.condition === "CONDITION_CLEAN" &&
+  const condition = shopsConditionFor(pack.condition), brandIds = shopsBrandIdsFor(pack);
+  return condition !== null && brandIds !== null && input.condition === condition &&
     input.name === pack.title && input.description === pack.description &&
     input.price === pack.priceYen && input.variants[0]?.quantity === pack.quantity &&
     input.variants[0]?.skuCode === job.managementCode &&
@@ -55,7 +56,7 @@ function matchesPack(request: Request, job: WebHttpDraftJob, assetIds: string[])
     JSON.stringify(input.assetIds) === JSON.stringify(assetIds) &&
     assetIds.length === pack.imageRefs.length &&
     JSON.stringify(input.categoryIds) === JSON.stringify([pack.categoryId]) &&
-    JSON.stringify(input.brandIds) === JSON.stringify(pack.brandId ? [pack.brandId] : []) &&
+    JSON.stringify(input.brandIds) === JSON.stringify(brandIds) &&
     input.shippingMethodType === pack.shipping.method &&
     input.shippingPayerType === pack.shipping.payer &&
     input.shippingFromStateId === pack.shipping.origin &&

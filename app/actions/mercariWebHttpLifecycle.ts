@@ -16,6 +16,14 @@ import { prepareMercariWebHttpDraftJobAction } from "./mercariWebHttpDraftJob";
 import { webHttpDraftRequestId, type WebHttpDraftJob } from "@/lib/listing/mercariBridge/webHttpDraftJob";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+export async function renewMercariHttpConnectionAction(): Promise<"CONNECTED" | "AUTH_REQUIRED" | "UNAVAILABLE"> {
+  if (await getInventoryRole() !== "ADMIN") return "UNAVAILABLE";
+  try {
+    const runtime = createMercariHttpsRuntime();
+    if (!runtime) return "UNAVAILABLE";
+    return await runtime.refreshSession() ? "CONNECTED" : "AUTH_REQUIRED";
+  } catch { return "UNAVAILABLE"; }
+}
 const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable) :
   value && typeof value === "object" ? Object.fromEntries(Object.entries(value)
     .sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, stable(v)])) : value;

@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { getInventoryRole, getCurrentInventoryUserEmail } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories } from "@/lib/inventory/queries";
 import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/service";
-import { getCategoryById } from "@/lib/listing/mercari/csv/masters";
+import { getCategoryById, getBrandById } from "@/lib/listing/mercari/csv/masters";
+import { shopsConditionFor, shopsBrandIdsFor } from "@/lib/listing/mercariBridge/webHttpSelection";
 import { mercariBridgeReadRepository } from "@/lib/listing/mercariBridge/repository";
 import { createMercariHttpsRuntime } from "@/lib/listing/mercariBridge/webHttpRuntime";
 import { openMercariWebHttpCookieReadOnly } from "@/lib/listing/mercariBridge/webHttpReadOnlyClient";
@@ -43,7 +44,10 @@ export async function executeMercariHttpDraftStepAction(requestId: string): Prom
     const session = await runtime.readSession();
     if (!session) return result("AUTH_REQUIRED");
     const { pack } = JSON.parse(job.snapshotJson);
-    if (pack.imageRefs.length < 1 || pack.imageRefs.length > 20 || pack.condition !== "NO_NOTABLE_DAMAGE" || pack.brandId !== null)
+    const condition = shopsConditionFor(pack.condition);
+    const brandIds = shopsBrandIdsFor(pack);
+    if (pack.imageRefs.length < 1 || pack.imageRefs.length > 20 || !condition || !brandIds ||
+        (brandIds.length > 0 && getBrandById(brandIds[0])?.name !== pack.brandName))
       return result("UNSUPPORTED_SELECTION");
     const sourceUnchanged = async () => {
       const current = await prepareMercariWebHttpDraftJobAction(job.inventoryId, {
@@ -102,7 +106,7 @@ export async function executeMercariHttpDraftStepAction(requestId: string): Prom
       remoteAssetId: assets[0], remoteAssetIds: assets, imageRefCount: assets.length };
     const selected: ObservedDraftSelectedProof = { status: "HUMAN_VERIFIED_SHOPS_SELECTION",
       shopId: job.shopId, snapshotFingerprint: job.snapshotFingerprint, categoryId: pack.categoryId,
-      categoryPath: pack.categoryPath, belloConditionCode: pack.condition, shopsConditionEnum: "CONDITION_CLEAN",
+      categoryPath: pack.categoryPath, belloConditionCode: pack.condition, shopsConditionEnum: condition,
       adminPriceYen: pack.priceYen, adminQuantity: pack.quantity, countryRestrictionTemplateId: "",
       channelListingScope: "CHANNEL_LISTING_SCOPE_ALL_CHANNELS", variantDefaultsVerified: true };
     const source = {
@@ -114,6 +118,7 @@ export async function executeMercariHttpDraftStepAction(requestId: string): Prom
       },
       readSavedDraft: getListingDraftForInventory,
       readSelectedCategory: async (id: string) => getCategoryById(id) ?? null,
+      readSelectedBrand: async (id: string) => getBrandById(id) ?? null,
       hasExistingBinding: async () => Boolean(await runtime.readBinding(job.inventoryId) ||
         await mercariBridgeReadRepository.getBinding(job.inventoryId)),
       hasExistingChannelListing: async () => Boolean(await getChannelListing(job.inventoryId, "MERCARI_SHOPS")),

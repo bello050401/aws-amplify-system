@@ -4,6 +4,7 @@ import type { MercariManualListingPack } from "@/app/actions/mercariManualListin
 import type { ListingDraftRecord, ListingImageRef } from "@/lib/listing/types";
 import { B005396_INVENTORY_ID } from "./b005396GeneralPreparation.ts";
 import { initialWebHttpExecutionState } from "./webHttpExecutionGate.ts";
+import { shopsConditionFor, shopsBrandIdsFor, type ShopsCondition } from "./webHttpSelection.ts";
 import type { WebHttpDraftJob, WebHttpReviewEvidence } from "./webHttpDraftJob.ts";
 import type { ObservedDraftAssetProof, ObservedDraftMappingProof,
   ObservedDraftMutation, ObservedDraftTargetProof } from
@@ -20,6 +21,7 @@ export type ObservedDraftInputMapperPorts = {
   readSavedDraft: (inventoryId: string) => Promise<ListingDraftRecord | null>;
   readSelectedCategory: (categoryId: string) => Promise<{
     categoryId: string; fullPath: string } | null>;
+  readSelectedBrand?: (brandId: string) => Promise<{ brandId: string; name: string } | null>;
   hasExistingBinding: (job: WebHttpDraftJob) => Promise<boolean | null>;
   hasExistingChannelListing: (job: WebHttpDraftJob) => Promise<boolean | null>;
   /** The reader must exhaust all pages under the same shop/session. */
@@ -28,14 +30,13 @@ export type ObservedDraftInputMapperPorts = {
   readCurrentImageSha256: (ref: ImageRef) => Promise<string | null>;
 };
 
-/** These proofs have no production producer. They must come from independent verification. */
+/** The selection must match the saved EC snapshot and the observed Shops master. */
 export type ObservedDraftSelectedProof = {
   status: "HUMAN_VERIFIED_SHOPS_SELECTION";
   shopId: string; snapshotFingerprint: string;
   categoryId: string; categoryPath: string;
   belloConditionCode: string;
-  /** B005396's observed Shops enum for BELLO NO_NOTABLE_DAMAGE. */
-  shopsConditionEnum: "CONDITION_CLEAN";
+  shopsConditionEnum: ShopsCondition;
   adminPriceYen: number; adminQuantity: number;
   countryRestrictionTemplateId: string;
   channelListingScope: string;
@@ -102,6 +103,16 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       !SOURCE_CODE.test(evidence.sourceInventoryCode) ||
       evidence.sourceInventoryCode.toUpperCase() === "B005396")
     return fail("INVALID_JOB");
+  const condition = shopsConditionFor(pack.condition);
+  const brandIds = shopsBrandIdsFor(pack);
+  if (!condition || !brandIds) return fail("SELECTION_UNVERIFIED");
+  if (brandIds.length) {
+    try {
+      const brand = await ports.readSelectedBrand?.(brandIds[0]);
+      if (!brand || brand.brandId !== pack.brandId || brand.name !== pack.brandName)
+        return fail("SELECTION_UNVERIFIED");
+    } catch { return fail("SELECTION_UNVERIFIED"); }
+  }
   let inventory: Inventory | null;
   let draft: ListingDraftRecord | null;
   let category: { categoryId: string; fullPath: string } | null;
@@ -151,7 +162,6 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       evidence.selectedCategoryId !== pack.categoryId ||
       evidence.selectedCategoryPath !== pack.categoryPath ||
       evidence.selectedQuantity !== pack.quantity ||
-      pack.brandId !== null || pack.brandName !== null ||
       pack.shipping.method !== "METHOD_TYPE_UNDECIDED" ||
       pack.shipping.payer !== "PAYER_TYPE_SELLER" ||
       pack.shipping.origin !== "jp11" ||
@@ -162,11 +172,8 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       proofs.selected.snapshotFingerprint !== job.snapshotFingerprint ||
       proofs.selected.categoryId !== pack.categoryId ||
       proofs.selected.categoryPath !== pack.categoryPath ||
-      // B005396 BELLO displayed 目立った傷や汚れなし; its HAR update sent
-      // CONDITION_CLEAN. No other BELLO-to-Shops condition pair is verified.
-      pack.condition !== "NO_NOTABLE_DAMAGE" ||
       proofs.selected.belloConditionCode !== pack.condition ||
-      proofs.selected.shopsConditionEnum !== "CONDITION_CLEAN" ||
+      proofs.selected.shopsConditionEnum !== condition ||
       proofs.selected.adminPriceYen !== pack.priceYen ||
       proofs.selected.adminQuantity !== pack.quantity ||
       proofs.selected.variantDefaultsVerified !== true ||
@@ -223,7 +230,8 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
     skuCode: job.managementCode, janCode: "",
     maxQuantityPerOrder: null };
   const common = { name: pack.title, description: pack.description,
-    brandIds: null, shippingPayerType: pack.shipping.payer,
+    brandIds: kind === "UPDATE" && brandIds.length ? brandIds : null,
+    shippingPayerType: pack.shipping.payer,
     countryRestrictionTemplateId: selected.countryRestrictionTemplateId,
     isRefurbished: false, channelListingScope: selected.channelListingScope };
   const mutation: ObservedDraftMutation = kind === "CREATE" ? {

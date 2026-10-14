@@ -30,8 +30,9 @@ async function main() {
   await store.send(new PutSecretValueCommand({SecretId:target.ARN, SecretString:JSON.stringify({
     schemaVersion:1, shopId:WEB_HTTP_SHOP_ID, authenticatedAt:new Date().toISOString(),
     expiresAt:new Date(session.expiresAtMs).toISOString(),
-    opaqueMaterial:JSON.stringify({cookieHeader:session.cookieHeader}),
+    opaqueMaterial:JSON.stringify(session),
   })}));
-  console.log(JSON.stringify({status:"STAGING_SESSION_INSTALLED", expiresAt:new Date(session.expiresAtMs).toISOString()}));
+  console.log(JSON.stringify({status:"STAGING_SESSION_INSTALLED", expiresAt:new Date(session.expiresAtMs).toISOString(),
+    renewalAvailable:"refreshCookieHeader" in session}));
 }
 main().catch(() => { console.log(JSON.stringify({status:"IMPORT_UNAVAILABLE"})); process.exitCode=1; });

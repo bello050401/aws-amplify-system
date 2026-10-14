@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { getMercariHttpListingStateAction, publishMercariHttpListingAction,
-  stopMercariHttpListingAction, reopenMercariHttpListingAction, type HttpListingState } from "@/app/actions/mercariWebHttpLifecycle";
+  stopMercariHttpListingAction, reopenMercariHttpListingAction, renewMercariHttpConnectionAction,
+  type HttpListingState } from "@/app/actions/mercariWebHttpLifecycle";
 import type { PublishPreview } from "@/lib/listing/mercariBridge/webHttpProductPublish";
 import { executeMercariHttpDraftStepAction } from "@/app/actions/mercariWebHttpExecuteDraft";
 
@@ -66,10 +67,19 @@ export function MercariHttpExecutionPanel({ inventoryId, requestId, onDraftSaved
     })();
     return () => { active = false; };
   }, [savingDraft, requestId, inventoryId, onDraftSaved]);
-  async function act(operation: "check" | "review" | "publish" | "stop") {
+  async function act(operation: "check" | "renew" | "review" | "publish" | "stop") {
     if (busy || seconds > 0) return;
     setBusy(true); setMessage("");
     try {
+      if (operation === "renew") {
+        setPreview(null);
+        const connection = await renewMercariHttpConnectionAction();
+        setMessage(connection === "CONNECTED" ? "接続を確認しました。商品は変更していません。" :
+          connection === "AUTH_REQUIRED" ? "接続を更新できませんでした。メルカリShopsへの再ログインが必要です。" :
+          "接続を確認できません。しばらくしてから状態を確認してください。");
+        setState(await getMercariHttpListingStateAction(inventoryId));
+        return;
+      }
       if (operation === "check") { setPreview(null); setState(await getMercariHttpListingStateAction(inventoryId)); return; }
       if (operation === "stop") {
         const result = await stopMercariHttpListingAction(inventoryId);
@@ -98,12 +108,14 @@ export function MercariHttpExecutionPanel({ inventoryId, requestId, onDraftSaved
   }
   return <div className="my-3 rounded border border-blue-200 bg-blue-50 p-3 text-sm">
     <p role="status" className="font-semibold">{state ? labels[state.status] : "HTTPS接続を確認中…"}</p>
-    {state?.authenticatedUntil && <p className="mt-1 text-xs">現在の認証期限: {new Date(state.authenticatedUntil).toLocaleString("ja-JP")}</p>}
+    {state?.authenticatedUntil && <p className="mt-1 text-xs">接続の有効期限: {new Date(state.authenticatedUntil).toLocaleString("ja-JP")}（利用時に自動更新）</p>}
     {state?.productId && <a className="mt-1 block text-blue-700 underline" target="_blank" rel="noreferrer"
       href={`https://mercari-shops.com/seller/shops/evkhihBFFNn5hukMS9s36H/products/${state.productId}/edit`}>Shopsの商品を開く</a>}
     <div className="mt-3 flex flex-wrap gap-2">
       <button type="button" className="rounded border px-3 py-2 disabled:opacity-50" disabled={busy || seconds > 0}
         onClick={() => void act("check")}>状態を確認</button>
+      <button type="button" className="rounded border px-3 py-2 disabled:opacity-50" disabled={busy || seconds > 0}
+        onClick={() => void act("renew")}>接続を更新</button>
       {(state?.status === "DRAFT_READY" || state?.status === "STOPPED") && <button type="button" className="rounded bg-blue-700 px-3 py-2 text-white disabled:opacity-50"
         disabled={busy || seconds > 0} onClick={() => void act("review")}>出品内容を確認</button>}
       {state?.status === "PREPARED" && <button type="button" className="rounded bg-blue-700 px-3 py-2 text-white disabled:opacity-50"

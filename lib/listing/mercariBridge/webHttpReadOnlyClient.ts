@@ -387,7 +387,7 @@ async function openReadOnlyWithCookies(cookies: Cookie[], fetchPort: FetchPort,
       const unknown = (status: "UNKNOWN" | "AUTH_REQUIRED" = "UNKNOWN") =>
         ({ status, shopId: null, draftId: null, skuCode: null,
           name: null, description: null, price: null, quantity: null,
-          categoryId: null, conditionId: null, imageAssetIds: null,
+          categoryId: null, conditionId: null, brandIds: null, imageAssetIds: null,
           shippingMethodId: null, shippingPayerId: null,
           shippingDurationId: null, shippingFromStateId: null });
       if (!shopVerified || !DRAFT_ID.test(draftId)) return unknown();
@@ -407,6 +407,8 @@ async function openReadOnlyWithCookies(cookies: Cookie[], fetchPort: FetchPort,
           typeof draft.variants[0].skuCode !== "string" ||
           typeof draft.variants[0].quantity !== "number" ||
           categoryIds?.length !== 1 ||
+          !Array.isArray(draft.brands) || draft.brands.length > 1 ||
+          !draft.brands.every(brand => object(brand) && typeof brand.id === "string" && DRAFT_ID.test(brand.id)) ||
           !Array.isArray(draft.thumbnails) ||
           !draft.thumbnails.every(image => object(image) &&
             typeof image.id === "string") ||
@@ -426,6 +428,7 @@ async function openReadOnlyWithCookies(cookies: Cookie[], fetchPort: FetchPort,
         price: draft.price, quantity: draft.variants[0].quantity,
         categoryId: categoryIds[0],
         conditionId: draft.condition.id,
+        brandIds: draft.brands.map(brand => brand.id),
         imageAssetIds: draft.thumbnails.map(image => image.id),
         shippingMethodId: draft.shippingMethodType.id,
         shippingPayerId: draft.shippingPayerType.id,

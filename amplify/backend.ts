@@ -66,7 +66,8 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   new ManagedPolicy(httpStack, "RuntimeAccess", {
     roles: [runtimeRole],
     statements: [
-      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [session.secretArn] }),
+      new PolicyStatement({ actions: ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecretVersionStage"], resources: [session.secretArn] }),
       new PolicyStatement({
         actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
           "dynamodb:DeleteItem", "dynamodb:ConditionCheckItem"],

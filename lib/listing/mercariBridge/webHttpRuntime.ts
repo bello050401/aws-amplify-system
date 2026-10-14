@@ -1,7 +1,9 @@
 import "server-only";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+import { SecretsManagerClient, GetSecretValueCommand, PutSecretValueCommand, UpdateSecretVersionStageCommand } from "@aws-sdk/client-secrets-manager";
+import { randomUUID } from "node:crypto";
+import { parseRefreshMaterial, refreshWebHttpSessionOnce } from "./webHttpSessionRefresh.ts";
 import outputs from "../../../amplify_outputs.json";
 import { WEB_HTTP_SHOP_ID } from "./webHttpDraftJob";
 import { DynamoWebHttpSendReservationRepository } from "./webHttpSendReservationRepository";
@@ -35,6 +37,48 @@ export function parseRuntimeSession(value: unknown, now = Date.now()): RuntimeSe
   return names.has("id_token") ? { cookieHeader: material.cookieHeader, expiresAtMs } : null;
 }
 
+type SessionVersion = { versionId: string; record: unknown };
+export type SessionRefreshStore = {
+  read: () => Promise<SessionVersion>;
+  /** Durable single-use claim. A lost refresh response cannot be retried. */
+  claim: (versionId: string, attemptId: string, now: number) => Promise<boolean>;
+  /** Promote only if AWSCURRENT still points to the version we refreshed. */
+  replace: (previousVersion: string, attemptId: string, record: unknown) => Promise<void>;
+};
+export async function readRenewableRuntimeSession(store: SessionRefreshStore, forceRefresh = false,
+  fetchPort: typeof fetch = fetch, clock = Date.now): Promise<RuntimeSession | null> {
+  const previous = await store.read();
+  const fresh = parseRuntimeSession(previous.record, clock());
+  if (fresh && !forceRefresh && fresh.expiresAtMs > clock() + 10 * 60_000) return fresh;
+  const record = previous.record as Record<string, unknown> | null;
+  if (!record || record.schemaVersion !== 1 || record.shopId !== WEB_HTTP_SHOP_ID ||
+      typeof record.opaqueMaterial !== "string" || typeof record.authenticatedAt !== "string" ||
+      !Number.isFinite(Date.parse(record.authenticatedAt)) || Date.parse(record.authenticatedAt) > clock()) return null;
+  let material;
+  try { material = parseRefreshMaterial(JSON.parse(record.opaqueMaterial), clock()); } catch { material = null; }
+  if (!material) return forceRefresh ? null : fresh;
+  const attemptId = randomUUID();
+  if (!await store.claim(previous.versionId, attemptId, clock())) {
+    // Another invocation may just have completed. Never submit a second refresh.
+    const current = await store.read();
+    return current.versionId !== previous.versionId ? parseRuntimeSession(current.record, clock()) : fresh;
+  }
+  // A fresh manual import supersedes this claim; do not consume its predecessor.
+  if ((await store.read()).versionId !== previous.versionId) return null;
+  const renewed = await refreshWebHttpSessionOnce(material, fetchPort, clock);
+  if (!renewed) return null;
+  const next = { schemaVersion: 1, shopId: WEB_HTTP_SHOP_ID,
+    authenticatedAt: new Date(clock()).toISOString(), expiresAt: new Date(renewed.expiresAtMs).toISOString(),
+    opaqueMaterial: JSON.stringify(renewed) };
+  try { await store.replace(previous.versionId, attemptId, next); }
+  catch {
+    // Includes a concurrent manual import or lost acknowledgement after promotion.
+    const current = await store.read();
+    return current.versionId !== previous.versionId ? parseRuntimeSession(current.record, clock()) : null;
+  }
+  return parseRuntimeSession(next, clock());
+}
+
 /** AWS workload credentials come from the compute role, not the signed-in browser. */
 export function createMercariHttpsRuntime() {
   const config = (outputs as unknown as { custom?: { mercariHttps?: Config } }).custom?.mercariHttps;
@@ -44,6 +88,33 @@ export function createMercariHttpsRuntime() {
     return null;
   const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: config.region }));
   const sm = new SecretsManagerClient({ region: config.region });
+  const sessionStore: SessionRefreshStore = {
+    read: async () => {
+      const secret = await sm.send(new GetSecretValueCommand({ SecretId: config.secretArn, VersionStage: "AWSCURRENT" }));
+      if (!secret.VersionId) throw Error("SESSION_VERSION_MISSING");
+      return { versionId: secret.VersionId, record: JSON.parse(secret.SecretString ?? "null") };
+    },
+    claim: async (versionId, attemptId, now) => {
+      try {
+        await ddb.send(new UpdateCommand({ TableName: config.slotTable,
+          Key: { shopId: `AUTH#${WEB_HTTP_SHOP_ID}` },
+          UpdateExpression: "SET secretVersion = :version, attemptId = :attempt, leaseUntil = :until",
+          ConditionExpression: "attribute_not_exists(secretVersion) OR (secretVersion <> :version AND leaseUntil < :now)",
+          ExpressionAttributeValues: { ":version": versionId, ":attempt": attemptId, ":until": now + 60_000, ":now": now } }));
+        return true;
+      } catch (error) {
+        if (error instanceof Error && error.name === "ConditionalCheckFailedException") return false;
+        throw Error("SESSION_CLAIM_UNAVAILABLE");
+      }
+    },
+    replace: async (previousVersion, attemptId, record) => {
+      await sm.send(new PutSecretValueCommand({ SecretId: config.secretArn,
+        ClientRequestToken: attemptId, VersionStages: ["BELLO_REFRESH_PENDING"], SecretString: JSON.stringify(record) }));
+      await sm.send(new UpdateSecretVersionStageCommand({ SecretId: config.secretArn, VersionStage: "AWSCURRENT",
+        RemoveFromVersionId: previousVersion, MoveToVersionId: attemptId }));
+      // The fixed pending label is reused on the next refresh, so no unbounded labels.
+    },
+  };
   const repository = new DynamoWebHttpSendReservationRepository(ddb,
     { slotTableName: config.slotTable, attemptTableName: config.attemptTable });
   const readBinding = async (inventoryId: string): Promise<WebHttpProductBinding | null> => {
@@ -59,12 +130,8 @@ export function createMercariHttpsRuntime() {
       managementCode: item.managementCode };
   };
   return { repository, readBinding,
-    readSession: async () => {
-      const secret = await sm.send(new GetSecretValueCommand({ SecretId: config.secretArn,
-        VersionStage: "AWSCURRENT" }));
-      try { return parseRuntimeSession(JSON.parse(secret.SecretString ?? "null")); }
-      catch { return null; }
-    },
+    readSession: async () => readRenewableRuntimeSession(sessionStore),
+    refreshSession: async () => readRenewableRuntimeSession(sessionStore, true),
     saveBinding: async (binding: WebHttpProductBinding, requestId: string, verifiedAt: string,
       remoteStatus: "STATUS_OPENED" | "STATUS_UNOPENED") => {
       const previous = await readBinding(binding.inventoryId);
