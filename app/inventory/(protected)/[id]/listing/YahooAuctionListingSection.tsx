@@ -126,12 +126,12 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
         {input.format === "AUCTION" && <div><label htmlFor="yahoo-buy-now" className="text-sm">即決価格（任意・円）</label>
           <input id="yahoo-buy-now" type="number" min={1} step={1} className={field} value={input.buyNowYen ?? ""} onChange={e => change("buyNowYen", e.target.value === "" ? null : Number(e.target.value))} /></div>}
         <div className="grid gap-3 sm:grid-cols-2">
-          <div><label htmlFor="yahoo-category" className="text-sm">ヤフオクのカテゴリーID</label>
-            <input id="yahoo-category" inputMode="numeric" className={field} value={input.categoryId} onChange={e => change("categoryId", e.target.value)} /></div>
-          <div><label htmlFor="yahoo-category-name" className="text-sm">カテゴリー名（確認用）</label>
-            <input id="yahoo-category-name" className={field} value={input.categoryName} onChange={e => change("categoryName", e.target.value)} /></div>
+          <div><label htmlFor="yahoo-category" className="text-sm">カテゴリー</label>
+            <select id="yahoo-category" className={field} disabled defaultValue=""><option value="">接続後に選択できます</option></select></div>
+          <div><label htmlFor="yahoo-category-name" className="text-sm">カテゴリーのメモ（任意）</label>
+            <input id="yahoo-category-name" className={field} placeholder="例：家具、椅子" value={input.categoryName} onChange={e => change("categoryName", e.target.value)} /></div>
         </div>
-        <p className="text-xs text-gray-600">カテゴリー選択一覧は接続仕様の確認後に追加します。メルカリのカテゴリーIDは使用しません。</p>
+        <p className="text-xs text-gray-600">接続後にYahoo!オークションのカテゴリーから選択できます。メモだけではカテゴリーの指定にはなりません。</p>
         <div><label htmlFor="yahoo-end" className="text-sm">終了希望日時（日本時間）</label>
           <input id="yahoo-end" type="datetime-local" step={3600} className={field} value={input.endAtJst} onChange={e => change("endAtJst", e.target.value)} />
           <p className="mt-1 text-xs text-gray-600">実際に指定できる開催期間は、出品時に確認します。</p></div>
