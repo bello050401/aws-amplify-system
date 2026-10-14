@@ -50,10 +50,10 @@ The older PC section's generic “BELLO出品記録なし” label was misleadin
 
 Display correction commit `7b81916` passed `tsc --noEmit` and `git diff --check`, then deployed to staging in Amplify job 423 (BUILD/DEPLOY/VERIFY all SUCCEED). The actual reloaded BELLO page showed “メルカリShops PC方式の出品記録” and the separate HTTPS status instructions. No listing operation was repeated for this text-only deployment.
 
-## Remaining acceptance
+## Final acceptance update
 
-- Review this existing draft; do not create it again.
-- The exact approved public lifecycle test is complete, including final non-public readback and persistence. Do not repeat it without a new reason.
-- Long-term session renewal is not established. The new HAR contains no sign-in/token-refresh requests and no refresh token. The displayed expiry is a real limit, not proof of sustained login.
-- Other condition mappings and optional brand submission remain disabled by the current runtime. Do not silently replace the user's selections.
-- Automation remains paused. BASE and Next Engine were not changed.
+- The approved lifecycle is complete, including final non-public readback and persistence. The draft was consumed by publication; keep the existing product link and do not create another draft or repeat this cycle without a new reason.
+- The later user-provided HAR saved at 2026-10-14 13:50:31 UTC contains the actual refresh exchange. Server-only HTTPS renewal is now implemented and deployed in job 424 (`39b68dd`). The BELLO screen initiated one successful live renewal at 14:12:08 UTC; the rotated session was persisted in Secrets Manager and verified after page reload. The automatic near-expiry decision is tested. Long-term uninterrupted login is not a guarantee.
+- All six observed condition mappings and optional master-validated brand submission are implemented and covered by contract/readback tests. The live product cycle above was CONDITION_CLEAN with no brand; other combinations were not sent as live product mutations.
+- See `mercari-https-renewal-20261014.md` for the final renewal proof and exact verified scope. The current product remains non-public.
+- Automation remains PAUSED. BASE and Next Engine were not changed. Only the authorized staging environment was deployed.
