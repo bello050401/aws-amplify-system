@@ -4,7 +4,7 @@ import { parseListingEvidence, yahooAuctionIdValid, canCancelWithoutBids, zeroFe
   type YahooListingEvidence } from "./webHttpListing";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { CATEGORY_PATH, SELECTED_INPUT_PATH, categoryRequestFromInput, selectedInputRequest,
-  previewRequestFromInput, verifyPreview, validPreviewImages, type YahooPreviewImages, type YahooFixedPreviewInput,
+  previewRequestFromInput, relistingImagesFromInput, verifyPreview, validPreviewImages, type YahooPreviewImages, type YahooFixedPreviewInput,
   type YahooPreviewEvidence } from "./webHttpPreview";
 
 const ORIGIN = "https://auctions.yahoo.co.jp";
@@ -354,6 +354,18 @@ export class YahooWebSession {
       if(r.status===404 && evidence?.status!=='cancelled')return {ok:false,code:'UNEXPECTED_RESPONSE'};
       return evidence?{ok:true,value:evidence}:{ok:false,code:'UNEXPECTED_FORM'};
     }catch{return {ok:false,code:'READ_UNAVAILABLE'};}
+  }
+
+  async inspectRelistingImages(input:YahooFixedPreviewInput):Promise<Result<YahooUploadedImage[]>>{
+    if(!input.relistId)return {ok:false,code:'UNEXPECTED_FORM'};
+    const prior=await this.inspectListing(input.relistId);
+    if(!prior.ok)return prior;
+    if(prior.value.status!=='cancelled'||prior.value.bids||prior.value.bidders||prior.value.highestBidders)return {ok:false,code:'UNEXPECTED_FORM'};
+    try{
+      const r=await this.#fetch(ORIGIN+'/sell/jp/show/resubmit?aID='+input.relistId,{headers:{Cookie:this.#cookie,Accept:'text/html'},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(20_000)});
+      if(r.status!==200||!(r.headers.get('content-type')??'').startsWith('text/html')){await r.body?.cancel();return {ok:false,code:'UNEXPECTED_RESPONSE'};}
+      return {ok:true,value:relistingImagesFromInput(await limitedHtml(r),input)};
+    }catch{return {ok:false,code:'UNEXPECTED_FORM'};}
   }
 
   /** The observed cancelled-item form uses oresubmit and preserves aID.

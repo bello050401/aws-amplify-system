@@ -139,6 +139,8 @@ function applyInput(fields: URLSearchParams, input: YahooFixedPreviewInput, imag
     fields.set(`ImageWidth${i}`, all[i-1] ? String(all[i-1].width) : "");
     fields.set(`ImageHeight${i}`, all[i-1] ? String(all[i-1].height) : "");
     fields.set(`image_comment${i}`, "");
+    // Existing pictures are locked in Yahoo's relist form. The workflow reads
+    // these exact assets before confirmation rather than uploading replacements.
     if(input.relistId)fields.set(`Image${i}Uploaded`,all[i-1]?'1':'');
   }
   for (const k of [...fields.keys()]) if (/^is_(?:yahuneko|jp_)/.test(k)) fields.set(k, "");
@@ -163,6 +165,22 @@ export function previewRequestFromInput(html: string, input: YahooFixedPreviewIn
   if (fields.get("category") !== input.categoryId) throw Error("CATEGORY_MISMATCH");
   applyInput(fields, input, image);
   return fields;
+}
+/** Read the immutable pictures from the exact owned-item relist form. */
+export function relistingImagesFromInput(html:string,input:YahooFixedPreviewInput):YahooUploadedImage[]{
+  if(!input.relistId)throw Error('RELIST_ID_REQUIRED');
+  const fields=hiddenFields(singleForm(html,'auction',PREVIEW_PATH),input.relistId);
+  requireToken(fields,'.crumb');
+  if(fields.get('category')!==input.categoryId)throw Error('CATEGORY_MISMATCH');
+  const images:YahooUploadedImage[]=[];let gap=false;
+  for(let i=1;i<=10;i++){
+    const url=fields.get(`ImageFullPath${i}`);
+    if(!url){gap=true;continue;}
+    if(gap||fields.get(`Image${i}Uploaded`)!=='1')throw Error('RELIST_IMAGE_CHANGED');
+    images.push({url,width:Number(fields.get(`ImageWidth${i}`)),height:Number(fields.get(`ImageHeight${i}`))});
+  }
+  if(!validPreviewImages(input,images))throw Error('RELIST_IMAGE_CHANGED');
+  return images;
 }
 export function verifyPreview(html: string, input: YahooFixedPreviewInput, images: YahooPreviewImages): YahooPreviewEvidence | null {
   try {

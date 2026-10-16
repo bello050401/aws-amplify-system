@@ -88,7 +88,12 @@ export function YahooAuctionControls({inventoryId,revision,dirty,disabled,onList
       <p className="mt-2">{view.confirmation.title}</p>
       <p>{view.confirmation.priceYen.toLocaleString()}円・数量 {view.confirmation.quantity}・画像 {view.uploaded} 枚</p>
       <p>{view.confirmation.category}</p><p>送料込み・{view.confirmation.shipping}</p>
-      <p>終了：{view.confirmation.endAtJst.replace('T',' ')}台（日本時間）</p>
+      <p>終了：{view.confirmation.endAtJst.slice(0,10)} {view.confirmation.endAtJst.slice(11,13)}時台（日本時間）</p>
+      {view.confirmation.relist&&<p className="mt-2">再出品は前回の画像を使用します。今回の画像は下に表示したものです。</p>}
+      <div className="mt-2 flex flex-wrap gap-2">{view.confirmation.imageUrls.map((url,index)=>(
+        // eslint-disable-next-line @next/next/no-img-element
+        <img key={url} src={url} alt={`出品する商品画像 ${index+1}`} width={112} height={112} className="h-28 w-28 rounded border object-contain bg-white"/>
+      ))}</div>
       <label className="mt-3 flex gap-2"><input type="checkbox" checked={terms} onChange={e=>setTerms(e.target.checked)}/>この内容とYahoo!オークションの利用規約・ガイドラインに同意して公開する</label>
       <button type="button" className={button+' mt-3 bg-blue-700 text-white'} disabled={!terms||busy||disabled||waitSeconds>0} onClick={()=>execute(()=>publishYahooListingAction(inventoryId,view.confirmationId!,terms))}>この内容で{view.confirmation.relist?'再出品':'出品'}する</button>
     </div>}

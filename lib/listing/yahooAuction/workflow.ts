@@ -33,7 +33,7 @@ export function workflowView(s:WorkflowState|null,waitUntil=0):YahooWorkflowView
   return {stage:s?.stage??'IDLE',uploaded:s?.images.length??0,imageCount:s?.saved?.payload.source.images.length??0,
     confirmationId:s?.stage==='READY'?s.jobId:null,listing:s?.listing??null,waitUntil,error:s?.error??null,
     confirmation:s?.stage==='READY'&&i?{title:i.title,priceYen:i.priceYen!,quantity:i.quantity,category:i.categoryName,
-      endAtJst:i.endAtJst,shipping:s.saved!.payload.source.shippingMethod==='KAZAI'?'家財おまかせ便':'佐川急便',relist:!!s.relistId}:null};
+      endAtJst:i.endAtJst,shipping:s.saved!.payload.source.shippingMethod==='KAZAI'?'家財おまかせ便':'佐川急便',relist:!!s.relistId,imageUrls:s.images.map(image=>image.url)}:null};
 }
 const matches=(e:YahooListingEvidence,i:{title:string;priceYen:number|null;quantity:number})=>e.title===i.title&&e.priceYen===i.priceYen&&e.quantity===i.quantity;
 export class YahooWorkflow {
@@ -70,9 +70,16 @@ export class YahooWorkflow {
       await this.save({...this.empty(binding),saved,fingerprint:hash,imageSourceHash,stage:'PREPARING',
         relistId:binding?.auctionId,images:old?.imageSourceHash===imageSourceHash?old.images:[]});
     }
-    const s=this.state!;
+    let s=this.state!;
     if(s.stage==='READY'&&Date.now()-(s.readyAt??0)<15*60_000)return;
-    if(s.images.length<saved.payload.source.images.length){
+    if(binding){
+      // Yahoo locks prior pictures during relisting. Display the exact remote
+      // images for approval, without silently replacing or duplicating them.
+      const priorImages=await this.session.inspectRelistingImages(previewInput(saved,binding.auctionId));
+      if(!priorImages.ok)throw new WorkflowFailure(priorImages.code);
+      await this.save({...s,images:priorImages.value});s=this.state!;
+    }
+    if(!binding&&s.images.length<saved.payload.source.images.length){
       const bytes=await this.image(saved.payload.source.images[s.images.length]);
       const inspected=await this.session.inspectInput();if(!inspected.ok)throw new WorkflowFailure(inspected.code);
       assertCurrent(await this.context(),expectedRevision);
