@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { getYahooAuctionPreparationAction, saveYahooAuctionPreparationAction } from "@/app/actions/yahooAuctionPreparation";
 import { checkYahooHttpsConnectionAction } from "@/app/actions/yahooAuctionHttp";
+import { getYahooListingResultAction, refreshYahooListingResultAction } from "@/app/actions/yahooAuctionResult";
+import type { YahooListingResult } from "@/lib/listing/yahooAuction/listingResult";
 import { initialYahooAuctionInput, yahooPreparationIssues, yahooSourceMatches, yahooRemoteActionAvailability,
   type YahooAuctionInput, type YahooAuctionSaved } from "@/lib/listing/yahooAuction/preparation";
 import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
@@ -21,6 +23,8 @@ const failureMessage = (code: string) => ({
   ACCESS_DENIED: "Yahoo!オークションが接続を受け付けませんでした。出品処理は行っていません。",
   RATE_LIMITED: "Yahoo!オークションが一時的に接続を制限しています。時間を空けて確認してください。",
   SESSION_UNAVAILABLE: "ヤフオクの接続情報を読み込めませんでした。",
+  RESULT_UNAVAILABLE: "出品結果を確認できません。出品・取消の再送は行っていません。",
+  REMOTE_CONTENT_CHANGED: "ヤフオク側の商品情報が変更されています。商品画面を確認してください。",
 }[code] ?? "読み込みに失敗しました。もう一度確認してください。");
 
 export function YahooAuctionListingSection({ inventoryId }: { inventoryId: string }) {
@@ -35,11 +39,16 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [connectionCheckedAt, setConnectionCheckedAt] = useState<string | null>(null);
+  const [listing, setListing] = useState<YahooListingResult | null>(null);
+  const [resultUnavailable, setResultUnavailable] = useState(false);
   const inFlight = useRef(false);
   const connection = yahooRemoteActionAvailability();
 
   useEffect(() => {
     let active = true;
+    setListing(null);setResultUnavailable(false);
+    getYahooListingResultAction(inventoryId).then(r=>{if(active){if(r.ok)setListing(r.listing);else setResultUnavailable(true);}})
+      .catch(()=>{if(active)setResultUnavailable(true);});
     getYahooAuctionPreparationAction(inventoryId).then(result => {
       if (!active) return;
       if (!result.ok) { setError(failureMessage(result.code)); return; }
@@ -52,6 +61,16 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
 
   function change<K extends keyof YahooAuctionInput>(key: K, value: YahooAuctionInput[K]) {
     setInput(old => ({ ...old, [key]: value })); setMessage("");
+  }
+  async function refreshRemoteResult() {
+    if(inFlight.current)return;
+    inFlight.current=true;setBusy(true);setError("");setMessage("");
+    try {
+      const r=await refreshYahooListingResultAction(inventoryId);
+      if(!r.ok){setError(failureMessage(r.code));return;}
+      setListing(r.listing);setResultUnavailable(false);setMessage(r.listing?"ヤフオクの現在の出品状態を確認して保存しました。":"この商品に紐付いたヤフオク出品はありません。");
+    }catch{setError(failureMessage('RESULT_UNAVAILABLE'));}
+    finally{inFlight.current=false;setBusy(false);}
   }
   async function checkConnection() {
     if (inFlight.current) return;
@@ -98,6 +117,14 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
       <h2 className="font-bold">ヤフオク出品</h2>
       <span className="rounded bg-gray-100 px-2 py-1 text-xs">個人アカウント</span>
     </div>
+    {listing && <div className="mt-3 rounded border border-blue-200 bg-blue-50 p-3 text-sm">
+      <p className="font-semibold">{listing.remoteStatus==='open'?'出品中':listing.remoteStatus==='cancelled'?'出品停止中':'終了'}（確認時点）</p>
+      <p className="mt-1">{listing.priceYen.toLocaleString('ja-JP')}円・数量{listing.quantity}・入札{listing.bids}件</p>
+      <p className="mt-1 text-xs">確認：{new Date(listing.checkedAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}</p>
+      <a className="mt-1 inline-block text-blue-700 underline" href={`https://auctions.yahoo.co.jp/jp/auction/${listing.auctionId}`} target="_blank" rel="noreferrer">ヤフオクの商品を開く</a>
+      <button type="button" disabled={busy} onClick={refreshRemoteResult} className="ml-3 rounded border bg-white px-3 py-2 text-sm disabled:opacity-50">出品状態を確認</button>
+    </div>}
+    {resultUnavailable && <p className="mt-2 text-sm text-amber-800">保存された出品結果を確認できません。<button type="button" disabled={busy} onClick={refreshRemoteResult} className="ml-2 underline">出品状態を確認</button></p>}
     <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm">
       <p className="font-semibold">出品連携の準備中</p>
       <p className="mt-1">{connectionCheckedAt ? `サーバーからの接続確認済み（${new Date(connectionCheckedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}）。出品操作は準備中です。` : connection.reason}</p>

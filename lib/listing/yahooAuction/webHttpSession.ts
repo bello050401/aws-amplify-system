@@ -1,4 +1,7 @@
 import "server-only";
+import { PUBLICATION_URL, publicationRequest, publicationResponseEvidence } from "./webHttpPublication";
+import { parseListingEvidence, yahooAuctionIdValid, canCancelWithoutBids, zeroFeeCancellationPreview,
+  type YahooListingEvidence } from "./webHttpListing";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { CATEGORY_PATH, SELECTED_INPUT_PATH, categoryRequestFromInput, selectedInputRequest,
   previewRequestFromInput, verifyPreview, validPreviewInput, type YahooFixedPreviewInput,
@@ -142,8 +145,8 @@ async function limitedHtml(response: Response): Promise<string> {
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
-/** Server-only client for authenticated reads, image probe and pre-publication forms.
- * Publication/cancellation are NOT implemented. There is no URL override,
+/** Server-only client for observed website HTTPS requests. Callers reserve
+ * mutating operations durably before sending. There is no URL override,
  * browser fallback, redirect following or automatic retry.
  * Credentials stay in private fields, including when inspected or JSON serialized.
  */
@@ -155,6 +158,9 @@ export class YahooWebSession {
   #imageAttempted = false;
   #previewHtml: string | null = null;
   #previewAttempted = false;
+  #publication: { body: URLSearchParams; evidence: YahooPreviewEvidence; preparedAt: number } | null = null;
+  #publicationAttempted = false;
+  #cancellationAttempted = false;
   #capturedAt: string;
   private constructor(cookie: string, inputUrl: string, fetchImpl: typeof fetch, capturedAt: string) {
     this.#cookie = cookie; this.#inputUrl = inputUrl; this.#fetch = fetchImpl;
@@ -216,6 +222,7 @@ export class YahooWebSession {
   }
 
   async inspectInput(): Promise<Result<YahooInputMetadata>> {
+    this.#publication = null;
     this.#imageContext = null;
     this.#previewHtml = null;
     try {
@@ -287,6 +294,12 @@ export class YahooWebSession {
         else if (path === SELECTED_INPUT_PATH) body = previewRequestFromInput(html, input, image);
         else {
           const value = verifyPreview(html, input, image);
+          if (value) {
+            // A valid preview remains useful even if a changed final form cannot
+            // be submitted. Publication is armed only by strict serialization.
+            try { this.#publication = { body: publicationRequest(html, input, image), evidence: value, preparedAt: Date.now() }; }
+            catch { this.#publication = null; }
+          }
           return value ? { ok: true, value } : { ok: false, code: "PREVIEW_MISMATCH", stage, status };
         }
         referer = ORIGIN + path;
@@ -294,6 +307,87 @@ export class YahooWebSession {
       return { ok: false, code: "UNEXPECTED_FORM", stage };
     } catch { return { ok: false, code: status === undefined && stage !== "INPUT" ? "READ_UNAVAILABLE" : "UNEXPECTED_FORM", stage, status }; }
     finally { this.#previewHtml = null; }
+  }
+
+  /** Authorized operator probe. Caller must durably reserve the one attempt
+   * before send, enforce account-wide spacing and reconcile any uncertainty.
+   * No retry or redirect following; response evidence alone is not success. */
+  async publishPreparedListing(approval: { title: string; priceYen: number; quantity: number; termsAccepted: true },
+    beforeSend: (evidence: YahooPreviewEvidence) => Promise<void>) {
+    if (this.#publicationAttempted) return { ok: false as const, code: "PUBLICATION_ALREADY_ATTEMPTED" };
+    const prepared = this.#publication;
+    if (!prepared || Date.now() - prepared.preparedAt > 5 * 60_000) return { ok: false as const, code: "FRESH_PREVIEW_REQUIRED" };
+    if (approval.termsAccepted !== true || approval.title !== prepared.evidence.title ||
+        approval.priceYen !== prepared.evidence.priceYen || approval.quantity !== prepared.evidence.quantity)
+      return { ok: false as const, code: "APPROVAL_MISMATCH" };
+    this.#publicationAttempted = true;
+    this.#publication = null;
+    try { await beforeSend(prepared.evidence); }
+    catch { return { ok: false as const, code: "ATTEMPT_NOT_RESERVED" }; }
+    let status: number | undefined;
+    try {
+      const response = await this.#fetch(PUBLICATION_URL, { method: "POST", body: prepared.body,
+        headers: { Cookie: this.#cookie, Origin: ORIGIN, Referer: ORIGIN + PREVIEW_PATH, Accept: "text/html" },
+        redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(30_000) });
+      status = response.status;
+      if (status !== 200 || response.redirected || !(response.headers.get("content-type") ?? "").startsWith("text/html")) {
+        await response.body?.cancel().catch(() => {});
+        return { ok: false as const, code: "PUBLICATION_RESULT_UNKNOWN", status };
+      }
+      const evidence = publicationResponseEvidence(await limitedHtml(response));
+      return { ok: false as const, code: "PUBLICATION_READBACK_REQUIRED", status, evidence };
+    } catch { return { ok: false as const, code: "PUBLICATION_RESULT_UNKNOWN", status }; }
+  }
+
+  async inspectListing(auctionId: string): Promise<Result<YahooListingEvidence>> {
+    if(!yahooAuctionIdValid(auctionId))return {ok:false,code:"UNEXPECTED_FORM"};
+    try {
+      const r=await this.#fetch(ORIGIN+'/jp/auction/'+auctionId,{method:'GET',headers:{Cookie:this.#cookie,Accept:'text/html'},
+        redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(20_000)});
+      if(r.status!==200 || r.redirected || !(r.headers.get('content-type')??'').startsWith('text/html')) {
+        await r.body?.cancel().catch(()=>{}); return {ok:false,code:r.status===401?'AUTH_REQUIRED':r.status===403?'ACCESS_DENIED':r.status===429?'RATE_LIMITED':'UNEXPECTED_RESPONSE'};
+      }
+      const evidence=parseListingEvidence(await limitedHtml(r),auctionId);
+      return evidence?{ok:true,value:evidence}:{ok:false,code:'UNEXPECTED_FORM'};
+    }catch{return {ok:false,code:'READ_UNAVAILABLE'};}
+  }
+
+  /** No fees/bids are accepted. The observed server also rejects a late bid
+   * when hasCancelFee:false is sent. A transport error never triggers a retry. */
+  async cancelListingWithoutFee(auctionId:string, expected:{title:string;priceYen:number;quantity:number},
+    beforeSend:(evidence:YahooListingEvidence)=>Promise<void>) {
+    if(this.#cancellationAttempted)return {ok:false as const,code:'CANCELLATION_ALREADY_ATTEMPTED'};
+    const first=await this.inspectListing(auctionId);
+    if(!first.ok)return first;
+    const matches=(d:YahooListingEvidence)=>d.title===expected.title&&d.priceYen===expected.priceYen&&d.quantity===expected.quantity;
+    if(!matches(first.value)||!canCancelWithoutBids(first.value))return {ok:false as const,code:'BIDS_OR_STATE_CHANGED'};
+    const url=ORIGIN+'/api/sell/v1/items/'+auctionId+'/close';
+    let token:string|null=null;
+    try {
+      const r=await this.#fetch(url+'/preview?operation=CANCEL',{method:'GET',headers:{Cookie:this.#cookie,Accept:'application/json',Referer:ORIGIN+'/jp/auction/'+auctionId},
+        redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(20_000)});
+      if(r.status!==200||r.redirected||!(r.headers.get('content-type')??'').startsWith('application/json')) {
+        await r.body?.cancel().catch(()=>{});return {ok:false as const,code:'CANCELLATION_PREVIEW_UNAVAILABLE'};
+      }
+      token=r.headers.get('x-csrf-token');
+      if(!token||token.length>8192||/[\r\n]/.test(token)||!zeroFeeCancellationPreview(JSON.parse(await limitedHtml(r)),first.value))
+        return {ok:false as const,code:'CANCELLATION_FEE_OR_FORM_CHANGED'};
+    }catch{return {ok:false as const,code:'CANCELLATION_PREVIEW_UNAVAILABLE'};}
+    const fresh=await this.inspectListing(auctionId);
+    if(!fresh.ok)return fresh;
+    if(!matches(fresh.value)||!canCancelWithoutBids(fresh.value))return {ok:false as const,code:'BIDS_OR_STATE_CHANGED'};
+    this.#cancellationAttempted=true;
+    try{await beforeSend(fresh.value);}catch{return {ok:false as const,code:'ATTEMPT_NOT_RESERVED'};}
+    let httpStatus:number|undefined;
+    try {
+      const r=await this.#fetch(url,{method:'PUT',headers:{Cookie:this.#cookie,Origin:ORIGIN,Referer:ORIGIN+'/jp/auction/'+auctionId,
+        'Content-Type':'application/json',Accept:'application/json','x-csrf-token':token},body:JSON.stringify({hasCancelFee:false,operation:'CANCEL'}),
+        redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(20_000)});
+      httpStatus=r.status; await r.body?.cancel().catch(()=>{});
+    }catch{/* Reconcile the exact known ID even when acknowledgement is lost. */}
+    const after=await this.inspectListing(auctionId);
+    return after.ok&&matches(after.value)&&after.value.status==='cancelled'&&after.value.bids===0 ?
+      {ok:true as const,value:after.value,httpStatus}:{ok:false as const,code:'CANCELLATION_RESULT_UNKNOWN',httpStatus};
   }
 
   /** Observed in the user-supplied HTML + uploadImage/dragdrop scripts (2026-10-16).

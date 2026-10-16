@@ -282,3 +282,52 @@ approval is not Yahoo public approval.
 - Screenshot: `C:/Users/win/Documents/Codex/2026-10-15/yahoo-auction-proof/yahoo-listing-saved.png`.
 - Test inventory: `57b4b2b5-d6ad-435a-b303-5d412405a44c` (B005105 chair).
   Category and desired end time intentionally blank; no Yahoo listing was made.
+
+## Authorized public HTTPS test, 2026-10-16 23:50-23:54 JST
+
+The user explicitly approved B005105, one THONET chair, 99,999 yen,
+seller-paid delivery, final listing terms and a cancellation check after at
+least 30 seconds; no bid/fee acceptance. The response was not inferred from `f`.
+
+- A fresh input/category/preview sequence and the observed final form handler
+  were used. One local Node HTTPS POST to `/sell/jp/config/submit` at
+  2026-10-16T14:50:22.660Z returned candidate ID `f1248612637`.
+- The actual item page confirmed title, one chair, 99,999 yen, free shipping,
+  ownership and zero bids. The first response alone was not called success.
+- The served Yahoo client showed cancellation GET
+  `/api/sell/v1/items/{id}/close/preview?operation=CANCEL`, then PUT
+  `/api/sell/v1/items/{id}/close` with JSON
+  `{ "hasCancelFee": false, "operation": "CANCEL" }` and the fresh preview
+  response's `x-csrf-token`. This is the website's own HTTPS flow, not a
+  contracted public API or browser automation production architecture.
+- The real preview had isSubmitFeeCategory:false and empty feeInfo. The site's
+  implementation interprets an omitted fee as zero. Bids were rechecked before
+  sending, and the server receives hasCancelFee:false to reject late fee cases.
+- One HTTPS cancellation was sent at 2026-10-16T14:54:13.918Z, 231 seconds after
+  publication. The first probe reported RESULT_UNKNOWN during response handling;
+  the response status/body were not retained, so the exact parse failure is not
+  asserted. No second PUT was sent. A separate authenticated HTTPS read at
+  14:54:45Z confirmed status:cancelled, bids:0, quantity:1, price:99999. The
+  actual UI showed ended with no winner.
+- The reusable client now ignores cancellation response bodies and reconciles
+  the exact known item even after an empty response or lost acknowledgement.
+- Durable local one-attempt files prevent repeated publication or cancellation.
+  They are operator probes, not the production account-wide job/spacing store.
+- Screenshots and sanitized result records are outside Git under
+  `C:/Users/win/Documents/Codex/2026-10-16/yahoo-http-proof/`:
+  `yahoo-https-published.png`, `yahoo-https-cancelled.png`,
+  `publication-b005105-once.json`, `cancellation-f1248612637-once.json`,
+  `cancellation-readback-f1248612637.json`.
+
+Added a separate YahooAuctionListing result model, conditional refresh action,
+and EC result display. An operator import verifies the exact ended test via
+HTTPS and matches the saved BELLO preparation before creating its binding.
+No stock, BASE or Mercari record is changed. Targeted Yahoo tests: 37 pass;
+TypeScript passes. Staging deployment/UI acceptance to be recorded separately.
+
+Not yet complete: full EC publish/cancel/relist orchestration, durable
+account-wide send spacing and ambiguity recovery, category/image binding,
+AWS mutation acceptance, general multi-image/auction mode and session renewal.
+The public test above ran local server-side Node, not the AWS compute role.
+The relist URL was observed; read-only input reports mode=oresubmit and the old
+auction ID. No relist was submitted or authorized by this single-publication test.

@@ -934,6 +934,21 @@ const schema = a.schema({
     allow.group("ADMIN"), allow.group("EDITOR"), allow.group("VIEWER").to(["read"]),
   ]),
 
+  /** Verified remote result, separate from editable preparation; never credentials. */
+  YahooAuctionListing: a.model({
+    inventoryId: a.string().required(),
+    auctionId: a.string().required(),
+    title: a.string().required(),
+    priceYen: a.integer().required(),
+    quantity: a.integer().required(),
+    remoteStatus: a.string().required(),
+    bids: a.integer().required(),
+    checkedAt: a.datetime().required(),
+    revision: a.integer().required(),
+  }).identifier(["inventoryId"]).authorization((allow) => [
+    allow.group("ADMIN"), allow.group("EDITOR"), allow.group("VIEWER").to(["read"]),
+  ]),
+
   /** チャネルに依存しない共通の出品下書き — 1つのInventoryにつき0または1件。 */
   ListingDraft: a
     .model({
