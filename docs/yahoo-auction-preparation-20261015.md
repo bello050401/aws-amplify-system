@@ -364,3 +364,6 @@ B005105. No second cancellation was sent.
   and the remaining items above are not complete. The connection-preparation
   banner's inaccurate "未設定" default was replaced with wording that describes
   the unfinished publication workflow without asserting an unconfigured session.
+  Build 432 (`a7c8232`) deployed this wording successfully (all three phases
+  SUCCEED); a fresh page load confirmed the corrected text and revision 3's
+  00:26:52 JST checked timestamp. The final screenshot reflects build 432.
