@@ -362,5 +362,5 @@ B005105. No second cancellation was sent.
 - The authorized public test and result display acceptance are complete.
   The EC publish button remains disabled: full publish/cancel/relist orchestration
   and the remaining items above are not complete. The connection-preparation
-  banner also resets to an inaccurate "未設定" default after reload despite a
-  working configured connection; correct that wording with the next UI change.
+  banner's inaccurate "未設定" default was replaced with wording that describes
+  the unfinished publication workflow without asserting an unconfigured session.
