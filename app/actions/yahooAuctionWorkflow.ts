@@ -51,7 +51,7 @@ export async function getYahooWorkflowAction(id:string):Promise<YahooWorkflowRes
     if(!state)view.listing=await legacy(id);
     return {ok:true,view};}catch(e){return failure(e);}
 }
-async function run(id:string,operation:'PREPARE'|'PUBLISH'|'CANCEL'|'REFRESH',value:unknown,termsAccepted=false):Promise<YahooWorkflowResult>{
+async function run(id:string,operation:'PREPARE'|'PUBLISH'|'CANCEL'|'REFRESH'|'NEW',value:unknown,termsAccepted=false):Promise<YahooWorkflowResult>{
   let store:YahooWorkflowStore|undefined,acquired=false;
   try{
     await authorize(id);store=new YahooWorkflowStore(id);await store.acquire();acquired=true;
@@ -60,7 +60,11 @@ async function run(id:string,operation:'PREPARE'|'PUBLISH'|'CANCEL'|'REFRESH',va
       const c=await getYahooAuctionPreparationAction(id);if(!c.ok)throw new WorkflowFailure(c.code);return c.context;
     },imageBytes,()=>legacy(id),mirror);
     await flow.load();
-    if(operation==='PREPARE'){
+    if(operation==='NEW'){
+      const input=value as {auctionId?:unknown;revision?:unknown}|null;
+      if(!input||typeof input.auctionId!=='string'||!Number.isSafeInteger(input.revision)||Number(input.revision)<1)throw new WorkflowFailure('INVALID_INPUT');
+      await flow.startNew(input.auctionId,Number(input.revision));
+    } else if(operation==='PREPARE'){
       if(!Number.isSafeInteger(value)||Number(value)<1)throw new WorkflowFailure('INVALID_INPUT');
       await flow.prepare(Number(value));
     } else if(operation==='PUBLISH'){
@@ -73,6 +77,7 @@ async function run(id:string,operation:'PREPARE'|'PUBLISH'|'CANCEL'|'REFRESH',va
   }catch(e){return failure(e);}finally{if(acquired)await store!.release();}
 }
 export async function prepareYahooPublicationAction(id:string,revision:number){return run(id,'PREPARE',revision);}
+export async function startNewYahooPublicationAction(id:string,auctionId:string,revision:number){return run(id,'NEW',{auctionId,revision});}
 export async function publishYahooListingAction(id:string,confirmationId:string,termsAccepted:boolean){return run(id,'PUBLISH',confirmationId,termsAccepted);}
 export async function cancelYahooListingAction(id:string,auctionId:string){return run(id,'CANCEL',auctionId);}
 export async function reconcileYahooListingAction(id:string){return run(id,'REFRESH',null);}

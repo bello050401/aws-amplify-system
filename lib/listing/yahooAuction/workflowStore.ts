@@ -11,6 +11,7 @@ import type {YahooWorkflowView} from './workflowTypes';
 export type WorkflowState={pk:string;revision:number;stage:YahooWorkflowView['stage'];jobId:string;
   saved?:YahooAuctionSaved;fingerprint?:string;images:YahooUploadedImage[];imageSourceHash?:string;
   listing:YahooListingResult|null;candidateId?:string;relistId?:string;error?:string;readyAt?:number;
+  newListing?:boolean;previousListings?:YahooListingResult[];
   lastOperation?:'PUBLISH'|'CANCEL'|'IMAGE';updatedAt:string};
 export class WorkflowFailure extends Error {
   constructor(public code:string,public waitUntil?:number){super(code);}

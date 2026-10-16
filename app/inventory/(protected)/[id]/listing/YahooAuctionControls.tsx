@@ -1,6 +1,6 @@
 "use client";
 import {useEffect,useRef,useState} from 'react';
-import {getYahooWorkflowAction,prepareYahooPublicationAction,publishYahooListingAction,cancelYahooListingAction,reconcileYahooListingAction} from '@/app/actions/yahooAuctionWorkflow';
+import {getYahooWorkflowAction,prepareYahooPublicationAction,startNewYahooPublicationAction,publishYahooListingAction,cancelYahooListingAction,reconcileYahooListingAction} from '@/app/actions/yahooAuctionWorkflow';
 import type {YahooWorkflowView,YahooWorkflowResult} from '@/lib/listing/yahooAuction/workflowTypes';
 import type {YahooListingResult} from '@/lib/listing/yahooAuction/listingResult';
 
@@ -26,6 +26,7 @@ export const yahooWorkflowMessage=(code:string)=>({
   UNEXPECTED_FORM:'Yahoo!の確認画面を照合できないため、公開していません。',
   IMAGE_UNAVAILABLE:'選択した画像を読み込めません。共通下書きの画像を確認してください。',
   REMOTE_CONTENT_CHANGED:'Yahoo!の商品内容が変わっています。商品画面を確認してください。',
+  HISTORY_LIMIT:'この商品の出品履歴が上限に達しました。履歴を確認してください。',
 }[code]??'処理を確定できません。送信結果を確認してください。');
 const button='rounded border px-4 py-2 text-sm disabled:opacity-40';
 export function YahooAuctionControls({inventoryId,revision,dirty,disabled,onListing}:{inventoryId:string;revision:number|null;dirty:boolean;disabled:boolean;onListing:(r:YahooListingResult|null)=>void}){
@@ -67,13 +68,21 @@ export function YahooAuctionControls({inventoryId,revision,dirty,disabled,onList
   }
   const listed=view?.listing?.remoteStatus==='open';
   return <div className="my-3 rounded border border-blue-200 p-3">
-    <p className="text-sm">{listed?'出品中です。停止すると、再出品へ切り替わります。':view?.listing?.remoteStatus==='cancelled'?'出品停止中です。内容を確認して再出品できます。':'入力した内容を確認してから出品します。'}</p>
+    <p className="text-sm">{listed?'出品中です。停止すると、再出品へ切り替わります。':view?.newListing?'前回の出品を停止したまま、新しい出品番号で作成する準備をしています。':view?.listing?.remoteStatus==='cancelled'?'出品停止中です。内容を確認して再出品できます。':'入力した内容を確認してから出品します。'}</p>
     <p className="mt-1 text-xs text-gray-600">送料込み・出品操作は30秒間隔。入札や取消料金がある場合は停止しません。</p>
     <div className="mt-3 flex flex-wrap gap-2">
       {listed?<button type="button" className={button+' bg-red-700 text-white'} disabled={busy||disabled||!!uncertain||waitSeconds>0} onClick={()=>setStopConfirm(true)}>出品停止</button>:
-        <button type="button" className={button+' bg-blue-700 text-white'} disabled={!view||busy||disabled||dirty||!revision||!!uncertain} onClick={prepare}>{running?'出品内容を確認中…':view?.listing?'再出品の内容を確認':'出品内容を確認'}</button>}
+        <button type="button" className={button+' bg-blue-700 text-white'} disabled={!view||busy||disabled||dirty||!revision||!!uncertain} onClick={prepare}>{running?'出品内容を確認中…':view?.newListing?'新規出品の内容を確認':view?.listing?'再出品の内容を確認':'出品内容を確認'}</button>}
       <button type="button" className={button} disabled={busy} onClick={()=>execute(()=>reconcileYahooListingAction(inventoryId))}>送信結果を確認</button>
     </div>
+    {view?.listing?.remoteStatus==='cancelled'&&view.stage==='IDLE'&&!view.newListing&&<details className="mt-3 text-sm">
+      <summary className="cursor-pointer">新しい出品番号で作成する場合</summary>
+      <p className="my-2">前回の停止済み出品は履歴に残し、現在の下書きと画像で新規出品を準備します。この操作では公開されません。</p>
+      <button type="button" className={button} disabled={busy||disabled||dirty||!revision} onClick={()=>execute(()=>startNewYahooPublicationAction(inventoryId,view.listing!.auctionId,revision!))}>新規出品の準備に切り替える</button>
+    </details>}
+    {!!view?.previousListings.length&&<details className="mt-3 text-sm"><summary className="cursor-pointer">過去の出品履歴（{view.previousListings.length}件）</summary>
+      <ul className="mt-2 space-y-1">{view.previousListings.map(prior=><li key={prior.auctionId}><a className="text-blue-700 underline" href={`https://auctions.yahoo.co.jp/jp/auction/${prior.auctionId}`} target="_blank" rel="noreferrer">{prior.auctionId}</a>：{prior.priceYen.toLocaleString()}円・停止確認 {new Date(prior.checkedAt).toLocaleString('ja-JP')}</li>)}</ul>
+    </details>}
     {dirty&&<p className="mt-2 text-xs text-amber-800">変更した下書きを保存すると、出品内容を確認できます。</p>}
     {waitSeconds>0&&<p role="status" className="mt-2 text-sm">次の送信まで {waitSeconds} 秒</p>}
     {running&&<p role="status" className="mt-2 text-sm">画像 {view?.uploaded??0} / {view?.imageCount??0} 枚を処理済み。確認画面を準備しています。</p>}
