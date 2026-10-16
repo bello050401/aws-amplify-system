@@ -213,6 +213,31 @@ Yahoo was 2026-10-19T02:36:10Z (11:36:10 JST).
   disabled until the complete server workflow and actual outcome are verified.
 - 18 targeted tests and project TypeScript check pass before staging deployment.
 
+### Staging acceptance of the server connection
+
+- Commit `53e133bd4c94e1d400ae29c9627d52ecee358a65` deployed in Amplify job 429;
+  BUILD, DEPLOY and VERIFY all SUCCEED. Only the authorized staging branch was
+  pushed. Existing BASE/Mercari resources and runtime permissions were preserved.
+- Dedicated Yahoo staging secret was created by CDK and imported from the user's
+  HAR after an authenticated local read. A first import attempt before resource
+  creation returned NOT_CONFIRMED; DescribeSecret confirmed it was not yet
+  provisioned. Import succeeded after creation; no blind secret overwrite retry.
+- At 2026-10-16 12:51:13 JST, the deployed EC page's authenticated
+  `ヤフオク接続を確認` action read the encrypted session with the AWS compute role,
+  performed the HTTPS input GET from AWS, and displayed the explicit success.
+- Screenshot outside Git:
+  `C:/Users/win/Documents/Codex/2026-10-16/yahoo-http-proof/bello-yahoo-cloud-connected.png`.
+- This proves cloud authenticated **reading**. The earlier preview POST proof
+  was local Node; AWS image/preview/publication writes remain unproven.
+- Public-test approval question is pending: B005105, one chair, 99,999 yen,
+  seller-paid shipping, final listing terms; wait at least 30 seconds before
+  checking cancellation. Do not confirm a cancellation with bids or a fee.
+- No Yahoo public listing was created in this turn. Chrome preview tab 725666925
+  remains at confirmation for the concrete test; screenshot
+  `C:/Users/win/Documents/Codex/2026-10-16/yahoo-http-proof/yahoo-preview-approval.png`.
+- The deployed EC listing button remains disabled. Category/image/job bindings,
+  full publication/stop/relist flow and durable send spacing still need work.
+
 Remaining: verify AWS execution, connect image/category/preview results to each
 inventory, obtain Yahoo-specific approval for a concrete public test, observe and
 verify publication/cancellation/relisting, and implement durable result binding,
