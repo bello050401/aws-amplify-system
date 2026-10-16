@@ -244,7 +244,7 @@ verify publication/cancellation/relisting, and implement durable result binding,
 30-second spacing and ambiguous-result reconciliation. The earlier Mercari test
 approval is not Yahoo public approval.
 
-## Implemented
+## Initial preparation implementation (2026-10-15)
 
 - Separate `YahooAuctionPreparation` model, keyed by inventory, with revisions.
 - Own title, description, condition, fixed/auction format, price, quantity,
@@ -342,3 +342,25 @@ missing data, different IDs/accounts and open/closed statuses still fail.
 Five targeted readback/cancellation tests pass. The operator import then verified
 the remote state and conditionally created the YahooAuctionListing binding to
 B005105. No second cancellation was sent.
+
+### Staging result acceptance, 2026-10-17 00:25-00:27 JST
+
+- Staging build 430 (`1e6c01b`) and corrective build 431 (`6f0af41`) both
+  completed BUILD / DEPLOY / VERIFY successfully. Production was not targeted.
+- All 38 Yahoo tests passed after the 404 correction. The staging build's
+  compile/type checks also passed.
+- GPT in-app BELLO EC listing displayed the saved cancelled test under Mercari:
+  99,999 yen, quantity 1, bids 0, exact auction link `f1248612637`.
+- Clicking `出品状態を確認` called the deployed AWS server, authenticated with
+  the dedicated Yahoo session and saved fresh cancellation evidence. The UI
+  explicitly reported success at 00:25:58 JST; DynamoDB consistent read showed
+  revision 2, cancelled, bids 0. Reload restored that same checked timestamp.
+- A subsequent status-button read at 00:26:52 JST produced revision 3 and the
+  same cancellation state. These were readbacks, not repeated cancellations.
+- Full screenshot: `yahoo-http-proof/bello-yahoo-result-verified.png` under
+  `C:/Users/win/Documents/Codex/2026-10-16/`.
+- The authorized public test and result display acceptance are complete.
+  The EC publish button remains disabled: full publish/cancel/relist orchestration
+  and the remaining items above are not complete. The connection-preparation
+  banner also resets to an inaccurate "未設定" default after reload despite a
+  working configured connection; correct that wording with the next UI change.
