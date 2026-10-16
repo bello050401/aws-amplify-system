@@ -5,7 +5,6 @@ import { YahooAuctionControls, yahooWorkflowMessage } from "./YahooAuctionContro
 import { searchYahooCategoriesAction } from "@/app/actions/yahooAuctionWorkflow";
 import { getYahooAuctionPreparationAction, saveYahooAuctionPreparationAction } from "@/app/actions/yahooAuctionPreparation";
 import { checkYahooHttpsConnectionAction } from "@/app/actions/yahooAuctionHttp";
-import { getYahooListingResultAction, refreshYahooListingResultAction } from "@/app/actions/yahooAuctionResult";
 import type { YahooListingResult } from "@/lib/listing/yahooAuction/listingResult";
 import { initialYahooAuctionInput, yahooPreparationIssues, yahooSourceMatches,
   type YahooAuctionInput, type YahooAuctionSaved } from "@/lib/listing/yahooAuction/preparation";
@@ -42,16 +41,13 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
   const [conflict, setConflict] = useState(false);
   const [connectionCheckedAt, setConnectionCheckedAt] = useState<string | null>(null);
   const [listing, setListing] = useState<YahooListingResult | null>(null);
-  const [resultUnavailable, setResultUnavailable] = useState(false);
   const inFlight = useRef(false);
   const [categoryQuery,setCategoryQuery]=useState("");
   const [categories,setCategories]=useState<{id:string;name:string;path:string}[]>([]);
 
   useEffect(() => {
     let active = true;
-    setListing(null);setResultUnavailable(false);
-    getYahooListingResultAction(inventoryId).then(r=>{if(active){if(r.ok)setListing(r.listing);else setResultUnavailable(true);}})
-      .catch(()=>{if(active)setResultUnavailable(true);});
+    setListing(null);
     getYahooAuctionPreparationAction(inventoryId).then(result => {
       if (!active) return;
       if (!result.ok) { setError(failureMessage(result.code)); return; }
@@ -64,16 +60,6 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
 
   function change<K extends keyof YahooAuctionInput>(key: K, value: YahooAuctionInput[K]) {
     setInput(old => ({ ...old, [key]: value })); setMessage("");
-  }
-  async function refreshRemoteResult() {
-    if(inFlight.current)return;
-    inFlight.current=true;setBusy(true);setError("");setMessage("");
-    try {
-      const r=await refreshYahooListingResultAction(inventoryId);
-      if(!r.ok){setError(failureMessage(r.code));return;}
-      setListing(r.listing);setResultUnavailable(false);setMessage(r.listing?"ヤフオクの現在の出品状態を確認して保存しました。":"この商品に紐付いたヤフオク出品はありません。");
-    }catch{setError(failureMessage('RESULT_UNAVAILABLE'));}
-    finally{inFlight.current=false;setBusy(false);}
   }
   async function checkConnection() {
     if (inFlight.current) return;
@@ -125,12 +111,10 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
       <p className="mt-1">{listing.priceYen.toLocaleString('ja-JP')}円・数量{listing.quantity}・入札{listing.bids}件</p>
       <p className="mt-1 text-xs">確認：{new Date(listing.checkedAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}</p>
       <a className="mt-1 inline-block text-blue-700 underline" href={`https://auctions.yahoo.co.jp/jp/auction/${listing.auctionId}`} target="_blank" rel="noreferrer">ヤフオクの商品を開く</a>
-      <button type="button" disabled={busy} onClick={refreshRemoteResult} className="ml-3 rounded border bg-white px-3 py-2 text-sm disabled:opacity-50">出品状態を確認</button>
     </div>}
-    {resultUnavailable && <p className="mt-2 text-sm text-amber-800">保存された出品結果を確認できません。<button type="button" disabled={busy} onClick={refreshRemoteResult} className="ml-2 underline">出品状態を確認</button></p>}
     <YahooAuctionControls inventoryId={inventoryId} revision={saved?.revision??null}
       dirty={!saved||JSON.stringify(input)!==JSON.stringify(saved.payload.input)||!!sourceChanged} disabled={busy||!loaded}
-      onListing={r=>{setListing(r);setResultUnavailable(false);}} />
+      onListing={setListing} />
     <div className="my-3 flex flex-wrap gap-2">
       <button type="button" disabled={busy} onClick={checkConnection} className="rounded border px-3 py-2 text-sm disabled:opacity-50">ヤフオク接続を確認</button>
       <button type="button" disabled={busy} onClick={refreshSource} className="rounded border px-3 py-2 text-sm disabled:opacity-50">共通下書きを確認</button>
