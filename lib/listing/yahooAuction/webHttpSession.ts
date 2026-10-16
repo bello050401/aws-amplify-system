@@ -344,10 +344,13 @@ export class YahooWebSession {
     try {
       const r=await this.#fetch(ORIGIN+'/jp/auction/'+auctionId,{method:'GET',headers:{Cookie:this.#cookie,Accept:'text/html'},
         redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(20_000)});
-      if(r.status!==200 || r.redirected || !(r.headers.get('content-type')??'').startsWith('text/html')) {
+      if(![200,404].includes(r.status) || r.redirected || !(r.headers.get('content-type')??'').startsWith('text/html')) {
         await r.body?.cancel().catch(()=>{}); return {ok:false,code:r.status===401?'AUTH_REQUIRED':r.status===403?'ACCESS_DENIED':r.status===429?'RATE_LIMITED':'UNEXPECTED_RESPONSE'};
       }
       const evidence=parseListingEvidence(await limitedHtml(r),auctionId);
+      // Observed after cancellation: Yahoo serves an owned cancelled item with
+      // HTTP 404. Accept only the full matching-item evidence, never a bare 404.
+      if(r.status===404 && evidence?.status!=='cancelled')return {ok:false,code:'UNEXPECTED_RESPONSE'};
       return evidence?{ok:true,value:evidence}:{ok:false,code:'UNEXPECTED_FORM'};
     }catch{return {ok:false,code:'READ_UNAVAILABLE'};}
   }

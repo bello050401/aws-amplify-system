@@ -331,3 +331,14 @@ AWS mutation acceptance, general multi-image/auction mode and session renewal.
 The public test above ran local server-side Node, not the AWS compute role.
 The relist URL was observed; read-only input reports mode=oresubmit and the old
 auction ID. No relist was submitted or authorized by this single-publication test.
+
+### Delayed cancellation readback, 2026-10-17 JST
+
+The subsequent owned item GET returned HTTP 404 with complete `__NEXT_DATA__`
+item evidence: the exact auction ID, status cancelled, price 99,999, quantity 1,
+zero bids and owner information. A generic 404 must not be treated as cancelled.
+The parser now accepts 404 only with full matching owned cancellation evidence;
+missing data, different IDs/accounts and open/closed statuses still fail.
+Five targeted readback/cancellation tests pass. The operator import then verified
+the remote state and conditionally created the YahooAuctionListing binding to
+B005105. No second cancellation was sent.
