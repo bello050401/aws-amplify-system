@@ -50,9 +50,10 @@ is_jp_yupacket_plus_official_ship is_jp_yupack_official_ship is_other_ship items
 tmpClosingYMD tmpClosingTime featuredRadio featuredAmount oldCpaAmount cpaAmount minBidRating retpolicy ppayreg
 catD largeCat burl eappid comeAgain submitUrl historyUrl type _crumb ypmOK exhibitcategory nonpremium
 isnonpremiumfromtransition crumb catSuggestSrc Title istatus Quantity shipschedule salesmode StartPrice BidOrBuyPrice
-ClosingYMD ClosingTime numResubmit shipname1 shipmethod`).split(/\s+/));
+ClosingYMD ClosingTime numResubmit shipname1 shipmethod markdown`).split(/\s+/));
 for (let i = 1; i <= 10; i++) for (const prefix of ["image_comment", "ImageFullPath", "ImageWidth", "ImageHeight"]) hiddenNames.add(prefix + i);
-function hiddenFields(form: El): URLSearchParams {
+for (let i = 1; i <= 10; i++) hiddenNames.add(`Image${i}Uploaded`);
+function hiddenFields(form: El, relistId?: string): URLSearchParams {
   const fields = new URLSearchParams();
   for (const n of nodes(form)) {
     const name = attr(n, "name");
@@ -61,7 +62,7 @@ function hiddenFields(form: El): URLSearchParams {
     if (value.length > 60_000 || fields.has(name) && fields.get(name) !== value) throw Error("FORM_CHANGED");
     fields.set(name, value);
   }
-  if (fields.get("mode") !== "submit" || fields.get("aID") !== "" || fields.get("oldAID") !== "") throw Error("NOT_NEW_FORM");
+  if (fields.get("mode") !== (relistId ? "oresubmit" : "submit") || fields.get("aID") !== (relistId ?? "") || fields.get("oldAID") !== "") throw Error("FORM_ID_CHANGED");
   return fields;
 }
 function requireToken(fields: URLSearchParams, key: string) {
@@ -73,12 +74,13 @@ export type YahooFixedPreviewInput = {
   title: string; description: string; condition: "new" | "used10" | "used20" | "used40" | "used60" | "used80";
   priceYen: number; quantity: number; categoryId: string;
   closingDateJst: string; closingHourJst: number;
+  relistId?: string;
   // First observed shipping configuration. Other configurations need their own evidence.
-  shipping: { payer: "seller"; method: "家財おまかせ便"; prefecture: "11"; schedule: "2" };
+  shipping: { payer: "seller"; method: "家財おまかせ便" | "佐川急便"; prefecture: "11"; schedule: "2" };
 };
 export type YahooPreviewEvidence = {
   title: string; priceYen: number; quantity: number; categoryId: string;
-  imageCount: 1; shippingIncluded: true; shippingMethod: string;
+  imageCount: number; shippingIncluded: true; shippingMethod: string;
   endAt: string; publicationAttempted: false;
 };
 export function validPreviewInput(input: YahooFixedPreviewInput, image: YahooUploadedImage): boolean {
@@ -89,8 +91,9 @@ export function validPreviewInput(input: YahooFixedPreviewInput, image: YahooUpl
       !Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > 9 ||
       !/^[1-9]\d{0,11}$/.test(input.categoryId) || !/^\d{4}-\d{2}-\d{2}$/.test(input.closingDateJst) ||
       !Number.isSafeInteger(input.closingHourJst) || input.closingHourJst < 0 || input.closingHourJst > 23 ||
-      input.shipping?.payer !== "seller" || input.shipping.method !== "家財おまかせ便" ||
-      input.shipping.prefecture !== "11" || input.shipping.schedule !== "2" || !image) return false;
+      input.shipping?.payer !== "seller" || !["家財おまかせ便", "佐川急便"].includes(input.shipping.method) ||
+      input.shipping.prefecture !== "11" || input.shipping.schedule !== "2" ||
+      (input.relistId !== undefined && !/^[a-z][0-9]{8,12}$/.test(input.relistId)) || !image) return false;
   try {
     const date = new Date(input.closingDateJst + "T00:00:00Z");
     const url = new URL(image.url);
@@ -100,8 +103,15 @@ export function validPreviewInput(input: YahooFixedPreviewInput, image: YahooUpl
   } catch { return false; }
 }
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-function applyInput(fields: URLSearchParams, input: YahooFixedPreviewInput, image: YahooUploadedImage) {
-  if (!validPreviewInput(input, image)) throw Error("INVALID_INPUT");
+export type YahooPreviewImages = YahooUploadedImage | YahooUploadedImage[];
+export const previewImages = (images: YahooPreviewImages): YahooUploadedImage[] => Array.isArray(images) ? images : [images];
+export function validPreviewImages(input: YahooFixedPreviewInput, images: YahooPreviewImages) {
+  const all = previewImages(images);
+  return all.length >= 1 && all.length <= 10 && new Set(all.map(i => i.url)).size === all.length && all.every(i => validPreviewInput(input, i));
+}
+function applyInput(fields: URLSearchParams, input: YahooFixedPreviewInput, images: YahooPreviewImages) {
+  const all = previewImages(images);
+  if (!validPreviewImages(input, images)) throw Error("INVALID_INPUT");
   const serverSeconds = fields.get("submitUnixtime");
   if (!serverSeconds || !/^\d{10}$/.test(serverSeconds)) throw Error("FORM_TIME_MISSING");
   const serverTime = Number(serverSeconds) * 1000;
@@ -125,14 +135,15 @@ function applyInput(fields: URLSearchParams, input: YahooFixedPreviewInput, imag
   };
   for (const [k, v] of Object.entries(values)) fields.set(k, v);
   for (let i = 1; i <= 10; i++) {
-    fields.set(`ImageFullPath${i}`, i === 1 ? image.url : "");
-    fields.set(`ImageWidth${i}`, i === 1 ? String(image.width) : "");
-    fields.set(`ImageHeight${i}`, i === 1 ? String(image.height) : "");
+    fields.set(`ImageFullPath${i}`, all[i-1]?.url ?? "");
+    fields.set(`ImageWidth${i}`, all[i-1] ? String(all[i-1].width) : "");
+    fields.set(`ImageHeight${i}`, all[i-1] ? String(all[i-1].height) : "");
     fields.set(`image_comment${i}`, "");
+    if(input.relistId)fields.set(`Image${i}Uploaded`,all[i-1]?'1':'');
   }
   for (const k of [...fields.keys()]) if (/^is_(?:yahuneko|jp_)/.test(k)) fields.set(k, "");
 }
-export function categoryRequestFromInput(html: string, input: YahooFixedPreviewInput, image: YahooUploadedImage): URLSearchParams {
+export function categoryRequestFromInput(html: string, input: YahooFixedPreviewInput, image: YahooPreviewImages): URLSearchParams {
   const fields = hiddenFields(singleForm(html, "auction", PREVIEW_PATH));
   requireToken(fields, ".crumb");
   if (fields.get("category") !== "0") throw Error("FORM_CHANGED");
@@ -146,15 +157,17 @@ export function selectedInputRequest(html: string, categoryId: string): URLSearc
   fields.set("category", categoryId);
   return fields;
 }
-export function previewRequestFromInput(html: string, input: YahooFixedPreviewInput, image: YahooUploadedImage): URLSearchParams {
-  const fields = hiddenFields(singleForm(html, "auction", PREVIEW_PATH));
+export function previewRequestFromInput(html: string, input: YahooFixedPreviewInput, image: YahooPreviewImages): URLSearchParams {
+  const fields = hiddenFields(singleForm(html, "auction", PREVIEW_PATH), input.relistId);
   requireToken(fields, ".crumb");
   if (fields.get("category") !== input.categoryId) throw Error("CATEGORY_MISMATCH");
   applyInput(fields, input, image);
   return fields;
 }
-export function verifyPreview(html: string, input: YahooFixedPreviewInput, image: YahooUploadedImage): YahooPreviewEvidence | null {
+export function verifyPreview(html: string, input: YahooFixedPreviewInput, images: YahooPreviewImages): YahooPreviewEvidence | null {
   try {
+    if (!validPreviewImages(input, images)) return null;
+    const all = previewImages(images);
     const form = singleForm(html, "auction", null), els = nodes(form);
     const values = new Map<string, string>();
     for (const el of els.filter(n => n.tagName === "input" && attr(n, "type") === "hidden")) {
@@ -162,15 +175,18 @@ export function verifyPreview(html: string, input: YahooFixedPreviewInput, image
       if (values.has(key)) return null;
       values.set(key, attr(el, "value") ?? "");
     }
-    const expected = { Title: input.title, category: input.categoryId, Quantity: String(input.quantity),
+    if (input.relistId ? values.get('aID') !== input.relistId : !!values.get('aID')) return null;
+    const expected = { mode: input.relistId ? "oresubmit" : "submit", Title: input.title, category: input.categoryId, Quantity: String(input.quantity),
       istatus: input.condition, salesmode: "buynow", StartPrice: String(input.priceYen), BidOrBuyPrice: String(input.priceYen),
       Description: escapeHtml(input.description).replace(/\r?\n/g, "<br>"),
-      ImageFullPath1: image.url, ImageWidth1: String(image.width), ImageHeight1: String(image.height),
       shipping: "seller", shipname1: input.shipping.method, shipmethod: "other", loc_cd: "11", shipschedule: "2",
       ClosingYMD: input.closingDateJst, ClosingTime: String(input.closingHourJst), numResubmit: "0", AutoExtension: "no",
       Offer: "0", featuredAmount: "", cpaAmount: "", totalCharges: "0", insertionFeeTotal: "0", is_paypay_fleamarket_cross_listing: "0" };
     if (Object.entries(expected).some(([k, v]) => values.get(k) !== v)) return null;
-    for (let i = 2; i <= 10; i++) if (values.get(`ImageFullPath${i}`)) return null;
+    for (let i = 1; i <= 10; i++) {
+      const image = all[i-1];
+      if (image ? values.get(`ImageFullPath${i}`) !== image.url || values.get(`ImageWidth${i}`) !== String(image.width) || values.get(`ImageHeight${i}`) !== String(image.height) : !!values.get(`ImageFullPath${i}`)) return null;
+    }
     if (!values.get(".crumb") || !documentNodes(html).some(n => n.tagName === "button" && attr(n, "id") === "auc_preview_submit_down")) return null;
     const end = values.get("endDate");
     if (!end || !/^\d{10}$/.test(end)) return null;
@@ -178,6 +194,6 @@ export function verifyPreview(html: string, input: YahooFixedPreviewInput, image
     const jst = new Date(Number(end) * 1000 + 9 * 3600_000).toISOString();
     if (jst.slice(0, 10) !== input.closingDateJst || Number(jst.slice(11, 13)) !== input.closingHourJst) return null;
     return { title: input.title, priceYen: input.priceYen, quantity: input.quantity, categoryId: input.categoryId,
-      imageCount: 1, shippingIncluded: true, shippingMethod: input.shipping.method, endAt, publicationAttempted: false };
+      imageCount: all.length, shippingIncluded: true, shippingMethod: input.shipping.method, endAt, publicationAttempted: false };
   } catch { return null; }
 }

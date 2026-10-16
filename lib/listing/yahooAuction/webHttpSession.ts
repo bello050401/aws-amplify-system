@@ -4,7 +4,7 @@ import { parseListingEvidence, yahooAuctionIdValid, canCancelWithoutBids, zeroFe
   type YahooListingEvidence } from "./webHttpListing";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { CATEGORY_PATH, SELECTED_INPUT_PATH, categoryRequestFromInput, selectedInputRequest,
-  previewRequestFromInput, verifyPreview, validPreviewInput, type YahooFixedPreviewInput,
+  previewRequestFromInput, verifyPreview, validPreviewImages, type YahooPreviewImages, type YahooFixedPreviewInput,
   type YahooPreviewEvidence } from "./webHttpPreview";
 
 const ORIGIN = "https://auctions.yahoo.co.jp";
@@ -263,10 +263,11 @@ export class YahooWebSession {
    * Never follows the final confirmation button or returns its credential fields.
    * Currently limited to the observed fixed-price, seller-paid furniture flow.
    */
-  async previewFixedListing(input: YahooFixedPreviewInput, image: YahooUploadedImage): Promise<PreviewResult> {
+  async previewFixedListing(input: YahooFixedPreviewInput, image: YahooPreviewImages): Promise<PreviewResult> {
     let stage: Extract<PreviewResult, { ok: false }>["stage"] = "INPUT";
-    if (!validPreviewInput(input, image)) return { ok: false, code: "INVALID_PREVIEW_INPUT", stage };
+    if (!validPreviewImages(input, image)) return { ok: false, code: "INVALID_PREVIEW_INPUT", stage };
     if (this.#previewAttempted) return { ok: false, code: "PREVIEW_ALREADY_ATTEMPTED", stage };
+    if (input.relistId) return this.previewRelisting(input, image);
     const inspected = await this.inspectInput();
     if (!inspected.ok) return { ...inspected, stage };
     this.#previewAttempted = true;
@@ -355,6 +356,54 @@ export class YahooWebSession {
     }catch{return {ok:false,code:'READ_UNAVAILABLE'};}
   }
 
+  /** The observed cancelled-item form uses oresubmit and preserves aID.
+   * No fallback to a new listing when the remote item or form changes. */
+  private async previewRelisting(input: YahooFixedPreviewInput, images: YahooPreviewImages): Promise<PreviewResult> {
+    this.#previewAttempted = true;
+    const stage = "PREVIEW" as const;
+    const prior = await this.inspectListing(input.relistId!);
+    if (!prior.ok) return {...prior, stage};
+    if (prior.value.status !== 'cancelled' || prior.value.bids || prior.value.bidders || prior.value.highestBidders)
+      return {ok:false,code:'PREVIEW_MISMATCH',stage};
+    try {
+      const url = ORIGIN + '/sell/jp/show/resubmit?aID=' + input.relistId;
+      const r = await this.#fetch(url, {headers:{Cookie:this.#cookie,Accept:'text/html'},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(20_000)});
+      if (r.status !== 200 || !(r.headers.get('content-type')??'').startsWith('text/html')) {
+        await r.body?.cancel(); return {ok:false,code:'UNEXPECTED_RESPONSE',stage};
+      }
+      const body = previewRequestFromInput(await limitedHtml(r),input,images);
+      const p = await this.#fetch(ORIGIN + PREVIEW_PATH,{method:'POST',body,
+        headers:{Cookie:this.#cookie,Origin:ORIGIN,Referer:url,Accept:'text/html'},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(30_000)});
+      if (p.status !== 200 || !(p.headers.get('content-type')??'').startsWith('text/html')) {
+        await p.body?.cancel(); return {ok:false,code:'UNEXPECTED_RESPONSE',stage};
+      }
+      const html = await limitedHtml(p), value = verifyPreview(html,input,images);
+      if (!value) return {ok:false,code:'PREVIEW_MISMATCH',stage};
+      this.#publication = {body:publicationRequest(html,input,images),evidence:value,preparedAt:Date.now()};
+      return {ok:true,value};
+    } catch {return {ok:false,code:'UNEXPECTED_FORM',stage};}
+  }
+
+  /** Read-only endpoint used by Yahoo's observed category chooser. */
+  async searchCategories(query: string): Promise<Result<{id:string;name:string;path:string}[]>> {
+    if (!query.trim() || query.length > 100) return {ok:false,code:'UNEXPECTED_FORM'};
+    try {
+      const r = await this.#fetch(ORIGIN+'/web/api/sellfe/v1/categories/suggest?query='+encodeURIComponent(query.trim()),
+        {headers:{Cookie:this.#cookie,Accept:'application/json'},redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(20_000)});
+      if (r.status!==200 || !(r.headers.get('content-type')??'').startsWith('application/json')) {
+        await r.body?.cancel(); return {ok:false,code:r.status===401?'AUTH_REQUIRED':r.status===429?'RATE_LIMITED':'UNEXPECTED_RESPONSE'};
+      }
+      const data=JSON.parse(await limitedHtml(r));
+      if (!Array.isArray(data.categories) || data.categories.length>200) throw Error();
+      const value=data.categories.map((c:{id:unknown;name:unknown;path?:{id:unknown;name:unknown}[]})=>{
+        if (!Number.isSafeInteger(c.id) || Number(c.id)<1 || typeof c.name!=='string' || c.name.length>200 ||
+            !Array.isArray(c.path) || c.path.length>20 || c.path.some(p=>typeof p.name!=='string'||p.name.length>200)) throw Error();
+        return {id:String(c.id),name:c.name,path:c.path.map(p=>p.name).join(' ＞ ')};
+      });
+      return {ok:true,value};
+    } catch {return {ok:false,code:'READ_UNAVAILABLE'};}
+  }
+
   /** No fees/bids are accepted. The observed server also rejects a late bid
    * when hasCancelFee:false is sent. A transport error never triggers a retry. */
   async cancelListingWithoutFee(auctionId:string, expected:{title:string;priceYen:number;quantity:number},
@@ -397,7 +446,8 @@ export class YahooWebSession {
    * Uploads one image asset only, without a product/listing/preview submission.
    * One attempt per session even after failure; the caller must retain its result
    * and never construct another session simply to retry an uncertain upload.
-   * This is an operator probe, not the production multi-image/durable job runner.
+   * The durable workflow invokes this once per reserved image and persists the
+   * asset before advancing to the next image. It never retries an unknown upload.
    */
   async probeImageUpload(bytes: Uint8Array, filename: string): Promise<ImageResult> {
     if (this.#imageAttempted) return { ok: false, code: "UPLOAD_ALREADY_ATTEMPTED" };

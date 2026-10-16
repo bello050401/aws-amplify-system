@@ -367,3 +367,11 @@ B005105. No second cancellation was sent.
   Build 432 (`a7c8232`) deployed this wording successfully (all three phases
   SUCCEED); a fresh page load confirmed the corrected text and revision 3's
   00:26:52 JST checked timestamp. The final screenshot reflects build 432.
+
+## 2026-10-17: EC操作からのHTTPS実行
+
+- ヤフオク欄にカテゴリー検索、出品確認、公開、取消、再出品、送信結果照合を接続。現在の対象は定額販売（競り形式は無効表示）。共通画像は最大10枚、配送は出品者負担・埼玉県・3〜7日。
+- 専用DynamoDBテーブルでアカウント全体の送信間隔30秒、180秒の操作ロック、商品ごとの処理段階を保持。画像と最終公開・取消は送信前に記録し、結果不明時は再送しない。新規出品への無断フォールバックはない。
+- 再出品フォームの `mode=oresubmit`、既存 `aID`、`markdown=1`、`Image1Uploaded=1` を観測。B005105 / f1248612637 の再出品プレビューは2026-10-16T22:46:07ZにHTTPSで成功。公開はしていない。
+- 対象テスト48件成功。ローカルproduction build成功。HAR秘密値17種類に対しコミット差分の一致0。
+- この段階では新しいECワークフローのAWS実送信・画面受入は未検証。以前のローカル公開取消テストと混同しない。実証後に追記する。

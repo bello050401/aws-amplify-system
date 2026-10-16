@@ -89,11 +89,16 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
     secretStringValue: SecretValue.unsafePlainText('{"schemaVersion":1,"state":"UNCONFIGURED"}'),
   });
   yahooSession.applyRemovalPolicy(RemovalPolicy.RETAIN);
+  const yahooState = new Table(yahooStack, "OperationState", {
+    partitionKey:{name:"pk",type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,
+    removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecovery:true,
+  });
   new ManagedPolicy(yahooStack, "ReadSession", {
     roles: [Role.fromRoleName(yahooStack, "RuntimeRole", "BelloAmplifyStagingComputeRole")],
-    statements: [new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [yahooSession.secretArn] })],
+    statements: [new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [yahooSession.secretArn] }),
+      new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:ConditionCheckItem"],resources:[yahooState.tableArn]})],
   });
-  backend.addOutput({custom:{yahooHttps:{region:yahooStack.region,secretArn:yahooSession.secretArn}}});
+  backend.addOutput({custom:{yahooHttps:{region:yahooStack.region,secretArn:yahooSession.secretArn,stateTable:yahooState.tableName}}});
 }
 
 // SKU counter table for amplify/functions/generate-sku. This is

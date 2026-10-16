@@ -12,7 +12,6 @@ export type YahooAuctionPayload = {
     shippingMethod: ListingShippingMethod };
 };
 export type YahooAuctionSaved = { revision: number; updatedAt: string; payload: YahooAuctionPayload };
-export const YAHOO_CONNECTION_MESSAGE = "出品操作は準備中です。保存した出品結果や現在の接続状態は、この欄で確認できます。";
 const conditions = new Set(["NEW", "LIKE_NEW", "NO_NOTABLE_DAMAGE", "SLIGHT_DAMAGE", "DAMAGE", "BAD"]);
 export const yahooInventoryIdValid = (id: unknown): id is string => typeof id === "string" &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -103,7 +102,3 @@ export function parseYahooSaved(value: unknown): YahooAuctionSaved | null {
   return { revision: row.revision, updatedAt: row.updatedAt, payload: p };
 }
 
-/** A listing cannot be inferred from saving a BELLO draft. Remote actions need the actual connector. */
-export function yahooRemoteActionAvailability(): { enabled: false; reason: string } {
-  return { enabled: false, reason: YAHOO_CONNECTION_MESSAGE };
-}

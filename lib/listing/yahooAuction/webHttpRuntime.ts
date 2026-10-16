@@ -3,7 +3,7 @@ import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-sec
 import outputs from "../../../amplify_outputs.json";
 import { YahooWebSession } from "./webHttpSession";
 
-type Config = { region: string; secretArn: string };
+type Config = { region: string; secretArn: string; stateTable?:string };
 export function yahooRuntimeConfig(): Config | null {
   const c = (outputs as unknown as {custom?: {yahooHttps?: Config}}).custom?.yahooHttps;
   return c?.region === "us-west-2" &&

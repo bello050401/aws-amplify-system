@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { YahooAuctionControls, yahooWorkflowMessage } from "./YahooAuctionControls";
+import { searchYahooCategoriesAction } from "@/app/actions/yahooAuctionWorkflow";
 import { getYahooAuctionPreparationAction, saveYahooAuctionPreparationAction } from "@/app/actions/yahooAuctionPreparation";
 import { checkYahooHttpsConnectionAction } from "@/app/actions/yahooAuctionHttp";
 import { getYahooListingResultAction, refreshYahooListingResultAction } from "@/app/actions/yahooAuctionResult";
 import type { YahooListingResult } from "@/lib/listing/yahooAuction/listingResult";
-import { initialYahooAuctionInput, yahooPreparationIssues, yahooSourceMatches, yahooRemoteActionAvailability,
+import { initialYahooAuctionInput, yahooPreparationIssues, yahooSourceMatches,
   type YahooAuctionInput, type YahooAuctionSaved } from "@/lib/listing/yahooAuction/preparation";
 import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
 import { LISTING_SHIPPING_METHODS, type ListingDraftRecord } from "@/lib/listing/types";
@@ -42,7 +44,8 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
   const [listing, setListing] = useState<YahooListingResult | null>(null);
   const [resultUnavailable, setResultUnavailable] = useState(false);
   const inFlight = useRef(false);
-  const connection = yahooRemoteActionAvailability();
+  const [categoryQuery,setCategoryQuery]=useState("");
+  const [categories,setCategories]=useState<{id:string;name:string;path:string}[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -125,17 +128,16 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
       <button type="button" disabled={busy} onClick={refreshRemoteResult} className="ml-3 rounded border bg-white px-3 py-2 text-sm disabled:opacity-50">出品状態を確認</button>
     </div>}
     {resultUnavailable && <p className="mt-2 text-sm text-amber-800">保存された出品結果を確認できません。<button type="button" disabled={busy} onClick={refreshRemoteResult} className="ml-2 underline">出品状態を確認</button></p>}
-    <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm">
-      <p className="font-semibold">出品連携の準備中</p>
-      <p className="mt-1">{connectionCheckedAt ? `サーバーからの接続確認済み（${new Date(connectionCheckedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}）。出品操作は準備中です。` : connection.reason}</p>
-    </div>
+    <YahooAuctionControls inventoryId={inventoryId} revision={saved?.revision??null}
+      dirty={!saved||JSON.stringify(input)!==JSON.stringify(saved.payload.input)||!!sourceChanged} disabled={busy||!loaded}
+      onListing={r=>{setListing(r);setResultUnavailable(false);}} />
     <div className="my-3 flex flex-wrap gap-2">
-      <button type="button" disabled={!connection.enabled} className="rounded bg-gray-200 px-4 py-2 text-sm text-gray-500">ヤフオクに出品する</button>
       <button type="button" disabled={busy} onClick={checkConnection} className="rounded border px-3 py-2 text-sm disabled:opacity-50">ヤフオク接続を確認</button>
       <button type="button" disabled={busy} onClick={refreshSource} className="rounded border px-3 py-2 text-sm disabled:opacity-50">共通下書きを確認</button>
     </div>
     {error && <p role="alert" className="my-2 text-sm text-red-700">{error}</p>}
     {message && <p role="status" className="my-2 text-sm text-green-800">{message}</p>}
+    {connectionCheckedAt&&<p className="text-xs text-gray-500">接続確認：{new Date(connectionCheckedAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}</p>}
     {!loaded ? <p className="text-sm text-gray-600">{error ? "下書きは未確認です。「共通下書きを確認」で再取得できます。" : "下書きを確認中です。"}</p> : <>
       <p className="text-xs text-gray-600">{saved ? `BELLO保存済み：${new Date(saved.updatedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}` : "ヤフオク用の下書きは未保存です。"}</p>
       {!eligible && <p className="mt-2 text-sm text-red-700">この商品の在庫・販売状況では、出品準備を保存できません。</p>}
@@ -159,7 +161,7 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
           </select></div>
         <div><label htmlFor="yahoo-format" className="text-sm">販売形式</label>
           <select id="yahoo-format" className={field} value={input.format} onChange={e => change("format", e.target.value as YahooAuctionInput["format"])}>
-            <option value="FIXED">定額（即決価格で販売）</option><option value="AUCTION">オークション（競り）</option>
+            <option value="FIXED">定額（即決価格で販売）</option><option value="AUCTION" disabled>オークション（競り）は未対応</option>
           </select></div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div><label htmlFor="yahoo-price" className="text-sm">{input.format === "FIXED" ? "即決価格（円）" : "開始価格（円）"}</label>
@@ -168,16 +170,16 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
           <div><label htmlFor="yahoo-quantity" className="text-sm">数量（現在庫 {available}）</label>
             <input id="yahoo-quantity" type="number" min={1} max={Math.min(9, available)} step={1} className={field} value={input.quantity} onChange={e => change("quantity", Number(e.target.value))} /></div>
         </div>
-        <p className="text-xs text-gray-600">送料込み参考価格を確認して入力してください。複数個の出品可否は接続後にアカウント条件と照合します。</p>
+        <p className="text-xs text-gray-600">送料込み参考価格を確認して入力してください。数量は出品前に在庫と照合します。</p>
         {input.format === "AUCTION" && <div><label htmlFor="yahoo-buy-now" className="text-sm">即決価格（任意・円）</label>
           <input id="yahoo-buy-now" type="number" min={1} step={1} className={field} value={input.buyNowYen ?? ""} onChange={e => change("buyNowYen", e.target.value === "" ? null : Number(e.target.value))} /></div>}
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div><label htmlFor="yahoo-category" className="text-sm">カテゴリー</label>
-            <select id="yahoo-category" className={field} disabled defaultValue=""><option value="">接続後に選択できます</option></select></div>
-          <div><label htmlFor="yahoo-category-name" className="text-sm">カテゴリーのメモ（任意）</label>
-            <input id="yahoo-category-name" className={field} placeholder="例：家具、椅子" value={input.categoryName} onChange={e => change("categoryName", e.target.value)} /></div>
+        <div><label htmlFor="yahoo-category-query" className="text-sm">カテゴリーを検索</label>
+          <div className="mt-1 flex gap-2"><input id="yahoo-category-query" className={field} maxLength={100} placeholder="例：ダイニングチェア" value={categoryQuery} onChange={e=>setCategoryQuery(e.target.value)}/>
+            <button type="button" disabled={busy||!categoryQuery.trim()} className="shrink-0 rounded border px-3 py-2 text-sm" onClick={async()=>{setBusy(true);setError('');try{const r=await searchYahooCategoriesAction(categoryQuery);if(r.ok){setCategories(r.value);if(!r.value.length)setMessage('一致するカテゴリーがありません。別の言葉で検索してください。');}else setError(yahooWorkflowMessage(r.code));}catch{setError('カテゴリーを読み込めません。');}finally{setBusy(false);}}}>検索</button></div>
+          {categories.length>0&&<select id="yahoo-category" aria-label="カテゴリー候補" className={field} value={input.categoryId} onChange={e=>{const c=categories.find(c=>c.id===e.target.value);if(c)setInput(i=>({...i,categoryId:c.id,categoryName:c.path}));}}>
+            <option value="">選択してください</option>{categories.map(c=><option key={c.id} value={c.id}>{c.path}</option>)}</select>}
+          <p className="mt-2 text-sm">選択中：{input.categoryName||'未選択'}</p>
         </div>
-        <p className="text-xs text-gray-600">接続後にYahoo!オークションのカテゴリーから選択できます。メモだけではカテゴリーの指定にはなりません。</p>
         <div><label htmlFor="yahoo-end" className="text-sm">終了希望日時（日本時間）</label>
           <input id="yahoo-end" type="datetime-local" step={3600} className={field} value={input.endAtJst} onChange={e => change("endAtJst", e.target.value)} />
           <p className="mt-1 text-xs text-gray-600">実際に指定できる開催期間は、出品時に確認します。</p></div>
@@ -189,7 +191,7 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
           <dt>発送元</dt><dd>埼玉県</dd>
           <dt>発送まで</dt><dd>3〜7日</dd>
         </dl>
-        <p className="text-xs text-gray-600">ヤフオクは入札状況によって取消条件が異なります。出品停止・再出品は接続後に実際の状態を確認して操作します。</p>
+        <p className="text-xs text-gray-600">入札や取消料がある場合は、出品停止を実行せず理由を表示します。</p>
         <button type="button" disabled={!draft || !loaded} onClick={save} className="rounded bg-blue-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">ヤフオク下書きを保存</button>
       </fieldset>
       {issues.length > 0 && <details className="mt-3 text-xs text-gray-600"><summary>出品に向けて確認する項目（{issues.length}件）</summary><ul className="mt-2 list-disc pl-5">{issues.map(issue => <li key={issue}>{issue}</li>)}</ul><p className="mt-2">未入力の項目があっても下書きは保存できます。</p></details>}
