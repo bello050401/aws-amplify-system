@@ -78,6 +78,22 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   backend.addOutput({ custom: { mercariHttps: { region: httpStack.region,
     secretArn: session.secretArn, slotTable: slot.tableName,
     attemptTable: attempt.tableName, linkTable: link.tableName } } });
+
+  // A separate credential boundary for Yahoo's personal-account HTTPS session.
+  // Runtime can read only. The explicit local import tool verifies authentication
+  // before writing, using the operator's existing AWS credentials.
+  const yahooStack = backend.createStack("YahooHttpsRuntime");
+  const yahooSession = new Secret(yahooStack, "Session", {
+    secretName: "bello/yahoo-web-session-staging",
+    description: "BELLO staging Yahoo HTTPS session; never public output",
+    secretStringValue: SecretValue.unsafePlainText('{"schemaVersion":1,"state":"UNCONFIGURED"}'),
+  });
+  yahooSession.applyRemovalPolicy(RemovalPolicy.RETAIN);
+  new ManagedPolicy(yahooStack, "ReadSession", {
+    roles: [Role.fromRoleName(yahooStack, "RuntimeRole", "BelloAmplifyStagingComputeRole")],
+    statements: [new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [yahooSession.secretArn] })],
+  });
+  backend.addOutput({custom:{yahooHttps:{region:yahooStack.region,secretArn:yahooSession.secretArn}}});
 }
 
 // SKU counter table for amplify/functions/generate-sku. This is

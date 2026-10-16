@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getYahooAuctionPreparationAction, saveYahooAuctionPreparationAction } from "@/app/actions/yahooAuctionPreparation";
+import { checkYahooHttpsConnectionAction } from "@/app/actions/yahooAuctionHttp";
 import { initialYahooAuctionInput, yahooPreparationIssues, yahooSourceMatches, yahooRemoteActionAvailability,
   type YahooAuctionInput, type YahooAuctionSaved } from "@/lib/listing/yahooAuction/preparation";
 import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
@@ -15,6 +16,11 @@ const failureMessage = (code: string) => ({
   CONFLICT: "別の画面でヤフオク下書きが更新されました。入力を控えてからページを再読み込みしてください。",
   NOT_ELIGIBLE: "在庫数または販売状況が変わったため保存できません。商品情報を確認してください。",
   UNAVAILABLE: "保存状態を確認できません。入力は残っています。再読み込み前に入力を控えてください。",
+  NOT_CONFIGURED: "ヤフオク接続の設定がまだ完了していません。",
+  AUTH_REQUIRED: "ヤフオクのログイン状態を確認できません。認証の更新が必要です。",
+  ACCESS_DENIED: "Yahoo!オークションが接続を受け付けませんでした。出品処理は行っていません。",
+  RATE_LIMITED: "Yahoo!オークションが一時的に接続を制限しています。時間を空けて確認してください。",
+  SESSION_UNAVAILABLE: "ヤフオクの接続情報を読み込めませんでした。",
 }[code] ?? "読み込みに失敗しました。もう一度確認してください。");
 
 export function YahooAuctionListingSection({ inventoryId }: { inventoryId: string }) {
@@ -28,6 +34,7 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
+  const [connectionCheckedAt, setConnectionCheckedAt] = useState<string | null>(null);
   const inFlight = useRef(false);
   const connection = yahooRemoteActionAvailability();
 
@@ -45,6 +52,17 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
 
   function change<K extends keyof YahooAuctionInput>(key: K, value: YahooAuctionInput[K]) {
     setInput(old => ({ ...old, [key]: value })); setMessage("");
+  }
+  async function checkConnection() {
+    if (inFlight.current) return;
+    inFlight.current = true; setBusy(true); setError(""); setMessage(""); setConnectionCheckedAt(null);
+    try {
+      const result = await checkYahooHttpsConnectionAction();
+      if (!result.ok) { setError(failureMessage(result.code)); return; }
+      setConnectionCheckedAt(result.checkedAt);
+      setMessage("BELLOのサーバーからヤフオクへの接続を確認しました。出品操作は行っていません。");
+    } catch { setError("接続を確認できませんでした。出品操作は行っていません。"); }
+    finally { inFlight.current = false; setBusy(false); }
   }
   async function refreshSource() {
     if (inFlight.current) return;
@@ -82,10 +100,11 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
     </div>
     <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm">
       <p className="font-semibold">出品連携の準備中</p>
-      <p className="mt-1">{connection.reason}</p>
+      <p className="mt-1">{connectionCheckedAt ? `サーバーからの接続確認済み（${new Date(connectionCheckedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}）。出品操作は準備中です。` : connection.reason}</p>
     </div>
     <div className="my-3 flex flex-wrap gap-2">
       <button type="button" disabled={!connection.enabled} className="rounded bg-gray-200 px-4 py-2 text-sm text-gray-500">ヤフオクに出品する</button>
+      <button type="button" disabled={busy} onClick={checkConnection} className="rounded border px-3 py-2 text-sm disabled:opacity-50">ヤフオク接続を確認</button>
       <button type="button" disabled={busy} onClick={refreshSource} className="rounded border px-3 py-2 text-sm disabled:opacity-50">共通下書きを確認</button>
     </div>
     {error && <p role="alert" className="my-2 text-sm text-red-700">{error}</p>}

@@ -1,5 +1,8 @@
 import "server-only";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
+import { CATEGORY_PATH, SELECTED_INPUT_PATH, categoryRequestFromInput, selectedInputRequest,
+  previewRequestFromInput, verifyPreview, validPreviewInput, type YahooFixedPreviewInput,
+  type YahooPreviewEvidence } from "./webHttpPreview";
 
 const ORIGIN = "https://auctions.yahoo.co.jp";
 const INPUT_PATHS = new Set(["/jp/show/submit", "/sell/jp/show/submit"]);
@@ -12,7 +15,29 @@ type Element = DefaultTreeAdapterMap["element"];
 type Failure = "CAPTURE_INVALID" | "CAPTURE_TOO_OLD" | "AUTH_REQUIRED" |
   "ACCESS_DENIED" | "RATE_LIMITED" | "UNEXPECTED_RESPONSE" | "UNEXPECTED_FORM" | "READ_UNAVAILABLE";
 type Result<T> = { ok: true; value: T } | { ok: false; code: Failure };
-export type YahooUploadedImage = { url: string; width: number; height: number; thumbnail: string };
+type PreviewResult = { ok: true; value: YahooPreviewEvidence } | { ok: false;
+  code: Failure | "INVALID_PREVIEW_INPUT" | "PREVIEW_ALREADY_ATTEMPTED" | "PREVIEW_MISMATCH";
+  stage: "INPUT" | "CATEGORY" | "SELECTED_INPUT" | "PREVIEW"; status?: number };
+export type YahooUploadedImage = { url: string; width: number; height: number; thumbnail?: string };
+
+/** Both image responses observed on 2026-10-16 omit thumbnail. The separate
+ * thumbnail request returns the same images envelope, with string dimensions. */
+export function parseYahooImageResponse(result: unknown): YahooUploadedImage | null {
+  const assetUrl = (value: unknown): value is string => {
+    if (typeof value !== "string" || value.length > 4096) return false;
+    try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password && !url.port && !url.hash &&
+      url.origin === "https://auctions.c.yimg.jp" && !url.search; } catch { return false; }
+  };
+  const data = result as { images?: { url?: unknown; width?: unknown; height?: unknown }[]; thumbnail?: unknown } | null;
+  if (!Array.isArray(data?.images) || data.images.length !== 1) return null;
+  const photo = data.images[0];
+  const dimension = (v: unknown) => typeof v === "number" ? v : typeof v === "string" && /^[1-9]\d{0,4}$/.test(v) ? Number(v) : NaN;
+  const width = dimension(photo?.width), height = dimension(photo?.height);
+  if (!assetUrl(photo?.url) || !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
+      width < 1 || height < 1 || width > 30_000 || height > 30_000 ||
+      (data.thumbnail !== undefined && !assetUrl(data.thumbnail))) return null;
+  return { url: photo.url, width, height, ...(data.thumbnail === undefined ? {} : { thumbnail: data.thumbnail as string }) };
+}
 type ImageResult = { ok: true; value: YahooUploadedImage } | { ok: false; code: Failure |
   "INVALID_IMAGE" | "INPUT_REQUIRED" | "UPLOAD_ALREADY_ATTEMPTED" | "IMAGE_RESULT_UNKNOWN";
   diagnostic?: { status?: number; responseKind: "JSON" | "HTML" | "OTHER" | "UNRECEIVED";
@@ -28,6 +53,16 @@ export type YahooInputMetadata = {
   csrfPresent: true;
   imageCsrfPresent: boolean;
 };
+
+function validCookieHeader(cookie: unknown): cookie is string {
+  if (typeof cookie !== "string" || !cookie || cookie.length > 48_000 || /[^\x20-\x7e]/.test(cookie)) return false;
+  const names = new Set<string>();
+  return cookie.split(";").every(pair => {
+    const i = pair.trim().indexOf("="), name = pair.trim().slice(0, i);
+    if (i < 1 || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || names.has(name)) return false;
+    names.add(name); return true;
+  });
+}
 
 function elements(root: Node): Element[] {
   const pending: Node[] = [root], found: Element[] = [];
@@ -107,7 +142,7 @@ async function limitedHtml(response: Response): Promise<string> {
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
-/** Server-only client for authenticated input reading and one image-upload probe.
+/** Server-only client for authenticated reads, image probe and pre-publication forms.
  * Publication/cancellation are NOT implemented. There is no URL override,
  * browser fallback, redirect following or automatic retry.
  * Credentials stay in private fields, including when inspected or JSON serialized.
@@ -118,8 +153,12 @@ export class YahooWebSession {
   #fetch: typeof fetch;
   #imageContext: { crumb: string; readAt: number } | null = null;
   #imageAttempted = false;
-  private constructor(cookie: string, inputUrl: string, fetchImpl: typeof fetch) {
+  #previewHtml: string | null = null;
+  #previewAttempted = false;
+  #capturedAt: string;
+  private constructor(cookie: string, inputUrl: string, fetchImpl: typeof fetch, capturedAt: string) {
     this.#cookie = cookie; this.#inputUrl = inputUrl; this.#fetch = fetchImpl;
+    this.#capturedAt = capturedAt;
   }
   toJSON() { return { type: "YahooWebSession", credentials: "REDACTED" }; }
 
@@ -141,21 +180,44 @@ export class YahooWebSession {
         typeof h.name === "string" && h.name.toLowerCase() === "cookie") : [];
       if (headers.length !== 1 || typeof headers[0].value !== "string") continue;
       const cookie = headers[0].value;
-      if (!cookie || cookie.length > 64_000 || /[^\x20-\x7e]/.test(cookie)) continue;
-      const names = new Set<string>();
-      const valid = cookie.split(";").every(pair => {
-        const i = pair.trim().indexOf("="), name = pair.trim().slice(0, i);
-        if (i < 1 || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || names.has(name)) return false;
-        names.add(name); return true;
-      });
-      if (valid && (!selected || time > selected.time)) selected = { cookie, url: url.href, time };
+      if (validCookieHeader(cookie) && (!selected || time > selected.time)) selected = { cookie, url: url.href, time };
     }
     if (!selected) return { ok: false, code: old ? "CAPTURE_TOO_OLD" : "CAPTURE_INVALID" };
-    return { ok: true, value: new YahooWebSession(selected.cookie, selected.url, options.fetchImpl ?? fetch) };
+    return { ok: true, value: new YahooWebSession(selected.cookie, selected.url, options.fetchImpl ?? fetch, new Date(selected.time).toISOString()) };
+  }
+
+  /** Only an encrypted, dedicated server store may supply this record. Capture
+   * age is an import constraint, not a fabricated cookie lifetime. Each operation
+   * checks authentication live; no refresh endpoint has been observed yet. */
+  static fromStoredSession(serialized: string, options: { now?: number; fetchImpl?: typeof fetch } = {}): Result<YahooWebSession> {
+    try {
+      if (serialized.length > 60_000) throw Error();
+      const record = JSON.parse(serialized), now = options.now ?? Date.now();
+      if (record?.schemaVersion !== 1 || record.origin !== ORIGIN || !validCookieHeader(record.cookieHeader) ||
+          typeof record.capturedAt !== "string" || typeof record.verifiedAt !== "string" ||
+          !Number.isFinite(Date.parse(record.capturedAt)) || !Number.isFinite(Date.parse(record.verifiedAt)) ||
+          Date.parse(record.verifiedAt) < Date.parse(record.capturedAt) || Date.parse(record.verifiedAt) > now + 60_000)
+        throw Error();
+      return { ok: true, value: new YahooWebSession(record.cookieHeader, ORIGIN + "/jp/show/submit?category=0",
+        options.fetchImpl ?? fetch, record.capturedAt) };
+    } catch { return { ok: false, code: "CAPTURE_INVALID" }; }
+  }
+
+  /** Operator-only encrypted-store import. Secret material never appears in the
+   * return value. The writer must not log, send to the browser or use ordinary DBs. */
+  async persistVerifiedSession(writeEncrypted: (value: string) => Promise<void>): Promise<Result<YahooInputMetadata>> {
+    const inspected = await this.inspectInput();
+    if (!inspected.ok) return inspected;
+    try {
+      await writeEncrypted(JSON.stringify({ schemaVersion: 1, origin: ORIGIN, capturedAt: this.#capturedAt,
+        verifiedAt: new Date().toISOString(), cookieHeader: this.#cookie }));
+      return inspected;
+    } catch { return { ok: false, code: "READ_UNAVAILABLE" }; }
   }
 
   async inspectInput(): Promise<Result<YahooInputMetadata>> {
     this.#imageContext = null;
+    this.#previewHtml = null;
     try {
       const response = await this.#fetch(this.#inputUrl, { method: "GET", headers: { Cookie: this.#cookie, Accept: "text/html" },
         redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(20_000) });
@@ -176,6 +238,7 @@ export class YahooWebSession {
       }
       const html = await limitedHtml(response), result = inspectYahooInputHtml(html);
       if (result.ok) {
+        this.#previewHtml = html;
         const nodes = elements(parse(html));
         const crumb = nodes.filter(n => n.tagName === "input" && attr(n, "id") === "img_crumb");
         const target = nodes.filter(n => n.tagName === "input" && attr(n, "id") === "imgUploadUrl");
@@ -186,6 +249,51 @@ export class YahooWebSession {
       }
       return result;
     } catch { return { ok: false, code: "READ_UNAVAILABLE" }; }
+  }
+
+  /** Exactly the captured pre-publication sequence. Reuses a previously uploaded
+   * image, obtains fresh form tokens and checks the returned price/quantity/options.
+   * Never follows the final confirmation button or returns its credential fields.
+   * Currently limited to the observed fixed-price, seller-paid furniture flow.
+   */
+  async previewFixedListing(input: YahooFixedPreviewInput, image: YahooUploadedImage): Promise<PreviewResult> {
+    let stage: Extract<PreviewResult, { ok: false }>["stage"] = "INPUT";
+    if (!validPreviewInput(input, image)) return { ok: false, code: "INVALID_PREVIEW_INPUT", stage };
+    if (this.#previewAttempted) return { ok: false, code: "PREVIEW_ALREADY_ATTEMPTED", stage };
+    const inspected = await this.inspectInput();
+    if (!inspected.ok) return { ...inspected, stage };
+    this.#previewAttempted = true;
+    let status: number | undefined;
+    try {
+      let body = categoryRequestFromInput(this.#previewHtml!, input, image);
+      this.#previewHtml = null;
+      let referer = this.#inputUrl;
+      for (const path of [CATEGORY_PATH, SELECTED_INPUT_PATH, PREVIEW_PATH] as const) {
+        stage = path === CATEGORY_PATH ? "CATEGORY" : path === SELECTED_INPUT_PATH ? "SELECTED_INPUT" : "PREVIEW";
+        status = undefined;
+        const response = await this.#fetch(ORIGIN + path, { method: "POST", body,
+          headers: { Cookie: this.#cookie, Origin: ORIGIN, Referer: referer, Accept: "text/html" },
+          redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(30_000) });
+        status = response.status;
+        if (status !== 200 || response.redirected || (response.headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase() !== "text/html") {
+          await response.body?.cancel().catch(() => {});
+          let login = false;
+          try { login = new URL(response.headers.get("location") ?? "", ORIGIN).origin === "https://login.yahoo.co.jp"; } catch {}
+          return { ok: false, stage, status, code: status === 401 || login ? "AUTH_REQUIRED" : status === 403 ? "ACCESS_DENIED" :
+            status === 429 ? "RATE_LIMITED" : "UNEXPECTED_RESPONSE" };
+        }
+        const html = await limitedHtml(response);
+        if (path === CATEGORY_PATH) body = selectedInputRequest(html, input.categoryId);
+        else if (path === SELECTED_INPUT_PATH) body = previewRequestFromInput(html, input, image);
+        else {
+          const value = verifyPreview(html, input, image);
+          return value ? { ok: true, value } : { ok: false, code: "PREVIEW_MISMATCH", stage, status };
+        }
+        referer = ORIGIN + path;
+      }
+      return { ok: false, code: "UNEXPECTED_FORM", stage };
+    } catch { return { ok: false, code: status === undefined && stage !== "INPUT" ? "READ_UNAVAILABLE" : "UNEXPECTED_FORM", stage, status }; }
+    finally { this.#previewHtml = null; }
   }
 
   /** Observed in the user-supplied HTML + uploadImage/dragdrop scripts (2026-10-16).
@@ -227,17 +335,8 @@ export class YahooWebSession {
       diagnostic.stage = "DECODE";
       const result = JSON.parse(await limitedHtml(response));
       diagnostic.stage = "ASSET_SHAPE";
-      const assetUrl = (value: unknown): value is string => {
-        if (typeof value !== "string" || value.length > 4096) return false;
-        try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password && !url.port && !url.hash &&
-          (url.hostname === "auctions.yahoo.co.jp" || url.hostname.endsWith(".yimg.jp")); } catch { return false; }
-      };
-      const photo = result?.images?.[0];
-      if (!Array.isArray(result?.images) || result.images.length !== 1 || !photo || !assetUrl(photo.url) ||
-          !Number.isSafeInteger(photo.width) || !Number.isSafeInteger(photo.height) ||
-          photo.width < 1 || photo.height < 1 || photo.width > 30_000 || photo.height > 30_000 || !assetUrl(result.thumbnail))
-        return { ok: false, code: "IMAGE_RESULT_UNKNOWN", diagnostic };
-      return { ok: true, value: { url: photo.url, width: photo.width, height: photo.height, thumbnail: result.thumbnail } };
+      const photo = parseYahooImageResponse(result);
+      return photo ? { ok: true, value: photo } : { ok: false, code: "IMAGE_RESULT_UNKNOWN", diagnostic };
     } catch { return { ok: false, code: "IMAGE_RESULT_UNKNOWN", diagnostic }; }
   }
 }

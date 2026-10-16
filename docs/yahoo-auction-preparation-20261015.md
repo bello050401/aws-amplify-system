@@ -180,6 +180,45 @@ References checked for context (these do not replace observed HTTPS evidence):
 - Historical private listing API announcement (2012; not proof of current access): https://techblog.yahoo.co.jp/web/auctions/submit-api/
 - AucTown support confirms its individually contracted Yahoo API: https://support.auctown.jp/hc/ja/articles/6679545880591
 
+## 2026-10-16 updated HAR and HTTPS preview
+
+The user's updated Desktop HAR (15,790,401 bytes, modified 03:20:59 UTC)
+contains 450 entries. Relevant successful operations: image asset (107),
+thumbnail processing (110), category selector (114), selected-category input
+(219), and pre-publication confirmation (374). Both image responses omit the
+optional `thumbnail` property; the second response uses string dimensions.
+The parser was corrected from this actual evidence. The earlier direct image
+probe remains UNKNOWN: its raw response was not retained and it was NOT retried.
+
+At 2026-10-16 03:36 UTC, the Node HTTPS client fetched a fresh authenticated
+form, posted to `topsubmit`, selected category 2084057261 via `show/submit`,
+then posted to `show/preview`. It reused the existing browser-uploaded image.
+The final HTML was checked against the requested title, description, photo,
+99,999 yen, quantity 1, seller-paid 家財おまかせ便, Saitama, 3–7 days,
+automatic relist off and zero optional fees. It passed. End time returned by
+Yahoo was 2026-10-19T02:36:10Z (11:36:10 JST).
+
+- Local evidence: `C:/Users/win/Documents/Codex/2026-10-16/yahoo-http-proof/preview-probe-20261016.json`.
+- No new image upload, final listing, cancellation or relisting occurred.
+- No captured CSRF/signature values were replayed; tokens come from fresh forms.
+- Preview client is currently limited to the observed fixed-price, one-photo,
+  seller-paid furniture configuration. It is not yet a general listing connector.
+- Secret import is operator-only into a dedicated staging Secrets Manager
+  secret. The AWS runtime receives read permission only. Secrets/HTML/HAR do not
+  reach the browser, outputs or normal logs.
+- Cookie longevity and renewal are not established. The 24-hour HAR freshness
+  restriction applies only to import; stored sessions authenticate live. There
+  is no invented refresh endpoint or browser fallback.
+- Added authenticated BELLO connection-check action/button. Publication stays
+  disabled until the complete server workflow and actual outcome are verified.
+- 18 targeted tests and project TypeScript check pass before staging deployment.
+
+Remaining: verify AWS execution, connect image/category/preview results to each
+inventory, obtain Yahoo-specific approval for a concrete public test, observe and
+verify publication/cancellation/relisting, and implement durable result binding,
+30-second spacing and ambiguous-result reconciliation. The earlier Mercari test
+approval is not Yahoo public approval.
+
 ## Implemented
 
 - Separate `YahooAuctionPreparation` model, keyed by inventory, with revisions.
