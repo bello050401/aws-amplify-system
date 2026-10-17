@@ -10,6 +10,7 @@ import type { InventoryItem, InventoryOptions, PendingPhoto, UploadedPhoto } fro
 import { isMobileFeatures, type MobileFeatures } from "../domain/access";
 import type {SalesResponse} from "../ui/SalesScreen";
 import { InventoryWriteError, type SaveRequest } from "../domain/editor";
+import { InventoryReadError } from "../domain/readError";
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
@@ -32,7 +33,8 @@ async function jsonRequest(path: string, cookie?: string): Promise<unknown> {
       signal: controller.signal, redirect: "error",
     });
     if (response.status === 401 || response.status === 403) throw new StaffSessionError(response.status === 401 ? "ログインが必要です。" : "スタッフ用アプリの利用権限がありません。");
-    if (!response.ok) throw new Error("在庫サービスに接続できませんでした。");
+    if (response.status === 404) throw new InventoryReadError("not_found");
+    if (!response.ok) throw new InventoryReadError("unavailable");
     return await response.json();
   } finally { clearTimeout(timeout); }
 }

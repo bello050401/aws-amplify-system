@@ -172,6 +172,7 @@
   },
   "sales": {
     "implemented": true,
+    "presentation": "match WEB report: black sales and green gross-profit lines, shared chart geometry, compact bordered totals, persistent grouped month controls with direct year/month selection",
     "source": "existing BELLO loadSalesSummary/loadSalesItems",
     "features": [
       "month selection",
@@ -181,5 +182,11 @@
       "on-demand item details"
     ],
     "permission": "requireMobileFeature sales; no data read when denied"
-  }
+  },
+  "dateInput": {
+    "web": "three scroll-snap wheels for year/month/day, explicit confirm/clear/cancel, month-end clamping",
+    "iosNative": "Japanese native spinner",
+    "storedFormat": "YYYY-MM-DD"
+  },
+  "deletedInventory": "authenticated detail 404 removes only the confirmed missing item from visible rows and the device snapshot; network failures retain cached records; local cache failures do not masquerade as detail-read failures"
 }

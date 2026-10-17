@@ -8,6 +8,9 @@ import { StaffApp, type StaffAppPorts } from "./src/ui/StaffApp";
 import { previewItems, galleryPreviewItems } from "./src/preview/fixture";
 import { InventoryWriteError } from "./src/domain/editor";
 import { LiveApp } from "./src/ui/LiveApp";
+import { nowInJst, shiftYearMonth } from "../lib/inventory/sales";
+import { totalsFromAggregate } from "../lib/inventory/salesAggregate";
+import { InventoryReadError } from "./src/domain/readError";
 
 function Preview() {
   const [staffPreview, setStaffPreview] = useState(false);
@@ -25,8 +28,13 @@ function Preview() {
     loadInventory: async () => records.current.map((item) => ({ ...item })),
     loadDetail: async id => {
       const item = records.current.find(row => row.id === id);
-      if (!item) throw new Error("Not found");
+      if (!item || (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("detail-test") === "missing")) throw new InventoryReadError("not_found");
       return { ...item, details: { ...item.details }, photos: item.photos?.map(photo => ({ ...photo })) };
+    },
+    loadSales: async (year,month) => {
+      const now=nowInJst(new Date());
+      const totals=totalsFromAggregate({yearMonth:year+"-"+month,count:63,totalSales:2085000,totalCost:877000,totalPurchase:877000,totalProfit:1208000,totalShipping:29000},year,month);
+      return {view:{year,month,status:"ok",totals,aggregateRebuiltAt:new Date().toISOString(),trend:Array.from({length:12},(_,index)=>({...shiftYearMonth(year,month,index-11),status:"ok" as const,totalSales:[4600000,4900000,5300000,4700000,6200000,6000000,7000000,8200000,7700000,5300000,7500000,2085000][index],totalGrossProfit:[3300000,3400000,3700000,3200000,4200000,4300000,4400000,5300000,5000000,3600000,5300000,1208000][index]}))},forecast:year===now.year&&month===now.month?{averageDailySales:122647,projectedMonthEndSales:3802057,month,today:now.day,totalDaysInMonth:31}:null,forecastUnavailable:false,items:[]};
     },
     save: async (request) => {
       if (offlineRef.current) throw new InventoryWriteError("offline");

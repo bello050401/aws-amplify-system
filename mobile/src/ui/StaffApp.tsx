@@ -13,6 +13,7 @@ import { visibleDetailFields } from "../domain/detailFields";
 import { InventoryPhotos } from "./InventoryPhotos";
 import {BarcodeScanner} from "./BarcodeScanner";
 import {SalesScreen, type SalesResponse} from "./SalesScreen";
+import { InventoryReadError } from "../domain/readError";
 
 type Tab = "home" | "inventory" | "ec" | "sales";
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -120,7 +121,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       statusOptions:options.statuses,categoryOptions:options.categories,locationOptions:options.locations};
     setEditor(new InventoryEditor(item,ports,true));setCreating(false);
   };
-  const leaveEditor = () => { setEditor(null); setSelected(null); setTab("inventory"); };
+  const leaveEditor = () => { setEditor(null); setSelected(null); setError(null); setTab("inventory"); };
   const openItem = async (item: InventoryItem) => {
     const attempt = ++detailGeneration.current;
     setSelected(item); setError(null); setDetailLoading(false);
@@ -139,10 +140,23 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       if (current) {
         const next = { ...current, items: current.items.map(row => row.id === detail.id ? detail : row) };
         snapshotRef.current = next; setSnapshot(next);
-        await ports.snapshot.write(next.items, next.fetchedAt);
+        try { await ports.snapshot.write(next.items, next.fetchedAt); }
+        catch { if (attempt === detailGeneration.current) setError("最新の商品詳細を表示していますが、圏外用の保存ができませんでした。"); }
       }
-    } catch {
-      if (attempt === detailGeneration.current) setError("商品詳細を読み込めませんでした。保存済みの情報を表示しています。");
+    } catch (error) {
+      if (attempt !== detailGeneration.current) return;
+      if (error instanceof InventoryReadError && error.code === "not_found") {
+        // Only an authenticated 404 confirms deletion. Keep cached records on network/server failures.
+        setSelected(null); setTab("inventory");
+        setServerRows(rows => rows?.filter(row => row.id !== item.id) ?? null);
+        const current = snapshotRef.current;
+        if (current) {
+          const next = { ...current, items: current.items.filter(row => row.id !== item.id) };
+          snapshotRef.current = next; setSnapshot(next);
+          try { await ports.snapshot.write(next.items, next.fetchedAt); } catch {}
+        }
+        setError("この商品は自社システムから削除されています。一覧から取り除きました。");
+      } else setError("商品詳細を読み込めませんでした。保存済みの情報を表示しています。");
     } finally { if (attempt === detailGeneration.current) setDetailLoading(false); }
   };
   const rows = !offline && ports.searchInventory && serverRows ? serverRows : (snapshot?.items ?? []).filter((item) =>
@@ -167,6 +181,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         {snapshot && <Text style={s.timestamp}>最終取得 {new Date(snapshot.fetchedAt).toLocaleString("ja-JP")}</Text>}
       </View>}
       {error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+      {error && selected && !detailLoading && <Pressable accessibilityRole="button" onPress={() => { void openItem(selected); }} style={{padding:14}}><Text style={{color:colors.blue}}>商品詳細を再読み込み</Text></Pressable>}
       {feature ? <View style={s.pending}><Text style={s.pendingTitle}>{feature}</Text><Text style={s.pendingText}>この操作は実装中です。実在庫への変更は行いません。</Text></View> : selected ? <ScrollView contentContainerStyle={s.detail}>
         <Text style={s.tag}>{selected.category}</Text><Text style={s.itemTitle}>{selected.name}</Text>
         <View style={s.hero}><ProductImage item={selected} large /><View style={s.heroFacts}>

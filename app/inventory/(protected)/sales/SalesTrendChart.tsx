@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { SalesTrendPoint } from "@/lib/inventory/salesView";
+import { salesChart } from "@/lib/inventory/salesChart";
 
 const WIDTH = 640;
 const HEIGHT = 220;
@@ -31,31 +32,7 @@ const PADDING = { top: 16, right: 16, bottom: 24, left: 8 };
 export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  const okPoints = points.filter((p) => p.status === "ok");
-  const maxValue = Math.max(1, ...okPoints.map((p) => Math.max(p.totalSales, p.totalGrossProfit)));
-  const plotWidth = WIDTH - PADDING.left - PADDING.right;
-  const plotHeight = HEIGHT - PADDING.top - PADDING.bottom;
-
-  const xFor = (i: number) => PADDING.left + (points.length <= 1 ? plotWidth / 2 : (i / (points.length - 1)) * plotWidth);
-  const yFor = (value: number) => PADDING.top + plotHeight - (value / maxValue) * plotHeight;
-
-  /** "ok"の点だけをつないだ折れ線。連続していない("ok"でない点を挟む)区間は別のセグメントとして描き、その間に線を引かない(0円へ落とさない)。 */
-  function buildPath(valueOf: (p: SalesTrendPoint) => number): string {
-    const segments: string[] = [];
-    let drawing = false;
-    points.forEach((p, i) => {
-      if (p.status !== "ok") {
-        drawing = false;
-        return;
-      }
-      segments.push(`${drawing ? "L" : "M"} ${xFor(i)} ${yFor(valueOf(p))}`);
-      drawing = true;
-    });
-    return segments.join(" ");
-  }
-
-  const salesPath = buildPath((p) => p.totalSales);
-  const profitPath = buildPath((p) => p.totalGrossProfit);
+  const { plotWidth, plotHeight, xFor, yFor, salesPath, profitPath } = salesChart(points, WIDTH, HEIGHT);
 
   const hovered = hoverIndex != null ? points[hoverIndex] : null;
   const yen = (n: number) => `¥${n.toLocaleString("ja-JP")}`;
