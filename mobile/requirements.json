@@ -38,9 +38,21 @@
       "EC出品",
       "売上"
     ],
-    "accountProvisioned": false,
-    "loginAliasImplemented": false,
-    "passwordEntry": "secure setup; must meet existing Cognito policy"
+    "accountProvisioned": true,
+    "loginAliasImplemented": true,
+    "passwordEntry": "Previously supplied compliant password; existing Cognito policy unchanged",
+    "loginId": "スタッフ",
+    "internalIdentifier": "non-deliverable reserved domain; no email inbox required",
+    "verifiedRole": "EDITOR",
+    "productionAuthVerified": {
+      "login": true,
+      "inventoryStatus": 200,
+      "salesStatus": 403,
+      "features": {
+        "ecListing": false,
+        "sales": false
+      }
+    }
   },
   "labelPrinting": false,
   "sharedData": {
@@ -155,7 +167,6 @@
   },
   "appleDeveloperProgram": "not-enrolled-as-confirmed-by-user",
   "pending": [
-    "ID-only staff account setup",
     "live existing ZAICO synchronization coexistence verification",
     "real-device cross-device edit/readback verification",
     "native offline cold-start verification",
