@@ -37,7 +37,7 @@ export function InventoryPhotos({ item }: { item: InventoryItem }) {
       </Pressable>)}
     </View>
     {current.length > shown && <Pressable accessibilityRole="button" style={s.more} onPress={() => setShown(value => value + 24)}><Text style={s.moreText}>残り{current.length - shown}枚を表示</Text></Pressable>}
-    <Text style={s.caption}>画像の追加・変更は接続準備中です。</Text>
+
     <Modal visible={Boolean(selected)} animationType="fade" onRequestClose={() => setExpanded(null)}>
       <View style={s.viewer}>
         <View style={s.viewerHeader}><Text style={s.closeText}>{selectedIndex + 1} / {current.length}</Text><Pressable accessibilityRole="button" accessibilityLabel="画像を閉じる" onPress={() => setExpanded(null)} style={s.close}><Text style={s.closeText}>閉じる</Text></Pressable></View>

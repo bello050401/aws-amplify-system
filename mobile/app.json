@@ -15,10 +15,28 @@
     "web": {
       "bundler": "metro"
     },
-    "experiments": { "baseUrl": "/staff-app" },
+    "experiments": {
+      "baseUrl": "/staff-app"
+    },
     "plugins": [
       "expo-image",
-      "expo-secure-store"
+      "expo-secure-store",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "商品写真の撮影とQRコード・バーコードの読み取りに使用します。",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "在庫に登録する写真を選択します。",
+          "cameraPermission": "在庫の商品写真を撮影します。",
+          "microphonePermission": false
+        }
+      ]
     ]
   }
 }

@@ -4,13 +4,15 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { InventoryEditor, type EditorPorts } from "../domain/editor";
-import { mergeInventoryRead, type InventoryItem } from "../domain/inventory";
+import { mergeInventoryRead, type InventoryItem, type InventoryOptions } from "../domain/inventory";
 import { SnapshotStore, type InventorySnapshot } from "../domain/snapshot";
 import { InventoryEditorScreen } from "./InventoryEditorScreen";
 import { colors } from "./theme";
 import { canOpenTab, permittedTab, RESTRICTED_FEATURES, type MobileFeatures } from "../domain/access";
 import { visibleDetailFields } from "../domain/detailFields";
 import { InventoryPhotos } from "./InventoryPhotos";
+import {BarcodeScanner} from "./BarcodeScanner";
+import {SalesScreen, type SalesResponse} from "./SalesScreen";
 
 type Tab = "home" | "inventory" | "ec" | "sales";
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -22,6 +24,8 @@ export interface StaffAppPorts extends EditorPorts {
   snapshot: SnapshotStore;
   loadInventory: () => Promise<InventoryItem[]>;
   searchInventory?: (input: { q: string; category: string; offset: number }) => Promise<{ items: InventoryItem[]; hasMore: boolean }>;
+  loadOptions?: () => Promise<InventoryOptions>;
+  loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
   loadDetail?: (id: string) => Promise<InventoryItem>;
 }
 
@@ -29,6 +33,8 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   ports: StaffAppPorts; offline: boolean; preview?: boolean; onToggleOffline?: () => void; onLogout?: () => void; writesEnabled?: boolean;
   features?: MobileFeatures; previewAccount?: string; onTogglePreviewAccount?: () => void;
 }) {
+  const [scanSearch,setScanSearch]=useState(false);
+  const [creating,setCreating]=useState(false);
   const [requestedTab, setTab] = useState<Tab>("home");
   // Filter the screen as well as navigation, including when access changes on an open screen.
   const tab = permittedTab(requestedTab, features);
@@ -94,13 +100,25 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   }, [ports, query, category]); // Reconnection never submits edits.
 
   const saved = (item: InventoryItem) => {
-    setServerRows(rows => rows?.map(row => row.id === item.id ? item : row) ?? null);
-    const items = (snapshot?.items ?? []).map((row) => row.id === item.id ? item : row);
+    setServerRows(rows => rows ? [item,...rows.filter(row=>row.id!==item.id)] : null);
+    const items = [item,...(snapshot?.items ?? []).filter(row=>row.id!==item.id)].slice(0,500);
     // Only this record was refreshed; preserve the list's last-fetch timestamp.
     const fetchedAt = snapshot?.fetchedAt ?? new Date().toISOString();
     setSnapshot({ schema: 1, owner: "current", fetchedAt, items });
     void ports.snapshot.write(items, fetchedAt).catch(() => setError("変更は保存済みですが、端末の保存データを更新できませんでした。"));
     setEditor(null); setSelected(null); setTab("inventory");
+  };
+  const startCreate=async()=>{
+    if(creating)return;
+    if(!writesEnabled){setError("在庫を登録する権限がありません。");return;}
+    setCreating(true);setError(null);
+    let options:InventoryOptions={categories:[],locations:[],statuses:[]};
+    try{if(ports.loadOptions&&await ports.online())options=await ports.loadOptions();}
+    catch{setError("選択肢を取得できませんでした。通信状態を確認してください。");}
+    const item:InventoryItem={id:ports.newMutationId(),sku:"保存時に自動採番",name:"",quantity:1,unit:"",location:"",category:"",condition:"",statusId:null,
+      note:"",barcode:"",plannedSalePrice:null,thumbnailUrl:null,updatedAt:new Date().toISOString(),details:{},photos:[],photosComplete:true,
+      statusOptions:options.statuses,categoryOptions:options.categories,locationOptions:options.locations};
+    setEditor(new InventoryEditor(item,ports,true));setCreating(false);
   };
   const leaveEditor = () => { setEditor(null); setSelected(null); setTab("inventory"); };
   const openItem = async (item: InventoryItem) => {
@@ -167,7 +185,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         <View style={s.tiles}>{[
           { label: "新規登録", icon: "add" as IconName },
           { label: "スキャン検索", icon: "qr-code-outline" as IconName },
-        ].map((tile) => <Pressable accessibilityRole="button" accessibilityLabel={tile.label} key={tile.label} style={s.tile} onPress={() => setFeature(tile.label)}><Ionicons name={tile.icon} size={49} color={colors.turquoise} /><Text style={s.tileLabel}>{tile.label}</Text></Pressable>)}</View>
+        ].map((tile) => <Pressable accessibilityRole="button" accessibilityLabel={tile.label} key={tile.label} style={s.tile} disabled={creating} onPress={() => {if(tile.label === "新規登録")void startCreate();else setScanSearch(true);}}><Ionicons name={tile.icon} size={49} color={colors.turquoise} /><Text style={s.tileLabel}>{tile.label}</Text></Pressable>)}</View>
         <View style={s.homeSummary}><Text style={s.label}>この端末で読み込んだ在庫</Text><Text style={s.count}>{snapshot?.items.length ?? 0}<Text style={s.unit}> 件</Text></Text><Text style={s.homeSub}>圏外でも直前に読み込んだ情報を確認できます。</Text></View>
       </ScrollView> : tab === "inventory" ? <View style={s.list}>
         <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><TextInput accessibilityLabel="在庫を検索" placeholder="物品名・管理番号・コード" value={query} onChangeText={setQuery} style={s.searchInput} />{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => setQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>
@@ -180,10 +198,11 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
             <ProductImage item={item} /><View style={s.rowMain}><Text style={s.tag}>{item.category}</Text><Text style={s.rowName} numberOfLines={3}>{item.name}</Text><Text style={s.sku}>{item.sku}</Text></View>
             <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
           </Pressable>} />
-      </View> : <View style={s.pending}><Ionicons name={tab === "ec" ? "storefront-outline" : "stats-chart-outline"} size={55} color={colors.turquoise} /><Text style={s.pendingTitle}>{tab === "ec" ? "EC出品" : "売上"}</Text><Text style={s.pendingText}>既存の自社システムとの接続を実装中です。{offline ? "通信が戻ってから操作できます。" : ""}</Text></View>}
+      </View> : tab === "sales" && ports.loadSales ? <SalesScreen load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Ionicons name={tab === "ec" ? "storefront-outline" : "stats-chart-outline"} size={55} color={colors.turquoise} /><Text style={s.pendingTitle}>{tab === "ec" ? "EC出品" : "売上"}</Text><Text style={s.pendingText}>既存の自社システムとの接続を実装中です。{offline ? "通信が戻ってから操作できます。" : ""}</Text></View>}
       {selected && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={22} color="white" /><Text style={s.white}>編集</Text></Pressable>}
       <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={25} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
     </>}
+    {scanSearch&&<BarcodeScanner onClose={()=>setScanSearch(false)} onRead={value=>{setScanSearch(false);setQuery(value);setCategory("");setSelected(null);setTab("inventory");}}/>}
     <Modal visible={categoryPicker} transparent animationType="slide" onRequestClose={() => setCategoryPicker(false)}><View style={s.shade}><View style={s.picker}><Text style={s.title}>カテゴリを選択</Text>{["", ...categories].map((value) => <Pressable accessibilityRole="button" key={value} style={s.pickerChoice} onPress={() => { setCategory(value); setCategoryPicker(false); }}><Text style={s.categoryText}>{value || "指定なし"}</Text></Pressable>)}<Pressable accessibilityRole="button" style={s.pickerChoice} onPress={() => setCategoryPicker(false)}><Text style={s.blue}>キャンセル</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
 }

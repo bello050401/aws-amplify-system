@@ -5,6 +5,7 @@ interface DetailFieldPresentation {
   label: string;
   section: string;
   kind?: "money" | "integer" | "date" | "multiline";
+  inputMode?: "numeric" | "decimal";
   options?: readonly string[];
   feature?: keyof MobileFeatures;
   readOnly?: boolean;
@@ -17,17 +18,17 @@ export type DetailField = DetailFieldPresentation & (
 // A mobile presentation of existing BELLO fields, not a new storage schema.
 // Reuse the Web field-key type; custom keys are checked against the existing ZAICO mapping.
 export const DETAIL_FIELDS: readonly DetailField[] = [
-  { key: "firstMarkdownPrice", label: "1回目値下げ時の金額（30日）", section: "値下げ価格" },
-  { key: "secondMarkdownPrice", label: "2回目値下げ時の金額（60日）", section: "値下げ価格" },
-  { key: "thirdMarkdownPrice", label: "3回目値下げ金額（90日）", section: "値下げ価格" },
-  { key: "conditionRating", label: "コンディション評価（1〜5の5段階で）", section: "状態・サイズ", kind: "multiline" },
+  { key: "firstMarkdownPrice", inputMode: "numeric", label: "1回目値下げ時の金額（30日）", section: "値下げ価格" },
+  { key: "secondMarkdownPrice", inputMode: "numeric", label: "2回目値下げ時の金額（60日）", section: "値下げ価格" },
+  { key: "thirdMarkdownPrice", inputMode: "numeric", label: "3回目値下げ金額（90日）", section: "値下げ価格" },
+  { key: "conditionRating", inputMode: "decimal", label: "コンディション評価（1〜5の5段階で）", section: "状態・サイズ" },
   { key: "damageNotes", label: "傷汚れ箇所等メモ", section: "状態・サイズ", kind: "multiline" },
-  { key: "width", label: "幅（cm）", section: "状態・サイズ" },
-  { key: "depth", label: "奥行（cm）", section: "状態・サイズ" },
-  { key: "height", label: "高さ（cm）", section: "状態・サイズ" },
-  { key: "overallLength", label: "全長（cm）", section: "状態・サイズ" },
+  { key: "width", inputMode: "decimal", label: "幅（cm）", section: "状態・サイズ" },
+  { key: "depth", inputMode: "decimal", label: "奥行（cm）", section: "状態・サイズ" },
+  { key: "height", inputMode: "decimal", label: "高さ（cm）", section: "状態・サイズ" },
+  { key: "overallLength", inputMode: "decimal", label: "全長（cm）", section: "状態・サイズ" },
   { key: "lengthAdjustable", label: "全長調節可否", section: "状態・サイズ", options: ["可", "不可"] },
-  { key: "legHeight", label: "脚高", section: "状態・サイズ", custom: true },
+  { key: "legHeight", inputMode: "decimal", label: "脚高", section: "状態・サイズ", custom: true },
   { key: "seatDimensions", label: "座面寸法", section: "状態・サイズ", custom: true },
   { key: "mountType", label: "取付タイプ", section: "状態・サイズ" },
   { key: "socketType", label: "口金", section: "状態・サイズ", custom: true },

@@ -257,8 +257,8 @@ export interface InventoryFieldsInput extends InventoryExtendedFields {
  *   id and lets the caller decide navigation client-side instead.
  */
 export async function createInventory(input: InventoryFieldsInput): Promise<never>;
-export async function createInventory(input: InventoryFieldsInput, options: { skipRedirect: true }): Promise<{ id: string }>;
-export async function createInventory(input: InventoryFieldsInput, options?: { skipRedirect?: boolean }): Promise<{ id: string } | never> {
+export async function createInventory(input: InventoryFieldsInput, options: { skipRedirect: true; id?: string }): Promise<{ id: string }>;
+export async function createInventory(input: InventoryFieldsInput, options?: { skipRedirect?: boolean; id?: string }): Promise<{ id: string } | never> {
   const role = await getInventoryRole();
   if (!canEditInventory(role)) {
     throw new Error("在庫を登録する権限がありません（ADMIN または EDITOR のみ）。");
@@ -288,12 +288,13 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
   const { data: sku, errors: skuErrors } = await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);
   if (skuErrors || !sku) {
     console.error("[createInventory] SKU generation failed:", skuErrors);
-    await Promise.allSettled(allImageStorageKeys(images).map((k) => removeInventoryImage(k)));
+    if (!options?.id) await Promise.allSettled(allImageStorageKeys(images).map((k) => removeInventoryImage(k)));
     throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(skuErrors)}`);
   }
 
   const { data: created, errors } = await serverDataClient.models.Inventory.create(
     {
+      ...(options?.id ? { id: options.id } : {}),
       sku,
       name,
       categoryId: input.categoryId || undefined,
@@ -329,7 +330,7 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
     // aborted registration is harmless and exactly what an atomic
     // counter is expected to produce sometimes; see amplify/functions/
     // generate-sku's own comment on why it's never decremented.
-    await Promise.allSettled(allImageStorageKeys(images).map((k) => removeInventoryImage(k)));
+    if (!options?.id) await Promise.allSettled(allImageStorageKeys(images).map((k) => removeInventoryImage(k)));
     throw new Error(`在庫の登録に失敗しました: ${JSON.stringify(errors)}`);
   }
 

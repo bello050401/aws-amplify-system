@@ -22,12 +22,13 @@ async function main() {
   };
   let row: Record<string, any> = structuredClone(initial);
   let session: Record<string, any> = { ok: true, owner: "test-staff", role: "EDITOR", features };
+  let exists = true, allowImages = false;
   let writes = 0, reads = 0, lostReply = false, failBeforeWrite = false, failReadAfterWrite = false;
   let history: any[] = [], triggers = 0;
   const env: Record<string, string> = { BELLO_MOBILE_WRITES_ENABLED: "true" };
   const ports = {
     session: async () => session,
-    detail: async (requested: string) => { assert.equal(requested, id); reads++; if (writes && failReadAfterWrite) throw Error("private read error"); return structuredClone(row); },
+    detail: async (requested: string) => { assert.equal(requested, id); reads++; if (writes && failReadAfterWrite) throw Error("private read error"); return exists ? structuredClone(row) : null; },
     write: async (request: any) => {
       assert.equal(request.authMode, "userPool"); assert.match(request.query, /condition: \$condition/);
       if (failBeforeWrite) throw Error("private unknown transport error");
@@ -38,6 +39,14 @@ async function main() {
       if (lostReply) { lostReply = false; throw Error("private response lost after commit"); }
       return { data: { updateInventory: { id: row.id, updatedAt: row.updatedAt } } };
     },
+    create: async (input:any) => {
+      assert.equal(input.id,id,"Client identity must be preserved by the actual shared create action");
+      if(exists)return {errors:[{errorType:"DynamoDB:ConditionalCheckFailedException"}]};
+      exists=true;writes++;row={...input,customFields:JSON.parse(input.customFields),updatedAt:"2026-10-17T01:00:00.000Z"};
+      if(lostReply){lostReply=false;throw Error("Lost create reply");}
+      return {data:{id:input.id}};
+    },
+    image: async () => {if(!allowImages)throw Error("Unexpected image operation");return null;},
     history: async (...args: any[]) => { history.push(args); },
     trigger: async () => { triggers++; },
   };
@@ -51,11 +60,11 @@ async function main() {
     "@/lib/amplify/serverUtils": 'export const runWithAmplifyServerContext = ({operation}) => operation({});',
     "@/lib/mobile/session": 'export const getMobileSession = () => globalThis.ports.session();',
     "@/lib/amplify/requireInventoryUser": 'export const getInventoryRole = async () => (await globalThis.ports.session()).role; export const canEditInventory = role => ["EDITOR","ADMIN"].includes(role); export const canHardDeleteInventory = () => false; export const getCurrentInventoryUserEmail = async () => "synthetic-staff";',
-    "@/lib/amplify/dataClient": 'export const inventoryAuthMode = {authMode:"userPool"}; export const serverDataClient = {graphql: request => globalThis.ports.write(request)};',
+    "@/lib/amplify/dataClient": 'export const inventoryAuthMode = {authMode:"userPool"}; export const serverDataClient = {graphql: request => globalThis.ports.write(request), mutations:{generateInventorySku:async()=>({data:"TEST-NEW"})},models:{Inventory:{create:input=>globalThis.ports.create(input)}}};',
     "@/lib/inventory/queries": `export const getInventoryDetail = id => globalThis.ports.detail(id); export const getInventoryHistory = async () => []; export const listCategories = async () => ${JSON.stringify(categories)}; export const listLocations = async () => ${JSON.stringify(locations)}; export const listStatuses = async () => ${JSON.stringify(statuses)};`,
     "@/lib/inventory/inventoryPage": 'export const clearInventoryCountCache = () => {};',
-    "@/lib/inventory/imageServerOps": 'const forbidden = () => { throw Error("Unexpected image write"); }; export const computeOriginalHashForPath = forbidden, copyInventoryImage = forbidden, removeInventoryImage = forbidden;',
-    "@/lib/inventory/thumbnail": 'const forbidden = () => { throw Error("Unexpected image processing"); }; export const copyInventoryMedium = forbidden, copyInventoryThumbnail = forbidden, generateInventoryDerivatives = forbidden, generateInventoryMedium = forbidden, generateInventoryThumbnail = forbidden;',
+    "@/lib/inventory/imageServerOps": 'const forbidden = () => { throw Error("Unexpected image write"); }; export const computeOriginalHashForPath = ()=>globalThis.ports.image(), copyInventoryImage = forbidden, removeInventoryImage = forbidden;',
+    "@/lib/inventory/thumbnail": 'const forbidden = () => { throw Error("Unexpected image processing"); }; export const copyInventoryMedium = forbidden, copyInventoryThumbnail = forbidden, generateInventoryDerivatives = async()=>{await globalThis.ports.image();return {thumbnailKey:null,mediumKey:null};}, generateInventoryMedium = forbidden, generateInventoryThumbnail = forbidden;',
     "@/lib/inventory/history": 'export const logInventoryHistory = (...args) => globalThis.ports.history(...args); export const diffField = (fieldName, oldValue, newValue) => oldValue === newValue ? null : {fieldName,oldValue,newValue};',
     "@/lib/imageProcessing/jobService": 'export const triggerImageProcessingIfNeeded = () => globalThis.ports.trigger();',
     "@/app/actions/photoRegistration": 'export const listInventoryPhotoAssetsAction = async () => ({ok:true,value:{assets:[],truncated:false}});',
@@ -66,7 +75,7 @@ async function main() {
     builder.onResolve({ filter: /.*/ }, args => Object.hasOwn(sources, args.path) ? { path: args.path, namespace: "stub" } : undefined);
     builder.onLoad({ filter: /.*/, namespace: "stub" }, args => ({ contents: sources[args.path], loader: "js" }));
   }}] });
-  const module = { exports: {} as { PATCH(request: Request, context: { params: { id: string } }): Promise<Response> } };
+  const module = { exports: {} as { POST(request: Request, context: { params: { id: string } }): Promise<Response>; PATCH(request: Request, context: { params: { id: string } }): Promise<Response> } };
   vm.runInNewContext(bundled.outputFiles[0].text, { module, exports: module.exports, ports, Response, Date, URL, Buffer, process: {env}, require: createRequire(import.meta.url) });
   let nonce = 0;
   const body = () => ({ id, expectedUpdatedAt: row.updatedAt, mutationId: `00000000-0000-4000-8000-${String(++nonce).padStart(12, "0")}`,
@@ -138,6 +147,22 @@ async function main() {
   failReadAfterWrite = false; assert.equal((await patch(uncertain)).status, 200); assert.equal(writes, 1);
   reset(); failBeforeWrite = true;
   const unknown = await patch(body()); assert.equal(unknown.status, 503); assert.deepEqual(await unknown.json(), {error:"UNCONFIRMED"}); assert.equal(writes, 0);
+  reset();exists=false;allowImages=true;
+  const fresh=body() as ReturnType<typeof body> & {create:boolean;uploads:{storageKey:string;type:string}[]}; fresh.create=true;
+  fresh.draft.details={width:"12.5",transactionDate:"2026-10-17"};
+  fresh.uploads=[{storageKey:'inventory/mobile/test-staff/11111111-1111-4111-8111-111111111111/'+"a".repeat(64)+'.jpg',type:"NORMAL"}];
+  const post=(value:unknown)=>module.exports.POST(new Request('https://bello.example/api/mobile/inventory/'+id,{method:"POST",headers:{"Content-Type":"application/json","X-Bello-Mobile":"1"},body:JSON.stringify(value)}),{params:{id}});
+  assert.equal((await patch(fresh)).status,422);
+  session.role="VIEWER";assert.equal((await post(fresh)).status,403);session.role="EDITOR";
+  const wrongOwner=structuredClone(fresh);wrongOwner.uploads[0].storageKey=wrongOwner.uploads[0].storageKey.replace('test-staff','another-staff');
+  assert.equal((await post(wrongOwner)).status,403);assert.equal(writes,0);
+  const before=structuredClone(fresh);lostReply=true;
+  assert.equal((await post(fresh)).status,200);assert.equal(writes,1);assert.equal(row.id,id);assert.equal(row.images.length,1);assert.equal(row.images[0].isPrimary,true);assert.equal(row.width,"12.5");
+  assert.equal((await post(before)).status,200);assert.equal(writes,1);
+  const conflict=structuredClone(fresh);conflict.draft.name="different";assert.equal((await post(conflict)).status,409);assert.equal(writes,1);
+  reset();exists=false;allowImages=true;
+  const concurrentCreates=await Promise.all([post(fresh),post(fresh)]);assert.deepEqual(concurrentCreates.map(r=>r.status),[200,200]);assert.equal(writes,1);
+  console.log("PASS: real shared create action preserves client ID; images, ownership, permissions, concurrent and lost-response create retries are verified with synthetic storage.");
   console.log("PASS: actual BELLO save action, field/image preservation and clearing, permissions, CSRF/body bounds, atomic conflicts, duplicate retry and lost-response reconciliation; synthetic storage only.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

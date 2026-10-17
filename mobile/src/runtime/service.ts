@@ -6,8 +6,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { nativeSessionCookies } from "./sessionCookies";
 import { SecureTokenStorage } from "./secureTokenStorage";
 import { isInventoryItem } from "../domain/snapshot";
-import type { InventoryItem } from "../domain/inventory";
+import type { InventoryItem, InventoryOptions, PendingPhoto, UploadedPhoto } from "../domain/inventory";
 import { isMobileFeatures, type MobileFeatures } from "../domain/access";
+import type {SalesResponse} from "../ui/SalesScreen";
 import { InventoryWriteError, type SaveRequest } from "../domain/editor";
 
 const isWeb = Platform.OS === "web";
@@ -106,7 +107,7 @@ export async function saveInventory(request: SaveRequest): Promise<InventoryItem
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
     const response = await fetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.id)}`, {
-      method: "PATCH", credentials: "same-origin", headers: { Accept: "application/json", "Content-Type": "application/json", "X-Bello-Mobile": "1", ...(session.cookie ? { Cookie: session.cookie } : {}) },
+      method: request.create ? "POST" : "PATCH", credentials: "same-origin", headers: { Accept: "application/json", "Content-Type": "application/json", "X-Bello-Mobile": "1", ...(session.cookie ? { Cookie: session.cookie } : {}) },
       body: JSON.stringify(request), signal: controller.signal, redirect: "error",
     });
     if (response.status === 401) throw new InventoryWriteError("unauthorized");
@@ -129,4 +130,31 @@ export async function readInventoryDetail(id: string): Promise<InventoryItem> {
     throw new Error("商品詳細を確認できませんでした。");
   }
   return value.item;
+}
+
+export async function readInventoryOptions(): Promise<InventoryOptions> {
+  const session=await authenticatedSession();
+  const value=await jsonRequest("/api/mobile/options",session.cookie) as InventoryOptions & {owner:string};
+  if(value.owner!==session.owner||!Array.isArray(value.categories)||!Array.isArray(value.locations)||!Array.isArray(value.statuses)) throw new Error("選択肢を取得できませんでした。");
+  return value;
+}
+export async function uploadInventoryPhoto(photo:PendingPhoto):Promise<UploadedPhoto> {
+  if(!mobileWritesEnabled())throw new InventoryWriteError("forbidden");
+  const session=await authenticatedSession(); const blob=await (await fetch(photo.uri)).blob();
+  if(blob.size>3*1024*1024)throw new Error("写真が大きすぎます。");
+  const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),60000);
+  try {
+    const response=await fetch(API_ORIGIN+"/api/mobile/images",{method:"POST",credentials:"same-origin",redirect:"error",signal:controller.signal,
+      headers:{"Content-Type":"image/jpeg","X-Bello-Mobile":"1","X-Photo-Id":photo.id,...(session.cookie?{Cookie:session.cookie}:{})},body:blob});
+    if(!response.ok)throw new Error("写真を保存できませんでした。");
+    const value=await response.json();
+    if(value.owner!==session.owner||typeof value.storageKey!=="string")throw new Error("写真を確認できませんでした。");
+    return {storageKey:value.storageKey,type:photo.type};
+  } finally {clearTimeout(timeout);}
+}
+export async function readSales(year:number,month:number,items=false):Promise<SalesResponse> {
+  const session=await authenticatedSession();
+  const value=await jsonRequest('/api/mobile/sales?y='+year+'&m='+month+(items?'&items=1':''),session.cookie) as SalesResponse & {owner:string};
+  if(value.owner!==session.owner)throw new Error("売上を取得できませんでした。");
+  return value;
 }

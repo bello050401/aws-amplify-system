@@ -7,9 +7,9 @@ import { getInventoryDetail, listCategories, listLocations, listStatuses } from 
 import { mobileInventoryDetail } from "@/lib/mobile/inventoryDetail";
 import { mobileInventoryPhotos } from "@/lib/mobile/inventoryPhotos";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
-import { updateInventory } from "@/app/actions/inventory";
+import { createInventory, updateInventory } from "@/app/actions/inventory";
 import { InventorySaveError } from "@/lib/inventory/conditionalUpdate";
-import { parseMobileSave, mobileInventoryInput, mobileWriteWasApplied, MobileWriteValidationError } from "@/lib/mobile/inventoryWrite";
+import { parseMobileSave, mobileCreateInput, mobileInventoryInput, mobileWriteWasApplied, MobileWriteValidationError } from "@/lib/mobile/inventoryWrite";
 
 export const dynamic = "force-dynamic";
 export async function GET(_request: Request, context: { params: { id: string } }) {
@@ -38,7 +38,7 @@ export async function GET(_request: Request, context: { params: { id: string } }
 }
 
 /** Native clients use the same BELLO save action as the Web editor. No direct ZAICO calls. */
-export async function PATCH(request: Request, context: { params: { id: string } }) {
+async function save(request: Request, context: { params: { id: string } }, creating: boolean) {
   const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
   const fail = (error: string, status: number) => NextResponse.json({ error }, { status, headers });
   const session = await getMobileSession();
@@ -69,13 +69,18 @@ export async function PATCH(request: Request, context: { params: { id: string } 
   } catch { return fail("INVALID_INPUT", 400); }
   try {
     const body = parseMobileSave(raw, context.params.id);
+    if (Boolean(body.create) !== creating) return fail("INVALID_INPUT", 422);
     const row = await getInventoryDetail(body.id);
-    if (!row) return fail("NOT_FOUND", 404);
+    if (!row && !creating) return fail("NOT_FOUND", 404);
+    if (row && creating && !mobileWriteWasApplied(row, body, session.owner)) return fail("CONFLICT", 409);
     // A previous response may have been lost. Confirm the receipt before attempting a write.
-    if (!mobileWriteWasApplied(row, body, session.owner)) {
-      const [categories, locations, statuses] = await Promise.all([listCategories(row.categoryId), listLocations(row.locationId), listStatuses()]);
-      const input = mobileInventoryInput(row, body, session.owner, session.features, categories, locations, statuses);
-      try { await updateInventory(body.id, input, { skipRedirect: true }); }
+    if (!row || !mobileWriteWasApplied(row, body, session.owner)) {
+      const [categories, locations, statuses] = await Promise.all([listCategories(row?.categoryId), listLocations(row?.locationId), listStatuses()]);
+      const input = row ? mobileInventoryInput(row, body, session.owner, session.features, categories, locations, statuses) : mobileCreateInput(body, session.owner, session.features, categories, locations, statuses);
+      try {
+        if (creating) await createInventory(input, { skipRedirect: true, id: body.id });
+        else await updateInventory(body.id, input, { skipRedirect: true });
+      }
       catch (error) {
         // Also handles two simultaneous retries: only one conditional write may succeed.
         const latest = await getInventoryDetail(body.id).catch(() => null);
@@ -97,3 +102,6 @@ export async function PATCH(request: Request, context: { params: { id: string } 
     return fail("UNCONFIRMED", 503);
   }
 }
+
+export async function PATCH(request: Request, context: { params: { id: string } }) { return save(request, context, false); }
+export async function POST(request: Request, context: { params: { id: string } }) { return save(request, context, true); }

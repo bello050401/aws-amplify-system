@@ -17,6 +17,7 @@ export function mobileInventoryDetail(row: InventoryDetail, categories: MasterOp
     // Reuse BELLO's existing state/master relationship. No app-only ZAICO state field.
     statusId: row.statusId,
     statusOptions: statuses.map(status => ({ id: status.id, label: status.label })),
+    categoryOptions: categories.map(option => option.name), locationOptions: locations.map(option => option.name),
     condition: statuses.find(status => status.id === row.statusId)?.label ?? "", note: row.note ?? "", barcode: row.barcode ?? "",
     plannedSalePrice: row.plannedSalePrice, thumbnailUrl: photos.find(photo => photo.primary)?.url ?? photos[0]?.url ?? null,
     updatedAt: row.updatedAt, details, photos, detailLoadedAt: fetchedAt,

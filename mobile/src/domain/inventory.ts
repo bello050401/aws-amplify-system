@@ -7,6 +7,9 @@ export interface InventoryPhoto {
   source?: "INVENTORY" | "PHOTO_ASSET";
 }
 export interface InventoryStatusOption { id: string; label: string }
+export interface PendingPhoto { id: string; uri: string; type: "NORMAL" | "DAMAGE" }
+export interface UploadedPhoto { storageKey: string; type: "NORMAL" | "DAMAGE" }
+export interface InventoryOptions { categories: string[]; locations: string[]; statuses: InventoryStatusOption[] }
 export interface InventoryItem {
   id: string;
   sku: string;
@@ -21,6 +24,8 @@ export interface InventoryItem {
   /** BELLO StatusMaster ID and choices. condition is its display label, not a separate saved field. */
   statusId?: string | null;
   statusOptions?: InventoryStatusOption[];
+  categoryOptions?: string[];
+  locationOptions?: string[];
   note: string;
   barcode: string;
   plannedSalePrice: number | null;

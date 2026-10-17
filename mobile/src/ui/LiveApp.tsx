@@ -5,7 +5,7 @@ import * as Network from "expo-network";
 import * as Crypto from "expo-crypto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
-import { API_ORIGIN, clearLocalSession, configureMobileAuth, readInventory, readInventoryDetail, readMobileSession, saveInventory, mobileWritesEnabled, StaffSessionError, type MobileSession } from "../runtime/service";
+import { API_ORIGIN, clearLocalSession, configureMobileAuth, readInventory, readInventoryDetail, readInventoryOptions, uploadInventoryPhoto, readSales, readMobileSession, saveInventory, mobileWritesEnabled, StaffSessionError, type MobileSession } from "../runtime/service";
 import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
@@ -78,6 +78,9 @@ export function LiveApp() {
     newMutationId: () => Crypto.randomUUID(),
     searchInventory: readInventory,
     loadDetail: readInventoryDetail,
+    loadOptions: readInventoryOptions,
+    uploadPhoto: uploadInventoryPhoto,
+    loadSales: readSales,
     save: saveInventory,
   }; }, [userId]);
 

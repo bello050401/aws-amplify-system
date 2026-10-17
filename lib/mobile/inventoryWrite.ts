@@ -19,11 +19,16 @@ export class MobileWriteValidationError extends Error {
 }
 const invalid = (): never => { throw new MobileWriteValidationError("INVALID_INPUT"); };
 
-/** Accept only the mobile editor contract; no images, arbitrary columns, or custom metadata. */
+/** Accept the mobile editor contract and append-only uploads; never arbitrary columns or custom metadata. */
 export function parseMobileSave(raw: unknown, id: string): SaveRequest {
   if (!object(raw) || !uuid.test(id) || raw.id !== id || typeof raw.mutationId !== "string" || !uuid.test(raw.mutationId) ||
       typeof raw.expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(raw.expectedUpdatedAt)) ||
-      Object.keys(raw).some(key => !["id", "mutationId", "expectedUpdatedAt", "draft"].includes(key))) return invalid();
+      Object.keys(raw).some(key => !["id", "mutationId", "expectedUpdatedAt", "draft", "create", "uploads"].includes(key))) return invalid();
+  if (raw.create !== undefined && raw.create !== true) return invalid();
+  if (raw.uploads !== undefined && (!Array.isArray(raw.uploads) || raw.uploads.length > 100 || raw.uploads.some(photo =>
+    !object(photo) || Object.keys(photo).some(key => !["storageKey", "type"].includes(key)) ||
+    typeof photo.storageKey !== "string" || !/^inventory\/mobile\/[a-z0-9-]+\/[a-f0-9-]{36}\/[a-f0-9]{64}\.jpg$/.test(photo.storageKey) ||
+    !["NORMAL", "DAMAGE"].includes(String(photo.type))))) return invalid();
   const draft = raw.draft;
   if (!object(draft) || !object(draft.details) || Object.keys(draft).some(key => key !== "details" && !draftKeys.includes(key as typeof draftKeys[number])) ||
       draftKeys.some(key => typeof draft[key] !== "string" || (draft[key] as string).length > 16000)) return invalid();
@@ -33,13 +38,13 @@ export function parseMobileSave(raw: unknown, id: string): SaveRequest {
   if (validateDraft(draft as InventoryDraft)) return invalid();
   // GraphQL Int, not JavaScript's wider safe integer range.
   if (Number(draft.quantity) > 2147483647 || Number(draft.details.purchaseQuantity ?? 0) > 2147483647) return invalid();
-  return { id, mutationId: raw.mutationId, expectedUpdatedAt: raw.expectedUpdatedAt, draft: draft as InventoryDraft };
+  return { id, mutationId: raw.mutationId, expectedUpdatedAt: raw.expectedUpdatedAt, draft: draft as InventoryDraft, ...(raw.create ? { create: true } : {}), ...(raw.uploads ? { uploads: raw.uploads as SaveRequest["uploads"] } : {}) };
 }
 
 function receiptFor(request: SaveRequest, owner: string) {
   const draft = request.draft;
   const values = [...draftKeys.map(key => [key, draft[key]]), ["details", Object.entries(draft.details).sort(([a], [b]) => a.localeCompare(b))]];
-  return { owner, mutationId: request.mutationId, fingerprint: createHash("sha256").update(JSON.stringify([request.id, request.expectedUpdatedAt, values])).digest("hex") };
+  return { owner, mutationId: request.mutationId, fingerprint: createHash("sha256").update(JSON.stringify([request.id, request.expectedUpdatedAt, values, ...(request.create || request.uploads ? [request.create ?? false, request.uploads ?? []] : [])])).digest("hex") };
 }
 
 export function mobileWriteWasApplied(row: InventoryDetail, request: SaveRequest, owner: string): boolean {
@@ -85,6 +90,24 @@ export function mobileInventoryInput(row: InventoryDetail, request: SaveRequest,
     if (field.custom) input.customFields![field.key] = value;
     else columns[field.key] = value;
   }
+  const seen = new Set(input.images.map(image => image.kind === "uploaded" ? image.storageKey : ""));
+  for (const photo of request.uploads ?? []) {
+    if (!photo.storageKey.startsWith('inventory/mobile/' + owner + '/')) throw new MobileWriteValidationError("FIELD_FORBIDDEN");
+    if (seen.has(photo.storageKey)) continue;
+    seen.add(photo.storageKey);
+    input.images.push({kind: "uploaded", storageKey: photo.storageKey, type: photo.type, sortOrder: input.images.length,
+      isPrimary: photo.type === "NORMAL" && !input.images.some(image => image.type === "NORMAL"),
+      sourceSystem: null, sourceUrl: null, thumbnailKey: null, mediumKey: null, originalHash: null, classification: null});
+  }
   input.customFields![MOBILE_WRITE_RECEIPT] = receiptFor(request, owner);
   return input;
+}
+
+/** A fresh BELLO record uses the same field mapping and master validation as an edit. */
+export function mobileCreateInput(request: SaveRequest, owner: string, features: MobileFeatures,
+  categories: MasterOption[], locations: MasterOption[], statuses: StatusOption[]): InventoryFieldsInput {
+  const blank = Object.fromEntries(ALL_EXTENDED_FIELDS.map(field => [field.key, null]));
+  const row = { ...blank, id: request.id, updatedAt: request.expectedUpdatedAt, categoryId: null, locationId: null,
+    statusId: null, images: [], customFields: {}, purchasePrice: null, salePrice: null } as unknown as InventoryDetail;
+  return mobileInventoryInput(row, request, owner, features, categories, locations, statuses);
 }

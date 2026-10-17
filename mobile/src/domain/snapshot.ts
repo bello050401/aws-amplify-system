@@ -24,6 +24,7 @@ export function isInventoryItem(value: unknown): value is InventoryItem {
     (row.statusId === undefined || row.statusId === null || typeof row.statusId === "string") &&
     (row.statusOptions === undefined || (Array.isArray(row.statusOptions) && row.statusOptions.every(option =>
       option && typeof option.id === "string" && typeof option.label === "string"))) &&
+    [row.categoryOptions,row.locationOptions].every(options => options === undefined || (Array.isArray(options) && options.every(value => typeof value === "string"))) &&
     (row.details === undefined || isDetailValues(row.details)) &&
     (row.detailLoadedAt === undefined || (typeof row.detailLoadedAt === "string" && Number.isFinite(Date.parse(row.detailLoadedAt)))) &&
     (row.photosComplete === undefined || typeof row.photosComplete === "boolean") &&
@@ -66,6 +67,8 @@ export class SnapshotStore {
       location: item.location, category: item.category, condition: item.condition, note: item.note,
       ...(item.statusId !== undefined ? { statusId: item.statusId } : {}),
       ...(item.statusOptions ? { statusOptions: item.statusOptions.map(option => ({ id: option.id, label: option.label })) } : {}),
+      ...(item.categoryOptions ? {categoryOptions:[...item.categoryOptions]} : {}),
+      ...(item.locationOptions ? {locationOptions:[...item.locationOptions]} : {}),
       barcode: item.barcode, plannedSalePrice: item.plannedSalePrice, thumbnailUrl: item.thumbnailUrl, updatedAt: item.updatedAt,
       ...(item.details ? { details: copyDetailValues(item.details) } : {}),
       ...(item.detailLoadedAt ? { detailLoadedAt: item.detailLoadedAt } : {}),

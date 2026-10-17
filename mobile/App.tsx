@@ -15,10 +15,13 @@ function Preview() {
   const offlineRef = useRef(false);
   const records = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
     ? galleryPreviewItems() : previewItems.map((item) => ({ ...item })));
+  const uploadedPhotos=useRef(new Map<string,string>());
   const ports = useMemo<StaffAppPorts>(() => ({
     snapshot: new SnapshotStore(AsyncStorage, "ui-preview", "preview-only"),
     online: async () => !offlineRef.current,
     newMutationId: () => Crypto.randomUUID(),
+    loadOptions: async()=>({categories:["販売中","撮影待ち"],locations:["川越倉庫","所沢倉庫"],statuses:previewItems[0].statusOptions??[]}),
+    uploadPhoto:async photo=>{uploadedPhotos.current.set(photo.id,photo.uri);return {storageKey:photo.id,type:photo.type};},
     loadInventory: async () => records.current.map((item) => ({ ...item })),
     loadDetail: async id => {
       const item = records.current.find(row => row.id === id);
@@ -27,10 +30,11 @@ function Preview() {
     },
     save: async (request) => {
       if (offlineRef.current) throw new InventoryWriteError("offline");
-      const item = records.current.find((row) => row.id === request.id);
+      const item = records.current.find((row) => row.id === request.id) ?? (request.create ? {...previewItems[0],id:request.id,sku:"見本・新規",name:"",details:{},photos:[],updatedAt:request.expectedUpdatedAt} : undefined);
       if (!item || item.updatedAt !== request.expectedUpdatedAt) throw new InventoryWriteError("conflict");
       const saved = { ...item, ...request.draft, quantity: Number(request.draft.quantity), plannedSalePrice: request.draft.plannedSalePrice === "" ? null : Number(request.draft.plannedSalePrice), updatedAt: new Date().toISOString() };
-      records.current = records.current.map((row) => row.id === saved.id ? saved : row);
+      saved.photos=[...(item.photos??[]),...(request.uploads??[]).map((photo,i)=>({id:photo.storageKey,url:null,type:photo.type,primary:!(item.photos?.length)&&i===0}))];
+      records.current = [saved,...records.current.filter(row=>row.id!==saved.id)];
       return saved;
     },
   }), []);

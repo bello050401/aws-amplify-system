@@ -12,8 +12,7 @@
     "legacyShippingReadOnly": true,
     "unknownDropdownOptions": "use current BELLO input definitions",
     "pending": [
-      "image and file uploads",
-      "code scanner",
+      "physical iPhone camera/date/keyboard verification",
       "live existing ZAICO synchronization coexistence verification"
     ]
   },
@@ -73,9 +72,10 @@
     "screenshotTenImageLimit": false,
     "provider": "BELLO storage only; no direct ZAICO attachment retrieval or permission dependency",
     "pending": [
-      "uploads and changes through BELLO"
+      "physical iPhone camera/library verification"
     ],
-    "liveVerification": "BELLO product/damage counts and image delivery verified on B005557 (10) and B000004 (6)"
+    "liveVerification": "BELLO product/damage counts and image delivery verified on B005557 (10) and B000004 (6)",
+    "uploads": "Camera or photo library; normalize JPEG; append through BELLO only on explicit save; preserve existing images"
   },
   "receiptList": false,
   "dispatchList": false,
@@ -157,11 +157,29 @@
   "pending": [
     "ID-only staff account setup",
     "live existing ZAICO synchronization coexistence verification",
-    "image upload/edit through BELLO",
-    "new registration and code scanner",
-    "EC/sales integration",
     "real-device cross-device edit/readback verification",
     "native offline cold-start verification",
-    "Apple account and final distribution"
-  ]
+    "Apple account and final distribution",
+    "EC tab integration",
+    "physical iPhone camera/photo/date/keyboard verification"
+  ],
+  "registration": {
+    "implemented": true,
+    "sameEditor": true,
+    "sharedBelloCreate": true,
+    "stableIdAndReceipt": true,
+    "offlineDraftRetained": true
+  },
+  "sales": {
+    "implemented": true,
+    "source": "existing BELLO loadSalesSummary/loadSalesItems",
+    "features": [
+      "month selection",
+      "forecast",
+      "all seven totals",
+      "12-month sales and gross profit trend",
+      "on-demand item details"
+    ],
+    "permission": "requireMobileFeature sales; no data read when denied"
+  }
 }
