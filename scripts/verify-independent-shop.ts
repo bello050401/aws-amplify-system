@@ -1,0 +1,37 @@
+import assert from "node:assert/strict";
+import { createListingWorkflow, type Source, type Remote, type Client } from "../lib/listing/independentShop/workflow";
+import { createIndependentShopClient } from "../lib/listing/independentShop/client";
+import { independentShopConnection } from "../lib/listing/independentShop/connection";
+const checks:string[]=[];const ok=(name:string)=>{checks.push(name);console.log("PASS "+name)};
+const initial:Source={id:"item-1",name:"テーブル",sku:"B1",price:2000,description:"公開する商品説明",quantity:3,version:"v1",images:[{storageKey:"inventory/own.jpg",sortOrder:0}]};
+let role:string|null="EDITOR",source={...initial},remote:Remote|null=null,reads=0,uploads=0,saves=0,clock=Date.now(),configured=true;
+const key="bello_"+"a".repeat(64);
+let savedItem:Record<string,unknown>|null=null;
+const api:Client={find:async()=>remote,upload:async()=>{uploads++;return "/media/12345678-abcd.jpg"},save:async item=>{saves++;savedItem=item;if(remote&&item.revision!==remote.revision)throw Error("409");remote={id:"new-1",revision:(remote?.revision||0)+1,stock:Number(item.stock),status:"draft"};return {id:remote.id,revision:remote.revision}}};
+const flow=createListingWorkflow({role:async()=>role,source:async()=>{reads++;return source},client:async()=>configured?{api,signingKey:key}:null,image:async()=>new Blob(["fixture"],{type:"image/jpeg"}),now:()=>clock});
+async function main(){
+ const previousFlag=process.env.BELLO_SHOP_CONNECTION_ENABLED;
+ process.env.BELLO_SHOP_CONNECTION_ENABLED="0";
+ assert.equal(await independentShopConnection(),null);
+ if(previousFlag===undefined)delete process.env.BELLO_SHOP_CONNECTION_ENABLED;else process.env.BELLO_SHOP_CONNECTION_ENABLED=previousFlag;
+ ok("Connection is disabled by default and does not require AWS credentials");
+ for(const denied of [null,"VIEWER"]){role=denied;await assert.rejects(()=>flow.preview("item-1",1),/ログイン/)}assert.equal(reads,0);ok("Anonymous and VIEWER are rejected before data access");role="EDITOR";
+ await assert.rejects(()=>flow.preview("another-item",1),/商品ID/);ok("Mismatched source IDs are rejected");
+ const before=uploads;await assert.rejects(()=>flow.preview("item-1",4),/現在庫/);assert.equal(uploads,before);ok("Invalid stock cannot read or upload images");
+ configured=false;const local=await flow.preview("item-1",1);assert.equal(local.connected,false);assert.equal(local.token,null);await assert.rejects(()=>flow.commit("item-1",1,"",[]),/未設定/);ok("Missing connection permits preview only");configured=true;
+ const p=await flow.preview("item-1",1);assert.ok(p.token);assert.equal(uploads,0);assert.equal(saves,0);ok("Preview performs no image or product writes");
+ const token=p.token!;await assert.rejects(()=>flow.upload("item-1",1,token+"x",0),/確認/);assert.equal(uploads,0);ok("Tampered preview is rejected before image upload");
+ source={...source,version:"v2"};await assert.rejects(()=>flow.upload("item-1",1,token,0),/更新/);source={...initial};ok("Source changes invalidate previous approval");
+ clock+=16*60*1000;await assert.rejects(()=>flow.upload("item-1",1,token,0),/期限/);clock=Date.now();ok("Expired preview cannot be used");
+ const fresh=(await flow.preview("item-1",1)).token!;const receipt=await flow.upload("item-1",1,fresh,0);await assert.rejects(()=>flow.commit("item-1",1,fresh,[{...receipt,url:"/media/other.jpg"}]),/一致/);assert.equal(saves,0);ok("Image receipt cannot be swapped");
+ await flow.commit("item-1",1,fresh,[receipt]);assert.equal(savedItem!.status,"draft");assert.equal(savedItem!.externalId,"inventory:item-1");assert.equal(savedItem!.stock,1);assert.deepEqual(Object.keys(savedItem!).sort(),["basePrice","description","externalId","images","name","sku","status","stock"].sort());ok("Approved listing saves a draft with only public fields");
+ await assert.rejects(()=>flow.commit("item-1",1,fresh,[receipt]),/更新/);assert.equal(saves,1);ok("Replaying a completed save cannot create a duplicate");
+ const update=await flow.preview("item-1",1);remote={...remote!,revision:99,stock:0};await assert.rejects(()=>flow.upload("item-1",1,update.token!,0),/更新/);ok("Order-driven remote stock changes invalidate a pending update");
+ remote={...remote!,variants:[{}]};await assert.rejects(()=>flow.preview("item-1",1),/種類別/);ok("Variant stock cannot be overwritten by a scalar quantity");
+ let captured: {url:string;init:RequestInit}|null=null;
+ const client=createIndependentShopClient({apiKey:key,sitesServiceToken:"test-service"},async(url,init)=>{captured={url:String(url),init:init!};return Response.json({items:[]})});
+ await client.find("inventory:x");assert.ok(captured!.url.startsWith("https://bello-interior-independent.misty-loom-0065.chatgpt.site/api/v1/"));assert.equal(captured!.init.redirect,"error");assert.equal(captured!.init.cache,"no-store");ok("Credentials are sent only to the fixed site with redirects disabled");
+ const partial=createIndependentShopClient({apiKey:key,sitesServiceToken:"test"},async()=>Response.json({failed:1,results:[{ok:false,status:409}]},{status:207}));await assert.rejects(()=>partial.save({}),/更新/);ok("Partial-success HTTP responses cannot be reported as successful saves");
+ console.log(JSON.stringify({passed:checks.length,checks}));
+}
+main().catch(e=>{console.error(e);process.exitCode=1});
