@@ -1,0 +1,13 @@
+# Expo gives these public app assets content-hashed filenames. Reuse unchanged
+# code, fonts and branding on the phone; new releases automatically use new URLs.
+# Inventory/API responses and the HTML entry point keep their existing policies.
+# https://docs.aws.amazon.com/amplify/latest/userguide/setting-custom-headers.html
+customHeaders:
+  - pattern: '/staff-app/_expo/static/**'
+    headers:
+      - key: 'Cache-Control'
+        value: 'public, max-age=31536000, immutable'
+  - pattern: '/staff-app/assets/**'
+    headers:
+      - key: 'Cache-Control'
+        value: 'public, max-age=31536000, immutable'
