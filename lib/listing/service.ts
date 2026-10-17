@@ -863,14 +863,18 @@ export async function saveListingDraft(
 ): Promise<ListingDraftRecord> {
   if (!input.title.trim()) throw new Error("出品タイトルを入力してください。");
 
-  const inventory = await getInventoryDetail(inventoryId);
+  // いずれも独立した読み取り。書き込みは全取得と対象カテゴリーの検証後に行う。
+  const [inventory, categoryNameOf, existing] = await Promise.all([
+    getInventoryDetail(inventoryId),
+    loadCategoryNameLookup(),
+    getListingDraftForInventory(inventoryId),
+  ]);
   if (!inventory) throw new Error("対象の在庫が見つかりません。");
 
   // §12: 「direct route」「product detail listing action」「server
   // action」全部で対象外カテゴリーをブロックする — 一覧に出ていない
   // 商品でも、詳細画面や直接のServer Action呼び出しから下書きを作れて
   // しまう抜け道を防ぐ。
-  const categoryNameOf = await loadCategoryNameLookup();
   const categoryName = categoryNameOf(inventory.categoryId);
   if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
@@ -883,7 +887,6 @@ export async function saveListingDraft(
   const ordered = top ? [top, ...normal.filter((i) => i !== top)] : normal;
   const inventoryImages: ListingImageRef[] = ordered.map((img, idx) => ({ storageKey: img.storageKey, sortOrder: idx }));
 
-  const existing = await getListingDraftForInventory(inventoryId);
   const fields = {
     title: input.title.trim(),
     description: input.description.trim() || undefined,
