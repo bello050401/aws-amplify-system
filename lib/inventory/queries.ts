@@ -10,7 +10,7 @@ import { parseCustomFields } from "./customFieldsCodec";
 import type { InventoryExtendedFields } from "./extendedFields";
 import { effectiveListThumbnailKey, normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
 import { resolveDisplayInventoryId } from "./inventoryId";
-import { evaluateQuery, matchesQuickSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
+import { evaluateQuery, matchesQuickSearch, matchesNameSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 import { searchInventoryFast, type FastSearchInput } from "./inventorySearchFast";
 import {
   isE2EFixtureModeActive,
@@ -587,14 +587,14 @@ export async function listInventoryMobileSearch(
   input: { q?: string; categoryIds?: string[]; advanced: AdvancedSearchQuery; sort: InventorySort },
   fieldsByKey: Map<string, SearchFieldDef>, options: { offset: number; limit: number },
 ): Promise<SearchPage<InventoryListRow>> {
-  const fast = await trySearchFast({filters:{categoryIds:input.categoryIds},q:input.q,
+  const fast = await trySearchFast({filters:{categoryIds:input.categoryIds},q:input.q,nameOnly:true,
     advanced:{query:input.advanced,fieldsByKey},sort:input.sort,fieldsByKey},options);
   if (fast) return fast;
   const conditions: Record<string, unknown>[] = [];
   if (input.categoryIds?.length) conditions.push({or:input.categoryIds.map(id=>({categoryId:{eq:id}}))});
   const all = await fetchAllInventoryRecords(conditions);
   const filtered = all.filter(row => evaluateQuery(row as unknown as SearchableRecord,input.advanced,fieldsByKey) &&
-    (!input.q || matchesQuickSearch(row as unknown as SearchableRecord,input.q)));
+    (!input.q || matchesNameSearch(row as unknown as SearchableRecord,input.q)));
   filtered.sort((a,b)=>inventoryComparator(input.sort,fieldsByKey)(a as unknown as Record<string,unknown>,b as unknown as Record<string,unknown>));
   return {items:filtered.slice(options.offset,options.offset+options.limit),total:filtered.length,
     totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0),...options};

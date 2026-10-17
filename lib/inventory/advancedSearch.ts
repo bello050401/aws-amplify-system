@@ -302,6 +302,12 @@ export function matchesQuickSearch(record: SearchableRecord, q: string): boolean
   );
 }
 
+/** Staff app's text box searches product names; code scanning uses a separate barcode condition. */
+export function matchesNameSearch(record: SearchableRecord, q: string): boolean {
+  const needle = q.trim();
+  return !needle || ciIncludes(toStr(record.name), needle);
+}
+
 // ────────────────────────────────────────────────────────────────────
 // 検索対象フィールドの登録(metadata-driven) — spec §7の最低限リストを
 // 網羅する静的フィールドに、CustomFieldDefinition由来の動的フィールド

@@ -5,7 +5,7 @@ import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { getMobileSession } from "@/lib/mobile/session";
 import { buildSearchFieldDefs, emptyAdvancedQuery } from "@/lib/inventory/advancedSearch";
 import { mobileSearchFields, searchValidation, DEFAULT_INVENTORY_SORT, type AdvancedSearchQuery, type InventorySort } from "@/mobile/src/domain/search";
-import { listCategories, listLocations, listStatuses, listInventory, listInventorySimpleSearch, listInventoryMobileSearch, listCustomFieldDefinitions } from "@/lib/inventory/queries";
+import { listCategories, listLocations, listStatuses, listInventory, listInventoryMobileSearch, listCustomFieldDefinitions } from "@/lib/inventory/queries";
 import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
 import { listInventoryPrimaryPhotoThumbnailsAction } from "@/app/actions/photoRegistration";
 import { resolveListPhotoUrl } from "@/lib/photoRegistration/gallerySelection";
@@ -41,9 +41,9 @@ export async function GET(request: Request) {
     } catch {return NextResponse.json({error:"INVALID_QUERY"},{status:400,headers});}
     const filters = { ...(q ? { q } : {}), ...(categoryId ? { categoryIds: [categoryId] } : {}) };
     const options = { offset, limit: 50 };
-    const fullSearch = advanced.conditions.length > 0 || sort.field !== "updatedAt" || sort.direction !== "desc";
-    const indexed = q || fullSearch ? null : await listInventoryOffsetPage(filters, options);
-    const page = fullSearch ? await listInventoryMobileSearch({...filters,advanced,sort},new Map(fields.map(field=>[field.key,field])),options) : indexed?.usedIndex ? indexed : q ? await listInventorySimpleSearch(filters, options) : await listInventory(filters, options);
+    const fullSearch = Boolean(q) || advanced.conditions.length > 0 || sort.field !== "updatedAt" || sort.direction !== "desc";
+    const indexed = fullSearch ? null : await listInventoryOffsetPage(filters, options);
+    const page = fullSearch ? await listInventoryMobileSearch({...filters,advanced,sort},new Map(fields.map(field=>[field.key,field])),options) : indexed?.usedIndex ? indexed : await listInventory(filters, options);
     const photoResult = await listInventoryPrimaryPhotoThumbnailsAction(page.items.map(row => row.id)).catch(() => null);
     const hasMore = "hasNext" in page ? page.hasNext : page.offset + page.items.length < page.total;
     const categoryNames = new Map(categories.map((row) => [row.id, row.name]));

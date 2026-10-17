@@ -1,12 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {buildSearchFieldDefs,evaluateQuery,type AdvancedSearchQuery} from "../../lib/inventory/advancedSearch";
+import {buildSearchFieldDefs,evaluateQuery,matchesNameSearch,matchesQuickSearch,type AdvancedSearchQuery} from "../../lib/inventory/advancedSearch";
 import {inventoryComparator} from "../../lib/inventory/searchSort";
 import {buildScanProjection} from "../../lib/inventory/searchScanProjection";
 import {mobileSearchFields,searchValidation,cachedInventorySearch,cachedSearchFields} from "../src/domain/search";
 import {previewItems} from "../src/preview/fixture";
 const fields=mobileSearchFields(buildSearchFieldDefs([],{categories:[{id:"z",name:"A"},{id:"a",name:"B"}],locations:[],statuses:[]}),{sales:true,ecListing:true});
 const map=new Map(fields.map(field=>[field.key,field]));
+
+test("商品名の検索は管理番号・コードを含めず、コードの詳細検索は維持",()=>{
+  const item={...previewItems[0],name:"Herman Miller Chair",sku:"B005854",barcode:"202601030000",displayId:"73770285",customFields:null};
+  const defs=cachedSearchFields([item],{sales:true,ecListing:true});
+  assert.equal(matchesNameSearch(item,"  miller "),true);
+  assert.equal(cachedInventorySearch([item],{q:"miller"},defs).length,1);
+  for(const value of [item.sku,item.barcode,item.displayId]){
+    assert.equal(matchesNameSearch(item,value),false);
+    assert.equal(cachedInventorySearch([item],{q:value},defs).length,0);
+  }
+  assert.equal(matchesQuickSearch(item,item.sku),true);
+  assert.equal(cachedInventorySearch([item],{advanced:{combinator:"AND",conditions:[{id:"scan",field:"barcode",operator:"equals",value:item.barcode}]}},defs).length,1);
+});
 test("全体を数値順に並べてから50件ずつ取り出す・同値も安定",()=>{
   const records=Array.from({length:123},(_,i)=>({id:String(i).padStart(3,"0"),quantity:i%70,customFields:null}));
   const sorted=records.sort(inventoryComparator({field:"quantity",direction:"desc"},map));

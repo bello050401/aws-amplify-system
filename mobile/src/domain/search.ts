@@ -1,4 +1,4 @@
-import { buildSearchFieldDefs, evaluateQuery, isConditionComplete, operatorsForType, operatorNeedsNoValue, operatorNeedsSecondValue, type AdvancedSearchQuery, type SearchFieldDef } from "../../../lib/inventory/advancedSearch";
+import { buildSearchFieldDefs, evaluateQuery, matchesNameSearch, isConditionComplete, operatorsForType, operatorNeedsNoValue, operatorNeedsSecondValue, type AdvancedSearchQuery, type SearchFieldDef } from "../../../lib/inventory/advancedSearch";
 import { DEFAULT_INVENTORY_SORT, inventoryComparator, type InventorySort } from "../../../lib/inventory/searchSort";
 import { DETAIL_FIELDS, validCalendarDate } from "./detailFields";
 import type { MobileFeatures } from "./access";
@@ -46,7 +46,7 @@ export function cachedInventorySearch(items: InventoryItem[], input: InventorySe
   const compare=inventoryComparator(input.sort ?? DEFAULT_INVENTORY_SORT,defs);
   return records.filter(({item,record})=>{
     if (input.category && item.category!==input.category) return false;
-    if (input.q && !`${item.name} ${item.sku} ${item.displayId ?? ""} ${item.barcode}`.toLocaleLowerCase().includes(input.q.toLocaleLowerCase().trim())) return false;
+    if (input.q && !matchesNameSearch(record, input.q)) return false;
     if (!input.advanced?.conditions.length) return true;
     // Unfetched details are unknown, never misreported as empty fields.
     const results = input.advanced.conditions.map(condition=>{

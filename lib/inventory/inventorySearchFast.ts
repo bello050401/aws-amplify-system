@@ -8,6 +8,7 @@ import { resolveDisplayInventoryId } from "./inventoryId";
 import {
   evaluateQuery,
   matchesQuickSearch,
+  matchesNameSearch,
   type AdvancedSearchQuery,
   type SearchFieldDef,
   type SearchableRecord,
@@ -214,6 +215,7 @@ export interface FastSearchInput {
   fieldsByKey?: Map<string, SearchFieldDef>;
   /** クイック検索の文字列(在庫ID/SKU/物品名の部分一致)。 */
   q?: string;
+  nameOnly?: boolean;
   /** 詳細検索。 */
   advanced?: { query: AdvancedSearchQuery; fieldsByKey: Map<string, SearchFieldDef> };
 }
@@ -271,7 +273,7 @@ export async function searchInventoryFast(
   const q = input.q?.trim();
   const filtered = candidates.filter((record) => {
     if (input.advanced && !evaluateQuery(record, input.advanced.query, input.advanced.fieldsByKey)) return false;
-    if (q && !matchesQuickSearch(record, q)) return false;
+    if (q && !(input.nameOnly ? matchesNameSearch(record, q) : matchesQuickSearch(record, q))) return false;
     return true;
   });
   filtered.sort(input.sort ? inventoryComparator(input.sort, input.fieldsByKey ?? input.advanced?.fieldsByKey ?? new Map()) : compareByUpdatedAtDesc);
