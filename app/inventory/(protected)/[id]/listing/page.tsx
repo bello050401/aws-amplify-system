@@ -6,6 +6,7 @@ import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/se
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
+import { IndependentShopPanel } from "./IndependentShopPanel";
 import { MercariPrivateCreatePreparationPanel } from "./MercariPrivateCreatePreparationPanel";
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
 import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
@@ -123,6 +124,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
           initialChannelListing={channelListing}
           canPrepareMercari={role === "ADMIN"}
         />
+        <IndependentShopPanel inventoryId={item.id} quantity={item.quantity} />
         {role === "ADMIN" && (
           item.id.toLowerCase() === "5b0f3587-cbbb-4c09-ae78-595b2b3e353f" ?
             <MercariPrivateCreatePreparationPanel inventoryId={item.id} /> :
