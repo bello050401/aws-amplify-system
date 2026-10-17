@@ -5,5 +5,3 @@ module.exports = {
     return operation({});
   },
 };
-
-module.exports.runWithUserPoolServerContext = module.exports.runWithAmplifyServerContext;

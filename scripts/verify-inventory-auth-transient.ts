@@ -13,7 +13,7 @@ const mocks = root + "scripts/__mocks__/";
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "aws-amplify/auth/server") return { url: mocks + "inventoryAuthMiddleware.fetchAuthSession.mock.cjs", shortCircuit: true };
-    if (specifier === "@/lib/amplify/userPoolServer" || (specifier === "./userPoolServer" && context.parentURL?.includes("/lib/amplify/requireInventoryUser"))) {
+    if (specifier === "@/lib/amplify/serverUtils" || (specifier === "./serverUtils" && context.parentURL?.includes("/lib/amplify/requireInventoryUser"))) {
       return { url: mocks + "inventoryAuthTransient.serverUtils.mock.cjs", shortCircuit: true };
     }
     if (!specifier.startsWith("@/")) return nextResolve(specifier, context);

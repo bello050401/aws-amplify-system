@@ -2,7 +2,7 @@ import { requestCache } from "./requestCache";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { fetchAuthSession } from "aws-amplify/auth/server";
-import { runWithUserPoolServerContext } from "./userPoolServer";
+import { runWithAmplifyServerContext } from "./serverUtils";
 import { isCognitoRateLimitError } from "./cognitoTransientError";
 
 export type InventoryRole = "ADMIN" | "EDITOR" | "VIEWER";
@@ -93,7 +93,7 @@ export const getInventorySessionStatus = requestCache(async function getInventor
   const bypassRole = getE2EBypassRole();
   if (bypassRole) return { kind: "authorized", role: bypassRole };
   try {
-    return await runWithUserPoolServerContext({
+    return await runWithAmplifyServerContext({
       nextServerContext: { cookies },
       operation: async (contextSpec) => {
         const session = await fetchAuthSession(contextSpec);
@@ -126,7 +126,7 @@ export function canHardDeleteInventory(role: InventoryRole | null): boolean {
 /** 書き込み系のアクションは createdBy/updatedBy/changedBy で繰り返しこれを呼ぶ。理由は getInventorySessionStatus と同じ。 */
 export const getCurrentInventoryUserEmail = requestCache(async function getCurrentInventoryUserEmail(): Promise<string | null> {
   try {
-    return await runWithUserPoolServerContext({
+    return await runWithAmplifyServerContext({
       nextServerContext: { cookies },
       operation: async (contextSpec) => {
         const session = await fetchAuthSession(contextSpec);
@@ -143,7 +143,7 @@ export const getCurrentInventoryUserEmail = requestCache(async function getCurre
 /** Stable Cognito owner key for owner-scoped, immutable trial events. */
 export const getCurrentInventoryUserSub = requestCache(async function getCurrentInventoryUserSub(): Promise<string | null> {
   try {
-    return await runWithUserPoolServerContext({
+    return await runWithAmplifyServerContext({
       nextServerContext: { cookies },
       operation: async (contextSpec) => {
         const session = await fetchAuthSession(contextSpec);
