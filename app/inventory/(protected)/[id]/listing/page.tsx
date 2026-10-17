@@ -17,7 +17,6 @@ import { webHttpDraftTargetAllowed } from
 import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { findBrandByName } from "@/lib/brands/catalog";
-import { getNextEngineMasterSync } from "@/lib/listing/nextEngine/masterSync";
 import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
 import { InventoryAuthTemporarilyUnavailable } from "../../InventoryAuthTemporarilyUnavailable";
 
@@ -64,13 +63,12 @@ export default async function ListingPage({ params }: { params: { id: string } }
       listCategories(item.categoryId),
       listStatuses(),
       listInventoryPhotoAssetsAction(item.id),
-      getNextEngineMasterSync(item.id),
     ] as const);
   } catch (error) {
     if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
     throw error;
   }
-  const [draft, channelListing, categories, statuses, photoAssetsResult, nextEngineSync] = detailRead;
+  const [draft, channelListing, categories, statuses, photoAssetsResult] = detailRead;
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
   const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
@@ -134,10 +132,7 @@ export default async function ListingPage({ params }: { params: { id: string } }
           photoAssets={photoAssets}
           initialDraft={draft}
           initialChannelListing={channelListing}
-          initialNextEngineSync={nextEngineSync}
-          canSendNextEngine={role === "ADMIN"}
-          nextEngineUploadEnabled={process.env.NEXT_ENGINE_MASTER_UPLOAD_ENABLED === "1" &&
-            process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
+          canPrepareMercari={role === "ADMIN"}
         />
         {role === "ADMIN" && (
           item.id.toLowerCase() === "5b0f3587-cbbb-4c09-ae78-595b2b3e353f" ?

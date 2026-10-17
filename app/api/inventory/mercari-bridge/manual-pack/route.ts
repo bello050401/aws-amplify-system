@@ -23,7 +23,6 @@ const canonical = (value: unknown): unknown => Array.isArray(value) ?
 
 /** The PC's signed-in BELLO profile rechecks every selected value and image key. */
 export async function POST(request: NextRequest) {
-  if (process.env.NEXT_ENGINE_ISOLATED_APP === "1") return reply({ ok: false }, 404);
   const headerFailure = bridgePostHeaderFailure({
     origin: request.headers.get("origin"), requestOrigin: request.nextUrl.origin,
     configuredPublicOrigin: process.env.MERCARI_BRIDGE_PUBLIC_ORIGIN,

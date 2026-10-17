@@ -5,7 +5,6 @@ import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { listAllCustomFieldDefinitions } from "@/lib/inventory/queries";
 import { getZaicoTokenSource } from "@/lib/zaico/client";
 import { getBaseConnectionState } from "@/lib/base/connectionState";
-import { getNextEngineConnectionState } from "@/lib/listing/nextEngine/connectionState";
 import { getLineTokenSource } from "@/lib/messaging/line/tokenAccess";
 import { InventoryHeader } from "../../InventoryHeader";
 import { SettingsTabs } from "./SettingsTabs";
@@ -94,14 +93,13 @@ export default async function InventorySettingsPage() {
         getZaicoTokenSource(),
         getLineTokenSource(),
         getBaseConnectionState(host),
-        role === "ADMIN" ? getNextEngineConnectionState() : Promise.resolve("CONFIGURATION_REQUIRED" as const),
       ]) };
     } catch (error) {
       return { ok: false as const, fallback: settingsAuthFallback(error) };
     }
   })();
   if (!settingsRead.ok) return settingsRead.fallback;
-  const [categories, locations, units, customFields, zaicoTokenSource, lineTokenSource, baseConnection, nextEngineConnection] = settingsRead.value;
+  const [categories, locations, units, customFields, zaicoTokenSource, lineTokenSource, baseConnection] = settingsRead.value;
   // isZaicoConnected()相当の真偽値はzaicoTokenSourceから導出する — Secrets
   // Managerへ二重にGetSecretValueを呼ばないため(以前はisZaicoConnected()
   // とgetZaicoTokenSource()を両方呼ぶと同じ呼び出しが2回発生していた)。
@@ -124,12 +122,6 @@ export default async function InventorySettingsPage() {
           zaicoConnected={zaicoConnected}
           zaicoTokenSource={zaicoTokenSource}
           baseConnection={baseConnection}
-          nextEngineConnection={nextEngineConnection}
-          nextEnginePrivateTestEnabled={process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED === "1" &&
-            process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
-          nextEnginePrivateRetestEnabled={process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_V2_ENABLED === "1" &&
-            process.env.NEXT_ENGINE_PRIVATE_MASTER_TEST_ENABLED !== "1" &&
-            process.env.NEXT_ENGINE_NO_AUTO_MALL_SYNC_CONFIRMED === "1"}
           mercariPrivateCreateTrialEnabled={privateCreateTrialEnabled(
             process.env.MERCARI_PRIVATE_CREATE_TRIAL_ENABLED,
             process.env.MERCARI_BRIDGE_PUBLIC_ORIGIN)}
