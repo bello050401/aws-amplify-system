@@ -24,6 +24,9 @@ frontend:
         # Staff-confirmed EC list operations only. This does not enable the pricing scheduler.
         - if [ "$AWS_APP_ID" = "d4hkkg7dty2du" ] && [ "$AWS_BRANCH" = "claude/inventory-management-system-5vbvc7" ]; then echo "BASE_MANUAL_LISTING_ENABLED=1" >> .env.production; fi
         - echo "BELLO_MOBILE_WRITES_ENABLED=${BELLO_MOBILE_WRITES_ENABLED:-false}" >> .env.production
+        # Explicit opt-in for the owner-only BELLO shop connector on this staging branch.
+        # Credentials stay in the dedicated server-side Secret, never in build variables.
+        - if [ "$AWS_APP_ID" = "d4hkkg7dty2du" ] && [ "$AWS_BRANCH" = "claude/inventory-management-system-5vbvc7" ]; then echo "BELLO_SHOP_CONNECTION_ENABLED=${BELLO_SHOP_CONNECTION_ENABLED:-0}" >> .env.production; fi
         - if [ "$AWS_APP_ID" = "d4hkkg7dty2du" ] && [ "$AWS_BRANCH" = "claude/inventory-management-system-5vbvc7" ]; then echo "BELLO_MOBILE_PUBLIC_ORIGIN=https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com" >> .env.production; fi
         # Exact non-secret HTTPS Origin accepted for the staging Mercari read-result POST.
         # Amplify's internal Next URL may differ from the browser-visible hostname.

@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { EC_CHANNEL_LABEL, EC_CHANNELS, type EcChannel } from "@/lib/listing/ecManagement";
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
 import { YahooAuctionListingSection } from "./YahooAuctionListingSection";
+import { IndependentShopPanel } from "./IndependentShopPanel";
 import { MercariShopsLifecycleSection } from "./MercariShopsLifecycleSection";
 import type { InventoryDetail } from "@/lib/inventory/queries";
 import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
@@ -56,10 +57,10 @@ export function ListingWorkspace({
 }) {
   const params = useSearchParams();
   const requested = params.get("channel");
-  const initialTab: "COMMON" | EcChannel = EC_CHANNELS.includes(requested as EcChannel)
+  const initialTab: "COMMON" | "INDEPENDENT" | EcChannel = canPrepareMercari && requested === "INDEPENDENT" ? "INDEPENDENT" : EC_CHANNELS.includes(requested as EcChannel)
     ? (requested as EcChannel)
     : "COMMON";
-  const [tab, setTab] = useState<"COMMON" | EcChannel>(initialTab);
+  const [tab, setTab] = useState<"COMMON" | "INDEPENDENT" | EcChannel>(initialTab);
   const [visited, setVisited] = useState<Set<string>>(() => new Set([initialTab]));
   const [draft, setDraft] = useState(initialDraft);
   const [dirty, setDirty] = useState(false);
@@ -95,7 +96,7 @@ export function ListingWorkspace({
         </Link>
       </div>
       <div role="tablist" aria-label="編集する商品情報" className="mb-4 flex gap-1 overflow-x-auto border-b">
-        {(["COMMON", ...EC_CHANNELS] as const).map((value) => (
+        {(["COMMON", ...EC_CHANNELS, ...(canPrepareMercari ? ["INDEPENDENT" as const] : [])] as const).map((value) => (
           <button
             type="button"
             key={value}
@@ -107,7 +108,7 @@ export function ListingWorkspace({
             }}
             className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm ${tab === value ? "border-blue-700 font-bold text-blue-800" : "border-transparent text-gray-500"}`}
           >
-            {value === "COMMON" ? "共通の商品情報" : EC_CHANNEL_LABEL[value]}
+            {value === "COMMON" ? "共通の商品情報" : value === "INDEPENDENT" ? "BELLO自社サイト" : EC_CHANNEL_LABEL[value]}
           </button>
         ))}
       </div>
@@ -222,6 +223,13 @@ export function ListingWorkspace({
           >
             BASEの接続設定
           </Link>
+        </div>
+      )}
+      {canPrepareMercari && visited.has("INDEPENDENT") && (
+        <div hidden={tab !== "INDEPENDENT"}>
+          <fieldset disabled={dirty}>
+            <IndependentShopPanel inventoryId={item.id} quantity={item.quantity} />
+          </fieldset>
         </div>
       )}
     </div>
