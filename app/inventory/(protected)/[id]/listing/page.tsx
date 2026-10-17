@@ -16,6 +16,7 @@ import { webHttpDraftTargetAllowed } from
   "@/lib/listing/mercariBridge/webHttpDraftJob";
 import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
+import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
 import { InventoryAuthTemporarilyUnavailable } from "../../InventoryAuthTemporarilyUnavailable";
@@ -63,12 +64,13 @@ export default async function ListingPage({ params }: { params: { id: string } }
       listCategories(item.categoryId),
       listStatuses(),
       listInventoryPhotoAssetsAction(item.id),
+      getShippingReferencePriceForInventory(item).catch(() => null),
     ] as const);
   } catch (error) {
     if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
     throw error;
   }
-  const [draft, channelListing, categories, statuses, photoAssetsResult] = detailRead;
+  const [draft, channelListing, categories, statuses, photoAssetsResult, shippingReference] = detailRead;
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
   const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
@@ -108,23 +110,10 @@ export default async function ListingPage({ params }: { params: { id: string } }
             既存メルカリShops商品を照合する
           </Link>}
         </div>
-        {/* 2026-09-04 EC出品改修指示書 §2/§3: PCでは右側に在庫詳細を出す。
-            以前はここが `max-w-2xl` の1カラムで、PC表示でも画面の左半分
-            しか使っていなかった。
-
-            【なぜ xl(1280px) で切るのか】出品フォームは max-w-2xl(672px)、
-            右パネルは 320px、間隔とページの左右余白(px-6)を足すと
-            約1,064px 必要になる。ナビレール(w-16=64px)がその外側にあるので、
-            lg(1024px)では右パネルが潰れて読めない。§3の「タブレット等に
-            ついては適切なブレークポイントを設定」に対する答えがこれで、
-            iPhone・iPadは従来どおり1カラム、そこから先で2カラムになる。
-
-            【モバイルで下へ回さない】§3が明示している。右パネルはPC作業を
-            効率化するためのもので、狭い画面では出品フォームの操作を
-            邪魔するだけ。`hidden xl:block` で**描画ごと**落とす(具体的な
-            幅の割り振り・レイアウトはListingWorkspace.tsx側に集約した)。 */}
+        {/* Desktop: basic information and reference price on the right; mobile: retain that order below the form. */}
         <ListingWorkspace
           item={item}
+          shippingReference={shippingReference}
           brandLogoAvailable={Boolean(findBrandByName(typeof item.customFields?.belloBrand === "string" ? item.customFields.belloBrand : "")?.logoUrl)}
           categoryName={categoryName}
           statusName={statusName}

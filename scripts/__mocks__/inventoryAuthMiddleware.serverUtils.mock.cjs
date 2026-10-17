@@ -51,3 +51,5 @@ async function runWithAmplifyServerContext({ nextServerContext, operation }) {
 }
 
 module.exports = { runWithAmplifyServerContext };
+
+module.exports.runWithUserPoolServerContext = module.exports.runWithAmplifyServerContext;

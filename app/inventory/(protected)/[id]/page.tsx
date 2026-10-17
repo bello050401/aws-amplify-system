@@ -1,3 +1,5 @@
+import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
+import { ShippingReferencePriceSection } from "./listing/ShippingReferencePriceSection";
 import Link from "next/link";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
@@ -148,12 +150,13 @@ export default async function InventoryDetailPage({
     relatedRead = await Promise.all([
       listCategories(item.categoryId),
       listLocations(item.locationId),
+      getShippingReferencePriceForInventory(item).catch(() => null),
     ] as const);
   } catch (error) {
     if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
     throw error;
   }
-  const [categories, locations] = relatedRead;
+  const [categories, locations, shippingReference] = relatedRead;
 
   const category = item.categoryId ? categories.find((c) => c.id === item.categoryId) : undefined;
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;
@@ -342,6 +345,7 @@ export default async function InventoryDetailPage({
             <DetailSection title="基本情報">
               <DetailInfoTable rows={basicRows} />
             </DetailSection>
+            <ShippingReferencePriceSection key={item.id} inventoryId={item.id} initialResult={shippingReference} />
 
             {/* 販売情報 / サイズ情報 / コンディション — レジストリ駆動、
                 並び順・ラベル・型・単位の定義はextendedFields.tsの1箇所

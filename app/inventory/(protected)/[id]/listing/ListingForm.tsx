@@ -11,7 +11,6 @@ import { buildManualListingText } from "@/lib/listing/manualListingText";
 import { buildShippingWarning, withCurrentShippingWarning } from "@/lib/ai/productPage/listingFacts";
 import type { SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
 import { ShippingEstimateSection } from "./ShippingEstimateSection";
-import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
 import { BaseListingSection } from "./BaseListingSection";
 import { MercariShopsLifecycleSection } from "./MercariShopsLifecycleSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
@@ -608,13 +607,7 @@ export function ListingForm({
           上の出品履歴と同じ理由でChannelListing存在時のみ表示する。 */}
       {channelListing && <ShippingEstimateSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
 
-      {/* BELLO統合業務OS ZAICO級高速化・完成保証最大化版(2026-08-30) §31/§46:
-          送料込み参考価格。ShippingEstimateSectionと違いChannelListing
-          の有無に依存しない(出品準備前でも販売予定金額・寸法さえあれば
-          表示できる読み取り専用の目安)。 */}
-      <ShippingReferencePriceSection inventoryId={inventoryId} />
-
-      {/* BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASEを
+{/* BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASEを
           「別システムだから」と対象外にせず、Mercariと並列のチャネルと
           して扱う。draftの有無だけを条件にする(BASEはMercariと違い
           カテゴリーマッピング等の事前設定が必須ではないため)。 */}

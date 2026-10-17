@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { fetchAuthSession } from "aws-amplify/auth/server";
-import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
+import { runWithUserPoolServerContext } from "@/lib/amplify/userPoolServer";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 
 /**
@@ -126,7 +126,7 @@ export async function middleware(request: NextRequest) {
     return response;
   }
   try {
-    await runWithAmplifyServerContext({
+    await runWithUserPoolServerContext({
       nextServerContext: { request, response },
       operation: (contextSpec) => fetchAuthSession(contextSpec),
     });

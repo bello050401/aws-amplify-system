@@ -22,13 +22,16 @@ import type { ShippingMeasurementEvidence } from "@/lib/shipping/referencePrice"
  *  - 代表3地域だけでなく、ShippingRateに登録されている**全地域**を
  *    展開して参照できるようにする。
  */
-export function ShippingReferencePriceSection({ inventoryId }: { inventoryId: string }) {
-  const [result, setResult] = useState<GetShippingReferencePriceResult | null>(null);
+export function ShippingReferencePriceSection({ inventoryId, initialResult }: { inventoryId: string; initialResult?: GetShippingReferencePriceResult | null }) {
+  const [result, setResult] = useState<GetShippingReferencePriceResult | null>(initialResult ?? null);
   const [error, setError] = useState<string | null>(null);
   const [showAllRegions, setShowAllRegions] = useState(false);
   const [regionQuery, setRegionQuery] = useState("");
 
   useEffect(() => {
+    if (initialResult) { setResult(initialResult); setError(null); return; }
+    setResult(null);
+    setError(null);
     let cancelled = false;
     getShippingReferencePriceAction(inventoryId)
       .then((r) => {
@@ -40,7 +43,7 @@ export function ShippingReferencePriceSection({ inventoryId }: { inventoryId: st
     return () => {
       cancelled = true;
     };
-  }, [inventoryId]);
+  }, [inventoryId, initialResult]);
 
   const view = result && result.available ? result.view : null;
   // useMemoで包むのは、毎レンダーで新しい配列リテラルが生まれると

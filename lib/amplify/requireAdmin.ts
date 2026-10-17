@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { fetchAuthSession } from "aws-amplify/auth/server";
-import { runWithAmplifyServerContext } from "./serverUtils";
+import { runWithUserPoolServerContext } from "./userPoolServer";
 import { resolveAppOrigin } from "@/lib/http/appOrigin";
 
 export type SessionStatus = "admin" | "signed-in-not-admin" | "signed-out";
@@ -16,7 +16,7 @@ export type SessionStatus = "admin" | "signed-in-not-admin" | "signed-out";
  */
 export async function getSessionStatus(): Promise<SessionStatus> {
   try {
-    return await runWithAmplifyServerContext({
+    return await runWithUserPoolServerContext({
       nextServerContext: { cookies },
       operation: async (contextSpec) => {
         const session = await fetchAuthSession(contextSpec);

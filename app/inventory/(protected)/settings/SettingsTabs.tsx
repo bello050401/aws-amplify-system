@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import type { MasterEntry } from "@/lib/inventory/masters";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
@@ -10,18 +11,18 @@ import type { BaseConnectionState } from "@/lib/base/connectionState";
 import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
-import { ZaicoSyncPanel } from "./ZaicoSyncPanel";
-import { ZaicoDuplicateAuditPanel } from "./ZaicoDuplicateAuditPanel";
-import { ThumbnailBackfillPanel } from "./ThumbnailBackfillPanel";
-import { ListingPartitionBackfillPanel } from "./ListingPartitionBackfillPanel";
-import { BaseSettingsPanel } from "./BaseSettingsPanel";
-import { MercariPcConnectionPanel } from "./MercariPcConnectionPanel";
-import { MercariPrivateCreateTrialPanel } from "./MercariPrivateCreateTrialPanel";
-import { ShippingRatePanel } from "./ShippingRatePanel";
-import { LineSettingsPanel } from "./LineSettingsPanel";
-import { SystemAuditPanel } from "./SystemAuditPanel";
-import { PhotoProfilePanel } from "./PhotoProfilePanel";
-import { ProductDescriptionPanel } from "./ProductDescriptionPanel";
+const ZaicoSyncPanel = dynamic(() => import("./ZaicoSyncPanel").then(m => m.ZaicoSyncPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const ZaicoDuplicateAuditPanel = dynamic(() => import("./ZaicoDuplicateAuditPanel").then(m => m.ZaicoDuplicateAuditPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const ThumbnailBackfillPanel = dynamic(() => import("./ThumbnailBackfillPanel").then(m => m.ThumbnailBackfillPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const ListingPartitionBackfillPanel = dynamic(() => import("./ListingPartitionBackfillPanel").then(m => m.ListingPartitionBackfillPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const BaseSettingsPanel = dynamic(() => import("./BaseSettingsPanel").then(m => m.BaseSettingsPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const MercariPcConnectionPanel = dynamic(() => import("./MercariPcConnectionPanel").then(m => m.MercariPcConnectionPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const MercariPrivateCreateTrialPanel = dynamic(() => import("./MercariPrivateCreateTrialPanel").then(m => m.MercariPrivateCreateTrialPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const ShippingRatePanel = dynamic(() => import("./ShippingRatePanel").then(m => m.ShippingRatePanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const LineSettingsPanel = dynamic(() => import("./LineSettingsPanel").then(m => m.LineSettingsPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const SystemAuditPanel = dynamic(() => import("./SystemAuditPanel").then(m => m.SystemAuditPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const PhotoProfilePanel = dynamic(() => import("./PhotoProfilePanel").then(m => m.PhotoProfilePanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const ProductDescriptionPanel = dynamic(() => import("./ProductDescriptionPanel").then(m => m.ProductDescriptionPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 
 interface SettingsTabsProps {
   categories: MasterEntry[];

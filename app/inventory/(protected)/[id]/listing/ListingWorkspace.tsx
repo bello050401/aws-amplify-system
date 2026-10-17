@@ -7,6 +7,8 @@ import type { ChannelListingRecord, ListingDraftRecord, ListingShippingMethod } 
 import { DEFAULT_LISTING_SHIPPING_METHOD } from "@/lib/listing/types";
 import { ListingForm } from "./ListingForm";
 import { InventoryFactsPanel } from "./InventoryFactsPanel";
+import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
+import type { GetShippingReferencePriceResult } from "@/lib/shipping/service";
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 
 /**
@@ -31,6 +33,7 @@ export function ListingWorkspace({
   initialDraft,
   initialChannelListing,
   canPrepareMercari,
+  shippingReference,
 }: {
   item: InventoryDetail;
   brandLogoAvailable: boolean;
@@ -41,6 +44,7 @@ export function ListingWorkspace({
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
   canPrepareMercari: boolean;
+  shippingReference: GetShippingReferencePriceResult | null;
 }) {
   // §1 既定は「らくらく家財便」。保存済みの下書きがあればその選択を復元する。
   const [shippingMethod, setShippingMethod] = useState<ListingShippingMethod>(
@@ -71,8 +75,9 @@ export function ListingWorkspace({
           onShippingMethodChange={setShippingMethod}
         />
       </div>
-      <div className="hidden min-w-0 xl:block xl:sticky xl:top-4 xl:max-h-[calc(100vh_-_96px_-_2rem)] xl:grow xl:shrink xl:basis-80 xl:max-w-md xl:overflow-y-auto 2xl:basis-96 2xl:max-w-lg">
+      <div className="min-w-0 xl:sticky xl:top-4 xl:max-h-[calc(100vh_-_96px_-_2rem)] xl:grow xl:shrink xl:basis-80 xl:max-w-md xl:overflow-y-auto 2xl:basis-96 2xl:max-w-lg">
         <InventoryFactsPanel item={item} categoryName={categoryName} statusName={statusName} shippingMethod={shippingMethod} />
+        <ShippingReferencePriceSection key={item.id} inventoryId={item.id} initialResult={shippingReference} />
       </div>
     </div>
   );

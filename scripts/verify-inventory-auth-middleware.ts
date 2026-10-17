@@ -26,7 +26,7 @@
  * mock(SDK境界——実Cognito/実AWS設定を要る層だけを差し替える):
  *   - "aws-amplify/auth/server"のfetchAuthSession(scripts/__mocks__/
  *     inventoryAuthMiddleware.fetchAuthSession.mock.cjs)。
- *   - "@/lib/amplify/serverUtils"のrunWithAmplifyServerContext
+ *   - "@/lib/amplify/userPoolServer"のrunWithAmplifyServerContext
  *     (実credentialsProvider/tokenProvider構築だけを迂回——上記参照)。
  *
  * 検証しないこと(このtestの範囲外、完了報告に明記): 実Cognitoが
@@ -64,7 +64,7 @@ registerHooks({
     if (specifier === "aws-amplify/auth/server") {
       return { url: FETCH_AUTH_SESSION_MOCK_URL, shortCircuit: true };
     }
-    if (specifier === "@/lib/amplify/serverUtils") {
+    if (specifier === "@/lib/amplify/userPoolServer") {
       return { url: SERVER_UTILS_MOCK_URL, shortCircuit: true };
     }
     const isAlias = specifier.startsWith("@/");

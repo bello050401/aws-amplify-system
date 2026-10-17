@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { generateServerClientUsingCookies } from "@aws-amplify/adapter-nextjs/data";
 import type { Schema } from "@/amplify/data/resource";
 import outputs from "@/amplify_outputs.json";
+import { userPoolServerConfig } from "./userPoolServerConfig";
 import { createDirectDataClient } from "./directData";
 import { isQueryTimingEnabled, recordQuery } from "@/lib/perf/queryTiming";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
@@ -27,7 +28,7 @@ import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
  *     fails with an authorization error even for a signed-in admin.
  */
 const cookieDataClient = generateServerClientUsingCookies<Schema>({
-  config: outputs,
+  config: userPoolServerConfig(outputs),
   cookies,
 });
 
