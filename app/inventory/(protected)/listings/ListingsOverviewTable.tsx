@@ -337,7 +337,7 @@ export function ListingsOverviewTable({
                         {EC_STATE_LABEL[s.state]}
                       </span>
                       {canEdit && !archived && (
-                        <div className="mt-1 flex items-center gap-2 text-xs">
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                           <button
                             type="button"
                             aria-label={`${row.name}を${EC_CHANNEL_LABEL[c]}に出品`}
@@ -356,6 +356,7 @@ export function ListingsOverviewTable({
                           >
                             停止
                           </button>
+                          {c !== "YAHOO" && s.externalId && <button type="button" aria-label={`${row.name}の${EC_CHANNEL_LABEL[c]}商品内容を更新`} className="rounded border px-2 py-1 text-blue-700 disabled:opacity-30" disabled={s.state==="PENDING"||s.state==="UNKNOWN"} onClick={()=>open("UPDATE",[row],c)}>更新</button>}
                         </div>
                       )}
                       {s.externalId && (

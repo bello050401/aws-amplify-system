@@ -14,7 +14,9 @@ const mocks = {
   "../../InventoryThumbnail": `import React from 'react';export function InventoryThumbnail(){return <div className="flex h-full w-full items-center justify-center bg-stone-100 text-xs text-stone-400">写真</div>}`,
   "@/app/actions/listing":
     fixture +
-    `export const listListingsOverviewSafeAction=async()=>({ok:true,rows});export const bulkCreateListingDraftsAction=async(ids)=>({created:ids,skipped:[],failed:[]});export const exportMercariShopsCsvAction=async()=>({ok:false,blockedRows:[]});`,
+    `export const listListingsOverviewSafeAction=async()=>({ok:true,rows});export const getBaseChannelListingAction=async()=>null;export const saveBaseChannelOverrideAction=async()=>({});export const getMercariFurnitureCategoryTreeAction=async()=>[];`,
+  "@/app/actions/ecListingPresets": `import {DEFAULT_EC_PRESETS} from './lib/listing/ecPresets';let rows=structuredClone(DEFAULT_EC_PRESETS);export const listEcPresetsAction=async()=>rows.filter(p=>!p.deleted);export const saveEcPresetAction=async(p)=>{const saved={...p,revision:p.revision+1};rows=[...rows.filter(r=>r.id!==p.id),saved];return saved;};`,
+  "@/app/actions/yahooAuctionWorkflow": `export const searchYahooCategoriesAction=async()=>({ok:true,value:[{id:'12345',path:'家具 > 椅子'}]});`,
   "@/app/actions/ecListingCatalog": fixture + `export const getEcListingCatalogAction=async()=>catalog();`,
   "@/app/actions/ecListingOperations":
     fixture +
@@ -26,7 +28,7 @@ export async function executeEcListingAction(review){await new Promise(r=>setTim
 (async () => {
   const bundle = await esbuild.build({
     stdin: {
-      contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {ListingsOverviewTable} from './app/inventory/(protected)/listings/ListingsOverviewTable';${fixture}createRoot(document.getElementById('app')).render(<ListingsOverviewTable initialResult={{ok:true,rows}} canEdit/>);`,
+      contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {ListingsOverviewTable} from './app/inventory/(protected)/listings/ListingsOverviewTable';import {EcPresetManager} from './app/inventory/(protected)/settings/EcPresetManager';import {BaseListingEditor} from './app/inventory/(protected)/[id]/listing/BaseListingEditor';${fixture}createRoot(document.getElementById('app')).render(location.pathname==='/settings'?<EcPresetManager isAdmin/>:location.pathname==='/base'?<BaseListingEditor inventoryId="test" draft={{title:'チェア',description:'説明',price:29800,images:[{storageKey:'test',sortOrder:0}]}}/>:<ListingsOverviewTable initialResult={{ok:true,rows}} canEdit/>);`,
       loader: "tsx",
       resolveDir: root,
     },
@@ -54,7 +56,7 @@ export async function executeEcListingAction(review){await new Promise(r=>setTim
   });
   const css = await require("postcss")([
     require("tailwindcss")({
-      content: [path.join(root, "app/inventory/(protected)/listings/*.tsx")],
+      content: [path.join(root, "app/inventory/(protected)/listings/*.tsx"),path.join(root,"app/inventory/(protected)/settings/EcPresetManager.tsx"),path.join(root,"app/inventory/(protected)/[[]id]/listing/*.tsx")],
       theme: { extend: {} },
       plugins: [],
     }),

@@ -19,7 +19,7 @@ export function previewInput(saved:YahooAuctionSaved,relistId?:string):YahooFixe
   if(!i.condition||!i.priceYen)throw new WorkflowFailure('INVALID_INPUT');
   return {title:i.title,description:i.description,condition:condition[i.condition],priceYen:i.priceYen,quantity:i.quantity,
     categoryId:i.categoryId,closingDateJst:i.endAtJst.slice(0,10),closingHourJst:Number(i.endAtJst.slice(11,13)),
-    ...(relistId?{relistId}:{}),shipping:{payer:'seller',method:saved.payload.source.shippingMethod==='KAZAI'?'家財おまかせ便':'佐川急便',prefecture:'11',schedule:'2'}};
+    ...(relistId?{relistId}:{}),shipping:{payer:'seller',method:(saved.payload.input.shippingMethod??saved.payload.source.shippingMethod)==='KAZAI'?'家財おまかせ便':'佐川急便',prefecture:'11',schedule:'2'}};
 }
 export function assertCurrent(c:Context,expectedRevision:number){
   if(!c.saved||!c.draft||c.saved.revision!==expectedRevision||!yahooSourceMatches(c.saved.payload.source,c.draft))throw new WorkflowFailure('SOURCE_CHANGED');
@@ -34,7 +34,7 @@ export function workflowView(s:WorkflowState|null,waitUntil=0):YahooWorkflowView
     confirmationId:s?.stage==='READY'?s.jobId:null,listing:s?.listing??null,waitUntil,error:s?.error??null,
     newListing:s?.newListing??false,previousListings:s?.previousListings??[],
     confirmation:s?.stage==='READY'&&i?{title:i.title,priceYen:i.priceYen!,quantity:i.quantity,category:i.categoryName,
-      endAtJst:i.endAtJst,shipping:s.saved!.payload.source.shippingMethod==='KAZAI'?'家財おまかせ便':'佐川急便',relist:!!s.relistId,imageUrls:s.images.map(image=>image.url)}:null};
+      endAtJst:i.endAtJst,shipping:(s.saved!.payload.input.shippingMethod??s.saved!.payload.source.shippingMethod)==='KAZAI'?'家財おまかせ便':'佐川急便',relist:!!s.relistId,imageUrls:s.images.map(image=>image.url)}:null};
 }
 const matches=(e:YahooListingEvidence,i:{title:string;priceYen:number|null;quantity:number})=>e.title===i.title&&e.priceYen===i.priceYen&&e.quantity===i.quantity;
 export class YahooWorkflow {

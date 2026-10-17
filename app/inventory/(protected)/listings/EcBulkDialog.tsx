@@ -101,7 +101,7 @@ export function EcBulkDialog({
     for (const review of ready) {
       if (stop.current || !live.current) break;
       let result: EcReview = review;
-      for (let attempts = 0; attempts < 10; attempts++) {
+      for (let attempts = 0; attempts < 50; attempts++) {
         try {
           result = await executeEcListingAction(review, true, terms);
         } catch {

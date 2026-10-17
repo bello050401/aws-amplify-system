@@ -1,3 +1,5 @@
+import { isShopsDeliveryMethod } from "./listingShipping";
+import { presetDescription } from "../ecPresets";
 import "server-only";
 
 import type { MercariManualListingPack } from "@/app/actions/mercariManualListingPack";
@@ -147,7 +149,7 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       typeof draft.inventoryId !== "string" ||
       draft.inventoryId.toLowerCase() !== job.inventoryId.toLowerCase() ||
       draft.updatedAt !== pack.draftUpdatedAt ||
-      draft.title !== pack.title || draft.description !== pack.description ||
+      draft.title !== pack.title || presetDescription(draft.description ?? "", pack.descriptionSuffix ?? "") !== pack.description ||
       draft.price !== evidence.sourcePriceYen ||
       draft.condition !== pack.condition ||
       draft.shippingMethod !== evidence.sourceShippingMethod ||
@@ -162,7 +164,7 @@ export async function mapObservedDraftInput(job: WebHttpDraftJob,
       evidence.selectedCategoryId !== pack.categoryId ||
       evidence.selectedCategoryPath !== pack.categoryPath ||
       evidence.selectedQuantity !== pack.quantity ||
-      pack.shipping.method !== "METHOD_TYPE_UNDECIDED" ||
+      !isShopsDeliveryMethod(pack.shipping.method) ||
       pack.shipping.payer !== "PAYER_TYPE_SELLER" ||
       pack.shipping.origin !== "jp11" ||
       pack.shipping.duration !== "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" ||

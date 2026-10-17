@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { EcPresetManager } from "./EcPresetManager";
 import { renewMercariHttpConnectionAction } from "@/app/actions/mercariWebHttpLifecycle";
 import { checkYahooHttpsConnectionAction } from "@/app/actions/yahooAuctionHttp";
 
@@ -56,6 +57,7 @@ export function EcListingSettingsPanel({
           EC商品一覧へ
         </Link>
       </div>
+      <EcPresetManager isAdmin={isAdmin} />
       <h3 className="mb-3 text-sm font-bold">販売先との接続</h3>
       <div className="grid gap-4 md:grid-cols-3">
         <section className={card}>

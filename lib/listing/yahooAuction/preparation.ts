@@ -4,7 +4,7 @@ export type YahooAuctionInput = {
   title: string; description: string; condition: ListingConditionCode | null;
   format: "FIXED" | "AUCTION"; priceYen: number | null; buyNowYen: number | null;
   quantity: number; categoryId: string; categoryName: string;
-  endAtJst: string; autoExtension: boolean;
+  endAtJst: string; autoExtension: boolean; shippingMethod?: ListingShippingMethod;
 };
 export type YahooAuctionPayload = {
   schemaVersion: 1; input: YahooAuctionInput;
@@ -41,11 +41,11 @@ export function parseYahooAuctionInput(value: unknown): YahooAuctionInput | null
       typeof v.categoryId !== "string" || !/^(?:[1-9]\d{0,11})?$/.test(v.categoryId) ||
       typeof v.categoryName !== "string" || v.categoryName.length > 300 ||
       typeof v.endAtJst !== "string" || v.endAtJst !== "" && !validJstDate(v.endAtJst) ||
-      typeof v.autoExtension !== "boolean") return null;
+      typeof v.autoExtension !== "boolean" || v.shippingMethod !== undefined && !["KAZAI", "SAGAWA"].includes(v.shippingMethod)) return null;
   return { title: v.title.trim(), description: v.description, condition: v.condition,
     format: v.format, priceYen: v.priceYen, buyNowYen: v.format === "AUCTION" ? v.buyNowYen : null,
     quantity: v.quantity, categoryId: v.categoryId, categoryName: v.categoryName.trim(),
-    endAtJst: v.endAtJst, autoExtension: v.format === "AUCTION" && v.autoExtension };
+    endAtJst: v.endAtJst, ...(v.shippingMethod ? {shippingMethod:v.shippingMethod} : {}), autoExtension: v.format === "AUCTION" && v.autoExtension };
 }
 
 export function yahooPreparationIssues(input: YahooAuctionInput, imageCount: number, availableQuantity: number,

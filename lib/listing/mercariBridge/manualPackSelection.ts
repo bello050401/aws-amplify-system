@@ -3,6 +3,7 @@ export type ManualPackSelection = {
   quantity: string;
   categoryId: string | null;
   brandId: string | null;
+  shippingMethod?: string; descriptionSuffix?: string;
 };
 
 /** A delayed server response is usable only for the exact fields submitted. */
@@ -12,7 +13,8 @@ export function sameManualPackSelection(
   return requested.price === current.price &&
     requested.quantity === current.quantity &&
     requested.categoryId === current.categoryId &&
-    requested.brandId === current.brandId;
+    requested.brandId === current.brandId &&
+    requested.shippingMethod === current.shippingMethod && requested.descriptionSuffix === current.descriptionSuffix;
 }
 
 /** B005396 can be reviewed only with an explicit category and in-stock quantity. */

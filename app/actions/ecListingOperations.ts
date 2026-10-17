@@ -15,6 +15,7 @@ import {
   publishMercariHttpListingAction,
   reopenMercariHttpListingAction,
   stopMercariHttpListingAction,
+  updateMercariHttpContentAction,
 } from "./mercariWebHttpLifecycle";
 import { getMercariWebHttpDraftJobStatusAction } from "./mercariWebHttpDraftJob";
 import { executeMercariHttpDraftStepAction } from "./mercariWebHttpExecuteDraft";
@@ -25,6 +26,7 @@ import {
   publishYahooListingAction,
   cancelYahooListingAction,
 } from "./yahooAuctionWorkflow";
+import { reviewBaseContentUpdate, executeBaseContentUpdate } from "@/lib/listing/base/updateLifecycle";
 import { reviewBaseListing, executeBaseListing } from "@/lib/listing/base/manualLifecycle";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -75,7 +77,7 @@ export async function reviewEcListingAction(
   if (
     !validId(id) ||
     !EC_CHANNELS.includes(channel) ||
-    !["PUBLISH", "STOP", "ARCHIVE", "RESTORE"].includes(operation) ||
+    !["PUBLISH", "STOP", "UPDATE", "ARCHIVE", "RESTORE"].includes(operation) ||
     !canEditInventory(await getInventoryRole())
   )
     return base;
@@ -111,6 +113,7 @@ export async function reviewEcListingAction(
     const common = await getListingDraftForInventory(id);
     if (operation === "PUBLISH" && !common)
       return { ...base, message: "共通の商品情報を保存してから出品してください。" };
+    if (operation === "UPDATE") return channel === "BASE" ? {...base,...await reviewBaseContentUpdate(id)} : channel === "MERCARI_SHOPS" ? {...base,...await updateMercariHttpContentAction(id,null)} : {...base,message:"ヤフオクは出品停止後、保存した内容で再出品してください。"};
     if (channel === "BASE") return { ...base, ...(await reviewBaseListing(id, operation)) };
     if (channel === "YAHOO") {
       const current = await getYahooWorkflowAction(id);
@@ -253,7 +256,7 @@ export async function executeEcListingAction(
     review.token.length > 300 ||
     !validId(review.inventoryId) ||
     !EC_CHANNELS.includes(review.channel) ||
-    !["PUBLISH", "STOP", "ARCHIVE", "RESTORE"].includes(review.operation) ||
+    !["PUBLISH", "STOP", "UPDATE", "ARCHIVE", "RESTORE"].includes(review.operation) ||
     !canEditInventory(await getInventoryRole())
   )
     return failed;
@@ -292,6 +295,11 @@ export async function executeEcListingAction(
       })) as { errors?: unknown; data?: { updateListingDraft?: { id: string } } };
       if (r.errors || !r.data?.updateListingDraft)
         return { ...failed, message: "保存内容が変わりました。再確認してください。" };
+    } else if (review.operation === "UPDATE") {
+      if(review.channel==="YAHOO")return failed;
+      const result=review.channel==="BASE"?await executeBaseContentUpdate(id,review.token):await updateMercariHttpContentAction(id,review.token);
+      if(result.status==="DONE"){revalidatePath("/inventory/listings");revalidatePath(`/inventory/${id}/listing`);}
+      return {...review,...result};
     } else if (review.channel === "BASE") {
       const result = await executeBaseListing(id, review.operation, review.token);
       if (!result.ok) return { ...failed, message: result.message };

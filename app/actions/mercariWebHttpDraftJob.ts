@@ -27,8 +27,9 @@ const canonical = (value: unknown): unknown => Array.isArray(value) ?
     Object.fromEntries(Object.entries(value).sort(([left], [right]) =>
       left.localeCompare(right)).map(([key, child]) => [key, canonical(child)])) : value;
 
+import type { ShopsDeliveryMethod } from "@/lib/listing/mercariBridge/listingShipping";
 type Selection = { priceYen: number; quantity: number; categoryId: string;
-  brandId: string | null };
+  brandId: string | null; shippingMethod?: ShopsDeliveryMethod; descriptionSuffix?: string };
 type PreparationResult = { ok: true; pack: MercariManualListingPack;
   evidence: WebHttpReviewEvidence } |
   { ok: false; code: "FORBIDDEN" | "BLOCKED_TARGET" | "PREPARATION_UNAVAILABLE" };

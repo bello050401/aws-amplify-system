@@ -1,5 +1,7 @@
 "use client";
 
+import { EcPresetPicker } from "../../listings/EcPresetPicker";
+import { shopsDeliveryLabel, type ShopsDeliveryMethod } from "@/lib/listing/mercariBridge/listingShipping";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { searchMercariBrandsAction } from "@/app/actions/listing";
 import { prepareMercariManualListingPackAction,
@@ -20,12 +22,14 @@ import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker
 import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
 
 export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
-  hasDraft, hasShopsRecord, mode, showExecution = true }: { inventoryId: string; availableQuantity: number;
-  hasDraft: boolean; hasShopsRecord: boolean; mode: "HTTP" | "PC"; showExecution?: boolean }) {
+  hasDraft, hasShopsRecord, mode, showExecution = true, commonPrice = null }: { inventoryId: string; availableQuantity: number;
+  hasDraft: boolean; hasShopsRecord: boolean; mode: "HTTP" | "PC"; showExecution?: boolean; commonPrice?: number | null }) {
   const isB005396 = inventoryId.toLowerCase() === B005396_INVENTORY_ID;
   const isHttp = mode === "HTTP";
   const [price, setPrice] = useState(isB005396 ? "99999" : "");
   const [quantity, setQuantity] = useState("");
+  const [shippingMethod,setShippingMethod]=useState<ShopsDeliveryMethod>("METHOD_TYPE_UNDECIDED");
+  const [descriptionSuffix,setDescriptionSuffix]=useState("");
   const [category, setCategory] = useState<{ id: string; path: string } | null>(null);
   const [brandQuery, setBrandQuery] = useState("");
   const [brand, setBrand] = useState<BrandMasterEntry | null>(null);
@@ -77,7 +81,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     `状態: ${conditionLabel}`,
     `数量: ${pack.quantity}`,
     `管理コード: ${pack.managementCode}`,
-    "配送方法: 未定（出品者手配）",
+    `配送方法: ${shopsDeliveryLabel(pack.shipping.method)}`,
     "送料: 送料込み（出品者負担）",
     "発送元: 埼玉県",
     "発送まで: 4〜7日",
@@ -150,12 +154,13 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     setShippingReviewed(false);
     const revision = selectionRevision.current;
     const requested: ManualPackSelection = { price, quantity,
-      categoryId: category.id, brandId: brand?.brandId ?? null };
+      categoryId: category.id, brandId: brand?.brandId ?? null,
+      shippingMethod:selectionRef.current.shippingMethod, descriptionSuffix:selectionRef.current.descriptionSuffix };
     try {
       if (isHttp) {
         const result = await prepareMercariWebHttpDraftJobAction(inventoryId, {
           priceYen: Number(price), quantity: Number(quantity),
-          categoryId: category.id, brandId: brand?.brandId ?? null });
+          categoryId: category.id, brandId: brand?.brandId ?? null, shippingMethod, descriptionSuffix });
         if (revision !== selectionRevision.current ||
             !sameManualPackSelection(requested, selectionRef.current)) {
           setMessage("入力が変わりました。現在の内容で確認し直してください。");
@@ -283,8 +288,8 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isHttp && isB005396 ?
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
       "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
-    {isHttp && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-      下の「準備登録」で保存した後、商品一覧でこの商品を選び「メルカリShopsに出品」を押してください。
+    {isHttp && hasShopsRecord ? <p className="mt-2 rounded bg-blue-50 p-3 text-sm text-blue-900">登録済みの商品です。商品名・説明・単価・数量・写真を変更する場合は共通の商品情報を保存し、商品一覧の「更新」を押してください。カテゴリ・配送方法・公開状態は現在の設定を保ちます。</p> : isHttp && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+      下の「準備登録」で保存した後、商品一覧のこの商品のメルカリShops欄で「出品」を押してください。
     </p>}
     {isHttp && showExecution && <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs" role="status">
       <p>HTTP方式の準備状態: {httpStatus === "CHECKING" ? "確認中" :
@@ -305,7 +310,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
           "Shops送信結果・出品成立は未確認"}</p>
     </div>}
     <dl className="mt-3 grid grid-cols-2 gap-1 rounded bg-gray-50 p-3 text-xs">
-      <dt>配送方法</dt><dd>未定（出品者手配）</dd>
+      <dt>配送方法</dt><dd>{shopsDeliveryLabel(shippingMethod)}</dd>
       <dt>送料</dt><dd>送料込み（出品者負担）</dd>
       <dt>発送元</dt><dd>埼玉県</dd>
       <dt>発送まで</dt><dd>4〜7日</dd>
@@ -320,6 +325,15 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     {!available ? <p className="mt-3 text-amber-700">保存済みの下書き・在庫数・Shops出品記録を確認してください。新規出品準備は現在できません。</p> :
       isHttp && httpStatus !== "NOT_PREPARED" ?
         <p className="mt-3 text-amber-700">準備状態を確認できるまで、新しい準備登録はできません。登録済みの場合は上の依頼状態を確認してください。</p> : <>
+      {isHttp && !isB005396 && <EcPresetPicker channel="MERCARI_SHOPS" disabled={busy} onApply={p=>{
+        const method=p.values.shopsDelivery==="MERCARI_SHIPPING_YAMATO"?"METHOD_MERCARI_SHIPPING_YAMATO":"METHOD_TYPE_UNDECIDED";
+        selectionRevision.current++; selectionRef.current.shippingMethod=method; selectionRef.current.descriptionSuffix=p.values.descriptionSuffix;
+        setShippingMethod(method);setDescriptionSuffix(p.values.descriptionSuffix);
+        if(commonPrice!=null){const v=String(commonPrice+p.values.priceAddition);selectionRef.current.price=v;setPrice(v);}
+        if(p.values.categoryId){selectionRef.current.categoryId=p.values.categoryId;setCategory({id:p.values.categoryId,path:p.values.categoryName});}
+        setPack(null);setReviewEvidence(null);setShippingReviewed(false);setMessage("設定を適用しました。内容を確認して準備登録してください。");
+      }}/>}
+      {isHttp && <label className="mt-3 block text-xs">配送方法<select aria-label="メルカリShopsの配送方法" className="mt-1 block w-full rounded border p-2" value={shippingMethod} disabled={busy||isB005396} onChange={e=>{const method=e.target.value as ShopsDeliveryMethod;selectionRevision.current++;selectionRef.current.shippingMethod=method;setShippingMethod(method);setPack(null);setReviewEvidence(null);setShippingReviewed(false);}}><option value="METHOD_TYPE_UNDECIDED">未定（出品者が手配）</option><option value="METHOD_MERCARI_SHIPPING_YAMATO">らくらくメルカリ便（匿名配送）</option></select></label>}
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs">販売価格（円）<input type="number" min={300} max={9999999}
           step={1} value={price} disabled={busy || isB005396}
@@ -370,6 +384,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <p className="font-bold">{pack.title}</p>
       <p>管理コード: <code>{pack.managementCode}</code></p>
       <p>価格 ¥{pack.priceYen.toLocaleString("ja-JP")} ／ 数量 {pack.quantity} ／ {pack.categoryPath}</p>
+      <p>配送: {shopsDeliveryLabel(pack.shipping.method)}</p>
       <p>状態: {conditionLabel} ／ ブランド: {pack.brandName ?? "指定なし"}</p>
       <p className="mt-1">保存済み写真 {pack.imageRefs.length} 枚。{isHttp ?
         "画像自体は未確認です。" : "送信前に写真もShops画面で確認してください。"}</p>
@@ -384,7 +399,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
           <dt>現在の在庫数</dt><dd>{reviewEvidence.sourceQuantity}</dd>
           <dt>EC配送方法</dt><dd>{reviewEvidence.sourceShippingMethod === "KAZAI" ? "家財便" : "佐川急便"}</dd>
           <dt>選択したShopsカテゴリー</dt><dd>{reviewEvidence.selectedCategoryPath}</dd>
-          <dt>Shops配送方法</dt><dd>未定（出品者手配）</dd>
+          <dt>Shops配送方法</dt><dd>{shopsDeliveryLabel(pack.shipping.method)}</dd>
           <dt>Shops送料・発送元</dt><dd>出品者負担・埼玉県</dd>
           <dt>Shops発送まで</dt><dd>4〜7日</dd>
         </dl>

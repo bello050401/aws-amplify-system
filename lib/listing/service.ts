@@ -1011,14 +1011,20 @@ export async function saveChannelOverride(
     return e2eSaveChannelOverride(inventoryId, channel, input, who, existing);
   }
 
+  if (channel === "BASE" && existing?.status === "PUBLISHING") throw Error("BASEの操作中です。完了後に保存してください。");
   const fields = {
-    categoryMapping: stringifyListingJson(input.categoryMapping),
-    overrideTitle: input.overrideTitle?.trim() || undefined,
-    overrideDescription: input.overrideDescription?.trim() || undefined,
-    overridePrice: input.overridePrice ?? undefined,
+    categoryMapping: stringifyListingJson(channel === "BASE" ? existing?.categoryMapping ?? null : input.categoryMapping),
+    overrideTitle: input.overrideTitle?.trim() || (channel === "BASE" ? null : undefined),
+    overrideDescription: input.overrideDescription?.trim() || (channel === "BASE" ? null : undefined),
+    overridePrice: input.overridePrice ?? (channel === "BASE" ? null : undefined),
     updatedBy: who ?? undefined,
   };
 
+  if (existing && channel === "BASE") {
+    const result = await serverDataClient.graphql({query:`mutation SaveBaseFields($input:UpdateChannelListingInput!,$condition:ModelChannelListingConditionInput) { updateChannelListing(input:$input,condition:$condition) { id } }`, variables:{input:{id:existing.id,...fields},condition:{updatedAt:{eq:existing.updatedAt},status:{ne:"PUBLISHING"}}},authMode:"userPool"}) as {errors?:unknown;data?:{updateChannelListing?:unknown}};
+    if(result.errors||!result.data?.updateChannelListing) throw Error("別の操作で情報が変わりました。読み込み直してください。");
+    const saved=await getChannelListing(inventoryId,channel); if(!saved)throw Error("保存結果を確認できませんでした。");return saved;
+  }
   if (existing) {
     const { data: updated, errors } = await serverDataClient.models.ChannelListing.update({ id: existing.id, ...fields }, inventoryAuthMode);
     if (errors || !updated) throw new Error(`チャネル別設定の更新に失敗しました: ${JSON.stringify(errors)}`);
@@ -1027,6 +1033,7 @@ export async function saveChannelOverride(
 
   const { data: created, errors } = await serverDataClient.models.ChannelListing.create(
     {
+      ...(channel === "BASE" ? {id:`ec-base-${inventoryId}`} : {}),
       listingDraftId: draft.id,
       inventoryId,
       channel,

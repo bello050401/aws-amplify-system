@@ -90,6 +90,16 @@ const gql = async ({ query, variables }) => {
     state.draft = { ...state.draft, ...variables.input };
     return { data: { updateListingDraft: { id: state.draft.id } } };
   }
+  if(query.includes("ClaimBaseManual")){
+    if(state.channel.status==="PUBLISHING"||state.channel.updatedAt!==variables.condition.updatedAt.eq)return {errors:["conflict"]};
+    state.channel={...state.channel,...variables.input};
+    if(state.changeSourceAfterClaim)state.draft={...state.draft,updatedAt:"changed"};
+  }
+  if(query.includes("FinishBaseManual")){
+    if(state.channel.lastError!==variables.condition.lastError.eq)return {errors:["conflict"]};
+    state.channel={...state.channel,...variables.input};
+    if(typeof state.channel.categoryMapping==="string")state.channel.categoryMapping=JSON.parse(state.channel.categoryMapping);
+  }
   return { data: { updateChannelListing: { id: "base-row" } } };
 };
 async function load(file, extra = {}) {
@@ -105,7 +115,7 @@ async function load(file, extra = {}) {
     "@/lib/listing/service":
       'export const getListingDraftForInventory=async()=>f.state().draft?.deletedAt?null:f.state().draft;export const getChannelListing=async(id,channel)=>channel==="MERCARI_SHOPS"?(f.state().legacyMercari??null):f.state().channel;export const saveListingDraft=async()=>{throw Error("unexpected create");};',
     "./mercariWebHttpLifecycle":
-      'export const getMercariHttpListingStateAction=async()=>f.state().http;export const publishMercariHttpListingAction=async()=>f.state().publication;export const reopenMercariHttpListingAction=publishMercariHttpListingAction;export const stopMercariHttpListingAction=async()=>{f.state().writes.push("stop");return{status:"STOPPED",stopConfirmed:true}};',
+      'export const getMercariHttpListingStateAction=async()=>f.state().http;export const publishMercariHttpListingAction=async()=>f.state().publication;export const reopenMercariHttpListingAction=publishMercariHttpListingAction;export const updateMercariHttpContentAction=async()=>({status:"BLOCKED"});export const stopMercariHttpListingAction=async()=>{f.state().writes.push("stop");return{status:"STOPPED",stopConfirmed:true}};',
     "./mercariWebHttpDraftJob":
       'export const getMercariWebHttpDraftJobStatusAction=async()=>({ok:true,requestId:"job-1"});',
     "./mercariWebHttpExecuteDraft":
@@ -116,6 +126,9 @@ async function load(file, extra = {}) {
       'export const getYahooWorkflowAction=async()=>({ok:true,view:{listing:{remoteStatus:"open",auctionId:"auction-1",title:"Chair",priceYen:12000,quantity:1}}});export const prepareYahooPublicationAction=async()=>({ok:false,code:"INVALID_INPUT"});export const publishYahooListingAction=async()=>({ok:false,code:"WAIT_INTERVAL",waitUntil:123});export const cancelYahooListingAction=async()=>({ok:false,code:"BIDS_OR_STATE_CHANGED"});',
     "@/lib/listing/base/manualLifecycle":
       'export const reviewBaseListing=async()=>({status:"BLOCKED",message:"test"});export const executeBaseListing=async()=>({ok:false,message:"test"});',
+    "@/lib/listing/base/updateLifecycle":
+      'export const reviewBaseContentUpdate=async()=>({status:"BLOCKED"});export const executeBaseContentUpdate=reviewBaseContentUpdate;',
+    "../ecImage": 'export const baseImageUrl=async()=>"https://example.test/source.jpg";',
     "@/lib/base/oauth": 'export const getAccessToken=async()=>"test-token";',
     "@/lib/base/connectionState": "export const getBaseConnectionState=async()=>({requestWriteItems:true});",
     "@/lib/listing/mercari/csv/buildExportRows":
@@ -123,7 +136,7 @@ async function load(file, extra = {}) {
     "@/lib/http/fetchWithTimeout":
       "export const fetchWithTimeout=async()=>({ok:true,json:async()=>({item:f.state().remote})});",
     "./adapter":
-      'export const createBaseProduct=async()=>{f.state().writes.push("create");return {externalProductId:"1234",visibility:"PRIVATE"}};export const addManualBaseImage=async(id,n)=>{f.state().writes.push("image:"+n);f.state().remote["img"+n+"_origin"]="https://example.test/new.jpg";};export const setManualBaseVisibility=async(id,visible)=>{f.state().writes.push(visible?"publish":"stop");if(!f.state().failReadback)f.state().remote.visible=visible?1:0;};',
+      'export const createBaseProduct=async()=>{f.state().writes.push("create");return {externalProductId:"1234",visibility:"PRIVATE"}};export const addManualBaseImage=async(id,n)=>{f.state().writes.push("image:"+n);f.state().remote["img"+n+"_origin"]="https://example.test/new-"+n+".jpg";};export const setManualBaseVisibility=async(id,visible)=>{f.state().writes.push(visible?"publish":"stop");if(!f.state().failReadback)f.state().remote.visible=visible?1:0;};export const editManualBaseContent=async(id,content)=>{f.state().writes.push("edit");if(!f.state().failReadback)Object.assign(f.state().remote,content)};export const deleteManualBaseImage=async(id,n)=>{f.state().writes.push("delete-image:"+n);delete f.state().remote["img"+n+"_origin"]};',
     ...extra,
   };
   const result = await esbuild.build({
@@ -188,6 +201,30 @@ async function load(file, extra = {}) {
   state.role = "VIEWER";
   assert.equal((await operations.reviewEcListingAction(id, "MERCARI_SHOPS", "STOP")).status, "BLOCKED");
   assert.equal(state.writes.length, 0);
+  const update = await load("lib/listing/base/updateLifecycle.ts");
+  process.env.BASE_MANUAL_LISTING_ENABLED = "1";
+  reset();
+  state.draft.description="New description";
+  state.remote.visible=1;
+  state.remote.img2_origin="https://example.test/extra.jpg";
+  let ur=await update.reviewBaseContentUpdate(id);
+  assert.equal(ur.status,"READY");assert.equal(state.writes.length,0);
+  let step=await update.executeBaseContentUpdate(id,ur.token);
+  assert.equal(step.status,"WAIT");assert.deepEqual(state.writes,["edit"]);
+  step=await update.executeBaseContentUpdate(id,ur.token);
+  assert.equal(step.status,"WAIT");assert.deepEqual(state.writes,["edit","image:1"]);
+  step=await update.executeBaseContentUpdate(id,ur.token);
+  assert.equal(step.status,"DONE");assert.deepEqual(state.writes,["edit","image:1","delete-image:2"]);
+  assert.equal(state.remote.visible,1,"update preserves visibility");assert.equal(state.remote.stock,2);
+  assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"DONE");assert.equal(state.writes.length,3,"completed update cannot replay");
+  reset();ur=await update.reviewBaseContentUpdate(id);state.remote.price=999;
+  assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED");assert.equal(state.writes.length,0);
+  reset();ur=await update.reviewBaseContentUpdate(id);state.changeSourceAfterClaim=true;
+  assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED");assert.equal(state.writes.length,0,"post-claim source changes stop writes");
+  reset();state.remote.variations=[{variation_id:1}];assert.equal((await update.reviewBaseContentUpdate(id)).status,"BLOCKED");
+  reset();ur=await update.reviewBaseContentUpdate(id);state.failReadback=true;
+  assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED");assert.equal(state.channel.status,"ERROR");
+  assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED");assert.equal(state.writes.length,1,"unknown write is never repeated");
   reset();
   const stop = await operations.reviewEcListingAction(id, "MERCARI_SHOPS", "STOP");
   state.http.productId = "another";

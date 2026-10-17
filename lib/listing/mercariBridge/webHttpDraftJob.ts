@@ -1,3 +1,5 @@
+import { isShopsDeliveryMethod } from "./listingShipping";
+import { presetDescription } from "../ecPresets";
 import { createHash } from "node:crypto";
 import type { MercariManualListingPack } from "@/app/actions/mercariManualListingPack";
 import type { PrivateCreatePreparation } from
@@ -50,7 +52,7 @@ export function inspectGeneralWebHttpPreparation(source: PrivateCreatePreparatio
       source.shopId !== WEB_HTTP_SHOP_ID || pack.shopId !== source.shopId ||
       pack.inventoryId.toLowerCase() !== source.inventoryId.toLowerCase() ||
       pack.draftId !== source.draftId || pack.draftUpdatedAt !== source.draftUpdatedAt ||
-      pack.title !== source.title || pack.description !== source.description ||
+      pack.title !== source.title || pack.description !== presetDescription(source.description, pack.descriptionSuffix ?? "") ||
       pack.condition !== source.condition ||
       JSON.stringify(pack.imageRefs) !== JSON.stringify(source.imageRefs) ||
       pack.quantity < 1 || pack.quantity > source.quantity ||
@@ -114,7 +116,7 @@ export function buildWebHttpDraftJob(pack: MercariManualListingPack,
       !pack.categoryId || !pack.categoryPath?.startsWith("家具・インテリア > ") ||
       !Array.isArray(pack.imageRefs) || pack.imageRefs.length < 1 ||
       pack.imageRefs.length > 20 ||
-      pack.shipping?.method !== "METHOD_TYPE_UNDECIDED" ||
+      !isShopsDeliveryMethod(pack.shipping?.method) ||
       pack.shipping.payer !== "PAYER_TYPE_SELLER" ||
       pack.shipping.origin !== "jp11" ||
       pack.shipping.duration !== "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" ||

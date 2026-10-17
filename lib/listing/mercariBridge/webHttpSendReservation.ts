@@ -202,6 +202,15 @@ export async function reserveWebHttpProductStopStart(identity: WebHttpProductSto
     });
 }
 
+/** Existing-product image uploads share the same shop-wide durable send slot. */
+export async function reserveWebHttpContentImage(identity: SendIdentity, requestId:string,
+  attemptId:string,repo:WebHttpSendReservationRepository,clock:()=>number=Date.now):Promise<WebHttpSendReservationResult> {
+  if(!UUID.test(identity.inventoryId)||identity.shopId!==WEB_HTTP_SHOP_ID||!identity.requestedBy||
+    !/^[a-f0-9]{64}$/.test(identity.snapshotFingerprint)||!/^[a-f0-9]{64}$/.test(requestId)||!UUID.test(attemptId))
+    return {ok:false,code:"INVALID_JOB"};
+  return reservePreparedSend(identity,requestId,attemptId,repo,clock);
+}
+
 async function reservePreparedSend(job: SendIdentity, requestId: string,
   attemptId: string, repo: WebHttpSendReservationRepository, clock: () => number,
   product?: Pick<WebHttpSendAttempt,

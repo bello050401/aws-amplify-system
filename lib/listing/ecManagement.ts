@@ -27,10 +27,11 @@ export type EcCatalog = {
   archivedIds: string[];
   errors: string[];
 };
-export type EcOperation = "PUBLISH" | "STOP" | "ARCHIVE" | "RESTORE";
+export type EcOperation = "PUBLISH" | "STOP" | "UPDATE" | "ARCHIVE" | "RESTORE";
 export const EC_OPERATION_LABEL: Record<EcOperation, string> = {
   PUBLISH: "出品",
   STOP: "出品停止",
+  UPDATE: "更新",
   ARCHIVE: "削除",
   RESTORE: "復元",
 };

@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { EC_CHANNEL_LABEL, EC_CHANNELS, type EcChannel } from "@/lib/listing/ecManagement";
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
 import { YahooAuctionListingSection } from "./YahooAuctionListingSection";
+import { BaseListingEditor } from "./BaseListingEditor";
 import { IndependentShopPanel } from "./IndependentShopPanel";
 import { MercariShopsLifecycleSection } from "./MercariShopsLifecycleSection";
 import type { InventoryDetail } from "@/lib/inventory/queries";
@@ -160,6 +161,7 @@ export function ListingWorkspace({
                 hasDraft={!!draft}
                 hasShopsRecord={!!initialChannelListing}
                 mode="HTTP"
+                commonPrice={draft?.price ?? item.plannedSalePrice}
                 showExecution={false}
               />
             ) : (
@@ -193,38 +195,7 @@ export function ListingWorkspace({
           </fieldset>
         </div>
       )}
-      {visited.has("BASE") && (
-        <div hidden={tab !== "BASE"} className="max-w-2xl rounded-lg border bg-white p-5">
-          <h3 className="font-bold">BASEの商品情報</h3>
-          <p className="mt-2 text-sm text-gray-600">
-            共通タブで保存した商品名・説明文・価格・画像を使います。商品一覧の「BASEに出品」で画像を準備し、公開する内容を確認できます。
-          </p>
-          {draft ? (
-            <dl className="mt-4 space-y-3 text-sm">
-              <div>
-                <dt className="text-gray-500">商品名</dt>
-                <dd>{draft.title}</dd>
-              </div>
-              <div>
-                <dt className="text-gray-500">価格</dt>
-                <dd>{draft.price?.toLocaleString() ?? "未設定"}円</dd>
-              </div>
-              <div>
-                <dt className="text-gray-500">画像</dt>
-                <dd>{draft.images.length}枚</dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="mt-4 text-sm text-amber-800">先に共通の商品情報を保存してください。</p>
-          )}
-          <Link
-            href="/inventory/settings?tab=base"
-            className="mt-4 inline-block text-sm text-blue-700 underline"
-          >
-            BASEの接続設定
-          </Link>
-        </div>
-      )}
+      {visited.has("BASE") && <div hidden={tab!=="BASE"}><fieldset disabled={dirty}><BaseListingEditor inventoryId={item.id} draft={draft}/></fieldset></div>}
       {canPrepareMercari && visited.has("INDEPENDENT") && (
         <div hidden={tab !== "INDEPENDENT"}>
           <fieldset disabled={dirty}>

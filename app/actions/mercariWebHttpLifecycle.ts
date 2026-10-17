@@ -14,6 +14,10 @@ import { prepareBelloInventoryImageForObservedUpload } from "@/lib/listing/merca
 import { readAcknowledgedImageAssetProof } from "@/lib/listing/mercariBridge/webHttpAcknowledgedProofs";
 import { prepareMercariWebHttpDraftJobAction } from "./mercariWebHttpDraftJob";
 import { webHttpDraftRequestId, type WebHttpDraftJob } from "@/lib/listing/mercariBridge/webHttpDraftJob";
+import { createHash } from "node:crypto";
+import { getListingDraftForInventory } from "@/lib/listing/service";
+import { updateObservedWebHttpContent } from "@/lib/listing/mercariBridge/webHttpContentUpdate";
+import { ecImageJpeg } from "@/lib/listing/ecImage";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export async function renewMercariHttpConnectionAction(): Promise<"CONNECTED" | "AUTH_REQUIRED" | "UNAVAILABLE"> {
@@ -30,8 +34,31 @@ const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(sta
 async function sourceUnchanged(job: WebHttpDraftJob) {
   const pack = JSON.parse(job.snapshotJson).pack;
   const current = await prepareMercariWebHttpDraftJobAction(job.inventoryId, {
-    priceYen: pack.priceYen, quantity: pack.quantity, categoryId: pack.categoryId, brandId: pack.brandId });
+    priceYen: pack.priceYen, quantity: pack.quantity, categoryId: pack.categoryId, brandId: pack.brandId,
+    shippingMethod: pack.shipping.method, descriptionSuffix: pack.descriptionSuffix });
   return current.ok && JSON.stringify(stable(current.pack)) === JSON.stringify(stable(pack));
+}
+
+export async function updateMercariHttpContentAction(inventoryId:string,digest:string|null) {
+  const blocked=(message:string)=>({status:"BLOCKED" as const,message});
+  if(!UUID.test(inventoryId)||await getInventoryRole()!=="ADMIN"||digest!==null&&!/^[a-f0-9]{64}$/.test(digest))return blocked("この操作を行う権限がありません。");
+  try {
+    const principal=await getCurrentInventoryUserEmail(),runtime=createMercariHttpsRuntime();
+    if(!principal||!runtime)return blocked("メルカリShopsの接続設定を確認してください。");
+    const session=await runtime.readSession();
+    if(!session)return blocked("メルカリShopsの接続を確認してください。");
+    return await updateObservedWebHttpContent(inventoryId,principal,digest,{
+      session,repository:runtime.repository,readBinding:runtime.readBinding,saveVerifiedState:runtime.saveVerifiedState,imageJpeg:ecImageJpeg,
+      readSource:async id=>{
+        const [draft,item]=await Promise.all([getListingDraftForInventory(id),getInventoryDetail(id)]);
+        if(!draft||!item||item.saleEndDate)throw Error("SOURCE");
+        const category=(await listCategories(item.categoryId)).find(c=>c.id===item.categoryId);
+        if(!category||!isEcListingEligible(category.name))throw Error("CATEGORY");
+        const source={title:draft.title,description:draft.description??"",price:draft.price??0,quantity:item.quantity,images:draft.images};
+        return {...source,fingerprint:createHash("sha256").update(JSON.stringify([draft.id,draft.updatedAt,item.updatedAt,source])).digest("hex")};
+      },
+    });
+  }catch{return blocked("商品情報を確認できませんでした。再読み込みしてください。");}
 }
 
 export type HttpListingState = { status: "FORBIDDEN" | "NOT_CONFIGURED" | "AUTH_REQUIRED" |

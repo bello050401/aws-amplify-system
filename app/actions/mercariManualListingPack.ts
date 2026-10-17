@@ -1,5 +1,7 @@
 "use server";
 
+import { isShopsDeliveryMethod, type ShopsDeliveryMethod } from "@/lib/listing/mercariBridge/listingShipping";
+import { presetDescription } from "@/lib/listing/ecPresets";
 import { getCategoryById, getBrandById } from "@/lib/listing/mercari/csv/masters";
 import { getMercariPrivateCreatePreparationAction } from
   "@/app/actions/mercariPrivateCreatePreparation";
@@ -18,6 +20,7 @@ export type MercariManualListingPack = {
   draftUpdatedAt: string;
   title: string;
   description: string;
+  descriptionSuffix?: string;
   condition: string;
   imageRefs: { source: "INVENTORY" | "PHOTO_ASSET"; storageKey: string;
     sortOrder: number; photoAssetId: string | null }[];
@@ -29,7 +32,7 @@ export type MercariManualListingPack = {
   brandName: string | null;
   managementCode: string;
   shipping: {
-    method: "METHOD_TYPE_UNDECIDED";
+    method: ShopsDeliveryMethod;
     payer: "PAYER_TYPE_SELLER";
     origin: "jp11";
     duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS";
@@ -46,7 +49,7 @@ function mercariManagementCode(inventoryId: string): string {
 export async function prepareMercariManualListingPackAction(
   inventoryId: string,
   selected: { priceYen: number; quantity: number; categoryId: string;
-    brandId: string | null },
+    brandId: string | null; shippingMethod?: ShopsDeliveryMethod; descriptionSuffix?: string },
 ): Promise<{ ok: true; pack: MercariManualListingPack } |
   { ok: false; code: "INVALID_SELECTION" | "DRAFT_UNAVAILABLE" |
     "RESERVED_TEST" | "EXISTING_LINK" }> {
@@ -56,7 +59,9 @@ export async function prepareMercariManualListingPackAction(
       selected.priceYen < 300 || selected.priceYen > 9_999_999 ||
       !Number.isSafeInteger(selected.quantity) || selected.quantity < 1 ||
       typeof selected.categoryId !== "string" ||
-      (selected.brandId !== null && typeof selected.brandId !== "string"))
+      (selected.brandId !== null && typeof selected.brandId !== "string") ||
+      selected.shippingMethod !== undefined && !isShopsDeliveryMethod(selected.shippingMethod) ||
+      selected.descriptionSuffix !== undefined && (typeof selected.descriptionSuffix !== "string" || selected.descriptionSuffix.length > 3000))
     return { ok: false, code: "INVALID_SELECTION" };
   const saved = await getMercariPrivateCreatePreparationAction(inventoryId);
   if (!saved.ok) return { ok: false, code: saved.code === "EXISTING_LINK" ?
@@ -70,17 +75,19 @@ export async function prepareMercariManualListingPackAction(
       (selected.brandId !== null && !brand))
     return { ok: false, code: "INVALID_SELECTION" };
   const draft = saved.preparation;
+  if (presetDescription(draft.description, selected.descriptionSuffix ?? "").length > 3000) return {ok:false,code:"INVALID_SELECTION"};
   return { ok: true, pack: {
     schemaVersion: 1, kind: "BELLO_MERCARI_SHOPS_MANUAL_LISTING_PACK",
     shopId: draft.shopId, inventoryId: draft.inventoryId,
     draftId: draft.draftId, draftUpdatedAt: draft.draftUpdatedAt,
-    title: draft.title, description: draft.description,
+    title: draft.title, description: presetDescription(draft.description, selected.descriptionSuffix ?? ""),
+    ...(selected.descriptionSuffix?.trim() ? {descriptionSuffix:selected.descriptionSuffix.trim()} : {}),
     condition: draft.condition, imageRefs: draft.imageRefs,
     priceYen: selected.priceYen, quantity: selected.quantity,
     categoryId: category.categoryId, categoryPath: category.fullPath,
     brandId: brand?.brandId ?? null, brandName: brand?.name ?? null,
     managementCode: mercariManagementCode(draft.inventoryId),
-    shipping: { method: "METHOD_TYPE_UNDECIDED", payer: "PAYER_TYPE_SELLER",
+    shipping: { method: selected.shippingMethod ?? "METHOD_TYPE_UNDECIDED", payer: "PAYER_TYPE_SELLER",
       origin: "jp11", duration: "DURATION_TYPE_FOUR_TO_SEVEN_DAYS" },
     status: "PREPARED_NO_SEND",
   } };

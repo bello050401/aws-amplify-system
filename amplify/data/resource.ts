@@ -925,6 +925,11 @@ const schema = a.schema({
   ]),
 
   /** Personal Yahoo Auctions preparation only; no remote listing status or credentials. */
+  EcListingPreset: a.model({
+    name: a.string().required(), channel: a.string().required(),
+    values: a.json().required(), revision: a.integer().required(), deleted: a.boolean().required(),
+  }).authorization(allow => [allow.group("ADMIN"), allow.group("EDITOR").to(["read"])]),
+
   YahooAuctionPreparation: a.model({
     inventoryId: a.string().required(),
     payload: a.json().required(),

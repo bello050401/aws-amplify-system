@@ -58,8 +58,11 @@ async function baseApiCall<T>(path: string, params: Record<string, string | numb
   if (manual) {
     // Separate opt-in for confirmed staff operations; never enables scheduled pricing.
     const visibility = path === "/items/edit" && Object.keys(params).sort().join(",") === "item_id,visible" && [0, 1].includes(Number(params.visible));
-    const image = path === "/items/add_image" && Object.keys(params).sort().join(",") === "image_no,image_url,item_id" && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
-    if (process.env.BASE_MANUAL_LISTING_ENABLED !== "1" || (!visibility && !image) || !/^[1-9][0-9]*$/.test(String(params.item_id)))
+    const image = path === "/items/add_image" && Object.keys(params).sort().join(",") === "image_no,image_url,item_id" && Number.isInteger(Number(params.image_no)) && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
+    const removeImage = path === "/items/delete_image" && Object.keys(params).sort().join(",") === "image_no,item_id" && Number.isInteger(Number(params.image_no)) && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
+    const content = path === "/items/edit" && Object.keys(params).sort().join(",") === "detail,item_id,price,stock,title" && typeof params.title === "string" && params.title.trim().length > 0 && Number.isSafeInteger(params.price) && Number(params.price) > 0 && Number.isSafeInteger(params.stock) && Number(params.stock) >= 0;
+    const privateAdd = path === "/items/add" && Object.keys(params).sort().join(",") === "detail,price,stock,title,visible" && params.visible === 0;
+    if (process.env.BASE_MANUAL_LISTING_ENABLED !== "1" || (!visibility && !image && !removeImage && !content && !privateAdd) || (!privateAdd && !/^[1-9][0-9]*$/.test(String(params.item_id))))
       throw new BaseListingApiError("CONFIG_REQUIRED", "BASEの一覧からの出品操作が有効になっていません。");
   } else if (privateTestWrite) {
     try { assertBasePrivateTestWrite(path, params); }
@@ -112,7 +115,7 @@ export interface BaseListingResult {
 }
 
 /** §4: items/add — 商品を新規作成する。確認済みフィールド名(title/detail/price/stock/visible)のみ送る。 */
-export async function createBaseProduct(input: BaseListingInput): Promise<BaseListingResult> {
+export async function createBaseProduct(input: BaseListingInput, manual = false): Promise<BaseListingResult> {
   const title = input.overrideTitle?.trim() || input.draft.title;
   // §25 チャネル別formatter を通す。共通の商品説明は書き換えず、送信用の
   // 文字列だけをここで作る(改行の正規化・制御文字の除去)。
@@ -131,7 +134,7 @@ export async function createBaseProduct(input: BaseListingInput): Promise<BaseLi
     stock: input.quantity,
     // BASE defaults to visible=1 if omitted. New items must always start hidden.
     visible: 0,
-  }, true);
+  }, !manual, manual);
   const itemId = data.item?.item_id ?? data.item_id;
   if (!itemId) throw new BaseListingApiError("UNKNOWN_REMOTE_ERROR", `item_idがレスポンスに含まれていません: ${JSON.stringify(data)}`);
   const externalProductId = String(itemId);
@@ -140,7 +143,7 @@ export async function createBaseProduct(input: BaseListingInput): Promise<BaseLi
     if (await getBaseProductVisibility(externalProductId)) {
       visibility = "PUBLIC";
       // If BASE ignored visible=0, immediately request non-display again.
-      await baseApiCall("/items/edit", { item_id: externalProductId, visible: 0 }, true);
+      await baseApiCall("/items/edit", { item_id: externalProductId, visible: 0 }, !manual, manual);
       visibility = await getBaseProductVisibility(externalProductId) ? "PUBLIC" : "PRIVATE";
     } else {
       visibility = "PRIVATE";
@@ -195,4 +198,10 @@ export async function setManualBaseVisibility(itemId: string, visible: boolean):
 export async function addManualBaseImage(itemId: string, index: number, imageUrl: string): Promise<void> {
   if (new URL(imageUrl).protocol !== "https:") throw Error("INVALID_IMAGE_URL");
   await baseApiCall("/items/add_image", { item_id: itemId, image_no: index, image_url: imageUrl }, false, true);
+}
+export async function editManualBaseContent(itemId: string, content: {title:string;detail:string;price:number;stock:number}) {
+  await baseApiCall("/items/edit", {item_id:itemId,...content}, false, true);
+}
+export async function deleteManualBaseImage(itemId: string, index: number) {
+  await baseApiCall("/items/delete_image", {item_id:itemId,image_no:index}, false, true);
 }

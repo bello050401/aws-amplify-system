@@ -1,5 +1,7 @@
 "use client";
 
+import { EcPresetPicker } from "../../listings/EcPresetPicker";
+import { presetDescription, presetEndAt } from "@/lib/listing/ecPresets";
 import { useEffect, useRef, useState } from "react";
 import { YahooAuctionControls, yahooWorkflowMessage } from "./YahooAuctionControls";
 import { searchYahooCategoriesAction } from "@/app/actions/yahooAuctionWorkflow";
@@ -129,6 +131,7 @@ export function YahooAuctionListingSection({ inventoryId, showExecution = true }
       {sourceChanged && <p className="mt-2 text-sm text-amber-800">共通下書きの写真・配送方法が更新されています。次の保存で最新の内容を取り込みます。</p>}
       <p className="mt-3 text-xs text-gray-600">商品名・説明・状態はヤフオク用に編集できます。メルカリやBASEの下書きには影響しません。</p>
       <fieldset disabled={busy || !eligible || conflict} className="mt-3 space-y-4">
+        <EcPresetPicker channel="YAHOO" disabled={busy || !draft} onApply={p=>{if(!draft)return;setInput(old=>({...old,format:"FIXED",buyNowYen:null,autoExtension:false,priceYen:draft.price==null?null:draft.price+p.values.priceAddition,shippingMethod:p.values.shippingMethod,endAtJst:presetEndAt(p.values),description:presetDescription(draft.description??"",p.values.descriptionSuffix),...(p.values.categoryId?{categoryId:p.values.categoryId,categoryName:p.values.categoryName}:{})}));setMessage(`「${p.name}」を適用しました。内容を確認して保存してください。`);}}/>
         <button type="button" disabled={!draft} className="rounded border px-3 py-2 text-sm disabled:opacity-50" onClick={() => {
           if (!draft) return;
           setInput(old => ({ ...old, title: draft.title, description: draft.description ?? "", condition: draft.condition }));
@@ -170,7 +173,7 @@ export function YahooAuctionListingSection({ inventoryId, showExecution = true }
         {input.format === "AUCTION" && <label className="flex gap-2 text-sm"><input type="checkbox" checked={input.autoExtension} onChange={e => change("autoExtension", e.target.checked)} />終了直前の入札で自動延長する</label>}
         <dl className="grid grid-cols-2 gap-2 rounded bg-gray-50 p-3 text-sm">
           <dt>出品画像</dt><dd>{draft?.images.length ?? 0}枚（共通下書きの選択順）</dd>
-          <dt>配送方法</dt><dd>{LISTING_SHIPPING_METHODS.find(s => s.code === draft?.shippingMethod)?.label ?? "共通下書きを保存してください"}</dd>
+          <dt>配送方法</dt><dd><select aria-label="ヤフオクの配送方法" className={field} value={input.shippingMethod ?? draft?.shippingMethod ?? "KAZAI"} onChange={e=>change("shippingMethod",e.target.value as "KAZAI"|"SAGAWA")}>{LISTING_SHIPPING_METHODS.map(s=><option key={s.code} value={s.code}>{s.label}</option>)}</select></dd>
           <dt>送料負担</dt><dd>送料込み（出品者負担）</dd>
           <dt>発送元</dt><dd>埼玉県</dd>
           <dt>発送まで</dt><dd>3〜7日</dd>
