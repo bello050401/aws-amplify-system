@@ -1,0 +1,26 @@
+import assert from "node:assert/strict";
+import { memoLabelBarcode, resolveLabelBarcode } from "../lib/inventory/labelBarcode";
+import { mapZaicoCoreFields } from "../lib/inventory/zaicoMapping";
+import { evaluateQuery, buildSearchFieldDefs } from "../lib/inventory/advancedSearch";
+
+const printed = "2026060811316";
+assert.equal(resolveLabelBarcode("tw202610151214141524218", printed), printed);
+assert.equal(resolveLabelBarcode("tw923f75d9-91c4-4f40-b5d7-174ae366beaf", printed), printed);
+assert.equal(resolveLabelBarcode(null, printed), printed);
+assert.equal(resolveLabelBarcode("0000123456789", printed), "0000123456789");
+assert.equal(resolveLabelBarcode("tw202610151214141524218", "計22脚"), "tw202610151214141524218");
+assert.equal(memoLabelBarcode("36800\nコード：2026040411499"), "2026040411499");
+assert.equal(memoLabelBarcode("０８０-１２３４-５６７８\n２０２６０６０８１１３１６"), printed);
+assert.equal(memoLabelBarcode("https://example.com/2026060811316"), null);
+assert.equal(memoLabelBarcode("2026060811316円"), null);
+assert.equal(memoLabelBarcode("0000123456789"), "0000123456789");
+assert.equal(memoLabelBarcode("2026060811316\n2026040411499"), null);
+assert.equal(memoLabelBarcode("1個目：2026040411390\n2個目：2026040411437"), null);
+const mapped = mapZaicoCoreFields({id:74983233,title:"label fixture",code:"tw202610151214141524218",optional_attributes:[{name:"★市川メモ",value:printed}]} as Parameters<typeof mapZaicoCoreFields>[0]);
+assert.equal(mapped.fields.barcode,printed);
+const defs = new Map(buildSearchFieldDefs([], {categories:[],locations:[],statuses:[]}).map(field=>[field.key,field]));
+const query = {combinator:"AND" as const,conditions:[{id:"scan",field:"barcode",operator:"equals" as const,value:printed}]};
+assert.equal(evaluateQuery({barcode:printed,customFields:{}},query,defs),true);
+assert.equal(evaluateQuery({barcode:printed+"0",customFields:{}},query,defs),false);
+assert.equal(evaluateQuery({barcode:"tw202610151214141524218",adminMemo:printed,customFields:{}},query,defs),false);
+console.log("PASS: printed label fallback, explicit code preservation, ambiguous memo rejection and exact scan matching");

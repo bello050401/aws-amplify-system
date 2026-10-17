@@ -31,6 +31,7 @@
  */
 import type { ExtendedFieldKey, InventoryExtendedFields } from "./extendedFields";
 import type { ZaicoInventory, ZaicoOptionalAttribute } from "@/lib/zaico/client";
+import { resolveLabelBarcode } from "./labelBarcode";
 
 /**
  * NFKC (full/half-width unification) + variation-selector stripping +
@@ -328,7 +329,7 @@ export interface ZaicoCoreMappedFields {
  *   category → Category（名前で findOrCreateMasterEntryByName）
  *   place → Location（同上）
  *   etc → note（既存の主備考フィールド）
- *   code → barcode（外部管理コード）
+ *   code → barcode（自動発行コードの場合、★市川メモの印刷ラベル番号を優先）
  *   item_image.url → 画像取込元（ここでは URL を返すだけ、実際の
  *        ダウンロード/S3アップロードは zaicoSync.ts が行う）
  */
@@ -368,6 +369,9 @@ export function mapZaicoCoreFields(item: ZaicoInventory): { fields: ZaicoCoreMap
   const warnings: string[] = [];
   const name = item.title?.trim();
   if (!name) warnings.push("titleが空のため、商品名を仮の値で登録しました。");
+  const labelMemo = (item.optional_attributes ?? [])
+    .filter(attribute => normalizeZaicoAttributeName(attribute.name) === normalizeZaicoAttributeName("★市川メモ"))
+    .map(attribute => attribute.value ?? "").join("\n");
 
   return {
     fields: {
@@ -375,7 +379,7 @@ export function mapZaicoCoreFields(item: ZaicoInventory): { fields: ZaicoCoreMap
       quantity: parseZaicoQuantity(item.quantity, warnings),
       unit: item.unit?.trim() || null,
       note: item.etc?.trim() || null,
-      barcode: item.code?.trim() || null,
+      barcode: resolveLabelBarcode(item.code, labelMemo),
       categoryName: item.category?.trim() || null,
       locationName: item.place?.trim() || null,
       imageSourceUrl: item.item_image?.url?.trim() || null,
