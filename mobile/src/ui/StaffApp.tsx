@@ -1,7 +1,7 @@
 import { InventorySearchScreen, InventorySortSheet } from "./InventorySearchScreen";
 import { cachedInventorySearch, cachedSearchFields, mobileSearchFields, DEFAULT_INVENTORY_SORT, type InventorySearchInput, type AdvancedSearchQuery, type InventorySort } from "../domain/search";
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -17,6 +17,7 @@ import {BarcodeScanner} from "./BarcodeScanner";
 import {SalesScreen, type SalesResponse} from "./SalesScreen";
 import { InventoryReadError } from "../domain/readError";
 import { HomeScreen } from "./HomeScreen";
+import { PullToRefreshList } from "./PullToRefreshList";
 import { deletionWarning, inventoryCopyDraft, removeConfirmedInventory, type DeleteRequest } from "../domain/inventoryActions";
 
 type Tab = "home" | "inventory" | "ec" | "sales";
@@ -93,7 +94,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     const currentGeneration = ++generation.current;
     setLoading(true); setError(null);
     try {
-      if (!await ports.online()) { setError("【圏外です】"); return; }
+      const online = await ports.online();
+      if (currentGeneration !== generation.current) return;
+      if (!online) { setError("【圏外です】"); return; }
       const page = ports.searchInventory ? await ports.searchInventory({ q: query, category, advanced, sort, offset: append ? nextOffset.current : 0 }) : null;
       const received = page ? page.items : await ports.loadInventory();
       if (currentGeneration !== generation.current) return;
@@ -108,7 +111,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       const fetchedAt = new Date().toISOString();
       setSnapshot({ schema: 1, owner: "current", items, fetchedAt });
       try { await ports.snapshot.write(items, fetchedAt); }
-      catch { setError("在庫を読み込みましたが、この端末に圏外用のデータを保存できませんでした。"); }
+      catch { if (currentGeneration === generation.current) setError("在庫を読み込みましたが、この端末に圏外用のデータを保存できませんでした。"); }
     } catch {
       if (currentGeneration === generation.current) setError("在庫を読み込めませんでした。保存済みの在庫があれば表示します。");
     } finally {
@@ -248,12 +251,12 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         </View>)}
         {!writesEnabled && <Text style={s.homeSub}>このアプリでは現在、在庫の閲覧のみ利用できます。</Text>}
       </ScrollView> : tab === "home" ? <HomeScreen offline={offline} creating={creating} writesEnabled={writesEnabled} onInventory={()=>setTab("inventory")} onCreate={()=>{void startCreate();}} onScan={()=>setScanSearch(true)} /> : tab === "inventory" ? <View style={s.list}>
-        <FlatList keyboardShouldPersistTaps="handled" ListHeaderComponent={<View style={s.listHeader}>
+        <PullToRefreshList keyboardShouldPersistTaps="handled" ListHeaderComponent={<View style={s.listHeader}>
         <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><TextInput accessibilityLabel="商品名を検索" placeholder="商品名" value={query} onChangeText={setQuery} style={s.searchInput} />{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => setQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>
         <View style={s.filterRow}><Pressable accessibilityRole="button" onPress={() => setCategoryPicker(true)} style={s.category}><Ionicons name="pricetag-outline" size={21} color={colors.text} /><Text numberOfLines={1} style={[s.categoryText,{maxWidth:130}]}>{category || "カテゴリ"}</Text><Ionicons name="chevron-down" size={16} color={colors.muted} /></Pressable><Pressable accessibilityRole="button" onPress={()=>setSearchOpen(true)} style={s.advancedButton}><Text style={s.blue}>詳細検索{advanced.conditions.length ? `（${advanced.conditions.length}）` : ""}</Text></Pressable></View>
-        <View style={s.summaryRow}><Pressable accessibilityRole="button" accessibilityLabel="在庫を再読み込み" onPress={()=>{void refresh();}} style={{padding:8}}><Ionicons name="refresh" size={18} color={colors.muted}/></Pressable><Text style={s.result}>{serverResults && total!==null ? total.toLocaleString() : rows.length.toLocaleString()}件{serverResults&&total===null&&hasMore?" 読込済み":""}{(!serverResults||totalQuantity!==null)?` 合計 ${(serverResults ? totalQuantity! : rows.reduce((sum,item)=>sum+item.quantity,0)).toLocaleString()}`:""}</Text></View>
+        <View style={s.summaryRow}><Text style={s.result}>{serverResults && total!==null ? total.toLocaleString() : rows.length.toLocaleString()}件{serverResults&&total===null&&hasMore?" 読込済み":""}{(!serverResults||totalQuantity!==null)?` 合計 ${(serverResults ? totalQuantity! : rows.reduce((sum,item)=>sum+item.quantity,0)).toLocaleString()}`:""}</Text></View>
         <Text style={s.scope}>{loading ? "自社システムから読み込み中…" : serverResults ? `${searchFields.find(field=>field.key===sort.field)?.label ?? "更新日"}・${sort.direction === "asc" ? "昇順" : "降順"}` : "読み込み済みの在庫のみ（未取得の詳細は対象外）"}</Text>
-        </View>} data={rows} keyExtractor={(item) => item.id} refreshing={loading} onRefresh={() => { void refresh(); }}
+        </View>} data={rows} keyExtractor={(item) => item.id} refreshing={loading} onRefresh={() => refresh()}
           ListFooterComponent={!offline && hasMore ? <Pressable accessibilityRole="button" disabled={loading} onPress={() => { void refresh(true); }} style={s.pickerChoice}><Text style={s.blue}>{loading ? "読み込み中…" : "続きを読み込む"}</Text></Pressable> : undefined}
           contentContainerStyle={s.listContent} ListEmptyComponent={loading ? <ActivityIndicator color={colors.blue} /> : <Text style={s.empty}>{offline ? "この端末に保存済みの在庫がありません。通信が戻ったら読み込んでください。" : "該当する在庫がありません。"}</Text>}
           renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantity}`} onPress={() => { void openItem(item); }} style={s.row}>
@@ -294,7 +297,7 @@ function DetailFact({ label, value, multiline = false }: { label: string; value?
 
 const s = StyleSheet.create({
   deleteShade:{flex:1,backgroundColor:"#00000066",justifyContent:"center",padding:24},deleteDialog:{backgroundColor:"white",borderRadius:22,padding:22,gap:16},deleteTitle:{fontSize:18,fontWeight:"700",lineHeight:27,color:colors.text},deleteName:{fontSize:16,lineHeight:24,color:colors.text},deleteNote:{fontSize:13,lineHeight:21,color:colors.muted},deleteButtons:{flexDirection:"row",gap:12,marginTop:8},deleteCancel:{flex:1,minHeight:48,alignItems:"center",justifyContent:"center"},deleteConfirm:{flex:1,minHeight:48,alignItems:"center",justifyContent:"center",backgroundColor:colors.danger,borderRadius:12},
-  advancedButton:{borderWidth:1.5,borderColor:colors.blue,borderRadius:10,padding:11},summaryRow:{flexDirection:"row",alignItems:"center",justifyContent:"space-between",marginTop:3},
+  advancedButton:{borderWidth:1.5,borderColor:colors.blue,borderRadius:10,padding:11},summaryRow:{flexDirection:"row",alignItems:"center",justifyContent:"flex-end",marginTop:3},
   floatingEdit: { position: "absolute", right: 16, bottom: 84, zIndex: 1 },
   detailHeading: { fontSize: 16, lineHeight: 22, fontWeight: "600", color: colors.text, paddingTop: 16, paddingBottom: 10 },
   accountPreview: { backgroundColor: "#344146", paddingHorizontal: 12, paddingVertical: 8, flexDirection: "row", justifyContent: "space-between" },

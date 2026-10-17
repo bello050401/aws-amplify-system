@@ -16,6 +16,8 @@ function Preview() {
   const [staffPreview, setStaffPreview] = useState(false);
   const [offline, setOffline] = useState(false);
   const offlineRef = useRef(false);
+  const refreshTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("refresh-test") === "1").current;
+  const readAttempt = useRef(0);
   const records = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
     ? galleryPreviewItems() : previewItems.map((item) => ({ ...item })));
   const uploadedPhotos=useRef(new Map<string,string>());
@@ -25,7 +27,19 @@ function Preview() {
     newMutationId: () => Crypto.randomUUID(),
     loadOptions: async()=>({categories:["販売中","撮影待ち"],locations:["川越倉庫","所沢倉庫"],statuses:previewItems[0].statusOptions??[]}),
     uploadPhoto:async photo=>{uploadedPhotos.current.set(photo.id,photo.uri);return {storageKey:photo.id,type:photo.type};},
-    loadInventory: async () => records.current.map((item) => ({ ...item })),
+    loadInventory: async () => {
+      if (refreshTest) {
+        // Synthetic browser fixture: each read changes a visible value; the third read fails.
+        const attempt = ++readAttempt.current;
+        await new Promise(resolve => setTimeout(resolve, 1800));
+        if (attempt === 3) throw new InventoryReadError("unavailable");
+        return Array.from({ length: 20 }, (_, index) => ({ ...previewItems[index % previewItems.length],
+          id: `refresh-preview-${index}`, name: `更新確認用 ${index + 1}`, quantity: attempt,
+          updatedAt: `2026-10-17T01:00:${String(attempt).padStart(2, "0")}.000Z`,
+        }));
+      }
+      return records.current.map(item => ({ ...item }));
+    },
     loadDetail: async id => {
       const item = records.current.find(row => row.id === id);
       if (!item || (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("detail-test") === "missing")) throw new InventoryReadError("not_found");

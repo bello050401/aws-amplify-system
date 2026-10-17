@@ -12,6 +12,7 @@ import { StaffApp, type StaffAppPorts } from "./StaffApp";
 import { removeInventory } from "../runtime/service";
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
+import type { InventorySearchInput } from "../domain/search";
 
 function connected(state: Network.NetworkState) { return state.isConnected !== false && state.isInternetReachable !== false; }
 const loginModeKey = `bello.login-mode.${API_ORIGIN}`;
@@ -63,6 +64,19 @@ export function LiveApp() {
   const ports = useMemo<StaffAppPorts | null>(() => {
     if (!userId) return null;
     const snapshot = new SnapshotStore(AsyncStorage, userId, API_ORIGIN);
+    const loadInventoryPage = async (input?: InventorySearchInput) => {
+      try { return await readInventory(input); }
+      catch (error) {
+        // The paginated list must handle expired/revoked sessions too, not only the legacy loader.
+        if (error instanceof StaffSessionError) {
+          setAccess(null); setCanEdit(false);
+          await snapshot.clearOnLogout();
+          await signOut(); await clearLocalSession();
+          setUserId(null); setMessage(error.message);
+        }
+        throw error;
+      }
+    };
     return {
     snapshot,
     online: async () => connected(await Network.getNetworkStateAsync()),
@@ -85,7 +99,7 @@ export function LiveApp() {
       }
     },
     newMutationId: () => Crypto.randomUUID(),
-    searchInventory: readInventory,
+    searchInventory: loadInventoryPage,
     loadDetail: readInventoryDetail,
     loadOptions: readInventoryOptions,
     uploadPhoto: uploadInventoryPhoto,

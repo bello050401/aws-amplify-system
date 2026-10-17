@@ -13,6 +13,7 @@ import type {SalesResponse} from "../ui/SalesScreen";
 import { InventoryWriteError, type SaveRequest } from "../domain/editor";
 import { InventoryReadError } from "../domain/readError";
 import type { DeleteRequest } from "../domain/inventoryActions";
+import { readJson, ReadHttpError } from "./readJson";
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
@@ -25,20 +26,19 @@ const secureTokens = new SecureTokenStorage();
 let configured: MobileConfig | null = null;
 export class StaffSessionError extends Error {}
 
-async function jsonRequest(path: string, cookie?: string): Promise<unknown> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+async function jsonRequest(path: string, cookie?: string, retry = false): Promise<unknown> {
   try {
-    const response = await fetch(`${API_ORIGIN}${path}`, {
+    return await readJson(`${API_ORIGIN}${path}`, {
       headers: { Accept: "application/json", ...(cookie ? { Cookie: cookie } : {}) },
-      credentials: "same-origin",
-      signal: controller.signal, redirect: "error",
-    });
-    if (response.status === 401 || response.status === 403) throw new StaffSessionError(response.status === 401 ? "ログインが必要です。" : "スタッフ用アプリの利用権限がありません。");
-    if (response.status === 404) throw new InventoryReadError("not_found");
-    if (!response.ok) throw new InventoryReadError("unavailable");
-    return await response.json();
-  } finally { clearTimeout(timeout); }
+      credentials: "same-origin", redirect: "error",
+    }, { retry });
+  } catch (error) {
+    if (error instanceof ReadHttpError) {
+      if (error.status === 401 || error.status === 403) throw new StaffSessionError(error.status === 401 ? "ログインが必要です。" : "スタッフ用アプリの利用権限がありません。");
+      throw new InventoryReadError(error.status === 404 ? "not_found" : "unavailable");
+    }
+    throw error;
+  }
 }
 
 function isConfig(raw: unknown): raw is MobileConfig {
@@ -92,7 +92,7 @@ export async function readInventory(input: InventorySearchInput = {}): Promise<I
   if (input.offset) params.set("offset", String(input.offset));
   if (input.advanced?.conditions.length) params.set("advanced",JSON.stringify(input.advanced));
   if (input.sort) params.set("sort",JSON.stringify(input.sort));
-  const value = await jsonRequest(`/api/mobile/inventory?${params}`, session.cookie) as InventoryResponse;
+  const value = await jsonRequest(`/api/mobile/inventory?${params}`, session.cookie, true) as InventoryResponse;
   if (value.owner !== session.owner || !["ADMIN", "EDITOR", "VIEWER"].includes(value.role) || !Array.isArray(value.items) || !value.items.every(isInventoryItem)) {
     throw new Error("在庫データを確認できませんでした。");
   }
