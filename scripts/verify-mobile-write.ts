@@ -101,7 +101,7 @@ async function main() {
   }
   assert.equal(writes, 0);
 
-  const request = body(); request.draft.quantity = "12"; request.draft.note = ""; request.draft.unit = "";
+  const request = body(); request.draft.quantity = "12"; request.draft.note = ""; request.draft.unit = ""; request.draft.barcode = "UPDATED-CODE";
   request.draft.category = ""; request.draft.location = ""; request.draft.statusId = "";
   request.draft.details.width = "47"; request.draft.details.seatDimensions = "changed dimensions";
   request.draft.details.purchasePrice = "";
@@ -112,17 +112,19 @@ async function main() {
   delete env.BELLO_MOBILE_PUBLIC_ORIGIN;
   const saved = await response.json(); assert.equal(saved.owner, "test-staff"); assert.equal(saved.mutationId, request.mutationId); assert.equal(saved.item.quantity, 12);
   assert.equal(row.note, null); assert.equal(row.unit, null); assert.equal(row.categoryId, null); assert.equal(row.locationId, null); assert.equal(row.statusId, null); assert.equal(row.purchasePrice, null);
+  assert.equal(row.barcode, "UPDATED-CODE"); assert.equal(saved.item.barcode, "UPDATED-CODE");
   assert.equal(row.salePrice, 40000); assert.equal(row.saleCommission, 4000); assert.equal(row.listingNotes, "restricted listing"); assert.equal(row.shippingCost, 200);
   assert.equal(row.customFields.unknownExistingField, "must-preserve"); assert.equal(row.customFields.seatDimensions, "changed dimensions"); assert.equal(row.width, "47");
   assert.deepEqual(JSON.parse(JSON.stringify(row.images)), initial.images); assert.equal(writes, 1); assert.equal(history.length, 1); assert.equal(triggers, 1);
   assert.equal(JSON.stringify(history).includes("__bello"), false);
   assert.equal(saved.item.details.salePrice, undefined); assert.equal(saved.item.customFields, undefined);
-  const syncInput = { zaico: { name: initial.name, quantity: initial.quantity, note: initial.note, extendedFields: { width: initial.width }, customFields: initial.customFields },
-    bello: { name: row.name, quantity: row.quantity, note: row.note, extendedFields: { width: row.width }, customFields: row.customFields }, snapshotJson: null, isNewRecord: false };
+  const syncInput = { zaico: { name: initial.name, quantity: initial.quantity, note: initial.note, barcode: initial.barcode, extendedFields: { width: initial.width }, customFields: initial.customFields },
+    bello: { name: row.name, quantity: row.quantity, note: row.note, barcode: row.barcode, extendedFields: { width: row.width }, customFields: row.customFields }, snapshotJson: null, isNewRecord: false };
   const sync = mergeZaicoUpdate(syncInput);
   assert.equal(sync.updates.quantity, undefined); assert.equal(sync.updates.note, undefined); assert.equal(sync.extendedFields.width, undefined);
   assert.equal(sync.customFields.seatDimensions, "changed dimensions");
-  for (const field of ["quantity", "note", "width", "customFields.seatDimensions"]) assert.ok(sync.conflicts.some(conflict => conflict.field === field));
+  for (const field of ["quantity", "note", "barcode", "width", "customFields.seatDimensions"]) assert.ok(sync.conflicts.some(conflict => conflict.field === field));
+  assert.equal(sync.updates.barcode, undefined);
   // Agreement releases only that field, allowing subsequent external changes to follow existing policy.
   const agreed = mergeZaicoUpdate({ ...syncInput, zaico: { ...syncInput.zaico, quantity: row.quantity } });
   assert.equal((agreed.customFields.__belloEditedFields as string[]).includes("quantity"), false);
@@ -150,6 +152,7 @@ async function main() {
   reset();exists=false;allowImages=true;
   const fresh=body() as ReturnType<typeof body> & {create:boolean;uploads:{storageKey:string;type:string}[]}; fresh.create=true;
   fresh.draft.details={width:"12.5",transactionDate:"2026-10-17"};
+  fresh.draft.barcode="NEW-CODE";
   fresh.uploads=[{storageKey:'inventory/mobile/test-staff/11111111-1111-4111-8111-111111111111/'+"a".repeat(64)+'.jpg',type:"NORMAL"}];
   const post=(value:unknown)=>module.exports.POST(new Request('https://bello.example/api/mobile/inventory/'+id,{method:"POST",headers:{"Content-Type":"application/json","X-Bello-Mobile":"1"},body:JSON.stringify(value)}),{params:{id}});
   assert.equal((await patch(fresh)).status,422);
@@ -158,6 +161,7 @@ async function main() {
   assert.equal((await post(wrongOwner)).status,403);assert.equal(writes,0);
   const before=structuredClone(fresh);lostReply=true;
   assert.equal((await post(fresh)).status,200);assert.equal(writes,1);assert.equal(row.id,id);assert.equal(row.images.length,1);assert.equal(row.images[0].isPrimary,true);assert.equal(row.width,"12.5");
+  assert.equal(row.barcode,"NEW-CODE");assert.equal(row.transactionDate,"2026-10-17");
   assert.equal((await post(before)).status,200);assert.equal(writes,1);
   const conflict=structuredClone(fresh);conflict.draft.name="different";assert.equal((await post(conflict)).status,409);assert.equal(writes,1);
   reset();exists=false;allowImages=true;

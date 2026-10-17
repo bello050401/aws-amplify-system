@@ -305,6 +305,7 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
       purchasePrice: input.purchasePrice,
       salePrice: input.salePrice,
       note: input.note?.trim() || undefined,
+      barcode: input.barcode?.trim() || undefined,
       images,
       customFields: stringifyCustomFields(input.customFields),
       createdBy: who ?? undefined,
@@ -392,6 +393,7 @@ export async function updateInventory(
       purchasePrice: input.purchasePrice,
       salePrice: input.salePrice,
       note: input.note?.trim() || null,
+      barcode: input.barcode?.trim() || null,
       images,
       customFields: stringifyCustomFields(input.customFields),
       updatedBy: who ?? undefined,
@@ -448,6 +450,7 @@ export async function updateInventory(
     diffField("仕入単価", existing.purchasePrice, input.purchasePrice),
     diffField("販売価格", existing.salePrice, input.salePrice),
     diffField("備考", existing.note, input.note),
+    diffField("QRコード・バーコード", existing.barcode, input.barcode),
     diffField("追加項目", JSON.stringify(productCustomFields(existing.customFields)), JSON.stringify(productCustomFields(input.customFields))),
     imagesChanged ? { fieldName: "画像", oldValue: `${oldImageKeys.length}枚`, newValue: `${newImageKeys.length}枚` } : null,
     // Phase C: one diffField call per extended field, reusing the exact

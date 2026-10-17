@@ -33,6 +33,7 @@ import { InventoryAuthTemporarilyUnavailable } from "../InventoryAuthTemporarily
 import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
 import { inventorySpeedProbeEnabled, SPEED_PROBE_INVENTORY_ID } from "@/lib/inventory/speedProbeGate";
 import { InventorySpeedProbeResult } from "./InventorySpeedProbeResult";
+import { productCustomFields } from "@/lib/inventory/humanEdits";
 
 /** "60000" → "60,000円" — every price on this page (readable Japanese yen, not a bare number). */
 function formatYen(value: number | null): string {
@@ -178,7 +179,7 @@ export default async function InventoryDetailPage({
   // extendedFields vs. 管理者定義のcustomFields)をそのまま維持する判
   // 断。spec C-3の「脚高/座面寸法/梱包サイズ」例示はここに含まれる。
   const fieldLabelByKey = new Map(fieldDefs.map((f) => [f.fieldKey, f.label]));
-  const customFieldValues = (item.customFields ?? {}) as Record<string, unknown>;
+  const customFieldValues = productCustomFields(item.customFields);
   const customFieldRows: DetailInfoRow[] = fieldDefs.map((def) => ({
     label: def.label,
     value: customFieldValues[def.fieldKey] === undefined || customFieldValues[def.fieldKey] === null || customFieldValues[def.fieldKey] === ""
