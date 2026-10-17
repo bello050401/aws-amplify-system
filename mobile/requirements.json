@@ -1,20 +1,143 @@
 {
   "audience": "staff-only",
   "reference": "18 user-supplied ZAICO screenshots including 7 complete edit-screen images; auction screenshot excluded",
-  "detailScreen": { "existingFieldsDisplayed": 35, "storage": "reuse existing BELLO Inventory columns and customFields keys used by ZAICO mapping; no app-specific duplicate fields", "sourceOrderPreserved": true, "stockAndPurchaseQuantitiesSeparate": true, "plannedAndActualSalePricesSeparate": true, "stateSource": "existing BELLO statusId and StatusMaster choices", "stateAndConditionRatingSeparate": true, "legacyShippingReadOnly": true, "unknownDropdownOptions": "use current BELLO input definitions", "pending": ["image and file uploads", "code scanner", "production edit/save and coexistence verification"] },
-  "tabs": ["ホーム", "在庫一覧", "EC出品", "売上"],
-  "homeActions": ["新規登録", "スキャン検索"],
-  "excludedHomeActions": ["入庫", "出庫", "棚卸", "一括操作"],
-  "accountAccess": { "requestedLoginId": "スタッフ", "staffHiddenFeatures": ["EC出品", "売上"], "accountProvisioned": false, "loginAliasImplemented": false, "passwordEntry": "secure setup; must meet existing Cognito policy" },
+  "detailScreen": {
+    "existingFieldsDisplayed": 35,
+    "storage": "reuse existing BELLO Inventory columns and customFields keys used by ZAICO mapping; no app-specific duplicate fields",
+    "sourceOrderPreserved": true,
+    "stockAndPurchaseQuantitiesSeparate": true,
+    "plannedAndActualSalePricesSeparate": true,
+    "stateSource": "existing BELLO statusId and StatusMaster choices",
+    "stateAndConditionRatingSeparate": true,
+    "legacyShippingReadOnly": true,
+    "unknownDropdownOptions": "use current BELLO input definitions",
+    "pending": [
+      "image and file uploads",
+      "code scanner",
+      "live existing ZAICO synchronization coexistence verification"
+    ]
+  },
+  "tabs": [
+    "ホーム",
+    "在庫一覧",
+    "EC出品",
+    "売上"
+  ],
+  "homeActions": [
+    "新規登録",
+    "スキャン検索"
+  ],
+  "excludedHomeActions": [
+    "入庫",
+    "出庫",
+    "棚卸",
+    "一括操作"
+  ],
+  "accountAccess": {
+    "requestedLoginId": "スタッフ",
+    "staffHiddenFeatures": [
+      "EC出品",
+      "売上"
+    ],
+    "accountProvisioned": false,
+    "loginAliasImplemented": false,
+    "passwordEntry": "secure setup; must meet existing Cognito policy"
+  },
   "labelPrinting": false,
-  "sharedData": { "source": "existing BELLO inventory records", "targetDevices": ["iPhone", "iPad", "Android", "PC browser"], "writesRequirePermission": true, "identity": "displayId is the existing inventory ID; sku is the separate management number", "staleEdit": "compare the originally read version atomically before saving; applies to Web edits and server/scheduled ZAICO imports", "completionRequires": ["cross-device saved-value readback", "ZAICO coexistence verification", "no edit rollback", "image counts and sources reconciled"] },
-  "images": { "sources": ["Inventory.NORMAL", "Inventory.DAMAGE", "PhotoAsset.READY"], "primaryRule": "reuse current Web gallery preference", "display": "product/damage tabs, total count, primary badge, grid with 24 more at a time, full-size viewer", "screenshotTenImageLimit": false, "provider": "BELLO storage only; no direct ZAICO attachment retrieval or permission dependency", "pending": ["uploads and changes through BELLO", "live mobile screen verification"] },
+  "sharedData": {
+    "source": "existing BELLO inventory records",
+    "targetDevices": [
+      "iPhone",
+      "iPad",
+      "Android",
+      "PC browser"
+    ],
+    "writesRequirePermission": true,
+    "identity": "displayId is the existing inventory ID; sku is the separate management number",
+    "staleEdit": "compare the originally read version atomically before saving; applies to Web edits and server/scheduled ZAICO imports",
+    "completionRequires": [
+      "cross-device saved-value readback",
+      "ZAICO coexistence verification",
+      "no edit rollback",
+      "image counts and sources reconciled"
+    ]
+  },
+  "images": {
+    "sources": [
+      "Inventory.NORMAL",
+      "Inventory.DAMAGE",
+      "PhotoAsset.READY"
+    ],
+    "primaryRule": "reuse current Web gallery preference",
+    "display": "product/damage tabs, total count, primary badge, grid with 24 more at a time, full-size viewer",
+    "screenshotTenImageLimit": false,
+    "provider": "BELLO storage only; no direct ZAICO attachment retrieval or permission dependency",
+    "pending": [
+      "uploads and changes through BELLO"
+    ],
+    "liveVerification": "BELLO product/damage counts and image delivery verified on B005557 (10) and B000004 (6)"
+  },
   "receiptList": false,
   "dispatchList": false,
-  "dataBoundary": { "appReadsFrom": "BELLO", "appWritesTo": "BELLO", "directZaicoRequests": false, "zaicoLoginRequired": false, "missingImages": "inspect BELLO's inventory and photo-registration records; never add an app-to-ZAICO path" },
-  "saveIntegration": { "implementedLocally": true, "endpoint": "PATCH /api/mobile/inventory/:id", "implementation": "reuse existing BELLO Web edit action with conditional version checks", "preserves": ["existing images", "hidden fields", "unexposed fields", "unknown existing custom fields"], "retry": "atomic receipt confirms prior save without a second write", "releaseFlag": "BELLO_MOBILE_WRITES_ENABLED", "defaultEnabled": false, "releaseRequires": ["deploy Web action and synchronization worker together", "drain older worker invocations before enabling mobile writes", "verify authenticated production read/save/readback"], "humanEditProtection": "mark actual changed fields in the same update; existing sync reports differences instead of overwriting; release a field after values agree", "nativeClientTests": "simulated transport passed; no automatic retry" },
-  "zaico": { "coexistence": true, "keepExistingSync": true, "preventEditRollback": true, "appResponsibility": "use the existing BELLO system; ZAICO integration remains the existing system's responsibility", "mappingRepair": "three markdown-price labels now map to existing columns; existing production values not backfilled", "unknownWriteOutcome": "retain potentially saved images until result is confirmed" },
-  "verification20261017": { "productionWrites": 0, "productionDeployment": false, "liveInventoryReadCount": 5536, "liveSourceSamplesCompared": 3, "invalidQuantityPriceNameOrCustomJsonCounts": 0, "priorDirectZaicoProbe": "unnecessary investigation; excluded from app requirements and no longer run by the audit", "galleryUiViewports": ["390x844", "820x1180", "1280x900"], "gallerySyntheticCount": 33, "imageProjectionSyntheticCount": 111, "zaicoSyncChecksPassed": 139, "workerChecksPassed": 96, "crossDeviceLiveWriteConfirmed": false },
+  "dataBoundary": {
+    "appReadsFrom": "BELLO",
+    "appWritesTo": "BELLO",
+    "directZaicoRequests": false,
+    "zaicoLoginRequired": false,
+    "missingImages": "inspect BELLO's inventory and photo-registration records; never add an app-to-ZAICO path"
+  },
+  "saveIntegration": {
+    "implementedLocally": true,
+    "endpoint": "PATCH /api/mobile/inventory/:id",
+    "implementation": "reuse existing BELLO Web edit action with conditional version checks",
+    "preserves": [
+      "existing images",
+      "hidden fields",
+      "unexposed fields",
+      "unknown existing custom fields"
+    ],
+    "retry": "atomic receipt confirms prior save without a second write",
+    "releaseFlag": "BELLO_MOBILE_WRITES_ENABLED",
+    "defaultEnabled": false,
+    "releaseRequires": [
+      "deploy Web action and synchronization worker together",
+      "drain older worker invocations before enabling mobile writes",
+      "verify authenticated production read/save/readback"
+    ],
+    "humanEditProtection": "mark actual changed fields in the same update; existing sync reports differences instead of overwriting; release a field after values agree",
+    "nativeClientTests": "simulated transport passed; no automatic retry",
+    "productionDeployed": true,
+    "productionVerified": "Live staff app save -> PC readback; PC save -> app readback; B005105 restored",
+    "searchPagination": "Server search and pagination implemented; older records outside initial page verified"
+  },
+  "zaico": {
+    "coexistence": true,
+    "keepExistingSync": true,
+    "preventEditRollback": true,
+    "appResponsibility": "use the existing BELLO system; ZAICO integration remains the existing system's responsibility",
+    "mappingRepair": "three markdown-price labels now map to existing columns; existing production values not backfilled",
+    "unknownWriteOutcome": "retain potentially saved images until result is confirmed"
+  },
+  "verification20261017": {
+    "productionWrites": 2,
+    "productionDeployment": true,
+    "liveInventoryReadCount": 5536,
+    "liveSourceSamplesCompared": 3,
+    "invalidQuantityPriceNameOrCustomJsonCounts": 0,
+    "priorDirectZaicoProbe": "unnecessary investigation; excluded from app requirements and no longer run by the audit",
+    "galleryUiViewports": [
+      "390x844",
+      "820x1180",
+      "1280x900"
+    ],
+    "gallerySyntheticCount": 33,
+    "imageProjectionSyntheticCount": 111,
+    "zaicoSyncChecksPassed": 139,
+    "workerChecksPassed": 96,
+    "crossDeviceLiveWriteConfirmed": false,
+    "separateBrowserLiveWriteConfirmed": true,
+    "originalBusinessValuesRestored": true
+  },
   "offline": {
     "read": "previously-loaded-inventory-only",
     "showLastFetchedAt": true,
@@ -22,10 +145,23 @@
     "keepUnsavedEdit": true,
     "queueWrites": false,
     "automaticReplayOnReconnect": false,
-    "leaveDirtyEditor": ["変更を保存する", "変更内容を破棄する", "編集を続ける"],
+    "leaveDirtyEditor": [
+      "変更を保存する",
+      "変更内容を破棄する",
+      "編集を続ける"
+    ],
     "saveWhileOffline": "warn-and-stay-in-editor",
     "updateVisibleInventoryOnlyAfterServerSuccess": true
   },
   "appleDeveloperProgram": "not-enrolled-as-confirmed-by-user",
-  "pending": ["ID-only staff account setup", "BELLO mobile edit/save production rollout and result verification", "existing-sync worker deployment and live coexistence verification", "image upload/edit through BELLO", "inventory server search/pagination", "new registration and code scanner", "EC/sales integration", "production deployment", "real-device cross-device edit/readback verification", "Apple account and final distribution"]
+  "pending": [
+    "ID-only staff account setup",
+    "live existing ZAICO synchronization coexistence verification",
+    "image upload/edit through BELLO",
+    "new registration and code scanner",
+    "EC/sales integration",
+    "real-device cross-device edit/readback verification",
+    "native offline cold-start verification",
+    "Apple account and final distribution"
+  ]
 }

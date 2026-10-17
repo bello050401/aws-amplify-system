@@ -1,5 +1,5 @@
 {
-  "status": "local implementation and verification; app not complete or deployed",
+  "status": "Production BELLO read/edit/save deployed and verified in two browser sessions; entire mobile app not complete",
   "dataSource": "BELLO only",
   "zaicoLoginRequired": false,
   "liveReadOnlyAudit": {
@@ -7,9 +7,21 @@
     "inventoryCount": 5536,
     "invalidQuantityPriceNameOrCustomJsonCounts": 0,
     "imageSamples": [
-      { "sku": "B005557", "storedImages": 10, "mobileProjectionImages": 10 },
-      { "sku": "B000004", "storedImages": 6, "mobileProjectionImages": 6 },
-      { "sku": "B000036", "storedImages": 4, "mobileProjectionImages": 4 }
+      {
+        "sku": "B005557",
+        "storedImages": 10,
+        "mobileProjectionImages": 10
+      },
+      {
+        "sku": "B000004",
+        "storedImages": 6,
+        "mobileProjectionImages": 6
+      },
+      {
+        "sku": "B000036",
+        "storedImages": 4,
+        "mobileProjectionImages": 4
+      }
     ],
     "directZaicoRequests": 0,
     "writes": 0,
@@ -35,18 +47,76 @@
     ],
     "nativeSaveTransport": "pass with simulated network; no automatic retry",
     "nextProductionBuild": "pass; existing unrelated lint warnings remain",
-    "mobileTypecheck": "pass"
+    "mobileTypecheck": "pass",
+    "webSaveTransport": "pass with simulated network; same-origin credentials and no manual Cookie header"
   },
   "production": {
-    "deployed": false,
+    "deployed": true,
+    "deployedCommit": "314d2508edeadb73b652b1cbbdc1601f08686540",
+    "amplifyJob": {
+      "id": "442",
+      "status": "SUCCEED"
+    },
+    "appUrl": "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com/staff-app/index.html",
+    "writesEnabled": true,
     "writesEnabledByDefault": false,
     "releaseFlag": "BELLO_MOBILE_WRITES_ENABLED",
-    "releaseOrder": [
-      "Deploy the Web action and existing synchronization worker with the edit protections.",
-      "Ensure older worker invocations have drained before enabling mobile saves.",
-      "Verify authenticated reads, explicit saves and cross-device readback."
-    ],
+    "existingSyncWorkerDeployed": true,
+    "existingSyncWorkerUpdatedAt": "2026-10-17T03:45:31Z",
+    "olderWorkerInvocationsDrainedBeforeLiveSave": true,
+    "realInventoryWrites": 2,
+    "realBrowserBidirectionalVerification": true,
     "realDeviceVerification": false,
-    "remainingScope": "See requirements.json pending list. No additional ZAICO login or direct ZAICO retrieval is required."
-  }
+    "directZaicoRequests": 0,
+    "actualZaicoImportTriggered": false,
+    "remainingScope": "See requirements.json pending list. Native device tests and live ZAICO coexistence verification are not completed."
+  },
+  "liveSaveVerification": {
+    "targetSku": "B005105",
+    "appToPc": {
+      "savedAt": "2026-10-17T03:53:40.620Z",
+      "action": "Temporary note marker appended through the live staff app",
+      "result": "PC screen reload and consistent database read confirmed"
+    },
+    "pcToApp": {
+      "savedAt": "2026-10-17T03:54:43.904Z",
+      "action": "Original note restored through existing PC edit screen",
+      "result": "Staff app refresh/reopen and consistent database read confirmed"
+    },
+    "originalNoteRestored": true,
+    "quantityUnchanged": true,
+    "priceUnchanged": true,
+    "imagesUnchanged": true,
+    "allBusinessValuesRestored": true,
+    "retainedChanges": [
+      "updatedAt",
+      "updatedBy",
+      "listUpdatedAt",
+      "internal human-edit protection and save receipt"
+    ],
+    "limitation": "Two separate authenticated browser sessions; no physical iPhone test and no automatic push-refresh claim"
+  },
+  "liveGalleryVerification": [
+    {
+      "sku": "B005557",
+      "productImages": 10,
+      "damageImages": 0,
+      "total": 10,
+      "displayedImageElementsLoaded": 12,
+      "displayedImageElementsFailed": 0,
+      "lastImageFullscreenVerified": true,
+      "fullscreenImageElementsLoaded": 13
+    },
+    {
+      "sku": "B000004",
+      "productImages": 4,
+      "damageImages": 2,
+      "total": 6,
+      "damageTabImageElementsLoaded": 4,
+      "damageTabImageElementsFailed": 0,
+      "lastDamageImageFullscreenVerified": true,
+      "fullscreenImageElementsLoaded": 5
+    }
+  ],
+  "liveSearchVerification": "B005557 and B000004 found through server search outside the initially loaded page"
 }
