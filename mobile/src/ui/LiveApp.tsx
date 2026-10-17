@@ -5,7 +5,7 @@ import * as Network from "expo-network";
 import * as Crypto from "expo-crypto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
-import { API_ORIGIN, clearLocalSession, configureMobileAuth, readInventory, readInventoryDetail, readInventoryOptions, uploadInventoryPhoto, readSales, readMobileSession, saveInventory, mobileWritesEnabled, StaffSessionError, type MobileSession } from "../runtime/service";
+import { API_ORIGIN, clearLocalSession, configureMobileAuth, readInventory, readInventoryThumbnails, readInventoryDetail, readInventoryOptions, uploadInventoryPhoto, readSales, readMobileSession, saveInventory, mobileWritesEnabled, StaffSessionError, type MobileSession } from "../runtime/service";
 import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
@@ -55,8 +55,11 @@ export function LiveApp() {
   // No permission cache is reused offline or across accounts. Revalidate on reconnection.
   useEffect(() => {
     let active = true;
-    setAccess(null);
-    if (userId && !offline) void readMobileSession().then(session => {
+    if (!userId || offline) { setAccess(null); return; }
+    // Setup/sign-in already verified this account. Avoid a second identical request at startup.
+    // Going offline clears access above, so reconnecting still revalidates it.
+    if (access?.owner === userId) return;
+    void readMobileSession().then(session => {
       if (active && session.owner === userId) { setAccess(session); setCanEdit(session.role !== "VIEWER"); }
     }).catch(() => { if (active) { setAccess(null); setCanEdit(false); } });
     return () => { active = false; };
@@ -100,6 +103,7 @@ export function LiveApp() {
     },
     newMutationId: () => Crypto.randomUUID(),
     searchInventory: loadInventoryPage,
+    loadThumbnails: readInventoryThumbnails,
     loadDetail: readInventoryDetail,
     loadOptions: readInventoryOptions,
     uploadPhoto: uploadInventoryPhoto,

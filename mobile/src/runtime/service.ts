@@ -7,7 +7,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { nativeSessionCookies } from "./sessionCookies";
 import { SecureTokenStorage } from "./secureTokenStorage";
 import { isInventoryItem } from "../domain/snapshot";
-import type { InventoryItem, InventoryOptions, PendingPhoto, UploadedPhoto } from "../domain/inventory";
+import type { InventoryItem, InventoryOptions, InventoryThumbnail, PendingPhoto, UploadedPhoto } from "../domain/inventory";
 import { isMobileFeatures, type MobileFeatures } from "../domain/access";
 import type {SalesResponse} from "../ui/SalesScreen";
 import { InventoryWriteError, type SaveRequest } from "../domain/editor";
@@ -19,7 +19,7 @@ const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
 export const API_ORIGIN = isWeb && typeof window !== "undefined" ? window.location.origin : "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
 interface MobileConfig { auth: { userPoolId: string; userPoolClientId: string }; contractVersion: number; writesEnabled: boolean }
-export interface InventoryResponse { owner: string; role: "ADMIN" | "EDITOR" | "VIEWER"; items: InventoryItem[]; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null; fetchedAt: string }
+export interface InventoryResponse { owner: string; role: "ADMIN" | "EDITOR" | "VIEWER"; items: InventoryItem[]; imagesDeferred?: boolean; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null; fetchedAt: string }
 export interface MobileSession { owner: string; role: "ADMIN" | "EDITOR" | "VIEWER"; features: MobileFeatures }
 const configKey = `bello.mobile-config.${API_ORIGIN}`;
 const secureTokens = new SecureTokenStorage();
@@ -84,19 +84,38 @@ export async function readMobileSession(): Promise<MobileSession> {
   return { owner: value.owner, role: value.role, features: { ecListing: value.features.ecListing, sales: value.features.sales } };
 }
 
-export async function readInventory(input: InventorySearchInput = {}): Promise<InventoryResponse> {
-  const session = await authenticatedSession();
+function inventoryParams(input: InventorySearchInput): URLSearchParams {
   const params = new URLSearchParams();
   if (input.q) params.set("q", input.q);
   if (input.category) params.set("category", input.category);
   if (input.offset) params.set("offset", String(input.offset));
   if (input.advanced?.conditions.length) params.set("advanced",JSON.stringify(input.advanced));
   if (input.sort) params.set("sort",JSON.stringify(input.sort));
+  return params;
+}
+
+export async function readInventory(input: InventorySearchInput = {}): Promise<InventoryResponse> {
+  const session = await authenticatedSession();
+  const params = inventoryParams(input);
+  params.set("images", "deferred");
   const value = await jsonRequest(`/api/mobile/inventory?${params}`, session.cookie, true) as InventoryResponse;
   if (value.owner !== session.owner || !["ADMIN", "EDITOR", "VIEWER"].includes(value.role) || !Array.isArray(value.items) || !value.items.every(isInventoryItem)) {
     throw new Error("在庫データを確認できませんでした。");
   }
   return value;
+}
+
+export async function readInventoryThumbnails(ids: string[]): Promise<InventoryThumbnail[]> {
+  if (!ids.length) return [];
+  const session = await authenticatedSession();
+  const params = new URLSearchParams({ images: "only", ids: ids.join(",") });
+  const value = await jsonRequest(`/api/mobile/inventory?${params}`, session.cookie, true) as { owner?: string; items?: InventoryThumbnail[] };
+  if (value?.owner !== session.owner || !Array.isArray(value.items) || !value.items.every(item =>
+    typeof item?.id === "string" && typeof item.updatedAt === "string" &&
+    (item.thumbnailUrl === null || (typeof item.thumbnailUrl === "string" && item.thumbnailUrl.startsWith("https://"))))) {
+    throw new Error("商品画像を確認できませんでした。");
+  }
+  return value.items;
 }
 
 export async function clearLocalSession(): Promise<void> { if (!isWeb) await secureTokens.clear(); }

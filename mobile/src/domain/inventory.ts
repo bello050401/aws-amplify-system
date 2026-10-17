@@ -82,10 +82,23 @@ export function validateDraft(draft: InventoryDraft): string | null {
 }
 
 /** Preserve details on a list refresh only while the server version remains identical. */
-export function mergeInventoryRead(previous: InventoryItem[], current: InventoryItem[]): InventoryItem[] {
+export function mergeInventoryRead(previous: InventoryItem[], current: InventoryItem[], imagesDeferred = false): InventoryItem[] {
   const cached = new Map(previous.map(item => [item.id, item]));
   return current.map(item => {
     const old = cached.get(item.id);
-    return old?.detailLoadedAt && old.updatedAt === item.updatedAt ? { ...old, ...item } : item;
+    const sameVersion = old?.updatedAt === item.updatedAt;
+    const merged = old?.detailLoadedAt && sameVersion ? { ...old, ...item } : item;
+    return imagesDeferred && old && sameVersion ? { ...merged, thumbnailUrl: old.thumbnailUrl } : merged;
+  });
+}
+
+export type InventoryThumbnail = Pick<InventoryItem, "id" | "updatedAt" | "thumbnailUrl">;
+
+/** A late photo response must never restore deleted rows or overwrite stock/edit values. */
+export function mergeInventoryThumbnails(items: InventoryItem[], thumbnails: InventoryThumbnail[]): InventoryItem[] {
+  const byId = new Map(thumbnails.map(image => [image.id, image]));
+  return items.map(item => {
+    const image = byId.get(item.id);
+    return image?.updatedAt === item.updatedAt ? { ...item, thumbnailUrl: image.thumbnailUrl } : item;
   });
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { InventoryEditor } from "../src/domain/editor";
-import { draftFor, mergeInventoryRead, sameDraft, validateDraft } from "../src/domain/inventory";
+import { draftFor, mergeInventoryRead, mergeInventoryThumbnails, sameDraft, validateDraft } from "../src/domain/inventory";
 import { DETAIL_FIELDS, copyDetailValues, visibleDetailFields } from "../src/domain/detailFields";
 import { previewItems } from "../src/preview/fixture";
 
@@ -85,4 +85,26 @@ test("list refresh preserves already read details only for the same version", ()
   assert.deepEqual(mergeInventoryRead([item], [listItem])[0].details, details);
   assert.equal(mergeInventoryRead([item], [{ ...listItem, updatedAt: "2026-10-18T01:00:00Z" }])[0].details, undefined);
   assert.equal(mergeInventoryRead([item], [{ ...listItem, id: "different-item" }])[0].details, undefined);
+});
+
+test("fast reads show zero/one/multiple quantities immediately and preserve only same-version cached images", () => {
+  const previous = previewItems.map(item => ({ ...item, thumbnailUrl: `https://example.test/${item.id}.jpg` }));
+  const fresh = previous.map((item, index) => ({ ...item, quantity: [0, 1, 11][index], thumbnailUrl: null }));
+  const merged = mergeInventoryRead(previous, fresh, true);
+  assert.deepEqual(merged.map(item => item.quantity), [0, 1, 11]);
+  assert.deepEqual(merged.map(item => item.thumbnailUrl), previous.map(item => item.thumbnailUrl));
+  assert.equal(mergeInventoryRead(previous, [{ ...fresh[0], updatedAt: "2026-10-18T00:00:00Z" }], true)[0].thumbnailUrl, null);
+  assert.equal(mergeInventoryRead(previous, fresh)[0].thumbnailUrl, null, "A confirmed absent image still clears the old one");
+});
+
+test("late images cannot change quantities, undo an edit or restore a deleted record", () => {
+  const [first, second, third] = previewItems;
+  const rows = [{ ...first, quantity: 0 }, { ...second, quantity: 1, updatedAt: "2026-10-18T00:00:00Z" }];
+  const images = [first, second, third].map(item => ({ id: item.id, updatedAt: item.updatedAt, thumbnailUrl: `https://example.test/${item.id}.jpg` }));
+  const merged = mergeInventoryThumbnails(rows, images);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].thumbnailUrl, images[0].thumbnailUrl);
+  assert.equal(merged[0].quantity, 0);
+  assert.equal(merged[1], rows[1], "Ignore the image belonging to an older server version");
+  assert.equal(merged[1].quantity, 1);
 });

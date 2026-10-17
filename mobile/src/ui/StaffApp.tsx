@@ -6,7 +6,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { InventoryEditor, type EditorPorts } from "../domain/editor";
-import { mergeInventoryRead, type InventoryItem, type InventoryOptions } from "../domain/inventory";
+import { mergeInventoryRead, mergeInventoryThumbnails, type InventoryThumbnail, type InventoryItem, type InventoryOptions } from "../domain/inventory";
 import { SnapshotStore, type InventorySnapshot } from "../domain/snapshot";
 import { InventoryEditorScreen } from "./InventoryEditorScreen";
 import { colors } from "./theme";
@@ -30,7 +30,8 @@ const tabs: { key: Tab; label: string; icon: IconName }[] = [
 export interface StaffAppPorts extends EditorPorts {
   snapshot: SnapshotStore;
   loadInventory: () => Promise<InventoryItem[]>;
-  searchInventory?: (input: InventorySearchInput) => Promise<{ items: InventoryItem[]; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null }>;
+  searchInventory?: (input: InventorySearchInput) => Promise<{ items: InventoryItem[]; imagesDeferred?: boolean; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null }>;
+  loadThumbnails?: (ids: string[]) => Promise<InventoryThumbnail[]>;
   loadOptions?: () => Promise<InventoryOptions>;
   loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
   loadDetail?: (id: string) => Promise<InventoryItem>;
@@ -76,12 +77,13 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const [categoryPicker, setCategoryPicker] = useState(false);
   const [feature, setFeature] = useState<string | null>(null);
   const generation = useRef(0);
+  const imageGeneration = useRef(0);
 
   useEffect(() => {
     let active = true;
     ports.snapshot.read().then((cached) => { if (active) setSnapshot((current) => current ?? cached); })
       .catch(() => { if (active) setError("保存済みの在庫を読み込めませんでした。"); });
-    return () => { active = false; generation.current++; detailGeneration.current++; };
+    return () => { active = false; generation.current++; imageGeneration.current++; detailGeneration.current++; };
   }, [ports]);
 
   useEffect(()=>{
@@ -93,15 +95,18 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const refresh = async (append = false) => {
     if (append && loading) return;
     const currentGeneration = ++generation.current;
+    if (!append) imageGeneration.current++;
+    const currentImageGeneration = imageGeneration.current;
     setLoading(true); setError(null);
     try {
       const online = await ports.online();
       if (currentGeneration !== generation.current) return;
       if (!online) { setError("【圏外です】"); return; }
-      const page = ports.searchInventory ? await ports.searchInventory({ q: query, category, advanced, sort, offset: append ? nextOffset.current : 0 }) : null;
+      const input = { q: query, category, advanced, sort, offset: append ? nextOffset.current : 0 };
+      const page = ports.searchInventory ? await ports.searchInventory(input) : null;
       const received = page ? page.items : await ports.loadInventory();
       if (currentGeneration !== generation.current) return;
-      const fresh = mergeInventoryRead(snapshotRef.current?.items ?? [], received);
+      const fresh = mergeInventoryRead(snapshotRef.current?.items ?? [], received, page?.imagesDeferred);
       const items = page ? [...fresh, ...(snapshotRef.current?.items ?? []).filter(row => !fresh.some(item => item.id === row.id))].slice(0, 500) : fresh;
       if (page) {
         setServerRows(previous => append ? [...(previous ?? []), ...fresh.filter(item => !previous?.some(row => row.id === item.id))] : fresh);
@@ -110,9 +115,25 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         setHasMore(page.hasMore);
       }
       const fetchedAt = new Date().toISOString();
-      setSnapshot({ schema: 1, owner: "current", items, fetchedAt });
-      try { await ports.snapshot.write(items, fetchedAt); }
-      catch { if (currentGeneration === generation.current) setError("在庫を読み込みましたが、この端末に圏外用のデータを保存できませんでした。"); }
+      const next = { schema: 1 as const, owner: "current", items, fetchedAt };
+      snapshotRef.current = next; setSnapshot(next);
+      // Rendering/refresh completion must not wait for the offline copy or image lookups.
+      void ports.snapshot.write(items, fetchedAt).catch(() => {
+        if (currentGeneration === generation.current) setError("在庫を読み込みましたが、この端末に圏外用のデータを保存できませんでした。");
+      });
+      if (page?.imagesDeferred && ports.loadThumbnails) void ports.loadThumbnails(received.map(item => item.id)).then(thumbnails => {
+        if (currentImageGeneration !== imageGeneration.current) return;
+        setServerRows(rows => rows && mergeInventoryThumbnails(rows, thumbnails));
+        const current = snapshotRef.current;
+        if (!current) return;
+        const withImages = { ...current, items: mergeInventoryThumbnails(current.items, thumbnails) };
+        snapshotRef.current = withImages; setSnapshot(withImages);
+        void ports.snapshot.write(withImages.items, withImages.fetchedAt).catch(() => {
+          if (currentImageGeneration === imageGeneration.current) setError("在庫は更新しましたが、画像を端末に保存できませんでした。");
+        });
+      }).catch(() => {
+        if (currentImageGeneration === imageGeneration.current) setError("在庫は更新しましたが、画像を読み込めませんでした。下に引くと再読み込みできます。");
+      });
     } catch {
       if (currentGeneration === generation.current) setError("在庫を読み込めませんでした。保存済みの在庫があれば表示します。");
     } finally {
@@ -122,6 +143,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   useEffect(() => {
     // Invalidate an older response immediately when search changes.
     generation.current++;
+    imageGeneration.current++;
     setServerRows(null); setHasMore(false); setTotal(null);setTotalQuantity(null);
     const timer = setTimeout(() => { void refresh(); }, query ? 350 : 0);
     return () => clearTimeout(timer);
@@ -260,7 +282,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         <PullToRefreshList keyboardShouldPersistTaps="handled" ListHeaderComponent={<View style={s.listHeader}>
         <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><TextInput accessibilityLabel="商品名を検索" placeholder="商品名" value={query} onChangeText={setQuery} style={s.searchInput} />{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => setQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>
         <View style={s.filterRow}><Pressable accessibilityRole="button" onPress={() => setCategoryPicker(true)} style={s.category}><Ionicons name="pricetag-outline" size={21} color={colors.text} /><Text numberOfLines={1} style={[s.categoryText,{maxWidth:130}]}>{category || "カテゴリ"}</Text><Ionicons name="chevron-down" size={16} color={colors.muted} /></Pressable><Pressable accessibilityRole="button" onPress={()=>setSearchOpen(true)} style={s.advancedButton}><Text style={s.blue}>詳細検索{advanced.conditions.length ? `（${advanced.conditions.length}）` : ""}</Text></Pressable></View>
-        <View style={s.summaryRow}><Text style={s.result}>{serverResults && total!==null ? total.toLocaleString() : rows.length.toLocaleString()}件{serverResults&&total===null&&hasMore?" 読込済み":""}{(!serverResults||totalQuantity!==null)?` 合計 ${(serverResults ? totalQuantity! : rows.reduce((sum,item)=>sum+item.quantity,0)).toLocaleString()}`:""}</Text></View>
+        <View style={s.summaryRow}><Text style={s.result}>{serverResults && total!==null ? total.toLocaleString() : rows.length.toLocaleString()}件{serverResults&&total===null&&hasMore?" 読込済み":""}・数量合計 {(serverResults && totalQuantity!==null ? totalQuantity : rows.reduce((sum,item)=>sum+item.quantity,0)).toLocaleString()}{serverResults&&totalQuantity===null&&hasMore?"（表示分）":""}</Text></View>
         <Text style={s.scope}>{loading ? "自社システムから読み込み中…" : serverResults ? `${searchFields.find(field=>field.key===sort.field)?.label ?? "更新日"}・${sort.direction === "asc" ? "昇順" : "降順"}` : "読み込み済みの在庫のみ（未取得の詳細は対象外）"}</Text>
         </View>} data={rows} keyExtractor={(item) => item.id} refreshing={loading} onRefresh={() => refresh()}
           ListFooterComponent={!offline && hasMore ? <Pressable accessibilityRole="button" disabled={loading} onPress={() => { void refresh(true); }} style={s.pickerChoice}><Text style={s.blue}>{loading ? "読み込み中…" : "続きを読み込む"}</Text></Pressable> : undefined}

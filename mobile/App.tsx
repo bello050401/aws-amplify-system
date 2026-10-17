@@ -18,11 +18,24 @@ function Preview() {
   const offlineRef = useRef(false);
   const refreshTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("refresh-test") === "1").current;
   const readAttempt = useRef(0);
+  const loadingTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("loading-test") === "1").current;
   const records = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
     ? galleryPreviewItems() : previewItems.map((item) => ({ ...item })));
   const uploadedPhotos=useRef(new Map<string,string>());
   const ports = useMemo<StaffAppPorts>(() => ({
-    snapshot: new SnapshotStore(AsyncStorage, "ui-preview", "preview-only"),
+    snapshot: new SnapshotStore(loadingTest ? { ...AsyncStorage, setItem: async (key, value) => {
+      await new Promise(resolve => setTimeout(resolve, 2500)); await AsyncStorage.setItem(key, value);
+    } } : AsyncStorage, "ui-preview", loadingTest ? "loading-preview-only" : "preview-only"),
+    ...(loadingTest ? {
+      searchInventory: async () => {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        return { items: previewItems.map((item, index) => ({ ...item, quantity: [0, 1, 11][index] })), imagesDeferred: true, hasMore: true };
+      },
+      loadThumbnails: async () => {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        return previewItems.map(item => ({ id: item.id, updatedAt: item.updatedAt, thumbnailUrl: null }));
+      },
+    } : {}),
     online: async () => !offlineRef.current,
     newMutationId: () => Crypto.randomUUID(),
     loadOptions: async()=>({categories:["販売中","撮影待ち"],locations:["川越倉庫","所沢倉庫"],statuses:previewItems[0].statusOptions??[]}),
