@@ -2,8 +2,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  bulkCreateListingDraftsAction,
-  exportMercariShopsCsvAction,
   listListingsOverviewSafeAction,
 } from "@/app/actions/listing";
 import { getEcListingCatalogAction } from "@/app/actions/ecListingCatalog";
@@ -19,14 +17,12 @@ import {
   EC_CHANNEL_LABEL,
   EC_STATE_LABEL,
   ecStateFor,
-  retainVisibleSelection,
   type EcCatalog,
   type EcChannel,
   type EcState,
   type EcOperation,
 } from "@/lib/listing/ecManagement";
 import { formatJstDateTime } from "@/lib/inventory/formatJst";
-import { downloadCsvFromBase64, type MercariCsvExportOutcome } from "./mercariCsvDownload";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
 import { EcBulkDialog } from "./EcBulkDialog";
 
@@ -58,8 +54,7 @@ export function ListingsOverviewTable({
   const [channel, setChannel] = useState<EcChannel>("MERCARI_SHOPS"),
     [query, setQuery] = useState(""),
     [filter, setFilter] = useState<"ALL" | EcState>("ALL");
-  const [archived, setArchived] = useState(false),
-    [selected, setSelected] = useState<Set<string>>(new Set());
+  const [archived, setArchived] = useState(false);
   const [page, setPage] = useState(0),
     [pageSize, setPageSize] = useState(50),
     [sort, setSort] = useState("updated");
@@ -67,10 +62,7 @@ export function ListingsOverviewTable({
       kind: EcOperation;
       items: ListingOverviewRow[];
       channel: EcChannel;
-    } | null>(null),
-    [busy, setBusy] = useState(false),
-    [feedback, setFeedback] = useState("");
-  const [csv, setCsv] = useState<MercariCsvExportOutcome | null>(null);
+    } | null>(null);
   const authRetry = useRef(false);
   useEffect(() => setState(loadStateFromInitialRows(initialResult)), [initialResult]);
   async function loadCatalog() {
@@ -135,67 +127,12 @@ export function ListingsOverviewTable({
       );
   }, [rows, catalog, query, channel, filter, sort, archived]);
   useEffect(() => {
-    if (state.kind !== "ok" || catalogBusy) return;
-    setSelected((s) =>
-      retainVisibleSelection(
-        s,
-        filtered.map((r) => r.inventoryId),
-      ),
-    );
-  }, [filtered, state.kind, catalogBusy]);
-  useEffect(() => {
     setPage(0);
   }, [query, channel, filter, archived, pageSize, sort]);
   const pagination = paginate(filtered, page, pageSize),
     pageRows = pagination.pageRows;
-  const picked = rows.filter((row) => selected.has(row.inventoryId));
-  const allPage = pageRows.length > 0 && pageRows.every((r) => selected.has(r.inventoryId));
-  function toggle(id: string) {
-    setSelected((current) => {
-      const next = new Set(current);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
-  function togglePage() {
-    setSelected((current) => {
-      const next = new Set(current);
-      for (const row of pageRows) allPage ? next.delete(row.inventoryId) : next.add(row.inventoryId);
-      return next;
-    });
-  }
-  function open(kind: EcOperation, items = picked, target = channel) {
+  function open(kind: EcOperation, items: ListingOverviewRow[], target = channel) {
     setOperation({ kind, items, channel: target });
-  }
-  async function createDrafts() {
-    if (!selected.size || busy) return;
-    setBusy(true);
-    setFeedback("");
-    try {
-      const r = await bulkCreateListingDraftsAction([...selected]);
-      setFeedback(
-        `下書き作成 ${r.created.length}件 · 作成済み ${r.skipped.length}件 · 失敗 ${r.failed.length}件`,
-      );
-      await reload();
-    } catch {
-      setFeedback("下書きを作成できませんでした。選択は保持されています。");
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function exportCsv() {
-    if (!selected.size || busy) return;
-    setBusy(true);
-    setCsv(null);
-    try {
-      const r = await exportMercariShopsCsvAction([...selected]);
-      setCsv(r);
-      if (r.ok && r.csvBase64 && r.filename) downloadCsvFromBase64(r.csvBase64, r.filename);
-    } catch {
-      setFeedback("CSVを作成できませんでした。選択は保持されています。");
-    } finally {
-      setBusy(false);
-    }
   }
   if (state.kind !== "ok")
     return (
@@ -228,13 +165,13 @@ export function ListingsOverviewTable({
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-bold text-gray-900">商品一覧</h2>
-          <p className="mt-1 text-xs text-gray-500">商品を選択して、販売先ごとに出品・停止できます。</p>
+          <p className="mt-1 text-xs text-gray-500">各商品の販売先の欄から出品・停止できます。</p>
         </div>
         <div className="flex gap-2">
           <button
             className={button}
             type="button"
-            disabled={busy || catalogBusy}
+            disabled={catalogBusy}
             onClick={() => void reload()}
           >
             再読込
@@ -257,7 +194,6 @@ export function ListingsOverviewTable({
             aria-selected={channel === c}
             onClick={() => {
               setChannel(c);
-              setSelected(new Set());
               setFilter("ALL");
             }}
             className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm ${channel === c ? "border-blue-700 font-bold text-blue-800" : "border-transparent text-gray-500 hover:text-gray-900"}`}
@@ -291,97 +227,9 @@ export function ListingsOverviewTable({
           <option value="updated">更新が新しい順</option>
           <option value="name">商品名順</option>
           <option value="quantity">数量が多い順</option>
-          <option value="price">価格が高い順</option>
+          <option value="price">単価が高い順</option>
         </select>
       </div>
-      {canEdit && (
-        <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/95 px-3 py-3 shadow-sm">
-          <span className="mr-2 text-sm font-semibold">{selected.size}件選択</span>
-          {archived ? (
-            <button className={button} disabled={!selected.size || busy} onClick={() => open("RESTORE")}>
-              復元
-            </button>
-          ) : (
-            <>
-              <button
-                className="rounded-md bg-blue-700 px-5 py-2 text-sm font-bold text-white disabled:opacity-40"
-                disabled={!selected.size || busy || !catalog?.channels[channel]}
-                onClick={() => open("PUBLISH")}
-              >
-                {EC_CHANNEL_LABEL[channel]}に出品
-              </button>
-              <button
-                className={button}
-                disabled={!selected.size || busy || !catalog?.channels[channel]}
-                onClick={() => open("STOP")}
-              >
-                出品停止
-              </button>
-              <button
-                className={button + " text-red-700"}
-                disabled={!selected.size || busy}
-                onClick={() => open("ARCHIVE")}
-              >
-                削除
-              </button>
-              <details className="relative">
-                <summary className={button + " cursor-pointer list-none"}>その他 ▾</summary>
-                <div className="absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border bg-white p-2 shadow-lg">
-                  <button
-                    className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-gray-50 disabled:opacity-40"
-                    disabled={!selected.size || busy}
-                    onClick={() => void createDrafts()}
-                  >
-                    共通下書きを一括作成
-                  </button>
-                  <button
-                    className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-gray-50 disabled:opacity-40"
-                    disabled={!selected.size || busy}
-                    onClick={() => void exportCsv()}
-                  >
-                    メルカリShops CSV出力
-                  </button>
-                  <Link href="/inventory/listings/pricing-rules" className="block px-3 py-2 text-sm">
-                    自動値下げルール
-                  </Link>
-                </div>
-              </details>
-            </>
-          )}
-          <button
-            type="button"
-            className="ml-auto px-2 text-xs text-gray-600 underline"
-            disabled={!selected.size}
-            onClick={() => setSelected(new Set())}
-          >
-            選択解除
-          </button>
-        </div>
-      )}
-      {feedback && (
-        <p role="status" className="mb-3 text-sm">
-          {feedback}
-        </p>
-      )}
-      {csv && (
-        <div className="mb-3 rounded border p-3 text-sm">
-          {csv.ok ? (
-            `CSVを生成しました（${csv.outputCount}件）。`
-          ) : (
-            <>
-              <p>CSVに不足項目があります。</p>
-              {csv.blockedRows.map((r, i) => (
-                <pre key={i} className="mt-1 whitespace-pre-wrap text-xs">
-                  {JSON.stringify(r)}
-                </pre>
-              ))}
-              {csv.encodingErrors?.map((e, i) => (
-                <p key={i}>{String(e)}</p>
-              ))}
-            </>
-          )}
-        </div>
-      )}
       {catalog?.errors.map((e) => (
         <p key={e} role="alert" className="mb-2 text-xs text-red-700">
           {e}
@@ -397,7 +245,6 @@ export function ListingsOverviewTable({
           className="ml-auto underline"
           onClick={() => {
             setArchived((v) => !v);
-            setSelected(new Set());
           }}
         >
           {archived ? "通常の商品一覧へ" : "削除済み"}
@@ -419,19 +266,9 @@ export function ListingsOverviewTable({
         <table className="w-full border-collapse text-sm md:min-w-[850px]">
           <thead className="bg-gray-50 text-xs text-gray-600">
             <tr>
-              {canEdit && (
-                <th className="w-8 p-2 md:w-10 md:p-3">
-                  <input
-                    aria-label="このページの商品をすべて選択"
-                    type="checkbox"
-                    checked={allPage}
-                    onChange={togglePage}
-                  />
-                </th>
-              )}
               <th className="px-3 py-3 text-left">商品</th>
               <th className="hidden px-3 py-3 text-right md:table-cell">数量</th>
-              <th className="hidden px-3 py-3 text-right md:table-cell">価格</th>
+              <th className="hidden px-3 py-3 text-right md:table-cell">単価</th>
               {EC_CHANNELS.map((c) => (
                 <th
                   key={c}
@@ -446,18 +283,8 @@ export function ListingsOverviewTable({
             {pageRows.map((row) => (
               <tr
                 key={row.inventoryId}
-                className={selected.has(row.inventoryId) ? "bg-blue-50/50" : "hover:bg-gray-50/70"}
+                className="hover:bg-gray-50/70"
               >
-                {canEdit && (
-                  <td className="p-2 align-middle md:p-3">
-                    <input
-                      aria-label={`${row.name}を選択`}
-                      type="checkbox"
-                      checked={selected.has(row.inventoryId)}
-                      onChange={() => toggle(row.inventoryId)}
-                    />
-                  </td>
-                )}
                 <td className="px-2 py-3 md:px-3">
                   <div className="flex min-w-0 max-w-xl items-start gap-2 md:min-w-64 md:items-center md:gap-3">
                     <div className="h-10 w-10 shrink-0 overflow-hidden rounded bg-gray-100 md:h-14 md:w-14">
@@ -472,7 +299,7 @@ export function ListingsOverviewTable({
                       </Link>
                       <p className="mt-1 text-xs text-gray-600 md:hidden">
                         数量 {row.quantity} ·{" "}
-                        {row.price != null ? `${row.price.toLocaleString()}円` : "価格未設定"}
+                        {row.price != null ? `単価 ${row.price.toLocaleString()}円` : "単価未設定"}
                       </p>
                       <div className="mt-1 flex flex-wrap items-center gap-2 whitespace-nowrap text-[11px] text-gray-400">
                         <span className="hidden md:inline">{row.displayId}</span>
@@ -580,8 +407,7 @@ export function ListingsOverviewTable({
           channel={operation.channel}
           operation={operation.kind}
           onClose={() => setOperation(null)}
-          onChanged={(done) => {
-            setSelected((s) => new Set([...s].filter((id) => !done.includes(id))));
+          onChanged={() => {
             void loadCatalog();
             void listListingsOverviewSafeAction().then((r) => setState(loadStateFromInitialRows(r)));
           }}

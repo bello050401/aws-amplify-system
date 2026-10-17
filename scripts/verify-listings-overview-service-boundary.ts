@@ -180,12 +180,12 @@ async function main() {
     // が独立に取得し、実質2回叩いていた。
     check(mock.calls.category.length === 1, "★要件: Category.listは1回のlistListingsOverviewにつき1回だけ呼ばれる(重複取得の解消)", `calls=${mock.calls.category.length}`);
 
-    // ★要件6: ListingDraft.listのselectionSetはinventoryIdだけ——
+    // ★要件6: ListingDraft.listのselectionSetはinventoryIdとpriceだけ——
     // description/images(a.json()の大きめの列)を一覧の存在判定のために
     // 運ばない。
     check(
-      mock.calls.listingDraft.every((c: { selectionSet?: string[] }) => Array.isArray(c.selectionSet) && c.selectionSet.length === 1 && c.selectionSet[0] === "inventoryId"),
-      "★要件: ListingDraft.listのselectionSetはinventoryIdだけを要求する",
+      mock.calls.listingDraft.every((c: { selectionSet?: string[] }) => Array.isArray(c.selectionSet) && c.selectionSet.length === 2 && c.selectionSet.includes("inventoryId") && c.selectionSet.includes("price")),
+      "★要件: ListingDraft.listのselectionSetはinventoryIdとpriceだけを要求する",
       JSON.stringify(mock.calls.listingDraft.map((c: { selectionSet?: string[] }) => c.selectionSet)),
     );
     check(
@@ -207,6 +207,9 @@ async function main() {
     check(chairRow0?.channelListing?.status === "ACTIVE", "ChannelListingが実際にjoinされている(externalListingId等)");
     const deskRow0 = rows.find((r) => r.inventoryId === "cat-desk-0");
     check(deskRow0?.hasDraft === true, "ListingDraftの有無(hasDraft)が実際にjoinされている");
+    check(chairRow0?.price === 29800, "在庫5でも売上合計ではなく販売予定単価29800円");
+    check(deskRow0?.price === 32000, "保存した出品単価を販売予定価格より優先");
+    check(rows.find(r => r.inventoryId === "cat-chair-1")?.price === null, "単価未設定で売上金額にフォールバックしない");
   }
 
   console.log("\n── 失敗の伝播: listListingsOverview vs listListingsOverviewSafe ──");

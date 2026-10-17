@@ -338,36 +338,9 @@ async function fetchAllChannelListings(channel: ListingChannel): Promise<Channel
   return items;
 }
 
-/**
- * EC一覧の「下書きの有無」(ListingOverviewRow.hasDraft)だけを求めるための
- * 軽量版取得(2026-09-13 EC一覧の読取量削減)。
- *
- * ## なぜ全文/画像を運んでいたのが無駄だったか
- *
- * 以前は`fetchAllListingDrafts`が(下書き編集画面と同じ)ListingDraftの
- * 全列——タイトル・説明文・価格・配送方法・images(a.json())・
- * createdBy/updatedBy等——を取得し`ListingDraftRecord`へ変換していたが、
- * この一覧(buildOverviewRows)が実際に使うのは`inventoryId`の集合
- * (`hasDraft: draftInventoryIds.has(item.id)`)だけだった。
- *
- * AppSyncの`selectionSet`でAppSyncが**返す**列を`inventoryId`だけに絞る
- * ——lib/inventory/searchScanProjection.tsのコメントにある通り、DynamoDB
- * →AppSync間の転送自体は減らない(そちらを減らすには
- * ProjectionExpressionでDynamoDBへ直結する必要がある、この一覧は
- * ChannelListing/ListingDraftのGSI自体が未整備のためScanのまま——
- * lib/listing/service.tsのLISTING_OVERVIEW_PAGE_SIZE付近のコメント参照)
- * が、AppSyncが組み立てて返すJSON(images等の大きめのAWSJSON文字列を
- * 含む)自体は小さくなる。`toListingDraftRecord`は使わない——あちらは
- * `id`/`title`/`createdAt`/`updatedAt`等、selectionSetを絞った結果には
- * 無いフィールドを要求する型なので、ここでは呼ばない(無理に使い回すと
- * 型が合わない)。
- *
- * 削除filter(`deletedAt: { attributeExists: false }`)・全ページ追跡・
- * 上限(LISTING_OVERVIEW_MAX_ITEMS)・エラー伝播は`fetchAllListingDrafts`
- * と同じまま——変えたのは選択する列だけ。
- */
-async function fetchListingDraftInventoryIds(): Promise<Set<string>> {
-  const inventoryIds = new Set<string>();
+/** 一覧用に下書きの単価だけ取得する。本文・画像は運ばない。 */
+async function fetchListingDraftPrices(): Promise<Map<string, number | null>> {
+  const prices = new Map<string, number | null>();
   let fetchedCount = 0;
   let nextToken: string | null | undefined;
   do {
@@ -375,11 +348,11 @@ async function fetchListingDraftInventoryIds(): Promise<Set<string>> {
       filter: { deletedAt: { attributeExists: false } },
       limit: LISTING_OVERVIEW_PAGE_SIZE,
       nextToken: nextToken ?? undefined,
-      selectionSet: ["inventoryId"],
+      selectionSet: ["inventoryId", "price"],
       ...inventoryAuthMode,
     });
     if (errors) throw new Error(`出品下書き一覧の取得に失敗しました: ${JSON.stringify(errors)}`);
-    for (const row of data) inventoryIds.add(row.inventoryId);
+    for (const row of data) prices.set(row.inventoryId, row.price ?? null);
     // 件数の上限判定は(重複除去前の)取得件数そのもので行う——
     // fetchAllListingDraftsと同じ歯止めの意味を保つ(Setのサイズだと、
     // inventoryIdの重複がもしあった場合に上限判定がずれてしまう)。
@@ -387,7 +360,7 @@ async function fetchListingDraftInventoryIds(): Promise<Set<string>> {
     nextToken = nt;
     if (fetchedCount >= LISTING_OVERVIEW_MAX_ITEMS) break;
   } while (nextToken);
-  return inventoryIds;
+  return prices;
 }
 
 /** 一覧ベースのEC出品管理画面(下記ListingOverviewRow)の1行。 */
@@ -445,7 +418,7 @@ export interface ListingOverviewRow {
  * Promise.allで束ねる並列読み取りから、最終行を組み立てる純粋な部分。
  * 計測の有無に関わらず同じ関数を通す(二重実装を避ける)。
  *
- * `draftInventoryIds`はfetchListingDraftInventoryIdsが返す「下書きが
+ * `draftPrices`はfetchListingDraftPricesが返す「下書きが
  * 存在するinventoryIdの集合」——2026-09-13 EC一覧の読取量削減で
  * `ListingDraftRecord[]`から変更(この関数が使うのは元々inventoryIdの
  * 存在判定だけだったため、呼び出し側の取得を軽量化した分だけ型も
@@ -454,7 +427,7 @@ export interface ListingOverviewRow {
 function buildOverviewRows(
   inventoryPage: Awaited<ReturnType<typeof listEcEligibleInventory>>,
   channelListings: ChannelListingRecord[],
-  draftInventoryIds: Set<string>,
+  draftPrices: Map<string, number | null>,
   categoryNameOf: CategoryNameLookup,
 ): ListingOverviewRow[] {
   const channelListingByInventoryId = new Map(channelListings.map((c) => [c.inventoryId, c]));
@@ -471,10 +444,11 @@ function buildOverviewRows(
       displayId: item.displayId,
       name: item.name,
       quantity: item.quantity,
-      price: item.salePrice ?? item.plannedSalePrice ?? null,
+      // salePrice is a sales result and may include multiple sold units.
+      price: draftPrices.get(item.id) ?? item.plannedSalePrice ?? null,
       thumbnailKey: item.mainImageThumbnailKey ?? item.mainImageStorageKey,
       inventoryUpdatedAt: item.updatedAt,
-      hasDraft: draftInventoryIds.has(item.id),
+      hasDraft: draftPrices.has(item.id),
       channelListing: channelListingByInventoryId.get(item.id) ?? null,
     }));
 }
@@ -522,7 +496,7 @@ async function fetchListingsOverviewRows(): Promise<ListingOverviewRow[]> {
   const categoriesPromise = listAllMasterEntries("Category").catch((err) => {
     throw tagListingsOverviewFailureStage(err, "categoryNames");
   });
-  const [inventoryPage, channelListings, draftInventoryIds, categories] = await Promise.all([
+  const [inventoryPage, channelListings, draftPrices, categories] = await Promise.all([
     // 対象カテゴリだけをGSIから引く(全件スキャンしない)。
     categoriesPromise
       .then((categories) => listEcEligibleInventory(categories))
@@ -532,12 +506,12 @@ async function fetchListingsOverviewRows(): Promise<ListingOverviewRow[]> {
     fetchAllChannelListings("MERCARI_SHOPS").catch((err) => {
       throw tagListingsOverviewFailureStage(err, "channelListings");
     }),
-    fetchListingDraftInventoryIds().catch((err) => {
+    fetchListingDraftPrices().catch((err) => {
       throw tagListingsOverviewFailureStage(err, "listingDrafts");
     }),
     categoriesPromise,
   ]);
-  return buildOverviewRows(inventoryPage, channelListings, draftInventoryIds, buildCategoryNameLookup(categories));
+  return buildOverviewRows(inventoryPage, channelListings, draftPrices, buildCategoryNameLookup(categories));
 }
 
 /** 一覧の計測結果 1段階ぶん。固定ラベル・壁時計経過時間・成否のみ ── 商品・顧客・認証情報は一切含まない。 */
@@ -610,7 +584,7 @@ async function fetchListingsOverviewRowsWithStages(): Promise<{ rows: ListingOve
       return listEcEligibleInventory(catOutcome.value);
     }),
     measureStage("channelListings", () => fetchAllChannelListings("MERCARI_SHOPS")),
-    measureStage("listingDrafts", fetchListingDraftInventoryIds),
+    measureStage("listingDrafts", fetchListingDraftPrices),
     categoryOutcomePromise,
   ]);
   const outcomes = [inventoryOutcome, channelOutcome, draftOutcome, categoryOutcome];
@@ -623,7 +597,7 @@ async function fetchListingsOverviewRowsWithStages(): Promise<{ rows: ListingOve
   const rows = buildOverviewRows(
     (inventoryOutcome as { ok: true; value: Awaited<ReturnType<typeof listEcEligibleInventory>> }).value,
     (channelOutcome as { ok: true; value: ChannelListingRecord[] }).value,
-    (draftOutcome as { ok: true; value: Set<string> }).value,
+    (draftOutcome as { ok: true; value: Map<string, number | null> }).value,
     buildCategoryNameLookup((categoryOutcome as { ok: true; value: Awaited<ReturnType<typeof listAllMasterEntries>> }).value),
   );
   return { rows, stages };
@@ -798,7 +772,7 @@ export async function bulkCreateListingDrafts(
         {
           title: inventory.name,
           description: "",
-          price: inventory.salePrice ?? inventory.plannedSalePrice ?? 0,
+          price: inventory.plannedSalePrice ?? 0,
           condition: "NO_NOTABLE_DAMAGE",
         },
         who,
