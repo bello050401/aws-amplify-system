@@ -19,20 +19,15 @@ export function SalesScreen({load,offline,onOpen}:{load:(year:number,month:numbe
   const view=data?.view;const totals=view?.totals;const change=(delta:number)=>setMonth(value=>shiftYearMonth(value.year,value.month,delta));
   const button=(label:string,action:()=>void,disabled=false)=><Pressable accessibilityRole="button" disabled={disabled} onPress={action} style={[s.button,disabled&&{opacity:.4}]}><Text style={s.link}>{label}</Text></Pressable>;
   const tile=(label:string,value:string)=><View style={s.tile} key={label}><Text style={s.tileLabel}>{label}</Text><Text style={s.amount}>{value}</Text></View>;
-  const last=shiftYearMonth(today.year,today.month,-1);
-  const isCurrent=month.year===today.year&&month.month===today.month;
-  const isLast=month.year===last.year&&month.month===last.month;
   return <View style={s.screen}>
     <View style={s.controls}>
       <View style={s.row}>
         <Pressable accessibilityRole="button" accessibilityLabel="前月" disabled={month.year===2000&&month.month===1} onPress={()=>change(-1)} style={s.arrow}><Ionicons name="chevron-back" size={22} color="#374151"/></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel={month.year+"年"+month.month+"月を選択"} accessibilityState={{expanded:picker}} onPress={()=>{setPickYear(month.year);setPicker(true);}} style={s.monthButton}><Text style={s.monthTitle}>{month.year}年{month.month}月</Text><Ionicons name="chevron-down" size={17} color="#6b7280"/></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="翌月" disabled={month.year===today.year+1&&month.month===12} onPress={()=>change(1)} style={s.arrow}><Ionicons name="chevron-forward" size={22} color="#374151"/></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="売上を再読み込み" disabled={busy||offline} onPress={()=>{void refresh();}} style={s.reload}><Ionicons name="refresh-outline" size={21} color="#4b5563"/></Pressable>
       </View>
-      <View style={s.row}><View style={s.segments}>
-        <Pressable accessibilityRole="button" accessibilityState={{selected:isLast}} onPress={()=>setMonth(last)} style={[s.segment,isLast&&s.selected]}><Text style={[s.segmentText,isLast&&s.white]}>先月</Text></Pressable>
-        <Pressable accessibilityRole="button" accessibilityState={{selected:isCurrent}} onPress={()=>setMonth({year:today.year,month:today.month})} style={[s.segment,isCurrent&&s.selected]}><Text style={[s.segmentText,isCurrent&&s.white]}>今月</Text></Pressable>
-      </View><Pressable accessibilityRole="button" accessibilityLabel="売上を再読み込み" disabled={busy||offline} onPress={()=>{void refresh();}} style={s.reload}><Ionicons name="refresh-outline" size={17} color="#4b5563"/><Text style={s.hint}>更新</Text></Pressable></View>
+
     </View>
     <ScrollView contentContainerStyle={s.body}>
       {busy?<ActivityIndicator accessibilityLabel="売上を読み込み中"/>:null}{error?<Text accessibilityRole="alert" style={s.error}>{error}</Text>:null}
@@ -66,7 +61,7 @@ export function SalesScreen({load,offline,onOpen}:{load:(year:number,month:numbe
 const s=StyleSheet.create({
   screen:{flex:1,backgroundColor:"white"},controls:{paddingHorizontal:16,paddingTop:4,paddingBottom:8,borderBottomWidth:1,borderColor:"#e5e7eb",backgroundColor:"white"},
   row:{flexDirection:"row",alignItems:"center",justifyContent:"space-between"},arrow:{width:44,height:44,alignItems:"center",justifyContent:"center"},monthButton:{minHeight:44,flex:1,flexDirection:"row",gap:8,alignItems:"center",justifyContent:"center"},monthTitle:{fontSize:20,fontWeight:"700",color:"#111827"},
-  segments:{flexDirection:"row",backgroundColor:"#f3f4f6",borderRadius:7,padding:2},segment:{minHeight:40,minWidth:64,alignItems:"center",justifyContent:"center",borderRadius:5},segmentText:{fontSize:14,color:"#4b5563"},selected:{backgroundColor:"#111827"},white:{color:"white"},reload:{minHeight:44,paddingHorizontal:8,flexDirection:"row",gap:5,alignItems:"center"},
+  selected:{backgroundColor:"#111827"},white:{color:"white"},reload:{height:44,width:44,alignItems:"center",justifyContent:"center"},
   body:{padding:16,gap:14,paddingBottom:30,width:"100%",maxWidth:800,alignSelf:"center"},section:{gap:8},button:{minHeight:44,padding:10,borderWidth:1,borderColor:"#d1d5db",borderRadius:5,alignItems:"center",justifyContent:"center"},link:{color:colors.blue,fontSize:14,lineHeight:21},error:{color:colors.danger,lineHeight:22},hint:{fontSize:12,color:"#6b7280",lineHeight:18},note:{fontSize:11,color:"#6b7280",marginTop:-9},heading:{fontSize:13,fontWeight:"700",color:"#6b7280"},amount:{fontSize:18,fontWeight:"700",color:"#111827",fontVariant:["tabular-nums"]},
   tiles:{flexDirection:"row",flexWrap:"wrap",gap:1,padding:1,backgroundColor:"#e5e7eb"},tile:{flexBasis:"48%",flexGrow:1,backgroundColor:"white",paddingHorizontal:12,paddingVertical:9,gap:3},tileLabel:{fontSize:11,color:"#6b7280",lineHeight:15},chart:{gap:12,borderWidth:1,borderColor:"#e5e7eb",padding:12},item:{gap:6,borderBottomWidth:1,borderColor:colors.border,paddingVertical:14},
   shade:{flex:1,backgroundColor:"#0005",justifyContent:"flex-end"},dialog:{backgroundColor:"white",padding:20,paddingBottom:30,borderTopLeftRadius:20,borderTopRightRadius:20,gap:12,width:"100%",maxWidth:500,alignSelf:"center"},dialogTitle:{fontSize:18,fontWeight:"700"},pickerGrid:{flexDirection:"row",flexWrap:"wrap",gap:4},pickerCell:{width:"24%",minHeight:44,justifyContent:"center",alignItems:"center",backgroundColor:"#f3f4f6",borderRadius:5},pickerText:{fontSize:16,color:"#374151"}
