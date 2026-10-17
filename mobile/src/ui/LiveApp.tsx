@@ -10,10 +10,13 @@ import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
 import { colors } from "./theme";
-import { loginErrorMessage, resolveLoginId } from "../domain/login";
+import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 
 function connected(state: Network.NetworkState) { return state.isConnected !== false && state.isInternetReachable !== false; }
+const loginModeKey = `bello.login-mode.${API_ORIGIN}`;
 export function LiveApp() {
+  const requestedMode = useRef(requestedLoginMode(typeof window === "undefined" ? "" : window.location?.search ?? "")).current;
+  const [loginMode, setLoginMode] = useState<LoginMode>(requestedMode ?? "account");
   const [userId, setUserId] = useState<string | null>(null);
   const [access, setAccess] = useState<MobileSession | null>(null);
   // Retain local editing capability while offline; every actual write is reauthorized by BELLO.
@@ -29,6 +32,10 @@ export function LiveApp() {
     try {
       const online = connected(await Network.getNetworkStateAsync()); setOffline(!online);
       await configureMobileAuth(online); if (!mounted.current) return;
+      const rememberedMode = requestedMode ?? await AsyncStorage.getItem(loginModeKey).catch(() => null);
+      if (!mounted.current) return;
+      setLoginMode(rememberedMode === "staff" ? "staff" : "account");
+      if (requestedMode) void AsyncStorage.setItem(loginModeKey, requestedMode).catch(() => {});
       setReady(true);
       const user = await getCurrentUser().catch(() => null);
       if (user && mounted.current) {
@@ -85,15 +92,21 @@ export function LiveApp() {
     save: saveInventory,
   }; }, [userId]);
 
+  const chooseLoginMode = (mode: LoginMode) => {
+    if (busy) return;
+    setLoginMode(mode); setPassword(""); setAnswer(""); setChallenge(null); setMessage(null);
+    // Store only the chosen entrance, never a password or an authorization decision.
+    void AsyncStorage.setItem(loginModeKey, mode).catch(() => setMessage("この端末にログイン方法を記憶できませんでした。ログインは続けられます。"));
+  };
   const login = async () => {
     if (busy) return;
     setBusy(true); setMessage(null);
     try {
       if (!connected(await Network.getNetworkStateAsync())) { setMessage("【圏外です】"); return; }
-      if (!challenge && (!email.trim() || !password)) { setMessage("ログインIDとパスワードを入力してください。"); return; }
+      if (!challenge && ((loginMode === "account" && !email.trim()) || !password)) { setMessage(loginMode === "staff" ? "パスワードを入力してください。" : "ログインIDとパスワードを入力してください。"); return; }
       if (!challenge && password.length < 8) { setMessage("パスワードは8文字以上です。登録時のパスワードを入力してください。"); return; }
       if (!challenge) await signOut();
-      const result = challenge ? await confirmSignIn({ challengeResponse: answer }) : await signIn({ username: resolveLoginId(email), password });
+      const result = challenge ? await confirmSignIn({ challengeResponse: answer }) : await signIn({ username: loginUsername(loginMode, email), password });
       if (result.isSignedIn) {
         const session = await readMobileSession(); setAccess(session); setCanEdit(session.role !== "VIEWER");
         const user = await getCurrentUser(); setUserId(user.userId); setPassword(""); setAnswer(""); setChallenge(null);
@@ -103,7 +116,7 @@ export function LiveApp() {
         else if (["CONFIRM_SIGN_IN_WITH_SMS_CODE", "CONFIRM_SIGN_IN_WITH_TOTP_CODE", "CONFIRM_SIGN_IN_WITH_EMAIL_CODE"].includes(step)) setChallenge("code");
         else setMessage("追加の本人確認が必要です。管理者にログイン方法を確認してください。");
       }
-    } catch (error) { setMessage(error instanceof StaffSessionError ? error.message : loginErrorMessage(error)); }
+    } catch (error) { setMessage(error instanceof StaffSessionError ? error.message : loginErrorMessage(error, loginMode)); }
     finally { setBusy(false); }
   };
   const logout = async () => {
@@ -117,14 +130,15 @@ export function LiveApp() {
   };
   if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}
     features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES} />;
-  return <View style={s.root}><Image source={require("../../assets/bello-system-icon.png")} style={s.brand} contentFit="contain" accessibilityLabel="Bello SYSTEM"/><Text style={s.title}>スタッフログイン</Text>
+  return <View style={s.root}><Image source={require("../../assets/bello-system-icon.png")} style={s.brand} contentFit="contain" accessibilityLabel="Bello SYSTEM"/>
     {message && <Text accessibilityRole="alert" style={s.error}>{message}</Text>}
     {!ready ? <Pressable accessibilityRole="button" onPress={setup} style={s.button}><Text style={s.white}>接続を確認する</Text></Pressable> : <>
       {challenge ? <><Text style={s.label}>{challenge === "password" ? "新しいパスワード" : "確認コード"}</Text><TextInput accessibilityLabel={challenge === "password" ? "新しいパスワード" : "確認コード"} style={s.input} value={answer} onChangeText={setAnswer} secureTextEntry={challenge === "password"} autoCapitalize="none" /></> : <>
-        <Text style={s.label}>ログインID</Text><TextInput accessibilityLabel="ログインID" placeholder="スタッフ または メールアドレス" style={s.input} value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false} autoComplete="username" />
+        {loginMode === "account" && <><Text style={s.label}>ログインID</Text><TextInput accessibilityLabel="ログインID" placeholder="スタッフ または メールアドレス" style={s.input} value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false} autoComplete="username" /></>}
         <Text style={s.label}>パスワード</Text><TextInput accessibilityLabel="パスワード" style={s.input} value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password" /></>}
       <Pressable accessibilityRole="button" disabled={busy} onPress={login} style={s.button}>{busy ? <ActivityIndicator color="white" /> : <Text style={s.white}>{challenge ? "確認する" : "ログイン"}</Text>}</Pressable>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={() => chooseLoginMode(loginMode === "staff" ? "account" : "staff")} style={s.switchAccount}><Text style={s.switchText}>{loginMode === "staff" ? "別のアカウントでログイン" : "スタッフはこちら"}</Text></Pressable>
     </>}
   </View>;
 }
-const s = StyleSheet.create({ root: { flex: 1, justifyContent: "center", padding: 30, backgroundColor: "#F8F6F1" }, brand: { width: 112, height: 112, alignSelf: "center", borderRadius: 24 }, title: { fontSize: 21, fontWeight:"700",textAlign:"center",marginTop: 20, marginBottom: 30, color: colors.text }, label: { fontSize: 15, color: colors.muted, marginBottom: 8 }, input: { borderWidth: 1, borderColor: colors.border, backgroundColor: "white", borderRadius: 12, padding: 15, fontSize: 17, marginBottom: 20 }, button: { borderRadius: 16, backgroundColor: "#263D3C", padding: 17, alignItems: "center", marginTop: 10 }, white: { fontSize: 17, fontWeight: "600", color: "white" }, error: { color: colors.danger, marginBottom: 20, lineHeight: 23 } });
+const s = StyleSheet.create({ root: { flex: 1, justifyContent: "center", padding: 30, backgroundColor: "#F8F6F1" }, brand: { width: 112, height: 112, alignSelf: "center", borderRadius: 24, marginBottom: 30 }, label: { fontSize: 15, color: colors.muted, marginBottom: 8 }, input: { borderWidth: 1, borderColor: colors.border, backgroundColor: "white", borderRadius: 12, padding: 15, fontSize: 17, marginBottom: 20 }, button: { borderRadius: 16, backgroundColor: "#263D3C", padding: 17, alignItems: "center", marginTop: 10 }, white: { fontSize: 17, fontWeight: "600", color: "white" }, switchAccount: { minHeight: 44, justifyContent: "center", alignItems: "center", marginTop: 16 }, switchText: { fontSize: 14, color: "#526B63" }, error: { color: colors.danger, marginBottom: 20, lineHeight: 23 } });
