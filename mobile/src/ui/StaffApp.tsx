@@ -18,6 +18,7 @@ import {SalesScreen, type SalesResponse} from "./SalesScreen";
 import { InventoryReadError } from "../domain/readError";
 import { HomeScreen } from "./HomeScreen";
 import { PullToRefreshList } from "./PullToRefreshList";
+import { DetailSwipeBack } from "./DetailSwipeBack";
 import { deletionWarning, inventoryCopyDraft, removeConfirmedInventory, type DeleteRequest } from "../domain/inventoryActions";
 
 type Tab = "home" | "inventory" | "ec" | "sales";
@@ -149,6 +150,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     setEditor(new InventoryEditor(item,ports,true));setCreating(false);
   };
   const leaveEditor = () => { setEditor(null); setSelected(null); setError(null); setTab("inventory"); };
+  const returnFromDetail = () => {
+    detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setError(null); setTab("inventory");
+  };
   const startCopy = () => {
     if (!selected || !writesEnabled || detailLoading) return;
     if (!selected.detailLoadedAt || !selected.photosComplete) { setError("写真を含む商品詳細を読み込んでからコピーしてください。"); return; }
@@ -180,7 +184,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     if (!ports.loadDetail) return;
     setDetailLoading(true);
     try {
-      if (!await ports.online()) {
+      const online = await ports.online();
+      if (attempt !== detailGeneration.current) return;
+      if (!online) {
         if (!item.detailLoadedAt) setError("【圏外です】この商品の詳細は未取得です。保存済みの基本情報を表示しています。");
         return;
       }
@@ -222,9 +228,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={saved} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <>
+    {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={saved} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
       <View style={s.header}>
-        <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); }} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
+        <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
         <View style={[s.headerSide, selected && {width:88,flexDirection:"row"}]}>{selected && writesEnabled && <>
           <Pressable accessibilityRole="button" accessibilityLabel="この商品をコピーして新規登録" disabled={detailLoading} onPress={startCopy} style={s.round}><Ionicons name="copy-outline" size={23} color={colors.blue}/></Pressable>
@@ -266,7 +272,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       </View> : tab === "sales" && ports.loadSales ? <SalesScreen load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Ionicons name={tab === "ec" ? "storefront-outline" : "stats-chart-outline"} size={55} color={colors.turquoise} /><Text style={s.pendingTitle}>{tab === "ec" ? "EC出品" : "売上"}</Text><Text style={s.pendingText}>既存の自社システムとの接続を実装中です。{offline ? "通信が戻ってから操作できます。" : ""}</Text></View>}
       {selected && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={21} color="white" /><Text style={s.editLabel}>編集</Text></Pressable>}
       <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={22} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
-    </>}
+    </DetailSwipeBack>}
     <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={()=>{if(!deleteBusy.current)setDeleteTarget(null);}}>
       <View style={s.deleteShade}><View accessibilityViewIsModal style={s.deleteDialog}>
         <Ionicons name="trash-outline" size={30} color={colors.danger}/><Text style={s.deleteTitle}>この商品を本当に削除しますか？</Text>
