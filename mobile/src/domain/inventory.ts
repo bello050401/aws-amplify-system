@@ -1,3 +1,4 @@
+import type { SearchFieldDef } from "../../../lib/inventory/advancedSearch";
 import { copyDetailValues, validateDetailValues, type DetailValues } from "./detailFields";
 
 export interface InventoryPhoto {
@@ -9,7 +10,7 @@ export interface InventoryPhoto {
 export interface InventoryStatusOption { id: string; label: string }
 export interface PendingPhoto { id: string; uri: string; type: "NORMAL" | "DAMAGE" }
 export interface UploadedPhoto { storageKey: string; type: "NORMAL" | "DAMAGE" }
-export interface InventoryOptions { categories: string[]; locations: string[]; statuses: InventoryStatusOption[] }
+export interface InventoryOptions { searchFields?: SearchFieldDef[]; categories: string[]; locations: string[]; statuses: InventoryStatusOption[] }
 export interface InventoryItem {
   id: string;
   sku: string;
@@ -30,6 +31,7 @@ export interface InventoryItem {
   barcode: string;
   plannedSalePrice: number | null;
   thumbnailUrl: string | null;
+  createdAt?: string;
   updatedAt: string;
   details?: DetailValues;
   photos?: InventoryPhoto[];

@@ -18,6 +18,7 @@ export function isInventoryItem(value: unknown): value is InventoryItem {
   return ["id", "sku", "name", "unit", "location", "category", "condition", "note", "barcode", "updatedAt"]
     .every((key) => typeof row[key] === "string") &&
     (row.displayId === undefined || typeof row.displayId === "string") &&
+    (row.createdAt === undefined || typeof row.createdAt === "string") &&
     typeof row.quantity === "number" && Number.isSafeInteger(row.quantity) && row.quantity >= 0 &&
     (row.plannedSalePrice === null || (typeof row.plannedSalePrice === "number" && Number.isFinite(row.plannedSalePrice))) &&
     (row.thumbnailUrl === null || typeof row.thumbnailUrl === "string") &&
@@ -64,6 +65,7 @@ export class SnapshotStore {
     const snapshot: InventorySnapshot = { schema: 1, owner: this.owner, fetchedAt, items: items.slice(0, 500).map(item => ({
       id: item.id, sku: item.sku, name: item.name, quantity: item.quantity, unit: item.unit,
       ...(item.displayId !== undefined ? { displayId: item.displayId } : {}),
+      ...(item.createdAt !== undefined ? { createdAt: item.createdAt } : {}),
       location: item.location, category: item.category, condition: item.condition, note: item.note,
       ...(item.statusId !== undefined ? { statusId: item.statusId } : {}),
       ...(item.statusOptions ? { statusOptions: item.statusOptions.map(option => ({ id: option.id, label: option.label })) } : {}),

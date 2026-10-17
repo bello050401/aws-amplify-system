@@ -1,3 +1,5 @@
+import { InventorySearchScreen, InventorySortSheet } from "./InventorySearchScreen";
+import { cachedInventorySearch, cachedSearchFields, mobileSearchFields, DEFAULT_INVENTORY_SORT, type InventorySearchInput, type AdvancedSearchQuery, type InventorySort } from "../domain/search";
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -24,7 +26,7 @@ const tabs: { key: Tab; label: string; icon: IconName }[] = [
 export interface StaffAppPorts extends EditorPorts {
   snapshot: SnapshotStore;
   loadInventory: () => Promise<InventoryItem[]>;
-  searchInventory?: (input: { q: string; category: string; offset: number }) => Promise<{ items: InventoryItem[]; hasMore: boolean }>;
+  searchInventory?: (input: InventorySearchInput) => Promise<{ items: InventoryItem[]; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null }>;
   loadOptions?: () => Promise<InventoryOptions>;
   loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
   loadDetail?: (id: string) => Promise<InventoryItem>;
@@ -46,6 +48,13 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const [editor, setEditor] = useState<InventoryEditor | null>(null);
   const [loading, setLoading] = useState(false);
   const [serverRows, setServerRows] = useState<InventoryItem[] | null>(null);
+  const [advanced,setAdvanced]=useState<AdvancedSearchQuery>({combinator:"AND",conditions:[]});
+  const [sort,setSort]=useState<InventorySort>(DEFAULT_INVENTORY_SORT);
+  const [searchOpen,setSearchOpen]=useState(false);
+  const [sortOpen,setSortOpen]=useState(false);
+  const [options,setOptions]=useState<InventoryOptions|null>(null);
+  const [total,setTotal]=useState<number|null>(null);
+  const [totalQuantity,setTotalQuantity]=useState<number|null>(null);
   const [hasMore, setHasMore] = useState(false);
   const nextOffset = useRef(0);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -66,20 +75,27 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     return () => { active = false; generation.current++; detailGeneration.current++; };
   }, [ports]);
 
+  useEffect(()=>{
+    let active=true;
+    if (!offline && ports.loadOptions) void ports.loadOptions().then(value=>{if(active)setOptions(value);}).catch(()=>{});
+    return ()=>{active=false;};
+  },[ports,offline]);
+  const searchFields=options?.searchFields ? mobileSearchFields(options.searchFields,features) : cachedSearchFields(snapshot?.items ?? [],features);
   const refresh = async (append = false) => {
     if (append && loading) return;
     const currentGeneration = ++generation.current;
     setLoading(true); setError(null);
     try {
       if (!await ports.online()) { setError("【圏外です】"); return; }
-      const page = ports.searchInventory ? await ports.searchInventory({ q: query, category, offset: append ? nextOffset.current : 0 }) : null;
+      const page = ports.searchInventory ? await ports.searchInventory({ q: query, category, advanced, sort, offset: append ? nextOffset.current : 0 }) : null;
       const received = page ? page.items : await ports.loadInventory();
       if (currentGeneration !== generation.current) return;
       const fresh = mergeInventoryRead(snapshotRef.current?.items ?? [], received);
       const items = page ? [...fresh, ...(snapshotRef.current?.items ?? []).filter(row => !fresh.some(item => item.id === row.id))].slice(0, 500) : fresh;
       if (page) {
         setServerRows(previous => append ? [...(previous ?? []), ...fresh.filter(item => !previous?.some(row => row.id === item.id))] : fresh);
-        nextOffset.current = (append ? nextOffset.current : 0) + received.length;
+        nextOffset.current = page.nextOffset ?? ((append ? nextOffset.current : 0) + received.length);
+        setTotal(page.total ?? null);setTotalQuantity(page.totalQuantity ?? null);
         setHasMore(page.hasMore);
       }
       const fetchedAt = new Date().toISOString();
@@ -95,10 +111,10 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   useEffect(() => {
     // Invalidate an older response immediately when search changes.
     generation.current++;
-    setServerRows(null); setHasMore(false);
+    setServerRows(null); setHasMore(false); setTotal(null);setTotalQuantity(null);
     const timer = setTimeout(() => { void refresh(); }, query ? 350 : 0);
     return () => clearTimeout(timer);
-  }, [ports, query, category]); // Reconnection never submits edits.
+  }, [ports, query, category, advanced, sort]); // Reconnection never submits edits.
 
   const saved = (item: InventoryItem) => {
     setServerRows(rows => rows ? [item,...rows.filter(row=>row.id!==item.id)] : null);
@@ -108,6 +124,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     setSnapshot({ schema: 1, owner: "current", fetchedAt, items });
     void ports.snapshot.write(items, fetchedAt).catch(() => setError("変更は保存済みですが、端末の保存データを更新できませんでした。"));
     setEditor(null); setSelected(null); setTab("inventory");
+    if (ports.searchInventory) void refresh();
   };
   const startCreate=async()=>{
     if(creating)return;
@@ -159,10 +176,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       } else setError("商品詳細を読み込めませんでした。保存済みの情報を表示しています。");
     } finally { if (attempt === detailGeneration.current) setDetailLoading(false); }
   };
-  const rows = !offline && ports.searchInventory && serverRows ? serverRows : (snapshot?.items ?? []).filter((item) =>
-    (!category || item.category === category) &&
-    (!query || `${item.name} ${item.displayId ?? ""} ${item.sku} ${item.barcode}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())));
-  const categories = Array.from(new Set((snapshot?.items ?? []).map((item) => item.category).filter(Boolean)));
+  const serverResults = !offline && !!ports.searchInventory && serverRows !== null;
+  const rows = serverResults ? serverRows! : cachedInventorySearch(snapshot?.items ?? [],{q:query,category,advanced,sort},searchFields);
+  const categories = options?.categories ?? Array.from(new Set((snapshot?.items ?? []).map(item=>item.category).filter(Boolean)));
   const title = feature ?? (selected ? "物品詳細" : tabs.find((item) => item.key === tab)!.label);
 
   return <SafeAreaView style={s.safe}>
@@ -171,11 +187,11 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={saved} features={features} /> : <>
+    {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={saved} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <>
       <View style={s.header}>
         <View style={s.headerSide}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); }} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
-        <Text style={s.title}>{tab === "home" && !selected && !feature ? "BELLO" : title}</Text>
-        <View style={s.headerSide}>{tab === "inventory" && !selected && <Pressable accessibilityRole="button" accessibilityLabel="在庫を再読み込み" onPress={() => { void refresh(); }} style={s.round}><Ionicons name="refresh" size={24} color={colors.text} /></Pressable>}{tab === "home" && !feature && onLogout && <Pressable accessibilityRole="button" accessibilityLabel="ログアウト" onPress={onLogout} style={s.round}><Ionicons name="log-out-outline" size={24} color={colors.text} /></Pressable>}</View>
+        <Text style={s.title}>{title}</Text>
+        <View style={s.headerSide}>{tab === "inventory" && !selected && <Pressable accessibilityRole="button" accessibilityLabel="並び替え" onPress={() => setSortOpen(true)} style={s.round}><Ionicons name="swap-vertical" size={24} color={colors.text} /></Pressable>}{tab === "home" && !feature && onLogout && <Pressable accessibilityRole="button" accessibilityLabel="ログアウト" onPress={onLogout} style={s.round}><Ionicons name="log-out-outline" size={24} color={colors.text} /></Pressable>}</View>
       </View>
       {offline && <View style={s.offline}><Text style={s.offlineText}>【圏外です】保存済みの在庫を表示しています</Text>
         {snapshot && <Text style={s.timestamp}>最終取得 {new Date(snapshot.fetchedAt).toLocaleString("ja-JP")}</Text>}
@@ -197,6 +213,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         </View>)}
         {!writesEnabled && <Text style={s.homeSub}>このアプリでは現在、在庫の閲覧のみ利用できます。</Text>}
       </ScrollView> : tab === "home" ? <ScrollView contentContainerStyle={s.home}>
+        <Image source={require("../../assets/bello-system-icon.png")} style={{width:190,height:190,alignSelf:"center",borderRadius:30}} contentFit="contain" accessibilityLabel="Bello SYSTEM"/>
         <View style={s.tiles}>{[
           { label: "新規登録", icon: "add" as IconName },
           { label: "スキャン検索", icon: "qr-code-outline" as IconName },
@@ -204,8 +221,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         <View style={s.homeSummary}><Text style={s.label}>この端末で読み込んだ在庫</Text><Text style={s.count}>{snapshot?.items.length ?? 0}<Text style={s.unit}> 件</Text></Text><Text style={s.homeSub}>圏外でも直前に読み込んだ情報を確認できます。</Text></View>
       </ScrollView> : tab === "inventory" ? <View style={s.list}>
         <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><TextInput accessibilityLabel="在庫を検索" placeholder="物品名・管理番号・コード" value={query} onChangeText={setQuery} style={s.searchInput} />{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => setQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>
-        <View style={s.filterRow}><Pressable accessibilityRole="button" onPress={() => setCategoryPicker(true)} style={s.category}><Ionicons name="pricetag-outline" size={21} color={colors.text} /><Text style={s.categoryText}>{category || "カテゴリ"}</Text><Ionicons name="chevron-down" size={16} color={colors.muted} /></Pressable><Text style={s.result}>{rows.length}件</Text></View>
-        <Text style={s.scope}>{!offline && ports.searchInventory ? "自社システムの在庫から検索" : "読み込み済みの在庫から検索"}</Text>
+        <View style={s.filterRow}><Pressable accessibilityRole="button" onPress={() => setCategoryPicker(true)} style={s.category}><Ionicons name="pricetag-outline" size={21} color={colors.text} /><Text numberOfLines={1} style={[s.categoryText,{maxWidth:130}]}>{category || "カテゴリ"}</Text><Ionicons name="chevron-down" size={16} color={colors.muted} /></Pressable><Pressable accessibilityRole="button" onPress={()=>setSearchOpen(true)} style={s.advancedButton}><Text style={s.blue}>詳細検索{advanced.conditions.length ? `（${advanced.conditions.length}）` : ""}</Text></Pressable></View>
+        <View style={s.summaryRow}><Pressable accessibilityRole="button" accessibilityLabel="在庫を再読み込み" onPress={()=>{void refresh();}} style={{padding:8}}><Ionicons name="refresh" size={18} color={colors.muted}/></Pressable><Text style={s.result}>{serverResults && total!==null ? total.toLocaleString() : rows.length.toLocaleString()}件{serverResults&&total===null&&hasMore?" 読込済み":""}{(!serverResults||totalQuantity!==null)?` 合計 ${(serverResults ? totalQuantity! : rows.reduce((sum,item)=>sum+item.quantity,0)).toLocaleString()}`:""}</Text></View>
+        <Text style={s.scope}>{loading ? "自社システムから読み込み中…" : serverResults ? `${searchFields.find(field=>field.key===sort.field)?.label ?? "更新日"}・${sort.direction === "asc" ? "昇順" : "降順"}` : "読み込み済みの在庫のみ（未取得の詳細は対象外）"}</Text>
         <FlatList data={rows} keyExtractor={(item) => item.id} refreshing={loading} onRefresh={() => { void refresh(); }}
           ListFooterComponent={!offline && hasMore ? <Pressable accessibilityRole="button" disabled={loading} onPress={() => { void refresh(true); }} style={s.pickerChoice}><Text style={s.blue}>{loading ? "読み込み中…" : "続きを読み込む"}</Text></Pressable> : undefined}
           contentContainerStyle={s.listContent} ListEmptyComponent={loading ? <ActivityIndicator color={colors.blue} /> : <Text style={s.empty}>{offline ? "この端末に保存済みの在庫がありません。通信が戻ったら読み込んでください。" : "該当する在庫がありません。"}</Text>}
@@ -217,8 +235,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       {selected && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={22} color="white" /><Text style={s.white}>編集</Text></Pressable>}
       <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={25} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
     </>}
-    {scanSearch&&<BarcodeScanner onClose={()=>setScanSearch(false)} onRead={value=>{setScanSearch(false);setQuery(value);setCategory("");setSelected(null);setTab("inventory");}}/>}
-    <Modal visible={categoryPicker} transparent animationType="slide" onRequestClose={() => setCategoryPicker(false)}><View style={s.shade}><View style={s.picker}><Text style={s.title}>カテゴリを選択</Text>{["", ...categories].map((value) => <Pressable accessibilityRole="button" key={value} style={s.pickerChoice} onPress={() => { setCategory(value); setCategoryPicker(false); }}><Text style={s.categoryText}>{value || "指定なし"}</Text></Pressable>)}<Pressable accessibilityRole="button" style={s.pickerChoice} onPress={() => setCategoryPicker(false)}><Text style={s.blue}>キャンセル</Text></Pressable></View></View></Modal>
+    {scanSearch&&<BarcodeScanner onClose={()=>setScanSearch(false)} onRead={value=>{setScanSearch(false);setQuery("");setCategory("");setAdvanced({combinator:"AND",conditions:[{id:"barcode-scan",field:"barcode",operator:"equals",value}]});setSelected(null);setTab("inventory");}}/>}
+    {sortOpen&&<InventorySortSheet value={sort} fields={searchFields} onClose={()=>setSortOpen(false)} onApply={value=>{setSort(value);setSortOpen(false);}}/>}
+    <Modal visible={categoryPicker} transparent animationType="slide" onRequestClose={() => setCategoryPicker(false)}><View style={s.shade}><View style={s.picker}><Text style={s.title}>カテゴリを選択</Text><ScrollView style={{maxHeight:450}}>{["", ...categories].map((value) => <Pressable accessibilityRole="button" key={value} style={s.pickerChoice} onPress={() => { setCategory(value); setCategoryPicker(false); }}><Text style={s.categoryText}>{value || "指定なし"}</Text></Pressable>)}</ScrollView><Pressable accessibilityRole="button" style={s.pickerChoice} onPress={() => setCategoryPicker(false)}><Text style={s.blue}>キャンセル</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
 }
 
@@ -228,6 +247,7 @@ function ProductImage({ item, large }: { item: InventoryItem; large?: boolean })
 }
 
 const s = StyleSheet.create({
+  advancedButton:{borderWidth:1.5,borderColor:colors.blue,borderRadius:10,padding:11},summaryRow:{flexDirection:"row",alignItems:"center",justifyContent:"space-between",paddingHorizontal:16,marginTop:6},
   floatingEdit: { position: "absolute", right: 20, bottom: 105, zIndex: 1 },
   detailHeading: { fontSize: 20, fontWeight: "700", color: colors.text, paddingTop: 26, paddingBottom: 16 },
   accountPreview: { backgroundColor: "#344146", paddingHorizontal: 12, paddingVertical: 8, flexDirection: "row", justifyContent: "space-between" },

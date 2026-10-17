@@ -13,7 +13,8 @@
       }
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "favicon": "./assets/bello-system-icon.png"
     },
     "experiments": {
       "baseUrl": "/staff-app"
@@ -37,6 +38,7 @@
           "microphonePermission": false
         }
       ]
-    ]
+    ],
+    "icon": "./assets/bello-system-icon.png"
   }
 }

@@ -13,6 +13,7 @@ import {
   type SearchableRecord,
 } from "./advancedSearch";
 import type { InventoryCursorListFilters } from "./inventoryCursorList";
+import { inventoryComparator, type InventorySort } from "./searchSort";
 import { recordQuery } from "@/lib/perf/queryTiming";
 
 /**
@@ -209,6 +210,8 @@ async function hydrate(table: string, ids: string[]): Promise<Map<string, RawIte
 export interface FastSearchInput {
   /** サイドバーの絞り込み。DynamoDB の FilterExpression として押し下げる。 */
   filters?: InventoryCursorListFilters;
+  sort?: InventorySort;
+  fieldsByKey?: Map<string, SearchFieldDef>;
   /** クイック検索の文字列(在庫ID/SKU/物品名の部分一致)。 */
   q?: string;
   /** 詳細検索。 */
@@ -216,6 +219,7 @@ export interface FastSearchInput {
 }
 
 export interface FastSearchPage {
+  totalQuantity: number;
   /** 表示する行の生データ(呼び出し側が従来の toSearchRecord に通す)。 */
   rawItems: RawItem[];
   total: number;
@@ -244,7 +248,8 @@ export async function searchInventoryFast(
   const { filterExpression, names: filterNames, values: filterValues } = buildCountExpression(input.filters ?? {});
 
   // その検索が実際に参照する列だけを射影に入れる。
-  const referencedKeys: string[] = ["displayId"];
+  const referencedKeys: string[] = ["displayId", "quantity"];
+  if (input.sort) referencedKeys.push(input.sort.field);
   if (input.advanced) {
     for (const condition of input.advanced.query.conditions) {
       if (condition.field) referencedKeys.push(condition.field);
@@ -269,7 +274,7 @@ export async function searchInventoryFast(
     if (q && !matchesQuickSearch(record, q)) return false;
     return true;
   });
-  filtered.sort(compareByUpdatedAtDesc);
+  filtered.sort(input.sort ? inventoryComparator(input.sort, input.fieldsByKey ?? input.advanced?.fieldsByKey ?? new Map()) : compareByUpdatedAtDesc);
 
   const page = filtered.slice(options.offset, options.offset + options.limit);
   const byId = await hydrate(
@@ -281,5 +286,5 @@ export async function searchInventoryFast(
   // そのまま落とす(従来経路でも同じことが起きうる)。
   const rawItems = page.map((r) => byId.get(r.id)).filter((x): x is RawItem => Boolean(x));
 
-  return { rawItems, total: filtered.length, offset: options.offset, limit: options.limit };
+  return { rawItems, total: filtered.length, totalQuantity: filtered.reduce((sum,row)=>sum+Number(row.quantity ?? 0),0), offset: options.offset, limit: options.limit };
 }

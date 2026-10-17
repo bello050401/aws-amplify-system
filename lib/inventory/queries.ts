@@ -1,3 +1,4 @@
+import { inventoryComparator, type InventorySort } from "./searchSort";
 import "server-only";
 import { requestCache } from "@/lib/amplify/requestCache";
 import { cachedMaster } from "./masterCache";
@@ -453,6 +454,7 @@ export async function listInventoryByCategory(categoryId: string): Promise<Inven
 }
 
 export interface SearchPage<T> {
+  totalQuantity?: number;
   items: T[];
   total: number;
   offset: number;
@@ -479,6 +481,7 @@ async function trySearchFast(
     return {
       items: fast.rawItems.map((raw) => toSearchRecord(raw as unknown as InventoryModel)),
       total: fast.total,
+      totalQuantity: fast.totalQuantity,
       offset: fast.offset,
       limit: fast.limit,
     };
@@ -577,6 +580,24 @@ export async function listInventoryAdvanced(
   const total = filtered.length;
   const page = filtered.slice(options.offset, options.offset + options.limit);
   return { items: page, total, offset: options.offset, limit: options.limit };
+}
+
+/** Mobile reuses the full-inventory engine: filter and sort before pagination. */
+export async function listInventoryMobileSearch(
+  input: { q?: string; categoryIds?: string[]; advanced: AdvancedSearchQuery; sort: InventorySort },
+  fieldsByKey: Map<string, SearchFieldDef>, options: { offset: number; limit: number },
+): Promise<SearchPage<InventoryListRow>> {
+  const fast = await trySearchFast({filters:{categoryIds:input.categoryIds},q:input.q,
+    advanced:{query:input.advanced,fieldsByKey},sort:input.sort,fieldsByKey},options);
+  if (fast) return fast;
+  const conditions: Record<string, unknown>[] = [];
+  if (input.categoryIds?.length) conditions.push({or:input.categoryIds.map(id=>({categoryId:{eq:id}}))});
+  const all = await fetchAllInventoryRecords(conditions);
+  const filtered = all.filter(row => evaluateQuery(row as unknown as SearchableRecord,input.advanced,fieldsByKey) &&
+    (!input.q || matchesQuickSearch(row as unknown as SearchableRecord,input.q)));
+  filtered.sort((a,b)=>inventoryComparator(input.sort,fieldsByKey)(a as unknown as Record<string,unknown>,b as unknown as Record<string,unknown>));
+  return {items:filtered.slice(options.offset,options.offset+options.limit),total:filtered.length,
+    totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0),...options};
 }
 
 export interface InventoryHistoryRow {

@@ -1,3 +1,4 @@
+import type { InventorySearchInput } from "../domain/search";
 import { Amplify } from "aws-amplify";
 import { Platform } from "react-native";
 import { fetchAuthSession, getCurrentUser } from "aws-amplify/auth";
@@ -16,7 +17,7 @@ const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
 export const API_ORIGIN = isWeb && typeof window !== "undefined" ? window.location.origin : "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
 interface MobileConfig { auth: { userPoolId: string; userPoolClientId: string }; contractVersion: number; writesEnabled: boolean }
-export interface InventoryResponse { owner: string; role: "ADMIN" | "EDITOR" | "VIEWER"; items: InventoryItem[]; hasMore: boolean; fetchedAt: string }
+export interface InventoryResponse { owner: string; role: "ADMIN" | "EDITOR" | "VIEWER"; items: InventoryItem[]; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null; fetchedAt: string }
 export interface MobileSession { owner: string; role: "ADMIN" | "EDITOR" | "VIEWER"; features: MobileFeatures }
 const configKey = `bello.mobile-config.${API_ORIGIN}`;
 const secureTokens = new SecureTokenStorage();
@@ -82,12 +83,14 @@ export async function readMobileSession(): Promise<MobileSession> {
   return { owner: value.owner, role: value.role, features: { ecListing: value.features.ecListing, sales: value.features.sales } };
 }
 
-export async function readInventory(input: { q?: string; category?: string; offset?: number } = {}): Promise<InventoryResponse> {
+export async function readInventory(input: InventorySearchInput = {}): Promise<InventoryResponse> {
   const session = await authenticatedSession();
   const params = new URLSearchParams();
   if (input.q) params.set("q", input.q);
   if (input.category) params.set("category", input.category);
   if (input.offset) params.set("offset", String(input.offset));
+  if (input.advanced?.conditions.length) params.set("advanced",JSON.stringify(input.advanced));
+  if (input.sort) params.set("sort",JSON.stringify(input.sort));
   const value = await jsonRequest(`/api/mobile/inventory?${params}`, session.cookie) as InventoryResponse;
   if (value.owner !== session.owner || !["ADMIN", "EDITOR", "VIEWER"].includes(value.role) || !Array.isArray(value.items) || !value.items.every(isInventoryItem)) {
     throw new Error("在庫データを確認できませんでした。");
