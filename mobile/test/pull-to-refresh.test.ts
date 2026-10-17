@@ -13,6 +13,11 @@ test("a downward pull at the top refreshes once after release", () => {
 });
 test("short pulls and returning the finger cancel without refreshing", () => {
   const gesture = new PullToRefreshGesture();
+  gesture.begin(100, 100, 0);
+  assert.equal(gesture.move(101, 103, 0), true);
+  assert.equal(gesture.active, false);
+  assert.equal(gesture.distance, 0);
+  assert.equal(gesture.release(), false);
   gesture.begin(100, 100, 0); gesture.move(100, 130, 0);
   assert.equal(gesture.release(), false);
   gesture.begin(100, 100, 0); gesture.move(100, 280, 0); gesture.move(100, 105, 0);

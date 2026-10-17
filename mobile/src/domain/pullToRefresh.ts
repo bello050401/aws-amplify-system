@@ -18,7 +18,9 @@ export class PullToRefreshGesture {
     if (scrollTop > 1 || (!this.active && (dy < -8 || (Math.abs(dx) > 8 && Math.abs(dx) >= dy)))) {
       this.cancel(); return false;
     }
-    if (!this.active && dy < 10) return false;
+    // Claim the first downward touch move before Safari starts its own rubber-band scroll.
+    // The visible indicator still waits for an intentional 10px pull.
+    if (!this.active && dy < 10) return dy > 0 && dy >= Math.abs(dx);
     this.active = true;
     this.distance = Math.min(MAX_PULL_DISTANCE, Math.max(0, dy) * .5);
     return true;
