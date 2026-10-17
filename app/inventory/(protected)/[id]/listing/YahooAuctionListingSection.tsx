@@ -95,7 +95,7 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
       const result = await saveYahooAuctionPreparationAction(inventoryId, input, saved?.revision ?? null, draft.updatedAt);
       if (!result.ok) { setError(failureMessage(result.code)); if (result.code === "CONFLICT") setConflict(true); return; }
       setSaved(result.saved); setInput(result.saved.payload.input);
-      setMessage("ヤフオク用の下書きをBELLOに保存しました。まだ出品していません。");
+      setMessage("ヤフオク用の下書きをBELLOに保存しました。出品状況は上の表示で確認できます。");
     } catch { setError(failureMessage("UNAVAILABLE")); }
     finally { inFlight.current = false; setBusy(false); }
   }
