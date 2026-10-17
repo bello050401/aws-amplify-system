@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import type { MasterEntry } from "@/lib/inventory/masters";
@@ -23,6 +23,7 @@ const LineSettingsPanel = dynamic(() => import("./LineSettingsPanel").then(m => 
 const SystemAuditPanel = dynamic(() => import("./SystemAuditPanel").then(m => m.SystemAuditPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const PhotoProfilePanel = dynamic(() => import("./PhotoProfilePanel").then(m => m.PhotoProfilePanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const ProductDescriptionPanel = dynamic(() => import("./ProductDescriptionPanel").then(m => m.ProductDescriptionPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const EcListingSettingsPanel = dynamic(() => import("./EcListingSettingsPanel").then(m => m.EcListingSettingsPanel));
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -80,6 +81,7 @@ export function SettingsTabs({
   // 全タブで一貫させる。
   const VALID_TABS = [
     "category",
+    "ecListing",
     "unit",
     "location",
     "customFields",
@@ -102,6 +104,7 @@ export function SettingsTabs({
   const isValidTab = (value: string | null): value is Tab => (VALID_TABS as readonly string[]).includes(value ?? "");
 
   const [tab, setTab] = useState<Tab>(isValidTab(initialTab) ? initialTab : "category");
+  useEffect(() => { if (isValidTab(initialTab)) setTab(initialTab); }, [initialTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tabClass = (active: boolean) =>
     `border-b-2 px-3 py-2 text-[13px] ${active ? "border-gray-900 font-bold text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`;
@@ -109,6 +112,7 @@ export function SettingsTabs({
   return (
     <div>
       <div className="flex flex-wrap border-b border-gray-200">
+        {!readOnly && <button type="button" onClick={() => setTab("ecListing")} className={tabClass(tab === "ecListing")}>出品設定</button>}
         <button type="button" onClick={() => setTab("category")} className={tabClass(tab === "category")}>
           カテゴリ
         </button>
@@ -183,6 +187,7 @@ export function SettingsTabs({
       </div>
 
       <div className="pt-4">
+        {tab === "ecListing" && !readOnly && <EcListingSettingsPanel isAdmin={isAdmin} onOpen={setTab} />}
         {tab === "category" && <MasterList model="Category" label="カテゴリ" entries={categories} readOnly={readOnly} />}
         {tab === "unit" && <MasterList model="Unit" label="単位" entries={units} readOnly={readOnly} />}
         {tab === "location" && <MasterList model="Location" label="保管場所" entries={locations} readOnly={readOnly} />}

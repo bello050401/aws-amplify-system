@@ -6,10 +6,6 @@ import { getListingDraftForInventory, getChannelListing } from "@/lib/listing/se
 import { splitImagesByType, resolveTopImage } from "@/lib/inventory/imageTypes";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { ListingWorkspace } from "./ListingWorkspace";
-import { MercariPrivateCreatePreparationPanel } from "./MercariPrivateCreatePreparationPanel";
-import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
-import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
-import { YahooAuctionListingSection } from "./YahooAuctionListingSection";
 import { B005396_INVENTORY_ID } from
   "@/lib/listing/mercariBridge/b005396GeneralPreparation";
 import { webHttpDraftTargetAllowed } from
@@ -98,12 +94,14 @@ export default async function ListingPage({ params }: { params: { id: string } }
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {/* 2026-09-04 §2: 2カラム化に伴い mx-auto を外した。中央寄せのままだと
             戻り導線だけが本文と揃わない位置へ動く。 */}
-        <div className="mb-3 max-w-2xl">
+        <div className="mb-3 flex flex-wrap gap-4">
+          <Link href="/inventory/listings" className="text-[12px] text-blue-700 underline">← EC商品一覧</Link>
+          <Link href="/inventory/settings?tab=ecListing" className="text-[12px] text-blue-700 underline">出品設定</Link>
           {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §10: EC出品
               詳細から元のBELLO在庫詳細へ戻れる導線。inventoryId(一意キー)
               による直接リンクで、商品名/SKUの曖昧検索は使わない。 */}
           <Link href={`/inventory/${item.id}`} className="text-[12px] text-blue-700 underline hover:text-blue-900">
-            ← 在庫詳細を開く
+            ← 在庫詳細
           </Link>
           {role === "ADMIN" && <Link href={`/inventory/mercari-bridge?inventoryId=${encodeURIComponent(item.id)}`}
             className="ml-4 text-[12px] text-blue-700 underline hover:text-blue-900">
@@ -122,43 +120,8 @@ export default async function ListingPage({ params }: { params: { id: string } }
           initialDraft={draft}
           initialChannelListing={channelListing}
           canPrepareMercari={role === "ADMIN"}
+          httpPreparationEligible={httpPreparationEligible && !["5b0f3587-cbbb-4c09-ae78-595b2b3e353f", "dd273c1e-9b2a-4013-acc6-c445a481fab8", B005396_INVENTORY_ID].includes(item.id.toLowerCase())}
         />
-        {role === "ADMIN" && (
-          item.id.toLowerCase() === "5b0f3587-cbbb-4c09-ae78-595b2b3e353f" ?
-            <MercariPrivateCreatePreparationPanel inventoryId={item.id} /> :
-          item.id.toLowerCase() === "dd273c1e-9b2a-4013-acc6-c445a481fab8" ?
-            <p className="mt-5 max-w-2xl rounded border border-amber-300 bg-amber-50 p-4 text-sm">
-              この非公開テストは結果の確認中です。重複操作を防ぐため、ここから出品準備を繰り返せません。
-            </p> :
-          item.id.toLowerCase() === B005396_INVENTORY_ID ?
-            <p className="mt-5 max-w-2xl rounded border border-amber-300 bg-amber-50 p-4 text-sm">
-              この商品は販売済みです。HTTP方式の準備登録はできません。
-            </p> :
-            <>
-              <MercariManualListingPackPanel inventoryId={item.id}
-                availableQuantity={item.quantity} hasDraft={Boolean(draft)}
-                hasShopsRecord={Boolean(channelListing)} mode="PC" />
-              {httpPreparationEligible ?
-                <MercariManualListingPackPanel inventoryId={item.id}
-                  availableQuantity={item.quantity} hasDraft={Boolean(draft)}
-                  hasShopsRecord={Boolean(channelListing)} mode="HTTP" /> :
-                <p className="mt-5 max-w-2xl rounded border border-amber-300 bg-amber-50 p-4 text-sm">
-                  この商品は販売状況または既存の登録を確認できないため、HTTP方式の準備登録はできません。
-                </p>}
-            </>
-        )}
-        {role === "ADMIN" && (!httpPreparationEligible || [
-          "5b0f3587-cbbb-4c09-ae78-595b2b3e353f", "dd273c1e-9b2a-4013-acc6-c445a481fab8",
-          B005396_INVENTORY_ID,
-        ].includes(item.id.toLowerCase())) && <section id="mercari-http-listing" className="mt-5 max-w-2xl rounded border bg-white p-4">
-          <h2 className="font-bold">メルカリShops HTTPS出品</h2>
-          <MercariHttpExecutionPanel inventoryId={item.id} requestId={null} />
-        </section>}
-        <YahooAuctionListingSection key={item.id} inventoryId={item.id} />
-        {/* 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」は
-            ここにあったが、上の「出品下書き（共通項目）→ AIで下書き生成」と
-            役割が重複していたので消した。生成エンジン・生成履歴の保存・
-            BASEからの情報補完は、そちらへ引き取ってある(消したのはUIだけ)。 */}
       </div>
     </div>
   );

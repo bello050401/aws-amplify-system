@@ -49,13 +49,19 @@ const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
 
 const API_BASE = "https://api.thebase.in/1";
 
-async function baseApiCall<T>(path: string, params: Record<string, string | number>, privateTestWrite = false): Promise<T> {
+async function baseApiCall<T>(path: string, params: Record<string, string | number>, privateTestWrite = false, manual = false): Promise<T> {
   // このファイルの呼び出しは items/add と items/edit の2つだけで、
   // どちらもBASE側の実データを変える。読み取りは lib/base/client.real.ts
   // が別に持っているので、ここを通るものは全部「書き込み」でよい。
   // 関門はトークン取得より前に置く —— 遮断されるのに認証だけ走るのは
   // 無駄だし、失敗の理由も分かりにくくなる。
-  if (privateTestWrite) {
+  if (manual) {
+    // Separate opt-in for confirmed staff operations; never enables scheduled pricing.
+    const visibility = path === "/items/edit" && Object.keys(params).sort().join(",") === "item_id,visible" && [0, 1].includes(Number(params.visible));
+    const image = path === "/items/add_image" && Object.keys(params).sort().join(",") === "image_no,image_url,item_id" && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
+    if (process.env.BASE_MANUAL_LISTING_ENABLED !== "1" || (!visibility && !image) || !/^[1-9][0-9]*$/.test(String(params.item_id)))
+      throw new BaseListingApiError("CONFIG_REQUIRED", "BASEの一覧からの出品操作が有効になっていません。");
+  } else if (privateTestWrite) {
     try { assertBasePrivateTestWrite(path, params); }
     catch { throw new BaseListingApiError("CONFIG_REQUIRED", "BASEの非公開テスト登録が有効になっていません。"); }
   } else {
@@ -181,3 +187,12 @@ export async function getBaseProductVisibility(itemId: string): Promise<boolean>
 }
 
 export { isBaseConnected };
+
+/** Called only after the role check, source comparison and per-item claim in manualLifecycle. */
+export async function setManualBaseVisibility(itemId: string, visible: boolean): Promise<void> {
+  await baseApiCall("/items/edit", { item_id: itemId, visible: visible ? 1 : 0 }, false, true);
+}
+export async function addManualBaseImage(itemId: string, index: number, imageUrl: string): Promise<void> {
+  if (new URL(imageUrl).protocol !== "https:") throw Error("INVALID_IMAGE_URL");
+  await baseApiCall("/items/add_image", { item_id: itemId, image_no: index, image_url: imageUrl }, false, true);
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { saveListingDraftAction } from "@/app/actions/listing";
 import { requireSavedDraftResult, draftSaveFailureMessage,
   draftSaveNeedsFreshPage } from "@/lib/listing/draftSaveFeedback";
@@ -10,9 +10,6 @@ import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
 import { buildManualListingText } from "@/lib/listing/manualListingText";
 import { buildShippingWarning, withCurrentShippingWarning } from "@/lib/ai/productPage/listingFacts";
 import type { SagawaUnavailableReason } from "@/lib/shipping/sagawaSize";
-import { ShippingEstimateSection } from "./ShippingEstimateSection";
-import { BaseListingSection } from "./BaseListingSection";
-import { MercariShopsLifecycleSection } from "./MercariShopsLifecycleSection";
 import { generateListingCopyAction } from "@/app/actions/ai";
 import { createBrandedListingImageAction, uploadBrandLogoAction } from "@/app/actions/brandLogo";
 import { InventoryImageGallery } from "../../../InventoryImageGallery";
@@ -55,9 +52,10 @@ export function ListingForm({
   photoAssets,
   initialDraft,
   initialChannelListing,
-  canPrepareMercari,
   shippingMethod,
   onShippingMethodChange,
+  onDraftSaved,
+  onDirtyChange,
 }: {
   inventoryId: string;
   brandLogoAvailable: boolean;
@@ -76,9 +74,11 @@ export function ListingForm({
    */
   shippingMethod: ListingShippingMethod;
   onShippingMethodChange: (method: ListingShippingMethod) => void;
+  onDraftSaved?: (draft: ListingDraftRecord) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [draft, setDraft] = useState(initialDraft);
-  const [channelListing, setChannelListing] = useState(initialChannelListing);
+  const [channelListing] = useState(initialChannelListing);
   const [selectedImages, setSelectedImages] = useState<ListingImageRef[]>(initialDraft?.images ?? []);
   const [brandLogoBusy, setBrandLogoBusy] = useState(false);
   const [logoFile, setLogoFile] = useState<File | null>(null);
@@ -162,6 +162,15 @@ export function ListingForm({
     return withCurrentShippingWarning(aiQuality.warnings, currentShippingWarning);
   }, [aiQuality, shippingMethod]);
 
+  const dirty = title !== (draft?.title ?? inventoryName) || description !== (draft?.description ?? "") ||
+    (price ? Number(price) : 0) !== (draft?.price ?? 0) || condition !== (draft?.condition ?? "NO_NOTABLE_DAMAGE") ||
+    shippingMethod !== (draft?.shippingMethod ?? "KAZAI") || JSON.stringify(selectedImages) !== JSON.stringify(draft?.images ?? []);
+  useEffect(() => { onDirtyChange?.(dirty); if (dirty) setDraftSaved(false); }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   /**
@@ -279,6 +288,7 @@ export function ListingForm({
         images: selectedImages,
       }));
       setDraft(result);
+      onDraftSaved?.(result);
       draftPersisted = true;
       if (photoAssets.length > 0) {
         const photoAssetIds = selectedImages
@@ -309,9 +319,6 @@ export function ListingForm({
     // 「画面の左半分しか使っていない」という元の問題が形を変えて残る。
     // 広げすぎると1行が長くなって読みにくいので 4xl(896px)で止める。
     <div className="max-w-2xl xl:max-w-4xl">
-      <p className="mb-4 text-[12px] text-gray-500">
-        「{inventoryName}」をECチャネルへ出品するための下書き・設定です。Inventory本体（在庫マスタ）のデータは一切変更されません。
-      </p>
 
       {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: 在庫詳細
           ページと同一のInventoryImageGallery(メイン画像+複数画像の
@@ -319,6 +326,7 @@ export function ListingForm({
           そのまま再利用する——画像を複製せず、既存のthumbnail/S3/
           signed URLアーキテクチャに乗る。 */}
       <div className="mb-4">
+        <details className="mb-3 rounded-lg border p-3"><summary className="cursor-pointer text-sm font-medium">商品画像を大きく確認</summary>
         {productGallery.kind === "PHOTO_ASSET" ? (
           <PhotoAssetProductGallery key={productGallery.assets[0]?.id} inventoryId={inventoryId} initialAssets={productGallery.assets} title="商品画像" />
         ) : (
@@ -330,6 +338,7 @@ export function ListingForm({
         {productGallery.kind === "PHOTO_ASSET" && images.length > 0 ? (
           <InventoryImageGallery images={images} alt={inventoryName} title="既存画像" />
         ) : null}
+        </details>
         <ListingImageSelector
           images={images}
           photoAssets={photoAssets}
@@ -337,8 +346,8 @@ export function ListingForm({
           brandedImageKey={brandedImageKey}
           onChange={setSelectedImages}
         />
-        <div className="mt-3 border border-gray-200 p-3 text-sm">
-          <p className="font-semibold">ブランドロゴ（任意）</p>
+        <details className="mt-3 rounded-lg border border-gray-200 p-3 text-sm">
+          <summary className="cursor-pointer font-semibold">ロゴ入り画像を作成（任意）</summary>
           <p className="mt-1 text-gray-600">BELLOロゴを左上に、商品のブランドロゴがある場合は右下に重ねます。余白は追加せず、元画像は変更しません。</p>
           <button type="button" disabled={brandLogoBusy || selectedImages.length >= 20} className="mt-2 border border-gray-400 px-3 py-2 disabled:opacity-50"
             onClick={async () => {
@@ -380,11 +389,11 @@ export function ListingForm({
             <p className="mt-1 text-xs text-gray-600">商品にロゴが重なっていないか確認してください。使わない場合は出品画像一覧から外せます。</p>
           </div>}
           <p className="mt-1 text-gray-500">作成後に下書きを保存すると出品画像として使えます。</p>
-        </div>
+        </details>
       </div>
 
       {/* 出品下書き(Common Listing Draft) — チャネルに依存しない共通項目。 */}
-      <div className="border border-gray-200 p-4">
+      <div className="rounded-lg border border-gray-200 bg-white p-4">
         <div className="mb-2 flex items-center justify-between">
           <p className="text-[12px] font-bold text-gray-700">出品下書き（共通項目）</p>
           <button
@@ -538,17 +547,18 @@ export function ListingForm({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[12px] text-gray-600">価格（円）</label>
+              <label htmlFor="listing-price" className="block text-[12px] text-gray-600">価格（円）</label>
               <input
                 type="number"
+                id="listing-price" inputMode="numeric"
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
                 className="mt-0.5 w-full border border-gray-300 px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
               />
             </div>
             <div>
-              <label className="block text-[12px] text-gray-600">コンディション</label>
-              <select
+              <label htmlFor="listing-condition" className="block text-[12px] text-gray-600">コンディション</label>
+              <select id="listing-condition"
                 value={condition}
                 onChange={(e) => setCondition(e.target.value as ListingConditionCode)}
                 className="mt-0.5 w-full border border-gray-300 bg-white px-2 py-1 text-[13px] focus:border-gray-500 focus:outline-none"
@@ -565,7 +575,7 @@ export function ListingForm({
         {draft && draft.images.length === 0 && (
           <p className="mt-2 text-[11px] text-amber-700">在庫に商品画像が登録されていません。出品には少なくとも1枚の商品画像が必要です。</p>
         )}
-        <div className="mt-3 flex items-center gap-2">
+        <div className="sticky bottom-0 mt-3 flex flex-wrap items-center gap-2 border-t bg-white/95 py-3">
           <button
             type="button"
             onClick={handleSaveDraft}
@@ -600,18 +610,14 @@ export function ListingForm({
 
       {/* Mercari Shops CSV出力(2026-09-14、P2)向けのカテゴリー/ブランド
           選択。出品の実行導線ではない——公式マスタの検索・確定のみ。 */}
-      <MercariShopsLifecycleSection inventoryId={inventoryId} listing={channelListing}
-        canPrepare={canPrepareMercari} />
 
       {/* BELLO統合業務OS指示書(2026-08-30) §67-68: 送料見積り(家財おまかせ便)。
           上の出品履歴と同じ理由でChannelListing存在時のみ表示する。 */}
-      {channelListing && <ShippingEstimateSection inventoryId={inventoryId} channelListing={channelListing} onUpdated={setChannelListing} />}
 
 {/* BELLO統合業務OS 第二次完全完遂指示(2026-08-30) §4: BASEを
           「別システムだから」と対象外にせず、Mercariと並列のチャネルと
           して扱う。draftの有無だけを条件にする(BASEはMercariと違い
           カテゴリーマッピング等の事前設定が必須ではないため)。 */}
-      <BaseListingSection inventoryId={inventoryId} hasDraft={Boolean(draft)} />
     </div>
   );
 }

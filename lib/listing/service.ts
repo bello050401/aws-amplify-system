@@ -18,7 +18,7 @@ import {
   e2eChannelOverrideFor,
   e2eSaveChannelOverride,
 } from "./e2eFixtures";
-import { unwrapList, unwrapWriteRequired } from "@/lib/amplify/listAll";
+import { unwrapList } from "@/lib/amplify/listAll";
 import { attachStageTimings, currentQueryTimings, getStageTimings, groupTimingsByOp, isQueryTimingEnabled, measureStage, withQueryTiming } from "@/lib/perf/queryTiming";
 import {
   classifyListingsOverviewErrorKind,
@@ -870,6 +870,11 @@ export async function saveListingDraft(
     getListingDraftForInventory(inventoryId),
   ]);
   if (!inventory) throw new Error("対象の在庫が見つかりません。");
+  if (!existing && !isE2EFixtureModeActive()) {
+    const previous = unwrapList(await serverDataClient.models.ListingDraft.listListingDraftByInventoryId(
+      { inventoryId }, { ...inventoryAuthMode }), "出品下書き");
+    if (previous.some(row => row.deletedAt)) throw new Error("EC一覧から削除済みです。「削除済み」から復元してから編集してください。");
+  }
 
   // §12: 「direct route」「product detail listing action」「server
   // action」全部で対象外カテゴリーをブロックする — 一覧に出ていない
@@ -1121,11 +1126,14 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
   const categoryName = categoryNameOf(inventory.categoryId);
   if (!isEcListingEligible(categoryName)) throw new Error(ecListingIneligibleReason(categoryName as string));
 
-  // Mercari側と同じ理由。
-  unwrapWriteRequired(
-    await serverDataClient.models.ChannelListing.update(publishingPatch(channelListing.id, who), inventoryAuthMode),
-    "出品状態(呼び出し中)",
-  );
+  // Share the same conditional claim with list-based operations across devices.
+  const claimed = await serverDataClient.graphql({
+    query: `mutation ClaimBaseCreate($input: UpdateChannelListingInput!, $condition: ModelChannelListingConditionInput) { updateChannelListing(input: $input, condition: $condition) { id } }`,
+    variables: { input: publishingPatch(channelListing.id, who), condition: {
+      updatedAt: { eq: channelListing.updatedAt }, status: { ne: "PUBLISHING" },
+    } }, authMode: "userPool",
+  }) as { errors?: unknown; data?: { updateChannelListing?: { id: string } } };
+  if (claimed.errors || !claimed.data?.updateChannelListing) throw new Error("別の出品処理が始まっています。状態を確認してください。");
 
   try {
     const result = await createBaseProduct({

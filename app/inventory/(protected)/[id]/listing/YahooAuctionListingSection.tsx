@@ -28,7 +28,7 @@ const failureMessage = (code: string) => ({
   REMOTE_CONTENT_CHANGED: "ヤフオク側の商品情報が変更されています。商品画面を確認してください。",
 }[code] ?? "読み込みに失敗しました。もう一度確認してください。");
 
-export function YahooAuctionListingSection({ inventoryId }: { inventoryId: string }) {
+export function YahooAuctionListingSection({ inventoryId, showExecution = true }: { inventoryId: string; showExecution?: boolean }) {
   const [input, setInput] = useState<YahooAuctionInput>(initialYahooAuctionInput(null));
   const [draft, setDraft] = useState<ListingDraftRecord | null>(null);
   const [saved, setSaved] = useState<YahooAuctionSaved | null>(null);
@@ -112,11 +112,11 @@ export function YahooAuctionListingSection({ inventoryId }: { inventoryId: strin
       <p className="mt-1 text-xs">確認：{new Date(listing.checkedAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}</p>
       <a className="mt-1 inline-block text-blue-700 underline" href={`https://auctions.yahoo.co.jp/jp/auction/${listing.auctionId}`} target="_blank" rel="noreferrer">ヤフオクの商品を開く</a>
     </div>}
-    <YahooAuctionControls inventoryId={inventoryId} revision={saved?.revision??null}
+    {showExecution && <YahooAuctionControls inventoryId={inventoryId} revision={saved?.revision??null}
       dirty={!saved||JSON.stringify(input)!==JSON.stringify(saved.payload.input)||!!sourceChanged} disabled={busy||!loaded}
-      onListing={setListing} />
+      onListing={setListing} />}
     <div className="my-3 flex flex-wrap gap-2">
-      <button type="button" disabled={busy} onClick={checkConnection} className="rounded border px-3 py-2 text-sm disabled:opacity-50">ヤフオク接続を確認</button>
+      {showExecution && <button type="button" disabled={busy} onClick={checkConnection} className="rounded border px-3 py-2 text-sm disabled:opacity-50">ヤフオク接続を確認</button>}
       <button type="button" disabled={busy} onClick={refreshSource} className="rounded border px-3 py-2 text-sm disabled:opacity-50">共通下書きを確認</button>
     </div>
     {error && <p role="alert" className="my-2 text-sm text-red-700">{error}</p>}

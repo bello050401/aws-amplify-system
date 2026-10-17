@@ -1,6 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { EC_CHANNEL_LABEL, EC_CHANNELS, type EcChannel } from "@/lib/listing/ecManagement";
+import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
+import { YahooAuctionListingSection } from "./YahooAuctionListingSection";
+import { MercariShopsLifecycleSection } from "./MercariShopsLifecycleSection";
 import type { InventoryDetail } from "@/lib/inventory/queries";
 import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import type { ChannelListingRecord, ListingDraftRecord, ListingShippingMethod } from "@/lib/listing/types";
@@ -34,6 +40,7 @@ export function ListingWorkspace({
   initialChannelListing,
   canPrepareMercari,
   shippingReference,
+  httpPreparationEligible = false,
 }: {
   item: InventoryDetail;
   brandLogoAvailable: boolean;
@@ -45,7 +52,17 @@ export function ListingWorkspace({
   initialChannelListing: ChannelListingRecord | null;
   canPrepareMercari: boolean;
   shippingReference: GetShippingReferencePriceResult | null;
+  httpPreparationEligible?: boolean;
 }) {
+  const params = useSearchParams();
+  const requested = params.get("channel");
+  const initialTab: "COMMON" | EcChannel = EC_CHANNELS.includes(requested as EcChannel)
+    ? (requested as EcChannel)
+    : "COMMON";
+  const [tab, setTab] = useState<"COMMON" | EcChannel>(initialTab);
+  const [visited, setVisited] = useState<Set<string>>(() => new Set([initialTab]));
+  const [draft, setDraft] = useState(initialDraft);
+  const [dirty, setDirty] = useState(false);
   // §1 既定は「らくらく家財便」。保存済みの下書きがあればその選択を復元する。
   const [shippingMethod, setShippingMethod] = useState<ListingShippingMethod>(
     initialDraft?.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD,
@@ -60,25 +77,153 @@ export function ListingWorkspace({
     // 左詰めで残り、フォームと右パネルの間に死んだ余白ができていた)、
     // 余った分は右パネル側(grow/basis)へ渡す —— 1280pxちょうどでは
     // 従来通りほぼ320px、画面が広がるほど右パネルが余白を吸収する。
-    <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
-      <div className="min-w-0 xl:w-[56rem]">
-        <ListingForm
-          inventoryId={item.id}
-          brandLogoAvailable={brandLogoAvailable}
-          inventoryName={item.name}
-          images={images}
-          photoAssets={photoAssets}
-          initialDraft={initialDraft}
-          initialChannelListing={initialChannelListing}
-          canPrepareMercari={canPrepareMercari}
-          shippingMethod={shippingMethod}
-          onShippingMethodChange={setShippingMethod}
-        />
+    <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold">商品情報の編集</h2>
+          <p className="mt-1 max-w-3xl text-sm text-gray-600">{item.name}</p>
+        </div>
+        <Link
+          href="/inventory/listings"
+          onClick={(event) => {
+            if (dirty && !window.confirm("保存していない変更があります。変更を破棄して一覧に戻りますか？"))
+              event.preventDefault();
+          }}
+          className="rounded-md bg-blue-700 px-4 py-2 text-sm text-white"
+        >
+          商品一覧で出品・停止する
+        </Link>
       </div>
-      <div className="min-w-0 xl:sticky xl:top-4 xl:max-h-[calc(100vh_-_96px_-_2rem)] xl:grow xl:shrink xl:basis-80 xl:max-w-md xl:overflow-y-auto 2xl:basis-96 2xl:max-w-lg">
-        <InventoryFactsPanel item={item} categoryName={categoryName} statusName={statusName} shippingMethod={shippingMethod} />
-        <ShippingReferencePriceSection key={item.id} inventoryId={item.id} initialResult={shippingReference} />
+      <div role="tablist" aria-label="編集する商品情報" className="mb-4 flex gap-1 overflow-x-auto border-b">
+        {(["COMMON", ...EC_CHANNELS] as const).map((value) => (
+          <button
+            type="button"
+            key={value}
+            role="tab"
+            aria-selected={tab === value}
+            onClick={() => {
+              setTab(value);
+              setVisited((current) => new Set([...current, value]));
+            }}
+            className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm ${tab === value ? "border-blue-700 font-bold text-blue-800" : "border-transparent text-gray-500"}`}
+          >
+            {value === "COMMON" ? "共通の商品情報" : EC_CHANNEL_LABEL[value]}
+          </button>
+        ))}
       </div>
+      {dirty && tab !== "COMMON" && (
+        <p className="mb-3 rounded bg-amber-50 p-3 text-sm text-amber-800">
+          共通の商品情報に未保存の変更があります。共通タブで保存してから、販売先の情報を編集してください。
+        </p>
+      )}
+      <div hidden={tab !== "COMMON"}>
+        <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
+          <div className="min-w-0 xl:w-[56rem]">
+            <ListingForm
+              inventoryId={item.id}
+              brandLogoAvailable={brandLogoAvailable}
+              inventoryName={item.name}
+              images={images}
+              photoAssets={photoAssets}
+              initialDraft={initialDraft}
+              initialChannelListing={initialChannelListing}
+              canPrepareMercari={canPrepareMercari}
+              shippingMethod={shippingMethod}
+              onShippingMethodChange={setShippingMethod}
+              onDraftSaved={setDraft}
+              onDirtyChange={setDirty}
+            />
+          </div>
+          <div className="min-w-0 xl:sticky xl:top-4 xl:max-h-[calc(100vh_-_96px_-_2rem)] xl:grow xl:shrink xl:basis-80 xl:max-w-md xl:overflow-y-auto 2xl:basis-96 2xl:max-w-lg">
+            <InventoryFactsPanel
+              item={item}
+              categoryName={categoryName}
+              statusName={statusName}
+              shippingMethod={shippingMethod}
+            />
+            <ShippingReferencePriceSection
+              key={item.id}
+              inventoryId={item.id}
+              initialResult={shippingReference}
+            />
+          </div>
+        </div>
+      </div>
+      {visited.has("MERCARI_SHOPS") && (
+        <div hidden={tab !== "MERCARI_SHOPS"}>
+          <fieldset disabled={dirty} className="disabled:opacity-50">
+            {canPrepareMercari && httpPreparationEligible ? (
+              <MercariManualListingPackPanel
+                inventoryId={item.id}
+                availableQuantity={item.quantity}
+                hasDraft={!!draft}
+                hasShopsRecord={!!initialChannelListing}
+                mode="HTTP"
+                showExecution={false}
+              />
+            ) : (
+              <p className="rounded border bg-gray-50 p-4 text-sm">
+                この商品の出品準備には、販売状況と既存の出品情報の確認が必要です。
+              </p>
+            )}
+            <details className="mt-4 rounded-lg border p-4">
+              <summary className="cursor-pointer text-sm">CSV・PC連携の補助機能と過去の記録</summary>
+              <MercariShopsLifecycleSection
+                inventoryId={item.id}
+                listing={initialChannelListing}
+                canPrepare={canPrepareMercari}
+              />
+              <MercariManualListingPackPanel
+                inventoryId={item.id}
+                availableQuantity={item.quantity}
+                hasDraft={!!draft}
+                hasShopsRecord={!!initialChannelListing}
+                mode="PC"
+                showExecution={false}
+              />
+            </details>
+          </fieldset>
+        </div>
+      )}
+      {visited.has("YAHOO") && (
+        <div hidden={tab !== "YAHOO"}>
+          <fieldset disabled={dirty}>
+            <YahooAuctionListingSection inventoryId={item.id} showExecution={false} />
+          </fieldset>
+        </div>
+      )}
+      {visited.has("BASE") && (
+        <div hidden={tab !== "BASE"} className="max-w-2xl rounded-lg border bg-white p-5">
+          <h3 className="font-bold">BASEの商品情報</h3>
+          <p className="mt-2 text-sm text-gray-600">
+            共通タブで保存した商品名・説明文・価格・画像を使います。商品一覧の「BASEに出品」で画像を準備し、公開する内容を確認できます。
+          </p>
+          {draft ? (
+            <dl className="mt-4 space-y-3 text-sm">
+              <div>
+                <dt className="text-gray-500">商品名</dt>
+                <dd>{draft.title}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">価格</dt>
+                <dd>{draft.price?.toLocaleString() ?? "未設定"}円</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">画像</dt>
+                <dd>{draft.images.length}枚</dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="mt-4 text-sm text-amber-800">先に共通の商品情報を保存してください。</p>
+          )}
+          <Link
+            href="/inventory/settings?tab=base"
+            className="mt-4 inline-block text-sm text-blue-700 underline"
+          >
+            BASEの接続設定
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

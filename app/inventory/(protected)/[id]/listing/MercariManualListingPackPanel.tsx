@@ -20,8 +20,8 @@ import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker
 import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
 
 export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
-  hasDraft, hasShopsRecord, mode }: { inventoryId: string; availableQuantity: number;
-  hasDraft: boolean; hasShopsRecord: boolean; mode: "HTTP" | "PC" }) {
+  hasDraft, hasShopsRecord, mode, showExecution = true }: { inventoryId: string; availableQuantity: number;
+  hasDraft: boolean; hasShopsRecord: boolean; mode: "HTTP" | "PC"; showExecution?: boolean }) {
   const isB005396 = inventoryId.toLowerCase() === B005396_INVENTORY_ID;
   const isHttp = mode === "HTTP";
   const [price, setPrice] = useState(isB005396 ? "99999" : "");
@@ -277,16 +277,16 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   }
   return <section id={isHttp ? "mercari-http-listing" : "mercari-manual-preparation"}
     className="mt-5 max-w-2xl rounded border border-gray-200 bg-white p-4 text-sm text-gray-800">
-    <h2 className="font-bold">メルカリShops {isHttp ? "HTTPS出品" : "PC方式の出品準備"}</h2>
-    {isHttp && <MercariHttpExecutionPanel inventoryId={inventoryId} requestId={httpRequestId}
+    <h2 className="font-bold">メルカリShops {isHttp ? "出品情報" : "PC方式の出品準備"}</h2>
+    {isHttp && showExecution && <MercariHttpExecutionPanel inventoryId={inventoryId} requestId={httpRequestId}
       onDraftSaved={refreshHttpStatus} />}
     <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isHttp && isB005396 ?
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
       "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
     {isHttp && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-      下の「準備登録」で内容を保存し、上の「Shopsに下書きを保存」で写真と商品情報を送信します。公開は出品内容の確認後に行います。
+      下の「準備登録」で保存した後、商品一覧でこの商品を選び「メルカリShopsに出品」を押してください。
     </p>}
-    {isHttp && <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs" role="status">
+    {isHttp && showExecution && <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs" role="status">
       <p>HTTP方式の準備状態: {httpStatus === "CHECKING" ? "確認中" :
         httpStatus === "NOT_PREPARED" ? "未登録" :
         httpStatus === "AWAITING_HTTP_AUTH_AND_CREATE_CONTRACT" ?

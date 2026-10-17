@@ -21,6 +21,8 @@ frontend:
         # This non-secret switch is enabled only on the staging branch; other
         # branches receive 0 and cannot send BASE private test writes.
         - echo "BASE_PRIVATE_TEST_WRITES_ENABLED=${BASE_PRIVATE_TEST_WRITES_ENABLED:-0}" >> .env.production
+        # Staff-confirmed EC list operations only. This does not enable the pricing scheduler.
+        - if [ "$AWS_APP_ID" = "d4hkkg7dty2du" ] && [ "$AWS_BRANCH" = "claude/inventory-management-system-5vbvc7" ]; then echo "BASE_MANUAL_LISTING_ENABLED=1" >> .env.production; fi
         - echo "BELLO_MOBILE_WRITES_ENABLED=${BELLO_MOBILE_WRITES_ENABLED:-false}" >> .env.production
         - if [ "$AWS_APP_ID" = "d4hkkg7dty2du" ] && [ "$AWS_BRANCH" = "claude/inventory-management-system-5vbvc7" ]; then echo "BELLO_MOBILE_PUBLIC_ORIGIN=https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com" >> .env.production; fi
         # Exact non-secret HTTPS Origin accepted for the staging Mercari read-result POST.
