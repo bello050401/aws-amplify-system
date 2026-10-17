@@ -26,7 +26,7 @@ export function DateField({label,value,disabled,onChange}:DateFieldProps) {
   const close=()=>{setOpen(false);button.current?.focus();};
   useEffect(()=>{if(open)dialog.current?.focus();},[open]);
   const years=Array.from({length:Math.max(2100,draft.year)-Math.min(1900,draft.year)+1},(_,index)=>Math.min(1900,draft.year)+index);
-  const action:React.CSSProperties={border:0,background:"#e5e7eb",borderRadius:24,padding:"11px 20px",fontSize:17,color:"#374151",fontFamily:"inherit",cursor:"pointer",minHeight:44};
+  const action:React.CSSProperties={border:0,background:"#e5e7eb",borderRadius:24,padding:"11px 12px",fontSize:17,color:"#374151",fontFamily:"inherit",cursor:"pointer",minHeight:44,whiteSpace:"nowrap"};
   return <>
     <button ref={button} type="button" aria-label={label+"を選択"} aria-haspopup="dialog" disabled={disabled} onClick={()=>{setDraft(dateParts(value));setOpen(true);}} style={{fontFamily:"inherit",fontSize:17,color:value?"#303633":"#929793",textAlign:"left",background:"white",border:"1px solid #AAAFAA",borderRadius:10,padding:16,minHeight:56,width:"100%",boxSizing:"border-box",cursor:"pointer"}}>{value.replaceAll("-","/")||"年月日を選択"}</button>
     {open&&createPortal(<div style={{position:"fixed",inset:0,zIndex:100000,background:"#0005",display:"flex",justifyContent:"center",alignItems:"flex-end"}} onClick={event=>{if(event.target===event.currentTarget)close();}}>
