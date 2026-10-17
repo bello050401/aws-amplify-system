@@ -33,3 +33,16 @@ export async function writeInventoryRevision(writer: InventoryRevisionWriter, in
   if (result.errors?.length || !saved || saved.id !== input.id || !Number.isFinite(Date.parse(saved.updatedAt))) throw new InventorySaveError("UNCONFIRMED");
   return saved;
 }
+
+export interface InventoryDeleteResult { data?: { deleteInventory?: { id: string } | null }; errors?: { errorType?: string; message?: string }[] }
+export async function deleteInventoryRevision(writer: (request: Parameters<InventoryRevisionWriter>[0]) => Promise<InventoryDeleteResult>, id: string, expectedUpdatedAt: string): Promise<void> {
+  if (!id || !Number.isFinite(Date.parse(expectedUpdatedAt))) throw new InventorySaveError("CONFLICT");
+  let result: InventoryDeleteResult;
+  try {
+    result = await writer({ query: `mutation DeleteInventoryRevision($input: DeleteInventoryInput!, $condition: ModelInventoryConditionInput!) {
+      deleteInventory(input: $input, condition: $condition) { id }
+    }`, variables: { input: { id }, condition: { updatedAt: { eq: expectedUpdatedAt } } }, authMode: "userPool" });
+  } catch (error) { throw new InventorySaveError(isConditionalFailure(error) ? "CONFLICT" : "UNCONFIRMED"); }
+  if (isConditionalFailure(result)) throw new InventorySaveError("CONFLICT");
+  if (result.errors?.length || result.data?.deleteInventory?.id !== id) throw new InventorySaveError("UNCONFIRMED");
+}

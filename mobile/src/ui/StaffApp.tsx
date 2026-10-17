@@ -17,6 +17,7 @@ import {BarcodeScanner} from "./BarcodeScanner";
 import {SalesScreen, type SalesResponse} from "./SalesScreen";
 import { InventoryReadError } from "../domain/readError";
 import { HomeScreen } from "./HomeScreen";
+import { deletionWarning, inventoryCopyDraft, removeConfirmedInventory, type DeleteRequest } from "../domain/inventoryActions";
 
 type Tab = "home" | "inventory" | "ec" | "sales";
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -31,6 +32,7 @@ export interface StaffAppPorts extends EditorPorts {
   loadOptions?: () => Promise<InventoryOptions>;
   loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
   loadDetail?: (id: string) => Promise<InventoryItem>;
+  removeInventory?: (request: DeleteRequest) => Promise<void>;
 }
 
 export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, writesEnabled = false, features = RESTRICTED_FEATURES, previewAccount, onTogglePreviewAccount }: {
@@ -47,6 +49,10 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const [snapshot, setSnapshot] = useState<InventorySnapshot | null>(null);
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const [editor, setEditor] = useState<InventoryEditor | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<InventoryItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const deleteBusy = useRef(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [serverRows, setServerRows] = useState<InventoryItem[] | null>(null);
   const [advanced,setAdvanced]=useState<AdvancedSearchQuery>({combinator:"AND",conditions:[]});
@@ -140,6 +146,31 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     setEditor(new InventoryEditor(item,ports,true));setCreating(false);
   };
   const leaveEditor = () => { setEditor(null); setSelected(null); setError(null); setTab("inventory"); };
+  const startCopy = () => {
+    if (!selected || !writesEnabled || detailLoading) return;
+    if (!selected.detailLoadedAt || !selected.photosComplete) { setError("写真を含む商品詳細を読み込んでからコピーしてください。"); return; }
+    const draft = inventoryCopyDraft(selected, ports.newMutationId(), new Date().toISOString());
+    setError(null);
+    setEditor(new InventoryEditor(draft, ports, true, { id: selected.id, updatedAt: selected.updatedAt }));
+  };
+  const confirmDelete = async () => {
+    if (!deleteTarget || !ports.removeInventory || !writesEnabled || deleteBusy.current) return;
+    deleteBusy.current = true; setDeleting(true); setDeleteError(null);
+    try {
+      await removeConfirmedInventory(deleteTarget, { online: ports.online, removeInventory: ports.removeInventory });
+      generation.current++; detailGeneration.current++; setLoading(false); setDetailLoading(false);
+      const items = (snapshotRef.current?.items ?? []).filter(item => item.id !== deleteTarget.id);
+      const fetchedAt = snapshotRef.current?.fetchedAt ?? new Date().toISOString();
+      const next = { schema: 1 as const, owner: "current", items, fetchedAt };
+      snapshotRef.current = next; setSnapshot(next);
+      setServerRows(rows => rows?.filter(item => item.id !== deleteTarget.id) ?? null);
+      setSelected(null); setDeleteTarget(null); setTab("inventory"); setError(null);
+      try { await ports.snapshot.write(items, fetchedAt); }
+      catch { setError("商品は削除しましたが、端末の保存データを更新できませんでした。再読み込みしてください。"); }
+      if (ports.searchInventory) void refresh();
+    } catch (error) { setDeleteError(deletionWarning(error)); }
+    finally { deleteBusy.current = false; setDeleting(false); }
+  };
   const openItem = async (item: InventoryItem) => {
     const attempt = ++detailGeneration.current;
     setSelected(item); setError(null); setDetailLoading(false);
@@ -190,9 +221,12 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
     {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={saved} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <>
       <View style={s.header}>
-        <View style={s.headerSide}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); }} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
+        <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); }} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
-        <View style={s.headerSide}>{tab === "inventory" && !selected && <Pressable accessibilityRole="button" accessibilityLabel="並び替え" onPress={() => setSortOpen(true)} style={s.round}><Ionicons name="swap-vertical" size={24} color={colors.text} /></Pressable>}{tab === "home" && !feature && onLogout && <Pressable accessibilityRole="button" accessibilityLabel="ログアウト" onPress={onLogout} style={s.round}><Ionicons name="log-out-outline" size={24} color={colors.text} /></Pressable>}</View>
+        <View style={[s.headerSide, selected && {width:88,flexDirection:"row"}]}>{selected && writesEnabled && <>
+          <Pressable accessibilityRole="button" accessibilityLabel="この商品をコピーして新規登録" disabled={detailLoading} onPress={startCopy} style={s.round}><Ionicons name="copy-outline" size={23} color={colors.blue}/></Pressable>
+          {ports.removeInventory && <Pressable accessibilityRole="button" accessibilityLabel="この商品を削除" disabled={detailLoading || !selected.detailLoadedAt} onPress={()=>{setDeleteError(null);setDeleteTarget(selected);}} style={s.round}><Ionicons name="trash-outline" size={23} color={colors.danger}/></Pressable>}
+        </>}{tab === "inventory" && !selected && <Pressable accessibilityRole="button" accessibilityLabel="並び替え" onPress={() => setSortOpen(true)} style={s.round}><Ionicons name="swap-vertical" size={24} color={colors.text} /></Pressable>}{tab === "home" && !feature && onLogout && <Pressable accessibilityRole="button" accessibilityLabel="ログアウト" onPress={onLogout} style={s.round}><Ionicons name="log-out-outline" size={24} color={colors.text} /></Pressable>}</View>
       </View>
       {offline && <View style={s.offline}><Text style={s.offlineText}>【圏外です】保存済みの在庫を表示しています</Text>
         {snapshot && <Text style={s.timestamp}>最終取得 {new Date(snapshot.fetchedAt).toLocaleString("ja-JP")}</Text>}
@@ -230,6 +264,16 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       {selected && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={22} color="white" /><Text style={s.white}>編集</Text></Pressable>}
       <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={25} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
     </>}
+    <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={()=>{if(!deleteBusy.current)setDeleteTarget(null);}}>
+      <View style={s.deleteShade}><View accessibilityViewIsModal style={s.deleteDialog}>
+        <Ionicons name="trash-outline" size={30} color={colors.danger}/><Text style={s.deleteTitle}>この商品を本当に削除しますか？</Text>
+        <Text numberOfLines={5} style={s.deleteName}>{deleteTarget?.name}</Text>
+        <Text style={s.deleteNote}>自社システムの在庫から削除されます。この操作は取り消せません。</Text>
+        {deleteError && <Text accessibilityRole="alert" style={s.error}>{deleteError}</Text>}
+        <View style={s.deleteButtons}><Pressable accessibilityRole="button" disabled={deleting} onPress={()=>setDeleteTarget(null)} style={s.deleteCancel}><Text style={s.blue}>キャンセル</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={deleting} onPress={()=>{void confirmDelete();}} style={[s.deleteConfirm,deleting&&{opacity:.5}]}><Text style={s.white}>{deleting?"削除中…":"削除する"}</Text></Pressable></View>
+      </View></View>
+    </Modal>
     {scanSearch&&<BarcodeScanner onClose={()=>setScanSearch(false)} onRead={value=>{setScanSearch(false);setQuery("");setCategory("");setAdvanced({combinator:"AND",conditions:[{id:"barcode-scan",field:"barcode",operator:"equals",value}]});setSelected(null);setTab("inventory");}}/>}
     {sortOpen&&<InventorySortSheet value={sort} fields={searchFields} onClose={()=>setSortOpen(false)} onApply={value=>{setSort(value);setSortOpen(false);}}/>}
     <Modal visible={categoryPicker} transparent animationType="slide" onRequestClose={() => setCategoryPicker(false)}><View style={s.shade}><View style={s.picker}><Text style={s.title}>カテゴリを選択</Text><ScrollView style={{maxHeight:450}}>{["", ...categories].map((value) => <Pressable accessibilityRole="button" key={value} style={s.pickerChoice} onPress={() => { setCategory(value); setCategoryPicker(false); }}><Text style={s.categoryText}>{value || "指定なし"}</Text></Pressable>)}</ScrollView><Pressable accessibilityRole="button" style={s.pickerChoice} onPress={() => setCategoryPicker(false)}><Text style={s.blue}>キャンセル</Text></Pressable></View></View></Modal>
@@ -242,6 +286,7 @@ function ProductImage({ item, large }: { item: InventoryItem; large?: boolean })
 }
 
 const s = StyleSheet.create({
+  deleteShade:{flex:1,backgroundColor:"#00000066",justifyContent:"center",padding:24},deleteDialog:{backgroundColor:"white",borderRadius:22,padding:22,gap:16},deleteTitle:{fontSize:18,fontWeight:"700",lineHeight:27,color:colors.text},deleteName:{fontSize:16,lineHeight:24,color:colors.text},deleteNote:{fontSize:13,lineHeight:21,color:colors.muted},deleteButtons:{flexDirection:"row",gap:12,marginTop:8},deleteCancel:{flex:1,minHeight:48,alignItems:"center",justifyContent:"center"},deleteConfirm:{flex:1,minHeight:48,alignItems:"center",justifyContent:"center",backgroundColor:colors.danger,borderRadius:12},
   advancedButton:{borderWidth:1.5,borderColor:colors.blue,borderRadius:10,padding:11},summaryRow:{flexDirection:"row",alignItems:"center",justifyContent:"space-between",marginTop:3},
   floatingEdit: { position: "absolute", right: 20, bottom: 105, zIndex: 1 },
   detailHeading: { fontSize: 20, fontWeight: "700", color: colors.text, paddingTop: 26, paddingBottom: 16 },

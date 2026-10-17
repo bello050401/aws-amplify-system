@@ -7,9 +7,9 @@ import { getInventoryDetail, listCategories, listLocations, listStatuses } from 
 import { mobileInventoryDetail } from "@/lib/mobile/inventoryDetail";
 import { mobileInventoryPhotos } from "@/lib/mobile/inventoryPhotos";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
-import { createInventory, updateInventory } from "@/app/actions/inventory";
+import { createInventory, updateInventory, deleteInventory } from "@/app/actions/inventory";
 import { InventorySaveError } from "@/lib/inventory/conditionalUpdate";
-import { parseMobileSave, mobileCreateInput, mobileInventoryInput, mobileWriteWasApplied, MobileWriteValidationError } from "@/lib/mobile/inventoryWrite";
+import { parseMobileSave, mobileCreateInput, mobileCopyInput, mobileInventoryInput, mobileWriteWasApplied, MobileWriteValidationError } from "@/lib/mobile/inventoryWrite";
 
 export const dynamic = "force-dynamic";
 export async function GET(_request: Request, context: { params: { id: string } }) {
@@ -38,7 +38,7 @@ export async function GET(_request: Request, context: { params: { id: string } }
 }
 
 /** Native clients use the same BELLO save action as the Web editor. No direct ZAICO calls. */
-async function save(request: Request, context: { params: { id: string } }, creating: boolean) {
+async function save(request: Request, context: { params: { id: string } }, creating: boolean | "delete") {
   const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
   const fail = (error: string, status: number) => NextResponse.json({ error }, { status, headers });
   const session = await getMobileSession();
@@ -68,6 +68,15 @@ async function save(request: Request, context: { params: { id: string } }, creat
     raw = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch { return fail("INVALID_INPUT", 400); }
   try {
+    if (creating === "delete") {
+      const body = raw as { id?: unknown; expectedUpdatedAt?: unknown } | null;
+      if (!body || Array.isArray(body) || body.id !== context.params.id || !/^[a-f0-9-]{36}$/i.test(context.params.id) ||
+          typeof body.expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(body.expectedUpdatedAt)) ||
+          Object.keys(body).some(key => !["id", "expectedUpdatedAt"].includes(key))) return fail("INVALID_INPUT", 422);
+      await deleteInventory(context.params.id, { skipRedirect: true, expectedUpdatedAt: body.expectedUpdatedAt });
+      if (await getInventoryDetail(context.params.id)) return fail("UNCONFIRMED", 503);
+      return NextResponse.json({ owner: session.owner, deletedId: context.params.id }, { headers });
+    }
     const body = parseMobileSave(raw, context.params.id);
     if (Boolean(body.create) !== creating) return fail("INVALID_INPUT", 422);
     const row = await getInventoryDetail(body.id);
@@ -75,8 +84,14 @@ async function save(request: Request, context: { params: { id: string } }, creat
     if (row && creating && !mobileWriteWasApplied(row, body, session.owner)) return fail("CONFLICT", 409);
     // A previous response may have been lost. Confirm the receipt before attempting a write.
     if (!row || !mobileWriteWasApplied(row, body, session.owner)) {
-      const [categories, locations, statuses] = await Promise.all([listCategories(row?.categoryId), listLocations(row?.locationId), listStatuses()]);
-      const input = row ? mobileInventoryInput(row, body, session.owner, session.features, categories, locations, statuses) : mobileCreateInput(body, session.owner, session.features, categories, locations, statuses);
+      const source = body.copyFrom ? await getInventoryDetail(body.copyFrom.id) : null;
+      if (body.copyFrom && !source) return fail("CONFLICT", 409);
+      const [categories, locations, statuses] = await Promise.all([listCategories(row?.categoryId ?? source?.categoryId), listLocations(row?.locationId ?? source?.locationId), listStatuses()]);
+      const assets = source ? await listInventoryPhotoAssetsAction(source.id) : null;
+      if (source && (!assets?.ok || assets.value.truncated)) return fail("COPY_IMAGES_UNAVAILABLE", 422);
+      const input = row ? mobileInventoryInput(row, body, session.owner, session.features, categories, locations, statuses) : source
+        ? mobileCopyInput(source, assets?.ok ? assets.value.assets : [], process.env.PHOTO_REGISTRATION_BUCKET_NAME, body, session.owner, session.features, categories, locations, statuses)
+        : mobileCreateInput(body, session.owner, session.features, categories, locations, statuses);
       try {
         if (creating) await createInventory(input, { skipRedirect: true, id: body.id });
         else await updateInventory(body.id, input, { skipRedirect: true });
@@ -105,3 +120,4 @@ async function save(request: Request, context: { params: { id: string } }, creat
 
 export async function PATCH(request: Request, context: { params: { id: string } }) { return save(request, context, false); }
 export async function POST(request: Request, context: { params: { id: string } }) { return save(request, context, true); }
+export async function DELETE(request: Request, context: { params: { id: string } }) { return save(request, context, "delete"); }

@@ -15,6 +15,7 @@ export interface SaveRequest {
   draft: InventoryDraft;
   create?: boolean;
   uploads?: UploadedPhoto[];
+  copyFrom?: { id: string; updatedAt: string };
 }
 export interface EditorPorts {
   online: () => Promise<boolean>;
@@ -50,9 +51,9 @@ export class InventoryEditor {
   private pendingRequest: SaveRequest | null = null;
   private uploaded = new Map<string, UploadedPhoto>();
 
-  constructor(item: InventoryItem, private readonly ports: EditorPorts, creating = false) {
+  constructor(item: InventoryItem, private readonly ports: EditorPorts, creating = false, private readonly copyFrom?: SaveRequest["copyFrom"]) {
     this.state = {
-      saved: { ...item, details: copyDetailValues(item.details) }, draft: draftFor(item), dirty: false, saving: false,
+      saved: { ...item, details: copyDetailValues(item.details) }, draft: draftFor(item), dirty: Boolean(copyFrom), saving: false,
       leaveConfirmation: false, warning: null, outcomeUncertain: false,
       photos: [], creating,
     };
@@ -105,7 +106,7 @@ export class InventoryEditor {
 
   requestLeave(): boolean {
     if (this.state.saving) return false;
-    if (!this.state.dirty) return true;
+    if (!this.state.dirty && !this.copyFrom) return true;
     this.set({ leaveConfirmation: true });
     return false;
   }
@@ -147,6 +148,7 @@ export class InventoryEditor {
         id: this.state.saved.id, expectedUpdatedAt: this.state.saved.updatedAt,
         mutationId: this.ports.newMutationId(), draft: { ...this.state.draft, details: copyDetailValues(this.state.draft.details) },
         ...(this.state.creating ? { create: true } : {}), ...(uploads.length ? { uploads } : {}),
+        ...(this.copyFrom ? { copyFrom: this.copyFrom } : {}),
       };
       this.pendingRequest = request;
       const saved = await this.ports.save(request);

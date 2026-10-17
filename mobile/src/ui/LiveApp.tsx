@@ -9,6 +9,7 @@ import { API_ORIGIN, clearLocalSession, configureMobileAuth, readInventory, read
 import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
+import { removeInventory } from "../runtime/service";
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 
@@ -90,6 +91,7 @@ export function LiveApp() {
     uploadPhoto: uploadInventoryPhoto,
     loadSales: readSales,
     save: saveInventory,
+    removeInventory,
   }; }, [userId]);
 
   const chooseLoginMode = (mode: LoginMode) => {

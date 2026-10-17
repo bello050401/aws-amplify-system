@@ -58,10 +58,12 @@ test("detail fields are cloned and only allowed field keys enter the draft", () 
   assert.equal(sameDraft(draft, second), true); second.details.depth = "55"; assert.equal(sameDraft(draft, second), false);
   assert.deepEqual(copyDetailValues(["invalid"]), {});
 });
-test("legacy shipping cannot be changed through the editor and read failures cannot create unknown fields", () => {
+test("shipping is editable and unknown fields cannot enter the draft", () => {
   const editor = new InventoryEditor(previewItems[0], { online: async () => true, newMutationId: () => "test", save: async () => previewItems[0] });
   editor.changeDetail("shippingCost", "9999"); editor.changeDetail("unexpectedToken", "bad");
-  assert.equal(editor.getSnapshot().dirty, false);
+  assert.equal(editor.getSnapshot().dirty, true);
+  assert.equal(editor.getSnapshot().draft.details.shippingCost, "9999");
+  assert.equal("unexpectedToken" in editor.getSnapshot().draft.details, false);
 });
 test("dates and monetary values reject impossible entries but preserve valid leap dates and zero", () => {
   const draft = draftFor(previewItems[0]);

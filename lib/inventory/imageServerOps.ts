@@ -5,6 +5,7 @@ import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { generateThumbnailFromBytes, INVENTORY_IMAGE_CACHE_CONTROL } from "./thumbnail";
 import { newInventoryImageKey } from "./imageKeys";
 import { computeOriginalHash } from "@/lib/imageProcessing/pipeline";
+import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 // Re-exported for every existing external caller (app/actions/inventory.ts,
 // zaicoSyncPorts.ts) — this function itself moved to imageKeys.ts (BELLO
@@ -43,9 +44,20 @@ export { newInventoryImageKey } from "./imageKeys";
  * already has unsafe characters baked in from before that upstream fix —
  * see the catch block below for how that specific case is surfaced.
  */
-export async function copyInventoryImage(sourcePath: string): Promise<string> {
+export async function copyInventoryImage(sourcePath: string, sourceBucket?: string): Promise<string> {
   const destinationPath = newInventoryImageKey(sourcePath);
   try {
+    if (sourceBucket) {
+      if (sourceBucket !== process.env.PHOTO_REGISTRATION_BUCKET_NAME || !/^photo-batches\/[a-zA-Z0-9-]+\/processed\/[a-zA-Z0-9-]+\.(jpg|png|webp)$/.test(sourcePath)) throw new Error("Invalid photo source");
+      const object = await new S3Client({ region: process.env.PHOTO_REGISTRATION_AWS_REGION || "us-west-2" }).send(new GetObjectCommand({ Bucket: sourceBucket, Key: sourcePath }));
+      if (!object.Body || !object.ContentLength || object.ContentLength > 20 * 1024 * 1024) throw new Error("Invalid photo size");
+      const bytes = await object.Body.transformToByteArray();
+      if (bytes.byteLength > 20 * 1024 * 1024) throw new Error("Invalid photo size");
+      await runWithAmplifyServerContext({ nextServerContext: { cookies }, operation: context => uploadData(context, {
+        path: destinationPath, data: bytes, options: { contentType: object.ContentType, cacheControl: INVENTORY_IMAGE_CACHE_CONTROL },
+      }).result });
+      return destinationPath;
+    }
     await runWithAmplifyServerContext({
       nextServerContext: { cookies },
       operation: (contextSpec) =>

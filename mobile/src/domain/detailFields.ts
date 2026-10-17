@@ -43,8 +43,7 @@ export const DETAIL_FIELDS: readonly DetailField[] = [
   { key: "counterpartyOccupation", label: "職業", section: "仕入情報" },
   { key: "counterpartyAddress", label: "住所", section: "仕入情報", kind: "multiline" },
   { key: "purchasePrice", label: "購入価格", section: "仕入情報", kind: "money" },
-  // Existing BELLO policy includes costs in purchasePrice; preserve legacy shipping separately.
-  { key: "shippingCost", label: "送料（保存済みの参考値）", section: "仕入情報", kind: "money", readOnly: true },
+  { key: "shippingCost", label: "送料", section: "仕入情報", kind: "money" },
   { key: "dailyPurchaseTotal", label: "その日の仕入れ合計金額（他商品含む）", section: "仕入情報", kind: "money" },
   { key: "saleStartDate", label: "販売開始日", section: "販売情報", kind: "date", feature: "sales" },
   { key: "saleEndDate", label: "販売終了日", section: "販売情報", kind: "date", feature: "sales" },

@@ -12,6 +12,7 @@ import { isMobileFeatures, type MobileFeatures } from "../domain/access";
 import type {SalesResponse} from "../ui/SalesScreen";
 import { InventoryWriteError, type SaveRequest } from "../domain/editor";
 import { InventoryReadError } from "../domain/readError";
+import type { DeleteRequest } from "../domain/inventoryActions";
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
@@ -135,6 +136,27 @@ export async function readInventoryDetail(id: string): Promise<InventoryItem> {
     throw new Error("商品詳細を確認できませんでした。");
   }
   return value.item;
+}
+
+export async function removeInventory(request: DeleteRequest): Promise<void> {
+  if (!mobileWritesEnabled()) throw new InventoryWriteError("forbidden");
+  let session: Awaited<ReturnType<typeof authenticatedSession>>;
+  try { session = await authenticatedSession(); } catch { throw new InventoryWriteError("unauthorized"); }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.id)}`, {
+      method: "DELETE", credentials: "same-origin", redirect: "error", signal: controller.signal,
+      headers: { "Content-Type": "application/json", "X-Bello-Mobile": "1", ...(session.cookie ? { Cookie: session.cookie } : {}) }, body: JSON.stringify(request),
+    });
+    if (response.status === 401) throw new InventoryWriteError("unauthorized");
+    if (response.status === 403) throw new InventoryWriteError("forbidden");
+    if (response.status === 409) throw new InventoryWriteError("conflict");
+    if (!response.ok) throw new InventoryWriteError("uncertain");
+    const value = await response.json();
+    if (value.owner !== session.owner || value.deletedId !== request.id) throw new InventoryWriteError("uncertain");
+  } catch (error) { throw error instanceof InventoryWriteError ? error : new InventoryWriteError("uncertain"); }
+  finally { clearTimeout(timeout); }
 }
 
 export async function readInventoryOptions(): Promise<InventoryOptions> {

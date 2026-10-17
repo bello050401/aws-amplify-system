@@ -17,7 +17,7 @@ import { copyInventoryMedium, copyInventoryThumbnail, generateInventoryDerivativ
 import { diffField, logInventoryHistory } from "@/lib/inventory/history";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import type { InventoryImageRecord, InventoryImageType } from "@/lib/inventory/imageTypes";
-import { assertInventoryVersion, writeInventoryRevision, type InventoryWriteResult } from "@/lib/inventory/conditionalUpdate";
+import { assertInventoryVersion, writeInventoryRevision, deleteInventoryRevision, type InventoryDeleteResult, type InventoryWriteResult } from "@/lib/inventory/conditionalUpdate";
 import { withHumanEdits, productCustomFields } from "@/lib/inventory/humanEdits";
 
 /**
@@ -71,6 +71,8 @@ export type ImageSlotInput =
   | {
       kind: "copy";
       sourceStorageKey: string;
+      /** Only the configured BELLO photo-registration bucket is accepted. */
+      sourceBucket?: string;
       sortOrder: number;
       type: InventoryImageType;
       isPrimary: boolean;
@@ -150,7 +152,7 @@ async function resolveImages(images: ImageSlotInput[], existingImages: Inventory
         });
         continue;
       }
-      const newKey = await copyInventoryImage(img.sourceStorageKey);
+      const newKey = await copyInventoryImage(img.sourceStorageKey, img.sourceBucket);
       createdKeys.push(newKey);
       const thumbnailKey = img.sourceThumbnailKey ? await copyInventoryThumbnail(img.sourceThumbnailKey) : null;
       if (thumbnailKey) createdKeys.push(thumbnailKey);
@@ -215,6 +217,8 @@ function allImageStorageKeys(images: InventoryImageRecord[]): string[] {
 function extendedFieldsInput(input: InventoryExtendedFields): Partial<InventoryExtendedFields> {
   const result: Record<string, string | number | null> = {};
   for (const field of ALL_EXTENDED_FIELDS) {
+    // Older open clients do not submit shippingCost; omission must preserve it.
+    if (field.key === "shippingCost" && !Object.hasOwn(input, "shippingCost")) continue;
     result[field.key] = input[field.key] ?? null;
   }
   return result as Partial<InventoryExtendedFields>;
@@ -458,7 +462,7 @@ export async function updateInventory(
     // spec, this doesn't need to be more elaborate than "what changed",
     // and diffField already gives that for free per field rather than
     // needing a separate combined-summary code path.
-    ...ALL_EXTENDED_FIELDS.map((field) => diffField(field.label, existing[field.key], input[field.key])),
+    ...ALL_EXTENDED_FIELDS.filter(field => field.key !== "shippingCost" || Object.hasOwn(input, "shippingCost")).map((field) => diffField(field.label, existing[field.key], input[field.key])),
   ].filter((c): c is NonNullable<typeof c> => c !== null);
   await logInventoryHistory(inventoryId, who, changes);
 
@@ -480,11 +484,10 @@ export async function updateInventory(
 
 /**
  * Hard delete (spec §3: soft-delete/restore is explicitly deferred to a
- * later phase — "現段階では完全削除でも構いません"). ADMIN-only,
+ * later phase — "現段階では完全削除でも構いません"). ADMIN/EDITOR,
  * enforced here for a clean error message and, independently, by the
- * schema itself (`Inventory`'s `.authorization()` in
- * amplify/data/resource.ts grants EDITOR only read/create/update — no
- * delete — so this can't be bypassed by skipping this check).
+ * schema itself. Staff deletion was explicitly authorized on 2026-10-17;
+ * VIEWER remains read-only.
  *
  * InventoryHistory rows for this item are deliberately left in place —
  * an audit trail documenting what happened to a since-deleted item is
@@ -494,22 +497,24 @@ export async function updateInventory(
  * requires a deleted SKU stay retired, and the counter only ever moves
  * forward.
  */
-export async function deleteInventory(inventoryId: string): Promise<never> {
+export async function deleteInventory(inventoryId: string): Promise<never>;
+export async function deleteInventory(inventoryId: string, options: { skipRedirect: true; expectedUpdatedAt: string }): Promise<{ id: string }>;
+export async function deleteInventory(inventoryId: string, options?: { skipRedirect: true; expectedUpdatedAt: string }): Promise<{ id: string } | never> {
   const role = await getInventoryRole();
   if (!canHardDeleteInventory(role)) {
-    throw new Error("在庫を削除する権限がありません（ADMIN のみ）。");
+    throw new Error("在庫を削除する権限がありません。");
   }
 
   const existing = await getInventoryDetail(inventoryId);
-  if (!existing) throw new Error("対象の在庫が見つかりません。");
+  if (!existing) {
+    if (options?.skipRedirect) return { id: inventoryId };
+    throw new Error("対象の在庫が見つかりません。");
+  }
+  if (options) assertInventoryVersion(options.expectedUpdatedAt, existing.updatedAt);
 
   const who = await getCurrentInventoryUserEmail();
 
-  const { errors } = await serverDataClient.models.Inventory.delete({ id: inventoryId }, inventoryAuthMode);
-  if (errors) {
-    console.error("[deleteInventory] Inventory.delete failed:", errors);
-    throw new Error(`在庫の削除に失敗しました: ${JSON.stringify(errors)}`);
-  }
+  await deleteInventoryRevision(async request => await serverDataClient.graphql(request) as InventoryDeleteResult, inventoryId, existing.updatedAt);
 
   await logInventoryHistory(inventoryId, who, [{ fieldName: "削除", oldValue: "有効", newValue: "削除済み" }]);
   await Promise.allSettled(allImageStorageKeys(existing.images).map((k) => removeInventoryImage(k)));
@@ -518,6 +523,8 @@ export async function deleteInventory(inventoryId: string): Promise<never> {
   // 追加・削除の直後に古い件数を出し続けないよう、ここで捨てる。
   clearInventoryCountCache();
   revalidatePath("/inventory");
+  revalidatePath(`/inventory/${inventoryId}`);
+  if (options?.skipRedirect) return { id: inventoryId };
   redirect("/inventory");
 }
 

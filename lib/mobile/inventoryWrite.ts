@@ -7,6 +7,9 @@ import { DETAIL_FIELDS } from "@/mobile/src/domain/detailFields";
 import { validateDraft, type InventoryDraft } from "@/mobile/src/domain/inventory";
 import type { SaveRequest } from "@/mobile/src/domain/editor";
 import type { MobileFeatures } from "./accessPolicy";
+import type { WebPhotoAssetView } from "../photoRegistration/webAdapter";
+import { extensionForMimeType, photoAssetS3Key } from "../photoRegistration/types";
+import { resolveProductGallerySource } from "../photoRegistration/gallerySelection";
 
 // Internal save receipt, stored in the same atomic Inventory update as the fields.
 // It contains no credentials or product text and is excluded from mobile projection.
@@ -23,8 +26,11 @@ const invalid = (): never => { throw new MobileWriteValidationError("INVALID_INP
 export function parseMobileSave(raw: unknown, id: string): SaveRequest {
   if (!object(raw) || !uuid.test(id) || raw.id !== id || typeof raw.mutationId !== "string" || !uuid.test(raw.mutationId) ||
       typeof raw.expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(raw.expectedUpdatedAt)) ||
-      Object.keys(raw).some(key => !["id", "mutationId", "expectedUpdatedAt", "draft", "create", "uploads"].includes(key))) return invalid();
+      Object.keys(raw).some(key => !["id", "mutationId", "expectedUpdatedAt", "draft", "create", "uploads", "copyFrom"].includes(key))) return invalid();
   if (raw.create !== undefined && raw.create !== true) return invalid();
+  if (raw.copyFrom !== undefined && (!raw.create || !object(raw.copyFrom) || Object.keys(raw.copyFrom).some(key => !["id", "updatedAt"].includes(key)) ||
+      typeof raw.copyFrom.id !== "string" || !uuid.test(raw.copyFrom.id) || raw.copyFrom.id === id ||
+      typeof raw.copyFrom.updatedAt !== "string" || !Number.isFinite(Date.parse(raw.copyFrom.updatedAt)))) return invalid();
   if (raw.uploads !== undefined && (!Array.isArray(raw.uploads) || raw.uploads.length > 100 || raw.uploads.some(photo =>
     !object(photo) || Object.keys(photo).some(key => !["storageKey", "type"].includes(key)) ||
     typeof photo.storageKey !== "string" || !/^inventory\/mobile\/[a-z0-9-]+\/[a-f0-9-]{36}\/[a-f0-9]{64}\.jpg$/.test(photo.storageKey) ||
@@ -38,13 +44,13 @@ export function parseMobileSave(raw: unknown, id: string): SaveRequest {
   if (validateDraft(draft as InventoryDraft)) return invalid();
   // GraphQL Int, not JavaScript's wider safe integer range.
   if (Number(draft.quantity) > 2147483647 || Number(draft.details.purchaseQuantity ?? 0) > 2147483647) return invalid();
-  return { id, mutationId: raw.mutationId, expectedUpdatedAt: raw.expectedUpdatedAt, draft: draft as InventoryDraft, ...(raw.create ? { create: true } : {}), ...(raw.uploads ? { uploads: raw.uploads as SaveRequest["uploads"] } : {}) };
+  return { id, mutationId: raw.mutationId, expectedUpdatedAt: raw.expectedUpdatedAt, draft: draft as InventoryDraft, ...(raw.create ? { create: true } : {}), ...(raw.uploads ? { uploads: raw.uploads as SaveRequest["uploads"] } : {}), ...(raw.copyFrom ? { copyFrom: raw.copyFrom as SaveRequest["copyFrom"] } : {}) };
 }
 
 function receiptFor(request: SaveRequest, owner: string) {
   const draft = request.draft;
   const values = [...draftKeys.map(key => [key, draft[key]]), ["details", Object.entries(draft.details).sort(([a], [b]) => a.localeCompare(b))]];
-  return { owner, mutationId: request.mutationId, fingerprint: createHash("sha256").update(JSON.stringify([request.id, request.expectedUpdatedAt, values, ...(request.create || request.uploads ? [request.create ?? false, request.uploads ?? []] : [])])).digest("hex") };
+  return { owner, mutationId: request.mutationId, fingerprint: createHash("sha256").update(JSON.stringify([request.id, request.expectedUpdatedAt, values, ...(request.create || request.uploads ? [request.create ?? false, request.uploads ?? []] : []), ...(request.copyFrom ? [request.copyFrom] : [])])).digest("hex") };
 }
 
 export function mobileWriteWasApplied(row: InventoryDetail, request: SaveRequest, owner: string): boolean {
@@ -110,4 +116,29 @@ export function mobileCreateInput(request: SaveRequest, owner: string, features:
   const row = { ...blank, id: request.id, updatedAt: request.expectedUpdatedAt, categoryId: null, locationId: null,
     statusId: null, images: [], customFields: {}, purchasePrice: null, salePrice: null } as unknown as InventoryDetail;
   return mobileInventoryInput(row, request, owner, features, categories, locations, statuses);
+}
+
+/** Copy only product values and independently owned photos; never source IDs, sync links, receipts or audit metadata. */
+export function mobileCopyInput(source: InventoryDetail, assets: WebPhotoAssetView[], bucket: string | undefined,
+  request: SaveRequest, owner: string, features: MobileFeatures, categories: MasterOption[], locations: MasterOption[], statuses: StatusOption[]): InventoryFieldsInput {
+  if (!request.create || request.copyFrom?.id !== source.id) return invalid();
+  assertInventoryVersion(request.copyFrom.updatedAt, source.updatedAt);
+  const input = mobileCreateInput(request, owner, features, categories, locations, statuses);
+  const ready = assets.filter(asset => asset.status === "READY" && !asset.isDeleted);
+  const chosen = resolveProductGallerySource(source.images, ready);
+  const primaryImage = chosen.kind === "INVENTORY" ? chosen.images[0]?.storageKey : undefined;
+  const primaryAsset = chosen.kind === "PHOTO_ASSET" ? chosen.assets[0]?.id : undefined;
+  const copied: InventoryFieldsInput["images"] = [...new Map(source.images.map(image => [image.storageKey, image])).values()].map((image, index) => ({
+    kind: "copy", sourceStorageKey: image.storageKey, sourceThumbnailKey: image.thumbnailKey, sourceMediumKey: image.mediumKey,
+    sourceOriginalHash: image.originalHash, sourceClassification: image.classification, sourceSystem: null, sourceUrl: null,
+    type: image.type, isPrimary: image.storageKey === primaryImage, sortOrder: index,
+  }));
+  for (const asset of ready) {
+    if (!bucket) throw new Error("Photo storage unavailable");
+    copied.push({kind:"copy", sourceBucket:bucket, sourceStorageKey:photoAssetS3Key(asset.photoBatchId,asset.id,"PROCESSED",extensionForMimeType(asset.declared.PROCESSED.mimeType)),
+      sourceThumbnailKey:null,sourceMediumKey:null,sourceOriginalHash:asset.declared.PROCESSED.sha256,sourceClassification:null,sourceSystem:null,sourceUrl:null,
+      type:asset.inventoryImageType === "DAMAGE" ? "DAMAGE" : "NORMAL",isPrimary:asset.id === primaryAsset,sortOrder:copied.length});
+  }
+  input.images = [...copied, ...input.images.map((image,index)=>({...image,sortOrder:copied.length+index,isPrimary:image.isPrimary && !copied.some(photo=>photo.type==="NORMAL")}))];
+  return input;
 }

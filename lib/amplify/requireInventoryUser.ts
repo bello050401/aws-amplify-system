@@ -119,7 +119,7 @@ export function canEditInventory(role: InventoryRole | null): boolean {
 }
 
 export function canHardDeleteInventory(role: InventoryRole | null): boolean {
-  return role === "ADMIN";
+  return role === "ADMIN" || role === "EDITOR";
 }
 
 /** Identity string for Inventory.createdBy/updatedBy and InventoryHistory.changedBy — email if the token carries one, else the Cognito sub, so a write is never silently attributed to "unknown". */

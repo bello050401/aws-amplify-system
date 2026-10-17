@@ -547,7 +547,7 @@ const schema = a.schema({
     ])
     .authorization((allow) => [
       allow.group("ADMIN"), // full CRUD, including hard delete (完全削除)
-      allow.group("EDITOR").to(["read", "create", "update"]), // no hard delete — logical delete is just an update setting deletedAt
+      allow.group("EDITOR").to(["read", "create", "update", "delete"]), // Staff may delete inventory after explicit confirmation (2026-10-17).
       allow.group("VIEWER").to(["read"]),
     ]),
 
