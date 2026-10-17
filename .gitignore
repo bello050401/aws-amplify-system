@@ -54,3 +54,6 @@ scripts/qa-image-processing-harness/dist/
 # がdata/mercari-masters/*.csv(git追跡済み)から毎回再生成する。npm run
 # build/dev/typecheckのpre*フックが自動実行するのでコミット不要)。
 lib/listing/mercari/csv/generated/
+
+# Staff app web bundle is rebuilt in CI from mobile/.
+public/staff-app/

@@ -158,6 +158,11 @@ export const ZAICO_ATTRIBUTE_MAP: Record<string, ZaicoAttributeTarget> = {
   // 実測: 5,313件中 plannedSalePrice を持つのは2件のみで、その2件は
   // ZAICO同期ではなくCSV/手入力由来。
   "☆販売予定価格（送料別大原記載）": { kind: "extendedField", field: "plannedSalePrice", valueType: "number" },
+  // 2026-10-17: supplied screenshots and read-only live inventory audit confirmed
+  // these exact names. Reuse the three existing BELLO text columns.
+  "1回目値下げ時の金額（30日）": { kind: "extendedField", field: "firstMarkdownPrice", valueType: "text" },
+  "2回目値下げ時の金額（60日）": { kind: "extendedField", field: "secondMarkdownPrice", valueType: "text" },
+  "3回目値下げ金額（90日）": { kind: "extendedField", field: "thirdMarkdownPrice", valueType: "text" },
 
   // 出品情報。ZAICOでは "<<出品情報>>" という見出し形の名前を持つが、
   // 実データでは**本文(ヤフオク/メルカリ/BASEの価格、コンディション文、

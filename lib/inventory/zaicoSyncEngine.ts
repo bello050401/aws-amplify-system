@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { InventorySaveError } from "./conditionalUpdate";
 import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
 import { mergeZaicoUpdate, labelOf, type MergeMode } from "./zaicoSyncMerge";
+import { productCustomFields } from "./humanEdits";
 import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
 import { ALL_EXTENDED_FIELDS } from "./extendedFields";
 import type { InventoryModel, ZaicoSyncPort, MasterCache } from "./zaicoSyncPorts";
@@ -589,7 +591,7 @@ export async function syncOneZaicoItem(
       const c = diffField(label, before as string | number | null | undefined, value as string | number | null | undefined);
       if (c) appliedChanges.push(c);
     }
-    for (const [key, value] of Object.entries(merge.customFields)) {
+    for (const [key, value] of Object.entries(productCustomFields(merge.customFields))) {
       const before = existingCustomFields[key] as string | number | null | undefined;
       const c = diffField(key, before ?? null, value as string | number | null | undefined);
       if (c) appliedChanges.push(c);
@@ -599,6 +601,7 @@ export async function syncOneZaicoItem(
     try {
       await port.updateInventory({
         id: existingRecord.id,
+        expectedUpdatedAt: existingRecord.updatedAt,
         ...merge.updates,
         images: imageMerge.images,
         customFields: stringifyCustomFields(merge.customFields),
@@ -607,8 +610,12 @@ export async function syncOneZaicoItem(
         zaicoSnapshotJson: merge.nextSnapshotJson,
       });
     } catch (err) {
-      if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
-      if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
+      // A lost acknowledgement may follow a successful write. Deleting its images
+      // would break the saved item. Only clean up a confirmed conditional rejection.
+      if (err instanceof InventorySaveError && err.code === "CONFLICT") {
+        if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
+        if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
+      }
       throw err;
     }
 

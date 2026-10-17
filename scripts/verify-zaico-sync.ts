@@ -30,6 +30,7 @@ import { effectiveHeroKey, effectiveListThumbnailKey, type InventoryImageRecord 
 import { compareByUpdatedAtDesc } from "@/lib/inventory/queries";
 import sharp from "sharp";
 import type { ZaicoInventory } from "@/lib/zaico/client";
+import { InventorySaveError } from "@/lib/inventory/conditionalUpdate";
 
 let failures = 0;
 let passes = 0;
@@ -211,6 +212,33 @@ async function testUpdateOnRealChange() {
   const result = await syncOneZaicoItem(changed, "tester@example.com", undefined, port);
   assertEqual(result.status, "updated", "a real field change (quantity 3→7) syncs as updated");
   assertEqual(calls.updateInventory, 1, "exactly one updateInventory call for the changed field");
+}
+
+async function testSyncRejectsStaleWriteAndPreservesUnconfirmedImages() {
+  for (const outcome of ["CONFLICT", "UNCONFIRMED"] as const) {
+    const { port, store, removedImages } = createMockPort();
+    const item = makeZaicoItem({ item_image: { url: "https://example.invalid/old.jpg" } });
+    const created = await syncOneZaicoItem(item, "tester", undefined, port);
+    const existing = store.get(created.inventoryId!)!;
+    const readVersion = "2026-10-17T00:00:00.000Z";
+    store.set(existing.id, { ...existing, updatedAt: readVersion });
+    let condition: string | undefined;
+    port.updateInventory = async input => {
+      condition = input.expectedUpdatedAt;
+      // A concurrent device's save must remain untouched by the rejected sync.
+      if (outcome === "CONFLICT") store.set(existing.id, { ...store.get(existing.id)!, quantity: 9 });
+      throw new InventorySaveError(outcome);
+    };
+    const result = await syncOneZaicoItem({ ...item, quantity: 4, item_image: { url: "https://example.invalid/new.jpg" } }, "tester", undefined, port);
+    assertEqual(condition, readVersion, `${outcome}: sync carries the version actually read`);
+    assertEqual(result.status, "failed", `${outcome}: sync does not report success`);
+    if (outcome === "CONFLICT") {
+      assertEqual(store.get(existing.id)?.quantity, 9, "a concurrent device edit survives rejected sync");
+      assertTrue(removedImages.some(key => key.includes("new.jpg")), "confirmed rejection cleans up new unused images");
+    } else {
+      assertEqual(removedImages, [], "unknown write outcome never deletes possibly saved images");
+    }
+  }
 }
 
 async function testFailureIsolation() {
@@ -985,6 +1013,7 @@ function testUpdatedAtSort() {
 async function main() {
   await testCreateThenIdempotentUnchanged();
   await testUpdateOnRealChange();
+  await testSyncRejectsStaleWriteAndPreservesUnconfirmedImages();
   await testFailureIsolation();
   await testClaimSourceLinkAtomicity();
   await testRaceDuringSingleItemSyncIsCaughtByClaim();

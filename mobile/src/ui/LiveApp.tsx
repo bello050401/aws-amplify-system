@@ -1,0 +1,124 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { signIn, signOut, confirmSignIn, getCurrentUser } from "aws-amplify/auth";
+import * as Network from "expo-network";
+import * as Crypto from "expo-crypto";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Image } from "expo-image";
+import { API_ORIGIN, clearLocalSession, configureMobileAuth, readInventory, readInventoryDetail, readMobileSession, saveInventory, mobileWritesEnabled, StaffSessionError, type MobileSession } from "../runtime/service";
+import { RESTRICTED_FEATURES } from "../domain/access";
+import { SnapshotStore } from "../domain/snapshot";
+import { StaffApp, type StaffAppPorts } from "./StaffApp";
+import { colors } from "./theme";
+
+function connected(state: Network.NetworkState) { return state.isConnected !== false && state.isInternetReachable !== false; }
+export function LiveApp() {
+  const [userId, setUserId] = useState<string | null>(null);
+  const [access, setAccess] = useState<MobileSession | null>(null);
+  // Retain local editing capability while offline; every actual write is reauthorized by BELLO.
+  const [canEdit, setCanEdit] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [email, setEmail] = useState(""); const [password, setPassword] = useState("");
+  const [challenge, setChallenge] = useState<"password" | "code" | null>(null); const [answer, setAnswer] = useState("");
+  const [message, setMessage] = useState<string | null>(null); const [busy, setBusy] = useState(false);
+  const mounted = useRef(true);
+  const setup = async () => {
+    setMessage(null); setReady(false); setAccess(null); setCanEdit(false);
+    try {
+      const online = connected(await Network.getNetworkStateAsync()); setOffline(!online);
+      await configureMobileAuth(online); if (!mounted.current) return;
+      setReady(true);
+      const user = await getCurrentUser().catch(() => null);
+      if (user && mounted.current) {
+        // Online restoration must revalidate staff authorization with the server.
+        if (online) { const session = await readMobileSession(); setAccess(session); setCanEdit(session.role !== "VIEWER"); }
+        setUserId(user.userId);
+      }
+    } catch (error) { if (mounted.current) setMessage(error instanceof Error ? error.message : "接続できませんでした。"); }
+  };
+  useEffect(() => {
+    mounted.current = true; void setup();
+    const subscription = Network.addNetworkStateListener(state => setOffline(!connected(state)));
+    return () => { mounted.current = false; subscription.remove(); };
+  }, []);
+  // No permission cache is reused offline or across accounts. Revalidate on reconnection.
+  useEffect(() => {
+    let active = true;
+    setAccess(null);
+    if (userId && !offline) void readMobileSession().then(session => {
+      if (active && session.owner === userId) { setAccess(session); setCanEdit(session.role !== "VIEWER"); }
+    }).catch(() => { if (active) { setAccess(null); setCanEdit(false); } });
+    return () => { active = false; };
+  }, [userId, offline]);
+  const ports = useMemo<StaffAppPorts | null>(() => {
+    if (!userId) return null;
+    const snapshot = new SnapshotStore(AsyncStorage, userId, API_ORIGIN);
+    return {
+    snapshot,
+    online: async () => connected(await Network.getNetworkStateAsync()),
+    loadInventory: async () => {
+      try {
+        const session = await readMobileSession();
+        if (session.owner !== userId) throw new StaffSessionError("ログインが必要です。");
+        setAccess(session);
+        setCanEdit(session.role !== "VIEWER");
+        return (await readInventory()).items;
+      }
+      catch (error) {
+        setAccess(null);
+        if (error instanceof StaffSessionError) {
+          await snapshot.clearOnLogout();
+          await signOut(); await clearLocalSession();
+          setCanEdit(false); setUserId(null); setMessage(error.message);
+        }
+        throw error;
+      }
+    },
+    newMutationId: () => Crypto.randomUUID(),
+    searchInventory: readInventory,
+    loadDetail: readInventoryDetail,
+    save: saveInventory,
+  }; }, [userId]);
+
+  const login = async () => {
+    if (busy) return;
+    setBusy(true); setMessage(null);
+    try {
+      if (!connected(await Network.getNetworkStateAsync())) { setMessage("【圏外です】"); return; }
+      if (!challenge) await signOut();
+      const result = challenge ? await confirmSignIn({ challengeResponse: answer }) : await signIn({ username: email.trim(), password });
+      if (result.isSignedIn) {
+        const session = await readMobileSession(); setAccess(session); setCanEdit(session.role !== "VIEWER");
+        const user = await getCurrentUser(); setUserId(user.userId); setPassword(""); setAnswer(""); setChallenge(null);
+      } else {
+        const step = result.nextStep.signInStep;
+        if (step === "CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED") setChallenge("password");
+        else if (["CONFIRM_SIGN_IN_WITH_SMS_CODE", "CONFIRM_SIGN_IN_WITH_TOTP_CODE", "CONFIRM_SIGN_IN_WITH_EMAIL_CODE"].includes(step)) setChallenge("code");
+        else setMessage("追加の本人確認が必要です。管理者にログイン方法を確認してください。");
+      }
+    } catch { setMessage("ログインできませんでした。入力内容・スタッフ権限・通信状態を確認してください。"); }
+    finally { setBusy(false); }
+  };
+  const logout = async () => {
+    setAccess(null); setCanEdit(false);
+    try {
+      await ports?.snapshot.clearOnLogout();
+      await signOut(); await clearLocalSession();
+      setUserId(null);
+      await Promise.all([Image.clearDiskCache(), Image.clearMemoryCache()]);
+    } catch { setMessage("ログアウト処理を完了できませんでした。再試行してください。"); }
+  };
+  if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}
+    features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES} />;
+  return <View style={s.root}><Text style={s.brand}>BELLO</Text><Text style={s.title}>スタッフログイン</Text>
+    {message && <Text accessibilityRole="alert" style={s.error}>{message}</Text>}
+    {!ready ? <Pressable accessibilityRole="button" onPress={setup} style={s.button}><Text style={s.white}>接続を確認する</Text></Pressable> : <>
+      {challenge ? <><Text style={s.label}>{challenge === "password" ? "新しいパスワード" : "確認コード"}</Text><TextInput accessibilityLabel={challenge === "password" ? "新しいパスワード" : "確認コード"} style={s.input} value={answer} onChangeText={setAnswer} secureTextEntry={challenge === "password"} autoCapitalize="none" /></> : <>
+        <Text style={s.label}>メールアドレス</Text><TextInput accessibilityLabel="メールアドレス" style={s.input} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" />
+        <Text style={s.label}>パスワード</Text><TextInput accessibilityLabel="パスワード" style={s.input} value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password" /></>}
+      <Pressable accessibilityRole="button" disabled={busy} onPress={login} style={s.button}>{busy ? <ActivityIndicator color="white" /> : <Text style={s.white}>{challenge ? "確認する" : "ログイン"}</Text>}</Pressable>
+    </>}
+  </View>;
+}
+const s = StyleSheet.create({ root: { flex: 1, justifyContent: "center", padding: 30, backgroundColor: colors.cream }, brand: { fontSize: 40, fontWeight: "700", color: colors.text }, title: { fontSize: 21, marginTop: 12, marginBottom: 30, color: colors.text }, label: { fontSize: 15, color: colors.muted, marginBottom: 8 }, input: { borderWidth: 1, borderColor: colors.border, backgroundColor: "white", borderRadius: 12, padding: 15, fontSize: 17, marginBottom: 20 }, button: { borderRadius: 25, backgroundColor: colors.blue, padding: 17, alignItems: "center", marginTop: 10 }, white: { fontSize: 17, fontWeight: "600", color: "white" }, error: { color: colors.danger, marginBottom: 20, lineHeight: 23 } });

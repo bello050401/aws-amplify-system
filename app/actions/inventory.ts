@@ -17,6 +17,8 @@ import { copyInventoryMedium, copyInventoryThumbnail, generateInventoryDerivativ
 import { diffField, logInventoryHistory } from "@/lib/inventory/history";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import type { InventoryImageRecord, InventoryImageType } from "@/lib/inventory/imageTypes";
+import { assertInventoryVersion, writeInventoryRevision, type InventoryWriteResult } from "@/lib/inventory/conditionalUpdate";
+import { withHumanEdits, productCustomFields } from "@/lib/inventory/humanEdits";
 
 /**
  * What the client sends for one image slot (see ImageEditor.tsx):
@@ -219,14 +221,16 @@ function extendedFieldsInput(input: InventoryExtendedFields): Partial<InventoryE
 }
 
 export interface InventoryFieldsInput extends InventoryExtendedFields {
+  /** Required on update. The version originally shown to the editor. */
+  expectedUpdatedAt?: string;
   name: string;
   categoryId?: string;
   statusId?: string;
   locationId?: string;
   quantity?: number;
   unit?: string;
-  purchasePrice?: number;
-  salePrice?: number;
+  purchasePrice?: number | null;
+  salePrice?: number | null;
   note?: string;
   images: ImageSlotInput[];
   customFields?: Record<string, unknown>;
@@ -371,21 +375,22 @@ export async function updateInventory(
   ]);
   if (!existing) throw new Error("対象の在庫が見つかりません。");
 
+  assertInventoryVersion(input.expectedUpdatedAt, existing.updatedAt);
+
   const who = await getCurrentInventoryUserEmail();
   const images = await resolveImages(input.images, existing.images);
 
-  const { errors } = await serverDataClient.models.Inventory.update(
-    {
+  const revisionInput = {
       id: inventoryId,
       name,
-      categoryId: input.categoryId || undefined,
-      statusId: input.statusId || undefined,
-      locationId: input.locationId || undefined,
+      categoryId: input.categoryId || null,
+      statusId: input.statusId || null,
+      locationId: input.locationId || null,
       quantity: input.quantity ?? 0,
-      unit: input.unit?.trim() || undefined,
+      unit: input.unit?.trim() || null,
       purchasePrice: input.purchasePrice,
       salePrice: input.salePrice,
-      note: input.note?.trim() || undefined,
+      note: input.note?.trim() || null,
       images,
       customFields: stringifyCustomFields(input.customFields),
       updatedBy: who ?? undefined,
@@ -394,13 +399,15 @@ export async function updateInventory(
       // ここは意図的にlistUpdatedAtを更新する対象)。
       listUpdatedAt: new Date().toISOString(),
       ...extendedFieldsInput(input),
-    },
-    inventoryAuthMode,
+    };
+  revisionInput.customFields = stringifyCustomFields(withHumanEdits(
+    existing as unknown as Record<string, unknown>, revisionInput, existing.customFields, input.customFields,
+  ));
+  await writeInventoryRevision(
+    async request => await serverDataClient.graphql(request) as InventoryWriteResult,
+    revisionInput,
+    input.expectedUpdatedAt,
   );
-  if (errors) {
-    console.error("[updateInventory] Inventory.update failed:", errors);
-    throw new Error(`在庫の更新に失敗しました: ${JSON.stringify(errors)}`);
-  }
 
   const categoryName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? id;
   const locationName = (id: string | null) => locations.find((l) => l.id === id)?.name ?? id;
@@ -440,7 +447,7 @@ export async function updateInventory(
     diffField("仕入単価", existing.purchasePrice, input.purchasePrice),
     diffField("販売価格", existing.salePrice, input.salePrice),
     diffField("備考", existing.note, input.note),
-    diffField("追加項目", JSON.stringify(existing.customFields ?? {}), JSON.stringify(input.customFields ?? {})),
+    diffField("追加項目", JSON.stringify(productCustomFields(existing.customFields)), JSON.stringify(productCustomFields(input.customFields))),
     imagesChanged ? { fieldName: "画像", oldValue: `${oldImageKeys.length}枚`, newValue: `${newImageKeys.length}枚` } : null,
     // Phase C: one diffField call per extended field, reusing the exact
     // same before/after normalization as every other field above — per

@@ -50,6 +50,15 @@ const items = JSON.parse(fs.readFileSync(FIXTURE, "utf8")) as ZaicoInventory[];
 const byId = new Map(items.map((i) => [String(i.id), i]));
 
 function main() {
+  const markdown = mapZaicoOptionalAttributes([
+    { name: "1回目値下げ時の金額（30日）", value: "25,000" },
+    { name: "2回目値下げ時の金額（60日）", value: "相談" },
+    { name: "3回目値下げ金額（90日）", value: "0" },
+  ], false);
+  assertEqual(markdown.extendedFields.firstMarkdownPrice, "25,000", "30日値下げ: 既存の文字列欄を維持");
+  assertEqual(markdown.extendedFields.secondMarkdownPrice, "相談", "60日値下げ: 数字以外も維持");
+  assertEqual(markdown.extendedFields.thirdMarkdownPrice, "0", "90日値下げ: 0を消さない");
+  assertEqual(markdown.unmapped, [], "値下げ3項目の同期漏れを防ぐ");
   console.log("── 1. quantity: ZAICOは文字列で返す ──────────────────────");
   // 実測の根本原因: ZAICO は "2.0" / "1.0" という**文字列**を返す。
   // 以前の `typeof === "number"` 判定では常に null になり、Stagingの

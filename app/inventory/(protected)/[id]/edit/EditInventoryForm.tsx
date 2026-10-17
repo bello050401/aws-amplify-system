@@ -213,6 +213,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
       await updateInventory(
         item.id,
         {
+          expectedUpdatedAt: item.updatedAt,
           name,
           categoryId: categoryId || undefined,
           statusId: statusId || undefined,

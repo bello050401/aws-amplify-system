@@ -6,6 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 import sharp from "sharp";
 import type { ZaicoSyncPort, InventoryModel, NewInventoryInput, UpdateInventoryInput, ClaimSourceLinkResult } from "@/lib/inventory/zaicoSyncPorts";
 import { normalizeMasterName, buildZaicoSourceLinkId } from "@/lib/inventory/zaicoSyncEngine";
+import { InventorySaveError } from "@/lib/inventory/conditionalUpdate";
 
 /**
  * BELLO統合業務OS 第五ラウンド §4(P0-A): `ZaicoSyncPort`の
@@ -211,6 +212,7 @@ async function createInventory(input: NewInventoryInput): Promise<InventoryModel
 }
 
 async function updateInventory(input: UpdateInventoryInput): Promise<void> {
+  if (!input.expectedUpdatedAt || !Number.isFinite(Date.parse(input.expectedUpdatedAt))) throw new InventorySaveError("CONFLICT");
   // §9(pricing-schedulerで確立): UpdateExpressionが明示した属性しか
   // 変更しない——GSIキー属性(id/sku/categoryId/statusId/locationId/
   // deletedAt)のうち、実際にZAICO側で値が変わったものだけがこの
@@ -248,7 +250,16 @@ async function updateInventory(input: UpdateInventoryInput): Promise<void> {
   const names = Object.fromEntries(Object.keys(fields).map((k, i) => [`#f${i}`, k]));
   const values = Object.fromEntries(Object.values(fields).map((v, i) => [`:v${i}`, v]));
   const setClause = Object.keys(fields).map((_, i) => `#f${i} = :v${i}`).join(", ");
-  await ddb.send(new UpdateCommand({ TableName: INVENTORY_TABLE, Key: { id: input.id }, UpdateExpression: `SET ${setClause}`, ExpressionAttributeNames: names, ExpressionAttributeValues: values }));
+  try {
+    await ddb.send(new UpdateCommand({
+      TableName: INVENTORY_TABLE, Key: { id: input.id }, UpdateExpression: `SET ${setClause}`,
+      ConditionExpression: "#revision = :expectedRevision",
+      ExpressionAttributeNames: { ...names, "#revision": "updatedAt" },
+      ExpressionAttributeValues: { ...values, ":expectedRevision": input.expectedUpdatedAt },
+    }));
+  } catch (error) {
+    throw new InventorySaveError(error instanceof Error && error.name === "ConditionalCheckFailedException" ? "CONFLICT" : "UNCONFIRMED");
+  }
 }
 
 async function logHistory(inventoryId: string, changedBy: string | null, changes: { fieldName: string; oldValue: string | null; newValue: string | null }[]): Promise<void> {

@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "BELLO",
+    "slug": "bello-staff",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "商品写真の撮影とQRコード・バーコードの読み取りに使用します。",
+        "NSPhotoLibraryUsageDescription": "在庫に登録する商品写真を選択するために使用します。"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "experiments": { "baseUrl": "/staff-app" },
+    "plugins": [
+      "expo-image",
+      "expo-secure-store"
+    ]
+  }
+}

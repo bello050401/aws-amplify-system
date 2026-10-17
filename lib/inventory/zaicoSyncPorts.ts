@@ -8,6 +8,7 @@ import { downloadAndImportInventoryImage, removeInventoryImage } from "./imageSe
 import type { InventoryImageRecord } from "./imageTypes";
 import { buildZaicoSourceLinkId } from "./zaicoSyncEngine";
 import { unwrapGet, unwrapList } from "@/lib/amplify/listAll";
+import { writeInventoryRevision, type InventoryWriteResult } from "./conditionalUpdate";
 
 /**
  * Ports-and-adapters boundary for the ZAICO sync engine (BELLO統合改修
@@ -120,6 +121,8 @@ export interface NewInventoryInput {
 
 export interface UpdateInventoryInput {
   id: string;
+  /** Version read before mapping; reject a concurrent user/device/sync write. */
+  expectedUpdatedAt: string;
   /**
    * 2026-09-02: 任意になった。項目別の更新方針(zaicoUpdatePolicy.ts)に
    * よって、商品名を更新しないと決まる場合があるため。
@@ -365,7 +368,8 @@ export function createServerSyncPort(): ZaicoSyncPort {
       return created;
     },
     async updateInventory(input) {
-      const { errors } = await serverDataClient.models.Inventory.update(
+      await writeInventoryRevision(
+        async request => await serverDataClient.graphql(request) as InventoryWriteResult,
         {
           id: input.id,
           name: input.name,
@@ -388,9 +392,8 @@ export function createServerSyncPort(): ZaicoSyncPort {
           listUpdatedAt: new Date().toISOString(),
           ...input.extendedFields,
         },
-        inventoryAuthMode,
+        input.expectedUpdatedAt,
       );
-      if (errors) throw new Error(`在庫の更新に失敗しました: ${JSON.stringify(errors)}`);
     },
     logHistory: logInventoryHistory,
     downloadAndImportImage: downloadAndImportInventoryImage,

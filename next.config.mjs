@@ -63,6 +63,9 @@ const nextConfig = {
    * その場合はwebhookが TABLE_NOT_CONFIGURED を返すので原因が分かる。
    */
   env: {
+    // Non-secret gate compiled into SSR, like the other Amplify switches below.
+    BELLO_MOBILE_WRITES_ENABLED: process.env.BELLO_MOBILE_WRITES_ENABLED === "true" ? "true" : "false",
+    ...(process.env.BELLO_MOBILE_PUBLIC_ORIGIN ? { BELLO_MOBILE_PUBLIC_ORIGIN: process.env.BELLO_MOBILE_PUBLIC_ORIGIN } : {}),
     ...(process.env.CONVERSATION_TABLE_NAME ? { CONVERSATION_TABLE_NAME: process.env.CONVERSATION_TABLE_NAME } : {}),
     ...(process.env.MESSAGE_TABLE_NAME ? { MESSAGE_TABLE_NAME: process.env.MESSAGE_TABLE_NAME } : {}),
     // Mercari中継サーバーのURL。**秘密値ではない**(共有鍵とCAはSecrets

@@ -1,0 +1,52 @@
+{
+  "status": "local implementation and verification; app not complete or deployed",
+  "dataSource": "BELLO only",
+  "zaicoLoginRequired": false,
+  "liveReadOnlyAudit": {
+    "checkedAt": "2026-10-17T03:18:14.147Z",
+    "inventoryCount": 5536,
+    "invalidQuantityPriceNameOrCustomJsonCounts": 0,
+    "imageSamples": [
+      { "sku": "B005557", "storedImages": 10, "mobileProjectionImages": 10 },
+      { "sku": "B000004", "storedImages": 6, "mobileProjectionImages": 6 },
+      { "sku": "B000036", "storedImages": 4, "mobileProjectionImages": 4 }
+    ],
+    "directZaicoRequests": 0,
+    "writes": 0,
+    "limitation": "Stored records and projection counts; does not demonstrate image download, live mobile endpoints or device writes."
+  },
+  "localVerification": {
+    "mobileUnitTestsPassed": 34,
+    "existingSyncChecksPassed": 139,
+    "syncWorkerChecksPassed": 96,
+    "mobileReadAccessDetailPhotos": "pass",
+    "syntheticPhotoProjectionCount": 111,
+    "actualWebSaveActionWithSyntheticStorage": "pass",
+    "saveCoverage": [
+      "preserves all existing images and hidden/unexposed fields",
+      "clears nullable fields",
+      "rejects unauthorized, invalid, cross-origin and oversized requests",
+      "only one concurrent conditional write wins",
+      "same request replay does not write again",
+      "lost acknowledgement and failed readback retain an atomic save receipt",
+      "existing sync preserves explicitly edited fields and reports conflicts",
+      "field protection releases when incoming and current values agree",
+      "internal save metadata is excluded from displayed change history"
+    ],
+    "nativeSaveTransport": "pass with simulated network; no automatic retry",
+    "nextProductionBuild": "pass; existing unrelated lint warnings remain",
+    "mobileTypecheck": "pass"
+  },
+  "production": {
+    "deployed": false,
+    "writesEnabledByDefault": false,
+    "releaseFlag": "BELLO_MOBILE_WRITES_ENABLED",
+    "releaseOrder": [
+      "Deploy the Web action and existing synchronization worker with the edit protections.",
+      "Ensure older worker invocations have drained before enabling mobile saves.",
+      "Verify authenticated reads, explicit saves and cross-device readback."
+    ],
+    "realDeviceVerification": false,
+    "remainingScope": "See requirements.json pending list. No additional ZAICO login or direct ZAICO retrieval is required."
+  }
+}

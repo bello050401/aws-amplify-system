@@ -9,6 +9,7 @@ import {
   valuesEqual,
   type UpdateDecision,
 } from "./zaicoUpdatePolicy";
+import { humanEditedFields, HUMAN_EDITED_FIELDS } from "./humanEdits";
 
 /**
  * ZAICO同期の「今回どの項目を書き込むか」を決める層。
@@ -177,12 +178,18 @@ export function mergeZaicoUpdate(params: {
   const extendedFields: Record<string, unknown> = {};
   const skipped: SkippedField[] = [];
   const conflicts: FieldConflict[] = [];
+  const edited = humanEditedFields(bello.customFields);
 
   // 次回の基準(スナップショット)に何を残すか。フィールド単位で決める。
   // 詳しい理由は下の「次回のためのスナップショット」のコメント。
   const nextBase: Record<string, unknown> = {};
 
   const record = (field: string, decision: UpdateDecision, zaicoValue: unknown, belloValue: unknown, sink: Record<string, unknown>) => {
+    if (!isNewRecord && edited.has(field)) {
+      if (valuesEqual(zaicoValue, belloValue)) edited.delete(field);
+      else decision = { action: "CONFLICT", belloValue, zaicoValue,
+        reason: "自社システムで変更した内容と異なります。編集内容を保持し、確認対象にします。" };
+    }
     if (decision.action === "APPLY") {
       sink[field] = decision.value;
       // 実際に書き込んだので、次回の基準はこの値。
@@ -252,12 +259,25 @@ export function mergeZaicoUpdate(params: {
   }
 
   // ── customFields(キー単位) ─────────────────────────────────────
+  const incomingCustom = { ...zaico.customFields };
+  for (const [key, value] of Object.entries(incomingCustom)) {
+    const field = `customFields.${key}`;
+    if (!isNewRecord && edited.has(field)) {
+      if (valuesEqual(value, bello.customFields[key])) edited.delete(field);
+      else {
+        delete incomingCustom[key];
+        conflicts.push({ field, label: `追加項目(${key})`, belloValue: bello.customFields[key], zaicoValue: value,
+          reason: "自社システムで変更した内容と異なります。編集内容を保持し、確認対象にします。" });
+      }
+    }
+  }
   const cf = resolveCustomFields({
-    zaico: zaico.customFields,
+    zaico: incomingCustom,
     bello: bello.customFields,
     lastZaico: snapshot ? (snapshot.__customFields as Record<string, unknown> | undefined) : undefined,
     isNewRecord,
   });
+  if (HUMAN_EDITED_FIELDS in bello.customFields) cf.merged[HUMAN_EDITED_FIELDS] = [...edited].sort();
   for (const key of cf.keptDeleted) {
     skipped.push({
       field: `customFields.${key}`,

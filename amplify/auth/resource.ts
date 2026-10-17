@@ -26,5 +26,6 @@ export const auth = defineAuth({
   loginWith: {
     email: true,
   },
-  groups: ["Admins", "ADMIN", "EDITOR", "VIEWER"],
+  // These additional groups restrict mobile features; they never grant inventory access.
+  groups: ["Admins", "ADMIN", "EDITOR", "VIEWER", "MOBILE_HIDE_EC", "MOBILE_HIDE_SALES"],
 });
