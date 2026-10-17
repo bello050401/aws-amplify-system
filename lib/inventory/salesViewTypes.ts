@@ -20,4 +20,3 @@ export interface SalesSummaryView {
   aggregateRebuiltAt: string | null;
   trend: SalesTrendPoint[];
 }
-
