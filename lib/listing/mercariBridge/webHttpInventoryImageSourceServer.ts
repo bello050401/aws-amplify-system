@@ -4,6 +4,9 @@ import { cookies } from "next/headers";
 import { getUrl } from "aws-amplify/storage/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { getInventoryDetail } from "@/lib/inventory/queries";
+import { resolveListingImageDownloadUrl } from "@/lib/listing/mercari/csv/buildExportRows";
+import { registeredIntroductionPhotos } from "@/lib/ai/productPage/registeredPhotos";
+import { photoAssetS3Key, extensionForMimeType } from "@/lib/photoRegistration/types";
 import type { WebHttpDraftJob } from "./webHttpDraftJob.ts";
 import { prepareInventoryImageForObservedUpload } from
   "./webHttpInventoryImageSource.ts";
@@ -12,11 +15,12 @@ import { prepareInventoryImageForObservedUpload } from
  * enforced while streaming, before buffering more than one image.
  */
 async function readOwnStorageBytes(storageKey: string,
-  maxBytes: number): Promise<Uint8Array | null> {
-  const { url } = await runWithAmplifyServerContext({
+  maxBytes: number, source: "INVENTORY" | "PHOTO_ASSET" = "INVENTORY"): Promise<Uint8Array | null> {
+  const url = source === "PHOTO_ASSET" ? await resolveListingImageDownloadUrl({storageKey,source}) : (await runWithAmplifyServerContext({
     nextServerContext: { cookies },
     operation: contextSpec => getUrl(contextSpec, { path: storageKey }),
-  });
+  })).url;
+  if (!url) return null;
   const response = await fetch(url, { cache: "no-store",
     redirect: "error", signal: AbortSignal.timeout(15_000) });
   if (!response.ok || !response.body) return null;
@@ -55,6 +59,11 @@ export function prepareBelloInventoryImageForObservedUpload(
 ) {
   return prepareInventoryImageForObservedUpload(job, {
     readInventory: getInventoryDetail,
+    readPhotoAsset: async (inventoryId, assetId) => {
+      const asset = (await registeredIntroductionPhotos(inventoryId)).find(a => a.id === assetId);
+      if (!asset) return null;
+      return { storageKey: photoAssetS3Key(asset.photoBatchId,asset.id,"PROCESSED",extensionForMimeType(asset.declared.PROCESSED.mimeType)), originalHash: asset.declared.PROCESSED.sha256 };
+    },
     readStorageBytes: readOwnStorageBytes,
   }, imageIndex);
 }

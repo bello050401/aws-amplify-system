@@ -14,7 +14,9 @@ type InventoryImage = { storageKey: string; originalHash: string | null };
 export type InventoryImageSourcePorts = {
   readInventory: (inventoryId: string) => Promise<{
     id: string; images: InventoryImage[] } | null>;
-  readStorageBytes: (storageKey: string, maxBytes: number) =>
+  /** Must verify READY/nondeleted asset and current LINKED batch ownership. */
+  readPhotoAsset?: (inventoryId: string, photoAssetId: string) => Promise<InventoryImage | null>;
+  readStorageBytes: (storageKey: string, maxBytes: number, source?: "INVENTORY" | "PHOTO_ASSET") =>
     Promise<Uint8Array | null>;
 };
 
@@ -28,7 +30,7 @@ export async function prepareInventoryImageForObservedUpload(
   if (!initialWebHttpExecutionState(job) || !ports ||
       typeof ports.readInventory !== "function" ||
       typeof ports.readStorageBytes !== "function") return null;
-  let imageRef: { storageKey: string; source: string };
+  let imageRef: { storageKey: string; source: string; photoAssetId?: string };
   try {
     const snapshot = JSON.parse(job.snapshotJson);
     if (snapshot?.pack?.inventoryId !== job.inventoryId ||
@@ -37,18 +39,23 @@ export async function prepareInventoryImageForObservedUpload(
         !Number.isInteger(imageIndex) || imageIndex < 0 || imageIndex >= snapshot.pack.imageRefs.length) return null;
     imageRef = snapshot.pack.imageRefs[imageIndex];
   } catch { return null; }
-  if (imageRef?.source !== "INVENTORY" ||
+  if (!["INVENTORY", "PHOTO_ASSET"].includes(imageRef?.source) ||
       typeof imageRef.storageKey !== "string" || !imageRef.storageKey)
     return null;
   try {
     const inventory = await ports.readInventory(job.inventoryId);
     if (!inventory || inventory.id !== job.inventoryId ||
         !Array.isArray(inventory.images)) return null;
-    const matches = inventory.images.filter(image =>
-      image.storageKey === imageRef.storageKey);
+    let matches: InventoryImage[];
+    if (imageRef.source === "PHOTO_ASSET") {
+      if (!imageRef.photoAssetId || !ports.readPhotoAsset) return null;
+      const asset = await ports.readPhotoAsset(job.inventoryId, imageRef.photoAssetId);
+      if (!asset || asset.storageKey !== imageRef.storageKey || !asset.originalHash || !SHA256.test(asset.originalHash)) return null;
+      matches = [asset];
+    } else matches = inventory.images.filter(image => image.storageKey === imageRef.storageKey);
     if (matches.length !== 1) return null;
     const bytes = await ports.readStorageBytes(imageRef.storageKey,
-      MAX_SOURCE_BYTES);
+      MAX_SOURCE_BYTES, imageRef.source as "INVENTORY" | "PHOTO_ASSET");
     if (!(bytes instanceof Uint8Array) || bytes.length < 4 ||
         bytes.length > MAX_SOURCE_BYTES) return null;
     const originalSha256 = createHash("sha256").update(bytes).digest("hex");
