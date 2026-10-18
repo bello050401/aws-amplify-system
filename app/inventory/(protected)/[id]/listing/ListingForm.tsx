@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { normalizeShippingPackages, type ShippingPackage } from "@/lib/shipping/packages";
+import type { ShippingRank } from "@/lib/shipping/rank";
+import { ShippingPackagesEditor } from "./ShippingPackagesEditor";
 import { saveListingDraftAction } from "@/app/actions/listing";
 import { requireSavedDraftResult, draftSaveFailureMessage,
   draftSaveNeedsFreshPage } from "@/lib/listing/draftSaveFeedback";
@@ -53,6 +56,9 @@ export function ListingForm({
   initialDraft,
   initialChannelListing,
   shippingMethod,
+  shippingPackages,
+  onShippingPackagesChange,
+  estimatedShippingRank,
   onShippingMethodChange,
   onDraftSaved,
   onDirtyChange,
@@ -73,6 +79,9 @@ export function ListingForm({
    * 変えても右パネルの表示が変わらない(即時反映できない)。
    */
   shippingMethod: ListingShippingMethod;
+  shippingPackages: ShippingPackage[];
+  onShippingPackagesChange: (packages: ShippingPackage[]) => void;
+  estimatedShippingRank: ShippingRank | null;
   onShippingMethodChange: (method: ListingShippingMethod) => void;
   onDraftSaved?: (draft: ListingDraftRecord) => void;
   onDirtyChange?: (dirty: boolean) => void;
@@ -164,7 +173,8 @@ export function ListingForm({
 
   const dirty = title !== (draft?.title ?? inventoryName) || description !== (draft?.description ?? "") ||
     (price ? Number(price) : 0) !== (draft?.price ?? 0) || condition !== (draft?.condition ?? "NO_NOTABLE_DAMAGE") ||
-    shippingMethod !== (draft?.shippingMethod ?? "KAZAI") || JSON.stringify(selectedImages) !== JSON.stringify(draft?.images ?? []);
+    shippingMethod !== (draft?.shippingMethod ?? "KAZAI") || JSON.stringify(selectedImages) !== JSON.stringify(draft?.images ?? []) ||
+    JSON.stringify(shippingPackages) !== JSON.stringify(normalizeShippingPackages(draft?.shippingPackages));
   useEffect(() => { onDirtyChange?.(dirty); if (dirty) setDraftSaved(false); }, [dirty, onDirtyChange]);
   useEffect(() => {
     if (!dirty) return;
@@ -285,6 +295,7 @@ export function ListingForm({
         // §1 配送方法も一緒に保存する。次に開いたときも、説明文を
         // 再生成したときも同じ選択が使われる。
         shippingMethod,
+        shippingPackages,
         images: selectedImages,
       }));
       setDraft(result);
@@ -546,6 +557,8 @@ export function ListingForm({
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
+            {shippingMethod === "KAZAI" && <div className="col-span-2"><ShippingPackagesEditor packages={shippingPackages}
+              onChange={onShippingPackagesChange} estimatedRank={estimatedShippingRank} /></div>}
             <div>
               <label htmlFor="listing-price" className="block text-[12px] text-gray-600">価格（円）</label>
               <input

@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { EC_CHANNEL_LABEL, EC_CHANNELS, type EcChannel } from "@/lib/listing/ecManagement";
 import { MercariManualListingPackPanel } from "./MercariManualListingPackPanel";
 import { YahooAuctionListingSection } from "./YahooAuctionListingSection";
@@ -15,8 +14,9 @@ import type { ChannelListingRecord, ListingDraftRecord, ListingShippingMethod } 
 import { DEFAULT_LISTING_SHIPPING_METHOD } from "@/lib/listing/types";
 import { ListingForm } from "./ListingForm";
 import { InventoryFactsPanel } from "./InventoryFactsPanel";
-import { ShippingReferencePriceSection } from "./ShippingReferencePriceSection";
-import type { GetShippingReferencePriceResult } from "@/lib/shipping/service";
+import { ShippingPackageReference } from "./ShippingPackageReference";
+import { normalizeShippingPackages } from "@/lib/shipping/packages";
+import { calculateShippingRankFromDimensionsDetailed } from "@/lib/shipping/rank";
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 
 /**
@@ -41,7 +41,6 @@ export function ListingWorkspace({
   initialDraft,
   initialChannelListing,
   canPrepareMercari,
-  shippingReference,
   httpPreparationEligible = false,
 }: {
   item: InventoryDetail;
@@ -53,18 +52,16 @@ export function ListingWorkspace({
   initialDraft: ListingDraftRecord | null;
   initialChannelListing: ChannelListingRecord | null;
   canPrepareMercari: boolean;
-  shippingReference: GetShippingReferencePriceResult | null;
   httpPreparationEligible?: boolean;
 }) {
-  const params = useSearchParams();
-  const requested = params.get("channel");
-  const initialTab: "COMMON" | "INDEPENDENT" | EcChannel = canPrepareMercari && requested === "INDEPENDENT" ? "INDEPENDENT" : EC_CHANNELS.includes(requested as EcChannel)
-    ? (requested as EcChannel)
-    : "COMMON";
+  const initialTab = "COMMON";
   const [tab, setTab] = useState<"COMMON" | "INDEPENDENT" | EcChannel>(initialTab);
   const [visited, setVisited] = useState<Set<string>>(() => new Set([initialTab]));
   const [draft, setDraft] = useState(initialDraft);
   const [dirty, setDirty] = useState(false);
+  const [shippingPackages, setShippingPackages] = useState(() => normalizeShippingPackages(initialDraft?.shippingPackages));
+  const dimensions = calculateShippingRankFromDimensionsDetailed(item.width, item.depth, item.height);
+  const estimatedRank = "rank" in dimensions ? dimensions.rank : null;
   // §1 既定は「らくらく家財便」。保存済みの下書きがあればその選択を復元する。
   const [shippingMethod, setShippingMethod] = useState<ListingShippingMethod>(
     initialDraft?.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD,
@@ -132,7 +129,10 @@ export function ListingWorkspace({
               canPrepareMercari={canPrepareMercari}
               shippingMethod={shippingMethod}
               onShippingMethodChange={setShippingMethod}
-              onDraftSaved={setDraft}
+              shippingPackages={shippingPackages}
+              onShippingPackagesChange={setShippingPackages}
+              estimatedShippingRank={estimatedRank}
+              onDraftSaved={saved => { setDraft(saved); setShippingPackages(normalizeShippingPackages(saved.shippingPackages)); }}
               onDirtyChange={setDirty}
             />
           </div>
@@ -143,11 +143,11 @@ export function ListingWorkspace({
               statusName={statusName}
               shippingMethod={shippingMethod}
             />
-            <ShippingReferencePriceSection
+            {shippingMethod === "KAZAI" && <ShippingPackageReference
               key={item.id}
               inventoryId={item.id}
-              initialResult={shippingReference}
-            />
+              packages={shippingPackages}
+            />}
           </div>
         </div>
       </div>

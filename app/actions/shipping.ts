@@ -75,6 +75,13 @@ export async function getShippingReferencePriceAction(inventoryId: string): Prom
   return getShippingReferencePrice(inventoryId);
 }
 
+export async function getShippingPackageQuoteDataAction(inventoryId: string) {
+  const role = await getInventoryRole();
+  if (!role) throw new Error("ログインが必要です。");
+  const { getShippingPackageQuoteData } = await import("@/lib/shipping/service");
+  return getShippingPackageQuoteData(inventoryId);
+}
+
 // ─────────────────────────────────────────────────────────────────────
 
 

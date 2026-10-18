@@ -986,6 +986,7 @@ const schema = a.schema({
        * で決め、マイグレーションを不要にする。
        */
       shippingMethod: a.string(),
+      shippingPackages: a.json(), // 共通の荷物別サイズ。nullは寸法からの推定、既存データは1口。
       createdBy: a.string(),
       updatedBy: a.string(),
       deletedAt: a.datetime(), // ソフトデリート — Inventory本体と同じ規約

@@ -1,4 +1,5 @@
 import "server-only";
+import { normalizeShippingPackages } from "@/lib/shipping/packages";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { listEcEligibleInventory } from "@/lib/inventory/ecEligibleQuery";
@@ -118,6 +119,7 @@ function toListingDraftRecord(row: {
   price?: number | null;
   condition?: ListingConditionCode | null;
   shippingMethod?: string | null;
+  shippingPackages?: unknown;
   images?: unknown;
   createdBy?: string | null;
   updatedBy?: string | null;
@@ -135,6 +137,7 @@ function toListingDraftRecord(row: {
     // 未設定(この項目より前に作られた下書き)は既定値として読む。
     // マイグレーションを不要にするための片側の約束。
     shippingMethod: parseListingShippingMethod(row.shippingMethod),
+    shippingPackages: normalizeShippingPackages(tolerantParseJson(row.shippingPackages)),
     images,
     createdBy: row.createdBy ?? null,
     updatedBy: row.updatedBy ?? null,
@@ -793,6 +796,7 @@ export interface ListingDraftInput {
   condition: ListingConditionCode;
   /** 配送方法(§1)。省略時は既存の下書きの値、それも無ければ既定値。 */
   shippingMethod?: ListingShippingMethod;
+  shippingPackages?: import("@/lib/shipping/packages").ShippingPackage[];
   /**
    * 担当者が確定した出品画像順。省略時だけ従来どおりInventory画像を初期値にする。
    * 空配列は「画像を全て外した」という明示操作なのでフォールバックしない。
@@ -874,6 +878,7 @@ export async function saveListingDraft(
     // §1 未指定なら既存の選択を保つ。保存のたびに既定値へ戻すと、
     // 佐川を選んだ商品がタイトル修正だけで家財便へ戻ってしまう。
     shippingMethod: input.shippingMethod ?? existing?.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD,
+    shippingPackages: stringifyListingJson(normalizeShippingPackages(input.shippingPackages ?? existing?.shippingPackages)),
     images: stringifyListingJson(normalizeListingImages(input.images ?? inventoryImages)),
     updatedBy: who ?? undefined,
   };

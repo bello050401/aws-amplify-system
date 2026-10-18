@@ -12,7 +12,6 @@ import { webHttpDraftTargetAllowed } from
   "@/lib/listing/mercariBridge/webHttpDraftJob";
 import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
-import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
 import { InventoryAuthTemporarilyUnavailable } from "../../InventoryAuthTemporarilyUnavailable";
@@ -60,13 +59,12 @@ export default async function ListingPage({ params }: { params: { id: string } }
       listCategories(item.categoryId),
       listStatuses(),
       listInventoryPhotoAssetsAction(item.id),
-      getShippingReferencePriceForInventory(item).catch(() => null),
     ] as const);
   } catch (error) {
     if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
     throw error;
   }
-  const [draft, channelListing, categories, statuses, photoAssetsResult, shippingReference] = detailRead;
+  const [draft, channelListing, categories, statuses, photoAssetsResult] = detailRead;
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
   const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
@@ -111,7 +109,6 @@ export default async function ListingPage({ params }: { params: { id: string } }
         {/* Desktop: basic information and reference price on the right; mobile: retain that order below the form. */}
         <ListingWorkspace
           item={item}
-          shippingReference={shippingReference}
           brandLogoAvailable={Boolean(findBrandByName(typeof item.customFields?.belloBrand === "string" ? item.customFields.belloBrand : "")?.logoUrl)}
           categoryName={categoryName}
           statusName={statusName}
