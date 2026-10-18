@@ -2,10 +2,12 @@
 import { useState } from "react";
 import { previewIndependentShopAction,uploadIndependentShopImageAction,saveIndependentShopAction } from "@/app/actions/independentShop";
 import type { Preview,Receipt } from "@/lib/listing/independentShop/workflow";
+import { IndependentShopPublication } from "./IndependentShopPublication";
 export function IndependentShopPanel({inventoryId,quantity}:{inventoryId:string;quantity:number}){
  const [stock,setStock]=useState(String(Math.min(1,Math.max(0,quantity))));
  const [preview,setPreview]=useState<Preview|null>(null),[receipts,setReceipts]=useState<Receipt[]>([]);
  const [busy,setBusy]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("");
+ const [refreshKey,setRefreshKey]=useState(0);
  async function check(){setBusy(true);setError("");setMessage("");setPreview(null);setReceipts([]);try{const r=await previewIndependentShopAction(inventoryId,Number(stock));if(!r.ok){setError(r.error);return}setPreview(r.value)}catch{setError("通信できませんでした。時間をおいて確認してください。")}finally{setBusy(false)}}
  async function save(){
   if(!preview?.token)return;setBusy(true);setError("");const done=[...receipts];
@@ -18,10 +20,11 @@ export function IndependentShopPanel({inventoryId,quantity}:{inventoryId:string;
    setMessage("下書きを保存しています…");
    const saved=await saveIndependentShopAction(inventoryId,preview.stock,preview.token,done);
    if(!saved.ok){setError(saved.error);return}
-   setMessage("BELLO自社サイトに下書きを保存しました。商品ID："+saved.value.id);setPreview(null);setReceipts([]);
+   setMessage("BELLO自社サイトに下書きを保存しました。商品ID："+saved.value.id);setPreview(null);setReceipts([]);setRefreshKey(value=>value+1);
   }catch{setError("通信が中断されました。取り込み内容を再確認し、保存結果を照合してから再試行してください。")}finally{setBusy(false)}
  }
  return <section className="mt-6 max-w-4xl rounded-xl border border-teal-200 bg-white p-5" aria-labelledby="independent-shop-heading">
+  <IndependentShopPublication inventoryId={inventoryId} refreshKey={refreshKey}/>
   <h2 id="independent-shop-heading" className="text-base font-bold text-gray-900">BELLO自社サイトへ出品</h2>
   <p className="mt-2 text-sm text-gray-600">保存済みの出品下書きと選択した画像を取り込みます。送信後は自社サイトの下書きとなります。</p>
   <p className="mt-1 text-sm text-gray-600">自社サイトはオーナー限定で確認中です。販売に割り当てる数量を確認してください。</p>

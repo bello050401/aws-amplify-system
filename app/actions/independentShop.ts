@@ -40,3 +40,5 @@ async function result<T>(job:()=>Promise<T>):Promise<{ok:true;value:T}|{ok:false
 export async function previewIndependentShopAction(id:string,stock:number){return result(()=>workflow().preview(id,stock));}
 export async function uploadIndependentShopImageAction(id:string,stock:number,token:string,index:number){return result(()=>workflow().upload(id,stock,token,index));}
 export async function saveIndependentShopAction(id:string,stock:number,token:string,receipts:Receipt[]){return result(()=>workflow().commit(id,stock,token,receipts));}
+export async function previewIndependentShopPublicationAction(id:string){return result(()=>workflow().publicationPreview(id));}
+export async function changeIndependentShopPublicationAction(id:string,token:string){return result(()=>workflow().changePublication(id,token));}

@@ -11,7 +11,7 @@ export function createIndependentShopClient(credentials: Credentials, request: t
   try{return await response.json()}catch{throw new ListingError("自社サイトの応答を確認できませんでした。")}
  }
  return {
-  async find(externalId){const data=await call("products?externalId="+encodeURIComponent(externalId));if(!Array.isArray(data.items))throw new ListingError("商品照合に失敗しました。");const p=data.items[0];return p?{id:String(p.id),revision:p.revision,stock:p.stock,status:p.status,variants:p.variants} as Remote:null;},
+  async find(externalId){const data=await call("products?externalId="+encodeURIComponent(externalId));if(!Array.isArray(data.items)||data.items.length>1)throw new ListingError("商品照合に失敗しました。");const p=data.items[0];if(p&&(p.externalId!==externalId||!p.id||!Number.isInteger(p.revision)))throw new ListingError("自社サイトの商品が一致しません。");return p?{id:String(p.id),revision:p.revision,stock:p.stock,status:p.status,variants:p.variants,name:p.name,price:p.price,images:p.images} as Remote:null;},
   async upload(blob){return (await call("upload","POST",blob)).url;},
   async save(item){const result=await call("integrations/catalog","POST",{items:[item],dryRun:false});const row=result.results?.[0];if(result.failed||!row?.ok||!row.id||!Number.isInteger(row.revision))throw new ListingError(row?.status===409?"商品または在庫が更新されました。確認し直してください。":"商品を保存できませんでした。保存結果を確認してから再試行してください。");return {id:String(row.id),revision:row.revision};}
  };

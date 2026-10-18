@@ -3,7 +3,8 @@ export const SHOP_ORIGIN = "https://bello-interior-independent.misty-loom-0065.c
 export class ListingError extends Error {}
 export type ImageRef = { storageKey: string; source?: "INVENTORY" | "PHOTO_ASSET"; photoAssetId?: string; sortOrder: number };
 export type Source = { id: string; name: string; sku: string; price: number; description: string; quantity: number; version: string; images: ImageRef[]; categories?:string[] };
-export type Remote = { id: string; revision: number; stock: number; status: string; variants?: unknown[] };
+export type Remote = { id: string; revision: number; stock: number; status: string; variants?: unknown[]; name?: string; price?: number; images?: string[] };
+export type PublicationPreview = { remote: Remote | null; target: "published" | "draft"; token: string | null };
 export type Preview = { name: string; description: string; price: number; stock: number; sourceStock: number; imageCount: number; connected: boolean; remote: Remote | null; token: string | null };
 export type Receipt = { index: number; url: string; signature: string };
 export type Client = { find: (id: string) => Promise<Remote | null>; upload: (blob: Blob) => Promise<string>; save: (item: Record<string, unknown>) => Promise<{ id: string; revision: number }> };
@@ -43,7 +44,38 @@ export function createListingWorkflow(ports: Ports) {
   verify(token,ctx.connection.signingKey,proof(ctx.source,stock,ctx.remote));
   return {...ctx,connection:ctx.connection};
  }
+ async function publicationContext(id: string) {
+  const role=await ports.role();if(role!=="ADMIN"&&role!=="EDITOR")throw new ListingError("出品操作には管理者または編集者のログインが必要です。");
+  if(typeof id!=="string"||!id||id.length>200)throw new ListingError("商品IDを確認してください。");
+  const connection=await ports.client();if(!connection)throw new ListingError("BELLO自社サイトの接続情報が未設定です。");
+  const remote=await connection.api.find("inventory:"+id);
+  const target=remote?.status==="published"?"draft" as const:"published" as const;
+  let version:string|null=null;
+  // Stopping must remain possible even if the inventory or draft is no longer valid.
+  if(remote&&target==="published") {
+   if(remote.status!=="draft")throw new ListingError("自社サイトの商品状態を確認してください。");
+   const source=await ports.source(id);if(source.id!==id)throw new ListingError("商品IDが一致しません。");
+   validateSource(source,remote.stock);
+   if(remote.stock<1||remote.variants?.length||!remote.name?.trim()||!Number.isSafeInteger(remote.price)||remote.price!<1||!remote.images?.length)throw new ListingError("自社サイトの下書きに商品名・価格・画像・販売可能数が揃っているか確認してください。");
+   version=source.version;
+  }
+  return {connection,remote,target,fingerprint:digest({action:"publication",id,target,remote,version})};
+ }
  return {
+  async publicationPreview(id:string):Promise<PublicationPreview>{
+   const {connection,remote,target,fingerprint}=await publicationContext(id);
+   const payload=Buffer.from(JSON.stringify({fingerprint,expires:now()+15*60*1000})).toString("base64url");
+   return {remote,target,token:remote?payload+"."+sign(connection.signingKey,payload):null};
+  },
+  async changePublication(id:string,token:string){
+   const {connection,remote,target,fingerprint}=await publicationContext(id);
+   if(!remote)throw new ListingError("自社サイトに下書きを保存してから出品してください。");
+   verify(token,connection.signingKey,fingerprint);
+   await connection.api.save({externalId:"inventory:"+id,revision:remote.revision,status:target});
+   const confirmed=await connection.api.find("inventory:"+id);
+   if(!confirmed||confirmed.id!==remote.id||confirmed.status!==target)throw new ListingError("出品状態を確認できませんでした。「出品状態を確認」で結果を確認してください。");
+   return {id:confirmed.id,status:confirmed.status};
+  },
   async preview(id: string, stock: number): Promise<Preview> {
    const {source,connection,remote}=await context(id,stock);
    const payload=Buffer.from(JSON.stringify({fingerprint:proof(source,stock,remote),expires:now()+15*60*1000})).toString("base64url");

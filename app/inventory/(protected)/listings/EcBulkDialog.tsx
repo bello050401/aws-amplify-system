@@ -5,6 +5,7 @@ import { reviewEcListingAction, executeEcListingAction } from "@/app/actions/ecL
 import {
   EC_CHANNEL_LABEL,
   EC_OPERATION_LABEL,
+  isExpectedEcReview,
   type EcChannel,
   type EcOperation,
   type EcReview,
@@ -58,12 +59,14 @@ export function EcBulkDialog({
           };
           for (let attempt = 0; attempt < 50; attempt++) {
             try {
-              result = await reviewEcListingAction(item.inventoryId, channel, operation);
+              const response = await reviewEcListingAction(item.inventoryId, channel, operation);
+              if (!isExpectedEcReview(response, {inventoryId:item.inventoryId,channel,operation})) throw new Error("Invalid review response");
+              result = response;
             } catch {
               result = {
                 ...result,
                 status: "BLOCKED",
-                message: "通信に失敗しました。入力は保存されたままです。",
+                message: "確認結果を取得できませんでした。一覧を再読み込みして再試行してください。保存済みの途中結果から再開できます。",
               };
             }
             if (!live.current) return;
@@ -103,7 +106,9 @@ export function EcBulkDialog({
       let result: EcReview = review;
       for (let attempts = 0; attempts < 50; attempts++) {
         try {
-          result = await executeEcListingAction(review, true, terms);
+          const response = await executeEcListingAction(review, true, terms);
+          if (!isExpectedEcReview(response, review)) throw new Error("Invalid execution response");
+          result = response;
         } catch {
           result = {
             ...review,

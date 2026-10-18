@@ -50,6 +50,15 @@ export type EcReview = {
   nextAt?: number;
   requiresTerms?: boolean;
 };
+/** Server-action results can be absent after a deployment or interrupted response. */
+export function isExpectedEcReview(value: unknown, expected: Pick<EcReview,"inventoryId"|"channel"|"operation">): value is EcReview {
+  if (!value || typeof value !== "object") return false;
+  const r=value as Partial<EcReview>;
+  return r.inventoryId===expected.inventoryId && r.channel===expected.channel && r.operation===expected.operation
+    && typeof r.title==="string" && typeof r.message==="string" && ["READY","WAIT","BLOCKED","DONE"].includes(r.status??"")
+    && (r.status!=="READY" || (typeof r.token==="string" && r.token.length>0))
+    && (r.nextAt===undefined || Number.isFinite(r.nextAt));
+}
 export function ecStateFor(
   catalog: EcCatalog | null,
   channel: EcChannel,
