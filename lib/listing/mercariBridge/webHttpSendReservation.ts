@@ -8,7 +8,8 @@ import { initialWebHttpExecutionState, transitionWebHttpExecution,
 // BELLO and Shops are both rechecked after the durable claim. Allow those
 // bounded reads to finish before sendBeforeAt; a four-second permit could
 // consume the one-use claim before the HTTPS request even began. The next
-// product can reserve only 30 seconds after the lease ends.
+// product can reserve only 30 seconds after the lease ends unless a durable
+// product acknowledgement/readback has already closed that one-use send.
 export const WEB_HTTP_SEND_LEASE_MS = 31_000;
 export const WEB_HTTP_SEND_DEADLINE_MS = 30_000;
 
@@ -47,6 +48,7 @@ export type WebHttpShopSendSlot = {
   lastStartedAt: string;
   sendBeforeAt: string;
   nextEligibleAt: string;
+  sendCompletedAt?: string;
   requestId: string;
   attemptId: string;
   requestedBy: string;
@@ -137,12 +139,15 @@ function validSlot(slot: WebHttpShopSendSlot, job: SendIdentity) {
   const startedAt = Date.parse(slot.lastStartedAt);
   const sendBefore = Date.parse(slot.sendBeforeAt);
   const nextEligible = Date.parse(slot.nextEligibleAt);
+  const completedAt = slot.sendCompletedAt === undefined ? null : Date.parse(slot.sendCompletedAt);
   return slot.shopId === job.shopId &&
     Number.isSafeInteger(slot.revision) && slot.revision >= 1 &&
     slot.revision < 2_147_483_647 &&
     validTime(startedAt) && validTime(sendBefore) &&
     validTime(nextEligible) && sendBefore > startedAt &&
-    nextEligible - sendBefore >= WEB_HTTP_MIN_SEND_INTERVAL_MS &&
+    (completedAt === null ? nextEligible - sendBefore >= WEB_HTTP_MIN_SEND_INTERVAL_MS :
+      validTime(completedAt) && completedAt >= startedAt &&
+      nextEligible - completedAt >= WEB_HTTP_MIN_SEND_INTERVAL_MS) &&
     UUID.test(slot.attemptId) && /^[a-f0-9]{64}$/.test(slot.requestId) &&
     typeof slot.requestedBy === "string" && Boolean(slot.requestedBy);
 }

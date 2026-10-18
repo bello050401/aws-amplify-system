@@ -12,6 +12,7 @@ import type {
   WebHttpShopSendSlot,
 } from "./webHttpSendReservation.ts";
 import { webHttpProductStopGuardId } from "./webHttpSendReservation.ts";
+import { WEB_HTTP_MIN_SEND_INTERVAL_MS } from "./webHttpExecutionGate.ts";
 
 type Tables = {
   slotTableName: string;
@@ -53,6 +54,41 @@ export class DynamoWebHttpSendReservationRepository
     return (response.Item as WebHttpSendAttempt | undefined) ?? null;
   }
 
+  /** A completed product write cannot send again. Keep the 30-second interval,
+   * but do not also wait for its unused send lease. Unknown results retain the
+   * full lease. A late receipt cannot shorten another operation's reservation.
+   * Failure here retains the conservative interval; it does not undo success.
+   */
+  private async completeProductSend(requestId: string, attemptId: string,
+    remoteProductId: string, nowIso: string): Promise<void> {
+    try {
+      const attempt = await this.getAttempt(requestId);
+      if (!attempt || attempt.attemptId !== attemptId ||
+          attempt.remoteProductId !== remoteProductId ||
+          !["PRODUCT_ACKNOWLEDGED", "PRODUCT_STOP_VERIFIED", "PRODUCT_REOPEN_VERIFIED"].includes(attempt.status)) return;
+      const slot = await this.getSlot(attempt.shopId);
+      const now = Date.parse(nowIso);
+      if (!slot || slot.requestId !== requestId || slot.attemptId !== attemptId ||
+          slot.revision !== attempt.slotRevision || !Number.isSafeInteger(now) ||
+          now < Date.parse(slot.lastStartedAt)) return;
+      const nextEligibleAt = new Date(now + WEB_HTTP_MIN_SEND_INTERVAL_MS).toISOString();
+      if (Date.parse(nextEligibleAt) >= Date.parse(slot.nextEligibleAt)) return;
+      await this.ddb.send(new TransactWriteCommand({ TransactItems: [{ ConditionCheck: {
+        TableName: this.tables.attemptTableName, Key: { requestId },
+        ConditionExpression: "#s = :completed AND attemptId = :attempt AND remoteProductId = :product AND slotRevision = :revision",
+        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeValues: { ":completed": attempt.status, ":attempt": attemptId,
+          ":product": remoteProductId, ":revision": slot.revision },
+      } }, { Update: {
+        TableName: this.tables.slotTableName, Key: { shopId: attempt.shopId },
+        UpdateExpression: "SET sendCompletedAt = :now, nextEligibleAt = :next, updatedAt = :now",
+        ConditionExpression: "revision = :revision AND requestId = :request AND attemptId = :attempt AND nextEligibleAt > :next",
+        ExpressionAttributeValues: { ":revision": slot.revision, ":request": requestId,
+          ":attempt": attemptId, ":now": nowIso, ":next": nextEligibleAt },
+      } }] }));
+    } catch { /* Keep the original durable lease on conflict or storage failure. */ }
+  }
+
   async getPendingProductStop(shopId: string, productId: string): Promise<string | null> {
     const response = await this.ddb.send(new GetCommand({
       TableName: this.tables.attemptTableName,
@@ -79,6 +115,7 @@ export class DynamoWebHttpSendReservationRepository
         ":claimed": "SEND_CLAIMED_RESULT_UNKNOWN", ":attempt": attemptId,
         ":id": remoteProductId, ":now": nowIso },
     }));
+    await this.completeProductSend(requestId, attemptId, remoteProductId, nowIso);
   }
 
   /** Record the reviewed, non-secret payload atomically with the one-use claim.
@@ -203,6 +240,7 @@ export class DynamoWebHttpSendReservationRepository
       ExpressionAttributeNames: { "#linkedRequestId": "linkedRequestId" },
       ExpressionAttributeValues: { ":requestId": requestId },
     } }] }));
+    await this.completeProductSend(requestId, attemptId, remoteProductId, nowIso);
   }
 
   /** This can release a reservation only if no sender ever claimed it. */
@@ -259,7 +297,7 @@ export class DynamoWebHttpSendReservationRepository
             "#sendBeforeAt = :sendBeforeAt, #nextEligibleAt = :nextEligibleAt, " +
             "#requestId = :requestId, #attemptId = :attemptId, " +
             "#requestedBy = :requestedBy, " +
-            "#createdAt = if_not_exists(#createdAt, :now), #updatedAt = :now",
+            "#createdAt = if_not_exists(#createdAt, :now), #updatedAt = :now REMOVE sendCompletedAt",
           ConditionExpression: previous ?
             "#revision = :previousRevision AND #attemptId = :previousAttemptId " +
               "AND #nextEligibleAt <= :now" :
