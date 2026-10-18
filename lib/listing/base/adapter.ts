@@ -94,11 +94,16 @@ async function baseApiCall<T>(path: string, params: Record<string, string | numb
   const text = await res.text();
   if (!res.ok) throw classifyBaseHttpStatus(res.status, text);
 
+  let payload: unknown;
   try {
-    return JSON.parse(text) as T;
+    payload = JSON.parse(text);
   } catch {
     throw new BaseListingApiError("UNKNOWN_REMOTE_ERROR", `Expected JSON, got: ${text.slice(0, 300)}`);
   }
+  // BASE can return an application error with an otherwise successful HTTP response.
+  if (payload && typeof payload === "object" && ("error" in payload || "errors" in payload))
+    throw new BaseListingApiError("REMOTE_VALIDATION_ERROR", text.slice(0, 300));
+  return payload as T;
 }
 
 export interface BaseListingInput {
@@ -195,9 +200,13 @@ export { isBaseConnected };
 export async function setManualBaseVisibility(itemId: string, visible: boolean): Promise<void> {
   await baseApiCall("/items/edit", { item_id: itemId, visible: visible ? 1 : 0 }, false, true);
 }
-export async function addManualBaseImage(itemId: string, index: number, imageUrl: string): Promise<void> {
+export async function addManualBaseImage(itemId: string, index: number, imageUrl: string): Promise<string> {
   if (new URL(imageUrl).protocol !== "https:") throw Error("INVALID_IMAGE_URL");
-  await baseApiCall("/items/add_image", { item_id: itemId, image_no: index, image_url: imageUrl }, false, true);
+  const result = await baseApiCall<{ item?: Record<string, unknown> }>("/items/add_image", { item_id: itemId, image_no: index, image_url: imageUrl }, false, true);
+  const savedUrl = result.item?.[`img${index}_origin`];
+  if (String(result.item?.item_id) !== itemId || typeof savedUrl !== "string" || !URL.canParse(savedUrl) || new URL(savedUrl).protocol !== "https:")
+    throw new BaseListingApiError("UNKNOWN_REMOTE_ERROR", "BASEから画像の保存結果が返りませんでした。");
+  return savedUrl;
 }
 export async function editManualBaseContent(itemId: string, content: {title:string;detail:string;price:number;stock:number}) {
   await baseApiCall("/items/edit", {item_id:itemId,...content}, false, true);

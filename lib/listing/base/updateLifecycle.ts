@@ -205,11 +205,12 @@ export async function executeBaseContentUpdate(
       claim = undefined;
       return blocked("確認後に商品情報が変わりました。確認し直してください。");
     }
+    let acknowledgedImage: string | null = null;
     if (step === 0) {
       await editManualBaseContent(remote.id, s.content);
       step = 1;
     } else if (step <= count) {
-      await addManualBaseImage(remote.id, step, imageUrl!);
+      acknowledgedImage = await addManualBaseImage(remote.id, step, imageUrl!);
       step++;
     } else {
       const extra = remote.imageSlots.findLastIndex(
@@ -223,7 +224,7 @@ export async function executeBaseContentUpdate(
     const readback = await readBaseItem(remote.id);
     if (readback.visible !== p.visible || !matchesContent(readback, s.content))
       throw Error("BASEの変更結果を確認できませんでした。");
-    if (p.step >= 1 && p.step <= count && !readback.imageSlots[p.step - 1])
+    if (p.step >= 1 && p.step <= count && (!acknowledgedImage || readback.imageSlots[p.step - 1] !== acknowledgedImage))
       throw Error("画像の保存結果を確認できませんでした。");
     if (
       p.step > count &&

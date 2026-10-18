@@ -181,9 +181,9 @@ export async function reviewBaseListing(id: string, operation: "PUBLISH" | "STOP
       try {
         const url = await baseImageUrl(draft.images[count]);
         if (!url) throw Error("IMAGE");
-        await addManualBaseImage(remote.id, count + 1, url);
+        const savedImage = await addManualBaseImage(remote.id, count + 1, url);
         const readback = await readBaseItem(remote.id);
-        if (readback.images.length < count + 1) throw Error("IMAGE_UNKNOWN");
+        if (readback.imageSlots[count] !== savedImage) throw Error("IMAGE_UNKNOWN");
         await finishBaseManual(row, token, {
           status: "PAUSED",
           categoryMapping: JSON.stringify({ ...mapping, baseImageSource: source, baseImageCount: count + 1 }),

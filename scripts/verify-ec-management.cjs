@@ -136,7 +136,7 @@ async function load(file, extra = {}) {
     "@/lib/http/fetchWithTimeout":
       "export const fetchWithTimeout=async()=>({ok:true,json:async()=>({item:f.state().remote})});",
     "./adapter":
-      'export const createBaseProduct=async()=>{f.state().writes.push("create");return {externalProductId:"1234",visibility:"PRIVATE"}};export const addManualBaseImage=async(id,n)=>{f.state().writes.push("image:"+n);f.state().remote["img"+n+"_origin"]="https://example.test/new-"+n+".jpg";};export const setManualBaseVisibility=async(id,visible)=>{f.state().writes.push(visible?"publish":"stop");if(!f.state().failReadback)f.state().remote.visible=visible?1:0;};export const editManualBaseContent=async(id,content)=>{f.state().writes.push("edit");if(!f.state().failReadback)Object.assign(f.state().remote,content)};export const deleteManualBaseImage=async(id,n)=>{f.state().writes.push("delete-image:"+n);delete f.state().remote["img"+n+"_origin"]};',
+      'export const createBaseProduct=async()=>{f.state().writes.push("create");return {externalProductId:"1234",visibility:"PRIVATE"}};export const addManualBaseImage=async(id,n)=>{f.state().writes.push("image:"+n);const url="https://example.test/new-"+n+".jpg";if(!f.state().failImageReadback)f.state().remote["img"+n+"_origin"]=url;return url;};export const setManualBaseVisibility=async(id,visible)=>{f.state().writes.push(visible?"publish":"stop");if(!f.state().failReadback)f.state().remote.visible=visible?1:0;};export const editManualBaseContent=async(id,content)=>{f.state().writes.push("edit");if(!f.state().failReadback)Object.assign(f.state().remote,content)};export const deleteManualBaseImage=async(id,n)=>{f.state().writes.push("delete-image:"+n);delete f.state().remote["img"+n+"_origin"]};',
     ...extra,
   };
   const result = await esbuild.build({
@@ -169,6 +169,7 @@ async function load(file, extra = {}) {
     console,
     process,
     URL,
+    URLSearchParams,
     Date,
     Buffer,
     fixture: { state: () => state, models, gql },
@@ -217,6 +218,13 @@ async function load(file, extra = {}) {
   assert.equal(step.status,"DONE");assert.deepEqual(state.writes,["edit","image:1","delete-image:2"]);
   assert.equal(state.remote.visible,1,"update preserves visibility");assert.equal(state.remote.stock,2);
   assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"DONE");assert.equal(state.writes.length,3,"completed update cannot replay");
+  reset();ur=await update.reviewBaseContentUpdate(id);
+  assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"WAIT");
+  state.failImageReadback=true;
+  assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED","old image cannot confirm replacement");
+  assert.equal(state.channel.status,"ERROR");
+  assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED");
+  assert.deepEqual(state.writes,["edit","image:1"],"unverified image write is not repeated");
   reset();ur=await update.reviewBaseContentUpdate(id);state.remote.price=999;
   assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED");assert.equal(state.writes.length,0);
   reset();ur=await update.reviewBaseContentUpdate(id);state.changeSourceAfterClaim=true;
@@ -302,6 +310,20 @@ async function load(file, extra = {}) {
   const pure = await load("lib/listing/ecManagement.ts");
   assert.equal(pure.ecStateFor(null, "BASE", id, true).state, "UNKNOWN");
   assert.deepEqual([...pure.retainVisibleSelection(new Set(["1", "2"]), ["2"])], ["2"]);
+  reset();
+  const adapter = await load("lib/listing/base/adapter.ts", {
+    "@/lib/base/oauth": "export const getAccessToken=async()=>'test-token';export const isBaseConnected=async()=>true;export class BaseNotConnectedError extends Error{}",
+    "@/lib/integrations/writeGuard": "export const assertExternalWriteAllowed=()=>{throw Error('unexpected automatic write')};",
+    "@/lib/http/fetchWithTimeout": "export const fetchWithTimeout=async()=>({ok:true,text:async()=>JSON.stringify(f.state().imageResponse)});",
+  });
+  state.imageResponse={item:{item_id:1234,img1_origin:"https://example.test/confirmed.jpg"}};
+  assert.equal(await adapter.addManualBaseImage("1234",1,"https://example.test/source.jpg"),"https://example.test/confirmed.jpg");
+  for(const imageResponse of [{error:"image_put_fail"},{errors:["invalid"]},{item:{item_id:1234}},{item:{item_id:999,img1_origin:"https://example.test/wrong.jpg"}}]){
+    state.imageResponse=imageResponse;
+    await assert.rejects(()=>adapter.addManualBaseImage("1234",1,"https://example.test/source.jpg"));
+  }
+  state.imageResponse={error:"invalid_item"};
+  await assert.rejects(()=>adapter.editManualBaseContent("1234",{title:"Chair",detail:"Updated",price:12000,stock:2}));
   console.log("EC management: boundary checks passed. No live marketplace writes.");
 })().catch((e) => {
   console.error(e);
