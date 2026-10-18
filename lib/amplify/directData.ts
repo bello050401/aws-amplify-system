@@ -1,5 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { normalizeDirectStructuredJson } from "./structuredJson";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, DeleteCommand, ScanCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
@@ -313,7 +314,7 @@ async function modelCreate(model: string, input: Record<string, unknown>): Promi
   const now = nowIso();
   const idField = identifierFor(model);
   const item: Record<string, unknown> = {
-    ...input,
+    ...normalizeDirectStructuredJson(model, input),
     // **spread の後に置く。** 先に置くと、呼び出し側が `id: undefined` を
     // 明示的に含めていた場合に spread が上書きし、キーの無い行を書こうとして失敗する。
     [idField]:
@@ -428,7 +429,7 @@ async function modelUpdate(model: string, input: Record<string, unknown>): Promi
   const { [idField]: id, ...rest } = input;
   if (typeof id !== "string") throw new Error(`${model}.update には ${idField} が必要です。`);
 
-  const { expression: expr, names, values } = buildUpdateExpression(rest, nowIso());
+  const { expression: expr, names, values } = buildUpdateExpression(normalizeDirectStructuredJson(model, rest), nowIso());
 
 
   try {

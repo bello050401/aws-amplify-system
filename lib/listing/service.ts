@@ -1,4 +1,5 @@
 import "server-only";
+import { decodeStructuredJson } from "@/lib/amplify/structuredJson";
 import { commonCategory, normalizeChannelPrices, type CommonChannelPrices } from './commonSettings';
 import { normalizeShippingPackages } from "@/lib/shipping/packages";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
@@ -86,33 +87,20 @@ async function loadCategoryNameLookup(): Promise<CategoryNameLookup> {
  * (AWSJSON)フィールド — lib/inventory/customFieldsCodec.tsで既に文書化
  * されている「wire quirk」(書き込みは実際のJSON文字列でなければならず、
  * 生のJSオブジェクトを渡すと`Variable '...' has an invalid value.`で
- * 失敗する)と同じものがこちらにも当てはまる。読み取り側は文字列
- * (常にこちらが書き込む形)と、既にパース済みのオブジェクト(一部の
- * 読み取り経路で観測される形)の両方を許容する — parseCustomFieldsと
- * 同じ考え方。customFieldsCodec.tsから直接importしないのは、あちらが
- * `Record<string, unknown>`という固定形に型付けされているため
- * (ListingDraft.images/ChannelListing.categoryMappingは配列/別の
- * オブジェクト形なので、同じ関数を使い回すと型があわない)。
+ * 失敗する)と同じものがこちらにも当てはまる。読み取りはオブジェクト、
+ * AWSJSONの文字列、旧DynamoDB直接保存による二重JSONを許容する。
+ * 不正な値は既定の価格へ置き換えず、エラーとして扱う。
  */
 function stringifyListingJson(value: unknown): string | undefined {
   if (value === null || value === undefined) return undefined;
   return JSON.stringify(value);
 }
 
-function tolerantParseJson<T>(raw: unknown): T | null {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw === "string") {
-    try {
-      return JSON.parse(raw) as T;
-    } catch (err) {
-      console.error("[lib/listing/service.ts] failed to JSON.parse a stored a.json() value:", raw, err);
-      return null;
-    }
-  }
-  return raw as T;
+function parseStoredListingJson<T>(raw: unknown): T | null {
+  return decodeStructuredJson(raw) as T | null;
 }
 
-function toListingDraftRecord(row: {
+export function toListingDraftRecord(row: {
   id: string;
   inventoryId: string;
   title: string;
@@ -129,20 +117,21 @@ function toListingDraftRecord(row: {
   createdAt: string;
   updatedAt: string;
 }): ListingDraftRecord {
-  const images = tolerantParseJson<ListingImageRef[]>(row.images) ?? [];
+  const images = parseStoredListingJson<ListingImageRef[]>(row.images) ?? [];
+  if (!Array.isArray(images)) throw new Error("保存済みの出品画像の形式を確認してください。");
   return {
     id: row.id,
     inventoryId: row.inventoryId,
     title: row.title,
     commonCategoryId: row.commonCategoryId ?? null,
-    channelPrices: normalizeChannelPrices(tolerantParseJson(row.channelPrices)),
+    channelPrices: normalizeChannelPrices(parseStoredListingJson(row.channelPrices)),
     description: row.description ?? null,
     price: row.price ?? null,
     condition: row.condition ?? null,
     // 未設定(この項目より前に作られた下書き)は既定値として読む。
     // マイグレーションを不要にするための片側の約束。
     shippingMethod: parseListingShippingMethod(row.shippingMethod),
-    shippingPackages: normalizeShippingPackages(tolerantParseJson(row.shippingPackages)),
+    shippingPackages: normalizeShippingPackages(parseStoredListingJson(row.shippingPackages)),
     images,
     createdBy: row.createdBy ?? null,
     updatedBy: row.updatedBy ?? null,
@@ -187,7 +176,7 @@ function toChannelListingRecord(row: {
   createdAt: string;
   updatedAt: string;
 }): ChannelListingRecord {
-  const categoryMapping = tolerantParseJson<ChannelListingRecord["categoryMapping"]>(row.categoryMapping);
+  const categoryMapping = parseStoredListingJson<ChannelListingRecord["categoryMapping"]>(row.categoryMapping);
   return {
     id: row.id,
     listingDraftId: row.listingDraftId,
@@ -379,6 +368,7 @@ export interface ListingOverviewRow {
   quantity: number;
   price: number | null;
   thumbnailKey: string | null;
+  thumbnailIsPrimary?: boolean;
   inventoryUpdatedAt: string;
   hasDraft: boolean;
   /** 現時点でチャネルはMERCARI_SHOPSのみ(lib/listing/types.tsのListingChannel参照) — 将来チャネルが増えたらこの1フィールドを配列にする。 */
@@ -455,6 +445,7 @@ function buildOverviewRows(
       // salePrice is a sales result and may include multiple sold units.
       price: draftPrices.get(item.id) ?? item.plannedSalePrice ?? null,
       thumbnailKey: item.mainImageThumbnailKey ?? item.mainImageStorageKey,
+      thumbnailIsPrimary: item.mainImageIsPrimary,
       inventoryUpdatedAt: item.updatedAt,
       hasDraft: draftPrices.has(item.id),
       channelListing: channelListingByInventoryId.get(item.id) ?? null,

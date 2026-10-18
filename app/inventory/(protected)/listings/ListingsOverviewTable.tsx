@@ -24,6 +24,8 @@ import {
 } from "@/lib/listing/ecManagement";
 import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
+import { usePrimaryPhotoThumbnails } from "../../usePrimaryPhotoThumbnails";
+import { resolveListPhotoUrl } from "@/lib/photoRegistration/gallerySelection";
 import { EcBulkDialog } from "./EcBulkDialog";
 
 const button =
@@ -131,6 +133,7 @@ export function ListingsOverviewTable({
   }, [query, channel, filter, archived, pageSize, sort]);
   const pagination = paginate(filtered, page, pageSize),
     pageRows = pagination.pageRows;
+  const photoThumbnails = usePrimaryPhotoThumbnails(pageRows.map(row => row.inventoryId));
   function open(kind: EcOperation, items: ListingOverviewRow[], target = channel) {
     setOperation({ kind, items, channel: target });
   }
@@ -288,7 +291,11 @@ export function ListingsOverviewTable({
                 <td className="px-2 py-3 md:px-3">
                   <div className="flex min-w-0 max-w-xl items-start gap-2 md:min-w-64 md:items-center md:gap-3">
                     <div className="h-10 w-10 shrink-0 overflow-hidden rounded bg-gray-100 md:h-14 md:w-14">
-                      <InventoryThumbnail storageKey={row.thumbnailKey} alt={row.name} />
+                      <InventoryThumbnail
+                        storageKey={row.thumbnailKey}
+                        directUrl={resolveListPhotoUrl(row.thumbnailIsPrimary === true, photoThumbnails[row.inventoryId])}
+                        alt={row.name}
+                      />
                     </div>
                     <div className="min-w-0">
                       <Link
