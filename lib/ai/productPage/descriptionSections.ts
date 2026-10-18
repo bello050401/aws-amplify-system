@@ -55,8 +55,8 @@ export const RETURN_POLICY_BODY = [
 
 /** §18 お取り置きについて。 */
 export const HOLD_POLICY_BODY = [
-  "入金前のお取り置きは対応しておりません。",
-  "購入後は原則として2週間以内の発送をお願いしております。",
+  "ご入金前のお取り置きは対応しておりません。",
+  "ご購入後は原則として2週間以内の受け取りをお願いしております。",
   "それ以上の保管をご希望の場合は、事前にご相談ください。",
 ].join("\n");
 
@@ -86,6 +86,7 @@ export interface ProductDetailInput {
   height: string | null;
   /** 全長(該当商品のみ)。 */
   overallLength?: string | null;
+  armHeight?: string | null;
   seat: SeatDimensions;
 }
 
@@ -107,6 +108,7 @@ export function buildProductDetailSection(input: ProductDetailInput): string {
   if (input.depth?.trim()) lines.push(`奥行:${withCm(input.depth)}`);
   if (input.height?.trim()) lines.push(`高さ:${withCm(input.height)}`);
   if (input.overallLength?.trim()) lines.push(`全長:${withCm(input.overallLength)}`);
+  if (input.armHeight?.trim()) lines.push(`アーム高さ:${withCm(input.armHeight)}`);
   const seatLine = formatSeatDimensionsLine(input.seat);
   if (seatLine) lines.push(seatLine);
   return lines.join("\n");
@@ -135,6 +137,8 @@ export interface ShippingSectionInput {
   method?: "KAZAI" | "SAGAWA";
   /** らくらく家財便のランク。判定できなければ null(§10)。 */
   rank: ShippingRank | null;
+  /** Operator-selected packages, in the same order as the common draft. */
+  packageRanks?: (ShippingRank | null)[];
   /** 佐川急便のサイズ区分表記(「佐川急便160サイズ」)。判定できなければ null。 */
   sagawaSizeLabel?: string | null;
   /** 判定できなかった理由(担当者向け)。 */
@@ -155,11 +159,15 @@ export interface ShippingSectionInput {
  * 書かない。「Gランクの上」ではなく「個別見積り」であって、書くと誤案内。
  */
 export function buildShippingSection(input: ShippingSectionInput): string {
+  const ranks = input.packageRanks?.length ? input.packageRanks : [input.rank];
+  const rankLabel = ranks.map((rank, index) => rank && rank !== "OVERSIZE"
+    ? `${ranks.length > 1 ? `${index + 1}口目：` : ""}${rank}ランク`
+    : SHIPPING_UNDETERMINED_MARKER).join("・");
   const method =
     (input.method ?? "KAZAI") === "SAGAWA"
       ? (input.sagawaSizeLabel ?? SHIPPING_UNDETERMINED_MARKER)
-      : input.rank && input.rank !== "OVERSIZE"
-        ? `${KAZAI_SERVICE_NAME}${input.rank}ランク`
+      : ranks.every(rank => rank && rank !== "OVERSIZE")
+        ? `${KAZAI_SERVICE_NAME}${ranks.length > 1 ? `（${rankLabel}／計${ranks.length}口）` : rankLabel}`
         : SHIPPING_UNDETERMINED_MARKER;
   return [`埼玉県より、${method}、または、自社での配送を予定しております。`, REMOTE_AREA_NOTICE].join("\n");
 }

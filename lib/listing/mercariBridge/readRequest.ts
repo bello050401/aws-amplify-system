@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { commonChannelPrice } from "../commonSettings";
 import type { InventoryDetail } from "@/lib/inventory/queries";
 import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/types";
 
@@ -92,7 +93,7 @@ export function buildExistingReadJob(input: ExistingReadInput): ExistingReadJob 
     inventoryCode: inventory.sku,
     title: reviewedOverrides?.title ?? channelListing?.overrideTitle ?? draft.title,
     description: reviewedOverrides?.description ?? channelListing?.overrideDescription ?? draft.description ?? "",
-    priceYen: reviewedOverrides?.priceYen ?? channelListing?.overridePrice ?? draft.price,
+    priceYen: reviewedOverrides?.priceYen ?? commonChannelPrice(draft, 'MERCARI_SHOPS', channelListing?.overridePrice),
     quantity: reviewedOverrides?.quantity ?? inventory.quantity,
   };
   if (!expected.title?.trim() || expected.title.length > 255 ||

@@ -3,6 +3,7 @@ import { getAccessToken, isBaseConnected, BaseNotConnectedError } from "@/lib/ba
 import { BaseListingApiError, classifyBaseHttpStatus } from "./errors";
 import { assertExternalWriteAllowed } from "@/lib/integrations/writeGuard";
 import type { ListingDraftRecord } from "../types";
+import { commonChannelPrice } from '../commonSettings';
 import { formatDescriptionForChannel } from "../descriptionFormat";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
 import { parseBaseItemVisibility } from "./visibility";
@@ -62,7 +63,9 @@ async function baseApiCall<T>(path: string, params: Record<string, string | numb
     const removeImage = path === "/items/delete_image" && Object.keys(params).sort().join(",") === "image_no,item_id" && Number.isInteger(Number(params.image_no)) && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
     const content = path === "/items/edit" && Object.keys(params).sort().join(",") === "detail,item_id,price,stock,title" && typeof params.title === "string" && params.title.trim().length > 0 && Number.isSafeInteger(params.price) && Number(params.price) > 0 && Number.isSafeInteger(params.stock) && Number(params.stock) >= 0;
     const privateAdd = path === "/items/add" && Object.keys(params).sort().join(",") === "detail,price,stock,title,visible" && params.visible === 0;
-    if (process.env.BASE_MANUAL_LISTING_ENABLED !== "1" || (!visibility && !image && !removeImage && !content && !privateAdd) || (!privateAdd && !/^[1-9][0-9]*$/.test(String(params.item_id))))
+    const category = path === '/item_categories/add' && Object.keys(params).sort().join(',') === 'category_id,item_id' && /^[1-9][0-9]*$/.test(String(params.category_id));
+    const removeCategory = path === '/item_categories/delete' && Object.keys(params).join(',') === 'item_category_id' && /^[1-9][0-9]*$/.test(String(params.item_category_id));
+    if (process.env.BASE_MANUAL_LISTING_ENABLED !== "1" || (!visibility && !image && !removeImage && !content && !privateAdd && !category && !removeCategory) || (!privateAdd && !removeCategory && !/^[1-9][0-9]*$/.test(String(params.item_id))))
       throw new BaseListingApiError("CONFIG_REQUIRED", "BASEの一覧からの出品操作が有効になっていません。");
   } else if (privateTestWrite) {
     try { assertBasePrivateTestWrite(path, params); }
@@ -128,7 +131,7 @@ export async function createBaseProduct(input: BaseListingInput, manual = false)
     input.overrideDescription?.trim() || input.draft.description || "",
     "BASE",
   ).text;
-  const price = input.overridePrice ?? input.draft.price;
+  const price = commonChannelPrice(input.draft,'BASE',input.overridePrice);
   if (!title) throw new BaseListingApiError("REMOTE_VALIDATION_ERROR", "タイトルが空です。");
   if (price == null || price <= 0) throw new BaseListingApiError("REMOTE_VALIDATION_ERROR", "価格が未設定です。");
 
@@ -195,6 +198,34 @@ export async function getBaseProductVisibility(itemId: string): Promise<boolean>
 }
 
 export { isBaseConnected };
+
+async function readBaseCategoryLinks(itemId:string):Promise<{linkId:string;categoryId:string}[]> {
+  if(!/^[1-9][0-9]*$/.test(itemId))throw new Error('BASE商品IDを確認してください。');
+  const token=await getAccessToken();
+  const response=await fetchExternal(`${API_BASE}/item_categories/detail/${itemId}`,{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});
+  if(!response.ok)throw new Error('BASEの商品カテゴリを確認できませんでした。');
+  const data=await response.json() as {item_categories?:{item_category_id:unknown;item_id:unknown;category_id:unknown}[]};
+  if(!Array.isArray(data.item_categories)||data.item_categories.some(r=>String(r.item_id)!==itemId||!/^[1-9][0-9]*$/.test(String(r.category_id))||!/^[1-9][0-9]*$/.test(String(r.item_category_id))))throw new Error('BASEの商品カテゴリの応答を確認できませんでした。');
+  return data.item_categories.map(r=>({linkId:String(r.item_category_id),categoryId:String(r.category_id)}));
+}
+
+export async function readBaseProductCategories(itemId:string):Promise<string[]> {
+  return (await readBaseCategoryLinks(itemId)).map(r=>r.categoryId);
+}
+
+/** Under a per-item claim: replace only the category previously managed by this common picker. */
+export async function setManualBaseCategory(itemId:string,categoryId:string,previousCategoryId?:unknown):Promise<void>{
+  if(!/^[1-9][0-9]*$/.test(categoryId))throw new Error('BASEの商品カテゴリを確認してください。');
+  const before=await readBaseCategoryLinks(itemId);
+  if(!before.some(r=>r.categoryId===categoryId))
+    await baseApiCall('/item_categories/add',{item_id:itemId,category_id:categoryId},false,true);
+  const previous=typeof previousCategoryId==='string'&&previousCategoryId!==categoryId
+    ? before.filter(r=>r.categoryId===previousCategoryId):[];
+  for(const link of previous)
+    await baseApiCall('/item_categories/delete',{item_category_id:link.linkId},false,true);
+  const after=await readBaseProductCategories(itemId);
+  if(!after.includes(categoryId)||previous.some(r=>after.includes(r.categoryId)))throw new Error('BASEのカテゴリ保存を確認できませんでした。');
+}
 
 /** Called only after the role check, source comparison and per-item claim in manualLifecycle. */
 export async function setManualBaseVisibility(itemId: string, visible: boolean): Promise<void> {

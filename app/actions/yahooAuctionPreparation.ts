@@ -8,6 +8,8 @@ import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { parseYahooAuctionInput, parseYahooSaved, yahooInventoryIdValid, yahooPayloadsMatch,
   type YahooAuctionPayload, type YahooAuctionSaved } from "@/lib/listing/yahooAuction/preparation";
 import type { ListingDraftRecord } from "@/lib/listing/types";
+import { resolvedYahooEndAt } from "@/lib/listing/yahooAuction/ending";
+import { commonChannelPrice } from "@/lib/listing/commonSettings";
 
 type Context = { draft: ListingDraftRecord | null; saved: YahooAuctionSaved | null;
   availableQuantity: number; canPrepare: boolean };
@@ -33,8 +35,8 @@ export async function getYahooAuctionPreparationAction(inventoryId: string): Pro
     ]);
     if (!item) return { ok: false, code: "INVALID_INPUT" };
     const category = (await listCategories(item.categoryId)).find(c => c.id === item.categoryId)?.name ?? null;
-    const canPrepare = item.quantity > 0 && item.saleEndDate === null && category !== null &&
-      category.normalize("NFKC").trim() !== "売り切れ" && isEcListingEligible(category);
+    const canPrepare = item.quantity > 0 && item.saleEndDate === null &&
+      category?.normalize("NFKC").trim() !== "売り切れ" && isEcListingEligible(category);
     return { ok: true, context: { draft, saved, availableQuantity: item.quantity, canPrepare } };
   } catch { return { ok: false, code: "UNAVAILABLE" }; }
 }
@@ -56,9 +58,10 @@ export async function saveYahooAuctionPreparationAction(inventoryId: string, inp
   if (!canPrepare || parsed.quantity > availableQuantity) return { ok: false, code: "NOT_ELIGIBLE" };
   if (!draft || draft.updatedAt !== expectedSourceUpdatedAt) return { ok: false, code: "SOURCE_CHANGED" };
   if ((saved?.revision ?? null) !== expectedRevision) return { ok: false, code: "CONFLICT" };
-  const payload: YahooAuctionPayload = { schemaVersion: 1, input: parsed,
+  const payload: YahooAuctionPayload = { schemaVersion: 1, input: { ...parsed, endAtJst: resolvedYahooEndAt(parsed) },
     source: { draftId: draft.id, draftUpdatedAt: draft.updatedAt, images: draft.images,
-      shippingMethod: draft.shippingMethod } };
+      shippingMethod: draft.shippingMethod, commonCategoryId: draft.commonCategoryId ?? null,
+      commonPriceYen: commonChannelPrice(draft, 'YAHOO') } };
   const revision = (expectedRevision ?? 0) + 1;
   const action = expectedRevision === null ? "createYahooAuctionPreparation" : "updateYahooAuctionPreparation";
   const inputType = expectedRevision === null ? "CreateYahooAuctionPreparationInput" : "UpdateYahooAuctionPreparationInput";

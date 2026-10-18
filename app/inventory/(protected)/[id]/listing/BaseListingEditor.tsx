@@ -77,7 +77,7 @@ export function BaseListingEditor({
               channel="BASE"
               disabled={!ready || busy}
               onApply={(p) => {
-                setPrice(
+                if (!draft.channelPrices) setPrice(
                   draft.price == null
                     ? ""
                     : String(draft.price + p.values.priceAddition),
@@ -120,10 +120,12 @@ export function BaseListingEditor({
                 inputMode="numeric"
                 min={1}
                 step={1}
-                value={price}
+                value={draft.channelPrices ? draft.channelPrices.BASE ?? "" : price}
+                readOnly={!!draft.channelPrices}
                 placeholder={draft.price?.toString() ?? "未設定"}
                 onChange={(e) => setPrice(e.target.value)}
               />
+              {draft.channelPrices && <span className="mt-1 block text-xs text-gray-500">価格は「共通の商品情報」で変更できます。</span>}
             </label>
             <button
               type="button"

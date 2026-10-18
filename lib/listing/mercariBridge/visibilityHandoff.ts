@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { commonChannelPrice } from "../commonSettings";
 import type { InventoryDetail } from "@/lib/inventory/queries";
 import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/types";
 
@@ -29,7 +30,7 @@ export function buildVisibilityPcJob(inventory: InventoryDetail,
   draft: ListingDraftRecord, listing: ChannelListingRecord,
   action: "STOP" | "RELIST" = "STOP"): VisibilityPcJob | null {
   const title = listing?.overrideTitle ?? draft?.title;
-  const priceYen = listing?.overridePrice ?? draft?.price;
+  const priceYen = draft ? commonChannelPrice(draft, 'MERCARI_SHOPS', listing?.overridePrice) : null;
   if (!["STOP", "RELIST"].includes(action) ||
       typeof inventory?.id !== "string" || !UUID.test(inventory.id) ||
       PRIVATE_TEST_INVENTORIES.has(inventory.id.toLowerCase()) ||

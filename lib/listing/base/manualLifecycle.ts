@@ -8,7 +8,8 @@ import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { getChannelListing, getListingDraftForInventory } from "@/lib/listing/service";
 import { baseImageUrl } from "../ecImage";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
-import { createBaseProduct, addManualBaseImage, setManualBaseVisibility } from "./adapter";
+import { createBaseProduct, addManualBaseImage, setManualBaseVisibility, readBaseProductCategories, setManualBaseCategory } from "./adapter";
+import {commonCategory,commonChannelPrice} from '../commonSettings';
 import type { EcReview } from "../ecManagement";
 import type { ChannelListingRecord } from "../types";
 
@@ -63,7 +64,7 @@ async function eligible(id: string, quantity: number) {
   const item = await getInventoryDetail(id);
   if (!item || item.saleEndDate || item.quantity < quantity || quantity < 1) return false;
   const name = (await listCategories(item.categoryId)).find((c) => c.id === item.categoryId)?.name;
-  return !!name && name !== "売り切れ" && isEcListingEligible(name);
+  return name !== "売り切れ" && isEcListingEligible(name ?? null);
 }
 export async function claimBaseManual(row: ChannelListingRecord) {
   const token = `EC_MANUAL:${randomUUID()}`;
@@ -163,13 +164,24 @@ export async function reviewBaseListing(id: string, operation: "PUBLISH" | "STOP
     }
     return { status: "DONE", message: remote.visible ? "すでに出品中です。" : "すでに出品停止中です。" };
   }
+  let reviewedDraftUpdatedAt: string | null = null;
   if (operation === "PUBLISH") {
     if (!(await eligible(id, remote.quantity)))
       return { status: "BLOCKED", message: "在庫数または販売状況を確認してください。" };
     const draft = await getListingDraftForInventory(id);
     if (!draft?.images.length) return { status: "BLOCKED", message: "出品画像を選択して保存してください。" };
-    const source = hash([draft.id, draft.images]);
+    reviewedDraftUpdatedAt = draft.updatedAt;
+    const price=commonChannelPrice(draft,'BASE',row.overridePrice);
+    if(price===null||remote.price!==price)return {status:'BLOCKED',message:'BASEの価格が共通の商品情報と異なります。商品一覧の「内容更新」を実行してください。'};
+    const category=commonCategory(draft.commonCategoryId)?.base;
     const mapping = (row.categoryMapping ?? {}) as Record<string, unknown>;
+    if(category && (mapping.baseCommonCategoryId!==category.id || !(await readBaseProductCategories(remote.id)).includes(category.id))){
+      const token=await claimBaseManual(row);
+      try{await setManualBaseCategory(remote.id,category.id,mapping.baseCommonCategoryId);await finishBaseManual(row,token,{status:'PAUSED',categoryMapping:JSON.stringify({...mapping,baseCommonCategoryId:category.id})});}
+      catch{await finishBaseManual(row,token,{status:'ERROR',lastError:'BASEのカテゴリを確認できませんでした。'});throw new Error('CATEGORY_UNVERIFIED');}
+      return {status:'WAIT',nextAt:Date.now()+500,message:'共通の商品カテゴリをBASEに設定しました。'};
+    }
+    const source = hash([draft.id, draft.images]);
     if (mapping.baseImageSource && mapping.baseImageSource !== source)
       return {
         status: "BLOCKED",
@@ -209,7 +221,7 @@ export async function reviewBaseListing(id: string, operation: "PUBLISH" | "STOP
     price: remote.price,
     quantity: remote.quantity,
     imageCount: remote.images.length,
-    token: hash([id, operation, row.id, remote]),
+    token: hash([id, operation, row.id, remote, reviewedDraftUpdatedAt]),
     message:
       operation === "PUBLISH" ? "BASEで公開する内容を確認してください。" : "BASEの商品を非公開にします。",
   };
@@ -223,10 +235,16 @@ export async function executeBaseListing(
   if (!row?.externalListingId || row.status === "PUBLISHING")
     return { ok: false, message: "登録内容を確認し直してください。" };
   const remote = await readBaseItem(row.externalListingId);
-  if (hash([id, operation, row.id, remote]) !== digest)
+  const draft=operation==='PUBLISH'?await getListingDraftForInventory(id):null;
+  if (hash([id, operation, row.id, remote,draft?.updatedAt??null]) !== digest)
     return { ok: false, message: "BASEの商品内容が変わりました。確認し直してください。" };
   if (operation === "PUBLISH" && !(await eligible(id, remote.quantity)))
     return { ok: false, message: "在庫数または販売状況が変わりました。" };
+  if(operation==='PUBLISH'){
+    const category=commonCategory(draft?.commonCategoryId)?.base;
+    if(!draft || remote.price!==commonChannelPrice(draft,'BASE',row.overridePrice) || category&&!(await readBaseProductCategories(remote.id)).includes(category.id))
+      return {ok:false,message:'共通の商品情報とBASEの価格・カテゴリを確認し直してください。'};
+  }
   const token = await claimBaseManual(row);
   try {
     await setManualBaseVisibility(remote.id, operation === "PUBLISH");

@@ -52,6 +52,7 @@ export type YahooInputMetadata = {
   conditionValues: string[];
   quantityValues: number[];
   shippingPayerDefault: "buyer" | "seller" | null;
+  shippingControls: { name: string; id: string; value: string; label: string }[];
   automaticRelistDefault: number | null;
   csrfPresent: true;
   imageCsrfPresent: boolean;
@@ -114,9 +115,17 @@ export function inspectYahooInputHtml(html: string): Result<YahooInputMetadata> 
     const chosen = relistOptions.filter(n => attr(n, "selected") !== undefined);
     const selectedRelist = chosen.length <= 1 ? chosen[0] ?? relistOptions[0] : undefined;
     const relist = selectedRelist ? attr(selectedRelist, "value") : undefined;
+    const textOf = (node: Node): string => 'value' in node ? String(node.value) : 'childNodes' in node ? node.childNodes.map(textOf).join('') : '';
+    const shippingControls = fields.filter(n => ['input', 'option'].includes(n.tagName) &&
+      /^(?:shipping|shipfee|shipname|other_ship)/.test(attr(n, 'name') || attr(n, 'id') || '')).map(n => {
+        const id = attr(n, 'id') ?? '';
+        const label = id ? fields.find(label => label.tagName === 'label' && attr(label, 'for') === id) : null;
+        return { name: attr(n, 'name') ?? '', id, value: (attr(n, 'value') ?? '').slice(0, 100), label: label ? textOf(label).trim().slice(0, 150) : '' };
+      });
     return { ok: true, value: {
       previewPath: PREVIEW_PATH, conditionValues: conditions, quantityValues: quantities.map(Number),
       shippingPayerDefault: payer === "buyer" || payer === "seller" ? payer : null,
+      shippingControls,
       automaticRelistDefault: relist && /^[0-3]$/.test(relist) ? Number(relist) : null,
       csrfPresent: true,
       imageCsrfPresent: fields.some(n => n.tagName === "input" && attr(n, "id") === "img_crumb" && !!attr(n, "value")),

@@ -10,7 +10,6 @@ export function ShippingPackagesEditor({ packages, onChange, estimatedRank }: { 
     <div className="space-y-3">{packages.map((p, i) => <div key={p.id} className="rounded border bg-white p-3">
       <div className="mb-2 flex items-center justify-between"><strong className="text-sm">{i + 1}口目</strong>
         {packages.length > 1 && <button type="button" className="text-xs text-red-700 underline" onClick={() => onChange(packages.filter(x => x.id !== p.id))} aria-label={`${i + 1}口目を削除`}>削除</button>}</div>
-      <label className="block text-xs text-gray-600">荷物名（任意）<input aria-label={`${i + 1}口目の荷物名`} className="mt-1 block w-full rounded border p-2 text-sm" value={p.name} maxLength={80} placeholder="本体、脚など" onChange={e => onChange(packages.map(x => x.id === p.id ? { ...x, name: e.target.value } : x))} /></label>
       <label className="mt-2 block text-xs text-gray-600">家財便サイズ<select aria-label={`${i + 1}口目の家財便サイズ`} className="mt-1 block w-full rounded border bg-white p-2 text-sm" value={p.rank ?? "AUTO"}
         onChange={e => onChange(packages.map(x => x.id === p.id ? { ...x, rank: e.target.value === "AUTO" ? null : e.target.value as ShippingRank } : x))}>
         <option value="AUTO">配送判定に合わせる{estimatedRank ? `：${SHIPPING_RANK_LABEL[estimatedRank]}` : "（未判定）"}</option>

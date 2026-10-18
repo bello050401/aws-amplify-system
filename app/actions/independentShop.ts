@@ -6,6 +6,7 @@ import { resolveListingImageDownloadUrl } from "@/lib/listing/mercari/csv/buildE
 import { listInventoryPhotoAssetsAction } from "./photoRegistration";
 import { buildListingImageCandidates } from "@/lib/photoRegistration/inventoryListingAdapter";
 import { createListingWorkflow, ListingError, type Source, type Receipt, type ImageRef } from "@/lib/listing/independentShop/workflow";
+import {commonCategory,commonChannelPrice} from '@/lib/listing/commonSettings';
 import { independentShopConnection } from "@/lib/listing/independentShop/connection";
 async function source(id:string):Promise<Source>{
  const [item,draft]=await Promise.all([getInventoryDetail(id),getListingDraftForInventory(id)]);
@@ -20,7 +21,8 @@ async function source(id:string):Promise<Source>{
   const savedBrandImage=ref.source!=="PHOTO_ASSET"&&/^inventory\/listing-branded\/[a-f0-9-]{36}\.jpg$/.test(ref.storageKey);
   if(!matching&&!savedBrandImage)throw new ListingError("この商品の出品画像として確認できない画像があります。画像を選び直して保存してください。");
  }
- return {id:item.id,name:draft.title||item.name,description:draft.description||"",price:draft.price??item.plannedSalePrice??0,sku:item.sku||"",quantity:item.quantity,version:item.updatedAt+":"+draft.updatedAt,images:refs};
+ const category=commonCategory(draft.commonCategoryId);
+ return {id:item.id,name:draft.title||item.name,description:draft.description||"",price:commonChannelPrice(draft,'INDEPENDENT')??0,sku:item.sku||"",quantity:item.quantity,version:item.updatedAt+":"+draft.updatedAt,images:refs,...(category?{categories:[category.independent.id]}:{})};
 }
 async function image(ref:ImageRef){
  const signed=await resolveListingImageDownloadUrl(ref);if(!signed)throw new ListingError("商品画像を取得できません。");

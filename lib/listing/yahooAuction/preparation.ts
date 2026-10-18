@@ -1,15 +1,17 @@
 import type { ListingConditionCode, ListingDraftRecord, ListingImageRef, ListingShippingMethod } from "../types";
+import { defaultYahooEndAt } from "./ending";
+import { commonCategory,commonChannelPrice } from '../commonSettings';
 
 export type YahooAuctionInput = {
   title: string; description: string; condition: ListingConditionCode | null;
   format: "FIXED" | "AUCTION"; priceYen: number | null; buyNowYen: number | null;
   quantity: number; categoryId: string; categoryName: string;
-  endAtJst: string; autoExtension: boolean; shippingMethod?: ListingShippingMethod;
+  endAtJst: string; automaticEnd?: boolean; autoExtension: boolean; shippingMethod?: ListingShippingMethod;
 };
 export type YahooAuctionPayload = {
   schemaVersion: 1; input: YahooAuctionInput;
   source: { draftId: string; draftUpdatedAt: string; images: ListingImageRef[];
-    shippingMethod: ListingShippingMethod };
+    shippingMethod: ListingShippingMethod; commonCategoryId?: string | null; commonPriceYen?: number | null };
 };
 export type YahooAuctionSaved = { revision: number; updatedAt: string; payload: YahooAuctionPayload };
 const conditions = new Set(["NEW", "LIKE_NEW", "NO_NOTABLE_DAMAGE", "SLIGHT_DAMAGE", "DAMAGE", "BAD"]);
@@ -17,9 +19,25 @@ export const yahooInventoryIdValid = (id: unknown): id is string => typeof id ==
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
 export function initialYahooAuctionInput(draft: ListingDraftRecord | null): YahooAuctionInput {
+  const category=commonCategory(draft?.commonCategoryId)?.yahoo;
   return { title: draft?.title ?? "", description: draft?.description ?? "", condition: draft?.condition ?? null,
-    format: "FIXED", priceYen: null, buyNowYen: null, quantity: 1,
-    categoryId: "", categoryName: "", endAtJst: "", autoExtension: true };
+    format: "FIXED", priceYen: draft?commonChannelPrice(draft,'YAHOO'):null, buyNowYen: null, quantity: 1,
+    categoryId: category?.id??"", categoryName: category?.path??"", endAtJst: defaultYahooEndAt(), automaticEnd: true, autoExtension: false };
+}
+
+/** Only changed common choices replace channel choices; unrelated common edits retain manual overrides. */
+export function restoreYahooAuctionInput(draft: ListingDraftRecord | null, saved: YahooAuctionSaved | null): YahooAuctionInput {
+  if (!saved) return initialYahooAuctionInput(draft);
+  const input = { ...saved.payload.input };
+  if (!draft) return input;
+  const category = commonCategory(draft.commonCategoryId)?.yahoo;
+  if (category && saved.payload.source.commonCategoryId !== draft.commonCategoryId) {
+    input.categoryId = category.id;
+    input.categoryName = category.path;
+  }
+  const price = commonChannelPrice(draft, 'YAHOO');
+  if (draft.channelPrices && saved.payload.source.commonPriceYen !== price) input.priceYen = price;
+  return input;
 }
 
 function validJstDate(value: string): boolean {
@@ -41,11 +59,11 @@ export function parseYahooAuctionInput(value: unknown): YahooAuctionInput | null
       typeof v.categoryId !== "string" || !/^(?:[1-9]\d{0,11})?$/.test(v.categoryId) ||
       typeof v.categoryName !== "string" || v.categoryName.length > 300 ||
       typeof v.endAtJst !== "string" || v.endAtJst !== "" && !validJstDate(v.endAtJst) ||
-      typeof v.autoExtension !== "boolean" || v.shippingMethod !== undefined && !["KAZAI", "SAGAWA"].includes(v.shippingMethod)) return null;
+      typeof v.autoExtension !== "boolean" || v.automaticEnd !== undefined && typeof v.automaticEnd !== "boolean" || v.shippingMethod !== undefined && !["KAZAI", "SAGAWA"].includes(v.shippingMethod)) return null;
   return { title: v.title.trim(), description: v.description, condition: v.condition,
     format: v.format, priceYen: v.priceYen, buyNowYen: v.format === "AUCTION" ? v.buyNowYen : null,
     quantity: v.quantity, categoryId: v.categoryId, categoryName: v.categoryName.trim(),
-    endAtJst: v.endAtJst, ...(v.shippingMethod ? {shippingMethod:v.shippingMethod} : {}), autoExtension: v.format === "AUCTION" && v.autoExtension };
+    endAtJst: v.endAtJst, automaticEnd: v.automaticEnd !== false, ...(v.shippingMethod ? {shippingMethod:v.shippingMethod} : {}), autoExtension: v.format === "AUCTION" && v.autoExtension };
 }
 
 export function yahooPreparationIssues(input: YahooAuctionInput, imageCount: number, availableQuantity: number,
@@ -59,8 +77,8 @@ export function yahooPreparationIssues(input: YahooAuctionInput, imageCount: num
   if (input.format === "AUCTION" && input.priceYen && input.buyNowYen && input.buyNowYen < input.priceYen)
     issues.push("即決価格を開始価格以上にしてください。");
   if (!input.categoryId) issues.push("ヤフオクのカテゴリーを指定してください。");
-  if (!input.endAtJst) issues.push("終了日時を指定してください。");
-  else if (Date.parse(`${input.endAtJst}:00+09:00`) <= now) issues.push("終了日時を未来の日時に変更してください。");
+  if (input.automaticEnd === false && !input.endAtJst) issues.push("終了日時を指定してください。");
+  else if (input.automaticEnd === false && Date.parse(`${input.endAtJst}:00+09:00`) <= now) issues.push("終了日時を未来の日時に変更してください。");
   if (input.quantity > availableQuantity) issues.push("出品数量が現在の在庫数を超えています。");
   if (imageCount === 0) issues.push("上の共通下書きで出品画像を選んで保存してください。");
   if (imageCount > 10) issues.push("出品画像を10枚以内にしてください。");

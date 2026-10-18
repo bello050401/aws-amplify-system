@@ -1,4 +1,5 @@
 import "server-only";
+import { commonCategory, normalizeChannelPrices, type CommonChannelPrices } from './commonSettings';
 import { normalizeShippingPackages } from "@/lib/shipping/packages";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getInventoryDetail } from "@/lib/inventory/queries";
@@ -115,6 +116,8 @@ function toListingDraftRecord(row: {
   id: string;
   inventoryId: string;
   title: string;
+  commonCategoryId?: string | null;
+  channelPrices?: unknown;
   description?: string | null;
   price?: number | null;
   condition?: ListingConditionCode | null;
@@ -131,6 +134,8 @@ function toListingDraftRecord(row: {
     id: row.id,
     inventoryId: row.inventoryId,
     title: row.title,
+    commonCategoryId: row.commonCategoryId ?? null,
+    channelPrices: normalizeChannelPrices(tolerantParseJson(row.channelPrices)),
     description: row.description ?? null,
     price: row.price ?? null,
     condition: row.condition ?? null,
@@ -791,6 +796,8 @@ export async function bulkCreateListingDrafts(
 
 export interface ListingDraftInput {
   title: string;
+  commonCategoryId?: string | null;
+  channelPrices?: CommonChannelPrices | null;
   description: string;
   price: number;
   condition: ListingConditionCode;
@@ -840,6 +847,8 @@ export async function saveListingDraft(
   who: string | null,
 ): Promise<ListingDraftRecord> {
   if (!input.title.trim()) throw new Error("出品タイトルを入力してください。");
+  if(input.commonCategoryId && !commonCategory(input.commonCategoryId))throw new Error('共通の商品カテゴリを選び直してください。');
+  if(input.channelPrices!==undefined)normalizeChannelPrices(input.channelPrices);
 
   // いずれも独立した読み取り。書き込みは全取得と対象カテゴリーの検証後に行う。
   const [inventory, categoryNameOf, existing] = await Promise.all([
@@ -872,6 +881,8 @@ export async function saveListingDraft(
 
   const fields = {
     title: input.title.trim(),
+    commonCategoryId: input.commonCategoryId === undefined ? existing?.commonCategoryId : input.commonCategoryId,
+    channelPrices: stringifyListingJson(input.channelPrices === undefined ? existing?.channelPrices ?? null : input.channelPrices),
     description: input.description.trim() || undefined,
     price: input.price,
     condition: input.condition,

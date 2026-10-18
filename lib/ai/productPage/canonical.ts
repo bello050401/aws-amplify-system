@@ -9,15 +9,20 @@ import { generateProductPage, preserveCriticalTitleDisclosures, type ProductPage
 import { buildGuidanceBlock, listActiveGuidance, type GuidanceRule } from "./guidance";
 import { resolveLinkedBaseItem, type BaseLink } from "./baseLink";
 import { buildResolvedProductContext, type ResolvedProductContext } from "@/lib/inquiry/productContext";
-import { buildListingFacts, type ListingFacts } from "./listingFacts";
+import { buildListingFacts, buildShippingWarning, withCurrentShippingWarning, type ListingFacts } from "./listingFacts";
+import { descriptionPackageSelection } from "./shippingSelection";
+import type { ShippingPackage } from "@/lib/shipping/packages";
+import type { ListingImageRef } from "@/lib/listing/types";
+import { commonCategory } from "@/lib/listing/commonSettings";
 import { getListingDraftForInventory } from "@/lib/listing/service";
 import { DEFAULT_LISTING_SHIPPING_METHOD, type ListingShippingMethod } from "@/lib/listing/types";
 import { formatSagawaSize } from "@/lib/shipping/sagawaSize";
 import { findBrandByName } from "@/lib/brands/catalog";
 import { verifiedBrandOverview } from "@/lib/brands/verifiedOverview";
 import { researchProductIntroduction } from "./productResearch";
-import { resolveTopImage } from "@/lib/inventory/imageTypes";
-import { observeStoredProductPhoto } from "./photoObservation";
+import { observeStoredProductPhoto, observeSignedProductPhoto } from "./photoObservation";
+import { chooseIntroductionPhoto } from "./introductionPhoto";
+import { registeredIntroductionPhotos } from "./registeredPhotos";
 import {
   buildConditionSection,
   buildProductDetailSection,
@@ -172,7 +177,8 @@ export interface CanonicalGenerationResult extends ProductPageResult {
  */
 export async function generateCanonicalProductPage(
   inventoryId: string,
-  options: { shippingMethod?: ListingShippingMethod; listingTitle?: string } = {},
+  options: { shippingMethod?: ListingShippingMethod; listingTitle?: string;
+    shippingPackages?: ShippingPackage[]; images?: ListingImageRef[]; commonCategoryId?: string | null } = {},
 ): Promise<CanonicalGenerationResult> {
   const item = await getInventoryDetail(inventoryId);
   if (!item) throw new Error("対象の在庫が見つかりません。");
@@ -185,9 +191,10 @@ export async function generateCanonicalProductPage(
   //
   // **サイズやAIから自動で決めない。** ここに推測を入れると、担当者が
   // 佐川を選んでいるのに家財便の文面が出る、という食い違いが起きる。
+  const savedDraft = await getListingDraftForInventory(inventoryId);
   const shippingMethod =
     options.shippingMethod ??
-    (await getListingDraftForInventory(inventoryId))?.shippingMethod ??
+    savedDraft?.shippingMethod ??
     DEFAULT_LISTING_SHIPPING_METHOD;
 
   const [archiveRows, styleProfile, categories, guidance] = await Promise.all([
@@ -197,7 +204,9 @@ export async function generateCanonicalProductPage(
     listActiveGuidance(),
   ]);
   const archive = toStyleReferences(archiveRows);
-  const categoryName = categories.find((c: { id: string; name: string }) => c.id === item.categoryId)?.name ?? null;
+  const operationalCategory = categories.find((c: { id: string; name: string }) => c.id === item.categoryId)?.name ?? null;
+  const categoryName = commonCategory(options.commonCategoryId ?? savedDraft?.commonCategoryId)?.label
+    ?? inferCategory(item.name) ?? operationalCategory;
 
   // ── BASEからの補完(2026-09-03 追加指示 §44) ────────────────
   //
@@ -298,6 +307,13 @@ export async function generateCanonicalProductPage(
     shippingMethod,
   });
 
+  const packageSelection = descriptionPackageSelection(options.shippingPackages ?? savedDraft?.shippingPackages, facts.shippingRank);
+  facts.shippingRank = packageSelection.ranks[0];
+  facts.shippingRankReason = packageSelection.reason;
+  facts.warnings = withCurrentShippingWarning(facts.warnings, buildShippingWarning({
+    shippingMethod, shippingRankReason: facts.shippingRankReason,
+    sagawaUnavailableReason: facts.sagawa.unavailableReason, sagawaNote: facts.sagawa.note,
+  }));
   const conditionSection = buildConditionSection({
     maintenance: facts.maintenance,
     nonFabric: facts.nonFabric,
@@ -311,12 +327,14 @@ export async function generateCanonicalProductPage(
       depth: facts.depth,
       height: facts.height,
       overallLength: facts.overallLength,
+      armHeight: customFieldText("armHeight"),
       seat: facts.seat,
     }),
     shipping: buildShippingSection({
       // §1 担当者が選んだ配送方法。渡されなければ既定(らくらく家財便)。
       method: shippingMethod,
       rank: facts.shippingRank,
+      packageRanks: packageSelection.ranks,
       sagawaSizeLabel: formatSagawaSize(facts.sagawa),
       unresolvedReason: facts.shippingRankReason,
     }),
@@ -327,10 +345,10 @@ export async function generateCanonicalProductPage(
   // infer identity from a generated title or a visually similar product.
   const researchModel = customFieldText("modelNumber") ?? productContext?.details.modelNumber?.value ?? null;
   const productReferences = await researchProductIntroduction(brand, researchModel);
-  const topPhoto = resolveTopImage(item.images);
-  const photoObservations = topPhoto
-    ? await observeStoredProductPhoto(topPhoto.mediumKey ?? topPhoto.thumbnailKey ?? topPhoto.storageKey)
-    : [];
+  const registeredPhotos = await registeredIntroductionPhotos(item.id);
+  const topPhoto = chooseIntroductionPhoto(item.images, registeredPhotos, options.images ?? savedDraft?.images);
+  const photoObservations = topPhoto?.kind === "photo" ? await observeSignedProductPhoto(topPhoto.url)
+    : topPhoto?.kind === "storage" ? await observeStoredProductPhoto(topPhoto.key) : [];
   const result = await generateProductPage({
     inventoryId: item.id,
     listingTitle: options.listingTitle?.trim() || undefined,

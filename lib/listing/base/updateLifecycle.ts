@@ -6,6 +6,7 @@ import {
 } from "@/lib/listing/service";
 import { getInventoryDetail, listCategories } from "@/lib/inventory/queries";
 import { isEcListingEligible } from "../ecEligibility";
+import { commonCategory } from "../commonSettings";
 import { getBaseConnectionState } from "@/lib/base/connectionState";
 import { baseImageUrl } from "../ecImage";
 import {
@@ -18,6 +19,7 @@ import {
   editManualBaseContent,
   addManualBaseImage,
   deleteManualBaseImage,
+  setManualBaseCategory,
 } from "./adapter";
 import type { EcReview } from "../ecManagement";
 type Result = Pick<
@@ -64,8 +66,7 @@ async function source(id: string, claimToken?: string) {
     (c) => c.id === item.categoryId,
   )?.name;
   if (
-    !category ||
-    !isEcListingEligible(category) ||
+    !isEcListingEligible(category ?? null) ||
     item.saleEndDate ||
     !Number.isSafeInteger(item.quantity) ||
     item.quantity < 0
@@ -74,7 +75,7 @@ async function source(id: string, claimToken?: string) {
   const content = {
     title: row.overrideTitle ?? draft.title,
     detail: row.overrideDescription ?? draft.description ?? "",
-    price: row.overridePrice ?? draft.price ?? 0,
+    price: draft.channelPrices ? draft.channelPrices.BASE ?? 0 : row.overridePrice ?? draft.price ?? 0,
     stock: item.quantity,
   };
   if (
@@ -140,6 +141,7 @@ export async function reviewBaseContentUpdate(id: string): Promise<Result> {
         : "保存した商品情報をBASEに反映します。",
       details: [
         "商品名・説明・単価・数量を更新します。",
+        ...(s.draft.commonCategoryId ? ["共通の商品カテゴリをBASEに反映します。"] : []),
         `画像を共通タブの${s.draft.images.length}枚に揃えます。`,
         remote.visible
           ? "公開中のまま更新します。"
@@ -236,6 +238,9 @@ export async function executeBaseContentUpdate(
       step > count &&
       readback.images.length === count &&
       readback.imageSlots.slice(0, count).every(Boolean);
+    const category = commonCategory(s.draft.commonCategoryId)?.base;
+    if (done && category)
+      await setManualBaseCategory(remote.id, category.id, s.mapping.baseCommonCategoryId);
     const mapping = {
       ...s.mapping,
       baseImageSource: hash([s.draft.id, s.draft.images]),
@@ -245,6 +250,7 @@ export async function executeBaseContentUpdate(
         ? {
             baseContentSource: s.fingerprint,
             baseContentRemote: hash(readback),
+            ...(category ? { baseCommonCategoryId: category.id } : {}),
           }
         : {}),
     };

@@ -13,6 +13,7 @@
  * 検証できるようにする(実DBを一切叩かない)。
  */
 import { resolveEffectiveListingFields } from "@/lib/listing/types";
+import { commonCategory, commonChannelPrice } from "@/lib/listing/commonSettings";
 import type { ChannelListingRecord, ListingDraftRecord } from "@/lib/listing/types";
 import { conditionCodeToCsvValue } from "./conditionCode";
 import type { MercariCsvRowFields } from "./types";
@@ -145,7 +146,7 @@ export function assembleMercariCsvRowFields(
 
   const resolved = channelListing
     ? resolveEffectiveListingFields(draft, channelListing)
-    : { title: draft.title, description: draft.description ?? "", price: draft.price ?? 0 };
+    : { title: draft.title, description: draft.description ?? "", price: commonChannelPrice(draft, 'MERCARI_SHOPS') ?? 0 };
 
   if (!draft.title && !channelListing?.overrideTitle) {
     return { ok: false, inventoryId, displayId, reasons: ["タイトルが未設定です"] };
@@ -154,7 +155,7 @@ export function assembleMercariCsvRowFields(
     return { ok: false, inventoryId, displayId, reasons: ["出品価格が未設定です(成約済み販売価格を黙って転用しません)"] };
   }
 
-  const categoryId = channelListing?.categoryMapping?.mercariCategoryId ?? null;
+  const categoryId = channelListing?.categoryMapping?.mercariCategoryId ?? commonCategory(draft.commonCategoryId)?.mercari.id ?? null;
   if (!categoryId) {
     return {
       ok: false,
@@ -241,7 +242,7 @@ export function assembleMercariCsvRowFields(
     provenance: {
       title: channelListing?.overrideTitle ? "override" : "draft",
       description: channelListing?.overrideDescription ? "override" : "draft",
-      price: channelListing?.overridePrice != null ? "override" : "draft",
+      price: !draft.channelPrices && channelListing?.overridePrice != null ? "override" : "draft",
     },
   };
 }

@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { getListingDraftForInventory } from "@/lib/listing/service";
 import { updateObservedWebHttpContent } from "@/lib/listing/mercariBridge/webHttpContentUpdate";
 import { ecImageJpeg } from "@/lib/listing/ecImage";
+import { commonChannelPrice } from "@/lib/listing/commonSettings";
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export async function renewMercariHttpConnectionAction(): Promise<"CONNECTED" | "AUTH_REQUIRED" | "UNAVAILABLE"> {
@@ -54,7 +55,7 @@ export async function updateMercariHttpContentAction(inventoryId:string,digest:s
         if(!draft||!item||item.saleEndDate)throw Error("SOURCE");
         const category=(await listCategories(item.categoryId)).find(c=>c.id===item.categoryId);
         if(!category||!isEcListingEligible(category.name))throw Error("CATEGORY");
-        const source={title:draft.title,description:draft.description??"",price:draft.price??0,quantity:item.quantity,images:draft.images};
+        const source={title:draft.title,description:draft.description??"",price:commonChannelPrice(draft,'MERCARI_SHOPS')??0,quantity:item.quantity,images:draft.images};
         return {...source,fingerprint:createHash("sha256").update(JSON.stringify([draft.id,draft.updatedAt,item.updatedAt,source])).digest("hex")};
       },
     });

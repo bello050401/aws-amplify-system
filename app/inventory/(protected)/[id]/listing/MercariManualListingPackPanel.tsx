@@ -22,15 +22,15 @@ import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker
 import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
 
 export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
-  hasDraft, hasShopsRecord, mode, showExecution = true, commonPrice = null }: { inventoryId: string; availableQuantity: number;
-  hasDraft: boolean; hasShopsRecord: boolean; mode: "HTTP" | "PC"; showExecution?: boolean; commonPrice?: number | null }) {
+  hasDraft, hasShopsRecord, mode, showExecution = true, commonPrice = null, commonCategory = null }: { inventoryId: string; availableQuantity: number;
+  hasDraft: boolean; hasShopsRecord: boolean; mode: "HTTP" | "PC"; showExecution?: boolean; commonPrice?: number | null; commonCategory?:{id:string;path:string}|null }) {
   const isB005396 = inventoryId.toLowerCase() === B005396_INVENTORY_ID;
   const isHttp = mode === "HTTP";
-  const [price, setPrice] = useState(isB005396 ? "99999" : "");
+  const [price, setPrice] = useState(isB005396 ? "99999" : commonPrice==null?'':String(commonPrice));
   const [quantity, setQuantity] = useState("");
   const [shippingMethod,setShippingMethod]=useState<ShopsDeliveryMethod>("METHOD_TYPE_UNDECIDED");
   const [descriptionSuffix,setDescriptionSuffix]=useState("");
-  const [category, setCategory] = useState<{ id: string; path: string } | null>(null);
+  const [category, setCategory] = useState<{ id: string; path: string } | null>(commonCategory);
   const [brandQuery, setBrandQuery] = useState("");
   const [brand, setBrand] = useState<BrandMasterEntry | null>(null);
   const [brandResults, setBrandResults] = useState<BrandMasterEntry[]>([]);
@@ -54,7 +54,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const selectionRevision = useRef(0);
   const selectionRef = useRef<ManualPackSelection>({
-    price: isB005396 ? "99999" : "", quantity: "", categoryId: null,
+    price: isB005396 ? "99999" : commonPrice==null?'':String(commonPrice), quantity: "", categoryId: commonCategory?.id??null,
     brandId: null,
   });
   // The HTTP panel lives below the PC panel on the server page. A draft saved

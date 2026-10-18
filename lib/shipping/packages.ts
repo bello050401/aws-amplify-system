@@ -1,7 +1,7 @@
 import { SHIPPING_RANKS, type ShippingRank } from "./rank";
 import { calculateMedian, MIN_DISTINCT_REGIONS_FOR_MEDIAN } from "./referencePrice";
 import type { ShippingRateRecord } from "./types";
-import { SHIPPING_ORIGIN_PREFECTURE } from "./prefectures";
+import { JAPAN_PREFECTURES, SHIPPING_ORIGIN_PREFECTURE } from "./prefectures";
 import { isKazaiServiceName, KAZAI_PROVIDER_NAME } from "./serviceName";
 
 export interface ShippingPackage { id: string; name: string; rank: ShippingRank | null }
@@ -43,7 +43,8 @@ export interface PackageQuote {
 
 /** A selected destination applies to every package. Unavailable or missing rates never mean zero. */
 export function buildPackageQuote(input: { packages: ShippingPackage[]; estimatedRank: ShippingRank | null;
-  plannedPrice: number | null; rates: PackageRate[]; asOfDate: string; destinationKey?: string | null }): PackageQuote {
+  plannedPrice: number | null; rates: PackageRate[]; asOfDate: string; destinationKey?: string | null;
+  requireAllPrefectures?: boolean }): PackageQuote {
   const packages = normalizeShippingPackages(input.packages);
   const latest = new Map<string, PackageRate>();
   const regionKey = (r: PackageRate) => JSON.stringify([r.destinationPrefecture, r.destinationArea]);
@@ -57,11 +58,11 @@ export function buildPackageQuote(input: { packages: ShippingPackage[]; estimate
   }
   // Choose the latest row before rejecting stale/unconfirmed rates: an old price must not reappear.
   const rates = [...latest.values()].filter(r => r.verifiedAt && r.status !== "STALE" && r.status !== "UNCONFIRMED");
-  const selectedRanks = new Set(packages.map(p => p.rank ?? input.estimatedRank));
+  const selectedRanks = new Set(packages.map((p,i) => p.rank ?? (i===0?input.estimatedRank:null)));
   const regionMap = new Map(rates.filter(r => selectedRanks.has(r.rank)).map(r => [regionKey(r),
     { key: regionKey(r), label: [r.destinationPrefecture, r.destinationArea].filter(Boolean).join(" ") }]));
   const rows = packages.map((p, i): PackageFee => {
-    const rank = p.rank ?? input.estimatedRank;
+    const rank = p.rank ?? (i===0?input.estimatedRank:null);
     const row = { id: p.id, name: p.name || `${i + 1}口目`, rank, fee: null, reason: null };
     if (!rank) return { ...row, reason: "サイズ未選択" };
     if (rank === "OVERSIZE") return { ...row, reason: "個別見積りが必要です" };
@@ -72,6 +73,10 @@ export function buildPackageQuote(input: { packages: ShippingPackage[]; estimate
       if (r.status === "UNAVAILABLE" || r.price == null) return { ...row, reason: "配送不可・要確認" };
       if (!validFee(r)) return { ...row, reason: "料金の確認が必要です" };
       return { ...row, fee: r.price + (r.surcharge ?? 0) };
+    }
+    if(input.requireAllPrefectures){
+      const fee=nationwideShippingMedian(candidates);
+      return fee===null ? {...row,reason:'47都道府県の有効な料金が揃っていません'} : {...row,fee};
     }
     const priced = candidates.filter(validFee);
     if (new Set(priced.map(r => r.destinationPrefecture)).size < MIN_DISTINCT_REGIONS_FOR_MEDIAN)
@@ -88,4 +93,15 @@ export function buildPackageQuote(input: { packages: ShippingPackage[]; estimate
 function validFee(rate: PackageRate): rate is PackageRate & { price: number } {
   return rate.status !== "UNAVAILABLE" && rate.price != null && Number.isSafeInteger(rate.price) &&
     rate.price >= 0 && (rate.surcharge == null || Number.isSafeInteger(rate.surcharge) && rate.surcharge >= 0);
+}
+
+/** One vote per prefecture. Hokkaido's four zones contribute their median, not four votes. */
+export function nationwideShippingMedian(rates: PackageRate[]): number | null {
+  const totals: number[]=[];
+  for(const prefecture of JAPAN_PREFECTURES){
+    const rows=rates.filter(r=>r.destinationPrefecture===prefecture);
+    if(rows.length!==(prefecture==='北海道'?4:1)||rows.some(r=>!validFee(r)))return null;
+    totals.push(calculateMedian(rows.map(r=>r.price!+(r.surcharge??0)).sort((a,b)=>a-b)));
+  }
+  return calculateMedian(totals.sort((a,b)=>a-b));
 }

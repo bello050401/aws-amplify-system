@@ -75,12 +75,12 @@ export type YahooFixedPreviewInput = {
   priceYen: number; quantity: number; categoryId: string;
   closingDateJst: string; closingHourJst: number;
   relistId?: string;
-  // First observed shipping configuration. Other configurations need their own evidence.
-  shipping: { payer: "seller"; method: "家財おまかせ便" | "佐川急便"; prefecture: "11"; schedule: "2" };
+  // Buyer-paid shipping is quoted after the destination is known (shippinginput=later).
+  shipping: { payer: "seller" | "buyer"; method: "家財おまかせ便" | "佐川急便"; prefecture: "11"; schedule: "2" };
 };
 export type YahooPreviewEvidence = {
   title: string; priceYen: number; quantity: number; categoryId: string;
-  imageCount: number; shippingIncluded: true; shippingMethod: string;
+  imageCount: number; shippingIncluded: boolean; shippingMethod: string;
   endAt: string; publicationAttempted: false;
 };
 export function validPreviewInput(input: YahooFixedPreviewInput, image: YahooUploadedImage): boolean {
@@ -91,7 +91,7 @@ export function validPreviewInput(input: YahooFixedPreviewInput, image: YahooUpl
       !Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > 9 ||
       !/^[1-9]\d{0,11}$/.test(input.categoryId) || !/^\d{4}-\d{2}-\d{2}$/.test(input.closingDateJst) ||
       !Number.isSafeInteger(input.closingHourJst) || input.closingHourJst < 0 || input.closingHourJst > 23 ||
-      input.shipping?.payer !== "seller" || !["家財おまかせ便", "佐川急便"].includes(input.shipping.method) ||
+      !["seller", "buyer"].includes(input.shipping?.payer) || !["家財おまかせ便", "佐川急便"].includes(input.shipping.method) ||
       input.shipping.prefecture !== "11" || input.shipping.schedule !== "2" ||
       (input.relistId !== undefined && !/^[a-z][0-9]{8,12}$/.test(input.relistId)) || !image) return false;
   try {
@@ -125,7 +125,7 @@ function applyInput(fields: URLSearchParams, input: YahooFixedPreviewInput, imag
     Description_rte: "", Description_rte_work: "", submit_description: "text",
     istatus: input.condition, Quantity: String(input.quantity), salesmode: "buynow",
     StartPrice: String(input.priceYen), BidOrBuyPrice: String(input.priceYen),
-    loc_cd: input.shipping.prefecture, shipping: "seller", shippinginput: "now", shiptime: "payment",
+    loc_cd: input.shipping.prefecture, shipping: input.shipping.payer, shippinginput: input.shipping.payer === "buyer" ? "later" : "now", shiptime: "payment",
     is_other_ship: "yes", shipname1: input.shipping.method, shipmethod: "other", shipschedule: input.shipping.schedule,
     ClosingYMD: input.closingDateJst, ClosingTime: String(input.closingHourJst), Duration: String(days),
     tmpClosingYMD: input.closingDateJst, tmpClosingTime: "", numResubmit: "0",
@@ -134,6 +134,8 @@ function applyInput(fields: URLSearchParams, input: YahooFixedPreviewInput, imag
     productSearchTitle: "", box_condition: "", wrapping_paper_condition: "", accessories: "",
   };
   for (const [k, v] of Object.entries(values)) fields.set(k, v);
+  // A stale fee or second shipping method must not change the buyer's quote.
+  for (let i = 1; i <= 10; i++) { fields.set(`shipfee${i}`, ""); if (i > 1) fields.set(`shipname${i}`, ""); }
   for (let i = 1; i <= 10; i++) {
     fields.set(`ImageFullPath${i}`, all[i-1]?.url ?? "");
     fields.set(`ImageWidth${i}`, all[i-1] ? String(all[i-1].width) : "");
@@ -197,10 +199,12 @@ export function verifyPreview(html: string, input: YahooFixedPreviewInput, image
     const expected = { mode: input.relistId ? "oresubmit" : "submit", Title: input.title, category: input.categoryId, Quantity: String(input.quantity),
       istatus: input.condition, salesmode: "buynow", StartPrice: String(input.priceYen), BidOrBuyPrice: String(input.priceYen),
       Description: escapeHtml(input.description).replace(/\r?\n/g, "<br>"),
-      shipping: "seller", shipname1: input.shipping.method, shipmethod: "other", loc_cd: "11", shipschedule: "2",
+      shipping: input.shipping.payer, shipname1: input.shipping.method, shipmethod: "other", loc_cd: "11", shipschedule: "2",
       ClosingYMD: input.closingDateJst, ClosingTime: String(input.closingHourJst), numResubmit: "0", AutoExtension: "no",
       Offer: "0", featuredAmount: "", cpaAmount: "", totalCharges: "0", insertionFeeTotal: "0", is_paypay_fleamarket_cross_listing: "0" };
     if (Object.entries(expected).some(([k, v]) => values.get(k) !== v)) return null;
+    if (input.shipping.payer === "buyer" && (values.get("shippinginput") !== "later" ||
+      Array.from({length: 10}, (_, i) => i + 1).some(i => !!values.get(`shipfee${i}`) || i > 1 && !!values.get(`shipname${i}`)))) return null;
     for (let i = 1; i <= 10; i++) {
       const image = all[i-1];
       if (image ? values.get(`ImageFullPath${i}`) !== image.url || values.get(`ImageWidth${i}`) !== String(image.width) || values.get(`ImageHeight${i}`) !== String(image.height) : !!values.get(`ImageFullPath${i}`)) return null;
@@ -212,6 +216,6 @@ export function verifyPreview(html: string, input: YahooFixedPreviewInput, image
     const jst = new Date(Number(end) * 1000 + 9 * 3600_000).toISOString();
     if (jst.slice(0, 10) !== input.closingDateJst || Number(jst.slice(11, 13)) !== input.closingHourJst) return null;
     return { title: input.title, priceYen: input.priceYen, quantity: input.quantity, categoryId: input.categoryId,
-      imageCount: all.length, shippingIncluded: true, shippingMethod: input.shipping.method, endAt, publicationAttempted: false };
+      imageCount: all.length, shippingIncluded: input.shipping.payer === "seller", shippingMethod: input.shipping.method, endAt, publicationAttempted: false };
   } catch { return null; }
 }

@@ -8,6 +8,7 @@ import type {YahooListingResult} from './listingResult';
 import type {YahooListingEvidence} from './webHttpListing';
 import {WorkflowFailure,uncertainStage,type WorkflowState,type YahooWorkflowStore} from './workflowStore';
 import type {YahooWorkflowView} from './workflowTypes';
+import {resolvedYahooEndAt} from './ending';
 
 type Context={saved:YahooAuctionSaved|null;draft:ListingDraftRecord|null;availableQuantity:number;canPrepare:boolean};
 type Store=Pick<YahooWorkflowStore,'pk'|'read'|'commit'|'account'>;
@@ -18,8 +19,8 @@ export function previewInput(saved:YahooAuctionSaved,relistId?:string):YahooFixe
   if(i.format!=='FIXED')throw new WorkflowFailure('FIXED_PRICE_ONLY');
   if(!i.condition||!i.priceYen)throw new WorkflowFailure('INVALID_INPUT');
   return {title:i.title,description:i.description,condition:condition[i.condition],priceYen:i.priceYen,quantity:i.quantity,
-    categoryId:i.categoryId,closingDateJst:i.endAtJst.slice(0,10),closingHourJst:Number(i.endAtJst.slice(11,13)),
-    ...(relistId?{relistId}:{}),shipping:{payer:'seller',method:(saved.payload.input.shippingMethod??saved.payload.source.shippingMethod)==='KAZAI'?'家財おまかせ便':'佐川急便',prefecture:'11',schedule:'2'}};
+    categoryId:i.categoryId,closingDateJst:resolvedYahooEndAt(i).slice(0,10),closingHourJst:Number(resolvedYahooEndAt(i).slice(11,13)),
+    ...(relistId?{relistId}:{}),shipping:{payer:'buyer',method:(saved.payload.input.shippingMethod??saved.payload.source.shippingMethod)==='KAZAI'?'家財おまかせ便':'佐川急便',prefecture:'11',schedule:'2'}};
 }
 export function assertCurrent(c:Context,expectedRevision:number){
   if(!c.saved||!c.draft||c.saved.revision!==expectedRevision||!yahooSourceMatches(c.saved.payload.source,c.draft))throw new WorkflowFailure('SOURCE_CHANGED');
@@ -90,10 +91,14 @@ export class YahooWorkflow {
     const binding=await this.binding();
     await this.verifyHistory();
     if(binding)await this.verifyStopped(binding);
-    if(!this.state||this.state.fingerprint!==hash||this.state.stage==='IDLE'){
+    const scheduleExpired=this.state?.stage==='READY'&&Date.now()-(this.state.readyAt??0)>=15*60_000;
+    const automaticScheduleChanged=saved.payload.input.automaticEnd!==false&&
+      this.state?.saved?.payload.input.endAtJst!==resolvedYahooEndAt(saved.payload.input);
+    if(!this.state||this.state.fingerprint!==hash||this.state.stage==='IDLE'||scheduleExpired||automaticScheduleChanged){
       const imageSourceHash=payloadHash(saved.payload.source);
       const old=this.state;
-      await this.save({...this.empty(binding),saved,fingerprint:hash,imageSourceHash,stage:'PREPARING',
+      const confirmedSchedule={...saved,payload:{...saved.payload,input:{...saved.payload.input,endAtJst:resolvedYahooEndAt(saved.payload.input),automaticEnd:false}}};
+      await this.save({...this.empty(binding),saved:confirmedSchedule,fingerprint:hash,imageSourceHash,stage:'PREPARING',
         relistId:old?.newListing?undefined:binding?.auctionId,images:old?.imageSourceHash===imageSourceHash?old.images:[]});
     }
     let s=this.state!;
@@ -101,7 +106,7 @@ export class YahooWorkflow {
     if(binding&&!s.newListing){
       // Yahoo locks prior pictures during relisting. Display the exact remote
       // images for approval, without silently replacing or duplicating them.
-      const priorImages=await this.session.inspectRelistingImages(previewInput(saved,binding.auctionId));
+      const priorImages=await this.session.inspectRelistingImages(previewInput(s.saved!,binding.auctionId));
       if(!priorImages.ok)throw new WorkflowFailure(priorImages.code);
       await this.save({...s,images:priorImages.value});s=this.state!;
     }
@@ -114,7 +119,7 @@ export class YahooWorkflow {
       if(!result.ok){await this.save({...this.state!,stage:'VERIFY_REQUIRED',error:result.code});return;}
       await this.save({...this.state!,stage:'PREPARING',images:[...s.images,result.value]});return;
     }
-    const preview=await this.session.previewFixedListing(previewInput(saved,s.relistId),s.images);
+    const preview=await this.session.previewFixedListing(previewInput(s.saved!,s.relistId),s.images);
     if(!preview.ok)throw new WorkflowFailure(preview.code);
     assertCurrent(await this.context(),expectedRevision);
     await this.save({...this.state!,stage:'READY',readyAt:Date.now(),error:undefined});
@@ -127,7 +132,7 @@ export class YahooWorkflow {
     if(payloadHash(saved.payload)!==s.fingerprint)throw new WorkflowFailure('SOURCE_CHANGED');
     await this.verifyHistory();
     if(s.listing)await this.verifyStopped(s.listing);
-    const preview=await this.session.previewFixedListing(previewInput(saved,s.relistId),s.images);
+    const preview=await this.session.previewFixedListing(previewInput(s.saved!,s.relistId),s.images);
     if(!preview.ok)throw new WorkflowFailure(preview.code);
     const i=saved.payload.input;
     let reservationError:unknown;

@@ -62,7 +62,7 @@ export function initialListingSelection(
   candidates: ListingImageCandidate[],
   saved: ListingImageRef[] | null | undefined,
 ): ListingImageCandidate[] {
-  if (saved?.length) return restoreListingSelection(candidates, saved).selected;
+  if (Array.isArray(saved)) return restoreListingSelection(candidates, saved).selected;
   const photos = candidates.filter((item) => item.ref.source === "PHOTO_ASSET");
   return (photos.length ? photos : candidates.filter((item) => item.ref.source === "INVENTORY")).slice(0, 20);
 }

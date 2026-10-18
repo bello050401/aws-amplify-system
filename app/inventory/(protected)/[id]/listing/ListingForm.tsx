@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { normalizeShippingPackages, type ShippingPackage } from "@/lib/shipping/packages";
+import type { ShippingPackage } from "@/lib/shipping/packages";
 import type { ShippingRank } from "@/lib/shipping/rank";
 import { ShippingPackagesEditor } from "./ShippingPackagesEditor";
+import { CommonEcSettings } from './CommonEcSettings';
+import type { CommonChannelPrices } from '@/lib/listing/commonSettings';
 import { saveListingDraftAction } from "@/app/actions/listing";
+import { commonDraftHasChanges } from "@/lib/listing/commonDraftChanges";
 import { requireSavedDraftResult, draftSaveFailureMessage,
   draftSaveNeedsFreshPage } from "@/lib/listing/draftSaveFeedback";
 import type { ChannelListingRecord, ListingConditionCode, ListingDraftRecord, ListingShippingMethod } from "@/lib/listing/types";
@@ -24,7 +27,7 @@ import { ListingImageSelector } from "./ListingImageSelector";
 import { InventoryThumbnail } from "../../../InventoryThumbnail";
 import { PhotoAssetProductGallery } from "../PhotoAssetProductGallery";
 import { resolveProductGallerySource } from "@/lib/photoRegistration/gallerySelection";
-import { buildListingImageCandidates, restoreListingSelection } from "@/lib/photoRegistration/inventoryListingAdapter";
+import { buildListingImageCandidates, restoreListingSelection, initialListingSelection, listingRefsFromSelection } from "@/lib/photoRegistration/inventoryListingAdapter";
 
 /**
  * BELLO統合改修 master指示書 Phase D — EC出品の編集UI。
@@ -62,6 +65,7 @@ export function ListingForm({
   onShippingMethodChange,
   onDraftSaved,
   onDirtyChange,
+  onPriceChange,
 }: {
   inventoryId: string;
   brandLogoAvailable: boolean;
@@ -85,10 +89,14 @@ export function ListingForm({
   onShippingMethodChange: (method: ListingShippingMethod) => void;
   onDraftSaved?: (draft: ListingDraftRecord) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onPriceChange?: (price: number | null) => void;
 }) {
   const [draft, setDraft] = useState(initialDraft);
   const [channelListing] = useState(initialChannelListing);
-  const [selectedImages, setSelectedImages] = useState<ListingImageRef[]>(initialDraft?.images ?? []);
+  const [initialImageSelection] = useState(() => listingRefsFromSelection(initialListingSelection(
+    buildListingImageCandidates(images, photoAssets, initialDraft?.images ?? null), initialDraft?.images,
+  )));
+  const [selectedImages, setSelectedImages] = useState<ListingImageRef[]>(initialImageSelection);
   const [brandLogoBusy, setBrandLogoBusy] = useState(false);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoSaved, setLogoSaved] = useState(false);
@@ -105,6 +113,9 @@ export function ListingForm({
   const [title, setTitle] = useState(initialDraft?.title ?? inventoryName);
   const [description, setDescription] = useState(initialDraft?.description ?? "");
   const [price, setPrice] = useState(initialDraft?.price != null ? String(initialDraft.price) : "");
+  useEffect(() => { onPriceChange?.(price !== '' && Number.isSafeInteger(Number(price)) && Number(price) > 0 ? Number(price) : null); }, [price, onPriceChange]);
+  const [commonCategoryId,setCommonCategoryId]=useState(initialDraft?.commonCategoryId??'');
+  const [channelPrices,setChannelPrices]=useState<CommonChannelPrices|null>(initialDraft?.channelPrices??null);
   const [condition, setCondition] = useState<ListingConditionCode>(initialDraft?.condition ?? "NO_NOTABLE_DAMAGE");
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -171,10 +182,8 @@ export function ListingForm({
     return withCurrentShippingWarning(aiQuality.warnings, currentShippingWarning);
   }, [aiQuality, shippingMethod]);
 
-  const dirty = title !== (draft?.title ?? inventoryName) || description !== (draft?.description ?? "") ||
-    (price ? Number(price) : 0) !== (draft?.price ?? 0) || condition !== (draft?.condition ?? "NO_NOTABLE_DAMAGE") ||
-    shippingMethod !== (draft?.shippingMethod ?? "KAZAI") || JSON.stringify(selectedImages) !== JSON.stringify(draft?.images ?? []) ||
-    JSON.stringify(shippingPackages) !== JSON.stringify(normalizeShippingPackages(draft?.shippingPackages));
+  const dirty = commonDraftHasChanges({ title, description, price, condition, shippingMethod,
+    images: selectedImages, shippingPackages, commonCategoryId, channelPrices }, draft, { title: inventoryName, images: initialImageSelection });
   useEffect(() => { onDirtyChange?.(dirty); if (dirty) setDraftSaved(false); }, [dirty, onDirtyChange]);
   useEffect(() => {
     if (!dirty) return;
@@ -243,7 +252,8 @@ export function ListingForm({
     setAiQuality(null);
     try {
       // §1 画面で選択中の配送方法をそのまま渡す(保存前でも反映する)。
-      const result = await generateListingCopyAction(inventoryId, shippingMethod, title.trim() !== inventoryName.trim() ? title : undefined);
+      const result = await generateListingCopyAction(inventoryId, shippingMethod, title.trim() !== inventoryName.trim() ? title : undefined,
+        { shippingPackages, images: selectedImages, commonCategoryId });
       if (!result.ok) {
         setDraftError(result.error);
         return;
@@ -289,6 +299,8 @@ export function ListingForm({
     try {
       const result = requireSavedDraftResult(await saveListingDraftAction(inventoryId, {
         title,
+        commonCategoryId: commonCategoryId || null,
+        channelPrices,
         description,
         price: price ? Number(price) : 0,
         condition,
@@ -560,7 +572,7 @@ export function ListingForm({
             {shippingMethod === "KAZAI" && <div className="col-span-2"><ShippingPackagesEditor packages={shippingPackages}
               onChange={onShippingPackagesChange} estimatedRank={estimatedShippingRank} /></div>}
             <div>
-              <label htmlFor="listing-price" className="block text-[12px] text-gray-600">価格（円）</label>
+              <label htmlFor="listing-price" className="block text-[12px] text-gray-600">基準価格・送料別（円）</label>
               <input
                 type="number"
                 id="listing-price" inputMode="numeric"
@@ -585,6 +597,9 @@ export function ListingForm({
             </div>
           </div>
         </div>
+        <div className="mt-4"><CommonEcSettings inventoryId={inventoryId} categoryId={commonCategoryId}
+          onCategoryChange={setCommonCategoryId} prices={channelPrices} onPricesChange={setChannelPrices}
+          goodsPrice={price?Number(price):null} packages={shippingPackages} shippingMethod={shippingMethod}/></div>
         {draft && draft.images.length === 0 && (
           <p className="mt-2 text-[11px] text-amber-700">在庫に商品画像が登録されていません。出品には少なくとも1枚の商品画像が必要です。</p>
         )}

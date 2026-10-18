@@ -69,8 +69,8 @@ export default async function ListingPage({ params }: { params: { id: string } }
   const categoryName = categories.find((c) => c.id === item.categoryId)?.name ?? null;
   const statusName = statuses.find((s) => s.id === item.statusId)?.label ?? null;
   const httpPreparationEligible = webHttpDraftTargetAllowed(item.id) &&
-    categoryName !== null && isEcListingEligible(categoryName) &&
-    categoryName.normalize("NFKC").trim() !== "売り切れ" &&
+    isEcListingEligible(categoryName) &&
+    categoryName?.normalize("NFKC").trim() !== "売り切れ" &&
     item.saleEndDate === null &&
     (item.market === null || item.market.trim() !== "" &&
       !item.market.includes("メルカリ"));

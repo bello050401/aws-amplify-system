@@ -239,7 +239,7 @@ export function stripUnsupportedSeatingClaims(
   intro: string,
   verifiedProductFacts: ReadonlyArray<{ fact: string; sourceUrl: string }> = [],
 ): { text: string; removedSentences: string[] } {
-  const claims = [/(?:身体|体)のラインに沿(?:う|った)/, /(?:快適な座り心地|座り心地が快適|心地よい座り心地)/];
+  const claims = [/(?:身体|体)のラインに沿(?:う|った)/, /(?:快適な座り心地|座り心地が快適|心地よい座り心地|座りやす[いく]|座り易[いく])/, /堅牢(?:性|な)|耐久性に優れ|強度を(?:確保|実現)|安定感を(?:与え|実現)|使い勝手(?:も|が|に)優れ/];
   // Research snippets can mention a claim while explicitly denying it. A
   // source URL and matching words alone do not turn that mention into proof.
   const evidence = verifiedProductFacts
@@ -496,8 +496,11 @@ export function findCategoryMismatchViolations(
   categoryName: string | null | undefined,
 ): CategoryMismatchViolation[] {
   if (!intro) return [];
-  if (inferProductFamily(categoryName) !== "LIGHTING") return [];
   const found: CategoryMismatchViolation[] = [];
+  if (categoryName?.includes("ダイニングチェア")) {
+    for (const m of intro.matchAll(/カウンターチェア|バースツール|ハイチェア/g)) found.push({ matched: m[0] });
+  }
+  if (inferProductFamily(categoryName) !== "LIGHTING") return found;
   for (const m of intro.matchAll(/家具/g)) {
     if (m.index === undefined) continue;
     if (isStoreSelfReferenceContext(intro, m.index)) continue;

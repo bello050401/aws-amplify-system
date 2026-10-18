@@ -8,7 +8,7 @@ import { searchYahooCategoriesAction } from "@/app/actions/yahooAuctionWorkflow"
 import { getYahooAuctionPreparationAction, saveYahooAuctionPreparationAction } from "@/app/actions/yahooAuctionPreparation";
 import { checkYahooHttpsConnectionAction } from "@/app/actions/yahooAuctionHttp";
 import type { YahooListingResult } from "@/lib/listing/yahooAuction/listingResult";
-import { initialYahooAuctionInput, yahooPreparationIssues, yahooSourceMatches,
+import { initialYahooAuctionInput, restoreYahooAuctionInput, yahooPreparationIssues, yahooSourceMatches,
   type YahooAuctionInput, type YahooAuctionSaved } from "@/lib/listing/yahooAuction/preparation";
 import { LISTING_CONDITIONS } from "@/lib/listing/conditionOptions";
 import { LISTING_SHIPPING_METHODS, type ListingDraftRecord } from "@/lib/listing/types";
@@ -55,7 +55,7 @@ export function YahooAuctionListingSection({ inventoryId, showExecution = true }
       if (!result.ok) { setError(failureMessage(result.code)); return; }
       const c = result.context;
       setDraft(c.draft); setSaved(c.saved); setAvailable(c.availableQuantity); setEligible(c.canPrepare);
-      setInput(c.saved?.payload.input ?? initialYahooAuctionInput(c.draft)); setLoaded(true);
+      setInput(restoreYahooAuctionInput(c.draft, c.saved)); setLoaded(true);
     }).catch(() => { if (active) setError("ヤフオク下書きを読み込めません。ページを再読み込みしてください。"); });
     return () => { active = false; };
   }, [inventoryId]);
@@ -85,7 +85,14 @@ export function YahooAuctionListingSection({ inventoryId, showExecution = true }
         setConflict(true); setError(failureMessage("CONFLICT")); return;
       }
       setDraft(c.draft); setAvailable(c.availableQuantity); setEligible(c.canPrepare);
-      if (!loaded) { setSaved(c.saved); setInput(c.saved?.payload.input ?? initialYahooAuctionInput(c.draft)); setLoaded(true); }
+      if (!loaded) { setSaved(c.saved); setInput(restoreYahooAuctionInput(c.draft, c.saved)); setLoaded(true); }
+      else if (c.draft && draft) setInput(current => restoreYahooAuctionInput(c.draft, {
+        revision: saved?.revision ?? 1, updatedAt: draft.updatedAt,
+        payload: { schemaVersion: 1, input: current, source: {
+          draftId: draft.id, draftUpdatedAt: draft.updatedAt, images: draft.images, shippingMethod: draft.shippingMethod,
+          commonCategoryId: draft.commonCategoryId ?? null, commonPriceYen: draft.channelPrices?.YAHOO ?? draft.price,
+        } },
+      }));
       setMessage(c.draft ? "最新の共通下書き・写真・配送方法を確認しました。" : "上の共通下書きを先に保存してください。");
     } catch { setError(failureMessage("UNAVAILABLE")); }
     finally { inFlight.current = false; setBusy(false); }
@@ -157,7 +164,7 @@ export function YahooAuctionListingSection({ inventoryId, showExecution = true }
           <div><label htmlFor="yahoo-quantity" className="text-sm">数量（現在庫 {available}）</label>
             <input id="yahoo-quantity" type="number" min={1} max={Math.min(9, available)} step={1} className={field} value={input.quantity} onChange={e => change("quantity", Number(e.target.value))} /></div>
         </div>
-        <p className="text-xs text-gray-600">送料込み参考価格を確認して入力してください。数量は出品前に在庫と照合します。</p>
+        <p className="text-xs text-gray-600">送料を含まない商品単価です。送料は配送先に応じて落札後に案内します。数量は出品前に在庫と照合します。</p>
         {input.format === "AUCTION" && <div><label htmlFor="yahoo-buy-now" className="text-sm">即決価格（任意・円）</label>
           <input id="yahoo-buy-now" type="number" min={1} step={1} className={field} value={input.buyNowYen ?? ""} onChange={e => change("buyNowYen", e.target.value === "" ? null : Number(e.target.value))} /></div>}
         <div><label htmlFor="yahoo-category-query" className="text-sm">カテゴリーを検索</label>
@@ -167,14 +174,15 @@ export function YahooAuctionListingSection({ inventoryId, showExecution = true }
             <option value="">選択してください</option>{categories.map(c=><option key={c.id} value={c.id}>{c.path}</option>)}</select>}
           <p className="mt-2 text-sm">選択中：{input.categoryName||'未選択'}</p>
         </div>
-        <div><label htmlFor="yahoo-end" className="text-sm">終了希望日時（日本時間）</label>
-          <input id="yahoo-end" type="datetime-local" step={3600} className={field} value={input.endAtJst} onChange={e => change("endAtJst", e.target.value)} />
-          <p className="mt-1 text-xs text-gray-600">実際に指定できる開催期間は、出品時に確認します。</p></div>
+        <div><label className="flex gap-2 text-sm"><input type="checkbox" checked={input.automaticEnd !== false} onChange={e => change("automaticEnd", e.target.checked)} />終了を自動設定（1日・21時）</label>
+          {input.automaticEnd === false && <><label htmlFor="yahoo-end" className="mt-2 block text-sm">終了希望日時（日本時間）</label>
+          <input id="yahoo-end" type="datetime-local" step={3600} className={field} value={input.endAtJst} onChange={e => change("endAtJst", e.target.value)} /></>}
+          <p className="mt-1 text-xs text-gray-600">出品準備時に翌日の21時を設定します。確定日時は出品前の確認画面に表示します。</p></div>
         {input.format === "AUCTION" && <label className="flex gap-2 text-sm"><input type="checkbox" checked={input.autoExtension} onChange={e => change("autoExtension", e.target.checked)} />終了直前の入札で自動延長する</label>}
         <dl className="grid grid-cols-2 gap-2 rounded bg-gray-50 p-3 text-sm">
           <dt>出品画像</dt><dd>{draft?.images.length ?? 0}枚（共通下書きの選択順）</dd>
           <dt>配送方法</dt><dd><select aria-label="ヤフオクの配送方法" className={field} value={input.shippingMethod ?? draft?.shippingMethod ?? "KAZAI"} onChange={e=>change("shippingMethod",e.target.value as "KAZAI"|"SAGAWA")}>{LISTING_SHIPPING_METHODS.map(s=><option key={s.code} value={s.code}>{s.label}</option>)}</select></dd>
-          <dt>送料負担</dt><dd>送料込み（出品者負担）</dd>
+          <dt>送料負担</dt><dd>送料別（落札者負担・落札後に送料を連絡）</dd>
           <dt>発送元</dt><dd>埼玉県</dd>
           <dt>発送まで</dt><dd>3〜7日</dd>
         </dl>

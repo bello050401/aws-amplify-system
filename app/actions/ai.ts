@@ -136,6 +136,8 @@ export async function generateListingCopyAction(
    */
   shippingMethod?: ListingShippingMethod,
   listingTitle?: string,
+  selection?: { shippingPackages?: import("@/lib/shipping/packages").ShippingPackage[];
+    images?: import("@/lib/listing/types").ListingImageRef[]; commonCategoryId?: string | null },
 ): Promise<GenerateListingCopyActionResult> {
   const correlationId = randomUUID();
   try {
@@ -155,7 +157,8 @@ export async function generateListingCopyAction(
     // 2026-09-03 追加指示 §41/§49: 「BASE商品ページの下書きを作る」の
     // UIを消し、生成の入口をここへ一本化した。あちら側にだけあった
     // 生成履歴の保存も、一緒に消えないようここへ引き取っている(§47)。
-    const result = await generateCanonicalProductPage(inventoryId, { shippingMethod, listingTitle });
+    const result = await generateCanonicalProductPage(inventoryId, { shippingMethod, listingTitle,
+      shippingPackages: selection?.shippingPackages, images: selection?.images, commonCategoryId: selection?.commonCategoryId });
     const who = await getCurrentInventoryUserEmail();
     const history = await saveGeneratedProductPage(result, who);
     if (history.reason) {

@@ -16,6 +16,7 @@ import { ListingForm } from "./ListingForm";
 import { InventoryFactsPanel } from "./InventoryFactsPanel";
 import { ShippingPackageReference } from "./ShippingPackageReference";
 import { normalizeShippingPackages } from "@/lib/shipping/packages";
+import {commonCategory,commonChannelPrice} from '@/lib/listing/commonSettings';
 import { calculateShippingRankFromDimensionsDetailed } from "@/lib/shipping/rank";
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 
@@ -66,6 +67,7 @@ export function ListingWorkspace({
   const [shippingMethod, setShippingMethod] = useState<ListingShippingMethod>(
     initialDraft?.shippingMethod ?? DEFAULT_LISTING_SHIPPING_METHOD,
   );
+  const [goodsPrice, setGoodsPrice] = useState<number | null>(initialDraft?.price ?? null);
 
   return (
     // 2026-09-04 EC出品改修指示書 §2/§3の2カラム方針はそのまま。
@@ -134,6 +136,7 @@ export function ListingWorkspace({
               estimatedShippingRank={estimatedRank}
               onDraftSaved={saved => { setDraft(saved); setShippingPackages(normalizeShippingPackages(saved.shippingPackages)); }}
               onDirtyChange={setDirty}
+              onPriceChange={setGoodsPrice}
             />
           </div>
           <div className="min-w-0 xl:sticky xl:top-4 xl:max-h-[calc(100vh_-_96px_-_2rem)] xl:grow xl:shrink xl:basis-80 xl:max-w-md xl:overflow-y-auto 2xl:basis-96 2xl:max-w-lg">
@@ -147,6 +150,7 @@ export function ListingWorkspace({
               key={item.id}
               inventoryId={item.id}
               packages={shippingPackages}
+              goodsPrice={goodsPrice}
             />}
           </div>
         </div>
@@ -156,12 +160,14 @@ export function ListingWorkspace({
           <fieldset disabled={dirty} className="disabled:opacity-50">
             {canPrepareMercari && httpPreparationEligible ? (
               <MercariManualListingPackPanel
+                key={draft?.updatedAt??'new'}
                 inventoryId={item.id}
                 availableQuantity={item.quantity}
                 hasDraft={!!draft}
                 hasShopsRecord={!!initialChannelListing}
                 mode="HTTP"
-                commonPrice={draft?.price ?? item.plannedSalePrice}
+                commonPrice={draft?commonChannelPrice(draft,'MERCARI_SHOPS'):item.plannedSalePrice}
+                commonCategory={commonCategory(draft?.commonCategoryId)?.mercari??null}
                 showExecution={false}
               />
             ) : (
@@ -191,7 +197,7 @@ export function ListingWorkspace({
       {visited.has("YAHOO") && (
         <div hidden={tab !== "YAHOO"}>
           <fieldset disabled={dirty}>
-            <YahooAuctionListingSection inventoryId={item.id} showExecution={false} />
+            <YahooAuctionListingSection key={draft?.updatedAt??'new'} inventoryId={item.id} showExecution={false} />
           </fieldset>
         </div>
       )}

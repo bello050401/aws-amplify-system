@@ -69,7 +69,7 @@ export function YahooAuctionControls({inventoryId,revision,dirty,disabled,onList
   const listed=view?.listing?.remoteStatus==='open';
   return <div className="my-3 rounded border border-blue-200 p-3">
     <p className="text-sm">{listed?'出品中です。停止すると、再出品へ切り替わります。':view?.newListing?'前回の出品を停止したまま、新しい出品番号で作成する準備をしています。':view?.listing?.remoteStatus==='cancelled'?'出品停止中です。内容を確認して再出品できます。':'入力した内容を確認してから出品します。'}</p>
-    <p className="mt-1 text-xs text-gray-600">送料込み・出品操作は30秒間隔。入札や取消料金がある場合は停止しません。</p>
+    <p className="mt-1 text-xs text-gray-600">送料別・落札後に送料を連絡します。入札や取消料金がある場合は停止しません。</p>
     <div className="mt-3 flex flex-wrap gap-2">
       {listed?<button type="button" className={button+' bg-red-700 text-white'} disabled={busy||disabled||!!uncertain||waitSeconds>0} onClick={()=>setStopConfirm(true)}>出品停止</button>:
         <button type="button" className={button+' bg-blue-700 text-white'} disabled={!view||busy||disabled||dirty||!revision||!!uncertain} onClick={prepare}>{running?'出品内容を確認中…':view?.newListing?'新規出品の内容を確認':view?.listing?'再出品の内容を確認':'出品内容を確認'}</button>}
@@ -96,7 +96,7 @@ export function YahooAuctionControls({inventoryId,revision,dirty,disabled,onList
       <h3 className="font-bold">{view.confirmation.relist?'再出品':'出品'}する内容</h3>
       <p className="mt-2">{view.confirmation.title}</p>
       <p>{view.confirmation.priceYen.toLocaleString()}円・数量 {view.confirmation.quantity}・画像 {view.uploaded} 枚</p>
-      <p>{view.confirmation.category}</p><p>送料込み・{view.confirmation.shipping}</p>
+      <p>{view.confirmation.category}</p><p>送料別・{view.confirmation.shipping}（落札後に送料を連絡）</p>
       <p>終了：{view.confirmation.endAtJst.slice(0,10)} {view.confirmation.endAtJst.slice(11,13)}時台（日本時間）</p>
       {view.confirmation.relist&&<p className="mt-2">再出品は前回の画像を使用します。今回の画像は下に表示したものです。</p>}
       <div className="mt-2 flex flex-wrap gap-2">{view.confirmation.imageUrls.map((url,index)=>(

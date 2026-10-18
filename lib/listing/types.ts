@@ -76,6 +76,8 @@ export interface ListingDraftRecord {
   id: string;
   inventoryId: string;
   title: string;
+  commonCategoryId?: string | null;
+  channelPrices?: import('./commonSettings').CommonChannelPrices | null;
   description: string | null;
   price: number | null;
   condition: ListingConditionCode | null;
@@ -232,6 +234,6 @@ export function resolveEffectiveListingFields(
   return {
     title: channelListing.overrideTitle ?? draft.title,
     description: channelListing.overrideDescription ?? draft.description ?? "",
-    price: channelListing.overridePrice ?? draft.price ?? 0,
+    price: draft.channelPrices ? draft.channelPrices[channelListing.channel] ?? 0 : channelListing.overridePrice ?? draft.price ?? 0,
   };
 }

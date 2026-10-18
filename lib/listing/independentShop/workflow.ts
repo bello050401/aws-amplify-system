@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 export const SHOP_ORIGIN = "https://bello-interior-independent.misty-loom-0065.chatgpt.site";
 export class ListingError extends Error {}
 export type ImageRef = { storageKey: string; source?: "INVENTORY" | "PHOTO_ASSET"; photoAssetId?: string; sortOrder: number };
-export type Source = { id: string; name: string; sku: string; price: number; description: string; quantity: number; version: string; images: ImageRef[] };
+export type Source = { id: string; name: string; sku: string; price: number; description: string; quantity: number; version: string; images: ImageRef[]; categories?:string[] };
 export type Remote = { id: string; revision: number; stock: number; status: string; variants?: unknown[] };
 export type Preview = { name: string; description: string; price: number; stock: number; sourceStock: number; imageCount: number; connected: boolean; remote: Remote | null; token: string | null };
 export type Receipt = { index: number; url: string; signature: string };
@@ -63,7 +63,7 @@ export function createListingWorkflow(ports: Ports) {
    if(!Array.isArray(receipts)||receipts.length!==source.images.length)throw new ListingError("画像の転送が完了していません。");
    const images=receipts.map((r,index)=>{if(!r||r.index!==index||typeof r.url!=="string"||typeof r.signature!=="string"||!equal(r.signature,sign(connection.signingKey,JSON.stringify([token,index,r.url]))))throw new ListingError("画像の転送結果が一致しません。確認からやり直してください。");return r.url});
    // Explicit fields only: no supplier, acquisition cost, customer, or arbitrary notes.
-   const item={externalId:"inventory:"+source.id,name:source.name,description:source.description,basePrice:source.price,sku:source.sku,stock,status:"draft",images,...(remote?{revision:remote.revision}:{})};
+   const item={externalId:"inventory:"+source.id,name:source.name,description:source.description,basePrice:source.price,sku:source.sku,stock,status:"draft",images,...(source.categories?{categories:source.categories}:{}),...(remote?{revision:remote.revision}:{})};
    return connection.api.save(item);
   }
  };
