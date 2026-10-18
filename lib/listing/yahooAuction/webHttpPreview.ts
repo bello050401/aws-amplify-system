@@ -219,3 +219,17 @@ export function verifyPreview(html: string, input: YahooFixedPreviewInput, image
       imageCount: all.length, shippingIncluded: input.shipping.payer === "seller", shippingMethod: input.shipping.method, endAt, publicationAttempted: false };
   } catch { return null; }
 }
+/** Recognize a visible seller-facing validation error without exposing form tokens. */
+export function previewRejectionReason(html:string):"DUPLICATE_TITLE"|null {
+  try{
+    const els=documentNodes(html);
+    const text=(node:Node):string=>node.nodeName==="#text"?(node as DefaultTreeAdapterMap["textNode"]).value:("childNodes" in node?node.childNodes.map(text).join(""):"");
+    for(const el of els){
+      if(!(attr(el,"class")??"").split(/\s+/).includes("decErrorBox__title")||!text(el).includes("すでに同じタイトルのオークションが出品されています"))continue;
+      let current:Node|null=el,hidden=false;
+      while(current){if("tagName" in current&&(attr(current,"hidden")!==undefined||/display\s*:\s*none/i.test(attr(current,"style")??"")||/(?:^|\s)is-hide(?:\s|$)/.test(attr(current,"class")??""))){hidden=true;break}current="parentNode" in current?current.parentNode:null;}
+      if(!hidden)return "DUPLICATE_TITLE";
+    }
+  }catch{/* An unfamiliar response stays blocked by the strict preview verifier. */}
+  return null;
+}

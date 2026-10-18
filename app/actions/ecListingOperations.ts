@@ -32,6 +32,8 @@ import { reviewBaseListing, executeBaseListing } from "@/lib/listing/base/manual
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const validId = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 const messages: Record<string, string> = {
+  DUPLICATE_TITLE: "ヤフオクに同じ商品名の出品があるため、準備できませんでした。ヤフオクの出品中一覧を確認し、別の商品であれば商品名を区別して保存してください。",
+  PREVIEW_MISMATCH: "ヤフオクの確認画面が保存内容と一致しませんでした。出品は実行していません。商品名・価格・数量・配送方法を確認してください。",
   WAIT_INTERVAL: "販売先への送信間隔を空けています。",
   AUTH_REQUIRED: "販売先のログインが切れています。出品設定から接続を確認してください。",
   FORBIDDEN: "この販売先を操作する権限がありません。",

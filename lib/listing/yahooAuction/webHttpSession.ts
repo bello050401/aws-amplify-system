@@ -4,7 +4,7 @@ import { parseListingEvidence, yahooAuctionIdValid, canCancelWithoutBids, zeroFe
   type YahooListingEvidence } from "./webHttpListing";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { CATEGORY_PATH, SELECTED_INPUT_PATH, categoryRequestFromInput, selectedInputRequest,
-  previewRequestFromInput, relistingImagesFromInput, verifyPreview, validPreviewImages, type YahooPreviewImages, type YahooFixedPreviewInput,
+  previewRequestFromInput, relistingImagesFromInput, verifyPreview, previewRejectionReason, validPreviewImages, type YahooPreviewImages, type YahooFixedPreviewInput,
   type YahooPreviewEvidence } from "./webHttpPreview";
 
 const ORIGIN = "https://auctions.yahoo.co.jp";
@@ -19,7 +19,7 @@ type Failure = "CAPTURE_INVALID" | "CAPTURE_TOO_OLD" | "AUTH_REQUIRED" |
   "ACCESS_DENIED" | "RATE_LIMITED" | "UNEXPECTED_RESPONSE" | "UNEXPECTED_FORM" | "READ_UNAVAILABLE";
 type Result<T> = { ok: true; value: T } | { ok: false; code: Failure };
 type PreviewResult = { ok: true; value: YahooPreviewEvidence } | { ok: false;
-  code: Failure | "INVALID_PREVIEW_INPUT" | "PREVIEW_ALREADY_ATTEMPTED" | "PREVIEW_MISMATCH";
+  code: Failure | "INVALID_PREVIEW_INPUT" | "PREVIEW_ALREADY_ATTEMPTED" | "PREVIEW_MISMATCH" | "DUPLICATE_TITLE";
   stage: "INPUT" | "CATEGORY" | "SELECTED_INPUT" | "PREVIEW"; status?: number };
 export type YahooUploadedImage = { url: string; width: number; height: number; thumbnail?: string };
 
@@ -310,7 +310,7 @@ export class YahooWebSession {
             try { this.#publication = { body: publicationRequest(html, input, image), evidence: value, preparedAt: Date.now() }; }
             catch { this.#publication = null; }
           }
-          return value ? { ok: true, value } : { ok: false, code: "PREVIEW_MISMATCH", stage, status };
+          return value ? { ok: true, value } : { ok: false, code: previewRejectionReason(html)??"PREVIEW_MISMATCH", stage, status };
         }
         referer = ORIGIN + path;
       }
