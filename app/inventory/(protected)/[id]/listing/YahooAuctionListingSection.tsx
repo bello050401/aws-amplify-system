@@ -81,7 +81,7 @@ export function YahooAuctionListingSection({ inventoryId, showExecution = true }
       const result = await getYahooAuctionPreparationAction(inventoryId);
       if (!result.ok) { setError(failureMessage(result.code)); return; }
       const c = result.context;
-      if ((c.saved?.revision ?? null) !== (saved?.revision ?? null)) {
+      if (loaded && (c.saved?.revision ?? null) !== (saved?.revision ?? null)) {
         setConflict(true); setError(failureMessage("CONFLICT")); return;
       }
       setDraft(c.draft); setAvailable(c.availableQuantity); setEligible(c.canPrepare);

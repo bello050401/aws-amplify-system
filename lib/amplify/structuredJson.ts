@@ -20,6 +20,7 @@ export function decodeStructuredJson(raw: unknown): object | null {
 const STRUCTURED_FIELDS: Record<string, readonly string[]> = {
   ListingDraft: ["images", "channelPrices", "shippingPackages"],
   ChannelListing: ["categoryMapping"],
+  YahooAuctionPreparation: ["payload"],
 };
 
 /** The AppSync input is JSON text, but its resolver stores native maps/lists.

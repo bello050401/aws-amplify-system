@@ -1,6 +1,7 @@
 import type { ListingConditionCode, ListingDraftRecord, ListingImageRef, ListingShippingMethod } from "../types";
 import { defaultYahooEndAt } from "./ending";
 import { commonCategory,commonChannelPrice } from '../commonSettings';
+import { decodeStructuredJson } from '../../amplify/structuredJson';
 
 export type YahooAuctionInput = {
   title: string; description: string; condition: ListingConditionCode | null;
@@ -109,7 +110,7 @@ export function parseYahooSaved(value: unknown): YahooAuctionSaved | null {
   if (!value || typeof value !== "object") return null;
   const row = value as { revision: number; updatedAt: string; payload: unknown };
   let p: YahooAuctionPayload;
-  try { p = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload; } catch { return null; }
+  try { p = decodeStructuredJson(row.payload) as YahooAuctionPayload; } catch { return null; }
   if (!Number.isSafeInteger(row.revision) || row.revision < 1 ||
       typeof row.updatedAt !== "string" || !Number.isFinite(Date.parse(row.updatedAt)) ||
       !p || p.schemaVersion !== 1 || !parseYahooAuctionInput(p.input) || !p.source ||
