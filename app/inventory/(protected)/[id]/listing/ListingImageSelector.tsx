@@ -109,7 +109,7 @@ export function ListingImageSelector({
 
   return (
     <div className="mt-4 border border-gray-200 p-3">
-      <p className="mb-2 text-[12px] font-bold text-gray-700">出品画像（並び順のままMercari Shopsへ渡します。先頭が主画像）</p>
+      <p className="mb-2 text-[12px] font-bold text-gray-700">出品画像（各販売先へこの順番で反映します。先頭が主画像）</p>
       {missingCount > 0 && (
         <p className="mb-2 text-[11px] text-amber-700">
           {missingCount}件の保存済み画像を復元できませんでした（削除済みの可能性があります）。

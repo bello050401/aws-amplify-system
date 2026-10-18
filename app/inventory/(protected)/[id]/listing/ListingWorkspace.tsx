@@ -92,7 +92,7 @@ export function ListingWorkspace({
           }}
           className="rounded-md bg-blue-700 px-4 py-2 text-sm text-white"
         >
-          商品一覧で出品・停止する
+          EC商品一覧へ戻る
         </Link>
       </div>
       <div role="tablist" aria-label="編集する商品情報" className="mb-4 flex gap-1 overflow-x-auto border-b">
@@ -177,6 +177,10 @@ export function ListingWorkspace({
             )}
             <details className="mt-4 rounded-lg border p-4">
               <summary className="cursor-pointer text-sm">CSV・PC連携の補助機能と過去の記録</summary>
+              {canPrepareMercari && <Link href={`/inventory/mercari-bridge?inventoryId=${encodeURIComponent(item.id)}`}
+                className="my-3 inline-block text-sm text-blue-700 underline">
+                既存メルカリShops商品を照合する
+              </Link>}
               <MercariShopsLifecycleSection
                 inventoryId={item.id}
                 listing={initialChannelListing}

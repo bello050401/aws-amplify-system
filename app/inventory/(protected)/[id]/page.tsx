@@ -42,9 +42,7 @@ function formatYen(value: number | null): string {
 
 /** ISO datetime → "2026/08/28 17:40" — exact zero-padded format; Intl's dateStyle/timeStyle shorthand drops the leading zero on month/day/hour, which doesn't match. */
 function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
 }
 
 /** AWSDate "YYYY-MM-DD" → "YYYY/MM/DD"; plain string replace, never Date-parsed, so this can never shift a day from a timezone conversion. Empty/absent → "-" (spec A-4: 未入力も表示). */

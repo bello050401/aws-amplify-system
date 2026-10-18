@@ -18,6 +18,7 @@ import {
   stripUnverifiedPhotoColorSentences,
   stripUnsupportedClearFinishSentences,
   stripUnsupportedSeatingClaims,
+  stripUnsupportedPartMaterialSentences,
   MAX_GENERIC_PHRASES,
   type CategoryMismatchViolation,
   type IntroConditionViolation,
@@ -574,6 +575,17 @@ export async function generateProductPage(input: ProductPageGenerationInput): Pr
   }
   const clearFinishEvidence = [facts.publicNote, input.extraFacts?.material,
     ...(input.extraFacts?.verifiedProductFacts?.map((entry) => entry.fact) ?? [])].filter(Boolean).join("\n");
+  const materialsStripped = stripUnsupportedPartMaterialSentences(sections.introduction ?? "", clearFinishEvidence);
+  if (materialsStripped.removedSentences.length > 0) {
+    if (!isIntroStillUsable(materialsStripped.text)) {
+      return { ...base, ok: false, sections, fullDescription: buildDescription(sections, input),
+        violations: [{ code: "UNSUPPORTED_PART_MATERIAL", detail: "各部位の材質を確認できず、除くと紹介文が短すぎます。" }],
+        modelProvider: result!.providerId, modelName: result!.modelId,
+        failureReason: "部位ごとの材質を確認できません。" };
+    }
+    sections = { ...sections, introduction: materialsStripped.text };
+    introSanitized = true;
+  }
   const finishStripped = stripUnsupportedClearFinishSentences(sections.introduction ?? "", clearFinishEvidence);
   if (finishStripped.removedSentences.length > 0) {
     if (!isIntroStillUsable(finishStripped.text)) {

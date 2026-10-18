@@ -221,6 +221,33 @@ export function stripUnverifiedPhotoColorSentences(intro: string, inventoryText:
 }
 
 /** A specific clear/lacquer coating needs an explicit product record, not an inference from polishing. */
+/** A list of materials does not establish which material each component uses. */
+export function stripUnsupportedPartMaterialSentences(intro: string, evidence: string): { text: string; removedSentences: string[] } {
+  const parts = [/背もたれ|背部/, /座面|シート/, /脚部|脚/, /肘掛け|肘掛|アーム/, /天板/, /フレーム/];
+  const materials = [/木製|木材|ウッド|無垢/, /スチール|鋼|鉄製/, /アルミ/, /プラスチック|樹脂/, /本革|天然皮革/, /合皮|合成皮革/, /布製|ファブリック/, /ガラス/];
+  const positive = splitSentences(evidence).filter(s => !/ない|なく|ません|不明|未確認|推測|可能性|かもしれ|とは限/.test(s));
+  const normalize = (text: string) => text.replace(/[。\s]/g, "");
+  const exact = new Set(positive.map(normalize));
+  const pairs = new Set<string>();
+  for (const clause of positive.flatMap(s => s.split(/[、，,\n]/))) {
+    const ms = materials.flatMap((r, i) => r.test(clause) ? [i] : []);
+    if (ms.length === 1) parts.forEach((r, i) => { if (r.test(clause)) pairs.add(`${i}:${ms[0]}`); });
+  }
+  const removedSentences: string[] = [];
+  const kept = splitSentences(intro).filter(sentence => {
+    if (!parts.some(r => r.test(sentence)) || !materials.some(r => r.test(sentence)) || exact.has(normalize(sentence))) return true;
+    const supported = sentence.split(/[、，,]/).every(clause => {
+      const ps = parts.flatMap((r, i) => r.test(clause) ? [i] : []);
+      const ms = materials.flatMap((r, i) => r.test(clause) ? [i] : []);
+      return !ms.length || (ps.length > 0 && ms.length === 1 && ps.every(p => pairs.has(`${p}:${ms[0]}`)));
+    });
+    if (supported) return true;
+    removedSentences.push(sentence.trim());
+    return false;
+  });
+  return { text: kept.join("").replace(/\n{3,}/g, "\n\n").trim(), removedSentences };
+}
+
 export function stripUnsupportedClearFinishSentences(intro: string, evidence: string): { text: string; removedSentences: string[] } {
   if (/(?:艶消し|つや消し|マット)?クリア|透明(?:塗装|コーティング)|ラッカー仕上げ/.test(evidence)) {
     return { text: intro, removedSentences: [] };
@@ -239,7 +266,7 @@ export function stripUnsupportedSeatingClaims(
   intro: string,
   verifiedProductFacts: ReadonlyArray<{ fact: string; sourceUrl: string }> = [],
 ): { text: string; removedSentences: string[] } {
-  const claims = [/(?:身体|体)のラインに沿(?:う|った)/, /(?:快適な座り心地|座り心地が快適|心地よい座り心地|座りやす[いく]|座り易[いく])/, /堅牢(?:性|な)|耐久性に優れ|強度を(?:確保|実現)|安定感を(?:与え|実現)|使い勝手(?:も|が|に)優れ/];
+  const claims = [/(?:身体|体)のラインに沿(?:う|った)/, /座り心地|座りやす[いく]|座り易[いく]/, /堅牢(?:性|な)|耐久性に優れ|強度を(?:確保|実現)|安定感|使い勝手(?:も|が|に)優れ/];
   // Research snippets can mention a claim while explicitly denying it. A
   // source URL and matching words alone do not turn that mention into proof.
   const evidence = verifiedProductFacts

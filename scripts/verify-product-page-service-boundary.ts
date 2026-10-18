@@ -27,6 +27,7 @@
  */
 import { registerHooks } from "node:module";
 import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
 
 declare module "node:module" {
   export function registerHooks(hooks: {
@@ -34,8 +35,9 @@ declare module "node:module" {
   }): void;
 }
 
-const projectRoot = pathToFileURL(process.cwd() + "/").href;
-const mocksDir = pathToFileURL(process.cwd() + "/scripts/__mocks__/").href;
+const projectDirectory = realpathSync(process.cwd());
+const projectRoot = pathToFileURL(projectDirectory + "/").href;
+const mocksDir = pathToFileURL(projectDirectory + "/scripts/__mocks__/").href;
 const PROVIDER_MOCK_URL = mocksDir + "aiGateway.provider.mock.mjs";
 const USAGE_LOG_MOCK_URL = mocksDir + "aiGateway.usageLog.mock.mjs";
 
@@ -221,7 +223,7 @@ async function testCountryClaimFromPartOnlyFactIsRejected() {
     brand: null,
   };
   providerMock.__configure([
-    step(sections("落ち着いた雰囲気のラウンジソファです。このソファはイタリア製で、贅沢な座り心地が魅力です。", { title: "サンプル ラウンジソファ" })),
+    step(sections("落ち着いた雰囲気のラウンジソファです。このソファはイタリア製です。", { title: "サンプル ラウンジソファ" })),
   ]);
 
   const result = await generateProductPage(sofaInput);
@@ -256,7 +258,7 @@ async function testCountryClaimGroundedByWholeProductFactPasses() {
     brand: null,
   };
   providerMock.__configure([
-    step(sections("落ち着いた雰囲気のラウンジソファです。このソファはイタリア製で、贅沢な座り心地が魅力です。", { title: "サンプル ラウンジソファ2" })),
+    step(sections("落ち着いた雰囲気のラウンジソファです。このソファはイタリア製です。", { title: "サンプル ラウンジソファ2" })),
   ]);
 
   const result = await generateProductPage(sofaInput);
@@ -290,8 +292,8 @@ async function testConditionLeakStillRewrittenAfterCategoryCheckAdded() {
     brand: null,
   };
   providerMock.__configure([
-    step(sections("ゆとりのある座り心地が魅力のラウンジチェアです。座面には若干のスレが見られますが、使用に支障はありません。", { title: "サンプル ラウンジチェア" })),
-    step(sections("ゆとりのある座り心地が魅力のラウンジチェアです。丸みのあるフォルムがリビングにも書斎にもなじみます。", { title: "サンプル ラウンジチェア" })),
+    step(sections("背もたれに丸みのあるラウンジチェアです。座面には若干のスレが見られますが、使用に支障はありません。", { title: "サンプル ラウンジチェア" })),
+    step(sections("背もたれに丸みのあるラウンジチェアです。丸みのあるフォルムがリビングにも書斎にもなじみます。", { title: "サンプル ラウンジチェア" })),
   ]);
 
   const result = await generateProductPage(chairInput);

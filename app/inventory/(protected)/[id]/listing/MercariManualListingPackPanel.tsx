@@ -287,7 +287,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       onDraftSaved={refreshHttpStatus} />}
     <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isHttp && isB005396 ?
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
-      "価格、カテゴリー、数量はこの商品について選んでください。"}</p>
+      "価格とカテゴリーは共通の商品情報を反映しています。数量を入力し、内容をご確認ください。"}</p>
     {isHttp && hasShopsRecord ? <p className="mt-2 rounded bg-blue-50 p-3 text-sm text-blue-900">登録済みの商品です。商品名・説明・単価・数量・写真を変更する場合は共通の商品情報を保存し、商品一覧の「更新」を押してください。カテゴリ・配送方法・公開状態は現在の設定を保ちます。</p> : isHttp && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
       下の「準備登録」で保存した後、商品一覧のこの商品のメルカリShops欄で「出品」を押してください。
     </p>}
@@ -315,7 +315,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       <dt>発送元</dt><dd>埼玉県</dd>
       <dt>発送まで</dt><dd>4〜7日</dd>
     </dl>
-    <p className="mt-2 text-xs text-gray-600">送料込み参考価格を確認し、実際の販売価格を入力してください。参考価格は自動入力しません。</p>
+    <p className="mt-2 text-xs text-gray-600">共通の商品情報で設定したメルカリShopsの送料込み価格です。この商品だけ金額を変更することもできます。</p>
     {!isHttp && <p className="mt-2 text-xs text-gray-600" role="status">
       {secondsLeft === null ? "PCアプリに接続すると次の出品までの時間を表示します。" :
         secondsLeft < 0 ? "PC側で出品操作が進行中、または記録の確認が必要です。" :

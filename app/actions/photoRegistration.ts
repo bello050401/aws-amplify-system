@@ -318,6 +318,7 @@ export async function setPhotoAssetPrimaryAction(input: {
 
 export interface InventoryCandidateRow {
   id: string;
+  sku: string;
   name: string;
   categoryName: string;
   thumbnailKey: string | null;
@@ -380,7 +381,7 @@ export async function searchInventoryCandidatesAction(query: string): Promise<{ 
       .sort((a, b) => priorityOf(a.categoryId) - priorityOf(b.categoryId) || categoryOf(a.categoryId).localeCompare(categoryOf(b.categoryId), "ja") || b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, 40)
       .map((row) => ({
-        id: row.id, name: row.name, categoryName: categoryOf(row.categoryId),
+        id: row.id, sku: row.sku, name: row.name, categoryName: categoryOf(row.categoryId),
         thumbnailKey: row.mainImageThumbnailKey, previewKey: row.mainImageStorageKey,
         imageCount: row.imageCount, updatedAt: row.updatedAt,
       }));

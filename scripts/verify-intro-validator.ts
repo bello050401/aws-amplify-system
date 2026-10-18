@@ -36,6 +36,7 @@ import {
   stripAmbiguousPartColorSentences,
   stripUnsupportedClearFinishSentences,
   stripUnsupportedSeatingClaims,
+  stripUnsupportedPartMaterialSentences,
   MAX_GENERIC_PHRASES,
   MIN_INTRO_LENGTH_AFTER_STRIP,
 } from "../lib/ai/productPage/introValidator";
@@ -400,6 +401,14 @@ function testCategoryMismatchDetection() {
 }
 
 function main() {
+  const materialSource = "スチール、木";
+  const wrongParts = stripUnsupportedPartMaterialSentences("スチールとウッドを組み合わせたチェアです。座面と背もたれはスチール製で、脚部は木製となっています。背もたれには大きな開口があります。", materialSource);
+  assertEqual(wrongParts.removedSentences.length, 1, "素材列挙だけから座面や脚へ材質を割り当てない");
+  assertTrue(wrongParts.text.includes("スチールとウッド") && wrongParts.text.includes("大きな開口"), "素材全体と外観の記述は保持");
+  assertEqual(stripUnsupportedPartMaterialSentences("座面は木製です。", "座面は木製。脚はスチール製。").removedSentences.length, 0, "部位と素材の明示記録は保持");
+  assertEqual(stripUnsupportedPartMaterialSentences("座面はスチール製です。", "座面は木製。脚はスチール製。").removedSentences.length, 1, "別部位の素材を座面に転用しない");
+  assertEqual(stripUnsupportedPartMaterialSentences("座面は木製です。", "座面は木製ではありません。").removedSentences.length, 1, "素材の否定記録を根拠にしない");
+  assertEqual(stripUnsupportedSeatingClaims("この構造により、安定感のある座り心地を提供します。").removedSentences.length, 1, "実画面で発生した安定感のある座り心地を除去");
   const seating = stripUnsupportedSeatingClaims(
     "座面と背もたれの輪郭に丸みがあるチェアです。身体のラインに沿うように設計されています。快適な座り心地です。脚部には細い直線を用い、軽やかな外観に仕上げています。",
   );

@@ -276,7 +276,8 @@ export function ListingForm({
         setDraftError("生成文が品質検査を通過しなかったため、入力中の下書きは変更していません。確認事項を解消してから再生成してください。");
         return;
       }
-      setTitle(result.data.title);
+      // Staff supply the listing title; description generation must preserve it.
+      if (!title.trim()) setTitle(result.data.title);
       // Apply the complete canonical description only after its quality gate.
       setDescription(result.data.description);
       setLastAppliedDescription(result.data.description);

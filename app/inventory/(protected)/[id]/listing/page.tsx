@@ -93,7 +93,6 @@ export default async function ListingPage({ params }: { params: { id: string } }
         {/* 2026-09-04 §2: 2カラム化に伴い mx-auto を外した。中央寄せのままだと
             戻り導線だけが本文と揃わない位置へ動く。 */}
         <div className="mb-3 flex flex-wrap gap-4">
-          <Link href="/inventory/listings" className="text-[12px] text-blue-700 underline">← EC商品一覧</Link>
           <Link href="/inventory/settings?tab=ecListing" className="text-[12px] text-blue-700 underline">出品設定</Link>
           {/* 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §10: EC出品
               詳細から元のBELLO在庫詳細へ戻れる導線。inventoryId(一意キー)
@@ -101,10 +100,6 @@ export default async function ListingPage({ params }: { params: { id: string } }
           <Link href={`/inventory/${item.id}`} className="text-[12px] text-blue-700 underline hover:text-blue-900">
             ← 在庫詳細
           </Link>
-          {role === "ADMIN" && <Link href={`/inventory/mercari-bridge?inventoryId=${encodeURIComponent(item.id)}`}
-            className="ml-4 text-[12px] text-blue-700 underline hover:text-blue-900">
-            既存メルカリShops商品を照合する
-          </Link>}
         </div>
         {/* Desktop: basic information and reference price on the right; mobile: retain that order below the form. */}
         <ListingWorkspace

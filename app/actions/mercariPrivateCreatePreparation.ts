@@ -1,6 +1,7 @@
 "use server";
 
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
+import { validPreparationImageRef } from "@/lib/listing/mercariBridge/preparationImageRef";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { getChannelListing, getListingDraftForInventory } from "@/lib/listing/service";
 import { mercariBridgeReadRepository } from "@/lib/listing/mercariBridge/repository";
@@ -99,13 +100,7 @@ export async function getMercariPrivateCreatePreparationAction(
         typeof draft.condition !== "string" || !CONDITIONS.has(draft.condition) ||
         !["KAZAI", "SAGAWA"].includes(draft.shippingMethod) ||
         !Array.isArray(draft.images) || draft.images.length < 1 || draft.images.length > 20 ||
-        draft.images.some((image, index) => !image || image.sortOrder !== index ||
-          typeof image.storageKey !== "string" || !image.storageKey ||
-          image.storageKey.length > 512 || /[?#\x00-\x1f]/.test(image.storageKey) ||
-          image.storageKey.includes("://") ||
-          (image.source === "PHOTO_ASSET" ?
-            typeof image.photoAssetId !== "string" || !UUID.test(image.photoAssetId) :
-            image.source !== undefined && image.source !== "INVENTORY")))
+        draft.images.some((image, index) => !validPreparationImageRef(image, index)))
       return { ok: false, code: "INCOMPLETE_DRAFT" };
     const content: PreparationContent = {
       shopId: SHOP_ID, inventoryId: inventory.id,

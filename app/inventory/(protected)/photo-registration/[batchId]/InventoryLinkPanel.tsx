@@ -58,7 +58,7 @@ export function InventoryLinkPanel({ batchId, batchStatus, currentInventoryId, h
     <div className="rounded border border-gray-200 bg-white p-4">
       <label htmlFor="photo-registration-inventory-search" className="mb-1 block text-xs font-medium text-gray-700">商品を検索</label>
       <input id="photo-registration-inventory-search" value={query} onChange={(event) => { setQuery(event.target.value); setLinkError(null); }}
-        placeholder="商品名で検索（撮影待ち → 補修待ち → 出品待ち → その他）" className="w-full rounded border border-gray-300 px-3 py-2 text-sm" />
+        placeholder="商品名・管理番号で検索" className="w-full rounded border border-gray-300 px-3 py-2 text-sm" />
       <p aria-live="polite" className="mt-1 min-h-5 text-xs text-gray-500">
         {searching ? "検索中…" : searchError ? <span className="text-red-600">{searchError}</span> : `${candidates.length}件を表示`}
       </p>
@@ -71,7 +71,7 @@ export function InventoryLinkPanel({ batchId, batchStatus, currentInventoryId, h
               className={`flex w-full gap-3 border-b border-gray-100 p-3 text-left hover:bg-gray-50 ${selected?.id === candidate.id ? "bg-blue-50 ring-1 ring-inset ring-blue-300" : ""}`}>
               <InventoryThumbnail storageKey={candidate.thumbnailKey} alt={candidate.name} size="list" loading="lazy" />
               <span className="min-w-0 flex-1"><span className="block truncate text-sm font-bold text-gray-900">{candidate.name}</span>
-                <span className="block text-xs text-gray-600">{candidate.categoryName}</span></span>
+                <span className="block text-xs text-gray-600">{candidate.sku} ・ {candidate.categoryName}</span></span>
             </button>
           ))}
         </div>
@@ -82,14 +82,14 @@ export function InventoryLinkPanel({ batchId, batchStatus, currentInventoryId, h
               <InventoryThumbnail storageKey={selected.previewKey} alt={selected.name} size="heroContain" loading="eager" />
             </div>
             <div className="mt-3">
-              <div className="min-w-0"><p className="text-sm text-gray-600">{selected.categoryName}</p>
+              <div className="min-w-0"><p className="text-sm text-gray-600">{selected.sku} ・ {selected.categoryName}</p>
                 <h3 className="mt-1 text-base font-bold text-gray-900">{selected.name}</h3></div>
             </div>
             <p className="mt-3 text-sm text-gray-600">商品画像：{selected.imageCount > 1 ? "登録あり" : "撮影画像の登録待ち"}</p>
             {linkError ? <p role="alert" className="mt-3 text-sm text-red-600">{linkError}</p> : null}
             <button type="button" onClick={handleConfirmLink} disabled={linking}
               className="mt-4 min-h-10 w-full rounded bg-blue-700 px-4 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50">
-              {linking ? "バックエンドで紐付け中…" : "この商品へ紐付ける"}
+              {linking ? "紐付け中…" : "この商品へ紐付ける"}
             </button>
           </> : <p className="text-sm text-gray-500">左の検索結果から商品を選択してください。</p>}
         </div>
