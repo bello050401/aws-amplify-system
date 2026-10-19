@@ -152,15 +152,18 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     return () => clearTimeout(timer);
   }, [ports, query, category, advanced, sort]); // Reconnection never submits edits.
 
-  const saved = (item: InventoryItem) => {
+  const updateSavedItem = (item: InventoryItem) => {
     setServerRows(rows => rows ? [item,...rows.filter(row=>row.id!==item.id)] : null);
     const items = [item,...(snapshot?.items ?? []).filter(row=>row.id!==item.id)].slice(0,500);
     // Only this record was refreshed; preserve the list's last-fetch timestamp.
     const fetchedAt = snapshot?.fetchedAt ?? new Date().toISOString();
     setSnapshot({ schema: 1, owner: "current", fetchedAt, items });
     void ports.snapshot.write(items, fetchedAt).catch(() => setError("変更は保存済みですが、端末の保存データを更新できませんでした。"));
-    setEditor(null); setSelected(null); setTab("inventory");
     if (ports.searchInventory) void refresh();
+  };
+  const saved = (item: InventoryItem) => {
+    updateSavedItem(item);
+    setEditor(null); setSelected(null); setTab("inventory");
   };
   const startCreate=async()=>{
     if(creating)return;
@@ -253,7 +256,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onNextScan={item=>{saved(item);setScanSearch(true);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
+    {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
       <View style={s.header}>
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>

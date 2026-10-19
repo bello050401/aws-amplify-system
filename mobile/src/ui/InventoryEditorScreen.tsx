@@ -13,10 +13,10 @@ import {BarcodeScanner} from "./BarcodeScanner";
 import {PhotoPicker} from "./PhotoPicker";
 import {QrMovementSheet} from './QrMovementSheet';
 
-export function InventoryEditorScreen({ editor, onLeave, onSaved, onNextScan, features = RESTRICTED_FEATURES }: {
+export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, features = RESTRICTED_FEATURES }: {
   editor: InventoryEditor; onLeave: () => void; onSaved: (item: InventoryItem) => void;
   features?: MobileFeatures;
-  onNextScan?:(item:InventoryItem)=>void;
+  onQrSaved?:(item:InventoryItem)=>void;
 }) {
   const [scanning,setScanning]=useState(false);
   const [scanned,setScanned]=useState<string|null>(null);
@@ -79,7 +79,7 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onNextScan, fe
       <Text style={s.hint}>変更は「完了」を押して保存できたときに反映されます。</Text>
     </ScrollView>
     {scanning && <BarcodeScanner onClose={()=>setScanning(false)} onRead={value=>{setScanned(value);setScanning(false);}}/>}
-    {scanned!==null&&<QrMovementSheet value={scanned} editor={editor} onCancel={()=>setScanned(null)} onRescan={()=>{setScanned(null);setScanning(true);}} onDone={onSaved} onNext={onNextScan}/>}
+    {scanned!==null&&<QrMovementSheet value={scanned} editor={editor} onCancel={()=>setScanned(null)} onRescan={()=>{setScanned(null);setScanning(true);}} onSaved={item=>{setScanned(null);onQrSaved?.(item);}}/>}
     <Modal visible={master!==null} transparent animationType="slide" onRequestClose={()=>setMaster(null)}><View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>{master==="category"?"カテゴリ":"保管場所"}</Text><ScrollView style={{maxHeight:400}}>{["",...new Set(master==="category"?state.saved.categoryOptions:state.saved.locationOptions)].map(value=><Pressable accessibilityRole="button" key={value} style={s.choice} onPress={()=>{if(master==="category"){const current=splitCategoryNames(state.draft.category);editor.change("category",!value?"":(current.includes(value)?current.filter(c=>c!==value):[...current,value]).join(","));}else if(master){editor.change(master,value);setMaster(null);}}}><Text style={s.link}>{master==="category"&&splitCategoryNames(state.draft.category).includes(value)?"✓ ":""}{value||"未設定"}</Text></Pressable>)}</ScrollView><Pressable accessibilityRole="button" onPress={()=>setMaster(null)} style={s.choice}><Text style={s.link}>完了</Text></Pressable></View></View></Modal>
     <Modal visible={statusChoiceOpen} transparent animationType="slide" onRequestClose={() => setStatusChoiceOpen(false)}>
       <View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>状態</Text>

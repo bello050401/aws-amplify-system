@@ -16,7 +16,7 @@ export function ScannerLayout({ children, error, onClose, permissionAction }: {
     <SafeAreaView style={s.root}>
       <View style={s.header}>
         <Pressable accessibilityRole="button" accessibilityLabel="読み取りを閉じる" onPress={onClose} style={s.close}><Ionicons name="close" size={25} color="white" /></Pressable>
-        <Text style={s.title}>コードを読み取る</Text><View style={s.headerSpacer} />
+        <Text style={s.title}>バーコードを読み取る</Text><View style={s.headerSpacer} />
       </View>
       <View style={s.camera} onLayout={event => setSize(event.nativeEvent.layout)}>
         {children}
@@ -37,8 +37,8 @@ export function ScannerLayout({ children, error, onClose, permissionAction }: {
         {!!permissionAction && <View style={s.cameraMessage}><Ionicons name="camera-outline" size={38} color="#A9BFB7" /><Text style={s.error}>コードを読み取るためにカメラを使用します。</Text><Pressable accessibilityRole="button" onPress={permissionAction} style={s.allow}><Text style={s.allowText}>カメラを許可する</Text></Pressable></View>}
       </View>
       <View style={s.footer}>
-        <View style={s.codeKinds}><Ionicons name="barcode-outline" size={28} color="#A9DAC9" /><Text style={s.codeKindText}>バーコード</Text><View style={s.dot} /><Ionicons name="qr-code-outline" size={22} color="#A9DAC9" /><Text style={s.codeKindText}>QRコード</Text></View>
-        <Text style={s.instruction}>枠の中にコード全体を合わせてください</Text>
+        <View style={s.codeKinds}><Ionicons name="barcode-outline" size={28} color="#A9DAC9" /><Text style={s.codeKindText}>バーコード専用</Text></View>
+        <Text style={s.instruction}>枠の中にバーコード全体を合わせてください</Text>
         <Text style={s.hint}>バーコードは横向きに。ピントが合うまで{`\n`}ゆっくり距離を調整してください。</Text>
       </View>
     </SafeAreaView>
