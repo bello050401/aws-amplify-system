@@ -158,7 +158,6 @@ export default async function InventoryDetailPage({
   }
   const [categories, locations, shippingReference] = relatedRead;
 
-  const category = item.categoryId ? categories.find((c) => c.id === item.categoryId) : undefined;
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;
   const status = item.statusId ? statuses.find((s) => s.id === item.statusId) : undefined;
   const canEdit = canEditInventory(role);

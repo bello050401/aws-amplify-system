@@ -9,7 +9,6 @@ import { downloadAndImportInventoryImage, removeInventoryImage } from "./imageSe
 import type { InventoryImageRecord } from "./imageTypes";
 import { buildZaicoSourceLinkId } from "./zaicoSyncEngine";
 import { unwrapGet, unwrapList } from "@/lib/amplify/listAll";
-import { writeInventoryRevision, type InventoryWriteResult } from "./conditionalUpdate";
 
 /**
  * Ports-and-adapters boundary for the ZAICO sync engine (BELLO統合改修

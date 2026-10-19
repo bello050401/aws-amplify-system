@@ -18,7 +18,7 @@ import { copyInventoryMedium, copyInventoryThumbnail, generateInventoryDerivativ
 import { diffField, logInventoryHistory } from "@/lib/inventory/history";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
 import type { InventoryImageRecord, InventoryImageType } from "@/lib/inventory/imageTypes";
-import { assertInventoryVersion, writeInventoryRevision, deleteInventoryRevision, type InventoryDeleteResult, type InventoryWriteResult } from "@/lib/inventory/conditionalUpdate";
+import { assertInventoryVersion } from "@/lib/inventory/conditionalUpdate";
 import { withHumanEdits, productCustomFields } from "@/lib/inventory/humanEdits";
 import { inventoryCategoryIds } from "@/lib/inventory/categories";
 import { inventoryQuantityError } from "@/lib/inventory/quantityValidation";
@@ -302,7 +302,7 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
     throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(skuErrors)}`);
   }
 
-  const { data: created, errors } = await (async (data: Record<string, unknown>, _auth: unknown) => ({data: await persistInventoryWithCategories(data), errors: undefined}))(
+  const { data: created, errors } = await (async (data: Record<string, unknown>) => ({data: await persistInventoryWithCategories(data), errors: undefined}))(
     {
       ...(options?.id ? { id: options.id } : {}),
       sku,
@@ -333,7 +333,6 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
       // spread straight through with no per-field handling needed here.
       ...extendedFieldsInput(input),
     },
-    inventoryAuthMode,
   );
 
   if (errors || !created) {

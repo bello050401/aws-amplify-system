@@ -5,50 +5,7 @@ import type { MasterEntry } from "@/lib/inventory/masters";
 import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { toListRow, type InventoryListRow } from "@/lib/inventory/queries";
 
-/**
- * EC出品の対象になり得る在庫だけを、カテゴリのGSIから直接引く。
- *
- * ## なぜ必要か —— 実測
- *
- * EC出品一覧は、在庫を**全件読んでから**対象外カテゴリを落として
- * 表示していた。実データで数えると:
- *
- *   在庫総数                        5,313件
- *   うち対象外カテゴリ               4,965件
- *     発送完了 4,565 / 破棄 178 / 事務所備品 134 /
- *     補修待ち 49 / 無償提供 31 / コーディネート用 8
- *   実際に表示される対象              348件
- *
- * つまり **348件を出すために5,313件を読んでいた**。読み取りの実測値は
- * 全件スキャンで 9,246ms(7往復)。
- *
- * カテゴリ別のGSI(inventoriesByCategoryId)は既に存在するので、
- * 対象カテゴリだけを引けば読む量が15分の1になる。ページを切って
- * 件数を減らす方法もあるが、この画面は**取得済みの全件に対して
- * 絞り込み・検索**を行うため、件数を削ると検索できる範囲が狭まる。
- * 「対象だけを全部引く」なら、検索の範囲を一切狭めずに速くできる。
- *
- * ## 2026-09-13 EC一覧の読取量削減: Categoryは呼び出し側と共有する
- *
- * 以前はこの関数が`listAllMasterEntries("Category")`を自分で呼んでいた。
- * ところがEC出品一覧(lib/listing/service.tsのlistListingsOverview)は
- * 対象外カテゴリー名の解決(buildCategoryNameLookup)にも同じCategory
- * マスタが要るため、1回の一覧表示で**同じCategoryマスタを2回**
- * 取得していた(件数は少ない=実害は小さいが、単純な無駄な重複)。
- * ここでは自分で取得せず、呼び出し側が1回だけ取得した結果を受け取る
- * ——「1回のlist要求の中でCategory取得を共有する」ことを、関数の外へ
- * 出して呼び出し側の責務にする形。呼び出し元が1箇所(lib/listing/
- * service.ts)しか無いことは確認済み。
- *
- * ## 境界(正直に)
- *
- * カテゴリが未設定の在庫はカテゴリGSIに現れないため、この関数の
- * 結果には含まれない(実測で1件)。EC出品はカテゴリの対応付けが
- * 必須なので、カテゴリ未設定の在庫はそもそも出品できず、この一覧に
- * 出ないことによる実害は無い。件数は `uncategorizedExcluded` として
- * 返すので、呼び出し側が黙って落とさずに扱える。
- */
-
+/** Multiple categories use Inventory.categoryIds; categoryId remains a legacy fallback. */
 export interface EcEligibleInventoryResult {
   items: InventoryListRow[];
   /** 引いた対象カテゴリの数。 */
@@ -57,44 +14,16 @@ export interface EcEligibleInventoryResult {
   uncategorizedExcluded: true;
 }
 
-/** 1カテゴリあたりの取得上限。最大カテゴリ(販売中277件)でも1〜2往復で収まる。 */
-const PAGE_SIZE = 200;
-/** 1カテゴリが異常に大きい場合の歯止め。 */
-const MAX_PAGES_PER_CATEGORY = 20;
-
-/**
- * `categories`は呼び出し側(lib/listing/service.ts)が1回だけ取得した
- * Categoryマスタ全件(listAllMasterEntries("Category")の結果)——この関数
- * 自身はCategoryを取得しない(上記コメント参照)。
- */
+/** Read once for all eligible categories to avoid one full table scan per category. */
 export async function listEcEligibleInventory(categories: MasterEntry[]): Promise<EcEligibleInventoryResult> {
-  const eligible = categories.filter((c) => isEcListingEligible(c.name));
-
-  // カテゴリごとの取得は互いに独立しているので同時に投げる。
-  // カテゴリ数は実測19件(うち対象13件)で、同時実行数として問題にならない。
-  const perCategory = await Promise.all(
-    eligible.map(async (category) => {
-      const rows: InventoryListRow[] = [];
-      let nextToken: string | null | undefined;
-      let pages = 0;
-      do {
-        const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.list(
-          { filter:categoryFilter(category.id), limit: PAGE_SIZE, nextToken: nextToken ?? undefined, ...inventoryAuthMode },
-        );
-        // 取得エラーを0件と区別する。黙って空にすると「その分類の商品が
-        // 無い」ように見えてしまう。
-        if (errors) throw new Error(`在庫の取得に失敗しました(カテゴリ ${category.name}): ${errors.map((e) => e.message).join("; ")}`);
-        rows.push(...data.map((d) => toListRow(d as never)));
-        nextToken = nt;
-        pages++;
-      } while (nextToken);
-      return rows;
-    }),
-  );
-
-  const items = [...new Map(perCategory.flat().map(row=>[row.id,row])).values()];
-  // 一覧の並びは在庫一覧と揃える(更新の新しい順)。
-  items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
-
-  return { items, queriedCategories: eligible.length, uncategorizedExcluded: true };
+ const eligible=categories.filter(c=>isEcListingEligible(c.name));
+ if(!eligible.length)return {items:[],queriedCategories:0,uncategorizedExcluded:true};
+ const items:InventoryListRow[]=[];let nextToken:string|null|undefined;
+ do {
+  const {data,nextToken:nt,errors}=await serverDataClient.models.Inventory.list({filter:{or:eligible.map(c=>categoryFilter(c.id))},limit:1000,nextToken:nextToken??undefined,...inventoryAuthMode});
+  if(errors)throw new Error('在庫の取得に失敗しました: '+errors.map(e=>e.message).join('; '));
+  items.push(...data.map(row=>toListRow(row as never)));nextToken=nt;
+ }while(nextToken);
+ items.sort((a,b)=>a.updatedAt<b.updatedAt?1:a.updatedAt>b.updatedAt?-1:0);
+ return {items,queriedCategories:eligible.length,uncategorizedExcluded:true};
 }

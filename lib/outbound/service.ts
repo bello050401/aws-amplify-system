@@ -1,7 +1,7 @@
 import {sendOutboundTransaction} from './transactionRetry';
 import 'server-only';
 import {createHash,randomUUID} from 'node:crypto';
-import {GetCommand,PutCommand,ScanCommand,TransactWriteCommand,UpdateCommand} from '@aws-sdk/lib-dynamodb';
+import {GetCommand,PutCommand,ScanCommand,TransactWriteCommand,UpdateCommand,type ScanCommandOutput} from '@aws-sdk/lib-dynamodb';
 import {inventoryDdb as db,inventoryTable as table,getInventoryRaw,categoryLinkChanges} from '@/lib/inventory/categoryPersistence';
 import {inventoryCategoryIds} from '@/lib/inventory/categories';
 import {withHumanEdits} from '@/lib/inventory/humanEdits';
@@ -15,7 +15,7 @@ import {DEFAULT_OUTBOUND_COLUMNS,parseJsonField,type OutboundDestination,type Ou
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function requireUuid(id:unknown):asserts id is string {if(typeof id!=='string'||!uuid.test(id))throw new Error('対象を選び直してください。');}
 async function all(model:string,filter?:{expression:string;values:Record<string,unknown>;names?:Record<string,string>}) {
-  const items:Record<string,any>[]=[];let key:Record<string,unknown>|undefined;
+  const items:NonNullable<ScanCommandOutput['Items']>=[];let key:Record<string,unknown>|undefined;
   do {const p=await db.send(new ScanCommand({TableName:table(model),ConsistentRead:true,ExclusiveStartKey:key,
     ...(filter?{FilterExpression:filter.expression,ExpressionAttributeValues:filter.values,ExpressionAttributeNames:filter.names}:{})}));items.push(...p.Items??[]);key=p.LastEvaluatedKey;}while(key);
   return items;
