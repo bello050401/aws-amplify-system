@@ -1,3 +1,4 @@
+import {splitCategoryNames} from '@/lib/inventory/categories';
 import { createHash } from "node:crypto";
 import type { InventoryFieldsInput } from "@/app/actions/inventory";
 import type { InventoryDetail, MasterOption, StatusOption } from "@/lib/inventory/queries";
@@ -10,6 +11,7 @@ import type { MobileFeatures } from "./accessPolicy";
 import type { WebPhotoAssetView } from "../photoRegistration/webAdapter";
 import { extensionForMimeType, photoAssetS3Key } from "../photoRegistration/types";
 import { resolveProductGallerySource } from "../photoRegistration/gallerySelection";
+import { imageId } from "./inventoryPhotos";
 
 // Internal save receipt, stored in the same atomic Inventory update as the fields.
 // It contains no credentials or product text and is excluded from mobile projection.
@@ -22,11 +24,14 @@ export class MobileWriteValidationError extends Error {
 }
 const invalid = (): never => { throw new MobileWriteValidationError("INVALID_INPUT"); };
 
-/** Accept the mobile editor contract and append-only uploads; never arbitrary columns or custom metadata. */
+/** Accept only editor fields, uploads and IDs of photos belonging to this inventory. */
 export function parseMobileSave(raw: unknown, id: string): SaveRequest {
   if (!object(raw) || !uuid.test(id) || raw.id !== id || typeof raw.mutationId !== "string" || !uuid.test(raw.mutationId) ||
       typeof raw.expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(raw.expectedUpdatedAt)) ||
-      Object.keys(raw).some(key => !["id", "mutationId", "expectedUpdatedAt", "draft", "create", "uploads", "copyFrom"].includes(key))) return invalid();
+      Object.keys(raw).some(key => !["id", "mutationId", "expectedUpdatedAt", "draft", "create", "uploads", "copyFrom", "removedPhotoIds"].includes(key))) return invalid();
+  if (raw.removedPhotoIds !== undefined && (raw.create || !Array.isArray(raw.removedPhotoIds) || raw.removedPhotoIds.length > 100 ||
+      raw.removedPhotoIds.some(id => typeof id !== "string" || !/^inventory-[a-f0-9]{24}$/.test(id)) ||
+      new Set(raw.removedPhotoIds).size !== raw.removedPhotoIds.length)) return invalid();
   if (raw.create !== undefined && raw.create !== true) return invalid();
   if (raw.copyFrom !== undefined && (!raw.create || !object(raw.copyFrom) || Object.keys(raw.copyFrom).some(key => !["id", "updatedAt"].includes(key)) ||
       typeof raw.copyFrom.id !== "string" || !uuid.test(raw.copyFrom.id) || raw.copyFrom.id === id ||
@@ -44,13 +49,13 @@ export function parseMobileSave(raw: unknown, id: string): SaveRequest {
   if (validateDraft(draft as InventoryDraft)) return invalid();
   // GraphQL Int, not JavaScript's wider safe integer range.
   if (Number(draft.quantity) > 2147483647 || Number(draft.details.purchaseQuantity ?? 0) > 2147483647) return invalid();
-  return { id, mutationId: raw.mutationId, expectedUpdatedAt: raw.expectedUpdatedAt, draft: draft as InventoryDraft, ...(raw.create ? { create: true } : {}), ...(raw.uploads ? { uploads: raw.uploads as SaveRequest["uploads"] } : {}), ...(raw.copyFrom ? { copyFrom: raw.copyFrom as SaveRequest["copyFrom"] } : {}) };
+  return { id, mutationId: raw.mutationId, expectedUpdatedAt: raw.expectedUpdatedAt, draft: draft as InventoryDraft, ...(raw.create ? { create: true } : {}), ...(raw.uploads ? { uploads: raw.uploads as SaveRequest["uploads"] } : {}), ...(raw.copyFrom ? { copyFrom: raw.copyFrom as SaveRequest["copyFrom"] } : {}), ...(raw.removedPhotoIds ? { removedPhotoIds: raw.removedPhotoIds as string[] } : {}) };
 }
 
 function receiptFor(request: SaveRequest, owner: string) {
   const draft = request.draft;
   const values = [...draftKeys.map(key => [key, draft[key]]), ["details", Object.entries(draft.details).sort(([a], [b]) => a.localeCompare(b))]];
-  return { owner, mutationId: request.mutationId, fingerprint: createHash("sha256").update(JSON.stringify([request.id, request.expectedUpdatedAt, values, ...(request.create || request.uploads ? [request.create ?? false, request.uploads ?? []] : []), ...(request.copyFrom ? [request.copyFrom] : [])])).digest("hex") };
+  return { owner, mutationId: request.mutationId, fingerprint: createHash("sha256").update(JSON.stringify([request.id, request.expectedUpdatedAt, values, ...(request.create || request.uploads ? [request.create ?? false, request.uploads ?? []] : []), ...(request.copyFrom ? [request.copyFrom] : []), ...(request.removedPhotoIds?.length ? [[...request.removedPhotoIds].sort()] : [])])).digest("hex") };
 }
 
 export function mobileWriteWasApplied(row: InventoryDetail, request: SaveRequest, owner: string): boolean {
@@ -71,13 +76,17 @@ function masterId(name: string, current: string | null, choices: MasterOption[])
 export function mobileInventoryInput(row: InventoryDetail, request: SaveRequest, owner: string, features: MobileFeatures,
   categories: MasterOption[], locations: MasterOption[], statuses: StatusOption[]): InventoryFieldsInput {
   assertInventoryVersion(request.expectedUpdatedAt, row.updatedAt);
+  const removed = new Set(request.removedPhotoIds ?? []);
+  // Resolve opaque IDs against the current product; never accept client-supplied storage paths.
+  if ([...removed].some(id => !row.images.some(image => imageId(image.storageKey) === id))) return invalid();
   const { draft } = request;
   if (draft.statusId && draft.statusId !== row.statusId && !statuses.some(status => status.id === draft.statusId)) return invalid();
   const input: InventoryFieldsInput = {
     name: draft.name, quantity: Number(draft.quantity), unit: draft.unit, note: draft.note,
-    categoryId: masterId(draft.category, row.categoryId, categories), locationId: masterId(draft.location, row.locationId, locations), statusId: draft.statusId,
+    categoryIds: splitCategoryNames(draft.category).map(name=>masterId(name, row.categoryId, categories)),
+    categoryId: splitCategoryNames(draft.category).map(name=>masterId(name, row.categoryId, categories))[0] ?? "", locationId: masterId(draft.location, row.locationId, locations), statusId: draft.statusId,
     expectedUpdatedAt: request.expectedUpdatedAt, purchasePrice: row.purchasePrice, salePrice: row.salePrice,
-    images: row.images.map(image => ({ ...image, kind: "uploaded" as const })),
+    images: row.images.filter(image => !removed.has(imageId(image.storageKey))).map(image => ({ ...image, kind: "uploaded" as const })),
     customFields: { ...row.customFields },
   };
   const columns = input as unknown as Record<string, unknown>;

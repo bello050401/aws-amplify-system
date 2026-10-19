@@ -4,7 +4,7 @@ import { resolveProductGallerySource } from "../photoRegistration/gallerySelecti
 import type { WebPhotoAssetView } from "../photoRegistration/webAdapter";
 import type { InventoryPhoto } from "../../mobile/src/domain/inventory";
 
-const imageId = (key: string) => `inventory-${createHash("sha256").update(key).digest("hex").slice(0, 24)}`;
+export const imageId = (key: string) => `inventory-${createHash("sha256").update(key).digest("hex").slice(0, 24)}`;
 
 /** All existing Web image sources, with the same primary-image precedence. Never truncate to a screenshot's count. */
 export async function mobileInventoryPhotos(images: InventoryImageRecord[], assets: WebPhotoAssetView[], sign: (key: string) => Promise<string>): Promise<InventoryPhoto[]> {

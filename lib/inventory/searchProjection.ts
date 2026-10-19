@@ -53,6 +53,7 @@ const STRUCTURAL_FIELDS = [
   "deletedAt",
   // マスタ参照(カテゴリ/保管場所/状態での絞り込み)。
   "categoryId",
+  "categoryIds",
   "locationId",
   "statusId",
   // 在庫ID表示の解決(resolveDisplayInventoryId)。

@@ -69,6 +69,7 @@ export function attributesForSearchFieldKey(key: string): string[] {
   if (key === "displayId") return ["sku", "sourceSystem", "sourceInventoryId"];
   // 動的な追加項目は customFields(AWSJSON文字列)の中。個別に射影できない。
   if (key.startsWith("cf:")) return ["customFields"];
+  if (key === "categoryId") return ["categoryId", "categoryIds"];
   return [key];
 }
 

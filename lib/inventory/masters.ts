@@ -1,4 +1,5 @@
 import "server-only";
+import {categoryFilter} from "./categories";
 import { invalidateMasterCache } from "./masterCache";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages, unwrapList } from "@/lib/amplify/listAll";
@@ -332,7 +333,7 @@ async function countInventoryReferences(model: MasterModelName, id: string): Pro
     do {
       const result =
         model === "Category"
-          ? await serverDataClient.models.Inventory.listInventoryByCategoryId({ categoryId: id }, { limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode })
+          ? await serverDataClient.models.Inventory.list({ filter:categoryFilter(id), limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode })
           : await serverDataClient.models.Inventory.listInventoryByLocationId({ locationId: id }, { limit: 200, nextToken: nextToken ?? undefined, ...inventoryAuthMode });
       // 「使われているか」を数える処理。ここで取得に失敗して0件が
       // 返ると、deleteMasterEntry は「誰も使っていない」と判断して

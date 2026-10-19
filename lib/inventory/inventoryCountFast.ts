@@ -93,8 +93,9 @@ export function buildCountExpression(filters: InventoryCursorListFilters): Count
     // 複数選択は OR(buildFilter と同じ)。
     const ors = categoryIds.map((id, i) => {
       names["#cat"] = "categoryId";
+      names["#cats"] = "categoryIds";
       values[`:cat${i}`] = id;
-      return `#cat = :cat${i}`;
+      return `(contains(#cats, :cat${i}) OR (attribute_not_exists(#cats) AND #cat = :cat${i}))`;
     });
     parts.push(`(${ors.join(" OR ")})`);
   }

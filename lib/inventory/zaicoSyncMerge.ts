@@ -30,6 +30,7 @@ import { humanEditedFields, HUMAN_EDITED_FIELDS } from "./humanEdits";
 export interface ZaicoProposedValues {
   /** ZAICOのカテゴリ名から解決したBELLOのカテゴリID。 */
   categoryId?: string | null;
+  categoryIds?: string[];
   locationId?: string | null;
   name?: string | null;
   quantity?: number | null;
@@ -47,6 +48,7 @@ export interface ZaicoProposedValues {
 /** いまBELLOに入っている値。 */
 export interface BelloCurrentValues {
   categoryId?: string | null;
+  categoryIds?: string[];
   locationId?: string | null;
   name?: string | null;
   quantity?: number | null;
@@ -136,6 +138,7 @@ export interface MergeResult {
 /** トップレベル列として扱う項目。 */
 const TOP_LEVEL_FIELDS = [
   "categoryId",
+  "categoryIds",
   "locationId",
   "name",
   "quantity",
@@ -179,6 +182,7 @@ export function mergeZaicoUpdate(params: {
   const skipped: SkippedField[] = [];
   const conflicts: FieldConflict[] = [];
   const edited = humanEditedFields(bello.customFields);
+  if (edited.has('categoryId') || edited.has('categoryIds')) { edited.add('categoryId'); edited.add('categoryIds'); }
 
   // 次回の基準(スナップショット)に何を残すか。フィールド単位で決める。
   // 詳しい理由は下の「次回のためのスナップショット」のコメント。
@@ -186,7 +190,10 @@ export function mergeZaicoUpdate(params: {
 
   const record = (field: string, decision: UpdateDecision, zaicoValue: unknown, belloValue: unknown, sink: Record<string, unknown>) => {
     if (!isNewRecord && edited.has(field)) {
-      if (valuesEqual(zaicoValue, belloValue)) edited.delete(field);
+      if (valuesEqual(zaicoValue, belloValue)) {
+        edited.delete(field);
+        if(field==='categoryIds') edited.delete('categoryId');
+      }
       else decision = { action: "CONFLICT", belloValue, zaicoValue,
         reason: "自社システムで変更した内容と異なります。編集内容を保持し、確認対象にします。" };
     }
@@ -232,6 +239,7 @@ export function mergeZaicoUpdate(params: {
 
   // ── トップレベルの列 ────────────────────────────────────────────
   for (const field of TOP_LEVEL_FIELDS) {
+    if (field==='categoryId' && zaico.categoryIds!==undefined) continue;
     const zaicoValue = zaico[field];
     if (zaicoValue === undefined) continue;
     const belloValue = bello[field];
@@ -244,6 +252,7 @@ export function mergeZaicoUpdate(params: {
     });
     record(field, decision, zaicoValue, belloValue, updates);
   }
+  if (Array.isArray(updates.categoryIds)) updates.categoryId=updates.categoryIds[0]??null;
 
   // ── extendedFields ──────────────────────────────────────────────
   for (const [field, zaicoValue] of Object.entries(zaico.extendedFields)) {

@@ -499,6 +499,8 @@ const zaicoSourceLinkTable = backend.data.resources.tables["ZaicoSourceLink"];
 
 inventoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 categoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+for (const name of ['InventoryCategory','BarcodeClaim']) backend.data.resources.tables[name].grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+
 locationTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 inventoryHistoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 zaicoSyncJobTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
@@ -680,3 +682,15 @@ backend.salesAggregateScheduler.addEnvironment("INVENTORY_TABLE_NAME", inventory
 backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_SNAPSHOT_TABLE_NAME", salesAggregateSnapshotTable.tableName);
 backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_RUN_STATUS_TABLE_NAME", salesAggregateRunStatusTable.tableName);
 backend.salesAggregateScheduler.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJobTable.tableName);
+
+// Only the existing BELLO host receives the new authenticated inventory/outbound adapter permissions.
+if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {
+  const outboundStack = backend.createStack('OutboundRuntime');
+  const role = Role.fromRoleName(outboundStack, 'ExistingComputeRole', 'BelloAmplifyStagingComputeRole');
+  const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','InventoryHistory'].map(name=>backend.data.resources.tables[name].tableArn);
+  const readable = ['Category','Location'].map(name=>backend.data.resources.tables[name].tableArn);
+  new ManagedPolicy(outboundStack,'RuntimeAccess',{roles:[role],statements:[
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:writable}),
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query'],resources:readable}),
+  ]});
+}

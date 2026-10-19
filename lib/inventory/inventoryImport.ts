@@ -1,4 +1,6 @@
 import "server-only";
+import {persistInventoryWithCategories} from "./categoryPersistence";
+import {splitCategoryNames,inventoryCategoryIds} from "./categories";
 import ExcelJS from "exceljs";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { clearInventoryCountCache } from "./inventoryCountCache";
@@ -9,6 +11,7 @@ import { parseCustomFields, stringifyCustomFields } from "./customFieldsCodec";
 import { diffField, logInventoryHistory, type HistoryFieldChange } from "./history";
 import { STATIC_EXPORT_FIELDS, EXTENDED_EXPORT_FIELDS, KNOWN_CUSTOM_FIELD_KEYS, type ExportFieldValueType } from "./exportFields";
 import { parseCsv } from "./csv";
+import { inventoryQuantityError } from "./quantityValidation";
 
 type InventoryModel = Schema["Inventory"]["type"];
 
@@ -228,6 +231,34 @@ export function parseCsvFile(text: string): { headers: string[]; rows: Record<st
   return { headers, rows };
 }
 
+function readXlsxCell(cell: ExcelJS.Cell): string {
+  let value = cell.value;
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    if ("formula" in value || "sharedFormula" in value) {
+      // Only use Excel's saved result. Never evaluate uploaded formula code.
+      // Cell.value omits falsy results in ExcelJS; Cell.result preserves 0/""/false.
+      const result = cell.result;
+      if (result === undefined || result === null) {
+        throw new Error(`${cell.address}セルの計算結果が保存されていません。Excelで再計算して保存するか、値に貼り付けてから取り込んでください。`);
+      }
+      value = result;
+    } else if ("richText" in value) {
+      value = value.richText.map((part) => part.text).join("");
+    } else if ("hyperlink" in value) {
+      value = value.text;
+    }
+  }
+  if (value instanceof Date) {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${value.getUTCFullYear()}/${pad(value.getUTCMonth() + 1)}/${pad(value.getUTCDate())}`;
+  }
+  if (value && typeof value === "object") {
+    const detail = "error" in value ? `（${value.error}）` : "";
+    throw new Error(`${cell.address}セルを読み取れません${detail}。Excelで内容を修正してから取り込んでください。`);
+  }
+  return value === null || value === undefined ? "" : String(value).trim();
+}
+
 export async function parseXlsxFile(buffer: ArrayBuffer): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
   const workbook = new ExcelJS.Workbook();
   try {
@@ -247,7 +278,7 @@ export async function parseXlsxFile(buffer: ArrayBuffer): Promise<{ headers: str
   const headerRow = sheet.getRow(1);
   const headers: string[] = [];
   headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-    headers[colNumber - 1] = String(cell.value ?? "").trim();
+    headers[colNumber - 1] = readXlsxCell(cell);
   });
 
   const rows: Record<string, string>[] = [];
@@ -259,15 +290,7 @@ export async function parseXlsxFile(buffer: ArrayBuffer): Promise<{ headers: str
     headers.forEach((header, i) => {
       if (!header) return;
       const cell = row.getCell(i + 1);
-      let value = cell.value;
-      // 日付セルはExcel上でDateオブジェクトとして保持される — 文字列
-      // 化はCSVと同じ"YYYY/MM/DD"へ揃える(以降のparseImportDateは
-      // "YYYY/MM/DD"と"YYYY-MM-DD"の両方を受け付ける)。
-      if (value instanceof Date) {
-        const pad = (n: number) => String(n).padStart(2, "0");
-        value = `${value.getFullYear()}/${pad(value.getMonth() + 1)}/${pad(value.getDate())}`;
-      }
-      const str = value === null || value === undefined ? "" : String(value).trim();
+      const str = readXlsxCell(cell);
       if (str) hasValue = true;
       record[header] = str;
     });
@@ -329,7 +352,7 @@ export interface ImportRowOutcome {
   warnings: string[];
   error?: string;
   /** create/updateのときだけ — 実際にInventory.create/updateへ渡す値。executeImportRowsが使う。 */
-  writePayload?: Record<string, string | number | null>;
+  writePayload?: Record<string, string | number | string[] | null>;
   /** update/createのときだけ — InventoryHistoryへ書く差分。executeImportRowsが使う。 */
   historyChanges?: HistoryFieldChange[];
 }
@@ -345,6 +368,13 @@ export function parseImportNumber(raw: string, label: string, warnings: string[]
     return null;
   }
   return n;
+}
+
+export function parseImportQuantity(raw: string, warnings: string[]): { value: number | null; error: string | null } {
+  const value = parseImportNumber(raw, "数量", warnings);
+  return { value, error: raw.trim() && value === null
+    ? "数量は0以上の整数で入力してください。"
+    : inventoryQuantityError(value) };
 }
 
 /** "2026/08/27" "2026-08-27" → AWSDate "2026-08-27"。 */
@@ -473,7 +503,7 @@ export async function resolveImportRows(
       warnings.push(`指定された在庫ID/SKU "${matchedValue}" は既存の在庫と一致しないため、新規登録として扱います（SKUは自動採番されます）。`);
     }
 
-    const payload: Record<string, string | number | null> = {};
+    const payload: Record<string, string | number | string[] | null> = {};
     let name = existing?.name ?? "";
     let rowError: string | null = null;
 
@@ -494,14 +524,13 @@ export async function resolveImportRows(
         const trimmed = raw.trim();
         if (!trimmed) {
           payload.categoryId = null;
+          payload.categoryIds = [];
           continue;
         }
-        const match = categoryByName.get(normalizeMasterName(trimmed));
-        if (!match) {
-          rowError = `カテゴリ "${trimmed}" が見つかりません。/inventory/settingsで作成してから再度お試しください。`;
-          continue;
-        }
-        payload.categoryId = match.id;
+        const matches = splitCategoryNames(trimmed).map(name=>categoryByName.get(normalizeMasterName(name)));
+        if(matches.some(x=>!x)){rowError='カテゴリが見つかりません。設定画面で確認してください。';continue;}
+        payload.categoryIds=matches.map(x=>x!.id);
+        payload.categoryId=matches[0]?.id??null;
         continue;
       }
       if (targetKey === "locationName") {
@@ -532,7 +561,11 @@ export async function resolveImportRows(
 
       const meta = fieldMeta[targetKey];
       if (!meta) continue; // マッピング候補にない未知のtarget key(理論上到達しない)
-      if (meta.valueType === "number") {
+      if (targetKey === "quantity") {
+        const parsedQuantity = parseImportQuantity(raw, warnings);
+        if (parsedQuantity.error) rowError = parsedQuantity.error;
+        else payload.quantity = parsedQuantity.value;
+      } else if (meta.valueType === "number") {
         const n = parseImportNumber(raw, meta.label, warnings);
         if (raw.trim() === "") payload[targetKey] = null;
         else if (n !== null) payload[targetKey] = n;
@@ -569,7 +602,7 @@ export async function resolveImportRows(
     for (const [key, value] of Object.entries(payload)) {
       const before = readInventoryField(existing, key);
       const label = fieldLabelFor(key, fieldMeta);
-      push(diffField(label, before, value));
+      push(diffField(label, before, Array.isArray(value)?value.join(','):value));
     }
 
     if (historyChanges.length === 0) {
@@ -580,6 +613,7 @@ export async function resolveImportRows(
 }
 
 function readInventoryField(item: InventoryModel, key: string): string | number | null {
+  if (key === "categoryIds") return inventoryCategoryIds(item).join(",");
   if (key === "categoryId") return item.categoryId ?? null;
   if (key === "locationId") return item.locationId ?? null;
   if (key === "statusId") return item.statusId ?? null;
@@ -648,7 +682,7 @@ export async function executeImportRows(
         if (skuErrors || !sku) throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(skuErrors)}`);
 
         const { customFields, ...corePayload } = splitCustomFields(outcome.writePayload ?? {});
-        const { data: created, errors } = await serverDataClient.models.Inventory.create(
+        const created = await persistInventoryWithCategories(
           {
             sku,
             name: outcome.name,
@@ -661,9 +695,7 @@ export async function executeImportRows(
             listingPartition: "ACTIVE",
             listUpdatedAt: new Date().toISOString(),
           },
-          inventoryAuthMode,
         );
-        if (errors || !created) throw new Error(`作成に失敗しました: ${JSON.stringify(errors)}`);
         // 在庫が1件増えた。総件数のキャッシュを捨てないと、取込直後の
         // 一覧が古い件数を最大60秒表示し続ける(PHASE 6)。
         clearInventoryCountCache();
@@ -677,7 +709,7 @@ export async function executeImportRows(
         const { customFields, ...corePayload } = splitCustomFields(outcome.writePayload ?? {});
         const mergedCustomFields = Object.keys(customFields).length > 0 ? { ...(parseCustomFields(existing.customFields) ?? {}), ...customFields } : undefined;
 
-        const { errors } = await serverDataClient.models.Inventory.update(
+        await persistInventoryWithCategories(
           {
             id: outcome.inventoryId,
             ...corePayload,
@@ -687,9 +719,8 @@ export async function executeImportRows(
             // 並び順を最新化する対象(thumbnailBackfill.tsとは異なる)。
             listUpdatedAt: new Date().toISOString(),
           },
-          inventoryAuthMode,
+          existing.updatedAt,
         );
-        if (errors) throw new Error(`更新に失敗しました: ${JSON.stringify(errors)}`);
 
         await logInventoryHistory(
           outcome.inventoryId,
@@ -712,6 +743,7 @@ export async function executeImportRows(
 const KNOWN_CORE_KEYS = new Set([
   "name",
   "categoryId",
+  "categoryIds",
   "locationId",
   "statusId",
   "quantity",
@@ -724,12 +756,12 @@ const KNOWN_CORE_KEYS = new Set([
 ]);
 
 /** payload内の「Inventoryの実カラムに直接書ける値」と「customFieldsに入れるべき値(管理者定義フィールド)」を分ける。 */
-function splitCustomFields(payload: Record<string, string | number | null>): {
-  customFields: Record<string, string | number | null>;
+function splitCustomFields(payload: Record<string, string | number | string[] | null>): {
+  customFields: Record<string, string | number | string[] | null>;
   [key: string]: unknown;
 } {
-  const core: Record<string, string | number | null> = {};
-  const customFields: Record<string, string | number | null> = {};
+  const core: Record<string, string | number | string[] | null> = {};
+  const customFields: Record<string, string | number | string[] | null> = {};
   for (const [key, value] of Object.entries(payload)) {
     if (KNOWN_CORE_KEYS.has(key)) core[key] = value;
     else customFields[key] = value;

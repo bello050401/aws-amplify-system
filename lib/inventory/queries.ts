@@ -1,3 +1,4 @@
+import {inventoryCategoryIds,categoryFilter} from "./categories";
 import { inventoryComparator, type InventorySort } from "./searchSort";
 import "server-only";
 import { requestCache } from "@/lib/amplify/requestCache";
@@ -42,6 +43,7 @@ export interface InventoryListRow {
   sourceInventoryId: string | null;
   name: string;
   categoryId: string | null;
+  categoryIds?: string[];
   statusId: string | null;
   locationId: string | null;
   quantity: number;
@@ -103,6 +105,7 @@ export function toListRow(item: InventoryModel): InventoryListRow {
     sourceInventoryId: item.sourceInventoryId ?? null,
     name: item.name,
     categoryId: item.categoryId ?? null,
+    categoryIds: inventoryCategoryIds(item),
     statusId: item.statusId ?? null,
     locationId: item.locationId ?? null,
     quantity: item.quantity ?? 0,
@@ -224,7 +227,7 @@ export async function listInventory(filters: InventoryListFilters, options: { of
   const conditions: Record<string, unknown>[] = [];
   // 複数カテゴリはOR条件（いずれかに一致）、他の条件とはAND — spec §9。
   if (filters.categoryIds && filters.categoryIds.length > 0) {
-    conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
+    conditions.push({ or: filters.categoryIds.map((id) => categoryFilter(id)) });
   }
   if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
@@ -450,7 +453,7 @@ export async function listAllInventory(): Promise<InventorySearchRecord[]> {
  * 全件(5,313件)を読んでからJSで捨てるより速く、候補も混ざらない。
  */
 export async function listInventoryByCategory(categoryId: string): Promise<InventorySearchRecord[]> {
-  return fetchAllInventoryRecords([{ categoryId: { eq: categoryId } }]);
+  return fetchAllInventoryRecords([categoryFilter(categoryId)]);
 }
 
 export interface SearchPage<T> {
@@ -509,7 +512,7 @@ export async function listInventorySimpleSearch(
   if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const conditions: Record<string, unknown>[] = [];
   if (filters.categoryIds && filters.categoryIds.length > 0) {
-    conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
+    conditions.push({ or: filters.categoryIds.map((id) => categoryFilter(id)) });
   }
   if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
@@ -570,7 +573,7 @@ export async function listInventoryAdvanced(
 
   const conditions: Record<string, unknown>[] = [];
   if (extraFilters.categoryIds && extraFilters.categoryIds.length > 0) {
-    conditions.push({ or: extraFilters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
+    conditions.push({ or: extraFilters.categoryIds.map((id) => categoryFilter(id)) });
   }
   if (extraFilters.locationId) conditions.push({ locationId: { eq: extraFilters.locationId } });
 
@@ -591,7 +594,7 @@ export async function listInventoryMobileSearch(
     advanced:{query:input.advanced,fieldsByKey},sort:input.sort,fieldsByKey},options);
   if (fast) return fast;
   const conditions: Record<string, unknown>[] = [];
-  if (input.categoryIds?.length) conditions.push({or:input.categoryIds.map(id=>({categoryId:{eq:id}}))});
+  if (input.categoryIds?.length) conditions.push({or:input.categoryIds.map(id=>categoryFilter(id))});
   const all = await fetchAllInventoryRecords(conditions);
   const filtered = all.filter(row => evaluateQuery(row as unknown as SearchableRecord,input.advanced,fieldsByKey) &&
     (!input.q || matchesNameSearch(row as unknown as SearchableRecord,input.q)));

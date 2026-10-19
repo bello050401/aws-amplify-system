@@ -1,3 +1,4 @@
+import {splitCategoryNames} from '../../../lib/inventory/categories';
 import React, { useState, useSyncExternalStore } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -10,12 +11,15 @@ import { InventoryPhotos } from "./InventoryPhotos";
 import {DateField} from "./DateField";
 import {BarcodeScanner} from "./BarcodeScanner";
 import {PhotoPicker} from "./PhotoPicker";
+import {QrMovementSheet} from './QrMovementSheet';
 
-export function InventoryEditorScreen({ editor, onLeave, onSaved, features = RESTRICTED_FEATURES }: {
+export function InventoryEditorScreen({ editor, onLeave, onSaved, onNextScan, features = RESTRICTED_FEATURES }: {
   editor: InventoryEditor; onLeave: () => void; onSaved: (item: InventoryItem) => void;
   features?: MobileFeatures;
+  onNextScan?:(item:InventoryItem)=>void;
 }) {
   const [scanning,setScanning]=useState(false);
+  const [scanned,setScanned]=useState<string|null>(null);
   const [photoBusy,setPhotoBusy]=useState(false);
   const [master,setMaster]=useState<"category"|"location"|null>(null);
   const [choice, setChoice] = useState<DetailField | null>(null);
@@ -37,14 +41,16 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, features = RES
         <Ionicons name="close" size={30} color={colors.text} />
       </Pressable>
       <Text style={s.title}>{state.creating ? "在庫の新規登録" : "在庫の編集"}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="完了" disabled={state.saving || photoBusy} onPress={save} style={[s.done, state.saving && s.disabled]}>
-        <Text style={s.white}>{state.saving ? "保存中" : "完了"}</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel={state.outcomeUncertain ? "保存状況を確認" : "完了"} disabled={state.saving || photoBusy} onPress={save} style={[s.done, state.saving && s.disabled]}>
+        <Text style={s.white}>{state.saving ? "保存中" : state.outcomeUncertain ? "保存確認" : "完了"}</Text>
       </Pressable>
     </View>
     {state.warning && <View accessibilityRole="alert" style={s.warning}><Text style={s.warningText}>{state.warning}</Text></View>}
     <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets contentContainerStyle={s.form}>
       {fields.map((field) => <React.Fragment key={field.key}>
-        {field.key === "barcode" && <><InventoryPhotos item={state.saved} /><PhotoPicker photos={state.photos} disabled={state.saving || state.outcomeUncertain} onAdd={photos=>editor.addPhotos(photos)} onRemove={id=>editor.removePhoto(id)} onBusy={setPhotoBusy}/></>}
+        {field.key === "barcode" && <><InventoryPhotos item={{ ...state.saved, photos: state.saved.photos?.filter(photo => !state.removedPhotoIds.includes(photo.id)) }} disabled={state.saving || state.outcomeUncertain || photoBusy} onRemove={!state.creating && state.saved.photosComplete === true ? id => editor.removeSavedPhoto(id) : undefined} />
+          {state.removedPhotoIds.length > 0 && <View><Text style={s.hint}>{state.removedPhotoIds.length}枚を削除予定です。完了で保存すると反映されます。</Text><Pressable accessibilityRole="button" accessibilityLabel="写真の削除予定を元に戻す" disabled={state.saving || state.outcomeUncertain} style={s.choice} onPress={() => editor.restoreRemovedPhotos()}><Text style={s.link}>削除予定を元に戻す</Text></Pressable></View>}
+          <PhotoPicker photos={state.photos} disabled={state.saving || state.outcomeUncertain} onAdd={photos=>editor.addPhotos(photos)} onRemove={id=>editor.removePhoto(id)} onBusy={setPhotoBusy}/></>}
         <View style={s.field}>
         <Text style={s.label}>{field.label}</Text>
         {(field.key === "category" || field.key === "location") && (field.key === "category" ? state.saved.categoryOptions : state.saved.locationOptions) ? <Pressable accessibilityRole="button" accessibilityLabel={field.label} disabled={state.saving || state.outcomeUncertain} onPress={()=>setMaster(field.key as "category"|"location")} style={s.select}><Text style={s.selectText}>{state.draft[field.key] || "未設定"}</Text><Ionicons name="chevron-down" size={22} color={colors.blue}/></Pressable> : field.key === "condition" ? <Pressable accessibilityRole="button" accessibilityLabel="状態" style={s.select}
@@ -56,6 +62,7 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, features = RES
           editable={!state.saving && !state.outcomeUncertain} inputMode={field.numeric ? "numeric" : "text"} keyboardType={field.numeric ? "number-pad" : "default"}
           multiline={field.multiline} textAlignVertical={field.multiline ? "top" : "center"} />}
         {field.key === "barcode" && <Pressable accessibilityRole="button" accessibilityLabel="コードを撮影して登録" disabled={state.saving || state.outcomeUncertain} onPress={()=>setScanning(true)} style={[s.choice,{borderWidth:1,borderColor:colors.blue,marginTop:14}]}><Text style={s.link}>コードを撮影して登録</Text></Pressable>}
+        {field.key === 'barcode' && !!state.draft.barcode.trim() && <Pressable accessibilityRole="button" accessibilityLabel="入力した番号で移動予定を登録" disabled={state.saving||state.outcomeUncertain} onPress={()=>setScanned(state.draft.barcode)} style={s.choice}><Text style={s.link}>入力した番号で移動予定を登録</Text></Pressable>}
       </View></React.Fragment>)}
       {extra.map((field, index) => <View key={field.key}>
         {(index === 0 || field.section !== extra[index - 1].section) && <Text style={s.sectionHeading}>{field.section}</Text>}
@@ -71,8 +78,9 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, features = RES
       </View>)}
       <Text style={s.hint}>変更は「完了」を押して保存できたときに反映されます。</Text>
     </ScrollView>
-    {scanning && <BarcodeScanner onClose={()=>setScanning(false)} onRead={value=>{editor.change("barcode",value);setScanning(false);}}/>}
-    <Modal visible={master!==null} transparent animationType="slide" onRequestClose={()=>setMaster(null)}><View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>{master==="category"?"カテゴリ":"保管場所"}</Text><ScrollView style={{maxHeight:400}}>{["",...new Set(master==="category"?state.saved.categoryOptions:state.saved.locationOptions)].map(value=><Pressable accessibilityRole="button" key={value} style={s.choice} onPress={()=>{if(master)editor.change(master,value);setMaster(null);}}><Text style={s.link}>{value||"未設定"}</Text></Pressable>)}</ScrollView><Pressable accessibilityRole="button" onPress={()=>setMaster(null)} style={s.choice}><Text style={s.link}>キャンセル</Text></Pressable></View></View></Modal>
+    {scanning && <BarcodeScanner onClose={()=>setScanning(false)} onRead={value=>{setScanned(value);setScanning(false);}}/>}
+    {scanned!==null&&<QrMovementSheet value={scanned} editor={editor} onCancel={()=>setScanned(null)} onRescan={()=>{setScanned(null);setScanning(true);}} onDone={onSaved} onNext={onNextScan}/>}
+    <Modal visible={master!==null} transparent animationType="slide" onRequestClose={()=>setMaster(null)}><View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>{master==="category"?"カテゴリ":"保管場所"}</Text><ScrollView style={{maxHeight:400}}>{["",...new Set(master==="category"?state.saved.categoryOptions:state.saved.locationOptions)].map(value=><Pressable accessibilityRole="button" key={value} style={s.choice} onPress={()=>{if(master==="category"){const current=splitCategoryNames(state.draft.category);editor.change("category",!value?"":(current.includes(value)?current.filter(c=>c!==value):[...current,value]).join(","));}else if(master){editor.change(master,value);setMaster(null);}}}><Text style={s.link}>{master==="category"&&splitCategoryNames(state.draft.category).includes(value)?"✓ ":""}{value||"未設定"}</Text></Pressable>)}</ScrollView><Pressable accessibilityRole="button" onPress={()=>setMaster(null)} style={s.choice}><Text style={s.link}>完了</Text></Pressable></View></View></Modal>
     <Modal visible={statusChoiceOpen} transparent animationType="slide" onRequestClose={() => setStatusChoiceOpen(false)}>
       <View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>状態</Text>
         <ScrollView style={{ maxHeight: 360 }}>
@@ -92,12 +100,12 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, features = RES
     </Modal>
     <Modal visible={state.leaveConfirmation} transparent animationType="fade" onRequestClose={() => editor.continueEditing()}>
       <View style={s.shade}><View accessibilityViewIsModal style={s.dialog}>
-        <Text style={s.dialogTitle}>変更内容をどうしますか？</Text>
-        <Text style={s.dialogText}>保存してから一覧に戻るか、変更内容を破棄するかを選んでください。</Text>
+        <Text style={s.dialogTitle}>{state.outcomeUncertain ? "保存状況を確認してください" : "変更内容をどうしますか？"}</Text>
+        <Text style={s.dialogText}>{state.outcomeUncertain ? "変更が保存されている可能性があります。通信回復後に保存状況を確認するまで、入力を保持します。" : "保存してから一覧に戻るか、変更内容を破棄するかを選んでください。"}</Text>
         {state.warning && <Text accessibilityRole="alert" style={s.warningText}>{state.warning}</Text>}
-        <Pressable accessibilityRole="button" disabled={state.saving} onPress={save} style={[s.choice, s.primary]}><Text style={s.white}>{state.saving ? "保存中…" : "変更を保存する"}</Text></Pressable>
-        <Pressable accessibilityRole="button" disabled={state.saving} onPress={() => { if (editor.discard()) onLeave(); }} style={s.choice}><Text style={s.destructive}>変更内容を破棄する</Text></Pressable>
-        <Pressable accessibilityRole="button" disabled={state.saving} onPress={() => editor.continueEditing()} style={s.choice}><Text style={s.link}>編集を続ける</Text></Pressable>
+        <Pressable accessibilityRole="button" disabled={state.saving} onPress={save} style={[s.choice, s.primary]}><Text style={s.white}>{state.saving ? "保存中…" : state.outcomeUncertain ? "保存状況を確認する" : "変更を保存する"}</Text></Pressable>
+        {!state.outcomeUncertain && <Pressable accessibilityRole="button" disabled={state.saving} onPress={() => { if (editor.discard()) onLeave(); }} style={s.choice}><Text style={s.destructive}>変更内容を破棄する</Text></Pressable>}
+        <Pressable accessibilityRole="button" disabled={state.saving} onPress={() => editor.continueEditing()} style={s.choice}><Text style={s.link}>{state.outcomeUncertain ? "入力内容を確認する" : "編集を続ける"}</Text></Pressable>
       </View></View>
     </Modal>
   </View>;

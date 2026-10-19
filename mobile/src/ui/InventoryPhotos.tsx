@@ -5,11 +5,12 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { InventoryItem, InventoryPhoto } from "../domain/inventory";
 import { colors } from "./theme";
 
-export function InventoryPhotos({ item }: { item: InventoryItem }) {
+export function InventoryPhotos({ item, onRemove, disabled = false }: { item: InventoryItem; onRemove?: (id: string) => void; disabled?: boolean }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<InventoryPhoto | null>(null);
   const [group, setGroup] = useState<"NORMAL" | "DAMAGE">("NORMAL");
   const [shown, setShown] = useState(24);
-  const photos: InventoryPhoto[] = item.photos?.length ? item.photos : item.thumbnailUrl ? [{ id: "thumbnail", url: item.thumbnailUrl, primary: true }] : [];
+  const photos: InventoryPhoto[] = item.photos ?? (item.thumbnailUrl ? [{ id: "thumbnail", url: item.thumbnailUrl, primary: true }] : []);
   const normal = photos.filter(photo => photo.type !== "DAMAGE");
   const damage = photos.filter(photo => photo.type === "DAMAGE");
   const current = [...(group === "DAMAGE" ? damage : normal)].sort((a, b) => Number(b.primary) - Number(a.primary));
@@ -32,9 +33,12 @@ export function InventoryPhotos({ item }: { item: InventoryItem }) {
       {picture(hero, true)}{hero.primary && <Text style={s.badge}>主画像</Text>}
     </Pressable> : <View style={[s.hero, s.empty]}><Ionicons name="image-outline" size={36} color={colors.muted} /><Text style={s.caption}>画像なし</Text></View>}
     <View style={s.grid}>
-      {current.slice(0, shown).map((photo, index) => <Pressable accessibilityRole="button" accessibilityLabel={`${group === "DAMAGE" ? "傷・状態" : "商品画像"}${index + 1}を拡大`} key={photo.id} onPress={() => setExpanded(photo.id)} style={[s.cell, photo.primary && s.primary]}>
-        {picture(photo)}<Text style={s.photoLabel}>{photo.primary ? "主画像" : `${index + 1}`} {photo.source === "PHOTO_ASSET" ? "・撮影" : ""}</Text>
-      </Pressable>)}
+      {current.slice(0, shown).map((photo, index) => <View key={photo.id} style={[s.cell, photo.primary && s.primary]}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${group === "DAMAGE" ? "傷・状態" : "商品画像"}${index + 1}を拡大`} onPress={() => setExpanded(photo.id)}>
+          {picture(photo)}<Text style={s.photoLabel}>{photo.primary ? "主画像" : `${index + 1}`} {photo.source === "PHOTO_ASSET" ? "・撮影" : ""}</Text>
+        </Pressable>
+        {onRemove && photo.source === "INVENTORY" && <Pressable accessibilityRole="button" accessibilityLabel={`${group === "DAMAGE" ? "傷・状態" : "商品画像"}${index + 1}を削除`} disabled={disabled} onPress={() => setRemoveTarget(photo)} style={s.remove}><Text style={s.removeText}>削除</Text></Pressable>}
+      </View>)}
     </View>
     {current.length > shown && <Pressable accessibilityRole="button" style={s.more} onPress={() => setShown(value => value + 24)}><Text style={s.moreText}>残り{current.length - shown}枚を表示</Text></Pressable>}
 
@@ -48,9 +52,20 @@ export function InventoryPhotos({ item }: { item: InventoryItem }) {
         </View>
       </View>
     </Modal>
+    <Modal visible={removeTarget !== null} transparent animationType="fade" onRequestClose={() => setRemoveTarget(null)}>
+      <View style={s.shade}><View style={s.dialog} accessibilityViewIsModal>
+        <Text style={s.heading}>この写真を削除しますか？</Text>
+        <Text style={s.caption}>「完了」で保存すると削除されます。保存前は元に戻せます。</Text>
+        {removeTarget && picture(removeTarget, true)}
+        <Pressable accessibilityRole="button" accessibilityLabel="写真の削除を確定" disabled={disabled} style={s.remove} onPress={() => { if (removeTarget) onRemove?.(removeTarget.id); setRemoveTarget(null); setExpanded(null); }}><Text style={s.removeText}>削除する</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="写真の削除をキャンセル" onPress={() => setRemoveTarget(null)} style={s.remove}><Text style={s.moreText}>キャンセル</Text></Pressable>
+      </View></View>
+    </Modal>
   </View>;
 }
 const s = StyleSheet.create({
+  remove: { minHeight: 44, padding: 10, alignItems: "center", justifyContent: "center" }, removeText: { color: colors.danger, fontSize: 14 },
+  shade: { flex: 1, backgroundColor: "#00000055", alignItems: "center", justifyContent: "center", padding: 20 }, dialog: { backgroundColor: "white", borderRadius: 18, padding: 18, gap: 10, width: "100%", maxWidth: 400 },
   section: { marginBottom: 12 }, headingRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }, heading: { fontSize: 16, lineHeight: 22, fontWeight: "600", color: colors.text }, count: { fontSize: 12, color: colors.muted },
   tabs: { flexDirection: "row", backgroundColor: "#F3F0EA", borderRadius: 12, padding: 3, marginBottom: 10 }, tab: { flex: 1, minHeight: 44, padding: 8, borderRadius: 9, alignItems: "center", justifyContent: "center" }, activeTab: { backgroundColor: "white" }, tabText: { color: colors.muted, fontSize: 13 }, activeText: { color: colors.blue, fontWeight: "700" },
   heroWrap: { position: "relative" }, hero: { width: "100%", height: 200, borderRadius: 10, backgroundColor: "#F7F5F1" }, badge: { position: "absolute", left: 8, top: 8, backgroundColor: colors.orange, color: "#352A1B", fontSize: 11, padding: 5, borderRadius: 5 },

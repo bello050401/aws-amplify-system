@@ -8,7 +8,7 @@ import { mobileInventoryDetail } from "@/lib/mobile/inventoryDetail";
 import { mobileInventoryPhotos } from "@/lib/mobile/inventoryPhotos";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
 import { createInventory, updateInventory, deleteInventory } from "@/app/actions/inventory";
-import { InventorySaveError } from "@/lib/inventory/conditionalUpdate";
+import { InventorySaveError, InventoryMutationRejected } from "@/lib/inventory/conditionalUpdate";
 import { parseMobileSave, mobileCreateInput, mobileCopyInput, mobileInventoryInput, mobileWriteWasApplied, MobileWriteValidationError } from "@/lib/mobile/inventoryWrite";
 
 export const dynamic = "force-dynamic";
@@ -111,6 +111,7 @@ async function save(request: Request, context: { params: { id: string } }, creat
         !(Date.parse(payload.item.updatedAt) >= Date.parse(confirmed.updatedAt))) return fail("UNCONFIRMED", 503);
     return NextResponse.json({ ...payload, mutationId: body.mutationId }, { headers });
   } catch (error) {
+    if (error instanceof InventoryMutationRejected) return fail(error.code,422);
     if (error instanceof MobileWriteValidationError) return fail(error.code, error.code === "FIELD_FORBIDDEN" ? 403 : 422);
     if (error instanceof InventorySaveError && error.code === "CONFLICT") return fail("CONFLICT", 409);
     // A failure after submission is not proof that the data was not saved.

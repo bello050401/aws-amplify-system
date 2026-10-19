@@ -1,10 +1,15 @@
 "use client";
+import {CategoryMultiSelect} from "@/app/inventory/CategoryMultiSelect";
+import {inventoryCategoryIds} from "@/lib/inventory/categories";
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { remove } from "aws-amplify/storage";
 import { createInventory, type ImageSlotInput } from "@/app/actions/inventory";
+import { inventoryQuantityError } from "@/lib/inventory/quantityValidation";
+import { inventorySaveErrorMessage } from "@/lib/inventory/saveErrorMessage";
 import { BrandPicker } from "@/app/inventory/BrandPicker";
+import { customFieldFormValues } from "@/lib/inventory/customFieldFormValues";
 import { LabeledInput, LabeledSelect, CustomFieldInput } from "../FormFields";
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../ImageEditor";
 import { ExtendedFieldsSection } from "../ExtendedFieldsSection";
@@ -25,6 +30,7 @@ interface DuplicateSource extends InventoryExtendedFields {
   sourceDisplayId: string;
   name: string;
   categoryId?: string;
+  categoryIds?: string[];
   statusId?: string;
   locationId?: string;
   quantity?: number;
@@ -146,7 +152,8 @@ interface NewInventoryFormProps {
 export function NewInventoryForm({ categories, locations, statuses, customFieldDefs, units, duplicateFrom }: NewInventoryFormProps) {
   const router = useRouter();
   const [name, setName] = useState(duplicateFrom?.name ?? "");
-  const [categoryId, setCategoryId] = useState(duplicateFrom?.categoryId ?? "");
+  const [categoryIds, setCategoryIds] = useState<string[]>(inventoryCategoryIds(duplicateFrom ?? {}));
+  const categoryId = categoryIds[0] ?? "";
   const [statusId, setStatusId] = useState(duplicateFrom?.statusId ?? "");
   const [locationId, setLocationId] = useState(duplicateFrom?.locationId ?? "");
   const [quantity, setQuantity] = useState(String(duplicateFrom?.quantity ?? 1));
@@ -173,7 +180,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
   const initialSnapshotRef = useRef<string | null>(null);
   const currentSnapshot = buildFormDirtySnapshot({
     name,
-    categoryId,
+    categoryIds,
     statusId,
     locationId,
     quantity,
@@ -214,6 +221,8 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
    */
   async function attemptSave(): Promise<{ success: boolean; id?: string }> {
     setError(null);
+    const quantityError = inventoryQuantityError(Number(quantity));
+    if (quantityError) { setError(quantityError); return { success: false }; }
     if (!name.trim()) {
       setError("商品名を入力してください。");
       return { success: false };
@@ -238,13 +247,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
     setSubmitting(true);
     try {
-      const customFields: Record<string, unknown> = {};
-      if (customFieldValues.belloBrand) customFields.belloBrand = customFieldValues.belloBrand;
-      for (const def of customFieldDefs) {
-        const raw = customFieldValues[def.fieldKey];
-        if (raw === undefined || raw === "") continue;
-        customFields[def.fieldKey] = def.fieldType === "NUMBER" ? Number(raw) : raw;
-      }
+      const customFields = customFieldFormValues(duplicateFrom?.customFields, customFieldDefs, customFieldValues);
 
       const images: ImageSlotInput[] = [...slotsToImageInputs(normalImageSlots, "NORMAL"), ...slotsToImageInputs(damageImageSlots, "DAMAGE")];
 
@@ -252,6 +255,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
         {
           name,
           categoryId: categoryId || undefined,
+          categoryIds,
           statusId: statusId || undefined,
           locationId: locationId || undefined,
           quantity: quantity ? Number(quantity) : 0,
@@ -269,7 +273,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
       setDirty(false);
       return { success: true, id: created.id };
     } catch (err) {
-      setError(err instanceof Error ? err.message : "登録に失敗しました。");
+      setError(inventorySaveErrorMessage(err, "登録に失敗しました。"));
       return { success: false };
     } finally {
       setSubmitting(false);
@@ -347,7 +351,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
         <LabeledInput label="物品名" required value={name} onChange={setName} />
         <BrandPicker value={customFieldValues.belloBrand ?? ""} onChange={(value) => setCustomFieldValues((previous) => ({ ...previous, belloBrand: value }))} />
 
-        <LabeledSelect label="カテゴリ" value={categoryId} onChange={setCategoryId} options={categories.map((c) => ({ value: c.id, label: c.name }))} />
+        <CategoryMultiSelect value={categoryIds} onChange={setCategoryIds} options={categories}/>
         <LabeledSelect label="保管場所" value={locationId} onChange={setLocationId} options={locations.map((l) => ({ value: l.id, label: l.name }))} />
         <LabeledSelect label="状態" value={statusId} onChange={setStatusId} options={statuses.map((s) => ({ value: s.id, label: s.label }))} />
 

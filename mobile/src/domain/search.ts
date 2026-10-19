@@ -1,3 +1,4 @@
+import {splitCategoryNames} from '../../../lib/inventory/categories';
 import { buildSearchFieldDefs, evaluateQuery, matchesNameSearch, isConditionComplete, operatorsForType, operatorNeedsNoValue, operatorNeedsSecondValue, type AdvancedSearchQuery, type SearchFieldDef } from "../../../lib/inventory/advancedSearch";
 import { DEFAULT_INVENTORY_SORT, inventoryComparator, type InventorySort } from "../../../lib/inventory/searchSort";
 import { DETAIL_FIELDS, validCalendarDate } from "./detailFields";
@@ -18,7 +19,7 @@ export function mobileSearchFields(fields: SearchFieldDef[], features: MobileFea
     .map(def => ({...def, label: def.key === "name" ? "物品名" : def.key === "barcode" ? "QRコード・バーコードの値" : def.label}));
 }
 export function cachedSearchFields(items: InventoryItem[], features: MobileFeatures): SearchFieldDef[] {
-  const names = (key: "category" | "location") => [...new Set(items.map(item => item[key]).filter(Boolean))].map(name=>({id:name,name}));
+  const names = (key: "category" | "location") => [...new Set(items.flatMap(item => key === "category" ? splitCategoryNames(item.category) : [item[key]]).filter(Boolean))].map(name=>({id:name,name}));
   return mobileSearchFields(buildSearchFieldDefs([], {categories:names("category"),locations:names("location"),statuses:[...new Map(items.map(item=>[item.statusId ?? item.condition,{id:item.statusId ?? item.condition,label:item.condition}])).values()]}),features);
 }
 export function searchValidation(query: AdvancedSearchQuery, fields: SearchFieldDef[]): string | null {
@@ -42,10 +43,10 @@ export function cachedInventorySearch(items: InventoryItem[], input: InventorySe
   const defs = new Map(fields.map(field=>[field.key,field]));
   const mapMaster = (key:string,label:string) => defs.get(key)?.options?.find(option=>option.label===label)?.value ?? label;
   const records = items.map(item=>({item,record:{...item,...item.details,customFields:item.details ?? {},
-    categoryId:mapMaster("categoryId",item.category),locationId:mapMaster("locationId",item.location),statusId:item.statusId ?? mapMaster("statusId",item.condition)}}));
+    categoryId:mapMaster("categoryId",item.category),categoryIds:splitCategoryNames(item.category).map(name=>mapMaster("categoryId",name)),locationId:mapMaster("locationId",item.location),statusId:item.statusId ?? mapMaster("statusId",item.condition)}}));
   const compare=inventoryComparator(input.sort ?? DEFAULT_INVENTORY_SORT,defs);
   return records.filter(({item,record})=>{
-    if (input.category && item.category!==input.category) return false;
+    if (input.category && !splitCategoryNames(item.category).includes(input.category)) return false;
     if (input.q && !matchesNameSearch(record, input.q)) return false;
     if (!input.advanced?.conditions.length) return true;
     // Unfetched details are unknown, never misreported as empty fields.

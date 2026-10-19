@@ -74,6 +74,7 @@ export function validateDraft(draft: InventoryDraft): string | null {
   if (!/^\d+$/.test(draft.quantity) || !Number.isSafeInteger(Number(draft.quantity))) {
     return "数量は0以上の整数で入力してください。";
   }
+  if (Number(draft.quantity) > 2_147_483_647) return "数量は2,147,483,647以下で入力してください。";
   if (draft.plannedSalePrice !== "" &&
       (!/^\d+$/.test(draft.plannedSalePrice) || !Number.isSafeInteger(Number(draft.plannedSalePrice)))) {
     return "販売予定価格は0以上の整数で入力してください。";

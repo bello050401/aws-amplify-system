@@ -1,4 +1,5 @@
 import "server-only";
+import {persistInventoryWithCategories,getInventoryRaw} from "./categoryPersistence";
 import type { Schema } from "@/amplify/data/resource";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { clearInventoryCountCache } from "./inventoryCountCache";
@@ -103,6 +104,7 @@ export interface NewInventoryInput {
   sku: string;
   name: string;
   categoryId?: string;
+  categoryIds?: string[];
   locationId?: string;
   quantity: number;
   unit?: string;
@@ -129,6 +131,7 @@ export interface UpdateInventoryInput {
    */
   name?: string;
   categoryId?: string;
+  categoryIds?: string[];
   locationId?: string;
   quantity?: number;
   unit?: string;
@@ -334,12 +337,13 @@ export function createServerSyncPort(): ZaicoSyncPort {
       return sku;
     },
     async createInventory(input) {
-      const { data: created, errors } = await serverDataClient.models.Inventory.create(
+      const created = await persistInventoryWithCategories(
         {
           id: input.id,
           sku: input.sku,
           name: input.name,
           categoryId: input.categoryId,
+          categoryIds: input.categoryIds,
           locationId: input.locationId,
           quantity: input.quantity,
           unit: input.unit,
@@ -359,21 +363,19 @@ export function createServerSyncPort(): ZaicoSyncPort {
           listUpdatedAt: new Date().toISOString(),
           ...input.extendedFields,
         },
-        inventoryAuthMode,
       );
-      if (errors || !created) throw new Error(`在庫の作成に失敗しました: ${JSON.stringify(errors)}`);
       // 在庫が1件増えた。総件数のキャッシュを捨てないと、同期直後の
       // 一覧が古い件数を最大60秒表示し続ける(PHASE 6)。
       clearInventoryCountCache();
-      return created;
+      return await getInventoryRaw(created.id) as InventoryModel;
     },
     async updateInventory(input) {
-      await writeInventoryRevision(
-        async request => await serverDataClient.graphql(request) as InventoryWriteResult,
+      await persistInventoryWithCategories(
         {
           id: input.id,
           name: input.name,
           categoryId: input.categoryId,
+          categoryIds: input.categoryIds,
           locationId: input.locationId,
           quantity: input.quantity,
           unit: input.unit,

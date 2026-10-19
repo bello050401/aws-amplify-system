@@ -1,3 +1,4 @@
+import {categoryFilter} from "./categories";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { MasterEntry } from "@/lib/inventory/masters";
@@ -77,9 +78,8 @@ export async function listEcEligibleInventory(categories: MasterEntry[]): Promis
       let nextToken: string | null | undefined;
       let pages = 0;
       do {
-        const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.listInventoryByCategoryId(
-          { categoryId: category.id },
-          { limit: PAGE_SIZE, nextToken: nextToken ?? undefined, ...inventoryAuthMode },
+        const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.list(
+          { filter:categoryFilter(category.id), limit: PAGE_SIZE, nextToken: nextToken ?? undefined, ...inventoryAuthMode },
         );
         // 取得エラーを0件と区別する。黙って空にすると「その分類の商品が
         // 無い」ように見えてしまう。
@@ -87,12 +87,12 @@ export async function listEcEligibleInventory(categories: MasterEntry[]): Promis
         rows.push(...data.map((d) => toListRow(d as never)));
         nextToken = nt;
         pages++;
-      } while (nextToken && pages < MAX_PAGES_PER_CATEGORY);
+      } while (nextToken);
       return rows;
     }),
   );
 
-  const items = perCategory.flat();
+  const items = [...new Map(perCategory.flat().map(row=>[row.id,row])).values()];
   // 一覧の並びは在庫一覧と揃える(更新の新しい順)。
   items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
 

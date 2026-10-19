@@ -19,7 +19,9 @@ export function isInventoryItem(value: unknown): value is InventoryItem {
     .every((key) => typeof row[key] === "string") &&
     (row.displayId === undefined || typeof row.displayId === "string") &&
     (row.createdAt === undefined || typeof row.createdAt === "string") &&
-    typeof row.quantity === "number" && Number.isSafeInteger(row.quantity) && row.quantity >= 0 &&
+    // Imported or historical records can contain negative stock. Keep the actual
+    // value readable instead of rejecting the entire list; edits validate separately.
+    typeof row.quantity === "number" && Number.isSafeInteger(row.quantity) &&
     (row.plannedSalePrice === null || (typeof row.plannedSalePrice === "number" && Number.isFinite(row.plannedSalePrice))) &&
     (row.thumbnailUrl === null || typeof row.thumbnailUrl === "string") &&
     (row.statusId === undefined || row.statusId === null || typeof row.statusId === "string") &&

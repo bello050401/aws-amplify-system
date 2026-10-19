@@ -323,6 +323,35 @@ const schema = a.schema({
       allow.group("VIEWER").to(["read"]),
     ]),
 
+  InventoryCategory: a.model({
+    inventoryId: a.string().required(), categoryId: a.string().required(),
+  }).secondaryIndexes(index => [index('inventoryId'), index('categoryId')])
+    .authorization(allow => [allow.group('ADMIN').to(['read']), allow.group('EDITOR').to(['read']), allow.group('VIEWER').to(['read'])]),
+
+  OutboundDestination: a.model({
+    name: a.string().required(), categoryId: a.string().required(), locationId: a.string().required(),
+    isActive: a.boolean().default(true), sortOrder: a.integer().default(0),
+    sender: a.string().required(), template: a.json().required(), fileNamePattern: a.string().required(),
+    preparationStatus: a.string().default('WAITING_TEMPLATE'), slackChannelId: a.string(),
+  }).authorization(allow => [allow.group('ADMIN'), allow.group('EDITOR').to(['read']), allow.group('VIEWER').to(['read'])]),
+
+  OutboundBatch: a.model({
+    destinationId: a.string().required(), destinationName: a.string().required(),
+    categoryId: a.string().required(), locationId: a.string().required(),
+    requestedBy: a.string().required(), fingerprint: a.string().required(),
+    status: a.string().required(), template: a.json().required(), fileName: a.string().required(), sender: a.string().required(),
+  }).authorization(allow => [allow.group('ADMIN').to(['read']), allow.group('EDITOR').to(['read']), allow.group('VIEWER').to(['read'])]),
+
+  OutboundItem: a.model({
+    batchId: a.string().required(), inventoryId: a.string().required(),
+    status: a.string().required(), snapshot: a.json().required(), expectedUpdatedAt: a.string(),
+    error: a.string(), sentAt: a.datetime(), sentBy: a.string(),
+  }).secondaryIndexes(index => [index('batchId'), index('inventoryId')])
+    .authorization(allow => [allow.group('ADMIN').to(['read']), allow.group('EDITOR').to(['read']), allow.group('VIEWER').to(['read'])]),
+
+  BarcodeClaim: a.model({ inventoryId: a.string().required() })
+    .authorization(allow => [allow.group('ADMIN').to(['read']), allow.group('EDITOR').to(['read'])]),
+
   Location: a
     .model({
       name: a.string().required(),
@@ -399,6 +428,8 @@ const schema = a.schema({
       sku: a.string().required(), // displayed in the UI as "在庫ID" (Phase C) — the field itself, its auto-numbering, and its uniqueness role are unchanged
       name: a.string().required(),
       categoryId: a.string(), // → Category.id, application-level reference (see note above)
+      categoryIds: a.string().array(), // Read projection of InventoryCategory; updated with its links.
+      outboundBatchId: a.string(), // Reservation until the outbound document is sent or cancelled.
       statusId: a.string(), // → StatusMaster.id
       locationId: a.string(), // → Location.id
       quantity: a.integer().default(0),

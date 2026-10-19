@@ -1,9 +1,13 @@
 "use client";
+import {CategoryMultiSelect} from "@/app/inventory/CategoryMultiSelect";
+import {inventoryCategoryIds} from "@/lib/inventory/categories";
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { remove } from "aws-amplify/storage";
 import { updateInventory, type ImageSlotInput } from "@/app/actions/inventory";
+import { inventoryQuantityError } from "@/lib/inventory/quantityValidation";
+import { inventorySaveErrorMessage } from "@/lib/inventory/saveErrorMessage";
 import { LabeledInput, LabeledSelect, CustomFieldInput } from "../../FormFields";
 import { ImageEditor, imageEditorHasError, imageEditorHasUploading, type ImageEditorSlot } from "../../../ImageEditor";
 import { ExtendedFieldsSection } from "../../ExtendedFieldsSection";
@@ -21,6 +25,7 @@ import type { CustomFieldDefinitionRow, InventoryDetail, MasterOption, StatusOpt
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 import { PhotoAssetImageEditor } from "./PhotoAssetImageEditor";
 import { BrandPicker } from "@/app/inventory/BrandPicker";
+import { customFieldFormValues } from "@/lib/inventory/customFieldFormValues";
 
 interface EditInventoryFormProps {
   item: InventoryDetail;
@@ -119,7 +124,8 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
 export function EditInventoryForm({ item, photoAssets, categories, locations, statuses, customFieldDefs, units, returnTo }: EditInventoryFormProps) {
   const router = useRouter();
   const [name, setName] = useState(item.name);
-  const [categoryId, setCategoryId] = useState(item.categoryId ?? "");
+  const [categoryIds, setCategoryIds] = useState<string[]>(inventoryCategoryIds(item ?? {}));
+  const categoryId = categoryIds[0] ?? "";
   const [statusId, setStatusId] = useState(item.statusId ?? "");
   const [locationId, setLocationId] = useState(item.locationId ?? "");
   const [quantity, setQuantity] = useState(String(item.quantity));
@@ -134,9 +140,8 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
   const [extendedValues, setExtendedValues] = useState<Record<string, string>>(extendedValuesFromRecord(item));
   const { normal: initialNormal, damage: initialDamage } = splitImagesByType(item.images);
   const [normalImageSlots, setNormalImageSlots] = useState<ImageEditorSlot[]>(slotsFromExistingImages(initialNormal));
-  // 既存の傷写真データは保存時に保持する。新規追加欄は撮影画像からの分類へ
-  // 統一したため、この画面では変更しない。
-  const [damageImageSlots] = useState<ImageEditorSlot[]>(slotsFromExistingImages(initialDamage));
+  // 新規登録・PWAで追加されたInventory画像も、撮影バッチ画像と同様に編集できる。
+  const [damageImageSlots, setDamageImageSlots] = useState<ImageEditorSlot[]>(slotsFromExistingImages(initialDamage));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -147,7 +152,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
   const initialSnapshotRef = useRef<string | null>(null);
   const currentSnapshot = buildFormDirtySnapshot({
     name,
-    categoryId,
+    categoryIds,
     statusId,
     locationId,
     quantity,
@@ -179,6 +184,8 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
   /** Same role as NewInventoryForm's attemptSave — see that file's comment. */
   async function attemptSave(): Promise<{ success: boolean }> {
     setError(null);
+    const quantityError = inventoryQuantityError(Number(quantity));
+    if (quantityError) { setError(quantityError); return { success: false }; }
     if (!name.trim()) {
       setError("商品名を入力してください。");
       return { success: false };
@@ -200,13 +207,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
 
     setSubmitting(true);
     try {
-      const customFields: Record<string, unknown> = {};
-      if (customFieldValues.belloBrand) customFields.belloBrand = customFieldValues.belloBrand;
-      for (const def of customFieldDefs) {
-        const raw = customFieldValues[def.fieldKey];
-        if (raw === undefined || raw === "") continue;
-        customFields[def.fieldKey] = def.fieldType === "NUMBER" ? Number(raw) : raw;
-      }
+      const customFields = customFieldFormValues(item.customFields, customFieldDefs, customFieldValues);
 
       const images: ImageSlotInput[] = [...slotsToImageInputs(normalImageSlots, "NORMAL"), ...slotsToImageInputs(damageImageSlots, "DAMAGE")];
 
@@ -216,12 +217,13 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
           expectedUpdatedAt: item.updatedAt,
           name,
           categoryId: categoryId || undefined,
+          categoryIds,
           statusId: statusId || undefined,
           locationId: locationId || undefined,
           quantity: quantity ? Number(quantity) : 0,
           unit: unit || undefined,
-          purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
-          salePrice: salePrice ? Number(salePrice) : undefined,
+          purchasePrice: purchasePrice.trim() ? Number(purchasePrice) : null,
+          salePrice: salePrice.trim() ? Number(salePrice) : null,
           barcode: barcode || undefined,
           note: note || undefined,
           images,
@@ -233,7 +235,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
       setDirty(false);
       return { success: true };
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新に失敗しました。");
+      setError(inventorySaveErrorMessage(err, "更新に失敗しました。"));
       return { success: false };
     } finally {
       setSubmitting(false);
@@ -305,6 +307,10 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
           <p className="mb-2 text-[11px] font-bold text-gray-400">追加アップロード画像</p>
           <ImageEditor slots={normalImageSlots} onChange={setNormalImageSlots} variant="normal" />
         </div>
+        <div className="border border-gray-200 p-4">
+          <p className="mb-2 text-[11px] font-bold text-gray-400">傷・汚れ写真</p>
+          <ImageEditor slots={damageImageSlots} onChange={setDamageImageSlots} variant="damage" />
+        </div>
       </div>
 
       {/* 中央カラム: 大きな入力欄の単一カラムフォーム(master指示書
@@ -318,13 +324,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
         <div className="grid grid-cols-1 gap-4">
           <LabeledInput label="物品名" required value={name} onChange={setName} size="large" />
           <BrandPicker value={customFieldValues.belloBrand ?? ""} onChange={(value) => handleCustomFieldChange("belloBrand", value)} />
-          <LabeledSelect
-            label="カテゴリ"
-            value={categoryId}
-            onChange={setCategoryId}
-            options={categories.map((c) => ({ value: c.id, label: c.name }))}
-            size="large"
-          />
+          <CategoryMultiSelect value={categoryIds} onChange={setCategoryIds} options={categories}/>
           <LabeledSelect
             label="保管場所"
             value={locationId}

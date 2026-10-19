@@ -7,9 +7,15 @@ import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from
 import { diffField, logInventoryHistory, type HistoryFieldChange } from "@/lib/inventory/history";
 import { INLINE_EDIT_HISTORY_SUFFIX, type InlineEditChanges } from "@/lib/inventory/inlineEdit";
 import { unwrapGet } from "@/lib/amplify/listAll";
+import { inventoryQuantityError } from "@/lib/inventory/quantityValidation";
+import {persistInventoryWithCategories} from "@/lib/inventory/categoryPersistence";
+import { assertInventoryVersion } from "@/lib/inventory/conditionalUpdate";
+import { withHumanEdits } from "@/lib/inventory/humanEdits";
+import { parseCustomFields, stringifyCustomFields } from "@/lib/inventory/customFieldsCodec";
 
 export interface BulkInventoryEditItem {
   id: string;
+  expectedUpdatedAt: string;
   changes: InlineEditChanges;
 }
 
@@ -59,8 +65,17 @@ export async function bulkUpdateInventoryListFields(items: BulkInventoryEditItem
   const who = await getCurrentInventoryUserEmail();
   const results: BulkInventoryEditItemResult[] = [];
 
-  for (const item of items) {
+  for (let item of items) {
     try {
+      if ("name" in item.changes) {
+        const name = typeof item.changes.name === "string" ? item.changes.name.trim() : "";
+        if (!name) throw new Error("商品名を入力してください。");
+        item = { ...item, changes: { ...item.changes, name } };
+      }
+      if ("quantity" in item.changes) {
+        const quantityError = inventoryQuantityError(item.changes.quantity);
+        if (quantityError) throw new Error(quantityError);
+      }
       // 書き込み自体は errors を見ているので取り違えは起きないが、
       // 取得に失敗したときに「見つかりません」と報告していた。原因が
       // 違うと次にやることも違うので、区別して伝える。
@@ -71,11 +86,18 @@ export async function bulkUpdateInventoryListFields(items: BulkInventoryEditItem
       if (!existing || existing.deletedAt) {
         throw new Error("対象の在庫が見つかりません。");
       }
+      assertInventoryVersion(item.expectedUpdatedAt, existing.updatedAt);
+      for (const key of Object.keys(item.changes)) {
+        if (!Object.prototype.hasOwnProperty.call(FIELD_LABELS, key)) {
+          throw new Error("一覧から編集できない項目が含まれています。");
+        }
+      }
 
       // changesに含まれるキーだけを送る — 触れていないフィールドは
       // undefinedのままAmplifyの.update()から除外され、既存値を保持する
       // (createInventory/updateInventoryと同じ規約)。
-      const { errors } = await serverDataClient.models.Inventory.update(
+      const previousCustom = parseCustomFields(existing.customFields);
+      await persistInventoryWithCategories(
         {
           id: item.id,
           updatedBy: who ?? undefined,
@@ -83,12 +105,12 @@ export async function bulkUpdateInventoryListFields(items: BulkInventoryEditItem
           // 一覧の並び順(listUpdatedAt)も更新対象とする。
           listUpdatedAt: new Date().toISOString(),
           ...item.changes,
+          customFields: stringifyCustomFields(withHumanEdits(
+            existing as unknown as Record<string, unknown>, { ...item.changes }, previousCustom, previousCustom ?? {},
+          )),
         },
-        inventoryAuthMode,
+        item.expectedUpdatedAt,
       );
-      if (errors) {
-        throw new Error(`更新に失敗しました: ${JSON.stringify(errors)}`);
-      }
 
       const changes: HistoryFieldChange[] = [];
       const push = (c: HistoryFieldChange | null) => c && changes.push(c);

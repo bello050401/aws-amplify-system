@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { bulkUpdateInventoryListFields, type BulkInventoryEditItemResult } from "@/app/actions/inventoryBulkEdit";
 import type { InlineEditChanges, InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
 import type { InventoryListRow } from "@/lib/inventory/queries";
@@ -69,6 +69,8 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
   const [saving, setSaving] = useState(false);
   const [lastResult, setLastResult] = useState<DirectEditContextValue["lastResult"]>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const editVersions = useRef<Record<string, string>>({});
+  const saveInFlight = useRef(false);
 
   const rowsById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
@@ -104,12 +106,15 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
 
   const setValue = useCallback(
     (rowId: string, column: InlineEditFieldKey, value: FieldValue) => {
+      if (saveInFlight.current) return;
       const row = rowsById.get(rowId);
       if (!row) return;
       const field = COLUMN_TO_FIELD[column];
       setEdits((prev) => {
         const rowEdits = { ...(prev[rowId] ?? {}) };
         if (isFieldChanged(row, field, value)) {
+          // Keep the version at the first edit, even if another row's save refreshes the list.
+          editVersions.current[rowId] ??= row.updatedAt;
           (rowEdits as Record<string, FieldValue>)[field] = value;
         } else {
           delete (rowEdits as Record<string, FieldValue>)[field];
@@ -117,6 +122,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
         const next = { ...prev };
         if (Object.keys(rowEdits).length === 0) {
           delete next[rowId];
+          delete editVersions.current[rowId];
         } else {
           next[rowId] = rowEdits;
         }
@@ -137,9 +143,11 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
   const dirtyCount = Object.keys(edits).length;
 
   async function performSave(): Promise<{ success: boolean }> {
-    const items = Object.entries(edits).map(([id, changes]) => ({ id, changes }));
+    if (saveInFlight.current) return { success: false };
+    const items = Object.entries(edits).map(([id, changes]) => ({ id, changes, expectedUpdatedAt: editVersions.current[id] ?? "" }));
     if (items.length === 0) return { success: true };
 
+    saveInFlight.current = true;
     setSaving(true);
     setSaveError(null);
     try {
@@ -150,7 +158,10 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
       // 成功した行だけdirty解除、失敗した行はdirtyのまま残す(spec §12)。
       setEdits((prev) => {
         const next = { ...prev };
-        for (const id of succeededIds) delete next[id];
+        for (const id of succeededIds) {
+          delete next[id];
+          delete editVersions.current[id];
+        }
         return next;
       });
 
@@ -180,6 +191,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
       setSaveError("保存結果を確認できませんでした。通信状態を確認して、もう一度お試しください。入力内容は保持されています。");
       return { success: false };
     } finally {
+      saveInFlight.current = false;
       setSaving(false);
     }
   }
@@ -194,6 +206,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
   }
 
   function discardAndExit() {
+    editVersions.current = {};
     setEdits({});
     setLastResult(null);
     setSaveError(null);
@@ -221,6 +234,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
   useEffect(() => {
     registerSaveHandler(async () => performSave());
     registerDiscardHandler(() => {
+      editVersions.current = {};
       setEdits({});
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

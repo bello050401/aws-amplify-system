@@ -17,7 +17,7 @@
  *   2. 文字列演算子(含む/含まない/完全一致/前方一致)の判定は、絞り込み
  *      済みの候補集合に対してこのモジュールがcase-insensitiveに評価
  *      する(ciEquals/ciIncludes/ciStartsWith — String.prototype
- *      .toLocaleLowerCase()で比較するだけで、保存値そのものは一切変更
+ *      .normalize("NFKC").toLocaleLowerCase()で比較するだけで、保存値そのものは一切変更
  *      しない)。
  * という2段構成で、「見かけだけ」ではなく実際にDynamoDBレベルの絞り込
  * みと組み合わせた実装にしている。既存のlistInventory(サイドバー等の
@@ -149,15 +149,18 @@ export function completeConditions(query: AdvancedSearchQuery): AdvancedSearchCo
 }
 
 // ── 大文字小文字を区別しない文字列比較 ──────────────────────────────
-// 保存値・表示値は一切変更しない。比較の瞬間だけtoLocaleLowerCase。
+// 保存値・表示値を保ち、比較時だけ英数の全半角・半角カナ・大小文字を揃える。
+function searchText(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("ja");
+}
 function ciEquals(a: string, b: string): boolean {
-  return a.toLocaleLowerCase() === b.toLocaleLowerCase();
+  return searchText(a) === searchText(b);
 }
 function ciIncludes(haystack: string, needle: string): boolean {
-  return haystack.toLocaleLowerCase().includes(needle.toLocaleLowerCase());
+  return searchText(haystack).includes(searchText(needle));
 }
 function ciStartsWith(haystack: string, needle: string): boolean {
-  return haystack.toLocaleLowerCase().startsWith(needle.toLocaleLowerCase());
+  return searchText(haystack).startsWith(searchText(needle));
 }
 
 function toStr(v: unknown): string {
@@ -259,6 +262,11 @@ export interface SearchableRecord {
 }
 
 export function evaluateCondition(record: SearchableRecord, def: SearchFieldDef, condition: AdvancedSearchCondition): boolean {
+  if(def.key === "categoryId" && Array.isArray(record.categoryIds)) {
+    if(condition.operator === "isEmpty") return record.categoryIds.length === 0;
+    if(condition.operator === "isNotEmpty") return record.categoryIds.length > 0;
+    return condition.operator === "equals" && record.categoryIds.includes(condition.value);
+  }
   const raw = def.key.startsWith("cf:") ? record.customFields?.[def.key.slice(3)] : record[def.key];
   switch (def.valueType) {
     case "number":

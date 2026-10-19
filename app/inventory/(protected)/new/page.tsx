@@ -60,6 +60,7 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
         sourceDisplayId: duplicateSource.displayId,
         name: duplicateSource.name,
         categoryId: duplicateSource.categoryId ?? undefined,
+        categoryIds: duplicateSource.categoryIds?.filter((id):id is string=>!!id) ?? undefined,
         statusId: duplicateSource.statusId ?? undefined,
         locationId: duplicateSource.locationId ?? undefined,
         quantity: duplicateSource.quantity,

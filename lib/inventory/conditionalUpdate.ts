@@ -1,4 +1,9 @@
 /** Shared save contract for Web/mobile callers. The caller retains staff authorization. */
+export class InventoryMutationRejected extends Error {
+  constructor(readonly code: 'BARCODE_DUPLICATE' | 'BARCODE_INVALID' | 'OUTBOUND_RESERVED' | 'CATEGORY_INVALID') {
+    super({BARCODE_DUPLICATE:'この番号は別の商品に登録されています。保存できません。', BARCODE_INVALID:'読み取れませんでした。番号を確認してください。', OUTBOUND_RESERVED:'出庫データを作成済みです。出庫画面で送信を完了するか、未送信データを取り消してから編集してください。', CATEGORY_INVALID:'カテゴリを確認してください。最新の一覧から20個以内で選択してください。'}[code]);
+  }
+}
 export class InventorySaveError extends Error {
   constructor(readonly code: "CONFLICT" | "UNCONFIRMED") {
     super(code === "CONFLICT"
@@ -12,7 +17,7 @@ export function assertInventoryVersion(expected: unknown, current: string): asse
 }
 
 export interface InventoryWriteResult { data?: { updateInventory?: { id: string; updatedAt: string } | null }; errors?: { errorType?: string; message?: string }[] }
-export type InventoryRevisionWriter = (request: { query: string; variables: { input: Record<string, unknown>; condition: { updatedAt: { eq: string } } }; authMode: "userPool" }) => Promise<InventoryWriteResult>;
+export type InventoryRevisionWriter = (request: { query: string; variables: { input: Record<string, unknown>; condition: { updatedAt: { eq: string }; outboundBatchId?: { attributeExists: boolean } } }; authMode: "userPool" }) => Promise<InventoryWriteResult>;
 function isConditionalFailure(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const errors = (value as { errors?: unknown }).errors;
@@ -26,7 +31,7 @@ export async function writeInventoryRevision(writer: InventoryRevisionWriter, in
   try {
     result = await writer({ query: `mutation SaveInventoryRevision($input: UpdateInventoryInput!, $condition: ModelInventoryConditionInput!) {
       updateInventory(input: $input, condition: $condition) { id updatedAt }
-    }`, variables: { input, condition: { updatedAt: { eq: expectedUpdatedAt } } }, authMode: "userPool" });
+    }`, variables: { input, condition: { updatedAt: { eq: expectedUpdatedAt }, outboundBatchId:{attributeExists:false} } }, authMode: "userPool" });
   } catch (error) { throw new InventorySaveError(isConditionalFailure(error) ? "CONFLICT" : "UNCONFIRMED"); }
   if (isConditionalFailure(result)) throw new InventorySaveError("CONFLICT");
   const saved = result.data?.updateInventory;
@@ -41,7 +46,7 @@ export async function deleteInventoryRevision(writer: (request: Parameters<Inven
   try {
     result = await writer({ query: `mutation DeleteInventoryRevision($input: DeleteInventoryInput!, $condition: ModelInventoryConditionInput!) {
       deleteInventory(input: $input, condition: $condition) { id }
-    }`, variables: { input: { id }, condition: { updatedAt: { eq: expectedUpdatedAt } } }, authMode: "userPool" });
+    }`, variables: { input: { id }, condition: { updatedAt: { eq: expectedUpdatedAt }, outboundBatchId:{attributeExists:false} } }, authMode: "userPool" });
   } catch (error) { throw new InventorySaveError(isConditionalFailure(error) ? "CONFLICT" : "UNCONFIRMED"); }
   if (isConditionalFailure(result)) throw new InventorySaveError("CONFLICT");
   if (result.errors?.length || result.data?.deleteInventory?.id !== id) throw new InventorySaveError("UNCONFIRMED");

@@ -138,6 +138,13 @@ export async function saveInventory(request: SaveRequest): Promise<InventoryItem
     if (response.status === 401) throw new InventoryWriteError("unauthorized");
     if (response.status === 403) throw new InventoryWriteError("forbidden");
     if (response.status === 409) throw new InventoryWriteError("conflict");
+    if (response.status === 422) {
+      const failure=await response.json();
+      if(failure.error==='BARCODE_DUPLICATE') throw new InventoryWriteError('barcodeDuplicate');
+      if(failure.error==='BARCODE_INVALID') throw new InventoryWriteError('barcodeInvalid');
+      if(failure.error==='OUTBOUND_RESERVED') throw new InventoryWriteError('outboundReserved');
+      if(failure.error==='CATEGORY_INVALID') throw new InventoryWriteError('categoryInvalid');
+    }
     if (response.status >= 400 && response.status < 500) throw new InventoryWriteError("server");
     if (!response.ok) throw new InventoryWriteError("uncertain");
     const value = await response.json();

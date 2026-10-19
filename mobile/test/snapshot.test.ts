@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SnapshotStore, type KeyValueStore } from "../src/domain/snapshot";
+import { SnapshotStore, isInventoryItem, type KeyValueStore } from "../src/domain/snapshot";
 import { previewItems } from "../src/preview/fixture";
 
 function memory() {
@@ -13,6 +13,16 @@ function memory() {
   return { data, storage };
 }
 const time = "2026-10-17T03:00:00.000Z";
+test("historical negative stock remains readable without dropping the inventory list", async () => {
+  const { storage } = memory();
+  const negative = { ...previewItems[0], id: "historical-negative", quantity: -1 };
+  const store = new SnapshotStore(storage, "staff", "qa");
+  await store.write([...previewItems, negative], time);
+  const loaded = await store.read();
+  assert.equal(loaded?.items.length, previewItems.length + 1);
+  assert.equal(loaded?.items.at(-1)?.quantity, -1);
+  for (const quantity of [NaN, Infinity, 1.5]) assert.equal(isInventoryItem({ ...negative, quantity }), false);
+});
 test("previously loaded records survive restarting the app", async () => {
   const { storage } = memory(); await new SnapshotStore(storage, "staff-A", "production").write(previewItems, time);
   const loaded = await new SnapshotStore(storage, "staff-A", "production").read();

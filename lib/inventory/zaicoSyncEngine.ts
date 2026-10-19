@@ -3,6 +3,7 @@ import { InventorySaveError } from "./conditionalUpdate";
 import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
 import { mergeZaicoUpdate, labelOf, type MergeMode } from "./zaicoSyncMerge";
 import { productCustomFields } from "./humanEdits";
+import { inventoryCategoryIds, splitCategoryNames } from "./categories";
 import { normalizeImageRecord, type InventoryImageRecord } from "./imageTypes";
 import { ALL_EXTENDED_FIELDS } from "./extendedFields";
 import type { InventoryModel, ZaicoSyncPort, MasterCache } from "./zaicoSyncPorts";
@@ -353,16 +354,17 @@ export async function syncOneZaicoItem(
     warnings.push(...optAttrs.warnings);
     warnings.push(...optAttrs.unmapped.map((u) => `unmapped optional attribute: "${u.name}"`));
 
-    let categoryId = existing?.categoryId ?? null;
+    let categoryIds = inventoryCategoryIds(existing ?? {});
     if (core.categoryName) {
       try {
-        const r = await findOrCreateCategoryCached(core.categoryName, port, masterCache);
-        categoryId = r.id;
-        categoryCreated = r.created;
+        const entries = await Promise.all(splitCategoryNames(core.categoryName).map(name => findOrCreateCategoryCached(name, port, masterCache)));
+        categoryIds = [...new Set(entries.map(entry => entry.id))];
+        categoryCreated = entries.some(entry => entry.created);
       } catch (err) {
         warnings.push(`カテゴリの同期に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    const categoryId = categoryIds[0] ?? null;
 
     let locationId = existing?.locationId ?? null;
     if (core.locationName) {
@@ -400,7 +402,7 @@ export async function syncOneZaicoItem(
       if (core.unit !== null) push(diffField("単位", existing.unit, core.unit));
       if (core.note !== null) push(diffField("備考", existing.note, core.note));
       if (core.barcode !== null) push(diffField("QRコード・バーコード", existing.barcode, core.barcode));
-      if (core.categoryName && categoryId !== (existing.categoryId ?? null)) {
+      if (core.categoryName && JSON.stringify([...categoryIds].sort()) !== JSON.stringify(inventoryCategoryIds(existing).sort())) {
         changes.push({ fieldName: "カテゴリ", oldValue: null, newValue: `${core.categoryName}（ZAICO同期）` });
       }
       if (core.locationName && locationId !== (existing.locationId ?? null)) {
@@ -454,6 +456,7 @@ export async function syncOneZaicoItem(
           sku,
           name: core.name,
           categoryId: categoryId ?? undefined,
+          categoryIds,
           locationId: locationId ?? undefined,
           quantity: core.quantity ?? 0,
           unit: core.unit ?? undefined,
@@ -470,6 +473,7 @@ export async function syncOneZaicoItem(
           extendedFields: optAttrs.extendedFields,
         });
       } catch (err) {
+        if (err instanceof InventorySaveError && err.code === "UNCONFIRMED") throw err;
         if (imageMerge.newStorageKey) await port.removeImage(imageMerge.newStorageKey);
         if (imageMerge.newThumbnailKey) await port.removeImage(imageMerge.newThumbnailKey);
         // 同上——create自体が失敗した場合もclaimを解放し、再試行を妨げない
@@ -509,6 +513,7 @@ export async function syncOneZaicoItem(
     const merge = mergeZaicoUpdate({
       zaico: {
         categoryId: categoryId ?? undefined,
+        categoryIds: core.categoryName ? categoryIds : undefined,
         locationId: locationId ?? undefined,
         name: core.name,
         quantity: core.quantity ?? undefined,
@@ -522,6 +527,7 @@ export async function syncOneZaicoItem(
       },
       bello: {
         categoryId: existingRecord.categoryId ?? null,
+        categoryIds: inventoryCategoryIds(existingRecord),
         locationId: existingRecord.locationId ?? null,
         name: existingRecord.name,
         quantity: existingRecord.quantity ?? null,

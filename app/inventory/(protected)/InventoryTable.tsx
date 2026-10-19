@@ -1,4 +1,5 @@
 "use client";
+import {inventoryCategoryIds} from "@/lib/inventory/categories";
 
 import { useMemo } from "react";
 import Link from "next/link";
@@ -133,10 +134,10 @@ function renderReadOnlyCell(
       );
     }
     case "category": {
-      const category = row.categoryId ? categoriesById[row.categoryId] : undefined;
+      const categoryNames = inventoryCategoryIds(row).map(id=>categoriesById[id]?.name).filter(Boolean);
       return (
-        <span className="block truncate text-gray-600" title={category?.name}>
-          {category?.name ?? "-"}
+        <span className="block truncate text-gray-600" title={categoryNames.join("、")}>
+          {categoryNames.join(" / ") || "-"}
         </span>
       );
     }
@@ -213,6 +214,7 @@ function renderEditableCell(
   locations: MasterOption[],
   getValue: ReturnType<typeof useDirectEdit>["getValue"],
   setValue: ReturnType<typeof useDirectEdit>["setValue"],
+  saving: boolean,
 ): React.ReactNode {
   // 通常表示の読み取り専用セル(<td>のpx-2 py-1だけがinsetで、中身の
   // <span>自体は余白を持たない)と見た目の密度を揃える(夜間開発の
@@ -226,12 +228,14 @@ function renderEditableCell(
   switch (column) {
     case "name": {
       const value = getValue(row, "name") ?? row.name;
-      return <input type="text" value={value} onChange={(e) => setValue(row.id, column, e.target.value)} className={inputClass} />;
+      return <input disabled={saving} type="text" value={value} onChange={(e) => setValue(row.id, column, e.target.value)} className={inputClass} />;
     }
     case "quantity": {
-      const value = getValue(row, "quantity") ?? row.quantity;
+      const pending = getValue(row, "quantity");
+      const value = pending === undefined ? row.quantity : pending;
       return (
         <input
+          disabled={saving}
           type="number"
           value={value ?? ""}
           onChange={(e) => setValue(row.id, column, e.target.value === "" ? null : Number(e.target.value))}
@@ -240,9 +244,10 @@ function renderEditableCell(
       );
     }
     case "location": {
-      const value = getValue(row, "locationId") ?? row.locationId ?? "";
+      const pending = getValue(row, "locationId");
+      const value = pending === undefined ? row.locationId : pending;
       return (
-        <select value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass}>
+        <select disabled={saving} value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass}>
           <option value="">未選択</option>
           {locations.map((l) => (
             <option key={l.id} value={l.id}>
@@ -253,9 +258,10 @@ function renderEditableCell(
       );
     }
     case "category": {
-      const value = getValue(row, "categoryId") ?? row.categoryId ?? "";
+      const pending = getValue(row, "categoryId");
+      const value = pending === undefined ? row.categoryId : pending;
       return (
-        <select value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass}>
+        <select disabled={saving} value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass}>
           <option value="">未選択</option>
           {categories.map((c) => (
             <option key={c.id} value={c.id}>
@@ -269,9 +275,11 @@ function renderEditableCell(
     case "salePrice":
     case "purchasePrice": {
       const current = column === "plannedSalePrice" ? row.plannedSalePrice : column === "salePrice" ? row.salePrice : row.purchasePrice;
-      const value = getValue(row, column) ?? current;
+      const pending = getValue(row, column);
+      const value = pending === undefined ? current : pending;
       return (
         <input
+          disabled={saving}
           type="number"
           value={value ?? ""}
           onChange={(e) => setValue(row.id, column, e.target.value === "" ? null : Number(e.target.value))}
@@ -280,16 +288,19 @@ function renderEditableCell(
       );
     }
     case "market": {
-      const value = getValue(row, "market") ?? row.market ?? "";
-      return <input type="text" value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass} />;
+      const pending = getValue(row, "market");
+      const value = pending === undefined ? row.market : pending;
+      return <input disabled={saving} type="text" value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass} />;
     }
     case "note":
     case "conditionRating":
     case "damageNotes": {
       const current = column === "note" ? row.note : column === "conditionRating" ? row.conditionRating : row.damageNotes;
-      const value = getValue(row, column) ?? current;
+      const pending = getValue(row, column);
+      const value = pending === undefined ? current : pending;
       return (
         <textarea
+          disabled={saving}
           value={value ?? ""}
           onChange={(e) => setValue(row.id, column, e.target.value || null)}
           rows={1}
@@ -328,7 +339,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
   const columnByKey = new Map([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c]));
   const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key]);
 
-  const { enabled: directEditEnabled, getValue, setValue, isRowDirty } = useDirectEdit();
+  const { enabled: directEditEnabled, getValue, setValue, isRowDirty, saving } = useDirectEdit();
 
   // 列幅はlib/inventory/listColumns.tsのdefaultWidth(表示設定の「初期
   // 設定に戻す」で使う既定値)を基準に、useInventoryListColumns経由の
@@ -415,7 +426,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                         // isInlineEditableColumn above — TS just can't
                         // track a type guard through an intermediate
                         // boolean variable, hence the assertion.
-                        renderEditableCell(col.key as InlineEditFieldKey, row, categories, locations, getValue, setValue)
+                        renderEditableCell(col.key as InlineEditFieldKey, row, categories, locations, getValue, setValue, saving)
                       ) : directEditEnabled ? (
                         renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails)
                       ) : (

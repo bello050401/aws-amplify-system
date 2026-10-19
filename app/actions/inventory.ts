@@ -1,4 +1,5 @@
 "use server";
+import { persistInventoryWithCategories, deleteInventoryWithCategories } from "@/lib/inventory/categoryPersistence";
 
 import { revalidatePath } from "next/cache";
 import { clearInventoryCountCache } from "@/lib/inventory/inventoryPage";
@@ -19,6 +20,8 @@ import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/invento
 import type { InventoryImageRecord, InventoryImageType } from "@/lib/inventory/imageTypes";
 import { assertInventoryVersion, writeInventoryRevision, deleteInventoryRevision, type InventoryDeleteResult, type InventoryWriteResult } from "@/lib/inventory/conditionalUpdate";
 import { withHumanEdits, productCustomFields } from "@/lib/inventory/humanEdits";
+import { inventoryCategoryIds } from "@/lib/inventory/categories";
+import { inventoryQuantityError } from "@/lib/inventory/quantityValidation";
 
 /**
  * What the client sends for one image slot (see ImageEditor.tsx):
@@ -229,6 +232,7 @@ export interface InventoryFieldsInput extends InventoryExtendedFields {
   expectedUpdatedAt?: string;
   name: string;
   categoryId?: string;
+  categoryIds?: string[];
   statusId?: string;
   locationId?: string;
   quantity?: number;
@@ -270,6 +274,8 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
 
   const name = input.name.trim();
   if (!name) throw new Error("商品名を入力してください。");
+  const quantityError = inventoryQuantityError(input.quantity);
+  if (quantityError) throw new Error(quantityError);
 
   const who = await getCurrentInventoryUserEmail();
 
@@ -296,12 +302,13 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
     throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(skuErrors)}`);
   }
 
-  const { data: created, errors } = await serverDataClient.models.Inventory.create(
+  const { data: created, errors } = await (async (data: Record<string, unknown>, _auth: unknown) => ({data: await persistInventoryWithCategories(data), errors: undefined}))(
     {
       ...(options?.id ? { id: options.id } : {}),
       sku,
       name,
       categoryId: input.categoryId || undefined,
+      categoryIds: input.categoryIds,
       statusId: input.statusId || undefined,
       locationId: input.locationId || undefined,
       quantity: input.quantity ?? 0,
@@ -372,6 +379,8 @@ export async function updateInventory(
 
   const name = input.name.trim();
   if (!name) throw new Error("商品名を入力してください。");
+  const quantityError = inventoryQuantityError(input.quantity);
+  if (quantityError) throw new Error(quantityError);
 
   const [existing, categories, locations, statuses] = await Promise.all([
     getInventoryDetail(inventoryId),
@@ -390,6 +399,7 @@ export async function updateInventory(
       id: inventoryId,
       name,
       categoryId: input.categoryId || null,
+      categoryIds: input.categoryIds,
       statusId: input.statusId || null,
       locationId: input.locationId || null,
       quantity: input.quantity ?? 0,
@@ -410,11 +420,7 @@ export async function updateInventory(
   revisionInput.customFields = stringifyCustomFields(withHumanEdits(
     existing as unknown as Record<string, unknown>, revisionInput, existing.customFields, input.customFields,
   ));
-  await writeInventoryRevision(
-    async request => await serverDataClient.graphql(request) as InventoryWriteResult,
-    revisionInput,
-    input.expectedUpdatedAt,
-  );
+  await persistInventoryWithCategories(revisionInput, input.expectedUpdatedAt);
 
   const categoryName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? id;
   const locationName = (id: string | null) => locations.find((l) => l.id === id)?.name ?? id;
@@ -443,10 +449,15 @@ export async function updateInventory(
   const oldImageKeys = existing.images.map((i) => i.storageKey);
   const newImageKeys = images.map((i) => i.storageKey);
   const imagesChanged = oldImageKeys.length !== newImageKeys.length || oldImageKeys.some((k, i) => k !== newImageKeys[i]);
+  const oldCategoryIds = inventoryCategoryIds(existing);
+  const newCategoryIds = input.categoryIds ?? [...new Set([
+    ...(input.categoryId ? [input.categoryId] : []), ...oldCategoryIds.filter(id => id !== existing.categoryId),
+  ])];
+  const categoryHistoryValue = (ids: string[]) => [...new Set(ids)].sort().map(categoryName).join(" / ");
 
   const changes = [
     diffField("商品名", existing.name, name),
-    diffField("カテゴリ", categoryName(existing.categoryId), categoryName(input.categoryId ?? null)),
+    diffField("カテゴリ", categoryHistoryValue(oldCategoryIds), categoryHistoryValue(newCategoryIds)),
     diffField("保管場所", locationName(existing.locationId), locationName(input.locationId ?? null)),
     diffField("ステータス", statusLabel(existing.statusId), statusLabel(input.statusId ?? null)),
     diffField("数量", existing.quantity, input.quantity ?? 0),
@@ -514,7 +525,7 @@ export async function deleteInventory(inventoryId: string, options?: { skipRedir
 
   const who = await getCurrentInventoryUserEmail();
 
-  await deleteInventoryRevision(async request => await serverDataClient.graphql(request) as InventoryDeleteResult, inventoryId, existing.updatedAt);
+  await deleteInventoryWithCategories(inventoryId, existing.updatedAt);
 
   await logInventoryHistory(inventoryId, who, [{ fieldName: "削除", oldValue: "有効", newValue: "削除済み" }]);
   await Promise.allSettled(allImageStorageKeys(existing.images).map((k) => removeInventoryImage(k)));

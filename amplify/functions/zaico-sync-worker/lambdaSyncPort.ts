@@ -1,3 +1,4 @@
+import {createInventoryPersistence} from '@/lib/inventory/categoryPersistenceCore';
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, UpdateCommand, ScanCommand, GetCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
@@ -39,7 +40,7 @@ import { InventorySaveError } from "@/lib/inventory/conditionalUpdate";
  * この区別を明記する。
  */
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
 const s3 = new S3Client({});
 const lambdaClient = new LambdaClient({});
 
@@ -165,101 +166,20 @@ async function generateSku(): Promise<string> {
   return sku;
 }
 
+// Keep categories, barcode claims and the inventory row in one transaction.
+const persistence = createInventoryPersistence(ddb, model => {
+  if (!INVENTORY_TABLE.startsWith('Inventory-')) throw new Error('Inventory table is not configured');
+  return model + INVENTORY_TABLE.slice('Inventory'.length);
+});
 async function createInventory(input: NewInventoryInput): Promise<InventoryModel> {
-  // 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §11.7: idはこの
-  // 関数が新規発行するのではなく、claimSourceLinkで既に確保済みの
-  // input.idをそのまま使う——claim〜実createの間に窓を作らない。
-  const id = input.id;
-  const now = new Date().toISOString();
-  const item: Record<string, unknown> = {
-    id,
-    sku: input.sku,
-    name: input.name,
-    quantity: input.quantity,
-    images: input.images,
-    createdBy: input.createdBy,
-    updatedBy: input.updatedBy,
-    sourceSystem: input.sourceSystem,
-    sourceInventoryId: input.sourceInventoryId,
-    createdAt: now,
-    updatedAt: now,
-    // 第六ラウンドP0-5(amplify/data/resource.tsのInventoryモデル
-    // コメント参照)。この経路はserverDataClientを経由しない生の
-    // DynamoDB PutItemなので、Amplify Data側のcreate/updateと同じ
-    // フィールドをここで明示的に設定する必要がある。
-    listingPartition: "ACTIVE",
-    listUpdatedAt: now,
-    ...input.extendedFields,
-  };
-  // undefined値の属性はそもそも書き込まない(DynamoDBDocumentClientは
-  // デフォルトでundefinedのkeyを除去しないため明示的にfilterする——
-  // Amplify Dataの通常のcreateと同じ「未指定フィールドは空文字/nullで
-  // はなくAttribute自体が存在しない」という宣言的な省略を再現する)。
-  for (const [key, value] of [
-    ["categoryId", input.categoryId],
-    ["locationId", input.locationId],
-    ["unit", input.unit],
-    ["purchasePrice", input.purchasePrice],
-    ["salePrice", input.salePrice],
-    ["note", input.note],
-    ["barcode", input.barcode],
-    ["customFields", input.customFields],
-  ] as const) {
-    if (value !== undefined) item[key] = value;
-  }
-  await ddb.send(new PutCommand({ TableName: INVENTORY_TABLE, Item: item }));
-  return item as unknown as InventoryModel;
+  const {extendedFields, ...fields}=input;
+  const saved=await persistence.persistInventoryWithCategories({...fields,...extendedFields,listingPartition:'ACTIVE',listUpdatedAt:new Date().toISOString()});
+  return await persistence.getInventoryRaw(saved.id) as InventoryModel;
 }
-
 async function updateInventory(input: UpdateInventoryInput): Promise<void> {
-  if (!input.expectedUpdatedAt || !Number.isFinite(Date.parse(input.expectedUpdatedAt))) throw new InventorySaveError("CONFLICT");
-  // §9(pricing-schedulerで確立): UpdateExpressionが明示した属性しか
-  // 変更しない——GSIキー属性(id/sku/categoryId/statusId/locationId/
-  // deletedAt)のうち、実際にZAICO側で値が変わったものだけがこの
-  // UpdateExpressionに含まれる(呼び出し元のsyncOneZaicoItemが
-  // 既にfields差分を計算済み)。
-  // 第六ラウンドP0-5: この呼び出し元(syncOneZaicoItem)はZAICO側の実際の
-  // 差分が検出された場合のみupdateInventoryを呼ぶ(unchanged fast-pathは
-  // ここに到達しない)ので、listUpdatedAtを更新してよい対象。
-  const fields: Record<string, unknown> = {
-    images: input.images,
-    updatedBy: input.updatedBy,
-    updatedAt: new Date().toISOString(),
-    listUpdatedAt: new Date().toISOString(),
-    ...input.extendedFields,
-  };
-  // 2026-09-02: name も任意になった。項目別の更新方針
-  // (lib/inventory/zaicoUpdatePolicy.ts)によっては商品名を更新しない
-  // と決まるため、undefined をそのまま書いて既存値を壊さないよう、
-  // 他の任意項目と同じ扱いにする。
-  for (const [key, value] of [
-    ["name", input.name],
-    ["categoryId", input.categoryId],
-    ["locationId", input.locationId],
-    ["quantity", input.quantity],
-    ["unit", input.unit],
-    ["note", input.note],
-    ["barcode", input.barcode],
-    ["purchasePrice", input.purchasePrice],
-    ["salePrice", input.salePrice],
-    ["customFields", input.customFields],
-    ["zaicoSnapshotJson", input.zaicoSnapshotJson],
-  ] as const) {
-    if (value !== undefined) fields[key] = value;
-  }
-  const names = Object.fromEntries(Object.keys(fields).map((k, i) => [`#f${i}`, k]));
-  const values = Object.fromEntries(Object.values(fields).map((v, i) => [`:v${i}`, v]));
-  const setClause = Object.keys(fields).map((_, i) => `#f${i} = :v${i}`).join(", ");
-  try {
-    await ddb.send(new UpdateCommand({
-      TableName: INVENTORY_TABLE, Key: { id: input.id }, UpdateExpression: `SET ${setClause}`,
-      ConditionExpression: "#revision = :expectedRevision",
-      ExpressionAttributeNames: { ...names, "#revision": "updatedAt" },
-      ExpressionAttributeValues: { ...values, ":expectedRevision": input.expectedUpdatedAt },
-    }));
-  } catch (error) {
-    throw new InventorySaveError(error instanceof Error && error.name === "ConditionalCheckFailedException" ? "CONFLICT" : "UNCONFIRMED");
-  }
+  if (!input.expectedUpdatedAt) throw new InventorySaveError('CONFLICT');
+  const {expectedUpdatedAt,extendedFields,...fields}=input;
+  await persistence.persistInventoryWithCategories({...fields,...extendedFields,listUpdatedAt:new Date().toISOString()},expectedUpdatedAt);
 }
 
 async function logHistory(inventoryId: string, changedBy: string | null, changes: { fieldName: string; oldValue: string | null; newValue: string | null }[]): Promise<void> {

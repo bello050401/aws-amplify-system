@@ -1,3 +1,4 @@
+import {categoryFilter} from "./categories";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { toListRow, type InventoryListRow } from "./queries";
@@ -50,7 +51,7 @@ const MAX_PAGES = 60;
 function buildFilter(filters: InventoryCursorListFilters): Record<string, unknown> {
   const conditions: Record<string, unknown>[] = [{ deletedAt: { attributeExists: false } }];
   if (filters.categoryIds && filters.categoryIds.length > 0) {
-    conditions.push({ or: filters.categoryIds.map((id) => ({ categoryId: { eq: id } })) });
+    conditions.push({ or: filters.categoryIds.map((id) => categoryFilter(id)) });
   }
   if (filters.locationId) conditions.push({ locationId: { eq: filters.locationId } });
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });

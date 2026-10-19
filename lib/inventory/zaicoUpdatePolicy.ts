@@ -79,6 +79,7 @@ export interface ZaicoFieldRule {
  * 台帳項目が大半で、そちらを既定にするほうが表が短く、例外が目立つ。
  */
 export const ZAICO_FIELD_RULES: ZaicoFieldRule[] = [
+  {field:"categoryIds",label:"カテゴリ",policy:"HUMAN_WINS",reason:"複数カテゴリと移動予定はBELLOの人による編集を保持する。"},
   // ── 人間優先(3-way merge) ────────────────────────────────────
   {
     field: "categoryId",
@@ -281,6 +282,7 @@ function numericallyEqual(a: unknown, b: unknown): boolean {
 }
 
 export function valuesEqual(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b) && [...a,...b].every(v=>typeof v==='string')) return JSON.stringify([...new Set(a)].sort())===JSON.stringify([...new Set(b)].sort());
   if (numericallyEqual(a, b)) return true;
   return normalizeForCompare(a) === normalizeForCompare(b);
 }

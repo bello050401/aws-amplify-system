@@ -1,3 +1,4 @@
+import {inventoryCategoryIds} from '@/lib/inventory/categories';
 import { NextResponse } from "next/server";
 import { getMobileSession } from "@/lib/mobile/session";
 import { buildSearchFieldDefs, emptyAdvancedQuery } from "@/lib/inventory/advancedSearch";
@@ -63,7 +64,7 @@ export async function GET(request: Request) {
       return {
         id: row.id, sku: row.sku, displayId: row.displayId, name: row.name, quantity: row.quantity, unit: row.unit ?? "",
         location: (row.locationId && locationNames.get(row.locationId)) || "",
-        category: (row.categoryId && categoryNames.get(row.categoryId)) || "",
+        category: inventoryCategoryIds(row).map(id=>categoryNames.get(id)).filter(Boolean).join(","),
         statusId: row.statusId, condition: (row.statusId && statusLabels.get(row.statusId)) || "", note: row.note ?? "", barcode: row.barcode ?? "",
         plannedSalePrice: row.plannedSalePrice, thumbnailUrl: imageById.get(row.id) ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt,
       };

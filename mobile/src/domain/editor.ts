@@ -1,9 +1,10 @@
 import { draftFor, sameDraft, validateDraft, type InventoryDraft, type InventoryItem } from "./inventory";
 import { DETAIL_FIELDS, copyDetailValues } from "./detailFields";
 import type { PendingPhoto, UploadedPhoto } from "./inventory";
+import {splitCategoryNames} from '../../../lib/inventory/categories';
 
 export const OFFLINE_WARNING = "【圏外です】";
-export type WriteFailure = "offline" | "unauthorized" | "forbidden" | "conflict" | "uncertain" | "server";
+export type WriteFailure = "offline" | "unauthorized" | "forbidden" | "conflict" | "uncertain" | "server" | "barcodeDuplicate" | "barcodeInvalid" | "outboundReserved" | "categoryInvalid";
 export class InventoryWriteError extends Error {
   constructor(readonly kind: WriteFailure) { super(kind); }
 }
@@ -15,6 +16,7 @@ export interface SaveRequest {
   draft: InventoryDraft;
   create?: boolean;
   uploads?: UploadedPhoto[];
+  removedPhotoIds?: string[];
   copyFrom?: { id: string; updatedAt: string };
 }
 export interface EditorPorts {
@@ -32,10 +34,15 @@ export interface EditorState {
   warning: string | null;
   outcomeUncertain: boolean;
   photos: PendingPhoto[];
+  removedPhotoIds: string[];
   creating: boolean;
 }
 
 const errors: Record<WriteFailure, string> = {
+  barcodeDuplicate: 'この番号は別の商品に登録されています。番号を確認して読み直してください。',
+  barcodeInvalid: '読み取れませんでした。番号を確認してください。',
+  outboundReserved: '出庫データを作成済みです。出庫画面で送信を完了するか、未送信データを取り消してから編集してください。',
+  categoryInvalid: 'カテゴリを確認してください。最新の一覧から20個以内で選択してください。',
   offline: OFFLINE_WARNING,
   unauthorized: "ログインの有効期限が切れました。編集内容は保持しています。",
   forbidden: "変更する権限がありません。編集内容は保持しています。",
@@ -55,7 +62,7 @@ export class InventoryEditor {
     this.state = {
       saved: { ...item, details: copyDetailValues(item.details) }, draft: draftFor(item), dirty: Boolean(copyFrom), saving: false,
       leaveConfirmation: false, warning: null, outcomeUncertain: false,
-      photos: [], creating,
+      photos: [], removedPhotoIds: [], creating,
     };
   }
 
@@ -74,7 +81,7 @@ export class InventoryEditor {
     if (this.state.saving || this.state.outcomeUncertain) return;
     const draft = { ...this.state.draft, [key]: key === "details" ? copyDetailValues(value) : value };
     this.pendingRequest = null;
-    this.set({ draft, dirty: this.state.photos.length > 0 || !sameDraft(draft, draftFor(this.state.saved)), warning: null });
+    this.set({ draft, dirty: this.state.photos.length > 0 || this.state.removedPhotoIds.length > 0 || !sameDraft(draft, draftFor(this.state.saved)), warning: null });
   }
 
   changeDetail(key: string, value: string): void {
@@ -89,7 +96,7 @@ export class InventoryEditor {
     if (id && !selected) return;
     const draft = { ...this.state.draft, statusId: id, condition: selected?.label ?? "" };
     this.pendingRequest = null;
-    this.set({ draft, dirty: this.state.photos.length > 0 || !sameDraft(draft, draftFor(this.state.saved)), warning: null });
+    this.set({ draft, dirty: this.state.photos.length > 0 || this.state.removedPhotoIds.length > 0 || !sameDraft(draft, draftFor(this.state.saved)), warning: null });
   }
 
   addPhotos(photos: PendingPhoto[]): void {
@@ -101,7 +108,20 @@ export class InventoryEditor {
     if (this.state.saving || this.state.outcomeUncertain) return;
     const photos = this.state.photos.filter(photo => photo.id !== id);
     this.pendingRequest = null;
-    this.set({ photos, dirty: photos.length > 0 || !sameDraft(this.state.draft, draftFor(this.state.saved)) });
+    this.set({ photos, dirty: photos.length > 0 || this.state.removedPhotoIds.length > 0 || !sameDraft(this.state.draft, draftFor(this.state.saved)) });
+  }
+
+  removeSavedPhoto(id: string): void {
+    if (this.state.saving || this.state.outcomeUncertain || this.state.creating || this.state.saved.photosComplete !== true) return;
+    if (!this.state.saved.photos?.some(photo => photo.id === id && photo.source === "INVENTORY")) return;
+    this.pendingRequest = null;
+    this.set({ removedPhotoIds: [...new Set([...this.state.removedPhotoIds, id])], dirty: true, warning: null });
+  }
+
+  restoreRemovedPhotos(): void {
+    if (this.state.saving || this.state.outcomeUncertain) return;
+    this.pendingRequest = null;
+    this.set({ removedPhotoIds: [], dirty: this.state.photos.length > 0 || !sameDraft(this.state.draft, draftFor(this.state.saved)) });
   }
 
   requestLeave(): boolean {
@@ -115,10 +135,27 @@ export class InventoryEditor {
 
   discard(): boolean {
     if (this.state.saving) return false;
-    // Discarding local fields never rolls back a possibly completed server write.
-    this.set({ draft: draftFor(this.state.saved), photos: [], dirty: false, leaveConfirmation: false, warning: null });
+    // Keep the request identity until a possibly committed write is reconciled.
+    // Discarding it cannot undo the write and would make a later retry unsafe.
+    if (this.state.outcomeUncertain) {
+      this.set({ warning: errors.uncertain, leaveConfirmation: true });
+      return false;
+    }
+    this.set({ draft: draftFor(this.state.saved), photos: [], removedPhotoIds: [], dirty: false, leaveConfirmation: false, warning: null });
     this.pendingRequest = null;
     return true;
+  }
+
+  /** QR and movement are one server transaction. Cancel/rejection never leaves half a draft. */
+  async saveQrMovement(value:string,category:string|null,movementNames:string[]):Promise<InventoryItem|null> {
+    if(this.state.saving)return null;
+    if(this.state.outcomeUncertain)return this.save();
+    const previous={barcode:this.state.draft.barcode,category:this.state.draft.category};
+    this.change('barcode',value.trim());
+    if(category)this.change('category',[...splitCategoryNames(previous.category).filter(c=>!movementNames.includes(c)),category].join(','));
+    const result=await this.save();
+    if(!result&&!this.state.outcomeUncertain){const warning=this.state.warning;this.change('barcode',previous.barcode);this.change('category',previous.category);this.set({warning});}
+    return result;
   }
 
   async save(): Promise<InventoryItem | null> {
@@ -148,6 +185,7 @@ export class InventoryEditor {
         id: this.state.saved.id, expectedUpdatedAt: this.state.saved.updatedAt,
         mutationId: this.ports.newMutationId(), draft: { ...this.state.draft, details: copyDetailValues(this.state.draft.details) },
         ...(this.state.creating ? { create: true } : {}), ...(uploads.length ? { uploads } : {}),
+        ...(this.state.removedPhotoIds.length ? { removedPhotoIds: [...this.state.removedPhotoIds] } : {}),
         ...(this.copyFrom ? { copyFrom: this.copyFrom } : {}),
       };
       this.pendingRequest = request;
@@ -156,7 +194,7 @@ export class InventoryEditor {
       this.pendingRequest = null;
       this.set({ saved: { ...saved, details: copyDetailValues(saved.details) }, draft: draftFor(saved), dirty: false,
         leaveConfirmation: false, warning: null, outcomeUncertain: false });
-      this.set({ creating: false, photos: [] });
+      this.set({ creating: false, photos: [], removedPhotoIds: [] });
       return saved;
     } catch (error) {
       const kind = error instanceof InventoryWriteError ? error.kind : "uncertain";

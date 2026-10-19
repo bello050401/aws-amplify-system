@@ -128,6 +128,14 @@ const nextConfig = {
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
         ],
       },
+      {
+        // PWAのスキャン検索は同一オリジンから端末カメラを使う。
+        // 一律 camera=() では利用者が許可してもブラウザーに拒否される。
+        source: "/staff-app/:path*",
+        headers: [
+          { key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=(), payment=()" },
+        ],
+      },
     ];
   },
 };

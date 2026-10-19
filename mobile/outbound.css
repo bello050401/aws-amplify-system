@@ -1,0 +1,13 @@
+/* Scoped base rules: do not reset the surrounding React Native Web app. */
+#bello-outbound {flex:1;min-height:0;position:relative;transform:translateZ(0);overflow:hidden;background:#fff;color:#111827;font-size:16px;line-height:1.5;font-family:inherit;}
+#bello-outbound *,#bello-outbound ::before,#bello-outbound ::after {box-sizing:border-box;border-width:0;border-style:solid;border-color:#e5e7eb;}
+#bello-outbound > main {height:100%;width:100%;overflow-y:auto;overscroll-behavior:contain;}
+#bello-outbound h1,#bello-outbound h2,#bello-outbound h3,#bello-outbound p,#bello-outbound ul {margin:0;}
+#bello-outbound h1,#bello-outbound h2,#bello-outbound h3 {font-size:inherit;font-weight:inherit;}
+#bello-outbound ul {list-style:none;padding:0;}
+#bello-outbound button,#bello-outbound input,#bello-outbound select {font:inherit;color:inherit;}
+#bello-outbound button {background:transparent;cursor:pointer;}
+#bello-outbound button:disabled {cursor:default;}
+#bello-outbound a {text-decoration:none;color:inherit;}
+#bello-outbound img {display:block;max-width:100%;}
+@tailwind utilities;

@@ -42,6 +42,7 @@ export const NAV_ITEMS = [
   // ベースの管理画面(/inventory/listings、app/inventory/(protected)/
   // listings/page.tsx)への入口。
   { key: "listings", label: "EC出品", href: "/inventory/listings", enabled: true },
+  { key: "outbound", label: "出庫", href: "/inventory/outbound", enabled: true },
   // BELLO統合業務OS指示書(2026-08-30) §38: 「メッセージ」をEC出品の
   // 直下へ追加。
   { key: "messages", label: "メッセージ", href: "/inventory/messages", enabled: true },

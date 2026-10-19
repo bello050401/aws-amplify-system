@@ -15,7 +15,8 @@ import type { ImageEditorSlot } from "./ImageEditor";
  */
 export interface FormDirtySnapshotInput {
   name: string;
-  categoryId: string;
+  categoryId?: string;
+  categoryIds?: string[];
   statusId: string;
   locationId: string;
   quantity: string;
@@ -57,6 +58,7 @@ export function buildFormDirtySnapshot(input: FormDirtySnapshotInput): string {
   return JSON.stringify({
     name: input.name,
     categoryId: input.categoryId,
+    categoryIds: input.categoryIds,
     statusId: input.statusId,
     locationId: input.locationId,
     quantity: input.quantity,
@@ -75,7 +77,9 @@ export function buildFormDirtySnapshot(input: FormDirtySnapshotInput): string {
 /**
  * Best-effort cleanup for "保存せず移動" (spec L): removes the S3 object
  * for every "new"-kind slot that already finished uploading (has a
- * `storageKey`) across both image lists. Not awaited by the caller — a
+ * `storageKey`) across both image lists. Pending uploads share a lifetime
+ * marker so their completion handler also removes the file after departure.
+ * Not awaited by the caller — a
  * failed cleanup here is a minor orphaned-object concern, never worth
  * blocking or failing the navigation the user already chose to take (same
  * reasoning as every other best-effort S3 cleanup in this app — see

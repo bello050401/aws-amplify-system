@@ -1,3 +1,4 @@
+import {categoryLabels} from '@/lib/inventory/categories';
 import type { InventoryDetail, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { visibleDetailFields } from "@/mobile/src/domain/detailFields";
 import type { MobileFeatures } from "./accessPolicy";
@@ -13,7 +14,7 @@ export function mobileInventoryDetail(row: InventoryDetail, categories: MasterOp
   return {
     id: row.id, sku: row.sku, displayId: row.displayId, name: row.name, quantity: row.quantity, unit: row.unit ?? "",
     location: locations.find(location => location.id === row.locationId)?.name ?? "",
-    category: categories.find(category => category.id === row.categoryId)?.name ?? "",
+    category: categoryLabels(row,categories).join(","),
     // Reuse BELLO's existing state/master relationship. No app-only ZAICO state field.
     statusId: row.statusId,
     statusOptions: statuses.map(status => ({ id: status.id, label: status.label })),

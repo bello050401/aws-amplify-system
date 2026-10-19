@@ -1,3 +1,4 @@
+import {categoryLabels} from "@/lib/inventory/categories";
 import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { ShippingReferencePriceSection } from "./listing/ShippingReferencePriceSection";
 import Link from "next/link";
@@ -7,7 +8,7 @@ import { canEditInventory, canHardDeleteInventory, getInventoryRole } from "@/li
 import {
   getInventoryDetail,
   listCategories,
-  listCustomFieldDefinitions,
+  listAllCustomFieldDefinitions,
   listLocations,
   listStatuses,
 } from "@/lib/inventory/queries";
@@ -126,7 +127,7 @@ export default async function InventoryDetailPage({
     initialRead = await Promise.all([
       getInventoryDetail(params.id),
       listStatuses(),
-      listCustomFieldDefinitions(),
+      listAllCustomFieldDefinitions(),
       listInventoryPhotoAssetsAction(params.id),
     ] as const);
   } catch (error) {
@@ -178,22 +179,19 @@ export default async function InventoryDetailPage({
   // 断。spec C-3の「脚高/座面寸法/梱包サイズ」例示はここに含まれる。
   const fieldLabelByKey = new Map(fieldDefs.map((f) => [f.fieldKey, f.label]));
   const customFieldValues = productCustomFields(item.customFields);
-  const customFieldRows: DetailInfoRow[] = fieldDefs.map((def) => ({
-    label: def.label,
+  const customFieldRows: DetailInfoRow[] = fieldDefs.filter((def) => def.isActive ||
+    (customFieldValues[def.fieldKey] !== undefined && customFieldValues[def.fieldKey] !== null && customFieldValues[def.fieldKey] !== "")).map((def) => ({
+    label: def.isActive ? def.label : `${def.label}（無効）`,
     value: customFieldValues[def.fieldKey] === undefined || customFieldValues[def.fieldKey] === null || customFieldValues[def.fieldKey] === ""
       ? "-"
       : String(customFieldValues[def.fieldKey]),
   }));
-  // A CustomFieldDefinitionが非アクティブ化された後でも、既にこの在庫
-  // へ値が入っている場合はfieldLabelByKeyに無いキーとして残る —
-  // listCustomFieldDefinitionsはisActiveのみ返すため、そのキーを
-  // フィールド定義名ではなくキー名で表示することでデータの消失を防ぐ
-  // (A-2の「編集画面にある項目が詳細で見えない状態をなくす」の裏返し
-  // として、"以前は存在した値"も隠さない)。
+  // 無効な定義の既存値も元の項目名で表示。定義が残っていない取込項目は
+  // キー名を代用し、以前の値を隠さない。
   for (const [key, value] of Object.entries(customFieldValues)) {
     if (fieldLabelByKey.has(key)) continue;
     if (value === undefined || value === null || value === "") continue;
-    customFieldRows.push({ label: key, value: String(value) });
+    customFieldRows.push({ label: key === "belloBrand" ? "ブランド" : key, value: String(value) });
   }
 
   // 販売情報 / サイズ情報 / コンディション — レジストリの並び順どおり
@@ -248,7 +246,7 @@ export default async function InventoryDetailPage({
     { label: "在庫ID", value: item.displayId },
     { label: "SKU", value: item.sku },
     { label: "物品名", value: item.name },
-    { label: "カテゴリ", value: category?.name ?? "-" },
+    { label: "カテゴリ", value: categoryLabels(item,categories).join(" / ") || "-" },
     { label: "状態", value: status?.label ?? "-" },
     { label: "数量", value: String(item.quantity) },
     { label: "単位", value: item.unit ?? "-" },
@@ -306,7 +304,6 @@ export default async function InventoryDetailPage({
         </div>
         {speedProbe && <InventorySpeedProbeResult endAt={process.env.INVENTORY_SPEED_PROBE_END_AT!} />}
         {role === "VIEWER" && <p className="mt-1 text-[11px] text-gray-400">VIEWER権限のため、編集・複製・削除は行えません。</p>}
-        {role === "EDITOR" && <p className="mt-1 text-[11px] text-gray-400">削除はADMIN権限が必要です。</p>}
 
         {/* PC「左：商品画像／右：商品情報」の2列。lg未満（モバイル/狭幅）
             では1カラムへ積み上げる — DOM順(画像→情報)がそのままモバイ
