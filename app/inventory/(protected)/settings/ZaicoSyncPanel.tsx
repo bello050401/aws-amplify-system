@@ -1,6 +1,7 @@
 "use client";
 
 import { formatJstDateTime } from "@/lib/inventory/formatJst";
+import {ZaicoTransitionPanel} from "./ZaicoTransitionPanel";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -46,6 +47,12 @@ import type { ZaicoTokenSource } from "@/lib/zaico/client";
  * したら入力欄も即座にクリアする。
  */
 export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConnected: boolean; zaicoTokenSource: ZaicoTokenSource }) {
+  const [phase,setPhase]=useState<string|null>(null);
+  return <div className="space-y-4"><ZaicoTransitionPanel onPhase={setPhase}/>
+    {phase==='DISABLED'&&<LegacyZaicoSyncPanel zaicoConnected={zaicoConnected} zaicoTokenSource={zaicoTokenSource}/>}
+  </div>;
+}
+function LegacyZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConnected: boolean; zaicoTokenSource: ZaicoTokenSource }) {
   const router = useRouter();
   const [zaicoId, setZaicoId] = useState("");
   const [busy, setBusy] = useState<"idle" | "one" | "limited" | "preview">("idle");
@@ -280,7 +287,7 @@ export function ZaicoSyncPanel({ zaicoConnected, zaicoTokenSource }: { zaicoConn
   return (
     <div className="max-w-2xl">
       <p className="mb-4 text-[12px] text-gray-500">
-        ZAICOの在庫データをBELLOへ取り込みます（ZAICO → BELLOの一方向のみ。BELLOからZAICOへは一切書き込みません）。
+        以下はAPI接続設定と従来の手動取り込みです。暫定同期の開始後は、同期処理を上の設定に一本化します。
       </p>
 
       {/* ZAICO API接続設定 — トークンの値は表示しない・伏字すら表示しない

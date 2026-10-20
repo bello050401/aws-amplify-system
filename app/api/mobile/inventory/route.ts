@@ -63,6 +63,7 @@ export async function GET(request: Request) {
     const items = page.items.map(row => {
       return {
         id: row.id, sku: row.sku, displayId: row.displayId, name: row.name, quantity: row.quantity, unit: row.unit ?? "",
+        quantityUnset:row.quantityUnset,
         location: (row.locationId && locationNames.get(row.locationId)) || "",
         category: inventoryCategoryIds(row).map(id=>categoryNames.get(id)).filter(Boolean).join(","),
         statusId: row.statusId, condition: (row.statusId && statusLabels.get(row.statusId)) || "", note: row.note ?? "", barcode: row.barcode ?? "",

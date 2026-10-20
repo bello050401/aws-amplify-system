@@ -235,7 +235,7 @@ export interface InventoryFieldsInput extends InventoryExtendedFields {
   categoryIds?: string[];
   statusId?: string;
   locationId?: string;
-  quantity?: number;
+  quantity?: number | null;
   unit?: string;
   purchasePrice?: number | null;
   salePrice?: number | null;
@@ -311,7 +311,7 @@ export async function createInventory(input: InventoryFieldsInput, options?: { s
       categoryIds: input.categoryIds,
       statusId: input.statusId || undefined,
       locationId: input.locationId || undefined,
-      quantity: input.quantity ?? 0,
+      quantity: input.quantity === undefined ? 0 : input.quantity,
       unit: input.unit?.trim() || undefined,
       purchasePrice: input.purchasePrice,
       salePrice: input.salePrice,
@@ -401,7 +401,7 @@ export async function updateInventory(
       categoryIds: input.categoryIds,
       statusId: input.statusId || null,
       locationId: input.locationId || null,
-      quantity: input.quantity ?? 0,
+      quantity: input.quantity === undefined ? (existing.quantityUnset ? null : existing.quantity) : input.quantity,
       unit: input.unit?.trim() || null,
       purchasePrice: input.purchasePrice,
       salePrice: input.salePrice,
@@ -459,7 +459,7 @@ export async function updateInventory(
     diffField("カテゴリ", categoryHistoryValue(oldCategoryIds), categoryHistoryValue(newCategoryIds)),
     diffField("保管場所", locationName(existing.locationId), locationName(input.locationId ?? null)),
     diffField("ステータス", statusLabel(existing.statusId), statusLabel(input.statusId ?? null)),
-    diffField("数量", existing.quantity, input.quantity ?? 0),
+    diffField("数量", existing.quantityUnset ? null : existing.quantity, input.quantity === undefined ? (existing.quantityUnset ? null : existing.quantity) : input.quantity),
     diffField("単位", existing.unit, input.unit),
     diffField("仕入単価", existing.purchasePrice, input.purchasePrice),
     diffField("販売価格", existing.salePrice, input.salePrice),

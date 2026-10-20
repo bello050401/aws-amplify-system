@@ -1,6 +1,7 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "node:crypto";
+import {runConfiguredTransition} from "./transitionRuntime";
 import { listInventories } from "./zaicoApiClient";
 import { createLambdaSyncPort, findMissingZaicoManagedInventory } from "./lambdaSyncPort";
 import { syncPendingItemsWithDelta, mergeDeltaPageCounts, type DeltaPageCounts } from "@/lib/inventory/zaicoSyncPageProcessor";
@@ -454,4 +455,7 @@ export const runSyncWorker = async (overrides?: HandlerTestOverrides) => {
 };
 
 // Lambdaイベントをテスト用依存関係として解釈しない。
-export const handler = async () => runSyncWorker();
+export const handler = async () => {
+  if(await runConfiguredTransition())return {transition:true};
+  return runSyncWorker();
+};

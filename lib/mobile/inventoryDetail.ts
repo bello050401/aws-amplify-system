@@ -1,4 +1,5 @@
 import {mergedInventoryTarget} from "@/lib/outbound/mergeInventory";
+import {unconvertedZaicoValues} from "@/lib/zaico/transition/rawValues";
 import {categoryLabels} from '@/lib/inventory/categories';
 import type { InventoryDetail, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { visibleDetailFields } from "@/mobile/src/domain/detailFields";
@@ -15,6 +16,8 @@ export function mobileInventoryDetail(row: InventoryDetail, categories: MasterOp
   return {
     mergedIntoInventoryId: mergedInventoryTarget(row.customFields),
     id: row.id, sku: row.sku, displayId: row.displayId, name: row.name, quantity: row.quantity, unit: row.unit ?? "",
+    quantityUnset:row.quantityUnset,
+    zaicoOriginalValues:unconvertedZaicoValues(row.customFields).filter(value=>visibleDetailFields(features).some(field=>(field.custom?`custom.${field.key}`:field.key)===value.field)).map(({field,name,value})=>({field,name,value})),
     location: locations.find(location => location.id === row.locationId)?.name ?? "",
     category: categoryLabels(row,categories).join(","),
     // Reuse BELLO's existing state/master relationship. No app-only ZAICO state field.

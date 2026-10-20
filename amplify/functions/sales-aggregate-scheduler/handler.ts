@@ -42,6 +42,10 @@ const ZAICO_JOB_TABLE = process.env.ZAICO_SYNC_JOB_TABLE_NAME;
 /** Queue one delta run after the sales refresh; the existing five-minute worker executes it. */
 export async function queueZaicoDelta(client: Pick<typeof ddb, "send"> = ddb, tableName = ZAICO_JOB_TABLE): Promise<string> {
   if (!tableName) return "not-configured";
+  if (process.env.ZAICO_TRANSITION_TABLE_NAME) {
+    const transition = await client.send(new GetCommand({TableName:process.env.ZAICO_TRANSITION_TABLE_NAME,Key:{id:"transition#control"},ConsistentRead:true}));
+    if (transition.Item && transition.Item.phase !== "DISABLED") return "transition-managed";
+  }
   const previous = await client.send(new GetCommand({ TableName: tableName, Key: { id: ZAICO_SYNC_JOB_ID } }));
   const plan = planScheduledZaicoDelta(previous.Item ?? null);
   if (!plan) return "no-trusted-completed-baseline";

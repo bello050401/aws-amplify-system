@@ -124,7 +124,7 @@ function renderReadOnlyCell(
         </span>
       );
     case "quantity":
-      return row.quantity;
+      return row.quantityUnset ? "—" : row.quantity;
     case "location": {
       const location = row.locationId ? locationsById[row.locationId] : undefined;
       return (
@@ -232,7 +232,7 @@ function renderEditableCell(
     }
     case "quantity": {
       const pending = getValue(row, "quantity");
-      const value = pending === undefined ? row.quantity : pending;
+      const value = pending === undefined ? (row.quantityUnset ? null : row.quantity) : pending;
       return (
         <input
           disabled={saving}

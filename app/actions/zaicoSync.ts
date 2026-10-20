@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
+import {assertLegacyZaicoAllowed} from "@/lib/zaico/transition/legacyGuard";
 import {
   syncSingleZaicoItem,
   syncLimitedZaicoItems,
@@ -172,6 +173,7 @@ export async function startZaicoBackgroundSyncAction(
     async () => {
       const role = await getInventoryRole();
       requireAdminOrThrow(role);
+      await assertLegacyZaicoAllowed();
       if (mode !== "DELTA" && mode !== "FULL") {
         return { started: false, reason: "同期の種類が不正です。" };
       }
@@ -188,6 +190,7 @@ export async function advanceZaicoBackgroundSyncAction(): Promise<ZaicoAdvanceAc
     async () => {
       const role = await getInventoryRole();
       requireAdminOrThrow(role);
+      await assertLegacyZaicoAllowed();
       const who = await getCurrentInventoryUserEmail();
       const result = await advanceZaicoBackgroundSyncJob(who);
       if (!result.shouldContinue) {

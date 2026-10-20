@@ -82,7 +82,7 @@ export function mobileInventoryInput(row: InventoryDetail, request: SaveRequest,
   const { draft } = request;
   if (draft.statusId && draft.statusId !== row.statusId && !statuses.some(status => status.id === draft.statusId)) return invalid();
   const input: InventoryFieldsInput = {
-    name: draft.name, quantity: Number(draft.quantity), unit: draft.unit, note: draft.note,
+    name: draft.name, quantity: draft.quantity === "" ? null : Number(draft.quantity), unit: draft.unit, note: draft.note,
     categoryIds: splitCategoryNames(draft.category).map(name=>masterId(name, row.categoryId, categories)),
     categoryId: splitCategoryNames(draft.category).map(name=>masterId(name, row.categoryId, categories))[0] ?? "", locationId: masterId(draft.location, row.locationId, locations), statusId: draft.statusId,
     expectedUpdatedAt: request.expectedUpdatedAt, purchasePrice: row.purchasePrice, salePrice: row.salePrice,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SnapshotStore, isInventoryItem, type KeyValueStore } from "../src/domain/snapshot";
 import { previewItems } from "../src/preview/fixture";
+import { draftFor } from "../src/domain/inventory";
 
 function memory() {
   const data = new Map<string, string>();
@@ -13,6 +14,15 @@ function memory() {
   return { data, storage };
 }
 const time = "2026-10-17T03:00:00.000Z";
+test("blank ZAICO quantity and original values survive cache and editing without becoming zero", async () => {
+  const { storage } = memory();
+  const item = {...previewItems[0],quantity:0,quantityUnset:true,
+    zaicoOriginalValues:[{field:"saleStartDate",name:"販売開始日",value:"45238"}]};
+  await new SnapshotStore(storage,"staff","qa").write([item],time);
+  const saved=(await new SnapshotStore(storage,"staff","qa").read())!.items[0];
+  assert.equal(draftFor(saved).quantity,"");
+  assert.deepEqual(saved.zaicoOriginalValues,item.zaicoOriginalValues);
+});
 test("historical negative stock remains readable without dropping the inventory list", async () => {
   const { storage } = memory();
   const negative = { ...previewItems[0], id: "historical-negative", quantity: -1 };

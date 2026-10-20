@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { InventorySaveError } from "./conditionalUpdate";
+import { initialOptionalFields } from "../zaico/transition/initialOptionalFields";
 import { mapZaicoCoreFields, mapZaicoOptionalAttributes } from "./zaicoMapping";
 import { mergeZaicoUpdate, labelOf, type MergeMode } from "./zaicoSyncMerge";
 import { productCustomFields } from "./humanEdits";
@@ -300,8 +301,19 @@ export async function syncOneZaicoItem(
   const warnings: string[] = [];
   let categoryCreated = false;
   let locationCreated = false;
+  // Release a new source reservation if validation/master resolution fails
+  // before create starts. Never release one with an uncertain create outcome.
+  let uncommittedSourceClaim = false;
 
   try {
+    if (mode === 'ZAICO_BASELINE') {
+      for (const field of ['title','quantity','unit','category','state','place','etc','code','optional_attributes']) {
+        if (!Object.prototype.hasOwnProperty.call(zaicoItem,field)) throw new Error(`初回同期の取得データに ${field} がありません。`);
+      }
+      if (typeof zaicoItem.quantity === 'number' && !Number.isFinite(zaicoItem.quantity)) {
+        throw new Error('ZAICOの数量が不正なため、初回同期を停止しました。');
+      }
+    }
     let existing = prefetched ? (prefetched.get(sourceInventoryId) ?? null) : await port.findExistingBySourceId(sourceInventoryId);
     let isNewRecord = existing === null;
 
@@ -325,6 +337,7 @@ export async function syncOneZaicoItem(
     if (isNewRecord) {
       claimedInventoryId = randomUUID();
       const claim = await port.claimSourceLink(sourceInventoryId, claimedInventoryId);
+      uncommittedSourceClaim = claim.claimed;
       if (!claim.claimed) {
         claimedInventoryId = null;
         // claim済みの行が指す実際のInventoryを取り直す——findExistingBySourceId
@@ -348,13 +361,37 @@ export async function syncOneZaicoItem(
     }
 
     // Keep the source link and historical row, without resurrecting consolidated stock.
+    if (mode === 'ZAICO_BASELINE' && existing &&
+      (parseCustomFields(existing.customFields)?.__belloStockMerge || parseCustomFields(existing.customFields)?.__belloStockSplit)) {
+      throw new Error('分割・統合された在庫です。数量とZAICO在庫IDの対応を確認するまで初回同期を停止します。');
+    }
     if (existing && parseCustomFields(existing.customFields)?.__belloStockMerge) return {
       zaicoId:sourceInventoryId,name:existing.name,status:'unchanged',inventoryId:existing.id,sku:existing.sku,imageImported:false,categoryCreated:false,locationCreated:false,warnings,
     };
+    if (mode === 'ZAICO_BASELINE' && existing) {
+      if (!port.archiveBeforeInitialSync) throw new Error('初回同期のバックアップ保存先が未設定です。商品は変更していません。');
+      await port.archiveBeforeInitialSync(existing, zaicoItem);
+    }
     const { fields: core, warnings: coreWarnings } = mapZaicoCoreFields(zaicoItem);
     warnings.push(...coreWarnings);
+    if (mode === 'ZAICO_BASELINE' && coreWarnings.length) throw new Error(`ZAICOの基本項目を安全に取り込めません: ${coreWarnings.join(' / ')}`);
+    if (mode === 'ZAICO_BASELINE' && core.quantity !== null && !Number.isSafeInteger(core.quantity)) {
+      throw new Error('ZAICOの数量がBELLOの整数項目に正確に保存できないため、初回同期を停止しました。');
+    }
 
-    const optAttrs = mapZaicoOptionalAttributes(zaicoItem.optional_attributes, isNewRecord);
+    const optAttrs = mapZaicoOptionalAttributes(zaicoItem.optional_attributes, isNewRecord || mode === 'ZAICO_BASELINE');
+    const initialAttrs = mode === 'ZAICO_BASELINE' ? initialOptionalFields(zaicoItem.optional_attributes) : null;
+    let initialStatusId: string | null | undefined;
+    if (mode === 'ZAICO_BASELINE') {
+      const state = zaicoItem.state?.trim();
+      if (state) {
+        if (!port.findOrCreateStatus) throw new Error('ZAICOの状態マスタを初回同期できません。更新を停止しました。');
+        const statuses = masterCache ? (masterCache.statuses ??= new Map()) : undefined;
+        const status = statuses?.get(normalizeMasterName(state)) ?? await port.findOrCreateStatus(state);
+        statuses?.set(normalizeMasterName(state),status);
+        initialStatusId = status.id;
+      } else initialStatusId = null;
+    }
     warnings.push(...optAttrs.warnings);
     warnings.push(...optAttrs.unmapped.map((u) => `unmapped optional attribute: "${u.name}"`));
 
@@ -365,9 +402,11 @@ export async function syncOneZaicoItem(
         categoryIds = [...new Set(entries.map(entry => entry.id))];
         categoryCreated = entries.some(entry => entry.created);
       } catch (err) {
+        if (mode === 'ZAICO_BASELINE') throw err;
         warnings.push(`カテゴリの同期に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    if (mode === 'ZAICO_BASELINE' && !core.categoryName) categoryIds = [];
     const categoryId = categoryIds[0] ?? null;
 
     let locationId = existing?.locationId ?? null;
@@ -377,10 +416,12 @@ export async function syncOneZaicoItem(
         locationId = r.id;
         locationCreated = r.created;
       } catch (err) {
+        if (mode === 'ZAICO_BASELINE') throw err;
         warnings.push(`保管場所の同期に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
       }
     } else {
-      warnings.push("ZAICO側で保管場所(place)が取得できませんでした。保管場所は更新していません。");
+      if (mode === 'ZAICO_BASELINE') locationId = null;
+      else warnings.push("ZAICO側で保管場所(place)が取得できませんでした。保管場所は更新していません。");
     }
 
     const existingImages: InventoryImageRecord[] = (existing?.images ?? [])
@@ -443,6 +484,8 @@ export async function syncOneZaicoItem(
 
     if (isNewRecord) {
       const inventoryId = claimedInventoryId!; // isNewRecord===trueの場合、上のclaim処理で必ず設定済み
+      // The create branch has its own confirmed/uncertain failure handling.
+      uncommittedSourceClaim = false;
       let sku: string;
       try {
         sku = await port.generateSku();
@@ -462,19 +505,33 @@ export async function syncOneZaicoItem(
           categoryId: categoryId ?? undefined,
           categoryIds,
           locationId: locationId ?? undefined,
-          quantity: core.quantity ?? 0,
+          statusId: initialStatusId ?? undefined,
+          quantity: mode === 'ZAICO_BASELINE' ? core.quantity : core.quantity ?? 0,
           unit: core.unit ?? undefined,
-          purchasePrice: optAttrs.coreFields.purchasePrice,
-          salePrice: optAttrs.coreFields.salePrice,
+          purchasePrice: (initialAttrs?.coreFields.purchasePrice ?? optAttrs.coreFields.purchasePrice) as number | undefined,
+          salePrice: (initialAttrs?.coreFields.salePrice ?? optAttrs.coreFields.salePrice) as number | undefined,
           note: core.note ?? undefined,
           barcode: core.barcode ?? undefined,
           images: imageMerge.images,
-          customFields: stringifyCustomFields(mergedCustomFields),
+          customFields: stringifyCustomFields(initialAttrs?.customFields ?? mergedCustomFields),
           createdBy: who ?? "ZAICO同期",
           updatedBy: who ?? "ZAICO同期",
           sourceSystem: "ZAICO",
           sourceInventoryId,
-          extendedFields: optAttrs.extendedFields,
+          ...(mode === 'ZAICO_BASELINE' ? {
+            zaicoSnapshotJson: mergeZaicoUpdate({
+              mode, isNewRecord: true, snapshotJson: null,
+              zaico: {
+                name: core.name, quantity: core.quantity, categoryIds, locationId,
+                statusId: initialStatusId, unit: core.unit, note: core.note, barcode: core.barcode,
+                purchasePrice: initialAttrs!.coreFields.purchasePrice as number | null,
+                salePrice: initialAttrs!.coreFields.salePrice as number | null,
+                extendedFields: initialAttrs!.extendedFields, customFields: initialAttrs!.customFields,
+              },
+              bello: {extendedFields:{},customFields:{}},
+            }).nextSnapshotJson,
+          } : {}),
+          extendedFields: initialAttrs?.extendedFields ?? optAttrs.extendedFields,
         });
       } catch (err) {
         if (err instanceof InventorySaveError && err.code === "UNCONFIRMED") throw err;
@@ -516,20 +573,22 @@ export async function syncOneZaicoItem(
     // で判定する。
     const merge = mergeZaicoUpdate({
       zaico: {
+        statusId: initialStatusId,
         categoryId: categoryId ?? undefined,
-        categoryIds: core.categoryName ? categoryIds : undefined,
-        locationId: locationId ?? undefined,
+        categoryIds: core.categoryName || mode === 'ZAICO_BASELINE' ? categoryIds : undefined,
+        locationId: mode === 'ZAICO_BASELINE' ? locationId : locationId ?? undefined,
         name: core.name,
-        quantity: core.quantity ?? undefined,
-        unit: core.unit ?? undefined,
-        note: core.note ?? undefined,
-        barcode: core.barcode ?? undefined,
-        purchasePrice: optAttrs.coreFields.purchasePrice,
-        salePrice: optAttrs.coreFields.salePrice,
-        extendedFields: optAttrs.extendedFields as Record<string, unknown>,
-        customFields: optAttrs.customFields as Record<string, unknown>,
+        quantity: mode === 'ZAICO_BASELINE' ? core.quantity : core.quantity ?? undefined,
+        unit: mode === 'ZAICO_BASELINE' ? core.unit : core.unit ?? undefined,
+        note: mode === 'ZAICO_BASELINE' ? core.note : core.note ?? undefined,
+        barcode: mode === 'ZAICO_BASELINE' ? core.barcode : core.barcode ?? undefined,
+        purchasePrice: (initialAttrs ? initialAttrs.coreFields.purchasePrice : optAttrs.coreFields.purchasePrice) as number | null | undefined,
+        salePrice: (initialAttrs ? initialAttrs.coreFields.salePrice : optAttrs.coreFields.salePrice) as number | null | undefined,
+        extendedFields: (initialAttrs?.extendedFields ?? optAttrs.extendedFields) as Record<string, unknown>,
+        customFields: (initialAttrs?.customFields ?? optAttrs.customFields) as Record<string, unknown>,
       },
       bello: {
+        statusId: existingRecord.statusId ?? null,
         categoryId: existingRecord.categoryId ?? null,
         categoryIds: inventoryCategoryIds(existingRecord),
         locationId: existingRecord.locationId ?? null,
@@ -568,7 +627,8 @@ export async function syncOneZaicoItem(
     // 「基準を作った時点でずれていた」という事実の一覧。
     for (const d of merge.baselineDifferences) {
       warnings.push(
-        `${d.label}: BELLO「${String(d.belloValue)}」/ ZAICO「${String(d.zaicoValue)}」(基準作成時点の相違。値は変更していません)`,
+        `${d.label}: BELLO「${String(d.belloValue)}」/ ZAICO「${String(d.zaicoValue)}」` +
+        (mode === 'ZAICO_BASELINE' ? '(初回同期でZAICOを反映。変更前の値をバックアップ済み)' : '(基準作成時点の相違。値は変更していません)'),
       );
     }
     for (const c of merge.conflicts) {
@@ -648,7 +708,9 @@ export async function syncOneZaicoItem(
       locationCreated,
       warnings,
     };
-  } catch (err) {
+  } catch (caught) {
+    const err = uncommittedSourceClaim
+      ? await releaseClaimPreservingError(port, sourceInventoryId, caught) : caught;
     return {
       zaicoId: sourceInventoryId,
       name: zaicoItem.title?.trim() || sourceInventoryId,

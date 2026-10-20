@@ -48,6 +48,7 @@ export interface InventoryListRow {
   statusId: string | null;
   locationId: string | null;
   quantity: number;
+  quantityUnset?: boolean;
   unit: string | null;
   purchasePrice: number | null;
   salePrice: number | null;
@@ -110,6 +111,7 @@ export function toListRow(item: InventoryModel): InventoryListRow {
     statusId: item.statusId ?? null,
     locationId: item.locationId ?? null,
     quantity: item.quantity ?? 0,
+    quantityUnset: item.quantity == null,
     unit: item.unit ?? null,
     purchasePrice: item.purchasePrice ?? null,
     salePrice: item.salePrice ?? null,

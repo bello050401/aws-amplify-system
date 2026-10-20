@@ -8,8 +8,11 @@ import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
  * （2026-09-04 健全化 PHASE 8 — lib/http/fetchWithTimeout.ts）。
  * どこが時間切れになったのかがログで分かるよう、名前を付けて渡す。
  */
-const fetchExternal = (input: string | URL | Request, init?: RequestInit) =>
-  fetchWithTimeout(input, init, { label: "ZAICO API" });
+const fetchExternal = async (input: string | URL | Request, init?: RequestInit) => {
+  const {assertLegacyZaicoAllowed}=await import("./transition/legacyGuard");
+  await assertLegacyZaicoAllowed();
+  return fetchWithTimeout(input, init, { label: "ZAICO API" });
+};
 
 
 /**

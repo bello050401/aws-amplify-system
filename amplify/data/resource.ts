@@ -704,6 +704,17 @@ const schema = a.schema({
    */
   ZaicoSyncMode: a.enum(["DELTA", "FULL"]),
 
+  // Isolated, temporary integration state. Inventory is usable without these
+  // records; server adapters enforce leases/CAS and never expose tokens here.
+  ZaicoTransitionRecord: a.model({
+    version:a.string(),
+    phase:a.string(),
+    status:a.string(),
+    inventoryId:a.string(),
+    sourceId:a.string(),
+    error:a.string(),
+  }).authorization(allow=>[allow.groups(["ADMIN"])]),
+
   ZaicoSyncJob: a
     .model({
       status: a.ref("ZaicoSyncStatus").required(),

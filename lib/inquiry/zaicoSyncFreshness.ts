@@ -1,5 +1,8 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import {inventoryDdb,inventoryTable} from "@/lib/inventory/categoryPersistence";
+import {CONTROL_ID,transitionStore} from "@/lib/zaico/transition/store";
+import {isE2EFixtureModeActive} from "@/lib/inventory/e2eFixtures";
 
 /**
  * ZAICO同期がどれだけ新しいかを、商品特定の判断材料として使う。
@@ -52,6 +55,15 @@ export async function getZaicoSyncFreshness(): Promise<ZaicoSyncFreshness> {
 
   const unknown: ZaicoSyncFreshness = { lastSyncedAt: null, ageHours: null, isStale: true };
   try {
+    if(!isE2EFixtureModeActive()){
+      const control=await transitionStore(inventoryDdb,inventoryTable('ZaicoTransitionRecord')).get(CONTROL_ID);
+      if(control&&control.phase!=='DISABLED'){
+        const lastSyncedAt=control.lastSuccessfulPullAt??null;
+        const ageHours=lastSyncedAt?(Date.now()-Date.parse(lastSyncedAt))/3_600_000:null;
+        const value={lastSyncedAt,ageHours,isStale:control.phase==='STOPPED'?false:ageHours===null||ageHours>ZAICO_SYNC_STALE_HOURS};
+        cache={at:Date.now(),value};return value;
+      }
+    }
     const { data, errors } = await serverDataClient.models.ZaicoSyncJob.list({ limit: 200, ...inventoryAuthMode });
     if (errors && errors.length > 0) {
       console.warn("[zaicoSyncFreshness] 同期ジョブを読めませんでした。", errors.map((e) => e.message).join("; "));

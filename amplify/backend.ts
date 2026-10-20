@@ -82,7 +82,8 @@ backend.storage.resources.bucket.grantRead(backend.mediaMaintenance.resources.la
 backend.storage.resources.bucket.grantDelete(backend.mediaMaintenance.resources.lambda,'inventory/*');
 backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:GetBucketVersioning'],resources:[backend.storage.resources.bucket.bucketArn]}));
 backend.storage.resources.cfnResources.cfnBucket.lifecycleConfiguration = {
-  rules:[{id:'AbortIncompleteImageUploads',status:'Enabled',abortIncompleteMultipartUpload:{daysAfterInitiation:7}}],
+  rules:[{id:'AbortIncompleteImageUploads',status:'Enabled',abortIncompleteMultipartUpload:{daysAfterInitiation:7}},
+    {id:'ZaicoTransitionBackupRetention',status:'Enabled',prefix:'zaico-transition/',expirationInDays:90}],
 };
 // Enable only after BOTH the web adapter and Photo Station API have the purge
 // lock in applyRestore. This prevents an old API restoring a file mid-deletion.
@@ -569,10 +570,15 @@ for (const name of ['InventoryCategory','BarcodeClaim']) backend.data.resources.
 locationTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 inventoryHistoryTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 zaicoSyncJobTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+backend.data.resources.tables["ZaicoTransitionRecord"].grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
+backend.data.resources.tables["StatusMaster"].grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 zaicoSourceLinkTable.grantReadWriteData(backend.zaicoSyncWorker.resources.lambda);
 backend.storage.resources.bucket.grantRead(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
 backend.storage.resources.bucket.grantPut(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
 backend.storage.resources.bucket.grantDelete(backend.zaicoSyncWorker.resources.lambda, "inventory/*");
+backend.storage.resources.bucket.grantReadWrite(backend.zaicoSyncWorker.resources.lambda, "zaico-transition/*");
+// The transition lasts about a month. Backups outlive the transition, but do
+// not accumulate permanently. The off switch itself is never expired.
 zaicoTokenSecret.grantRead(backend.zaicoSyncWorker.resources.lambda);
 backend.generateSku.resources.lambda.grantInvoke(backend.zaicoSyncWorker.resources.lambda);
 
@@ -581,6 +587,7 @@ backend.zaicoSyncWorker.addEnvironment("CATEGORY_TABLE_NAME", categoryTable.tabl
 backend.zaicoSyncWorker.addEnvironment("LOCATION_TABLE_NAME", locationTable.tableName);
 backend.zaicoSyncWorker.addEnvironment("INVENTORY_HISTORY_TABLE_NAME", inventoryHistoryTable.tableName);
 backend.zaicoSyncWorker.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJobTable.tableName);
+backend.zaicoSyncWorker.addEnvironment("ZAICO_TRANSITION_TABLE_NAME", backend.data.resources.tables["ZaicoTransitionRecord"].tableName);
 backend.zaicoSyncWorker.addEnvironment("ZAICO_SOURCE_LINK_TABLE_NAME", zaicoSourceLinkTable.tableName);
 backend.zaicoSyncWorker.addEnvironment("STORAGE_BUCKET_NAME", backend.storage.resources.bucket.bucketName);
 backend.zaicoSyncWorker.addEnvironment("GENERATE_SKU_FUNCTION_NAME", backend.generateSku.resources.lambda.functionName);
@@ -747,12 +754,14 @@ backend.salesAggregateScheduler.addEnvironment("INVENTORY_TABLE_NAME", inventory
 backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_SNAPSHOT_TABLE_NAME", salesAggregateSnapshotTable.tableName);
 backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_RUN_STATUS_TABLE_NAME", salesAggregateRunStatusTable.tableName);
 backend.salesAggregateScheduler.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJobTable.tableName);
+backend.data.resources.tables["ZaicoTransitionRecord"].grantReadData(backend.salesAggregateScheduler.resources.lambda);
+backend.salesAggregateScheduler.addEnvironment("ZAICO_TRANSITION_TABLE_NAME", backend.data.resources.tables["ZaicoTransitionRecord"].tableName);
 
 // Only the existing BELLO host receives the new authenticated inventory/outbound adapter permissions.
 if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {
   const outboundStack = backend.createStack('OutboundRuntime');
   const role = Role.fromRoleName(outboundStack, 'ExistingComputeRole', 'BelloAmplifyStagingComputeRole');
-  const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','OutboundSequence','InventoryHistory','ImageProcessingVersion'].map(name=>backend.data.resources.tables[name].tableArn);
+  const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','OutboundSequence','InventoryHistory','ImageProcessingVersion','ZaicoTransitionRecord'].map(name=>backend.data.resources.tables[name].tableArn);
   const readable = ['Category','Location'].map(name=>backend.data.resources.tables[name].tableArn);
   new ManagedPolicy(outboundStack,'RuntimeAccess',{roles:[role],statements:[
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:writable}),

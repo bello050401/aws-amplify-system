@@ -9,6 +9,7 @@ import { downloadAndImportInventoryImage, removeInventoryImage } from "./imageSe
 import type { InventoryImageRecord } from "./imageTypes";
 import { buildZaicoSourceLinkId } from "./zaicoSyncEngine";
 import { unwrapGet, unwrapList } from "@/lib/amplify/listAll";
+import type { ZaicoInventory } from "@/lib/zaico/client";
 
 /**
  * Ports-and-adapters boundary for the ZAICO sync engine (BELLO統合改修
@@ -105,7 +106,8 @@ export interface NewInventoryInput {
   categoryId?: string;
   categoryIds?: string[];
   locationId?: string;
-  quantity: number;
+  statusId?: string;
+  quantity: number | null;
   unit?: string;
   purchasePrice?: number;
   salePrice?: number;
@@ -117,6 +119,7 @@ export interface NewInventoryInput {
   updatedBy: string;
   sourceSystem: string;
   sourceInventoryId: string;
+  zaicoSnapshotJson?: string;
   extendedFields: Record<string, unknown>;
 }
 
@@ -129,15 +132,16 @@ export interface UpdateInventoryInput {
    * よって、商品名を更新しないと決まる場合があるため。
    */
   name?: string;
-  categoryId?: string;
+  categoryId?: string | null;
   categoryIds?: string[];
-  locationId?: string;
-  quantity?: number;
-  unit?: string;
-  note?: string;
-  barcode?: string;
-  purchasePrice?: number;
-  salePrice?: number;
+  locationId?: string | null;
+  statusId?: string | null;
+  quantity?: number | null;
+  unit?: string | null;
+  note?: string | null;
+  barcode?: string | null;
+  purchasePrice?: number | null;
+  salePrice?: number | null;
   images: InventoryImageRecord[];
   customFields: string | undefined;
   updatedBy: string;
@@ -164,6 +168,7 @@ export interface UpdateInventoryInput {
 export interface MasterCache {
   categories: Map<string, { id: string }>; // normalizeMasterName(name) -> entry
   locations: Map<string, { id: string }>;
+  statuses?: Map<string, { id: string }>;
 }
 
 export interface ClaimSourceLinkResult {
@@ -173,6 +178,12 @@ export interface ClaimSourceLinkResult {
 }
 
 export interface ZaicoSyncPort {
+  /** Required for ZAICO_BASELINE. Must fail unless the full before-image is durable.
+   * The production adapter must also retain image bytes needed for restoration
+   * before the normal image-replacement path removes an old storage object.
+   */
+  archiveBeforeInitialSync?(inventory: InventoryModel, zaico: ZaicoInventory): Promise<void>;
+  findOrCreateStatus?(name: string): Promise<{id:string;created:boolean}>;
   findExistingBySourceId(sourceInventoryId: string): Promise<InventoryModel | null>;
   /** One full scan of every ZAICO-managed BELLO record, keyed by sourceInventoryId - called once per sync run (Next.js: once per request; Lambda: once per batch tick), never once per item. */
   fetchAllZaicoManaged(): Promise<Map<string, InventoryModel>>;
@@ -330,6 +341,7 @@ export function createServerSyncPort(): ZaicoSyncPort {
     fetchAllZaicoManaged: serverFetchAllZaicoManaged,
     findOrCreateCategory: (name) => findOrCreateMasterEntryByName("Category", name),
     findOrCreateLocation: (name) => findOrCreateMasterEntryByName("Location", name),
+    findOrCreateStatus: (name) => findOrCreateMasterEntryByName("Status", name),
     async generateSku() {
       const { data: sku, errors } = await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);
       if (errors || !sku) throw new Error(`SKUの発番に失敗しました: ${JSON.stringify(errors)}`);
@@ -344,6 +356,7 @@ export function createServerSyncPort(): ZaicoSyncPort {
           categoryId: input.categoryId,
           categoryIds: input.categoryIds,
           locationId: input.locationId,
+          statusId: input.statusId,
           quantity: input.quantity,
           unit: input.unit,
           purchasePrice: input.purchasePrice,
@@ -356,6 +369,7 @@ export function createServerSyncPort(): ZaicoSyncPort {
           updatedBy: input.updatedBy,
           sourceSystem: input.sourceSystem,
           sourceInventoryId: input.sourceInventoryId,
+          zaicoSnapshotJson: input.zaicoSnapshotJson,
           // 第六ラウンドP0-5(amplify/data/resource.tsのInventory
           // モデルコメント参照)。
           listingPartition: "ACTIVE",
@@ -378,6 +392,7 @@ export function createServerSyncPort(): ZaicoSyncPort {
           categoryId: input.categoryId,
           categoryIds: input.categoryIds,
           locationId: input.locationId,
+          statusId: input.statusId,
           quantity: input.quantity,
           unit: input.unit,
           note: input.note,

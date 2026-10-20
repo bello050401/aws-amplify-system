@@ -22,6 +22,9 @@ export function isInventoryItem(value: unknown): value is InventoryItem {
     // Imported or historical records can contain negative stock. Keep the actual
     // value readable instead of rejecting the entire list; edits validate separately.
     typeof row.quantity === "number" && Number.isSafeInteger(row.quantity) &&
+    (row.quantityUnset === undefined || typeof row.quantityUnset === "boolean") &&
+    (row.zaicoOriginalValues === undefined || (Array.isArray(row.zaicoOriginalValues) && row.zaicoOriginalValues.every(value =>
+      value && typeof value.field === "string" && typeof value.name === "string" && typeof value.value === "string"))) &&
     (row.plannedSalePrice === null || (typeof row.plannedSalePrice === "number" && Number.isFinite(row.plannedSalePrice))) &&
     (row.thumbnailUrl === null || typeof row.thumbnailUrl === "string") &&
     (row.statusId === undefined || row.statusId === null || typeof row.statusId === "string") &&
@@ -66,6 +69,8 @@ export class SnapshotStore {
     if (!items.every(isInventoryItem) || !Number.isFinite(Date.parse(fetchedAt))) throw new Error("Invalid inventory snapshot.");
     const snapshot: InventorySnapshot = { schema: 1, owner: this.owner, fetchedAt, items: items.slice(0, 500).map(item => ({
       id: item.id, sku: item.sku, name: item.name, quantity: item.quantity, unit: item.unit,
+      ...(item.quantityUnset !== undefined ? {quantityUnset:item.quantityUnset} : {}),
+      ...(item.zaicoOriginalValues ? {zaicoOriginalValues:item.zaicoOriginalValues.map(value=>({...value}))} : {}),
       ...(item.displayId !== undefined ? { displayId: item.displayId } : {}),
       ...(item.createdAt !== undefined ? { createdAt: item.createdAt } : {}),
       location: item.location, category: item.category, condition: item.condition, note: item.note,

@@ -274,12 +274,13 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       {feature ? <View style={s.pending}><Text style={s.pendingTitle}>{feature}</Text><Text style={s.pendingText}>この操作は実装中です。実在庫への変更は行いません。</Text></View> : selected ? <ScrollView contentContainerStyle={s.detail}>
         <View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(selected.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.itemTitle}>{selected.name}</Text>
         <View style={s.hero}><ProductImage item={selected} large /><View style={s.heroFacts}>
-          <View style={s.heroFact}><Text style={s.label}>数量</Text><Text style={s.heroQuantity}>{selected.quantity}<Text style={s.unit}> {selected.unit}</Text></Text></View>
+          <View style={s.heroFact}><Text style={s.label}>数量</Text><Text style={s.heroQuantity}>{selected.quantityUnset?"—":selected.quantity}<Text style={s.unit}> {selected.unit}</Text></Text></View>
           <View style={s.heroFact}><Text style={s.label}>保管場所</Text><Text style={s.location}>{selected.location || "未設定"}</Text></View>
         </View></View>
         {[["在庫ID", selected.displayId ?? selected.sku], ["管理番号", selected.sku], ["物品名", selected.name], ["カテゴリ", selected.category], ["状態", selected.condition], ["備考", selected.note], ["QRコード・バーコード", selected.barcode], ["販売予定価格", selected.plannedSalePrice === null ? "" : `${selected.plannedSalePrice.toLocaleString()}円`]].map(([label, value]) => <DetailFact key={label} label={label!} value={value} multiline={label === "備考"} />)}
         <InventoryPhotos item={selected} />
         {detailLoading && <ActivityIndicator accessibilityLabel="商品詳細を読み込み中" color={colors.blue} />}
+        {!!selected.zaicoOriginalValues?.length&&<View><Text style={s.label}>ZAICOの元の値</Text>{selected.zaicoOriginalValues.map((value,index)=><DetailFact key={index} label={value.name} value={value.value}/>)}</View>}
         {selected.detailLoadedAt && visibleDetailFields(features).map((field, index, fields) => <View key={field.key}>
           {(index === 0 || fields[index - 1].section !== field.section) && <Text style={s.detailHeading}>{field.section}</Text>}
           <DetailFact label={field.label} value={selected.details?.[field.key]} multiline={field.kind === "multiline"} />
@@ -294,9 +295,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         </View>} data={rows} keyExtractor={(item) => item.id} refreshing={loading} onRefresh={() => refresh()}
           ListFooterComponent={!offline && hasMore ? <Pressable accessibilityRole="button" disabled={loading} onPress={() => { void refresh(true); }} style={s.pickerChoice}><Text style={s.blue}>{loading ? "読み込み中…" : "続きを読み込む"}</Text></Pressable> : undefined}
           contentContainerStyle={s.listContent} ListEmptyComponent={loading ? <ActivityIndicator color={colors.blue} /> : <Text style={s.empty}>{offline ? "この端末に保存済みの在庫がありません。通信が戻ったら読み込んでください。" : "該当する在庫がありません。"}</Text>}
-          renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantity}`} onPress={() => { void openItem(item); }} style={s.row}>
+          renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantityUnset?"未入力":item.quantity}`} onPress={() => { void openItem(item); }} style={s.row}>
             <ProductImage item={item} /><View style={s.rowMain}><View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(item.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.rowName} numberOfLines={2}>{item.name}</Text></View>
-            <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
+            <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
           </Pressable>} />
       </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={21} color="white" /><Text style={s.editLabel}>編集</Text></Pressable>}

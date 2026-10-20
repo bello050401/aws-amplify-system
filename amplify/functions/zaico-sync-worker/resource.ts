@@ -46,5 +46,7 @@ export const zaicoSyncWorker = defineFunction({
   layers: { sharp: "bello-sharp-linux-x64:1" },
   timeoutSeconds: 240, // 5分スケジュールに対して余裕を残す(次のtickと重ならない)
   memoryMB: 512, // sharpによるthumbnail生成を含むため既定値(128MB)より引き上げ
-  schedule: "every 5m",
+  // Cheap control read every minute; the configured interval defaults to 5m.
+  // Cron permits overlapping ticks; the durable server lease prevents overlap.
+  schedule: "* * * * ? *",
 });

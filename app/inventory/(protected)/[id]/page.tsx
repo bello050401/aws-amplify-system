@@ -1,4 +1,5 @@
 import {mergedInventoryTarget} from "@/lib/outbound/mergeInventory";
+import {unconvertedZaicoValues} from "@/lib/zaico/transition/rawValues";
 import {categoryLabels} from "@/lib/inventory/categories";
 import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { ShippingReferencePriceSection } from "./listing/ShippingReferencePriceSection";
@@ -249,7 +250,7 @@ export default async function InventoryDetailPage({
     { label: "物品名", value: item.name },
     { label: "カテゴリ", value: categoryLabels(item,categories).join(" / ") || "-" },
     { label: "状態", value: status?.label ?? "-" },
-    { label: "数量", value: String(item.quantity) },
+    { label: "数量", value: item.quantityUnset ? "未入力" : String(item.quantity) },
     { label: "単位", value: item.unit ?? "-" },
     { label: "QRコード・バーコード", value: item.barcode ?? "-" },
     { label: "備考", value: item.note || "-" },
@@ -343,6 +344,10 @@ export default async function InventoryDetailPage({
             <DetailSection title="基本情報">
               <DetailInfoTable rows={basicRows} />
             </DetailSection>
+            {unconvertedZaicoValues(item.customFields).length>0&&<DetailSection title="ZAICOの元の値">
+              <p className="mb-2 text-xs text-gray-600">数値・日付として扱えない値を、そのまま保持しています。</p>
+              <DetailInfoTable rows={unconvertedZaicoValues(item.customFields).map(v=>({label:v.name,value:v.value}))}/>
+            </DetailSection>}
             <ShippingReferencePriceSection key={item.id} inventoryId={item.id} initialResult={shippingReference} />
 
             {/* 販売情報 / サイズ情報 / コンディション — レジストリ駆動、

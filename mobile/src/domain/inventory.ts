@@ -19,6 +19,8 @@ export interface InventoryItem {
   mergedIntoInventoryId?: string | null;
   name: string;
   quantity: number;
+  quantityUnset?: boolean;
+  zaicoOriginalValues?: {field:string;name:string;value:string}[];
   unit: string;
   location: string;
   category: string;
@@ -56,7 +58,7 @@ export type InventoryDraft = {
 
 export function draftFor(item: InventoryItem): InventoryDraft {
   return {
-    name: item.name, quantity: String(item.quantity), unit: item.unit,
+    name: item.name, quantity: item.quantityUnset ? "" : String(item.quantity), unit: item.unit,
     location: item.location, category: item.category, condition: item.condition, statusId: item.statusId ?? "",
     note: item.note, barcode: item.barcode,
     plannedSalePrice: item.plannedSalePrice === null ? "" : String(item.plannedSalePrice),
@@ -72,7 +74,7 @@ export function sameDraft(a: InventoryDraft, b: InventoryDraft): boolean {
 
 export function validateDraft(draft: InventoryDraft): string | null {
   if (!draft.name.trim()) return "物品名を入力してください。";
-  if (!/^\d+$/.test(draft.quantity) || !Number.isSafeInteger(Number(draft.quantity))) {
+  if (draft.quantity !== "" && (!/^\d+$/.test(draft.quantity) || !Number.isSafeInteger(Number(draft.quantity)))) {
     return "数量は0以上の整数で入力してください。";
   }
   if (Number(draft.quantity) > 2_147_483_647) return "数量は2,147,483,647以下で入力してください。";

@@ -10,6 +10,7 @@ import {
   type UpdateDecision,
 } from "./zaicoUpdatePolicy";
 import { humanEditedFields, HUMAN_EDITED_FIELDS } from "./humanEdits";
+import { buildZaicoAuthoritativeBaseline } from "../zaico/transition/initialBaseline";
 
 /**
  * ZAICO同期の「今回どの項目を書き込むか」を決める層。
@@ -28,6 +29,7 @@ import { humanEditedFields, HUMAN_EDITED_FIELDS } from "./humanEdits";
 
 /** ZAICOが今回渡してきた、BELLOの列に対応する値。 */
 export interface ZaicoProposedValues {
+  statusId?: string | null;
   /** ZAICOのカテゴリ名から解決したBELLOのカテゴリID。 */
   categoryId?: string | null;
   categoryIds?: string[];
@@ -47,6 +49,7 @@ export interface ZaicoProposedValues {
 
 /** いまBELLOに入っている値。 */
 export interface BelloCurrentValues {
+  statusId?: string | null;
   categoryId?: string | null;
   categoryIds?: string[];
   locationId?: string | null;
@@ -78,29 +81,18 @@ export interface SkippedField {
 }
 
 /**
- * 同期の走らせ方。
- *
- * ── なぜ2つ要るのか ─────────────────────────────────────────────
- *
- * 3-wayマージは「前回ZAICOが渡した値」を基準に、人が触ったかどうかを
- * 判定する。その基準(スナップショット)が**まだ1件も無い**。
- *
- * 基準が無い状態でいきなりマージを流すと、初回に食い違っていた項目は
- * すべて「人の編集か判断できない」として据え置かれ、その回にZAICOの値が
- * スナップショットへ入る。すると2回目以降は「BELLOの値 ≠ 前回ZAICO値」
- * となり、**それが人の編集だったかどうかに関わらず永久に据え置かれて
- * 毎回警告が出る**。
- *
- * そこで初回だけ SNAPSHOT_ONLY で走らせる。業務値には一切触れず、
- * ZAICOの現在値を基準として記録するだけ。同時に「その時点で食い違って
- * いた項目」を一覧で出すので、人はそれを見て判断できる。
- * 2回目からは MERGE で、本来の意味の3-wayが働く。
+ * MERGE/SNAPSHOT_ONLY retain the existing one-way integration behavior.
+ * The temporary two-way migration explicitly selects ZAICO_BASELINE for its
+ * first run: archive old BELLO values, align shared fields, then record the
+ * comparison baseline. SNAPSHOT_ONLY is not sufficient for that first run.
  */
 export type MergeMode =
   /** 通常。方針表に従って書き込む。 */
   | "MERGE"
   /** 初回の基準作り。**業務値は1つも書き換えない。** */
-  | "SNAPSHOT_ONLY";
+  | "SNAPSHOT_ONLY"
+  /** Transition bootstrap: archive first, then align shared fields to ZAICO. */
+  | "ZAICO_BASELINE";
 
 export interface MergeResult {
   /** 実際に書き込む値(トップレベルの列)。 */
@@ -126,7 +118,7 @@ export interface MergeResult {
    */
   writesBusinessValues: boolean;
   /**
-   * SNAPSHOT_ONLY のときだけ埋まる ——「基準を作った時点で
+   * 初回基準モードで埋まる ——「基準を作った時点で
    * ZAICOとBELLOが食い違っていた項目」。
    *
    * 据え置いた(skipped)でも食い違い(conflicts)でもない。まだ何も
@@ -176,6 +168,7 @@ export function mergeZaicoUpdate(params: {
 
   // 初回の基準作り。業務値には触れず、いま食い違っているものを並べて返す。
   if (mode === "SNAPSHOT_ONLY") return buildBaseline({ zaico, bello, snapshotJson });
+  if (mode === "ZAICO_BASELINE") return buildZaicoAuthoritativeBaseline(zaico, bello);
 
   const updates: Record<string, unknown> = {};
   const extendedFields: Record<string, unknown> = {};

@@ -128,7 +128,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
   const categoryId = categoryIds[0] ?? "";
   const [statusId, setStatusId] = useState(item.statusId ?? "");
   const [locationId, setLocationId] = useState(item.locationId ?? "");
-  const [quantity, setQuantity] = useState(String(item.quantity));
+  const [quantity, setQuantity] = useState(item.quantityUnset ? "" : String(item.quantity));
   const [unit, setUnit] = useState(item.unit ?? "");
   const [purchasePrice, setPurchasePrice] = useState(item.purchasePrice != null ? String(item.purchasePrice) : "");
   const [salePrice, setSalePrice] = useState(item.salePrice != null ? String(item.salePrice) : "");
@@ -220,7 +220,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
           categoryIds,
           statusId: statusId || undefined,
           locationId: locationId || undefined,
-          quantity: quantity ? Number(quantity) : 0,
+          quantity: quantity ? Number(quantity) : null,
           unit: unit || undefined,
           purchasePrice: purchasePrice.trim() ? Number(purchasePrice) : null,
           salePrice: salePrice.trim() ? Number(salePrice) : null,
