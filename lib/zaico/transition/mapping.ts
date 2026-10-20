@@ -91,7 +91,9 @@ const masterName=(rows:Row[],id:unknown,label='name')=>{
 export function outgoingPatch(changes:SharedFields,remote:V2Inventory|undefined,masters:Masters):Row {
   const patch:Row={};
   const direct:Record<string,string>={name:'title',quantity:'quantity',unit:'unit',note:'etc',barcode:'code'};
-  const optional={...remote?.optional_attributes};
+  // Responses permit null, but v2 update requests accept string values only.
+  // Keep every existing field, representing an empty source value as "".
+  const optional=Object.fromEntries(Object.entries(remote?.optional_attributes??{}).map(([name,value])=>[name,value??'']));
   let optionalChanged=false;
   for(const [field,value] of Object.entries(changes)){
     if(field in direct)patch[direct[field]]=value===null?'':String(value);

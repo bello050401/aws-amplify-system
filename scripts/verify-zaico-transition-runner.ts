@@ -151,9 +151,11 @@ async function main(){
     h.calls.length=0;await h.tick();assert.equal(h.calls.length,0);
   });
   await test('Reverse optional mapping preserves unknown source values',async()=>{
-    const h=harness(),r=remote(1);r.optional_attributes!['未知の項目']='残す';
+    const h=harness(),r=remote(1);r.optional_attributes!['未知の項目']='残す';r.optional_attributes!['未入力の項目']=null;
     const p=outgoingPatch({purchasePrice:300},r,h.masters);
     assert.equal(p.optional_attributes['未知の項目'],'残す');assert.equal(p.optional_attributes['⚫︎購入価格'],'300');
+    assert.equal(p.optional_attributes['未入力の項目'],'');
+    assert.ok(Object.values(p.optional_attributes).every(value=>typeof value==='string'));
   });
   console.log(`PASS ${checks} transition workflow scenarios`);
 }
