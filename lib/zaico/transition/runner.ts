@@ -77,7 +77,11 @@ export async function runTransition(p:TransitionPort){
         }
         await p.archive('before-delete',{local,remote});
         await p.deleteInventory(local);
-        await save({...state,id:ITEM_PREFIX+local.id,inventoryId:local.id,sourceId,status:'DELETED',remote,initialRunId:control.initialRunId});
+        await save({...state,id:ITEM_PREFIX+local.id,inventoryId:local.id,sourceId,status:'DELETED',remote,deletedConfirmed:true,error:null,initialRunId:control.initialRunId});
+      }else if(state&&state.status!=='DELETED'){
+        // A successful DELETE may lose its reply or its state write. A later
+        // confirmed tombstone/404 completes the journal without deleting twice.
+        await save({...state,status:'DELETED',remote,deletedConfirmed:true,error:null});
       }
       return;
     }
@@ -272,11 +276,11 @@ export async function runTransition(p:TransitionPort){
           await save({...state,status:'CONFLICT',error:'BELLO削除後にZAICOで変更されています。削除を停止しました。',conflict:{archive}});
           pending++;continue;
         }
-        await save({...state,status:'DELETE_UNCONFIRMED'});
+        state=await save({...state,status:'DELETE_UNCONFIRMED'});
         await p.api.remove(state.sourceId);
         const remaining=await p.api.get(state.sourceId);
         if(remaining&&!remaining.deleted)throw Error('ZAICOの削除を確認できませんでした。');
-          await save({...state,status:'DELETED',deletedConfirmed:true,error:null});
+        await save({...state,status:'DELETED',deletedConfirmed:true,error:null});
         await checkpoint();
         continue;
       }

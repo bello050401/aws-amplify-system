@@ -18,7 +18,10 @@ export function harness(){
   let failBackup=false,failCreate=false,refusePatch=false,afterPatch:(()=>void)|undefined;
   const port:TransitionPort={
     getControl:async()=>clone(control),saveControl:async(c)=>control=clone(c),
-    states:async()=>clone([...states.values()]),saveState:async(s)=>{const saved:Row={...clone(s),version:String(++seq)};states.set(saved.inventoryId,saved);return clone(saved);},
+    states:async()=>clone([...states.values()]),saveState:async(s)=>{
+      if(states.get(s.inventoryId)?.version!==s.version)throw Error('Stale sync-state version');
+      const saved:Row={...clone(s),version:String(++seq)};states.set(saved.inventoryId,saved);return clone(saved);
+    },
     inventories:async()=>clone([...rows.values()]),inventory:async(id)=>clone(rows.get(id)),
     masters:async()=>masters,
     archive:async(label,value)=>{if(failBackup)throw Error('backup failed');const key=label+'/'+seq++;archives.set(key,clone(value));return key;},
@@ -119,6 +122,15 @@ async function main(){
   await test('Delete against a changed upstream is held for review',async()=>{
     const h=harness();h.seed();await h.run();h.rows.delete('one');h.remotes.get('1')!.title='changed';await h.tick();
     assert.equal(h.calls.filter(c=>c.method==='DELETE').length,0);assert.equal(h.states.get('one')!.status,'CONFLICT');
+  });
+  await test('Lost deletion acknowledgement recovers from a confirmed 404 without repeating DELETE',async()=>{
+    const h=harness();h.seed();await h.run();h.rows.delete('one');
+    const remove=h.port.api.remove;
+    h.port.api.remove=async id=>{await remove(id);throw Error('Lost deletion reply');};
+    await h.tick();assert.equal(h.states.get('one')!.status,'ERROR');
+    await h.tick();assert.equal(h.states.get('one')!.status,'DELETED');
+    assert.equal(h.states.get('one')!.error,null);
+    assert.equal(h.calls.filter(c=>c.method==='DELETE').length,1);
   });
   await test('New local item creates exactly once and links its source ID',async()=>{
     const h=harness();h.seed();await h.run();h.rows.set('two',{id:'two',name:'新しい商品',quantity:2,categoryIds:[],updatedAt:'2026-10-20T00:00:00Z'});
