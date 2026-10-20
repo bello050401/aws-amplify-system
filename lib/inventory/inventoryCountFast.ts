@@ -84,9 +84,9 @@ export interface CountExpression {
  * scripts/verify-inventory-count.ts が実データで突き合わせる。
  */
 export function buildCountExpression(filters: InventoryCursorListFilters): CountExpression {
-  const parts: string[] = ["attribute_not_exists(deletedAt)"];
+  const parts: string[] = ["attribute_not_exists(deletedAt)", "(attribute_not_exists(listingPartition) OR listingPartition <> :mergedPartition)"];
   const names: Record<string, string> = {};
-  const values: Record<string, unknown> = {};
+  const values: Record<string, unknown> = {":mergedPartition":"MERGED"};
 
   const categoryIds = filters.categoryIds ?? [];
   if (categoryIds.length > 0) {

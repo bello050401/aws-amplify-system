@@ -1,3 +1,4 @@
+import {mergedInventoryTarget} from "@/lib/outbound/mergeInventory";
 import {categoryLabels} from "@/lib/inventory/categories";
 import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { ShippingReferencePriceSection } from "./listing/ShippingReferencePriceSection";
@@ -160,8 +161,9 @@ export default async function InventoryDetailPage({
 
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;
   const status = item.statusId ? statuses.find((s) => s.id === item.statusId) : undefined;
-  const canEdit = canEditInventory(role);
-  const canDelete = canHardDeleteInventory(role);
+  const mergedInto = mergedInventoryTarget(item.customFields);
+  const canEdit = canEditInventory(role) && !mergedInto;
+  const canDelete = canHardDeleteInventory(role) && !mergedInto;
 
   // QA005: 一覧から来た場合はその検索条件/ページングへ、直リンクの
   // 場合は通常一覧へ。編集画面へも同じ `from` を引き継ぎ、編集の
@@ -269,6 +271,7 @@ export default async function InventoryDetailPage({
           ← 在庫一覧へ戻る
         </Link>
 
+        {mergedInto && <p className="my-3 rounded-lg bg-blue-50 p-3">この在庫は出庫先の商品に合算済みです。<Link className="ml-2 text-blue-700 underline" href={`/inventory/${mergedInto}`}>現在の商品ページを開く</Link>（以下は元の商品情報・履歴です）</p>}
         <div className="mt-3 flex items-start justify-between">
           <div>
             <div className="flex items-center gap-2">

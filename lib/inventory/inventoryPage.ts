@@ -49,6 +49,8 @@ const COUNT_PAGE_SIZE = 1000;
 const MAX_PAGES = 60;
 
 function buildFilter(filters: InventoryCursorListFilters): Record<string, unknown> {
+  // The index key already selects ACTIVE, excluding MERGED. DynamoDB rejects
+  // a second condition on the same key in the filter expression.
   const conditions: Record<string, unknown>[] = [{ deletedAt: { attributeExists: false } }];
   if (filters.categoryIds && filters.categoryIds.length > 0) {
     conditions.push({ or: filters.categoryIds.map((id) => categoryFilter(id)) });

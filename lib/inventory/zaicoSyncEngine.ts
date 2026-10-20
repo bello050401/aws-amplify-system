@@ -347,6 +347,10 @@ export async function syncOneZaicoItem(
       }
     }
 
+    // Keep the source link and historical row, without resurrecting consolidated stock.
+    if (existing && parseCustomFields(existing.customFields)?.__belloStockMerge) return {
+      zaicoId:sourceInventoryId,name:existing.name,status:'unchanged',inventoryId:existing.id,sku:existing.sku,imageImported:false,categoryCreated:false,locationCreated:false,warnings,
+    };
     const { fields: core, warnings: coreWarnings } = mapZaicoCoreFields(zaicoItem);
     warnings.push(...coreWarnings);
 

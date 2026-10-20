@@ -30,10 +30,10 @@ async function releaseBarcodeClaim(id:string,value:string):Promise<InventoryTran
   // claim owned by a surviving page when its original page is changed/deleted.
   let key:Record<string,unknown>|undefined;
   do{
-    const page=await inventoryDdb.send(new ScanCommand({TableName:inventoryTable('Inventory'),ProjectionExpression:'id',FilterExpression:'barcode=:barcode AND id<>:id AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':barcode':value,':id':id},ExclusiveStartKey:key,ConsistentRead:true}));
+    const page=await inventoryDdb.send(new ScanCommand({TableName:inventoryTable('Inventory'),ProjectionExpression:'id',FilterExpression:'barcode=:barcode AND id<>:id AND attribute_not_exists(deletedAt) AND (attribute_not_exists(listingPartition) OR listingPartition <> :merged)',ExpressionAttributeValues:{':barcode':value,':id':id,':merged':'MERGED'},ExclusiveStartKey:key,ConsistentRead:true}));
     const survivor=page.Items?.[0];
     if(survivor)return [
-      {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:survivor.id},ConditionExpression:'barcode=:barcode AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':barcode':value}}},
+      {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:survivor.id},ConditionExpression:'barcode=:barcode AND attribute_not_exists(deletedAt) AND (attribute_not_exists(listingPartition) OR listingPartition <> :merged)',ExpressionAttributeValues:{':barcode':value,':merged':'MERGED'}}},
       {Update:{TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(value)},UpdateExpression:'SET inventoryId=:next',ConditionExpression:'inventoryId=:owner',ExpressionAttributeValues:{':next':survivor.id,':owner':id}}},
     ];
     key=page.LastEvaluatedKey;
@@ -49,7 +49,7 @@ async function barcodeChanges(id:string,before:unknown,after:unknown,now:string)
     let key:Record<string,unknown>|undefined;
     do {
       const page=await inventoryDdb.send(new ScanCommand({TableName:inventoryTable('Inventory'),ProjectionExpression:'id',
-        FilterExpression:'barcode = :barcode AND id <> :id AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':barcode':value,':id':id},ExclusiveStartKey:key,ConsistentRead:true}));
+        FilterExpression:'barcode = :barcode AND id <> :id AND attribute_not_exists(deletedAt) AND (attribute_not_exists(listingPartition) OR listingPartition <> :merged)',ExpressionAttributeValues:{':barcode':value,':id':id,':merged':'MERGED'},ExclusiveStartKey:key,ConsistentRead:true}));
       if(page.Items?.length) throw new InventoryMutationRejected('BARCODE_DUPLICATE');
       key=page.LastEvaluatedKey;
     } while(key);
@@ -66,6 +66,7 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
   const id=String(input.id || randomUUID());
   const current=expectedUpdatedAt?await getInventoryRaw(id):undefined;
   if(expectedUpdatedAt && (!current || current.updatedAt!==expectedUpdatedAt)) throw new InventorySaveError('CONFLICT');
+  if(current?.listingPartition==='MERGED') throw new InventoryMutationRejected('MERGED');
   if(current?.outboundBatchId) throw new InventoryMutationRejected('OUTBOUND_RESERVED');
   const before=inventoryCategoryIds(current ?? {});
   const after=Array.isArray(input.categoryIds)?[...new Set(input.categoryIds as string[])]:input.categoryId===undefined?before:
@@ -102,6 +103,7 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
 async function deleteInventoryWithCategories(id:string,expectedUpdatedAt:string) {
   const row=await getInventoryRaw(id);
   if(!row || row.updatedAt!==expectedUpdatedAt) throw new InventorySaveError('CONFLICT');
+  if(row.listingPartition==='MERGED') throw new InventoryMutationRejected('MERGED');
   if(row.outboundBatchId) throw new InventoryMutationRejected('OUTBOUND_RESERVED');
   const changes:InventoryTransaction=[{Delete:{TableName:inventoryTable('Inventory'),Key:{id},ConditionExpression:'updatedAt = :version AND attribute_not_exists(outboundBatchId)',ExpressionAttributeValues:{':version':expectedUpdatedAt}}},...categoryLinkChanges(id,inventoryCategoryIds(row),[],new Date().toISOString())];
   const barcode=typeof row.barcode==='string'?row.barcode.trim():'';

@@ -15,6 +15,7 @@ import {KAWAGOE_TEMPLATE,kawagoeAttachments,orderNumber,validateArrivalDate,vali
 import {assertOutboundEmailReady,sendOutboundEmail,isDefiniteEmailFailure} from './email';
 import {splitInventoryRecord,remainingCustomFields} from './splitInventory';
 import {nextSplitSku,prepareSplitPhotos,removeUnsentSplitPhotos} from './splitPhotos';
+import {applyOutboundMerge,findOutboundMergeTarget} from './mergePersistence';
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function requireUuid(id:unknown):asserts id is string {if(typeof id!=='string'||!uuid.test(id))throw new Error('対象を選び直してください。');}
@@ -43,7 +44,7 @@ async function destination(id:string) {
 export async function outboundProducts(destinationId:string):Promise<OutboundProduct[]> {
   const dest=await destination(destinationId);
   const rows=(await all('Inventory',{expression:'attribute_not_exists(deletedAt) AND (contains(categoryIds,:cat) OR (attribute_not_exists(categoryIds) AND categoryId = :cat))',values:{':cat':dest.categoryId}}))
-    .filter(row=>!row.outboundBatchId&&Number(row.quantity)>0);
+    .filter(row=>!row.outboundBatchId&&row.listingPartition!=='MERGED'&&Number(row.quantity)>0);
   const locations=new Map((await all('Location')).map(l=>[l.id,l.name]));
   // Resolve the same signed thumbnails as the staff list, including PhotoStation assets.
   const thumbs=await inventoryThumbnails(rows.map(row=>({...row,...outboundThumbnailFields(row.images)})) as InventoryListRow[]);
@@ -143,10 +144,7 @@ export async function emailOutbound(batchId:string,actor:string):Promise<Outboun
   for(const item of batch.rows.filter(row=>row.status==='PENDING'&&row.splitInventoryId&&!row.splitPrepared)){
    const source=await getInventoryRaw(item.inventoryId);
    if(!source||source.outboundBatchId!==batchId||source.updatedAt!==item.expectedUpdatedAt)throw Error('出庫対象が変更されています。送信前に確認してください。');
-   const splitSku=item.splitSku??await nextSplitSku();
-   await db.send(new UpdateCommand({TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET splitSku=:sku',ExpressionAttributeValues:{':sku':splitSku}}));
-   const images=await prepareSplitPhotos(source,item);
-   await db.send(new UpdateCommand({TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET splitImages=:photos, splitPrepared=:yes',ExpressionAttributeValues:{':photos':JSON.stringify(images),':yes':true}}));
+   if(!await findOutboundMergeTarget(source,batch.locationId))await prepareSplit(source,item);
   }
   batch=await getOutboundBatch(batchId);
   for(const item of batch.rows.filter(row=>row.status==='PENDING')){
@@ -172,7 +170,6 @@ export async function acknowledgeOutboundReceipt(batchId:string,actor:string){
  if(batch.emailStatus==='SENT')return confirmOutboundSent(batchId,actor);
  const expired=batch.status==='SENDING'&&Date.parse(batch.updatedAt??batch.createdAt)<Date.now()-5*60*1000;
  if(batch.status!=='SEND_UNKNOWN'&&!expired)throw Error('送信処理中です。5分ほど待って結果を再確認してください。');
- if(batch.rows.some(r=>r.status==='PENDING'&&r.splitInventoryId&&!r.splitPrepared))throw Error('分割写真の準備が完了していません。出庫履歴を確認してください。');
  await db.send(new UpdateCommand({TableName:table('OutboundBatch'),Key:{id:batchId},UpdateExpression:'SET #s=:sending, emailStatus=:sent, emailConfirmedBy=:who, emailConfirmedAt=:now REMOVE emailError',ConditionExpression:'#s=:old AND updatedAt=:version',ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':sending':'SENDING',':sent':'SENT',':who':actor,':now':new Date().toISOString(),':old':batch.status,':version':batch.updatedAt}}));
  return confirmOutboundSent(batchId,actor);
 }
@@ -180,6 +177,13 @@ function batchStateCheck(id:string,status:string){return {ConditionCheck:{TableN
 async function updateBatchStatus(id:string,status:string,from:string[]) {
   try{await db.send(new UpdateCommand({TableName:table('OutboundBatch'),Key:{id},UpdateExpression:'SET #s = :s, updatedAt = :now',ConditionExpression:'#s IN ('+from.map((_,i)=>`:f${i}`).join(',')+')',ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':s':status,':now':new Date().toISOString(),...Object.fromEntries(from.map((s,i)=>[`:f${i}`,s]))}}));return true;}
   catch(e){if(e instanceof Error&&e.name==='ConditionalCheckFailedException')return false;throw e;}
+}
+async function prepareSplit(source:Record<string,unknown>,item:OutboundRow){
+ const splitSku=item.splitSku??await nextSplitSku();
+ await db.send(new UpdateCommand({TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET splitSku=:sku',ExpressionAttributeValues:{':sku':splitSku}}));
+ const images=await prepareSplitPhotos(source,item);
+ await db.send(new UpdateCommand({TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET splitImages=:photos, splitPrepared=:yes',ExpressionAttributeValues:{':photos':JSON.stringify(images),':yes':true}}));
+ Object.assign(item,{splitSku,splitImages:images,splitPrepared:true});
 }
 export async function confirmOutboundSent(batchId:string,actor:string):Promise<OutboundBatch> {
   const batch=await getOutboundBatch(batchId);
@@ -193,10 +197,17 @@ export async function confirmOutboundSent(batchId:string,actor:string):Promise<O
     if(!row||row.outboundBatchId!==batchId||row.updatedAt!==item.expectedUpdatedAt){await recordPendingError(item.id,'対象商品が更新されています。送信内容と履歴を確認してください。自動再送は行いません。');continue;}
     const now=new Date().toISOString(),before=inventoryCategoryIds(row),after=before.filter(cat=>cat!==batch.categoryId);
     const changes={categoryId:after[0]??null,categoryIds:after,locationId:batch.locationId};
+    try{
+      if(await applyOutboundMerge(row,item,batch,actor)){
+        if(item.splitPrepared&&item.splitInventoryId)await removeUnsentSplitPhotos(batchId,item.splitInventoryId).catch(error=>console.error('[outbound-unused-split-photos]',{batchId,itemId:item.id,error}));
+        continue;
+      }
+    }catch(error){console.error('[outbound-merge]',error);await recordPendingError(item.id,(error as Error).message);continue;}
     if(item.splitInventoryId){
       try{
         validateMovementQuantity(item.snapshot.quantity,Number(row.quantity));
         if(item.snapshot.quantity>=Number(row.quantity))throw Error('分割する在庫数が変わっています。');
+        if(!item.splitPrepared)await prepareSplit(row,item);
         const child=splitInventoryRecord(row,item,batch,after,actor,now),remaining=Number(row.quantity)-item.snapshot.quantity;
         await sendOutboundTransaction(db,new TransactWriteCommand({TransactItems:[
           batchStateCheck(batchId,'APPLYING'),

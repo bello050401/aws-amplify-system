@@ -26,7 +26,7 @@ export async function prepareSplitPhotos(source:Record<string,unknown>,item:Outb
  for(const photo of images){if(typeof photo.storageKey!=='string')throw Error('商品の画像情報を確認してください。');const storageKey=await copy(photo.storageKey,typeof photo.sourceBucket==='string'?photo.sourceBucket:bucket);const thumbnailKey=typeof photo.thumbnailKey==='string'?await copy(photo.thumbnailKey):storageKey;const mediumKey=typeof photo.mediumKey==='string'?await copy(photo.mediumKey):storageKey;const rest={...photo};delete rest.sourceBucket;copied.push({...rest,storageKey,thumbnailKey,mediumKey,sourceSystem:null,sourceUrl:null});}
  return copied;
 }
-export async function removeUnsentSplitPhotos(batchId:string){
+export async function removeUnsentSplitPhotos(batchId:string,splitInventoryId?:string){
  let token:string|undefined;
- do{const result=await s3.send(new ListObjectsV2Command({Bucket:bucket,Prefix:`inventory/outbound/${batchId}/`,ContinuationToken:token}));if(result.Contents?.length){const removed=await s3.send(new DeleteObjectsCommand({Bucket:bucket,Delete:{Objects:result.Contents.map(item=>({Key:item.Key!})),Quiet:true}}));if(removed.Errors?.length)throw Error('分割用写真の取消を完了できませんでした。もう一度取り消してください。');}token=result.NextContinuationToken;}while(token);
+ do{const result=await s3.send(new ListObjectsV2Command({Bucket:bucket,Prefix:`inventory/outbound/${batchId}/${splitInventoryId?splitInventoryId+'/':''}`,ContinuationToken:token}));if(result.Contents?.length){const removed=await s3.send(new DeleteObjectsCommand({Bucket:bucket,Delete:{Objects:result.Contents.map(item=>({Key:item.Key!})),Quiet:true}}));if(removed.Errors?.length)throw Error('分割用写真の取消を完了できませんでした。もう一度取り消してください。');}token=result.NextContinuationToken;}while(token);
 }

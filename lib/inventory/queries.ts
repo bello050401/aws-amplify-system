@@ -1,3 +1,4 @@
+import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
 import {inventoryCategoryIds,categoryFilter} from "./categories";
 import { inventoryComparator, type InventorySort } from "./searchSort";
 import "server-only";
@@ -329,7 +330,7 @@ export function isInventoryProjectionInUse(): boolean | null {
 }
 
 async function fetchAllInventoryRecords(extraConditions: Record<string, unknown>[] = []): Promise<InventorySearchRecord[]> {
-  const filter = { and: [{ deletedAt: { attributeExists: false } }, ...extraConditions] };
+  const filter = { and: [NOT_MERGED_FILTER, { deletedAt: { attributeExists: false } }, ...extraConditions] };
 
   async function fetchPages(useProjection: boolean): Promise<InventorySearchRecord[]> {
     const items: InventorySearchRecord[] = [];

@@ -1,3 +1,4 @@
+import {mergedInventoryTarget} from "@/lib/outbound/mergeInventory";
 import {categoryLabels} from '@/lib/inventory/categories';
 import type { InventoryDetail, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { visibleDetailFields } from "@/mobile/src/domain/detailFields";
@@ -12,6 +13,7 @@ export function mobileInventoryDetail(row: InventoryDetail, categories: MasterOp
     fieldText(field.custom ? row.customFields?.[field.key] : row[field.key]),
   ]));
   return {
+    mergedIntoInventoryId: mergedInventoryTarget(row.customFields),
     id: row.id, sku: row.sku, displayId: row.displayId, name: row.name, quantity: row.quantity, unit: row.unit ?? "",
     location: locations.find(location => location.id === row.locationId)?.name ?? "",
     category: categoryLabels(row,categories).join(","),

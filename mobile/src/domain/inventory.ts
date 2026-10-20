@@ -16,6 +16,7 @@ export interface InventoryItem {
   sku: string;
   /** Existing BELLO display ID (ZAICO ID for imported products); sku remains the management number. */
   displayId?: string;
+  mergedIntoInventoryId?: string | null;
   name: string;
   quantity: number;
   unit: string;

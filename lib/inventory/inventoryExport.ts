@@ -1,3 +1,4 @@
+import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
 import { nowInJst } from "@/lib/inventory/sales";
 import "server-only";
 import ExcelJS from "exceljs";
@@ -61,7 +62,7 @@ export function buildCategoryLocationConditions(filters: Pick<InventoryListFilte
  * に絞り込む(buildInventoryExport参照)。
  */
 function buildFilterConditions(filters: InventoryListFilters): Record<string, unknown>[] {
-  const conditions: Record<string, unknown>[] = [{ deletedAt: { attributeExists: false } }, ...buildCategoryLocationConditions(filters)];
+  const conditions: Record<string, unknown>[] = [NOT_MERGED_FILTER, { deletedAt: { attributeExists: false } }, ...buildCategoryLocationConditions(filters)];
   if (filters.statusId) conditions.push({ statusId: { eq: filters.statusId } });
   return conditions;
 }
@@ -163,7 +164,7 @@ export async function buildInventoryExport(
   // deletedAt除外+カテゴリ/保管場所(あれば)だけを積む——statusId/qは
   // 上のコメントのとおり意図的に含めない。詳細検索が無効なときは従来
   // どおりbuildFilterConditions(deletedAt+カテゴリ/保管場所/状態すべて)。
-  const conditions = advanced ? [{ deletedAt: { attributeExists: false } }, ...buildCategoryLocationConditions(filters)] : buildFilterConditions(filters);
+  const conditions = advanced ? [NOT_MERGED_FILTER, { deletedAt: { attributeExists: false } }, ...buildCategoryLocationConditions(filters)] : buildFilterConditions(filters);
   const [categories, locations, statuses, customFieldDefs, items] = await Promise.all([
     listCategories(),
     listLocations(),
