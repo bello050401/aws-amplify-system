@@ -95,6 +95,17 @@ if(process.env.PHOTO_MEDIA_CLEANUP_ENABLED==='true'){
   backend.mediaMaintenance.addEnvironment('PHOTO_REGISTRATION_BUCKET_NAME',photoBucket);
   backend.mediaMaintenance.addEnvironment('MEDIA_INVENTORY_HISTORY_TABLE_NAME',backend.data.resources.tables.InventoryHistory.tableName);
   backend.data.resources.tables.InventoryHistory.grantReadData(backend.mediaMaintenance.resources.lambda);
+  // Amplify exposes imported table constructs without their secondary indexes.
+  // The orphan check queries deletion history and condition-checks both records
+  // atomically before marking photos; table read grants alone do not cover these.
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({
+    actions:['dynamodb:Query'],
+    resources:[`${backend.data.resources.tables.InventoryHistory.tableArn}/index/inventoryHistoriesByInventoryIdAndChangedAt`],
+  }));
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({
+    actions:['dynamodb:ConditionCheckItem'],
+    resources:[backend.data.resources.tables.Inventory.tableArn,backend.data.resources.tables.InventoryHistory.tableArn],
+  }));
   backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:Scan','dynamodb:Query','dynamodb:GetItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[`arn:aws:dynamodb:${mediaStack.region}:${mediaStack.account}:table/${photoTable}`]}));
   backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:ListBucketVersions'],resources:[`arn:aws:s3:::${photoBucket}`],conditions:{StringLike:{'s3:prefix':['photo-batches/*']}}}));
   backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:DeleteObjectVersion'],resources:[`arn:aws:s3:::${photoBucket}/photo-batches/*`]}));
