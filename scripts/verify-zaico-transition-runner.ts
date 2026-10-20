@@ -96,6 +96,26 @@ async function main(){
     const h=harness();h.seed();await h.run();h.rows.delete('one');await h.tick();
     assert.equal(h.calls.filter(c=>c.method==='DELETE').length,1);assert.equal(h.states.get('one')!.status,'DELETED');
   });
+  await test('Database map key order cannot produce a false deletion conflict',async()=>{
+    const h=harness();h.seed();await h.run();
+    const state=h.states.get('one')!;
+    state.remoteBase=Object.fromEntries(Object.entries(state.remoteBase).reverse());
+    state.remote=Object.fromEntries(Object.entries(state.remote).reverse());
+    h.rows.delete('one');await h.tick();
+    assert.equal(h.calls.filter(c=>c.method==='DELETE').length,1);
+    assert.equal(h.states.get('one')!.status,'DELETED');
+    assert.equal(h.states.get('one')!.error,null);
+  });
+  await test('Unchanged persisted maps do not rewrite sync state because of key order',async()=>{
+    const h=harness();h.seed();await h.run();
+    const state=h.states.get('one')!;
+    state.remoteBase=Object.fromEntries(Object.entries(state.remoteBase).reverse());
+    state.localBase=Object.fromEntries(Object.entries(state.localBase).reverse());
+    state.remote.optional_attributes=Object.fromEntries(Object.entries(state.remote.optional_attributes).reverse());
+    let writes=0;const save=h.port.saveState;
+    h.port.saveState=async row=>{writes++;return save(row);};
+    await h.tick();assert.equal(writes,0);
+  });
   await test('Delete against a changed upstream is held for review',async()=>{
     const h=harness();h.seed();await h.run();h.rows.delete('one');h.remotes.get('1')!.title='changed';await h.tick();
     assert.equal(h.calls.filter(c=>c.method==='DELETE').length,0);assert.equal(h.states.get('one')!.status,'CONFLICT');

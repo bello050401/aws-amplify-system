@@ -16,7 +16,16 @@ export interface FieldConflict {
   bello: SharedFields[string] | undefined;
   zaico: SharedFields[string] | undefined;
 }
-const canonical = (value: unknown): unknown => Array.isArray(value) ? [...value].sort() : value;
+// DynamoDB maps do not retain object insertion order. Compare their contents,
+// including nested snapshots, rather than the order returned by the database.
+const canonical = (value: unknown): unknown => {
+  if(Array.isArray(value))return value.map(canonical).sort();
+  if(value!==null&&typeof value==='object'){
+    return Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))
+      .map(([key,item])=>[key,canonical(item)]));
+  }
+  return value;
+};
 export const equal = (a: unknown, b: unknown) => JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
 
 /** Missing fields are not erasures. Adapters represent an explicit clear as null. */

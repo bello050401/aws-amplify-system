@@ -276,7 +276,7 @@ export async function runTransition(p:TransitionPort){
         await p.api.remove(state.sourceId);
         const remaining=await p.api.get(state.sourceId);
         if(remaining&&!remaining.deleted)throw Error('ZAICOの削除を確認できませんでした。');
-        await save({...state,status:'DELETED',deletedConfirmed:true});
+          await save({...state,status:'DELETED',deletedConfirmed:true,error:null});
         await checkpoint();
         continue;
       }
