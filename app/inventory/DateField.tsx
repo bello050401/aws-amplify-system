@@ -33,17 +33,20 @@ export function DateField({
   onChange,
   className,
   required,
+  label,
 }: {
   value: string;
   onChange: (value: string) => void;
   className: string;
   required?: boolean;
+  label?: string;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   return (
     <input
       ref={ref}
       type="date"
+      aria-label={label}
       value={value}
       required={required}
       onChange={(e) => onChange(e.target.value)}

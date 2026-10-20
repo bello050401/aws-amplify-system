@@ -524,9 +524,7 @@ export async function deleteInventory(inventoryId: string, options?: { skipRedir
 
   const who = await getCurrentInventoryUserEmail();
 
-  await deleteInventoryWithCategories(inventoryId, existing.updatedAt);
-
-  await logInventoryHistory(inventoryId, who, [{ fieldName: "削除", oldValue: "有効", newValue: "削除済み" }]);
+  await deleteInventoryWithCategories(inventoryId, existing.updatedAt, who ?? '在庫削除');
   await Promise.allSettled(allImageStorageKeys(existing.images).map((k) => removeInventoryImage(k)));
 
   // 件数の集計はプロセス内に60秒だけ持つ（lib/inventory/inventoryPage.ts）。

@@ -2,6 +2,7 @@
 
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import { DateField } from "../DateField";
+import { choicesWithCurrentValue } from "@/lib/inventory/zaicoFieldChoices";
 
 /**
  * Shared field primitives for the new-registration and edit forms — pulled
@@ -55,6 +56,7 @@ export function LabeledInput({
         {required && <span className="text-red-500"> *</span>}
       </label>
       <input
+        aria-label={label}
         type={type}
         value={value}
         required={required}
@@ -84,6 +86,7 @@ export function LabeledSelect({
     <div>
       <label className="block text-[12px] text-gray-600">{label}</label>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={`mt-0.5 w-full border border-gray-300 bg-white px-2.5 focus:border-gray-500 focus:outline-none ${SIZE_CLASSES[size]}`}
@@ -126,6 +129,7 @@ export function CustomFieldInput({
       <div className={fullWidthClassName}>
         {label}
         <textarea
+          aria-label={def.label}
           value={value}
           required={def.required}
           onChange={(e) => onChange(e.target.value)}
@@ -139,11 +143,10 @@ export function CustomFieldInput({
     return (
       <div>
         {label}
-        <select value={value} required={def.required} onChange={(e) => onChange(e.target.value)} className={`bg-white ${fieldClass}`}>
-          <option value="">未選択</option>
-          {def.options.map((o) => (
+        <select aria-label={def.label} value={value} required={def.required} onChange={(e) => onChange(e.target.value)} className={`bg-white ${fieldClass}`}>
+          {choicesWithCurrentValue(def.options, value).map((o) => (
             <option key={o} value={o}>
-              {o}
+              {o || "未選択"}
             </option>
           ))}
         </select>
@@ -155,7 +158,7 @@ export function CustomFieldInput({
     return (
       <div>
         {label}
-        <DateField value={value} required={def.required} onChange={onChange} className={fieldClass} />
+        <DateField label={def.label} value={value} required={def.required} onChange={onChange} className={fieldClass} />
       </div>
     );
   }
@@ -164,7 +167,7 @@ export function CustomFieldInput({
   return (
     <div>
       {label}
-      <input type={inputType} value={value} required={def.required} onChange={(e) => onChange(e.target.value)} className={fieldClass} />
+      <input aria-label={def.label} type={inputType} value={value} required={def.required} onChange={(e) => onChange(e.target.value)} className={fieldClass} />
     </div>
   );
 }

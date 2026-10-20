@@ -1,13 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Isolated BELLO photo registration E2E validation resources
+# Despite its legacy name, the deployed photo stack is used by the live app.
+# Do not redeploy this historical template over live CORS/environment/IAM drift.
+# Preserve durable data and device identities if a stack is removed/replaced.
+Description: BELLO photo registration resources (legacy E2E stack name)
 Parameters:
   CodeBucket: { Type: String }
   CodeKey: { Type: String }
 Resources:
   PhotoTable:
     Type: AWS::DynamoDB::Table
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BillingMode: PAY_PER_REQUEST
       PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
@@ -45,10 +48,18 @@ Resources:
       Tags: [{ Key: Environment, Value: isolated-validation }]
   PhotoBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: RetireObsoletePhotoVersions
+            Prefix: photo-batches/
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 7 }
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+            ExpiredObjectDeleteMarker: true
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -63,8 +74,8 @@ Resources:
       Tags: [{ Key: Environment, Value: isolated-validation }]
   UserPool:
     Type: AWS::Cognito::UserPool
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       UserPoolName: bello-photo-e2e-users
       AdminCreateUserConfig: { AllowAdminCreateUserOnly: true }

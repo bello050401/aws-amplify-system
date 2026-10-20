@@ -159,6 +159,9 @@ interface AssetItem {
   status: PhotoAssetStatus;
   isDeleted: boolean;
   statusBeforeDelete: PhotoAssetStatus | null;
+  deletedAt?: string;
+  purgeStartedAt?: string;
+  purgedAt?: string;
   sourceType: PhotoAssetSourceType;
   revision: number;
   inventoryImageType?: "NORMAL" | "DAMAGE";
@@ -181,6 +184,9 @@ function assetViewFromItem(item: AssetItem): PhotoAssetView {
     status: item.status,
     isDeleted: item.isDeleted,
     statusBeforeDelete: item.statusBeforeDelete ?? null,
+    deletedAt: item.deletedAt ?? null,
+    purgeStartedAt: item.purgeStartedAt ?? null,
+    purgedAt: item.purgedAt ?? null,
     sourceType: item.sourceType,
     revision: item.revision,
     inventoryImageType: item.inventoryImageType === "DAMAGE" ? "DAMAGE" : "NORMAL",
@@ -694,7 +700,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
               Update: {
                 TableName: this.tableName,
                 Key: { PK: `BATCH#${batchId}`, SK: sk },
-                UpdateExpression: "SET isDeleted = :true, #status = :deleted, statusBeforeDelete = :prev",
+                UpdateExpression: "SET isDeleted = :true, #status = :deleted, statusBeforeDelete = :prev, deletedAt = :deletedAt",
                 ConditionExpression: "isDeleted = :false AND #status = :readStatus AND listingSelectionCount = :zero",
                 ExpressionAttributeNames: { "#status": "status" },
                 ExpressionAttributeValues: {
@@ -704,6 +710,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
                   ":prev": decision.statusBeforeDelete,
                   ":readStatus": decision.statusBeforeDelete,
                   ":zero": 0,
+                  ":deletedAt": this.now().toISOString(),
                 },
               },
             },
@@ -743,8 +750,8 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
               Update: {
                 TableName: this.tableName,
                 Key: { PK: `BATCH#${batchId}`, SK: sk },
-                UpdateExpression: "SET isDeleted = :false, #status = :next",
-                ConditionExpression: "isDeleted = :true AND #status = :deletedStatus AND statusBeforeDelete = :next",
+                UpdateExpression: "SET isDeleted = :false, #status = :next REMOVE deletedAt",
+                ConditionExpression: "isDeleted = :true AND #status = :deletedStatus AND statusBeforeDelete = :next AND attribute_not_exists(purgeStartedAt) AND attribute_not_exists(purgedAt)",
                 ExpressionAttributeNames: { "#status": "status" },
                 ExpressionAttributeValues: { ":false": false, ":true": true, ":deletedStatus": "DELETED", ":next": decision.nextAssetStatus },
               },

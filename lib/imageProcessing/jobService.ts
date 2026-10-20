@@ -7,6 +7,8 @@ import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { isImageProcessingE2EKey, e2eListVersions, e2eListPendingJobStatuses } from "./e2eFixtures";
 import { ENGINE_VERSION } from "./sharpProcessor";
 import { buildIdempotencyKey } from "./pipeline";
+import {inventoryDdb,inventoryTable} from '../inventory/categoryPersistence';
+import {activateVersionAtomically,type VersionLifecycleRow} from './versionLifecycle';
 
 /** §7: 画像に明示的なclassificationが無い場合の既定値。DAMAGE写真は常にDAMAGE分類、NORMAL写真はisPrimary(=トップ画像候補)ならTOP、それ以外はFULL——「強い構図補正はTOP/FULLだけ」というsharpProcessor.tsの前提と一致させる。 */
 export function defaultClassification(img: { type: "NORMAL" | "DAMAGE"; isPrimary: boolean; classification?: ImageClassificationName | null }): ImageClassificationName {
@@ -279,22 +281,13 @@ export async function listVersionsForKeys(imageStorageKeys: string[]): Promise<R
 }
 
 /**
- * §12 バージョンrollback / workerが処理成功した新versionをACTIVEにする、
- * 両方の入口。旧ACTIVEを先にfalseへ落としてから新しい対象をtrueにする
- * ——常に「ACTIVEが0件の瞬間」を経由しても「ACTIVEが2件同時に存在する
- * 瞬間」は経由しない(表示側がfind(v=>v.active)で1件だけ拾う設計なら
- * 0件の瞬間はフォールバック——見つからなければ「処理中」表示でよく、
- * 2件同時存在の方が「どちらが正か不明」という実害があるため、この順序
- * を選んだ)。2回の独立UPDATE(id指定、GSIキー属性に触れない)なので
- * pricing-schedulerと同じ安全原則に従う。
+ * 採用する加工版の切替。旧版の無効化と新版の採用を同一トランザクション
+ * で保存する。期限切れ版の回収や他の利用者による切替と競合した場合は、
+ * 読み込み時の版を条件にして処理全体を拒否し、既存の採用版を保持する。
  */
 export async function setActiveVersion(imageStorageKey: string, newActiveVersionId: string): Promise<void> {
   const versions = await listVersions(imageStorageKey);
-  const currentActive = versions.find((v) => v.active && v.id !== newActiveVersionId);
-  if (currentActive) {
-    await serverDataClient.models.ImageProcessingVersion.update({ id: currentActive.id, active: false, status: "SUPERSEDED" }, inventoryAuthMode);
-  }
-  await serverDataClient.models.ImageProcessingVersion.update({ id: newActiveVersionId, active: true }, inventoryAuthMode);
+  await activateVersionAtomically(inventoryDdb,inventoryTable('ImageProcessingVersion'),imageStorageKey,newActiveVersionId,versions as VersionLifecycleRow[]);
 }
 
 /**
@@ -319,8 +312,4 @@ export async function setActiveVersion(imageStorageKey: string, newActiveVersion
  */
 export async function adoptVersion(imageStorageKey: string, versionId: string): Promise<void> {
   await setActiveVersion(imageStorageKey, versionId);
-  // 人の確認が済んだのでREADYへ。setActiveVersionが旧ACTIVEを
-  // SUPERSEDEDへ落とした後に実行する(順序を入れ替えるとSUPERSEDED側を
-  // READYへ戻してしまう)。
-  await serverDataClient.models.ImageProcessingVersion.update({ id: versionId, status: "READY" }, inventoryAuthMode);
 }

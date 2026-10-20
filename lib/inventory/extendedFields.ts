@@ -31,6 +31,8 @@
 // app/actions/inventory.ts); omitting the property entirely (undefined)
 // is only ever how an unrelated caller (e.g. a future migration script)
 // would say "leave this field alone".
+import { ZAICO_FIELD_CHOICES } from "./zaicoFieldChoices";
+
 export interface InventoryExtendedFields {
   barcode?: string | null;
   plannedSalePrice?: number | null;
@@ -72,7 +74,7 @@ export interface ExtendedFieldDef {
   key: ExtendedFieldKey;
   label: string;
   type: ExtendedFieldType;
-  /** Only meaningful for type "select". Kept short and explicit on purpose — spec explicitly says not to invent option lists for fields whose real choices aren't decided yet (mountType, transactionType, identityVerificationMethod, counterpartyOccupation all stay plain text for that reason, ready to become a `select` later with no data migration). */
+  /** Options verified against the current ZAICO input screen. */
   options?: { value: string; label: string }[];
   fullWidth?: boolean;
   /**
@@ -96,6 +98,7 @@ export interface ExtendedSectionDef {
 }
 
 const UNSET_OPTION = { value: "", label: "未設定" };
+const selectOptions = (key: keyof typeof ZAICO_FIELD_CHOICES) => [UNSET_OPTION, ...ZAICO_FIELD_CHOICES[key].map(value => ({ value, label: value }))];
 
 /**
  * purchasePrice/salePrice are pre-existing core Inventory fields (not
@@ -123,7 +126,7 @@ export const INVENTORY_EXTENDED_SECTIONS: ExtendedSectionDef[] = [
       { key: "thirdMarkdownPrice", label: "3回目値下げ金額（90日）", type: "text" },
       { key: "saleStartDate", label: "販売開始日", type: "date" },
       { key: "saleEndDate", label: "販売終了日", type: "date" },
-      { key: "market", label: "市場", type: "text" },
+      { key: "market", label: "市場", type: "select", options: selectOptions("market") },
       { key: "externalProductId", label: "商品ID", type: "text" },
       { key: "saleCommission", label: "販売手数料", type: "number", unit: "円" },
       { key: "listingNotes", label: "出品情報", type: "textarea", fullWidth: true },
@@ -137,8 +140,8 @@ export const INVENTORY_EXTENDED_SECTIONS: ExtendedSectionDef[] = [
       { key: "depth", label: "奥行（cm）", type: "text" },
       { key: "height", label: "高さ（cm）", type: "text" },
       { key: "overallLength", label: "全長（cm）", type: "text" },
-      { key: "lengthAdjustable", label: "全長調節可否", type: "select", options: [UNSET_OPTION, { value: "可", label: "可" }, { value: "不可", label: "不可" }] },
-      { key: "mountType", label: "取付タイプ", type: "text" },
+      { key: "lengthAdjustable", label: "全長調節可否", type: "select", options: selectOptions("lengthAdjustable") },
+      { key: "mountType", label: "取付タイプ", type: "select", options: selectOptions("mountType") },
     ],
   },
   {
@@ -156,10 +159,10 @@ export const INVENTORY_EXTENDED_SECTIONS: ExtendedSectionDef[] = [
       { key: "usedGoodsItemType", label: "品目", type: "text" },
       { key: "transactionDate", label: "取引の年月日", type: "date" },
       { key: "purchaseQuantity", label: "数量（仕入台帳）", type: "number" },
-      { key: "transactionType", label: "取引区分", type: "text" },
-      { key: "identityVerificationMethod", label: "真偽確認のためにとった措置の区分および方法", type: "text", fullWidth: true },
+      { key: "transactionType", label: "取引区分", type: "select", options: selectOptions("transactionType") },
+      { key: "identityVerificationMethod", label: "真偽確認のためにとった措置の区分および方法", type: "select", options: selectOptions("identityVerificationMethod"), fullWidth: true },
       { key: "counterpartyName", label: "相手氏名", type: "text" },
-      { key: "counterpartyOccupation", label: "職業", type: "text" },
+      { key: "counterpartyOccupation", label: "職業", type: "select", options: selectOptions("counterpartyOccupation") },
       { key: "counterpartyAddress", label: "住所", type: "text" },
       { key: "shippingCost", label: "送料", type: "number", unit: "円" },
       { key: "dailyPurchaseTotal", label: "その日の仕入れ合計金額（他商品含む）", type: "number", unit: "円" },

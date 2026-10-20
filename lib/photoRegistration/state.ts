@@ -819,6 +819,9 @@ export function decideRestoreAsset(
   if (!asset.isDeleted) {
     return err("ASSET_NOT_DELETED", `asset ${asset.id} is not deleted`, "photoAssetId");
   }
+  if (asset.purgeStartedAt || asset.purgedAt) {
+    return err("INVALID_STATUS_TRANSITION", "The deleted image has passed retention and cannot be restored", "photoAssetId");
+  }
   if (batch.status === "ARCHIVED") {
     return err("INVALID_STATUS_TRANSITION", `batch ${batch.id} is ARCHIVED`, "photoAssetId");
   }

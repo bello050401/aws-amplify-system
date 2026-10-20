@@ -3,6 +3,7 @@ import { Duration, RemovalPolicy, SecretValue } from "aws-cdk-lib";
 import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
+import { LogRetention, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Effect, ManagedPolicy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
@@ -15,6 +16,7 @@ import { imageProcessingWorker } from "./functions/image-processing-worker/resou
 import { zaicoSyncWorker } from "./functions/zaico-sync-worker/resource";
 import { integrityMonitor } from "./functions/integrity-monitor/resource";
 import { salesAggregateScheduler } from "./functions/sales-aggregate-scheduler/resource";
+import { mediaMaintenance } from "./functions/media-maintenance/resource";
 
 /**
  * Amplify Gen2 backend definition.
@@ -44,7 +46,59 @@ const backend = defineBackend({
   zaicoSyncWorker,
   integrityMonitor,
   salesAggregateScheduler,
+  mediaMaintenance,
 });
+
+// Expire operational logs in their EXISTING groups. Changing logging.retention
+// on these established functions creates different groups and strands old logs.
+for (const fn of [backend.generateSku, backend.pricingScheduler, backend.imageProcessingWorker,
+  backend.zaicoSyncWorker, backend.integrityMonitor, backend.salesAggregateScheduler]) {
+  const lambda=fn.resources.lambda;
+  new LogRetention(lambda,'OperationalLogRetention',{
+    logGroupName:`/aws/lambda/${lambda.functionName}`, retention:RetentionDays.THREE_MONTHS,
+  });
+}
+
+// A separate daily collector recovers failed deletes and abandoned uploads.
+// Only immutable inventory image keys are eligible after two unused observations
+// at least seven days apart; any reference read failure stops deletion entirely.
+const mediaStack = backend.createStack('MediaMaintenance');
+const mediaObservationTable = new Table(mediaStack, 'UnusedImageObservation', {
+  partitionKey:{name:'id',type:AttributeType.STRING}, billingMode:BillingMode.PAY_PER_REQUEST,
+  removalPolicy:RemovalPolicy.RETAIN,
+});
+mediaObservationTable.grantReadWriteData(backend.mediaMaintenance.resources.lambda);
+backend.mediaMaintenance.addEnvironment('MEDIA_OBSERVATION_TABLE_NAME',mediaObservationTable.tableName);
+const mediaReferenceNames:Record<string,string> = {};
+for(const model of ['Inventory','ListingDraft','ChannelListing','ImageProcessingVersion','ProcessingJob','PhotoProfile','GeneratedProductPage','BelloStyleProfile','YahooAuctionPreparation','MercariBridgeHttpDraftJob','OutboundItem','BaseProductArchive','BaseItemCache','Feature','FeatureItem','KnowledgeDocument','KnowledgeDocumentRevision','MercariBridgeHttpSendAttempt']) {
+  const table=backend.data.resources.tables[model];
+  table.grantReadData(backend.mediaMaintenance.resources.lambda);
+  mediaReferenceNames[model]=table.tableName;
+}
+backend.mediaMaintenance.addEnvironment('MEDIA_REFERENCE_TABLES',JSON.stringify(mediaReferenceNames));
+backend.data.resources.tables.ImageProcessingVersion.grantReadWriteData(backend.mediaMaintenance.resources.lambda);
+backend.mediaMaintenance.addEnvironment('MEDIA_BUCKET_NAME',backend.storage.resources.bucket.bucketName);
+backend.storage.resources.bucket.grantRead(backend.mediaMaintenance.resources.lambda,'inventory/*');
+backend.storage.resources.bucket.grantDelete(backend.mediaMaintenance.resources.lambda,'inventory/*');
+backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:GetBucketVersioning'],resources:[backend.storage.resources.bucket.bucketArn]}));
+backend.storage.resources.cfnResources.cfnBucket.lifecycleConfiguration = {
+  rules:[{id:'AbortIncompleteImageUploads',status:'Enabled',abortIncompleteMultipartUpload:{daysAfterInitiation:7}}],
+};
+// Enable only after BOTH the web adapter and Photo Station API have the purge
+// lock in applyRestore. This prevents an old API restoring a file mid-deletion.
+if(process.env.PHOTO_MEDIA_CLEANUP_ENABLED==='true'){
+  const photoTable=process.env.PHOTO_REGISTRATION_TABLE_NAME;
+  const photoBucket=process.env.PHOTO_REGISTRATION_BUCKET_NAME;
+  if(!photoTable||!photoBucket)throw Error('Photo cleanup requires the existing photo resources');
+  backend.mediaMaintenance.addEnvironment('PHOTO_MEDIA_CLEANUP_ENABLED','true');
+  backend.mediaMaintenance.addEnvironment('PHOTO_REGISTRATION_TABLE_NAME',photoTable);
+  backend.mediaMaintenance.addEnvironment('PHOTO_REGISTRATION_BUCKET_NAME',photoBucket);
+  backend.mediaMaintenance.addEnvironment('MEDIA_INVENTORY_HISTORY_TABLE_NAME',backend.data.resources.tables.InventoryHistory.tableName);
+  backend.data.resources.tables.InventoryHistory.grantReadData(backend.mediaMaintenance.resources.lambda);
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:Scan','dynamodb:Query','dynamodb:GetItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[`arn:aws:dynamodb:${mediaStack.region}:${mediaStack.account}:table/${photoTable}`]}));
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:ListBucketVersions'],resources:[`arn:aws:s3:::${photoBucket}`],conditions:{StringLike:{'s3:prefix':['photo-batches/*']}}}));
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:DeleteObjectVersion'],resources:[`arn:aws:s3:::${photoBucket}/photo-batches/*`]}));
+}
 
 // Runtime permissions are restricted to the already authorized staging host.
 // Cookie values are written directly to Secrets Manager, never to outputs or builds.
@@ -687,7 +741,7 @@ backend.salesAggregateScheduler.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaic
 if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {
   const outboundStack = backend.createStack('OutboundRuntime');
   const role = Role.fromRoleName(outboundStack, 'ExistingComputeRole', 'BelloAmplifyStagingComputeRole');
-  const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','OutboundSequence','InventoryHistory'].map(name=>backend.data.resources.tables[name].tableArn);
+  const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','OutboundSequence','InventoryHistory','ImageProcessingVersion'].map(name=>backend.data.resources.tables[name].tableArn);
   const readable = ['Category','Location'].map(name=>backend.data.resources.tables[name].tableArn);
   new ManagedPolicy(outboundStack,'RuntimeAccess',{roles:[role],statements:[
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:writable}),

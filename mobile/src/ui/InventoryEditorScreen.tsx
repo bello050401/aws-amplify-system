@@ -12,6 +12,7 @@ import {DateField} from "./DateField";
 import {BarcodeScanner} from "./BarcodeScanner";
 import {PhotoPicker} from "./PhotoPicker";
 import {QrMovementSheet} from './QrMovementSheet';
+import {choicesWithCurrentValue} from '../../../lib/inventory/zaicoFieldChoices';
 
 export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, features = RESTRICTED_FEATURES }: {
   editor: InventoryEditor; onLeave: () => void; onSaved: (item: InventoryItem) => void;
@@ -94,7 +95,9 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, fea
     </Modal>
     <Modal visible={choice !== null} transparent animationType="slide" onRequestClose={() => setChoice(null)}>
       <View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>{choice?.label}</Text>
-        {["", ...new Set([...(choice?.options ?? []), ...(choice && state.draft.details[choice.key] ? [state.draft.details[choice.key]] : [])])].map(value => <Pressable key={value} accessibilityRole="button" style={s.choice} onPress={() => { if (choice) editor.changeDetail(choice.key, value); setChoice(null); }}><Text style={s.link}>{value || "未設定"}</Text></Pressable>)}
+        <ScrollView style={{maxHeight:320}} keyboardShouldPersistTaps="handled">
+        {choicesWithCurrentValue(choice?.options ?? [], choice ? state.draft.details[choice.key] ?? "" : "").map(value => <Pressable key={value} accessibilityRole="button" accessibilityState={{selected:!!choice && state.draft.details[choice.key]===value}} style={s.choice} onPress={() => { if (choice) editor.changeDetail(choice.key, value); setChoice(null); }}><Text style={s.link}>{value || "未設定"}</Text></Pressable>)}
+        </ScrollView>
         <Pressable accessibilityRole="button" style={s.choice} onPress={() => setChoice(null)}><Text style={s.link}>キャンセル</Text></Pressable>
       </View></View>
     </Modal>
@@ -112,7 +115,7 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, fea
 }
 const s = StyleSheet.create({
   sectionHeading: { fontSize: 20, fontWeight: "700", color: colors.text, paddingVertical: 18, borderTopWidth: 1, borderColor: colors.border, marginTop: 8 },
-  select: { borderWidth: 1, borderColor: "#AAAFAA", borderRadius: 10, minHeight: 54, padding: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, selectText: { fontSize: 17, color: colors.text }, readOnly: { backgroundColor: "#F4F2EE" },
+  select: { borderWidth: 1, borderColor: "#AAAFAA", borderRadius: 10, minHeight: 54, padding: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, selectText: { fontSize: 17, color: colors.text, flexShrink:1 }, readOnly: { backgroundColor: "#F4F2EE" },
   screen: { flex: 1, backgroundColor: colors.paper }, header: { backgroundColor: colors.cream, flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 18 },
   round: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#FFF9ED", alignItems: "center", justifyContent: "center" }, title: { fontSize: 20, fontWeight: "700", color: colors.text },
   done: { paddingVertical: 13, paddingHorizontal: 20, backgroundColor: colors.blue, borderRadius: 26 }, white: { color: "white", fontSize: 16, fontWeight: "600", textAlign: "center" }, disabled: { opacity: .5 },

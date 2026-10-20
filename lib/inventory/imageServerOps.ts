@@ -192,9 +192,9 @@ export async function downloadAndImportInventoryImage(sourceUrl: string): Promis
  * owning Inventory record has already been updated/deleted/aborted
  * successfully (see createInventory/updateInventory/deleteInventory) —
  * never awaited as a precondition for the DB write, and a failure here
- * is logged, not thrown: an orphaned S3 object is a minor cleanup
- * concern, it must never roll back a DB write that already succeeded
- * (or block reporting a failure that already happened).
+ * is logged, not thrown, because the inventory write already succeeded.
+ * The daily media-maintenance collector retries unused immutable objects
+ * after its seven-day observation period, including abandoned uploads.
  */
 export async function removeInventoryImage(path: string): Promise<void> {
   try {

@@ -32,6 +32,7 @@
 import type { ExtendedFieldKey, InventoryExtendedFields } from "./extendedFields";
 import type { ZaicoInventory, ZaicoOptionalAttribute } from "@/lib/zaico/client";
 import { resolveLabelBarcode } from "./labelBarcode";
+import { normalizeCalendarDate } from "./calendarDate";
 
 /**
  * NFKC (full/half-width unification) + variation-selector stripping +
@@ -297,13 +298,11 @@ export function parseZaicoNumber(raw: string | null | undefined, label: string):
 export function parseZaicoDate(raw: string | null | undefined, label: string): ParsedValue<string> {
   const trimmed = raw?.trim();
   if (!trimmed) return { value: null };
-  const normalized = trimmed.replace(/\//g, "-");
-  const match = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(normalized);
-  if (!match) {
+  const normalized = normalizeCalendarDate(trimmed);
+  if (!normalized) {
     return { value: null, warning: `「${label}」の値 "${raw}" を日付に変換できませんでした。` };
   }
-  const [, y, m, d] = match;
-  return { value: `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}` };
+  return { value: normalized };
 }
 
 export interface ZaicoCoreMappedFields {

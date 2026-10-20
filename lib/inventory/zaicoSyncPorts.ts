@@ -362,6 +362,8 @@ export function createServerSyncPort(): ZaicoSyncPort {
           listUpdatedAt: new Date().toISOString(),
           ...input.extendedFields,
         },
+        undefined,
+        {preserveZaicoSourceBarcode:true},
       );
       // 在庫が1件増えた。総件数のキャッシュを捨てないと、同期直後の
       // 一覧が古い件数を最大60秒表示し続ける(PHASE 6)。
@@ -394,6 +396,7 @@ export function createServerSyncPort(): ZaicoSyncPort {
           ...input.extendedFields,
         },
         input.expectedUpdatedAt,
+        {preserveZaicoSourceBarcode:true},
       );
     },
     logHistory: logInventoryHistory,

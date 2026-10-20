@@ -274,6 +274,9 @@ export interface PhotoAssetView {
    * uploadを完了していなかったAssetが検証なしでREADYになってしまう。
    */
   statusBeforeDelete: PhotoAssetStatus | null;
+  deletedAt?: string | null;
+  purgeStartedAt?: string | null;
+  purgedAt?: string | null;
   sourceType: PhotoAssetSourceType;
   /** requestUploads時に宣言された、各variantの期待値。completeはこれと突き合わせる。 */
   declared: Record<PhotoAssetVariant, DeclaredObject>;

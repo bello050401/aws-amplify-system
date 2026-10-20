@@ -1,5 +1,6 @@
 import "server-only";
 import {persistInventoryWithCategories} from "./categoryPersistence";
+import {normalizeCalendarDate} from "./calendarDate";
 import {splitCategoryNames,inventoryCategoryIds} from "./categories";
 import ExcelJS from "exceljs";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
@@ -381,13 +382,12 @@ export function parseImportQuantity(raw: string, warnings: string[]): { value: n
 export function parseImportDate(raw: string, label: string, warnings: string[]): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  const normalized = trimmed.replace(/\//g, "-");
-  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(normalized);
-  if (!m) {
+  const normalized = normalizeCalendarDate(trimmed);
+  if (!normalized) {
     warnings.push(`「${label}」の値 "${raw}" を日付に変換できませんでした（この項目は更新されません）。`);
     return null;
   }
-  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  return normalized;
 }
 
 interface FieldMeta {
@@ -404,7 +404,7 @@ async function buildFieldMetaMap(): Promise<Record<string, FieldMeta>> {
   // 優先する(exportFields.tsの冒頭コメント参照。keyは共通、labelだけ
   // 用途によって意図的に別々)。
   for (const f of EXTENDED_EXPORT_FIELDS) map[f.key] = { valueType: f.valueType, label: f.label };
-  for (const def of customFieldDefs) map[def.fieldKey] = { valueType: def.fieldType === "NUMBER" ? "number" : "string", label: def.label };
+  for (const def of customFieldDefs) map[def.fieldKey] = { valueType: def.fieldType === "NUMBER" ? "number" : def.fieldType === "DATE" ? "date" : "string", label: def.label };
   return map;
 }
 

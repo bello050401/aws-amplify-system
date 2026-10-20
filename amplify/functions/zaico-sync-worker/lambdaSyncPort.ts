@@ -173,13 +173,13 @@ const persistence = createInventoryPersistence(ddb, model => {
 });
 async function createInventory(input: NewInventoryInput): Promise<InventoryModel> {
   const {extendedFields, ...fields}=input;
-  const saved=await persistence.persistInventoryWithCategories({...fields,...extendedFields,listingPartition:'ACTIVE',listUpdatedAt:new Date().toISOString()});
+  const saved=await persistence.persistInventoryWithCategories({...fields,...extendedFields,listingPartition:'ACTIVE',listUpdatedAt:new Date().toISOString()},undefined,{preserveZaicoSourceBarcode:true});
   return await persistence.getInventoryRaw(saved.id) as InventoryModel;
 }
 async function updateInventory(input: UpdateInventoryInput): Promise<void> {
   if (!input.expectedUpdatedAt) throw new InventorySaveError('CONFLICT');
   const {expectedUpdatedAt,extendedFields,...fields}=input;
-  await persistence.persistInventoryWithCategories({...fields,...extendedFields,listUpdatedAt:new Date().toISOString()},expectedUpdatedAt);
+  await persistence.persistInventoryWithCategories({...fields,...extendedFields,listUpdatedAt:new Date().toISOString()},expectedUpdatedAt,{preserveZaicoSourceBarcode:true});
 }
 
 async function logHistory(inventoryId: string, changedBy: string | null, changes: { fieldName: string; oldValue: string | null; newValue: string | null }[]): Promise<void> {

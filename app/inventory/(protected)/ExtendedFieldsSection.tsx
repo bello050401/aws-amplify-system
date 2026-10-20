@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import type { ExtendedSectionDef } from "@/lib/inventory/extendedFields";
 import type { FieldSize } from "./FormFields";
 import { DateField } from "../DateField";
+import { choicesWithCurrentValue } from "@/lib/inventory/zaicoFieldChoices";
 
 interface ExtendedFieldsSectionProps {
   section: ExtendedSectionDef;
@@ -66,23 +67,25 @@ export function ExtendedFieldsSection({ section, values, onChange, extra, size =
             <label className="block text-[12px] text-gray-600">{field.label}</label>
             {field.type === "textarea" ? (
               <textarea
+                aria-label={field.label}
                 value={values[field.key] ?? ""}
                 onChange={(e) => onChange(field.key, e.target.value)}
                 rows={size === "large" ? 4 : 2}
                 className={fieldClass}
               />
             ) : field.type === "select" ? (
-              <select value={values[field.key] ?? ""} onChange={(e) => onChange(field.key, e.target.value)} className={`bg-white ${fieldClass}`}>
-                {(field.options ?? []).map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
+              <select aria-label={field.label} value={values[field.key] ?? ""} onChange={(e) => onChange(field.key, e.target.value)} className={`bg-white ${fieldClass}`}>
+                {choicesWithCurrentValue((field.options ?? []).map(o=>o.value), values[field.key] ?? "").map((value) => (
+                  <option key={value} value={value}>
+                    {field.options?.find(o=>o.value===value)?.label ?? (value || "未設定")}
                   </option>
                 ))}
               </select>
             ) : field.type === "date" ? (
-              <DateField value={values[field.key] ?? ""} onChange={(v) => onChange(field.key, v)} className={fieldClass} />
+              <DateField label={field.label} value={values[field.key] ?? ""} onChange={(v) => onChange(field.key, v)} className={fieldClass} />
             ) : (
               <input
+                aria-label={field.label}
                 type={field.type === "number" ? "number" : "text"}
                 value={values[field.key] ?? ""}
                 onChange={(e) => onChange(field.key, e.target.value)}

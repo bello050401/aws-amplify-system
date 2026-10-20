@@ -1,5 +1,6 @@
 import type { MobileFeatures } from "./access";
 import type { ExtendedFieldKey } from "../../../lib/inventory/extendedFields";
+import { ZAICO_FIELD_CHOICES } from "../../../lib/inventory/zaicoFieldChoices";
 
 interface DetailFieldPresentation {
   label: string;
@@ -21,33 +22,35 @@ export const DETAIL_FIELDS: readonly DetailField[] = [
   { key: "firstMarkdownPrice", inputMode: "numeric", label: "1回目値下げ時の金額（30日）", section: "値下げ価格" },
   { key: "secondMarkdownPrice", inputMode: "numeric", label: "2回目値下げ時の金額（60日）", section: "値下げ価格" },
   { key: "thirdMarkdownPrice", inputMode: "numeric", label: "3回目値下げ金額（90日）", section: "値下げ価格" },
-  { key: "conditionRating", inputMode: "decimal", label: "コンディション評価（1〜5の5段階で）", section: "状態・サイズ" },
+  { key: "conditionRating", inputMode: "decimal", kind: "multiline", label: "コンディション評価（1〜5の5段階で）", section: "状態・サイズ" },
   { key: "damageNotes", label: "傷汚れ箇所等メモ", section: "状態・サイズ", kind: "multiline" },
   { key: "width", inputMode: "decimal", label: "幅（cm）", section: "状態・サイズ" },
   { key: "depth", inputMode: "decimal", label: "奥行（cm）", section: "状態・サイズ" },
   { key: "height", inputMode: "decimal", label: "高さ（cm）", section: "状態・サイズ" },
   { key: "overallLength", inputMode: "decimal", label: "全長（cm）", section: "状態・サイズ" },
-  { key: "lengthAdjustable", label: "全長調節可否", section: "状態・サイズ", options: ["可", "不可"] },
+  { key: "lengthAdjustable", label: "全長調節可否", section: "状態・サイズ", options: ZAICO_FIELD_CHOICES.lengthAdjustable },
   { key: "legHeight", inputMode: "decimal", label: "脚高", section: "状態・サイズ", custom: true },
   { key: "seatDimensions", label: "座面寸法", section: "状態・サイズ", custom: true },
-  { key: "mountType", label: "取付タイプ", section: "状態・サイズ" },
+  { key: "mountType", label: "取付タイプ", section: "状態・サイズ", options: ZAICO_FIELD_CHOICES.mountType },
   { key: "socketType", label: "口金", section: "状態・サイズ", custom: true },
   { key: "packageSize", label: "梱包サイズ", section: "状態・サイズ", custom: true },
   { key: "usedGoodsItemType", label: "品目", section: "仕入情報" },
   { key: "transactionDate", label: "取引の年月日", section: "仕入情報", kind: "date" },
-  { key: "usedGoodsFeature", label: "古物の特徴", section: "仕入情報", custom: true },
+  // BELLO's existing custom field is TEXTAREA and historical values contain
+  // line breaks. Preserve that content when editing on a phone as on PC.
+  { key: "usedGoodsFeature", label: "古物の特徴", section: "仕入情報", custom: true, kind: "multiline" },
   { key: "purchaseQuantity", label: "数量（仕入）", section: "仕入情報", kind: "integer" },
-  { key: "transactionType", label: "取引区分", section: "仕入情報" },
-  { key: "identityVerificationMethod", label: "取引相手の真偽の確認のためにとった措置の区分および方法", section: "仕入情報", kind: "multiline" },
+  { key: "transactionType", label: "取引区分", section: "仕入情報", options: ZAICO_FIELD_CHOICES.transactionType },
+  { key: "identityVerificationMethod", label: "取引相手の真偽の確認のためにとった措置の区分および方法", section: "仕入情報", options: ZAICO_FIELD_CHOICES.identityVerificationMethod },
   { key: "counterpartyName", label: "相手氏名", section: "仕入情報" },
-  { key: "counterpartyOccupation", label: "職業", section: "仕入情報" },
+  { key: "counterpartyOccupation", label: "職業", section: "仕入情報", options: ZAICO_FIELD_CHOICES.counterpartyOccupation },
   { key: "counterpartyAddress", label: "住所", section: "仕入情報", kind: "multiline" },
   { key: "purchasePrice", label: "購入価格", section: "仕入情報", kind: "money" },
   { key: "shippingCost", label: "送料", section: "仕入情報", kind: "money" },
   { key: "dailyPurchaseTotal", label: "その日の仕入れ合計金額（他商品含む）", section: "仕入情報", kind: "money" },
   { key: "saleStartDate", label: "販売開始日", section: "販売情報", kind: "date", feature: "sales" },
   { key: "saleEndDate", label: "販売終了日", section: "販売情報", kind: "date", feature: "sales" },
-  { key: "market", label: "市場", section: "販売情報", feature: "sales" },
+  { key: "market", label: "市場", section: "販売情報", feature: "sales", options: ZAICO_FIELD_CHOICES.market },
   { key: "externalProductId", label: "商品ID", section: "販売情報", feature: "ecListing" },
   { key: "salePrice", label: "販売価格", section: "販売情報", kind: "money", feature: "sales" },
   { key: "listingNotes", label: "出品情報", section: "販売情報", kind: "multiline", feature: "ecListing" },
