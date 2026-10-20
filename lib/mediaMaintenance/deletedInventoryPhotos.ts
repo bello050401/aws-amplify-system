@@ -20,7 +20,7 @@ export async function markDeletedInventoryPhotos(
   onlyBatchIds?: ReadonlySet<string>,
 ) {
   let cursor: Record<string, unknown> | undefined;
-  const batches: Record<string, any>[] = [];
+  const batches: Record<string, unknown>[] = [];
   do {
     const r = await db.send(
       new ScanCommand({
@@ -40,7 +40,7 @@ export async function markDeletedInventoryPhotos(
   } while (cursor);
   const result = { marked: 0, protected: 0, failures: [] as string[] };
   for (const batch of batches) {
-    if (onlyBatchIds && !onlyBatchIds.has(batch.id)) continue;
+    if (onlyBatchIds && !onlyBatchIds.has(String(batch.id))) continue;
     if (
       !/^[0-9a-f-]{36}$/i.test(String(batch.inventoryId)) ||
       batch.openRevisionRevision != null
@@ -55,7 +55,7 @@ export async function markDeletedInventoryPhotos(
     );
     if (owner.Item) continue;
     let after: Record<string, unknown> | undefined,
-      deletion: Record<string, any> | undefined;
+      deletion: Record<string, unknown> | undefined;
     do {
       const r = await db.send(
         new QueryCommand({
