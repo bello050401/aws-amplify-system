@@ -156,6 +156,9 @@ async function main(){
     assert.equal(p.optional_attributes['未知の項目'],'残す');assert.equal(p.optional_attributes['⚫︎購入価格'],'300');
     assert.equal(p.optional_attributes['未入力の項目'],'');
     assert.ok(Object.values(p.optional_attributes).every(value=>typeof value==='string'));
+    h.masters.attributeNames=['⚪︎コンディション評価(1～5の5段階で)'];
+    const create=outgoingPatch({conditionRating:'4',purchasePrice:null},undefined,h.masters);
+    assert.deepEqual(create.optional_attributes,{'⚪︎コンディション評価(1～5の5段階で)':'4'});
   });
   console.log(`PASS ${checks} transition workflow scenarios`);
 }

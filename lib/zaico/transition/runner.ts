@@ -155,6 +155,12 @@ export async function runTransition(p:TransitionPort){
   const window=await p.readArchive(control.work.key);
   if(!Array.isArray(window.remote)||window.end!==control.work.end||typeof window.initial!=='boolean')
     throw Error('保存された同期範囲を確認できません。');
+  // Reuse observed company field labels (including full-width punctuation) for
+  // new items. This needs no extra ZAICO request and avoids guessing aliases.
+  masters.attributeNames=[...new Set([
+    ...states.flatMap(s=>Object.keys(s.remote?.optional_attributes??{})),
+    ...window.remote.flatMap(r=>Object.keys(r.optional_attributes??{})),
+  ])];
   const remoteIds=new Set(window.remote.map((r:V2Inventory)=>String(r.id)));
   // FULL omissions without an explicit tombstone are never assumed to be deletes.
   for(let index=control.work.index;index<window.remote.length;index++){

@@ -12,6 +12,7 @@ export {RAW_VALUES} from './rawValues';
 export type Row=Record<string,any>;
 export interface Masters {
   categories:Row[]; locations:Row[]; statuses:Row[];
+  attributeNames?:string[];
   resolve:(kind:'Category'|'Location'|'StatusMaster',name:string)=>Promise<string>;
 }
 const optionalTargets=new Map<string,{name:string;kind:'coreField'|'extendedField'|'customField';field:string}>();
@@ -101,14 +102,18 @@ export function outgoingPatch(changes:SharedFields,remote:V2Inventory|undefined,
     else if(field==='locationId')patch.place=masterName(masters.locations,value);
     else if(field==='statusId')patch.state=masterName(masters.statuses,value,'label');
     else {
+      if(!remote&&value===null)continue; // New items do not need blank optional fields sent.
       const target=optionalTargets.get(field);
       if(!target)throw Error(`同期未対応の項目です: ${field}`);
       // Update every alias already present, otherwise the canonical source name.
-      const names=Object.keys(optional).filter(name=>{
+      const matches=(name:string)=>{
         const t=resolveZaicoAttributeTarget(name);
         return t.kind!=='unmapped'&&(t.kind==='customField'?`custom.${t.fieldKey}`:t.field)===field;
-      });
-      for(const name of names.length?names:[target.name])optional[name]=value===null?'':String(value);
+      };
+      const existing=Object.keys(optional).filter(matches);
+      const observed=(masters.attributeNames??[]).filter(matches);
+      const names=existing.length?existing:observed.length?observed:[target.name];
+      for(const name of names)optional[name]=value===null?'':String(value);
       optionalChanged=true;
     }
   }
