@@ -23,6 +23,23 @@ async function validateCategoryIds(ids:string[]) {
   if(entries.some(x=>!x.Item)) throw new InventoryMutationRejected('CATEGORY_INVALID');
 }
 const barcodeKey=(value:string)=>createHash('sha256').update(value).digest('hex');
+async function releaseBarcodeClaim(id:string,value:string):Promise<InventoryTransaction>{
+  const claim=await inventoryDdb.send(new GetCommand({TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(value)},ConsistentRead:true}));
+  if(claim.Item?.inventoryId!==id)return [];
+  // Partial outbound stock intentionally shares its product barcode. Keep the
+  // claim owned by a surviving page when its original page is changed/deleted.
+  let key:Record<string,unknown>|undefined;
+  do{
+    const page=await inventoryDdb.send(new ScanCommand({TableName:inventoryTable('Inventory'),ProjectionExpression:'id',FilterExpression:'barcode=:barcode AND id<>:id AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':barcode':value,':id':id},ExclusiveStartKey:key,ConsistentRead:true}));
+    const survivor=page.Items?.[0];
+    if(survivor)return [
+      {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:survivor.id},ConditionExpression:'barcode=:barcode AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':barcode':value}}},
+      {Update:{TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(value)},UpdateExpression:'SET inventoryId=:next',ConditionExpression:'inventoryId=:owner',ExpressionAttributeValues:{':next':survivor.id,':owner':id}}},
+    ];
+    key=page.LastEvaluatedKey;
+  }while(key);
+  return [{Delete:{TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(value)},ConditionExpression:'inventoryId=:owner',ExpressionAttributeValues:{':owner':id}}}];
+}
 async function barcodeChanges(id:string,before:unknown,after:unknown,now:string):Promise<InventoryTransaction> {
   const value=typeof after==='string'?after.trim():'';
   const old=typeof before==='string'?before.trim():'';
@@ -41,8 +58,7 @@ async function barcodeChanges(id:string,before:unknown,after:unknown,now:string)
   if(value) changes.push({Put:{TableName:inventoryTable('BarcodeClaim'),Item:{id:barcodeKey(value),inventoryId:id,createdAt:now,updatedAt:now,__typename:'BarcodeClaim'},
     ConditionExpression:'attribute_not_exists(id) OR inventoryId = :owner',ExpressionAttributeValues:{':owner':id}}});
   if(old) {
-    const claim=await inventoryDdb.send(new GetCommand({TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(old)},ConsistentRead:true}));
-    if(claim.Item?.inventoryId===id) changes.push({Delete:{TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(old)},ConditionExpression:'inventoryId = :owner',ExpressionAttributeValues:{':owner':id}}});
+    changes.push(...await releaseBarcodeClaim(id,old));
   }
   return changes;
 }
@@ -90,8 +106,7 @@ async function deleteInventoryWithCategories(id:string,expectedUpdatedAt:string)
   const changes:InventoryTransaction=[{Delete:{TableName:inventoryTable('Inventory'),Key:{id},ConditionExpression:'updatedAt = :version AND attribute_not_exists(outboundBatchId)',ExpressionAttributeValues:{':version':expectedUpdatedAt}}},...categoryLinkChanges(id,inventoryCategoryIds(row),[],new Date().toISOString())];
   const barcode=typeof row.barcode==='string'?row.barcode.trim():'';
   if(barcode) {
-    const claim=await inventoryDdb.send(new GetCommand({TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(barcode)},ConsistentRead:true}));
-    if(claim.Item?.inventoryId===id) changes.push({Delete:{TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(barcode)},ConditionExpression:'inventoryId = :owner',ExpressionAttributeValues:{':owner':id}}});
+    changes.push(...await releaseBarcodeClaim(id,barcode));
   }
   try {await inventoryDdb.send(new TransactWriteCommand({TransactItems:changes}));}
   catch(error) {throw new InventorySaveError(error instanceof Error && error.name==='TransactionCanceledException'?'CONFLICT':'UNCONFIRMED');}

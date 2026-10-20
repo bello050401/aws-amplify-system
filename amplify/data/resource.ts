@@ -333,6 +333,7 @@ const schema = a.schema({
     isActive: a.boolean().default(true), sortOrder: a.integer().default(0),
     sender: a.string().required(), template: a.json().required(), fileNamePattern: a.string().required(),
     preparationStatus: a.string().default('WAITING_TEMPLATE'), slackChannelId: a.string(),
+    templateType: a.string(), emailTo: a.string(), emailFrom: a.string(),
   }).authorization(allow => [allow.group('ADMIN'), allow.group('EDITOR').to(['read']), allow.group('VIEWER').to(['read'])]),
 
   OutboundBatch: a.model({
@@ -340,14 +341,20 @@ const schema = a.schema({
     categoryId: a.string().required(), locationId: a.string().required(),
     requestedBy: a.string().required(), fingerprint: a.string().required(),
     status: a.string().required(), template: a.json().required(), fileName: a.string().required(), sender: a.string().required(),
+    arrivalDate: a.date(), orderNumber: a.string(), templateType: a.string(), emailTo: a.string(), emailFrom: a.string(),
+    emailStatus: a.string(), emailMessageId: a.string(), emailError: a.string(), emailSentAt: a.datetime(), emailConfirmedBy: a.string(), emailConfirmedAt: a.datetime(),
   }).authorization(allow => [allow.group('ADMIN').to(['read']), allow.group('EDITOR').to(['read']), allow.group('VIEWER').to(['read'])]),
 
   OutboundItem: a.model({
     batchId: a.string().required(), inventoryId: a.string().required(),
     status: a.string().required(), snapshot: a.json().required(), expectedUpdatedAt: a.string(),
     error: a.string(), sentAt: a.datetime(), sentBy: a.string(),
+    sourceQuantity: a.integer(), detailNote: a.string(), splitInventoryId: a.string(), splitSku: a.string(), splitImages: a.json(), splitPrepared: a.boolean(),
   }).secondaryIndexes(index => [index('batchId'), index('inventoryId')])
     .authorization(allow => [allow.group('ADMIN').to(['read']), allow.group('EDITOR').to(['read']), allow.group('VIEWER').to(['read'])]),
+
+  OutboundSequence: a.model({ sequence: a.integer().required() })
+    .authorization(allow => [allow.group('ADMIN').to(['read'])]),
 
   BarcodeClaim: a.model({ inventoryId: a.string().required() })
     .authorization(allow => [allow.group('ADMIN').to(['read']), allow.group('EDITOR').to(['read'])]),

@@ -687,10 +687,14 @@ backend.salesAggregateScheduler.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaic
 if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {
   const outboundStack = backend.createStack('OutboundRuntime');
   const role = Role.fromRoleName(outboundStack, 'ExistingComputeRole', 'BelloAmplifyStagingComputeRole');
-  const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','InventoryHistory'].map(name=>backend.data.resources.tables[name].tableArn);
+  const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','OutboundSequence','InventoryHistory'].map(name=>backend.data.resources.tables[name].tableArn);
   const readable = ['Category','Location'].map(name=>backend.data.resources.tables[name].tableArn);
   new ManagedPolicy(outboundStack,'RuntimeAccess',{roles:[role],statements:[
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:writable}),
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query'],resources:readable}),
+    new PolicyStatement({actions:['ses:GetEmailIdentity'],resources:['*']}),
+    new PolicyStatement({actions:['ses:SendEmail','ses:SendRawEmail'],resources:[`arn:aws:ses:us-west-2:${outboundStack.account}:identity/bello050401@gmail.com`],conditions:{StringEquals:{'ses:FromAddress':'bello050401@gmail.com'},'ForAllValues:StringEquals':{'ses:Recipients':['bello050401@gmail.com']}}}),
+    new PolicyStatement({actions:['s3:GetObject','s3:PutObject','s3:DeleteObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/*')]}),
+    new PolicyStatement({actions:['s3:ListBucket'],resources:[backend.storage.resources.bucket.bucketArn],conditions:{StringLike:{'s3:prefix':['inventory/outbound/*']}}}),
   ]});
 }

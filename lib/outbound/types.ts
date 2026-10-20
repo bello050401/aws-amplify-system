@@ -1,10 +1,11 @@
 export type OutboundColumn = { key: 'sku'|'barcode'|'name'|'quantity'|'unit'|'width'|'depth'|'height'|'location'; label:string };
-export interface OutboundDestination {id:string; name:string; categoryId:string; locationId:string; isActive:boolean; sortOrder:number; sender:string; template:OutboundColumn[]; fileNamePattern:string; preparationStatus?:'ON_HOLD'|'WAITING_TEMPLATE'|'READY'; slackChannelId?:string|null;updatedAt?:string}
+export interface OutboundDestination {id:string; name:string; categoryId:string; locationId:string; isActive:boolean; sortOrder:number; sender:string; template:OutboundColumn[]; fileNamePattern:string; preparationStatus?:'ON_HOLD'|'WAITING_TEMPLATE'|'READY'; slackChannelId?:string|null;updatedAt?:string;templateType?:string;emailTo?:string;emailFrom?:string}
 export interface OutboundProduct {id:string;sku:string;name:string;barcode:string;quantity:number;unit:string;updatedAt:string;thumbnailUrl?:string|null;location:string;[key:string]:unknown}
-export interface OutboundRow {id:string;inventoryId:string;batchId:string;status:'PENDING'|'SENT'|'SKIPPED'|'CANCELLED';snapshot:OutboundProduct;error?:string;expectedUpdatedAt?:string;sentAt?:string;sentBy?:string}
-export interface OutboundBatch {id:string;destinationId:string;destinationName:string;categoryId:string;locationId:string;status:string;requestedBy:string;fingerprint:string;template:OutboundColumn[];fileName:string;sender:string;createdAt:string;rows:OutboundRow[]}
+export interface OutboundSelection {id:string;updatedAt:string;quantity?:number;detailNote?:string}
+export interface OutboundRow {id:string;inventoryId:string;batchId:string;status:'PENDING'|'SENT'|'SKIPPED'|'CANCELLED';snapshot:OutboundProduct;error?:string;expectedUpdatedAt?:string;sentAt?:string;sentBy?:string;sourceQuantity?:number;detailNote?:string;splitInventoryId?:string;splitSku?:string;splitImages?:unknown;splitPrepared?:boolean}
+export interface OutboundBatch {id:string;destinationId:string;destinationName:string;categoryId:string;locationId:string;status:string;requestedBy:string;fingerprint:string;template:OutboundColumn[];fileName:string;sender:string;createdAt:string;updatedAt?:string;rows:OutboundRow[];arrivalDate?:string;orderNumber?:string;templateType?:string;emailTo?:string;emailFrom?:string;emailStatus?:string;emailMessageId?:string;emailError?:string}
 export function outboundStatusLabel(status:string):string {
-  return ({PREPARING:'作成途中',AWAITING_SEND:'送信待ち',APPLYING:'商品情報を更新中',PARTIAL:'商品情報の更新未完了',COMPLETED:'完了',CANCELLING:'取消処理中',CANCELLED:'取消済み'} as Record<string,string>)[status]??'状態を確認してください';
+  return ({PREPARING:'作成途中',AWAITING_SEND:'送信待ち',SENDING:'メール送信中',SEND_UNKNOWN:'メール送信結果の確認が必要',APPLYING:'商品情報を更新中',PARTIAL:'商品情報の更新未完了',COMPLETED:'完了',CANCELLING:'取消処理中',CANCELLED:'取消済み'} as Record<string,string>)[status]??'状態を確認してください';
 }
 export function outboundRowLabel(row:OutboundRow,batchStatus:string):string {
   if(row.status==='PENDING'&&['PARTIAL','APPLYING'].includes(batchStatus))return '送信記録済み・商品情報の更新未完了';
