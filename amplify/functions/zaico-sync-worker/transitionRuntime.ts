@@ -1,12 +1,13 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {DynamoDBClient} from '@aws-sdk/client-dynamodb';
-import {DynamoDBDocumentClient,ScanCommand,PutCommand,type ScanCommandOutput} from '@aws-sdk/lib-dynamodb';
+import {DynamoDBDocumentClient,ScanCommand,PutCommand,UpdateCommand,type ScanCommandOutput} from '@aws-sdk/lib-dynamodb';
 import {S3Client,PutObjectCommand,GetObjectCommand,HeadObjectCommand,CopyObjectCommand} from '@aws-sdk/client-s3';
 import {SecretsManagerClient,GetSecretValueCommand} from '@aws-sdk/client-secrets-manager';
 import {createInventoryPersistence} from '../../../lib/inventory/categoryPersistenceCore';
 import {createV2Client} from '../../../lib/zaico/transition/v2Client';
 import {CONTROL_ID,transitionStore,type Control} from '../../../lib/zaico/transition/store';
 import {runTransition,type TransitionPort} from '../../../lib/zaico/transition/runner';
+import {sourceIdentityUpdate} from '../../../lib/zaico/transition/identity';
 import type {Masters,Row} from '../../../lib/zaico/transition/mapping';
 import {createLambdaSyncPort} from './lambdaSyncPort';
 
@@ -123,6 +124,12 @@ export async function runConfiguredTransition():Promise<boolean>{
     },
     saveInventory:async(row,expected)=>{
       await store.assertLease(owner);
+      const identity=sourceIdentityUpdate(table('Inventory'),row,expected);
+      if(identity){
+        const result=await db.send(new UpdateCommand(identity));
+        if(!result.Attributes)throw Error('同期後の在庫を確認できません。');
+        return result.Attributes;
+      }
       const result=await persistence.persistInventoryWithCategories({...row,listUpdatedAt:new Date().toISOString()},expected,{preserveZaicoSourceBarcode:true});
       const saved=await persistence.getInventoryRaw(result.id);
       if(!saved)throw Error('同期後の在庫を確認できません。');
