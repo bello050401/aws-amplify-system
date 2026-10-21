@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {sourceIdentityUpdate} from '../lib/zaico/transition/identity';
 import {harness} from './verify-zaico-transition-runner';
 import {applyFields,RAW_VALUES} from '../lib/zaico/transition/mapping';
+import type {V2Inventory} from '../lib/zaico/transition/v2Client';
 
 async function main(){
  const input={id:'local',sourceSystem:'ZAICO',sourceInventoryId:'999'};
@@ -21,7 +22,7 @@ async function main(){
  assert.equal(JSON.parse(applyFields({id:'x'},{},{price:{value:'invalid'}}).customFields)[RAW_VALUES].price.value,'invalid');
  const h=harness();h.control={...h.control,phase:'ACTIVE',initialCompletedAt:'2026-10-20T00:00:00Z'};
  h.port.api.create=async(body)=>{
-   const created={optional_attributes:{},...body,id:999,deleted:false};h.remotes.set('999',created);
+   const created={optional_attributes:{},...body,id:999,deleted:false} as V2Inventory;h.remotes.set('999',created);
    return {data:created};
  };
  const version='2026-10-20T12:00:00Z';
