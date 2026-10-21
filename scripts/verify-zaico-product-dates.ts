@@ -48,6 +48,10 @@ async function main(){
  assert.deepEqual([old,recent].sort(inventoryComparator({field:'updatedAt',direction:'desc'},fields)).map(x=>x.id),['a','z']);
  const tied={...recent,id:'b',sourceInventoryId:'10'};
  assert.deepEqual([recent,tied].sort(compareInventoryDateDesc).map(x=>x.id),['b','a']);
+ for(const field of ['createdAt','updatedAt']){
+  assert.deepEqual([tied,recent].sort(inventoryComparator({field,direction:'asc'},fields)).map(x=>x.id),['a','b']);
+  assert.deepEqual([recent,tied].sort(inventoryComparator({field,direction:'desc'},fields)).map(x=>x.id),['b','a']);
+ }
  assert.equal(productUpdatedAt({updatedAt:version}),version);
  assert.equal(toListRow({...old,sku:'B1',name:'old',images:[]} as any).listUpdatedAt,old.listUpdatedAt);
  assert.ok(buildScanProjection(['updatedAt']).attributes.includes('listUpdatedAt'));
@@ -55,6 +59,7 @@ async function main(){
   assert.equal(evaluateQuery(old,{combinator:'AND',conditions:[{id:'date',field:'createdAt',operator:'on',value:'2022-05-07'}]},fields),true);
  const cached=[old,recent].map(x=>({...x,displayId:x.sourceInventoryId,name:x.id,sku:x.id,quantity:1,unit:'',location:'',category:'',condition:'',note:'',barcode:'',plannedSalePrice:null,thumbnailUrl:null} as InventoryItem));
  assert.deepEqual(cachedInventorySearch(cached,{},defs).map(x=>x.id),['a','z']);
+ assert.deepEqual(cachedInventorySearch(cached,{sort:{field:'createdAt',direction:'asc'}},defs).map(x=>x.id),['z','a']);
  console.log('PASS source screen dates, metadata-only echo, no outbound loop, pending/concurrent edit preservation, PC/search/PWA ordering and projections');
 }
 main().catch(e=>{console.error(e);process.exitCode=1});

@@ -18,6 +18,11 @@ export function inventoryComparator(sort: InventorySort, fields: Map<string, Sea
     const aEmpty = av == null || av === "", bEmpty = bv == null || bv === "";
     if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
     const compared = def?.valueType === "number" && !aEmpty ? Number(av) - Number(bv) : collator.compare(String(av ?? ""), String(bv ?? ""));
-    return (Number.isFinite(compared) && compared !== 0 ? compared * (sort.direction === "asc" ? 1 : -1) : collator.compare(String(b.sourceInventoryId ?? b.id), String(a.sourceInventoryId ?? a.id)));
+    const direction = sort.direction === "asc" ? 1 : -1;
+    if (Number.isFinite(compared) && compared !== 0) return compared * direction;
+    // ZAICO uses the same direction for inventory IDs when product dates tie.
+    // Old imports often share midnight timestamps, so this also defines pages.
+    const dateTie = sort.field === 'createdAt' || sort.field === 'updatedAt';
+    return collator.compare(String(a.sourceInventoryId ?? a.id), String(b.sourceInventoryId ?? b.id)) * (dateTie ? direction : -1) || 0;
   };
 }
