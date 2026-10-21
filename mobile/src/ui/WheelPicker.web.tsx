@@ -3,7 +3,9 @@ import type {WheelPickerProps} from "./WheelPicker";
 export function WheelPicker({label,options,value,onChange}:WheelPickerProps) {
   const node=useRef<HTMLDivElement>(null);
   useEffect(()=>{if(node.current)node.current.scrollTop=Math.max(0,options.findIndex(option=>option.value===value))*44;},[]);
-  const choose=(index:number)=>{const bounded=Math.max(0,Math.min(options.length-1,index));onChange(options[bounded].value);node.current?.scrollTo({top:bounded*44,behavior:"smooth"});};
+  // A tap must select the destination immediately: animated intermediate scroll
+  // events could otherwise restore the old choice just before tapping Done.
+  const choose=(index:number)=>{const bounded=Math.max(0,Math.min(options.length-1,index));node.current?.scrollTo({top:bounded*44,behavior:"instant"});onChange(options[bounded].value);};
   return <div style={{flex:1,position:"relative",minWidth:0}}>
     <div aria-hidden style={{position:"absolute",top:88,left:0,right:0,height:44,background:"#e2e3e7",borderRadius:10}}/>
     <div ref={node} role="listbox" aria-label={label} tabIndex={0} aria-activedescendant={`${label}-${value}`}
