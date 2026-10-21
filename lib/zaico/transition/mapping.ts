@@ -2,7 +2,7 @@ import {mapZaicoCoreFields,mapZaicoOptionalAttributes,resolveZaicoAttributeTarge
 import {parseCustomFields} from '../../inventory/zaicoSyncEngine';
 import {inventoryCategoryIds,splitCategoryNames} from '../../inventory/categories';
 import {type V2Inventory,toLegacyInventory} from './v2Client';
-import type {SharedFields} from './protocol';
+import {equal,type SharedFields} from './protocol';
 import {RAW_VALUES} from './rawValues';
 
 export {RAW_VALUES} from './rawValues';
@@ -71,14 +71,15 @@ export async function remoteFields(remote:V2Inventory,masters:Masters){
 
 export function applyFields(row:Row,fields:SharedFields,raw?:Record<string,unknown>):Row {
   const update:Row={id:row.id,updatedBy:'ZAICO暫定同期'};
-  const custom={...parseCustomFields(row.customFields)};
+  const originalCustom=parseCustomFields(row.customFields)??{};
+  const custom={...originalCustom};
   for(const [key,value] of Object.entries(fields)){
     if(key.startsWith('custom.'))custom[key.slice(7)]=value;
     else update[key]=value;
   }
-  if(raw!==undefined)custom[RAW_VALUES]=raw;
+  if(raw!==undefined&&(Object.keys(raw).length||Object.prototype.hasOwnProperty.call(originalCustom,RAW_VALUES)))custom[RAW_VALUES]=raw;
   // Remote application is not an interactive edit; keep source baseline separate.
-  update.customFields=JSON.stringify(custom);
+  update.customFields=equal(custom,originalCustom)?row.customFields:JSON.stringify(custom);
   return update;
 }
 
