@@ -33,6 +33,12 @@ export interface TransitionPort{
 const active=(row:Row|undefined)=>row&&!row.deletedAt&&row.listingPartition!=='MERGED';
 const done=(p:TransitionPort)=>p.now()>=p.deadline-25_000;
 function message(e:unknown){return e instanceof Error?e.message:'同期に失敗しました。';}
+function assignedCreateCode(state:Row|undefined,local:Row|undefined,remote:SharedFields){
+  const assigned=state?.remoteBase?.barcode;
+  return active(local)&&state?.desired&&Object.prototype.hasOwnProperty.call(state.desired,'barcode')&&
+    !state.desired.barcode&&!state.localBase?.barcode&&!local!.barcode&&
+    typeof assigned==='string'&&/^tw\d{1,100}$/.test(assigned)&&assigned===remote.barcode?assigned:undefined;
+}
 
 /**
  * One durable server lease surrounds this runner. Local comparisons use AWS
@@ -86,6 +92,16 @@ export async function runTransition(p:TransitionPort){
       return;
     }
     const proposed=await remoteFields(remote,masters);
+    // Recover older creates where ZAICO's generated code was misclassified as
+    // a rejected field. Only accept the exact code observed at creation, while
+    // the original request and the current local code are both still blank.
+    const assigned=assignedCreateCode(state,local,proposed.fields);
+    if(!initial&&assigned&&state){
+      // A barcode is a real editable field: advance the edit version so a
+      // form opened before assignment cannot silently overwrite the new code.
+      local=await p.saveInventory({id:local!.id,barcode:assigned,updatedBy:'ZAICO暫定同期'},local!.updatedAt);
+      state={...state,localBase:{...state.localBase,barcode:assigned}};
+    }
     if(state?.status==='WRITE_REJECTED'&&local&&equal(proposed.fields,state.remoteBase)&&equal(localFields(local),state.rejectedDesired))return;
     if(!active(local)&&state&&!initial){
       // A local deletion is a pending outbound operation, not a request to
@@ -243,16 +259,21 @@ export async function runTransition(p:TransitionPort){
         const sourceId=String(response?.data?.id??'');
         if(!/^[1-9]\d*$/.test(sourceId))throw Error('ZAICO新規作成の結果を確認できません。自動再作成は停止しました。');
         state=await save({...state,sourceId,status:'VERIFYING'});
-        // Preserve concurrent edits; attaching the source identity uses the current row version.
-        const latest=await p.inventory(id);
-        if(!latest)throw Error('ZAICO作成中にBELLO商品が削除されました。管理者の確認が必要です。');
-        local=await p.saveInventory({id,sourceSystem:'ZAICO',sourceInventoryId:sourceId},latest.updatedAt);
-        bySource.set(sourceId,local);
         const verified=await p.api.get(sourceId);
         if(!verified)throw Error('作成したZAICO商品を再取得できませんでした。');
         const actual=await remoteFields(verified,masters);
-        const mismatches=changedFields(desired,actual.fields);
-        state=await save({...state,remote:verified,remoteBase:actual.fields,localBase:desired,
+        // ZAICO generates a tw-code when a new product has no barcode. It is
+        // an initial assigned value, not a rejected save or a later user edit.
+        const generated=!desired.barcode&&typeof actual.fields.barcode==='string'&&/^tw\d{1,100}$/.test(actual.fields.barcode)?actual.fields.barcode:undefined;
+        const accepted=generated?{...desired,barcode:generated}:desired;
+        // Preserve concurrent edits; only fill a code which is still blank.
+        const latest=await p.inventory(id);
+        if(!latest)throw Error('ZAICO作成中にBELLO商品が削除されました。管理者の確認が必要です。');
+        local=await p.saveInventory({id,sourceSystem:'ZAICO',sourceInventoryId:sourceId},latest.updatedAt);
+        if(generated&&!latest.barcode)local=await p.saveInventory({id,barcode:generated,updatedBy:'ZAICO暫定同期'},local.updatedAt);
+        bySource.set(sourceId,local);
+        const mismatches=changedFields(accepted,actual.fields);
+        state=await save({...state,remote:verified,remoteBase:actual.fields,localBase:accepted,
           status:Object.keys(mismatches).length?'ERROR':'OK',error:Object.keys(mismatches).length?'ZAICOで保存されなかった項目があります。':null});
         await checkpoint();
         continue;
@@ -284,7 +305,14 @@ export async function runTransition(p:TransitionPort){
         await checkpoint();
         continue;
       }
-      const decision=reconcileFields(state.remoteBase,desired,current.fields);
+      // Failed legacy creates may be outside the next delta window. Recover
+      // their assigned code from this mandatory read before computing writes.
+      if(assignedCreateCode(state,local,current.fields)){
+        await acceptRemote(fresh,false);
+        state=stateById.get(id)!;local=await p.inventory(id);
+      }
+      if(!local)continue;
+      const decision=reconcileFields(state.remoteBase,localFields(local),current.fields);
       if(Object.keys(decision.toBello).length||decision.conflicts.length){
         await acceptRemote(fresh,false);
         state=stateById.get(id)!;local=await p.inventory(id);
