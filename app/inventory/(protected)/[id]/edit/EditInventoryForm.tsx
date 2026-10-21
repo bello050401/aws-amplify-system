@@ -1,4 +1,5 @@
 "use client";
+import {formatJstDateTime} from "@/lib/inventory/formatJst";
 import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {CategoryMultiSelect} from "@/app/inventory/CategoryMultiSelect";
 import {inventoryCategoryIds} from "@/lib/inventory/categories";
@@ -470,7 +471,5 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
  * の純粋関数を2箇所に持つ方が、詳細画面のdiffをゼロに保つより安全。
  */
 function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return formatJstDateTime(iso);
 }

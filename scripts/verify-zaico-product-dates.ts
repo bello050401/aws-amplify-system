@@ -52,6 +52,7 @@ async function main(){
  assert.equal(toListRow({...old,sku:'B1',name:'old',images:[]} as any).listUpdatedAt,old.listUpdatedAt);
  assert.ok(buildScanProjection(['updatedAt']).attributes.includes('listUpdatedAt'));
  assert.equal(evaluateQuery(old,{combinator:'AND',conditions:[{id:'date',field:'updatedAt',operator:'after',value:'2026-01-01'}]},fields),false);
+  assert.equal(evaluateQuery(old,{combinator:'AND',conditions:[{id:'date',field:'createdAt',operator:'on',value:'2022-05-07'}]},fields),true);
  const cached=[old,recent].map(x=>({...x,displayId:x.sourceInventoryId,name:x.id,sku:x.id,quantity:1,unit:'',location:'',category:'',condition:'',note:'',barcode:'',plannedSalePrice:null,thumbnailUrl:null} as InventoryItem));
  assert.deepEqual(cachedInventorySearch(cached,{},defs).map(x=>x.id),['a','z']);
  console.log('PASS source screen dates, metadata-only echo, no outbound loop, pending/concurrent edit preservation, PC/search/PWA ordering and projections');

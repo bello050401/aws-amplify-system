@@ -1,3 +1,4 @@
+import {formatJstDateTime} from "@/lib/inventory/formatJst";
 import {productUpdatedAt} from "./productDates";
 import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
 import { nowInJst } from "@/lib/inventory/sales";
@@ -104,8 +105,7 @@ function formatCellValue(value: unknown, valueType: ExportFieldDef["valueType"])
   if (valueType === "datetime") {
     const d = new Date(String(value));
     if (Number.isNaN(d.getTime())) return String(value);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return formatJstDateTime(String(value));
   }
   return String(value);
 }

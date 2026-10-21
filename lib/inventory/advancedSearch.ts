@@ -273,8 +273,14 @@ export function evaluateCondition(record: SearchableRecord, def: SearchFieldDef,
     case "number":
       return matchNumber(raw, condition.operator, condition.value, condition.value2);
     case "date":
-    case "datetime":
       return matchDate(raw, condition.operator, condition.value, condition.value2);
+    case "datetime": {
+      // Product dates are stored in UTC but the calendar filter is Japanese
+      // local time, just like the date rendered in the inventory screens.
+      const time = typeof raw === 'string' ? Date.parse(raw) : NaN;
+      const day = Number.isFinite(time) ? new Date(time + 9 * 60 * 60 * 1000).toISOString().slice(0,10) : raw;
+      return matchDate(day, condition.operator, condition.value, condition.value2);
+    }
     case "category":
     case "location":
     case "status":
