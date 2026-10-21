@@ -36,6 +36,7 @@ export interface InventoryItem {
   thumbnailUrl: string | null;
   createdAt?: string;
   updatedAt: string;
+  listUpdatedAt?: string;
   details?: DetailValues;
   photos?: InventoryPhoto[];
   photosComplete?: boolean;

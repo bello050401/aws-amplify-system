@@ -1,3 +1,4 @@
+import {productDateValue} from "./productDates";
 /**
  * ZAICO同等の汎用詳細検索エンジン(夜間開発指示書 §7)。
  *
@@ -267,7 +268,7 @@ export function evaluateCondition(record: SearchableRecord, def: SearchFieldDef,
     if(condition.operator === "isNotEmpty") return record.categoryIds.length > 0;
     return condition.operator === "equals" && record.categoryIds.includes(condition.value);
   }
-  const raw = def.key.startsWith("cf:") ? record.customFields?.[def.key.slice(3)] : record[def.key];
+  const raw = def.key.startsWith("cf:") ? record.customFields?.[def.key.slice(3)] : productDateValue(record,def.key);
   switch (def.valueType) {
     case "number":
       return matchNumber(raw, condition.operator, condition.value, condition.value2);

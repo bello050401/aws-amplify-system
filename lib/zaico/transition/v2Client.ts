@@ -1,6 +1,8 @@
 import type {ZaicoInventory} from '../client';
 
 export interface V2Inventory extends Omit<ZaicoInventory,'optional_attributes'> {
+  /** Product update date displayed by ZAICO, distinct from API bookkeeping. */
+  update_date?:string|null;
   deleted:boolean;
   optional_attributes:Record<string,string|null>|null;
 }

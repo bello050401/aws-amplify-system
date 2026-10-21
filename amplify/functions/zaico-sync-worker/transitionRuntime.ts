@@ -8,6 +8,7 @@ import {createV2Client} from '../../../lib/zaico/transition/v2Client';
 import {CONTROL_ID,transitionStore,type Control} from '../../../lib/zaico/transition/store';
 import {runTransition,type TransitionPort} from '../../../lib/zaico/transition/runner';
 import {sourceIdentityUpdate} from '../../../lib/zaico/transition/identity';
+import {sourceDatesUpdate} from '../../../lib/zaico/transition/sourceDates';
 import type {Masters,Row} from '../../../lib/zaico/transition/mapping';
 import {createLambdaSyncPort} from './lambdaSyncPort';
 
@@ -130,10 +131,18 @@ export async function runConfiguredTransition():Promise<boolean>{
         if(!result.Attributes)throw Error('同期後の在庫を確認できません。');
         return result.Attributes;
       }
-      const result=await persistence.persistInventoryWithCategories({...row,listUpdatedAt:new Date().toISOString()},expected,{preserveZaicoSourceBarcode:true});
+      const result=await persistence.persistInventoryWithCategories({...row,listUpdatedAt:row.listUpdatedAt??new Date().toISOString()},expected,{preserveZaicoSourceBarcode:true});
       const saved=await persistence.getInventoryRaw(result.id);
       if(!saved)throw Error('同期後の在庫を確認できません。');
       return saved;
+    },
+    saveSourceDates:async(row,remote,includeUpdated)=>{
+      const command=sourceDatesUpdate(table('Inventory'),row,remote,includeUpdated);
+      if(!command)return row;
+      await store.assertLease(owner);
+      const result=await db.send(new UpdateCommand(command));
+      if(!result.Attributes)throw Error('商品の日時を確認できません。');
+      return result.Attributes;
     },
     deleteInventory:async(row)=>{
       await store.assertLease(owner);

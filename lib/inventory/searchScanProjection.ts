@@ -50,6 +50,7 @@
 export const ALWAYS_SCANNED_ATTRIBUTES = [
   "id",
   "updatedAt",
+  "listUpdatedAt",
   "sku",
   "name",
   "sourceSystem",
@@ -65,6 +66,7 @@ export const ALWAYS_SCANNED_ATTRIBUTES = [
  * scripts/verify-search-projection.ts が Inventory モデル定義と突き合わせる。
  */
 export function attributesForSearchFieldKey(key: string): string[] {
+  if (key === 'updatedAt') return ['updatedAt','listUpdatedAt'];
   // 表示用の在庫IDは保存された列ではなく導出値(lib/inventory/inventoryId.ts)。
   if (key === "displayId") return ["sku", "sourceSystem", "sourceInventoryId"];
   // 動的な追加項目は customFields(AWSJSON文字列)の中。個別に射影できない。

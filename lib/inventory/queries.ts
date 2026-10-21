@@ -1,6 +1,7 @@
 import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
 import {inventoryCategoryIds,categoryFilter} from "./categories";
 import { inventoryComparator, type InventorySort } from "./searchSort";
+import {compareInventoryDateDesc} from './productDates';
 import "server-only";
 import { requestCache } from "@/lib/amplify/requestCache";
 import { cachedMaster } from "./masterCache";
@@ -65,6 +66,8 @@ export interface InventoryListRow {
   imageCount: number;
   createdAt: string;
   updatedAt: string;
+  /** Business update date; updatedAt is still used for optimistic editing. */
+  listUpdatedAt?: string | null;
   // Additional optional list columns (統合改善指示書 §10) — the same
   // extendedFields already readable on the detail/edit screens, now also
   // available as opt-in list columns. See lib/inventory/listColumns.ts
@@ -130,6 +133,7 @@ export function toListRow(item: InventoryModel): InventoryListRow {
     })(),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
+    listUpdatedAt: item.listUpdatedAt ?? null,
     barcode: item.barcode ?? null,
     saleCommission: item.saleCommission ?? null,
     market: item.market ?? null,
@@ -295,10 +299,7 @@ export const SEARCH_MAX_SCAN_ITEMS = 20000;
  * ―既存画像へのサムネイル遡及生成で、ユーザーには見えないthumbnailKey
  * だけを書き込むためこの一覧の意図とは食い違う。
  */
-export function compareByUpdatedAtDesc(a: { id: string; updatedAt: string }, b: { id: string; updatedAt: string }): number {
-  if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
-  return a.id < b.id ? 1 : -1;
-}
+export const compareByUpdatedAtDesc = compareInventoryDateDesc;
 
 /**
  * 追加のAppSync filter条件(サイドバーのカテゴリ/保管場所/状態等、

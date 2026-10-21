@@ -67,7 +67,7 @@ export async function GET(request: Request) {
         location: (row.locationId && locationNames.get(row.locationId)) || "",
         category: inventoryCategoryIds(row).map(id=>categoryNames.get(id)).filter(Boolean).join(","),
         statusId: row.statusId, condition: (row.statusId && statusLabels.get(row.statusId)) || "", note: row.note ?? "", barcode: row.barcode ?? "",
-        plannedSalePrice: row.plannedSalePrice, thumbnailUrl: imageById.get(row.id) ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt,
+        plannedSalePrice: row.plannedSalePrice, thumbnailUrl: imageById.get(row.id) ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt, listUpdatedAt: row.listUpdatedAt ?? undefined,
       };
     });
     return NextResponse.json({ owner, role: session.role, items, imagesDeferred: images === "deferred", hasMore, nextOffset: offset+50, total: "total" in page ? page.total : null, totalQuantity: "totalQuantity" in page ? page.totalQuantity : null, fetchedAt: new Date().toISOString() }, { headers });

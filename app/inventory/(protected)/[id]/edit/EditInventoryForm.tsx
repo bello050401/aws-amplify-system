@@ -1,4 +1,5 @@
 "use client";
+import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {CategoryMultiSelect} from "@/app/inventory/CategoryMultiSelect";
 import {inventoryCategoryIds} from "@/lib/inventory/categories";
 
@@ -451,7 +452,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
             </div>
             <div>
               <dt className="text-gray-400">更新日時</dt>
-              <dd className="mt-0.5 text-[13px] text-gray-700">{formatDateTime(item.updatedAt)}</dd>
+              <dd className="mt-0.5 text-[13px] text-gray-700">{formatDateTime(productUpdatedAt(item))}</dd>
             </div>
           </dl>
         </div>

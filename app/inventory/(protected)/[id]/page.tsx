@@ -1,3 +1,4 @@
+import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {mergedInventoryTarget} from "@/lib/outbound/mergeInventory";
 import {unconvertedZaicoValues} from "@/lib/zaico/transition/rawValues";
 import {categoryLabels} from "@/lib/inventory/categories";
@@ -234,7 +235,7 @@ export default async function InventoryDetailPage({
   const managementRows: DetailInfoRow[] = [
     { label: "保管場所", value: location?.name ?? "-" },
     { label: "作成日", value: formatDateTime(item.createdAt) },
-    { label: "更新日", value: formatDateTime(item.updatedAt) },
+    { label: "更新日", value: formatDateTime(productUpdatedAt(item)) },
     { label: "作成者", value: item.createdBy ?? "-" },
     { label: "更新者", value: item.updatedBy ?? "-" },
     { label: "管理メモ", value: item.adminMemo || "-" },

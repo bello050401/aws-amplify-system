@@ -15,6 +15,7 @@ import {
 } from "./advancedSearch";
 import type { InventoryCursorListFilters } from "./inventoryCursorList";
 import { inventoryComparator, type InventorySort } from "./searchSort";
+import {compareInventoryDateDesc} from './productDates';
 import { recordQuery } from "@/lib/perf/queryTiming";
 
 /**
@@ -134,10 +135,7 @@ function toCandidate(raw: RawItem): SearchableRecord & { id: string; updatedAt: 
 }
 
 /** 従来と同じ並び(updatedAt DESC、同点はidで安定化)。 */
-function compareByUpdatedAtDesc(a: { id: string; updatedAt: string }, b: { id: string; updatedAt: string }): number {
-  if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
-  return a.id < b.id ? 1 : -1;
-}
+const compareByUpdatedAtDesc = compareInventoryDateDesc;
 
 /** 1セグメントぶんを最後まで辿る。 */
 async function scanSegment(

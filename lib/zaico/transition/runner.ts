@@ -3,6 +3,7 @@ import {applyFields,localFields,outgoingPatch,remoteFields,type Masters,type Row
 import {changedFields,equal,reconcileFields,type SharedFields} from './protocol';
 import {ITEM_PREFIX,type Control} from './store';
 import type {V2Inventory} from './v2Client';
+import {sourceDatePatch} from './sourceDates';
 
 export interface SyncWindow {remote:V2Inventory[];end:string;start?:string;full:boolean;initial:boolean}
 export interface TransitionPort{
@@ -16,6 +17,7 @@ export interface TransitionPort{
   archive(label:string,value:unknown):Promise<string>;
   readArchive(key:string):Promise<SyncWindow>;
   saveInventory(row:Row,expected?:string):Promise<Row>;
+  saveSourceDates(row:Row,remote:V2Inventory,includeUpdated:boolean):Promise<Row>;
   deleteInventory(row:Row):Promise<void>;
   generateSku():Promise<string>;
   syncImage(row:Row,remote:V2Inventory):Promise<Row>;
@@ -132,7 +134,11 @@ export async function runTransition(p:TransitionPort){
     const hasChange=!local.updatedAt||Object.keys(changedFields(before,{...before,...changes})).length||
       update.customFields!==local.customFields||update.images!==undefined||update.sourceInventoryId!==undefined;
     if(hasChange||conflicts.length)await p.archive(initial?'initial-before':'before-sync',{local,remote,conflicts});
-    const saved=hasChange?await p.saveInventory({...(!local.updatedAt?local:{}),...update},local.updatedAt):local;
+    const matchesRemote=equal({...before,...changes},proposed.fields);
+    const dates=sourceDatePatch(local,remote,matchesRemote);
+    let saved=hasChange?await p.saveInventory({...(!local.updatedAt?local:{}),...update,
+      listUpdatedAt:dates.listUpdatedAt??local.listUpdatedAt??local.updatedAt},local.updatedAt):local;
+    saved=await p.saveSourceDates(saved,remote,matchesRemote);
     if(hasChange)await p.history(saved,changedFields(before,localFields(saved)));
     byId.set(saved.id,saved);bySource.set(sourceId,saved);
     // Local-only changes stay different from the shared baseline until sent.
@@ -271,6 +277,7 @@ export async function runTransition(p:TransitionPort){
         if(!latest)throw Error('ZAICO作成中にBELLO商品が削除されました。管理者の確認が必要です。');
         local=await p.saveInventory({id,sourceSystem:'ZAICO',sourceInventoryId:sourceId},latest.updatedAt);
         if(generated&&!latest.barcode)local=await p.saveInventory({id,barcode:generated,updatedBy:'ZAICO暫定同期'},local.updatedAt);
+        local=await p.saveSourceDates(local,verified,equal(localFields(local),actual.fields));
         bySource.set(sourceId,local);
         const mismatches=changedFields(accepted,actual.fields);
         state=await save({...state,remote:verified,remoteBase:actual.fields,localBase:accepted,
@@ -332,8 +339,12 @@ export async function runTransition(p:TransitionPort){
           throw Error(`ZAICOで保存を確認できない項目: ${refused.join(', ')}`);
         }
         // Store only the version actually sent. A concurrent edit remains pending.
+        const latest=await p.inventory(id);
+        if(latest)await p.saveSourceDates(latest,verified,equal(localFields(latest),actual.fields));
         await save({...state,remote:verified,remoteBase:actual.fields,localBase:{...state.localBase,...decision.toBello,...toSend},status:'OK',error:null,desired:null});
       }else{
+        const latest=await p.inventory(id);
+        if(latest)await p.saveSourceDates(latest,fresh,equal(localFields(latest),current.fields));
         await save({...state,remote:fresh,remoteBase:current.fields,localBase:{...state.localBase,...decision.toBello},status:'OK',error:null});
       }
     }catch(e){

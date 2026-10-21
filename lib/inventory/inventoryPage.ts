@@ -2,6 +2,7 @@ import {categoryFilter} from "./categories";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { toListRow, type InventoryListRow } from "./queries";
+import {compareInventoryDateDesc,productUpdatedAt} from './productDates';
 import { isE2EFixtureModeActive, e2eListPage } from "./e2eFixtures";
 import type { InventoryCursorListFilters } from "./inventoryCursorList";
 import { countActiveInventoryFast } from "./inventoryCountFast";
@@ -118,7 +119,10 @@ export async function listInventoryOffsetPage(
       collected.push(...data.map(toListRow));
       nextToken = nt;
       pages++;
-    } while (nextToken && collected.length < needed && pages < MAX_PAGES);
+    // Complete the boundary second before slicing; DynamoDB does not order
+    // records sharing one GSI key by ZAICO ID. Never split that tie arbitrarily.
+    } while (nextToken && (collected.length <= needed ||
+      productUpdatedAt(collected[collected.length-1]) === productUpdatedAt(collected[needed-1])) && pages < MAX_PAGES);
   } catch (err) {
     const reason = err instanceof Error ? `${err.name}: ${err.message}`.slice(0, 300) : "unknown";
     console.warn("[inventoryPage] GSI経路が失敗したため従来経路へ切り替えます", { reason });
@@ -131,7 +135,8 @@ export async function listInventoryOffsetPage(
     return { items: [], offset: options.offset, limit: options.limit, hasNext: false, usedIndex: false, indexFailureReason: "GSIから1件も返らなかった（バックフィル未完了の可能性）" };
   }
 
-  const items = collected.slice(options.offset, options.offset + options.limit);
+  if(nextToken&&pages>=MAX_PAGES)return {items:[],offset:options.offset,limit:options.limit,hasNext:false,usedIndex:false,indexFailureReason:'一覧の同日時の境界まで取得できませんでした'};
+  const items = collected.sort(compareInventoryDateDesc).slice(options.offset, options.offset + options.limit);
   return {
     items,
     offset: options.offset,

@@ -6,7 +6,7 @@ export interface DeletePorts { online: () => Promise<boolean>; removeInventory: 
 
 /** The source remains untouched. No request is sent until the new form is saved. */
 export function inventoryCopyDraft(source: InventoryItem, id: string, now: string): InventoryItem {
-  return { ...source, id, sku: "保存時に自動採番", displayId: undefined, updatedAt: now, createdAt: undefined,
+  return { ...source, id, sku: "保存時に自動採番", displayId: undefined, updatedAt: now, listUpdatedAt: now, createdAt: undefined,
     details: { ...source.details }, photos: source.photos?.map(photo => ({ ...photo })) };
 }
 

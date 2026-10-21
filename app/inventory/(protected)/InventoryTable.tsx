@@ -1,4 +1,5 @@
 "use client";
+import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {inventoryCategoryIds} from "@/lib/inventory/categories";
 
 import { useMemo } from "react";
@@ -154,7 +155,7 @@ function renderReadOnlyCell(
         </span>
       );
     case "updatedAt":
-      return formatDate(row.updatedAt);
+      return formatDate(productUpdatedAt(row));
     case "barcode":
       return <span className="block truncate font-mono text-[12px] text-gray-600">{row.barcode ?? "-"}</span>;
     case "saleCommission":

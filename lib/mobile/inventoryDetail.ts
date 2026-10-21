@@ -26,6 +26,6 @@ export function mobileInventoryDetail(row: InventoryDetail, categories: MasterOp
     categoryOptions: categories.map(option => option.name), locationOptions: locations.map(option => option.name),
     condition: statuses.find(status => status.id === row.statusId)?.label ?? "", note: row.note ?? "", barcode: row.barcode ?? "",
     plannedSalePrice: row.plannedSalePrice, thumbnailUrl: photos.find(photo => photo.primary)?.url ?? photos[0]?.url ?? null,
-    createdAt: row.createdAt, updatedAt: row.updatedAt, details, photos, detailLoadedAt: fetchedAt,
+    createdAt: row.createdAt, updatedAt: row.updatedAt, listUpdatedAt: row.listUpdatedAt ?? undefined, details, photos, detailLoadedAt: fetchedAt,
   };
 }

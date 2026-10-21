@@ -49,6 +49,7 @@ const STRUCTURAL_FIELDS = [
   // 並び順(compareByUpdatedAtDesc)と作成日時の表示。
   "createdAt",
   "updatedAt",
+  "listUpdatedAt",
   // 論理削除の除外。
   "deletedAt",
   // マスタ参照(カテゴリ/保管場所/状態での絞り込み)。

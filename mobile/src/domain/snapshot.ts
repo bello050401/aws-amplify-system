@@ -19,6 +19,7 @@ export function isInventoryItem(value: unknown): value is InventoryItem {
     .every((key) => typeof row[key] === "string") &&
     (row.displayId === undefined || typeof row.displayId === "string") &&
     (row.createdAt === undefined || typeof row.createdAt === "string") &&
+    (row.listUpdatedAt === undefined || typeof row.listUpdatedAt === "string") &&
     // Imported or historical records can contain negative stock. Keep the actual
     // value readable instead of rejecting the entire list; edits validate separately.
     typeof row.quantity === "number" && Number.isSafeInteger(row.quantity) &&
@@ -73,6 +74,7 @@ export class SnapshotStore {
       ...(item.zaicoOriginalValues ? {zaicoOriginalValues:item.zaicoOriginalValues.map(value=>({...value}))} : {}),
       ...(item.displayId !== undefined ? { displayId: item.displayId } : {}),
       ...(item.createdAt !== undefined ? { createdAt: item.createdAt } : {}),
+      ...(item.listUpdatedAt !== undefined ? { listUpdatedAt: item.listUpdatedAt } : {}),
       location: item.location, category: item.category, condition: item.condition, note: item.note,
       ...(item.statusId !== undefined ? { statusId: item.statusId } : {}),
       ...(item.statusOptions ? { statusOptions: item.statusOptions.map(option => ({ id: option.id, label: option.label })) } : {}),

@@ -1,3 +1,4 @@
+import {productUpdatedAt} from "./productDates";
 import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
 import { nowInJst } from "@/lib/inventory/sales";
 import "server-only";
@@ -233,7 +234,7 @@ export async function buildInventoryExport(
       sourceSystem: item.sourceSystem ?? "",
       sourceInventoryId: item.sourceInventoryId ?? "",
       createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
+      updatedAt: productUpdatedAt(item),
       createdBy: item.createdBy ?? "",
       updatedBy: item.updatedBy ?? "",
       // ZAICOにはあるがBELLOでは追跡していない列 — 列自体は互換性のため

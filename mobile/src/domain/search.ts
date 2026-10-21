@@ -42,7 +42,7 @@ export function searchValidation(query: AdvancedSearchQuery, fields: SearchField
 export function cachedInventorySearch(items: InventoryItem[], input: InventorySearchInput, fields: SearchFieldDef[]): InventoryItem[] {
   const defs = new Map(fields.map(field=>[field.key,field]));
   const mapMaster = (key:string,label:string) => defs.get(key)?.options?.find(option=>option.label===label)?.value ?? label;
-  const records = items.map(item=>({item,record:{...item,...item.details,customFields:item.details ?? {},
+  const records = items.map(item=>({item,record:{...item,...item.details,sourceInventoryId:item.displayId && /^\d+$/.test(item.displayId) ? item.displayId : undefined,customFields:item.details ?? {},
     categoryId:mapMaster("categoryId",item.category),categoryIds:splitCategoryNames(item.category).map(name=>mapMaster("categoryId",name)),locationId:mapMaster("locationId",item.location),statusId:item.statusId ?? mapMaster("statusId",item.condition)}}));
   const compare=inventoryComparator(input.sort ?? DEFAULT_INVENTORY_SORT,defs);
   return records.filter(({item,record})=>{

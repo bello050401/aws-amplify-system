@@ -3,6 +3,7 @@ import {runTransition,type TransitionPort} from '../lib/zaico/transition/runner'
 import {localFields,remoteFields,outgoingPatch,type Row,type Masters,RAW_VALUES} from '../lib/zaico/transition/mapping';
 import type {V2Inventory} from '../lib/zaico/transition/v2Client';
 import type {Control} from '../lib/zaico/transition/store';
+import {sourceDatePatch} from '../lib/zaico/transition/sourceDates';
 const clone=<T>(v:T):T=>structuredClone(v);
 const remote=(id:number,title='ZAICOの商品'):V2Inventory=>({id,title,quantity:'3',unit:'個',category:'販売中,業者間',state:'良品',place:'川越',etc:'備考',code:'2026102100001',optional_attributes:{'⚫︎購入価格':'２００','⚫︎販売開始日':'45238'},deleted:false} as V2Inventory);
 export function harness(){
@@ -32,6 +33,10 @@ export function harness(){
       rows.set(row.id,saved);return clone(saved);
     },
     deleteInventory:async(row)=>{if(row.updatedAt!==rows.get(row.id)?.updatedAt)throw Error('CONFLICT');rows.delete(row.id);},
+    saveSourceDates:async(row,remote,includeUpdated)=>{
+      if(row.updatedAt!==rows.get(row.id)?.updatedAt)throw Error('CONFLICT');
+      const saved={...row,...sourceDatePatch(row,remote,includeUpdated)};rows.set(row.id,saved);return clone(saved);
+    },
     generateSku:async()=>'QA'+(++seq),syncImage:async(row)=>row,history:async()=>{},
     api:{
       list:async(input)=>{calls.push({method:'LIST'});return {data:clone([...remotes.values()]),pagination:{current_page:input.page,total_pages:1,total_count:remotes.size}};},

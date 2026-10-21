@@ -13,15 +13,9 @@
  * item_image.url) are handled by `mapZaicoCoreFields` below — see its own
  * comment for the exact target of each.
  *
- * `state` is deliberately NOT mapped this pass: BELLO's closest
- * structural analog (StatusMaster) is a code+label master list, not a
- * free-text field, and the real sample showed `state: ""` (empty/unused)
- * — forcing a mapping for a field that may not even be populated was
- * judged premature. `created_at`/`updated_at` are also not persisted —
- * ZAICO's own updated_at isn't needed for diffing (this sync always
- * re-fetches full detail and compares field values directly, not
- * timestamps). Both are flagged in the completion report as open
- * questions rather than silently decided.
+ * The active v2 transition maps state through its status master. Product
+ * dates are handled by transition/sourceDates: created_at -> createdAt,
+ * update_date -> listUpdatedAt. Database updatedAt remains an edit version.
  *
  * `optional_attributes[].name` → target mapping is `ZAICO_ATTRIBUTE_MAP`
  * below, built ONLY from the exact names confirmed in the real sample
