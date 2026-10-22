@@ -3,6 +3,7 @@ import {productCustomFields,withHumanEdits} from '@/lib/inventory/humanEdits';
 import {parseCustomFields,stringifyCustomFields} from '@/lib/inventory/customFieldsCodec';
 import type {OutboundBatch,OutboundRow} from './types';
 import {parseJsonField} from './types';
+import {preservesOutboundClassification} from './inventoryPolicy';
 
 export function splitInventoryRecord(source:Record<string,unknown>,item:OutboundRow,batch:OutboundBatch,categoryIds:string[],actor:string,now:string){
  if(!item.splitInventoryId||!item.splitSku||!item.splitPrepared)throw Error('移動分の写真と商品情報を準備できていません。');
@@ -11,7 +12,7 @@ export function splitInventoryRecord(source:Record<string,unknown>,item:Outbound
  const fields=Object.fromEntries(keys.filter(key=>!excluded.has(key)&&source[key]!=null).map(key=>[key,source[key]]));
  const custom={...productCustomFields(parseCustomFields(source.customFields)),__belloStockSplit:{sourceInventoryId:source.id,batchId:batch.id,orderNumber:batch.orderNumber}};
  return {...fields,id:item.splitInventoryId,sku:item.splitSku,barcode:item.snapshot.barcode,quantity:item.snapshot.quantity,
-  categoryIds,...(categoryIds[0]?{categoryId:categoryIds[0]}:{}),locationId:batch.locationId,
+  categoryIds,...(categoryIds[0]?{categoryId:categoryIds[0]}:{}),locationId:preservesOutboundClassification(batch)?source.locationId:batch.locationId,
   images:parseJsonField(item.splitImages,[]),customFields:stringifyCustomFields(custom),sourceSystem:'BELLO',
   purchaseQuantity:0,dailyPurchaseTotal:0,listingPartition:'ACTIVE',listUpdatedAt:now,
   createdAt:now,updatedAt:now,createdBy:actor,updatedBy:actor,__typename:'Inventory'};

@@ -16,6 +16,7 @@ import {assertOutboundEmailReady,sendOutboundEmail,isDefiniteEmailFailure} from 
 import {splitInventoryRecord,remainingCustomFields} from './splitInventory';
 import {nextSplitSku,prepareSplitPhotos,removeUnsentSplitPhotos} from './splitPhotos';
 import {applyOutboundMerge,findOutboundMergeTarget} from './mergePersistence';
+import {preservesOutboundClassification} from './inventoryPolicy';
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function requireUuid(id:unknown):asserts id is string {if(typeof id!=='string'||!uuid.test(id))throw new Error('対象を選び直してください。');}
@@ -144,7 +145,7 @@ export async function emailOutbound(batchId:string,actor:string):Promise<Outboun
   for(const item of batch.rows.filter(row=>row.status==='PENDING'&&row.splitInventoryId&&!row.splitPrepared)){
    const source=await getInventoryRaw(item.inventoryId);
    if(!source||source.outboundBatchId!==batchId||source.updatedAt!==item.expectedUpdatedAt)throw Error('出庫対象が変更されています。送信前に確認してください。');
-   if(!await findOutboundMergeTarget(source,batch.locationId))await prepareSplit(source,item);
+   if(preservesOutboundClassification(batch)||!await findOutboundMergeTarget(source,batch.locationId))await prepareSplit(source,item);
   }
   batch=await getOutboundBatch(batchId);
   for(const item of batch.rows.filter(row=>row.status==='PENDING')){
@@ -189,16 +190,33 @@ export async function confirmOutboundSent(batchId:string,actor:string):Promise<O
   const batch=await getOutboundBatch(batchId);
   if(batch.status==='CANCELLED'||batch.status==='CANCELLING')throw new Error('この出庫データは取り消されています。');
   if(batch.status==='PREPARING')throw new Error('データを作成中です。もう一度結果を確認してください。');
-  if(batch.sender!=='MANUAL'&&!(batch.sender==='EMAIL'&&batch.emailStatus==='SENT'))throw new Error('メール送信の完了を確認してから在庫を更新します。');
+  if(batch.sender!=='MANUAL'&&!(batch.sender==='EMAIL'&&batch.emailStatus==='SENT'))throw new Error('メール送信の完了を確認してから出庫を完了します。');
   if(batch.status==='COMPLETED')return batch;
   if(!await updateBatchStatus(batchId,'APPLYING',['AWAITING_SEND','PARTIAL','APPLYING','SENDING']))throw new Error('出庫の状態が変わりました。履歴を確認してください。');
   for(const item of batch.rows.filter(row=>row.status==='PENDING')) {
     const row=await getInventoryRaw(item.inventoryId);
     if(!row||row.outboundBatchId!==batchId||row.updatedAt!==item.expectedUpdatedAt){await recordPendingError(item.id,'対象商品が更新されています。送信内容と履歴を確認してください。自動再送は行いません。');continue;}
-    const now=new Date().toISOString(),before=inventoryCategoryIds(row),after=before.filter(cat=>cat!==batch.categoryId);
+    if(preservesOutboundClassification(batch)&&!item.splitInventoryId){
+      try{
+        // Only the reservation and dispatch journal change. In particular, keep
+        // updatedAt/customFields intact so this does not enqueue a ZAICO edit.
+        const now=new Date().toISOString();
+        await sendOutboundTransaction(db,new TransactWriteCommand({TransactItems:[
+          batchStateCheck(batchId,'APPLYING'),
+          {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'REMOVE outboundBatchId',ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':batch':batchId,':version':item.expectedUpdatedAt}}},
+          {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who, updatedAt=:now, snapshot=:snapshot REMOVE #error, splitInventoryId, splitSku, splitImages, splitPrepared',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor,':snapshot':JSON.stringify({...item.snapshot,classificationPreserved:true})}}},
+          {Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId:item.inventoryId,changedAt:now,changedBy:actor,fieldName:'出庫データ送信',oldValue:JSON.stringify({categoryIds:inventoryCategoryIds(row),locationId:row.locationId,quantity:row.quantity}),newValue:JSON.stringify({categoryIds:inventoryCategoryIds(row),locationId:row.locationId,quantity:row.quantity,batchId,destination:batch.destinationName,sentQuantity:item.snapshot.quantity,classificationPreserved:true}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}},
+        ]}));
+      }catch(error){
+        const fresh=await db.send(new GetCommand({TableName:table('OutboundItem'),Key:{id:item.id},ConsistentRead:true}));
+        if(fresh.Item?.status!=='SENT'){console.error('[outbound-record]',error);await recordPendingError(item.id,'出庫履歴の保存を確認できません。結果を再確認してください。商品情報は変更していません。');}
+      }
+      continue;
+    }
+    const now=new Date().toISOString(),before=inventoryCategoryIds(row),after=preservesOutboundClassification(batch)?before:before.filter(cat=>cat!==batch.categoryId);
     const changes={categoryId:after[0]??null,categoryIds:after,locationId:batch.locationId};
     try{
-      if(await applyOutboundMerge(row,item,batch,actor)){
+      if(!preservesOutboundClassification(batch)&&await applyOutboundMerge(row,item,batch,actor)){
         if(item.splitPrepared&&item.splitInventoryId)await removeUnsentSplitPhotos(batchId,item.splitInventoryId).catch(error=>console.error('[outbound-unused-split-photos]',{batchId,itemId:item.id,error}));
         continue;
       }
@@ -214,8 +232,8 @@ export async function confirmOutboundSent(batchId:string,actor:string):Promise<O
           {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'SET quantity=:qty, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who REMOVE outboundBatchId',ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND quantity=:available AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':qty':remaining,':custom':remainingCustomFields(row,remaining),':now':now,':who':actor,':batch':batchId,':version':item.expectedUpdatedAt,':available':Number(row.quantity)}}},
           {Put:{TableName:table('Inventory'),Item:child,ConditionExpression:'attribute_not_exists(id)'}},
           ...categoryLinkChanges(child.id,[],after,now),
-          {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who REMOVE #error',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor}}},
-          ...[item.inventoryId,child.id].map(inventoryId=>({Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId,changedAt:now,changedBy:actor,fieldName:'部分出庫',oldValue:JSON.stringify({quantity:row.quantity,locationId:row.locationId}),newValue:JSON.stringify({batchId,sourceInventoryId:item.inventoryId,movedInventoryId:child.id,movedQuantity:child.quantity,remainingQuantity:remaining,locationId:batch.locationId}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}})),
+          {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who, snapshot=:snapshot REMOVE #error',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor,':snapshot':JSON.stringify({...item.snapshot,classificationPreserved:preservesOutboundClassification(batch)})}}},
+          ...[item.inventoryId,child.id].map(inventoryId=>({Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId,changedAt:now,changedBy:actor,fieldName:'部分出庫',oldValue:JSON.stringify({quantity:row.quantity,locationId:row.locationId}),newValue:JSON.stringify({batchId,sourceInventoryId:item.inventoryId,movedInventoryId:child.id,movedQuantity:child.quantity,remainingQuantity:remaining,locationId:child.locationId,categoryIds:after}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}})),
         ]}));
       }catch(e){const fresh=await getOutboundBatch(batchId);if(fresh.rows.find(r=>r.id===item.id)?.status!=='SENT')await recordPendingError(item.id,'移動分の商品ページの保存を確認できません。更新結果を再確認してください。');}
       continue;
