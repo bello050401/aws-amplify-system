@@ -11,7 +11,7 @@ export async function createAwsOutboundFixture(){
  const prefix='bello-qa-outbound-'+randomUUID().slice(0,8)+'-';
  const models=['Inventory','OutboundDestination','Category','Location','InventoryCategory','OutboundBatch','OutboundItem','OutboundSequence','InventoryHistory'];
  const names=new Map(models.map(m=>[m,prefix+m])),created=[];
- const client=new DynamoDBClient({region:'us-west-2',credentials:fromIni({profile:'Bello'}),maxAttempts:5,requestHandler:new NodeHttpHandler({httpsAgent:new https.Agent({keepAlive:false,maxSockets:10}),connectionTimeout:10000,requestTimeout:20000})});
+ const client=new DynamoDBClient({region:'us-west-2',endpoint:'https://dynamodb.us-west-2.amazonaws.com',accountIdEndpointMode:'disabled',credentials:fromIni({profile:'Bello'}),maxAttempts:2,requestHandler:new NodeHttpHandler({httpsAgent:new https.Agent({keepAlive:false,maxSockets:10}),connectionTimeout:10000,requestTimeout:10000,throwOnRequestTimeout:true})});
  const doc=DynamoDBDocumentClient.from(client,{marshallOptions:{removeUndefinedValues:true}});
  let failDispatchOnce=false;
  const database={send:async command=>{
@@ -21,6 +21,7 @@ export async function createAwsOutboundFixture(){
    if(failDispatchOnce&&input.TransactItems.some(a=>a.Put?.TableName==='InventoryHistory')){failDispatchOnce=false;throw Error('Injected dispatch interruption');}
    input.TransactItems.forEach(a=>map(Object.values(a)[0]));
   }else map(input);
+  if(process.env.BELLO_QA_TRACE)console.log('AWS QA:',command.constructor.name,input.TableName??'transaction');
   try{return await doc.send(new command.constructor(input));}catch(error){console.error('AWS QA command failed:',command.constructor.name,input.TableName??'transaction',error.name);throw error;}
  }};
  async function cleanup(){
