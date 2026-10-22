@@ -287,9 +287,9 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
       onDraftSaved={refreshHttpStatus} />}
     <p className="mt-2 text-xs text-gray-600">タイトル・説明文・状態・写真は保存済みのEC下書きから読み込みます。{isHttp && isB005396 ?
       "価格は99,999円に固定しています。カテゴリー・ブランド・数量をこの商品について選んでください。" :
-      "価格とカテゴリーは共通の商品情報を反映しています。数量を入力し、内容をご確認ください。"}</p>
-    {isHttp && hasShopsRecord ? <p className="mt-2 rounded bg-blue-50 p-3 text-sm text-blue-900">登録済みの商品です。商品名・説明・単価・数量・写真を変更する場合は共通の商品情報を保存し、商品一覧の「更新」を押してください。カテゴリ・配送方法・公開状態は現在の設定を保ちます。</p> : isHttp && <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
-      下の「準備登録」で保存した後、商品一覧のこの商品のメルカリShops欄で「出品」を押してください。
+      isHttp ? "価格・数量・カテゴリーは共通の商品情報を反映しています。このタブは例外的な商品の設定を確認するときに使います。" : "価格とカテゴリーは共通の商品情報を反映しています。数量を入力し、内容をご確認ください。"}</p>
+    {isHttp && hasShopsRecord ? <p className="mt-2 rounded bg-blue-50 p-3 text-sm text-blue-900">登録済みの商品です。共通の商品情報を保存し、商品一覧の「更新」を押してください。数量・カテゴリ・配送方法も共通設定を反映し、公開・停止状態は保ちます。</p> : isHttp && <p className="mt-2 rounded border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+      通常は共通の商品情報を保存して、商品一覧の「出品」を押すだけです。このタブでの準備登録は必須ではありません。
     </p>}
     {isHttp && showExecution && <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs" role="status">
       <p>HTTP方式の準備状態: {httpStatus === "CHECKING" ? "確認中" :
@@ -310,7 +310,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
           "Shops送信結果・出品成立は未確認"}</p>
     </div>}
     <dl className="mt-3 grid grid-cols-2 gap-1 rounded bg-gray-50 p-3 text-xs">
-      <dt>配送方法</dt><dd>{shopsDeliveryLabel(shippingMethod)}</dd>
+      <dt>配送方法</dt><dd>{isHttp ? "通常配送（出品者が手配）" : shopsDeliveryLabel(shippingMethod)}</dd>
       <dt>送料</dt><dd>送料込み（出品者負担）</dd>
       <dt>発送元</dt><dd>埼玉県</dd>
       <dt>発送まで</dt><dd>4〜7日</dd>
@@ -324,8 +324,8 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
     </p>}
     {!available ? <p className="mt-3 text-amber-700">保存済みの下書き・在庫数・Shops出品記録を確認してください。新規出品準備は現在できません。</p> :
       isHttp && httpStatus !== "NOT_PREPARED" ?
-        <p className="mt-3 text-amber-700">準備状態を確認できるまで、新しい準備登録はできません。登録済みの場合は上の依頼状態を確認してください。</p> : <>
-      {isHttp && !isB005396 && <EcPresetPicker channel="MERCARI_SHOPS" disabled={busy} onApply={p=>{
+        <p className="mt-3 text-amber-700">{httpStatus==='CHECKING' ? '保存した設定を読み込み中…' : '出品準備の記録があります。通常の出品・停止・更新は商品一覧から操作できます。'}</p> : <>
+      {isHttp && showExecution && !isB005396 && <EcPresetPicker channel="MERCARI_SHOPS" disabled={busy} onApply={p=>{
         const method=p.values.shopsDelivery==="MERCARI_SHIPPING_YAMATO"?"METHOD_MERCARI_SHIPPING_YAMATO":"METHOD_TYPE_UNDECIDED";
         selectionRevision.current++; selectionRef.current.shippingMethod=isHttp?"METHOD_TYPE_UNDECIDED":method; selectionRef.current.descriptionSuffix=p.values.descriptionSuffix;
         setShippingMethod(isHttp?"METHOD_TYPE_UNDECIDED":method);setDescriptionSuffix(p.values.descriptionSuffix);
