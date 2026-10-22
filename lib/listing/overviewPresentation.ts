@@ -2,7 +2,7 @@ import type {ListingOverviewRow} from './service';
 import {commonChannelPrice} from './commonSettings';
 import {EC_CHANNELS,type EcChannel} from './ecManagement';
 export type EcSortKey='name'|'quantity'|'price'|'created'|'updated'|EcChannel;
-export function ecOverviewPrice(row:ListingOverviewRow,channel:EcChannel){return commonChannelPrice({price:row.price,channelPrices:row.channelPrices??null},channel);}
+export function ecOverviewPrice(row:ListingOverviewRow,channel:EcChannel){return row.hasDraft||row.archived?commonChannelPrice({price:row.price,channelPrices:row.channelPrices??null},channel):null;}
 export function compareEcOverview(a:ListingOverviewRow,b:ListingOverviewRow,key:EcSortKey,direction:'asc'|'desc'){
  const sign=direction==='asc'?1:-1;
  const value=(r:ListingOverviewRow):string|number|null=>key==='name'?r.name:key==='quantity'?r.quantity:key==='price'?r.price:key==='created'?(r.inventoryCreatedAt?Date.parse(r.inventoryCreatedAt):null):key==='updated'?Date.parse(r.inventoryUpdatedAt):EC_CHANNELS.includes(key as EcChannel)?ecOverviewPrice(r,key as EcChannel):null;

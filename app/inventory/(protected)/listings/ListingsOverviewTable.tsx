@@ -293,7 +293,7 @@ export function ListingsOverviewTable({
                       </p>
                       <div className="mt-1 flex flex-wrap items-center gap-2 whitespace-nowrap text-[11px] text-gray-400">
                         <span className="hidden md:inline">{row.displayId}</span>
-                        <span className="hidden md:inline">{formatJstDateTime(row.inventoryUpdatedAt)}</span>
+                        <span className="hidden md:inline">{sort==='created'?'登録':'更新'} {formatJstDateTime(sort==='created'?row.inventoryCreatedAt:row.inventoryUpdatedAt)}</span>
                         <Link className="text-blue-700" href={`/inventory/${row.inventoryId}/listing`}>
                           編集
                         </Link>
