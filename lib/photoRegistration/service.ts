@@ -17,7 +17,7 @@
  * のエラーコード表で「読み直してから再送」に分類されている) に委ねる。
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   assertDeviceOwnsBatch,
   authorizeOperation,
@@ -63,6 +63,7 @@ import {
   validateLinkBatchToInventoryInput,
   validateListingImageSelectionInput,
   validateRequestUploadsInput,
+  type ValidatedCreatePhotoBatch,
 } from "./validation";
 
 const ALL_VARIANTS: PhotoAssetVariant[] = ["PROCESSED", "THUMBNAIL"];
@@ -128,10 +129,33 @@ export class PhotoRegistrationService {
 
     const validated = validateCreatePhotoBatchInput(rawInput);
     if (!validated.ok) return validated;
+    return this.createValidatedBatch(validated.value);
+  }
 
+  /** Web imports use the staff identity, never a client-supplied device identity. */
+  async createWebPhotoBatch(
+    input: { requestId: string; count: number },
+    claims: TrustedClaims,
+  ): Promise<PhotoResult<{ batchId: string; batchCode: string; status: string }>> {
+    const actor = this.authorize(claims, "createWebPhotoBatch");
+    if (!actor.ok) return actor;
+    if (!input || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(input.requestId)
+      || !Number.isInteger(input.count) || input.count < 1 || input.count > 20)
+      return err("INVALID_INPUT", "Select between 1 and 20 images");
+    const owner = createHash("sha256").update(actor.value.actorId).digest("hex");
+    const validated = validateCreatePhotoBatchInput({
+      localImportSessionId: `WEB:${owner}:${input.requestId}`,
+      sourceDeviceId: null, sourceSdCardId: null, clientVersion: "web-manual-1",
+      imageCountOriginal: input.count, expectedAssetCount: input.count,
+    });
+    if (!validated.ok) return validated;
+    return this.createValidatedBatch(validated.value);
+  }
+
+  private async createValidatedBatch(input: ValidatedCreatePhotoBatch): Promise<PhotoResult<{ batchId: string; batchCode: string; status: string }>> {
     for (let attempt = 0; attempt <= this.maxConflictRetries; attempt += 1) {
-      const existing = await this.repository.findBatchBySessionId(validated.value.localImportSessionId);
-      const decision = decideCreatePhotoBatch(validated.value, existing);
+      const existing = await this.repository.findBatchBySessionId(input.localImportSessionId);
+      const decision = decideCreatePhotoBatch(input, existing);
       if (!decision.ok) return decision;
 
       if (decision.value.kind === "RETURN_EXISTING") {

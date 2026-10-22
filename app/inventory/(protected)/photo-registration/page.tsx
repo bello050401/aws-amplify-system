@@ -2,6 +2,7 @@ import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { listUnregisteredPhotoBatchesAction } from "@/app/actions/photoRegistration";
 import { InventoryHeader } from "../../InventoryHeader";
 import { PhotoBatchListTable } from "./PhotoBatchListTable";
+import { WebUploadPanel } from "./[batchId]/WebUploadPanel";
 
 interface PhotoRegistrationListPageProps {
   searchParams: { cursor?: string };
@@ -31,6 +32,11 @@ export default async function PhotoRegistrationListPage({ searchParams }: PhotoR
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={heading} />
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <section className="mb-5">
+          <h2 className="mb-2 text-sm font-bold text-gray-900">写真を取り込む</h2>
+          <p className="mb-3 text-sm text-gray-600">編集済みの写真を複数選んで登録できます。構図・縦横比はそのまま保持します。</p>
+          <WebUploadPanel />
+        </section>
         {!result.ok ? (
           result.code === "NOT_CONFIGURED" ? (
             <div role="status" className="rounded border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">

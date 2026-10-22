@@ -95,6 +95,14 @@ export async function listUnregisteredPhotoBatchesAction(cursor: string | null, 
   return mapPhotoResult(await runtime.adapter.listUnregisteredBatches(limit, cursor, runtime.claims));
 }
 
+export async function createWebPhotoBatchAction(input: { requestId: string; count: number }): Promise<PhotoActionResult<{ batchId: string; batchCode: string; status: string }>> {
+  const runtime = await requireWebRuntimeAndClaims();
+  if (!runtime.ok) return runtime;
+  const result = await runtime.adapter.createWebBatch(input, runtime.claims);
+  if (result.ok) revalidatePath("/inventory/photo-registration");
+  return mapPhotoResult(result);
+}
+
 export async function getPhotoBatchDetailAction(batchId: string, page = 1, pageSize = 24): Promise<PhotoActionResult<WebBatchDetail>> {
   const runtime = await requireWebRuntimeAndClaims();
   if (!runtime.ok) return runtime;

@@ -328,6 +328,10 @@ export class PhotoRegistrationWebAdapter {
   }
 
   /** requestPhotoAssetUploads のWeb向け薄いラッパー。ファイル名の危険拡張子だけこの層で追加検証する。 */
+  async createWebBatch(input: { requestId: string; count: number }, claims: TrustedClaims) {
+    return this.deps.service.createWebPhotoBatch(input, claims);
+  }
+
   async requestWebUploads(rawInput: unknown, claims: TrustedClaims): Promise<PhotoResult<{ batchId: string; revision: number; items: unknown[] }>> {
     const shapeCheck = checkWebUploadShape(rawInput);
     if (!shapeCheck.ok) return shapeCheck;

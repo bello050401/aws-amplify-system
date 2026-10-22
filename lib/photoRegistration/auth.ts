@@ -53,6 +53,7 @@ export function resolveActorContext(claims: TrustedClaims, config: AuthConfig): 
 
 export type PhotoRegistrationOperation =
   | "createPhotoBatch"
+  | "createWebPhotoBatch"
   | "requestPhotoAssetUploads"
   | "completePhotoAssetUpload"
   | "completePhotoBatch"
@@ -71,6 +72,7 @@ export type PhotoRegistrationOperation =
  */
 const ALLOWED_ROLES: Record<PhotoRegistrationOperation, PhotoActorRole[]> = {
   createPhotoBatch: ["PHOTO_DEVICE"],
+  createWebPhotoBatch: ["STAFF", "ADMIN"],
   requestPhotoAssetUploads: ["PHOTO_DEVICE", "STAFF", "ADMIN"],
   completePhotoAssetUpload: ["PHOTO_DEVICE", "STAFF", "ADMIN"],
   completePhotoBatch: ["PHOTO_DEVICE", "STAFF", "ADMIN"],

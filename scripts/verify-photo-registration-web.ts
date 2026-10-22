@@ -630,6 +630,39 @@ test("導線: MobileBottomNav.tsx がInventoryNavRail.tsxと同じNAV_ITEMS/badg
 // 実行
 // ─────────────────────────────────────────────────────────────────────────
 
+test("manual batch: staff can create idempotently without acquiring device rights", async () => {
+  const env=buildEnv();
+  const input={requestId:"d2d39c62-6b68-42d7-9100-85c0d24d1c86",count:2};
+  const first=expectOk(await env.adapter.createWebBatch(input,staffClaims()),"create manual");
+  assert.equal(expectOk(await env.adapter.createWebBatch(input,staffClaims()),"retry").batchId,first.batchId);
+  assert.notEqual(expectOk(await env.adapter.createWebBatch(input,adminClaims()),"other actor").batchId,first.batchId);
+  const batch=await env.repository.getBatchById(first.batchId);
+  assert.equal(batch?.sourceDeviceId,null);
+  assert.equal(batch?.manifest.expectedAssetCount,2);
+  expectErr(await env.service.createPhotoBatch({localImportSessionId:"spoof",sourceDeviceId:"PC",expectedAssetCount:1,imageCountOriginal:1},staffClaims()),"PERMISSION_DENIED","device route stays restricted");
+  expectErr(await env.adapter.createWebBatch(input,viewerClaims()),"PERMISSION_DENIED","viewer");
+  expectErr(await env.adapter.createWebBatch(input,deviceClaims()),"PERMISSION_DENIED","device");
+  for(const count of [0,21,1.5])expectErr(await env.adapter.createWebBatch({...input,count},staffClaims()),"INVALID_INPUT","bad count");
+});
+
+test("manual batch: unchanged original bytes finalize as WEB_UPLOAD and remain linkable", async () => {
+  const env=buildEnv(),claims=staffClaims();
+  const {batchId}=expectOk(await env.adapter.createWebBatch({requestId:"edea3de3-494b-4ff7-a673-a3133ff5a921",count:1},claims),"create");
+  const declared={mimeType:"image/jpeg",fileSize:1200,sha256:hash(81)};
+  const thumb={mimeType:"image/jpeg",fileSize:100,sha256:hash(82)};
+  const request={batchId,assets:[{clientAssetId:"manual-1",fileName:"hand-edited.jpg",processed:declared,thumbnail:thumb}]};
+  const received=expectOk(await env.adapter.requestWebUploads(request,claims),"request");
+  const item=received.items[0] as UploadResultItem;
+  for(const u of item.uploads!)env.fakeS3.put(u.s3Key,{contentLength:u.expectedBytes,contentType:u.expectedMimeType,sha256Hex:u.expectedSha256});
+  expectOk(await env.adapter.completeWebUpload({photoAssetId:item.photoAssetId,processed:{...declared,width:1800,height:1000},thumbnail:{...thumb,width:400,height:222}},claims),"complete");
+  assert.equal(expectOk(await env.adapter.finalizeWebUpload(batchId,claims),"finalize").status,"READY_FOR_REVIEW");
+  const [asset]=await env.repository.getAssetsForBatch(batchId);
+  assert.equal(asset.sourceType,"WEB_UPLOAD");
+  assert.equal(asset.declared.PROCESSED.sha256,declared.sha256);
+  env.ddb.inventoryTable.put({id:"manual-inventory"});
+  expectOk(await env.adapter.linkToInventory({batchId,inventoryId:"manual-inventory"},claims),"link");
+});
+
 async function main() {
   await Promise.all(pendingTests);
   console.log(`\n[verify-photo-registration-web] ${passed} passed, ${failures.length} failed`);

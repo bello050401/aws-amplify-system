@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { completeWebAssetUploadAction, finalizeWebUploadAction, requestWebAssetUploadsAction, type WebUploadAssetInput } from "@/app/actions/photoRegistration";
+import { createWebPhotoBatchAction, completeWebAssetUploadAction, finalizeWebUploadAction, requestWebAssetUploadsAction, type WebUploadAssetInput } from "@/app/actions/photoRegistration";
 import { MAX_PROCESSED_BYTES, WEB_UPLOAD_PROCESSED_MIME_TYPES } from "@/lib/photoRegistration/types";
 
 /** lib/photoRegistration/webAdapter.ts の MAX_WEB_UPLOAD_FILES_PER_REQUEST と一致させること
@@ -95,16 +95,27 @@ interface ResponseItem {
  * ブラウザから直接PUTする — このコンポーネントもサーバーもAWS認証情報を
  * 一切保持しない。
  */
-export function WebUploadPanel({ batchId, batchStatus }: { batchId: string; batchStatus: string }) {
+export function WebUploadPanel({ batchId, batchStatus = "CREATED" }: { batchId?: string; batchStatus?: string }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const activeBatch = useRef(batchId);
+  const requestId = useRef<string | null>(null);
+  const [createdBatchId, setCreatedBatchId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!submitting) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [submitting]);
 
   const archived = batchStatus === "ARCHIVED";
 
   function handleFilesSelected(fileList: FileList | null) {
+    if (inFlight.current || createdBatchId) return;
     setFormError(null);
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
@@ -121,6 +132,7 @@ export function WebUploadPanel({ batchId, batchStatus }: { batchId: string; batc
         return;
       }
     }
+    requestId.current = crypto.randomUUID();
     setEntries(files.map((file) => ({ id: crypto.randomUUID(), file, status: "queued" as FileStatus })));
   }
 
@@ -129,7 +141,8 @@ export function WebUploadPanel({ batchId, batchStatus }: { batchId: string; batc
   }
 
   async function handleSubmit() {
-    if (submitting || entries.length === 0) return; // 二重送信防止
+    if (inFlight.current || entries.length === 0) return;
+    inFlight.current = true;
     setSubmitting(true);
     setFormError(null);
 
@@ -165,12 +178,29 @@ export function WebUploadPanel({ batchId, batchStatus }: { batchId: string; batc
           },
         });
       }
+      // Deduplicate before fixing the expected count. Original bytes are kept intact.
+      const seen = new Set<string>();
+      const unique = prepared.filter(p => {
+        if (seen.has(p.input.processed.sha256)) {
+          updateEntry(p.entry.id, { status: "skipped", message: "同じ画像が選択されています。" });
+          return false;
+        }
+        seen.add(p.input.processed.sha256); return true;
+      });
+      prepared.splice(0, prepared.length, ...unique);
+      if (!activeBatch.current) {
+        const created = await createWebPhotoBatchAction({ requestId: requestId.current ?? (requestId.current = crypto.randomUUID()), count: prepared.length });
+        if (!created.ok) { setFormError(created.message); return; }
+        activeBatch.current = created.value.batchId;
+        setCreatedBatchId(created.value.batchId);
+      }
+      const targetBatchId = activeBatch.current;
 
       // READY_FOR_REVIEW/LINKEDへの追加は新しいrevisionを開く必要がある(§13)。
       // CREATED/UPLOADINGはPhoto Station側の通常受入と同じ経路で足りる。
       const opensRevision = batchStatus === "READY_FOR_REVIEW" || batchStatus === "LINKED";
       const requested = await requestWebAssetUploadsAction(
-        batchId,
+        targetBatchId,
         prepared.map((p) => p.input),
         opensRevision ? prepared.length : null,
       );
@@ -220,7 +250,7 @@ export function WebUploadPanel({ batchId, batchStatus }: { batchId: string; batc
         }
 
         updateEntry(p.entry.id, { status: "completing" });
-        const completed = await completeWebAssetUploadAction(batchId, {
+        const completed = await completeWebAssetUploadAction(targetBatchId, {
           photoAssetId: item.photoAssetId,
           processed: { sha256: p.input.processed.sha256, fileSize: p.input.processed.fileSize, width: p.dims.width, height: p.dims.height },
           thumbnail: { sha256: p.input.thumbnail.sha256, fileSize: p.input.thumbnail.fileSize, width: p.thumbDims.width, height: p.thumbDims.height },
@@ -232,12 +262,18 @@ export function WebUploadPanel({ batchId, batchStatus }: { batchId: string; batc
         updateEntry(p.entry.id, { status: "done" });
       }
 
-      const finalized = await finalizeWebUploadAction(batchId);
+      const finalized = await finalizeWebUploadAction(targetBatchId);
       if (!finalized.ok) {
-        setFormError(`アップロードは完了しましたが、確定処理に失敗しました: ${finalized.message}`);
+        setFormError(`取り込みが未完了です。同じ選択のまま再実行できます。 ${finalized.message}`);
+      } else if (!batchId) {
+        router.push(`/inventory/photo-registration/${targetBatchId}`);
       }
       router.refresh();
+    } catch (error) {
+      console.error("[WebUploadPanel] import failed", error);
+      setFormError("取り込みを完了できませんでした。選択した写真は残っています。もう一度取り込んでください。");
     } finally {
+      inFlight.current = false;
       setSubmitting(false);
     }
   }
@@ -257,10 +293,11 @@ export function WebUploadPanel({ batchId, batchStatus }: { batchId: string; batc
         type="file"
         accept="image/jpeg,image/png,image/webp"
         multiple
-        disabled={submitting}
+        disabled={submitting || createdBatchId !== null}
         onChange={(e) => handleFilesSelected(e.target.files)}
         className="block w-full text-xs text-gray-700"
       />
+      {createdBatchId && formError ? <p className="mt-2 text-sm"><a className="text-blue-700 underline" href={`/inventory/photo-registration/${createdBatchId}`}>取り込み済みの写真を確認</a></p> : null}
       {formError ? (
         <p role="alert" className="mt-2 text-xs text-red-600">
           {formError}
@@ -285,7 +322,7 @@ export function WebUploadPanel({ batchId, batchStatus }: { batchId: string; batc
         disabled={submitting || entries.length === 0}
         className="mt-3 min-h-8 rounded bg-gray-900 px-4 text-xs font-bold text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {submitting ? "アップロード中…" : `選択した${entries.length}枚を追加`}
+        {submitting ? "取り込み中…" : batchId ? `選択した${entries.length}枚を追加` : `選択した${entries.length}枚を取り込む`}
       </button>
     </div>
   );
