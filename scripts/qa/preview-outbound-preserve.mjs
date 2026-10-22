@@ -20,10 +20,12 @@ http.createServer(async(req,res)=>{try{
       let body='';for await(const part of req)body+=part;const data=JSON.parse(body);let batch;
       if(data.action==='prepare'){batch=await fixture.api.prepareOutbound(data.id,data.destinationId,data.items,'QA',data.arrivalDate);batch=await fixture.api.emailOutbound(batch.id,'QA');}
       else if(data.action==='send')batch=await fixture.api.emailOutbound(data.id,'QA');
+      else if(data.action==='arrive')batch=await fixture.api.confirmOutboundArrival(data.id,data.commandId,data.changes,'QA');
       else if(data.action==='cancel')batch=await fixture.api.cancelUnsentOutbound(data.id);
       else throw Error('Unsupported QA action');
       res.end(JSON.stringify({batch}));return;
     }
+    if(url.searchParams.has('batch')&&url.searchParams.get('arrival')==='1'){res.end(JSON.stringify(await fixture.api.previewOutboundArrival(url.searchParams.get('batch'))));return;}
     if(url.searchParams.has('batch')){
       const batch=await fixture.api.getOutboundBatch(url.searchParams.get('batch'));
       if(url.searchParams.has('download')){const file=kawagoeAttachments(batch).find(f=>f.kind===url.searchParams.get('kind'));res.setHeader('Content-Type','text/csv; charset=Shift_JIS');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);res.end(file.data);return;}

@@ -13,6 +13,7 @@ export function splitInventoryRecord(source:Record<string,unknown>,item:Outbound
  const custom={...productCustomFields(parseCustomFields(source.customFields)),__belloStockSplit:{sourceInventoryId:source.id,batchId:batch.id,orderNumber:batch.orderNumber}};
  return {...fields,id:item.splitInventoryId,sku:item.splitSku,barcode:item.snapshot.barcode,quantity:item.snapshot.quantity,
   categoryIds,...(categoryIds[0]?{categoryId:categoryIds[0]}:{}),locationId:preservesOutboundClassification(batch)?source.locationId:batch.locationId,
+  ...(preservesOutboundClassification(batch)?{outboundArrivalBatchId:batch.id}:{}),
   images:parseJsonField(item.splitImages,[]),customFields:stringifyCustomFields(custom),sourceSystem:'BELLO',
   purchaseQuantity:0,dailyPurchaseTotal:0,listingPartition:'ACTIVE',listUpdatedAt:now,
   createdAt:now,updatedAt:now,createdBy:actor,updatedBy:actor,__typename:'Inventory'};

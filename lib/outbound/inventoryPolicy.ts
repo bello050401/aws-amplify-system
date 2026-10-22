@@ -1,6 +1,6 @@
-/** Kawagoe keeps the current categories and location, including split stock. */
-export function preservesOutboundClassification(value:{templateType?:string}|null|undefined):boolean {
-  return value?.templateType==='KAWAGOE_V1';
+/** All dispatches preserve classification; only manual arrival changes it. */
+export function preservesOutboundClassification(value:{templateType?:string;arrivalWorkflow?:string}|null|undefined):boolean {
+  return !!value;
 }
 
-export const PRESERVED_CLASSIFICATION_NOTICE='出庫後もカテゴリ・保管場所は変更しません。一部数量の出庫では商品ページを分割し、どちらにも出庫前のカテゴリ・保管場所を引き継ぎます。';
+export const PRESERVED_CLASSIFICATION_NOTICE='出庫時はカテゴリ・保管場所を維持します。数量分割は行います。到着後、出庫履歴から在庫情報を変更してください。';

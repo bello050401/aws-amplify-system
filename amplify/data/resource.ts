@@ -341,6 +341,7 @@ const schema = a.schema({
     categoryId: a.string().required(), locationId: a.string().required(),
     requestedBy: a.string().required(), fingerprint: a.string().required(),
     status: a.string().required(), template: a.json().required(), fileName: a.string().required(), sender: a.string().required(),
+    arrivalWorkflow: a.string(), arrivalStatus: a.string(), arrivalAt: a.datetime(), arrivalBy: a.string(), arrivalCommandId: a.string(), arrivalPlan: a.json(),
     arrivalDate: a.date(), orderNumber: a.string(), templateType: a.string(), emailTo: a.string(), emailFrom: a.string(),
     emailStatus: a.string(), emailMessageId: a.string(), emailError: a.string(), emailSentAt: a.datetime(), emailConfirmedBy: a.string(), emailConfirmedAt: a.datetime(),
   }).authorization(allow => [allow.group('ADMIN').to(['read']), allow.group('EDITOR').to(['read']), allow.group('VIEWER').to(['read'])]),
@@ -348,6 +349,7 @@ const schema = a.schema({
   OutboundItem: a.model({
     batchId: a.string().required(), inventoryId: a.string().required(),
     status: a.string().required(), snapshot: a.json().required(), expectedUpdatedAt: a.string(),
+    arrivalStatus: a.string(), arrivalAt: a.datetime(), arrivalBy: a.string(), arrivalError: a.string(), arrivalChanges: a.json(),
     error: a.string(), sentAt: a.datetime(), sentBy: a.string(),
     sourceQuantity: a.integer(), detailNote: a.string(), splitInventoryId: a.string(), splitSku: a.string(), splitImages: a.json(), splitPrepared: a.boolean(),
   }).secondaryIndexes(index => [index('batchId'), index('inventoryId')])
@@ -436,6 +438,7 @@ const schema = a.schema({
       name: a.string().required(),
       categoryId: a.string(), // → Category.id, application-level reference (see note above)
       categoryIds: a.string().array(), // Read projection of InventoryCategory; updated with its links.
+      outboundArrivalBatchId: a.string(), // Dispatched stock awaiting manual arrival confirmation.
       outboundBatchId: a.string(), // Reservation until the outbound document is sent or cancelled.
       statusId: a.string(), // → StatusMaster.id
       locationId: a.string(), // → Location.id
