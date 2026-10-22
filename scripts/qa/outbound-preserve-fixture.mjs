@@ -13,7 +13,7 @@ import * as categories from '../../lib/inventory/categories.ts';
 import * as custom from '../../lib/inventory/customFieldsCodec.ts';
 import * as human from '../../lib/inventory/humanEdits.ts';
 
-export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',locationId='office'}={}) {
+export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',locationId='office',database,onError=()=>{}}={}) {
   const itemId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',destinationId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   const tables=new Map(),effects={emails:[],copies:[],merges:0,mergeReads:0,categoryWrites:[],failEmail:false,failCompletion:false,failArrivalFor:null,failArrivalFinal:false,transactions:[]};
   const rows=model=>{if(!tables.has(model))tables.set(model,new Map());return tables.get(model);};
@@ -52,8 +52,13 @@ export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',
     }
     put(op.TableName,row);
   }
-  const db={send:async command=>{
+  const db=database??{send:async command=>{
     const op=command.input;
+    // DynamoDB rejects reserved attribute names even when our in-memory parser
+    // understands them. Keep the production incident reproducible here too.
+    for(const action of op.TransactItems??[{operation:op}])for(const value of Object.values(action)){
+      if(/(?<![#:])\bsnapshot\b/.test([value.UpdateExpression,value.ConditionExpression,value.FilterExpression,value.ProjectionExpression].filter(Boolean).join(' ')))throw Object.assign(Error('Reserved keyword: snapshot'),{name:'ValidationException'});
+    }
     if(command instanceof commands.GetCommand)return {Item:read(op.TableName,op.Key.id)};
     if(command instanceof commands.ScanCommand){
       let items=[...rows(op.TableName).values()];
@@ -74,7 +79,7 @@ export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',
   const stubs={
     'server-only':{},'node:crypto':crypto,'@aws-sdk/lib-dynamodb':commands,
     './transactionRetry':{sendOutboundTransaction:(db,c)=>db.send(c)},
-    '@/lib/inventory/categoryPersistence':{inventoryDdb:db,inventoryTable:n=>n,getInventoryRaw:id=>Promise.resolve(read('Inventory',id)),categoryLinkChanges:(id,before,after,now)=>{effects.categoryWrites.push({id,before,after});return [...before.filter(c=>!after.includes(c)).map(c=>({Delete:{TableName:'InventoryCategory',Key:{id:id+':'+c}}})),...after.map(c=>({Put:{TableName:'InventoryCategory',Item:{id:id+':'+c,inventoryId:id,categoryId:c,createdAt:now}}}))];}},
+    '@/lib/inventory/categoryPersistence':{inventoryDdb:db,inventoryTable:n=>n,getInventoryRaw:async id=>(await db.send(new commands.GetCommand({TableName:'Inventory',Key:{id},ConsistentRead:true}))).Item,categoryLinkChanges:(id,before,after,now)=>{effects.categoryWrites.push({id,before,after});return [...before.filter(c=>!after.includes(c)).map(c=>({Delete:{TableName:'InventoryCategory',Key:{id:id+':'+c}}})),...after.map(c=>({Put:{TableName:'InventoryCategory',Item:{id:id+':'+c,inventoryId:id,categoryId:c,createdAt:now}}}))];}},
     '@/lib/inventory/categories':categories,'@/lib/inventory/humanEdits':human,'@/lib/inventory/customFieldsCodec':custom,
     '@/lib/inventory/inventoryPage':{clearInventoryCountCache(){}},'@/lib/mobile/inventoryThumbnails':{inventoryThumbnails:async items=>items.map(r=>({id:r.id,thumbnailUrl:null}))},
     './arrivalTypes':arrivalTypes,
@@ -84,8 +89,8 @@ export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',
     './email':{assertOutboundEmailReady:async()=>{},sendOutboundEmail:async batch=>{if(effects.failEmail)throw Error('Injected email failure');effects.emails.push(kawagoe.kawagoeAttachments(batch));return 'isolated-qa-message';},isDefiniteEmailFailure:()=>true},
   };
   const exports={};
-  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../../lib/outbound/service.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require:name=>{if(!(name in stubs))throw Error('Unstubbed dependency: '+name);return stubs[name];},Date,JSON,Error,console:{error(){}},Set,Map,Number,Object,Array});
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../../lib/outbound/service.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require:name=>{if(!(name in stubs))throw Error('Unstubbed dependency: '+name);return stubs[name];},Date,JSON,Error,console:{error:onError},Set,Map,Number,Object,Array});
   stubs['./service']=exports;
-  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../../lib/outbound/arrivalService.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require:name=>{if(!(name in stubs))throw Error('Unstubbed dependency: '+name);return stubs[name];},Date,JSON,Error,console:{error(){}},Set,Map,Number,Object,Array});
-  return {api:exports,itemId,destinationId,original,effects,read,put,rows,prepare:async(quantity=5,id=crypto.randomUUID())=>exports.prepareOutbound(id,destinationId,[{id:itemId,updatedAt:read('Inventory',itemId).updatedAt,quantity,detailNote:'確認用の備考',exportName:'送信データ用の商品名'}],'QA','2026-10-23')};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../../lib/outbound/arrivalService.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require:name=>{if(!(name in stubs))throw Error('Unstubbed dependency: '+name);return stubs[name];},Date,JSON,Error,console:{error:onError},Set,Map,Number,Object,Array});
+  return {api:exports,itemId,destinationId,original,effects,read,put,rows,seed:async()=>{for(const [model,items] of tables)for(const item of items.values())await db.send(new commands.PutCommand({TableName:model,Item:item}));},prepare:async(quantity=5,id=crypto.randomUUID())=>exports.prepareOutbound(id,destinationId,[{id:itemId,updatedAt:(await db.send(new commands.GetCommand({TableName:'Inventory',Key:{id:itemId},ConsistentRead:true}))).Item.updatedAt,quantity,detailNote:'確認用の備考',exportName:'送信データ用の商品名'}],'QA','2026-10-23')};
 }

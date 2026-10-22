@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {createAwsOutboundFixture} from './outbound-aws-fixture.mjs';
+import {arrivalStatus} from '../../lib/outbound/arrivalTypes.ts';
+const f=await createAwsOutboundFixture();
+try{
+ const first=await f.prepare(3);
+ const sent=await f.api.emailOutbound(first.id,'QA-AWS');
+ assert.equal(sent.status,'COMPLETED');assert.equal(arrivalStatus(sent),'WAITING');
+ const childId=sent.rows[0].splitInventoryId;
+ assert.equal((await f.readCloud('Inventory',f.itemId)).quantity,2);
+ const child=await f.readCloud('Inventory',childId);
+ assert.equal(child.quantity,3);assert.equal(child.locationId,'office');assert.deepEqual(child.categoryIds,['sale','move']);
+ console.log('PASS: actual AWS transaction splits 5 into 2 + 3, retaining classification');
+ let preview=await f.api.previewOutboundArrival(first.id);
+ const commandId=randomUUID();
+ const changes=preview.items.map(r=>({rowId:r.rowId,inventoryId:r.inventoryId,expectedUpdatedAt:r.updatedAt,locationId:'kawagoe',categoryIds:['sale']}));
+ const complete=await f.api.confirmOutboundArrival(first.id,commandId,changes,'QA-AWS');
+ assert.equal(complete.arrivalStatus,'COMPLETED');
+ assert.equal((await f.readCloud('Inventory',f.itemId)).locationId,'office');
+ assert.equal((await f.readCloud('Inventory',childId)).locationId,'kawagoe');
+ assert.deepEqual((await f.readCloud('Inventory',childId)).categoryIds,['sale']);
+ const historyCount=(await f.scanCloud('InventoryHistory')).length;
+ await f.api.confirmOutboundArrival(first.id,commandId,changes,'QA-AWS');
+ assert.equal((await f.scanCloud('InventoryHistory')).length,historyCount);
+ console.log('PASS: AWS arrival changes only the split child; retry does not duplicate history');
+ const second=await f.prepare(2);
+ f.failNextDispatch();
+ const interrupted=await f.api.emailOutbound(second.id,'QA-AWS');
+ assert.equal(interrupted.status,'PARTIAL');assert.equal(interrupted.emailStatus,'SENT');
+ const recovered=await f.api.emailOutbound(second.id,'QA-AWS');
+ assert.equal(recovered.status,'COMPLETED');assert.equal(arrivalStatus(recovered),'WAITING');
+ assert.equal(f.effects.emails.length,2); // One captured send per batch, none on recovery.
+ assert.equal((await f.readCloud('Inventory',f.itemId)).locationId,'office');
+ console.log('PASS: full-quantity dispatch recovers after accepted email without resending');
+ preview=await f.api.previewOutboundArrival(second.id);
+ const final=await f.api.confirmOutboundArrival(second.id,randomUUID(),preview.items.map(r=>({rowId:r.rowId,inventoryId:r.inventoryId,expectedUpdatedAt:r.updatedAt,locationId:'kawagoe',categoryIds:[]})),'QA-AWS');
+ assert.equal(final.arrivalStatus,'COMPLETED');
+ assert.deepEqual((await f.readCloud('Inventory',f.itemId)).categoryIds,[]);
+ assert.equal((await f.readCloud('Inventory',f.itemId)).categoryId,undefined);
+ assert.equal((await f.scanCloud('InventoryCategory')).filter(r=>r.inventoryId===f.itemId).length,0);
+ console.log('PASS: AWS empty-category update removes category links and completes history');
+ console.log('External email/Slack/ZAICO sends: 0');
+}finally{await f.cleanup();}
