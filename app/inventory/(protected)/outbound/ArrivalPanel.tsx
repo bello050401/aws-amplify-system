@@ -38,7 +38,7 @@ export function ArrivalPanel({batch,embedded,canEdit,disabled,onUpdated,request}
    {(status==='APPLYING'||status==='PARTIAL'||pending.current)&&<button className={button+' w-full bg-blue-600 !text-white'} disabled={busy||disabled} onClick={()=>apply(true)}>更新を再開</button>}
    {status!=='APPLYING'&&!pending.current&&<button className={button+' w-full bg-blue-600 !text-white'} disabled={busy||disabled} onClick={open}>{status==='PARTIAL'?'未完了の商品を確認・変更':'到着確認・一括変更'}</button>}
   </div>}
-  {preview&&<div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"><section role="dialog" aria-modal="true" aria-label="到着確認・一括変更" className="flex max-h-[94dvh] w-full max-w-2xl flex-col rounded-t-2xl bg-white sm:rounded-2xl">
+  {preview&&<div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"><section role="dialog" aria-modal="true" aria-label="到着確認・一括変更" className="flex max-h-[94%] w-full max-w-2xl flex-col rounded-t-2xl bg-white sm:rounded-2xl">
    <header className="shrink-0 border-b p-4"><h2 className="text-lg font-semibold">到着確認・一括変更</h2><p className="text-sm">{batch.destinationName} · {preview.items.length}商品 · {preview.items.reduce((n,i)=>n+i.quantity,0)}点</p></header>
    <div className="space-y-5 overflow-y-auto p-4">
     <label className="grid gap-2 font-semibold">変更後の保管場所<select aria-label="変更後の保管場所" className={field} value={location} disabled={busy} onChange={e=>setLocation(e.target.value)}><option value="">選んでください</option>{preview.locations.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
