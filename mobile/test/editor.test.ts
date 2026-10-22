@@ -162,3 +162,27 @@ test("server returning a different item is not treated as saved", async () => {
   f.editor.change("quantity", "2"); assert.equal(await f.editor.save(), null);
   assert.equal(f.editor.getSnapshot().saved.id, f.base.id); assert.equal(f.editor.getSnapshot().dirty, true);
 });
+
+test('single Photo Station image removal preserves unsaved inventory edits',async()=>{
+ const f=fixture();const image={id:'asset1',source:'PHOTO_ASSET' as const,url:'photo.jpg',primary:true};
+ const base={...f.base,photos:[image,{...image,id:'asset2',primary:false}]};let removed='';
+ f.ports.deletePhotoAsset=async(_id,id)=>{removed=id};const editor=new InventoryEditor(base,f.ports);
+ editor.change('note','未保存のメモ');await editor.deletePhotoAsset('asset1');
+ assert.equal(removed,'asset1');assert.equal(editor.getSnapshot().draft.note,'未保存のメモ');
+ assert.equal(editor.getSnapshot().dirty,true);assert.deepEqual(editor.getSnapshot().saved.photos?.map(p=>p.id),['asset2']);
+ assert.equal(base.photos.length,2);
+});
+test('failed/offline Photo Station deletion retains image and clears saving state',async()=>{
+ const f=fixture();const base={...f.base,photos:[{id:'asset1',source:'PHOTO_ASSET' as const,url:'photo.jpg',primary:true}]};let calls=0;
+ f.ports.deletePhotoAsset=async()=>{calls++;throw Error('削除できません')};const editor=new InventoryEditor(base,f.ports);
+ f.setOnline(false);await assert.rejects(()=>editor.deletePhotoAsset('asset1'));assert.equal(calls,0);
+ f.setOnline(true);await assert.rejects(()=>editor.deletePhotoAsset('asset1'));assert.equal(calls,1);
+ assert.equal(editor.getSnapshot().saved.photos?.length,1);assert.equal(editor.getSnapshot().saving,false);
+});
+test('parallel image delete is blocked until first result is known',async()=>{
+ const f=fixture();let finish:()=>void=()=>{};f.ports.deletePhotoAsset=()=>new Promise<void>(r=>{finish=r});
+ const editor=new InventoryEditor({...f.base,photos:[{id:'asset1',source:'PHOTO_ASSET' as const,url:'photo.jpg',primary:true}]},f.ports);
+ const first=editor.deletePhotoAsset('asset1');await Promise.resolve();
+ await assert.rejects(()=>editor.deletePhotoAsset('asset1'));finish();await first;
+ assert.equal(editor.getSnapshot().saved.photos?.length,0);
+});

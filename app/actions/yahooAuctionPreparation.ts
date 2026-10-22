@@ -56,10 +56,11 @@ export async function saveYahooAuctionPreparationAction(inventoryId: string, inp
   if (!contextResult.ok) return contextResult;
   const { draft, saved, availableQuantity, canPrepare } = contextResult.context;
   if (!canPrepare || parsed.quantity > availableQuantity) return { ok: false, code: "NOT_ELIGIBLE" };
+  if (draft?.quantity!=null && parsed.quantity!==draft.quantity) return {ok:false,code:"SOURCE_CHANGED"};
   if (!draft || draft.updatedAt !== expectedSourceUpdatedAt) return { ok: false, code: "SOURCE_CHANGED" };
   if ((saved?.revision ?? null) !== expectedRevision) return { ok: false, code: "CONFLICT" };
   const payload: YahooAuctionPayload = { schemaVersion: 1, input: { ...parsed, endAtJst: resolvedYahooEndAt(parsed) },
-    source: { draftId: draft.id, draftUpdatedAt: draft.updatedAt, images: draft.images,
+    source: { commonTitle:draft.title,commonDescription:draft.description??"",commonCondition:draft.condition, draftId: draft.id, draftUpdatedAt: draft.updatedAt, images: draft.images,
       shippingMethod: draft.shippingMethod, commonCategoryId: draft.commonCategoryId ?? null,
       commonPriceYen: commonChannelPrice(draft, 'YAHOO') } };
   const revision = (expectedRevision ?? 0) + 1;

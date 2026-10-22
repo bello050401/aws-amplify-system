@@ -1,3 +1,4 @@
+import {listingQuantity} from "../../quantity";
 /**
  * `buildExportRowForInventory`(lib/listing/mercari/csv/buildExportRows.ts)
  * が実DB(Inventory/ListingDraft/ChannelListing)を取得した「後」の、
@@ -140,6 +141,10 @@ export function assembleMercariCsvRowFields(
     };
   }
 
+  const quantity = listingQuantity(draft, inventory.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > inventory.quantity) {
+    return {ok:false,inventoryId,displayId,reasons:['共通の出品数量が現在の在庫数を超えています。共通の商品情報を確認してください。']};
+  }
   if (!draft.condition) {
     return { ok: false, inventoryId, displayId, reasons: ["商品の状態が下書きに未設定です"] };
   }
@@ -199,7 +204,7 @@ export function assembleMercariCsvRowFields(
     productName: resolved.title,
     productDescription: resolved.description,
     skuType: null,
-    quantity: inventory.quantity,
+    quantity,
     managementCode,
     janCode: inventory.barcode ?? null,
     catalogId: null,

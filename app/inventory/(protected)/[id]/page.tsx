@@ -234,8 +234,8 @@ export default async function InventoryDetailPage({
   // (旧「独立した保管場所カード」+「管理メモ」セクションは廃止)。
   const managementRows: DetailInfoRow[] = [
     { label: "保管場所", value: location?.name ?? "-" },
-    { label: "作成日", value: formatDateTime(item.createdAt) },
-    { label: "更新日", value: formatDateTime(productUpdatedAt(item)) },
+    { label: "ページ作成日", value: formatDateTime(item.createdAt) },
+    { label: "最終更新日時", value: formatDateTime(productUpdatedAt(item)) },
     { label: "作成者", value: item.createdBy ?? "-" },
     { label: "更新者", value: item.updatedBy ?? "-" },
     { label: "管理メモ", value: item.adminMemo || "-" },
@@ -250,7 +250,6 @@ export default async function InventoryDetailPage({
     { label: "SKU", value: item.sku },
     { label: "物品名", value: item.name },
     { label: "カテゴリ", value: categoryLabels(item,categories).join(" / ") || "-" },
-    { label: "状態", value: status?.label ?? "-" },
     { label: "数量", value: item.quantityUnset ? "未入力" : String(item.quantity) },
     { label: "単位", value: item.unit ?? "-" },
     { label: "QRコード・バーコード", value: item.barcode ?? "-" },

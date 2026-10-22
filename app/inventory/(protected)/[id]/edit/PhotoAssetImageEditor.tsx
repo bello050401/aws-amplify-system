@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { setPhotoAssetInventoryTypeAction, setPhotoAssetPrimaryAction } from "@/app/actions/photoRegistration";
+import { deleteInventoryPhotoAssetAction, setPhotoAssetInventoryTypeAction, setPhotoAssetPrimaryAction } from "@/app/actions/photoRegistration";
 import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
 
-export function PhotoAssetImageEditor({ assets: initialAssets }: { assets: WebPhotoAssetView[] }) {
+export function PhotoAssetImageEditor({ inventoryId, assets: initialAssets }: { inventoryId:string; assets: WebPhotoAssetView[] }) {
   const [assets, setAssets] = useState(initialAssets.map((asset) => ({ ...asset, inventoryImageType: asset.inventoryImageType === "DAMAGE" ? "DAMAGE" as const : "NORMAL" as const })));
+  const [deleteTarget,setDeleteTarget]=useState<WebPhotoAssetView|null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (assets.length === 0) return null;
@@ -32,6 +33,11 @@ export function PhotoAssetImageEditor({ assets: initialAssets }: { assets: WebPh
     setAssets((current) => current.map((item) => ({ ...item, inventoryIsPrimary: item.id === asset.id })));
   }
 
+  async function remove(asset:WebPhotoAssetView){
+    if(pendingId)return;setPendingId(asset.id);setError(null);
+    try{const r=await deleteInventoryPhotoAssetAction(inventoryId,asset.id);if(!r.ok){setError(r.message);return;}setAssets(current=>current.filter(p=>p.id!==asset.id));setDeleteTarget(null);}
+    catch{setError('削除結果を確認できませんでした。画像を読み直してください。');}finally{setPendingId(null);}
+  }
   const renderGroup = (type: "NORMAL" | "DAMAGE", title: string) => {
     const group = assets.filter((asset) => asset.inventoryImageType === type);
     return (
@@ -54,6 +60,7 @@ export function PhotoAssetImageEditor({ assets: initialAssets }: { assets: WebPh
                   className="mt-1 min-h-7 w-full border border-gray-300 px-1 text-[10px] hover:bg-gray-50 disabled:opacity-50">
                   {pendingId === asset.id ? "変更中…" : type === "NORMAL" ? "傷写真にする" : "商品画像に戻す"}
                 </button>
+                <button type="button" disabled={!!pendingId} onClick={()=>setDeleteTarget(asset)} className="mt-1 min-h-9 w-full border border-red-200 text-xs text-red-700">この画像を削除</button>
               </div>
             ))}
           </div>
@@ -65,6 +72,7 @@ export function PhotoAssetImageEditor({ assets: initialAssets }: { assets: WebPh
   return <>
     {renderGroup("NORMAL", "商品画像（撮影画像）")}
     {renderGroup("DAMAGE", "傷・汚れ写真（撮影画像から選択）")}
+    {deleteTarget&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><section role="alertdialog" aria-label="撮影画像の削除確認" className="rounded-xl bg-white p-5"><h3 className="font-semibold">この写真を削除しますか？</h3><p className="my-3 text-sm">確定すると商品から削除されます。</p><button type="button" disabled={!!pendingId} className="mr-3 border px-4 py-2" onClick={()=>setDeleteTarget(null)}>キャンセル</button><button type="button" disabled={!!pendingId} className="bg-red-700 px-4 py-2 text-white" onClick={()=>void remove(deleteTarget)}>削除する</button>{error&&<p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}</section></div>}
     {error ? <p role="alert" className="text-xs text-red-600">{error}</p> : null}
   </>;
 }

@@ -1,4 +1,5 @@
 import "server-only";
+import {listingQuantity} from "../quantity";
 import { createHash } from "node:crypto";
 import {
   getChannelListing,
@@ -76,9 +77,10 @@ async function source(id: string, claimToken?: string) {
     title: row.overrideTitle ?? draft.title,
     detail: row.overrideDescription ?? draft.description ?? "",
     price: draft.channelPrices ? draft.channelPrices.BASE ?? 0 : row.overridePrice ?? draft.price ?? 0,
-    stock: item.quantity,
+    stock: listingQuantity(draft,item.quantity),
   };
   if (
+    !Number.isSafeInteger(content.stock) || content.stock<1 || content.stock>item.quantity ||
     !content.title.trim() ||
     !Number.isSafeInteger(content.price) ||
     content.price < 1 ||

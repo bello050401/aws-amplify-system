@@ -1,4 +1,5 @@
 import iconv from 'iconv-lite';
+import {exportProductName} from './types';
 import type {OutboundBatch,OutboundRow} from './types';
 
 export const KAWAGOE_TEMPLATE='KAWAGOE_V1';
@@ -30,11 +31,11 @@ export function kawagoeAttachments(batch:OutboundBatch):OutboundAttachment[] {
  const rows=batch.rows.filter(row=>row.status==='PENDING'||row.status==='SENT');
  if(!rows.length)throw Error('送信できる商品がありません。');
  const products=new Map<string,OutboundRow>();
- for(const row of rows){const code=validateBarcode(row.snapshot.barcode);validateMovementQuantity(row.snapshot.quantity,row.sourceQuantity??row.snapshot.quantity);if(products.has(code)&&products.get(code)!.snapshot.name!==row.snapshot.name)throw Error('同じバーコードに異なる商品名があります。対象商品を確認してください。');products.set(code,row);}
+ for(const row of rows){const code=validateBarcode(row.snapshot.barcode);validateMovementQuantity(row.snapshot.quantity,row.sourceQuantity??row.snapshot.quantity);if(products.has(code)&&exportProductName(products.get(code)!.snapshot)!==exportProductName(row.snapshot))throw Error('同じバーコードに異なる商品名があります。対象商品を確認してください。');products.set(code,row);}
  const suffix=batch.orderNumber.replace('入荷','');
  const total=rows.reduce((sum,row)=>sum+row.snapshot.quantity,0);
  return [
-  {kind:'products',fileName:`Bello_商品マスタ取込CSV_${suffix}.csv`,data:csv([PRODUCT_HEADERS,...[...products].map(([code,row])=>[code,code,row.snapshot.name])])},
+  {kind:'products',fileName:`Bello_商品マスタ取込CSV_${suffix}.csv`,data:csv([PRODUCT_HEADERS,...[...products].map(([code,row])=>[code,code,exportProductName(row.snapshot)])])},
   {kind:'arrival',fileName:`${suffix}入荷予定（計${total}点）.csv`,data:csv([ARRIVAL_HEADERS,...rows.map(row=>[batch.orderNumber,batch.arrivalDate!.replaceAll('-','/'),validateBarcode(row.snapshot.barcode),row.snapshot.quantity,'',row.detailNote??''])])},
  ];
 }

@@ -124,6 +124,7 @@ export function ListingWorkspace({
               inventoryId={item.id}
               brandLogoAvailable={brandLogoAvailable}
               inventoryName={item.name}
+              availableQuantity={item.quantity}
               images={images}
               photoAssets={photoAssets}
               initialDraft={initialDraft}
@@ -167,6 +168,7 @@ export function ListingWorkspace({
                 hasShopsRecord={!!initialChannelListing}
                 mode="HTTP"
                 commonPrice={draft?commonChannelPrice(draft,'MERCARI_SHOPS'):item.plannedSalePrice}
+                commonQuantity={draft?.quantity??item.quantity}
                 commonCategory={commonCategory(draft?.commonCategoryId)?.mercari??null}
                 showExecution={false}
               />
@@ -209,7 +211,7 @@ export function ListingWorkspace({
       {canPrepareMercari && visited.has("INDEPENDENT") && (
         <div hidden={tab !== "INDEPENDENT"}>
           <fieldset disabled={dirty}>
-            <IndependentShopPanel inventoryId={item.id} quantity={item.quantity} />
+            <IndependentShopPanel inventoryId={item.id} quantity={draft?.quantity??item.quantity} />
           </fieldset>
         </div>
       )}

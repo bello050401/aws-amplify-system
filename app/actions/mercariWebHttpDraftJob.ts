@@ -86,7 +86,7 @@ export async function reserveMercariWebHttpDraftJobAction(
     const current = await prepareMercariWebHttpDraftJobAction(
       reviewedPack.inventoryId, { priceYen: reviewedPack.priceYen,
         quantity: reviewedPack.quantity, categoryId: reviewedPack.categoryId,
-        brandId: reviewedPack.brandId });
+        brandId: reviewedPack.brandId, shippingMethod:reviewedPack.shipping.method, descriptionSuffix:reviewedPack.descriptionSuffix });
     if (!current.ok || JSON.stringify(canonical(current.pack)) !==
         JSON.stringify(canonical(reviewedPack)))
       return { ok: false, code: "PACK_CHANGED" };

@@ -1,4 +1,6 @@
 import "server-only";
+import {productUpdatedAt} from "@/lib/inventory/productDates";
+import {listingQuantity} from "./quantity";
 import { decodeStructuredJson } from "@/lib/amplify/structuredJson";
 import { commonCategory, normalizeChannelPrices, type CommonChannelPrices } from './commonSettings';
 import { normalizeShippingPackages } from "@/lib/shipping/packages";
@@ -101,6 +103,7 @@ function parseStoredListingJson<T>(raw: unknown): T | null {
 }
 
 export function toListingDraftRecord(row: {
+  quantity?: number | null;
   id: string;
   inventoryId: string;
   title: string;
@@ -124,6 +127,7 @@ export function toListingDraftRecord(row: {
     inventoryId: row.inventoryId,
     title: row.title,
     commonCategoryId: row.commonCategoryId ?? null,
+    quantity: row.quantity ?? null,
     channelPrices: normalizeChannelPrices(parseStoredListingJson(row.channelPrices)),
     description: row.description ?? null,
     price: row.price ?? null,
@@ -336,20 +340,23 @@ async function fetchAllChannelListings(channel: ListingChannel): Promise<Channel
 }
 
 /** 一覧用に下書きの単価だけ取得する。本文・画像は運ばない。 */
-async function fetchListingDraftPrices(): Promise<Map<string, number | null>> {
-  const prices = new Map<string, number | null>();
+type OverviewDraft = {channelPrices?:ListingDraftRecord["channelPrices"];price:number|null;quantity?:number|null;deletedAt?:string|null;updatedAt:string};
+async function fetchListingDraftPrices(): Promise<Map<string, OverviewDraft>> {
+  const prices = new Map<string, OverviewDraft>();
   let fetchedCount = 0;
   let nextToken: string | null | undefined;
   do {
     const { data, nextToken: nt, errors } = await serverDataClient.models.ListingDraft.list({
-      filter: { deletedAt: { attributeExists: false } },
       limit: LISTING_OVERVIEW_PAGE_SIZE,
       nextToken: nextToken ?? undefined,
-      selectionSet: ["inventoryId", "price"],
+      selectionSet: ["inventoryId", "price", "channelPrices", "quantity", "deletedAt", "updatedAt"],
       ...inventoryAuthMode,
     });
     if (errors) throw new Error(`出品下書き一覧の取得に失敗しました: ${JSON.stringify(errors)}`);
-    for (const row of data) prices.set(row.inventoryId, row.price ?? null);
+    for (const row of data) {
+      const previous=prices.get(row.inventoryId);
+      if (!previous || row.updatedAt>previous.updatedAt) prices.set(row.inventoryId, {channelPrices:normalizeChannelPrices(parseStoredListingJson(row.channelPrices)),price:row.price??null,quantity:row.quantity,deletedAt:row.deletedAt,updatedAt:row.updatedAt});
+    }
     // 件数の上限判定は(重複除去前の)取得件数そのもので行う——
     // fetchAllListingDraftsと同じ歯止めの意味を保つ(Setのサイズだと、
     // inventoryIdの重複がもしあった場合に上限判定がずれてしまう)。
@@ -362,6 +369,10 @@ async function fetchListingDraftPrices(): Promise<Map<string, number | null>> {
 
 /** 一覧ベースのEC出品管理画面(下記ListingOverviewRow)の1行。 */
 export interface ListingOverviewRow {
+  channelPrices?: ListingDraftRecord["channelPrices"];
+  inventoryCreatedAt?: string;
+  categories?: string[];
+  archived?: boolean;
   inventoryId: string;
   displayId: string;
   name: string;
@@ -425,7 +436,7 @@ export interface ListingOverviewRow {
 function buildOverviewRows(
   inventoryPage: Awaited<ReturnType<typeof listEcEligibleInventory>>,
   channelListings: ChannelListingRecord[],
-  draftPrices: Map<string, number | null>,
+  draftPrices: Map<string, OverviewDraft>,
   categoryNameOf: CategoryNameLookup,
 ): ListingOverviewRow[] {
   const channelListingByInventoryId = new Map(channelListings.map((c) => [c.inventoryId, c]));
@@ -436,18 +447,22 @@ function buildOverviewRows(
   return inventoryPage.items
     // listEcEligibleInventory が対象カテゴリだけを引いているので、ここは
     // 二重の網。カテゴリ名が後から変わった場合にも取りこぼさない。
-    .filter((item) => isEcListingEligible(categoryNameOf(item.categoryId)))
+    .filter((item) => (item.categoryIds?.length ? item.categoryIds : [item.categoryId]).some(id=>isEcListingEligible(categoryNameOf(id))))
     .map((item) => ({
       inventoryId: item.id,
       displayId: item.displayId,
       name: item.name,
-      quantity: item.quantity,
+      quantity: draftPrices.get(item.id)?.quantity ?? item.quantity,
+      categories: (item.categoryIds?.length?item.categoryIds:[item.categoryId]).map(categoryNameOf).filter((n):n is string=>!!n),
+      archived: !!draftPrices.get(item.id)?.deletedAt,
       // salePrice is a sales result and may include multiple sold units.
-      price: draftPrices.get(item.id) ?? item.plannedSalePrice ?? null,
+      price: draftPrices.get(item.id)?.price ?? item.plannedSalePrice ?? null,
       thumbnailKey: item.mainImageThumbnailKey ?? item.mainImageStorageKey,
       thumbnailIsPrimary: item.mainImageIsPrimary,
-      inventoryUpdatedAt: item.updatedAt,
-      hasDraft: draftPrices.has(item.id),
+      inventoryUpdatedAt: productUpdatedAt(item),
+      inventoryCreatedAt: item.createdAt,
+      channelPrices: draftPrices.get(item.id)?.channelPrices ?? null,
+      hasDraft: draftPrices.has(item.id) && !draftPrices.get(item.id)?.deletedAt,
       channelListing: channelListingByInventoryId.get(item.id) ?? null,
     }));
 }
@@ -596,7 +611,7 @@ async function fetchListingsOverviewRowsWithStages(): Promise<{ rows: ListingOve
   const rows = buildOverviewRows(
     (inventoryOutcome as { ok: true; value: Awaited<ReturnType<typeof listEcEligibleInventory>> }).value,
     (channelOutcome as { ok: true; value: ChannelListingRecord[] }).value,
-    (draftOutcome as { ok: true; value: Map<string, number | null> }).value,
+    (draftOutcome as { ok: true; value: Map<string, OverviewDraft> }).value,
     buildCategoryNameLookup((categoryOutcome as { ok: true; value: Awaited<ReturnType<typeof listAllMasterEntries>> }).value),
   );
   return { rows, stages };
@@ -786,6 +801,7 @@ export async function bulkCreateListingDrafts(
 }
 
 export interface ListingDraftInput {
+  quantity?: number;
   title: string;
   commonCategoryId?: string | null;
   channelPrices?: CommonChannelPrices | null;
@@ -870,7 +886,10 @@ export async function saveListingDraft(
   const ordered = top ? [top, ...normal.filter((i) => i !== top)] : normal;
   const inventoryImages: ListingImageRef[] = ordered.map((img, idx) => ({ storageKey: img.storageKey, sortOrder: idx }));
 
+  const quantity = input.quantity ?? existing?.quantity ?? Math.max(1, inventory.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > Math.max(1, inventory.quantity)) throw new Error("出品数量を1以上、現在の在庫数以下で入力してください。");
   const fields = {
+    quantity,
     title: input.title.trim(),
     commonCategoryId: input.commonCategoryId === undefined ? existing?.commonCategoryId : input.commonCategoryId,
     channelPrices: stringifyListingJson(input.channelPrices === undefined ? existing?.channelPrices ?? null : input.channelPrices),
@@ -1129,7 +1148,7 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
       overrideTitle: channelListing.overrideTitle,
       overrideDescription: channelListing.overrideDescription,
       overridePrice: channelListing.overridePrice,
-      quantity: inventory.quantity,
+      quantity: listingQuantity(draft, inventory.quantity),
     });
     const { data: updated, errors } = await serverDataClient.models.ChannelListing.update(
       { id: channelListing.id, externalListingId: result.externalProductId,

@@ -5,7 +5,9 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import type { InventoryItem, InventoryPhoto } from "../domain/inventory";
 import { colors } from "./theme";
 
-export function InventoryPhotos({ item, onRemove, disabled = false }: { item: InventoryItem; onRemove?: (id: string) => void; disabled?: boolean }) {
+export function InventoryPhotos({ item, onRemove, onDeleteAsset, disabled = false }: { item: InventoryItem; onRemove?: (id: string) => void; onDeleteAsset?: (id:string)=>Promise<void>; disabled?: boolean }) {
+  const [deleteError,setDeleteError]=useState('');
+  const [deleting,setDeleting]=useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<InventoryPhoto | null>(null);
   const [group, setGroup] = useState<"NORMAL" | "DAMAGE">("NORMAL");
@@ -37,7 +39,7 @@ export function InventoryPhotos({ item, onRemove, disabled = false }: { item: In
         <Pressable accessibilityRole="button" accessibilityLabel={`${group === "DAMAGE" ? "傷・状態" : "商品画像"}${index + 1}を拡大`} onPress={() => setExpanded(photo.id)}>
           {picture(photo)}<Text style={s.photoLabel}>{photo.primary ? "主画像" : `${index + 1}`} {photo.source === "PHOTO_ASSET" ? "・撮影" : ""}</Text>
         </Pressable>
-        {onRemove && photo.source === "INVENTORY" && <Pressable accessibilityRole="button" accessibilityLabel={`${group === "DAMAGE" ? "傷・状態" : "商品画像"}${index + 1}を削除`} disabled={disabled} onPress={() => setRemoveTarget(photo)} style={s.remove}><Text style={s.removeText}>削除</Text></Pressable>}
+        {((onRemove && photo.source === "INVENTORY") || (onDeleteAsset && photo.source === "PHOTO_ASSET")) && <Pressable accessibilityRole="button" accessibilityLabel={`${group === "DAMAGE" ? "傷・状態" : "商品画像"}${index + 1}を削除`} disabled={disabled} onPress={() => {setDeleteError('');setRemoveTarget(photo);}} style={s.remove}><Text style={s.removeText}>削除</Text></Pressable>}
       </View>)}
     </View>
     {current.length > shown && <Pressable accessibilityRole="button" style={s.more} onPress={() => setShown(value => value + 24)}><Text style={s.moreText}>残り{current.length - shown}枚を表示</Text></Pressable>}
@@ -52,13 +54,14 @@ export function InventoryPhotos({ item, onRemove, disabled = false }: { item: In
         </View>
       </View>
     </Modal>
-    <Modal visible={removeTarget !== null} transparent animationType="fade" onRequestClose={() => setRemoveTarget(null)}>
+    <Modal visible={removeTarget !== null} transparent animationType="fade" onRequestClose={() => {if(!deleting)setRemoveTarget(null);}}>
       <View style={s.shade}><View style={s.dialog} accessibilityViewIsModal>
         <Text style={s.heading}>この写真を削除しますか？</Text>
-        <Text style={s.caption}>「完了」で保存すると削除されます。保存前は元に戻せます。</Text>
+        <Text style={s.caption}>{removeTarget?.source==='PHOTO_ASSET'?'削除すると、この商品の写真から取り除かれます。':'「完了」で保存すると削除されます。保存前は元に戻せます。'}</Text>
+        {deleteError&&<Text accessibilityRole="alert" style={s.warning}>{deleteError}</Text>}
         {removeTarget && picture(removeTarget, true)}
-        <Pressable accessibilityRole="button" accessibilityLabel="写真の削除を確定" disabled={disabled} style={s.remove} onPress={() => { if (removeTarget) onRemove?.(removeTarget.id); setRemoveTarget(null); setExpanded(null); }}><Text style={s.removeText}>削除する</Text></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="写真の削除をキャンセル" onPress={() => setRemoveTarget(null)} style={s.remove}><Text style={s.moreText}>キャンセル</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="写真の削除を確定" disabled={disabled||deleting} style={s.remove} onPress={async () => {if(!removeTarget||deleting)return;setDeleting(true);setDeleteError('');try{if(removeTarget.source==='PHOTO_ASSET')await onDeleteAsset?.(removeTarget.id);else onRemove?.(removeTarget.id);setRemoveTarget(null);setExpanded(null);}catch(e){setDeleteError(e instanceof Error?e.message:'写真を削除できませんでした。');}finally{setDeleting(false);}}}><Text style={s.removeText}>削除する</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="写真の削除をキャンセル" disabled={deleting} onPress={() => setRemoveTarget(null)} style={s.remove}><Text style={s.moreText}>キャンセル</Text></Pressable>
       </View></View>
     </Modal>
   </View>;

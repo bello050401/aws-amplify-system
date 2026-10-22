@@ -211,3 +211,12 @@ export async function readSales(year:number,month:number,items=false):Promise<Sa
   if(value.owner!==session.owner)throw new Error("売上を取得できませんでした。");
   return value;
 }
+
+export async function removeInventoryPhotoAsset(id:string,photoId:string):Promise<void>{
+ if(!mobileWritesEnabled())throw new Error('写真を削除する権限がありません。');
+ const session=await authenticatedSession();const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),20000);
+ try{const response=await fetch(API_ORIGIN+'/api/mobile/inventory/'+encodeURIComponent(id)+'/photos/'+encodeURIComponent(photoId),{method:'DELETE',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{'X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})}});
+ const result=await response.json();if(!response.ok)throw new Error(result.message||'写真を削除できませんでした。ログインと通信を確認してください。');
+ if(result.owner!==session.owner||result.deletedId!==photoId)throw new Error('削除結果を確認できません。詳細を開き直してください。');
+ }finally{clearTimeout(timeout);}
+}

@@ -1,4 +1,5 @@
 "use server";
+import { commonYahooUpdateAction,commonOperationSourceHash } from "./ecCommonOperations";
 import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import {
@@ -19,7 +20,7 @@ import {
 } from "./mercariWebHttpLifecycle";
 import { getMercariWebHttpDraftJobStatusAction } from "./mercariWebHttpDraftJob";
 import { executeMercariHttpDraftStepAction } from "./mercariWebHttpExecuteDraft";
-import { getYahooAuctionPreparationAction } from "./yahooAuctionPreparation";
+import { ensureYahooCommonPreparationAction,prepareMercariFromCommonAction } from "./commonEcPreparation";
 import {
   getYahooWorkflowAction,
   prepareYahooPublicationAction,
@@ -60,6 +61,13 @@ async function archivedDraft(id: string) {
   );
   if (r.errors) throw Error("DRAFT_READ_FAILED");
   return [...r.data].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
+}
+
+async function publicationWithCommonUpdate(base:EcReview, update:Partial<EcReview>):Promise<EcReview|null> {
+  if(update.status==='DONE')return null;
+  if(update.status!=='READY'||!update.token)return {...base,...update};
+  const token='SYNC.'+Buffer.from(JSON.stringify({s:await commonOperationSourceHash(base.inventoryId),u:update.token})).toString('base64url');
+  return {...base,...update,operation:'PUBLISH',token,message:'保存した共通の商品情報を反映してから出品します。'};
 }
 
 /** A bounded, one-product step. The client queues products; no unbounded server job or automatic retry of uncertain writes. */
@@ -115,8 +123,17 @@ export async function reviewEcListingAction(
     const common = await getListingDraftForInventory(id);
     if (operation === "PUBLISH" && !common)
       return { ...base, message: "共通の商品情報を保存してから出品してください。" };
-    if (operation === "UPDATE") return channel === "BASE" ? {...base,...await reviewBaseContentUpdate(id)} : channel === "MERCARI_SHOPS" ? {...base,...await updateMercariHttpContentAction(id,null)} : {...base,message:"ヤフオクは出品停止後、保存した内容で再出品してください。"};
-    if (channel === "BASE") return { ...base, ...(await reviewBaseListing(id, operation)) };
+    if (operation === "UPDATE") return channel === "BASE" ? {...base,...await reviewBaseContentUpdate(id)} : channel === "MERCARI_SHOPS" ? {...base,...await updateMercariHttpContentAction(id,null)} : {...base,...await commonYahooUpdateAction(id,null)};
+    if (channel === "BASE") {
+      if(operation==='PUBLISH'){
+        const existing=await getChannelListing(id,'BASE');
+        if(existing?.externalListingId&&existing.status!=='ACTIVE'){
+          const sync=await publicationWithCommonUpdate(base,await reviewBaseContentUpdate(id));
+          if(sync)return sync;
+        }
+      }
+      return {...base,...await reviewBaseListing(id,operation)};
+    }
     if (channel === "YAHOO") {
       const current = await getYahooWorkflowAction(id);
       if (!current.ok) return { ...base, message: message(current.code) };
@@ -135,10 +152,9 @@ export async function reviewEcListingAction(
       }
       if (current.view.listing?.remoteStatus === "open")
         return { ...base, status: "DONE", message: "すでに出品中です。" };
-      const prep = await getYahooAuctionPreparationAction(id);
-      if (!prep.ok || !prep.context.saved)
-        return { ...base, message: "ヤフオクの出品情報を商品編集で保存してください。" };
-      const prepared = await prepareYahooPublicationAction(id, prep.context.saved.revision);
+      const prep = await ensureYahooCommonPreparationAction(id);
+      if (!prep.ok) return {...base,message:prep.message};
+      const prepared = await prepareYahooPublicationAction(id, prep.saved.revision);
       if (!prepared.ok)
         return {
           ...base,
@@ -196,8 +212,10 @@ export async function reviewEcListingAction(
       };
     }
     if (state.status === "LISTED") return { ...base, status: "DONE", message: "すでに出品中です。" };
-    if (state.status === "NOT_PREPARED")
-      return { ...base, message: "メルカリShopsの価格・数量・カテゴリを商品編集で保存してください。" };
+    if (state.status === "NOT_PREPARED") {
+      const prepared=await prepareMercariFromCommonAction(id);
+      return prepared.ok?{...base,status:"WAIT",nextAt:Date.now()+500,message:"共通の商品情報から出品準備を作成しました。"}:{...base,message:prepared.message};
+    }
     if (state.status === "PREPARED") {
       const job = await getMercariWebHttpDraftJobStatusAction(id);
       if (!job.ok || !job.requestId)
@@ -214,6 +232,10 @@ export async function reviewEcListingAction(
     }
     if (state.status !== "STOPPED" && state.status !== "DRAFT_READY")
       return { ...base, message: message(state.status) };
+    if(state.status==='STOPPED'){
+      const sync=await publicationWithCommonUpdate(base,await updateMercariHttpContentAction(id,null));
+      if(sync)return sync;
+    }
     const result = await (
       state.status === "STOPPED" ? reopenMercariHttpListingAction : publishMercariHttpListingAction
     )(id, null);
@@ -264,6 +286,21 @@ export async function executeEcListingAction(
     return failed;
   const id = review.inventoryId;
   try {
+    if(review.operation==='PUBLISH'&&review.token.startsWith('SYNC.')) {
+      let approved:{s:string;u:string};
+      try{approved=JSON.parse(Buffer.from(review.token.slice(5),'base64url').toString('utf8'));}catch{return failed;}
+      if(!approved||approved.s!==await commonOperationSourceHash(id)||typeof approved.u!=='string')return {...failed,message:'共通の商品情報が変わりました。出品前に確認し直してください。'};
+      if(review.channel==='YAHOO')return failed;
+      const updated=review.channel==='BASE'?await executeBaseContentUpdate(id,approved.u):await updateMercariHttpContentAction(id,approved.u);
+      if(updated.status!=='DONE')return {...review,...updated,token:review.token,operation:'PUBLISH'};
+      if(approved.s!==await commonOperationSourceHash(id))return {...failed,message:'共通の商品情報が変わりました。出品前に確認し直してください。'};
+      const fresh=await reviewEcListingAction(id,review.channel,'PUBLISH');
+      if(fresh.status==='DONE')return fresh;
+      if(fresh.status!=='READY'||!fresh.token)return {...review,...fresh,token:review.token};
+      if(fresh.token.startsWith('SYNC.'))return {...failed,message:'販売先の商品情報が変わりました。確認し直してください。'};
+      const result=await executeEcListingAction(fresh,true,termsAccepted);
+      return {...result,token:result.status==='WAIT'?review.token:result.token};
+    }
     if (review.operation === "ARCHIVE" || review.operation === "RESTORE") {
       const check = await reviewEcListingAction(id, review.channel, review.operation);
       if (check.status === "DONE") return check;
@@ -298,7 +335,7 @@ export async function executeEcListingAction(
       if (r.errors || !r.data?.updateListingDraft)
         return { ...failed, message: "保存内容が変わりました。再確認してください。" };
     } else if (review.operation === "UPDATE") {
-      if(review.channel==="YAHOO")return failed;
+      if(review.channel==="YAHOO")return {...review,...await commonYahooUpdateAction(id,review.token,termsAccepted)};
       const result=review.channel==="BASE"?await executeBaseContentUpdate(id,review.token):await updateMercariHttpContentAction(id,review.token);
       if(result.status==="DONE"){revalidatePath("/inventory/listings");revalidatePath(`/inventory/${id}/listing`);}
       return {...review,...result};

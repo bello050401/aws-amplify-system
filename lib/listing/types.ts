@@ -73,6 +73,8 @@ export function parseListingShippingMethod(value: string | null | undefined): Li
 }
 
 export interface ListingDraftRecord {
+  /** Common listing quantity; older drafts default to currently available stock. */
+  quantity?: number | null;
   id: string;
   inventoryId: string;
   title: string;

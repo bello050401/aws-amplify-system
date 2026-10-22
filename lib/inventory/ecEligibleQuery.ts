@@ -1,3 +1,5 @@
+import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
+import {compareInventoryDateDesc} from "./productDates";
 import {categoryFilter} from "./categories";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
@@ -20,10 +22,10 @@ export async function listEcEligibleInventory(categories: MasterEntry[]): Promis
  if(!eligible.length)return {items:[],queriedCategories:0,uncategorizedExcluded:true};
  const items:InventoryListRow[]=[];let nextToken:string|null|undefined;
  do {
-  const {data,nextToken:nt,errors}=await serverDataClient.models.Inventory.list({filter:{or:eligible.map(c=>categoryFilter(c.id))},limit:1000,nextToken:nextToken??undefined,...inventoryAuthMode});
+  const {data,nextToken:nt,errors}=await serverDataClient.models.Inventory.list({filter:{and:[NOT_MERGED_FILTER,{deletedAt:{attributeExists:false}},{or:eligible.map(c=>categoryFilter(c.id))}]},limit:1000,nextToken:nextToken??undefined,...inventoryAuthMode});
   if(errors)throw new Error('在庫の取得に失敗しました: '+errors.map(e=>e.message).join('; '));
-  items.push(...data.map(row=>toListRow(row as never)));nextToken=nt;
+  items.push(...data.filter(row=>!row.deletedAt&&row.listingPartition!=='MERGED').map(row=>toListRow(row as never)));nextToken=nt;
  }while(nextToken);
- items.sort((a,b)=>a.updatedAt<b.updatedAt?1:a.updatedAt>b.updatedAt?-1:0);
+ items.sort(compareInventoryDateDesc);
  return {items,queriedCategories:eligible.length,uncategorizedExcluded:true};
 }

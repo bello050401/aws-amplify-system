@@ -1,4 +1,5 @@
 import "server-only";
+import {listingQuantity} from "../quantity";
 import { createHash, randomUUID } from "node:crypto";
 import { serverDataClient, inventoryAuthMode } from "@/lib/amplify/dataClient";
 import { getAccessToken } from "@/lib/base/oauth";
@@ -116,7 +117,7 @@ export async function reviewBaseListing(id: string, operation: "PUBLISH" | "STOP
       };
     const draft = await getListingDraftForInventory(id),
       inventory = await getInventoryDetail(id);
-    if (!draft?.images.length || !inventory || !draft.price || !(await eligible(id, inventory.quantity)))
+    if (!draft?.images.length || !inventory || !draft.price || !(await eligible(id, listingQuantity(draft,inventory.quantity))))
       return { status: "BLOCKED", message: "共通の商品情報の価格・画像・在庫数を確認してください。" };
     if (!row) {
       const result = await serverDataClient.models.ChannelListing.create(
@@ -132,7 +133,7 @@ export async function reviewBaseListing(id: string, operation: "PUBLISH" | "STOP
     try {
       const created = await createBaseProduct({
         draft,
-        quantity: inventory.quantity,
+        quantity: listingQuantity(draft,inventory.quantity),
         overrideTitle: row.overrideTitle,
         overrideDescription: row.overrideDescription,
         overridePrice: row.overridePrice,

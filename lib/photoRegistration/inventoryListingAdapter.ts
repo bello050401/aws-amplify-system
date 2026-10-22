@@ -47,8 +47,8 @@ export function buildListingImageCandidates(
     }));
   const candidates: ListingImageCandidate[] = [...legacy, ...uploaded];
   for (const ref of savedImages ?? []) {
-    if (ref.source !== "PHOTO_ASSET" && ref.storageKey.startsWith("inventory/listing-branded/") && !candidates.some(item => item.ref.storageKey === ref.storageKey)) {
-      candidates.push({ ref, label: "保存済みロゴ入り画像", previewUrl: null, available: true });
+    if (ref.source !== "PHOTO_ASSET" && (ref.storageKey.startsWith("inventory/listing-branded/") || ref.storageKey.startsWith("inventory/listing-upload/")) && !candidates.some(item => item.ref.storageKey === ref.storageKey)) {
+      candidates.push({ ref, label: ref.storageKey.startsWith("inventory/listing-upload/") ? "追加した出品画像" : "保存済みロゴ入り画像", previewUrl: null, available: true });
     }
   }
   if (brandedImageKey?.startsWith("inventory/listing-branded/") && !candidates.some(item => item.ref.storageKey === brandedImageKey)) {

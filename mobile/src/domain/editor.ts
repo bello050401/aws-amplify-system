@@ -23,6 +23,7 @@ export interface EditorPorts {
   online: () => Promise<boolean>;
   save: (request: SaveRequest) => Promise<InventoryItem>;
   newMutationId: () => string;
+  deletePhotoAsset?: (id:string,photoId:string)=>Promise<void>;
   uploadPhoto?: (photo: PendingPhoto) => Promise<UploadedPhoto>;
 }
 export interface EditorState {
@@ -116,6 +117,18 @@ export class InventoryEditor {
     if (!this.state.saved.photos?.some(photo => photo.id === id && photo.source === "INVENTORY")) return;
     this.pendingRequest = null;
     this.set({ removedPhotoIds: [...new Set([...this.state.removedPhotoIds, id])], dirty: true, warning: null });
+  }
+
+  async deletePhotoAsset(id:string):Promise<InventoryItem>{
+    if(this.state.saving||this.state.outcomeUncertain||this.state.creating||!this.ports.deletePhotoAsset||!this.state.saved.photos?.some(p=>p.id===id&&p.source==='PHOTO_ASSET'))throw new Error('写真を確認してから再度お試しください。');
+    this.set({saving:true});
+    try{if(!await this.ports.online())throw new Error(OFFLINE_WARNING);
+      await this.ports.deletePhotoAsset(this.state.saved.id,id);
+      const photos=this.state.saved.photos!.filter(p=>p.id!==id);
+      const primary=photos.find(p=>p.primary)??photos[0];
+      const saved={...this.state.saved,photos,thumbnailUrl:primary?.url??null};
+      this.set({saved});return saved;
+    }finally{this.set({saving:false});}
   }
 
   restoreRemovedPhotos(): void {

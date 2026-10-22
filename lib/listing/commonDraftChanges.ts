@@ -15,6 +15,7 @@ export function commonDraftHasChanges(
     title: string;
     description: string;
     price: string;
+    quantity?: string;
     condition: string;
     shippingMethod: ListingShippingMethod;
     images: ListingImageRef[];
@@ -23,9 +24,10 @@ export function commonDraftHasChanges(
     channelPrices?: CommonChannelPrices | null;
   },
   saved: ListingDraftRecord | null,
-  defaults: { title: string; images: ListingImageRef[] },
+  defaults: { title: string; images: ListingImageRef[]; quantity?:number },
 ): boolean {
   return (
+    (form.quantity !== undefined && Number(form.quantity) !== (saved?.quantity ?? defaults.quantity ?? 1)) ||
     form.title.trim() !== (saved?.title ?? defaults.title).trim() ||
     (form.commonCategoryId || null) !== (saved?.commonCategoryId || null) ||
     COMMON_EC_CHANNELS.some(

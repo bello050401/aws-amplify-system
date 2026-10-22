@@ -12,7 +12,7 @@ export type YahooAuctionInput = {
 export type YahooAuctionPayload = {
   schemaVersion: 1; input: YahooAuctionInput;
   source: { draftId: string; draftUpdatedAt: string; images: ListingImageRef[];
-    shippingMethod: ListingShippingMethod; commonCategoryId?: string | null; commonPriceYen?: number | null };
+    shippingMethod: ListingShippingMethod; commonCategoryId?: string | null; commonPriceYen?: number | null; commonTitle?:string; commonDescription?:string; commonCondition?:ListingConditionCode|null };
 };
 export type YahooAuctionSaved = { revision: number; updatedAt: string; payload: YahooAuctionPayload };
 const conditions = new Set(["NEW", "LIKE_NEW", "NO_NOTABLE_DAMAGE", "SLIGHT_DAMAGE", "DAMAGE", "BAD"]);
@@ -21,8 +21,8 @@ export const yahooInventoryIdValid = (id: unknown): id is string => typeof id ==
 
 export function initialYahooAuctionInput(draft: ListingDraftRecord | null): YahooAuctionInput {
   const category=commonCategory(draft?.commonCategoryId)?.yahoo;
-  return { title: draft?.title ?? "", description: draft?.description ?? "", condition: draft?.condition ?? null,
-    format: "FIXED", priceYen: draft?commonChannelPrice(draft,'YAHOO'):null, buyNowYen: null, quantity: 1,
+  return { title: [...(draft?.title ?? "")].slice(0,65).join(""), description: draft?.description ?? "", condition: draft?.condition ?? null,
+    format: "FIXED", priceYen: draft?commonChannelPrice(draft,'YAHOO'):null, buyNowYen: null, quantity: draft?.quantity ?? 1,
     categoryId: category?.id??"", categoryName: category?.path??"", endAtJst: defaultYahooEndAt(), automaticEnd: true, autoExtension: false };
 }
 
@@ -31,13 +31,18 @@ export function restoreYahooAuctionInput(draft: ListingDraftRecord | null, saved
   if (!saved) return initialYahooAuctionInput(draft);
   const input = { ...saved.payload.input };
   if (!draft) return input;
+  const previous=saved.payload.source;
+  if (previous.commonTitle!==draft.title) input.title=[...draft.title].slice(0,65).join("");
+  if (previous.commonDescription!==(draft.description??"")) input.description=draft.description??"";
+  if (previous.commonCondition!==draft.condition) input.condition=draft.condition;
+  input.quantity=draft.quantity??input.quantity;
   const category = commonCategory(draft.commonCategoryId)?.yahoo;
   if (category && saved.payload.source.commonCategoryId !== draft.commonCategoryId) {
     input.categoryId = category.id;
     input.categoryName = category.path;
   }
   const price = commonChannelPrice(draft, 'YAHOO');
-  if (draft.channelPrices && saved.payload.source.commonPriceYen !== price) input.priceYen = price;
+  if (saved.payload.source.commonPriceYen !== price) input.priceYen = price;
   return input;
 }
 

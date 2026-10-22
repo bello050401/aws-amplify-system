@@ -1,6 +1,6 @@
 /** Immutable upload keys only. Never collect unknown buckets or business documents. */
 export function isManagedInventoryImage(key: string): boolean {
-  return /^inventory\/(?:thumbnails\/|medium\/|processed\/)?[0-9a-f-]{36}\.(?:jpg|jpeg|png|webp|gif|avif|heic|heif)$/i.test(
+  return /^inventory\/(?:thumbnails\/|medium\/|processed\/|listing-upload\/[0-9a-f-]{36}\/)?[0-9a-f-]{36}\.(?:jpg|jpeg|png|webp|gif|avif|heic|heif)$/i.test(
     key,
   );
 }
@@ -18,7 +18,7 @@ export function collectReferencedKeys(
       /* malformed escape: retain the original */
     }
     for (const match of text.matchAll(
-      /inventory\/(?:thumbnails\/|medium\/|processed\/)?[0-9a-f-]{36}\.(?:jpeg|jpg|png|webp|gif|avif|heic|heif)/gi,
+      /inventory\/(?:thumbnails\/|medium\/|processed\/|listing-upload\/[0-9a-f-]{36}\/)?[0-9a-f-]{36}\.(?:jpeg|jpg|png|webp|gif|avif|heic|heif)/gi,
     ))
       result.add(match[0]);
     if (/^\s*[\[{]/.test(value)) {

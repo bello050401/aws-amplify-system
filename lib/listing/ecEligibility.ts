@@ -25,7 +25,7 @@ import { normalizeMasterName } from "@/lib/inventory/masters";
  * ・大文字小文字無視、lib/inventory/masters.tsのnormalizeMasterNameと
  * 同じ正規化)で判定するほうが、実際の運用データと一致する。
  */
-const EXCLUDED_CATEGORY_NAMES = ["補修待ち", "発送完了", "事務所備品", "コーディネート用", "無償提供", "破棄"] as const;
+const EXCLUDED_CATEGORY_NAMES = ["発送完了", "事務所備品", "コーディネート用", "無償提供", "破棄"] as const;
 
 const EXCLUDED_CATEGORY_NAMES_NORMALIZED = new Set(EXCLUDED_CATEGORY_NAMES.map(normalizeMasterName));
 

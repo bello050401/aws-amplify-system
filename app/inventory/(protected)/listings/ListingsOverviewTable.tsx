@@ -26,6 +26,7 @@ import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
 import { usePrimaryPhotoThumbnails } from "../../usePrimaryPhotoThumbnails";
 import { resolveListPhotoUrl } from "@/lib/photoRegistration/gallerySelection";
+import {compareEcOverview,ecOverviewPrice,type EcSortKey} from "@/lib/listing/overviewPresentation";
 import { EcBulkDialog } from "./EcBulkDialog";
 
 const button =
@@ -53,9 +54,11 @@ export function ListingsOverviewTable({
   );
   const [catalog, setCatalog] = useState<EcCatalog | null>(null),
     [catalogBusy, setCatalogBusy] = useState(false);
-  const [channel, setChannel] = useState<EcChannel>("MERCARI_SHOPS"),
-    [query, setQuery] = useState(""),
+  const channel: EcChannel = "MERCARI_SHOPS";
+  const [query, setQuery] = useState(""),
     [filter, setFilter] = useState<"ALL" | EcState>("ALL");
+  const [direction,setDirection]=useState<"asc"|"desc">("desc");
+  const [categoryFilter,setCategoryFilter]=useState("ALL");
   const [archived, setArchived] = useState(false);
   const [page, setPage] = useState(0),
     [pageSize, setPageSize] = useState(50),
@@ -64,6 +67,7 @@ export function ListingsOverviewTable({
       kind: EcOperation;
       items: ListingOverviewRow[];
       channel: EcChannel;
+      common?:boolean;
     } | null>(null);
   const authRetry = useRef(false);
   useEffect(() => setState(loadStateFromInitialRows(initialResult)), [initialResult]);
@@ -101,13 +105,13 @@ export function ListingsOverviewTable({
   }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = state.kind === "ok" ? state.rows : EMPTY;
   const filtered = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase("ja-JP"),
-      deleted = new Set(catalog?.archivedIds ?? []);
+    const q = query.trim().toLocaleLowerCase("ja-JP");
     return rows
-      .filter((row) => deleted.has(row.inventoryId) === archived)
+      .filter((row) => !!row.archived === archived)
+      .filter(row => categoryFilter === "ALL" || row.categories?.includes(categoryFilter))
       .filter(
         (row) =>
-          filter === "ALL" || ecStateFor(catalog, channel, row.inventoryId, row.hasDraft).state === filter,
+          filter === "ALL" || EC_CHANNELS.some(c=>ecStateFor(catalog,c,row.inventoryId,row.hasDraft).state===filter),
       )
       .filter(
         (row) =>
@@ -118,19 +122,11 @@ export function ListingsOverviewTable({
             ...EC_CHANNELS.map((c) => ecStateFor(catalog, c, row.inventoryId, row.hasDraft).externalId ?? ""),
           ].some((s) => s.toLocaleLowerCase("ja-JP").includes(q)),
       )
-      .sort((a, b) =>
-        sort === "name"
-          ? a.name.localeCompare(b.name, "ja")
-          : sort === "quantity"
-            ? b.quantity - a.quantity
-            : sort === "price"
-              ? (b.price ?? 0) - (a.price ?? 0)
-              : b.inventoryUpdatedAt.localeCompare(a.inventoryUpdatedAt),
-      );
-  }, [rows, catalog, query, channel, filter, sort, archived]);
+      .sort((a,b)=>compareEcOverview(a,b,sort as EcSortKey,direction));
+  }, [rows, catalog, query, filter, sort, archived,categoryFilter,direction]);
   useEffect(() => {
     setPage(0);
-  }, [query, channel, filter, archived, pageSize, sort]);
+  }, [query, filter, archived, pageSize, sort,categoryFilter,direction]);
   const pagination = paginate(filtered, page, pageSize),
     pageRows = pagination.pageRows;
   const photoThumbnails = usePrimaryPhotoThumbnails(pageRows.map(row => row.inventoryId));
@@ -168,7 +164,7 @@ export function ListingsOverviewTable({
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-bold text-gray-900">商品一覧</h2>
-          <p className="mt-1 text-xs text-gray-500">各商品の販売先の欄から出品・停止できます。</p>
+          <p className="mt-1 text-xs text-gray-500">共通の商品情報を保存したら、共通動作から各販売先へまとめて出品・停止・更新できます。</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -184,27 +180,7 @@ export function ListingsOverviewTable({
           </Link>
         </div>
       </div>
-      <div
-        role="tablist"
-        aria-label="操作する販売先"
-        className="flex gap-1 overflow-x-auto border-b border-gray-200"
-      >
-        {EC_CHANNELS.map((c) => (
-          <button
-            key={c}
-            type="button"
-            role="tab"
-            aria-selected={channel === c}
-            onClick={() => {
-              setChannel(c);
-              setFilter("ALL");
-            }}
-            className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm ${channel === c ? "border-blue-700 font-bold text-blue-800" : "border-transparent text-gray-500 hover:text-gray-900"}`}
-          >
-            {EC_CHANNEL_LABEL[c]}
-          </button>
-        ))}
-      </div>
+      <div className="my-3 flex flex-wrap gap-2" aria-label="作業状態で絞り込み">{["ALL","補修待ち","撮影待ち","出品待ち"].map(c=><button key={c} type="button" aria-pressed={categoryFilter===c} onClick={()=>setCategoryFilter(c)} className={button+(categoryFilter===c?" border-blue-600 bg-blue-50 text-blue-800":"")}>{c==="ALL"?"すべて":c}</button>)}</div>
       <div className="my-3 flex flex-wrap items-center gap-2">
         <input
           aria-label="商品を検索"
@@ -227,11 +203,16 @@ export function ListingsOverviewTable({
           ))}
         </select>
         <select aria-label="並び順" value={sort} onChange={(e) => setSort(e.target.value)} className={button}>
-          <option value="updated">更新が新しい順</option>
+          <option value="updated">更新日時</option>
+          <option value="created">登録日時</option>
           <option value="name">商品名順</option>
-          <option value="quantity">数量が多い順</option>
-          <option value="price">単価が高い順</option>
+          <option value="quantity">数量</option>
+          <option value="price">単価</option>
+          <option value="MERCARI_SHOPS">メルカリShopsの価格</option>
+          <option value="YAHOO">ヤフオクの価格</option>
+          <option value="BASE">BASEの価格</option>
         </select>
+        <button type="button" aria-label="昇順・降順を切り替え" className={button} onClick={()=>setDirection(d=>d==='desc'?'asc':'desc')}>{direction==='desc'?'↓ 降順（新しい・高い順）':'↑ 昇順（古い・安い順）'}</button>
       </div>
       {catalog?.errors.map((e) => (
         <p key={e} role="alert" className="mb-2 text-xs text-red-700">
@@ -272,10 +253,11 @@ export function ListingsOverviewTable({
               <th className="px-3 py-3 text-left">商品</th>
               <th className="hidden px-3 py-3 text-right md:table-cell">数量</th>
               <th className="hidden px-3 py-3 text-right md:table-cell">単価</th>
+              <th className="w-40 px-3 py-3 text-left">共通動作</th>
               {EC_CHANNELS.map((c) => (
                 <th
                   key={c}
-                  className={`w-28 px-2 py-3 text-left md:w-36 md:px-3 ${c === channel ? "bg-blue-50 text-blue-800" : "hidden md:table-cell"}`}
+                  className="w-36 px-3 py-3 text-left"
                 >
                   {EC_CHANNEL_LABEL[c]}
                 </th>
@@ -298,8 +280,9 @@ export function ListingsOverviewTable({
                       />
                     </div>
                     <div className="min-w-0">
+                      <div className="mb-1 flex flex-wrap gap-1">{row.categories?.map(c=><span key={c} className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{c}</span>)}</div>
                       <Link
-                        href={`/inventory/${row.inventoryId}/listing?channel=${channel}`}
+                        href={`/inventory/${row.inventoryId}/listing`}
                         className="line-clamp-2 font-medium leading-5 text-gray-900 hover:text-blue-700"
                       >
                         {row.name}
@@ -331,13 +314,15 @@ export function ListingsOverviewTable({
                 <td className="hidden whitespace-nowrap px-3 py-3 text-right tabular-nums md:table-cell">
                   {row.price != null ? `${row.price.toLocaleString()}円` : "—"}
                 </td>
+                <td className="px-3 py-3">{canEdit&&!archived&&<div className="flex flex-wrap gap-1">{(["STOP","PUBLISH","UPDATE"] as const).map(kind=><button key={kind} type="button" disabled={catalogBusy||!catalog} className={button} aria-label={`${row.name}の全販売先を${kind==="STOP"?"出品停止":kind==="PUBLISH"?"出品":"更新"}`} onClick={()=>setOperation({kind,items:[row],channel,common:true})}>{kind==="STOP"?"出品停止":kind==="PUBLISH"?"出品":"更新"}</button>)}</div>}</td>
                 {EC_CHANNELS.map((c) => {
                   const s = ecStateFor(catalog, c, row.inventoryId, row.hasDraft);
                   return (
                     <td
                       key={c}
-                      className={`px-2 py-3 md:px-3 ${c === channel ? "" : "hidden md:table-cell"}`}
+                      className="px-3 py-3"
                     >
+                      <p className="mb-2 whitespace-nowrap font-semibold tabular-nums" title="保存した出品設定の価格">{ecOverviewPrice(row,c)?.toLocaleString('ja-JP') ?? '未設定'}{ecOverviewPrice(row,c)!=null?'円':''}</p>
                       <span
                         className={`inline-block rounded px-2 py-1 text-xs font-medium ${badge[s.state]}`}
                       >
@@ -363,7 +348,7 @@ export function ListingsOverviewTable({
                           >
                             停止
                           </button>
-                          {c !== "YAHOO" && s.externalId && <button type="button" aria-label={`${row.name}の${EC_CHANNEL_LABEL[c]}商品内容を更新`} className="rounded border px-2 py-1 text-blue-700 disabled:opacity-30" disabled={s.state==="PENDING"||s.state==="UNKNOWN"} onClick={()=>open("UPDATE",[row],c)}>更新</button>}
+                          {s.externalId && <button type="button" aria-label={`${row.name}の${EC_CHANNEL_LABEL[c]}商品内容を更新`} className="rounded border px-2 py-1 text-blue-700 disabled:opacity-30" disabled={s.state==="PENDING"||s.state==="UNKNOWN"} onClick={()=>open("UPDATE",[row],c)}>更新</button>}
                         </div>
                       )}
                       {s.externalId && (
@@ -413,6 +398,7 @@ export function ListingsOverviewTable({
         <EcBulkDialog
           items={operation.items}
           channel={operation.channel}
+          allChannels={operation.common}
           operation={operation.kind}
           onClose={() => setOperation(null)}
           onChanged={() => {

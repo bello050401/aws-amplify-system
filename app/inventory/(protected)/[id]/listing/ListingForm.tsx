@@ -54,6 +54,7 @@ export function ListingForm({
   inventoryId,
   brandLogoAvailable,
   inventoryName,
+  availableQuantity,
   images,
   photoAssets,
   initialDraft,
@@ -70,6 +71,7 @@ export function ListingForm({
   inventoryId: string;
   brandLogoAvailable: boolean;
   inventoryName: string;
+  availableQuantity: number;
   /** 不具合修正・ZAICO同期重複根絶指示書(2026-08-30) §9: Inventory Masterの商品画像(トップ画像が先頭に来るよう呼び出し元でソート済み) — このコンポーネント自体は画像データを一切書き込まず、表示のみ。 */
   images: InventoryImageRecord[];
   photoAssets: WebPhotoAssetView[];
@@ -91,6 +93,7 @@ export function ListingForm({
   onDirtyChange?: (dirty: boolean) => void;
   onPriceChange?: (price: number | null) => void;
 }) {
+  const [imageBusy,setImageBusy]=useState(false);
   const [draft, setDraft] = useState(initialDraft);
   const [channelListing] = useState(initialChannelListing);
   const [initialImageSelection] = useState(() => listingRefsFromSelection(initialListingSelection(
@@ -103,13 +106,14 @@ export function ListingForm({
   const [brandedImageKey, setBrandedImageKey] = useState<string | null>(null);
   const [brandLogoError, setBrandLogoError] = useState<string | null>(null);
   const validSelectedPrimary = restoreListingSelection(
-    buildListingImageCandidates(images, photoAssets, initialDraft?.images ?? null, brandedImageKey), selectedImages,
+    buildListingImageCandidates(images, photoAssets, selectedImages, brandedImageKey), selectedImages,
   ).selected[0]?.ref ?? null;
-  const previewImages: InventoryImageRecord[] = validSelectedPrimary?.source !== "PHOTO_ASSET" && validSelectedPrimary?.storageKey.startsWith("inventory/listing-branded/")
+  const previewImages: InventoryImageRecord[] = validSelectedPrimary?.source !== "PHOTO_ASSET" && (validSelectedPrimary?.storageKey.startsWith("inventory/listing-branded/")||validSelectedPrimary?.storageKey.startsWith("inventory/listing-upload/"))
     ? [{ storageKey: validSelectedPrimary.storageKey, sortOrder: -1, type: "NORMAL", isPrimary: true, sourceSystem: null, sourceUrl: null, thumbnailKey: null, mediumKey: null, originalHash: null, classification: null }, ...images]
     : images;
   const productGallery = resolveProductGallerySource(previewImages, photoAssets, validSelectedPrimary);
 
+  const [quantity,setQuantity]=useState(String(initialDraft?.quantity ?? Math.max(1,availableQuantity)));
   const [title, setTitle] = useState(initialDraft?.title ?? inventoryName);
   const [description, setDescription] = useState(initialDraft?.description ?? "");
   const [price, setPrice] = useState(initialDraft?.price != null ? String(initialDraft.price) : "");
@@ -182,8 +186,8 @@ export function ListingForm({
     return withCurrentShippingWarning(aiQuality.warnings, currentShippingWarning);
   }, [aiQuality, shippingMethod]);
 
-  const dirty = commonDraftHasChanges({ title, description, price, condition, shippingMethod,
-    images: selectedImages, shippingPackages, commonCategoryId, channelPrices }, draft, { title: inventoryName, images: initialImageSelection });
+  const dirty = commonDraftHasChanges({ title, description, price, quantity, condition, shippingMethod,
+    images: selectedImages, shippingPackages, commonCategoryId, channelPrices }, draft, { title: inventoryName, images: initialImageSelection, quantity:Math.max(1,availableQuantity) });
   useEffect(() => { onDirtyChange?.(dirty); if (dirty) setDraftSaved(false); }, [dirty, onDirtyChange]);
   useEffect(() => {
     if (!dirty) return;
@@ -302,6 +306,7 @@ export function ListingForm({
         title,
         commonCategoryId: commonCategoryId || null,
         channelPrices,
+        quantity:Number(quantity),
         description,
         price: price ? Number(price) : 0,
         condition,
@@ -364,6 +369,8 @@ export function ListingForm({
         ) : null}
         </details>
         <ListingImageSelector
+            inventoryId={inventoryId}
+            onBusy={setImageBusy}
           images={images}
           photoAssets={photoAssets}
           initialImages={initialDraft?.images ?? null}
@@ -598,6 +605,7 @@ export function ListingForm({
             </div>
           </div>
         </div>
+<div className="mt-4"><label htmlFor="listing-quantity" className="block text-sm font-medium">出品数量（全販売先共通）</label><input id="listing-quantity" type="number" inputMode="numeric" min="1" max={Math.max(1,availableQuantity)} value={quantity} onChange={e=>setQuantity(e.target.value)} className="mt-1 w-32 rounded border px-3 py-2"/><span className="ml-3 text-xs text-gray-500">現在の在庫 {availableQuantity}点</span></div>
         <div className="mt-4"><CommonEcSettings inventoryId={inventoryId} categoryId={commonCategoryId}
           onCategoryChange={setCommonCategoryId} prices={channelPrices} onPricesChange={setChannelPrices}
           goodsPrice={price?Number(price):null} packages={shippingPackages} shippingMethod={shippingMethod}/></div>
@@ -608,7 +616,7 @@ export function ListingForm({
           <button
             type="button"
             onClick={handleSaveDraft}
-            disabled={draftBusy || draftRecoveryNeeded}
+            disabled={draftBusy || draftRecoveryNeeded || imageBusy}
             className="bg-gray-900 px-3 py-1 text-[13px] font-bold text-white disabled:opacity-50"
           >
             {draftBusy ? "保存中…" : "下書きを保存"}

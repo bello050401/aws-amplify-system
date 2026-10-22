@@ -246,7 +246,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     } finally { if (attempt === detailGeneration.current) setDetailLoading(false); }
   };
   const serverResults = !offline && !!ports.searchInventory && serverRows !== null;
-  const rows = serverResults ? serverRows! : cachedInventorySearch(snapshot?.items ?? [],{q:query,category,advanced,sort},searchFields);
+  const rows = serverResults ? serverRows! : !offline && !!ports.searchInventory && !error ? [] : cachedInventorySearch(snapshot?.items ?? [],{q:query,category,advanced,sort},searchFields);
   const categories = options?.categories ?? Array.from(new Set((snapshot?.items ?? []).flatMap(item=>splitCategoryNames(item.category)).filter(Boolean)));
   const title = feature ?? (selected ? "物品詳細" : tabs.find((item) => item.key === tab)!.label);
 
@@ -256,7 +256,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
+    {editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
       <View style={s.header}>
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
@@ -277,7 +277,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
           <View style={s.heroFact}><Text style={s.label}>数量</Text><Text style={s.heroQuantity}>{selected.quantityUnset?"—":selected.quantity}<Text style={s.unit}> {selected.unit}</Text></Text></View>
           <View style={s.heroFact}><Text style={s.label}>保管場所</Text><Text style={s.location}>{selected.location || "未設定"}</Text></View>
         </View></View>
-        {[["在庫ID", selected.displayId ?? selected.sku], ["管理番号", selected.sku], ["物品名", selected.name], ["カテゴリ", selected.category], ["状態", selected.condition], ["備考", selected.note], ["QRコード・バーコード", selected.barcode], ["販売予定価格", selected.plannedSalePrice === null ? "" : `${selected.plannedSalePrice.toLocaleString()}円`]].map(([label, value]) => <DetailFact key={label} label={label!} value={value} multiline={label === "備考"} />)}
+        {[["在庫ID", selected.displayId ?? selected.sku], ["管理番号", selected.sku], ["物品名", selected.name], ["カテゴリ", selected.category], ["ページ作成日", selected.createdAt?new Date(selected.createdAt).toLocaleString("ja-JP"):""], ["最終更新日時", new Date(selected.listUpdatedAt??selected.updatedAt).toLocaleString("ja-JP")], ["備考", selected.note], ["QRコード・バーコード", selected.barcode], ["販売予定価格", selected.plannedSalePrice === null ? "" : `${selected.plannedSalePrice.toLocaleString()}円`]].map(([label, value]) => <DetailFact key={label} label={label!} value={value} multiline={label === "備考"} />)}
         <InventoryPhotos item={selected} />
         {detailLoading && <ActivityIndicator accessibilityLabel="商品詳細を読み込み中" color={colors.blue} />}
         {!!selected.zaicoOriginalValues?.length&&<View><Text style={s.label}>ZAICOの元の値</Text>{selected.zaicoOriginalValues.map((value,index)=><DetailFact key={index} label={value.name} value={value.value}/>)}</View>}

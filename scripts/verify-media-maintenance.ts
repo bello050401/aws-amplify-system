@@ -288,3 +288,12 @@ main().catch((e) => {
   console.error(e);
   process.exitCode = 1;
 });
+
+test('EC direct uploads are protected while referenced and collectible only after grace',()=>{
+ const upload='inventory/listing-upload/00000000-0000-4000-8000-000000000002/00000000-0000-4000-8000-000000000003.jpg';
+ assert(isManagedInventoryImage(upload));
+ assert(collectReferencedKeys(JSON.stringify({images:[{storageKey:upload}]})).has(upload));
+ assert.equal(orphanAction({...obj,key:upload},new Set([upload]),{...old,id:upload},now),'KEEP');
+ assert.equal(orphanAction({...obj,key:upload},new Set(),{...old,id:upload},now),'DELETE');
+ assert(!isManagedInventoryImage('inventory/listing-upload/other/file.jpg'));
+});

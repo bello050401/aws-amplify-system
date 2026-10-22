@@ -20,7 +20,7 @@ function Preview() {
   const readAttempt = useRef(0);
   const loadingTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("loading-test") === "1").current;
   const records = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
-    ? galleryPreviewItems() : previewItems.map((item) => ({ ...item })));
+    ? galleryPreviewItems() : previewItems.map((item,index) => ({ ...item, ...(__DEV__ && index===0 && typeof window!=='undefined' && new URLSearchParams(window.location.search).get('photo-delete-test')==='1' ? {photosComplete:true,photos:[{id:'photo-00000000-0000-4000-8000-000000000001',source:'PHOTO_ASSET' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:true},{id:'preview-image',source:'INVENTORY' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:false}]} : {}) })));
   const uploadedPhotos=useRef(new Map<string,string>());
   const ports = useMemo<StaffAppPorts>(() => ({
     snapshot: new SnapshotStore(loadingTest ? { ...AsyncStorage, setItem: async (key, value) => {
@@ -39,6 +39,7 @@ function Preview() {
     online: async () => !offlineRef.current,
     newMutationId: () => Crypto.randomUUID(),
     loadOptions: async()=>({categories:["販売中","撮影待ち"],locations:["川越倉庫","所沢倉庫"],statuses:previewItems[0].statusOptions??[]}),
+    deletePhotoAsset:async(id,photoId)=>{const item=records.current.find(r=>r.id===id);if(!item)throw Error('写真が見つかりません。');item.photos=item.photos?.filter(p=>p.id!==photoId);},
     uploadPhoto:async photo=>{uploadedPhotos.current.set(photo.id,photo.uri);return {storageKey:photo.id,type:photo.type};},
     loadInventory: async () => {
       if (refreshTest) {
@@ -69,7 +70,7 @@ function Preview() {
       const item = records.current.find((row) => row.id === request.id) ?? (request.create ? {...previewItems[0],id:request.id,sku:"見本・新規",name:"",details:{},photos:[],updatedAt:request.expectedUpdatedAt} : undefined);
       if (!item || item.updatedAt !== request.expectedUpdatedAt) throw new InventoryWriteError("conflict");
       const saved = { ...item, ...request.draft, quantity: Number(request.draft.quantity), plannedSalePrice: request.draft.plannedSalePrice === "" ? null : Number(request.draft.plannedSalePrice), updatedAt: new Date().toISOString() };
-      saved.photos=[...((request.copyFrom ? records.current.find(item=>item.id===request.copyFrom!.id)?.photos : item.photos)??[]),...(request.uploads??[]).map((photo,i)=>({id:photo.storageKey,url:null,type:photo.type,primary:!(item.photos?.length)&&i===0}))];
+      saved.photos=[...((request.copyFrom ? records.current.find(item=>item.id===request.copyFrom!.id)?.photos : item.photos)??[]).filter(p=>!request.removedPhotoIds?.includes(p.id)),...(request.uploads??[]).map((photo,i)=>({id:photo.storageKey,url:null,type:photo.type,primary:!(item.photos?.length)&&i===0}))];
       records.current = [saved,...records.current.filter(row=>row.id!==saved.id)];
       return saved;
     },

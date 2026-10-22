@@ -22,12 +22,12 @@ import { MercariFurnitureCategoryPicker } from "./MercariFurnitureCategoryPicker
 import { MercariHttpExecutionPanel } from "./MercariHttpExecutionPanel";
 
 export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
-  hasDraft, hasShopsRecord, mode, showExecution = true, commonPrice = null, commonCategory = null }: { inventoryId: string; availableQuantity: number;
-  hasDraft: boolean; hasShopsRecord: boolean; mode: "HTTP" | "PC"; showExecution?: boolean; commonPrice?: number | null; commonCategory?:{id:string;path:string}|null }) {
+  hasDraft, hasShopsRecord, mode, showExecution = true, commonPrice = null, commonCategory = null, commonQuantity = 1 }: { inventoryId: string; availableQuantity: number;
+  hasDraft: boolean; hasShopsRecord: boolean; mode: "HTTP" | "PC"; showExecution?: boolean; commonQuantity?:number; commonPrice?: number | null; commonCategory?:{id:string;path:string}|null }) {
   const isB005396 = inventoryId.toLowerCase() === B005396_INVENTORY_ID;
   const isHttp = mode === "HTTP";
   const [price, setPrice] = useState(isB005396 ? "99999" : commonPrice==null?'':String(commonPrice));
-  const [quantity, setQuantity] = useState("");
+  const [quantity, setQuantity] = useState(String(commonQuantity));
   const [shippingMethod,setShippingMethod]=useState<ShopsDeliveryMethod>("METHOD_TYPE_UNDECIDED");
   const [descriptionSuffix,setDescriptionSuffix]=useState("");
   const [category, setCategory] = useState<{ id: string; path: string } | null>(commonCategory);
@@ -54,7 +54,7 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const selectionRevision = useRef(0);
   const selectionRef = useRef<ManualPackSelection>({
-    price: isB005396 ? "99999" : commonPrice==null?'':String(commonPrice), quantity: "", categoryId: commonCategory?.id??null,
+    price: isB005396 ? "99999" : commonPrice==null?'':String(commonPrice), quantity: String(commonQuantity), categoryId: commonCategory?.id??null,
     brandId: null,
   });
   // The HTTP panel lives below the PC panel on the server page. A draft saved
@@ -327,20 +327,20 @@ export function MercariManualListingPackPanel({ inventoryId, availableQuantity,
         <p className="mt-3 text-amber-700">準備状態を確認できるまで、新しい準備登録はできません。登録済みの場合は上の依頼状態を確認してください。</p> : <>
       {isHttp && !isB005396 && <EcPresetPicker channel="MERCARI_SHOPS" disabled={busy} onApply={p=>{
         const method=p.values.shopsDelivery==="MERCARI_SHIPPING_YAMATO"?"METHOD_MERCARI_SHIPPING_YAMATO":"METHOD_TYPE_UNDECIDED";
-        selectionRevision.current++; selectionRef.current.shippingMethod=method; selectionRef.current.descriptionSuffix=p.values.descriptionSuffix;
-        setShippingMethod(method);setDescriptionSuffix(p.values.descriptionSuffix);
+        selectionRevision.current++; selectionRef.current.shippingMethod=isHttp?"METHOD_TYPE_UNDECIDED":method; selectionRef.current.descriptionSuffix=p.values.descriptionSuffix;
+        setShippingMethod(isHttp?"METHOD_TYPE_UNDECIDED":method);setDescriptionSuffix(p.values.descriptionSuffix);
         if(commonPrice!=null){const v=String(commonPrice+p.values.priceAddition);selectionRef.current.price=v;setPrice(v);}
         if(p.values.categoryId){selectionRef.current.categoryId=p.values.categoryId;setCategory({id:p.values.categoryId,path:p.values.categoryName});}
         setPack(null);setReviewEvidence(null);setShippingReviewed(false);setMessage("設定を適用しました。内容を確認して準備登録してください。");
       }}/>}
-      {isHttp && <label className="mt-3 block text-xs">配送方法<select aria-label="メルカリShopsの配送方法" className="mt-1 block w-full rounded border p-2" value={shippingMethod} disabled={busy||isB005396} onChange={e=>{const method=e.target.value as ShopsDeliveryMethod;selectionRevision.current++;selectionRef.current.shippingMethod=method;setShippingMethod(method);setPack(null);setReviewEvidence(null);setShippingReviewed(false);}}><option value="METHOD_TYPE_UNDECIDED">未定（出品者が手配）</option><option value="METHOD_MERCARI_SHIPPING_YAMATO">らくらくメルカリ便（匿名配送）</option></select></label>}
+      {isHttp && <p className="mt-3 text-sm">配送方法：通常配送（出品者が手配）</p>}
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs">販売価格（円）<input type="number" min={300} max={9999999}
           step={1} value={price} disabled={busy || isB005396}
           onChange={event => { selectionRevision.current++; selectionRef.current.price = event.target.value; setPrice(event.target.value); setPack(null); }}
           className="mt-1 w-full rounded border border-gray-300 p-2" /></label>
         <label className="text-xs">出品数量（在庫上限 {availableQuantity}）<input type="number"
-          min={1} max={availableQuantity} step={1} value={quantity} disabled={busy}
+          min={1} max={availableQuantity} step={1} value={quantity} disabled={isHttp||busy}
           onChange={event => { selectionRevision.current++; selectionRef.current.quantity = event.target.value; setQuantity(event.target.value); setPack(null); setReviewEvidence(null); setShippingReviewed(false); }}
           className="mt-1 w-full rounded border border-gray-300 p-2" /></label>
       </div>

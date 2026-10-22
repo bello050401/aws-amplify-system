@@ -123,12 +123,12 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
  * component and config NewInventoryForm uses, so those field
  * definitions exist in exactly one place (spec §5).
  */
-export function EditInventoryForm({ item, photoAssets, categories, locations, statuses, customFieldDefs, units, returnTo }: EditInventoryFormProps) {
+export function EditInventoryForm({ item, photoAssets, categories, locations, customFieldDefs, units, returnTo }: EditInventoryFormProps) {
   const router = useRouter();
   const [name, setName] = useState(item.name);
   const [categoryIds, setCategoryIds] = useState<string[]>(inventoryCategoryIds(item ?? {}));
   const categoryId = categoryIds[0] ?? "";
-  const [statusId, setStatusId] = useState(item.statusId ?? "");
+  const statusId = item.statusId ?? "";
   const [locationId, setLocationId] = useState(item.locationId ?? "");
   const [quantity, setQuantity] = useState(item.quantityUnset ? "" : String(item.quantity));
   const [unit, setUnit] = useState(item.unit ?? "");
@@ -304,7 +304,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
           フォームの左に固定幅で配置 — モバイルでは(grid-cols-1により)
           フォームより先に単純に積まれる("image then form")。 */}
       <div className="space-y-4 lg:col-start-1">
-        <PhotoAssetImageEditor assets={photoAssets} />
+        <PhotoAssetImageEditor inventoryId={item.id} assets={photoAssets} />
         <div className="border border-gray-200 p-4">
           <p className="mb-2 text-[11px] font-bold text-gray-400">追加アップロード画像</p>
           <ImageEditor slots={normalImageSlots} onChange={setNormalImageSlots} variant="normal" />
@@ -334,7 +334,6 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, st
             options={locations.map((l) => ({ value: l.id, label: l.name }))}
             size="large"
           />
-          <LabeledSelect label="状態" value={statusId} onChange={setStatusId} options={statuses.map((s) => ({ value: s.id, label: s.label }))} size="large" />
 
           <div className="grid grid-cols-2 gap-4">
             <LabeledInput label="数量" type="number" value={quantity} onChange={setQuantity} size="large" />

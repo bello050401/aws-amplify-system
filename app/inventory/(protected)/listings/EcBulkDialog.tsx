@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { reviewEcListingAction, executeEcListingAction } from "@/app/actions/ecListingOperations";
 import {
+  EC_CHANNELS,
   EC_CHANNEL_LABEL,
   EC_OPERATION_LABEL,
   isExpectedEcReview,
@@ -14,16 +15,19 @@ import {
 export function EcBulkDialog({
   items,
   channel,
+  allChannels=false,
   operation,
   onClose,
   onChanged,
 }: {
   items: { inventoryId: string; name: string }[];
   channel: EcChannel;
+  allChannels?:boolean;
   operation: EcOperation;
   onClose: () => void;
   onChanged: (done: string[]) => void;
 }) {
+  const targets=items.flatMap(item=>(allChannels?EC_CHANNELS:[channel]).map(targetChannel=>({...item,channel:targetChannel})));
   const [reviews, setReviews] = useState<EcReview[]>([]),
     [busy, setBusy] = useState(true),
     [phase, setPhase] = useState<"review" | "execute" | "done">("review");
@@ -34,7 +38,7 @@ export function EcBulkDialog({
     started = useRef(false),
     dialog = useRef<HTMLDivElement>(null);
   const update = (value: EcReview) =>
-    setReviews((rows) => [...rows.filter((r) => r.inventoryId !== value.inventoryId), value]);
+    setReviews((rows) => [...rows.filter((r) => r.inventoryId !== value.inventoryId || r.channel !== value.channel), value]);
   async function waitUntil(at: number) {
     while (live.current && !stop.current && Date.now() < at)
       await new Promise((resolve) => setTimeout(resolve, Math.min(1000, at - Date.now())));
@@ -47,20 +51,20 @@ export function EcBulkDialog({
     if (!started.current) {
       started.current = true;
       void (async () => {
-        for (const item of items) {
+        for (const item of targets) {
           if (!live.current || stop.current) break;
           let result: EcReview = {
             inventoryId: item.inventoryId,
             title: item.name,
-            channel,
+            channel:item.channel,
             operation,
             status: "BLOCKED",
             message: "通信に失敗しました。",
           };
           for (let attempt = 0; attempt < 50; attempt++) {
             try {
-              const response = await reviewEcListingAction(item.inventoryId, channel, operation);
-              if (!isExpectedEcReview(response, {inventoryId:item.inventoryId,channel,operation})) throw new Error("Invalid review response");
+              const response = await reviewEcListingAction(item.inventoryId, item.channel, operation);
+              if (!isExpectedEcReview(response, {inventoryId:item.inventoryId,channel:item.channel,operation})) throw new Error("Invalid review response");
               result = response;
             } catch {
               result = {
@@ -170,7 +174,7 @@ export function EcBulkDialog({
               {EC_OPERATION_LABEL[operation]}の確認
             </h2>
             <p className="mt-1 text-sm text-gray-600">
-              {operation === "ARCHIVE" || operation === "RESTORE" ? "EC商品情報" : EC_CHANNEL_LABEL[channel]}{" "}
+              {operation === "ARCHIVE" || operation === "RESTORE" ? "EC商品情報" : allChannels ? "メルカリShops・ヤフオク・BASE" : EC_CHANNEL_LABEL[channel]}{" "}
               · {items.length}商品
             </p>
           </div>
@@ -190,12 +194,12 @@ export function EcBulkDialog({
             </p>
           )}
           <ul className="divide-y">
-            {items.map((item) => {
-              const r = reviews.find((row) => row.inventoryId === item.inventoryId);
+            {targets.map((item) => {
+              const r = reviews.find((row) => row.inventoryId === item.inventoryId && row.channel === item.channel);
               return (
-                <li key={item.inventoryId} className="py-3">
+                <li key={`${item.inventoryId}:${item.channel}`} className="py-3">
                   <div className="flex items-start justify-between gap-3">
-                    <p className="text-sm font-semibold">{r?.title || item.name}</p>
+                    <p className="text-sm font-semibold">{allChannels && <span className="mr-2 text-blue-700">{EC_CHANNEL_LABEL[item.channel]}</span>}{r?.title || item.name}</p>
                     <span
                       className={`shrink-0 rounded px-2 py-1 text-xs ${r?.status === "DONE" ? "bg-green-50 text-green-700" : r?.status === "BLOCKED" ? "bg-red-50 text-red-700" : "bg-gray-100 text-gray-700"}`}
                     >
@@ -229,7 +233,7 @@ export function EcBulkDialog({
                   ))}
                   {r?.status === "BLOCKED" && (
                     <Link
-                      href={`/inventory/${item.inventoryId}/listing?channel=${channel}`}
+                      href={`/inventory/${item.inventoryId}/listing?channel=${item.channel}`}
                       target="_blank"
                       className="mt-2 inline-block text-sm text-blue-700 underline"
                     >

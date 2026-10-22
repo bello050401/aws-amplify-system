@@ -197,6 +197,17 @@ export async function deletePhotoAssetAction(batchId: string, photoAssetId: stri
   return mapPhotoResult(result);
 }
 
+export async function deleteInventoryPhotoAssetAction(inventoryId:string,photoAssetId:string):Promise<PhotoActionResult<{photoAssetId:string}>> {
+ if(!['ADMIN','EDITOR'].includes(await getInventoryRole()??''))return {ok:false,code:'PERMISSION_DENIED',message:ERROR_LABELS.PERMISSION_DENIED};
+ const photos=await listInventoryPhotoAssetsAction(inventoryId);
+ if(!photos.ok)return photos;
+ const asset=photos.value.assets.find(p=>p.id===photoAssetId);
+ if(!asset)return {ok:false,code:'ASSET_NOT_FOUND',message:'この商品の画像が見つかりません。詳細を読み直してください。'};
+ const result=await deletePhotoAssetAction(asset.photoBatchId,photoAssetId);
+ if(result.ok){revalidatePath('/inventory');revalidatePath('/inventory/listings');revalidatePath('/inventory/'+inventoryId);revalidatePath('/inventory/'+inventoryId+'/edit');revalidatePath('/inventory/'+inventoryId+'/listing');}
+ return result;
+}
+
 export async function restorePhotoAssetAction(
   batchId: string,
   photoAssetId: string,

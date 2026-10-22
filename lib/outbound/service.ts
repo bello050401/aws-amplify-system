@@ -66,7 +66,7 @@ export async function outboundHistory() {
 export async function prepareOutbound(id:string,destinationId:string,selected:OutboundSelection[],actor:string,arrivalDate?:string):Promise<OutboundBatch> {
   requireUuid(id);requireUuid(destinationId);
   if(!Array.isArray(selected)||!selected.length||selected.length>200||new Set(selected.map(x=>x.id)).size!==selected.length)throw new Error('1〜200商品を選択してください。');
-  selected.forEach(row=>{requireUuid(row.id);if(!Number.isFinite(Date.parse(row.updatedAt)))throw new Error('商品を読み直してください。');if(row.quantity!==undefined&&(!Number.isInteger(row.quantity)||row.quantity<1))throw Error('出庫数量は1点以上の整数で入力してください。');if(row.detailNote!==undefined&&(typeof row.detailNote!=='string'||row.detailNote.length>2000))throw Error('入荷明細備考は2000文字以内で入力してください。');});
+  selected.forEach(row=>{requireUuid(row.id);if(row.exportName!==undefined&&(typeof row.exportName!=='string'||!row.exportName.trim()||row.exportName.length>500||/[\u0000-\u001f\u007f]/u.test(row.exportName)))throw Error('送信用の商品名は1〜500文字で入力してください。');if(!Number.isFinite(Date.parse(row.updatedAt)))throw new Error('商品を読み直してください。');if(row.quantity!==undefined&&(!Number.isInteger(row.quantity)||row.quantity<1))throw Error('出庫数量は1点以上の整数で入力してください。');if(row.detailNote!==undefined&&(typeof row.detailNote!=='string'||row.detailNote.length>2000))throw Error('入荷明細備考は2000文字以内で入力してください。');});
   const fingerprint=createHash('sha256').update(JSON.stringify([destinationId,[...selected].sort((a,b)=>a.id.localeCompare(b.id)),...(arrivalDate?[arrivalDate]:[])])).digest('hex');
   let batch:OutboundBatch;
   const existing=await db.send(new GetCommand({TableName:table('OutboundBatch'),Key:{id},ConsistentRead:true}));
@@ -96,7 +96,7 @@ export async function prepareOutbound(id:string,destinationId:string,selected:Ou
     if(recorded.has(selection.id))continue;
     const row=await getInventoryRaw(selection.id),now=new Date().toISOString();
     const sourceQuantity=Number(row?.quantity??0),quantity=selection.quantity??sourceQuantity;
-    const snapshot:OutboundProduct={id:selection.id,sku:String(row?.sku??''),name:String(row?.name??'削除された商品'),barcode:String(row?.barcode??'').trim(),quantity,unit:String(row?.unit??''),updatedAt:selection.updatedAt,location:locations.get(row?.locationId)??'',width:row?.width??'',depth:row?.depth??'',height:row?.height??''};
+    const snapshot:OutboundProduct={id:selection.id,sku:String(row?.sku??''),name:String(row?.name??'削除された商品'),...(selection.exportName!==undefined?{exportName:selection.exportName.trim()}:{}),barcode:String(row?.barcode??'').trim(),quantity,unit:String(row?.unit??''),updatedAt:selection.updatedAt,location:locations.get(row?.locationId)??'',width:row?.width??'',depth:row?.depth??'',height:row?.height??''};
     let error=!row||row.deletedAt?'商品が削除されています。':row.updatedAt!==selection.updatedAt?'別の端末で変更されています。':!inventoryCategoryIds(row).includes(batch.categoryId)?'移動予定が変更済みです。':row.outboundBatchId?'別の出庫で選択済みです。':null;
     if(!error)try{validateMovementQuantity(quantity,sourceQuantity);if(batch.templateType===KAWAGOE_TEMPLATE)validateBarcode(snapshot.barcode);}catch(e){error=(e as Error).message;}
     const item={id:`${id}:${selection.id}`,batchId:id,inventoryId:selection.id,status:error?'SKIPPED':'PENDING',snapshot:JSON.stringify(snapshot),sourceQuantity,detailNote:selection.detailNote??'',...(quantity<sourceQuantity&&!error?{splitInventoryId:randomUUID()}:{}),expectedUpdatedAt:selection.updatedAt,error:error??null,createdAt:now,updatedAt:now,__typename:'OutboundItem'};

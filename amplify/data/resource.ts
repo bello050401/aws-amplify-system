@@ -1009,6 +1009,7 @@ const schema = a.schema({
       inventoryId: a.string().required(), // FK — belongsTo relationではなくフラットなID参照(Category/Locationのparent-child関係と同じ設計判断)
       title: a.string().required(),
       commonCategoryId: a.string(),
+      quantity: a.integer(),
       channelPrices: a.json(),
       description: a.string(),
       price: a.integer(),

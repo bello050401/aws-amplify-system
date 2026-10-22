@@ -22,7 +22,7 @@ async function source(id:string):Promise<Source>{
   if(!matching&&!savedBrandImage)throw new ListingError("この商品の出品画像として確認できない画像があります。画像を選び直して保存してください。");
  }
  const category=commonCategory(draft.commonCategoryId);
- return {id:item.id,name:draft.title||item.name,description:draft.description||"",price:commonChannelPrice(draft,'INDEPENDENT')??0,sku:item.sku||"",quantity:item.quantity,version:item.updatedAt+":"+draft.updatedAt,images:refs,...(category?{categories:[category.independent.id]}:{})};
+ return {id:item.id,name:draft.title||item.name,description:draft.description||"",price:commonChannelPrice(draft,'INDEPENDENT')??0,sku:item.sku||"",quantity:draft.quantity??item.quantity,version:item.updatedAt+":"+draft.updatedAt,images:refs,...(category?{categories:[category.independent.id]}:{})};
 }
 async function image(ref:ImageRef){
  const signed=await resolveListingImageDownloadUrl(ref);if(!signed)throw new ListingError("商品画像を取得できません。");

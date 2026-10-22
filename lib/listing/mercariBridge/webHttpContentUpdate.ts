@@ -25,6 +25,8 @@ import type { EcReview } from "../ecManagement";
 
 export type ContentSource = {
   fingerprint: string;
+  categoryId?: string;
+  shippingMethodType?: string;
   title: string;
   description: string;
   price: number;
@@ -229,6 +231,8 @@ export async function updateObservedWebHttpContent(
       fields: {
         ...p.fields,
         name: s.title,
+        ...(s.categoryId?{categoryIds:[s.categoryId]}:{}),
+        ...(s.shippingMethodType?{shippingMethodType:s.shippingMethodType}:{}),
         description: s.description,
         price: s.price,
         assetIds,
