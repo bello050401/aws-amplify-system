@@ -8,7 +8,7 @@ import {parseCustomFields,stringifyCustomFields} from '@/lib/inventory/customFie
 import {clearInventoryCountCache} from '@/lib/inventory/inventoryPage';
 import {getOutboundBatch,requireUuid,pendingArrivalInventoryIds} from './service';
 import {parseJsonField} from './types';
-import {isArrivalRow,arrivalStatus,type ArrivalChange,type ArrivalPreview} from './arrivalTypes';
+import {isArrivalRow,type ArrivalChange,type ArrivalPreview} from './arrivalTypes';
 import {sendOutboundTransaction} from './transactionRetry';
 
 async function masters(model:string){
@@ -39,8 +39,18 @@ export async function confirmOutboundArrival(id:string,commandId:string,changes:
  requireUuid(commandId);
  let batch=await getOutboundBatch(id);
  if(batch.status!=='COMPLETED')throw Error('出庫の完了を確認してから到着確認を行ってください。');
- if(arrivalStatus(batch)==='COMPLETED')return batch;
- if(!batch.rows.some(isArrivalRow))throw Error('この履歴には到着確認待ちの商品がありません。');
+ const arrivalRows=batch.rows.filter(isArrivalRow);
+ if(!arrivalRows.length)throw Error('この履歴には到着確認待ちの商品がありません。');
+ if(arrivalRows.every(r=>r.arrivalStatus==='COMPLETED')){
+  // Product transactions can all succeed just before a timeout. Finish the
+  // batch journal on retry without touching those products a second time.
+  if(batch.arrivalStatus!=='COMPLETED'&&batch.arrivalCommandId){
+   try{await db.send(new UpdateCommand({TableName:table('OutboundBatch'),Key:{id},UpdateExpression:'SET arrivalStatus=:done, arrivalAt=:now, arrivalBy=:actor, updatedAt=:now',ConditionExpression:'arrivalCommandId=:cmd',ExpressionAttributeValues:{':done':'COMPLETED',':now':new Date().toISOString(),':actor':actor,':cmd':batch.arrivalCommandId}}));}
+   catch{throw Error('商品の更新は完了していますが、履歴の確定を確認できません。結果を再確認してください。');}
+   clearInventoryCountCache();return getOutboundBatch(id);
+  }
+  return batch;
+ }
  if(batch.arrivalCommandId!==commandId){
   if(batch.arrivalStatus==='APPLYING')throw Error('到着確認の処理中です。「更新を再開」で結果を確認してください。');
   const preview=await previewOutboundArrival(id);

@@ -15,7 +15,7 @@ import * as human from '../../lib/inventory/humanEdits.ts';
 
 export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',locationId='office'}={}) {
   const itemId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',destinationId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-  const tables=new Map(),effects={emails:[],copies:[],merges:0,mergeReads:0,categoryWrites:[],failEmail:false,failCompletion:false,failArrivalFor:null,transactions:[]};
+  const tables=new Map(),effects={emails:[],copies:[],merges:0,mergeReads:0,categoryWrites:[],failEmail:false,failCompletion:false,failArrivalFor:null,failArrivalFinal:false,transactions:[]};
   const rows=model=>{if(!tables.has(model))tables.set(model,new Map());return tables.get(model);};
   const read=(model,id)=>structuredClone(rows(model).get(id));
   const put=(model,value)=>rows(model).set(value.id,structuredClone(value));
@@ -68,7 +68,7 @@ export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',
       op.TransactItems.forEach(action=>check(Object.values(action)[0]));
       op.TransactItems.forEach(action=>{const [kind,value]=Object.entries(action)[0];apply(value,kind);});return {};
     }
-    if(command instanceof commands.UpdateCommand||command instanceof commands.PutCommand){check(op);apply(op,command instanceof commands.PutCommand?'Put':'Update');return {};}
+    if(command instanceof commands.UpdateCommand||command instanceof commands.PutCommand){if(effects.failArrivalFinal&&op.TableName==='OutboundBatch'&&(op.ExpressionAttributeValues?.[':status']==='COMPLETED'||op.ExpressionAttributeValues?.[':done']==='COMPLETED'))throw Error('Injected final journal failure');check(op);apply(op,command instanceof commands.PutCommand?'Put':'Update');return {};}
     throw Error('Unsupported fixture command');
   }};
   const stubs={

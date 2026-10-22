@@ -16,7 +16,7 @@ export function isArrivalRow(row:OutboundRow){return row.status==='SENT'&&row.sn
 export function arrivalStatus(batch:OutboundBatch):ArrivalStatus|undefined {
  const rows=batch.rows.filter(isArrivalRow);
  if(!rows.length)return undefined;
- if(rows.every(row=>row.arrivalStatus==='COMPLETED'))return 'COMPLETED';
+ if(rows.every(row=>row.arrivalStatus==='COMPLETED'))return batch.arrivalStatus==='COMPLETED'?'COMPLETED':'APPLYING';
  if(batch.arrivalStatus==='APPLYING')return 'APPLYING';
  if(batch.arrivalStatus==='PARTIAL'||rows.some(row=>row.arrivalStatus==='COMPLETED'))return 'PARTIAL';
  return 'WAITING';
