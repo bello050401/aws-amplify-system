@@ -16,6 +16,14 @@ export async function createAwsOutboundFixture(){
  let failDispatchOnce=false;
  const database={send:async command=>{
   const input=structuredClone(command.input);
+  // These isolated masters have exactly the seeded keys. The workstation's
+  // unfiltered master Scan requests time out, so read those real AWS records
+  // by key for transaction tests. Public UI separately checks master listing.
+  if(command instanceof ScanCommand&&['Category','Location'].includes(input.TableName)){
+   const keys=input.TableName==='Category'?['sale','move']:['office','kawagoe'];
+   const Items=[];for(const id of keys){const result=await doc.send(new GetCommand({TableName:names.get(input.TableName),Key:{id},ConsistentRead:true}));if(result.Item)Items.push(result.Item);}
+   return {Items};
+  }
   const map=op=>{if(!names.has(op.TableName))throw Error('Unapproved QA table '+op.TableName);op.TableName=names.get(op.TableName);};
   if(input.TransactItems){
    if(failDispatchOnce&&input.TransactItems.some(a=>a.Put?.TableName==='InventoryHistory')){failDispatchOnce=false;throw Error('Injected dispatch interruption');}
