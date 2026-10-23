@@ -50,11 +50,12 @@ function check(name: string, fn: () => void) {
 }
 
 console.log("=== formatDateTime: 分割前と同じゼロ埋め書式 ===");
-check("2026-08-28T17:40:00.000Z相当のISOを日本時間ではなくローカル値のまま整形", () => {
-  // Dateはローカルタイムゾーンで解釈される既存実装のまま(分割時に変更していない)。
+check("実行環境によらず履歴を日本時間で整形", () => {
   const iso = "2026-01-05T09:05:00.000Z";
   const out = formatDateTime(iso);
   assert.match(out, /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/, `zero-padded format expected, got "${out}"`);
+  assert.equal(out,"2026/01/05 18:05");
+  assert.equal(formatDateTime("2026-10-23T16:00:00.000Z"),"2026/10/24 01:00");
 });
 
 console.log("\n=== historyOperationLabel: 登録/削除/編集の分岐(スキーマ変更なしの派生ロジック) ===");
