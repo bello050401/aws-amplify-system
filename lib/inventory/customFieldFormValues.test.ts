@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { customFieldFormValues } from "./customFieldFormValues";
+import { productCustomFields, withHumanEdits } from "./humanEdits";
 
 test("editing visible fields retains inactive and unknown product values without changing their types", () => {
   const original = { inactive: "過去の記録", imported: { source: "legacy" }, count: 4, visible: "old", belloBrand: "old" };
@@ -18,4 +19,11 @@ test("new and duplicated records preserve numeric zero and omit source save/sync
   assert.deepEqual(customFieldFormValues({ hidden: 12.5, __belloMobileWrite: { mutationId: "source" }, __belloEditedFields: ["name"] },
     [{ fieldKey: "amount", fieldType: "NUMBER" }], { amount: "0" }), { hidden: 12.5, amount: 0 });
   assert.deepEqual(customFieldFormValues(null, [{ fieldKey: "amount", fieldType: "NUMBER" }], { amount: "123.45" }), { amount: 123.45 });
+});
+
+test("Restage receipt is hidden and omitted on duplication, but preserved on editing", () => {
+  const original={memo:'keep',__restageImport:{date:'2026-10-23',goodsId:'178392'}};
+  assert.deepEqual(productCustomFields(original),{memo:'keep'});
+  assert.deepEqual(customFieldFormValues(original,[],{}),{memo:'keep'});
+  assert.deepEqual(withHumanEdits({}, {}, original, {memo:'keep'}),original);
 });
