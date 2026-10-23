@@ -15,6 +15,7 @@ test('数量0や価格不明は登録を止める',()=>{assert.throws(()=>lotQua
 test('品目は家具4種類とその他',()=>{assert.equal(classifyItem('ローテーブル Knoll'),'テーブル');assert.equal(classifyItem('ハイスツール HAY'),'椅子');assert.equal(classifyItem('サイドボード 木製'),'棚');assert.equal(classifyItem('テーブルランプ'),'照明');assert.equal(classifyItem('冷蔵庫'),'その他');assert.equal(classifyItem('テーブル・椅子 一山'),'その他');});
 test('画像は同じ商品IDの1枚目に限定',()=>{assert.throws(()=>validateImageUrl('https://example.com/1.png','123'));assert.throws(()=>validateImageUrl('./common.action?action=get_image&imageKey=999/1.png','123'));});
 test('不正日付・未来日は拒否',()=>{assert.throws(()=>assertAuctionDate('2026-02-30'));assert.throws(()=>assertAuctionDate('2099-01-01'));});
+test('実際の対象商品なし表示を0件として扱う',()=>{const x=parseRestageLots('<input id="listCbn" value="5"><input id="conditionDate" value="2026/10/21"><input id="page" value="1"><input id="maxPage" value=""><div class="red">対象商品が見つかりませんでした。</div>','2026-10-21');assert.deepEqual(x,{lots:[],errors:[],maxPage:0,page:1});});
 const html=await readFile('scripts/fixtures/restage-wins.html','utf8');
 const parsed=parseRestageLots(html,'2026-10-23');
 test('実際の自社落札11件をすべて読み取る',()=>{assert.equal(parsed.lots.length,11);assert.equal(parsed.errors.length,0);assert.equal(parsed.maxPage,1);});

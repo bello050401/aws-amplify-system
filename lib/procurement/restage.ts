@@ -63,7 +63,7 @@ export function parseRestageLots(html:string,date:string) {
       lots.push({goodsId,date,name,sourceQuantity,...q,hammerPrice,purchasePrice:purchaseUnitPrice(hammerPrice,q.quantity,q.isBundle),itemType:classifyItem(name),imageUrl:validateImageUrl(attr(img??{},'src'),goodsId),lotNumber:clean(sub[0])});
     }catch(error){errors.push({goodsId,name,error:error instanceof Error?error.message:'読取エラー'});}
   }
-  if(!body&&!/検索結果[\s\S]*?0[\s\S]*?件/.test(html)) throw Error('落札一覧を取得できません。ログイン状態を確認してください。');
+  if(!body&&!nodes.some(n=>n.tagName==='div'&&clean(n)==='対象商品が見つかりませんでした。')) throw Error('落札一覧を取得できません。ログイン状態を確認してください。');
   return {lots,errors,maxPage,page};
 }
 
