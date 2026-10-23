@@ -88,11 +88,12 @@ export default async function PhotoBatchDetailPage({ params, searchParams }: Pho
 
             <section>
               <h2 className="mb-2 text-xs font-bold text-gray-700">画像 ({result.value.totalAssetCount}枚)</h2>
+              <p className="mb-3 text-xs text-gray-500">削除した画像は7日間の復元期間後、毎日の自動整理で元画像・縮小画像・過去の版を完全に削除します。</p>
               {result.value.totalAssetCount === 0 ? (
                 <p className="rounded border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">まだ画像がありません。</p>
               ) : (
                 <>
-                  <PhotoAssetGrid batchId={params.batchId} assets={result.value.assets} actorRole={result.value.actorRole} />
+                  <PhotoAssetGrid batchId={params.batchId} assets={result.value.assets} actorRole={result.value.actorRole} archived={result.value.batch.status === "ARCHIVED"} />
                   <PageLinks batchId={params.batchId} page={result.value.page} pageSize={result.value.pageSize} total={result.value.totalAssetCount} />
                 </>
               )}

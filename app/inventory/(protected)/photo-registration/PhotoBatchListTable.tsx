@@ -31,7 +31,7 @@ export function PhotoBatchListTable({
   const [error, setError] = useState<string | null>(null);
 
   async function removeBatch(batch: PhotoBatchView) {
-    if (!window.confirm(`${batch.batchCode} を一覧から削除しますか？\n紐付け済みのバッチは削除できません。`)) return;
+    if (!window.confirm(`${batch.batchCode} と含まれる画像を削除しますか？\n画像は7日経過後の自動整理でAWSからも完全に削除されます。\n紐付け済みのバッチは削除できません。`)) return;
     setError(null);
     setDeleting(batch.id);
     try {

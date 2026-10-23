@@ -762,8 +762,10 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
                 Key: batchKey(batchId),
                 UpdateExpression:
                   "SET expectedAssetCount = expectedAssetCount + :expDelta, registeredAssetCount = registeredAssetCount + :regDelta, completedAssetCount = completedAssetCount + :compDelta, failedAssetCount = failedAssetCount + :failDelta",
-                ConditionExpression: "expectedAssetCount <= :maxMinusOne",
+                ConditionExpression: "expectedAssetCount <= :maxMinusOne AND #batchStatus <> :archived",
+                ExpressionAttributeNames: { "#batchStatus": "status" },
                 ExpressionAttributeValues: {
+                  ":archived": "ARCHIVED",
                   ":expDelta": decision.manifestDelta.expected,
                   ":regDelta": decision.manifestDelta.registered,
                   ":compDelta": decision.manifestDelta.completed,

@@ -1,6 +1,7 @@
 import {
   DynamoDBDocumentClient,
   ScanCommand,
+  QueryCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
@@ -20,6 +21,7 @@ export async function cleanupPhotoAssets(
   table: string,
   bucket: string,
   now = Date.now(),
+  onlyBatchIds?: ReadonlySet<string>,
 ) {
   const key = (p: DeletedPhoto) => ({ PK: p.PK, SK: p.SK });
   const condition =
@@ -29,6 +31,21 @@ export async function cleanupPhotoAssets(
   return purgeDeletedPhotos(
     {
       listDeleted: async () => {
+        if (onlyBatchIds) {
+          const rows: DeletedPhoto[] = [];
+          for (const id of onlyBatchIds) {
+            if (!/^[0-9a-f-]{36}$/i.test(id)) throw Error("Invalid batch id");
+            let after: Record<string, unknown> | undefined;
+            do {
+              const page = await db.send(new QueryCommand({ TableName: table, ConsistentRead: true,
+                KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+                ExpressionAttributeValues: { ":pk": `BATCH#${id}`, ":prefix": "ASSET#" }, ExclusiveStartKey: after }));
+              rows.push(...((page.Items as DeletedPhoto[]) ?? []).filter(p => p.isDeleted));
+              after = page.LastEvaluatedKey;
+            } while (after);
+          }
+          return rows;
+        }
         let after: Record<string, unknown> | undefined;
         const rows: DeletedPhoto[] = [];
         do {

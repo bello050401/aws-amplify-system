@@ -18,6 +18,7 @@ import type { AuthConfig } from "@/lib/photoRegistration/auth";
 import type { BatchListPage, PhotoStoragePort, TrustedClaims } from "@/lib/photoRegistration/ports";
 import { PHOTO_REGISTRATION_REGION, type PhotoErrorCode, type PhotoResult } from "@/lib/photoRegistration/types";
 import { assetKey } from "@/lib/photoRegistration/keys";
+import { markArchivedPhotoBatchAssets } from "@/lib/mediaMaintenance/archivedPhotoBatches";
 
 /**
  * 画像登録Web UIのserver action境界。ここでは新しい業務判断をしない —
@@ -346,7 +347,7 @@ export interface InventoryCandidateRow {
   updatedAt: string;
 }
 
-/** Hide an unlinked batch while retaining its audit record and original objects. */
+/** Hide an unlinked batch and schedule all its unreferenced images for deletion. */
 export async function archiveUnlinkedPhotoBatchAction(batchId: string): Promise<PhotoActionResult<{ batchId: string }>> {
   const role = await getInventoryRole();
   if (!role || role === "VIEWER") return { ok: false, code: "PERMISSION_DENIED", message: ERROR_LABELS.PERMISSION_DENIED };
@@ -357,11 +358,13 @@ export async function archiveUnlinkedPhotoBatchAction(batchId: string): Promise<
     await ddb.send(new UpdateCommand({
       TableName: tableName,
       Key: { PK: `BATCH#${batchId}`, SK: `BATCH#${batchId}` },
-      UpdateExpression: "SET #status = :archived, updatedAt = :now REMOVE GSI1PK, GSI1SK",
-      ConditionExpression: "attribute_exists(PK) AND #status = :ready AND attribute_not_exists(inventoryId) AND attribute_not_exists(openRevisionRevision)",
+      UpdateExpression: "SET #status = :archived, updatedAt = :now, deletedAt = if_not_exists(deletedAt, :now) REMOVE GSI1PK, GSI1SK",
+      ConditionExpression: "attribute_exists(PK) AND (#status = :ready OR #status = :archived) AND attribute_not_exists(inventoryId) AND attribute_not_exists(openRevisionRevision)",
       ExpressionAttributeNames: { "#status": "status" },
       ExpressionAttributeValues: { ":archived": "ARCHIVED", ":ready": "READY_FOR_REVIEW", ":now": new Date().toISOString() },
     }));
+    const marked = await markArchivedPhotoBatchAssets(ddb, tableName, batchId);
+    if (marked.failures.length || marked.protected) console.error("[archiveUnlinkedPhotoBatchAction] cleanup pending", { batchId, ...marked });
     revalidatePath("/inventory/photo-registration");
     return { ok: true, value: { batchId } };
   } catch (error) {

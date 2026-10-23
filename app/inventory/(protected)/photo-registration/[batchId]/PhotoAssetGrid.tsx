@@ -18,17 +18,19 @@ export function PhotoAssetGrid({
   batchId,
   assets,
   actorRole,
+  archived = false,
 }: {
   batchId: string;
   assets: WebPhotoAssetView[];
   actorRole: PhotoActorRole;
+  archived?: boolean;
 }) {
   const router = useRouter();
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const canDelete = actorRole === "STAFF" || actorRole === "ADMIN";
-  const canRestore = actorRole === "ADMIN";
+  const canRestore = actorRole === "ADMIN" && !archived;
 
   const setPending = (id: string, pending: boolean) => {
     setPendingIds((prev) => {
@@ -77,7 +79,7 @@ export function PhotoAssetGrid({
                 // eslint-disable-next-line @next/next/no-img-element -- 署名付きURLは短命かつ動的なので next/image の外部ドメイン許可対象にしない
                 <img src={asset.thumbnailUrl} alt={`画像 ${asset.sequence + 1 || index + 1}`} className="h-full w-full object-contain" loading="lazy" />
               ) : (
-                <span className="text-xs text-gray-400">画像を表示できません</span>
+                <span className="text-xs text-gray-400">{asset.purgedAt ? "元画像・縮小画像を完全削除済み" : "画像を表示できません"}</span>
               )}
               {asset.isDeleted ? (
                 <span className="absolute left-1 top-1 rounded bg-gray-900/80 px-1.5 py-0.5 text-[10px] font-bold text-white">削除済み</span>
@@ -102,7 +104,7 @@ export function PhotoAssetGrid({
                 {pending ? "削除中…" : "削除"}
               </button>
             ) : null}
-            {asset.isDeleted && canRestore ? (
+            {asset.isDeleted && canRestore && !asset.purgeStartedAt && !asset.purgedAt ? (
               <button
                 type="button"
                 onClick={() => handleRestore(asset.id)}

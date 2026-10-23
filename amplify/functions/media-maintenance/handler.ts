@@ -19,6 +19,7 @@ import {
 } from "../../../lib/mediaMaintenance/core";
 import { sweepUnusedImages } from "../../../lib/mediaMaintenance/sweep";
 import { cleanupPhotoAssets } from "../../../lib/mediaMaintenance/photoCleanupAws";
+import { markArchivedPhotoBatches } from "../../../lib/mediaMaintenance/archivedPhotoBatches";
 import { markDeletedInventoryPhotos } from "../../../lib/mediaMaintenance/deletedInventoryPhotos";
 import {
   retireExpiredVersions,
@@ -163,6 +164,8 @@ export const handler = async () => {
     );
     if (orphanResult.failures.length)
       throw Error("Deleted inventory photo cleanup failed; retry required");
+    const archivedResult = await markArchivedPhotoBatches(db, photoTable);
+    console.log(JSON.stringify({ kind: "ARCHIVED_PHOTO_BATCHES", ...archivedResult }));
     const photoResult = await cleanupPhotoAssets(
       db,
       s3,
@@ -172,7 +175,7 @@ export const handler = async () => {
     console.log(
       JSON.stringify({ kind: "PHOTO_MEDIA_MAINTENANCE", ...photoResult }),
     );
-    if (photoResult.failures.length)
+    if (photoResult.failures.length || archivedResult.failures.length)
       throw Error("Photo cleanup failed; durable claims retained for retry");
   }
   return result;

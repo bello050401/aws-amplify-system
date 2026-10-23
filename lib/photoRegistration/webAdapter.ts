@@ -181,6 +181,7 @@ export class PhotoRegistrationWebAdapter {
   }
 
   private async toWebAsset(asset: PhotoAssetView): Promise<WebPhotoAssetView> {
+    if (asset.purgeStartedAt || asset.purgedAt) return { ...asset, thumbnailUrl: null, processedUrl: null };
     // Both variants are independent signatures. Waiting for the thumbnail
     // before starting the processed image adds an avoidable signing round
     // trip to every photo detail view.
