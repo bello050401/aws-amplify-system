@@ -165,6 +165,19 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
       new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:ConditionCheckItem"],resources:[yahooState.tableArn]})],
   });
   backend.addOutput({custom:{yahooHttps:{region:yahooStack.region,secretArn:yahooSession.secretArn,stateTable:yahooState.tableName}}});
+
+  const procurementStack = backend.createStack("ProcurementImport");
+  const restageSecret = Secret.fromSecretNameV2(procurementStack, "RestageCredentials", "bello/restage-readonly-credentials");
+  const procurementTable = new Table(procurementStack, "Imports", {
+    partitionKey:{name:"pk",type:AttributeType.STRING},sortKey:{name:"sk",type:AttributeType.STRING},
+    billingMode:BillingMode.PAY_PER_REQUEST,removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecovery:true,timeToLiveAttribute:"ttl",
+  });
+  new ManagedPolicy(procurementStack,"RuntimeAccess",{
+    roles:[Role.fromRoleName(procurementStack,"RuntimeRole","BelloAmplifyStagingComputeRole")],
+    statements:[new PolicyStatement({actions:["secretsmanager:GetSecretValue"],resources:[`${restageSecret.secretArn}-??????`]}),
+      new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem","dynamodb:Query"],resources:[procurementTable.tableArn]})],
+  });
+  backend.addOutput({custom:{procurement:{region:procurementStack.region,secretArn:restageSecret.secretArn,tableName:procurementTable.tableName}}});
 }
 
 // SKU counter table for amplify/functions/generate-sku. This is

@@ -208,6 +208,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               <span className="md:hidden">+ 新規</span>
               <span className="hidden md:inline">+ 新規登録</span>
             </Link>
+            <Link href="/inventory/procurement" onClick={(e) => handleGuardedLinkClick(e, "/inventory/procurement")} className="whitespace-nowrap border border-gray-300 px-3 py-1.5 text-[13px] font-bold hover:bg-gray-50">定期仕入れ</Link>
             <DirectEditControls />
           </>
         ) : null}
