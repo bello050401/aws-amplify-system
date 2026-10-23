@@ -14,6 +14,9 @@ assert.deepEqual(changes.categoryIds,['repair']);assert.equal(changes.locationId
 assert.equal(changes.quantity,undefined);assert.equal(changes.purchasePrice,undefined);assert.equal(changes.images,undefined);
 assert.equal(original.quantity,3);assert.equal(original.purchasePrice,1188);
 assert.deepEqual(restageSupplement({...original,...changes},lot,ledger,defaults),{});
+assert.deepEqual(restageSupplement({...original,...changes,categoryId:null,categoryIds:[],locationId:null},lot,ledger,defaults),{},'later cleared defaults must stay cleared');
+const explicitlyCleared=restageSupplement({...original,customFields:{...original.customFields,__belloEditedFields:['categoryIds','locationId']}},lot,ledger,defaults);
+assert.equal(explicitlyCleared.categoryIds,undefined);assert.equal(explicitlyCleared.locationId,undefined);
 assert.throws(()=>restageSupplement({...original,purchaseQuantity:42},lot,ledger,defaults),/変更されています/);
 const preserved=restageSupplement({...original,categoryId:'other',categoryIds:['other'],locationId:'warehouse'},lot,ledger,defaults);
 assert.equal(preserved.categoryId,undefined);assert.equal(preserved.locationId,undefined);

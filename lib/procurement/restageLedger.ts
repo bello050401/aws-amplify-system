@@ -33,7 +33,13 @@ export function restageSupplement(row:Record<string,unknown>,lot:RestageLot,ledg
     }
     changes.customFields={...custom,__restageImport:{...receipt,ledger}};
   }
-  if(!row.locationId)changes.locationId=defaults.locationId;
-  if(!row.categoryId&&(!Array.isArray(row.categoryIds)||row.categoryIds.length===0)){changes.categoryId=defaults.categoryId;changes.categoryIds=[defaults.categoryId];}
+  // Defaults are applied once; a later deliberate clearing must survive re-fetch.
+  if(!receipt.defaults){
+    const edited=new Set(Array.isArray(custom.__belloEditedFields)?custom.__belloEditedFields:[]);
+    if(!row.locationId&&!edited.has('locationId'))changes.locationId=defaults.locationId;
+    if(!row.categoryId&&(!Array.isArray(row.categoryIds)||row.categoryIds.length===0)&&!edited.has('categoryId')&&!edited.has('categoryIds')){changes.categoryId=defaults.categoryId;changes.categoryIds=[defaults.categoryId];}
+    const next=changes.customFields as Record<string,any>|undefined;
+    changes.customFields={...(next??custom),__restageImport:{...(next?.__restageImport??receipt),defaults}};
+  }
   return changes;
 }
