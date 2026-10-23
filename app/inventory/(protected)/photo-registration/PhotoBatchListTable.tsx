@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { archiveUnlinkedPhotoBatchAction } from "@/app/actions/photoRegistration";
@@ -29,9 +29,15 @@ export function PhotoBatchListTable({
   const router = useRouter();
   const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmBatch, setConfirmBatch] = useState<PhotoBatchView | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (confirmBatch) dialogRef.current?.showModal();
+    else dialogRef.current?.close();
+  }, [confirmBatch]);
 
   async function removeBatch(batch: PhotoBatchView) {
-    if (!window.confirm(`${batch.batchCode} と含まれる画像を削除しますか？\n画像は7日経過後の自動整理でAWSからも完全に削除されます。\n紐付け済みのバッチは削除できません。`)) return;
+    if (deleting !== null) return;
     setError(null);
     setDeleting(batch.id);
     try {
@@ -41,6 +47,7 @@ export function PhotoBatchListTable({
         return;
       }
       window.dispatchEvent(new Event("bello:photo-batches-changed"));
+      setConfirmBatch(null);
       router.refresh();
     } catch {
       setError(`${batch.batchCode}: 削除できませんでした。もう一度お試しください。`);
@@ -51,6 +58,18 @@ export function PhotoBatchListTable({
 
   return (
     <div className="flex flex-col gap-3">
+      <dialog ref={dialogRef} aria-labelledby="photo-batch-delete-title" onClose={() => setConfirmBatch(null)}
+        onCancel={(event) => { if (deleting) event.preventDefault(); }}
+        className="w-[min(90vw,480px)] rounded-lg border border-gray-300 p-5 shadow-xl backdrop:bg-black/40">
+        <h2 id="photo-batch-delete-title" className="mb-3 font-bold">画像をまとめて削除</h2>
+        <p className="text-sm">{confirmBatch?.batchCode} と含まれる画像を削除しますか？</p>
+        <p className="mt-2 text-xs text-gray-600">画像は7日経過後の自動整理でAWSからも完全に削除されます。紐付け済みのバッチは削除できません。</p>
+        {error ? <p role="alert" className="mt-3 text-sm text-red-700">{error}</p> : null}
+        <div className="mt-5 flex justify-end gap-3">
+          <button type="button" autoFocus disabled={deleting !== null} onClick={() => setConfirmBatch(null)} className="rounded border px-4 py-2">キャンセル</button>
+          <button type="button" disabled={deleting !== null} onClick={() => { if (confirmBatch) void removeBatch(confirmBatch); }} className="rounded bg-red-700 px-4 py-2 text-white disabled:opacity-50">{deleting ? "削除中…" : "画像を削除する"}</button>
+        </div>
+      </dialog>
       {error ? <p role="alert" className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
       {batches.length === 0 ? (
         <div className="p-8 text-center text-sm text-gray-500">このページに表示するバッチはありません。</div>
@@ -75,7 +94,7 @@ export function PhotoBatchListTable({
               </Link>
               <button
                 type="button"
-                onClick={() => void removeBatch(batch)}
+                onClick={() => { setError(null); setConfirmBatch(batch); }}
                 disabled={deleting !== null}
                 aria-label={`${batch.batchCode}を削除`}
                 className="shrink-0 rounded border border-red-300 px-3 py-2 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
