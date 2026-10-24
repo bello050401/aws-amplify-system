@@ -127,9 +127,9 @@ export function createNewImageSlot(file: File): ImageEditorSlot {
   };
 }
 
-export function slotPreviewKey(slot: ImageEditorSlot): string | null {
-  if (slot.kind === "existing") return slot.storageKey;
-  if (slot.kind === "copy") return slot.sourceStorageKey;
+export function slotPreviewKey(slot: ImageEditorSlot, size: "small" | "medium" = "medium"): string | null {
+  if (slot.kind === "existing") return (size === "medium" ? slot.mediumKey : null) ?? slot.thumbnailKey ?? slot.storageKey;
+  if (slot.kind === "copy") return (size === "medium" ? slot.sourceMediumKey : null) ?? slot.sourceThumbnailKey ?? slot.sourceStorageKey;
   return null; // "new" uses localPreviewUrl instead
 }
 
@@ -172,8 +172,8 @@ function safeUploadPath(file: File): string {
  * cropped square reads fine at that size and a mismatched aspect ratio
  * there would look worse, not better.
  */
-function EditorImagePreview({ slot, className, alt }: { slot: ImageEditorSlot; className: string; alt: string }) {
-  const { url, failed, rejectDirect } = useInventoryPreviewUrl(slot.kind === "new" ? null : slotPreviewKey(slot));
+function EditorImagePreview({ slot, className, alt, size = "medium" }: { slot: ImageEditorSlot; className: string; alt: string; size?: "small" | "medium" }) {
+  const { url, failed, rejectDirect } = useInventoryPreviewUrl(slotPreviewKey(slot, size));
 
   if (slot.kind === "new") {
     // eslint-disable-next-line @next/next/no-img-element -- local blob: object URL preview, not a remote asset next/image can optimize
@@ -430,6 +430,7 @@ export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditor
                 >
                   <EditorImagePreview
                     slot={slot}
+                    size="small"
                     alt=""
                     className={`h-full w-full bg-gray-50 object-cover ${slot.kind === "new" && slot.uploading ? "opacity-50" : ""}`}
                   />
