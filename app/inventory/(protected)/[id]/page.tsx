@@ -273,11 +273,11 @@ export default async function InventoryDetailPage({
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫詳細</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <Link href={backToListHref} className="text-[12px] text-gray-500 hover:text-gray-900">
+        <Link prefetch={false} href={backToListHref} className="text-[12px] text-gray-500 hover:text-gray-900">
           ← 在庫一覧へ戻る
         </Link>
 
-        {mergedInto && <p className="my-3 rounded-lg bg-blue-50 p-3">この在庫は出庫先の商品に合算済みです。<Link className="ml-2 text-blue-700 underline" href={`/inventory/${mergedInto}`}>現在の商品ページを開く</Link>（以下は元の商品情報・履歴です）</p>}
+        {mergedInto && <p className="my-3 rounded-lg bg-blue-50 p-3">この在庫は出庫先の商品に合算済みです。<Link prefetch={false} className="ml-2 text-blue-700 underline" href={`/inventory/${mergedInto}`}>現在の商品ページを開く</Link>（以下は元の商品情報・履歴です）</p>}
         <div className="mt-3 flex flex-col gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -291,11 +291,11 @@ export default async function InventoryDetailPage({
           <div className="flex items-center gap-3">
             {canEdit && (
               <div className="flex gap-2">
-                <Link href={editHref} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                <Link prefetch={false} href={editHref} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   編集
                 </Link>
                 {role === "ADMIN" && <SoldOutButton item={item}/>}
-                <Link href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                <Link prefetch={false} href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   複製
                 </Link>
                 {/* BELLO統合改修 master指示書 Phase D — EC出品機能への
@@ -303,7 +303,7 @@ export default async function InventoryDetailPage({
                     一切変更しない(実際の出品UI・下書き編集は独立した
                     サブページ app/inventory/(protected)/[id]/listing/
                     にある)。 */}
-                <Link href={`/inventory/${item.id}/listing`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
+                <Link prefetch={false} href={`/inventory/${item.id}/listing`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   EC出品
                 </Link>
               </div>

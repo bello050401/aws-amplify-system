@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
 import { useInventoryImageUrl } from "./useInventoryImageUrl";
 import { useInventoryPreviewUrl } from "./InventoryPreviewUrls";
@@ -110,6 +110,16 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false,
     mediumBody,
   });
 
+  const heroImageRef = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    // A server-rendered or cached image can finish before React attaches its
+    // load handler. Reconcile the actual image after SELECT resets the state.
+    const image = heroImageRef.current;
+    if (!smallKey || !heroPlan.mountSrc || !image?.complete || image.getAttribute("src") !== heroPlan.mountSrc) return;
+    if (image.naturalWidth > 0) dispatchSmallBody({ type: "LOADED", key: smallKey });
+    else dispatchSmallBody({ type: rejectSmallDirect() ? "SELECT" : "FAILED", key: smallKey });
+  }, [smallKey, heroPlan.mountSrc, rejectSmallDirect]);
+
   // --- ライトボックス: 原本(storageKey)は開いている間だけ要求する ---
   // current自体はselectedが変わるたびに変わるので、ライトボックスを
   // 開いたまま←/→で切り替えても「選択中の1枚だけ」が新たに要求される
@@ -167,6 +177,7 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false,
           <div className="relative h-[380px] w-full">
             {/* eslint-disable-next-line @next/next/no-img-element -- S3 URL; see InventoryThumbnail's identical note. */}
             <img
+              ref={heroImageRef}
               src={heroPlan.mountSrc}
               alt={alt}
               onLoad={() => smallKey && dispatchSmallBody({ type: "LOADED", key: smallKey })}
