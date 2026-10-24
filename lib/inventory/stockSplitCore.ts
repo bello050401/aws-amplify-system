@@ -32,7 +32,10 @@ export function createStockSplitService(p:StockSplitPorts) {
   const parsed=typeof source.images==='string'?JSON.parse(source.images):source.images;
   if(parsed!=null&&!Array.isArray(parsed))throw new StockSplitError('INVALID','元の写真情報を確認できないため、分割を中止しました。');
   const originals:unknown[]=Array.isArray(parsed)?parsed:[];
-  const images=await p.copyPhotos({...source,images:[...originals,...r.photos.map((photo,i)=>({...photo,sortOrder:originals.length+i,isPrimary:false}))]},id);
+  // Copy inherited photos independently. New, owner-scoped uploads belong directly
+  // to the child: copying them again would leave a second cloud object behind.
+  const inheritedPhotos=await p.copyPhotos({...source,images:originals},id);
+  const images=[...inheritedPhotos,...r.photos.map((photo,i)=>({...photo,sortOrder:inheritedPhotos.length+i,isPrimary:false}))];
   const result:StockSplitResult={sourceId:String(source.id),splitId:id,remainingQuantity:Number(source.quantity)-r.quantity,splitQuantity:r.quantity,updatedAt:now};
   const remaining={quantity:result.remainingQuantity,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
   const values={...remaining,customFields:stringifyCustomFields(withHumanEdits(source,remaining,custom,custom??undefined))},entries=Object.entries(values);
@@ -51,8 +54,8 @@ export function createStockSplitService(p:StockSplitPorts) {
   try{await p.db.send(new TransactWriteCommand({TransactItems:writes,ClientRequestToken:randomUUID()}));}
   catch(error){
    const committed=await receipt().catch(()=>null);
-   if(committed){if(committed.splitId!==id)await p.discardPhotos(images);return committed;}
-   if(error instanceof Error&&error.name==='TransactionCanceledException'){await p.discardPhotos(images);throw new StockSplitError('CONFLICT','別の更新と重なったため分割していません。商品を開き直してください。');}
+   if(committed){if(committed.splitId!==id)await p.discardPhotos(inheritedPhotos);return committed;}
+   if(error instanceof Error&&error.name==='TransactionCanceledException'){await p.discardPhotos(inheritedPhotos);throw new StockSplitError('CONFLICT','別の更新と重なったため分割していません。商品を開き直してください。');}
    throw new StockSplitError('UNCONFIRMED','保存結果を確認できません。同じ内容で結果を再確認してください。');
   }
   return result;
