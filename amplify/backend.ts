@@ -17,6 +17,7 @@ import { zaicoSyncWorker } from "./functions/zaico-sync-worker/resource";
 import { integrityMonitor } from "./functions/integrity-monitor/resource";
 import { salesAggregateScheduler } from "./functions/sales-aggregate-scheduler/resource";
 import { mediaMaintenance } from "./functions/media-maintenance/resource";
+import { invoiceIssuer } from './functions/invoice-issuer/resource';
 
 /**
  * Amplify Gen2 backend definition.
@@ -47,7 +48,27 @@ const backend = defineBackend({
   integrityMonitor,
   salesAggregateScheduler,
   mediaMaintenance,
+  invoiceIssuer,
 });
+
+// Isolated create-only invoicing. No invoice data/PDF bucket or data model exists.
+const invoiceStack=backend.createStack('InvoiceIssuance');
+const invoiceOperations=new Table(invoiceStack,'Operations',{partitionKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.DESTROY});
+const invoiceSecret=new Secret(invoiceStack,'Credentials',{generateSecretString:{secretStringTemplate:JSON.stringify({settingsVerified:false}),generateStringKey:'key',passwordLength:64,excludePunctuation:true}});
+invoiceSecret.grantRead(backend.invoiceIssuer.resources.lambda);
+invoiceSecret.grantWrite(backend.invoiceIssuer.resources.lambda);
+backend.invoiceIssuer.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem'],resources:[invoiceOperations.tableArn]}));
+backend.invoiceIssuer.addEnvironment('OPERATIONS_TABLE',invoiceOperations.tableName);
+backend.invoiceIssuer.addEnvironment('MF_SECRET_ARN',invoiceSecret.secretArn);
+backend.invoiceIssuer.addEnvironment('USER_POOL_ID',backend.auth.resources.userPool.userPoolId);
+backend.invoiceIssuer.addEnvironment('USER_POOL_CLIENT_ID',backend.auth.resources.userPoolClient.userPoolClientId);
+backend.invoiceIssuer.addEnvironment('OAUTH_CALLBACK','https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com/api/invoicing/oauth/callback');
+const invoiceLambda=backend.invoiceIssuer.resources.lambda.node.defaultChild as import('aws-cdk-lib/aws-lambda').CfnFunction;
+invoiceLambda.reservedConcurrentExecutions=1;
+if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/inventory-management-system-5vbvc7'){
+ new ManagedPolicy(backend.invoiceIssuer.resources.lambda,'InvokeOnly',{roles:[Role.fromRoleName(backend.invoiceIssuer.resources.lambda,'WebRuntime','BelloAmplifyStagingComputeRole')],statements:[new PolicyStatement({actions:['lambda:InvokeFunction'],resources:[backend.invoiceIssuer.resources.lambda.functionArn]})]});
+}
+backend.addOutput({custom:{invoicing:{functionName:backend.invoiceIssuer.resources.lambda.functionName,region:invoiceStack.region}}});
 
 // Expire operational logs in their EXISTING groups. Changing logging.retention
 // on these established functions creates different groups and strands old logs.

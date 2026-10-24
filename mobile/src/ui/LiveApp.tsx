@@ -152,6 +152,7 @@ export function LiveApp() {
     } catch { setMessage("ログアウト処理を完了できませんでした。再試行してください。"); }
   };
   if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}
+    canIssueDocuments={!offline && access?.owner===userId && access.role==="ADMIN"}
     features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES} />;
   return <View style={s.root}><Image source={require("../../assets/bello-system-icon.png")} style={s.brand} contentFit="contain" accessibilityLabel="Bello SYSTEM"/>
     {message && <Text accessibilityRole="alert" style={s.error}>{message}</Text>}

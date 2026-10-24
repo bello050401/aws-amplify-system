@@ -45,6 +45,7 @@ export const NAV_ITEMS = [
   { key: "outbound", label: "出庫", href: "/inventory/outbound", enabled: true },
   // BELLO統合業務OS指示書(2026-08-30) §38: 「メッセージ」をEC出品の
   // 直下へ追加。
+  { key: "documents", label: "請求書・領収書発行", href: "/inventory/documents", enabled: true },
   { key: "messages", label: "メッセージ", href: "/inventory/messages", enabled: true },
   { key: "settings", label: "設定", href: "/inventory/settings", enabled: true },
 ] as const;
@@ -104,7 +105,7 @@ export function usePhotoRegistrationBadge(): PhotoRegistrationBadgeState | null 
   return badge;
 }
 
-export function InventoryNavRail() {
+export function InventoryNavRail({canIssueDocuments=false}:{canIssueDocuments?:boolean}) {
   const pathname = usePathname();
   const { guardedNavigate } = useUnsavedChanges();
   const router = useRouter();
@@ -156,7 +157,7 @@ export function InventoryNavRail() {
         <BelloLogo variant="sidebar" />
       </button>
       <ul className="flex flex-1 flex-col border-r border-gray-200 py-1">
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter(item=>item.key!=="documents"||canIssueDocuments).map((item) => {
           // /inventory itself must not read as "current" for every
           // /inventory/* route (it would otherwise match /inventory/settings
           // too, via a naive prefix check) — it's current only on an exact

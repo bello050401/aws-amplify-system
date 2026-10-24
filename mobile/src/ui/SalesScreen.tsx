@@ -1,3 +1,4 @@
+import {DocumentEntry} from "./DocumentEntry";
 import React,{useEffect,useRef,useState} from "react";
 import {ActivityIndicator,Modal,Pressable,ScrollView,StyleSheet,Text,View} from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -6,19 +7,20 @@ import {calculateItemGrossProfit,nowInJst,shiftYearMonth,formatJstDateTime,type 
 import {SalesTrendChart} from "./SalesTrendChart";
 import {colors} from "./theme";
 export interface SalesResponse {view:SalesSummaryView;forecast:null|{averageDailySales:number;projectedMonthEndSales:number;month:number;today:number;totalDaysInMonth:number};forecastUnavailable:boolean;items?:SalesTargetItem[]}
-export function SalesScreen({load,offline,onOpen}:{load:(year:number,month:number,items?:boolean)=>Promise<SalesResponse>;offline:boolean;onOpen:(id:string)=>void}){
+export function SalesScreen({load,offline,onOpen,canIssueDocuments=false}:{load:(year:number,month:number,items?:boolean)=>Promise<SalesResponse>;offline:boolean;onOpen:(id:string)=>void;canIssueDocuments?:boolean}){
+  const [document,setDocument]=useState<"invoice"|"receipt"|null>(null);
   const today=nowInJst(new Date());const [month,setMonth]=useState({year:today.year,month:today.month});
-  const [data,setData]=useState<SalesResponse|null>(null);const [error,setError]=useState("");const [busy,setBusy]=useState(false);const [itemsBusy,setItemsBusy]=useState(false);
-  const [items,setItems]=useState<SalesTargetItem[]|null>(null);const [shown,setShown]=useState(20);const version=useRef(0);
+  const [data,setData]=useState<SalesResponse|null>(null);const [error,setError]=useState("");const [busy,setBusy]=useState(false);
+  const version=useRef(0);
   const [picker,setPicker]=useState(false);const [pickYear,setPickYear]=useState(today.year);
-  const refresh=async()=>{const attempt=++version.current;setError("");setData(null);setItems(null);setShown(20);setItemsBusy(false);if(offline){setBusy(false);setError("【圏外です】売上は通信できる状態で確認してください。");return;}setBusy(true);
+  const refresh=async()=>{const attempt=++version.current;setError("");setData(null);if(offline){setBusy(false);setError("【圏外です】売上は通信できる状態で確認してください。");return;}setBusy(true);
     try{const value=await load(month.year,month.month);if(attempt===version.current)setData(value);}catch{if(attempt===version.current)setError("売上を取得できませんでした。再読み込みしてください。");}finally{if(attempt===version.current)setBusy(false);}};
   useEffect(()=>{void refresh();return()=>{version.current++;};},[month.year,month.month,offline,load]);
-  const details=async()=>{if(itemsBusy)return;const attempt=version.current;setItemsBusy(true);setError("");try{const result=await load(month.year,month.month,true);if(attempt===version.current)setItems(result.items??[]);}catch{if(attempt===version.current)setError("明細を取得できませんでした。");}finally{if(attempt===version.current)setItemsBusy(false);}};
   const yen=(n:number)=>"¥"+Math.round(n).toLocaleString("ja-JP");
   const view=data?.view;const totals=view?.totals;const change=(delta:number)=>setMonth(value=>shiftYearMonth(value.year,value.month,delta));
   const button=(label:string,action:()=>void,disabled=false)=><Pressable accessibilityRole="button" disabled={disabled} onPress={action} style={[s.button,disabled&&{opacity:.4}]}><Text style={s.link}>{label}</Text></Pressable>;
   const tile=(label:string,value:string)=><View style={s.tile} key={label}><Text style={s.tileLabel}>{label}</Text><Text style={s.amount}>{value}</Text></View>;
+  if(document&&canIssueDocuments)return <DocumentEntry kind={document} onClose={()=>setDocument(null)}/>;
   return <View style={s.screen}>
     <View style={s.controls}>
       <View style={s.row}>
@@ -39,12 +41,7 @@ export function SalesScreen({load,offline,onOpen}:{load:(year:number,month:numbe
         <Text style={s.note}>送料は原価に含みません。</Text>
         <View style={s.chart}><Text style={s.heading}>直近12ヶ月の推移</Text><SalesTrendChart key={month.year+"-"+month.month} points={view.trend}/></View>
       </>}
-      <View style={s.section}><Text style={s.heading}>対象商品一覧{items?"（"+items.length+"件）":""}</Text><Text style={s.hint}>販売終了日が選択月の商品。明細は現在の在庫から取得するため、集計時点との差がある場合があります。</Text>{button(itemsBusy?"取得中…":items?"明細を再取得":"明細を表示",()=>{void details();},itemsBusy||offline)}
-        {items?.length===0?<Text>対象商品はありません。</Text>:null}{items?.slice(0,shown).map(item=><Pressable accessibilityRole="button" key={item.id} onPress={()=>onOpen(item.id)} style={s.item}>
-          <Text style={s.link}>{item.name}</Text><Text style={s.hint}>在庫ID {item.displayId} / SKU {item.sku}</Text><Text style={s.hint}>販売終了日 {item.saleEndDate.replace(/-/g,"/")}</Text>
-          <Text>売上 {item.salePrice===null?"—":yen(item.salePrice)}　原価 {item.purchasePrice===null?"—":yen(item.purchasePrice)}</Text><Text>送料（参考） {item.shippingCost===null?"—":yen(item.shippingCost)}</Text><Text>粗利益 {yen(calculateItemGrossProfit(item.salePrice,item.purchasePrice))}</Text>
-        </Pressable>)}{items&&items.length>shown&&button("続きを表示（残り"+(items.length-shown)+"件）",()=>setShown(value=>value+20))}
-      </View>
+      {canIssueDocuments&&<View style={s.section}><Text style={s.heading}>帳票発行</Text>{button("請求書発行",()=>setDocument("invoice"),offline)}{button("領収書発行",()=>setDocument("receipt"),offline)}</View>}
     </ScrollView>
     <Modal visible={picker} transparent animationType="slide" onRequestClose={()=>setPicker(false)}>
       <View style={s.shade}><Pressable accessibilityRole="button" accessibilityLabel="年月選択を閉じる" style={StyleSheet.absoluteFill} onPress={()=>setPicker(false)}/>

@@ -46,7 +46,7 @@ export default async function ProtectedInventoryLayout({ children }: { children:
     // in this Client Component provider doesn't change that.
     <UnsavedChangesProvider>
       <div className="flex h-screen bg-white text-gray-900">
-        <InventoryNavRail />
+        <InventoryNavRail canIssueDocuments={status.role==="ADMIN"} />
         {/* Each page renders its own InventoryHeader (spec O/P/Q — see
             that component's file comment for why this replaced a single
             shared layout-level header bar) as the first child of this
@@ -56,7 +56,7 @@ export default async function ProtectedInventoryLayout({ children }: { children:
             のコンテンツが隠れないための余白 — `md:`以上ではrail側に
             戻るのでボトムナビ自体が無く、この余白も不要(md:pb-0)。 */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-14 md:pb-0">{children}</div>
-        <MobileBottomNav />
+        <MobileBottomNav canIssueDocuments={status.role==="ADMIN"} />
       </div>
     </UnsavedChangesProvider>
   );

@@ -43,9 +43,9 @@ export interface StaffAppPorts extends EditorPorts {
   openEcListing?: () => Promise<void>;
 }
 
-export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, writesEnabled = false, features = RESTRICTED_FEATURES, previewAccount, onTogglePreviewAccount }: {
+export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, writesEnabled = false, canIssueDocuments = false, features = RESTRICTED_FEATURES, previewAccount, onTogglePreviewAccount }: {
   ports: StaffAppPorts; offline: boolean; preview?: boolean; onToggleOffline?: () => void; onLogout?: () => void; writesEnabled?: boolean;
-  features?: MobileFeatures; previewAccount?: string; onTogglePreviewAccount?: () => void;
+  canIssueDocuments?: boolean; features?: MobileFeatures; previewAccount?: string; onTogglePreviewAccount?: () => void;
 }) {
   const [scanSearch,setScanSearch]=useState(false);
   const [creating,setCreating]=useState(false);
@@ -312,7 +312,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
             <ProductImage item={item} /><View style={s.rowMain}><View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(item.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.rowName} numberOfLines={2}>{item.name}</Text></View>
             <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
           </Pressable>} />
-      </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
+      </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && ports.sell && features.sales && features.ecListing && <Pressable accessibilityRole="button" accessibilityLabel="売切" disabled={offline || detailLoading || !selected.detailLoadedAt || selected.quantity<1 || splitCategoryNames(selected.category).includes('売り切れ')} onPress={()=>setSelling(selected)} style={[s.edit,s.floatingEdit,{bottom:156},(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1||splitCategoryNames(selected.category).includes('売り切れ'))&&{opacity:.4}]}><Text style={s.editLabel}>売切</Text></Pressable>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={21} color="white" /><Text style={s.editLabel}>編集</Text></Pressable>}
       <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={22} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
