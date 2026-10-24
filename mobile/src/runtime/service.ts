@@ -14,6 +14,8 @@ import { InventoryWriteError, type SaveRequest } from "../domain/editor";
 import { InventoryReadError } from "../domain/readError";
 import type { DeleteRequest } from "../domain/inventoryActions";
 import { readJson, ReadHttpError } from "./readJson";
+import {MobileSoldOutError,type SoldOutSaved} from '../ui/SoldOutScreen';
+import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutInput';
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
@@ -121,6 +123,22 @@ export async function readInventoryThumbnails(ids: string[]): Promise<InventoryT
 export async function clearLocalSession(): Promise<void> { if (!isWeb) await secureTokens.clear(); }
 
 export function mobileWritesEnabled(): boolean { return configured?.writesEnabled === true; }
+
+export async function sellInventory(request:SoldOutRequest):Promise<SoldOutSaved> {
+  if(!mobileWritesEnabled())throw new MobileSoldOutError('FORBIDDEN','在庫を編集する権限がありません。');
+  const session=await authenticatedSession();
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),60000);
+  try {
+    const response=await fetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.inventoryId)}/sold-out`,{method:'POST',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{Accept:'application/json','Content-Type':'application/json','X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})},body:JSON.stringify(request)});
+    const value=await response.json() as {ok?:boolean;code?:string;error?:string;owner?:string;mutationId?:string;result?:SoldOutResult};
+    if(!response.ok||!value.ok)throw new MobileSoldOutError(value.code??(response.status===403?'FORBIDDEN':'UNCONFIRMED'),value.error??'登録結果を確認できません。同じ内容で再確認してください。');
+    if(value.owner!==session.owner||value.mutationId!==request.mutationId||value.result?.sourceId!==request.inventoryId)throw Error('登録結果を確認できません。');
+    const sold=await readInventoryDetail(value.result.soldId);
+    const source=sold.id===request.inventoryId?sold:await readInventoryDetail(request.inventoryId);
+    return {sold,source};
+  }catch(error){throw error instanceof MobileSoldOutError?error:new MobileSoldOutError('UNCONFIRMED','登録結果を確認できません。同じ内容で「登録結果を再確認」を押してください。');}
+  finally{clearTimeout(timeout);}
+}
 
 /** Explicit user save only. A timeout is uncertain and keeps the same mutation ID for reconciliation. */
 export async function saveInventory(request: SaveRequest): Promise<InventoryItem> {

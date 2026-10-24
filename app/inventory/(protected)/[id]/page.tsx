@@ -5,6 +5,7 @@ import {categoryLabels} from "@/lib/inventory/categories";
 import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { ShippingReferencePriceSection } from "./listing/ShippingReferencePriceSection";
 import Link from "next/link";
+import SoldOutButton from './SoldOutButton';
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { canEditInventory, canHardDeleteInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
@@ -286,6 +287,8 @@ export default async function InventoryDetailPage({
           <div className="flex items-center gap-3">
             {canEdit && (
               <div className="flex gap-2">
+                <SoldOutButton item={item}/>
+                <Link href="/inventory/procurement" className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">定期仕入れ</Link>
                 <Link href={editHref} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   編集
                 </Link>

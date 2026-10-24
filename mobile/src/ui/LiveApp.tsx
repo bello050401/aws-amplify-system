@@ -10,6 +10,7 @@ import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
 import { removeInventory, removeInventoryPhotoAsset } from "../runtime/service";
+import {sellInventory} from '../runtime/service';
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 import type { InventorySearchInput } from "../domain/search";
@@ -109,6 +110,7 @@ export function LiveApp() {
     uploadPhoto: uploadInventoryPhoto,
     loadSales: readSales,
     save: saveInventory,
+    sell: sellInventory,
     removeInventory,
     deletePhotoAsset: removeInventoryPhotoAsset,
   }; }, [userId]);
