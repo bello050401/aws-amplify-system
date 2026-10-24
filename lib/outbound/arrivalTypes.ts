@@ -25,7 +25,7 @@ export function arrivalLabel(status?:string){return ({WAITING:'出庫済み・�
 
 export function arrivalFailureMessage(error:unknown){
  const failure=error as {name?:string;message?:string}|null;
- if(failure?.name==='AccessDeniedException')return 'システムの更新権限が不足しています。管理者による設定修正後に「更新を再開」してください。';
+ if(failure?.name==='AccessDeniedException')return 'システムの更新権限が不足しています。管理者による設定修正後に「確認」を押してください。';
  if(failure?.message&&/商品が変更|保管場所またはカテゴリ/.test(failure.message))return failure.message;
- return '更新を確認できません。「更新を再開」で再確認してください。';
+ return '更新を確認できません。「確認」を押して再確認してください。';
 }

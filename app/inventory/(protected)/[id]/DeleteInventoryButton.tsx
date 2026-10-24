@@ -37,7 +37,7 @@ export function DeleteInventoryButton({ inventoryId, label }: { inventoryId: str
 
   return (
     <div className="flex flex-col items-end">
-      <button type="button" onClick={handleClick} disabled={pending} className="text-[11px] text-red-500 underline decoration-dotted hover:text-red-700 disabled:opacity-50">
+      <button type="button" onClick={handleClick} disabled={pending} className="border border-red-400 px-3 py-1.5 text-[12px] text-red-600 hover:bg-red-50 disabled:opacity-50">
         {pending ? "削除中…" : "削除"}
       </button>
       {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}

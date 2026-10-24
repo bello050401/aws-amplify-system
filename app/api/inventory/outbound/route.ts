@@ -4,7 +4,7 @@ import {outboundDestinations,outboundHistory,outboundProducts,getOutboundBatch,p
 import {KAWAGOE_TEMPLATE,kawagoeAttachments} from '@/lib/outbound/kawagoe';
 import {outboundCsv} from '@/lib/outbound/types';
 import {isOutboundRequestOriginAllowed} from '@/lib/outbound/requestOrigin';
-import {previewOutboundArrival,confirmOutboundArrival} from '@/lib/outbound/arrivalService';
+import {previewOutboundArrival,confirmDefaultOutboundArrival} from '@/lib/outbound/arrivalService';
 export const dynamic='force-dynamic';
 const headers={'Cache-Control':'private, no-store',Vary:'Cookie'};
 export async function GET(request:Request){
@@ -31,7 +31,7 @@ export async function POST(request:Request){
   if(!['ADMIN','EDITOR'].includes(session.role))return NextResponse.json({error:'出庫する権限がありません。'},{status:403,headers});
   if(!isOutboundRequestOriginAllowed(request))return NextResponse.json({error:'不正な送信元です。'},{status:403,headers});
   try{const input=await request.json();if(input.confirmed!==true)throw new Error('最終確認が必要です。');
-    if(input.action==='arrive')return NextResponse.json({batch:await confirmOutboundArrival(input.id,input.commandId,input.changes,session.owner)},{headers});
+    if(input.action==='arrive')return NextResponse.json({batch:await confirmDefaultOutboundArrival(input.id,input.commandId,session.owner)},{headers});
     let batch=input.action==='prepare'?await prepareOutbound(input.id,input.destinationId,input.items,session.owner,input.arrivalDate):input.action==='send'?await emailOutbound(input.id,session.owner):input.action==='received'?await acknowledgeOutboundReceipt(input.id,session.owner):input.action==='sent'?await confirmOutboundSent(input.id,session.owner):input.action==='cancel'?await cancelUnsentOutbound(input.id):null;
     if(input.action==='prepare'&&batch?.sender==='EMAIL'&&batch.rows.some(r=>r.status==='PENDING'))batch=await emailOutbound(batch.id,session.owner);
     if(!batch)throw new Error('操作を確認してください。');return NextResponse.json({batch},{headers});

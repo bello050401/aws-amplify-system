@@ -1,3 +1,4 @@
+import {withListImageUrls} from '@/lib/inventory/listImageUrls';
 import {inventoryCategoryIds} from '@/lib/inventory/categories';
 import { NextResponse } from "next/server";
 import { getMobileSession } from "@/lib/mobile/session";
@@ -60,14 +61,15 @@ export async function GET(request: Request) {
     const categoryNames = new Map(categories.map((row) => [row.id, row.name]));
     const locationNames = new Map(locations.map((row) => [row.id, row.name]));
     const statusLabels = new Map(statuses.map((row) => [row.id, row.label]));
-    const items = page.items.map(row => {
+    const imageRows = images === "deferred" ? await withListImageUrls(page.items) : page.items;
+    const items = imageRows.map(row => {
       return {
         id: row.id, sku: row.sku, displayId: row.displayId, name: row.name, quantity: row.quantity, unit: row.unit ?? "",
         quantityUnset:row.quantityUnset,
         location: (row.locationId && locationNames.get(row.locationId)) || "",
         category: inventoryCategoryIds(row).map(id=>categoryNames.get(id)).filter(Boolean).join(","),
         statusId: row.statusId, condition: (row.statusId && statusLabels.get(row.statusId)) || "", note: row.note ?? "", barcode: row.barcode ?? "",
-        plannedSalePrice: row.plannedSalePrice, thumbnailUrl: imageById.get(row.id) ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt, listUpdatedAt: row.listUpdatedAt ?? undefined,
+        plannedSalePrice: row.plannedSalePrice, thumbnailUrl: imageById.get(row.id) ?? row.mainImageSignedUrl ?? null, createdAt: row.createdAt, updatedAt: row.updatedAt, listUpdatedAt: row.listUpdatedAt ?? undefined,
       };
     });
     return NextResponse.json({ owner, role: session.role, items, imagesDeferred: images === "deferred", hasMore, nextOffset: offset+50, total: "total" in page ? page.total : null, totalQuantity: "totalQuantity" in page ? page.totalQuantity : null, fetchedAt: new Date().toISOString() }, { headers });

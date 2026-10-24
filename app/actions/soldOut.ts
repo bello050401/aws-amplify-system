@@ -1,6 +1,6 @@
 'use server';
 import {revalidatePath} from 'next/cache';
-import {canEditInventory,getInventoryRole,getCurrentInventoryUserEmail} from '@/lib/amplify/requireInventoryUser';
+import {getInventoryRole} from '@/lib/amplify/requireInventoryUser';
 import {inventoryDdb,inventoryTable} from '@/lib/inventory/categoryPersistence';
 import {listCategories} from '@/lib/inventory/queries';
 import {clearInventoryCountCache} from '@/lib/inventory/inventoryPage';
@@ -8,10 +8,13 @@ import {serverDataClient,inventoryAuthMode} from '@/lib/amplify/dataClient';
 import {createSoldOutService} from '@/lib/inventory/soldOutCore';
 import {copySoldOutPhotos,discardSoldOutPhotos} from '@/lib/inventory/soldOutPhotos';
 import {SoldOutError,type SoldOutRequest,type SoldOutResult} from '@/lib/inventory/soldOutInput';
+import {inventoryMutationSession} from '@/lib/inventory/mutationSession';
 
 export async function registerSoldOut(request:SoldOutRequest):Promise<{ok:true;result:SoldOutResult}|{ok:false;code:string;error:string}> {
-  if(!canEditInventory(await getInventoryRole()))return {ok:false,code:'FORBIDDEN',error:'在庫を編集する権限がありません。'};
-  const actor=await getCurrentInventoryUserEmail();
+  if((await getInventoryRole())!=='ADMIN')return {ok:false,code:'FORBIDDEN',error:'売却は管理者のみ実行できます。'};
+  const verified=await inventoryMutationSession();
+  if(verified?.role!=='ADMIN')return {ok:false,code:'FORBIDDEN',error:'売却は管理者のみ実行できます。'};
+  const actor=verified.owner;
   if(!actor)return {ok:false,code:'FORBIDDEN',error:'再ログインしてください。'};
   try {
     const execute=createSoldOutService({db:inventoryDdb,table:inventoryTable,categories:listCategories,copyPhotos:copySoldOutPhotos,discardPhotos:discardSoldOutPhotos,nextSku:async()=>{

@@ -10,6 +10,7 @@ import { InventoryEditor, type EditorPorts } from "../domain/editor";
 import { mergeInventoryRead, mergeInventoryThumbnails, type InventoryThumbnail, type InventoryItem, type InventoryOptions } from "../domain/inventory";
 import { SnapshotStore, type InventorySnapshot } from "../domain/snapshot";
 import { InventoryEditorScreen } from "./InventoryEditorScreen";
+import {StockSplitScreen,type StockSplitPorts} from './StockSplitScreen';
 import {SoldOutScreen,type SoldOutPorts,type SoldOutSaved} from './SoldOutScreen';
 import { colors } from "./theme";
 import { canOpenTab, permittedTab, RESTRICTED_FEATURES, type MobileFeatures } from "../domain/access";
@@ -40,12 +41,13 @@ export interface StaffAppPorts extends EditorPorts {
   loadDetail?: (id: string) => Promise<InventoryItem>;
   removeInventory?: (request: DeleteRequest) => Promise<void>;
   sell?: SoldOutPorts['sell'];
+  split?: StockSplitPorts['split']; checkBarcode?: StockSplitPorts['checkBarcode'];
   openEcListing?: () => Promise<void>;
 }
 
-export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, writesEnabled = false, canIssueDocuments = false, features = RESTRICTED_FEATURES, previewAccount, onTogglePreviewAccount }: {
+export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, writesEnabled = false, canIssueDocuments = false, canSellInventory = false, features = RESTRICTED_FEATURES, previewAccount, onTogglePreviewAccount }: {
   ports: StaffAppPorts; offline: boolean; preview?: boolean; onToggleOffline?: () => void; onLogout?: () => void; writesEnabled?: boolean;
-  canIssueDocuments?: boolean; features?: MobileFeatures; previewAccount?: string; onTogglePreviewAccount?: () => void;
+  canIssueDocuments?: boolean; canSellInventory?: boolean; features?: MobileFeatures; previewAccount?: string; onTogglePreviewAccount?: () => void;
 }) {
   const [scanSearch,setScanSearch]=useState(false);
   const [creating,setCreating]=useState(false);
@@ -57,6 +59,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const [snapshot, setSnapshot] = useState<InventorySnapshot | null>(null);
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const [editor, setEditor] = useState<InventoryEditor | null>(null);
+  const [splitting,setSplitting]=useState<InventoryItem|null>(null);
   const [selling,setSelling]=useState<InventoryItem|null>(null);
   const [deleteTarget, setDeleteTarget] = useState<InventoryItem | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -269,7 +272,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {selling && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
+    {splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
       <View style={s.header}>
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
@@ -313,7 +316,8 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
             <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
           </Pressable>} />
       </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
-      {selected && !selected.mergedIntoInventoryId && writesEnabled && ports.sell && features.sales && features.ecListing && <Pressable accessibilityRole="button" accessibilityLabel="売切" disabled={offline || detailLoading || !selected.detailLoadedAt || selected.quantity<1 || splitCategoryNames(selected.category).includes('売り切れ')} onPress={()=>setSelling(selected)} style={[s.edit,s.floatingEdit,{bottom:156},(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1||splitCategoryNames(selected.category).includes('売り切れ'))&&{opacity:.4}]}><Text style={s.editLabel}>売切</Text></Pressable>}
+      {selected && !selected.mergedIntoInventoryId && writesEnabled && ports.split && <Pressable accessibilityRole="button" accessibilityLabel="在庫分け" disabled={offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1} onPress={()=>setSplitting(selected)} style={[s.edit,s.floatingEdit,{bottom:canSellInventory?228:156},(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1)&&{opacity:.4}]}><Text style={[s.editLabel,{textAlign:'center'}]}>{'在庫\n分け'}</Text></Pressable>}
+      {selected && !selected.mergedIntoInventoryId && writesEnabled && canSellInventory && ports.sell && features.sales && features.ecListing && <Pressable accessibilityRole="button" accessibilityLabel="売却" disabled={offline || detailLoading || !selected.detailLoadedAt || selected.quantity<1 || splitCategoryNames(selected.category).includes('売り切れ')} onPress={()=>setSelling(selected)} style={[s.edit,s.floatingEdit,{bottom:156},(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1||splitCategoryNames(selected.category).includes('売り切れ'))&&{opacity:.4}]}><Text style={s.editLabel}>売却</Text></Pressable>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={21} color="white" /><Text style={s.editLabel}>編集</Text></Pressable>}
       <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={22} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
     </DetailSwipeBack>}

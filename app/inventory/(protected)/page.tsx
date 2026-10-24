@@ -1,3 +1,5 @@
+import {withListImageUrls} from '@/lib/inventory/listImageUrls';
+import {selectableLocations} from "@/lib/inventory/locationChoices";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
   listCategories,
@@ -150,7 +152,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
           ? await listInventory(filters, { offset, limit })
           : null;
 
-  const rows = listResult ? listResult.items : pagedResult!.items;
+  const rows = await withListImageUrls(listResult ? listResult.items : pagedResult!.items);
   // 総件数は行の表示を待たせない（Suspenseで後から差し込む）。検索経路は
   // 従来どおり集計済みの値をそのまま使う。
   const knownTotal = listResult ? listResult.total : null;
@@ -252,7 +254,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           <InventorySidebar
             categories={categories}
-            locations={locations}
+            locations={selectableLocations(locations)}
             activeCategoryIds={categoryIds}
             activeLocationId={searchParams.locationId}
             q={searchParams.q}
@@ -269,7 +271,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
                 photoRegistrationEnabled={Boolean(process.env.PHOTO_REGISTRATION_TABLE_NAME && process.env.PHOTO_REGISTRATION_INVENTORY_TABLE_NAME && process.env.PHOTO_REGISTRATION_BUCKET_NAME)}
                 rows={rows}
                 categories={categories}
-                locations={locations}
+                locations={selectableLocations(locations)}
                 categoriesById={categoriesById}
                 locationsById={locationsById}
                 statusesById={statusesById}

@@ -1,3 +1,4 @@
+import {selectableLocations} from "@/lib/inventory/locationChoices";
 import { notFound, redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses, listUnits } from "@/lib/inventory/queries";
@@ -53,7 +54,7 @@ export default async function EditInventoryPage({
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫編集</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <EditInventoryForm item={item} photoAssets={photoAssetsResult.ok ? photoAssetsResult.value.assets : []} categories={categories} locations={locations} statuses={statuses} customFieldDefs={customFieldDefs} units={units} returnTo={detailHref} />
+        <EditInventoryForm item={item} photoAssets={photoAssetsResult.ok ? photoAssetsResult.value.assets : []} categories={categories} locations={selectableLocations(locations,item.locationId)} statuses={statuses} customFieldDefs={customFieldDefs} units={units} returnTo={detailHref} />
       </div>
     </div>
   );

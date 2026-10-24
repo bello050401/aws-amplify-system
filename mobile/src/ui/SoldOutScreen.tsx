@@ -25,7 +25,7 @@ export function SoldOutScreen({item,ports,onCancel,onSaved}:{item:InventoryItem;
     }finally{inflight.current=false;setBusy(false);}
   };
   return <KeyboardAvoidingView style={s.screen} behavior={Platform.OS==='ios'?'padding':undefined}>
-    <View style={s.header}><Pressable accessibilityRole="button" disabled={busy||uncertain} onPress={onCancel} style={s.cancel}><Text style={s.link}>キャンセル</Text></Pressable><Text style={s.title}>売切登録</Text><View style={s.cancel}/></View>
+    <View style={s.header}><Pressable accessibilityRole="button" disabled={busy||uncertain} onPress={onCancel} style={s.cancel}><Text style={s.link}>キャンセル</Text></Pressable><Text style={s.title}>売却登録</Text><View style={s.cancel}/></View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.body}>
       <Text style={s.label}>売却数量（在庫 {item.quantity}）</Text><TextInput accessibilityLabel="売却数量" value={quantity} onChangeText={setQuantity} keyboardType="number-pad" inputMode="numeric" editable={!locked} style={s.input}/>
       <Text style={s.label}>商品名</Text><TextInput accessibilityLabel="商品名" value={name} onChangeText={setName} multiline maxLength={2000} editable={!locked} style={[s.input,{minHeight:74}]}/>
@@ -36,7 +36,7 @@ export function SoldOutScreen({item,ports,onCancel,onSaved}:{item:InventoryItem;
       <Text style={s.note}>売却分を「売り切れ」に変更します。{Number(quantity)>0&&Number(quantity)<item.quantity?`元の商品には ${item.quantity-Number(quantity)} 個を残します。`:'元の商品ページを更新します。'}</Text>
       {!!error&&<Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     </ScrollView>
-    <View style={s.footer}><Pressable accessibilityRole="button" disabled={busy||conflict} onPress={submit} style={[s.submit,(busy||conflict)&&{opacity:.5}]}><Text style={s.submitText}>{busy?'登録を確認中…':uncertain?'登録結果を再確認':'売切登録'}</Text></Pressable></View>
+    <View style={s.footer}><Pressable accessibilityRole="button" disabled={busy||conflict} onPress={submit} style={[s.submit,(busy||conflict)&&{opacity:.5}]}><Text style={s.submitText}>{busy?'登録を確認中…':uncertain?'登録結果を再確認':'売却登録'}</Text></Pressable></View>
     <Modal visible={choosing} transparent animationType="slide" onRequestClose={()=>setChoosing(false)}><View style={s.shade}><View style={s.sheet}><View style={s.header}><Text style={s.title}>市場</Text><Pressable accessibilityRole="button" onPress={()=>setChoosing(false)} style={s.cancel}><Text style={s.link}>閉じる</Text></Pressable></View><ScrollView>{[...new Set(['',...SOLD_OUT_MARKETS,...(item.details?.market?[item.details.market]:[])])].map(value=><Pressable key={value} accessibilityRole="button" accessibilityState={{selected:market===value}} onPress={()=>{setMarket(value);setChoosing(false);}} style={s.option}><Text style={s.value}>{value||'未設定'}</Text></Pressable>)}</ScrollView></View></View></Modal>
   </KeyboardAvoidingView>;
 }

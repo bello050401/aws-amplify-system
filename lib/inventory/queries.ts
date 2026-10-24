@@ -58,6 +58,7 @@ export interface InventoryListRow {
   // lib/inventory/listColumns.ts.
   plannedSalePrice: number | null;
   note: string | null;
+  mainImageSignedUrl?: string | null;
   mainImageStorageKey: string | null;
   /** BELLO統合改修 master指示書 Phase B: the key the list view should actually fetch — the top image's small thumbnail when one exists, `mainImageStorageKey` (the original) otherwise. Only ever used by the list table's InventoryThumbnail; every other screen keeps using `mainImageStorageKey`/`storageKey` directly. */
   mainImageThumbnailKey: string | null;

@@ -7,7 +7,7 @@ export async function POST(request:Request,context:{params:{id:string}}) {
   const fail=(error:string,status:number)=>NextResponse.json({error},{status,headers});
   const session=await getMobileSession();
   if(!session.ok)return fail(session.error,session.status);
-  if(session.role==='VIEWER'||process.env.BELLO_MOBILE_WRITES_ENABLED!=='true')return fail('編集権限がありません。',403);
+  if(session.role!=='ADMIN'||process.env.BELLO_MOBILE_WRITES_ENABLED!=='true')return fail('売却は管理者のみ実行できます。',403);
   if(!session.features.sales||!session.features.ecListing)return fail('販売情報を編集する権限がありません。',403);
   const origin=request.headers.get('origin');
   if(request.headers.get('x-bello-mobile')!=='1'||request.headers.get('sec-fetch-site')==='cross-site'||(origin&&origin!==(process.env.BELLO_MOBILE_PUBLIC_ORIGIN||new URL(request.url).origin)))return fail('許可されていない操作です。',403);

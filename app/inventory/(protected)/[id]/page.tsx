@@ -274,7 +274,7 @@ export default async function InventoryDetailPage({
         </Link>
 
         {mergedInto && <p className="my-3 rounded-lg bg-blue-50 p-3">この在庫は出庫先の商品に合算済みです。<Link className="ml-2 text-blue-700 underline" href={`/inventory/${mergedInto}`}>現在の商品ページを開く</Link>（以下は元の商品情報・履歴です）</p>}
-        <div className="mt-3 flex items-start justify-between">
+        <div className="mt-3 flex flex-col gap-4">
           <div>
             <div className="flex items-center gap-2">
               {status && <span className="border border-gray-300 px-1.5 py-0.5 text-[11px] text-gray-700">{status.label}</span>}
@@ -287,11 +287,10 @@ export default async function InventoryDetailPage({
           <div className="flex items-center gap-3">
             {canEdit && (
               <div className="flex gap-2">
-                <SoldOutButton item={item}/>
-                <Link href="/inventory/procurement" className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">定期仕入れ</Link>
                 <Link href={editHref} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   編集
                 </Link>
+                {role === "ADMIN" && <SoldOutButton item={item}/>}
                 <Link href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   複製
                 </Link>

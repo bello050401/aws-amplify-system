@@ -35,7 +35,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     const previous = await readReceipt(); if (previous) return previous;
     const source = await persistence.getInventoryRaw(request.inventoryId);
     if (!source || source.updatedAt !== request.expectedUpdatedAt) throw new SoldOutError('CONFLICT','ほかの操作で商品が変更されています。商品を開き直してください。');
-    if (source.listingPartition === 'MERGED' || source.outboundBatchId || source.outboundArrivalBatchId) throw new SoldOutError('INVALID','出庫処理中または合算済みのため、処理が完了してから売切登録してください。');
+    if (source.listingPartition === 'MERGED' || source.outboundBatchId || source.outboundArrivalBatchId) throw new SoldOutError('INVALID','出庫処理中または合算済みのため、処理が完了してから売却登録してください。');
     validateSoldOut(request, source.quantity, source.market ?? '');
     const masters = await ports.categories();
     const soldMaster = masters.filter(c=>c.name==='売り切れ'), activeMaster = masters.filter(c=>c.name==='販売中');
@@ -77,7 +77,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
       writes.push(...persistence.categoryLinkChanges(source.id,before,after,now));
     }
     const oldValue=JSON.stringify({quantity:source.quantity,name:source.name,categoryIds:before,saleEndDate:source.saleEndDate,externalProductId:source.externalProductId,market:source.market,salePrice:source.salePrice});
-    const history = {inventoryId:source.id,fieldName:'売切登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
+    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
     writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:receiptId},ConditionExpression:'attribute_not_exists(id)'}});
     if(split) writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:`${receiptId}:SPLIT`,inventoryId:soldId,fieldName:'売却分を分割'}}});
     try { await db.send(new TransactWriteCommand({TransactItems:writes,ClientRequestToken:randomUUID()})); }

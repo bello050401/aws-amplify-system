@@ -1,4 +1,5 @@
 "use client";
+import {QuantityInput} from "@/app/inventory/QuantityInput";
 import {formatJstDateTime} from "@/lib/inventory/formatJst";
 import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {CategoryMultiSelect} from "@/app/inventory/CategoryMultiSelect";
@@ -282,7 +283,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
       // `size`/`columns` props FormFields.tsx/ExtendedFieldsSection.tsx
       // gained, both defaulting to their exact pre-Phase-C look) and
       // nowhere else.
-      className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)_260px] lg:items-start"
+      className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_220px] lg:items-start"
     >
       {/* 単位欄のdatalist候補(夜間開発指示書 §10) — 自由入力のまま、単位マスタの値を候補として提示する。 */}
       <datalist id="unit-options">
@@ -294,7 +295,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
       {/* タイトルはInventoryHeader側(edit/page.tsx)に表示済み — ここでは
           未保存変更ガードを経由する「詳細へ戻る」だけを残す。全カラムの
           上に1本だけ表示する。 */}
-      <div className="flex items-center justify-end lg:col-span-3">
+      <div className="flex items-center justify-end lg:col-span-2 xl:col-span-3">
         <button type="button" onClick={() => guardedNavigate(`/inventory/${item.id}`)} className="text-[12px] text-gray-500 hover:text-gray-900">
           詳細へ戻る
         </button>
@@ -336,7 +337,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
           />
 
           <div className="grid grid-cols-2 gap-4">
-            <LabeledInput label="数量" type="number" value={quantity} onChange={setQuantity} size="large" />
+            <QuantityInput value={quantity} onChange={setQuantity}/>
             <LabeledInput label="単位" value={unit} onChange={setUnit} placeholder="個" list="unit-options" size="large" />
           </div>
           <LabeledInput label="QRコード・バーコード" value={barcode} onChange={setBarcode} size="large" />
@@ -405,7 +406,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
 
         {error && <p className="mt-4 text-[13px] text-red-600">{error}</p>}
 
-        <div className="mt-6 flex gap-2">
+        <div className="sticky bottom-0 z-20 mt-6 flex gap-2 border-t bg-white/95 py-3">
           <button
             type="submit"
             disabled={submitting || imageEditorHasUploading(normalImageSlots) || imageEditorHasUploading(damageImageSlots)}
@@ -428,7 +429,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
           ンには一切関わらない。参照レイアウトの「右=補足情報」に対応
           — デスクトップでは追従表示(sticky)、モバイルではフォームの
           後ろに単純に積まれる。 */}
-      <div className="lg:col-start-3">
+      <div className="lg:col-start-2 xl:col-start-3">
         <div className="border border-gray-200 p-4 lg:sticky lg:top-4">
           <p className="mb-2 text-[11px] font-bold text-gray-400">付加情報</p>
           <dl className="space-y-2 text-[12px] text-gray-600">

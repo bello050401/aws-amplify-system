@@ -16,9 +16,9 @@ export function usePrimaryPhotoThumbnails(inventoryIds: string[], enabled = true
     const ids = pageKey ? pageKey.split("\u0000") : [];
     void (async () => {
       let photos: Record<string, PhotoThumbnailChoice> = {};
-      for (let start = 0; active && enabled && start < ids.length; start += 16) {
+      for (let start = 0; active && enabled && start < ids.length; start += 100) {
         try {
-          const response = await listInventoryPrimaryPhotoThumbnailsAction(ids.slice(start, start + 16));
+          const response = await listInventoryPrimaryPhotoThumbnailsAction(ids.slice(start, start + 100));
           if (active && response.ok) {
             photos = { ...photos, ...response.value };
             setResult({ key: pageKey, photos });

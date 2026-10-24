@@ -1,3 +1,4 @@
+import {selectableLocations} from "@/lib/inventory/locationChoices";
 import {mergedInventoryTarget} from "@/lib/outbound/mergeInventory";
 import {unconvertedZaicoValues} from "@/lib/zaico/transition/rawValues";
 import {categoryLabels} from '@/lib/inventory/categories';
@@ -23,7 +24,7 @@ export function mobileInventoryDetail(row: InventoryDetail, categories: MasterOp
     // Reuse BELLO's existing state/master relationship. No app-only ZAICO state field.
     statusId: row.statusId,
     statusOptions: statuses.map(status => ({ id: status.id, label: status.label })),
-    categoryOptions: categories.map(option => option.name), locationOptions: locations.map(option => option.name),
+    categoryOptions: categories.map(option => option.name), locationOptions: selectableLocations(locations,row.locationId).map(option => option.name),
     condition: statuses.find(status => status.id === row.statusId)?.label ?? "", note: row.note ?? "", barcode: row.barcode ?? "",
     plannedSalePrice: row.plannedSalePrice, thumbnailUrl: photos.find(photo => photo.primary)?.url ?? photos[0]?.url ?? null,
     createdAt: row.createdAt, updatedAt: row.updatedAt, listUpdatedAt: row.listUpdatedAt ?? undefined, details, photos, detailLoadedAt: fetchedAt,

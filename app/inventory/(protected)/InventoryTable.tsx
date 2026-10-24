@@ -102,7 +102,7 @@ function renderReadOnlyCell(
       return (
         <InventoryThumbnail
           storageKey={row.mainImageThumbnailKey}
-          directUrl={resolveListPhotoUrl(row.mainImageIsPrimary, photoThumbnails[row.id])}
+          directUrl={resolveListPhotoUrl(row.mainImageIsPrimary, photoThumbnails[row.id]) ?? row.mainImageSignedUrl}
           alt={row.name}
           size="list"
           loading="lazy"

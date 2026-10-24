@@ -1,3 +1,4 @@
+import {selectableLocations} from "@/lib/inventory/locationChoices";
 import { redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses, listUnits } from "@/lib/inventory/queries";
@@ -82,7 +83,7 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <NewInventoryForm
           categories={categories}
-          locations={locations}
+          locations={selectableLocations(locations,duplicateSource?.locationId)}
           statuses={statuses}
           customFieldDefs={customFieldDefs}
           units={units}

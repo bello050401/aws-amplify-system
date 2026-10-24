@@ -148,6 +148,7 @@ export function InventoryThumbnail({
       src={url ?? undefined}
       alt={alt}
       loading={loading}
+      decoding="async"
       onError={(e) => {
         // getUrl() succeeded (a valid presigned URL) but the browser
         // still couldn't load it — e.g. the object doesn't actually

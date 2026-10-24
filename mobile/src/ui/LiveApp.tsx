@@ -10,7 +10,7 @@ import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
 import { removeInventory, removeInventoryPhotoAsset } from "../runtime/service";
-import {sellInventory} from '../runtime/service';
+import {sellInventory,splitInventory,checkSplitBarcode} from '../runtime/service';
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 import type { InventorySearchInput } from "../domain/search";
@@ -111,6 +111,8 @@ export function LiveApp() {
     loadSales: readSales,
     save: saveInventory,
     sell: sellInventory,
+    split: splitInventory,
+    checkBarcode: checkSplitBarcode,
     removeInventory,
     deletePhotoAsset: removeInventoryPhotoAsset,
   }; }, [userId]);
@@ -153,6 +155,7 @@ export function LiveApp() {
   };
   if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}
     canIssueDocuments={!offline && access?.owner===userId && access.role==="ADMIN"}
+    canSellInventory={access?.owner===userId && access.role==="ADMIN"}
     features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES} />;
   return <View style={s.root}><Image source={require("../../assets/bello-system-icon.png")} style={s.brand} contentFit="contain" accessibilityLabel="Bello SYSTEM"/>
     {message && <Text accessibilityRole="alert" style={s.error}>{message}</Text>}

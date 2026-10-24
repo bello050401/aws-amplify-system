@@ -1,3 +1,5 @@
+import {withHumanEdits} from '@/lib/inventory/humanEdits';
+import {parseCustomFields,stringifyCustomFields} from '@/lib/inventory/customFieldsCodec';
 import {sendOutboundTransaction} from './transactionRetry';
 import 'server-only';
 import {createHash,randomUUID} from 'node:crypto';
@@ -215,14 +217,17 @@ export async function confirmOutboundSent(batchId:string,actor:string):Promise<O
     if(!row||row.outboundBatchId!==batchId||row.updatedAt!==item.expectedUpdatedAt){await recordPendingError(item.id,'対象商品が更新されています。送信内容と履歴を確認してください。自動再送は行いません。');continue;}
     if(!item.splitInventoryId){
       try{
-        // Only the reservation and dispatch journal change. In particular, keep
-        // updatedAt/customFields intact so this does not enqueue a ZAICO edit.
-        const now=new Date().toISOString();
+        // Remove only the movement category; location waits for arrival.
+        const now=new Date(Math.max(Date.now(),Date.parse(row.updatedAt)+1)).toISOString();
+        const before=inventoryCategoryIds(row),after=before.filter(id=>id!==batch.categoryId);
+        const previous=parseCustomFields(row.customFields);
+        const custom=stringifyCustomFields(withHumanEdits(row,{categoryId:after[0]??null,categoryIds:after},previous,previous??{}));
         await sendOutboundTransaction(db,new TransactWriteCommand({TransactItems:[
           batchStateCheck(batchId,'APPLYING'),
-          {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'SET outboundArrivalBatchId=:batch REMOVE outboundBatchId',ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':batch':batchId,':version':item.expectedUpdatedAt}}},
-          {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who, updatedAt=:now, #snapshot=:snapshot REMOVE #error, splitInventoryId, splitSku, splitImages, splitPrepared',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error','#snapshot':'snapshot'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor,':snapshot':JSON.stringify({...item.snapshot,classificationPreserved:true})}}},
-          {Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId:item.inventoryId,changedAt:now,changedBy:actor,fieldName:'出庫データ送信',oldValue:JSON.stringify({categoryIds:inventoryCategoryIds(row),locationId:row.locationId,quantity:row.quantity}),newValue:JSON.stringify({categoryIds:inventoryCategoryIds(row),locationId:row.locationId,quantity:row.quantity,batchId,destination:batch.destinationName,sentQuantity:item.snapshot.quantity,classificationPreserved:true}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}},
+          {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'SET outboundArrivalBatchId=:batch, categoryIds=:cats, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who'+(after[0]?', categoryId=:primary':'')+' REMOVE outboundBatchId'+(after[0]?'':', categoryId'),ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':batch':batchId,':version':item.expectedUpdatedAt,':cats':after,':custom':custom,':now':now,':who':actor,...(after[0]?{':primary':after[0]}:{})}}},
+          ...categoryLinkChanges(item.inventoryId,before,after,now),
+          {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who, updatedAt=:now, #snapshot=:snapshot REMOVE #error, splitInventoryId, splitSku, splitImages, splitPrepared',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error','#snapshot':'snapshot'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor,':snapshot':JSON.stringify({...item.snapshot,classificationPreserved:true,movementCategoryRemoved:true})}}},
+          {Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId:item.inventoryId,changedAt:now,changedBy:actor,fieldName:'出庫データ送信',oldValue:JSON.stringify({categoryIds:inventoryCategoryIds(row),locationId:row.locationId,quantity:row.quantity}),newValue:JSON.stringify({categoryIds:after,locationId:row.locationId,quantity:row.quantity,batchId,destination:batch.destinationName,sentQuantity:item.snapshot.quantity,classificationPreserved:true,movementCategoryRemoved:true}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}},
         ]}));
       }catch(error){
         const fresh=await db.send(new GetCommand({TableName:table('OutboundItem'),Key:{id:item.id},ConsistentRead:true}));
@@ -230,7 +235,7 @@ export async function confirmOutboundSent(batchId:string,actor:string):Promise<O
       }
       continue;
     }
-    const now=new Date().toISOString(),after=inventoryCategoryIds(row);
+    const now=new Date(Math.max(Date.now(),Date.parse(row.updatedAt)+1)).toISOString(),after=inventoryCategoryIds(row).filter(id=>id!==batch.categoryId);
     if(item.splitInventoryId){
       try{
         validateMovementQuantity(item.snapshot.quantity,Number(row.quantity));
@@ -242,7 +247,7 @@ export async function confirmOutboundSent(batchId:string,actor:string):Promise<O
           {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'SET quantity=:qty, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who REMOVE outboundBatchId',ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND quantity=:available AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':qty':remaining,':custom':remainingCustomFields(row,remaining),':now':now,':who':actor,':batch':batchId,':version':item.expectedUpdatedAt,':available':Number(row.quantity)}}},
           {Put:{TableName:table('Inventory'),Item:child,ConditionExpression:'attribute_not_exists(id)'}},
           ...categoryLinkChanges(child.id,[],after,now),
-          {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who, #snapshot=:snapshot REMOVE #error',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error','#snapshot':'snapshot'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor,':snapshot':JSON.stringify({...item.snapshot,classificationPreserved:preservesOutboundClassification(batch)})}}},
+          {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who, #snapshot=:snapshot REMOVE #error',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error','#snapshot':'snapshot'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor,':snapshot':JSON.stringify({...item.snapshot,classificationPreserved:preservesOutboundClassification(batch),movementCategoryRemoved:true})}}},
           ...[item.inventoryId,child.id].map(inventoryId=>({Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId,changedAt:now,changedBy:actor,fieldName:'部分出庫',oldValue:JSON.stringify({quantity:row.quantity,locationId:row.locationId}),newValue:JSON.stringify({batchId,sourceInventoryId:item.inventoryId,movedInventoryId:child.id,movedQuantity:child.quantity,remainingQuantity:remaining,locationId:child.locationId,categoryIds:after}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}})),
         ]}));
       }catch(e){const fresh=await getOutboundBatch(batchId);if(fresh.rows.find(r=>r.id===item.id)?.status!=='SENT')await recordPendingError(item.id,'移動分の商品ページの保存を確認できません。更新結果を再確認してください。');}

@@ -52,7 +52,7 @@ export async function confirmOutboundArrival(id:string,commandId:string,changes:
   return batch;
  }
  if(batch.arrivalCommandId!==commandId){
-  if(batch.arrivalStatus==='APPLYING')throw Error('到着確認の処理中です。「更新を再開」で結果を確認してください。');
+  if(batch.arrivalStatus==='APPLYING')throw Error('到着確認の処理中です。「確認」で結果を確認してください。');
   const preview=await previewOutboundArrival(id);
   if(!Array.isArray(changes)||changes.length!==preview.items.length||new Set(changes.map(c=>c.rowId)).size!==changes.length)throw Error('この出庫に含まれる未更新の商品をすべて確認してください。');
   const categoryIds=new Set(preview.categories.map(c=>c.id)),locationIds=new Set(preview.locations.map(l=>l.id));
@@ -111,4 +111,17 @@ export async function confirmOutboundArrival(id:string,commandId:string,changes:
  const fresh=await getOutboundBatch(id),complete=fresh.rows.filter(isArrivalRow).every(r=>r.arrivalStatus==='COMPLETED');
  try{await db.send(new UpdateCommand({TableName:table('OutboundBatch'),Key:{id},UpdateExpression:'SET arrivalStatus=:status, updatedAt=:now'+(complete?', arrivalAt=:now, arrivalBy=:actor':''),ConditionExpression:'arrivalCommandId=:cmd AND arrivalStatus=:applying',ExpressionAttributeValues:{':cmd':commandId,':applying':'APPLYING',':status':complete?'COMPLETED':'PARTIAL',':now':new Date().toISOString(),...(complete?{':actor':actor}:{})}}));}catch{const result=await getOutboundBatch(id);if(result.arrivalStatus!=='COMPLETED')throw Error('完了状態を確認できません。履歴から更新を再開してください。');}
  clearInventoryCountCache();return getOutboundBatch(id);
+}
+
+export async function confirmDefaultOutboundArrival(id:string,commandId:string,actor:string){
+ requireUuid(id);requireUuid(commandId);
+ const batch=await getOutboundBatch(id);
+ if(batch.arrivalCommandId===commandId||batch.arrivalStatus==='APPLYING'||batch.arrivalStatus==='COMPLETED'){
+  return confirmOutboundArrival(id,batch.arrivalCommandId??commandId,[],actor);
+ }
+ const preview=await previewOutboundArrival(id);
+ return confirmOutboundArrival(id,commandId,preview.items.map(item=>({
+  rowId:item.rowId,inventoryId:item.inventoryId,expectedUpdatedAt:item.updatedAt,locationId:batch.locationId,
+  categoryIds:batch.rows.find(row=>row.id===item.rowId)?.snapshot.movementCategoryRemoved===true?item.categoryIds:item.defaultCategoryIds,
+ })),actor);
 }

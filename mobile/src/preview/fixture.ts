@@ -10,6 +10,7 @@ export const previewItems: InventoryItem[] = [
 
 // Sample detail values are synthetic and never copied from an actual transaction.
 for (const item of previewItems) {
+  item.id = ['preview-chair','preview-table','preview-stool'].includes(item.id) ? '11111111-1111-4111-8111-00000000000'+(previewItems.indexOf(item)+1) : item.id;
   item.statusOptions = [
     { id: "preview-status-good", label: "目立った傷や汚れなし" },
     { id: "preview-status-worn", label: "やや傷や汚れあり" },

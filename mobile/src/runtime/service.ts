@@ -14,6 +14,8 @@ import { InventoryWriteError, type SaveRequest } from "../domain/editor";
 import { InventoryReadError } from "../domain/readError";
 import type { DeleteRequest } from "../domain/inventoryActions";
 import { readJson, ReadHttpError } from "./readJson";
+import {StockSplitError,type StockSplitRequest,type StockSplitResult} from '../../../lib/inventory/stockSplitInput';
+import type {StockSplitSaved} from '../ui/StockSplitScreen';
 import {MobileSoldOutError,type SoldOutSaved} from '../ui/SoldOutScreen';
 import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutInput';
 
@@ -236,4 +238,22 @@ export async function removeInventoryPhotoAsset(id:string,photoId:string):Promis
  const result=await response.json();if(!response.ok)throw new Error(result.message||'写真を削除できませんでした。ログインと通信を確認してください。');
  if(result.owner!==session.owner||result.deletedId!==photoId)throw new Error('削除結果を確認できません。詳細を開き直してください。');
  }finally{clearTimeout(timeout);}
+}
+
+export async function checkSplitBarcode(barcode:string,excludeId:string):Promise<number>{
+ const page=await readInventory({advanced:{combinator:'AND',conditions:[{id:'split-barcode',field:'barcode',operator:'equals',value:barcode}]}});
+ return Math.max(0,(page.total??page.items.length)-(page.items.some(i=>i.id===excludeId)?1:0));
+}
+export async function splitInventory(request:StockSplitRequest):Promise<StockSplitSaved>{
+ if(!mobileWritesEnabled())throw new StockSplitError('FORBIDDEN','在庫を分ける権限がありません。');
+ const session=await authenticatedSession(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
+ try{
+  const response=await fetch(API_ORIGIN+'/api/mobile/inventory/'+encodeURIComponent(request.inventoryId)+'/split',{method:'POST',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{'Content-Type':'application/json','X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})},body:JSON.stringify(request)});
+  const value=await response.json() as {ok?:boolean;code?:StockSplitError['code'];error?:string;owner?:string;mutationId?:string;result?:StockSplitResult};
+  if(!response.ok||!value.ok)throw new StockSplitError(value.code??'UNCONFIRMED',value.error??'保存結果を確認できません。');
+  if(value.owner!==session.owner||value.mutationId!==request.mutationId||value.result?.sourceId!==request.inventoryId)throw Error('保存結果を確認できません。');
+  const [source,split]=await Promise.all([readInventoryDetail(value.result.sourceId),readInventoryDetail(value.result.splitId)]);
+  return {source,split};
+ }catch(e){throw e instanceof StockSplitError?e:new StockSplitError('UNCONFIRMED','保存結果を確認できません。同じ内容で結果を再確認してください。');}
+ finally{clearTimeout(timer);}
 }

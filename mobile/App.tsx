@@ -41,6 +41,14 @@ function Preview() {
     loadOptions: async()=>({categories:["販売中","撮影待ち"],locations:["川越倉庫","所沢倉庫"],statuses:previewItems[0].statusOptions??[]}),
     deletePhotoAsset:async(id,photoId)=>{const item=records.current.find(r=>r.id===id);if(!item)throw Error('写真が見つかりません。');item.photos=item.photos?.filter(p=>p.id!==photoId);},
     uploadPhoto:async photo=>{uploadedPhotos.current.set(photo.id,photo.uri);return {storageKey:photo.id,type:photo.type};},
+    checkBarcode:async(barcode,id)=>records.current.filter(r=>r.id!==id&&r.barcode===barcode).length,
+    split:async request=>{
+      const source=records.current.find(r=>r.id===request.inventoryId);if(!source||source.updatedAt!==request.expectedUpdatedAt)throw new InventoryWriteError('conflict');
+      const updatedAt=new Date().toISOString(),remaining={...source,quantity:source.quantity-request.quantity,updatedAt};
+      const child={...source,id:Crypto.randomUUID(),sku:'見本・分割',quantity:request.quantity,barcode:request.barcode,details:{...source.details,damageNotes:request.damageNotes},photos:[...(source.photos??[]),...request.photos.map(p=>({id:p.storageKey,type:p.type,primary:false,url:uploadedPhotos.current.get(p.storageKey)??null}))],updatedAt};
+      records.current=[child,remaining,...records.current.filter(r=>r.id!==source.id)];return {source:remaining,split:child};
+    },
+    sell:async request=>{const source=records.current.find(r=>r.id===request.inventoryId);if(!source)throw new InventoryWriteError('conflict');return {source,sold:source};},
     loadInventory: async () => {
       if (refreshTest) {
         // Synthetic browser fixture: each read changes a visible value; the third read fails.
@@ -75,7 +83,7 @@ function Preview() {
       return saved;
     },
   }), []);
-  return <StaffApp ports={ports} offline={offline} preview writesEnabled
+  return <StaffApp ports={ports} offline={offline} preview writesEnabled canSellInventory={!staffPreview}
     features={{ ecListing: !staffPreview, sales: !staffPreview }}
     previewAccount={staffPreview ? "スタッフ" : "管理者"} onTogglePreviewAccount={() => setStaffPreview(value => !value)} onToggleOffline={() => {
     offlineRef.current = !offlineRef.current; setOffline(offlineRef.current);

@@ -6,8 +6,8 @@ import {ImageManipulator,SaveFormat} from "expo-image-manipulator";
 import * as Crypto from "expo-crypto";
 import type {PendingPhoto} from "../domain/inventory";
 import {colors} from "./theme";
-export function PhotoPicker({photos,disabled,onAdd,onRemove,onBusy}:{photos:PendingPhoto[];disabled:boolean;onAdd:(photos:PendingPhoto[])=>void;onRemove:(id:string)=>void;onBusy:(busy:boolean)=>void}){
-  const [type,setType]=useState<"NORMAL"|"DAMAGE">("NORMAL");const [busy,setBusy]=useState(false);const [error,setError]=useState("");
+export function PhotoPicker({photos,disabled,onAdd,onRemove,onBusy,fixedType}:{photos:PendingPhoto[];disabled:boolean;onAdd:(photos:PendingPhoto[])=>void;onRemove:(id:string)=>void;onBusy:(busy:boolean)=>void;fixedType?:"DAMAGE"}){
+  const [chosenType,setType]=useState<"NORMAL"|"DAMAGE">("NORMAL");const type=fixedType??chosenType;const [busy,setBusy]=useState(false);const [error,setError]=useState("");
   const pick=async(camera:boolean)=>{
     if(busy||disabled)return;setBusy(true);onBusy(true);setError("");
     try {
@@ -24,7 +24,7 @@ export function PhotoPicker({photos,disabled,onAdd,onRemove,onBusy}:{photos:Pend
     finally{setBusy(false);onBusy(false);}
   };
   return <View style={{gap:12,marginBottom:24}}>
-    <View style={{flexDirection:"row",gap:8}}>{([['NORMAL','商品画像'],['DAMAGE','傷・状態']]as const).map(([value,label])=><Pressable accessibilityRole="button" accessibilityState={{selected:type===value}} key={value} disabled={disabled||busy} onPress={()=>setType(value)} style={{padding:12,borderRadius:10,backgroundColor:type===value?colors.selection:"#f5f5f5"}}><Text>{label}を追加</Text></Pressable>)}</View>
+    {!fixedType&&<View style={{flexDirection:"row",gap:8}}>{([['NORMAL','商品画像'],['DAMAGE','傷・状態']]as const).map(([value,label])=><Pressable accessibilityRole="button" accessibilityState={{selected:type===value}} key={value} disabled={disabled||busy} onPress={()=>setType(value)} style={{padding:12,borderRadius:10,backgroundColor:type===value?colors.selection:"#f5f5f5"}}><Text>{label}を追加</Text></Pressable>)}</View>}
     <View style={{flexDirection:"row",gap:10}}>{([true,false] as const).map(camera=><Pressable key={String(camera)} accessibilityRole="button" disabled={disabled||busy} onPress={()=>{void pick(camera);}} style={{flex:1,padding:16,borderWidth:1,borderColor:colors.blue,borderRadius:12}}><Text style={{color:colors.blue,textAlign:"center"}}>{camera?"写真を撮影":"写真から選択"}</Text></Pressable>)}</View>
     {busy?<ActivityIndicator accessibilityLabel="写真を読み込み中"/>:null}{error?<Text accessibilityRole="alert" style={{color:colors.danger}}>{error}</Text>:null}
     {photos.length>0&&<Text>追加予定 {photos.length}枚（完了で保存）</Text>}
