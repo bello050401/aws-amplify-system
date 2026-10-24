@@ -122,7 +122,9 @@ export function InventoryThumbnail({
     );
   }
 
-  if (!isNearViewport) {
+  if (!isNearViewport && !directUrl) {
+    // Ready server-signed URLs can use native lazy loading immediately,
+    // without waiting for hydration and the IntersectionObserver effect.
     // まだ画面外 — サイズだけ確保した空箱。「No Image」の文字は出さない
     // (実際には画像があるのに無いように見えてしまうのを避ける)。
     return <div ref={setElementRef} className={`${SIZE_CLASSES[size]} shrink-0 border border-gray-200 bg-gray-50`} />;
