@@ -50,7 +50,7 @@ export function InventoryCardList({ rows, categoriesById, locationsById, statuse
                 thumbnail 56px→40px(spec目標36〜44px)、行の縦padding
                 を詰め(spec目標: 行高48〜58px)、leading-tightで行間を
                 詰める——「above-the-fold 4〜6行以上」を達成する。 */}
-            <Link href={buildDetailHref(row.id, listReturnQuery)} className="flex items-center gap-2.5 px-3 py-1.5 active:bg-gray-50">
+            <Link href={buildDetailHref(row.id, listReturnQuery)} prefetch={false} className="flex items-center gap-2.5 px-3 py-1.5 active:bg-gray-50">
               <div className="h-10 w-10 shrink-0">
                 <InventoryThumbnail storageKey={row.mainImageThumbnailKey} directUrl={resolveListPhotoUrl(row.mainImageIsPrimary, photoThumbnails[row.id]) ?? row.mainImageSignedUrl} alt={row.name} size="small" loading="lazy" />
               </div>

@@ -56,6 +56,7 @@ export function CategoryFilterList({ categories, activeCategoryIds, activeLocati
             <li key={cat.id}>
               <Link
                 href={href}
+                prefetch={false}
                 onClick={(e) => handleClick(e, href)}
                 className={`flex items-center gap-1.5 truncate px-2 py-1 text-[13px] ${
                   checked ? "bg-gray-100 font-bold text-gray-900" : "text-gray-700 hover:bg-gray-50"
@@ -70,7 +71,7 @@ export function CategoryFilterList({ categories, activeCategoryIds, activeLocati
         })}
       </ul>
       {activeCategoryIds.length > 0 && (
-        <Link href={clearHref} onClick={(e) => handleClick(e, clearHref)} className="mt-1 block px-2 py-1 text-[11px] text-gray-400 hover:text-gray-700">
+        <Link href={clearHref} prefetch={false} onClick={(e) => handleClick(e, clearHref)} className="mt-1 block px-2 py-1 text-[11px] text-gray-400 hover:text-gray-700">
           すべて解除
         </Link>
       )}

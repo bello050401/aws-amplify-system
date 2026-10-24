@@ -42,6 +42,7 @@ function PageSizeLinks({ baseParams, limit, extraReset }: { baseParams: Record<s
           <Link
             key={n}
             href={href}
+            prefetch={false}
             onClick={(e) => handleClick(e, href)}
             className={`border px-2 py-0.5 ${limit === n ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 hover:bg-gray-50"}`}
           >
@@ -92,7 +93,7 @@ export function InventoryPagination({ baseParams, offset, total, limit, currentC
           (() => {
             const href = hrefFor(baseParams, { offset: String(Math.max(0, offset - limit)) });
             return (
-              <Link href={href} onClick={(e) => handleClick(e, href)} className="border border-gray-300 px-2 py-1 hover:bg-gray-50">
+              <Link href={href} prefetch={false} onClick={(e) => handleClick(e, href)} className="border border-gray-300 px-2 py-1 hover:bg-gray-50">
                 ← 前へ
               </Link>
             );
@@ -104,7 +105,7 @@ export function InventoryPagination({ baseParams, offset, total, limit, currentC
           (() => {
             const href = hrefFor(baseParams, { offset: String(offset + limit) });
             return (
-              <Link href={href} onClick={(e) => handleClick(e, href)} className="border border-gray-300 px-2 py-1 hover:bg-gray-50">
+              <Link href={href} prefetch={false} onClick={(e) => handleClick(e, href)} className="border border-gray-300 px-2 py-1 hover:bg-gray-50">
                 次へ →
               </Link>
             );

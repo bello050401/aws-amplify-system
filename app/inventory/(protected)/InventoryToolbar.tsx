@@ -188,6 +188,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
           )}
           <Link
             href={advancedHref}
+            prefetch={false}
             onClick={(e) => handleGuardedLinkClick(e, advancedHref)}
             className={`whitespace-nowrap border px-2 py-1 text-[12px] ${advancedOpen ? "border-gray-900 bg-gray-900 text-white" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}
           >
@@ -202,13 +203,14 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
           <>
             <Link
               href="/inventory/new"
+              prefetch={false}
               onClick={(e) => handleGuardedLinkClick(e, "/inventory/new")}
               className="bg-gray-900 px-3 py-1.5 text-[13px] font-bold text-white hover:bg-gray-800"
             >
               <span className="md:hidden">+ 新規</span>
               <span className="hidden md:inline">+ 新規登録</span>
             </Link>
-            <Link href="/inventory/procurement" onClick={(e) => handleGuardedLinkClick(e, "/inventory/procurement")} className="whitespace-nowrap border border-gray-300 px-3 py-1.5 text-[13px] font-bold hover:bg-gray-50">定期仕入れ</Link>
+            <Link href="/inventory/procurement" prefetch={false} onClick={(e) => handleGuardedLinkClick(e, "/inventory/procurement")} className="whitespace-nowrap border border-gray-300 px-3 py-1.5 text-[13px] font-bold hover:bg-gray-50">定期仕入れ</Link>
             <DirectEditControls />
           </>
         ) : null}

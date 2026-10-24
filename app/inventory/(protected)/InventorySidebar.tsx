@@ -50,6 +50,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
       <div className="border-b border-gray-100 p-2">
         <Link
           href={allHref}
+          prefetch={false}
           onClick={(e) => handleClick(e, allHref)}
           className={`block px-2 py-1.5 text-[13px] ${isAll ? "bg-gray-100 font-bold text-gray-900" : "text-gray-700 hover:bg-gray-50"}`}
         >
@@ -67,6 +68,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
               <li key={loc.id}>
                 <Link
                   href={href}
+                  prefetch={false}
                   onClick={(e) => handleClick(e, href)}
                   className={`block truncate px-2 py-1 text-[13px] ${
                     activeLocationId === loc.id ? "bg-gray-100 font-bold text-gray-900" : "text-gray-700 hover:bg-gray-50"

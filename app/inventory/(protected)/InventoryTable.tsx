@@ -432,7 +432,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                       ) : directEditEnabled ? (
                         renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails, rowIndex < 12 ? "eager" : "lazy")
                       ) : (
-                        <Link href={href} className="block">
+                        <Link href={href} prefetch={false} className="block">
                           {renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails, rowIndex < 12 ? "eager" : "lazy")}
                         </Link>
                       )}
