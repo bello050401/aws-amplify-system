@@ -19,6 +19,8 @@ import type { BatchListPage, PhotoStoragePort, TrustedClaims } from "@/lib/photo
 import { PHOTO_REGISTRATION_REGION, type PhotoErrorCode, type PhotoResult } from "@/lib/photoRegistration/types";
 import { assetKey } from "@/lib/photoRegistration/keys";
 import { markArchivedPhotoBatchAssets } from "@/lib/mediaMaintenance/archivedPhotoBatches";
+import { cleanupPhotoAssets } from "@/lib/mediaMaintenance/photoCleanupAws";
+import { S3Client } from "@aws-sdk/client-s3";
 
 /**
  * 画像登録Web UIのserver action境界。ここでは新しい業務判断をしない —
@@ -347,12 +349,13 @@ export interface InventoryCandidateRow {
   updatedAt: string;
 }
 
-/** Hide an unlinked batch and schedule all its unreferenced images for deletion. */
+/** Archive first, then purge exact batch objects before reporting success. */
 export async function archiveUnlinkedPhotoBatchAction(batchId: string): Promise<PhotoActionResult<{ batchId: string }>> {
   const role = await getInventoryRole();
   if (!role || role === "VIEWER") return { ok: false, code: "PERMISSION_DENIED", message: ERROR_LABELS.PERMISSION_DENIED };
   const tableName = process.env.PHOTO_REGISTRATION_TABLE_NAME;
-  if (!tableName) return NOT_CONFIGURED;
+  const bucketName = process.env.PHOTO_REGISTRATION_BUCKET_NAME;
+  if (!tableName || !bucketName) return NOT_CONFIGURED;
   const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.PHOTO_REGISTRATION_AWS_REGION || PHOTO_REGISTRATION_REGION }));
   try {
     await ddb.send(new UpdateCommand({
@@ -364,7 +367,12 @@ export async function archiveUnlinkedPhotoBatchAction(batchId: string): Promise<
       ExpressionAttributeValues: { ":archived": "ARCHIVED", ":ready": "READY_FOR_REVIEW", ":now": new Date().toISOString() },
     }));
     const marked = await markArchivedPhotoBatchAssets(ddb, tableName, batchId);
-    if (marked.failures.length || marked.protected) console.error("[archiveUnlinkedPhotoBatchAction] cleanup pending", { batchId, ...marked });
+    if (marked.failures.length || marked.protected) {
+      console.error("[archiveUnlinkedPhotoBatchAction] cleanup pending", { batchId, ...marked });
+      return { ok: false, code: "CONFLICT", message: "使用中の画像、または削除未完了の画像があります。削除結果を再確認してください。" };
+    }
+    const purged = await cleanupPhotoAssets(ddb, new S3Client({region: process.env.PHOTO_REGISTRATION_AWS_REGION || PHOTO_REGISTRATION_REGION}), tableName, bucketName, Date.now(), new Set([batchId]));
+    if (purged.failures.length) return { ok: false, code: "INTERNAL_ERROR", message: "クラウドの削除が未完了です。もう一度「画像を削除する」を押してください。未完了分は自動整理でも再処理します。" };
     revalidatePath("/inventory/photo-registration");
     return { ok: true, value: { batchId } };
   } catch (error) {

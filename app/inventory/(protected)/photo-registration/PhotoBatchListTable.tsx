@@ -63,7 +63,7 @@ export function PhotoBatchListTable({
         className="w-[min(90vw,480px)] rounded-lg border border-gray-300 p-5 shadow-xl backdrop:bg-black/40">
         <h2 id="photo-batch-delete-title" className="mb-3 font-bold">画像をまとめて削除</h2>
         <p className="text-sm">{confirmBatch?.batchCode} と含まれる画像を削除しますか？</p>
-        <p className="mt-2 text-xs text-gray-600">画像は7日経過後の自動整理でAWSからも完全に削除されます。紐付け済みのバッチは削除できません。</p>
+        <p className="mt-2 text-xs text-gray-600">確定すると、含まれる画像・縮小画像・保管中の編集前写真をクラウドから削除します。元には戻せません。商品に紐付け済みのバッチは削除できません。</p>
         {error ? <p role="alert" className="mt-3 text-sm text-red-700">{error}</p> : null}
         <div className="mt-5 flex justify-end gap-3">
           <button type="button" autoFocus disabled={deleting !== null} onClick={() => setConfirmBatch(null)} className="rounded border px-4 py-2">キャンセル</button>
