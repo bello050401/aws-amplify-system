@@ -1,5 +1,5 @@
 import 'server-only';
-import {createHash,randomUUID} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
 import {GetCommand,ScanCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
 import {inventoryDdb as db,inventoryTable as table,categoryLinkChanges} from '@/lib/inventory/categoryPersistence';
 import {inventoryCategoryIds} from '@/lib/inventory/categories';
@@ -20,7 +20,7 @@ export async function findOutboundMergeTarget(source:Record<string,unknown>,loca
  return candidates.sort((a,b)=>String(a.createdAt??'').localeCompare(String(b.createdAt??''))||String(a.id).localeCompare(String(b.id)))[0]??null;
 }
 
-/** The source decrement, destination increment, barcode claim and receipt are one transaction. */
+/** The source decrement, destination increment and receipt are one transaction. */
 export async function applyOutboundMerge(source:Record<string,unknown>,item:OutboundRow,batch:OutboundBatch,actor:string):Promise<boolean>{
  for(let attempt=0;attempt<5;attempt++){
   const target=await findOutboundMergeTarget(source,batch.locationId);if(!target)return false;
@@ -29,8 +29,6 @@ export async function applyOutboundMerge(source:Record<string,unknown>,item:Outb
   const now=new Date(Math.max(Date.now(),Date.parse(String(target.updatedAt))+1,Date.parse(String(source.updatedAt))+1)).toISOString();
   const categories=inventoryCategoryIds(source),sourceChanges=remaining?{quantity:remaining}:{quantity:0,categoryIds:[],categoryId:null};
   const snapshot={...item.snapshot,mergedIntoInventoryId:target.id,mergedIntoSku:target.sku,mergeQuantityBefore:before,mergeQuantityAfter:after};
-  const barcodeId=createHash('sha256').update(String(source.barcode)).digest('hex');
-  const claim=(await db.send(new GetCommand({TableName:table('BarcodeClaim'),Key:{id:barcodeId},ConsistentRead:true}))).Item;
   try{await sendOutboundTransaction(db,new TransactWriteCommand({TransactItems:[
    {ConditionCheck:{TableName:table('OutboundBatch'),Key:{id:batch.id},ConditionExpression:'#s=:s',ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':s':'APPLYING'}}},
    {Update:{TableName:table('Inventory'),Key:{id:source.id},
@@ -41,7 +39,6 @@ export async function applyOutboundMerge(source:Record<string,unknown>,item:Outb
     ConditionExpression:'updatedAt=:version AND quantity=:before AND barcode=:barcode AND #n=:name AND locationId=:loc AND attribute_not_exists(deletedAt) AND attribute_not_exists(outboundBatchId) AND (attribute_not_exists(listingPartition) OR listingPartition<>:merged)',
     ExpressionAttributeNames:{'#n':'name'},ExpressionAttributeValues:{':q':after,':custom':remainingCustomFields(target,after),':now':now,':who':actor,':version':target.updatedAt,':before':before,':barcode':source.barcode,':name':source.name,':loc':batch.locationId,':merged':MERGED_PARTITION}}},
    ...(!remaining?categoryLinkChanges(String(source.id),categories,[],now):[]),
-   ...(!remaining&&claim?.inventoryId===source.id?[{Update:{TableName:table('BarcodeClaim'),Key:{id:barcodeId},UpdateExpression:'SET inventoryId=:target, updatedAt=:now',ConditionExpression:'inventoryId=:source',ExpressionAttributeValues:{':target':target.id,':now':now,':source':source.id}}}]:[]),
    {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent,  #snapshot=:snapshot, sentAt=:now, sentBy=:who, updatedAt=:now REMOVE #error',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error','#snapshot':'snapshot'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':snapshot':JSON.stringify(snapshot),':now':now,':who':actor}}},
    ...[source.id,target.id].map(inventoryId=>({Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId,changedAt:now,changedBy:actor,fieldName:'出庫・数量合算',oldValue:JSON.stringify({sourceQuantity:source.quantity,targetQuantity:before,sourceLocationId:source.locationId,sourceCategoryIds:categories}),newValue:JSON.stringify({batchId:batch.id,sourceInventoryId:source.id,mergedIntoInventoryId:target.id,movedQuantity:item.snapshot.quantity,remainingQuantity:remaining,targetQuantity:after,locationId:batch.locationId}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}})),
   ]}));return true;}catch(error){

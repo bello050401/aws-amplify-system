@@ -140,7 +140,6 @@ export async function saveInventory(request: SaveRequest): Promise<InventoryItem
     if (response.status === 409) throw new InventoryWriteError("conflict");
     if (response.status === 422) {
       const failure=await response.json();
-      if(failure.error==='BARCODE_DUPLICATE') throw new InventoryWriteError('barcodeDuplicate');
       if(failure.error==='BARCODE_INVALID') throw new InventoryWriteError('barcodeInvalid');
       if(failure.error==='OUTBOUND_RESERVED') throw new InventoryWriteError('outboundReserved');
       if(failure.error==='CATEGORY_INVALID') throw new InventoryWriteError('categoryInvalid');

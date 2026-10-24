@@ -1,54 +1,61 @@
 import assert from 'node:assert/strict';
-import {DynamoDBDocumentClient,GetCommand,ScanCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
+import {DynamoDBDocumentClient,GetCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
 import {createInventoryPersistence, type InventoryTransaction} from '../lib/inventory/categoryPersistenceCore';
-import {InventorySaveError} from '../lib/inventory/conditionalUpdate';
+import {InventorySaveError,InventoryMutationRejected} from '../lib/inventory/conditionalUpdate';
 
 async function main(){
- let transactions:InventoryTransaction[]=[];
- let duplicate=true;
- let existing:Record<string,unknown>|undefined;
+ const records=new Map<string,Record<string,any>>();
+ const transactions:InventoryTransaction[]=[];
  let cancelTransaction=false;
- const source={id:'new-source-page',sourceSystem:'ZAICO',sourceInventoryId:'75103701',barcode:'2025030605436',name:'別の販売分',quantity:0};
  const client={async send(command:unknown){
-  if(command instanceof ScanCommand)return {Items:duplicate?[{id:'remaining-stock-page'}]:[]};
-  if(command instanceof GetCommand)return command.input.TableName==='QA-Inventory'?{Item:existing}:{};
-  if(command instanceof TransactWriteCommand){if(cancelTransaction)throw Object.assign(new Error('changed'),{name:'TransactionCanceledException'});transactions.push(command.input.TransactItems!);return {};}
-  throw Error('unexpected command');
+  if(command instanceof GetCommand){
+   assert.equal(command.input.TableName,'QA-Inventory','No barcode claim lookup or whole-inventory scan');
+   return {Item:records.get(String(command.input.Key!.id))};
+  }
+  if(command instanceof TransactWriteCommand){
+   if(cancelTransaction)throw Object.assign(new Error('changed'),{name:'TransactionCanceledException'});
+   const tx=command.input.TransactItems!;
+   for(const entry of tx){
+    const op=entry.Put??entry.Update??entry.Delete??entry.ConditionCheck;
+    assert.notEqual(op?.TableName,'QA-BarcodeClaim','Shared codes must never acquire an exclusive claim');
+    if(entry.Put?.TableName==='QA-Inventory'){
+     const row=entry.Put.Item!;if(records.has(String(row.id)))throw Object.assign(Error('exists'),{name:'TransactionCanceledException'});
+     records.set(String(row.id),{...row});
+    }
+    if(entry.Update?.TableName==='QA-Inventory'){
+     const u=entry.Update,row=records.get(String(u.Key!.id))!;
+     assert.equal(row.updatedAt,u.ExpressionAttributeValues![':version']);
+     const next={...row};
+     for(const [alias,key] of Object.entries(u.ExpressionAttributeNames!)){
+      const v=':v'+alias.slice(2);if(v in u.ExpressionAttributeValues!)next[key]=u.ExpressionAttributeValues![v];else delete next[key];
+     }records.set(String(u.Key!.id),next);
+    }
+    if(entry.Delete?.TableName==='QA-Inventory')records.delete(String(entry.Delete.Key!.id));
+   }transactions.push(tx);return {};
+  }
+  throw Error('Unexpected request: no barcode uniqueness scan is allowed');
  }} as unknown as DynamoDBDocumentClient;
- const persistence=createInventoryPersistence(client,m=>'QA-'+m);
- // The production source failure is reproduced by the ordinary write policy.
- await assert.rejects(persistence.persistInventoryWithCategories(source),/別の商品/);
- assert.equal(transactions.length,0);
- // Opt-in is a separate server argument, never an imported/client field.
- await assert.rejects(persistence.persistInventoryWithCategories({...source,preserveZaicoSourceBarcode:true}),/別の商品/);
- await assert.rejects(persistence.persistInventoryWithCategories({...source,sourceSystem:'BELLO'},undefined,{preserveZaicoSourceBarcode:true}),/読み取れません/);
- await persistence.persistInventoryWithCategories(source,undefined,{preserveZaicoSourceBarcode:true});
- assert.equal(transactions.length,1);
- assert.equal(transactions[0][0].Put?.Item?.id,'new-source-page');
- assert.equal(transactions[0][0].Put?.Item?.quantity,0);
- assert.equal(transactions[0][0].Put?.Item?.barcode,source.barcode);
- assert.ok(transactions[0].some(x=>x.ConditionCheck?.Key?.id==='remaining-stock-page'));
- assert.ok(!transactions[0].some(x=>x.Put?.TableName==='QA-BarcodeClaim'));
- assert.ok(!transactions[0].some(x=>x.Update?.Key?.id==='remaining-stock-page'));
- // Manual QR assignment is still blocked after enabling the source adapter.
- await assert.rejects(persistence.persistInventoryWithCategories({id:'manual-page',barcode:source.barcode}),/別の商品/);
- duplicate=false;transactions=[];
- await persistence.persistInventoryWithCategories({...source,id:'unique-page'},undefined,{preserveZaicoSourceBarcode:true});
- assert.ok(transactions[0].some(x=>x.Put?.TableName==='QA-BarcodeClaim'));
- // Updates inherit the trusted source identity from the saved record. They
- // retain version guards, and a disappearing survivor becomes a conflict.
- duplicate=true;transactions=[];
- existing={...source,barcode:'old-source-label',updatedAt:'2026-10-20T00:00:00.000Z'};
- await persistence.persistInventoryWithCategories({id:source.id,barcode:source.barcode},String(existing.updatedAt),{preserveZaicoSourceBarcode:true});
- assert.equal(transactions[0][0].Update?.Key?.id,source.id);
- assert.match(transactions[0][0].Update?.ConditionExpression??'',/updatedAt/);
- assert.ok(transactions[0].some(x=>x.ConditionCheck?.Key?.id==='remaining-stock-page'));
+ const p=createInventoryPersistence(client,m=>'QA-'+m);
+ const base={name:'同じ椅子',quantity:5,barcode:' 2025030605436 ',categoryIds:[],images:[{storageKey:'inventory/original.jpg'}]};
+ const first=await p.persistInventoryWithCategories({...base,id:'remaining',sku:'B000001'});
+ const second=await p.persistInventoryWithCategories({...base,id:'sold',sku:'B000002',quantity:2});
+ assert.notEqual(first.id,second.id);
+ assert.equal(records.get('remaining')!.barcode,records.get('sold')!.barcode);
+ assert.equal(records.get('remaining')!.quantity,5);
+ assert.equal(records.get('sold')!.quantity,2);
+ const original=structuredClone(records.get('remaining'));
+ const edited=await p.persistInventoryWithCategories({id:'sold',quantity:1,note:'出荷指示用'},second.updatedAt);
+ assert.deepEqual(records.get('remaining'),original,'Editing sold stock cannot update remaining stock');
+ await p.persistInventoryWithCategories({id:'sold',barcode:'2025030605436'},edited.updatedAt);
+ await p.persistInventoryWithCategories({...base,id:'zaico',sourceSystem:'ZAICO',sourceInventoryId:'75103701'},undefined,{preserveZaicoSourceBarcode:true});
+ await assert.rejects(p.persistInventoryWithCategories({id:'invalid',barcode:'bad\ncode'}),e=>e instanceof InventoryMutationRejected&&e.code==='BARCODE_INVALID');
+ await assert.rejects(p.persistInventoryWithCategories({id:'sold',quantity:0},second.updatedAt),e=>e instanceof InventorySaveError&&e.code==='CONFLICT');
  cancelTransaction=true;
- await assert.rejects(persistence.persistInventoryWithCategories({id:source.id,barcode:source.barcode},String(existing.updatedAt),{preserveZaicoSourceBarcode:true}),e=>e instanceof InventorySaveError&&e.code==='CONFLICT');
- cancelTransaction=false;transactions=[];
- existing={...source,updatedAt:'2026-10-20T00:00:00.000Z'};
- await persistence.persistInventoryWithCategories({id:source.id,quantity:0},String(existing.updatedAt),{preserveZaicoSourceBarcode:true});
- assert.equal(transactions[0].length,1,'unchanged barcode must not claim or merge another page');
- console.log('PASS: source duplicate reproduction; distinct pages preserved; no merge/claim takeover; manual and forged opt-in rejected; unique source barcode claimed');
+ await assert.rejects(p.persistInventoryWithCategories({...base,id:'conflict'}),e=>e instanceof InventorySaveError&&e.code==='CONFLICT');
+ cancelTransaction=false;
+ await p.deleteInventoryWithCategories('sold',String(records.get('sold')!.updatedAt));
+ assert.equal(records.has('sold'),false);assert.deepEqual(records.get('remaining'),original);
+ assert.equal(records.get('zaico')!.barcode,'2025030605436');
+ console.log('PASS: same-code create/duplicate/update/source import; separate quantities; delete isolation; format validation; stale version and atomic-write conflicts; no uniqueness scans or claims');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

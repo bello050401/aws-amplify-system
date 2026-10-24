@@ -336,7 +336,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
 
       {duplicateFrom && (
         <p className="mb-4 border border-gray-200 bg-gray-50 px-3 py-2 text-[12px] text-gray-600">
-          「{duplicateFrom.sourceDisplayId} {duplicateFrom.name}」の内容を引き継いでいます。在庫IDは登録時に新しく発番されます。内容を確認・修正してから登録してください。
+          「{duplicateFrom.sourceDisplayId} {duplicateFrom.name}」の内容を引き継いでいます。バーコードは同じ番号で登録できます。在庫IDは新しく発番され、複製元の数量は変わりません。売れた分の数量などを確認して登録してください。
         </p>
       )}
 

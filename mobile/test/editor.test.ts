@@ -32,12 +32,12 @@ test('QR no-movement choice leaves existing movement unchanged',async()=>{
   const result=await f.editor.saveQrMovement('2026101900315',null,['川越移動予定','プラスロジ移動予定']);
   assert.equal(result?.category,'販売中,川越移動予定');
 });
-test('duplicate QR rolls back QR and category draft but retains unrelated edits',async()=>{
+test('invalid QR rolls back QR and category draft but retains unrelated edits',async()=>{
   const f=fixture();f.editor.change('note','入力中のメモ'); const previous=f.editor.getSnapshot().draft;
-  f.ports.save=async()=>{throw new InventoryWriteError('barcodeDuplicate');};
+  f.ports.save=async()=>{throw new InventoryWriteError('barcodeInvalid');};
   assert.equal(await f.editor.saveQrMovement('duplicate','川越移動予定',['川越移動予定','プラスロジ移動予定']),null);
   assert.equal(f.editor.getSnapshot().draft.barcode,previous.barcode);assert.equal(f.editor.getSnapshot().draft.category,previous.category);
-  assert.equal(f.editor.getSnapshot().draft.note,'入力中のメモ');assert.match(f.editor.getSnapshot().warning!,/別の商品/);
+  assert.equal(f.editor.getSnapshot().draft.note,'入力中のメモ');assert.match(f.editor.getSnapshot().warning!,/読み取れません/);
   assert.equal(f.editor.getSnapshot().outcomeUncertain,false);
 });
 test('offline QR flow sends nothing and returns both fields to their previous values',async()=>{
@@ -185,4 +185,15 @@ test('parallel image delete is blocked until first result is known',async()=>{
  const first=editor.deletePhotoAsset('asset1');await Promise.resolve();
  await assert.rejects(()=>editor.deletePhotoAsset('asset1'));finish();await first;
  assert.equal(editor.getSnapshot().saved.photos?.length,0);
+});
+
+
+test('same barcode can be saved on independent stock pages',async()=>{
+ const a=fixture(),b=fixture();
+ a.editor.change('quantity','3'); b.editor.change('quantity','2');
+ const first=await a.editor.saveQrMovement('SHARED-PRODUCT',null,[]);
+ const second=await b.editor.saveQrMovement('SHARED-PRODUCT',null,[]);
+ assert.equal(first?.barcode,second?.barcode);
+ assert.equal(first?.quantity,3);assert.equal(second?.quantity,2);
+ assert.equal(a.editor.getSnapshot().warning,null);assert.equal(b.editor.getSnapshot().warning,null);
 });

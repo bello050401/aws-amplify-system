@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { DynamoDBDocumentClient, GetCommand, ScanCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { randomUUID } from 'node:crypto';
+import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { inventoryCategoryIds } from './categories';
 import { InventorySaveError, InventoryMutationRejected } from './conditionalUpdate';
 
@@ -22,69 +22,21 @@ async function validateCategoryIds(ids:string[]) {
   const entries=await Promise.all(ids.map(id=>inventoryDdb.send(new GetCommand({TableName:inventoryTable('Category'),Key:{id},ConsistentRead:true}))));
   if(entries.some(x=>!x.Item)) throw new InventoryMutationRejected('CATEGORY_INVALID');
 }
-const barcodeKey=(value:string)=>createHash('sha256').update(value).digest('hex');
-async function releaseBarcodeClaim(id:string,value:string):Promise<InventoryTransaction>{
-  const claim=await inventoryDdb.send(new GetCommand({TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(value)},ConsistentRead:true}));
-  if(claim.Item?.inventoryId!==id)return [];
-  // Partial outbound stock intentionally shares its product barcode. Keep the
-  // claim owned by a surviving page when its original page is changed/deleted.
-  let key:Record<string,unknown>|undefined;
-  do{
-    const page=await inventoryDdb.send(new ScanCommand({TableName:inventoryTable('Inventory'),ProjectionExpression:'id',FilterExpression:'barcode=:barcode AND id<>:id AND attribute_not_exists(deletedAt) AND (attribute_not_exists(listingPartition) OR listingPartition <> :merged)',ExpressionAttributeValues:{':barcode':value,':id':id,':merged':'MERGED'},ExclusiveStartKey:key,ConsistentRead:true}));
-    const survivor=page.Items?.[0];
-    if(survivor)return [
-      {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:survivor.id},ConditionExpression:'barcode=:barcode AND attribute_not_exists(deletedAt) AND (attribute_not_exists(listingPartition) OR listingPartition <> :merged)',ExpressionAttributeValues:{':barcode':value,':merged':'MERGED'}}},
-      {Update:{TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(value)},UpdateExpression:'SET inventoryId=:next',ConditionExpression:'inventoryId=:owner',ExpressionAttributeValues:{':next':survivor.id,':owner':id}}},
-    ];
-    key=page.LastEvaluatedKey;
-  }while(key);
-  return [{Delete:{TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(value)},ConditionExpression:'inventoryId=:owner',ExpressionAttributeValues:{':owner':id}}}];
+/** A barcode identifies a product, not a stock page. Sold and remaining stock
+ * may share it. Inventory.id continues to identify each independent page. */
+function validateBarcode(value:unknown) {
+  if(value == null) return;
+  if(typeof value !== 'string' || value.trim().length>256 || /[\u0000-\u001f\u007f]/u.test(value)) throw new InventoryMutationRejected('BARCODE_INVALID');
 }
-async function barcodeChanges(id:string,before:unknown,after:unknown,now:string,preserveSourceBarcode=false):Promise<InventoryTransaction> {
-  const value=typeof after==='string'?after.trim():'';
-  const old=typeof before==='string'?before.trim():'';
-  if(value===old) return [];
-  if(value && (value.length>256 || /[\u0000-\u001f\u007f]/u.test(value))) throw new InventoryMutationRejected('BARCODE_INVALID');
-  let sharedInventoryId:string|undefined;
-  if(value) {
-    let key:Record<string,unknown>|undefined;
-    do {
-      const page=await inventoryDdb.send(new ScanCommand({TableName:inventoryTable('Inventory'),ProjectionExpression:'id',
-        FilterExpression:'barcode = :barcode AND id <> :id AND attribute_not_exists(deletedAt) AND (attribute_not_exists(listingPartition) OR listingPartition <> :merged)',ExpressionAttributeValues:{':barcode':value,':id':id,':merged':'MERGED'},ExclusiveStartKey:key,ConsistentRead:true}));
-      if(page.Items?.length) {
-        if(!preserveSourceBarcode) throw new InventoryMutationRejected('BARCODE_DUPLICATE');
-        sharedInventoryId=String(page.Items[0].id);
-        break;
-      }
-      key=page.LastEvaluatedKey;
-    } while(key);
-  }
-  const changes:InventoryTransaction=[];
-  // ZAICO can have separate inventory IDs for sold stock and remaining stock
-  // bearing the same physical label. Import both pages without merging them or
-  // stealing the existing claim. Interactive QR edits still require uniqueness.
-  if(sharedInventoryId) changes.push({ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:sharedInventoryId},
-    ConditionExpression:'barcode=:barcode AND attribute_not_exists(deletedAt) AND (attribute_not_exists(listingPartition) OR listingPartition <> :merged)',
-    ExpressionAttributeValues:{':barcode':value,':merged':'MERGED'}}});
-  else if(value) changes.push({Put:{TableName:inventoryTable('BarcodeClaim'),Item:{id:barcodeKey(value),inventoryId:id,createdAt:now,updatedAt:now,__typename:'BarcodeClaim'},
-    ConditionExpression:'attribute_not_exists(id) OR inventoryId = :owner',ExpressionAttributeValues:{':owner':id}}});
-  if(old) {
-    changes.push(...await releaseBarcodeClaim(id,old));
-  }
-  return changes;
-}
-async function persistInventoryWithCategories(input:Record<string,unknown>,expectedUpdatedAt?:string,options?:{preserveZaicoSourceBarcode?:boolean}):Promise<{id:string;updatedAt:string}> {
+async function persistInventoryWithCategories(input:Record<string,unknown>,expectedUpdatedAt?:string,_legacyOptions?:{preserveZaicoSourceBarcode?:boolean}):Promise<{id:string;updatedAt:string}> {
   const id=String(input.id || randomUUID());
   const current=expectedUpdatedAt?await getInventoryRaw(id):undefined;
   if(expectedUpdatedAt && (!current || current.updatedAt!==expectedUpdatedAt)) throw new InventorySaveError('CONFLICT');
   if(current?.listingPartition==='MERGED') throw new InventoryMutationRejected('MERGED');
   if(current?.outboundBatchId) throw new InventoryMutationRejected('OUTBOUND_RESERVED');
-  // Only the two server-side ZAICO adapters opt in; form/API payload fields
-  // cannot enable this behavior. Require an actual ZAICO source link on the row.
-  const sourceSystem=input.sourceSystem??current?.sourceSystem;
-  const sourceInventoryId=input.sourceInventoryId??current?.sourceInventoryId;
-  const preserveSourceBarcode=options?.preserveZaicoSourceBarcode===true;
-  if(preserveSourceBarcode && (sourceSystem!=='ZAICO' || !sourceInventoryId)) throw new InventoryMutationRejected('BARCODE_INVALID');
+  // Legacy adapter option remains compatible; every caller now allows shared codes.
+  void _legacyOptions;
+  validateBarcode(input.barcode);
   const before=inventoryCategoryIds(current ?? {});
   const after=Array.isArray(input.categoryIds)?[...new Set(input.categoryIds as string[])]:input.categoryId===undefined?before:
     [...new Set([...(input.categoryId?[String(input.categoryId)]:[]),...before.filter(cat=>cat!==current?.categoryId)])];
@@ -92,7 +44,6 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
   const now=new Date(Math.max(Date.now(), Date.parse(String(current?.updatedAt??''))+1 || 0)).toISOString();
   const values={...input,id,categoryId:after[0]??null,categoryIds:after,updatedAt:now,...(typeof input.barcode==='string'?{barcode:input.barcode.trim()}: {})};
   const changes=categoryLinkChanges(id,before,after,now);
-  changes.push(...await barcodeChanges(id,current?.barcode,input.barcode===undefined?current?.barcode:input.barcode,now,preserveSourceBarcode));
   if(expectedUpdatedAt) {
     const entries=Object.entries(values).filter(([key,value])=>key!=='id' && value!==undefined);
     const names=Object.fromEntries(entries.map(([key],i)=>[`#f${i}`,key]));
@@ -104,11 +55,6 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
   try { await inventoryDdb.send(new TransactWriteCommand({TransactItems:changes})); }
   catch(error) {
     if(error instanceof Error && error.name==='TransactionCanceledException') {
-      const value=typeof input.barcode==='string'?input.barcode.trim():'';
-      if(value && !preserveSourceBarcode) {
-        const claim=await inventoryDdb.send(new GetCommand({TableName:inventoryTable('BarcodeClaim'),Key:{id:barcodeKey(value)},ConsistentRead:true}));
-        if(claim.Item && claim.Item.inventoryId!==id) throw new InventoryMutationRejected('BARCODE_DUPLICATE');
-      }
       throw new InventorySaveError('CONFLICT');
     }
     throw new InventorySaveError('UNCONFIRMED');
@@ -116,7 +62,7 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
   return {id,updatedAt:now};
 }
 
-/** Delete the inventory and its owned category/barcode links in the same conditional transaction. */
+/** Delete the inventory and its owned category links in the same conditional transaction. */
 async function deleteInventoryWithCategories(id:string,expectedUpdatedAt:string,changedBy='在庫削除') {
   const row=await getInventoryRaw(id);
   if(!row || row.updatedAt!==expectedUpdatedAt) throw new InventorySaveError('CONFLICT');
@@ -127,10 +73,6 @@ async function deleteInventoryWithCategories(id:string,expectedUpdatedAt:string,
   // must distinguish a deleted product from a missing/misconfigured table.
   const deletedAt=new Date().toISOString();
   changes.push({Put:{TableName:inventoryTable('InventoryHistory'),Item:{id:randomUUID(),inventoryId:id,changedAt:deletedAt,changedBy,fieldName:'削除',oldValue:'有効',newValue:'削除済み',createdAt:deletedAt,updatedAt:deletedAt,__typename:'InventoryHistory'},ConditionExpression:'attribute_not_exists(id)'}});
-  const barcode=typeof row.barcode==='string'?row.barcode.trim():'';
-  if(barcode) {
-    changes.push(...await releaseBarcodeClaim(id,barcode));
-  }
   try {await inventoryDdb.send(new TransactWriteCommand({TransactItems:changes}));}
   catch(error) {throw new InventorySaveError(error instanceof Error && error.name==='TransactionCanceledException'?'CONFLICT':'UNCONFIRMED');}
 }
