@@ -80,6 +80,7 @@ function renderReadOnlyCell(
   locationsById: Record<string, MasterOption>,
   statusesById: Record<string, StatusOption>,
   photoThumbnails: Record<string, PhotoThumbnailChoice>,
+  imageLoading: "lazy" | "eager" = "lazy",
 ): React.ReactNode {
   if (key.startsWith("cf:")) {
     const value = customFieldValueFromRow(row, key);
@@ -105,7 +106,7 @@ function renderReadOnlyCell(
           directUrl={resolveListPhotoUrl(row.mainImageIsPrimary, photoThumbnails[row.id]) ?? row.mainImageSignedUrl}
           alt={row.name}
           size="list"
-          loading="lazy"
+          loading={imageLoading}
         />
       );
     case "status": {
@@ -408,7 +409,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {rows.map((row, rowIndex) => {
             const href = buildDetailHref(row.id, listReturnQuery);
             const dirty = directEditEnabled && isRowDirty(row.id);
             return (
@@ -429,10 +430,10 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                         // boolean variable, hence the assertion.
                         renderEditableCell(col.key as InlineEditFieldKey, row, categories, locations, getValue, setValue, saving)
                       ) : directEditEnabled ? (
-                        renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails)
+                        renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails, rowIndex < 12 ? "eager" : "lazy")
                       ) : (
                         <Link href={href} className="block">
-                          {renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails)}
+                          {renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails, rowIndex < 12 ? "eager" : "lazy")}
                         </Link>
                       )}
                     </td>

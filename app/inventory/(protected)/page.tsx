@@ -50,11 +50,13 @@ function parseAdvancedQuery(raw: string | undefined): AdvancedSearchQuery | null
 }
 
 export default async function InventoryListPage({ searchParams }: InventoryListPageProps) {
+  const started = performance.now();
   const role = await getInventoryRole();
   // The (protected) layout already redirects a non-authorized visitor
   // before this page ever renders, so `role` is never null here in
   // practice — this narrows the type without duplicating that redirect.
   if (!role) return null;
+  const authorizedAt = performance.now();
 
   const limit = searchParams.limit === "100" ? 100 : 50;
   const advancedOpen = searchParams.advanced === "1";
@@ -152,7 +154,14 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
           ? await listInventory(filters, { offset, limit })
           : null;
 
+  const dataReadyAt = performance.now();
   const rows = await withListImageUrls(listResult ? listResult.items : pagedResult!.items);
+  const timing = {
+    auth: Math.round(authorizedAt - started),
+    data: Math.round(dataReadyAt - authorizedAt),
+    signing: Math.round(performance.now() - dataReadyAt),
+    total: Math.round(performance.now() - started),
+  };
   // 総件数は行の表示を待たせない（Suspenseで後から差し込む）。検索経路は
   // 従来どおり集計済みの値をそのまま使う。
   const knownTotal = listResult ? listResult.total : null;
@@ -214,6 +223,7 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
           hidden
           data-inventory-source={pagedResult === null ? "search" : pagedResult.usedIndex ? "index" : "fallback"}
           data-inventory-index-error={pagedResult?.indexFailureReason ?? ""}
+          data-inventory-timing={JSON.stringify(timing)}
         />
         <InventoryHeader
           role={role}

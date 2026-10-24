@@ -18,6 +18,7 @@
  *   AWS_PROFILE=Bello npm run verify:search-projection
  */
 import { readFileSync } from "node:fs";
+import { toListRow } from "../lib/inventory/queries";
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import {
@@ -206,6 +207,11 @@ async function main() {
   // ── 2. Golden: 検索結果が一致するか ─────────────────────────────
   console.log("\n── 2. 検索結果の一致(全列 vs projection) ────────────────");
   const projected = all.map(project);
+  check(
+    all.every((row, index) => JSON.stringify(toListRow(row as never)) === JSON.stringify(toListRow(projected[index] as never))),
+    "通常一覧の全列・代表画像・日時がprojection前後で一致",
+    `${all.length}件`,
+  );
   let totalHits = 0;
   for (const gc of GOLDEN_CASES) {
     const before = all.filter((r) => evaluateQuery(asSearchable(r), gc.query, FIELDS_BY_KEY)).map((r) => r.id as string);

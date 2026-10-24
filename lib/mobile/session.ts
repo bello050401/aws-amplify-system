@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { fetchAuthSession } from "aws-amplify/auth/server";
-import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
+import { runWithUserPoolServerContext } from "@/lib/amplify/userPoolServer";
 import { getInventorySessionStatus, type InventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { mobileFeaturesForGroups, type MobileFeature, type MobileFeatures } from "./accessPolicy";
 
@@ -16,7 +16,7 @@ export async function getMobileSession(): Promise<MobileSessionResult> {
     return { ok: false, status, error: status === 503 ? "AUTH_UNAVAILABLE" : status === 403 ? "FORBIDDEN" : "SIGN_IN_REQUIRED" };
   }
   try {
-    return await runWithAmplifyServerContext({ nextServerContext: { cookies }, operation: async context => {
+    return await runWithUserPoolServerContext({ nextServerContext: { cookies }, operation: async context => {
       const session = await fetchAuthSession(context);
       const payload = session.tokens?.accessToken.payload;
       const groups = payload?.["cognito:groups"];

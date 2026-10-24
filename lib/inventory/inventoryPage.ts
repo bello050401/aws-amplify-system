@@ -1,4 +1,5 @@
 import {categoryFilter} from "./categories";
+import { INVENTORY_SEARCH_SELECTION_SET } from "./searchProjection";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { toListRow, type InventoryListRow } from "./queries";
@@ -104,13 +105,21 @@ export async function listInventoryOffsetPage(
   // 経路へ落とす。遅くはなるが、一覧は出る。
   try {
     do {
-    const { data, nextToken: nt, errors } = await serverDataClient.models.Inventory.listInventoryByListingPartitionAndListUpdatedAt(
+    // Use the already-verified list/search projection. The full model includes
+    // raw ZAICO payloads and image source URLs which the table never reads.
+    // Keep the index, filters and boundary-tie completion unchanged.
+    const queryPage = serverDataClient.models.Inventory.listInventoryByListingPartitionAndListUpdatedAt as unknown as (
+      key: { listingPartition: string },
+      options: Record<string, unknown>,
+    ) => Promise<{ data: Parameters<typeof toListRow>[0][]; nextToken?: string | null; errors?: { message: string }[] }>;
+    const { data, nextToken: nt, errors } = await queryPage(
       { listingPartition: "ACTIVE" },
       {
         sortDirection: "DESC", // listUpdatedAt降順 = 既存の updatedAt DESC と同じ意図
         filter,
         limit: QUERY_PAGE_SIZE,
         nextToken: nextToken ?? undefined,
+        selectionSet: INVENTORY_SEARCH_SELECTION_SET,
         ...inventoryAuthMode,
       },
     );

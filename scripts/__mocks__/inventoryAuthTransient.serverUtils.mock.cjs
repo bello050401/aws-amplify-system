@@ -1,7 +1,7 @@
 'use strict';
 
 module.exports = {
-  async runWithAmplifyServerContext({ operation }) {
+  async runWithUserPoolServerContext({ operation }) {
     return operation({});
   },
 };
