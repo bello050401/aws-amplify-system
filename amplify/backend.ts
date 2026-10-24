@@ -116,6 +116,17 @@ if(process.env.PHOTO_MEDIA_CLEANUP_ENABLED==='true'){
 // Cookie values are written directly to Secrets Manager, never to outputs or builds.
 if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
     process.env.AWS_BRANCH === "claude/inventory-management-system-5vbvc7") {
+  const photoBucket = process.env.PHOTO_REGISTRATION_BUCKET_NAME;
+  if(photoBucket){
+    const photoWebStack=backend.createStack("PhotoWebDeletion");
+    new ManagedPolicy(photoWebStack,"ExactPhotoDeletion",{
+      roles:[Role.fromRoleName(photoWebStack,"RuntimeRole","BelloAmplifyStagingComputeRole")],
+      statements:[
+        new PolicyStatement({actions:["s3:ListBucketVersions"],resources:["arn:aws:s3:::"+photoBucket],conditions:{StringLike:{"s3:prefix":["photo-batches/*"]}}}),
+        new PolicyStatement({actions:["s3:DeleteObjectVersion"],resources:["arn:aws:s3:::"+photoBucket+"/photo-batches/*"]}),
+      ],
+    });
+  }
   const httpStack = backend.createStack("MercariHttpsRuntime");
   // Job 418 created this RETAIN secret before its IAM update rolled back.
   // Import its exact existing ARN: never replace credentials or create a

@@ -1,3 +1,4 @@
+import type {PhotoOriginal} from "./originalRetention";
 /**
  * 画像登録基盤 Phase 1 — API契約の型・定数・エラーコード。
  *
@@ -261,6 +262,7 @@ export interface PhotoBatchView {
 
 /** 判断に必要な範囲だけのPhotoAsset射影。**inventoryIdは意図的に存在しない** (§4.6)。 */
 export interface PhotoAssetView {
+  original?: PhotoOriginal;
   id: string;
   photoBatchId: string;
   /** Photo Station / Web UI が採番する、batch内で一意なクライアント側ID。再送の同一性判定に使う。 */

@@ -72,7 +72,7 @@ export function PhotoAssetImageEditor({ inventoryId, assets: initialAssets }: { 
   return <>
     {renderGroup("NORMAL", "商品画像（撮影画像）")}
     {renderGroup("DAMAGE", "傷・汚れ写真（撮影画像から選択）")}
-    {deleteTarget&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><section role="alertdialog" aria-label="撮影画像の削除確認" className="rounded-xl bg-white p-5"><h3 className="font-semibold">この写真を削除しますか？</h3><p className="my-3 text-sm">確定すると商品から削除されます。</p><button type="button" disabled={!!pendingId} className="mr-3 border px-4 py-2" onClick={()=>setDeleteTarget(null)}>キャンセル</button><button type="button" disabled={!!pendingId} className="bg-red-700 px-4 py-2 text-white" onClick={()=>void remove(deleteTarget)}>削除する</button>{error&&<p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}</section></div>}
+    {deleteTarget&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><section role="alertdialog" aria-label="撮影画像の削除確認" className="rounded-xl bg-white p-5"><h3 className="font-semibold">この写真を削除しますか？</h3><p className="my-3 text-sm">確定するとクラウドの画像も削除されます。元に戻せません。</p><button type="button" disabled={!!pendingId} className="mr-3 border px-4 py-2" onClick={()=>setDeleteTarget(null)}>キャンセル</button><button type="button" disabled={!!pendingId} className="bg-red-700 px-4 py-2 text-white" onClick={()=>void remove(deleteTarget)}>削除する</button>{error&&<p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}</section></div>}
     {error ? <p role="alert" className="text-xs text-red-600">{error}</p> : null}
   </>;
 }

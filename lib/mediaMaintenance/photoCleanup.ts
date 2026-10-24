@@ -1,4 +1,3 @@
-import { ORPHAN_GRACE_MS } from "./core";
 export interface DeletedPhoto {
   PK: string;
   SK: string;
@@ -10,6 +9,8 @@ export interface DeletedPhoto {
   deletedAt?: string;
   purgeStartedAt?: string;
   purgedAt?: string;
+  purgeRecheckedAt?:string;
+  original?: import("../photoRegistration/originalRetention").PhotoOriginal;
   declaredProcessedMimeType: string;
   declaredThumbnailMimeType: string;
 }
@@ -32,19 +33,19 @@ export async function purgeDeletedPhotos(
       !p.isDeleted ||
       p.status !== "DELETED" ||
       p.listingSelectionCount !== 0 ||
-      p.purgedAt
+      p.purgedAt && p.purgeRecheckedAt
     ) {
       result.kept++;
       continue;
     }
-    // Legacy deletions did not record a date: start a NEW full grace period.
+    // Legacy deletions without a timestamp are recorded before a later retry.
     if (!p.deletedAt) {
       await ports.markDeletionObserved(p, new Date(now).toISOString());
       result.observed++;
       continue;
     }
     const deleted = Date.parse(p.deletedAt);
-    if (!Number.isFinite(deleted) || deleted >= now - ORPHAN_GRACE_MS) {
+    if (!Number.isFinite(deleted) || deleted > now) {
       result.kept++;
       continue;
     }

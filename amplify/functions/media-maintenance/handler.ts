@@ -1,3 +1,5 @@
+import {TemporaryOriginals} from "../../../lib/photoRegistration/temporaryOriginals";
+import {cleanupExpiredOriginals} from "../../../lib/mediaMaintenance/originalPhotoCleanup";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
@@ -164,6 +166,12 @@ export const handler = async () => {
     );
     if (orphanResult.failures.length)
       throw Error("Deleted inventory photo cleanup failed; retry required");
+    const temporaryResult=await new TemporaryOriginals({db,s3,table:photoTable,bucket:photoBucket,auth:{photoDeviceGroupDeployed:false}}).cleanup();
+    console.log(JSON.stringify({kind:"TEMPORARY_ORIGINALS",...temporaryResult}));
+    if(temporaryResult.failures.length)throw Error("Temporary original cleanup failed");
+    const originalResult = await cleanupExpiredOriginals(db,s3,photoTable,photoBucket);
+    console.log(JSON.stringify({kind:"EXPIRED_ORIGINAL_PHOTOS",...originalResult}));
+    if(originalResult.failures.length)throw Error("Original photo expiration failed; retained for retry");
     const archivedResult = await markArchivedPhotoBatches(db, photoTable);
     console.log(JSON.stringify({ kind: "ARCHIVED_PHOTO_BATCHES", ...archivedResult }));
     const photoResult = await cleanupPhotoAssets(

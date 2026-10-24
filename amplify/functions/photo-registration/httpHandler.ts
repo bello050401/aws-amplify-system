@@ -1,3 +1,5 @@
+import {TemporaryOriginals} from "../../../lib/photoRegistration/temporaryOriginals";
+import {OriginalPhotoUploads} from "../../../lib/photoRegistration/originalUpload";
 import type { APIGatewayProxyHandlerV2 } from "aws-lambda";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
@@ -12,8 +14,9 @@ const required = (name: string) => {
   if (!value) throw new Error(`${name} is required`);
   return value;
 };
+const originalDb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const repository = new DynamoPhotoRegistrationRepository({
-  ddb: DynamoDBDocumentClient.from(new DynamoDBClient({})),
+  ddb: originalDb,
   tableName: required("PHOTO_REGISTRATION_TABLE_NAME"),
   inventoryTableName: required("INVENTORY_TABLE_NAME"),
   now: () => new Date(),
@@ -24,6 +27,8 @@ const service = new PhotoRegistrationService({
   authConfig: { photoDeviceGroupDeployed: process.env.PHOTO_DEVICE_GROUP_DEPLOYED === "true" },
 });
 
+const temporaryOriginals = new TemporaryOriginals({db:originalDb,s3:new S3Client({}),table:required("PHOTO_REGISTRATION_TABLE_NAME"),bucket:required("PHOTO_REGISTRATION_BUCKET_NAME"),auth:{photoDeviceGroupDeployed:process.env.PHOTO_DEVICE_GROUP_DEPLOYED === "true"}});
+const originals = new OriginalPhotoUploads({db:originalDb,s3:new S3Client({}),table:required("PHOTO_REGISTRATION_TABLE_NAME"),bucket:required("PHOTO_REGISTRATION_BUCKET_NAME"),repository,temporaryOriginals,auth:{photoDeviceGroupDeployed:process.env.PHOTO_DEVICE_GROUP_DEPLOYED === "true"}});
 function groupsFromClaim(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
   if (typeof value !== "string") return [];
@@ -58,6 +63,10 @@ const json = (statusCode: number, body: unknown) => ({ statusCode, headers: { "c
 
 async function dispatch(operation: string, input: unknown, claims: TrustedClaims) {
   switch (operation) {
+    case "requestTemporaryOriginal": return temporaryOriginals.handle("request",input,claims);
+    case "completeTemporaryOriginal": return temporaryOriginals.handle("complete",input,claims);
+    case "requestOriginalPhotoUpload": return originals.handle("request",input,claims);
+    case "completeOriginalPhotoUpload": return originals.handle("complete",input,claims);
     case "createPhotoBatch": return service.createPhotoBatch(input, claims);
     case "requestPhotoAssetUploads": return service.requestPhotoAssetUploads(input, claims);
     case "completePhotoAssetUpload": return service.completePhotoAssetUpload(input, claims);

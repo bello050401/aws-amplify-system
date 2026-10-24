@@ -239,10 +239,10 @@ async function main() {
   {
     const x = photoFixture({
       ...photo,
-      deletedAt: new Date(now - ORPHAN_GRACE_MS).toISOString(),
+      deletedAt: new Date(now).toISOString(),
     });
     await purgeDeletedPhotos(x.ports, now);
-    assert.deepEqual(x.actions, []);
+    assert.deepEqual(x.actions, ["claim", "remove", "finish"]);
     checks++;
   }
   {
@@ -277,7 +277,7 @@ async function main() {
     checks++;
   }
   {
-    const x = photoFixture({ ...photo, purgedAt: old.firstSeenAt });
+    const x = photoFixture({ ...photo, purgedAt: old.firstSeenAt, purgeRecheckedAt: old.firstSeenAt });
     await purgeDeletedPhotos(x.ports, now);
     assert.deepEqual(x.actions, []);
     checks++;

@@ -663,6 +663,25 @@ test("manual batch: unchanged original bytes finalize as WEB_UPLOAD and remain l
   expectOk(await env.adapter.linkToInventory({batchId,inventoryId:"manual-inventory"},claims),"link");
 });
 
+
+test("download and confirmed deletion: enforce roles, disable deleted downloads, retry failed cloud removal",async()=>{
+ const env=buildEnv(),batch=await createAndFillBatch(env,"download-delete",1);
+ const [asset]=await env.repository.getAssetsForBatch(batch);
+ let removals=0,fail=true;
+ const adapter=new PhotoRegistrationWebAdapter({service:env.service,repository:env.repository,authConfig:{photoDeviceGroupDeployed:true},presignGetUrl:buildPresignGetUrl(),
+ presignDownloadUrl:async(key,name)=>"signed:"+name+":"+key,
+ purgeDeletedAsset:async()=>{removals++;if(fail)throw Error("S3 unavailable");}});
+ expectErr(await adapter.downloadAsset(asset.id,viewerClaims()),"PERMISSION_DENIED","viewer download");
+ assert(expectOk(await adapter.downloadAsset(asset.id,staffClaims()),"download").includes(".jpg"));
+ expectErr(await adapter.downloadAsset(asset.id,staffClaims(),"original"),"ASSET_NOT_FOUND","missing original");
+ expectErr(await adapter.deleteAsset({photoAssetId:asset.id},staffClaims()),"CONFLICT","cloud failure");
+ expectErr(await adapter.downloadAsset(asset.id,staffClaims()),"ASSET_NOT_FOUND","deleted download");
+ const detail=expectOk(await adapter.getBatchDetail(batch,staffClaims(),{page:1,pageSize:24}),"deleted detail");
+ assert.equal(detail.assets[0].thumbnailUrl,null);assert.equal(detail.assets[0].processedUrl,null);
+ fail=false;expectOk(await adapter.deleteAsset({photoAssetId:asset.id},staffClaims()),"retry removal");
+ assert.equal(removals,2);
+ expectErr(await adapter.restoreAsset({photoAssetId:asset.id},adminClaims()),"PERMISSION_DENIED","irreversible deletion");
+});
 async function main() {
   await Promise.all(pendingTests);
   console.log(`\n[verify-photo-registration-web] ${passed} passed, ${failures.length} failed`);

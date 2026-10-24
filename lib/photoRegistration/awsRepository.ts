@@ -149,6 +149,7 @@ function batchViewFromItem(item: BatchItem): PhotoBatchView {
 }
 
 interface AssetItem {
+  original?: PhotoAssetView["original"];
   PK: string;
   SK: string;
   entityType: "PhotoAsset";
@@ -180,6 +181,7 @@ function assetViewFromItem(item: AssetItem): PhotoAssetView {
     id: item.id,
     photoBatchId: item.photoBatchId,
     clientAssetId: item.clientAssetId,
+    ...(item.original ? {original:item.original} : {}),
     sequence: item.sequence,
     status: item.status,
     isDeleted: item.isDeleted,

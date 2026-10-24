@@ -1,4 +1,5 @@
 "use client";
+import {PhotoOriginalDownload} from "@/app/inventory/components/PhotoOriginalDownload";
 
 import { useState } from "react";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
@@ -72,6 +73,8 @@ export function PhotoAssetProductGallery({
         )}
       </div>
 
+      <a className="mt-2 inline-flex min-h-9 items-center rounded border border-blue-300 px-3 text-xs text-blue-700" href={"/api/inventory/photo-download?id="+encodeURIComponent(current.id)}>この画像をダウンロード</a>
+      <PhotoOriginalDownload asset={current}/>
       {assets.length > 1 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {assets.map((asset, i) => (

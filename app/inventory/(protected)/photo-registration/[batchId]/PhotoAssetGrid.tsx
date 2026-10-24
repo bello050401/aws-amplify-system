@@ -1,123 +1,43 @@
 "use client";
-
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { deletePhotoAssetAction, restorePhotoAssetAction } from "@/app/actions/photoRegistration";
-import type { PhotoActorRole } from "@/lib/photoRegistration/types";
-import type { WebPhotoAssetView } from "@/lib/photoRegistration/webAdapter";
-
-const STATUS_LABEL: Record<string, string> = {
-  UPLOADING: "アップロード中",
-  READY: "準備完了",
-  FLAGGED: "要確認",
-  DELETED: "削除済み",
-  FAILED: "失敗",
-};
-
-export function PhotoAssetGrid({
-  batchId,
-  assets,
-  actorRole,
-  archived = false,
-}: {
-  batchId: string;
-  assets: WebPhotoAssetView[];
-  actorRole: PhotoActorRole;
-  archived?: boolean;
-}) {
-  const router = useRouter();
-  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
-  const [errors, setErrors] = useState<Record<string, string>>({});
-
-  const canDelete = actorRole === "STAFF" || actorRole === "ADMIN";
-  const canRestore = actorRole === "ADMIN" && !archived;
-
-  const setPending = (id: string, pending: boolean) => {
-    setPendingIds((prev) => {
-      const next = new Set(prev);
-      if (pending) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-
-  async function handleDelete(photoAssetId: string) {
-    if (pendingIds.has(photoAssetId)) return; // 二重送信防止
-    setPending(photoAssetId, true);
-    setErrors((prev) => ({ ...prev, [photoAssetId]: "" }));
-    const result = await deletePhotoAssetAction(batchId, photoAssetId);
-    setPending(photoAssetId, false);
-    if (!result.ok) {
-      setErrors((prev) => ({ ...prev, [photoAssetId]: result.message }));
-      return;
-    }
-    router.refresh();
-  }
-
-  async function handleRestore(photoAssetId: string) {
-    if (pendingIds.has(photoAssetId)) return;
-    setPending(photoAssetId, true);
-    setErrors((prev) => ({ ...prev, [photoAssetId]: "" }));
-    const result = await restorePhotoAssetAction(batchId, photoAssetId);
-    setPending(photoAssetId, false);
-    if (!result.ok) {
-      setErrors((prev) => ({ ...prev, [photoAssetId]: result.message }));
-      return;
-    }
-    router.refresh();
-  }
-
-  return (
-    <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-      {assets.map((asset, index) => {
-        const pending = pendingIds.has(asset.id);
-        const error = errors[asset.id];
-        return (
-          <li key={asset.id} className="flex flex-col gap-1 rounded border border-gray-200 bg-white p-2">
-            <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded bg-gray-100">
-              {asset.thumbnailUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element -- 署名付きURLは短命かつ動的なので next/image の外部ドメイン許可対象にしない
-                <img src={asset.thumbnailUrl} alt={`画像 ${asset.sequence + 1 || index + 1}`} className="h-full w-full object-contain" loading="lazy" />
-              ) : (
-                <span className="text-xs text-gray-400">{asset.purgedAt ? "元画像・縮小画像を完全削除済み" : "画像を表示できません"}</span>
-              )}
-              {asset.isDeleted ? (
-                <span className="absolute left-1 top-1 rounded bg-gray-900/80 px-1.5 py-0.5 text-[10px] font-bold text-white">削除済み</span>
-              ) : null}
-            </div>
-            <p className="truncate text-[11px] text-gray-600">
-              #{asset.sequence + 1} ・ {STATUS_LABEL[asset.status] ?? asset.status} ・ {asset.sourceType === "WEB_UPLOAD" ? "Web" : "撮影機"}
-            </p>
-            {error ? (
-              <p role="alert" className="text-[10px] text-red-600">
-                {error}
-              </p>
-            ) : null}
-            {!asset.isDeleted && canDelete ? (
-              <button
-                type="button"
-                onClick={() => handleDelete(asset.id)}
-                disabled={pending}
-                aria-label={`画像 ${asset.sequence + 1} を削除`}
-                className="min-h-7 rounded border border-red-300 px-2 text-[11px] text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {pending ? "削除中…" : "削除"}
-              </button>
-            ) : null}
-            {asset.isDeleted && canRestore && !asset.purgeStartedAt && !asset.purgedAt ? (
-              <button
-                type="button"
-                onClick={() => handleRestore(asset.id)}
-                disabled={pending}
-                aria-label={`画像 ${asset.sequence + 1} を復元`}
-                className="min-h-7 rounded border border-blue-300 px-2 text-[11px] text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {pending ? "復元中…" : "復元(ADMIN)"}
-              </button>
-            ) : null}
-          </li>
-        );
-      })}
-    </ul>
-  );
+import {PhotoOriginalDownload} from "@/app/inventory/components/PhotoOriginalDownload";
+import {useRouter} from "next/navigation";
+import {useRef,useState} from "react";
+import {deletePhotoAssetAction} from "@/app/actions/photoRegistration";
+import type {PhotoActorRole} from "@/lib/photoRegistration/types";
+import type {WebPhotoAssetView} from "@/lib/photoRegistration/webAdapter";
+const status:Record<string,string>={UPLOADING:"アップロード中",READY:"準備完了",FLAGGED:"要確認",DELETED:"削除済み",FAILED:"失敗"};
+export function PhotoAssetGrid({batchId,assets,actorRole}:{batchId:string;assets:WebPhotoAssetView[];actorRole:PhotoActorRole;archived?:boolean}){
+ const router=useRouter(), busy=useRef(false);
+ const [target,setTarget]=useState<WebPhotoAssetView|null>(null),[pending,setPending]=useState(false),[error,setError]=useState("");
+ const canDelete=actorRole==="STAFF"||actorRole==="ADMIN";
+ async function confirmDelete(){
+  if(!target||busy.current)return;busy.current=true;setPending(true);setError("");
+  try{const result=await deletePhotoAssetAction(batchId,target.id);
+   if(!result.ok){setError(result.message);return;}
+   setTarget(null);router.refresh();
+  }catch{setError("削除結果を確認できません。再度お試しください。");}
+  finally{busy.current=false;setPending(false);}
+ }
+ return <>
+ <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+ {assets.map(asset=><li key={asset.id} className="flex flex-col gap-2 rounded border border-gray-200 bg-white p-2">
+  <div className="flex aspect-square items-center justify-center overflow-hidden rounded bg-gray-100">
+   {/* eslint-disable-next-line @next/next/no-img-element */}
+   {asset.thumbnailUrl&&!asset.isDeleted?<img src={asset.thumbnailUrl} alt={"画像 "+(asset.sequence+1)} className="h-full w-full object-contain" loading="lazy"/>:<span className="text-xs text-gray-500">{asset.isDeleted?asset.purgedAt?"削除済み":"クラウドの削除を確認してください":"画像を表示できません"}</span>}
+  </div>
+  <p className="text-[11px] text-gray-600">#{asset.sequence+1} ・ {status[asset.status]??asset.status} ・ {asset.sourceType==="WEB_UPLOAD"?"Web":"撮影機"}</p>
+  {!asset.isDeleted&&asset.processedUrl&&<a className="flex min-h-9 items-center justify-center rounded border border-blue-300 text-xs text-blue-700" href={"/api/inventory/photo-download?id="+encodeURIComponent(asset.id)} aria-label={"画像 "+(asset.sequence+1)+" をダウンロード"}>ダウンロード</a>}
+  <PhotoOriginalDownload asset={asset}/>
+  {canDelete&&(!asset.isDeleted||!asset.purgedAt)&&<button type="button" disabled={pending} onClick={()=>{setError("");setTarget(asset);}} aria-label={"画像 "+(asset.sequence+1)+" を削除"} className="min-h-9 rounded border border-red-300 text-xs text-red-700 disabled:opacity-50">{asset.isDeleted?"削除を再実行":"削除"}</button>}
+ </li>)}
+ </ul>
+ {target&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><section role="alertdialog" aria-modal="true" aria-label="画像の削除確認" className="w-full max-w-sm rounded-xl bg-white p-5">
+  <h3 className="font-bold">画像 {target.sequence+1} を削除しますか？</h3>
+  {/* eslint-disable-next-line @next/next/no-img-element */}
+  {target.thumbnailUrl&&<img src={target.thumbnailUrl} alt="削除する画像" className="my-3 h-48 w-full object-contain"/>}
+  <p className="my-3 text-sm">この画像と縮小画像・保管中の編集前写真をクラウドから削除します。削除後は元に戻せません。</p>
+  {error&&<p role="alert" className="my-3 text-sm text-red-700">{error}</p>}
+  <div className="flex gap-3"><button autoFocus type="button" disabled={pending} onClick={()=>setTarget(null)} className="min-h-11 flex-1 rounded border">キャンセル</button><button type="button" disabled={pending} onClick={()=>void confirmDelete()} className="min-h-11 flex-1 rounded bg-red-700 text-white disabled:opacity-50">{pending?"削除中…":"削除する"}</button></div>
+ </section></div>}
+ </>;
 }

@@ -1,3 +1,5 @@
+import {deleteAllPhotoObjectVersions} from "./deletePhotoObject";
+import {originalObjectKey} from "../photoRegistration/originalRetention";
 import {
   DynamoDBDocumentClient,
   ScanCommand,
@@ -6,8 +8,6 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import {
   S3Client,
-  DeleteObjectCommand,
-  ListObjectVersionsCommand,
 } from "@aws-sdk/client-s3";
 import {
   photoAssetS3Key,
@@ -22,6 +22,7 @@ export async function cleanupPhotoAssets(
   bucket: string,
   now = Date.now(),
   onlyBatchIds?: ReadonlySet<string>,
+  onlyAssetIds?: ReadonlySet<string>,
 ) {
   const key = (p: DeletedPhoto) => ({ PK: p.PK, SK: p.SK });
   const condition =
@@ -44,7 +45,7 @@ export async function cleanupPhotoAssets(
               after = page.LastEvaluatedKey;
             } while (after);
           }
-          return rows;
+          return onlyAssetIds ? rows.filter(p => onlyAssetIds.has(p.id)) : rows;
         }
         let after: Record<string, unknown> | undefined;
         const rows: DeletedPhoto[] = [];
@@ -96,7 +97,7 @@ export async function cleanupPhotoAssets(
                 "SET purgeStartedAt = if_not_exists(purgeStartedAt, :at)",
               ConditionExpression:
                 condition +
-                " AND deletedAt = :previous AND attribute_not_exists(purgedAt)",
+                " AND deletedAt = :previous AND attribute_not_exists(purgeRecheckedAt)",
               ExpressionAttributeNames: names,
               ExpressionAttributeValues: {
                 ...values,
@@ -132,41 +133,16 @@ export async function cleanupPhotoAssets(
             variant,
             extensionForMimeType(mime),
           );
-          let keyMarker: string | undefined, versionMarker: string | undefined;
-          do {
-            const page = await s3.send(
-              new ListObjectVersionsCommand({
-                Bucket: bucket,
-                Prefix: exact,
-                KeyMarker: keyMarker,
-                VersionIdMarker: versionMarker,
-              }),
-            );
-            for (const object of [
-              ...(page.Versions || []),
-              ...(page.DeleteMarkers || []),
-            ])
-              if (object.Key === exact)
-                await s3.send(
-                  new DeleteObjectCommand({
-                    Bucket: bucket,
-                    Key: exact,
-                    VersionId: object.VersionId,
-                  }),
-                );
-            keyMarker = page.IsTruncated ? page.NextKeyMarker : undefined;
-            versionMarker = page.IsTruncated
-              ? page.NextVersionIdMarker
-              : undefined;
-          } while (keyMarker);
+          await deleteAllPhotoObjectVersions(s3,bucket,exact);
         }
+        await deleteAllPhotoObjectVersions(s3,bucket,originalObjectKey(p.photoBatchId,p.id));
       },
       finish: async (p, at) => {
         await db.send(
           new UpdateCommand({
             TableName: table,
             Key: key(p),
-            UpdateExpression: "SET purgedAt = :at",
+            UpdateExpression: "SET purgedAt = if_not_exists(purgedAt, :at)" + (Date.parse(at) >= Date.parse(p.deletedAt!) + 16*60*1000 ? ", purgeRecheckedAt = :at" : ""),
             ConditionExpression:
               condition +
               " AND deletedAt = :previous AND attribute_exists(purgeStartedAt)",

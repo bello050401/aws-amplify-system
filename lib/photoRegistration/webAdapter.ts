@@ -30,6 +30,8 @@
  * (scripts/verify-photo-registration-api.tsと同じ考え方)。
  */
 import "server-only";
+import {originalAvailable} from "./originalRetention";
+import { cleanupPhotoAssets } from "../mediaMaintenance/photoCleanupAws";
 import { cookies } from "next/headers";
 import { fetchAuthSession } from "aws-amplify/auth/server";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
@@ -156,6 +158,8 @@ export interface PhotoRegistrationWebDeps {
   repository: PhotoRegistrationRepository;
   authConfig: AuthConfig;
   presignGetUrl: (s3Key: string) => Promise<string>;
+  presignDownloadUrl?: (s3Key: string, fileName: string, expiresIn?:number) => Promise<string>;
+  purgeDeletedAsset?: (asset: PhotoAssetView) => Promise<void>;
 }
 
 export class PhotoRegistrationWebAdapter {
@@ -181,7 +185,7 @@ export class PhotoRegistrationWebAdapter {
   }
 
   private async toWebAsset(asset: PhotoAssetView): Promise<WebPhotoAssetView> {
-    if (asset.purgeStartedAt || asset.purgedAt) return { ...asset, thumbnailUrl: null, processedUrl: null };
+    if (asset.isDeleted || asset.purgeStartedAt || asset.purgedAt) return { ...asset, thumbnailUrl: null, processedUrl: null };
     // Both variants are independent signatures. Waiting for the thumbnail
     // before starting the processed image adds an avoidable signing round
     // trip to every photo detail view.
@@ -360,11 +364,36 @@ export class PhotoRegistrationWebAdapter {
   }
 
   async deleteAsset(rawInput: unknown, claims: TrustedClaims): Promise<PhotoResult<{ photoAssetId: string }>> {
-    return this.deps.service.deletePhotoAsset(rawInput, claims);
+    const result = await this.deps.service.deletePhotoAsset(rawInput, claims);
+    if (!result.ok || !this.deps.purgeDeletedAsset) return result;
+    const found = await this.deps.repository.getAssetWithBatch(result.value.photoAssetId);
+    if (!found?.asset.isDeleted) return err("CONFLICT", "削除結果を確認できません。再度お試しください。");
+    if (!found.asset.purgedAt) {
+      try { await this.deps.purgeDeletedAsset(found.asset); }
+      catch { return err("CONFLICT", "画像は非表示になりましたが、クラウドの削除が未完了です。もう一度削除を実行してください。"); }
+    }
+    return result;
   }
 
   async restoreAsset(rawInput: unknown, claims: TrustedClaims): Promise<PhotoResult<{ photoAssetId: string; status: string }>> {
+    if (this.deps.purgeDeletedAsset) return err("PERMISSION_DENIED", "削除した画像は復元できません。");
     return this.deps.service.restorePhotoAsset(rawInput, claims);
+  }
+
+  async downloadAsset(photoAssetId: string, claims: TrustedClaims, variant="processed"): Promise<PhotoResult<string>> {
+    const auth = this.requireStaffOrAdmin(claims); if (!auth.ok) return auth;
+    const found = await this.deps.repository.getAssetWithBatch(photoAssetId);
+    if (!found || found.asset.isDeleted || found.asset.purgeStartedAt || found.asset.purgedAt) return err("ASSET_NOT_FOUND", "画像が見つかりません。");
+    const asset = found.asset;
+    if (asset.status !== "READY" && asset.status !== "FLAGGED") return err("UPLOAD_NOT_COMPLETE", "アップロードが完了していません。");
+    if (!this.deps.presignDownloadUrl) return err("CONFLICT", "ダウンロードを準備できません。");
+    if(variant==="original"){
+      if(!originalAvailable(asset.original))return err("ASSET_NOT_FOUND","編集前写真は未アップロード、または7日間の保管期限を過ぎています。");
+      const o=asset.original!;
+      return ok(await this.deps.presignDownloadUrl(o.key,o.fileName,Math.max(1,Math.min(60,Math.floor((Date.parse(o.expiresAt)-Date.now())/1000)))));
+    }
+    const ext = extensionForMimeType(asset.declared.PROCESSED.mimeType);
+    return ok(await this.deps.presignDownloadUrl(photoAssetS3Key(asset.photoBatchId, asset.id, "PROCESSED", ext), found.batch.batchCode + "_" + (asset.sequence + 1) + "." + ext));
   }
 
   async linkToInventory(rawInput: unknown, claims: TrustedClaims): Promise<PhotoResult<{ batchId: string; status: string }>> {
@@ -442,6 +471,15 @@ export function getPhotoRegistrationWebAdapter(): PhotoRegistrationWebAdapter | 
     repository,
     authConfig,
     presignGetUrl: buildPresignGetUrl(s3Client, config.bucketName, 900),
+    presignDownloadUrl: (Key, fileName, expiresIn=60) => getSignedUrl(s3Client, new GetObjectCommand({Bucket:config.bucketName, Key,
+      ResponseContentDisposition: "attachment; filename*=UTF-8''" + encodeURIComponent(fileName)}), {expiresIn}),
+    purgeDeletedAsset: async asset => {
+      const result = await cleanupPhotoAssets(ddb, s3Client, config.tableName, config.bucketName, Date.now(), new Set([asset.photoBatchId]), new Set([asset.id]));
+      if (result.failures.length || result.purged !== 1) {
+        const latest = await repository.getAssetWithBatch(asset.id);
+        if (!latest?.asset.purgedAt) throw Error("Photo purge incomplete");
+      }
+    },
   });
   return cachedAdapter;
 }
