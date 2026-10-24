@@ -109,7 +109,7 @@ export async function confirmOutboundArrival(id:string,commandId:string,changes:
   }
  }
  const fresh=await getOutboundBatch(id),complete=fresh.rows.filter(isArrivalRow).every(r=>r.arrivalStatus==='COMPLETED');
- try{await db.send(new UpdateCommand({TableName:table('OutboundBatch'),Key:{id},UpdateExpression:'SET arrivalStatus=:status, updatedAt=:now'+(complete?', arrivalAt=:now, arrivalBy=:actor':''),ConditionExpression:'arrivalCommandId=:cmd AND arrivalStatus=:applying',ExpressionAttributeValues:{':cmd':commandId,':applying':'APPLYING',':status':complete?'COMPLETED':'PARTIAL',':now':new Date().toISOString(),...(complete?{':actor':actor}:{})}}));}catch{const result=await getOutboundBatch(id);if(result.arrivalStatus!=='COMPLETED')throw Error('完了状態を確認できません。履歴から更新を再開してください。');}
+ try{await db.send(new UpdateCommand({TableName:table('OutboundBatch'),Key:{id},UpdateExpression:'SET arrivalStatus=:status, updatedAt=:now'+(complete?', arrivalAt=:now, arrivalBy=:actor':''),ConditionExpression:'arrivalCommandId=:cmd AND arrivalStatus=:applying',ExpressionAttributeValues:{':cmd':commandId,':applying':'APPLYING',':status':complete?'COMPLETED':'PARTIAL',':now':new Date().toISOString(),...(complete?{':actor':actor}:{})}}));}catch{const result=await getOutboundBatch(id);if(result.arrivalStatus!=='COMPLETED')throw Error('完了状態を確認できません。履歴から「確認」を押して再確認してください。');}
  clearInventoryCountCache();return getOutboundBatch(id);
 }
 
