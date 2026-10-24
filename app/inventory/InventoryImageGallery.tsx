@@ -3,6 +3,7 @@
 import { useEffect, useReducer, useState } from "react";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
 import { useInventoryImageUrl } from "./useInventoryImageUrl";
+import { useInventoryPreviewUrl } from "./InventoryPreviewUrls";
 import { InventoryThumbnail } from "./InventoryThumbnail";
 import { effectiveListThumbnailKey, type InventoryImageRecord } from "@/lib/inventory/imageTypes";
 import { initialBodyLoadState, reduceBodyLoadState, planHeroRender, planFullRender } from "./inventoryImageLoadState";
@@ -69,7 +70,7 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false,
 
   // --- メイン画像: small先行 → mediumは本体onLoad成功時のみ差し替え ---
   const smallKey = current ? effectiveListThumbnailKey(current) : null;
-  const { url: smallUrl, failed: smallResolveFailed } = useInventoryImageUrl(smallKey);
+  const { url: smallUrl, failed: smallResolveFailed, rejectDirect: rejectSmallDirect } = useInventoryPreviewUrl(smallKey);
   const [smallBody, dispatchSmallBody] = useReducer(reduceBodyLoadState, initialBodyLoadState(smallKey));
   useEffect(() => {
     dispatchSmallBody({ type: "SELECT", key: smallKey });
@@ -79,7 +80,7 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false,
   // (thumbnailKey→storageKeyの同じフォールバック順)ので、mediumUrlは
   // 常にnullのまま——「medium段階が存在しない」を素直に表す。
   const mediumKey = current?.mediumKey ?? null;
-  const { url: mediumUrl } = useInventoryImageUrl(mediumKey);
+  const { url: mediumUrl, rejectDirect: rejectMediumDirect } = useInventoryPreviewUrl(mediumKey);
   const [mediumBody, dispatchMediumBody] = useReducer(reduceBodyLoadState, initialBodyLoadState(mediumKey));
   useEffect(() => {
     dispatchMediumBody({ type: "SELECT", key: mediumKey });
@@ -97,9 +98,9 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false,
     if (!keyAtStart) return;
     const preload = new Image();
     preload.onload = () => dispatchMediumBody({ type: "LOADED", key: keyAtStart });
-    preload.onerror = () => dispatchMediumBody({ type: "FAILED", key: keyAtStart });
+    preload.onerror = () => { if (!rejectMediumDirect()) dispatchMediumBody({ type: "FAILED", key: keyAtStart }); };
     preload.src = mediumUrl;
-  }, [mediumUrl, mediumKey]);
+  }, [mediumUrl, mediumKey, rejectMediumDirect]);
 
   const heroPlan = planHeroRender({
     smallUrl,
@@ -169,7 +170,7 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false,
               src={heroPlan.mountSrc}
               alt={alt}
               onLoad={() => smallKey && dispatchSmallBody({ type: "LOADED", key: smallKey })}
-              onError={() => smallKey && dispatchSmallBody({ type: "FAILED", key: smallKey })}
+              onError={() => smallKey && dispatchSmallBody({ type: rejectSmallDirect() ? "SELECT" : "FAILED", key: smallKey })}
               className={`h-[380px] w-full object-contain ${heroPlan.showLoadingOverlay ? "invisible" : ""}`}
             />
             {heroPlan.showLoadingOverlay && (

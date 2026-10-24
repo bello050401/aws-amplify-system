@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { getUrl } from "aws-amplify/storage/server";
-import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
+import { signInventoryListKey } from "@/lib/inventory/listImageUrls";
 import { getMobileSession } from "@/lib/mobile/session";
 import { getInventoryDetail, listCategories, listLocations, listStatuses } from "@/lib/inventory/queries";
 import { mobileInventoryDetail } from "@/lib/mobile/inventoryDetail";
@@ -25,11 +23,10 @@ export async function GET(_request: Request, context: { params: { id: string } }
       listCategories(row.categoryId), listLocations(row.locationId), listStatuses(),
       listInventoryPhotoAssetsAction(id).catch(() => null),
     ]);
-    const photos = await runWithAmplifyServerContext({ nextServerContext: { cookies }, operation: authContext =>
-      mobileInventoryPhotos(row.images, assetResult?.ok ? assetResult.value.assets : [], async path => {
-        const image = await getUrl(authContext, { path, options: { expiresIn: 900 } });
-        return image.url.toString();
-      }),
+    const photos = await mobileInventoryPhotos(row.images, assetResult?.ok ? assetResult.value.assets : [], async path => {
+      const url = await signInventoryListKey(path);
+      if (!url) throw new Error("IMAGE_UNAVAILABLE");
+      return url;
     });
     const item = mobileInventoryDetail(row, categories, locations, statuses, session.features, photos, new Date().toISOString());
     item.photosComplete = Boolean(assetResult?.ok && !assetResult.value.truncated && photos.every(photo => photo.url));

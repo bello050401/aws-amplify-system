@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { uploadData, remove } from "aws-amplify/storage";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
-import { useInventoryImageUrl } from "./useInventoryImageUrl";
+import { useInventoryPreviewUrl } from "./InventoryPreviewUrls";
 
 /**
  * Shared image editor for both new-registration and edit (spec: editing
@@ -173,7 +173,7 @@ function safeUploadPath(file: File): string {
  * there would look worse, not better.
  */
 function EditorImagePreview({ slot, className, alt }: { slot: ImageEditorSlot; className: string; alt: string }) {
-  const { url, failed } = useInventoryImageUrl(slot.kind === "new" ? null : slotPreviewKey(slot));
+  const { url, failed, rejectDirect } = useInventoryPreviewUrl(slot.kind === "new" ? null : slotPreviewKey(slot));
 
   if (slot.kind === "new") {
     // eslint-disable-next-line @next/next/no-img-element -- local blob: object URL preview, not a remote asset next/image can optimize
@@ -187,7 +187,7 @@ function EditorImagePreview({ slot, className, alt }: { slot: ImageEditorSlot; c
     );
   }
   // eslint-disable-next-line @next/next/no-img-element -- S3 URL; see InventoryThumbnail's identical note.
-  return <img src={url} alt={alt} className={className} />;
+  return <img src={url} alt={alt} className={className} onError={rejectDirect} />;
 }
 
 export function ImageEditor({ slots, onChange, variant = "normal" }: ImageEditorProps) {

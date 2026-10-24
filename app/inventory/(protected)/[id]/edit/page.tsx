@@ -6,6 +6,8 @@ import { appendReturnParam } from "@/lib/inventory/listReturnParams";
 import { InventoryHeader } from "../../../InventoryHeader";
 import { EditInventoryForm } from "./EditInventoryForm";
 import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
+import { signInventoryPreviews } from "@/lib/inventory/listImageUrls";
+import { InventoryPreviewUrls } from "../../../InventoryPreviewUrls";
 
 export default async function EditInventoryPage({
   params,
@@ -45,17 +47,20 @@ export default async function EditInventoryPage({
   // selectable (labeled "（無効）") option — see listCategories'/
   // listLocations' own comment. Depends on `item`, so this can't join
   // the Promise.all above.
-  const [categories, locations] = await Promise.all([
+  const [categories, locations, previewUrls] = await Promise.all([
     listCategories(item.categoryId),
     listLocations(item.locationId),
+    signInventoryPreviews(item.images),
   ]);
 
   return (
+    <InventoryPreviewUrls key={item.id} urls={previewUrls}>
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫編集</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <EditInventoryForm item={item} photoAssets={photoAssetsResult.ok ? photoAssetsResult.value.assets : []} categories={categories} locations={selectableLocations(locations,item.locationId)} statuses={statuses} customFieldDefs={customFieldDefs} units={units} returnTo={detailHref} />
       </div>
     </div>
+    </InventoryPreviewUrls>
   );
 }

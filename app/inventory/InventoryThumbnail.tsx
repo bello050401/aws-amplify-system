@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
-import { useInventoryImageUrl } from "./useInventoryImageUrl";
+import { useInventoryPreviewUrl } from "./InventoryPreviewUrls";
 
 const SIZE_CLASSES = {
   small: "h-10 w-10", // was the only size; kept for anywhere not yet migrated
@@ -106,7 +106,7 @@ export function InventoryThumbnail({
   const [failedSource, setFailedSource] = useState<"direct" | "storage" | null>(null);
   useEffect(() => setFailedSource(null), [storageKey, directUrl]);
   const useStorage = !directUrl || failedSource === "direct";
-  const { url: resolvedUrl, failed: resolveFailed } = useInventoryImageUrl(isNearViewport && useStorage ? storageKey : null);
+  const { url: resolvedUrl, failed: resolveFailed, rejectDirect: rejectPreview } = useInventoryPreviewUrl(isNearViewport && useStorage ? storageKey : null);
   const url = useStorage ? resolvedUrl : directUrl;
   const failed = failedSource === "storage" || (useStorage && resolveFailed) || (failedSource === "direct" && !storageKey);
   const fitClass = CONTAIN_SIZES.has(size) ? "object-contain" : "object-cover";
@@ -152,6 +152,7 @@ export function InventoryThumbnail({
       loading={loading}
       decoding="async"
       onError={(e) => {
+        if (useStorage && rejectPreview()) return;
         // getUrl() succeeded (a valid presigned URL) but the browser
         // still couldn't load it — e.g. the object doesn't actually
         // exist at that key. Falls back to the same placeholder instead

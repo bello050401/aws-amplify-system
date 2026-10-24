@@ -3,6 +3,7 @@ import {S3Client,GetObjectCommand} from '@aws-sdk/client-s3';
 import {getSignedUrl} from '@aws-sdk/s3-request-presigner';
 import outputs from '../../amplify_outputs.json';
 import type {InventoryListRow} from './queries';
+import { effectiveListThumbnailKey, type InventoryImageRecord } from './imageTypes';
 const s3=new S3Client({region:outputs.storage.aws_region});
 const cache=new Map<string,{url:string;until:number}>();
 /** Internal only: callers supply inventory rows read through the authenticated data boundary.
@@ -18,5 +19,12 @@ export async function signInventoryListKey(key:string):Promise<string|null>{
 }
 export async function withListImageUrls<T extends InventoryListRow>(rows:T[]):Promise<T[]>{
  return Promise.all(rows.map(async row=>({...row,mainImageSignedUrl:row.mainImageThumbnailKey?await signInventoryListKey(row.mainImageThumbnailKey):null})));
+}
+
+/** Only previews from an already-authorized inventory record. Originals stay on demand. */
+export async function signInventoryPreviews(images: InventoryImageRecord[]): Promise<Record<string, string>> {
+ const keys = [...new Set(images.flatMap(image => [effectiveListThumbnailKey(image), image.mediumKey].filter((key): key is string => Boolean(key))))];
+ const signed = await Promise.all(keys.map(async key => [key, await signInventoryListKey(key)] as const));
+ return Object.fromEntries(signed.filter((entry): entry is readonly [string, string] => entry[1] !== null));
 }
 

@@ -39,6 +39,8 @@ import { isCognitoRateLimitError } from "@/lib/amplify/cognitoTransientError";
 import { inventorySpeedProbeEnabled, SPEED_PROBE_INVENTORY_ID } from "@/lib/inventory/speedProbeGate";
 import { InventorySpeedProbeResult } from "./InventorySpeedProbeResult";
 import { productCustomFields } from "@/lib/inventory/humanEdits";
+import { signInventoryPreviews } from "@/lib/inventory/listImageUrls";
+import { InventoryPreviewUrls } from "../../InventoryPreviewUrls";
 
 /** "60000" → "60,000円" — every price on this page (readable Japanese yen, not a bare number). */
 function formatYen(value: number | null): string {
@@ -155,12 +157,13 @@ export default async function InventoryDetailPage({
       listCategories(item.categoryId),
       listLocations(item.locationId),
       getShippingReferencePriceForInventory(item).catch(() => null),
+      signInventoryPreviews(item.images),
     ] as const);
   } catch (error) {
     if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
     throw error;
   }
-  const [categories, locations, shippingReference] = relatedRead;
+  const [categories, locations, shippingReference, previewUrls] = relatedRead;
 
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;
   const status = item.statusId ? statuses.find((s) => s.id === item.statusId) : undefined;
@@ -266,6 +269,7 @@ export default async function InventoryDetailPage({
   const speedProbe = role === "ADMIN" && params.id === SPEED_PROBE_INVENTORY_ID && inventorySpeedProbeEnabled();
 
   return (
+    <InventoryPreviewUrls key={item.id} urls={previewUrls}>
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫詳細</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
@@ -391,5 +395,6 @@ export default async function InventoryDetailPage({
         </div>
       </div>
     </div>
+    </InventoryPreviewUrls>
   );
 }
