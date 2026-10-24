@@ -1,7 +1,7 @@
 import {totals,type Invoice,type CalcConfig} from './model';
 const ORIGIN='https://invoice.moneyforward.com';
 type RecordValue=Record<string,unknown>;
-export class ProviderFailure extends Error { constructor(){super('PROVIDER_FAILURE');} }
+export class ProviderFailure extends Error { constructor(readonly checkCode='VALIDATION'){super('PROVIDER_FAILURE');} }
 // No general API proxy is exported. IDs come exclusively from this invocation's create responses.
 export class NewInvoiceProvider {
  private partner=''; private billing=''; private pdf='';
@@ -11,13 +11,14 @@ export class NewInvoiceProvider {
   if(!this.allowed('POST',path))throw new ProviderFailure();
   const res=await this.fetcher(ORIGIN+path,{method:'POST',redirect:'error',headers:{Authorization:`Bearer ${this.token}`,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000),cache:'no-store'});
   // Never include provider response bodies (which contain invoice details) in an exception/log.
-  if(!res.ok)throw new ProviderFailure();return res.json();
+  if(!res.ok)throw new ProviderFailure(`${path.endsWith('/partners')?'PARTNER':path.endsWith('/departments')?'DEPARTMENT':'BILLING'}_HTTP_${res.status}`);return res.json();
  }
  private id(value:unknown){if(typeof value!=='string'||!/^[-_a-zA-Z0-9]{1,160}$/.test(value))throw new ProviderFailure();return value;}
  async create(input:Invoice,config:CalcConfig){
   const p=await this.json('/api/v3/partners',{name:input.recipient,name_suffix:input.suffix});this.partner=this.id(p.id);
-  // MF requires at least one department field. Empty string avoids inventing an address/person.
-  const d=await this.json(`/api/v3/partners/${this.partner}/departments`,{person_dept:''});const department=this.id(d.id);
+  // MF rejects an entirely blank department (422). Use the known issuer label;
+  // never invent a recipient address, department or contact person.
+  const d=await this.json(`/api/v3/partners/${this.partner}/departments`,{office_member_name:'株式会社BELLO'});const department=this.id(d.id);
   const result=await this.json('/api/v3/invoice_template_billings',{department_id:department,billing_date:input.date,due_date:input.dueDate,
    items:input.lines.map(l=>({name:l.name,price:Number(l.price),quantity:Number(l.quantity),excise:l.tax}))});
   this.billing=this.id(result.id);const expected=totals(input.lines,config);const c=result.config as CalcConfig|undefined;

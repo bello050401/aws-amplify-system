@@ -60,7 +60,7 @@ export async function handler(event:{token?:string;action?:string;ticket?:string
    const input=validateInvoice(event.input);const c=unseal(event.ticket,s.key,owner,'issue');
    // Refresh before crossing the irreversible boundary. The shared lease prevents rotation races.
    const bearer=await access(s);
-   const outcome=await issueOnce({transition:(from,to)=>transition(c.operation,from,to)},()=>new NewInvoiceProvider(bearer).create(input,s.config||DEFAULT_CONFIG));
+   const outcome=await issueOnce({transition:(from,to)=>transition(c.operation,from,to)},()=>new NewInvoiceProvider(bearer).create(input,s.config||DEFAULT_CONFIG),async(checkCode)=>{await db.send(new UpdateCommand({TableName:TABLE,Key:{id:c.operation},UpdateExpression:'SET checkCode=:code',ExpressionAttributeValues:{':code':checkCode}}));});
    if(!outcome.ok)return outcome;
    const result=outcome.value;return {ok:true,number:result.number,pdfTicket:seal({purpose:'pdf',owner,operation:c.operation,billingId:result.billingId,expires:Date.now()+600000},s.key),expiresIn:600};
   }
