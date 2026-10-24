@@ -7,6 +7,7 @@ import {validateInvoice,DEFAULT_CONFIG,UNKNOWN_RESULT,type CalcConfig} from '../
 import {seal,unseal} from '../../../lib/invoicing/capability';
 import {NewInvoiceProvider} from '../../../lib/invoicing/provider';
 import {issueOnce} from '../../../lib/invoicing/issuance';
+import {withIssuerLease} from '../../../lib/invoicing/lock';
 const db=DynamoDBDocumentClient.from(new DynamoDBClient({}));const secrets=new SecretsManagerClient({});
 const TABLE=process.env.OPERATIONS_TABLE!;const SECRET=process.env.MF_SECRET_ARN!;
 const verifier=CognitoJwtVerifier.create({userPoolId:process.env.USER_POOL_ID!,clientId:process.env.USER_POOL_CLIENT_ID!,tokenUse:'access'});
@@ -27,12 +28,15 @@ async function status(operation:string,owner:string){const r=await db.send(new G
 async function transition(operation:string,from:string,to:string){await db.send(new UpdateCommand({TableName:TABLE,Key:{id:operation},UpdateExpression:'SET #s=:to',ConditionExpression:'#s=:from',ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':from':from,':to':to}}));}
 async function begin(owner:string,kind:string){const operation=randomUUID();await db.send(new PutCommand({TableName:TABLE,Item:{id:operation,owner:hash(owner),status:kind,ttl:Math.floor(Date.now()/1000)+86400},ConditionExpression:'attribute_not_exists(id)'}));return operation;}
 const fail=(code:string,message:string)=>({ok:false,code,message});
+async function acquireLease(owner:string){try{await db.send(new UpdateCommand({TableName:TABLE,Key:{id:'issuer-lock'},UpdateExpression:'SET #o=:owner, #s=:status, expiresAt=:expires, #ttl=:ttl',ConditionExpression:'attribute_not_exists(expiresAt) OR expiresAt < :now',ExpressionAttributeNames:{'#o':'owner','#s':'status','#ttl':'ttl'},ExpressionAttributeValues:{':owner':owner,':status':'LOCKED',':expires':Date.now()+120000,':ttl':Math.floor(Date.now()/1000)+120,':now':Date.now()}}));return true;}catch(e){if((e as Error).name==='ConditionalCheckFailedException')return false;throw e;}}
+async function releaseLease(owner:string){await db.send(new UpdateCommand({TableName:TABLE,Key:{id:'issuer-lock'},UpdateExpression:'SET expiresAt=:zero, #s=:status',ConditionExpression:'#o=:owner',ExpressionAttributeNames:{'#o':'owner','#s':'status'},ExpressionAttributeValues:{':owner':owner,':zero':0,':status':'IDLE'}}));}
 // Private IAM invocation only; re-verify the end user's signed token inside this isolated boundary.
 // No event/error/provider-body logging. No permissions for inventory, S3, accounting, or existing MF data.
 export async function handler(event:{token?:string;action?:string;ticket?:string;input?:unknown;code?:string}){
  let owner:string;
  try{const user=await verifier.verify(event.token||'');if(!user['cognito:groups']?.includes('ADMIN'))return fail('FORBIDDEN','管理者のみ利用できます。');owner=user.sub;}catch{return fail('FORBIDDEN','管理者のログインが必要です。');}
  try{
+  const leaseOwner=randomUUID();return await withIssuerLease(()=>acquireLease(leaseOwner),()=>releaseLease(leaseOwner),async()=>{
   const s=await settings();if(!s.key||s.key.length<32)throw new Error('NOT_CONFIGURED');
   if(event.action==='status')return {ok:true,connected:!!s.refreshToken,ready:!!s.refreshToken&&s.settingsVerified===true,config:s.config||DEFAULT_CONFIG,canConnect:!!s.clientId&&!!s.clientSecret};
   if(event.action==='oauth-start'){
@@ -54,7 +58,7 @@ export async function handler(event:{token?:string;action?:string;ticket?:string
   if(event.action==='issue'){
    if(!s.refreshToken||!s.settingsVerified)return fail('NOT_READY','マネーフォワードの接続と帳票設定の確認が必要です。');
    const input=validateInvoice(event.input);const c=unseal(event.ticket,s.key,owner,'issue');
-   // Refresh before crossing the irreversible boundary. Reserved concurrency prevents refresh rotation races.
+   // Refresh before crossing the irreversible boundary. The shared lease prevents rotation races.
    const bearer=await access(s);
    const outcome=await issueOnce({transition:(from,to)=>transition(c.operation,from,to)},()=>new NewInvoiceProvider(bearer).create(input,s.config||DEFAULT_CONFIG));
    if(!outcome.ok)return outcome;
@@ -65,5 +69,6 @@ export async function handler(event:{token?:string;action?:string;ticket?:string
    const data=await new NewInvoiceProvider(await access(s)).downloadNew(c.billingId);return {ok:true,pdf:data.toString('base64')};
   }
   return fail('FORBIDDEN','許可されていない操作です。');
+  });
  }catch{return fail('UNAVAILABLE','処理を完了できませんでした。入力内容・接続状態または取得期限を確認してください。');}
 }

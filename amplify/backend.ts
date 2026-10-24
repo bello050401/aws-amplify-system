@@ -63,8 +63,7 @@ backend.invoiceIssuer.addEnvironment('MF_SECRET_ARN',invoiceSecret.secretArn);
 backend.invoiceIssuer.addEnvironment('USER_POOL_ID',backend.auth.resources.userPool.userPoolId);
 backend.invoiceIssuer.addEnvironment('USER_POOL_CLIENT_ID',backend.auth.resources.userPoolClient.userPoolClientId);
 backend.invoiceIssuer.addEnvironment('OAUTH_CALLBACK','https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com/api/invoicing/oauth/callback');
-const invoiceLambda=backend.invoiceIssuer.resources.lambda.node.defaultChild as import('aws-cdk-lib/aws-lambda').CfnFunction;
-invoiceLambda.reservedConcurrentExecutions=1;
+// Requests use a conditional DynamoDB lease; no reserved concurrency is required.
 if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/inventory-management-system-5vbvc7'){
  new ManagedPolicy(backend.invoiceIssuer.resources.lambda,'InvokeOnly',{roles:[Role.fromRoleName(backend.invoiceIssuer.resources.lambda,'WebRuntime','BelloAmplifyStagingComputeRole')],statements:[new PolicyStatement({actions:['lambda:InvokeFunction'],resources:[backend.invoiceIssuer.resources.lambda.functionArn]})]});
 }

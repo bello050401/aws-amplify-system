@@ -19,7 +19,7 @@ export function DocumentForm({kind='invoice',embedded=false,onClose}:{kind?:'inv
  const save=async(e:React.FormEvent)=>{e.preventDefault();if(running.current||uncertain||saved)return;setError('');let value:Invoice;try{value=validateInvoice(input);}catch(e){setError((e as Error).message);return;}
   running.current=true;setBusy(true);let issuing=false;
   try{const prepared=await call('prepare');issuing=true;const result=await call('issue',{ticket:prepared.ticket,input:value});setSaved(result);setInput({recipient:'',suffix:'御中',date:todayJst(),dueDate:nextMonthEnd(),lines:[]});setProducts([]);setQ('');await loadPdf(result.pdfTicket);
-  }catch(e){if(issuing){setUncertain(true);setError(UNKNOWN_RESULT);}else setError((e as Error).message);}finally{setBusy(false);running.current=false;}
+  }catch(e){if(issuing&&(e as {code?:string}).code!=='BUSY'){setUncertain(true);setError(UNKNOWN_RESULT);}else setError((e as Error).message);}finally{setBusy(false);running.current=false;}
  };
  const download=()=>{if(!pdf)return;const u=URL.createObjectURL(pdf);const a=document.createElement('a');a.href=u;a.download='BELLO-請求書.pdf';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);};
  const share=async()=>{if(!pdf)return;try{await navigator.share({files:[new File([pdf],'BELLO-請求書.pdf',{type:'application/pdf'})]});}catch(e){if((e as Error).name!=='AbortError')setNotice('共有できませんでした。PDFダウンロードをご利用ください。');}};

@@ -5,6 +5,7 @@ import {totals,DEFAULT_CONFIG,validateInvoice,nextMonthEnd,type Invoice} from '.
 import {seal,unseal} from '../lib/invoicing/capability';
 import {NewInvoiceProvider} from '../lib/invoicing/provider';
 import {issueOnce} from '../lib/invoicing/issuance';
+import {withIssuerLease} from '../lib/invoicing/lock';
 let passed=0;async function test(name:string,fn:()=>unknown|Promise<unknown>){await fn();passed++;console.log('PASS '+name);}
 const input:Invoice={recipient:'検証用',suffix:'様',date:'2026-10-24',dueDate:'2026-11-30',lines:[{name:'椅子',price:'10000',quantity:'1',tax:'ten_percent'}]};
 async function main(){
@@ -25,6 +26,7 @@ async function main(){
  await test('作成後の通信切断でも再発行しない',async()=>{let state='READY',count=0;const store={transition:async(from:string,to:string)=>{if(state!==from)throw new Error();state=to;}};const create=async()=>{count++;throw new Error();};assert.equal((await issueOnce(store,create)).ok,false);assert.equal((await issueOnce(store,create)).ok,false);assert.equal(count,1);assert.equal(state,'UNKNOWN');});
  await test('完了状態の保存失敗も再発行しない',async()=>{let state='READY',count=0;const store={transition:async(from:string,to:string)=>{if(to==='SAVED'||state!==from)throw new Error();state=to;}};assert.equal((await issueOnce(store,async()=>{count++;return 'created';})).ok,false);await issueOnce(store,async()=>{count++;return 'created';});assert.equal(count,1);});
  await test('PDFのみ・上限検査',async()=>{await assert.rejects(()=>new NewInvoiceProvider('test',async()=>new Response('not pdf',{headers:{'content-type':'text/html'}})).downloadNew('new'));const p=await new NewInvoiceProvider('test',async()=>new Response('%PDF-1.7 test',{headers:{'content-type':'application/pdf'}})).downloadNew('new');assert.equal(p.subarray(0,5).toString(),'%PDF-');});
+ await test('複数端末の処理を直列化し、成功・失敗後に解放する',async()=>{let locked=false,calls=0;const acquire=async()=>{if(locked)return false;locked=true;return true;},release=async()=>{locked=false;};const result=await Promise.all([withIssuerLease(acquire,release,async()=>{calls++;return 'ok';}),withIssuerLease(acquire,release,async()=>{calls++;return 'unexpected';})]);assert.equal(calls,1);assert.equal((result[1] as {code:string}).code,'BUSY');assert.equal(locked,false);await assert.rejects(()=>withIssuerLease(acquire,release,async()=>{throw new Error('failure');}));assert.equal(locked,false);});
  await test('独立Lambdaに在庫・S3への書込みや帳票ログがない',()=>{const s=readFileSync('amplify/functions/invoice-issuer/handler.ts','utf8');assert.doesNotMatch(s,/console\.|S3Client|Inventory|ScanCommand/);const item=s.match(/Item:\{id:operation[^}]+\}/)?.[0];assert.ok(item);assert.doesNotMatch(item!,/input|recipient|price|pdf|billingId/);});
  console.log(`${passed} tests passed`);
 }main().catch(e=>{console.error(e);process.exitCode=1;});
