@@ -5,7 +5,7 @@ import {restageLedger,ledgerFields,restageSupplement,resolveRestageDefaults} fro
 async function main(){
 const lots=parseRestageLots(await readFile('scripts/fixtures/restage-wins.html','utf8'),'2026-10-23').lots;
 const ledger=restageLedger(lots),defaults=resolveRestageDefaults([{id:'repair',name:'補修待ち'}],[{id:'office',name:'所沢事務所'}]);
-assert.deepEqual(ledger,{version:2,date:'2026-10-23',lotCount:11,quantity:37,itemTypes:'テーブル 22点、椅子 7点、棚 2点、その他 6点',hammerTotal:211000,purchaseTotal:250668});
+assert.deepEqual(ledger,{version:2,rounding:'HALF_UP',date:'2026-10-23',lotCount:11,quantity:37,itemTypes:'テーブル 22点、椅子 7点、棚 2点、その他 6点',hammerTotal:211000,purchaseTotal:250668});
 const lot=lots.find(l=>l.isBundle)!;
 const original={...restageInventoryFields(lot),id:'one',images:['kept'],categoryIds:[],customFields:{material:'wood',__restageImport:{date:lot.date,goodsId:lot.goodsId}}};
 const changes=restageSupplement(original,lot,ledger,defaults);

@@ -5,8 +5,8 @@ import {RestageHttp} from '../lib/procurement/restageHttp';
 async function main(){
 let checks=0;const test=(name:string,fn:()=>void)=>{fn();checks++;console.log('PASS '+name);};
 test('通常4台は落札単価×1.188（4で割らない）',()=>assert.equal(purchaseUnitPrice(7000,4,false),8316));
-test('一山3点は総額を3で割り切り上げる',()=>assert.equal(purchaseUnitPrice(1001,3,true),397));
-test('整数円の計算に浮動小数の誤差が出ない',()=>{for(let n=1;n<20000;n++)assert.equal(purchaseUnitPrice(n,1,false),Number((BigInt(n)*1188n+999n)/1000n));});
+test('一山3点は総額を3で割り四捨五入する',()=>assert.equal(purchaseUnitPrice(1001,3,true),396));
+test('整数円の計算に浮動小数の誤差が出ない',()=>{for(let n=1;n<20000;n++)assert.equal(purchaseUnitPrice(n,1,false),Number((BigInt(n)*1188n+500n)/1000n));});
 test('全角・カンマ付きの一山点数を優先',()=>assert.deepEqual(lotQuantity('家具 １２点 一山','1式'),{quantity:12,isBundle:true,unit:'点'}));
 test('実際の3点山・1山表記を3点として計算',()=>assert.deepEqual(lotQuantity('C-3【3点山】ラウンジチェア','1山'),{quantity:3,isBundle:true,unit:'点'}));
 test('通常の脚数と台数',()=>{assert.equal(lotQuantity('椅子','4脚').quantity,4);assert.equal(lotQuantity('机','3台').quantity,3);});

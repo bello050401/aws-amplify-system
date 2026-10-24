@@ -1,4 +1,5 @@
 import { parse } from 'parse5';
+import { procurementPurchasePrice } from './pricing';
 
 export const RESTAGE_ORIGIN = 'https://real.next-restage.co.jp';
 export type RestageLot = { goodsId:string; date:string; name:string; sourceQuantity:string; quantity:number; unit:string; hammerPrice:number; purchasePrice:number; isBundle:boolean; itemType:string; imageUrl:string; lotNumber:string };
@@ -30,9 +31,7 @@ export function lotQuantity(name:string,sourceQuantity:string) {
 }
 export function purchaseUnitPrice(hammerPrice:number,quantity:number,isBundle:boolean) {
   if(!Number.isSafeInteger(hammerPrice)||hammerPrice<=0||hammerPrice>100000000||!Number.isSafeInteger(quantity)||quantity<1) throw Error('落札価格または数量が不正です。');
-  // Integer arithmetic avoids turning an exact yen value into +1 yen through floating-point error.
-  const denominator=1000*(isBundle?quantity:1);
-  return Math.floor((hammerPrice*1188+denominator-1)/denominator);
+  return procurementPurchasePrice('RESTAGE',hammerPrice,quantity,isBundle);
 }
 export function validateImageUrl(raw:string,goodsId:string) {
   const url=new URL(raw,RESTAGE_ORIGIN+'/restage/goodslist.action');
@@ -69,5 +68,5 @@ export function parseRestageLots(html:string,date:string) {
 
 export function restageInventoryFields(lot:RestageLot){
   return {name:lot.name,quantity:lot.quantity,unit:lot.unit,purchasePrice:lot.purchasePrice,transactionDate:lot.date,purchaseQuantity:lot.quantity,usedGoodsItemType:lot.itemType,transactionType:'買受',identityVerificationMethod:'対面している相手の勤務先や家族などに、身元確認の問い合わせ',counterpartyName:'リステージオークション',counterpartyAddress:'履歴あり',
-    adminMemo:`リステージ 商品ID:${lot.goodsId} 出品番号:${lot.lotNumber}\n開催日:${lot.date}／落札価格:${lot.hammerPrice}円／表示数量:${lot.sourceQuantity}\n購入単価:${lot.hammerPrice}×1.188${lot.isBundle?'÷'+lot.quantity:''}（1円未満切り上げ）`};
+    adminMemo:`リステージ 商品ID:${lot.goodsId} 出品番号:${lot.lotNumber}\n開催日:${lot.date}／落札価格:${lot.hammerPrice}円／表示数量:${lot.sourceQuantity}\n購入単価:${lot.hammerPrice}×1.188${lot.isBundle?'÷'+lot.quantity:''}（1円未満四捨五入）`};
 }

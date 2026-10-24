@@ -22,3 +22,10 @@ export function arrivalStatus(batch:OutboundBatch):ArrivalStatus|undefined {
  return 'WAITING';
 }
 export function arrivalLabel(status?:string){return ({WAITING:'出庫済み・到着確認待ち',APPLYING:'在庫情報を更新中',PARTIAL:'一部未完了・確認が必要',COMPLETED:'到着確認済み・更新完了'} as Record<string,string>)[status??'']??'';}
+
+export function arrivalFailureMessage(error:unknown){
+ const failure=error as {name?:string;message?:string}|null;
+ if(failure?.name==='AccessDeniedException')return 'システムの更新権限が不足しています。管理者による設定修正後に「更新を再開」してください。';
+ if(failure?.message&&/商品が変更|保管場所またはカテゴリ/.test(failure.message))return failure.message;
+ return '更新を確認できません。「更新を再開」で再確認してください。';
+}

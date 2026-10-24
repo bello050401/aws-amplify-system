@@ -41,7 +41,7 @@ export async function registerRestageLotAction(runId:string,goodsId:string){
   const preview=await getImportRecord('RUN#'+runId,'LOT#'+goodsId);
   if(!preview||Number(preview.ttl)<Date.now()/1000)return{ok:false as const,error:'取得結果の有効期限が切れました。再度取得してください。'};
   const lot=preview.lot as RestageLot,ledger=preview.ledger as RestageLedger|null,defaults=preview.defaults as RestageDefaults;
-  if(!ledger||ledger.date!==lot.date||ledger.version!==2||!defaults)return{ok:false as const,error:'全落札の台帳集計を確認できません。取得エラーを解消して再取得してください。'};
+  if(!ledger||ledger.date!==lot.date||ledger.version!==2||ledger.rounding!=='HALF_UP'||!defaults)return{ok:false as const,error:'全落札の台帳集計・価格計算を確認できません。再取得してください。'};
   const pk='DATE#'+lot.date,sk='LOT#'+lot.goodsId,id=restageInventoryId(lot);
   const previous=await getImportRecord(pk,sk);
   if(previous?.status==='REGISTERED'){
@@ -69,7 +69,7 @@ export async function registerRestageLotAction(runId:string,goodsId:string){
     const connection=await restageConnection(),image=await connection.image(lot);
     const ext=image.mime==='image/png'?'.png':image.mime==='image/webp'?'.webp':'.jpg',storageKey='inventory/'+id+ext;
     await runWithAmplifyServerContext({nextServerContext:{cookies},operation:context=>uploadData(context,{path:storageKey,data:image.bytes,options:{contentType:image.mime,cacheControl:'public, max-age=31536000, immutable'}}).result});
-    await createInventory({...restageInventoryFields(lot),...ledgerFields(ledger),categoryId:defaults.categoryId,categoryIds:[defaults.categoryId],locationId:defaults.locationId,customFields:{__restageImport:{date:lot.date,goodsId:lot.goodsId,hammerPrice:lot.hammerPrice,quantity:lot.quantity,multiplier:'1.188',rounding:'CEILING',isBundle:lot.isBundle,ledger,defaults}},images:[{kind:'uploaded',storageKey,sortOrder:0,type:'NORMAL',isPrimary:true,sourceSystem:null,sourceUrl:lot.imageUrl,thumbnailKey:null,mediumKey:null,originalHash:createHash('sha256').update(image.bytes).digest('hex'),classification:null}]},{skipRedirect:true,id});
+    await createInventory({...restageInventoryFields(lot),...ledgerFields(ledger),categoryId:defaults.categoryId,categoryIds:[defaults.categoryId],locationId:defaults.locationId,customFields:{__restageImport:{date:lot.date,goodsId:lot.goodsId,hammerPrice:lot.hammerPrice,quantity:lot.quantity,multiplier:'1.188',rounding:'HALF_UP',isBundle:lot.isBundle,ledger,defaults}},images:[{kind:'uploaded',storageKey,sortOrder:0,type:'NORMAL',isPrimary:true,sourceSystem:null,sourceUrl:lot.imageUrl,thumbnailKey:null,mediumKey:null,originalHash:createHash('sha256').update(image.bytes).digest('hex'),classification:null}]},{skipRedirect:true,id});
     await complete();return{ok:true as const,id,skipped:false};
   }catch(e){
     // A response may be lost after the inventory transaction committed. Never

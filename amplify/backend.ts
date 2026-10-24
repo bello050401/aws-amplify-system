@@ -778,7 +778,9 @@ if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'cl
   const readable = ['Category','Location'].map(name=>backend.data.resources.tables[name].tableArn);
   new ManagedPolicy(outboundStack,'RuntimeAccess',{roles:[role],statements:[
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:writable}),
-    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query'],resources:readable}),
+    // Arrival transactions check that the selected masters are still active.
+    // ConditionCheckItem is required even though these tables are never edited.
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:ConditionCheckItem'],resources:readable}),
     new PolicyStatement({actions:['ses:GetEmailIdentity'],resources:['*']}),
     new PolicyStatement({actions:['ses:SendEmail','ses:SendRawEmail'],resources:[`arn:aws:ses:us-west-2:${outboundStack.account}:identity/bello050401@gmail.com`],conditions:{StringEquals:{'ses:FromAddress':'bello050401@gmail.com'},'ForAllValues:StringEquals':{'ses:Recipients':['bello050401@gmail.com']}}}),
     new PolicyStatement({actions:['s3:GetObject','s3:PutObject','s3:DeleteObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/*')]}),

@@ -8,7 +8,7 @@ import {parseCustomFields,stringifyCustomFields} from '@/lib/inventory/customFie
 import {clearInventoryCountCache} from '@/lib/inventory/inventoryPage';
 import {getOutboundBatch,requireUuid,pendingArrivalInventoryIds} from './service';
 import {parseJsonField} from './types';
-import {isArrivalRow,type ArrivalChange,type ArrivalPreview} from './arrivalTypes';
+import {isArrivalRow,arrivalFailureMessage,type ArrivalChange,type ArrivalPreview} from './arrivalTypes';
 import {sendOutboundTransaction} from './transactionRetry';
 
 async function masters(model:string){
@@ -104,7 +104,7 @@ export async function confirmOutboundArrival(id:string,commandId:string,changes:
    const fresh=(await db.send(new GetCommand({TableName:table('OutboundItem'),Key:{id:item.id},ConsistentRead:true}))).Item;
    if(fresh?.arrivalStatus==='COMPLETED')continue;
    console.error('[outbound-arrival]',{batchId:id,itemId:item.id,error});
-   const message=error instanceof Error&&/商品が変更|保管場所またはカテゴリ/.test(error.message)?error.message:'更新を確認できません。「更新を再開」で再確認してください。';
+   const message=arrivalFailureMessage(error);
    try{await db.send(new UpdateCommand({TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET arrivalError=:error',ConditionExpression:'attribute_not_exists(arrivalStatus)',ExpressionAttributeValues:{':error':message}}));}catch{/* A concurrent retry may already have completed this item. */}
   }
  }
