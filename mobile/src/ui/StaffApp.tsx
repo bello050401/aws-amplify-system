@@ -1,4 +1,5 @@
 import {splitCategoryNames} from '../../../lib/inventory/categories';
+import {newInventoryDefaults} from '../../../lib/inventory/newInventoryDefaults';
 import { InventorySearchScreen, InventorySortSheet } from "./InventorySearchScreen";
 import { cachedInventorySearch, cachedSearchFields, mobileSearchFields, DEFAULT_INVENTORY_SORT, type InventorySearchInput, type AdvancedSearchQuery, type InventorySort } from "../domain/search";
 import React, { useEffect, useRef, useState } from "react";
@@ -188,7 +189,8 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     let options:InventoryOptions={categories:[],locations:[],statuses:[]};
     try{if(ports.loadOptions&&await ports.online())options=await ports.loadOptions();}
     catch{setError("選択肢を取得できませんでした。通信状態を確認してください。");}
-    const item:InventoryItem={id:ports.newMutationId(),sku:"保存時に自動採番",name:"",quantity:1,unit:"",location:"",category:"",condition:"",statusId:null,
+    const defaults=newInventoryDefaults(options.categories.map(name=>({name})),options.locations.map(name=>({name})));
+    const item:InventoryItem={id:ports.newMutationId(),sku:"保存時に自動採番",name:"",quantity:1,unit:"",location:defaults.location?.name??"",category:defaults.category?.name??"",condition:"",statusId:null,
       note:"",barcode:"",plannedSalePrice:null,thumbnailUrl:null,updatedAt:new Date().toISOString(),details:{},photos:[],photosComplete:true,
       statusOptions:options.statuses,categoryOptions:options.categories,locationOptions:options.locations};
     setEditor(new InventoryEditor(item,ports,true));setCreating(false);

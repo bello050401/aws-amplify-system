@@ -16,6 +16,8 @@ import {
 import type { InventoryCursorListFilters } from "./inventoryCursorList";
 import { inventoryComparator, type InventorySort } from "./searchSort";
 import {compareInventoryDateDesc} from './productDates';
+import {categoryPriorityComparator} from './categoryPriority';
+import type {CategoryRecord} from './categories';
 import { recordQuery } from "@/lib/perf/queryTiming";
 
 /**
@@ -116,7 +118,7 @@ function parseCustomFieldsValue(raw: unknown): Record<string, unknown> | null {
 }
 
 /** 判定にかけられる形へ整える。列を絞っている以外は従来の行と同じ意味になるようにする。 */
-function toCandidate(raw: RawItem): SearchableRecord & { id: string; updatedAt: string } {
+function toCandidate(raw: RawItem): SearchableRecord & CategoryRecord & { id: string; updatedAt: string } {
   return {
     ...raw,
     // 表示用の在庫IDは保存列ではなく導出値。従来経路(toListRow)と同じ関数を使う。
@@ -210,6 +212,7 @@ export interface FastSearchInput {
   /** サイドバーの絞り込み。DynamoDB の FilterExpression として押し下げる。 */
   filters?: InventoryCursorListFilters;
   sort?: InventorySort;
+  categoryPriority?: readonly (readonly string[])[];
   fieldsByKey?: Map<string, SearchFieldDef>;
   /** クイック検索の文字列(在庫ID/SKU/物品名の部分一致)。 */
   q?: string;
@@ -249,6 +252,7 @@ export async function searchInventoryFast(
 
   // その検索が実際に参照する列だけを射影に入れる。
   const referencedKeys: string[] = ["displayId", "quantity"];
+  if (input.categoryPriority?.length) referencedKeys.push('categoryId');
   if (input.sort) referencedKeys.push(input.sort.field);
   if (input.advanced) {
     for (const condition of input.advanced.query.conditions) {
@@ -274,7 +278,8 @@ export async function searchInventoryFast(
     if (q && !(input.nameOnly ? matchesNameSearch(record, q) : matchesQuickSearch(record, q))) return false;
     return true;
   });
-  filtered.sort(input.sort ? inventoryComparator(input.sort, input.fieldsByKey ?? input.advanced?.fieldsByKey ?? new Map()) : compareByUpdatedAtDesc);
+  const comparator=input.sort ? inventoryComparator(input.sort, input.fieldsByKey ?? input.advanced?.fieldsByKey ?? new Map()) : compareByUpdatedAtDesc;
+  filtered.sort(input.categoryPriority?.length ? categoryPriorityComparator<(typeof filtered)[number]>(input.categoryPriority,comparator) : comparator);
 
   const page = filtered.slice(options.offset, options.offset + options.limit);
   const byId = await hydrate(

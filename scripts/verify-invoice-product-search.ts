@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import {invoiceProductScope} from '../lib/invoicing/productSearch';
+import {categoryPriorityComparator} from '../lib/inventory/categoryPriority';
+import {compareInventoryDateDesc} from '../lib/inventory/productDates';
+import {buildScanProjection} from '../lib/inventory/searchScanProjection';
+import {newInventoryDefaults} from '../lib/inventory/newInventoryDefaults';
+
+const masters=[{id:'sale',name:'販売中'},{id:'repair',name:'補修待ち'},{id:'photo',name:'撮影待ち'},{id:'list',name:'出品待ち'},{id:'sold',name:'売り切れ'}];
+const scope=invoiceProductScope(masters);
+const row=(id:string,categories:string[],date='2026-10-25T00:00:00Z')=>({id,categoryIds:categories,updatedAt:date});
+const rows=[...Array.from({length:25},(_,i)=>row('waiting'+i,['list'])),row('excluded',['sold']),row('photography',['photo']),row('repair-new',['repair']),row('repair-old',['repair'],'2026-10-23T00:00:00Z'),row('listed-old',['sale'],'2026-01-01T00:00:00Z'),row('multiple',['photo','sale'])];
+const result=rows.filter(r=>scope.label(r)!==null).sort(categoryPriorityComparator<(typeof rows)[number]>(scope.priority,compareInventoryDateDesc));
+assert.deepEqual(result.slice(0,5).map(r=>r.id),['multiple','listed-old','repair-new','repair-old','photography']);
+assert.equal(result.length,30);
+assert.equal(result.filter(r=>r.id==='multiple').length,1);
+assert.equal(result.slice(0,20).some(r=>r.id==='listed-old'),true,'priority must apply before the 20-result page');
+assert.equal(scope.label({categoryId:'sale'}),'出品中');
+assert.equal(scope.label({categoryId:'sale',categoryIds:[]}),null,'canonical empty category list overrides legacy scalar');
+assert.equal(scope.label({categoryIds:['unrelated']}),null);
+assert.deepEqual(invoiceProductScope([]).categoryIds,[],'missing masters must never become an unrestricted search');
+assert.equal(invoiceProductScope([{id:'alias',name:'出品中'}]).label({categoryIds:['alias']}),'出品中');
+const projection=buildScanProjection(['categoryId']);
+assert.ok(projection.attributes.includes('categoryId')&&projection.attributes.includes('categoryIds'));
+const defaults=newInventoryDefaults(masters,[{id:'other',name:'別拠点'},{id:'tokoro',name:'所沢事務所'}]);
+assert.equal(defaults.category?.id,'repair');assert.equal(defaults.location?.id,'tokoro');
+assert.deepEqual(newInventoryDefaults([],[]),{category:undefined,location:undefined});
+assert.equal(masters.length,5);
+console.log('PASS: category priority before pagination, within-group date order, multi-category deduplication, excluded categories, legacy and canonical categories, missing masters, alias, projection, new-inventory master defaults.');

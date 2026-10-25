@@ -2,6 +2,7 @@ import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
 import {inventoryCategoryIds,categoryFilter} from "./categories";
 import { inventoryComparator, type InventorySort } from "./searchSort";
 import {compareInventoryDateDesc} from './productDates';
+import {categoryPriorityComparator} from './categoryPriority';
 import "server-only";
 import { requestCache } from "@/lib/amplify/requestCache";
 import { cachedMaster } from "./masterCache";
@@ -516,7 +517,7 @@ async function trySearchFast(
  */
 export async function listInventorySimpleSearch(
   filters: InventoryListFilters,
-  options: { offset: number; limit: number },
+  options: { offset: number; limit: number; categoryPriority?: readonly (readonly string[])[] },
 ): Promise<SearchPage<InventoryListRow>> {
   if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const conditions: Record<string, unknown>[] = [];
@@ -531,7 +532,7 @@ export async function listInventorySimpleSearch(
   // 決まる(lib/inventory/inventorySearchFast.ts)。使えない環境では null が
   // 返るので、そのまま従来経路へ落ちる。
   const fast = await trySearchFast(
-    { filters: { categoryIds: filters.categoryIds, locationId: filters.locationId, statusId: filters.statusId }, q: filters.q },
+    { filters: { categoryIds: filters.categoryIds, locationId: filters.locationId, statusId: filters.statusId }, q: filters.q, categoryPriority: options.categoryPriority },
     options,
   );
   if (fast) return fast;
@@ -539,6 +540,8 @@ export async function listInventorySimpleSearch(
   const all = await fetchAllInventoryRecords(conditions);
   const q = filters.q?.trim();
   const filtered = q ? all.filter((r) => matchesQuickSearch(r as unknown as SearchableRecord, q)) : all;
+
+  if (options.categoryPriority?.length) filtered.sort(categoryPriorityComparator<(typeof filtered)[number]>(options.categoryPriority,compareInventoryDateDesc));
 
   const total = filtered.length;
   const page = filtered.slice(options.offset, options.offset + options.limit);

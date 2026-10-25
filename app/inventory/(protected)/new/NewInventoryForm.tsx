@@ -1,6 +1,7 @@
 "use client";
 import {CategoryMultiSelect} from "@/app/inventory/CategoryMultiSelect";
 import {inventoryCategoryIds} from "@/lib/inventory/categories";
+import {newInventoryDefaults} from "@/lib/inventory/newInventoryDefaults";
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -151,11 +152,12 @@ interface NewInventoryFormProps {
  */
 export function NewInventoryForm({ categories, locations, statuses, customFieldDefs, units, duplicateFrom }: NewInventoryFormProps) {
   const router = useRouter();
+  const defaults = newInventoryDefaults(categories,locations);
   const [name, setName] = useState(duplicateFrom?.name ?? "");
-  const [categoryIds, setCategoryIds] = useState<string[]>(inventoryCategoryIds(duplicateFrom ?? {}));
+  const [categoryIds, setCategoryIds] = useState<string[]>(duplicateFrom ? inventoryCategoryIds(duplicateFrom) : defaults.category ? [defaults.category.id] : []);
   const categoryId = categoryIds[0] ?? "";
   const [statusId, setStatusId] = useState(duplicateFrom?.statusId ?? "");
-  const [locationId, setLocationId] = useState(duplicateFrom?.locationId ?? "");
+  const [locationId, setLocationId] = useState(duplicateFrom ? duplicateFrom.locationId ?? "" : defaults.location?.id ?? "");
   const [quantity, setQuantity] = useState(String(duplicateFrom?.quantity ?? 1));
   const [unit, setUnit] = useState(duplicateFrom?.unit ?? "");
   const [purchasePrice, setPurchasePrice] = useState(duplicateFrom?.purchasePrice != null ? String(duplicateFrom.purchasePrice) : "");
