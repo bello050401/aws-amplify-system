@@ -16,7 +16,7 @@
             <TextBlock Text="縦横比の維持・色空間(sRGB)・出力形式(JPEG)は安全な初期設定として固定されており、この画面からは変更できません。" Foreground="#9A5B00" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
               <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,10,8">
                 <TextBlock Text="出力画像 長辺(px)"/>
                 <TextBox Text="{Binding LongEdgePx, UpdateSourceTrigger=PropertyChanged}"/>
@@ -33,57 +33,15 @@
                 <TextBlock Text="サムネイル品質(1-100)"/>
                 <TextBox Text="{Binding ThumbnailJpegQuality, UpdateSourceTrigger=PropertyChanged}"/>
               </StackPanel>
-              <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,10,0">
-                <TextBlock Text="トリミング方法"/>
-                <ComboBox ItemsSource="{Binding CropMethods}" SelectedItem="{Binding CropMethod}"/>
-              </StackPanel>
-              <StackPanel Grid.Row="2" Grid.Column="1" Margin="10,0,0,0">
-                <CheckBox Content="画像方向を自動正規化" IsChecked="{Binding AutoRotate}" Margin="0,18,0,0"/>
-              </StackPanel>
             </Grid>
+            <TextBlock Text="構図はトップ画像から自動判定し、商品全体を正方形または3:2に統一します。商品が切れそうな写真は確認画面で止めます。" Foreground="#536171" TextWrapping="Wrap" Margin="0,8,0,0"/>
+            <CheckBox Content="画像方向を自動正規化" IsChecked="{Binding AutoRotate}" Margin="0,8,0,0"/>
           </StackPanel>
         </Border>
 
-        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,0,14">
-          <StackPanel>
-            <TextBlock Text="トーン補正" FontWeight="Bold" FontSize="15" Margin="0,0,0,10"/>
-            <Grid>
-              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-              <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,10,8">
-                <TextBlock Text="明るさ(-100〜100)"/>
-                <Slider Minimum="-100" Maximum="100" Value="{Binding Brightness}"/>
-              </StackPanel>
-              <StackPanel Grid.Row="0" Grid.Column="1" Margin="10,0,0,8">
-                <TextBlock Text="コントラスト(-100〜100)"/>
-                <Slider Minimum="-100" Maximum="100" Value="{Binding Contrast}"/>
-              </StackPanel>
-              <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,10,8">
-                <TextBlock Text="色温度(-100〜100)"/>
-                <Slider Minimum="-100" Maximum="100" Value="{Binding ColorTemperatureShift}"/>
-              </StackPanel>
-              <StackPanel Grid.Row="1" Grid.Column="1" Margin="10,0,0,8">
-                <TextBlock Text="彩度(-100〜100)"/>
-                <Slider Minimum="-100" Maximum="100" Value="{Binding Saturation}"/>
-              </StackPanel>
-              <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,10,0">
-                <TextBlock Text="シャープネス(0〜100)"/>
-                <Slider Minimum="0" Maximum="100" Value="{Binding Sharpness}"/>
-              </StackPanel>
-              <StackPanel Grid.Row="2" Grid.Column="1" Margin="10,0,0,0">
-                <CheckBox Content="GPS・撮影者などのメタデータを削除" IsChecked="{Binding StripMetadata}" Margin="0,18,0,0"/>
-              </StackPanel>
-            </Grid>
-          </StackPanel>
-        </Border>
+        <CheckBox Content="GPS・撮影者などのメタデータを削除" IsChecked="{Binding StripMetadata}" Margin="0,0,0,14"/>
 
-        <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,0,14">
-          <StackPanel>
-            <TextBlock Text="Lightroom (未接続時は無視されます)" FontWeight="Bold" FontSize="15" Margin="0,0,0,10"/>
-            <TextBlock Text="使用するLightroomプリセット名"/>
-            <TextBox Text="{Binding LightroomPresetName, UpdateSourceTrigger=PropertyChanged}"/>
-          </StackPanel>
-        </Border>
+        <TextBlock Text="色や明るさはLightroomプリセットで調整します。SD取込後の『仕上がりを比較して選択』画面でXMPを取り込み、写真を選んで適用してください。" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
         <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,0,14">
           <StackPanel>

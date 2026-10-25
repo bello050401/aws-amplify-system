@@ -39,6 +39,8 @@ public sealed class SqliteStationRepository(string databasePath) : IStationRepos
             """, cancellationToken);
         try { await ExecuteAsync(connection, "ALTER TABLE source_files ADD COLUMN source_mtime_utc TEXT NOT NULL DEFAULT '';", cancellationToken); }
         catch (SqliteException error) when (error.SqliteErrorCode == 1) { /* additive migration already applied */ }
+        await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_sessions_card_generation ON import_sessions(card_generation_id);", cancellationToken);
+        await ExecuteAsync(connection, "CREATE INDEX IF NOT EXISTS idx_sources_session ON source_files(session_id);", cancellationToken);
     }
 
     public async Task<ImportSession?> FindSessionAsync(Guid id, CancellationToken cancellationToken = default)
@@ -108,13 +110,60 @@ public sealed class SqliteStationRepository(string databasePath) : IStationRepos
         command.CommandText = """
             SELECT 1 FROM source_files f JOIN import_sessions s ON s.id=f.session_id
             WHERE s.card_generation_id=$generation AND f.relative_path=$relative
-              AND f.size=$size AND f.source_mtime_utc=$mtime LIMIT 1
+              AND f.size=$size AND f.source_mtime_utc=$mtime AND ($sha IS NULL OR f.sha256=$sha) LIMIT 1
             """;
         command.Parameters.AddWithValue("$generation", cardGenerationId);
         command.Parameters.AddWithValue("$relative", candidate.RelativePath);
         command.Parameters.AddWithValue("$size", candidate.Size);
         command.Parameters.AddWithValue("$mtime", candidate.ModifiedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$sha", (object?)candidate.Sha256 ?? DBNull.Value);
         return await command.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    public async Task<HashSet<SourceCandidate>> LoadKnownSourcesAsync(string cardGenerationId, CancellationToken cancellationToken = default)
+    {
+        var known = new HashSet<SourceCandidate>();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT f.relative_path, f.size, f.source_mtime_utc
+            FROM source_files f JOIN import_sessions s ON s.id=f.session_id
+            WHERE s.card_generation_id=$generation
+            """;
+        command.Parameters.AddWithValue("$generation", cardGenerationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (DateTimeOffset.TryParse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var modifiedAt))
+                known.Add(new SourceCandidate(reader.GetString(0), reader.GetInt64(1), modifiedAt));
+        }
+        return known;
+    }
+
+    public async Task<Dictionary<SourceCandidate, HashSet<string>>> LoadKnownSourceHashesAsync(string generation, string legacy,
+        CancellationToken cancellationToken = default)
+    {
+        var known = new Dictionary<SourceCandidate, HashSet<string>>();
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT f.relative_path, f.size, f.source_mtime_utc, f.sha256
+            FROM source_files f JOIN import_sessions s ON s.id=f.session_id
+            WHERE s.card_generation_id IN ($generation,$legacy)
+            """;
+        command.Parameters.AddWithValue("$generation", generation);
+        command.Parameters.AddWithValue("$legacy", legacy);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (!DateTimeOffset.TryParse(reader.GetString(2), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var modified)) continue;
+            var key = new SourceCandidate(reader.GetString(0), reader.GetInt64(1), modified);
+            if (!known.TryGetValue(key, out var hashes)) known[key] = hashes = new(StringComparer.OrdinalIgnoreCase);
+            hashes.Add(reader.GetString(3));
+        }
+        return known;
     }
 
     public async Task<IReadOnlyList<ImportSession>> ListSessionsAsync(CancellationToken cancellationToken = default)

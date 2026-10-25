@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {GetCommand,PutCommand,UpdateCommand,QueryCommand,ScanCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
+import {GetCommand,PutCommand,UpdateCommand,QueryCommand,ScanCommand,BatchGetCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import {HeadObjectCommand,GetObjectCommand,PutObjectCommand,type S3Client} from '@aws-sdk/client-s3';
 import {getSignedUrl} from '@aws-sdk/s3-request-presigner';
 import {authorizeOperation,resolveActorContext,type AuthConfig} from './auth';
@@ -7,7 +7,9 @@ import type {TrustedClaims} from './ports';
 import {err,ok} from './types';
 import {validOriginalDeclaration,ORIGINAL_RETENTION_MS,type PhotoOriginal} from './originalRetention';
 import {deleteAllPhotoObjectVersions} from '../mediaMaintenance/deletePhotoObject';
-export interface TemporaryOriginal extends PhotoOriginal {id:string;deviceId:string;sessionId:string;clientAssetId:string;importedAt:string;PK:string;SK:string}
+import {assetKey} from './keys';
+import {originalObjectKey} from './originalRetention';
+export interface TemporaryOriginal extends PhotoOriginal {id:string;deviceId:string;sessionId:string;clientAssetId:string;importedAt:string;PK:string;SK:string;assetRef?:{id:string;batchId:string;sequence:number};available?:boolean;removed?:boolean;autoDeleted?:boolean}
 const key=(id:string)=>({PK:'ORIGINAL#'+id,SK:'ORIGINAL#'+id});
 const objectKey=(id:string)=>'photo-batches/original-imports/'+id+'.bin';
 export class TemporaryOriginals{
@@ -26,7 +28,7 @@ export class TemporaryOriginals{
    const id=createHash('sha256').update(JSON.stringify([claims.deviceId,i.sessionId,i.clientAssetId])).digest('hex');
    row=(await this.d.db.send(new GetCommand({TableName:this.d.table,Key:key(id),ConsistentRead:true}))).Item as TemporaryOriginal|undefined;
    if(!row){
-    row={...key(id),id,deviceId:claims.deviceId,sessionId:i.sessionId,clientAssetId:i.clientAssetId,key:objectKey(id),fileName:i.original.fileName,mimeType:'application/octet-stream',sha256:i.original.sha256,fileSize:i.original.fileSize,importedAt:new Date(imported).toISOString(),requestedAt:new Date(now).toISOString(),expiresAt:new Date(Math.min(now,imported)+ORIGINAL_RETENTION_MS).toISOString()};
+    row={...key(id),id,deviceId:claims.deviceId,sessionId:i.sessionId,clientAssetId:i.clientAssetId,key:objectKey(id),fileName:i.original.fileName,mimeType:'application/octet-stream',sha256:i.original.sha256,fileSize:i.original.fileSize,importedAt:new Date(imported).toISOString(),requestedAt:new Date(now).toISOString(),expiresAt:new Date(now+ORIGINAL_RETENTION_MS).toISOString()};
     try{await this.d.db.send(new PutCommand({TableName:this.d.table,Item:{...row,entityType:'TemporaryOriginal',GSI1PK:'ORIGINAL_IMPORT',GSI1SK:row.importedAt+'#'+id},ConditionExpression:'attribute_not_exists(PK)'}));}
     catch{return err('CONFLICT','取込写真の保管準備を再実行してください。');}
    }
@@ -36,6 +38,11 @@ export class TemporaryOriginals{
    row=(await this.d.db.send(new GetCommand({TableName:this.d.table,Key:key(i.id),ConsistentRead:true}))).Item as TemporaryOriginal|undefined;
   }
   if(!row||row.deviceId!==claims.deviceId||row.key!==objectKey(row.id))return err('PERMISSION_DENIED','この取込写真にはアクセスできません。');
+  if(row.assetRef&&Date.parse(row.expiresAt)>now){
+   const saved=await this.resolveStored(row);
+   if(saved)return ok({id:row.id,status:'READY',expiresAt:row.expiresAt});
+   return err('UPLOAD_NOT_COMPLETE','関連する編集前写真が削除されています。原本はPCに保持しています。');
+  }
   if(row.purgedAt||Date.parse(row.expiresAt)<=now)return ok({id:row.id,status:'EXPIRED',expiresAt:row.expiresAt});
   if(op==='request'){
    if(row.uploadedAt)return ok({id:row.id,status:'READY',expiresAt:row.expiresAt});
@@ -44,31 +51,63 @@ export class TemporaryOriginals{
   }
   const h=await this.d.s3.send(new HeadObjectCommand({Bucket:this.d.bucket,Key:row.key,ChecksumMode:'ENABLED'}));
   if(h.ContentLength!==row.fileSize||h.ChecksumSHA256!==Buffer.from(row.sha256,'hex').toString('base64'))return err('UPLOAD_NOT_COMPLETE','取込原本の保存を確認できません。');
-  await this.d.db.send(new UpdateCommand({TableName:this.d.table,Key:key(row.id),UpdateExpression:'SET uploadedAt = if_not_exists(uploadedAt, :at)',ConditionExpression:'attribute_not_exists(purgedAt)',ExpressionAttributeValues:{':at':new Date(now).toISOString()}}));
+  if(!row.uploadedAt){
+   const uploadedAt=(h.LastModified??new Date(now)).toISOString(),expiresAt=new Date(Date.parse(uploadedAt)+ORIGINAL_RETENTION_MS).toISOString();
+   try{await this.d.db.send(new UpdateCommand({TableName:this.d.table,Key:key(row.id),UpdateExpression:'SET uploadedAt = :at, expiresAt = :expiry',ConditionExpression:'attribute_not_exists(purgedAt) AND attribute_not_exists(uploadedAt)',ExpressionAttributeValues:{':at':uploadedAt,':expiry':expiresAt}}));row={...row,uploadedAt,expiresAt};}
+   catch(error){if((error as Error).name!=='ConditionalCheckFailedException')throw error;const latest=(await this.d.db.send(new GetCommand({TableName:this.d.table,Key:key(row.id),ConsistentRead:true}))).Item as TemporaryOriginal|undefined;if(!latest?.uploadedAt||latest.purgedAt)return err('UPLOAD_NOT_COMPLETE','取込原本の保存を再確認してください。');row=latest;}
+  }
   return ok({id:row.id,status:'READY',expiresAt:row.expiresAt});
  }
  async list(){
   const result=await this.d.db.send(new QueryCommand({TableName:this.d.table,IndexName:'GSI1',KeyConditionExpression:'GSI1PK = :pk',ExpressionAttributeValues:{':pk':'ORIGINAL_IMPORT'},ScanIndexForward:false,Limit:200}));
-  return (result.Items??[]) as TemporaryOriginal[];
+  const rows=(result.Items??[]) as TemporaryOriginal[],refs=rows.filter(r=>r.assetRef);
+  const assets=new Map<string,{id:string;isDeleted?:boolean;purgeStartedAt?:string;original?:PhotoOriginal}>();
+  for(let n=0;n<refs.length;n+=100){const response=await this.d.db.send(new BatchGetCommand({RequestItems:{[this.d.table]:{Keys:refs.slice(n,n+100).map(r=>assetKey(r.assetRef!.batchId,r.assetRef!.sequence,r.assetRef!.id)),ConsistentRead:true}}}));for(const a of response.Responses?.[this.d.table]??[])assets.set(a.id,a as {id:string;isDeleted?:boolean;purgeStartedAt?:string;original?:PhotoOriginal});}
+  const now=this.d.now?.()??Date.now();
+  return rows.map(r=>{const a=r.assetRef?assets.get(r.assetRef.id):null;return {...r,available:!!r.uploadedAt&&Date.parse(r.expiresAt)>now&&(r.assetRef?!!a&&!a.isDeleted&&!a.original?.purgedAt&&!a.purgeStartedAt:!r.purgedAt),removed:!!r.assetRef&&!!a&&(a.isDeleted||!!a.purgeStartedAt),autoDeleted:Date.parse(r.expiresAt)<=now&&!!(r.assetRef?a?.original?.purgeRecheckedAt:r.purgeRecheckedAt)};});
  }
- async download(id:string){
+ private async resolveStored(r:TemporaryOriginal):Promise<PhotoOriginal|null>{
+  const now=this.d.now?.()??Date.now();
+  if(!r.uploadedAt||Date.parse(r.expiresAt)<=now)return null;
+  if(!r.assetRef)return !r.purgedAt&&r.key===objectKey(r.id)?r:null;
+  const a=(await this.d.db.send(new GetCommand({TableName:this.d.table,Key:assetKey(r.assetRef.batchId,r.assetRef.sequence,r.assetRef.id),ConsistentRead:true}))).Item;
+  const o=a?.original as PhotoOriginal|undefined;
+  return a&&!a.isDeleted&&!a.purgeStartedAt&&o?.uploadedAt&&!o.purgedAt&&Date.parse(o.expiresAt)>now&&o.sha256===r.sha256&&o.key===originalObjectKey(r.assetRef.batchId,r.assetRef.id)?o:null;
+ }
+ async stored(id:string){
   if(!/^[a-f0-9]{64}$/.test(id))return null;
   const r=(await this.d.db.send(new GetCommand({TableName:this.d.table,Key:key(id),ConsistentRead:true}))).Item as TemporaryOriginal|undefined;
+  return r?this.resolveStored(r):null;
+ }
+ async previewBytes(id:string){
+  const r=await this.stored(id);if(!r)return null;
+  const result=await this.d.s3.send(new GetObjectCommand({Bucket:this.d.bucket,Key:r.key}));
+  if(!result.Body||!result.ContentLength||result.ContentLength>100*1024*1024)return null;
+  return {bytes:Buffer.from(await result.Body.transformToByteArray()),fileName:r.fileName};
+ }
+ async download(id:string){
+  const r=await this.stored(id);
   const now=this.d.now?.()??Date.now();
-  if(!r?.uploadedAt||r.purgedAt||Date.parse(r.expiresAt)<=now||r.key!==objectKey(id))return null;
+  if(!r)return null;
   return getSignedUrl(this.d.s3,new GetObjectCommand({Bucket:this.d.bucket,Key:r.key,ResponseContentDisposition:"attachment; filename*=UTF-8''"+encodeURIComponent(r.fileName)}),{expiresIn:Math.max(1,Math.min(60,Math.floor((Date.parse(r.expiresAt)-now)/1000)))});
  }
  /** Called only after the associated asset's original bytes have been verified. */
- async retire(id:string,deviceId:string,sha256:string){
+ async metadata(id:string,deviceId:string,sha256:string){
   if(!/^[a-f0-9]{64}$/.test(id))throw Error('Invalid archive id');
   const row=(await this.d.db.send(new GetCommand({TableName:this.d.table,Key:key(id),ConsistentRead:true}))).Item as TemporaryOriginal|undefined;
-  if(!row)return; // Legacy saves may have no import-stage archive.
+  if(!row)return null;
   if(row.deviceId!==deviceId||row.sha256!==sha256)throw Error('Original archive mismatch');
+  if(!row.uploadedAt||Date.parse(row.expiresAt)<=(this.d.now?.()??Date.now()))throw Error('Original archive unavailable');
+  return row;
+ }
+ async retire(id:string,deviceId:string,sha256:string,assetRef?:TemporaryOriginal['assetRef']){
+  const row=await this.metadata(id,deviceId,sha256);if(!row)return;
+  if(assetRef){await this.d.db.send(new UpdateCommand({TableName:this.d.table,Key:key(id),UpdateExpression:'SET assetRef = :ref',ConditionExpression:'sha256 = :hash',ExpressionAttributeValues:{':ref':assetRef,':hash':sha256}}));row.assetRef=assetRef;}
   await this.purge(row,this.d.now?.()??Date.now());
  }
  private async purge(row:TemporaryOriginal,now:number){
   if(row.key!==objectKey(row.id))throw Error('Invalid archive key');
-  await this.d.db.send(new UpdateCommand({TableName:this.d.table,Key:key(row.id),UpdateExpression:'SET purgedAt = if_not_exists(purgedAt, :at) REMOVE GSI1PK, GSI1SK',ConditionExpression:'sha256 = :hash',ExpressionAttributeValues:{':at':new Date(now).toISOString(),':hash':row.sha256}}));
+  await this.d.db.send(new UpdateCommand({TableName:this.d.table,Key:key(row.id),UpdateExpression:'SET purgedAt = if_not_exists(purgedAt, :at)',ConditionExpression:'sha256 = :hash AND expiresAt = :expiry',ExpressionAttributeValues:{':at':new Date(now).toISOString(),':hash':row.sha256,':expiry':row.expiresAt}}));
   await deleteAllPhotoObjectVersions(this.d.s3,this.d.bucket,row.key);
   if(now>=Date.parse(row.purgedAt??row.expiresAt)+16*60000)await this.d.db.send(new UpdateCommand({TableName:this.d.table,Key:key(row.id),UpdateExpression:'SET purgeRecheckedAt = :at',ExpressionAttributeValues:{':at':new Date(now).toISOString()}}));
  }

@@ -1,10 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,12 +17,14 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="System.IO" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PhotoStation.Domain\PhotoStation.Domain.csproj" />
     <ProjectReference Include="..\..\src\PhotoStation.Application\PhotoStation.Application.csproj" />
     <ProjectReference Include="..\..\src\PhotoStation.Infrastructure\PhotoStation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\PhotoStation.Desktop\PhotoStation.Desktop.csproj" />
   </ItemGroup>
 
   <ItemGroup>

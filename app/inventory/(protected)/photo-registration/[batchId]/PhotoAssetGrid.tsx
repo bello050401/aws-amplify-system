@@ -19,13 +19,14 @@ export function PhotoAssetGrid({batchId,assets,actorRole}:{batchId:string;assets
   finally{busy.current=false;setPending(false);}
  }
  return <>
- <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
- {assets.map(asset=><li key={asset.id} className="flex flex-col gap-2 rounded border border-gray-200 bg-white p-2">
+ <ul className="grid grid-cols-1 gap-4 min-[440px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+ {assets.map(asset=><li key={asset.id} className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+  <div className="flex items-center justify-between text-xs"><span className="font-semibold text-slate-900">写真 {asset.sequence+1}</span><span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-800">{asset.sourceType==="WEB_UPLOAD"?"手動登録":"編集後"}</span></div>
   <div className="flex aspect-square items-center justify-center overflow-hidden rounded bg-gray-100">
    {/* eslint-disable-next-line @next/next/no-img-element */}
    {asset.thumbnailUrl&&!asset.isDeleted?<img src={asset.thumbnailUrl} alt={"画像 "+(asset.sequence+1)} className="h-full w-full object-contain" loading="lazy"/>:<span className="text-xs text-gray-500">{asset.isDeleted?asset.purgedAt?"削除済み":"クラウドの削除を確認してください":"画像を表示できません"}</span>}
   </div>
-  <p className="text-[11px] text-gray-600">#{asset.sequence+1} ・ {status[asset.status]??asset.status} ・ {asset.sourceType==="WEB_UPLOAD"?"Web":"撮影機"}</p>
+  <p className="text-xs text-slate-600">{status[asset.status]??asset.status}</p>
   {!asset.isDeleted&&asset.processedUrl&&<a className="flex min-h-9 items-center justify-center rounded border border-blue-300 text-xs text-blue-700" href={"/api/inventory/photo-download?id="+encodeURIComponent(asset.id)} aria-label={"画像 "+(asset.sequence+1)+" をダウンロード"}>ダウンロード</a>}
   <PhotoOriginalDownload asset={asset}/>
   {canDelete&&(!asset.isDeleted||!asset.purgedAt)&&<button type="button" disabled={pending} onClick={()=>{setError("");setTarget(asset);}} aria-label={"画像 "+(asset.sequence+1)+" を削除"} className="min-h-9 rounded border border-red-300 text-xs text-red-700 disabled:opacity-50">{asset.isDeleted?"削除を再実行":"削除"}</button>}

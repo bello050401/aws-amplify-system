@@ -2,7 +2,7 @@ export const ORIGINAL_RETENTION_MS=7*24*60*60*1000;
 export const MAX_ORIGINAL_BYTES=100*1024*1024;
 export interface PhotoOriginal {
  key:string;fileName:string;mimeType:string;fileSize:number;sha256:string;
- expiresAt:string;requestedAt:string;uploadedAt?:string;purgedAt?:string;purgeRecheckedAt?:string;
+ expiresAt:string;requestedAt:string;uploadedAt?:string;retentionStartedAt?:string;purgedAt?:string;purgeRecheckedAt?:string;
 }
 export const originalObjectKey=(batchId:string,assetId:string)=>'photo-batches/originals/'+batchId+'/'+assetId+'.bin';
 export function originalAvailable(original:PhotoOriginal|undefined,now=Date.now()){

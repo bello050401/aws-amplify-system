@@ -50,7 +50,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     }
 
     public ObservableCollection<string> PresetNames { get; } = [];
-    public string[] CropMethods { get; } = ["none", "cover"];
+    public string[] CropMethods { get; } = ["auto"];
 
     public ICommand SaveCommand { get; }
     public ICommand ResetToDefaultCommand { get; }
@@ -115,9 +115,9 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     }
 
     private EditSettings ToSettings() => new(
-        KeepAspectRatio, AutoCrop, CropMethod, AutoRotate, ColorSpace, OutputFormat,
+        KeepAspectRatio, false, "none", AutoRotate, ColorSpace, OutputFormat,
         LongEdgePx, JpegQuality, ThumbnailLongEdgePx, ThumbnailJpegQuality, StripMetadata,
-        Brightness, Contrast, ColorTemperatureShift, Saturation, Sharpness, LightroomPresetName);
+        0, 0, 0, 0, 0, null);
 
     private void Apply(EditSettings settings)
     {

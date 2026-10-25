@@ -12,15 +12,15 @@ namespace PhotoStation.Infrastructure;
 /// だけを構造化結果として解析し、それ以外の行はonStatusへそのまま流す(利用者向けの
 /// 進捗表示)。認証トークンは子プロセスの環境変数としてのみ渡し、引数・ログには出さない。
 /// </summary>
-public sealed class NodeCliPipelineRunner(string nodeExecutablePath, string cliScriptPath, ITokenProvider tokenProvider) : IPhotoPipelineRunner
+public sealed class NodeCliPipelineRunner(string nodeExecutablePath, string cliScriptPath, ITokenProvider tokenProvider, bool archiveOnly = false) : IPhotoPipelineRunner
 {
     private const string ResultPrefix = "RESULT_JSON:";
     private const string TokenEnvironmentVariable = "BELLO_PHOTO_STATION_TOKEN";
 
     public async Task<PipelineResult> RunAsync(PipelineRequest request, Action<string> onStatus, CancellationToken cancellationToken = default)
     {
-        var token = tokenProvider.GetToken();
-        if (string.IsNullOrWhiteSpace(token))
+        var token = request.Destination == "web" ? tokenProvider.GetToken() : null;
+        if (request.Destination == "web" && string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException($"{TokenEnvironmentVariable} environment variable is required");
 
         var startInfo = new ProcessStartInfo(nodeExecutablePath)
@@ -40,8 +40,13 @@ public sealed class NodeCliPipelineRunner(string nodeExecutablePath, string cliS
         AddArg(startInfo, "--history-file", request.HistoryFile);
         AddArg(startInfo, "--device-id", request.DeviceId);
         AddArg(startInfo, "--api-endpoint", request.ApiEndpoint);
+        AddArg(startInfo, "--require-selection", "true");
+        if (archiveOnly) AddArg(startInfo, "--archive-only", "true");
+        AddArg(startInfo, "--destination", request.Destination);
+        if (request.ExportDirectory is { } directory) AddArg(startInfo, "--export-directory", directory);
         if (!string.IsNullOrWhiteSpace(request.SdCardId)) AddArg(startInfo, "--sd-card-id", request.SdCardId);
-        startInfo.Environment[TokenEnvironmentVariable] = token;
+        if (token is not null) startInfo.Environment[TokenEnvironmentVariable] = token;
+        else startInfo.Environment.Remove(TokenEnvironmentVariable);
 
         using var process = new Process { StartInfo = startInfo };
         PipelineResult? result = null;
@@ -57,7 +62,9 @@ public sealed class NodeCliPipelineRunner(string nodeExecutablePath, string cliS
         if (!process.Start()) throw new InvalidOperationException("Failed to start the edit/upload pipeline process");
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-        await process.WaitForExitAsync(cancellationToken);
+        try { await process.WaitForExitAsync(cancellationToken); }
+        catch (OperationCanceledException) { if (!process.HasExited) process.Kill(entireProcessTree: true); throw; }
+        process.WaitForExit(); // Drain asynchronous result/status handlers.
 
         if (result is not null) return result;
         var detail = stderr.Length > 0 ? stderr.ToString().Trim() : $"exit code {process.ExitCode}";
@@ -80,7 +87,8 @@ public sealed class NodeCliPipelineRunner(string nodeExecutablePath, string cliS
             GetOptionalString(root, "batchCode"),
             ReadFileNames(root, "uploaded"),
             ReadFailures(root, "editFailures"),
-            ReadFailures(root, "uploadFailures"));
+            ReadFailures(root, "uploadFailures"),
+            GetOptionalString(root, "savedDirectory"));
     }
 
     private static string? GetOptionalString(JsonElement element, string property) =>

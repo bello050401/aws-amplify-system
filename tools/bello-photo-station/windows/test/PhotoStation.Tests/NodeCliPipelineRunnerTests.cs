@@ -72,6 +72,17 @@ public sealed class NodeCliPipelineRunnerTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(Request(), _ => { }));
     }
 
+    [Theory]
+    [InlineData("pc", "C:/写真 保存先")]
+    [InlineData("shared", @"\\server\共有\商品写真")]
+    public async Task LocalDestinationNeedsNoLoginAndKeepsUnicodePathsIntact(string destination, string directory)
+    {
+        var runner = new NodeCliPipelineRunner("node", FixtureScriptPath(), new FixedTokenProvider(null));
+        var result = await runner.RunAsync(Request() with { Destination = destination, ExportDirectory = directory }, _ => { });
+        Assert.Equal("SAVED_LOCAL", result.Status);
+        Assert.Equal(directory, result.SavedDirectory);
+    }
+
     private sealed class FixedTokenProvider(string? token) : ITokenProvider
     {
         public string? GetToken() => token;

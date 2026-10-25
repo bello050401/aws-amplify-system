@@ -8,7 +8,7 @@ import {SalesTrendChart} from "./SalesTrendChart";
 import {colors} from "./theme";
 export interface SalesResponse {view:SalesSummaryView;forecast:null|{averageDailySales:number;projectedMonthEndSales:number;month:number;today:number;totalDaysInMonth:number};forecastUnavailable:boolean;items?:SalesTargetItem[]}
 export function SalesScreen({load,offline,onOpen,canIssueDocuments=false}:{load:(year:number,month:number,items?:boolean)=>Promise<SalesResponse>;offline:boolean;onOpen:(id:string)=>void;canIssueDocuments?:boolean}){
-  const [document,setDocument]=useState<"invoice"|"receipt"|null>(null);
+  const [document,setDocument]=useState<"invoice"|null>(null);
   const today=nowInJst(new Date());const [month,setMonth]=useState({year:today.year,month:today.month});
   const [data,setData]=useState<SalesResponse|null>(null);const [error,setError]=useState("");const [busy,setBusy]=useState(false);
   const version=useRef(0);
@@ -20,7 +20,7 @@ export function SalesScreen({load,offline,onOpen,canIssueDocuments=false}:{load:
   const view=data?.view;const totals=view?.totals;const change=(delta:number)=>setMonth(value=>shiftYearMonth(value.year,value.month,delta));
   const button=(label:string,action:()=>void,disabled=false)=><Pressable accessibilityRole="button" disabled={disabled} onPress={action} style={[s.button,disabled&&{opacity:.4}]}><Text style={s.link}>{label}</Text></Pressable>;
   const tile=(label:string,value:string)=><View style={s.tile} key={label}><Text style={s.tileLabel}>{label}</Text><Text style={s.amount}>{value}</Text></View>;
-  if(document&&canIssueDocuments)return <DocumentEntry kind={document} onClose={()=>setDocument(null)}/>;
+  if(document&&canIssueDocuments)return <DocumentEntry onClose={()=>setDocument(null)}/>;
   return <View style={s.screen}>
     <View style={s.controls}>
       <View style={s.row}>
@@ -41,7 +41,7 @@ export function SalesScreen({load,offline,onOpen,canIssueDocuments=false}:{load:
         <Text style={s.note}>送料は原価に含みません。</Text>
         <View style={s.chart}><Text style={s.heading}>直近12ヶ月の推移</Text><SalesTrendChart key={month.year+"-"+month.month} points={view.trend}/></View>
       </>}
-      {canIssueDocuments&&<View style={s.section}><Text style={s.heading}>帳票発行</Text>{button("請求書発行",()=>setDocument("invoice"),offline)}{button("領収書発行",()=>setDocument("receipt"),offline)}</View>}
+      {canIssueDocuments&&<View style={s.section}><Text style={s.heading}>帳票発行</Text>{button("請求書発行",()=>setDocument("invoice"),offline)}</View>}
     </ScrollView>
     <Modal visible={picker} transparent animationType="slide" onRequestClose={()=>setPicker(false)}>
       <View style={s.shade}><Pressable accessibilityRole="button" accessibilityLabel="年月選択を閉じる" style={StyleSheet.absoluteFill} onPress={()=>setPicker(false)}/>

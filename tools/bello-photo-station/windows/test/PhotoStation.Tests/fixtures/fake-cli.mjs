@@ -3,7 +3,11 @@
 // 独立に、C#側(NodeCliPipelineRunner)のサブプロセス配線 —
 // 標準出力の行単位status読み取り・RESULT_JSON:解析・非ゼロ終了コード・
 // トークンが環境変数で渡ること — をsharp等の外部依存なしで検証できるようにする。
-if (!process.env.BELLO_PHOTO_STATION_TOKEN) {
+if (process.argv.includes('pc') || process.argv.includes('shared')) {
+  if (process.env.BELLO_PHOTO_STATION_TOKEN) throw new Error('Local save must not receive credentials');
+  const directory = process.argv[process.argv.indexOf('--export-directory') + 1];
+  console.log(`RESULT_JSON:${JSON.stringify({status: 'SAVED_LOCAL', savedDirectory: directory, editFailures: [], uploadFailures: []})}`);
+} else if (!process.env.BELLO_PHOTO_STATION_TOKEN) {
   console.error("BELLO_PHOTO_STATION_TOKEN environment variable is required");
   process.exitCode = 1;
 } else {

@@ -6,6 +6,37 @@ namespace PhotoStation.Tests;
 
 public sealed class PhotoUploadServiceTests : IDisposable
 {
+    [Theory]
+    [InlineData("https://dq30ujzf5d.execute-api.us-west-2.amazonaws.com", true)]
+    [InlineData("https://dq30ujzf5d.execute-api.us-west-2.amazonaws.com/", true)]
+    [InlineData("http://dq30ujzf5d.execute-api.us-west-2.amazonaws.com/", false)]
+    [InlineData("https://production.example.com/", false)]
+    [InlineData("https://dq30ujzf5d.execute-api.us-west-2.amazonaws.com.evil.test/", false)]
+    [InlineData("https://dq30ujzf5d.execute-api.us-west-2.amazonaws.com/path", false)]
+    public void DesktopValidationEndpointIsAllowlisted(string endpoint, bool expected) =>
+        Assert.Equal(expected, PhotoEndpointSafety.IsAllowedValidationEndpoint(endpoint));
+
+    [Fact]
+    public void ValidationTokenMustBeForDedicatedPoolAndStillUsable()
+    {
+        var now = DateTimeOffset.Parse("2026-09-23T00:00:00Z");
+        static string Token(string issuer, string group, long expiry)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object> {
+                ["iss"] = issuer, ["cognito:groups"] = new[] { group }, ["exp"] = expiry,
+                ["aud"] = "3nm24ejtua3inrg0sdmpbn2vqs", ["token_use"] = "id",
+            });
+            return "header." + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_') + ".signature";
+        }
+        const string pool = "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_bKfdql8QT";
+        Assert.True(PhotoEndpointSafety.HasUsableValidationToken(Token(pool, "PHOTO_DEVICE", now.AddHours(1).ToUnixTimeSeconds()), now));
+        Assert.False(PhotoEndpointSafety.HasUsableValidationToken(Token(pool, "PHOTO_DEVICE", now.AddMinutes(1).ToUnixTimeSeconds()), now));
+        Assert.False(PhotoEndpointSafety.HasUsableValidationToken(Token(pool, "ADMIN", now.AddHours(1).ToUnixTimeSeconds()), now));
+        Assert.False(PhotoEndpointSafety.HasUsableValidationToken(Token("https://cognito-idp.us-west-2.amazonaws.com/another", "PHOTO_DEVICE", now.AddHours(1).ToUnixTimeSeconds()), now));
+        Assert.False(PhotoEndpointSafety.HasUsableValidationToken("invalid", now));
+    }
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "bello-photo-upload-tests", Guid.NewGuid().ToString("N"));
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true); }
 
@@ -99,6 +130,29 @@ public sealed class PhotoUploadServiceTests : IDisposable
         var service = new PhotoUploadService(repository, new FakeRunner(new PipelineResult("COMPLETE", null, null, [], [], [])));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(Request(session), _ => { }));
+    }
+
+    [Fact]
+    public async Task LocalSaveHasDistinctStateAndCanLaterSaveToWeb()
+    {
+        var (repository, session) = await LocalSecuredSessionAsync("local-save.sqlite");
+        var service = new PhotoUploadService(repository, new FakeRunner(new PipelineResult("SAVED_LOCAL", null, null, [], [], [], "C:/Photos/BELLO-test")));
+        var outcome = await service.UploadAsync(Request(session) with { Destination = "pc", ExportDirectory = "C:/Photos" }, _ => { });
+        Assert.Equal(ImportSessionState.LocalSaved, outcome.State);
+        Assert.Equal(ImportSessionState.LocalSaved, (await repository.FindSessionAsync(session.Id))!.State);
+        var web = new PhotoUploadService(repository, new FakeRunner(new PipelineResult("COMPLETE", "b1", "PB-1", ["a.jpg"], [], [])));
+        Assert.Equal(ImportSessionState.CloudVerifying, (await web.UploadAsync(Request(session), _ => { })).State);
+    }
+
+    [Theory]
+    [InlineData("SAVED_LOCAL", "web")]
+    [InlineData("COMPLETE", "shared")]
+    [InlineData("UNKNOWN", "web")]
+    public async Task MismatchedOrUnknownCompletionCannotBeReportedAsSuccess(string status, string destination)
+    {
+        var (repository, session) = await LocalSecuredSessionAsync();
+        var service = new PhotoUploadService(repository, new FakeRunner(new PipelineResult(status, null, null, [], [], [], "C:/Photos")));
+        Assert.Equal(ImportSessionState.NeedsReview, (await service.UploadAsync(Request(session) with { Destination = destination, ExportDirectory = "C:/Photos" }, _ => { })).State);
     }
 
     private sealed class FakeRunner(PipelineResult result) : IPhotoPipelineRunner

@@ -283,7 +283,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
       // `size`/`columns` props FormFields.tsx/ExtendedFieldsSection.tsx
       // gained, both defaulting to their exact pre-Phase-C look) and
       // nowhere else.
-      className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_220px] lg:items-start"
+      className="relative grid grid-cols-1 gap-6 pb-24 lg:grid-cols-[220px_minmax(0,1fr)_230px] xl:grid-cols-[280px_minmax(0,1fr)_260px] lg:items-start"
     >
       {/* 単位欄のdatalist候補(夜間開発指示書 §10) — 自由入力のまま、単位マスタの値を候補として提示する。 */}
       <datalist id="unit-options">
@@ -295,7 +295,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
       {/* タイトルはInventoryHeader側(edit/page.tsx)に表示済み — ここでは
           未保存変更ガードを経由する「詳細へ戻る」だけを残す。全カラムの
           上に1本だけ表示する。 */}
-      <div className="flex items-center justify-end lg:col-span-2 xl:col-span-3">
+      <div className="flex items-center justify-end lg:col-span-3">
         <button type="button" onClick={() => guardedNavigate(`/inventory/${item.id}`)} className="text-[12px] text-gray-500 hover:text-gray-900">
           詳細へ戻る
         </button>
@@ -323,23 +323,11 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
           数 — 既定値"compact"のNewInventoryForm.tsxの見た目は一切変わ
           らない。 */}
       <div className="lg:col-start-2">
-        <p className="mb-3 text-[11px] font-bold text-gray-400">基本情報</p>
+        <p className="mb-3 text-[11px] font-bold text-gray-400">物品情報</p>
         <div className="grid grid-cols-1 gap-4">
           <LabeledInput label="物品名" required value={name} onChange={setName} size="large" />
           <BrandPicker value={customFieldValues.belloBrand ?? ""} onChange={(value) => handleCustomFieldChange("belloBrand", value)} />
           <CategoryMultiSelect value={categoryIds} onChange={setCategoryIds} options={categories}/>
-          <LabeledSelect
-            label="保管場所"
-            value={locationId}
-            onChange={setLocationId}
-            options={locations.map((l) => ({ value: l.id, label: l.name }))}
-            size="large"
-          />
-
-          <div className="grid grid-cols-2 gap-4">
-            <QuantityInput value={quantity} onChange={setQuantity}/>
-            <LabeledInput label="単位" value={unit} onChange={setUnit} placeholder="個" list="unit-options" size="large" />
-          </div>
           <LabeledInput label="QRコード・バーコード" value={barcode} onChange={setBarcode} size="large" />
 
           <div>
@@ -406,22 +394,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
 
         {error && <p className="mt-4 text-[13px] text-red-600">{error}</p>}
 
-        <div className="sticky bottom-0 z-20 mt-6 flex gap-2 border-t bg-white/95 py-3">
-          <button
-            type="submit"
-            disabled={submitting || imageEditorHasUploading(normalImageSlots) || imageEditorHasUploading(damageImageSlots)}
-            className="bg-gray-900 px-5 py-3 text-[15px] font-bold text-white disabled:opacity-50"
-          >
-            {submitting ? "保存中…" : "保存する"}
-          </button>
-          <button
-            type="button"
-            onClick={() => guardedNavigate(returnTo)}
-            className="border border-gray-300 px-5 py-3 text-[15px] text-gray-700"
-          >
-            キャンセル
-          </button>
-        </div>
+
       </div>
 
       {/* 右カラム(任意・補足情報) — 在庫ID/SKU/ZAICO連携状況/登録・更新
@@ -429,8 +402,21 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
           ンには一切関わらない。参照レイアウトの「右=補足情報」に対応
           — デスクトップでは追従表示(sticky)、モバイルではフォームの
           後ろに単純に積まれる。 */}
-      <div className="lg:col-start-2 xl:col-start-3">
-        <div className="border border-gray-200 p-4 lg:sticky lg:top-4">
+      <aside className="space-y-4 lg:col-start-3 lg:row-start-2 lg:sticky lg:top-4">
+        <section className="space-y-4 rounded-lg border border-amber-100 bg-[#fff3e4] p-4"><h3 className="font-semibold">在庫情報</h3>          <LabeledSelect
+            label="保管場所"
+            value={locationId}
+            onChange={setLocationId}
+            options={locations.map((l) => ({ value: l.id, label: l.name }))}
+            size="large"
+          />
+
+          <div className="grid grid-cols-1 gap-4">
+            <QuantityInput value={quantity} onChange={setQuantity}/>
+            <LabeledInput label="単位" value={unit} onChange={setUnit} placeholder="個" list="unit-options" size="large" />
+          </div>
+</section>
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
           <p className="mb-2 text-[11px] font-bold text-gray-400">付加情報</p>
           <dl className="space-y-2 text-[12px] text-gray-600">
             <div>
@@ -457,7 +443,23 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
             </div>
           </dl>
         </div>
-      </div>
+      </aside>
+        <div className="fixed bottom-0 left-16 right-0 z-30 flex justify-center gap-3 border-t bg-white/95 px-6 py-3 shadow-[0_-2px_8px_#00000008]">
+          <button
+            type="button"
+            onClick={() => guardedNavigate(returnTo)}
+            className="border border-gray-300 px-5 py-3 text-[15px] text-gray-700"
+          >
+            キャンセル
+          </button>          <button
+            type="submit"
+            disabled={submitting || imageEditorHasUploading(normalImageSlots) || imageEditorHasUploading(damageImageSlots)}
+            className="bg-gray-900 px-5 py-3 text-[15px] font-bold text-white disabled:opacity-50"
+          >
+            {submitting ? "保存中…" : "保存する"}
+          </button>
+
+        </div>
     </form>
   );
 }

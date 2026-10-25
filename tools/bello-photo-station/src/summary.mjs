@@ -4,6 +4,7 @@
  * 表示テキストの生成だけをここに切り出す。
  */
 export function formatSummary(result, { photoCount }) {
+  if (result.status === 'SAVED_LOCAL') return `写真${result.saved.length}枚を保存しました。\n保存先：${result.savedDirectory}\nSDカードを取り外せます。`;
   if (result.status === "COMPLETE") {
     return [
       `写真${photoCount}枚の編集と検証環境へのアップロードが完了しました。`,

@@ -1,5 +1,4 @@
 // Shared by the web app and the isolated issuer. No persistence or network access.
-export const RECEIPT_URL = 'https://invoice.moneyforward.com/receipts/new';
 export const UNKNOWN_RESULT = '請求書の保存結果を確認できませんでした。重複発行を防ぐため、マネーフォワード側で確認してください。';
 export const TAXES = {ten_percent: {label:'10%',rate:10}, eight_percent_as_reduced_tax_rate:{label:'8%（軽減）',rate:8}, non_taxable:{label:'非課税',rate:0}, untaxable:{label:'不課税',rate:0}} as const;
 export type Tax = keyof typeof TAXES;

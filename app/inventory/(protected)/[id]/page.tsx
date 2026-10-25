@@ -6,6 +6,7 @@ import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { ShippingReferencePriceSection } from "./listing/ShippingReferencePriceSection";
 import Link from "next/link";
 import SoldOutButton from './SoldOutButton';
+import StockSplitButton from './StockSplitButton';
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { canEditInventory, canHardDeleteInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
@@ -295,6 +296,7 @@ export default async function InventoryDetailPage({
                   編集
                 </Link>
                 {role === "ADMIN" && <SoldOutButton item={item}/>}
+                <StockSplitButton item={item}/>
                 <Link prefetch={false} href={`/inventory/new?duplicateFrom=${item.id}`} className="border border-gray-300 px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
                   複製
                 </Link>

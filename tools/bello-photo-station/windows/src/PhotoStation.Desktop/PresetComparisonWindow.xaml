@@ -1,0 +1,61 @@
+<Window x:Class="PhotoStation.Desktop.PresetComparisonWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:PhotoStation.Desktop"
+ Title="商品の現像設定 - BELLO Photo Station" Width="1450" Height="900" MinWidth="1000" MinHeight="650" Background="#F4F6F8">
+ <Grid Margin="18">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <StackPanel>
+   <TextBlock Text="商品の現像設定" FontSize="25" FontWeight="SemiBold"/>
+   <TextBlock Text="左の一覧で写真を選び『トップにする』で変更できます。標準の仕上がりでよければ、そのまま下の保存ボタンを押してください。" Margin="0,5,0,8" TextWrapping="Wrap"/>
+   <Expander x:Name="PresetManagement" Header="プリセットの管理" IsExpanded="True" Margin="0,0,0,8">
+   <WrapPanel>
+    <Button x:Name="AddButton" Content="XMPを取り込む…" Click="Add_Click" Padding="12,7"/>
+    <TextBlock Text="右側で選んだプリセットをこの商品全体に使用します" Margin="14,0,6,0" VerticalAlignment="Center"/>
+    <Button x:Name="SetDefaultButton" Content="右のプリセットを標準にする" Click="SetDefault_Click" Padding="12,7" Margin="8,0,0,0"/>
+    <Button x:Name="DeleteButton" Content="右のプリセットを削除" Click="Delete_Click" Padding="12,7" Margin="8,0,0,0"/>
+    <Button x:Name="RefreshButton" Content="一覧を更新" Click="Refresh_Click" Padding="12,7" Margin="8,0,0,0"/>
+    <TextBlock x:Name="PresetCount" VerticalAlignment="Center" Margin="10,0,0,0"/>
+   </WrapPanel>
+   </Expander>
+  </StackPanel>
+  <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="205"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <DockPanel Margin="0,0,12,0">
+    <StackPanel DockPanel.Dock="Top"><TextBlock Text="商品の写真" FontWeight="Bold"/>
+     <TextBlock x:Name="TopStatus" TextWrapping="Wrap" Foreground="#A23428" Margin="0,5,0,8"/>
+     <Button x:Name="MakeTopButton" Content="トップにする" Click="MakeTop_Click" Margin="0,0,0,8" Padding="10,8"/>
+    </StackPanel>
+    <ListBox x:Name="Sources" SelectionMode="Single" MouseDoubleClick="Source_DoubleClick" VirtualizingStackPanel.IsVirtualizing="True" ScrollViewer.CanContentScroll="True">
+     <ListBox.ItemTemplate><DataTemplate><StackPanel Margin="4" Width="165">
+      <Image Source="{Binding Thumbnail}" Height="105" Stretch="Uniform"/>
+      <TextBlock Text="{Binding TopLabel}" Foreground="#A23428" FontWeight="Bold"/>
+      <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+     </StackPanel></DataTemplate></ListBox.ItemTemplate>
+    </ListBox>
+   </DockPanel>
+   <Grid Grid.Column="1" Margin="0,0,8,0">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <TextBlock Text="左の写真" FontWeight="Bold" Margin="0,0,0,5"/>
+    <ComboBox Grid.Row="1" x:Name="LeftChoice" DisplayMemberPath="Name" SelectionChanged="ComparisonChoice_Changed" Margin="0,0,0,8"/>
+    <Border Grid.Row="2" Background="White" BorderBrush="#D5DCE5" BorderThickness="1" CornerRadius="8" Padding="6">
+     <Image x:Name="LeftImage" Stretch="Uniform" MouseLeftButtonDown="Zoom_Click" ToolTip="タッチモードではタップで拡大"/>
+    </Border>
+   </Grid>
+   <Grid Grid.Column="2" Margin="8,0,0,0">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <TextBlock Text="右：この商品に使う仕上がり" FontWeight="Bold" Margin="0,0,0,5" TextWrapping="Wrap"/>
+    <ComboBox Grid.Row="1" x:Name="RightChoice" DisplayMemberPath="Name" SelectionChanged="ComparisonChoice_Changed" Margin="0,0,0,8"/>
+    <Border Grid.Row="2" Background="White" BorderBrush="#D5DCE5" BorderThickness="1" CornerRadius="8" Padding="6">
+     <Image x:Name="RightImage" Stretch="Uniform" MouseLeftButtonDown="Zoom_Click" ToolTip="タッチモードではタップで拡大"/>
+    </Border>
+   </Grid>
+  </Grid>
+  <StackPanel Grid.Row="2" Margin="0,12,0,0">
+   <TextBlock x:Name="Status" Foreground="#536171" TextWrapping="Wrap" Margin="0,0,0,7"/>
+   <WrapPanel HorizontalAlignment="Right">
+    <Button x:Name="PreviewButton" Content="比較画像を生成" Click="Preview_Click" Padding="14,8"/>
+    <Button x:Name="FramingPreviewButton" Content="構図とスタンプを確認" Click="FramingPreview_Click" Padding="14,8" Margin="8,0,0,0"/>
+    <Button x:Name="ManualFramingButton" Content="構図を手動で調整" Click="ManualFraming_Click" Padding="14,8" Margin="8,0,0,0"/>
+    <Button x:Name="FinishButton" Content="このプリセットで全画像を処理・保存" Click="Finish_Click" Padding="14,8" Margin="8,0,0,0"/>
+    <Button Content="後で続ける" Click="Later_Click" Padding="12,8" Margin="8,0,0,0"/>
+   </WrapPanel>
+  </StackPanel>
+ </Grid>
+</Window>

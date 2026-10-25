@@ -45,7 +45,7 @@ export const NAV_ITEMS = [
   { key: "outbound", label: "出庫", href: "/inventory/outbound", enabled: true },
   // BELLO統合業務OS指示書(2026-08-30) §38: 「メッセージ」をEC出品の
   // 直下へ追加。
-  { key: "documents", label: "請求書・領収書発行", href: "/inventory/documents", enabled: true },
+  { key: "documents", label: "請求書発行", href: "/inventory/documents", enabled: true },
   { key: "messages", label: "メッセージ", href: "/inventory/messages", enabled: true },
   { key: "settings", label: "設定", href: "/inventory/settings", enabled: true },
 ] as const;
@@ -186,7 +186,7 @@ export function InventoryNavRail({canIssueDocuments=false}:{canIssueDocuments?:b
                 className={`w-full ${className}`}
               >
                 <span className="relative inline-flex">
-                  {item.label}
+                  {item.key === "documents" ? <span>請求書<br/>発行</span> : item.label}
                   {item.key === "photo-registration" && photoRegistrationBadge && photoRegistrationBadge.count > 0 ? (
                     <span
                       aria-label={`未登録の画像登録バッチが${photoRegistrationBadge.hasMore ? "99件以上" : `${photoRegistrationBadge.count}件`}あります`}

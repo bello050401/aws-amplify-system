@@ -1,4 +1,12 @@
+using System.Globalization;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using PhotoStation.Application;
+using PhotoStation.Desktop;
 using PhotoStation.Domain;
 using PhotoStation.Infrastructure;
 
@@ -65,6 +73,38 @@ public sealed class PhotoStationTests : IDisposable
     }
 
     [Fact]
+    public async Task TwoProductsOnOneCardRemainSeparateSessions()
+    {
+        var source = Path.Combine(_root, "card", "DCIM"); Directory.CreateDirectory(source);
+        var candidates = new List<SourceCandidate>();
+        foreach (var name in new[] { "chair-1.jpg", "chair-2.jpg", "lamp-1.jpg", "lamp-2.jpg" }) {
+            var file = Path.Combine(source, name); await File.WriteAllTextAsync(file, name);
+            var info = new FileInfo(file);
+            candidates.Add(new SourceCandidate(name, info.Length, info.LastWriteTimeUtc));
+        }
+        var repository = new SqliteStationRepository(Path.Combine(_root, "db", "station.sqlite"));
+        await repository.InitializeAsync();
+        var service = new ImportService(repository, new VerifiedFileCopier());
+        var chairId = Guid.NewGuid(); var lampId = Guid.NewGuid();
+        var chair = await service.ImportAsync(new ImportRequest(chairId, "staging", "TEST", "SAME-CARD", source,
+            Path.Combine(_root, "sessions", chairId.ToString()), candidates.Take(2).ToArray()));
+        Assert.Equal(2, chair.VerifiedCount);
+        foreach (var item in candidates.Take(2)) Assert.True(await repository.IsSourceKnownAsync("SAME-CARD", item));
+        foreach (var item in candidates.Skip(2)) Assert.False(await repository.IsSourceKnownAsync("SAME-CARD", item));
+        var known = await repository.LoadKnownSourcesAsync("SAME-CARD");
+        Assert.Equal(2, known.Count);
+        foreach (var item in candidates.Take(2)) Assert.Contains(item, known);
+        foreach (var item in candidates.Skip(2)) Assert.DoesNotContain(item, known);
+        Assert.Empty(await repository.LoadKnownSourcesAsync("OTHER-CARD"));
+        var lamp = await service.ImportAsync(new ImportRequest(lampId, "staging", "TEST", "SAME-CARD", source,
+            Path.Combine(_root, "sessions", lampId.ToString()), candidates.Skip(2).ToArray()));
+        Assert.Equal(2, lamp.VerifiedCount);
+        Assert.Equal(2, (await repository.ListSessionsAsync()).Count);
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(_root, "sessions", chairId.ToString(), "source")).Length);
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(_root, "sessions", lampId.ToString(), "source")).Length);
+    }
+
+    [Fact]
     public async Task InsertedCardCanBeReadAndCopiedWithoutChangingSource()
     {
         var source = Environment.GetEnvironmentVariable("BELLO_TEST_CARD_ROOT");
@@ -119,4 +159,112 @@ public sealed class PhotoStationTests : IDisposable
     }
 
     private static ImportSession Session() => new(Guid.NewGuid(), "staging", "STATION-1", "GEN-1", "manifest", DateTimeOffset.UtcNow);
+
+    [Fact]
+    public void ThumbnailConverterDownsizesInsteadOfDecodingFullImage()
+    {
+        RunSta(() =>
+        {
+            Directory.CreateDirectory(_root);
+            var path = Path.Combine(_root, "large.jpg");
+            SaveTestJpeg(path, 800, 600);
+            var converterType = typeof(ProductImageSelectionWindow).GetNestedType("ThumbnailConverter", BindingFlags.NonPublic)!;
+            var converter = (IValueConverter)Activator.CreateInstance(converterType)!;
+            var thumbnail = (BitmapImage)converter.Convert(path, typeof(ImageSource), null!, CultureInfo.InvariantCulture)!;
+            Assert.True(thumbnail.PixelWidth < 800, "candidate list must decode a reduced thumbnail, not the full-size image");
+            Assert.Equal(360, thumbnail.PixelWidth);
+        });
+    }
+
+    [Fact]
+    public void CandidateGridShowsThreeColumnsAndTogglesSelection()
+    {
+        RunSta(() =>
+        {
+            Directory.CreateDirectory(_root);
+            var files = new List<FileInfo>();
+            for (var i = 0; i < 3; i++)
+            {
+                var path = Path.Combine(_root, $"photo{i}.jpg");
+                SaveTestJpeg(path, 400, 300);
+                files.Add(new FileInfo(path));
+            }
+            var window = new ProductImageSelectionWindow(files);
+            var photos = (ListBox)typeof(ProductImageSelectionWindow)
+                .GetField("_photos", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(window)!;
+            var count = (TextBlock)typeof(ProductImageSelectionWindow)
+                .GetField("_count", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(window)!;
+
+            photos.ItemsPanel.Seal();
+            var wrapPanel = (WrapPanel)photos.ItemsPanel.LoadContent();
+            var columns = Math.Floor((window.Width - 32) / wrapPanel.ItemWidth);
+            Assert.True(columns is >= 2 and <= 3,
+                "candidates must lay out as a two-to-three column grid of large thumbnails");
+
+            var importButton = FindButton(window, "選択した1商品を取り込む");
+            Assert.False(importButton.IsEnabled);
+            Assert.Equal("", count.Text);
+
+            photos.SelectedItems.Add(files[0]);
+            Assert.True(importButton.IsEnabled);
+            Assert.Equal("1枚を選択", count.Text);
+
+            photos.SelectedItems.Add(files[1]);
+            Assert.Equal("2枚を選択", count.Text);
+
+            photos.SelectedItems.Remove(files[0]);
+            Assert.Equal("1枚を選択", count.Text);
+
+            photos.SelectedItems.Remove(files[1]);
+            Assert.False(importButton.IsEnabled);
+            Assert.Equal("0枚を選択", count.Text);
+
+            var style = (Style)typeof(ProductImageSelectionWindow)
+                .GetMethod("BuildSelectionStyle", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, null)!;
+            var trigger = Assert.IsType<Trigger>(Assert.Single(style.Triggers));
+            Assert.Equal(ListBoxItem.IsSelectedProperty, trigger.Property);
+        });
+    }
+
+    private static Button FindButton(DependencyObject root, string content) =>
+        FindButtonOrNull(root, content) ?? throw new InvalidOperationException($"Button '{content}' not found");
+
+    private static Button? FindButtonOrNull(DependencyObject root, string content)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(root))
+        {
+            if (child is not DependencyObject node) continue;
+            if (node is Button button && Equals(button.Content, content)) return button;
+            var found = FindButtonOrNull(node, content);
+            if (found is not null) return found;
+        }
+        return null;
+    }
+
+    private static void SaveTestJpeg(string path, int width, int height)
+    {
+        var visual = new DrawingVisual();
+        using (var context = visual.RenderOpen())
+            context.DrawRectangle(Brushes.White, null, new Rect(0, 0, width, height));
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        var encoder = new JpegBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+    }
+
+    private static void RunSta(Action action)
+    {
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+        var thread = new Thread(() =>
+        {
+            try { action(); }
+            catch (Exception error) { failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        failure?.Throw();
+    }
 }

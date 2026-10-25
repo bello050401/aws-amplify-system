@@ -12,7 +12,8 @@ public sealed record PipelineResult(
     string? BatchCode,
     IReadOnlyList<string> UploadedFileNames,
     IReadOnlyList<PipelineFailure> EditFailures,
-    IReadOnlyList<PipelineFailure> UploadFailures);
+    IReadOnlyList<PipelineFailure> UploadFailures,
+    string? SavedDirectory = null);
 
 public sealed record PipelineRequest(
     string SessionId,
@@ -22,7 +23,9 @@ public sealed record PipelineRequest(
     string HistoryFile,
     string DeviceId,
     string ApiEndpoint,
-    string? SdCardId = null);
+    string? SdCardId = null,
+    string Destination = "web",
+    string? ExportDirectory = null);
 
 /// <summary>
 /// 設定読込→一括編集→検証環境へのアップロードまでを1セッション分実行する。

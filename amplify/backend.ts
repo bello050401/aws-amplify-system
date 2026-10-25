@@ -4,7 +4,7 @@ import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LogRetention, RetentionDays } from "aws-cdk-lib/aws-logs";
-import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
+import { AttributeType, BillingMode, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Effect, ManagedPolicy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
@@ -54,6 +54,10 @@ const backend = defineBackend({
 // Isolated create-only invoicing. No invoice data/PDF bucket or data model exists.
 const invoiceStack=backend.createStack('InvoiceIssuance');
 const invoiceOperations=new Table(invoiceStack,'Operations',{partitionKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.DESTROY});
+// Reusable names only. Invoice contents and PDFs never enter this table.
+const invoiceAddressees=new Table(invoiceStack,'Addressees',{partitionKey:{name:'directory',type:AttributeType.STRING},sortKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:true}});
+invoiceAddressees.grantReadWriteData(backend.invoiceIssuer.resources.lambda);
+backend.invoiceIssuer.addEnvironment('ADDRESSEES_TABLE',invoiceAddressees.tableName);
 const invoiceSecret=new Secret(invoiceStack,'Credentials',{generateSecretString:{secretStringTemplate:JSON.stringify({settingsVerified:false}),generateStringKey:'key',passwordLength:64,excludePunctuation:true}});
 invoiceSecret.grantRead(backend.invoiceIssuer.resources.lambda);
 invoiceSecret.grantWrite(backend.invoiceIssuer.resources.lambda);
@@ -142,6 +146,7 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
     new ManagedPolicy(photoWebStack,"ExactPhotoDeletion",{
       roles:[Role.fromRoleName(photoWebStack,"RuntimeRole","BelloAmplifyStagingComputeRole")],
       statements:[
+        ...(process.env.PHOTO_REGISTRATION_TABLE_NAME?[new PolicyStatement({actions:['dynamodb:BatchGetItem'],resources:[`arn:aws:dynamodb:${photoWebStack.region}:${photoWebStack.account}:table/${process.env.PHOTO_REGISTRATION_TABLE_NAME}`]})]:[]),
         new PolicyStatement({actions:["s3:ListBucketVersions"],resources:["arn:aws:s3:::"+photoBucket],conditions:{StringLike:{"s3:prefix":["photo-batches/*"]}}}),
         new PolicyStatement({actions:["s3:DeleteObjectVersion"],resources:["arn:aws:s3:::"+photoBucket+"/photo-batches/*"]}),
       ],

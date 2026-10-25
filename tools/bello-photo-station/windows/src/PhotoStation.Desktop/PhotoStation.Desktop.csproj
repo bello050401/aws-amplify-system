@@ -12,6 +12,11 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\BelloPhotoStation.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\BelloPhotoStationRounded.png" />
+  </ItemGroup>
 
 </Project>

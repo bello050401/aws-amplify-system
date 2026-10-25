@@ -14,10 +14,11 @@ public enum ImportSessionState
     CloudReadyUnlinked,
     Linked,
     NeedsReview,
-    Cancelled
+    Cancelled,
+    LocalSaved
 }
 
-public sealed record SourceCandidate(string RelativePath, long Size, DateTimeOffset ModifiedAtUtc);
+public sealed record SourceCandidate(string RelativePath, long Size, DateTimeOffset ModifiedAtUtc, string? Sha256 = null);
 
 public sealed record VerifiedSource(
     Guid SourceId,
@@ -38,8 +39,9 @@ public sealed class ImportSession
             [ImportSessionState.Copying] = [ImportSessionState.LocalSecured, ImportSessionState.NeedsReview, ImportSessionState.Cancelled],
             [ImportSessionState.LocalSecured] = [ImportSessionState.Rendering, ImportSessionState.ReadyToUpload],
             [ImportSessionState.Rendering] = [ImportSessionState.Processing, ImportSessionState.NeedsReview],
-            [ImportSessionState.Processing] = [ImportSessionState.ReadyToUpload, ImportSessionState.NeedsReview],
-            [ImportSessionState.ReadyToUpload] = [ImportSessionState.Uploading],
+            [ImportSessionState.Processing] = [ImportSessionState.ReadyToUpload, ImportSessionState.NeedsReview, ImportSessionState.LocalSaved],
+            [ImportSessionState.LocalSaved] = [ImportSessionState.Rendering],
+            [ImportSessionState.ReadyToUpload] = [ImportSessionState.Uploading, ImportSessionState.NeedsReview],
             [ImportSessionState.Uploading] = [ImportSessionState.CloudVerifying, ImportSessionState.NeedsReview],
             [ImportSessionState.CloudVerifying] = [ImportSessionState.CloudReadyUnlinked, ImportSessionState.NeedsReview],
             [ImportSessionState.CloudReadyUnlinked] = [ImportSessionState.Linked],
@@ -54,7 +56,16 @@ public sealed class ImportSession
     public string CardGenerationId { get; }
     public string ManifestHash { get; }
     public DateTimeOffset CreatedAtUtc { get; }
+    public DateTimeOffset CreatedAtLocal => CreatedAtUtc.ToLocalTime();
     public ImportSessionState State { get; private set; }
+    public string DisplayState => State switch {
+        ImportSessionState.LocalSecured => "取込済み",
+        ImportSessionState.LocalSaved => "フォルダー保存済み",
+        ImportSessionState.CloudVerifying or ImportSessionState.CloudReadyUnlinked => "WEB保存済み",
+        ImportSessionState.Linked => "商品に登録済み",
+        ImportSessionState.NeedsReview => "再実行できます",
+        ImportSessionState.Cancelled => "中止",
+        _ => "処理中" };
     public string? HoldReason { get; private set; }
 
     public ImportSession(Guid id, string environment, string stationId, string cardGenerationId,

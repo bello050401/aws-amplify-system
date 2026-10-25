@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using PhotoStation.Application;
 using PhotoStation.Domain;
 
@@ -16,19 +17,38 @@ public sealed class VerifiedFileCopier(TimeProvider? timeProvider = null) : IVer
         if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0)
             throw new IOException("Reparse-point sources are not accepted");
 
-        var sourceId = Guid.NewGuid();
+        // Stable within a session: after a crash between publishing the copy
+        // and recording it in SQLite, reuse the verified file instead of
+        // leaving a second image in the product's source directory.
+        var fullSessionRoot = Path.GetFullPath(sessionRoot).TrimEnd(Path.DirectorySeparatorChar);
+        var sessionIdentity = Guid.TryParse(Path.GetFileName(fullSessionRoot), out var sessionId)
+            ? sessionId.ToString("D") : fullSessionRoot.ToLowerInvariant();
+        var sourceId = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(
+            sessionIdentity + "\0" + relativePath.Replace('\\', '/').ToLowerInvariant())).AsSpan(0, 16));
         var sourceDir = Path.Combine(Path.GetFullPath(sessionRoot), "source");
         Directory.CreateDirectory(sourceDir);
         var extension = Path.GetExtension(source).ToLowerInvariant();
         var destination = ResolveUnderRoot(sourceDir, sourceId.ToString("N") + extension);
         var partial = destination + ".partial";
-        if (File.Exists(destination)) throw new IOException("Destination already exists");
+        if (File.Exists(destination))
+        {
+            if ((File.GetAttributes(destination) & FileAttributes.ReparsePoint) != 0) throw new IOException("Destination is a link");
+            var existing = new FileInfo(source);
+            var originalHash = await Sha256Async(source, cancellationToken);
+            if (new FileInfo(destination).Length != existing.Length || await Sha256Async(destination, cancellationToken) != originalHash)
+                throw new IOException("取込済みの写真とSDの内容が違います。上書きせず保留しました。");
+            return new VerifiedSource(sourceId, relativePath, destination, existing.Length, originalHash, existing.LastWriteTimeUtc, _time.GetUtcNow());
+        }
+        if (File.Exists(partial) && (File.GetAttributes(partial) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("Partial destination is a link");
 
         var before = new FileInfo(source);
+        var sizeBefore = before.Length;
+        var modifiedBefore = before.LastWriteTimeUtc;
         string sourceHash;
         await using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read,
                          1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
-        await using (var output = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+        await using (var output = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None,
                          1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.WriteThrough))
         using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
         {
@@ -45,7 +65,7 @@ public sealed class VerifiedFileCopier(TimeProvider? timeProvider = null) : IVer
         }
 
         var after = new FileInfo(source);
-        if (before.Length != after.Length || before.LastWriteTimeUtc != after.LastWriteTimeUtc)
+        if (sizeBefore != after.Length || modifiedBefore != after.LastWriteTimeUtc)
             throw new IOException("Source changed while it was being copied");
         var destinationHash = await Sha256Async(partial, cancellationToken);
         if (!string.Equals(sourceHash, destinationHash, StringComparison.Ordinal))

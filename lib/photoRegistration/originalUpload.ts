@@ -30,7 +30,8 @@ export class OriginalPhotoUploads{
    if(!original){
     const importedAt=input.original.importedAt==null?now:Date.parse(input.original.importedAt);
     if(!Number.isFinite(importedAt)||importedAt>now+60000)return err('INVALID_INPUT','取込日時が無効です。');
-    original={key:originalObjectKey(a.photoBatchId,a.id),fileName:input.original.fileName,mimeType:'application/octet-stream',fileSize:input.original.fileSize,sha256:input.original.sha256,requestedAt:new Date(now).toISOString(),expiresAt:new Date(Math.min(now,importedAt)+ORIGINAL_RETENTION_MS).toISOString()};
+    const archive=input.archiveId&&this.deps.temporaryOriginals&&claims.deviceId?await this.deps.temporaryOriginals.metadata(input.archiveId,claims.deviceId,input.original.sha256):null;
+    original={key:originalObjectKey(a.photoBatchId,a.id),fileName:input.original.fileName,mimeType:'application/octet-stream',fileSize:input.original.fileSize,sha256:input.original.sha256,requestedAt:new Date(now).toISOString(),expiresAt:archive?.expiresAt??new Date(now+ORIGINAL_RETENTION_MS).toISOString(),...(archive?.uploadedAt?{retentionStartedAt:archive.uploadedAt}:{})};
     try{await this.deps.db.send(new UpdateCommand({TableName:this.deps.table,Key,UpdateExpression:'SET original = :original',ConditionExpression:alive+' AND attribute_not_exists(original)',ExpressionAttributeValues:{':no':false,':original':original}}));}
     catch{return err('CONFLICT','編集前写真の保存準備が重なりました。再度お試しください。');}
    }
@@ -45,9 +46,12 @@ export class OriginalPhotoUploads{
   if(original.purgedAt||Date.parse(original.expiresAt)<=now)return err('INVALID_STATUS_TRANSITION','編集前写真の保管期限を過ぎています。');
   const head=await this.deps.s3.send(new HeadObjectCommand({Bucket:this.deps.bucket,Key:original.key,ChecksumMode:'ENABLED'}));
   if(head.ContentLength!==original.fileSize||head.ChecksumSHA256!==Buffer.from(original.sha256,'hex').toString('base64'))return err('UPLOAD_NOT_COMPLETE','編集前写真のアップロードを確認できません。');
-  try{await this.deps.db.send(new UpdateCommand({TableName:this.deps.table,Key,UpdateExpression:'SET original.uploadedAt = if_not_exists(original.uploadedAt, :at)',ConditionExpression:alive+' AND original.sha256 = :hash AND attribute_not_exists(original.purgedAt)',ExpressionAttributeValues:{':no':false,':at':new Date(now).toISOString(),':hash':original.sha256}}));}
+  // The first verified upload starts retention; a retry or later edited save must not extend it.
+  const retentionStartedAt=original.retentionStartedAt??original.uploadedAt??(head.LastModified??new Date(now)).toISOString();
+  const expiresAt=new Date(Date.parse(retentionStartedAt)+ORIGINAL_RETENTION_MS).toISOString();
+  try{await this.deps.db.send(new UpdateCommand({TableName:this.deps.table,Key,UpdateExpression:'SET original.uploadedAt = if_not_exists(original.uploadedAt, :at), original.retentionStartedAt = if_not_exists(original.retentionStartedAt, :start), original.expiresAt = :expiry',ConditionExpression:alive+' AND original.sha256 = :hash AND attribute_not_exists(original.purgedAt) AND original.expiresAt = :previous',ExpressionAttributeValues:{':no':false,':at':(head.LastModified??new Date(now)).toISOString(),':start':retentionStartedAt,':expiry':expiresAt,':previous':original.expiresAt,':hash':original.sha256}}));}
   catch{return err('CONFLICT','編集前写真の保存結果を確認できません。');}
-  if(input.archiveId&&this.deps.temporaryOriginals&&claims.deviceId)await this.deps.temporaryOriginals.retire(input.archiveId,claims.deviceId,original.sha256);
-  return ok({status:'READY',expiresAt:original.expiresAt});
+  if(input.archiveId&&this.deps.temporaryOriginals&&claims.deviceId)await this.deps.temporaryOriginals.retire(input.archiveId,claims.deviceId,original.sha256,{id:a.id,batchId:a.photoBatchId,sequence:a.sequence});
+  return ok({status:'READY',expiresAt});
  }
 }

@@ -27,6 +27,9 @@ function fixture(quantity=5) {
  const request:StockSplitRequest={inventoryId:id,mutationId:randomUUID(),expectedUpdatedAt:time,quantity:2,damageNotes:'右側に傷',barcode:'SAME',photos:[{storageKey:`inventory/mobile/${owner}/${randomUUID()}/${'a'.repeat(64)}.jpg`,type:'DAMAGE'}]};
  return {owner,source,state,request,run,get:(id:string)=>rows.get('Inventory/'+id),stocks:()=>[...rows].filter(([k])=>k.startsWith('Inventory/')).map(([,r])=>r),set:(r:any)=>rows.set('Inventory/'+r.id,r)};
 }
+test('残り3点と分割2点のタイトルを別々に保存・再送しても2件だけ',async()=>{const f=fixture(),r={...f.request,sourceName:'商品B',splitName:'商品C'};const a=await f.run(r,f.owner);assert.equal(f.get(a.sourceId).name,'商品B');assert.equal(f.get(a.splitId).name,'商品C');assert.equal(f.get(a.sourceId).quantity,3);assert.equal(f.get(a.splitId).quantity,2);assert.deepEqual(await f.run(r,f.owner),a);assert.equal(f.stocks().length,2);await assert.rejects(f.run({...r,splitName:'別名'},f.owner));});
+test('タイトル変更を含む処理失敗では元の名前と数量を維持',async()=>{const f=fixture();f.state.fail=true;await assert.rejects(f.run({...f.request,sourceName:'商品B',splitName:'商品C'},f.owner));assert.deepEqual(f.get(f.source.id),f.source);assert.equal(f.stocks().length,1);});
+test('空タイトルと長すぎるタイトルを拒否',async()=>{for(const change of [{sourceName:' '},{splitName:''},{splitName:'あ'.repeat(2001)}]){const f=fixture();await assert.rejects(f.run({...f.request,...change},f.owner));assert.equal(f.state.transactions,0);}});
 for(const [qty,split] of [[5,2],[10,1],[2,2]])test(`在庫分け ${qty}→${split}: 数量・識別・写真・元情報`,async()=>{
  const f=fixture(qty),r=await f.run({...f.request,quantity:split},f.owner),source=f.get(r.sourceId),child=f.get(r.splitId);
  assert.notEqual(r.sourceId,r.splitId);assert.notEqual(source.sku,child.sku);assert.equal(source.quantity,qty-split);assert.equal(child.quantity,split);assert.equal(f.stocks().reduce((n,r)=>n+r.quantity,0),qty);

@@ -20,11 +20,13 @@ export class PhotoRegistrationApiClient {
   async call(operation, input) {
     for (let attempt = 0; ; attempt += 1) {
       const token = await this.tokenProvider();
-      const response = await this.fetch(`${this.endpoint}/${operation}`, {
+      let response;
+      try { response = await this.fetch(`${this.endpoint}/${operation}`, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify(input),
-      });
+        signal: AbortSignal.timeout(60000),
+      }); } catch(error) { if(attempt>=this.retries)throw new Error('通信が切断されました。取込済み写真から再実行できます。',{cause:error});await new Promise(r=>setTimeout(r,Math.min(500*2**attempt,4000)));continue; }
       const body = await response.json().catch(() => ({ ok: false, error: { code: "HTTP_ERROR", message: `HTTP ${response.status}` } }));
       if (response.ok && body.ok) return body.value;
       const code = body?.error?.code ?? "HTTP_ERROR";
@@ -42,14 +44,19 @@ export class PhotoRegistrationApiClient {
       "content-length": String(upload.expectedBytes),
       ...(!checksumInQuery ? { "x-amz-checksum-sha256": Buffer.from(upload.expectedSha256, "hex").toString("base64") } : {}),
     };
-    const response = await this.fetch(upload.uploadUrl, {
+    for(let attempt=0;;attempt++){
+    let response;
+    try{response = await this.fetch(upload.uploadUrl, {
       method: "PUT",
       headers,
-      body: bytes,
-    });
+      body: bytes,signal:AbortSignal.timeout(120000),
+    });}catch(error){if(attempt>=this.retries)throw new Error('写真のアップロードが中断しました。原本はPCに保持しています。',{cause:error});await new Promise(r=>setTimeout(r,Math.min(500*2**attempt,4000)));continue;}
+    if((response.status>=500||response.status===429)&&attempt<this.retries){await new Promise(r=>setTimeout(r,Math.min(500*2**attempt,4000)));continue;}
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
       throw new Error(`S3 PUT failed: HTTP ${response.status}${detail ? ` ${detail.slice(0, 500)}` : ""}`);
+    }
+    return;
     }
   }
 }
@@ -68,6 +75,9 @@ export async function uploadSession({ api, deviceId, sdCardId = null, sessionId 
     prepared.push({
       clientAssetId: asset.clientAssetId ?? `${sessionId}-${String(index + 1).padStart(3, "0")}`,
       fileName: asset.fileName,
+      originalPath: asset.originalPath,
+      originalArchiveId: asset.originalArchiveId,
+      original: asset.originalPath ? {...await describeFile(asset.originalPath,"application/octet-stream"),fileName:asset.fileName,importedAt:asset.importedAt??null} : null,
       processedPath: asset.processedPath,
       thumbnailPath: asset.thumbnailPath,
       processed: await describeFile(asset.processedPath),
@@ -84,14 +94,15 @@ export async function uploadSession({ api, deviceId, sdCardId = null, sessionId 
     const response = await api.call("requestPhotoAssetUploads", { batchId: batch.batchId, assets: group.map(({ clientAssetId, fileName, processed, thumbnail }) => ({ clientAssetId, fileName, processed, thumbnail })) });
     for (const item of response.items) {
       const local = group.find((x) => x.clientAssetId === item.clientAssetId);
-      if (item.kind === "DUPLICATE_SKIP") { duplicateSkips += 1; continue; }
-      if (item.kind === "ALREADY_READY") { uploaded += 1; continue; }
+      if (item.kind === "DUPLICATE_SKIP") { duplicateSkips += 1; await onCheckpoint({ sessionId, batchId: batch.batchId, clientAssetId: item.clientAssetId, phase: "ASSET_READY" }); continue; }
+      if (item.kind === "ALREADY_READY") { await uploadOriginal(api,item.photoAssetId,local); uploaded += 1; await onCheckpoint({ sessionId, batchId: batch.batchId, clientAssetId: item.clientAssetId, phase: "ASSET_READY" }); continue; }
       for (const target of item.uploads) await api.upload(target, target.variant === "PROCESSED" ? local.processedPath : local.thumbnailPath);
       await api.call("completePhotoAssetUpload", {
         photoAssetId: item.photoAssetId,
         processed: { sha256: local.processed.sha256, fileSize: local.processed.fileSize, ...local.processedDimensions },
         thumbnail: { sha256: local.thumbnail.sha256, fileSize: local.thumbnail.fileSize, ...local.thumbnailDimensions },
       });
+      await uploadOriginal(api,item.photoAssetId,local);
       uploaded += 1;
       await onCheckpoint({ sessionId, batchId: batch.batchId, clientAssetId: item.clientAssetId, phase: "ASSET_READY" });
     }
@@ -100,4 +111,16 @@ export async function uploadSession({ api, deviceId, sdCardId = null, sessionId 
   const completed = await api.call("completePhotoBatch", { batchId: batch.batchId, imageCountProcessed: expected, imageCountUploaded: uploaded });
   await onCheckpoint({ sessionId, batchId: batch.batchId, phase: "COMPLETE" });
   return { ...completed, batchCode: batch.batchCode, uploaded, duplicateSkips };
+}
+
+async function uploadOriginal(api,photoAssetId,local){
+ if(!local.originalPath)return;
+ const result=await api.call("requestOriginalPhotoUpload",{photoAssetId,archiveId:local.originalArchiveId,original:local.original});
+ if(result.status==="UPLOAD"){
+  await api.upload(result.upload,local.originalPath);
+  const completed=await api.call("completeOriginalPhotoUpload",{photoAssetId,archiveId:local.originalArchiveId});
+  if(completed.status!=="READY")throw Error("編集前写真の保存を確認できません。再実行してください。");
+ }else if(result.status==="READY"&&local.originalArchiveId){
+  await api.call("completeOriginalPhotoUpload",{photoAssetId,archiveId:local.originalArchiveId});
+ }else if(result.status!=="READY")throw Error("編集前写真の保存状態を確認できません。保管期限と取込履歴を確認してください。");
 }

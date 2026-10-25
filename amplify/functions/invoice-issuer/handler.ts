@@ -1,3 +1,4 @@
+import {manageAddressees} from '../../../lib/invoicing/addressees';
 import {CognitoJwtVerifier} from 'aws-jwt-verify';
 import {DynamoDBClient} from '@aws-sdk/client-dynamodb';
 import {DynamoDBDocumentClient,GetCommand,PutCommand,UpdateCommand} from '@aws-sdk/lib-dynamodb';
@@ -36,6 +37,7 @@ export async function handler(event:{token?:string;action?:string;ticket?:string
  let owner:string;
  try{const user=await verifier.verify(event.token||'');if(!user['cognito:groups']?.includes('ADMIN'))return fail('FORBIDDEN','管理者のみ利用できます。');owner=user.sub;}catch{return fail('FORBIDDEN','管理者のログインが必要です。');}
  try{
+  if(event.action==='addressees')return await manageAddressees(db,process.env.ADDRESSEES_TABLE!,event.input);
   const leaseOwner=randomUUID();return await withIssuerLease(()=>acquireLease(leaseOwner),()=>releaseLease(leaseOwner),async()=>{
   const s=await settings();if(!s.key||s.key.length<32)throw new Error('NOT_CONFIGURED');
   if(event.action==='status')return {ok:true,connected:!!s.refreshToken,ready:!!s.refreshToken&&s.settingsVerified===true,config:s.config||DEFAULT_CONFIG,canConnect:!!s.clientId&&!!s.clientSecret};

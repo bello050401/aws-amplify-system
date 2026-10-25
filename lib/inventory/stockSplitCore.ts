@@ -14,7 +14,10 @@ export function createStockSplitService(p:StockSplitPorts) {
  return async(r:StockSplitRequest,actor:string):Promise<StockSplitResult>=>{
   validateStockSplit(r,undefined,actor);
   const receiptId='STOCK_SPLIT:'+r.mutationId;
-  const hash=createHash('sha256').update(JSON.stringify([actor,r.inventoryId,r.expectedUpdatedAt,r.quantity,r.damageNotes,r.barcode.trim(),r.photos])).digest('hex');
+  const identity:unknown[]=[actor,r.inventoryId,r.expectedUpdatedAt,r.quantity,r.damageNotes,r.barcode.trim(),r.photos];
+  // Preserve retries from clients opened before the title fields were added.
+  if(r.sourceName!==undefined||r.splitName!==undefined)identity.push([r.sourceName?.trim(),r.splitName?.trim()]);
+  const hash=createHash('sha256').update(JSON.stringify(identity)).digest('hex');
   const receipt=async()=>{
    const row=(await p.db.send(new GetCommand({TableName:p.table('InventoryHistory'),Key:{id:receiptId},ConsistentRead:true}))).Item;
    if(!row)return null;const data=JSON.parse(row.newValue);
@@ -37,19 +40,19 @@ export function createStockSplitService(p:StockSplitPorts) {
   const inheritedPhotos=await p.copyPhotos({...source,images:originals},id);
   const images=[...inheritedPhotos,...r.photos.map((photo,i)=>({...photo,sortOrder:inheritedPhotos.length+i,isPrimary:false}))];
   const result:StockSplitResult={sourceId:String(source.id),splitId:id,remainingQuantity:Number(source.quantity)-r.quantity,splitQuantity:r.quantity,updatedAt:now};
-  const remaining={quantity:result.remainingQuantity,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
+  const remaining={quantity:result.remainingQuantity,...(r.sourceName!==undefined?{name:r.sourceName.trim()}:{}),updatedAt:now,listUpdatedAt:now,updatedBy:actor};
   const values={...remaining,customFields:stringifyCustomFields(withHumanEdits(source,remaining,custom,custom??undefined))},entries=Object.entries(values);
   const inherited:Row={};
   for(const key of ['name','unit','statusId','locationId','note','purchasePrice','salePrice',...ALL_EXTENDED_FIELDS.map(f=>f.key)])if(source[key]!==undefined)inherited[key]=source[key];
-  const child={...inherited,id,sku,quantity:r.quantity,barcode:r.barcode.trim(),damageNotes:r.damageNotes,
+  const child={...inherited,...(r.splitName!==undefined?{name:r.splitName.trim()}:{}),id,sku,quantity:r.quantity,barcode:r.barcode.trim(),damageNotes:r.damageNotes,
    categoryId:cats[0]??null,categoryIds:cats,images,sourceSystem:'BELLO',listingPartition:'ACTIVE',createdAt:now,updatedAt:now,listUpdatedAt:now,createdBy:actor,updatedBy:actor,
    customFields:stringifyCustomFields({...productCustomFields(custom),__belloStockSplit:{sourceInventoryId:source.id,operation:'STOCK_SPLIT',mutationId:r.mutationId}}),__typename:'Inventory'};
   const writes:InventoryTransaction=[
    {Update:{TableName:p.table('Inventory'),Key:{id:source.id},UpdateExpression:'SET '+entries.map((_,i)=>`#f${i}=:v${i}`).join(', '),ConditionExpression:'updatedAt=:version AND quantity=:quantity AND attribute_not_exists(deletedAt) AND attribute_not_exists(outboundBatchId) AND attribute_not_exists(outboundArrivalBatchId)',ExpressionAttributeNames:Object.fromEntries(entries.map(([key],i)=>[`#f${i}`,key])),ExpressionAttributeValues:{...Object.fromEntries(entries.map(([,value],i)=>[`:v${i}`,value])),':version':source.updatedAt,':quantity':source.quantity}}},
    {Put:{TableName:p.table('Inventory'),Item:child,ConditionExpression:'attribute_not_exists(id)'}},
    ...persistence.categoryLinkChanges(id,[],cats,now),
-   {Put:{TableName:p.table('InventoryHistory'),Item:{id:receiptId,inventoryId:source.id,fieldName:'在庫分け',oldValue:JSON.stringify({quantity:source.quantity}),newValue:JSON.stringify({hash,result}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'},ConditionExpression:'attribute_not_exists(id)'}},
-   {Put:{TableName:p.table('InventoryHistory'),Item:{id:receiptId+':SPLIT',inventoryId:id,fieldName:'在庫分け',newValue:JSON.stringify({sourceInventoryId:source.id,quantity:r.quantity}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}}
+   {Put:{TableName:p.table('InventoryHistory'),Item:{id:receiptId,inventoryId:source.id,fieldName:'在庫分け',oldValue:JSON.stringify({quantity:source.quantity,name:source.name}),newValue:JSON.stringify({hash,result,name:r.sourceName?.trim()??source.name,splitName:child.name}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'},ConditionExpression:'attribute_not_exists(id)'}},
+   {Put:{TableName:p.table('InventoryHistory'),Item:{id:receiptId+':SPLIT',inventoryId:id,fieldName:'在庫分け',newValue:JSON.stringify({sourceInventoryId:source.id,quantity:r.quantity,name:child.name}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}}
   ];
   try{await p.db.send(new TransactWriteCommand({TransactItems:writes,ClientRequestToken:randomUUID()}));}
   catch(error){
