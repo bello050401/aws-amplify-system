@@ -1,5 +1,6 @@
 "use server";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
+import {readEconveniCatalog} from '@/lib/listing/econveni/runtimeStore';
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { EcCatalog, EcChannelState, EcState } from "@/lib/listing/ecManagement";
 
@@ -118,5 +119,18 @@ export async function getEcListingCatalogAction(): Promise<EcCatalog> {
       .filter((r) => r.deletedAt && !active.has(r.inventoryId))
       .map((r) => r.inventoryId);
   } else catalog.errors.push("EC商品情報の削除状態を取得できませんでした。");
+  try{
+    for(const row of await readEconveniCatalog()){
+      for(const channel of ['YAHOO','MERCARI_SHOPS'] as const){
+        const c=row.channels[channel];
+        const state:EcState=['PENDING','VERIFY_REQUIRED'].includes(c.state)||['PENDING','VERIFY_REQUIRED'].includes(row.save.state)?'ERROR':c.remoteStatus==='ACTIVE'?'ACTIVE':c.remoteStatus==='INACTIVE'?'STOPPED':'DRAFT';
+        catalog.channels[channel]??={};
+        catalog.channels[channel]![row.inventoryId]={state,externalId:c.listingId??null,url:c.listingUrl??null,checkedAt:row.updatedAt};
+      }
+    }
+  }catch{
+    delete catalog.channels.YAHOO;delete catalog.channels.MERCARI_SHOPS;
+    catalog.errors.push('eコンビニの保存・出品情報を取得できませんでした。再読み込みしてください。');
+  }
   return catalog;
 }

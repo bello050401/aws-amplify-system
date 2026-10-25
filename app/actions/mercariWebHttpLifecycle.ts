@@ -42,6 +42,7 @@ async function sourceUnchanged(job: WebHttpDraftJob) {
 }
 
 export async function updateMercariHttpContentAction(inventoryId:string,digest:string|null) {
+  if(process.env.BELLO_LEGACY_EC_DIRECT_WRITES!=='1')return {status:'BLOCKED' as const,message:'eコンビニへの商品保存は共通の商品情報で行ってください。公開済み商品の編集は販売先で確認してください。'};
   const blocked=(message:string)=>({status:"BLOCKED" as const,message});
   if(!UUID.test(inventoryId)||await getInventoryRole()!=="ADMIN"||digest!==null&&!/^[a-f0-9]{64}$/.test(digest))return blocked("この操作を行う権限がありません。");
   try {
@@ -99,6 +100,7 @@ export async function getMercariHttpListingStateAction(inventoryId: string): Pro
 }
 
 export async function publishMercariHttpListingAction(inventoryId: string, digest: string | null): Promise<PublishResult> {
+  if(process.env.BELLO_LEGACY_EC_DIRECT_WRITES!=='1')return {status:'AUTH_REQUIRED',preview:null,productId:null,nextEligibleAtMs:null};
   const failed = (status: PublishResult["status"]): PublishResult =>
     ({ status, preview: null, productId: null, nextEligibleAtMs: null });
   if (!UUID.test(inventoryId) || await getInventoryRole() !== "ADMIN" ||
@@ -137,6 +139,7 @@ export async function publishMercariHttpListingAction(inventoryId: string, diges
 }
 
 export async function stopMercariHttpListingAction(inventoryId: string) {
+  if(process.env.BELLO_LEGACY_EC_DIRECT_WRITES!=='1')return {status:'FORBIDDEN',stopConfirmed:false,nextEligibleAtMs:null};
   if (!UUID.test(inventoryId) || await getInventoryRole() !== "ADMIN")
     return { status: "FORBIDDEN", stopConfirmed: false, nextEligibleAtMs: null };
   try {
@@ -158,6 +161,7 @@ export async function stopMercariHttpListingAction(inventoryId: string) {
 }
 
 export async function reopenMercariHttpListingAction(inventoryId: string, digest: string | null): Promise<PublishResult> {
+  if(process.env.BELLO_LEGACY_EC_DIRECT_WRITES!=='1')return {status:'AUTH_REQUIRED',preview:null,productId:null,nextEligibleAtMs:null};
   const failed = (status: PublishResult["status"]): PublishResult => ({ status, preview: null, productId: null, nextEligibleAtMs: null });
   if (!UUID.test(inventoryId) || await getInventoryRole() !== "ADMIN" ||
       digest !== null && !/^[a-f0-9]{64}$/.test(digest)) return failed("SOURCE_CHANGED");

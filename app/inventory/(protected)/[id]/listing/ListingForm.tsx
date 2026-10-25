@@ -7,6 +7,7 @@ import { ShippingPackagesEditor } from "./ShippingPackagesEditor";
 import { CommonEcSettings } from './CommonEcSettings';
 import type { CommonChannelPrices } from '@/lib/listing/commonSettings';
 import { saveListingDraftAction } from "@/app/actions/listing";
+import {saveEconveniDraftAction} from '@/app/actions/econveniListing';
 import { commonDraftHasChanges } from "@/lib/listing/commonDraftChanges";
 import { requireSavedDraftResult, draftSaveFailureMessage,
   draftSaveNeedsFreshPage } from "@/lib/listing/draftSaveFeedback";
@@ -124,6 +125,7 @@ export function ListingForm({
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
+  const [remoteSaveMessage,setRemoteSaveMessage]=useState('');
   const [draftRecoveryNeeded, setDraftRecoveryNeeded] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   /**
@@ -295,6 +297,7 @@ export function ListingForm({
   async function handleSaveDraft() {
     setDraftError(null);
     setDraftSaved(false);
+    setRemoteSaveMessage('');
     if (!title.trim()) {
       setDraftError("出品タイトルを入力してください。");
       return;
@@ -332,6 +335,19 @@ export function ListingForm({
           return;
         }
       }
+      setRemoteSaveMessage('BELLOに保存しました。eコンビニに商品・画像を保存しています…');
+      let remote=await saveEconveniDraftAction(inventoryId);
+      for(let attempt=0;remote?.status==='WAIT'&&attempt<4;attempt++){
+        setRemoteSaveMessage(remote.message);
+        await new Promise(resolve=>setTimeout(resolve,Math.min(32000,Math.max(1000,(remote.nextAt??Date.now()+30000)-Date.now()+300))));
+        remote=await saveEconveniDraftAction(inventoryId);
+      }
+      if(!remote||remote.status!=='DONE'){
+        setRemoteSaveMessage('BELLOの下書きは保存済みです。eコンビニの出品準備は未完了です。');
+        setDraftError(remote?.message??'eコンビニの保存結果を確認できませんでした。再確認してください。');
+        return;
+      }
+      setRemoteSaveMessage(remote.message);
       setDraftSaved(true);
     } catch (err) {
       if (!draftPersisted && draftSaveNeedsFreshPage(err)) setDraftRecoveryNeeded(true);
@@ -632,10 +648,11 @@ export function ListingForm({
           >
             下書き内容をコピー
           </button>
-          {draftSaved && <span className="text-[12px] text-green-700">保存しました</span>}
+          {draftSaved && <span className="text-[12px] text-green-700">出品準備完了</span>}
           {copyState === "copied" && <span className="text-[12px] text-green-700">コピーしました</span>}
           {copyState === "error" && <span className="text-[12px] text-red-600">コピーできませんでした</span>}
         </div>
+        {remoteSaveMessage && <p role="status" className="mt-2 text-sm text-gray-700">{remoteSaveMessage}</p>}
         {draftError && <p className="mt-2 text-[12px] text-red-600">{draftError}</p>}
         {draftRecoveryNeeded && <div className="mt-2 border border-amber-300 bg-amber-50 p-3 text-[12px] text-gray-800">
           <p>このタブの入力は残っています。別タブで保存済みの内容を確認し、必要な入力だけ移してください。元のタブから保存を再送しません。</p>

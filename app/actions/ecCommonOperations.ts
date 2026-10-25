@@ -20,6 +20,7 @@ export async function commonOperationSourceHash(id:string) {
 /** Yahoo cannot edit an open fixed-price listing: an explicit update confirmation
  * covers fee-free cancellation and a new listing, using the existing durable workflow. */
 export async function commonYahooUpdateAction(id:string,token:string|null,terms=false):Promise<Partial<EcReview>> {
+  if(process.env.BELLO_LEGACY_EC_DIRECT_WRITES!=='1')return {status:'BLOCKED',message:'公開済みのヤフオク商品の更新は販売先で確認してください。eコンビニの準備情報は共通下書きの保存で更新します。'};
   const blocked=(message:string):Partial<EcReview>=>({status:'BLOCKED',message});
   if(!canEditInventory(await getInventoryRole()))return blocked('編集権限を確認してください。');
   const source=await commonOperationSourceHash(id);

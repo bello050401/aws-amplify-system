@@ -52,6 +52,8 @@ export async function getYahooWorkflowAction(id:string):Promise<YahooWorkflowRes
     return {ok:true,view};}catch(e){return failure(e);}
 }
 async function run(id:string,operation:'PREPARE'|'PUBLISH'|'CANCEL'|'REFRESH'|'NEW',value:unknown,termsAccepted=false):Promise<YahooWorkflowResult>{
+  // Retained for rollback only; ordinary publication/stop uses the shared e-conveni queue.
+  if(operation!=='REFRESH'&&process.env.BELLO_LEGACY_EC_DIRECT_WRITES!=='1')return {ok:false,code:'NOT_CONFIGURED'};
   let store:YahooWorkflowStore|undefined,acquired=false;
   try{
     await authorize(id);store=new YahooWorkflowStore(id);await store.acquire();acquired=true;

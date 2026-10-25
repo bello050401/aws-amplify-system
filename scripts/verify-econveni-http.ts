@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import iconv from "iconv-lite";
-import { EconveniHttpError, EconveniHttpSession, encodeForm, multipartForm, readForms } from "../lib/listing/econveni/httpSession";
+import { EconveniHttpError, EconveniHttpSession, encodeForm, multipartForm, readForms, inventoryBindings } from "../lib/listing/econveni/httpSession";
 const login='<table><form method="post" action="https://member.e-conveni.net/login.php?action=process"><tr><td><input name="users_account"><input type="password" name="users_passwd"><input name="server_name" type="hidden" value="smart"></td></tr></form></table>';
 const product='<form method="post" enctype="multipart/form-data" action="https://img.e-conveni.net/smart/functions.php"><input type="hidden" name="action" value="product_add"><input name="products_name"><input type="file" name="products_image"><textarea name="bikou"></textarea><input type="checkbox" name="object" value="yes"><select name="category"><option value="chair">椅子</option></select></form>';
 const html=(body:string,headers:Record<string,string>={})=>new Response(new Uint8Array(iconv.encode(body,"euc-jp")),{headers:{"content-type":"text/html; charset=euc-jp",...headers}});
 const draft={products_name:"【BELLO検証・出品禁止】試験",bikou:"BELLO_TEST_ONLY\nBELLO_INVENTORY_ID=qa-econveni-test",object:"yes"};
 const image={bytes:Buffer.from([0xff,0xd8,0,1,2,0xff,0xd9]),filename:"test.jpg",mimeType:"image/jpeg" as const};
 async function main(){
+ const bindings=inventoryBindings({url:"https://smart.e-conveni.net/products.php",status:200,html:'<a href="product.php?action=product_update&amp;products_id=10" title="BELLO_INVENTORY_ID=qa-example-1\nBELLO_OPERATION_ID=op-one">same title</a><a href="product.php?action=product_update&amp;products_id=11" title="BELLO_INVENTORY_ID=qa-example-10">same title</a>'},"qa-example-1");
+ assert.deepEqual(bindings.map(b=>[b.productId,b.operationId]),[["10","op-one"]],"Title and partial IDs must never bind inventory");
  const fields=readForms({url:"https://smart.e-conveni.net/default.php",status:200,html:login})[0].fields;
  assert.deepEqual(fields.map(f=>f.name),["users_account","users_passwd","server_name"],"Legacy table controls must be preserved");
  assert.equal(encodeForm([["a","日本語 & +"]]),"a=%C6%FC%CB%DC%B8%EC+%26+%2B");

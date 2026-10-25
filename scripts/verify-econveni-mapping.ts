@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {prepareEconveniProduct} from '../lib/listing/econveni/mapping';
+import type {ListingDraftRecord} from '../lib/listing/types';
+const draft={id:'draft',inventoryId:'11111111-1111-4111-8111-111111111111',title:'椅子 & テーブル',description:'状態 <良好>\nサイズ',price:10000,channelPrices:{YAHOO:12000,MERCARI_SHOPS:13000},condition:'SLIGHT_DAMAGE',quantity:2,shippingMethod:'SAGAWA',commonCategoryId:'dining-chair',images:[{storageKey:'second.jpg',sortOrder:2},{storageKey:'first.jpg',sortOrder:1}],updatedAt:'2026-10-25T00:00:00Z'} as ListingDraftRecord;
+const a=prepareEconveniProduct(draft,5,'B005000',null,null);
+assert.equal(a.fields.products_quantity,'2');assert.equal(a.fields.mercariShops_variants,':2:B005000:');
+assert.equal(a.fields.products_price,'12000');assert.equal(a.fields.products_willprice,'12000');assert.equal(a.fields.mercariShops_price,'13000');
+assert.equal(a.fields.products_description,'状態 &lt;良好&gt;<br>サイズ');assert.equal(a.fields.mercariShops_description,'状態 <良好>\nサイズ');
+assert.equal(a.option.condition,'used40');assert.equal(a.fields.mercariShops_condition,'CONDITION_LITTLE_DIRTY');assert.equal(a.shippingLabel,'佐川急便');
+assert.equal(a.refs[0].storageKey,'first.jpg');assert.equal(a.fields.object,'');
+assert.equal(a.fingerprint,prepareEconveniProduct({...draft,updatedAt:'later'},5,'B005000',null,null).fingerprint,'A no-change save must not re-upload');
+assert.notEqual(a.fingerprint,prepareEconveniProduct({...draft,quantity:3},5,'B005000',null,null).fingerprint);
+assert.throws(()=>prepareEconveniProduct(draft,1,'B005000',null,null),/在庫数/);
+assert.throws(()=>prepareEconveniProduct({...draft,images:[]},5,'B005000',null,null),/出品画像/);
+assert.throws(()=>prepareEconveniProduct(draft,5,'B005000',{categoryMapping:{mercariShippingMethod:3}} as any,null),/通常配送/);
+console.log('PASS: common category, channel prices, common quantity, condition, shipping, image order, unchanged-content reuse, insufficient stock and exceptional shipping protection');

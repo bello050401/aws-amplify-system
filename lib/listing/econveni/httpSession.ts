@@ -1,13 +1,18 @@
 import "server-only";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import iconv from "iconv-lite";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 
 type Element = DefaultTreeAdapterMap["element"];
 type Node = DefaultTreeAdapterMap["node"];
 export type FormField = { name: string; value: string; type: string; checked: boolean; options: { value: string; label: string }[] };
 export type HtmlForm = { action: string; method: string; enctype: string; fields: FormField[] };
 export type HtmlPage = { url: string; status: number; html: string };
+export type InventoryBinding = { productId: string; url: string; operationId: string | null };
+export type EconveniMarket = "YAHOO" | "MERCARI_SHOPS";
+export type EconveniMarketStatus = { state: "ACTIVE" | "INACTIVE" | "EXCLUDED"; listingId: string | null; listingUrl: string | null };
+export type EconveniRemoteProduct = InventoryBinding & { channels: Record<EconveniMarket, EconveniMarketStatus> };
+export type EconveniCommand = { channel: EconveniMarket; operation: "PUBLISH" | "STOP"; productId: string; accountId: string; url: string; title: string; price: number };
 export class EconveniHttpError extends Error {
   constructor(public readonly code: "AUTH_REQUIRED" | "ACCESS_DENIED" | "ADDITIONAL_AUTH" | "CONTRACT_CHANGED" | "NETWORK" | "UNSAFE_DESTINATION") { super(code); }
 }
@@ -25,6 +30,116 @@ function elements(node: Node): Element[] {
 function attr(node: Element, name: string): string { return node.attrs.find(a => a.name === name)?.value ?? ""; }
 function hasAttr(node: Element, name: string): boolean { return node.attrs.some(a => a.name === name); }
 function text(node: Node): string { return "value" in node ? node.value : "childNodes" in node ? node.childNodes.map(text).join("") : ""; }
+export function inventoryBindings(page: HtmlPage, inventoryId: string): InventoryBinding[] {
+  const matches = new Map<string, InventoryBinding>();
+  for (const node of elements(parse(page.html))) {
+    if (node.tagName !== "a") continue;
+    const notes = attr(node, "title").replace(/\r\n/g, "\n").split("\n");
+    if (!notes.includes("BELLO_INVENTORY_ID=" + inventoryId)) continue;
+    const target = allowedUrl(attr(node, "href"), page.url);
+    const productId = target.searchParams.get("products_id") ?? "";
+    if (target.origin !== SMART || target.pathname !== "/product.php" || target.searchParams.get("action") !== "product_update" || !/^\d+$/.test(productId)) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const operationId = notes.find(n => n.startsWith("BELLO_OPERATION_ID="))?.slice("BELLO_OPERATION_ID=".length) ?? null;
+    matches.set(productId, { productId, url: target.href, operationId });
+  }
+  return [...matches.values()];
+}
+/** Inspect only the row bound to the immutable inventory marker, never a title match. */
+export function remoteProduct(page: HtmlPage, inventoryId: string): EconveniRemoteProduct | null {
+  const bindings = inventoryBindings(page, inventoryId);
+  if (bindings.length > 1) throw new EconveniHttpError("CONTRACT_CHANGED");
+  if (!bindings.length) return null;
+  const binding = bindings[0];
+  const checkbox = elements(parse(page.html)).find(n => n.tagName === "input" && attr(n,"name") === "pidlist" && attr(n,"value") === binding.productId);
+  let row: Node | undefined = checkbox;
+  while (row && (!("tagName" in row) || row.tagName !== "tr")) row = "parentNode" in row ? row.parentNode ?? undefined : undefined;
+  if (!row || !("childNodes" in row)) throw new EconveniHttpError("CONTRACT_CHANGED");
+  const cells = row.childNodes.filter((n): n is Element=>"tagName" in n && n.tagName === "td");
+  if (cells.length !== 12 || text(cells[1]).trim() !== binding.productId) throw new EconveniHttpError("CONTRACT_CHANGED");
+  const channel = (market: EconveniMarket): EconveniMarketStatus => {
+    const cell=cells[market === "YAHOO" ? 4 : 7];
+    const links=elements(cell).filter(n=>n.tagName === "a");
+    const status = links.length ? text(links[0]).trim() : text(cell).trim();
+    if (!["出","未","外"].includes(status)) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const external = links.map(n=>attr(n,"href")).filter(h=>market === "YAHOO" ? /^https?:\/\/(?:auctions\.yahoo\.co\.jp|page\d*\.auctions\.yahoo\.co\.jp)\/jp\/auction\/(?:[a-z][0-9]{8,12}|[0-9]{10})\/?$/.test(h) : /^https:\/\/mercari-shops\.com\/products\/[A-Za-z0-9]+\/?$/.test(h));
+    if (external.length > 1 || status === "出" && external.length !== 1) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const id = external[0]?.split("/").filter(Boolean).at(-1) ?? null;
+    return { state: status === "出" ? "ACTIVE" : status === "外" ? "EXCLUDED" : "INACTIVE", listingId: id,
+      listingUrl: id ? market === "YAHOO" ? `https://auctions.yahoo.co.jp/jp/auction/${id}` : `https://jp.mercari.com/shops/product/${id}` : null };
+  };
+  return { ...binding, channels: { YAHOO: channel("YAHOO"), MERCARI_SHOPS: channel("MERCARI_SHOPS") } };
+}
+/** Only the four observed one-product normal UI actions are allowed. No JS is executed. */
+export function readEconveniCommand(page: HtmlPage, expected: { channel: EconveniMarket; operation: "PUBLISH" | "STOP"; productId: string; accountId: string; title: string; price: number }): EconveniCommand {
+  const labels = { YAHOO: { PUBLISH: "Yahoo!オークションガイドラインに同意して出品する", STOP: "上記のYahoo!アイテムを全て終了する" }, MERCARI_SHOPS: { PUBLISH: "メルカリShops 出品実行", STOP: "上記のメルカリShopsアイテムを全て終了する" } };
+  const nodes = elements(parse(page.html));
+  const buttons = nodes.filter(n => ["input","button"].includes(n.tagName) && (attr(n,"value") || text(n)).trim() === labels[expected.channel][expected.operation]);
+  if (buttons.length !== 1) throw new EconveniHttpError("CONTRACT_CHANGED");
+  const command = /^window\.open\('([^']+)',/.exec(attr(buttons[0],"onclick"));
+  if (!command) throw new EconveniHttpError("CONTRACT_CHANGED");
+  const url = allowedUrl(command[1],page.url);
+  const path = expected.channel === "YAHOO" ? expected.operation === "PUBLISH" ? "/yahoo_submit.php" : "/yahoo_cancel.php" : expected.operation === "PUBLISH" ? "/exhibit/mercariShopsCreateProduct.php" : "/exhibit/mercariShopsDeleteProductInput.php";
+  const allowedParams = new Set(["action","users_id","products_id","mode","order_by","attribute_page","query"]);
+  if (url.origin !== (expected.channel === "YAHOO" ? SMART : IMAGE) || url.pathname !== path ||
+      [...url.searchParams.keys()].some(k=>!allowedParams.has(k) || url.searchParams.getAll(k).length!==1) ||
+      url.searchParams.get("products_id") !== "T"+expected.productId || url.searchParams.get("users_id") !== expected.accountId ||
+      expected.channel === "YAHOO" && url.searchParams.get("action") !== "exhibit_product") throw new EconveniHttpError("CONTRACT_CHANGED");
+  const expectedText = expected.title + " @" + expected.price.toLocaleString("en-US") + "円";
+  const normalized = text(parse(page.html)).replace(/\s+/g," ");
+  // Exactly one preview line: refuse a batch that accidentally contains another product.
+  if (!normalized.includes(expectedText) || (normalized.match(/@[\d,]+円/g) ?? []).length !== 1) throw new EconveniHttpError("CONTRACT_CHANGED");
+  return { ...expected, url: url.href };
+}
+
+export function econveniCommandCompleted(page: HtmlPage, channel: EconveniMarket, operation: "PUBLISH" | "STOP") {
+  const visible = text(parse(page.html)).replace(/\s+/g," ");
+  return visible.includes("システム正常終了") && !/エラー|失敗|アクセス拒否|ログインしてください/.test(visible) &&
+    (operation === "PUBLISH" ? visible.includes("出品完了") : visible.includes("完了")) &&
+    (channel !== "MERCARI_SHOPS" || /処理件数\s*1件/.test(visible));
+}
+/** Browser successful-controls semantics, including exactly one checked radio per name. */
+export function formValues(form: HtmlForm, overrides: Record<string,string> = {}): [string,string][] {
+  const fields = form.fields.filter(f=>!["file","submit","button","image","reset"].includes(f.type));
+  const names = new Set(fields.map(f=>f.name));
+  if (Object.keys(overrides).some(k=>!names.has(k))) throw new EconveniHttpError("CONTRACT_CHANGED");
+  const output: [string,string][]=[];
+  const consumed=new Set<string>();
+  for(const field of fields) {
+    if(Object.hasOwn(overrides,field.name)) {
+      if(consumed.has(field.name)) continue;
+      consumed.add(field.name);
+      const value=overrides[field.name];
+      if(field.type==="checkbox" && value==="") continue;
+      if(field.type==="radio" && !fields.some(f=>f.name===field.name&&f.value===value)) throw new EconveniHttpError("CONTRACT_CHANGED");
+      if(field.options.length && !field.options.some(o=>o.value===value)) throw new EconveniHttpError("CONTRACT_CHANGED");
+      output.push([field.name,value]);
+    } else if(!["checkbox","radio"].includes(field.type)||field.checked) output.push([field.name,field.value]);
+  }
+  return output;
+}
+
+/** Exact successful-control comparison also rejects unexpected enabled checkboxes. */
+export function sameOptionValues(actual: [string,string][], expected: [string,string][], ignored: string[]): boolean {
+  const normalize=(values:[string,string][])=>values.filter(([name])=>!ignored.includes(name))
+    .map(([name,value])=>JSON.stringify([name,value])).sort();
+  return JSON.stringify(normalize(actual))===JSON.stringify(normalize(expected));
+}
+
+export function productImageUrls(page:HtmlPage, productId:string):string[] {
+  if(!/^\d+$/.test(productId)) throw new EconveniHttpError("CONTRACT_CHANGED");
+  const paths=new Map<number,string>();
+  for(const image of elements(parse(page.html)).filter(e=>e.tagName==="img")) {
+    const source=attr(image,"src");
+    if(!source.includes("/smart/products/")) continue;
+    const url=allowedUrl(source,page.url);
+    const match=/^\/smart\/products\/(\d+)\/(\d+)_(\d+)\.(jpg|png)$/i.exec(url.pathname);
+    if(url.origin!==IMAGE||!match||match[2]!==productId||url.search||url.hash) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const order=Number(match[3]);
+    if(order<1||order>20||paths.has(order)&&paths.get(order)!==url.href) throw new EconveniHttpError("CONTRACT_CHANGED");
+    paths.set(order,url.href);
+  }
+  return [...paths].sort(([a],[b])=>a-b).map(([,url])=>url);
+}
 export function readForms(page: HtmlPage): HtmlForm[] {
   const nodes = elements(parse(page.html, { sourceCodeLocationInfo: true }));
   // The legacy form crosses table rows. HTML parsing reparents its controls,
@@ -96,6 +211,14 @@ export class EconveniHttpSession {
   private authenticated = false;
   private cachedRegistration: HtmlForm | null = null;
   private writeAttempted = false;
+  private executedCommands = new Set<string>();
+  private optionWriteAttempted=false;
+
+  dispose() {
+    this.cookies = [];
+    this.authenticated = false;
+    this.cachedRegistration = null;
+  }
   constructor(private readonly transport: typeof fetch = fetch) {}
   private acceptCookies(headers: Headers, url: URL) {
     for (const raw of headers.getSetCookie()) {
@@ -182,6 +305,183 @@ export class EconveniHttpSession {
     const page = await this.request(target.href);
     if (!readForms(page).some(f => f.fields.some(x => x.name === "products_name"))) throw new EconveniHttpError("AUTH_REQUIRED");
     return page;
+  }
+
+  async searchInventoryPage(inventoryId: string): Promise<HtmlPage> {
+    if (!this.authenticated) throw new EconveniHttpError("AUTH_REQUIRED");
+    if (!/^[a-zA-Z0-9-]{8,80}$/.test(inventoryId)) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const query = new URLSearchParams({ scop: "bikou", query: "BELLO_INVENTORY_ID=" + inventoryId, radioquery: "and" });
+    const page = await this.request(SMART + "/products.php?" + query);
+    if (!readForms(page).some(f => f.fields.some(x => x.name === "scop"))) throw new EconveniHttpError("AUTH_REQUIRED");
+    return page;
+  }
+  async findInventory(inventoryId: string): Promise<InventoryBinding[]> {
+    const page = await this.searchInventoryPage(inventoryId);
+    const matches = inventoryBindings(page, inventoryId);
+    // Search is substring-based on the service. Only an exact, line-delimited internal ID binds.
+    if (matches.length > 1) throw new EconveniHttpError("CONTRACT_CHANGED");
+    return matches;
+  }
+
+  async readInventory(inventoryId: string) { return remoteProduct(await this.searchInventoryPage(inventoryId), inventoryId); }
+
+  async preflightSave(inventoryId:string,values:Record<string,string>,count:number){
+    const existing=await this.readInventory(inventoryId);
+    const form=existing?readForms(await this.productPage(existing.url)).find(f=>f.fields.some(x=>x.name==='products_name')):await this.registrationForm();
+    if(!form||count<1||count>10)throw new EconveniHttpError('CONTRACT_CHANGED');
+    // Validate field choices and encoding before reserving an external write.
+    for(const [key,value] of formValues(form,values)){eucText(key);eucText(value);}
+  }
+
+  /** Unbound legacy products must not be duplicated or adopted by title alone. */
+  async assertNoExistingTitle(title:string){
+    const page=await this.request(SMART+'/products.php?'+encodeForm([['scop','products_name'],['query',title],['radioquery','and']]));
+    if(!readForms(page).some(f=>f.fields.some(x=>x.name==='scop')))throw new EconveniHttpError('AUTH_REQUIRED');
+    if(elements(parse(page.html)).some(n=>n.tagName==='input'&&attr(n,'name')==='pidlist'))throw new EconveniHttpError('CONTRACT_CHANGED');
+  }
+
+  async verifySavedProduct(binding:InventoryBinding, expected:{fields:Record<string,string>;imageHashes:string[]}):Promise<boolean> {
+    const page=await this.productPage(binding.url);
+    const forms=readForms(page).filter(f=>f.fields.some(x=>x.name==="products_name"));
+    if(forms.length!==1) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const actual=Object.fromEntries(formValues(forms[0]));
+    const normalize=(s:string)=>s.replace(/\r\n/g,"\n");
+    if(Object.entries(expected.fields).some(([key,value])=>normalize(actual[key]??"")!==normalize(value))) return false;
+    const urls=productImageUrls(page,binding.productId);
+    if(urls.length!==expected.imageHashes.length) return false;
+    for(let index=0;index<urls.length;index++){
+      let response:Response;
+      try{response=await this.transport(urls[index],{redirect:"error",cache:"no-store",signal:AbortSignal.timeout(15_000)});}
+      catch{throw new EconveniHttpError("NETWORK");}
+      if(!response.ok||!response.body) throw new EconveniHttpError("NETWORK");
+      const reader=response.body.getReader(),chunks:Uint8Array[]=[];let size=0;
+      try{for(;;){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;
+        if(size>20*1024*1024) throw new EconveniHttpError("CONTRACT_CHANGED");chunks.push(part.value);
+      }}finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
+      if(createHash("sha256").update(Buffer.concat(chunks)).digest("hex")!==expected.imageHashes[index])return false;
+    }
+    return true;
+  }
+
+  /** Read normal option labels without touching login/token settings on the same page. */
+  async yahooOptionForm(label: string): Promise<{form:HtmlForm; labels:{value:string;label:string}[]}> {
+    if(!this.authenticated) throw new EconveniHttpError("AUTH_REQUIRED");
+    if(!/^(?:add|[1-9]\d*)$/.test(label)) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const page=await this.request(SMART+"/yahoo_setting.php?label="+label);
+    const forms=readForms(page);
+    const matching=forms.filter(f=>f.fields.some(x=>x.name==="Duration")&&f.fields.some(x=>x.name==="istatus"));
+    if(matching.length!==1) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const form=matching[0];
+    if(form.action!==SMART+"/yahoo_setting.php"||form.method!=="POST"||form.fields.some(f=>/passwd|password|token/i.test(f.name))) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const selector=elements(parse(page.html)).find(n=>n.tagName==="select"&&attr(n,"name")==="selected");
+    if(!selector) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const labels=elements(selector).filter(n=>n.tagName==="option").map(n=>({value:attr(n,"value"),label:text(n).trim()}));
+    return {form,labels};
+  }
+
+  /** Copy a normal option template into an immutable BELLO-owned label.
+   * Existing labels are never edited: they may be shared by unrelated products.
+   * The caller holds the durable account lease and has reserved SAVE first.
+   */
+  async ensureYahooOption(templateId:string, options:{condition:string;duration:number;closingHour:number;autoExtension:boolean}):Promise<string> {
+    if(!["new","used10","used20","used40","used60","used80"].includes(options.condition)||!Number.isInteger(options.duration)||options.duration<1||options.duration>8||!Number.isInteger(options.closingHour)||options.closingHour<0||options.closingHour>23) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const source=await this.yahooOptionForm(templateId);
+    const base=Object.fromEntries(formValues(source.form));
+    // Never inherit paid promotions or automatic price reductions.
+    if(["showCase1","boldSelected","highlightlistingSelected","giftSelected","wrappingSelected","affiliate","change_price_resubmit"].some(k=>base[k]&&base[k]!=="0")||Number(base.featuredAmount??0)>0) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const replacements={istatus:options.condition,Duration:String(options.duration),ClosingTime:String(options.closingHour),AutoExtension:options.autoExtension?"yes":"",rest_key:"on",numResubmit:"0"};
+    const effective=formValues(source.form,replacements).filter(([k])=>!["yahoo_setting_id","users_id","sort_order","yahoo_setting_label"].includes(k));
+    const label="BELLO-"+createHash("sha256").update(JSON.stringify(effective)).digest("hex").slice(0,24);
+    const found=source.labels.filter(l=>l.label===label);
+    if(found.length>1) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const verify=async(id:string)=>{
+      const actual=formValues((await this.yahooOptionForm(id)).form);
+      const read=Object.fromEntries(actual);
+      if(read.yahoo_setting_label!==label||!sameOptionValues(actual,effective,["yahoo_setting_id","users_id","sort_order","yahoo_setting_label"])) throw new EconveniHttpError("CONTRACT_CHANGED");
+      return id;
+    };
+    if(found.length) return verify(found[0].value);
+    if(this.optionWriteAttempted) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const blank=(await this.yahooOptionForm("add")).form;
+    const fresh=Object.fromEntries(formValues(blank));
+    if(fresh.yahoo_setting_id!=="add"||fresh.users_id!==base.users_id) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const fields:[string,string][]=[...effective,["yahoo_setting_label",label],["yahoo_setting_id","add"],["users_id",fresh.users_id],["sort_order",fresh.sort_order]];
+    this.optionWriteAttempted=true;
+    this.cachedRegistration=null;
+    await this.request(blank.action,"POST",encodeForm(fields));
+    const after=await this.yahooOptionForm("add");
+    const matches=after.labels.filter(l=>l.label===label);
+    if(matches.length!==1) throw new EconveniHttpError("CONTRACT_CHANGED");
+    return verify(matches[0].value);
+  }
+
+  /** Normal product form. Only the bound inventory can be updated; unknown writes are never replayed. */
+  async saveProduct(inventoryId:string,operationId:string,values:Record<string,string>,images:UploadImage[],existing:InventoryBinding|null):Promise<HtmlPage> {
+    if(this.writeAttempted||!/^[a-zA-Z0-9-]{8,80}$/.test(inventoryId)||!/^[a-zA-Z0-9-]{8,80}$/.test(operationId)||images.length>10) throw new EconveniHttpError("CONTRACT_CHANGED");
+    if(!values.products_name?.trim()||!images.length&&!existing||Object.hasOwn(values,"bikou")) throw new EconveniHttpError("CONTRACT_CHANGED");
+    let form:HtmlForm;
+    if(existing){
+      const binding=(await this.findInventory(inventoryId))[0];
+      if(!binding||binding.productId!==existing.productId) throw new EconveniHttpError("CONTRACT_CHANGED");
+      const page=await this.productPage(binding.url);
+      const forms=readForms(page).filter(f=>f.fields.some(x=>x.name==="products_name"));
+      if(forms.length!==1) throw new EconveniHttpError("CONTRACT_CHANGED");
+      form=forms[0];
+    } else {
+      if((await this.findInventory(inventoryId)).length) throw new EconveniHttpError("CONTRACT_CHANGED");
+      form=await this.registrationForm();
+    }
+    const target=allowedUrl(form.action);
+    const expectedAction=existing?"product_update":"product_add";
+    if(target.origin!==IMAGE||target.pathname!=="/smart/functions.php"||target.search||form.method!=="POST"||form.enctype!=="multipart/form-data"||form.fields.find(f=>f.name==="action")?.value!==expectedAction) throw new EconveniHttpError("CONTRACT_CHANGED");
+    if(existing&&form.fields.find(f=>f.name==="products_id")?.value!==existing.productId) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const editable=new Set(form.fields.filter(f=>!["hidden","file","submit","button","image"].includes(f.type)).map(f=>f.name));
+    if(Object.keys(values).some(k=>!editable.has(k))) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const previousNotes=form.fields.find(f=>f.name==="bikou")?.value??"";
+    const notes=[...previousNotes.replace(/\r\n/g,"\n").split("\n").filter(n=>n&&!/^BELLO_(?:INVENTORY_ID|OPERATION_ID)=/.test(n)),"BELLO_INVENTORY_ID="+inventoryId,"BELLO_OPERATION_ID="+operationId].join("\n");
+    const fields=formValues(form,{...values,bikou:notes});
+    const body=multipartForm(fields,images);
+    this.writeAttempted=true;
+    const result=await this.request(target.href,"POST",body.body,body.contentType);
+    if(existing&&images.length){
+      const saved=await this.readInventory(inventoryId);
+      if(saved?.productId!==existing.productId||saved.operationId!==operationId)throw new EconveniHttpError('CONTRACT_CHANGED');
+      const page=await this.productPage(saved.url);
+      // The form update leaves trailing files behind. Remove only observed image controls
+      // outside the selected range, on this exact product, after its save is acknowledged.
+      const extra=elements(parse(page.html)).filter(n=>n.tagName==='input'&&/^画像\d+を削除$/.test(attr(n,'value')))
+        .map(n=>({node:n,index:Number(attr(n,'value').match(/\d+/)![0])})).filter(x=>x.index>images.length).sort((a,b)=>b.index-a.index);
+      const accountId=form.fields.find(f=>f.name==='users_id')?.value;
+      for(const {node,index} of extra){
+        const match=/^location\.href='([^']+)'$/.exec(attr(node,'onclick'));
+        if(!match||index>20)throw new EconveniHttpError('CONTRACT_CHANGED');
+        const deletion=allowedUrl(match[1]),suffix=index===1?'':String(index),key='products_image'+suffix;
+        if(deletion.origin!==IMAGE||deletion.pathname!=='/smart/functions.php'||deletion.searchParams.get('action')!=='delete_image'+suffix||deletion.searchParams.get('users_id')!==accountId||deletion.searchParams.get('products_id')!==existing.productId||![existing.productId+'_'+index+'.jpg',existing.productId+'_'+index+'.png'].includes(deletion.searchParams.get(key)??'')||[...deletion.searchParams.keys()].some(k=>!['action','users_id','products_id',key].includes(k)))throw new EconveniHttpError('CONTRACT_CHANGED');
+        await this.request(deletion.href);
+      }
+    }
+    return result;
+  }
+
+  /** Preview is read-only. Execution requires its exact observed command and a durable reservation. */
+  async publicationPreview(expected: Omit<EconveniCommand,"url"|"accountId">): Promise<EconveniCommand> {
+    if (!/^\d+$/.test(expected.productId)) throw new EconveniHttpError("CONTRACT_CHANGED");
+    const form = await this.registrationForm();
+    const accountId = form.fields.find(f=>f.name === "users_id")?.value ?? "";
+    if (!/^\d+$/.test(accountId)) throw new EconveniHttpError("AUTH_REQUIRED");
+    const action = (expected.channel === "YAHOO" ? "yahoo" : "mercariShops") + (expected.operation === "PUBLISH" ? "_exhibit_together" : "_stop_together");
+    const page = await this.request(SMART + "/product_listing.php?" + new URLSearchParams({ action, products_id: "T"+expected.productId, mode:"", order_by:"", attribute_page:"", query:"" }));
+    return readEconveniCommand(page, { ...expected, accountId });
+  }
+  async executeCommand(command: EconveniCommand): Promise<HtmlPage> {
+    if (!this.authenticated) throw new EconveniHttpError("AUTH_REQUIRED");
+    const key=command.channel+":"+command.operation+":"+command.productId;
+    if (this.executedCommands.has(key)) throw new EconveniHttpError("CONTRACT_CHANGED");
+    // Validate again against the normal preview, not an arbitrary URL supplied by a caller.
+    const fresh=await this.publicationPreview(command);
+    if (fresh.url!==command.url) throw new EconveniHttpError("CONTRACT_CHANGED");
+    this.executedCommands.add(key);
+    return this.request(fresh.url);
   }
 
   /** Stage 2 only. Not exposed by a production action until durable queue/reconciliation is ready. */

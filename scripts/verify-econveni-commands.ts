@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { readEconveniCommand,remoteProduct,formValues,readForms,econveniCommandCompleted,sameOptionValues,productImageUrls,type HtmlPage,type EconveniMarket } from "../lib/listing/econveni/httpSession";
+import { initialEconveniWorkflow, reserveEconveniOperation } from "../lib/listing/econveni/workflowStore";
+import {reconcileEconveniChannel} from "../lib/listing/econveni/reconciliation";
+const page=(html:string):HtmlPage=>({url:"https://smart.e-conveni.net/product_listing.php",status:200,html});
+const labels={YAHOO:{PUBLISH:"Yahoo!オークションガイドラインに同意して出品する",STOP:"上記のYahoo!アイテムを全て終了する"},MERCARI_SHOPS:{PUBLISH:"メルカリShops 出品実行",STOP:"上記のメルカリShopsアイテムを全て終了する"}};
+async function main(){
+ for(const channel of ["YAHOO","MERCARI_SHOPS"] as EconveniMarket[])for(const operation of ["PUBLISH","STOP"] as const){
+  const expected={channel,operation,productId:"10176618",accountId:"9350",title:"【かに様専用】",price:999999};
+  const path=channel==="YAHOO"?`https://smart.e-conveni.net/${operation==="PUBLISH"?"yahoo_submit":"yahoo_cancel"}.php?action=exhibit_product&`:`https://img.e-conveni.net/exhibit/${operation==="PUBLISH"?"mercariShopsCreateProduct":"mercariShopsDeleteProductInput"}.php?`;
+  const url=path+"users_id=9350&products_id=T10176618&mode=&order_by=&attribute_page=&query=";
+  const html=`<div>【かに様専用】 @999,999円</div><input value="${labels[channel][operation]}" onclick="window.open('${url}','result');">`;
+  assert.equal(readEconveniCommand(page(html),expected).url,url);
+  for(const bad of [html.replace('T10176618','T999'),html.replace('users_id=9350','users_id=1'),html.replace('T10176618','T10176618M999'),html+'<div>other @1,000円</div>',html.replace('999,999円','99,999円'),html.replace('query=','unknown=')]) assert.throws(()=>readEconveniCommand(page(bad),expected));
+  assert.equal(econveniCommandCompleted(page(`出品完了 完了 システム正常終了 処理件数1件`),channel,operation),true);
+  assert.equal(econveniCommandCompleted(page(`出品完了 システム正常終了 処理件数1件 エラー`),channel,operation),false);
+ }
+ const fixture=await readFile('scripts/fixtures/econveni/owned-test-row.html','utf8');
+ const excluded=remoteProduct(page('<table>'+fixture+'</table>'),'qa-econveni-20261025-02')!;
+ assert.equal(excluded.channels.YAHOO.state,'EXCLUDED');assert.equal(excluded.channels.MERCARI_SHOPS.state,'EXCLUDED');
+ const active=remoteProduct(page('<table>'+fixture.replace('<td align=center nowrap>外</td>', '<td><a>出</a> <a href="https://auctions.yahoo.co.jp/jp/auction/s1249698997">s1249698997</a></td>')+'</table>'),'qa-econveni-20261025-02')!;
+ assert.equal(active.channels.YAHOO.listingId,'s1249698997');
+ const numeric=remoteProduct(page('<table>'+fixture.replace('<td align=center nowrap>外</td>', '<td><a>出</a> <a href="https://page.auctions.yahoo.co.jp/jp/auction/1247721321">1247721321</a></td>')+'</table>'),'qa-econveni-20261025-02')!;
+ assert.equal(numeric.channels.YAHOO.listingId,'1247721321');
+ assert.throws(()=>remoteProduct(page('<table>'+fixture.replace('<td align=center nowrap>外</td>', '<td><a>出</a> <a href="https://fakeauctions.yahoo.co.jp/jp/auction/s1249698997">s1249698997</a></td>')+'</table>'),'qa-econveni-20261025-02'));
+ const saved={...initialEconveniWorkflow('qa-econveni-20261025-02'),save:{state:'SUCCEEDED' as const,productId:'10176618',fingerprint:'hash'}};
+ const publishing=reserveEconveniOperation(saved,'YAHOO','hash','publish')!;
+ assert.equal(reconcileEconveniChannel(publishing,excluded,'YAHOO').channels.YAHOO.state,'VERIFY_REQUIRED');
+ const listed=reconcileEconveniChannel(publishing,active,'YAHOO');
+ assert.equal(listed.channels.YAHOO.state,'SUCCEEDED');assert.equal(reserveEconveniOperation(listed,'YAHOO','hash','repeat'),null);
+ const stopping=reserveEconveniOperation(listed,'YAHOO','hash','stop','STOP')!;
+ assert.equal(reconcileEconveniChannel(stopping,excluded,'YAHOO').channels.YAHOO.state,'VERIFY_REQUIRED','Excluded does NOT mean stopped');
+ assert.equal(reconcileEconveniChannel(stopping,active,'YAHOO').channels.YAHOO.state,'VERIFY_REQUIRED');
+ const inactive={...active,channels:{...active.channels,YAHOO:{...active.channels.YAHOO,state:'INACTIVE' as const}}};
+ const stopped=reconcileEconveniChannel(stopping,inactive,'YAHOO');
+ assert.equal(stopped.channels.YAHOO.remoteStatus,'INACTIVE');assert.equal(reserveEconveniOperation(stopped,'YAHOO','hash','stop-again','STOP'),null);
+ assert.equal(stopped.channels.MERCARI_SHOPS.state,'NOT_STARTED');
+ const form=readForms(page('<form method="post"><input type="radio" name="condition" value="a" checked><input type="radio" name="condition" value="b"><input type="checkbox" name="auto" value="yes" checked><select name="label"><option value="1">One</option></select></form>'))[0];
+ assert.deepEqual(formValues(form,{condition:'b',auto:''}),[['condition','b'],['label','1']]);
+ assert.throws(()=>formValues(form,{condition:'invented'}));assert.throws(()=>formValues(form,{label:'2'}));assert.throws(()=>formValues(form,{unknown:'x'}));
+ assert.equal(sameOptionValues([['a','1'],['id','20']],[['a','1']],['id']),true);
+ assert.equal(sameOptionValues([['a','1'],['paid','yes']],[['a','1']],['id']),false);
+ const images=page('<img src="https://img.e-conveni.net/smart/products/9350/123_2.jpg"><img src="https://img.e-conveni.net/smart/products/9350/123_1.jpg">');
+ assert.deepEqual(productImageUrls(images,'123'),['https://img.e-conveni.net/smart/products/9350/123_1.jpg','https://img.e-conveni.net/smart/products/9350/123_2.jpg']);
+ assert.throws(()=>productImageUrls(images,'124'));
+ assert.throws(()=>productImageUrls(page('<img src="https://other.example/smart/products/9350/123_1.jpg">'),'123'));
+ console.log('PASS: 4 normal-form command contracts, wrong product/account/batch rejection, remote IDs, excluded ambiguity, per-channel reconciliation, publish/stop idempotency, successful form controls');
+}
+void main().catch(e=>{console.error(e);process.exitCode=1;});

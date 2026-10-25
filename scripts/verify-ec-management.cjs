@@ -105,6 +105,10 @@ const gql = async ({ query, variables }) => {
 async function load(file, extra = {}) {
   const mocks = {
     "server-only": "",
+    "./ecCommonOperations": 'export const commonOperationSourceHash=async()=>"source";export const commonYahooUpdateAction=async()=>({status:"BLOCKED"});',
+    "./econveniListing": 'export const econveniListingAction=async(id,channel,operation,token)=>{f.state().econveniCalls??=[];f.state().econveniCalls.push({id,channel,operation,token});return{inventoryId:id,channel,operation,title:"Chair",status:token?"DONE":"READY",token:"review-owned",message:"e-conveni"}};',
+    "@/lib/listing/econveni/runtimeStore": 'export const readEconveniCatalog=async()=>{if(f.state().failEconveni)throw Error("unavailable");return f.state().econveniRows??[]};',
+    "@/lib/inventory/ecEligibleQuery": 'export const queryEcEligibleInventory=async()=>({items:[],totalCount:0});',
     "next/cache": "export const revalidatePath=()=>{};",
     "@/lib/amplify/requireInventoryUser":
       'export const getInventoryRole=async()=>f.state().role;export const canEditInventory=r=>r==="ADMIN"||r==="EDITOR";export const getCurrentInventoryUserEmail=async()=>"test";',
@@ -129,14 +133,14 @@ async function load(file, extra = {}) {
     "@/lib/listing/base/updateLifecycle":
       'export const reviewBaseContentUpdate=async()=>({status:"BLOCKED"});export const executeBaseContentUpdate=reviewBaseContentUpdate;',
     "../ecImage": 'export const baseImageUrl=async()=>"https://example.test/source.jpg";',
-    "@/lib/base/oauth": 'export const getAccessToken=async()=>"test-token";',
+    "@/lib/base/oauth": 'export const getAccessToken=async()=>"test-token";export const isBaseConnected=async()=>true;export class BaseNotConnectedError extends Error{}',
     "@/lib/base/connectionState": "export const getBaseConnectionState=async()=>({requestWriteItems:true});",
     "@/lib/listing/mercari/csv/buildExportRows":
       'export const resolveListingImageDownloadUrl=async()=>"https://example.test/source.jpg";',
     "@/lib/http/fetchWithTimeout":
       "export const fetchWithTimeout=async()=>({ok:true,json:async()=>({item:f.state().remote})});",
     "./adapter":
-      'export const createBaseProduct=async()=>{f.state().writes.push("create");return {externalProductId:"1234",visibility:"PRIVATE"}};export const addManualBaseImage=async(id,n)=>{f.state().writes.push("image:"+n);const url="https://example.test/new-"+n+".jpg";if(!f.state().failImageReadback)f.state().remote["img"+n+"_origin"]=url;return url;};export const setManualBaseVisibility=async(id,visible)=>{f.state().writes.push(visible?"publish":"stop");if(!f.state().failReadback)f.state().remote.visible=visible?1:0;};export const editManualBaseContent=async(id,content)=>{f.state().writes.push("edit");if(!f.state().failReadback)Object.assign(f.state().remote,content)};export const deleteManualBaseImage=async(id,n)=>{f.state().writes.push("delete-image:"+n);delete f.state().remote["img"+n+"_origin"]};',
+      'export const readBaseProductCategories=async()=>[];export const setManualBaseCategory=async()=>{};export const createBaseProduct=async()=>{f.state().writes.push("create");return {externalProductId:"1234",visibility:"PRIVATE"}};export const addManualBaseImage=async(id,n)=>{f.state().writes.push("image:"+n);const url="https://example.test/new-"+n+".jpg";if(!f.state().failImageReadback)f.state().remote["img"+n+"_origin"]=url;return url;};export const setManualBaseVisibility=async(id,visible)=>{f.state().writes.push(visible?"publish":"stop");if(!f.state().failReadback)f.state().remote.visible=visible?1:0;};export const editManualBaseContent=async(id,content)=>{f.state().writes.push("edit");if(!f.state().failReadback)Object.assign(f.state().remote,content)};export const deleteManualBaseImage=async(id,n)=>{f.state().writes.push("delete-image:"+n);delete f.state().remote["img"+n+"_origin"]};',
     ...extra,
   };
   const result = await esbuild.build({
@@ -233,37 +237,15 @@ async function load(file, extra = {}) {
   reset();ur=await update.reviewBaseContentUpdate(id);state.failReadback=true;
   assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED");assert.equal(state.channel.status,"ERROR");
   assert.equal((await update.executeBaseContentUpdate(id,ur.token)).status,"BLOCKED");assert.equal(state.writes.length,1,"unknown write is never repeated");
-  reset();
-  const stop = await operations.reviewEcListingAction(id, "MERCARI_SHOPS", "STOP");
-  state.http.productId = "another";
-  assert.equal((await operations.executeEcListingAction(stop, true)).status, "BLOCKED");
-  assert.equal(state.writes.length, 0, "changed binding cannot be stopped");
-  reset();
-  const yahooStop = await operations.reviewEcListingAction(id, "YAHOO", "STOP");
-  assert.equal(
-    (await operations.executeEcListingAction(yahooStop, true)).status,
-    "BLOCKED",
-    "bid guard kept",
-  );
-  reset();
-  state.http.status = "PREPARED";
-  const preparing = await operations.reviewEcListingAction(id, "MERCARI_SHOPS", "PUBLISH");
-  assert.equal(preparing.status, "WAIT");
-  assert.deepEqual(state.writes, ["prepare"]);
-  reset();
-  state.http.status = "NOT_PREPARED";
-  state.legacyMercari = { externalListingId: "legacy-1" };
-  assert.equal(
-    (await operations.reviewEcListingAction(id, "MERCARI_SHOPS", "STOP")).status,
-    "BLOCKED",
-    "unbound old listing must not appear stopped",
-  );
-  assert.equal(
-    (await operations.reviewEcListingAction(id, "MERCARI_SHOPS", "PUBLISH")).status,
-    "BLOCKED",
-    "unbound old listing must not be recreated",
-  );
-  assert.equal(state.writes.length, 0);
+  for(const channel of ["YAHOO","MERCARI_SHOPS"]){
+    for(const operation of ["PUBLISH","STOP"]){
+      reset();const r=await operations.reviewEcListingAction(id,channel,operation);
+      assert.equal(r.status,"READY");assert.deepEqual(JSON.parse(JSON.stringify(state.econveniCalls)),[{id,channel,operation}]);
+      assert.equal((await operations.executeEcListingAction(r,true,true)).status,"DONE");
+      assert.equal(state.econveniCalls.length,2);assert.equal(state.econveniCalls[1].token,"review-owned");
+      assert.equal(state.writes.length,0,"No old direct-marketplace calls");
+    }
+  }
   reset();
   const catalog = await load("app/actions/ecListingCatalog.ts");
   let result = await catalog.getEcListingCatalogAction();
