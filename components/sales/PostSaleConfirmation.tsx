@@ -1,7 +1,7 @@
 'use client';
 import {useState} from 'react';
-import type {PostSalePlan} from '@/lib/saleCandidates/postSale';
-import {EC_CHANNEL_LABEL,type EcChannel} from '@/lib/listing/ecManagement';
+import type {PostSalePlan} from '../../lib/saleCandidates/postSale';
+import {EC_CHANNEL_LABEL,type EcChannel} from '../../lib/listing/ecManagement';
 export function PostSaleConfirmation({plan,onConfirm,onReview,onClose}:{plan:PostSalePlan;onConfirm:()=>Promise<void>;onReview:(packs:Partial<Record<EcChannel,number>>)=>Promise<void>;onClose:()=>void}){
  const [busy,setBusy]=useState(false),[checked,setChecked]=useState(false);
  const [packs,setPacks]=useState<Partial<Record<EcChannel,number>>>(Object.fromEntries(plan.rows.filter(r=>r.operation==='STOCK').map(r=>[r.channel,r.unitsPerListing??1]))),[dirty,setDirty]=useState(false);
