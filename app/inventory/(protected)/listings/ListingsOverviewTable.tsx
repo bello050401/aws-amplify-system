@@ -28,6 +28,8 @@ import { usePrimaryPhotoThumbnails } from "../../usePrimaryPhotoThumbnails";
 import { resolveListPhotoUrl } from "@/lib/photoRegistration/gallerySelection";
 import {compareEcOverview,ecOverviewPrice,type EcSortKey} from "@/lib/listing/overviewPresentation";
 import { EcBulkDialog, type EcDialogAction } from "./EcBulkDialog";
+import {EconveniManualDialog} from './EconveniManualDialog';
+import {econveniManualSyncAction} from '@/app/actions/econveniManualSync';
 
 const button =
   "rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium hover:bg-gray-50 disabled:opacity-40";
@@ -68,6 +70,7 @@ export function ListingsOverviewTable({
       items: ListingOverviewRow[];
     } | null>(null);
   const authRetry = useRef(false);
+  const [manualOpen,setManualOpen]=useState(false);
   useEffect(() => setState(loadStateFromInitialRows(initialResult)), [initialResult]);
   async function loadCatalog() {
     setCatalogBusy(true);
@@ -165,6 +168,7 @@ export function ListingsOverviewTable({
           <p className="mt-1 text-xs text-gray-500">共通の商品情報を保存したら、共通動作から各販売先へまとめて出品できます。停止・更新は各販売先の欄から操作してください。</p>
         </div>
         <div className="flex gap-2">
+          {canEdit&&<button className={button+' border-blue-300 text-blue-700'} onClick={()=>setManualOpen(true)}>eコンビニ連携</button>}
           <button
             className={button}
             type="button"
@@ -372,6 +376,8 @@ export function ListingsOverviewTable({
                           )}
                         </div>
                       )}
+                      {s.source==='ECONVENI'&&<p className="mt-2 text-[10px] text-slate-500">eコンビニ取得<br/>{s.checkedAt?formatJstDateTime(s.checkedAt):''}</p>}
+                      {s.note&&<p className="mt-1 max-w-48 text-xs text-amber-700">{s.note}</p>}
                     </td>
                   );
                 })}
@@ -404,6 +410,7 @@ export function ListingsOverviewTable({
           次へ
         </button>
       </div>
+      {manualOpen&&<EconveniManualDialog rows={rows} run={econveniManualSyncAction} onClose={()=>setManualOpen(false)} onChanged={()=>void loadCatalog()} renderPhoto={row=><div className="h-full w-full [&_img]:!h-full [&_img]:!w-full [&_div]:max-h-full"><InventoryThumbnail storageKey={row.thumbnailKey} directUrl={resolveListPhotoUrl(!!row.thumbnailIsPrimary,photoThumbnails[row.inventoryId])} alt={row.name} size="heroContain"/></div>}/>}
       {operation && (
         <EcBulkDialog
           items={operation.items}

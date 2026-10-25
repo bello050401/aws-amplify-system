@@ -2,6 +2,7 @@ import "server-only";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import iconv from "iconv-lite";
 import { randomUUID, createHash } from "node:crypto";
+import type {ExternalProduct,ExternalStatus} from './manualSyncModel';
 
 type Element = DefaultTreeAdapterMap["element"];
 type Node = DefaultTreeAdapterMap["node"];
@@ -30,6 +31,47 @@ function elements(node: Node): Element[] {
 function attr(node: Element, name: string): string { return node.attrs.find(a => a.name === name)?.value ?? ""; }
 function hasAttr(node: Element, name: string): boolean { return node.attrs.some(a => a.name === name); }
 function text(node: Node): string { return "value" in node ? node.value : "childNodes" in node ? node.childNodes.map(text).join("") : ""; }
+/** Read only the observed standard table. Never follow its command links. */
+export function externalCatalogPage(page:HtmlPage):{products:ExternalProduct[];total:number}{
+ const nodes=elements(parse(page.html)),totalMatch=text(parse(page.html)).match(/検索結果\s*:\s*([\d,]+)件/);
+ if(!totalMatch||!readForms(page).some(f=>f.fields.some(x=>x.name==='scop')))throw new EconveniHttpError('CONTRACT_CHANGED');
+ const products:ExternalProduct[]=[];
+ for(const checkbox of nodes.filter(n=>n.tagName==='input'&&attr(n,'name')==='pidlist')){
+  const id=attr(checkbox,'value');let row:Node|undefined=checkbox;
+  while(row&&(!('tagName'in row)||row.tagName!=='tr'))row='parentNode'in row?row.parentNode??undefined:undefined;
+  const cells=row&&'childNodes'in row?row.childNodes.filter((n):n is Element=>'tagName'in n&&n.tagName==='td'):[];
+  if(!/^\d{1,15}$/.test(id)||cells.length!==12||text(cells[1]).trim()!==id)throw new EconveniHttpError('CONTRACT_CHANGED');
+  const titleLink=elements(cells[3]).find(n=>n.tagName==='a');if(!titleLink)throw new EconveniHttpError('CONTRACT_CHANGED');
+  const target=allowedUrl(attr(titleLink,'href'),page.url);
+  if(target.origin!==SMART||target.pathname!=='/product.php'||target.searchParams.get('products_id')!==id||target.searchParams.get('action')!=='product_update')throw new EconveniHttpError('CONTRACT_CHANGED');
+  const markers=attr(titleLink,'title').split(/\r?\n/).filter(n=>n.startsWith('BELLO_INVENTORY_ID=')).map(n=>n.slice(19));
+  if(markers.length>1)throw new EconveniHttpError('CONTRACT_CHANGED');
+  const source=elements(cells[2]).find(n=>n.tagName==='img');let imageUrl:string|null=null;
+  if(source&&attr(source,'src').includes('/smart/products/')){
+   const u=allowedUrl(attr(source,'src'),page.url);
+   if(u.origin!==IMAGE||!new RegExp('^/smart/products/\\d+/'+id+'_\\d+\\.(jpg|png)$','i').test(u.pathname)||u.search||u.hash)throw new EconveniHttpError('CONTRACT_CHANGED');imageUrl=u.href;
+  }
+  // A fresh HTTP session uses the compact photo-present icon. The standard UI
+  // uses this account/product first-photo path. The confirmation UI additionally
+  // requires successful loading of both images; a missing photo cannot be linked.
+  if(!imageUrl&&source&&attr(source,'src')==='images/dot_green.gif'&&/^\d+$/.test(target.searchParams.get('users_id')??'')){
+   imageUrl=IMAGE+'/smart/products/'+target.searchParams.get('users_id')+'/'+id+'_1.jpg';
+  }
+  const status=(index:number,market:'YAHOO'|'MERCARI_SHOPS'|'BASE'):ExternalStatus=>{
+   const links=elements(cells[index]).filter(n=>n.tagName==='a'),label=(links[0]?text(links[0]):text(cells[index])).trim();
+   if(!['出','未','外'].includes(label))throw new EconveniHttpError('CONTRACT_CHANGED');
+   const pattern=market==='YAHOO'?/^https?:\/\/(?:auctions\.yahoo\.co\.jp|page\d*\.auctions\.yahoo\.co\.jp)\/jp\/auction\/([a-z][0-9]{8,12}|[0-9]{10})\/?$/:market==='MERCARI_SHOPS'?/^https:\/\/mercari-shops\.com\/products\/([A-Za-z0-9]+)\/?$/:/^https:\/\/[a-zA-Z0-9-]+\.base\.shop\/items\/([0-9]+)\/?$/;
+   const matches=links.map(n=>attr(n,'href').match(pattern)).filter((x):x is RegExpMatchArray=>!!x);
+   if(matches.length>1||label==='出'&&matches.length!==1)throw new EconveniHttpError('CONTRACT_CHANGED');
+   return {state:label==='出'?'ACTIVE':label==='外'?'EXCLUDED':'INACTIVE',listingId:matches[0]?.[1]??null,listingUrl:matches[0]?.[0].replace(/^http:/,'https:')??null};
+  };
+  const quantity=Number(text(cells[10]).trim()),price=Number(text(cells[11]).trim().replaceAll(',',''));
+  if(!Number.isSafeInteger(quantity)||quantity<0||!Number.isSafeInteger(price)||price<0)throw new EconveniHttpError('CONTRACT_CHANGED');
+  products.push({productId:id,title:text(titleLink).trim(),imageUrl,quantity,price,inventoryMarker:markers[0]??null,channels:{YAHOO:status(4,'YAHOO'),MERCARI_SHOPS:status(7,'MERCARI_SHOPS'),BASE:status(9,'BASE')}});
+ }
+ if(new Set(products.map(p=>p.productId)).size!==products.length)throw new EconveniHttpError('CONTRACT_CHANGED');
+ return {products,total:Number(totalMatch[1].replaceAll(',',''))};
+}
 export function inventoryBindings(page: HtmlPage, inventoryId: string): InventoryBinding[] {
   const matches = new Map<string, InventoryBinding>();
   for (const node of elements(parse(page.html))) {
@@ -336,6 +378,21 @@ export class EconveniHttpSession {
   }
 
   async readInventory(inventoryId: string) { return remoteProduct(await this.searchInventoryPage(inventoryId), inventoryId); }
+
+  async readExternalCatalog():Promise<ExternalProduct[]>{
+    if(!this.authenticated)throw new EconveniHttpError('AUTH_REQUIRED');
+    const items:ExternalProduct[]=[];let total:number|undefined;
+    for(let page=1;page<=40;page++){
+      if(page>1)await new Promise(r=>setTimeout(r,1000));
+      const result=externalCatalogPage(await this.request(SMART+'/products.php?'+new URLSearchParams({order_by:'products_id',attribute_page:String(page)})));
+      if(total!==undefined&&result.total!==total||result.total>1000)throw new EconveniHttpError('CONTRACT_CHANGED');
+      total=result.total;items.push(...result.products);
+      if(new Set(items.map(p=>p.productId)).size!==items.length||items.length>total)throw new EconveniHttpError('CONTRACT_CHANGED');
+      if(items.length===total)return items;
+      if(!result.products.length)throw new EconveniHttpError('CONTRACT_CHANGED');
+    }
+    throw new EconveniHttpError('CONTRACT_CHANGED');
+  }
 
   async preflightSave(inventoryId:string,values:Record<string,string>,count:number){
     const existing=await this.readInventory(inventoryId);

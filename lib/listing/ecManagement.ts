@@ -17,6 +17,8 @@ export const EC_STATE_LABEL: Record<EcState, string> = {
   UNKNOWN: "未確認",
 };
 export type EcChannelState = {
+  source?: 'ECONVENI';
+  note?: string;
   state: EcState;
   externalId: string | null;
   url: string | null;

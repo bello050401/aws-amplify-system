@@ -1,6 +1,8 @@
 "use server";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {readEconveniCatalog} from '@/lib/listing/econveni/runtimeStore';
+import {readManualSync} from '@/lib/listing/econveni/manualSync';
+import {overlayManualStatuses} from '@/lib/listing/econveni/manualSyncModel';
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { EcCatalog, EcChannelState, EcState } from "@/lib/listing/ecManagement";
 
@@ -132,5 +134,7 @@ export async function getEcListingCatalogAction(): Promise<EcCatalog> {
     delete catalog.channels.YAHOO;delete catalog.channels.MERCARI_SHOPS;
     catalog.errors.push('eコンビニの保存・出品情報を取得できませんでした。再読み込みしてください。');
   }
+  try {overlayManualStatuses(catalog,await readManualSync());}
+  catch {catalog.errors.push('eコンビニの手動連携情報を取得できませんでした。状態を再確認してください。');}
   return catalog;
 }

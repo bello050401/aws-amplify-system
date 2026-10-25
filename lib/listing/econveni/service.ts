@@ -14,6 +14,7 @@ import {runEconveniSave} from './saveWorkflow';
 import {runEconveniCommand} from './commandWorkflow';
 import {prepareEconveniProduct,EconveniPreparationError} from './mapping';
 import type {EcReview} from '../ecManagement';
+import {manualWriteRestriction} from './manualWriteGuard';
 
 export type EconveniSaveResult={status:'DONE'|'WAIT'|'BLOCKED';message:string;productId?:string;nextAt?:number};
 export function econveniFailure(error:unknown):EconveniSaveResult{
@@ -69,6 +70,7 @@ async function saveInSession(id:string,store:ReturnType<typeof econveniStore>,se
 }
 export async function saveEconveniDraft(id:string):Promise<EconveniSaveResult>{
   try{
+    const restriction=await manualWriteRestriction(id);if(restriction)return {status:'BLOCKED',message:restriction};
     const prepared=await source(id),store=econveniStore(id),session=new EconveniHttpSession();
     const state=await withEconveniAccount(store,session,()=>econveniCredentialStore.credentials(),()=>saveInSession(id,store,session,prepared));
     if(state.save.state!=='SUCCEEDED')throw new EconveniWorkflowError('VERIFY_REQUIRED');
@@ -84,6 +86,7 @@ function display(state:EconveniWorkflow,channel:EconveniChannel){
 export async function econveniOperation(id:string,channel:EconveniChannel,operation:'PUBLISH'|'STOP',actor:string,token?:string,terms=false):Promise<EcReview>{
   let base:EcReview={inventoryId:id,channel,operation,title:'',status:'BLOCKED',message:'処理を確認できませんでした。'};
   try{
+    const restriction=await manualWriteRestriction(id,channel);if(restriction)return {...base,message:restriction};
     const prepared=operation==='PUBLISH'?await source(id):null;
     const store=econveniStore(id),session=new EconveniHttpSession();
     return await withEconveniAccount(store,session,()=>econveniCredentialStore.credentials(),async()=>{

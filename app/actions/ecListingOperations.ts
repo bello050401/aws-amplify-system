@@ -1,5 +1,6 @@
 "use server";
 import {econveniListingAction} from './econveniListing';
+import {manualWriteRestriction} from '@/lib/listing/econveni/manualWriteGuard';
 import {markInventoryPublished} from '@/lib/listing/publicationCategory';
 import { commonYahooUpdateAction,commonOperationSourceHash } from "./ecCommonOperations";
 import { createHash } from "node:crypto";
@@ -60,6 +61,11 @@ export async function reviewEcListingAction(
     const item = await getInventoryDetail(id);
     if (!item) return { ...base, message: "対象商品が見つかりません。" };
     base.title = item.name;
+    if(['PUBLISH','STOP','UPDATE'].includes(operation)){
+      const existing=channel==='BASE'||operation==='UPDATE'?await getChannelListing(id,channel==='BASE'?'BASE':'MERCARI_SHOPS'):null;
+      const warning=await manualWriteRestriction(id,channel,channel==='BASE'||operation==='UPDATE'&&channel==='MERCARI_SHOPS'?existing?.externalListingId??null:undefined);
+      if(warning)return {...base,message:warning};
+    }
     if ((channel === 'YAHOO' || channel === 'MERCARI_SHOPS') && (operation === 'PUBLISH' || operation === 'STOP'))
       return econveniListingAction(id,channel,operation);
     if (operation === "ARCHIVE" || operation === "RESTORE") {
@@ -132,6 +138,11 @@ export async function executeEcListingAction(
     return failed;
   const id = review.inventoryId;
   try {
+    if(['PUBLISH','STOP','UPDATE'].includes(review.operation)){
+      const existing=review.channel==='BASE'||review.operation==='UPDATE'?await getChannelListing(id,review.channel==='BASE'?'BASE':'MERCARI_SHOPS'):null;
+      const warning=await manualWriteRestriction(id,review.channel,review.channel==='BASE'||review.operation==='UPDATE'&&review.channel==='MERCARI_SHOPS'?existing?.externalListingId??null:undefined);
+      if(warning)return {...failed,message:warning};
+    }
     if ((review.channel === 'YAHOO' || review.channel === 'MERCARI_SHOPS') && (review.operation === 'PUBLISH' || review.operation === 'STOP'))
       return econveniListingAction(id,review.channel,review.operation,review.token,termsAccepted);
     if(review.operation==='PUBLISH'&&review.token.startsWith('SYNC.')) {
