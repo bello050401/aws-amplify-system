@@ -24,6 +24,8 @@ export async function registerSoldOut(request:SoldOutRequest):Promise<{ok:true;r
       if(!/^[a-f0-9]{64}$/.test(request.sourceCandidateId))throw new SoldOutError('INVALID','購入通知を選び直してください。');
       candidate=await candidateStore().get(request.sourceCandidateId);
       if(!candidate||candidate.state==='DELETED')throw new SoldOutError('CONFLICT','この購入通知は削除されています。');
+      const expectedMarket=({BASE:'ベイス',MERCARI:'メルカリSHOP',YAHOO:'ヤフオク'} as Record<string,string>)[candidate.channel];
+      if(expectedMarket&&request.market!==expectedMarket)throw new SoldOutError('INVALID','購入通知の販売先は変更できません。通知を確認してください。');
       if(candidate.state==='DONE'&&candidate.result)return {ok:true,result:candidate.result};
     }
     const execute=createSoldOutService({db:inventoryDdb,table:inventoryTable,categories:listCategories,copyPhotos:copySoldOutPhotos,discardPhotos:discardSoldOutPhotos,nextSku:async()=>{

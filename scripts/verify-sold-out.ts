@@ -6,6 +6,9 @@ import {createSoldOutService} from '../lib/inventory/soldOutCore';
 import {japanToday,type SoldOutRequest} from '../lib/inventory/soldOutInput';
 import {createCandidateStore} from '../lib/saleCandidates/storeCore';
 import type {SaleCandidate} from '../lib/saleCandidates/model';
+import {saleAmounts,type SalePricing} from '../lib/inventory/salePricing';
+import {summarizeSales} from '../lib/inventory/sales';
+import {buildMonthlyAggregates} from '../lib/inventory/salesAggregate';
 
 function fixture(quantity=5,withCandidate=false) {
   const id=randomUUID(), time='2026-10-24T01:00:00.000Z';
@@ -65,3 +68,24 @@ test('purchase candidate and sale split commit atomically with commission',async
 test('deleted candidate rejects sale without quantity/history changes',async()=>{const f=fixture(5,true);f.rows().get('Candidates/'+f.candidate.id).state='DELETED';await assert.rejects(f.run(f.request,'actor'));assert.deepEqual(f.get(f.source.id),f.source);assert.equal(f.inventory().length,1);});
 test('candidate transaction failure leaves both candidate and inventory unchanged',async()=>{const f=fixture(5,true);f.state.fail=true;await assert.rejects(f.run(f.request,'actor'));assert.equal(f.rows().get('Candidates/'+f.candidate.id).state,'PENDING');assert.deepEqual(f.get(f.source.id),f.source);});
 test('lost candidate confirmation response and double click return only one split',async()=>{const f=fixture(5,true);f.state.lost=true;const r=await f.run(f.request,'actor');assert.deepEqual(await f.run(f.request,'actor'),r);assert.equal(f.inventory().length,2);assert.equal(f.rows().get('Candidates/'+f.candidate.id).state,'DONE');});
+
+for(const [mode,units,itemsPerUnit,price,fee] of [['UNIT',2,1,10000,1000],['SET',1,2,20000,2000],['SET',2,2,20000,2000]] as const)test(`${mode} ${units} commercial units: physical stock and financial totals stay separate`,async()=>{
+ const f=fixture(5,true),pricing:SalePricing={mode,units,itemsPerUnit,unitPrice:price,unitCommission:fee};
+ const amounts=saleAmounts(pricing),request={...f.request,...amounts,pricing};
+ const result=await f.run(request,'actor'),sold=f.get(result.soldId),remaining=f.get(result.sourceId);
+ assert.equal(sold.quantity,units*itemsPerUnit);assert.equal(remaining.quantity,5-units*itemsPerUnit);
+ assert.equal(sold.salePrice,price*units);assert.equal(sold.saleCommission,fee*units);
+ assert.equal(sold.name,mode==='SET'?`【${itemsPerUnit}点セット】${request.name}`:request.name);
+ assert.ok(!sold.categoryIds.includes('active'));assert.ok(sold.categoryIds.includes('sold'));
+ assert.deepEqual(remaining.categoryIds,f.source.categoryIds);assert.equal(remaining.name,f.source.name);
+ const records=f.inventory();assert.equal(summarizeSales(records,2026,10).totalSales,price*units);
+ assert.equal(buildMonthlyAggregates(records)[0].totalSales,price*units);
+ assert.equal(JSON.parse(sold.customFields).__belloSale.unitCommission,fee);
+ assert.deepEqual(await f.run(request,'actor'),result);assert.equal(f.inventory().length,2);
+});
+test('set pricing rejects mismatched totals and over-stock without writes',async()=>{
+ const f=fixture(5,true),pricing:SalePricing={mode:'SET',units:1,itemsPerUnit:2,unitPrice:15000,unitCommission:1500};
+ await assert.rejects(f.run({...f.request,...saleAmounts(pricing),pricing,salePrice:30000},'actor'));
+ await assert.rejects(f.run({...f.request,...saleAmounts({...pricing,units:3}),pricing:{...pricing,units:3}},'actor'));
+ assert.equal(f.state.transactions,0);assert.deepEqual(f.get(f.source.id),f.source);
+});

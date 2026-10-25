@@ -4,7 +4,7 @@ import {categoryFilter} from "./categories";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { MasterEntry } from "@/lib/inventory/masters";
-import { isEcListingEligible } from "@/lib/listing/ecEligibility";
+import { isEcListingVisible } from "@/lib/listing/ecEligibility";
 import { toListRow, type InventoryListRow } from "@/lib/inventory/queries";
 
 /** Multiple categories use Inventory.categoryIds; categoryId remains a legacy fallback. */
@@ -18,7 +18,7 @@ export interface EcEligibleInventoryResult {
 
 /** Read once for all eligible categories to avoid one full table scan per category. */
 export async function listEcEligibleInventory(categories: MasterEntry[]): Promise<EcEligibleInventoryResult> {
- const eligible=categories.filter(c=>isEcListingEligible(c.name));
+ const eligible=categories.filter(c=>isEcListingVisible(c.name));
  if(!eligible.length)return {items:[],queriedCategories:0,uncategorizedExcluded:true};
  const items:InventoryListRow[]=[];let nextToken:string|null|undefined;
  do {

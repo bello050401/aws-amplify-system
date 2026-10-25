@@ -1,3 +1,5 @@
+
+import {assertMessagesEnabled} from "@/lib/messaging/featureState";
 import "server-only";
 import {
   fetchMercariNotificationMailsByIds,
@@ -123,6 +125,7 @@ export async function ingestMercariNotificationMails(params: {
    */
   reprocess?: boolean;
 }): Promise<MailIngestResult> {
+  assertMessagesEnabled();
   const result: MailIngestResult = {
     fetched: 0,
     ingested: 0,

@@ -1,3 +1,4 @@
+import {MESSAGES_PAUSED} from "@/lib/messaging/featureState";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyLineSignature } from "@/lib/messaging/line/signature";
 import { getLineChannelSecret } from "@/lib/messaging/line/tokenAccess";
@@ -45,6 +46,7 @@ import type { LineWebhookBody } from "@/lib/messaging/line/types";
  *   の2点で、どちらも本人操作(BLOCKED_BY_USER)。
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  if (MESSAGES_PAUSED) return NextResponse.json({ok:true,paused:true});
   const channelSecret = await getLineChannelSecret();
   if (!channelSecret) {
     console.error("[line webhook] LINE_CHANNEL_SECRETが未設定のため受信を処理できません。");

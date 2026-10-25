@@ -125,6 +125,7 @@ function omitNulls<T extends Record<string, unknown>>(obj: T): Partial<T> {
 
 function batchViewFromItem(item: BatchItem): PhotoBatchView {
   return {
+    linkedAt:item.linkedAt??null,
     id: item.id,
     batchCode: item.batchCode,
     status: item.status,
@@ -263,7 +264,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
   }
 
   async getBatchById(batchId: string): Promise<PhotoBatchView | null> {
-    const result = await this.ddb.send(new GetCommand({ TableName: this.tableName, Key: batchKey(batchId) }));
+    const result = await this.ddb.send(new GetCommand({ TableName: this.tableName, Key: batchKey(batchId), ConsistentRead:true }));
     if (!result.Item) return null;
     return batchViewFromItem(result.Item as BatchItem);
   }

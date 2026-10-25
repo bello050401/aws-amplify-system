@@ -1,4 +1,6 @@
 "use server";
+import {assertMessagesEnabled} from "@/lib/messaging/featureState";
+
 
 import { randomUUID } from "node:crypto";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
@@ -44,6 +46,7 @@ function safeErrorMessage(err: unknown, fallback: string): string {
 }
 
 async function requireEditPermission(): Promise<string | null> {
+  assertMessagesEnabled();
   const role = await getInventoryRole();
   if (!canEditInventory(role)) throw new Error("この操作にはADMINまたはEDITOR権限が必要です。");
   return getCurrentInventoryUserEmail();

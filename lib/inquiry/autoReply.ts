@@ -1,3 +1,5 @@
+
+import {assertMessagesEnabled} from "@/lib/messaging/featureState";
 import "server-only";
 import { runWithDirectData } from "@/lib/amplify/dataClient";
 import { getConversation, listMessages } from "@/lib/messaging/service";
@@ -138,6 +140,7 @@ export async function processInquiryAndNotify(params: {
    */
   productContextNotes?: string[];
 }): Promise<AutoReplyResult> {
+  assertMessagesEnabled();
   try {
     const settings = await getAIReplySettings();
 

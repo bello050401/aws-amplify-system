@@ -1,4 +1,5 @@
 import { ZAICO_FIELD_CHOICES } from './zaicoFieldChoices';
+import {saleAmounts,type SalePricing} from './salePricing';
 
 export const SOLD_OUT_MARKETS = ZAICO_FIELD_CHOICES.market;
 export interface SoldOutRequest {
@@ -7,6 +8,7 @@ export interface SoldOutRequest {
   externalProductId: string; market: string; salePrice: number | null;
   saleCommission?: number|null;
   sourceCandidateId?:string;
+  pricing?:SalePricing;
 }
 export interface SoldOutResult { sourceId: string; soldId: string; remainingQuantity: number; soldQuantity: number; updatedAt: string }
 export class SoldOutError extends Error {
@@ -27,4 +29,8 @@ export function validateSoldOut(request: SoldOutRequest, available?: number, cur
   if (request.saleCommission!=null&&(!Number.isSafeInteger(request.saleCommission)||request.saleCommission<0))invalid('販売手数料は0以上の整数で入力してください。');
   if(request.sourceCandidateId!==undefined&&!/^[a-f0-9]{64}$/.test(request.sourceCandidateId))invalid('購入通知を開き直してください。');
   if(request.sourceCandidateId&&(request.salePrice==null||request.saleCommission==null))invalid('販売価格と販売手数料を確認して入力してください。');
+  if(request.pricing){
+    let a;try{a=saleAmounts(request.pricing);}catch(e){invalid((e as Error).message);}
+    if(a!.quantity!==request.quantity||a!.salePrice!==request.salePrice||a!.saleCommission!==(request.saleCommission??null))invalid('売却数量・単価・手数料の合計が一致しません。');
+  }
 }

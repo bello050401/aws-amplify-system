@@ -1,5 +1,6 @@
 "use server";
 import {econveniListingAction} from './econveniListing';
+import {markInventoryPublished} from '@/lib/listing/publicationCategory';
 import { commonYahooUpdateAction,commonOperationSourceHash } from "./ecCommonOperations";
 import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
@@ -98,7 +99,9 @@ export async function reviewEcListingAction(
           if(sync)return sync;
         }
       }
-      return {...base,...await reviewBaseListing(id,operation)};
+      const result={...base,...await reviewBaseListing(id,operation)};
+      if(operation==='PUBLISH'&&result.status==='DONE')await markInventoryPublished(id,(await getCurrentInventoryUserEmail())??'BASE出品');
+      return result;
     }
     return base;
   } catch {
@@ -187,6 +190,7 @@ export async function executeEcListingAction(
     } else if (review.channel === "BASE") {
       const result = await executeBaseListing(id, review.operation, review.token);
       if (!result.ok) return { ...failed, message: result.message };
+      if(review.operation==='PUBLISH')await markInventoryPublished(id,(await getCurrentInventoryUserEmail())??'BASE出品');
     } else { return failed; }
     revalidatePath("/inventory/listings");
     revalidatePath(`/inventory/${id}/listing`);

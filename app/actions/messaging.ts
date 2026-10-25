@@ -1,4 +1,6 @@
 "use server";
+import {assertMessagesEnabled} from "@/lib/messaging/featureState";
+
 
 import { revalidatePath } from "next/cache";
 import { getLineOutboundStatus } from "@/lib/messaging/line/outboundGuard";
@@ -30,12 +32,14 @@ import type { ConversationRecord, ConversationWorkflowStatus, MessageRecord } fr
  * の「1件同期」等と同じADMIN限定にする)。
  */
 async function requireEditPermission(): Promise<string | null> {
+  assertMessagesEnabled();
   const role = await getInventoryRole();
   if (!canEditInventory(role)) throw new Error("この操作にはADMINまたはEDITOR権限が必要です。");
   return getCurrentInventoryUserEmail();
 }
 
 async function requireAdmin(): Promise<string | null> {
+  assertMessagesEnabled();
   const role = await getInventoryRole();
   if (role !== "ADMIN") throw new Error("この操作にはADMIN権限が必要です。");
   return getCurrentInventoryUserEmail();

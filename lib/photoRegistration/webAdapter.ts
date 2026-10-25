@@ -30,7 +30,7 @@
  * (scripts/verify-photo-registration-api.tsと同じ考え方)。
  */
 import "server-only";
-import {originalAvailable} from "./originalRetention";
+import {originalAvailable,originalForBatch,originalUrlTtl} from "./originalRetention";
 import { cleanupPhotoAssets } from "../mediaMaintenance/photoCleanupAws";
 import { cookies } from "next/headers";
 import { fetchAuthSession } from "aws-amplify/auth/server";
@@ -184,7 +184,7 @@ export class PhotoRegistrationWebAdapter {
     }
   }
 
-  private async toWebAsset(asset: PhotoAssetView): Promise<WebPhotoAssetView> {
+  private async toWebAsset(asset: PhotoAssetView,linkedAt?:string|null): Promise<WebPhotoAssetView> {
     if (asset.isDeleted || asset.purgeStartedAt || asset.purgedAt) return { ...asset, thumbnailUrl: null, processedUrl: null };
     // Both variants are independent signatures. Waiting for the thumbnail
     // before starting the processed image adds an avoidable signing round
@@ -195,6 +195,7 @@ export class PhotoRegistrationWebAdapter {
     ]);
     return {
       ...asset,
+      original:originalForBatch(asset.original,linkedAt),
       thumbnailUrl,
       processedUrl,
     };
@@ -241,7 +242,7 @@ export class PhotoRegistrationWebAdapter {
     const start = (page - 1) * pageSize;
     const pageItems = rawAssets.slice(start, start + pageSize);
 
-    const assets = await Promise.all(pageItems.map((asset) => this.toWebAsset(asset)));
+    const assets = await Promise.all(pageItems.map((asset) => this.toWebAsset(asset,batch.linkedAt)));
 
     return ok({ batch, assets, totalAssetCount, page, pageSize, actorRole: actorResult.value.role });
   }
@@ -266,7 +267,7 @@ export class PhotoRegistrationWebAdapter {
       .flat()
       .filter((asset) => !asset.isDeleted && asset.status === "READY")
       .sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
-    return ok({ inventoryId, assets: await Promise.all(rawAssets.map((asset) => this.toWebAsset(asset))), batchCount: batches.length, truncated });
+    return ok({ inventoryId, assets: await Promise.all(rawAssets.map((asset) => this.toWebAsset(asset,batches.find(b=>b.id===asset.photoBatchId)?.linkedAt))), batchCount: batches.length, truncated });
   }
 
   /**
@@ -388,9 +389,10 @@ export class PhotoRegistrationWebAdapter {
     if (asset.status !== "READY" && asset.status !== "FLAGGED") return err("UPLOAD_NOT_COMPLETE", "アップロードが完了していません。");
     if (!this.deps.presignDownloadUrl) return err("CONFLICT", "ダウンロードを準備できません。");
     if(variant==="original"){
-      if(!originalAvailable(asset.original))return err("ASSET_NOT_FOUND","編集前写真は未アップロード、または7日間の保管期限を過ぎています。");
-      const o=asset.original!;
-      return ok(await this.deps.presignDownloadUrl(o.key,o.fileName,Math.max(1,Math.min(60,Math.floor((Date.parse(o.expiresAt)-Date.now())/1000)))));
+      const original=originalForBatch(asset.original,found.batch.linkedAt);
+      if(!originalAvailable(original))return err("ASSET_NOT_FOUND","編集前写真は未アップロード、または7日間の保管期限を過ぎています。");
+      const o=original!;
+      return ok(await this.deps.presignDownloadUrl(o.key,o.fileName,originalUrlTtl(o,60)));
     }
     const ext = extensionForMimeType(asset.declared.PROCESSED.mimeType);
     return ok(await this.deps.presignDownloadUrl(photoAssetS3Key(asset.photoBatchId, asset.id, "PROCESSED", ext), found.batch.batchCode + "_" + (asset.sequence + 1) + "." + ext));

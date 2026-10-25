@@ -3,7 +3,7 @@ const {S3Client,GetBucketLifecycleConfigurationCommand,PutBucketLifecycleConfigu
 const {LambdaClient,GetFunctionCommand,UpdateFunctionCodeCommand}=require('@aws-sdk/client-lambda');
 const region='us-west-2',bucket='bello-photo-e2e-validation-photobucket-l3bwsehg6e26',name='bello-photo-e2e-validation-PhotoFunction-IsZ8OHOyIA0w';
 (async()=>{
- const dir=path.resolve('artifacts/revision-20261025'),lambda=new LambdaClient({region}),s3=new S3Client({region});
+ const dir=path.resolve('artifacts/sale-workflow-20261025'),lambda=new LambdaClient({region}),s3=new S3Client({region});fs.mkdirSync(dir,{recursive:true});
  const before=await lambda.send(new GetFunctionCommand({FunctionName:name}));
  const response=await fetch(before.Code.Location);if(!response.ok)throw Error('Backup failed');fs.writeFileSync(path.join(dir,'photo-lambda-before.zip'),Buffer.from(await response.arrayBuffer()));
  execFileSync(process.execPath,['node_modules/esbuild/bin/esbuild','amplify/functions/photo-registration/httpHandler.ts','--bundle','--platform=node','--target=node20','--external:@aws-sdk/*','--outfile='+path.join(dir,'photo-lambda/index.js')]);
@@ -11,7 +11,9 @@ const region='us-west-2',bucket='bello-photo-e2e-validation-photobucket-l3bwsehg
  const updated=await lambda.send(new UpdateFunctionCodeCommand({FunctionName:name,RevisionId:before.Configuration.RevisionId,ZipFile:zip}));
  const lifecycle=await s3.send(new GetBucketLifecycleConfigurationCommand({Bucket:bucket}));fs.writeFileSync(path.join(dir,'lifecycle-before.json'),JSON.stringify({Rules:lifecycle.Rules},null,2));
  const ids=new Set(['ExpireOriginalImportsAfterSevenDays','ExpireAssetOriginalsAfterSevenDays']);
- const rules=[...(lifecycle.Rules??[]).filter(r=>!ids.has(r.ID)),...['photo-batches/original-imports/','photo-batches/originals/'].map((prefix,i)=>({ID:[...ids][i],Filter:{Prefix:prefix},Status:'Enabled',Expiration:{Days:7},NoncurrentVersionExpiration:{NoncurrentDays:1},AbortIncompleteMultipartUpload:{DaysAfterInitiation:1}}))];
+ // Current originals expire seven days after product linkage via daily maintenance.
+ // S3 age is upload age: an age-based current-object rule would delete unlinked photos too early.
+ const rules=[...(lifecycle.Rules??[]).filter(r=>!ids.has(r.ID)),...['photo-batches/original-imports/','photo-batches/originals/'].map((prefix,i)=>({ID:[...ids][i],Filter:{Prefix:prefix},Status:'Enabled',NoncurrentVersionExpiration:{NoncurrentDays:1},AbortIncompleteMultipartUpload:{DaysAfterInitiation:1}}))];
  await s3.send(new PutBucketLifecycleConfigurationCommand({Bucket:bucket,LifecycleConfiguration:{Rules:rules}}));
  const result={at:new Date().toISOString(),function:name,revisionId:updated.RevisionId,codeSha256:updated.CodeSha256,lifecycle:(await s3.send(new GetBucketLifecycleConfigurationCommand({Bucket:bucket}))).Rules};fs.writeFileSync(path.join(dir,'photo-deploy.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 })().catch(e=>{console.error(e.name+': '+e.message);process.exitCode=1;});

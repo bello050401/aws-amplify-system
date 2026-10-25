@@ -59,13 +59,14 @@ async function baseApiCall<T>(path: string, params: Record<string, string | numb
   if (manual) {
     // Separate opt-in for confirmed staff operations; never enables scheduled pricing.
     const visibility = path === "/items/edit" && Object.keys(params).sort().join(",") === "item_id,visible" && [0, 1].includes(Number(params.visible));
+    const stockOnly=path==='/items/edit'&&Object.keys(params).sort().join(',')==='item_id,stock'&&Number.isSafeInteger(params.stock)&&Number(params.stock)>=0;
     const image = path === "/items/add_image" && Object.keys(params).sort().join(",") === "image_no,image_url,item_id" && Number.isInteger(Number(params.image_no)) && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
     const removeImage = path === "/items/delete_image" && Object.keys(params).sort().join(",") === "image_no,item_id" && Number.isInteger(Number(params.image_no)) && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
     const content = path === "/items/edit" && Object.keys(params).sort().join(",") === "detail,item_id,price,stock,title" && typeof params.title === "string" && params.title.trim().length > 0 && Number.isSafeInteger(params.price) && Number(params.price) > 0 && Number.isSafeInteger(params.stock) && Number(params.stock) >= 0;
     const privateAdd = path === "/items/add" && Object.keys(params).sort().join(",") === "detail,price,stock,title,visible" && params.visible === 0;
     const category = path === '/item_categories/add' && Object.keys(params).sort().join(',') === 'category_id,item_id' && /^[1-9][0-9]*$/.test(String(params.category_id));
     const removeCategory = path === '/item_categories/delete' && Object.keys(params).join(',') === 'item_category_id' && /^[1-9][0-9]*$/.test(String(params.item_category_id));
-    if (process.env.BASE_MANUAL_LISTING_ENABLED !== "1" || (!visibility && !image && !removeImage && !content && !privateAdd && !category && !removeCategory) || (!privateAdd && !removeCategory && !/^[1-9][0-9]*$/.test(String(params.item_id))))
+    if (process.env.BASE_MANUAL_LISTING_ENABLED !== "1" || (!stockOnly && !visibility && !image && !removeImage && !content && !privateAdd && !category && !removeCategory) || (!privateAdd && !removeCategory && !/^[1-9][0-9]*$/.test(String(params.item_id))))
       throw new BaseListingApiError("CONFIG_REQUIRED", "BASEの一覧からの出品操作が有効になっていません。");
   } else if (privateTestWrite) {
     try { assertBasePrivateTestWrite(path, params); }
@@ -198,6 +199,8 @@ export async function getBaseProductVisibility(itemId: string): Promise<boolean>
 }
 
 export { isBaseConnected };
+
+export async function setManualBaseStock(itemId:string,stock:number){await baseApiCall('/items/edit',{item_id:itemId,stock},false,true);}
 
 async function readBaseCategoryLinks(itemId:string):Promise<{linkId:string;categoryId:string}[]> {
   if(!/^[1-9][0-9]*$/.test(itemId))throw new Error('BASE商品IDを確認してください。');

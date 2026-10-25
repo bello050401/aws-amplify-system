@@ -247,6 +247,7 @@ export interface PhotoBatchManifest {
 
 /** 判断に必要な範囲だけのPhotoBatch射影。 */
 export interface PhotoBatchView {
+  linkedAt?: string | null;
   id: string;
   batchCode: string;
   status: PhotoBatchStatus;

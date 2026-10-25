@@ -58,12 +58,17 @@ const purchaseTable=new Table(purchaseStack,'Candidates',{partitionKey:{name:'id
 purchaseTable.addGlobalSecondaryIndex({indexName:'ByState',partitionKey:{name:'state',type:AttributeType.STRING},sortKey:{name:'receivedAt',type:AttributeType.STRING}});
 purchaseTable.grantReadWriteData(backend.purchaseNotifications.resources.lambda);
 backend.purchaseNotifications.addEnvironment('SALE_CANDIDATES_TABLE',purchaseTable.tableName);
+backend.purchaseNotifications.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:UpdateItem'],resources:[backend.data.resources.tables['BaseOAuthToken'].tableArn]}));
+backend.purchaseNotifications.addEnvironment('BASE_OAUTH_TOKEN_TABLE_NAME',backend.data.resources.tables['BaseOAuthToken'].tableName);
+backend.purchaseNotifications.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[`arn:aws:secretsmanager:us-west-2:${purchaseStack.account}:secret:bello/base-app-credentials-*`]}));
 backend.invoiceIssuer.addEnvironment('SALE_CANDIDATES_TABLE',purchaseTable.tableName);
 backend.invoiceIssuer.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:PutItem'],resources:[purchaseTable.tableArn]}));
 backend.purchaseNotifications.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[`arn:aws:secretsmanager:us-west-2:${purchaseStack.account}:secret:bello/gmail-oauth-*`]}));
 if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/inventory-management-system-5vbvc7'){
  new ManagedPolicy(backend.purchaseNotifications.resources.lambda,'WebAccess',{roles:[Role.fromRoleName(backend.purchaseNotifications.resources.lambda,'WebRuntime','BelloAmplifyStagingComputeRole')],statements:[
-  new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:Query'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}),
+  new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:Query','dynamodb:Scan'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}),
+  new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:UpdateItem'],resources:[backend.data.resources.tables['BaseOAuthToken'].tableArn]}),
+  new PolicyStatement({actions:['dynamodb:Scan'],resources:[backend.data.resources.tables['ChannelListing'].tableArn]}),
   new PolicyStatement({actions:['secretsmanager:GetSecretValue','secretsmanager:PutSecretValue'],resources:[`arn:aws:secretsmanager:us-west-2:${purchaseStack.account}:secret:bello/gmail-oauth-*`]}),
   new PolicyStatement({actions:['lambda:InvokeFunction'],resources:[backend.purchaseNotifications.resources.lambda.functionArn]})
  ]});

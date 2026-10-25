@@ -1,4 +1,6 @@
 "use server";
+import {assertMessagesEnabled} from "@/lib/messaging/featureState";
+
 
 import { revalidatePath } from "next/cache";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
@@ -28,12 +30,14 @@ import { resendWaitingDeliveries, retryDelivery, sendTestNotification } from "@/
  *   - 保存前に実際のLINE APIで疎通確認し、失敗したら既存の設定を壊さない
  */
 async function requireAdmin(): Promise<void> {
+  assertMessagesEnabled();
   const role = await getInventoryRole();
   if (role !== "ADMIN") throw new Error("この操作にはADMIN権限が必要です。");
 }
 
 /** 画面表示・テスト送信は EDITOR も使える(運用担当が接続状態を見られる必要がある)。 */
 async function requireEditor(): Promise<void> {
+  assertMessagesEnabled();
   const role = await getInventoryRole();
   if (role !== "ADMIN" && role !== "EDITOR") throw new Error("この操作にはADMINまたはEDITOR権限が必要です。");
 }

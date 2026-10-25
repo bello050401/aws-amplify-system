@@ -1,10 +1,13 @@
+import {baseAccessToken} from './tokenStore';
+import {inventoryDdb,inventoryTable} from '@/lib/inventory/categoryPersistence';
+import {UpdateCommand} from '@aws-sdk/lib-dynamodb';
 import { adminAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { unwrapDataResult, AmplifyDataError, type AmplifyDataResult } from "@/lib/amplify/dataResult";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
 import { getBaseCredentials } from "./secretStore";
 import { BaseNotConfiguredError } from "./errors";
 import { resolveRedirectUri } from "./redirectUri";
-import { createSingleFlight, shouldRetryToken, tokenRetryDelayMs } from "./tokenRetry";
+import { shouldRetryToken, tokenRetryDelayMs } from "./tokenRetry";
 import { resolveScope } from "./scope";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
 
@@ -67,7 +70,9 @@ export async function buildAuthorizeUrl(state: string, request: Request): Promis
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", resolveRedirectUri(request));
-  url.searchParams.set("scope", resolveScope(requestWriteItems));
+  const scopes=new Set(resolveScope(requestWriteItems).split(/\s+/));
+  if(new URL(request.url).searchParams.get('orders')==='1')scopes.add('read_orders');
+  url.searchParams.set("scope", [...scopes].join(' '));
   url.searchParams.set("state", state);
   return url.toString();
 }
@@ -165,7 +170,7 @@ async function requestTokenOnce(params: Record<string, string>, grant: TokenGran
     }
     // サーバーログには応答本文を残す（原因調査に要る）。送信した
     // パラメータ側は絶対に出さない —— client_secretが入っているため。
-    console.error("[base/oauth] token endpoint failed", { status: res.status, code, body: text.slice(0, 500) });
+    console.error("[base/oauth] token endpoint failed", { status: res.status, code });
     throw new BaseTokenExchangeError(describeTokenError(code, res.status, grant), code, res.status);
   }
 
@@ -286,6 +291,7 @@ async function saveToken(accessToken: string, refreshToken: string | undefined, 
     unwrapTokenResult(await serverDataClient.models.BaseOAuthToken.create(row, adminAuthMode), "create");
   }
 
+  await inventoryDdb.send(new UpdateCommand({TableName:inventoryTable('BaseOAuthToken'),Key:{id:TOKEN_ROW_ID},UpdateExpression:'REMOVE refreshBlocked,refreshOwner,refreshLeaseUntil',ConditionExpression:'accessToken=:a',ExpressionAttributeValues:{':a':accessToken}}));
   // 書き込みが受理されたことと、実際に読み戻せることは別物。
   // 「連携完了」と表示してよいのは後者を確かめてからにする ——
   // 今回の不具合はまさに「保存できたつもり」で成功表示を出していた。
@@ -338,49 +344,10 @@ export async function isBaseConnected(): Promise<boolean> {
  * comment in amplify/data/resource.ts for why the public feature page
  * never needs to call this at all.
  */
-export async function getAccessToken(): Promise<string> {
-  // 「認証情報が無い」と「連携が済んでいない」は別の状態で、次にやる
-  // ことが違う。取り違えると設定画面の案内が的外れになるので先に分ける。
-  if (!(await getBaseCredentials())) throw new BaseNotConfiguredError();
-
-  const token = unwrapTokenResult(
-    await serverDataClient.models.BaseOAuthToken.get({ id: TOKEN_ROW_ID }, adminAuthMode),
-    "get(access-token)",
-  );
-  if (!token) throw new BaseNotConnectedError();
-
-  // expiresAt が壊れていれば getTime() は NaN になり、この比較は false。
-  // つまり「期限が読めないなら更新する」側へ倒れる —— 読めない値を
-  // 有効期限内とみなして期限切れトークンを使い続けるより安全。
-  const expiresAt = new Date(token.expiresAt).getTime();
-  if (expiresAt > Date.now() + 60_000) {
-    return token.accessToken;
-  }
-
-  // 同時に走らせない。BASEはリフレッシュのたびに refresh_token を回転
-  // させることがあり、2本同時だと後から来たほうが**既に無効になった**
-  // トークンを送って invalid_grant になる。さらに悪いのは保存の競合で、
-  // 古いトークンで上書きすると連携そのものが壊れ、**人による再連携**が
-  // 必要になる。BASEの再認証は人しかできないので、そこへ落とさない。
-  // (効くのは同一プロセス内まで。理由は lib/base/tokenRetry.ts に書いた)
-  return refreshInFlight(async () => {
-    const { clientId, clientSecret } = await requireCredentials();
-    const body = await requestToken(
-      {
-        grant_type: "refresh_token",
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: token.refreshToken,
-      },
-      "refresh_token",
-    );
-    await saveToken(body.access_token, body.refresh_token, body.expires_in);
-    return body.access_token;
-  });
-}
+export async function getAccessToken(): Promise<string> {return baseAccessToken(inventoryDdb,inventoryTable('BaseOAuthToken'),getBaseCredentials);}
 
 /** 更新の同時実行を1本に畳む。モジュールスコープ = プロセス単位。 */
-const refreshInFlight = createSingleFlight<string>();
+
 
 export async function disconnectBase(): Promise<void> {
   const existing = unwrapTokenResult(

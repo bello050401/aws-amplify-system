@@ -18,5 +18,6 @@ export function createCandidateStore(db:DynamoDBDocumentClient,table:string){
   config:async():Promise<FeeConfig>=>{const r=await get('CONFIG');return r?.fees?validateFeeConfig(r.fees):DEFAULT_FEES;},
   configure:async(fees:unknown,actor:string)=>db.send(new PutCommand({TableName:table,Item:{id:'CONFIG',fees:validateFeeConfig(fees),updatedBy:actor,updatedAt:new Date().toISOString()}})),
   status:()=>get('IMPORT_STATUS'),
+  baseStatus:()=>get('BASE_IMPORT_STATUS'),
  };
 }

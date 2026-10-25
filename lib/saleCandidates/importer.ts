@@ -21,7 +21,8 @@ export async function importPurchases(db:DynamoDBDocumentClient,table:string,rea
     const id=pendingIds[0],key='MAIL:'+id;const previous=await db.send(new GetCommand({TableName:table,Key:{id:key},ConsistentRead:true}));
     if(!previous.Item){
      const parsed=parsePurchaseMail(await reader.read(id));
-     for(const candidate of parsed)if(await store.put(candidate))created++;
+     // BASE is read from its official orders API; never create a second email-derived order.
+     for(const candidate of parsed.filter(c=>c.channel==='MERCARI'))if(await store.put(candidate))created++;
      await db.send(new PutCommand({TableName:table,Item:{id:key,checkedAt:new Date().toISOString(),ttl:Math.floor(Date.now()/1000)+30*86400}}));checked++;
     }
     pendingIds.shift();

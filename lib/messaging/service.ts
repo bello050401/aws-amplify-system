@@ -1,3 +1,5 @@
+
+import {assertMessagesEnabled} from "@/lib/messaging/featureState";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages, unwrapGet, unwrapList } from "@/lib/amplify/listAll";
@@ -491,6 +493,7 @@ export async function recordIncomingMessage(params: {
  * いが、データとしては残る)。
  */
 export async function draftReply(conversationId: string, body: string, aiGenerated: boolean, who: string | null): Promise<MessageRecord> {
+  assertMessagesEnabled();
   if (!body.trim()) throw new Error("返信内容を入力してください。");
   const { data, errors } = await serverDataClient.models.Message.create(
     {
@@ -521,6 +524,7 @@ export async function draftReply(conversationId: string, body: string, aiGenerat
  * できるようにするため)。
  */
 export async function sendReply(conversationId: string, messageId: string, who: string | null): Promise<MessageRecord> {
+  assertMessagesEnabled();
   const conversation = await getConversation(conversationId);
   if (!conversation) throw new Error("対象の会話が見つかりません。");
 

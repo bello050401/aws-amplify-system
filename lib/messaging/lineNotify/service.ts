@@ -1,3 +1,5 @@
+
+import {assertMessagesEnabled} from "@/lib/messaging/featureState";
 import "server-only";
 import type { InquiryIntent, ReplyDraftStatus, ReplyEvidence } from "@/lib/inquiry/types";
 import type { DeliveryWindowState } from "@/lib/inquiry/deliveryWindow";
@@ -134,6 +136,7 @@ function analysisStatusFor(params: NotifyInquiryParams): string {
  * 既に SENT なら何もしない。
  */
 export async function notifyInquiry(params: NotifyInquiryParams): Promise<NotifyResult> {
+  assertMessagesEnabled();
   const dedupeKey = buildDedupeKey({
     channel: params.channel,
     conversationId: params.conversationId,
@@ -255,6 +258,7 @@ async function dispatch(
  * 原因(トークン切れ等)を直した後に、溜まった通知を人が流せる必要がある。
  */
 export async function retryDelivery(deliveryId: string): Promise<NotifyResult> {
+  assertMessagesEnabled();
   const reset = await resetDeliveryForRetry(deliveryId);
   if (!reset.summaryText) {
     return { sent: false, status: "DEAD_LETTER", reason: "送信する本文が残っていません。", deliveryId };
@@ -276,6 +280,7 @@ export const RESEND_MAX_COUNT = 10;
 export const RESEND_MAX_AGE_HOURS = 48;
 
 export async function resendWaitingDeliveries(): Promise<{ sent: number; skipped: number; failed: number; message: string }> {
+  assertMessagesEnabled();
   const settings = await getLineNotifySettings();
   if (!settings.targetUserId) {
     return { sent: 0, skipped: 0, failed: 0, message: "通知先が未登録のため送信できません。先に友だち追加してください。" };
@@ -325,6 +330,7 @@ export async function resendWaitingDeliveries(): Promise<{ sent: number; skipped
  * AI処理ログで本物の通知が埋もれる。送って結果を返すだけにする。
  */
 export async function sendTestNotification(): Promise<{ ok: boolean; message: string }> {
+  assertMessagesEnabled();
   const settings = await getLineNotifySettings();
   const now = new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
   const summary = [

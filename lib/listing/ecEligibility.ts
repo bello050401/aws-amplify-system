@@ -49,6 +49,11 @@ export function ecListingIneligibleReason(categoryName: string): string {
 
 export { EXCLUDED_CATEGORY_NAMES };
 
+/** List visibility is narrower than permission to edit an existing channel draft. */
+export function isEcListingVisible(categoryName:string|null):boolean {
+  return ['補修待ち','撮影待ち','出品待ち','販売中','売り切れ'].some(name=>normalizeMasterName(name)===normalizeMasterName(categoryName??''));
+}
+
 /**
  * categoryId → Category.name の解決。呼び出し元(lib/listing/service.ts)
  * がlib/inventory/masters.tsのlistAllMasterEntries("Category")を

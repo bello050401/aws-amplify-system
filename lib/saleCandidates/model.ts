@@ -2,11 +2,14 @@ import type {SoldOutResult} from '../inventory/soldOutInput';
 export type SaleChannel='BASE'|'MERCARI'|'YAHOO'|'DIRECT';
 export const CHANNELS:Record<SaleChannel,{label:string;market:string}>={BASE:{label:'BASE',market:'ベイス'},MERCARI:{label:'メルカリShops',market:'メルカリSHOP'},YAHOO:{label:'Yahoo!オークション',market:'ヤフオク'},DIRECT:{label:'直接取引',market:'直接取引'}};
 export type SaleCandidate={
- id:string; state:'PENDING'|'DONE'|'DELETED'; channel:SaleChannel; source:'GMAIL'|'DIRECT'|'INVOICE';
+ id:string; state:'PENDING'|'DONE'|'DELETED'; channel:SaleChannel; source:'GMAIL'|'DIRECT'|'INVOICE'|'BASE_API';
  name:string; quantity:number|null; unitPrice:number|null; orderId:string; identifierType:'ORDER'|'AUCTION'|'INVOICE'|'MANUAL';
  saleDate:string; receivedAt:string; createdAt:string; updatedAt:string; suggestedInventoryId?:string;
  shipping:number|null; orderTotal:number|null; payment:string; warnings:string[]; orderLineCount:number;
  feeAllocation?:{index:number;amounts:number[]};
+ externalListingId?:string; orderLineId?:string;
+ orderRoute?:'WEB'|'PAY_ID_APP'|'UNKNOWN';
+ confirmedLineFee?:number;
  result?:SoldOutResult; completedBy?:string; completedAt?:string; deletedBy?:string; deletedAt?:string;
  completedSale?:{quantity:number;total:number|null;commission:number|null;date:string;identifier:string};
 };

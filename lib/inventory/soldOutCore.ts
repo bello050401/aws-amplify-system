@@ -6,6 +6,7 @@ import { ALL_EXTENDED_FIELDS } from './extendedFields';
 import { withHumanEdits, productCustomFields } from './humanEdits';
 import { parseCustomFields, stringifyCustomFields } from './customFieldsCodec';
 import { SoldOutError, validateSoldOut, type SoldOutRequest, type SoldOutResult } from './soldOutInput';
+import {saleTitle} from './salePricing';
 
 type Row = Record<string, unknown>;
 export interface SoldOutPorts {
@@ -25,7 +26,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     // Full validation below allows an unchanged legacy market value.
     validateSoldOut(request, undefined, request?.market);
     const receiptId = `SOLD_OUT:${request.mutationId}`;
-    const digest = createHash('sha256').update(JSON.stringify([actor, request.inventoryId, request.expectedUpdatedAt, request.quantity, request.name.trim(), request.saleEndDate, request.externalProductId.trim(), request.market, request.salePrice,...(request.saleCommission!==undefined||request.sourceCandidateId?[request.saleCommission??null,request.sourceCandidateId??null]:[])])).digest('hex');
+    const digest = createHash('sha256').update(JSON.stringify([actor, request.inventoryId, request.expectedUpdatedAt, request.quantity, request.name.trim(), request.saleEndDate, request.externalProductId.trim(), request.market, request.salePrice,...(request.saleCommission!==undefined||request.sourceCandidateId?[request.saleCommission??null,request.sourceCandidateId??null]:[]),...(request.pricing?[request.pricing]:[])])).digest('hex');
     const readReceipt = async () => {
       const receipt = (await db.send(new GetCommand({TableName:table('InventoryHistory'),Key:{id:receiptId},ConsistentRead:true}))).Item;
       if (!receipt) return null;
@@ -44,6 +45,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     const before = inventoryCategoryIds(source);
     if(request.sourceCandidateId&&!masters.some(c=>['販売中','出品中','出品待ち','撮影待ち','補修待ち'].includes(c.name)&&before.includes(c.id)))throw new SoldOutError('INVALID','この商品は売却候補の対象カテゴリから外れています。商品を選び直してください。');
     const sourceCustom = parseCustomFields(source.customFields);
+    const saleCustom=request.pricing?{__belloSale:{...request.pricing,physicalQuantity:request.quantity,total:request.salePrice,commissionTotal:request.saleCommission,sourceInventoryId:source.id}}:{};
     if (before.includes(soldMaster[0].id)) throw new SoldOutError('INVALID','この商品はすでに売り切れです。');
     const activeIds=masters.filter(c=>['販売中','出品中'].includes(c.name)).map(c=>c.id);
     const after = [...before.filter(id=>!activeIds.includes(id)),soldMaster[0].id];
@@ -51,7 +53,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     const split = request.quantity < source.quantity;
     const now = new Date(Math.max(Date.parse(ports.now?.() ?? new Date().toISOString()),Date.parse(source.updatedAt)+1)).toISOString();
     const soldId = split ? randomUUID() : source.id;
-    const changes: Row = {name:request.name.trim(),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
+    const changes: Row = {name:saleTitle(request.name,request.pricing),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
     if(request.saleCommission!==undefined)changes.saleCommission=request.saleCommission;
     const result: SoldOutResult = {sourceId:source.id,soldId,remainingQuantity:source.quantity-request.quantity,soldQuantity:request.quantity,updatedAt:now};
     let images: unknown[] = [];
@@ -73,11 +75,11 @@ export function createSoldOutService(ports: SoldOutPorts) {
       update({...remaining,customFields:stringifyCustomFields(withHumanEdits(source,remaining,sourceCustom,sourceCustom ?? undefined))});
       const inherited: Row = {};
       for (const key of ['unit','statusId','locationId','note','barcode','purchasePrice',...ALL_EXTENDED_FIELDS.map(field=>field.key)]) if(source[key]!==undefined) inherited[key]=source[key];
-      const custom = {...productCustomFields(sourceCustom),__belloStockSplit:{sourceInventoryId:source.id,operation:'SOLD_OUT',mutationId:request.mutationId}};
+      const custom = {...productCustomFields(sourceCustom),...saleCustom,__belloStockSplit:{sourceInventoryId:source.id,operation:'SOLD_OUT',mutationId:request.mutationId}};
       writes.push({Put:{TableName:table('Inventory'),Item:{...inherited,...changes,id:soldId,sku,images,customFields:stringifyCustomFields(custom),sourceSystem:'BELLO',listingPartition:'ACTIVE',createdAt:now,createdBy:actor,__typename:'Inventory'},ConditionExpression:'attribute_not_exists(id)'}});
       writes.push(...persistence.categoryLinkChanges(soldId,[],after,now));
     } else {
-      update({...changes,customFields:stringifyCustomFields(withHumanEdits(source,changes,sourceCustom,sourceCustom ?? undefined))});
+      update({...changes,customFields:stringifyCustomFields({...withHumanEdits(source,changes,sourceCustom,sourceCustom ?? undefined),...saleCustom})});
       writes.push(...persistence.categoryLinkChanges(source.id,before,after,now));
     }
     const oldValue=JSON.stringify({quantity:source.quantity,name:source.name,categoryIds:before,saleEndDate:source.saleEndDate,externalProductId:source.externalProductId,market:source.market,salePrice:source.salePrice});
