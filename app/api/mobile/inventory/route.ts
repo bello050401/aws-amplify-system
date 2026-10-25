@@ -50,7 +50,7 @@ export async function GET(request: Request) {
     } catch {return NextResponse.json({error:"INVALID_QUERY"},{status:400,headers});}
     const filters = { ...(q ? { q } : {}), ...(categoryId ? { categoryIds: [categoryId] } : {}) };
     const options = { offset, limit: 50 };
-    const fullSearch = Boolean(q) || advanced.conditions.length > 0 || sort.field !== "updatedAt" || sort.direction !== "desc";
+    const fullSearch = Boolean(q || categoryId) || advanced.conditions.length > 0 || sort.field !== "updatedAt" || sort.direction !== "desc";
     const indexed = fullSearch ? null : await listInventoryOffsetPage(filters, options);
     const page = fullSearch ? await listInventoryMobileSearch({...filters,advanced,sort},new Map(fields.map(field=>[field.key,field])),options) : indexed?.usedIndex ? indexed : await listInventory(filters, options);
     // Product names and quantities must not wait for 50 photo lookups/signatures.

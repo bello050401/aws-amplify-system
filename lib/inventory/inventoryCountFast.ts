@@ -97,7 +97,9 @@ export function buildCountExpression(filters: InventoryCursorListFilters): Count
       values[`:cat${i}`] = id;
       return `(contains(#cats, :cat${i}) OR (attribute_not_exists(#cats) AND #cat = :cat${i}))`;
     });
-    parts.push(`(${ors.join(" OR ")})`);
+    // Each category clause already has parentheses. DynamoDB rejects ((...))
+    // for one selected category, causing the fast search/count to fall back.
+    parts.push(ors.length === 1 ? ors[0] : `(${ors.join(" OR ")})`);
   }
   if (filters.locationId) {
     names["#loc"] = "locationId";

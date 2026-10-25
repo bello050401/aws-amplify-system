@@ -15,6 +15,7 @@ import { effectiveListThumbnailKey, normalizeImageRecord, resolveTopImage, type 
 import { resolveDisplayInventoryId } from "./inventoryId";
 import { evaluateQuery, matchesQuickSearch, matchesNameSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 import { searchInventoryFast, type FastSearchInput } from "./inventorySearchFast";
+import { inventoryVerifiedReadSession } from "./mutationSession";
 import {
   isE2EFixtureModeActive,
   E2E_CATEGORIES,
@@ -484,6 +485,9 @@ async function trySearchFast(
   options: { offset: number; limit: number },
 ): Promise<SearchPage<InventoryListRow> | null> {
   try {
+    // IAM reads do not pass through AppSync's token verification. Verify the
+    // signed session before using this path; failures retain AppSync fallback.
+    if (!await inventoryVerifiedReadSession()) return null;
     const fast = await searchInventoryFast(input, options);
     if (!fast) return null;
     return {

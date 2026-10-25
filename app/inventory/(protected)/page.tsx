@@ -84,7 +84,10 @@ export default async function InventoryListPage({ searchParams }: InventoryListP
   // 渡し(lib/inventory/queries.ts参照)、結果が両方の条件に一致するよう
   // にする——URLだけadv/advancedを保持して結果には反映しない、という
   // 見せかけの修正はしない。
-  const searchMode: "advanced" | "quick" | "plain" = advancedQuery ? "advanced" : hasQuickSearchText ? "quick" : "plain";
+  // A sparse category/location filter otherwise walks every GSI page in
+  // sequence. Reuse the existing projected, parallel search for filters too.
+  const hasSidebarFilter = categoryIds.length > 0 || Boolean(searchParams.locationId || searchParams.statusId);
+  const searchMode: "advanced" | "quick" | "plain" = advancedQuery ? "advanced" : hasQuickSearchText || hasSidebarFilter ? "quick" : "plain";
 
   // 2026-09-04 性能総点検: マスタ4種と在庫の取得を**同時に**始める。
   //

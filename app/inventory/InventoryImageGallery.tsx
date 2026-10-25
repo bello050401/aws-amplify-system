@@ -39,7 +39,8 @@ interface InventoryImageGalleryProps {
  * 常にeffectiveListThumbnailKey(一覧と全く同じ320px版)。
  *
  * 「読み込み中」の表示は署名URL解決だけで消さない——実際の<img>の
- * onLoadが発火するまで、URLがあってもオーバーレイで隠し続ける
+ * onLoadまたはcomplete/naturalWidthで完了を確認する。画像自体は
+ * ブラウザが読み込んだ時点で描画し、Reactの起動を待って隠さない。
  * (app/inventory/inventoryImageLoadState.tsのplanHeroRender/
  * planFullRenderが判定するのはそこ)。ライトボックスの原本も同様に
  * onLoad/onErrorを管理し、署名自体は成功したが本体(バイト列)の
@@ -182,10 +183,10 @@ export function InventoryImageGallery({ images, alt, title, hideIfEmpty = false,
               alt={alt}
               onLoad={() => smallKey && dispatchSmallBody({ type: "LOADED", key: smallKey })}
               onError={() => smallKey && dispatchSmallBody({ type: rejectSmallDirect() ? "SELECT" : "FAILED", key: smallKey })}
-              className={`h-[380px] w-full object-contain ${heroPlan.showLoadingOverlay ? "invisible" : ""}`}
+              className="h-[380px] w-full object-contain"
             />
             {heroPlan.showLoadingOverlay && (
-              <div className="absolute inset-0 flex items-center justify-center text-[11px] text-gray-400">読み込み中…</div>
+              <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-white/90 px-2 text-[11px] text-gray-400">読み込み中…</div>
             )}
           </div>
         ) : (
