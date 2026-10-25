@@ -35,6 +35,7 @@ export const NAV_ITEMS = [
   { key: "photo-registration", label: "画像登録", href: "/inventory/photo-registration", enabled: true },
   // 夜間開発指示書 §12: 在庫一覧/売上/設定という主要構成。
   { key: "sales", label: "売上", href: "/inventory/sales", enabled: true },
+  { key: "sale-candidates", label: "売却管理", href: "/inventory/sale-candidates", enabled: true },
   // BELLO統合改修 master指示書(2026-08-29統合改修版) §14: 「EC出品」を
   // 売上の直下へ追加 — 在庫詳細画面の既存「EC出品」リンク
   // (/inventory/[id]/listing、1商品単位)はこの変更後も残したまま
@@ -157,7 +158,7 @@ export function InventoryNavRail({canIssueDocuments=false}:{canIssueDocuments?:b
         <BelloLogo variant="sidebar" />
       </button>
       <ul className="flex flex-1 flex-col border-r border-gray-200 py-1">
-        {NAV_ITEMS.filter(item=>item.key!=="documents"||canIssueDocuments).map((item) => {
+        {NAV_ITEMS.filter(item=>!['documents','sale-candidates'].includes(item.key)||canIssueDocuments).map((item) => {
           // /inventory itself must not read as "current" for every
           // /inventory/* route (it would otherwise match /inventory/settings
           // too, via a naive prefix check) — it's current only on an exact

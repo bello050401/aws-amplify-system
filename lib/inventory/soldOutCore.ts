@@ -15,6 +15,7 @@ export interface SoldOutPorts {
   copyPhotos: (source:Row, attemptId:string)=>Promise<unknown[]>;
   discardPhotos: (images:unknown[])=>Promise<void>;
   now?: ()=>string;
+  saleCommit?: (result:SoldOutResult,now:string)=>InventoryTransaction;
 }
 /** Both inventory records, category links and the retry receipt commit together. */
 export function createSoldOutService(ports: SoldOutPorts) {
@@ -24,7 +25,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     // Full validation below allows an unchanged legacy market value.
     validateSoldOut(request, undefined, request?.market);
     const receiptId = `SOLD_OUT:${request.mutationId}`;
-    const digest = createHash('sha256').update(JSON.stringify([actor, request.inventoryId, request.expectedUpdatedAt, request.quantity, request.name.trim(), request.saleEndDate, request.externalProductId.trim(), request.market, request.salePrice])).digest('hex');
+    const digest = createHash('sha256').update(JSON.stringify([actor, request.inventoryId, request.expectedUpdatedAt, request.quantity, request.name.trim(), request.saleEndDate, request.externalProductId.trim(), request.market, request.salePrice,...(request.saleCommission!==undefined||request.sourceCandidateId?[request.saleCommission??null,request.sourceCandidateId??null]:[])])).digest('hex');
     const readReceipt = async () => {
       const receipt = (await db.send(new GetCommand({TableName:table('InventoryHistory'),Key:{id:receiptId},ConsistentRead:true}))).Item;
       if (!receipt) return null;
@@ -41,14 +42,17 @@ export function createSoldOutService(ports: SoldOutPorts) {
     const soldMaster = masters.filter(c=>c.name==='売り切れ'), activeMaster = masters.filter(c=>c.name==='販売中');
     if (soldMaster.length!==1 || activeMaster.length!==1) throw new SoldOutError('INVALID','カテゴリマスタの「販売中」「売り切れ」を確認してください。');
     const before = inventoryCategoryIds(source);
+    if(request.sourceCandidateId&&!masters.some(c=>['販売中','出品中','出品待ち','撮影待ち','補修待ち'].includes(c.name)&&before.includes(c.id)))throw new SoldOutError('INVALID','この商品は売却候補の対象カテゴリから外れています。商品を選び直してください。');
     const sourceCustom = parseCustomFields(source.customFields);
     if (before.includes(soldMaster[0].id)) throw new SoldOutError('INVALID','この商品はすでに売り切れです。');
-    const after = [...before.filter(id=>id!==activeMaster[0].id),soldMaster[0].id];
+    const activeIds=masters.filter(c=>['販売中','出品中'].includes(c.name)).map(c=>c.id);
+    const after = [...before.filter(id=>!activeIds.includes(id)),soldMaster[0].id];
     await persistence.validateCategoryIds(after);
     const split = request.quantity < source.quantity;
     const now = new Date(Math.max(Date.parse(ports.now?.() ?? new Date().toISOString()),Date.parse(source.updatedAt)+1)).toISOString();
     const soldId = split ? randomUUID() : source.id;
     const changes: Row = {name:request.name.trim(),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
+    if(request.saleCommission!==undefined)changes.saleCommission=request.saleCommission;
     const result: SoldOutResult = {sourceId:source.id,soldId,remainingQuantity:source.quantity-request.quantity,soldQuantity:request.quantity,updatedAt:now};
     let images: unknown[] = [];
     const writes: InventoryTransaction = [];
@@ -80,6 +84,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
     writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:receiptId},ConditionExpression:'attribute_not_exists(id)'}});
     if(split) writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:`${receiptId}:SPLIT`,inventoryId:soldId,fieldName:'売却分を分割'}}});
+    if(ports.saleCommit)writes.push(...ports.saleCommit(result,now));
     try { await db.send(new TransactWriteCommand({TransactItems:writes,ClientRequestToken:randomUUID()})); }
     catch(error) {
       // A lost response is not evidence of rollback. Check the durable receipt first.

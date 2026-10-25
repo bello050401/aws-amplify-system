@@ -18,6 +18,7 @@ import { integrityMonitor } from "./functions/integrity-monitor/resource";
 import { salesAggregateScheduler } from "./functions/sales-aggregate-scheduler/resource";
 import { mediaMaintenance } from "./functions/media-maintenance/resource";
 import { invoiceIssuer } from './functions/invoice-issuer/resource';
+import {purchaseNotifications} from './functions/purchase-notifications/resource';
 
 /**
  * Amplify Gen2 backend definition.
@@ -49,7 +50,25 @@ const backend = defineBackend({
   salesAggregateScheduler,
   mediaMaintenance,
   invoiceIssuer,
+  purchaseNotifications,
 });
+
+const purchaseStack=backend.createStack('PurchaseNotifications');
+const purchaseTable=new Table(purchaseStack,'Candidates',{partitionKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:true}});
+purchaseTable.addGlobalSecondaryIndex({indexName:'ByState',partitionKey:{name:'state',type:AttributeType.STRING},sortKey:{name:'receivedAt',type:AttributeType.STRING}});
+purchaseTable.grantReadWriteData(backend.purchaseNotifications.resources.lambda);
+backend.purchaseNotifications.addEnvironment('SALE_CANDIDATES_TABLE',purchaseTable.tableName);
+backend.invoiceIssuer.addEnvironment('SALE_CANDIDATES_TABLE',purchaseTable.tableName);
+backend.invoiceIssuer.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:PutItem'],resources:[purchaseTable.tableArn]}));
+backend.purchaseNotifications.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[`arn:aws:secretsmanager:us-west-2:${purchaseStack.account}:secret:bello/gmail-oauth-*`]}));
+if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/inventory-management-system-5vbvc7'){
+ new ManagedPolicy(backend.purchaseNotifications.resources.lambda,'WebAccess',{roles:[Role.fromRoleName(backend.purchaseNotifications.resources.lambda,'WebRuntime','BelloAmplifyStagingComputeRole')],statements:[
+  new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:Query'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}),
+  new PolicyStatement({actions:['secretsmanager:GetSecretValue','secretsmanager:PutSecretValue'],resources:[`arn:aws:secretsmanager:us-west-2:${purchaseStack.account}:secret:bello/gmail-oauth-*`]}),
+  new PolicyStatement({actions:['lambda:InvokeFunction'],resources:[backend.purchaseNotifications.resources.lambda.functionArn]})
+ ]});
+}
+backend.addOutput({custom:{saleCandidates:{tableName:purchaseTable.tableName,functionName:backend.purchaseNotifications.resources.lambda.functionName}}});
 
 // Isolated create-only invoicing. No invoice data/PDF bucket or data model exists.
 const invoiceStack=backend.createStack('InvoiceIssuance');

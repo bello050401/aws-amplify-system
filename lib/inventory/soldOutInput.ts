@@ -5,6 +5,8 @@ export interface SoldOutRequest {
   mutationId: string; inventoryId: string; expectedUpdatedAt: string;
   quantity: number; name: string; saleEndDate: string;
   externalProductId: string; market: string; salePrice: number | null;
+  saleCommission?: number|null;
+  sourceCandidateId?:string;
 }
 export interface SoldOutResult { sourceId: string; soldId: string; remainingQuantity: number; soldQuantity: number; updatedAt: string }
 export class SoldOutError extends Error {
@@ -22,4 +24,7 @@ export function validateSoldOut(request: SoldOutRequest, available?: number, cur
   if (typeof request.externalProductId !== 'string' || request.externalProductId.length > 256) invalid('IDは256文字以内で入力してください。');
   if (typeof request.market !== 'string' || (request.market && request.market !== currentMarket && !(SOLD_OUT_MARKETS as readonly string[]).includes(request.market))) invalid('市場を選択肢から選んでください。');
   if (request.salePrice !== null && (!Number.isSafeInteger(request.salePrice) || request.salePrice < 0)) invalid('販売価格は0以上の整数で入力してください。');
+  if (request.saleCommission!=null&&(!Number.isSafeInteger(request.saleCommission)||request.saleCommission<0))invalid('販売手数料は0以上の整数で入力してください。');
+  if(request.sourceCandidateId!==undefined&&!/^[a-f0-9]{64}$/.test(request.sourceCandidateId))invalid('購入通知を開き直してください。');
+  if(request.sourceCandidateId&&(request.salePrice==null||request.saleCommission==null))invalid('販売価格と販売手数料を確認して入力してください。');
 }

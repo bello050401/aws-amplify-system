@@ -25,7 +25,7 @@ export function MobileBottomNav({canIssueDocuments=false}:{canIssueDocuments?:bo
       className="fixed inset-x-0 bottom-0 z-40 flex border-t border-gray-200 bg-white pb-[env(safe-area-inset-bottom)] md:hidden"
       aria-label="主要ナビゲーション"
     >
-      {NAV_ITEMS.filter(item=>item.key!=="documents"||canIssueDocuments).map((item) => {
+      {NAV_ITEMS.filter(item=>!['documents','sale-candidates'].includes(item.key)||canIssueDocuments).map((item) => {
         const isCurrent = item.href != null && (item.href === "/inventory" ? pathname === "/inventory" : pathname?.startsWith(item.href));
         const className = [
           "flex flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-center text-[10px] leading-tight",

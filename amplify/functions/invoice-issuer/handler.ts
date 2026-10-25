@@ -1,7 +1,7 @@
 import {manageAddressees} from '../../../lib/invoicing/addressees';
 import {CognitoJwtVerifier} from 'aws-jwt-verify';
 import {DynamoDBClient} from '@aws-sdk/client-dynamodb';
-import {DynamoDBDocumentClient,GetCommand,PutCommand,UpdateCommand} from '@aws-sdk/lib-dynamodb';
+import {DynamoDBDocumentClient,GetCommand,PutCommand,UpdateCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
 import {SecretsManagerClient,GetSecretValueCommand,PutSecretValueCommand} from '@aws-sdk/client-secrets-manager';
 import {randomUUID,randomBytes,createHash} from 'node:crypto';
 import {validateInvoice,DEFAULT_CONFIG,UNKNOWN_RESULT,type CalcConfig} from '../../../lib/invoicing/model';
@@ -9,6 +9,7 @@ import {seal,unseal} from '../../../lib/invoicing/capability';
 import {NewInvoiceProvider} from '../../../lib/invoicing/provider';
 import {issueOnce} from '../../../lib/invoicing/issuance';
 import {withIssuerLease} from '../../../lib/invoicing/lock';
+import {invoiceLinks,makeInvoiceCandidates} from '../../../lib/saleCandidates/invoiceCandidates';
 const db=DynamoDBDocumentClient.from(new DynamoDBClient({}));const secrets=new SecretsManagerClient({});
 const TABLE=process.env.OPERATIONS_TABLE!;const SECRET=process.env.MF_SECRET_ARN!;
 const verifier=CognitoJwtVerifier.create({userPoolId:process.env.USER_POOL_ID!,clientId:process.env.USER_POOL_CLIENT_ID!,tokenUse:'access'});
@@ -33,7 +34,7 @@ async function acquireLease(owner:string){try{await db.send(new UpdateCommand({T
 async function releaseLease(owner:string){await db.send(new UpdateCommand({TableName:TABLE,Key:{id:'issuer-lock'},UpdateExpression:'SET expiresAt=:zero, #s=:status',ConditionExpression:'#o=:owner',ExpressionAttributeNames:{'#o':'owner','#s':'status'},ExpressionAttributeValues:{':owner':owner,':zero':0,':status':'IDLE'}}));}
 // Private IAM invocation only; re-verify the end user's signed token inside this isolated boundary.
 // No event/error/provider-body logging. No permissions for inventory, S3, accounting, or existing MF data.
-export async function handler(event:{token?:string;action?:string;ticket?:string;input?:unknown;code?:string}){
+export async function handler(event:{token?:string;action?:string;ticket?:string;input?:unknown;code?:string;saleLinks?:unknown}){
  let owner:string;
  try{const user=await verifier.verify(event.token||'');if(!user['cognito:groups']?.includes('ADMIN'))return fail('FORBIDDEN','管理者のみ利用できます。');owner=user.sub;}catch{return fail('FORBIDDEN','管理者のログインが必要です。');}
  try{
@@ -59,12 +60,18 @@ export async function handler(event:{token?:string;action?:string;ticket?:string
   }
   if(event.action==='issue'){
    if(!s.refreshToken||!s.settingsVerified)return fail('NOT_READY','マネーフォワードの接続と帳票設定の確認が必要です。');
-   const input=validateInvoice(event.input);const c=unseal(event.ticket,s.key,owner,'issue');
+   const input=validateInvoice(event.input);const links=invoiceLinks(event.saleLinks,input);const c=unseal(event.ticket,s.key,owner,'issue');
    // Refresh before crossing the irreversible boundary. The shared lease prevents rotation races.
    const bearer=await access(s);
-   const outcome=await issueOnce({transition:(from,to)=>transition(c.operation,from,to)},()=>new NewInvoiceProvider(bearer).create(input,s.config||DEFAULT_CONFIG),async(checkCode)=>{await db.send(new UpdateCommand({TableName:TABLE,Key:{id:c.operation},UpdateExpression:'SET checkCode=:code',ExpressionAttributeValues:{':code':checkCode}}));});
+   const outcome=await issueOnce({transition:async(from,to)=>{
+    if(to!=='SAVED'||!links.length){await transition(c.operation,from,to);return;}
+    const entries=makeInvoiceCandidates(c.operation,input,links);
+    // Commit candidates with the issuer receipt. A failed transaction never exposes half a batch.
+    try{await db.send(new TransactWriteCommand({ClientRequestToken:c.operation,TransactItems:[{Update:{TableName:TABLE,Key:{id:c.operation},UpdateExpression:'SET #s=:to',ConditionExpression:'#s=:from',ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':from':from,':to':to}}},...entries.map(Item=>({Put:{TableName:process.env.SALE_CANDIDATES_TABLE!,Item,ConditionExpression:'attribute_not_exists(id)'}}))]}));}
+    catch(e){if(await status(c.operation,owner)!=='SAVED')throw e;}
+   }},()=>new NewInvoiceProvider(bearer).create(input,s.config||DEFAULT_CONFIG),async(checkCode)=>{await db.send(new UpdateCommand({TableName:TABLE,Key:{id:c.operation},UpdateExpression:'SET checkCode=:code',ExpressionAttributeValues:{':code':checkCode}}));});
    if(!outcome.ok)return outcome;
-   const result=outcome.value;return {ok:true,number:result.number,pdfTicket:seal({purpose:'pdf',owner,operation:c.operation,billingId:result.billingId,expires:Date.now()+600000},s.key),expiresIn:600};
+   const result=outcome.value;return {ok:true,number:result.number,saleCandidates:links.length,pdfTicket:seal({purpose:'pdf',owner,operation:c.operation,billingId:result.billingId,expires:Date.now()+600000},s.key),expiresIn:600};
   }
   if(event.action==='pdf'){
    const c=unseal(event.ticket,s.key,owner,'pdf');if(await status(c.operation,owner)!=='SAVED'||!c.billingId)throw new Error('INVALID_OPERATION');

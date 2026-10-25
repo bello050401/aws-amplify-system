@@ -17,7 +17,9 @@ import type { InventoryCursorListFilters } from "./inventoryCursorList";
 import { inventoryComparator, type InventorySort } from "./searchSort";
 import {compareInventoryDateDesc} from './productDates';
 import {categoryPriorityComparator} from './categoryPriority';
+import {saleNameScore} from '../saleCandidates/search';
 import type {CategoryRecord} from './categories';
+import {inventoryCategoryIds} from './categories';
 import { recordQuery } from "@/lib/perf/queryTiming";
 
 /**
@@ -213,6 +215,8 @@ export interface FastSearchInput {
   filters?: InventoryCursorListFilters;
   sort?: InventorySort;
   categoryPriority?: readonly (readonly string[])[];
+  saleRelevance?: boolean;
+  saleExcludeCategoryIds?: string[];
   fieldsByKey?: Map<string, SearchFieldDef>;
   /** クイック検索の文字列(在庫ID/SKU/物品名の部分一致)。 */
   q?: string;
@@ -274,11 +278,12 @@ export async function searchInventoryFast(
   const candidates = raw.map(toCandidate);
   const q = input.q?.trim();
   const filtered = candidates.filter((record) => {
+    if(input.saleRelevance&&(Number(record.quantity)<=0||inventoryCategoryIds(record).some(id=>input.saleExcludeCategoryIds?.includes(id))))return false;
     if (input.advanced && !evaluateQuery(record, input.advanced.query, input.advanced.fieldsByKey)) return false;
-    if (q && !(input.nameOnly ? matchesNameSearch(record, q) : matchesQuickSearch(record, q))) return false;
+    if (q && !(input.saleRelevance ? saleNameScore(String(record.name??''),q)>0||matchesQuickSearch(record,q) : input.nameOnly ? matchesNameSearch(record, q) : matchesQuickSearch(record, q))) return false;
     return true;
   });
-  const comparator=input.sort ? inventoryComparator(input.sort, input.fieldsByKey ?? input.advanced?.fieldsByKey ?? new Map()) : compareByUpdatedAtDesc;
+  const comparator=input.saleRelevance&&q ? (a:typeof filtered[number],b:typeof filtered[number])=>saleNameScore(String(b.name??''),q)-saleNameScore(String(a.name??''),q)||compareByUpdatedAtDesc(a,b) : input.sort ? inventoryComparator(input.sort, input.fieldsByKey ?? input.advanced?.fieldsByKey ?? new Map()) : compareByUpdatedAtDesc;
   filtered.sort(input.categoryPriority?.length ? categoryPriorityComparator<(typeof filtered)[number]>(input.categoryPriority,comparator) : comparator);
 
   const page = filtered.slice(options.offset, options.offset + options.limit);
