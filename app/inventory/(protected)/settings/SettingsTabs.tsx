@@ -24,6 +24,7 @@ const SystemAuditPanel = dynamic(() => import("./SystemAuditPanel").then(m => m.
 const PhotoProfilePanel = dynamic(() => import("./PhotoProfilePanel").then(m => m.PhotoProfilePanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const ProductDescriptionPanel = dynamic(() => import("./ProductDescriptionPanel").then(m => m.ProductDescriptionPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const EcListingSettingsPanel = dynamic(() => import("./EcListingSettingsPanel").then(m => m.EcListingSettingsPanel));
+const EconveniSettingsPanel = dynamic(() => import("./EconveniSettingsPanel").then(m => m.EconveniSettingsPanel));
 
 interface SettingsTabsProps {
   categories: MasterEntry[];
@@ -82,6 +83,7 @@ export function SettingsTabs({
   const VALID_TABS = [
     "category",
     "ecListing",
+    "econveni",
     "unit",
     "location",
     "customFields",
@@ -113,6 +115,7 @@ export function SettingsTabs({
     <div>
       <div className="flex flex-wrap border-b border-gray-200">
         {!readOnly && <button type="button" onClick={() => setTab("ecListing")} className={tabClass(tab === "ecListing")}>出品設定</button>}
+        {isAdmin && <button type="button" onClick={() => setTab("econveni")} className={tabClass(tab === "econveni")}>eコンビニ連携</button>}
         <button type="button" onClick={() => setTab("category")} className={tabClass(tab === "category")}>
           カテゴリ
         </button>
@@ -188,6 +191,7 @@ export function SettingsTabs({
 
       <div className="pt-4">
         {tab === "ecListing" && !readOnly && <EcListingSettingsPanel isAdmin={isAdmin} onOpen={setTab} />}
+        {tab === "econveni" && isAdmin && <EconveniSettingsPanel />}
         {tab === "category" && <MasterList model="Category" label="カテゴリ" entries={categories} readOnly={readOnly} />}
         {tab === "unit" && <MasterList model="Unit" label="単位" entries={units} readOnly={readOnly} />}
         {tab === "location" && <MasterList model="Location" label="保管場所" entries={locations} readOnly={readOnly} />}

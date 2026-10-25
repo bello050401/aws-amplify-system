@@ -58,6 +58,11 @@ export function EcListingSettingsPanel({
         </Link>
       </div>
       <EcPresetManager isAdmin={isAdmin} />
+      {isAdmin && <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
+        <h3 className="font-bold">eコンビニ経由の出品準備</h3>
+        <p className="mt-1 text-sm text-gray-600">接続に使用するログイン情報を登録します。</p>
+        <Link href="/inventory/settings?tab=econveni" className={button}>eコンビニ連携を開く</Link>
+      </div>}
       <h3 className="mb-3 text-sm font-bold">販売先との接続</h3>
       <div className="grid gap-4 md:grid-cols-3">
         <section className={card}>
