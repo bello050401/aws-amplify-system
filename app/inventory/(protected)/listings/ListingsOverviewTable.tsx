@@ -27,7 +27,7 @@ import { InventoryThumbnail } from "../../InventoryThumbnail";
 import { usePrimaryPhotoThumbnails } from "../../usePrimaryPhotoThumbnails";
 import { resolveListPhotoUrl } from "@/lib/photoRegistration/gallerySelection";
 import {compareEcOverview,ecOverviewPrice,type EcSortKey} from "@/lib/listing/overviewPresentation";
-import { EcBulkDialog } from "./EcBulkDialog";
+import { EcBulkDialog, type EcDialogAction } from "./EcBulkDialog";
 
 const button =
   "rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium hover:bg-gray-50 disabled:opacity-40";
@@ -64,10 +64,8 @@ export function ListingsOverviewTable({
     [pageSize, setPageSize] = useState(50),
     [sort, setSort] = useState("updated");
   const [operation, setOperation] = useState<{
-      kind: EcOperation;
+      action: EcDialogAction;
       items: ListingOverviewRow[];
-      channel: EcChannel;
-      common?:boolean;
     } | null>(null);
   const authRetry = useRef(false);
   useEffect(() => setState(loadStateFromInitialRows(initialResult)), [initialResult]);
@@ -131,7 +129,7 @@ export function ListingsOverviewTable({
     pageRows = pagination.pageRows;
   const photoThumbnails = usePrimaryPhotoThumbnails(pageRows.map(row => row.inventoryId));
   function open(kind: EcOperation, items: ListingOverviewRow[], target = channel) {
-    setOperation({ kind, items, channel: target });
+    setOperation({ action: { kind, channel: target }, items });
   }
   if (state.kind !== "ok")
     return (
@@ -164,7 +162,7 @@ export function ListingsOverviewTable({
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-bold text-gray-900">商品一覧</h2>
-          <p className="mt-1 text-xs text-gray-500">共通の商品情報を保存したら、共通動作から各販売先へまとめて出品・停止・更新できます。</p>
+          <p className="mt-1 text-xs text-gray-500">共通の商品情報を保存したら、共通動作から各販売先へまとめて出品できます。停止・更新は各販売先の欄から操作してください。</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -314,7 +312,19 @@ export function ListingsOverviewTable({
                 <td className="hidden whitespace-nowrap px-3 py-3 text-right tabular-nums md:table-cell">
                   {row.price != null ? `${row.price.toLocaleString()}円` : "—"}
                 </td>
-                <td className="px-3 py-3">{canEdit&&!archived&&<div className="flex flex-wrap gap-1">{(["STOP","PUBLISH","UPDATE"] as const).map(kind=><button key={kind} type="button" disabled={catalogBusy||!catalog} className={button} aria-label={`${row.name}の全販売先を${kind==="STOP"?"出品停止":kind==="PUBLISH"?"出品":"更新"}`} onClick={()=>setOperation({kind,items:[row],channel,common:true})}>{kind==="STOP"?"出品停止":kind==="PUBLISH"?"出品":"更新"}</button>)}</div>}</td>
+                <td className="px-3 py-3">
+                  {canEdit && !archived && (
+                    <button
+                      type="button"
+                      disabled={catalogBusy || !catalog}
+                      className={button}
+                      aria-label={`${row.name}の全販売先を出品`}
+                      onClick={() => setOperation({ action: { kind: "COMMON_PUBLISH" }, items: [row] })}
+                    >
+                      出品
+                    </button>
+                  )}
+                </td>
                 {EC_CHANNELS.map((c) => {
                   const s = ecStateFor(catalog, c, row.inventoryId, row.hasDraft);
                   return (
@@ -397,9 +407,7 @@ export function ListingsOverviewTable({
       {operation && (
         <EcBulkDialog
           items={operation.items}
-          channel={operation.channel}
-          allChannels={operation.common}
-          operation={operation.kind}
+          action={operation.action}
           onClose={() => setOperation(null)}
           onChanged={() => {
             void loadCatalog();

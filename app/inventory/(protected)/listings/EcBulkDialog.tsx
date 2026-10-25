@@ -12,22 +12,26 @@ import {
   type EcReview,
 } from "@/lib/listing/ecManagement";
 
+export type EcDialogAction =
+  | { kind: "COMMON_PUBLISH" }
+  | { kind: EcOperation; channel: EcChannel };
+
 export function EcBulkDialog({
   items,
-  channel,
-  allChannels=false,
-  operation,
+  action,
   onClose,
   onChanged,
 }: {
   items: { inventoryId: string; name: string }[];
-  channel: EcChannel;
-  allChannels?:boolean;
-  operation: EcOperation;
+  action: EcDialogAction;
   onClose: () => void;
   onChanged: (done: string[]) => void;
 }) {
-  const targets=items.flatMap(item=>(allChannels?EC_CHANNELS:[channel]).map(targetChannel=>({...item,channel:targetChannel})));
+  // Only publication can target all channels. Stop/update always name one channel.
+  const commonPublish = action.kind === "COMMON_PUBLISH";
+  const operation: EcOperation = commonPublish ? "PUBLISH" : action.kind;
+  const channels = action.kind === "COMMON_PUBLISH" ? EC_CHANNELS : [action.channel];
+  const targets = items.flatMap(item => channels.map(channel => ({ ...item, channel })));
   const [reviews, setReviews] = useState<EcReview[]>([]),
     [busy, setBusy] = useState(true),
     [phase, setPhase] = useState<"review" | "execute" | "done">("review");
@@ -174,7 +178,7 @@ export function EcBulkDialog({
               {EC_OPERATION_LABEL[operation]}の確認
             </h2>
             <p className="mt-1 text-sm text-gray-600">
-              {operation === "ARCHIVE" || operation === "RESTORE" ? "EC商品情報" : allChannels ? "メルカリShops・ヤフオク・BASE" : EC_CHANNEL_LABEL[channel]}{" "}
+              {operation === "ARCHIVE" || operation === "RESTORE" ? "EC商品情報" : commonPublish ? "メルカリShops・ヤフオク・BASE" : EC_CHANNEL_LABEL[channels[0]]}{" "}
               · {items.length}商品
             </p>
           </div>
@@ -199,7 +203,7 @@ export function EcBulkDialog({
               return (
                 <li key={`${item.inventoryId}:${item.channel}`} className="py-3">
                   <div className="flex items-start justify-between gap-3">
-                    <p className="text-sm font-semibold">{allChannels && <span className="mr-2 text-blue-700">{EC_CHANNEL_LABEL[item.channel]}</span>}{r?.title || item.name}</p>
+                    <p className="text-sm font-semibold">{commonPublish && <span className="mr-2 text-blue-700">{EC_CHANNEL_LABEL[item.channel]}</span>}{r?.title || item.name}</p>
                     <span
                       className={`shrink-0 rounded px-2 py-1 text-xs ${r?.status === "DONE" ? "bg-green-50 text-green-700" : r?.status === "BLOCKED" ? "bg-red-50 text-red-700" : "bg-gray-100 text-gray-700"}`}
                     >
