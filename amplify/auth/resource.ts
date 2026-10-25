@@ -26,6 +26,9 @@ export const auth = defineAuth({
   loginWith: {
     email: true,
   },
-  // These additional groups restrict mobile features; they never grant inventory access.
-  groups: ["Admins", "ADMIN", "EDITOR", "VIEWER", "MOBILE_HIDE_EC", "MOBILE_HIDE_SALES"],
+  // Identity Pool selects ONE IAM role by group precedence (first wins).
+  // Mixed CMS/inventory users must use their inventory role. Never grant
+  // inventory permissions to CMS-only Admins as a precedence workaround.
+  // MOBILE_HIDE_* only restrict features; they never grant data access.
+  groups: ["ADMIN", "EDITOR", "VIEWER", "Admins", "MOBILE_HIDE_EC", "MOBILE_HIDE_SALES"],
 });

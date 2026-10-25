@@ -52,6 +52,16 @@ WebCrypto の非抽出鍵は、物理端末の完全な証明ではない。端�
 
 ## 基盤ライブラリの修正
 
+### 画像アクセス権限の分離（作業ブランチで修正、本番未反映）
+
+既存の `amplify/storage/resource.ts` は、在庫用 ADMIN と別の CMS 用 Admins にも inventory / knowledge の権限を付与していた。Identity Pool がグループの優先順位から IAM ロールを一つだけ選ぶため、兼任ユーザーの不具合を避ける目的の設定だったが、CMS 専用ユーザーにまで権限が広がる。
+
+`amplify/auth/resource.ts` の優先順位を ADMIN → EDITOR → VIEWER → Admins にし、storage の Admins への付与を撤去した。グループ名・所属、CMS の AppSync 権限は変更していない。MOBILE_HIDE_EC / MOBILE_HIDE_SALES も維持。優先順位と storage 権限を必ず同時に反映する必要がある。
+
+`scripts/verify-security-storage.ts` は実際の Amplify auth / storage 定義をローカルで合成し、生成した Cognito グループと IAM ポリシーを使って、6 グループの全 64 通りの所属組み合わせで期待する読み取り・書き込み・削除権限を検証した。すべて合格。これはデプロイ後の AWS IAM 実アクセス試験の代わりではなく、本番はまだ既存設定である。発行済みの一時 IAM 認証情報が残る場合も考慮して切り替える。
+
+既存業務との接続調査では 887 ソースファイル内に、旧セッション参照 76 箇所、ブラウザからの画像ストレージ直接接続 6 箇所などを検出した。文字列一致による調査であり、同数の脆弱性を発見した意味ではない。API / Server Actions / AppSync / S3 を一体で移行する必要があり、既存処理に承認チェックを一箇所追加しただけでは完了にできない。
+
 Next.js 14.2.35 → 15.5.28、sharp 0.35.4 → 0.35.5。非同期 cookies / headers / route params への対応を実施。認証 Cookie 読取を await 化し、既存ログインフォームは同じ内容のクライアントコンポーネントへ分離。React Native 用 DateField の型だけを Web と共有し、Web ビルドへ Native 実装を取り込まない。
 
 依存関係検査は変更前 critical 1 / high 17 / moderate 1 → 変更後 critical 0 / high 0 / moderate 2。件数は依存パッケージ単位であり、別々の攻撃が同数存在する意味ではない。残る moderate は ExcelJS とその uuid 依存に同じ指摘が伝播したもの。現在の ExcelJS は uuid v4 を利用しており、指摘の対象 v3/v5/v6 バッファ API の利用は見つからなかった。指摘自体の解消とは扱わず、互換性を確認して追従する。
@@ -72,6 +82,7 @@ AWS アカウントの読取調査では root MFA 有効・root access key な�
 
 ```
 node node_modules/tsx/dist/cli.mjs scripts/verify-security.ts
+node node_modules/tsx/dist/cli.mjs scripts/verify-security-storage.ts
 node node_modules/typescript/bin/tsc -p tools/bello-security-pilot/tsconfig.json --noEmit
 node scripts/build-security-pilot.cjs
 node node_modules/tsx/dist/cli.mjs scripts/security-pilot-live.ts
