@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { GetSecretValueCommand, PutSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { EconveniCredentialStore, ECONVENI_SECRET_ID, validateEconveniCredentials } from "../lib/listing/econveni/credentials";
 import Module from "node:module";
+import { EconveniHttpSession } from "../lib/listing/econveni/httpSession";
 
 async function main() {
   let value = JSON.stringify({ schemaVersion: 1, configured: false });
@@ -48,17 +49,25 @@ async function main() {
     return originalLoad.call(this, request, ...args);
   };
   const originalSend = SecretsManagerClient.prototype.send;
+  const originalLogin = EconveniHttpSession.prototype.login;
+  const originalForm = EconveniHttpSession.prototype.registrationForm;
+  let loginCalls = 0;
+  EconveniHttpSession.prototype.login = async () => { loginCalls++; };
+  EconveniHttpSession.prototype.registrationForm = async () => ({ action: "", method: "POST", enctype: "", fields: [] });
   (SecretsManagerClient.prototype as any).send = fake.send;
   try {
-    const { getEconveniSettingsAction, saveEconveniSettingsAction } = require("../app/actions/econveniSettings");
+    const { getEconveniSettingsAction, saveEconveniSettingsAction, checkEconveniConnectionAction } = require("../app/actions/econveniSettings");
     for (role of [null, "EDITOR", "VIEWER"]) {
       const before = commands.length;
       assert.equal((await getEconveniSettingsAction()).ok, false);
       assert.equal((await saveEconveniSettingsAction({ loginId: "id", password: "pwd" })).ok, false);
+      assert.equal((await checkEconveniConnectionAction()).ok, false);
+      assert.equal(loginCalls, 0);
       assert.equal(commands.length, before, "Denied roles must never touch credentials");
     }
     role = "ADMIN"; sub = null;
     assert.equal((await saveEconveniSettingsAction({ loginId: "id", password: "pwd" })).ok, false);
+    assert.equal((await checkEconveniConnectionAction()).ok, false);
     sub = "admin-sub";
     const result = await saveEconveniSettingsAction({ loginId: "id", password: "server-secret" });
     assert.equal(result.ok, true);
@@ -66,11 +75,16 @@ async function main() {
     const read = await getEconveniSettingsAction();
     assert.equal(read.ok, true);
     assert.ok(!JSON.stringify(read).includes("server-secret"));
+    const check = await checkEconveniConnectionAction();
+    assert.equal(check.ok, true); assert.equal(loginCalls, 1);
+    assert.ok(!JSON.stringify(check).includes("server-secret"));
     fail = true;
     assert.ok(!JSON.stringify(await getEconveniSettingsAction()).includes("sensitive-password"));
   } finally {
     moduleApi._load = originalLoad;
     SecretsManagerClient.prototype.send = originalSend;
+    EconveniHttpSession.prototype.login = originalLogin;
+    EconveniHttpSession.prototype.registrationForm = originalForm;
   }
   console.log("PASS: validation, exact secret scope, opaque password, safe state/errors, ADMIN-only read/write, missing identity denial");
 }

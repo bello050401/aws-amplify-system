@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getEconveniSettingsAction, saveEconveniSettingsAction } from "@/app/actions/econveniSettings";
+import { checkEconveniConnectionAction, getEconveniSettingsAction, saveEconveniSettingsAction } from "@/app/actions/econveniSettings";
 import type { EconveniCredentialsState } from "@/lib/listing/econveni/credentials";
 
 export function EconveniSettingsPanel() {
@@ -11,6 +11,8 @@ export function EconveniSettingsPanel() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
   const form = useRef<HTMLFormElement>(null);
   const sending = useRef(false);
   useEffect(() => {
@@ -38,7 +40,7 @@ export function EconveniSettingsPanel() {
         password: String(data.get("password") ?? ""),
       });
       if (result.ok) {
-        setState(result.state); setEditing(false); setNotice(result.message ?? "保存しました。");
+        setState(result.state); setEditing(false); setCheckedAt(null); setNotice(result.message ?? "保存しました。");
       } else setError(result.message);
     } catch { setError("保存結果を確認できませんでした。再読み込みして設定状態を確認してください。"); }
     finally {
@@ -46,6 +48,17 @@ export function EconveniSettingsPanel() {
       element.reset(); data.delete("password"); data.delete("loginId");
       sending.current = false; setBusy(false);
     }
+  }
+
+  async function checkConnection() {
+    if (sending.current) return;
+    sending.current = true; setChecking(true); setError(""); setNotice(""); setCheckedAt(null);
+    try {
+      const result = await checkEconveniConnectionAction();
+      if (result.ok) { setCheckedAt(result.checkedAt); setNotice(result.message); }
+      else setError(result.message);
+    } catch { setError("接続を確認できませんでした。時間をおいて再度お試しください。"); }
+    finally { sending.current = false; setChecking(false); }
   }
 
   return (
@@ -56,7 +69,8 @@ export function EconveniSettingsPanel() {
       {loading && <p role="status" className="mt-4 text-sm">設定を読み込み中…</p>}
       {state && <div className="mt-4 rounded-lg bg-gray-50 p-3 text-sm">
         <p className="font-semibold">{state.configured ? "ログイン情報：保存済み" : "ログイン情報：未設定"}</p>
-        <p className="mt-1 text-gray-600">接続確認：未完了</p>
+        <p className="mt-1 text-gray-600">接続確認：{checkedAt ? "成功" : "この画面では未確認"}</p>
+        {checkedAt && <p className="mt-1 text-xs text-gray-500">確認日時：{new Date(checkedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}</p>}
         {state.updatedAt && <p className="mt-1 text-xs text-gray-500">保存日時：{new Date(state.updatedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}</p>}
       </div>}
       {error && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
@@ -75,8 +89,11 @@ export function EconveniSettingsPanel() {
           {state.configured && <button type="button" disabled={busy} onClick={() => { form.current?.reset(); setEditing(false); }} className="rounded-md border border-gray-300 px-4 py-2 text-sm">キャンセル</button>}
         </div>
       </form>}
-      {state?.configured && !editing && <button type="button" onClick={() => { setEditing(true); setNotice(""); }} className="mt-4 rounded-md border border-gray-300 px-4 py-2 text-sm">ログイン情報を変更</button>}
-      <p className="mt-5 text-sm text-gray-600">現在は接続の準備段階です。保存だけでは商品登録・出品は行われません。</p>
+      {state?.configured && !editing && <div className="mt-4 flex flex-wrap gap-3">
+        <button type="button" disabled={checking} onClick={checkConnection} className="rounded-md bg-gray-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{checking ? "接続確認中…" : "接続を確認"}</button>
+        <button type="button" disabled={checking} onClick={() => { setEditing(true); setNotice(""); }} className="rounded-md border border-gray-300 px-4 py-2 text-sm disabled:opacity-50">ログイン情報を変更</button>
+      </div>}
+      <p className="mt-5 text-sm text-gray-600">接続確認ではログインと画面の読み取りだけを行います。商品登録・出品は行われません。出品方式の切り替えは検証中です。</p>
     </section>
   );
 }
