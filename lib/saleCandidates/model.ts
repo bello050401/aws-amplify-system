@@ -8,6 +8,7 @@ export type SaleCandidate={
  shipping:number|null; orderTotal:number|null; payment:string; warnings:string[]; orderLineCount:number;
  feeAllocation?:{index:number;amounts:number[]};
  result?:SoldOutResult; completedBy?:string; completedAt?:string; deletedBy?:string; deletedAt?:string;
+ completedSale?:{quantity:number;total:number|null;commission:number|null;date:string;identifier:string};
 };
 export type FeeRule={rateBps:number;fixed:number;serviceBps:number;rounding:'ROUND'|'FLOOR'|'YAHOO_TAX'};
 export type FeeConfig={base:FeeRule;baseExternal:FeeRule;basePayId:FeeRule;mercari:FeeRule;yahoo:FeeRule;direct:FeeRule};

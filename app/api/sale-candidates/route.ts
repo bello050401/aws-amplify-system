@@ -18,7 +18,7 @@ export async function GET(request:Request){
    const id=c.state==='DONE'?c.result?.soldId:c.source==='INVOICE'&&!c.name?c.suggestedInventoryId:undefined;
    if(!id)return c;
    const item=await getInventoryDetail(id);
-   return {...c,name:item?.name||c.name||'請求書の商品（在庫を再選択してください）'};
+   return {...c,name:item?.name||c.name||'請求書の商品（在庫を再選択してください）',...(c.state==='DONE'&&item?{completedSale:{quantity:c.result!.soldQuantity,total:item.salePrice??null,commission:item.saleCommission??null,date:item.saleEndDate||'',identifier:item.externalProductId||''}}:{})};
   }));
   return reply({items,cursor:page.cursor,fees,status});
  }catch{return reply({error:'売却候補を取得できませんでした。'},503);}
