@@ -190,7 +190,7 @@ export function ListingForm({
 
   const dirty = commonDraftHasChanges({ title, description, price, quantity, condition, shippingMethod,
     images: selectedImages, shippingPackages, commonCategoryId, channelPrices }, draft, { title: inventoryName, images: initialImageSelection, quantity:Math.max(1,availableQuantity) });
-  useEffect(() => { onDirtyChange?.(dirty); if (dirty) setDraftSaved(false); }, [dirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange?.(dirty); if (dirty) { setDraftSaved(false); setRemoteSaveMessage(''); } }, [dirty, onDirtyChange]);
   useEffect(() => {
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -648,11 +648,11 @@ export function ListingForm({
           >
             下書き内容をコピー
           </button>
-          {draftSaved && <span className="text-[12px] text-green-700">出品準備完了</span>}
+          {draftSaved && !dirty && <span className="text-[12px] text-green-700">出品準備完了</span>}
           {copyState === "copied" && <span className="text-[12px] text-green-700">コピーしました</span>}
           {copyState === "error" && <span className="text-[12px] text-red-600">コピーできませんでした</span>}
         </div>
-        {remoteSaveMessage && <p role="status" className="mt-2 text-sm text-gray-700">{remoteSaveMessage}</p>}
+        {remoteSaveMessage && !dirty && <p role="status" className="mt-2 text-sm text-gray-700">{remoteSaveMessage}</p>}
         {draftError && <p className="mt-2 text-[12px] text-red-600">{draftError}</p>}
         {draftRecoveryNeeded && <div className="mt-2 border border-amber-300 bg-amber-50 p-3 text-[12px] text-gray-800">
           <p>このタブの入力は残っています。別タブで保存済みの内容を確認し、必要な入力だけ移してください。元のタブから保存を再送しません。</p>
