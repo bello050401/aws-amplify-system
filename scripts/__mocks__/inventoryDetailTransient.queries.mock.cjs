@@ -19,7 +19,7 @@ module.exports = {
     return { id, categoryId: null, locationId: null };
   },
   async listStatuses() { calls.statuses += 1; return []; },
-  async listCustomFieldDefinitions() { calls.fields += 1; return []; },
+  async listAllCustomFieldDefinitions() { calls.fields += 1; return []; },
   async listCategories() { calls.categories += 1; if (phase === 'second') throw throttle(); return []; },
   async listLocations() { calls.locations += 1; return []; },
 };

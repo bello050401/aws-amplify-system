@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { DateFieldProps } from "./DateField";
+import type { DateFieldProps } from "./DateField.types";
 import { dateParts, dateValue, daysInMonth, validDateParts } from "../domain/dateWheel";
 
 const rowHeight = 44;

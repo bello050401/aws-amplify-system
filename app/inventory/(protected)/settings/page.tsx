@@ -75,12 +75,12 @@ export default async function InventorySettingsPage() {
   // (lib/base/redirectUri.ts)。Amplify HostingはCloudFrontの背後に
   // あるので、ブラウザから見えるホストは x-forwarded-host に入る。
   //
-  // headers() は同期なので host は即座に決まる —— getBaseConnectionState は
+  // Next.js 15 の非同期 headers() から host を取得する。getBaseConnectionState は
   // 上の7件に何も依存していない。以前は Promise.all の**後ろ**で単独に
   // awaitしており、Secrets Managerへの往復が1つだけ直列に後ろへ
   // ぶら下がっていた。この画面は外部サービスの接続状態を4つ読む
   // (ZAICO / Mercari / LINE / BASE)ので、そのうち1つが直列なのは効く。
-  const requestHeaders = headers();
+  const requestHeaders = await headers();
   const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
 
   const settingsRead = await (async () => {

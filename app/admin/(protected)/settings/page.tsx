@@ -7,7 +7,7 @@ import { disconnectBaseAction } from "@/app/actions/base";
 export const dynamic = "force-dynamic";
 
 interface Props {
-  searchParams: { connected?: string; error?: string };
+  searchParams: Promise<{ connected?: string; error?: string }>;
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -15,7 +15,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_state: "連携の検証に失敗しました(セッション切れの可能性があります)。もう一度お試しください。",
 };
 
-export default async function SettingsPage({ searchParams }: Props) {
+export default async function SettingsPage({ searchParams: pendingSearchParams }: Props) {
+  const searchParams = await pendingSearchParams;
+
   const connected = await isBaseConnected();
 
   return (

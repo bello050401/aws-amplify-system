@@ -10,13 +10,16 @@ import { signInventoryPreviews } from "@/lib/inventory/listImageUrls";
 import { InventoryPreviewUrls } from "../../../InventoryPreviewUrls";
 
 export default async function EditInventoryPage({
-  params,
-  searchParams,
+  params: pendingParams,
+  searchParams: pendingSearchParams,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
   /** QA005: 詳細画面から引き継いだ `from` — 詳細ページの同名propと同じ(lib/inventory/listReturnParams.ts参照)。 */
-  searchParams: { from?: string };
+  searchParams: Promise<{ from?: string }>;
 }) {
+  const params = await pendingParams;
+  const searchParams = await pendingSearchParams;
+
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects a signed-out/unauthorized visitor
   // QA005: 保存後/キャンセル時に戻る詳細URL。`from` を引き継いだまま

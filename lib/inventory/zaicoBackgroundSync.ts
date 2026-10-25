@@ -470,7 +470,7 @@ export async function advanceZaicoBackgroundSyncJob(who: string | null, port: Za
   // 一切到達しない。shouldContinue:falseなので呼び出し元(ZaicoSyncPanel
   // .tsxのscheduleAdvance再帰)もここで止まる。
   if (isZaicoSyncE2EFixtureModeActive()) {
-    return { job: e2eZaicoBackgroundSyncStatus(), shouldContinue: false };
+    return { job: await e2eZaicoBackgroundSyncStatus(), shouldContinue: false };
   }
   // getZaicoBackgroundSyncStatus と同じ理由で errors を必ず見る ——
   // 読めなかっただけなのに「進めるものが無い」と返すと、UIはポーリングを

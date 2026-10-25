@@ -6,11 +6,13 @@ import { PhotoBatchListTable } from "./PhotoBatchListTable";
 import { WebUploadPanel } from "./[batchId]/WebUploadPanel";
 
 interface PhotoRegistrationListPageProps {
-  searchParams: { cursor?: string };
+  searchParams: Promise<{ cursor?: string }>;
 }
 
 /** 未登録バッチ一覧。代表写真は表示された行から各バッチの先頭画像だけ遅延取得する。 */
-export default async function PhotoRegistrationListPage({ searchParams }: PhotoRegistrationListPageProps) {
+export default async function PhotoRegistrationListPage({ searchParams: pendingSearchParams }: PhotoRegistrationListPageProps) {
+  const searchParams = await pendingSearchParams;
+
   const role = await getInventoryRole();
   // (protected) layoutが未ログインを既にredirect済みなのでnullにはならないが、型を絞るため。
   if (!role) return null;

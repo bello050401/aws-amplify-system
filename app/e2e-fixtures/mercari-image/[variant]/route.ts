@@ -15,7 +15,9 @@ import { MERCARI_IMG_E2E_FAILURE_STATUS, mercariImgFixtureBytes } from "@/lib/li
  * INVENTORY_E2E_FIXTURES==='1')の外では常に404——本番ビルド
  * (next start、NODE_ENV=production)ではこの分岐は構造的に到達しない。
  */
-export async function GET(_req: Request, { params }: { params: { variant: string } }): Promise<Response> {
+export async function GET(_req: Request, { params: pendingParams }: { params: Promise<{ variant: string }> }): Promise<Response> {
+  const params = await pendingParams;
+
   if (!isE2EFixtureModeActive()) {
     return new Response("Not Found", { status: 404 });
   }

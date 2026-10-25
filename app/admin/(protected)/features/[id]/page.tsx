@@ -6,10 +6,12 @@ import { FeatureEditor } from "./FeatureEditor";
 export const dynamic = "force-dynamic";
 
 interface Props {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
-export default async function FeatureEditPage({ params }: Props) {
+export default async function FeatureEditPage({ params: pendingParams }: Props) {
+  const params = await pendingParams;
+
   const feature = await getFeatureWithItems(params.id);
   if (!feature) notFound();
 

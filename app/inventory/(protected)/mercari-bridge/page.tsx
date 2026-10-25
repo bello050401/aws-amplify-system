@@ -6,9 +6,11 @@ import { MercariExistingReadPanel } from "./MercariExistingReadPanel";
 
 export const metadata = { title: "メルカリShops既存商品照合 | BELLO" };
 
-export default async function MercariBridgePage({ searchParams }: {
-  searchParams: { inventoryId?: string; requestId?: string };
+export default async function MercariBridgePage({ searchParams: pendingSearchParams }: {
+  searchParams: Promise<{ inventoryId?: string; requestId?: string }>;
 }) {
+  const searchParams = await pendingSearchParams;
+
   const role = await getInventoryRole();
   if (role !== "ADMIN") notFound();
   const inventoryId = typeof searchParams.inventoryId === "string" ? searchParams.inventoryId : "";

@@ -15,7 +15,7 @@ import { SalesTrendChart } from "./SalesTrendChart";
 import { SalesItemsSection } from "./SalesItemsSection";
 
 interface SalesPageProps {
-  searchParams: { y?: string; m?: string };
+  searchParams: Promise<{ y?: string; m?: string }>;
 }
 
 /**
@@ -55,7 +55,9 @@ interface SalesPageProps {
  * 構造的に起きない(docs/sales-aggregate-snapshot-consistency-
  * 20260911.md参照)。このページ自体のコードは変わっていない。
  */
-export default async function SalesPage({ searchParams }: SalesPageProps) {
+export default async function SalesPage({ searchParams: pendingSearchParams }: SalesPageProps) {
+  const searchParams = await pendingSearchParams;
+
   const role = await getInventoryRole();
   if (!role) return null;
 

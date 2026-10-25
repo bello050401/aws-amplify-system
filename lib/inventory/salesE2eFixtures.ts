@@ -66,8 +66,8 @@ export type SalesE2EScenario = "normal" | "invalid" | "future";
 
 const SCENARIO_COOKIE = "__inv_e2e_sales_scenario";
 
-function resolveScenario(): SalesE2EScenario {
-  const raw = cookies().get(SCENARIO_COOKIE)?.value;
+async function resolveScenario(): Promise<SalesE2EScenario> {
+  const raw = (await cookies()).get(SCENARIO_COOKIE)?.value;
   return raw === "invalid" || raw === "future" ? raw : "normal";
 }
 
@@ -171,7 +171,7 @@ function baselineRebuiltAt(year: number, month: number): string {
  * `lib/inventory/salesView.ts`のloadSalesSummaryがisE2EFixtureModeActive()
  * 通過後にだけ呼ぶ。実集計テーブルへは一切アクセスしない。
  */
-export function e2eLoadSalesSummary(year: number, month: number): SalesSummaryView {
+export async function e2eLoadSalesSummary(year: number, month: number): Promise<SalesSummaryView> {
   const now = new Date();
   const { year: curYear, month: curMonth } = currentJstYearMonth();
 
@@ -184,7 +184,7 @@ export function e2eLoadSalesSummary(year: number, month: number): SalesSummaryVi
   });
 
   if (year === curYear && month === curMonth) {
-    const scenario = resolveScenario();
+    const scenario = await resolveScenario();
     return {
       year,
       month,

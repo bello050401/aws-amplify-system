@@ -2,7 +2,9 @@ import {NextResponse} from 'next/server';
 import {getMobileSession} from '@/lib/mobile/session';
 import {deleteInventoryPhotoAssetAction} from '@/app/actions/photoRegistration';
 export const dynamic='force-dynamic';
-export async function DELETE(request:Request,{params}:{params:{id:string;photoId:string}}){
+export async function DELETE(request:Request,{params: pendingParams}:{params:Promise<{id:string;photoId:string}>}){
+  const params = await pendingParams;
+
  const headers={'Cache-Control':'private, no-store',Vary:'Cookie'};
  const reply=(body:unknown,status=200)=>NextResponse.json(body,{status,headers});
  const session=await getMobileSession();if(!session.ok)return reply({error:session.error},session.status);

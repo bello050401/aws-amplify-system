@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-html-link-for-pages -- Preserve full document reloads for session recovery and externally changed listing state. */
 
 import { useEffect } from "react";
 
@@ -18,7 +19,7 @@ export default function InventoryError({ error, reset }: { error: Error & { dige
     // クライアント側でも一言記録しておく(実際の完全なstackはNext.js自身が
     // サーバー側stderrへ既に出力済み——ここでは開発者コンソールでの
     // 追跡補助のみ、secretは一切含まれない)。
-    console.error("[InventoryError boundary]", { digest: error.digest, message: error.message });
+    console.error("[InventoryError boundary]", { digest: error.digest });
   }, [error]);
 
   return (

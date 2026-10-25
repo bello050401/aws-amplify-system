@@ -9,7 +9,9 @@ import {copySoldOutPhotos,discardSoldOutPhotos} from '@/lib/inventory/soldOutPho
 import {serverDataClient,inventoryAuthMode} from '@/lib/amplify/dataClient';
 import {clearInventoryCountCache} from '@/lib/inventory/inventoryPage';
 export const dynamic='force-dynamic';
-export async function POST(request:Request,context:{params:{id:string}}){
+export async function POST(request:Request,context:{params:Promise<{id:string}>}){
+  const params = await context.params;
+
  const headers={'Cache-Control':'private, no-store',Vary:'Cookie'};
  const fail=(error:string,status:number,code='INVALID')=>NextResponse.json({ok:false,error,code},{status,headers});
  const session=await getMobileSession();
@@ -26,7 +28,7 @@ export async function POST(request:Request,context:{params:{id:string}}){
   try{while(true){const next=await reader.read();if(next.done)break;size+=next.value.byteLength;if(size>65536){await reader.cancel();return fail('入力内容が長すぎます。',413);}chunks.push(next.value);}}finally{reader.releaseLock();}
   input=JSON.parse(Buffer.concat(chunks).toString('utf8'));
  }catch{return fail('入力内容を確認してください。',400);}
- if(input?.inventoryId!==context.params.id)return fail('商品を確認してください。',422);
+ if(input?.inventoryId!==params.id)return fail('商品を確認してください。',422);
  try{
   const execute=createStockSplitService({db:inventoryDdb,table:inventoryTable,copyPhotos:copySoldOutPhotos,discardPhotos:discardSoldOutPhotos,nextSku:async()=>{
    const result=await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);if(!result.data||result.errors?.length)throw Error('管理番号を作成できませんでした。');return result.data;

@@ -109,17 +109,20 @@ function formatItemTypeAndQuantity(itemType: string | null, quantity: number | n
  * 基準に戻す」を数値としても満たす。
  */
 export default async function InventoryDetailPage({
-  params,
-  searchParams,
+  params: pendingParams,
+  searchParams: pendingSearchParams,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
   /**
    * QA005: 一覧から遷移した際に付く `from` — 一覧の検索条件/ページング
    * を正規化したクエリ文字列(lib/inventory/listReturnParams.ts参照)。
    * 直リンク・改ざんされた値・存在しない場合は無視して通常一覧へ戻る。
    */
-  searchParams: { from?: string };
+  searchParams: Promise<{ from?: string }>;
 }) {
+  const params = await pendingParams;
+  const searchParams = await pendingSearchParams;
+
   const role = await getInventoryRole();
   if (!role) return null;
 

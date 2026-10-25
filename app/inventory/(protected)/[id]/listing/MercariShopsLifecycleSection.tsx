@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-html-link-for-pages -- Preserve full document reloads for session recovery and externally changed listing state. */
 
 import { useRef, useState } from "react";
 import { prepareMercariVisibilityPcJobAction } from "@/app/actions/mercariVisibilityHandoff";

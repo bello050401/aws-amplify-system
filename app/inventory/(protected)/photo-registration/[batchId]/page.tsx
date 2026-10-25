@@ -19,11 +19,14 @@ const STATUS_LABEL: Record<string, string> = {
 const ASSET_PAGE_SIZE = 24;
 
 interface PhotoBatchDetailPageProps {
-  params: { batchId: string };
-  searchParams: { assetPage?: string };
+  params: Promise<{ batchId: string }>;
+  searchParams: Promise<{ assetPage?: string }>;
 }
 
-export default async function PhotoBatchDetailPage({ params, searchParams }: PhotoBatchDetailPageProps) {
+export default async function PhotoBatchDetailPage({ params: pendingParams, searchParams: pendingSearchParams }: PhotoBatchDetailPageProps) {
+  const params = await pendingParams;
+  const searchParams = await pendingSearchParams;
+
   const role = await getInventoryRole();
   if (!role) return null;
 

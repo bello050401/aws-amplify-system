@@ -48,11 +48,11 @@ export type InventorySessionStatus =
  * 3つとも同時に成立しない限り、この関数は実Cognitoチェックへ
  * フォールスルーする——既存の認可ロジックには一切手を加えていない。
  */
-function getE2EBypassRole(): InventoryRole | null {
+async function getE2EBypassRole(): Promise<InventoryRole | null> {
   if (process.env.NODE_ENV === "production") return null;
   const token = process.env.INVENTORY_E2E_AUTH_TOKEN;
   if (!token || token.length < 16) return null;
-  const raw = cookies().get("__inv_e2e_role")?.value;
+  const raw = (await cookies()).get("__inv_e2e_role")?.value;
   if (!raw) return null;
   const separatorIndex = raw.indexOf(":");
   if (separatorIndex < 0) return null;
@@ -90,7 +90,7 @@ function getE2EBypassRole(): InventoryRole | null {
  * 重複排除が効かないだけで、挙動は今までと同一。
  */
 export const getInventorySessionStatus = requestCache(async function getInventorySessionStatus(): Promise<InventorySessionStatus> {
-  const bypassRole = getE2EBypassRole();
+  const bypassRole = await getE2EBypassRole();
   if (bypassRole) return { kind: "authorized", role: bypassRole };
   try {
     return await runWithUserPoolServerContext({

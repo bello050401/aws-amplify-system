@@ -3,7 +3,9 @@ import {adminCredential,invokeIssuer,sameOrigin,bodyLimited,NO_STORE} from '@/li
 import {validateInvoice,UNKNOWN_RESULT} from '@/lib/invoicing/model';
 import {invoiceLinks} from '@/lib/saleCandidates/invoiceCandidates';
 export const dynamic='force-dynamic';export const maxDuration=90;
-export async function POST(request:Request,{params}:{params:{action:string}}){
+export async function POST(request:Request,{params: pendingParams}:{params:Promise<{action:string}>}){
+  const params = await pendingParams;
+
  const reply=(value:unknown,status=200)=>NextResponse.json(value,{status,headers:NO_STORE});
  try{
   if(!sameOrigin(request))return reply({ok:false,message:'許可されていない操作です。'},403);

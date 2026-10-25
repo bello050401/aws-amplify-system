@@ -40,8 +40,8 @@ async function main() {
   const { default: InventoryDetailPage } = await import('@/app/inventory/(protected)/[id]/page');
   const queries = (await import(queriesUrl)).default;
   const roles = (await import(roleUrl)).default;
-  const params = { id: 'inventory-test' };
-  const searchParams = {};
+  const params = Promise.resolve({ id: 'inventory-test' });
+  const searchParams = Promise.resolve({});
 
   queries.__setPhase('first');
   const first = await InventoryDetailPage({ params, searchParams });

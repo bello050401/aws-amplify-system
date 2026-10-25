@@ -47,8 +47,8 @@ export type ZaicoSyncE2EScenario = "delta" | "recovery";
 
 const SCENARIO_COOKIE = "__inv_e2e_zaico_scenario";
 
-function resolveScenario(): ZaicoSyncE2EScenario {
-  const raw = cookies().get(SCENARIO_COOKIE)?.value;
+async function resolveScenario(): Promise<ZaicoSyncE2EScenario> {
+  const raw = (await cookies()).get(SCENARIO_COOKIE)?.value;
   return raw === "recovery" ? "recovery" : "delta";
 }
 
@@ -123,8 +123,8 @@ const SCENARIOS: Record<ZaicoSyncE2EScenario, ZaicoBackgroundSyncJob> = {
 };
 
 /** `lib/inventory/zaicoBackgroundSync.ts`の各関数がisE2EFixtureModeActive()通過後にだけ呼ぶ。 */
-export function e2eZaicoBackgroundSyncStatus(): ZaicoBackgroundSyncJob {
-  return SCENARIOS[resolveScenario()];
+export async function e2eZaicoBackgroundSyncStatus(): Promise<ZaicoBackgroundSyncJob> {
+  return SCENARIOS[await resolveScenario()];
 }
 
 /** zaicoBackgroundSync.ts側の各ガードが同じ判定を再実装しないための再エクスポート。 */

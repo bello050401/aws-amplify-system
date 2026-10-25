@@ -57,7 +57,7 @@ const EXTERNAL_STUBS: Record<string, string> = {
   "@aws-sdk/client-secrets-manager": SECRETS_MANAGER_MOCK_URL,
   react: mocksDir + "stub-react-minimal.cjs",
   "@aws-sdk/client-dynamodb": mocksDir + "stub-aws-sdk-dynamodb.cjs",
-  "@aws-sdk/lib-dynamodb": mocksDir + "stub-aws-sdk-lib-dynamodb.cjs",
+  "@aws-sdk/lib-dynamodb": mocksDir + "settingsE2EIsolation.documentClient.mock.cjs",
   "@aws-amplify/adapter-nextjs": mocksDir + "stub-amplify-adapter-nextjs.cjs",
   "@/amplify_outputs.json": mocksDir + "stub-amplify-outputs.cjs",
 };
@@ -103,13 +103,15 @@ function check(ok: boolean, label: string, detail = "") {
 async function main() {
   const dataClientMock = (await import(DATA_CLIENT_MOCK_URL)).default;
   const secretsManagerMock = (await import(SECRETS_MANAGER_MOCK_URL)).default;
+  const documentClientMock = (await import(mocksDir + 'settingsE2EIsolation.documentClient.mock.cjs')).default;
 
   function resetSpies() {
     dataClientMock.__resetCalls();
     secretsManagerMock.__resetCalls();
+    documentClientMock.__resetCalls();
   }
   function totalCalls() {
-    return dataClientMock.__calls.length + secretsManagerMock.__calls.length;
+    return dataClientMock.__calls.length + secretsManagerMock.__calls.length + documentClientMock.__calls.length;
   }
 
   const { ensureSettingsBootstrap } = await import("@/lib/inventory/settingsBootstrap");
