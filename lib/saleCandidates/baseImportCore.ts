@@ -20,7 +20,9 @@ export async function importBaseOrdersCore(db:DynamoDBDocumentClient,table:strin
    if(!/^\/orders\?(?:[^#]*)$|^\/orders\/detail\/[A-Za-z0-9_-]+$/.test(path))throw Error('BASE_ORDER_ENDPOINT');
    const response=await transport('https://api.thebase.in/1'+path,{headers:{Authorization:'Bearer '+token},cache:'no-store',redirect:'error',signal:AbortSignal.timeout(12000)});
    if([401,403].includes(response.status))throw Error('BASE_ORDERS_AUTH_REQUIRED');
-   if(!response.ok)throw Error('BASE_ORDERS_READ_FAILED');const v=await response.json();if(v.error||v.errors)throw Error('BASE_ORDERS_AUTH_REQUIRED');return v;
+   const v=await response.json();
+   if(['invalid_scope','insufficient_scope','invalid_token','unauthorized_client'].includes(v.error))throw Error('BASE_ORDERS_AUTH_REQUIRED');
+   if(!response.ok||v.error||v.errors)throw Error('BASE_ORDERS_READ_FAILED');return v;
   };
   const page=await read('/orders?'+new URLSearchParams({start_ordered:String(start),end_ordered:String(end),offset:String(offset),limit:'10'}));
   if(!Array.isArray(page.orders))throw Error('BASE_ORDER_FORMAT');
