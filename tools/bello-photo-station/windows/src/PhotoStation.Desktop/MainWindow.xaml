@@ -1,4 +1,4 @@
-<Window x:Class="PhotoStation.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="BELLO Photo Station r11" Icon="Assets/BelloPhotoStationRounded.png" Height="790" Width="1120" MinHeight="700" MinWidth="1020" Background="#F4F6F8">
+<Window x:Class="PhotoStation.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="BELLO Photo Station r12" Icon="Assets/BelloPhotoStationRounded.png" Height="790" Width="1120" MinHeight="700" MinWidth="1020" Background="#F4F6F8">
  <Grid>
   <Grid x:Name="DesktopPanel" Margin="24">
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
@@ -52,7 +52,7 @@
   </Grid>
   <ScrollViewer x:Name="TouchPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly">
    <StackPanel Margin="20" MaxWidth="1280">
-    <TextBlock Text="BELLO Photo Station r11" FontSize="27" FontWeight="SemiBold" Foreground="#172033"/>
+    <TextBlock Text="BELLO Photo Station r12" FontSize="27" FontWeight="SemiBold" Foreground="#172033"/>
     <TextBlock Text="SDカードを入れて、同じ商品の写真を選んでください" FontSize="17" Margin="0,6,0,18" TextWrapping="Wrap" Foreground="#536171"/>
     <Border Background="White" CornerRadius="14" Padding="18">
      <StackPanel>

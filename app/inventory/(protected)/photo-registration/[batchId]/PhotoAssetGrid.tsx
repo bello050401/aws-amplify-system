@@ -1,5 +1,6 @@
 "use client";
 import {PhotoOriginalDownload} from "@/app/inventory/components/PhotoOriginalDownload";
+import {PhotoFileDownload} from "@/app/inventory/components/PhotoFileDownload";
 import {useRouter} from "next/navigation";
 import {useRef,useState} from "react";
 import {deletePhotoAssetAction} from "@/app/actions/photoRegistration";
@@ -27,7 +28,7 @@ export function PhotoAssetGrid({batchId,assets,actorRole}:{batchId:string;assets
    {asset.thumbnailUrl&&!asset.isDeleted?<img src={asset.thumbnailUrl} alt={"画像 "+(asset.sequence+1)} className="h-full w-full object-contain" loading="lazy"/>:<span className="text-xs text-gray-500">{asset.isDeleted?asset.purgedAt?"削除済み":"クラウドの削除を確認してください":"画像を表示できません"}</span>}
   </div>
   <p className="text-xs text-slate-600">{status[asset.status]??asset.status}</p>
-  {!asset.isDeleted&&asset.processedUrl&&<a className="flex min-h-9 items-center justify-center rounded border border-blue-300 text-xs text-blue-700" href={"/api/inventory/photo-download?id="+encodeURIComponent(asset.id)} aria-label={"画像 "+(asset.sequence+1)+" をダウンロード"}>ダウンロード</a>}
+  {!asset.isDeleted&&asset.processedUrl&&<PhotoFileDownload className="flex min-h-9 items-center justify-center rounded border border-blue-300 text-xs text-blue-700" href={"/api/inventory/photo-download?id="+encodeURIComponent(asset.id)} ariaLabel={"画像 "+(asset.sequence+1)+" をダウンロード"}>ダウンロード</PhotoFileDownload>}
   <PhotoOriginalDownload asset={asset}/>
   {canDelete&&(!asset.isDeleted||!asset.purgedAt)&&<button type="button" disabled={pending} onClick={()=>{setError("");setTarget(asset);}} aria-label={"画像 "+(asset.sequence+1)+" を削除"} className="min-h-9 rounded border border-red-300 text-xs text-red-700 disabled:opacity-50">{asset.isDeleted?"削除を再実行":"削除"}</button>}
  </li>)}
