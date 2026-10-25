@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { readEconveniCommand,remoteProduct,formValues,readForms,econveniCommandCompleted,sameOptionValues,productImageUrls,type HtmlPage,type EconveniMarket } from "../lib/listing/econveni/httpSession";
+import { readEconveniCommand,readEconveniPreviewProduct,remoteProduct,formValues,readForms,econveniCommandCompleted,sameOptionValues,productImageUrls,type HtmlPage,type EconveniMarket } from "../lib/listing/econveni/httpSession";
 import { initialEconveniWorkflow, reserveEconveniOperation } from "../lib/listing/econveni/workflowStore";
 import {reconcileEconveniChannel} from "../lib/listing/econveni/reconciliation";
 const page=(html:string):HtmlPage=>({url:"https://smart.e-conveni.net/product_listing.php",status:200,html});
 const labels={YAHOO:{PUBLISH:"Yahoo!オークションガイドラインに同意して出品する",STOP:"上記のYahoo!アイテムを全て終了する"},MERCARI_SHOPS:{PUBLISH:"メルカリShops 出品実行",STOP:"上記のメルカリShopsアイテムを全て終了する"}};
 async function main(){
+ const shopsExpected={channel:'MERCARI_SHOPS' as const,operation:'PUBLISH' as const,productId:'123',accountId:'9350',title:'Shops title',price:2000};
+ const detail='<form><input name="products_id" value="123"><input name="users_id" value="9350"><input name="products_name" value="Base title"><input name="products_price" value="1000"><input name="mercariShops_name" value="Shops title"><input name="mercariShops_price" value="2000"></form>';
+ const display=readEconveniPreviewProduct(page(detail),shopsExpected);
+ assert.deepEqual(display,{title:'Base title',price:1000});
+ const preview=`<div>Base title @1,000円</div><input value="メルカリShops 出品実行" onclick="window.open('https://img.e-conveni.net/exhibit/mercariShopsCreateProduct.php?users_id=9350&products_id=T123','result');">`;
+ const command=readEconveniCommand(page(preview),shopsExpected,display);
+ assert.equal(command.price,2000);assert.equal(command.title,'Shops title');
+ for(const bad of [detail.replace('value="123"','value="124"'),detail.replace('value="9350"','value="1"'),detail.replace('Shops title','Other'),detail.replace('value="2000"','value="1000"'),detail.replace('value="1000"','value=""')])assert.throws(()=>readEconveniPreviewProduct(page(bad),shopsExpected));
+ assert.throws(()=>readEconveniCommand(page(preview.replace('@1,000円','@2,000円')),shopsExpected,display));
  for(const channel of ["YAHOO","MERCARI_SHOPS"] as EconveniMarket[])for(const operation of ["PUBLISH","STOP"] as const){
   const expected={channel,operation,productId:"10176618",accountId:"9350",title:"【かに様専用】",price:999999};
   const path=channel==="YAHOO"?`https://smart.e-conveni.net/${operation==="PUBLISH"?"yahoo_submit":"yahoo_cancel"}.php?action=exhibit_product&`:`https://img.e-conveni.net/exhibit/${operation==="PUBLISH"?"mercariShopsCreateProduct":"mercariShopsDeleteProductInput"}.php?`;

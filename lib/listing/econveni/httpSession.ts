@@ -70,7 +70,7 @@ export function remoteProduct(page: HtmlPage, inventoryId: string): EconveniRemo
   return { ...binding, channels: { YAHOO: channel("YAHOO"), MERCARI_SHOPS: channel("MERCARI_SHOPS") } };
 }
 /** Only the four observed one-product normal UI actions are allowed. No JS is executed. */
-export function readEconveniCommand(page: HtmlPage, expected: { channel: EconveniMarket; operation: "PUBLISH" | "STOP"; productId: string; accountId: string; title: string; price: number }): EconveniCommand {
+export function readEconveniCommand(page: HtmlPage, expected: { channel: EconveniMarket; operation: "PUBLISH" | "STOP"; productId: string; accountId: string; title: string; price: number }, listDisplay = {title:expected.title,price:expected.price}): EconveniCommand {
   const labels = { YAHOO: { PUBLISH: "Yahoo!オークションガイドラインに同意して出品する", STOP: "上記のYahoo!アイテムを全て終了する" }, MERCARI_SHOPS: { PUBLISH: "メルカリShops 出品実行", STOP: "上記のメルカリShopsアイテムを全て終了する" } };
   const nodes = elements(parse(page.html));
   const buttons = nodes.filter(n => ["input","button"].includes(n.tagName) && (attr(n,"value") || text(n)).trim() === labels[expected.channel][expected.operation]);
@@ -84,11 +84,23 @@ export function readEconveniCommand(page: HtmlPage, expected: { channel: Econven
       [...url.searchParams.keys()].some(k=>!allowedParams.has(k) || url.searchParams.getAll(k).length!==1) ||
       url.searchParams.get("products_id") !== "T"+expected.productId || url.searchParams.get("users_id") !== expected.accountId ||
       expected.channel === "YAHOO" && url.searchParams.get("action") !== "exhibit_product") throw new EconveniHttpError("CONTRACT_CHANGED");
-  const expectedText = expected.title + " @" + expected.price.toLocaleString("en-US") + "円";
+  const expectedText = listDisplay.title + " @" + listDisplay.price.toLocaleString("en-US") + "円";
   const normalized = text(parse(page.html)).replace(/\s+/g," ");
   // Exactly one preview line: refuse a batch that accidentally contains another product.
   if (!normalized.includes(expectedText) || (normalized.match(/@[\d,]+円/g) ?? []).length !== 1) throw new EconveniHttpError("CONTRACT_CHANGED");
   return { ...expected, url: url.href };
+}
+
+/** The batch confirmation always displays the base title/price, even for Shops.
+ * Validate the channel-specific values from this exact product before using that label. */
+export function readEconveniPreviewProduct(page:HtmlPage, expected:Omit<EconveniCommand,'url'>){
+  const forms=readForms(page).filter(f=>f.fields.some(x=>x.name==='products_name'));
+  if(forms.length!==1)throw new EconveniHttpError('CONTRACT_CHANGED');
+  const values=Object.fromEntries(formValues(forms[0]));
+  const title=expected.channel==='MERCARI_SHOPS'?values.mercariShops_name:values.products_name;
+  const price=expected.channel==='MERCARI_SHOPS'?values.mercariShops_price:values.products_price;
+  if(values.products_id!==expected.productId||values.users_id!==expected.accountId||title!==expected.title||!/^\d+$/.test(price??'')||Number(price)!==expected.price||!values.products_name||!/^\d+$/.test(values.products_price??''))throw new EconveniHttpError('CONTRACT_CHANGED');
+  return {title:values.products_name,price:Number(values.products_price)};
 }
 
 export function econveniCommandCompleted(page: HtmlPage, channel: EconveniMarket, operation: "PUBLISH" | "STOP") {
@@ -469,9 +481,11 @@ export class EconveniHttpSession {
     const form = await this.registrationForm();
     const accountId = form.fields.find(f=>f.name === "users_id")?.value ?? "";
     if (!/^\d+$/.test(accountId)) throw new EconveniHttpError("AUTH_REQUIRED");
+    const detail=await this.productPage(SMART+'/product.php?'+new URLSearchParams({action:'product_update',products_id:expected.productId}));
+    const listDisplay=readEconveniPreviewProduct(detail,{...expected,accountId});
     const action = (expected.channel === "YAHOO" ? "yahoo" : "mercariShops") + (expected.operation === "PUBLISH" ? "_exhibit_together" : "_stop_together");
     const page = await this.request(SMART + "/product_listing.php?" + new URLSearchParams({ action, products_id: "T"+expected.productId, mode:"", order_by:"", attribute_page:"", query:"" }));
-    return readEconveniCommand(page, { ...expected, accountId });
+    return readEconveniCommand(page, { ...expected, accountId },listDisplay);
   }
   async executeCommand(command: EconveniCommand): Promise<HtmlPage> {
     if (!this.authenticated) throw new EconveniHttpError("AUTH_REQUIRED");
