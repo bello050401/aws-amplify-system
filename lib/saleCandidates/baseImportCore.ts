@@ -1,4 +1,4 @@
-import 'server-only';
+// Shared by the server-only web wrapper and the standalone Lambda worker.
 import {GetCommand,PutCommand,ScanCommand,UpdateCommand,TransactWriteCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import {randomUUID} from 'node:crypto';
 
