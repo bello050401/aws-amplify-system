@@ -2,7 +2,9 @@
 import {defineBackend} from '@aws-amplify/backend';
 import {App,Stack,CfnOutput,RemovalPolicy,SecretValue,Token} from 'aws-cdk-lib';
 import {Table,AttributeType,BillingMode} from 'aws-cdk-lib/aws-dynamodb';
-import {Effect,PolicyStatement,AnyPrincipal,Role,ArnPrincipal} from 'aws-cdk-lib/aws-iam';
+import {Effect,PolicyStatement,AnyPrincipal,Role,ArnPrincipal,ServicePrincipal} from 'aws-cdk-lib/aws-iam';
+import {Secret} from 'aws-cdk-lib/aws-secretsmanager';
+import {addDeviceResources} from '../amplify/security/deviceResources';
 import {CfnWebACL,CfnWebACLAssociation} from 'aws-cdk-lib/aws-wafv2';
 import {CfnResolver,CfnFunctionConfiguration} from 'aws-cdk-lib/aws-appsync';
 import {auth} from '../amplify/auth/resource';
@@ -57,6 +59,28 @@ testRole.addToPolicy(new PolicyStatement({actions:['kms:GenerateDataKey','kms:De
 testRole.addToPolicy(new PolicyStatement({actions:['s3:GetObject','s3:GetObjectVersion','s3:PutObject','s3:DeleteObject','s3:DeleteObjectVersion'],resources:[backend.storage.resources.bucket.arnForObjects('*'),'arn:aws:s3:::'+pilot.FixturePhotoBucket+'/*']}));
 testRole.addToPolicy(new PolicyStatement({actions:['s3:ListBucket','s3:ListBucketVersions','s3:GetBucketVersioning'],resources:[backend.storage.resources.bucket.bucketArn,'arn:aws:s3:::'+pilot.FixturePhotoBucket]}));
 new CfnOutput(root,'IsolatedBrowserRoleArn',{value:testRole.roleArn});
+// Full HTTPS staging, separate from production identities and SSR permissions.
+// Keep the existing private AppSync gate and S3 deny above; the factory's
+// preparation phase adds only identity/session resources to this already gated API.
+if(process.env.SECURITY_HOSTED_STAGE==='true'){
+ const origin='https://codex-security-20261026.d4hkkg7dty2du.amplifyapp.com';
+ const role=new Role(root,'IsolatedHostingRuntime',{assumedBy:new ServicePrincipal('amplify.amazonaws.com').withConditions({StringEquals:{'aws:SourceAccount':'203918843421'},ArnEquals:{'aws:SourceArn':'arn:aws:amplify:us-west-2:203918843421:apps/d4hkkg7dty2du'}})});
+ const resources=addDeviceResources({stack:Stack.of(authResources.userPool),pool:authResources.userPool,cfnPool:authResources.cfnResources.cfnUserPool,
+  api:cfnApi,bucket:backend.storage.resources.bucket,runtime:role,identityRoles,origin,phase:'prepare',
+  existingDataGate:Secret.fromSecretCompleteArn(root,'ExistingStageDataGate',pilot.DataGateSecretArn)});
+ // Both isolated test identities are supported; neither provider is production.
+ cfnApi.additionalAuthenticationProviders=[...(cfnApi.additionalAuthenticationProviders as any[]),{
+  authenticationType:'AMAZON_COGNITO_USER_POOLS',userPoolConfig:{userPoolId:authResources.userPool.userPoolId,awsRegion:'us-west-2',appIdClientRegex:resources.client.ref}}];
+ authResources.cfnResources.cfnUserPool.adminCreateUserConfig={allowAdminCreateUserOnly:true};
+ authResources.cfnResources.cfnUserPool.deletionProtection='ACTIVE';
+ const config={...resources.configuration,phase:'enforced',region:'us-west-2',deployment:'bello-security-hosted-20261026'};
+ backend.addOutput({custom:{deviceSecurity:config}});
+ new CfnOutput(root,'HostedSecurity',{value:JSON.stringify(config)});
+ new CfnOutput(root,'IsolatedHostingRoleArn',{value:role.roleArn});
+ role.addToPolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:BatchGetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem','dynamodb:Query','dynamodb:Scan'],resources:[...dataTableArns,...dataTableArns.map(n=>n+'/index/*'),'arn:aws:dynamodb:us-west-2:203918843421:table/'+pilot.FixturePhotoTable,'arn:aws:dynamodb:us-west-2:203918843421:table/'+pilot.FixturePhotoTable+'/index/*']}));
+ role.addToPolicy(new PolicyStatement({actions:['s3:GetObject','s3:GetObjectVersion','s3:PutObject','s3:DeleteObject','s3:DeleteObjectVersion'],resources:[backend.storage.resources.bucket.arnForObjects('*'),'arn:aws:s3:::'+pilot.FixturePhotoBucket+'/*']}));
+ role.addToPolicy(new PolicyStatement({actions:['s3:ListBucket','s3:ListBucketVersions','s3:GetBucketVersioning'],resources:[backend.storage.resources.bucket.bucketArn,'arn:aws:s3:::'+pilot.FixturePhotoBucket]}));
+}
 const app=backend.auth.resources.userPool.node.root as App;
 // BELLO currently uses HTTP reads/writes, not GraphQL subscriptions. Exclude only
 // those unused resolvers from this regression copy so initial creation stays

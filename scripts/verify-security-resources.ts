@@ -11,7 +11,7 @@ const require=createRequire(import.meta.url);
 const {settings}=require('./security-runtime-environment.cjs');
 let passed=0;
 function test(name:string,fn:()=>void){fn();passed++;console.log('PASS '+name);}
-function fixture(phase:'prepare'|'enforced'){
+function fixture(phase:'prepare'|'enforced',origin='https://security.example.com'){
  const app=new App(),auth=new Stack(app,'Auth'),data=new Stack(app,'Data'),storage=new Stack(app,'Storage');
  const pool=new UserPool(auth,'ExistingPool',{selfSignUpEnabled:false});
  const old=pool.addClient('ExistingBrowserClient');
@@ -21,7 +21,7 @@ function fixture(phase:'prepare'|'enforced'){
  const bucket=new Bucket(storage,'ExistingBucket');
  const identity=new Role(auth,'IdentityRole',{assumedBy:new ServicePrincipal('cognito-identity.amazonaws.com')});
  const runtime=Role.fromRoleArn(auth,'WebRuntime','arn:aws:iam::111122223333:role/TestRuntime');
- const result=addDeviceResources({stack:auth,pool,cfnPool:cfn,api:api.node.defaultChild as any,bucket,runtime,identityRoles:[identity],phase,origin:'https://security.example.com',recoveryOperatorArn:'arn:aws:iam::111122223333:user/RecoveryOperator'});
+ const result=addDeviceResources({stack:auth,pool,cfnPool:cfn,api:api.node.defaultChild as any,bucket,runtime,identityRoles:[identity],phase,origin,recoveryOperatorArn:'arn:aws:iam::111122223333:user/RecoveryOperator'});
  return{app,auth,data,storage,pool,cfn,old,result,password};
 }
 test('Preparation preserves existing user pool/password/MFA/browser client',()=>{
@@ -58,5 +58,18 @@ test('Server env exports identifiers only, never secret values',()=>{
  const c={phase:'enforced',origin:'https://security.example.com',region:'us-west-2',table:'t',keyArn:'k',deployment:'d',poolId:'p',clientId:'c',clientSecretArn:'s',dataGateSecretArn:'g',clientSecret:'must-not-copy'};
  const r=settings({BELLO_DEVICE_SECURITY:'enforced',SECURITY_ORIGIN:c.origin},{custom:{deviceSecurity:c}});
  assert(!JSON.stringify(r).includes('must-not-copy'));assert(!Object.keys(r).some(k=>k.startsWith('NEXT_PUBLIC')));assert.equal(r.SECURITY_ORIGIN,c.origin);
+});
+test('Cognito oversized relying-party hostname fails before deployment',()=>{
+ assert.throws(()=>fixture('prepare','https://'+'a'.repeat(54)+'.example.com'),/63 characters/);
+});
+test('Hosted staging cannot select the production branch or backend',()=>{
+ const {prepare}=require('./security-hosted-build.cjs');
+ const env={AWS_APP_ID:'d4hkkg7dty2du',AWS_BRANCH:'codex/security-20261026'};
+ const origin='https://codex-security-20261026.d4hkkg7dty2du.amplifyapp.com';
+ const outputs={custom:{deviceSecurity:{phase:'enforced',origin,region:'us-west-2',poolId:'us-west-2_iCUa4QWvi',table:'t',keyArn:'k',deployment:'d',clientId:'c',clientSecretArn:'s',dataGateSecretArn:'g'}},data:{url:'https://5cufjlyzvbdlxd74q3j5rqwquy.appsync-api.us-west-2.amazonaws.com/graphql'},storage:{bucket_name:'amplify-bellosecuritybusi-belloinventorystoragebuc-alf7jbmof57c'}};
+ assert.equal(prepare(env,outputs).SECURITY_ORIGIN,origin);
+ assert.throws(()=>prepare({...env,AWS_BRANCH:'claude/inventory-management-system-5vbvc7'},outputs));
+ assert.throws(()=>prepare(env,{...outputs,storage:{bucket_name:'production'}}));
+ assert.throws(()=>prepare(env,{...outputs,custom:{deviceSecurity:{...outputs.custom.deviceSecurity,poolId:'us-west-2_e4411KsnA'}}}));
 });
 console.log(JSON.stringify({passed,failed:0,deployed:false}));

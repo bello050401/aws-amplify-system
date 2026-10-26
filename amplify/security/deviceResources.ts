@@ -2,7 +2,7 @@ import {RemovalPolicy,Stack} from 'aws-cdk-lib';
 import {CfnUserPool,CfnUserPoolClient,IUserPool} from 'aws-cdk-lib/aws-cognito';
 import {AttributeType,BillingMode,Table,TableEncryption} from 'aws-cdk-lib/aws-dynamodb';
 import {Key} from 'aws-cdk-lib/aws-kms';
-import {Secret} from 'aws-cdk-lib/aws-secretsmanager';
+import {Secret,type ISecret} from 'aws-cdk-lib/aws-secretsmanager';
 import {AnyPrincipal,ArnPrincipal,Effect,IRole,ManagedPolicy,PolicyStatement,Role} from 'aws-cdk-lib/aws-iam';
 import {IBucket} from 'aws-cdk-lib/aws-s3';
 import {CfnGraphQLApi} from 'aws-cdk-lib/aws-appsync';
@@ -11,12 +11,15 @@ import {CfnWebACL,CfnWebACLAssociation} from 'aws-cdk-lib/aws-wafv2';
 export type DeviceResourceOptions={
  stack:Stack; pool:IUserPool; cfnPool:CfnUserPool; api:CfnGraphQLApi; bucket:IBucket;
  runtime:IRole; identityRoles:IRole[]; origin:string; phase:'prepare'|'enforced'; recoveryOperatorArn?:string;
+ existingDataGate?:ISecret;
 };
 /** Additive preparation preserves the existing pool, users, groups and browser
  * client. Enforcement is a separate, reviewed release: never enabled by default. */
 export function addDeviceResources(o:DeviceResourceOptions){
  const {stack}=o,parsed=new URL(o.origin);
  if(parsed.protocol!=='https:'||parsed.origin!==o.origin)throw Error('Exact HTTPS security origin required');
+ // CloudFormation/Cognito limits WebAuthnRelyingPartyID to 63 characters.
+ if(parsed.hostname.length>63)throw Error('Cognito passkey hostname must be at most 63 characters');
  const pool=o.cfnPool;
  const oldPolicies=pool.policies as CfnUserPool.PoliciesProperty|undefined;
  pool.userPoolTier='ESSENTIALS';
@@ -41,7 +44,7 @@ export function addDeviceResources(o:DeviceResourceOptions){
  table.addGlobalSecondaryIndex({indexName:'ByKind',partitionKey:{name:'kind',type:AttributeType.STRING},sortKey:{name:'id',type:AttributeType.STRING}});
  const key=new Key(stack,'DeviceSessionKey',{enableKeyRotation:true,removalPolicy:RemovalPolicy.RETAIN});
  const secret=new Secret(stack,'DeviceClientCredentials',{generateSecretString:{secretStringTemplate:JSON.stringify({pendingSetup:true}),generateStringKey:'placeholder',passwordLength:32},removalPolicy:RemovalPolicy.RETAIN});
- const gate=new Secret(stack,'DeviceDataGate',{generateSecretString:{secretStringTemplate:'{}',generateStringKey:'value',passwordLength:48,excludePunctuation:true},removalPolicy:RemovalPolicy.RETAIN});
+ const gate=o.existingDataGate??new Secret(stack,'DeviceDataGate',{generateSecretString:{secretStringTemplate:'{}',generateStringKey:'value',passwordLength:48,excludePunctuation:true},removalPolicy:RemovalPolicy.RETAIN});
  new ManagedPolicy(stack,'DeviceRuntimeAccess',{roles:[o.runtime],statements:[
   new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:Query'],resources:[table.tableArn,table.tableArn+'/index/ByKind']}),
   new PolicyStatement({actions:['kms:GenerateDataKey','kms:Decrypt'],resources:[key.keyArn]}),
