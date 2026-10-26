@@ -68,7 +68,7 @@ if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/in
  new ManagedPolicy(backend.purchaseNotifications.resources.lambda,'WebAccess',{roles:[Role.fromRoleName(backend.purchaseNotifications.resources.lambda,'WebRuntime','BelloAmplifyStagingComputeRole')],statements:[
   new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:Query','dynamodb:Scan'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}),
   new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:UpdateItem'],resources:[backend.data.resources.tables['BaseOAuthToken'].tableArn]}),
-  new PolicyStatement({actions:['dynamodb:Scan'],resources:[backend.data.resources.tables['ChannelListing'].tableArn]}),
+  new PolicyStatement({actions:['dynamodb:Scan'],resources:[backend.data.resources.tables['ChannelListing'].tableArn,backend.data.resources.tables['YahooAuctionListing'].tableArn]}),
   new PolicyStatement({actions:['secretsmanager:GetSecretValue','secretsmanager:PutSecretValue'],resources:[`arn:aws:secretsmanager:us-west-2:${purchaseStack.account}:secret:bello/gmail-oauth-*`]}),
   new PolicyStatement({actions:['lambda:InvokeFunction'],resources:[backend.purchaseNotifications.resources.lambda.functionArn]})
  ]});

@@ -2,11 +2,26 @@ import {GetCommand,PutCommand,QueryCommand,UpdateCommand,type DynamoDBDocumentCl
 import type {InventoryTransaction} from '../inventory/categoryPersistenceCore';
 import type {SoldOutResult} from '../inventory/soldOutInput';
 import {DEFAULT_FEES,type SaleCandidate,type FeeConfig,validateFeeConfig} from './model';
+import {mergeYahooNotification} from './yahooMail';
 export function createCandidateStore(db:DynamoDBDocumentClient,table:string){
  const get=async(id:string)=>(await db.send(new GetCommand({TableName:table,Key:{id},ConsistentRead:true}))).Item;
  return {
   get:async(id:string)=>(await get(id)) as SaleCandidate|undefined,
   put:async(value:SaleCandidate)=>{try{await db.send(new PutCommand({TableName:table,Item:value,ConditionExpression:'attribute_not_exists(id)'}));return true;}catch(e){if((e as Error).name==='ConditionalCheckFailedException')return false;throw e;}},
+  receiveYahoo:async(value:SaleCandidate):Promise<'created'|'updated'|'unchanged'>=>{
+   for(let attempt=0;attempt<5;attempt++){
+    const current=await get(value.id) as SaleCandidate|undefined;
+    if(current?.state==='DELETED')return 'unchanged';
+    const next=current?mergeYahooNotification(current,value):value;
+    if(next===current)return 'unchanged';
+    try{
+     // Compare state and version so a concurrent sale/delete cannot be overwritten by a mail refresh.
+     await db.send(new PutCommand({TableName:table,Item:next,ConditionExpression:current?'updatedAt=:version AND #s=:state':'attribute_not_exists(id)',...(current?{ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':version':current.updatedAt,':state':current.state}}:{})}));
+     return current?'updated':'created';
+    }catch(e){if((e as Error).name!=='ConditionalCheckFailedException')throw e;}
+   }
+   throw Error('YAHOO_CONCURRENT_UPDATE');
+  },
   list:async(state:SaleCandidate['state'],cursor?:string)=>{
    let key;try{key=cursor?JSON.parse(Buffer.from(cursor,'base64url').toString()):undefined;}catch{throw Error('INVALID_CURSOR');}
    if(key&&(typeof key.id!=='string'||key.state!==state||typeof key.receivedAt!=='string'))throw Error('INVALID_CURSOR');

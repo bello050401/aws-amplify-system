@@ -1,7 +1,9 @@
 import {createHash} from 'node:crypto';
 import type {SaleCandidate,SaleChannel} from './model';
+import {parseYahooMail} from './yahooMail';
 export type PurchaseMail={gmailId:string;from:string;subject:string;receivedAt:string;text?:string;html?:string};
-export const PURCHASE_QUERY='newer_than:7d {(from:noreply@thebase.in subject:商品購入通知) (from:no-reply@mercari-shops.com subject:発送をお願いします)}';
+export const PURCHASE_QUERY_VERSION=2;
+export const PURCHASE_QUERY='newer_than:7d {(from:noreply@thebase.in subject:商品購入通知) (from:no-reply@mercari-shops.com subject:発送をお願いします) (from:auction-master@mail.yahoo.co.jp {subject:落札 subject:お届け先住所確定 subject:商品を発送してください})}';
 export const candidateKey=(channel:string,order:string,line:string)=>createHash('sha256').update(JSON.stringify([channel,order,line])).digest('hex');
 export function mailText(mail:PurchaseMail){
  return (mail.text?.trim()||mail.html?.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'').replace(/<br\s*\/?\s*>|<\/(?:p|div|tr|li|td)>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#(\d+);/g,(_,n)=>String.fromCodePoint(Number(n)))||'').replace(/\r/g,'').normalize('NFKC');
@@ -11,6 +13,7 @@ function yen(value:string){if(!value)return null;const s=value.replace(/[¥￥�
 export function parsePurchaseMail(mail:PurchaseMail):SaleCandidate[]{
  const sender=(mail.from.match(/<([^>]+)>/)?.[1]||mail.from).trim().toLowerCase();
  const text=mailText(mail);
+ if(sender==='auction-master@mail.yahoo.co.jp')return parseYahooMail(mail,text);
  let channel:SaleChannel;
  if(sender==='noreply@thebase.in'&&/^商品購入通知[:：].*商品が購入されました/.test(mail.subject)&&/ご注文内容/.test(text))channel='BASE';
  else if(sender==='no-reply@mercari-shops.com'&&/^【メルカリShops】「.+」の発送をお願いします/.test(mail.subject)&&/商品の発送をお願いします/.test(text))channel='MERCARI';
