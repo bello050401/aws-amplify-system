@@ -12,7 +12,21 @@
  * ブラウザが実際に見ているホストはCloudFrontが `x-forwarded-host` へ
  * 入れてくれるので、そちらを優先する。
  */
+/** Enforced authentication never trusts caller-controlled routing headers. */
+export function configuredSecurityOrigin(): string | undefined {
+  if (process.env.BELLO_DEVICE_SECURITY !== "enforced") return undefined;
+  const value = process.env.SECURITY_ORIGIN;
+  if (!value) throw new Error("SECURITY_NOT_CONFIGURED");
+  const url = new URL(value);
+  if (url.origin !== value ||
+      (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))))
+    throw new Error("SECURITY_NOT_CONFIGURED");
+  return value;
+}
+
 export function resolveAppOrigin(request: Request): string {
+  const configured = configuredSecurityOrigin();
+  if (configured) return configured;
   const headers = request.headers;
   const forwardedHost = headers.get("x-forwarded-host")?.split(",")[0]?.trim();
   const host = forwardedHost || headers.get("host")?.trim();

@@ -1,4 +1,4 @@
-import { resolveAppOrigin } from "@/lib/http/appOrigin";
+import { configuredSecurityOrigin, resolveAppOrigin } from "@/lib/http/appOrigin";
 
 /**
  * BASE OAuthの `redirect_uri` を決める。
@@ -25,13 +25,23 @@ export const OAUTH_CALLBACK_PATH = "/api/base/oauth/callback";
 // 同じ問題を持っていた）ので lib/http/appOrigin.ts に置いてある。
 export { resolveAppOrigin };
 
+function configuredCallback(): string | undefined {
+  const origin = configuredSecurityOrigin();
+  const override = process.env.BASE_REDIRECT_URI?.trim();
+  if (!origin) return override || undefined;
+  // Authentication codes must return to the same approved-browser boundary.
+  const expected = origin + OAUTH_CALLBACK_PATH;
+  if (override && override !== expected) throw new Error("BASE_CALLBACK_SECURITY_ORIGIN_MISMATCH");
+  return expected;
+}
+
 /**
  * 認可URL・トークン交換の両方で使う `redirect_uri`。
  * **同じリクエスト系列で必ず同じ値になること**が正しさの条件なので、
  * 上書きの優先順位はここ1か所だけで決める。
  */
 export function resolveRedirectUri(request: Request): string {
-  const override = process.env.BASE_REDIRECT_URI?.trim();
+  const override = configuredCallback();
   if (override) return override;
   return `${resolveAppOrigin(request)}${OAUTH_CALLBACK_PATH}`;
 }
@@ -42,7 +52,7 @@ export function resolveRedirectUri(request: Request): string {
  * ホストを引数で受ける。
  */
 export function buildRedirectUriFromHost(host: string | null): string | null {
-  const override = process.env.BASE_REDIRECT_URI?.trim();
+  const override = configuredCallback();
   if (override) return override;
   const trimmed = host?.trim();
   if (!trimmed) return null;

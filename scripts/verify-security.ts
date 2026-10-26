@@ -141,6 +141,16 @@ await test("Account suspension invalidates all prior sessions",async()=>{await l
 await test('Reenabling an account cannot resurrect its older session',async()=>{const u=(await store.get<User>('user#viewer'))!;await call(admin,{action:'enableUser',sub:u.sub,expectedVersion:u.version});await rejects(()=>call(suspendedViewer,{action:'businessProbe'}),'ACCOUNT_DISABLED');const b=browser();await login(b,'viewer');await trustedBootstrap(b);assert.equal((await call(b,{action:'businessProbe'})).ok,true);await rejects(()=>call(suspendedViewer,{action:'businessProbe'}),'ACCOUNT_DISABLED');});
 await test("Personal session has an absolute expiry, regardless of TTL deletion",async()=>{time+=31*86400;await rejects(()=>call(admin,{action:"businessProbe"}),"SESSION_EXPIRED");});
 await test("Login attempts are rate limited",async()=>{for(let i=0;i<10;i++)await login(browser(),"admin");await rejects(()=>login(browser(),"admin"),"TOO_MANY_REQUESTS");});
+await test('Unknown hosting IP never combines unrelated users into one login quota',async()=>{
+ const separateStore=new MemoryStore(),separateService=new SecurityService(separateStore,fixtureVault,provider,origin,()=>time);
+ for(let i=0;i<40;i++)await rejects(()=>separateService.begin({username:'unknown-'+i,mode:'password',password:'invalid',key:browser().publicKey,name:'QA',shared:false},{...ctx,ip:'hosting-unverified'}),'LOGIN_FAILED');
+ assert(![...separateStore.counters.keys()].some(k=>k.startsWith('login-ip#')));
+});
+await test('Per-account limit still applies when the hosting IP is unavailable',async()=>{
+ const separateStore=new MemoryStore(),separateService=new SecurityService(separateStore,fixtureVault,provider,origin,()=>time);
+ const attempt=()=>separateService.begin({username:'unknown',mode:'password',password:'invalid',key:browser().publicKey,name:'QA',shared:false},{...ctx,ip:'hosting-unverified'});
+ for(let i=0;i<10;i++)await rejects(attempt,'LOGIN_FAILED');await rejects(attempt,'TOO_MANY_REQUESTS');
+});
 await test("Store transactions never partially modify records on CAS error",async()=>{const a={id:"atomic-a",version:1},b={id:"atomic-b",version:1};await store.write([{row:a,expected:null},{row:b,expected:null}]);await rejects(()=>store.write([{row:{...a,version:2},expected:1},{row:{...b,version:2},expected:99}]),"STALE_RECORD");assert.equal((await store.get(a.id))?.version,1);});
 console.log(JSON.stringify({passed,failed:0,hardwareBiometrics:"NOT_TESTED",productionChanged:false}));
 }

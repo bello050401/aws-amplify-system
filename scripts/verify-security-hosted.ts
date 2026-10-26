@@ -37,10 +37,10 @@ async function action(b:Browser,input:unknown,expected=200){
  const signature=sign('sha256',Buffer.from(c.message),{key:b.key.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url');
  return post(b,'/api/security/action',{payload,proof:{challengeId:c.challengeId,signature}},expected);
 }
-async function business(b:Browser,path:string,expected:number,binding?:string){
+async function business(b:Browser,path:string,expected:number,binding?:string,extra:Record<string,string>={}){
  const p={version:1 as const,at:Math.floor(Date.now()/1000),nonce:randomBytes(32).toString('base64url'),binding:binding??(await action(b,{action:'status'})).requestBinding,digest:hash('').toString('base64url')};
  const signature=sign('sha256',Buffer.from(requestProofMessage(origin,'GET',path,p)),{key:b.key.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url');
- const r=await fetch(origin+path,{redirect:'manual',headers:{origin,cookie:b.cookie,'x-bello-device-proof':JSON.stringify({...p,signature})},signal:AbortSignal.timeout(60000)});
+ const r=await fetch(origin+path,{redirect:'manual',headers:{origin,cookie:b.cookie,'x-bello-device-proof':JSON.stringify({...p,signature}),...extra},signal:AbortSignal.timeout(60000)});
  assert.equal(r.status,expected,'Business '+path);return r;
 }
 async function create(b:Browser){
@@ -84,6 +84,16 @@ async function main(){
    const r=await fetch(origin+'/api/mobile/inventory',{headers});assert.equal(r.status,403);assert.equal((await r.json() as any).error,'INVALID_ORIGIN');
   }
  });
+ for(const path of ['/api/base/oauth/callback','/api/invoicing/oauth/callback','/api/sale-candidates/oauth']){
+  await test('HTTPS OAuth return is inert until signed same-origin navigation: '+path,async()=>{
+   const url=origin+path+'?code=qa_invalid&state=qa_invalid';
+   const r=await fetch(url,{redirect:'manual',headers:{'sec-fetch-site':'cross-site','sec-fetch-dest':'document'}});
+   assert.equal(r.status,200);assert(r.headers.get('cache-control')?.includes('no-store'));assert.equal(r.headers.get('referrer-policy'),'no-referrer');
+   const body=await r.text();assert(body.includes('location.replace(location.href)'));assert(!body.includes('qa_invalid'));assert(!r.headers.has('set-cookie'));
+   const retry=await fetch(url,{redirect:'manual',headers:{'sec-fetch-site':'same-origin','sec-fetch-dest':'document'}});
+   assert.equal(retry.status,307);const next=new URL(retry.headers.get('location')!);assert.equal(next.origin,origin);assert.equal(next.pathname,'/security');
+  });
+ }
  await test('CloudFront replaces a client-supplied request ID before the audit boundary',async()=>{
   const r=await fetch(origin+'/api/security/login',{method:'POST',headers:{origin,'content-type':'application/json','user-agent':probeAgent,'x-amz-cf-id':spoofId,'x-forwarded-for':'198.51.100.77','cloudfront-viewer-address':'198.51.100.77:443'},body:'{}'});
   assert.equal(r.status,400);await r.text();
@@ -100,6 +110,10 @@ async function main(){
  const id='device#'+admin.sub+'#'+keyId(admin.key.publicKey.export({format:'jwk'}) as JsonWebKey),d=await store.get<Device>(id);assert(d);assert.equal(d.status,'pending');
  await store.write([{expected:d.version,row:{...d,version:d.version+1,status:'approved'}}]);
  await test('Approved ADMIN can read actual isolated inventory',async()=>{const r=await business(admin,'/api/mobile/inventory?images=deferred',200);assert.equal((await r.json() as any).role,'ADMIN')});
+ await test('Signed BASE invalid-state callback cannot redirect through a forged host',async()=>{
+  const r=await business(admin,'/api/base/oauth/callback?state=qa_invalid&code=qa_invalid',307,undefined,{'x-forwarded-host':'attacker.invalid','x-forwarded-proto':'http'});
+  const next=new URL(r.headers.get('location')!);assert.equal(next.origin,origin);assert.equal(next.pathname,'/inventory/settings');assert(next.searchParams.has('baseError'));assert(!next.searchParams.has('baseConnected'));
+ });
  await test('Approved session cookie alone cannot read business data',async()=>{
   const r=await fetch(origin+'/api/mobile/inventory',{headers:{origin,cookie:admin.cookie}});assert.equal(r.status,401);assert.equal((await r.json() as any).error,'DEVICE_PROOF_REQUIRED');
  });
