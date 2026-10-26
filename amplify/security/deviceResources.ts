@@ -54,7 +54,7 @@ export function addDeviceResources(o:DeviceResourceOptions){
  let recoveryRole:Role|undefined;
  if(o.recoveryOperatorArn){
   if(!/^arn:aws:iam::\d{12}:(user|role)\/.+/.test(o.recoveryOperatorArn))throw Error('Exact recovery operator ARN required');
-  recoveryRole=new Role(stack,'DeviceRecoveryOperator',{assumedBy:new ArnPrincipal(o.recoveryOperatorArn).withConditions({Bool:{'aws:MultiFactorAuthPresent':'true'}}),
+  recoveryRole=new Role(stack,'DeviceRecoveryOperator',{assumedBy:new ArnPrincipal(o.recoveryOperatorArn).withConditions({Bool:{'aws:MultiFactorAuthPresent':'true'},NumericLessThanEquals:{'aws:MultiFactorAuthAge':300}}),
    description:'Emergency approval of one verified pending administrator device. MFA required.'});
   recoveryRole.addToPolicy(new PolicyStatement({actions:['dynamodb:GetItem'],resources:[table.tableArn],
    conditions:{'ForAllValues:StringLike':{'dynamodb:LeadingKeys':['user#*','device#*']}}}));
@@ -83,5 +83,6 @@ export function addDeviceResources(o:DeviceResourceOptions){
  return{table,key,secret,client,gate,recoveryRole,configuration:{
   phase:o.phase,origin:o.origin,region:stack.region,deployment:stack.stackName,poolId:o.pool.userPoolId,
   clientId:client.ref,table:table.tableName,keyArn:key.keyArn,clientSecretArn:secret.secretArn,dataGateSecretArn:gate.secretArn,
+  ...(recoveryRole?{recoveryRoleArn:recoveryRole.roleArn}:{}),
  }};
 }

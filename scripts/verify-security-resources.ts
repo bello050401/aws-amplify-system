@@ -47,6 +47,8 @@ test('Recovery requires MFA and cannot change users or access business data',()=
  const f=fixture('prepare'),r=Template.fromStack(f.auth).toJSON().Resources;
  const role=Object.values(r).find((v:any)=>v.Type==='AWS::IAM::Role'&&v.Properties.Description?.startsWith('Emergency')) as any;
  assert.equal(role.Properties.AssumeRolePolicyDocument.Statement[0].Condition.Bool['aws:MultiFactorAuthPresent'],'true');
+ assert.equal(role.Properties.AssumeRolePolicyDocument.Statement[0].Condition.NumericLessThanEquals['aws:MultiFactorAuthAge'],300);
+ assert(f.result.configuration.recoveryRoleArn);
  const policies=Object.values(r).filter((v:any)=>v.Type==='AWS::IAM::Policy'&&JSON.stringify(v.Properties.Roles).includes('DeviceRecoveryOperator')) as any[];
  assert.equal(policies.length,1);const statements=policies[0].Properties.PolicyDocument.Statement;
  assert(statements.every((s:any)=>['dynamodb:GetItem','dynamodb:PutItem'].includes(s.Action)));

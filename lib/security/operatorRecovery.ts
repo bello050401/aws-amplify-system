@@ -1,6 +1,14 @@
 import {keyId,randomId,safeText} from './crypto';
 import {SecurityError,type Store,type User,type Device} from './types';
 
+/** Do not treat any assumed role (notably a normal SSO administrator session)
+ * as evidence that the separate recovery role's MFA trust policy was satisfied. */
+export function assertRecoveryCaller(callerArn:string,expectedRoleArn:string,account:string){
+ const expected=/^arn:aws:iam::(\d{12}):role\/(?:[^/]+\/)*([^/]+)$/.exec(expectedRoleArn);
+ const actual=/^arn:aws:sts::(\d{12}):assumed-role\/([^/]+)\/[^/]+$/.exec(callerArn);
+ if(!expected||!actual||expected[1]!==account||actual[1]!==account||actual[2]!==expected[2])throw new SecurityError('RECOVERY_DEDICATED_ROLE_REQUIRED');
+}
+
 /** Emergency operator path, intentionally not exported by any HTTP route.
  * An AWS operator must verify the employee, exact pending key and request code.
  * Existing/revoked keys and password-only accounts cannot be promoted here. */

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {generateKeyPairSync} from 'node:crypto';
-import {approveRecoveryDevice} from '../lib/security/operatorRecovery';
+import {approveRecoveryDevice,assertRecoveryCaller} from '../lib/security/operatorRecovery';
 import {keyId} from '../lib/security/crypto';
 import {SecurityError,type Store,type Row,type Device,type User} from '../lib/security/types';
 const rows=new Map<string,Row>(),store:Store={get:async(id)=>structuredClone(rows.get(id)) as any,list:async()=>({items:[]}),rate:async()=>{},write:async(ms)=>{
@@ -14,6 +14,11 @@ const input={sub:user.sub,deviceId:device.id,version:1,fingerprint:keyId(publicK
 let passed=0;async function test(name:string,fn:()=>Promise<void>){rows.set(user.id,structuredClone(user));rows.set(device.id,structuredClone(device));await fn();passed++;console.log('PASS '+name)}
 async function denied(fn:()=>Promise<unknown>,code:string){await assert.rejects(fn,(e:unknown)=>e instanceof SecurityError&&e.code===code)}
 async function main(){
+ await test('A normal SSO administrator role is not the dedicated recovery role',async()=>{
+  assert.throws(()=>assertRecoveryCaller('arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_AdministratorAccess_abc/operator','arn:aws:iam::123456789012:role/RecoveryMfa','123456789012'));
+  assert.throws(()=>assertRecoveryCaller(arn,'arn:aws:iam::999999999999:role/RecoveryMfa','123456789012'));
+ });
+ await test('Only the configured same-account recovery role is accepted',async()=>assertRecoveryCaller(arn,'arn:aws:iam::123456789012:role/RecoveryMfa','123456789012'));
  await test('Long-lived IAM user cannot perform recovery',()=>denied(()=>approveRecoveryDevice(store,input,'arn:aws:iam::123456789012:user/operator'),'RECOVERY_ASSUMED_ROLE_REQUIRED'));
  await test('Password-only account cannot gain emergency approval',async()=>{rows.set(user.id,{...user,passkeyRegistered:false});await denied(()=>approveRecoveryDevice(store,input,arn),'RECOVERY_ADMIN_PASSKEY_REQUIRED')});
  await test('Disabled administrator cannot be revived by approval',async()=>{rows.set(user.id,{...user,enabled:false});await denied(()=>approveRecoveryDevice(store,input,arn),'RECOVERY_ADMIN_PASSKEY_REQUIRED')});
