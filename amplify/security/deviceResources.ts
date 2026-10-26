@@ -1,4 +1,4 @@
-import {RemovalPolicy,Stack} from 'aws-cdk-lib';
+import {RemovalPolicy,Stack,ArnFormat} from 'aws-cdk-lib';
 import {CfnUserPool,CfnUserPoolClient,IUserPool} from 'aws-cdk-lib/aws-cognito';
 import {AttributeType,BillingMode,Table,TableEncryption} from 'aws-cdk-lib/aws-dynamodb';
 import {Key} from 'aws-cdk-lib/aws-kms';
@@ -7,26 +7,25 @@ import {AnyPrincipal,ArnPrincipal,Effect,IRole,ManagedPolicy,PolicyStatement,Rol
 import {IBucket} from 'aws-cdk-lib/aws-s3';
 import {CfnGraphQLApi} from 'aws-cdk-lib/aws-appsync';
 import {CfnWebACL,CfnWebACLAssociation} from 'aws-cdk-lib/aws-wafv2';
+import {configurePasskeys} from './passkeyResources';
 
 export type DeviceResourceOptions={
  stack:Stack; pool:IUserPool; cfnPool:CfnUserPool; api:CfnGraphQLApi; bucket:IBucket;
  runtime:IRole; identityRoles:IRole[]; origin:string; phase:'prepare'|'enforced'; recoveryOperatorArn?:string;
  existingDataGate?:ISecret;
+ edgeAudit?:{region:'us-east-1';logGroup:string};
 };
 /** Additive preparation preserves the existing pool, users, groups and browser
  * client. Enforcement is a separate, reviewed release: never enabled by default. */
 export function addDeviceResources(o:DeviceResourceOptions){
  const {stack}=o,parsed=new URL(o.origin);
  if(parsed.protocol!=='https:'||parsed.origin!==o.origin)throw Error('Exact HTTPS security origin required');
- // CloudFormation/Cognito limits WebAuthnRelyingPartyID to 63 characters.
- if(parsed.hostname.length>63)throw Error('Cognito passkey hostname must be at most 63 characters');
+ if(o.edgeAudit&&(o.edgeAudit.region!=='us-east-1'||!/^aws-waf-logs-bello-[a-z0-9-]+$/.test(o.edgeAudit.logGroup)))throw Error('Invalid dedicated edge audit configuration');
  const pool=o.cfnPool;
  const oldPolicies=pool.policies as CfnUserPool.PoliciesProperty|undefined;
  pool.userPoolTier='ESSENTIALS';
  pool.policies={...oldPolicies,signInPolicy:{allowedFirstAuthFactors:['PASSWORD','WEB_AUTHN']}};
- pool.webAuthnRelyingPartyId=parsed.hostname;
- pool.webAuthnUserVerification='required';
- pool.webAuthnFactorConfiguration='MULTI_FACTOR_WITH_USER_VERIFICATION';
+ const passkeyConfiguration=configurePasskeys(pool,parsed.hostname);
  // Existing MFA/password/recovery configuration is deliberately preserved.
  const client=new CfnUserPoolClient(stack,'DeviceSessionClient',{
   userPoolId:o.pool.userPoolId,clientName:'BELLO server-only device sessions',generateSecret:true,
@@ -36,6 +35,7 @@ export function addDeviceResources(o:DeviceResourceOptions){
   refreshTokenRotation:{feature:'ENABLED',retryGracePeriodSeconds:10},authSessionValidity:3,
  });
  client.applyRemovalPolicy(RemovalPolicy.RETAIN);
+ if(passkeyConfiguration)client.node.addDependency(passkeyConfiguration);
  const table=new Table(stack,'DeviceSecurityState',{
   partitionKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,
   encryption:TableEncryption.AWS_MANAGED,timeToLiveAttribute:'expiresAt',deletionProtection:true,
@@ -50,6 +50,7 @@ export function addDeviceResources(o:DeviceResourceOptions){
   new PolicyStatement({actions:['kms:GenerateDataKey','kms:Decrypt'],resources:[key.keyArn]}),
   new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[secret.secretArn,gate.secretArn]}),
   new PolicyStatement({actions:['cognito-idp:AdminCreateUser','cognito-idp:AdminAddUserToGroup','cognito-idp:AdminDisableUser'],resources:[o.pool.userPoolArn]}),
+  ...(o.edgeAudit?[new PolicyStatement({actions:['logs:FilterLogEvents'],resources:[stack.formatArn({service:'logs',region:o.edgeAudit.region,resource:'log-group',resourceName:o.edgeAudit.logGroup+':*',arnFormat:ArnFormat.COLON_RESOURCE_NAME})]})]:[]),
  ]});
  let recoveryRole:Role|undefined;
  if(o.recoveryOperatorArn){
@@ -83,6 +84,7 @@ export function addDeviceResources(o:DeviceResourceOptions){
  return{table,key,secret,client,gate,recoveryRole,configuration:{
   phase:o.phase,origin:o.origin,region:stack.region,deployment:stack.stackName,poolId:o.pool.userPoolId,
   clientId:client.ref,table:table.tableName,keyArn:key.keyArn,clientSecretArn:secret.secretArn,dataGateSecretArn:gate.secretArn,
+  ...(o.edgeAudit?{edgeAudit:o.edgeAudit}:{}),
   ...(recoveryRole?{recoveryRoleArn:recoveryRole.roleArn}:{}),
  }};
 }

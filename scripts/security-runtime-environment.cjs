@@ -10,9 +10,10 @@ function settings(env,outputs){
   SECURITY_CLIENT_ID:c.clientId,SECURITY_CLIENT_SECRET_ARN:c.clientSecretArn,SECURITY_ORIGIN:c.origin,
   SECURITY_APPSYNC_GATE_SECRET_ARN:c.dataGateSecretArn};
  if(Object.values(result).some(x=>typeof x!=='string'||!x||/[\r\n]/.test(x)))throw Error('Invalid security setting');
- // Source IP trust is not enabled by an arbitrary env/header. Hosting verification
- // evidence is checked separately before this exact option may be set.
- if(env.SECURITY_TRUSTED_SOURCE==='cloudfront-viewer-address')result.SECURITY_TRUSTED_SOURCE=env.SECURITY_TRUSTED_SOURCE;
+ if(c.edgeAudit){
+  if(c.edgeAudit.region!=='us-east-1'||!/^aws-waf-logs-bello-[a-z0-9-]+$/.test(c.edgeAudit.logGroup))throw Error('Invalid edge audit configuration');
+  result.SECURITY_EDGE_LOG_REGION=c.edgeAudit.region;result.SECURITY_EDGE_LOG_GROUP=c.edgeAudit.logGroup;
+ }
  return result;
 }
 module.exports={settings};

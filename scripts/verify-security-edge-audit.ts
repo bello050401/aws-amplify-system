@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {createEdgeAuditEnricher,matchEdgeIp,type EdgeRecord} from '../lib/security/edgeAudit';
-import {edgeRequestId} from '../lib/security/sourceIp';
+import {edgeRequestId,trustedSourceIp} from '../lib/security/sourceIp';
 import type {Row} from '../lib/security/types';
 const at=1800000000,host='stage.example.com',id='CF_AWS_GENERATED_REQUEST_0123456789';
 const row:Row={id:'device#test',version:7,kind:'device',lastIp:'hosting-unverified',edgeRequestId:id,edgeAt:at,edgeTarget:'/api/security/action',edgeMethod:'POST'};
@@ -20,5 +20,6 @@ await test('Audit export gets IP but never raw headers or response body',async()
 await test('Verified cache is short and avoids repeat requests',async()=>{let calls=0,time=at*1000;const e=createEdgeAuditEnricher(host,async()=>{calls++;return[record]},()=>time);await e([row]);await e([row]);assert.equal(calls,1);time+=61000;await e([row]);assert.equal(calls,2)});
 await test('Expired metadata and malicious filter IDs do not trigger log queries',async()=>{let calls=0;const e=createEdgeAuditEnricher(host,async()=>{calls++;return[]},()=>at*1000);await e([{...row,edgeRequestId:'" || attack'},{...row,edgeAt:at-91*86400}]);assert.equal(calls,0)});
 await test('Header parsing rejects malformed and unbounded identifiers',()=>{assert.equal(edgeRequestId(new Headers({'x-amz-cf-id':id})),id);for(const value of ['', 'short', 'a'.repeat(203),'" || attack'])assert.equal(edgeRequestId(new Headers({'x-amz-cf-id':value})), '')});
+await test('No environment flag may trust a caller-supplied viewer address',()=>{const old=process.env.SECURITY_TRUSTED_SOURCE;try{process.env.SECURITY_TRUSTED_SOURCE='cloudfront-viewer-address';assert.equal(trustedSourceIp(new Headers({'cloudfront-viewer-address':'198.51.100.77:443','x-forwarded-for':'198.51.100.77'})),'hosting-unverified')}finally{if(old===undefined)delete process.env.SECURITY_TRUSTED_SOURCE;else process.env.SECURITY_TRUSTED_SOURCE=old}});
 console.log(JSON.stringify({passed,failed:0,live:false}));
 }main().catch(e=>{console.error(e.message);process.exitCode=1});

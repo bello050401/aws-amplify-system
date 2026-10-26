@@ -68,10 +68,8 @@ if(process.env.SECURITY_HOSTED_STAGE==='true'){
  // documented service trust and attach only to this branch (no preview builds).
  // Resource permissions below still exclude every production resource.
  const role=new Role(root,'IsolatedHostingRuntime',{assumedBy:new ServicePrincipal('amplify.amazonaws.com')});
- // Metadata-only IP correlation for authenticated ADMIN views; no other logs.
- role.addToPolicy(new PolicyStatement({actions:['logs:FilterLogEvents'],resources:['arn:aws:logs:us-east-1:203918843421:log-group:aws-waf-logs-bello-security-stage:*']}));
  const resources=addDeviceResources({stack:Stack.of(authResources.userPool),pool:authResources.userPool,cfnPool:authResources.cfnResources.cfnUserPool,
-  api:cfnApi,bucket:backend.storage.resources.bucket,runtime:role,identityRoles,origin,phase:'prepare',
+  api:cfnApi,bucket:backend.storage.resources.bucket,runtime:role,identityRoles,origin,phase:'prepare',edgeAudit:{region:'us-east-1',logGroup:'aws-waf-logs-bello-security-stage'},
   existingDataGate:Secret.fromSecretCompleteArn(root,'ExistingStageDataGate',pilot.DataGateSecretArn)});
  // Both isolated test identities are supported; neither provider is production.
  cfnApi.additionalAuthenticationProviders=[...(cfnApi.additionalAuthenticationProviders as any[]),{

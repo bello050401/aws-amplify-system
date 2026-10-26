@@ -845,6 +845,7 @@ if(securityPhase){
     runtime:Role.fromRoleName(securityStack,'DeviceSecurityRuntime',process.env.SECURITY_RUNTIME_ROLE_NAME),
     identityRoles:[authResources.authenticatedUserIamRole,authResources.unauthenticatedUserIamRole,...Object.values(authResources.groups).map(g=>g.role)],
     phase:securityPhase,origin:process.env.SECURITY_ORIGIN,recoveryOperatorArn:process.env.SECURITY_RECOVERY_OPERATOR_ARN,
+    ...(process.env.SECURITY_EDGE_LOG_GROUP?{edgeAudit:{region:'us-east-1' as const,logGroup:process.env.SECURITY_EDGE_LOG_GROUP}}:{}),
   });
   backend.addOutput({custom:{deviceSecurity:resources.configuration}});
   if(securityPhase==='enforced')backend.invoiceIssuer.addEnvironment('USER_POOL_CLIENT_ID',resources.client.ref);

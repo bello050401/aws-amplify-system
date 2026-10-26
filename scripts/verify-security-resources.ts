@@ -11,7 +11,7 @@ const require=createRequire(import.meta.url);
 const {settings}=require('./security-runtime-environment.cjs');
 let passed=0;
 function test(name:string,fn:()=>void){fn();passed++;console.log('PASS '+name);}
-function fixture(phase:'prepare'|'enforced',origin='https://security.example.com'){
+function fixture(phase:'prepare'|'enforced',origin='https://security.example.com',edgeAudit?:{region:'us-east-1';logGroup:string}){
  const app=new App(),auth=new Stack(app,'Auth'),data=new Stack(app,'Data'),storage=new Stack(app,'Storage');
  const pool=new UserPool(auth,'ExistingPool',{selfSignUpEnabled:false});
  const old=pool.addClient('ExistingBrowserClient');
@@ -21,7 +21,7 @@ function fixture(phase:'prepare'|'enforced',origin='https://security.example.com
  const bucket=new Bucket(storage,'ExistingBucket');
  const identity=new Role(auth,'IdentityRole',{assumedBy:new ServicePrincipal('cognito-identity.amazonaws.com')});
  const runtime=Role.fromRoleArn(auth,'WebRuntime','arn:aws:iam::111122223333:role/TestRuntime');
- const result=addDeviceResources({stack:auth,pool,cfnPool:cfn,api:api.node.defaultChild as any,bucket,runtime,identityRoles:[identity],phase,origin,recoveryOperatorArn:'arn:aws:iam::111122223333:user/RecoveryOperator'});
+ const result=addDeviceResources({stack:auth,pool,cfnPool:cfn,api:api.node.defaultChild as any,bucket,runtime,identityRoles:[identity],phase,origin,edgeAudit,recoveryOperatorArn:'arn:aws:iam::111122223333:user/RecoveryOperator'});
  return{app,auth,data,storage,pool,cfn,old,result,password};
 }
 test('Preparation preserves existing user pool/password/MFA/browser client',()=>{
@@ -61,8 +61,25 @@ test('Server env exports identifiers only, never secret values',()=>{
  const r=settings({BELLO_DEVICE_SECURITY:'enforced',SECURITY_ORIGIN:c.origin},{custom:{deviceSecurity:c}});
  assert(!JSON.stringify(r).includes('must-not-copy'));assert(!Object.keys(r).some(k=>k.startsWith('NEXT_PUBLIC')));assert.equal(r.SECURITY_ORIGIN,c.origin);
 });
-test('Cognito oversized relying-party hostname fails before deployment',()=>{
- assert.throws(()=>fixture('prepare','https://'+'a'.repeat(54)+'.example.com'),/63 characters/);
+test('Long production origin keeps exact RP through the official Cognito API',()=>{
+ const origin='https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com';
+ const f=fixture('prepare',origin),t=Template.fromStack(f.auth).toJSON();
+ const api=Object.values(t.Resources).find((v:any)=>v.Type==='Custom::BelloExactPasskeyRp') as any;
+ assert(api);assert.equal(api.Properties.Hostname,new URL(origin).hostname);
+ assert(!api.Properties.Delete);assert.equal(f.cfn.webAuthnRelyingPartyId,undefined);
+ assert(JSON.stringify(t).includes('GetUserPoolMfaConfig'));
+ const text=JSON.stringify(t);assert(text.includes('cognito-idp:SetUserPoolMfaConfig'));assert(!text.includes('cognito-idp:*'));
+ assert.equal(f.cfn.mfaConfiguration,'OFF');f.app.synth();
+ assert.throws(()=>fixture('prepare','https://'+'a'.repeat(60)+'.'+'b'.repeat(60)+'.example.com'),/127 characters/);
+});
+test('Audit IAM is scoped to one log group and config cannot enable header trust',()=>{
+ const edgeAudit={region:'us-east-1' as const,logGroup:'aws-waf-logs-bello-test'};
+ const f=fixture('prepare',undefined,edgeAudit),serialized=JSON.stringify(Template.fromStack(f.auth).toJSON());
+ assert(serialized.includes(':log-group:aws-waf-logs-bello-test:*'));assert(serialized.includes('logs:FilterLogEvents'));assert(!serialized.includes('logs:*'));
+ const c={...f.result.configuration,phase:'enforced'};
+ const result=settings({BELLO_DEVICE_SECURITY:'enforced',SECURITY_ORIGIN:c.origin,SECURITY_TRUSTED_SOURCE:'cloudfront-viewer-address'},{custom:{deviceSecurity:c}});
+ assert.equal(result.SECURITY_EDGE_LOG_GROUP,edgeAudit.logGroup);assert(!result.SECURITY_TRUSTED_SOURCE);
+ assert.throws(()=>fixture('prepare',undefined,{...edgeAudit,logGroup:'unrelated-sensitive-logs'}));
 });
 test('Hosted staging cannot select the production branch or backend',()=>{
  const {prepare}=require('./security-hosted-build.cjs');

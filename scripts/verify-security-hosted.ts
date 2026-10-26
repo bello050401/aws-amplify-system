@@ -9,6 +9,7 @@ import {DynamoSecurityStore} from '../lib/security/awsStore';
 import type {Device,User} from '../lib/security/types';
 import {requestProofMessage} from '../lib/security/requestProof';
 import {keyId} from '../lib/security/crypto';
+import {isIP} from 'node:net';
 const outputs=JSON.parse(fs.readFileSync('artifacts/security-20261026/hosted-outputs/amplify_outputs.json','utf8'));
 const config=outputs.custom.deviceSecurity,origin='https://codex-security-20261026.d4hkkg7dty2du.amplifyapp.com',host=new URL(origin).hostname;
 assert.equal(config.origin,origin);assert.equal(config.poolId,'us-west-2_iCUa4QWvi');assert.equal(config.phase,'enforced');
@@ -68,6 +69,8 @@ const results:{name:string,result:string,ms:number}[]=[];
 async function test(name:string,fn:()=>Promise<void>){const t=Date.now();try{await fn();results.push({name,result:'PASS',ms:Date.now()-t});console.log('PASS '+name)}catch(e){results.push({name,result:'FAIL',ms:Date.now()-t});throw e}}
 async function main(){
  const admin=browser('ADMIN'),staff=browser('EDITOR'),created:Browser[]=[];
+ const probeAgent='BELLO-edge-proof-'+randomBytes(12).toString('hex'),spoofId='CLIENT_SUPPLIED_FAKE_ID_0123456789';
+ let probeRequestId='';
  try{
  await test('Public HTTPS authentication screen and no loopback bypass',async()=>{
   const r=await fetch(origin+'/security');assert.equal(r.status,200);assert((await r.text()).includes('パスキー'));assert(r.headers.get('content-security-policy')?.includes("frame-ancestors 'none'"));
@@ -81,6 +84,14 @@ async function main(){
    const r=await fetch(origin+'/api/mobile/inventory',{headers});assert.equal(r.status,403);assert.equal((await r.json() as any).error,'INVALID_ORIGIN');
   }
  });
+ await test('CloudFront replaces a client-supplied request ID before the audit boundary',async()=>{
+  const r=await fetch(origin+'/api/security/login',{method:'POST',headers:{origin,'content-type':'application/json','user-agent':probeAgent,'x-amz-cf-id':spoofId,'x-forwarded-for':'198.51.100.77','cloudfront-viewer-address':'198.51.100.77:443'},body:'{}'});
+  assert.equal(r.status,400);await r.text();
+  let probe:any;
+  for(let i=0;i<5;i++){probe=(await store.list('event')).items.find(x=>x.userAgent===probeAgent);if(probe)break;await new Promise(r=>setTimeout(r,1000));}
+  assert(probe);assert.equal(probe.ip,'hosting-unverified');assert(probe.edgeRequestId);assert.notEqual(probe.edgeRequestId,spoofId);
+  probeRequestId=String(probe.edgeRequestId);
+ });
  for(const b of [admin,staff]){await create(b);created.push(b)}
  await test('HTTPS password bootstrap issues secure opaque cookie only',()=>password(admin));
  await test('Real Cognito registration and login with software passkey',async()=>{await enroll(admin);await passkey(admin)});
@@ -91,6 +102,24 @@ async function main(){
  await test('Approved ADMIN can read actual isolated inventory',async()=>{const r=await business(admin,'/api/mobile/inventory?images=deferred',200);assert.equal((await r.json() as any).role,'ADMIN')});
  await test('Approved session cookie alone cannot read business data',async()=>{
   const r=await fetch(origin+'/api/mobile/inventory',{headers:{origin,cookie:admin.cookie}});assert.equal(r.status,401);assert.equal((await r.json() as any).error,'DEVICE_PROOF_REQUIRED');
+ });
+ await test('ADMIN audit resolves the actual AWS IP while ignoring forged IP headers',async()=>{
+  let record:any;
+  for(let i=0;i<18;i++){
+   record=(await action(admin,{action:'events'})).items.find((x:any)=>x.edgeRequestId===probeRequestId);
+   if(record?.edgeIpVerified)break;
+   await new Promise(r=>setTimeout(r,5000));
+  }
+  assert.equal(record?.edgeIpVerified,true,'Verified WAF evidence must be available');assert(isIP(record.ip));assert.notEqual(record.ip,'198.51.100.77');
+  assert(!('httpRequest' in record));assert(!('headers' in record));
+  let device:any;
+  for(let i=0;i<18;i++){
+   device=(await action(admin,{action:'devices'})).items.find((x:any)=>x.sub===admin.sub);
+   if(device?.edgeIpVerified)break;
+   await new Promise(r=>setTimeout(r,5000));
+  }
+  assert.equal(device?.edgeIpVerified,true);assert.equal(device.lastIp,record.ip);
+  assert(!device.publicKey);assert(!device.verificationCode);
  });
  await test('EDITOR authenticates but remains pending on another browser key',async()=>{await password(staff);await enroll(staff);await passkey(staff);await business(staff,'/api/mobile/inventory',403)});
  let target:any;
