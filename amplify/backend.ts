@@ -1,5 +1,6 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { Duration, RemovalPolicy, SecretValue } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, SecretValue, Stack } from "aws-cdk-lib";
+import {addDeviceResources} from './security/deviceResources';
 import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
@@ -829,6 +830,26 @@ backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_RUN_STATUS_TABLE
 backend.salesAggregateScheduler.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJobTable.tableName);
 backend.data.resources.tables["ZaicoTransitionRecord"].grantReadData(backend.salesAggregateScheduler.resources.lambda);
 backend.salesAggregateScheduler.addEnvironment("ZAICO_TRANSITION_TABLE_NAME", backend.data.resources.tables["ZaicoTransitionRecord"].tableName);
+
+// Security resources are opt-in. An ordinary deployment remains unchanged.
+const securityPhase=process.env.BELLO_SECURITY_INFRA;
+if(securityPhase){
+  if(securityPhase!=='prepare'&&securityPhase!=='enforced')throw Error('Invalid BELLO_SECURITY_INFRA phase');
+  if((securityPhase==='enforced')!==(process.env.BELLO_DEVICE_SECURITY==='enforced'))throw Error('Security infrastructure/runtime phases must agree');
+  if(!process.env.SECURITY_ORIGIN||!process.env.SECURITY_RUNTIME_ROLE_NAME)throw Error('Security origin and existing runtime role are required');
+  const authResources=backend.auth.resources;
+  const securityStack=Stack.of(authResources.userPool);
+  const resources=addDeviceResources({
+    stack:securityStack,pool:authResources.userPool,cfnPool:authResources.cfnResources.cfnUserPool,
+    api:backend.data.resources.cfnResources.cfnGraphqlApi,bucket:backend.storage.resources.bucket,
+    runtime:Role.fromRoleName(securityStack,'DeviceSecurityRuntime',process.env.SECURITY_RUNTIME_ROLE_NAME),
+    identityRoles:[authResources.authenticatedUserIamRole,authResources.unauthenticatedUserIamRole,...Object.values(authResources.groups).map(g=>g.role)],
+    phase:securityPhase,origin:process.env.SECURITY_ORIGIN,recoveryOperatorArn:process.env.SECURITY_RECOVERY_OPERATOR_ARN,
+  });
+  backend.addOutput({custom:{deviceSecurity:resources.configuration}});
+  if(securityPhase==='enforced')backend.invoiceIssuer.addEnvironment('USER_POOL_CLIENT_ID',resources.client.ref);
+}
+if(process.env.BELLO_DEVICE_SECURITY==='enforced'&&securityPhase!=='enforced')throw Error('Device enforcement requires its data boundary resources');
 
 // Only the existing BELLO host receives the new authenticated inventory/outbound adapter permissions.
 if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {

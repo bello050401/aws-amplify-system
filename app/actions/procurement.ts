@@ -1,7 +1,7 @@
 'use server';
 import {randomUUID,createHash} from 'node:crypto';
 import {cookies} from 'next/headers';
-import {uploadData} from 'aws-amplify/storage/server';
+import {uploadData} from '@/lib/security/serverStorage';
 import {runWithAmplifyServerContext} from '@/lib/amplify/serverUtils';
 import {canEditInventory,getInventoryRole,getCurrentInventoryUserEmail} from '@/lib/amplify/requireInventoryUser';
 import {createInventory} from './inventory';

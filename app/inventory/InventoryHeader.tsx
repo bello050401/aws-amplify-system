@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { signOut } from "aws-amplify/auth";
+import { signOut } from "@/lib/security/browserLogout";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
 import type { InventoryRole } from "@/lib/amplify/requireInventoryUser";
 
@@ -59,6 +59,7 @@ export function InventoryHeader({ role, center }: { role: InventoryRole; center?
         {/* モバイルはロールの説明文言を省略し、コンパクトに(§155)。 */}
         <span className="hidden md:inline">{ROLE_LABEL[role]}</span>
         <span className="md:hidden">{role}</span>
+        {process.env.BELLO_DEVICE_SECURITY==='enforced'&&role==='ADMIN'&&<a href="/security" className="inline-flex min-h-8 items-center text-blue-700">端末管理</a>}
         <button
           type="button"
           onClick={async () => {

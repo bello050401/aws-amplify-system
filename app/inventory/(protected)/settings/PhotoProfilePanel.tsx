@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { uploadData } from "aws-amplify/storage";
+import { uploadData } from "@/lib/security/browserStorage";
 import { createPhotoProfileAction, listPhotoProfilesAction, setActivePhotoProfileAction, type PhotoProfileSummary } from "@/app/actions/imageProcessing";
 
 /**

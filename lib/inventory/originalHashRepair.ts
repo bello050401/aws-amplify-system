@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { getUrl } from "aws-amplify/storage/server";
+import { getUrl } from "@/lib/security/serverStorage";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { serverDataClient, inventoryAuthMode } from "@/lib/amplify/dataClient";
 import { computeOriginalHash } from "@/lib/imageProcessing/pipeline";

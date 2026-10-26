@@ -1,7 +1,7 @@
 import "server-only";
 
 import { cookies } from "next/headers";
-import { getUrl } from "aws-amplify/storage/server";
+import { getUrl } from "@/lib/security/serverStorage";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import { resolveListingImageDownloadUrl } from "@/lib/listing/mercari/csv/buildExportRows";

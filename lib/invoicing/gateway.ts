@@ -5,9 +5,19 @@ import {LambdaClient,InvokeCommand} from '@aws-sdk/client-lambda';
 import {CognitoJwtVerifier} from 'aws-jwt-verify';
 import {runWithAmplifyServerContext} from '../amplify/serverUtils';
 import outputs from '../../amplify_outputs.json';
+import {deviceSecurityEnabled} from '../security/serverRuntime';
+import {approvedServerSession} from '../security/serverSession';
 export const NO_STORE={'Cache-Control':'private, no-store, max-age=0','Pragma':'no-cache','Vary':'Cookie','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'};
 const verifier=CognitoJwtVerifier.create({userPoolId:outputs.auth.user_pool_id,clientId:outputs.auth.user_pool_client_id,tokenUse:'access'});
-export async function adminCredential(){return runWithAmplifyServerContext({nextServerContext:{cookies},operation:async context=>{const s=await fetchAuthSession(context);const t=s.tokens?.accessToken;if(!t)return null;try{const verified=await verifier.verify(t.toString());return verified['cognito:groups']?.includes('ADMIN')?t.toString():null;}catch{return null;}}});}
+export async function adminCredential(){
+ if(deviceSecurityEnabled()){
+  // The approved server grant is bound to this request and rechecks revocation.
+  // Its JWT belongs to the confidential client, not the legacy browser client.
+  const session=await approvedServerSession();
+  return session?.groups.includes('ADMIN')?session.tokens.access:null;
+ }
+ return runWithAmplifyServerContext({nextServerContext:{cookies},operation:async context=>{const s=await fetchAuthSession(context);const t=s.tokens?.accessToken;if(!t)return null;try{const verified=await verifier.verify(t.toString());return verified['cognito:groups']?.includes('ADMIN')?t.toString():null;}catch{return null;}}});
+}
 export async function invokeIssuer(token:string,action:string,params:Record<string,unknown>={}){
  const config=(outputs as unknown as {custom?:{invoicing?:{region:string;functionName:string}}}).custom?.invoicing;
  if(!config)return {ok:false,code:'NOT_CONFIGURED',message:'請求書発行の接続を準備しています。'};

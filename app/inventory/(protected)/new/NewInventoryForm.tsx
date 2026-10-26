@@ -5,7 +5,7 @@ import {newInventoryDefaults} from "@/lib/inventory/newInventoryDefaults";
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { remove } from "aws-amplify/storage";
+import { remove } from "@/lib/security/browserStorage";
 import { createInventory, type ImageSlotInput } from "@/app/actions/inventory";
 import { inventoryQuantityError } from "@/lib/inventory/quantityValidation";
 import { inventorySaveErrorMessage } from "@/lib/inventory/saveErrorMessage";

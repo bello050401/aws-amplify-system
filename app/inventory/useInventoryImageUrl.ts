@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getUrl } from "aws-amplify/storage";
+import { getUrl } from "@/lib/security/browserStorage";
 import { fetchAuthSession } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
 import { ImageUrlResolver, type AuthContext, type SignedUrlResult, type ResolveResult } from "./inventoryImageUrlResolver";
@@ -48,6 +48,7 @@ function readSessionStorage(): Storage | null {
 }
 
 async function fetchRealAuthContext(): Promise<AuthContext | null> {
+  if(process.env.BELLO_DEVICE_SECURITY === "enforced") return {identityId:"approved-browser",isAuthenticated:true,credentialsExpiresAtMs:null};
   const session = await fetchAuthSession();
   if (!session.identityId) return null;
   return {

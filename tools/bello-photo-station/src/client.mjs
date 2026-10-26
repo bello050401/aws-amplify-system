@@ -9,10 +9,11 @@ export async function describeFile(path, mimeType = "image/jpeg") {
 }
 
 export class PhotoRegistrationApiClient {
-  constructor({ endpoint, tokenProvider, fetchImpl = fetch, retries = 3 }) {
+  constructor({ endpoint, tokenProvider, deviceProofProvider, fetchImpl = fetch, retries = 3 }) {
     if (!endpoint || !/^https:\/\//.test(endpoint)) throw new Error("PHOTO_STATION_API_URL must be an https URL");
     this.endpoint = endpoint.replace(/\/$/, "");
     this.tokenProvider = tokenProvider;
+    this.deviceProofProvider = deviceProofProvider;
     this.fetch = fetchImpl;
     this.retries = retries;
   }
@@ -20,11 +21,13 @@ export class PhotoRegistrationApiClient {
   async call(operation, input) {
     for (let attempt = 0; ; attempt += 1) {
       const token = await this.tokenProvider();
+      const raw=JSON.stringify(input),url=`${this.endpoint}/${operation}`;
+      const deviceHeaders=this.deviceProofProvider?await this.deviceProofProvider({url,method:'POST',body:raw,token}):{};
       let response;
       try { response = await this.fetch(`${this.endpoint}/${operation}`, {
         method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(input),
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...deviceHeaders },
+        body: raw,
         signal: AbortSignal.timeout(60000),
       }); } catch(error) { if(attempt>=this.retries)throw new Error('通信が切断されました。取込済み写真から再実行できます。',{cause:error});await new Promise(r=>setTimeout(r,Math.min(500*2**attempt,4000)));continue; }
       const body = await response.json().catch(() => ({ ok: false, error: { code: "HTTP_ERROR", message: `HTTP ${response.status}` } }));

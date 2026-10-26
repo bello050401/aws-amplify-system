@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies, headers } from "next/headers";
-import { getUrl } from "aws-amplify/storage/server";
+import { getUrl } from "@/lib/security/serverStorage";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";

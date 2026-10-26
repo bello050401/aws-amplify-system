@@ -25,6 +25,7 @@ const nextConfig = {
   },
   // Stable Next.js 15 option. instrumentation.ts is enabled without an experimental flag.
   outputFileTracingIncludes: {
+    "/security": ["./tools/bello-security-pilot/index.html"],
     "/inventory/[id]/listing": ["./public/bello-interior-listing-logo.png"],
   },
 
@@ -59,6 +60,8 @@ const nextConfig = {
    * その場合はwebhookが TABLE_NOT_CONFIGURED を返すので原因が分かる。
    */
   env: {
+    BELLO_DEVICE_SECURITY: process.env.BELLO_DEVICE_SECURITY === "enforced" ? "enforced" : "legacy",
+    ...Object.fromEntries(["SECURITY_REGION", "SECURITY_TABLE", "SECURITY_KEY_ARN", "SECURITY_DEPLOYMENT", "SECURITY_POOL_ID", "SECURITY_CLIENT_ID", "SECURITY_CLIENT_SECRET_ARN", "SECURITY_ORIGIN", "SECURITY_APPSYNC_GATE_SECRET_ARN", "SECURITY_TRUSTED_SOURCE"].filter(key=>process.env[key]).map(key=>[key,process.env[key]])),
     // Non-secret gate compiled into SSR, like the other Amplify switches below.
     BELLO_MOBILE_WRITES_ENABLED: process.env.BELLO_MOBILE_WRITES_ENABLED === "true" ? "true" : "false",
     ...(process.env.BELLO_MOBILE_PUBLIC_ORIGIN ? { BELLO_MOBILE_PUBLIC_ORIGIN: process.env.BELLO_MOBILE_PUBLIC_ORIGIN } : {}),
@@ -111,6 +114,7 @@ const nextConfig = {
    */
   async headers() {
     return [
+      { source: "/security-worker.js", headers: [{ key: "Cache-Control", value: "no-store" }, { key: "Service-Worker-Allowed", value: "/" }] },
       {
         source: "/:path*",
         headers: [

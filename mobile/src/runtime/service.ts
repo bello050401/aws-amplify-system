@@ -15,6 +15,7 @@ import { InventoryReadError } from "../domain/readError";
 import type { DeleteRequest } from "../domain/inventoryActions";
 import { readJson, ReadHttpError } from "./readJson";
 import {StockSplitError,type StockSplitRequest,type StockSplitResult} from '../../../lib/inventory/stockSplitInput';
+import {clearLegacyBrowserCredentials} from '../../../lib/security/browserMigration';
 import type {StockSplitSaved} from '../ui/StockSplitScreen';
 import {MobileSoldOutError,type SoldOutSaved} from '../ui/SoldOutScreen';
 import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutInput';
@@ -22,12 +23,13 @@ import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutI
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
 export const API_ORIGIN = isWeb && typeof window !== "undefined" ? window.location.origin : "https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com";
-interface MobileConfig { auth: { userPoolId: string; userPoolClientId: string }; contractVersion: number; writesEnabled: boolean }
+interface MobileConfig { auth: { userPoolId: string; userPoolClientId: string }; contractVersion: number; writesEnabled: boolean; deviceSecurity?: boolean }
 export interface InventoryResponse { owner: string; role: "ADMIN" | "EDITOR" | "VIEWER"; items: InventoryItem[]; imagesDeferred?: boolean; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null; fetchedAt: string }
 export interface MobileSession { owner: string; role: "ADMIN" | "EDITOR" | "VIEWER"; features: MobileFeatures }
 const configKey = `bello.mobile-config.${API_ORIGIN}`;
 const secureTokens = new SecureTokenStorage();
 let configured: MobileConfig | null = null;
+let approvedOwner: string | null = null;
 export class StaffSessionError extends Error {}
 
 async function jsonRequest(path: string, cookie?: string, retry = false): Promise<unknown> {
@@ -63,12 +65,26 @@ export async function configureMobileAuth(online: boolean): Promise<void> {
   }
   if (!isConfig(candidate)) throw new Error("【圏外です】初回は通信できる場所でログインしてください。");
   configured = candidate;
+  if (candidate.deviceSecurity) {
+    if (!isWeb) throw new Error("承認済みブラウザーからWebアプリを開いてください。");
+    clearLegacyBrowserCredentials();
+    const prefix=`bello.inventory.v1.${encodeURIComponent(API_ORIGIN)}.`;
+    const oldSnapshots=(await AsyncStorage.getAllKeys()).filter(key=>key.startsWith(prefix));
+    if(oldSnapshots.length)await AsyncStorage.multiRemove(oldSnapshots);
+    return;
+  }
   Amplify.configure({ Auth: { Cognito: candidate.auth } }, { ssr: isWeb });
   if (!isWeb) cognitoUserPoolsTokenProvider.setKeyValueStorage(secureTokens);
 }
 
 async function authenticatedSession() {
   if (!configured) throw new Error("ログインが必要です。");
+  if (configured.deviceSecurity) {
+    if(approvedOwner)return {cookie:undefined,owner:approvedOwner};
+    const session = await jsonRequest("/api/mobile/session") as MobileSession;
+    if (!session?.owner || !["ADMIN","EDITOR","VIEWER"].includes(session.role)) throw new StaffSessionError("ログインが必要です。");
+    approvedOwner=session.owner;return {cookie:undefined,owner:session.owner};
+  }
   const [session, user] = await Promise.all([fetchAuthSession(), getCurrentUser()]);
   const accessToken = session.tokens?.accessToken;
   const idToken = session.tokens?.idToken;
@@ -80,6 +96,12 @@ async function authenticatedSession() {
 }
 
 export async function readMobileSession(): Promise<MobileSession> {
+  if (configured?.deviceSecurity) {
+    const value = await jsonRequest("/api/mobile/session") as MobileSession;
+    if (!value?.owner || !["ADMIN","EDITOR","VIEWER"].includes(value.role) || !isMobileFeatures(value.features)) throw new StaffSessionError("利用権限を確認できませんでした。");
+    approvedOwner=value.owner;
+    return value;
+  }
   const session = await authenticatedSession();
   const value = await jsonRequest("/api/mobile/session", session.cookie) as MobileSession | null;
   if (!value || value.owner !== session.owner || !["ADMIN", "EDITOR", "VIEWER"].includes(value.role) || !isMobileFeatures(value.features)) {
@@ -122,9 +144,10 @@ export async function readInventoryThumbnails(ids: string[]): Promise<InventoryT
   return value.items;
 }
 
-export async function clearLocalSession(): Promise<void> { if (!isWeb) await secureTokens.clear(); }
+export async function clearLocalSession(): Promise<void> { approvedOwner=null; if (!isWeb) await secureTokens.clear(); }
 
 export function mobileWritesEnabled(): boolean { return configured?.writesEnabled === true; }
+export function mobileDeviceSecurityEnabled(): boolean { return configured?.deviceSecurity === true; }
 
 export async function sellInventory(request:SoldOutRequest):Promise<SoldOutSaved> {
   if(!mobileWritesEnabled())throw new MobileSoldOutError('FORBIDDEN','在庫を編集する権限がありません。');

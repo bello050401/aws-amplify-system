@@ -6,6 +6,7 @@ import { KmsVault } from "../../lib/security/awsVault";
 import { CognitoProvider } from "../../lib/security/cognito";
 import { SecurityService } from "../../lib/security/service";
 import { securityHttp, SECURITY_HEADERS } from "../../lib/security/http";
+import { businessHttp } from "./business";
 
 let service: SecurityService | undefined;
 async function getService() {
@@ -31,10 +32,10 @@ export async function handler(event: Event) {
     body: readFileSync(join(__dirname, event.rawPath.slice(1)), "utf8"),
   };
   if (event.requestContext.http.method === "GET" && event.rawPath === "/health") return {
-    statusCode: 200, headers: SECURITY_HEADERS, body: JSON.stringify({ environment: "isolated-security-pilot", businessDataConnected: false }),
+    statusCode: 200, headers: SECURITY_HEADERS, body: JSON.stringify({ environment: "isolated-security-pilot", businessDataConnected: "isolated-fixture-tables", productionDataConnected: false }),
   };
   try {
-    return await securityHttp(await getService(), {
+    return await (event.rawPath.startsWith("/api/business/")?businessHttp:securityHttp)(await getService(), {
       method: event.requestContext.http.method, path: event.rawPath,
       headers: { ...event.headers, cookie: event.cookies?.join("; ") ?? event.headers.cookie },
       body: event.isBase64Encoded ? Buffer.from(event.body ?? "", "base64").toString() : event.body ?? "",

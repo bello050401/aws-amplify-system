@@ -1,5 +1,6 @@
 import { SecurityService } from "./service";
 import { SecurityError, type Context, type Proof } from "./types";
+import {isTerminalSessionError} from './sessionInvalidation';
 
 export const COOKIE = "__Host-bello-session";
 export const SECURITY_HEADERS = {
@@ -12,7 +13,7 @@ export type HttpRequest = { method: string; path: string; headers: Record<string
 export type HttpResult = { statusCode: number; headers: Record<string, string>; body: string; cookies?: string[] };
 const response = (statusCode: number, value: unknown): HttpResult => ({ statusCode, headers: SECURITY_HEADERS, body: JSON.stringify(value) });
 export async function securityHttp(service: SecurityService, req: HttpRequest): Promise<HttpResult> {
-  const ctx: Context = { origin: req.headers.origin ?? "", ip: req.ip, userAgent: req.headers["user-agent"] ?? "" };
+  const ctx: Context = { origin: req.headers.origin ?? "", ip: req.ip, userAgent: req.headers["user-agent"] ?? "",target:req.path,method:req.method };
   try {
     if (req.method !== "POST") throw new SecurityError("METHOD_NOT_ALLOWED", 405);
     if (ctx.origin !== service.origin || !req.headers["content-type"]?.startsWith("application/json") ||
@@ -40,6 +41,10 @@ export async function securityHttp(service: SecurityService, req: HttpRequest): 
     const error = e instanceof SecurityError ? e : new SecurityError(e instanceof SyntaxError ? "INVALID_JSON" : "SECURITY_UNAVAILABLE", e instanceof SyntaxError ? 400 : 503);
     // A separate metadata-only audit event; failed auditing never allows access.
     try { await service.audit("REQUEST_DENIED", ctx, error.code); } catch { /* response remains fail-closed */ }
-    return response(error.status, { error: error.code });
+    const out=response(error.status, { error: error.code });
+    // A revoked/expired session cannot be used again. Clearing the local cookie
+    // also lets its owner register a fresh key without a permanent login loop.
+    if(isTerminalSessionError(error.code)&&!['DEVICE_PENDING','DEVICE_REJECTED'].includes(error.code))out.cookies=[COOKIE+'=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'];
+    return out;
   }
 }

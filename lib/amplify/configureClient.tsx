@@ -2,10 +2,15 @@
 
 import { Amplify } from "aws-amplify";
 import outputs from "@/amplify_outputs.json";
+import {clearLegacyBrowserCredentials} from '../security/browserMigration';
+import {useEffect} from 'react';
+import {retainBrowserSessionGuard} from '../security/browserSessionGuard';
 
-Amplify.configure(outputs, { ssr: true });
+if(process.env.BELLO_DEVICE_SECURITY==='enforced')clearLegacyBrowserCredentials();
+else Amplify.configure(outputs, { ssr: true });
 
 /** Mount once near the root of any client tree that calls Amplify Auth/Data client-side. */
 export function ConfigureAmplifyClientSide() {
+  useEffect(()=>process.env.BELLO_DEVICE_SECURITY==='enforced'?retainBrowserSessionGuard():undefined,[]);
   return null;
 }

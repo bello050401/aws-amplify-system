@@ -1,7 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { createHash, randomUUID } from "node:crypto";
-import { getUrl, remove, uploadData } from "aws-amplify/storage/server";
+import { getUrl, remove, uploadData } from "@/lib/security/serverStorage";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { KNOWLEDGE_SEARCH_TEXT_MAX_CHARS } from "./limits";

@@ -8,6 +8,9 @@ import { DynamoPhotoRegistrationRepository } from "../../../lib/photoRegistratio
 import { S3PhotoStorage } from "../../../lib/photoRegistration/awsStorage";
 import { PhotoRegistrationService } from "../../../lib/photoRegistration/service";
 import type { TrustedClaims } from "../../../lib/photoRegistration/ports";
+import {authorizePhotoDevice} from '../../../lib/security/photoDevice';
+import {DynamoSecurityStore} from '../../../lib/security/awsStore';
+import {SecurityError} from '../../../lib/security/types';
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -50,8 +53,21 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   };
   if (!trusted.userId) return json(401, { ok: false, error: { code: "AUTH_REQUIRED", message: "authenticated identity required" } });
   const operation = event.pathParameters?.operation ?? event.rawPath.split("/").filter(Boolean).at(-1) ?? "";
+  if(process.env.BELLO_PHOTO_DEVICE_APPROVAL==='enforced'){
+    try{
+      const body=event.isBase64Encoded?Buffer.from(event.body??'','base64').toString():event.body??'';
+      const approved=await authorizePhotoDevice(new DynamoSecurityStore(required('SECURITY_TABLE'),process.env.AWS_REGION!),{
+        sub:trusted.userId,groups:trusted.groups,authTime:Number(claims.auth_time),legacyDeviceId:trusted.deviceId??null,
+        key:JSON.parse(event.headers['x-bello-device-key']??'null'),proof:JSON.parse(event.headers['x-bello-device-proof']??'null'),
+        method:event.requestContext.http.method,target:event.rawPath+(event.rawQueryString?'?'+event.rawQueryString:''),body,register:operation==='registerDevice',
+        name:operation==='registerDevice'?JSON.parse(body).name:undefined,
+      },{origin:required('PHOTO_SECURITY_ORIGIN'),ip:event.requestContext.http.sourceIp,userAgent:event.requestContext.http.userAgent});
+      if(operation==='registerDevice')return json(200,{ok:true,value:approved});
+      trusted.deviceId=approved.deviceId;
+    }catch(error){const e=error instanceof SecurityError?error:new SecurityError('DEVICE_PROOF_REQUIRED');return json(e.status,{ok:false,error:{code:e.code,message:'端末の承認・ログインを確認してください。'}});}
+  }
   let input: unknown = {};
-  try { input = event.body ? JSON.parse(event.body) : {}; }
+  try { input = event.body ? JSON.parse(event.isBase64Encoded?Buffer.from(event.body,'base64').toString():event.body) : {}; }
   catch { return json(400, { ok: false, error: { code: "INVALID_INPUT", message: "invalid JSON" } }); }
   const result = await dispatch(operation, input, trusted);
   return json(result.ok ? 200 : result.error === "PERMISSION_DENIED" ? 403 : 400, result.ok

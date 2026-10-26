@@ -1,4 +1,5 @@
-import { createHmac } from "node:crypto";
+import { createHmac,randomBytes } from "node:crypto";
+import {CognitoIdentityProviderClient,AdminCreateUserCommand,AdminAddUserToGroupCommand,AdminDisableUserCommand} from '@aws-sdk/client-cognito-identity-provider';
 import { CognitoJwtVerifier } from "aws-jwt-verify";
 import { SecurityError, type Identity, type Provider, type Tokens } from "./types";
 
@@ -79,4 +80,22 @@ export class CognitoProvider implements Provider {
     return this.identity(r.AuthenticationResult, tokens.refresh);
   }
   async revoke(tokens: Tokens) { await this.call("RevokeToken", { ClientId: this.clientId, ClientSecret: this.clientSecret, Token: tokens.refresh }); }
+  async createStaff(username:string,role:'EDITOR'|'VIEWER') {
+    if(!['EDITOR','VIEWER'].includes(role))throw new SecurityError('INVALID_STAFF_ROLE',400);
+    const client=new CognitoIdentityProviderClient({region:this.region,maxAttempts:1});
+    const temporaryPassword='Aa1!'+randomBytes(24).toString('base64url');
+    let created=false;
+    try{
+      const result=await client.send(new AdminCreateUserCommand({UserPoolId:this.poolId,Username:username,TemporaryPassword:temporaryPassword,MessageAction:'SUPPRESS',ForceAliasCreation:false,UserAttributes:[{Name:'email',Value:username}]}));
+      created=true;
+      const sub=result.User?.Attributes?.find(a=>a.Name==='sub')?.Value;
+      if(!sub)throw Error('Missing identity');
+      await client.send(new AdminAddUserToGroupCommand({UserPoolId:this.poolId,Username:username,GroupName:role}));
+      return{sub,temporaryPassword};
+    }catch(error){
+      if(created)await client.send(new AdminDisableUserCommand({UserPoolId:this.poolId,Username:username})).catch(()=>{});
+      // Never return upstream request data, passwords or AWS diagnostics.
+      throw new SecurityError((error as Error).name==='UsernameExistsException'?'STAFF_ALREADY_EXISTS':'STAFF_CREATION_UNCONFIRMED',409);
+    }
+  }
 }

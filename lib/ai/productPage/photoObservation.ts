@@ -1,7 +1,7 @@
 import "server-only";
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 import { cookies } from "next/headers";
-import { getUrl } from "aws-amplify/storage/server";
+import { getUrl } from "@/lib/security/serverStorage";
 import sharp from "sharp";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";

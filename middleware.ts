@@ -3,6 +3,8 @@ import type { NextRequest } from "next/server";
 import { fetchAuthSession } from "aws-amplify/auth/server";
 import { runWithUserPoolServerContext } from "@/lib/amplify/userPoolServer";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
+import { deviceSecurityEnabled } from "@/lib/security/serverRuntime";
+import { approvedDeviceBoundary } from "@/lib/security/nextBoundary";
 
 /**
  * /inventory配下専用のセッション更新境界(task_4e04c971153ee1eb39の候補を
@@ -102,6 +104,8 @@ import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
  * catchはcatch節で何も出力しない。
  */
 export async function middleware(request: NextRequest) {
+  if (deviceSecurityEnabled()) return approvedDeviceBoundary(request);
+  if (!request.nextUrl.pathname.startsWith("/inventory")) return NextResponse.next();
   const response = NextResponse.next();
   // 2026-09-14 P1修正: 非本番二重ゲート(isE2EFixtureModeActive——
   // NODE_ENV!=='production' かつ INVENTORY_E2E_FIXTURES==='1')が
@@ -138,6 +142,8 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // /inventory以外のシステム(特集ページ/admin等)には一切影響しない。
-  matcher: ["/inventory/:path*"],
+  // Scrub caller-supplied internal context on every dynamic route, including
+  // Server Actions posted to public pages. Public reads remain unauthenticated.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|security-assets/|security-worker.js|staff-app/).*)"],
+  runtime: "nodejs",
 };

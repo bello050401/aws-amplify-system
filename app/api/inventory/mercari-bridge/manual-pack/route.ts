@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import { getUrl } from "@aws-amplify/storage/server";
+import { getUrl } from "@/lib/security/serverStorage";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { prepareMercariManualListingPackAction,

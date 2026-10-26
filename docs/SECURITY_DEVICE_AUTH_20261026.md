@@ -1,93 +1,103 @@
-# BELLO 認証強化：実装状態と移行手順
+# BELLO 端末承認・パスキー認証の実装と移行
 
-2026-10-26。作業ブランチ `codex/security-device-auth-20261026`。
+2026-10-26。ブランチ codex/security-device-auth-20261026。
 
-## 現在の境界
+## 現在の状態
 
-本番とは別の AWS スタック `BelloSecurityPilot20261026` に認証・端末管理の検証環境を配置した。本番 Cognito、AppSync、S3、スタッフアカウント、PhotoStation 接続、EC 連携は変更していない。検証環境は業務データに接続しない。既存システム全体が新方式で保護されたという意味ではない。
+本番の認証方式は変更していない。認証・端末承認を実際のBELLO在庫画面、iPhone用Web画面、業務APIへ接続した隔離環境で検証した。実iPhone Face IDと実Windows Helloは未確認。ソフトウェアWebAuthn試験を生体認証の実機確認と扱わない。
 
-検証環境 URL: https://rn5u65d173.execute-api.us-west-2.amazonaws.com
+UIだけを公開して旧AppSync・S3経路を開いたまま「端末承認必須」と説明してはならない。
 
-## 実装した仕組み
+## 実装
 
-- Cognito Essentials / WebAuthn。ユーザー検証を必須とし、初回だけパスワードで登録を開始。既存パスキーがあるアカウントはパスワードだけで追加登録・業務アクセスできない。
-- ブラウザごとに非抽出の P-256 秘密鍵を作り IndexedDB に保持。公開鍵だけをサーバーに送る。同期パスキーだけでは別ブラウザの承認を引き継げない。
-- サーバーが発行する 60 秒・一回限りのチャレンジに、操作内容・送信先を含めて署名。Cookie のみ、内容の改変、署名の再送を拒否。
-- HttpOnly / Secure / SameSite=Strict の不透明なセッション Cookie。Cognito トークンはブラウザへ返さず KMS の暗号化を施してサーバー保管。ログにも記録しない。
-- 個人端末は 14 日無操作・最大 30 日、共用端末は 30 分無操作・最大 8 時間。初回パスワードセッションは 15 分。トークンは 5 分、有効期間を更新する処理は競合を防ぎながら実行。
-- 操作ごとにサーバーでユーザー停止・端末承認・世代番号を再確認。拒否、承認待ち、承認解除を区別する。管理操作には 5 分以内のパスキー認証が必要。
-- 本人から伝えられた申請番号と本人確認チェックで承認。管理者一覧 API に申請番号を返さない。管理者の現在端末を誤って承認解除する操作を禁止。
-- 既存の在庫 ADMIN と特集ページ用 Admins を区別。EDITOR / VIEWER の範囲を維持。入力された役割やユーザー ID を本人情報として採用しない。
-- メタデータ限定の監査ログ、90 日保持、管理者の書き出し。パスワード、トークン、秘密鍵、帳票本文などは記録しない。ログイン回数制限、API スロットリング、CSP を適用。
+- 既存CognitoユーザーID・グループを維持し、機密クライアントで本人確認必須のパスキー認証を行う。CMS用Adminsと在庫用ADMINを区別する。
+- ブラウザごとの抽出不可P-256鍵をIndexedDBへ保持する。同期パスキーで認証できても、新しいブラウザ鍵は承認まで業務へアクセスできない。
+- HttpOnly・Secure・SameSite=Strict Cookieにはランダムなセッション識別子だけを格納する。CognitoトークンはサーバーでKMS暗号化し、ブラウザへ渡さない。強化モードで旧トークンとPWAの業務キャッシュを除去する。
+- 個人用は無操作14日・絶対期限30日、共用は無操作30分・絶対期限8時間。アクセストークン5分、更新トークンをローテーションする。DynamoDB TTLの物理削除を待たず期限を判定する。
+- 承認待ち・承認済み・拒否・解除を管理する。承認時は既知の連絡手段で本人を確認し、本人画面の申請番号を照合する。管理者一覧APIには申請番号を返さない。
+- 管理操作は直近5分のパスキー認証を要求する。使用中の管理者自身の端末解除・停止を防ぐ。スタッフ作成はEDITOR/VIEWERのみ、招待メールを自動送信しない。
+- 承認解除・全端末ログアウト・利用停止は世代番号で既存セッションを遮断する。再有効化しても古いセッションは復活しない。
+- 明示的に拒否された端末だけ指定の赤い拒否画面にする。承認待ち・入力誤り・通信障害は別表示とする。
+- 監査はメタデータのみ90日。認証秘密情報・帳票本文を記録しない。管理者が書き出せる。
 
-## 保証できない点
+## 業務アクセスの保護
 
-WebCrypto の非抽出鍵は、物理端末の完全な証明ではない。端末マルウェア、ブラウザプロファイル全体の侵害、同一オリジンの XSS による鍵の使用まで防げると説明しない。端末の OS 更新、Windows Defender 等の保護、画面ロック、ディスク暗号化、不要な拡張機能の整理が必要。
+middleware、nextBoundary、serverGrant、serverSessionで画面・Route Handler・Server Actionを保護する。メソッド、パス、クエリ、本文、Origin、セッションを署名へ結びつけ、nonce再使用を拒否する。呼出者の内部認可ヘッダーは除去し、サーバー署名情報だけを渡す。処理側でも失効を再確認する。
 
-顔・指紋情報は BELLO に送らない。端末・パスキー提供元によっては PIN 等で本人確認する。同期パスキーは最高保証レベルのハードウェア固定鍵と同一ではない。
+AppSyncはサーバーだけが持つ照合値をWAFで検証し、有効なCognito JWT・APIキーの直接呼出しも拒否する。その内側でモデル別権限を適用する。公開CMSのサーバー読取は公開モデル権限を維持し、在庫は公開しない。
 
-検証 URL のパスキーは本番ドメイン用ではない。本番では既存の Cognito ユーザー ID と権限を維持し、正式ドメインで登録する。検証用アカウントを本番へ移さない。
+S3はIdentity Pool各ロールへ明示的Denyを適用し、既発行の一時認証情報からも直接アクセスできなくする。ブラウザ画像は同一サイトの署名付きAPIを使用する。画像実体、容量、ピクセル数、保存パスを検証し、既存キーの上書きを禁止する。保存済み画像の削除は既存の参照確認処理を維持する。
 
-## 本番移行前に必要な実装・確認
+加工用のS3署名URLは30秒、PhotoStationダウンロードは60秒。PhotoStationアップロードURLは既存処理に応じて300/900秒。この期間は発行済みURLが残る。端末解除だけでURLも即失効するとは説明しない。
 
-1. 既存ユーザープール設定・クライアント・権限・IAM・各配信設定を取得して復旧用に保護。ユーザー ID を作り直さない。
-2. 本番ドメインにサーバー側認証経路を設け、全業務 API / Server Action で署名・承認・役割を確認する。画面のガードだけで完了としない。
-3. 既存の Cognito JWT を使った AppSync 直接アクセスと Identity Pool / S3 直接アクセスを閉じる。公開 Feature / FeatureItem / BaseItemCache の API キー経路は、公開データだけの投影と許可リストへ分離する。
-4. PhotoStation は人の長期 JWT を流用せず、取消可能な専用端末認証で移行。BASE、Gmail、請求書の OAuth callback、ZAICO 等のバックグラウンド処理は独立した最小権限を維持する。
-5. S3 の既存署名 URL の残存期間を明確にする。即時失効が必要なデータは配信時にも承認を確認する。発行済み URL が JWT の取消だけで無効になると説明しない。
-6. 管理者本人の iPhone / Windows Hello で初回登録・通常ログイン・ブラウザ再起動・スタッフ切替・別ブラウザ承認・取消を実測。ソフトウェア認証器の成功を生体認証の実機成功と記載しない。
-7. 本番相当の業務 API を使い、未承認・承認解除・アカウント停止で 403 となること、在庫・画像・EC 等の通常操作が維持されることを確認する。
-8. 管理者の復旧と切戻しをリハーサルし、アラートの通知先と対応手順を確認する。検証スタックの CloudWatch アラームには現在通知先がない。
-9. `cutoverReadiness()` の 18 項目を証拠付きで満たしてから切り替える。この関数は移行ツール用であり、既存本番 CI 全体を制御済みではない。
+BASE・Gmail・請求書のOAuth復帰は同一サイトの安全な文書を一度経由し、Strict Cookieと端末署名を再取得する。復帰文書自体はトークン交換せず、既存state照合も維持する。請求書の専用ワーカーは強化モードのクライアントIDを検証する。帳票保存禁止等の既存仕様は変更しない。
 
-本番と古い認証経路を並存させたまま「端末承認必須」として運用しない。全経路を一体で閉じる必要がある。
+PhotoStationはPHOTO_DEVICE専用ユーザーとWindows CNGの永続・抽出不可鍵を組み合わせる。人のJWTだけでは画像へアクセスできない。端末承認・解除を検証した。通常のWindows版にはまだ強制適用していない。
 
-## 管理者復旧
+## 隔離環境と実操作
 
-最初の管理者も自動承認しない。本人のパスキー登録後、既存の AWS 管理経路で担当者がユーザー ID・申請番号・公開鍵識別子を照合し、対象 1 件だけを条件付き更新で承認する。一般 HTTP API に初期管理者の抜け道を作らない。
+BelloSecurityPilot20261026は専用Cognito、DynamoDB、KMS、Secrets Manager、Lambda、HTTP API、AppSync、写真S3を持つプロトコル検証環境。
 
-すべての端末を紛失した場合は既知の連絡手段で本人を確認する。AWS 管理経路でアカウントを一時停止し全セッションを失効させ、失効済み端末を再承認しない。必要なパスキーの再登録手続き、新しいブラウザ鍵の申請、管理者承認を行う。毎日の通常ログインにこの手続きを要求しない。
+amplify-bellosecuritybusiness-20261026-sandbox-40e26f1744は実BELLOの63モデルとCRUD・関連・権限を使う隔離コピー。未使用のGraphQL subscription 189本とその専用処理を除外してCloudFormation一操作2,500リソース制限に対応。スケジューラ・EC・ZAICO・メール送信・請求書発行ワーカーは接続しない。
 
-切戻しは、まず新機能の書き込みを止め、影響対象を限定して原因を確認する。承認解除した利用者や漏洩した旧トークンを復活させる切戻しは禁止。旧方式へ戻す必要がある場合は漏洩のない復旧用認証経路を使う。安全性を確認できないときは業務 API を閉じたまま復旧する。
+完全なNext.jsアプリをlocalhost:4319で起動し、Chrome実操作を行った。本人認証だけ代替するループバックfixtureは私有ビルド内に生成し、Git・本番へ含めない。
 
-## 基盤ライブラリの修正
+Chromeで新規在庫5点を保存・再表示し、3点と2点へ異なるタイトルで分割した。null検索キーをDynamoDBへ送る既存不具合を修正し、同じ操作を再実行して合計5点を確認した。
 
-### 画像アクセス権限の分離（作業ブランチで修正、本番未反映）
+iPhone用Web画面をChromeで開き、備考を編集・保存・再表示した。EDITORの売却非表示、VIEWERの編集・分割・複製禁止を確認した。端末解除後の保存拒否・ログイン画面復帰・元データ維持を確認した。実iPhoneの確認ではない。
 
-既存の `amplify/storage/resource.ts` は、在庫用 ADMIN と別の CMS 用 Admins にも inventory / knowledge の権限を付与していた。Identity Pool がグループの優先順位から IAM ロールを一つだけ選ぶため、兼任ユーザーの不具合を避ける目的の設定だったが、CMS 専用ユーザーにまで権限が広がる。
+PhotoStationでは実Windows鍵による承認、原本の同一バイト保存、編集後画像保存、再試行重複防止、解除後拒否を確認した。Lightroom加工の再確認ではない。
 
-`amplify/auth/resource.ts` の優先順位を ADMIN → EDITOR → VIEWER → Admins にし、storage の Admins への付与を撤去した。グループ名・所属、CMS の AppSync 権限は変更していない。MOBILE_HIDE_EC / MOBILE_HIDE_SALES も維持。優先順位と storage 権限を必ず同時に反映する必要がある。
+初期の設定画面確認で既存BASE設定メタデータを読み取ったため、検証サーバーを隔離リソースのみ許可するIAMロールへ変更した。外部BASE APIや本番データの変更は行っていない。「本番情報を一切読んでいない」とは記録しない。
 
-`scripts/verify-security-storage.ts` は実際の Amplify auth / storage 定義をローカルで合成し、生成した Cognito グループと IAM ポリシーを使って、6 グループの全 64 通りの所属組み合わせで期待する読み取り・書き込み・削除権限を検証した。すべて合格。これはデプロイ後の AWS IAM 実アクセス試験の代わりではなく、本番はまだ既存設定である。発行済みの一時 IAM 認証情報が残る場合も考慮して切り替える。
+リージョン指定漏れによるus-east-1作成はロールバックし、残存リソースなしを確認して失敗スタックを削除した。明示的リージョン検証を追加した。IAM定義長の上限は、隔離APIの一意IDで対象を限定して修正した。
 
-既存業務との接続調査では 887 ソースファイル内に、旧セッション参照 76 箇所、ブラウザからの画像ストレージ直接接続 6 箇所などを検出した。文字列一致による調査であり、同数の脆弱性を発見した意味ではない。API / Server Actions / AppSync / S3 を一体で移行する必要があり、既存処理に承認チェックを一箇所追加しただけでは完了にできない。
+## 追加の依存修正と回帰確認
 
-Next.js 14.2.35 → 15.5.28、sharp 0.35.4 → 0.35.5。非同期 cookies / headers / route params への対応を実施。認証 Cookie 読取を await 化し、既存ログインフォームは同じ内容のクライアントコンポーネントへ分離。React Native 用 DateField の型だけを Web と共有し、Web ビルドへ Native 実装を取り込まない。
+ExcelJSが参照するuuidをCommonJS互換の11.1.1へ固定し、既知の実行時依存の警告は0件になった。CSV/XLSX取込58件、ZAICO項目の型・先頭ゼロ・日本語保持、実際にUUIDを生成する拡張書式のExcel往復を確認した。純粋な取込ジョブでReactのRSC専用cacheが存在しない場合はキャッシュを使わず、認証判定自体は同じ処理を実行するよう修正した。
 
-依存関係検査は変更前 critical 1 / high 17 / moderate 1 → 変更後 critical 0 / high 0 / moderate 2。件数は依存パッケージ単位であり、別々の攻撃が同数存在する意味ではない。残る moderate は ExcelJS とその uuid 依存に同じ指摘が伝播したもの。現在の ExcelJS は uuid v4 を利用しており、指摘の対象 v3/v5/v6 バッファ API の利用は見つからなかった。指摘自体の解消とは扱わず、互換性を確認して追従する。
+## 本番移行
 
-公式情報:
-- https://github.com/vercel/next.js/security/advisories/GHSA-2464-fhr4-w9xw
-- https://github.com/vercel/next.js/security/advisories/GHSA-p3m5-59mp-jv5r
-- https://github.com/lovell/sharp/security/advisories/GHSA-wq5f-xc86-pv6w
-- https://github.com/uuidjs/uuid/security/advisories/GHSA-w5hq-g745-h8pq
+1. 本番プール・クライアント・グループ・IAM・配信設定を取得して復旧用に保護する。既存ユーザーIDを作り直さない。
+2. BELLO_SECURITY_INFRA=prepareは追加準備段階。機密クライアント、セッション保存先等を追加するが、旧ログインとデータ経路は閉じない。既存パスワード・MFA・復旧設定を保持する。本番プールは既にEssentials。追加環境・認証利用量等による費用は別途確認する。
+3. scripts/security-initialize-client.tsは既定で確認のみ。--applyで秘密情報をSecrets Managerへ直接保存し、値は表示・ファイル化しない。
+4. 本番相当の配信環境で業務・外部連携・復旧・端末実機試験を完了する。初期管理者にも一般HTTP APIの自動承認例外を作らない。
+5. BELLO_SECURITY_INFRA=enforcedとBELLO_DEVICE_SECURITY=enforcedを一致させる。AppSync・S3の旧経路閉鎖、Next.js・PWA・機器認証を一体で移行する。
+6. scripts/check-security-release.cjsを本番CIへ組込済み。対象commit・origin・24時間以内の確認と19項目の証拠が揃わなければ強化モードの本番反映を止める。未検証項目をtrueにして通過させない。
 
-## 検証用 AWS リソースと運用
+## 復旧・切戻し
 
-別 Cognito pool / confidential client、DynamoDB（PITR・削除保護・TTL）、KMS、Secrets Manager、Lambda、HTTP API、CloudWatch ログとエラーアラームを新設。アプリの IAM から本番在庫・本番画像への権限を付与していない。これらは従量課金・保管課金の対象となる。実運用移行後に検証環境の要否を確認する。削除保護・RETAIN を無視した自動全削除はしない。
+scripts/security-operator-recovery.tsは別管理のAWSロールから実行する。既定は確認のみ。本人確認、既存ADMIN、登録済みパスキー、新しいpending端末、公開鍵識別子、申請番号、レコード版を照合して1台だけ承認する。取消済み鍵は復活させない。
 
-AWS アカウントの読取調査では root MFA 有効・root access key なし。us-west-2 の GuardDuty detector と CloudTrail trail の登録は見つからなかった。CloudTrail の標準イベント履歴がないという意味ではない。監視運用・通知担当・長期証跡は未整備として残る。
+DeviceRecoveryOperatorはMFA必須。ユーザー情報の読取と端末・監査イベントの書込に限定し、業務データやユーザー権限を書き換えられない。SSOではaws:MultiFactorAuthPresentが付かない場合があるため、復旧用MFA経路の実地確認が必要。SSOからの復旧リハーサル完了とは扱わない。
 
-## 再現コマンド
+切戻しは新機能の書込を止め、影響を限定して原因を確認する。WAF/S3 Denyを先に外さない。強化モードのまま前の正常コードへ戻すことを優先する。旧方式へ戻すなら漏洩・取消済みトークンの復活を防ぎ、全経路を整合させる。未確認なら業務APIを閉じたまま復旧する。
 
-```
-node node_modules/tsx/dist/cli.mjs scripts/verify-security.ts
-node node_modules/tsx/dist/cli.mjs scripts/verify-security-storage.ts
-node node_modules/typescript/bin/tsc -p tools/bello-security-pilot/tsconfig.json --noEmit
-node scripts/build-security-pilot.cjs
-node node_modules/tsx/dist/cli.mjs scripts/security-pilot-live.ts
-npm audit --omit=dev --audit-level=high
-npm run build
-```
+## 監視と残件
 
-live テストは検証スタック名・プール名を照合してから使い捨てアカウントを作成する。通知メールを送らない。パスワード・秘密鍵・Cookie は結果ファイルに保存せず、テストアカウントを最後に無効化する。ソフトウェア WebAuthn 認証器を利用するため、実機顔認証の代わりにはならない。
+IPは信頼できる配信層情報だけを採用する。X-Forwarded-Forを信用しない。Hostingの上書き確認まではhosting-unverifiedと記録する。
+
+infra/security-edge.tsにAmplify用WAFを用意した。us-east-1/CLOUDFRONT、初期count、明示指定でのみ関連付ける。合成確認済み、本番未適用。Amplify WAF連携は1アプリ月15米ドルにWAF利用料が別途必要。
+
+検証用エラーアラームはあるが通知先・到達確認は未完了。root MFA有効・root access keyなしを読取確認済み。調査対象リージョンでGuardDuty detectorとCloudTrail trailは見つからなかった。長期監視・証跡整備は残件。標準CloudTrailイベント履歴がないという意味ではない。
+
+未完了の受け入れ条件：
+- 実iPhone Face ID、実Windows Hello、実ブラウザ再起動・翌日利用。
+- Amplify配信環境でのIP取得とエッジ制御。
+- 復旧用MFA経路と切戻しの実地リハーサル。
+- アラート通知先・到達確認と長期AWS監視。
+- 新認証配下の全外部OAuth・本番相当ワーカーの回帰。
+- 本番切替と切替後のスタッフ確認。
+
+## 保証範囲
+
+抽出不可鍵でも物理端末を完全には識別できない。OS侵害、同一サイトXSS、ブラウザプロファイル全体の侵害まで防ぐとは説明しない。OS更新、Defender等、画面ロック、ディスク暗号化、拡張機能管理も必要。生体情報はBELLOへ送らず、端末によってPIN等で本人確認する。
+
+本番未変更の現段階で、実運用が既に強化されたとは言わない。「日本で上位」という順位や安全性の倍率を試験件数から算出しない。
+
+公式根拠：
+- https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-authentication-flow-methods.html
+- https://docs.aws.amazon.com/amplify/latest/userguide/amplify-SSR-compute-role.html
+- https://docs.aws.amazon.com/amplify/latest/userguide/ssr-environment-variables.html
+- https://docs.aws.amazon.com/amplify/latest/userguide/amplify-waf-CDK.html
+- https://docs.aws.amazon.com/amplify/latest/userguide/waf-pricing.html

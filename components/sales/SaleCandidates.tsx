@@ -4,7 +4,7 @@ import {CHANNELS,DEFAULT_FEES,type SaleCandidate,type FeeConfig} from '../../lib
 import {suggestedSaleQuery} from '../../lib/saleCandidates/search';
 import {SaleRegistrationForm,type SaleProduct} from './SaleRegistrationForm';
 import {PostSaleConfirmation} from './PostSaleConfirmation';
-import type {PostSalePlan} from '../../lib/saleCandidates/postSale';
+import type {PostSalePlan} from '../../lib/saleCandidates/postSaleTypes';
 import {ProductPhoto} from '../invoicing/ProductPhoto';
 type Product=SaleProduct&{sku:string;displayId:string;price:number|null;category:string;thumbnailUrl:string|null};
 async function action(body:unknown){const r=await fetch('/api/sale-candidates',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json','X-Bello-Sale-Candidates':'1'},body:JSON.stringify(body)});const v=await r.json();if(!r.ok)throw Object.assign(Error(v.error||v.message||(v.code==='GMAIL_AUTH_REQUIRED'?'Gmailとの再接続が必要です。':'処理結果を確認できませんでした。')),{code:v.code});return v;}

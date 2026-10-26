@@ -4,7 +4,11 @@ import { createServerRunner } from "@aws-amplify/adapter-nextjs";
 // command once before `npm run dev` if this import errors on a fresh
 // checkout.
 import outputs from "@/amplify_outputs.json";
+import { deviceSecurityEnabled } from "../security/serverRuntime";
+import { businessCookies } from "../security/serverSession";
+import { userPoolServerConfig } from "./userPoolServerConfig";
 
-export const { runWithAmplifyServerContext } = createServerRunner({
-  config: outputs,
+const { runWithAmplifyServerContext: runner } = createServerRunner({
+  config: deviceSecurityEnabled()?userPoolServerConfig(outputs):outputs,
 });
+export const runWithAmplifyServerContext:typeof runner=input=>runner(deviceSecurityEnabled()?{...input,nextServerContext:{cookies:businessCookies}}:input);

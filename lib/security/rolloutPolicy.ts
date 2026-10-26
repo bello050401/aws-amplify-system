@@ -1,11 +1,11 @@
-/** Preflight for the future production cutover tool. Existing production CI does not yet call this gate. */
+/** Mirrors the production CI preflight in scripts/check-security-release.cjs. */
 export const REQUIRED_CUTOVER_CHECKS = [
   "productionUsersPreserved", "legacyGroupsPreserved", "allBusinessRoutesGated",
   "appSyncDirectAccessDenied", "apiKeyPrivateDataDenied", "identityPoolDirectAccessDenied",
   "s3ExistingUrlExpiryBounded", "photoStationMachineAuthVerified", "oauthCallbacksVerified",
   "backgroundWorkersVerified", "adminRecoveryRehearsed", "rollbackRehearsed",
   "realIPhonePasskeyPassed", "realWindowsHelloPassed", "sessionReopenPassed",
-  "revocationOnRealBusinessApiPassed", "businessRegressionPassed", "auditAlertRecipientVerified",
+  "revocationOnRealBusinessApiPassed", "businessRegressionPassed", "auditAlertRecipientVerified", "trustedClientIpVerified",
 ] as const;
 export type CutoverCheck = typeof REQUIRED_CUTOVER_CHECKS[number];
 export type CutoverEvidence = Partial<Record<CutoverCheck, { passed: boolean; evidence: string }>>;

@@ -8,7 +8,7 @@ do{
  const page=aws('dynamodb','query',['--table-name',out.Table,'--index-name','ByKind','--key-condition-expression','#k = :k','--expression-attribute-names',JSON.stringify({'#k':'kind'}),'--expression-attribute-values',JSON.stringify({':k':{S:'user'}}),...(cursor?['--exclusive-start-key',JSON.stringify(cursor)]:[])]);
  for(const row of page.Items??[]){
   const username=row.username?.S;
-  if(!/^qa-(?:admin|editor|ui)-\d+@bello\.invalid$/.test(username??''))continue;
+  if(!/^qa-(?:admin|editor|ui|business)-\d+@bello\.invalid$/.test(username??''))continue;
   aws('cognito-idp','admin-disable-user',['--user-pool-id',out.PoolId,'--username',username]);
   aws('dynamodb','update-item',['--table-name',out.Table,'--key',JSON.stringify({id:row.id}),'--update-expression','SET enabled = :disabled ADD generation :one, #v :one','--condition-expression','#v = :version','--expression-attribute-names',JSON.stringify({'#v':'version'}),'--expression-attribute-values',JSON.stringify({':disabled':{BOOL:false},':one':{N:'1'},':version':row.version})]);
   closed++;

@@ -4,7 +4,7 @@ export type DeviceStatus = "pending" | "approved" | "rejected" | "revoked";
 export type Row = { id: string; version: number; expiresAt?: number; [key: string]: unknown };
 export type User = Row & { kind: "user"; sub: string; username: string; groups: string[]; enabled: boolean; generation: number; passkeyRegistered: boolean };
 export type Device = Row & { kind: "device"; sub: string; name: string; publicKey: JsonWebKey; status: DeviceStatus; shared: boolean; generation: number; requestedAt: number; lastSeenAt: number; lastIp: string; userAgent: string; verificationCode: string };
-export type Session = Row & { kind: "session"; sub: string; deviceId: string; userGeneration: number; deviceGeneration: number; strongAt: number; createdAt: number; lastSeenAt: number; expiresAt: number; vault: string; revoked: boolean };
+export type Session = Row & { kind: "session"; origin: string; sub: string; deviceId: string; userGeneration: number; deviceGeneration: number; strongAt: number; createdAt: number; lastSeenAt: number; expiresAt: number; vault: string; revoked: boolean };
 export type Challenge = Row & { kind: "challenge"; sessionId: string; nonce: string; digest: string; expiresAt: number };
 export type Tokens = { access: string; id: string; refresh: string; expiresAt: number };
 export type Identity = { sub: string; username: string; groups: string[]; tokens: Tokens };
@@ -24,8 +24,9 @@ export interface Provider {
   hasPasskey(tokens: Tokens): Promise<boolean>;
   refresh(tokens: Tokens): Promise<Identity>;
   revoke(tokens: Tokens): Promise<void>;
+  createStaff?(username:string,role:'EDITOR'|'VIEWER'):Promise<{sub:string;temporaryPassword:string}>;
 }
-export type Context = { ip: string; userAgent: string; origin: string };
+export type Context = { ip: string; userAgent: string; origin: string; target?: string; method?: string };
 export type Proof = { challengeId: string; signature: string };
 export class SecurityError extends Error {
   constructor(public code: string, public status = 403) { super(code); this.name = "SecurityError"; }

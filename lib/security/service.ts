@@ -1,4 +1,7 @@
 import { randomInt } from "node:crypto";
+import {isIP} from 'node:net';
+import { requestProofMessage, type RequestProof } from "./requestProof";
+import { hasBusinessPermission } from "./accessPolicy";
 import { hash, keyId, proofMessage, publicKey, randomId, safeText, verifyProof } from "./crypto";
 import { SecurityError, isAdmin, permitted, seconds, versioned, type Challenge, type Context, type Device, type Identity, type Proof, type Provider, type Row, type Session, type Store, type Tokens, type User, type Vault } from "./types";
 
@@ -10,7 +13,8 @@ export type Action =
   | { action: "businessProbe" } | { action: "logout" }
   | { action: "devices"; cursor?: string } | { action: "users"; cursor?: string } | { action: "events"; cursor?: string }
   | { action: "approve" | "reject" | "revoke"; deviceId: string; expectedVersion: number; verificationCode?: string; personConfirmed?: boolean }
-  | { action: "disableUser" | "logoutUser"; sub: string; expectedVersion: number };
+  | { action: "disableUser" | "enableUser" | "logoutUser"; sub: string; expectedVersion: number }
+  | { action:'createUser'; username:string; role:'EDITOR'|'VIEWER'; personConfirmed:boolean };
 
 /** Independent server-side auth boundary. No product/EC write code or frontend tokens. */
 export class SecurityService {
@@ -24,7 +28,7 @@ export class SecurityService {
       id: "event#" + time.toString().padStart(12, "0") + "#" + randomId(),
       kind: "event", version: 1, at: time, event, result,
       sub: sub ?? null, deviceId: deviceId ?? null, ip: safeText(ctx.ip, 64),
-      userAgent: safeText(ctx.userAgent, 240), target: "/api/security",
+      userAgent: safeText(ctx.userAgent, 240), target: safeText((ctx.target ?? "/api/security").split("?")[0],240), method:safeText(ctx.method??"POST",10),
       expiresAt: time + 90 * seconds.day,
     } }]);
     if (process.env.SECURITY_DEPLOYMENT) console.info(JSON.stringify({ type: "security-audit", at: time, event, result, sub: sub ?? null, deviceId: deviceId ?? null, ip: safeText(ctx.ip, 64) }));
@@ -35,7 +39,9 @@ export class SecurityService {
     const username = safeText(input.username, 256).trim();
     if (!username || !["password", "passkey"].includes(input.mode)) throw new SecurityError("INVALID_LOGIN", 400);
     const key = publicKey(input.key);
-    await this.store.rate("login-ip#" + hash(ctx.ip), 30, 300, this.now());
+    // Unknown hosting metadata must not put every employee in one 30-attempt
+    // bucket. The per-account limit always applies; an edge WAF covers floods.
+    if(isIP(ctx.ip))await this.store.rate("login-ip#" + hash(ctx.ip), 30, 300, this.now());
     await this.store.rate("login-user#" + hash(username.toLowerCase()), 10, 300, this.now());
     let result: Awaited<ReturnType<Provider["start"]>>;
     try { result = await this.provider.start(username, input.mode, input.password); }
@@ -76,6 +82,7 @@ export class SecurityService {
       id: userId, kind: "user", version: (oldUser?.version ?? 0) + 1, sub: identity.sub,
       username: identity.username, groups: identity.groups, enabled: true,
       generation: oldUser?.generation ?? 1, passkeyRegistered: hasPasskey,
+      ...(oldUser?.revokedBefore ? {revokedBefore:oldUser.revokedBefore} : {}),
     };
     const deviceId = "device#" + identity.sub + "#" + keyId(data.key);
     const oldDevice = await this.store.get<Device>(deviceId);
@@ -88,7 +95,7 @@ export class SecurityService {
     };
     const sessionToken = randomId();
     const session: Session = {
-      id: "session#" + hash(sessionToken), kind: "session", version: 1, sub: user.sub, deviceId,
+      id: "session#" + hash(sessionToken), kind: "session", origin: this.origin, version: 1, sub: user.sub, deviceId,
       userGeneration: user.generation, deviceGeneration: device.generation,
       strongAt: data.mode === "passkey" ? time : 0, createdAt: time, lastSeenAt: time,
       // Bootstrap/password sessions cannot become persistent privileged sessions.
@@ -107,7 +114,7 @@ export class SecurityService {
   private checkOrigin(ctx: Context) { if (ctx.origin !== this.origin) throw new SecurityError("INVALID_ORIGIN"); }
   private async actor(token: string): Promise<Actor> {
     const session = await this.store.get<Session>("session#" + hash(token));
-    if (!session || session.revoked || session.expiresAt <= this.now()) throw new SecurityError("SESSION_EXPIRED", 401);
+    if (!session || session.origin !== this.origin || session.revoked || session.expiresAt <= this.now()) throw new SecurityError("SESSION_EXPIRED", 401);
     const [user, device] = await Promise.all([this.store.get<User>("user#" + session.sub), this.store.get<Device>(session.deviceId)]);
     if (!user || !user.enabled || user.generation !== session.userGeneration || !permitted(user.groups)) throw new SecurityError("ACCOUNT_DISABLED");
     if (!device || device.generation !== session.deviceGeneration) throw new SecurityError("DEVICE_REVOKED");
@@ -147,7 +154,8 @@ export class SecurityService {
       return { username: user.username, status: device.status, passkeyRegistered: user.passkeyRegistered,
         needsPasskeyLogin: session.strongAt === 0, name: device.name, shared: device.shared,
         verificationCode: device.verificationCode, admin: isAdmin(user.groups),
-        approved: device.status === "approved" && session.strongAt > 0 && user.passkeyRegistered };
+        approved: device.status === "approved" && session.strongAt > 0 && user.passkeyRegistered,
+        requestBinding: hash(session.id) };
     }
     if (device.status === "rejected") throw new SecurityError("DEVICE_REJECTED");
     if (device.status === "revoked") throw new SecurityError("DEVICE_REVOKED");
@@ -173,6 +181,20 @@ export class SecurityService {
       return { ok: true, groups: currentActor.user.groups };
     }
     this.requireAdmin(currentActor);
+    if(body.action==='createUser'){
+      const username=safeText(body.username,256).trim().toLowerCase();
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)||!['EDITOR','VIEWER'].includes(body.role)||body.personConfirmed!==true)throw new SecurityError('INVALID_STAFF_INPUT',400);
+      if(!this.provider.createStaff)throw new SecurityError('STAFF_CREATION_UNAVAILABLE',503);
+      await this.store.rate('provision#'+user.sub,5,3600,this.now());
+      const request={id:'provision#'+hash(username),kind:'provision',version:1,status:'started',createdAt:this.now(),expiresAt:this.now()+7*seconds.day};
+      await this.store.write([{expected:null,row:request}]);
+      try{
+        const result=await this.provider.createStaff(username,body.role);
+        await this.store.write([{expected:1,row:{...request,version:2,status:'complete'}},{expected:null,row:{id:'user#'+result.sub,kind:'user',version:1,sub:result.sub,username,groups:[body.role],enabled:true,generation:1,passkeyRegistered:false}}]);
+        await this.audit('STAFF_CREATED',ctx,'ok',result.sub);
+        return{ok:true,username,temporaryPassword:result.temporaryPassword};
+      }catch(error){await this.audit('STAFF_CREATION_UNCONFIRMED',ctx,'check-required');throw error;}
+    }
     if (["devices", "users", "events"].includes(body.action)) {
       const kind = body.action === "devices" ? "device" : body.action === "users" ? "user" : "event";
       const page = await this.store.list(kind, "cursor" in body ? body.cursor : undefined);
@@ -198,15 +220,51 @@ export class SecurityService {
       await this.audit("DEVICE_" + body.action.toUpperCase(), ctx, String(next.status), target.sub, target.id);
       return { ok: true };
     }
-    if (body.action === "disableUser" || body.action === "logoutUser") {
+    if (body.action === "disableUser" || body.action === "enableUser" || body.action === "logoutUser") {
       const target = await this.store.get<User>("user#" + body.sub);
       if (!target || target.version !== body.expectedVersion) throw new SecurityError("STALE_RECORD", 409);
       if (target.sub === user.sub) throw new SecurityError("CANNOT_DISABLE_CURRENT_ADMIN", 409);
-      await this.store.write([{ row: { ...versioned(target), generation: target.generation + 1, enabled: body.action === "disableUser" ? false : target.enabled }, expected: target.version }]);
-      await this.audit(body.action === "disableUser" ? "ACCOUNT_DISABLED" : "ALL_SESSIONS_REVOKED", ctx, "ok", target.sub);
+      await this.store.write([{ row: { ...versioned(target), generation: target.generation + 1, revokedBefore: this.now(), enabled: body.action === "enableUser" ? true : body.action === "disableUser" ? false : target.enabled }, expected: target.version }]);
+      await this.audit(body.action === "enableUser" ? "ACCOUNT_ENABLED" : body.action === "disableUser" ? "ACCOUNT_DISABLED" : "ALL_SESSIONS_REVOKED", ctx, "ok", target.sub);
       return { ok: true };
     }
     throw new SecurityError("UNKNOWN_ACTION", 400);
+  }
+
+  /** Server-only authorization for real business routes. No bearer/JWT is returned to the client. */
+  async authorizeRequest(token: string, request: { method: string; target: string; digest: string; proof: RequestProof }, ctx: Context) {
+    this.checkOrigin(ctx);
+    const actor = await this.actor(token), p = request.proof;
+    this.requireApproved(actor);
+    if (!p || p.version !== 1 || !Number.isSafeInteger(p.at) || Math.abs(this.now() - p.at) > 30 ||
+      !/^[A-Za-z0-9_-]{43}$/.test(p.nonce) || !/^[A-Za-z0-9_-]{43}$/.test(p.digest) ||
+      p.binding !== hash(actor.session.id) || p.digest !== request.digest ||
+      !request.target.startsWith("/") || /[\r\n#]/.test(request.target) ||
+      !verifyProof(actor.device.publicKey, requestProofMessage(this.origin, request.method, request.target, p), p.signature))
+      throw new SecurityError("INVALID_DEVICE_PROOF");
+    // TTL is cleanup only; CAS prevents concurrent reuse even before expiry deletion.
+    await this.store.write([{ expected: null, row: { id: "http-proof#" + hash(actor.session.id + p.nonce), kind: "http-proof", version: 1, expiresAt: this.now() + 120 } }]);
+    const tokens = await this.tokens(actor);
+    const current = await this.actor(token);
+    this.requireApproved(current);
+    await this.touch(current, ctx);
+    if(!['GET','HEAD','OPTIONS'].includes(request.method))await this.audit('BUSINESS_WRITE_AUTHORIZED',{...ctx,target:request.target,method:request.method},'authorized',current.user.sub,current.device.id);
+    return { sub: current.user.sub, username: current.user.username, groups: current.user.groups,
+      deviceId: current.device.id, sessionId: current.session.id, tokens };
+  }
+
+  /** Explicit scope check reused by HTTP and desktop gateway operations. */
+  async serverTokens(token:string,expected:{sub:string;deviceId:string}) {
+    const actor=await this.actor(token);this.requireApproved(actor);
+    if(actor.user.sub!==expected.sub||actor.device.id!==expected.deviceId)throw new SecurityError('DEVICE_PROOF_REQUIRED');
+    const tokens=await this.tokens(actor);
+    this.requireApproved(await this.actor(token));
+    return tokens;
+  }
+
+  /** Explicit scope check reused by HTTP and desktop gateway operations. */
+  requireBusinessPermission(groups: string[], area: "inventory" | "featureCms", operation: "read" | "write" | "admin") {
+    if (!hasBusinessPermission(groups, area, operation)) throw new SecurityError("INSUFFICIENT_PERMISSION");
   }
 
   private requireApproved({ user, device, session }: Actor) {
@@ -219,18 +277,43 @@ export class SecurityService {
   }
   private async touch({ session, device }: Actor, ctx: Context) {
     if (this.now() - session.lastSeenAt < 60) return;
-    await this.store.write([
+    try { await this.store.write([
       { row: { ...versioned(session), lastSeenAt: this.now() }, expected: session.version },
       { row: { ...versioned(device), lastSeenAt: this.now(), lastIp: safeText(ctx.ip, 64), userAgent: safeText(ctx.userAgent, 240) }, expected: device.version },
-    ]);
+    ]); } catch (error) {
+      // Parallel image/API requests may update activity first. Never overwrite a
+      // concurrent revocation or token rotation with stale session fields.
+      if (!(error instanceof SecurityError) || error.code !== "STALE_RECORD") throw error;
+      const [currentSession, currentDevice, user] = await Promise.all([
+        this.store.get<Session>(session.id), this.store.get<Device>(device.id), this.store.get<User>("user#" + session.sub),
+      ]);
+      if (!currentSession || currentSession.revoked || currentSession.expiresAt <= this.now() ||
+        !user?.enabled || user.generation !== session.userGeneration ||
+        !currentDevice || currentDevice.status !== "approved" || currentDevice.generation !== session.deviceGeneration)
+        throw new SecurityError("DEVICE_REVOKED");
+    }
   }
-  private async tokens(actor: Actor) {
+  private async tokens(actor: Actor, attempt = 0): Promise<Tokens> {
     const tokens = await this.vault.open<Tokens>(actor.session.vault);
     if (tokens.expiresAt > this.now() + 30) return tokens;
     // Rotation must be serialized across workers. CAS a lease before using the old refresh token.
     const lease = { ...versioned(actor.session), refreshLeaseUntil: this.now() + 30 };
-    if (Number(actor.session.refreshLeaseUntil ?? 0) > this.now()) throw new SecurityError("RETRY_LATER", 409);
-    await this.store.write([{ row: lease, expected: actor.session.version }]);
+    const waitForRefresh = async () => {
+      if (attempt >= 12) throw new SecurityError("RETRY_LATER", 409);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const session = await this.store.get<Session>(actor.session.id);
+      const user = await this.store.get<User>(actor.user.id);
+      const device = await this.store.get<Device>(actor.device.id);
+      if (!session || session.revoked || !user?.enabled || user.generation !== session.userGeneration ||
+        !device || device.generation !== session.deviceGeneration) throw new SecurityError("ACCOUNT_DISABLED");
+      return this.tokens({ session, user, device }, attempt + 1);
+    };
+    if (Number(actor.session.refreshLeaseUntil ?? 0) > this.now()) return waitForRefresh();
+    try { await this.store.write([{ row: lease, expected: actor.session.version }]); }
+    catch (error) {
+      if (error instanceof SecurityError && error.code === "STALE_RECORD") return waitForRefresh();
+      throw error;
+    }
     const refreshed = await this.provider.refresh(tokens);
     if (refreshed.sub !== actor.user.sub || !permitted(refreshed.groups)) throw new SecurityError("ACCOUNT_DISABLED");
     const freshUser = await this.store.get<User>(actor.user.id);

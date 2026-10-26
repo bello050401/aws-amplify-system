@@ -17,11 +17,19 @@
 <button id="enroll" hidden>パスキーを登録</button><button id="passkey-again" hidden>パスキーで本人確認</button>
 <button id="refresh-status" class="secondary">承認状況を確認</button>
 <button id="probe" hidden>承認済みアクセスを確認</button><p id="probe-result" role="status"></p>
-<details id="re-register" hidden><summary>端末を登録し直す</summary><p>管理者に確認してから操作してください。新しい端末承認が必要になります。</p><button id="new-device" class="secondary">新しい登録を申請する</button></details></section>
+</section><details id="re-register" class="card" hidden><summary>端末を登録し直す</summary><p>管理者に確認してから操作してください。新しい端末承認が必要になります。</p><button id="new-device" class="secondary">新しい登録を申請する</button></details>
 <section id="admin" hidden><div class="heading"><h2>端末の管理</h2><button id="reload-devices" class="small secondary">再読み込み</button></div>
 <p>承認は、本人との対面・電話などで申請番号を確認してから行ってください。申請だけでは業務データを利用できません。</p>
 <div id="devices"></div><button id="more-devices" class="secondary" hidden>続きを表示</button>
-<h2>スタッフ</h2><div id="users"></div><button id="more-users" class="secondary" hidden>続きを表示</button>
+<h2>スタッフ</h2><details><summary>スタッフを追加</summary><form id="create-staff-form">
+<label>メールアドレス<input id="staff-email" type="email" autocomplete="off" required maxlength="256"></label>
+<label>権限<select id="staff-role"><option value="EDITOR">編集者</option><option value="VIEWER">閲覧のみ</option></select></label>
+<label class="check"><input id="staff-confirmed" type="checkbox" required>登録するスタッフ本人を確認しました</label>
+<button type="submit">スタッフを作成</button></form>
+<div id="staff-created" hidden><p>初回パスワードを本人へ直接伝えてください。メールは送信しません。初回のみ変更が必要です。</p>
+<label>初回パスワード<input id="staff-temporary-password" type="password" readonly autocomplete="off"></label>
+<button id="show-staff-password" class="secondary">表示する</button><button id="close-staff-password" class="secondary">確認しました</button></div></details>
+<div id="users"></div><button id="more-users" class="secondary" hidden>続きを表示</button>
 <h2>アクセスの記録</h2><button id="load-events" class="secondary">記録を表示</button><button id="export-events" class="secondary" hidden>表示した記録を書き出す</button>
 <div id="events"></div><button id="more-events" class="secondary" hidden>続きを表示</button></section>
 <p class="foot">生体情報はBELLOへ送信されません。端末によってはPINなどで本人確認します。</p></main>

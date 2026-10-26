@@ -38,6 +38,7 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import {deviceSecurityEnabled} from '../security/serverRuntime';
 import { runWithUserPoolServerContext } from "@/lib/amplify/userPoolServer";
 import { requestCache } from "@/lib/amplify/requestCache";
 import { authorizeOperation, resolveActorContext, type AuthConfig } from "./auth";
@@ -431,8 +432,8 @@ function readRuntimeConfigFromEnv(): RuntimeConfig | null {
 
 function buildPresignGetUrl(s3Client: S3Client, bucketName: string, expirySeconds: number): (s3Key: string) => Promise<string> {
   return async (s3Key: string) => {
-    const command = new GetObjectCommand({ Bucket: bucketName, Key: s3Key });
-    return getSignedUrl(s3Client, command, { expiresIn: expirySeconds });
+    const command = new GetObjectCommand({ Bucket: bucketName, Key: s3Key, ResponseCacheControl: 'private, no-store' });
+    return getSignedUrl(s3Client, command, { expiresIn: deviceSecurityEnabled()?Math.min(expirySeconds,30):expirySeconds });
   };
 }
 
@@ -474,7 +475,7 @@ export function getPhotoRegistrationWebAdapter(): PhotoRegistrationWebAdapter | 
     authConfig,
     presignGetUrl: buildPresignGetUrl(s3Client, config.bucketName, 900),
     presignDownloadUrl: (Key, fileName, expiresIn=60) => getSignedUrl(s3Client, new GetObjectCommand({Bucket:config.bucketName, Key,
-      ResponseContentDisposition: "attachment; filename*=UTF-8''" + encodeURIComponent(fileName)}), {expiresIn}),
+      ResponseCacheControl:'private, no-store',ResponseContentDisposition: "attachment; filename*=UTF-8''" + encodeURIComponent(fileName)}), {expiresIn:deviceSecurityEnabled()?Math.min(expiresIn,30):expiresIn}),
     purgeDeletedAsset: async asset => {
       const result = await cleanupPhotoAssets(ddb, s3Client, config.tableName, config.bucketName, Date.now(), new Set([asset.photoBatchId]), new Set([asset.id]));
       if (result.failures.length || result.purged !== 1) {

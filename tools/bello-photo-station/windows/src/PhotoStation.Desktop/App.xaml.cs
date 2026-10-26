@@ -12,6 +12,9 @@ public partial class App : System.Windows.Application
     internal static Task<string>? LightroomStartup { get; private set; }
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Headless child process: no SD scan, Lightroom, UI, history or login access.
+        if (e.Args.Contains("--sign-device-request")) { Shutdown(DeviceRequestSigner.Run()); return; }
+        Environment.SetEnvironmentVariable("BELLO_DEVICE_SIGNER_EXE", Environment.ProcessPath);
         // Distribution smoke checks must not restore the operator's real login,
         // scan SD cards, or run retention against their existing photo history.
         if (e.Args.Contains("--installation-check"))

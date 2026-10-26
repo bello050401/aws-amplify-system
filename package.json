@@ -10,7 +10,7 @@
     "postinstall": "node scripts/ensure-amplify-bundled-deps.cjs",
     "predev": "node scripts/generate-mercari-masters-data.cjs",
     "dev": "next dev",
-    "prebuild": "node scripts/generate-mercari-masters-data.cjs",
+    "prebuild": "node scripts/generate-mercari-masters-data.cjs && node scripts/build-security-pilot.cjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -173,7 +173,8 @@
     "react-dom": "^18.3.1",
     "server-only": "^0.0.1",
     "sharp": "^0.35.5",
-    "@aws-sdk/client-kms": "3.1119.0"
+    "@aws-sdk/client-kms": "3.1119.0",
+    "@aws-sdk/client-cognito-identity-provider": "3.1119.0"
   },
   "devDependencies": {
     "@aws-amplify/backend": "^1.6.0",
@@ -204,6 +205,9 @@
     "brace-expansion@>=2 <3": "^2.1.7",
     "@anthropic-ai/sdk": {
       "zod": "^4.6.7"
+    },
+    "exceljs": {
+      "uuid": "11.1.1"
     }
   }
 }

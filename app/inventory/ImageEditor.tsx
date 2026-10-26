@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { uploadData, remove } from "aws-amplify/storage";
+import { uploadData, remove } from "@/lib/security/browserStorage";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
 import { useInventoryPreviewUrl } from "./InventoryPreviewUrls";
 

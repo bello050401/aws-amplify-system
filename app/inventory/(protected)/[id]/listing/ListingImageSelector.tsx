@@ -11,7 +11,7 @@ import {
   initialListingSelection,
   type ListingImageCandidate,
 } from "@/lib/photoRegistration/inventoryListingAdapter";
-import {uploadData} from "aws-amplify/storage";
+import {uploadData} from "@/lib/security/browserStorage";
 import {ConfigureAmplifyClientSide} from "@/lib/amplify/configureClient";
 import {getListingOriginalDownloadAction} from "@/app/actions/listingImages";
 import { InventoryThumbnail } from "../../../InventoryThumbnail";

@@ -62,3 +62,6 @@ public/staff-app/
 tools/bello-security-pilot/dist/
 cdk.out/
 artifacts/security-*/
+public/security-assets/
+public/security-worker.js
+tools/bello-security-pilot/photo-dist/

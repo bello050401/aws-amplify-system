@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { signIn, signOut, confirmSignIn, getCurrentUser } from "aws-amplify/auth";
+import { signIn, signOut as legacySignOut, confirmSignIn, getCurrentUser } from "aws-amplify/auth";
 import * as Network from "expo-network";
 import * as Crypto from "expo-crypto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -8,14 +8,25 @@ import { Image } from "expo-image";
 import { API_ORIGIN, clearLocalSession, configureMobileAuth, readInventory, readInventoryThumbnails, readInventoryDetail, readInventoryOptions, uploadInventoryPhoto, readSales, readMobileSession, saveInventory, mobileWritesEnabled, StaffSessionError, type MobileSession } from "../runtime/service";
 import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
+import {MemoryKeyValueStore} from '../domain/memoryStore';
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
 import { removeInventory, removeInventoryPhotoAsset } from "../runtime/service";
 import {sellInventory,splitInventory,checkSplitBarcode} from '../runtime/service';
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 import type { InventorySearchInput } from "../domain/search";
+import { mobileDeviceSecurityEnabled } from "../runtime/service";
+import {SESSION_INVALID_MESSAGE} from '../../../lib/security/sessionInvalidation';
 
 function connected(state: Network.NetworkState) { return state.isConnected !== false && state.isInternetReachable !== false; }
+async function signOut() {
+  await clearLocalSession();
+  if (mobileDeviceSecurityEnabled() && typeof window !== "undefined") {
+    window.location.assign("/security?logout=1");
+    return new Promise<void>(() => {});
+  }
+  return legacySignOut();
+}
 const loginModeKey = `bello.login-mode.${API_ORIGIN}`;
 export function LiveApp() {
   const requestedMode = useRef(requestedLoginMode(typeof window === "undefined" ? "" : window.location?.search ?? "")).current;
@@ -35,6 +46,10 @@ export function LiveApp() {
     try {
       const online = connected(await Network.getNetworkStateAsync()); setOffline(!online);
       await configureMobileAuth(online); if (!mounted.current) return;
+      if (mobileDeviceSecurityEnabled()) {
+        try { const session=await readMobileSession(); setAccess(session);setCanEdit(session.role!=="VIEWER");setUserId(session.owner);setReady(true);return; }
+        catch { if(typeof window!=="undefined") window.location.assign("/security?returnTo="+encodeURIComponent("/staff-app/index.html"));return; }
+      }
       const rememberedMode = requestedMode ?? await AsyncStorage.getItem(loginModeKey).catch(() => null);
       if (!mounted.current) return;
       setLoginMode(rememberedMode === "staff" ? "staff" : "account");
@@ -65,9 +80,22 @@ export function LiveApp() {
     }).catch(() => { if (active) { setAccess(null); setCanEdit(false); } });
     return () => { active = false; };
   }, [userId, offline]);
+  // Recheck on returning to the app, including a browser restored from BFCache.
+  // No background polling or user interaction is required while the session is valid.
+  useEffect(()=>{
+    if(!userId||!mobileDeviceSecurityEnabled()||typeof document==='undefined')return;
+    let active=true;
+    const verify=()=>{if(document.visibilityState==='hidden')return;setAccess(null);setCanEdit(false);
+      void readMobileSession().then(session=>{if(active&&session.owner===userId){setAccess(session);setCanEdit(session.role!=='VIEWER');}})
+        .catch(()=>{if(active){setAccess(null);setCanEdit(false);setMessage('端末の承認・通信状態を確認してください。');}});};
+    const invalid=(event:MessageEvent)=>{if(event.source===navigator.serviceWorker?.controller&&event.data?.type===SESSION_INVALID_MESSAGE){setAccess(null);setCanEdit(false);setMessage('この端末のログイン・承認状態を確認してください。');}};
+    navigator.serviceWorker?.addEventListener('message',invalid);
+    document.addEventListener('visibilitychange',verify);window.addEventListener('pageshow',verify);
+    return()=>{active=false;navigator.serviceWorker?.removeEventListener('message',invalid);document.removeEventListener('visibilitychange',verify);window.removeEventListener('pageshow',verify);};
+  },[userId]);
   const ports = useMemo<StaffAppPorts | null>(() => {
     if (!userId) return null;
-    const snapshot = new SnapshotStore(AsyncStorage, userId, API_ORIGIN);
+    const snapshot = new SnapshotStore(mobileDeviceSecurityEnabled()?new MemoryKeyValueStore():AsyncStorage, userId, API_ORIGIN);
     const loadInventoryPage = async (input?: InventorySearchInput) => {
       try { return await readInventory(input); }
       catch (error) {
@@ -153,10 +181,17 @@ export function LiveApp() {
       await Promise.all([Image.clearDiskCache(), Image.clearMemoryCache()]);
     } catch { setMessage("ログアウト処理を完了できませんでした。再試行してください。"); }
   };
-  if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}
+  const approvalUnavailable=mobileDeviceSecurityEnabled()&&(offline||access?.owner!==userId);
+  if(ports)return <View style={{flex:1}}>{approvalUnavailable&&<View style={s.root}>
+    <Text style={s.label}>{offline?'通信できる場所で再開してください。':'端末の承認を確認しています。'}</Text>
+    {message&&<Text accessibilityRole="alert" style={s.error}>{message}</Text>}
+    <Pressable accessibilityRole="button" onPress={setup} style={s.button}><Text style={s.white}>接続を確認する</Text></Pressable>
+    <Pressable accessibilityRole="button" onPress={logout}><Text>ログアウト</Text></Pressable>
+  </View>}
+  <View style={{flex:1,display:approvalUnavailable?'none':'flex'}} accessibilityElementsHidden={approvalUnavailable} importantForAccessibility={approvalUnavailable?'no-hide-descendants':'auto'}><StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={!approvalUnavailable && canEdit && mobileWritesEnabled()}
     canIssueDocuments={!offline && access?.owner===userId && access.role==="ADMIN"}
     canSellInventory={access?.owner===userId && access.role==="ADMIN"}
-    features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES} />;
+    features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES} /></View></View>;
   return <View style={s.root}><Image source={require("../../assets/bello-system-icon.png")} style={s.brand} contentFit="contain" accessibilityLabel="Bello SYSTEM"/>
     {message && <Text accessibilityRole="alert" style={s.error}>{message}</Text>}
     {!ready ? <Pressable accessibilityRole="button" onPress={setup} style={s.button}><Text style={s.white}>接続を確認する</Text></Pressable> : <>

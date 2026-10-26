@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { cookies } from "next/headers";
 import sharp from "sharp";
-import { getUrl, uploadData } from "aws-amplify/storage/server";
+import { getUrl, uploadData } from "@/lib/security/serverStorage";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail } from "@/lib/inventory/queries";

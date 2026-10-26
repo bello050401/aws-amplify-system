@@ -1,7 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import sharp from "sharp";
-import { copy, getUrl, uploadData } from "aws-amplify/storage/server";
+import { copy, getUrl, uploadData } from "@/lib/security/serverStorage";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
 

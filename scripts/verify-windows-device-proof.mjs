@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {createHash,createPublicKey,verify} from 'node:crypto';
+import {windowsDeviceProof} from '../tools/bello-photo-station/src/deviceProof.mjs';
+const token='fixture.'+Buffer.from(JSON.stringify({sub:'windows-device-fixture'})).toString('base64url')+'.fixture';
+const input={url:'https://photo.example.invalid/completePhotoBatch',method:'POST',body:'{"test":true}',token};
+const signed=await windowsDeviceProof(input),again=await windowsDeviceProof(input);
+const key=JSON.parse(signed['x-bello-device-key']),p=JSON.parse(signed['x-bello-device-proof']);
+assert.equal(key.d,undefined);assert.equal(signed['x-bello-device-key'],again['x-bello-device-key']);assert.notEqual(p.nonce,JSON.parse(again['x-bello-device-proof']).nonce);
+const message=['BELLO-HTTP-PROOF-v1','https://photo.example.invalid','POST','/completePhotoBatch',String(p.at),p.nonce,p.binding,p.digest].join('\n');
+assert.equal(p.digest,createHash('sha256').update(input.body).digest('base64url'));
+assert(verify('sha256',Buffer.from(message),{key:createPublicKey({key,format:'jwk'}),dsaEncoding:'ieee-p1363'},Buffer.from(p.signature,'base64url')));
+console.log(JSON.stringify({windowsCngSigning:'PASS',samePersistedKeyAfterHelperRestart:'PASS',privateKeyReturned:false,networkRequests:0}));

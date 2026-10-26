@@ -45,11 +45,12 @@ export function createStockSplitService(p:StockSplitPorts) {
   const inherited:Row={};
   for(const key of ['name','unit','statusId','locationId','note','purchasePrice','salePrice',...ALL_EXTENDED_FIELDS.map(f=>f.key)])if(source[key]!==undefined)inherited[key]=source[key];
   const child={...inherited,...(r.splitName!==undefined?{name:r.splitName.trim()}:{}),id,sku,quantity:r.quantity,barcode:r.barcode.trim(),damageNotes:r.damageNotes,
-   categoryId:cats[0]??null,categoryIds:cats,images,sourceSystem:'BELLO',listingPartition:'ACTIVE',createdAt:now,updatedAt:now,listUpdatedAt:now,createdBy:actor,updatedBy:actor,
+   ...(cats.length?{categoryId:cats[0]}:{}),categoryIds:cats,images,sourceSystem:'BELLO',listingPartition:'ACTIVE',createdAt:now,updatedAt:now,listUpdatedAt:now,createdBy:actor,updatedBy:actor,
    customFields:stringifyCustomFields({...productCustomFields(custom),__belloStockSplit:{sourceInventoryId:source.id,operation:'STOCK_SPLIT',mutationId:r.mutationId}}),__typename:'Inventory'};
   const writes:InventoryTransaction=[
    {Update:{TableName:p.table('Inventory'),Key:{id:source.id},UpdateExpression:'SET '+entries.map((_,i)=>`#f${i}=:v${i}`).join(', '),ConditionExpression:'updatedAt=:version AND quantity=:quantity AND attribute_not_exists(deletedAt) AND attribute_not_exists(outboundBatchId) AND attribute_not_exists(outboundArrivalBatchId)',ExpressionAttributeNames:Object.fromEntries(entries.map(([key],i)=>[`#f${i}`,key])),ExpressionAttributeValues:{...Object.fromEntries(entries.map(([,value],i)=>[`:v${i}`,value])),':version':source.updatedAt,':quantity':source.quantity}}},
-   {Put:{TableName:p.table('Inventory'),Item:child,ConditionExpression:'attribute_not_exists(id)'}},
+   // Sparse-index keys cannot contain NULL. Match normal inventory creation.
+   {Put:{TableName:p.table('Inventory'),Item:Object.fromEntries(Object.entries(child).filter(([,value])=>value!==null&&value!==undefined)),ConditionExpression:'attribute_not_exists(id)'}},
    ...persistence.categoryLinkChanges(id,[],cats,now),
    {Put:{TableName:p.table('InventoryHistory'),Item:{id:receiptId,inventoryId:source.id,fieldName:'在庫分け',oldValue:JSON.stringify({quantity:source.quantity,name:source.name}),newValue:JSON.stringify({hash,result,name:r.sourceName?.trim()??source.name,splitName:child.name}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'},ConditionExpression:'attribute_not_exists(id)'}},
    {Put:{TableName:p.table('InventoryHistory'),Item:{id:receiptId+':SPLIT',inventoryId:id,fieldName:'在庫分け',newValue:JSON.stringify({sourceInventoryId:source.id,quantity:r.quantity,name:child.name}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}}

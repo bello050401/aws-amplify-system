@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createHash } from "node:crypto";
 import sharp from "sharp";
-import { uploadData } from "aws-amplify/storage/server";
+import { uploadData } from "@/lib/security/serverStorage";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { getMobileSession } from "@/lib/mobile/session";
 export const dynamic = "force-dynamic";

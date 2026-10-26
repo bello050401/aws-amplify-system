@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { signOut } from "aws-amplify/auth";
+import { signOut } from "@/lib/security/browserLogout";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
 
 const links = [

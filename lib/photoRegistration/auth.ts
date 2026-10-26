@@ -20,7 +20,6 @@ import type { TrustedClaims } from "./ports";
 /** §47の3 role。既存Cognito groupのADMIN/EDITORをADMIN/STAFFへ写像する。VIEWERは常に拒否 (読み取りAPIも含め、この層に到達させない)。 */
 const GROUP_TO_ROLE: Record<string, PhotoActorRole> = {
   ADMIN: "ADMIN",
-  Admins: "ADMIN",
   EDITOR: "STAFF",
   PHOTO_DEVICE: "PHOTO_DEVICE",
 };

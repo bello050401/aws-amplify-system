@@ -9,10 +9,10 @@ import {reviewEcListingAction,executeEcListingAction} from '@/app/actions/ecList
 import {getChannelListing} from '@/lib/listing/service';
 import {readBaseItem,claimBaseManual,finishBaseManual} from '@/lib/listing/base/manualLifecycle';
 import {setManualBaseStock} from '@/lib/listing/base/adapter';
-import type {EcChannel,EcReview} from '@/lib/listing/ecManagement';
+import type {EcChannel} from '@/lib/listing/ecManagement';
+import type {PostSaleRow as Row,PostSalePlan} from './postSaleTypes';
+export type {PostSalePlan} from './postSaleTypes';
 
-type Row={channel:EcChannel;externalId:string;operation:'STOP'|'STOCK';state:'READY'|'BLOCKED'|'DONE'|'VERIFY_REQUIRED';message:string;targetQuantity?:number;beforeQuantity?:number;unitsPerListing?:number;review?:EcReview};
-export type PostSalePlan={id:string;candidateId:string;sourceId:string;sourceVersion:string;soldChannel:EcChannel|null;remaining:number;actor:string;expiresAt:number;rows:Row[];state:'REVIEW'|'EXECUTING'|'COMPLETE'|'ATTENTION';token:string;updatedAt:string};
 const channels=['BASE','MERCARI_SHOPS','YAHOO'] as const;
 const fromMarket=(market:string):EcChannel|null=>market==='ベイス'?'BASE':market==='メルカリSHOP'?'MERCARI_SHOPS':market==='ヤフオク'?'YAHOO':null;
 async function context(candidateId:string){

@@ -18,6 +18,7 @@ import { isMainModule } from './isMainModule.mjs';
 import { SettingsStore } from "./settings.mjs";
 import { ProcessingHistoryStore } from "./history.mjs";
 import { PhotoRegistrationApiClient } from "./client.mjs";
+import {windowsDeviceProof} from './deviceProof.mjs';
 import { runEditAndUploadPipeline } from "./runPipeline.mjs";
 import { formatSummary } from "./summary.mjs";
 import { collectSources as collectAllSources, validateSelections } from './presetWorkflow.mjs';
@@ -63,7 +64,9 @@ export async function main(argv = process.argv.slice(2)) {
   const settingsStore = new SettingsStore(args["settings-file"]);
   const { active: settings } = await settingsStore.load();
   const history = new ProcessingHistoryStore(args["history-file"]);
-  const api = destination === 'web' ? new PhotoRegistrationApiClient({ endpoint: args["api-endpoint"], tokenProvider: async () => token }) : null;
+  const deviceProofProvider=process.env.BELLO_PHOTO_DEVICE_APPROVAL==='enforced'?windowsDeviceProof:undefined;
+  const api = destination === 'web' ? new PhotoRegistrationApiClient({ endpoint: args["api-endpoint"], tokenProvider: async () => token,deviceProofProvider }) : null;
+  if(api&&deviceProofProvider){const registered=await api.call('registerDevice',{name:args['device-id']});if(registered.pending)throw Error(`PhotoStationの端末承認待ちです。申請番号 ${registered.verificationCode} を管理者に伝えてください。`);args['device-id']=registered.deviceId;}
   const sources = await collectAllSources(args["source-dir"]);
   if(args['archive-only']==='true'){
     if(destination!=='web'||!validateValidationToken(token)||args['api-endpoint'].replace(/\/$/,'')!=='https://dq30ujzf5d.execute-api.us-west-2.amazonaws.com')throw Error('取込写真の送信先・ログインを確認してください。');

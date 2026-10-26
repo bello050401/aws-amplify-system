@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { copy, getUrl, remove, uploadData } from "aws-amplify/storage/server";
+import { copy, getUrl, remove, uploadData } from "@/lib/security/serverStorage";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { generateThumbnailFromBytes, INVENTORY_IMAGE_CACHE_CONTROL } from "./thumbnail";
 import { newInventoryImageKey } from "./imageKeys";

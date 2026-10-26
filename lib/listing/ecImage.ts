@@ -2,7 +2,7 @@ import "server-only";
 import sharp from "sharp";
 import { createHash } from "node:crypto";
 import { cookies } from "next/headers";
-import { uploadData, getUrl } from "aws-amplify/storage/server";
+import { uploadData, getUrl } from "@/lib/security/serverStorage";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { resolveListingImageDownloadUrl } from "./mercari/csv/buildExportRows";
 import type { ListingImageRef } from "./types";

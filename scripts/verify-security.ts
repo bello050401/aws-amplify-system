@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { SecurityService } from "../lib/security/service";
-import { hash } from "../lib/security/crypto";
+import { hash,randomId } from "../lib/security/crypto";
+import { requestProofMessage } from '../lib/security/requestProof';
+import {issueServerGrant,readServerGrant} from '../lib/security/serverGrant';
+import {authorizePhotoDevice} from '../lib/security/photoDevice';
 import { securityHttp, COOKIE } from "../lib/security/http";
 import { hasBusinessPermission } from "../lib/security/accessPolicy";
 import { assertCutoverReady, cutoverReadiness } from "../lib/security/rolloutPolicy";
@@ -60,6 +63,34 @@ await test("Approval requires contact verification and matching code",async()=>{
 await test("Staff cannot approve a device",async()=>{await rejects(()=>call(staff,{action:"devices"}),"DEVICE_PENDING");});
 await test("Approval makes existing pending session usable",async()=>{const d=await device(staff);await call(admin,{action:"approve",deviceId:d.id,expectedVersion:d.version,personConfirmed:true,verificationCode:d.verificationCode});assert.equal((await call(staff,{action:"businessProbe"})).ok,true);});
 await test("Approved staff still cannot use admin API",async()=>{await rejects(()=>call(staff,{action:"devices"}),"ADMIN_REQUIRED");});
+const signedRequest=async(b:Browser,method='POST',target='/api/mobile/inventory',payload='{}')=>{
+ const status=await call(b,{action:'status'}),p={version:1 as const,at:time,nonce:randomId(),binding:status.requestBinding,digest:hash(payload)};
+ return{method,target,digest:p.digest,proof:{...p,signature:sign('sha256',Buffer.from(requestProofMessage(origin,method,target,p)),{key:b.keys.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url')}};
+};
+await test('Business request binds method, target, exact body and session',async()=>{
+ const r=await signedRequest(staff);for(const change of [{method:'DELETE'},{target:'/api/mobile/inventory/other'},{digest:hash('{"quantity":999}')},{proof:{...r.proof,binding:randomId()}}])await rejects(()=>service.authorizeRequest(staff.token,{...r,...change},ctx),'INVALID_DEVICE_PROOF');
+ const a=await service.authorizeRequest(staff.token,r,ctx);assert.equal(a.sub,'staff');assert(a.tokens.access);
+ await rejects(()=>service.authorizeRequest(staff.token,r,ctx),'STALE_RECORD');
+});
+await test('Business proof cannot be used by a copied-cookie browser',async()=>{
+ const r=await signedRequest(staff);r.proof.signature=sign('sha256',Buffer.from(requestProofMessage(origin,r.method,r.target,r.proof)),{key:browser().keys.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url');
+ await rejects(()=>service.authorizeRequest(staff.token,r,ctx),'INVALID_DEVICE_PROOF');
+});
+await test('Business proof expires without depending on cleanup TTL',async()=>{const r=await signedRequest(staff);time+=31;await rejects(()=>service.authorizeRequest(staff.token,r,ctx),'INVALID_DEVICE_PROOF');});
+await test('Internal SSR grant rejects caller forgery, stale timestamp and different cookie',async()=>{
+ const key=randomId(),input={at:time,binding:hash(staff.token),sub:'staff',username:'staff',groups:['EDITOR'],deviceId:'test',tokens:identity('staff').tokens},grant=issueServerGrant(input,key);
+ assert(!Buffer.from(grant.split('.')[0],'base64url').toString().includes('tokens'));
+ assert.equal(readServerGrant(grant,staff.token,key,time).sub,'staff');for(const [header,token,at] of [[grant+'x',staff.token,time],[grant,'stolen',time],[grant,staff.token,time+61]])assert.throws(()=>readServerGrant(String(header),String(token),key,Number(at)),/DEVICE_PROOF_REQUIRED/);
+});
+await test('PhotoStation key registration, approval, replay, revocation and account suspension',async()=>{
+ const machine=browser(),sub='photo-fixture',signPhoto=(register:boolean)=>{const body=register?'{}':'{"batch":"test"}',target=register?'/registerDevice':'/completePhotoBatch',p={version:1 as const,at:time,nonce:randomId(),binding:hash('photo#'+sub),digest:hash(body)};return{sub,groups:['PHOTO_DEVICE'],legacyDeviceId:'STATION-1',key:machine.publicKey,proof:{...p,signature:sign('sha256',Buffer.from(requestProofMessage(origin,'POST',target,p)),{key:machine.keys.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url')},method:'POST',target,body,register};};
+ const registered=await authorizePhotoDevice(store,signPhoto(true),ctx,time);assert(registered.pending);
+ await rejects(()=>authorizePhotoDevice(store,signPhoto(false),ctx,time),'DEVICE_PENDING');
+ let d=(await store.list('device')).items.find(x=>x.sub===sub)!;await store.write([{expected:d.version,row:{...d,version:d.version+1,status:'approved'}}]);
+ const request=signPhoto(false);assert.equal((await authorizePhotoDevice(store,request,ctx,time)).deviceId,'STATION-1');await rejects(()=>authorizePhotoDevice(store,request,ctx,time),'STALE_RECORD');
+ d=(await store.get(d.id))!;await store.write([{expected:d.version,row:{...d,version:d.version+1,status:'revoked'}}]);await rejects(()=>authorizePhotoDevice(store,signPhoto(false),ctx,time),'DEVICE_REVOKED');
+ const u=(await store.get('user#'+sub))!;await store.write([{expected:u.version,row:{...u,version:u.version+1,enabled:false}}]);await rejects(()=>authorizePhotoDevice(store,signPhoto(true),ctx,time),'ACCOUNT_DISABLED');
+});
 await test("Changing IP does not require reapproval",async()=>{assert.equal((await call(staff,{action:"businessProbe"},{...ctx,ip:"198.51.100.33"})).ok,true);});
 await test("Another browser using same account/passkey needs separate approval",async()=>{const other=browser();await login(other,"staff");await rejects(()=>call(other,{action:"businessProbe"}),"DEVICE_PENDING");});
 await test("Browser reopen with same key and cookie stays logged in",async()=>{const reopened={...staff};assert.equal((await call(reopened,{action:"status"})).approved,true);});
@@ -82,6 +113,15 @@ await test("HTTP untrusted origin rejected",async()=>{const r=await securityHttp
 await test("Audit contains no password, credential, raw token or key",async()=>{const rows=await store.list("event");for(const row of rows.items)for(const forbidden of ["password","credential","vault","privateKey","accessToken","refreshToken"])assert(!Object.hasOwn(row,forbidden));});
 await test("Fresh passkey required for aged administrator control",async()=>{time+=301;await rejects(()=>call(admin,{action:"devices"}),"REAUTHENTICATE");});
 await test("Reauthentication with same key does not require another approval",async()=>{await login(admin,"admin");assert.equal((await call(admin,{action:"status"})).approved,true);});
+await test('Concurrent expired requests refresh once and all remain usable',async()=>{
+ const b=browser();await login(b,'viewer');await trustedBootstrap(b);time+=301;
+ const before=refreshCount;const results=await Promise.all(Array.from({length:6},()=>call(b,{action:'businessProbe'})));
+ assert(results.every(x=>x.ok));assert.equal(refreshCount-before,1);
+});
+await test('Session from another deployment origin cannot be reused',async()=>{
+ const other=new SecurityService(store,fixtureVault,provider,'https://other.example.test',()=>time);
+ await rejects(()=>other.challenge(admin.token,hash('{}'),{...ctx,origin:other.origin}),'SESSION_EXPIRED');
+});
 await test("Role demotion is enforced when Cognito tokens refresh",async()=>{const b=browser();await login(b,"admin");await trustedBootstrap(b);profiles.admin.groups=["EDITOR"];time+=301;await rejects(()=>call(b,{action:"devices"}),"ADMIN_REQUIRED");profiles.admin.groups=["ADMIN"];await login(admin,"admin");});
 await test("Concurrent proof replay succeeds at most once",async()=>{const p=await proof(admin,{action:"status"}),r=await Promise.allSettled([service.perform(admin.token,p.payload,p.proof,ctx),service.perform(admin.token,p.payload,p.proof,ctx)]);assert.equal(r.filter(x=>x.status==="fulfilled").length,1);});
 await test("Refresh outage does not bypass authentication or extend expiry",async()=>{const b=browser();await login(b,"cms");await trustedBootstrap(b);const before=await store.get<Row>("session#"+hash(b.token));time+=301;refreshFailure=true;await rejects(()=>call(b,{action:"businessProbe"}),"UPSTREAM_UNAVAILABLE");refreshFailure=false;assert.equal((await store.get<Row>("session#"+hash(b.token)))!.expiresAt,before!.expiresAt);await rejects(()=>call(b,{action:"businessProbe"}),"RETRY_LATER");time+=31;assert.equal((await call(b,{action:"businessProbe"})).ok,true);});
@@ -89,7 +129,9 @@ await test("Next-day personal session renews without login or approval",async()=
  const b=browser();await login(b,"viewer");await trustedBootstrap(b);time+=86400;assert.equal((await call(b,{action:"businessProbe"})).ok,true);assert(refreshCount>0);
 });
 await test("Shared device expires after 30 minute idle",async()=>{const b=browser();await login(b,"viewer","passkey",true);await trustedBootstrap(b);time+=1801;await rejects(()=>call(b,{action:"businessProbe"}),"SESSION_EXPIRED");});
-await test("Account suspension invalidates all prior sessions",async()=>{await login(admin,"admin");const b=browser();await login(b,"viewer");await trustedBootstrap(b);const u=(await store.get<User>("user#viewer"))!;await call(admin,{action:"disableUser",sub:u.sub,expectedVersion:u.version});await rejects(()=>call(b,{action:"businessProbe"}),"ACCOUNT_DISABLED");await rejects(()=>login(browser(),"viewer"),"ACCOUNT_DISABLED");});
+const suspendedViewer=browser();
+await test("Account suspension invalidates all prior sessions",async()=>{await login(admin,"admin");const b=suspendedViewer;await login(b,"viewer");await trustedBootstrap(b);const u=(await store.get<User>("user#viewer"))!;await call(admin,{action:"disableUser",sub:u.sub,expectedVersion:u.version});await rejects(()=>call(b,{action:"businessProbe"}),"ACCOUNT_DISABLED");await rejects(()=>login(browser(),"viewer"),"ACCOUNT_DISABLED");});
+await test('Reenabling an account cannot resurrect its older session',async()=>{const u=(await store.get<User>('user#viewer'))!;await call(admin,{action:'enableUser',sub:u.sub,expectedVersion:u.version});await rejects(()=>call(suspendedViewer,{action:'businessProbe'}),'ACCOUNT_DISABLED');const b=browser();await login(b,'viewer');await trustedBootstrap(b);assert.equal((await call(b,{action:'businessProbe'})).ok,true);await rejects(()=>call(suspendedViewer,{action:'businessProbe'}),'ACCOUNT_DISABLED');});
 await test("Personal session has an absolute expiry, regardless of TTL deletion",async()=>{time+=31*86400;await rejects(()=>call(admin,{action:"businessProbe"}),"SESSION_EXPIRED");});
 await test("Login attempts are rate limited",async()=>{for(let i=0;i<10;i++)await login(browser(),"admin");await rejects(()=>login(browser(),"admin"),"TOO_MANY_REQUESTS");});
 await test("Store transactions never partially modify records on CAS error",async()=>{const a={id:"atomic-a",version:1},b={id:"atomic-b",version:1};await store.write([{row:a,expected:null},{row:b,expected:null}]);await rejects(()=>store.write([{row:{...a,version:2},expected:1},{row:{...b,version:2},expected:99}]),"STALE_RECORD");assert.equal((await store.get(a.id))?.version,1);});

@@ -1,3 +1,6 @@
+import {clearLegacyBrowserCredentials} from '../../lib/security/browserMigration';
+import {isTerminalSessionError} from '../../lib/security/sessionInvalidation';
+clearLegacyBrowserCredentials();
 const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => element<HTMLInputElement>(id);
 const encoder = new TextEncoder();
@@ -18,6 +21,9 @@ const messages: Record<string,string> = {
   REAUTHENTICATE: "管理操作のため、パスキーでもう一度本人確認してください。",
   ACCOUNT_DISABLED: "このアカウントの利用は停止されています。",
   TOO_MANY_REQUESTS: "操作が集中しています。少し待ってからお試しください。",
+  STAFF_ALREADY_EXISTS:'このスタッフはすでに登録されています。',
+  STAFF_CREATION_UNCONFIRMED:'作成結果を確認できません。重複操作をせず、管理者が登録状況を確認してください。',
+  INVALID_STAFF_INPUT:'メールアドレス・権限・本人確認欄を確認してください。',
 };
 let keyPair: CryptoKeyPair, username = "", current: Record<string,unknown> = {};
 let busy = false, deviceCursor: string|undefined, userCursor: string|undefined, eventCursor: string|undefined;
@@ -39,6 +45,8 @@ async function saved<T>(key:string,value?:T):Promise<T|undefined>{
 }
 function showError(e:unknown){
   const code=(e as Error).message;
+  if(code==='DEVICE_REVOKED')element('re-register').hidden=false;
+  if(code==='REAUTHENTICATE'){element('passkey-again').hidden=false;element('passkey-again').textContent='管理操作のためパスキーで本人確認';}
   element("error").textContent=messages[code]??((e as Error).name==="NotAllowedError"?"本人確認をキャンセルしました。":"処理を完了できませんでした。時間をおいて再度お試しください。");element("error").hidden=false;
   if(["REAUTHENTICATE","SESSION_EXPIRED","SIGN_IN_REQUIRED"].includes(code)){
     element("passkey-again").hidden=false;
@@ -107,6 +115,21 @@ async function login(mode:"passkey"|"password"){
 }
 async function refresh(){
   current=await action({action:"status"});
+  await saved("requestBinding",String(current.requestBinding??""));
+  if (current.status === "rejected") {
+    document.body.replaceChildren();
+    document.body.className="access-rejected";
+    add(document.body,"div","警察に通報させていただきます。\n\nざまあみやがれ\n\nお前はブタ箱行きだ。");
+    return;
+  }
+  if(current.approved && document.body.dataset.business === "1") {
+    await navigator.serviceWorker.register("/security-worker.js", {scope:"/", updateViaCache:"none"});
+    await navigator.serviceWorker.ready;
+    if(!navigator.serviceWorker.controller) await new Promise<void>((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error("DEVICE_PROOF_UNAVAILABLE")),10000);
+      navigator.serviceWorker.addEventListener("controllerchange",()=>{clearTimeout(timer);resolve();},{once:true});
+    });
+  }
   element("login").hidden=true;element("session").hidden=false;
   element("status-title").textContent=({pending:"端末の承認待ち",approved:"端末は承認されています",rejected:"アクセスは許可されていません",revoked:"端末の承認が解除されています"} as Record<string,string>)[String(current.status)]??"状態確認";
   element("status-description").textContent=current.approved?"このブラウザで安全に利用を再開できます。":current.status==="pending"?"下の申請番号を管理者に伝えてください。承認が完了するまでは業務データを取得できません。":current.status==="approved"?"パスキーによる本人確認を完了してください。":"管理者に確認してください。";
@@ -116,6 +139,11 @@ async function refresh(){
   element("passkey-again").hidden=!current.passkeyRegistered||!current.needsPasskeyLogin;
   element("probe").hidden=!current.approved;element("admin").hidden=!(current.approved&&current.admin);
   element("re-register").hidden=!["rejected","revoked"].includes(String(current.status));
+  if (current.approved && document.body.dataset.business === "1" && new URLSearchParams(location.search).has("returnTo")) {
+    const target=new URLSearchParams(location.search).get("returnTo")||"/inventory";
+    location.replace(target.startsWith("/")&&!target.startsWith("//")&&!target.includes("\\")&&!target.startsWith("/security")?target:"/inventory");
+    return;
+  }
   if(current.approved&&current.admin){await load("devices");await load("users");}
 }
 function add(parent:HTMLElement,tag:string,text:string,cls?:string){const e=document.createElement(tag);e.textContent=text;if(cls)e.className=cls;parent.append(e);return e;}
@@ -143,6 +171,7 @@ async function load(kind:"devices"|"users"|"events",more=false){
       add(box,"h3",item.username);add(box,"p",item.groups.join(" / ")+" ／ "+(item.enabled?"利用中":"停止中"));
       button(box,"全端末からログアウト",async()=>{if(confirm("このスタッフの全セッションを終了しますか？")){await action({action:"logoutUser",sub:item.sub,expectedVersion:item.version});await load("users");}});
       if(item.enabled)button(box,"アカウント停止",async()=>{if(confirm("このスタッフの利用を停止しますか？")){await action({action:"disableUser",sub:item.sub,expectedVersion:item.version});await load("users");}},"danger");
+      else button(box,'利用を再開',async()=>{if(confirm('本人確認は済んでいますか？ 利用を再開します。以前のセッションは無効のままです。')){await action({action:'enableUser',sub:item.sub,expectedVersion:item.version});await load('users');}});
     }else{events.push(item);add(box,"p",date(item.at)+" ／ "+item.event+" ／ "+item.result+" ／ "+item.ip);}
   }
   if(!r.items.length&&!more)add(area,"p","該当する記録はありません。");
@@ -158,14 +187,27 @@ element("enroll").onclick=()=>run(async()=>{
   await action({action:"enrollFinish",credential:credential(c)});await login("passkey");
 });
 element("logout").onclick=()=>run(async()=>{await action({action:"logout"});location.reload();});
-element("probe").onclick=()=>run(async()=>{await action({action:"businessProbe"});element("probe-result").textContent="本人認証・暗号鍵・端末承認・権限の確認に成功しました。（本番データへの接続は行っていません）";});
+element("probe").onclick=()=>run(async()=>{await action({action:"businessProbe"});if(document.body.dataset.business==="1"){
+  const target=new URLSearchParams(location.search).get("returnTo")||"/inventory";
+  location.assign(target.startsWith("/")&&!target.startsWith("//")&&!target.includes("\\")?target:"/inventory");return;
+}element("probe-result").textContent="本人認証・暗号鍵・端末承認・権限の確認に成功しました。（本番データへの接続は行っていません）";});
 element("reload-devices").onclick=()=>run(()=>load("devices"));
 for(const kind of ["devices","users","events"] as const)element("more-"+kind).onclick=()=>run(()=>load(kind,true));
 element("load-events").onclick=()=>run(()=>load("events"));
+element<HTMLFormElement>('create-staff-form').onsubmit=event=>{event.preventDefault();run(async()=>{
+  const result=await action({action:'createUser',username:input('staff-email').value,role:element<HTMLSelectElement>('staff-role').value,personConfirmed:input('staff-confirmed').checked});
+  input('staff-temporary-password').value=result.temporaryPassword;input('staff-temporary-password').type='password';element('staff-created').hidden=false;input('staff-email').value='';input('staff-confirmed').checked=false;
+  setTimeout(()=>{input('staff-temporary-password').value='';element('staff-created').hidden=true;},300000);await load('users');
+});};
+element('show-staff-password').onclick=()=>{input('staff-temporary-password').type=input('staff-temporary-password').type==='password'?'text':'password';};
+element('close-staff-password').onclick=()=>{input('staff-temporary-password').value='';element('staff-created').hidden=true;};
 element("export-events").onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(events,null,2)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="BELLO-access-events.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
-element("new-device").onclick=()=>run(async()=>{if(!confirm("新しい端末登録を申請します。管理者の再承認が必要です。よろしいですか？"))return;try{await action({action:"logout"});}catch{}keyPair=await crypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"},false,["sign","verify"]);await saved("keyPair",keyPair);location.reload();});
+element("new-device").onclick=()=>run(async()=>{if(!confirm("新しい端末登録を申請します。管理者の再承認が必要です。よろしいですか？"))return;try{await action({action:"logout"});}catch(e){if(!isTerminalSessionError((e as Error).message))throw e;}keyPair=await crypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"},false,["sign","verify"]);await saved("keyPair",keyPair);await saved('requestBinding','');location.reload();});
 run(async()=>{
   keyPair=await saved<CryptoKeyPair>("keyPair")??await crypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"},false,["sign","verify"]);
   await saved("keyPair",keyPair);username=await saved<string>("username")??"";input("username").value=username;
+  if(document.body.dataset.business==="1"&&new URLSearchParams(location.search).get("logout")==="1"){
+    try{await action({action:"logout"});}catch(e){if(!isTerminalSessionError((e as Error).message))throw e;}await saved("requestBinding","");history.replaceState(null,"","/security");
+  }
   try{await refresh();}catch(e){element("login").hidden=false;if(!["SIGN_IN_REQUIRED","SESSION_EXPIRED"].includes((e as Error).message))throw e;}
 });

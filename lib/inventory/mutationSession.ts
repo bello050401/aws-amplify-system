@@ -5,7 +5,7 @@ import {CognitoJwtVerifier} from 'aws-jwt-verify';
 import {runWithUserPoolServerContext} from '../amplify/userPoolServer';
 import {requestCache} from '../amplify/requestCache';
 import outputs from '../../amplify_outputs.json';
-const verifier=CognitoJwtVerifier.create({userPoolId:outputs.auth.user_pool_id,clientId:outputs.auth.user_pool_client_id,tokenUse:'access'});
+const verifier=CognitoJwtVerifier.create({userPoolId:process.env.BELLO_DEVICE_SECURITY==='enforced'?process.env.SECURITY_POOL_ID!:outputs.auth.user_pool_id,clientId:process.env.BELLO_DEVICE_SECURITY==='enforced'?process.env.SECURITY_CLIENT_ID!:outputs.auth.user_pool_client_id,tokenUse:'access'});
 /** Verify signature, expiry and app client before an inventory IAM operation. */
 export const inventoryVerifiedReadSession=requestCache(async()=>{
  try{return await runWithUserPoolServerContext({nextServerContext:{cookies},operation:async context=>{

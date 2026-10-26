@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { cookies } from "next/headers";
+import { businessCookies } from "../security/serverSession";
+import { deviceSecurityEnabled, securityRuntime } from "../security/serverRuntime";
 import { generateServerClientUsingCookies } from "@aws-amplify/adapter-nextjs/data";
 import type { Schema } from "@/amplify/data/resource";
 import outputs from "@/amplify_outputs.json";
@@ -29,7 +30,8 @@ import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
  */
 const cookieDataClient = generateServerClientUsingCookies<Schema>({
   config: userPoolServerConfig(outputs),
-  cookies,
+  cookies: businessCookies,
+  headers: async ():Promise<Record<string,string>> => deviceSecurityEnabled() ? {"x-bello-data-gate": (await securityRuntime()).dataGate} : {},
 });
 
 /**
