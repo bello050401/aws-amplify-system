@@ -10,6 +10,7 @@ import type { RequestProof } from "./requestProof";
 import {businessContentPolicy} from './contentPolicy';
 import {trustedSourceIp} from './sourceIp';
 import {oauthReturnLanding} from './oauthReturn';
+import {checkBusinessOrigin,securityReturnUrl} from './businessOrigin';
 
 export async function approvedDeviceBoundary(request: NextRequest) {
   // Never propagate a caller-supplied grant, even on a public route.
@@ -20,8 +21,7 @@ export async function approvedDeviceBoundary(request: NextRequest) {
   if(oauthLanding)return oauthLanding;
   try {
     const { service, contextKey } = await securityRuntime();
-    if (request.nextUrl.origin !== service.origin || request.headers.get("sec-fetch-site") === "cross-site" ||
-      (request.headers.has("origin") && request.headers.get("origin") !== service.origin)) throw new SecurityError("INVALID_ORIGIN");
+    checkBusinessOrigin(request.headers, service.origin);
     const rawProof = request.headers.get("x-bello-device-proof");
     if (!rawProof || rawProof.length > 2048) throw new SecurityError("DEVICE_PROOF_REQUIRED", 401);
     let proof: RequestProof;
@@ -59,9 +59,8 @@ export async function approvedDeviceBoundary(request: NextRequest) {
     try {const {service}=await securityRuntime();await service.audit("BUSINESS_ACCESS_DENIED",{origin:service.origin,ip:trustedSourceIp(request.headers),userAgent:request.headers.get("user-agent")??"",target:request.nextUrl.pathname,method:request.method},e.code);}catch{/* Audit failures never allow access. */}
     const documentNavigation=request.headers.get("sec-fetch-dest")==="document" ||
       (!request.nextUrl.pathname.startsWith("/api/") && request.headers.get("accept")?.includes("text/html"));
-    if (request.method === "GET" && documentNavigation) {
-      const url = new URL("/security", request.url);
-      url.searchParams.set("returnTo", request.nextUrl.pathname + request.nextUrl.search);
+    if (request.method === "GET" && documentNavigation && process.env.SECURITY_ORIGIN) {
+      const url = securityReturnUrl(process.env.SECURITY_ORIGIN, request.nextUrl.pathname, request.nextUrl.search);
       const response = NextResponse.redirect(url); response.headers.set("cache-control", "no-store"); response.headers.set("referrer-policy", "no-referrer"); return response;
     }
     return NextResponse.json({ error: e.code }, { status: e.status, headers: SECURITY_HEADERS });
