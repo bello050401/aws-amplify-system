@@ -64,7 +64,10 @@ new CfnOutput(root,'IsolatedBrowserRoleArn',{value:testRole.roleArn});
 // preparation phase adds only identity/session resources to this already gated API.
 if(process.env.SECURITY_HOSTED_STAGE==='true'){
  const origin='https://codex-security-20261026.d4hkkg7dty2du.amplifyapp.com';
- const role=new Role(root,'IsolatedHostingRuntime',{assumedBy:new ServicePrincipal('amplify.amazonaws.com').withConditions({StringEquals:{'aws:SourceAccount':'203918843421'},ArnEquals:{'aws:SourceArn':'arn:aws:amplify:us-west-2:203918843421:apps/d4hkkg7dty2du'}})});
+ // Amplify's compute-role validation does not supply SourceArn. Follow its
+ // documented service trust and attach only to this branch (no preview builds).
+ // Resource permissions below still exclude every production resource.
+ const role=new Role(root,'IsolatedHostingRuntime',{assumedBy:new ServicePrincipal('amplify.amazonaws.com')});
  const resources=addDeviceResources({stack:Stack.of(authResources.userPool),pool:authResources.userPool,cfnPool:authResources.cfnResources.cfnUserPool,
   api:cfnApi,bucket:backend.storage.resources.bucket,runtime:role,identityRoles,origin,phase:'prepare',
   existingDataGate:Secret.fromSecretCompleteArn(root,'ExistingStageDataGate',pilot.DataGateSecretArn)});
