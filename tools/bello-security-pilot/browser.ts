@@ -45,6 +45,18 @@ async function saved<T>(key:string,value?:T):Promise<T|undefined>{
 }
 function showError(e:unknown){
   const code=(e as Error).message;
+  // Do not leave a stale approved/pending screen or administrator records
+  // visible after the server has invalidated this session. Keep the browser
+  // key: an ordinary session expiry must not force another device approval.
+  if(['ACCOUNT_DISABLED','DEVICE_REVOKED','SESSION_EXPIRED','SIGN_IN_REQUIRED'].includes(code)){
+    current={};events=[];deviceCursor=userCursor=eventCursor=undefined;
+    element('session').hidden=true;element('admin').hidden=true;element('login').hidden=false;
+    for(const id of ['devices','users','events'])element(id).replaceChildren();
+    for(const id of ['account','verify-code','probe-result'])element(id).textContent='';
+    for(const id of ['password','staff-temporary-password'])input(id).value='';
+    element('staff-created').hidden=true;
+    void saved('requestBinding','').catch(()=>{});
+  }
   if(code==='DEVICE_REVOKED')element('re-register').hidden=false;
   if(code==='REAUTHENTICATE'){element('passkey-again').hidden=false;element('passkey-again').textContent='管理操作のためパスキーで本人確認';}
   element("error").textContent=messages[code]??((e as Error).name==="NotAllowedError"?"本人確認をキャンセルしました。":"処理を完了できませんでした。時間をおいて再度お試しください。");element("error").hidden=false;
