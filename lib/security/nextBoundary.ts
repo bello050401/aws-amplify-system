@@ -8,7 +8,7 @@ import { SecurityError } from "./types";
 import { protectedBusinessPath } from "./routes";
 import type { RequestProof } from "./requestProof";
 import {businessContentPolicy} from './contentPolicy';
-import {trustedSourceIp} from './sourceIp';
+import {trustedSourceIp,edgeRequestId} from './sourceIp';
 import {oauthReturnLanding} from './oauthReturn';
 import {checkBusinessOrigin,securityReturnUrl} from './businessOrigin';
 
@@ -40,7 +40,7 @@ export async function approvedDeviceBoundary(request: NextRequest) {
     const actor = await service.authorizeRequest(token, { method: request.method, target: request.nextUrl.pathname + request.nextUrl.search,
       digest: digest.digest("base64url"), proof }, { origin: service.origin,
       // Hosting must supply a trusted origin source; caller X-Forwarded-For is NOT evidence.
-      ip: trustedSourceIp(request.headers), userAgent: request.headers.get("user-agent") ?? "",target:request.nextUrl.pathname,method:request.method });
+      ip: trustedSourceIp(request.headers), userAgent: request.headers.get("user-agent") ?? "",target:request.nextUrl.pathname,method:request.method,edgeRequestId:edgeRequestId(request.headers) });
     // APIs retain their own existing operation-specific role checks. CMS-only
     // Admins must not be mistaken for inventory ADMIN, or denied their CMS APIs.
     if(!request.nextUrl.pathname.startsWith("/api/"))
@@ -56,7 +56,7 @@ export async function approvedDeviceBoundary(request: NextRequest) {
     return response;
   } catch (error) {
     const e = error instanceof SecurityError ? error : new SecurityError("SECURITY_UNAVAILABLE", 503);
-    try {const {service}=await securityRuntime();await service.audit("BUSINESS_ACCESS_DENIED",{origin:service.origin,ip:trustedSourceIp(request.headers),userAgent:request.headers.get("user-agent")??"",target:request.nextUrl.pathname,method:request.method},e.code);}catch{/* Audit failures never allow access. */}
+    try {const {service}=await securityRuntime();await service.audit("BUSINESS_ACCESS_DENIED",{origin:service.origin,ip:trustedSourceIp(request.headers),userAgent:request.headers.get("user-agent")??"",target:request.nextUrl.pathname,method:request.method,edgeRequestId:edgeRequestId(request.headers)},e.code);}catch{/* Audit failures never allow access. */}
     const documentNavigation=request.headers.get("sec-fetch-dest")==="document" ||
       (!request.nextUrl.pathname.startsWith("/api/") && request.headers.get("accept")?.includes("text/html"));
     if (request.method === "GET" && documentNavigation && process.env.SECURITY_ORIGIN) {

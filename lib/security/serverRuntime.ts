@@ -4,6 +4,7 @@ import { KmsVault } from "./awsVault";
 import { CognitoProvider } from "./cognito";
 import { SecurityService } from "./service";
 import { SecurityError } from "./types";
+import {awsEdgeAuditEnricher} from './edgeAuditAws';
 
 export const deviceSecurityEnabled = () => process.env.BELLO_DEVICE_SECURITY === "enforced";
 let runtime: Promise<{ service: SecurityService; contextKey: string; dataGate: string }> | undefined;
@@ -22,7 +23,8 @@ async function load() {
     typeof credentials.contextKey !== "string" || credentials.contextKey.length < 43) throw new SecurityError("SECURITY_NOT_CONFIGURED", 503);
   const service = new SecurityService(new DynamoSecurityStore(process.env.SECURITY_TABLE!, region!),
     new KmsVault(process.env.SECURITY_KEY_ARN!, region!, process.env.SECURITY_DEPLOYMENT!),
-    new CognitoProvider(process.env.SECURITY_POOL_ID!, process.env.SECURITY_CLIENT_ID!, region!, credentials.clientSecret), process.env.SECURITY_ORIGIN!);
+    new CognitoProvider(process.env.SECURITY_POOL_ID!, process.env.SECURITY_CLIENT_ID!, region!, credentials.clientSecret), process.env.SECURITY_ORIGIN!,undefined,
+    awsEdgeAuditEnricher(process.env.SECURITY_ORIGIN!));
   const gate = await new SecretsManagerClient({region}).send(new GetSecretValueCommand({SecretId:process.env.SECURITY_APPSYNC_GATE_SECRET_ARN}));
   const dataGate=JSON.parse(gate.SecretString??'{}').value;
   if(typeof dataGate!=='string'||dataGate.length<43)throw new SecurityError('SECURITY_NOT_CONFIGURED',503);

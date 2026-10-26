@@ -68,6 +68,8 @@ if(process.env.SECURITY_HOSTED_STAGE==='true'){
  // documented service trust and attach only to this branch (no preview builds).
  // Resource permissions below still exclude every production resource.
  const role=new Role(root,'IsolatedHostingRuntime',{assumedBy:new ServicePrincipal('amplify.amazonaws.com')});
+ // Metadata-only IP correlation for authenticated ADMIN views; no other logs.
+ role.addToPolicy(new PolicyStatement({actions:['logs:FilterLogEvents'],resources:['arn:aws:logs:us-east-1:203918843421:log-group:aws-waf-logs-bello-security-stage:*']}));
  const resources=addDeviceResources({stack:Stack.of(authResources.userPool),pool:authResources.userPool,cfnPool:authResources.cfnResources.cfnUserPool,
   api:cfnApi,bucket:backend.storage.resources.bucket,runtime:role,identityRoles,origin,phase:'prepare',
   existingDataGate:Secret.fromSecretCompleteArn(root,'ExistingStageDataGate',pilot.DataGateSecretArn)});

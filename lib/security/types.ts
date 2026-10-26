@@ -26,7 +26,7 @@ export interface Provider {
   revoke(tokens: Tokens): Promise<void>;
   createStaff?(username:string,role:'EDITOR'|'VIEWER'):Promise<{sub:string;temporaryPassword:string}>;
 }
-export type Context = { ip: string; userAgent: string; origin: string; target?: string; method?: string };
+export type Context = { ip: string; userAgent: string; origin: string; target?: string; method?: string; edgeRequestId?: string };
 export type Proof = { challengeId: string; signature: string };
 export class SecurityError extends Error {
   constructor(public code: string, public status = 403) { super(code); this.name = "SecurityError"; }

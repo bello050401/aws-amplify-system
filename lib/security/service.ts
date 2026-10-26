@@ -8,6 +8,7 @@ import { SecurityError, isAdmin, permitted, seconds, versioned, type Challenge, 
 type Flow = Row & { kind: "flow"; vault: string; expiresAt: number };
 type FlowData = { provider: unknown; mode: "password" | "passkey"; key: JsonWebKey; name: string; shared: boolean; origin: string };
 type Actor = { session: Session; user: User; device: Device };
+const edgeFields=(ctx:Context,at:number)=>({edgeRequestId:ctx.edgeRequestId??'',edgeAt:at,edgeTarget:(ctx.target??'/api/security').split('?')[0],edgeMethod:ctx.method??'POST'});
 export type Action =
   | { action: "status" } | { action: "enrollStart" } | { action: "enrollFinish"; credential: unknown }
   | { action: "businessProbe" } | { action: "logout" }
@@ -19,14 +20,15 @@ export type Action =
 /** Independent server-side auth boundary. No product/EC write code or frontend tokens. */
 export class SecurityService {
   constructor(readonly store: Store, readonly vault: Vault, readonly provider: Provider,
-    readonly origin: string, readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
+    readonly origin: string, readonly now: () => number = () => Math.floor(Date.now() / 1000),
+    readonly enrichAudit?: (rows:Row[])=>Promise<Row[]>) {}
 
   async audit(event: string, ctx: Context, result: string, sub?: string, deviceId?: string) {
     const time = this.now();
     // Only explicit metadata. Never spread a request, error, token, credential or key.
     await this.store.write([{ expected: null, row: {
       id: "event#" + time.toString().padStart(12, "0") + "#" + randomId(),
-      kind: "event", version: 1, at: time, event, result,
+      kind: "event", version: 1, at: time, event, result, ...edgeFields(ctx,time),
       sub: sub ?? null, deviceId: deviceId ?? null, ip: safeText(ctx.ip, 64),
       userAgent: safeText(ctx.userAgent, 240), target: safeText((ctx.target ?? "/api/security").split("?")[0],240), method:safeText(ctx.method??"POST",10),
       expiresAt: time + 90 * seconds.day,
@@ -87,10 +89,10 @@ export class SecurityService {
     const deviceId = "device#" + identity.sub + "#" + keyId(data.key);
     const oldDevice = await this.store.get<Device>(deviceId);
     // Rejected/revoked devices are never silently put back into pending/approved.
-    const device: Device = oldDevice ? { ...versioned(oldDevice), username: identity.username, lastSeenAt: time, lastIp: safeText(ctx.ip, 64), userAgent: safeText(ctx.userAgent, 240) } : {
+    const device: Device = oldDevice ? { ...versioned(oldDevice), username: identity.username, lastSeenAt: time, lastIp: safeText(ctx.ip, 64), userAgent: safeText(ctx.userAgent, 240), ...edgeFields(ctx,time) } : {
       id: deviceId, kind: "device", version: 1, sub: identity.sub, publicKey: data.key,
       name: data.name, username: identity.username, shared: data.shared, status: "pending", generation: 1,
-      requestedAt: time, lastSeenAt: time, lastIp: safeText(ctx.ip, 64),
+      requestedAt: time, lastSeenAt: time, lastIp: safeText(ctx.ip, 64), ...edgeFields(ctx,time),
       userAgent: safeText(ctx.userAgent, 240), verificationCode: String(randomInt(100000, 1000000)),
     };
     const sessionToken = randomId();
@@ -198,7 +200,10 @@ export class SecurityService {
     if (["devices", "users", "events"].includes(body.action)) {
       const kind = body.action === "devices" ? "device" : body.action === "users" ? "user" : "event";
       const page = await this.store.list(kind, "cursor" in body ? body.cursor : undefined);
-      return { ...page, items: page.items.map(row => {
+      // Enrichment happens only after fresh ADMIN authentication. It never
+      // changes access decisions, inventory reads, or stored device versions.
+      const rows=kind!=='user'&&this.enrichAudit?await this.enrichAudit(page.items):page.items;
+      return { ...page, items: rows.map(row => {
         // The code must come from the staff member, not the approval response.
         const safe = { ...row };
         delete safe.publicKey; delete safe.vault; delete safe.verificationCode;
@@ -279,7 +284,7 @@ export class SecurityService {
     if (this.now() - session.lastSeenAt < 60) return;
     try { await this.store.write([
       { row: { ...versioned(session), lastSeenAt: this.now() }, expected: session.version },
-      { row: { ...versioned(device), lastSeenAt: this.now(), lastIp: safeText(ctx.ip, 64), userAgent: safeText(ctx.userAgent, 240) }, expected: device.version },
+      { row: { ...versioned(device), lastSeenAt: this.now(), lastIp: safeText(ctx.ip, 64), userAgent: safeText(ctx.userAgent, 240), ...edgeFields(ctx,this.now()) }, expected: device.version },
     ]); } catch (error) {
       // Parallel image/API requests may update activity first. Never overwrite a
       // concurrent revocation or token rotation with stale session fields.

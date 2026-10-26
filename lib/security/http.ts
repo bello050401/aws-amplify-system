@@ -1,6 +1,7 @@
 import { SecurityService } from "./service";
 import { SecurityError, type Context, type Proof } from "./types";
 import {isTerminalSessionError} from './sessionInvalidation';
+import {edgeRequestId} from './sourceIp';
 
 export const COOKIE = "__Host-bello-session";
 export const SECURITY_HEADERS = {
@@ -13,7 +14,7 @@ export type HttpRequest = { method: string; path: string; headers: Record<string
 export type HttpResult = { statusCode: number; headers: Record<string, string>; body: string; cookies?: string[] };
 const response = (statusCode: number, value: unknown): HttpResult => ({ statusCode, headers: SECURITY_HEADERS, body: JSON.stringify(value) });
 export async function securityHttp(service: SecurityService, req: HttpRequest): Promise<HttpResult> {
-  const ctx: Context = { origin: req.headers.origin ?? "", ip: req.ip, userAgent: req.headers["user-agent"] ?? "",target:req.path,method:req.method };
+  const ctx: Context = { origin: req.headers.origin ?? "", ip: req.ip, userAgent: req.headers["user-agent"] ?? "",target:req.path,method:req.method,edgeRequestId:edgeRequestId(new Headers(Object.entries(req.headers).filter((entry):entry is [string,string]=>typeof entry[1]==='string'))) };
   try {
     if (req.method !== "POST") throw new SecurityError("METHOD_NOT_ALLOWED", 405);
     if (ctx.origin !== service.origin || !req.headers["content-type"]?.startsWith("application/json") ||

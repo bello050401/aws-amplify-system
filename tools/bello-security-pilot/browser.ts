@@ -171,7 +171,7 @@ async function load(kind:"devices"|"users"|"events",more=false){
     const box=document.createElement("div");box.className=kind==="events"?"event":"device";area.append(box);
     if(kind==="devices"){
       add(box,"h3",item.name);add(box,"span",({pending:"承認待ち",approved:"承認済み",rejected:"拒否",revoked:"承認解除"} as Record<string,string>)[item.status],"tag");
-      add(box,"p","スタッフ："+(item.username??item.sub)+" ／ 最終利用："+date(item.lastSeenAt)+" ／ IP："+item.lastIp);
+      add(box,"p","スタッフ："+(item.username??item.sub)+" ／ 最終利用："+date(item.lastSeenAt)+" ／ IP："+(item.lastIp==='hosting-unverified'?'未確認':item.lastIp)+(item.edgeIpVerified?'（AWS照合済み）':''));
       add(box,"p",item.userAgent+(item.shared?" ／ 共用端末":" ／ 個人端末"));
       if(item.status==="pending"){
         const l=add(box,"label","本人から確認した申請番号"),code=document.createElement("input");code.inputMode="numeric";code.maxLength=6;l.append(code);
@@ -184,7 +184,7 @@ async function load(kind:"devices"|"users"|"events",more=false){
       button(box,"全端末からログアウト",async()=>{if(confirm("このスタッフの全セッションを終了しますか？")){await action({action:"logoutUser",sub:item.sub,expectedVersion:item.version});await load("users");}});
       if(item.enabled)button(box,"アカウント停止",async()=>{if(confirm("このスタッフの利用を停止しますか？")){await action({action:"disableUser",sub:item.sub,expectedVersion:item.version});await load("users");}},"danger");
       else button(box,'利用を再開',async()=>{if(confirm('本人確認は済んでいますか？ 利用を再開します。以前のセッションは無効のままです。')){await action({action:'enableUser',sub:item.sub,expectedVersion:item.version});await load('users');}});
-    }else{events.push(item);add(box,"p",date(item.at)+" ／ "+item.event+" ／ "+item.result+" ／ "+item.ip);}
+    }else{events.push(item);add(box,"p",date(item.at)+" ／ "+item.event+" ／ "+item.result+" ／ "+(item.ip==='hosting-unverified'?'接続元は未確認':item.ip)+(item.edgeIpVerified?'（AWS照合済み）':''));}
   }
   if(!r.items.length&&!more)add(area,"p","該当する記録はありません。");
   if(kind==="events")element("export-events").hidden=false;

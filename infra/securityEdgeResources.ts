@@ -24,7 +24,7 @@ export function addSecurityEdge(stack:Stack,o:{appArn:string;host:string;mode:'c
    {action:'SUBSTITUTION',field:{fieldType:'QUERY_STRING'}},
    {action:'SUBSTITUTION',field:{fieldType:'BODY'}},
   ]},rules:[
-   {name:'AuthenticationAudit',priority:0,action:{count:{}},statement:scoped(path('/api/security/','STARTS_WITH')),ruleLabels:[{name:'bello:security-audit'}],visibilityConfig:visibility('BelloAuthenticationAudit')},
+   {name:'AuthenticationAudit',priority:0,action:{count:{}},statement:scoped(path('/api/','STARTS_WITH')),ruleLabels:[{name:'bello:security-audit'}],visibilityConfig:visibility('BelloAuthenticationAudit')},
    {name:'LoginBurst',priority:1,action,statement:{rateBasedStatement:{limit:120,aggregateKeyType:'IP',evaluationWindowSec:300,scopeDownStatement:scoped({orStatement:{statements:[path('/api/security/login','EXACTLY'),path('/api/security/finish','EXACTLY')]}})}},visibilityConfig:visibility('BelloLoginBurst')},
    {name:'ApiFlood',priority:2,action,statement:{rateBasedStatement:{limit:10000,aggregateKeyType:'IP',evaluationWindowSec:300,scopeDownStatement:scoped(path('/api/','STARTS_WITH'))}},visibilityConfig:visibility('BelloApiFlood')},
   ]});

@@ -12,6 +12,7 @@ function prepare(env,outputs){
    outputs.storage?.bucket_name!=='amplify-bellosecuritybusi-belloinventorystoragebuc-alf7jbmof57c')throw Error('Isolated backend mismatch');
  return {...settings({BELLO_DEVICE_SECURITY:'enforced',SECURITY_ORIGIN:ORIGIN},outputs),
   AWS_REGION:'us-west-2',BELLO_MOBILE_WRITES_ENABLED:'true',BELLO_MOBILE_PUBLIC_ORIGIN:ORIGIN,
+  SECURITY_EDGE_LOG_GROUP:'aws-waf-logs-bello-security-stage',SECURITY_EDGE_LOG_REGION:'us-east-1',
   CONVERSATION_TABLE_NAME:'Conversation-yau3id5kzjepfbr6b7wt42nstq-NONE',MESSAGE_TABLE_NAME:'Message-yau3id5kzjepfbr6b7wt42nstq-NONE',
   PHOTO_REGISTRATION_AWS_REGION:'us-west-2',PHOTO_REGISTRATION_BUCKET_NAME:'bellosecuritypilot2026102-fixturephotostorage478ba-iixvfe7t3nzv',
   PHOTO_REGISTRATION_TABLE_NAME:'BelloSecurityPilot20261026-FixturePhotosA8EAA0D3-15T87HTXNB3M',

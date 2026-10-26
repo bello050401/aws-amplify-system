@@ -34,7 +34,8 @@ const provider:Provider={
   refresh:async t=>{refreshCount++;if(refreshFailure)throw new SecurityError("UPSTREAM_UNAVAILABLE",503);return identity(t.access);},revoke:async()=>{},
 };
 const origin="https://security.example.test",ctx:Context={origin,ip:"192.0.2.10",userAgent:"test"};
-const service=new SecurityService(store,fixtureVault,provider,origin,()=>time);
+let auditEnrichmentCalls=0;
+const service=new SecurityService(store,fixtureVault,provider,origin,()=>time,async rows=>{auditEnrichmentCalls++;return rows;});
 type Browser=ReturnType<typeof browser>;
 function browser(){const keys=generateKeyPairSync("ec",{namedCurve:"prime256v1"});return{keys,publicKey:keys.publicKey.export({format:"jwk"}),token:""};}
 async function login(b:Browser,user:string,mode:"passkey"|"password"="passkey",shared=false){const r=await service.begin({username:user,mode,key:b.publicKey,name:user+" PC",shared},ctx);assert(r.sessionToken);b.token=r.sessionToken;}
@@ -63,6 +64,12 @@ await test("Approval requires contact verification and matching code",async()=>{
 await test("Staff cannot approve a device",async()=>{await rejects(()=>call(staff,{action:"devices"}),"DEVICE_PENDING");});
 await test("Approval makes existing pending session usable",async()=>{const d=await device(staff);await call(admin,{action:"approve",deviceId:d.id,expectedVersion:d.version,personConfirmed:true,verificationCode:d.verificationCode});assert.equal((await call(staff,{action:"businessProbe"})).ok,true);});
 await test("Approved staff still cannot use admin API",async()=>{await rejects(()=>call(staff,{action:"devices"}),"ADMIN_REQUIRED");});
+await test('Edge log lookup is restricted to freshly authenticated ADMIN audit views',async()=>{
+ const before=auditEnrichmentCalls;await rejects(()=>call(staff,{action:'events'}),'ADMIN_REQUIRED');
+ await call(staff,{action:'status'});await call(staff,{action:'businessProbe'});assert.equal(auditEnrichmentCalls,before);
+ await call(admin,{action:'devices'});assert.equal(auditEnrichmentCalls,before+1);
+ await call(admin,{action:'users'});assert.equal(auditEnrichmentCalls,before+1);
+});
 const signedRequest=async(b:Browser,method='POST',target='/api/mobile/inventory',payload='{}')=>{
  const status=await call(b,{action:'status'}),p={version:1 as const,at:time,nonce:randomId(),binding:status.requestBinding,digest:hash(payload)};
  return{method,target,digest:p.digest,proof:{...p,signature:sign('sha256',Buffer.from(requestProofMessage(origin,method,target,p)),{key:b.keys.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url')}};
