@@ -72,4 +72,13 @@ test('Hosted staging cannot select the production branch or backend',()=>{
  assert.throws(()=>prepare(env,{...outputs,storage:{bucket_name:'production'}}));
  assert.throws(()=>prepare(env,{...outputs,custom:{deviceSecurity:{...outputs.custom.deviceSecurity,poolId:'us-west-2_e4411KsnA'}}}));
 });
+test('Actual repository CI never deploys normal backend for isolated branch',()=>{
+ const {commands}=require('./security-ci-backend.cjs');
+ const isolated=commands({AWS_APP_ID:'d4hkkg7dty2du',AWS_BRANCH:'codex/security-20261026'});
+ assert.equal(isolated.length,1);assert.deepEqual(isolated[0][1],['scripts/security-hosted-build.cjs']);
+ assert(!JSON.stringify(isolated).includes('pipeline-deploy'));
+ assert.throws(()=>commands({AWS_APP_ID:'other',AWS_BRANCH:'codex/security-20261026'}));
+ const production=commands({AWS_APP_ID:'d4hkkg7dty2du',AWS_BRANCH:'claude/inventory-management-system-5vbvc7'});
+ assert.deepEqual(production[0][1],['scripts/check-security-release.cjs']);assert(production[1][1].includes('pipeline-deploy'));
+});
 console.log(JSON.stringify({passed,failed:0,deployed:false}));
