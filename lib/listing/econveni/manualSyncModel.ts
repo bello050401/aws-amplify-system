@@ -6,9 +6,27 @@ export type ExternalSnapshot = {version:string;checkedAt:string;products:Externa
 export type ManualLink = {inventoryId:string;productId:string;inventoryName:string;remoteTitle:string;linkedAt:string;actor:string;baseline:Record<EcChannel,ExternalStatus>;revision:number;disabled?:boolean};
 export type ManualSyncData = {snapshot:ExternalSnapshot|null;links:ManualLink[]};
 export const normalTitle=(value:string)=>value.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}\p{S}]/gu,'');
+/** Candidate comparison only. Never use this value to rename inventory or an external listing. */
+export const titleWithoutNotes=(value:string)=>value.replace(/【[^【】]*】/gu,'');
+export function differentTitleNotes(left:string,right:string):boolean {
+ const notes=(value:string)=>[...new Set(Array.from(value.matchAll(/【([^【】]*)】/gu),m=>normalTitle(m[1])).filter(Boolean))].sort().join('\n');
+ return notes(left)!==notes(right);
+}
+export function sameTitleWithoutNotes(left:string,right:string):boolean {
+ const a=normalTitle(titleWithoutNotes(left)),b=normalTitle(titleWithoutNotes(right));
+ return !!a&&a===b;
+}
+/** Pasting a BELLO title with internal notes can find the external title without those notes. */
+export function productTitleMatchesQuery(title:string,identifier:string,query:string):boolean {
+ if(!query.trim())return true;
+ const raw=normalTitle(query),bare=normalTitle(titleWithoutNotes(query));
+ // An empty/notes-only comparison must not match every product. Explicit memo searches still work.
+ return !!raw&&(normalTitle(title).includes(raw)||normalTitle(identifier).includes(raw))
+  ||!!bare&&normalTitle(titleWithoutNotes(title)).includes(bare);
+}
 /** Ranking proposes candidates only; neither a name nor a picture automatically binds stock. */
 export function titleSimilarity(left:string,right:string):number {
- const a=normalTitle(left),b=normalTitle(right);if(!a||!b)return 0;if(a===b)return 1;
+ const a=normalTitle(titleWithoutNotes(left)),b=normalTitle(titleWithoutNotes(right));if(!a||!b)return 0;if(a===b)return 1;
  const grams=(s:string)=>new Set(Array.from({length:Math.max(0,s.length-1)},(_,i)=>s.slice(i,i+2)));
  const x=grams(a),y=grams(b);return x.size+y.size?2*[...x].filter(v=>y.has(v)).length/(x.size+y.size):0;
 }
