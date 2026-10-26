@@ -201,6 +201,11 @@
     "yaml": "2.9.1"
   },
   "overrides": {
+    "handlebars": "4.7.10",
+    "fast-uri@>=3 <4": "3.1.9",
+    "immutable@>=3 <4": "3.8.4",
+    "lodash@>=4 <5": "4.18.1",
+    "mysql2@>=3 <4": "3.24.6",
     "postcss": "$postcss",
     "source-map-js": "^1.2.2",
     "brace-expansion@<2": "^1.1.21",

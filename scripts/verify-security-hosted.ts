@@ -73,6 +73,13 @@ async function main(){
   const r=await fetch(origin+'/security');assert.equal(r.status,200);assert((await r.text()).includes('パスキー'));assert(r.headers.get('content-security-policy')?.includes("frame-ancestors 'none'"));
   assert.equal((await fetch(origin+'/security-stage-fixture',{method:'POST'})).status,404);
   assert.equal((await fetch(origin+'/api/mobile/inventory')).status,401);
+  const redirect=await fetch(origin+'/inventory',{redirect:'manual',headers:{accept:'text/html','x-forwarded-host':'attacker.invalid'}});
+  assert.equal(redirect.status,307);assert.equal(new URL(redirect.headers.get('location')!).origin,origin);
+ });
+ await test('Cross-site requests remain denied and cannot choose a trusted origin',async()=>{
+  for(const headers of [new Headers({origin:'https://attacker.invalid'}),new Headers({origin,'sec-fetch-site':'cross-site'})]){
+   const r=await fetch(origin+'/api/mobile/inventory',{headers});assert.equal(r.status,403);assert.equal((await r.json() as any).error,'INVALID_ORIGIN');
+  }
  });
  for(const b of [admin,staff]){await create(b);created.push(b)}
  await test('HTTPS password bootstrap issues secure opaque cookie only',()=>password(admin));
@@ -82,6 +89,9 @@ async function main(){
  const id='device#'+admin.sub+'#'+keyId(admin.key.publicKey.export({format:'jwk'}) as JsonWebKey),d=await store.get<Device>(id);assert(d);assert.equal(d.status,'pending');
  await store.write([{expected:d.version,row:{...d,version:d.version+1,status:'approved'}}]);
  await test('Approved ADMIN can read actual isolated inventory',async()=>{const r=await business(admin,'/api/mobile/inventory?images=deferred',200);assert.equal((await r.json() as any).role,'ADMIN')});
+ await test('Approved session cookie alone cannot read business data',async()=>{
+  const r=await fetch(origin+'/api/mobile/inventory',{headers:{origin,cookie:admin.cookie}});assert.equal(r.status,401);assert.equal((await r.json() as any).error,'DEVICE_PROOF_REQUIRED');
+ });
  await test('EDITOR authenticates but remains pending on another browser key',async()=>{await password(staff);await enroll(staff);await passkey(staff);await business(staff,'/api/mobile/inventory',403)});
  let target:any;
  await test('ADMIN approves staff with matching verification code',async()=>{
