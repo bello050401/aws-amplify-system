@@ -97,6 +97,7 @@ export type ImageEditorSlot =
       id: string;
       kind: "copy";
       sourceStorageKey: string;
+      sourceBucket?: string;
       isPrimary: boolean;
       sourceSystem: string | null;
       sourceUrl: string | null;

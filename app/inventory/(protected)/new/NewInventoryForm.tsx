@@ -24,7 +24,7 @@ import {
   parseExtendedValues,
   type InventoryExtendedFields,
 } from "@/lib/inventory/extendedFields";
-import type { InventoryImageRecord } from "@/lib/inventory/imageTypes";
+import type { DuplicateInventoryImage } from "@/lib/inventory/duplicateImages";
 import type { CustomFieldDefinitionRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 
 interface DuplicateSource extends InventoryExtendedFields {
@@ -41,8 +41,8 @@ interface DuplicateSource extends InventoryExtendedFields {
   note?: string;
   barcode?: string | null;
   customFields?: Record<string, unknown>;
-  normalImages: InventoryImageRecord[];
-  damageImages: InventoryImageRecord[];
+  normalImages: DuplicateInventoryImage[];
+  damageImages: DuplicateInventoryImage[];
 }
 
 /**
@@ -54,11 +54,12 @@ interface DuplicateSource extends InventoryExtendedFields {
  * Inventory (it has no sourceInventoryId of its own), so its copied image
  * must not carry a ZAICO tag the sync engine would try to match against.
  */
-function slotsFromImages(images: InventoryImageRecord[]): ImageEditorSlot[] {
+function slotsFromImages(images: DuplicateInventoryImage[]): ImageEditorSlot[] {
   return images.map((img) => ({
     id: crypto.randomUUID(),
     kind: "copy" as const,
     sourceStorageKey: img.storageKey,
+    sourceBucket: img.sourceBucket,
     isPrimary: img.isPrimary,
     sourceSystem: null,
     sourceUrl: null,
@@ -86,6 +87,7 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
       ? {
           kind: "copy",
           sourceStorageKey: slot.sourceStorageKey,
+          sourceBucket: slot.sourceBucket,
           sortOrder: idx,
           type,
           isPrimary,

@@ -3,7 +3,10 @@ import { redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { getInventoryDetail, listCategories, listCustomFieldDefinitions, listLocations, listStatuses, listUnits } from "@/lib/inventory/queries";
 import { ALL_EXTENDED_FIELDS, type InventoryExtendedFields } from "@/lib/inventory/extendedFields";
-import { splitImagesByType } from "@/lib/inventory/imageTypes";
+import { buildDuplicateImages } from "@/lib/inventory/duplicateImages";
+import { signInventoryPreviews } from "@/lib/inventory/listImageUrls";
+import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration";
+import { InventoryPreviewUrls } from "../../InventoryPreviewUrls";
 import { InventoryHeader } from "../../InventoryHeader";
 import { NewInventoryForm } from "./NewInventoryForm";
 
@@ -30,13 +33,20 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
   // duplicate of a record whose master has since been deactivated still
   // prefills correctly instead of silently dropping to 未選択 — same
   // reasoning as the edit page (see listCategories'/listLocations' comment).
-  const [categories, locations, statuses, customFieldDefs, units] = await Promise.all([
+  const [categories, locations, statuses, customFieldDefs, units, photoResult, inventoryPreviewUrls] = await Promise.all([
     listCategories(duplicateSource?.categoryId),
     listLocations(duplicateSource?.locationId),
     listStatuses(),
     listCustomFieldDefinitions(),
     listUnits(),
+    duplicateSource ? listInventoryPhotoAssetsAction(duplicateSource.id) : null,
+    signInventoryPreviews(duplicateSource?.images ?? []),
   ]);
+
+  // Never allow a transient photo-service failure to silently produce an image-less copy.
+  if (photoResult && (!photoResult.ok || photoResult.value.truncated)) {
+    return <div role="alert" className="p-6">複製元の商品画像を取得できませんでした。画像を欠落させないため、再読み込みしてから複製してください。</div>;
+  }
 
   // A missing/deleted source (bad link, or it was deleted between
   // opening the list and clicking 複製) just falls back to a blank
@@ -54,7 +64,9 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
   // ImageEditor slot lists straight from these, isPrimary included, so a
   // duplicate keeps whichever photo was the source's top image too
   // (spec §9).
-  const { normal: normalImages, damage: damageImages } = splitImagesByType(duplicateSource?.images ?? []);
+  const { normal: normalImages, damage: damageImages, previewUrls } = buildDuplicateImages(
+    duplicateSource?.images ?? [], photoResult?.ok ? photoResult.value.assets : [], process.env.PHOTO_REGISTRATION_BUCKET_NAME,
+  );
 
   const duplicateFrom = duplicateSource
     ? {
@@ -81,6 +93,7 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">新規在庫登録</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <InventoryPreviewUrls key={duplicateSource?.id ?? "new"} urls={{ ...inventoryPreviewUrls, ...previewUrls }}>
         <NewInventoryForm
           categories={categories}
           locations={selectableLocations(locations,duplicateSource?.locationId)}
@@ -89,6 +102,7 @@ export default async function NewInventoryPage({ searchParams }: NewInventoryPag
           units={units}
           duplicateFrom={duplicateFrom}
         />
+        </InventoryPreviewUrls>
       </div>
     </div>
   );

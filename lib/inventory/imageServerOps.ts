@@ -6,6 +6,7 @@ import { generateThumbnailFromBytes, INVENTORY_IMAGE_CACHE_CONTROL } from "./thu
 import { newInventoryImageKey } from "./imageKeys";
 import { computeOriginalHash } from "@/lib/imageProcessing/pipeline";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { isPhotoProcessedCopyKey } from "./duplicateImages";
 
 // Re-exported for every existing external caller (app/actions/inventory.ts,
 // zaicoSyncPorts.ts) — this function itself moved to imageKeys.ts (BELLO
@@ -48,7 +49,7 @@ export async function copyInventoryImage(sourcePath: string, sourceBucket?: stri
   const destinationPath = newInventoryImageKey(sourcePath);
   try {
     if (sourceBucket) {
-      if (sourceBucket !== process.env.PHOTO_REGISTRATION_BUCKET_NAME || !/^photo-batches\/[a-zA-Z0-9-]+\/processed\/[a-zA-Z0-9-]+\.(jpg|png|webp)$/.test(sourcePath)) throw new Error("Invalid photo source");
+      if (sourceBucket !== process.env.PHOTO_REGISTRATION_BUCKET_NAME || !isPhotoProcessedCopyKey(sourcePath)) throw new Error("Invalid photo source");
       const object = await new S3Client({ region: process.env.PHOTO_REGISTRATION_AWS_REGION || "us-west-2" }).send(new GetObjectCommand({ Bucket: sourceBucket, Key: sourcePath }));
       if (!object.Body || !object.ContentLength || object.ContentLength > 20 * 1024 * 1024) throw new Error("Invalid photo size");
       const bytes = await object.Body.transformToByteArray();
