@@ -4,7 +4,7 @@ import {CHANNELS,DEFAULT_FEES,type SaleCandidate,type FeeConfig} from '../../lib
 import {suggestedSaleQuery} from '../../lib/saleCandidates/search';
 import {SaleRegistrationForm,type SaleProduct} from './SaleRegistrationForm';
 import {PostSaleConfirmation} from './PostSaleConfirmation';
-import type {PostSalePlan} from '../../lib/saleCandidates/postSale';
+import type {PostSalePlan} from '../../lib/saleCandidates/postSaleModel';
 import {YahooProgress} from './YahooProgress';
 import {ProductPhoto} from '../invoicing/ProductPhoto';
 type Product=SaleProduct&{sku:string;displayId:string;price:number|null;category:string;thumbnailUrl:string|null};

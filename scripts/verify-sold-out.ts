@@ -9,6 +9,7 @@ import type {SaleCandidate} from '../lib/saleCandidates/model';
 import {saleAmounts,type SalePricing} from '../lib/inventory/salePricing';
 import {summarizeSales} from '../lib/inventory/sales';
 import {buildMonthlyAggregates} from '../lib/inventory/salesAggregate';
+import {stockCountTitle} from '../lib/inventory/stockCountTitle';
 
 function fixture(quantity=5,withCandidate=false) {
   const id=randomUUID(), time='2026-10-24T01:00:00.000Z';
@@ -64,6 +65,26 @@ test('two terminals cannot sell against the same stale quantity',async()=>{const
 test('receipt cannot be reused for different values or another actor',async()=>{const f=fixture();await f.run(f.request,'actor');await assert.rejects(f.run({...f.request,salePrice:2},'actor'));await assert.rejects(f.run(f.request,'other'));assert.equal(f.inventory().length,2);});
 test('all-sale cannot be applied again with a fresh command',async()=>{const f=fixture(1);await f.run(f.request,'actor');await assert.rejects(f.run({...f.request,mutationId:randomUUID(),expectedUpdatedAt:f.get(f.source.id).updatedAt},'actor'));assert.equal(f.inventory().length,1);});
 test('JST day boundary',()=>{assert.equal(japanToday(new Date('2026-10-23T15:00:00Z')),'2026-10-24');});
+test('stock count changes only inside memo; preserve memo text, units, set count and dimensions',()=>{
+ assert.equal(stockCountTitle('【濃い：在庫５脚・補修】椅子【2点セット】幅50cm',3),'【濃い：在庫3脚・補修】椅子【2点セット】幅50cm');
+ assert.equal(stockCountTitle('【在庫： 10】棚【撮影済み】',9),'【在庫： 9】棚【撮影済み】');
+ assert.equal(stockCountTitle('在庫10の棚【補修待ち】',2),'在庫10の棚【補修待ち】');
+});
+test('5→2 sale atomically records remaining title 3 and sold title 2, without touching other notes',async()=>{
+ const f=fixture();f.get(f.source.id).name='【濃い：在庫5】椅子【補修済み】';
+ const request={...f.request,quantity:2,name:'【濃い：在庫5】椅子（売却分）【補修済み】'};
+ const r=await f.run(request,'actor');
+ assert.equal(f.get(f.source.id).name,'【濃い：在庫3】椅子【補修済み】');
+ assert.equal(f.get(r.soldId).name,'【濃い：在庫2】椅子（売却分）【補修済み】');
+ assert.equal(f.get(f.source.id).quantity,3);assert.equal(f.get(r.soldId).quantity,2);
+ assert.ok(JSON.parse(f.get(f.source.id).customFields).__belloEditedFields.includes('name'));
+ await f.run(request,'actor');assert.equal(f.get(f.source.id).name,'【濃い：在庫3】椅子【補修済み】');
+});
+test('failed sale preserves original stock count title and quantity',async()=>{
+ const f=fixture();f.get(f.source.id).name='【在庫5】椅子';f.state.fail=true;
+ await assert.rejects(f.run({...f.request,quantity:2},'actor'));
+ assert.equal(f.get(f.source.id).name,'【在庫5】椅子');assert.equal(f.get(f.source.id).quantity,5);
+});
 test('purchase candidate and sale split commit atomically with commission',async()=>{const f=fixture(5,true);const r=await f.run({...f.request,quantity:2,saleCommission:1320},'actor');assert.equal(f.get(f.source.id).quantity,3);assert.equal(f.get(r.soldId).quantity,2);assert.equal(f.get(r.soldId).saleCommission,1320);assert.equal(f.get(f.source.id).saleCommission,undefined);assert.equal(f.rows().get('Candidates/'+f.candidate.id).state,'DONE');});
 test('deleted candidate rejects sale without quantity/history changes',async()=>{const f=fixture(5,true);f.rows().get('Candidates/'+f.candidate.id).state='DELETED';await assert.rejects(f.run(f.request,'actor'));assert.deepEqual(f.get(f.source.id),f.source);assert.equal(f.inventory().length,1);});
 test('candidate transaction failure leaves both candidate and inventory unchanged',async()=>{const f=fixture(5,true);f.state.fail=true;await assert.rejects(f.run(f.request,'actor'));assert.equal(f.rows().get('Candidates/'+f.candidate.id).state,'PENDING');assert.deepEqual(f.get(f.source.id),f.source);});

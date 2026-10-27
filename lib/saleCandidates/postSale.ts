@@ -9,10 +9,10 @@ import {reviewEcListingAction,executeEcListingAction} from '@/app/actions/ecList
 import {getChannelListing} from '@/lib/listing/service';
 import {readBaseItem,claimBaseManual,finishBaseManual} from '@/lib/listing/base/manualLifecycle';
 import {setManualBaseStock} from '@/lib/listing/base/adapter';
-import type {EcChannel,EcReview} from '@/lib/listing/ecManagement';
+import type {EcChannel} from '@/lib/listing/ecManagement';
+import type {PostSaleRow as Row,PostSalePlan} from './postSaleModel';
+export type {PostSalePlan} from './postSaleModel';
 
-type Row={channel:EcChannel;externalId:string;operation:'STOP'|'STOCK';state:'READY'|'BLOCKED'|'DONE'|'VERIFY_REQUIRED';message:string;targetQuantity?:number;beforeQuantity?:number;unitsPerListing?:number;review?:EcReview};
-export type PostSalePlan={id:string;candidateId:string;sourceId:string;sourceVersion:string;soldChannel:EcChannel|null;remaining:number;actor:string;expiresAt:number;rows:Row[];state:'REVIEW'|'EXECUTING'|'COMPLETE'|'ATTENTION';token:string;updatedAt:string};
 const channels=['BASE','MERCARI_SHOPS','YAHOO'] as const;
 const fromMarket=(market:string):EcChannel|null=>market==='ベイス'?'BASE':market==='メルカリSHOP'?'MERCARI_SHOPS':market==='ヤフオク'?'YAHOO':null;
 async function context(candidateId:string){
@@ -26,14 +26,18 @@ async function context(candidateId:string){
 const key=(id:string)=>({pk:'SALE_EC#'+id});
 export async function reviewPostSale(candidateId:string,actor:string,packSizes:Partial<Record<EcChannel,number>>={}):Promise<PostSalePlan>{
  const old=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as (PostSalePlan&{pk:string})|undefined;
- if(old&&old.state!=='REVIEW')return old;
+ if(old&&(old.state==='COMPLETE'||old.state==='EXECUTING'&&old.expiresAt>Date.now()))return old;
  const {c,source,soldChannel}=await context(candidateId),catalog=await getEcListingCatalogAction();
  if(catalog.errors.length)throw Error('販売先の紐付けを確認できません。再度確認してください。');
  const rows:Row[]=[];
  for(const channel of channels){
   if(channel===soldChannel)continue;
+  const prior=old?.rows.find(r=>r.channel===channel);
+  if(prior?.state==='DONE'){rows.push(prior);continue;}
   const linked=catalog.channels[channel]?.[source.id];
-  if(!linked?.externalId||linked.state!=='ACTIVE')continue;
+  if(!linked?.externalId)continue;
+  if(prior&&prior.externalId!==linked.externalId){rows.push({...prior,state:'BLOCKED',message:'出品番号が変更されています。EC出品画面で確認してください。'});continue;}
+  if(linked.state!=='ACTIVE'&&!prior)continue;
   if(c.result!.remainingQuantity===0){
    const review=await reviewEcListingAction(source.id,channel,'STOP');
    rows.push({channel,externalId:linked.externalId,operation:'STOP',state:review.status==='READY'?'READY':review.status==='DONE'?'DONE':'BLOCKED',message:review.message,review});
@@ -42,11 +46,14 @@ export async function reviewPostSale(candidateId:string,actor:string,packSizes:P
    const pack=packSizes[channel]??1;
    if(!Number.isSafeInteger(pack)||pack<1||pack>10000)throw Error('販売先の1商品あたりの点数を確認してください。');
    const target=Math.min(remote.quantity,Math.floor(c.result!.remainingQuantity/pack));
+   if(prior?.state==='VERIFY_REQUIRED'){
+    rows.push({...prior,state:remote.quantity===prior.targetQuantity?'DONE':'VERIFY_REQUIRED',message:remote.quantity===prior.targetQuantity?'前回の数量更新を確認しました。':'前回の数量更新は未確認です。再送せずBASEで確認してください。'});continue;
+   }
    rows.push({channel,externalId:linked.externalId,operation:'STOCK',state:remote.hasVariations?'BLOCKED':remote.quantity===target?'DONE':'READY',message:remote.hasVariations?'バリエーション別の在庫はBASEで確認してください。':remote.quantity===target?'現在の数量が残り在庫以下のため変更しません。':'BASEの在庫数量を変更します。セット出品の場合は1商品あたりの点数を確認してください。',beforeQuantity:remote.quantity,targetQuantity:target,unitsPerListing:pack});
   }else rows.push({channel,externalId:linked.externalId,operation:'STOCK',state:'BLOCKED',targetQuantity:c.result!.remainingQuantity,message:'この販売先の公開済み商品の数量更新は未確認です。販売先で数量を変更してください。出品停止には置き換えません。'});
  }
  const plan:PostSalePlan={id:candidateId,candidateId,sourceId:source.id,sourceVersion:source.updatedAt,soldChannel,remaining:c.result!.remainingQuantity,actor,expiresAt:Date.now()+600000,rows,state:'REVIEW',token:randomUUID(),updatedAt:new Date().toISOString()};
- await db.send(new PutCommand({TableName:table,Item:{pk:key(candidateId).pk,...plan},ConditionExpression:old?'#state=:state AND #token=:token':'attribute_not_exists(pk)',...(old?{ExpressionAttributeNames:{'#state':'state','#token':'token'},ExpressionAttributeValues:{':state':'REVIEW',':token':old.token}}:{})}));return plan;
+ await db.send(new PutCommand({TableName:table,Item:{pk:key(candidateId).pk,...plan},ConditionExpression:old?'#state=:state AND #token=:token':'attribute_not_exists(pk)',...(old?{ExpressionAttributeNames:{'#state':'state','#token':'token'},ExpressionAttributeValues:{':state':old.state,':token':old.token}}:{})}));return plan;
 }
 export async function executePostSale(candidateId:string,actor:string,token:string,confirmed:boolean):Promise<PostSalePlan>{
  const p=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as PostSalePlan|undefined;
@@ -65,7 +72,7 @@ export async function executePostSale(candidateId:string,actor:string,token:stri
    if(latest.source.updatedAt!==p.sourceVersion||row.channel===latest.soldChannel)throw Error('在庫の状態が変わりました。');
    if(row.operation==='STOP'&&row.review){
     const result=await executeEcListingAction(row.review,true);
-    row.state=result.status==='DONE'?'DONE':'BLOCKED';row.message=result.message;
+    row.state=result.status==='DONE'?'DONE':'BLOCKED';row.message=result.status==='WAIT'?'送信間隔を空けています。30秒ほど待って「結果を再確認」を押してください。':result.message;
    }else if(row.channel==='BASE'&&row.targetQuantity!==undefined){
     const linked=await getChannelListing(p.sourceId,'BASE');if(linked?.externalListingId!==row.externalId)throw Error('紐付けが変わりました。');
     const remote=await readBaseItem(row.externalId);if(remote.hasVariations||remote.quantity!==row.beforeQuantity)throw Error('販売先の数量が変わりました。確認してください。');

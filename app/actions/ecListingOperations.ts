@@ -1,6 +1,7 @@
 "use server";
 import {econveniListingAction} from './econveniListing';
 import {manualWriteRestriction} from '@/lib/listing/econveni/manualWriteGuard';
+import {manualLinkedStop} from '@/lib/listing/econveni/manualStop';
 import {markInventoryPublished} from '@/lib/listing/publicationCategory';
 import { commonYahooUpdateAction,commonOperationSourceHash } from "./ecCommonOperations";
 import { createHash } from "node:crypto";
@@ -9,6 +10,7 @@ import {
   canEditInventory,
   getInventoryRole,
   getCurrentInventoryUserEmail,
+  getCurrentInventoryUserSub,
 } from "@/lib/amplify/requireInventoryUser";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { getInventoryDetail } from "@/lib/inventory/queries";
@@ -61,6 +63,10 @@ export async function reviewEcListingAction(
     const item = await getInventoryDetail(id);
     if (!item) return { ...base, message: "対象商品が見つかりません。" };
     base.title = item.name;
+    if(operation==='STOP'){
+      const result=await manualLinkedStop(id,channel,(await getCurrentInventoryUserSub())??'');
+      if(result)return result;
+    }
     if(['PUBLISH','STOP','UPDATE'].includes(operation)){
       const existing=channel==='BASE'||operation==='UPDATE'?await getChannelListing(id,channel==='BASE'?'BASE':'MERCARI_SHOPS'):null;
       const warning=await manualWriteRestriction(id,channel,channel==='BASE'||operation==='UPDATE'&&channel==='MERCARI_SHOPS'?existing?.externalListingId??null:undefined);
@@ -138,6 +144,10 @@ export async function executeEcListingAction(
     return failed;
   const id = review.inventoryId;
   try {
+    if(review.operation==='STOP'){
+      const result=await manualLinkedStop(id,review.channel,(await getCurrentInventoryUserSub())??'',review.token);
+      if(result){if(result.status==='DONE')revalidatePath('/inventory/listings');return result;}
+    }
     if(['PUBLISH','STOP','UPDATE'].includes(review.operation)){
       const existing=review.channel==='BASE'||review.operation==='UPDATE'?await getChannelListing(id,review.channel==='BASE'?'BASE':'MERCARI_SHOPS'):null;
       const warning=await manualWriteRestriction(id,review.channel,review.channel==='BASE'||review.operation==='UPDATE'&&review.channel==='MERCARI_SHOPS'?existing?.externalListingId??null:undefined);

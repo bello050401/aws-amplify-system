@@ -394,6 +394,34 @@ export class EconveniHttpSession {
     throw new EconveniHttpError('CONTRACT_CHANGED');
   }
 
+  /** Look up an already approved product by immutable ID; title is only a bounded search filter. */
+  async readExternalProduct(productId:string):Promise<ExternalProduct>{
+    if(!/^\d{1,15}$/.test(productId))throw new EconveniHttpError('CONTRACT_CHANGED');
+    const page=await this.productPage(SMART+'/product.php?'+new URLSearchParams({action:'product_update',products_id:productId}));
+    const forms=readForms(page).filter(f=>f.fields.some(x=>x.name==='products_name'));
+    if(forms.length!==1)throw new EconveniHttpError('CONTRACT_CHANGED');
+    const fields=Object.fromEntries(formValues(forms[0]));
+    if(fields.products_id!==productId||!fields.products_name)throw new EconveniHttpError('CONTRACT_CHANGED');
+    for(let n=1;n<=40;n++){
+      if(n>1)await new Promise(r=>setTimeout(r,1000));
+      const found=externalCatalogPage(await this.request(SMART+'/products.php?'+encodeForm([['scop','products_name'],['query',fields.products_name],['radioquery','and'],['attribute_page',String(n)]])));
+      const matches=found.products.filter(p=>p.productId===productId);
+      if(matches.length===1)return matches[0];
+      if(matches.length>1||!found.products.length||found.total<=n*found.products.length)break;
+    }
+    throw new EconveniHttpError('CONTRACT_CHANGED');
+  }
+
+  async manualStopPreview(productId:string,channel:EconveniMarket):Promise<EconveniCommand>{
+    const page=await this.productPage(SMART+'/product.php?'+new URLSearchParams({action:'product_update',products_id:productId}));
+    const forms=readForms(page).filter(f=>f.fields.some(x=>x.name==='products_name'));
+    if(forms.length!==1)throw new EconveniHttpError('CONTRACT_CHANGED');
+    const fields=Object.fromEntries(formValues(forms[0]));
+    const title=fields[channel==='YAHOO'?'products_name':'mercariShops_name'],price=fields[channel==='YAHOO'?'products_price':'mercariShops_price'];
+    if(fields.products_id!==productId||!title||!/^\d+$/.test(price??''))throw new EconveniHttpError('CONTRACT_CHANGED');
+    return this.publicationPreview({channel,operation:'STOP',productId,title,price:Number(price)});
+  }
+
   async preflightSave(inventoryId:string,values:Record<string,string>,count:number){
     const existing=await this.readInventory(inventoryId);
     const form=existing?readForms(await this.productPage(existing.url)).find(f=>f.fields.some(x=>x.name==='products_name')):await this.registrationForm();

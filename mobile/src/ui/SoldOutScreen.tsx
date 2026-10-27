@@ -5,6 +5,7 @@ import {japanToday,SOLD_OUT_MARKETS,validateSoldOut,type SoldOutRequest} from '.
 import {DateField} from './DateField';
 import {colors} from './theme';
 import {OperationQuantity,OperationConfirmation,operationStyles} from './InventoryOperationControls';
+import {stockCountTitle} from '../../../lib/inventory/stockCountTitle';
 export interface SoldOutSaved {sold:InventoryItem;source:InventoryItem}
 export interface SoldOutPorts {newMutationId:()=>string;sell:(request:SoldOutRequest)=>Promise<SoldOutSaved>}
 export class MobileSoldOutError extends Error {constructor(public code:string,message:string){super(message);}}
@@ -30,6 +31,7 @@ export function SoldOutScreen({item,ports,onCancel,onSaved}:{item:InventoryItem;
     <View style={s.header}><Pressable accessibilityRole="button" disabled={busy||uncertain} onPress={onCancel} style={s.cancel}><Text style={s.link}>キャンセル</Text></Pressable><Text style={s.title}>売却登録</Text><View style={s.cancel}/></View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.body}>
       <OperationQuantity label="売却数量" available={item.quantity} value={quantity} onChange={setQuantity} disabled={locked}/>
+      {Number(quantity)>0&&Number(quantity)<item.quantity&&stockCountTitle(item.name,item.quantity-Number(quantity))!==item.name&&<Text style={s.note}>残る商品のタイトル：{stockCountTitle(item.name,item.quantity-Number(quantity))}</Text>}
       <Text style={s.label}>商品名</Text><TextInput accessibilityLabel="商品名" value={name} onChangeText={setName} multiline maxLength={2000} editable={!locked} style={[s.input,{minHeight:74}]}/>
       <Text style={s.label}>販売終了日</Text><DateField label="販売終了日" value={date} onChange={setDate} disabled={locked}/>
       <Text style={s.label}>ID</Text><TextInput accessibilityLabel="ID" value={id} onChangeText={setId} maxLength={256} editable={!locked} style={s.input}/>
@@ -39,7 +41,7 @@ export function SoldOutScreen({item,ports,onCancel,onSaved}:{item:InventoryItem;
       {!!error&&<Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     </ScrollView>
     <View style={s.footer}><Pressable accessibilityRole="button" disabled={busy||conflict} onPress={()=>{if(uncertain){void submit();return;}try{validateSoldOut({mutationId:ports.newMutationId(),inventoryId:item.id,expectedUpdatedAt:item.updatedAt,quantity:Number(quantity),name,saleEndDate:date,externalProductId:id,market,salePrice:price.trim()?Number(price):null},item.quantity,item.details?.market??'');setError('');setConfirm(true);}catch(e){setError((e as Error).message);}}} style={[s.submit,(busy||conflict)&&{opacity:.5}]}><Text style={s.submitText}>{busy?'登録を確認中…':uncertain?'登録結果を再確認':'内容確認'}</Text></Pressable></View>
-    <OperationConfirmation visible={confirm} title="売却の内容確認" busy={busy} onBack={()=>setConfirm(false)} onConfirm={()=>{setConfirm(false);void submit();}}><Text style={s.value}>{name}</Text><Text style={s.value}>売却 {quantity}点 / 残り {item.quantity-Number(quantity)}点</Text><Text style={s.value}>販売終了日：{date}{'\n'}市場：{market||'未設定'}{'\n'}販売価格：{price||'未設定'}円</Text></OperationConfirmation>
+    <OperationConfirmation visible={confirm} title="売却の内容確認" busy={busy} onBack={()=>setConfirm(false)} onConfirm={()=>{setConfirm(false);void submit();}}><Text style={s.value}>{stockCountTitle(name,Number(quantity))}</Text><Text style={s.value}>売却 {quantity}点 / 残り {item.quantity-Number(quantity)}点</Text><Text style={s.value}>販売終了日：{date}{'\n'}市場：{market||'未設定'}{'\n'}販売価格：{price||'未設定'}円</Text></OperationConfirmation>
     <Modal visible={choosing} transparent animationType="slide" onRequestClose={()=>setChoosing(false)}><View style={s.shade}><View style={s.sheet}><View style={s.header}><Text style={s.title}>市場</Text><Pressable accessibilityRole="button" onPress={()=>setChoosing(false)} style={s.cancel}><Text style={s.link}>閉じる</Text></Pressable></View><ScrollView>{[...new Set(['',...SOLD_OUT_MARKETS,...(item.details?.market?[item.details.market]:[])])].map(value=><Pressable key={value} accessibilityRole="button" accessibilityState={{selected:market===value}} onPress={()=>{setMarket(value);setChoosing(false);}} style={s.option}><Text style={s.value}>{value||'未設定'}</Text></Pressable>)}</ScrollView></View></View></Modal>
   </KeyboardAvoidingView>;
 }

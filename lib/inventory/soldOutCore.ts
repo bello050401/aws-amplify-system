@@ -7,6 +7,7 @@ import { withHumanEdits, productCustomFields } from './humanEdits';
 import { parseCustomFields, stringifyCustomFields } from './customFieldsCodec';
 import { SoldOutError, validateSoldOut, type SoldOutRequest, type SoldOutResult } from './soldOutInput';
 import {saleTitle} from './salePricing';
+import {stockCountTitle} from './stockCountTitle';
 
 type Row = Record<string, unknown>;
 export interface SoldOutPorts {
@@ -53,7 +54,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     const split = request.quantity < source.quantity;
     const now = new Date(Math.max(Date.parse(ports.now?.() ?? new Date().toISOString()),Date.parse(source.updatedAt)+1)).toISOString();
     const soldId = split ? randomUUID() : source.id;
-    const changes: Row = {name:saleTitle(request.name,request.pricing),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
+    const changes: Row = {name:saleTitle(stockCountTitle(request.name,request.quantity),request.pricing),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
     if(request.saleCommission!==undefined)changes.saleCommission=request.saleCommission;
     const result: SoldOutResult = {sourceId:source.id,soldId,remainingQuantity:source.quantity-request.quantity,soldQuantity:request.quantity,updatedAt:now};
     let images: unknown[] = [];
@@ -71,7 +72,8 @@ export function createSoldOutService(ports: SoldOutPorts) {
       const sku = await ports.nextSku();
       // New S3 objects: deleting either stock page must never break the other's photos.
       images = await ports.copyPhotos(source, soldId);
-      const remaining = {quantity:result.remainingQuantity,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
+      const remainingName=stockCountTitle(source.name,result.remainingQuantity);
+      const remaining = {...(remainingName!==source.name?{name:remainingName}:{}),quantity:result.remainingQuantity,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
       update({...remaining,customFields:stringifyCustomFields(withHumanEdits(source,remaining,sourceCustom,sourceCustom ?? undefined))});
       const inherited: Row = {};
       for (const key of ['unit','statusId','locationId','note','barcode','purchasePrice',...ALL_EXTENDED_FIELDS.map(field=>field.key)]) if(source[key]!==undefined) inherited[key]=source[key];
@@ -83,7 +85,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
       writes.push(...persistence.categoryLinkChanges(source.id,before,after,now));
     }
     const oldValue=JSON.stringify({quantity:source.quantity,name:source.name,categoryIds:before,saleEndDate:source.saleEndDate,externalProductId:source.externalProductId,market:source.market,salePrice:source.salePrice});
-    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
+    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes,...(split?{remainingName:stockCountTitle(source.name,result.remainingQuantity)}:{})}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
     writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:receiptId},ConditionExpression:'attribute_not_exists(id)'}});
     if(split) writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:`${receiptId}:SPLIT`,inventoryId:soldId,fieldName:'売却分を分割'}}});
     if(ports.saleCommit)writes.push(...ports.saleCommit(result,now));

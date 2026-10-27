@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { GetCommand, UpdateCommand, TransactWriteCommand, type DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, UpdateCommand, TransactWriteCommand, type TransactWriteCommandInput, type DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 
 export type EconveniChannel = "YAHOO" | "MERCARI_SHOPS";
 export type RemoteState = "NOT_STARTED" | "PENDING" | "SUCCEEDED" | "FAILED" | "VERIFY_REQUIRED";
@@ -74,6 +74,14 @@ export class EconveniWorkflowStore {
   }
   async commit(previous: EconveniWorkflow | null, next: EconveniWorkflow, reserveSend = false) {
     if (next.inventoryId !== this.inventoryId || next.pk !== this.key || (previous && previous.inventoryId !== this.inventoryId)) throw new EconveniWorkflowError("INVALID_TRANSITION");
+    return this.commitRecord(previous, next, reserveSend);
+  }
+  /** Stop-only receipts use a separate namespace; they never make a legacy product publishable. */
+  async commitManualStop<T extends {pk:string;inventoryId:string;revision:number;updatedAt:string}>(previous:T|null,next:T,checks:NonNullable<TransactWriteCommandInput['TransactItems']>,reserveSend=false):Promise<T>{
+    if(next.inventoryId!==this.inventoryId||!['BASE','YAHOO','MERCARI_SHOPS'].some(c=>next.pk===`ECONVENI#MANUAL_STOP#${this.inventoryId}#${c}`)||previous&&previous.pk!==next.pk)throw new EconveniWorkflowError('INVALID_TRANSITION');
+    return this.commitRecord(previous,next,reserveSend,checks);
+  }
+  private async commitRecord<T extends {pk:string;revision:number;updatedAt:string}>(previous:T|null,next:T,reserveSend=false,checks:NonNullable<TransactWriteCommandInput['TransactItems']>=[]):Promise<T>{
     const now = Date.now();
     if (reserveSend) {
       const result = await this.client.send(new GetCommand({ TableName: this.table, Key: { pk: ACCOUNT }, ConsistentRead: true }));
@@ -92,6 +100,7 @@ export class EconveniWorkflowStore {
           { ConditionCheck: { TableName: this.table, Key: { pk: ACCOUNT }, ConditionExpression: condition, ExpressionAttributeNames: names, ExpressionAttributeValues: values } },
         { Put: { TableName: this.table, Item: value, ConditionExpression: previous ? "revision=:revision" : "attribute_not_exists(pk)",
           ...(previous ? { ExpressionAttributeValues: { ":revision": previous.revision } } : {}) } },
+        ...checks,
       ] }));
       return value;
     } catch { throw new EconveniWorkflowError("STATE_UNAVAILABLE"); }

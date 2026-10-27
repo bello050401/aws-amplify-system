@@ -26,6 +26,7 @@ reset();remaining=0;p=await reviewPostSale('c','owner');await executePostSale('c
 reset();remaining=3;p=await reviewPostSale('c','owner');version='v2';await assert.rejects(()=>executePostSale('c','owner',p.token,true));assert.equal(calls.length,0);
 reset();p=await reviewPostSale('c','owner');remoteFailure=true;const result=await executePostSale('c','owner',p.token,true);assert.equal(result.state,'ATTENTION');await executePostSale('c','owner',p.token,true);assert.equal(calls.length,1);
 reset();market='BASE';p=await reviewPostSale('c','owner');assert(!p.rows.some(r=>r.channel==='BASE'));assert(p.rows.every(r=>r.state==='BLOCKED'));await executePostSale('c','owner',p.token,true);assert.equal(calls.length,0);
+reset();remaining=0;market='YAHOO';p=await reviewPostSale('c','owner');const waiting=plans.get('SALE_EC#c');waiting.state='ATTENTION';waiting.rows[0].state='DONE';waiting.rows[1].state='BLOCKED';waiting.rows[1].message='WAIT';p=await reviewPostSale('c','owner');assert.equal(p.rows[0].state,'DONE');assert(!p.rows.some(r=>r.channel==='YAHOO'));await executePostSale('c','owner',p.token,true);assert.deepEqual(calls,[['STOP','MERCARI_SHOPS']]);
 const resultText='PASS: explicit confirmation; actor/token binding; sold-channel exclusion; zero-stock stops only other channels; pack-size stock; stale inventory blocked; uncertain write not retried; unsupported quantity not replaced with stop.';
 fs.writeFileSync('artifacts/sale-workflow-20261025/post-sale-safety.txt',resultText);console.log(resultText);
 })().catch(e=>{console.error(e);process.exitCode=1;});
