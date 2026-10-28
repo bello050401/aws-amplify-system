@@ -23,7 +23,9 @@ export class NewInvoiceProvider {
   const result=await this.json('/api/v3/invoice_template_billings',{department_id:department,billing_date:input.date,due_date:input.dueDate,billing_number:number,
    items:input.lines.map(l=>({name:l.name,price:Number(l.price),quantity:Number(l.quantity),excise:l.tax}))});
   this.billing=this.id(result.id);const expected=totals(input.lines,config);const c=result.config as CalcConfig|undefined;
-  if(result.billing_number!==number||result.billing_date!==input.date||result.due_date!==input.dueDate)throw new ProviderFailure('NUMBER_OR_DATE_MISMATCH');
+  // MF returns slash-separated dates although requests use ISO dates.
+  const date=(value:unknown)=>typeof value==='string'?value.replaceAll('/','-'):'';
+  if(result.billing_number!==number||date(result.billing_date)!==input.date||date(result.due_date)!==input.dueDate)throw new ProviderFailure('NUMBER_OR_DATE_MISMATCH');
   // Fixed MF settings are authoritative; a drift must never be reported as a correct invoice.
   if(!c||c.consumption_tax_display_type!=='internal'||c.rounding!==config.rounding||c.rounding_consumption_tax!==config.rounding_consumption_tax||Number(result.total_price)!==expected.total||Number(result.excise_price)!==expected.tax)throw new ProviderFailure();
   const rows=result.items as RecordValue[]|undefined;
