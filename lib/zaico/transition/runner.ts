@@ -4,6 +4,7 @@ import {changedFields,equal,reconcileFields,type SharedFields} from './protocol'
 import {ITEM_PREFIX,type Control} from './store';
 import type {V2Inventory} from './v2Client';
 import {sourceDatePatch} from './sourceDates';
+import {needsPhoto,restagePhoto} from './images';
 
 export interface SyncWindow {remote:V2Inventory[];end:string;start?:string;full:boolean;initial:boolean}
 export interface TransitionPort{
@@ -20,7 +21,8 @@ export interface TransitionPort{
   saveSourceDates(row:Row,remote:V2Inventory,includeUpdated:boolean):Promise<Row>;
   deleteInventory(row:Row):Promise<void>;
   generateSku():Promise<string>;
-  syncImage(row:Row,remote:V2Inventory):Promise<Row>;
+  syncImage(row:Row,remote:V2Inventory,ownUploadedUrl?:string):Promise<Row>;
+  readPrimaryImage?(row:Row):Promise<string>;
   history(row:Row,changes:SharedFields):Promise<void>;
   api:{
     list(input:{start?:string;end:string;page:number;includeDeleted?:boolean}):Promise<{data:V2Inventory[];pagination:{current_page:number;total_pages:number;total_count:number}}>;
@@ -69,6 +71,22 @@ export async function runTransition(p:TransitionPort){
     issueIds:[...stateById.values()].filter(s=>(!['OK','DELETED'].includes(s.status))||(s.conflict&&!s.conflictAcknowledgedAt))
       .slice(0,100).map(s=>s.inventoryId),
   });
+
+  async function fillPhoto(local:Row,state:Row,remote:V2Inventory){
+    const photo=restagePhoto(local);
+    if(!photo||!p.readPrimaryImage||remote.item_image?.url||state.imageExport?.fingerprint===photo.fingerprint)return;
+    // Read the current inventory again so deletion/replacement during a sync
+    // cannot cause an old image to be uploaded.
+    const latest=await p.inventory(local.id);
+    if(!active(latest)||restagePhoto(latest)?.fingerprint!==photo.fingerprint||latest?.outboundBatchId)return;
+    const encoded=await p.readPrimaryImage(latest!);
+    await p.archive('before-photo-export',{inventoryId:local.id,remote,fingerprint:photo.fingerprint});
+    state=await save({...state,imageAttempt:{fingerprint:photo.fingerprint,at:new Date(p.now()).toISOString()},status:'IMAGE_UNCONFIRMED'});
+    await p.api.patch(state.sourceId,{item_image:encoded});
+    const verified=await p.api.get(state.sourceId);
+    if(!verified||verified.deleted||!verified.item_image?.url)throw Error('ZAICOへの写真保存を確認できません。次回同期で再確認します。');
+    await save({...state,remote:verified,imageExport:{fingerprint:photo.fingerprint,url:verified.item_image.url},imageAttempt:null,status:'OK',error:null});
+  }
 
   async function acceptRemote(remote:V2Inventory,initial:boolean){
     const sourceId=String(remote.id);
@@ -129,7 +147,12 @@ export async function runTransition(p:TransitionPort){
       update.sourceSystem='ZAICO';update.sourceInventoryId=sourceId;
     }
     // Image processing is only required when ZAICO's main image actually changed.
-    const withImages=await p.syncImage(local,remote);
+    // A lost PUT reply is recovered from the next authoritative read, before
+    // the photo can be downloaded back as a second BELLO image.
+    if(state?.imageAttempt&&remote.item_image?.url){
+      state={...state,imageExport:{fingerprint:state.imageAttempt.fingerprint,url:remote.item_image.url},imageAttempt:null};
+    }
+    const withImages=await p.syncImage(local,remote,state?.imageExport?.url);
     if(!equal(local.images,withImages.images))update.images=withImages.images;
     const hasChange=!local.updatedAt||Object.keys(changedFields(before,{...before,...changes})).length||
       update.customFields!==local.customFields||update.images!==undefined||update.sourceInventoryId!==undefined;
@@ -242,7 +265,7 @@ export async function runTransition(p:TransitionPort){
     let state=stateById.get(id);
     let local=byId.get(id);
     if(state?.status==='OK'&&active(local)&&state.localBase&&
-      Object.keys(changedFields(state.localBase,localFields(local!))).length===0)continue;
+      Object.keys(changedFields(state.localBase,localFields(local!))).length===0&&(!p.readPrimaryImage||!needsPhoto(local,state)))continue;
     local=await p.inventory(id);
     if(!state&&!active(local))continue;
     if(local?.outboundBatchId){pending++;continue;}
@@ -253,7 +276,7 @@ export async function runTransition(p:TransitionPort){
     const desired=alive?localFields(local!):{};
     if(state?.status==='WRITE_REJECTED'&&equal(desired,state.rejectedDesired)){pending++;continue;}
     const changed=state?.localBase?changedFields(state.localBase,desired):desired;
-    if(alive&&state&&Object.keys(changed).length===0&&state.status==='OK')continue;
+    if(alive&&state&&Object.keys(changed).length===0&&state.status==='OK'&&(!p.readPrimaryImage||!needsPhoto(local,state)))continue;
     if(!alive&&state?.deletedConfirmed)continue;
     try{
       if(!state?.sourceId){
@@ -282,6 +305,7 @@ export async function runTransition(p:TransitionPort){
         const mismatches=changedFields(accepted,actual.fields);
         state=await save({...state,remote:verified,remoteBase:actual.fields,localBase:accepted,
           status:Object.keys(mismatches).length?'ERROR':'OK',error:Object.keys(mismatches).length?'ZAICOで保存されなかった項目があります。':null});
+        if(state.status==='OK')await fillPhoto(local,state,verified);
         await checkpoint();
         continue;
       }
@@ -291,6 +315,9 @@ export async function runTransition(p:TransitionPort){
         await acceptRemote({id:Number(state.sourceId),deleted:true} as V2Inventory,false);
         await checkpoint();
         continue;
+      }
+      if(state.imageAttempt&&fresh.item_image?.url){
+        state=await save({...state,imageExport:{fingerprint:state.imageAttempt.fingerprint,url:fresh.item_image.url},imageAttempt:null});
       }
       if(!state.localBase||!state.remoteBase){
         await acceptRemote(fresh,true);
@@ -341,11 +368,13 @@ export async function runTransition(p:TransitionPort){
         // Store only the version actually sent. A concurrent edit remains pending.
         const latest=await p.inventory(id);
         if(latest)await p.saveSourceDates(latest,verified,equal(localFields(latest),actual.fields));
-        await save({...state,remote:verified,remoteBase:actual.fields,localBase:{...state.localBase,...decision.toBello,...toSend},status:'OK',error:null,desired:null});
+        state=await save({...state,remote:verified,remoteBase:actual.fields,localBase:{...state.localBase,...decision.toBello,...toSend},status:'OK',error:null,desired:null});
+        await fillPhoto(local,state,verified);
       }else{
         const latest=await p.inventory(id);
         if(latest)await p.saveSourceDates(latest,fresh,equal(localFields(latest),current.fields));
-        await save({...state,remote:fresh,remoteBase:current.fields,localBase:{...state.localBase,...decision.toBello},status:'OK',error:null});
+        state=await save({...state,remote:fresh,remoteBase:current.fields,localBase:{...state.localBase,...decision.toBello},status:'OK',error:null});
+        await fillPhoto(local,state,fresh);
       }
     }catch(e){
       const latest=stateById.get(id)??state;
@@ -375,7 +404,7 @@ export async function runTransition(p:TransitionPort){
       const ids=new Set(aliveRows.map(row=>row.id));
       const clean=tail.data.length===0&&tail.pagination.total_count===0&&aliveRows.every(row=>{
         const state=stateById.get(row.id);
-        return state?.status==='OK'&&state.localBase&&Object.keys(changedFields(state.localBase,localFields(row))).length===0;
+        return state?.status==='OK'&&state.localBase&&Object.keys(changedFields(state.localBase,localFields(row))).length===0&&(!p.readPrimaryImage||!needsPhoto(row,state));
       })&&[...stateById.values()].every(state=>state.status==='DELETED'||ids.has(state.inventoryId));
       if(clean)await p.saveControl({...control,phase:'STOPPED',stoppedAt:new Date(p.now()).toISOString(),stoppedBy:control.stopRequestedBy,lastSuccessfulPullAt:new Date(p.now()).toISOString()});
       else await p.saveControl({...control,nextRunAt:0,lastError:'最終確認中に変更を検出しました。もう一度同期してから連携を終了します。'});

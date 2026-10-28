@@ -9,6 +9,7 @@ import {CONTROL_ID,transitionStore,type Control} from '../../../lib/zaico/transi
 import {runTransition,type TransitionPort} from '../../../lib/zaico/transition/runner';
 import {sourceIdentityUpdate} from '../../../lib/zaico/transition/identity';
 import {sourceDatesUpdate} from '../../../lib/zaico/transition/sourceDates';
+import {restagePhoto} from '../../../lib/zaico/transition/images';
 import type {Masters,Row} from '../../../lib/zaico/transition/mapping';
 import {createLambdaSyncPort} from './lambdaSyncPort';
 
@@ -149,9 +150,26 @@ export async function runConfiguredTransition():Promise<boolean>{
       await persistence.deleteInventoryWithCategories(row.id,row.updatedAt,'ZAICO暫定同期');
     },
     generateSku:legacy.generateSku,
-    syncImage:async(row,remote)=>{
+    readPrimaryImage:async(row)=>{
+      const photo=restagePhoto(row);
+      if(!photo)throw Error('送信する仕入写真を確認できません。');
+      const {image}=photo;
+      // Procurement originals belong to this bucket, never an arbitrary URL.
+      if(image.sourceBucket&&image.sourceBucket!==bucket)throw Error('仕入写真の保存先を確認できません。');
+      if(!image.storageKey.startsWith('inventory/'))throw Error('仕入写真の保存先を確認できません。');
+      const object=await s3.send(new GetObjectCommand({Bucket:bucket,Key:image.storageKey}));
+      if(!object.Body||!object.ContentLength||object.ContentLength>5*1024*1024){if(object.Body&&'destroy' in object.Body)object.Body.destroy();throw Error('ZAICO写真は5MB以内で登録してください。BELLOの原本は保持しています。');}
+      const bytes=Buffer.from(await object.Body.transformToByteArray());
+      if(bytes.length!==object.ContentLength)throw Error('仕入写真の読み込みが完了していません。');
+      if(image.originalHash&&createHash('sha256').update(bytes).digest('hex')!==image.originalHash)throw Error('仕入写真の内容が登録時と一致しません。');
+      const mime=bytes[0]===255&&bytes[1]===216?'image/jpeg':bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'image/png':null;
+      if(!mime)throw Error('ZAICOへの写真送信はJPEG・PNGに対応しています。');
+      return `data:${mime};base64,${bytes.toString('base64')}`;
+    },
+    syncImage:async(row,remote,ownUploadedUrl)=>{
       const url=remote.item_image?.url;
       if(!url)return row; // Missing URL does not prove image deletion.
+      if(url===ownUploadedUrl)return row;
       const images=Array.isArray(row.images)?row.images:[];
       const old=images.find((i:Row)=>i.sourceSystem==='ZAICO');
       if(old?.sourceUrl===url)return row;

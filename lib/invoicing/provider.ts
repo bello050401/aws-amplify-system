@@ -14,14 +14,16 @@ export class NewInvoiceProvider {
   if(!res.ok)throw new ProviderFailure(`${path.endsWith('/partners')?'PARTNER':path.endsWith('/departments')?'DEPARTMENT':'BILLING'}_HTTP_${res.status}`);return res.json();
  }
  private id(value:unknown){if(typeof value!=='string'||!/^[-_a-zA-Z0-9]{1,160}$/.test(value))throw new ProviderFailure();return value;}
- async create(input:Invoice,config:CalcConfig){
+ async create(input:Invoice,config:CalcConfig,number:string){
+  if(!/^20\d{6}[1-9]\d{0,4}$/.test(number)||!number.startsWith(input.date.replaceAll('-','')))throw new ProviderFailure('NUMBER_INVALID');
   const p=await this.json('/api/v3/partners',{name:input.recipient,name_suffix:input.suffix});this.partner=this.id(p.id);
   // MF rejects an entirely blank department (422). Use the known issuer label;
   // never invent a recipient address, department or contact person.
   const d=await this.json(`/api/v3/partners/${this.partner}/departments`,{office_member_name:'株式会社BELLO'});const department=this.id(d.id);
-  const result=await this.json('/api/v3/invoice_template_billings',{department_id:department,billing_date:input.date,due_date:input.dueDate,
+  const result=await this.json('/api/v3/invoice_template_billings',{department_id:department,billing_date:input.date,due_date:input.dueDate,billing_number:number,
    items:input.lines.map(l=>({name:l.name,price:Number(l.price),quantity:Number(l.quantity),excise:l.tax}))});
   this.billing=this.id(result.id);const expected=totals(input.lines,config);const c=result.config as CalcConfig|undefined;
+  if(result.billing_number!==number||result.billing_date!==input.date||result.due_date!==input.dueDate)throw new ProviderFailure('NUMBER_OR_DATE_MISMATCH');
   // Fixed MF settings are authoritative; a drift must never be reported as a correct invoice.
   if(!c||c.consumption_tax_display_type!=='internal'||c.rounding!==config.rounding||c.rounding_consumption_tax!==config.rounding_consumption_tax||Number(result.total_price)!==expected.total||Number(result.excise_price)!==expected.tax)throw new ProviderFailure();
   const rows=result.items as RecordValue[]|undefined;

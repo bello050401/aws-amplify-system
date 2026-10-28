@@ -43,7 +43,7 @@ export function harness(){
       get:async(id)=>{calls.push({method:'GET',id});return clone(remotes.get(id)??null);},
       patch:async(id,body)=>{
         calls.push({method:'PATCH',id,body});
-        if(!refusePatch)remotes.set(id,{...remotes.get(id)!,...body as Row});
+        if(!refusePatch)remotes.set(id,{...remotes.get(id)!,...body as Row,...(body.item_image?{item_image:{url:'https://images.zaico.example/'+id+'.jpg'}}:{})});
         afterPatch?.();return {data:clone(remotes.get(id))};
       },
       create:async(body)=>{
@@ -196,6 +196,30 @@ async function main(){
     h.masters.attributeNames=['⚪︎コンディション評価(1～5の5段階で)'];
     const create=outgoingPatch({conditionRating:'4',purchasePrice:null},undefined,h.masters);
     assert.deepEqual(create.optional_attributes,{'⚪︎コンディション評価(1～5の5段階で)':'4'});
+  });
+
+  const withPhoto=async()=>{const h=harness();h.seed();const row=h.rows.get('one')!;row.customFields=JSON.stringify({__restageImport:{goodsId:'test'}});row.images=[{type:'NORMAL',isPrimary:true,storageKey:'inventory/test.jpg'}];h.port.readPrimaryImage=async()=> 'data:image/jpeg;base64,test';await h.run();return h;};
+  await test('仕入写真は初回基準取込後に空のZAICO写真だけへ1回送信',async()=>{
+    const h=await withPhoto();assert.equal(h.calls.filter(c=>c.method==='PATCH').length,0);const before=localFields(h.rows.get('one')!);
+    await h.tick();assert.deepEqual(h.calls.filter(c=>c.method==='PATCH').map(c=>Object.keys(c.body)),[['item_image']]);assert.deepEqual(localFields(h.rows.get('one')!),before);assert.equal(h.rows.get('one')!.images.length,1);assert.ok(h.states.get('one')!.imageExport.url);
+    h.calls.length=0;await h.tick();assert.deepEqual(h.calls.map(c=>c.method),['LIST']);
+  });
+  await test('ZAICO既存写真と他商品の写真は上書きしない',async()=>{
+    const h=await withPhoto();h.remotes.get('1')!.item_image={url:'https://existing.example/a.jpg'};await h.tick();assert.equal(h.calls.filter(c=>c.method==='PATCH').length,0);
+    const other=harness();other.seed();await other.run();other.rows.get('one')!.images=[{type:'NORMAL',storageKey:'inventory/a.jpg'}];other.port.readPrimaryImage=async()=>{throw Error('should not read');};await other.tick();assert.equal(other.calls.filter(c=>c.method==='PATCH').length,0);
+  });
+  await test('写真送信の応答消失はGETで復旧し重複送信・取込を防ぐ',async()=>{
+    const h=await withPhoto();let own:string|undefined;h.port.syncImage=async(row,remote,url)=>{own=url;return row;};
+    h.afterPatch=()=>{throw Error('reply lost');};await h.tick();assert.equal(h.states.get('one')!.status,'ERROR');h.afterPatch=undefined;await h.tick();assert.equal(h.states.get('one')!.status,'OK');assert.ok(own);assert.equal(h.calls.filter(c=>c.method==='PATCH').length,1);
+  });
+  await test('写真読込失敗は成功扱いせず原本を保持し再試行できる',async()=>{
+    const h=await withPhoto();h.port.readPrimaryImage=async()=>{throw Error('read failed');};await h.tick();assert.equal(h.states.get('one')!.status,'ERROR');assert.equal(h.calls.filter(c=>c.method==='PATCH').length,0);assert.equal(h.rows.get('one')!.images.length,1);h.port.readPrimaryImage=async()=> 'data:image/jpeg;base64,test';await h.tick();assert.equal(h.states.get('one')!.status,'OK');assert.ok(h.states.get('one')!.imageExport);
+  });
+  await test('送信後にZAICOで削除した写真を復活させない',async()=>{
+    const h=await withPhoto();await h.tick();h.remotes.get('1')!.item_image=null as any;h.calls.length=0;await h.tick();assert.equal(h.calls.filter(c=>c.method==='PATCH').length,0);
+  });
+  await test('新規仕入商品は本文を作成してから写真を送り二重作成しない',async()=>{
+    const h=harness();h.seed();await h.run();h.rows.set('two',{id:'two',name:'新規仕入',quantity:1,categoryIds:[],customFields:JSON.stringify({__restageImport:{goodsId:'new'}}),images:[{type:'NORMAL',storageKey:'inventory/new.jpg'}],updatedAt:'2026-10-20T00:00:00Z'});h.port.readPrimaryImage=async()=> 'data:image/jpeg;base64,test';await h.tick();await h.tick();assert.equal(h.calls.filter(c=>c.method==='POST').length,1);assert.equal(h.calls.filter(c=>c.method==='PATCH'&&c.body.item_image).length,1);
   });
   console.log(`PASS ${checks} transition workflow scenarios`);
 }

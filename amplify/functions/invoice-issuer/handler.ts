@@ -9,6 +9,7 @@ import {seal,unseal} from '../../../lib/invoicing/capability';
 import {NewInvoiceProvider} from '../../../lib/invoicing/provider';
 import {issueOnce} from '../../../lib/invoicing/issuance';
 import {withIssuerLease} from '../../../lib/invoicing/lock';
+import {reserveInvoiceNumber} from '../../../lib/invoicing/numbering';
 import {invoiceLinks,makeInvoiceCandidates} from '../../../lib/saleCandidates/invoiceCandidates';
 const db=DynamoDBDocumentClient.from(new DynamoDBClient({}));const secrets=new SecretsManagerClient({});
 const TABLE=process.env.OPERATIONS_TABLE!;const SECRET=process.env.MF_SECRET_ARN!;
@@ -69,7 +70,7 @@ export async function handler(event:{token?:string;action?:string;ticket?:string
     // Commit candidates with the issuer receipt. A failed transaction never exposes half a batch.
     try{await db.send(new TransactWriteCommand({ClientRequestToken:c.operation,TransactItems:[{Update:{TableName:TABLE,Key:{id:c.operation},UpdateExpression:'SET #s=:to',ConditionExpression:'#s=:from',ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':from':from,':to':to}}},...entries.map(Item=>({Put:{TableName:process.env.SALE_CANDIDATES_TABLE!,Item,ConditionExpression:'attribute_not_exists(id)'}}))]}));}
     catch(e){if(await status(c.operation,owner)!=='SAVED')throw e;}
-   }},()=>new NewInvoiceProvider(bearer).create(input,s.config||DEFAULT_CONFIG),async(checkCode)=>{await db.send(new UpdateCommand({TableName:TABLE,Key:{id:c.operation},UpdateExpression:'SET checkCode=:code',ExpressionAttributeValues:{':code':checkCode}}));});
+   }},async()=>new NewInvoiceProvider(bearer).create(input,s.config||DEFAULT_CONFIG,await reserveInvoiceNumber(db,TABLE,input.date,input.sequenceStart)),async(checkCode)=>{await db.send(new UpdateCommand({TableName:TABLE,Key:{id:c.operation},UpdateExpression:'SET checkCode=:code',ExpressionAttributeValues:{':code':checkCode}}));});
    if(!outcome.ok)return outcome;
    const result=outcome.value;return {ok:true,number:result.number,saleCandidates:links.length,pdfTicket:seal({purpose:'pdf',owner,operation:c.operation,billingId:result.billingId,expires:Date.now()+600000},s.key),expiresIn:600};
   }

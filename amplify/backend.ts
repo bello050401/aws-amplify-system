@@ -77,7 +77,9 @@ backend.addOutput({custom:{saleCandidates:{tableName:purchaseTable.tableName,fun
 
 // Isolated create-only invoicing. No invoice data/PDF bucket or data model exists.
 const invoiceStack=backend.createStack('InvoiceIssuance');
-const invoiceOperations=new Table(invoiceStack,'Operations',{partitionKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.DESTROY});
+// Operations expire; date/last-ordinal counters have no TTL so a previously
+// issued number cannot be reused. Neither record type contains invoice data.
+const invoiceOperations=new Table(invoiceStack,'Operations',{partitionKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:true}});
 // Reusable names only. Invoice contents and PDFs never enter this table.
 const invoiceAddressees=new Table(invoiceStack,'Addressees',{partitionKey:{name:'directory',type:AttributeType.STRING},sortKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:true}});
 invoiceAddressees.grantReadWriteData(backend.invoiceIssuer.resources.lambda);
