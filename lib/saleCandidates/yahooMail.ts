@@ -28,11 +28,13 @@ export function parseYahooMail(mail:PurchaseMail,text:string):SaleCandidate[]{
  const name=(field(text,'商品')||subject.replace(/^[^:]+:\s*/, '').replace(/\([a-z][0-9]{6,15}\)\s*$/i,'').trim()).slice(0,2000);
  if(!name)return [];
  // Start price, remaining stock, shipping and payment total must never become the sale unit price.
- const price=stage==='WON'?yen(field(text,'落札価格')):null;
+ const price=stage==='WON'?(yen(field(text,'落札価格'))??yen(field(text,'落札金額'))):null;
+ const shipping=yen(field(text,'送料'))??yen(field(text,'配送料'));
+ const orderTotal=yen(field(text,'合計金額'))??yen(field(text,'支払い金額'));
  const rawCount=stage==='WON'?field(text,'落札数量'):'';
  const count=rawCount.match(/^(\d+)(?:\s*(?:個|点|台|脚|セット))?$/)?.[1];
  const quantity=count&&Number.isSafeInteger(Number(count))&&Number(count)>0?Number(count):null;
- return [{id:createHash('sha256').update(JSON.stringify(['YAHOO',id,'0'])).digest('hex'),state:'PENDING',channel:'YAHOO',source:'GMAIL',name,quantity,unitPrice:price,orderId:id,identifierType:'AUCTION',externalListingId:id,saleDate:jstDate(received),receivedAt:received,createdAt:now,updatedAt:now,shipping:null,orderTotal:null,payment:'',warnings:[...(price===null?[missingPrice]:[]),...(quantity===null?[missingQuantity]:[]),dateWarning],orderLineCount:1,yahooStatus:stage,yahooEvents:{[stage]:received}}];
+ return [{id:createHash('sha256').update(JSON.stringify(['YAHOO',id,'0'])).digest('hex'),state:'PENDING',channel:'YAHOO',source:'GMAIL',name,quantity,unitPrice:price,orderId:id,identifierType:'AUCTION',externalListingId:id,saleDate:jstDate(received),receivedAt:received,createdAt:now,updatedAt:now,shipping,orderTotal,payment:'',warnings:[...(price===null?[missingPrice]:[]),...(quantity===null?[missingQuantity]:[]),dateWarning],orderLineCount:1,yahooStatus:stage,yahooEvents:{[stage]:received}}];
 }
 
 /** Merge mail-owned fields only; preserve deletion, completed sale and inventory references. */
@@ -46,7 +48,9 @@ export function mergeYahooNotification(current:SaleCandidate,incoming:SaleCandid
  const warnings=[...new Set([...current.warnings,...incoming.warnings])].filter(w=>!(w===missingPrice&&price!==null)&&!(w===missingQuantity&&quantity!==null));
  if(current.unitPrice!==null&&incoming.unitPrice!==null&&current.unitPrice!==incoming.unitPrice)warnings.push('同じオークションIDで異なる落札価格の通知があります。金額を確認してください。');
  if(current.quantity!==null&&incoming.quantity!==null&&current.quantity!==incoming.quantity)warnings.push('同じオークションIDで異なる落札数量の通知があります。数量を確認してください。');
- const next={...current,name:current.name||incoming.name,unitPrice:price,quantity,warnings:[...new Set(warnings)],externalListingId:current.externalListingId||incoming.externalListingId,yahooStatus:status,yahooEvents:events,receivedAt:[current.receivedAt,incoming.receivedAt].sort().at(-1)!,saleDate:events.WON?jstDate(events.WON):current.saleDate};
+ const conflicts=(['shipping','orderTotal'] as const).filter(k=>current[k]!==null&&incoming[k]!==null&&current[k]!==incoming[k]);
+ if(conflicts.length)warnings.push('同じオークションIDで送料・支払い合計が異なる通知があります。取引ナビで確認してください。');
+ const next={...current,name:current.name||incoming.name,unitPrice:price,quantity,shipping:current.shipping??incoming.shipping,orderTotal:current.orderTotal??incoming.orderTotal,warnings:[...new Set(warnings)],externalListingId:current.externalListingId||incoming.externalListingId,yahooStatus:status,yahooEvents:events,receivedAt:[current.receivedAt,incoming.receivedAt].sort().at(-1)!,saleDate:events.WON?jstDate(events.WON):current.saleDate};
  if(JSON.stringify(next)===JSON.stringify(current))return current;
  return {...next,updatedAt:new Date(Math.max(Date.parse(now),Date.parse(current.updatedAt)+1)).toISOString()};
 }
