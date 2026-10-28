@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseYahooPurchaseMail,
+  isYahooPurchaseNotice,
   consolidateYahooPurchases,
   allocateYen,
   yahooPurchaseId,
@@ -31,6 +32,8 @@ const order = {
   text: "注文ID　：store-1\n購入日時：2026年10月16日10時00分00秒\nオークションID：a1234567890\n商品情報：椅子\n8,800円×4＝35,200円\nオークションID：b1234567890\n商品情報：机\n13,200円×1＝13,200円\n商品の合計金額 ： 48,400円\n送料：101円\n合計金額：48,501円",
 };
 test("buyer template separates tax, quantity and seller notifications", () => {
+  assert(isYahooPurchaseNotice(won.subject));
+  assert(!isYahooPurchaseNotice('Yahoo!オークション - 終了（落札者あり）：売れた商品(a1234567890)'));
   const e = parseYahooPurchaseMail(won)!;
   assert.equal(e.lots[0].quantity, 4);
   assert.equal(e.lots[0].itemTotal, 35200);

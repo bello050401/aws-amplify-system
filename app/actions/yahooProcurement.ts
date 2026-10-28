@@ -27,6 +27,7 @@ import { resolveRestageDefaults } from "@/lib/procurement/restageLedger";
 import { classifyItem } from "@/lib/procurement/restage";
 import {
   parseYahooPurchaseMail,
+  isYahooPurchaseNotice,
   consolidateYahooPurchases,
   yahooPurchaseQuery,
   yahooPurchaseId,
@@ -115,7 +116,7 @@ export async function readYahooProcurementAction(id: string) {
       const mail = await reader.read(r.ids[index]),
         event = parseYahooPurchaseMail(mail);
       if (event) events.push(event);
-      else unrecognized++;
+      else if (isYahooPurchaseNotice(mail.subject)) unrecognized++;
     }
     await releaseImport(pk, "STATE", owner, { events, index, unrecognized });
     return {

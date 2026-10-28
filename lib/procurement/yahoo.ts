@@ -86,6 +86,13 @@ function transactionDate(text: string, received: string) {
     : receivedDate.toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" });
 }
 /** Strict buyer-only templates. Mail bodies, buyer contact and payment credentials are never retained. */
+export function isYahooPurchaseNotice(subject: string) {
+  const normalized = subject.normalize("NFKC");
+  return (
+    /^【Yahoo!オークション】(?:ご購入の確認|購入内容の変更)/.test(normalized) ||
+    /^Yahoo!オークション\s*-\s*(?:落札者|終了)\s*:/.test(normalized)
+  );
+}
 export function parseYahooPurchaseMail(
   mail: PurchaseMail,
 ): YahooPurchaseEvent | null {
