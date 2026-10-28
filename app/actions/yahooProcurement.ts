@@ -280,6 +280,30 @@ export type YahooPurchaseConfirmation = {
   amountConfirmed: boolean;
   distinctConfirmed: boolean;
 };
+/** Hide a purchase candidate permanently without deleting any inventory or photo. */
+export async function excludeYahooProcurementAction(id: string, auctionId: string, amounts: PurchaseAmounts) {
+  const r = await run(id);
+  try {
+    if (!auctionIdValid(auctionId)) throw Error("商品IDが不正です。");
+    const member = await getImportRecord("YAHOO_RUN#" + id, "LOT#" + auctionId);
+    if (!member) throw Error("取得結果がありません。");
+    if (member.lot.alreadyImported || member.lot.inventoryId) throw Error("登録済みの商品は候補から削除できません。");
+    const pk = "YAHOO_PURCHASE", previous = await getImportRecord(pk, auctionId);
+    if (previous?.status === "EXCLUDED") return { ok: true as const };
+    if (previous?.status === "REGISTERED") throw Error("登録済みの商品は候補から削除できません。再取得してください。");
+    const owner = await claimImport(pk, auctionId);
+    if (!owner) throw Error("登録中です。再取得で結果を確認してください。");
+    try {
+      // Keep the confirmed purchase amounts for another item in the same order's ledger.
+      await releaseImport(pk, auctionId, owner, {
+        status: "EXCLUDED", exclusionReason: "USER_DISMISSED",
+        excludedAt: new Date().toISOString(), excludedBy: r.createdBy,
+        confirmedPurchase: purchaseAmounts(amounts) ?? null,
+      });
+    } catch (e) { await releaseImport(pk, auctionId, owner); throw e; }
+    return { ok: true as const };
+  } catch (e) { return { ok: false as const, error: message(e) }; }
+}
 export async function registerYahooProcurementAction(
   id: string,
   auctionId: string,
@@ -320,7 +344,7 @@ export async function registerYahooProcurementAction(
         // Reuse their original confirmed amounts, never their current split stock.
         const saved = await getImportRecord("YAHOO_PURCHASE", source.auctionId);
         const member = await getImportRecord("YAHOO_RUN#" + id, "LOT#" + source.auctionId);
-        const imported = saved?.status === "REGISTERED" || member?.lot?.alreadyImported;
+        const imported = saved?.status === "REGISTERED" || member?.lot?.alreadyImported || saved?.exclusionReason === "USER_DISMISSED";
         const amounts = imported
           ? purchaseAmounts(saved?.confirmedPurchase) || purchaseAmounts(member?.confirmedPurchase)
           : undefined;

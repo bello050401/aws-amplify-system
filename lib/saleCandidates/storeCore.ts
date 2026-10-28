@@ -1,7 +1,7 @@
 import {GetCommand,PutCommand,QueryCommand,UpdateCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import type {InventoryTransaction} from '../inventory/categoryPersistenceCore';
 import type {SoldOutResult} from '../inventory/soldOutInput';
-import {DEFAULT_FEES,type SaleCandidate,type FeeConfig,validateFeeConfig} from './model';
+import {DEFAULT_FEES,currentFeeConfig,type SaleCandidate,type FeeConfig,validateFeeConfig} from './model';
 import {mergeYahooNotification} from './yahooMail';
 export function createCandidateStore(db:DynamoDBDocumentClient,table:string){
  const get=async(id:string)=>(await db.send(new GetCommand({TableName:table,Key:{id},ConsistentRead:true}))).Item;
@@ -30,8 +30,8 @@ export function createCandidateStore(db:DynamoDBDocumentClient,table:string){
   },
   remove:async(id:string,actor:string)=>{await db.send(new UpdateCommand({TableName:table,Key:{id},UpdateExpression:'SET #s=:deleted,deletedBy=:actor,deletedAt=:now,updatedAt=:now',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':deleted':'DELETED',':pending':'PENDING',':actor':actor,':now':new Date().toISOString()}}));},
   commit:(candidate:SaleCandidate,actor:string,result:SoldOutResult,now:string):InventoryTransaction=>[{Update:{TableName:table,Key:{id:candidate.id},UpdateExpression:'SET #s=:done, #r=:result,completedBy=:actor,completedAt=:now,updatedAt=:now',ConditionExpression:'#s=:pending AND updatedAt=:version',ExpressionAttributeNames:{'#s':'state','#r':'result'},ExpressionAttributeValues:{':pending':'PENDING',':done':'DONE',':result':result,':actor':actor,':now':now,':version':candidate.updatedAt}}}],
-  config:async():Promise<FeeConfig>=>{const r=await get('CONFIG');return r?.fees?validateFeeConfig(r.fees):DEFAULT_FEES;},
-  configure:async(fees:unknown,actor:string)=>db.send(new PutCommand({TableName:table,Item:{id:'CONFIG',fees:validateFeeConfig(fees),updatedBy:actor,updatedAt:new Date().toISOString()}})),
+  config:async():Promise<FeeConfig>=>{const r=await get('CONFIG');return r?.fees?currentFeeConfig(validateFeeConfig(r.fees)):DEFAULT_FEES;},
+  configure:async(fees:unknown,actor:string)=>db.send(new PutCommand({TableName:table,Item:{id:'CONFIG',fees:currentFeeConfig(validateFeeConfig(fees)),updatedBy:actor,updatedAt:new Date().toISOString()}})),
   status:()=>get('IMPORT_STATUS'),
   baseStatus:()=>get('BASE_IMPORT_STATUS'),
  };

@@ -24,13 +24,19 @@ export const DEFAULT_FEES:FeeConfig={
  baseExternal:{rateBps:460,fixed:40,serviceBps:300,rounding:'ROUND'},
  basePayId:{rateBps:360,fixed:40,serviceBps:590,rounding:'ROUND'},
  mercari:{rateBps:1000,fixed:0,serviceBps:0,rounding:'FLOOR'},
- yahoo:{rateBps:909,fixed:0,serviceBps:0,rounding:'YAHOO_TAX'},
+ yahoo:{rateBps:1000,fixed:0,serviceBps:0,rounding:'ROUND'},
  direct:{rateBps:0,fixed:0,serviceBps:0,rounding:'ROUND'},
 };
+// BELLO uses the owner's 10% gross-price rule, without adding consumption tax again.
+export function currentYahooFee(rule:FeeRule):FeeRule {
+ return rule.rounding==='YAHOO_TAX' && [909,1000].includes(rule.rateBps) && !rule.fixed && !rule.serviceBps
+   ? {...DEFAULT_FEES.yahoo} : rule;
+}
+export function currentFeeConfig(config:FeeConfig):FeeConfig { return {...config,yahoo:currentYahooFee(config.yahoo)}; }
 export function calculateFee(channel:SaleChannel,amount:number,payment:string,config:FeeConfig=DEFAULT_FEES,viaPayId=false){
  if(!Number.isSafeInteger(amount)||amount<0)throw Error('手数料の計算対象額を確認してください。');
  const key=channel==='BASE'?(viaPayId?'basePayId':/Amazon\s*Pay|PayPal|PayPay/i.test(payment)?'baseExternal':'base'):channel==='MERCARI'?'mercari':channel==='YAHOO'?'yahoo':'direct';
- const r=config[key],round=r.rounding==='FLOOR'?Math.floor:Math.round;
+ const r=key==='yahoo'?currentYahooFee(config.yahoo):config[key],round=r.rounding==='FLOOR'?Math.floor:Math.round;
  const fee=round(amount*r.rateBps/10000)+r.fixed;
  return fee+(r.rounding==='YAHOO_TAX'?Math.floor(fee/10):round(amount*r.serviceBps/10000));
 }

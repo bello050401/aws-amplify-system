@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { defaultYahooPurchaseRange } from "@/lib/procurement/yahooRange";
 import { editYahooAmounts, initialYahooAmounts, yahooAmountError, type YahooAmountFields } from "@/lib/procurement/yahooAmounts";
@@ -9,6 +9,7 @@ import {
   previewYahooProcurementAction,
   prepareYahooProcurementPhotoAction,
   registerYahooProcurementAction,
+  excludeYahooProcurementAction,
   type YahooProcurementRow,
 } from "@/app/actions/yahooProcurement";
 type Row = YahooProcurementRow & YahooAmountFields & {
@@ -26,6 +27,12 @@ export default function YahooProcurementPanel() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [incomplete, setIncomplete] = useState(false);
+  const [confirmationDialog, setConfirmationDialog] = useState<{ kind: "register" | "exclude"; message: string; auctionId?: string } | null>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (confirmationDialog && !dialog.current?.open) dialog.current?.showModal();
+    if (!confirmationDialog && dialog.current?.open) dialog.current?.close();
+  }, [confirmationDialog]);
   const working = useRef(false);
   const patch = (id: string, v: Partial<Row>) =>
     setRows((old) => old.map((r) => (r.auctionId === id ? { ...r, ...v } : r)));
@@ -99,12 +106,12 @@ export default function YahooProcurementPanel() {
       await read(r.runId);
     });
   }
-  async function register() {
+  async function register(confirmed = false) {
     await execute(async () => {
-      const selected = rows.filter((r) => r.selected && !r.inventoryId);
+      const selected = rows.filter((r) => r.selected && !r.inventoryId && !r.excluded);
       if (!selected.length) return;
       // The ledger includes every item in a combined order, including unselected items.
-      const required = rows.filter(r => !r.inventoryId && selected.some(s =>
+      const required = rows.filter(r => !r.inventoryId && !r.excluded && selected.some(s =>
         s.auctionId === r.auctionId || (!!s.orderId && s.orderId === r.orderId)));
       for (const row of required) {
         const invalid = yahooAmountError(row);
@@ -117,7 +124,10 @@ export default function YahooProcurementPanel() {
       }
       const quantity = selected.reduce((n, r) => n + Number(r.count), 0);
       const total = selected.reduce((n, r) => n + Number(r.total) + Number(r.postage), 0);
-      if (!window.confirm(`選択した${selected.length}商品（${quantity}点）を登録します。\n購入金額合計（送料込）：${total.toLocaleString()}円\n\n送料がない商品は0円で登録します。数量・購入単価・送料に間違いありませんか？`)) return;
+      if (!confirmed) {
+        setConfirmationDialog({kind: "register", message: `選択した${selected.length}商品（${quantity}点）を登録します。\n購入金額合計（送料込）：${total.toLocaleString()}円\n\n送料がない商品は0円で登録します。数量・購入単価・送料に間違いありませんか？`});
+        return;
+      }
       const confirmation = rows.map((r) => ({
         auctionId: r.auctionId,
         quantity: Number(r.count),
@@ -150,7 +160,20 @@ export default function YahooProcurementPanel() {
       );
     });
   }
-  const selected = rows.filter(r => r.selected && !r.inventoryId);
+  async function exclude(auctionId: string) {
+    await execute(async () => {
+      const row = rows.find(r => r.auctionId === auctionId);
+      if (!row) return;
+      const result = await excludeYahooProcurementAction(run, auctionId, {
+        quantity: Number(row.count), itemTotal: Number(row.total), shipping: row.postage === "" ? NaN : Number(row.postage),
+      });
+      if (!result.ok) throw Error(result.error);
+      patch(auctionId, { excluded: true, selected: false });
+      setNotice("候補から削除しました。次回の取得でも除外します。登録済みの商品・写真・在庫は変更していません。");
+    });
+  }
+  const visibleRows = rows.filter(r => !r.excluded);
+  const selected = rows.filter(r => r.selected && !r.inventoryId && !r.excluded);
   const selectedValid = selected.every(r => !yahooAmountError(r));
   const selectedQuantity = selected.reduce((n, r) => n + Number(r.count), 0);
   const selectedTotal = selected.reduce((n, r) => n + Number(r.total) + Number(r.postage), 0);
@@ -235,18 +258,18 @@ export default function YahooProcurementPanel() {
           {notice}
         </p>
       )}
-      {!!rows.length && (
+      {!!visibleRows.length && (
         <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-gray-50 px-3 py-2 text-sm">
             <label className="flex items-center gap-2">
               <input type="checkbox" className="h-5 w-5" disabled={busy}
-                checked={rows.some(r => !r.inventoryId) && rows.filter(r => !r.inventoryId).every(r => r.selected)}
-                onChange={e => setRows(old => old.map(r => r.inventoryId ? r : { ...r, selected: e.target.checked }))} />
+                checked={visibleRows.some(r => !r.inventoryId) && visibleRows.filter(r => !r.inventoryId).every(r => r.selected)}
+                onChange={e => setRows(old => old.map(r => r.inventoryId || r.excluded ? r : { ...r, selected: e.target.checked }))} />
               すべて選択
             </label>
-            <span>{rows.length}商品 ／ 選択 {selected.length}商品</span>
+            <span>{visibleRows.length}商品 ／ 選択 {selected.length}商品</span>
           </div>
-          {rows.map((r, index) => (
+          {visibleRows.map((r, index) => (
             <article key={r.auctionId} aria-label={`仕入れ商品 ${index + 1}`} className="border-b border-gray-200 p-3 last:border-b-0">
               <div className="grid grid-cols-[1.25rem_4rem_minmax(0,1fr)] items-center gap-3 lg:grid-cols-[1.25rem_4.5rem_minmax(12rem,1fr)_5.5rem_9rem_8rem]">
                 <input type="checkbox" aria-label={`選択 ${r.auctionId}`} checked={r.selected}
@@ -254,7 +277,7 @@ export default function YahooProcurementPanel() {
                   onChange={e => patch(r.auctionId, { selected: e.target.checked })} />
                 {r.imageUrl ? (
                   <img src={r.imageUrl} alt={r.name} referrerPolicy="no-referrer" loading="lazy"
-                    className="h-16 w-16 rounded bg-gray-50 object-contain lg:h-18 lg:w-18" />
+                    className="h-16 w-16 rounded bg-gray-50 object-contain lg:h-[72px] lg:w-[72px]" />
                 ) : <div className="grid h-16 w-16 place-items-center rounded bg-gray-50 text-xs">写真未取得</div>}
                 <div className="min-w-0">
                   <p className="line-clamp-2 break-words text-sm font-semibold" title={r.name}>{r.name}</p>
@@ -278,7 +301,8 @@ export default function YahooProcurementPanel() {
                   ))}
                 </div>
               </div>
-              <details className="mt-2 text-sm text-gray-600">
+              <div className="mt-2 flex items-start justify-between gap-3">
+              <details className="min-w-0 flex-1 text-sm text-gray-600">
                 <summary className="cursor-pointer text-blue-700">詳細・取引情報</summary>
                 <div className="mt-2 space-y-2 rounded bg-gray-50 p-3">
                   <p className="break-words">{r.name}</p>
@@ -289,6 +313,9 @@ export default function YahooProcurementPanel() {
                     : r.sourceReady && <p>個人出品者：相手氏名・住所は空欄。本人確認方法・職業は指定の固定値</p>}
                 </div>
               </details>
+              {!r.inventoryId && <button type="button" disabled={busy} className="shrink-0 rounded border border-red-200 px-3 py-1.5 text-sm text-red-700 disabled:opacity-50"
+                onClick={() => setConfirmationDialog({kind: "exclude", auctionId: r.auctionId, message: `「${r.name}」を取得候補から削除します。\n次回の取得でも除外します。\n\n登録済みの商品ページ・画像・在庫は削除しません。`})}>候補から削除</button>}
+              </div>
               {!!r.warnings.length && <p className="mt-2 text-sm text-amber-800">{r.warnings.join(" ")}</p>}
               {!r.inventoryId && r.changed && (
                 <label className="mt-2 flex items-start gap-2 rounded bg-amber-50 p-2 text-sm">
@@ -322,18 +349,33 @@ export default function YahooProcurementPanel() {
           ))}
         </div>
       )}
-      {!!rows.length && (
+      {!!visibleRows.length && (
         <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-100 bg-white px-4 py-3 shadow-lg">
           <div>
             <p className="font-semibold">選択 {selected.length}商品{selectedValid ? `・${selectedQuantity}点` : ""}</p>
             <p className="text-sm text-gray-600">購入金額合計（送料込）：{selectedValid ? `${selectedTotal.toLocaleString()}円` : "入力内容を確認してください"}</p>
           </div>
-          <button onClick={register} disabled={busy || !selected.length || !selectedValid}
+          <button onClick={() => void register()} disabled={busy || !selected.length || !selectedValid}
             className="min-h-11 rounded bg-blue-700 px-6 py-3 font-bold text-white disabled:opacity-50">
             {busy ? "処理中…" : "選択した商品を確認して登録"}
           </button>
+          {error && <p className="w-full text-sm text-red-700">{error}</p>}
         </div>
       )}
+      <dialog ref={dialog} aria-labelledby="yahoo-confirm-title" onCancel={e => { e.preventDefault(); setConfirmationDialog(null); }}
+        className="w-[calc(100%-2rem)] max-w-lg rounded-xl border p-0 text-gray-900 shadow-xl backdrop:bg-black/40">
+        {confirmationDialog && <div className="space-y-5 p-5">
+          <h2 id="yahoo-confirm-title" className="text-lg font-bold">{confirmationDialog.kind === "exclude" ? "候補から削除" : "登録内容の確認"}</h2>
+          <p className="whitespace-pre-line break-words text-sm leading-7">{confirmationDialog.message}</p>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="min-h-11 rounded border px-4 py-2" onClick={() => setConfirmationDialog(null)}>キャンセル</button>
+            <button type="button" className={`min-h-11 rounded px-5 py-2 font-bold text-white ${confirmationDialog.kind === "exclude" ? "bg-red-700" : "bg-blue-700"}`}
+              onClick={() => { const current = confirmationDialog; setConfirmationDialog(null); if (current.kind === "exclude") void exclude(current.auctionId!); else void register(true); }}>
+              {confirmationDialog.kind === "exclude" ? "候補から削除する" : "この内容で登録する"}
+            </button>
+          </div>
+        </div>}
+      </dialog>
     </section>
   );
 }
