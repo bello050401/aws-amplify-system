@@ -26,6 +26,7 @@ import {
 import { resolveRestageDefaults } from "@/lib/procurement/restageLedger";
 import { classifyItem } from "@/lib/procurement/restage";
 import { procurementLedgerDetails } from "@/lib/procurement/ledgerDetails";
+import { defaultYahooPurchaseRange } from "@/lib/procurement/yahooRange";
 import {
   parseYahooPurchaseMail,
   isYahooPurchaseNotice,
@@ -71,9 +72,13 @@ async function run(id: string) {
     throw Error("取得結果の有効期限が切れました。再取得してください。");
   return r;
 }
-export async function startYahooProcurementAction(from: string, to: string) {
+export async function startYahooProcurementAction(from?: string, to?: string) {
   await actor();
   try {
+    if (from === undefined && to === undefined) {
+      ({ from, to } = defaultYahooPurchaseRange());
+    }
+    if (!from || !to) throw Error("取得期間の開始日と終了日を選んでください。");
     const query = yahooPurchaseQuery(from, to),
       reader = await purchaseGmailReader(),
       ids: string[] = [];
@@ -97,7 +102,7 @@ export async function startYahooProcurementAction(from: string, to: string) {
       createdBy: await actor(),
       ttl: Math.floor(Date.now() / 1000) + 86400,
     });
-    return { ok: true as const, runId: id, count: ids.length };
+    return { ok: true as const, runId: id, count: ids.length, from, to };
   } catch (e) {
     return { ok: false as const, error: message(e) };
   }
@@ -133,6 +138,7 @@ export async function readYahooProcurementAction(id: string) {
 }
 export type YahooProcurementRow = YahooPurchase & {
   inventoryId: string | null;
+  alreadyImported?: boolean;
   excluded?: boolean;
   possibleDuplicates: { id: string; name: string }[];
   imageUrl?: string;
@@ -140,6 +146,14 @@ export type YahooProcurementRow = YahooPurchase & {
   sourceReady?: boolean;
   error?: string;
 };
+type PurchaseAmounts = { quantity: number; itemTotal: number; shipping: number };
+function purchaseAmounts(value: unknown): PurchaseAmounts | undefined {
+  if (!value || typeof value !== "object") return;
+  const v = value as PurchaseAmounts;
+  if ([v.quantity, v.itemTotal, v.shipping].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 2147483647)
+    && v.quantity >= 1 && v.quantity <= 10000 && v.itemTotal + v.shipping <= 2147483647)
+    return { quantity: v.quantity, itemTotal: v.itemTotal, shipping: v.shipping };
+}
 export async function previewYahooProcurementAction(id: string) {
   const r = await run(id);
   try {
@@ -164,12 +178,17 @@ export async function previewYahooProcurementAction(id: string) {
             "i",
           ).test(e.adminMemo || ""),
       );
-      if (exact.length > 1)
-        throw Error(
-          "同じオークションIDが複数の商品に記録されています。既存の商品を確認してください。",
-        );
+      // Splitting/duplicating an inventory item may preserve its purchase ID.
+      // Any match means this purchase must not create another inventory item.
+      const alreadyImported = previous?.status === "REGISTERED" || exact.length > 0;
+      const origin = exact.find(e => e.id === previous?.inventoryId)
+        || exact.find(e => e.id === yahooPurchaseId(lot.auctionId));
+      const confirmedPurchase = purchaseAmounts(previous?.confirmedPurchase)
+        || purchaseAmounts(origin?.customFields?.__yahooPurchaseImport)
+        || (exact.length === 1 ? purchaseAmounts(exact[0].customFields?.__yahooPurchaseImport) : undefined);
       const row: YahooProcurementRow = {
         ...lot,
+        alreadyImported,
         excluded: previous?.status === "EXCLUDED",
         inventoryId:
           previous?.status === "REGISTERED"
@@ -191,6 +210,7 @@ export async function previewYahooProcurementAction(id: string) {
         await putImportRecord({
           ...key,
           lot: row,
+          confirmedPurchase,
           defaults,
           ttl: r.ttl,
           createdBy: r.createdBy,
@@ -198,7 +218,8 @@ export async function previewYahooProcurementAction(id: string) {
     }
     return {
       ok: true as const,
-      rows: rows.filter((row) => !row.excluded),
+      rows: rows.filter((row) => !row.excluded && !row.alreadyImported),
+      importedCount: rows.filter((row) => !row.excluded && row.alreadyImported).length,
       excludedCount: rows.filter((row) => row.excluded).length,
       unrecognized: Number(r.unrecognized || 0),
     };
@@ -288,12 +309,24 @@ export async function registerYahooProcurementAction(
         inventoryId: String(previous?.inventoryId || lot.inventoryId),
         skipped: true,
       };
+    if (lot.alreadyImported) throw Error("登録済みの商品です。再取得してください。");
     const group = consolidateYahooPurchases(r.events, r.from, r.to).filter(
         (x) =>
           lot.orderId ? x.orderId === lot.orderId : x.auctionId === auctionId,
       ),
-      details = group.map((source) => {
-        const v = confirmation.find((v) => v.auctionId === source.auctionId);
+      details = await Promise.all(group.map(async (source) => {
+        // Previously imported members of a combined order stay hidden in the UI.
+        // Reuse their original confirmed amounts, never their current split stock.
+        const saved = await getImportRecord("YAHOO_PURCHASE", source.auctionId);
+        const member = await getImportRecord("YAHOO_RUN#" + id, "LOT#" + source.auctionId);
+        const imported = saved?.status === "REGISTERED" || member?.lot?.alreadyImported;
+        const amounts = imported
+          ? purchaseAmounts(saved?.confirmedPurchase) || purchaseAmounts(member?.confirmedPurchase)
+          : undefined;
+        if (imported && !amounts) throw Error("同じ注文の登録済み商品の購入金額を確認できません。既存の商品を確認してください。");
+        const v = amounts
+          ? { ...amounts, auctionId: source.auctionId, amountConfirmed: true, distinctConfirmed: false }
+          : confirmation.find((v) => v.auctionId === source.auctionId);
         if (!v || !v.amountConfirmed)
           throw Error("最新の商品合計・送料・数量を確認してください。");
         if (
@@ -306,7 +339,7 @@ export async function registerYahooProcurementAction(
         )
           throw Error("数量・金額を確認してください。");
         return { ...source, ...v };
-      });
+      }));
     const target = details.find((v) => v.auctionId === auctionId)!;
     if (lot.possibleDuplicates.length && !target.distinctConfirmed)
       throw Error(
@@ -336,6 +369,7 @@ export async function registerYahooProcurementAction(
       releaseImport("YAHOO_PURCHASE", auctionId, owner, {
         status: "REGISTERED",
         inventoryId,
+        confirmedPurchase: purchaseAmounts(target),
         registeredAt: new Date().toISOString(),
       });
     let uploadedKey: string | undefined;

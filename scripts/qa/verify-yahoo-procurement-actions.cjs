@@ -46,6 +46,7 @@ function load(code, mods) {
 (async () => {
   const domain = load(await bundle("lib/procurement/yahoo.ts"), {});
   const ledger = load(await bundle("lib/procurement/ledgerDetails.ts"), {});
+  const ranges = load(await bundle("lib/procurement/yahooRange.ts"), {});
   let role = "ADMIN",
     who = "owner",
     records = new Map(),
@@ -54,7 +55,7 @@ function load(code, mods) {
     removed = [],
     uploads = [],
     fail = "",
-    existing = [];
+    existing = [], queries = [];
   const runId = "11111111-1111-4111-a111-111111111111",
     id = "a1234567890";
   const lot = {
@@ -126,7 +127,7 @@ function load(code, mods) {
     },
     "@/lib/saleCandidates/mailReader": {
       purchaseGmailReader: async () => ({
-        list: async () => ({ messages: [] }),
+        list: async (query) => { queries.push(query); return { messages: [] }; },
         read: async () => {
           throw Error("Unexpected mail access");
         },
@@ -161,6 +162,7 @@ function load(code, mods) {
     },
     "@/lib/procurement/restage": { classifyItem: () => "椅子" },
     "@/lib/procurement/yahoo": domain,
+    "@/lib/procurement/yahooRange": ranges,
       "@/lib/procurement/ledgerDetails": ledger,
     "@/lib/procurement/yahooPublic": {
       yahooPublicItem: async () => ({
@@ -187,6 +189,7 @@ function load(code, mods) {
     removed = [];
     uploads = [];
     existing = [];
+    queries = [];
     fail = "";
     who = "owner";
     role = "ADMIN";
@@ -315,7 +318,10 @@ function load(code, mods) {
       customFields: { __yahooPurchaseImport: { auctionId: id } },
     },
   ];
-  assert(!(await action.previewYahooProcurementAction(runId)).ok);
+  let preview = await action.previewYahooProcurementAction(runId);
+  assert(preview.ok);
+  assert.equal(preview.rows.length, 0);
+  assert.equal(preview.importedCount, 1); // Splits do not block the entire retrieval.
   reset();
   const another = {
     ...lot,
@@ -334,8 +340,57 @@ function load(code, mods) {
   assert((await action.registerYahooProcurementAction(runId, id, values)).ok);
   assert.equal(created[0].input.purchaseQuantity, 6);
   assert.equal(created[0].input.dailyPurchaseTotal, 52800);
+  // Default dates need no input; explicit historical retrieval stays available.
+  reset();
+  let started = await action.startYahooProcurementAction();
+  assert(started.ok);
+  assert.deepEqual({ from: started.from, to: started.to }, copy(ranges.defaultYahooPurchaseRange()));
+  assert.equal(queries[0], domain.yahooPurchaseQuery(started.from, started.to));
+  assert.deepEqual(copy(ranges.defaultYahooPurchaseRange(new Date("2026-10-28T12:00:00+09:00"))), {from:"2026-10-15",to:"2026-10-28"});
+  assert.deepEqual(copy(ranges.defaultYahooPurchaseRange(new Date("2027-01-01T00:00:00+09:00"))), {from:"2026-12-02",to:"2027-01-01"});
+  started = await action.startYahooProcurementAction("2026-10-15", "2026-10-16");
+  assert(started.ok);
+  assert.equal(started.from, "2026-10-15");
+  assert(!(await action.startYahooProcurementAction("2026-10-15")).ok);
+  // Merely previewing a purchase does not hide it on another retrieval.
+  reset();
+  preview = await action.previewYahooProcurementAction(runId);
+  assert.equal(preview.rows.length, 1);
+  assert.equal((await action.previewYahooProcurementAction(runId)).rows.length, 1);
+  records.set(key("YAHOO_PURCHASE", id), {status:"REGISTERED",inventoryId:"deleted-item"});
+  preview = await action.previewYahooProcurementAction(runId);
+  assert(preview.ok);
+  assert.equal(preview.rows.length, 0);
+  assert.equal(preview.importedCount, 1); // Deleted imported pages stay excluded too.
+  // A duplicate source ID and cancellation must not prevent an unrelated new lot.
+  reset();
+  existing = ["one", "two"].map(inventoryId => ({id:inventoryId,name:lot.name,adminMemo:`オークションID：${id}`}));
+  records.get(key("YAHOO_RUN#" + runId, "STATE")).events[0].lots.push({...another,orderId:"other-order"});
+  preview = await action.previewYahooProcurementAction(runId);
+  assert(preview.ok);
+  assert.equal(preview.rows.length, 1);
+  assert.equal(preview.rows[0].auctionId, another.auctionId);
+  assert.equal(preview.importedCount, 1);
+  // A partly imported combined order uses the imported member's purchase amounts.
+  reset();
+  records.get(key("YAHOO_RUN#" + runId, "STATE")).events[0].lots.push(another);
+  records.set(key("YAHOO_PURCHASE", another.auctionId), {status:"REGISTERED",inventoryId:"sold-already",confirmedPurchase:{quantity:2,itemTotal:17600,shipping:500}});
+  preview = await action.previewYahooProcurementAction(runId);
+  assert.equal(preview.rows.length, 1);
+  assert((await register()).ok);
+  assert.equal(created[0].input.purchaseQuantity, 6);
+  assert.equal(created[0].input.dailyPurchaseTotal, 53300);
+  assert.equal(records.get(key("YAHOO_PURCHASE", id)).confirmedPurchase.itemTotal, 35200);
+  // Legacy imports obtain immutable purchase metadata, not the current stock count.
+  reset();
+  records.get(key("YAHOO_RUN#" + runId, "STATE")).events[0].lots.push(another);
+  existing = [{id:domain.yahooPurchaseId(another.auctionId),name:another.name,quantity:1,customFields:{__yahooPurchaseImport:{auctionId:another.auctionId,quantity:2,itemTotal:17600,shipping:500}}}];
+  await action.previewYahooProcurementAction(runId);
+  assert((await register()).ok);
+  assert.equal(created[0].input.purchaseQuantity, 6);
+  assert.equal(created[0].input.dailyPurchaseTotal, 53300);
   console.log(
-    "PASS: 13 server scenarios — store/individual fields; original photo; defaults; repeat/deleted-item dedupe; concurrent registration; uncertain commit; rollback; photo failure; role/owner enforcement; invalid money; exclusions; duplicate source IDs; shared-order ledger.",
+    "PASS: Yahoo procurement actions — existing registration safety scenarios plus default/date retrieval, fetched-but-unregistered retry, registered/deleted exclusion, duplicate-source isolation, partial shared orders, immutable legacy purchase amounts.",
   );
 })().catch((e) => {
   console.error(e);

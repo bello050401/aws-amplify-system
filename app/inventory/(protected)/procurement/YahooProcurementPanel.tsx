@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import Link from "next/link";
+import { defaultYahooPurchaseRange } from "@/lib/procurement/yahooRange";
 import {
   startYahooProcurementAction,
   readYahooProcurementAction,
@@ -19,10 +20,8 @@ type Row = YahooProcurementRow & {
   result?: string;
 };
 export default function YahooProcurementPanel() {
-  const [from, setFrom] = useState("2026-10-15"),
-    [to, setTo] = useState(() =>
-      new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Tokyo" }),
-    ),
+  const [from, setFrom] = useState(() => defaultYahooPurchaseRange().from),
+    [to, setTo] = useState(() => defaultYahooPurchaseRange().to),
     [run, setRun] = useState(""),
     [rows, setRows] = useState<Row[]>([]),
     [busy, setBusy] = useState(false),
@@ -73,7 +72,7 @@ export default function YahooProcurementPanel() {
       );
     }
     setNotice(
-      `${items.length}商品を取得しました。${r.excludedCount ? `キャンセル等の${r.excludedCount}商品は除外しています。` : ""}${r.unrecognized ? `形式を確認できない通知が${r.unrecognized}通あります。これらは自動登録せず、Gmailでの確認が必要です。` : ""}写真・数量・送料を確認して登録できます。`,
+      `${items.length ? `未取り込みの${items.length}商品を取得しました。写真・数量・送料を確認して登録できます。` : "この期間に未取り込みの商品はありません。"}${r.importedCount ? `取り込み済み${r.importedCount}商品を除外しました。` : ""}${r.excludedCount ? `キャンセル等の${r.excludedCount}商品も除外しています。` : ""}${r.unrecognized ? `形式を確認できない通知が${r.unrecognized}通あります。これらは自動登録せず、Gmailでの確認が必要です。` : ""}`,
     );
   }
   async function execute(job: () => Promise<void>) {
@@ -84,18 +83,21 @@ export default function YahooProcurementPanel() {
     try {
       await job();
     } catch (e) {
+      setNotice("");
       setError((e as Error).message);
     } finally {
       working.current = false;
       setBusy(false);
     }
   }
-  async function fetchLots() {
+  async function fetchLots(specifyDates = false) {
     await execute(async () => {
       setRows([]);
       setRun("");
       setNotice("購入通知を取得しています…");
-      const r = await startYahooProcurementAction(from, to);
+      const r = specifyDates
+        ? await startYahooProcurementAction(from, to)
+        : await startYahooProcurementAction();
       if (!r.ok) throw Error(r.error);
       setRun(r.runId);
       await read(r.runId);
@@ -140,7 +142,31 @@ export default function YahooProcurementPanel() {
     <section className="space-y-5">
       <div className="rounded border bg-white p-5 space-y-4">
         <h2 className="text-lg font-bold">ヤフオクの落札商品を取り込む</h2>
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => void fetchLots()}
+            disabled={busy}
+            className="rounded bg-blue-700 px-6 py-3 font-bold text-white disabled:opacity-50"
+          >
+            未取り込みの商品を取得
+          </button>
+          {run && incomplete && (
+            <button
+              disabled={busy}
+              onClick={() => void execute(() => read(run))}
+              className="rounded border px-4 py-3"
+            >
+              取得を続ける
+            </button>
+          )}
+        </div>
+        <p className="text-sm text-gray-600">
+          取り込み済み・キャンセルの商品は除外します。まだ登録していない商品は、次回も表示されます。
+        </p>
+        <details className="rounded border border-gray-200 p-3">
+          <summary className="cursor-pointer font-medium text-blue-700">期間を指定して取得</summary>
+          <p className="mt-2 text-sm text-gray-600">通常は2026/10/15以降の直近31日が対象です。それ以前の商品はここで期間を指定してください（1回31日以内）。取り込み済みの商品は再登録しません。</p>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
           <label className="grid gap-1">
             開始日
             <input
@@ -162,28 +188,23 @@ export default function YahooProcurementPanel() {
             />
           </label>
           <button
-            onClick={fetchLots}
+            onClick={() => void fetchLots(true)}
             disabled={busy}
             className="rounded bg-blue-700 px-6 py-3 text-white disabled:opacity-50"
           >
-            取得
+            この期間の未取り込み商品を取得
           </button>
-          {run && incomplete && (
-            <button
-              disabled={busy}
-              onClick={() => void execute(() => read(run))}
-              className="rounded border px-4 py-3"
-            >
-              取得を続ける
-            </button>
-          )}
-        </div>
+          </div>
+        </details>
+        <details className="text-sm text-gray-600">
+          <summary className="cursor-pointer">登録内容・金額の計算方法</summary>
         <p className="text-sm text-gray-600">
           購入通知から取得し、先頭の商品写真を登録します。保管場所は所沢事務所、カテゴリは補修待ちです。ストアの会社名・本店住所はストア情報から入力し、個人出品者の氏名・住所は空欄にします。本人確認方法・職業は指定の固定値、古物の特徴は商品名から入力します。
         </p>
         <p className="text-sm text-gray-600">
           商品合計は税込です。送料は別欄で確認し、購入単価には送料を含め、1円未満は四捨五入します。まとめ買いの送料は商品金額の割合で配分します。金額変更通知がある場合は、取引ナビで最新の金額を確認してください。
         </p>
+        </details>
       </div>
       {error && (
         <p role="alert" className="rounded bg-red-50 p-4 text-red-700">
@@ -317,7 +338,7 @@ export default function YahooProcurementPanel() {
             ) : (
               r.sourceReady && (
                 <p className="mt-3 text-sm text-gray-600">
-                  個人出品者：相手氏名・住所・本人確認方法は空欄
+                  個人出品者：相手氏名・住所は空欄。本人確認方法・職業は指定の固定値
                 </p>
               )
             )}
