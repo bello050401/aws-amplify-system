@@ -25,6 +25,7 @@ import {
 } from "@/lib/procurement/store";
 import { resolveRestageDefaults } from "@/lib/procurement/restageLedger";
 import { classifyItem } from "@/lib/procurement/restage";
+import { procurementLedgerDetails } from "@/lib/procurement/ledgerDetails";
 import {
   parseYahooPurchaseMail,
   isYahooPurchaseNotice,
@@ -389,13 +390,13 @@ export async function registerYahooProcurementAction(
           dailyPurchaseTotal: ledgerTotal,
           counterpartyName: store?.name || "",
           counterpartyAddress: store?.address || "",
-          identityVerificationMethod: "",
-          counterpartyOccupation: "",
+          ...procurementLedgerDetails(lot.name),
           categoryId: preview.defaults.categoryId,
           categoryIds: [preview.defaults.categoryId],
           locationId: preview.defaults.locationId,
           adminMemo: `ヤフオク仕入れ / オークションID：${auctionId}\n商品合計（税込） ${target.itemTotal}円 / 送料配分 ${target.shipping}円${store ? "\nストア情報：" + store.url + "\n" + store.license : ""}`,
           customFields: {
+            ...procurementLedgerDetails(lot.name).customFields,
             __yahooPurchaseImport: {
               auctionId,
               orderId: lot.orderId,

@@ -27,3 +27,11 @@ test("Restage receipt is hidden and omitted on duplication, but preserved on edi
   assert.deepEqual(customFieldFormValues(original,[],{}),{memo:'keep'});
   assert.deepEqual(withHumanEdits({}, {}, original, {memo:'keep'}),original);
 });
+
+test("Yahoo import identity survives editing, but is hidden and not copied to another inventory", () => {
+  const original={usedGoodsFeature:'品目：椅子',__yahooPurchaseImport:{auctionId:'r1234567890'}};
+  const visible={usedGoodsFeature:'品目：椅子'};
+  assert.deepEqual(productCustomFields(original),visible);
+  assert.deepEqual(customFieldFormValues(original,[],{}),visible);
+  assert.deepEqual(withHumanEdits({}, {}, original, visible),original);
+});

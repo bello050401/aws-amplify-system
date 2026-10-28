@@ -221,6 +221,9 @@ async function main(){
   await test('新規仕入商品は本文を作成してから写真を送り二重作成しない',async()=>{
     const h=harness();h.seed();await h.run();h.rows.set('two',{id:'two',name:'新規仕入',quantity:1,categoryIds:[],customFields:JSON.stringify({__restageImport:{goodsId:'new'}}),images:[{type:'NORMAL',storageKey:'inventory/new.jpg'}],updatedAt:'2026-10-20T00:00:00Z'});h.port.readPrimaryImage=async()=> 'data:image/jpeg;base64,test';await h.tick();await h.tick();assert.equal(h.calls.filter(c=>c.method==='POST').length,1);assert.equal(h.calls.filter(c=>c.method==='PATCH'&&c.body.item_image).length,1);
   });
+  await test('ヤフオク新規商品は台帳と写真が連動し再同期で二重作成しない',async()=>{
+    const h=harness();h.seed();await h.run();h.rows.set('two',{id:'two',name:'ヤフオク仕入',quantity:2,categoryIds:[],identityVerificationMethod:'対面している相手の勤務先や家族などに、身元確認の問い合わせ',counterpartyOccupation:'リサイクル販売業',customFields:JSON.stringify({__yahooPurchaseImport:{auctionId:'r1234567890'},usedGoodsFeature:'品目：テーブル／色：ホワイト'}),images:[{type:'NORMAL',storageKey:'inventory/new.jpg'}],updatedAt:'2026-10-20T00:00:00Z'});h.port.readPrimaryImage=async()=> 'data:image/jpeg;base64,test';await h.tick();await h.tick();assert.equal(h.calls.filter(c=>c.method==='POST').length,1);assert.equal(h.calls.filter(c=>c.method==='PATCH'&&c.body.item_image).length,1);assert.equal(h.remotes.get('999')!.optional_attributes!['⚫︎古物の特徴'],'品目：テーブル／色：ホワイト');assert.equal(h.states.get('two')!.status,'OK');
+  });
   console.log(`PASS ${checks} transition workflow scenarios`);
 }
 if(process.argv[1]?.endsWith('verify-zaico-transition-runner.ts'))main().catch(e=>{console.error(e);process.exitCode=1;});

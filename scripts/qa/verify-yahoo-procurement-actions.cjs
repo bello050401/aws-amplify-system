@@ -45,6 +45,7 @@ function load(code, mods) {
 }
 (async () => {
   const domain = load(await bundle("lib/procurement/yahoo.ts"), {});
+  const ledger = load(await bundle("lib/procurement/ledgerDetails.ts"), {});
   let role = "ADMIN",
     who = "owner",
     records = new Map(),
@@ -160,6 +161,7 @@ function load(code, mods) {
     },
     "@/lib/procurement/restage": { classifyItem: () => "椅子" },
     "@/lib/procurement/yahoo": domain,
+      "@/lib/procurement/ledgerDetails": ledger,
     "@/lib/procurement/yahooPublic": {
       yahooPublicItem: async () => ({
         name: lot.name,
@@ -235,7 +237,9 @@ function load(code, mods) {
   assert.equal(p.dailyPurchaseTotal, 35200);
   assert.equal(p.counterpartyName, seller.name);
   assert.equal(p.counterpartyAddress, seller.address);
-  assert.equal(p.identityVerificationMethod, "");
+  assert.equal(p.identityVerificationMethod, ledger.PROCUREMENT_IDENTITY_METHOD);
+    assert.equal(p.counterpartyOccupation, ledger.PROCUREMENT_OCCUPATION);
+    assert.equal(p.customFields.usedGoodsFeature, ledger.procurementFeature(lot.name));
   assert.equal(p.categoryId, "repair-master");
   assert.equal(p.locationId, "office-master");
   assert.equal(

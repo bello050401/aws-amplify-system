@@ -4,7 +4,7 @@ import {changedFields,equal,reconcileFields,type SharedFields} from './protocol'
 import {ITEM_PREFIX,type Control} from './store';
 import type {V2Inventory} from './v2Client';
 import {sourceDatePatch} from './sourceDates';
-import {needsPhoto,restagePhoto} from './images';
+import {needsPhoto,procurementPhoto} from './images';
 
 export interface SyncWindow {remote:V2Inventory[];end:string;start?:string;full:boolean;initial:boolean}
 export interface TransitionPort{
@@ -73,12 +73,12 @@ export async function runTransition(p:TransitionPort){
   });
 
   async function fillPhoto(local:Row,state:Row,remote:V2Inventory){
-    const photo=restagePhoto(local);
+    const photo=procurementPhoto(local);
     if(!photo||!p.readPrimaryImage||remote.item_image?.url||state.imageExport?.fingerprint===photo.fingerprint)return;
     // Read the current inventory again so deletion/replacement during a sync
     // cannot cause an old image to be uploaded.
     const latest=await p.inventory(local.id);
-    if(!active(latest)||restagePhoto(latest)?.fingerprint!==photo.fingerprint||latest?.outboundBatchId)return;
+    if(!active(latest)||procurementPhoto(latest)?.fingerprint!==photo.fingerprint||latest?.outboundBatchId)return;
     const encoded=await p.readPrimaryImage(latest!);
     await p.archive('before-photo-export',{inventoryId:local.id,remote,fingerprint:photo.fingerprint});
     state=await save({...state,imageAttempt:{fingerprint:photo.fingerprint,at:new Date(p.now()).toISOString()},status:'IMAGE_UNCONFIRMED'});
