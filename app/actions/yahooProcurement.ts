@@ -27,6 +27,7 @@ import { resolveRestageDefaults } from "@/lib/procurement/restageLedger";
 import { classifyItem } from "@/lib/procurement/restage";
 import { procurementLedgerDetails } from "@/lib/procurement/ledgerDetails";
 import { defaultYahooPurchaseRange } from "@/lib/procurement/yahooRange";
+import { yahooPurchaseUnitPrice } from "@/lib/procurement/yahooAmounts";
 import {
   parseYahooPurchaseMail,
   isYahooPurchaseNotice,
@@ -412,9 +413,7 @@ export async function registerYahooProcurementAction(
           name: lot.name,
           quantity: target.quantity,
           unit: "点",
-          purchasePrice: Math.round(
-            (target.itemTotal + target.shipping) / target.quantity,
-          ),
+          purchasePrice: yahooPurchaseUnitPrice(target.itemTotal, target.shipping, target.quantity),
           transactionDate: lot.date,
           transactionType: "買受",
           purchaseQuantity: ledgerQuantity,

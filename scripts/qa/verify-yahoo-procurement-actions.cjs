@@ -47,6 +47,7 @@ function load(code, mods) {
   const domain = load(await bundle("lib/procurement/yahoo.ts"), {});
   const ledger = load(await bundle("lib/procurement/ledgerDetails.ts"), {});
   const ranges = load(await bundle("lib/procurement/yahooRange.ts"), {});
+  const amounts = load(await bundle("lib/procurement/yahooAmounts.ts"), {});
   let role = "ADMIN",
     who = "owner",
     records = new Map(),
@@ -163,6 +164,7 @@ function load(code, mods) {
     "@/lib/procurement/restage": { classifyItem: () => "椅子" },
     "@/lib/procurement/yahoo": domain,
     "@/lib/procurement/yahooRange": ranges,
+    "@/lib/procurement/yahooAmounts": amounts,
       "@/lib/procurement/ledgerDetails": ledger,
     "@/lib/procurement/yahooPublic": {
       yahooPublicItem: async () => ({
@@ -256,6 +258,20 @@ function load(code, mods) {
   inventory.clear();
   await register();
   assert.equal(created.length, 1); // A deleted imported item is not resurrected.
+  reset();
+  const rounded = amounts.initialYahooAmounts({ quantity: 3, itemTotal: 800, shipping: null });
+  assert((await action.registerYahooProcurementAction(runId, id, [{
+    ...confirmation()[0], quantity: Number(rounded.count), itemTotal: Number(rounded.total), shipping: Number(rounded.postage),
+  }])).ok);
+  assert.equal(created[0].input.purchasePrice, 267);
+  assert.equal(created[0].input.dailyPurchaseTotal, 800);
+  reset();
+  const edited = amounts.editYahooAmounts(amounts.initialYahooAmounts({ quantity: 4, itemTotal: 35200, shipping: 400 }), "unitPrice", "9000");
+  assert((await action.registerYahooProcurementAction(runId, id, [{
+    ...confirmation()[0], quantity: Number(edited.count), itemTotal: Number(edited.total), shipping: Number(edited.postage),
+  }])).ok);
+  assert.equal(created[0].input.purchasePrice, 9000);
+  assert.equal(created[0].input.dailyPurchaseTotal, 36000);
   reset(null);
   assert((await register()).ok);
   assert.equal(created[0].input.counterpartyName, "");
