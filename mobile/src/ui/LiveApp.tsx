@@ -10,7 +10,9 @@ import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
 import { removeInventory, removeInventoryPhotoAsset } from "../runtime/service";
-import {sellInventory,splitInventory,checkSplitBarcode,readInventorySearchCatalog} from '../runtime/service';
+import {sellInventory,splitInventory,checkSplitBarcode,syncInventorySearchCatalog} from '../runtime/service';
+import {CatalogStore} from '../domain/catalogStore';
+import {catalogStorage} from '../runtime/catalogStorage';
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 import type { InventorySearchInput } from "../domain/search";
@@ -68,21 +70,25 @@ export function LiveApp() {
   const ports = useMemo<StaffAppPorts | null>(() => {
     if (!userId) return null;
     const snapshot = new SnapshotStore(AsyncStorage, userId, API_ORIGIN);
+    const searchCatalogStore=new CatalogStore(catalogStorage,userId,API_ORIGIN);
+    const clearCaches=async()=>{await Promise.all([snapshot.clearOnLogout(),searchCatalogStore.clearOnLogout()]);};
+    const revoke=async(message:string)=>{
+      // Hide business data immediately, even when browser storage is unavailable.
+      setAccess(null);setCanEdit(false);setUserId(null);setMessage(message);
+      await Promise.allSettled([clearCaches(),signOut(),clearLocalSession(),Image.clearDiskCache(),Image.clearMemoryCache()]);
+    };
     const loadInventoryPage = async (input?: InventorySearchInput) => {
       try { return await readInventory(input); }
       catch (error) {
         // The paginated list must handle expired/revoked sessions too, not only the legacy loader.
         if (error instanceof StaffSessionError) {
-          setAccess(null); setCanEdit(false);
-          await snapshot.clearOnLogout();
-          await signOut(); await clearLocalSession();
-          setUserId(null); setMessage(error.message);
+          await revoke(error.message);
         }
         throw error;
       }
     };
     return {
-    snapshot,
+    snapshot,searchCatalogStore,
     online: async () => connected(await Network.getNetworkStateAsync()),
     loadInventory: async () => {
       try {
@@ -95,20 +101,18 @@ export function LiveApp() {
       catch (error) {
         setAccess(null);
         if (error instanceof StaffSessionError) {
-          await snapshot.clearOnLogout();
-          await signOut(); await clearLocalSession();
-          setCanEdit(false); setUserId(null); setMessage(error.message);
+          await revoke(error.message);
         }
         throw error;
       }
     },
     newMutationId: () => Crypto.randomUUID(),
     searchInventory: loadInventoryPage,
-    loadSearchCatalog: async()=>{
-      try{return await readInventorySearchCatalog();}
+    syncSearchCatalog: async(hashes,fresh)=>{
+      try{return await syncInventorySearchCatalog(hashes,fresh);}
       catch(error){
         if(error instanceof StaffSessionError){
-          setAccess(null);setCanEdit(false);await snapshot.clearOnLogout();await signOut();await clearLocalSession();setUserId(null);setMessage(error.message);
+          await revoke(error.message);
         }
         throw error;
       }
@@ -154,13 +158,9 @@ export function LiveApp() {
     finally { setBusy(false); }
   };
   const logout = async () => {
-    setAccess(null); setCanEdit(false);
-    try {
-      await ports?.snapshot.clearOnLogout();
-      await signOut(); await clearLocalSession();
-      setUserId(null);
-      await Promise.all([Image.clearDiskCache(), Image.clearMemoryCache()]);
-    } catch { setMessage("ログアウト処理を完了できませんでした。再試行してください。"); }
+    setAccess(null);setCanEdit(false);setUserId(null);
+    const results=await Promise.allSettled([ports?.snapshot.clearOnLogout(),ports?.searchCatalogStore?.clearOnLogout(),signOut(),clearLocalSession(),Image.clearDiskCache(),Image.clearMemoryCache()]);
+    if(results.some(r=>r.status==='rejected'))setMessage("画面を閉じましたが、端末の保存情報を消去できない項目があります。ブラウザのサイトデータを消去してください。");
   };
   if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}
     canIssueDocuments={!offline && access?.owner===userId && access.role==="ADMIN"}

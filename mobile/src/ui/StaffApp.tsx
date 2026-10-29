@@ -5,6 +5,9 @@ import { cachedInventorySearch, cachedSearchFields, mobileSearchFields, DEFAULT_
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import {QuickSearchCatalog,supportsQuickSearch} from '../domain/quickSearch';
+import {CatalogStore} from '../domain/catalogStore';
+import {CATALOG_SYNC_MS,type CatalogDelta} from '../domain/catalogProtocol';
+import {reusableThumbnail} from '../domain/thumbnailFreshness';
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -37,7 +40,8 @@ const tabs: { key: Tab; label: string; icon: IconName }[] = [
 export interface StaffAppPorts extends EditorPorts {
   snapshot: SnapshotStore;
   loadInventory: () => Promise<InventoryItem[]>;
-  loadSearchCatalog?:()=>Promise<InventoryItem[]>;
+  searchCatalogStore?:CatalogStore;
+  syncSearchCatalog?:(hashes?:string[],fresh?:boolean)=>Promise<CatalogDelta>;
   searchInventory?: (input: InventorySearchInput) => Promise<{ items: InventoryItem[]; imagesDeferred?: boolean; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null }>;
   loadThumbnails?: (ids: string[]) => Promise<InventoryThumbnail[]>;
   loadOptions?: () => Promise<InventoryOptions>;
@@ -93,32 +97,100 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const generation = useRef(0);
   const imageGeneration = useRef(0);
   const quick=useRef(new QuickSearchCatalog());
-  const catalogPending=useRef(false);
+  const catalogPending=useRef<Promise<void>|null>(null);
   const [catalogRevision,setCatalogRevision]=useState(0);
+  const [catalogSyncing,setCatalogSyncing]=useState(false);
+  const [catalogWarning,setCatalogWarning]=useState<string|null>(null);
+  const catalogEpoch=useRef(0);
+  const catalogDirty=useRef(false);
+  const persistTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const alive=useRef(true);
   const appActive=useRef(true);
-  const ensureCatalog=async()=>{
-    if(!appActive.current||offline||!ports.loadSearchCatalog||catalogPending.current||quick.current.ready())return;
-    catalogPending.current=true;
+  const persistCatalog=()=>{
+    clearTimeout(persistTimer.current);
+    persistTimer.current=setTimeout(()=>{
+      const state=quick.current.state();
+      if(alive.current&&state&&ports.searchCatalogStore)void ports.searchCatalogStore.write(state).catch(()=>{if(alive.current)setCatalogWarning('この端末に検索データを保存できません。現在の検索は利用できます。');});
+    },400);
+  };
+  const ensureCatalog=async(force=false):Promise<void>=>{
+    if(!appActive.current||offline||!ports.syncSearchCatalog)return;
+    if(catalogPending.current){await catalogPending.current;if(force&&alive.current)return ensureCatalog(true);return;}
+    if(!force&&!quick.current.needsSync())return;
     const version=quick.current.version();
-    try{const items=await ports.loadSearchCatalog();if(alive.current&&quick.current.replace(items,version))setCatalogRevision(n=>n+1);}
-    catch{/* Search remains available through the authenticated server route. */}
-    finally{catalogPending.current=false;}
+    const epoch=catalogEpoch.current;
+    setCatalogSyncing(true);
+    const task=(async()=>{
+      try{
+        const delta=await ports.syncSearchCatalog!(quick.current.manifest(),force||catalogDirty.current);
+        if(alive.current&&epoch===catalogEpoch.current&&quick.current.accept(delta,version)){
+          catalogDirty.current=false;setCatalogWarning(null);persistCatalog();
+          if(delta.buckets.length){
+            const current=snapshotRef.current;
+            if(current){
+              const items=quick.current.reconcile(current.items),next={...current,items};
+              snapshotRef.current=next;setSnapshot(next);
+              void ports.snapshot.write(items,next.fetchedAt).catch(()=>{});
+            }
+            setCatalogRevision(n=>n+1);
+          }
+        }
+      }catch{if(alive.current&&epoch===catalogEpoch.current)setCatalogWarning('最新情報を確認できません。保存済みの情報を表示しています。下に引くと再確認できます。');}
+      finally{if(alive.current&&epoch===catalogEpoch.current)setCatalogSyncing(false);}
+    })();
+    catalogPending.current=task;
+    try{await task;}finally{if(catalogPending.current===task)catalogPending.current=null;}
   };
   useEffect(()=>{
-    alive.current=true;quick.current.clear();
-    const timer=setTimeout(()=>void ensureCatalog(),700);
+    alive.current=true;const epoch=++catalogEpoch.current;
+    const version=quick.current.version();
+    // Authorization is checked by LiveApp before mounting. A saved catalogue is not a login credential.
+    const restore=ports.searchCatalogStore?.read().then(state=>{
+      if(state&&alive.current&&epoch===catalogEpoch.current&&quick.current.restore(state,version))setCatalogRevision(n=>n+1);
+    }).catch(()=>{if(alive.current)setCatalogWarning('端末の検索データを再作成しています。');});
+    void Promise.resolve(restore).then(()=>{if(epoch===catalogEpoch.current)void ensureCatalog(true);});
+    const timer=setInterval(()=>{if(appActive.current)void ensureCatalog();},CATALOG_SYNC_MS);
     const state=AppState.addEventListener('change',value=>{
       appActive.current=value==='active';
-      quick.current.clear();setCatalogRevision(n=>n+1);
-      if(value==='active')void ensureCatalog();
+      if(value==='active')void ensureCatalog(true);
     });
-    return()=>{alive.current=false;clearTimeout(timer);state.remove();quick.current.clear();};
+    return()=>{alive.current=false;catalogEpoch.current++;clearInterval(timer);clearTimeout(persistTimer.current);state.remove();};
   },[ports,offline]);
+
+  const thumbnailBusy=useRef(new Set<string>());
+  const thumbnailDone=useRef(new Map<string,number>());
+  const thumbnailRequests=useRef(0);
+  const thumbnailWaiting=useRef<InventoryItem[]>([]);
+  const loadVisibleThumbnails=async(items:InventoryItem[])=>{
+    if(offline||!ports.loadThumbnails)return;
+    if(thumbnailRequests.current>=2){thumbnailWaiting.current=items;return;}
+    const wanted=items.filter(i=>!reusableThumbnail(i.thumbnailUrl)&&!thumbnailBusy.current.has(`${i.id}:${i.updatedAt}`)&&Date.now()-(thumbnailDone.current.get(`${i.id}:${i.updatedAt}`)??0)>60000).slice(0,12);
+    if(!wanted.length)return;
+    thumbnailRequests.current++;
+    const keys=wanted.map(i=>`${i.id}:${i.updatedAt}`);keys.forEach(k=>thumbnailBusy.current.add(k));
+    try{
+      const thumbnails=await ports.loadThumbnails(wanted.map(i=>i.id));
+      if(!alive.current)return;
+      keys.forEach(k=>thumbnailDone.current.set(k,Date.now()));
+      while(thumbnailDone.current.size>500)thumbnailDone.current.delete(thumbnailDone.current.keys().next().value!);
+      // Merge by ID + version only; a later search must not discard a useful shared thumbnail.
+      setServerRows(rows=>rows&&mergeInventoryThumbnails(rows,thumbnails));
+      const current=snapshotRef.current;
+      if(current){const next={...current,items:mergeInventoryThumbnails(current.items,thumbnails)};snapshotRef.current=next;setSnapshot(next);}
+    }catch{/* Keep a usable text list; a later refresh retries photos. */}
+    finally{
+      keys.forEach(k=>thumbnailBusy.current.delete(k));thumbnailRequests.current--;
+      const waiting=thumbnailWaiting.current;thumbnailWaiting.current=[];
+      if(alive.current&&waiting.length)void thumbnailLoader.current(waiting);
+    }
+  };
+  const thumbnailLoader=useRef(loadVisibleThumbnails);thumbnailLoader.current=loadVisibleThumbnails;
+  const viewabilityConfig=useRef({itemVisiblePercentThreshold:5,minimumViewTime:120}).current;
+  const viewableChanged=useRef(({viewableItems}:{viewableItems:{item:InventoryItem}[]})=>{void thumbnailLoader.current(viewableItems.map(v=>v.item));}).current;
 
   useEffect(() => {
     let active = true;
-    ports.snapshot.read().then((cached) => { if (active) setSnapshot((current) => current ?? cached); })
+    ports.snapshot.read().then((cached) => { if (active) setSnapshot((current) => current ?? (cached?{...cached,items:quick.current.reconcile(cached.items)}:null)); })
       .catch(() => { if (active) setError("保存済みの在庫を読み込めませんでした。"); });
     return () => { active = false; generation.current++; imageGeneration.current++; detailGeneration.current++; };
   }, [ports]);
@@ -128,17 +200,16 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     if (!offline && ports.loadOptions) void ports.loadOptions().then(value=>{if(active)setOptions(value);}).catch(()=>{});
     return ()=>{active=false;};
   },[ports,offline]);
-  const searchFields=useMemo(()=>options?.searchFields ? mobileSearchFields(options.searchFields,features) : cachedSearchFields(snapshot?.items ?? [],features),[options,features,snapshot]);
+  const searchFields=useMemo(()=>options?.searchFields ? mobileSearchFields(options.searchFields,features) : cachedSearchFields([],features),[options,features]);
   const refresh = async (append = false,force = false) => {
     if (append && loading) return;
     const currentGeneration = ++generation.current;
     if (!append) imageGeneration.current++;
-    const currentImageGeneration = imageGeneration.current;
     setLoading(true); setError(null);
     try {
-      if(force){quick.current.clear();void ensureCatalog();}
+      if(force){await ensureCatalog(true);thumbnailDone.current.clear();}
       const input = { q: query, category, advanced, sort, offset: append ? nextOffset.current : 0 };
-      const local=offline||force?null:quick.current.search(input,searchFields);
+      const local=quick.current.search(input,searchFields);
       const online = local?true:await ports.online();
       if (currentGeneration !== generation.current) return;
       if (!online) { setError("【圏外です】"); return; }
@@ -146,7 +217,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       const previousById=new Map((snapshotRef.current?.items??[]).map(item=>[item.id,item]));
       const received = page ? page.items.map(item=>local&&previousById.get(item.id)?.updatedAt===item.updatedAt?previousById.get(item.id)!:item) : await ports.loadInventory();
       if (currentGeneration !== generation.current) return;
-      const fresh = mergeInventoryRead(snapshotRef.current?.items ?? [], received, page?.imagesDeferred);
+      const fresh = mergeInventoryRead(snapshotRef.current?.items ?? [], received, page?.imagesDeferred).map(item=>reusableThumbnail(item.thumbnailUrl)?item:{...item,thumbnailUrl:null});
       const items = page ? [...fresh, ...(snapshotRef.current?.items ?? []).filter(row => !fresh.some(item => item.id === row.id))].slice(0, 500) : fresh;
       if (page) {
         setServerRows(previous => append ? [...(previous ?? []), ...fresh.filter(item => !previous?.some(row => row.id === item.id))] : fresh);
@@ -158,23 +229,10 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       const next = { schema: 1 as const, owner: "current", items, fetchedAt };
       snapshotRef.current = next; setSnapshot(next);
       // Rendering/refresh completion must not wait for the offline copy or image lookups.
-      void ports.snapshot.write(items, fetchedAt).catch(() => {
+      if(!local)void ports.snapshot.write(items, fetchedAt).catch(() => {
         if (currentGeneration === generation.current) setError("在庫を読み込みましたが、この端末に圏外用のデータを保存できませんでした。");
       });
-      const imageIds=received.filter(item=>!local||!item.thumbnailUrl).map(item=>item.id);
-      if (page?.imagesDeferred && ports.loadThumbnails && imageIds.length) void ports.loadThumbnails(imageIds).then(thumbnails => {
-        if (currentImageGeneration !== imageGeneration.current) return;
-        setServerRows(rows => rows && mergeInventoryThumbnails(rows, thumbnails));
-        const current = snapshotRef.current;
-        if (!current) return;
-        const withImages = { ...current, items: mergeInventoryThumbnails(current.items, thumbnails) };
-        snapshotRef.current = withImages; setSnapshot(withImages);
-        void ports.snapshot.write(withImages.items, withImages.fetchedAt).catch(() => {
-          if (currentImageGeneration === imageGeneration.current) setError("在庫は更新しましたが、画像を端末に保存できませんでした。");
-        });
-      }).catch(() => {
-        if (currentImageGeneration === imageGeneration.current) setError("在庫は更新しましたが、画像を読み込めませんでした。下に引くと再読み込みできます。");
-      });
+      if(page?.imagesDeferred&&!offline)void loadVisibleThumbnails(fresh.slice(0,10));
     } catch {
       if (currentGeneration === generation.current) setError("在庫を読み込めませんでした。保存済みの在庫があれば表示します。");
     } finally {
@@ -185,15 +243,16 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     // Invalidate an older response immediately when search changes.
     generation.current++;
     imageGeneration.current++;
-    if(quick.current.ready()&&supportsQuickSearch({q:query,category,advanced,sort})&&!offline){void refresh();return;}
+    if(quick.current.ready()&&supportsQuickSearch({q:query,category,advanced,sort})){void refresh();void ensureCatalog();return;}
     setServerRows(null); setHasMore(false); setTotal(null);setTotalQuantity(null);
     if(query||category)void ensureCatalog();
-    const timer = setTimeout(() => { void refresh(); }, query ? 160 : 0);
+    const timer = setTimeout(() => { void refresh(); }, query ? 160 : 250);
     return () => clearTimeout(timer);
   }, [ports, query, category, advanced, sort, supportsQuickSearch({q:query,category,advanced,sort})?catalogRevision:0,offline]); // Reconnection never submits edits.
 
   const updateSavedItem = (item: InventoryItem) => {
     quick.current.update([item]);
+    catalogDirty.current=true;persistCatalog();
     setServerRows(rows => rows ? [item,...rows.filter(row=>row.id!==item.id)] : null);
     const items = [item,...(snapshot?.items ?? []).filter(row=>row.id!==item.id)].slice(0,500);
     // Only this record was refreshed; preserve the list's last-fetch timestamp.
@@ -208,6 +267,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   };
   const sold = ({sold,source}:SoldOutSaved) => {
     quick.current.update(source.id===sold.id?[sold]:[source,sold]);
+    catalogDirty.current=true;persistCatalog();
     const changed=new Map([source,sold].map(item=>[item.id,item]));
     const items=[...changed.values(),...(snapshot?.items??[]).filter(item=>!changed.has(item.id))].slice(0,500);
     const fetchedAt=snapshot?.fetchedAt??new Date().toISOString();
@@ -247,6 +307,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     try {
       await removeConfirmedInventory(deleteTarget, { online: ports.online, removeInventory: ports.removeInventory });
       quick.current.update([],[deleteTarget.id]);
+      catalogDirty.current=true;persistCatalog();
       generation.current++; detailGeneration.current++; setLoading(false); setDetailLoading(false);
       const items = (snapshotRef.current?.items ?? []).filter(item => item.id !== deleteTarget.id);
       const fetchedAt = snapshotRef.current?.fetchedAt ?? new Date().toISOString();
@@ -276,6 +337,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       if (attempt !== detailGeneration.current) return;
       if (detail.id !== item.id) throw new Error("Detail identity mismatch");
       quick.current.update([detail]);
+      persistCatalog();
       setSelected(detail);
       const current = snapshotRef.current;
       if (current) {
@@ -288,6 +350,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       if (attempt !== detailGeneration.current) return;
       if (error instanceof InventoryReadError && error.code === "not_found") {
         quick.current.update([],[item.id]);
+        catalogDirty.current=true;persistCatalog();
         // Only an authenticated 404 confirms deletion. Keep cached records on network/server failures.
         setSelected(null); setTab("inventory");
         setServerRows(rows => rows?.filter(row => row.id !== item.id) ?? null);
@@ -301,7 +364,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       } else setError("商品詳細を読み込めませんでした。保存済みの情報を表示しています。");
     } finally { if (attempt === detailGeneration.current) setDetailLoading(false); }
   };
-  const serverResults = !offline && !!ports.searchInventory && serverRows !== null;
+  const serverResults = !!ports.searchInventory && serverRows !== null;
   const rows = serverResults ? serverRows! : !offline && !!ports.searchInventory && !error ? [] : cachedInventorySearch(snapshot?.items ?? [],{q:query,category,advanced,sort},searchFields);
   const categories = options?.categories ?? Array.from(new Set((snapshot?.items ?? []).flatMap(item=>splitCategoryNames(item.category)).filter(Boolean)));
   const title = feature ?? (selected ? "物品詳細" : tabs.find((item) => item.key === tab)!.label);
@@ -347,8 +410,10 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><TextInput accessibilityLabel="商品名を検索" placeholder="商品名" value={query} onChangeText={setQuery} style={s.searchInput} />{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => setQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>
         <View style={s.filterRow}><Pressable accessibilityRole="button" onPress={() => setCategoryPicker(true)} style={s.category}><Ionicons name="pricetag-outline" size={21} color={colors.text} /><Text numberOfLines={1} style={[s.categoryText,{maxWidth:130}]}>{category || "カテゴリ"}</Text><Ionicons name="chevron-down" size={16} color={colors.muted} /></Pressable><Pressable accessibilityRole="button" onPress={()=>setSearchOpen(true)} style={s.advancedButton}><Text style={s.blue}>詳細検索{advanced.conditions.length ? `（${advanced.conditions.length}）` : ""}</Text></Pressable></View>
         <View style={s.summaryRow}><Text style={s.result}>{serverResults && total!==null ? total.toLocaleString() : rows.length.toLocaleString()}件{serverResults&&total===null&&hasMore?" 読込済み":""}・数量合計 {(serverResults && totalQuantity!==null ? totalQuantity : rows.reduce((sum,item)=>sum+item.quantity,0)).toLocaleString()}{serverResults&&totalQuantity===null&&hasMore?"（表示分）":""}</Text></View>
-        <Text style={s.scope}>{loading ? "自社システムから読み込み中…" : serverResults ? `${searchFields.find(field=>field.key===sort.field)?.label ?? "更新日"}・${sort.direction === "asc" ? "昇順" : "降順"}` : "読み込み済みの在庫のみ（未取得の詳細は対象外）"}</Text>
+        <Text style={s.scope}>{loading ? "読み込み中…" : serverResults ? `${searchFields.find(field=>field.key===sort.field)?.label ?? "更新日"}・${sort.direction === "asc" ? "昇順" : "降順"}` : "読み込み済みの在庫のみ（未取得の詳細は対象外）"}{catalogSyncing?' ・最新情報を確認中':''}</Text>
+        {catalogWarning&&<Text style={s.scope}>{catalogWarning}</Text>}
         </View>} data={rows} keyExtractor={(item) => item.id} refreshing={loading} onRefresh={() => refresh(false,true)}
+          initialNumToRender={10} maxToRenderPerBatch={8} windowSize={5} onViewableItemsChanged={viewableChanged} viewabilityConfig={viewabilityConfig}
           ListFooterComponent={!offline && hasMore ? <Pressable accessibilityRole="button" disabled={loading} onPress={() => { void refresh(true); }} style={s.pickerChoice}><Text style={s.blue}>{loading ? "読み込み中…" : "続きを読み込む"}</Text></Pressable> : undefined}
           contentContainerStyle={s.listContent} ListEmptyComponent={loading ? <ActivityIndicator color={colors.blue} /> : <Text style={s.empty}>{offline ? "この端末に保存済みの在庫がありません。通信が戻ったら読み込んでください。" : "該当する在庫がありません。"}</Text>}
           renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantityUnset?"未入力":item.quantity}`} onPress={() => { void openItem(item); }} style={s.row}>

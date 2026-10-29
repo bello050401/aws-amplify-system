@@ -18,6 +18,7 @@ import {StockSplitError,type StockSplitRequest,type StockSplitResult} from '../.
 import type {StockSplitSaved} from '../ui/StockSplitScreen';
 import {MobileSoldOutError,type SoldOutSaved} from '../ui/SoldOutScreen';
 import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutInput';
+import type {CatalogDelta} from '../domain/catalogProtocol';
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
@@ -114,6 +115,22 @@ export async function readInventorySearchCatalog():Promise<InventoryItem[]> {
   const value=await jsonRequest('/api/mobile/search-catalog',session.cookie) as {owner?:string;items?:InventoryItem[]};
   if(value.owner!==session.owner||!Array.isArray(value.items)||value.items.length>20000||!value.items.every(isInventoryItem))throw new Error('検索用の商品情報を確認できませんでした。');
   return value.items;
+}
+
+export async function syncInventorySearchCatalog(hashes?:string[],fresh=false):Promise<CatalogDelta>{
+ const session=await authenticatedSession();
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
+ try{
+  const response=await fetch(`${API_ORIGIN}/api/mobile/search-catalog`,{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,
+   headers:{Accept:'application/json','Content-Type':'application/json',...(session.cookie?{Cookie:session.cookie}:{})},body:JSON.stringify({hashes,fresh})});
+  if(!response.ok)throw new ReadHttpError(response.status);
+  const value=await response.json() as CatalogDelta&{owner?:string};
+  if(value.owner!==session.owner)throw new StaffSessionError('ログインが必要です。');
+  return value;
+ }catch(error){
+  if(error instanceof ReadHttpError&&(error.status===401||error.status===403))throw new StaffSessionError('ログインまたは端末の利用権限を確認してください。');
+  throw error;
+ }finally{clearTimeout(timer);}
 }
 
 export async function readInventoryThumbnails(ids: string[]): Promise<InventoryThumbnail[]> {

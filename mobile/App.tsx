@@ -12,6 +12,10 @@ import { nowInJst, shiftYearMonth } from "../lib/inventory/sales";
 import { totalsFromAggregate } from "../lib/inventory/salesAggregate";
 import { InventoryReadError } from "./src/domain/readError";
 import { cachedInventorySearch, cachedSearchFields } from "./src/domain/search";
+import {CatalogStore} from './src/domain/catalogStore';
+import {catalogStorage} from './src/runtime/catalogStorage';
+import {catalogBucket,compactCatalogItem,type CatalogDelta} from './src/domain/catalogProtocol';
+import {View,Text,Pressable} from 'react-native';
 
 function Preview() {
   const [staffPreview, setStaffPreview] = useState(false);
@@ -19,6 +23,7 @@ function Preview() {
   const offlineRef = useRef(false);
   const refreshTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("refresh-test") === "1").current;
   const readAttempt = useRef(0);
+  const [catalogReads,setCatalogReads]=useState(0),[pageReads,setPageReads]=useState(0);
   const loadingTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("loading-test") === "1").current;
   const quickSearchTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("quick-search-test") === "1").current;
   const records = useRef(quickSearchTest ? Array.from({length:6000},(_,index)=>({...previewItems[index%3],id:`quick-preview-${index}`,sku:`QA-${index}`,name:`検索確認 チェア ${index}`,thumbnailUrl:null,quantity:index%10+1})) : __DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
@@ -39,9 +44,17 @@ function Preview() {
       },
     } : {}),
     ...(quickSearchTest ? {
-      loadSearchCatalog: async()=>{await new Promise(resolve=>setTimeout(resolve,50));return records.current.map(item=>({...item}));},
+      searchCatalogStore:new CatalogStore(catalogStorage,'ui-preview','quick-search-preview'),
+      syncSearchCatalog:async(previous):Promise<CatalogDelta>=>{
+        setCatalogReads(n=>n+1);await new Promise(resolve=>setTimeout(resolve,3000));
+        const buckets=Array.from({length:64},()=>[] as typeof records.current);
+        records.current.forEach(i=>buckets[catalogBucket(i.id)].push(compactCatalogItem(i)));
+        buckets.forEach(b=>b.sort((a,b)=>a.id<b.id?-1:1));
+        const hashes=await Promise.all(buckets.map(async b=>(await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,JSON.stringify(b))).slice(0,32)));
+        return {schema:2,hashes,total:records.current.length,checkedAt:new Date().toISOString(),buckets:buckets.flatMap((items,index)=>previous?.[index]===hashes[index]?[]:[{index,items}])};
+      },
       searchInventory: async input=>{
-        await new Promise(resolve=>setTimeout(resolve,600));
+        setPageReads(n=>n+1);await new Promise(resolve=>setTimeout(resolve,3000));
         const all=cachedInventorySearch(records.current,input,cachedSearchFields(records.current,{ecListing:true,sales:true})),offset=input.offset??0;
         return {items:all.slice(offset,offset+50),hasMore:offset+50<all.length,nextOffset:offset+50,total:all.length,totalQuantity:all.reduce((sum,item)=>sum+item.quantity,0)};
       },
@@ -93,11 +106,11 @@ function Preview() {
       return saved;
     },
   }), []);
-  return <StaffApp ports={ports} offline={offline} preview writesEnabled canSellInventory={!staffPreview}
+  return <>{quickSearchTest&&<View><Text>確認専用：同期 {catalogReads} / サーバー検索 {pageReads}</Text><Pressable accessibilityRole="button" accessibilityLabel="検索データを2日前にして再起動" onPress={async()=>{const state=await ports.searchCatalogStore!.read();if(state){await ports.searchCatalogStore!.write({...state,checkedAt:new Date(Date.now()-2*86400000).toISOString()});window.location.reload();}}}><Text>2日後の再起動を確認</Text></Pressable></View>}<StaffApp ports={ports} offline={offline} preview writesEnabled canSellInventory={!staffPreview}
     features={{ ecListing: !staffPreview, sales: !staffPreview }}
     previewAccount={staffPreview ? "スタッフ" : "管理者"} onTogglePreviewAccount={() => setStaffPreview(value => !value)} onToggleOffline={() => {
     offlineRef.current = !offlineRef.current; setOffline(offlineRef.current);
-  }} />;
+  }} /></>;
 }
 
 export default function App() {

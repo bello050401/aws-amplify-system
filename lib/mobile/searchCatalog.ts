@@ -9,7 +9,7 @@ import type {InventoryItem} from '@/mobile/src/domain/inventory';
 
 const client=DynamoDBDocumentClient.from(new DynamoDBClient({region:process.env.AWS_REGION||'us-west-2'}));
 type CatalogRecord={id:string;sku?:string;sourceSystem?:string;sourceInventoryId?:string;name?:string;quantity?:number;unit?:string;categoryId?:string;categoryIds?:string[];locationId?:string;statusId?:string;barcode?:string;plannedSalePrice?:number;createdAt?:string;updatedAt:string;listUpdatedAt?:string};
-// A bounded, in-memory search catalogue, never originals, custom fields or sales/customer records.
+// Minimal search projection, never originals, custom fields or sales/customer records.
 export const CATALOG_ATTRIBUTES=['id','sku','sourceSystem','sourceInventoryId','name','quantity','unit','categoryId','categoryIds','locationId','statusId','barcode','plannedSalePrice','createdAt','updatedAt','listUpdatedAt'] as const;
 export async function readSearchCatalog(masters:{categories:{id:string;name:string}[];locations:{id:string;name:string}[];statuses:{id:string;label:string}[]}):Promise<InventoryItem[]>{
  const names=Object.fromEntries(CATALOG_ATTRIBUTES.map((key,i)=>['#p'+i,key]));
@@ -28,4 +28,21 @@ export async function readSearchCatalog(masters:{categories:{id:string;name:stri
  return rows.map(row=>({id:row.id,sku:row.sku??'',displayId:resolveDisplayInventoryId({sourceSystem:row.sourceSystem??null,sourceInventoryId:row.sourceInventoryId??null,sku:row.sku??''}),name:row.name??'',quantity:row.quantity??0,quantityUnset:row.quantity==null,
   unit:row.unit??'',category:inventoryCategoryIds(row).map(id=>cats.get(id)).filter(Boolean).join(','),location:locs.get(row.locationId??'')??'',statusId:row.statusId??null,condition:states.get(row.statusId??'')??'',
   barcode:row.barcode??'',note:'',plannedSalePrice:row.plannedSalePrice??null,thumbnailUrl:null,createdAt:row.createdAt,updatedAt:row.updatedAt,listUpdatedAt:row.listUpdatedAt??undefined}));
+}
+
+// Coalesce concurrent reads within one server instance. Every caller authorizes first.
+// Forced refresh after a local edit bypasses cached and in-flight older reads.
+let cached:{key:string;items:InventoryItem[];checkedAt:string}|null=null;
+let pending:{key:string;promise:Promise<{items:InventoryItem[];checkedAt:string}>}|null=null;
+export async function cachedSearchCatalog(masters:Parameters<typeof readSearchCatalog>[0],fresh=false){
+ const key=JSON.stringify(masters);
+ if(!fresh&&cached?.key===key&&Date.now()-Date.parse(cached.checkedAt)<15000)return cached;
+ if(!fresh&&pending?.key===key)return pending.promise;
+ const checkedAt=new Date().toISOString();
+ const promise=readSearchCatalog(masters).then(items=>{
+  if(!cached||cached.checkedAt<=checkedAt)cached={key,items,checkedAt};
+  return {items,checkedAt};
+ });
+ pending={key,promise};
+ try{return await promise;}finally{if(pending?.promise===promise)pending=null;}
 }
