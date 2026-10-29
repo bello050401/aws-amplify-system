@@ -109,6 +109,13 @@ export async function readInventory(input: InventorySearchInput = {}): Promise<I
   return value;
 }
 
+export async function readInventorySearchCatalog():Promise<InventoryItem[]> {
+  const session=await authenticatedSession();
+  const value=await jsonRequest('/api/mobile/search-catalog',session.cookie) as {owner?:string;items?:InventoryItem[]};
+  if(value.owner!==session.owner||!Array.isArray(value.items)||value.items.length>20000||!value.items.every(isInventoryItem))throw new Error('検索用の商品情報を確認できませんでした。');
+  return value.items;
+}
+
 export async function readInventoryThumbnails(ids: string[]): Promise<InventoryThumbnail[]> {
   if (!ids.length) return [];
   const session = await authenticatedSession();

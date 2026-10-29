@@ -6,8 +6,10 @@ import { DETAIL_FIELDS, copyDetailValues, visibleDetailFields } from "../src/dom
 import { previewItems } from "../src/preview/fixture";
 
 test("all screenshot detail fields are distinct and numeric-looking codes/measurements retain text", () => {
-  assert.equal(DETAIL_FIELDS.length, 35);
-  assert.equal(new Set(DETAIL_FIELDS.map(field => field.key)).size, 35);
+  assert.equal(DETAIL_FIELDS.length, 36);
+  assert.equal(new Set(DETAIL_FIELDS.map(field => field.key)).size, 36);
+  assert.equal(DETAIL_FIELDS.at(-1)?.key, "outboundName");
+  assert.equal(DETAIL_FIELDS.at(-1)?.label, "出庫時の名前");
   const draft = draftFor(previewItems[0]);
   assert.equal(draft.quantity, "11"); assert.equal(draft.details.purchaseQuantity, "3");
   assert.equal(draft.plannedSalePrice, "29800"); assert.equal(draft.details.purchasePrice, "5940");

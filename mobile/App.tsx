@@ -11,6 +11,7 @@ import { LiveApp } from "./src/ui/LiveApp";
 import { nowInJst, shiftYearMonth } from "../lib/inventory/sales";
 import { totalsFromAggregate } from "../lib/inventory/salesAggregate";
 import { InventoryReadError } from "./src/domain/readError";
+import { cachedInventorySearch, cachedSearchFields } from "./src/domain/search";
 
 function Preview() {
   const [staffPreview, setStaffPreview] = useState(false);
@@ -19,7 +20,8 @@ function Preview() {
   const refreshTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("refresh-test") === "1").current;
   const readAttempt = useRef(0);
   const loadingTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("loading-test") === "1").current;
-  const records = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
+  const quickSearchTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("quick-search-test") === "1").current;
+  const records = useRef(quickSearchTest ? Array.from({length:6000},(_,index)=>({...previewItems[index%3],id:`quick-preview-${index}`,sku:`QA-${index}`,name:`検索確認 チェア ${index}`,thumbnailUrl:null,quantity:index%10+1})) : __DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
     ? galleryPreviewItems() : previewItems.map((item,index) => ({ ...item, ...(__DEV__ && index===0 && typeof window!=='undefined' && new URLSearchParams(window.location.search).get('photo-delete-test')==='1' ? {photosComplete:true,photos:[{id:'photo-00000000-0000-4000-8000-000000000001',source:'PHOTO_ASSET' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:true},{id:'preview-image',source:'INVENTORY' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:false}]} : {}) })));
   const uploadedPhotos=useRef(new Map<string,string>());
   const ports = useMemo<StaffAppPorts>(() => ({
@@ -34,6 +36,14 @@ function Preview() {
       loadThumbnails: async () => {
         await new Promise(resolve => setTimeout(resolve, 3000));
         return previewItems.map(item => ({ id: item.id, updatedAt: item.updatedAt, thumbnailUrl: null }));
+      },
+    } : {}),
+    ...(quickSearchTest ? {
+      loadSearchCatalog: async()=>{await new Promise(resolve=>setTimeout(resolve,50));return records.current.map(item=>({...item}));},
+      searchInventory: async input=>{
+        await new Promise(resolve=>setTimeout(resolve,600));
+        const all=cachedInventorySearch(records.current,input,cachedSearchFields(records.current,{ecListing:true,sales:true})),offset=input.offset??0;
+        return {items:all.slice(offset,offset+50),hasMore:offset+50<all.length,nextOffset:offset+50,total:all.length,totalQuantity:all.reduce((sum,item)=>sum+item.quantity,0)};
       },
     } : {}),
     online: async () => !offlineRef.current,

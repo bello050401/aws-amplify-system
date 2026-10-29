@@ -10,7 +10,7 @@ import { RESTRICTED_FEATURES } from "../domain/access";
 import { SnapshotStore } from "../domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./StaffApp";
 import { removeInventory, removeInventoryPhotoAsset } from "../runtime/service";
-import {sellInventory,splitInventory,checkSplitBarcode} from '../runtime/service';
+import {sellInventory,splitInventory,checkSplitBarcode,readInventorySearchCatalog} from '../runtime/service';
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 import type { InventorySearchInput } from "../domain/search";
@@ -104,6 +104,15 @@ export function LiveApp() {
     },
     newMutationId: () => Crypto.randomUUID(),
     searchInventory: loadInventoryPage,
+    loadSearchCatalog: async()=>{
+      try{return await readInventorySearchCatalog();}
+      catch(error){
+        if(error instanceof StaffSessionError){
+          setAccess(null);setCanEdit(false);await snapshot.clearOnLogout();await signOut();await clearLocalSession();setUserId(null);setMessage(error.message);
+        }
+        throw error;
+      }
+    },
     loadThumbnails: readInventoryThumbnails,
     loadDetail: readInventoryDetail,
     loadOptions: readInventoryOptions,
