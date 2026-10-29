@@ -13,6 +13,7 @@ import { removeInventory, removeInventoryPhotoAsset } from "../runtime/service";
 import {sellInventory,splitInventory,checkSplitBarcode,syncInventorySearchCatalog} from '../runtime/service';
 import {CatalogStore} from '../domain/catalogStore';
 import {catalogStorage} from '../runtime/catalogStorage';
+import {createListPhotoCache} from '../runtime/listPhotoCache';
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 import type { InventorySearchInput } from "../domain/search";
@@ -71,7 +72,9 @@ export function LiveApp() {
     if (!userId) return null;
     const snapshot = new SnapshotStore(AsyncStorage, userId, API_ORIGIN);
     const searchCatalogStore=new CatalogStore(catalogStorage,userId,API_ORIGIN);
-    const clearCaches=async()=>{await Promise.all([snapshot.clearOnLogout(),searchCatalogStore.clearOnLogout()]);};
+    const loadThumbnails=async(ids:string[])=>{try{return await readInventoryThumbnails(ids);}catch(error){if(error instanceof StaffSessionError)await revoke(error.message);throw error;}};
+    const listPhotoCache=createListPhotoCache(userId,loadThumbnails);
+    const clearCaches=async()=>{await Promise.all([snapshot.clearOnLogout(),searchCatalogStore.clearOnLogout(),listPhotoCache?.clearOnLogout()]);};
     const revoke=async(message:string)=>{
       // Hide business data immediately, even when browser storage is unavailable.
       setAccess(null);setCanEdit(false);setUserId(null);setMessage(message);
@@ -88,7 +91,7 @@ export function LiveApp() {
       }
     };
     return {
-    snapshot,searchCatalogStore,
+    snapshot,searchCatalogStore,listPhotoCache,
     online: async () => connected(await Network.getNetworkStateAsync()),
     loadInventory: async () => {
       try {
@@ -117,7 +120,7 @@ export function LiveApp() {
         throw error;
       }
     },
-    loadThumbnails: readInventoryThumbnails,
+    loadThumbnails,
     loadDetail: readInventoryDetail,
     loadOptions: readInventoryOptions,
     uploadPhoto: uploadInventoryPhoto,
@@ -159,7 +162,7 @@ export function LiveApp() {
   };
   const logout = async () => {
     setAccess(null);setCanEdit(false);setUserId(null);
-    const results=await Promise.allSettled([ports?.snapshot.clearOnLogout(),ports?.searchCatalogStore?.clearOnLogout(),signOut(),clearLocalSession(),Image.clearDiskCache(),Image.clearMemoryCache()]);
+    const results=await Promise.allSettled([ports?.snapshot.clearOnLogout(),ports?.searchCatalogStore?.clearOnLogout(),ports?.listPhotoCache?.clearOnLogout(),signOut(),clearLocalSession(),Image.clearDiskCache(),Image.clearMemoryCache()]);
     if(results.some(r=>r.status==='rejected'))setMessage("画面を閉じましたが、端末の保存情報を消去できない項目があります。ブラウザのサイトデータを消去してください。");
   };
   if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}

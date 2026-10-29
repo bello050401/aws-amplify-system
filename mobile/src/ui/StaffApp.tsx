@@ -8,6 +8,8 @@ import {QuickSearchCatalog,supportsQuickSearch} from '../domain/quickSearch';
 import {CatalogStore} from '../domain/catalogStore';
 import {CATALOG_SYNC_MS,type CatalogDelta} from '../domain/catalogProtocol';
 import {reusableThumbnail} from '../domain/thumbnailFreshness';
+import type {ListPhotoCache} from '../domain/listPhotoCache';
+import {useListPhoto} from './useListPhoto';
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -41,6 +43,7 @@ export interface StaffAppPorts extends EditorPorts {
   snapshot: SnapshotStore;
   loadInventory: () => Promise<InventoryItem[]>;
   searchCatalogStore?:CatalogStore;
+  listPhotoCache?:ListPhotoCache;
   syncSearchCatalog?:(hashes?:string[],fresh?:boolean)=>Promise<CatalogDelta>;
   searchInventory?: (input: InventorySearchInput) => Promise<{ items: InventoryItem[]; imagesDeferred?: boolean; hasMore: boolean; nextOffset?: number; total?: number | null; totalQuantity?: number | null }>;
   loadThumbnails?: (ids: string[]) => Promise<InventoryThumbnail[]>;
@@ -101,11 +104,16 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const [catalogRevision,setCatalogRevision]=useState(0);
   const [catalogSyncing,setCatalogSyncing]=useState(false);
   const [catalogWarning,setCatalogWarning]=useState<string|null>(null);
+  const [photoWarning,setPhotoWarning]=useState<string|null>(null);
   const catalogEpoch=useRef(0);
   const catalogDirty=useRef(false);
   const persistTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const alive=useRef(true);
   const appActive=useRef(true);
+  const selectPhotos=(observedAt?:number)=>{
+    const state=quick.current.state();
+    if(state&&quick.current.ready())void ports.listPhotoCache?.select(state.items,observedAt??Date.parse(state.checkedAt));
+  };
   const persistCatalog=()=>{
     clearTimeout(persistTimer.current);
     persistTimer.current=setTimeout(()=>{
@@ -125,6 +133,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         const delta=await ports.syncSearchCatalog!(quick.current.manifest(),force||catalogDirty.current);
         if(alive.current&&epoch===catalogEpoch.current&&quick.current.accept(delta,version)){
           catalogDirty.current=false;setCatalogWarning(null);persistCatalog();
+          selectPhotos();
           if(delta.buckets.length){
             const current=snapshotRef.current;
             if(current){
@@ -146,7 +155,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     const version=quick.current.version();
     // Authorization is checked by LiveApp before mounting. A saved catalogue is not a login credential.
     const restore=ports.searchCatalogStore?.read().then(state=>{
-      if(state&&alive.current&&epoch===catalogEpoch.current&&quick.current.restore(state,version))setCatalogRevision(n=>n+1);
+      if(state&&alive.current&&epoch===catalogEpoch.current&&quick.current.restore(state,version)){setCatalogRevision(n=>n+1);selectPhotos();}
     }).catch(()=>{if(alive.current)setCatalogWarning('端末の検索データを再作成しています。');});
     void Promise.resolve(restore).then(()=>{if(epoch===catalogEpoch.current)void ensureCatalog(true);});
     const timer=setInterval(()=>{if(appActive.current)void ensureCatalog();},CATALOG_SYNC_MS);
@@ -157,6 +166,19 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     return()=>{alive.current=false;catalogEpoch.current++;clearInterval(timer);clearTimeout(persistTimer.current);state.remove();};
   },[ports,offline]);
 
+  useEffect(()=>{
+    const cache=ports.listPhotoCache;if(!cache)return;
+    const active=()=>cache.setActive(!offline&&appActive.current&&(typeof document==='undefined'||document.visibilityState==='visible'));
+    active();const unsubscribe=cache.subscribe(()=>setPhotoWarning(cache.status().warning));
+    const app=AppState.addEventListener('change',()=>active());
+    const defer=()=>cache.defer();
+    if(typeof document!=='undefined'){
+      document.addEventListener('visibilitychange',active);
+      for(const event of ['pointerdown','touchmove','wheel','keydown'])document.addEventListener(event,defer,{passive:true});
+    }
+    return()=>{cache.setActive(false);unsubscribe();app.remove();if(typeof document!=='undefined'){document.removeEventListener('visibilitychange',active);for(const event of ['pointerdown','touchmove','wheel','keydown'])document.removeEventListener(event,defer);}};
+  },[ports,offline]);
+
   const thumbnailBusy=useRef(new Set<string>());
   const thumbnailDone=useRef(new Map<string,number>());
   const thumbnailRequests=useRef(0);
@@ -164,13 +186,15 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const loadVisibleThumbnails=async(items:InventoryItem[])=>{
     if(offline||!ports.loadThumbnails)return;
     if(thumbnailRequests.current>=2){thumbnailWaiting.current=items;return;}
-    const wanted=items.filter(i=>!reusableThumbnail(i.thumbnailUrl)&&!thumbnailBusy.current.has(`${i.id}:${i.updatedAt}`)&&Date.now()-(thumbnailDone.current.get(`${i.id}:${i.updatedAt}`)??0)>60000).slice(0,12);
+    const wanted=items.filter(i=>!ports.listPhotoCache?.has(i)&&!reusableThumbnail(i.thumbnailUrl)&&!thumbnailBusy.current.has(`${i.id}:${i.updatedAt}`)&&Date.now()-(thumbnailDone.current.get(`${i.id}:${i.updatedAt}`)??0)>60000).slice(0,12);
     if(!wanted.length)return;
     thumbnailRequests.current++;
+    ports.listPhotoCache?.foregroundBusy(true);
     const keys=wanted.map(i=>`${i.id}:${i.updatedAt}`);keys.forEach(k=>thumbnailBusy.current.add(k));
     try{
       const thumbnails=await ports.loadThumbnails(wanted.map(i=>i.id));
       if(!alive.current)return;
+      ports.listPhotoCache?.hint(thumbnails);
       keys.forEach(k=>thumbnailDone.current.set(k,Date.now()));
       while(thumbnailDone.current.size>500)thumbnailDone.current.delete(thumbnailDone.current.keys().next().value!);
       // Merge by ID + version only; a later search must not discard a useful shared thumbnail.
@@ -180,6 +204,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     }catch{/* Keep a usable text list; a later refresh retries photos. */}
     finally{
       keys.forEach(k=>thumbnailBusy.current.delete(k));thumbnailRequests.current--;
+      ports.listPhotoCache?.foregroundBusy(thumbnailRequests.current>0);
       const waiting=thumbnailWaiting.current;thumbnailWaiting.current=[];
       if(alive.current&&waiting.length)void thumbnailLoader.current(waiting);
     }
@@ -252,7 +277,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
 
   const updateSavedItem = (item: InventoryItem) => {
     quick.current.update([item]);
-    catalogDirty.current=true;persistCatalog();
+    catalogDirty.current=true;persistCatalog();selectPhotos(Date.now());
     setServerRows(rows => rows ? [item,...rows.filter(row=>row.id!==item.id)] : null);
     const items = [item,...(snapshot?.items ?? []).filter(row=>row.id!==item.id)].slice(0,500);
     // Only this record was refreshed; preserve the list's last-fetch timestamp.
@@ -267,7 +292,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   };
   const sold = ({sold,source}:SoldOutSaved) => {
     quick.current.update(source.id===sold.id?[sold]:[source,sold]);
-    catalogDirty.current=true;persistCatalog();
+    catalogDirty.current=true;persistCatalog();selectPhotos(Date.now());
     const changed=new Map([source,sold].map(item=>[item.id,item]));
     const items=[...changed.values(),...(snapshot?.items??[]).filter(item=>!changed.has(item.id))].slice(0,500);
     const fetchedAt=snapshot?.fetchedAt??new Date().toISOString();
@@ -307,7 +332,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     try {
       await removeConfirmedInventory(deleteTarget, { online: ports.online, removeInventory: ports.removeInventory });
       quick.current.update([],[deleteTarget.id]);
-      catalogDirty.current=true;persistCatalog();
+      catalogDirty.current=true;persistCatalog();selectPhotos(Date.now());
       generation.current++; detailGeneration.current++; setLoading(false); setDetailLoading(false);
       const items = (snapshotRef.current?.items ?? []).filter(item => item.id !== deleteTarget.id);
       const fetchedAt = snapshotRef.current?.fetchedAt ?? new Date().toISOString();
@@ -336,7 +361,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       const detail = await ports.loadDetail(item.id);
       if (attempt !== detailGeneration.current) return;
       if (detail.id !== item.id) throw new Error("Detail identity mismatch");
-      quick.current.update([detail]);
+      quick.current.update([detail]);selectPhotos(Date.now());
       persistCatalog();
       setSelected(detail);
       const current = snapshotRef.current;
@@ -350,7 +375,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       if (attempt !== detailGeneration.current) return;
       if (error instanceof InventoryReadError && error.code === "not_found") {
         quick.current.update([],[item.id]);
-        catalogDirty.current=true;persistCatalog();
+        catalogDirty.current=true;persistCatalog();selectPhotos(Date.now());
         // Only an authenticated 404 confirms deletion. Keep cached records on network/server failures.
         setSelected(null); setTab("inventory");
         setServerRows(rows => rows?.filter(row => row.id !== item.id) ?? null);
@@ -392,7 +417,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       {error && selected && !detailLoading && <Pressable accessibilityRole="button" onPress={() => { void openItem(selected); }} style={{padding:14}}><Text style={{color:colors.blue}}>商品詳細を再読み込み</Text></Pressable>}
       {feature ? <View style={s.pending}><Text style={s.pendingTitle}>{feature}</Text><Text style={s.pendingText}>この操作は実装中です。実在庫への変更は行いません。</Text></View> : selected ? <ScrollView contentContainerStyle={s.detail}>
         <View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(selected.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.itemTitle}>{selected.name}</Text>
-        <View style={s.hero}><ProductImage item={selected} large /><View style={s.heroFacts}>
+        <View style={s.hero}><ProductImage item={selected} large cache={ports.listPhotoCache}/><View style={s.heroFacts}>
           <View style={s.heroFact}><Text style={s.label}>数量</Text><Text style={s.heroQuantity}>{selected.quantityUnset?"—":selected.quantity}<Text style={s.unit}> {selected.unit}</Text></Text></View>
           <View style={s.heroFact}><Text style={s.label}>保管場所</Text><Text style={s.location}>{selected.location || "未設定"}</Text></View>
         </View></View>
@@ -412,12 +437,13 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         <View style={s.summaryRow}><Text style={s.result}>{serverResults && total!==null ? total.toLocaleString() : rows.length.toLocaleString()}件{serverResults&&total===null&&hasMore?" 読込済み":""}・数量合計 {(serverResults && totalQuantity!==null ? totalQuantity : rows.reduce((sum,item)=>sum+item.quantity,0)).toLocaleString()}{serverResults&&totalQuantity===null&&hasMore?"（表示分）":""}</Text></View>
         <Text style={s.scope}>{loading ? "読み込み中…" : serverResults ? `${searchFields.find(field=>field.key===sort.field)?.label ?? "更新日"}・${sort.direction === "asc" ? "昇順" : "降順"}` : "読み込み済みの在庫のみ（未取得の詳細は対象外）"}{catalogSyncing?' ・最新情報を確認中':''}</Text>
         {catalogWarning&&<Text style={s.scope}>{catalogWarning}</Text>}
+        {photoWarning&&<Text style={s.scope}>{photoWarning}</Text>}
         </View>} data={rows} keyExtractor={(item) => item.id} refreshing={loading} onRefresh={() => refresh(false,true)}
           initialNumToRender={10} maxToRenderPerBatch={8} windowSize={5} onViewableItemsChanged={viewableChanged} viewabilityConfig={viewabilityConfig}
           ListFooterComponent={!offline && hasMore ? <Pressable accessibilityRole="button" disabled={loading} onPress={() => { void refresh(true); }} style={s.pickerChoice}><Text style={s.blue}>{loading ? "読み込み中…" : "続きを読み込む"}</Text></Pressable> : undefined}
           contentContainerStyle={s.listContent} ListEmptyComponent={loading ? <ActivityIndicator color={colors.blue} /> : <Text style={s.empty}>{offline ? "この端末に保存済みの在庫がありません。通信が戻ったら読み込んでください。" : "該当する在庫がありません。"}</Text>}
           renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantityUnset?"未入力":item.quantity}`} onPress={() => { void openItem(item); }} style={s.row}>
-            <ProductImage item={item} /><View style={s.rowMain}><View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(item.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.rowName} numberOfLines={2}>{item.name}</Text></View>
+            <ProductImage item={item} cache={ports.listPhotoCache}/><View style={s.rowMain}><View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(item.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.rowName} numberOfLines={2}>{item.name}</Text></View>
             <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
           </Pressable>} />
       </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
@@ -442,9 +468,10 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   </SafeAreaView>;
 }
 
-function ProductImage({ item, large }: { item: InventoryItem; large?: boolean }) {
+function ProductImage({ item, large,cache }: { item: InventoryItem; large?: boolean;cache?:ListPhotoCache }) {
   const style = large ? s.largeImage : s.thumbnail;
-  return item.thumbnailUrl ? <Image source={{ uri: item.thumbnailUrl }} style={style} contentFit="cover" cachePolicy="memory-disk" accessibilityLabel={item.name} /> : <View style={[style, s.placeholder]}><Ionicons name="cube-outline" size={large ? 60 : 28} color="#C8BDAA" /></View>;
+  const uri=useListPhoto(cache,item);
+  return uri ? <Image source={{ uri }} style={style} contentFit="cover" cachePolicy={uri.startsWith('blob:')?'none':'memory-disk'} accessibilityLabel={item.name} /> : <View style={[style, s.placeholder]}><Ionicons name="cube-outline" size={large ? 60 : 28} color="#C8BDAA" /></View>;
 }
 
 function DetailFact({ label, value, multiline = false }: { label: string; value?: string; multiline?: boolean }) {
