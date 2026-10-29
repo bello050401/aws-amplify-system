@@ -48,6 +48,7 @@ const CUSTOM_FIELD_SEED: { fieldKey: string; label: string; fieldType: "TEXT" | 
   { fieldKey: "netSaleProceeds", label: "手元に入ってきた売上金", fieldType: "TEXT" },
   { fieldKey: "transferDate", label: "振込日", fieldType: "TEXT" },
   { fieldKey: "entryMemo", label: "記入メモ", fieldType: "TEXTAREA" },
+  { fieldKey: "outboundName", label: "出庫時の名前", fieldType: "TEXT" },
 ];
 
 export async function seedCustomFieldDefinitions(): Promise<void> {

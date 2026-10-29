@@ -64,6 +64,24 @@ export function harness(){
 let checks=0;
 async function test(name:string,fn:()=>Promise<void>){await fn();checks++;console.log('PASS '+name);}
 async function main(){
+  await test('New dispatch field upgrades old baselines without phantom writes or erasure',async()=>{
+    const h=harness();h.seed();await h.run();h.calls.length=0;
+    const state=h.states.get('one')!;
+    delete state.localBase['custom.outboundName'];delete state.remoteBase['custom.outboundName'];
+    const original=clone(h.rows.get('one')!);
+    await h.tick();assert.deepEqual(h.calls.map(c=>c.method),['LIST']);
+    assert.deepEqual(h.rows.get('one'),original);
+    const row=h.rows.get('one')!;
+    row.customFields=JSON.stringify({...JSON.parse(row.customFields),outboundName:'CSV送信用の名前'});
+    h.calls.length=0;await h.tick();
+    assert.equal(h.remotes.get('1')!.optional_attributes!['出庫時の名前'],'CSV送信用の名前');
+    assert.equal(JSON.parse(h.rows.get('one')!.customFields).outboundName,'CSV送信用の名前');
+    assert.equal(h.rows.get('one')!.name,original.name);
+    assert.equal(h.calls.filter(c=>c.method==='PATCH').length,1);
+    h.calls.length=0;await h.tick();assert.deepEqual(h.calls.map(c=>c.method),['LIST']);
+    h.remotes.get('1')!.optional_attributes!['出庫時の名前']='ZAICOで訂正';
+    await h.tick();assert.equal(JSON.parse(h.rows.get('one')!.customFields).outboundName,'ZAICOで訂正');
+  });
   await test('Initial source wins, numeric blank/raw preserved, no outbound',async()=>{
     const h=harness();h.seed();await h.run();
     assert.equal(h.rows.get('one')!.name,'ZAICOの商品');assert.equal(h.rows.get('one')!.quantity,3);

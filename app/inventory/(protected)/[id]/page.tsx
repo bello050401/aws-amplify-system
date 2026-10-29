@@ -187,8 +187,8 @@ export default async function InventoryDetailPage({
   // 断。spec C-3の「脚高/座面寸法/梱包サイズ」例示はここに含まれる。
   const fieldLabelByKey = new Map(fieldDefs.map((f) => [f.fieldKey, f.label]));
   const customFieldValues = productCustomFields(item.customFields);
-  const customFieldRows: DetailInfoRow[] = fieldDefs.filter((def) => def.isActive ||
-    (customFieldValues[def.fieldKey] !== undefined && customFieldValues[def.fieldKey] !== null && customFieldValues[def.fieldKey] !== "")).map((def) => ({
+  const customFieldRows: DetailInfoRow[] = fieldDefs.filter((def) => def.fieldKey !== "outboundName" && (def.isActive ||
+    (customFieldValues[def.fieldKey] !== undefined && customFieldValues[def.fieldKey] !== null && customFieldValues[def.fieldKey] !== ""))).map((def) => ({
     label: def.isActive ? def.label : `${def.label}（無効）`,
     value: customFieldValues[def.fieldKey] === undefined || customFieldValues[def.fieldKey] === null || customFieldValues[def.fieldKey] === ""
       ? "-"
@@ -197,10 +197,11 @@ export default async function InventoryDetailPage({
   // 無効な定義の既存値も元の項目名で表示。定義が残っていない取込項目は
   // キー名を代用し、以前の値を隠さない。
   for (const [key, value] of Object.entries(customFieldValues)) {
-    if (fieldLabelByKey.has(key)) continue;
+    if (fieldLabelByKey.has(key) || key === "outboundName") continue;
     if (value === undefined || value === null || value === "") continue;
     customFieldRows.push({ label: key === "belloBrand" ? "ブランド" : key, value: String(value) });
   }
+  customFieldRows.push({label:"出庫時の名前",value:String(customFieldValues.outboundName || "-")});
 
   // 販売情報 / サイズ情報 / コンディション — レジストリの並び順どおり
   // (A-3)。usedGoodsLedgerとadminMemoは、それぞれD/Eの固定要件により

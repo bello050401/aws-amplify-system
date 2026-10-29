@@ -113,6 +113,7 @@ export type ZaicoAttributeTarget =
  *   means the same thing.
  */
 export const ZAICO_ATTRIBUTE_MAP: Record<string, ZaicoAttributeTarget> = {
+  "出庫時の名前": { kind: "customField", fieldKey: "outboundName", valueType: "text" },
   "⚫︎市場": { kind: "extendedField", field: "market", valueType: "text" },
   "⚫︎商品ID": { kind: "extendedField", field: "externalProductId", valueType: "text" },
   "⚫︎販売価格": { kind: "coreField", field: "salePrice", valueType: "number" },

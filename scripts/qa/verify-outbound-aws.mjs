@@ -11,6 +11,8 @@ try{
  assert.equal((await f.readCloud('Inventory',f.itemId)).quantity,2);
  const child=await f.readCloud('Inventory',childId);
  assert.equal(child.quantity,3);assert.equal(child.locationId,'office');assert.deepEqual(child.categoryIds,['sale','move']);
+ assert.equal(JSON.parse(child.customFields).outboundName,sent.rows[0].snapshot.exportName);
+ assert.equal(JSON.parse((await f.readCloud('Inventory',f.itemId)).customFields).outboundName,undefined);
  console.log('PASS: actual AWS transaction splits 5 into 2 + 3, retaining classification');
  let preview=await f.api.previewOutboundArrival(first.id);
  const commandId=randomUUID();
@@ -30,6 +32,7 @@ try{
  assert.equal(interrupted.status,'PARTIAL');assert.equal(interrupted.emailStatus,'SENT');
  const recovered=await f.api.emailOutbound(second.id,'QA-AWS');
  assert.equal(recovered.status,'COMPLETED');assert.equal(arrivalStatus(recovered),'WAITING');
+ assert.equal(JSON.parse((await f.readCloud('Inventory',f.itemId)).customFields).outboundName,recovered.rows[0].snapshot.exportName);
  assert.equal(f.effects.emails.length,2); // One captured send per batch, none on recovery.
  assert.equal((await f.readCloud('Inventory',f.itemId)).locationId,'office');
  console.log('PASS: full-quantity dispatch recovers after accepted email without resending');

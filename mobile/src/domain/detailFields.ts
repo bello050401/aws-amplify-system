@@ -58,6 +58,7 @@ export const DETAIL_FIELDS: readonly DetailField[] = [
   { key: "listingNotes", label: "出品情報", section: "販売情報", kind: "multiline", feature: "ecListing" },
   { key: "saleCommission", label: "販売手数料", section: "販売情報", kind: "money", feature: "sales" },
   { key: "adminMemo", label: "市川メモ", section: "メモ", kind: "multiline" },
+  { key: "outboundName", label: "出庫時の名前", section: "出庫記録", custom: true },
 ];
 
 export type DetailValues = Record<string, string>;

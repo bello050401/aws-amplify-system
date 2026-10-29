@@ -10,6 +10,10 @@ import tailwind from 'tailwindcss';
 import {createOutboundFixture} from './outbound-preserve-fixture.mjs';
 import {kawagoeAttachments} from '../../lib/outbound/kawagoe.ts';
 const root=process.cwd(),fixture=process.argv.includes('--aws-isolated')?await(await import('./outbound-aws-fixture.mjs')).createAwsOutboundFixture():createOutboundFixture();
+if(process.argv.includes('--long-list')){
+  if(fixture.scanCloud)throw Error('Long-list fixture is in-memory only');
+  for(let n=2;n<=12;n++)fixture.put('Inventory',{...fixture.original,id:`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`,sku:`QA-${String(n).padStart(2,'0')}`,name:`確認商品 ${n} 【在庫5】長い商品名 デザイナーズ チェア 北欧家具 撮影済み`});
+}
 if(process.argv.includes('--arrival-ready')){const batch=await fixture.prepare(3);await fixture.api.emailOutbound(batch.id,'QA');}
 const bundle=await esbuild.build({stdin:{contents:`import React from 'react';import{createRoot}from'react-dom/client';import{OutboundScreen}from'./app/inventory/(protected)/outbound/OutboundScreen';createRoot(document.getElementById('app')).render(location.pathname==='/app'?<div id='bello-outbound'><OutboundScreen embedded/></div>:<OutboundScreen/>);`,loader:'tsx',resolveDir:root},bundle:true,alias:{react:path.dirname(require.resolve('react/package.json')),'react-dom':path.dirname(require.resolve('react-dom/package.json'))},write:false,platform:'browser',format:'iife',jsx:'automatic',define:{'process.env.NODE_ENV':'"development"'}});
 const css=await postcss([tailwind({content:[path.join(root,'app/inventory/(protected)/outbound/*.tsx')],theme:{extend:{}},plugins:[]})]).process('@tailwind base;@tailwind components;@tailwind utilities;',{from:undefined});

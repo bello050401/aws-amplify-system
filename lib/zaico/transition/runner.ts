@@ -57,6 +57,13 @@ export async function runTransition(p:TransitionPort){
   const masters=await p.masters();
   const rows=await p.inventories();
   const states=await p.states();
+  // This field did not exist in older checkpoints. Its initial value was blank,
+  // not a concurrent ZAICO deletion. Upgrade in memory without bulk API writes.
+  for(const state of states){
+    for(const key of ['localBase','remoteBase'] as const){
+      if(state[key])state[key]={'custom.outboundName':null,...state[key]};
+    }
+  }
   const byId=new Map(rows.map(row=>[row.id,row]));
   const bySource=new Map<string,Row>();
   for(const row of rows){

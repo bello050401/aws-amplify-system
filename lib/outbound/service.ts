@@ -11,7 +11,7 @@ import {outboundThumbnailFields} from './productThumbnail';
 import {DEFAULT_OUTBOUND_COLUMNS,parseJsonField,type OutboundDestination,type OutboundBatch,type OutboundRow,type OutboundProduct,type OutboundSelection} from './types';
 import {KAWAGOE_TEMPLATE,kawagoeAttachments,orderNumber,validateArrivalDate,validateBarcode,validateMovementQuantity} from './kawagoe';
 import {assertOutboundEmailReady,sendOutboundEmail,isDefiniteEmailFailure} from './email';
-import {splitInventoryRecord,remainingCustomFields} from './splitInventory';
+import {splitInventoryRecord,remainingCustomFields,dispatchedCustomFields} from './splitInventory';
 import {nextSplitSku,prepareSplitPhotos,removeUnsentSplitPhotos} from './splitPhotos';
 import {preservesOutboundClassification} from './inventoryPolicy';
 import {arrivalStatus,isArrivalRow,type OutboundHistoryEntry} from './arrivalTypes';
@@ -220,7 +220,7 @@ export async function confirmOutboundSent(batchId:string,actor:string):Promise<O
         const after=inventoryCategoryIds(row);
         await sendOutboundTransaction(db,new TransactWriteCommand({TransactItems:[
           batchStateCheck(batchId,'APPLYING'),
-          {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'SET outboundArrivalBatchId=:batch, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who REMOVE outboundBatchId',ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':batch':batchId,':version':item.expectedUpdatedAt,':now':now,':who':actor}}},
+          {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'SET outboundArrivalBatchId=:batch, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who REMOVE outboundBatchId',ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':batch':batchId,':version':item.expectedUpdatedAt,':custom':dispatchedCustomFields(row,item),':now':now,':who':actor}}},
           {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who, updatedAt=:now, #snapshot=:snapshot REMOVE #error, splitInventoryId, splitSku, splitImages, splitPrepared',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error','#snapshot':'snapshot'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor,':snapshot':JSON.stringify({...item.snapshot,classificationPreserved:true,movementCategoryRemoved:false})}}},
           {Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId:item.inventoryId,changedAt:now,changedBy:actor,fieldName:'出庫データ送信',oldValue:JSON.stringify({categoryIds:after,locationId:row.locationId,quantity:row.quantity}),newValue:JSON.stringify({categoryIds:after,locationId:row.locationId,quantity:row.quantity,batchId,destination:batch.destinationName,sentQuantity:item.snapshot.quantity,classificationPreserved:true,movementCategoryRemoved:false}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}},
         ]}));
