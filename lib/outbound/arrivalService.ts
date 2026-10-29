@@ -122,6 +122,6 @@ export async function confirmDefaultOutboundArrival(id:string,commandId:string,a
  const preview=await previewOutboundArrival(id);
  return confirmOutboundArrival(id,commandId,preview.items.map(item=>({
   rowId:item.rowId,inventoryId:item.inventoryId,expectedUpdatedAt:item.updatedAt,locationId:batch.locationId,
-  categoryIds:batch.rows.find(row=>row.id===item.rowId)?.snapshot.movementCategoryRemoved===true?item.categoryIds:item.defaultCategoryIds,
+  categoryIds:item.defaultCategoryIds,
  })),actor);
 }

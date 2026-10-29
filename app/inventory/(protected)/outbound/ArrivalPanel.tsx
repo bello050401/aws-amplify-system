@@ -20,7 +20,7 @@ export function ArrivalPanel({batch,embedded,canEdit,disabled,onUpdated,request}
  const button='min-h-12 rounded-xl border border-blue-600 px-5 py-3 text-blue-700 disabled:opacity-40';
  return <section className="space-y-3 rounded-xl border border-blue-200 bg-blue-50 p-4" aria-label="到着確認">
   <h3 className="font-semibold">{arrivalLabel(status)}</h3>
-  <p className="text-sm leading-6">{status==='COMPLETED'?(batch.arrivalAt?new Date(batch.arrivalAt).toLocaleString('ja-JP')+' 更新完了':'更新完了'):'受け取り後に「確認」を押すと、この出庫分の保管場所を変更します。'}</p>
+  <p className="text-sm leading-6">{status==='COMPLETED'?(batch.arrivalAt?new Date(batch.arrivalAt).toLocaleString('ja-JP')+' 更新完了':'更新完了'):'受け取り後に「確認」を押すと、この出庫分の移動予定カテゴリを外し、保管場所を変更します。他のカテゴリは維持します。'}</p>
   {!!failures.length&&<ul className="space-y-2 text-sm text-red-800">{failures.map(r=><li key={r.id}>{r.splitSku??r.snapshot.sku}：{r.arrivalError}</li>)}</ul>}
   {error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-red-800">{error}</p>}
   {canEdit&&batch.status==='COMPLETED'&&status!=='COMPLETED'&&<div className={embedded?'sticky bottom-0 z-20 bg-blue-50 pt-2':''}><button className={button+' w-full bg-blue-600 !text-white sm:max-w-sm'} disabled={busy||disabled} onClick={()=>setDialog(true)}>{busy?'確認中…':'確認'}</button></div>}

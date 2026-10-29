@@ -31,7 +31,7 @@ export function kawagoeAttachments(batch:OutboundBatch):OutboundAttachment[] {
  const rows=batch.rows.filter(row=>row.status==='PENDING'||row.status==='SENT');
  if(!rows.length)throw Error('送信できる商品がありません。');
  const products=new Map<string,OutboundRow>();
- for(const row of rows){const code=validateBarcode(row.snapshot.barcode);validateMovementQuantity(row.snapshot.quantity,row.sourceQuantity??row.snapshot.quantity);if(products.has(code)&&exportProductName(products.get(code)!.snapshot)!==exportProductName(row.snapshot))throw Error('同じバーコードに異なる商品名があります。対象商品を確認してください。');products.set(code,row);}
+ for(const row of rows){const code=validateBarcode(row.snapshot.barcode);validateMovementQuantity(row.snapshot.quantity,row.sourceQuantity??row.snapshot.quantity);if(!exportProductName(row.snapshot))throw Error('在庫数表記以外の送信用の商品名を入力してください。');if(products.has(code)&&exportProductName(products.get(code)!.snapshot)!==exportProductName(row.snapshot))throw Error('同じバーコードに異なる商品名があります。対象商品を確認してください。');products.set(code,row);}
  const suffix=batch.orderNumber.replace('入荷','');
  const total=rows.reduce((sum,row)=>sum+row.snapshot.quantity,0);
  return [

@@ -21,3 +21,16 @@ test('export-only product name enters CSV but never changes split inventory name
  const child=splitInventoryRecord({id:'source',name:row.snapshot.name,quantity:5,customFields:'{}'},r,batch,[],'user','now');
  assert.equal((child as Record<string,unknown>).name,row.snapshot.name);
 });
+
+test('川越の実CSVは在庫メモだけ省き、数量・元の商品名・他の備考を維持する',()=>{
+ const r={...row,snapshot:{...row.snapshot,name:'【在庫4】MARUNI Table 135【天板傷】'}};
+ const before=structuredClone(r),files=kawagoeAttachments({...batch,rows:[r]});
+ const product=iconv.decode(files[0].data,'cp932'),arrival=iconv.decode(files[1].data,'cp932');
+ assert.ok(product.includes('MARUNI Table 135【天板傷】'));assert.ok(!product.includes('在庫4'));
+ assert.ok(arrival.includes(',0012345678901,3,,'));assert.deepEqual(r,before);
+ const second={...r,id:'second',snapshot:{...r.snapshot,name:'【在庫２】MARUNI Table 135【天板傷】',quantity:2}};
+ const combined=kawagoeAttachments({...batch,rows:[r,second]});
+ assert.equal(iconv.decode(combined[0].data,'cp932').split('\r\n').length,3);
+ assert.match(combined[1].fileName,/計5点/);
+ assert.throws(()=>kawagoeAttachments({...batch,rows:[{...r,snapshot:{...r.snapshot,exportName:'【在庫4】'}}]}),/送信用の商品名/);
+});

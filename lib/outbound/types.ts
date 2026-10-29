@@ -12,7 +12,12 @@ export function outboundRowLabel(row:OutboundRow,batchStatus:string):string {
   return {SENT:'送信済み',PENDING:'送信待ち',CANCELLED:'取消済み',SKIPPED:'除外'}[row.status];
 }
 export const DEFAULT_OUTBOUND_COLUMNS:OutboundColumn[]=[{key:'sku',label:'管理番号'},{key:'barcode',label:'QRコード・バーコード'},{key:'name',label:'商品名'},{key:'quantity',label:'数量'},{key:'unit',label:'単位'},{key:'width',label:'幅(cm)'},{key:'depth',label:'奥行(cm)'},{key:'height',label:'高さ(cm)'},{key:'location',label:'移動前の保管場所'}];
-export function exportProductName(row:OutboundProduct):string{return row.exportName ?? row.name;}
+/** Stock-count memos are internal; quantities are sent in the dedicated CSV column. */
+export function exportProductName(row:Pick<OutboundProduct,'name'|'exportName'>):string {
+  return (row.exportName ?? row.name)
+    .replace(/【\s*在庫\s*[:：]?\s*[0-9０-９]+(?:[,，][0-9０-９]+)*\s*(?:点|個|脚|台|枚|本|組|セット)?\s*】[ \t　]*/gu,'')
+    .trim();
+}
 export function outboundCsv(rows:OutboundProduct[],columns:OutboundColumn[]):string {
   const escape=(value:unknown)=>{let text=String(value??'');if(/^[\s]*[=+@-]/u.test(text))text="'"+text;return '"'+text.replaceAll('"','""')+'"';};
   return '\ufeff'+[columns.map(col=>escape(col.label)).join(','),...rows.map(row=>columns.map(col=>escape(col.key==='name'?exportProductName(row):row[col.key])).join(','))].join('\r\n')+'\r\n';
