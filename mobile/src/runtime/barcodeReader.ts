@@ -1,5 +1,6 @@
-import { BrowserMultiFormatOneDReader } from '@zxing/browser';
-import { BarcodeFormat, DecodeHintType } from '@zxing/library';
+import { BrowserMultiFormatOneDReader,HTMLCanvasElementLuminanceSource } from '@zxing/browser';
+import { BarcodeFormat, DecodeHintType, Result } from '@zxing/library';
+import {decodeWornEanLabel} from './wornBarcode';
 
 // Inventory labels are linear barcodes. Do not spend each unsuccessful frame
 // searching for QR, Data Matrix, PDF417 or Aztec symbols.
@@ -10,8 +11,19 @@ export const INVENTORY_BARCODE_FORMATS = [
 ];
 export const BARCODE_SCAN_INTERVAL_MS = 80;
 
+class InventoryBarcodeReader extends BrowserMultiFormatOneDReader {
+  private lastExtraPass=0;
+  override decodeFromCanvas(canvas:HTMLCanvasElement):Result {
+    try{return super.decodeFromCanvas(canvas);}catch(error){
+      // Keep the normal 80 ms fast path. Run the worn-label pass at most twice/sec.
+      const now=Date.now();if(now-this.lastExtraPass<500)throw error;
+      this.lastExtraPass=now;
+      return decodeWornEanLabel(new HTMLCanvasElementLuminanceSource(canvas));
+    }
+  }
+}
 export function createInventoryBarcodeReader() {
-  return new BrowserMultiFormatOneDReader(
+  return new InventoryBarcodeReader(
     new Map([[DecodeHintType.POSSIBLE_FORMATS, INVENTORY_BARCODE_FORMATS]]),
     { delayBetweenScanAttempts: BARCODE_SCAN_INTERVAL_MS, delayBetweenScanSuccess: BARCODE_SCAN_INTERVAL_MS },
   );

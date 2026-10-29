@@ -30,6 +30,16 @@ function add(s:ExcelJS.Worksheet,values:Record<string,unknown>) {
 }
 export async function usedGoodsLedgerWorkbook(ledger:UsedGoodsLedger):Promise<Buffer> {
   const book=new ExcelJS.Workbook();book.creator='株式会社BELLO';book.created=new Date(ledger.generatedAt);book.modified=book.created;
+  const daily=sheet(book,'古物台帳',`${ledger.year}年 古物台帳（日付・仕入先別）`,'同じ日・同じ仕入先を1行に集計。商品ごとの品目・特徴は「商品別明細」と併せて保管してください。',[
+    {header:'取引年月日',key:'date',width:14,numFmt:'yyyy/mm/dd'},{header:'相手方氏名・名称',key:'counterpartyName',width:28},
+    {header:'取引区分',key:'transactionType',width:12},{header:'品目（登録内容）',key:'itemTypes',width:36},
+    {header:'取引数量',key:'quantity',width:12,numFmt:'#,##0'},{header:'仕入れ合計（円）',key:'total',width:18,numFmt:'#,##0'},
+    {header:'合計の根拠',key:'amountBasis',width:28},{header:'相手方住所',key:'counterpartyAddress',width:38},
+    {header:'相手方職業',key:'counterpartyOccupation',width:18},{header:'年齢・生年月日',key:'counterpartyAge',width:18},
+    {header:'真偽確認の措置・方法',key:'verification',width:40},{header:'商品別明細の管理番号',key:'references',width:25},
+    {header:'商品ページ数',key:'products',width:13,numFmt:'#,##0'},{header:'確認事項',key:'issues',width:50},
+  ]);
+  for(const r of ledger.supplierDays)add(daily,{...r,date:new Date(r.date+'T00:00:00Z'),issues:r.issues.join('\n')});
   const columns=[
     {header:'管理番号',key:'managementNumber',width:15},{header:'取引年月日',key:'date',width:14,numFmt:'yyyy/mm/dd'},
     {header:'受入れ・払出し',key:'direction',width:14},{header:'取引区分',key:'transactionType',width:12},
@@ -41,7 +51,7 @@ export async function usedGoodsLedgerWorkbook(ledger:UsedGoodsLedger):Promise<Bu
     {header:'登録済み合計（円）※',key:'recordedTotal',width:18,numFmt:'#,##0'},
     {header:'仕入取引番号',key:'transactionKey',width:28},{header:'販売経路',key:'market',width:18},{header:'確認事項',key:'issues',width:44},
   ];
-  const main=sheet(book,'古物台帳',`${ledger.year}年 古物台帳（受入れ）`,'取引の年月日を基準に抽出。未記録の項目は空欄です。',columns);
+  const main=sheet(book,'商品別明細',`${ledger.year}年 商品別明細（受入れ）`,'取引の年月日を基準に抽出。未記録の項目は空欄です。',columns);
   const disposals=sheet(book,'払出記録',`${ledger.year}年 払出記録（売却）`,'販売終了日を基準に抽出。仕入先を売却相手として転記しません。',columns);
   main.getCell('A4').value='※受入れは「その日の仕入れ合計金額」、払出しは「販売価格」。受入れの合計を行ごとに足し合わせないでください。';
   for(const r of ledger.rows)add(r.direction==='受入れ'?main:disposals,{...r,date:new Date(r.date+'T00:00:00Z'),issues:r.issues.join('\n')});
@@ -58,6 +68,7 @@ export async function usedGoodsLedgerWorkbook(ledger:UsedGoodsLedger):Promise<Bu
   ]);
   for(const r of ledger.issues)add(checks,{...r});
   main.pageSetup.fitToWidth=3; main.pageSetup.printTitlesColumn='A:B'; disposals.pageSetup.fitToWidth=3; disposals.pageSetup.printTitlesColumn='A:B'; groups.pageSetup.fitToWidth=2;
-  for(const s of [main,disposals,groups,checks]){s.autoFilter={from:{row:HEADER,column:1},to:{row:Math.max(HEADER,s.rowCount),column:s.columnCount}};s.pageSetup.printArea=`A1:${s.getColumn(s.columnCount).letter}${s.rowCount}`;}
+  daily.pageSetup.fitToWidth=3;daily.pageSetup.printTitlesColumn='A:B';
+  for(const s of [daily,main,disposals,groups,checks]){s.autoFilter={from:{row:HEADER,column:1},to:{row:Math.max(HEADER,s.rowCount),column:s.columnCount}};s.pageSetup.printArea=`A1:${s.getColumn(s.columnCount).letter}${s.rowCount}`;}
   return Buffer.from(await book.xlsx.writeBuffer());
 }

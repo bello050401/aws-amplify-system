@@ -13,9 +13,13 @@ export interface LedgerTransaction {
   quantity: number | null; total: number | null; products: number; issues: string[];
 }
 export interface LedgerIssue { inventoryId: string; managementNumber: string; name: string; date: string; message: string }
+export interface LedgerSupplierDay {
+  key:string;date:string;counterpartyName:string;counterpartyAddress:string;counterpartyOccupation:string;counterpartyAge:string;verification:string;
+  transactionType:string;itemTypes:string;references:string;products:number;quantity:number|null;total:number|null;amountBasis:string;issues:string[];
+}
 export interface UsedGoodsLedger {
   year: number; generatedAt: string; rows: UsedGoodsLedgerRow[];
-  transactions: LedgerTransaction[]; issues: LedgerIssue[]; omittedSplits: number;
+  transactions: LedgerTransaction[]; supplierDays:LedgerSupplierDay[]; issues: LedgerIssue[]; omittedSplits: number;
 }
 export const LEDGER_SOURCE_FIELDS = [
   'id','sku','name','quantity','unit','sourceSystem','sourceInventoryId','transactionDate',
@@ -127,5 +131,47 @@ export function buildUsedGoodsLedger(sources: LedgerSource[], selectedYear: numb
   }
   rows.sort((a,b)=>a.date.localeCompare(b.date)||a.managementNumber.localeCompare(b.managementNumber)||a.direction.localeCompare(b.direction));
   for(const row of rows) if(row.issues.length) issues.push({inventoryId:row.inventoryId,managementNumber:row.managementNumber,name:row.name,date:row.date,message:`${row.direction}：${row.issues.join('／')}`});
-  return {year,generatedAt,rows,transactions:[...transactions.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.key.localeCompare(b.key)),issues,omittedSplits};
+  const groups=[...transactions.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.key.localeCompare(b.key));
+  const supplierDays=groupLedgerBySupplierDay(rows,groups);
+  for(const group of supplierDays)if(group.issues.length)issues.push({inventoryId:'',managementNumber:'日次集計',name:group.counterpartyName,date:group.date,message:group.issues.join('／')});
+  return {year,generatedAt,rows,transactions:groups,supplierDays,issues,omittedSplits};
+}
+
+/** Summarize a supplier's day while keeping every product in the detail sheet.
+ * A stored daily total/transaction total is a total, never a per-product amount.
+ */
+export function groupLedgerBySupplierDay(rows:UsedGoodsLedgerRow[],transactions:LedgerTransaction[]):LedgerSupplierDay[] {
+  const buckets=new Map<string,UsedGoodsLedgerRow[]>(),byTransaction=new Map(transactions.map(t=>[t.key,t]));
+  for(const row of rows.filter(r=>r.direction==='受入れ')) {
+    const supplier=row.counterpartyName.normalize('NFKC').replace(/[\s　]+/g,' ').trim();
+    const key=JSON.stringify([row.date,supplier||`未記録:${row.inventoryId}`]);
+    buckets.set(key,[...(buckets.get(key)??[]),row]);
+  }
+  const unique=(values:string[])=>[...new Set(values.filter(Boolean))];
+  return [...buckets.entries()].map(([key,items])=>{
+    const first=items[0],issues:string[]=[];
+    const text=(field:keyof UsedGoodsLedgerRow)=>unique(items.map(r=>str(r[field]))).join('\n');
+    let quantity:number|null=null,total:number|null=null,amountBasis='合計金額未記録';
+    const allImported=items.every(r=>r.transactionKey&&byTransaction.has(r.transactionKey));
+    if(allImported) {
+      const groups=unique(items.map(r=>r.transactionKey)).map(k=>byTransaction.get(k)!);
+      total=groups.every(g=>g.total!==null)?groups.reduce((s,g)=>s+g.total!,0):null;
+      quantity=groups.every(g=>g.quantity!==null)?groups.reduce((s,g)=>s+g.quantity!,0):null;
+      amountBasis='仕入取引ごとの確定額を合算';issues.push(...unique(groups.flatMap(g=>g.issues)));
+    }else{
+      const totals=[...new Set(items.map(r=>r.recordedTotal).filter((v):v is number=>v!==null))];
+      if(totals.length===1){total=totals[0];amountBasis='登録済みの日次合計（重複加算なし）';}
+      else if(totals.length>1){amountBasis='日次合計が不一致';issues.push('同じ日・仕入先に異なる日次合計があります。原票を確認してください。');}
+      // This field was entered for a whole purchase/auction, not current on-hand stock.
+      const quantities=[...new Set(items.map(r=>r.quantity).filter((v):v is number=>v!==null))];
+      if(quantities.length===1)quantity=quantities[0];
+      else if(quantities.length>1)issues.push('仕入台帳の数量が一致しません。取引全体の数量を確認してください。');
+      if(items.some(r=>r.transactionKey))issues.push('取込データと手動登録が混在しています。仕入れの重複と日次合計を確認してください。');
+    }
+    if(total===null)issues.push('正確な仕入れ合計を確認できません。購入単価や現在庫数から推測していません。');
+    if(quantity===null)issues.push('取引数量を確認してください。商品別の記録は明細シートに残しています。');
+    for(const field of ['counterpartyAddress','counterpartyOccupation','counterpartyAge','verification'] as const)if(unique(items.map(r=>r[field])).length>1)issues.push(`${field==='counterpartyAddress'?'相手方住所':field==='verification'?'本人確認方法':field==='counterpartyOccupation'?'職業':'年齢・生年月日'}に複数の記録があります。明細を確認してください。`);
+    if(!first.counterpartyName)issues.push('仕入先名が未記録のため、他の商品とはまとめていません。');
+    return {key,date:first.date,counterpartyName:first.counterpartyName,counterpartyAddress:text('counterpartyAddress'),counterpartyOccupation:text('counterpartyOccupation'),counterpartyAge:text('counterpartyAge'),verification:text('verification'),transactionType:text('transactionType'),itemTypes:text('itemType'),references:items.map(r=>r.managementNumber).join('\n'),products:items.length,quantity,total,amountBasis,issues};
+  }).sort((a,b)=>a.date.localeCompare(b.date)||a.counterpartyName.localeCompare(b.counterpartyName));
 }

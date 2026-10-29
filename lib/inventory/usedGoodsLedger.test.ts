@@ -13,7 +13,7 @@ test('year boundaries use transaction dates, not inventory creation dates',()=>{
 });
 test('uses original ledger quantity and does not change the source',()=>{
  const s=source(),before=structuredClone(s),r=buildUsedGoodsLedger([s],2026);
- assert.equal(r.rows[0].quantity,5);assert.equal(r.rows[0].unitPrice,1000);assert.equal(r.issues.length,0);assert.deepEqual(s,before);
+ assert.equal(r.rows[0].quantity,5);assert.equal(r.rows[0].unitPrice,1000);assert.equal(r.issues.filter(x=>x.inventoryId).length,0);assert.deepEqual(s,before);
 });
 test('stock splitting excludes duplicate receipt while keeping a sale disposal',()=>{
  const r=buildUsedGoodsLedger([source(),source({id:'b',quantity:2,saleEndDate:'2026-10-02',salePrice:2000,customFields:{__belloStockSplit:{sourceInventoryId:'a',operation:'SOLD_OUT'},__belloSale:{physicalQuantity:2}}})],2026);
@@ -53,9 +53,29 @@ test('sold/merged/deleted original receipts retained when data still exists',()=
 test('XLSX has typed dates/numbers, literal formula-like titles, filters, frozen headers',async()=>{
  const r=buildUsedGoodsLedger([source({name:'=HYPERLINK("https://example.invalid")',sku:'0000123'})],2026);
  const bytes=await usedGoodsLedgerWorkbook(r);const book=new ExcelJS.Workbook();await book.xlsx.load(new Uint8Array(bytes).buffer);
- assert.deepEqual(book.worksheets.map(s=>s.name),['古物台帳','払出記録','仕入取引集計','確認事項']);const s=book.worksheets[0];
+ assert.deepEqual(book.worksheets.map(s=>s.name),['古物台帳','商品別明細','払出記録','仕入取引集計','確認事項']);const s=book.getWorksheet('商品別明細')!;
  assert.equal(s.getCell('A6').value,'0000123');assert.ok(s.getCell('B6').value instanceof Date);assert.equal(s.getCell('G6').value,5);assert.equal(s.getCell('N6').value,1000);assert.equal(s.getCell('E6').formula,undefined);assert.match(s.getCell('E6').text,/^=HYPERLINK/);
  assert.equal(s.views[0].state,'frozen');assert.ok(s.autoFilter);assert.equal(s.getCell('N6').numFmt,'#,##0');
+});
+test('same supplier and date is one summary row, daily total and quantity counted once',()=>{
+ const r=buildUsedGoodsLedger([source({id:'a',dailyPurchaseTotal:5000}),source({id:'b',dailyPurchaseTotal:5000}),source({id:'c',dailyPurchaseTotal:5000})],2026);
+ assert.equal(r.supplierDays.length,1);assert.equal(r.supplierDays[0].total,5000);assert.equal(r.supplierDays[0].quantity,5);assert.equal(r.supplierDays[0].products,3);assert.equal(r.rows.length,3);
+});
+test('separate Yahoo transactions on same day sum exact amounts, including equal amounts',()=>{
+ const r=buildUsedGoodsLedger(['a','b'].map(id=>source({id,customFields:{__yahooPurchaseImport:{auctionId:id,orderId:id,quantity:1,itemTotal:1501,shipping:500}}})),2026);
+ assert.equal(r.supplierDays.length,1);assert.equal(r.supplierDays[0].total,4002);assert.equal(r.supplierDays[0].quantity,2);
+});
+test('different suppliers/dates remain separate and unnamed suppliers never merge',()=>{
+ const r=buildUsedGoodsLedger([source(),source({id:'b',counterpartyName:'別会社'}),source({id:'c',transactionDate:'2026-10-02'}),source({id:'d',counterpartyName:''}),source({id:'e',counterpartyName:''})],2026);
+ assert.equal(r.supplierDays.length,5);
+});
+test('conflicting daily totals are flagged rather than summed or silently picked',()=>{
+ const r=buildUsedGoodsLedger([source({id:'a',dailyPurchaseTotal:1000}),source({id:'b',dailyPurchaseTotal:2000})],2026);
+ assert.equal(r.supplierDays[0].total,null);assert.match(r.supplierDays[0].issues.join(),/異なる日次合計/);
+});
+test('missing purchase total is not inferred from current stock or a transaction-wide quantity',()=>{
+ const r=buildUsedGoodsLedger([source({quantity:2,purchaseQuantity:37,purchasePrice:1000})],2026);
+ assert.equal(r.supplierDays[0].total,null);assert.match(r.supplierDays[0].issues.join(),/推測していません/);
 });
 test('empty year still creates a usable workbook without claiming all records complete',async()=>{
  const r=buildUsedGoodsLedger([source({transactionDate:null})],2025);assert.equal(r.rows.length,0);assert.equal(r.issues.length,1);assert.ok((await usedGoodsLedgerWorkbook(r)).length>1000);
