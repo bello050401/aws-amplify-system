@@ -24,6 +24,7 @@ const CUSTOM_FIELD_SEED: { fieldKey: string; label: string; fieldType: "TEXT" | 
   { fieldKey: "seatDimensions", label: "座面寸法", fieldType: "TEXT" },
   { fieldKey: "packageSize", label: "梱包サイズ", fieldType: "TEXT" },
   { fieldKey: "usedGoodsFeature", label: "古物の特徴", fieldType: "TEXTAREA" },
+  { fieldKey: "counterpartyAge", label: "取引相手の年齢・生年月日（古物台帳）", fieldType: "TEXT" },
   // ZAICO sync (implementation instructions §9): "●売却の優先度" has no
   // existing BELLO field whose meaning matches it — see
   // lib/inventory/zaicoMapping.ts's ZAICO_ATTRIBUTE_MAP comment for why

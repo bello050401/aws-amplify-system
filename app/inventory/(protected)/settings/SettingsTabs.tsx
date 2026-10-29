@@ -11,6 +11,7 @@ import type { BaseConnectionState } from "@/lib/base/connectionState";
 import { MasterList } from "./MasterList";
 import { CustomFieldSettings } from "./CustomFieldSettings";
 import { ListColumnSettings } from "./ListColumnSettings";
+const UsedGoodsLedgerPanel = dynamic(() => import("./UsedGoodsLedgerPanel").then(m => m.UsedGoodsLedgerPanel));
 const ZaicoSyncPanel = dynamic(() => import("./ZaicoSyncPanel").then(m => m.ZaicoSyncPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const ZaicoDuplicateAuditPanel = dynamic(() => import("./ZaicoDuplicateAuditPanel").then(m => m.ZaicoDuplicateAuditPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const ThumbnailBackfillPanel = dynamic(() => import("./ThumbnailBackfillPanel").then(m => m.ThumbnailBackfillPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
@@ -81,6 +82,7 @@ export function SettingsTabs({
   // クエリパラメータの意味(「このタブを開いた状態で戻す/開く」)を
   // 全タブで一貫させる。
   const VALID_TABS = [
+    "usedGoodsLedger",
     "category",
     "ecListing",
     "econveni",
@@ -114,6 +116,7 @@ export function SettingsTabs({
   return (
     <div>
       <div className="flex flex-wrap border-b border-gray-200">
+        {isAdmin && <button type="button" onClick={() => setTab("usedGoodsLedger")} className={tabClass(tab === "usedGoodsLedger")}>古物台帳</button>}
         {!readOnly && <button type="button" onClick={() => setTab("ecListing")} className={tabClass(tab === "ecListing")}>出品設定</button>}
         {isAdmin && <button type="button" onClick={() => setTab("econveni")} className={tabClass(tab === "econveni")}>eコンビニ連携</button>}
         <button type="button" onClick={() => setTab("category")} className={tabClass(tab === "category")}>
@@ -190,6 +193,7 @@ export function SettingsTabs({
       </div>
 
       <div className="pt-4">
+        {tab === "usedGoodsLedger" && isAdmin && <UsedGoodsLedgerPanel />}
         {tab === "ecListing" && !readOnly && <EcListingSettingsPanel isAdmin={isAdmin} onOpen={setTab} />}
         {tab === "econveni" && isAdmin && <EconveniSettingsPanel />}
         {tab === "category" && <MasterList model="Category" label="カテゴリ" entries={categories} readOnly={readOnly} />}

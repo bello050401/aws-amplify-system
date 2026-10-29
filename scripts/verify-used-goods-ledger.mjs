@@ -1,0 +1,23 @@
+import {build} from 'esbuild';
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+const dir=path.resolve('artifacts/used-goods-ledger-20261029');await fs.mkdir(dir,{recursive:true});
+const output=path.join(dir,'route-test.cjs');
+await build({entryPoints:['app/api/inventory/used-goods-ledger/route.ts'],outfile:output,bundle:true,platform:'node',format:'cjs',packages:'external',plugins:[{name:'ledger-test',setup(b){
+ b.onResolve({filter:/^(server-only|@\/lib\/mobile\/session|\.\/categoryPersistence)$/},args=>({path:args.path,namespace:'stub'}));
+ b.onLoad({filter:/.*/,namespace:'stub'},args=>({contents:args.path==='server-only'?'':args.path.includes('session')?'export async function getMobileSession(){return globalThis.__ledgerTest.session;}':'export const inventoryTable=()=>"test-ledger"; export const inventoryDdb={send:async command=>{const t=globalThis.__ledgerTest;t.calls.push(command); if(t.fail)throw Error("private source payload");return command.input.ExclusiveStartKey?{Items:[t.b]}:{Items:[t.a],LastEvaluatedKey:{id:"a"}};}};',loader:'js'}));
+}}]});
+const {GET}=await import(pathToFileURL(output));
+const state={session:{ok:false,status:401},calls:[],a:{id:'a',sku:'A',transactionDate:'2026-01-01',purchaseQuantity:2},b:{id:'b',sku:'B',transactionDate:'2026-12-31',purchaseQuantity:3}};globalThis.__ledgerTest=state;
+const req=(query='year=2026')=>new Request('http://localhost/api/inventory/used-goods-ledger?'+query);
+assert.equal((await GET(req())).status,401);assert.equal(state.calls.length,0);
+state.session={ok:true,role:'EDITOR'};assert.equal((await GET(req())).status,403);assert.equal(state.calls.length,0);
+state.session={ok:true,role:'VIEWER'};assert.equal((await GET(req())).status,403);
+state.session={ok:true,role:'ADMIN'};assert.equal((await GET(req('year=oops'))).status,400);assert.equal(state.calls.length,0);
+const response=await GET(req());assert.equal(response.status,200);assert.equal((await response.json()).rows.length,2);assert.equal(state.calls.length,2);assert.match(response.headers.get('cache-control'),/no-store/);
+assert.ok(state.calls.every(c=>c.constructor.name==='ScanCommand'));assert.equal(state.calls[1].input.ExclusiveStartKey.id,'a');
+const download=await GET(req('year=2026&format=xlsx'));assert.equal(download.status,200);assert.match(download.headers.get('content-disposition'),/attachment/);assert.match(download.headers.get('content-type'),/spreadsheetml/);assert.equal(Buffer.from(await download.arrayBuffer()).subarray(0,2).toString(),'PK');
+state.fail=true;const failure=await GET(req('year=2026&format=xlsx'));assert.equal(failure.status,503);assert.ok(!(await failure.text()).includes('private source payload'));
+console.log('PASS: unauthenticated / EDITOR / VIEWER denied before reads; ADMIN preview / XLSX; year validation; complete pagination; no-cache; partial read failure; only ScanCommand');
