@@ -21,6 +21,7 @@ import {BarcodeScanner} from "./BarcodeScanner";
 import {SalesScreen, type SalesResponse} from "./SalesScreen";
 import { InventoryReadError } from "../domain/readError";
 import { HomeScreen } from "./HomeScreen";
+import {PriceEntry} from "./PriceEntry";
 import { OutboundEntry } from "./OutboundEntry";
 import { PullToRefreshList } from "./PullToRefreshList";
 import { DetailSwipeBack } from "./DetailSwipeBack";
@@ -51,6 +52,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   canIssueDocuments?: boolean; canSellInventory?: boolean; features?: MobileFeatures; previewAccount?: string; onTogglePreviewAccount?: () => void;
 }) {
   const [scanSearch,setScanSearch]=useState(false);
+  const [priceEntryOpen,setPriceEntryOpen]=useState(false);
   const [creating,setCreating]=useState(false);
   const [requestedTab, setTab] = useState<Tab>("home");
   // Filter the screen as well as navigation, including when access changes on an open screen.
@@ -274,7 +276,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
+    {priceEntryOpen && writesEnabled ? <PriceEntry onClose={()=>{setPriceEntryOpen(false);void refresh();}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
       <View style={s.header}>
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
@@ -304,7 +306,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
           <DetailFact label={field.label} value={selected.details?.[field.key]} multiline={field.kind === "multiline"} />
         </View>)}
         {!writesEnabled && <Text style={s.homeSub}>このアプリでは現在、在庫の閲覧のみ利用できます。</Text>}
-      </ScrollView> : tab === "home" ? <HomeScreen offline={offline} creating={creating} writesEnabled={writesEnabled} onInventory={()=>setTab("inventory")} onCreate={()=>{void startCreate();}} onScan={()=>setScanSearch(true)} /> : tab === "inventory" ? <View style={s.list}>
+      </ScrollView> : tab === "home" ? <HomeScreen onPriceEntry={()=>setPriceEntryOpen(true)} offline={offline} creating={creating} writesEnabled={writesEnabled} onInventory={()=>setTab("inventory")} onCreate={()=>{void startCreate();}} onScan={()=>setScanSearch(true)} /> : tab === "inventory" ? <View style={s.list}>
         <PullToRefreshList keyboardShouldPersistTaps="handled" ListHeaderComponent={<View style={s.listHeader}>
         <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><TextInput accessibilityLabel="商品名を検索" placeholder="商品名" value={query} onChangeText={setQuery} style={s.searchInput} />{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => setQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>
         <View style={s.filterRow}><Pressable accessibilityRole="button" onPress={() => setCategoryPicker(true)} style={s.category}><Ionicons name="pricetag-outline" size={21} color={colors.text} /><Text numberOfLines={1} style={[s.categoryText,{maxWidth:130}]}>{category || "カテゴリ"}</Text><Ionicons name="chevron-down" size={16} color={colors.muted} /></Pressable><Pressable accessibilityRole="button" onPress={()=>setSearchOpen(true)} style={s.advancedButton}><Text style={s.blue}>詳細検索{advanced.conditions.length ? `（${advanced.conditions.length}）` : ""}</Text></Pressable></View>

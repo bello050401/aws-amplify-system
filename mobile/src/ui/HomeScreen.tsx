@@ -10,9 +10,10 @@ interface Props {
   onInventory: () => void;
   onCreate: () => void;
   onScan: () => void;
+  onPriceEntry: () => void;
 }
 
-export function HomeScreen({ offline, creating, writesEnabled, onInventory, onCreate, onScan }: Props) {
+export function HomeScreen({ offline, creating, writesEnabled, onInventory, onCreate, onScan, onPriceEntry }: Props) {
   return <ScrollView style={s.screen} contentContainerStyle={s.content}>
     <View style={s.identity}>
       <Image source={require("../../assets/bello-system-icon.png")} style={s.logo} contentFit="contain" accessibilityLabel="Bello SYSTEM" />
@@ -50,6 +51,7 @@ export function HomeScreen({ offline, creating, writesEnabled, onInventory, onCr
       </Pressable>
     </View>
 
+    {writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="販売予定価格入力" disabled={offline} onPress={onPriceEntry} style={({pressed})=>[s.action,{marginTop:16,flex:0,padding:20,flexDirection:'row',alignItems:'center',gap:16},pressed&&s.pressed,offline&&{opacity:.5}]}><Ionicons name="pricetag-outline" size={28} color="#36746A"/><View style={{flex:1}}><Text style={s.actionTitle}>販売予定価格入力</Text><Text style={s.actionHint}>価格が未入力の商品をまとめて入力</Text></View><Ionicons name="chevron-forward" size={20} color="#7D827B"/></Pressable>}
   </ScrollView>;
 }
 
