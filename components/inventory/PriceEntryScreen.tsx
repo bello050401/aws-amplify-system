@@ -45,6 +45,16 @@ export function PriceEntryScreen({embedded=false,onClose,onDirty,onSaveReady,req
  useEffect(()=>{onSaveReady?.(()=>saveRef.current());return()=>onSaveReady?.(null);},[onSaveReady]);
  const leave=()=>{if(busy)return;if(dirty&&!window.confirm('入力内容がまだ保存されていません。保存せずに戻りますか？'))return;onClose?.();};
  const refresh=()=>{if(busy)return;if(dirty&&!window.confirm('未保存の入力を破棄して、最新の一覧を読み込みますか？'))return;pending.current.clear();setReload(n=>n+1);};
+ async function readLatest(row:PriceEntryItem){
+  try{const {item}=await request<{item:InventoryItem}>('/api/mobile/inventory/'+row.id);
+   if(item.plannedSalePrice!==null){
+    if(!window.confirm(`他の操作で販売予定価格が${item.plannedSalePrice.toLocaleString()}円に設定されています。この行の未保存の入力を破棄して、最新の内容を表示しますか？`))return;
+    setDrafts(all=>{const next={...all};delete next[row.id];return next;});
+   }else setDrafts(all=>{const d=all[row.id];return d?{...all,[row.id]:{...d,name:d.name===row.name?item.name:d.name,note:d.note===row.note?item.note:d.note}}:all;});
+   setItems(rows=>rows.map(r=>r.id===row.id?{...r,...item,imageUrl:item.thumbnailUrl}:r));
+   setResults(all=>({...all,[row.id]:{ok:item.plannedSalePrice!==null,message:item.plannedSalePrice!==null?'入力済みの最新情報を表示しています。':'最新の商品情報を読み込みました。入力内容を確認して保存してください。'}}));
+  }catch{setError('最新の商品を取得できませんでした。');}
+ }
  return <section className={'price-entry'+(embedded?' price-entry-mobile':'')}>
   <style>{priceEntryCss}</style>
   <header className="pe-header"><div>{onClose&&<button type="button" className="pe-back" onClick={leave} disabled={busy}>〈 戻る</button>}<h1>販売予定価格入力</h1><p>補修待ち・撮影待ち・出品待ちの、価格が未入力の商品</p></div><button type="button" className="pe-button" disabled={loading||busy} onClick={refresh}>一覧を更新</button></header>
@@ -57,7 +67,7 @@ export function PriceEntryScreen({embedded=false,onClose,onDirty,onSaveReady,req
     <label className="pe-note">備考<textarea aria-label={row.sku+'の備考'} value={draft.note} rows={3} placeholder="備考なし" disabled={busy||uncertain||row.plannedSalePrice!==null} onChange={e=>edit(row,'note',e.target.value)}/></label>
     <div className="pe-price"><label>販売予定価格<span className="pe-money"><input aria-label={row.sku+'の販売予定価格'} inputMode="numeric" pattern="[0-9]*" value={draft.price} placeholder="未入力" disabled={busy||uncertain||row.plannedSalePrice!==null} onChange={e=>edit(row,'price',e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();void saveAll(row.id);}}}/><span>円</span></span></label><button className="pe-primary" type="button" disabled={busy||(!changed(row,draft)&&!uncertain)} onClick={()=>void saveAll(row.id)}>{uncertain?'保存結果を再確認':result?.ok&&row.plannedSalePrice!==null?'保存済み':'保存'}</button>
     {result&&<p role={result.ok?'status':'alert'} className={result.ok?'pe-success':'pe-error'}>{result.message}</p>}
-    {result&&!result.ok&&!uncertain&&<button className="pe-back" type="button" onClick={async()=>{try{const {item}=await request<{item:InventoryItem}>('/api/mobile/inventory/'+row.id);setItems(rows=>rows.map(r=>r.id===row.id?{...r,...item,imageUrl:item.thumbnailUrl}:r));setResults(all=>({...all,[row.id]:{ok:false,message:'最新の商品情報を読み込みました。入力内容を確認して保存してください。'}}));}catch{setError('最新の商品を取得できませんでした。');}}}>最新の内容を確認</button>}
+    {result&&!result.ok&&!uncertain&&<button className="pe-back" type="button" onClick={()=>void readLatest(row)}>最新の内容を確認</button>}
     </div></article>;})}
    {!loading&&limit<items.length&&<button type="button" className="pe-more pe-button" onClick={()=>setLimit(n=>n+40)}>続きを表示（残り {items.length-limit}件）</button>}
   </div>
