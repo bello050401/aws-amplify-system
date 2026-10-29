@@ -23,7 +23,7 @@ try{
  await assert.rejects(()=>savePlannedPrice(port,{...input,mutationId:randomUUID(),plannedSalePrice:50},'QA'));
  const rollback={...original,id:randomUUID()};await doc.send(new PutCommand({TableName:table('Inventory'),Item:rollback}));
  const transaction=priceEntryWriteItems(rollback,{plannedSalePrice:100,updatedAt:'2026-10-29T00:00:01.000Z'},'QA',table)!;
- transaction.push({ConditionCheck:{TableName:table('Inventory'),Key:{id:rollback.id},ConditionExpression:'attribute_not_exists(id)'}});
+ transaction.push({ConditionCheck:{TableName:table('Inventory'),Key:{id:original.id},ConditionExpression:'attribute_not_exists(id)'}});
  await assert.rejects(()=>doc.send(new TransactWriteCommand({TransactItems:transaction})));assert.equal((await get(rollback.id)).plannedSalePrice,undefined);
  // Production filter syntax against the real engine, including zero-price exclusion.
  const filter=buildCountExpression({categoryIds:['repair']});const result=await doc.send(new ScanCommand({TableName:table('Inventory'),FilterExpression:filter.filterExpression+' AND (attribute_not_exists(#price) OR #price = :emptyPrice OR #price = :nullPrice)',ExpressionAttributeNames:{...filter.names,'#price':'plannedSalePrice'},ExpressionAttributeValues:{...filter.values,':emptyPrice':'',':nullPrice':null}}));assert.deepEqual(result.Items?.map(i=>i.id),[rollback.id]);
