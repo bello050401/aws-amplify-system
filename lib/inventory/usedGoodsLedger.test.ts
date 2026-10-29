@@ -73,6 +73,14 @@ test('conflicting daily totals are flagged rather than summed or silently picked
  const r=buildUsedGoodsLedger([source({id:'a',dailyPurchaseTotal:1000}),source({id:'b',dailyPurchaseTotal:2000})],2026);
  assert.equal(r.supplierDays[0].total,null);assert.match(r.supplierDays[0].issues.join(),/異なる日次合計/);
 });
+test('marketplace names alone must not merge different sellers',()=>{
+ const r=buildUsedGoodsLedger(['a','b'].map(id=>source({id,counterpartyName:'ヤフオク'})),2026);
+ assert.equal(r.supplierDays.length,2);assert.match(r.supplierDays[0].issues.join(),/販売サイト名/);
+});
+test('an inconsistent imported order cannot count its combined total on multiple supplier days',()=>{
+ const records=['a','b'].map((id,i)=>source({id,transactionDate:i?'2026-10-02':'2026-10-01',customFields:{__yahooPurchaseImport:{auctionId:id,orderId:'same',quantity:1,itemTotal:1000,shipping:0}}}));
+ const r=buildUsedGoodsLedger(records,2026);assert.equal(r.supplierDays.length,2);assert.ok(r.supplierDays.every(g=>g.total===null&&g.quantity===null));
+});
 test('missing purchase total is not inferred from current stock or a transaction-wide quantity',()=>{
  const r=buildUsedGoodsLedger([source({quantity:2,purchaseQuantity:37,purchasePrice:1000})],2026);
  assert.equal(r.supplierDays[0].total,null);assert.match(r.supplierDays[0].issues.join(),/推測していません/);

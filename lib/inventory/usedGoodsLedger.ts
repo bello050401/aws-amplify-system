@@ -142,9 +142,12 @@ export function buildUsedGoodsLedger(sources: LedgerSource[], selectedYear: numb
  */
 export function groupLedgerBySupplierDay(rows:UsedGoodsLedgerRow[],transactions:LedgerTransaction[]):LedgerSupplierDay[] {
   const buckets=new Map<string,UsedGoodsLedgerRow[]>(),byTransaction=new Map(transactions.map(t=>[t.key,t]));
+  const normalizeSupplier=(name:string)=>name.normalize('NFKC').replace(/[\s　]+/g,' ').trim();
+  // A marketplace name alone does not identify the actual seller.
+  const unidentifiedSupplier=(name:string)=>!name||/^(ヤフオク!?|Yahoo!?オークション|メルカリ(?:Shops)?|BASE)$/i.test(name.replace(/\s/g,''));
   for(const row of rows.filter(r=>r.direction==='受入れ')) {
-    const supplier=row.counterpartyName.normalize('NFKC').replace(/[\s　]+/g,' ').trim();
-    const key=JSON.stringify([row.date,supplier||`未記録:${row.inventoryId}`]);
+    const supplier=normalizeSupplier(row.counterpartyName);
+    const key=JSON.stringify([row.date,unidentifiedSupplier(supplier)?`仕入先未特定:${row.inventoryId}`:supplier]);
     buckets.set(key,[...(buckets.get(key)??[]),row]);
   }
   const unique=(values:string[])=>[...new Set(values.filter(Boolean))];
@@ -155,8 +158,9 @@ export function groupLedgerBySupplierDay(rows:UsedGoodsLedgerRow[],transactions:
     const allImported=items.every(r=>r.transactionKey&&byTransaction.has(r.transactionKey));
     if(allImported) {
       const groups=unique(items.map(r=>r.transactionKey)).map(k=>byTransaction.get(k)!);
-      total=groups.every(g=>g.total!==null)?groups.reduce((s,g)=>s+g.total!,0):null;
-      quantity=groups.every(g=>g.quantity!==null)?groups.reduce((s,g)=>s+g.quantity!,0):null;
+      const consistent=groups.every(g=>!g.issues.length&&g.date===first.date&&normalizeSupplier(g.counterpartyName)===normalizeSupplier(first.counterpartyName));
+      total=consistent&&groups.every(g=>g.total!==null)?groups.reduce((s,g)=>s+g.total!,0):null;
+      quantity=consistent&&groups.every(g=>g.quantity!==null)?groups.reduce((s,g)=>s+g.quantity!,0):null;
       amountBasis='仕入取引ごとの確定額を合算';issues.push(...unique(groups.flatMap(g=>g.issues)));
     }else{
       const totals=[...new Set(items.map(r=>r.recordedTotal).filter((v):v is number=>v!==null))];
@@ -171,7 +175,7 @@ export function groupLedgerBySupplierDay(rows:UsedGoodsLedgerRow[],transactions:
     if(total===null)issues.push('正確な仕入れ合計を確認できません。購入単価や現在庫数から推測していません。');
     if(quantity===null)issues.push('取引数量を確認してください。商品別の記録は明細シートに残しています。');
     for(const field of ['counterpartyAddress','counterpartyOccupation','counterpartyAge','verification'] as const)if(unique(items.map(r=>r[field])).length>1)issues.push(`${field==='counterpartyAddress'?'相手方住所':field==='verification'?'本人確認方法':field==='counterpartyOccupation'?'職業':'年齢・生年月日'}に複数の記録があります。明細を確認してください。`);
-    if(!first.counterpartyName)issues.push('仕入先名が未記録のため、他の商品とはまとめていません。');
+    if(unidentifiedSupplier(normalizeSupplier(first.counterpartyName)))issues.push('実際の仕入先名が未記録、または販売サイト名のみのため、他の商品とはまとめていません。');
     return {key,date:first.date,counterpartyName:first.counterpartyName,counterpartyAddress:text('counterpartyAddress'),counterpartyOccupation:text('counterpartyOccupation'),counterpartyAge:text('counterpartyAge'),verification:text('verification'),transactionType:text('transactionType'),itemTypes:text('itemType'),references:items.map(r=>r.managementNumber).join('\n'),products:items.length,quantity,total,amountBasis,issues};
   }).sort((a,b)=>a.date.localeCompare(b.date)||a.counterpartyName.localeCompare(b.counterpartyName));
 }
