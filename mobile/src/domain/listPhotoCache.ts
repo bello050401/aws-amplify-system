@@ -29,6 +29,7 @@ export class ListPhotoCache {
  private reconciling=false;
  private active=false;
  private busy=false;
+ private visibleDownloads=0;
  private quietUntil=0;
  private timer:ReturnType<typeof setTimeout>|undefined;
  private controller:AbortController|null=null;
@@ -64,6 +65,17 @@ export class ListPhotoCache {
  }
  setActive(value:boolean){this.active=value;if(!value){clearTimeout(this.timer);this.timer=undefined;this.controller?.abort();}else this.schedule();}
  foregroundBusy(value:boolean){this.busy=value;if(value)this.defer();else this.schedule();}
+ beginVisible(){this.visibleDownloads++;this.defer();return()=>{this.visibleDownloads=Math.max(0,this.visibleDownloads-1);this.schedule();};}
+ async rememberVisible(item:{id:string;updatedAt:string},blob:Blob){
+  if(this.stopped||this.reconciling||!this.state||this.warning||this.has(item)||this.wanted.get(item.id)!==item.updatedAt)return;
+  const generation=this.generation,epoch=this.state.epoch;
+  try{
+   if(await this.repo.put(this.owner,epoch,{id:item.id,version:item.updatedAt},blob)){
+    if(this.stopped||generation!==this.generation||this.has(item))return;
+    this.state!.known[item.id]=item.updatedAt;this.state!.count++;this.state!.bytes+=blob.size;this.failures.delete(item.id);this.hints.delete(item.id);this.emit();
+   }
+  }catch{if(!this.stopped&&generation===this.generation){this.warning='写真の端末保存を一時停止しています。再読み込みで再確認します。';this.emit();}}
+ }
  defer(){this.quietUntil=this.now()+1200;this.controller?.abort();this.schedule();}
  hint(images:InventoryThumbnail[]){
   for(const image of images)if(this.wanted.get(image.id)===image.updatedAt&&!this.has(image))this.hints.set(image.id,image);
@@ -75,7 +87,7 @@ export class ListPhotoCache {
  }
  private async pump(){
   if(this.running||!this.active||this.stopped||!this.state||this.reconciling||this.warning)return;
-  if(this.busy||this.now()<this.quietUntil){this.schedule();return;}
+  if(this.busy||this.visibleDownloads||this.now()<this.quietUntil){this.schedule();return;}
   const wanted=[...this.wanted].filter(([id,v])=>this.state!.known[id]!==v&&this.skipped.get(id)!==v&&(this.failures.get(id)??0)<=this.now());
   if(!wanted.length){if(this.failures.size)this.schedule(Math.max(1000,Math.min(...this.failures.values())-this.now()));return;}
   this.running=true;const generation=this.generation,epoch=this.state.epoch;
@@ -87,7 +99,7 @@ export class ListPhotoCache {
    if(this.stopped||generation!==this.generation||abort.signal.aborted)return;
    // One download at a time. Input/scroll/visibility changes cancel background work.
    for(const [id,version] of batch){
-    if(this.busy||abort.signal.aborted||!this.active||generation!==this.generation)break;
+    if(this.busy||this.visibleDownloads||abort.signal.aborted||!this.active||generation!==this.generation)break;
     const image=rows.find(r=>r.id===id&&r.updatedAt===version);
     if(!image){this.failures.set(id,this.now()+60000);continue;}
     try{
