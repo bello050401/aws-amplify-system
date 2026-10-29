@@ -5,7 +5,7 @@ import {arrivalStatus,arrivalLabel,type OutboundHistoryEntry} from '../../../../
 import {OutboundSettings} from './OutboundSettings';
 import {DateField} from '../../../../mobile/src/ui/DateField.web';
 import type {OutboundBatch,OutboundDestination,OutboundProduct,OutboundSelection} from '../../../../lib/outbound/types';
-import {outboundStatusLabel,outboundRowLabel,exportProductName} from '../../../../lib/outbound/types';
+import {outboundStatusLabel,outboundRowLabel,exportProductName,outboundNameDraft} from '../../../../lib/outbound/types';
 import {preservesOutboundClassification,PRESERVED_CLASSIFICATION_NOTICE} from '../../../../lib/outbound/inventoryPolicy';
 const endpoint='/api/inventory/outbound';
 async function read(url:string,body?:unknown){
@@ -35,6 +35,9 @@ export function OutboundScreen({embedded=false}:{embedded?:boolean}){
  const valid=chosen.length>0&&chosen.every(item=>Number.isInteger(qty(item))&&qty(item)>0&&qty(item)<=item.quantity&&!!exportProductName({name:item.name,exportName:exportNames[item.id]}))&&(!isKawagoe||!!arrivalDate);
  const total=chosen.reduce((sum,item)=>sum+(Number.isFinite(qty(item))?qty(item):0),0);
  const invalidate=()=>{command.current=null;};
+ function updateExportName(id:string,value:string,composing=false){
+  setExportNames(previous=>({...previous,[id]:composing?value:outboundNameDraft(value)}));invalidate();
+ }
  function select(id:string,on:boolean){setSelected(previous=>on?[...previous,id]:previous.filter(value=>value!==id));invalidate();}
  async function execute(){if(lock.current||!final)return;lock.current=true;setBusy(true);setError('');const action=final;setFinal(null);
   try{if(action==='prepare'&&!command.current)command.current={id:crypto.randomUUID(),destinationId:dest!.id,items:chosen.map(item=>({id:item.id,updatedAt:item.updatedAt,quantity:qty(item),detailNote:notes[item.id]??'',exportName:exportProductName({name:item.name,exportName:exportNames[item.id]})})),...(isKawagoe?{arrivalDate}:{})};
@@ -45,7 +48,7 @@ export function OutboundScreen({embedded=false}:{embedded?:boolean}){
  const selectAll=<label className="flex min-h-12 items-center gap-3"><input className="h-5 w-5" aria-label="すべて選択" type="checkbox" disabled={busy||!canEdit||!items.length} checked={!!items.length&&selected.length===items.length} onChange={e=>{setSelected(e.target.checked?items.map(item=>item.id):[]);invalidate();}}/>すべて選択</label>;
  const product=(item:OutboundProduct)=><div className="flex items-center gap-2">{item.thumbnailUrl?<img src={item.thumbnailUrl} alt="" className="h-14 w-14 shrink-0 rounded-lg object-contain"/>:<span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-xs text-gray-400">画像なし</span>}<div className="min-w-0 break-words text-sm">{item.name}<p className="mt-1 text-xs text-gray-500">{item.sku} · 現在 {item.quantity}点</p><p className="text-xs text-gray-500">{item.location}</p></div></div>;
  const quantity=(item:OutboundProduct)=><label className="grid gap-1 text-sm">出庫数量<input className={field} aria-label={item.sku+'の出庫数量'} type="number" inputMode="numeric" min={1} max={item.quantity} step={1} value={quantities[item.id]??item.quantity} disabled={busy||!canEdit||!selected.includes(item.id)} onChange={e=>{setQuantities(p=>({...p,[item.id]:e.target.value}));invalidate();}}/><span className="text-xs text-gray-500">元の場所に {Math.max(0,item.quantity-qty(item))}点残ります</span></label>;
- const exportName=(item:OutboundProduct)=><label className="grid gap-1 text-sm">送信用の商品名<input className={field} aria-label={item.sku+'の送信用の商品名'} maxLength={500} value={exportNames[item.id]??exportProductName(item)} disabled={busy||!canEdit||!selected.includes(item.id)} onChange={e=>{setExportNames(p=>({...p,[item.id]:e.target.value}));invalidate();}}/><span className="text-xs text-gray-500">「【在庫4】」などの在庫数表記は送信時に省きます。元の商品名は変わりません。</span></label>;
+ const exportName=(item:OutboundProduct)=><label className="grid gap-1 text-sm">送信用の商品名<input className={field} aria-label={item.sku+'の送信用の商品名'} maxLength={500} value={exportNames[item.id]??exportProductName(item)} disabled={busy||!canEdit||!selected.includes(item.id)} onChange={e=>updateExportName(item.id,e.target.value,(e.nativeEvent as InputEvent).isComposing)} onCompositionEnd={e=>updateExportName(item.id,e.currentTarget.value)}/><span className="text-xs text-gray-500">「【在庫4】」などの在庫数表記は名前の入力時に取り除きます。元の商品名は変わりません。</span></label>;
  const note=(item:OutboundProduct)=><label className="grid gap-1 text-sm">入荷明細備考<textarea className={field} aria-label={item.sku+'の入荷明細備考'} rows={2} maxLength={2000} placeholder="例：天板と脚を分解、計3梱包" value={notes[item.id]??''} disabled={busy||!canEdit||!selected.includes(item.id)} onChange={e=>{setNotes(p=>({...p,[item.id]:e.target.value}));invalidate();}}/></label>;
  return <main className={'mx-auto p-4 text-gray-900 '+(embedded?'max-w-xl pb-32':'w-full max-w-none pb-12')}>
   {!embedded&&<h1 className="mb-4 text-xl font-semibold">出庫</h1>}
