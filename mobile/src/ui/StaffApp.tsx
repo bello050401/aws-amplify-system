@@ -28,6 +28,7 @@ import {SalesScreen, type SalesResponse} from "./SalesScreen";
 import { InventoryReadError } from "../domain/readError";
 import { HomeScreen } from "./HomeScreen";
 import {PriceEntry} from "./PriceEntry";
+import {priceHistorySearch,type PriceHistoryPorts} from '../domain/priceHistory';
 import { OutboundEntry } from "./OutboundEntry";
 import { PullToRefreshList } from "./PullToRefreshList";
 import { DetailSwipeBack } from "./DetailSwipeBack";
@@ -226,6 +227,15 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     return ()=>{active=false;};
   },[ports,offline]);
   const searchFields=useMemo(()=>options?.searchFields ? mobileSearchFields(options.searchFields,features) : cachedSearchFields([],features),[options,features]);
+  const priceHistoryPorts=useMemo<PriceHistoryPorts|undefined>(()=>features.sales&&ports.loadDetail?{
+    features,detail:ports.loadDetail,thumbnails:ports.loadThumbnails,
+    search:async(q,offset)=>{
+      const input=priceHistorySearch(q,offset),local=quick.current.search(input,searchFields);
+      if(local)return {...local,items:local.items.map(item=>reusableThumbnail(item.thumbnailUrl)?item:{...item,thumbnailUrl:null})};
+      if(!ports.searchInventory||offline)throw Error('検索データを取得できません。');
+      return ports.searchInventory(input);
+    },
+  }:undefined,[features,ports,searchFields,offline]);
   const refresh = async (append = false,force = false) => {
     if (append && loading) return;
     const currentGeneration = ++generation.current;
@@ -400,7 +410,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {priceEntryOpen && writesEnabled ? <PriceEntry onClose={()=>{setPriceEntryOpen(false);void refresh(false,true);}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
+    {priceEntryOpen && writesEnabled ? <PriceEntry historyPorts={priceHistoryPorts} onClose={()=>{setPriceEntryOpen(false);void refresh(false,true);}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
       <View style={s.header}>
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>

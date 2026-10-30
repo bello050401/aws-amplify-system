@@ -28,7 +28,7 @@ async function main() {
     "next/server": 'export class NextResponse { static json(body, init={}) { return new Response(JSON.stringify(body), { ...init, headers: { "Content-Type":"application/json", ...init.headers } }); } }',
     "next/headers": 'export const cookies = () => ({});',
     "aws-amplify/auth/server": 'export const fetchAuthSession = () => globalThis.ports.auth();',
-    "@/lib/amplify/serverUtils": 'export const runWithAmplifyServerContext = ({operation}) => operation({});',
+    "@/lib/amplify/userPoolServer": 'export const runWithUserPoolServerContext = ({operation}) => operation({});',
     "@/lib/amplify/requireInventoryUser": 'export const getInventorySessionStatus = () => globalThis.ports.staff();',
   };
   const bundled = await build({ stdin: { contents: 'export { GET } from "./app/api/mobile/session/route"; export { requireMobileFeature } from "./lib/mobile/session";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, platform: "node", format: "cjs", plugins: [{ name: "isolated-auth", setup(builder) {
