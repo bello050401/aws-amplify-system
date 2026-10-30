@@ -15,7 +15,7 @@ test('数量0や価格不明は登録を止める',()=>{assert.throws(()=>lotQua
 test('品目は家具4種類とその他',()=>{assert.equal(classifyItem('ローテーブル Knoll'),'テーブル');assert.equal(classifyItem('ハイスツール HAY'),'椅子');assert.equal(classifyItem('サイドボード 木製'),'棚');assert.equal(classifyItem('テーブルランプ'),'照明');assert.equal(classifyItem('冷蔵庫'),'その他');assert.equal(classifyItem('テーブル・椅子 一山'),'その他');});
 test('画像は同じ商品IDの1枚目に限定',()=>{assert.throws(()=>validateImageUrl('https://example.com/1.png','123'));assert.throws(()=>validateImageUrl('./common.action?action=get_image&imageKey=999/1.png','123'));});
 test('不正日付・未来日は拒否',()=>{assert.throws(()=>assertAuctionDate('2026-02-30'));assert.throws(()=>assertAuctionDate('2099-01-01'));});
-test('実際の対象商品なし表示を0件として扱う',()=>{const x=parseRestageLots('<input id="listCbn" value="5"><input id="conditionDate" value="2026/10/21"><input id="page" value="1"><input id="maxPage" value=""><div class="red">対象商品が見つかりませんでした。</div>','2026-10-21');assert.deepEqual(x,{lots:[],errors:[],maxPage:0,page:1});});
+test('実際の対象商品なし表示を0件として扱う',()=>{const x=parseRestageLots('<input id="listCbn" value="5"><input id="conditionDate" value="2026/10/21"><input id="page" value="1"><input id="maxPage" value=""><div class="red">対象商品が見つかりませんでした。</div>','2026-10-21');assert.deepEqual(x,{lots:[],drafts:[],errors:[],maxPage:0,page:1});});
 const html=await readFile('scripts/fixtures/restage-wins.html','utf8');
 const parsed=parseRestageLots(html,'2026-10-23');
 test('実際の自社落札11件をすべて読み取る',()=>{assert.equal(parsed.lots.length,11);assert.equal(parsed.errors.length,0);assert.equal(parsed.maxPage,1);});
@@ -24,7 +24,7 @@ test('画面と数量・落札額・購入単価が一致',()=>{const table=pars
 test('仕入・古物台帳の指定項目が揃う',()=>{const v=restageInventoryFields(parsed.lots[0]);assert.equal(v.transactionDate,'2026-10-23');assert.equal(v.transactionType,'買受');assert.equal(v.counterpartyName,'リステージオークション');assert.equal(v.counterpartyAddress,'履歴あり');assert.equal(v.purchaseQuantity,parsed.lots[0].quantity);});
 test('自社落札の絞込が外れたHTMLを拒否',()=>assert.throws(()=>parseRestageLots(html.replace('name="listCbn" value="5"','name="listCbn" value="0"'),'2026-10-23')));
 test('開催日が違う応答を拒否',()=>assert.throws(()=>parseRestageLots(html,'2026-10-16')));
-test('壊れた商品は他の商品へ金額をずらさない',()=>{const x=parseRestageLots(html.replace('7,000円','未確定'),'2026-10-23');assert.equal(x.errors.length,1);assert.equal(x.lots.length,10);});
+test('壊れた商品は他の商品へ金額をずらさない',()=>{const x=parseRestageLots(html.replace('7,000円','未確定'),'2026-10-23');assert.equal(x.errors.length,0);assert.equal(x.lots.length,10);assert.equal(x.drafts.length,11);assert.equal(x.drafts.filter(d=>d.hammerPrice===null).length,1);});
 if(process.argv.includes('--live')){
  const {SecretsManagerClient,GetSecretValueCommand}=await import('@aws-sdk/client-secrets-manager');const {fromIni}=await import('@aws-sdk/credential-providers');
  const secret=await new SecretsManagerClient({region:'us-west-2',credentials:fromIni({profile:'Bello'})}).send(new GetSecretValueCommand({SecretId:'bello/restage-readonly-credentials'}));const client=new RestageHttp(JSON.parse(secret.SecretString!));await client.login();const live=await client.fetchLots('2026-10-23');assert.equal(live.lots.length,11);assert.equal(live.errors.length,0);

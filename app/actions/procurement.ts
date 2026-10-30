@@ -11,7 +11,7 @@ import {withHumanEdits} from '@/lib/inventory/humanEdits';
 import {logInventoryHistory,diffField} from '@/lib/inventory/history';
 import {revalidatePath} from 'next/cache';
 import {restageLedger,ledgerFields,resolveRestageDefaults,restageSupplement,importCustom,type RestageLedger,type RestageDefaults} from '@/lib/procurement/restageLedger';
-import {assertAuctionDate,restageInventoryFields,type RestageLot} from '@/lib/procurement/restage';
+import {assertAuctionDate,restageInventoryFields,completeRestageDraft,type RestageLot,type RestageDraft,type RestageEdit} from '@/lib/procurement/restage';
 import {claimImport,releaseImport,releaseFetchLock,getImportRecord,putImportRecord,importRecordsForDate,restageInventoryId,restageConnection,resetRestageConnection} from '@/lib/procurement/store';
 
 async function authorize(){if(!canEditInventory(await getInventoryRole()))throw Error('定期仕入れの操作権限がありません。');}
@@ -25,23 +25,69 @@ export async function fetchRestageAction(date:string){
     const connection=await restageConnection(),fetched=await connection.fetchLots(date),runId=randomUUID(),who=await getCurrentInventoryUserEmail(),ttl=Math.floor(Date.now()/1000)+86400;
     const previous=await importRecordsForDate(date),registered=new Map(previous.filter(x=>x.status==='REGISTERED').map(x=>[String(x.goodsId),String(x.inventoryId)]));
     const [categories,locations]=await Promise.all([listCategories(),listLocations()]);
-    const defaults=resolveRestageDefaults(categories,locations),ledger=fetched.lots.length&&!fetched.errors.length?restageLedger(fetched.lots):null;
-    for(const lot of fetched.lots)await putImportRecord({pk:'RUN#'+runId,sk:'LOT#'+lot.goodsId,lot,ledger,defaults,createdBy:who,createdAt:new Date().toISOString(),ttl});
-    const lots=await Promise.all(fetched.lots.map(async lot=>{const inventoryId=registered.get(lot.goodsId)??null,row=inventoryId?await getInventoryRaw(inventoryId):undefined;let needsUpdate=false;
-      if(row&&ledger){try{needsUpdate=Object.keys(restageSupplement(row,lot,ledger,defaults)).length>0;}catch{needsUpdate=true;}}
+    const defaults=resolveRestageDefaults(categories,locations);
+    // Reuse the confirmed original purchase for previously registered lots.
+    // Later edits/splits to inventory must not change the auction-day ledger.
+    const drafts=fetched.drafts.map(d=>{const saved=previous.find(p=>p.status==='REGISTERED'&&p.goodsId===d.goodsId)?.lot as RestageLot|undefined;return saved?{...saved,issues:[]} : d;});
+    const ledger=drafts.length&&!fetched.errors.length&&drafts.every(d=>!d.issues.length)?restageLedger(drafts.map(d=>completeRestageDraft(d))):null;
+    for(const lot of drafts)await putImportRecord({pk:'RUN#'+runId,sk:'LOT#'+lot.goodsId,lot,defaults,createdBy:who,createdAt:new Date().toISOString(),ttl});
+    await putImportRecord({pk:'RUN#'+runId,sk:'STATE',ids:drafts.map(d=>d.goodsId),date,defaults,errors:fetched.errors,ready:false,createdBy:who,ttl});
+    const lots=await Promise.all(drafts.map(async lot=>{const inventoryId=registered.get(lot.goodsId)??null,row=inventoryId?await getInventoryRaw(inventoryId):undefined;let needsUpdate=false;
+      if(row&&ledger){try{needsUpdate=Object.keys(restageSupplement(row,completeRestageDraft(lot),ledger,defaults)).length>0;}catch{needsUpdate=true;}}
       return {...lot,inventoryId,needsUpdate,deleted:!!inventoryId&&!row};}));
     return {ok:true as const,runId,lots,ledger,errors:fetched.errors};
   }catch(e){resetRestageConnection();return{ok:false as const,error:safeError(e)};}
   finally{await releaseFetchLock(lease);}
 }
 
+/** Freeze one complete, server-validated auction-day plan before any stock writes. */
+export async function prepareRestageRunAction(runId:string,edits:RestageEdit[]){
+  await authorize();
+  if(!/^[0-9a-f-]{36}$/.test(runId)||!Array.isArray(edits))return{ok:false as const,error:'取得結果が不正です。再度取得してください。'};
+  try{
+    const state=await getImportRecord('RUN#'+runId,'STATE'),who=await getCurrentInventoryUserEmail();
+    if(!state||state.createdBy!==who||Number(state.ttl)<Date.now()/1000)throw Error('取得結果の有効期限が切れました。再度取得してください。');
+    if(state.errors?.length)throw Error('商品ID・開催日などを確認できない行があります。再度取得してください。');
+    const ids=state.ids as string[];
+    if(!ids.length||edits.length!==ids.length||new Set(edits.map(e=>e?.goodsId)).size!==ids.length||edits.some(e=>!ids.includes(e?.goodsId)))throw Error('全商品の取得結果を確認してください。');
+    const lots:RestageLot[]=[];
+    for(const goodsId of ids){
+      const preview=await getImportRecord('RUN#'+runId,'LOT#'+goodsId);
+      if(!preview||preview.lot.date!==state.date)throw Error('取得結果が不足しています。再度取得してください。');
+      const previous=await getImportRecord('DATE#'+state.date,'LOT#'+goodsId);
+      const source=preview.lot as RestageDraft;
+      // Successful rows are immutable on retries, including partial registrations.
+      try{lots.push(previous?.status==='REGISTERED'&&previous.lot?completeRestageDraft({...previous.lot,issues:[]} as RestageDraft):completeRestageDraft(source,edits.find(e=>e.goodsId===goodsId)!));}
+      catch(e){throw Error(`商品ID ${goodsId}：${(e as Error).message}`);}
+    }
+    const ledger=restageLedger(lots),preparedId=randomUUID(),ttl=Number(state.ttl);
+    for(const lot of lots)await putImportRecord({pk:'RUN#'+preparedId,sk:'LOT#'+lot.goodsId,lot,ledger,defaults:state.defaults,createdBy:who,ttl});
+    // STATE is written last: a partial snapshot can never authorize registration.
+    await putImportRecord({pk:'RUN#'+preparedId,sk:'STATE',ids,date:state.date,defaults:state.defaults,errors:[],ready:true,createdBy:who,ttl});
+    return {ok:true as const,runId:preparedId,ledger,lots};
+  }catch(e){return{ok:false as const,error:safeError(e)};}
+}
+
 export async function registerRestageLotAction(runId:string,goodsId:string){
   await authorize();
   if(!/^[0-9a-f-]{36}$/.test(runId)||!/^\d{1,12}$/.test(goodsId))return{ok:false as const,error:'取得結果が不正です。再度取得してください。'};
+  const state=await getImportRecord('RUN#'+runId,'STATE'),who=await getCurrentInventoryUserEmail();
+  if(!state?.ready||state.createdBy!==who||Number(state.ttl)<Date.now()/1000||!state.ids?.includes(goodsId))return{ok:false as const,error:'取得内容を確認してから登録してください。'};
   const preview=await getImportRecord('RUN#'+runId,'LOT#'+goodsId);
   if(!preview||Number(preview.ttl)<Date.now()/1000)return{ok:false as const,error:'取得結果の有効期限が切れました。再度取得してください。'};
   const lot=preview.lot as RestageLot,ledger=preview.ledger as RestageLedger|null,defaults=preview.defaults as RestageDefaults;
   if(!ledger||ledger.date!==lot.date||ledger.version!==2||ledger.rounding!=='HALF_UP'||!defaults)return{ok:false as const,error:'全落札の台帳集計・価格計算を確認できません。再取得してください。'};
+  const dayLease=await claimImport('REGISTER_DAY',lot.date);
+  if(!dayLease)return{ok:false as const,error:'同じ開催日の登録処理中です。少し待って再試行してください。'};
+  try{
+  // Another tab may have registered a different correction since this plan was
+  // prepared. Never publish a stale full-day ledger over that confirmed purchase.
+  for(const record of await importRecordsForDate(lot.date)){
+    if(record.status!=='REGISTERED'||!record.lot)continue;
+    const planned=await getImportRecord('RUN#'+runId,'LOT#'+record.goodsId);
+    const original=record.lot as RestageLot,next=planned?.lot as RestageLot|undefined;
+    if(!next||['quantity','hammerPrice','isBundle','itemType'].some(k=>original[k as keyof RestageLot]!==next[k as keyof RestageLot]))return{ok:false as const,error:'別の画面で登録内容が変更されています。再取得すると登録済みの内容を引き継げます。'};
+  }
   const pk='DATE#'+lot.date,sk='LOT#'+lot.goodsId,id=restageInventoryId(lot);
   const previous=await getImportRecord(pk,sk);
   if(previous?.status==='REGISTERED'){
@@ -79,4 +125,5 @@ export async function registerRestageLotAction(runId:string,goodsId:string){
     resetRestageConnection();await releaseImport(pk,sk,lease,{status:'FAILED',goodsId,lastError:safeError(e),failedAt:new Date().toISOString()});
     return{ok:false as const,error:safeError(e)};
   }
+  }finally{await releaseImport('REGISTER_DAY',lot.date,dayLease);}
 }

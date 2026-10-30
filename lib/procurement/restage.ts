@@ -3,7 +3,9 @@ import { procurementPurchasePrice } from './pricing';
 import { procurementLedgerDetails } from './ledgerDetails';
 
 export const RESTAGE_ORIGIN = 'https://real.next-restage.co.jp';
-export type RestageLot = { goodsId:string; date:string; name:string; sourceQuantity:string; quantity:number; unit:string; hammerPrice:number; purchasePrice:number; isBundle:boolean; itemType:string; imageUrl:string; lotNumber:string };
+export {completeRestageDraft,RESTAGE_ITEM_TYPES} from './restageDraft';
+export type {RestageLot,RestageDraft,RestageEdit} from './restageDraft';
+import {completeRestageDraft,type RestageLot,type RestageDraft} from './restageDraft';
 type Node = {tagName?:string;nodeName?:string;value?:string;attrs?:{name:string;value:string}[];childNodes?:Node[]};
 const attr=(n:Node,key:string)=>n.attrs?.find(a=>a.name===key)?.value??'';
 const walk=(n:Node):Node[]=>[n,...(n.childNodes??[]).flatMap(walk)];
@@ -23,12 +25,16 @@ export function classifyItem(name:string):string {
 }
 export function lotQuantity(name:string,sourceQuantity:string) {
   const title=name.normalize('NFKC'), raw=sourceQuantity.normalize('NFKC').replace(/\s/g,'');
-  const bundle=title.match(/([\d,]+)\s*点\s*(?:まとめて\s*)?(?:一山|山)/);
-  if((/一山|点\s*山/.test(title)||/山$/.test(raw))&&!bundle) throw Error('一山の点数を読み取れません。商品名の点数を確認してください。');
+  // A bare "1山" is a lot count, never the number of individual pieces.
+  const pattern=/(\d[\d,]*)\s*(点|脚|台|個|枚|本|組|セット|式)\s*(?:まとめて\s*)?(?:一山|山)/g;
+  const candidates=[...title.matchAll(pattern),...raw.matchAll(pattern)];
+  if(new Set(candidates.map(m=>Number(m[1].replace(/,/g,'')))).size>1)throw Error('一山の数量表記が複数あります。数量を入力してください。');
+  const bundle=candidates[0];
+  if((/一山|(?:点|脚|台|個|枚|本|組|セット|式)\s*山|\d\s*山/.test(title)||/山$/.test(raw))&&!bundle) throw Error('一山の点数が不明です。数量を入力してください。');
   const match=bundle??raw.match(/^([\d,]+)(台|脚|点|個|枚|本|組|セット|式)$/);
   const quantity=Number(match?.[1].replace(/,/g,''));
   if(!Number.isSafeInteger(quantity)||quantity<1||quantity>100000) throw Error('落札数量を読み取れません。');
-  return {quantity,isBundle:!!bundle,unit:bundle?'点':match![2]};
+  return {quantity,isBundle:!!bundle,unit:match![2]};
 }
 export function purchaseUnitPrice(hammerPrice:number,quantity:number,isBundle:boolean) {
   if(!Number.isSafeInteger(hammerPrice)||hammerPrice<=0||hammerPrice>100000000||!Number.isSafeInteger(quantity)||quantity<1) throw Error('落札価格または数量が不正です。');
@@ -48,7 +54,7 @@ export function parseRestageLots(html:string,date:string) {
   const body=nodes.find(n=>n.tagName==='tbody'&&attr(n,'class').includes('table-body'));
   const rows=(body?.childNodes??[]).filter(n=>n.tagName==='tr');
   if(rows.length%2) throw Error('落札一覧の形式が変わっています。登録を中止しました。');
-  const lots:RestageLot[]=[],errors:{goodsId:string;name:string;error:string}[]=[];
+  const lots:RestageLot[]=[],drafts:RestageDraft[]=[],errors:{goodsId:string;name:string;error:string}[]=[];
   for(let i=0;i<rows.length;i+=2){
     const cells=(rows[i].childNodes??[]).filter(n=>n.tagName==='td'),sub=(rows[i+1].childNodes??[]).filter(n=>n.tagName==='td');
     const goodsId=clean(cells[0]??{}),name=clean(cells[6]??{});
@@ -56,15 +62,19 @@ export function parseRestageLots(html:string,date:string) {
       // Own-winning-lots also includes accepted one-chance purchases. Both
       // statuses have a confirmed hammer price; unsold/unauctioned rows do not.
       if(cells.length!==11||sub.length!==7||!/^\d{1,12}$/.test(goodsId)||clean(cells[1])!==date.replaceAll('-','/')||!['落札','ワンチャンス'].includes(clean(cells[9]))||!name) throw Error('開催日・商品ID・落札結果を確認できません。');
-      const sourceQuantity=clean(cells[7]),q=lotQuantity(name,sourceQuantity),price=clean(sub[5]).normalize('NFKC');
-      if(!/^[\d,]+円$/.test(price)) throw Error('落札価格が確定していません。');
-      const hammerPrice=Number(price.replace(/[円,]/g,''));
+      const sourceQuantity=clean(cells[7]),price=clean(sub[5]).normalize('NFKC'),issues:string[]=[];
+      let q:{quantity:number|null;isBundle:boolean;unit:string}={quantity:null,isBundle:/山/.test(name+' '+sourceQuantity),unit:'点'};
+      try{q=lotQuantity(name,sourceQuantity);}catch(e){issues.push((e as Error).message);}
+      const hammerPrice=/^[\d,]+円$/.test(price)?Number(price.replace(/[円,]/g,'')):null;
+      if(!hammerPrice||!Number.isSafeInteger(hammerPrice)||hammerPrice>100000000)issues.push('落札価格を確認して入力してください。');
       const img=walk(cells[4]).find(n=>n.tagName==='img');
-      lots.push({goodsId,date,name,sourceQuantity,...q,hammerPrice,purchasePrice:purchaseUnitPrice(hammerPrice,q.quantity,q.isBundle),itemType:classifyItem(name),imageUrl:validateImageUrl(attr(img??{},'src'),goodsId),lotNumber:clean(sub[0])});
+      const draft:RestageDraft={goodsId,date,name,sourceQuantity,...q,hammerPrice,purchasePrice:null,itemType:classifyItem(name),imageUrl:validateImageUrl(attr(img??{},'src'),goodsId),lotNumber:clean(sub[0]),issues};
+      if(!issues.length){const lot=completeRestageDraft(draft);lots.push(lot);draft.purchasePrice=lot.purchasePrice;}
+      drafts.push(draft);
     }catch(error){errors.push({goodsId,name,error:error instanceof Error?error.message:'読取エラー'});}
   }
   if(!body&&!nodes.some(n=>n.tagName==='div'&&clean(n)==='対象商品が見つかりませんでした。')) throw Error('落札一覧を取得できません。ログイン状態を確認してください。');
-  return {lots,errors,maxPage,page};
+  return {lots,drafts,errors,maxPage,page};
 }
 
 export function restageInventoryFields(lot:RestageLot){

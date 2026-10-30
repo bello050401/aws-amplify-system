@@ -1,4 +1,4 @@
-import {RESTAGE_ORIGIN,parseRestageLots,validateImageUrl,type RestageLot} from './restage';
+import {RESTAGE_ORIGIN,parseRestageLots,validateImageUrl,type RestageLot,type RestageDraft} from './restage';
 
 /** Read-only portal operations. Never accepts arbitrary actions, URLs or a browser session. */
 export class RestageHttp {
@@ -32,13 +32,13 @@ export class RestageHttp {
     if(!html.includes(this.credentials.id)||!html.includes('membertop')||html.includes('id="jumpHp"'))throw Error('リステージへログインできません。ID・パスワードを確認してください。');
   }
   async fetchLots(date:string){
-    const lots:RestageLot[]=[],errors:{goodsId:string;name:string;error:string}[]=[];const seen=new Set<string>();let maxPage=1;
+    const lots:RestageLot[]=[],drafts:RestageDraft[]=[],errors:{goodsId:string;name:string;error:string}[]=[];const seen=new Set<string>();let maxPage=1;
     for(let page=1;page<=maxPage;page++){
       const html=await this.html(await this.request('/restage/goodslist.action',{action:page===1?'search':'page',listCbn:'5',conditionDate:date.replaceAll('-','/'),conditionLane:'',conditionCorner:'',conditionSpnSite:'',conditionResultType:'',viewNum:'500',hyojiMode:'1',page:String(page)}));
       const parsed=parseRestageLots(html,date);if(parsed.page!==page)throw Error('落札一覧のページが重複しています。');maxPage=Math.max(1,parsed.maxPage);
-      for(const lot of parsed.lots){if(seen.has(lot.goodsId))throw Error('落札一覧に重複があり、取得を中止しました。');seen.add(lot.goodsId);lots.push(lot);}errors.push(...parsed.errors);
+      for(const draft of parsed.drafts){if(seen.has(draft.goodsId))throw Error('落札一覧に重複があり、取得を中止しました。');seen.add(draft.goodsId);drafts.push(draft);}lots.push(...parsed.lots);errors.push(...parsed.errors);
     }
-    return{lots,errors};
+    return{lots,drafts,errors};
   }
   async image(lot:RestageLot){
     const url=validateImageUrl(lot.imageUrl,lot.goodsId),response=await this.request(url),bytes=await this.bytes(response,25*1024*1024);
