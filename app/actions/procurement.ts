@@ -23,6 +23,7 @@ export async function fetchRestageAction(date:string){
   const lease=await claimImport('LOCK','RESTAGE',120);if(!lease)return{ok:false as const,error:'別の画面で取得中です。少し待ってからお試しください。'};
   try{
     const connection=await restageConnection(),fetched=await connection.fetchLots(date),runId=randomUUID(),who=await getCurrentInventoryUserEmail(),ttl=Math.floor(Date.now()/1000)+86400;
+    if(!who)throw Error('ログイン中の利用者を確認できません。再度取得してください。');
     const previous=await importRecordsForDate(date),registered=new Map(previous.filter(x=>x.status==='REGISTERED').map(x=>[String(x.goodsId),String(x.inventoryId)]));
     const [categories,locations]=await Promise.all([listCategories(),listLocations()]);
     const defaults=resolveRestageDefaults(categories,locations);
@@ -46,7 +47,7 @@ export async function prepareRestageRunAction(runId:string,edits:RestageEdit[]){
   if(!/^[0-9a-f-]{36}$/.test(runId)||!Array.isArray(edits))return{ok:false as const,error:'取得結果が不正です。再度取得してください。'};
   try{
     const state=await getImportRecord('RUN#'+runId,'STATE'),who=await getCurrentInventoryUserEmail();
-    if(!state||state.createdBy!==who||Number(state.ttl)<Date.now()/1000)throw Error('取得結果の有効期限が切れました。再度取得してください。');
+    if(!who||!state||state.createdBy!==who||Number(state.ttl)<Date.now()/1000)throw Error('取得結果の有効期限が切れました。再度取得してください。');
     if(state.errors?.length)throw Error('商品ID・開催日などを確認できない行があります。再度取得してください。');
     const ids=state.ids as string[];
     if(!ids.length||edits.length!==ids.length||new Set(edits.map(e=>e?.goodsId)).size!==ids.length||edits.some(e=>!ids.includes(e?.goodsId)))throw Error('全商品の取得結果を確認してください。');
@@ -72,7 +73,7 @@ export async function registerRestageLotAction(runId:string,goodsId:string){
   await authorize();
   if(!/^[0-9a-f-]{36}$/.test(runId)||!/^\d{1,12}$/.test(goodsId))return{ok:false as const,error:'取得結果が不正です。再度取得してください。'};
   const state=await getImportRecord('RUN#'+runId,'STATE'),who=await getCurrentInventoryUserEmail();
-  if(!state?.ready||state.createdBy!==who||Number(state.ttl)<Date.now()/1000||!state.ids?.includes(goodsId))return{ok:false as const,error:'取得内容を確認してから登録してください。'};
+  if(!who||!state?.ready||state.createdBy!==who||Number(state.ttl)<Date.now()/1000||!state.ids?.includes(goodsId))return{ok:false as const,error:'取得内容を確認してから登録してください。'};
   const preview=await getImportRecord('RUN#'+runId,'LOT#'+goodsId);
   if(!preview||Number(preview.ttl)<Date.now()/1000)return{ok:false as const,error:'取得結果の有効期限が切れました。再度取得してください。'};
   const lot=preview.lot as RestageLot,ledger=preview.ledger as RestageLedger|null,defaults=preview.defaults as RestageDefaults;
