@@ -13,6 +13,7 @@ import { createBaseProduct, addManualBaseImage, setManualBaseVisibility, readBas
 import {commonCategory,commonChannelPrice} from '../commonSettings';
 import type { EcReview } from "../ecManagement";
 import type { ChannelListingRecord } from "../types";
+import { classifyBaseHttpStatus } from './errors';
 
 export type BaseManualItem = {
   id: string;
@@ -37,7 +38,7 @@ export async function readBaseItem(id: string): Promise<BaseManualItem> {
     { headers: { Authorization: `Bearer ${await getAccessToken()}` }, cache: "no-store" },
     { label: "BASE商品確認" },
   );
-  if (!response.ok) throw Error("READ");
+  if (!response.ok) throw classifyBaseHttpStatus(response.status, await response.text());
   const data = (await response.json()).item;
   if (
     !data ||

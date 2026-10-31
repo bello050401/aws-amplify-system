@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {classifyBaseHttpStatus} from '../lib/listing/base/errors';
+const missing=classifyBaseHttpStatus(400,JSON.stringify({error:'no_item',private:'do-not-display'}));
+assert.equal(missing.code,'REMOTE_NOT_FOUND');
+assert.match(missing.message,/BASEの商品が見つかりません/);
+assert.ok(!missing.message.includes('do-not-display'));
+assert.equal(classifyBaseHttpStatus(401,'{"error":"no_item"}').code,'AUTH_FAILED');
+assert.equal(classifyBaseHttpStatus(403,'{}').code,'PERMISSION_DENIED');
+assert.equal(classifyBaseHttpStatus(429,'not-json').code,'RATE_LIMITED');
+assert.equal(classifyBaseHttpStatus(400,'{"error":"other"}').code,'REMOTE_VALIDATION_ERROR');
+console.log('PASS 5: missing item, auth, permission, rate-limit and validation errors remain distinct');

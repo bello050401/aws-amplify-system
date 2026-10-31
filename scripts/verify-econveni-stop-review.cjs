@@ -21,6 +21,7 @@ const {build} = require('esbuild');
     './accountWorkflow':{withEconveniAccount:async(_s,_h,_credentials,fn)=>fn()},
     './workflowStore':{EconveniWorkflowError:WorkflowError},'./saveWorkflow':{},
     './mapping':{EconveniPreparationError:class extends Error{}},'./manualWriteGuard':{manualWriteRestriction:async()=>null},
+    '../base/errors':{BaseListingApiError:class extends Error{}},
     './commandWorkflow':{runEconveniCommand:async(_store,session,input)=>{
       assert.equal(input.operation,'STOP');await session.publicationPreview({...input,productId:'123'});sends++;
       return {...current,channels:{...current.channels,YAHOO:{state:'SUCCEEDED'}}};
