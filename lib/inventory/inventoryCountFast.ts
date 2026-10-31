@@ -2,6 +2,7 @@ import "server-only";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { directTableName } from "@/lib/amplify/directData";
+import { readCompactSearch } from './readCompactSearch';
 import type { InventoryCursorListFilters } from "./inventoryCursorList";
 
 /**
@@ -128,6 +129,10 @@ export async function countActiveInventoryFast(filters: InventoryCursorListFilte
   }
 
   const { filterExpression, names, values } = buildCountExpression(filters);
+  const compact = await readCompactSearch(ddb(), {TableName: table, ProjectionExpression: 'id',
+    FilterExpression: filterExpression, ExpressionAttributeNames: Object.keys(names).length ? names : undefined,
+    ExpressionAttributeValues: values}, ['id','deletedAt','listingPartition',...Object.values(names)]);
+  if (compact) return compact.length;
 
   // 1セグメントぶんを最後まで数える。数え切れなければ null。
   async function countSegment(segment: number): Promise<number | null> {

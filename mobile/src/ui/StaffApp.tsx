@@ -50,7 +50,9 @@ export interface StaffAppPorts extends EditorPorts {
   loadThumbnails?: (ids: string[]) => Promise<InventoryThumbnail[]>;
   loadOptions?: () => Promise<InventoryOptions>;
   loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
-  loadDetail?: (id: string) => Promise<InventoryItem>;
+  loadDetail?: (id: string, expectedVersion?: string) => Promise<InventoryItem>;
+  prepareDetail?: (id: string, expectedVersion: string) => void;
+  clearPreparedDetails?: () => void;
   removeInventory?: (request: DeleteRequest) => Promise<void>;
   sell?: SoldOutPorts['sell'];
   split?: StockSplitPorts['split']; checkBarcode?: StockSplitPorts['checkBarcode'];
@@ -368,7 +370,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         if (!item.detailLoadedAt) setError("【圏外です】この商品の詳細は未取得です。保存済みの基本情報を表示しています。");
         return;
       }
-      const detail = freshlyLoaded ? item : await ports.loadDetail(item.id);
+      const detail = freshlyLoaded ? item : await ports.loadDetail(item.id,item.updatedAt);
       if (attempt !== detailGeneration.current) return;
       if (detail.id !== item.id) throw new Error("Detail identity mismatch");
       if(quick.current.observe(detail)){selectPhotos(Date.now());persistCatalog();}
@@ -403,6 +405,14 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   };
   const serverResults = !!ports.searchInventory && serverRows !== null;
   const rows = serverResults ? serverRows! : !offline && !!ports.searchInventory && !error ? [] : cachedInventorySearch(snapshot?.items ?? [],{q:query,category,advanced,sort},searchFields);
+  const preparationKey = rows.slice(0,2).map(row => `${row.id}:${row.updatedAt}`).join('|');
+  useEffect(() => {
+    if (offline) ports.clearPreparedDetails?.();
+    if (offline || selected || tab !== 'inventory' || !query.trim() || loading || !ports.prepareDetail) return;
+    const targets = rows.slice(0,2);
+    const timer = setTimeout(() => {for (const item of targets) ports.prepareDetail?.(item.id,item.updatedAt);}, 300);
+    return () => clearTimeout(timer);
+  }, [ports, offline, selected, tab, query, loading, preparationKey]);
   const categories = options?.categories ?? Array.from(new Set((snapshot?.items ?? []).flatMap(item=>splitCategoryNames(item.category)).filter(Boolean)));
   const title = feature ?? (selected ? "物品詳細" : tabs.find((item) => item.key === tab)!.label);
 
@@ -454,7 +464,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
           initialNumToRender={10} maxToRenderPerBatch={8} windowSize={5} onViewableItemsChanged={viewableChanged} viewabilityConfig={viewabilityConfig}
           ListFooterComponent={!offline && hasMore ? <Pressable accessibilityRole="button" disabled={loading} onPress={() => { void refresh(true); }} style={s.pickerChoice}><Text style={s.blue}>{loading ? "読み込み中…" : "続きを読み込む"}</Text></Pressable> : undefined}
           contentContainerStyle={s.listContent} ListEmptyComponent={loading ? <ActivityIndicator color={colors.blue} /> : <Text style={s.empty}>{offline ? "この端末に保存済みの在庫がありません。通信が戻ったら読み込んでください。" : "該当する在庫がありません。"}</Text>}
-          renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantityUnset?"未入力":item.quantity}`} onPress={() => { void openItem(item); }} style={s.row}>
+          renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantityUnset?"未入力":item.quantity}`} onPressIn={() => {if(!offline)ports.prepareDetail?.(item.id,item.updatedAt);}} onPress={() => { void openItem(item); }} style={s.row}>
             <ProductImage item={item} cache={ports.listPhotoCache}/><View style={s.rowMain}><View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(item.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.rowName} numberOfLines={2}>{item.name}</Text></View>
             <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
           </Pressable>} />

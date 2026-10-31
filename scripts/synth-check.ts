@@ -194,6 +194,23 @@ async function main() {
   // backend cannot deploy at all, whatever the individual models look like.
   assertNoNestedStackCycles(assembly.directory);
 
+  const compactTables = findFilesContaining(assembly.directory, 'inventorySearchCompactV1')
+    .filter(file => file.endsWith('.template.json'))
+    .flatMap(file => Object.values(JSON.parse(fs.readFileSync(file, 'utf8')).Resources ?? {}) as any[])
+    .filter(resource => resource.Type === 'Custom::AmplifyDynamoDBTable' &&
+      JSON.stringify(resource.Properties).includes('inventorySearchCompactV1'));
+  if (compactTables.length !== 1) throw new Error('Compact search must extend exactly one existing Inventory table');
+  const compactIndexes = Object.values(compactTables[0].Properties.globalSecondaryIndexes) as any[];
+  const compactIndex = compactIndexes.find(index => index.indexName === 'inventorySearchCompactV1');
+  if (compactIndexes.length !== 7 || compactIndex?.projection?.projectionType !== 'INCLUDE' ||
+      compactIndex.projection.nonKeyAttributes.length !== 19 || compactIndex.keySchema[0]?.attributeName !== 'id') {
+    throw new Error('Compact search index/table preservation check failed');
+  }
+  for (const field of ['Sku', 'CategoryId', 'StatusId', 'LocationId', 'DeletedAt', 'ListingPartitionAndListUpdatedAt']) {
+    if (!compactIndexes.some(index => index.indexName === 'inventoriesBy' + field)) throw new Error('Existing inventory index removed: ' + field);
+  }
+  console.log('✓ Compact search: 6 existing indexes retained, 1 small id-keyed INCLUDE index added; no replacement table.');
+
   // Amplify Data (Auth/Data/Storage/functions) is provisioned via nested
   // stacks, whose templates are written to disk as separate files in the
   // same cloud assembly directory rather than appearing in

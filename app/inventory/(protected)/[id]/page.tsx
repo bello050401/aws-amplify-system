@@ -132,16 +132,18 @@ export default async function InventoryDetailPage({
   let initialRead;
   try {
     initialRead = await Promise.all([
-      getInventoryDetail(params.id),
+      getInventoryDetail(params.id, {consistentDirectRead: true}),
       listStatuses(),
       listAllCustomFieldDefinitions(),
       listInventoryPhotoAssetsAction(params.id),
+      listCategories(),
+      listLocations(),
     ] as const);
   } catch (error) {
     if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
     throw error;
   }
-  const [item, statuses, fieldDefs, photoAssetsResult] = initialRead;
+  const [item, statuses, fieldDefs, photoAssetsResult, activeCategories, activeLocations] = initialRead;
   if (!item) notFound();
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const normalPhotoAssets = photoAssets
@@ -155,8 +157,8 @@ export default async function InventoryDetailPage({
   let relatedRead;
   try {
     relatedRead = await Promise.all([
-      listCategories(item.categoryId),
-      listLocations(item.locationId),
+      item.categoryId && !activeCategories.some(category => category.id === item.categoryId) ? listCategories(item.categoryId) : activeCategories,
+      item.locationId && !activeLocations.some(location => location.id === item.locationId) ? listLocations(item.locationId) : activeLocations,
       getShippingReferencePriceForInventory(item).catch(() => null),
       signInventoryPreviews(item.images),
     ] as const);

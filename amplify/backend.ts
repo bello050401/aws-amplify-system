@@ -1,10 +1,11 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { Duration, RemovalPolicy, SecretValue } from "aws-cdk-lib";
+import { CfnResource, Duration, RemovalPolicy, SecretValue } from "aws-cdk-lib";
 import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LogRetention, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { AttributeType, BillingMode, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
+import { COMPACT_SEARCH_INDEX, COMPACT_SEARCH_FIELDS } from '../lib/inventory/compactSearchIndex';
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Effect, ManagedPolicy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
@@ -527,6 +528,27 @@ const processingJobTable = backend.data.resources.tables["ProcessingJob"];
 const imageProcessingVersionTable = backend.data.resources.tables["ImageProcessingVersion"];
 const photoProfileTable = backend.data.resources.tables["PhotoProfile"];
 const inventoryTable = backend.data.resources.tables["Inventory"];
+// Dedicated small projection: DynamoDB maintains it for every existing/new row,
+// including deletions and provider imports. No custom replication worker.
+// Amplify Gen2 owns this table via Custom::AmplifyDynamoDBTable, not CfnTable.
+// Use its existing indexed overrides (the same shape used by Amplify's table
+// wrapper), and append only: preserve the table and every existing index.
+const inventoryResources = inventoryTable.node.scope!.node.findAll().filter((node): node is CfnResource => node instanceof CfnResource && node.cfnResourceType === 'Custom::AmplifyDynamoDBTable');
+if (inventoryResources.length !== 1) throw new Error('Inventory table resource must be unambiguous');
+const inventoryResource = inventoryResources[0];
+const existingIndexes = (inventoryResource as unknown as {rawOverrides?: {Properties?: {globalSecondaryIndexes?: Record<string, {indexName: string}>}}}).rawOverrides?.Properties?.globalSecondaryIndexes;
+if (!existingIndexes || Object.keys(existingIndexes).length !== 6) throw new Error('Review Inventory index layout before changing compact search');
+inventoryResource.addPropertyOverride('globalSecondaryIndexes.6', {
+  indexName: COMPACT_SEARCH_INDEX,
+  keySchema: [{attributeName: 'id', keyType: 'HASH'}],
+  projection: {projectionType: 'INCLUDE', nonKeyAttributes: COMPACT_SEARCH_FIELDS.filter(field => field !== 'id')},
+});
+if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {
+  new ManagedPolicy(inventoryTable, 'CompactSearchRead', {
+    roles: [Role.fromRoleName(inventoryTable, 'CompactSearchWebRuntime', 'BelloAmplifyStagingComputeRole')],
+    statements: [new PolicyStatement({actions: ['dynamodb:Scan'], resources: [inventoryTable.tableArn + '/index/' + COMPACT_SEARCH_INDEX]})],
+  });
+}
 
 processingJobTable.grantReadWriteData(backend.imageProcessingWorker.resources.lambda);
 imageProcessingVersionTable.grantReadWriteData(backend.imageProcessingWorker.resources.lambda);

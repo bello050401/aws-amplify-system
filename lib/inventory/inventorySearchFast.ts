@@ -22,6 +22,7 @@ import type {CategoryRecord} from './categories';
 import {inventoryCategoryIds} from './categories';
 import { recordQuery } from "@/lib/perf/queryTiming";
 import { readSearchCandidates, invalidateSearchCandidates } from './searchCandidateCache';
+import { readCompactSearch } from './readCompactSearch';
 
 /**
  * 検索を「巨大な在庫本体の全件転送」から切り離す
@@ -268,6 +269,16 @@ export async function searchInventoryFast(
   const projection = buildScanProjection(referencedKeys);
 
   const loadCandidates = async () => {
+    // The compact index is maintained by DynamoDB for every write. Re-read the
+    // base table on a version conflict: do not loop on an eventually consistent GSI.
+    if (retryChangedPage) {
+      const indexed = await readCompactSearch(ddb(), {
+        TableName: table, ProjectionExpression: projection.projectionExpression,
+        FilterExpression: filterExpression, ExpressionAttributeNames: {...projection.names, ...filterNames},
+        ExpressionAttributeValues: filterValues,
+      }, [...projection.attributes, ...Object.values(filterNames), 'deletedAt', 'listingPartition']);
+      if (indexed) return indexed;
+    }
     const segments = await Promise.all(
     Array.from({ length: SCAN_SEGMENTS }, (_, i) =>
       scanSegment(table, i, projection, filterExpression, filterNames, filterValues),

@@ -33,6 +33,19 @@ const clean=x=>JSON.parse(JSON.stringify(x));
  const prior=scans;await search.searchInventoryFast({q:'Beta',filters:{locationId:'x'}},{offset:0,limit:50});assert(scans>prior);
  fail=true;await assert.rejects(()=>search.searchInventoryFast({q:'Beta'},{offset:0,limit:50}),/temporary/);fail=false;
 
+ // Compact GSI may lag writes. Visible results must still come from a fresh
+ // base-table read; retry the base table, never the same stale index.
+ const current=[{id:'c',name:'Chair Gamma',quantity:3,updatedAt:'v2',categoryIds:['selling']}];
+ const lagged=[{...current[0],quantity:5,updatedAt:'v1'}];let compactScans=0,baseScans=0,indexFails=false;
+ const compactDb={send:async cmd=>{if(cmd instanceof GetCommand)return{Item:current.find(x=>x.id===cmd.input.Key.id)};
+  const indexed=!!cmd.input.IndexName;if(indexed){compactScans++;if(indexFails)throw Error('index unavailable');}else baseScans++;
+  const source=indexed?lagged:current;return{Items:cmd.input.Segment===0?source.filter(x=>!x.deletedAt).map(item=>Object.fromEntries(Object.values(cmd.input.ExpressionAttributeNames).filter(k=>k in item).map(k=>[k,item[k]]))):[]};}};
+ const loadCompact=()=>load('lib/inventory/inventorySearchFast.ts',{'server-only':{},'@aws-sdk/client-dynamodb':{DynamoDBClient:class{}},'@aws-sdk/lib-dynamodb':{ScanCommand,GetCommand,DynamoDBDocumentClient:{from:()=>compactDb}},'@/lib/amplify/directData':{directTableName:()=> 'Inventory-test'},'@/lib/perf/queryTiming':{recordQuery:()=>{}}},{process:{env:{CONVERSATION_TABLE_NAME:'Conversation-test-NONE',BELLO_COMPACT_SEARCH_INDEX:'1'}}});
+ let indexedSearch=await loadCompact();let indexedResult=await indexedSearch.searchInventoryFast({q:'Gamma'},{offset:0,limit:50});assert.equal(indexedResult.totalQuantity,3);assert.equal(indexedResult.rawItems[0].quantity,3);assert.equal(compactScans,4);assert.equal(baseScans,8);
+ current[0].deletedAt='deleted';indexedSearch=await loadCompact();indexedResult=await indexedSearch.searchInventoryFast({q:'Gamma'},{offset:0,limit:50});assert.equal(indexedResult.total,0);assert.equal(compactScans,8);assert.equal(baseScans,16);
+ delete current[0].deletedAt;indexFails=true;indexedSearch=await loadCompact();indexedResult=await indexedSearch.searchInventoryFast({q:'Gamma'},{offset:0,limit:50});assert.equal(indexedResult.totalQuantity,3);assert.equal(baseScans,24);
+ indexFails=false;lagged[0]={...current[0]};indexedSearch=await loadCompact();indexedResult=await indexedSearch.searchInventoryFast({q:'Gamma'},{offset:0,limit:50});assert.equal(indexedResult.totalQuantity,3);assert.equal(baseScans,24,'healthy compact index must avoid the full inventory scan');
+
  let thumbReads=0,thumbFail=false;const thumbs=await load('lib/inventory/thumbnailRecords.ts',{'server-only':{},'../amplify/dataClient':{inventoryAuthMode:{authMode:'userPool'},serverDataClient:{models:{Inventory:{get:async({id},opts)=>{thumbReads++;assert.equal(opts.authMode,'userPool');assert.deepEqual(clean(opts.selectionSet),['id','updatedAt','deletedAt','images.*']);return thumbFail?{errors:['offline']}:{data:{id,updatedAt:'now',deletedAt:id==='deleted'?'yes':null,images:[{storageKey:'damage',sortOrder:0,type:'DAMAGE'},{storageKey:'normal',thumbnailKey:'small',sortOrder:1,isPrimary:true}]}}}}}}}});
  const out=await thumbs.readThumbnailRecords(['a','a','deleted']);assert.equal(thumbReads,2);assert.equal(out.length,1);assert.equal(out[0].mainImageThumbnailKey,'small');assert.equal(out[0].mainImageIsPrimary,true);
  thumbFail=true;await assert.rejects(()=>thumbs.readThumbnailRecords(['a']),/UNAVAILABLE/);

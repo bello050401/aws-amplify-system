@@ -17,6 +17,7 @@ import {createListPhotoCache} from '../runtime/listPhotoCache';
 import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 import type { InventorySearchInput } from "../domain/search";
+import {DetailReadAhead} from '../domain/detailReadAhead';
 
 function connected(state: Network.NetworkState) { return state.isConnected !== false && state.isInternetReachable !== false; }
 const loginModeKey = `bello.login-mode.${API_ORIGIN}`;
@@ -72,9 +73,13 @@ export function LiveApp() {
     if (!userId) return null;
     const snapshot = new SnapshotStore(AsyncStorage, userId, API_ORIGIN);
     const searchCatalogStore=new CatalogStore(catalogStorage,userId,API_ORIGIN);
+    const detailAhead = new DetailReadAhead(async id => {
+      try { return await readInventoryDetail(id); }
+      catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; }
+    });
     const loadThumbnails=async(ids:string[])=>{try{return await readInventoryThumbnails(ids);}catch(error){if(error instanceof StaffSessionError)await revoke(error.message);throw error;}};
     const listPhotoCache=createListPhotoCache(userId,loadThumbnails);
-    const clearCaches=async()=>{await Promise.all([snapshot.clearOnLogout(),searchCatalogStore.clearOnLogout(),listPhotoCache?.clearOnLogout()]);};
+    const clearCaches=async()=>{detailAhead.clear();await Promise.all([snapshot.clearOnLogout(),searchCatalogStore.clearOnLogout(),listPhotoCache?.clearOnLogout()]);};
     const revoke=async(message:string)=>{
       // Hide business data immediately, even when browser storage is unavailable.
       setAccess(null);setCanEdit(false);setUserId(null);setMessage(message);
@@ -121,16 +126,23 @@ export function LiveApp() {
       }
     },
     loadThumbnails,
-    loadDetail: readInventoryDetail,
+    loadDetail: (id,version) => detailAhead.read(id,version),
+    prepareDetail: (id,version) => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      const connection = typeof navigator === 'undefined' ? undefined : (navigator as unknown as {connection?:{saveData?:boolean;effectiveType?:string}}).connection;
+      if (connection?.saveData || ['slow-2g','2g'].includes(connection?.effectiveType ?? '')) return;
+      detailAhead.prepare(id,version);
+    },
+    clearPreparedDetails: () => detailAhead.clear(),
     loadOptions: readInventoryOptions,
     uploadPhoto: uploadInventoryPhoto,
     loadSales: readSales,
-    save: saveInventory,
-    sell: sellInventory,
-    split: splitInventory,
+    save: (...args) => {detailAhead.clear();return saveInventory(...args);},
+    sell: (...args) => {detailAhead.clear();return sellInventory(...args);},
+    split: (...args) => {detailAhead.clear();return splitInventory(...args);},
     checkBarcode: checkSplitBarcode,
-    removeInventory,
-    deletePhotoAsset: removeInventoryPhotoAsset,
+    removeInventory: (...args) => {detailAhead.clear();return removeInventory(...args);},
+    deletePhotoAsset: (...args) => {detailAhead.clear();return removeInventoryPhotoAsset(...args);},
   }; }, [userId]);
 
   const chooseLoginMode = (mode: LoginMode) => {

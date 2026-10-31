@@ -33,12 +33,14 @@ export default async function EditInventoryPage({
   // item に依存しない3つ(ステータス・追加項目の定義・単位)は、item の
   // 取得を待つ理由が無い。以前は item を取り切ってから5つまとめて投げて
   // いたので、独立した問い合わせが1往復ぶん後ろへずれていた。
-  const [item, statuses, customFieldDefs, units, photoAssetsResult] = await Promise.all([
-    getInventoryDetail(params.id),
+  const [item, statuses, customFieldDefs, units, photoAssetsResult, activeCategories, activeLocations] = await Promise.all([
+    getInventoryDetail(params.id, {consistentDirectRead: true}),
     listStatuses(),
     listCustomFieldDefinitions(),
     listUnits(),
     listInventoryPhotoAssetsAction(params.id),
+    listCategories(),
+    listLocations(),
   ]);
   if (!item) notFound();
 
@@ -48,8 +50,8 @@ export default async function EditInventoryPage({
   // listLocations' own comment. Depends on `item`, so this can't join
   // the Promise.all above.
   const [categories, locations, previewUrls] = await Promise.all([
-    listCategories(item.categoryId),
-    listLocations(item.locationId),
+    item.categoryId && !activeCategories.some(category => category.id === item.categoryId) ? listCategories(item.categoryId) : activeCategories,
+    item.locationId && !activeLocations.some(location => location.id === item.locationId) ? listLocations(item.locationId) : activeLocations,
     signInventoryPreviews(item.images),
   ]);
 

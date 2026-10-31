@@ -6,15 +6,19 @@ import {buildCountExpression} from '@/lib/inventory/inventoryCountFast';
 import {resolveDisplayInventoryId} from '@/lib/inventory/inventoryId';
 import {inventoryCategoryIds} from '@/lib/inventory/categories';
 import type {InventoryItem} from '@/mobile/src/domain/inventory';
+import {readCompactSearch} from '@/lib/inventory/readCompactSearch';
 
 const client=DynamoDBDocumentClient.from(new DynamoDBClient({region:process.env.AWS_REGION||'us-west-2'}));
 type CatalogRecord={id:string;sku?:string;sourceSystem?:string;sourceInventoryId?:string;name?:string;quantity?:number;unit?:string;categoryId?:string;categoryIds?:string[];locationId?:string;statusId?:string;barcode?:string;plannedSalePrice?:number;createdAt?:string;updatedAt:string;listUpdatedAt?:string};
 // Minimal search projection, never originals, custom fields or sales/customer records.
 export const CATALOG_ATTRIBUTES=['id','sku','sourceSystem','sourceInventoryId','name','quantity','unit','categoryId','categoryIds','locationId','statusId','barcode','plannedSalePrice','createdAt','updatedAt','listUpdatedAt'] as const;
-export async function readSearchCatalog(masters:{categories:{id:string;name:string}[];locations:{id:string;name:string}[];statuses:{id:string;label:string}[]}):Promise<InventoryItem[]>{
+export async function readSearchCatalog(masters:{categories:{id:string;name:string}[];locations:{id:string;name:string}[];statuses:{id:string;label:string}[]},fresh=false):Promise<InventoryItem[]>{
  const names=Object.fromEntries(CATALOG_ATTRIBUTES.map((key,i)=>['#p'+i,key]));
  const filter=buildCountExpression({});
- const segments=await Promise.all(Array.from({length:8},async(_,segment)=>{
+ const indexed=fresh?null:await readCompactSearch(client,{TableName:directTableName('Inventory'),
+  ProjectionExpression:Object.keys(names).join(','),ExpressionAttributeNames:{...names,...filter.names},
+  FilterExpression:filter.filterExpression,ExpressionAttributeValues:filter.values},[...CATALOG_ATTRIBUTES,'deletedAt','listingPartition']);
+ const segments=indexed?[indexed as CatalogRecord[]]:await Promise.all(Array.from({length:8},async(_,segment)=>{
   const rows:CatalogRecord[]=[];let key:Record<string,unknown>|undefined;let pages=0;
   do{
    const page=await client.send(new ScanCommand({TableName:directTableName('Inventory'),Segment:segment,TotalSegments:8,
@@ -39,7 +43,7 @@ export async function cachedSearchCatalog(masters:Parameters<typeof readSearchCa
  if(!fresh&&cached?.key===key&&Date.now()-Date.parse(cached.checkedAt)<15000)return cached;
  if(!fresh&&pending?.key===key)return pending.promise;
  const checkedAt=new Date().toISOString();
- const promise=readSearchCatalog(masters).then(items=>{
+ const promise=readSearchCatalog(masters,fresh).then(items=>{
   if(!cached||cached.checkedAt<=checkedAt)cached={key,items,checkedAt};
   return {items,checkedAt};
  });
