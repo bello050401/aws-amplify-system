@@ -308,19 +308,24 @@ export function evaluateQuery(
 
 /** クイック検索(商品検索ボックス)専用 — 在庫ID/SKU/物品名のいずれかにcase-insensitiveに部分一致。 */
 export function matchesQuickSearch(record: SearchableRecord, q: string): boolean {
-  const needle = q.trim();
-  if (!needle) return true;
-  return (
-    ciIncludes(toStr(record.displayId), needle) ||
-    ciIncludes(toStr(record.sku), needle) ||
-    ciIncludes(toStr(record.name), needle)
-  );
+  return createQuickSearchMatcher(q)(record);
+}
+
+/** Normalize the query once per search, not three times for every inventory row.
+ * Keep each field separate so a match cannot cross an ID/name boundary. */
+export function createQuickSearchMatcher(q: string, nameOnly = false): (record: SearchableRecord) => boolean {
+  const needle = searchText(q.trim());
+  if (!needle) return () => true;
+  return nameOnly
+    ? record => searchText(toStr(record.name)).includes(needle)
+    : record => searchText(toStr(record.displayId)).includes(needle)
+      || searchText(toStr(record.sku)).includes(needle)
+      || searchText(toStr(record.name)).includes(needle);
 }
 
 /** Staff app's text box searches product names; code scanning uses a separate barcode condition. */
 export function matchesNameSearch(record: SearchableRecord, q: string): boolean {
-  const needle = q.trim();
-  return !needle || ciIncludes(toStr(record.name), needle);
+  return createQuickSearchMatcher(q, true)(record);
 }
 
 // ────────────────────────────────────────────────────────────────────

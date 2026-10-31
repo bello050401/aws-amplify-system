@@ -7,8 +7,7 @@ import { buildScanProjection } from "./searchScanProjection";
 import { resolveDisplayInventoryId } from "./inventoryId";
 import {
   evaluateQuery,
-  matchesQuickSearch,
-  matchesNameSearch,
+  createQuickSearchMatcher,
   type AdvancedSearchQuery,
   type SearchFieldDef,
   type SearchableRecord,
@@ -272,10 +271,12 @@ export async function searchInventoryFast(
 
   const candidates = raw.map(toCandidate);
   const q = input.q?.trim();
+  const matchesText = createQuickSearchMatcher(q ?? '', input.nameOnly);
+  const matchesCodeOrName = input.saleRelevance ? createQuickSearchMatcher(q ?? '') : matchesText;
   const filtered = candidates.filter((record) => {
     if(input.saleRelevance&&(Number(record.quantity)<=0||inventoryCategoryIds(record).some(id=>input.saleExcludeCategoryIds?.includes(id))))return false;
     if (input.advanced && !evaluateQuery(record, input.advanced.query, input.advanced.fieldsByKey)) return false;
-    if (q && !(input.saleRelevance ? saleNameScore(String(record.name??''),q)>0||matchesQuickSearch(record,q) : input.nameOnly ? matchesNameSearch(record, q) : matchesQuickSearch(record, q))) return false;
+    if (q && !(input.saleRelevance ? saleNameScore(String(record.name??''),q)>0||matchesCodeOrName(record) : matchesText(record))) return false;
     return true;
   });
   const comparator=input.saleRelevance&&q ? (a:typeof filtered[number],b:typeof filtered[number])=>saleNameScore(String(b.name??''),q)-saleNameScore(String(a.name??''),q)||compareByUpdatedAtDesc(a,b) : input.sort ? inventoryComparator(input.sort, input.fieldsByKey ?? input.advanced?.fieldsByKey ?? new Map()) : compareByUpdatedAtDesc;

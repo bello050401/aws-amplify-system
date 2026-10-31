@@ -14,7 +14,7 @@ import { parseCustomFields } from "./customFieldsCodec";
 import type { InventoryExtendedFields } from "./extendedFields";
 import { effectiveListThumbnailKey, normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
 import { resolveDisplayInventoryId } from "./inventoryId";
-import { evaluateQuery, matchesQuickSearch, matchesNameSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
+import { evaluateQuery, createQuickSearchMatcher, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 import { searchInventoryFast, type FastSearchInput } from "./inventorySearchFast";
 import { inventoryVerifiedReadSession } from "./mutationSession";
 import { readVerifiedInventoryDetail } from './detailRead';
@@ -540,7 +540,8 @@ export async function listInventorySimpleSearch(
 
   const all = await fetchAllInventoryRecords(conditions);
   const q = filters.q?.trim();
-  const filtered = q ? all.filter((r) => matchesQuickSearch(r as unknown as SearchableRecord, q)) : all;
+  const match = createQuickSearchMatcher(q ?? '');
+  const filtered = q ? all.filter((r) => match(r as unknown as SearchableRecord)) : all;
 
   if (options.categoryPriority?.length) filtered.sort(categoryPriorityComparator<(typeof filtered)[number]>(options.categoryPriority,compareInventoryDateDesc));
 
@@ -609,8 +610,9 @@ export async function listInventoryMobileSearch(
   const conditions: Record<string, unknown>[] = [];
   if (input.categoryIds?.length) conditions.push({or:input.categoryIds.map(id=>categoryFilter(id))});
   const all = await fetchAllInventoryRecords(conditions);
+  const match = createQuickSearchMatcher(input.q ?? '', true);
   const filtered = all.filter(row => evaluateQuery(row as unknown as SearchableRecord,input.advanced,fieldsByKey) &&
-    (!input.q || matchesNameSearch(row as unknown as SearchableRecord,input.q)));
+    match(row as unknown as SearchableRecord));
   filtered.sort((a,b)=>inventoryComparator(input.sort,fieldsByKey)(a as unknown as Record<string,unknown>,b as unknown as Record<string,unknown>));
   return {items:filtered.slice(options.offset,options.offset+options.limit),total:filtered.length,
     totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0),...options};

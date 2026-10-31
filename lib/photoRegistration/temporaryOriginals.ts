@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {GetCommand,PutCommand,UpdateCommand,QueryCommand,ScanCommand,BatchGetCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
+import {GetCommand,PutCommand,UpdateCommand,QueryCommand,ScanCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import {HeadObjectCommand,GetObjectCommand,PutObjectCommand,type S3Client} from '@aws-sdk/client-s3';
 import {getSignedUrl} from '@aws-sdk/s3-request-presigner';
 import {authorizeOperation,resolveActorContext,type AuthConfig} from './auth';
@@ -9,6 +9,7 @@ import {validOriginalDeclaration,originalForBatch,originalAvailable,originalUrlT
 import {deleteAllPhotoObjectVersions} from '../mediaMaintenance/deletePhotoObject';
 import {assetKey,batchKey} from './keys';
 import {originalObjectKey} from './originalRetention';
+import {readPhotoRows,photoRowKey} from './batchRead';
 export interface TemporaryOriginal extends PhotoOriginal {id:string;deviceId:string;sessionId:string;clientAssetId:string;importedAt:string;PK:string;SK:string;assetRef?:{id:string;batchId:string;sequence:number};available?:boolean;removed?:boolean;autoDeleted?:boolean}
 const key=(id:string)=>({PK:'ORIGINAL#'+id,SK:'ORIGINAL#'+id});
 const objectKey=(id:string)=>'photo-batches/original-imports/'+id+'.bin';
@@ -61,11 +62,12 @@ export class TemporaryOriginals{
  async list(){
   const result=await this.d.db.send(new QueryCommand({TableName:this.d.table,IndexName:'GSI1',KeyConditionExpression:'GSI1PK = :pk',ExpressionAttributeValues:{':pk':'ORIGINAL_IMPORT'},ScanIndexForward:false,Limit:200}));
   const rows=(result.Items??[]) as TemporaryOriginal[],refs=rows.filter(r=>r.assetRef);
+  const related=await readPhotoRows(this.d.db,this.d.table,refs.flatMap(r=>[assetKey(r.assetRef!.batchId,r.assetRef!.sequence,r.assetRef!.id),batchKey(r.assetRef!.batchId)]));
   const assets=new Map<string,{id:string;isDeleted?:boolean;purgeStartedAt?:string;original?:PhotoOriginal}>();
-  for(let n=0;n<refs.length;n+=100){const response=await this.d.db.send(new BatchGetCommand({RequestItems:{[this.d.table]:{Keys:refs.slice(n,n+100).map(r=>assetKey(r.assetRef!.batchId,r.assetRef!.sequence,r.assetRef!.id)),ConsistentRead:true}}}));for(const a of response.Responses?.[this.d.table]??[])assets.set(a.id,a as {id:string;isDeleted?:boolean;purgeStartedAt?:string;original?:PhotoOriginal});}
+  for(const r of refs){const ref=r.assetRef!,a=related.get(photoRowKey(assetKey(ref.batchId,ref.sequence,ref.id)));if(a)assets.set(ref.id,a as {id:string;isDeleted?:boolean;purgeStartedAt?:string;original?:PhotoOriginal});}
   const now=this.d.now?.()??Date.now();
   const batches=new Map<string,{linkedAt?:string}|undefined>();
-  for(const batchId of new Set(refs.map(r=>r.assetRef!.batchId))){const result=await this.d.db.send(new GetCommand({TableName:this.d.table,Key:batchKey(batchId),ConsistentRead:true}));batches.set(batchId,result.Item);}
+  for(const batchId of new Set(refs.map(r=>r.assetRef!.batchId)))batches.set(batchId,related.get(photoRowKey(batchKey(batchId))));
   return rows.map(r=>{const a=r.assetRef?assets.get(r.assetRef.id):null;const o=r.assetRef?originalForBatch(a?.original,batches.get(r.assetRef.batchId)?.linkedAt):{...r,expiresAt:'',retentionPolicy:'PRODUCT_LINK' as const};return {...r,expiresAt:o?.expiresAt??'',available:!!o&&originalAvailable(o,now)&&(!r.assetRef||!!a&&!a.isDeleted&&!a.purgeStartedAt),removed:!!r.assetRef&&!!a&&(a.isDeleted||!!a.purgeStartedAt),autoDeleted:!!o?.purgeRecheckedAt};});
  }
  private async resolveStored(r:TemporaryOriginal):Promise<PhotoOriginal|null>{
