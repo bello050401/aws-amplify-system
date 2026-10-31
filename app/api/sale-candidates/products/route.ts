@@ -27,6 +27,6 @@ export async function GET(request:Request){
   const page=match==='ID'?{rawItems:exact,total:exact.length}:q?await searchInventoryFast({q,saleRelevance:true,saleExcludeCategoryIds:masters.filter(c=>c.name==='売り切れ').map(c=>c.id),categoryPriority:scope.priority,filters:{categoryIds:scope.categoryIds}},{offset,limit:20}):{rawItems:[],total:0};if(!page)throw Error('SEARCH_UNAVAILABLE');
   const rows=page.rawItems.map(p=>toListRow(p as never)).filter(p=>scope.label(p)&&p.quantity>0&&!p.categoryIds?.some(id=>soldIds.includes(id)));
   const photos=new Map((await inventoryThumbnails(rows)).map(p=>[p.id,p.thumbnailUrl]));
-  return NextResponse.json({items:rows.map(p=>({id:p.id,name:p.name,quantity:p.quantity,sku:p.sku,displayId:p.displayId,updatedAt:p.updatedAt,market:p.market,price:p.salePrice??p.plannedSalePrice??null,category:scope.label(p),thumbnailUrl:photos.get(p.id)||null})),total:page.total,match},{headers:NO_STORE});
+  return NextResponse.json({items:rows.map(p=>({id:p.id,name:p.name,quantity:p.quantity,sku:p.sku,displayId:p.displayId,updatedAt:p.updatedAt,market:p.market,salePrice:p.salePrice??null,price:p.salePrice??p.plannedSalePrice??null,category:scope.label(p),thumbnailUrl:photos.get(p.id)||null})),total:page.total,match},{headers:NO_STORE});
  }catch{return NextResponse.json({error:'商品検索を完了できませんでした。再度お試しください。'},{status:503,headers:NO_STORE});}
 }
