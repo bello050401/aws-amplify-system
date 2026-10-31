@@ -232,7 +232,10 @@ export class PhotoRegistrationWebAdapter {
     const batch = await this.deps.repository.getBatchById(batchId);
     if (!batch) return err("BATCH_NOT_FOUND", `batch ${batchId} was not found`, "batchId");
 
-    const rawAssets = await this.deps.repository.getAssetsForBatch(batchId);
+    // Keep failed cloud deletions visible for retry, but do not count completed
+    // deletions as photos or let them occupy otherwise empty pagination pages.
+    const rawAssets = (await this.deps.repository.getAssetsForBatch(batchId))
+      .filter(asset => !(asset.isDeleted && asset.purgedAt));
     rawAssets.sort((a, b) => a.sequence - b.sequence);
 
     const pageSize = Math.min(Math.max(Math.trunc(pagination.pageSize) || 1, 1), 100);

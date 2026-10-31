@@ -682,6 +682,15 @@ test("download and confirmed deletion: enforce roles, disable deleted downloads,
  assert.equal(removals,2);
  expectErr(await adapter.restoreAsset({photoAssetId:asset.id},adminClaims()),"PERMISSION_DENIED","irreversible deletion");
 });
+test("purged photos leave the grid and pagination; pending cloud deletion remains retryable",async()=>{
+ const env=buildEnv(),batch=await createAndFillBatch(env,"purged-pagination",3);
+ const raw=await env.repository.getAssetsForBatch(batch);
+ env.repository.getAssetsForBatch=async()=>raw.map((a,i)=>i===0?{...a,isDeleted:true,purgedAt:new Date().toISOString()}:i===1?{...a,isDeleted:true}:a);
+ const first=expectOk(await env.adapter.getBatchDetail(batch,staffClaims(),{page:1,pageSize:1}),"first visible page");
+ assert.equal(first.totalAssetCount,2);assert.equal(first.assets[0].id,raw[1].id);assert.equal(first.assets[0].thumbnailUrl,null);assert(!first.assets[0].purgedAt);
+ const last=expectOk(await env.adapter.getBatchDetail(batch,staffClaims(),{page:99,pageSize:1}),"page clamped after deletion");
+ assert.equal(last.page,2);assert.equal(last.assets[0].id,raw[2].id);assert(last.assets[0].thumbnailUrl);
+});
 async function main() {
   await Promise.all(pendingTests);
   console.log(`\n[verify-photo-registration-web] ${passed} passed, ${failures.length} failed`);
