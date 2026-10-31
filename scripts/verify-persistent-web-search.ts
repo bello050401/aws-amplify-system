@@ -18,6 +18,14 @@ async function main(){
  const first=buildCatalogDelta(rows,undefined,date),state=applyCatalogDelta(null,first),q=new QuickSearchCatalog();
  assert.equal(first.buckets.length,64);assert(q.accept(first,q.version()));
  const fields=cachedSearchFields(rows,RESTRICTED_FEATURES),times:number[]=[];
+ const originalVersion=q.version(),originalManifest=q.manifest();
+ assert.equal(q.observe({...rows[1],detailLoadedAt:date,photosComplete:true}),false);
+ assert.equal(q.version(),originalVersion);assert.deepEqual(q.manifest(),originalManifest);assert(!q.needsSync());
+ const observed=new QuickSearchCatalog();observed.accept(first,observed.version());
+ assert(observed.observe({...rows[1],quantity:2,name:'最新詳細',updatedAt:date}));
+ assert(observed.needsSync());assert.equal(observed.search({q:'最新詳細'},fields)!.totalQuantity,2);
+ assert(!observed.accept(first,0));
+ checks.push('変更なし詳細は差分同期/検索再構築を省略・変更ありは最新数量と名称に更新・古い応答は拒否');
  for(const name of ['', 'チェア','cassina','テーブル','不存在'])for(const field of ['updatedAt','createdAt','quantity','name','plannedSalePrice','sku','displayId','unit'])for(const direction of ['asc','desc'] as const){
   const input={q:name,sort:{field,direction}},started=performance.now(),actual=q.search(input,fields)!;
   times.push(performance.now()-started);

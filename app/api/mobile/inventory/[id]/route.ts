@@ -26,7 +26,7 @@ export async function GET(_request: Request, context: { params: { id: string } }
     // Photo and item reads are independent after authorization. Starting them
     // together removes a full database round trip from the detail critical path.
     const [row, assetResult] = await Promise.all([
-      measure('inventory', () => getInventoryDetail(id)), measure('photoAssets', () => listInventoryPhotoAssetsAction(id)).catch(() => null),
+      measure('inventory', () => getInventoryDetail(id, {consistentDirectRead: true})), measure('photoAssets', () => listInventoryPhotoAssetsAction(id)).catch(() => null),
     ]);
     if (!row) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404, headers });
     const [categories, locations, statuses] = await Promise.all([

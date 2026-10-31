@@ -62,7 +62,7 @@ async function main() {
     builder.onLoad({ filter: /.*/, namespace: "stub" }, args => ({ contents: sources[args.path], loader: "js" }));
   }}] });
   const module = { exports: {} as { GET(request: Request, context: { params: { id: string } }): Promise<Response>; POST?: unknown } };
-  vm.runInNewContext(bundled.outputFiles[0].text, { module, exports: module.exports, ports, Response, Date, require: createRequire(import.meta.url) });
+  vm.runInNewContext(bundled.outputFiles[0].text, { module, exports: module.exports, ports, Response, Date, URL, require: createRequire(import.meta.url) });
   const get = (requested = id) => module.exports.GET(new Request("https://bello.example/api/mobile/inventory/test"), { params: { id: requested } });
   // The shared route now supports creation too. GET must still never invoke a write.
   assert.equal(typeof module.exports.POST, 'function');
@@ -95,6 +95,14 @@ async function main() {
   assetsUnavailable = false;
   session.features = { ecListing: true, sales: true };
   const admin = await (await get()).json(); assert.equal(admin.item.details.salePrice, "40000"); assert.equal(admin.item.details.listingNotes, "restricted listing text");
+  const diagnostic = () => module.exports.GET(new Request('https://bello.example/api/mobile/inventory/test?timing=1'), { params: { id } });
+  assert.equal((await (await diagnostic()).json()).diagnostics, undefined, 'Staff do not receive administrator diagnostics');
+  session.role = 'ADMIN';
+  assert.equal((await (await get()).json()).diagnostics, undefined, 'Ordinary reads have no diagnostic fields');
+  const measured = await (await diagnostic()).json();
+  assert.deepEqual(Object.keys(measured.diagnostics), ['milliseconds']);
+  assert.deepEqual(Object.keys(measured.diagnostics.milliseconds).sort(), ['categories','inventory','locations','photoAssets','session','statuses','total']);
+  assert.ok(Object.values(measured.diagnostics.milliseconds).every(ms => typeof ms === 'number' && ms >= 0));
   found = false; assert.equal((await get()).status, 404);
   unavailable = true; const failed = await get(); assert.equal(failed.status, 503); assert.deepEqual(await failed.json(), { error: "INVENTORY_UNAVAILABLE" });
   console.log("PASS: BELLO-only image sources and partial-source failure, detail access, field mapping, staff redaction, 404/errors and no writes; synthetic fixtures only.");

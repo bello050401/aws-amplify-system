@@ -37,12 +37,23 @@ const clean=x=>JSON.parse(JSON.stringify(x));
  const out=await thumbs.readThumbnailRecords(['a','a','deleted']);assert.equal(thumbReads,2);assert.equal(out.length,1);assert.equal(out[0].mainImageThumbnailKey,'small');assert.equal(out[0].mainImageIsPrimary,true);
  thumbFail=true;await assert.rejects(()=>thumbs.readThumbnailRecords(['a']),/UNAVAILABLE/);
 
+ let verified=false,directReads=0,directItem={id:'a',quantity:5},directFailure=false;
+ const detail=await load('lib/inventory/detailRead.ts',{'server-only':{},'./mutationSession':{inventoryVerifiedReadSession:async()=>verified?{owner:'owner',role:'VIEWER'}:null},'../amplify/directData':{directTableName:model=>{assert.equal(model,'Inventory');return'Inventory-test'}},'@aws-sdk/client-dynamodb':{DynamoDBClient:class{}},'@aws-sdk/lib-dynamodb':{GetCommand,DynamoDBDocumentClient:{from:()=>({send:async cmd=>{directReads++;assert.equal(cmd.input.ConsistentRead,true);assert.equal(cmd.input.TableName,'Inventory-test');if(directFailure)throw Error('outage');return{Item:directItem}}})}}});
+ assert.equal(await detail.readVerifiedInventoryDetail('a'),undefined);assert.equal(directReads,0);
+ verified=true;assert.equal(await detail.readVerifiedInventoryDetail('../invalid'),undefined);assert.equal(directReads,0);
+ assert.equal((await detail.readVerifiedInventoryDetail('a')).quantity,5);
+ directItem={id:'a',quantity:3};assert.equal((await detail.readVerifiedInventoryDetail('a')).quantity,3);assert.equal(directReads,2);
+ directItem=undefined;assert.equal(await detail.readVerifiedInventoryDetail('a'),null);
+ directItem={id:'different'};assert.equal(await detail.readVerifiedInventoryDetail('a'),undefined);
+ directFailure=true;assert.equal(await detail.readVerifiedInventoryDetail('a'),undefined);
+ verified=false;const last=directReads;assert.equal(await detail.readVerifiedInventoryDetail('a'),undefined);assert.equal(directReads,last);
+
  // Contract of the real HTTP route: unauthorized callers trigger no reads;
  // photo reads start before the still-pending inventory read resolves.
  let permitted=true,photoStarted=false,rowResolve;const rowPromise=new Promise(r=>rowResolve=r);
  const route=await load('app/api/mobile/inventory/[id]/route.ts',{'next/server':{NextResponse:{json:(body,options)=>({body,...options})}},'@/lib/mobile/session':{getMobileSession:async()=>permitted?{ok:true,owner:'owner',features:{}}:{ok:false,error:'FORBIDDEN',status:403}},'@/lib/inventory/queries':{getInventoryDetail:()=>rowPromise,listCategories:async()=>[],listLocations:async()=>[],listStatuses:async()=>[]},'@/lib/inventory/listImageUrls':{signInventoryListKey:async()=>null},'@/lib/mobile/inventoryDetail':{mobileInventoryDetail:()=>({id:'item'})},'@/lib/mobile/inventoryPhotos':{mobileInventoryPhotos:async()=>[]},'@/app/actions/photoRegistration':{listInventoryPhotoAssetsAction:async()=>{photoStarted=true;return{ok:true,value:{assets:[]}}}},'@/app/actions/inventory':{},'@/lib/inventory/conditionalUpdate':{},'@/lib/mobile/inventoryWrite':{}});
  permitted=false;assert.equal((await route.GET({}, {params:{id:'00000000-0000-0000-0000-000000000001'}})).status,403);assert(!photoStarted);
  permitted=true;const request=route.GET({}, {params:{id:'00000000-0000-0000-0000-000000000001'}});await new Promise(r=>setImmediate(r));assert(photoStarted);rowResolve({images:[]});const result=await request;assert.equal(result.body.owner,'owner');assert.equal(result.body.item.photosComplete,true);assert.match(result.headers['Cache-Control'],/no-store/);
- const report={passed:['candidate cache single-flight, expiry, invalidation race, failure, memory and entry limits','search stable results, fresh quantity/counts, soft-delete removal, sale category exclusions, filter separation, failed read rejection','master request coalescing and invalidation race','authenticated thumbnail projection, deduplication, image priority, deletion, failures','detail authorization, parallel reads, complete-photo guard and no-store']};
+ const report={passed:['candidate cache single-flight, expiry, invalidation race, failure, memory and entry limits','search stable results, fresh quantity/counts, soft-delete removal, sale category exclusions, filter separation, failed read rejection','master request coalescing and invalidation race','authenticated thumbnail projection, deduplication, image priority, deletion, failures','detail authorization, parallel reads, complete-photo guard and no-store','direct detail signature-verification gate, invalid ID, consistent fresh reads, missing item, identity mismatch and outage fallback']};
  fs.mkdirSync('artifacts/perceived-speed-20261031',{recursive:true});fs.writeFileSync('artifacts/perceived-speed-20261031/regression.json',JSON.stringify(report,null,2));console.log('PASS perceived-speed regressions: '+report.passed.join('; '));
 })().catch(e=>{console.error(e);process.exitCode=1});

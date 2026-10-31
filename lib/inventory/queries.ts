@@ -17,6 +17,7 @@ import { resolveDisplayInventoryId } from "./inventoryId";
 import { evaluateQuery, matchesQuickSearch, matchesNameSearch, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 import { searchInventoryFast, type FastSearchInput } from "./inventorySearchFast";
 import { inventoryVerifiedReadSession } from "./mutationSession";
+import { readVerifiedInventoryDetail } from './detailRead';
 import {
   isE2EFixtureModeActive,
   E2E_CATEGORIES,
@@ -656,10 +657,16 @@ export interface InventoryDetail extends InventoryListRow, ExtendedFieldsAsNulla
  * 計測: scripts/benchmark-inventory-queries.ts のsimGetInventoryDetail系
  * 参照。
  */
-export async function getInventoryDetail(id: string): Promise<InventoryDetail | null> {
+export async function getInventoryDetail(id: string, options?: {consistentDirectRead?: boolean}): Promise<InventoryDetail | null> {
   if (isE2EFixtureModeActive()) return e2eInventoryDetail(id); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const { data: item, errors } = await serverDataClient.models.Inventory.get({ id }, inventoryAuthMode);
-  if (errors?.length) throw new Error('INVENTORY_DETAIL_UNAVAILABLE');
+  const direct = options?.consistentDirectRead ? await readVerifiedInventoryDetail(id) : undefined;
+  let item: InventoryModel | null;
+  if (direct !== undefined) item = direct as InventoryModel | null;
+  else {
+    const result = await serverDataClient.models.Inventory.get({ id }, inventoryAuthMode);
+    if (result.errors?.length) throw new Error('INVENTORY_DETAIL_UNAVAILABLE');
+    item = result.data;
+  }
   if (!item || item.deletedAt) return null;
 
   return {

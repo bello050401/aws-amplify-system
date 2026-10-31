@@ -371,8 +371,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       const detail = freshlyLoaded ? item : await ports.loadDetail(item.id);
       if (attempt !== detailGeneration.current) return;
       if (detail.id !== item.id) throw new Error("Detail identity mismatch");
-      quick.current.update([detail]);selectPhotos(Date.now());
-      persistCatalog();
+      if(quick.current.observe(detail)){selectPhotos(Date.now());persistCatalog();}
       setSelected(detail);
       const current = snapshotRef.current;
       if (current) {

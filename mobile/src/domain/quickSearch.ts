@@ -54,6 +54,13 @@ export class QuickSearchCatalog {
   this.items=[...changed.filter(i=>!deleted.has(i.id)).map(compactCatalogItem),...this.items.filter(i=>!updates.has(i.id)&&!deleted.has(i.id))];
   this.invalidate();
  }
+ /** Opening an unchanged detail is not an edit. Keep the search index and
+  * delta hashes intact instead of synchronizing the same bucket on every back. */
+ observe(item:InventoryItem){
+  const current=this.items.find(row=>row.id===item.id),compact=compactCatalogItem(item);
+  if(current&&JSON.stringify(compactCatalogItem(current))===JSON.stringify(compact))return false;
+  this.update([item]);return true;
+ }
  search(input:InventorySearchInput,fields:SearchFieldDef[],now=Date.now()){
   if(!this.ready(now)||!supportsQuickSearch(input))return null;
   if(!this.indexed||this.indexedFields!==fields){
