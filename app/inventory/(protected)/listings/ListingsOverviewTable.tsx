@@ -17,6 +17,7 @@ import {
   EC_CHANNEL_LABEL,
   EC_STATE_LABEL,
   ecStateFor,
+  retainVisibleSelection,
   type EcCatalog,
   type EcChannel,
   type EcState,
@@ -35,7 +36,7 @@ const button =
   "rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium hover:bg-gray-50 disabled:opacity-40";
 const badge: Record<EcState, string> = {
   ACTIVE: "bg-emerald-50 text-emerald-700",
-  STOPPED: "bg-gray-100 text-gray-600",
+  STOPPED: "bg-red-50 text-red-700",
   ENDED: "bg-gray-100 text-gray-500",
   DRAFT: "bg-amber-50 text-amber-700",
   UNLISTED: "bg-gray-100 text-gray-500",
@@ -71,6 +72,7 @@ export function ListingsOverviewTable({
     } | null>(null);
   const authRetry = useRef(false);
   const [manualOpen,setManualOpen]=useState(false);
+  const [selected,setSelected]=useState<Set<string>>(new Set()),[bulkChannel,setBulkChannel]=useState<EcChannel>('BASE');
   useEffect(() => setState(loadStateFromInitialRows(initialResult)), [initialResult]);
   async function loadCatalog() {
     setCatalogBusy(true);
@@ -125,6 +127,7 @@ export function ListingsOverviewTable({
       )
       .sort((a,b)=>compareEcOverview(a,b,sort as EcSortKey,direction));
   }, [rows, catalog, query, filter, sort, archived,categoryFilter,direction]);
+  useEffect(()=>setSelected(s=>retainVisibleSelection(s,filtered.map(r=>r.inventoryId))),[filtered]);
   useEffect(() => {
     setPage(0);
   }, [query, filter, archived, pageSize, sort,categoryFilter,direction]);
@@ -248,10 +251,12 @@ export function ListingsOverviewTable({
           ))}
         </select>
       </div>
+      {canEdit&&!archived&&<div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3" aria-label="選択商品の一括操作"><strong className="text-sm">{selected.size}件 選択中</strong><button className={button} disabled={!selected.size} onClick={()=>setSelected(new Set())}>選択解除</button><label className="text-sm">販売先 <select className="ml-2 rounded border bg-white px-3 py-2" value={bulkChannel} onChange={e=>setBulkChannel(e.target.value as EcChannel)}>{EC_CHANNELS.map(c=><option key={c} value={c}>{EC_CHANNEL_LABEL[c]}</option>)}</select></label><button className={button} disabled={!selected.size||selected.size>10||catalogBusy} onClick={()=>open('PUBLISH',filtered.filter(r=>selected.has(r.inventoryId)),bulkChannel)}>選択商品を出品</button><button className={button} disabled={!selected.size||selected.size>10||catalogBusy} onClick={()=>open('STOP',filtered.filter(r=>selected.has(r.inventoryId)),bulkChannel)}>選択商品の出品を停止</button><span className="text-xs text-slate-500">1回10商品まで。対象と販売先を確認してから実行します。</span></div>}
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="w-full border-collapse text-sm md:min-w-[850px]">
           <thead className="bg-gray-50 text-xs text-gray-600">
             <tr>
+              {canEdit&&!archived&&<th className="w-10 px-3 py-3"><input type="checkbox" aria-label="このページの商品をすべて選択" checked={pageRows.length>0&&pageRows.every(r=>selected.has(r.inventoryId))} onChange={e=>setSelected(s=>{const n=new Set(s);pageRows.forEach(r=>e.target.checked?n.add(r.inventoryId):n.delete(r.inventoryId));return n;})}/></th>}
               <th className="px-3 py-3 text-left">商品</th>
               <th className="hidden px-3 py-3 text-right md:table-cell">数量</th>
               <th className="hidden px-3 py-3 text-right md:table-cell">単価</th>
@@ -270,8 +275,9 @@ export function ListingsOverviewTable({
             {pageRows.map((row) => (
               <tr
                 key={row.inventoryId}
-                className="hover:bg-gray-50/70"
+                className={selected.has(row.inventoryId)?'bg-slate-50':'hover:bg-gray-50/70'}
               >
+                {canEdit&&!archived&&<td className="px-3 py-3"><input type="checkbox" aria-label={`${row.name}を一括操作の対象に選択`} checked={selected.has(row.inventoryId)} onChange={e=>setSelected(s=>{const n=new Set(s);if(e.target.checked)n.add(row.inventoryId);else n.delete(row.inventoryId);return n;})}/></td>}
                 <td className="px-2 py-3 md:px-3">
                   <div className="flex min-w-0 max-w-xl items-start gap-2 md:min-w-64 md:items-center md:gap-3">
                     <div className="h-10 w-10 shrink-0 overflow-hidden rounded bg-gray-100 md:h-14 md:w-14">
@@ -416,7 +422,8 @@ export function ListingsOverviewTable({
           items={operation.items}
           action={operation.action}
           onClose={() => setOperation(null)}
-          onChanged={() => {
+          onChanged={(doneIds) => {
+            setSelected(previous=>new Set([...previous].filter(id=>!doneIds.includes(id))));
             void loadCatalog();
             void listListingsOverviewSafeAction().then((r) => setState(loadStateFromInitialRows(r)));
           }}

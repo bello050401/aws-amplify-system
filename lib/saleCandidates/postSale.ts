@@ -9,6 +9,8 @@ import {reviewEcListingAction,executeEcListingAction} from '@/app/actions/ecList
 import {getChannelListing} from '@/lib/listing/service';
 import {readBaseItem,claimBaseManual,finishBaseManual} from '@/lib/listing/base/manualLifecycle';
 import {setManualBaseStock} from '@/lib/listing/base/adapter';
+import {refreshSaleBinding,reviewSaleAdjustment,executeSaleAdjustment,saleAdjustmentStarted} from '@/lib/listing/econveni/saleAdjustment';
+import {stockCountTitle} from '@/lib/inventory/stockCountTitle';
 import type {EcChannel} from '@/lib/listing/ecManagement';
 import type {PostSaleRow as Row,PostSalePlan} from './postSaleModel';
 export type {PostSalePlan} from './postSaleModel';
@@ -21,63 +23,92 @@ async function context(candidateId:string){
  if(!source||!sold)throw Error('売却した商品の状態を確認できません。');
  const soldChannel:EcChannel|null=c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel==='BASE'?'BASE':c.channel==='YAHOO'?'YAHOO':fromMarket(String(sold.market??''));
  if(c.result.remainingQuantity>0&&source.quantity!==c.result.remainingQuantity||source.updatedAt!==c.result.updatedAt)throw Error('売却後に在庫が変更されています。最新の数量をEC出品画面で確認してください。');
- return {c,source,soldChannel};
+ let soldPack=1;try{const value=typeof sold.customFields==='string'?JSON.parse(sold.customFields):sold.customFields;const count=value?.__belloSale?.itemsPerUnit;if(Number.isSafeInteger(count)&&count>0&&count<=10000)soldPack=count;}catch{}
+ return {c,source,soldChannel,soldPack};
 }
 const key=(id:string)=>({pk:'SALE_EC#'+id});
 export async function reviewPostSale(candidateId:string,actor:string,packSizes:Partial<Record<EcChannel,number>>={}):Promise<PostSalePlan>{
  const old=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as (PostSalePlan&{pk:string})|undefined;
  if(old&&(old.state==='COMPLETE'||old.state==='EXECUTING'&&old.expiresAt>Date.now()))return old;
- const {c,source,soldChannel}=await context(candidateId),catalog=await getEcListingCatalogAction();
+ const {c,source,soldChannel,soldPack}=await context(candidateId);
+ const started=new Set(await Promise.all((old?.rows??[]).filter(r=>r.adjustment).map(async r=>await saleAdjustmentStarted(r.adjustment!)?r.channel:null)));
+ const resuming=old?.rows.some(r=>started.has(r.channel)&&r.state!=='DONE');
+ const remote=resuming?null:await refreshSaleBinding(source.id),catalog=await getEcListingCatalogAction();
  if(catalog.errors.length)throw Error('販売先の紐付けを確認できません。再度確認してください。');
  const rows:Row[]=[];
  for(const channel of channels){
-  if(channel===soldChannel)continue;
   const prior=old?.rows.find(r=>r.channel===channel);
   if(prior?.state==='DONE'){rows.push(prior);continue;}
+  if(channel===soldChannel){
+   if(channel==='YAHOO'&&c.result!.remainingQuantity>0){
+    const soldId=c.externalListingId||(c.identifierType==='AUCTION'?c.orderId:'');
+    const current=remote?.channels.YAHOO;
+   if(prior?.adjustment&&started.has(channel)){if(packSizes.YAHOO!==undefined&&packSizes.YAHOO!==prior.unitsPerListing)throw Error('処理開始後は点数を変更できません。');rows.push({...prior,state:'READY'});continue;}
+    if(!soldId||current?.listingId!==soldId){rows.push({channel,externalId:soldId,operation:'RELIST',state:'BLOCKED',message:'売れたオークションIDとeコンビニの紐付けを確認してください。別のページは変更しません。'});continue;}
+    const pack=packSizes.YAHOO??prior?.unitsPerListing??soldPack;if(!Number.isSafeInteger(pack)||pack<1||pack>10000)throw Error('出品1個あたりの点数を確認してください。');
+    if(c.result!.remainingQuantity<pack){rows.push({channel,externalId:soldId,operation:'MANUAL',state:'BLOCKED',message:'残り在庫が1セット分に足りません。セット内容を手動で確認してください。',unitsPerListing:pack});continue;}
+    const adjustment=await reviewSaleAdjustment({candidateId,inventoryId:source.id,channel,listingId:soldId,remaining:c.result!.remainingQuantity,pack,inventoryVersion:source.updatedAt});
+    rows.push({channel,externalId:soldId,operation:'RELIST',state:adjustment?'READY':'BLOCKED',message:adjustment?'eコンビニの「消」で古いIDを解除し、残り在庫を新しい商品ページとして出品します。売却済みページは残ります。':'先にeコンビニと商品を紐付けてください。',adjustment:adjustment??undefined,requiresTerms:true,targetQuantity:adjustment?.quantity,beforeQuantity:adjustment?.beforeQuantity,unitsPerListing:pack,currentState:'売却済み'});
+   }else if(channel==='MERCARI_SHOPS'&&c.result!.remainingQuantity>0)rows.push({channel,externalId:c.externalListingId??'',operation:'MANUAL',state:'BLOCKED',targetQuantity:c.result!.remainingQuantity,message:'売れたページを残し、メルカリShopsで残り数量を手動変更してください。',currentState:'売却先・ページ保持'});
+   continue;
+  }
+  if(prior?.adjustment&&started.has(channel)){if(packSizes[channel]!==undefined&&packSizes[channel]!==prior.unitsPerListing)throw Error('処理開始後は点数を変更できません。');rows.push({...prior,state:'READY'});continue;}
   const linked=catalog.channels[channel]?.[source.id];
   if(!linked?.externalId)continue;
   if(prior&&prior.externalId!==linked.externalId){rows.push({...prior,state:'BLOCKED',message:'出品番号が変更されています。EC出品画面で確認してください。'});continue;}
-  if(linked.state!=='ACTIVE'&&!prior)continue;
+  const fresh=remote?.channels[channel];
+  if(fresh?.listingId&&fresh.listingId!==linked.externalId)throw Error('最新の出品IDと保存された紐付けが一致しません。');
+  if((fresh?fresh.state!=='ACTIVE':linked.state!=='ACTIVE')&&!prior)continue;
   if(c.result!.remainingQuantity===0){
    const review=await reviewEcListingAction(source.id,channel,'STOP');
-   rows.push({channel,externalId:linked.externalId,operation:'STOP',state:review.status==='READY'?'READY':review.status==='DONE'?'DONE':'BLOCKED',message:review.message,review});
+   rows.push({channel,externalId:linked.externalId,operation:'STOP',state:review.status==='READY'?'READY':review.status==='DONE'?'DONE':'BLOCKED',message:review.message,review,currentState:'出品中'});
   }else if(channel==='BASE'){
    const remote=await readBaseItem(linked.externalId);
-   const pack=packSizes[channel]??1;
+   const pack=packSizes[channel]??prior?.unitsPerListing??1;
    if(!Number.isSafeInteger(pack)||pack<1||pack>10000)throw Error('販売先の1商品あたりの点数を確認してください。');
    const target=Math.min(remote.quantity,Math.floor(c.result!.remainingQuantity/pack));
    if(prior?.state==='VERIFY_REQUIRED'){
-    rows.push({...prior,state:remote.quantity===prior.targetQuantity?'DONE':'VERIFY_REQUIRED',message:remote.quantity===prior.targetQuantity?'前回の数量更新を確認しました。':'前回の数量更新は未確認です。再送せずBASEで確認してください。'});continue;
+    rows.push({...prior,state:remote.quantity===prior.targetQuantity&&remote.title===(prior.targetTitle??stockCountTitle(remote.title,c.result!.remainingQuantity))?'DONE':'VERIFY_REQUIRED',message:remote.quantity===prior.targetQuantity&&remote.title===(prior.targetTitle??stockCountTitle(remote.title,c.result!.remainingQuantity))?'前回の数量更新を確認しました。':'前回の数量更新は未確認です。再送せずBASEで確認してください。'});continue;
    }
-   rows.push({channel,externalId:linked.externalId,operation:'STOCK',state:remote.hasVariations?'BLOCKED':remote.quantity===target?'DONE':'READY',message:remote.hasVariations?'バリエーション別の在庫はBASEで確認してください。':remote.quantity===target?'現在の数量が残り在庫以下のため変更しません。':'BASEの在庫数量を変更します。セット出品の場合は1商品あたりの点数を確認してください。',beforeQuantity:remote.quantity,targetQuantity:target,unitsPerListing:pack});
-  }else rows.push({channel,externalId:linked.externalId,operation:'STOCK',state:'BLOCKED',targetQuantity:c.result!.remainingQuantity,message:'この販売先の公開済み商品の数量更新は未確認です。販売先で数量を変更してください。出品停止には置き換えません。'});
+   const adjustment=remote.hasVariations?null:await reviewSaleAdjustment({candidateId,inventoryId:source.id,channel,listingId:linked.externalId,remaining:c.result!.remainingQuantity,pack,inventoryVersion:source.updatedAt});
+   rows.push({channel,externalId:linked.externalId,operation:'STOCK',state:remote.hasVariations?'BLOCKED':adjustment?'READY':remote.quantity===target&&stockCountTitle(remote.title,c.result!.remainingQuantity)===remote.title?'DONE':'READY',message:remote.hasVariations?'バリエーション別の在庫はBASEで確認してください。':adjustment?'eコンビニの保存情報を揃えてからBASEの数量を変更します。':'BASEの在庫数量を変更します。',beforeQuantity:remote.quantity,beforeTitle:remote.title,targetTitle:stockCountTitle(remote.title,c.result!.remainingQuantity),targetQuantity:target,unitsPerListing:pack,adjustment:adjustment??undefined,currentState:remote.visible?'出品中':'停止中'});
+  }else rows.push({channel,externalId:linked.externalId,operation:'MANUAL',state:'BLOCKED',targetQuantity:c.result!.remainingQuantity,message:channel==='MERCARI_SHOPS'?'メルカリShopsで残り数量を手動変更してください。出品の削除は行いません。':'出品中のヤフオクは、残り在庫に合わせて手動で確認してください。売却済みページの再出品とは別の操作です。',currentState:'出品中'});
  }
- const plan:PostSalePlan={id:candidateId,candidateId,sourceId:source.id,sourceVersion:source.updatedAt,soldChannel,remaining:c.result!.remainingQuantity,actor,expiresAt:Date.now()+600000,rows,state:'REVIEW',token:randomUUID(),updatedAt:new Date().toISOString()};
+ const plan:PostSalePlan={id:candidateId,candidateId,sourceId:source.id,sourceVersion:source.updatedAt,soldChannel,remaining:c.result!.remainingQuantity,actor,expiresAt:Date.now()+600000,rows,state:'REVIEW',token:randomUUID(),updatedAt:new Date().toISOString(),title:String(source.name),productId:remote?.productId??old?.productId,checkedAt:new Date().toISOString()};
  await db.send(new PutCommand({TableName:table,Item:{pk:key(candidateId).pk,...plan},ConditionExpression:old?'#state=:state AND #token=:token':'attribute_not_exists(pk)',...(old?{ExpressionAttributeNames:{'#state':'state','#token':'token'},ExpressionAttributeValues:{':state':old.state,':token':old.token}}:{})}));return plan;
 }
-export async function executePostSale(candidateId:string,actor:string,token:string,confirmed:boolean):Promise<PostSalePlan>{
+export async function executePostSale(candidateId:string,actor:string,token:string,confirmed:boolean,terms=false):Promise<PostSalePlan>{
  const p=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as PostSalePlan|undefined;
  if(!confirmed||!p||p.actor!==actor||p.token!==token)throw Error('変更内容を確認してください。');
  if(p.state!=='REVIEW')return p;
  const current=await context(candidateId);
- if(p.expiresAt<Date.now()||p.sourceVersion!==current.source.updatedAt||p.soldChannel!==current.soldChannel||p.rows.some(r=>r.channel===current.soldChannel))throw Error('確認期限または対象の商品が変わりました。');
+ if(p.expiresAt<Date.now()||p.sourceVersion!==current.source.updatedAt||p.soldChannel!==current.soldChannel||p.rows.some(r=>r.channel===current.soldChannel&&r.operation!=='RELIST'&&r.operation!=='MANUAL'))throw Error('確認期限または対象の商品が変わりました。');
+ if(p.rows.some(r=>r.state==='READY'&&r.requiresTerms)&&!terms)throw Error('Yahoo!オークションのガイドラインを確認してください。');
+ if(p.nextAt&&p.nextAt>Date.now())return p;
  await db.send(new UpdateCommand({TableName:table,Key:key(candidateId),UpdateExpression:'SET #s=:busy',ConditionExpression:'#s=:review AND #t=:token',ExpressionAttributeNames:{'#s':'state','#t':'token'},ExpressionAttributeValues:{':busy':'EXECUTING',':review':'REVIEW',':token':token}}));
  p.state='EXECUTING';
+ p.nextAt=undefined;
  for(const row of p.rows){
   if(row.state!=='READY')continue;
   // Record an uncertain outcome before crossing the external boundary. Repeating the request cannot resend it.
   row.state='VERIFY_REQUIRED';row.message='変更結果を確認中です。';await persist(p);
   try{
    const latest=await context(candidateId);
-   if(latest.source.updatedAt!==p.sourceVersion||row.channel===latest.soldChannel)throw Error('在庫の状態が変わりました。');
-   if(row.operation==='STOP'&&row.review){
+   if(latest.source.updatedAt!==p.sourceVersion||row.channel===latest.soldChannel&&row.operation!=='RELIST')throw Error('在庫の状態が変わりました。');
+   if(row.adjustment){
+    const result=await executeSaleAdjustment(row.adjustment);
+    row.state=result.status==='DONE'?'DONE':result.status==='WAIT'?'READY':'VERIFY_REQUIRED';row.message=result.message;
+    if('newListingId'in result)row.newListingId=result.newListingId;
+    if(result.status==='WAIT'){p.nextAt=result.nextAt??Date.now()+30000;p.state='REVIEW';await persist(p);return p;}
+   }else if(row.operation==='STOP'&&row.review){
     const result=await executeEcListingAction(row.review,true);
-    row.state=result.status==='DONE'?'DONE':'BLOCKED';row.message=result.status==='WAIT'?'送信間隔を空けています。30秒ほど待って「結果を再確認」を押してください。':result.message;
+    row.state=result.status==='DONE'?'DONE':result.status==='WAIT'?'READY':'BLOCKED';row.message=result.message;
+    if(result.status==='WAIT'){p.nextAt=result.nextAt??Date.now()+30000;p.state='REVIEW';await persist(p);return p;}
    }else if(row.channel==='BASE'&&row.targetQuantity!==undefined){
     const linked=await getChannelListing(p.sourceId,'BASE');if(linked?.externalListingId!==row.externalId)throw Error('紐付けが変わりました。');
-    const remote=await readBaseItem(row.externalId);if(remote.hasVariations||remote.quantity!==row.beforeQuantity)throw Error('販売先の数量が変わりました。確認してください。');
+    const remote=await readBaseItem(row.externalId);if(remote.hasVariations||remote.quantity!==row.beforeQuantity||row.beforeTitle!==undefined&&remote.title!==row.beforeTitle)throw Error('販売先の数量が変わりました。確認してください。');
     const lock=await claimBaseManual(linked);
-    try{await setManualBaseStock(row.externalId,row.targetQuantity);const read=await readBaseItem(row.externalId);if(read.quantity!==row.targetQuantity)throw Error('数量更新を確認できません。');await finishBaseManual(linked,lock,{status:read.visible?'ACTIVE':'PAUSED'});row.state='DONE';row.message='在庫数量を確認しました。';}
+    try{const title=stockCountTitle(remote.title,p.remaining);await setManualBaseStock(row.externalId,row.targetQuantity,title);const read=await readBaseItem(row.externalId);if(read.quantity!==row.targetQuantity||read.title!==title)throw Error('数量更新を確認できません。');await finishBaseManual(linked,lock,{status:read.visible?'ACTIVE':'PAUSED'});row.state='DONE';row.message='在庫数量を確認しました。';}
     catch(e){await finishBaseManual(linked,lock,{status:'ERROR',lastError:'売却後の数量更新を確認してください。'}).catch(()=>{});throw e;}
    }
   }catch{row.message='変更結果を確認できません。重複送信せず販売先で確認してください。';}

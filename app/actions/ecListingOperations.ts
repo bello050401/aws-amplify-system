@@ -1,6 +1,7 @@
 "use server";
 import {econveniListingAction} from './econveniListing';
 import {manualWriteRestriction} from '@/lib/listing/econveni/manualWriteGuard';
+import {refreshSaleBinding} from '@/lib/listing/econveni/saleAdjustment';
 import {manualLinkedStop} from '@/lib/listing/econveni/manualStop';
 import {markInventoryPublished} from '@/lib/listing/publicationCategory';
 import { commonYahooUpdateAction,commonOperationSourceHash } from "./ecCommonOperations";
@@ -64,6 +65,7 @@ export async function reviewEcListingAction(
     if (!item) return { ...base, message: "対象商品が見つかりません。" };
     base.title = item.name;
     if(operation==='STOP'){
+      await refreshSaleBinding(id);
       const result=await manualLinkedStop(id,channel,(await getCurrentInventoryUserSub())??'');
       if(result)return result;
     }

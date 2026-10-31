@@ -1,3 +1,4 @@
 import type {EcChannel,EcReview} from '../listing/ecManagement';
-export type PostSaleRow={channel:EcChannel;externalId:string;operation:'STOP'|'STOCK';state:'READY'|'BLOCKED'|'DONE'|'VERIFY_REQUIRED';message:string;targetQuantity?:number;beforeQuantity?:number;unitsPerListing?:number;review?:EcReview};
-export type PostSalePlan={id:string;candidateId:string;sourceId:string;sourceVersion:string;soldChannel:EcChannel|null;remaining:number;actor:string;expiresAt:number;rows:PostSaleRow[];state:'REVIEW'|'EXECUTING'|'COMPLETE'|'ATTENTION';token:string;updatedAt:string};
+import type {SaleAdjustment} from '../listing/econveni/saleAdjustmentCore';
+export type PostSaleRow={channel:EcChannel;externalId:string;operation:'STOP'|'STOCK'|'RELIST'|'MANUAL';state:'READY'|'BLOCKED'|'DONE'|'VERIFY_REQUIRED';message:string;targetQuantity?:number;beforeQuantity?:number;beforeTitle?:string;targetTitle?:string;unitsPerListing?:number;review?:EcReview;adjustment?:SaleAdjustment;newListingId?:string;requiresTerms?:boolean;currentState?:string};
+export type PostSalePlan={id:string;candidateId:string;sourceId:string;sourceVersion:string;soldChannel:EcChannel|null;remaining:number;actor:string;expiresAt:number;rows:PostSaleRow[];state:'REVIEW'|'EXECUTING'|'COMPLETE'|'ATTENTION';token:string;updatedAt:string;title?:string;productId?:string;checkedAt?:string;nextAt?:number};

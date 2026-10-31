@@ -1,16 +1,46 @@
 'use client';
-import {useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import type {PostSalePlan} from '../../lib/saleCandidates/postSaleModel';
 import {EC_CHANNEL_LABEL,type EcChannel} from '../../lib/listing/ecManagement';
-export function PostSaleConfirmation({plan,onConfirm,onReview,onClose}:{plan:PostSalePlan;onConfirm:()=>Promise<void>;onReview:(packs:Partial<Record<EcChannel,number>>)=>Promise<void>;onClose:()=>void}){
- const [busy,setBusy]=useState(false),[checked,setChecked]=useState(false),[error,setError]=useState('');
- const [packs,setPacks]=useState<Partial<Record<EcChannel,number>>>(Object.fromEntries(plan.rows.filter(r=>r.operation==='STOCK').map(r=>[r.channel,r.unitsPerListing??1]))),[dirty,setDirty]=useState(false);
- return <div className="card"><h2>売却登録後のEC確認</h2><p>残り在庫：{plan.remaining}点</p>{plan.soldChannel&&<p className="notice">売れた{EC_CHANNEL_LABEL[plan.soldChannel]}の商品ページは変更・削除しません。</p>}
- {!plan.rows.length?<p>変更対象の出品はありません。</p>:plan.rows.map(r=><div className="card" key={r.channel}><strong>{EC_CHANNEL_LABEL[r.channel]}</strong><p className="meta">出品ID：{r.externalId}</p><p>{r.operation==='STOP'?'出品を停止':`数量 ${r.beforeQuantity??'現在値'} → ${r.targetQuantity}`}</p><p role={r.state==='BLOCKED'||r.state==='VERIFY_REQUIRED'?'alert':undefined}>{r.message}</p><p>{r.state==='DONE'?'確認済み':r.state==='READY'?'確認後に実行':'要確認'}</p></div>)}
- {plan.state==='REVIEW'&&plan.rows.filter(r=>r.operation==='STOCK'&&r.channel==='BASE').map(r=><label key={r.channel}>BASEの出品1個に含まれる点数<input aria-label="BASEの出品1個に含まれる点数" type="number" min="1" max="10000" value={packs[r.channel]??1} onChange={e=>{setPacks({...packs,[r.channel]:Number(e.target.value)});setDirty(true);setChecked(false);}}/></label>)}
- {error&&<p className="error" role="alert">{error}</p>}
- {plan.state!=='COMPLETE'&&plan.rows.some(r=>r.state==='BLOCKED'||r.state==='VERIFY_REQUIRED')&&<button disabled={busy} onClick={async()=>{setBusy(true);setChecked(false);setError('');try{await onReview(packs);}catch(e){setError(e instanceof Error?e.message:'結果を確認できませんでした。');}finally{setBusy(false);}}}>{busy?'結果を確認中…':'結果を再確認'}</button>}
- {dirty&&<button disabled={busy} onClick={async()=>{setBusy(true);setError('');try{await onReview(packs);setDirty(false);}catch(e){setError(e instanceof Error?e.message:'数量を確認できませんでした。再度確認してください。');}finally{setBusy(false);}}}>変更する数量を再確認</button>}
- {plan.state==='REVIEW'&&plan.rows.some(r=>r.state==='READY')&&<label style={{display:'flex',gap:10,alignItems:'center'}}><input style={{width:22,minHeight:22}} type="checkbox" disabled={dirty} checked={checked} onChange={e=>setChecked(e.target.checked)}/>対象の販売先と変更内容を確認しました</label>}
- <div className="tools"><button disabled={busy} onClick={onClose}>{plan.state==='REVIEW'?'今は変更しない':'閉じる'}</button>{plan.state==='REVIEW'&&plan.rows.some(r=>r.state==='READY')&&<button className="primary" disabled={!checked||dirty||busy} onClick={async()=>{if(busy)return;setBusy(true);try{await onConfirm();}finally{setBusy(false);}}}>{busy?'結果を確認中…':'確認した販売先を変更'}</button>}</div></div>;
+export function PostSaleConfirmation({plan,onConfirm,onReview,onClose,onLink}:{plan:PostSalePlan;onConfirm:(terms?:boolean)=>Promise<PostSalePlan|void>;onReview:(packs:Partial<Record<EcChannel,number>>)=>Promise<void>;onClose:()=>void;onLink?:()=>void}){
+ const [busy,setBusy]=useState(false),[checked,setChecked]=useState(false),[terms,setTerms]=useState(false),[error,setError]=useState(''),[wait,setWait]=useState(0);
+ const [packs,setPacks]=useState<Partial<Record<EcChannel,number>>>(Object.fromEntries(plan.rows.filter(r=>r.operation==='STOCK'||r.operation==='RELIST').map(r=>[r.channel,r.unitsPerListing??1]))),[dirty,setDirty]=useState(false);
+ const stop=useRef(false),mounted=useRef(true),sending=useRef(false);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;stop.current=true;};},[]);
+ useEffect(()=>{setChecked(false);setTerms(false);},[plan.token]);
+ const ready=plan.rows.some(r=>r.state==='READY'),needsTerms=plan.rows.some(r=>r.state==='READY'&&r.requiresTerms);
+ async function review(){setBusy(true);setChecked(false);setError('');try{await onReview(packs);setDirty(false);}catch(e){setError(e instanceof Error?e.message:'結果を確認できませんでした。');}finally{setBusy(false);}}
+ async function execute(){
+  if(sending.current||!checked||dirty||needsTerms&&!terms)return;
+  sending.current=true;stop.current=false;setBusy(true);setError('');
+  try{for(let n=0;n<30&&!stop.current&&mounted.current;n++){
+   const result=await onConfirm(terms);if(!result?.nextAt||result.state!=='REVIEW')break;
+   while(Date.now()<result.nextAt&&!stop.current&&mounted.current){setWait(Math.max(1,Math.ceil((result.nextAt-Date.now())/1000)));await new Promise(r=>setTimeout(r,500));}setWait(0);
+  }}catch(e){setError(e instanceof Error?e.message:'結果が未確認です。再送せず「結果を再確認」を押してください。');}
+  finally{sending.current=false;if(mounted.current){setBusy(false);setWait(0);setChecked(false);}}
+ }
+ return <section className="post-sale" aria-label="売却後の出品管理">
+  <header className="ps-heading"><div><p className="ps-eyebrow">売却登録済み</p><h2>出品情報を整える</h2></div><span className="ps-step">1 売却登録 → <strong>2 EC確認</strong></span></header>
+  <div className="ps-summary"><div><strong>{plan.title||'売却した商品'}</strong><p className="ps-muted">{plan.productId?`eコンビニ #${plan.productId} · 連携確認済み`:'販売先の紐付けを確認してください'}</p></div><div className="ps-stock"><small>残り在庫</small><b>{plan.remaining}<small> 点</small></b></div></div>
+  {plan.soldChannel&&<p className="ps-preserve">売れた<strong>{EC_CHANNEL_LABEL[plan.soldChannel]}</strong>の商品ページは保持します。</p>}
+  <div className="ps-channels">{plan.rows.map(r=>{
+   const manual=r.operation==='MANUAL',done=r.state==='DONE',problem=r.state==='BLOCKED'||r.state==='VERIFY_REQUIRED';
+   return <article key={r.channel} className="ps-channel"><div className="ps-channel-head"><h3>{EC_CHANNEL_LABEL[r.channel]}</h3><span className={`ps-status ${done&&r.operation==='STOP'?'ps-stopped':done?'ps-active':r.currentState==='出品中'?'ps-active':'ps-neutral'}`}>{done?r.operation==='STOP'?'停止中':r.operation==='RELIST'?'出品中':'数量更新済み':r.currentState||'状態確認'}</span></div>
+    <p className="ps-id">出品ID {r.newListingId||r.externalId||'未確認'}</p>
+    <p className="ps-operation">{r.operation==='STOP'?'出品を停止':r.operation==='RELIST'?'売却済みIDを解除 → 残り在庫を新規出品':manual?'数量の変更は手動':'BASEの数量を変更'}</p>
+    {(r.operation==='STOCK'||r.operation==='RELIST')&&<div className="ps-quantity"><span>{r.beforeQuantity??'現在'}</span><span className="ps-muted">→</span><strong>{r.targetQuantity??'確認中'}</strong><span>個</span></div>}
+    {r.adjustment&&r.adjustment.title!==r.adjustment.beforeTitle&&<p className="ps-muted">変更後の商品名：{r.adjustment.title}</p>}
+    <p className={`ps-message ${problem?'ps-attention':''}`} role={problem&&!manual?'alert':undefined}>{r.message}</p>
+    {!manual&&<span className="ps-muted">{done?'✓ 確認済み':r.state==='READY'?'確認後に実行':'要確認'}</span>}
+   </article>;
+  })}</div>
+  {!plan.rows.length&&<p className="ps-message">現在の紐付け情報には変更対象の出品がありません。未連携の商品は先にeコンビニと紐付けてください。</p>}
+  {plan.state==='REVIEW'&&plan.rows.filter(r=>(r.operation==='STOCK'||r.operation==='RELIST')&&r.state!=='DONE').map(r=><label className="ps-pack" key={r.channel}>{EC_CHANNEL_LABEL[r.channel]}：出品1個に含まれる点数<input aria-label={`${EC_CHANNEL_LABEL[r.channel]}の出品1個に含まれる点数`} type="number" min="1" max="10000" disabled={busy||!!plan.nextAt} value={packs[r.channel]??1} onChange={e=>{setPacks({...packs,[r.channel]:Number(e.target.value)});setDirty(true);setChecked(false);}}/></label>)}
+  {error&&<p className="ps-error" role="alert">{error}</p>}
+  <div className="ps-tools">{onLink&&<button disabled={busy} onClick={onLink}>eコンビニと紐付ける</button>}{plan.state!=='COMPLETE'&&<button disabled={busy} onClick={()=>void review()}>{dirty?'変更する数量を再確認':'結果を再確認'}</button>}</div>
+  {plan.state==='REVIEW'&&ready&&<><label className="ps-check"><input type="checkbox" disabled={dirty||busy} checked={checked} onChange={e=>setChecked(e.target.checked)}/>対象商品・販売先・変更する数量を確認しました</label>{needsTerms&&<label className="ps-check"><input type="checkbox" disabled={busy} checked={terms} onChange={e=>setTerms(e.target.checked)}/><span><a href="https://auctions.yahoo.co.jp/special/html/guidelines.html" target="_blank" rel="noreferrer">Yahoo!オークションガイドライン</a>に同意し、残り在庫を出品します</span></label>}</>}
+  <footer className="ps-footer"><button disabled={busy} onClick={onClose}>{plan.state==='REVIEW'?'今は変更しない':'閉じる'}</button>{busy?<button onClick={()=>{stop.current=true;setWait(0);}}>次の送信前に中断</button>:ready&&plan.state==='REVIEW'&&<button className="ps-primary" disabled={!checked||dirty||needsTerms&&!terms} onClick={()=>void execute()}>確認した内容を反映</button>}</footer>
+  {busy&&<p role="status" className="ps-muted">{wait?`送信間隔を空けています。次の処理まで ${wait}秒`:'eコンビニ・販売先の結果を確認しています…'}</p>}
+  <style>{`.post-sale{max-width:1040px;margin:0 auto;color:#243431}.post-sale h2,.post-sale h3,.post-sale p{margin:0}.ps-heading{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:20px}.post-sale h2{font-size:23px;font-weight:700}.ps-eyebrow,.ps-step{font-size:12px;color:#6c7875}.ps-eyebrow{margin-bottom:5px!important}.ps-summary{display:flex;align-items:center;gap:20px;padding:20px;border:1px solid #dfe5e2;border-radius:14px;background:#fff}.ps-summary>div:first-child{flex:1;min-width:0}.ps-summary strong{font-size:16px;line-height:1.6}.ps-stock{flex-shrink:0;text-align:right}.ps-stock small{display:block;font-size:12px;color:#6c7875}.ps-stock b{font-size:30px}.ps-stock b small{display:inline}.ps-muted,.ps-id{font-size:12px;color:#6c7875;line-height:1.6;overflow-wrap:anywhere}.ps-preserve{padding:14px 2px;font-size:13px}.ps-channels{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}.ps-channel{border:1px solid #dfe5e2;border-radius:14px;padding:18px;background:#fff}.ps-channel-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.ps-channel h3{font-size:16px;font-weight:700}.ps-status{border-radius:999px;padding:5px 10px;font-size:11px;white-space:nowrap}.ps-active{color:#176448;background:#e3f3e9}.ps-stopped{color:#9d4039;background:#fbe9e7}.ps-neutral{color:#626e69;background:#f0f3f1}.ps-id{margin-top:10px!important}.ps-operation{font-size:14px;font-weight:600;margin:16px 0 8px!important}.ps-quantity{display:flex;align-items:center;gap:12px;margin:12px 0;font-size:22px}.ps-message{font-size:13px;line-height:1.75;margin:12px 0!important}.ps-attention{color:#8a6226}.ps-pack{display:flex!important;align-items:center;gap:14px;font-size:13px;margin-top:16px!important}.ps-pack input{width:90px!important;min-height:42px!important}.ps-tools,.ps-footer{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}.post-sale button{border:1px solid #d2dcd6;border-radius:9px;padding:12px 17px;background:#fff;color:#243431;font-size:14px;min-height:44px}.post-sale button:disabled{opacity:.45}.post-sale .ps-primary{background:#273e38;color:#fff;border-color:#273e38}.ps-check{display:flex!important;align-items:center;gap:10px;margin-top:16px!important;font-size:14px;line-height:1.6}.ps-check input{width:22px!important;height:22px!important;min-height:22px!important;flex-shrink:0;accent-color:#273e38}.ps-check a{color:#356f9b;text-decoration:underline}.ps-error{color:#a52a2a;background:#fff0ee;border-radius:8px;padding:12px;font-size:13px}.ps-footer{border-top:1px solid #e5eae7;padding-top:16px}.ps-footer .ps-primary{margin-left:auto}@media(max-width:600px){.ps-heading{display:block}.ps-step{display:block;margin-top:9px}.ps-summary{padding:15px}.ps-channels{grid-template-columns:1fr}.ps-footer button{flex:1}.ps-footer .ps-primary{margin-left:0}}`}</style>
+ </section>;
 }

@@ -109,9 +109,18 @@ export async function econveniOperation(id:string,channel:EconveniChannel,operat
         const observed=remote.channels[channel];
         if(operation==='STOP'&&(observed.state!=='ACTIVE'||own.listingId!==observed.listingId))throw new EconveniWorkflowError('VERIFY_REQUIRED');
         if(operation==='PUBLISH'&&observed.state!=='INACTIVE')throw new EconveniWorkflowError('VERIFY_REQUIRED');
+        if(operation==='STOP'){
+          // A prior sale can change the stock annotation without changing this listing ID.
+          // Confirm the exact current form values, then pin them to this user's approval.
+          const {values}=await session.saleProductFields(state.save.productId);
+          const title=values[channel==='YAHOO'?'products_name':'mercariShops_name'];
+          const price=values[channel==='YAHOO'?'products_price':'mercariShops_price'];
+          if(!title||!/^\d+$/.test(price??'')||!/^\d+$/.test(values.products_quantity??''))throw new EconveniWorkflowError('VERIFY_REQUIRED');
+          base={...base,title,price:Number(price),quantity:Number(values.products_quantity)};
+        }
         if(operation==='PUBLISH'&&(!state.save.expected||!await session.verifySavedProduct(remote,state.save.expected)))throw new EconveniWorkflowError('VERIFY_REQUIRED');
         await session.publicationPreview({channel,operation,productId:state.save.productId,title:base.title,price:base.price!});
-        const approval={token:randomUUID(),actor,operation,fingerprint:state.save.fingerprint!,expiresAt:Date.now()+10*60_000};
+        const approval={token:randomUUID(),actor,operation,fingerprint:state.save.fingerprint!,expiresAt:Date.now()+10*60_000,title:base.title,price:base.price,quantity:base.quantity};
         state=await store.commit(state,{...state,approvals:{...state.approvals,[channel]:approval}});
         return {...base,status:'READY',token:approval.token,requiresTerms:channel==='YAHOO'&&operation==='PUBLISH',
           message:operation==='PUBLISH'?'eコンビニの保存内容を確認しました。この販売先に出品します。':channel==='MERCARI_SHOPS'?'メルカリShopsの商品を削除して出品を停止します。':'ヤフオクの出品を停止します。',
@@ -119,6 +128,7 @@ export async function econveniOperation(id:string,channel:EconveniChannel,operat
       }
       const approved=state.approvals?.[channel];
       if(!approved||approved.token!==token||approved.actor!==actor||approved.operation!==operation||approved.fingerprint!==state.save.fingerprint||approved.expiresAt<Date.now())throw new EconveniPreparationError('確認の有効期限が切れたか、内容が変わりました。確認し直してください。');
+      if(operation==='STOP'&&approved.title&&typeof approved.price==='number')base={...base,title:approved.title,price:approved.price,quantity:approved.quantity};
       if(channel==='YAHOO'&&operation==='PUBLISH'&&!terms)throw new EconveniPreparationError('ヤフオクのガイドラインへの同意を確認してください。');
       // The common draft may change while the account lease/login is awaited.
       if(prepared&&(await source(id)).fingerprint!==approved.fingerprint)throw new EconveniPreparationError('共通の商品情報が変わりました。下書きを保存してから確認し直してください。');

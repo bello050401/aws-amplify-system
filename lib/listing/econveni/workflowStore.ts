@@ -12,7 +12,7 @@ export type EconveniWorkflow = {
   save: { state: RemoteState; productId?: string; fingerprint?: string; operationId?: string;
     expected?: { fields:Record<string,string>; imageHashes:string[] }; errorCode?:string };
   channels: Record<EconveniChannel, ChannelState>;
-  approvals?: Partial<Record<EconveniChannel,{token:string;actor:string;operation:"PUBLISH"|"STOP";fingerprint:string;expiresAt:number}>>;
+  approvals?: Partial<Record<EconveniChannel,{token:string;actor:string;operation:"PUBLISH"|"STOP";fingerprint:string;expiresAt:number;title?:string;price?:number;quantity?:number}>>;
 };
 type Client = Pick<DynamoDBDocumentClient, "send">;
 export class EconveniWorkflowError extends Error {
@@ -79,6 +79,10 @@ export class EconveniWorkflowStore {
   /** Stop-only receipts use a separate namespace; they never make a legacy product publishable. */
   async commitManualStop<T extends {pk:string;inventoryId:string;revision:number;updatedAt:string}>(previous:T|null,next:T,checks:NonNullable<TransactWriteCommandInput['TransactItems']>,reserveSend=false):Promise<T>{
     if(next.inventoryId!==this.inventoryId||!['BASE','YAHOO','MERCARI_SHOPS'].some(c=>next.pk===`ECONVENI#MANUAL_STOP#${this.inventoryId}#${c}`)||previous&&previous.pk!==next.pk)throw new EconveniWorkflowError('INVALID_TRANSITION');
+    return this.commitRecord(previous,next,reserveSend,checks);
+  }
+  async commitSaleAdjustment<T extends {pk:string;inventoryId:string;revision:number;updatedAt:string}>(previous:T|null,next:T,checks:NonNullable<TransactWriteCommandInput['TransactItems']>,reserveSend=false):Promise<T>{
+    if(next.inventoryId!==this.inventoryId||!new RegExp('^ECONVENI#SALE_ADJUST#'+this.inventoryId+'#[a-f0-9]{64}#(BASE|YAHOO)$').test(next.pk)||previous&&previous.pk!==next.pk)throw new EconveniWorkflowError('INVALID_TRANSITION');
     return this.commitRecord(previous,next,reserveSend,checks);
   }
   private async commitRecord<T extends {pk:string;revision:number;updatedAt:string}>(previous:T|null,next:T,reserveSend=false,checks:NonNullable<TransactWriteCommandInput['TransactItems']>=[]):Promise<T>{

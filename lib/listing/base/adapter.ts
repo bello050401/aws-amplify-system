@@ -200,7 +200,10 @@ export async function getBaseProductVisibility(itemId: string): Promise<boolean>
 
 export { isBaseConnected };
 
-export async function setManualBaseStock(itemId:string,stock:number){await baseApiCall('/items/edit',{item_id:itemId,stock},false,true);}
+export async function setManualBaseStock(itemId:string,stock:number,title?:string){
+ if(!/^[1-9][0-9]*$/.test(itemId)||!Number.isSafeInteger(stock)||stock<0||stock>100000||title!==undefined&&(!title.trim()||title.length>1000))throw Error('BASEの数量・商品名を確認してください。');
+ await baseApiCall('/items/edit',{item_id:itemId,stock,...(title!==undefined?{title}:{})},false,true);
+}
 
 async function readBaseCategoryLinks(itemId:string):Promise<{linkId:string;categoryId:string}[]> {
   if(!/^[1-9][0-9]*$/.test(itemId))throw new Error('BASE商品IDを確認してください。');

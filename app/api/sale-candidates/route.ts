@@ -9,6 +9,8 @@ import {bodyLimited,NO_STORE} from '@/lib/invoicing/gateway';
 import {japanToday} from '@/lib/inventory/soldOutInput';
 import {importBaseOrders} from '@/lib/saleCandidates/baseImport';
 import {reviewPostSale,executePostSale} from '@/lib/saleCandidates/postSale';
+import {readManualSync,refreshManualSync,linkExternalProduct,productFingerprint} from '@/lib/listing/econveni/manualSync';
+import {inventoryThumbnails} from '@/lib/mobile/inventoryThumbnails';
 export const dynamic='force-dynamic';export const maxDuration=180;
 const reply=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:NO_STORE});
 export async function GET(request:Request){
@@ -47,7 +49,14 @@ export async function POST(request:Request){
   if(!/^[a-f0-9]{64}$/.test(b.id))return reply({error:'対象の候補を選び直してください。'},422);
   if(b.action==='delete'){await store.remove(b.id,session.owner);return reply({ok:true});}
   if(b.action==='ec-review')return reply({ok:true,plan:await reviewPostSale(b.id,session.owner,b.packSizes)});
-  if(b.action==='ec-confirm')return reply({ok:true,plan:await executePostSale(b.id,session.owner,b.token,b.confirmed===true)});
+  if(b.action==='ec-confirm')return reply({ok:true,plan:await executePostSale(b.id,session.owner,b.token,b.confirmed===true,b.terms===true)});
+  if(['ec-link-load','ec-link-refresh','ec-link-save'].includes(b.action)){
+   const candidate=await store.get(b.id);if(candidate?.state!=='DONE'||!candidate.result)throw Error('売却済みの商品を選択してください。');
+   const item=await getInventoryDetail(candidate.result.sourceId);if(!item)throw Error('在庫を確認できません。');
+   const data=b.action==='ec-link-save'?await linkExternalProduct({inventoryId:item.id,productId:b.productId??'',version:b.version??'',fingerprint:b.fingerprint??'',confirmed:b.confirmed===true},session.owner,true):await (b.action==='ec-link-refresh'?refreshManualSync():readManualSync());
+   const photo=(await inventoryThumbnails([item]))[0];
+   return reply({ok:true,item:{id:item.id,name:item.name,thumbnailUrl:photo?.thumbnailUrl??null},data,fingerprints:Object.fromEntries((data.snapshot?.products??[]).map(p=>[p.productId,productFingerprint(p)]))});
+  }
   if(b.action==='confirm'){
    const candidate=await store.get(b.id);if(!candidate||candidate.state==='DELETED')return reply({error:'この候補は削除されています。'},409);
    const result=await registerSoldOut({...b.sale,sourceCandidateId:b.id});

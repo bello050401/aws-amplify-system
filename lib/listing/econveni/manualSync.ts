@@ -34,10 +34,10 @@ export async function refreshManualSync():Promise<ManualSyncData>{
  });
 }
 /** The user confirms photos + title. A unique owner and version conditions prevent ambiguous/repeated binding. */
-export async function linkExternalProduct(input:{inventoryId:string;productId:string;version:string;fingerprint:string;confirmed:boolean},actor:string){
+export async function linkExternalProduct(input:{inventoryId:string;productId:string;version:string;fingerprint:string;confirmed:boolean},actor:string,allowCompletedSale=false){
  if(!input.confirmed||!/^\d{1,15}$/.test(input.productId))throw Error('商品名と写真を確認してください。');
  const [data,item,workflows]=await Promise.all([readManualSync(),getInventoryRaw(input.inventoryId),readEconveniCatalog()]);
- if(!item||item.isDeleted||item.deletedAt||item.quantity<1||item.saleEndDate)throw Error('現在の在庫を確認してください。');
+ if(!item||item.isDeleted||item.deletedAt||item.quantity<1||item.saleEndDate&&!allowCompletedSale)throw Error('現在の在庫を確認してください。');
  const snapshot=data.snapshot,remote=snapshot?.products.find(p=>p.productId===input.productId);
  if(!snapshot||snapshot.version!==input.version||Date.now()-Date.parse(snapshot.checkedAt)>30*60000||!remote||productFingerprint(remote)!==input.fingerprint)throw Error('取得した情報が変わったか、30分経過しました。状態を取得し直してください。');
  if(!remote.imageUrl)throw Error('eコンビニの写真を確認できないため、紐付けできません。');

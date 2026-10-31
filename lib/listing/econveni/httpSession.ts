@@ -422,6 +422,37 @@ export class EconveniHttpSession {
     return this.publicationPreview({channel,operation:'STOP',productId,title,price:Number(price)});
   }
 
+  /** Existing product fields only; used under a durable sale receipt, without changing photos or notes. */
+  async saleProductFields(productId:string):Promise<{form:HtmlForm;values:Record<string,string>}>{
+    if(!/^\d{1,15}$/.test(productId))throw new EconveniHttpError('CONTRACT_CHANGED');
+    const page=await this.productPage(SMART+'/product.php?'+new URLSearchParams({action:'product_update',products_id:productId}));
+    const forms=readForms(page).filter(f=>f.fields.some(x=>x.name==='products_name'));
+    if(forms.length!==1)throw new EconveniHttpError('CONTRACT_CHANGED');
+    const form=forms[0],values=Object.fromEntries(formValues(form)),target=allowedUrl(form.action);
+    if(values.products_id!==productId||values.action!=='product_update'||target.origin!==IMAGE||target.pathname!=='/smart/functions.php'||target.search||form.method!=='POST'||form.enctype!=='multipart/form-data')throw new EconveniHttpError('CONTRACT_CHANGED');
+    return {form,values};
+  }
+  async updateSaleFields(productId:string,before:Record<string,string>,after:Record<string,string>){
+    const allowed=new Set(['products_name','products_quantity','base_title','base_stock']);
+    if(this.writeAttempted||!Object.keys(after).length||Object.keys(after).some(k=>!allowed.has(k))||Object.keys(before).sort().join()!==Object.keys(after).sort().join())throw new EconveniHttpError('CONTRACT_CHANGED');
+    const {form,values}=await this.saleProductFields(productId);
+    if(Object.keys(before).some(k=>values[k]!==before[k]))throw new EconveniHttpError('CONTRACT_CHANGED');
+    const body=multipartForm(formValues(form,after),[]);
+    this.writeAttempted=true;
+    await this.request(form.action,'POST',body.body,body.contentType);
+  }
+  /** The observed per-row 消 removes only the e-conveni Yahoo ID, never the Yahoo item itself. */
+  async clearSoldYahooId(productId:string,listingId:string){
+    const detail=await this.saleProductFields(productId);
+    const page=await this.request(SMART+'/products.php?'+encodeForm([['scop','products_name'],['query',detail.values.products_name],['radioquery','and']]));
+    const product=externalCatalogPage(page).products.find(p=>p.productId===productId);
+    if(product?.channels.YAHOO.listingId!==listingId)throw new EconveniHttpError('CONTRACT_CHANGED');
+    const links=elements(parse(page.html)).filter(n=>n.tagName==='a'&&text(n).trim()==='消').map(n=>allowedUrl(attr(n,'href'),page.url)).filter(u=>u.origin===SMART&&u.pathname==='/functions.php'&&u.searchParams.get('action')==='delete_aID'&&u.searchParams.get('products_id')===productId&&u.searchParams.get('users_id')===detail.values.users_id);
+    if(links.length!==1||this.executedCommands.has('CLEAR:'+productId))throw new EconveniHttpError('CONTRACT_CHANGED');
+    this.executedCommands.add('CLEAR:'+productId);
+    await this.request(links[0].href);
+  }
+
   async preflightSave(inventoryId:string,values:Record<string,string>,count:number){
     const existing=await this.readInventory(inventoryId);
     const form=existing?readForms(await this.productPage(existing.url)).find(f=>f.fields.some(x=>x.name==='products_name')):await this.registrationForm();
