@@ -50,6 +50,8 @@ interface Entry<T> {
 }
 
 const store = new Map<string, Entry<unknown>>();
+const pending = new Map<string, Promise<unknown>>();
+let generation = 0;
 
 /**
  * キャッシュ越しに読む。**取得に失敗したら何も残さない** ——
@@ -58,9 +60,17 @@ const store = new Map<string, Entry<unknown>>();
 export async function cachedMaster<T>(key: string, load: () => Promise<T>): Promise<T> {
   const hit = store.get(key) as Entry<T> | undefined;
   if (hit && Date.now() - hit.at < MASTER_CACHE_TTL_MS) return hit.value;
-  const value = await load();
-  store.set(key, { at: Date.now(), value });
-  return value;
+  const running = pending.get(key);
+  if (running) return running as Promise<T>;
+  const version = generation;
+  const request = Promise.resolve().then(load).then(value => {
+    // A read started before an edit must not repopulate the invalidated cache.
+    if (version === generation) store.set(key, { at: Date.now(), value });
+    return value;
+  });
+  pending.set(key, request);
+  try { return await request; }
+  finally { if (pending.get(key) === request) pending.delete(key); }
 }
 
 /**
@@ -71,7 +81,9 @@ export async function cachedMaster<T>(key: string, load: () => Promise<T>): Prom
  * まとめて捨てて次のリクエストで取り直すほうが安全で速い。
  */
 export function invalidateMasterCache(): void {
+  generation++;
   store.clear();
+  pending.clear();
 }
 
 /** テスト・診断用。いま何が乗っているか。 */

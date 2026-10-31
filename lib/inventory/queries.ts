@@ -658,7 +658,8 @@ export interface InventoryDetail extends InventoryListRow, ExtendedFieldsAsNulla
  */
 export async function getInventoryDetail(id: string): Promise<InventoryDetail | null> {
   if (isE2EFixtureModeActive()) return e2eInventoryDetail(id); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
-  const { data: item } = await serverDataClient.models.Inventory.get({ id }, inventoryAuthMode);
+  const { data: item, errors } = await serverDataClient.models.Inventory.get({ id }, inventoryAuthMode);
+  if (errors?.length) throw new Error('INVENTORY_DETAIL_UNAVAILABLE');
   if (!item || item.deletedAt) return null;
 
   return {

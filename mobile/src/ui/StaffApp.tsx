@@ -356,7 +356,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     } catch (error) { setDeleteError(deletionWarning(error)); }
     finally { deleteBusy.current = false; setDeleting(false); }
   };
-  const openItem = async (item: InventoryItem) => {
+  const openItem = async (item: InventoryItem, freshlyLoaded = false) => {
     const attempt = ++detailGeneration.current;
     setSelected(item); setError(null); setDetailLoading(false);
     if (!ports.loadDetail) return;
@@ -368,7 +368,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         if (!item.detailLoadedAt) setError("【圏外です】この商品の詳細は未取得です。保存済みの基本情報を表示しています。");
         return;
       }
-      const detail = await ports.loadDetail(item.id);
+      const detail = freshlyLoaded ? item : await ports.loadDetail(item.id);
       if (attempt !== detailGeneration.current) return;
       if (detail.id !== item.id) throw new Error("Detail identity mismatch");
       quick.current.update([detail]);selectPhotos(Date.now());
@@ -378,8 +378,11 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       if (current) {
         const next = { ...current, items: current.items.map(row => row.id === detail.id ? detail : row) };
         snapshotRef.current = next; setSnapshot(next);
-        try { await ports.snapshot.write(next.items, next.fetchedAt); }
-        catch { if (attempt === detailGeneration.current) setError("最新の商品詳細を表示していますが、圏外用の保存ができませんでした。"); }
+        // The fresh server response already made editing safe. Offline storage
+        // must not keep every detail action disabled while IndexedDB is busy.
+        void ports.snapshot.write(next.items, next.fetchedAt).catch(() => {
+          if (attempt === detailGeneration.current) setError("最新の商品詳細を表示していますが、圏外用の保存ができませんでした。");
+        });
       }
     } catch (error) {
       if (attempt !== detailGeneration.current) return;
@@ -422,7 +425,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       {offline && <View style={s.offline}><Text style={s.offlineText}>【圏外です】保存済みの在庫を表示しています</Text>
         {snapshot && <Text style={s.timestamp}>最終取得 {new Date(snapshot.fetchedAt).toLocaleString("ja-JP")}</Text>}
       </View>}
-      {selected?.mergedIntoInventoryId && <View style={s.offline}><Text>この在庫は出庫先の商品に合算済みです。</Text><Pressable accessibilityRole="button" onPress={()=>{if(ports.loadDetail)void ports.loadDetail(selected.mergedIntoInventoryId!).then(item=>openItem(item)).catch(()=>setError("合算先の商品を取得できませんでした。"));}}><Text style={s.blue}>合算先の商品を開く</Text></Pressable></View>}
+      {selected?.mergedIntoInventoryId && <View style={s.offline}><Text>この在庫は出庫先の商品に合算済みです。</Text><Pressable accessibilityRole="button" onPress={()=>{if(ports.loadDetail)void ports.loadDetail(selected.mergedIntoInventoryId!).then(item=>openItem(item,true)).catch(()=>setError("合算先の商品を取得できませんでした。"));}}><Text style={s.blue}>合算先の商品を開く</Text></Pressable></View>}
       {error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
       {error && selected && !detailLoading && <Pressable accessibilityRole="button" onPress={() => { void openItem(selected); }} style={{padding:14}}><Text style={{color:colors.blue}}>商品詳細を再読み込み</Text></Pressable>}
       {feature ? <View style={s.pending}><Text style={s.pendingTitle}>{feature}</Text><Text style={s.pendingText}>この操作は実装中です。実在庫への変更は行いません。</Text></View> : selected ? <ScrollView contentContainerStyle={s.detail}>
@@ -456,7 +459,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
             <ProductImage item={item} cache={ports.listPhotoCache}/><View style={s.rowMain}><View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(item.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.rowName} numberOfLines={2}>{item.name}</Text></View>
             <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
           </Pressable>} />
-      </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
+      </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item,true);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && ports.split && <Pressable accessibilityRole="button" accessibilityLabel="在庫分け" disabled={offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1} onPress={()=>setSplitting(selected)} style={[s.edit,s.floatingEdit,{bottom:canSellInventory?228:156},(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1)&&{opacity:.4}]}><Text style={[s.editLabel,{textAlign:'center'}]}>{'在庫\n分け'}</Text></Pressable>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && canSellInventory && ports.sell && features.sales && features.ecListing && <Pressable accessibilityRole="button" accessibilityLabel="売却" disabled={offline || detailLoading || !selected.detailLoadedAt || selected.quantity<1 || splitCategoryNames(selected.category).includes('売り切れ')} onPress={()=>setSelling(selected)} style={[s.edit,s.floatingEdit,{bottom:156},(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1||splitCategoryNames(selected.category).includes('売り切れ'))&&{opacity:.4}]}><Text style={s.editLabel}>売却</Text></Pressable>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={21} color="white" /><Text style={s.editLabel}>編集</Text></Pressable>}

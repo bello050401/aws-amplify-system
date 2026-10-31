@@ -1,4 +1,5 @@
 import "server-only";
+import { invalidateSearchCandidates } from './searchCandidateCache';
 import type { InventoryCursorListFilters } from "./inventoryCursorList";
 
 /**
@@ -67,4 +68,5 @@ export function writeInventoryCount(key: string, value: number): void {
  */
 export function clearInventoryCountCache(): void {
   countCache.clear();
+  invalidateSearchCandidates();
 }

@@ -4,7 +4,8 @@ import { NextResponse } from "next/server";
 import { getMobileSession } from "@/lib/mobile/session";
 import { buildSearchFieldDefs, emptyAdvancedQuery } from "@/lib/inventory/advancedSearch";
 import { mobileSearchFields, searchValidation, DEFAULT_INVENTORY_SORT, type AdvancedSearchQuery, type InventorySort } from "@/mobile/src/domain/search";
-import { listCategories, listLocations, listStatuses, listInventory, listInventoryMobileSearch, listCustomFieldDefinitions, getInventoryDetail } from "@/lib/inventory/queries";
+import { listCategories, listLocations, listStatuses, listInventory, listInventoryMobileSearch, listCustomFieldDefinitions } from "@/lib/inventory/queries";
+import { readThumbnailRecords } from '@/lib/inventory/thumbnailRecords';
 import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
 import { inventoryThumbnails } from "@/lib/mobile/inventoryThumbnails";
 
@@ -31,8 +32,8 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: "INVALID_QUERY" }, { status: 400, headers });
       }
       // Fetch only the displayed IDs, avoiding a second full search or changing page membership.
-      const rows = await Promise.all([...new Set(ids)].map(id => getInventoryDetail(id)));
-      const items = await inventoryThumbnails(rows.filter(row => row !== null));
+      const rows = await readThumbnailRecords(ids);
+      const items = await inventoryThumbnails(rows);
       return NextResponse.json({ owner, items }, { headers });
     }
     const [categories, locations, statuses, customFields] = await Promise.all([listCategories(), listLocations(), listStatuses(), listCustomFieldDefinitions()]);

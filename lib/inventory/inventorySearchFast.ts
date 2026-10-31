@@ -21,6 +21,7 @@ import {saleNameScore} from '../saleCandidates/search';
 import type {CategoryRecord} from './categories';
 import {inventoryCategoryIds} from './categories';
 import { recordQuery } from "@/lib/perf/queryTiming";
+import { readSearchCandidates, invalidateSearchCandidates } from './searchCandidateCache';
 
 /**
  * 検索を「巨大な在庫本体の全件転送」から切り離す
@@ -195,7 +196,7 @@ async function hydrate(table: string, ids: string[]): Promise<Map<string, RawIte
     const chunk = ids.slice(i, i + HYDRATE_CONCURRENCY);
     const startedAt = Date.now();
     const results = await Promise.all(
-      chunk.map((id) => ddb().send(new GetCommand({ TableName: table, Key: { id } }))),
+      chunk.map((id) => ddb().send(new GetCommand({ TableName: table, Key: { id }, ConsistentRead: true }))),
     );
     recordQuery({
       model: "Inventory",
@@ -241,6 +242,7 @@ export interface FastSearchPage {
 export async function searchInventoryFast(
   input: FastSearchInput,
   options: { offset: number; limit: number },
+  retryChangedPage = true,
 ): Promise<FastSearchPage | null> {
   if (!process.env.CONVERSATION_TABLE_NAME) return null;
   let table: string;
@@ -256,7 +258,7 @@ export async function searchInventoryFast(
 
   // その検索が実際に参照する列だけを射影に入れる。
   const referencedKeys: string[] = ["displayId", "quantity"];
-  if (input.categoryPriority?.length) referencedKeys.push('categoryId');
+  if (input.categoryPriority?.length || input.saleRelevance) referencedKeys.push('categoryId');
   if (input.sort) referencedKeys.push(input.sort.field);
   if (input.advanced) {
     for (const condition of input.advanced.query.conditions) {
@@ -265,15 +267,24 @@ export async function searchInventoryFast(
   }
   const projection = buildScanProjection(referencedKeys);
 
-  const segments = await Promise.all(
+  const loadCandidates = async () => {
+    const segments = await Promise.all(
     Array.from({ length: SCAN_SEGMENTS }, (_, i) =>
       scanSegment(table, i, projection, filterExpression, filterNames, filterValues),
     ),
   );
-  const raw = segments.flat();
+    const rows = segments.flat();
+    return rows.length >= MAX_SCAN_ITEMS ? null : rows;
+  };
+  // The query text is deliberately absent: changing a word must not rescan all
+  // inventory. Filter and projection are part of the key. Advanced search may
+  // contain personal/custom fields, so it is never retained in this cache.
+  const raw = input.advanced?.query.conditions.length ? await loadCandidates() : await readSearchCandidates(
+    JSON.stringify([table, projection.attributes, filterExpression, filterNames, filterValues]), loadCandidates,
+  );
   // 安全弁に当たった = 全件を見られていない。件数も結果も信用できないので
   // 従来経路へ返す(途中までの結果を総件数として出さない)。
-  if (raw.length >= MAX_SCAN_ITEMS) return null;
+  if (!raw) return null;
 
   const candidates = raw.map(toCandidate);
   const q = input.q?.trim();
@@ -294,7 +305,20 @@ export async function searchInventoryFast(
   // 走査した直後に別セッションが削除した行は BatchGet で返らない。
   // 埋め合わせに別の行を繰り上げると総件数と食い違うので、落ちた行は
   // そのまま落とす(従来経路でも同じことが起きうる)。
-  const rawItems = page.map((r) => byId.get(r.id)).filter((x): x is RawItem => Boolean(x));
+  // Soft deletes still return an Item. Detect every changed displayed row and
+  // rebuild once, including its counts/order, instead of resurrecting it or
+  // showing cached quantities. Writes also invalidate this process's cache.
+  const changed = page.some(r => {
+    const latest = byId.get(r.id);
+    return !latest || latest.deletedAt || latest.listingPartition === 'MERGED' || latest.updatedAt !== r.updatedAt;
+  });
+  if (changed) {
+    invalidateSearchCandidates();
+    if (retryChangedPage) return searchInventoryFast(input, options, false);
+    // A second concurrent change: use the existing uncached fallback.
+    return null;
+  }
+  const rawItems = page.map(r => byId.get(r.id)!);
 
   return { rawItems, total: filtered.length, totalQuantity: filtered.reduce((sum,row)=>sum+Number(row.quantity ?? 0),0), offset: options.offset, limit: options.limit };
 }

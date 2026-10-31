@@ -47,13 +47,14 @@ async function main() {
     },
   };
   const sources: Record<string, string> = {
+    '@/lib/inventory/listImageUrls': 'export const signInventoryListKey = async path => (await globalThis.ports.sign(path)).url;',
     "next/server": 'export class NextResponse { static json(body, init={}) { return new Response(JSON.stringify(body), { ...init, headers: { "Content-Type":"application/json", ...init.headers } }); } }',
     "next/headers": 'export const cookies = () => ({});',
     "aws-amplify/storage/server": 'export const getUrl = async (_, {path}) => globalThis.ports.sign(path);',
     "@/lib/amplify/serverUtils": 'export const runWithAmplifyServerContext = ({operation}) => operation({});',
     "@/lib/mobile/session": 'export const getMobileSession = () => globalThis.ports.session();',
     "@/app/actions/photoRegistration": 'export const listInventoryPhotoAssetsAction = () => globalThis.ports.assets();',
-    "@/app/actions/inventory": 'export const updateInventory = () => { throw new Error("Read verification must never write"); };',
+    "@/app/actions/inventory": 'export const updateInventory = () => { throw new Error("Read verification must never write"); }; export const createInventory = updateInventory; export const deleteInventory = updateInventory;',
     "@/lib/inventory/queries": 'export const getInventoryDetail = id => globalThis.ports.detail(id); export const listCategories = async () => [{id:"category",name:"販売中"}]; export const listLocations = async () => [{id:"location",name:"倉庫"}]; export const listStatuses = async () => [{id:"status",label:"既存の状態"}];',
   };
   const bundled = await build({ entryPoints: ["app/api/mobile/inventory/[id]/route.ts"], bundle: true, write: false, platform: "node", format: "cjs", plugins: [{ name: "isolated-detail", setup(builder) {
@@ -63,7 +64,8 @@ async function main() {
   const module = { exports: {} as { GET(request: Request, context: { params: { id: string } }): Promise<Response>; POST?: unknown } };
   vm.runInNewContext(bundled.outputFiles[0].text, { module, exports: module.exports, ports, Response, Date, require: createRequire(import.meta.url) });
   const get = (requested = id) => module.exports.GET(new Request("https://bello.example/api/mobile/inventory/test"), { params: { id: requested } });
-  assert.equal(module.exports.POST, undefined);
+  // The shared route now supports creation too. GET must still never invoke a write.
+  assert.equal(typeof module.exports.POST, 'function');
   for (const status of [401, 403, 503]) {
     session = { ok: false, status, error: "FORBIDDEN" }; calls = 0;
     assert.equal((await get()).status, status); assert.equal(calls, 0);

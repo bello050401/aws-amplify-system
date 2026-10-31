@@ -20,6 +20,8 @@ async function main() {
     listInventoryPrimaryPhotoThumbnailsAction: async () => { calls.push("photos"); await waitForPhotos; return { ok: true, value: { "test-id": { url: "https://example.test/photo.jpg", explicitPrimary: true } } }; },
   };
   const sources: Record<string, string> = {
+    '@/lib/inventory/listImageUrls': 'export const withListImageUrls = async rows => rows; export const signInventoryListKey = async () => null;',
+    '@/lib/inventory/thumbnailRecords': 'export const readThumbnailRecords = async ids => (await Promise.all([...new Set(ids)].map(id => globalThis.ports.getInventoryDetail(id)))).filter(Boolean);',
     "next/server": 'export class NextResponse { static json(body,init={}) { return new Response(JSON.stringify(body), { ...init, headers: { "Content-Type": "application/json", ...init.headers } }); } }',
     "next/headers": 'export const cookies = () => ({});',
     "aws-amplify/storage/server": 'export const getUrl = async () => { throw new Error("No images in this fixture"); };',
