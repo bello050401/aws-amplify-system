@@ -5,7 +5,7 @@ import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LogRetention, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { AttributeType, BillingMode, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
-import { COMPACT_SEARCH_INDEX, COMPACT_SEARCH_FIELDS } from '../lib/inventory/compactSearchIndex';
+import { COMPACT_SEARCH_INDEX, COMPACT_SEARCH_FIELDS } from './compactSearchIndex';
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Effect, ManagedPolicy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
