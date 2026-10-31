@@ -8,9 +8,10 @@ import {getInventoryDetail} from '@/lib/inventory/queries';
 import {bodyLimited,NO_STORE} from '@/lib/invoicing/gateway';
 import {japanToday} from '@/lib/inventory/soldOutInput';
 import {importBaseOrders} from '@/lib/saleCandidates/baseImport';
-import {reviewPostSale,executePostSale} from '@/lib/saleCandidates/postSale';
+import {reviewPostSale,executePostSale,PostSaleError} from '@/lib/saleCandidates/postSale';
 import {readManualSync,refreshManualSync,linkExternalProduct,productFingerprint} from '@/lib/listing/econveni/manualSync';
 import {inventoryThumbnails} from '@/lib/mobile/inventoryThumbnails';
+import {withCurrentSaleSummary} from '@/lib/saleCandidates/listSummary';
 export const dynamic='force-dynamic';export const maxDuration=180;
 const reply=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:NO_STORE});
 export async function GET(request:Request){
@@ -18,12 +19,7 @@ export async function GET(request:Request){
   if((await inventoryMutationSession())?.role!=='ADMIN')return reply({error:'管理者のみ利用できます。'},403);
   const u=new URL(request.url),state=u.searchParams.get('state')==='DONE'?'DONE':'PENDING';
   const store=candidateStore(),[page,fees,status,baseStatus]=await Promise.all([store.list(state,u.searchParams.get('cursor')||undefined),store.config(),store.status(),store.baseStatus()]);
-  const items=await Promise.all(page.items.map(async c=>{
-   const id=c.state==='DONE'?c.result?.soldId:c.source==='INVOICE'&&!c.name?c.suggestedInventoryId:undefined;
-   if(!id)return c;
-   const item=await getInventoryDetail(id);
-   return {...c,name:item?.name||c.name||'請求書の商品（在庫を再選択してください）',...(c.state==='DONE'&&item?{completedSale:{quantity:c.result!.soldQuantity,total:item.salePrice??null,commission:item.saleCommission??null,date:item.saleEndDate||'',identifier:item.externalProductId||''}}:{})};
-  }));
+  const items=await withCurrentSaleSummary(page.items);
   return reply({items,cursor:page.cursor,fees,status,baseStatus});
  }catch{return reply({error:'売却候補を取得できませんでした。'},503);}
 }
@@ -63,5 +59,5 @@ export async function POST(request:Request){
    return reply(result,result.ok?200:result.code==='FORBIDDEN'?403:result.code==='INVALID'?422:409);
   }
   return reply({error:'操作を確認してください。'},422);
- }catch(e){return reply({error:(e as Error).name==='ConditionalCheckFailedException'?'別の操作で状態が変わりました。再読み込みしてください。':'処理結果を確認できませんでした。再読み込みして確認してください。'},503);}
+ }catch(e){if(e instanceof PostSaleError)return reply({error:e.message},409);return reply({error:(e as Error).name==='ConditionalCheckFailedException'?'別の操作で状態が変わりました。再読み込みしてください。':'処理結果を確認できませんでした。再読み込みして確認してください。'},503);}
 }

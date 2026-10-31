@@ -62,10 +62,10 @@ export async function manualLinkedStop(id:string,channel:EcChannel,actor:string,
 }
 
 /** Verified commands override the older read-only observation, without becoming a publish binding. */
-export async function overlayManualStops(catalog:EcCatalog,manual:ManualSyncData){
+export async function overlayManualStops(catalog:EcCatalog,manual:ManualSyncData,inventoryId?:string){
  let cursor:ScanCommandInput['ExclusiveStartKey'];
  do{
-  const r=await db.send(new ScanCommand({TableName:table,ExclusiveStartKey:cursor,ConsistentRead:true,FilterExpression:'begins_with(pk,:p)',ExpressionAttributeValues:{':p':'ECONVENI#MANUAL_STOP#'}}));
+  const r=inventoryId?{Items:(await Promise.all((['BASE','MERCARI_SHOPS','YAHOO'] as const).map(channel=>db.send(new GetCommand({TableName:table,Key:{pk:stopReceiptKey(inventoryId,channel)},ConsistentRead:true}))))).flatMap(result=>result.Item?[result.Item]:[]),LastEvaluatedKey:undefined}:await db.send(new ScanCommand({TableName:table,ExclusiveStartKey:cursor,ConsistentRead:true,FilterExpression:'begins_with(pk,:p)',ExpressionAttributeValues:{':p':'ECONVENI#MANUAL_STOP#'}}));
   for(const receipt of (r.Items??[]) as StopReceipt[]){
    if(receipt.state==='READY')continue;
    const link=manual.links.find(l=>!l.disabled&&l.inventoryId===receipt.inventoryId);

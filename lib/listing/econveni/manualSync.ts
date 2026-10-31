@@ -12,7 +12,15 @@ const cacheKey={pk:'ECONVENI#OBSERVED_CATALOG'};
 const linkKey=(id:string)=>({pk:'ECONVENI#MANUAL_LINK#'+id});
 const ownerKey=(id:string)=>({pk:'ECONVENI#MANUAL_OWNER#'+id});
 export const productFingerprint=(p:ExternalProduct)=>createHash('sha256').update(JSON.stringify(p)).digest('hex');
-export async function readManualSync():Promise<ManualSyncData>{
+export async function readManualSync(inventoryId?:string):Promise<ManualSyncData>{
+ if(inventoryId){
+  const [observed,linked]=await Promise.all([
+   db.send(new GetCommand({TableName:table,Key:cacheKey,ConsistentRead:true})),
+   db.send(new GetCommand({TableName:table,Key:linkKey(inventoryId),ConsistentRead:true})),
+  ]);
+  const link=linked.Item as ManualLink|undefined,snapshot=observed.Item as ExternalSnapshot|undefined;
+  return {snapshot:snapshot?{...snapshot,products:snapshot.products.filter(p=>p.productId===link?.productId)}:null,links:link&&!link.disabled?[link]:[]};
+ }
  const snapshot=(await db.send(new GetCommand({TableName:table,Key:cacheKey,ConsistentRead:true}))).Item as ExternalSnapshot|undefined;
  const links:ManualLink[]=[];let cursor:Record<string,unknown>|undefined;
  do{const result=await db.send(new ScanCommand({TableName:table,FilterExpression:'begins_with(pk,:prefix)',ExpressionAttributeValues:{':prefix':'ECONVENI#MANUAL_LINK#'},ExclusiveStartKey:cursor,ConsistentRead:true}));links.push(...(result.Items??[]) as ManualLink[]);cursor=result.LastEvaluatedKey;if(links.length>20000)throw Error('LINK_LIMIT');}while(cursor);

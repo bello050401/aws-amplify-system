@@ -34,11 +34,12 @@ const legacyState = (status: string): EcState =>
   })[status] as EcState | undefined) ?? "DRAFT";
 
 /** Stored results only: opening the table never sends publication or status requests to marketplaces. */
-export async function getEcListingCatalogAction(): Promise<EcCatalog> {
+export async function getEcListingCatalogAction(inventoryId?:string): Promise<EcCatalog> {
   const role = await getInventoryRole();
   if (!role) return { channels: {}, archivedIds: [], errors: ["ログインし直してください。"] };
+  if(inventoryId!==undefined&&!/^[a-zA-Z0-9-]{8,80}$/.test(inventoryId))return {channels:{},archivedIds:[],errors:['対象の商品を確認してください。']};
   const results = await Promise.allSettled([
-    collect((token) =>
+    inventoryId ? collect(token=>serverDataClient.models.ChannelListing.listChannelListingByInventoryId({inventoryId},{nextToken:token,selectionSet:["inventoryId","channel","status","externalListingId","listingUrl","updatedAt"],...inventoryAuthMode})) : collect((token) =>
       serverDataClient.models.ChannelListing.list({
         limit: 1000,
         nextToken: token,
@@ -46,7 +47,7 @@ export async function getEcListingCatalogAction(): Promise<EcCatalog> {
         ...inventoryAuthMode,
       }),
     ),
-    collect((token) =>
+    inventoryId ? serverDataClient.models.YahooAuctionListing.get({inventoryId},{...inventoryAuthMode}).then(r=>{if(r.errors)throw Error('READ_FAILED');return r.data?[r.data]:[];}) : collect((token) =>
       serverDataClient.models.YahooAuctionListing.list({
         limit: 1000,
         nextToken: token,
@@ -55,7 +56,7 @@ export async function getEcListingCatalogAction(): Promise<EcCatalog> {
       }),
     ),
     role === "ADMIN"
-      ? collect((token) =>
+      ? inventoryId ? serverDataClient.models.MercariBridgeHttpProductLink.get({inventoryId},{...inventoryAuthMode}).then(r=>{if(r.errors)throw Error('READ_FAILED');return r.data?[r.data]:[];}) : collect((token) =>
           serverDataClient.models.MercariBridgeHttpProductLink.list({
             limit: 1000,
             nextToken: token,
@@ -63,7 +64,7 @@ export async function getEcListingCatalogAction(): Promise<EcCatalog> {
           }),
         )
       : Promise.resolve(null),
-    collect((token) =>
+    inventoryId ? collect(token=>serverDataClient.models.ListingDraft.listListingDraftByInventoryId({inventoryId},{nextToken:token,selectionSet:["inventoryId","deletedAt"],...inventoryAuthMode})) : collect((token) =>
       serverDataClient.models.ListingDraft.list({
         limit: 1000,
         nextToken: token,
@@ -123,7 +124,7 @@ export async function getEcListingCatalogAction(): Promise<EcCatalog> {
       .map((r) => r.inventoryId);
   } else catalog.errors.push("EC商品情報の削除状態を取得できませんでした。");
   try{
-    for(const row of await readEconveniCatalog()){
+    for(const row of await readEconveniCatalog(inventoryId)){
       for(const channel of ['YAHOO','MERCARI_SHOPS'] as const){
         const c=row.channels[channel];
         const state:EcState=['PENDING','VERIFY_REQUIRED'].includes(c.state)||['PENDING','VERIFY_REQUIRED'].includes(row.save.state)?'ERROR':c.remoteStatus==='ACTIVE'?'ACTIVE':c.remoteStatus==='INACTIVE'?'STOPPED':'DRAFT';
@@ -135,7 +136,7 @@ export async function getEcListingCatalogAction(): Promise<EcCatalog> {
     delete catalog.channels.YAHOO;delete catalog.channels.MERCARI_SHOPS;
     catalog.errors.push('eコンビニの保存・出品情報を取得できませんでした。再読み込みしてください。');
   }
-  try {const manual=await readManualSync();overlayManualStatuses(catalog,manual);await overlayManualStops(catalog,manual);}
+  try {const manual=await readManualSync(inventoryId);overlayManualStatuses(catalog,manual);await overlayManualStops(catalog,manual,inventoryId);}
   catch {catalog.errors.push('eコンビニの手動連携情報を取得できませんでした。状態を再確認してください。');}
   return catalog;
 }

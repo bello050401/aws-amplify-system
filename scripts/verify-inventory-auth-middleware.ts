@@ -40,50 +40,14 @@
  * junction、[[qa-worktree-tooling-limits]]参照):
  *   node node_modules/tsx/dist/cli.mjs scripts/verify-inventory-auth-middleware.ts
  */
-import { registerHooks } from "node:module";
+import {build} from "esbuild";
+import vm from "node:vm";
 import { pathToFileURL } from "node:url";
 import { NextRequest, NextResponse } from "next/server";
 
-declare module "node:module" {
-  export function registerHooks(hooks: {
-    resolve?: (
-      specifier: string,
-      context: { parentURL?: string },
-      nextResolve: (specifier: string, context: unknown) => unknown,
-    ) => unknown;
-  }): void;
-}
-
-const projectRoot = pathToFileURL(process.cwd() + "/").href;
 const mocksDir = pathToFileURL(process.cwd() + "/scripts/__mocks__/").href;
 const FETCH_AUTH_SESSION_MOCK_URL = mocksDir + "inventoryAuthMiddleware.fetchAuthSession.mock.cjs";
 const SERVER_UTILS_MOCK_URL = mocksDir + "inventoryAuthMiddleware.serverUtils.mock.cjs";
-
-registerHooks({
-  resolve(specifier: string, context: { parentURL?: string }, nextResolve: (s: string, c: unknown) => unknown) {
-    if (specifier === "aws-amplify/auth/server") {
-      return { url: FETCH_AUTH_SESSION_MOCK_URL, shortCircuit: true };
-    }
-    if (specifier === "@/lib/amplify/userPoolServer") {
-      return { url: SERVER_UTILS_MOCK_URL, shortCircuit: true };
-    }
-    const isAlias = specifier.startsWith("@/");
-    const isRelative = specifier.startsWith("./") || specifier.startsWith("../");
-    if (!isAlias && !isRelative) {
-      return nextResolve(specifier, context);
-    }
-    const target = isAlias ? projectRoot + specifier.slice(2) : specifier;
-    try {
-      return nextResolve(target, context);
-    } catch {
-      try {
-        return nextResolve(target + ".ts", context);
-      } catch {
-        return nextResolve(target + ".tsx", context);
-      }
-    }
-  },
-});
 
 let passes = 0;
 let failures = 0;
@@ -132,8 +96,15 @@ function getSetCookieValue(response: NextResponse, name: string): string | undef
 }
 
 async function main() {
-  const { middleware } = await import("@/middleware");
   const fetchAuthSessionMock = (await import(FETCH_AUTH_SESSION_MOCK_URL)).default;
+  const adapterMock = (await import(SERVER_UTILS_MOCK_URL)).default;
+  // Alias resolution under tsx can precede Node resolve hooks. Explicit ports
+  // exercise the real middleware and SDK cookie adapter without contacting Cognito.
+  const built=await build({entryPoints:['middleware.ts'],bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'test-ports',setup(b){b.onResolve({filter:/.*/},a=>a.kind==='entry-point'?undefined:{path:a.path,external:true});}}]});
+  const ports:Record<string,unknown>={'next/server':{NextResponse},'aws-amplify/auth/server':fetchAuthSessionMock,'@/lib/amplify/userPoolServer':adapterMock,'@/lib/inventory/e2eFixtures':{isE2EFixtureModeActive:()=>false}};
+  const module={exports:{} as {middleware:(request:NextRequest)=>Promise<NextResponse>}};
+  vm.runInNewContext(built.outputFiles[0].text,{module,exports:module.exports,require:(id:string)=>{if(!(id in ports))throw Error('Unexpected middleware dependency: '+id);return ports[id];}});
+  const {middleware}=module.exports;
 
   const COOKIE_NAME = "amplify.mock.accessToken";
   const SECRET_CANARY = "refresh-token-should-never-appear-in-any-log-abc123";
