@@ -41,7 +41,9 @@ export function createYahooPaymentReconciler(db:DynamoDBDocumentClient,candidate
  }
  async function run(){
   const statusId='YAHOO_PAYMENT_CURSOR',status=await get(statusId),started=Date.now();
-  let cursor=status?.cursor,checked=0,applied=0,errors=0;
+  // Completed scans persist null. DynamoDB's ExclusiveStartKey accepts only a map
+  // or omission; passing that persisted null fails on the second scheduled run.
+  let cursor=status?.cursor??undefined,checked=0,applied=0,errors=0;
   do{
    const page=await db.send(new QueryCommand({TableName:candidateTable,IndexName:'ByState',KeyConditionExpression:'#s=:s',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':s':YAHOO_PAYMENT_QUEUE_STATE},Limit:25,ExclusiveStartKey:cursor}));
    for(const queue of (page.Items||[]) as Queue[]){

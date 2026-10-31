@@ -43,6 +43,9 @@ async function main(){
   }
   await Promise.all(created.map(TableName=>waitUntilTableExists({client:raw,maxWaitTime:90,minDelay:1,maxDelay:3},{TableName})));
   for(const [id,name] of [['active','販売中'],['sold','売り切れ'],['unpaid','入金待ち'],['other','椅子']])await put('Category',{id,name});
+  for(let i=0;i<3;i++)assert.deepEqual(await reconciler.run(),{checked:0,applied:0,errors:0,more:false});
+  assert.equal((await get('Candidates','YAHOO_PAYMENT_CURSOR'))!.cursor,null);
+  check('repeated empty scheduled runs resume safely from persisted null cursor');
   for(const [available,sold] of [[1,1],[5,2],[5,5],[10,1]]){
    const f=await fixture(available,sold),r=await f.run(f.request,'qa'),stock=await get('Inventory',r.soldId);
    assert.equal(stock!.quantity,sold);assert.equal(stock!.saleEndDate,null);assert.deepEqual(stock!.categoryIds,['other','sold','unpaid']);
@@ -77,7 +80,9 @@ async function main(){
   assert.equal(yahooSenderAuthenticated([{name:'Authentication-Results',value:'mx.google.com; dmarc=pass (p=REJECT) header.from=mail.yahoo.co.jp;'}]),true);
   for(const value of ['evil.invalid; dmarc=pass header.from=mail.yahoo.co.jp;','mx.google.com; dmarc=fail header.from=mail.yahoo.co.jp;','mx.google.com; dmarc=pass header.from=mail.yahoo.co.jp.evil.invalid;'])assert.equal(yahooSenderAuthenticated([{name:'Authentication-Results',value}]),false);
   check('only Google-received aligned Yahoo authentication can mark paid');
-  const run=await reconciler.run();assert.ok(run.errors>=6);check('scheduled query retries and records visible conflict errors');
+  const run=await reconciler.run();assert.ok(run.errors>=6);
+  const again=await reconciler.run();assert.ok(again.errors>=6);assert.equal(again.applied,0);
+  check('scheduled query retries and records visible conflict errors across repeated runs');
  }finally{
   for(const TableName of created){assert.ok(TableName.startsWith(prefix));await raw.send(new DeleteTableCommand({TableName}));}
   mkdirSync('artifacts/yahoo-payment-20261031',{recursive:true});writeFileSync('artifacts/yahoo-payment-20261031/aws-scratch-tests.json',JSON.stringify({checkedAt:new Date().toISOString(),passed,scratchTables:created,cleanup:'DELETE requested for all scratch tables'},null,2));
