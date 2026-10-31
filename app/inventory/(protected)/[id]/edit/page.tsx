@@ -9,14 +9,15 @@ import { listInventoryPhotoAssetsAction } from "@/app/actions/photoRegistration"
 import { signInventoryPreviews } from "@/lib/inventory/listImageUrls";
 import { InventoryPreviewUrls } from "../../../InventoryPreviewUrls";
 
-export default async function EditInventoryPage({
-  params,
-  searchParams,
-}: {
-  params: { id: string };
-  /** QA005: 詳細画面から引き継いだ `from` — 詳細ページの同名propと同じ(lib/inventory/listReturnParams.ts参照)。 */
-  searchParams: { from?: string };
-}) {
+export default async function EditInventoryPage(
+  props: {
+    params: Promise<{ id: string }>;
+    /** QA005: 詳細画面から引き継いだ `from` — 詳細ページの同名propと同じ(lib/inventory/listReturnParams.ts参照)。 */
+    searchParams: Promise<{ from?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects a signed-out/unauthorized visitor
   // QA005: 保存後/キャンセル時に戻る詳細URL。`from` を引き継いだまま

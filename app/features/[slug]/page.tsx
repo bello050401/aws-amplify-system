@@ -11,11 +11,12 @@ import { Cta } from "@/components/features/Cta";
 export const dynamic = "force-dynamic"; // price/stock must reflect BASE, not a stale build
 
 interface FeaturePageProps {
-  params: { slug: string };
+  params: Promise<{ slug: string }>;
 }
 
 
-export async function generateMetadata({ params }: FeaturePageProps): Promise<Metadata> {
+export async function generateMetadata(props: FeaturePageProps): Promise<Metadata> {
+  const params = await props.params;
   const result = await loadPublishedFeature(params.slug);
   if (!result) return {};
   return {
@@ -24,7 +25,8 @@ export async function generateMetadata({ params }: FeaturePageProps): Promise<Me
   };
 }
 
-export default async function FeaturePage({ params }: FeaturePageProps) {
+export default async function FeaturePage(props: FeaturePageProps) {
+  const params = await props.params;
   const result = await loadPublishedFeature(params.slug);
   if (!result) notFound();
   const { feature, items } = result;

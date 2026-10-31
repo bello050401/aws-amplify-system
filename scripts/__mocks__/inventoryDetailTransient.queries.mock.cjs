@@ -16,10 +16,10 @@ module.exports = {
     calls.item += 1;
     if (phase === 'first') throw throttle();
     if (phase === 'unknown') throw unexpected;
-    return { id, categoryId: null, locationId: null };
+    return { id, categoryId: "inactive", locationId: "inactive" };
   },
   async listStatuses() { calls.statuses += 1; return []; },
-  async listCustomFieldDefinitions() { calls.fields += 1; return []; },
-  async listCategories() { calls.categories += 1; if (phase === 'second') throw throttle(); return []; },
+  async listAllCustomFieldDefinitions() { calls.fields += 1; return []; },
+  async listCategories(id) { calls.categories += 1; if (id && phase === 'second') throw throttle(); return []; },
   async listLocations() { calls.locations += 1; return []; },
 };

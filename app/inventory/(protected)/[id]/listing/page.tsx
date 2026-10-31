@@ -30,7 +30,8 @@ import { InventoryAuthTemporarilyUnavailable } from "../../InventoryAuthTemporar
  */
 export const metadata = { title: "EC出品 | BELLO 在庫管理" };
 
-export default async function ListingPage({ params }: { params: { id: string } }) {
+export default async function ListingPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects signed-out/unauthorized users
   if (!canEditInventory(role)) {

@@ -5,7 +5,7 @@ import {
   type EcChannel,
   type EcChannelState,
 } from "./ecManagement";
-import type { ListingOverviewRow } from "./service";
+import type { ListingOverviewRow } from "./overviewTypes";
 import type { ExternalProduct } from "./econveni/manualSyncModel";
 
 export type RemoteOverviewProduct = {

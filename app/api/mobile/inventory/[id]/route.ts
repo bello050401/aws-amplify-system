@@ -10,7 +10,7 @@ import { InventorySaveError, InventoryMutationRejected } from "@/lib/inventory/c
 import { parseMobileSave, mobileCreateInput, mobileCopyInput, mobileInventoryInput, mobileWriteWasApplied, MobileWriteValidationError } from "@/lib/mobile/inventoryWrite";
 
 export const dynamic = "force-dynamic";
-export async function GET(_request: Request, context: { params: { id: string } }) {
+export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   const started = Date.now();
   const timing: Record<string, number> = {};
   const measure = async <T,>(name: string, run: () => Promise<T>): Promise<T> => {
@@ -20,7 +20,7 @@ export async function GET(_request: Request, context: { params: { id: string } }
   const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
   const session = await measure('session', getMobileSession);
   if (!session.ok) return NextResponse.json({ error: session.error }, { status: session.status, headers });
-  const { id } = context.params;
+  const { id } = (await context.params);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return NextResponse.json({ error: "INVALID_ID" }, { status: 400, headers });
   try {
     // Start independent reads after authorization. Master choices must not wait
@@ -54,8 +54,9 @@ export async function GET(_request: Request, context: { params: { id: string } }
 }
 
 /** Native clients use the same BELLO save action as the Web editor. No direct ZAICO calls. */
-async function save(request: Request, context: { params: { id: string } }, creating: boolean | "delete") {
+async function save(request: Request, context: { params: Promise<{ id: string }> }, creating: boolean | "delete") {
   const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
+  const { id } = await context.params;
   const fail = (error: string, status: number) => NextResponse.json({ error }, { status, headers });
   const session = await getMobileSession();
   if (!session.ok) return fail(session.error, session.status);
@@ -86,14 +87,14 @@ async function save(request: Request, context: { params: { id: string } }, creat
   try {
     if (creating === "delete") {
       const body = raw as { id?: unknown; expectedUpdatedAt?: unknown } | null;
-      if (!body || Array.isArray(body) || body.id !== context.params.id || !/^[a-f0-9-]{36}$/i.test(context.params.id) ||
+      if (!body || Array.isArray(body) || body.id !== id || !/^[a-f0-9-]{36}$/i.test(id) ||
           typeof body.expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(body.expectedUpdatedAt)) ||
           Object.keys(body).some(key => !["id", "expectedUpdatedAt"].includes(key))) return fail("INVALID_INPUT", 422);
-      await deleteInventory(context.params.id, { skipRedirect: true, expectedUpdatedAt: body.expectedUpdatedAt });
-      if (await getInventoryDetail(context.params.id)) return fail("UNCONFIRMED", 503);
-      return NextResponse.json({ owner: session.owner, deletedId: context.params.id }, { headers });
+      await deleteInventory(id, { skipRedirect: true, expectedUpdatedAt: body.expectedUpdatedAt });
+      if (await getInventoryDetail(id)) return fail("UNCONFIRMED", 503);
+      return NextResponse.json({ owner: session.owner, deletedId: id }, { headers });
     }
-    const body = parseMobileSave(raw, context.params.id);
+    const body = parseMobileSave(raw, id);
     if (Boolean(body.create) !== creating) return fail("INVALID_INPUT", 422);
     const row = await getInventoryDetail(body.id);
     if (!row && !creating) return fail("NOT_FOUND", 404);
@@ -135,6 +136,6 @@ async function save(request: Request, context: { params: { id: string } }, creat
   }
 }
 
-export async function PATCH(request: Request, context: { params: { id: string } }) { return save(request, context, false); }
-export async function POST(request: Request, context: { params: { id: string } }) { return save(request, context, true); }
-export async function DELETE(request: Request, context: { params: { id: string } }) { return save(request, context, "delete"); }
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) { return save(request, context, false); }
+export async function POST(request: Request, context: { params: Promise<{ id: string }> }) { return save(request, context, true); }
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) { return save(request, context, "delete"); }

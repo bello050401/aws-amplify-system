@@ -29,8 +29,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
-  const expectedState = cookies().get(STATE_COOKIE)?.value;
-  cookies().delete(STATE_COOKIE);
+  const expectedState = (await cookies()).get(STATE_COOKIE)?.value;
+  (await cookies()).delete(STATE_COOKIE);
 
   const denialCode = url.searchParams.get("error");
   if (denialCode) {

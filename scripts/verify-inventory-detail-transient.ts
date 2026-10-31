@@ -40,22 +40,22 @@ async function main() {
   const { default: InventoryDetailPage } = await import('@/app/inventory/(protected)/[id]/page');
   const queries = (await import(queriesUrl)).default;
   const roles = (await import(roleUrl)).default;
-  const params = { id: 'inventory-test' };
-  const searchParams = {};
+  const params = Promise.resolve({ id: 'inventory-test' });
+  const searchParams = Promise.resolve({});
 
   queries.__setPhase('first');
   const first = await InventoryDetailPage({ params, searchParams });
   const firstHtml = renderToStaticMarkup(first);
   assert.match(firstHtml, /認証サービスが一時的に混み合っています/);
   assert.doesNotMatch(firstHtml, /inventory-test/, '読取途中の在庫IDを表示しない');
-  assert.deepEqual(queries.calls, { item: 1, statuses: 1, fields: 1, categories: 0, locations: 0 }, '初段の読取を再試行しない');
+  assert.deepEqual(queries.calls, { item: 1, statuses: 1, fields: 1, categories: 1, locations: 1 }, '初段の読取を再試行しない');
 
   queries.__setPhase('second');
   const second = await InventoryDetailPage({ params, searchParams });
   const secondHtml = renderToStaticMarkup(second);
   assert.match(secondHtml, /認証サービスが一時的に混み合っています/);
   assert.doesNotMatch(secondHtml, /inventory-test/, '一部の読取が成功しても在庫データを表示しない');
-  assert.deepEqual(queries.calls, { item: 1, statuses: 1, fields: 1, categories: 1, locations: 1 }, '後段も再試行しない');
+  assert.deepEqual(queries.calls, { item: 1, statuses: 1, fields: 1, categories: 2, locations: 2 }, '後段も再試行しない');
 
   queries.__setPhase('unknown');
   await assert.rejects(() => InventoryDetailPage({ params, searchParams }), (error: unknown) => error === queries.unexpected, '未知エラーは既存境界へ');

@@ -108,18 +108,19 @@ function formatItemTypeAndQuantity(itemType: string | null, quantity: number | n
  * グリッド列幅を明示的に380pxへ戻すことで指示書の「以前の画像領域を
  * 基準に戻す」を数値としても満たす。
  */
-export default async function InventoryDetailPage({
-  params,
-  searchParams,
-}: {
-  params: { id: string };
-  /**
-   * QA005: 一覧から遷移した際に付く `from` — 一覧の検索条件/ページング
-   * を正規化したクエリ文字列(lib/inventory/listReturnParams.ts参照)。
-   * 直リンク・改ざんされた値・存在しない場合は無視して通常一覧へ戻る。
-   */
-  searchParams: { from?: string };
-}) {
+export default async function InventoryDetailPage(
+  props: {
+    params: Promise<{ id: string }>;
+    /**
+     * QA005: 一覧から遷移した際に付く `from` — 一覧の検索条件/ページング
+     * を正規化したクエリ文字列(lib/inventory/listReturnParams.ts参照)。
+     * 直リンク・改ざんされた値・存在しない場合は無視して通常一覧へ戻る。
+     */
+    searchParams: Promise<{ from?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const role = await getInventoryRole();
   if (!role) return null;
 

@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useRef, useState } from "react";
 import { prepareMercariVisibilityPcJobAction } from "@/app/actions/mercariVisibilityHandoff";
 import type { ChannelListingRecord } from "@/lib/listing/types";
@@ -201,10 +203,10 @@ export function MercariShopsLifecycleSection({ inventoryId, listing, operation =
       PCの結果を確認
     </button>}
     {(pcStatus === "STOP_VERIFIED" || pcStatus === "RELIST_VERIFIED") &&
-      <a href="/inventory/listings"
+      <Link prefetch={false} href="/inventory/listings"
         className="ml-2 mt-3 inline-block rounded border border-gray-300 px-3 py-2 text-xs font-bold">
         EC出品一覧に戻る
-      </a>}
+      </Link>}
     {message && <p role="status" className="mt-2 text-xs">{message}</p>}
     <p className="mt-2 text-xs text-gray-600">{pcStatus === "STOP_VERIFIED" ?
       "停止はPCで確認済みです。再出品はShopsの公開操作を確認するまで利用できません。" :

@@ -1,3 +1,4 @@
+import type { ListingOverviewRow } from "./overviewTypes";
 import "server-only";
 import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {listingQuantity} from "./quantity";
@@ -368,24 +369,8 @@ async function fetchListingDraftPrices(): Promise<Map<string, OverviewDraft>> {
 }
 
 /** 一覧ベースのEC出品管理画面(下記ListingOverviewRow)の1行。 */
-export interface ListingOverviewRow {
-  soldChannel?: "MERCARI_SHOPS" | "YAHOO" | "BASE" | null;
-  channelPrices?: ListingDraftRecord["channelPrices"];
-  inventoryCreatedAt?: string;
-  categories?: string[];
-  archived?: boolean;
-  inventoryId: string;
-  displayId: string;
-  name: string;
-  quantity: number;
-  price: number | null;
-  thumbnailKey: string | null;
-  thumbnailIsPrimary?: boolean;
-  inventoryUpdatedAt: string;
-  hasDraft: boolean;
-  /** 現時点でチャネルはMERCARI_SHOPSのみ(lib/listing/types.tsのListingChannel参照) — 将来チャネルが増えたらこの1フィールドを配列にする。 */
-  channelListing: ChannelListingRecord | null;
-}
+export type { ListingOverviewRow } from "./overviewTypes";
+
 
 /**
  * BELLO統合改修 master指示書(2026-08-29統合改修版) §15/§16: 在庫一覧

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import { confirmSignIn, fetchAuthSession, signIn, signOut } from "aws-amplify/auth";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
@@ -21,7 +21,7 @@ async function getClientSessionStatus(): Promise<ClientSessionStatus> {
 }
 
 interface InventoryLoginPageProps {
-  searchParams: { error?: string };
+  searchParams: Promise<{ error?: string }>;
 }
 
 /**
@@ -32,7 +32,8 @@ interface InventoryLoginPageProps {
  * worlds' groups just signs in once here or there; Cognito sessions
  * aren't scoped per app route.
  */
-export default function InventoryLoginPage({ searchParams }: InventoryLoginPageProps) {
+export default function InventoryLoginPage(props: InventoryLoginPageProps) {
+  const searchParams = use(props.searchParams);
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

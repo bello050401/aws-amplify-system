@@ -33,6 +33,8 @@ export default function InventoryError({ error, reset }: { error: Error & { dige
           <button type="button" onClick={() => reset()} className="border border-gray-900 px-4 py-1.5 text-xs font-bold text-gray-900 hover:bg-gray-50">
             再試行
           </button>
+          {/* Full navigation discards the prior authentication/error router state. */}
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a href="/inventory" className="border border-gray-300 px-4 py-1.5 text-xs text-gray-700 hover:bg-gray-50">
             在庫一覧へ戻る
           </a>

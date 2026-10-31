@@ -85,7 +85,7 @@ export interface ListingDraftRecord {
   condition: ListingConditionCode | null;
   /** 配送方法。既存の下書きでも必ず値が入る(未設定はKAZAIとして読む)。 */
   shippingMethod: ListingShippingMethod;
-  shippingPackages?: import("@/lib/shipping/packages").ShippingPackage[];
+  shippingPackages?: import("../shipping/packages").ShippingPackage[];
   images: ListingImageRef[];
   createdBy: string | null;
   updatedBy: string | null;

@@ -80,7 +80,7 @@ export default async function InventorySettingsPage() {
   // awaitしており、Secrets Managerへの往復が1つだけ直列に後ろへ
   // ぶら下がっていた。この画面は外部サービスの接続状態を4つ読む
   // (ZAICO / Mercari / LINE / BASE)ので、そのうち1つが直列なのは効く。
-  const requestHeaders = headers();
+  const requestHeaders = await headers();
   const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host");
 
   const settingsRead = await (async () => {

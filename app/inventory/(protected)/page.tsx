@@ -25,7 +25,7 @@ import { InventorySpeedProbeLink } from "./InventorySpeedProbeLink";
 import { inventorySpeedProbeEnabled, SPEED_PROBE_INVENTORY_ID } from "@/lib/inventory/speedProbeGate";
 
 interface InventoryListPageProps {
-  searchParams: {
+  searchParams: Promise<{
     q?: string;
     categoryIds?: string; // comma-separated (統合改善指示書 §9: 複数カテゴリOR)
     locationId?: string;
@@ -35,7 +35,7 @@ interface InventoryListPageProps {
     adv?: string;
     limit?: string;
     offset?: string;
-  };
+  }>;
 }
 
 function parseAdvancedQuery(raw: string | undefined): AdvancedSearchQuery | null {
@@ -49,7 +49,8 @@ function parseAdvancedQuery(raw: string | undefined): AdvancedSearchQuery | null
   }
 }
 
-export default async function InventoryListPage({ searchParams }: InventoryListPageProps) {
+export default async function InventoryListPage(props: InventoryListPageProps) {
+  const searchParams = await props.searchParams;
   const started = performance.now();
   const role = await getInventoryRole();
   // The (protected) layout already redirects a non-authorized visitor

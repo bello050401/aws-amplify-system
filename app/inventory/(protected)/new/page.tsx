@@ -11,10 +11,11 @@ import { InventoryHeader } from "../../InventoryHeader";
 import { NewInventoryForm } from "./NewInventoryForm";
 
 interface NewInventoryPageProps {
-  searchParams: { duplicateFrom?: string };
+  searchParams: Promise<{ duplicateFrom?: string }>;
 }
 
-export default async function NewInventoryPage({ searchParams }: NewInventoryPageProps) {
+export default async function NewInventoryPage(props: NewInventoryPageProps) {
+  const searchParams = await props.searchParams;
   const role = await getInventoryRole();
   if (!role) return null; // parent layout already redirects a signed-out/unauthorized visitor
   // VIEWER can reach every /inventory/* URL by typing it directly — the

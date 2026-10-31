@@ -58,7 +58,7 @@ export async function GET(request: Request) {
 
   // cookieを立てるのは認可URLの組み立てに成功した後だけ。失敗経路で
   // 立ててしまうと、次の正規の試行のstateと食い違う余地が生まれる。
-  cookies().set(STATE_COOKIE, state, {
+  (await cookies()).set(STATE_COOKIE, state, {
     httpOnly: true,
     secure: true,
     sameSite: "lax",

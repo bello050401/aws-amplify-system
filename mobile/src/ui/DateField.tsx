@@ -2,7 +2,8 @@ import React, {useState} from "react";
 import {Modal,Platform,Pressable,Text,View} from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import {colors} from "./theme";
-export interface DateFieldProps {label:string;value:string;disabled?:boolean;onChange:(value:string)=>void}
+import type {DateFieldProps} from "./dateFieldProps";
+export type {DateFieldProps} from "./dateFieldProps";
 export function DateField({label,value,disabled,onChange}:DateFieldProps) {
   const [open,setOpen]=useState(false);const [date,setDate]=useState(new Date());
   const commit=(d:Date)=>onChange(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);

@@ -48,5 +48,5 @@ reset();remaining=3;market='YAHOO';soldVersion='v2';soldOrder='different';await 
 reset();remaining=0;market='YAHOO';fullSale=true;paymentState='WAITING';p=await reviewPostSale('c','owner');assert.equal(p.rows.length,2);assert(!p.rows.some(r=>r.channel==='YAHOO'));assert.equal(calls.length,0);await executePostSale('c','owner',p.token,true);assert.deepEqual(calls,[['STOP','BASE'],['STOP','MERCARI_SHOPS']]);
 reset();remaining=0;market='YAHOO';fullSale=true;paymentState='APPLIED';version='v2';p=await reviewPostSale('c','owner');await executePostSale('c','owner',p.token,true);assert.deepEqual(calls,[['STOP','BASE'],['STOP','MERCARI_SHOPS']]);
 const resultText='PASS: explicit confirmation; actor/token binding; sold-channel exclusion; zero-stock stops only other channels; pack-size stock; stale inventory blocked; uncertain write not retried; unsupported quantity not replaced with stop.';
-fs.writeFileSync('artifacts/sale-shipping-link-20261031/post-sale-safety.txt',resultText);console.log(resultText);
+fs.mkdirSync('artifacts/sale-shipping-link-20261031',{recursive:true});fs.writeFileSync('artifacts/sale-shipping-link-20261031/post-sale-safety.txt',resultText);console.log(resultText);
 })().catch(e=>{console.error(e);process.exitCode=1;});

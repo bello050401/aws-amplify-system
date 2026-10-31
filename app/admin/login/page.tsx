@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import { confirmSignIn, fetchAuthSession, signIn, signOut } from "aws-amplify/auth";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
@@ -18,10 +18,11 @@ async function getClientSessionStatus(): Promise<ClientSessionStatus> {
 }
 
 interface AdminLoginPageProps {
-  searchParams: { error?: string };
+  searchParams: Promise<{ error?: string }>;
 }
 
-export default function AdminLoginPage({ searchParams }: AdminLoginPageProps) {
+export default function AdminLoginPage(props: AdminLoginPageProps) {
+  const searchParams = use(props.searchParams);
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -180,6 +181,8 @@ export default function AdminLoginPage({ searchParams }: AdminLoginPageProps) {
             /* 別アプリ側の有効なセッションを保ったまま案内する。
                「別のアカウントでログイン」を押したときだけサインアウトする。 */
             <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+              {/* Full navigation discards the prior authentication/error router state. */}
+              {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
               <a href="/inventory" className="font-bold underline">
                 在庫管理へ戻る
               </a>
@@ -235,6 +238,8 @@ export default function AdminLoginPage({ searchParams }: AdminLoginPageProps) {
             /* 別アプリ側の有効なセッションを保ったまま案内する。
                「別のアカウントでログイン」を押したときだけサインアウトする。 */
             <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+              {/* Full navigation discards the prior authentication/error router state. */}
+              {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
               <a href="/inventory" className="font-bold underline">
                 在庫管理へ戻る
               </a>

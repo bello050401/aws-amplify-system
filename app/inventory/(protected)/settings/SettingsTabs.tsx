@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
@@ -236,9 +238,9 @@ export function SettingsTabs({
         {tab === "pricing" && isAdmin && (
           <div className="text-[13px] text-gray-600">
             <p>自動値下げルールの管理は「EC出品」画面へ移動しました。</p>
-            <a href="/inventory/listings/pricing-rules" className="mt-2 inline-block text-blue-700 underline">
+            <Link prefetch={false} href="/inventory/listings/pricing-rules" className="mt-2 inline-block text-blue-700 underline">
               自動値下げルール管理画面を開く →
-            </a>
+            </Link>
           </div>
         )}
         {tab === "shipping" && isAdmin && <ShippingRatePanel />}
