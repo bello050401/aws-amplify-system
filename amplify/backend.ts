@@ -558,7 +558,11 @@ inventoryResource.addPropertyOverride('globalSecondaryIndexes.6', {
 if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {
   new ManagedPolicy(inventoryTable, 'CompactSearchRead', {
     roles: [Role.fromRoleName(inventoryTable, 'CompactSearchWebRuntime', 'BelloAmplifyStagingComputeRole')],
-    statements: [new PolicyStatement({actions: ['dynamodb:Scan'], resources: [inventoryTable.tableArn + '/index/' + COMPACT_SEARCH_INDEX]})],
+    statements: [
+      new PolicyStatement({actions: ['dynamodb:Scan'], resources: [inventoryTable.tableArn + '/index/' + COMPACT_SEARCH_INDEX]}),
+      // EC overview reads only explicitly linked stock IDs, in one batch instead of per-row requests.
+      new PolicyStatement({actions: ['dynamodb:BatchGetItem'], resources: [inventoryTable.tableArn]}),
+    ],
   });
 }
 
