@@ -2,7 +2,7 @@ import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {mergedInventoryTarget} from "@/lib/outbound/mergeInventory";
 import {unconvertedZaicoValues} from "@/lib/zaico/transition/rawValues";
 import {categoryLabels} from "@/lib/inventory/categories";
-import { getShippingReferencePriceForInventory, type GetShippingReferencePriceResult } from "@/lib/shipping/service";
+import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { ShippingReferencePriceSection } from "./listing/ShippingReferencePriceSection";
 import Link from "next/link";
 import SoldOutButton from './SoldOutButton';
@@ -108,10 +108,6 @@ function formatItemTypeAndQuantity(itemType: string | null, quantity: number | n
  * グリッド列幅を明示的に380pxへ戻すことで指示書の「以前の画像領域を
  * 基準に戻す」を数値としても満たす。
  */
-async function DeferredShippingReference({inventoryId, result}: {inventoryId: string; result: Promise<GetShippingReferencePriceResult | null>}) {
-  return <ShippingReferencePriceSection inventoryId={inventoryId} initialResult={await result} />;
-}
-
 export default async function InventoryDetailPage({
   params,
   searchParams,
@@ -149,9 +145,6 @@ export default async function InventoryDetailPage({
   }
   const [item, statuses, fieldDefs, photoAssetsResult, activeCategories, activeLocations] = initialRead;
   if (!item) notFound();
-  // Auxiliary rate calculations must not hold the actual inventory controls.
-  // Start now, stream just this section when complete, and reuse the same item.
-  const shippingReference = getShippingReferencePriceForInventory(item).catch(() => null);
   const photoAssets = photoAssetsResult.ok ? photoAssetsResult.value.assets : [];
   const normalPhotoAssets = photoAssets
     .filter((asset) => asset.inventoryImageType !== "DAMAGE")
@@ -166,13 +159,14 @@ export default async function InventoryDetailPage({
     relatedRead = await Promise.all([
       item.categoryId && !activeCategories.some(category => category.id === item.categoryId) ? listCategories(item.categoryId) : activeCategories,
       item.locationId && !activeLocations.some(location => location.id === item.locationId) ? listLocations(item.locationId) : activeLocations,
+      getShippingReferencePriceForInventory(item).catch(() => null),
       signInventoryPreviews(item.images),
     ] as const);
   } catch (error) {
     if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
     throw error;
   }
-  const [categories, locations, previewUrls] = relatedRead;
+  const [categories, locations, shippingReference, previewUrls] = relatedRead;
 
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;
   const status = item.statusId ? statuses.find((s) => s.id === item.statusId) : undefined;
@@ -365,9 +359,7 @@ export default async function InventoryDetailPage({
               <p className="mb-2 text-xs text-gray-600">数値・日付として扱えない値を、そのまま保持しています。</p>
               <DetailInfoTable rows={unconvertedZaicoValues(item.customFields).map(v=>({label:v.name,value:v.value}))}/>
             </DetailSection>}
-            <Suspense fallback={<p role="status" className="mt-4 text-xs text-gray-500">送料参考額を確認中…</p>}>
-              <DeferredShippingReference key={item.id} inventoryId={item.id} result={shippingReference} />
-            </Suspense>
+            <ShippingReferencePriceSection key={item.id} inventoryId={item.id} initialResult={shippingReference} />
 
             {/* 販売情報 / サイズ情報 / コンディション — レジストリ駆動、
                 並び順・ラベル・型・単位の定義はextendedFields.tsの1箇所
