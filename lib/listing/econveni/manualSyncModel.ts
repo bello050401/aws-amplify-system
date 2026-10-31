@@ -35,7 +35,9 @@ export function titleSimilarity(left:string,right:string):number {
 export function observedChannel(product:ExternalProduct|null,channel:EcChannel,link:ManualLink,checkedAt:string):EcChannelState {
  const baseline=link.baseline[channel],current=product?.channels[channel];
  const id=current?.listingId??baseline.listingId,url=current?.listingUrl??baseline.listingUrl;
- const note=!product?'eコンビニで商品を確認できません。削除・停止とは断定していません。':current?.state==='EXCLUDED'?'eコンビニで「対象外」です。出品停止とは異なります。':current?.state==='INACTIVE'&&!current.listingId&&baseline.listingId?'eコンビニは「未」。出品番号が外れているため、実ECの停止を確認してください。':undefined;
+ // 「未」は観測された通常状態。削除・停止の成功証明とは区別し、失敗扱いにしない。
+ // 未確認の停止命令は overlayManualStops が別途 ERROR として維持する。
+ const note=!product?'eコンビニで商品を確認できません。削除・停止とは断定していません。':current?.state==='EXCLUDED'?'eコンビニで「対象外」です。出品停止とは異なります。':undefined;
  return {state:note?'ERROR':current?.state==='ACTIVE'?'ACTIVE':current?.listingId?'STOPPED':'UNLISTED',externalId:id,url,checkedAt,note,source:'ECONVENI'};
 }
 /** Observations cannot overwrite a newer BELLO command, or an unresolved send. */

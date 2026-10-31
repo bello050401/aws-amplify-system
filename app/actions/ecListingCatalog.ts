@@ -4,6 +4,8 @@ import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {readEconveniCatalog} from '@/lib/listing/econveni/runtimeStore';
 import {readManualSync} from '@/lib/listing/econveni/manualSync';
 import {overlayManualStatuses} from '@/lib/listing/econveni/manualSyncModel';
+import {remoteOverview,soldListingReferences} from '@/lib/listing/econveni/overviewCatalog';
+import type {EconveniWorkflow} from '@/lib/listing/econveni/workflowStore';
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { EcCatalog, EcChannelState, EcState } from "@/lib/listing/ecManagement";
 
@@ -123,8 +125,10 @@ export async function getEcListingCatalogAction(inventoryId?:string): Promise<Ec
       .filter((r) => r.deletedAt && !active.has(r.inventoryId))
       .map((r) => r.inventoryId);
   } else catalog.errors.push("EC商品情報の削除状態を取得できませんでした。");
+  let workflows:EconveniWorkflow[]=[];
   try{
-    for(const row of await readEconveniCatalog(inventoryId)){
+    workflows=await readEconveniCatalog(inventoryId);
+    for(const row of workflows){
       for(const channel of ['YAHOO','MERCARI_SHOPS'] as const){
         const c=row.channels[channel];
         const state:EcState=['PENDING','VERIFY_REQUIRED'].includes(c.state)||['PENDING','VERIFY_REQUIRED'].includes(row.save.state)?'ERROR':c.remoteStatus==='ACTIVE'?'ACTIVE':c.remoteStatus==='INACTIVE'?'STOPPED':'DRAFT';
@@ -136,7 +140,22 @@ export async function getEcListingCatalogAction(inventoryId?:string): Promise<Ec
     delete catalog.channels.YAHOO;delete catalog.channels.MERCARI_SHOPS;
     catalog.errors.push('eコンビニの保存・出品情報を取得できませんでした。再読み込みしてください。');
   }
-  try {const manual=await readManualSync(inventoryId);overlayManualStatuses(catalog,manual);await overlayManualStops(catalog,manual,inventoryId);}
+  try {const manual=await readManualSync(inventoryId);
+    // Existing product-save bindings also take part in the same read-only observation.
+    const links=[...manual.links];
+    for(const workflow of workflows){
+      const product=manual.snapshot?.products.find(p=>p.productId===workflow.save.productId);
+      if(!product||links.some(l=>l.inventoryId===workflow.inventoryId))continue;
+      links.push({inventoryId:workflow.inventoryId,productId:product.productId,inventoryName:product.title,remoteTitle:product.title,
+        linkedAt:workflow.updatedAt,actor:'',baseline:product.channels,revision:workflow.revision});
+    }
+    overlayManualStatuses(catalog,{...manual,links});await overlayManualStops(catalog,manual,inventoryId);
+    if(!inventoryId){
+      const [remote,sold]=await Promise.allSettled([remoteOverview(manual,workflows),soldListingReferences()]);
+      if(remote.status==='fulfilled')catalog.econveni=remote.value;else catalog.errors.push('eコンビニ一覧の在庫情報を読み込めませんでした。再読込してください。');
+      if(sold.status==='fulfilled')catalog.soldListings=sold.value;else catalog.errors.push('売却先の確認情報を読み込めませんでした。操作前に売却管理を確認してください。');
+    }
+  }
   catch {catalog.errors.push('eコンビニの手動連携情報を取得できませんでした。状態を再確認してください。');}
   return catalog;
 }

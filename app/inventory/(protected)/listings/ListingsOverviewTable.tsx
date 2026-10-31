@@ -1,9 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  listListingsOverviewSafeAction,
-} from "@/app/actions/listing";
+import { listListingsOverviewSafeAction } from "@/app/actions/listing";
 import { getEcListingCatalogAction } from "@/app/actions/ecListingCatalog";
 import type { ListingOverviewRow } from "@/lib/listing/service";
 import type { ListingsOverviewLoadOutcome } from "@/lib/listing/overviewFailure";
@@ -16,33 +14,47 @@ import {
   EC_CHANNELS,
   EC_CHANNEL_LABEL,
   EC_STATE_LABEL,
-  ecStateFor,
   retainVisibleSelection,
   type EcCatalog,
   type EcChannel,
   type EcState,
   type EcOperation,
 } from "@/lib/listing/ecManagement";
+import {
+  overviewItems,
+  overviewChannel,
+  isProtectedSale,
+  isSoldInventory,
+  matchesListingState,
+  categoryMatches,
+  type ListingStateFilter,
+} from "@/lib/listing/overviewCatalogModel";
 import { formatJstDateTime } from "@/lib/inventory/formatJst";
 import { InventoryThumbnail } from "../../InventoryThumbnail";
 import { usePrimaryPhotoThumbnails } from "../../usePrimaryPhotoThumbnails";
 import { resolveListPhotoUrl } from "@/lib/photoRegistration/gallerySelection";
-import {compareEcOverview,ecOverviewPrice,type EcSortKey} from "@/lib/listing/overviewPresentation";
+import {
+  compareEcOverview,
+  ecOverviewPrice,
+  type EcSortKey,
+} from "@/lib/listing/overviewPresentation";
 import { EcBulkDialog, type EcDialogAction } from "./EcBulkDialog";
-import {EconveniManualDialog} from './EconveniManualDialog';
-import {econveniManualSyncAction} from '@/app/actions/econveniManualSync';
+import { EconveniManualDialog } from "./EconveniManualDialog";
+import { econveniManualSyncAction } from "@/app/actions/econveniManualSync";
 
 const button =
-  "rounded-md border border-gray-300 bg-white px-3 py-2 text-xs font-medium hover:bg-gray-50 disabled:opacity-40";
+  "inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40";
+const field =
+  "h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800";
 const badge: Record<EcState, string> = {
-  ACTIVE: "bg-emerald-50 text-emerald-700",
-  STOPPED: "bg-red-50 text-red-700",
-  ENDED: "bg-gray-100 text-gray-500",
-  DRAFT: "bg-amber-50 text-amber-700",
-  UNLISTED: "bg-gray-100 text-gray-500",
-  PENDING: "bg-blue-50 text-blue-700",
-  ERROR: "bg-red-50 text-red-700",
-  UNKNOWN: "bg-gray-100 text-gray-500",
+  ACTIVE: "bg-emerald-100 text-emerald-800",
+  STOPPED: "bg-slate-200 text-slate-700",
+  ENDED: "bg-slate-100 text-slate-600",
+  DRAFT: "bg-slate-100 text-slate-600",
+  UNLISTED: "bg-slate-100 text-slate-600",
+  PENDING: "bg-blue-100 text-blue-800",
+  ERROR: "bg-amber-100 text-amber-900",
+  UNKNOWN: "bg-slate-100 text-slate-600",
 };
 const EMPTY: ListingOverviewRow[] = [];
 export function ListingsOverviewTable({
@@ -52,28 +64,33 @@ export function ListingsOverviewTable({
   initialResult: ListingsOverviewLoadOutcome<ListingOverviewRow>;
   canEdit: boolean;
 }) {
-  const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(() =>
-    loadStateFromInitialRows(initialResult),
+  const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(
+    () => loadStateFromInitialRows(initialResult),
   );
   const [catalog, setCatalog] = useState<EcCatalog | null>(null),
     [catalogBusy, setCatalogBusy] = useState(false);
-  const channel: EcChannel = "MERCARI_SHOPS";
+  const [source, setSource] = useState<"ECONVENI" | "BELLO">("ECONVENI");
   const [query, setQuery] = useState(""),
-    [filter, setFilter] = useState<"ALL" | EcState>("ALL");
-  const [direction,setDirection]=useState<"asc"|"desc">("desc");
-  const [categoryFilter,setCategoryFilter]=useState("ALL");
-  const [archived, setArchived] = useState(false);
+    [filter, setFilter] = useState<ListingStateFilter>("ALL"),
+    [filterChannel, setFilterChannel] = useState<EcChannel | "ALL">("ALL");
+  const [categoryFilter, setCategoryFilter] = useState("ALL"),
+    [archived, setArchived] = useState(false);
+  const [sort, setSort] = useState("ECONVENI"),
+    [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(0),
-    [pageSize, setPageSize] = useState(50),
-    [sort, setSort] = useState("updated");
+    [pageSize, setPageSize] = useState(50);
   const [operation, setOperation] = useState<{
-      action: EcDialogAction;
-      items: ListingOverviewRow[];
-    } | null>(null);
+    action: EcDialogAction;
+    items: ListingOverviewRow[];
+  } | null>(null);
+  const [manualOpen, setManualOpen] = useState(false),
+    [selected, setSelected] = useState<Set<string>>(new Set()),
+    [bulkChannel, setBulkChannel] = useState<EcChannel>("BASE");
   const authRetry = useRef(false);
-  const [manualOpen,setManualOpen]=useState(false);
-  const [selected,setSelected]=useState<Set<string>>(new Set()),[bulkChannel,setBulkChannel]=useState<EcChannel>('BASE');
-  useEffect(() => setState(loadStateFromInitialRows(initialResult)), [initialResult]);
+  useEffect(
+    () => setState(loadStateFromInitialRows(initialResult)),
+    [initialResult],
+  );
   async function loadCatalog() {
     setCatalogBusy(true);
     try {
@@ -82,7 +99,7 @@ export function ListingsOverviewTable({
       setCatalog({
         channels: {},
         archivedIds: [],
-        errors: ["販売先の状態を読み込めませんでした。再読込してください。"],
+        errors: ["出品状態を読み込めませんでした。再読込してください。"],
       });
     } finally {
       setCatalogBusy(false);
@@ -93,70 +110,140 @@ export function ListingsOverviewTable({
   }, []);
   async function reload() {
     setState({ kind: "retrying" });
-    await loadCatalog();
-    try {
-      setState(loadStateFromInitialRows(await listListingsOverviewSafeAction()));
-    } catch {
-      setState({ kind: "error", failure: { stage: null, kind: "unknown" } });
-    }
+    await Promise.all([
+      loadCatalog(),
+      listListingsOverviewSafeAction()
+        .then((r) => setState(loadStateFromInitialRows(r)))
+        .catch(() =>
+          setState({
+            kind: "error",
+            failure: { stage: null, kind: "unknown" },
+          }),
+        ),
+    ]);
   }
   useEffect(() => {
-    if (state.kind === "error" && state.failure.kind === "auth-expired" && !authRetry.current) {
+    if (
+      state.kind === "error" &&
+      state.failure.kind === "auth-expired" &&
+      !authRetry.current
+    ) {
       authRetry.current = true;
       void reload();
     }
   }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = state.kind === "ok" ? state.rows : EMPTY;
+  const all = useMemo(
+    () => overviewItems(rows, catalog, source),
+    [rows, catalog, source],
+  );
   const filtered = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase("ja-JP");
-    return rows
-      .filter((row) => !!row.archived === archived)
-      .filter(row => categoryFilter === "ALL" || row.categories?.includes(categoryFilter))
+    const q = query.normalize("NFKC").trim().toLocaleLowerCase("ja-JP");
+    const result = all
       .filter(
-        (row) =>
-          filter === "ALL" || EC_CHANNELS.some(c=>ecStateFor(catalog,c,row.inventoryId,row.hasDraft).state===filter),
+        (item) => source === "ECONVENI" || !!item.row?.archived === archived,
+      )
+      .filter((item) => categoryMatches(item.row, categoryFilter))
+      .filter((item) =>
+        matchesListingState(item, catalog, filterChannel, filter),
       )
       .filter(
-        (row) =>
+        (item) =>
           !q ||
           [
-            row.name,
-            row.displayId,
-            ...EC_CHANNELS.map((c) => ecStateFor(catalog, c, row.inventoryId, row.hasDraft).externalId ?? ""),
-          ].some((s) => s.toLocaleLowerCase("ja-JP").includes(q)),
-      )
-      .sort((a,b)=>compareEcOverview(a,b,sort as EcSortKey,direction));
-  }, [rows, catalog, query, filter, sort, archived,categoryFilter,direction]);
-  useEffect(()=>setSelected(s=>retainVisibleSelection(s,filtered.map(r=>r.inventoryId))),[filtered]);
+            item.row?.name,
+            item.row?.displayId,
+            item.remote?.title,
+            item.remote?.productId,
+            ...EC_CHANNELS.map(
+              (c) => overviewChannel(item, catalog, c).externalId,
+            ),
+          ].some((v) =>
+            v?.normalize("NFKC").toLocaleLowerCase("ja-JP").includes(q),
+          ),
+      );
+    if (sort !== "ECONVENI")
+      result.sort((a, b) =>
+        a.row && b.row
+          ? compareEcOverview(a.row, b.row, sort as EcSortKey, direction)
+          : a.row
+            ? -1
+            : b.row
+              ? 1
+              : 0,
+      );
+    return result;
+  }, [
+    all,
+    source,
+    archived,
+    query,
+    categoryFilter,
+    catalog,
+    filterChannel,
+    filter,
+    sort,
+    direction,
+  ]);
+  useEffect(
+    () =>
+      setSelected((s) =>
+        retainVisibleSelection(
+          s,
+          filtered.flatMap((i) => (i.row ? [i.row.inventoryId] : [])),
+        ),
+      ),
+    [filtered],
+  );
   useEffect(() => {
     setPage(0);
-  }, [query, filter, archived, pageSize, sort,categoryFilter,direction]);
+    setSelected(new Set());
+  }, [
+    query,
+    filter,
+    filterChannel,
+    source,
+    archived,
+    pageSize,
+    sort,
+    categoryFilter,
+    direction,
+  ]);
   const pagination = paginate(filtered, page, pageSize),
-    pageRows = pagination.pageRows;
-  const photoThumbnails = usePrimaryPhotoThumbnails(pageRows.map(row => row.inventoryId));
-  function open(kind: EcOperation, items: ListingOverviewRow[], target = channel) {
-    setOperation({ action: { kind, channel: target }, items });
+    pageItems = pagination.pageRows;
+  const photoThumbnails = usePrimaryPhotoThumbnails(
+    pageItems.flatMap((i) => (i.row ? [i.row.inventoryId] : [])),
+  );
+  const checkedRows = filtered.flatMap((i) =>
+    i.row && selected.has(i.row.inventoryId) ? [i.row] : [],
+  );
+  const selectable = pageItems.flatMap((i) => (i.row ? [i.row] : []));
+  const actionsReady = !!catalog && !catalogBusy && !catalog.errors.length;
+  function open(
+    kind: EcOperation,
+    items: ListingOverviewRow[],
+    channel: EcChannel = "MERCARI_SHOPS",
+  ) {
+    setOperation({ action: { kind, channel }, items });
   }
   if (state.kind !== "ok")
     return (
-      <div className="rounded-lg border p-5 text-sm" role="status">
+      <div className="rounded-xl border bg-white p-6" role="status">
         {state.kind === "retrying" ? (
           "商品一覧を読み込み中…"
         ) : (
           <>
             <p>
               {state.failure.kind === "auth-expired"
-                ? "認証の有効期限が切れている可能性があります。再接続してください。"
-                : state.failure.kind === "auth-forbidden"
-                  ? "この一覧を表示する権限が確認できませんでした。"
-                  : "EC出品一覧を読み込めませんでした。"}
+                ? "ログイン状態を確認してください。"
+                : "商品一覧を読み込めませんでした。"}
             </p>
-            <button type="button" onClick={() => void reload()} className={button + " mt-3"}>
+            <button className={button + " mt-4"} onClick={() => void reload()}>
               再読込
             </button>
             {state.failure.kind === "auth-expired" && (
-              <Link className="ml-3 text-blue-700 underline" href="/inventory/login">
-                ログイン画面へ
+              <Link className="ml-4 underline" href="/inventory/login">
+                ログインへ
               </Link>
             )}
           </>
@@ -164,240 +251,652 @@ export function ListingsOverviewTable({
       </div>
     );
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto max-w-[1600px] space-y-4 text-slate-800">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="font-bold text-gray-900">商品一覧</h2>
-          <p className="mt-1 text-xs text-gray-500">共通の商品情報を保存したら、共通動作から各販売先へまとめて出品できます。停止・更新は各販売先の欄から操作してください。</p>
+          <h2 className="text-xl font-bold">EC商品一覧</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            商品の状態を確認して、販売先ごとに操作できます。
+          </p>
         </div>
         <div className="flex gap-2">
-          {canEdit&&<button className={button+' border-blue-300 text-blue-700'} onClick={()=>setManualOpen(true)}>eコンビニ連携</button>}
+          {canEdit && (
+            <button className={button} onClick={() => setManualOpen(true)}>
+              eコンビニ連携
+            </button>
+          )}
           <button
             className={button}
-            type="button"
             disabled={catalogBusy}
             onClick={() => void reload()}
           >
-            再読込
+            {catalogBusy ? "読込中…" : "再読込"}
           </button>
           <Link href="/inventory/settings?tab=ecListing" className={button}>
-            ⚙ 出品設定
+            出品設定
           </Link>
         </div>
       </div>
-      <div className="my-3 flex flex-wrap gap-2" aria-label="作業状態で絞り込み">{["ALL","補修待ち","撮影待ち","出品待ち"].map(c=><button key={c} type="button" aria-pressed={categoryFilter===c} onClick={()=>setCategoryFilter(c)} className={button+(categoryFilter===c?" border-blue-600 bg-blue-50 text-blue-800":"")}>{c==="ALL"?"すべて":c}</button>)}</div>
-      <div className="my-3 flex flex-wrap items-center gap-2">
+      <div
+        className="flex items-center gap-6 border-b border-slate-200"
+        aria-label="一覧の対象"
+      >
+        {(["ECONVENI", "BELLO"] as const).map((s) => (
+          <button
+            key={s}
+            className={
+              "border-b-2 px-1 pb-3 text-sm font-semibold " +
+              (source === s
+                ? "border-teal-800 text-teal-900"
+                : "border-transparent text-slate-500")
+            }
+            aria-pressed={source === s}
+            onClick={() => {
+              setSource(s);
+              setArchived(false);
+              setSort(s === "ECONVENI" ? "ECONVENI" : "updated");
+              setCategoryFilter("ALL");
+            }}
+          >
+            {s === "ECONVENI" ? "eコンビニの商品" : "BELLOの商品"}
+            <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs">
+              {s === "ECONVENI"
+                ? (catalog?.econveni?.products.length ?? "—")
+                : rows.filter((r) => !r.archived).length}
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
         <input
+          className={field + " w-full"}
           aria-label="商品を検索"
+          placeholder="商品名・管理番号で検索"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="商品名・管理番号・出品番号を検索"
-          className="min-w-48 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm"
         />
-        <select
-          aria-label="出品状態"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value as typeof filter)}
-          className={button}
+        <div
+          className="flex flex-wrap items-center gap-2"
+          aria-label="BELLOカテゴリで絞り込み"
         >
-          <option value="ALL">すべての出品状態</option>
-          {Object.entries(EC_STATE_LABEL).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
+          <span className="mr-2 text-xs font-semibold text-slate-500">
+            在庫カテゴリ
+          </span>
+          {[
+            "ALL",
+            "補修待ち",
+            "撮影待ち",
+            "出品待ち",
+            "販売中",
+            "売り切れ",
+            ...(source === "ECONVENI" ? ["UNLINKED"] : []),
+          ].map((c) => (
+            <button
+              key={c}
+              className={
+                "rounded-full border px-3 py-1.5 text-sm " +
+                (categoryFilter === c
+                  ? "border-teal-800 bg-teal-800 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50")
+              }
+              aria-pressed={categoryFilter === c}
+              onClick={() => setCategoryFilter(c)}
+            >
+              {c === "ALL" ? "すべて" : c === "UNLINKED" ? "未連携" : c}
+            </button>
           ))}
-        </select>
-        <select aria-label="並び順" value={sort} onChange={(e) => setSort(e.target.value)} className={button}>
-          <option value="updated">更新日時</option>
-          <option value="created">登録日時</option>
-          <option value="name">商品名順</option>
-          <option value="quantity">数量</option>
-          <option value="price">単価</option>
-          <option value="MERCARI_SHOPS">メルカリShopsの価格</option>
-          <option value="YAHOO">ヤフオクの価格</option>
-          <option value="BASE">BASEの価格</option>
-        </select>
-        <button type="button" aria-label="昇順・降順を切り替え" className={button} onClick={()=>setDirection(d=>d==='desc'?'asc':'desc')}>{direction==='desc'?'↓ 降順（新しい・高い順）':'↑ 昇順（古い・安い順）'}</button>
+        </div>
+        <div className="flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
+          <label className="text-xs text-slate-500">
+            販売先
+            <select
+              className={field + " mt-1 block"}
+              aria-label="絞り込む販売先"
+              value={filterChannel}
+              onChange={(e) =>
+                setFilterChannel(e.target.value as EcChannel | "ALL")
+              }
+            >
+              <option value="ALL">すべての販売先</option>
+              {EC_CHANNELS.map((c) => (
+                <option key={c} value={c}>
+                  {EC_CHANNEL_LABEL[c]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-slate-500">
+            ECの出品状態
+            <select
+              className={field + " mt-1 block"}
+              aria-label="ECの出品状態"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as ListingStateFilter)}
+            >
+              <option value="ALL">すべて</option>
+              <option value="ACTIVE">
+                {filterChannel === "ALL" ? "いずれかで出品中" : "出品中"}
+              </option>
+              <option value="INACTIVE">
+                {filterChannel === "ALL"
+                  ? "全販売先で出品なし"
+                  : "出品なし（停止・未出品・終了）"}
+              </option>
+              <option value="ATTENTION">確認が必要</option>
+            </select>
+          </label>
+          <label className="ml-auto text-xs text-slate-500">
+            並び順
+            <select
+              className={field + " mt-1 block"}
+              aria-label="並び順"
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+            >
+              {source === "ECONVENI" && (
+                <option value="ECONVENI">eコンビニと同じ順</option>
+              )}
+              <option value="updated">更新日時</option>
+              <option value="created">登録日時</option>
+              <option value="name">商品名</option>
+              <option value="quantity">在庫数</option>
+              <option value="price">基準価格</option>
+              {EC_CHANNELS.map((c) => (
+                <option key={c} value={c}>
+                  {EC_CHANNEL_LABEL[c]}の価格
+                </option>
+              ))}
+            </select>
+          </label>
+          {sort !== "ECONVENI" && (
+            <button
+              className={button + " h-10"}
+              aria-label="昇順・降順を切り替え"
+              onClick={() =>
+                setDirection((d) => (d === "desc" ? "asc" : "desc"))
+              }
+            >
+              {direction === "desc" ? "↓ 降順" : "↑ 昇順"}
+            </button>
+          )}
+        </div>
       </div>
       {catalog?.errors.map((e) => (
-        <p key={e} role="alert" className="mb-2 text-xs text-red-700">
+        <p
+          key={e}
+          role="alert"
+          className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900"
+        >
           {e}
         </p>
       ))}
-      <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-gray-600">
-        <span>{filtered.length.toLocaleString()}件</span>
-        <span>
-          {catalogBusy ? "出品状態を読み込み中…" : "保存済みの出品状態を表示 · 実行時に販売先を再確認"}
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        <strong>{filtered.length.toLocaleString()}件</strong>
+        <span className="text-xs text-slate-500">
+          {catalogBusy
+            ? "出品状態を読み込み中…"
+            : catalog?.econveni
+              ? "eコンビニ 最終取得 " +
+                formatJstDateTime(catalog.econveni.checkedAt)
+              : "保存済みの出品状態"}
         </span>
-        <button
-          type="button"
-          className="ml-auto underline"
-          onClick={() => {
-            setArchived((v) => !v);
-          }}
-        >
-          {archived ? "通常の商品一覧へ" : "削除済み"}
-        </button>
-        <select
-          aria-label="1ページの表示件数"
-          className="rounded border bg-white px-2 py-1"
-          value={pageSize}
-          onChange={(e) => setPageSize(Number(e.target.value))}
-        >
-          {[25, 50, 100, 200].map((n) => (
-            <option key={n} value={n}>
-              {n}件表示
-            </option>
-          ))}
-        </select>
+        <div className="ml-auto flex items-center gap-3">
+          {source === "BELLO" && (
+            <button
+              className="text-xs text-slate-500 underline"
+              onClick={() => setArchived((v) => !v)}
+            >
+              {archived ? "通常の商品へ" : "削除済み"}
+            </button>
+          )}
+          <select
+            className={field}
+            aria-label="1ページの表示件数"
+            value={pageSize}
+            onChange={(e) => setPageSize(Number(e.target.value))}
+          >
+            {[25, 50, 100, 200].map((n) => (
+              <option key={n} value={n}>
+                {n}件表示
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
-      {canEdit&&!archived&&<div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3" aria-label="選択商品の一括操作"><strong className="text-sm">{selected.size}件 選択中</strong><button className={button} disabled={!selected.size} onClick={()=>setSelected(new Set())}>選択解除</button><label className="text-sm">販売先 <select className="ml-2 rounded border bg-white px-3 py-2" value={bulkChannel} onChange={e=>setBulkChannel(e.target.value as EcChannel)}>{EC_CHANNELS.map(c=><option key={c} value={c}>{EC_CHANNEL_LABEL[c]}</option>)}</select></label><button className={button} disabled={!selected.size||selected.size>10||catalogBusy} onClick={()=>open('PUBLISH',filtered.filter(r=>selected.has(r.inventoryId)),bulkChannel)}>選択商品を出品</button><button className={button} disabled={!selected.size||selected.size>10||catalogBusy} onClick={()=>open('STOP',filtered.filter(r=>selected.has(r.inventoryId)),bulkChannel)}>選択商品の出品を停止</button><span className="text-xs text-slate-500">1回10商品まで。対象と販売先を確認してから実行します。</span></div>}
-      <div className="overflow-x-auto rounded-lg border border-gray-200">
-        <table className="w-full border-collapse text-sm md:min-w-[850px]">
-          <thead className="bg-gray-50 text-xs text-gray-600">
+      {canEdit && selected.size > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-3 rounded-xl border border-teal-200 bg-teal-50 p-3"
+          aria-label="選択商品の一括操作"
+        >
+          <strong>{selected.size}件 選択中</strong>
+          <button className={button} onClick={() => setSelected(new Set())}>
+            選択解除
+          </button>
+          <label className="text-sm">
+            操作する販売先{" "}
+            <select
+              className={field}
+              value={bulkChannel}
+              onChange={(e) => setBulkChannel(e.target.value as EcChannel)}
+            >
+              {EC_CHANNELS.map((c) => (
+                <option key={c} value={c}>
+                  {EC_CHANNEL_LABEL[c]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className={button}
+            disabled={
+              selected.size > 10 ||
+              !actionsReady ||
+              checkedRows.some((r) => isSoldInventory(r) || r.quantity < 1) ||
+              filtered.some(
+                (i) =>
+                  i.row &&
+                  selected.has(i.row.inventoryId) &&
+                  isProtectedSale(i, catalog, bulkChannel),
+              )
+            }
+            onClick={() => open("PUBLISH", checkedRows, bulkChannel)}
+          >
+            出品
+          </button>
+          <button
+            className={button}
+            disabled={
+              selected.size > 10 ||
+              !actionsReady ||
+              filtered.some(
+                (i) =>
+                  i.row &&
+                  selected.has(i.row.inventoryId) &&
+                  isProtectedSale(i, catalog, bulkChannel),
+              )
+            }
+            onClick={() => open("STOP", checkedRows, bulkChannel)}
+          >
+            出品を停止
+          </button>
+          <span className="text-xs text-slate-500">
+            1回10件まで・実行前に確認
+          </span>
+        </div>
+      )}
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full min-w-[1120px] table-fixed border-collapse text-sm">
+          <colgroup>
+            {canEdit && !archived && <col className="w-10" />}
+            <col />
+            <col className="w-[110px]" />
+            <col className="w-[110px]" />
+            {EC_CHANNELS.map((c) => (
+              <col key={c} className="w-[180px]" />
+            ))}
+          </colgroup>
+          <thead className="border-b bg-slate-50 text-xs text-slate-500">
             <tr>
-              {canEdit&&!archived&&<th className="w-10 px-3 py-3"><input type="checkbox" aria-label="このページの商品をすべて選択" checked={pageRows.length>0&&pageRows.every(r=>selected.has(r.inventoryId))} onChange={e=>setSelected(s=>{const n=new Set(s);pageRows.forEach(r=>e.target.checked?n.add(r.inventoryId):n.delete(r.inventoryId));return n;})}/></th>}
-              <th className="px-3 py-3 text-left">商品</th>
-              <th className="hidden px-3 py-3 text-right md:table-cell">数量</th>
-              <th className="hidden px-3 py-3 text-right md:table-cell">単価</th>
-              <th className="w-40 px-3 py-3 text-left">共通動作</th>
+              {canEdit && !archived && (
+                <th className="px-3 py-3">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4"
+                    aria-label="このページの商品をすべて選択"
+                    checked={
+                      selectable.length > 0 &&
+                      selectable.every((r) => selected.has(r.inventoryId))
+                    }
+                    disabled={!selectable.length}
+                    onChange={(e) =>
+                      setSelected((s) => {
+                        const n = new Set(s);
+                        selectable.forEach((r) =>
+                          e.target.checked
+                            ? n.add(r.inventoryId)
+                            : n.delete(r.inventoryId),
+                        );
+                        return n;
+                      })
+                    }
+                  />
+                </th>
+              )}
+              <th className="px-4 py-3 text-left">商品</th>
+              <th className="px-3 py-3 text-right">在庫・基準価格</th>
+              <th className="px-2 py-3 text-center">共通動作</th>
               {EC_CHANNELS.map((c) => (
                 <th
                   key={c}
-                  className="w-36 px-3 py-3 text-left"
+                  className="border-l border-slate-200 px-4 py-3 text-left"
                 >
                   {EC_CHANNEL_LABEL[c]}
                 </th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
-            {pageRows.map((row) => (
-              <tr
-                key={row.inventoryId}
-                className={selected.has(row.inventoryId)?'bg-slate-50':'hover:bg-gray-50/70'}
-              >
-                {canEdit&&!archived&&<td className="px-3 py-3"><input type="checkbox" aria-label={`${row.name}を一括操作の対象に選択`} checked={selected.has(row.inventoryId)} onChange={e=>setSelected(s=>{const n=new Set(s);if(e.target.checked)n.add(row.inventoryId);else n.delete(row.inventoryId);return n;})}/></td>}
-                <td className="px-2 py-3 md:px-3">
-                  <div className="flex min-w-0 max-w-xl items-start gap-2 md:min-w-64 md:items-center md:gap-3">
-                    <div className="h-10 w-10 shrink-0 overflow-hidden rounded bg-gray-100 md:h-14 md:w-14">
-                      <InventoryThumbnail
-                        storageKey={row.thumbnailKey}
-                        directUrl={resolveListPhotoUrl(row.thumbnailIsPrimary === true, photoThumbnails[row.inventoryId])}
-                        alt={row.name}
-                      />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="mb-1 flex flex-wrap gap-1">{row.categories?.map(c=><span key={c} className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{c}</span>)}</div>
-                      <Link
-                        href={`/inventory/${row.inventoryId}/listing`}
-                        className="line-clamp-2 font-medium leading-5 text-gray-900 hover:text-blue-700"
-                      >
-                        {row.name}
-                      </Link>
-                      <p className="mt-1 text-xs text-gray-600 md:hidden">
-                        数量 {row.quantity} ·{" "}
-                        {row.price != null ? `単価 ${row.price.toLocaleString()}円` : "単価未設定"}
-                      </p>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 whitespace-nowrap text-[11px] text-gray-400">
-                        <span className="hidden md:inline">{row.displayId}</span>
-                        <span className="hidden md:inline">{sort==='created'?'登録':'更新'} {formatJstDateTime(sort==='created'?row.inventoryCreatedAt:row.inventoryUpdatedAt)}</span>
-                        <Link className="text-blue-700" href={`/inventory/${row.inventoryId}/listing`}>
-                          編集
-                        </Link>
-                        {canEdit && (
-                          <button
-                            type="button"
-                            className="px-1 py-1 text-red-700 hover:underline"
-                            onClick={() => open(archived ? "RESTORE" : "ARCHIVE", [row])}
-                          >
-                            {archived ? "復元" : "削除"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </td>
-                <td className="hidden px-3 py-3 text-right tabular-nums md:table-cell">{row.quantity}</td>
-                <td className="hidden whitespace-nowrap px-3 py-3 text-right tabular-nums md:table-cell">
-                  {row.price != null ? `${row.price.toLocaleString()}円` : "—"}
-                </td>
-                <td className="px-3 py-3">
+          <tbody className="divide-y divide-slate-200">
+            {pageItems.map((item) => {
+              const row = item.row,
+                title = item.remote?.title ?? row?.name ?? "",
+                sold = isSoldInventory(row),
+                available = sold ? 0 : row?.quantity;
+              return (
+                <tr
+                  key={item.key}
+                  className={
+                    row && selected.has(row.inventoryId)
+                      ? "bg-teal-50/40"
+                      : "hover:bg-slate-50/50"
+                  }
+                >
                   {canEdit && !archived && (
-                    <button
-                      type="button"
-                      disabled={catalogBusy || !catalog}
-                      className={button}
-                      aria-label={`${row.name}の全販売先を出品`}
-                      onClick={() => setOperation({ action: { kind: "COMMON_PUBLISH" }, items: [row] })}
-                    >
-                      出品
-                    </button>
+                    <td className="px-3 py-4 align-top">
+                      <input
+                        className="mt-1 h-4 w-4"
+                        type="checkbox"
+                        aria-label={title + "を一括操作の対象に選択"}
+                        disabled={!row}
+                        checked={!!row && selected.has(row.inventoryId)}
+                        onChange={(e) =>
+                          row &&
+                          setSelected((s) => {
+                            const n = new Set(s);
+                            e.target.checked
+                              ? n.add(row.inventoryId)
+                              : n.delete(row.inventoryId);
+                            return n;
+                          })
+                        }
+                      />
+                    </td>
                   )}
-                </td>
-                {EC_CHANNELS.map((c) => {
-                  const s = ecStateFor(catalog, c, row.inventoryId, row.hasDraft);
-                  return (
-                    <td
-                      key={c}
-                      className="px-3 py-3"
-                    >
-                      <p className="mb-2 whitespace-nowrap font-semibold tabular-nums" title="保存した出品設定の価格">{ecOverviewPrice(row,c)?.toLocaleString('ja-JP') ?? '未設定'}{ecOverviewPrice(row,c)!=null?'円':''}</p>
-                      <span
-                        className={`inline-block rounded px-2 py-1 text-xs font-medium ${badge[s.state]}`}
-                      >
-                        {EC_STATE_LABEL[s.state]}
-                      </span>
-                      {canEdit && !archived && (
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                          <button
-                            type="button"
-                            aria-label={`${row.name}を${EC_CHANNEL_LABEL[c]}に出品`}
-                            disabled={s.state === "ACTIVE" || s.state === "UNKNOWN" || s.state === "PENDING"}
-                            className="rounded border border-blue-200 px-2 py-1 text-blue-700 hover:bg-blue-50 disabled:opacity-30"
-                            onClick={() => open("PUBLISH", [row], c)}
-                          >
-                            出品
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`${row.name}の${EC_CHANNEL_LABEL[c]}出品を停止`}
-                            disabled={!["ACTIVE", "ERROR"].includes(s.state)}
-                            className="rounded border border-gray-300 px-2 py-1 text-gray-600 hover:bg-gray-100 disabled:opacity-30"
-                            onClick={() => open("STOP", [row], c)}
-                          >
-                            停止
-                          </button>
-                          {s.externalId && <button type="button" aria-label={`${row.name}の${EC_CHANNEL_LABEL[c]}商品内容を更新`} className="rounded border px-2 py-1 text-blue-700 disabled:opacity-30" disabled={s.state==="PENDING"||s.state==="UNKNOWN"} onClick={()=>open("UPDATE",[row],c)}>更新</button>}
-                        </div>
-                      )}
-                      {s.externalId && (
-                        <div className="mt-1 max-w-32 truncate text-[10px] text-gray-500">
-                          {s.url ? (
-                            <a href={s.url} target="_blank" rel="noreferrer" className="hover:underline">
-                              {s.externalId} ↗
-                            </a>
-                          ) : (
-                            s.externalId
+                  <td className="px-4 py-5 align-top">
+                    <div className="flex gap-4">
+                      <div className="h-24 w-24 shrink-0 overflow-hidden rounded-lg border border-slate-100 bg-slate-50 [&_img]:!h-full [&_img]:!w-full [&_img]:!object-contain [&_div]:!h-full [&_div]:!w-full">
+                        {item.remote?.imageUrl ? (
+                          <img
+                            src={item.remote.imageUrl}
+                            alt={title}
+                            className="h-full w-full object-contain"
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : row ? (
+                          <InventoryThumbnail
+                            storageKey={row.thumbnailKey}
+                            directUrl={resolveListPhotoUrl(
+                              !!row.thumbnailIsPrimary,
+                              photoThumbnails[row.inventoryId],
+                            )}
+                            alt={title}
+                            size="list"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-2 flex flex-wrap gap-1.5">
+                          {row?.categories?.map((c) => (
+                            <span
+                              key={c}
+                              className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+                            >
+                              {c}
+                            </span>
+                          ))}
+                          {!row && (
+                            <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+                              {item.ambiguous ? "紐付けを確認" : "BELLO未連携"}
+                            </span>
                           )}
                         </div>
-                      )}
-                      {s.source==='ECONVENI'&&<p className="mt-2 text-[10px] text-slate-500">eコンビニ取得<br/>{s.checkedAt?formatJstDateTime(s.checkedAt):''}</p>}
-                      {s.note&&<p className="mt-1 max-w-48 text-xs text-amber-700">{s.note}</p>}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+                        {row ? (
+                          <Link
+                            href={"/inventory/" + row.inventoryId + "/listing"}
+                            className="line-clamp-3 text-base font-semibold leading-6 text-slate-900 hover:underline"
+                          >
+                            {title}
+                          </Link>
+                        ) : (
+                          <p className="line-clamp-3 text-base font-semibold leading-6">
+                            {title}
+                          </p>
+                        )}
+                        <div className="mt-3 flex items-center gap-4 text-xs text-slate-500">
+                          {row ? (
+                            <>
+                              <Link
+                                href={
+                                  "/inventory/" + row.inventoryId + "/listing"
+                                }
+                                className="font-medium text-teal-800 hover:underline"
+                              >
+                                商品を編集
+                              </Link>
+                              <details>
+                                <summary className="cursor-pointer">
+                                  その他
+                                </summary>
+                                <div className="mt-2 space-y-2">
+                                  <p>{row.displayId}</p>
+                                  <p>
+                                    更新{" "}
+                                    {formatJstDateTime(row.inventoryUpdatedAt)}
+                                  </p>
+                                  {item.remote &&
+                                    item.remote.title !== row.name && (
+                                      <p className="whitespace-normal">
+                                        在庫名：{row.name}
+                                      </p>
+                                    )}
+                                  {canEdit && (
+                                    <button
+                                      className="text-red-700 underline"
+                                      onClick={() =>
+                                        open(archived ? "RESTORE" : "ARCHIVE", [
+                                          row,
+                                        ])
+                                      }
+                                    >
+                                      {archived ? "復元" : "一覧から削除"}
+                                    </button>
+                                  )}
+                                </div>
+                              </details>
+                            </>
+                          ) : (
+                            canEdit && (
+                              <button
+                                className={button}
+                                onClick={() => setManualOpen(true)}
+                              >
+                                紐付ける
+                              </button>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-5 text-right align-top">
+                    <p className="text-lg font-semibold tabular-nums">
+                      {row ? available : item.remote?.quantity}
+                      <span className="ml-1 text-xs font-normal text-slate-500">
+                        点
+                      </span>
+                    </p>
+                    {!row && (
+                      <p className="text-[11px] text-slate-500">
+                        eコンビニ数量
+                      </p>
+                    )}
+                    <p className="mt-2 whitespace-nowrap text-sm tabular-nums">
+                      {(row?.price ?? item.remote?.price)?.toLocaleString(
+                        "ja-JP",
+                      ) ?? "—"}
+                      {(row?.price ?? item.remote?.price) != null ? "円" : ""}
+                    </p>
+                  </td>
+                  <td className="px-2 py-5 text-center align-top">
+                    {canEdit &&
+                    row &&
+                    !archived &&
+                    !sold &&
+                    row.quantity > 0 &&
+                    !EC_CHANNELS.some((c) =>
+                      isProtectedSale(item, catalog, c),
+                    ) ? (
+                      <button
+                        className={button + " whitespace-nowrap !px-2 !text-xs"}
+                        disabled={!actionsReady}
+                        onClick={() =>
+                          setOperation({
+                            action: { kind: "COMMON_PUBLISH" },
+                            items: [row],
+                          })
+                        }
+                      >
+                        まとめて出品
+                      </button>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                  {EC_CHANNELS.map((c) => {
+                    const s = overviewChannel(item, catalog, c),
+                      protectedSale = isProtectedSale(item, catalog, c),
+                      price = row ? ecOverviewPrice(row, c) : null;
+                    const label = protectedSale
+                      ? "売却先・保持"
+                      : s.source === "ECONVENI" && s.state === "UNLISTED"
+                        ? "出品なし"
+                        : EC_STATE_LABEL[s.state];
+                    return (
+                      <td
+                        key={c}
+                        className="border-l border-slate-100 px-4 py-5 align-top"
+                      >
+                        <span
+                          className={
+                            "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold " +
+                            (protectedSale
+                              ? "bg-slate-100 text-slate-600"
+                              : badge[s.state])
+                          }
+                        >
+                          <span
+                            className={
+                              "h-1.5 w-1.5 rounded-full " +
+                              (!protectedSale && s.state === "ACTIVE"
+                                ? "bg-emerald-600"
+                                : "bg-current opacity-50")
+                            }
+                          />
+                          {label}
+                        </span>
+                        <p className="mb-3 mt-2 text-base font-semibold tabular-nums">
+                          {price == null
+                            ? "—"
+                            : price.toLocaleString("ja-JP") + "円"}
+                        </p>
+                        {canEdit && row && !archived && !protectedSale && (
+                          <div className="flex flex-wrap gap-2">
+                            {["ACTIVE", "ERROR"].includes(s.state) ? (
+                              <button
+                                className={button + " !px-2.5 !py-1.5 !text-xs"}
+                                disabled={!actionsReady}
+                                onClick={() => open("STOP", [row], c)}
+                              >
+                                出品を停止
+                              </button>
+                            ) : (
+                              !sold &&
+                              row.quantity > 0 &&
+                              !["UNKNOWN", "PENDING"].includes(s.state) && (
+                                <button
+                                  className={
+                                    button +
+                                    " !border-teal-300 !px-2.5 !py-1.5 !text-xs !text-teal-800"
+                                  }
+                                  disabled={!actionsReady}
+                                  onClick={() => open("PUBLISH", [row], c)}
+                                >
+                                  出品
+                                </button>
+                              )
+                            )}
+                          </div>
+                        )}
+                        {(s.url ||
+                          s.note ||
+                          (canEdit &&
+                            row &&
+                            s.externalId &&
+                            !protectedSale)) && (
+                          <details className="mt-3 text-xs text-slate-500">
+                            <summary className="cursor-pointer hover:text-slate-800">
+                              詳細
+                            </summary>
+                            <div className="mt-2 space-y-2">
+                              {s.url && (
+                                <a
+                                  href={s.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block text-teal-800 underline"
+                                >
+                                  商品ページを開く ↗
+                                </a>
+                              )}
+                              {s.note && (
+                                <p
+                                  className={
+                                    "leading-5 " +
+                                    (s.state === "ERROR"
+                                      ? "text-amber-800"
+                                      : "")
+                                  }
+                                >
+                                  {s.note}
+                                </p>
+                              )}
+                              {canEdit &&
+                                row &&
+                                s.externalId &&
+                                !protectedSale && (
+                                  <button
+                                    className={button + " !text-xs"}
+                                    disabled={
+                                      !actionsReady ||
+                                      ["PENDING", "UNKNOWN"].includes(s.state)
+                                    }
+                                    onClick={() => open("UPDATE", [row], c)}
+                                  >
+                                    商品内容を更新
+                                  </button>
+                                )}
+                            </div>
+                          </details>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
-        {!pageRows.length && (
-          <p className="p-8 text-center text-sm text-gray-500">
-            {archived ? "削除済みの商品はありません。" : "該当する商品はありません。"}
+        {!pageItems.length && (
+          <p className="p-10 text-center text-sm text-slate-500">
+            {catalogBusy
+              ? "eコンビニの商品を読み込み中…"
+              : source === "ECONVENI" && !catalog?.econveni
+                ? "eコンビニ連携から商品一覧を取得してください。"
+                : "条件に合う商品はありません。"}
           </p>
         )}
       </div>
-      <div className="mt-3 flex items-center justify-end gap-3 text-sm">
+      <div className="flex items-center justify-end gap-4 text-sm">
         <button
           className={button}
           disabled={pagination.page === 0}
@@ -416,16 +915,40 @@ export function ListingsOverviewTable({
           次へ
         </button>
       </div>
-      {manualOpen&&<EconveniManualDialog rows={rows} run={econveniManualSyncAction} onClose={()=>setManualOpen(false)} onChanged={()=>void loadCatalog()} renderPhoto={row=><div className="h-full w-full [&_img]:!h-full [&_img]:!w-full [&_div]:max-h-full"><InventoryThumbnail storageKey={row.thumbnailKey} directUrl={resolveListPhotoUrl(!!row.thumbnailIsPrimary,photoThumbnails[row.inventoryId])} alt={row.name} size="heroContain"/></div>}/>}
+      {manualOpen && (
+        <EconveniManualDialog
+          rows={rows}
+          run={econveniManualSyncAction}
+          onClose={() => setManualOpen(false)}
+          onChanged={() => void loadCatalog()}
+          renderPhoto={(row) => (
+            <div className="h-full w-full [&_img]:!h-full [&_img]:!w-full [&_div]:max-h-full">
+              <InventoryThumbnail
+                storageKey={row.thumbnailKey}
+                directUrl={resolveListPhotoUrl(
+                  !!row.thumbnailIsPrimary,
+                  photoThumbnails[row.inventoryId],
+                )}
+                alt={row.name}
+                size="heroContain"
+              />
+            </div>
+          )}
+        />
+      )}
       {operation && (
         <EcBulkDialog
           items={operation.items}
           action={operation.action}
           onClose={() => setOperation(null)}
           onChanged={(doneIds) => {
-            setSelected(previous=>new Set([...previous].filter(id=>!doneIds.includes(id))));
+            setSelected(
+              (s) => new Set([...s].filter((id) => !doneIds.includes(id))),
+            );
             void loadCatalog();
-            void listListingsOverviewSafeAction().then((r) => setState(loadStateFromInitialRows(r)));
+            void listListingsOverviewSafeAction().then((r) =>
+              setState(loadStateFromInitialRows(r)),
+            );
           }}
         />
       )}

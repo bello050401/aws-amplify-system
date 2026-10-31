@@ -79,6 +79,8 @@ export async function overlayManualStops(catalog:EcCatalog,manual:ManualSyncData
    if(!link||link.productId!==receipt.productId||link.revision!==receipt.linkRevision)continue;
    const own=catalog.channels[receipt.channel]?.[receipt.inventoryId];
    if(!own||own.externalId!==receipt.listingId||own.source!=='ECONVENI'&&own.checkedAt&&own.checkedAt>receipt.updatedAt)continue;
+   // A successful old stop must not hide a later observation of a resumed listing.
+   if(receipt.state==='DONE'&&own.state==='ACTIVE'&&own.checkedAt&&own.checkedAt>receipt.updatedAt)continue;
    catalog.channels[receipt.channel]![receipt.inventoryId]={...own,state:receipt.state==='DONE'?'STOPPED':'ERROR',checkedAt:receipt.updatedAt,note:receipt.state==='DONE'?'出品停止を確認済みです。':'停止結果の確認が必要です。重複送信はしません。'};
   }
   cursor=r.LastEvaluatedKey;

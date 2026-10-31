@@ -25,6 +25,8 @@ export type EcChannelState = {
   checkedAt: string | null;
 };
 export type EcCatalog = {
+  econveni?: {checkedAt:string;products:import('./overviewCatalogModel').RemoteOverviewProduct[]};
+  soldListings?: Record<string,Partial<Record<EcChannel,string[]>>>;
   channels: Partial<Record<EcChannel, Record<string, EcChannelState>>>;
   archivedIds: string[];
   errors: string[];

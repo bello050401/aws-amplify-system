@@ -369,6 +369,7 @@ async function fetchListingDraftPrices(): Promise<Map<string, OverviewDraft>> {
 
 /** 一覧ベースのEC出品管理画面(下記ListingOverviewRow)の1行。 */
 export interface ListingOverviewRow {
+  soldChannel?: "MERCARI_SHOPS" | "YAHOO" | "BASE" | null;
   channelPrices?: ListingDraftRecord["channelPrices"];
   inventoryCreatedAt?: string;
   categories?: string[];
@@ -452,7 +453,8 @@ function buildOverviewRows(
       inventoryId: item.id,
       displayId: item.displayId,
       name: item.name,
-      quantity: draftPrices.get(item.id)?.quantity ?? item.quantity,
+      quantity: item.quantity,
+      soldChannel: item.market==='ヤフオク'?'YAHOO' as const:item.market==='メルカリSHOP'?'MERCARI_SHOPS' as const:item.market==='ベイス'?'BASE' as const:null,
       categories: (item.categoryIds?.length?item.categoryIds:[item.categoryId]).map(categoryNameOf).filter((n):n is string=>!!n),
       archived: !!draftPrices.get(item.id)?.deletedAt,
       // salePrice is a sales result and may include multiple sold units.

@@ -87,7 +87,14 @@ export function buildPackageQuote(input: { packages: ShippingPackage[]; estimate
   const plannedPrice = input.plannedPrice != null && Number.isFinite(input.plannedPrice) && input.plannedPrice >= 0 ? input.plannedPrice : null;
   return { packages: rows, shippingTotal, plannedPrice,
     referenceTotal: shippingTotal != null && plannedPrice != null ? shippingTotal + plannedPrice : null,
-    regions: [...regionMap.values()], destinationKey: input.destinationKey ?? null };
+    regions: [...regionMap.values()].sort((a,b) => {
+      const [ap,aa] = JSON.parse(a.key) as [string,string|null];
+      const [bp,ba] = JSON.parse(b.key) as [string,string|null];
+      const rank = (p:string) => { const i=(JAPAN_PREFECTURES as readonly string[]).indexOf(p); return i<0?999:i; };
+      const zones=['道北','道東','道央','道南'];
+      const zone=(area:string|null)=>{const i=zones.indexOf(area??'');return i<0?999:i;};
+      return rank(ap)-rank(bp) || zone(aa)-zone(ba) || a.label.localeCompare(b.label,'ja');
+    }), destinationKey: input.destinationKey ?? null };
 }
 
 function validFee(rate: PackageRate): rate is PackageRate & { price: number } {
