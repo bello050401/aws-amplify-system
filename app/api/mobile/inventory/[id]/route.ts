@@ -23,14 +23,20 @@ export async function GET(_request: Request, context: { params: { id: string } }
   const { id } = context.params;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return NextResponse.json({ error: "INVALID_ID" }, { status: 400, headers });
   try {
-    // Photo and item reads are independent after authorization. Starting them
-    // together removes a full database round trip from the detail critical path.
-    const [row, assetResult] = await Promise.all([
+    // Start independent reads after authorization. Master choices must not wait
+    // for the item, particularly when this server's master cache is still cold.
+    const [row, assetResult, activeCategories, activeLocations, statuses] = await Promise.all([
       measure('inventory', () => getInventoryDetail(id, {consistentDirectRead: true})), measure('photoAssets', () => listInventoryPhotoAssetsAction(id)).catch(() => null),
+      measure('categories', () => listCategories()), measure('locations', () => listLocations()), measure('statuses', listStatuses),
     ]);
     if (!row) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404, headers });
-    const [categories, locations, statuses] = await Promise.all([
-      measure('categories', () => listCategories(row.categoryId)), measure('locations', () => listLocations(row.locationId)), measure('statuses', listStatuses),
+    // Existing records may reference a retired choice. Preserve it exactly as
+    // before; only that exceptional lookup depends on the item's current IDs.
+    const [categories, locations] = await Promise.all([
+      row.categoryId && !activeCategories.some(option => option.id === row.categoryId)
+        ? measure('inactiveCategory', () => listCategories(row.categoryId)) : activeCategories,
+      row.locationId && !activeLocations.some(option => option.id === row.locationId)
+        ? measure('inactiveLocation', () => listLocations(row.locationId)) : activeLocations,
     ]);
     const photos = await mobileInventoryPhotos(row.images, assetResult?.ok ? assetResult.value.assets : [], async path => {
       const url = await signInventoryListKey(path);
