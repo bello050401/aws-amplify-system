@@ -11,8 +11,14 @@ import { parseMobileSave, mobileCreateInput, mobileCopyInput, mobileInventoryInp
 
 export const dynamic = "force-dynamic";
 export async function GET(_request: Request, context: { params: { id: string } }) {
+  const started = Date.now();
+  const timing: Record<string, number> = {};
+  const measure = async <T,>(name: string, run: () => Promise<T>): Promise<T> => {
+    const at = Date.now();
+    try { return await run(); } finally { timing[name] = Date.now() - at; }
+  };
   const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };
-  const session = await getMobileSession();
+  const session = await measure('session', getMobileSession);
   if (!session.ok) return NextResponse.json({ error: session.error }, { status: session.status, headers });
   const { id } = context.params;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return NextResponse.json({ error: "INVALID_ID" }, { status: 400, headers });
@@ -20,11 +26,11 @@ export async function GET(_request: Request, context: { params: { id: string } }
     // Photo and item reads are independent after authorization. Starting them
     // together removes a full database round trip from the detail critical path.
     const [row, assetResult] = await Promise.all([
-      getInventoryDetail(id), listInventoryPhotoAssetsAction(id).catch(() => null),
+      measure('inventory', () => getInventoryDetail(id)), measure('photoAssets', () => listInventoryPhotoAssetsAction(id)).catch(() => null),
     ]);
     if (!row) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404, headers });
     const [categories, locations, statuses] = await Promise.all([
-      listCategories(row.categoryId), listLocations(row.locationId), listStatuses(),
+      measure('categories', () => listCategories(row.categoryId)), measure('locations', () => listLocations(row.locationId)), measure('statuses', listStatuses),
     ]);
     const photos = await mobileInventoryPhotos(row.images, assetResult?.ok ? assetResult.value.assets : [], async path => {
       const url = await signInventoryListKey(path);
@@ -33,7 +39,11 @@ export async function GET(_request: Request, context: { params: { id: string } }
     });
     const item = mobileInventoryDetail(row, categories, locations, statuses, session.features, photos, new Date().toISOString());
     item.photosComplete = Boolean(assetResult?.ok && !assetResult.value.truncated && photos.every(photo => photo.url));
-    return NextResponse.json({ owner: session.owner, item }, { headers });
+    // Explicit administrator-only diagnostics contain durations, never tokens,
+    // query arguments or extra business records. Ordinary responses are unchanged.
+    const diagnostics = session.role === 'ADMIN' && new URL(_request.url).searchParams.get('timing') === '1'
+      ? { milliseconds: { ...timing, total: Date.now() - started } } : undefined;
+    return NextResponse.json({ owner: session.owner, item, ...(diagnostics ? { diagnostics } : {}) }, { headers });
   } catch { return NextResponse.json({ error: "INVENTORY_UNAVAILABLE" }, { status: 503, headers }); }
 }
 
