@@ -7,6 +7,8 @@ export interface SoldOutRequest {
   quantity: number; name: string; saleEndDate: string;
   externalProductId: string; market: string; salePrice: number | null;
   saleCommission?: number|null;
+  /** Buyer-paid shipping for this sale, once per transaction; excluded from item revenue and fees. */
+  saleShippingReceived?: number|null;
   sourceCandidateId?:string;
   pricing?:SalePricing;
 }
@@ -27,6 +29,7 @@ export function validateSoldOut(request: SoldOutRequest, available?: number, cur
   if (typeof request.market !== 'string' || (request.market && request.market !== currentMarket && !(SOLD_OUT_MARKETS as readonly string[]).includes(request.market))) invalid('市場を選択肢から選んでください。');
   if (request.salePrice !== null && (!Number.isSafeInteger(request.salePrice) || request.salePrice < 0)) invalid('販売価格は0以上の整数で入力してください。');
   if (request.saleCommission!=null&&(!Number.isSafeInteger(request.saleCommission)||request.saleCommission<0))invalid('販売手数料は0以上の整数で入力してください。');
+  if (request.saleShippingReceived!=null&&(!Number.isSafeInteger(request.saleShippingReceived)||request.saleShippingReceived<0))invalid('受取送料は0以上の整数で入力してください。');
   if(request.sourceCandidateId!==undefined&&!/^[a-f0-9]{64}$/.test(request.sourceCandidateId))invalid('購入通知を開き直してください。');
   if(request.sourceCandidateId&&(request.salePrice==null||request.saleCommission==null))invalid('販売価格と販売手数料を確認して入力してください。');
   if(request.pricing){

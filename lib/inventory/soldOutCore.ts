@@ -27,7 +27,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     // Full validation below allows an unchanged legacy market value.
     validateSoldOut(request, undefined, request?.market);
     const receiptId = `SOLD_OUT:${request.mutationId}`;
-    const digest = createHash('sha256').update(JSON.stringify([actor, request.inventoryId, request.expectedUpdatedAt, request.quantity, request.name.trim(), request.saleEndDate, request.externalProductId.trim(), request.market, request.salePrice,...(request.saleCommission!==undefined||request.sourceCandidateId?[request.saleCommission??null,request.sourceCandidateId??null]:[]),...(request.pricing?[request.pricing]:[])])).digest('hex');
+    const digest = createHash('sha256').update(JSON.stringify([actor, request.inventoryId, request.expectedUpdatedAt, request.quantity, request.name.trim(), request.saleEndDate, request.externalProductId.trim(), request.market, request.salePrice,...(request.saleCommission!==undefined||request.sourceCandidateId?[request.saleCommission??null,request.sourceCandidateId??null]:[]),...(request.pricing?[request.pricing]:[]),...(request.saleShippingReceived!==undefined?[{shippingReceived:request.saleShippingReceived}]:[])])).digest('hex');
     const readReceipt = async () => {
       const receipt = (await db.send(new GetCommand({TableName:table('InventoryHistory'),Key:{id:receiptId},ConsistentRead:true}))).Item;
       if (!receipt) return null;
@@ -46,7 +46,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     const before = inventoryCategoryIds(source);
     if(request.sourceCandidateId&&!masters.some(c=>['販売中','出品中','出品待ち','撮影待ち','補修待ち'].includes(c.name)&&before.includes(c.id)))throw new SoldOutError('INVALID','この商品は売却候補の対象カテゴリから外れています。商品を選び直してください。');
     const sourceCustom = parseCustomFields(source.customFields);
-    const saleCustom=request.pricing?{__belloSale:{...request.pricing,physicalQuantity:request.quantity,total:request.salePrice,commissionTotal:request.saleCommission,sourceInventoryId:source.id}}:{};
+    const saleCustom=request.pricing||request.saleShippingReceived!==undefined?{__belloSale:{...request.pricing,physicalQuantity:request.quantity,total:request.salePrice,commissionTotal:request.saleCommission,sourceInventoryId:source.id,...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{})}}:{};
     if (before.includes(soldMaster[0].id)) throw new SoldOutError('INVALID','この商品はすでに売り切れです。');
     const activeIds=masters.filter(c=>['販売中','出品中'].includes(c.name)).map(c=>c.id);
     const after = [...before.filter(id=>!activeIds.includes(id)),soldMaster[0].id];
@@ -85,7 +85,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
       writes.push(...persistence.categoryLinkChanges(source.id,before,after,now));
     }
     const oldValue=JSON.stringify({quantity:source.quantity,name:source.name,categoryIds:before,saleEndDate:source.saleEndDate,externalProductId:source.externalProductId,market:source.market,salePrice:source.salePrice});
-    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes,...(split?{remainingName:stockCountTitle(source.name,result.remainingQuantity)}:{})}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
+    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes,...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{}),...(split?{remainingName:stockCountTitle(source.name,result.remainingQuantity)}:{})}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
     writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:receiptId},ConditionExpression:'attribute_not_exists(id)'}});
     if(split) writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:`${receiptId}:SPLIT`,inventoryId:soldId,fieldName:'売却分を分割'}}});
     if(ports.saleCommit)writes.push(...ports.saleCommit(result,now));

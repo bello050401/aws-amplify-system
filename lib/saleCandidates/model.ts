@@ -14,7 +14,7 @@ export type SaleCandidate={
  orderRoute?:'WEB'|'PAY_ID_APP'|'UNKNOWN';
  confirmedLineFee?:number;
  result?:SoldOutResult; completedBy?:string; completedAt?:string; deletedBy?:string; deletedAt?:string;
- completedSale?:{quantity:number;total:number|null;commission:number|null;date:string;identifier:string};
+ completedSale?:{quantity:number;total:number|null;commission:number|null;shippingReceived?:number|null;date:string;identifier:string};
 };
 export type FeeRule={rateBps:number;fixed:number;serviceBps:number;rounding:'ROUND'|'FLOOR'|'YAHOO_TAX'};
 export type FeeConfig={base:FeeRule;baseExternal:FeeRule;basePayId:FeeRule;mercari:FeeRule;yahoo:FeeRule;direct:FeeRule};
@@ -24,12 +24,13 @@ export const DEFAULT_FEES:FeeConfig={
  baseExternal:{rateBps:460,fixed:40,serviceBps:300,rounding:'ROUND'},
  basePayId:{rateBps:360,fixed:40,serviceBps:590,rounding:'ROUND'},
  mercari:{rateBps:1000,fixed:0,serviceBps:0,rounding:'FLOOR'},
- yahoo:{rateBps:1000,fixed:0,serviceBps:0,rounding:'ROUND'},
+ yahoo:{rateBps:909,fixed:0,serviceBps:0,rounding:'YAHOO_TAX'},
  direct:{rateBps:0,fixed:0,serviceBps:0,rounding:'ROUND'},
 };
-// BELLO uses the owner's 10% gross-price rule, without adding consumption tax again.
+// Yahoo's advertised 10% includes tax. Official settlement: round 9.09%, then floor tax.
+// Normalize only our former standard presets; keep explicitly customized fee rules.
 export function currentYahooFee(rule:FeeRule):FeeRule {
- return rule.rounding==='YAHOO_TAX' && [909,1000].includes(rule.rateBps) && !rule.fixed && !rule.serviceBps
+ return ((rule.rounding==='YAHOO_TAX' && [909,1000].includes(rule.rateBps)) || rule.rounding==='ROUND' && rule.rateBps===1000) && !rule.fixed && !rule.serviceBps
    ? {...DEFAULT_FEES.yahoo} : rule;
 }
 export function currentFeeConfig(config:FeeConfig):FeeConfig { return {...config,yahoo:currentYahooFee(config.yahoo)}; }

@@ -110,3 +110,19 @@ test('set pricing rejects mismatched totals and over-stock without writes',async
  await assert.rejects(f.run({...f.request,...saleAmounts({...pricing,units:3}),pricing:{...pricing,units:3}},'actor'));
  assert.equal(f.state.transactions,0);assert.deepEqual(f.get(f.source.id),f.source);
 });
+
+test('received shipping is one transaction amount on sold stock only, never revenue or expense',async()=>{
+ const f=fixture(5,true);f.get(f.source.id).shippingCost=123;
+ const pricing:SalePricing={mode:'SET',units:1,itemsPerUnit:2,unitPrice:34800,unitCommission:3479};
+ const request={...f.request,...saleAmounts(pricing),pricing,market:'ヤフオク',saleShippingReceived:3260};
+ const result=await f.run(request,'actor'),sold=f.get(result.soldId),source=f.get(f.source.id);
+ assert.equal(sold.salePrice,34800);assert.equal(sold.saleCommission,3479);assert.equal(sold.shippingCost,123);
+ assert.equal(JSON.parse(sold.customFields).__belloSale.shippingReceived,3260);
+ assert.equal(JSON.parse(source.customFields).__belloSale,undefined);assert.equal(source.quantity,3);
+ assert.deepEqual(await f.run(request,'actor'),result);assert.equal(f.state.transactions,1);
+ await assert.rejects(f.run({...request,saleShippingReceived:3261},'actor'));
+});
+test('invalid shipping fails before any mutation; zero and unknown remain distinct',async()=>{
+ for(const shipping of [-1,1.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1]){const f=fixture();await assert.rejects(f.run({...f.request,saleShippingReceived:shipping},'actor'));assert.equal(f.state.transactions,0);}
+ for(const shipping of [0,null]){const f=fixture(1);const r=await f.run({...f.request,saleShippingReceived:shipping},'actor');assert.equal(JSON.parse(f.get(r.soldId).customFields).__belloSale.shippingReceived,shipping);}
+});

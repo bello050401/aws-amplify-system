@@ -9,8 +9,10 @@ import {reviewEcListingAction,executeEcListingAction} from '@/app/actions/ecList
 import {getChannelListing} from '@/lib/listing/service';
 import {readBaseItem,claimBaseManual,finishBaseManual} from '@/lib/listing/base/manualLifecycle';
 import {setManualBaseStock} from '@/lib/listing/base/adapter';
-import {refreshSaleBinding,reviewSaleAdjustment,executeSaleAdjustment,saleAdjustmentStarted} from '@/lib/listing/econveni/saleAdjustment';
+import {reviewSaleBinding,reviewSaleAdjustment,executeSaleAdjustment,saleAdjustmentStarted} from '@/lib/listing/econveni/saleAdjustment';
 import {stockCountTitle} from '@/lib/inventory/stockCountTitle';
+import {inventoryCategoryIds} from '@/lib/inventory/categories';
+import {listCategories} from '@/lib/inventory/queries';
 import type {EcChannel} from '@/lib/listing/ecManagement';
 import type {PostSaleRow as Row,PostSalePlan} from './postSaleModel';
 export type {PostSalePlan} from './postSaleModel';
@@ -23,20 +25,38 @@ async function context(candidateId:string){
  const c=await candidateStore().get(candidateId);if(c?.state!=='DONE'||!c.result)throw new PostSaleError('売却登録を先に完了してください。');
  const sourceRead=getInventoryRaw(c.result.sourceId);
  const [source,sold]=await Promise.all([sourceRead,c.result.sourceId===c.result.soldId?sourceRead:getInventoryRaw(c.result.soldId)]);
- if(!source||!sold)throw new PostSaleError('売却した商品の状態を確認できません。');
+ if(!source||!sold||source.isDeleted||source.deletedAt||sold.isDeleted||sold.deletedAt)throw new PostSaleError('売却した商品の状態を確認できません。');
  const soldChannel:EcChannel|null=c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel==='BASE'?'BASE':c.channel==='YAHOO'?'YAHOO':fromMarket(String(sold.market??''));
- if(c.result.remainingQuantity>0&&source.quantity!==c.result.remainingQuantity||source.updatedAt!==c.result.updatedAt)throw new PostSaleError('売却後に在庫が変更されています。最新の数量をEC出品画面で確認してください。');
- let soldPack=1;try{const value=typeof sold.customFields==='string'?JSON.parse(sold.customFields):sold.customFields;const count=value?.__belloSale?.itemsPerUnit;if(Number.isSafeInteger(count)&&count>0&&count<=10000)soldPack=count;}catch{}
+ let sale:Record<string,unknown>|undefined;
+ try{const value=typeof sold.customFields==='string'?JSON.parse(sold.customFields):sold.customFields;sale=value?.__belloSale;}catch{}
+ const expectedSource=c.result.sourceId===c.result.soldId?c.result.soldQuantity:c.result.remainingQuantity;
+ const changed=source.updatedAt!==c.result.updatedAt||sold.updatedAt!==c.result.updatedAt;
+ // A note/price/category edit must not permanently strand a completed sale. Rebuild the review
+ // against the latest version, but only while the original sale identity and both quantities agree.
+ if(source.quantity!==expectedSource||sold.quantity!==c.result.soldQuantity||changed&&(
+   sale?.sourceInventoryId!==c.result.sourceId||sale?.physicalQuantity!==c.result.soldQuantity||
+   c.channel!=='DIRECT'&&c.orderId&&sold.externalProductId!==c.orderId
+ ))throw new PostSaleError('売却後に数量または注文の対応が変更されています。最新の在庫と注文をEC出品画面で確認してください。');
+ if(changed){
+  const categoryIds=inventoryCategoryIds(sold),masters=await listCategories();
+  if(masters.some(m=>categoryIds.includes(m.id)&&['販売中','出品中'].includes(m.name)))throw new PostSaleError('売却した在庫が販売中に戻っています。売却の取り消しや再販売ではないか確認してください。');
+ }
+ let soldPack=1;const count=sale?.itemsPerUnit;if(typeof count==='number'&&Number.isSafeInteger(count)&&count>0&&count<=10000)soldPack=count;
  return {c,source,soldChannel,soldPack};
 }
 const key=(id:string)=>({pk:'SALE_EC#'+id});
 export async function reviewPostSale(candidateId:string,actor:string,packSizes:Partial<Record<EcChannel,number>>={}):Promise<PostSalePlan>{
  const old=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as (PostSalePlan&{pk:string})|undefined;
- if(old&&(old.state==='COMPLETE'||old.state==='EXECUTING'&&old.expiresAt>Date.now()))return old;
+ if(old&&(old.state==='COMPLETE'&&old.rows.length>0||old.state==='EXECUTING'&&old.expiresAt>Date.now()))return old;
  const {c,source,soldChannel,soldPack}=await context(candidateId);
  const started=new Set(await Promise.all((old?.rows??[]).filter(r=>r.adjustment).map(async r=>await saleAdjustmentStarted(r.adjustment!)?r.channel:null)));
  const resuming=old?.rows.some(r=>started.has(r.channel)&&r.state!=='DONE');
- const remote=resuming?null:await refreshSaleBinding(source.id),catalog=await getEcListingCatalogAction(source.id);
+ const observed=await (resuming?Promise.resolve<Awaited<ReturnType<typeof reviewSaleBinding>>>({remote:null,reviews:{}}):reviewSaleBinding(source.id,actor,c.result!.remainingQuantity===0?channels.filter(channel=>channel!==soldChannel):[])).catch((e:unknown)=>{
+  const code=String((e as {code?:string;name?:string})?.code||(e as Error)?.name||'Unknown');
+  console.error('SALE_EC_REVIEW_FAILED',{phase:'binding',code:/^[A-Za-z_]{1,64}$/.test(code)?code:'Unknown'});
+  throw new PostSaleError('売却登録と保存済みの紐付けは保持されています。eコンビニの最新状態を取得できませんでした。少し待って「結果を再確認」を押してください。');
+ });
+ const remote=observed.remote,catalog=await getEcListingCatalogAction(source.id);
  if(catalog.errors.length)throw new PostSaleError('販売先の紐付けを確認できません。再度確認してください。');
  const rows:Row[]=[];
  for(const channel of channels){
@@ -61,10 +81,14 @@ export async function reviewPostSale(candidateId:string,actor:string,packSizes:P
   if(prior&&prior.externalId!==linked.externalId){rows.push({...prior,state:'BLOCKED',message:'出品番号が変更されています。EC出品画面で確認してください。'});continue;}
   const fresh=remote?.channels[channel];
   if(fresh?.listingId&&fresh.listingId!==linked.externalId)throw new PostSaleError('最新の出品IDと保存された紐付けが一致しません。');
-  if((fresh?fresh.state!=='ACTIVE':linked.state!=='ACTIVE')&&!prior)continue;
+  const prepared=observed.reviews[channel];
+  if(fresh&&!fresh.listingId&&linked.externalId&&channel!=='BASE'&&prepared?.status!=='DONE'){
+   rows.push({channel,externalId:linked.externalId,operation:c.result!.remainingQuantity===0?'STOP':'MANUAL',state:'BLOCKED',currentState:'出品番号未確認',message:'eコンビニで出品番号が外れています。出品停止済みとは断定できないため、販売先で確認してください。別の商品への操作は行いません。'});continue;
+  }
+  if(!prepared&&(fresh?fresh.state!=='ACTIVE':linked.state!=='ACTIVE')&&!prior)continue;
   if(c.result!.remainingQuantity===0){
-   const review=await reviewEcListingAction(source.id,channel,'STOP');
-   rows.push({channel,externalId:linked.externalId,operation:'STOP',state:review.status==='READY'?'READY':review.status==='DONE'?'DONE':'BLOCKED',message:review.message,review,currentState:'出品中'});
+   const review=prepared??await reviewEcListingAction(source.id,channel,'STOP');
+   rows.push({channel,externalId:linked.externalId,operation:'STOP',state:review.status==='READY'?'READY':review.status==='DONE'?'DONE':'BLOCKED',message:review.message,review,currentState:review.status==='DONE'?'停止中':fresh?.state==='ACTIVE'?'出品中':'状態確認'});
   }else if(channel==='BASE'){
    const remote=await readBaseItem(linked.externalId);
    const pack=packSizes[channel]??prior?.unitsPerListing??1;

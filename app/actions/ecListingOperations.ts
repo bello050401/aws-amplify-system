@@ -65,9 +65,9 @@ export async function reviewEcListingAction(
     if (!item) return { ...base, message: "対象商品が見つかりません。" };
     base.title = item.name;
     if(operation==='STOP'){
-      await refreshSaleBinding(id);
       const result=await manualLinkedStop(id,channel,(await getCurrentInventoryUserSub())??'');
       if(result)return result;
+      await refreshSaleBinding(id);
     }
     if(['PUBLISH','STOP','UPDATE'].includes(operation)){
       const existing=channel==='BASE'||operation==='UPDATE'?await getChannelListing(id,channel==='BASE'?'BASE':'MERCARI_SHOPS'):null;

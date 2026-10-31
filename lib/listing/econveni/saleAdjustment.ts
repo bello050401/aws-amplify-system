@@ -13,6 +13,8 @@ import {readBaseItem,claimBaseManual,finishBaseManual} from '../base/manualLifec
 import {setManualBaseStock} from '../base/adapter';
 import {adjustmentFingerprint,adjustmentKey,runSaleAdjustment,type SaleAdjustment,type AdjustmentReceipt} from './saleAdjustmentCore';
 import type {ExternalProduct,ExternalSnapshot,ManualLink} from './manualSyncModel';
+import type {EcChannel,EcReview} from '../ecManagement';
+import {manualLinkedStop} from './manualStop';
 export async function saleAdjustmentStarted(request:SaleAdjustment){return !!(await db.send(new GetCommand({TableName:table,Key:{pk:adjustmentKey(request)},ConsistentRead:true}))).Item;}
 
 async function binding(id:string){
@@ -34,11 +36,19 @@ async function remember(remote:ExternalProduct){
  const value={...key,version:randomUUID(),checkedAt:new Date().toISOString(),products:[...(old?.products??[]).filter(p=>p.productId!==remote.productId),remote]};
  // Do not claim that all cached products were checked now. Their snapshot time remains unchanged.
  if(old)value.checkedAt=old.checkedAt;
- await db.send(new PutCommand({TableName:table,Item:value,ConditionExpression:old?'#v=:v':'attribute_not_exists(pk)',...(old?{ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':old.version}}:{})}));
+ try{await db.send(new PutCommand({TableName:table,Item:value,ConditionExpression:old?'#v=:v':'attribute_not_exists(pk)',...(old?{ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':old.version}}:{})}));}
+ catch(e){
+  // Another catalog read won the cache race. Keep that snapshot; the caller still uses this live read.
+  if((e as Error).name!=='ConditionalCheckFailedException')throw e;
+ }
 }
 /** Focused live read before a sale confirmation. No name-based automatic linking or full-catalog polling. */
 export async function refreshSaleBinding(id:string):Promise<ExternalProduct|null>{
- const b=await binding(id);if(!b)return null;
+ return (await reviewSaleBinding(id)).remote;
+}
+/** Share one authenticated, account-locked observation for all STOP preflights. Never executes a command. */
+export async function reviewSaleBinding(id:string,actor?:string,stopChannels:EcChannel[]=[]):Promise<{remote:ExternalProduct|null;reviews:Partial<Record<EcChannel,EcReview>>}>{
+ const b=await binding(id);if(!b)return {remote:null,reviews:{}};
  const session=new EconveniHttpSession();
  return withEconveniAccount(econveniStore(id),session,()=>econveniCredentialStore.credentials(),async()=>{
   const remote=await session.readExternalProduct(b.productId);
@@ -47,7 +57,14 @@ export async function refreshSaleBinding(id:string):Promise<ExternalProduct|null
    const expected=b.link?.baseline[channel].listingId??(channel==='BASE'?null:b.workflow?.channels[channel].listingId);
    if(expected&&remote.channels[channel].listingId&&expected!==remote.channels[channel].listingId)throw Error('出品IDが変わっています。eコンビニ連携で写真と商品を確認してください。');
   }
-  await remember(remote);return remote;
+  await remember(remote);
+  const reviews:Partial<Record<EcChannel,EcReview>>={};
+  if(actor&&b.link)for(const channel of stopChannels){
+   if(!b.link.baseline[channel].listingId&&!remote.channels[channel].listingId)continue;
+   const review=await manualLinkedStop(id,channel,actor,undefined,{session,remote});
+   if(review)reviews[channel]=review;
+  }
+  return {remote,reviews};
  });
 }
 export async function reviewSaleAdjustment(input:{candidateId:string;inventoryId:string;channel:'BASE'|'YAHOO';listingId:string;remaining:number;pack:number;inventoryVersion:string}):Promise<SaleAdjustment|null>{

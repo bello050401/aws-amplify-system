@@ -36,9 +36,9 @@ export function PostSaleConfirmation({plan,onConfirm,onReview,onClose,onLink}:{p
     {plan.state==='REVIEW'&&(r.operation==='STOCK'||r.operation==='RELIST')&&r.state!=='DONE'&&<label className="ps-pack"><span>出品1個に含まれる点数</span><input aria-label={`${EC_CHANNEL_LABEL[r.channel]}の出品1個に含まれる点数`} type="number" inputMode="numeric" min="1" max="10000" disabled={busy||!!plan.nextAt} value={packs[r.channel]??1} onChange={e=>{setPacks({...packs,[r.channel]:Number(e.target.value)});setDirty(true);setChecked(false);}}/></label>}
    </article>;
   })}</div>
-  {!plan.rows.length&&<p className="ps-message">現在の紐付け情報には変更対象の出品がありません。未連携の商品は先にeコンビニと紐付けてください。</p>}
+  {!plan.rows.length&&<p className="ps-message">{plan.productId?'紐付けは確認済みです。現在、変更できる他の販売先がありません。売れたページは保持しています。':'現在の紐付け情報には変更対象の出品がありません。先にeコンビニと紐付けてください。'}</p>}
   {error&&<p className="ps-error" role="alert">{error}</p>}
-  <div className="ps-tools">{onLink&&<button disabled={busy} onClick={onLink}>eコンビニと紐付ける</button>}{plan.state!=='COMPLETE'&&<button disabled={busy} onClick={()=>void review()}>{dirty?'変更する数量を再確認':'結果を再確認'}</button>}</div>
+  <div className="ps-tools">{onLink&&<button disabled={busy} onClick={onLink}>{plan.productId?'紐付けを確認':'eコンビニと紐付ける'}</button>}{plan.state!=='COMPLETE'&&<button disabled={busy} onClick={()=>void review()}>{dirty?'変更する数量を再確認':'結果を再確認'}</button>}</div>
   {plan.state==='REVIEW'&&ready&&<><label className="ps-check"><input type="checkbox" disabled={dirty||busy} checked={checked} onChange={e=>setChecked(e.target.checked)}/><span>対象商品・販売先・変更する数量を確認しました</span></label>{needsTerms&&<label className="ps-check"><input type="checkbox" disabled={busy} checked={terms} onChange={e=>setTerms(e.target.checked)}/><span><a href="https://auctions.yahoo.co.jp/special/html/guidelines.html" target="_blank" rel="noreferrer">Yahoo!オークションガイドライン</a>に同意し、残り在庫を出品します</span></label>}</>}
   <footer className="ps-footer"><button disabled={busy} onClick={onClose}>{plan.state==='REVIEW'?'今は変更しない':'閉じる'}</button>{busy?<button onClick={()=>{stop.current=true;setWait(0);}}>次の送信前に中断</button>:ready&&plan.state==='REVIEW'&&<button className="ps-primary" disabled={!checked||dirty||needsTerms&&!terms} onClick={()=>void execute()}>確認した内容を反映</button>}</footer>
   {busy&&<p role="status" className="ps-muted">{wait?`送信間隔を空けています。次の処理まで ${wait}秒`:'eコンビニ・販売先の結果を確認しています…'}</p>}

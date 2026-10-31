@@ -21,8 +21,10 @@ export function productTitleMatchesQuery(title:string,identifier:string,query:st
  if(!query.trim())return true;
  const raw=normalTitle(query),bare=normalTitle(titleWithoutNotes(query));
  // An empty/notes-only comparison must not match every product. Explicit memo searches still work.
+ const words=titleWithoutNotes(query).normalize('NFKC').trim().split(/\s+/).map(normalTitle).filter(Boolean);
  return !!raw&&(normalTitle(title).includes(raw)||normalTitle(identifier).includes(raw))
-  ||!!bare&&normalTitle(titleWithoutNotes(title)).includes(bare);
+  ||!!bare&&normalTitle(titleWithoutNotes(title)).includes(bare)
+  ||words.length>1&&words.every(word=>normalTitle(titleWithoutNotes(title)).includes(word));
 }
 /** Ranking proposes candidates only; neither a name nor a picture automatically binds stock. */
 export function titleSimilarity(left:string,right:string):number {

@@ -9,7 +9,7 @@ import {bodyLimited,NO_STORE} from '@/lib/invoicing/gateway';
 import {japanToday} from '@/lib/inventory/soldOutInput';
 import {importBaseOrders} from '@/lib/saleCandidates/baseImport';
 import {reviewPostSale,executePostSale,PostSaleError} from '@/lib/saleCandidates/postSale';
-import {readManualSync,refreshManualSync,linkExternalProduct,productFingerprint} from '@/lib/listing/econveni/manualSync';
+import {readManualSync,refreshManualSync,linkExternalProduct,productFingerprint,ManualSyncError} from '@/lib/listing/econveni/manualSync';
 import {inventoryThumbnails} from '@/lib/mobile/inventoryThumbnails';
 import {withCurrentSaleSummary} from '@/lib/saleCandidates/listSummary';
 export const dynamic='force-dynamic';export const maxDuration=180;
@@ -59,5 +59,5 @@ export async function POST(request:Request){
    return reply(result,result.ok?200:result.code==='FORBIDDEN'?403:result.code==='INVALID'?422:409);
   }
   return reply({error:'操作を確認してください。'},422);
- }catch(e){if(e instanceof PostSaleError)return reply({error:e.message},409);return reply({error:(e as Error).name==='ConditionalCheckFailedException'?'別の操作で状態が変わりました。再読み込みしてください。':'処理結果を確認できませんでした。再読み込みして確認してください。'},503);}
+ }catch(e){if(e instanceof PostSaleError||e instanceof ManualSyncError)return reply({error:e.message},409);return reply({error:(e as Error).name==='ConditionalCheckFailedException'?'別の操作で状態が変わりました。再読み込みしてください。':'処理結果を確認できませんでした。再読み込みして確認してください。'},503);}
 }
