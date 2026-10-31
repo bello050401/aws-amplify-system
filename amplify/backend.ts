@@ -840,8 +840,6 @@ if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'cl
   const readable = ['Category','Location'].map(name=>backend.data.resources.tables[name].tableArn);
   new ManagedPolicy(outboundStack,'RuntimeAccess',{roles:[role],statements:[
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:writable}),
-    // Same already-readable inventory, batched for the authenticated sale list.
-    new PolicyStatement({actions:['dynamodb:BatchGetItem'],resources:[backend.data.resources.tables.Inventory.tableArn]}),
     // Arrival transactions check that the selected masters are still active.
     // ConditionCheckItem is required even though these tables are never edited.
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:ConditionCheckItem'],resources:readable}),

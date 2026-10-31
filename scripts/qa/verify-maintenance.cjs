@@ -12,14 +12,10 @@ async function load(file,ports){const result=await build({entryPoints:[file],bun
  failure=true;assert((await getEcListingCatalogAction(id)).errors.length);failure=false;role='EDITOR';reads=[];await getEcListingCatalogAction(id);assert(!reads.includes('get-mercari'));role='ADMIN';
  let summaryReads=0;
  const readSummary=async(_key,opts)=>{summaryReads++;assert.equal(opts.authMode,'userPool');assert.equal(opts.selectionSet.length,6);assert(!opts.selectionSet.includes('images'));return{data:{name:'現在の商品名',salePrice:20000,saleCommission:2000,saleEndDate:'2026-10-31',externalProductId:'order'}};};
- let batch=null;
- const summaryPort={'server-only':{},'./summaryRead':{readCurrentSaleSummaryBatch:async()=>batch},'../amplify/dataClient':{inventoryAuthMode:{authMode:'userPool'},serverDataClient:{models:{Inventory:{get:readSummary}}}}};
+ const summaryPort={'server-only':{},'../amplify/dataClient':{inventoryAuthMode:{authMode:'userPool'},serverDataClient:{models:{Inventory:{get:readSummary}}}}};
  const {withCurrentSaleSummary}=await load('lib/saleCandidates/listSummary.ts',summaryPort);const c={id:'candidate',state:'DONE',result:{soldId:id,soldQuantity:2},name:'通知時の名前'};
  const items=await withCurrentSaleSummary([c,{...c,id:'second'},{id:'pending',state:'PENDING',name:'pending'}]);assert.equal(summaryReads,1);assert.equal(items[0].name,'現在の商品名');assert.equal(items[0].completedSale.total,20000);assert.equal(items[2].name,'pending');
  summaryPort['../amplify/dataClient'].serverDataClient.models.Inventory.get=async()=>({data:null,errors:[{message:'read failed'}]});await assert.rejects(()=>withCurrentSaleSummary([c]),/SALE_SUMMARY_UNAVAILABLE/);
- batch=new Map([[id,{name:'一括取得の最新名',salePrice:15000,saleCommission:1500,saleEndDate:'2026-10-31'}]]);
- const batched=await withCurrentSaleSummary([c,{...c,id:'duplicate'}]);assert.equal(summaryReads,1);assert.equal(batched[0].completedSale.total,15000);assert.equal(batched[1].name,'一括取得の最新名');
- batch=new Map([[id,{name:'削除済み',deletedAt:'now'}]]);assert.equal((await withCurrentSaleSummary([c]))[0].completedSale,undefined);
  const report={targetedCatalog:'same target result; other inventory excluded; no full scans',access:'anonymous and malformed id rejected before reads; EDITOR cannot read admin link',failure:'partial read reports error',saleSummary:'authenticated six-field projection; duplicate stock read once; errors not missing stock'};
  fs.writeFileSync('artifacts/maintenance-20261031/regression.json',JSON.stringify(report,null,2));console.log('PASS maintenance: focused catalog, access, read errors, minimal summary and duplicate suppression');
 })().catch(e=>{console.error(e);process.exitCode=1});
