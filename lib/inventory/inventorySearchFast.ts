@@ -1,6 +1,6 @@
 import "server-only";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, GetCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { directTableName } from "@/lib/amplify/directData";
 import { buildCountExpression } from "./inventoryCountFast";
 import { buildScanProjection } from "./searchScanProjection";
@@ -23,6 +23,7 @@ import {inventoryCategoryIds} from './categories';
 import { recordQuery } from "@/lib/perf/queryTiming";
 import { readSearchCandidates, invalidateSearchCandidates } from './searchCandidateCache';
 import { readCompactSearch } from './readCompactSearch';
+import { readInventoryBatch } from './batchRead';
 
 /**
  * 検索を「巨大な在庫本体の全件転送」から切り離す
@@ -44,7 +45,7 @@ import { readCompactSearch } from './readCompactSearch';
  *     evaluateQuery)へそのまま渡す —— 検索仕様は1文字も変えない。
  *
  *   第2段(表示する行の実体化): 絞り込み後に**表示する50件だけ**を
- *     GetItem で全列取得する(同時に投げるので待ちは1往復ぶん)。
+ *     BatchGetItem で全列取得する(未処理キーのみを再試行)。
  *
  * Staging 実測(同一条件・同一データ・5,329件):
  *
@@ -85,8 +86,6 @@ const REGION = process.env.AWS_REGION || process.env.BEDROCK_REGION || "us-west-
 const SCAN_SEGMENTS = 8;
 /** queries.ts の SEARCH_MAX_SCAN_ITEMS と同じ安全弁。超えたら従来経路へ返す。 */
 const MAX_SCAN_ITEMS = 20000;
-/** 実体化を同時に投げる本数。一覧の1ページ(50件)は1回で収まる。 */
-const HYDRATE_CONCURRENCY = 100;
 
 let cachedClient: DynamoDBDocumentClient | null = null;
 function ddb(): DynamoDBDocumentClient {
@@ -177,38 +176,12 @@ async function scanSegment(
   return items;
 }
 
-/**
- * 表示する行だけを全列で取り直す。
- *
- * ── なぜ BatchGetItem ではなく GetItem を並べるのか ──────────────
- *
- * SSR の実行ロール(BelloAmplifyStagingComputeRole)に許可されている
- * DynamoDB の操作は GetItem / Query / Scan の3つで、BatchGetItem は
- * 入っていない。BatchGetItem を使うとここが AccessDenied で落ち、
- * 検索が毎回**従来の全件経路へフォールバックする**(= 速くならない)。
- *
- * 1ページぶん(50件)の GetItem を同時に投げれば、待ち時間は1往復ぶん
- * で済み、読み取り容量(RCU)も BatchGetItem と同じ。権限追加という
- * AWS管理者作業も要らない。
- */
+/** Displayed rows are reread consistently in one batch instead of 50 separate
+ * requests. The exact inventory-table BatchGetItem grant is managed in backend.ts. */
 async function hydrate(table: string, ids: string[]): Promise<Map<string, RawItem>> {
-  const byId = new Map<string, RawItem>();
-  for (let i = 0; i < ids.length; i += HYDRATE_CONCURRENCY) {
-    const chunk = ids.slice(i, i + HYDRATE_CONCURRENCY);
-    const startedAt = Date.now();
-    const results = await Promise.all(
-      chunk.map((id) => ddb().send(new GetCommand({ TableName: table, Key: { id }, ConsistentRead: true }))),
-    );
-    recordQuery({
-      model: "Inventory",
-      op: `search-hydrate[x${chunk.length}]`,
-      ms: Date.now() - startedAt,
-      items: results.filter((r) => r.Item).length,
-    });
-    for (const res of results) {
-      if (res.Item) byId.set(res.Item.id as string, res.Item as RawItem);
-    }
-  }
+  const startedAt = Date.now();
+  const byId = await readInventoryBatch(ddb(), table, ids);
+  recordQuery({model: 'Inventory', op: 'search-hydrate-batch', ms: Date.now()-startedAt, items: byId.size});
   return byId;
 }
 
