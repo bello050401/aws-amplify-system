@@ -20,6 +20,7 @@ import { salesAggregateScheduler } from "./functions/sales-aggregate-scheduler/r
 import { mediaMaintenance } from "./functions/media-maintenance/resource";
 import { invoiceIssuer } from './functions/invoice-issuer/resource';
 import {purchaseNotifications} from './functions/purchase-notifications/resource';
+import {yahooPaymentReconciler} from './functions/yahoo-payment-reconciler/resource';
 
 /**
  * Amplify Gen2 backend definition.
@@ -52,11 +53,22 @@ const backend = defineBackend({
   mediaMaintenance,
   invoiceIssuer,
   purchaseNotifications,
+  yahooPaymentReconciler,
 });
 
 const purchaseStack=backend.createStack('PurchaseNotifications');
 const purchaseTable=new Table(purchaseStack,'Candidates',{partitionKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:true}});
 purchaseTable.addGlobalSecondaryIndex({indexName:'ByState',partitionKey:{name:'state',type:AttributeType.STRING},sortKey:{name:'receivedAt',type:AttributeType.STRING}});
+// The mail reader cannot edit inventory. Payment reconciliation has no mail/EC credentials.
+backend.yahooPaymentReconciler.addEnvironment('SALE_CANDIDATES_TABLE',purchaseTable.tableName);
+backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}));
+for(const [model,actions] of Object.entries({Inventory:['dynamodb:GetItem','dynamodb:UpdateItem'],Category:['dynamodb:GetItem'],InventoryCategory:['dynamodb:PutItem','dynamodb:DeleteItem'],InventoryHistory:['dynamodb:PutItem']})){
+ const modelTable=backend.data.resources.tables[model];
+ backend.yahooPaymentReconciler.addEnvironment(model+'_TABLE',modelTable.tableName);
+ backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions,resources:[modelTable.tableArn]}));
+}
+backend.yahooPaymentReconciler.resources.lambda.grantInvoke(backend.purchaseNotifications.resources.lambda);
+backend.purchaseNotifications.addEnvironment('YAHOO_PAYMENT_FUNCTION',backend.yahooPaymentReconciler.resources.lambda.functionName);
 purchaseTable.grantReadWriteData(backend.purchaseNotifications.resources.lambda);
 backend.purchaseNotifications.addEnvironment('SALE_CANDIDATES_TABLE',purchaseTable.tableName);
 backend.purchaseNotifications.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:UpdateItem'],resources:[backend.data.resources.tables['BaseOAuthToken'].tableArn]}));

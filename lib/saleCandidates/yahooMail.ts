@@ -5,7 +5,7 @@ import type {SaleCandidate,YahooSaleStatus} from './model';
 const stages:YahooSaleStatus[]=['WON','ADDRESS_CONFIRMED','AWAITING_SHIPMENT'];
 const missingPrice='落札価格を取得できていません。落札通知の取得後、金額を確認してください。';
 const missingQuantity='落札数量はメールから確定できません。数量（セット販売の場合はセット数）を確認してください。「残り数量」は売却数量ではありません。';
-const dateWarning='販売終了日は落札通知の受信日を初期表示しています。実際の販売日をご確認ください。';
+const dateWarning='販売終了日は支払い完了メールの受信日（日本時間）で自動入力します。未入金の間は空欄です。';
 const field=(text:string,label:string)=>text.match(new RegExp('(?:^|\\n)[ \\t]*'+label+'[ \\t]*:[ \\t]*([^\\n]+)'))?.[1]?.trim()||'';
 const yen=(value:string)=>{const s=value.replace(/[¥円,\s]/g,'');return /^\d+$/.test(s)&&Number.isSafeInteger(Number(s))?Number(s):null;};
 const jstDate=(value:string)=>new Date(Date.parse(value)+9*3600000).toISOString().slice(0,10);
@@ -34,7 +34,7 @@ export function parseYahooMail(mail:PurchaseMail,text:string):SaleCandidate[]{
  const rawCount=stage==='WON'?field(text,'落札数量'):'';
  const count=rawCount.match(/^(\d+)(?:\s*(?:個|点|台|脚|セット))?$/)?.[1];
  const quantity=count&&Number.isSafeInteger(Number(count))&&Number(count)>0?Number(count):null;
- return [{id:createHash('sha256').update(JSON.stringify(['YAHOO',id,'0'])).digest('hex'),state:'PENDING',channel:'YAHOO',source:'GMAIL',name,quantity,unitPrice:price,orderId:id,identifierType:'AUCTION',externalListingId:id,saleDate:jstDate(received),receivedAt:received,createdAt:now,updatedAt:now,shipping,orderTotal,payment:'',warnings:[...(price===null?[missingPrice]:[]),...(quantity===null?[missingQuantity]:[]),dateWarning],orderLineCount:1,yahooStatus:stage,yahooEvents:{[stage]:received}}];
+ return [{id:createHash('sha256').update(JSON.stringify(['YAHOO',id,'0'])).digest('hex'),state:'PENDING',channel:'YAHOO',source:'GMAIL',name,quantity,unitPrice:price,orderId:id,identifierType:'AUCTION',externalListingId:id,saleDate:jstDate(received),receivedAt:received,createdAt:now,updatedAt:now,shipping,orderTotal,payment:'',warnings:[...(price===null?[missingPrice]:[]),...(quantity===null?[missingQuantity]:[]),dateWarning],orderLineCount:1,yahooStatus:stage,yahooEvents:{[stage]:received},...(stage==='AWAITING_SHIPMENT'&&mail.authenticatedYahooSender&&Number.isFinite(Date.parse(mail.receivedAt))?{yahooPaymentNotice:{gmailId:mail.gmailId,receivedAt:received}}:{})}];
 }
 
 /** Merge mail-owned fields only; preserve deletion, completed sale and inventory references. */
@@ -50,7 +50,8 @@ export function mergeYahooNotification(current:SaleCandidate,incoming:SaleCandid
  if(current.quantity!==null&&incoming.quantity!==null&&current.quantity!==incoming.quantity)warnings.push('同じオークションIDで異なる落札数量の通知があります。数量を確認してください。');
  const conflicts=(['shipping','orderTotal'] as const).filter(k=>current[k]!==null&&incoming[k]!==null&&current[k]!==incoming[k]);
  if(conflicts.length)warnings.push('同じオークションIDで送料・支払い合計が異なる通知があります。取引ナビで確認してください。');
- const next={...current,name:current.name||incoming.name,unitPrice:price,quantity,shipping:current.shipping??incoming.shipping,orderTotal:current.orderTotal??incoming.orderTotal,warnings:[...new Set(warnings)],externalListingId:current.externalListingId||incoming.externalListingId,yahooStatus:status,yahooEvents:events,receivedAt:[current.receivedAt,incoming.receivedAt].sort().at(-1)!,saleDate:events.WON?jstDate(events.WON):current.saleDate};
+ const notice=[current.yahooPaymentNotice,incoming.yahooPaymentNotice].filter((v):v is NonNullable<SaleCandidate['yahooPaymentNotice']>=>!!v).sort((a,b)=>a.receivedAt.localeCompare(b.receivedAt))[0];
+ const next={...current,name:current.name||incoming.name,unitPrice:price,quantity,shipping:current.shipping??incoming.shipping,orderTotal:current.orderTotal??incoming.orderTotal,warnings:[...new Set(warnings)].filter(w=>!w.startsWith('販売終了日は落札通知の受信日')),externalListingId:current.externalListingId||incoming.externalListingId,yahooStatus:status,yahooEvents:events,receivedAt:[current.receivedAt,incoming.receivedAt].sort().at(-1)!,saleDate:events.WON?jstDate(events.WON):current.saleDate,...(notice?{yahooPaymentNotice:notice}:{})};
  if(JSON.stringify(next)===JSON.stringify(current))return current;
  return {...next,updatedAt:new Date(Math.max(Date.parse(now),Date.parse(current.updatedAt)+1)).toISOString()};
 }

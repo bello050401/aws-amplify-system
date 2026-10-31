@@ -11,6 +11,7 @@ import {SoldOutError,type SoldOutRequest,type SoldOutResult} from '@/lib/invento
 import {inventoryMutationSession} from '@/lib/inventory/mutationSession';
 import {candidateStore} from '@/lib/saleCandidates/store';
 import type {SaleCandidate} from '@/lib/saleCandidates/model';
+import {yahooPaymentPlan} from '@/lib/saleCandidates/yahooPaymentModel';
 
 export async function registerSoldOut(request:SoldOutRequest):Promise<{ok:true;result:SoldOutResult}|{ok:false;code:string;error:string}> {
   if((await getInventoryRole())!=='ADMIN')return {ok:false,code:'FORBIDDEN',error:'売却は管理者のみ実行できます。'};
@@ -28,7 +29,7 @@ export async function registerSoldOut(request:SoldOutRequest):Promise<{ok:true;r
       if(expectedMarket&&request.market!==expectedMarket)throw new SoldOutError('INVALID','購入通知の販売先は変更できません。通知を確認してください。');
       if(candidate.state==='DONE'&&candidate.result)return {ok:true,result:candidate.result};
     }
-    const execute=createSoldOutService({db:inventoryDdb,table:inventoryTable,categories:listCategories,copyPhotos:copySoldOutPhotos,discardPhotos:discardSoldOutPhotos,nextSku:async()=>{
+    const execute=createSoldOutService({yahooPayment:yahooPaymentPlan(candidate),db:inventoryDdb,table:inventoryTable,categories:listCategories,copyPhotos:copySoldOutPhotos,discardPhotos:discardSoldOutPhotos,nextSku:async()=>{
       const result=await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);
       if(!result.data||result.errors?.length)throw Error('管理番号を作成できませんでした。');return result.data;
     },...(candidate?{saleCommit:(result:SoldOutResult,now:string)=>candidateStore().commit(candidate!,actor,result,now)}:{})});

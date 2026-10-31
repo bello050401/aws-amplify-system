@@ -8,6 +8,7 @@ import { parseCustomFields, stringifyCustomFields } from './customFieldsCodec';
 import { SoldOutError, validateSoldOut, type SoldOutRequest, type SoldOutResult } from './soldOutInput';
 import {saleTitle} from './salePricing';
 import {stockCountTitle} from './stockCountTitle';
+import {paymentDate,type YahooPaymentPlan} from '../saleCandidates/yahooPaymentModel';
 
 type Row = Record<string, unknown>;
 export interface SoldOutPorts {
@@ -18,12 +19,20 @@ export interface SoldOutPorts {
   discardPhotos: (images:unknown[])=>Promise<void>;
   now?: ()=>string;
   saleCommit?: (result:SoldOutResult,now:string)=>InventoryTransaction;
+  yahooPayment?:YahooPaymentPlan;
 }
 /** Both inventory records, category links and the retry receipt commit together. */
 export function createSoldOutService(ports: SoldOutPorts) {
   const { db, table } = ports;
   const persistence = createInventoryPersistence(db, table);
   return async (request: SoldOutRequest, actor:string): Promise<SoldOutResult> => {
+    const payment=ports.yahooPayment;
+    if(!request)throw new SoldOutError('INVALID','商品を開き直してから登録してください。');
+    if(request.awaitingYahooPayment&&!payment)throw new SoldOutError('INVALID','ヤフオクの購入通知から売却登録してください。');
+    if(payment){
+      if(request.market!=='ヤフオク'||request.sourceCandidateId!==payment.candidateId||typeof request.externalProductId!=='string'||request.externalProductId.trim()!==payment.auctionId)throw new SoldOutError('INVALID','通知のオークションIDと売却対象を確認してください。');
+      request={...request,awaitingYahooPayment:payment.waiting,saleEndDate:payment.waiting?'':paymentDate(payment.paidAt!)};
+    }
     // Full validation below allows an unchanged legacy market value.
     validateSoldOut(request, undefined, request?.market);
     const receiptId = `SOLD_OUT:${request.mutationId}`;
@@ -37,24 +46,27 @@ export function createSoldOutService(ports: SoldOutPorts) {
     };
     const previous = await readReceipt(); if (previous) return previous;
     const source = await persistence.getInventoryRaw(request.inventoryId);
-    if (!source || source.updatedAt !== request.expectedUpdatedAt) throw new SoldOutError('CONFLICT','ほかの操作で商品が変更されています。商品を開き直してください。');
+    if (!source || source.deletedAt || source.isDeleted || source.updatedAt !== request.expectedUpdatedAt) throw new SoldOutError('CONFLICT','ほかの操作で商品が変更されています。商品を開き直してください。');
     if (source.listingPartition === 'MERGED' || source.outboundBatchId || source.outboundArrivalBatchId) throw new SoldOutError('INVALID','出庫処理中または合算済みのため、処理が完了してから売却登録してください。');
     validateSoldOut(request, source.quantity, source.market ?? '');
     const masters = await ports.categories();
     const soldMaster = masters.filter(c=>c.name==='売り切れ'), activeMaster = masters.filter(c=>c.name==='販売中');
     if (soldMaster.length!==1 || activeMaster.length!==1) throw new SoldOutError('INVALID','カテゴリマスタの「販売中」「売り切れ」を確認してください。');
     const before = inventoryCategoryIds(source);
+    const unpaidMasters=masters.filter(c=>c.name==='未入金'||c.name==='入金待ち');
+    const unpaid=unpaidMasters.find(c=>c.name==='未入金')||unpaidMasters.find(c=>c.name==='入金待ち');
+    if(payment?.waiting&&!unpaid)throw new SoldOutError('INVALID','未入金のカテゴリを確認してください。');
     if(request.sourceCandidateId&&!masters.some(c=>['販売中','出品中','出品待ち','撮影待ち','補修待ち'].includes(c.name)&&before.includes(c.id)))throw new SoldOutError('INVALID','この商品は売却候補の対象カテゴリから外れています。商品を選び直してください。');
     const sourceCustom = parseCustomFields(source.customFields);
-    const saleCustom=request.pricing||request.saleShippingReceived!==undefined?{__belloSale:{...request.pricing,physicalQuantity:request.quantity,total:request.salePrice,commissionTotal:request.saleCommission,sourceInventoryId:source.id,...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{})}}:{};
+    const saleCustom={...(request.pricing||request.saleShippingReceived!==undefined||payment?{__belloSale:{...request.pricing,physicalQuantity:request.quantity,total:request.salePrice,commissionTotal:request.saleCommission,sourceInventoryId:source.id,...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{})}}:{}),...(payment?{__belloYahooPayment:{candidateId:payment.candidateId,auctionId:payment.auctionId,state:payment.waiting?'WAITING':'APPLIED',...(payment.waiting?{unpaidCategoryId:unpaid!.id}:{paidAt:payment.paidAt})}}:{})};
     if (before.includes(soldMaster[0].id)) throw new SoldOutError('INVALID','この商品はすでに売り切れです。');
     const activeIds=masters.filter(c=>['販売中','出品中'].includes(c.name)).map(c=>c.id);
-    const after = [...before.filter(id=>!activeIds.includes(id)),soldMaster[0].id];
+    const after = [...before.filter(id=>!activeIds.includes(id)&&(!payment||!unpaidMasters.some(c=>c.id===id))),soldMaster[0].id,...(payment?.waiting?[unpaid!.id]:[])];
     await persistence.validateCategoryIds(after);
     const split = request.quantity < source.quantity;
     const now = new Date(Math.max(Date.parse(ports.now?.() ?? new Date().toISOString()),Date.parse(source.updatedAt)+1)).toISOString();
     const soldId = split ? randomUUID() : source.id;
-    const changes: Row = {name:saleTitle(stockCountTitle(request.name,request.quantity),request.pricing),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
+    const changes: Row = {name:saleTitle(stockCountTitle(request.name,request.quantity),request.pricing),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:payment?.waiting?null:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
     if(request.saleCommission!==undefined)changes.saleCommission=request.saleCommission;
     const result: SoldOutResult = {sourceId:source.id,soldId,remainingQuantity:source.quantity-request.quantity,soldQuantity:request.quantity,updatedAt:now};
     let images: unknown[] = [];

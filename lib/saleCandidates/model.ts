@@ -11,6 +11,8 @@ export type SaleCandidate={
  feeAllocation?:{index:number;amounts:number[]};
  externalListingId?:string; orderLineId?:string;
  yahooStatus?:YahooSaleStatus; yahooEvents?:Partial<Record<YahooSaleStatus,string>>;
+ yahooPaymentNotice?:{gmailId:string;receivedAt:string};
+ yahooPaymentState?:'WAITING'|'APPLIED'; yahooPaymentAppliedAt?:string; yahooPaymentError?:string;
  orderRoute?:'WEB'|'PAY_ID_APP'|'UNKNOWN';
  confirmedLineFee?:number;
  result?:SoldOutResult; completedBy?:string; completedAt?:string; deletedBy?:string; deletedAt?:string;

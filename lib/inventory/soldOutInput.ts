@@ -10,6 +10,8 @@ export interface SoldOutRequest {
   /** Buyer-paid shipping for this sale, once per transaction; excluded from item revenue and fees. */
   saleShippingReceived?: number|null;
   sourceCandidateId?:string;
+  /** UI hint only; the server derives eligibility from the stored Yahoo notification. */
+  awaitingYahooPayment?:boolean;
   pricing?:SalePricing;
 }
 export interface SoldOutResult { sourceId: string; soldId: string; remainingQuantity: number; soldQuantity: number; updatedAt: string }
@@ -24,7 +26,9 @@ export function validateSoldOut(request: SoldOutRequest, available?: number, cur
   if (!Number.isSafeInteger(request.quantity) || request.quantity < 1) invalid('売却数量は1以上の整数で入力してください。');
   if (available !== undefined && (!Number.isSafeInteger(available) || request.quantity > available)) invalid('売却数量が在庫数量を超えています。');
   if (typeof request.name !== 'string' || !request.name.trim() || request.name.length > 2000) invalid('商品名を2000文字以内で入力してください。');
-  if (typeof request.saleEndDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(request.saleEndDate) || !Number.isFinite(Date.parse(request.saleEndDate)) || new Date(request.saleEndDate).toISOString().slice(0,10) !== request.saleEndDate) invalid('販売終了日を正しく入力してください。');
+  if (request.awaitingYahooPayment) {
+    if(request.market!=='ヤフオク'||!request.sourceCandidateId||request.saleEndDate!=='')invalid('未入金のヤフオク通知を選び直してください。');
+  } else if (typeof request.saleEndDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(request.saleEndDate) || !Number.isFinite(Date.parse(request.saleEndDate)) || new Date(request.saleEndDate).toISOString().slice(0,10) !== request.saleEndDate) invalid('販売終了日を正しく入力してください。');
   if (typeof request.externalProductId !== 'string' || request.externalProductId.length > 256) invalid('IDは256文字以内で入力してください。');
   if (typeof request.market !== 'string' || (request.market && request.market !== currentMarket && !(SOLD_OUT_MARKETS as readonly string[]).includes(request.market))) invalid('市場を選択肢から選んでください。');
   if (request.salePrice !== null && (!Number.isSafeInteger(request.salePrice) || request.salePrice < 0)) invalid('販売価格は0以上の整数で入力してください。');

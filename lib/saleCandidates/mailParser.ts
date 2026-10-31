@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
 import type {SaleCandidate,SaleChannel} from './model';
 import {parseYahooMail} from './yahooMail';
-export type PurchaseMail={gmailId:string;from:string;subject:string;receivedAt:string;text?:string;html?:string};
-export const PURCHASE_QUERY_VERSION=2;
+export type PurchaseMail={gmailId:string;from:string;subject:string;receivedAt:string;text?:string;html?:string;authenticatedYahooSender?:boolean};
+export const PURCHASE_QUERY_VERSION=3;
 export const PURCHASE_QUERY='newer_than:7d {(from:noreply@thebase.in subject:商品購入通知) (from:no-reply@mercari-shops.com subject:発送をお願いします) (from:auction-master@mail.yahoo.co.jp {subject:落札 subject:お届け先住所確定 subject:商品を発送してください})}';
 export const candidateKey=(channel:string,order:string,line:string)=>createHash('sha256').update(JSON.stringify([channel,order,line])).digest('hex');
 export function mailText(mail:PurchaseMail){

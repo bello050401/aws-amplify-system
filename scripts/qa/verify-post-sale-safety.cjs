@@ -1,8 +1,8 @@
 const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('node:fs');
 (async()=>{
 const built=await build({entryPoints:['lib/saleCandidates/postSale.ts'],bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'isolate-ports',setup(b){b.onResolve({filter:/.*/},a=>a.kind==='entry-point'?undefined:{path:a.path,external:true});}}]});
-let plans=new Map(),calls=[],stock=5,title='【在庫5】椅子',remaining=3,market='MERCARI',version='v1',remoteFailure=false,sourceCount=null,soldCount=2,saleIdentity=true,fullSale=false,soldOrder='order',soldVersion=null,selling=false,deleted=false,observation={remote:null,reviews:{}},reviewFailure=false;
-const candidate=()=>({id:'c',state:'DONE',channel:market,orderId:'order',result:{sourceId:'source',soldId:fullSale?'source':'sold',soldQuantity:2,remainingQuantity:remaining,updatedAt:'v1'}});
+let paymentState,plans=new Map(),calls=[],stock=5,title='【在庫5】椅子',remaining=3,market='MERCARI',version='v1',remoteFailure=false,sourceCount=null,soldCount=2,saleIdentity=true,fullSale=false,soldOrder='order',soldVersion=null,selling=false,deleted=false,observation={remote:null,reviews:{}},reviewFailure=false;
+const candidate=()=>({id:'c',state:'DONE',yahooPaymentState:paymentState,channel:market,orderId:'order',result:{sourceId:'source',soldId:fullSale?'source':'sold',soldQuantity:2,remainingQuantity:remaining,updatedAt:'v1'}});
 const db={send:async c=>{const x=c.input,k=x.Key?.pk??x.Item?.pk;if(c.kind==='GetCommand')return{Item:plans.has(k)?structuredClone(plans.get(k)):undefined};if(c.kind==='PutCommand'){plans.set(k,structuredClone(x.Item));return{};}const old=plans.get(k);if(old.state!=='REVIEW')throw Error('Concurrent');old.state='EXECUTING';return{};}};
 const make=k=>class{constructor(input){this.input=input;this.kind=k;}};
 const mods={
@@ -45,6 +45,8 @@ reset();remaining=0;fullSale=true;version='v2';soldOrder='other-order';await ass
 reset();remaining=0;fullSale=true;version='v2';selling=true;await assert.rejects(()=>reviewPostSale('c','owner'),/販売中に戻/);assert.equal(calls.length,0);
 reset();deleted=true;await assert.rejects(()=>reviewPostSale('c','owner'),/状態を確認/);assert.equal(calls.length,0);
 reset();remaining=3;market='YAHOO';soldVersion='v2';soldOrder='different';await assert.rejects(()=>reviewPostSale('c','owner'),/数量または注文/);assert.equal(calls.length,0);
+reset();remaining=0;market='YAHOO';fullSale=true;paymentState='WAITING';p=await reviewPostSale('c','owner');assert.equal(p.rows.length,2);assert(!p.rows.some(r=>r.channel==='YAHOO'));assert.equal(calls.length,0);await executePostSale('c','owner',p.token,true);assert.deepEqual(calls,[['STOP','BASE'],['STOP','MERCARI_SHOPS']]);
+reset();remaining=0;market='YAHOO';fullSale=true;paymentState='APPLIED';version='v2';p=await reviewPostSale('c','owner');await executePostSale('c','owner',p.token,true);assert.deepEqual(calls,[['STOP','BASE'],['STOP','MERCARI_SHOPS']]);
 const resultText='PASS: explicit confirmation; actor/token binding; sold-channel exclusion; zero-stock stops only other channels; pack-size stock; stale inventory blocked; uncertain write not retried; unsupported quantity not replaced with stop.';
 fs.writeFileSync('artifacts/sale-shipping-link-20261031/post-sale-safety.txt',resultText);console.log(resultText);
 })().catch(e=>{console.error(e);process.exitCode=1;});

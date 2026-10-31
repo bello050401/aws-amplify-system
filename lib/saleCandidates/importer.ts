@@ -19,7 +19,7 @@ export async function importPurchases(db:DynamoDBDocumentClient,table:string,rea
   do{
    if(!pendingIds.length){const page=await reader.list(scanQuery,nextPage);pendingIds=(page.messages||[]).map((m:{id:string})=>m.id);nextPage=page.nextPageToken;}
    while(pendingIds.length&&Date.now()-now<25000){
-    const id=pendingIds[0],key='MAIL:'+id;const previous=await db.send(new GetCommand({TableName:table,Key:{id:key},ConsistentRead:true}));
+    const id=pendingIds[0],key='MAIL:v'+PURCHASE_QUERY_VERSION+':'+id;const previous=await db.send(new GetCommand({TableName:table,Key:{id:key},ConsistentRead:true}));
     if(!previous.Item){
      const parsed=parsePurchaseMail(await reader.read(id));
      // BASE is read from its official orders API; never create a second email-derived order.

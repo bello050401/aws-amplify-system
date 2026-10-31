@@ -1,5 +1,6 @@
 import {SecretsManagerClient,GetSecretValueCommand} from '@aws-sdk/client-secrets-manager';
 import type {PurchaseMail} from './mailParser';
+import {yahooSenderAuthenticated} from './mailAuthentication';
 type Part={mimeType?:string;body?:{data?:string};headers?:{name:string;value:string}[];parts?:Part[]};
 export function gmailResponseError(status:number,body:unknown){const e=body as {error?:{errors?:{reason?:string}[]}};if(status===429||e?.error?.errors?.some(x=>/rateLimit|quota/i.test(x.reason||'')))return 'GMAIL_RATE_LIMIT';return status===401||status===403?'GMAIL_AUTH_REQUIRED':'GMAIL_UNAVAILABLE';}
 export async function purchaseGmailReader(){
@@ -16,7 +17,7 @@ export async function purchaseGmailReader(){
    const m=await get('/messages/'+id+'?format=full');const text:string[]=[],html:string[]=[];
    const visit=(p:Part)=>{if(p.body?.data&&p.mimeType==='text/plain')text.push(Buffer.from(p.body.data,'base64url').toString('utf8'));if(p.body?.data&&p.mimeType==='text/html')html.push(Buffer.from(p.body.data,'base64url').toString('utf8'));p.parts?.forEach(visit);};if(m.payload)visit(m.payload);
    const h=(key:string)=>(m.payload?.headers as Part['headers'])?.find(v=>v.name.toLowerCase()===key)?.value||'';
-   return {gmailId:id,from:h('from'),subject:h('subject'),receivedAt:new Date(Number(m.internalDate)).toISOString(),text:text.join('\n'),html:html.join('\n')};
+   return {gmailId:id,from:h('from'),subject:h('subject'),receivedAt:new Date(Number(m.internalDate)).toISOString(),text:text.join('\n'),html:html.join('\n'),authenticatedYahooSender:yahooSenderAuthenticated(m.payload?.headers||[])};
   }
  };
 }
