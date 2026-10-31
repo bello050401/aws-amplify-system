@@ -1,0 +1,15 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),{build}=require('esbuild');
+(async()=>{
+ const p={features:[],refs:[],cache:{},gets:[],scope:0,featureCalls:0,refCalls:0,fail:false};
+ const models={Feature:{listFeatureBySlug:async({slug},o)=>{assert.equal(slug,'public');assert.equal(p.scope,1);p.featureCalls++;if(p.fail)return {data:[],errors:[{message:'denied'}]};return o.nextToken?{data:p.features}:{data:[],nextToken:'second'};}},FeatureItem:{list:async o=>{assert.equal(o.filter.featureId.eq,'published');assert.equal(o.filter.isVisible.eq,true);p.refCalls++;return o.nextToken?{data:p.refs}:{data:[],nextToken:'second'};}},BaseItemCache:{get:async({baseItemId})=>{p.gets.push(baseItemId);return {data:p.cache[baseItemId]??null};}}};
+ const bundled=await build({entryPoints:['lib/features/publicFeature.ts'],bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'ports',setup(b){b.onResolve({filter:/^(server-only|@\/lib\/amplify\/(dataClient|requestCache))$/},a=>({path:a.path,namespace:'port'}));b.onLoad({filter:/.*/,namespace:'port'},a=>({contents:a.path==='server-only'?'':a.path.endsWith('requestCache')?'export const requestCache=f=>f;':'export const serverDataClient=globalThis.ports.client; export const runWithDirectData=globalThis.ports.run;',loader:'js'}));}}]});
+ const m={exports:{}};vm.runInNewContext(bundled.outputFiles[0].text,{module:m,exports:m.exports,require,console,globalThis:{ports:{client:{models},run:async f=>{p.scope++;try{return await f();}finally{p.scope--;}}}}});const load=m.exports.loadPublishedFeature;
+ p.features=[{id:'draft',slug:'public',status:'DRAFT'},{id:'archived',slug:'public',status:'ARCHIVED'}];assert.equal(await load('public'),null);assert.equal(p.refCalls,0);
+ p.features.push({id:'published',slug:'public',status:'PUBLISHED',title:'公開'});
+ p.refs=[{featureId:'published',baseItemId:'visible',isVisible:true,sortOrder:2},{featureId:'published',baseItemId:'hidden',isVisible:false,sortOrder:0},{featureId:'other',baseItemId:'other',isVisible:true,sortOrder:0},{featureId:'published',baseItemId:'unpublished',isVisible:true,sortOrder:1},{featureId:'published',baseItemId:'missing',isVisible:true,sortOrder:3}];
+ p.cache={visible:{baseItemId:'visible',isPublished:true,title:'visible'},unpublished:{baseItemId:'unpublished',isPublished:false,title:'private'}};
+ const result=await load('public');assert.equal(result.feature.id,'published');assert.deepEqual(Array.from(result.items,x=>x.itemId),['visible']);assert(!p.gets.includes('hidden'));assert(!p.gets.includes('other'));assert.equal(p.refCalls,2);
+ p.fail=true;await assert.rejects(load('public'),/denied/);assert.equal(p.scope,0);
+ const schema=fs.readFileSync('amplify/data/resource.ts','utf8').split('BaseOAuthToken:')[0];assert(!schema.includes('allow.publicApiKey()'));
+ console.log('PASS: drafts/archives/private products hidden, correct parent/visibility required, pagination, errors fail closed, API-key rules removed; no external requests.');
+})().catch(e=>{console.error(e);process.exitCode=1});

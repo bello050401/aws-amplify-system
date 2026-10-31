@@ -7,7 +7,7 @@ import { generateSku } from "../functions/generate-sku/resource";
  *
  * 1. The BASE feature-page generator (Feature / FeatureItem /
  *    BaseItemCache / BaseOAuthToken below) — unchanged from Phase 1,
- *    still "Admins" group + public API-key read.
+ *    "Admins" group only. Public pages use a restricted server-side reader.
  * 2. BELLO Inventory (Category / Location / StatusMaster /
  *    CustomFieldDefinition / Inventory / InventoryHistory, added in
  *    Phase 2, further down this file) — ADMIN/EDITOR/VIEWER groups only,
@@ -61,12 +61,8 @@ const schema = a.schema({
     .secondaryIndexes((index) => [index("slug")])
     .authorization((allow) => [
       allow.group("Admins"),
-      // Public visitors only ever need read access, and only for pages the
-      // admin explicitly published. The public route (app/features/[slug])
-      // enforces `status === "PUBLISHED"` in its query — Amplify Data does
-      // not support row-level conditions on a public API-key rule, so this
-      // is a deliberate application-layer check, not a data-layer one.
-      allow.publicApiKey().to(["read"]),
+      // Public API-key access would expose DRAFT/ARCHIVED rows directly.
+      // Published pages are rendered by the server without exposing this model.
     ]),
 
   FeatureItem: a
@@ -79,7 +75,6 @@ const schema = a.schema({
     })
     .authorization((allow) => [
       allow.group("Admins"),
-      allow.publicApiKey().to(["read"]),
     ]),
 
   // Read-through cache of BASE product data. Written only by admin-authenticated
@@ -106,7 +101,6 @@ const schema = a.schema({
     .identifier(["baseItemId"])
     .authorization((allow) => [
       allow.group("Admins"),
-      allow.publicApiKey().to(["read"]),
     ]),
 
   // BASE OAuth2 tokens for this shop's connected app. Admin-only, no

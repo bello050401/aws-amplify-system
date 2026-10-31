@@ -882,6 +882,13 @@ backend.salesAggregateScheduler.addEnvironment("ZAICO_TRANSITION_TABLE_NAME", ba
 if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {
   const outboundStack = backend.createStack('OutboundRuntime');
   const role = Role.fromRoleName(outboundStack, 'ExistingComputeRole', 'BelloAmplifyStagingComputeRole');
+  // The public feature renderer can read only these display models. No BASE
+  // token, arbitrary table, or write permission is added for the public route.
+  new ManagedPolicy(outboundStack,'PublicFeatureReadAccess',{roles:[role],statements:[
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan'],resources:
+      ['Feature','FeatureItem','BaseItemCache'].map(name=>backend.data.resources.tables[name].tableArn)}),
+    new PolicyStatement({actions:['dynamodb:Query'],resources:[backend.data.resources.tables.Feature.tableArn+'/index/featuresBySlug']}),
+  ]});
   const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','OutboundSequence','InventoryHistory','ImageProcessingVersion','ZaicoTransitionRecord'].map(name=>backend.data.resources.tables[name].tableArn);
   const readable = ['Category','Location'].map(name=>backend.data.resources.tables[name].tableArn);
   new ManagedPolicy(outboundStack,'RuntimeAccess',{roles:[role],statements:[
