@@ -158,6 +158,11 @@ if(process.env.PHOTO_MEDIA_CLEANUP_ENABLED==='true'){
   backend.mediaMaintenance.addEnvironment('PHOTO_REGISTRATION_TABLE_NAME',photoTable);
   backend.mediaMaintenance.addEnvironment('PHOTO_REGISTRATION_BUCKET_NAME',photoBucket);
   backend.mediaMaintenance.addEnvironment('MEDIA_INVENTORY_HISTORY_TABLE_NAME',backend.data.resources.tables.InventoryHistory.tableName);
+  const mediaWorkflowTable='BelloEconveniWorkflow';
+  backend.mediaMaintenance.addEnvironment('MEDIA_ECONVENI_WORKFLOW_TABLE_NAME',mediaWorkflowTable);
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:ConditionCheckItem'],resources:[`arn:aws:dynamodb:${mediaStack.region}:${mediaStack.account}:table/${mediaWorkflowTable}`]}));
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:[backend.data.resources.tables.ListingDraft.tableArn]}));
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:ConditionCheckItem'],resources:[backend.data.resources.tables.ChannelListing.tableArn]}));
   backend.data.resources.tables.InventoryHistory.grantReadData(backend.mediaMaintenance.resources.lambda);
   // Amplify exposes imported table constructs without their secondary indexes.
   // The orphan check queries deletion history and condition-checks both records
@@ -170,7 +175,7 @@ if(process.env.PHOTO_MEDIA_CLEANUP_ENABLED==='true'){
     actions:['dynamodb:ConditionCheckItem'],
     resources:[backend.data.resources.tables.Inventory.tableArn,backend.data.resources.tables.InventoryHistory.tableArn],
   }));
-  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:Scan','dynamodb:Query','dynamodb:GetItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[`arn:aws:dynamodb:${mediaStack.region}:${mediaStack.account}:table/${photoTable}`]}));
+  backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:Scan','dynamodb:Query','dynamodb:GetItem','dynamodb:UpdateItem','dynamodb:PutItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:[`arn:aws:dynamodb:${mediaStack.region}:${mediaStack.account}:table/${photoTable}`]}));
   backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:ListBucketVersions'],resources:[`arn:aws:s3:::${photoBucket}`],conditions:{StringLike:{'s3:prefix':['photo-batches/*']}}}));
   backend.mediaMaintenance.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:DeleteObjectVersion'],resources:[`arn:aws:s3:::${photoBucket}/photo-batches/*`]}));
 }
@@ -548,6 +553,9 @@ const inventoryTable = backend.data.resources.tables["Inventory"];
 const inventoryResources = inventoryTable.node.scope!.node.findAll().filter((node): node is CfnResource => node instanceof CfnResource && node.cfnResourceType === 'Custom::AmplifyDynamoDBTable');
 if (inventoryResources.length !== 1) throw new Error('Inventory table resource must be unambiguous');
 const inventoryResource = inventoryResources[0];
+// Inventory edits/deletes need recoverable source data, not just history rows.
+// Keep the existing table and indexes; enable DynamoDB's bounded recovery log.
+inventoryResource.addPropertyOverride('pointInTimeRecoverySpecification', {pointInTimeRecoveryEnabled:true});
 const existingIndexes = (inventoryResource as unknown as {rawOverrides?: {Properties?: {globalSecondaryIndexes?: Record<string, {indexName: string}>}}}).rawOverrides?.Properties?.globalSecondaryIndexes;
 if (!existingIndexes || Object.keys(existingIndexes).length !== 6) throw new Error('Review Inventory index layout before changing compact search');
 inventoryResource.addPropertyOverride('globalSecondaryIndexes.6', {

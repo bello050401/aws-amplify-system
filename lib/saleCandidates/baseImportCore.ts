@@ -32,7 +32,7 @@ export async function importBaseOrdersCore(db:DynamoDBDocumentClient,table:strin
    if((await db.send(new GetCommand({TableName:table,Key:{id:marker},ConsistentRead:true}))).Item){offset++;continue;}
    // Existing email-derived orders are not re-created under another line identifier.
    let key:Record<string,unknown>|undefined,legacy=false;
-   do{const r=await db.send(new ScanCommand({TableName:table,ExclusiveStartKey:key,FilterExpression:'channel=:c AND orderId=:o',ExpressionAttributeValues:{':c':'BASE',':o':order.unique_key},ProjectionExpression:'id'}));legacy ||=!!r.Items?.length;key=r.LastEvaluatedKey;}while(key&&!legacy);
+   do{const r=await db.send(new ScanCommand({TableName:table,ExclusiveStartKey:key,FilterExpression:'channel=:c AND (orderId=:o OR orderHash=:h)',ExpressionAttributeValues:{':c':'BASE',':o':order.unique_key,':h':candidateKey('BASE',order.unique_key,'order')},ProjectionExpression:'id'}));legacy ||=!!r.Items?.length;key=r.LastEvaluatedKey;}while(key&&!legacy);
    const candidates=legacy?[]:parseBaseOrder(await read('/orders/detail/'+order.unique_key));
    // A cancelled/empty response is revisited on the next bounded walk.
    if(candidates.length||legacy){await db.send(new TransactWriteCommand({TransactItems:[{Put:{TableName:table,Item:{id:marker,createdAt:new Date().toISOString(),legacy},ConditionExpression:'attribute_not_exists(id)'}},...candidates.map(c=>({Put:{TableName:table,Item:c,ConditionExpression:'attribute_not_exists(id)'}}))]}));created+=candidates.length;}

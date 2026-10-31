@@ -23,6 +23,7 @@ import { sweepUnusedImages } from "../../../lib/mediaMaintenance/sweep";
 import { cleanupPhotoAssets } from "../../../lib/mediaMaintenance/photoCleanupAws";
 import { markArchivedPhotoBatches } from "../../../lib/mediaMaintenance/archivedPhotoBatches";
 import { markDeletedInventoryPhotos } from "../../../lib/mediaMaintenance/deletedInventoryPhotos";
+import { cleanupDeletedInventoryListings } from "../../../lib/mediaMaintenance/deletedInventoryListings";
 import {
   retireExpiredVersions,
   type VersionLifecycleRow,
@@ -63,6 +64,13 @@ export const handler = async () => {
     (await s3.send(new GetBucketVersioningCommand({ Bucket: bucket }))).Status
   )
     throw Error("Inventory bucket versioning requires version-aware cleanup");
+  if(process.env.PHOTO_MEDIA_CLEANUP_ENABLED === "true") {
+    const photo=process.env.PHOTO_REGISTRATION_TABLE_NAME, history=process.env.MEDIA_INVENTORY_HISTORY_TABLE_NAME, workflow=process.env.MEDIA_ECONVENI_WORKFLOW_TABLE_NAME;
+    if(!photo||!history||!workflow)throw Error("Deleted listing cleanup configuration incomplete");
+    const cleanup=await cleanupDeletedInventoryListings(db,{inventory:tableNames.Inventory,history,draft:tableNames.ListingDraft,channel:tableNames.ChannelListing,photo,workflow});
+    console.log(JSON.stringify({kind:"DELETED_INVENTORY_LISTINGS",...cleanup}));
+    if(cleanup.failures.length)throw Error("Deleted listing cleanup failed; retained for retry");
+  }
   const versionTable = tableNames.ImageProcessingVersion;
   const retired = await retireExpiredVersions(
     db,

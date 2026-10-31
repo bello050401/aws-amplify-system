@@ -16,7 +16,7 @@ import type { DeleteRequest } from "../domain/inventoryActions";
 import { readJson, ReadHttpError } from "./readJson";
 import {StockSplitError,type StockSplitRequest,type StockSplitResult} from '../../../lib/inventory/stockSplitInput';
 import type {StockSplitSaved} from '../ui/StockSplitScreen';
-import {MobileSoldOutError,type SoldOutSaved} from '../ui/SoldOutScreen';
+import {MobileSoldOutError,type SoldOutSaved} from '../domain/soldOut';
 import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutInput';
 import type {CatalogDelta} from '../domain/catalogProtocol';
 
@@ -185,6 +185,7 @@ export async function saveInventory(request: SaveRequest): Promise<InventoryItem
     if (response.status === 422) {
       const failure=await response.json();
       if(failure.error==='BARCODE_INVALID') throw new InventoryWriteError('barcodeInvalid');
+      if(failure.error==='ARRIVAL_RESERVED') throw new InventoryWriteError('arrivalReserved');
       if(failure.error==='OUTBOUND_RESERVED') throw new InventoryWriteError('outboundReserved');
       if(failure.error==='CATEGORY_INVALID') throw new InventoryWriteError('categoryInvalid');
     }

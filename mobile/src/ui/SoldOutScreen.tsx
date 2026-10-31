@@ -6,9 +6,9 @@ import {DateField} from './DateField';
 import {colors} from './theme';
 import {OperationQuantity,OperationConfirmation,operationStyles} from './InventoryOperationControls';
 import {stockCountTitle} from '../../../lib/inventory/stockCountTitle';
-export interface SoldOutSaved {sold:InventoryItem;source:InventoryItem}
+import {MobileSoldOutError,type SoldOutSaved} from '../domain/soldOut';
+export {MobileSoldOutError,type SoldOutSaved} from '../domain/soldOut';
 export interface SoldOutPorts {newMutationId:()=>string;sell:(request:SoldOutRequest)=>Promise<SoldOutSaved>}
-export class MobileSoldOutError extends Error {constructor(public code:string,message:string){super(message);}}
 export function SoldOutScreen({item,ports,onCancel,onSaved}:{item:InventoryItem;ports:SoldOutPorts;onCancel:()=>void;onSaved:(items:SoldOutSaved)=>void}) {
   const [quantity,setQuantity]=useState('1'),[name,setName]=useState(item.name),[date,setDate]=useState(japanToday),[id,setId]=useState(item.details?.externalProductId??''),[market,setMarket]=useState(item.details?.market??''),[price,setPrice]=useState(item.details?.salePrice??'');
   const [busy,setBusy]=useState(false),[uncertain,setUncertain]=useState(false),[conflict,setConflict]=useState(false),[error,setError]=useState(''),[choosing,setChoosing]=useState(false);

@@ -4,7 +4,7 @@ import type { PendingPhoto, UploadedPhoto } from "./inventory";
 import {splitCategoryNames} from '../../../lib/inventory/categories';
 
 export const OFFLINE_WARNING = "【圏外です】";
-export type WriteFailure = "offline" | "unauthorized" | "forbidden" | "conflict" | "uncertain" | "server" | "barcodeInvalid" | "outboundReserved" | "categoryInvalid";
+export type WriteFailure = "offline" | "unauthorized" | "forbidden" | "conflict" | "uncertain" | "server" | "barcodeInvalid" | "outboundReserved" | "arrivalReserved" | "categoryInvalid";
 export class InventoryWriteError extends Error {
   constructor(readonly kind: WriteFailure) { super(kind); }
 }
@@ -42,6 +42,7 @@ export interface EditorState {
 const errors: Record<WriteFailure, string> = {
   barcodeInvalid: '読み取れませんでした。番号を確認してください。',
   outboundReserved: '出庫データを作成済みです。出庫画面で送信を完了するか、未送信データを取り消してから編集してください。',
+  arrivalReserved: '到着確認待ちの商品です。出庫履歴で到着を確認してから、数量・カテゴリ・保管場所を変更してください。商品名や価格は編集できます。',
   categoryInvalid: 'カテゴリを確認してください。最新の一覧から20個以内で選択してください。',
   offline: OFFLINE_WARNING,
   unauthorized: "ログインの有効期限が切れました。編集内容は保持しています。",

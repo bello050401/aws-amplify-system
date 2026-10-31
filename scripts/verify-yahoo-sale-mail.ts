@@ -63,7 +63,7 @@ test('CAS retries after simultaneous sale and preserves its result',async()=>{
  assert.equal(await store.receiveYahoo(parse('paid')),'updated');const result=await store.get(c.id);assert.equal(result?.state,'DONE');assert.equal(result?.result?.soldId,'saved');assert.equal(result?.yahooStatus,'AWAITING_SHIPMENT');
 });
 test('CAS retries after simultaneous deletion and cannot restore it',async()=>{
- const m=memory(),store=createCandidateStore(m.db,'T'),c=parse('won');await store.put(c);let once=true;m.beforePut(key=>{if(key===c.id&&once){once=false;m.rows.set(key,{...m.rows.get(key),state:'DELETED',updatedAt:'2099-01-01T00:00:00.000Z'});}});assert.equal(await store.receiveYahoo(parse('paid')),'unchanged');assert.equal((await store.get(c.id))?.state,'DELETED');
+ const m=memory(),store=createCandidateStore(m.db,'T'),c=parse('won');await store.put(c);let once=true;m.beforePut(key=>{if(key===c.id&&once){once=false;m.rows.set(key,{...m.rows.get(key),state:'DELETED',updatedAt:'2099-01-01T00:00:00.000Z'});}});assert.equal(await store.receiveYahoo(parse('paid')),'unchanged');assert.equal(await store.get(c.id),undefined);assert.equal(m.rows.get(c.id).state,'DELETED');
 });
 test('CAS exhaustion throws and leaves the failed email unacknowledged for retry',async()=>{
  const m=memory(),c=parse('won');m.rows.set(c.id,c);m.beforePut(key=>{if(key===c.id)m.rows.get(key).updatedAt=new Date(Date.parse(m.rows.get(key).updatedAt)+1).toISOString();});const reader=async()=>({list:async()=>({messages:[{id:'paid'}]}),read:async()=>mail('paid')});assert.equal((await importPurchases(m.db,'T',reader)).ok,false);assert.ok(!m.rows.has('MAIL:v3:paid'));assert.deepEqual(m.rows.get('IMPORT_STATUS').pendingIds,['paid']);

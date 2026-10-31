@@ -344,6 +344,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
       // QueryとGetを並行すると、選択transactionを挟んで別の版の行を
       // 読み合わせる可能性がある。前後の版が一致した場合だけ返す。
       const before = await this.ddb.send(new GetCommand({ TableName: this.tableName, Key: stateKey, ConsistentRead: true }));
+      if (before.Item?.retiredAt) throw new ConditionViolationError("CONFLICT", "listing was permanently deleted");
       const rows = await this.ddb.send(new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :pfx)",
@@ -351,6 +352,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
         ConsistentRead: true,
       }));
       const after = await this.ddb.send(new GetCommand({ TableName: this.tableName, Key: stateKey, ConsistentRead: true }));
+      if (after.Item?.retiredAt) throw new ConditionViolationError("CONFLICT", "listing was permanently deleted");
       const beforeRevision = (before.Item?.selectionRevision as number | undefined) ?? 0;
       const afterRevision = (after.Item?.selectionRevision as number | undefined) ?? 0;
       if (beforeRevision === afterRevision) {
@@ -810,7 +812,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
       }
     }
     const unchanged = transactItems.length === 0 && decision.refCountIncrements.length === 0 && decision.refCountDecrements.length === 0;
-    const revisionCondition = "attribute_not_exists(selectionRevision) OR selectionRevision = :readRevision";
+    const revisionCondition = "attribute_not_exists(retiredAt) AND (attribute_not_exists(selectionRevision) OR selectionRevision = :readRevision)";
     const revisionValues = { ":readRevision": decision.nextSelectionRevision - 1 };
     transactItems.unshift(unchanged
       ? { ConditionCheck: { TableName: this.tableName, Key: listingSelectionStateKey(decision.listingId), ConditionExpression: revisionCondition, ExpressionAttributeValues: revisionValues } }

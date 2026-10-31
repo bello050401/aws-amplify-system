@@ -40,6 +40,11 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
   const before=inventoryCategoryIds(current ?? {});
   const after=Array.isArray(input.categoryIds)?[...new Set(input.categoryIds as string[])]:input.categoryId===undefined?before:
     [...new Set([...(input.categoryId?[String(input.categoryId)]:[]),...before.filter(cat=>cat!==current?.categoryId)])];
+  if(current?.outboundArrivalBatchId && (
+    input.quantity!==undefined && input.quantity!==current.quantity ||
+    input.locationId!==undefined && input.locationId!==current.locationId ||
+    before.length!==after.length || before.some(id=>!after.includes(id))
+  )) throw new InventoryMutationRejected('ARRIVAL_RESERVED');
   await validateCategoryIds(after);
   const now=new Date(Math.max(Date.now(), Date.parse(String(current?.updatedAt??''))+1 || 0)).toISOString();
   const values={...input,id,categoryId:after[0]??null,categoryIds:after,updatedAt:now,...(typeof input.barcode==='string'?{barcode:input.barcode.trim()}: {})};
@@ -68,7 +73,8 @@ async function deleteInventoryWithCategories(id:string,expectedUpdatedAt:string,
   if(!row || row.updatedAt!==expectedUpdatedAt) throw new InventorySaveError('CONFLICT');
   if(row.listingPartition==='MERGED') throw new InventoryMutationRejected('MERGED');
   if(row.outboundBatchId) throw new InventoryMutationRejected('OUTBOUND_RESERVED');
-  const changes:InventoryTransaction=[{Delete:{TableName:inventoryTable('Inventory'),Key:{id},ConditionExpression:'updatedAt = :version AND attribute_not_exists(outboundBatchId)',ExpressionAttributeValues:{':version':expectedUpdatedAt}}},...categoryLinkChanges(id,inventoryCategoryIds(row),[],new Date().toISOString())];
+  if(row.outboundArrivalBatchId) throw new InventoryMutationRejected('ARRIVAL_RESERVED');
+  const changes:InventoryTransaction=[{Delete:{TableName:inventoryTable('Inventory'),Key:{id},ConditionExpression:'updatedAt = :version AND attribute_not_exists(outboundBatchId) AND attribute_not_exists(outboundArrivalBatchId)',ExpressionAttributeValues:{':version':expectedUpdatedAt}}},...categoryLinkChanges(id,inventoryCategoryIds(row),[],new Date().toISOString())];
   // Keep proof of deletion in the same transaction. Background photo cleanup
   // must distinguish a deleted product from a missing/misconfigured table.
   const deletedAt=new Date().toISOString();

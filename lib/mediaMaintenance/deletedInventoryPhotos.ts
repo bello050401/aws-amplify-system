@@ -8,7 +8,7 @@ import {
 
 /** Deleted stock must not leave its unselected Photo Station originals forever.
  * A missing parent alone is insufficient: require a recorded inventory deletion.
- * Mark each asset deleted first; the normal seven-day photo grace period follows.
+ * Mark each asset deleted first; the version-aware photo cleanup removes it.
  * Never touch a standalone/unlinked batch or an asset selected for a listing.
  */
 export async function markDeletedInventoryPhotos(

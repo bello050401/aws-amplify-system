@@ -121,7 +121,7 @@ function renderReadOnlyCell(
       return <span className="block truncate font-mono text-[12px] text-gray-700">{row.displayId}</span>;
     case "name":
       return (
-        <span className="block truncate font-medium text-gray-900" title={row.name}>
+        <span className="line-clamp-2 break-words font-medium leading-relaxed text-gray-900" title={row.name}>
           {row.name}
         </span>
       );
@@ -371,35 +371,15 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
         <InventoryCardList rows={rows} categoriesById={categoriesById} locationsById={locationsById} statusesById={statusesById} listReturnQuery={listReturnQuery} photoThumbnails={photoThumbnails} />
       </div>
       <div className="hidden h-full overflow-auto md:block">
-      {/* table-layout: fixed + 明示的なtable幅(全可視列の合計) — これが
-          ないとブラウザは内容量に応じて列幅を自動調整し直してしまい、
-          設定した幅(物品名列を含む)が反映されない。合計がビューポート
-          を超えた分は、外側のoverflow-autoコンテナが横スクロールで吸収
-          する(物品名が長い場合でも他列や画像列を圧迫しない)。
-
-          追加修正指示 §2: 一覧の右端が「開いた」ように見える不具合の
-          修正 — 従来、行間の区切り線(各<tr>のborder-b)以外にテーブル
-          を縦方向に閉じる罫線が一切存在しなかった(左右の縦罫線が最初
-          から未実装)。border-rightをtable要素そのものに置くのが正しい
-          解: table-layout:fixed + 明示的なwidth(=totalWidth、可視列幅の
-          合計)により、<table>自身のボックス幅は常に「その時点で実際に
-          表示されている最後の列」の右端と厳密に一致する。そのため列の
-          表示/非表示をどう変更してtotalWidthが変わっても、この
-          border-rightは常に真の右端に追従する — 特定の列名(例:
-          updatedAt)をハードコードした右端固定は一切行っていない。
-          border-collapseにより、この<table>要素自身のborderは各行の
-          border-bと同じ罫線モデルで描画される(二重線にならない)。色は
-          既存のヘッダー下罫線と同じgray-200・太さもTailwindの既定1px
-          で統一し、行間のgray-100(より薄い区切り線)とは意図的に区別
-          した見た目の一貫性を保つ。 */}
-      <table className="border-collapse border-r border-gray-200 text-[13px]" style={{ tableLayout: "fixed", width: totalWidth }}>
+      {/* Keep configured widths as minima; let the product name use spare desktop space. */}
+      <table className="border-collapse border-r border-gray-200 text-[13px]" style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
             {visibleColumns.map((col) => {
               const w = widthFor(col.key);
               const align = RIGHT_ALIGN_COLUMNS.has(col.key) ? "text-right" : "text-left";
               return (
-                <th key={col.key} style={{ width: w, minWidth: MIN_COLUMN_WIDTH }} className={`px-2 py-1.5 ${align}`}>
+                <th key={col.key} style={{ width: col.key === "name" ? undefined : w, minWidth: col.key === "name" ? w : MIN_COLUMN_WIDTH }} className={`px-2 py-1.5 ${align}`}>
                   <span className="block truncate" title={col.label}>
                     {col.label}
                   </span>
@@ -420,7 +400,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                   return (
                     <td
                       key={col.key}
-                      style={{ width: w, minWidth: MIN_COLUMN_WIDTH }}
+                      style={{ width: col.key === "name" ? undefined : w, minWidth: col.key === "name" ? w : MIN_COLUMN_WIDTH }}
                       className={editable ? editableCell : RIGHT_ALIGN_COLUMNS.has(col.key) ? numCell : cell}
                     >
                       {editable ? (

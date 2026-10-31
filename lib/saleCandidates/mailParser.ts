@@ -1,10 +1,10 @@
-import {createHash} from 'node:crypto';
+import {candidateKey} from './identity';
+export {candidateKey} from './identity';
 import type {SaleCandidate,SaleChannel} from './model';
 import {parseYahooMail} from './yahooMail';
 export type PurchaseMail={gmailId:string;from:string;subject:string;receivedAt:string;text?:string;html?:string;authenticatedYahooSender?:boolean};
 export const PURCHASE_QUERY_VERSION=3;
 export const PURCHASE_QUERY='newer_than:7d {(from:noreply@thebase.in subject:商品購入通知) (from:no-reply@mercari-shops.com subject:発送をお願いします) (from:auction-master@mail.yahoo.co.jp {subject:落札 subject:お届け先住所確定 subject:商品を発送してください})}';
-export const candidateKey=(channel:string,order:string,line:string)=>createHash('sha256').update(JSON.stringify([channel,order,line])).digest('hex');
 export function mailText(mail:PurchaseMail){
  return (mail.text?.trim()||mail.html?.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'').replace(/<br\s*\/?\s*>|<\/(?:p|div|tr|li|td)>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#(\d+);/g,(_,n)=>String.fromCodePoint(Number(n)))||'').replace(/\r/g,'').normalize('NFKC');
 }

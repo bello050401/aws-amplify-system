@@ -1,7 +1,7 @@
 /** Shared save contract for Web/mobile callers. The caller retains staff authorization. */
 export class InventoryMutationRejected extends Error {
-  constructor(readonly code: 'MERGED' | 'BARCODE_INVALID' | 'OUTBOUND_RESERVED' | 'CATEGORY_INVALID') {
-    super({MERGED:'この商品は出庫先の在庫に合算済みです。合算先の商品を開いてください。',BARCODE_INVALID:'読み取れませんでした。番号を確認してください。', OUTBOUND_RESERVED:'出庫データを作成済みです。出庫画面で送信を完了するか、未送信データを取り消してから編集してください。', CATEGORY_INVALID:'カテゴリを確認してください。最新の一覧から20個以内で選択してください。'}[code]);
+  constructor(readonly code: 'MERGED' | 'BARCODE_INVALID' | 'OUTBOUND_RESERVED' | 'ARRIVAL_RESERVED' | 'CATEGORY_INVALID') {
+    super({MERGED:'この商品は出庫先の在庫に合算済みです。合算先の商品を開いてください。',BARCODE_INVALID:'読み取れませんでした。番号を確認してください。', OUTBOUND_RESERVED:'出庫データを作成済みです。出庫画面で送信を完了するか、未送信データを取り消してから編集してください。', ARRIVAL_RESERVED:'到着確認待ちの商品です。出庫履歴で到着を確認してから、数量・カテゴリ・保管場所の変更や削除を行ってください。商品名や価格は編集できます。', CATEGORY_INVALID:'カテゴリを確認してください。最新の一覧から20個以内で選択してください。'}[code]);
   }
 }
 export class InventorySaveError extends Error {

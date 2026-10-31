@@ -113,7 +113,20 @@ function evalAtomic(atom: string, item: Item, names?: Record<string, string>, va
 
 function evaluateCondition(expr: string | undefined, item: Item, names?: Record<string, string>, values?: Record<string, unknown>): boolean {
   if (!expr) return true;
-  return expr.split(" OR ").some((group) => group.split(" AND ").every((atom) => evalAtomic(atom, item, names, values)));
+  let text = expr.trim();
+  // DynamoDB parentheses bind before AND, which binds before OR. Splitting all
+  // spaces made a grouped guard impossible to test and could misread precedence.
+  if (text.startsWith("(")) {
+    let depth = 0, end = -1;
+    for (let i=0;i<text.length;i++) { if(text[i]==='(')depth++; if(text[i]===')'&&--depth===0){end=i;break;} }
+    if(end===text.length-1)return evaluateCondition(text.slice(1,-1),item,names,values);
+  }
+  for (const separator of [' OR ', ' AND ']) {
+    const parts:string[]=[];let depth=0,start=0;
+    for(let i=0;i<text.length;i++){if(text[i]==='(')depth++;else if(text[i]===')')depth--;if(depth===0&&text.startsWith(separator,i)){parts.push(text.slice(start,i));start=i+separator.length;i=start-1;}}
+    if(parts.length){parts.push(text.slice(start));return separator===' OR '?parts.some(x=>evaluateCondition(x,item,names,values)):parts.every(x=>evaluateCondition(x,item,names,values));}
+  }
+  return evalAtomic(text,item,names,values);
 }
 
 function splitRespectingParens(input: string, sep: string): string[] {
