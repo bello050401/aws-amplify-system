@@ -4,9 +4,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 
 /** Shared visual guide for native and Safari. Decoding still supports the entire camera image. */
-export function ScannerLayout({ children, error, onClose, permissionAction }: {
+export function ScannerLayout({ children, error, onClose, permissionAction, loading }: {
   children?: React.ReactNode;
   error?: string;
+  loading?: boolean;
   onClose: () => void;
   permissionAction?: () => void;
 }) {
@@ -33,6 +34,7 @@ export function ScannerLayout({ children, error, onClose, permissionAction }: {
           </View>
           <View style={s.maskFill} />
         </View>
+        {loading && <View style={s.cameraMessage}><Text accessibilityRole="text" style={s.error}>読み取りを準備しています…</Text></View>}
         {!!error && <View style={s.cameraMessage}><Ionicons name="camera-outline" size={38} color="#A9BFB7" /><Text accessibilityRole="alert" style={s.error}>{error}</Text></View>}
         {!!permissionAction && <View style={s.cameraMessage}><Ionicons name="camera-outline" size={38} color="#A9BFB7" /><Text style={s.error}>コードを読み取るためにカメラを使用します。</Text><Pressable accessibilityRole="button" onPress={permissionAction} style={s.allow}><Text style={s.allowText}>カメラを許可する</Text></Pressable></View>}
       </View>
