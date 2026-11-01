@@ -1,5 +1,6 @@
 import { listListingsOverviewSafe } from "@/lib/listing/service";
 import { ListingsOverviewTable } from "./ListingsOverviewTable";
+import { getEcListingCatalogAction } from "@/app/actions/ecListingCatalog";
 
 /**
  * EC一覧P1 レビュー補正(2026-09-13): page.tsx本体(ヘッダー・案内文)
@@ -15,6 +16,12 @@ import { ListingsOverviewTable } from "./ListingsOverviewTable";
  * 必要はない——本体(ヘッダー)がエラー境界へ巻き込まれることはない。
  */
 export async function ListingsOverviewData({ canEdit }: { canEdit: boolean }) {
-  const result = await listListingsOverviewSafe();
-  return <ListingsOverviewTable initialResult={result} canEdit={canEdit} />;
+  // The table needs both sources before an EC operation can be reviewed.
+  // Fetch them together, rather than waiting for browser hydration to start
+  // another server-action round trip. This remains inside the Suspense boundary.
+  const [result, catalog] = await Promise.all([
+    listListingsOverviewSafe(),
+    getEcListingCatalogAction().catch(() => undefined),
+  ]);
+  return <ListingsOverviewTable initialResult={result} initialCatalog={catalog} canEdit={canEdit} />;
 }

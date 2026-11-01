@@ -74,6 +74,11 @@ export async function getEcListingCatalogAction(inventoryId?:string): Promise<Ec
         ...inventoryAuthMode,
       }),
     ),
+    // These are independent, read-only snapshots. Do not wait for the legacy
+    // channel scans before starting the e-conveni and sale-reference reads.
+    readEconveniCatalog(inventoryId),
+    readManualSync(inventoryId),
+    inventoryId ? Promise.resolve(null) : soldListingReferences(),
   ]);
   const catalog: EcCatalog = { channels: {}, archivedIds: [], errors: [] };
   if (results[0].status === "fulfilled") {
@@ -127,7 +132,9 @@ export async function getEcListingCatalogAction(inventoryId?:string): Promise<Ec
   } else catalog.errors.push("EC商品情報の削除状態を取得できませんでした。");
   let workflows:EconveniWorkflow[]=[];
   try{
-    workflows=await readEconveniCatalog(inventoryId);
+    const workflowRead=results[4];
+    if(workflowRead.status==='rejected')throw workflowRead.reason;
+    workflows=workflowRead.value;
     for(const row of workflows){
       for(const channel of ['YAHOO','MERCARI_SHOPS'] as const){
         const c=row.channels[channel];
@@ -140,7 +147,9 @@ export async function getEcListingCatalogAction(inventoryId?:string): Promise<Ec
     delete catalog.channels.YAHOO;delete catalog.channels.MERCARI_SHOPS;
     catalog.errors.push('eコンビニの保存・出品情報を取得できませんでした。再読み込みしてください。');
   }
-  try {const manual=await readManualSync(inventoryId);
+  try {const manualRead=results[5];
+    if(manualRead.status==='rejected')throw manualRead.reason;
+    const manual=manualRead.value;
     // Existing product-save bindings also take part in the same read-only observation.
     const links=[...manual.links];
     for(const workflow of workflows){
@@ -151,9 +160,10 @@ export async function getEcListingCatalogAction(inventoryId?:string): Promise<Ec
     }
     overlayManualStatuses(catalog,{...manual,links});await overlayManualStops(catalog,manual,inventoryId);
     if(!inventoryId){
-      const [remote,sold]=await Promise.allSettled([remoteOverview(manual,workflows),soldListingReferences()]);
+      const [remote]=await Promise.allSettled([remoteOverview(manual,workflows)]);
+      const sold=results[6];
       if(remote.status==='fulfilled')catalog.econveni=remote.value;else catalog.errors.push('eコンビニ一覧の在庫情報を読み込めませんでした。再読込してください。');
-      if(sold.status==='fulfilled')catalog.soldListings=sold.value;else catalog.errors.push('売却先の確認情報を読み込めませんでした。操作前に売却管理を確認してください。');
+      if(sold.status==='fulfilled'&&sold.value)catalog.soldListings=sold.value;else catalog.errors.push('売却先の確認情報を読み込めませんでした。操作前に売却管理を確認してください。');
     }
   }
   catch {catalog.errors.push('eコンビニの手動連携情報を取得できませんでした。状態を再確認してください。');}

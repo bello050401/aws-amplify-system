@@ -59,15 +59,18 @@ const badge: Record<EcState, string> = {
 const EMPTY: ListingOverviewRow[] = [];
 export function ListingsOverviewTable({
   initialResult,
+  initialCatalog,
   canEdit,
 }: {
   initialResult: ListingsOverviewLoadOutcome<ListingOverviewRow>;
+  initialCatalog?: EcCatalog;
   canEdit: boolean;
 }) {
   const [state, setState] = useState<ListingsLoadState<ListingOverviewRow>>(
     () => loadStateFromInitialRows(initialResult),
   );
-  const [catalog, setCatalog] = useState<EcCatalog | null>(null),
+  const firstCatalog = useRef(initialCatalog);
+  const [catalog, setCatalog] = useState<EcCatalog | null>(initialCatalog ?? null),
     [catalogBusy, setCatalogBusy] = useState(false);
   const [source, setSource] = useState<"ECONVENI" | "BELLO">("ECONVENI");
   const [query, setQuery] = useState(""),
@@ -106,7 +109,7 @@ export function ListingsOverviewTable({
     }
   }
   useEffect(() => {
-    void loadCatalog();
+    if (firstCatalog.current === undefined) void loadCatalog();
   }, []);
   async function reload() {
     setState({ kind: "retrying" });

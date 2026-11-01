@@ -108,10 +108,17 @@ async function load(file, extra = {}) {
     "./ecCommonOperations": 'export const commonOperationSourceHash=async()=>"source";export const commonYahooUpdateAction=async()=>({status:"BLOCKED"});',
     "./econveniListing": 'export const econveniListingAction=async(id,channel,operation,token)=>{f.state().econveniCalls??=[];f.state().econveniCalls.push({id,channel,operation,token});return{inventoryId:id,channel,operation,title:"Chair",status:token?"DONE":"READY",token:"review-owned",message:"e-conveni"}};',
     "@/lib/listing/econveni/runtimeStore": 'export const readEconveniCatalog=async()=>{if(f.state().failEconveni)throw Error("unavailable");return f.state().econveniRows??[]};',
-    "@/lib/inventory/ecEligibleQuery": 'export const queryEcEligibleInventory=async()=>({items:[],totalCount:0});',
+    // Manual bindings have their own isolated lifecycle tests. These fixtures
+    // exercise the existing product-save workflow with no manual association.
+    "@/lib/listing/econveni/manualWriteGuard": 'export const manualWriteRestriction=async()=>null;',
+    "@/lib/listing/econveni/saleAdjustment": 'export const refreshSaleBinding=async()=>{};',
+    "@/lib/listing/econveni/manualStop": 'export const manualLinkedStop=async()=>null;export const overlayManualStops=async()=>{};',
+    "@/lib/listing/econveni/manualSync": 'export const readManualSync=async()=>({links:[],snapshot:null});',
+    "@/lib/listing/econveni/overviewCatalog": 'export const remoteOverview=async()=>({products:[]});export const soldListingReferences=async()=>[];',
+    "@/lib/inventory/ecEligibleQuery": 'export const queryEcEligibleInventory=async()=>({items:[],totalCount:0});export const listEcEligibleInventory=async()=>[];',
     "next/cache": "export const revalidatePath=()=>{};",
     "@/lib/amplify/requireInventoryUser":
-      'export const getInventoryRole=async()=>f.state().role;export const canEditInventory=r=>r==="ADMIN"||r==="EDITOR";export const getCurrentInventoryUserEmail=async()=>"test";',
+      'export const getInventoryRole=async()=>f.state().role;export const canEditInventory=r=>r==="ADMIN"||r==="EDITOR";export const getCurrentInventoryUserEmail=async()=>"test";export const getCurrentInventoryUserSub=async()=>"test-sub";',
     "@/lib/amplify/dataClient":
       "export const inventoryAuthMode={};export const serverDataClient={models:f.models,graphql:f.gql};",
     "@/lib/inventory/queries":
