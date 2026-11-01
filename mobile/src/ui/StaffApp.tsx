@@ -124,16 +124,19 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       if(alive.current&&state&&ports.searchCatalogStore)void ports.searchCatalogStore.write(state).catch(()=>{if(alive.current)setCatalogWarning('この端末に検索データを保存できません。現在の検索は利用できます。');});
     },400);
   };
-  const ensureCatalog=async(force=false):Promise<void>=>{
+  // Opening/resuming the app needs an immediate synchronization, but not a
+  // full base-table scan. Authoritative reads are reserved for a local edit or
+  // the user's explicit refresh; the compact index already tracks all writes.
+  const ensureCatalog=async(force=false,authoritative=false):Promise<void>=>{
     if(!appActive.current||offline||!ports.syncSearchCatalog)return;
-    if(catalogPending.current){await catalogPending.current;if(force&&alive.current)return ensureCatalog(true);return;}
+    if(catalogPending.current){await catalogPending.current;if(authoritative&&alive.current)return ensureCatalog(true,true);return;}
     if(!force&&!quick.current.needsSync())return;
     const version=quick.current.version();
     const epoch=catalogEpoch.current;
     setCatalogSyncing(true);
     const task=(async()=>{
       try{
-        const delta=await ports.syncSearchCatalog!(quick.current.manifest(),force||catalogDirty.current);
+        const delta=await ports.syncSearchCatalog!(quick.current.manifest(),authoritative||catalogDirty.current);
         if(alive.current&&epoch===catalogEpoch.current&&quick.current.accept(delta,version)){
           catalogDirty.current=false;setCatalogWarning(null);persistCatalog();
           selectPhotos();
@@ -244,7 +247,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     if (!append) imageGeneration.current++;
     setLoading(true); setError(null);
     try {
-      if(force){await ensureCatalog(true);thumbnailDone.current.clear();}
+      if(force){await ensureCatalog(true,true);thumbnailDone.current.clear();}
       const input = { q: query, category, advanced, sort, offset: append ? nextOffset.current : 0 };
       const local=quick.current.search(input,searchFields);
       const online = local?true:await ports.online();

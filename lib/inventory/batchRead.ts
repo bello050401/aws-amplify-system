@@ -8,7 +8,13 @@ export async function readInventoryBatch(
   table: string,
   ids: readonly string[],
   pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+  attributes?: readonly string[],
 ): Promise<Map<string, Record<string, unknown>>> {
+  const projected = attributes ? [...new Set(['id', ...attributes])] : null;
+  const projection = projected ? {
+    ProjectionExpression: projected.map((_, i) => '#b' + i).join(','),
+    ExpressionAttributeNames: Object.fromEntries(projected.map((name, i) => ['#b' + i, name])),
+  } : {};
   const unique = [...new Set(ids)];
   const found = new Map<string, Record<string, unknown>>();
   for (let offset = 0; offset < unique.length; offset += 100) {
@@ -18,7 +24,7 @@ export async function readInventoryBatch(
       if (attempt) await pause(Math.min(800, 50 * 2 ** (attempt - 1)));
       const requested = new Set(pending.map(key => key.id));
       const result = await db.send(new BatchGetCommand({RequestItems: {
-        [table]: {Keys: pending, ConsistentRead: true},
+        [table]: {Keys: pending, ConsistentRead: true, ...projection},
       }}));
       for (const row of result.Responses?.[table] ?? []) {
         if (typeof row.id !== 'string' || !requested.has(row.id)) throw Error('INVENTORY_BATCH_READ_UNEXPECTED_ROW');

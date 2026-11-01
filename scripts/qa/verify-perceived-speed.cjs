@@ -46,9 +46,23 @@ const clean=x=>JSON.parse(JSON.stringify(x));
  delete current[0].deletedAt;indexFails=true;indexedSearch=await loadCompact();indexedResult=await indexedSearch.searchInventoryFast({q:'Gamma'},{offset:0,limit:50});assert.equal(indexedResult.totalQuantity,3);assert.equal(baseScans,24);
  indexFails=false;lagged[0]={...current[0]};indexedSearch=await loadCompact();indexedResult=await indexedSearch.searchInventoryFast({q:'Gamma'},{offset:0,limit:50});assert.equal(indexedResult.totalQuantity,3);assert.equal(baseScans,24,'healthy compact index must avoid the full inventory scan');
 
- let thumbReads=0,thumbFail=false;const thumbs=await load('lib/inventory/thumbnailRecords.ts',{'server-only':{},'../amplify/dataClient':{inventoryAuthMode:{authMode:'userPool'},serverDataClient:{models:{Inventory:{get:async({id},opts)=>{thumbReads++;assert.equal(opts.authMode,'userPool');assert.deepEqual(clean(opts.selectionSet),['id','updatedAt','deletedAt','images.*']);return thumbFail?{errors:['offline']}:{data:{id,updatedAt:'now',deletedAt:id==='deleted'?'yes':null,images:[{storageKey:'damage',sortOrder:0,type:'DAMAGE'},{storageKey:'normal',thumbnailKey:'small',sortOrder:1,isPrimary:true}]}}}}}}}});
+ let thumbReads=0,thumbFail=false,thumbVerified=false,thumbBatchReads=0;
+ const thumbs=await load('lib/inventory/thumbnailRecords.ts',{'server-only':{},
+  './mutationSession':{inventoryVerifiedReadSession:async()=>thumbVerified?{owner:'staff',role:'VIEWER'}:null},
+  './categoryPersistence':{inventoryTable:()=> 'Inventory-test',inventoryDdb:{send:async cmd=>{
+   thumbBatchReads++;assert(thumbVerified);const req=cmd.input.RequestItems['Inventory-test'];assert.equal(req.ConsistentRead,true);
+   assert.deepEqual(Object.values(req.ExpressionAttributeNames),['id','updatedAt','deletedAt','listingPartition','images']);
+   if(thumbFail)throw Error('thumbnail read failed');
+   return {Responses:{'Inventory-test':req.Keys.map(({id})=>({id,updatedAt:'now',deletedAt:id==='deleted'?'yes':null,listingPartition:id==='merged'?'MERGED':'ALL',images:[{storageKey:'normal',thumbnailKey:'small',isPrimary:true}]}))}};
+  }}},'@aws-sdk/lib-dynamodb':{BatchGetCommand},
+  '../amplify/dataClient':{inventoryAuthMode:{authMode:'userPool'},serverDataClient:{models:{Inventory:{get:async({id},opts)=>{thumbReads++;assert.equal(opts.authMode,'userPool');assert.deepEqual(clean(opts.selectionSet),['id','updatedAt','deletedAt','images.*']);return thumbFail?{errors:['offline']}:{data:{id,updatedAt:'now',deletedAt:id==='deleted'?'yes':null,images:[{storageKey:'damage',sortOrder:0,type:'DAMAGE'},{storageKey:'normal',thumbnailKey:'small',sortOrder:1,isPrimary:true}]}}}}}}}});
  const out=await thumbs.readThumbnailRecords(['a','a','deleted']);assert.equal(thumbReads,2);assert.equal(out.length,1);assert.equal(out[0].mainImageThumbnailKey,'small');assert.equal(out[0].mainImageIsPrimary,true);
  thumbFail=true;await assert.rejects(()=>thumbs.readThumbnailRecords(['a']),/UNAVAILABLE/);
+ assert.equal(thumbBatchReads,0,'unverified callers cannot use IAM');
+ thumbFail=false;thumbVerified=true;const primary=await thumbs.readThumbnailRecords(['a','a','deleted','merged']);assert.equal(primary.length,1);assert.equal(primary[0].mainImageThumbnailKey,'small');assert.equal(thumbBatchReads,1);assert.equal(thumbReads,3);
+ await thumbs.readThumbnailRecords(Array.from({length:150},(_,i)=>'image-'+i));assert.equal(thumbBatchReads,3,'150 visible items need two bounded reads');
+ await assert.rejects(()=>thumbs.readThumbnailRecords(['../invalid']),/INVALID_THUMBNAIL_IDS/);assert.equal(thumbBatchReads,3);
+ thumbFail=true;await assert.rejects(()=>thumbs.readThumbnailRecords(['a']),/thumbnail read failed/);assert.equal(thumbReads,3,'failed IAM reads must not become an empty success');
 
  let verified=false,directReads=0,directItem={id:'a',quantity:5},directFailure=false;
  const detail=await load('lib/inventory/detailRead.ts',{'server-only':{},'./mutationSession':{inventoryVerifiedReadSession:async()=>verified?{owner:'owner',role:'VIEWER'}:null},'../amplify/directData':{directTableName:model=>{assert.equal(model,'Inventory');return'Inventory-test'}},'@aws-sdk/client-dynamodb':{DynamoDBClient:class{}},'@aws-sdk/lib-dynamodb':{GetCommand,DynamoDBDocumentClient:{from:()=>({send:async cmd=>{directReads++;assert.equal(cmd.input.ConsistentRead,true);assert.equal(cmd.input.TableName,'Inventory-test');if(directFailure)throw Error('outage');return{Item:directItem}}})}}});

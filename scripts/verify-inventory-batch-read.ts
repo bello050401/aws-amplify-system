@@ -21,3 +21,10 @@ test('exhausted retries and unexpected rows never become a partial success',asyn
  await assert.rejects(()=>readInventoryBatch(client(async()=>({Responses:{inventory:[{id:'wrong'}]}})),'inventory',['a']),/UNEXPECTED/);
  await assert.rejects(()=>readInventoryBatch(client(async()=>{throw Error('denied');}),'inventory',['a']),/denied/);
 });
+test('thumbnail projection includes ID on every retry and never requests unrelated fields',async()=>{
+ let calls=0;const db=client(async c=>{calls++;const request=c.input.RequestItems!.inventory;
+ assert.equal(request.ConsistentRead,true);assert.deepEqual(Object.values(request.ExpressionAttributeNames!),['id','images','updatedAt','deletedAt']);
+ assert.equal(request.ProjectionExpression,'#b0,#b1,#b2,#b3');
+ if(calls===1)return {UnprocessedKeys:{inventory:{Keys:[{id:'a'}]}}};return {Responses:{inventory:[{id:'a',images:[]}]}};});
+ assert.equal((await readInventoryBatch(db,'inventory',['a'],async()=>{},['images','updatedAt','deletedAt','images'])).size,1);assert.equal(calls,2);
+});

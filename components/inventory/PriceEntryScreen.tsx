@@ -15,11 +15,14 @@ export async function priceEntryRequest<T>(url:string,body?:unknown):Promise<T>{
 type Draft={name:string;note:string;price:string};
 const draftFor=(r:PriceEntryItem):Draft=>({name:r.name,note:r.note,price:r.plannedSalePrice==null?'':String(r.plannedSalePrice)});
 const changed=(r:PriceEntryItem,d?:Draft)=>!!d&&(d.name!==r.name||d.note!==r.note||d.price!==draftFor(r).price);
-export function PriceEntryScreen({embedded=false,onClose,onDirty,onSaveReady,request=priceEntryRequest,historyPorts}:{embedded?:boolean;onClose?:()=>void;onDirty?:(dirty:boolean)=>void;onSaveReady?:(save:(()=>Promise<boolean>)|null)=>void;request?:PriceEntryTransport;historyPorts?:PriceHistoryPorts}){
+export function PriceEntryScreen({embedded=false,onClose,onDirty,onSaveReady,request=priceEntryRequest,historyPorts,initialItems}:{embedded?:boolean;onClose?:()=>void;onDirty?:(dirty:boolean)=>void;onSaveReady?:(save:(()=>Promise<boolean>)|null)=>void;request?:PriceEntryTransport;historyPorts?:PriceHistoryPorts;initialItems?:PriceEntryItem[]}){
+ const firstItems=useRef(initialItems);
+ const [hydrated,setHydrated]=useState(false);
+ useEffect(()=>{setHydrated(true);},[]);
  const [history,setHistory]=useState<{id:string;sku:string;name:string}|null>(null);
  const priceInputs=useRef(new Map<string,HTMLInputElement>());
  const closeHistory=()=>{const id=history?.id;setHistory(null);if(id)priceInputs.current.get(id)?.focus({preventScroll:true});};
- const [items,setItems]=useState<PriceEntryItem[]>([]),[drafts,setDrafts]=useState<Record<string,Draft>>({}),[loading,setLoading]=useState(true),[error,setError]=useState(''),[limit,setLimit]=useState(40),[busy,setBusy]=useState(false),[photo,setPhoto]=useState<PriceEntryItem|null>(null);
+ const [items,setItems]=useState<PriceEntryItem[]>(initialItems??[]),[drafts,setDrafts]=useState<Record<string,Draft>>({}),[loading,setLoading]=useState(initialItems===undefined),[error,setError]=useState(''),[limit,setLimit]=useState(40),[busy,setBusy]=useState(false),[photo,setPhoto]=useState<PriceEntryItem|null>(null);
  const [results,setResults]=useState<Record<string,{ok:boolean;message:string}>>({}),[reload,setReload]=useState(0);
  const pending=useRef(new Map<string,PriceEntryChange>()),locked=useRef(false),rowsRef=useRef(items),draftRef=useRef(drafts);
  rowsRef.current=items;draftRef.current=drafts;
@@ -27,7 +30,7 @@ export function PriceEntryScreen({embedded=false,onClose,onDirty,onSaveReady,req
  const dirty=items.some(row=>changed(row,drafts[row.id]));
  useEffect(()=>{onDirty?.(dirty||busy);return()=>onDirty?.(false);},[dirty,busy,onDirty]);
  useEffect(()=>{if(!dirty&&!busy)return;const stop=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};window.addEventListener('beforeunload',stop);return()=>window.removeEventListener('beforeunload',stop);},[dirty,busy]);
- useEffect(()=>{let active=true;setLoading(true);setError('');void request<{items:PriceEntryItem[]}>('/api/inventory/planned-price').then(data=>{if(active){setItems(data.items);setDrafts({});setResults({});setLimit(40);}}).catch(e=>{if(active)setError(e.message);}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[request,reload]);
+ useEffect(()=>{if(reload===0&&firstItems.current!==undefined)return;let active=true;setLoading(true);setError('');void request<{items:PriceEntryItem[]}>('/api/inventory/planned-price').then(data=>{if(active){setItems(data.items);setDrafts({});setResults({});setLimit(40);}}).catch(e=>{if(active)setError(e.message);}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[request,reload]);
  // Resolve Photo Station thumbnails only for the visible portion; price editing stays available.
  useEffect(()=>{let active=true;const ids=visibleIds?visibleIds.split(','):[];void(async()=>{for(let start=0;active&&start<ids.length;start+=40){try{const data=await request<{items:InventoryThumbnail[]}>('/api/mobile/inventory?images=only&ids='+ids.slice(start,start+40).join(','));if(active)setItems(rows=>rows.map(row=>{const image=data.items.find(p=>p.id===row.id);return image?.updatedAt===row.updatedAt&&image.thumbnailUrl?{...row,imageUrl:image.thumbnailUrl}:row;}));}catch{}}})();return()=>{active=false;};},[visibleIds,request]);
  function edit(row:PriceEntryItem,key:keyof Draft,value:string){if(locked.current||pending.current.has(row.id))return;setDrafts(all=>({...all,[row.id]:{...draftFor(row),...all[row.id],[key]:value}}));setResults(all=>{const next={...all};delete next[row.id];return next;});}
@@ -60,7 +63,7 @@ export function PriceEntryScreen({embedded=false,onClose,onDirty,onSaveReady,req
    setResults(all=>({...all,[row.id]:{ok:item.plannedSalePrice!==null,message:item.plannedSalePrice!==null?'入力済みの最新情報を表示しています。':'最新の商品情報を読み込みました。入力内容を確認して保存してください。'}}));
   }catch{setError('最新の商品を取得できませんでした。');}
  }
- return <section className={'price-entry'+(embedded?' price-entry-mobile':'')}>
+ return <section className={'price-entry'+(embedded?' price-entry-mobile':'')} data-price-ready={hydrated&&!loading}>
   <style>{priceEntryCss}</style>
   <header className="pe-header"><div className="pe-heading">{onClose&&<button type="button" className="pe-back" onClick={leave} disabled={busy}>〈 戻る</button>}<span className="pe-eyebrow">出品の準備</span><h1>販売予定価格入力</h1><p>写真を確認して、販売価格を決めましょう。</p></div><button type="button" className="pe-refresh" aria-label="一覧を更新" disabled={loading||busy} onClick={refresh}><span aria-hidden="true">↻</span></button></header>
   <div className="pe-toolbar"><div className="pe-count">{loading?'商品を確認中…':<>あと <strong>{items.filter(r=>r.plannedSalePrice==null).length}</strong> 件</>}<small>未入力の販売予定価格</small></div><div className="pe-categories"><span>補修待ち</span><span>撮影待ち</span><span>出品待ち</span></div></div>
