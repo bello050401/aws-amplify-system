@@ -2,7 +2,8 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { getPhotoRegistrationBadgeAction, type PhotoRegistrationBadgeState } from "@/app/actions/photoRegistration";
+import type { PhotoRegistrationBadgeState } from "@/app/actions/photoRegistration";
+import { readPhotoPreview } from "@/lib/photoRegistration/previewClient";
 import { BelloLogo } from "./BelloLogo";
 import { useUnsavedChanges } from "./UnsavedChangesProvider";
 
@@ -80,14 +81,19 @@ export function usePhotoRegistrationBadge(): PhotoRegistrationBadgeState | null 
   useEffect(() => {
     let cancelled = false;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
     const refreshBadge = () => {
-      getPhotoRegistrationBadgeAction()
+      controller?.abort();
+      const request = new AbortController();
+      controller = request;
+      const timeout = setTimeout(() => request.abort(), 12000);
+      readPhotoPreview<PhotoRegistrationBadgeState | null>(new URLSearchParams({badge: '1'}), request.signal)
         .then((result) => {
-          if (!cancelled) setBadge(result);
+          if (!cancelled && !request.signal.aborted) setBadge(result);
         })
         .catch(() => {
-          if (!cancelled) setBadge(null);
-        });
+          if (!cancelled && !request.signal.aborted) setBadge(null);
+        }).finally(() => clearTimeout(timeout));
     };
     const onBatchChanged = () => {
       setBadge((current) => current ? { ...current, count: Math.max(0, current.count - 1) } : current);
@@ -99,6 +105,7 @@ export function usePhotoRegistrationBadge(): PhotoRegistrationBadgeState | null 
     window.addEventListener("bello:photo-batches-changed", onBatchChanged);
     return () => {
       cancelled = true;
+      controller?.abort();
       if (refreshTimer) clearTimeout(refreshTimer);
       window.removeEventListener("bello:photo-batches-changed", onBatchChanged);
     };

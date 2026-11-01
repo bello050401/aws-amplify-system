@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listInventoryPrimaryPhotoThumbnailsAction } from "@/app/actions/photoRegistration";
+import { readPhotoPreview } from "@/lib/photoRegistration/previewClient";
 import type { PhotoThumbnailChoice } from "@/lib/photoRegistration/gallerySelection";
 
 /** Load only the visible page, progressively. Text and inventory thumbnails
@@ -13,20 +13,24 @@ export function usePrimaryPhotoThumbnails(inventoryIds: string[], enabled = true
   const [result, setResult] = useState<{ key: string; photos: Record<string, PhotoThumbnailChoice> } | null>(null);
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
     const ids = pageKey ? pageKey.split("\u0000") : [];
     void (async () => {
       let photos: Record<string, PhotoThumbnailChoice> = {};
       for (let start = 0; active && enabled && start < ids.length; start += 100) {
         try {
-          const response = await listInventoryPrimaryPhotoThumbnailsAction(ids.slice(start, start + 100));
-          if (active && response.ok) {
-            photos = { ...photos, ...response.value };
+          const response = await readPhotoPreview<Record<string, PhotoThumbnailChoice>>(
+            new URLSearchParams({ids: ids.slice(start, start + 100).join(',')}), controller.signal);
+          if (active && !controller.signal.aborted) {
+            photos = { ...photos, ...response };
             setResult({ key: pageKey, photos });
           }
-        } catch { /* Keep the existing inventory thumbnail on lookup failure. */ }
+        } catch { break; /* Keep the existing inventory thumbnail on lookup failure. */ }
       }
+      clearTimeout(timeout);
     })();
-    return () => { active = false; };
+    return () => { active = false; clearTimeout(timeout); controller.abort(); };
   }, [pageKey, enabled]);
   return enabled && result?.key === pageKey ? result.photos : {};
 }
