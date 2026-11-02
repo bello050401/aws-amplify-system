@@ -22,7 +22,8 @@ export function PostSaleConfirmation({plan,onConfirm,onReview,onClose,onLink}:{p
  return <section className="post-sale" aria-label="売却後の出品管理">
   <ol className="workflow-steps" aria-label="売却の手順"><li>1 商品を選ぶ</li><li>2 売却を確認</li><li aria-current="step">3 出品を整える</li></ol>
   <header className="ps-heading"><div><p className="ps-eyebrow">✓ 売却登録済み</p><h2>出品情報を整える</h2></div></header>
-  <div className="ps-summary"><div><strong>{plan.title||'売却した商品'}</strong><p className="ps-muted">{plan.productId?`eコンビニ #${plan.productId} · 連携確認済み`:'販売先の紐付けを確認してください'}</p></div><div className="ps-stock"><small>残り在庫</small><b>{plan.remaining}<small> 点</small></b></div></div>
+  <div className="ps-summary"><div><strong>{plan.title||'売却した商品'}</strong><p className="ps-muted">{plan.productId?`eコンビニ #${plan.productId} · 連携確認済み`:'販売先の紐付けを確認してください'}</p></div><div className="ps-stock"><small>{plan.quantityDeferred?'入金後に残る在庫':'残り在庫'}</small><b>{plan.remaining}<small> 点</small></b></div></div>
+  {plan.quantityDeferred&&<p className="ps-preserve">入金待ちのため、BELLOの在庫数量は変更していません。他ECは入金待ちの数量を除いて調整できます。</p>}
   {plan.soldChannel&&<p className="ps-preserve">売れた<strong>{EC_CHANNEL_LABEL[plan.soldChannel]}</strong>の商品ページは保持します。</p>}
   <div className="ps-channels">{plan.rows.map(r=>{
    const manual=r.operation==='MANUAL',done=r.state==='DONE',problem=r.state==='BLOCKED'||r.state==='VERIFY_REQUIRED';

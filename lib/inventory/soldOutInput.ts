@@ -14,7 +14,7 @@ export interface SoldOutRequest {
   awaitingYahooPayment?:boolean;
   pricing?:SalePricing;
 }
-export interface SoldOutResult { sourceId: string; soldId: string; remainingQuantity: number; soldQuantity: number; updatedAt: string }
+export interface SoldOutResult { sourceId: string; soldId: string; remainingQuantity: number; soldQuantity: number; updatedAt: string; quantityDeferred?: boolean; sourceQuantity?: number }
 export class SoldOutError extends Error {
   constructor(public code: 'INVALID' | 'CONFLICT' | 'UNCONFIRMED', message: string) { super(message); }
 }

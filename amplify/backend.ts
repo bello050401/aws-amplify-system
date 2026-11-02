@@ -62,10 +62,22 @@ purchaseTable.addGlobalSecondaryIndex({indexName:'ByState',partitionKey:{name:'s
 // The mail reader cannot edit inventory. Payment reconciliation has no mail/EC credentials.
 backend.yahooPaymentReconciler.addEnvironment('SALE_CANDIDATES_TABLE',purchaseTable.tableName);
 backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}));
-for(const [model,actions] of Object.entries({Inventory:['dynamodb:GetItem','dynamodb:UpdateItem'],Category:['dynamodb:GetItem'],InventoryCategory:['dynamodb:PutItem','dynamodb:DeleteItem'],InventoryHistory:['dynamodb:PutItem']})){
+for(const [model,actions] of Object.entries({Inventory:['dynamodb:GetItem','dynamodb:UpdateItem','dynamodb:PutItem'],Category:['dynamodb:GetItem','dynamodb:Scan'],InventoryCategory:['dynamodb:PutItem','dynamodb:DeleteItem'],InventoryHistory:['dynamodb:GetItem','dynamodb:PutItem']})){
  const modelTable=backend.data.resources.tables[model];
  backend.yahooPaymentReconciler.addEnvironment(model+'_TABLE',modelTable.tableName);
  backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions,resources:[modelTable.tableArn]}));
+}
+backend.generateSku.resources.lambda.grantInvoke(backend.yahooPaymentReconciler.resources.lambda);
+backend.yahooPaymentReconciler.addEnvironment('GENERATE_SKU_FUNCTION_NAME',backend.generateSku.resources.lambda.functionName);
+backend.yahooPaymentReconciler.addEnvironment('INVENTORY_BUCKET',backend.storage.resources.bucket.bucketName);
+backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/*')]}));
+backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:PutObject','s3:DeleteObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/yahoo-payment/*')]}));
+if(process.env.PHOTO_REGISTRATION_TABLE_NAME&&process.env.PHOTO_REGISTRATION_BUCKET_NAME){
+ const photoTable=process.env.PHOTO_REGISTRATION_TABLE_NAME,photoBucket=process.env.PHOTO_REGISTRATION_BUCKET_NAME;
+ backend.yahooPaymentReconciler.addEnvironment('PHOTO_REGISTRATION_TABLE_NAME',photoTable);
+ backend.yahooPaymentReconciler.addEnvironment('PHOTO_REGISTRATION_BUCKET_NAME',photoBucket);
+ backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Query'],resources:[`arn:aws:dynamodb:${purchaseStack.region}:${purchaseStack.account}:table/${photoTable}`,`arn:aws:dynamodb:${purchaseStack.region}:${purchaseStack.account}:table/${photoTable}/index/GSI2`]}));
+ backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject'],resources:[`arn:aws:s3:::${photoBucket}/photo-batches/*/processed/*`,`arn:aws:s3:::${photoBucket}/photo-batches/*/thumbnail/*`]}));
 }
 backend.yahooPaymentReconciler.resources.lambda.grantInvoke(backend.purchaseNotifications.resources.lambda);
 backend.purchaseNotifications.addEnvironment('YAHOO_PAYMENT_FUNCTION',backend.yahooPaymentReconciler.resources.lambda.functionName);

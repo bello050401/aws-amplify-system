@@ -27,6 +27,12 @@ async function context(candidateId:string){
  const [source,sold]=await Promise.all([sourceRead,c.result.sourceId===c.result.soldId?sourceRead:getInventoryRaw(c.result.soldId)]);
  if(!source||!sold||source.isDeleted||source.deletedAt||sold.isDeleted||sold.deletedAt)throw new PostSaleError('売却した商品の状態を確認できません。');
  const soldChannel:EcChannel|null=c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel==='BASE'?'BASE':c.channel==='YAHOO'?'YAHOO':fromMarket(String(sold.market??''));
+ if(c.result.quantityDeferred){
+  let marker;try{marker=(typeof source.customFields==='string'?JSON.parse(source.customFields):source.customFields)?.__belloYahooPayment;}catch{}
+  if(c.channel!=='YAHOO'||c.yahooPaymentState!=='WAITING'||c.result.soldId!==source.id||source.quantity!==c.result.sourceQuantity||source.quantity!==c.result.remainingQuantity+c.result.soldQuantity||marker?.state!=='WAITING'||!marker.quantityDeferred||marker.candidateId!==c.id||marker.auctionId!==c.orderId||marker.request?.quantity!==c.result.soldQuantity)throw new PostSaleError('入金待ちの商品と数量の対応が変更されています。最新の在庫を確認してください。');
+  const pack=marker.request?.pricing?.itemsPerUnit;
+  return {c,source,soldChannel,soldPack:Number.isSafeInteger(pack)&&pack>0&&pack<=10000?pack:1};
+ }
  let sale:Record<string,unknown>|undefined;
  try{const value=typeof sold.customFields==='string'?JSON.parse(sold.customFields):sold.customFields;sale=value?.__belloSale;}catch{}
  const expectedSource=c.result.sourceId===c.result.soldId?c.result.soldQuantity:c.result.remainingQuantity;
@@ -101,7 +107,7 @@ export async function reviewPostSale(candidateId:string,actor:string,packSizes:P
    rows.push({channel,externalId:linked.externalId,operation:'STOCK',state:remote.hasVariations?'BLOCKED':adjustment?'READY':remote.quantity===target&&stockCountTitle(remote.title,c.result!.remainingQuantity)===remote.title?'DONE':'READY',message:remote.hasVariations?'バリエーション別の在庫はBASEで確認してください。':adjustment?'eコンビニの保存情報を揃えてからBASEの数量を変更します。':'BASEの在庫数量を変更します。',beforeQuantity:remote.quantity,beforeTitle:remote.title,targetTitle:stockCountTitle(remote.title,c.result!.remainingQuantity),targetQuantity:target,unitsPerListing:pack,adjustment:adjustment??undefined,currentState:remote.visible?'出品中':'停止中'});
   }else rows.push({channel,externalId:linked.externalId,operation:'MANUAL',state:'BLOCKED',targetQuantity:c.result!.remainingQuantity,message:channel==='MERCARI_SHOPS'?'メルカリShopsで残り数量を手動変更してください。出品の削除は行いません。':'出品中のヤフオクは、残り在庫に合わせて手動で確認してください。売却済みページの再出品とは別の操作です。',currentState:'出品中'});
  }
- const plan:PostSalePlan={id:candidateId,candidateId,sourceId:source.id,sourceVersion:source.updatedAt,soldChannel,remaining:c.result!.remainingQuantity,actor,expiresAt:Date.now()+600000,rows,state:'REVIEW',token:randomUUID(),updatedAt:new Date().toISOString(),title:String(source.name),productId:remote?.productId??old?.productId,checkedAt:new Date().toISOString()};
+ const plan:PostSalePlan={id:candidateId,candidateId,sourceId:source.id,sourceVersion:source.updatedAt,soldChannel,remaining:c.result!.remainingQuantity,quantityDeferred:c.result!.quantityDeferred===true,actor,expiresAt:Date.now()+600000,rows,state:'REVIEW',token:randomUUID(),updatedAt:new Date().toISOString(),title:String(source.name),productId:remote?.productId??old?.productId,checkedAt:new Date().toISOString()};
  await db.send(new PutCommand({TableName:table,Item:{pk:key(candidateId).pk,...plan},ConditionExpression:old?'#state=:state AND #token=:token':'attribute_not_exists(pk)',...(old?{ExpressionAttributeNames:{'#state':'state','#token':'token'},ExpressionAttributeValues:{':state':old.state,':token':old.token}}:{})}));return plan;
 }
 export async function executePostSale(candidateId:string,actor:string,token:string,confirmed:boolean,terms=false):Promise<PostSalePlan>{

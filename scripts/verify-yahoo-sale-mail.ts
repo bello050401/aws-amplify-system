@@ -11,7 +11,7 @@ import type {EconveniWorkflow} from '../lib/listing/econveni/workflowStore';
 import type {ManualSyncData} from '../lib/listing/econveni/manualSyncModel';
 
 const id='r1240092475',title='確認用 チェア / プロ仕上げ';
-const mail=(stage:'won'|'ended'|'address'|'paid',time?:string):PurchaseMail=>({gmailId:stage,from:'auction-master@mail.yahoo.co.jp',subject:'Yahoo!オークション - '+{won:'即決価格での落札',ended:'終了（落札者あり）',address:'お届け先住所確定',paid:'支払いが完了しました。商品を発送してください'}[stage]+'：'+title+'('+id+')',receivedAt:time||({won:'2026-10-26T11:03:22.000Z',ended:'2026-10-26T11:03:22.000Z',address:'2026-10-26T11:05:36.000Z',paid:'2026-10-26T11:25:06.000Z'}[stage]),text:'商品：'+title+'\nオークションID：'+id+'\nhttps://auctions.yahoo.co.jp/jp/auction/'+id+'?notice=clsic\n'+(stage==='won'?'開始価格：1 円\n残り数量：0\n落札価格：166,000 円\n':'')+'お届け先 PRIVATE-ADDRESS\n購入者 PRIVATE-CUSTOMER'});
+const mail=(stage:'won'|'ended'|'address'|'paid',time?:string):PurchaseMail=>({gmailId:stage,authenticatedYahooSender:true,from:'auction-master@mail.yahoo.co.jp',subject:'Yahoo!オークション - '+{won:'即決価格での落札',ended:'終了（落札者あり）',address:'お届け先住所確定',paid:'支払いが完了しました。商品を発送してください'}[stage]+'：'+title+'('+id+')',receivedAt:time||({won:'2026-10-26T11:03:22.000Z',ended:'2026-10-26T11:03:22.000Z',address:'2026-10-26T11:05:36.000Z',paid:'2026-10-26T11:25:06.000Z'}[stage]),text:'商品：'+title+'\nオークションID：'+id+'\nhttps://auctions.yahoo.co.jp/jp/auction/'+id+'?notice=clsic\n'+(stage==='won'?'開始価格：1 円\n残り数量：0\n落札価格：166,000 円\n':'')+'お届け先 PRIVATE-ADDRESS\n購入者 PRIVATE-CUSTOMER'});
 const parse=(stage:Parameters<typeof mail>[0])=>parsePurchaseMail(mail(stage))[0];
 const conditional=()=>Object.assign(Error('conditional'),{name:'ConditionalCheckFailedException'});
 function memory(){
@@ -41,14 +41,14 @@ test('HTML-only and explicit auction quantity, never start/payment price',()=>{
  const original=mail('won');const [c]=parsePurchaseMail({...original,text:undefined,html:original.text!.replace(/\n/g,'<br>')+'<br>落札数量：2個'});assert.equal(c.quantity,2);assert.equal(c.unitPrice,166000);
  const [paid]=parsePurchaseMail({...mail('paid'),text:mail('paid').text+'\n支払金額：180,000 円\n開始価格：1 円'});assert.equal(paid.unitPrice,null);
 });
-test('all 24 arrival orders yield one shipping-ready candidate retaining sale price and won date',()=>{
+test('all 24 arrival orders yield one shipping-ready candidate retaining sale price and payment date',()=>{
  function permutations<T>(a:T[]):T[][]{return a.length?a.flatMap((x,i)=>permutations(a.filter((_,j)=>i!==j)).map(p=>[x,...p])):[[]];}
  for(const order of permutations(['won','ended','address','paid'] as const)){
   const c=order.map(parse).reduce((current,next)=>mergeYahooNotification(current,next));assert.equal(c.yahooStatus,'AWAITING_SHIPMENT');assert.equal(c.unitPrice,166000);assert.equal(c.saleDate,'2026-10-26');assert.equal(c.yahooEvents?.WON,mail('won').receivedAt);assert.equal(Object.keys(c.yahooEvents||{}).length,3);assert.ok(!c.warnings.some(w=>w.includes('価格を取得できて')));
  }
 });
-test('late payment after midnight keeps original sale date; quoted won body cannot regress paid status',()=>{
- const paid=parsePurchaseMail({...mail('paid','2026-10-27T00:05:00.000Z'),text:mail('paid').text+'\n'+mail('won').text})[0];const c=mergeYahooNotification(paid,parse('won'));assert.equal(c.yahooStatus,'AWAITING_SHIPMENT');assert.equal(c.saleDate,'2026-10-26');assert.equal(c.receivedAt,'2026-10-27T00:05:00.000Z');
+test('late payment after midnight uses payment date; quoted won body cannot regress paid status',()=>{
+ const paid=parsePurchaseMail({...mail('paid','2026-10-27T00:05:00.000Z'),text:mail('paid').text+'\n'+mail('won').text})[0];const c=mergeYahooNotification(paid,parse('won'));assert.equal(c.yahooStatus,'AWAITING_SHIPMENT');assert.equal(c.saleDate,'2026-10-27');assert.equal(c.receivedAt,'2026-10-27T00:05:00.000Z');
 });
 test('duplicate mail is a no-op and conflicting money is retained with a warning',()=>{
  const c=parse('won');assert.equal(mergeYahooNotification(c,c),c);const conflict=parsePurchaseMail({...mail('won'),text:mail('won').text!.replace('166,000','180,000')})[0];const merged=mergeYahooNotification(c,conflict);assert.equal(merged.unitPrice,166000);assert.ok(merged.warnings.some(w=>w.includes('異なる落札価格')));
@@ -83,3 +83,5 @@ test('ID lookup covers legacy Yahoo, e-conveni publish and explicit manual links
  assert.deepEqual(collectYahooInventoryIds(id,[{inventoryId:'new',auctionId:id}],[workflow],{snapshot:null,links:[]}),['new']);
  assert.deepEqual(collectYahooInventoryIds('r1234567890',[],[workflow],manual),[]);
 });
+
+test('unpaid or unverified notification has no sale end date',()=>{assert.equal(parse('won').saleDate,'');assert.equal(parse('address').saleDate,'');assert.equal(parsePurchaseMail({...mail('paid'),authenticatedYahooSender:false})[0].saleDate,'');});

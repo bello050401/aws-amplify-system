@@ -5,11 +5,14 @@ import {parseCustomFields,stringifyCustomFields} from '../inventory/customFields
 import {withHumanEdits} from '../inventory/humanEdits';
 import type {SaleCandidate} from './model';
 import {yahooPaymentPlan,paymentDate,yahooPaymentKey,YAHOO_PAYMENT_QUEUE_STATE} from './yahooPaymentModel';
+import {createSoldOutService,type SoldOutPorts} from '../inventory/soldOutCore';
+import type {SoldOutRequest} from '../inventory/soldOutInput';
 
-type Queue={id:string;state:string;receivedAt:string;candidateId:string;auctionId:string;sourceId:string;soldId:string;soldQuantity:number};
+type Queue={id:string;state:string;receivedAt:string;candidateId:string;auctionId:string;sourceId:string;soldId:string;soldQuantity:number;quantityDeferred?:boolean;sourceQuantity?:number};
 const conflict=()=>Error('PAYMENT_INVENTORY_CONFLICT');
-/** No sale/quantity/EC mutation is called here. Only the exact sold record from the atomic sale receipt is eligible. */
-export function createYahooPaymentReconciler(db:DynamoDBDocumentClient,candidateTable:string,table:(name:string)=>string){
+/** New reservations settle stock atomically on payment. Legacy already-split sales
+ * only settle the date/category; their stock must never be deducted a second time. */
+export function createYahooPaymentReconciler(db:DynamoDBDocumentClient,candidateTable:string,table:(name:string)=>string,stockPorts?:Pick<SoldOutPorts,'categories'|'nextSku'|'copyPhotos'|'discardPhotos'>){
  const persistence=createInventoryPersistence(db,table);
  const get=async(id:string)=>(await db.send(new GetCommand({TableName:candidateTable,Key:{id},ConsistentRead:true}))).Item;
  async function settle(queue:Queue):Promise<'waiting'|'applied'|'skipped'> {
@@ -19,6 +22,18 @@ export function createYahooPaymentReconciler(db:DynamoDBDocumentClient,candidate
   if(!payment||payment.waiting)return 'waiting';
   const receipt=candidate.result;
   if(queue.id!==yahooPaymentKey(candidate.id)||queue.state!==YAHOO_PAYMENT_QUEUE_STATE||queue.auctionId!==candidate.orderId||!receipt||receipt.soldId!==queue.soldId||receipt.sourceId!==queue.sourceId||receipt.soldQuantity!==queue.soldQuantity)throw conflict();
+  if(queue.quantityDeferred || receipt.quantityDeferred){
+   if(!queue.quantityDeferred||!receipt.quantityDeferred||!stockPorts||queue.sourceQuantity!==receipt.sourceQuantity||queue.soldId!==queue.sourceId)throw conflict();
+   const source=await persistence.getInventoryRaw(queue.sourceId);
+   const marker=parseCustomFields(source?.customFields)?.__belloYahooPayment as Record<string,any>|undefined;
+   const saved=marker?.request as SoldOutRequest|undefined;
+   if(!source||!saved||marker?.candidateId!==candidate.id||marker.auctionId!==queue.auctionId||marker.sourceQuantity!==queue.sourceQuantity||saved.inventoryId!==queue.sourceId||saved.quantity!==queue.soldQuantity||saved.sourceCandidateId!==candidate.id)throw conflict();
+   await createSoldOutService({db,table,...stockPorts,yahooPayment:payment,settlingYahooPayment:true,saleCommit:(result,now)=>[
+    {Update:{TableName:candidateTable,Key:{id:candidate.id},UpdateExpression:'SET yahooPaymentState=:applied,yahooPaymentAppliedAt=:now,updatedAt=:now,#r=:result,saleDate=:date REMOVE yahooPaymentError',ConditionExpression:'#s=:done AND updatedAt=:version AND yahooPaymentState=:waiting',ExpressionAttributeNames:{'#s':'state','#r':'result'},ExpressionAttributeValues:{':applied':'APPLIED',':now':now,':done':'DONE',':version':candidate.updatedAt,':waiting':'WAITING',':result':result,':date':paymentDate(payment.paidAt!)}}},
+    {Delete:{TableName:candidateTable,Key:{id:queue.id},ConditionExpression:'candidateId=:candidate AND sourceId=:source AND quantityDeferred=:deferred',ExpressionAttributeValues:{':candidate':candidate.id,':source':source.id,':deferred':true}}}
+   ]})({...saved,expectedUpdatedAt:source.updatedAt},'ヤフオク入金確認');
+   return 'applied';
+  }
   const item=await persistence.getInventoryRaw(queue.soldId);
   const custom=parseCustomFields(item?.customFields),marker=custom?.__belloYahooPayment as Record<string,unknown>|undefined;
   if(!item||item.deletedAt||item.isDeleted||item.listingPartition==='MERGED'||item.outboundBatchId||item.outboundArrivalBatchId||item.quantity!==queue.soldQuantity||item.market!=='ヤフオク'||item.externalProductId!==queue.auctionId||item.saleEndDate||marker?.state!=='WAITING'||marker.candidateId!==candidate.id||marker.auctionId!==candidate.orderId||typeof marker.unpaidCategoryId!=='string')throw conflict();
@@ -51,7 +66,7 @@ export function createYahooPaymentReconciler(db:DynamoDBDocumentClient,candidate
     try{if(await settle(queue)==='applied')applied++;}
     catch(e){
      // Lost responses/concurrent invocations are harmless: the durable state is read again on the next pass.
-     errors++;const code=(e as Error).message==='PAYMENT_INVENTORY_CONFLICT'?'商品が変更されています。入金待ちの商品情報を確認してください。':'入金後の更新を再試行します。';
+     errors++;const code=((e as Error).message==='PAYMENT_INVENTORY_CONFLICT'||(e as {code?:string}).code==='CONFLICT'||(e as {code?:string}).code==='INVALID')?'商品が変更されています。入金待ちの商品情報を確認してください。':'入金後の更新を再試行します。';
      await db.send(new UpdateCommand({TableName:candidateTable,Key:{id:queue.candidateId},UpdateExpression:'SET yahooPaymentError=:error',ConditionExpression:'#s=:done AND yahooPaymentState=:waiting',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':error':code,':done':'DONE',':waiting':'WAITING'}})).catch(()=>{});
     }
    }

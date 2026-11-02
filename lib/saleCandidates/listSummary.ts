@@ -14,6 +14,11 @@ export async function withCurrentSaleSummary(candidates:SaleCandidate[]):Promise
   let request=pending.get(id);if(!request){request=read(id);pending.set(id,request);}
   const result=await request;if(result.errors?.length)throw Error('SALE_SUMMARY_UNAVAILABLE');
   const item=result.data&&!result.data.deletedAt?result.data:null;
+  if(candidate.result?.quantityDeferred){
+   let marker;try{marker=(typeof item?.customFields==='string'?JSON.parse(item.customFields):item?.customFields)?.__belloYahooPayment;}catch{}
+   const request=marker?.candidateId===candidate.id?marker.request:undefined;
+   return {...candidate,...(request?{name:request.name,completedSale:{quantity:request.quantity,total:request.salePrice,commission:request.saleCommission,shippingReceived:request.saleShippingReceived??null,date:'',identifier:request.externalProductId}}:{})};
+  }
   let shippingReceived:number|null=null;
   try{const custom=typeof item?.customFields==='string'?JSON.parse(item.customFields):item?.customFields;const n=custom?.__belloSale?.shippingReceived;if(Number.isSafeInteger(n)&&n>=0)shippingReceived=n;}catch{}
   return {...candidate,name:item?.name||candidate.name||'請求書の商品（在庫を再選択してください）',...(candidate.state==='DONE'&&item?{completedSale:{quantity:candidate.result!.soldQuantity,total:item.salePrice??null,commission:item.saleCommission??null,shippingReceived,date:item.saleEndDate||'',identifier:item.externalProductId||''}}:{})};
