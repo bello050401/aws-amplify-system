@@ -34,7 +34,7 @@
                 <TextBox Text="{Binding ThumbnailJpegQuality, UpdateSourceTrigger=PropertyChanged}"/>
               </StackPanel>
             </Grid>
-            <TextBlock Text="構図はトップ画像から自動判定し、商品全体を正方形または3:2に統一します。商品が切れそうな写真は確認画面で止めます。" Foreground="#536171" TextWrapping="Wrap" Margin="0,8,0,0"/>
+            <TextBlock Text="構図はトップ画像から自動判定し、商品全体を正方形または4:3に統一します。商品が切れそうな写真は確認画面で止めます。" Foreground="#536171" TextWrapping="Wrap" Margin="0,8,0,0"/>
             <CheckBox Content="画像方向を自動正規化" IsChecked="{Binding AutoRotate}" Margin="0,8,0,0"/>
           </StackPanel>
         </Border>

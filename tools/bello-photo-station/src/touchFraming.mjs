@@ -2,14 +2,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+import { framingUnits } from './framingAspect.mjs';
 
 export function touchCrop({ width, height, aspectRatio, centerX, centerY, zoom }) {
   if (![width,height,centerX,centerY,zoom].every(Number.isFinite) || width < 1 || height < 1 ||
-      ![1,1.5].includes(aspectRatio) || centerX < 0 || centerX > 1 || centerY < 0 || centerY > 1 || zoom < 1 || zoom > 4)
+      !framingUnits(aspectRatio) || centerX < 0 || centerX > 1 || centerY < 0 || centerY > 1 || zoom < 1 || zoom > 4)
     throw new Error('構図の位置または倍率が不正です。位置を確認し直してください');
-  const units = Math.floor(Math.min(width/(aspectRatio===1?1:3),height/(aspectRatio===1?1:2))/zoom);
+  const [rw,rh] = framingUnits(aspectRatio);
+  const units = Math.floor(Math.min(width/rw,height/rh)/zoom);
   if (units < 1) throw new Error('切り抜き範囲が小さすぎます');
-  const w=units*(aspectRatio===1?1:3),h=units*(aspectRatio===1?1:2);
+  const w=units*rw,h=units*rh;
   return {left:Math.round(Math.max(0,Math.min(width-w,centerX*width-w/2))),
     top:Math.round(Math.max(0,Math.min(height-h,centerY*height-h/2))),width:w,height:h};
 }

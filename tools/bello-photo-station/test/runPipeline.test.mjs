@@ -92,7 +92,7 @@ test('安全な商品比率を承認画面なしで全画像へ適用する', as
   assert.equal(JSON.parse(request.init.body).assets[0].clientAssetId, 'b');
 });
 
-test('被写体が見えにくい写真も切らずに商品全体を3:2で送る', async () => {
+test('被写体が見えにくい写真も切らずに商品全体を4:3で送る', async () => {
   const { dir, historyFile } = await setup();
   const a = await writeSyntheticSource(dir, 'a.jpg', { r: 90, g: 70, b: 50 });
   const b = await writeSyntheticSource(dir, 'b.jpg', { r: 100, g: 80, b: 60 });
@@ -100,14 +100,14 @@ test('被写体が見えにくい写真も切らずに商品全体を3:2で送�
     { clientAssetId: 'b', fileName: 'b.jpg', sourcePath: b }];
   const { api } = makeFakeApi();
   const result = await runEditAndUploadPipeline({ sessionId: 'contained', sources,
-    settings: { ...DEFAULT_SETTINGS, longEdgePx: 90, thumbnailLongEdgePx: 30 },
+    settings: { ...DEFAULT_SETTINGS, longEdgePx: 120, thumbnailLongEdgePx: 40 },
     outputRoot: dir, history: new ProcessingHistoryStore(historyFile), api, deviceId: 'TEST',
     selectedPresets: new Map(sources.map(s => [s.fileName, { preset: { hash: 'p' }, signature: 'p' }])),
-    framingTopFileName: 'a.jpg', stampLogoPath: null, prepareFraming: async () => ({ status: 'READY', aspectRatio: 1.5,
-      crops: { a: { left: 20, top: 0, width: 150, height: 100 }, b: null },
+    framingTopFileName: 'a.jpg', stampLogoPath: null, prepareFraming: async () => ({ status: 'READY', aspectRatio: 4/3,
+      crops: { a: { left: 20, top: 0, width: 128, height: 96 }, b: null },
       topAssetId: 'a', confirmationHash: 'plan', frames: new Map([['a', { path: a, angle: 0 }], ['b', { path: b, angle: 0 }]]) }) });
   assert.equal(result.status, 'COMPLETE');
-  for (const asset of result.uploaded) assert.deepEqual(asset.processedDimensions, { width: 90, height: 60 });
+  for (const asset of result.uploaded) assert.deepEqual(asset.processedDimensions, { width: 120, height: 90 });
 });
 
 test('商品のトップ画像だけにスタンプを加えてアップロードする', async () => {

@@ -60,7 +60,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<ImportSession> Sessions { get; } = [];
     public string DetectedDriveText { get => _detectedDriveText; private set => Set(ref _detectedDriveText, value); }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
-    public string RecipeSummary => "タッチで位置を調整 → 完了 → Lightroomで現像 ・ 正方形／3:2を統一 ・ 余白を追加せず保存";
+    public string RecipeSummary => "タッチで位置を調整 → 完了 → Lightroomで現像 ・ 正方形／4:3を統一 ・ 余白を追加せず保存";
     public string AppHeading => App.IsTestMode ? "BELLO Photo Station r12 テスト用" : "BELLO Photo Station r12";
     private string _lightroomStatus = "Lightroom Classic を確認しています…";
     public string LightroomStatus { get => _lightroomStatus; set => Set(ref _lightroomStatus, value); }

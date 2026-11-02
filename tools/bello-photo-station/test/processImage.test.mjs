@@ -7,6 +7,18 @@ import path from "node:path";
 import { processImage, sha256File } from "../src/processImage.mjs";
 import { DEFAULT_SETTINGS } from "../src/settings.mjs";
 import { makeSyntheticSourceJpeg } from "./testFixtures.mjs";
+import { touchCrop } from '../src/touchFraming.mjs';
+
+test('4:3で指指定した切り抜きを実JPEGとサムネイルへ保存し原本は維持する', async () => {
+  const dir=await tempDir(), sourcePath=path.join(dir,'source.jpg');
+  await writeFile(sourcePath,await makeSyntheticSourceJpeg({width:1200,height:800,orientation:1}));
+  const before=await sha256File(sourcePath);
+  const result=await processImage({sourcePath,processedPath:path.join(dir,'processed.jpg'),thumbnailPath:path.join(dir,'thumb.jpg'),
+    settings:{...DEFAULT_SETTINGS,productCrop:touchCrop({width:1200,height:800,aspectRatio:4/3,centerX:.5,centerY:.5,zoom:1}),longEdgePx:600,thumbnailLongEdgePx:120}});
+  assert.deepEqual([result.processed.width,result.processed.height],[600,450]);
+  assert.deepEqual([result.thumbnail.width,result.thumbnail.height],[120,90]);
+  assert.equal(await sha256File(sourcePath),before);
+});
 
 test("承認済みの商品クロップを本画像とサムネイルに同じ比率で適用する", async () => {
   const dir = await tempDir();
@@ -19,16 +31,16 @@ test("承認済みの商品クロップを本画像とサムネイルに同じ�
   assert.deepEqual([result.thumbnail.width, result.thumbnail.height], [120, 120]);
 });
 
-test("被写体不明の旧設定でも3:2の枠を写真で埋める", async () => {
+test("被写体不明の旧設定でも4:3の枠を写真で埋める", async () => {
   const dir = await tempDir();
   const sourcePath = path.join(dir, "source.jpg");
   await sharp({ create: { width: 1200, height: 675, channels: 3, background: '#831e21' } })
     .jpeg().toFile(sourcePath);
   const result = await processImage({ sourcePath, processedPath: path.join(dir, "processed.jpg"),
     thumbnailPath: path.join(dir, "thumb.jpg"), settings: { ...DEFAULT_SETTINGS,
-      productContainAspectRatio: 1.5, longEdgePx: 600, thumbnailLongEdgePx: 120 } });
-  assert.deepEqual([result.processed.width, result.processed.height], [600, 400]);
-  assert.deepEqual([result.thumbnail.width, result.thumbnail.height], [120, 80]);
+      productContainAspectRatio: 4/3, longEdgePx: 600, thumbnailLongEdgePx: 120 } });
+  assert.deepEqual([result.processed.width, result.processed.height], [600, 450]);
+  assert.deepEqual([result.thumbnail.width, result.thumbnail.height], [120, 90]);
   const top = await sharp(result.processed.path).extract({ left: 300, top: 2, width: 1, height: 1 }).raw().toBuffer();
   const middle = await sharp(result.processed.path).extract({ left: 300, top: 200, width: 1, height: 1 }).raw().toBuffer();
   assert.ok(top[0] > top[1] * 2 && top[0] < 160, 'top edge stays red, no neutral padding');

@@ -247,7 +247,7 @@ public partial class PresetComparisonWindow : Window
         await ExecuteAsync(async () => {
             await Run("choose-product", _session, preset.Id);
             await Run("top", _session, _topName);
-            // The pipeline selects square first, then 3:2 for the entire
+            // The pipeline selects square first, then 4:3 for the entire
             // product. It stops before upload if any subject is uncertain.
             DialogResult = true;
         });
@@ -268,7 +268,7 @@ public partial class PresetComparisonWindow : Window
 
     private bool? ShowFramingPreview(JsonElement result)
     {
-        var ratio = result.GetProperty("aspectRatio").GetDouble() == 1 ? "正方形" : "3:2";
+        var ratio = result.GetProperty("aspectRatio").GetDouble() == 1 ? "正方形" : "4:3";
         var layout = new DockPanel { Margin = new Thickness(16) };
         var header = new TextBlock { Text = $"全写真を{ratio}で統一します。商品や脚が切れていないか確認してください。",
             FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };

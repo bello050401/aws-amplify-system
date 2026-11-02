@@ -20,29 +20,29 @@ test('トップが正方形に収まれば商品全体を正方形に統一す�
   for (const crop of Object.values(plan.crops)) assert.equal(crop.width, crop.height);
 });
 
-test('トップが正方形に収まらない場合は全画像3:2', () => {
+test('トップが正方形に収まらない場合は全画像4:3', () => {
   const plan = planProductFraming({ topAssetId: 'top', images: [
     image('top', { left: 140, top: 270, width: 920, height: 200 }),
     image('side', { left: 350, top: 180, width: 460, height: 410 }),
   ] });
   assert.equal(plan.status, 'READY');
-  assert.equal(plan.aspectRatio, 1.5);
-  for (const crop of Object.values(plan.crops)) assert.equal(crop.width * 2, crop.height * 3);
+  assert.equal(plan.aspectRatio, 4/3);
+  for (const crop of Object.values(plan.crops)) assert.equal(crop.width * 3, crop.height * 4);
 });
 
-test('縦長トップが正方形にも3:2にも入らない場合は3:2で切り抜き、余白を足さない', () => {
+test('縦長トップが正方形にも4:3にも入らない場合は4:3で切り抜き、余白を足さない', () => {
   const plan = planProductFraming({ topAssetId: 'top', images: [
     image('top', { left: 240, top: 120, width: 320, height: 940 }, 800, 1200),
     image('side', { left: 270, top: 180, width: 270, height: 760 }, 800, 1200),
   ] });
   assert.equal(plan.status, 'READY');
-  assert.equal(plan.aspectRatio, 1.5);
+  assert.equal(plan.aspectRatio, 4/3);
   assert.ok(plan.crops.top);
-  assert.equal(plan.crops.top.width / plan.crops.top.height, 1.5);
+  assert.equal(plan.crops.top.width / plan.crops.top.height, 4/3);
   assert.deepEqual(plan.containAssetIds, []);
 });
 
-test('横長の追加写真によってメインの正方形を3:2へ変えない', () => {
+test('横長の追加写真によってメインの正方形を4:3へ変えない', () => {
   const plan = planProductFraming({ topAssetId: 'top', images: [
     image('top', { left: 400, top: 150, width: 350, height: 460 }),
     image('wide', { left: 80, top: 250, width: 1040, height: 230 }),
@@ -71,7 +71,7 @@ test('トップ基準の正方形は通常の横長写真だけに適用する',
 
 test('全体写真は余白不足なら横長を選び、拡大写真は切り取った構図を保つ', () => {
   // The real top-down table shot: the leg runs to the bottom edge, so there is
-  // no bottom margin to keep and demanding one used to force the whole product to 3:2.
+  // no bottom margin to keep and demanding one used to force the whole product to 4:3.
   const frame = { width: 3936, height: 2216, subjectBox: { left: 1063, top: 288, width: 1889, height: 1928 } };
   const crop = safeCropForSubject({ ...frame, aspectRatio: 1,margin:.06 });
   assert.equal(crop.width, crop.height);
@@ -79,7 +79,7 @@ test('全体写真は余白不足なら横長を選び、拡大写真は切り�
   assert.ok(crop.left + crop.width >= frame.subjectBox.left + frame.subjectBox.width);
   assert.ok(crop.top + crop.height >= frame.subjectBox.top + frame.subjectBox.height);
   const plan = planProductFraming({ topAssetId: 'top', images: [{ assetId: 'top', ...frame }] });
-  assert.equal(plan.aspectRatio, 1.5);
+  assert.equal(plan.aspectRatio, 4/3);
   const detail=planProductFraming({topAssetId:'top',images:[{assetId:'top',...frame,framingMode:'detail'}]});
   assert.equal(detail.aspectRatio,1);
   assert.ok(detail.crops.top);
@@ -105,8 +105,8 @@ test('アップ写真は偏った被写体検出でも撮影画像の中央か�
   for(const subjectBox of [null,{left:650,top:100,width:500,height:600},{left:40,top:20,width:300,height:500}]) {
     assert.deepEqual(detailCrop({width:1200,height:800,aspectRatio:1,subjectBox}),
       {left:200,top:0,width:800,height:800});
-    assert.deepEqual(detailCrop({width:800,height:1200,aspectRatio:1.5,subjectBox}),
-      {left:1,top:334,width:798,height:532});
+    assert.deepEqual(detailCrop({width:800,height:1200,aspectRatio:4/3,subjectBox}),
+      {left:0,top:300,width:800,height:600});
   }
 });
 
@@ -124,7 +124,7 @@ test('全体が収まらない追加写真も検出位置へ寄せず中央へ�
 
 test('中央切り取りは傾き補正の余白を除き端数でも中心を0.5px以内に保つ',()=>{
   for(const [width,height] of [[1201,803],[803,1201],[1200,800]]) {
-    for(const aspectRatio of [1,1.5]) {
+    for(const aspectRatio of [1,4/3]) {
       const c=detailCrop({width,height,aspectRatio,safeInset:25});
       assert.ok(c.left>=25&&c.top>=25&&c.left+c.width<=width-25&&c.top+c.height<=height-25);
       assert.equal(c.width/c.height,aspectRatio);

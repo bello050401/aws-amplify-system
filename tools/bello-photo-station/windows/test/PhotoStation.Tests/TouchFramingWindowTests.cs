@@ -73,11 +73,20 @@ public sealed class TouchFramingWindowTests
         Assert.False(File.Exists(Path.Combine(session,"touch-framing.json")));
         var draft=JsonDocument.Parse(File.ReadAllText(Path.Combine(session,"touch-framing-draft.json")));
         Assert.True(draft.RootElement.GetProperty("items").GetProperty("1.jpg").GetProperty("zoom").GetDouble()>1);
+        // Simulate a previous release's 3:2 draft; restore position into the new 4:3 review.
+        var legacy=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(session,"touch-framing-draft.json")))!;
+        legacy["aspectRatio"]=1.5;
+        File.WriteAllText(Path.Combine(session,"touch-framing-draft.json"),legacy.ToJsonString());
         var second=new TouchFramingWindow(runner,id,root){Width=1080,Height=760};
         second.Loaded+=async (_,_)=>{
             try{
                 await Ready(second);
-                Click(second,"横長 3:2");await Ready(second);
+                second.UpdateLayout();
+                var frame=(Canvas)typeof(TouchFramingWindow).GetField("_frame",BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(second)!;
+                Assert.InRange(Math.Abs(frame.ActualWidth/frame.ActualHeight-4d/3d),0,.0001);
+                Click(second,"正方形 1:1");await Ready(second);
+                Click(second,"横長 4:3");await Ready(second);
+                Click(second,"中央に戻す");AssertCentered(second);
                 Click(second,"次へ");await Ready(second,2);
                 Click(second,"次へ");await Ready(second,3);
                 SaveImage(second,Path.Combine(root,"02-last-photo.png"));
@@ -87,7 +96,7 @@ public sealed class TouchFramingWindowTests
         };
         Assert.True(second.ShowDialog());if(error is not null)throw error;
         var saved=JsonDocument.Parse(File.ReadAllText(Path.Combine(session,"touch-framing.json")));
-        Assert.Equal(1.5,saved.RootElement.GetProperty("aspectRatio").GetDouble());
+        Assert.Equal(4d/3d,saved.RootElement.GetProperty("aspectRatio").GetDouble());
         Assert.True(saved.RootElement.GetProperty("completed").GetBoolean());
         Assert.Equal(3,saved.RootElement.GetProperty("items").EnumerateObject().Count());
         Assert.False(File.Exists(Path.Combine(session,"touch-framing-draft.json")));

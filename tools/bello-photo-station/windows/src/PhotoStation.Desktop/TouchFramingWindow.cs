@@ -12,6 +12,7 @@ namespace PhotoStation.Desktop;
 /// <summary>Only display transforms run during gestures. Originals are never changed here.</summary>
 public sealed class TouchFramingWindow : Window
 {
+    private const double WideAspectRatio = 4d / 3d;
     public sealed record Position(string FileName, string SourceHash, int Width, int Height,
         double CenterX = .5, double CenterY = .5, double Zoom = 1);
     public sealed record Saved(int Version, bool Completed, string TopFileName, double AspectRatio, Dictionary<string, Position> Items);
@@ -27,7 +28,7 @@ public sealed class TouchFramingWindow : Window
     private readonly TextBlock _heading = new() { FontSize = 21, FontWeight = FontWeights.Bold };
     private readonly TextBlock _message = new() { FontSize = 14, TextWrapping = TextWrapping.Wrap };
     private readonly Button _previous = Button("戻る"), _next = Button("次へ"), _finish = Button("完了・現像へ"), _top = Button("この写真をトップにする");
-    private readonly Button _square = Button("正方形 1:1"), _wide = Button("横長 3:2");
+    private readonly Button _square = Button("正方形 1:1"), _wide = Button("横長 4:3");
     private readonly Slider _zoom = new() { Minimum = 1, Maximum = 4, Value = 1, Width = 140, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10,0,10,0) };
     private readonly ComboBox _preset = new() { MinHeight=44,MinWidth=220,FontSize=16,Margin=new Thickness(6) };
     public string? SelectedPresetId => (_preset.SelectedItem as ComboBoxItem)?.Tag as string;
@@ -71,7 +72,7 @@ public sealed class TouchFramingWindow : Window
         _image.RenderTransform = new TransformGroup { Children = { _scale, _translate } };
         RenderOptions.SetBitmapScalingMode(_image,BitmapScalingMode.LowQuality);
         _space.SizeChanged += (_,_) => UpdateFrame();
-        _square.Click += async (_,_) => await ChangeRatio(1); _wide.Click += async (_,_) => await ChangeRatio(1.5);
+        _square.Click += async (_,_) => await ChangeRatio(1); _wide.Click += async (_,_) => await ChangeRatio(WideAspectRatio);
         _top.Click += (_,_) => { if (_current is null) return; _topName = _names[_index]; UpdateFrame(); };
         center.Click += (_,_) => { if (_current is null) return; var p=Current; SavePosition(p with { CenterX=.5,CenterY=.5 }); };
         _zoom.ValueChanged += (_,_) => { if (_current is null || _updating) return; SavePosition(Current with { Zoom=_zoom.Value }); };
@@ -115,8 +116,9 @@ public sealed class TouchFramingWindow : Window
                     var file=Path.Combine(_directory,name); if(!File.Exists(file))continue;
                     try {
                         var saved=JsonSerializer.Deserialize<Saved>(await File.ReadAllTextAsync(file),Json);
-                        if(saved is { Version:1 } && saved.AspectRatio is 1 or 1.5) {
-                            _ratio=saved.AspectRatio;
+                        if(saved is { Version:1 } && (saved.AspectRatio is 1 or 1.5 || saved.AspectRatio == WideAspectRatio)) {
+                            // Old wide drafts retain their position, but every photo is reviewed in the new frame.
+                            _ratio=saved.AspectRatio==1.5?WideAspectRatio:saved.AspectRatio;
                             if(_names.Contains(saved.TopFileName))_topName=saved.TopFileName;
                             foreach(var p in saved.Items)if(_names.Contains(p.Key))_positions[p.Key]=p.Value;
                         }
@@ -161,7 +163,7 @@ public sealed class TouchFramingWindow : Window
         _updating=true;_zoom.Value=z;_updating=false;
         _heading.Text=$"{_index+1} / {_names.Length}枚　{(_topName==_names[_index]?"★ トップ写真":"位置の確認")}";
         _square.FontWeight=_ratio==1?FontWeights.Bold:FontWeights.Normal;
-        _wide.FontWeight=_ratio==1.5?FontWeights.Bold:FontWeights.Normal;
+        _wide.FontWeight=_ratio==WideAspectRatio?FontWeights.Bold:FontWeights.Normal;
     }
     private Task<Preview> GetPreview(string name) {
         if(_cache.TryGetValue(name,out var task))return task;

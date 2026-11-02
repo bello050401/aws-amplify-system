@@ -81,7 +81,7 @@ export async function processImage({ sourcePath, processedPath, thumbnailPath, s
 
   // Legacy plans must also fill the frame, never add background bands.
   const containRatio = merged.productContainAspectRatio;
-  if (containRatio != null && containRatio !== 1 && containRatio !== 1.5)
+  if (containRatio != null && containRatio !== 1 && containRatio !== 4 / 3)
     throw new Error('商品画像の統一比率が不正です');
   if (containRatio != null && merged.productCrop)
     throw new Error('商品画像の切り抜きと全体表示を同時に指定できません');

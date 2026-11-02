@@ -10,7 +10,7 @@ import {sha256File} from '../src/processImage.mjs';
 
 test('touch crop covers the frame without padding at every edge, shape and zoom',()=>{
   for(const [width,height] of [[3936,2216],[2216,3936],[800,800]])
-  for(const aspectRatio of [1,1.5])for(const zoom of [1,1.37,4])
+  for(const aspectRatio of [1,4/3])for(const zoom of [1,1.37,4])
   for(const centerX of [0,.5,1])for(const centerY of [0,.5,1]){
     const c=touchCrop({width,height,aspectRatio,zoom,centerX,centerY});
     assert.equal(c.width/c.height,aspectRatio);
@@ -52,6 +52,19 @@ test('manual positions survive rendering and repeat saves; auto detection cannot
   assert.deepEqual(first.crops['detail.jpg'],touchCrop({...items['detail.jpg'],aspectRatio:1}));
   const second=await prepareProductFraming(args);
   assert.deepEqual(second.crops,first.crops);assert.equal(renders,1); // same source bytes share verified render
+  saved.aspectRatio=4/3;
+  await writeFile(path.join(root,'touch-framing.json'),JSON.stringify(saved));
+  const wide=await prepareProductFraming(args);
+  assert.equal(wide.aspectRatio,4/3);
+  assert.notEqual(wide.confirmationHash,first.confirmationHash);
+  for(const crop of Object.values(wide.crops))assert.equal(crop.width*3,crop.height*4);
+  assert.deepEqual(wide.crops['detail.jpg'],touchCrop({...items['detail.jpg'],aspectRatio:4/3}));
+  saved.aspectRatio=1.5;
+  await writeFile(path.join(root,'touch-framing.json'),JSON.stringify(saved));
+  const old=await prepareProductFraming(args);
+  assert.equal(old.status,'NEEDS_REVIEW');
+  assert.match(old.reason,/4:3/);
+  saved.aspectRatio=4/3;
   saved.items['detail.jpg'].sourceHash='changed';
   await writeFile(path.join(root,'touch-framing.json'),JSON.stringify(saved));
   assert.equal((await prepareProductFraming(args)).status,'NEEDS_REVIEW');

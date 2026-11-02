@@ -15,6 +15,7 @@ import { renderCachedLightroom } from './lightroomRenderer.mjs';
 import { recoverSourceFraming } from './sourceFraming.mjs';
 import { analyzeDetailFocus } from './detailFocus.mjs';
 import { touchCrop } from './touchFraming.mjs';
+import { WIDE_ASPECT_RATIO, framingUnits } from './framingAspect.mjs';
 function validBox(box, width, height) {
   return box && [box.left, box.top, box.width, box.height].every(Number.isFinite)
     && box.left >= 0 && box.top >= 0 && box.width > 0 && box.height > 0
@@ -37,22 +38,22 @@ export function safeCropForSubject({ width, height, subjectBox, aspectRatio, mar
   const usableWidth = width - safeInset * 2, usableHeight = height - safeInset * 2;
   let cropWidth = Math.min(usableWidth, usableHeight * aspectRatio);
   let cropHeight = cropWidth / aspectRatio;
-  // Integer dimensions must preserve an exact 1:1 or 3:2 output ratio.
+  // Integer dimensions must preserve an exact 1:1 or 4:3 output ratio.
   if (aspectRatio === 1) cropWidth = cropHeight = Math.floor(Math.min(usableWidth, usableHeight));
-  else if (aspectRatio === 1.5) {
-    const unit = Math.floor(Math.min(usableWidth / 3, usableHeight / 2));
-    cropWidth = unit * 3; cropHeight = unit * 2;
-  } else if (aspectRatio === 2 / 3) {
-    const unit = Math.floor(Math.min(usableWidth / 2, usableHeight / 3));
-    cropWidth = unit * 2; cropHeight = unit * 3;
+  else if (aspectRatio === WIDE_ASPECT_RATIO) {
+    const unit = Math.floor(Math.min(usableWidth / 4, usableHeight / 3));
+    cropWidth = unit * 4; cropHeight = unit * 3;
+  } else if (aspectRatio === 3 / 4) {
+    const unit = Math.floor(Math.min(usableWidth / 3, usableHeight / 4));
+    cropWidth = unit * 3; cropHeight = unit * 4;
   } else return null;
   // Keep room around whole views, without retaining all the empty studio floor.
   // Limit the automatic zoom to 22%: a detector can miss a pale seat or thin leg.
   if (balanced) {
     const wantedHeight=Math.max(subjectBox.height/0.68,subjectBox.width/(aspectRatio*0.74),cropHeight*0.78);
-    const unit=aspectRatio===1?1:aspectRatio===1.5?2:3;
+    const unit=aspectRatio===1?1:aspectRatio===WIDE_ASPECT_RATIO?3:4;
     cropHeight=Math.min(cropHeight,Math.ceil(wantedHeight/unit)*unit);
-    cropWidth=cropHeight*aspectRatio;
+    cropWidth=(cropHeight/unit)*(aspectRatio===1?1:aspectRatio===WIDE_ASPECT_RATIO?4:3);
   }
   if (cropWidth < 1 || cropHeight < 1) return null;
   const usableRight = width - safeInset, usableBottom = height - safeInset;
@@ -83,9 +84,12 @@ export function detailCrop({width,height,aspectRatio,safeInset=0,detailFocus}) {
   if(![width,height,aspectRatio].every(n=>Number.isFinite(n)&&n>0))return null;
   if(!Number.isInteger(safeInset)||safeInset<0||safeInset*2>=Math.min(width,height))return null;
   const aw=width-safeInset*2,ah=height-safeInset*2;
-  const unit=aspectRatio===1?Math.floor(Math.min(aw,ah)):aspectRatio===1.5?Math.floor(Math.min(aw/3,ah/2)):0;
+  const dimensions=framingUnits(aspectRatio);
+  if(!dimensions)return null;
+  const [rw,rh]=dimensions;
+  const unit=Math.floor(Math.min(aw/rw,ah/rh));
   if(!unit)return null;
-  const w=unit*(aspectRatio===1?1:3),h=unit*(aspectRatio===1?1:2);
+  const w=unit*rw,h=unit*rh;
   const x=Number.isFinite(detailFocus?.x)&&detailFocus.x>=.30&&detailFocus.x<=.70?width*detailFocus.x:width/2;
   return {left:Math.round(Math.max(safeInset,Math.min(width-safeInset-w,x-w/2))),top:Math.round((height-h)/2),width:w,height:h};
 }
@@ -124,7 +128,7 @@ export function planProductFraming({ topAssetId, images }) {
   // Only the main photo determines the ratio. Uncertainty is not evidence
   // that the main subject needs a wide canvas. Every photo fills the chosen ratio.
   const knownTop = validBox(top.subjectBox, top.width, top.height);
-  const aspectRatio = knownTop && top.framingMode!=='detail' && !safeCropForSubject({ ...top, aspectRatio: 1, balanced:false, margin:0.10 }) ? 1.5 : 1;
+  const aspectRatio = knownTop && top.framingMode!=='detail' && !safeCropForSubject({ ...top, aspectRatio: 1, balanced:false, margin:0.10 }) ? WIDE_ASPECT_RATIO : 1;
   const crops = Object.fromEntries(images.map(image => [image.assetId,
     image.framingMode==='detail'?detailCrop({...image,aspectRatio}):
       safeCropForSubject({ ...image, aspectRatio }) ?? detailCrop({...image,aspectRatio})]));
@@ -144,7 +148,9 @@ export async function prepareProductFraming({ sources, topFileName, selectedPres
   try { touch=JSON.parse(await readFile(path.join(outputRoot,'touch-framing.json'),'utf8')); }
   catch(e) { if(e.code!=='ENOENT')throw e; }
   if(touch) {
-    if(touch.version!==1||touch.completed!==true||![1,1.5].includes(touch.aspectRatio))
+    if(touch.aspectRatio===1.5)
+      return {status:'NEEDS_REVIEW',reason:'横長の比率を4:3に変更しました。位置を調整する画面で全写真を確認して「完了」を押してください'};
+    if(touch.version!==1||touch.completed!==true||!framingUnits(touch.aspectRatio))
       return {status:'NEEDS_REVIEW',reason:'位置調整が途中です。全写真を確認して「完了」を押してください'};
     const frames=new Map(),crops={};
     for(const source of sources) {
@@ -231,6 +237,6 @@ export async function prepareProductFraming({ sources, topFileName, selectedPres
   })));
   const stampHash = await sha256File(fileURLToPath(new URL('../assets/BelloStamp.png', import.meta.url)));
   const confirmationHash = createHash('sha256').update(JSON.stringify({ topAssetId: top.clientAssetId,
-    aspectRatio: plan.aspectRatio, identity, stampHash, layoutVersion: 6 })).digest('hex');
+    aspectRatio: plan.aspectRatio, identity, stampHash, layoutVersion: 7 })).digest('hex');
   return { ...plan, frames, confirmationHash };
 }
