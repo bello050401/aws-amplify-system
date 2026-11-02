@@ -8,7 +8,7 @@ import { parseCustomFields, stringifyCustomFields } from './customFieldsCodecCor
 import { SoldOutError, validateSoldOut, type SoldOutRequest, type SoldOutResult } from './soldOutInput';
 import {saleTitle} from './salePricing';
 import {stockCountTitle} from './stockCountTitle';
-import {paymentDate,type YahooPaymentPlan} from '../saleCandidates/yahooPaymentModel';
+import {paymentDate,type YahooPaymentPlan,type YahooStockReservation} from '../saleCandidates/yahooPaymentModel';
 
 type Row = Record<string, unknown>;
 export interface SoldOutPorts {
@@ -56,7 +56,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     if (soldMaster.length!==1 || activeMaster.length!==1) throw new SoldOutError('INVALID','カテゴリマスタの「販売中」「売り切れ」を確認してください。');
     const currentCategories = inventoryCategoryIds(source);
     const sourceCustom = parseCustomFields(source.customFields);
-    const reservation = sourceCustom?.__belloYahooPayment as Record<string, any> | undefined;
+    const reservation = sourceCustom?.__belloYahooPayment as YahooStockReservation | undefined;
     const settling = ports.settlingYahooPayment && payment && !payment.waiting;
     if (reservation?.state==='WAITING' && !settling) throw new SoldOutError('CONFLICT','この商品はヤフオクの入金待ちです。入金確認後に数量を更新します。');
     if (settling && (!reservation?.quantityDeferred || reservation.candidateId!==payment.candidateId || reservation.auctionId!==payment.auctionId || reservation.sourceQuantity!==source.quantity || reservation.sourceMarket!==(source.market??'') || reservation.sourceExternalProductId!==(source.externalProductId??'') || reservation.request?.mutationId!==request.mutationId || reservation.request?.quantity!==request.quantity || !Array.isArray(reservation.beforeCategoryIds) || !Array.isArray(reservation.waitingCategoryIds) || JSON.stringify(currentCategories)!==JSON.stringify(reservation.waitingCategoryIds) || source.saleEndDate)) throw new SoldOutError('CONFLICT','入金待ちの商品情報が変更されています。数量とカテゴリを確認してください。');

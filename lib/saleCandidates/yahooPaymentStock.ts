@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {ScanCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
+import {ScanCommand,type ScanCommandInput,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import {CopyObjectCommand,DeleteObjectCommand,type S3Client} from '@aws-sdk/client-s3';
 import {DynamoPhotoRegistrationRepository} from '../photoRegistration/awsRepository';
 import {photoAssetS3Key} from '../photoRegistration/types';
@@ -18,7 +18,7 @@ export function createYahooPaymentStockPorts(config:{db:DynamoDBDocumentClient;t
  };
  return {
   nextSku:config.nextSku,discardPhotos,
-  categories:async()=>{const all:{id:string;name:string}[]=[];let cursor:Record<string,any>|undefined;do{const page=await db.send(new ScanCommand({TableName:table('Category'),ProjectionExpression:'id,#n',ExpressionAttributeNames:{'#n':'name'},ExclusiveStartKey:cursor,ConsistentRead:true}));all.push(...(page.Items??[]) as {id:string;name:string}[]);cursor=page.LastEvaluatedKey;}while(cursor);return all;},
+  categories:async()=>{const all:{id:string;name:string}[]=[];let cursor:ScanCommandInput['ExclusiveStartKey'];do{const page=await db.send(new ScanCommand({TableName:table('Category'),ProjectionExpression:'id,#n',ExpressionAttributeNames:{'#n':'name'},ExclusiveStartKey:cursor,ConsistentRead:true}));all.push(...(page.Items??[]) as {id:string;name:string}[]);cursor=page.LastEvaluatedKey;}while(cursor);return all;},
   copyPhotos:async source=>{
    const parsed=typeof source.images==='string'?JSON.parse(source.images):source.images;
    if(parsed!=null&&!Array.isArray(parsed))throw Error('PAYMENT_IMAGE_INVALID');
@@ -37,7 +37,7 @@ export function createYahooPaymentStockPorts(config:{db:DynamoDBDocumentClient;t
     await s3.send(new CopyObjectCommand({Bucket:inventoryBucket,Key:target,CopySource:bucket+'/'+key.split('/').map(encodeURIComponent).join('/')}));
     copied.set(identity,target);created.push({storageKey:target});return target;
    };
-   try{const result=[];for(const photo of originals){const bucket=photo.sourceBucket??inventoryBucket,storageKey=await copy(photo.storageKey,bucket);const {sourceBucket:_,...rest}=photo;result.push({...rest,storageKey,thumbnailKey:photo.thumbnailKey?await copy(photo.thumbnailKey,bucket):storageKey,mediumKey:photo.mediumKey?await copy(photo.mediumKey,bucket):storageKey,sourceSystem:null,sourceUrl:null});}return result;}
+   try{const result=[];for(const photo of originals){const bucket=photo.sourceBucket??inventoryBucket,storageKey=await copy(photo.storageKey,bucket);const rest={...photo};delete rest.sourceBucket;result.push({...rest,storageKey,thumbnailKey:photo.thumbnailKey?await copy(photo.thumbnailKey,bucket):storageKey,mediumKey:photo.mediumKey?await copy(photo.mediumKey,bucket):storageKey,sourceSystem:null,sourceUrl:null});}return result;}
    catch(error){await discardPhotos(created);throw error;}
   }
  };

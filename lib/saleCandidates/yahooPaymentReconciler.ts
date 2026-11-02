@@ -4,7 +4,7 @@ import {inventoryCategoryIds} from '../inventory/categories';
 import {parseCustomFields,stringifyCustomFields} from '../inventory/customFieldsCodecCore';
 import {withHumanEdits} from '../inventory/humanEdits';
 import type {SaleCandidate} from './model';
-import {yahooPaymentPlan,paymentDate,yahooPaymentKey,YAHOO_PAYMENT_QUEUE_STATE} from './yahooPaymentModel';
+import {yahooPaymentPlan,paymentDate,yahooPaymentKey,YAHOO_PAYMENT_QUEUE_STATE,type YahooStockReservation} from './yahooPaymentModel';
 import {createSoldOutService,type SoldOutPorts} from '../inventory/soldOutCore';
 import type {SoldOutRequest} from '../inventory/soldOutInput';
 
@@ -25,7 +25,7 @@ export function createYahooPaymentReconciler(db:DynamoDBDocumentClient,candidate
   if(queue.quantityDeferred || receipt.quantityDeferred){
    if(!queue.quantityDeferred||!receipt.quantityDeferred||!stockPorts||queue.sourceQuantity!==receipt.sourceQuantity||queue.soldId!==queue.sourceId)throw conflict();
    const source=await persistence.getInventoryRaw(queue.sourceId);
-   const marker=parseCustomFields(source?.customFields)?.__belloYahooPayment as Record<string,any>|undefined;
+   const marker=parseCustomFields(source?.customFields)?.__belloYahooPayment as YahooStockReservation|undefined;
    const saved=marker?.request as SoldOutRequest|undefined;
    if(!source||!saved||marker?.candidateId!==candidate.id||marker.auctionId!==queue.auctionId||marker.sourceQuantity!==queue.sourceQuantity||saved.inventoryId!==queue.sourceId||saved.quantity!==queue.soldQuantity||saved.sourceCandidateId!==candidate.id)throw conflict();
    await createSoldOutService({db,table,...stockPorts,yahooPayment:payment,settlingYahooPayment:true,saleCommit:(result,now)=>[

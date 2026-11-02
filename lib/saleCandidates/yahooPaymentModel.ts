@@ -1,3 +1,4 @@
+import type {SoldOutRequest} from '../inventory/soldOutInput';
 import type {SaleCandidate} from './model';
 
 export type YahooPaymentPlan={candidateId:string;auctionId:string;waiting:boolean;paidAt?:string};
@@ -12,3 +13,10 @@ export function yahooPaymentPlan(candidate?:SaleCandidate):YahooPaymentPlan|unde
  const paidAt=at&&Number.isFinite(Date.parse(at))?at:undefined;
  return {candidateId:candidate.id,auctionId:candidate.orderId,waiting:!paidAt,...(paidAt?{paidAt}:{})};
 }
+
+/** Durable validated request used only when the payment worker settles stock. */
+export type YahooStockReservation={
+ state:'WAITING';quantityDeferred:true;candidateId:string;auctionId:string;sourceQuantity:number;
+ sourceMarket:string;sourceExternalProductId:string;beforeCategoryIds:string[];waitingCategoryIds:string[];
+ unpaidCategoryId:string;request:SoldOutRequest;
+};
