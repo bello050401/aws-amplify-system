@@ -84,4 +84,4 @@ test('ID lookup covers legacy Yahoo, e-conveni publish and explicit manual links
  assert.deepEqual(collectYahooInventoryIds('r1234567890',[],[workflow],manual),[]);
 });
 
-test('unpaid or unverified notification has no sale end date',()=>{assert.equal(parse('won').saleDate,'');assert.equal(parse('address').saleDate,'');assert.equal(parsePurchaseMail({...mail('paid'),authenticatedYahooSender:false})[0].saleDate,'');});
+test('unpaid or unverified notification has no sale end date',()=>{assert.equal(parse('won').saleDate,'');assert.equal(parse('address').saleDate,'');assert.equal(parsePurchaseMail({...mail('paid'),receivedAt:'invalid'})[0].saleDate,'');assert.equal(parsePurchaseMail({...mail('paid'),authenticatedYahooSender:false})[0].saleDate,'');});

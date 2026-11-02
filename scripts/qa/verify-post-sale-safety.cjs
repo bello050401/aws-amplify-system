@@ -51,6 +51,7 @@ reset();remaining=0;market='YAHOO';fullSale=true;paymentState='APPLIED';version=
 reset();deferred=true;paymentState='WAITING';market='YAHOO';remaining=0;sourceCount=2;
 p=await reviewPostSale('c','owner');assert.equal(p.quantityDeferred,true);assert.equal(p.remaining,0);assert.equal(p.rows.map(r=>r.channel).join(','),'BASE,MERCARI_SHOPS');assert.equal(calls.length,0);
 await executePostSale('c','owner',p.token,true);assert.deepEqual(calls,[['STOP','BASE'],['STOP','MERCARI_SHOPS']]);assert.equal(sourceCount,2);
+deferred=false;paymentState='APPLIED';const settled=await reviewPostSale('c','owner');assert.equal(settled.quantityDeferred,false);assert.equal(calls.length,2);
 reset();deferred=true;paymentState='WAITING';market='YAHOO';remaining=3;sourceCount=5;
 p=await reviewPostSale('c','owner');assert.equal(p.rows.find(r=>r.channel==='BASE').targetQuantity,3);assert.equal(sourceCount,5);
 sourceCount=4;plans.clear();await assert.rejects(()=>reviewPostSale('c','owner'),/数量/);deferred=false;

@@ -53,7 +53,12 @@ async function context(candidateId:string){
 const key=(id:string)=>({pk:'SALE_EC#'+id});
 export async function reviewPostSale(candidateId:string,actor:string,packSizes:Partial<Record<EcChannel,number>>={}):Promise<PostSalePlan>{
  const old=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as (PostSalePlan&{pk:string})|undefined;
- if(old&&(old.state==='COMPLETE'&&old.rows.length>0||old.state==='EXECUTING'&&old.expiresAt>Date.now()))return old;
+ if(old&&(old.state==='COMPLETE'&&old.rows.length>0||old.state==='EXECUTING'&&old.expiresAt>Date.now())){
+  // An already completed EC confirmation must not keep showing 'stock unchanged'
+  // after the payment worker has settled the inventory. Never resend EC actions.
+  if(old.quantityDeferred){const c=await candidateStore().get(candidateId);if(c?.yahooPaymentState==='APPLIED'&&c.result&&!c.result.quantityDeferred)return {...old,quantityDeferred:false};}
+  return old;
+ }
  const {c,source,soldChannel,soldPack}=await context(candidateId);
  const started=new Set(await Promise.all((old?.rows??[]).filter(r=>r.adjustment).map(async r=>await saleAdjustmentStarted(r.adjustment!)?r.channel:null)));
  const resuming=old?.rows.some(r=>started.has(r.channel)&&r.state!=='DONE');
