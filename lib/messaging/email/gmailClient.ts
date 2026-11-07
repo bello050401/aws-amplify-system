@@ -2,6 +2,7 @@ import "server-only";
 import { getGmailCredentials, type GmailOAuthCredentials } from "./gmailSecretStore";
 import type { MercariMailInput } from "@/lib/messaging/mercari/notificationMailParser";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
+import {trustedMercariNotification} from '@/lib/messaging/mercari/trustedNotification';
 
 /**
  * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
@@ -63,14 +64,13 @@ async function getAccessToken(creds: GmailOAuthCredentials): Promise<string> {
   }
   if (!res.ok) {
     // レスポンス本文には client_secret は含まれないが、念のため長さを絞る。
-    const text = await res.text().catch(() => "");
     if (res.status === 400 || res.status === 401) {
       throw new GmailError(
         "AUTH_FAILED",
         "Gmailの認証に失敗しました。リフレッシュトークンが失効している可能性があります。設定画面から再取得してください。",
       );
     }
-    throw new GmailError("REMOTE_ERROR", `Googleの認証エンドポイントがエラーを返しました(HTTP ${res.status}): ${text.slice(0, 200)}`);
+    throw new GmailError("REMOTE_ERROR", `Googleの認証エンドポイントがエラーを返しました(HTTP ${res.status})。`);
   }
   const data = (await res.json()) as { access_token?: string };
   if (!data.access_token) throw new GmailError("AUTH_FAILED", "アクセストークンを取得できませんでした。");
@@ -87,10 +87,30 @@ async function apiGet<T>(path: string, accessToken: string): Promise<T> {
   if (res.status === 429) throw new GmailError("RATE_LIMITED", "Gmail APIのレート制限に達しました。時間をおいて再実行してください。");
   if (res.status === 401 || res.status === 403) throw new GmailError("AUTH_FAILED", `Gmail APIの認証に失敗しました(HTTP ${res.status})。`);
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new GmailError("REMOTE_ERROR", `Gmail APIがエラーを返しました(HTTP ${res.status}): ${text.slice(0, 200)}`);
+    throw new GmailError("REMOTE_ERROR", `Gmail APIがエラーを返しました(HTTP ${res.status})。`);
   }
   return (await res.json()) as T;
+}
+
+export interface GmailDeltaCursor {historyId?:string;pageToken?:string;resync?:boolean;snapshot?:string;}
+/** Return one complete page. The caller advances this cursor only after durable ingestion. */
+export async function readGmailDelta(cursor:GmailDeltaCursor):Promise<{ids:string[];mailbox:string;next:GmailDeltaCursor;done:boolean}>{
+ const creds=await getGmailCredentials();if(!creds)throw new GmailError('CONFIG_REQUIRED','Gmail接続を確認してください。');
+ const token=await getAccessToken(creds);
+ const profile=await apiGet<{emailAddress:string;historyId:string}>('/profile',token);
+ const resync=async():Promise<{ids:string[];mailbox:string;next:GmailDeltaCursor;done:boolean}>=>{
+   const snapshot=cursor.snapshot??profile.historyId;
+   // Initial catch-up is bounded to the last three months, with every page processed.
+   const q='from:no-reply@mercari-shops.com newer_than:90d';
+   const page=await apiGet<{messages?:{id:string}[];nextPageToken?:string}>('/messages?maxResults=20&q='+encodeURIComponent(q)+(cursor.resync&&cursor.pageToken?'&pageToken='+encodeURIComponent(cursor.pageToken):''),token);
+   return {ids:(page.messages??[]).map(m=>m.id),mailbox:profile.emailAddress,next:page.nextPageToken?{resync:true,pageToken:page.nextPageToken,snapshot}:{historyId:snapshot},done:!page.nextPageToken};
+ };
+ if(!cursor.historyId||cursor.resync)return resync();
+ try{
+   const page=await apiGet<{history?:{messagesAdded?:{message:{id:string}}[]}[];historyId:string;nextPageToken?:string}>('/history?maxResults=20&historyTypes=messageAdded&startHistoryId='+encodeURIComponent(cursor.historyId)+(cursor.pageToken?'&pageToken='+encodeURIComponent(cursor.pageToken):''),token);
+   const ids=[...new Set((page.history??[]).flatMap(h=>(h.messagesAdded??[]).map(m=>m.message.id)))];
+   return {ids,mailbox:profile.emailAddress,next:page.nextPageToken?{historyId:cursor.historyId,pageToken:page.nextPageToken}:{historyId:page.historyId},done:!page.nextPageToken};
+ }catch(error){if(error instanceof Error&&error.message.includes('HTTP 404'))return resync();throw error;}
 }
 
 interface GmailPart {
@@ -102,6 +122,7 @@ interface GmailPart {
 
 interface GmailMessage {
   id: string;
+  labelIds?:string[];
   internalDate?: string;
   payload?: GmailPart;
 }
@@ -254,6 +275,7 @@ export async function fetchMercariNotificationMailsByIds(ids: string[]): Promise
   for (const id of ids) {
     // 1通ずつ取る。format=full でMIME全体が返る。
     const msg = await apiGet<GmailMessage>(`/messages/${id}?format=full`, accessToken);
+    if(!trustedMercariNotification({from:header(msg,'From'),authenticationResults:header(msg,'Authentication-Results'),labels:msg.labelIds}))continue;
     const bodies = { text: [] as string[], html: [] as string[] };
     collectBodies(msg.payload, bodies);
 

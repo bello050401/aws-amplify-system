@@ -1,5 +1,5 @@
 
-import {assertMessagesEnabled} from "@/lib/messaging/featureState";
+import {assertMessagesEnabled,CUSTOMER_DELIVERY_ENABLED} from "@/lib/messaging/featureState";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages, unwrapGet, unwrapList } from "@/lib/amplify/listAll";
@@ -536,6 +536,8 @@ export async function sendReply(conversationId: string, messageId: string, who: 
     "返信の下書き",
   );
   if (!draft) throw new Error("返信の下書きが見つかりません。");
+  if(draft.conversationId!==conversationId||draft.direction!=='OUTBOUND'||draft.deliveryStatus!=='DRAFT')throw new Error('この会話の未送信の返信案を選択してください。');
+  if(conversation.channel!=='TEST'&&!CUSTOMER_DELIVERY_ENABLED)throw new Error('現在は返信案の確認期間です。顧客への送信はまだ有効になっていません。');
   const body = draft.body ?? "";
   if (!body.trim()) throw new Error("返信本文が空です。内容を入力してから送信してください。");
 

@@ -3,16 +3,18 @@ import { CfnResource, Duration, RemovalPolicy, SecretValue } from "aws-cdk-lib";
 import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
+import {Rule,Schedule,RuleTargetInput} from 'aws-cdk-lib/aws-events';
+import {LambdaFunction} from 'aws-cdk-lib/aws-events-targets';
 import { LogRetention, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { AttributeType, BillingMode, Table, TableEncryption, StreamViewType } from "aws-cdk-lib/aws-dynamodb";
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Runtime, LayerVersion, StartingPosition, FilterCriteria } from 'aws-cdk-lib/aws-lambda';
-import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { DynamoEventSource, SqsDlq, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 import path from 'node:path';
 import { COMPACT_SEARCH_INDEX, COMPACT_SEARCH_FIELDS } from './compactSearchIndex';
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
-import { Effect, ManagedPolicy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
+import { Effect, ManagedPolicy, Policy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
 import { data } from "./data/resource";
 import { storage } from "./storage/resource";
@@ -264,6 +266,40 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   backend.addOutput({custom:{yahooHttps:{region:yahooStack.region,secretArn:yahooSession.secretArn,stateTable:yahooState.tableName}}});
 
   const procurementStack = backend.createStack("ProcurementImport");
+  const inquiryStack=backend.createStack('InquiryRuntime');
+  const inquiryTable=new Table(inquiryStack,'Inbox',{partitionKey:{name:'pk',type:AttributeType.STRING},sortKey:{name:'sk',type:AttributeType.STRING},
+    billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,pointInTimeRecovery:true,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.RETAIN});
+  const inquiryFailures=new Queue(inquiryStack,'Failed',{retentionPeriod:Duration.days(14),enforceSSL:true});
+  inquiryTable.addGlobalSecondaryIndex({indexName:'recent',partitionKey:{name:'kind',type:AttributeType.STRING},sortKey:{name:'lastAt',type:AttributeType.NUMBER}});
+  const inquiryQueue=new Queue(inquiryStack,'Jobs',{visibilityTimeout:Duration.seconds(1080),retentionPeriod:Duration.days(14),enforceSSL:true,deadLetterQueue:{queue:inquiryFailures,maxReceiveCount:20}});
+  const inquiryWorker=new NodejsFunction(inquiryStack,'Worker',{entry:path.resolve('amplify/functions/inquiry-runtime/handler.ts'),handler:'handler',
+    runtime:Runtime.NODEJS_22_X,timeout:Duration.seconds(180),memorySize:1024,logRetention:RetentionDays.ONE_MONTH,
+    bundling:{minify:true,sourceMap:false,esbuildArgs:{'--alias:server-only':path.resolve('amplify/functions/inquiry-runtime/server-only.ts'),'--alias:@/lib/amplify/dataClient':path.resolve('amplify/functions/inquiry-runtime/dataClient.ts')}},
+    environment:{INQUIRY_TABLE:inquiryTable.tableName,QUEUE_URL:inquiryQueue.queueUrl,
+      CONVERSATION_TABLE_NAME:backend.data.resources.tables.Conversation.tableName,MESSAGE_TABLE_NAME:backend.data.resources.tables.Message.tableName,
+      MESSAGING_ATTACHMENT_BUCKET:backend.storage.resources.bucket.bucketName,
+      ...(process.env.AGENTCORE_GATEWAY_URL?{AGENTCORE_GATEWAY_URL:process.env.AGENTCORE_GATEWAY_URL}:{}),
+      ...(process.env.AI_BUDGET_CONFIG_JSON?{AI_BUDGET_CONFIG_JSON:process.env.AI_BUDGET_CONFIG_JSON}:{})}});
+  inquiryTable.grantReadWriteData(inquiryWorker);
+  inquiryQueue.grantSendMessages(inquiryWorker);
+  for(const name of ['Inventory','InventoryCategory','Category','Location','StatusMaster','UnitMaster','CustomFieldDefinition','InventoryHistory','ChannelListing','BaseProductArchive','KnowledgeDocument','KnowledgeDocumentRevision','ReplyRule','AIReplySettings','ShippingRate','ZaicoSyncJob'])backend.data.resources.tables[name]?.grantReadData(inquiryWorker);
+  for(const name of ['Conversation','Message','ReplyDraft','NotificationDelivery','LineNotifySettings','ExternalResearchCache','AIUsageLog','AIBudgetLedger','AIBudgetReservation','BaseOAuthToken','MercariOrderContext'])backend.data.resources.tables[name]?.grantReadWriteData(inquiryWorker);
+  inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:['bello/line-channel-secret','bello/line-notify-bot','bello/gmail-oauth','bello/base-app-credentials'].map(name=>`arn:aws:secretsmanager:${inquiryStack.region}:${inquiryStack.account}:secret:${name}-??????`)}));
+  inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject','s3:PutObject','s3:DeleteObject','s3:DeleteObjectVersion'],resources:[backend.storage.resources.bucket.arnForObjects('messaging/attachments/*')]}));
+  inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['s3:ListBucketVersions'],resources:[backend.storage.resources.bucket.bucketArn],conditions:{StringLike:{'s3:prefix':['messaging/attachments/*']}}}));
+  inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['bedrock:InvokeModel'],resources:[`arn:aws:bedrock:${inquiryStack.region}:${inquiryStack.account}:inference-profile/us.amazon.nova-pro-v1:0`,...['us-west-2','us-east-1','us-east-2'].map(region=>`arn:aws:bedrock:${region}::foundation-model/amazon.nova-pro-v1:0`)]}));
+  const inquiryGateway=process.env.AGENTCORE_GATEWAY_URL?.match(/^https:\/\/([a-z0-9-]+)\.gateway\.bedrock-agentcore\.([a-z0-9-]+)\.amazonaws\.com/);
+  if(inquiryGateway)inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['bedrock-agentcore:InvokeGateway'],resources:[`arn:aws:bedrock-agentcore:${inquiryGateway[2]}:${inquiryStack.account}:gateway/${inquiryGateway[1]}`]}));
+  new Rule(inquiryStack,'MailPoll',{schedule:Schedule.rate(Duration.minutes(1)),targets:[new LambdaFunction(inquiryWorker,{event:RuleTargetInput.fromObject({action:'POLL'}),retryAttempts:1})]});
+  new Alarm(inquiryStack,'FailedJobs',{metric:inquiryFailures.metricApproximateNumberOfMessagesVisible({period:Duration.minutes(5)}),threshold:1,evaluationPeriods:1,treatMissingData:TreatMissingData.NOT_BREACHING});
+  inquiryWorker.addEventSource(new SqsEventSource(inquiryQueue,{batchSize:1,reportBatchItemFailures:true,maxConcurrency:2}));
+  const inquiryRole=Role.fromRoleName(inquiryStack,'WebRole','BelloAmplifyStagingComputeRole');
+  const inquiryAccess=new Policy(inquiryStack,'WebAccess',{statements:[
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:Query','dynamodb:ConditionCheckItem'],resources:[inquiryTable.tableArn,inquiryTable.tableArn+'/index/recent']}),
+    new PolicyStatement({actions:['sqs:SendMessage'],resources:[inquiryQueue.queueArn]}),
+  ]});
+  inquiryRole.attachInlinePolicy(inquiryAccess);
+  backend.addOutput({custom:{inquiryRuntime:{region:inquiryStack.region,table:inquiryTable.tableName,queueUrl:inquiryQueue.queueUrl}}});
   const restageSecret = Secret.fromSecretNameV2(procurementStack, "RestageCredentials", "bello/restage-readonly-credentials");
   const procurementTable = new Table(procurementStack, "Imports", {
     partitionKey:{name:"pk",type:AttributeType.STRING},sortKey:{name:"sk",type:AttributeType.STRING},

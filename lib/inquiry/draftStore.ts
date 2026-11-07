@@ -1,5 +1,7 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
+import {listAllPages} from '@/lib/amplify/listAll';
+import {createHash} from 'node:crypto';
 import type { InquiryIntent, ReplyDraftRecord, ReplyDraftStatus, ReplyEvidence, UnresolvedFact } from "./types";
 
 /**
@@ -70,12 +72,11 @@ function parseJson<T>(value: unknown): T | null {
 }
 
 export async function listReplyDrafts(conversationId: string): Promise<ReplyDraftRecord[]> {
-  const { data, errors } = await serverDataClient.models.ReplyDraft.list({
+  const data=await listAllPages<ReplyDraftRow>(async nextToken=>{const result=await serverDataClient.models.ReplyDraft.list({
     filter: { conversationId: { eq: conversationId } },
-    limit: 50,
+    limit: 100,nextToken,
     ...inventoryAuthMode,
-  });
-  if (errors) throw new Error(`返信案の取得に失敗しました: ${errors.map((e) => e.message).join("; ")}`);
+  });return {data:result.data as unknown as ReplyDraftRow[],errors:result.errors,nextToken:result.nextToken};},{label:'返信案'});
   return (data as unknown as ReplyDraftRow[]).map(toRecord).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -143,7 +144,8 @@ export async function saveReplyDraft(input: SaveReplyDraftInput, who: string | n
     if (errors || !data) throw new Error(errors?.[0]?.message ?? "返信案の保存に失敗しました。");
     return toRecord(data as unknown as ReplyDraftRow);
   }
-  const { data, errors } = await serverDataClient.models.ReplyDraft.create({ ...payload, createdBy: who }, inventoryAuthMode);
+  const id='draft_'+createHash('sha256').update(JSON.stringify([input.conversationId,input.sourceMessageId])).digest('hex');
+  const { data, errors } = await serverDataClient.models.ReplyDraft.create({ id,...payload, createdBy: who }, inventoryAuthMode);
   if (errors || !data) throw new Error(errors?.[0]?.message ?? "返信案の保存に失敗しました。");
   return toRecord(data as unknown as ReplyDraftRow);
 }

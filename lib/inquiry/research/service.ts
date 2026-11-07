@@ -5,6 +5,8 @@ import { compareBySourcePriority, downgradeIfUncertain, evaluateModelEvidence, t
 import { htmlToText, sanitizeExternalText } from "./sanitize";
 import { escapeRegExp } from "../references";
 import type { ExternalResearchFact, ExternalSourceType } from "../types";
+import {publicResearchUrl,safeResearchGet} from './safeFetch';
+import {VERIFIED_BRAND_HOSTS} from './officialDomains';
 
 /**
  * §9 外部Webリサーチの実行層。
@@ -71,12 +73,13 @@ export function classifySource(url: string, knownBrandHosts: string[] = []): Ext
   } catch {
     return "OTHER";
   }
-  if (knownBrandHosts.some((h) => host.endsWith(h.toLowerCase()))) return "MANUFACTURER";
-  if (/manual|instruction|torisetsu|取扱/.test(pathname)) return "OFFICIAL_MANUAL";
-  if (/catalog|catalogue|カタログ/.test(pathname) || pathname.endsWith(".pdf")) return "OFFICIAL_CATALOG";
+  const official=[...VERIFIED_BRAND_HOSTS,...knownBrandHosts].some(h=>host===h.toLowerCase()||host.endsWith('.'+h.toLowerCase()));
+  if (official&&/manual|instruction|torisetsu|取扱/.test(pathname)) return "OFFICIAL_MANUAL";
+  if (official&&(/catalog|catalogue|カタログ/.test(pathname) || pathname.endsWith(".pdf"))) return "OFFICIAL_CATALOG";
+  if (official) return "MANUFACTURER";
   // フリマ・オークション・個人ブログは一次情報ではない(§9優先順位の末尾)。
   if (/mercari|yahoo|rakuma|auctions|blog|ameblo|note\.com|hatena/.test(host)) return "OTHER";
-  if (/shop|store|ec\./.test(host)) return "AUTHORIZED_RETAILER";
+  // A shop-looking URL alone does not establish authorized reseller status.
   return "OTHER";
 }
 
@@ -113,34 +116,15 @@ export function createDirectUrlProvider(urls: string[]): ResearchProvider {
  * ループバック/リンクローカル/プライベートIPを除外する。
  */
 export function isFetchableExternalUrl(raw: string): boolean {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-  const host = u.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) return false;
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) {
-    const [a, b] = host.split(".").map(Number);
-    if (a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)) return false;
-  }
-  if (host === "::1" || host.startsWith("[")) return false;
-  return true;
+  return publicResearchUrl(raw);
 }
 
 export async function fetchPage(url: string): Promise<ResearchSourceDocument | null> {
   try {
-    const res = await fetch(url, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: { "user-agent": "BELLO-InquiryResearch/1.0" },
-    });
-    if (!res.ok) return null;
-    const contentType = res.headers.get("content-type") ?? "";
-    if (!/text\/html|text\/plain|application\/xhtml/.test(contentType)) return null;
-    const raw = (await res.text()).slice(0, MAX_PAGE_BYTES);
+    const response=await safeResearchGet(url,MAX_PAGE_BYTES,FETCH_TIMEOUT_MS);
+    if(!response)return null;
+    url=response.url;
+    const raw=response.text;
     const title = raw.match(/<title[^>]*>([\s\S]{0,300}?)<\/title>/i)?.[1]?.trim() ?? url;
     // 既定の4,000文字だと、仕様表がページ下部にある商品ページで
     // 「素材」「消費電力」といった項目ごと切り落とされる(実測:

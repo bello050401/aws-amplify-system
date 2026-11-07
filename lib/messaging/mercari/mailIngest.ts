@@ -8,6 +8,7 @@ import {
 } from "@/lib/messaging/email/gmailClient";
 import { findMessageByExternalId, recordIncomingWebhookMessage } from "@/lib/messaging/webhookStore";
 import { processInquiryAndNotifyUnauthenticated } from "@/lib/inquiry/autoReply";
+import {enqueueInquiry} from '@/lib/inquiry/runtime/store';
 import {
   buildProductLookupText,
   canonicalOrderId,
@@ -124,6 +125,9 @@ export async function ingestMercariNotificationMails(params: {
    * (通知は dedupeKey が同じなので更新され、重複しない)。
    */
   reprocess?: boolean;
+  mailIds?:string[];
+  deferDraft?:boolean;
+  mailbox?:string;
 }): Promise<MailIngestResult> {
   assertMessagesEnabled();
   const result: MailIngestResult = {
@@ -145,7 +149,7 @@ export async function ingestMercariNotificationMails(params: {
   // 本文まで取ると1通ごとにAPIを1往復するため、30通で十数秒かかる。
   // 取り込み済みかはIDだけで判定できるので、**新しいものだけ本文を取りに行く**。
   // これで2回目以降の実行が数秒で終わる。
-  const { ids, query } = await listMercariNotificationMailIds(params.maxResults ?? 30);
+  const { ids, query } = params.mailIds?{ids:params.mailIds,query:'差分取得'}:await listMercariNotificationMailIds(params.maxResults ?? 30);
   result.query = query;
   result.fetched = ids.length;
 
@@ -229,6 +233,7 @@ export async function ingestMercariNotificationMails(params: {
       const stored = await recordIncomingWebhookMessage({
         channel: "MERCARI_SHOPS",
         externalCustomerId,
+        ...(params.mailbox?{externalAccountId:params.mailbox,externalConversationId:externalCustomerId}:{}),
         externalMessageId: `gmail:${mail.gmailId}`,
         body: bodyForStorage(parsed),
         externalSentAt: mail.receivedAt,
@@ -273,7 +278,7 @@ export async function ingestMercariNotificationMails(params: {
           })
         : null;
 
-      await processInquiryAndNotifyUnauthenticated({
+      const draftParams:Parameters<typeof processInquiryAndNotifyUnauthenticated>[0]={
         conversationId,
         sourceMessageId: messageId,
         who: params.who,
@@ -311,7 +316,10 @@ export async function ingestMercariNotificationMails(params: {
           : null,
         // §50 どうやって商品名へ辿り着いたか。社内通知の「商品情報の補完」に出す。
         productContextNotes: restored?.notes ?? [],
-      });
+        skipIfAlreadyNotified:true,
+      };
+      if(params.deferDraft)await enqueueInquiry('MERCARI_SHOPS',params.mailbox??'primary',externalCustomerId,'gmail:'+mail.gmailId,{channel:'MERCARI_SHOPS',params:draftParams});
+      else await processInquiryAndNotifyUnauthenticated(draftParams);
     } catch (err) {
       result.failed++;
       const message = err instanceof Error ? err.message : String(err);

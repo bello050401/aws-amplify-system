@@ -1,224 +1,100 @@
-import {MESSAGES_PAUSED} from "@/lib/messaging/featureState";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyLineSignature } from "@/lib/messaging/line/signature";
 import { getLineChannelSecret } from "@/lib/messaging/line/tokenAccess";
-import { fetchLineProfile } from "@/lib/messaging/line/profile";
-import { fetchLineMessageContent } from "@/lib/messaging/line/content";
-import { saveIncomingAttachment } from "@/lib/messaging/attachmentStore";
-import { parseLineWebhookBody } from "@/lib/messaging/line/adapter";
-import { recordIncomingWebhookMessage, classifyWebhookStoreFailure, type WebhookStoreFailure } from "@/lib/messaging/webhookStore";
-import { processInquiryAndNotifyUnauthenticated } from "@/lib/inquiry/autoReply";
-import { extractBaseItemId, extractUrls, isBaseUrl } from "@/lib/inquiry/references";
+import { enqueueInquiry } from "@/lib/inquiry/runtime/store";
 import type { LineWebhookBody } from "@/lib/messaging/line/types";
-
-/**
- * BELLO統合業務OS指示書(2026-08-30) §51/§87: LINE Messaging APIの
- * Webhook受信エンドポイント。認証はCognitoログインではなく
- * x-line-signature(§87 Webhook Security)で行う — この経路は
- * inventoryユーザーのログインセッションを一切要求しない、LINEの
- * サーバーだけが正しい署名を作れる、という前提に立つ(通常のADMIN権限
- * チェックはここには存在しない、それで正しい設計)。
- *
- * 【重要: 生のボディをそのまま使う】署名検証はJSON.parse前の生の
- * リクエストボディ文字列に対して行う(lib/messaging/line/signature.ts
- * のコメント参照) — request.text()で取得し、検証後にJSON.parseする。
- *
- * 【冪等性】LINEはWebhookをat-least-onceで配送する(再送されうる)。
- * recordIncomingMessageがexternalMessageId(LINEのmessage.id)で重複を
- * 検出しスキップするため、このroute自体は「何度呼ばれても安全」。
- *
- * 【応答速度】LINE公式ドキュメントの推奨に従い、実処理が失敗しても
- * (DB書き込みエラー等)LINE側には200を返す方針は取らない —
- * ここでは正直に失敗を401/500として返し、LINEの自動再送に任せる
- * (recordIncomingMessageの冪等性チェックのおかげで再送は安全)。
- *
- * 【BLOCKED_BY_USER】このURL自体は実装済みだが、実際にLINE Developers
- * ConsoleのWebhook URL欄へ登録するには、このアプリの実際の公開HTTPS
- * URLが必要。
- *
- * ※以前ここには「AWSへの実デプロイができていない(sts:GetCallerIdentity
- *   失敗)ため登録できていない」と書かれていたが、これは陳腐化している。
- *   Stagingは実際にデプロイ済みで、Webhookの登録先URLは
- *     https://claude-inventory-management-system-5vbvc7.d4hkkg7dty2du.amplifyapp.com/api/line/webhook
- *   である。未完了なのはデプロイではなく、
- *     1. LINE Developers ConsoleでこのURLをWebhook URLへ登録すること
- *     2. Channel Secret / Channel Access Tokenを設定画面から保存すること
- *   の2点で、どちらも本人操作(BLOCKED_BY_USER)。
- */
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  if (MESSAGES_PAUSED) return NextResponse.json({ok:true,paused:true});
-  const channelSecret = await getLineChannelSecret();
-  if (!channelSecret) {
-    console.error("[line webhook] LINE_CHANNEL_SECRETが未設定のため受信を処理できません。");
-    return new NextResponse("LINE integration not configured", { status: 500 });
-  }
-
-  const rawBody = await request.text();
-  const signature = request.headers.get("x-line-signature");
-  if (!verifyLineSignature(rawBody, signature, channelSecret)) {
-    console.error("[line webhook] 署名検証に失敗しました。");
+import { scopeKey } from "@/lib/inquiry/runtime/policy";
+import {
+  isWithdrawn,
+  markWithdrawn,
+} from "@/lib/inquiry/runtime/withdrawalState";
+export const runtime = "nodejs";
+export async function POST(request: NextRequest) {
+  const raw = await request.text();
+  if (Buffer.byteLength(raw) > 1_000_000)
+    return new NextResponse(null, { status: 413 });
+  const secret = await getLineChannelSecret();
+  if (!secret)
+    return new NextResponse("LINE integration not configured", { status: 503 });
+  if (
+    !verifyLineSignature(raw, request.headers.get("x-line-signature"), secret)
+  )
     return new NextResponse("Invalid signature", { status: 401 });
-  }
-
   let body: LineWebhookBody;
   try {
-    body = JSON.parse(rawBody) as LineWebhookBody;
+    body = JSON.parse(raw);
+    if (
+      !body ||
+      typeof body.destination !== "string" ||
+      !Array.isArray(body.events) ||
+      body.events.length > 100
+    )
+      throw Error();
   } catch {
-    return new NextResponse("Invalid JSON", { status: 400 });
+    return new NextResponse("Invalid body", { status: 400 });
   }
-
-  const normalized = parseLineWebhookBody(body);
-  // 保存に成功した受信メッセージ。保存ループの後でまとめて解析・通知する。
-  // retry=true は「既に取り込み済みだったもの」。通知が未完了の可能性が
-  // あるので処理はするが、通知済みならAIを呼ばずに終える。
-  const processed: { conversationId: string; messageId: string; retry: boolean }[] = [];
-  let failedCount = 0;
-  // 何で失敗したのかの種別だけを集める（中身は持たない）。
-  const failures = new Set<WebhookStoreFailure>();
-  // 同じ相手から複数イベントが来ることがあるので、プロフィールの取得は
-  // 1回のWebhook内で userId ごとに1度だけにする。
-  const profileCache = new Map<string, { displayName: string | null; source: string | null }>();
-
-  for (const msg of normalized) {
+  let failed = 0;
+  for (const event of body.events) {
+    if (
+      event.source?.type !== "user" ||
+      !event.source.userId ||
+      !["message", "unsend"].includes(event.type)
+    )
+      continue;
+    if (
+      !event.webhookEventId ||
+      !Number.isSafeInteger(event.timestamp) ||
+      !(event.message?.id || event.unsend?.messageId)
+    ) {
+      failed++;
+      continue;
+    }
+    // Do not persist reply credentials or untrusted attachment download URLs.
+    const safeEvent = {
+      type: event.type,
+      webhookEventId: event.webhookEventId,
+      timestamp: event.timestamp,
+      source: { type: "user", userId: event.source.userId },
+      ...(event.unsend
+        ? { unsend: { messageId: event.unsend.messageId } }
+        : {}),
+      ...(event.message
+        ? {
+            message: {
+              id: event.message.id,
+              type: event.message.type,
+              text: event.message.text,
+              quotedMessageId: event.message.quotedMessageId,
+              contentProvider: event.message.contentProvider
+                ? { type: event.message.contentProvider.type }
+                : undefined,
+            },
+          }
+        : {}),
+    };
     try {
-      // ── 顧客名 ─────────────────────────────────────────────
-      // 「不明な顧客」の原因は、ここでプロフィールを取りに行っていな
-      // かったこと。取れなかった場合は名前を作らず null のままにする
-      // (lib/messaging/line/profile.ts のコメント参照)。
-      let profile = profileCache.get(msg.externalCustomerId);
-      if (!profile) {
-        const fetched = await fetchLineProfile(msg.externalCustomerId);
-        profile = fetched.ok
-          ? { displayName: fetched.profile.displayName, source: "LINE_PROFILE" }
-          : { displayName: null, source: `LINE_PROFILE_FAILED:${fetched.reason}` };
-        if (!fetched.ok) {
-          console.warn("[line webhook] プロフィールを取得できませんでした", { reason: fetched.reason });
-        }
-        profileCache.set(msg.externalCustomerId, profile);
-      }
-
-      // ── 添付(画像等) ───────────────────────────────────────
-      // 取得は「できたら保存する」であって、失敗してもメッセージ自体は
-      // 必ず記録する。画像が取れなかったことと、問い合わせが無かったことは
-      // 全く違う(§4「画像取得失敗時はConversation自体を失わない」)。
-      let attachment: {
-        attachmentStorageKey?: string | null;
-        attachmentContentType?: string | null;
-        attachmentSizeBytes?: number | null;
-        attachmentStatus?: "NONE" | "PENDING" | "STORED" | "FAILED";
-        attachmentError?: string | null;
-      } = { attachmentStatus: msg.hasDownloadableContent ? "PENDING" : "NONE" };
-
-      if (msg.hasDownloadableContent) {
-        const content = await fetchLineMessageContent(msg.externalMessageId);
-        if (content.ok) {
-          const saved = await saveIncomingAttachment({
-            // 会話IDはこの時点ではまだ確定していないので、相手のIDで分ける。
-            // 会話単位で見たいときは Message.conversationId から辿れる。
-            conversationId: msg.externalCustomerId,
-            externalMessageId: msg.externalMessageId,
-            body: content.body,
-            contentType: content.contentType,
-          });
-          attachment = saved.ok
-            ? {
-                attachmentStorageKey: saved.storageKey,
-                attachmentContentType: saved.contentType,
-                attachmentSizeBytes: saved.sizeBytes,
-                attachmentStatus: "STORED",
-              }
-            : { attachmentStatus: "FAILED", attachmentError: saved.reason };
-        } else {
-          attachment = { attachmentStatus: "FAILED", attachmentError: content.reason };
-        }
-      }
-
-      const stored = await recordIncomingWebhookMessage({
-        channel: "LINE",
-        externalCustomerId: msg.externalCustomerId,
-        externalMessageId: msg.externalMessageId,
-        body: msg.body,
-        externalSentAt: msg.externalSentAt,
-        customerDisplayName: profile.displayName,
-        customerNameSource: profile.source,
-        customerNameFetchedAt: new Date().toISOString(),
-        contentKind: msg.contentKind,
-        // §19 表示名で会話を継続するときに、商品文脈が続いているかを見るため。
-        // 公式LINEでは source.userId が必ず取れるのでこちらは通常使われないが、
-        // 顧客IDが取れない経路でも同じ判定が働くように渡しておく。
-        baseItemIds: extractUrls(msg.body)
-          .filter((u) => isBaseUrl(u))
-          .map((u) => extractBaseItemId(u))
-          .filter((id): id is string => id != null),
-        ...attachment,
-      });
-
-      // ── 解析 → 返信案 → 社内LINE通知(2026-09-03 指示書 §1/§7) ──
-      //
-      // **保存が終わってから**行う。ここから先が失敗しても、問い合わせ
-      // そのものは既にDBにあるので失われない(§8)。
-      //
-      // 【同期実行の理由】Next.js 14 には `after()` が無く、レスポンス後に
-      // 処理を続ける安全な口が無い。awaitせずに投げるとLambdaの凍結で
-      // 処理が消え、「通知したつもりで届いていない」状態になる。
-      // 詳細は lib/inquiry/autoReply.ts の冒頭コメント参照。
-      //
-      // 【再送も処理の対象にする】以前は deduped を素通ししていたが、それだと
-      // 穴が残る: 初回で保存までは成功し、その後の解析・通知が実行時間の上限で
-      // 落ちた場合、LINEの再送は「重複」として弾かれ、**通知が永久に作られない**。
-      // 保存済みメッセージは画面に出るのにLINEには来ない、という気づきにくい
-      // 状態になる。再送を「やり直しの機会」として使い、
-      // skipIfAlreadyNotified で既に通知済みのものだけを弾く。
-      if (!("deduped" in stored)) {
-        processed.push({ ...stored, retry: false });
-      } else if (stored.conversationId && stored.messageId) {
-        processed.push({ conversationId: stored.conversationId, messageId: stored.messageId, retry: true });
-      }
-    } catch (err) {
-      // 1件の失敗で他のイベントの処理を止めない — 残りは処理を続ける。
-      failedCount++;
-      failures.add(classifyWebhookStoreFailure(err));
-      console.error("[line webhook] 受信メッセージの保存に失敗:", err instanceof Error ? err.message : err);
+      const pk = scopeKey("LINE", body.destination, event.source.userId);
+      if (event.type === "unsend" && event.unsend)
+        await markWithdrawn(pk, event.unsend.messageId);
+      if (
+        event.type === "message" &&
+        event.message &&
+        (await isWithdrawn(pk, event.message.id))
+      )
+        continue;
+      await enqueueInquiry(
+        "LINE",
+        body.destination,
+        event.source.userId,
+        event.webhookEventId,
+        { channel: "LINE", account: body.destination, event: safeEvent },
+      );
+    } catch {
+      failed++;
     }
   }
-
-  // ── 解析と通知 ──────────────────────────────────────────────
-  //
-  // 保存ループとは**別のループ**にする。解析は1件あたり数秒かかるので、
-  // 保存の途中に挟むと、後続メッセージの保存がその分だけ遅れる。
-  // 保存を全部終わらせてから解析へ入れば、少なくとも受信の取りこぼしは
-  // 解析の遅さの影響を受けない。
-  //
-  // ここでの失敗は 500 にしない。メッセージは保存済みで、通知は
-  // NotificationDelivery に失敗として残り画面から再送できる。
-  // 500を返すとLINEが全イベントを再送し、保存済みメッセージの再解析が
-  // 延々と走ることになる。
-  for (const target of processed) {
-    try {
-      await processInquiryAndNotifyUnauthenticated({
-        conversationId: target.conversationId,
-        sourceMessageId: target.messageId,
-        who: null,
-        skipIfAlreadyNotified: target.retry,
-      });
-    } catch (err) {
-      console.error("[line webhook] 解析・通知に失敗:", err instanceof Error ? err.message : err);
-    }
-  }
-
-  // 1件でも取りこぼしたら 2xx を返さない。
-  //
-  // 以前はここで常に `{ ok: true }`(200)を返していた。LINEは2xxを
-  // 「受信成功」とみなして**再送しない**ため、記録に失敗したメッセージは
-  // そのまま失われていた——「失敗してもLINE側の再送で安全に再処理できる」
-  // という当時のコメントの前提が、200を返している限り成立していなかった。
-  //
-  // 500を返せばLINEは同じイベント群を再送する。再送で重複が生まれないことは
-  // recordIncomingMessageのidempotency(externalMessageIdのGSIで既存を検出し
-  // `{deduped:true}`を返す)が保証しており、成功済みのメッセージは二重登録
-  // されない。よって「全部再送させる」のが正しく、かつ安全な選択。
-  if (failedCount > 0) {
-    return NextResponse.json({ ok: false, failed: failedCount, reasons: [...failures] }, { status: 500 });
-  }
-  return NextResponse.json({ ok: true });
+  return NextResponse.json(
+    { ok: failed === 0, failed },
+    { status: failed ? 503 : 200, headers: { "Cache-Control": "no-store" } },
+  );
 }

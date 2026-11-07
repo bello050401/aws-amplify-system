@@ -1,7 +1,7 @@
 // Two published Amplify construct bundles omit an exact dependency declared by
 // their bundled OpenTelemetry children. npm treats it as already present, so
 // the lockfile alone cannot make a clean install resolve the requested version.
-const { cpSync, existsSync, mkdirSync, readFileSync } = require("node:fs");
+const { cpSync, existsSync, mkdirSync, readFileSync, realpathSync } = require("node:fs");
 const { createRequire } = require("node:module");
 const path = require("node:path");
 
@@ -15,8 +15,9 @@ const readPackage = dir => JSON.parse(readFileSync(path.join(dir, "package.json"
 let repaired = 0;
 
 for (const [parentName, parentVersion] of parents) {
-  const parentDir = path.join(installed, "@aws-amplify", parentName);
-  if (!existsSync(parentDir)) continue; // npm --omit=dev has no backend constructs.
+  const parentLink = path.join(installed, "@aws-amplify", parentName);
+  if (!existsSync(parentLink)) continue; // npm --omit=dev has no backend constructs.
+  const parentDir=realpathSync(parentLink);
   const semver = require("semver");
   if (readPackage(parentDir).version !== parentVersion)
     throw Error(`Unexpected Amplify bundle version: ${parentName}`);

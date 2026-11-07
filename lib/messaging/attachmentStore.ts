@@ -1,6 +1,6 @@
 import "server-only";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { randomUUID } from "node:crypto";
+import { S3Client, PutObjectCommand, ListObjectVersionsCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { createHash } from "node:crypto";
 
 /**
  * 受信メッセージの添付(LINEの画像等)をBELLO側のS3へ保存する。
@@ -65,7 +65,7 @@ export async function saveIncomingAttachment(params: {
   }
   // キーに externalMessageId を含めるのは、同じメッセージを再処理しても
   // 同じ場所へ書けるようにするため(LINEの再送で重複ファイルを作らない)。
-  const key = `${ATTACHMENT_PREFIX}/${params.conversationId}/${params.externalMessageId}-${randomUUID().slice(0, 8)}${extensionFor(params.contentType)}`;
+  const key = `${ATTACHMENT_PREFIX}/${createHash('sha256').update(params.conversationId).digest('hex')}/${createHash('sha256').update(params.externalMessageId).digest('hex')}${extensionFor(params.contentType)}`;
 
   try {
     await s3().send(
@@ -74,10 +74,12 @@ export async function saveIncomingAttachment(params: {
         Key: key,
         Body: params.body,
         ContentType: params.contentType,
+        IfNoneMatch:'*',
       }),
     );
     return { ok: true, storageKey: key, contentType: params.contentType, sizeBytes: params.body.byteLength };
   } catch (err) {
+    if((err as {name?:string}).name==='PreconditionFailed')return {ok:true,storageKey:key,contentType:params.contentType,sizeBytes:params.body.byteLength};
     // 保存できなかったことは記録するが、値そのものは出さない。
     console.error("[messaging/attachmentStore] 添付の保存に失敗", {
       conversationId: params.conversationId,
@@ -95,8 +97,21 @@ export async function saveIncomingAttachment(params: {
  * ように見えるため —— 保存するのはキーだけにする。
  */
 export async function createAttachmentViewUrl(storageKey: string, expiresInSeconds = 300): Promise<string> {
+  if(!storageKey.startsWith(ATTACHMENT_PREFIX+'/')||storageKey.includes('..'))throw Error('写真の保存先を確認できません。');
   if (!BUCKET) throw new Error("添付の保存先バケットが設定されていません。");
   const { GetObjectCommand } = await import("@aws-sdk/client-s3");
   const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
   return getSignedUrl(s3(), new GetObjectCommand({ Bucket: BUCKET, Key: storageKey }), { expiresIn: expiresInSeconds });
+}
+
+/** Unsend purges the exact object and every historical version, not merely a marker. */
+export async function purgeIncomingAttachment(key:string){
+ if(!BUCKET||!key.startsWith(ATTACHMENT_PREFIX+'/')||key.includes('..'))throw Error('INVALID_ATTACHMENT_KEY');
+ let marker:string|undefined,version:string|undefined;
+ do{const p=await s3().send(new ListObjectVersionsCommand({Bucket:BUCKET,Prefix:key,KeyMarker:marker,VersionIdMarker:version}));
+   for(const item of [...p.Versions??[],...p.DeleteMarkers??[]])if(item.Key===key)await s3().send(new DeleteObjectCommand({Bucket:BUCKET,Key:key,VersionId:item.VersionId}));
+   marker=p.IsTruncated?p.NextKeyMarker:undefined;version=p.IsTruncated?p.NextVersionIdMarker:undefined;
+ }while(marker);
+ const check=await s3().send(new ListObjectVersionsCommand({Bucket:BUCKET,Prefix:key,MaxKeys:1}));
+ if([...check.Versions??[],...check.DeleteMarkers??[]].some(v=>v.Key===key))throw Error('ATTACHMENT_PURGE_INCOMPLETE');
 }

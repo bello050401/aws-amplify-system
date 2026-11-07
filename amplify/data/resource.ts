@@ -1513,6 +1513,7 @@ const schema = a.schema({
       body: a.string().required(),
       contentType: a.string(), // 例: "text"/"image" — 添付ありメッセージのUI表示分岐用(§53: 添付解析までは今回未実装、表示のみ)
       externalSentAt: a.datetime(),
+      quotedMessageId: a.string(),
       deliveryStatus: a.ref("MessageDeliveryStatus").required(),
       aiGenerated: a.boolean().default(false), // §134: AI生成文章かどうかの内部フラグ
       /**

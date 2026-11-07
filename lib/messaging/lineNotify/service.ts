@@ -233,7 +233,7 @@ async function dispatch(
     const notifyErr =
       err instanceof LineNotifyError
         ? err
-        : new LineNotifyError("UNKNOWN_REMOTE_ERROR", err instanceof Error ? err.message : String(err), true);
+        : new LineNotifyError("UNKNOWN_REMOTE_ERROR", '通知の送信結果を確認できません。通知先で確認してください。', false);
     const decision = decideAfterFailure({
       attemptCount,
       retryable: notifyErr.retryable,

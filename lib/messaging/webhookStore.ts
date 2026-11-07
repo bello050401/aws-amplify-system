@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, QueryCommand, ScanCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand, ScanCommand, PutCommand, UpdateCommand, GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 // 純粋ロジックのみを取り込む。service.ts は "server-only" と
 // serverDataClient(Cookie前提)を引き込むため、ここからは触らない。
 import { buildMessagePreview, deriveNeedsReply, deriveConversationStatus } from "./conversationStatus";
@@ -99,6 +99,8 @@ export interface IncomingWebhookMessage {
   externalCustomerId: string;
   /** チャネル側の会話ID(メルカリShopsの inquiryId 等)。最も強い識別子。 */
   externalConversationId?: string | null;
+  externalAccountId?:string;
+  quotedMessageId?:string|null;
   /** 本文から取れたBASE商品ID。表示名照合のときに文脈の継続性を見るのに使う。 */
   baseItemIds?: string[];
   externalMessageId: string;
@@ -309,6 +311,7 @@ async function findConversation(
     }
   }
 
+  if(params.externalAccountId)return {row:null,reason:'このアカウントの会話IDでは未登録です。'};
   if (params.externalCustomerId) {
     const rows = await scanConversations(
       deps,
@@ -400,6 +403,7 @@ export async function recordIncomingWebhookMessageWith(
   deps: WebhookStoreDeps,
   params: IncomingWebhookMessage,
 ): Promise<RecordResult> {
+  if(params.externalAccountId&&params.externalConversationId)return recordScopedIncomingWith(deps,params);
   const already = await findExistingMessage(deps, params.externalMessageId);
   if (already) return { deduped: true, ...already };
 
@@ -422,6 +426,7 @@ export async function recordIncomingWebhookMessageWith(
           __typename: "Conversation",
           channel: params.channel,
           externalCustomerId: params.externalCustomerId,
+          externalConversationId: params.externalConversationId??null,
           customerDisplayName: params.customerDisplayName ?? null,
           customerNameSource: params.customerNameSource ?? null,
           customerNameFetchedAt: params.customerNameFetchedAt ?? null,
@@ -505,6 +510,7 @@ export async function recordIncomingWebhookMessageWith(
           __typename: "Message",
           conversationId,
           externalMessageId: params.externalMessageId,
+          quotedMessageId: params.quotedMessageId??null,
           direction: "INBOUND",
           senderType: "CUSTOMER",
           body: params.body,
@@ -536,4 +542,44 @@ export async function recordIncomingWebhookMessageWith(
   }
 
   return { conversationId, messageId };
+}
+
+/** Account-scoped conversations and their incoming message commit together. */
+async function recordScopedIncomingWith(deps:WebhookStoreDeps,p:IncomingWebhookMessage):Promise<RecordResult>{
+ const messageId=deterministicMessageId(p.externalMessageId);
+ const conversationId='conv_'+createHash('sha256').update(JSON.stringify([p.channel,p.externalAccountId,p.externalConversationId])).digest('hex');
+ for(let attempt=0;attempt<6;attempt++){
+   const previous=await deps.send(new GetCommand({TableName:deps.messageTable,Key:{id:messageId},ConsistentRead:true}));
+   if(previous.Item)return {deduped:true,messageId,conversationId:String((previous.Item as Record<string,unknown>).conversationId)};
+   const result=await deps.send(new GetCommand({TableName:deps.conversationTable,Key:{id:conversationId},ConsistentRead:true}));
+   const old=result.Item as Record<string,unknown>|undefined;
+   // Strictly monotonic CAS stamp even when two different messages arrive in one millisecond.
+   const now=new Date(Math.max(Date.parse(deps.now()),(Date.parse(String(old?.updatedAt??''))||0)+1)).toISOString(),latest=!old||String(old.lastIncomingAt??'')<=p.externalSentAt;
+   const latestMessage=!old||String(old.lastMessageAt??'')<=p.externalSentAt;
+   const incomingAt=latest?p.externalSentAt:String(old?.lastIncomingAt??'');
+   const needsReply=deriveNeedsReply(incomingAt,typeof old?.lastOutgoingAt==='string'?old.lastOutgoingAt:null);
+   const conversation={...old,id:conversationId,__typename:'Conversation',channel:p.channel,externalCustomerId:p.externalCustomerId,
+     externalConversationId:p.externalConversationId,customerDisplayName:p.customerDisplayName??old?.customerDisplayName??null,
+     customerNameSource:p.customerNameSource??old?.customerNameSource??null,
+     customerNameFetchedAt:p.customerNameFetchedAt??old?.customerNameFetchedAt??null,
+     status:needsReply?'WAITING_FOR_REPLY':old?.status??'WAITING_FOR_REPLY',workflowStatus:old?.workflowStatus??'NEW',needsReply,priority:old?.priority??'NORMAL',
+     unreadCount:(Number(old?.unreadCount)||0)+1,isUnread:true,
+     lastMessagePreview:latestMessage?buildMessagePreview(p.body):old?.lastMessagePreview,
+     lastMessageAt:latestMessage?p.externalSentAt:old?.lastMessageAt,lastIncomingAt:incomingAt,
+     createdBy:old?.createdBy??'問い合わせ受信',updatedBy:'問い合わせ受信',createdAt:old?.createdAt??now,updatedAt:now};
+   const message={id:messageId,__typename:'Message',conversationId,externalMessageId:p.externalMessageId,
+     quotedMessageId:p.quotedMessageId??null,direction:'INBOUND',senderType:'CUSTOMER',body:p.body,
+     contentType:p.contentKind==='IMAGE'?'image':'text',contentKind:p.contentKind??'TEXT',
+     attachmentStorageKey:p.attachmentStorageKey??null,attachmentContentType:p.attachmentContentType??null,
+     attachmentSizeBytes:p.attachmentSizeBytes??null,attachmentStatus:p.attachmentStatus??'NONE',attachmentError:p.attachmentError??null,
+     externalSentAt:p.externalSentAt,deliveryStatus:'RECEIVED',aiGenerated:false,createdBy:'問い合わせ受信',createdAt:now,updatedAt:now};
+   try{
+     await deps.send(new TransactWriteCommand({TransactItems:[
+       {Put:{TableName:deps.messageTable,Item:message,ConditionExpression:'attribute_not_exists(id)'}},
+       {Put:{TableName:deps.conversationTable,Item:conversation,ConditionExpression:old?'updatedAt=:old':'attribute_not_exists(id)',
+         ...(old?{ExpressionAttributeValues:{':old':old.updatedAt}}:{})}},
+     ]}));
+     return {conversationId,messageId};
+   }catch(error){if((error as Error).name!=='TransactionCanceledException')throw error;}
+ }throw Error('会話の更新が競合しました。再受信で処理します。');
 }

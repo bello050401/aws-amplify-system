@@ -34,23 +34,27 @@ export function LiveApp() {
   const [challenge, setChallenge] = useState<"password" | "code" | null>(null); const [answer, setAnswer] = useState("");
   const [message, setMessage] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
+  const setupBusy=useRef(false);
   const setup = async () => {
+    if(setupBusy.current)return;setupBusy.current=true;
     setMessage(null); setReady(false); setAccess(null); setCanEdit(false);
     try {
-      const online = connected(await Network.getNetworkStateAsync()); setOffline(!online);
+      const [network,rememberedMode]=await Promise.all([Network.getNetworkStateAsync(),requestedMode??AsyncStorage.getItem(loginModeKey).catch(()=>null)]);
+      const online = connected(network); setOffline(!online);
       await configureMobileAuth(online); if (!mounted.current) return;
-      const rememberedMode = requestedMode ?? await AsyncStorage.getItem(loginModeKey).catch(() => null);
       if (!mounted.current) return;
       setLoginMode(rememberedMode === "staff" ? "staff" : "account");
       if (requestedMode) void AsyncStorage.setItem(loginModeKey, requestedMode).catch(() => {});
-      setReady(true);
       const user = await getCurrentUser().catch(() => null);
       if (user && mounted.current) {
         // Online restoration must revalidate staff authorization with the server.
-        if (online) { const session = await readMobileSession(); setAccess(session); setCanEdit(session.role !== "VIEWER"); }
+        if (!online)throw new Error('通信できません。接続を回復してから再読み込みしてください。');
+        const session = await readMobileSession(); setAccess(session); setCanEdit(session.role !== "VIEWER");
         setUserId(user.userId);
       }
+      if(mounted.current)setReady(true);
     } catch (error) { if (mounted.current) setMessage(error instanceof Error ? error.message : "接続できませんでした。"); }
+    finally {setupBusy.current=false;}
   };
   useEffect(() => {
     mounted.current = true; void setup();

@@ -54,14 +54,15 @@ function isConfig(raw: unknown): raw is MobileConfig {
 }
 
 export async function configureMobileAuth(online: boolean): Promise<void> {
-  let candidate: unknown;
-  if (online) {
+  if(configured)return;
+  let candidate: unknown=null;
+  const cached=await AsyncStorage.getItem(configKey).catch(()=>null);
+  if(cached){try{const parsed=JSON.parse(cached);if(isConfig(parsed.value)&&Number.isFinite(parsed.until)&&parsed.until>Date.now())candidate=parsed.value;}catch{/* corrupt cache is refetched */}}
+  if (!candidate&&online) {
     candidate = await jsonRequest("/api/mobile/config");
     if (!isConfig(candidate)) throw new Error("アプリの接続設定を取得できませんでした。");
-    await AsyncStorage.setItem(configKey, JSON.stringify(candidate));
-  } else {
-    const cached = await AsyncStorage.getItem(configKey);
-    candidate = cached ? JSON.parse(cached) : null;
+    // Public pool identifiers only. Permissions and tokens are never cached here.
+    void AsyncStorage.setItem(configKey, JSON.stringify({value:candidate,until:Date.now()+86400000})).catch(()=>{});
   }
   if (!isConfig(candidate)) throw new Error("【圏外です】初回は通信できる場所でログインしてください。");
   configured = candidate;

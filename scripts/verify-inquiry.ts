@@ -395,7 +395,7 @@ function testResearchTriggering() {
   assertEqual(sorted.map((s) => s.sourceType), ["MANUFACTURER", "OFFICIAL_CATALOG", "OTHER"], "情報源: メーカー公式 > 公式カタログ > その他の順");
 
   assertEqual(classifySource("https://www.mercari.com/item/1"), "OTHER", "情報源: フリマは一次情報として扱わない");
-  assertEqual(classifySource("https://example.com/catalog/2024.pdf"), "OFFICIAL_CATALOG", "情報源: カタログPDFはカタログ扱い");
+  assertEqual(classifySource("https://example.com/catalog/2024.pdf"), "OTHER", "情報源: 未確認ドメインのPDFは公式資料と断定しない");
   assertEqual(classifySource("https://hay.dk/products/mags", ["hay.dk"]), "MANUFACTURER", "情報源: 既知のメーカードメインはメーカー公式");
 
   const evidence = evaluateModelEvidence("この製品(SS226B)の耐荷重は5kgです", ["SS226B"]);
@@ -927,7 +927,7 @@ function testBaseTitleMatching() {
 
   assertTrue(exact.confidence > reordered.confidence, "語順まで一致する在庫が最上位になる");
   assertTrue(reordered.confidence > different.confidence, "同じHIGHでも語順違いは、別型(LOW)より上位");
-  assertTrue(exact.confidence >= 0.95, "完全一致は自動確定の水準に達する");
+  assertTrue(exact.confidence < PRODUCT_MATCH_AUTO_CONFIRM, "商品名の完全一致だけでは在庫個体を自動確定しない");
   assertTrue(different.confidence < 0.95, "別型(LOW)は自動確定しない");
 
   // 【在庫2】等の社内マーカーは比較から外れる。

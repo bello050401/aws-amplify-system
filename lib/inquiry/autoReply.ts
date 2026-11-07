@@ -9,39 +9,18 @@ import { findDeliveryByDedupeKey } from "@/lib/messaging/lineNotify/deliveryStor
 import { generateInquiryReplyDraft } from "./pipeline";
 import { loadConversationContext, saveConversationContext } from "./contextStore";
 import { addPendingQuestions, clearPendingQuestions, mergeConversationContext } from "./conversationContext";
-import { saveReplyDraft } from "./draftStore";
+import { saveReplyDraft,markReplyDraftStatus } from "./draftStore";
+import {conversationStamp} from './runtime/policy';
 import { getAIReplySettings } from "./settings";
 import { detectDeliveryDateIntent, evaluateDeliveryWindow, extractRequestedDeliveryDate } from "./deliveryWindow";
 import type { DeliveryWindowState } from "./deliveryWindow";
 import type { ReplyDraftRecord } from "./types";
 
-/**
- * 2026-09-03 指示書 §1/§7/§34: 受信 → 解析 → 返信案 → 社内LINE通知。
- *
- * ── なぜ同期処理なのか(正直に) ──────────────────────────────────
- *
- * 本来はキュー + ワーカーへ逃がすのが筋。ただし現状の Next.js は 14.2 で
- * `after()` が無く、レスポンスを返した後に処理を続ける安全な口が無い。
- * 「awaitせずに投げっぱなし」にすると、Amplify Hosting(Lambda)が
- * レスポンス後にコンテナを凍結した時点で処理が消える —— **通知したつもり
- * で誰にも届いていない**という、一番たちの悪い壊れ方になる。
- *
- * そこで今は Webhook の中で最後まで走らせる。遅くはなるが、
- *
- *   - メッセージの保存は**この関数より前に**完了している(失われない)
- *   - LINEがタイムアウトして再送しても、メッセージ側は externalMessageId、
- *     通知側は dedupeKey で重複しない(§10)
- *
- * ので、遅延の代償は「無駄な再送が起きうる」だけで、データは壊れない。
- * 将来ワーカーへ移すときは、この関数をそのまま呼べばよい形にしてある。
- *
- * ── 例外を投げない ──────────────────────────────────────────────
- *
- * §8。ここで throw すると Webhook が 500 を返し、LINEが再送を繰り返す。
- * 失敗は結果として返し、呼び出し側が 200 を返せるようにする。
- */
+/** Durable receive is completed before the private queue worker runs this pipeline. Stale conversations are checked before publishing drafts or staff notifications. */
 
 export interface AutoReplyResult {
+  stale?:boolean;
+  technicalFailure?:boolean;
   /** 返信案を生成できたか。 */
   drafted: boolean;
   draft: ReplyDraftRecord | null;
@@ -58,13 +37,11 @@ export interface AutoReplyResult {
  * 2週間の起点がずれ、本来【要確認】にすべきものが素通りする。
  * 判定できないときは null を返し、要確認判定へ影響させない。
  */
-function evaluateDeliveryState(messageText: string): DeliveryWindowState | null {
+export function evaluateDeliveryState(messageText: string): DeliveryWindowState | null {
   if (!detectDeliveryDateIntent(messageText)) return null;
   const requested = extractRequestedDeliveryDate(messageText);
   if (!requested) return "DATE_INFO_REQUIRED";
-  // 問い合わせ時点をこれから購入する日として扱う。実際の購入日が
-  // 分かる経路(注文連携)ができたら、そちらを渡すよう差し替える。
-  return evaluateDeliveryWindow({ purchaseDate: new Date(), requestedDeliveryDate: requested }).state;
+  return evaluateDeliveryWindow({ purchaseDate: null, requestedDeliveryDate: requested }).state;
 }
 
 /**
@@ -90,6 +67,7 @@ export function processInquiryAndNotifyUnauthenticated(
 }
 
 export async function processInquiryAndNotify(params: {
+  overrideInventoryId?:string|null;
   conversationId: string;
   sourceMessageId?: string | null;
   who: string | null;
@@ -139,6 +117,10 @@ export async function processInquiryAndNotify(params: {
    * 社内通知の1通目へそのまま出す。
    */
   productContextNotes?: string[];
+  /** Recheck the durable inbox version before publishing a generated draft. */
+  isCurrent?:()=>Promise<boolean>;
+  /** Evaluation records drafts only; it must never send a notification. */
+  notifyStaff?:boolean;
 }): Promise<AutoReplyResult> {
   assertMessagesEnabled();
   try {
@@ -160,13 +142,22 @@ export async function processInquiryAndNotify(params: {
       console.error("[autoReply] " + message, { conversationId: params.conversationId });
       return { drafted: false, draft: null, notify: null, reason: message };
     }
+    const initialStamp=conversationStamp(conversation,messages);
+    const fresh=async()=>{
+      if(params.isCurrent&&!await params.isCurrent())return false;
+      const [current,currentMessages]=await Promise.all([getConversation(params.conversationId),listMessages(params.conversationId)]);
+      return !!current&&conversationStamp(current,currentMessages)===initialStamp;
+    };
+    const staleResult:AutoReplyResult={drafted:false,draft:null,notify:null,reason:'新着または社員の操作があったため、古い返信案を公開せず再確認します。',stale:true};
 
     const target = params.sourceMessageId
       ? messages.find((m) => m.id === params.sourceMessageId && m.direction === "INBOUND")
-      : [...messages].reverse().find((m) => m.direction === "INBOUND");
+      : [...messages].filter(m=>m.direction==='INBOUND'&&m.body!=='[送信取消]').sort((a,b)=>(b.externalSentAt??b.createdAt).localeCompare(a.externalSentAt??a.createdAt))[0];
     if (!target) {
       return { drafted: false, draft: null, notify: null, reason: "対象の受信メッセージが見つかりませんでした。" };
     }
+    if(target.body==='[送信取消]')return {drafted:false,draft:null,notify:null,reason:'取り消されたメッセージです。'};
+    if(conversation.lastOutgoingAt&&(target.externalSentAt??target.createdAt)<=conversation.lastOutgoingAt)return {drafted:false,draft:null,notify:null,reason:'この受信後に社員が返信済みです。'};
 
     // 既に通知が済んでいるなら、ここで終える。AIを呼ぶ前に見る。
     if (params.skipIfAlreadyNotified) {
@@ -182,7 +173,7 @@ export async function processInquiryAndNotify(params: {
     }
 
     const history = messages
-      .filter((m) => m.id !== target.id)
+      .filter((m) => m.id !== target.id&&m.body!=='[送信取消]')
       .slice(-10)
       .map((m) => ({ direction: m.direction, body: m.body }));
 
@@ -224,6 +215,7 @@ export async function processInquiryAndNotify(params: {
           history,
           context: loadedContext.context,
           conversationInventoryId: conversation.relatedInventoryId,
+          overrideInventoryId:params.overrideInventoryId??null,
           productLookupText: params.productLookupHint ?? null,
           productTitle: params.productTitle ?? null,
           additionalContext: params.additionalContext ?? null,
@@ -232,11 +224,13 @@ export async function processInquiryAndNotify(params: {
         });
       } catch (err) {
         // 生成の失敗で通知まで止めない(§34)。
-        failureReason = err instanceof Error ? err.message : String(err);
+        console.warn('[inquiry] generation failed', {code:err instanceof Error?err.name:'UNKNOWN'});
+        return {drafted:false,draft:null,notify:null,technicalFailure:true,reason:'返信案を作成できませんでした。接続・予算・処理状態を確認してください。'};
       }
     }
 
     let draft: ReplyDraftRecord | null = null;
+    if(!await fresh())return staleResult;
     if (generated) {
       try {
         draft = await saveReplyDraft(
@@ -259,7 +253,8 @@ export async function processInquiryAndNotify(params: {
       } catch (err) {
         // 保存に失敗しても通知はする。生成結果はメモリ上にあるので、
         // 内容そのものは届けられる。
-        console.error("[autoReply] 返信案の保存に失敗しました", err instanceof Error ? err.message : String(err));
+        console.error("[autoReply] DRAFT_SAVE_FAILED");
+        throw Error('返信案を保存できませんでした。');
       }
       if (generated.failureReason) failureReason = generated.failureReason;
     }
@@ -275,7 +270,9 @@ export async function processInquiryAndNotify(params: {
     // 読み直して同じマージをやり直すので、両方の更新が残る。
     if (generated) {
       const result = generated;
+      if(!await fresh()){if(draft)await markReplyDraftStatus(draft.id,'DISMISSED',params.who);return staleResult;}
       const saved = await saveConversationContext(conversation.id, (current) => {
+        if(current.version!==loadedContext.context.version)return current;
         // current は競合時に読み直された最新値。そこへ**今回分かったことを
         // 足す**形で書く(上書きしない)。
         const merged = mergeConversationContext(current, {
@@ -301,6 +298,8 @@ export async function processInquiryAndNotify(params: {
     }
 
     // ── 通知 ──────────────────────────────────────────────────
+    if(!await fresh()){if(draft)await markReplyDraftStatus(draft.id,'DISMISSED',params.who);return staleResult;}
+    if(params.notifyStaff===false)return {drafted:Boolean(generated?.draftText),draft,notify:null,reason:failureReason??'返信案を保存しました。評価モードのため通知していません。'};
     const notify = await notifyInquiry({
       conversationId: conversation.id,
       sourceMessageId: target.id,
@@ -343,8 +342,7 @@ export async function processInquiryAndNotify(params: {
       reason: notify.reason,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[autoReply] 処理に失敗しました", { conversationId: params.conversationId, message });
-    return { drafted: false, draft: null, notify: null, reason: `処理に失敗しました: ${message}` };
+    console.error("[autoReply] PROCESSING_FAILED");
+    return { drafted: false, draft: null, notify: null, reason: '問い合わせ処理に失敗しました。再試行します。',technicalFailure:true };
   }
 }

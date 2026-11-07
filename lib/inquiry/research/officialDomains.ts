@@ -96,6 +96,8 @@ const BRAND_OFFICIAL_DOMAINS: Record<string, string[]> = {
   actus: ["actus-interior.com"],
 };
 
+export const VERIFIED_BRAND_HOSTS=[...new Set(Object.values(BRAND_OFFICIAL_DOMAINS).flat())];
+
 /**
  * 商品名や問い合わせから拾ったブランド候補を、公式ドメインへ変換する。
  *

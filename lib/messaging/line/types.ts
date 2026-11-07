@@ -18,11 +18,13 @@ export interface LineWebhookEvent {
   timestamp: number;
   source?: { type: string; userId?: string; groupId?: string; roomId?: string };
   replyToken?: string;
+  unsend?: {messageId:string};
   message?: {
     id: string;
     /** "text" | "image" | "sticker" | "video" | "audio" | "file" | "location" */
     type: string;
     text?: string;
+    quotedMessageId?:string;
     /**
      * 画像・動画・音声で、コンテンツをどこから取れるか。
      * "line" ならLINEのコンテンツAPIから、"external" なら外部URLから。

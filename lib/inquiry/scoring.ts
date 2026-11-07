@@ -88,21 +88,9 @@ const SCORE_NAME_FRAGMENT = 0.08;
 const SCORE_NAME_FRAGMENT_MAX = 0.32;
 export const WEAK_SIGNAL_SCORE_CAP = 0.92;
 
-/**
- * 出品タイトルとの一致の配点。
- *
- * 完全一致(正規化後)は同一性を保証する扱いにする —— 出品ページは
- * BELLOが自分の在庫名から起こしているため。同名の在庫が2件あれば両方が
- * 同点になるが、それは mergeSameProduct が**1件へまとめてから**
- * decideResolution へ渡す。BELLOは同じ商品を傷の有無や在庫数で行に
- * 分けており(「【小傷あり】…」「【在庫2】…」)、これは候補が割れたので
- * はなく同じ商品なので、人の確認を待たせる理由が無い
- * (2026-09-03 利用者指示)。
- *
- * **芯が違う商品どうしは今も同点のまま AMBIGUOUS になる。**
- * まとめるのは「先頭の【】を落とすと同じ文字列になるもの」だけ。
- */
-const SCORE_OFFICIAL_TITLE_EXACT = 0.96;
+/** 出品タイトルは候補を絞る手がかり。個体の確定にはIDまたは社員の確認を必要とする。 */
+// A matching title ranks a candidate but cannot identify a split physical item.
+const SCORE_OFFICIAL_TITLE_EXACT = 0.92;
 const SCORE_OFFICIAL_TITLE_NEAR = 0.85;
 const SCORE_OFFICIAL_TITLE_PARTIAL = 0.7;
 const OFFICIAL_TITLE_NEAR_THRESHOLD = 0.85;
@@ -327,53 +315,12 @@ export function productIdentityKey(name: string): string {
   return normalized.split(" ").filter(Boolean).sort().join(" ");
 }
 
-/**
- * 同一商品として扱える候補をまとめる。
- *
- * **候補が割れているのか、同じ商品が行に分かれているだけなのかは別物。**
- * 前者は人が判断する必要があるが、後者は自動で答えてよい。実機で
- * 「【小傷あり】BoConcept Elba…」と「【在庫2】BoConcept Elba…」が
- * 0.96で並び、同じ商品なのに AMBIGUOUS になっていた。
- *
- * まとめた行の内訳は mergedRows に残す —— 担当者は「どの行が何点か」で
- * 出荷を判断するので、ここを捨てると使えない通知になる。
- */
+/** 同じ内部在庫IDの重複だけをまとめ、別個体は候補として残す。 */
 export function mergeSameProduct(scored: ProductMatch[]): ProductMatch[] {
-  const groups = new Map<string, ProductMatch[]>();
-  for (const m of scored) {
-    const key = productIdentityKey(m.name);
-    // 芯が空になる名前(【】だけ等)は統合しない。別物を巻き込みかねない。
-    const bucket = key ? key : `__unique__:${m.inventoryId}`;
-    const list = groups.get(bucket);
-    if (list) list.push(m);
-    else groups.set(bucket, [m]);
-  }
-
-  const merged: ProductMatch[] = [];
-  for (const list of groups.values()) {
-    if (list.length === 1) {
-      merged.push(list[0]);
-      continue;
-    }
-    // 代表は確信度が最も高い行。同点なら在庫IDで安定させる(実行ごとに
-    // 代表が入れ替わると、通知の内容が理由なく変わる)。
-    const sorted = [...list].sort(
-      (a, b) => b.confidence - a.confidence || a.inventoryId.localeCompare(b.inventoryId),
-    );
-    const head = sorted[0];
-    merged.push({
-      ...head,
-      // 統合したことを理由にも残す。担当者が「なぜ1件になったか」を追える。
-      reasons: [...head.reasons, `同一商品の在庫${sorted.length}行を1件にまとめました`],
-      mergedRows: sorted.map((m) => ({
-        inventoryId: m.inventoryId,
-        displayInventoryId: m.displayInventoryId,
-        name: m.name,
-        quantity: m.quantity ?? null,
-      })),
-    });
-  }
-  return merged;
+  // Title and image similarity do not identify a physical inventory instance.
+  const byId=new Map<string,ProductMatch>();
+  for(const candidate of scored){const old=byId.get(candidate.inventoryId);if(!old||candidate.confidence>old.confidence)byId.set(candidate.inventoryId,candidate);}
+  return [...byId.values()];
 }
 
 export function decideResolution(scored: ProductMatch[]): ProductResolution {

@@ -73,7 +73,7 @@ export function isLineNotifyDisabled(): boolean {
   return (process.env[LINE_NOTIFY_DISABLED_FLAG] ?? "").trim().toLowerCase() === "true";
 }
 
-function classifyStatus(status: number, bodyText: string): LineNotifyError {
+function classifyStatus(status: number): LineNotifyError {
   if (status === 401 || status === 403) {
     // 認証エラーは再試行しても直らない。トークンを入れ直すまで失敗し続ける
     // ので、リトライで浪費せず即座に人へ知らせる。
@@ -90,14 +90,14 @@ function classifyStatus(status: number, bodyText: string): LineNotifyError {
     // 400番台は基本的にリクエストが不正。同じ内容を送り直しても通らない。
     return new LineNotifyError(
       "REMOTE_VALIDATION_ERROR",
-      `LINE APIがリクエストを拒否しました(HTTP ${status}): ${bodyText.slice(0, 300)}`,
+      `LINE APIがリクエストを拒否しました(HTTP ${status})。`,
       false,
     );
   }
   return new LineNotifyError(
     "UNKNOWN_REMOTE_ERROR",
-    `LINE APIが予期しないエラーを返しました(HTTP ${status}): ${bodyText.slice(0, 300)}`,
-    true,
+    `LINE APIの送信結果を確認できません(HTTP ${status})。再送前に通知先で確認してください。`,
+    false,
   );
 }
 
@@ -143,13 +143,13 @@ export async function sendNotifyPush(targetUserId: string, texts: string[]): Pro
   } catch (err) {
     throw new LineNotifyError(
       "NETWORK_ERROR",
-      `LINE APIへの接続に失敗しました: ${err instanceof Error ? err.message : String(err)}`,
-      true,
+      'LINE APIの送信結果を確認できません。再送前に通知先で確認してください。',
+      false,
     );
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw classifyStatus(res.status, text);
+    await res.body?.cancel();
+    throw classifyStatus(res.status);
   }
 }
 
@@ -173,8 +173,8 @@ export async function validateNotifyBotConnection(accessToken: string): Promise<
   try {
     const res = await fetchExternal(`${LINE_API_BASE}/v2/bot/info`, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return { ok: false, message: classifyStatus(res.status, text).message, info: null };
+      await res.body?.cancel();
+      return { ok: false, message: classifyStatus(res.status).message, info: null };
     }
     const data = (await res.json()) as { displayName?: string; basicId?: string; pictureUrl?: string };
     return {

@@ -1,7 +1,6 @@
 import "server-only";
 import { McpSession } from "./mcpClient";
 import { classifySource, fetchPage, isFetchableExternalUrl } from "./service";
-import { htmlToText, sanitizeExternalText } from "./sanitize";
 import { allOfficialDomains } from "./officialDomains";
 import type { ResearchProvider, ResearchProviderResult, ResearchQuery, ResearchSourceDocument } from "./port";
 
@@ -141,26 +140,18 @@ export function createAgentCoreSearchProvider(options: AgentCoreProviderOptions)
         .sort((a, b) => sourceRank(a.sourceType) - sourceRank(b.sourceType));
 
       const documents: ResearchSourceDocument[] = [];
-      for (const { result, sourceType } of ranked.slice(0, MAX_PAGES_PER_FIELD)) {
+      for (const { result } of ranked.slice(0, MAX_PAGES_PER_FIELD)) {
         const fetched = await fetchPage(result.url!);
         if (fetched) {
           // classifySourceに公式ドメイン一覧を渡した判定を優先する
           // (fetchPage内の判定はドメイン一覧を知らないため)。
-          documents.push({ ...fetched, sourceType, title: fetched.title || result.title || result.url! });
+          documents.push({ ...fetched, sourceType:classifySource(fetched.url,officialHosts), title: fetched.title || result.title || result.url! });
           continue;
         }
         // ページを取得できない場合(PDF・JS依存・403等)は、検索が返した
         // スニペットを使う。**一次情報ではない**ので、これも必ず
         // sanitizeExternalTextを通す。
-        const snippet = sanitizeExternalText(htmlToText(result.text ?? ""));
-        if (snippet.text.trim().length === 0) continue;
-        documents.push({
-          url: result.url!,
-          title: result.title ?? result.url!,
-          text: snippet.text,
-          sourceType,
-          injectionDetected: snippet.injectionDetected,
-        });
+        // Search snippets are discovery hints, never evidence for a reply.
       }
 
       return { status: "OK", documents };
