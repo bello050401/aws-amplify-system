@@ -17,6 +17,12 @@ async function create(name,range=false){assert(name.startsWith(prefix));await dy
   const store=require('../../lib/inquiry/runtime/store.ts'),{recordIncomingWebhookMessageWith}=require('../../lib/messaging/webhookStore.ts');
   const payload={channel:'LINE',account:'qa-account',event:{type:'message',timestamp:Date.now(),webhookEventId:'qa1',source:{type:'user',userId:'qa-user'},message:{id:'qa1',type:'text',text:'synthetic test only'}}};
   const keys=await Promise.all(Array.from({length:10},()=>store.enqueueInquiry('LINE','qa-account','qa-user','qa-event-1',payload)));assert.equal(new Set(keys).size,1);const pk=keys[0];assert.equal((await store.stateFor(pk)).version,1);pass('LINEの同一イベント10並列受信を1件に保存');
+  assert.equal((await store.stateFor(pk)).lastAt,payload.event.timestamp);
+  const mail={channel:'MERCARI_SHOPS',params:{conversationId:'qa-mail',sourceMessageId:'qa-mail-1',who:null}};
+  const mailPk=await store.enqueueInquiry('MERCARI_SHOPS','qa-account','qa-mail','qa-old-1',mail,'2026-08-12T01:00:00.000Z');
+  const mailState=await store.stateFor(mailPk);assert.equal(mailState.lastAt,Date.parse('2026-08-12T01:00:00.000Z'));assert(mailState.dueAt>Date.now());
+  await store.enqueueInquiry('MERCARI_SHOPS','qa-account','qa-mail','qa-old-2',mail,'2026-08-11T01:00:00.000Z');assert.equal((await store.stateFor(mailPk)).lastAt,mailState.lastAt);pass('過去メールの一覧順と処理待ち時間を分離し、遅着で日時を巻き戻さない');
+  await db.send(new UpdateCommand({TableName:config.table,Key:{pk,sk:'STATE'},UpdateExpression:'SET dueAt=:future',ExpressionAttributeValues:{':future':Date.now()+60000}}));
   assert('retrySeconds' in await store.claimInquiry(pk));pass('待ち合わせ時間より前は処理しない');
   await db.send(new UpdateCommand({TableName:config.table,Key:{pk,sk:'STATE'},UpdateExpression:'SET dueAt=:now',ExpressionAttributeValues:{':now':0}}));
   const claims=await Promise.all(Array.from({length:8},()=>store.claimInquiry(pk))),claim=claims.find(c=>c?.owner);assert.equal(claims.filter(c=>c?.owner).length,1);pass('8並列の処理開始で1ワーカーだけ取得');

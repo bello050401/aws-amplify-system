@@ -13,6 +13,9 @@ export type InventorySessionStatus =
   | { kind: "signed-in-not-authorized" }
   | { kind: "temporarily-unavailable" }
   | { kind: "signed-out" };
+export type VerifiedInventoryAccess = Exclude<InventorySessionStatus,{kind:"authorized"}> | {
+  kind:"authorized"; role:InventoryRole; owner:string|null; groups:string[];
+};
 
 /**
  * Inventory's own version of lib/amplify/requireAdmin.ts's getSessionStatus
@@ -89,24 +92,33 @@ async function getE2EBypassRole(): Promise<InventoryRole | null> {
  * Reactのdispatcherが無い文脈では cache() は素通しで元の関数を呼ぶ。
  * 重複排除が効かないだけで、挙動は今までと同一。
  */
-export const getInventorySessionStatus = requestCache(async function getInventorySessionStatus(): Promise<InventorySessionStatus> {
+export const getVerifiedInventoryAccess = requestCache(async function getVerifiedInventoryAccess(): Promise<VerifiedInventoryAccess> {
   const bypassRole = await getE2EBypassRole();
-  if (bypassRole) return { kind: "authorized", role: bypassRole };
+  if (bypassRole) return { kind: "authorized", role: bypassRole, owner:null, groups:[] };
   try {
     return await runWithUserPoolServerContext({
       nextServerContext: { cookies },
       operation: async (contextSpec) => {
         const session = await fetchAuthSession(contextSpec);
         if (!session.tokens) return { kind: "signed-out" };
-        const groups = (session.tokens.accessToken.payload["cognito:groups"] ?? []) as string[];
+        const groups = session.tokens.accessToken.payload["cognito:groups"] ?? [];
+        if(!Array.isArray(groups)||!groups.every(group=>typeof group==='string'))return {kind:'signed-in-not-authorized'};
         const role = INVENTORY_ROLES.find((r) => groups.includes(r));
-        return role ? { kind: "authorized", role } : { kind: "signed-in-not-authorized" };
+        const sub=session.tokens.accessToken.payload.sub;
+        return role ? { kind: "authorized", role, owner:typeof sub==='string'&&sub?sub:null, groups } : { kind: "signed-in-not-authorized" };
       },
     });
   } catch (error) {
     if (isCognitoRateLimitError(error)) return { kind: "temporarily-unavailable" };
     return { kind: "signed-out" };
   }
+});
+
+// Existing callers keep the same contract. Mobile reuses this verified identity
+// and group decision instead of fetching the same Cognito session a second time.
+export const getInventorySessionStatus = requestCache(async function getInventorySessionStatus():Promise<InventorySessionStatus>{
+  const access=await getVerifiedInventoryAccess();
+  return access.kind==='authorized'?{kind:access.kind,role:access.role}:access;
 });
 
 export async function getInventoryRole(): Promise<InventoryRole | null> {

@@ -319,7 +319,7 @@ export async function ingestMercariNotificationMails(params: {
         productContextNotes: restored?.notes ?? [],
         skipIfAlreadyNotified:true,
       };
-      if(params.deferDraft)await enqueueInquiry('MERCARI_SHOPS',params.mailbox??'primary',externalCustomerId,'gmail:'+mail.gmailId,{channel:'MERCARI_SHOPS',params:draftParams});
+      if(params.deferDraft)await enqueueInquiry('MERCARI_SHOPS',params.mailbox??'primary',externalCustomerId,'gmail:'+mail.gmailId,{channel:'MERCARI_SHOPS',params:draftParams},mail.receivedAt);
       else await processInquiryAndNotifyUnauthenticated(draftParams);
     } catch (err) {
       result.failed++;

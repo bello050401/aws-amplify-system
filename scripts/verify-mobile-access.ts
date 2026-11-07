@@ -13,14 +13,12 @@ async function main() {
   for (const groups of [undefined, null, "ADMIN", [], ["Admins"], ["MOBILE_HIDE_EC"], ["ADMIN", false]]) {
     assert.deepEqual(mobileFeaturesForGroups(groups), { ecListing: false, sales: false });
   }
-  let staff: Record<string, string> = { kind: "authorized", role: "EDITOR" };
   let payload: Record<string, unknown> | null = { sub: "staff-id", "cognito:groups": ["EDITOR", "MOBILE_HIDE_EC", "MOBILE_HIDE_SALES"] };
   let unavailable = false, authCalls = 0;
   const ports = {
-    staff: async () => staff,
     auth: async () => {
       authCalls++;
-      if (unavailable) throw new Error("Sensitive diagnostics must not escape");
+      if (unavailable) throw Object.assign(new Error("Sensitive diagnostics must not escape"),{name:'TooManyRequestsException'});
       return payload ? { tokens: { accessToken: { payload } } } : {};
     },
   };
@@ -29,21 +27,23 @@ async function main() {
     "next/headers": 'export const cookies = () => ({});',
     "aws-amplify/auth/server": 'export const fetchAuthSession = () => globalThis.ports.auth();',
     "@/lib/amplify/userPoolServer": 'export const runWithUserPoolServerContext = ({operation}) => operation({});',
-    "@/lib/amplify/requireInventoryUser": 'export const getInventorySessionStatus = () => globalThis.ports.staff();',
+    "./userPoolServer": 'export const runWithUserPoolServerContext = ({operation}) => operation({});',
+    "./requestCache": 'export const requestCache = fn => fn;',
   };
   const bundled = await build({ stdin: { contents: 'export { GET } from "./app/api/mobile/session/route"; export { requireMobileFeature } from "./lib/mobile/session";', resolveDir: process.cwd(), loader: "ts" }, bundle: true, write: false, platform: "node", format: "cjs", plugins: [{ name: "isolated-auth", setup(builder) {
     builder.onResolve({ filter: /.*/ }, args => sources[args.path] ? { path: args.path, namespace: "stub" } : undefined);
     builder.onLoad({ filter: /.*/, namespace: "stub" }, args => ({ contents: sources[args.path], loader: "js" }));
   }}] });
   const module = { exports: {} as { GET(): Promise<Response>; requireMobileFeature(feature: string): Promise<{ ok: boolean; status?: number; error?: string }> } };
-  vm.runInNewContext(bundled.outputFiles[0].text, { module, exports: module.exports, ports, Response });
-  for (const [kind, status] of [["signed-out", 401], ["signed-in-not-authorized", 403], ["temporarily-unavailable", 503]] as const) {
-    staff = { kind }; authCalls = 0;
+  vm.runInNewContext(bundled.outputFiles[0].text, { module, exports: module.exports, ports, Response, process:{env:{NODE_ENV:'production'}} });
+  for (const [input, status] of [[null,401],[{sub:'x','cognito:groups':['Other']},403],[{sub:'x','cognito:groups':'ADMIN'},403],[{sub:'x','cognito:groups':['ADMIN',false]},403]] as const) {
+    payload=input;authCalls=0;
     assert.equal((await module.exports.GET()).status, status);
-    assert.equal(authCalls, 0);
+    assert.equal(authCalls, 1,'Unauthenticated and malformed access still require exactly one credential verification');
   }
-  staff = { kind: "authorized", role: "EDITOR" };
+  payload={sub:'staff-id','cognito:groups':['EDITOR','MOBILE_HIDE_EC','MOBILE_HIDE_SALES']};authCalls=0;
   const response = await module.exports.GET();
+  assert.equal(authCalls,1,'Authorized startup must not repeat Cognito session verification');
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("Cache-Control"), "private, no-store");
   assert.equal(response.headers.get("Vary"), "Cookie");
@@ -53,11 +53,10 @@ async function main() {
     assert.equal(decision.ok, false); assert.equal(decision.status, 403);
   }
   payload = { sub: "admin-id", "cognito:groups": ["ADMIN", "MOBILE_HIDE_EC"] };
-  staff = { kind: "authorized", role: "ADMIN" };
   assert.equal((await module.exports.requireMobileFeature("ecListing")).status, 403);
   assert.equal((await module.exports.requireMobileFeature("sales")).ok, true);
-  payload = { sub: "staff-id", "cognito:groups": ["EDITOR"] };
-  assert.equal((await module.exports.GET()).status, 403); // Conflicting sessions fail closed.
+  payload = { "cognito:groups": ["EDITOR"] };
+  assert.equal((await module.exports.GET()).status, 401); // A group without an authenticated owner cannot access data.
   payload = null; assert.equal((await module.exports.GET()).status, 401);
   unavailable = true;
   const failed = await module.exports.GET(); assert.equal(failed.status, 503);

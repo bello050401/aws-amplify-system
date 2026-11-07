@@ -13,7 +13,7 @@ import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { runtimeConfig } from "@/lib/inquiry/runtime/config";
 export { runtimeConfig } from "@/lib/inquiry/runtime/config";
 export type { RuntimeConfig } from "@/lib/inquiry/runtime/config";
-import { eventKey, nextDue, scopeKey, LEASE_MS } from "./policy";
+import { eventKey, nextDue, scopeKey, LEASE_MS, inquiryActivityAt } from "./policy";
 import type { LineWebhookEvent } from "@/lib/messaging/line/types";
 import type { processInquiryAndNotify } from "@/lib/inquiry/autoReply";
 
@@ -43,6 +43,7 @@ export type InboxState = {
   firstAt: number;
   dueAt: number;
   lastAt: number;
+  activityVersion?: number;
   lockOwner?: string;
   lockUntil?: number;
   conversationId?: string;
@@ -83,6 +84,7 @@ export async function enqueueInquiry(
   conversation: string,
   id: string,
   payload: EventPayload,
+  occurredAt?: string | number,
 ) {
   const c = runtimeConfig(),
     pk = scopeKey(channel, account, conversation),
@@ -132,7 +134,7 @@ export async function enqueueInquiry(
                 TableName: c.table,
                 Key: { pk, sk: "STATE" },
                 UpdateExpression:
-                  "SET #v=:v, firstAt=:first, lastAt=:now, dueAt=:due, #result=:queued, kind=:kind, channel=:channel,lastEventSk=:event",
+                  "SET #v=:v, firstAt=:first, lastAt=:activity, activityVersion=:activityVersion, dueAt=:due, #result=:queued, kind=:kind, channel=:channel,lastEventSk=:event",
                 ConditionExpression: state
                   ? "#v=:old"
                   : "attribute_not_exists(#v)",
@@ -143,7 +145,8 @@ export async function enqueueInquiry(
                 ExpressionAttributeValues: {
                   ":v": version,
                   ":first": first,
-                  ":now": now,
+                  ":activity": inquiryActivityAt(payload.channel === "LINE" ? payload.event.timestamp : occurredAt, state?.activityVersion === 1 ? state.lastAt : undefined, now),
+                  ":activityVersion": 1,
                   ":due": nextDue(first, now),
                   ":queued": "QUEUED",
                   ":kind": "INBOX",

@@ -1,7 +1,4 @@
-import { cookies } from "next/headers";
-import { fetchAuthSession } from "aws-amplify/auth/server";
-import { runWithUserPoolServerContext } from "@/lib/amplify/userPoolServer";
-import { getInventorySessionStatus, type InventoryRole } from "@/lib/amplify/requireInventoryUser";
+import { getVerifiedInventoryAccess, type InventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { mobileFeaturesForGroups, type MobileFeature, type MobileFeatures } from "./accessPolicy";
 
 export type MobileSessionResult =
@@ -10,23 +7,16 @@ export type MobileSessionResult =
 
 /** No email/name matching, client flags, or unverified JWT decoding is an authorization source. */
 export async function getMobileSession(): Promise<MobileSessionResult> {
-  const staff = await getInventorySessionStatus();
+  const staff = await getVerifiedInventoryAccess();
   if (staff.kind !== "authorized") {
     const status = staff.kind === "temporarily-unavailable" ? 503 : staff.kind === "signed-in-not-authorized" ? 403 : 401;
     return { ok: false, status, error: status === 503 ? "AUTH_UNAVAILABLE" : status === 403 ? "FORBIDDEN" : "SIGN_IN_REQUIRED" };
   }
-  try {
-    return await runWithUserPoolServerContext({ nextServerContext: { cookies }, operation: async context => {
-      const session = await fetchAuthSession(context);
-      const payload = session.tokens?.accessToken.payload;
-      const groups = payload?.["cognito:groups"];
-      if (!payload || typeof payload.sub !== "string" || !payload.sub) return { ok: false, status: 401, error: "SIGN_IN_REQUIRED" };
-      if (!Array.isArray(groups) || !groups.every(group => typeof group === "string") || !groups.includes(staff.role)) {
-        return { ok: false, status: 403, error: "FORBIDDEN" };
-      }
-      return { ok: true, owner: payload.sub, role: staff.role, features: mobileFeaturesForGroups(groups) };
-    } });
-  } catch { return { ok: false, status: 503, error: "AUTH_UNAVAILABLE" }; }
+  if (!staff.owner) return { ok: false, status: 401, error: "SIGN_IN_REQUIRED" };
+  if (!Array.isArray(staff.groups) || !staff.groups.every(group => typeof group === "string") || !staff.groups.includes(staff.role)) {
+    return { ok: false, status: 403, error: "FORBIDDEN" };
+  }
+  return { ok: true, owner: staff.owner, role: staff.role, features: mobileFeaturesForGroups(staff.groups) };
 }
 
 /** Mobile EC/sales handlers must call this before reading data or performing any operation. */

@@ -35,6 +35,12 @@ export function eventKey(id: string) {
 export function nextDue(first: number, last: number) {
   return Math.min(first + MAX_BATCH_WAIT_MS, last + DEBOUNCE_MS);
 }
+/** Provider activity orders the inbox; receipt time is only for debounce/leases. */
+export function inquiryActivityAt(value: string | number | undefined, previous: number | undefined, now: number) {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
+  const incoming = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, now) : now;
+  return Math.max(Number.isFinite(previous) ? Math.min(previous!, now) : 0, incoming);
+}
 export function conversationStamp(
   c: {
     lastIncomingAt?: string | null;

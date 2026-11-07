@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {scopeKey,eventKey,nextDue,conversationStamp,researchBudget} from '../lib/inquiry/runtime/policy';
+import {scopeKey,eventKey,nextDue,conversationStamp,researchBudget,inquiryActivityAt} from '../lib/inquiry/runtime/policy';
 import {publicIPv4,publicResearchUrl,safeResearchGet} from '../lib/inquiry/research/safeFetch';
 import {trustedMercariNotification} from '../lib/messaging/mercari/trustedNotification';
 import {mergeSameProduct,decideResolution} from '../lib/inquiry/scoring';
@@ -8,6 +8,8 @@ import {classifySource} from '../lib/inquiry/research/service';
 import type {ProductMatch} from '../lib/inquiry/types';
 test('アカウント・媒体・会話の組合せで受信を分離',()=>{const a=scopeKey('LINE','a','u');assert.notEqual(a,scopeKey('LINE','b','u'));assert.notEqual(a,scopeKey('MERCARI_SHOPS','a','u'));assert.equal(a,scopeKey('LINE','a','u'));assert.notEqual(eventKey('a:b'),eventKey('a/b'));});
 test('5秒待ち合わせ・15秒上限',()=>{assert.equal(nextDue(1000,1000),6000);assert.equal(nextDue(1000,14000),16000);});
+test('過去通知の取得順ではなく元メッセージ日時で一覧を並べる',()=>{assert.equal(inquiryActivityAt(1000,undefined,100000),1000);assert.equal(inquiryActivityAt(900,1000,100000),1000);assert.equal(inquiryActivityAt(2000,1000,100000),2000);assert.equal(inquiryActivityAt('1970-01-01T00:00:03.000Z',1000,100000),3000);});
+test('異常・未来日時は一覧を固定せず受信時刻までに制限する',()=>{assert.equal(inquiryActivityAt('invalid',1000,100000),100000);assert.equal(inquiryActivityAt(200000,1000,100000),100000);assert.equal(inquiryActivityAt(-10,undefined,100000),100000);});
 test('追記・社員返信・送信取消が会話版を変える',()=>{const c={lastIncomingAt:'1'},m=[{id:'1',direction:'INBOUND',body:'a',deliveryStatus:'RECEIVED'}];const before=conversationStamp(c,m);assert.notEqual(before,conversationStamp({...c,lastOutgoingAt:'2'},m));assert.notEqual(before,conversationStamp(c,[{...m[0],body:'[送信取消]'}]));assert.notEqual(before,conversationStamp(c,[...m,{...m[0],id:'2'}]));});
 test('閲覧ワーカーの回数・時間・失敗上限',()=>{assert(researchBudget({startedAt:0,actions:29,failures:1},179999).allowed);assert(!researchBudget({startedAt:0,actions:30,failures:1},1).allowed);assert(!researchBudget({startedAt:0,actions:1,failures:2},1).allowed);assert(!researchBudget({startedAt:0,actions:1,failures:0},180000).allowed);});
 for(const address of ['127.0.0.1','10.1.2.3','169.254.169.254','172.31.0.1','192.168.1.1','100.64.1.1','0.0.0.0','224.0.0.1','::1'])test('非公開宛先を拒否 '+address,()=>assert(!publicIPv4(address)));

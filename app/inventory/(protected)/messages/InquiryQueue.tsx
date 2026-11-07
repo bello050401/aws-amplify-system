@@ -182,7 +182,7 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                   })}
                 </time>
               </div>
-              <p className="mt-2 line-clamp-2 break-words font-medium text-slate-900">{item.subject || item.customerName || "本文を確認中"}</p>
+              <p className="mt-2 line-clamp-2 break-words font-medium text-slate-900">{item.subject || item.customerName || (item.preview ? "お問い合わせ" : "本文を確認中")}</p>
               {item.preview && <p className="mt-1 line-clamp-2 break-words text-sm leading-relaxed text-slate-600">{item.preview}</p>}
               <p className="mt-2 text-xs text-teal-800">
                 {item.mode === "STAFF"
