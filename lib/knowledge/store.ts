@@ -123,6 +123,7 @@ export async function listSearchableKnowledge(): Promise<SearchableKnowledgeDocu
   const docs = await listKnowledgeDocuments();
   return docs.map((d) => ({
     id: d.id,
+    updatedAt:d.updatedAt,
     title: d.title,
     originalFileName: d.originalFileName,
     description: d.description,

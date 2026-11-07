@@ -10,6 +10,11 @@ import { getInventoryRole, getCurrentInventoryUserSub } from "@/lib/amplify/requ
 import { getConversation, listMessages } from "@/lib/messaging/service";
 import { listReplyDrafts } from "@/lib/inquiry/draftStore";
 import { createAttachmentViewUrl } from "@/lib/messaging/attachmentStore";
+import { getInventoryDetail } from "@/lib/inventory/queries";
+import {readJobKey} from '@/lib/inquiry/runtime/readContract';
+import {CUSTOMER_DELIVERY_ENABLED} from '@/lib/messaging/featureState';
+import {enqueueCustomerDelivery} from '@/lib/inquiry/runtime/deliveryJobs';
+import {retryInquiryRead,type InquiryReadJob} from '@/lib/inquiry/runtime/readJobs';
 import {
   inquiryDb,
   runtimeConfig,
@@ -22,8 +27,17 @@ async function requireAccess(admin = false) {
   if (role !== "ADMIN" && (admin || role !== "EDITOR"))
     throw Error("操作権限がありません。");
 }
-export async function readInquiryQueue() {
+export async function readInquiryQueue(cursor?: string) {
   await requireAccess();
+  let start: Record<string, unknown> | undefined;
+  if (cursor) {
+    try {
+      if (cursor.length > 1024) throw Error();
+      const value = JSON.parse(Buffer.from(cursor, "base64url").toString());
+      if (!/^CONV#[a-f0-9]{64}$/.test(value.pk) || value.sk !== "STATE" || value.kind !== "INBOX" || !Number.isFinite(value.lastAt)) throw Error();
+      start = {pk:value.pk,sk:"STATE",kind:"INBOX",lastAt:value.lastAt};
+    } catch { throw Error("一覧を読み込み直してください。"); }
+  }
   const c = runtimeConfig();
   const [settings, result] = await Promise.all([
     inquirySettings(),
@@ -35,13 +49,17 @@ export async function readInquiryQueue() {
         ExpressionAttributeValues: { ":kind": "INBOX" },
         ScanIndexForward: false,
         Limit: 50,
+        ExclusiveStartKey: start,
       }),
     ),
   ]);
   return {
+    cursor: result.LastEvaluatedKey ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString("base64url") : null,
     settings: {
       enabled: !!settings.enabled,
       notifyStaff: !!settings.notifyStaff,
+      deliveryEnabled:CUSTOMER_DELIVERY_ENABLED&&['REVIEW','AUTO'].includes(settings.delivery?.mode),
+      automaticDelivery:CUSTOMER_DELIVERY_ENABLED&&settings.delivery?.mode==='AUTO',
     },
     items: (result.Items ?? []).map((r) => ({
       pk: String(r.pk),
@@ -85,13 +103,46 @@ export async function readInquiryDetail(pk: string) {
     state.version > (state.processedVersion ?? 0)
       ? []
       : drafts.filter((d) => d.sourceMessageId === latest?.id);
+  const productIds = [...new Set(currentDrafts.flatMap(d=>d.evidence?.productCandidates.map(p=>p.inventoryId)??[]))].slice(0, 10);
+  const products = await Promise.all(productIds.map(async id=>{
+    const p = await getInventoryDetail(id);
+    return p ? {id, storageKey:p.mainImageThumbnailKey??p.mainImageStorageKey, quantity:p.quantity, sku:p.sku} : null;
+  }));
+  const event=state.sourceEventSk?await getRuntimeRecord(pk,state.sourceEventSk):null;
+  const sourceId=event?.payload?.params?.sourceMessageId;
+  const readJob=sourceId?await getRuntimeRecord(readJobKey(pk,state.version,sourceId)) as InquiryReadJob|undefined:null;
+  const delivery=state.lastDeliveryJobId?await getRuntimeRecord(state.lastDeliveryJobId):null;
   return {
     conversation,
     messages,
     drafts: currentDrafts,
     attachments,
+    products: products.filter(p=>p!==null),
+    remoteRead:readJob?{status:readJob.status,snapshot:readJob.status==='DONE'?readJob.result:null}:null,
     version: state.version,
+    delivery:delivery?{status:String(delivery.status),acceptedAt:typeof delivery.acceptedAt==='string'?delivery.acceptedAt:null}:null,
   };
+}
+export async function sendInquiryDraftAction(pk:string,draftId:string,version:string){
+  await requireAccess(true);
+  if(!/^CONV#[a-f0-9]{64}$/.test(pk)||typeof draftId!=='string'||draftId.length>200||typeof version!=='string'||version.length>60)throw Error('対象を確認できません。');
+  const actor=await getCurrentInventoryUserSub();if(!actor)throw Error('ログインし直してください。');
+  try{return await enqueueCustomerDelivery(pk,draftId,version,actor,true);}
+  catch{throw Error('送信を予約できませんでした。最新の会話・返信案と送信の有効化状況を確認してください。');}
+}
+export async function retryInquiryReadAction(pk:string){
+  await requireAccess(true);
+  if(!/^CONV#[a-f0-9]{64}$/.test(pk))throw Error('対象を確認できません。');
+  await retryInquiryRead(pk);
+}
+export async function refreshInquiryPhoto(pk: string, messageId: string) {
+  await requireAccess();
+  if (!/^CONV#[a-f0-9]{64}$/.test(pk)) throw Error("対象を確認できません。");
+  const state = await stateFor(pk);
+  if (!state?.conversationId) throw Error("問い合わせが見つかりません。");
+  const message = (await listMessages(state.conversationId)).find(m=>m.id===messageId);
+  if (!message || message.body === "[送信取消]" || message.attachmentStatus !== "STORED" || !message.attachmentStorageKey) throw Error("写真は削除されたか、表示できなくなりました。");
+  return createAttachmentViewUrl(message.attachmentStorageKey);
 }
 export async function setInquiryMode(pk: string, mode: "STAFF" | "DRAFT") {
   await requireAccess();
@@ -102,8 +153,8 @@ export async function setInquiryMode(pk: string, mode: "STAFF" | "DRAFT") {
     const state = await stateFor(pk);
     if (!state) throw Error("問い合わせが見つかりません。");
     const last =
-      mode === "DRAFT" && state.lastEventSk
-        ? await getRuntimeRecord(pk, state.lastEventSk)
+      mode === "DRAFT" && (state.sourceEventSk || state.lastEventSk)
+        ? await getRuntimeRecord(pk, state.sourceEventSk || state.lastEventSk!)
         : null;
     const previous = last
       ? Math.min(

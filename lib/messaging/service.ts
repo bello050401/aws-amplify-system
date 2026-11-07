@@ -1,13 +1,10 @@
 
-import {assertMessagesEnabled,CUSTOMER_DELIVERY_ENABLED} from "@/lib/messaging/featureState";
+import {assertMessagesEnabled} from "@/lib/messaging/featureState";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllPages, unwrapGet, unwrapList } from "@/lib/amplify/listAll";
 import { MESSAGE_PAGE_SIZE } from "./messagePaging";
 import { deriveConversationStatus, deriveNeedsReply, buildMessagePreview, sortConversations } from "./conversationStatus";
-import { sendLinePush } from "./line/adapter";
-import { sendEmailReply } from "./email/sesAdapter";
-import { buildReplySubject } from "./email/mime";
 import type { ConversationRecord, ConversationWorkflowStatus, MessageRecord, MessageChannel, MessageSenderType } from "./types";
 
 /**
@@ -537,28 +534,9 @@ export async function sendReply(conversationId: string, messageId: string, who: 
   );
   if (!draft) throw new Error("返信の下書きが見つかりません。");
   if(draft.conversationId!==conversationId||draft.direction!=='OUTBOUND'||draft.deliveryStatus!=='DRAFT')throw new Error('この会話の未送信の返信案を選択してください。');
-  if(conversation.channel!=='TEST'&&!CUSTOMER_DELIVERY_ENABLED)throw new Error('現在は返信案の確認期間です。顧客への送信はまだ有効になっていません。');
+  if(conversation.channel!=='TEST')throw new Error('顧客への返信は、問い合わせの最新確認と送信予約を経由してください。旧送信経路は使用できません。');
   const body = draft.body ?? "";
   if (!body.trim()) throw new Error("返信本文が空です。内容を入力してから送信してください。");
-
-  if (conversation.channel === "LINE") {
-    if (!conversation.externalCustomerId) throw new Error("この会話にはLINEの送信先(userId)が記録されていません。");
-    await sendLinePush(conversation.externalCustomerId, body); // §46確認モーダル通過後の実送信 — 失敗時はここでthrowされ、DRAFTのまま残る(SENTへ書き換えない)
-  } else if (conversation.channel === "EMAIL") {
-    if (!conversation.externalCustomerId) throw new Error("この会話には送信先のメールアドレスが記録されていません。");
-    const priorMessages = await listMessages(conversationId);
-    const latestIncoming = [...priorMessages].reverse().find((m) => m.direction === "INBOUND");
-    await sendEmailReply({
-      to: conversation.externalCustomerId,
-      subject: buildReplySubject(conversation.subject),
-      body,
-      inReplyToExternalMessageId: latestIncoming?.externalMessageId ?? null,
-    });
-  } else if (conversation.channel !== "TEST") {
-    throw new Error(
-      `${conversation.channel}チャネルへの送信は現時点で未実装です（外部API/Webhook連携の実装が必要 — 完了報告のBLOCKED_BY_EXTERNAL_SERVICE参照）。`,
-    );
-  }
 
   const { data: message, errors } = await serverDataClient.models.Message.update(
     { id: messageId, deliveryStatus: "SENT", externalSentAt: new Date().toISOString() },

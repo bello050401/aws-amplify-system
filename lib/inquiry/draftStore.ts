@@ -72,8 +72,7 @@ function parseJson<T>(value: unknown): T | null {
 }
 
 export async function listReplyDrafts(conversationId: string): Promise<ReplyDraftRecord[]> {
-  const data=await listAllPages<ReplyDraftRow>(async nextToken=>{const result=await serverDataClient.models.ReplyDraft.list({
-    filter: { conversationId: { eq: conversationId } },
+  const data=await listAllPages<ReplyDraftRow>(async nextToken=>{const result=await serverDataClient.models.ReplyDraft.listReplyDraftByConversationId({ conversationId }, {
     limit: 100,nextToken,
     ...inventoryAuthMode,
   });return {data:result.data as unknown as ReplyDraftRow[],errors:result.errors,nextToken:result.nextToken};},{label:'返信案'});

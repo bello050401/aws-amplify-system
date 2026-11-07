@@ -47,11 +47,13 @@ export type InboxState = {
   lockUntil?: number;
   conversationId?: string;
   lastEventSk?: string;
+  sourceEventSk?: string;
   result?: string;
   reason?: string;
   mode?: "DRAFT" | "STAFF";
   overrideInventoryId?: string;
   overrideVersion?: number;
+  lastDeliveryJobId?:string;
 };
 const conditional = (e: unknown) =>
   ["ConditionalCheckFailedException", "TransactionCanceledException"].includes(
@@ -252,6 +254,7 @@ export async function finishInquiry(
   result: string,
   reason: string,
   conversationId?: string,
+  sourceEventSk?: string,
 ) {
   await db.send(
     new UpdateCommand({
@@ -265,6 +268,7 @@ export async function finishInquiry(
       UpdateExpression:
         "SET processedVersion=:v, #result=:r, reason=:reason" +
         (conversationId ? ", conversationId=:cid" : "") +
+        (sourceEventSk ? ", sourceEventSk=:source" : "") +
         " REMOVE lockOwner,lockUntil",
       ExpressionAttributeNames: {
         "#result": "result",
@@ -279,6 +283,7 @@ export async function finishInquiry(
         ":reason": reason,
         ...(result === "ANSWERABLE" ? { ":staff": "STAFF" } : {}),
         ...(conversationId ? { ":cid": conversationId } : {}),
+        ...(sourceEventSk ? { ":source": sourceEventSk } : {}),
       },
     }),
   );

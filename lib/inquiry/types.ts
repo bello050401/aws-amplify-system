@@ -215,6 +215,8 @@ export interface NegotiationStaffCard {
 
 /** §33 参照情報。管理画面にだけ出す(顧客へは送らない)。 */
 export interface ReplyEvidence {
+  runtimeProof?: {conversationStamp:string;generatedAt:string};
+  inventoryVersion?: {id:string;updatedAt:string}|null;
   product: { inventoryId: string; displayInventoryId: string; name: string; confidence: number } | null;
   /**
    * **在庫(Inventory)の**特定状態。BASE商品の特定状態とは別物。
@@ -247,7 +249,7 @@ export interface ReplyEvidence {
   productCandidates: ProductMatch[];
   /** 在庫DBのどの項目を根拠に使ったか(値ではなく項目名)。 */
   inventoryFieldsUsed: string[];
-  knowledgeDocuments: { id: string; title: string; fileName: string }[];
+  knowledgeDocuments: { id: string; title: string; fileName: string; updatedAt?:string }[];
   /** 送料の根拠(既存のらくらく家財DBから引いたもの)。 */
   shipping: ShippingEvidence | null;
   externalResearchAttempted: boolean;

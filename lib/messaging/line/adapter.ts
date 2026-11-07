@@ -42,11 +42,11 @@ export class LineApiError extends Error {
   }
 }
 
-function classifyLineHttpStatus(status: number, bodyText: string): LineApiError {
+function classifyLineHttpStatus(status: number): LineApiError {
   if (status === 401 || status === 403) return new LineApiError("AUTH_FAILED", `LINE APIの認証に失敗しました(HTTP ${status})。Channel Access Tokenを確認してください。`);
   if (status === 429) return new LineApiError("RATE_LIMITED", "LINE APIのレート制限に達しました。しばらく待ってから再試行してください。");
-  if (status >= 400 && status < 500) return new LineApiError("REMOTE_VALIDATION_ERROR", `LINE APIがリクエストを拒否しました(HTTP ${status}): ${bodyText.slice(0, 300)}`);
-  return new LineApiError("UNKNOWN_REMOTE_ERROR", `LINE APIが予期しないエラーを返しました(HTTP ${status}): ${bodyText.slice(0, 300)}`);
+  if (status >= 400 && status < 500) return new LineApiError("REMOTE_VALIDATION_ERROR", `LINE APIがリクエストを拒否しました(HTTP ${status})。`);
+  return new LineApiError("UNKNOWN_REMOTE_ERROR", `LINE APIが予期しないエラーを返しました(HTTP ${status})。`);
 }
 
 async function callLineApi(path: string, accessToken: string, body: unknown): Promise<void> {
@@ -69,11 +69,11 @@ async function callLineApi(path: string, accessToken: string, body: unknown): Pr
       body: JSON.stringify(body),
     });
   } catch (err) {
-    throw new LineApiError("NETWORK_ERROR", `LINE APIへの接続に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    throw new LineApiError("NETWORK_ERROR", "LINE APIへの接続に失敗しました。時間をおいて接続状態を確認してください。");
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw classifyLineHttpStatus(res.status, text);
+    await res.body?.cancel().catch(() => {});
+    throw classifyLineHttpStatus(res.status);
   }
 }
 
@@ -112,13 +112,13 @@ export async function validateLineConnection(params: { channelSecret: string; ac
   try {
     const res = await fetchExternal(`${LINE_API_BASE}/v2/bot/info`, { headers: { Authorization: `Bearer ${params.accessToken}` } });
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      const err = classifyLineHttpStatus(res.status, text);
+      await res.body?.cancel().catch(() => {});
+      const err = classifyLineHttpStatus(res.status);
       return { ok: false, message: err.message, code: err.code };
     }
     return { ok: true, message: "接続を確認しました。" };
   } catch (err) {
-    return { ok: false, message: `LINE APIへの接続に失敗しました: ${err instanceof Error ? err.message : String(err)}`, code: "NETWORK_ERROR" };
+    return { ok: false, message: "LINE APIへの接続に失敗しました。時間をおいて接続状態を確認してください。", code: "NETWORK_ERROR" };
   }
 }
 

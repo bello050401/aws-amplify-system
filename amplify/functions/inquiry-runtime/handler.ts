@@ -3,6 +3,7 @@ import type { SQSEvent, SQSBatchResponse } from "aws-lambda";
 import { runInquiry } from "../../../lib/inquiry/runtime/worker";
 import { pollInquiryMail } from "../../../lib/inquiry/runtime/mailPoll";
 import { resumePending } from "../../../lib/inquiry/runtime/resume";
+import {runCustomerDelivery} from '../../../lib/inquiry/runtime/deliveryJobs';
 const sqs = new SQSClient({});
 // Processing runs in this private Lambda, independent of the website request timeout.
 export async function handler(
@@ -22,6 +23,7 @@ export async function handler(
   for (const record of event.Records) {
     try {
       const parsed = JSON.parse(record.body);
+      if(parsed.action==='SEND'){await runCustomerDelivery(parsed.pk);continue;}
       if (parsed.action === "RESUME") {
         await resumePending(parsed.cursor);
         continue;

@@ -67,6 +67,10 @@ export function processInquiryAndNotifyUnauthenticated(
 }
 
 export async function processInquiryAndNotify(params: {
+  /** Exact source link from the verified notification parser; never supplied by an LLM. */
+  mercariInquiryUrl?: string | null;
+  /** Server-validated full transcript for mail notifications without a customer body. */
+  verifiedRemote?: import('./runtime/readContract').ReadSnapshot;
   overrideInventoryId?:string|null;
   conversationId: string;
   sourceMessageId?: string | null;
@@ -157,6 +161,10 @@ export async function processInquiryAndNotify(params: {
       return { drafted: false, draft: null, notify: null, reason: "対象の受信メッセージが見つかりませんでした。" };
     }
     if(target.body==='[送信取消]')return {drafted:false,draft:null,notify:null,reason:'取り消されたメッセージです。'};
+    const remoteMessages=params.verifiedRemote?.messages;
+    const remoteTarget=remoteMessages?.filter(m=>m.speaker==='BUYER').at(-1);
+    if(remoteMessages?.at(-1)?.speaker==='SELLER')return {drafted:false,draft:null,notify:null,reason:'取得した最新の会話では社員が返信済みです。'};
+    if(remoteMessages&&!remoteTarget)return {drafted:false,draft:null,notify:null,reason:'お客様の問い合わせ本文を確認できません。'};
     if(conversation.lastOutgoingAt&&(target.externalSentAt??target.createdAt)<=conversation.lastOutgoingAt)return {drafted:false,draft:null,notify:null,reason:'この受信後に社員が返信済みです。'};
 
     // 既に通知が済んでいるなら、ここで終える。AIを呼ぶ前に見る。
@@ -172,7 +180,7 @@ export async function processInquiryAndNotify(params: {
       }
     }
 
-    const history = messages
+    const history = remoteTarget && remoteMessages ? remoteMessages.filter(m=>m!==remoteTarget).map(m=>({direction:m.speaker==='BUYER'?'INBOUND' as const:'OUTBOUND' as const,body:m.body})) : messages
       .filter((m) => m.id !== target.id&&m.body!=='[送信取消]')
       .slice(-10)
       .map((m) => ({ direction: m.direction, body: m.body }));
@@ -207,7 +215,7 @@ export async function processInquiryAndNotify(params: {
           channel: conversation.channel,
           conversationId: conversation.id,
           messageId: target.id,
-          messageText: target.body,
+          messageText: remoteTarget?.body ?? target.body,
           // 添付が実際にあったか。無いのに「お送りいただいた写真を確認し」と
           // 書く返信案が実機で出た(2026-09-03)。お客様は写真を送っていない
           // ので、返信を読んだ側は話が通じていないと受け取る。
@@ -242,7 +250,7 @@ export async function processInquiryAndNotify(params: {
             intents: generated.intents,
             draftText: generated.draftText,
             unresolvedFacts: generated.unresolvedFacts,
-            evidence: generated.evidence,
+            evidence: {...generated.evidence,runtimeProof:{conversationStamp:initialStamp,generatedAt:new Date().toISOString()}},
             modelProvider: generated.modelProvider,
             modelName: generated.modelName,
             status: generated.status,
@@ -305,13 +313,13 @@ export async function processInquiryAndNotify(params: {
       sourceMessageId: target.id,
       channel: conversation.channel,
       customerName: conversation.customerDisplayName,
-      messageText: target.body,
+      messageText: remoteTarget?.body ?? target.body,
       intents: generated?.intents ?? [],
       evidence: generated?.evidence ?? null,
       draftText: generated?.draftText ?? null,
       replyDraftId: draft?.id ?? null,
       draftStatus: generated?.status ?? null,
-      deliveryWindowState: evaluateDeliveryState(target.body),
+      deliveryWindowState: evaluateDeliveryState(remoteTarget?.body ?? target.body),
       // §27 引き継いだ情報を1通目に出す。「埼玉です」だけを見せられても
       // 担当者は判断できない。
       carriedFacts: generated?.carriedFacts ?? [],

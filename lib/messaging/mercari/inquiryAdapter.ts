@@ -1,92 +1,83 @@
 import "server-only";
+import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import { CUSTOMER_DELIVERY_ENABLED } from "../featureState";
 
-/**
- * BELLO統合業務OS指示書(2026-08-30) §32/§39/§51/§166: Mercari Shops
- * 問い合わせAPIの調査結果と、今回のラウンドでの実装範囲。
- *
- * 【WebSearch経由で確認できた実際の情報】(このsandbox環境から
- * api.mercari-shops.com/docs/index.htmlへ直接到達できないため、検索
- * 結果の要約経由 — §112「実装時に公式schemaを再確認する」対応が必要):
- * - `addInquiryMessage`というGraphQLミューテーションが実在し、入力型
- *   `AddInquiryMessageInput`・戻り値型`AddInquiryMessagePayload`を持つ。
- *   `AddInquiryMessagePayload`のフィールドとして
- *   attachments/body/from/id/inquiryId/sentAt/statusが確認できた。
- * - Webhook topicとして`INQUIRY_MESSAGE_ADMIN_DELETED`が実在すること
- *   を確認(公式ドキュメントのwebhook一覧クエリの一部として言及)。
- *   master指示書付録にある`INQUIRY_MESSAGE_CREATED`/`INQUIRY_RESOLVED`
- *   はこの検索では直接確認できなかった(実在しないという意味ではなく、
- *   検索結果の要約に含まれていなかっただけ — [UNVERIFIED])。
- * - 問い合わせ一覧を取得する側のQuery名(`inquiry`/`inquiries`/
- *   `inquiryMessages`)、`AddInquiryMessageInput`の具体的なフィールド
- *   構成、Webhookペイロードの実際のJSON形状、署名検証方式は確認できて
- *   いない([UNVERIFIED])。
- *
- * 【第二次完全完遂指示(2026-08-30)での再調査】「未確認はBLOCKED理由
- * にならない」との指摘を受け、改めて複数の切り口で再調査した:
- * (1) Webhook自体の提供形態を確認 — 「WebhookはAPI利用者専用の機能で、
- *     管理画面からは設定できず、createWebhook APIでのみ設定可能」と
- *     いう記述を確認(=Webhook機構自体は実在し、createWebhookという
- *     ミューテーション名も実在することの追加確認)。
- * (2) updateProductミューテーションについても再調査し、
- *     `UpdateProductInput`が`shippingConfigurationId`/
- *     `channelListingScope`フィールドを持つことを確認(が、price/
- *     status等の肝心のフィールド名は依然未確認)。
- * (3) GitHub上の非公式クライアント2件(mercari-shops-api-client,
- *     mercapi_shops)のソースを直接fetchしたが、いずれも読み取り専用
- *     (search/landing取得)のクライアントで、書き込み系ミューテーション
- *     の実装は含まれていなかった。
- * (4) sandbox GraphQLエンドポイント(api.mercari-shops-sandbox.com)への
- *     直接到達を試みたが、このsandbox環境のegress proxyでブロックされた
- *     (EGRESS_BLOCKED)。
- * 結論は変わらず: Webhook署名検証方式・問い合わせ一覧Query・
- * AddInquiryMessageInputの詳細フィールドは、いずれも実際のMercari
- * Shops開発者ポータルへのアクセス(契約者専用)無しには確定できない。
- * これは「調べていない」のではなく、上記4つの具体的な経路をすべて
- * 試した上でのBLOCKED_BY_EXTERNAL_SERVICE。
- *
- * 【今回未実装とした理由】上記の断片的な情報だけでは、実際に
- * 動作するリクエストを組み立てられない(特にWebhook署名検証の方式が
- * 不明なまま受信エンドポイントを公開するのは、検証されていないリクエ
- * ストを無条件に信頼することになりセキュリティ上危険 — §87 Webhook
- * Security「official validation requirements」に反する)。憶測で
- * 実装してAPIコールを試すことも、実際のMercari契約・ネットワーク到達
- * が無い状態では検証しようがなく、fake success(§157)につながる
- * リスクがある。
- *
- * そのため今回は:
- *   - lib/messaging/service.tsに、実チャネルからの受信を将来ここへ
- *     接続できる形(recordIncomingMessage相当の拡張ポイント)を用意。
- *   - このファイルには、実装時にすぐ使える程度まで調査結果を書き残す。
- *   - 実際にAPIを呼ぶ関数は未実装のまま、呼ばれたら明確に
- *     「未実装」と分かるエラーを投げるプレースホルダのみ用意する
- *     (黙って何もしない関数を残さない — §156「自分で実装可能なTODOを
- *     残して終了しない」の裏返しとして、少なくとも「なぜ実装していな
- *     いか」を呼び出し時にも分かるようにする)。
- *
- * 完了報告での分類: BLOCKED_BY_EXTERNAL_SERVICE
- * (Webhook署名検証方式・問い合わせ一覧Query・Input型の詳細フィールドが
- * 実際のMercari Shops APIドキュメントへの到達なしには確定できないため)。
- */
-
-/** [UNVERIFIED] WebSearchで確認できたフィールド名のみを反映した戻り値型の断片。実際の型定義はMercari公式ドキュメントへの到達後に確定させること。 */
+// Official schema verified 2026-11-08: https://api.mercari-shops.com/docs/index.html
+// This boundary exposes fixed operations only. It never retries an uncertain send.
 export interface MercariInquiryMessage {
-  id: string;
-  inquiryId: string;
-  body: string;
-  from: string;
-  sentAt: string;
-  status: string;
-  attachments: unknown[];
+  id:string; inquiryId:string; body:string; from:"BUYER"|"SELLER"|"UNSPECIFIED";
+  sentAt:string; status:"ACTIVE"|"ADMIN_DELETED"|"BLOCKED"|"UNSPECIFIED"; attachments:{url:string}[];
 }
-
-export async function fetchMercariInquiries(): Promise<never> {
-  throw new Error(
-    "Mercari問い合わせAPI連携は未実装です（Webhook署名検証方式・問い合わせ一覧クエリの実Schemaが未確認のため）。lib/messaging/mercari/inquiryAdapter.tsのファイル冒頭コメント参照。",
-  );
+export interface MercariInquiry {id:string;lastActivityAt:string;status:string;target:{__typename:string;productId?:string;productVariantId?:string|null;orderTransaction?:{id:string}|null;shopId?:string}}
+type Page<T>={edges:{node:T}[];pageInfo:{hasNextPage:boolean;endCursor:string|null}};
+type Credentials={accessToken:string;clientName:string;shopId:string};
+export class MercariInquiryError extends Error {
+  constructor(public code:string,public uncertain=false){super(code);this.name="MercariInquiryError";}
 }
-
-export async function sendMercariInquiryReply(inquiryId: string, body: string): Promise<never> {
-  throw new Error(
-    `Mercari問い合わせ(${inquiryId})への返信送信は未実装です（addInquiryMessageミューテーションの入力フィールド詳細が未確認のため、本文「${body.slice(0, 20)}...」は送信されていません）。lib/messaging/mercari/inquiryAdapter.tsのファイル冒頭コメント参照。`,
-  );
+const ids=/^[A-Za-z0-9_-]{1,160}$/;
+const target="__typename ... on InquiryProductTarget { productId productVariantId } ... on InquiryOrderTransactionTarget { orderTransaction { id } } ... on InquiryShopTarget { shopId }";
+const fields="id inquiryId body from sentAt status attachments { url }";
+const queries={
+ account:"query BelloInquiryAccount { shop { id } }",
+ detail:"query BelloInquiry($id:ID!) { inquiry(id:$id) { id lastActivityAt status target { "+target+" } } }",
+ list:"query BelloInquiries($after:String) { inquiries(first:50,after:$after) { edges { node { id lastActivityAt status target { "+target+" } } } pageInfo { endCursor hasNextPage } } }",
+ messages:"query BelloInquiryMessages($id:ID!,$after:String) { inquiryMessages(inquiryId:$id,first:200,after:$after) { edges { node { "+fields+" } } pageInfo { endCursor hasNextPage } } }",
+ send:"mutation BelloInquirySend($input:AddInquiryMessageInput!) { addInquiryMessage(input:$input) { inquiryMessage { "+fields+" } } }",
+} as const;
+function checkId(id:string){if(!ids.test(id))throw new MercariInquiryError("INVALID_ID");}
+function page<T>(value:Page<T>):Page<T>{
+ if(!value||!Array.isArray(value.edges)||typeof value.pageInfo?.hasNextPage!=="boolean"||(value.pageInfo.hasNextPage&&!value.pageInfo.endCursor))throw new MercariInquiryError("INVALID_PAGE");
+ return value;
+}
+function message(value:MercariInquiryMessage,id:string):MercariInquiryMessage{
+ if(!value||!ids.test(value.id)||value.inquiryId!==id||!["BUYER","SELLER","UNSPECIFIED"].includes(value.from)||!["ACTIVE","ADMIN_DELETED","BLOCKED","UNSPECIFIED"].includes(value.status)||!Number.isFinite(Date.parse(value.sentAt))||typeof value.body!=="string"||!Array.isArray(value.attachments))throw new MercariInquiryError("INVALID_MESSAGE");
+ return {...value,body:value.status==="ACTIVE"?value.body:"",attachments:value.status==="ACTIVE"?value.attachments.filter(a=>{try{return new URL(a.url).protocol==="https:";}catch{return false;}}):[]};
+}
+export function createMercariInquiryClient(credentials:Credentials,transport:typeof fetch=fetch){
+ checkId(credentials.shopId);
+ if(!credentials.accessToken||!credentials.clientName||/[\r\n]/.test(credentials.clientName))throw new MercariInquiryError("CONFIG_REQUIRED");
+ async function call<T>(operation:keyof typeof queries,variables:Record<string,unknown>={}):Promise<T>{
+  const writing=operation==="send";let response:Response;
+  try{response=await transport("https://api.mercari-shops.com/v1/graphql",{method:"POST",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(15000),headers:{"Content-Type":"application/json",Authorization:"Bearer "+credentials.accessToken,"User-Agent":credentials.clientName+"/2026-11-08"},body:JSON.stringify({query:queries[operation],variables})});}
+  catch{throw new MercariInquiryError("NETWORK_ERROR",writing);}
+  if(!response.ok){await response.body?.cancel().catch(()=>{});throw new MercariInquiryError(response.status===429?"RATE_LIMITED":response.status===401||response.status===403?"AUTH_REQUIRED":"HTTP_"+response.status,writing&&response.status>=500);}
+  let payload:{data:T;errors?:unknown[]};
+  try{const reader=response.body?.getReader();if(!reader)throw Error();let bytes=0;const chunks:Uint8Array[]=[];for(;;){const part=await reader.read();if(part.done)break;bytes+=part.value.length;if(bytes>1500000){await reader.cancel();throw Error();}chunks.push(part.value);}payload=JSON.parse(Buffer.concat(chunks).toString("utf8"));}
+  catch{throw new MercariInquiryError("INVALID_RESPONSE",writing);}
+  if(payload.errors?.length||!payload.data)throw new MercariInquiryError("REMOTE_REJECTED",writing);
+  return payload.data;
+ }
+ async function account(){const data=await call<{shop:{id:string}}>("account");if(data.shop?.id!==credentials.shopId)throw new MercariInquiryError("ACCOUNT_MISMATCH");}
+ return {
+  verifyAccount:account,
+  async list(after?:string){await account();return page((await call<{inquiries:Page<MercariInquiry>}>("list",{after:after??null})).inquiries);},
+  async read(id:string){
+   checkId(id);await account();
+   const detail=(await call<{inquiry:MercariInquiry}>("detail",{id})).inquiry;if(detail?.id!==id)throw new MercariInquiryError("INQUIRY_MISMATCH");
+   const rows=new Map<string,MercariInquiryMessage>(),seen=new Set<string>();let after:string|null=null;
+   for(let n=0;n<25;n++){
+    const p:Page<MercariInquiryMessage>=page((await call<{inquiryMessages:Page<MercariInquiryMessage>}>("messages",{id,after})).inquiryMessages);
+    for(const e of p.edges){const m=message(e.node,id);rows.set(m.id,m);}
+    if(!p.pageInfo.hasNextPage)return {inquiry:detail,messages:[...rows.values()].sort((a,b)=>a.sentAt.localeCompare(b.sentAt))};
+    const next=p.pageInfo.endCursor!;if(seen.has(next))throw new MercariInquiryError("CURSOR_LOOP");seen.add(next);after=next;
+   }
+   throw new MercariInquiryError("PAGE_LIMIT");
+  },
+  async send(id:string,body:string,idempotencyKey:string,verifyImmediately:()=>Promise<boolean>){
+   if(!CUSTOMER_DELIVERY_ENABLED)throw new MercariInquiryError("DELIVERY_DISABLED");
+   checkId(id);if(!body.trim()||body.length>1000||!/^[-0-9a-f]{36}$/i.test(idempotencyKey))throw new MercariInquiryError("INVALID_MESSAGE_INPUT");
+   await account();if(!await verifyImmediately())throw new MercariInquiryError("STALE_DRAFT");
+   const data=await call<{addInquiryMessage:{inquiryMessage:MercariInquiryMessage}}>("send",{input:{inquiryId:id,body,idempotencyKey}});
+   const sent=message(data.addInquiryMessage?.inquiryMessage,id);
+   if(sent.from!=="SELLER"||sent.status!=="ACTIVE"||sent.body!==body)throw new MercariInquiryError("SEND_UNCONFIRMED",true);
+   return sent;
+  },
+ };
+}
+export async function configuredMercariInquiryClient(shopId:string){
+ const client=new SecretsManagerClient({region:process.env.AWS_REGION||"us-west-2"});
+ const secret=await client.send(new GetSecretValueCommand({SecretId:"bello/mercari-access-token"}));
+ let saved:{accessToken?:string;token?:string;clientName?:string};
+ try{saved=JSON.parse(secret.SecretString??"");}catch{throw new MercariInquiryError("CONFIG_REQUIRED");}
+ return createMercariInquiryClient({shopId,accessToken:saved.accessToken??saved.token??"",clientName:saved.clientName??""});
 }

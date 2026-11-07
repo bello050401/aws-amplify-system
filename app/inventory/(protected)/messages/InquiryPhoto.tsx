@@ -7,15 +7,20 @@ const fit: Position = { scale: 1, x: 0, y: 0 };
 export function InquiryPhoto({
   url,
   urls = [url],
+  refreshUrl,
 }: {
   url: string;
   urls?: string[];
+  refreshUrl?: (index: number) => Promise<string>;
 }) {
   const [open, setOpen] = useState(false),
     [index, setIndex] = useState(0),
     [position, setPosition] = useState<Position>(fit),
     [failed, setFailed] = useState(false),
     [retry, setRetry] = useState(0);
+  const [refreshed, setRefreshed] = useState<Record<string,string>>({}),
+    [retrying, setRetrying] = useState(false),
+    [retryError, setRetryError] = useState("");
   const canvas = useRef<HTMLDivElement>(null),
     img = useRef<HTMLImageElement>(null),
     pointers = useRef(new Map<number, { x: number; y: number }>()),
@@ -97,7 +102,7 @@ export function InquiryPhoto({
         }}
       >
         <img
-          src={url}
+          src={refreshed[url] ?? url}
           alt="問い合わせの添付写真"
           className="h-32 w-40 rounded object-contain"
           loading="lazy"
@@ -224,21 +229,33 @@ export function InquiryPhoto({
               {failed ? (
                 <div className="grid h-full place-content-center gap-4 text-center">
                   <p>写真を読み込めませんでした。</p>
+                  {retryError && <p role="alert" className="max-w-sm text-sm">{retryError}</p>}
                   <button
+                    disabled={retrying}
                     className="rounded-lg border p-3"
-                    onClick={() => {
-                      setRetry((n) => n + 1);
-                      setFailed(false);
+                    onClick={async () => {
+                      setRetrying(true);
+                      setRetryError("");
+                      try {
+                        if (refreshUrl) {
+                          const original = urls[index], next = await refreshUrl(index);
+                          setRefreshed(p=>({...p,[original]:next}));
+                        }
+                        setRetry((n) => n + 1);
+                        setFailed(false);
+                      } catch {
+                        setRetryError("写真を再取得できませんでした。通信状態を確認してください。削除された写真は表示できません。");
+                      } finally { setRetrying(false); }
                     }}
                   >
-                    再読み込み
+                    {retrying ? "読み込み中…" : "再読み込み"}
                   </button>
                 </div>
               ) : (
                 <img
                   ref={img}
                   key={index + ":" + retry}
-                  src={urls[index]}
+                  src={refreshed[urls[index]] ?? urls[index]}
                   draggable={false}
                   alt={"添付写真 " + (index + 1)}
                   className="h-full w-full select-none object-contain"

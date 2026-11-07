@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),crypto=require('node:crypto');
 const {DynamoDBClient}=require('@aws-sdk/client-dynamodb');
-const {DynamoDBDocumentClient,PutCommand,GetCommand,DeleteCommand}=require('@aws-sdk/lib-dynamodb');
+const {DynamoDBDocumentClient,PutCommand,GetCommand,DeleteCommand,UpdateCommand}=require('@aws-sdk/lib-dynamodb');
 const {LambdaClient,InvokeCommand,GetFunctionConfigurationCommand}=require('@aws-sdk/client-lambda');
 const region='us-west-2',fn='amplify-d4hkkg7dty2du-claudeinvento-Worker11F36D0F-2WWHmekQi8Jm';
 const lambda=new LambdaClient({region}),db=DynamoDBDocumentClient.from(new DynamoDBClient({region}));
@@ -32,9 +32,21 @@ const lambda=new LambdaClient({region}),db=DynamoDBDocumentClient.from(new Dynam
    const state=(await db.send(new GetCommand({TableName:table,Key:{pk,sk:'STATE'},ConsistentRead:true}))).Item;
    assert.equal(state.processedVersion,1);assert.equal(state.result,'TECHNICAL_BLOCK');assert.equal(state.conversationId,cid);report.passed.push(n?'同じ処理を再実行しても二重処理しない':'公開Lambdaが会話・本文・設定を読み、取得不足を技術的確認待ちとして保存');
   }
+  const olderId=mid+'-older',olderKey='EVENT#'+crypto.createHash('sha256').update(olderId).digest('hex'),olderAt=new Date(now-3600000).toISOString();
+  await put('Message-'+suffix,{id:olderId,conversationId:cid,channel:'MERCARI_SHOPS',externalMessageId:olderId,direction:'INBOUND',senderKind:'CUSTOMER',body:'遅れて届いた古い検証用通知。',deliveryStatus:'RECEIVED',externalSentAt:olderAt,createdAt:iso,updatedAt:iso});
+  await put(table,{pk,sk:olderKey,version:2,receivedAt:now+1,ttl:Math.ceil(now/1000)+3600,payload:{channel:'MERCARI_SHOPS',params:{conversationId:cid,sourceMessageId:olderId,who:null,skipGeneration:true,skipReason:'この古い通知で最新結果を置換してはいけません。'}}});
+  await db.send(new UpdateCommand({TableName:table,Key:{pk,sk:'STATE'},UpdateExpression:'SET #v=:two,dueAt=:zero,lastEventSk=:older',ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':two':2,':zero':0,':older':olderKey}}));
+  if(local) await localRun(pk);
+  else {
+    const response=await lambda.send(new InvokeCommand({FunctionName:fn,Payload:Buffer.from(JSON.stringify(request))}));
+    assert(!response.FunctionError);assert.deepEqual(JSON.parse(Buffer.from(response.Payload).toString()).batchItemFailures,[]);
+  }
+  const late=(await db.send(new GetCommand({TableName:table,Key:{pk,sk:'STATE'},ConsistentRead:true}))).Item;
+  assert.equal(late.processedVersion,2);assert.equal(late.sourceEventSk,sk);assert.equal(late.result,'TECHNICAL_BLOCK');assert(!late.reason.includes('この古い通知'));
+  report.passed.push('古いメールが遅れて届いても最新の問い合わせを基準に処理する');
  }finally{
   if(config)await db.send(new PutCommand({TableName:table,Item:config}));else await db.send(new DeleteCommand({TableName:table,Key:{pk:'CONFIG',sk:'STATE'}}));
-  for(const [TableName,Key]of cleanup.reverse()){assert((Key.id??Key.pk).includes(tag)||Key.pk===pk);await db.send(new DeleteCommand({TableName,Key}));}
+  for(const [TableName,Key]of cleanup.reverse()){assert((Key.id??Key.pk).includes(tag)||Key.pk===pk);await db.send(new DeleteCommand({TableName,Key}));assert(!(await db.send(new GetCommand({TableName,Key,ConsistentRead:true}))).Item);}
   report.cleanup=true;fs.writeFileSync('artifacts/whole-instruction-20261107/inquiry-production-smoke.json',JSON.stringify(report,null,2));
  }
  console.log(JSON.stringify(report));

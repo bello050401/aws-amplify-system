@@ -574,7 +574,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   }
 
   // ── ナレッジ ──────────────────────────────────────────────────
-  let knowledgeHits: { id: string; title: string; fileName: string; excerpt: string }[] = [];
+  let knowledgeHits: { id: string; title: string; fileName: string; excerpt: string; updatedAt?:string }[] = [];
   if (settings.knowledgeEnabled) {
     try {
       const docs = await listSearchableKnowledge();
@@ -582,6 +582,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       // 問い合わせに一切現れない場合に引けるようにするため。
       knowledgeHits = retrieveKnowledge(docs, messageText, { intents }).map((hit) => ({
         id: hit.document.id,
+        updatedAt:hit.document.updatedAt,
         title: hit.document.title,
         fileName: hit.document.originalFileName,
         excerpt: hit.snippet,
@@ -858,6 +859,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   }
 
   const evidence: ReplyEvidence = {
+    inventoryVersion:inventory?.updatedAt?{id:inventory.id,updatedAt:inventory.updatedAt}:null,
     product: resolution.resolved
       ? {
           inventoryId: resolution.resolved.inventoryId,
@@ -879,7 +881,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     onSaleCategoryResolved: resolution.onSaleCategoryResolved,
     productCandidates: resolution.candidates,
     inventoryFieldsUsed,
-    knowledgeDocuments: knowledgeHits.map((k) => ({ id: k.id, title: k.title, fileName: k.fileName })),
+    knowledgeDocuments: knowledgeHits.map((k) => ({ id: k.id, title: k.title, fileName: k.fileName, updatedAt:k.updatedAt })),
     shipping,
     externalResearchAttempted: research.attempted,
     externalFacts: research.facts,

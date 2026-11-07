@@ -8,13 +8,21 @@ import {
   editInquiryDraft,
   chooseInquiryProduct,
   setInquiryProcessing,
+  refreshInquiryPhoto,
+  retryInquiryReadAction,
+  sendInquiryDraftAction,
 } from "@/app/actions/inquiryRuntime";
 import { RESULT_LABELS } from "@/lib/inquiry/runtime/labels";
 import { InquiryPhoto } from "./InquiryPhoto";
+import { InventoryThumbnail } from "@/app/inventory/InventoryThumbnail";
 type Queue = Awaited<ReturnType<typeof readInquiryQueue>>;
 type Detail = Awaited<ReturnType<typeof readInquiryDetail>>;
 export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
   const request = useRef(0);
+  const queueRequest = useRef(0);
+  const [loadingDetail, setLoadingDetail] = useState(false),
+    [loadingMore, setLoadingMore] = useState(false),
+    [messageCount, setMessageCount] = useState(30);
   const [queue, setQueue] = useState<Queue | null>(null),
     [selected, setSelected] = useState<string | null>(null),
     [detail, setDetail] = useState<Detail>(null);
@@ -23,9 +31,11 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
     [draftText, setDraftText] = useState(""),
     [notice, setNotice] = useState("");
   const refresh = async () => {
+    const generation = ++queueRequest.current;
     setError("");
     try {
-      setQueue(await readInquiryQueue());
+      const value = await readInquiryQueue();
+      if(generation === queueRequest.current) setQueue(value);
     } catch {
       setError("受信状況を取得できませんでした。再読み込みしてください。");
     }
@@ -40,6 +50,8 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
     const generation = ++request.current;
     setSelected(pk);
     setDetail(null);
+    setLoadingDetail(true);
+    setMessageCount(30);
     setError("");
     try {
       const value = await readInquiryDetail(pk);
@@ -52,16 +64,19 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
     } catch {
       if (generation === request.current)
         setError("問い合わせを取得できませんでした。");
+    } finally {
+      if (generation === request.current) setLoadingDetail(false);
     }
   }
   const selectedRow = queue?.items.find((r) => r.pk === selected);
+  const displayMessages=detail?.remoteRead?.snapshot?.messages.map((m,index)=>({id:'remote-'+index,body:m.body,direction:m.speaker==='BUYER'?'INBOUND':'OUTBOUND',externalSentAt:m.sentAt,createdAt:m.sentAt}))??detail?.messages??[];
   return (
     <section className="rounded-2xl border bg-white p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold">お問い合わせ</h2>
           <p className="mt-1 text-sm text-slate-600">
-            受信 → 商品・根拠の確認 → 返信案。顧客への自動送信は停止しています。
+            受信 → 商品・根拠の確認 → 返信案。{queue?.settings.automaticDelivery?'評価を通過した種類のみ自動送信します。':'顧客への自動送信は停止しています。'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -174,12 +189,23 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
               </p>
             </button>
           ))}
+          {queue?.cursor && <button disabled={loadingMore} className="min-h-12 w-full rounded-xl border bg-white p-3" onClick={async()=>{
+            const generation=queueRequest.current;
+            setLoadingMore(true);
+            try {
+              const page=await readInquiryQueue(queue.cursor!);
+              if(generation===queueRequest.current) setQueue(previous=>previous?{...page,items:[...previous.items,...page.items.filter(item=>!previous.items.some(p=>p.pk===item.pk))]}:page);
+            } catch { setError("続きを取得できませんでした。もう一度お試しください。"); }
+            finally { setLoadingMore(false); }
+          }}>{loadingMore ? "読み込み中…" : "以前の問い合わせを表示"}</button>}
         </div>
         <div className="min-w-0 rounded-xl bg-slate-50 p-4">
           {!selected ? (
             <p className="text-slate-600">
               問い合わせを選択すると、本文・写真・商品候補・返信案を確認できます。
             </p>
+          ) : loadingDetail ? (
+            <p role="status">問い合わせを読み込んでいます…</p>
           ) : !detail ? (
             <p>受信を保存しました。解析結果は処理後に表示されます。</p>
           ) : (
@@ -211,8 +237,13 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                     : "社員が対応する"}
                 </button>
               </div>
+              {detail.remoteRead&&<div className="mb-3 rounded-lg border bg-white p-3 text-sm">
+                <p>{detail.remoteRead.status==='DONE'?'メルカリの問い合わせ画面から全文を取得済み':detail.remoteRead.status==='READING'?'問い合わせ画面を確認しています':'問い合わせ画面の取得待ちです。確認用ブラウザが接続されると再開します。'}</p>
+                {isAdmin&&detail.remoteRead.status==='BLOCKED'&&<button disabled={busy} className="mt-2 min-h-11 rounded-lg border px-3" onClick={async()=>{setBusy(true);try{await retryInquiryReadAction(selected);await open(selected);setNotice('問い合わせ画面の取得を再開します。');}catch{setError('取得を再開できませんでした。接続状態を確認してください。');}finally{setBusy(false);}}}>本文の取得を再試行</button>}
+              </div>}
               <div className="max-h-[45vh] space-y-3 overflow-y-auto">
-                {detail.messages.slice(-30).map((m) => (
+                {displayMessages.length > messageCount && <button className="min-h-12 w-full rounded-lg border bg-white p-3" onClick={()=>setMessageCount(n=>n+30)}>以前のメッセージを表示</button>}
+                {displayMessages.slice(-messageCount).map((m) => (
                   <article
                     key={m.id}
                     className={
@@ -222,7 +253,7 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                   >
                     <small>
                       {m.direction === "INBOUND" ? "お客様" : "社員"} ·{" "}
-                      {new Date(m.createdAt).toLocaleString("ja-JP")}
+                      {new Date(m.externalSentAt ?? m.createdAt).toLocaleString("ja-JP")}
                     </small>
                     <p className="mt-1 whitespace-pre-wrap break-words">
                       {m.body}
@@ -231,12 +262,14 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                       <InquiryPhoto
                         url={detail.attachments.find((a) => a.id === m.id)!.url}
                         urls={detail.attachments.map((a) => a.url)}
+                        refreshUrl={index=>refreshInquiryPhoto(selected, detail.attachments[index].id)}
                       />
                     )}
                   </article>
                 ))}
               </div>
               <h3 className="mb-2 mt-5 font-bold">返信案</h3>
+              {detail.delivery&&<p role="status" className="mb-3 rounded-lg border bg-white p-3 text-sm">{({QUEUED:'送信前の最終確認を待っています。',SENDING:'送信結果を確認しています。',ACCEPTED:'サービス側で送信を受け付けました。既読・到達を保証する表示ではありません。',UNKNOWN:'送信結果を確認できません。二重送信を防ぐため、公式画面で履歴を確認してください。',CANCELLED:'情報が更新されたため、送信を取りやめました。最新の返信案を確認してください。',REJECTED:'サービス側で送信が受け付けられませんでした。接続状態を確認してください。'} as Record<string,string>)[detail.delivery.status]??'送信状態を確認してください。'}</p>}
               {detail.drafts
                 .filter((d) => d.status !== "DISMISSED")
                 .slice(0, 1)
@@ -258,6 +291,7 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                       onChange={(e) => setDraftText(e.target.value)}
                     />
                     <div className="mt-3 flex flex-wrap gap-2">
+                      {isAdmin&&queue?.settings.deliveryEnabled&&<button disabled={busy||draftText!==d.draftText||!!detail.delivery&&['QUEUED','SENDING','ACCEPTED','UNKNOWN'].includes(detail.delivery.status)} className="min-h-11 rounded-lg bg-teal-800 px-4 text-white disabled:opacity-50" onClick={async()=>{if(!window.confirm('表示中の会話・商品・返信内容を確認しましたか？このお客様に返信を送信します。'))return;setBusy(true);try{await sendInquiryDraftAction(selected,d.id,d.updatedAt);await open(selected);setNotice('送信前の最終確認を受け付けました。結果は再読み込みで確認できます。');}catch{setError('送信を予約できませんでした。最新の会話・返信案と接続を確認してください。');}finally{setBusy(false);}}}>内容を確認して送信</button>}
                       <button
                         disabled={busy || !draftText.trim()}
                         className="rounded-lg bg-teal-800 px-4 py-2 text-white disabled:opacity-50"
@@ -347,6 +381,10 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                             key={p.inventoryId}
                             className="rounded-lg border p-3"
                           >
+                            <div className="mb-2 flex items-center gap-3">
+                              <InventoryThumbnail storageKey={detail.products.find(item=>item.id===p.inventoryId)?.storageKey??null} alt={p.name} size="list" />
+                              <p className="text-slate-600">{detail.products.find(item=>item.id===p.inventoryId)?.sku ?? ""} · 在庫 {detail.products.find(item=>item.id===p.inventoryId)?.quantity ?? "未確認"}</p>
+                            </div>
                             <a
                               className="font-medium text-teal-800 underline"
                               href={"/inventory/" + p.inventoryId}

@@ -279,6 +279,7 @@ export async function ingestMercariNotificationMails(params: {
         : null;
 
       const draftParams:Parameters<typeof processInquiryAndNotifyUnauthenticated>[0]={
+        mercariInquiryUrl:parsed.inquiryUrl,
         conversationId,
         sourceMessageId: messageId,
         who: params.who,
@@ -322,9 +323,8 @@ export async function ingestMercariNotificationMails(params: {
       else await processInquiryAndNotifyUnauthenticated(draftParams);
     } catch (err) {
       result.failed++;
-      const message = err instanceof Error ? err.message : String(err);
-      result.messages.push(`1件の取り込みに失敗しました: ${message}`);
-      console.error("[mercariMailIngest] 取り込みに失敗", { gmailId: mail.gmailId, message });
+      result.messages.push('1件の取り込みに失敗しました。接続と処理状態を確認してください。');
+      console.error('[mercariMailIngest] FAILED', {code:err instanceof Error?err.name:'UNKNOWN'});
     }
   }
 

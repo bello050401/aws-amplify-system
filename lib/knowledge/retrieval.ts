@@ -14,6 +14,7 @@
 import { KNOWLEDGE_CONTEXT_MAX_CHARS, KNOWLEDGE_MAX_DOCUMENTS, KNOWLEDGE_SNIPPET_MAX_CHARS } from "./limits";
 
 export interface SearchableKnowledgeDocument {
+  updatedAt?:string;
   id: string;
   title: string;
   originalFileName: string;

@@ -64,6 +64,21 @@ export async function openDedicatedLogin({ profileDir, playwrightModulePath, lau
   }
 }
 
+/** Isolated read-only inquiry page. Never attaches to a user's existing Chrome session. */
+export async function openInquiryReadSession({root,profileDir,playwrightModulePath,shopId,launchPersistentContext=null}) {
+  if(!root||!isAbsolute(root)||!PRODUCT_ID.test(shopId??''))throw Error('INVALID_INQUIRY_CONFIG');
+  await bindAccount(root,shopId);
+  const context=await launchDedicatedProfile({profileDir,playwrightModulePath,launchPersistentContext,serviceWorkersBlock:true,startOffline:true});
+  try{
+    if(typeof context.setOffline!=='function')throw Error('OFFLINE_GUARD_REQUIRED');
+    // Restored pages cannot resume work; no unsent form or old job is reused.
+    for(const old of context.pages())await old.close();
+    const page=await context.newPage();
+    await context.setOffline(false);
+    return {context,page};
+  }catch(error){await context.close();throw error;}
+}
+
 /** Read-only launch to the observed product list; the user controls the normal create form. */
 export async function openDedicatedProductListSession({ root, profileDir,
   playwrightModulePath, shopId, launchPersistentContext = null }) {
