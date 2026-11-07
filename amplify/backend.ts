@@ -301,6 +301,7 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   inquiryWorker.addEventSource(new SqsEventSource(inquiryQueue,{batchSize:1,reportBatchItemFailures:true,maxConcurrency:2}));
   const inquiryRole=Role.fromRoleName(inquiryStack,'WebRole','BelloAmplifyStagingComputeRole');
   const inquiryAccess=new Policy(inquiryStack,'WebAccess',{statements:[
+    new PolicyStatement({actions:['dynamodb:BatchGetItem'],resources:[backend.data.resources.tables.Conversation.tableArn]}),
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:Query','dynamodb:ConditionCheckItem'],resources:[inquiryTable.tableArn,inquiryTable.tableArn+'/index/recent']}),
     new PolicyStatement({actions:['sqs:SendMessage'],resources:[inquiryQueue.queueArn]}),
   ]});

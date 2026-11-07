@@ -154,7 +154,7 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
         </p>
       )}
       <div className="mt-5 grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <div className="max-h-[70vh] space-y-2 overflow-y-auto">
+        <div className={"max-h-[70vh] space-y-2 overflow-y-auto " + (selected ? "hidden lg:block" : "")}>
           {queue?.items.length === 0 && (
             <p className="p-4 text-slate-500">新しい問い合わせはありません。</p>
           )}
@@ -174,7 +174,7 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                   {item.channel === "LINE" ? "LINE" : "メルカリShops"}
                 </strong>
                 <time>
-                  {new Date(item.lastAt).toLocaleString("ja-JP", {
+                  {new Date(item.messageAt ?? item.lastAt).toLocaleString("ja-JP", {
                     month: "numeric",
                     day: "numeric",
                     hour: "2-digit",
@@ -182,7 +182,9 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                   })}
                 </time>
               </div>
-              <p className="mt-2 text-sm">
+              <p className="mt-2 line-clamp-2 break-words font-medium text-slate-900">{item.subject || item.customerName || "本文を確認中"}</p>
+              {item.preview && <p className="mt-1 line-clamp-2 break-words text-sm leading-relaxed text-slate-600">{item.preview}</p>}
+              <p className="mt-2 text-xs text-teal-800">
                 {item.mode === "STAFF"
                   ? "社員対応中"
                   : (RESULT_LABELS[item.result] ?? "確認待ち")}
@@ -199,7 +201,8 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
             finally { setLoadingMore(false); }
           }}>{loadingMore ? "読み込み中…" : "以前の問い合わせを表示"}</button>}
         </div>
-        <div className="min-w-0 rounded-xl bg-slate-50 p-4">
+        <div className={"min-w-0 rounded-xl bg-slate-50 p-4 " + (!selected ? "hidden lg:block" : "")}>
+          {selected && <button className="mb-4 min-h-11 rounded-lg border bg-white px-4 lg:hidden" onClick={()=>{request.current++;setSelected(null);setDetail(null);setLoadingDetail(false);}}>← 問い合わせ一覧に戻る</button>}
           {!selected ? (
             <p className="text-slate-600">
               問い合わせを選択すると、本文・写真・商品候補・返信案を確認できます。

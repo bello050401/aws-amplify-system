@@ -1,5 +1,6 @@
 "use server";
 import {
+  BatchGetCommand,
   QueryCommand,
   UpdateCommand,
   TransactWriteCommand,
@@ -53,6 +54,23 @@ export async function readInquiryQueue(cursor?: string) {
       }),
     ),
   ]);
+  const conversationTable = directTableName("Conversation");
+  const conversationIds = [...new Set((result.Items ?? []).map(r => r.conversationId).filter((id): id is string => typeof id === "string"))];
+  const summaries = new Map<string, Record<string, unknown>>();
+  let pending: NonNullable<ConstructorParameters<typeof BatchGetCommand>[0]["RequestItems"]> = conversationIds.length ? {
+    [conversationTable]: {
+      Keys: conversationIds.map(id=>({id})),
+      ProjectionExpression: "id,customerDisplayName,subject,lastMessagePreview,lastMessageAt",
+    },
+  } : {};
+  // One bounded read for the visible page; do not fetch each conversation separately.
+  for (let attempt=0; Object.keys(pending).length && attempt<3; attempt++) {
+    const page = await inquiryDb.send(new BatchGetCommand({RequestItems:pending}));
+    for (const row of page.Responses?.[conversationTable] ?? []) summaries.set(String(row.id), row);
+    pending=page.UnprocessedKeys ?? {};
+    if(Object.keys(pending).length) await new Promise(resolve=>setTimeout(resolve,50*(attempt+1)));
+  }
+  if(Object.keys(pending).length) throw Error("問い合わせの一部を取得できませんでした。再読み込みしてください。");
   return {
     cursor: result.LastEvaluatedKey ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString("base64url") : null,
     settings: {
@@ -68,6 +86,10 @@ export async function readInquiryQueue(cursor?: string) {
       result: String(r.result),
       reason: String(r.reason ?? ""),
       mode: String(r.mode ?? "DRAFT"),
+      customerName: String(summaries.get(r.conversationId)?.customerDisplayName ?? ""),
+      subject: String(summaries.get(r.conversationId)?.subject ?? ""),
+      preview: String(summaries.get(r.conversationId)?.lastMessagePreview ?? ""),
+      messageAt: typeof summaries.get(r.conversationId)?.lastMessageAt === "string" ? String(summaries.get(r.conversationId)?.lastMessageAt) : null,
       conversationId:
         typeof r.conversationId === "string" ? r.conversationId : null,
     })),
