@@ -27,7 +27,10 @@ export async function readRestageSheet(bytes:Buffer,identity:SourceIdentity,url:
   inputTokens+=r.usage?.inputTokens||0;outputTokens+=r.usage?.outputTokens||0;if(r.stopReason!=='end_turn')throw Error('OCR_INCOMPLETE');
   const v=JSON.parse((r.output?.message?.content?.map(c=>c.text||'').join('')||'').replace(/^\s*```(?:json)?\s*/,'').replace(/\s*```\s*$/,''));
   if(typeof v.text!=='string'||v.text.length>24000||typeof v.complete!=='boolean')throw Error('OCR_INVALID_TEXT');
-  return{text:v.text,complete:v.complete&&!/判読不能|要確認/.test(v.text),unit:layout.unit||(v.unit===null||['mm','cm','m'].includes(v.unit)?v.unit:null),measurement:['PRODUCT','STACKED','UNKNOWN'].includes(v.measurement)?v.measurement:'UNKNOWN'};
+  // The model's separate unit property can be an inference. Only a verified
+  // printed header supplies a common unit; units in the verbatim text are
+  // parsed with their own values by the deterministic parser.
+  return{text:v.text,complete:v.complete&&!/判読不能|要確認/.test(v.text),unit:layout.unit,measurement:['PRODUCT','STACKED','UNKNOWN'].includes(v.measurement)?v.measurement:'UNKNOWN'};
  };
  const remarksRegions:Region[]=form==='GENERAL'?[layout.remarks.region]:[{x:.035,y:.295,width:.32,height:.265},{x:.02,y:.885,width:.95,height:.055}];
  const readings:SheetReading[]=[];

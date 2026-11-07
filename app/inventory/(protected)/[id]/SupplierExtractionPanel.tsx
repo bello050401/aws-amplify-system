@@ -31,7 +31,7 @@ export default function SupplierExtractionPanel({inventoryId,canEdit}:{inventory
    {!!job?.sources?.length&&<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
     <div className="space-y-3">{job.sources.map((s,i)=><div key={s.key} className="rounded-lg border border-slate-200 p-3"><a href={'/api/procurement/extraction/source?inventoryId='+encodeURIComponent(inventoryId)+'&index='+i} target="_blank" rel="noreferrer" className="text-sm font-medium text-blue-700">原資料 {i+1} を開く ↗</a>{s.mime.startsWith('image/')&&<img alt={'仕入先の出品表 '+(i+1)} src={'/api/procurement/extraction/source?inventoryId='+encodeURIComponent(inventoryId)+'&index='+i} className="mt-3 max-h-[650px] w-full object-contain"/>}</div>)}</div>
     <div className="space-y-5">
-     {result?.source.unitPolicy&&<p className="text-xs leading-relaxed text-slate-500">サイズ欄はcmです。出品表の715mmは71.5cmに換算します。</p>}
+     {result?.source.unitPolicy&&<p className="text-xs leading-relaxed text-slate-500">入力はcmです。原資料の単位が不明な場合は、確認した値を入力してください。715mmの場合は71.5cmです。</p>}
      {!applied&&!!result?.issues.length&&<ul className="space-y-1 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{result.issues.map((v,i)=><li key={i}>{v}</li>)}</ul>}
      {result&&<>
       <div className="space-y-3"><h3 className="text-sm font-semibold">寸法の確認</h3>

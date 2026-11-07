@@ -2,9 +2,9 @@ import {extractDimensions} from './dimensions';
 import type {SourceIdentity,SourceDocument,Region,ExtractionResult} from './types';
 
 export const RESTAGE_OCR_MODEL='qwen.qwen3-vl-235b-a22b';
-// Confirmed by BELLO on 2026-11-07: the general form's W715 means 715 mm,
-// and must be written to BELLO's centimetre field as 71.5. Explicit units win.
-export const GENERAL_FORM_DEFAULT_UNIT='mm';
+// A unit confirmed for one sheet is not a unit declaration for every sheet.
+// GENERAL sheets observed in the held-out set also contain mixed-scale numbers.
+// Unitless values remain reviewable without inventing millimetres or centimetres.
 type Section={text:string;complete:boolean;region:Region};
 export type SheetReading={form:'CHAIR'|'GENERAL'|'UNKNOWN';multipleProducts:boolean;lotNumber:string|null;
  measurement:'PRODUCT'|'STACKED'|'UNKNOWN';unit:'mm'|'cm'|'m'|null;
@@ -20,7 +20,7 @@ export function reconcileReadings(identity:SourceIdentity,url:string,hash:string
  if(!recognized)issues.push('出品表の形式を確定できません');
  if(a.multipleProducts||b.multipleProducts)issues.push('同一資料に複数商品があります。対象行を確認してください');
  if(lotMismatch)issues.push('資料のロット番号が取得対象と一致しません');
- const ua=a.unit||(a.form==='GENERAL'?GENERAL_FORM_DEFAULT_UNIT:null),ub=b.unit||(b.form==='GENERAL'?GENERAL_FORM_DEFAULT_UNIT:null);
+ const ua=a.unit,ub=b.unit;
  const unit=ua===ub?ua:null;
  const measure=recognized&&a.form==='GENERAL'?'PRODUCT':a.measurement===b.measurement?a.measurement:'UNKNOWN';
  const blocks=(['dimensions','remarks','condition'] as const).map(kind=>{
@@ -29,7 +29,7 @@ export function reconcileReadings(identity:SourceIdentity,url:string,hash:string
   return{id:kind,text:x.text,heading:kind==='dimensions'?(measure==='STACKED'?'積載寸法':measure==='UNKNOWN'?'対象未確定の寸法':'商品寸法')+(unit?`（${unit}）`:''):kind==='remarks'?'備考・特記事項':'状態',kind,region:x.region,imageId:hash,page:1,verified};
  });
  const source:SourceDocument={identity,url,hash,format:recognized?`restage-${a.form.toLowerCase()}-v1`:'unverified',acquiredAt:new Date().toISOString(),complete:true,targetVerified,blocks,issues};
- if(a.form==='GENERAL'&&a.unit===null&&b.unit===null)source.unitPolicy='2026-11-07 BELLO確認：汎用票の単位未記載715は715mm、BELLOのcm欄へ71.5として換算';
+ if(a.form==='GENERAL'&&a.unit===null&&b.unit===null)source.unitPolicy='原資料の単位未記載。別商品の単位を流用せず、確認したcm値を入力する';
  // Keep the untouched transcription in evidence; an explicit common-unit header
  // is inserted only for parsing, never appended to the verbatim remarks.
  const parseSource={...source,blocks:blocks.flatMap(block=>block.kind==='dimensions'?[{...block,id:'dimension-header',text:`寸法${unit?'（'+unit+'）':''}`},block]:[block])};

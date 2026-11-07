@@ -1,4 +1,4 @@
-export const EXTRACTION_VERSION = 'supplier-dimensions-2026-11-07.1';
+export const EXTRACTION_VERSION = 'supplier-dimensions-2026-11-07.2';
 export type Provider = 'RESTAGE' | 'YAHOO';
 export type ExtractionState = 'QUEUED' | 'PROCESSING' | 'APPLIED' | 'PARTIAL' | 'REVIEW' | 'NO_DIMENSIONS' | 'NO_SOURCE' | 'FAILED' | 'EXCLUDED';
 export interface SourceIdentity { provider: Provider; account: string; externalId: string; date?: string; lotNumber?: string; row: string; inventoryId: string }
