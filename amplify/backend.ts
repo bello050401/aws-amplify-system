@@ -280,7 +280,9 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   const extractionFailures=new Queue(procurementStack,'ExtractionFailures',{retentionPeriod:Duration.days(14),enforceSSL:true});
   const extractionWorker=new NodejsFunction(procurementStack,'ExtractionWorker',{
     entry:path.resolve('amplify/functions/procurement-extraction/handler.ts'),handler:'handler',runtime:Runtime.NODEJS_22_X,
-    timeout:Duration.seconds(300),memorySize:1536,reservedConcurrentExecutions:1,
+    // Keep the account's shared execution pool available to existing functions.
+    // The stream runs one record per shard; job leases prevent duplicate OCR.
+    timeout:Duration.seconds(300),memorySize:1536,
     bundling:{minify:true,externalModules:['sharp'],sourceMap:false},
     layers:[LayerVersion.fromLayerVersionArn(procurementStack,'ExtractionSharp',`arn:aws:lambda:${procurementStack.region}:${procurementStack.account}:layer:bello-sharp-linux-x64:1`)],
     logRetention:RetentionDays.ONE_MONTH,
