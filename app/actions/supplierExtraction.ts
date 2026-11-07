@@ -3,7 +3,7 @@ import {getInventoryRole,canEditInventory,getCurrentInventoryUserEmail} from '@/
 import {extractionRepository} from '@/lib/procurement/extraction/server';
 import {sourceIdentity,identityKey} from '@/lib/procurement/extraction/jobs';
 import {planSupplierMerge} from '@/lib/procurement/extraction/merge';
-import {FIELD_MAP,AXIS_LABELS} from '@/lib/procurement/extraction/types';
+import {FIELD_MAP,AXIS_LABELS,EXTRACTION_VERSION} from '@/lib/procurement/extraction/types';
 import {revalidatePath} from 'next/cache';
 const valid=(id:string)=>{if(!/^[A-Za-z0-9_-]{1,128}$/.test(id))throw Error('商品を確認してください');};
 async function authorize(edit=false){const role=await getInventoryRole();if(!role||edit&&!canEditInventory(role))throw Error('この操作の権限がありません');return role;}
@@ -11,8 +11,8 @@ function error(e:unknown){const message=(e as Error)?.message||'';return /^(仕�
 export async function getSupplierExtractionAction(id:string){
  await authorize();valid(id);
  try{const repo=extractionRepository(),[row,job]=await Promise.all([repo.inventory(id),repo.get(id)]);if(!row||row.deletedAt)throw Error('商品が見つかりません');const identity=sourceIdentity(row);if(!identity)return{ok:true as const,supported:false as const};
- const result=job?.resultKey?await repo.result(job):null;const plan=result?planSupplierMerge(row,result,identityKey(identity)):null;
- return{ok:true as const,supported:true as const,job:job||null,result,plan:plan?{patch:plan.patch,held:plan.held}:null,current:{updatedAt:String(row.updatedAt),name:String(row.name),note:String(row.note||''),fields:Object.fromEntries(Object.keys(FIELD_MAP).map(k=>[k,String(row[k]||'')]))}};
+ const result=job?.resultKey?await repo.result(job):null,requiresReanalysis=!!result&&result.version!==EXTRACTION_VERSION;const plan=result&&!requiresReanalysis?planSupplierMerge(row,result,identityKey(identity)):null;
+ return{ok:true as const,supported:true as const,job:job||null,result,requiresReanalysis,plan:plan?{patch:plan.patch,held:plan.held}:null,current:{updatedAt:String(row.updatedAt),name:String(row.name),note:String(row.note||''),fields:Object.fromEntries(Object.keys(FIELD_MAP).map(k=>[k,String(row[k]||'')]))}};
  }catch(e){return{ok:false as const,error:error(e)};}
 }
 export async function requestSupplierExtractionAction(id:string,expectedRevision?:string,force=false){

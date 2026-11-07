@@ -4,7 +4,7 @@ import {DynamoDBDocumentClient,GetCommand,PutCommand,UpdateCommand,TransactWrite
 import {S3Client,GetObjectCommand,PutObjectCommand} from '@aws-sdk/client-s3';
 import {customObject,planSupplierMerge} from './merge';
 import {sha} from './sources';
-import {EXTRACTION_VERSION,type SourceIdentity,type ExtractionState,type ExtractionResult} from './types';
+import {EXTRACTION_VERSION,READABLE_EXTRACTION_VERSIONS,type SourceIdentity,type ExtractionState,type ExtractionResult} from './types';
 
 export interface ExtractionConfig {region:string;table:string;bucket:string;inventoryTable:string;historyTable:string}
 export interface ExtractionJob {pk:string;sk:'CURRENT';identity:SourceIdentity;revision:string;state:ExtractionState;createdAt:string;updatedAt:string;requestedBy:string;leaseUntil?:number;resultKey?:string;sources?:{key:string;mime:string;hash:string}[];error?:string;force?:boolean;appliedAt?:string}
@@ -43,8 +43,9 @@ export class ExtractionRepository {
   {ConditionCheck:{TableName:this.config.table,Key:extractionKey(job.identity.inventoryId),ConditionExpression:'revision=:r AND #s=:s',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':r':job.revision,':s':'PROCESSING'}}},
   {Put:{TableName:this.config.table,Item:{pk:'SOURCE#'+identityKey(job.identity),sk:EXTRACTION_VERSION+'#'+hash,resultKey,revision:job.revision}}}
  ]}));}
- async result(job:ExtractionJob){if(!job.resultKey)throw Error('読取結果がまだありません');const r=JSON.parse((await this.object(job.resultKey)).toString()) as ExtractionResult;if(identityKey(r.source.identity)!==identityKey(job.identity)||r.version!==EXTRACTION_VERSION)throw Error('資料版が一致しません');return r;}
+ async result(job:ExtractionJob){if(!job.resultKey)throw Error('読取結果がまだありません');const r=JSON.parse((await this.object(job.resultKey)).toString()) as ExtractionResult;if(identityKey(r.source.identity)!==identityKey(job.identity)||!READABLE_EXTRACTION_VERSIONS.includes(r.version))throw Error('資料版が一致しません');return r;}
  async apply(job:ExtractionJob,result:ExtractionResult,expectedUpdatedAt:string,by:string){
+  if(result.version!==EXTRACTION_VERSION)throw Error('資料の読取方式が更新されています。「抽出のみ再試行」で読み直してください。');
   const row=await this.inventory(job.identity.inventoryId);
   if(!row||row.updatedAt!==expectedUpdatedAt||!sourceIdentity(row)||identityKey(sourceIdentity(row)!)!==identityKey(job.identity))throw Error('商品情報が変更されています。読み直して確認してください。');
   if(!['REVIEW','PARTIAL'].includes(job.state))throw Error('この結果は既に確定済み、または処理中です');
