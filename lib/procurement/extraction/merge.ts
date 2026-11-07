@@ -23,7 +23,10 @@ export function planSupplierMerge(inventory:Record<string,unknown>,result:Extrac
   fields[field]={value,sourceKey,hash:result.source.hash};applied.push(field);
  }
  if(result.source.identity.provider==='RESTAGE'){
-  const dim=result.dimensions.filter(d=>d.disposition==='ACCEPT').map(d=>`${AXIS_LABELS[d.axis]}：${d.raw.trim()}${d.unit&&!/\b(?:mm|cm|m)\b/i.test(d.raw)?' '+d.unit:''}${d.condition?'（'+d.condition+'）':''}`);
+  const dim=result.dimensions.filter(d=>d.disposition==='ACCEPT').map(d=>{
+   const label=AXIS_LABELS[d.axis],raw=d.raw.trim().replace(new RegExp('^'+label+'\\s*[：:]?\\s*'),'');
+   return `${label}：${raw}${d.unit&&!/(?:mm|cm|m)(?![A-Za-z])/i.test(raw)?' '+d.unit:''}${d.condition?'（'+d.condition+'）':''}`;
+  });
   const defects=result.defects.filter(d=>d.disposition==='ACCEPT').map(d=>d.text);
   const remarks=(result.remarks||[]).filter(r=>r.disposition==='ACCEPT').map(r=>r.text);
   if(dim.length||defects.length||remarks.length){
