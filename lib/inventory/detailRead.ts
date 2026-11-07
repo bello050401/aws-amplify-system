@@ -2,7 +2,7 @@ import 'server-only';
 import {DynamoDBClient} from '@aws-sdk/client-dynamodb';
 import {DynamoDBDocumentClient, GetCommand} from '@aws-sdk/lib-dynamodb';
 import {directTableName} from '../amplify/directData';
-import {inventoryVerifiedReadSession} from './mutationSession';
+import {inventoryVerifiedReadSession} from "@/lib/inventory/mutationSession";
 
 let client: DynamoDBDocumentClient | undefined;
 

@@ -6,7 +6,7 @@ import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import type { MasterEntry } from "@/lib/inventory/masters";
 import { isEcListingVisible } from "@/lib/listing/ecEligibility";
 import { toListRow, type InventoryListRow } from "@/lib/inventory/queries";
-import {inventoryVerifiedReadSession} from './mutationSession';
+import {inventoryVerifiedReadSession} from "@/lib/inventory/mutationSession";
 import {inventoryDdb,inventoryTable} from './categoryPersistence';
 import {readEcEligibleRecords} from './ecEligibleRead';
 

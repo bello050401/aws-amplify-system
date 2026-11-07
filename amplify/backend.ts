@@ -274,7 +274,7 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   const inquiryQueue=new Queue(inquiryStack,'Jobs',{visibilityTimeout:Duration.seconds(1080),retentionPeriod:Duration.days(14),enforceSSL:true,deadLetterQueue:{queue:inquiryFailures,maxReceiveCount:20}});
   const inquiryWorker=new NodejsFunction(inquiryStack,'Worker',{entry:path.resolve('amplify/functions/inquiry-runtime/handler.ts'),handler:'handler',
     runtime:Runtime.NODEJS_22_X,timeout:Duration.seconds(180),memorySize:1024,logRetention:RetentionDays.ONE_MONTH,
-    bundling:{minify:true,sourceMap:false,esbuildArgs:{'--alias:server-only':path.resolve('amplify/functions/inquiry-runtime/server-only.ts'),'--alias:@/lib/amplify/dataClient':path.resolve('amplify/functions/inquiry-runtime/dataClient.ts')}},
+    bundling:{minify:true,sourceMap:false,esbuildArgs:{'--alias:server-only':path.resolve('amplify/functions/inquiry-runtime/server-only.ts'),'--alias:@/lib/amplify/dataClient':path.resolve('amplify/functions/inquiry-runtime/dataClient.ts'),'--alias:@/lib/inquiry/runtime/config':path.resolve('amplify/functions/inquiry-runtime/config.ts'),'--alias:@/lib/inventory/mutationSession':path.resolve('amplify/functions/inquiry-runtime/webBoundary.ts'),'--alias:@/lib/amplify/serverUtils':path.resolve('amplify/functions/inquiry-runtime/webBoundary.ts')}},
     environment:{INQUIRY_TABLE:inquiryTable.tableName,QUEUE_URL:inquiryQueue.queueUrl,
       CONVERSATION_TABLE_NAME:backend.data.resources.tables.Conversation.tableName,MESSAGE_TABLE_NAME:backend.data.resources.tables.Message.tableName,
       MESSAGING_ATTACHMENT_BUCKET:backend.storage.resources.bucket.bucketName,

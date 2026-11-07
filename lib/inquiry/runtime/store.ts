@@ -10,30 +10,13 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
-import outputs from "@/amplify_outputs.json";
+import { runtimeConfig } from "@/lib/inquiry/runtime/config";
+export { runtimeConfig } from "@/lib/inquiry/runtime/config";
+export type { RuntimeConfig } from "@/lib/inquiry/runtime/config";
 import { eventKey, nextDue, scopeKey, LEASE_MS } from "./policy";
 import type { LineWebhookEvent } from "@/lib/messaging/line/types";
 import type { processInquiryAndNotify } from "@/lib/inquiry/autoReply";
 
-export type RuntimeConfig = {
-  region: string;
-  table: string;
-  queueUrl: string;
-};
-export function runtimeConfig(): RuntimeConfig {
-  if (process.env.INQUIRY_TABLE && process.env.QUEUE_URL)
-    return {
-      region: process.env.AWS_REGION || "us-west-2",
-      table: process.env.INQUIRY_TABLE,
-      queueUrl: process.env.QUEUE_URL,
-    };
-  const c = (
-    outputs as unknown as { custom?: { inquiryRuntime?: RuntimeConfig } }
-  ).custom?.inquiryRuntime;
-  if (!c?.table || !c.queueUrl)
-    throw Error("問い合わせの受信処理が未設定です。");
-  return c;
-}
 const db = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region: "us-west-2" }),
   { marshallOptions: { removeUndefinedValues: true } },

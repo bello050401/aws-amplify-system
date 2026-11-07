@@ -6,7 +6,7 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { directTableName } from "@/lib/amplify/directData";
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
-import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
+import { getInventoryRole, getCurrentInventoryUserSub } from "@/lib/amplify/requireInventoryUser";
 import { getConversation, listMessages } from "@/lib/messaging/service";
 import { listReplyDrafts } from "@/lib/inquiry/draftStore";
 import { createAttachmentViewUrl } from "@/lib/messaging/attachmentStore";
@@ -188,6 +188,8 @@ export async function editInquiryDraft(
   await requireAccess();
   if (!/^CONV#[a-f0-9]{64}$/.test(pk) || !body.trim() || body.length > 10000)
     throw Error("返信案の内容を確認してください。");
+  const actor = await getCurrentInventoryUserSub();
+  if (!actor) throw Error("ログインし直してください。");
   const state = await stateFor(pk),
     detail = await readInquiryDetail(pk);
   const draft = detail?.drafts.find(
@@ -224,7 +226,7 @@ export async function editInquiryDraft(
               ":cid": state.conversationId,
               ":body": body.trim(),
               ":now": new Date().toISOString(),
-              ":who": "社員編集",
+              ":who": actor,
             },
           },
         },

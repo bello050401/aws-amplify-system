@@ -16,7 +16,7 @@ import { effectiveListThumbnailKey, normalizeImageRecord, resolveTopImage, type 
 import { resolveDisplayInventoryId } from "./inventoryId";
 import { evaluateQuery, createQuickSearchMatcher, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 import { searchInventoryFast, type FastSearchInput } from "./inventorySearchFast";
-import { inventoryVerifiedReadSession } from "./mutationSession";
+import { inventoryVerifiedReadSession } from "@/lib/inventory/mutationSession";
 import { readVerifiedInventoryDetail } from './detailRead';
 import {
   isE2EFixtureModeActive,
