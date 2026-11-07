@@ -33,10 +33,8 @@ const SINGLETON_ID = "singleton";
 export async function getAIReplySettings(): Promise<AIReplySettings> {
   const { data, errors } = await serverDataClient.models.AIReplySettings.get({ id: SINGLETON_ID }, inventoryAuthMode);
   if (errors) {
-    // 設定が読めないことを「既定値」と黙って言い換えない。ただしここで
-    // 例外にすると問い合わせ画面ごと落ちるため、警告を残して既定値で続ける。
-    console.warn("[aiReplySettings] 設定を読めませんでした。既定値で続行します。", errors.map((e) => e.message).join("; "));
-    return AI_REPLY_SETTINGS_DEFAULT;
+    // A failed read must not turn a disabled feature back on. The caller retries.
+    throw new Error("AI_REPLY_SETTINGS_UNAVAILABLE");
   }
   if (!data) return AI_REPLY_SETTINGS_DEFAULT;
   return {

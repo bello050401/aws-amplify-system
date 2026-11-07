@@ -9,7 +9,12 @@ export async function handler(
   event: SQSEvent | { action: "POLL" },
 ): Promise<SQSBatchResponse> {
   if ("action" in event && event.action === "POLL") {
-    await pollInquiryMail();
+    try { await pollInquiryMail(); }
+    catch (error) {
+      console.warn("INQUIRY_MAIL_RETRY", safeErrorCode(error));
+      // Lambda logs uncaught Error.message. Never pass provider/customer content.
+      throw Error("INQUIRY_MAIL_RETRY");
+    }
     return { batchItemFailures: [] };
   }
   if (!("Records" in event)) throw Error("INVALID_JOB");
@@ -41,10 +46,17 @@ export async function handler(
         );
         failures.push({ itemIdentifier: record.messageId });
       }
-    } catch {
+    } catch (error) {
       failures.push({ itemIdentifier: record.messageId });
-      console.warn("INQUIRY_RETRY");
+      console.warn("INQUIRY_RETRY", safeErrorCode(error));
     }
   }
   return { batchItemFailures: failures };
+}
+
+function safeErrorCode(error: unknown): string {
+  const name = error instanceof Error ? error.name : "";
+  return ["AccessDeniedException", "ValidationException", "ResourceNotFoundException",
+    "ConditionalCheckFailedException", "ThrottlingException", "TimeoutError"].includes(name)
+    ? name : "PROCESSING_FAILED";
 }

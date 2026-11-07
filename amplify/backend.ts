@@ -284,6 +284,11 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   inquiryQueue.grantSendMessages(inquiryWorker);
   for(const name of ['Inventory','InventoryCategory','Category','Location','StatusMaster','UnitMaster','CustomFieldDefinition','InventoryHistory','ChannelListing','BaseProductArchive','KnowledgeDocument','KnowledgeDocumentRevision','ReplyRule','AIReplySettings','ShippingRate','ZaicoSyncJob'])backend.data.resources.tables[name]?.grantReadData(inquiryWorker);
   for(const name of ['Conversation','Message','ReplyDraft','NotificationDelivery','LineNotifySettings','ExternalResearchCache','AIUsageLog','AIBudgetLedger','AIBudgetReservation','BaseOAuthToken','MercariOrderContext'])backend.data.resources.tables[name]?.grantReadWriteData(inquiryWorker);
+  // Amplify's imported tables do not advertise their GSIs to grantReadData.
+  // Reading a table and querying its indexes are separate IAM resources.
+  inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['dynamodb:Query'],resources:
+    ['Inventory','InventoryCategory','InventoryHistory','ChannelListing','KnowledgeDocument','KnowledgeDocumentRevision','ReplyRule','Conversation','Message','ReplyDraft','NotificationDelivery','AIUsageLog']
+      .map(name=>`${backend.data.resources.tables[name].tableArn}/index/*`)}));
   inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:['bello/line-channel-secret','bello/line-notify-bot','bello/gmail-oauth','bello/base-app-credentials'].map(name=>`arn:aws:secretsmanager:${inquiryStack.region}:${inquiryStack.account}:secret:${name}-??????`)}));
   inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject','s3:PutObject','s3:DeleteObject','s3:DeleteObjectVersion'],resources:[backend.storage.resources.bucket.arnForObjects('messaging/attachments/*')]}));
   inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['s3:ListBucketVersions'],resources:[backend.storage.resources.bucket.bucketArn],conditions:{StringLike:{'s3:prefix':['messaging/attachments/*']}}}));

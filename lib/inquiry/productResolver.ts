@@ -54,13 +54,13 @@ async function listingsFor(inventoryIds: string[]): Promise<Map<string, ChannelL
   const map = new Map<string, ChannelListingRow[]>();
   await Promise.all(
     inventoryIds.map(async (inventoryId) => {
-      const { data, errors } = await serverDataClient.models.ChannelListing.list({
-        filter: { inventoryId: { eq: inventoryId } },
-        limit: 20,
-        ...inventoryAuthMode,
-      });
-      if (errors) throw new Error(`出品情報の取得に失敗しました: ${errors.map((e) => e.message).join("; ")}`);
-      map.set(inventoryId, data as unknown as ChannelListingRow[]);
+      const data = await listAllPages<ChannelListingRow>(async (nextToken) => {
+        const page = await serverDataClient.models.ChannelListing.listChannelListingByInventoryId(
+          { inventoryId }, { limit: 100, nextToken, ...inventoryAuthMode },
+        );
+        return { ...page, data: page.data as unknown as ChannelListingRow[] };
+      }, { label: "出品情報" });
+      map.set(inventoryId, data);
     }),
   );
   return map;
@@ -76,13 +76,12 @@ async function findByListingSignals(signals: MatchSignals): Promise<ChannelListi
     const path = url.replace(/^https?:\/\//, "");
     conditions.push({ listingUrl: { contains: path } });
   }
-  const { data, errors } = await serverDataClient.models.ChannelListing.list({
-    filter: { or: conditions },
-    limit: 50,
-    ...inventoryAuthMode,
-  });
-  if (errors) throw new Error(`出品情報の検索に失敗しました: ${errors.map((e) => e.message).join("; ")}`);
-  return data as unknown as ChannelListingRow[];
+  return listAllPages<ChannelListingRow>(async (nextToken) => {
+    const page = await serverDataClient.models.ChannelListing.list({
+      filter: { or: conditions }, limit: 1000, nextToken, ...inventoryAuthMode,
+    });
+    return { ...page, data: page.data as unknown as ChannelListingRow[] };
+  }, { label: "出品情報の検索" });
 }
 
 interface InventoryRow {
@@ -556,9 +555,7 @@ export async function resolveProductFromInquiry(params: {
     })
     .filter((m) => m.confidence > 0);
 
-  // 同じ商品が在庫の都合で複数行に分かれているだけなら、候補が割れたとは
-  // 扱わない(2026-09-03 利用者指示)。判定の前にまとめる —— 後だと
-  // AMBIGUOUS が確定してしまい、人の確認待ちのまま止まる。
+  // 同じ内部在庫IDの重複だけをまとめる。分割在庫・同名商品は別候補を維持する。
   let resolution = decideResolution(mergeSameProduct(scored));
   let inventorySyncSuspected = false;
   const freshness = await getZaicoSyncFreshness();
