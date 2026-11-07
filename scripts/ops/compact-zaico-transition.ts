@@ -72,6 +72,17 @@ async function main(){
   const r=report(await scan());fs.writeFileSync(path.join(dir,`${mode}-${stamp}.json`),JSON.stringify(r,null,2));console.log(JSON.stringify(r));return;
  }
  if(!process.argv.includes('--readers-deployed'))throw Error('Deploy and verify all readers before migration');
+ if(process.argv.includes('--wait-for-window')){
+  const until=Date.now()+15*60_000;let loops=0;
+  for(;;){
+   const c=await store.get(CONTROL_ID),lease=await store.get(LEASE_ID);
+   if(c?.phase!=='ACTIVE')throw Error('Integration is not ACTIVE');
+   if(!c.work&&(c.nextRunAt??0)-Date.now()>180_000&&(!lease||lease.expiresAt<Date.now()))break;
+   if(Date.now()>until)throw Error('No safe migration window within 15 minutes');
+   if(loops++%6===0)console.log(JSON.stringify({waitingForSync:true,lastSuccessfulPullAt:c.lastSuccessfulPullAt}));
+   await new Promise(resolve=>setTimeout(resolve,5000));
+  }
+ }
  const owner='storage-'+randomUUID();if(!await store.acquire(owner))throw Error('Sync is running. Retry after it finishes.');
  try{
   const control=await store.get(CONTROL_ID);
@@ -90,17 +101,27 @@ async function main(){
   fs.writeFileSync(path.join(dir,`${mode}-${stamp}-backup.json`),JSON.stringify({bucket,key,sha256:sha(backup),baseline},null,2));
   const changes=rows.map(row=>({before:row,after:mode==='apply'?encode(row):decode(row)})).filter(c=>c.before.snapshotEncoding!==c.after.snapshotEncoding);
   let changed=0;
-  // Forty-nine records plus one lease assertion: each batch is atomic. CAS
-  // and unchanged versions prevent migration from overwriting concurrent edits.
-  for(let start=0;start<changes.length;start+=49*4){
+  // Serialize transactions: they all condition-check the same lease and must
+  // not contend with one another. Limit burst writes on the on-demand table.
+  // CAS and unchanged versions prevent overwriting concurrent business edits.
+  for(let start=0;start<changes.length;start+=25){
    if(Date.now()>deadline)throw Error('Migration paused before the next sync; mixed formats are safe. Re-run to finish.');
-   const groups=Array.from({length:4},(_,i)=>changes.slice(start+i*49,start+(i+1)*49)).filter(g=>g.length);
-   const outcomes=await Promise.allSettled(groups.map(batch=>db.send(new TransactWriteCommand({ClientRequestToken:randomUUID(),TransactItems:[{ConditionCheck:{TableName:table,Key:{id:LEASE_ID},ConditionExpression:'#o=:o AND expiresAt>:now',
+   const batch=changes.slice(start,start+25);
+   const request=new TransactWriteCommand({ClientRequestToken:randomUUID(),TransactItems:[{ConditionCheck:{TableName:table,Key:{id:LEASE_ID},ConditionExpression:'#o=:o AND expiresAt>:now',
     ExpressionAttributeNames:{'#o':'owner'},ExpressionAttributeValues:{':o':owner,':now':Date.now()+25_000}}},
-    ...batch.map(c=>({Put:{TableName:table,Item:c.after,ConditionExpression:'#v=:v',ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':c.before.version}}}))]}))));
-   for(const result of outcomes)if(result.status==='rejected')throw result.reason;
-   changed+=groups.reduce((n,g)=>n+g.length,0);
-   if(changed%490===0)console.log(JSON.stringify({mode,changed,total:changes.length}));
+    ...batch.map(c=>({Put:{TableName:table,Item:c.after,ConditionExpression:'#v=:v',ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':c.before.version}}}))]});
+   for(let retry=0;;retry++){
+    try{await db.send(request);break;}catch(e){
+     const reasons=(e as any).CancellationReasons as {Code?:string}[]|undefined;
+     const transient=(e as any).name==='TransactionCanceledException'&&reasons?.some(r=>['TransactionConflict','ThrottlingError','ProvisionedThroughputExceeded'].includes(r.Code??''))&&
+      reasons.every(r=>['None','TransactionConflict','ThrottlingError','ProvisionedThroughputExceeded'].includes(r.Code??'None'));
+     if(!transient||retry>=3||Date.now()+2000>deadline)throw e;
+     await new Promise(resolve=>setTimeout(resolve,400*2**retry));
+    }
+   }
+   changed+=batch.length;
+   if(changed%500===0)console.log(JSON.stringify({mode,changed,total:changes.length}));
+   await new Promise(resolve=>setTimeout(resolve,150));
   }
   const after=await scan(),verified=report(after);assert.equal(verified.logicalHash,baseline.logicalHash,'No logical state may change');
   await store.assertLease(owner);
