@@ -11,7 +11,7 @@ import {outboundThumbnailFields} from './productThumbnail';
 import {DEFAULT_OUTBOUND_COLUMNS,parseJsonField,type OutboundDestination,type OutboundBatch,type OutboundRow,type OutboundProduct,type OutboundSelection} from './types';
 import {KAWAGOE_TEMPLATE,kawagoeAttachments,orderNumber,validateArrivalDate,validateBarcode,validateMovementQuantity} from './kawagoe';
 import {assertOutboundEmailReady,sendOutboundEmail,isDefiniteEmailFailure} from './email';
-import {splitInventoryRecord,remainingCustomFields,dispatchedCustomFields} from './splitInventory';
+import {splitInventoryRecord,remainingInventoryFields,dispatchedCustomFields} from './splitInventory';
 import {nextSplitSku,prepareSplitPhotos,removeUnsentSplitPhotos} from './splitPhotos';
 import {preservesOutboundClassification} from './inventoryPolicy';
 import {arrivalStatus,isArrivalRow,type OutboundHistoryEntry} from './arrivalTypes';
@@ -237,9 +237,10 @@ export async function confirmOutboundSent(batchId:string,actor:string):Promise<O
         if(item.snapshot.quantity>=Number(row.quantity))throw Error('分割する在庫数が変わっています。');
         if(!item.splitPrepared)await prepareSplit(row,item);
         const child=splitInventoryRecord(row,item,batch,after,actor,now),remaining=Number(row.quantity)-item.snapshot.quantity;
+        const remainingFields=remainingInventoryFields(row,remaining);
         await sendOutboundTransaction(db,new TransactWriteCommand({TransactItems:[
           batchStateCheck(batchId,'APPLYING'),
-          {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'SET quantity=:qty, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who REMOVE outboundBatchId',ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND quantity=:available AND attribute_not_exists(deletedAt)',ExpressionAttributeValues:{':qty':remaining,':custom':remainingCustomFields(row,remaining),':now':now,':who':actor,':batch':batchId,':version':item.expectedUpdatedAt,':available':Number(row.quantity)}}},
+          {Update:{TableName:table('Inventory'),Key:{id:item.inventoryId},UpdateExpression:'SET quantity=:qty, #n=:name, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who REMOVE outboundBatchId',ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND quantity=:available AND attribute_not_exists(deletedAt)',ExpressionAttributeNames:{'#n':'name'},ExpressionAttributeValues:{':qty':remaining,':name':remainingFields.name,':custom':remainingFields.customFields,':now':now,':who':actor,':batch':batchId,':version':item.expectedUpdatedAt,':available':Number(row.quantity)}}},
           {Put:{TableName:table('Inventory'),Item:child,ConditionExpression:'attribute_not_exists(id)'}},
           ...categoryLinkChanges(child.id,[],after,now),
           {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent, sentAt=:now, sentBy=:who, #snapshot=:snapshot REMOVE #error',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error','#snapshot':'snapshot'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':now':now,':who':actor,':snapshot':JSON.stringify({...item.snapshot,classificationPreserved:preservesOutboundClassification(batch),movementCategoryRemoved:false})}}},

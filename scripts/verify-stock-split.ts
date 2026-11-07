@@ -46,3 +46,6 @@ test('別端末の同時分割は片方だけ成功',async()=>{const f=fixture()
 test('出庫中と到着待ちの在庫は分割しない',async()=>{for(const field of ['outboundBatchId','outboundArrivalBatchId']){const f=fixture();f.set({...f.source,[field]:'pending'});await assert.rejects(f.run(f.request,f.owner));assert.equal(f.state.transactions,0);}});
 test('処理IDを変更内容や実行者のすり替えに使えない',async()=>{const f=fixture();await f.run(f.request,f.owner);await assert.rejects(f.run({...f.request,damageNotes:'変更'},f.owner));await assert.rejects(f.run({...f.request,photos:[]},randomUUID()));assert.equal(f.stocks().length,2);});
 
+
+import {importedStockTitle,STOCK_TITLE_META} from '../lib/inventory/managedStockTitle';
+test('自動在庫接頭辞: 分割5→3+2と独立タイトルを同じ取引で保存',async()=>{const f=fixture(),title=importedStockTitle('【検品】椅子',5,'脚','RESTAGE');f.set({...f.source,name:title.name,customFields:JSON.stringify({[STOCK_TITLE_META]:title.metadata})});const result=await f.run({...f.request,sourceName:title.name,splitName:'【傷あり】別個体'},f.owner);assert.equal(f.get(result.sourceId).name,'【在庫3】【検品】椅子');assert.equal(f.get(result.splitId).name,'【在庫2】【傷あり】別個体');assert.equal(JSON.parse(f.get(result.splitId).customFields)[STOCK_TITLE_META].lastQuantity,2);});

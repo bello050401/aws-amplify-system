@@ -19,6 +19,7 @@ import type {StockSplitSaved} from '../ui/StockSplitScreen';
 import {MobileSoldOutError,type SoldOutSaved} from '../domain/soldOut';
 import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutInput';
 import type {CatalogDelta} from '../domain/catalogProtocol';
+import {singleFlight} from '../domain/singleFlight';
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
@@ -68,7 +69,7 @@ export async function configureMobileAuth(online: boolean): Promise<void> {
   if (!isWeb) cognitoUserPoolsTokenProvider.setKeyValueStorage(secureTokens);
 }
 
-async function authenticatedSession() {
+const authenticationFlight=singleFlight(async () => {
   if (!configured) throw new Error("ログインが必要です。");
   const [session, user] = await Promise.all([fetchAuthSession(), getCurrentUser()]);
   const accessToken = session.tokens?.accessToken;
@@ -78,16 +79,18 @@ async function authenticatedSession() {
   if (typeof username !== "string") throw new Error("ログインが必要です。");
   const cookie = isWeb ? undefined : nativeSessionCookies({ clientId: configured.auth.userPoolClientId, username, accessToken: accessToken.toString(), idToken: idToken.toString() });
   return { cookie, owner: user.userId };
-}
+});
+async function authenticatedSession(){return authenticationFlight.run();}
 
-export async function readMobileSession(): Promise<MobileSession> {
+const permissionFlight=singleFlight(async ():Promise<MobileSession> => {
   const session = await authenticatedSession();
   const value = await jsonRequest("/api/mobile/session", session.cookie) as MobileSession | null;
   if (!value || value.owner !== session.owner || !["ADMIN", "EDITOR", "VIEWER"].includes(value.role) || !isMobileFeatures(value.features)) {
     throw new Error("アカウントの利用権限を確認できませんでした。");
   }
   return { owner: value.owner, role: value.role, features: { ecListing: value.features.ecListing, sales: value.features.sales } };
-}
+});
+export async function readMobileSession(): Promise<MobileSession> {return permissionFlight.run();}
 
 function inventoryParams(input: InventorySearchInput): URLSearchParams {
   const params = new URLSearchParams();
@@ -146,7 +149,7 @@ export async function readInventoryThumbnails(ids: string[]): Promise<InventoryT
   return value.items;
 }
 
-export async function clearLocalSession(): Promise<void> { if (!isWeb) await secureTokens.clear(); }
+export async function clearLocalSession(): Promise<void> { authenticationFlight.clear();permissionFlight.clear();if (!isWeb) await secureTokens.clear(); }
 
 export function mobileWritesEnabled(): boolean { return configured?.writesEnabled === true; }
 

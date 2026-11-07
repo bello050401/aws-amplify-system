@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { inventoryCategoryIds } from './categories';
 import { InventorySaveError, InventoryMutationRejected } from './conditionalUpdate';
+import {managedStockTitleChange} from './managedStockTitle';
 
 export type InventoryTransaction = NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']>;
 
@@ -34,6 +35,7 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
   if(expectedUpdatedAt && (!current || current.updatedAt!==expectedUpdatedAt)) throw new InventorySaveError('CONFLICT');
   if(current?.listingPartition==='MERGED') throw new InventoryMutationRejected('MERGED');
   if(current?.outboundBatchId) throw new InventoryMutationRejected('OUTBOUND_RESERVED');
+  input=managedStockTitleChange(input,current);
   // Legacy adapter option remains compatible; every caller now allows shared codes.
   void _legacyOptions;
   validateBarcode(input.barcode);

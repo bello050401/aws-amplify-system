@@ -26,6 +26,7 @@ import {
 import { resolveRestageDefaults } from "@/lib/procurement/restageLedger";
 import { classifyItem } from "@/lib/procurement/restage";
 import { procurementLedgerDetails } from "@/lib/procurement/ledgerDetails";
+import {importedStockTitle} from '@/lib/inventory/managedStockTitle';
 import { defaultYahooPurchaseRange } from "@/lib/procurement/yahooRange";
 import { yahooPurchaseUnitPrice } from "@/lib/procurement/yahooAmounts";
 import {
@@ -432,9 +433,10 @@ export async function registerYahooProcurementAction(
       });
       uploadedKey = storageKey;
       const store = preview.storeInfo as YahooStore | null;
+      const stockTitle=importedStockTitle(lot.name,target.quantity,'点','YAHOO');
       await createInventory(
         {
-          name: lot.name,
+          name: stockTitle.name,
           quantity: target.quantity,
           unit: "点",
           purchasePrice: yahooPurchaseUnitPrice(target.itemTotal, target.shipping, target.quantity),
@@ -454,6 +456,7 @@ export async function registerYahooProcurementAction(
           adminMemo: `ヤフオク仕入れ / オークションID：${auctionId}\n商品合計（税込） ${target.itemTotal}円 / 送料配分 ${target.shipping}円${store ? "\nストア情報：" + store.url + "\n" + store.license : ""}`,
           customFields: {
             ...procurementLedgerDetails(lot.name).customFields,
+            __belloStockTitle:stockTitle.metadata,
             __yahooPurchaseImport: {
               auctionId,
               orderId: lot.orderId,

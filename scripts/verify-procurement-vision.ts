@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import {parseVisualReading,reconcileConditions,visualAsSheet,type VisualReading} from '../lib/procurement/extraction/vision';
+import {combineSelectedResults} from '../lib/procurement/extraction/bundle';
+import {reconcileReadings,type SheetReading} from '../lib/procurement/extraction/restageOcr';
+import {planSupplierMerge} from '../lib/procurement/extraction/merge';
+const region={x:.1,y:.1,width:.3,height:.1};
+const section=(text:string)=>({text,complete:true,region});
+const native:SheetReading={form:'GENERAL',multipleProducts:false,lotNumber:'100',measurement:'PRODUCT',unit:'mm',dimensions:section('W600 D650 H800'),remarks:section(''),condition:section('')};
+const visual:VisualReading={dimensions:'W600 D650 H800',dimensionsComplete:true,unit:'mm',measurement:'PRODUCT',multipleProducts:false,lotNumber:'100',remarks:'伸長時は幅180cm。脚を外して測定。\n右肘に傷あり、動作未確認。',remarksComplete:true,conditions:[{part:'右肘',text:'傷あり',region,uncertain:false}]};
+const identity={provider:'RESTAGE' as const,account:'test',externalId:'100',inventoryId:'test',date:'2026-11-06',row:'lot',lotNumber:'100'};
+const result=()=>reconcileReadings(identity,'https://real.next-restage.co.jp/test','hash',visualAsSheet(visual,native),visualAsSheet(visual,native));
+let count=0;function test(name:string,fn:()=>void){fn();count++;console.log('PASS '+name);}
+test('missing completeness and product count fail closed',()=>{const r=parseVisualReading(JSON.stringify({dimensions:'W600',remarks:'',conditions:[]}));assert.equal(r.multipleProducts,true);assert.equal(r.dimensionsComplete,false);assert.equal(r.remarksComplete,false);assert.equal(r.unit,null);});
+test('untrusted coordinate bounds rejected',()=>assert.throws(()=>parseVisualReading(JSON.stringify({...visual,conditions:[{part:'脚',text:'傷',uncertain:false,region:[.9,0,.5,1]}]}))));
+test('unknown units never inferred from values',()=>{assert.equal(visualAsSheet({...visual,unit:'cm'},native).unit,null);});
+test('agreement preserves exact long remarks and restrictions',()=>{const p=planSupplierMerge({note:'既存のスタッフメモ'},result(),'test');assert.ok(String(p.patch.note).includes(visual.remarks));assert.ok(String(p.patch.note).startsWith('既存のスタッフメモ'));});
+test('condition agreement preserves affirmative',()=>{const r=reconcileConditions(result(),visual,visual);assert.equal(r.defects[0].disposition,'ACCEPT');assert.equal(r.defects[0].text,'右肘：傷あり');});
+test('condition negation never accepted on disagreement',()=>{const b={...visual,conditions:[{...visual.conditions[0],text:'傷なし'}]};const r=reconcileConditions(result(),visual,b);assert.equal(r.defects[0].disposition,'REVIEW');assert.deepEqual(r.defects[0].alternatives,['右肘：傷なし']);});
+test('uncertain selected checkbox remains review',()=>{const b={...visual,conditions:[{...visual.conditions[0],uncertain:true}]};assert.equal(reconcileConditions(result(),visual,b).defects[0].disposition,'REVIEW');});
+test('same text at different places is not a duplicate',()=>{const b={...visual,conditions:[visual.conditions[0],{...visual.conditions[0],region:{...region,y:.7}}]};const r=reconcileConditions(result(),b,b);assert.equal(r.defects.length,2);assert.ok(r.defects.every(x=>x.disposition==='ACCEPT'));});
+test('another product cannot authorize conditions',()=>{const r=result();r.source.targetVerified=false;assert.equal(reconcileConditions(r,visual,visual).defects[0].disposition,'REVIEW');});
+test('two selected sheets retain evidence page and notes',()=>{const a=result(),b=result();b.source.hash='second';const r=combineSelectedResults([a,b]);assert.equal(r.source.blocks[0].page,1);assert.ok(r.source.blocks.some(x=>x.page===2));assert.equal(new Set(r.source.blocks.map(x=>x.id)).size,r.source.blocks.length);assert.equal(r.remarks?.length,2);});
+test('different products cannot be combined',()=>{const b=result();b.source.identity={...identity,externalId:'200'};assert.throws(()=>combineSelectedResults([result(),b]));});
+test('cross-page conflict holds only the conflicting dimension',()=>{const b=result();const width=b.dimensions.find(x=>x.axis==='width')!;width.mm=700;const r=combineSelectedResults([result(),b]);assert.ok(r.dimensions.filter(x=>x.axis==='width').every(x=>x.disposition==='REVIEW'));assert.ok(r.dimensions.filter(x=>x.axis==='height').every(x=>x.disposition==='ACCEPT'));});
+test('incomplete continuation prevents misleading merge',()=>{const b=result();b.source.complete=false;assert.deepEqual(planSupplierMerge({},combineSelectedResults([result(),b]),'test').patch,{});});
+console.log(count+' vision/bundle tests passed');

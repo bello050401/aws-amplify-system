@@ -7,6 +7,7 @@ import {DynamoDBDocumentClient,PutCommand,GetCommand,UpdateCommand,ScanCommand} 
 import {ExtractionRepository,type ExtractionJob} from '../lib/procurement/extraction/jobs';
 import {extractDimensions} from '../lib/procurement/extraction/dimensions';
 import {descriptionBlocks,sha} from '../lib/procurement/extraction/sources';
+import {registeredExtractionPage} from '../lib/procurement/extraction/reviewQueue';
 const name='bello-qa-supplier-extraction-'+Date.now(),region='us-west-2',client=new DynamoDBClient({region,maxAttempts:4,requestHandler:new NodeHttpHandler({httpsAgent:new Agent({keepAlive:false}),connectionTimeout:10000,requestTimeout:20000})}),db=DynamoDBDocumentClient.from(client,{marshallOptions:{removeUndefinedValues:true}});
 const tables=[name+'-imports',name+'-stock',name+'-history'];const created:string[]=[],checks:string[]=[];
 const output='artifacts/procurement-extraction-20261107/aws-transaction-tests.json';
@@ -31,6 +32,10 @@ async function main(){
   await seed();const queued=await repo.request(identity,'QA','r1');await assert.rejects(()=>repo.request(identity,'QA','r1'));await repo.claim(queued);await assert.rejects(()=>repo.claim(queued));await assert.rejects(()=>repo.request(identity,'QA',queued.revision));checks.push('duplicate enqueue/claim and in-flight restart prevented');
   await repo.finish(queued,{state:'FAILED',error:'QA'});const retry=await repo.request(identity,'QA',queued.revision);await assert.rejects(()=>repo.finish(queued,{state:'APPLIED'}));assert.equal((await currentJob())?.revision,retry.revision);checks.push('late completion cannot overwrite newer retry');
   await assert.rejects(()=>repo.cache(queued,'hash','old-key'));assert.equal(await repo.cached(identity,'hash'),undefined);await repo.claim(retry);await repo.cache(retry,'hash','new-key');assert.equal(await repo.cached(identity,'hash'),'new-key');checks.push('late source cache update rejected; current revision cache accepted');
+  await repo.cancel('test',retry.revision);await assert.rejects(()=>repo.finish(retry,{state:'APPLIED'}));await assert.rejects(()=>repo.cache(retry,'hash','late-key'));assert.equal((await currentJob())?.state,'EXCLUDED');assert.equal((await stock())?.width,undefined);checks.push('cancel rejects late completion and cache without stock changes');
+  await db.send(new PutCommand({TableName:tables[0],Item:{pk:'YAHOO_PURCHASE',sk:identity.externalId,status:'REGISTERED',inventoryId:'test'}}));
+  await db.send(new PutCommand({TableName:tables[0],Item:{pk:'YAHOO_PURCHASE',sk:'r9999999999',status:'EXCLUDED',inventoryId:'excluded'}}));
+  const page=await registeredExtractionPage(repo,'YAHOO','');assert.equal(page.rows.length,1);assert.equal(page.rows[0].id,'test');assert.equal(page.rows[0].job?.state,'EXCLUDED');checks.push('review queue lists registered stock only and attaches exact current job');
   console.log(JSON.stringify({checks:checks.length,passed:checks}));
  }finally{
   const removed:string[]=[],cleanupErrors:string[]=[];

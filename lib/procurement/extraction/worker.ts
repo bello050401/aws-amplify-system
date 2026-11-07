@@ -7,6 +7,7 @@ import {readRestageSheet} from './focusedOcr';
 import {ExtractionRepository,sourceIdentity,identityKey,type ExtractionJob} from './jobs';
 import {EXTRACTION_VERSION,type ExtractionResult} from './types';
 import {customObject} from './merge';
+import {combineSelectedResults} from './bundle';
 
 export async function createExtractionAfterImport(repo:ExtractionRepository,row:Record<string,unknown>){
  if(row.status!=='REGISTERED'||typeof row.inventoryId!=='string')return;
@@ -44,13 +45,20 @@ export async function processExtraction(repo:ExtractionRepository,job:Extraction
    // Multiple attachments may be continuations or different rows. Retain every
    // original, but do not infer their association or silently use the first.
    for(const doc of sheets.documents){const hash=sha(doc.bytes),key=prefix+hash+'/original.'+(doc.mime==='image/jpeg'?'jpg':'png');await repo.putObject(key,doc.bytes,doc.mime);sources.push({key,mime:doc.mime,hash});}
-   if(sheets.documents.length!==1){await repo.finish(job,{state:'REVIEW',sources,error:'出品表が複数あります。対象行と続きの関係を原資料で確認してください。'});return;}
-   const doc=sheets.documents[0],hash=sources[0].hash,cached=!job.force&&await repo.cached(job.identity,hash);
-   if(cached){result=JSON.parse((await repo.object(cached)).toString());if(result.source.hash!==hash||result.version!==EXTRACTION_VERSION||identityKey(result.source.identity)!==identityKey(job.identity))throw Error('CACHE_INVALID');}
-   else{
-    const read=await readRestageSheet(doc.bytes,job.identity,doc.url);result=read.result;
-    const evidenceKey=prefix+hash+'/'+job.revision+'-readings.json';await repo.putObject(evidenceKey,Buffer.from(JSON.stringify(read)),'application/json');
+   if(sheets.documents.length!==1&&!job.selectedSourceHashes){await repo.finish(job,{state:'REVIEW',sources,error:'出品表が複数あります。この商品に対応する資料を選んで読み取ってください。'});return;}
+   if(job.selectedSourceHashes?.some(h=>!sources.some(s=>s.hash===h)))throw Error('SOURCE_SELECTION_CHANGED');
+   const selected=sheets.documents.filter((_,i)=>!job.selectedSourceHashes||job.selectedSourceHashes.includes(sources[i].hash)),results:ExtractionResult[]=[];
+   for(const doc of selected){
+    const hash=sha(doc.bytes),cached=!job.force&&await repo.cached(job.identity,hash);let individual:ExtractionResult;
+    if(cached){individual=JSON.parse((await repo.object(cached)).toString());if(individual.source.hash!==hash||individual.version!==EXTRACTION_VERSION||identityKey(individual.source.identity)!==identityKey(job.identity))throw Error('CACHE_INVALID');}
+    else{
+     const read=await readRestageSheet(doc.bytes,job.identity,doc.url);individual=read.result;
+     const evidenceKey=prefix+hash+'/'+job.revision+'-readings.json';await repo.putObject(evidenceKey,Buffer.from(JSON.stringify(read)),'application/json');
+     const key=prefix+hash+'/'+job.revision+'-result.json';await repo.putObject(key,Buffer.from(JSON.stringify(individual)),'application/json');await repo.cache(job,hash,key);
+    }
+    results.push(individual);
    }
+   result=results.length===1?results[0]:combineSelectedResults(results);
   }
   const resultKey=prefix+result.source.hash+'/'+job.revision+'-result.json';await repo.putObject(resultKey,Buffer.from(JSON.stringify(result)),'application/json');
   await repo.cache(job,result.source.hash,resultKey);

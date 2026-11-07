@@ -1,6 +1,7 @@
 import { parse } from 'parse5';
 import { procurementPurchasePrice } from './pricing';
 import { procurementLedgerDetails } from './ledgerDetails';
+import {importedStockTitle} from '../inventory/managedStockTitle';
 
 export const RESTAGE_ORIGIN = 'https://real.next-restage.co.jp';
 export {completeRestageDraft,RESTAGE_ITEM_TYPES} from './restageDraft';
@@ -78,6 +79,7 @@ export function parseRestageLots(html:string,date:string) {
 }
 
 export function restageInventoryFields(lot:RestageLot){
-  return {name:lot.name,quantity:lot.quantity,unit:lot.unit,purchasePrice:lot.purchasePrice,transactionDate:lot.date,purchaseQuantity:lot.quantity,usedGoodsItemType:lot.itemType,transactionType:'買受',...procurementLedgerDetails(lot.name),counterpartyName:'リステージオークション',counterpartyAddress:'履歴あり',
+  const title=importedStockTitle(lot.name,lot.quantity,lot.unit,'RESTAGE'),ledger=procurementLedgerDetails(lot.name);
+  return {name:title.name,quantity:lot.quantity,unit:lot.unit,purchasePrice:lot.purchasePrice,transactionDate:lot.date,purchaseQuantity:lot.quantity,usedGoodsItemType:lot.itemType,transactionType:'買受',...ledger,customFields:{...ledger.customFields,__belloStockTitle:title.metadata},counterpartyName:'リステージオークション',counterpartyAddress:'履歴あり',
     adminMemo:`リステージ 商品ID:${lot.goodsId} 出品番号:${lot.lotNumber}\n開催日:${lot.date}／落札価格:${lot.hammerPrice}円／表示数量:${lot.sourceQuantity}\n購入単価:${lot.hammerPrice}×1.188${lot.isBundle?'÷'+lot.quantity:''}（1円未満四捨五入）`};
 }

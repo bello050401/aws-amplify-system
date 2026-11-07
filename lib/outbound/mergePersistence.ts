@@ -3,7 +3,8 @@ import {randomUUID} from 'node:crypto';
 import {GetCommand,ScanCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
 import {inventoryDdb as db,inventoryTable as table,categoryLinkChanges} from '@/lib/inventory/categoryPersistence';
 import {inventoryCategoryIds} from '@/lib/inventory/categories';
-import {remainingCustomFields} from './splitInventory';
+import {remainingInventoryFields} from './splitInventory';
+import {managedStockTitleChange} from '@/lib/inventory/managedStockTitle';
 import {matchesOutboundMerge,mergeQuantities,mergedSourceCustom,MERGED_PARTITION} from './mergeInventory';
 import {sendOutboundTransaction} from './transactionRetry';
 import type {OutboundBatch,OutboundRow} from './types';
@@ -28,16 +29,18 @@ export async function applyOutboundMerge(source:Record<string,unknown>,item:Outb
   const {remaining,before,after}=mergeQuantities(source,target,item.snapshot.quantity);
   const now=new Date(Math.max(Date.now(),Date.parse(String(target.updatedAt))+1,Date.parse(String(source.updatedAt))+1)).toISOString();
   const categories=inventoryCategoryIds(source),sourceChanges=remaining?{quantity:remaining}:{quantity:0,categoryIds:[],categoryId:null};
+  const sourceFields=remaining?remainingInventoryFields(source,remaining):managedStockTitleChange({...sourceChanges,name:source.name,customFields:mergedSourceCustom(source,sourceChanges,String(target.id),batch.id,now)},source);
+  const targetFields=remainingInventoryFields(target,after);
   const snapshot={...item.snapshot,mergedIntoInventoryId:target.id,mergedIntoSku:target.sku,mergeQuantityBefore:before,mergeQuantityAfter:after};
   try{await sendOutboundTransaction(db,new TransactWriteCommand({TransactItems:[
    {ConditionCheck:{TableName:table('OutboundBatch'),Key:{id:batch.id},ConditionExpression:'#s=:s',ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':s':'APPLYING'}}},
    {Update:{TableName:table('Inventory'),Key:{id:source.id},
-    UpdateExpression:'SET quantity=:q, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who'+(!remaining?', listingPartition=:merged, categoryIds=:cats':'')+' REMOVE outboundBatchId'+(!remaining?', categoryId':''),
+    UpdateExpression:'SET #n=:newName, quantity=:q, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who'+(!remaining?', listingPartition=:merged, categoryIds=:cats':'')+' REMOVE outboundBatchId'+(!remaining?', categoryId':''),
     ConditionExpression:'outboundBatchId=:batch AND updatedAt=:version AND quantity=:available AND attribute_not_exists(deletedAt)',
-    ExpressionAttributeValues:{':q':remaining,':custom':remaining?remainingCustomFields(source,remaining):mergedSourceCustom(source,sourceChanges,String(target.id),batch.id,now),':now':now,':who':actor,':batch':batch.id,':version':item.expectedUpdatedAt,':available':Number(source.quantity),...(!remaining?{':merged':MERGED_PARTITION,':cats':[]}:{})}}},
-   {Update:{TableName:table('Inventory'),Key:{id:target.id},UpdateExpression:'SET quantity=:q, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who',
+    ExpressionAttributeNames:{'#n':'name'},ExpressionAttributeValues:{':newName':sourceFields.name,':q':remaining,':custom':sourceFields.customFields,':now':now,':who':actor,':batch':batch.id,':version':item.expectedUpdatedAt,':available':Number(source.quantity),...(!remaining?{':merged':MERGED_PARTITION,':cats':[]}:{})}}},
+   {Update:{TableName:table('Inventory'),Key:{id:target.id},UpdateExpression:'SET #n=:newName, quantity=:q, customFields=:custom, updatedAt=:now, listUpdatedAt=:now, updatedBy=:who',
     ConditionExpression:'updatedAt=:version AND quantity=:before AND barcode=:barcode AND #n=:name AND locationId=:loc AND attribute_not_exists(deletedAt) AND attribute_not_exists(outboundBatchId) AND (attribute_not_exists(listingPartition) OR listingPartition<>:merged)',
-    ExpressionAttributeNames:{'#n':'name'},ExpressionAttributeValues:{':q':after,':custom':remainingCustomFields(target,after),':now':now,':who':actor,':version':target.updatedAt,':before':before,':barcode':source.barcode,':name':source.name,':loc':batch.locationId,':merged':MERGED_PARTITION}}},
+    ExpressionAttributeNames:{'#n':'name'},ExpressionAttributeValues:{':newName':targetFields.name,':q':after,':custom':targetFields.customFields,':now':now,':who':actor,':version':target.updatedAt,':before':before,':barcode':source.barcode,':name':source.name,':loc':batch.locationId,':merged':MERGED_PARTITION}}},
    ...(!remaining?categoryLinkChanges(String(source.id),categories,[],now):[]),
    {Update:{TableName:table('OutboundItem'),Key:{id:item.id},UpdateExpression:'SET #s=:sent,  #snapshot=:snapshot, sentAt=:now, sentBy=:who, updatedAt=:now REMOVE #error',ConditionExpression:'#s=:pending',ExpressionAttributeNames:{'#s':'status','#error':'error','#snapshot':'snapshot'},ExpressionAttributeValues:{':sent':'SENT',':pending':'PENDING',':snapshot':JSON.stringify(snapshot),':now':now,':who':actor}}},
    ...[source.id,target.id].map(inventoryId=>({Put:{TableName:table('InventoryHistory'),Item:{id:randomUUID(),inventoryId,changedAt:now,changedBy:actor,fieldName:'出庫・数量合算',oldValue:JSON.stringify({sourceQuantity:source.quantity,targetQuantity:before,sourceLocationId:source.locationId,sourceCategoryIds:categories}),newValue:JSON.stringify({batchId:batch.id,sourceInventoryId:source.id,mergedIntoInventoryId:target.id,movedQuantity:item.snapshot.quantity,remainingQuantity:remaining,targetQuantity:after,locationId:batch.locationId}),createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}})),

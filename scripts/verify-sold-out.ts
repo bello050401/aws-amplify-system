@@ -126,3 +126,6 @@ test('invalid shipping fails before any mutation; zero and unknown remain distin
  for(const shipping of [-1,1.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1]){const f=fixture();await assert.rejects(f.run({...f.request,saleShippingReceived:shipping},'actor'));assert.equal(f.state.transactions,0);}
  for(const shipping of [0,null]){const f=fixture(1);const r=await f.run({...f.request,saleShippingReceived:shipping},'actor');assert.equal(JSON.parse(f.get(r.soldId).customFields).__belloSale.shippingReceived,shipping);}
 });
+
+import {importedStockTitle,STOCK_TITLE_META} from '../lib/inventory/managedStockTitle';
+test('仕入れ管理接頭辞を売却5→3+2に反映し、社内メモと数量履歴を保持',async()=>{const f=fixture(5),title=importedStockTitle('【検品】椅子',5,'脚','RESTAGE');f.rows().set('Inventory/'+f.source.id,{...f.source,name:title.name,customFields:JSON.stringify({[STOCK_TITLE_META]:title.metadata})});const result=await f.run({...f.request,quantity:2,name:title.name},'actor');assert.equal(f.get(result.sourceId).name,'【在庫3】【検品】椅子');assert.equal(f.get(result.soldId).name,'【在庫2】【検品】椅子');const history=[...f.rows().values()].find((x:any)=>x.fieldName==='売却登録');assert.equal(JSON.parse(history.newValue).changes.name,f.get(result.soldId).name);assert.equal(JSON.parse(history.newValue).remainingName,f.get(result.sourceId).name);});

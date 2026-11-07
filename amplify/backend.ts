@@ -293,7 +293,12 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   backend.storage.resources.bucket.grantReadWrite(extractionWorker,'procurement-sources/*');
   extractionWorker.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[`${restageSecret.secretArn}-??????`]}));
   extractionWorker.addToRolePolicy(new PolicyStatement({actions:['textract:AnalyzeDocument'],resources:['*']}));
-  extractionWorker.addToRolePolicy(new PolicyStatement({actions:['bedrock:InvokeModel'],resources:[`arn:aws:bedrock:${procurementStack.region}::foundation-model/qwen.qwen3-vl-235b-a22b`]}));
+  extractionWorker.addToRolePolicy(new PolicyStatement({actions:['bedrock:InvokeModel'],resources:[
+    ...['moonshotai.kimi-k3.1','moonshotai.kimi-k3'].flatMap(model=>[
+      `arn:aws:bedrock:${procurementStack.region}:${procurementStack.account}:inference-profile/us.${model}`,
+      ...['us-west-2','us-east-1','us-east-2'].map(region=>`arn:aws:bedrock:${region}::foundation-model/${model}`),
+    ]),
+  ]}));
   // LATEST can skip requests while a new mapping starts polling. Replay the
   // retained stream instead; exact job revisions make repeated delivery safe.
   extractionWorker.addEventSource(new DynamoEventSource(procurementTable,{startingPosition:StartingPosition.TRIM_HORIZON,batchSize:1,retryAttempts:4,maxRecordAge:Duration.hours(24),onFailure:new SqsDlq(extractionFailures),filters:[
@@ -302,6 +307,8 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   ]}));
   const extractionRuntime=Role.fromRoleName(procurementStack,'ExtractionWebRole','BelloAmplifyStagingComputeRole');
   new ManagedPolicy(procurementStack,'ExtractionWebAccess',{roles:[extractionRuntime],statements:[
+    new PolicyStatement({actions:['dynamodb:Query'],resources:[procurementTable.tableArn]}),
+    new PolicyStatement({actions:['dynamodb:BatchGetItem'],resources:[procurementTable.tableArn,backend.data.resources.tables.Inventory.tableArn]}),
     new PolicyStatement({actions:['s3:GetObject','s3:PutObject'],resources:[backend.storage.resources.bucket.arnForObjects('procurement-sources/*')]}),
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[procurementTable.tableArn,backend.data.resources.tables.Inventory.tableArn,backend.data.resources.tables.InventoryHistory.tableArn]}),
   ]});

@@ -7,7 +7,7 @@ import {sha} from './sources';
 import {EXTRACTION_VERSION,READABLE_EXTRACTION_VERSIONS,type SourceIdentity,type ExtractionState,type ExtractionResult} from './types';
 
 export interface ExtractionConfig {region:string;table:string;bucket:string;inventoryTable:string;historyTable:string}
-export interface ExtractionJob {pk:string;sk:'CURRENT';identity:SourceIdentity;revision:string;state:ExtractionState;createdAt:string;updatedAt:string;requestedBy:string;leaseUntil?:number;resultKey?:string;sources?:{key:string;mime:string;hash:string}[];error?:string;force?:boolean;appliedAt?:string}
+export interface ExtractionJob {pk:string;sk:'CURRENT';identity:SourceIdentity;revision:string;state:ExtractionState;createdAt:string;updatedAt:string;requestedBy:string;leaseUntil?:number;resultKey?:string;sources?:{key:string;mime:string;hash:string}[];error?:string;force?:boolean;appliedAt?:string;selectedSourceHashes?:string[]}
 export function sourceIdentity(inventory:Record<string,unknown>):SourceIdentity|null{
  const c=customObject(inventory.customFields),r=customObject(c.__restageImport),y=customObject(c.__yahooPurchaseImport),id=String(inventory.id||'');
  if(c.__restageImport&&c.__yahooPurchaseImport)return null;
@@ -22,12 +22,16 @@ export class ExtractionRepository {
  constructor(readonly config:ExtractionConfig,db?:DynamoDBDocumentClient,s3?:S3Client){this.db=db||DynamoDBDocumentClient.from(new DynamoDBClient({region:config.region}),{marshallOptions:{removeUndefinedValues:true}});this.s3=s3||new S3Client({region:config.region});}
  async inventory(id:string){return(await this.db.send(new GetCommand({TableName:this.config.inventoryTable,Key:{id},ConsistentRead:true}))).Item;}
  async get(id:string){return(await this.db.send(new GetCommand({TableName:this.config.table,Key:extractionKey(id),ConsistentRead:true}))).Item as ExtractionJob|undefined;}
- async request(identity:SourceIdentity,by:string,expectedRevision?:string,force=false){
-  const now=new Date().toISOString(),job:ExtractionJob={...extractionKey(identity.inventoryId),sk:'CURRENT',identity,revision:randomUUID(),state:'QUEUED',createdAt:now,updatedAt:now,requestedBy:by,force};
+ async request(identity:SourceIdentity,by:string,expectedRevision?:string,force=false,selectedSourceHashes?:string[]){
+  if(selectedSourceHashes&&(!selectedSourceHashes.length||selectedSourceHashes.length>3||selectedSourceHashes.some(h=>!/^[a-f0-9]{64}$/.test(h))||new Set(selectedSourceHashes).size!==selectedSourceHashes.length))throw Error('資料の選択を確認してください');
+  const now=new Date().toISOString(),job:ExtractionJob={...extractionKey(identity.inventoryId),sk:'CURRENT',identity,revision:randomUUID(),state:'QUEUED',createdAt:now,updatedAt:now,requestedBy:by,force,selectedSourceHashes};
   await this.db.send(new PutCommand({TableName:this.config.table,Item:job,ConditionExpression:expectedRevision?'revision=:old AND (#s<>:processing OR leaseUntil<:now)':'attribute_not_exists(pk)',ExpressionAttributeNames:expectedRevision?{'#s':'state'}:undefined,ExpressionAttributeValues:expectedRevision?{':old':expectedRevision,':processing':'PROCESSING',':now':Date.now()}:undefined}));return job;
  }
  async claim(job:ExtractionJob){
   await this.db.send(new UpdateCommand({TableName:this.config.table,Key:extractionKey(job.identity.inventoryId),ConditionExpression:'revision=:r AND (#s=:queued OR (#s=:processing AND leaseUntil<:now))',UpdateExpression:'SET #s=:processing, leaseUntil=:until, updatedAt=:at',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':r':job.revision,':queued':'QUEUED',':processing':'PROCESSING',':now':Date.now(),':until':Date.now()+360000,':at':new Date().toISOString()}}));
+ }
+ async cancel(id:string,revision:string){
+  await this.db.send(new UpdateCommand({TableName:this.config.table,Key:extractionKey(id),ConditionExpression:'revision=:r AND (#s=:q OR #s=:p)',UpdateExpression:'SET #s=:x, revision=:next, updatedAt=:at, #e=:e REMOVE leaseUntil',ExpressionAttributeNames:{'#s':'state','#e':'error'},ExpressionAttributeValues:{':r':revision,':q':'QUEUED',':p':'PROCESSING',':x':'EXCLUDED',':next':randomUUID(),':at':new Date().toISOString(),':e':'抽出を停止しました。商品情報は変更していません。'}}));
  }
  async finish(job:ExtractionJob,fields:Partial<ExtractionJob>){
   const data={...fields,updatedAt:new Date().toISOString()},entries=Object.entries(data).filter(([,value])=>value!==undefined);

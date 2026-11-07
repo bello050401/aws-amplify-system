@@ -8,6 +8,7 @@ import { parseCustomFields, stringifyCustomFields } from './customFieldsCodecCor
 import { SoldOutError, validateSoldOut, type SoldOutRequest, type SoldOutResult } from './soldOutInput';
 import {saleTitle} from './salePricing';
 import {stockCountTitle} from './stockCountTitle';
+import {managedStockTitleChange,hasManagedStockTitle,managedTitleBase} from './managedStockTitle';
 import {paymentDate,type YahooPaymentPlan,type YahooStockReservation} from '../saleCandidates/yahooPaymentModel';
 
 type Row = Record<string, unknown>;
@@ -87,14 +88,14 @@ export function createSoldOutService(ports: SoldOutPorts) {
       return result;
     }
     const soldId = split ? randomUUID() : source.id;
-    const changes: Row = {name:saleTitle(stockCountTitle(request.name,request.quantity),request.pricing),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:payment?.waiting?null:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
+    const changes: Row = {name:saleTitle(hasManagedStockTitle(source)?managedTitleBase(request.name,source):stockCountTitle(request.name,request.quantity),request.pricing),quantity:request.quantity,categoryId:after[0],categoryIds:after,saleEndDate:payment?.waiting?null:request.saleEndDate,externalProductId:request.externalProductId.trim(),market:request.market,salePrice:request.salePrice,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
     if(request.saleCommission!==undefined)changes.saleCommission=request.saleCommission;
     const result: SoldOutResult = {sourceId:source.id,soldId,remainingQuantity:source.quantity-request.quantity,soldQuantity:request.quantity,updatedAt:now};
     let images: unknown[] = [];
     const writes: InventoryTransaction = [];
     // Version check also excludes a concurrent outbound reservation.
     const update = (values:Row) => {
-      const entries=Object.entries(values).filter(([,v])=>v!==undefined);
+      const entries=Object.entries(managedStockTitleChange(values,source)).filter(([,v])=>v!==undefined);
       writes.push({Update:{TableName:table('Inventory'),Key:{id:source.id},
         UpdateExpression:'SET '+entries.map((_,i)=>`#f${i} = :v${i}`).join(', '),
         ConditionExpression:'updatedAt = :version AND quantity = :quantity AND attribute_not_exists(outboundBatchId) AND attribute_not_exists(outboundArrivalBatchId)',
@@ -105,7 +106,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
       const sku = await ports.nextSku();
       // New S3 objects: deleting either stock page must never break the other's photos.
       images = await ports.copyPhotos(source, soldId);
-      const remainingName=stockCountTitle(source.name,result.remainingQuantity);
+      const remainingName=hasManagedStockTitle(source)?source.name:stockCountTitle(source.name,result.remainingQuantity);
       const remaining = {...(remainingName!==source.name?{name:remainingName}:{}),quantity:result.remainingQuantity,updatedAt:now,listUpdatedAt:now,updatedBy:actor};
       const remainingChanges={...remaining,...(settling?{categoryId:before[0],categoryIds:before}:{})};
       const remainingCustom=withHumanEdits(source,remainingChanges,sourceCustom,sourceCustom ?? undefined);
@@ -115,14 +116,14 @@ export function createSoldOutService(ports: SoldOutPorts) {
       const inherited: Row = {};
       for (const key of ['unit','statusId','locationId','note','barcode','purchasePrice',...ALL_EXTENDED_FIELDS.map(field=>field.key)]) if(source[key]!==undefined) inherited[key]=source[key];
       const custom = {...productCustomFields(sourceCustom),...saleCustom,__belloStockSplit:{sourceInventoryId:source.id,operation:'SOLD_OUT',mutationId:request.mutationId}};
-      writes.push({Put:{TableName:table('Inventory'),Item:{...inherited,...changes,id:soldId,sku,images,customFields:stringifyCustomFields(custom),sourceSystem:'BELLO',listingPartition:'ACTIVE',createdAt:now,createdBy:actor,__typename:'Inventory'},ConditionExpression:'attribute_not_exists(id)'}});
+      writes.push({Put:{TableName:table('Inventory'),Item:managedStockTitleChange({...inherited,...changes,id:soldId,sku,images,customFields:stringifyCustomFields(custom),sourceSystem:'BELLO',listingPartition:'ACTIVE',createdAt:now,createdBy:actor,__typename:'Inventory'},source),ConditionExpression:'attribute_not_exists(id)'}});
       writes.push(...persistence.categoryLinkChanges(soldId,[],after,now));
     } else {
       update({...changes,customFields:stringifyCustomFields({...withHumanEdits(source,changes,sourceCustom,sourceCustom ?? undefined),...saleCustom})});
       writes.push(...persistence.categoryLinkChanges(source.id,currentCategories,after,now));
     }
     const oldValue=JSON.stringify({quantity:source.quantity,name:source.name,categoryIds:before,saleEndDate:source.saleEndDate,externalProductId:source.externalProductId,market:source.market,salePrice:source.salePrice});
-    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes,...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{}),...(split?{remainingName:stockCountTitle(source.name,result.remainingQuantity)}:{})}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
+    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes:{...changes,name:managedStockTitleChange(changes,source).name},...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{}),...(split?{remainingName:hasManagedStockTitle(source)?managedStockTitleChange({quantity:result.remainingQuantity},source).name:stockCountTitle(source.name,result.remainingQuantity)}:{})}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
     writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:receiptId},ConditionExpression:'attribute_not_exists(id)'}});
     if(split) writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:`${receiptId}:SPLIT`,inventoryId:soldId,fieldName:'売却分を分割'}}});
     if(ports.saleCommit)writes.push(...ports.saleCommit(result,now));

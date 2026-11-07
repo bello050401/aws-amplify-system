@@ -4,6 +4,7 @@ import {fetchRestageAction,prepareRestageRunAction,registerRestageLotAction} fro
 import {completeRestageDraft} from '@/lib/procurement/restageDraft';
 import {restageLedger} from '@/lib/procurement/restageTotals';
 import YahooProcurementPanel from './YahooProcurementPanel';
+import SupplierExtractionQueue from './SupplierExtractionQueue';
 import RestageReview,{rowProblem,type RestageRow as Row} from './RestageReview';
 const providers=['リステージオークション','トレファクライブネットオークション','ヤフーオークション'];
 function defaultDate(){const date=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Tokyo'}));date.setDate(date.getDate()-(date.getDay()+2)%7);return`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;}
@@ -42,6 +43,7 @@ export default function ProcurementPanel(){
   }
   async function registerPreview(){if(working.current||!run)return;working.current=true;stop.current=false;setBusy(true);setError('');try{await register(run,rows);}catch{setError('登録結果を確認できません。入力内容を保持しています。再試行してください。');}finally{working.current=false;setBusy(false);}}
   return <div className="space-y-6">
+    <SupplierExtractionQueue/>
     <div className="flex flex-wrap gap-3" role="group" aria-label="仕入れ先">{providers.map(name=><button key={name} disabled={busy} onClick={()=>setProvider(name)} aria-pressed={provider===name} className={`rounded-lg border px-4 py-3 font-medium ${provider===name?'border-blue-700 bg-blue-700 text-white':'border-gray-300 bg-white'} disabled:opacity-50`}>{name}</button>)}</div>
     {provider===providers[2]?<YahooProcurementPanel/>:provider!==providers[0]?<section className="space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-6"><p>{provider}の取り込みは準備中です。</p><p>購入単価：落札金額 × 1.21（1円未満四捨五入）。</p></section>:<>
       <section className="space-y-4 rounded-xl border border-gray-200 bg-white p-5"><div className="flex flex-wrap items-end gap-4"><label className="flex flex-col gap-2 font-medium">オークション開催日<input type="date" value={date} max={new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'})} disabled={busy} onChange={e=>{setDate(e.target.value);setRows([]);setRun('');setMessage('');setError('');setParseErrors([]);}} className="min-h-12 rounded-lg border border-gray-300 px-3"/></label><button disabled={busy||!date} onClick={fetchLots} className="min-h-12 rounded-lg bg-blue-700 px-8 font-bold text-white disabled:opacity-50">{busy?'処理中…':'取得'}</button>{busy&&<button onClick={()=>{stop.current=true;setMessage('処理中の商品が完了したら中断します。');}} className="min-h-12 rounded-lg border px-4">中断する</button>}</div>
