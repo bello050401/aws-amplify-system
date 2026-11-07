@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {DynamoDBDocumentClient,GetCommand,PutCommand,ScanCommand,UpdateCommand,DeleteCommand,type ScanCommandOutput} from '@aws-sdk/lib-dynamodb';
 import type {Row} from './mapping';
+import {decodeTransitionRecord,encodeTransitionRecord} from './recordEncoding';
 export const CONTROL_ID='transition#control';
 export const ITEM_PREFIX='transition#item#';
 export const LEASE_ID='transition#lease';
@@ -10,24 +11,29 @@ export interface Control extends Row{
   initialRunId:string; initialCompletedAt?:string; lastSuccessfulPullAt?:string;
   lastFullReconciliationAt?:string; nextRunAt?:number;
 }
-export function transitionStore(db:DynamoDBDocumentClient,table:string){
+export interface TransitionReadMetrics {count:number;pages:number;readUnits:number;durationMs:number;compressedItems:number}
+export function transitionStore(db:DynamoDBDocumentClient,table:string,options:{compactItemPayloads?:boolean;onListRead?:(metrics:TransitionReadMetrics)=>void}={}){
   async function get(id:string):Promise<Row|undefined>{
-    return (await db.send(new GetCommand({TableName:table,Key:{id},ConsistentRead:true}))).Item;
+    const row=(await db.send(new GetCommand({TableName:table,Key:{id},ConsistentRead:true}))).Item;
+    return row?decodeTransitionRecord(row):undefined;
   }
   async function put(row:Row,expectedVersion?:string){
     const next={...row,version:randomUUID(),updatedAt:new Date().toISOString()};
-    await db.send(new PutCommand({TableName:table,Item:next,
+    await db.send(new PutCommand({TableName:table,Item:options.compactItemPayloads?encodeTransitionRecord(next):next,
       ConditionExpression:expectedVersion?'#v=:v':'attribute_not_exists(id)',
       ...(expectedVersion?{ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':expectedVersion}}:{})}));
     return next as Row;
   }
   async function list(){
-    const rows:Row[]=[];let cursor;
+    const rows:Row[]=[];let cursor;const started=Date.now();let pages=0,readUnits=0,compressedItems=0;
     do{
       const page:ScanCommandOutput=await db.send(new ScanCommand({TableName:table,FilterExpression:'begins_with(id,:p)',
-        ExpressionAttributeValues:{':p':ITEM_PREFIX},ExclusiveStartKey:cursor,ConsistentRead:true}));
-      rows.push(...page.Items??[]);cursor=page.LastEvaluatedKey;
+        ExpressionAttributeValues:{':p':ITEM_PREFIX},ExclusiveStartKey:cursor,ConsistentRead:true,
+        ...(options.onListRead?{ReturnConsumedCapacity:'TOTAL' as const}:{})}));
+      for(const row of page.Items??[]){if(row.snapshotEncoding)compressedItems++;rows.push(decodeTransitionRecord(row));}
+      pages++;readUnits+=page.ConsumedCapacity?.CapacityUnits??0;cursor=page.LastEvaluatedKey;
     }while(cursor);
+    options.onListRead?.({count:rows.length,pages,readUnits,durationMs:Date.now()-started,compressedItems});
     return rows;
   }
   async function acquire(owner:string){

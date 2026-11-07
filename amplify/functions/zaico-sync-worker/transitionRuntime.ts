@@ -33,14 +33,25 @@ async function all(model:string){
 export async function runConfiguredTransition():Promise<boolean>{
   const jobTable=process.env.ZAICO_TRANSITION_TABLE_NAME;
   if(!jobTable)return false;
-  const store=transitionStore(db,jobTable);
-  const first=await store.get(CONTROL_ID) as Control|undefined;
-  if(!first||first.phase==='DISABLED')return false;
+  let store=transitionStore(db,jobTable);
+  const candidate=await store.get(CONTROL_ID) as Control|undefined;
+  if(!candidate||candidate.phase==='DISABLED')return false;
   // STOPPED also claims the legacy path: no fallback calls after migration.
-  if(first.phase==='STOPPED')return true;
-  if(!first.work&&(first.nextRunAt??0)>Date.now())return true;
+  if(candidate.phase==='STOPPED')return true;
+  if(!candidate.work&&(candidate.nextRunAt??0)>Date.now())return true;
   const owner=randomUUID();
   if(!await store.acquire(owner))return true;
+  // Re-read under the same lease used by admin settings and storage migration.
+  // A previous invocation may have completed after the preliminary cheap read.
+  let refreshed:Control|undefined;
+  try{
+    refreshed=await store.get(CONTROL_ID) as Control|undefined;
+    if(!refreshed||!['BASELINING','ACTIVE','FINALIZING'].includes(refreshed.phase)||
+      (!refreshed.work&&(refreshed.nextRunAt??0)>Date.now())){await store.release(owner);return true;}
+  }catch(e){await store.release(owner);throw e;}
+  const first=refreshed;
+  store=transitionStore(db,jobTable,{compactItemPayloads:first.compactItemPayloads===true,
+    onListRead:metrics=>console.log('[zaico-state-read]',JSON.stringify(metrics))});
   const bucket=process.env.STORAGE_BUCKET_NAME!;
   const persistence=createInventoryPersistence(db,table);
   const legacy=createLambdaSyncPort();

@@ -8,6 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {DynamoDBClient} from '@aws-sdk/client-dynamodb';
 import {DynamoDBDocumentClient,ScanCommand,GetCommand,PutCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
 import {fromIni} from '@aws-sdk/credential-providers';
+import {decodeTransitionRecord} from '../../lib/zaico/transition/recordEncoding';
 import {dispatchedCustomFields} from '../../lib/outbound/splitInventory';
 const dir=path.resolve('artifacts/dispatch-name-scroll-20261029');
 const table=(model:string)=>model+'-j6up24p7lnczdmklzjdt3vrp4y-NONE';
@@ -55,7 +56,8 @@ async function main(){
   for(const c of p.changes){
    const row=(await db.send(new GetCommand({TableName:table('Inventory'),Key:{id:c.id},ConsistentRead:true}))).Item!;
    const state=(await db.send(new GetCommand({TableName:table('ZaicoTransitionRecord'),Key:{id:'transition#item#'+c.id},ConsistentRead:true}))).Item;
-   results.push({id:c.id,sku:c.sku,local:parse(row.customFields).outboundName===c.outboundName,zaico:state?.remoteBase?.['custom.outboundName']===c.outboundName,status:state?.status,masterUnchanged:['name','quantity','locationId','categoryIds'].every(key=>JSON.stringify(row[key])===JSON.stringify(c.before[key]))});
+   const decodedState=state?decodeTransitionRecord(state):undefined;
+   results.push({id:c.id,sku:c.sku,local:parse(row.customFields).outboundName===c.outboundName,zaico:decodedState?.remoteBase?.['custom.outboundName']===c.outboundName,status:state?.status,masterUnchanged:['name','quantity','locationId','categoryIds'].every(key=>JSON.stringify(row[key])===JSON.stringify(c.before[key]))});
   }fs.writeFileSync(path.join(dir,'backfill-verified.json'),JSON.stringify(results,null,2));console.log(JSON.stringify(results));
  }else throw Error('Use plan|apply|verify');
 }

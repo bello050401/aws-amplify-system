@@ -4,6 +4,7 @@ import {localFields,remoteFields,outgoingPatch,type Row,type Masters,RAW_VALUES}
 import type {V2Inventory} from '../lib/zaico/transition/v2Client';
 import type {Control} from '../lib/zaico/transition/store';
 import {sourceDatePatch} from '../lib/zaico/transition/sourceDates';
+import {encodeTransitionRecord,decodeTransitionRecord} from '../lib/zaico/transition/recordEncoding';
 const clone=<T>(v:T):T=>structuredClone(v);
 const remote=(id:number,title='ZAICOの商品'):V2Inventory=>({id,title,quantity:'3',unit:'個',category:'販売中,業者間',state:'良品',place:'川越',etc:'備考',code:'2026102100001',optional_attributes:{'⚫︎購入価格':'２００','⚫︎販売開始日':'45238'},deleted:false} as V2Inventory);
 export function harness(){
@@ -21,7 +22,9 @@ export function harness(){
     getControl:async()=>clone(control),saveControl:async(c)=>control=clone(c),
     states:async()=>clone([...states.values()]),saveState:async(s)=>{
       if(states.get(s.inventoryId)?.version!==s.version)throw Error('Stale sync-state version');
-      const saved:Row={...clone(s),version:String(++seq)};states.set(saved.inventoryId,saved);return clone(saved);
+      const next:Row={...clone(s),version:String(++seq)};
+      const saved=process.env.BELLO_TEST_COMPACT_TRANSITION==='1'?decodeTransitionRecord(encodeTransitionRecord(next)):next;
+      states.set(saved.inventoryId,saved);return clone(saved);
     },
     inventories:async()=>clone([...rows.values()]),inventory:async(id)=>clone(rows.get(id)),
     masters:async()=>masters,
