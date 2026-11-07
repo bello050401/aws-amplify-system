@@ -1,0 +1,48 @@
+import assert from 'node:assert/strict';
+import {extractDimensions} from '../lib/procurement/extraction/dimensions';
+import {descriptionBlocks,yahooDescription,restageSheetLinks,sha} from '../lib/procurement/extraction/sources';
+import {planSupplierMerge,META} from '../lib/procurement/extraction/merge';
+import {reconcileReadings,crossCheckRemarks,type SheetReading} from '../lib/procurement/extraction/restageOcr';
+import type {SourceDocument,SourceIdentity} from '../lib/procurement/extraction/types';
+const identity:SourceIdentity={provider:'YAHOO',account:'test',externalId:'r1234567890',inventoryId:'test-only',row:'auction'};
+const source=(html:string):SourceDocument=>({identity,url:'https://auctions.yahoo.co.jp/jp/auction/r1234567890',hash:sha(html),format:'yahoo-description-html-v1',acquiredAt:'2026-11-07T00:00:00Z',complete:true,targetVerified:true,blocks:descriptionBlocks(html),issues:[]});
+const parse=(html:string)=>extractDimensions(source(html));
+let passed=0;function test(name:string,fn:()=>void){try{fn();passed++;console.log('PASS '+name);}catch(e){console.error('FAIL '+name);throw e;}}
+const accepted=(html:string)=>parse(html).dimensions.filter(d=>d.disposition==='ACCEPT').map(d=>[d.axis,d.mm]);
+test('T07 table columns and explicit common unit',()=>assert.deepEqual(accepted('<table><tr><th>幅(mm)</th><th>奥行(mm)</th><th>高さ(mm)</th></tr><tr><td>600</td><td>650</td><td>800</td></tr></table>'),[['width',600],['depth',650],['height',800]]));
+test('T08 common terminal unit and packaging exclusion',()=>assert.deepEqual(accepted('商品W120×D60×H72cm／梱包160サイズ'),[['width',1200],['depth',600],['height',720]]));
+test('T09 shipping dimensions only = no product dimensions',()=>assert.equal(parse('梱包 幅120cm 奥行60cm 高さ72cm').state,'NO_DIMENSIONS'));
+test('T09 no dimensions never creates zero',()=>assert.deepEqual(parse('傷あり。寸法の記載はありません。').dimensions,[]));
+test('T10 retrieval failure is not no dimensions',()=>assert.equal(extractDimensions({...source(''),complete:false}).state,'FAILED'));
+test('T11 unlabeled order is held',()=>{const r=parse('60×65×80cm');assert.equal(r.dimensions.length,0);assert.ok(r.issues.length);});
+test('T11 explicitly labeled order',()=>assert.deepEqual(accepted('幅×奥行×高さ：60×65×80cm'),[['width',600],['depth',650],['height',800]]));
+test('T12 decimals and mixed units',()=>assert.deepEqual(accepted('幅 71.5cm 奥行760mm 高さ0.81m'),[['width',715],['depth',760],['height',810]]));
+test('T12 partial field only',()=>assert.deepEqual(accepted('幅600mm'),[['width',600]]));
+test('T12 no unit is held',()=>assert.equal(parse('W600 D650 H800').dimensions.every(d=>d.disposition==='REVIEW'),true));
+test('T13 range approximate and folded values held',()=>assert.equal(parse('約 幅60〜80cm 折りたたみ時高さ20cm').dimensions.every(d=>d.disposition==='REVIEW'),true));
+test('T14 multiple products are held',()=>assert.equal(parse('テーブル 幅120cm<br>椅子 幅45cm').dimensions.every(d=>d.disposition==='REVIEW'),true));
+test('T15 conflict width holds width alone',()=>assert.deepEqual(accepted('W650mm 幅680mm 高さ800mm'),[['height',800]]));
+test('T16 human fields retained',()=>{const r=planSupplierMerge({width:'71',note:'メモ',customFields:{__belloEditedFields:['depth']}},parse('W715mm D760mm H810mm'),'one');assert.equal(r.patch.width,undefined);assert.equal(r.patch.depth,undefined);assert.equal(r.patch.height,'81');assert.equal(r.patch.note,undefined);});
+const section=(text:string)=>({text,complete:true,region:{x:.1,y:.2,width:.8,height:.5}});
+const general:SheetReading={form:'GENERAL',multipleProducts:false,lotNumber:null,measurement:'PRODUCT',unit:null,dimensions:section('W715 D760 H810'),remarks:section('通常時：幅120cm、伸長時：幅180cm。\n天板を外した状態では高さ70cm。右脚に小傷、動作未確認。'),condition:section('欠品無し')};
+const rid={...identity,provider:'RESTAGE' as const,externalId:'181999',date:'2026-11-06',lotNumber:'1999',row:'lot'};
+const generalResult=()=>reconcileReadings(rid,'https://real.next-restage.co.jp/restage/common.action','hash',general,structuredClone(general));
+test('General form source unit confirmed mm -> BELLO cm',()=>{const r=generalResult();const p=planSupplierMerge({},r,'one');assert.equal(p.patch.depth,'76');assert.equal(p.patch.height,'81');});
+test('Long remarks are verbatim including complex sizes and negation',()=>{const r=generalResult();const p=planSupplierMerge({note:'スタッフの既存メモ'},r,'one');assert.ok(String(p.patch.note).includes(general.remarks.text));assert.ok(String(p.patch.note).startsWith('スタッフの既存メモ\n\n'));});
+test('T17 reapply does not duplicate remarks',()=>{const r=generalResult(),p=planSupplierMerge({note:'メモ'},r,'one'),again=planSupplierMerge({...p.patch,customFields:p.custom},r,'one');assert.equal(again.patch.note,undefined);});
+test('T16 edited auto note not overwritten',()=>{const r=generalResult(),p=planSupplierMerge({},r,'one'),again=planSupplierMerge({...p.patch,note:String(p.patch.note).replace('小傷','大傷'),customFields:p.custom},r,'one');assert.equal(again.patch.note,undefined);assert.ok(again.held.some(x=>x.startsWith('備考')));});
+test('T06 missing or incomplete source leaves prior data untouched',()=>{const r=generalResult();r.source.complete=false;assert.deepEqual(planSupplierMerge({width:'70',note:'メモ'},r,'one').patch,{});});
+test('T03 lot mismatch blocks ALL writes',()=>{const r=reconcileReadings(rid,'u','h',{...general,lotNumber:'9999'},general);assert.equal(r.source.targetVerified,false);assert.deepEqual(planSupplierMerge({},r,'one').patch,{});});
+test('T03 multiple product sheet blocks ALL writes',()=>{const r=reconcileReadings(rid,'u','h',{...general,multipleProducts:true},general);assert.deepEqual(planSupplierMerge({},r,'one').patch,{});});
+test('Chair stacked dimensions never become product dimensions',()=>{const c={...general,form:'CHAIR' as const,unit:'mm' as const,measurement:'STACKED' as const,remarks:section(''),condition:section('座面：ほつれ')};const r=reconcileReadings(rid,'u','h',c,c);assert.ok(r.dimensions.every(d=>d.disposition==='EXCLUDE'));assert.equal(planSupplierMerge({},r,'one').patch.width,undefined);});
+test('T02 read discrepancy holds only the disputed axis',()=>{const first={...general,remarks:section('')},second=structuredClone(first);second.dimensions.text='W715 D760 H870';const r=reconcileReadings(rid,'u','h',first,second);assert.deepEqual(r.dimensions.filter(d=>d.blockId==='dimensions'&&d.disposition==='ACCEPT').map(d=>d.axis),['width','depth']);assert.equal(r.dimensions.find(d=>d.axis==='height')?.disposition,'REVIEW');});
+
+test('Repeated same OCR error still requires independent corroboration',()=>{const wrong={...general,remarks:section('シワ、キズあり')},native={...general,remarks:section('汚れ、キズあり')};const r=crossCheckRemarks(reconcileReadings(rid,'u','h',wrong,wrong),native);assert.equal(r.remarks?.[0].disposition,'REVIEW');assert.ok(!String(planSupplierMerge({},r,'one').patch.note).includes('シワ'));});
+
+test('Staff-confirmed note protected on subsequent source revision',()=>{const r=generalResult(),p=planSupplierMerge({},r,'one');p.custom.__belloEditedFields=['note'];r.remarks![0].text='変更後の備考';const again=planSupplierMerge({...p.patch,customFields:p.custom},r,'one');assert.equal(again.patch.note,undefined);});
+test('T05 remarks disagreement cannot auto-publish false absence',()=>{const a={...general,remarks:section('右肘に傷あり')},b={...general,remarks:section('右肘に傷なし')};const r=reconcileReadings(rid,'u','h',a,b);assert.equal(r.remarks![0].disposition,'REVIEW');assert.ok(!String(planSupplierMerge({},r,'one').patch.note).includes('右肘に傷'));});
+test('T20 delivery rank never overwritten; SH only retained as evidence',()=>{const r=parse('W600mm SH430mm');const p=planSupplierMerge({deliverySize:'B'},r,'one');assert.equal(p.patch.deliverySize,undefined);assert.equal(p.patch.width,'60');assert.equal(p.patch.seatHeight,undefined);assert.ok(r.dimensions.some(d=>d.axis==='seatHeight'&&d.mm===430));});
+test('Exact Yahoo ID required and full body retained',()=>{const html='<script id="__NEXT_DATA__">'+JSON.stringify({p:{auctionId:identity.externalId,descriptionHtml:'<p>W600mm</p>',description:'truncated'}})+'</script>';assert.equal(yahooDescription(html,identity).blocks[0].text,'W600mm');assert.throws(()=>yahooDescription(html,{...identity,externalId:'wrong'}));});
+test('Restage exact ID/date attachment restriction',()=>{const html='<input id="choiceGoodsId" value="181999"><input id="choiceAuctionDate" value="2026/11/06"><img alt="出品票" src="./common.action?action=get_image&amp;imageKey=181999/1.png">';assert.equal(restageSheetLinks(html,rid).length,1);assert.throws(()=>restageSheetLinks(html,{...rid,externalId:'bad'}));});
+test('Unselected format is not accepted',()=>{const r=reconcileReadings(rid,'u','h',{...general,form:'UNKNOWN'},general);assert.equal(r.source.targetVerified,false);});
+console.log(`${passed} tests passed`);

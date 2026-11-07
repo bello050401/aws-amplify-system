@@ -172,6 +172,10 @@ export async function yahooPublicItem(id: string) {
     id,
   );
 }
+export async function yahooDescriptionHtml(id:string){
+  if(!auctionIdValid(id))throw Error('商品IDが不正です。');
+  return (await bytes(`https://auctions.yahoo.co.jp/jp/auction/${id}`,2*1024*1024)).toString('utf8');
+}
 export async function yahooStore(url: string) {
   if (!validYahooStore(url)) throw Error("ストア情報を確認できません。");
   return parseYahooStore((await bytes(url, 1024 * 1024)).toString("utf8"), url);

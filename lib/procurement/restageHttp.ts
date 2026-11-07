@@ -1,4 +1,6 @@
 import {RESTAGE_ORIGIN,parseRestageLots,validateImageUrl,type RestageLot,type RestageDraft} from './restage';
+import {restageSheetLinks} from './extraction/sources';
+import type {SourceIdentity} from './extraction/types';
 
 /** Read-only portal operations. Never accepts arbitrary actions, URLs or a browser session. */
 export class RestageHttp {
@@ -47,5 +49,14 @@ export class RestageHttp {
     const mime=bytes.subarray(0,3).equals(Buffer.from([255,216,255]))?'image/jpeg':bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'image/png':bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP'?'image/webp':null;
     if(!mime)throw Error('リステージの1枚目の写真を取得できません。再取得してください。');
     return {bytes,mime};
+  }
+  async sheets(identity:SourceIdentity){
+    if(identity.provider!=='RESTAGE'||!/^\d{1,12}$/.test(identity.externalId)||!/^\d{4}-\d{2}-\d{2}$/.test(identity.date||''))throw Error('リステージの商品ID・開催日を確認してください。');
+    const html=await this.html(await this.request('/restage/goodsdetail.action',{action:'',seniMotoGamen:'1',choiceGoodsId:identity.externalId,choiceAuctionDate:identity.date!.replaceAll('-','/')}));
+    const links=restageSheetLinks(html,identity);if(links.length>12)throw Error('出品票が多いため確認が必要です。');
+    const documents=[];
+    for(const link of links){const bytes=await this.bytes(await this.request(link.url),25*1024*1024);const mime=bytes.subarray(0,3).equals(Buffer.from([255,216,255]))?'image/jpeg':bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'image/png':null;
+      if(!mime)throw Error('出品票の画像を取得できません。');documents.push({...link,bytes,mime});}
+    return {html,documents};
   }
 }

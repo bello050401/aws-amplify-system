@@ -4,7 +4,12 @@ import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
 import { LogRetention, RetentionDays } from "aws-cdk-lib/aws-logs";
-import { AttributeType, BillingMode, Table, TableEncryption } from "aws-cdk-lib/aws-dynamodb";
+import { AttributeType, BillingMode, Table, TableEncryption, StreamViewType } from "aws-cdk-lib/aws-dynamodb";
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { Runtime, LayerVersion, StartingPosition, FilterCriteria } from 'aws-cdk-lib/aws-lambda';
+import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { Queue } from 'aws-cdk-lib/aws-sqs';
+import path from 'node:path';
 import { COMPACT_SEARCH_INDEX, COMPACT_SEARCH_FIELDS } from './compactSearchIndex';
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Effect, ManagedPolicy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
@@ -262,7 +267,7 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   const restageSecret = Secret.fromSecretNameV2(procurementStack, "RestageCredentials", "bello/restage-readonly-credentials");
   const procurementTable = new Table(procurementStack, "Imports", {
     partitionKey:{name:"pk",type:AttributeType.STRING},sortKey:{name:"sk",type:AttributeType.STRING},
-    billingMode:BillingMode.PAY_PER_REQUEST,removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecovery:true,timeToLiveAttribute:"ttl",
+    billingMode:BillingMode.PAY_PER_REQUEST,removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecovery:true,timeToLiveAttribute:"ttl",stream:StreamViewType.NEW_AND_OLD_IMAGES,
   });
   new ManagedPolicy(procurementStack,"RuntimeAccess",{
     roles:[Role.fromRoleName(procurementStack,"RuntimeRole","BelloAmplifyStagingComputeRole")],
@@ -270,6 +275,33 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
       new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem","dynamodb:Query"],resources:[procurementTable.tableArn]})],
   });
   backend.addOutput({custom:{procurement:{region:procurementStack.region,secretArn:restageSecret.secretArn,tableName:procurementTable.tableName}}});
+  // Source extraction is driven by completed imports / explicit requests. It
+  // never scans the inventory and cannot write stock during the dry-run release.
+  const extractionFailures=new Queue(procurementStack,'ExtractionFailures',{retentionPeriod:Duration.days(14),enforceSSL:true});
+  const extractionWorker=new NodejsFunction(procurementStack,'ExtractionWorker',{
+    entry:path.resolve('amplify/functions/procurement-extraction/handler.ts'),handler:'handler',runtime:Runtime.NODEJS_22_X,
+    timeout:Duration.seconds(300),memorySize:1536,reservedConcurrentExecutions:1,
+    bundling:{minify:true,externalModules:['sharp'],sourceMap:false},
+    layers:[LayerVersion.fromLayerVersionArn(procurementStack,'ExtractionSharp',`arn:aws:lambda:${procurementStack.region}:${procurementStack.account}:layer:bello-sharp-linux-x64:1`)],
+    logRetention:RetentionDays.ONE_MONTH,
+    environment:{IMPORT_TABLE:procurementTable.tableName,SOURCE_BUCKET:backend.storage.resources.bucket.bucketName,INVENTORY_TABLE:backend.data.resources.tables.Inventory.tableName,HISTORY_TABLE:backend.data.resources.tables.InventoryHistory.tableName,RESTAGE_SECRET:restageSecret.secretArn},
+  });
+  procurementTable.grantReadWriteData(extractionWorker);
+  backend.data.resources.tables.Inventory.grantReadData(extractionWorker);
+  backend.storage.resources.bucket.grantReadWrite(extractionWorker,'procurement-sources/*');
+  extractionWorker.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[`${restageSecret.secretArn}-??????`]}));
+  extractionWorker.addToRolePolicy(new PolicyStatement({actions:['textract:AnalyzeDocument'],resources:['*']}));
+  extractionWorker.addToRolePolicy(new PolicyStatement({actions:['bedrock:InvokeModel'],resources:[`arn:aws:bedrock:${procurementStack.region}::foundation-model/qwen.qwen3-vl-235b-a22b`]}));
+  extractionWorker.addEventSource(new DynamoEventSource(procurementTable,{startingPosition:StartingPosition.LATEST,batchSize:1,retryAttempts:4,maxRecordAge:Duration.hours(24),onFailure:new SqsDlq(extractionFailures),filters:[
+    FilterCriteria.filter({eventName:['INSERT','MODIFY'],dynamodb:{NewImage:{status:{S:['REGISTERED']}}}}),
+    FilterCriteria.filter({eventName:['INSERT','MODIFY'],dynamodb:{NewImage:{pk:{S:[{prefix:'EXTRACTION#'}]},sk:{S:['CURRENT']},state:{S:['QUEUED']}}}}),
+  ]}));
+  const extractionRuntime=Role.fromRoleName(procurementStack,'ExtractionWebRole','BelloAmplifyStagingComputeRole');
+  new ManagedPolicy(procurementStack,'ExtractionWebAccess',{roles:[extractionRuntime],statements:[
+    new PolicyStatement({actions:['s3:GetObject','s3:PutObject'],resources:[backend.storage.resources.bucket.arnForObjects('procurement-sources/*')]}),
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[procurementTable.tableArn,backend.data.resources.tables.Inventory.tableArn,backend.data.resources.tables.InventoryHistory.tableArn]}),
+  ]});
+  backend.addOutput({custom:{supplierExtraction:{region:procurementStack.region,table:procurementTable.tableName,bucket:backend.storage.resources.bucket.bucketName,inventoryTable:backend.data.resources.tables.Inventory.tableName,historyTable:backend.data.resources.tables.InventoryHistory.tableName,mode:'REVIEW_ONLY'}}});
 }
 
 // SKU counter table for amplify/functions/generate-sku. This is

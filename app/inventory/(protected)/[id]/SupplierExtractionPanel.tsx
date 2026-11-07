@@ -1,0 +1,50 @@
+'use client';
+import {useState} from 'react';
+import {useRouter} from 'next/navigation';
+import {getSupplierExtractionAction,requestSupplierExtractionAction,confirmSupplierExtractionAction} from '@/app/actions/supplierExtraction';
+import {AXIS_LABELS,FIELD_MAP,STATE_LABELS} from '@/lib/procurement/extraction/types';
+type Data=Awaited<ReturnType<typeof getSupplierExtractionAction>>;
+const button='rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 disabled:opacity-50';
+export default function SupplierExtractionPanel({inventoryId,canEdit}:{inventoryId:string;canEdit:boolean}){
+ const router=useRouter(),[open,setOpen]=useState(false),[data,setData]=useState<Data|null>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
+ const [values,setValues]=useState<Record<string,{accept:boolean;cm:string}>>({}),[remarks,setRemarks]=useState(''),[includeRemarks,setIncludeRemarks]=useState(false),[confirmed,setConfirmed]=useState(false);
+ const [pending,setPending]=useState<'save'|'exclude'|null>(null);
+ async function load(){setBusy(true);setMessage('');try{const r=await getSupplierExtractionAction(inventoryId);setData(r);setConfirmed(false);if(r.ok&&r.supported&&r.result){setValues(Object.fromEntries(r.result.dimensions.filter(d=>d.axis in FIELD_MAP).map(d=>[d.id,{accept:d.disposition==='ACCEPT',cm:d.mm===null?'':String(d.mm/10)}])));setRemarks((r.result.remarks||[]).map(r=>r.text).join('\n'));setIncludeRemarks(!!r.result.remarks?.length&&r.result.remarks.every(r=>r.disposition==='ACCEPT'));}if(!r.ok)setMessage(r.error);}catch{setMessage('結果を取得できませんでした。再読込してください。');}finally{setBusy(false);}}
+ async function start(force=false){if(!data?.ok||!data.supported)return;setBusy(true);try{const r=await requestSupplierExtractionAction(inventoryId,data.job?.revision,force);if(!r.ok){setMessage(r.error);return;}await load();setMessage('資料を読み取っています。他の作業を続けられます。しばらくして「結果を読み込む」で確認してください。');}catch{setMessage('開始結果を確認できません。再読込してください。');}finally{setBusy(false);}}
+ async function save(exclude=false){if(!data?.ok||!data.supported||!data.job)return;setPending(null);setBusy(true);setMessage('');try{const r=await confirmSupplierExtractionAction(inventoryId,data.job.revision,data.current.updatedAt,{exclude,dimensions:Object.entries(values).map(([id,v])=>({id,...v})),remarks,remarksAccepted:includeRemarks});if(!r.ok){setMessage(r.error);return;}await load();setMessage(exclude?'除外しました。商品情報は変更していません。':'確認した情報を反映しました。');router.refresh();}catch{setMessage('保存結果を確認できません。再読込して確認してください。');}finally{setBusy(false);}}
+ const ready=data?.ok&&data.supported?data:null,job=ready?.job,result=ready?.result;
+ const processing=job?.state==='QUEUED'||job?.state==='PROCESSING'&&Number(job.leaseUntil)>Date.now();
+ return <section className="mt-6 rounded-xl border border-slate-200 bg-white">
+  <button type="button" className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left" aria-expanded={open} onClick={()=>{setOpen(!open);if(!open&&!data)void load();}}><span><span className="block text-sm font-semibold text-slate-800">仕入先の出品表・寸法</span><span className="mt-1 block text-xs text-slate-500">原資料と照合し、確認した内容を取り込む</span></span><span aria-hidden>{open?'−':'＋'}</span></button>
+  {open&&<div className="space-y-5 border-t border-slate-100 p-5">
+   <p className="text-sm leading-relaxed text-slate-600">仕入先の記載として保存します。自社の実測・検品結果とは区別します。長い寸法の説明や特記事項は全文を備考へ残せます。</p>
+   {message&&<p role="status" className="whitespace-pre-wrap rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900">{message}</p>}
+   {busy&&<p role="status" className="text-sm text-slate-500">処理中です…</p>}
+   {job&&<div className="flex flex-wrap items-center gap-3"><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold">{STATE_LABELS[job.state]}</span><span className="text-xs text-slate-500">自動反映は検証中です。原資料を確認してから反映してください。</span></div>}
+   {job?.error&&<p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{job.error}</p>}
+   <div className="flex flex-wrap gap-2">
+    {canEdit&&!processing&&<button className={button} disabled={busy} onClick={()=>void start(false)}>{job?'抽出のみ再試行':'出品表・商品説明を取得'}</button>}
+    <button className={button} disabled={busy} onClick={()=>void load()}>結果を読み込む</button>
+    {canEdit&&job&&!processing&&<button className={button} disabled={busy} onClick={()=>void start(true)}>原資料を再読取</button>}
+   </div>
+   {!!job?.sources?.length&&<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+    <div className="space-y-3">{job.sources.map((s,i)=><div key={s.key} className="rounded-lg border border-slate-200 p-3"><a href={'/api/procurement/extraction/source?inventoryId='+encodeURIComponent(inventoryId)+'&index='+i} target="_blank" rel="noreferrer" className="text-sm font-medium text-blue-700">原資料 {i+1} を開く ↗</a>{s.mime.startsWith('image/')&&<img alt={'仕入先の出品表 '+(i+1)} src={'/api/procurement/extraction/source?inventoryId='+encodeURIComponent(inventoryId)+'&index='+i} className="mt-3 max-h-[650px] w-full object-contain"/>}</div>)}</div>
+    <div className="space-y-5">
+     {result?.source.unitPolicy&&<p className="text-xs leading-relaxed text-slate-500">サイズ欄はcmです。出品表の715mmは71.5cmに換算します。</p>}
+     {!!result?.issues.length&&<ul className="space-y-1 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{result.issues.map((v,i)=><li key={i}>{v}</li>)}</ul>}
+     {result&&<>
+      <div className="space-y-3"><h3 className="text-sm font-semibold">寸法の確認</h3>
+       {result.dimensions.filter(d=>d.axis in FIELD_MAP).map(d=><div key={d.id} className="rounded-lg border border-slate-200 p-3"><label className="flex items-center gap-3"><input type="checkbox" checked={values[d.id]?.accept||false} disabled={!canEdit||busy} onChange={e=>setValues({...values,[d.id]:{...values[d.id],accept:e.target.checked}})}/><span className="min-w-16 text-sm font-medium">{AXIS_LABELS[d.axis]}</span><input aria-label={AXIS_LABELS[d.axis]+' cm'} inputMode="decimal" className="w-28 rounded-md border border-slate-300 px-3 py-2 text-sm" value={values[d.id]?.cm||''} disabled={!canEdit||busy} onChange={e=>setValues({...values,[d.id]:{...values[d.id],cm:e.target.value}})}/><span className="text-sm">cm</span></label><p className="mt-2 text-xs text-slate-500">現在値：{ready?.current.fields[d.axis]||'未入力'} ／ 原文：{d.raw}</p>{d.reason&&<p className="mt-1 text-xs text-amber-800">{d.reason}</p>}</div>)}
+       {!result.dimensions.length&&<p className="text-sm text-slate-500">転記できる寸法候補がありません。原文をご確認ください。</p>}
+      </div>
+      {result.source.identity.provider==='RESTAGE'&&<div><label className="mb-2 flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={includeRemarks} disabled={!canEdit||busy} onChange={e=>setIncludeRemarks(e.target.checked)}/>備考・特記事項の全文を取り込む</label><textarea aria-label="備考・特記事項の原文" rows={9} maxLength={24000} className="w-full rounded-lg border border-slate-300 p-3 text-sm leading-relaxed" value={remarks} disabled={!canEdit||busy} onChange={e=>setRemarks(e.target.value)}/><p className="mt-2 text-xs text-slate-500">図中の傷や選択欄など、必要な内容も原資料を確認して追記できます。既存のスタッフメモは保持します。</p></div>}
+      <details className="rounded-lg bg-slate-50 p-3"><summary className="cursor-pointer text-sm">取得した原文・根拠を見る</summary><div className="mt-3 space-y-3">{result.source.blocks.map(b=><div key={b.id}><p className="text-xs font-semibold text-slate-500">{b.heading||b.id}</p><p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{b.text}</p></div>)}</div></details>
+      {!!ready?.plan?.held.length&&<p className="whitespace-pre-wrap text-sm text-amber-800">{ready.plan.held.join('\n')}</p>}
+      {result.source.identity.provider==='RESTAGE'&&<details className="rounded-lg border border-slate-200 p-3" open={job.state==='APPLIED'}><summary className="cursor-pointer text-sm font-medium">現在の在庫の備考</summary><p className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed">{ready?.current.note||'未入力'}</p></details>}
+      {canEdit&&['REVIEW','PARTIAL'].includes(job.state)&&<div className="space-y-3 border-t border-slate-200 pt-4"><label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-1" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>この商品と原資料を照合し、採用する寸法・備考を確認しました</label><div className="flex flex-wrap gap-2"><button disabled={busy||!confirmed||!result.source.targetVerified} className="rounded-lg bg-slate-800 px-5 py-3 text-sm font-semibold text-white disabled:opacity-40" onClick={()=>setPending('save')}>確認した内容を反映</button><button disabled={busy} className={button} onClick={()=>setPending('exclude')}>この結果を除外</button></div>{pending&&<div role="alertdialog" aria-label="反映内容の最終確認" className="rounded-lg border border-slate-300 bg-slate-50 p-4"><p className="mb-3 text-sm">{pending==='exclude'?'この読取結果を除外します。商品情報は変更しません。':'確認した寸法・備考を「'+ready?.current.name+'」へ反映しますか？'}</p><div className="flex gap-2"><button className={button} disabled={busy} onClick={()=>setPending(null)}>キャンセル</button><button className="rounded-lg bg-slate-800 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40" disabled={busy} onClick={()=>void save(pending==='exclude')}>確定する</button></div></div>}</div>}
+     </>}
+    </div>
+   </div>}
+  </div>}
+ </section>;
+}

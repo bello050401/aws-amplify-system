@@ -42,6 +42,8 @@ import { InventorySpeedProbeResult } from "./InventorySpeedProbeResult";
 import { productCustomFields } from "@/lib/inventory/humanEdits";
 import { signInventoryPreviews } from "@/lib/inventory/listImageUrls";
 import { InventoryPreviewUrls } from "../../InventoryPreviewUrls";
+import SupplierExtractionPanel from './SupplierExtractionPanel';
+import {sourceIdentity} from '@/lib/procurement/extraction/jobs';
 
 /** "60000" → "60,000円" — every price on this page (readable Japanese yen, not a bare number). */
 function formatYen(value: number | null): string {
@@ -370,6 +372,7 @@ export default async function InventoryDetailPage(
             <DetailSection title="古物台帳・仕入情報">
               <DetailInfoTable rows={usedGoodsLedgerRows} />
             </DetailSection>
+            {sourceIdentity(item as unknown as Record<string,unknown>)&&<SupplierExtractionPanel inventoryId={item.id} canEdit={canEditInventory(role)} />}
 
             <DetailSection title="管理情報">
               <DetailInfoTable rows={managementRows} />
