@@ -294,7 +294,9 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   extractionWorker.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[`${restageSecret.secretArn}-??????`]}));
   extractionWorker.addToRolePolicy(new PolicyStatement({actions:['textract:AnalyzeDocument'],resources:['*']}));
   extractionWorker.addToRolePolicy(new PolicyStatement({actions:['bedrock:InvokeModel'],resources:[`arn:aws:bedrock:${procurementStack.region}::foundation-model/qwen.qwen3-vl-235b-a22b`]}));
-  extractionWorker.addEventSource(new DynamoEventSource(procurementTable,{startingPosition:StartingPosition.LATEST,batchSize:1,retryAttempts:4,maxRecordAge:Duration.hours(24),onFailure:new SqsDlq(extractionFailures),filters:[
+  // LATEST can skip requests while a new mapping starts polling. Replay the
+  // retained stream instead; exact job revisions make repeated delivery safe.
+  extractionWorker.addEventSource(new DynamoEventSource(procurementTable,{startingPosition:StartingPosition.TRIM_HORIZON,batchSize:1,retryAttempts:4,maxRecordAge:Duration.hours(24),onFailure:new SqsDlq(extractionFailures),filters:[
     FilterCriteria.filter({eventName:['INSERT','MODIFY'],dynamodb:{NewImage:{status:{S:['REGISTERED']}}}}),
     FilterCriteria.filter({eventName:['INSERT','MODIFY'],dynamodb:{NewImage:{pk:{S:[{prefix:'EXTRACTION#'}]},sk:{S:['CURRENT']},state:{S:['QUEUED']}}}}),
   ]}));
