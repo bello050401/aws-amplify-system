@@ -52,7 +52,7 @@ export class ExtractionRepository {
   if(!plan.applied.length)throw Error(plan.held.join('\n')||'反映できる項目がありません。原資料を確認してください。');
   const at=new Date().toISOString();
   plan.custom.__belloEditedFields=[...new Set([...(Array.isArray(plan.custom.__belloEditedFields)?plan.custom.__belloEditedFields:[]),...plan.applied])];
-  const changes={...plan.patch,customFields:JSON.stringify(plan.custom),updatedAt:at,updatedBy:by},entries=Object.entries(changes);
+  const changes={...plan.patch,customFields:JSON.stringify(plan.custom),updatedAt:at,listUpdatedAt:at,updatedBy:by},entries=Object.entries(changes);
   const hasReview=plan.held.length>0||result.dimensions.some(d=>d.disposition==='REVIEW')||(result.remarks||[]).some(d=>d.disposition==='REVIEW')||result.defects.some(d=>d.disposition==='REVIEW');
   // Stock, job revision and the audit trail commit atomically. A delayed worker
   // or staff edit cannot roll back a newer value, and a retry cannot double apply.
