@@ -6,6 +6,7 @@ import {
   setInquiryMode,
   pollInquiryMailAction,
   editInquiryDraft,
+  checkInquiryDraftAction,
   chooseInquiryProduct,
   setInquiryProcessing,
   refreshInquiryPhoto,
@@ -15,12 +16,15 @@ import {
 import { RESULT_LABELS } from "@/lib/inquiry/runtime/labels";
 import { detectUnverifiedFulfillment } from "@/lib/inquiry/fulfillmentSafety";
 import { InquiryPhoto } from "./InquiryPhoto";
-import { copyInquiryText } from "@/lib/inquiry/copyText";
+import ReplyReviewPanel from './ReplyReviewPanel';
+import {REVIEW_REASONS,type ReviewReason} from '@/lib/inquiry/review';
+import { copyInquiryText, copyValidatedInquiryText } from "@/lib/inquiry/copyText";
 import { InventoryThumbnail } from "@/app/inventory/InventoryThumbnail";
 type Queue = Awaited<ReturnType<typeof readInquiryQueue>>;
 type Detail = Awaited<ReturnType<typeof readInquiryDetail>>;
 export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compact?:boolean }) {
   const request = useRef(0);
+  const [reviewReason,setReviewReason]=useState<ReviewReason>('文章表現');
   const [copied,setCopied]=useState('');
   async function copy(text:string,key:string){
     try{await copyInquiryText(text);setCopied(key);setError('');}
@@ -312,6 +316,11 @@ export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compa
                       </p>
                     )}
                     <div className="mt-3 flex flex-wrap gap-2">
+                      <label className="flex items-center gap-2 text-sm">確認・修正理由
+                        <select value={reviewReason} onChange={e=>setReviewReason(e.target.value as ReviewReason)} className="min-h-11 rounded-lg border bg-white px-2">
+                          {REVIEW_REASONS.map(r=><option key={r}>{r}</option>)}
+                        </select>
+                      </label>
                       {isAdmin&&queue?.settings.deliveryEnabled&&<button disabled={busy||draftText!==d.draftText||!!detail.delivery&&['QUEUED','SENDING','ACCEPTED','UNKNOWN'].includes(detail.delivery.status)} className="min-h-11 rounded-lg bg-teal-800 px-4 text-white disabled:opacity-50" onClick={async()=>{if(!window.confirm('表示中の会話・商品・返信内容を確認しましたか？このお客様に返信を送信します。'))return;setBusy(true);try{await sendInquiryDraftAction(selected,d.id,d.updatedAt);await open(selected);setNotice('送信前の最終確認を受け付けました。結果は再読み込みで確認できます。');}catch{setError('送信を予約できませんでした。最新の会話・返信案と接続を確認してください。');}finally{setBusy(false);}}}>内容を確認して送信</button>}
                       <button
                         disabled={busy || !draftText.trim()}
@@ -324,6 +333,7 @@ export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compa
                               d.id,
                               d.updatedAt,
                               draftText,
+                              reviewReason,
                             );
                             await open(selected);
                             await refresh();
@@ -343,8 +353,18 @@ export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compa
                       </button>
                       <button
                         className="min-h-11 rounded-lg border px-4 py-2"
-                        disabled={!draftText.trim()}
-                        onClick={()=>void copy(draftText,'draft')}
+                        disabled={busy || !draftText.trim()}
+                        onClick={async()=>{
+                          setBusy(true);setError('');
+                          try{
+                            await copyValidatedInquiryText(draftText,async()=>{
+                              const checked=await checkInquiryDraftAction(selected,d.id,d.updatedAt,draftText);
+                              if(checked.issues.length)throw Error(checked.issues.map(i=>i.message).join(' '));
+                            });
+                            setCopied('draft');
+                          }catch(err){setError(err instanceof Error?err.message:'最新情報を確認できませんでした。再読み込みしてください。');}
+                          finally{setBusy(false);}
+                        }}
                       >
                         {copied==='draft'?'コピーしました':compact?'返信案をコピー':'コピー'}
                       </button>
@@ -383,6 +403,7 @@ export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compa
                         </ul>
                       </div>
                     )}
+                    <ReplyReviewPanel evidence={d.evidence} text={draftText}/>
                     <details className="mt-3 text-sm">
                       <summary>商品・回答の根拠を確認</summary>
                       <div className="mt-3 space-y-3">

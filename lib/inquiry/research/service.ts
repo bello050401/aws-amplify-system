@@ -1,11 +1,12 @@
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { buildResearchCacheKey, isResearchCacheFresh } from "./cache";
-import { compareBySourcePriority, downgradeIfUncertain, evaluateModelEvidence, type ResearchProvider, type ResearchProviderResult, type ResearchQuery, type ResearchSourceDocument } from "./port";
+import { compareBySourcePriority, evaluateModelEvidence, type ResearchProvider, type ResearchProviderResult, type ResearchQuery, type ResearchSourceDocument } from "./port";
 import { htmlToText, sanitizeExternalText } from "./sanitize";
 import { escapeRegExp } from "../references";
 import type { ExternalResearchFact, ExternalSourceType } from "../types";
 import {publicResearchUrl,safeResearchGet} from './safeFetch';
+import {redactInquiryContacts} from '@/lib/messaging/contactPrivacy';
 import {VERIFIED_BRAND_HOSTS} from './officialDomains';
 
 /**
@@ -92,6 +93,7 @@ export function classifySource(url: string, knownBrandHosts: string[] = []): Ext
  * 限定し、内部アドレスは弾く。
  */
 export function createDirectUrlProvider(urls: string[]): ResearchProvider {
+  const memo=new Map<string,ResearchSourceDocument|null>();
   return {
     id: "direct-url",
     async fetchDocuments(query: ResearchQuery): Promise<ResearchProviderResult> {
@@ -99,7 +101,8 @@ export function createDirectUrlProvider(urls: string[]): ResearchProvider {
       if (targets.length === 0) return { status: "NOT_CONFIGURED", reason: "参照できるURLが問い合わせに含まれていません。" };
       const documents: ResearchSourceDocument[] = [];
       for (const url of targets) {
-        const doc = await fetchPage(url);
+        const doc = memo.has(url)?memo.get(url):await fetchPage(url);
+        memo.set(url,doc??null);
         if (doc) documents.push(doc);
       }
       if (documents.length === 0) return { status: "ERROR", reason: "URLからページを取得できませんでした。" };
@@ -116,7 +119,7 @@ export function createDirectUrlProvider(urls: string[]): ResearchProvider {
  * ループバック/リンクローカル/プライベートIPを除外する。
  */
 export function isFetchableExternalUrl(raw: string): boolean {
-  return publicResearchUrl(raw);
+  return publicResearchUrl(raw) && redactInquiryContacts(raw)===raw && !/[?&](?:token|code|email|address|signature|auth)=/i.test(raw);
 }
 
 export async function fetchPage(url: string): Promise<ResearchSourceDocument | null> {
@@ -162,6 +165,20 @@ export interface ResearchOutcome {
   searchCallCount: number;
 }
 
+export function selectResearchFact(field:string,documents:ResearchSourceDocument[],modelHints:string[],at:string):ExternalResearchFact{
+ const checked=documents.map(d=>({doc:d,model:evaluateModelEvidence(d.text,modelHints),value:extractFieldValue(d.text,field)}));
+ const sources=checked.map(r=>({url:r.doc.url,retrievedAt:at,modelMatched:r.model.certain}));
+ const matches=checked.filter(r=>r.model.certain&&r.value&&!r.doc.injectionDetected&&r.doc.sourceType!=='OTHER');
+ const values=new Set(matches.map(r=>r.value!.normalize('NFKC').replace(/\s/g,'')));
+ if(values.size>1)return {field,status:'CONFLICT',confidence:0,checkedSources:sources,retrievedAt:at};
+ const best=matches[0]??checked.find(r=>r.value);
+ if(!best)return {field,status:'NOT_FOUND',confidence:0,checkedSources:sources,retrievedAt:at};
+ const found=matches.includes(best);
+ return {field,status:found?'FOUND':'UNCERTAIN',confidence:found?0.8:0,
+  value:redactInquiryContacts(best.value??''),sourceTitle:best.doc.title,sourceUrl:best.doc.url,sourceType:best.doc.sourceType,
+  modelEvidence:best.model.matched.join(', '),excerpt:redactInquiryContacts(best.value??''),retrievedAt:at,checkedSources:sources};
+}
+
 /**
  * 不明な項目だけを調べる(§9.1 発動条件)。
  *
@@ -190,8 +207,10 @@ export async function researchMissingFacts(params: {
   const documentTexts: string[] = [];
   const unavailableReasons: string[] = [];
   let attempted = false;
+  if(params.fields.length>4)unavailableReasons.push('調査項目の上限（4項目）を超えた内容は社内確認が必要です。');
 
-  for (const field of params.fields) {
+  const deadline=Date.now()+60_000;
+  for (const field of params.fields.slice(0,4)) {
     const brandHints = params.brandHints ?? [];
     const queryText = [...brandHints, ...params.modelHints, field].filter(Boolean).join(" ");
     const cacheKey = buildResearchCacheKey({ inventoryId: params.inventoryId, field, queryText });
@@ -203,7 +222,10 @@ export async function researchMissingFacts(params: {
 
     let documents: ResearchSourceDocument[] = [];
     for (const provider of params.providers) {
-      const result = await provider.fetchDocuments({ field, queryText, modelHints: params.modelHints, brandHints });
+      if(Date.now()>=deadline){unavailableReasons.push('調査時間の上限に達しました。');break;}
+      let result:ResearchProviderResult;
+      try{result=await provider.fetchDocuments({ field, queryText, modelHints: params.modelHints, brandHints });}
+      catch{result={status:'ERROR',reason:'調査先の取得に失敗しました。'};}
       if (result.status === "OK") {
         attempted = true;
         documents = documents.concat(result.documents);
@@ -217,38 +239,17 @@ export async function researchMissingFacts(params: {
     }
 
     documents.sort(compareBySourcePriority);
-    const best = documents[0];
-    documentTexts.push(best.text);
-
-    const evidence = evaluateModelEvidence(best.text, params.modelHints);
-    const extracted = extractFieldValue(best.text, field);
-    let fact: ExternalResearchFact = extracted
-      ? {
-          field,
-          value: extracted,
-          status: "FOUND",
-          sourceTitle: best.title,
-          sourceUrl: best.url,
-          sourceType: best.sourceType,
-          confidence: best.sourceType === "MANUFACTURER" ? 0.8 : 0.6,
-          modelEvidence: evidence.matched.join(", "),
-        }
-      : { field, status: "NOT_FOUND", sourceTitle: best.title, sourceUrl: best.url, sourceType: best.sourceType, confidence: 0 };
-
-    // §9.4: 指示文が混ざっていたページは、内容そのものの信頼度も下げる。
-    if (best.injectionDetected && fact.status === "FOUND") {
-      fact = { ...fact, status: "UNCERTAIN", confidence: Math.min(fact.confidence, 0.3) };
-    }
-    fact = downgradeIfUncertain(fact, evidence.certain);
+    documentTexts.push(...documents.map(d=>d.text));
+    const fact=selectResearchFact(field,documents,params.modelHints,new Date().toISOString());
     facts.push(fact);
     await writeCache(cacheKey, fact);
   }
 
   return {
     attempted,
-    facts,
+    facts:[...facts,...params.fields.slice(4).map(field=>({field,status:'UNCERTAIN' as const,confidence:0}))],
     documentTexts,
-    unavailableReason: attempted ? null : unavailableReasons.length > 0 ? unavailableReasons.join(" / ") : null,
+    unavailableReason: unavailableReasons.length > 0 ? unavailableReasons.join(" / ") : null,
     searchCallCount: params.readSearchCallCount?.() ?? 0,
   };
 }
@@ -375,9 +376,12 @@ export function extractFromSpecTable(text: string, field: string): string | null
 async function readCache(cacheKey: string, field: string, now?: number): Promise<ExternalResearchFact | null> {
   try {
     const { data } = await serverDataClient.models.ExternalResearchCache.get({ cacheKey }, inventoryAuthMode);
-    if (!data) return null;
+    if (!data || !data.evidenceJson) return null;
+    const proof=JSON.parse(data.evidenceJson) as ExternalResearchFact;
+    if(!proof.retrievedAt || !proof.checkedSources?.length)return null;
     if (!isResearchCacheFresh(data.fetchedAt, field, now)) return null;
     return {
+      ...proof,
       field: data.field,
       value: data.value ?? undefined,
       status: data.status ?? "NOT_FOUND",
@@ -394,6 +398,7 @@ async function readCache(cacheKey: string, field: string, now?: number): Promise
 async function writeCache(cacheKey: string, fact: ExternalResearchFact): Promise<void> {
   const payload = {
     cacheKey,
+    evidenceJson: JSON.stringify(fact),
     field: fact.field,
     value: fact.value ?? null,
     status: fact.status,

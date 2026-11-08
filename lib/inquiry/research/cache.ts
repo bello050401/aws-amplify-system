@@ -31,14 +31,14 @@ export function researchTtlMs(field: string): number {
  * 全部外れる。在庫が特定できていない場合は、検索語そのものから作る。
  */
 export function buildResearchCacheKey(params: { inventoryId: string | null; field: string; queryText: string }): string {
-  const subject = params.inventoryId ? `inv:${params.inventoryId}` : `q:${normalize(params.queryText)}`;
-  return `${subject}|${normalize(params.field)}`;
+  const subject = params.inventoryId ? `inv:${params.inventoryId}` : 'unlinked';
+  return `v3|${subject}|${normalize(params.queryText)}|${normalize(params.field)}`;
 }
 
 export function isResearchCacheFresh(fetchedAtIso: string, field: string, now = Date.now()): boolean {
   const fetchedAt = Date.parse(fetchedAtIso);
   if (Number.isNaN(fetchedAt)) return false;
-  return now - fetchedAt < researchTtlMs(field);
+  return now >= fetchedAt && now - fetchedAt < researchTtlMs(field);
 }
 
 function normalize(value: string): string {

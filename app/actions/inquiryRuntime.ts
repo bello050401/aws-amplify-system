@@ -1,5 +1,10 @@
 "use server";
 import {redactInquiryContacts} from '@/lib/messaging/contactPrivacy';
+import {reviewCustomerDraft,REVIEW_REASONS,type ReviewReason} from '@/lib/inquiry/review';
+import {listShippingRates} from '@/lib/shipping/service';
+import {listActiveReplyRules} from '@/lib/inquiry/replyRuleStore';
+import {lookupBaseProduct} from '@/lib/inquiry/baseProductLookup';
+import type {ReplyEvidence} from '@/lib/inquiry/types';
 import {
   BatchGetCommand,
   QueryCommand,
@@ -255,6 +260,7 @@ export async function editInquiryDraft(
   draftId: string,
   updatedAt: string,
   body: string,
+  reason: ReviewReason='文章表現',
 ) {
   await requireAccess();
   body=redactInquiryContacts(body);
@@ -270,6 +276,14 @@ export async function editInquiryDraft(
   );
   if (!state || !draft)
     throw Error("問い合わせが更新されました。読み込み直して確認してください。");
+  if(!REVIEW_REASONS.includes(reason))throw Error('修正理由を選択してください。');
+  const evidence=draft.evidence;
+  if(!evidence)throw Error('根拠が未保存の返信案です。作り直してください。');
+  await checkEvidenceFreshness(evidence);
+  const review=reviewCustomerDraft(body,evidence,detail?.messages.filter(m=>m.direction==='OUTBOUND').map(m=>m.body)??[]);
+  review.feedback={disposition:body.trim()===draft.draftText?'ACCEPTED':'EDITED',reason,at:review.at,approvedForReuse:false};
+  const reviewHistory=[...(evidence.reviewHistory??[]),review.feedback].slice(-20);
+  const updatedEvidence={...evidence,review,reviewHistory};
   await inquiryDb.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -292,13 +306,14 @@ export async function editInquiryDraft(
             Key: { id: draft.id },
             ConditionExpression: "updatedAt=:old AND conversationId=:cid",
             UpdateExpression:
-              "SET draftText=:body,updatedAt=:now,updatedBy=:who",
+              "SET draftText=:body,updatedAt=:now,updatedBy=:who,sourceSummary=:evidence",
             ExpressionAttributeValues: {
               ":old": updatedAt,
               ":cid": state.conversationId,
               ":body": body.trim(),
               ":now": new Date().toISOString(),
               ":who": actor,
+              ":evidence": JSON.stringify(updatedEvidence),
             },
           },
         },
@@ -335,4 +350,38 @@ export async function chooseInquiryProduct(
     }),
   );
   await setInquiryMode(pk, "DRAFT");
+}
+
+// Reuse on save and copy. Never sends a customer message or changes product data.
+async function checkEvidenceFreshness(evidence:ReplyEvidence){
+  if(evidence.inventoryVersion){
+    const current=await getInventoryDetail(evidence.inventoryVersion.id);
+    if(!current||current.updatedAt!==evidence.inventoryVersion.updatedAt)throw Error('商品情報が更新されています。返信案を作り直してください。');
+  }
+  if(evidence.quote?.confirmed){
+    const rates=await listShippingRates();
+    if(Date.now()-Date.parse(evidence.quote.at)>30*60_000||evidence.quote.rates.some(r=>!rates.some(now=>now.id===r.id&&now.updatedAt===r.updatedAt&&now.version===r.version)))
+      throw Error('送料の情報が更新または期限切れです。返信案を作り直してください。');
+  }
+
+  if(evidence.appliedReplyRules?.length){
+    const rules=await listActiveReplyRules();
+    if(evidence.appliedReplyRules.some(old=>!rules.some(now=>now.id===old.id&&now.version===old.version)))throw Error('店舗ルールが変わりました。返信案を作り直してください。');
+  }
+  for(const product of evidence.baseProducts??[]){
+    if(product.price==null)continue;
+    const current=await lookupBaseProduct(product.baseItemId);
+    if(current.source!=='api'||current.price!==product.price)throw Error('現在の掲載価格を確認できないか、価格が変更されています。返信案を作り直してください。');
+  }
+}
+export async function checkInquiryDraftAction(pk:string,draftId:string,updatedAt:string,body:string){
+  await requireAccess();
+  if(!/^CONV#[a-f0-9]{64}$/.test(pk)||!body.trim()||body.length>10000)throw Error('返信案を確認してください。');
+  const state=await stateFor(pk),detail=await readInquiryDetail(pk);
+  const draft=detail?.drafts.find(d=>d.id===draftId&&d.updatedAt===updatedAt&&d.status!=='DISMISSED');
+  if(!state||!draft?.evidence||state.version!==state.processedVersion)throw Error('新しいメッセージまたは変更があります。読み込み直してください。');
+  await checkEvidenceFreshness(draft.evidence);
+  const latest=await stateFor(pk);
+  if(latest?.version!==state.version)throw Error('確認中に新着メッセージが届きました。読み込み直してください。');
+  return reviewCustomerDraft(body,draft.evidence,detail?.messages.filter(m=>m.direction==='OUTBOUND').map(m=>m.body)??[]);
 }

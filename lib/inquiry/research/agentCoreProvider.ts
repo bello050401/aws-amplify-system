@@ -1,5 +1,7 @@
 import "server-only";
 import { McpSession } from "./mcpClient";
+import {reserveResearchSearch} from '@/lib/ai/gateway/commonBudget';
+import {redactInquiryContacts} from '@/lib/messaging/contactPrivacy';
 import { classifySource, fetchPage, isFetchableExternalUrl } from "./service";
 import { allOfficialDomains } from "./officialDomains";
 import type { ResearchProvider, ResearchProviderResult, ResearchQuery, ResearchSourceDocument } from "./port";
@@ -60,6 +62,7 @@ export const WEB_SEARCH_QUERY_MAX_CHARS = 200;
 
 export function buildSearchQuery(brandHints: readonly string[], modelHints: readonly string[], field: string): string {
   const query = [...brandHints, ...modelHints, field].filter((v) => v && v.trim().length > 0).join(" ");
+  if(redactInquiryContacts(query)!==query||/https?:|order_|注文番号|お客様|配送先/.test(query))return '';
   return query.slice(0, WEB_SEARCH_QUERY_MAX_CHARS);
 }
 
@@ -83,6 +86,8 @@ function pickWebSearchTool(tools: { name: string }[]): string | null {
 export function createAgentCoreSearchProvider(options: AgentCoreProviderOptions): ResearchProvider {
   const session = new McpSession(options.gatewayUrl);
   const officialHosts = allOfficialDomains();
+  const deadline=Date.now()+45_000;
+  let calls=0,pages=0;
 
   return {
     id: "agentcore-web-search",
@@ -93,23 +98,30 @@ export function createAgentCoreSearchProvider(options: AgentCoreProviderOptions)
       }
 
       let toolName: string;
+      if(calls>=2||Date.now()>=deadline)return {status:'ERROR',reason:'外部調査の上限に達しました。'};
+      if(!await reserveResearchSearch())return {status:'ERROR',reason:'外部調査の料金・利用枠を確認できません。'};
+      let prepaid=true;
       try {
         const tools = await session.listTools();
         const picked = pickWebSearchTool(tools);
         if (!picked) return { status: "ERROR", reason: "GatewayにWebSearchツールが公開されていません。" };
         toolName = picked;
-      } catch (err) {
-        return { status: "ERROR", reason: `Gatewayへ接続できませんでした: ${err instanceof Error ? err.message : String(err)}` };
+      } catch {
+        return { status: "ERROR", reason: '調査サービスへ接続できませんでした。' };
       }
 
       const runSearch = async (scope: "official" | "broad"): Promise<AgentCoreSearchResult[]> => {
+        if(calls>=2||Date.now()>=deadline)throw Error('RESEARCH_LIMIT');
+        if(!prepaid&&!await reserveResearchSearch())throw Error('RESEARCH_BUDGET_UNAVAILABLE');
+        prepaid=false;
+        calls++;
+        options.onSearch?.({query:'',scope,resultCount:0});
         const args: Record<string, unknown> = { query: searchText, maxResults: SEARCH_MAX_RESULTS };
         if (scope === "official" && options.officialDomains.length > 0) {
           args.filters = { domainFilter: { include: options.officialDomains } };
         }
         const raw = await session.callTool(toolName, args);
         const results = parseWebSearchResults(raw);
-        options.onSearch?.({ query: searchText, scope, resultCount: results.length });
         return results;
       };
 
@@ -125,7 +137,7 @@ export function createAgentCoreSearchProvider(options: AgentCoreProviderOptions)
           results = await runSearch("broad");
         }
       } catch (err) {
-        return { status: "ERROR", reason: `Web検索に失敗しました: ${err instanceof Error ? err.message : String(err)}` };
+        return { status: "ERROR", reason: 'Web検索に失敗、または調査の時間・費用上限に達しました。' };
       }
 
       if (results.length === 0) {
@@ -141,6 +153,8 @@ export function createAgentCoreSearchProvider(options: AgentCoreProviderOptions)
 
       const documents: ResearchSourceDocument[] = [];
       for (const { result } of ranked.slice(0, MAX_PAGES_PER_FIELD)) {
+        if(pages>=4||Date.now()>=deadline)break;
+        pages++;
         const fetched = await fetchPage(result.url!);
         if (fetched) {
           // classifySourceに公式ドメイン一覧を渡した判定を優先する
@@ -148,12 +162,11 @@ export function createAgentCoreSearchProvider(options: AgentCoreProviderOptions)
           documents.push({ ...fetched, sourceType:classifySource(fetched.url,officialHosts), title: fetched.title || result.title || result.url! });
           continue;
         }
-        // ページを取得できない場合(PDF・JS依存・403等)は、検索が返した
-        // スニペットを使う。**一次情報ではない**ので、これも必ず
-        // sanitizeExternalTextを通す。
+        // ページを取得できない場合は未確認のままにする。
         // Search snippets are discovery hints, never evidence for a reply.
       }
 
+      if(!documents.length && ranked.length)return {status:'ERROR',reason:'検索結果は見つかりましたが、参照先の本文を取得できませんでした。検索結果の抜粋を根拠には採用していません。'};
       return { status: "OK", documents };
     },
   };

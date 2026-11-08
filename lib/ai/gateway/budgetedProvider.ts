@@ -34,7 +34,7 @@ export class BudgetedGatewayProvider implements AIGatewayProvider {
     return result;
   }
   generateText(task: AITask, system: string, user: string, policy: AIGeneratePolicy) {
-    // 月300円の共通予算はメッセージ返信専用。EC出品の商品名・説明文は
+    // 月1,000円の共通予算はメッセージ返信専用。EC出品の商品名・説明文は
     // ユーザーが有料利用を許可しているため、この予算枠では停止しない。
     if (task !== "CUSTOMER_REPLY_DRAFT") return this.inner.generateText(task, system, user, policy);
     return this.run(system, user, policy, undefined, p => this.inner.generateText(task, system, user, p));

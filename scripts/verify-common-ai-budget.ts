@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { reservePaidAttempt, settlePaidAttempt, readBudgetSummary, type BudgetConfig } from "../lib/ai/gateway/commonBudget";
+import { reservePaidAttempt, settlePaidAttempt, readBudgetSummary, MONTHLY_CAP_JPY, type BudgetConfig } from "../lib/ai/gateway/commonBudget";
 import type { LedgerDeps } from "../lib/ai/budget/ledgerClient";
 let checked = 0;
 function check(v: unknown) { assert.ok(v); checked++; }
@@ -35,22 +35,22 @@ async function main(){
  const broken={...ledger,ddb:{send:async()=>{throw new Error('offline')}} as any};
  check(!(await reservePaidAttempt(attempt,{...deps,ledger:broken})).allowed);
  check(!(await reservePaidAttempt(attempt,{...deps,config:{...config,pricing:[{...config.pricing[0],yenPerUsdUpperBound:0}]}})).allowed);
- const results=await Promise.all(Array.from({length:180},(_,i)=>reservePaidAttempt(attempt,{...deps,id:String(i)})));
- assert.equal(results.filter(r=>r.allowed).length,150);checked++;
- let sum=await readBudgetSummary(deps);check(sum.initialized && sum.remainingJPY===0 && sum.reservedJPY===300 && sum.callCount===150);
+ const results=await Promise.all(Array.from({length:530},(_,i)=>reservePaidAttempt(attempt,{...deps,id:String(i)})));
+ assert.equal(results.filter(r=>r.allowed).length,500);checked++;
+ let sum=await readBudgetSummary(deps);check(sum.initialized && sum.remainingJPY===0 && sum.reservedJPY===MONTHLY_CAP_JPY && sum.callCount===500);
  const accepted=results[0];assert(accepted.allowed);
  check(!(await reservePaidAttempt(attempt,{...deps,id:'0'})).allowed);
  check(!(await settlePaidAttempt(accepted.reservation,{inputTokens:10000,outputTokens:0},{ledger:broken})));
  check(await settlePaidAttempt(accepted.reservation,{inputTokens:10000,outputTokens:0},{ledger}));
  check(await settlePaidAttempt(accepted.reservation,{inputTokens:10000,outputTokens:0},{ledger})); // idempotent
- sum=await readBudgetSummary(deps);check(sum.initialized && sum.spentJPY===1 && sum.reservedJPY===298 && sum.remainingJPY===1);
+ sum=await readBudgetSummary(deps);check(sum.initialized && sum.spentJPY===1 && sum.reservedJPY===998 && sum.remainingJPY===1);
  check(!(await settlePaidAttempt(accepted.reservation,{inputTokens:NaN,outputTokens:0},{ledger})));
  // A timed out call is never settled/released; its two yen remain reserved.
  check(!(await reservePaidAttempt(attempt,deps)).allowed);
  check(!(await reservePaidAttempt(attempt,{...deps,now:new Date('2026-10-01')})).allowed);
  rows.clear();
- check(!(await reservePaidAttempt(attempt,{...deps,config:{...config,priorSpentJPY:299}})).allowed);
- check((await reservePaidAttempt(attempt,{...deps,config:{...config,priorSpentJPY:298}})).allowed);
+ check(!(await reservePaidAttempt(attempt,{...deps,config:{...config,priorSpentJPY:999}})).allowed);
+ check((await reservePaidAttempt(attempt,{...deps,config:{...config,priorSpentJPY:998}})).allowed);
  check(!(await reservePaidAttempt(attempt,{...deps,config:{...config,priorSpentJPY:0}})).allowed);
  console.log(`budget: ${checked} assertions passed (synthetic, no AWS/provider calls)`);
 }

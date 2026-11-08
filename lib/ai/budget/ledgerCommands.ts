@@ -9,7 +9,7 @@ import type {
 
 /**
  * Reused atomic reservation/settlement implementation from the existing BELLO budget candidate.
- * The C gateway uses integer 1/10000 JPY units and a fixed 300 JPY cap.
+ * The C gateway uses integer 1/10000 JPY units and a owner-approved monthly cap.
  * Each provider attempt gets a unique ID. Duplicate reservations never authorize another call.
  * Monthly baseline, spent, reserved, remaining and attempted-call count are updated atomically.
  * Ambiguous provider failures retain their reservation; only measured success is settled.

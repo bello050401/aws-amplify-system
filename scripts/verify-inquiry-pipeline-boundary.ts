@@ -137,6 +137,10 @@ function installBaseMock(overrides: Partial<MockImpl> = {}): MockState {
     listCategories: async () => [{ id: "cat-1", name: "チェア", parentId: null, sortOrder: 0 }],
     listStatuses: async () => [{ id: "status-1", code: "ON_SALE", label: "販売中", sortOrder: 0 }],
     lookupShippingRate: async () => ({ price: 8_000, surcharge: null }),
+    quoteInquiryShipping: async () => ({version:'2026-11-08.1',at:new Date().toISOString(),asOfDate:'2026-11-08',state:'SUCCESS',confirmed:true,
+      conditions:{origin:'埼玉県',destination:'東京都',area:null,service:'KAZAI',packages:['C'],quantity:1},
+      merchandiseYen:10000,carrierCostYen:8000,customerShippingYen:8000,regionalYen:0,optionsYen:0,discountYen:0,totalYen:18000,
+      rates:[],policy:{id:'test',version:'1',mode:'SEPARATE',approved:true},missing:[],reasons:[]}),
     listShippingRates: async () => [],
     listSearchableKnowledge: async () => [],
     listActiveReplyRules: async () => [],
@@ -311,6 +315,8 @@ async function testUngroundedDiscountIsRejectedUntilAttemptCap() {
  * ══════════════════════════════════════════════════════════════════ */
 async function testApprovedDiscountIsAllowed() {
   const state = installBaseMock({
+    listActiveReplyRules: async () => [{id:"discount-test",title:"銀行振込の提案",category:"DISCOUNT",instruction:"請求書・銀行振込",priority:1,enabled:true,version:1,channelScope:[],productCategoryScope:[],conditions:null}],
+    quoteInquiryShipping: async () => ({version:"2026-11-08.1",at:new Date().toISOString(),asOfDate:"2026-11-08",state:"SUCCESS",confirmed:true,conditions:{origin:"埼玉県",destination:"東京都",area:null,service:"KAZAI",packages:["C"],quantity:1},merchandiseYen:50000,carrierCostYen:8000,customerShippingYen:0,regionalYen:0,optionsYen:0,discountYen:0,totalYen:50000,rates:[],policy:{id:"test",version:"1",mode:"INCLUDED",approved:true},missing:[],reasons:[]}),
     resolveNegotiation: async () => ({
       evidence: {
         detected: true,
@@ -323,7 +329,8 @@ async function testApprovedDiscountIsAllowed() {
       },
       staffCard: { differenceFromRequestedYen: 1000 } as never,
       // 承認済み: negotiationServiceが値引き後価格を確定した状態を模す。
-      customerSafeFacts: [{ label: "お値引き後のご提示価格(確定値)", value: "46,128円" }],
+      customerSafeFacts: [],
+      proposal:{discountedUnitYen:46128,regionalUnitYen:0},
       customerQuestions: [],
       missing: [],
     }),

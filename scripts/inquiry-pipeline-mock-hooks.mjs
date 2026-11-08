@@ -96,6 +96,7 @@ const MOCK_MODULES = {
   "./baseProductLookup": { exportNames: ["lookupBaseProduct", "lookupBaseProducts"] },
   "./replyRuleStore": { exportNames: ["listActiveReplyRules"] },
   "./replyHistoryStore": { exportNames: ["retrieveHistoricalReplies"] },
+  "./quoteService": { exportNames: ["quoteInquiryShipping"] },
   "./research/service": {
     exportNames: ["getAgentCoreGatewayUrl", "getWebResearchAvailability", "createDirectUrlProvider", "researchMissingFacts"],
   },
@@ -129,7 +130,7 @@ export async function load(url, context, nextLoad) {
     if (!entry) throw new Error(`inquiry-pipeline-mock-hooks: unknown mock specifier ${specifier}`);
     return { format: "module", source: buildMockSource(specifier, entry), shortCircuit: true };
   }
-  return nextLoad(url, context);
+  return nextLoad(url, url.endsWith(".json") ? {...context, importAttributes: {type: "json"}} : context);
 }
 
 /**

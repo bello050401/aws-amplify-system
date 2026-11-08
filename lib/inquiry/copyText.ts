@@ -17,3 +17,16 @@ export async function copyInquiryText(text:string):Promise<void>{
     if(selection){selection.removeAllRanges();for(const range of ranges)selection.addRange(range);}
   }
 }
+
+/** Start ClipboardItem within the tap, before awaiting server validation (iOS Safari). */
+export async function copyValidatedInquiryText(text:string,validate:()=>Promise<void>):Promise<void>{
+  if(typeof ClipboardItem!=="undefined"&&navigator.clipboard?.write){
+    const verified=validate().then(()=>new Blob([text],{type:"text/plain"}));
+    // Observe rejection even if the browser rejects the clipboard call first.
+    void verified.catch(()=>{});
+    await navigator.clipboard.write([new ClipboardItem({"text/plain":verified})]);
+    return;
+  }
+  await validate();
+  await copyInquiryText(text);
+}

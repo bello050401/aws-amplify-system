@@ -4,7 +4,8 @@ import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { liveLedgerDeps, type LedgerDeps } from "../budget/ledgerClient";
 import { reserveBudget, settleReservation } from "../budget/ledgerCommands";
 
-export const MONTHLY_CAP_JPY = 300;
+// Owner-approved trial ceiling, 2026-11-08. No automatic increase to 3,000 JPY.
+export const MONTHLY_CAP_JPY = 1000;
 const UNITS = 10_000;
 export class PaidAIBudgetError extends Error {
   readonly code = "PAID_AI_BUDGET_REFUSED";
@@ -76,4 +77,19 @@ export async function readBudgetSummary(dependencies?: Pick<BudgetDependencies, 
   if (!result.Item) return { month, initialized: false as const };
   const row = result.Item;
   return { month, initialized: true as const, capJPY: row.cap / UNITS, spentJPY: row.spent / UNITS, reservedJPY: row.reserved / UNITS, remainingJPY: row.remaining / UNITS, callCount: row.callCount };
+}
+
+/** AgentCore search: official $7/1,000 queries, plus Gateway invocations.
+ * $0.008 is a conservative per-query bound; shares the customer-reply monthly cap.
+ * https://aws.amazon.com/bedrock/agentcore/pricing/ checked 2026-11-08.
+ * Expiry fails closed and requires a pricing review, never a second budget. */
+export async function reserveResearchSearch(dependencies?:BudgetDependencies):Promise<boolean>{
+ const now=dependencies?.now??new Date(),config=dependencies?.config??configFromEnvironment(),month=monthOf(now);
+ if(!config||config.baselineVerifiedMonth!==month||now.getTime()>=Date.parse('2026-11-30T15:00:00Z')||
+  !Number.isFinite(config.priorSpentJPY)||config.priorSpentJPY<0||config.priorSpentJPY>MONTHLY_CAP_JPY||!Array.isArray(config.pricing))return false;
+ const fx=config.pricing.filter(p=>Date.parse(p.validUntil)>now.getTime()&&positive(p.yenPerUsdUpperBound)).map(p=>p.yenPerUsdUpperBound);
+ if(!fx.length)return false;
+ const amount=Math.ceil(.008*Math.max(...fx)*UNITS);
+ try{return (await reserveBudget(dependencies?.ledger??liveLedgerDeps(),{id:dependencies?.id??randomUUID(),month,amount,cap:MONTHLY_CAP_JPY*UNITS,priorSpent:Math.ceil(config.priorSpentJPY*UNITS)})).ok;}catch{return false;}
+ // Keep the full bound reserved even on uncertain upstream results.
 }

@@ -80,12 +80,12 @@ const rateRecord: ShippingRateRecord = {
   taxIncluded: true,
   currency: "JPY",
   surcharge: null,
-  effectiveFrom: null,
+  effectiveFrom: "2026-01-01",
   effectiveTo: null,
-  sourceReference: null,
+  sourceReference: "synthetic verified tariff",
   acquiredAt: null,
-  verifiedAt: null,
-  status: null,
+  verifiedAt: "2026-01-01T00:00:00Z",
+  status: "VERIFIED",
   rawHash: null,
   importBatchId: null,
   version: 1,
@@ -197,7 +197,9 @@ async function main() {
 
   // ── ケース3: 両方確定(値引き後価格を提示できる) ─────────────────
   currentScenario = "BOTH";
+  const {calculateInquiryQuote}=await import("@/lib/inquiry/quote");
   const both = await resolveNegotiation({
+    quote:calculateInquiryQuote({at:new Date().toISOString(),asOfDate:"2026-11-08",origin:"埼玉県",destination:"東京都",service:"KAZAI",ranks:["B"],packagesConfirmed:true,quantity:1,unitPriceYen:100000,policy:{id:"test",version:"1",mode:"INCLUDED",approved:true},rates:[rateRecord]}),
     context: negotiationContext,
     inventory: inventory(100_000),
     destinationPrefecture: "東京都",

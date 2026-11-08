@@ -140,6 +140,9 @@ export interface ExternalResearchFact {
    * 同シリーズで年式違いがある場合にこれが空なら不確実として扱う。
    */
   modelEvidence?: string;
+  retrievedAt?: string;
+  excerpt?: string;
+  checkedSources?: {url:string;retrievedAt:string;modelMatched:boolean}[];
 }
 
 /**
@@ -215,6 +218,11 @@ export interface NegotiationStaffCard {
 
 /** §33 参照情報。管理画面にだけ出す(顧客へは送らない)。 */
 export interface ReplyEvidence {
+  customerFacts?: {label:string;value:string}[];
+  quote?: import('./quote').InquiryQuote|null;
+  review?: import('./review').DraftReview;
+  reviewHistory?: NonNullable<import('./review').DraftReview['feedback']>[];
+  researchAvailability?: {status:'AVAILABLE'|'LIMITED'|'UNAVAILABLE';reason:string|null};
   replyHistory?: {status:'AVAILABLE'|'EMPTY'|'UNAVAILABLE';examples:import('./replyHistory').HistoricalReply[]};
   runtimeProof?: {conversationStamp:string;generatedAt:string};
   inventoryVersion?: {id:string;updatedAt:string}|null;

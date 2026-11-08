@@ -2627,6 +2627,7 @@ const schema = a.schema({
       sourceUrl: a.string(),
       sourceType: a.string(),
       confidence: a.float(),
+      evidenceJson: a.string(),
       fetchedAt: a.datetime().required(),
     })
     .identifier(["cacheKey"])

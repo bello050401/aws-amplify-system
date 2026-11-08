@@ -5,13 +5,9 @@ import { retrieveHistoricalReplies } from './replyHistoryStore';
 import { generateText } from "@/lib/ai/gateway/gateway";
 import { buildCustomerSafeFacts, type CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
 import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
-import { lookupShippingRate } from "@/lib/shipping/service";
-import {
-  calculateShippingRankFromDimensions,
-  SHIPPING_RANKS,
-  type ShippingRank,
-  type ShippingRankSource,
-} from "@/lib/shipping/rank";
+import { quoteInquiryShipping } from "./quoteService";
+import { customerQuoteFacts, withBankTransferProposal } from "./quote";
+import { reviewCustomerDraft } from "./review";
 import { listSearchableKnowledge } from "@/lib/knowledge/store";
 import { retrieveKnowledge } from "@/lib/knowledge/retrieval";
 import { extractIntents, hasProductIndependentIntent, requiresProduct } from "./intent";
@@ -32,7 +28,7 @@ import {
   PRODUCT_URL_REQUEST_TEMPLATE,
 } from "./productIdentification";
 import { getAIReplySettings } from "./settings";
-import { extractShippingDestination, missingShippingInfo } from "./shippingIntent";
+import { extractShippingDestination } from "./shippingIntent";
 import { buildInquirySystemPrompt, buildInquiryUserPrompt, INQUIRY_PROMPT_VERSION } from "./prompt";
 import { REPLY_MAX_GENERATION_ATTEMPTS, validateReplyDraft } from "./validate";
 import {
@@ -45,7 +41,9 @@ import {
 } from "./answerPlan";
 import { createDirectUrlProvider, getWebResearchAvailability, researchMissingFacts } from "./research/service";
 
-import { brandsInText } from "./research/officialDomains";
+import { createAgentCoreSearchProvider } from "./research/agentCoreProvider";
+import {getAgentCoreGatewayUrl} from "./research/service";
+import { brandsInText, allOfficialDomains } from "./research/officialDomains";
 import { nameCore } from "./scoring";
 import { extractBaseItemId, extractUrls, isBaseUrl } from "./references";
 import {
@@ -146,6 +144,8 @@ type BaseReplyResult = Omit<
 >;
 
 export async function generateInquiryReplyDraft(request: InquiryReplyRequest): Promise<GenerateInquiryReplyResult> {
+  const startedAt = Date.now();
+  let generationAttempts = 0;
   const settings = await getAIReplySettings();
   const messageText = normalizeMessage(request.messageText);
   const inquiryText = [...request.history.filter(m => m.direction === 'INBOUND').map(m => m.body), messageText].join('\n');
@@ -201,6 +201,12 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
    * 文面を正本にする。
    */
   const finish = (base: BaseReplyResult): GenerateInquiryReplyResult => {
+    if(base.draftText){
+      base.evidence.review=reviewCustomerDraft(base.draftText,base.evidence,request.history.filter(m=>m.direction==='OUTBOUND').map(m=>m.body));
+      base.evidence.review.elapsedMs=Date.now()-startedAt;
+      base.evidence.review.generationAttempts=generationAttempts;
+      if(base.evidence.review.issues.length && base.status==='READY')base.status='RESEARCH_INCOMPLETE';
+    }
     const asked = detectAskedQuestions(base.draftText, new Date().toISOString());
     const context = addPendingQuestions(workingContext, asked);
     return {
@@ -768,21 +774,20 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
 
 
   let shipping: ShippingEvidence | null = null;
-  if (intents.includes("SHIPPING") || negotiation.isNegotiation) {
-    shipping = await resolveShipping({
-      destinationPrefecture,
-      cityHint: destinationCityHint,
-      dimensions: mergedDimensions,
-      productResolved: inventory != null || productContext.identity.baseItemId != null,
-      // 寸法が読めない商品でも、説明文にランクが書かれていれば送料は出せる。
-      declaredRank: productContext.shipping.declaredRank,
-    });
-    for (const missing of shipping.missingCustomerInfo) {
-      // 交渉では市区町村まで求めない —— 指示書§4が求めているのは
-      // 「まず都道府県を確認する」ことなので、そこで止める。
-      if (negotiation.isNegotiation && missing === "お届け先の市区町村") continue;
-      unresolved.push({ field: missing, reason: "送料を確定するために必要な情報が不足しています。" });
-    }
+  let quote: Awaited<ReturnType<typeof quoteInquiryShipping>>|null=null;
+  if(intents.includes('SHIPPING')||negotiation.isNegotiation){
+    const currentBase=linkedBaseForContext?.source==='api'?linkedBaseForContext:null;
+    quote=await quoteInquiryShipping({inventoryId:inventory?.id??null,destination:destinationPrefecture,
+      declaredRank:productContext.shipping.declaredRank?.rank??null,quantity:negotiation.quantity??1,
+      unitPriceYen:currentBase?.price??null,priceCurrent:!!currentBase,channel:request.channel,
+      exceptionalRegion:/離島|小笠原|伊豆諸島|沖縄.*島/.test(inquiryText),
+      specialWorkUnconfirmed:/吊り|吊上|クレーン|搬入|階段|エレベーター/.test(inquiryText)});
+    shipping={destinationPrefecture,rank:quote.conditions.packages.join(' / ')||null,
+      rankSource:productContext.shipping.declaredRank?'BASE_DECLARED':null,
+      feeYen:quote.confirmed?quote.customerShippingYen:null,note:quote.reasons.join(' / ')||null,
+      missingCustomerInfo:quote.missing.filter(x=>/お届け先|配送地域/.test(x))};
+    for(const field of quote.missing)unresolved.push({field,reason:quote.reasons.join(' / ')});
+    if(!quote.confirmed&&!quote.missing.length)unresolved.push({field:'送料の確認',reason:quote.reasons.join(' / ')});
   }
 
   // ── 値下げ交渉の計算(金額はすべてここで確定する。AIには計算させない) ──
@@ -815,6 +820,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
           }
         : null;
     negotiationResult = await resolveNegotiation({
+      quote,
       context: negotiation,
       inventory: negotiationInventory,
       destinationPrefecture,
@@ -849,12 +855,10 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   const modelHints = [...new Set([...resolution.references.modelNumbers, ...extractModelHintsFromName(productNameCore)])];
 
 
-  // Paid external search has no verified per-call ceiling. Keep the existing
-  // official direct-URL reader, and do not route around the common AI budget.
-  const webSearchCallCount = 0;
-  const providers = researchFields.length > 0
-    ? [createDirectUrlProvider(resolution.references.urls)]
-    : [];
+  let webSearchCallCount=0;
+  const gateway=getAgentCoreGatewayUrl();
+  const providers=researchFields.length?[createDirectUrlProvider(resolution.references.urls),
+    ...(gateway&&modelHints.length?[createAgentCoreSearchProvider({gatewayUrl:gateway,officialDomains:allOfficialDomains(),onSearch:()=>{webSearchCallCount++;}})]:[])]:[];
   const research = await researchMissingFacts({
     fields: researchFields,
     inventoryId: resolution.resolved?.inventoryId ?? null,
@@ -866,7 +870,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   for (const fact of research.facts) {
     if (fact.status === "NOT_FOUND") {
       unresolved.push({ field: fact.field, reason: "公式情報を含め、確認できませんでした。" });
-    } else if (fact.status === "UNCERTAIN") {
+    } else if (fact.status === "UNCERTAIN" || fact.status === "CONFLICT") {
       unresolved.push({ field: fact.field, reason: "情報は見つかりましたが、この商品のものと確定できませんでした。" });
     }
   }
@@ -876,6 +880,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   }
 
   const evidence: ReplyEvidence = {
+    quote,
+    researchAvailability:{status:research.attempted?(research.unavailableReason?'LIMITED':'AVAILABLE'):'UNAVAILABLE',reason:research.unavailableReason},
     inventoryVersion:inventory?.updatedAt?{id:inventory.id,updatedAt:inventory.updatedAt}:null,
     product: resolution.resolved
       ? {
@@ -1070,7 +1076,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       destinationKnown: Boolean(shipping?.destinationPrefecture ?? destinationPrefecture),
     });
   } catch (err) {
-    console.warn("[inquiry] 返信ルールを読めませんでした。ルール無しで続行します。", err instanceof Error ? err.message : String(err));
+    console.warn("[inquiry] 返信ルールの取得失敗:", err instanceof Error ? err.name : "UnknownError");
+    unresolved.push({field:"店舗ルール",reason:"現在のルールを取得できませんでした。金額・対応の承諾は社内確認が必要です。"});
   }
   // 何が効いたかを根拠へ残す(§24「使用ルール」)。URLを尋ねて早期returnした
   // 経路ではルールを1件も読んでいないので、ここには来ない = 空のまま。
@@ -1080,6 +1087,21 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     category: r.category,
     version: r.version,
   }));
+  if(negotiationResult){
+    // No legacy offer may bypass current quote/rule validation or compete with its total.
+    negotiationResult.customerSafeFacts=[];
+    const discountRule=appliedRules.find(r=>r.category==='DISCOUNT');
+    if(quote&&negotiationResult.proposal&&discountRule){
+      const proposal=withBankTransferProposal(quote,negotiationResult.proposal,discountRule);
+      if(proposal){
+        quote=proposal;evidence.quote=proposal;
+        if(negotiationResult.staffCard)negotiationResult.staffCard.totalWithShippingYen=proposal.totalYen;
+        negotiationResult.customerSafeFacts=[{label:"請求書・銀行振込を条件としたご提示価格（担当者確認用）",value:proposal.totalYen!.toLocaleString("ja-JP")+"円"}];
+      }
+    }
+    if(!negotiationResult.customerSafeFacts.length)
+      unresolved.push({field:"値引き提案の条件",reason:"現在の価格・送料・有効な店舗ルールが揃っていないため、提案額の確定は社内確認が必要です。"});
+  }
   const historical = await retrieveHistoricalReplies({text:inquiryText,channel:request.channel,conversationId:request.conversationId,
     excludeSourceIds:request.historySourceId?[request.historySourceId]:[]});
   evidence.replyHistory = historical;
@@ -1093,8 +1115,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // そのまま入力にする(新しく「何が未解決か」を判定し直さない —— 既存の
   // unresolved判定・knownFacts判定をそのまま再利用する。lib/inquiry/
   // answerPlan.ts のファイル冒頭コメント参照)。新しいAI呼び出しは無い。
-  const customerFacingFacts = [...trustedProductFacts, ...(negotiationResult?.customerSafeFacts ?? []),
+  const customerFacingFacts = [...trustedProductFacts, ...(quote?customerQuoteFacts(quote):[]), ...(negotiationResult?.customerSafeFacts ?? []),
     ...officialLinePaymentFacts(request.channel, negotiation.isNegotiation)];
+  evidence.customerFacts=customerFacingFacts;
   const answerPlan = buildAnswerPlan({
     messageText,
     hasProduct: inventory != null,
@@ -1167,6 +1190,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // 3回作り直して返信案が1つも作られない状態になっていた(実測)。
   const allowedShippingFee = shipping?.feeYen ?? null;
   const allowedMoneyYen = [
+    ...(quote?.confirmed?[quote.merchandiseYen,quote.customerShippingYen,quote.regionalYen,quote.optionsYen,quote.discountYen,quote.totalYen].filter((n):n is number=>n!==null):[]),
     ...(negotiationResult?.customerSafeFacts ?? []).map((f) => Number(f.value.replace(/[^0-9]/g, ""))),
     // お客様ご自身が書かれた金額。復唱は事実の確認なので許す ——
     // ここを弾くと「ご希望の6万円について」と書けず、話が通じなくなる。
@@ -1209,6 +1233,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
 
   let freeOnly = canAnswerWithoutAI(answerPlan, trustedProductFacts, appliedRules.length > 0 || !!request.additionalContext || request.history.length > 0, messageText);
   for (let attempt = 1; attempt <= REPLY_MAX_GENERATION_ATTEMPTS; attempt++) {
+    generationAttempts=attempt;
     let output: string;
     try {
       if (freeOnly) {
@@ -1231,7 +1256,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       freeOnly = true;
       output = buildFreeReply(answerPlan, customerFacingFacts);
       evidence.generationRoute = "free_budget_fallback";
-      unresolved.push({ field: "返信案", reason: "有料AIを停止しているため、担当者の確認が必要です。" });
+      unresolved.push({ field: "返信案", reason: "AI予算・料金設定を確認できないか、次の処理に必要な予算枠が不足しています。簡易文のため、担当者が内容を確認してください。" });
     }
 
     output = ensureOfficialLinePaymentGuidance(output, request.channel, negotiation.isNegotiation);
@@ -1395,112 +1420,6 @@ function failed(reason: string, evidence: ReplyEvidence, intents: InquiryIntent[
  * (§32 の順序: Inventory → BASE保存データ → BASEライブ)。同じことを
  * 2箇所で判断すると、片方だけ直したときに食い違う。
  */
-async function resolveShipping(params: {
-  destinationPrefecture: string | null;
-  cityHint: string | null;
-  /** 統合Product Context が決めた寸法(出典は問わない)。 */
-  dimensions: { width: string | null; depth: string | null; height: string | null };
-  /** 商品が特定できているか(不足情報の案内文の出し分けに使う)。 */
-  productResolved: boolean;
-  /**
-   * BASEの商品説明に明記されていた配送ランク(2026-09-03 実測)。
-   *
-   * 寸法から推定するより**こちらが正確**。BELLOが商品ごとに決めて
-   * 説明文へ書いた値そのもので、推定ではない。
-   * 円形スツール(座面直径34cm / 脚幅44cm / 高さ75cm)のように
-   * 幅・奥行・高さの3辺で書かれていない商品では寸法抽出が成立せず、
-   * 「想定送料：不明」になっていたが、説明文にはランクが明記されていた。
-   */
-  declaredRank?: { rank: string; matchedText: string } | null;
-}): Promise<ShippingEvidence> {
-  const dims = calculateShippingRankFromDimensions(
-    params.dimensions.width,
-    params.dimensions.depth,
-    params.dimensions.height,
-  );
-
-  // ── 優先順位(2026-09-03 利用者指示) ──────────────────────────
-  //
-  //   1. BASE等にBELLOが明記した配送ランク (BASE_DECLARED)
-  //   2. その他の確定済み配送ランク         (STRUCTURED)
-  //   3. 寸法からの推定                     (DIMENSION_INFERRED)
-  //   4. 不明
-  //
-  // **明記されたランクを寸法推定で上書きしない。** 明記された値は、人が
-  // 形状・梱包・実際の配送方法まで考慮して決めたもので、3辺合計から
-  // 機械的に出した値より信頼度が高い。円形スツール(座面直径34cm /
-  // 脚幅44cm / 高さ75cm)のように3辺で表せない商品では推定自体が成立しない。
-  // 明記されたランクは文字列なので、料金マスタが知っている値だけを通す。
-  // 未知の文字列をそのまま渡すと、料金が引けずに「未登録」と報告され、
-  // 原因が説明文の表記ゆれなのかマスタ不足なのか分からなくなる。
-  const declared = params.declaredRank && (SHIPPING_RANKS as string[]).includes(params.declaredRank.rank)
-    ? (params.declaredRank.rank as ShippingRank)
-    : null;
-  const rank: ShippingRank | null = declared ?? dims?.rank ?? null;
-  const rankSource: ShippingRankSource | null = declared ? "BASE_DECLARED" : dims ? "DIMENSION_INFERRED" : null;
-
-  const missing = missingShippingInfo({
-    productResolved: params.productResolved,
-    destinationPrefecture: params.destinationPrefecture,
-    cityHint: params.cityHint,
-    hasDimensions: rank != null,
-  });
-
-  if (!params.destinationPrefecture || !rank) {
-    return {
-      destinationPrefecture: params.destinationPrefecture,
-      rank,
-      rankSource,
-      feeYen: null,
-      note: !params.destinationPrefecture
-        ? "お届け先が特定できないため、金額を出していません。"
-        : "在庫にもBASE商品ページにも、送料判定に使える寸法・配送ランクの記載がありません。",
-      missingCustomerInfo: missing,
-    };
-  }
-
-  const rate = await lookupShippingRate(params.destinationPrefecture, rank);
-  if (!rate) {
-    return {
-      destinationPrefecture: params.destinationPrefecture,
-      rank,
-      rankSource,
-      feeYen: null,
-      note: `埼玉県 → ${params.destinationPrefecture}・${rank}ランクの料金が料金マスタに未登録です。`,
-      missingCustomerInfo: missing,
-    };
-  }
-  if (rate.price == null) {
-    return {
-      destinationPrefecture: params.destinationPrefecture,
-      rank,
-      rankSource,
-      feeYen: null,
-      note: `埼玉県 → ${params.destinationPrefecture}・${rank}ランクは公式にサービス対象外と確認されています。`,
-      missingCustomerInfo: missing,
-    };
-  }
-  return {
-    destinationPrefecture: params.destinationPrefecture,
-    rank,
-    rankSource,
-    feeYen: rate.price + (rate.surcharge ?? 0),
-    // 市区町村が分からない段階の金額は参考値。確定額として案内させない。
-    // ランクを説明文から読んだ場合はそれも書く —— 担当者が金額の根拠を
-    // 追えるようにするため(寸法から計算したのか、記載を読んだのか)。
-    note: [
-      params.cityHint ? null : "都道府県のみで引いた参考額です。市区町村により変わる場合があります。",
-      declared ? `配送ランクはBASEの商品説明の「${params.declaredRank?.matchedText}」から読み取りました。` : null,
-      // 明記と推定が食い違う場合は隠さない。梱包サイズが3辺合計と
-      // ずれていることの手がかりになる。
-      declared && dims && dims.rank !== declared ? `寸法からの計算では${dims.rank}ランクです。` : null,
-    ]
-      .filter(Boolean)
-      .join(" ") || null,
-    missingCustomerInfo: missing,
-  };
-}
-
 /**
  * §9.1 外部調査を発動する条件。
  *
@@ -1555,7 +1474,7 @@ export function identifyResearchableFields(
    *
    * これを渡す前は、在庫DBに無い項目(素材・重量・型番・色)は、BASE商品
    * 説明に書いてあっても常に外部Web検索(課金対象)を呼んでいた。答えが
-   * 既に手元にあるのに毎回課金するのは、月300円以下という費用方針と
+   * 既に手元にあるのに毎回課金するのは、月1,000円以下という費用方針と
    * 相性が悪い。
    */
   knownFields: ReadonlySet<string> = new Set(),

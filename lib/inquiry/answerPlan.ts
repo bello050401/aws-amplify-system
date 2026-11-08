@@ -304,7 +304,7 @@ export function inspectAnswerPlanCoverage(output: string, plan: AnswerPlan): Ans
     questionId: item.questionId,
     topic: item.topic,
     planStatus: item.status,
-    coverage: outputTopics.has(item.topic) || item.answerConstraints.includes(ALREADY_KNOWN_CONSTRAINT) ? "UNVERIFIED" : "MISSING",
+    coverage: outputTopics.has(item.topic) ? "UNVERIFIED" : "MISSING",
   }));
   return { items, hasLikelyGap: items.some((i) => i.coverage === "MISSING") };
 }

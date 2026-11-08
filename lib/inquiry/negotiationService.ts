@@ -52,6 +52,7 @@ export interface NegotiationInventoryFacts {
 }
 
 export interface ResolveNegotiationParams {
+  quote?: import("./quote").InquiryQuote|null;
   context: NegotiationContext;
   inventory: NegotiationInventoryFacts | null;
   /** 会話から確定した配送先都道府県(不明ならnull)。 */
@@ -70,6 +71,7 @@ export interface ResolveNegotiationParams {
 }
 
 export interface ResolveNegotiationResult {
+  proposal?: {discountedUnitYen:number;regionalUnitYen:number};
   evidence: NegotiationEvidence;
   staffCard: NegotiationStaffCard | null;
   /** 顧客向けプロンプトへ渡してよい、確定した事実だけ。 */
@@ -189,7 +191,9 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
 
   // ── ShippingRate(正本)から送料 ──────────────────────────────
   let shippingFeeYen: number | null = null;
-  if (destinationPrefecture && rank) {
+  if (params.quote) {
+    shippingFeeYen=params.quote.confirmed?params.quote.carrierCostYen:null;
+  } else if (destinationPrefecture && rank) {
     const rate = await lookupShippingRate(destinationPrefecture, rank);
     if (!rate) {
       missing.push(`ShippingRate(埼玉県 → ${destinationPrefecture} / ${rank}ランク)`);
@@ -214,7 +218,10 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
   let offer: DiscountOffer | null = null;
   if (rank) {
     const allRates = await listShippingRates();
-    const median = nationalMedianShipping(allRates, rank);
+    const today=params.quote?.asOfDate??new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+    const currentRates=allRates.filter(r=>r.effectiveFrom&&r.effectiveFrom<=today&&
+      (!r.effectiveTo||r.effectiveTo>=today)&&r.status==='VERIFIED'&&r.taxIncluded&&r.currency==='JPY');
+    const median = nationalMedianShipping(currentRates, rank);
     offer = buildDiscountOffer({
       productResolved: true,
       salePrice: unitSale,
@@ -275,7 +282,7 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
     shippingSumCm,
     destinationPrefecture,
     shippingFeeYen,
-    totalWithShippingYen: totalSale != null && shippingFeeYen != null ? totalSale + shippingFeeYen : null,
+    totalWithShippingYen: params.quote?.confirmed ? params.quote.totalYen : null,
     baseDiscountedUnitPriceYen: baseDiscountedUnit,
     baseDiscountedTotalPriceYen: baseDiscountedTotal,
     differenceFromRequestedYen:
@@ -290,7 +297,7 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
   // 配送先が未確定のうちは**金額を一切出さない**。値下げ可否も確定
   // しない(指示書§4の禁止事項)。
   const customerSafeFacts: { label: string; value: string }[] = [];
-  if (condition.applicable && !awaitingDestination && offer?.determined && offer.referenceOffer != null) {
+  if (condition.applicable && !awaitingDestination && offer?.determined && offer.referenceOffer != null && params.quote?.confirmed) {
     // ラベルは**単価と合計が絶対に混ざらない**書き方にする。実機で
     // 「2点セットの価格は23,064円」(実際は単価)と誤記した返信案が出た。
     // 「単価」という語だけでは足りず、数量を明示した言い方にする。
@@ -304,12 +311,12 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
         value: `${(offer.referenceOffer * quantity).toLocaleString("ja-JP")}円`,
       });
     }
-    if (shippingFeeYen != null && destinationPrefecture) {
-      customerSafeFacts.push({ label: `送料(${destinationPrefecture})`, value: `${shippingFeeYen.toLocaleString("ja-JP")}円` });
-    }
+
   }
 
-  return { evidence, staffCard, customerSafeFacts, customerQuestions, missing };
+  return { evidence, staffCard, customerSafeFacts, customerQuestions, missing,
+    ...(condition.applicable&&params.quote?.confirmed&&offer?.determined&&offer.baseDiscountedPrice!=null&&offer.shippingAdjustment!=null?
+      {proposal:{discountedUnitYen:offer.baseDiscountedPrice,regionalUnitYen:offer.shippingAdjustment}}:{}) };
 }
 
 /** BASE商品までは特定できたが在庫へ紐付いていない場合の、最小限の判断カード。 */

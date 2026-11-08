@@ -97,7 +97,7 @@ export function compareBySourcePriority(a: { sourceType?: ExternalSourceType }, 
 export function evaluateModelEvidence(documentText: string, modelHints: string[]): { matched: string[]; certain: boolean } {
   const haystack = documentText.toUpperCase();
   // 3文字未満の断片は同定の根拠にしない(型番の一部が偶然一致しうる)。
-  const matched = modelHints.filter((h) => h.trim().length >= 3 && haystack.includes(h.toUpperCase()));
+  const matched = modelHints.filter((h) => h.trim().length >= 3 && new RegExp('(?<![A-Z0-9-])'+h.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![A-Z0-9-])').test(haystack));
   // 型番の手がかりが1つも無ければ、そのページが対象商品のものだとは
   // 言えない —— 「ブランドの公式サイトだから正しい」は成り立たない。
   return { matched, certain: matched.length > 0 };

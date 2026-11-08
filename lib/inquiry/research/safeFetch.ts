@@ -72,6 +72,7 @@ export async function safeResearchGet(
             "accept-encoding": "identity",
           },
           lookup: (_host, _opts, cb) => cb(null, addresses[0].address, 4),
+          family: 4,
         },
         (res) => {
           if ([301, 302, 303, 307, 308].includes(res.statusCode ?? 0)) {
