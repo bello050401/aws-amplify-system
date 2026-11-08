@@ -7,9 +7,9 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { directTableName } from "@/lib/amplify/directData";
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
-import { getInventoryRole, getCurrentInventoryUserSub } from "@/lib/amplify/requireInventoryUser";
-import { getConversation, listMessages } from "@/lib/messaging/service";
-import { listReplyDrafts } from "@/lib/inquiry/draftStore";
+import { getCurrentInventoryUserSub } from "@/lib/amplify/requireInventoryUser";
+import {inventoryVerifiedReadSession} from '@/lib/inventory/mutationSession';
+import {readInquiryConversationView,readInquiryMessage} from '@/lib/inquiry/runtime/viewStore';
 import { createAttachmentViewUrl } from "@/lib/messaging/attachmentStore";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import {readJobKey} from '@/lib/inquiry/runtime/readContract';
@@ -24,7 +24,7 @@ import {
   getRuntimeRecord,
 } from "@/lib/inquiry/runtime/store";
 async function requireAccess(admin = false) {
-  const role = await getInventoryRole();
+  const role = (await inventoryVerifiedReadSession())?.role;
   if (role !== "ADMIN" && (admin || role !== "EDITOR"))
     throw Error("操作権限がありません。");
 }
@@ -100,12 +100,9 @@ export async function readInquiryDetail(pk: string) {
   if (!/^CONV#[a-f0-9]{64}$/.test(pk)) throw Error("対象を確認できません。");
   const state = await stateFor(pk);
   if (!state?.conversationId) return null;
-  const [conversation, messages, drafts] = await Promise.all([
-    getConversation(state.conversationId),
-    listMessages(state.conversationId),
-    listReplyDrafts(state.conversationId),
-  ]);
-  if (!conversation) return null;
+  const view=await readInquiryConversationView(state.conversationId);
+  if(!view)return null;
+  const {conversation,messages,drafts}=view;
   const attachments = await Promise.all(
     messages
       .filter((m) => m.attachmentStatus === "STORED" && m.attachmentStorageKey)
@@ -127,7 +124,7 @@ export async function readInquiryDetail(pk: string) {
       : drafts.filter((d) => d.sourceMessageId === latest?.id);
   const productIds = [...new Set(currentDrafts.flatMap(d=>d.evidence?.productCandidates.map(p=>p.inventoryId)??[]))].slice(0, 10);
   const products = await Promise.all(productIds.map(async id=>{
-    const p = await getInventoryDetail(id);
+    const p = await getInventoryDetail(id,{consistentDirectRead:true});
     return p ? {id, storageKey:p.mainImageThumbnailKey??p.mainImageStorageKey, quantity:p.quantity, sku:p.sku} : null;
   }));
   const event=state.sourceEventSk?await getRuntimeRecord(pk,state.sourceEventSk):null;
@@ -162,7 +159,7 @@ export async function refreshInquiryPhoto(pk: string, messageId: string) {
   if (!/^CONV#[a-f0-9]{64}$/.test(pk)) throw Error("対象を確認できません。");
   const state = await stateFor(pk);
   if (!state?.conversationId) throw Error("問い合わせが見つかりません。");
-  const message = (await listMessages(state.conversationId)).find(m=>m.id===messageId);
+  const message = await readInquiryMessage(state.conversationId,messageId);
   if (!message || message.body === "[送信取消]" || message.attachmentStatus !== "STORED" || !message.attachmentStorageKey) throw Error("写真は削除されたか、表示できなくなりました。");
   return createAttachmentViewUrl(message.attachmentStorageKey);
 }

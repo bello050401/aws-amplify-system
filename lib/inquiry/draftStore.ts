@@ -36,7 +36,7 @@ interface ReplyDraftRow {
   updatedAt: string;
 }
 
-function toRecord(row: ReplyDraftRow): ReplyDraftRecord {
+export function toReplyDraftRecord(row: ReplyDraftRow): ReplyDraftRecord {
   return {
     id: row.id,
     conversationId: row.conversationId,
@@ -77,7 +77,7 @@ export async function listReplyDrafts(conversationId: string): Promise<ReplyDraf
     limit: 100,nextToken,
     ...inventoryAuthMode,
   });return {data:result.data as unknown as ReplyDraftRow[],errors:result.errors,nextToken:result.nextToken};},{label:'返信案'});
-  return (data as unknown as ReplyDraftRow[]).map(toRecord).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return (data as unknown as ReplyDraftRow[]).map(toReplyDraftRecord).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 /**
@@ -90,7 +90,7 @@ export async function listReplyDrafts(conversationId: string): Promise<ReplyDraf
 export async function getReplyDraft(id: string): Promise<ReplyDraftRecord | null> {
   const { data, errors } = await serverDataClient.models.ReplyDraft.get({ id }, inventoryAuthMode);
   if (errors) throw new Error(`返信案の取得に失敗しました: ${errors.map((e) => e.message).join("; ")}`);
-  return data ? toRecord(data as unknown as ReplyDraftRow) : null;
+  return data ? toReplyDraftRecord(data as unknown as ReplyDraftRow) : null;
 }
 
 /** その受信メッセージに対する最新の返信案(無ければnull)。 */
@@ -142,12 +142,12 @@ export async function saveReplyDraft(input: SaveReplyDraftInput, who: string | n
   if (existing) {
     const { data, errors } = await serverDataClient.models.ReplyDraft.update({ id: existing.id, ...payload }, inventoryAuthMode);
     if (errors || !data) throw new Error(errors?.[0]?.message ?? "返信案の保存に失敗しました。");
-    return toRecord(data as unknown as ReplyDraftRow);
+    return toReplyDraftRecord(data as unknown as ReplyDraftRow);
   }
   const id='draft_'+createHash('sha256').update(JSON.stringify([input.conversationId,input.sourceMessageId])).digest('hex');
   const { data, errors } = await serverDataClient.models.ReplyDraft.create({ id,...payload, createdBy: who }, inventoryAuthMode);
   if (errors || !data) throw new Error(errors?.[0]?.message ?? "返信案の保存に失敗しました。");
-  return toRecord(data as unknown as ReplyDraftRow);
+  return toReplyDraftRecord(data as unknown as ReplyDraftRow);
 }
 
 /** 返信欄へ反映して送信に使った、または破棄した、という記録(§18)。 */

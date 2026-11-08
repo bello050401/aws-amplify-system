@@ -34,7 +34,7 @@ import type { ConversationRecord, ConversationWorkflowStatus, MessageRecord, Mes
  *     (BELLO内で完結する安全なシミュレーション)。
  */
 
-function toConversationRecord(row: {
+export function toConversationRecord(row: {
   id: string;
   channel: MessageChannel;
   externalConversationId?: string | null;
@@ -99,7 +99,7 @@ function toConversationRecord(row: {
   };
 }
 
-function toMessageRecord(row: {
+export function toMessageRecord(row: {
   id: string;
   conversationId: string;
   externalMessageId?: string | null;
