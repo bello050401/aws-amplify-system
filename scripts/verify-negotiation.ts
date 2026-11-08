@@ -6,7 +6,7 @@
  *
  * ここで固定したいこと:
  *
- *  1. 7%引き・全国中央値・地域補正を**コードが**決めること（Novaに
+ *  1. 5%引き・全国中央値・地域補正を**コードが**決めること（Novaに
  *     金額を考えさせない）。
  *  2. どれか1つでも欠けたら金額を作らないこと。「たぶんこれくらい」は
  *     顧客への提示になってしまう。
@@ -111,13 +111,13 @@ function testDiscountIntent() {
   assertTrue(!detectDiscountIntent("サイズを教えてください"), "値下げ意図: 無関係な問い合わせを拾わない");
 }
 
-// ── §9.2 7%引き ─────────────────────────────────────────────────
+// ── §9.2 5%引き ─────────────────────────────────────────────────
 
 function testBaseDiscount() {
-  assertEqual(BASE_DISCOUNT_RATE, 0.07, "7%引き: 基本値引き率は7%");
-  assertEqual(calculateBaseDiscountedPrice(100_000), 93_000, "7%引き: 100,000円 → 93,000円");
-  assertEqual(calculateBaseDiscountedPrice(38_500), 35_805, "7%引き: 端数は既存の値下げと同じくMath.floorで丸める");
-  assertEqual(calculateBaseDiscountedPrice(1), 0, "7%引き: 極小額でも例外を作らない");
+  assertEqual(BASE_DISCOUNT_RATE, 0.05, "5%引き: 基本値引き率は5%");
+  assertEqual(calculateBaseDiscountedPrice(100_000), 95_000, "5%引き: 100,000円 → 95,000円");
+  assertEqual(calculateBaseDiscountedPrice(38_500), 36_575, "5%引き: 端数は既存の値下げと同じくMath.floorで丸める");
+  assertEqual(calculateBaseDiscountedPrice(1), 0, "5%引き: 極小額でも例外を作らない");
 }
 
 // ── §11.1 全国送料中央値 ───────────────────────────────────────
@@ -162,9 +162,9 @@ function offer(overrides: Partial<Parameters<typeof buildDiscountOffer>[0]> = {}
 
 function testDiscountOffer() {
   // 仕様書§31にある3件をそのまま固定する。
-  assertEqual(offer().referenceOffer, 93_000, "提示額: 100,000円 / 中央値8,000 / 配送先8,000 → 93,000円");
-  assertEqual(offer({ destinationShipping: 15_000 }).referenceOffer, 100_000, "提示額: 配送先15,000（中央値+7,000）→ 100,000円");
-  assertEqual(offer({ destinationShipping: 6_000 }).referenceOffer, 93_000, "提示額: 配送先が中央値より安くても追加値引きしない");
+  assertEqual(offer().referenceOffer, 95_000, "提示額: 100,000円 / 中央値8,000 / 配送先8,000 → 95,000円");
+  assertEqual(offer({ destinationShipping: 15_000 }).referenceOffer, 102_000, "提示額: 配送先15,000（中央値+7,000）→ 102,000円");
+  assertEqual(offer({ destinationShipping: 6_000 }).referenceOffer, 95_000, "提示額: 配送先が中央値より安くても追加値引きしない");
 
   assertEqual(calculateShippingAdjustment(6_000, 8_000), 0, "地域補正: 中央値以下なら補正0");
   assertEqual(calculateShippingAdjustment(15_000, 8_000), 7_000, "地域補正: 差額だけを戻す");
@@ -176,14 +176,14 @@ function testDiscountOffer() {
 
   const noPrice = offer({ salePrice: null });
   assertTrue(!noPrice.determined && noPrice.referenceOffer === null, "未確定: 商品価格不明なら金額生成なし");
-  assertEqual(noPrice.baseDiscountedPrice, null, "未確定: 価格が無ければ7%引きも出さない");
+  assertEqual(noPrice.baseDiscountedPrice, null, "未確定: 価格が無ければ5%引きも出さない");
 
   const noProduct = offer({ productResolved: false });
   assertTrue(!noProduct.determined && noProduct.referenceOffer === null, "未確定: 商品未特定なら金額生成なし");
 
   const noDestination = offer({ destinationPrefecture: null, destinationShipping: null });
   assertTrue(noDestination.undeterminedReasons.includes("DESTINATION_UNKNOWN"), "未確定: 配送先不明を理由として返す");
-  assertEqual(noDestination.baseDiscountedPrice, 93_000, "未確定: 配送先が無くても7%引きの内部計算自体は持つ（スタッフ表示用）");
+  assertEqual(noDestination.baseDiscountedPrice, 95_000, "未確定: 配送先が無くても5%引きの内部計算自体は持つ（スタッフ表示用）");
 
   const noMedian = offer({ nationalMedian: null });
   assertTrue(noMedian.undeterminedReasons.includes("NATIONAL_MEDIAN_UNKNOWN"), "未確定: 中央値が出せない場合も理由を返す");
@@ -194,7 +194,7 @@ function testDiscountOffer() {
 function testInternalBoundary() {
   const facts = customerSafeDiscountFacts(offer());
   const serialized = JSON.stringify(facts);
-  assertTrue(serialized.includes("93,000"), "境界: 確定した提示額は顧客向け事実に含まれる");
+  assertTrue(serialized.includes("95,000"), "境界: 確定した提示額は顧客向け事実に含まれる");
   assertTrue(!serialized.includes("8,000") && !serialized.includes("8000"), "境界: 送料の内訳（中央値・配送先送料）は顧客向け事実に出さない");
 
   const undetermined = customerSafeDiscountFacts(offer({ destinationShipping: null }));

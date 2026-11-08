@@ -13,6 +13,7 @@ import {sendCustomerMessage,type CustomerTarget} from './customerTransport';
 import {createRuntimeRecord,getRuntimeRecord,inquiryDb,inquirySettings,runtimeConfig,stateFor} from './store';
 import {exactInquiryTarget,readJobKey,type ReadSnapshot} from './readContract';
 import {detectUnverifiedFulfillment} from '../fulfillmentSafety';
+import {rememberVerifiedReplies} from '../replyHistoryIngest';
 
 type SendJob={pk:string;sk:'STATE';conversationPk:string;conversationId:string;version:number;draftId:string;draftVersion:string;sourceMessageId:string;destinationHash:string;bodyHash:string;manual:boolean;actor:string;retryKey:string;status:string;expiresAt:number;leaseUntil?:number};
 async function deliveryInputs(pk:string,draftId:string){
@@ -100,6 +101,7 @@ export async function runCustomerDelivery(pk:string){
       {Put:{TableName:directTableName('Message'),Item:{id:pk,conversationId:job.conversationId,direction:'OUTBOUND',senderType:job.manual?'STAFF':'AI',body:input.draft.draftText,contentType:'text',deliveryStatus:'SENT',externalSentAt:now,externalMessageId:sent.receipt,createdAt:now,updatedAt:now,createdBy:job.actor},ConditionExpression:'attribute_not_exists(id)'}},
       {Update:{TableName:directTableName('Conversation'),Key:{id:job.conversationId},UpdateExpression:'SET lastOutgoingAt=:now,updatedAt=:now',ExpressionAttributeValues:{':now':now}}},
     ]}));
+    if(job.manual)try{await runWithDirectData(async()=>rememberVerifiedReplies({conversationId:job.conversationId,channel:input.target.channel,messages:await listMessages(job.conversationId)}));}catch{console.warn('[inquiry] REPLY_HISTORY_INDEX_FAILED');}
   }catch{await finishStatus(job,'UNKNOWN');}
 }
 async function finishStatus(job:SendJob,status:string){

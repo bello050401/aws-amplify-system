@@ -125,6 +125,15 @@ const nextConfig = {
         ],
       },
       {
+        // Authenticated iPhone message view is embedded only by our own PWA.
+        source: "/staff-messages",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
+          { key: "Cache-Control", value: "private, no-store" },
+        ],
+      },
+      {
         // PWAのスキャン検索は同一オリジンから端末カメラを使う。
         // 一律 camera=() では利用者が許可してもブラウザーに拒否される。
         source: "/staff-app/:path*",

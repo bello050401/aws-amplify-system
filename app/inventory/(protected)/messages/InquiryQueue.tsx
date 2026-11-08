@@ -15,11 +15,17 @@ import {
 import { RESULT_LABELS } from "@/lib/inquiry/runtime/labels";
 import { detectUnverifiedFulfillment } from "@/lib/inquiry/fulfillmentSafety";
 import { InquiryPhoto } from "./InquiryPhoto";
+import { copyInquiryText } from "@/lib/inquiry/copyText";
 import { InventoryThumbnail } from "@/app/inventory/InventoryThumbnail";
 type Queue = Awaited<ReturnType<typeof readInquiryQueue>>;
 type Detail = Awaited<ReturnType<typeof readInquiryDetail>>;
-export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
+export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compact?:boolean }) {
   const request = useRef(0);
+  const [copied,setCopied]=useState('');
+  async function copy(text:string,key:string){
+    try{await copyInquiryText(text);setCopied(key);setError('');}
+    catch{setError('コピーできませんでした。本文を長押ししてコピーしてください。');}
+  }
   const queueRequest = useRef(0);
   const [loadingDetail, setLoadingDetail] = useState(false),
     [loadingMore, setLoadingMore] = useState(false),
@@ -50,6 +56,7 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
   async function open(pk: string) {
     const generation = ++request.current;
     setSelected(pk);
+    setCopied('');
     setDetail(null);
     setLoadingDetail(true);
     setMessageCount(30);
@@ -72,12 +79,12 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
   const selectedRow = queue?.items.find((r) => r.pk === selected);
   const displayMessages=detail?.remoteRead?.snapshot?.messages.map((m,index)=>({id:'remote-'+index,body:m.body,direction:m.speaker==='BUYER'?'INBOUND':'OUTBOUND',externalSentAt:m.sentAt,createdAt:m.sentAt}))??detail?.messages??[];
   return (
-    <section className="rounded-2xl border bg-white p-4 sm:p-6">
+    <section className={compact?"rounded-2xl border bg-white p-3":"rounded-2xl border bg-white p-4 sm:p-6"}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold">お問い合わせ</h2>
           <p className="mt-1 text-sm text-slate-600">
-            受信 → 商品・根拠の確認 → 返信案。{queue?.settings.automaticDelivery?'評価を通過した種類のみ自動送信します。':'顧客への自動送信は停止しています。'}
+            {compact?'会話を確認して、返信案をコピーできます。':<>受信 → 商品・根拠の確認 → 返信案。{queue?.settings.automaticDelivery?'評価を通過した種類のみ自動送信します。':'顧客への自動送信は停止しています。'}</>}
           </p>
         </div>
         <div className="flex gap-2">
@@ -265,6 +272,8 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                     <p className="mt-1 whitespace-pre-wrap break-words">
                       {m.body}
                     </p>
+                    <button type="button" className="mt-2 min-h-11 rounded-lg border px-3 text-sm text-teal-900"
+                      onClick={()=>void copy(m.body,m.id)}>{copied===m.id?'コピーしました':'本文をコピー'}</button>
                     {detail.attachments.find((a) => a.id === m.id) && (
                       <InquiryPhoto
                         url={detail.attachments.find((a) => a.id === m.id)!.url}
@@ -293,9 +302,9 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                     </label>
                     <textarea
                       id="reply-draft"
-                      className="mt-2 min-h-48 w-full rounded-lg border p-3 leading-7"
+                      className="mt-2 min-h-48 w-full rounded-lg border p-3 text-base leading-7"
                       value={draftText}
-                      onChange={(e) => setDraftText(e.target.value)}
+                      onChange={(e) => {setDraftText(e.target.value);setCopied('');}}
                     />
                     {detectUnverifiedFulfillment(draftText).length > 0 && (
                       <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
@@ -333,19 +342,11 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                         編集を保存
                       </button>
                       <button
-                        className="rounded-lg border px-4 py-2"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(draftText);
-                            setNotice("返信案をコピーしました。");
-                          } catch {
-                            setError(
-                              "コピーできませんでした。本文を選択してコピーしてください。",
-                            );
-                          }
-                        }}
+                        className="min-h-11 rounded-lg border px-4 py-2"
+                        disabled={!draftText.trim()}
+                        onClick={()=>void copy(draftText,'draft')}
                       >
-                        コピー
+                        {copied==='draft'?'コピーしました':compact?'返信案をコピー':'コピー'}
                       </button>
                       <button
                         disabled={busy}
@@ -385,6 +386,17 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                     <details className="mt-3 text-sm">
                       <summary>商品・回答の根拠を確認</summary>
                       <div className="mt-3 space-y-3">
+                        {d.evidence?.replyHistory && <section className="rounded-lg bg-slate-50 p-3">
+                          <h4 className="font-semibold">参考にした過去の返信</h4>
+                          <p className="mt-1 text-xs text-slate-500">別のお客様への実際の返信から選択。過去の金額・寸法・個人情報は引き継ぎません。</p>
+                          {d.evidence.replyHistory.status === 'UNAVAILABLE' && <p className="mt-2 text-amber-800">履歴を読み込めませんでした。今回の返信案には履歴を使用していません。</p>}
+                          {d.evidence.replyHistory.status === 'EMPTY' && <p className="mt-2 text-slate-600">今回の相談に合う取得済みの履歴はありません。</p>}
+                          {d.evidence.replyHistory.examples.map(example=><details key={example.id} className="mt-2 rounded border bg-white p-3">
+                            <summary>{example.question} · {example.channel === 'MERCARI_SHOPS' ? 'メルカリShops' : example.channel} · {example.sentAt.slice(0,10)}</summary>
+                            <p className="mt-2 whitespace-pre-wrap text-slate-600">{example.reply}</p>
+                            {example.sourceUrl && <a className="mt-2 inline-block text-teal-800 underline" href={example.sourceUrl} target="_blank" rel="noreferrer">元のやり取りを開く</a>}
+                          </details>)}
+                        </section>}
                         <p>
                           {d.evidence?.product?.name ?? "在庫個体は未確定です"}
                         </p>

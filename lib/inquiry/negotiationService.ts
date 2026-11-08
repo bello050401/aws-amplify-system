@@ -19,7 +19,7 @@ import type { NegotiationContext } from "./negotiation";
  * ── ここが引き受けること ────────────────────────────────────────
  *
  *   最大外形3辺 → 配送ランク → ShippingRate(正本) → 送料
- *   販売価格 → 7%引き(既存 discount.ts の Math.floor をそのまま使う)
+ *   販売価格 → 5%引き(既存 discount.ts の Math.floor をそのまま使う)
  *   仕入価格・販売開始日時 → 管理者向けの判断材料
  *   公式LINE＋請求書払い条件の適用可否
  *
@@ -86,7 +86,7 @@ export interface ResolveNegotiationResult {
  * 条件の内容は新しく作らず、既存の値引きルール文書
  * (lib/knowledge/businessRules.ts の DISCOUNT_RULES_CONTENT)に書かれて
  * いるものをそのまま使う ——「BELLOから請求書をお送りし、銀行振込で
- * お支払いいただける場合、商品代金の7%引きを基本としてご案内する」。
+ * お支払いいただける場合、商品代金の5%引きを基本としてご案内する」。
  *
  * 「公式LINE」の部分は、この問い合わせが公式LINEアカウント経由で
  * 届いていることで満たされる。チャネルがLINE以外の場合は、
@@ -101,7 +101,7 @@ export function evaluateOfficialLinePaymentCondition(channel: string): {
   if (channel === "LINE") {
     return {
       applicable: true,
-      reason: "公式LINE経由の問い合わせのため、請求書払い(銀行振込)を条件とした7%引きの案内対象。",
+      reason: "公式LINE経由の問い合わせのため、請求書払い(銀行振込)を条件とした5%引きの案内対象。",
       sourceDocumentTitle: DISCOUNT_RULE_SOURCE_TITLE,
     };
   }
@@ -201,9 +201,9 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
     }
   }
 
-  // ── 7%引き(既存エンジンをそのまま使う。丸めも変えない) ────────
+  // ── 5%引き(既存エンジンをそのまま使う。丸めも変えない) ────────
   const unitSale = inventory.unitSalePriceYen;
-  if (unitSale == null) missing.push("現在の販売価格");
+  if (unitSale == null) missing.push(channel==='LINE' ? "対象商品と一致する現在のBASE掲載価格" : "現在の販売価格");
   const quantity = context.quantity ?? 1;
   const totalSale = unitSale != null ? unitSale * quantity : null;
   const baseDiscountedUnit = unitSale != null && unitSale > 0 ? calculateBaseDiscountedPrice(unitSale) : null;
@@ -290,7 +290,7 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
   // 配送先が未確定のうちは**金額を一切出さない**。値下げ可否も確定
   // しない(指示書§4の禁止事項)。
   const customerSafeFacts: { label: string; value: string }[] = [];
-  if (!awaitingDestination && offer?.determined && offer.referenceOffer != null) {
+  if (condition.applicable && !awaitingDestination && offer?.determined && offer.referenceOffer != null) {
     // ラベルは**単価と合計が絶対に混ざらない**書き方にする。実機で
     // 「2点セットの価格は23,064円」(実際は単価)と誤記した返信案が出た。
     // 「単価」という語だけでは足りず、数量を明示した言い方にする。
@@ -347,7 +347,7 @@ function emptyStaffCardForBaseOnly(
     differenceFromRequestedYen: null,
     officialLinePaymentCondition: condition,
     decisionNotes: [
-      "BASE商品は特定できたが、BELLO在庫との紐付けが未確定。仕入価格・販売開始日時・7%基準額は在庫が確定してから算出する。",
+      "BASE商品は特定できたが、BELLO在庫との紐付けが未確定。仕入価格・販売開始日時・5%基準額は在庫が確定してから算出する。",
     ],
     missingInformation: missing,
   };

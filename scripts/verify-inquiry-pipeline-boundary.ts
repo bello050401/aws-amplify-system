@@ -140,6 +140,7 @@ function installBaseMock(overrides: Partial<MockImpl> = {}): MockState {
     listShippingRates: async () => [],
     listSearchableKnowledge: async () => [],
     listActiveReplyRules: async () => [],
+    retrieveHistoricalReplies: async () => ({status:'EMPTY',examples:[]}),
     lookupBaseProduct: async () => ({ source: "not-found" }),
     lookupBaseProducts: async () => [],
     getAgentCoreGatewayUrl: () => null,

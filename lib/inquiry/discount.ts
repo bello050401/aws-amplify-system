@@ -2,7 +2,7 @@
  * §9〜§13 値下げ交渉エンジン。純粋関数のみ。
  *
  * 【なぜコードで計算するか】仕様書§43が明示している通り、Novaに金額を
- * 考えさせない。7%引き・送料中央値・地域差額は、毎回同じ入力から同じ
+ * 考えさせない。5%引き・送料中央値・地域差額は、毎回同じ入力から同じ
  * 答えが出なければならない種類の計算で、文章生成モデルに任せる仕事では
  * ない。ここで確定した金額**だけ**を文章化させる。
  *
@@ -14,7 +14,7 @@
 import type { ShippingRateRecord } from "@/lib/shipping/types";
 
 /** §9.2 請求書・銀行振込で案内できる場合の基本値引き率。 */
-export const BASE_DISCOUNT_RATE = 0.07;
+export const BASE_DISCOUNT_RATE = 0.05;
 
 /**
  * §9.1 値下げ交渉の意図。
@@ -50,23 +50,7 @@ export function detectDiscountIntent(text: string): boolean {
   return !onlyPlainPrice;
 }
 
-/**
- * §9.2 基本7%引き。既存の値下げと同じくMath.floorで丸める。
- *
- * ── なぜ 1 - 0.07 を使わないのか ────────────────────────────────
- *
- * JavaScriptの二進小数では `1 - 0.07 === 0.9299999999999999` になり、
- * 0.93 と等しくない。その差で **1円ずれる**:
- *
- *   Math.floor(29800 * (1 - 0.07)) = 27713
- *   Math.floor(29800 * 0.93)       = 27714   ← 意図している値
- *
- * 1〜200,000円の範囲で **478通りの価格**がこのずれを踏む(実測)。
- * 実データの B005648(販売価格 29,800円)がちょうどそれで、値引き後の
- * 提示額が1円安くなっていた。
- *
- * 百分率を整数のまま扱えば、小数の引き算が入らないのでずれない。
- */
+/** BASE掲載価格 × 0.95。百分率を整数で計算し、既存どおり1円未満を切り捨てる。 */
 export function calculateBaseDiscountedPrice(salePrice: number): number {
   const remainingPercent = 100 - Math.round(BASE_DISCOUNT_RATE * 100);
   return Math.floor((salePrice * remainingPercent) / 100);
@@ -103,7 +87,7 @@ export function nationalMedianShipping(rates: ShippingRateRecord[], rank: string
  * §11.2 地域補正。
  *
  * 配送先の送料が全国中央値より**高い分だけ**を値引き後価格へ戻す。
- * 中央値より安い地域でも、その差額を追加値引きにはしない —— 基本7%を
+ * 中央値より安い地域でも、その差額を追加値引きにはしない —— 基本5%を
  * 維持する(仕様書の明示要件)。
  */
 export function calculateShippingAdjustment(destinationShipping: number, median: number): number {
@@ -135,13 +119,13 @@ export interface DiscountOfferInput {
 export interface DiscountOffer {
   /** 値引き後の金額を提示できる状態か。 */
   determined: boolean;
-  /** 7%引き後の価格。販売価格が分かれば出せる。 */
+  /** 5%引き後の価格。販売価格が分かれば出せる。 */
   baseDiscountedPrice: number | null;
   nationalMedian: number | null;
   destinationShipping: number | null;
   /** 配送先送料 − 全国中央値（下限0）。 */
   shippingAdjustment: number | null;
-  /** 実際に提示できる参考価格 = 7%引き + 地域補正。 */
+  /** 実際に提示できる参考価格 = 5%引き + 地域補正。 */
   referenceOffer: number | null;
   /** 提示できない場合の理由。UIとログに出す。 */
   undeterminedReasons: DiscountUndeterminedReason[];

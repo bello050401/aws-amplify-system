@@ -199,11 +199,11 @@ export interface NegotiationStaffCard {
   shippingFeeYen: number | null;
   /** 送料込みの採算情報(現在価格 + 送料)。 */
   totalWithShippingYen: number | null;
-  /** 7%値引き基準額(単価)。 */
+  /** 5%値引き基準額(単価)。 */
   baseDiscountedUnitPriceYen: number | null;
-  /** 7%値引き後の数量合計。 */
+  /** 5%値引き後の数量合計。 */
   baseDiscountedTotalPriceYen: number | null;
-  /** 希望額との差額(希望額 − 7%値引き後合計)。負なら希望のほうが安い。 */
+  /** 希望額との差額(希望額 − 5%値引き後合計)。負なら希望のほうが安い。 */
   differenceFromRequestedYen: number | null;
   /** 公式LINE＋請求書払い条件の適用可否。 */
   officialLinePaymentCondition: { applicable: boolean; reason: string; sourceDocumentTitle: string | null };
@@ -215,6 +215,7 @@ export interface NegotiationStaffCard {
 
 /** §33 参照情報。管理画面にだけ出す(顧客へは送らない)。 */
 export interface ReplyEvidence {
+  replyHistory?: {status:'AVAILABLE'|'EMPTY'|'UNAVAILABLE';examples:import('./replyHistory').HistoricalReply[]};
   runtimeProof?: {conversationStamp:string;generatedAt:string};
   inventoryVersion?: {id:string;updatedAt:string}|null;
   product: { inventoryId: string; displayInventoryId: string; name: string; confidence: number } | null;
@@ -453,6 +454,8 @@ export interface ReplyDraftRecord {
 export interface InquiryReplyRequest {
   channel: string;
   conversationId: string;
+  /** Remote thread identity, used only to exclude this case from reference history. */
+  historySourceId?: string | null;
   messageId: string;
   messageText: string;
   /**

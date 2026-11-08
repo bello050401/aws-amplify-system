@@ -95,6 +95,7 @@ const MOCK_MODULES = {
   "./negotiationService": { exportNames: ["resolveNegotiation", "evaluateOfficialLinePaymentCondition"] },
   "./baseProductLookup": { exportNames: ["lookupBaseProduct", "lookupBaseProducts"] },
   "./replyRuleStore": { exportNames: ["listActiveReplyRules"] },
+  "./replyHistoryStore": { exportNames: ["retrieveHistoricalReplies"] },
   "./research/service": {
     exportNames: ["getAgentCoreGatewayUrl", "getWebResearchAvailability", "createDirectUrlProvider", "researchMissingFacts"],
   },

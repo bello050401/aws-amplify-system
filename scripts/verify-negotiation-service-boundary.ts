@@ -15,7 +15,7 @@
  * lib/inquiry/negotiationService.ts の resolveNegotiation を実際に呼び出し
  * て確認する。外部境界(@/lib/shipping/service の listShippingRates /
  * lookupShippingRate。実DynamoDBへ接続する)だけを node:test の
- * モジュールモックで差し替え、それ以外(discount.ts の7%引き計算・地域補正
+ * モジュールモックで差し替え、それ以外(discount.ts の5%引き計算・地域補正
  * 等)はすべて実関数を通す。実クラウド・実AIへは一切接続しない。
  *
  * Run with: npm run verify:negotiation-service-boundary

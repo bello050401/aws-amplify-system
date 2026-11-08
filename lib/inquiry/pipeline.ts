@@ -1,6 +1,7 @@
 import "server-only";
 import { buildFreeReply, canAnswerWithoutAI } from "./freeReply";
 import { officialLinePaymentFacts, ensureOfficialLinePaymentGuidance } from './paymentWorkflow';
+import { retrieveHistoricalReplies } from './replyHistoryStore';
 import { generateText } from "@/lib/ai/gateway/gateway";
 import { buildCustomerSafeFacts, type CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
 import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
@@ -147,6 +148,7 @@ type BaseReplyResult = Omit<
 export async function generateInquiryReplyDraft(request: InquiryReplyRequest): Promise<GenerateInquiryReplyResult> {
   const settings = await getAIReplySettings();
   const messageText = normalizeMessage(request.messageText);
+  const inquiryText = [...request.history.filter(m => m.direction === 'INBOUND').map(m => m.body), messageText].join('\n');
 
   // ── 会話文脈(2026-09-03 追加指示 §17-§24) ─────────────────────
   //
@@ -588,7 +590,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       const docs = await listSearchableKnowledge();
       // 種別を渡すのは、「お店はどこ」のように文書側の語(所在地)が
       // 問い合わせに一切現れない場合に引けるようにするため。
-      knowledgeHits = retrieveKnowledge(docs, messageText, { intents }).map((hit) => ({
+      knowledgeHits = retrieveKnowledge(docs, inquiryText, { intents }).map((hit) => ({
         id: hit.document.id,
         updatedAt:hit.document.updatedAt,
         title: hit.document.title,
@@ -792,11 +794,15 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
             inventoryId: resolution.resolved.inventoryId,
             displayInventoryId: resolution.resolved.displayInventoryId,
             name: inventory.name,
-            unitSalePriceYen: basis === 'BASE_ITEM_ID' && linkedBaseForContext
+            unitSalePriceYen: request.channel === 'LINE'
+              ? basis === 'BASE_ITEM_ID' && resolution.baseProducts.length === 1 && linkedBaseForContext?.source === 'api' ? linkedBaseForContext.price : null
+              : basis === 'BASE_ITEM_ID' && linkedBaseForContext
               ? linkedBaseForContext.source === 'api' ? linkedBaseForContext.price : null
               : inventory.salePrice ?? inventory.plannedSalePrice ?? null,
             unitSalePriceSource:
-              basis === 'BASE_ITEM_ID' && linkedBaseForContext ? linkedBaseForContext.source === 'api' ? 'baseCurrentPrice' : null
+              request.channel === 'LINE'
+                ? basis === 'BASE_ITEM_ID' && resolution.baseProducts.length === 1 && linkedBaseForContext?.source === 'api' ? 'baseCurrentPrice' : null
+                : basis === 'BASE_ITEM_ID' && linkedBaseForContext ? linkedBaseForContext.source === 'api' ? 'baseCurrentPrice' : null
                 : inventory.salePrice != null ? "salePrice" : inventory.plannedSalePrice != null ? "plannedSalePrice" : null,
             purchasePriceYen: inventory.purchasePrice ?? null,
             saleStartDate: inventory.saleStartDate ?? null,
@@ -1057,6 +1063,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     appliedRules = selectReplyRules({
       rules: await listActiveReplyRules(),
       intents,
+      inquiryText,
       channel: request.channel as MessageChannel,
       productCategoryId: inventory?.categoryId ?? null,
       // 配送先が分かっているなら「配送先が不明なとき用」のルールは渡さない。
@@ -1073,7 +1080,9 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     category: r.category,
     version: r.version,
   }));
-  const inquiryText = [...request.history.filter(m => m.direction === 'INBOUND').map(m => m.body), messageText].join('\n');
+  const historical = await retrieveHistoricalReplies({text:inquiryText,channel:request.channel,conversationId:request.conversationId,
+    excludeSourceIds:request.historySourceId?[request.historySourceId]:[]});
+  evidence.replyHistory = historical;
   if (/領収書/.test(inquiryText) && !appliedRules.some(r => r.category === 'RECEIPT')) {
     unresolved.push({field: '領収書の発行・但し書き', reason: '今回のご希望に対応できることを確認した返信ルールがありません。請求書とは区別し、社内で確認してください。'});
   }
@@ -1097,6 +1106,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // ── 生成 ──────────────────────────────────────────────────────
   const systemPrompt = buildInquirySystemPrompt();
   const userPrompt = buildInquiryUserPrompt({
+    channel: request.channel,
     intents,
     answerPlanGuidance: buildAnswerPlanGuidance(answerPlan),
     replyRules: appliedRules.map((r) => ({
@@ -1109,6 +1119,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     // customerSafeFacts は空なので、AIが提示できる金額が存在しない。
     trustedProductFacts: customerFacingFacts,
     knowledgeExcerpts: knowledgeHits.map((k) => ({ title: k.title, excerpt: k.excerpt })),
+    historicalReplies: historical.examples,
     shipping,
     externalFacts: research.facts,
     unresolved,
@@ -1146,7 +1157,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
 
   // ── 顧客向けに書いてよい金額 ──────────────────────────────────
   //
-  // 送料と、値下げ交渉で提示してよい確定金額(7%引き後の単価・数量合計)。
+  // 送料と、値下げ交渉で提示してよい確定金額(5%引き後の単価・数量合計)。
   // **どちらもコード側で計算した値だけ**を通す —— AIに金額を計算させない
   // という方針(lib/inquiry/discount.ts)は変えない。
   //

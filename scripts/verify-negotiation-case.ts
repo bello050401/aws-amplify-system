@@ -213,7 +213,7 @@ async function main() {
   });
   check(!normal.isNegotiation, "同じ会話でも、通常の問い合わせは交渉として扱わない(配送先を聞き返さない)");
 
-  console.log("\n── 7. 送料判定と7%基準(実データ) ─────────────────────");
+  console.log("\n── 7. 送料判定と5%基準(実データ) ─────────────────────");
   if (top) {
     const inv = alive.find((r) => r.id === top.inventoryId)!;
     console.log(`   在庫: ${inv.sku} / 数量 ${inv.quantity} / 販売価格 ${inv.salePrice ?? "-"} / 販売予定価格 ${inv.plannedSalePrice ?? "-"} / 仕入 ${inv.purchasePrice ?? "-"}`);
@@ -239,8 +239,8 @@ async function main() {
     const unitPrice = inv.salePrice ?? inv.plannedSalePrice ?? null;
     if (unitPrice != null) {
       const discounted = calculateBaseDiscountedPrice(unitPrice);
-      console.log(`   7%引き後単価 ${discounted}円 / 2点合計 ${discounted * 2}円 / 希望総額との差 ${60000 - discounted * 2}円`);
-      check(discounted === Math.floor(unitPrice * 0.93), "7%引きの丸め(Math.floor)を変えていない");
+      console.log(`   5%引き後単価 ${discounted}円 / 2点合計 ${discounted * 2}円 / 希望総額との差 ${60000 - discounted * 2}円`);
+      check(discounted === Math.floor(unitPrice * 0.95), "5%引きの丸め(Math.floor)を変えていない");
     }
     console.log(`   販売開始 ${inv.saleStartDate ?? "-"} / 経過 ${daysOnSale(inv.saleStartDate ?? null) ?? "-"}日`);
   }

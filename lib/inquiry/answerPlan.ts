@@ -298,11 +298,13 @@ export interface AnswerPlanInspectionResult {
  */
 export function inspectAnswerPlanCoverage(output: string, plan: AnswerPlan): AnswerPlanInspectionResult {
   const outputTopics = new Set(extractIntents(output ?? ""));
+  // A concrete counteroffer can answer negotiation without the word 値下げ.
+  if (/(?:ご提示|ご案内|お値段|金額)[^。\n]{0,45}[\d,]+円|[\d,]+円[^。\n]{0,25}(?:ご案内|ご提示)/.test(output)) outputTopics.add('NEGOTIATION');
   const items: AnswerPlanCoverageItem[] = plan.items.map((item) => ({
     questionId: item.questionId,
     topic: item.topic,
     planStatus: item.status,
-    coverage: outputTopics.has(item.topic) ? "UNVERIFIED" : "MISSING",
+    coverage: outputTopics.has(item.topic) || item.answerConstraints.includes(ALREADY_KNOWN_CONSTRAINT) ? "UNVERIFIED" : "MISSING",
   }));
   return { items, hasLikelyGap: items.some((i) => i.coverage === "MISSING") };
 }
@@ -338,6 +340,7 @@ export function inspectAnswerPlanCoverage(output: string, plan: AnswerPlan): Ans
  * 同種のgrounded判定を作らない(§9の要件どおり無条件のまま)。
  */
 const UNGROUNDED_PROMISE_PATTERNS: { label: string; re: RegExp; discount?: boolean; condition?: boolean }[] = [
+  { label: '複数商品の状態の断定', re: /(?:状態|コンディション)[^。\n]{0,35}(?:同等|同じ|揃って|揃えて)[^。\n]{0,25}(?:確認して|あります|おります|です)/, condition: true },
   { label: "写真の追加送付", re: /(?:追加|別角度|もう少し|他)[^。\n]{0,10}(?:写真|画像|お写真)[^。\n]{0,6}(?:お送り|ご送付|送付|アップ)(?:いたし|し)(?:ます|ました)/ },
   { label: "発送日の確定", re: /(?:\d{1,2}月\d{1,2}日|明日|今週中|来週中|必ず)[^。\n]{0,10}(?:発送|出荷)(?:いたし|し)ます/ },
   { label: "値引き", re: /(?:お値引き|値引き|割引)(?:いたし|させていただき|し)ます/, discount: true },

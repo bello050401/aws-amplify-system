@@ -12,6 +12,7 @@ import { addPendingQuestions, clearPendingQuestions, mergeConversationContext } 
 import { saveReplyDraft,markReplyDraftStatus } from "./draftStore";
 import {conversationStamp} from './runtime/policy';
 import { getAIReplySettings } from "./settings";
+import { rememberVerifiedReplies } from './replyHistoryIngest';
 import { detectDeliveryDateIntent, evaluateDeliveryWindow, extractRequestedDeliveryDate } from "./deliveryWindow";
 import type { DeliveryWindowState } from "./deliveryWindow";
 import type { ReplyDraftRecord } from "./types";
@@ -162,6 +163,7 @@ export async function processInquiryAndNotify(params: {
     }
     if(target.body==='[送信取消]')return {drafted:false,draft:null,notify:null,reason:'取り消されたメッセージです。'};
     const remoteMessages=params.verifiedRemote?.messages;
+    await rememberVerifiedReplies({conversationId:conversation.id,channel:conversation.channel,messages,remote:params.verifiedRemote});
     const remoteTarget=remoteMessages?.filter(m=>m.speaker==='BUYER').at(-1);
     if(remoteMessages?.at(-1)?.speaker==='SELLER')return {drafted:false,draft:null,notify:null,reason:'取得した最新の会話では社員が返信済みです。'};
     if(remoteMessages&&!remoteTarget)return {drafted:false,draft:null,notify:null,reason:'お客様の問い合わせ本文を確認できません。'};
@@ -215,6 +217,7 @@ export async function processInquiryAndNotify(params: {
           channel: conversation.channel,
           conversationId: conversation.id,
           messageId: target.id,
+          historySourceId: params.verifiedRemote?.inquiryId ?? conversation.externalConversationId ?? conversation.externalCustomerId,
           messageText: remoteTarget?.body ?? target.body,
           // 添付が実際にあったか。無いのに「お送りいただいた写真を確認し」と
           // 書く返信案が実機で出た(2026-09-03)。お客様は写真を送っていない

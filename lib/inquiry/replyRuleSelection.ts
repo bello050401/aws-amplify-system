@@ -120,6 +120,8 @@ export interface SelectRulesInput {
    * 省略時は false(=不明)。既存の呼び出しの挙動は変わらない。
    */
   destinationKnown?: boolean;
+  /** Includes earlier customer questions when the newest message is only an answer. */
+  inquiryText?: string;
 }
 
 function matchesChannel(rule: ReplyRuleRecord, channel: MessageChannel): boolean {
@@ -162,6 +164,8 @@ export function selectReplyRules(input: SelectRulesInput): ReplyRuleRecord[] {
   for (const intent of input.intents) {
     for (const c of INTENT_TO_CATEGORIES[intent] ?? []) wanted.add(c);
   }
+  if (/領収書|但し書き|インボイス/.test(input.inquiryText??'')) wanted.add('RECEIPT');
+  if (/請求書|銀行振込|銀行振り込|支払|決済/.test(input.inquiryText??'')) wanted.add('PAYMENT');
   // 種別が1つも取れなかったときは OTHER だけを見る。何も渡さないと
   // 「どんな問い合わせにも共通の方針」まで落ちてしまう。
   if (wanted.size === 0) wanted.add("OTHER");
