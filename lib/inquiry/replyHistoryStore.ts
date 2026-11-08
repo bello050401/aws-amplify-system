@@ -2,7 +2,7 @@ import 'server-only';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import {createHash} from 'node:crypto';
-import { runtimeConfig } from './runtime/config';
+import { runtimeConfig } from '@/lib/inquiry/runtime/config';
 import { historyTopics, selectHistoricalReplies, REPLY_HISTORY_VERSION, type HistoricalReply } from './replyHistory';
 
 const db=DynamoDBDocumentClient.from(new DynamoDBClient({region:'us-west-2',maxAttempts:2}),{marshallOptions:{removeUndefinedValues:true}});

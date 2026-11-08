@@ -21,5 +21,9 @@ const assert=require('node:assert/strict'),vm=require('node:vm'),esbuild=require
  check('product claims never enter historical model wording',()=>{const s=h.historicalWording('お問い合わせありがとうございます。状態はどれも同等程度であることを確認しております。請求書はこのLINEでお送りします。');assert(!s.includes('同等'));assert(s.includes('請求書'));});
  const d=await load('lib/inquiry/discount.ts');
  check('BASE price multiplied by 0.95 using yen-safe arithmetic',()=>{assert.equal(d.calculateBaseDiscountedPrice(61800),58710);assert.equal(d.calculateBaseDiscountedPrice(29800),28310);assert.equal(d.calculateBaseDiscountedPrice(999),949);});
+ const ap=await load('lib/inquiry/answerPlan.ts');
+ check('counteroffer is recognized without the word discount',()=>{const result=ap.inspectAnswerPlanCoverage('58,710円でご案内できます。',{items:[{questionId:'Q1',topic:'NEGOTIATION',status:'ANSWERABLE',evidenceRefs:[],answerConstraints:[]}]});assert.equal(result.hasLikelyGap,false);});
+ check('missing unknown answer is still flagged',()=>{const result=ap.inspectAnswerPlanCoverage('ありがとうございます。',{items:[{questionId:'Q1',topic:'SIZE',status:'NEEDS_CHECK',evidenceRefs:[],answerConstraints:[]}]});assert.equal(result.hasLikelyGap,true);});
+ check('unverified item condition cannot be borrowed from another reply',()=>assert(ap.detectUngroundedPromises('商品状態は同等程度であることを確認しております。').includes('複数商品の状態の断定')));
  console.log(JSON.stringify({passed,externalWrites:0}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
