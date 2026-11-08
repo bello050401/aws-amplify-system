@@ -43,6 +43,7 @@
  * 混ぜると「顧客原文を追加ログへ保存しない」という制約に反する。
  */
 import { extractIntents, requiresProduct } from "./intent";
+import { detectUnverifiedFulfillment } from "./fulfillmentSafety";
 import type { InquiryIntent, UnresolvedFact } from "./types";
 
 export type AnswerPlanStatus = "ANSWERABLE" | "CONFLICT" | "NEEDS_CHECK";
@@ -349,7 +350,7 @@ export function detectUngroundedPromises(
   options?: { groundedDiscount?: boolean; groundedCondition?: boolean },
 ): string[] {
   const text = output ?? "";
-  const found: string[] = [];
+  const found: string[] = detectUnverifiedFulfillment(text);
   for (const p of UNGROUNDED_PROMISE_PATTERNS) {
     if (p.discount && options?.groundedDiscount) continue;
     if (p.condition && options?.groundedCondition) continue;

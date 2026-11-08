@@ -13,6 +13,7 @@ import {
   sendInquiryDraftAction,
 } from "@/app/actions/inquiryRuntime";
 import { RESULT_LABELS } from "@/lib/inquiry/runtime/labels";
+import { detectUnverifiedFulfillment } from "@/lib/inquiry/fulfillmentSafety";
 import { InquiryPhoto } from "./InquiryPhoto";
 import { InventoryThumbnail } from "@/app/inventory/InventoryThumbnail";
 type Queue = Awaited<ReturnType<typeof readInquiryQueue>>;
@@ -296,6 +297,11 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
                       value={draftText}
                       onChange={(e) => setDraftText(e.target.value)}
                     />
+                    {detectUnverifiedFulfillment(draftText).length > 0 && (
+                      <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                        配送日時や手配を約束する表現があります。この画面では手配の完了を確認できません。配送会社・担当者へ確認し、未確定の場合は返信案を修正してください。
+                      </p>
+                    )}
                     <div className="mt-3 flex flex-wrap gap-2">
                       {isAdmin&&queue?.settings.deliveryEnabled&&<button disabled={busy||draftText!==d.draftText||!!detail.delivery&&['QUEUED','SENDING','ACCEPTED','UNKNOWN'].includes(detail.delivery.status)} className="min-h-11 rounded-lg bg-teal-800 px-4 text-white disabled:opacity-50" onClick={async()=>{if(!window.confirm('表示中の会話・商品・返信内容を確認しましたか？このお客様に返信を送信します。'))return;setBusy(true);try{await sendInquiryDraftAction(selected,d.id,d.updatedAt);await open(selected);setNotice('送信前の最終確認を受け付けました。結果は再読み込みで確認できます。');}catch{setError('送信を予約できませんでした。最新の会話・返信案と接続を確認してください。');}finally{setBusy(false);}}}>内容を確認して送信</button>}
                       <button

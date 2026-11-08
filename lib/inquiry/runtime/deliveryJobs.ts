@@ -12,6 +12,7 @@ import {deliveryFingerprint,deliveryJobId,evaluatedDeliveryAllowed,recentDraftPr
 import {sendCustomerMessage,type CustomerTarget} from './customerTransport';
 import {createRuntimeRecord,getRuntimeRecord,inquiryDb,inquirySettings,runtimeConfig,stateFor} from './store';
 import {exactInquiryTarget,readJobKey,type ReadSnapshot} from './readContract';
+import {detectUnverifiedFulfillment} from '../fulfillmentSafety';
 
 type SendJob={pk:string;sk:'STATE';conversationPk:string;conversationId:string;version:number;draftId:string;draftVersion:string;sourceMessageId:string;destinationHash:string;bodyHash:string;manual:boolean;actor:string;retryKey:string;status:string;expiresAt:number;leaseUntil?:number};
 async function deliveryInputs(pk:string,draftId:string){
@@ -35,7 +36,7 @@ async function fresh(input:Awaited<ReturnType<typeof deliveryInputs>>,manual:boo
   if(state.version!==state.processedVersion||(!manual&&state.mode==='STAFF')||draft.status!=='READY'||!draft.draftText?.trim()||draft.unresolvedFacts.length||draft.evidence?.humanHandoff?.required||!proof||!recentDraftProof(proof.generatedAt))return false;
   // External prices, shipping arrangements and negotiation need a separate human review.
   // They are never covered merely by a product-record version check.
-  if(!manual&&(draft.evidence?.externalFacts.length||draft.evidence?.shipping||draft.evidence?.baseProducts?.length||draft.evidence?.channelProduct?.orderId||draft.evidence?.negotiation?.detected||draft.evidence?.inventorySyncSuspected))return false;
+  if(!manual&&(detectUnverifiedFulfillment(draft.draftText).length||draft.evidence?.externalFacts.length||draft.evidence?.shipping||draft.evidence?.baseProducts?.length||draft.evidence?.channelProduct?.orderId||draft.evidence?.negotiation?.detected||draft.evidence?.inventorySyncSuspected))return false;
   if(proof.conversationStamp!==conversationStamp(conversation,messages))return false;
   const latest=messages.filter(m=>m.direction==='INBOUND'&&m.body!=='[送信取消]').sort((a,b)=>(b.externalSentAt??b.createdAt).localeCompare(a.externalSentAt??a.createdAt))[0];
   if(!latest||latest.id!==draft.sourceMessageId||(conversation.lastOutgoingAt&&(latest.externalSentAt??latest.createdAt)<=conversation.lastOutgoingAt))return false;

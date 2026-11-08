@@ -451,6 +451,17 @@ async function testAnswerPlanFailureLogHasNoIdentifiers() {
   assertTrue(!serialized.includes(messageText), "識別子ログ: 顧客原文がログに含まれない");
 }
 
+async function testUnverifiedDeliveryPromiseIsRejected() {
+  const state = installBaseMock({generateText:async()=>({
+    output:"11月20日金曜日の18時〜21時にお届けするよう手配いたします。",
+    providerId:"anthropic",modelId:"test-unverified-delivery",
+  })});
+  const result=await generateInquiryReplyDraft(baseRequest({messageText:"11月20日の夕方にお願いします。"}));
+  assertEqual(callCount(state,"generateText"),3,"配送約束: 既存の再生成上限を超えない");
+  assertEqual(result.status,"FAILED","配送約束: 未確認の手配を回答可能として採用しない");
+  assertEqual(result.draftText,null,"配送約束: 未確認の約束を下書きへ残さない");
+}
+
 async function testBudgetFallbackUsesValidation() {
   const state = installBaseMock({ generateText: async () => {
     const error = new Error("budget unavailable"); error.name = "PaidAIBudgetError"; throw error;
@@ -475,6 +486,7 @@ async function main() {
   await testNormalSingleGeneration();
   await testMissingAnswerDoesNotTriggerRegeneration();
   await testUngroundedDiscountIsRejectedUntilAttemptCap();
+  await testUnverifiedDeliveryPromiseIsRejected();
   await testApprovedDiscountIsAllowed();
   await testModelInfoTracksTheAttemptThatSucceeded();
   await testAnswerPlanFailureLogHasNoIdentifiers();
