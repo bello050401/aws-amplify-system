@@ -2,6 +2,7 @@ import type {InventorySearchInput,SearchFieldDef} from './search';
 import type {InventoryItem} from './inventory';
 import {inventoryComparator} from '../../../lib/inventory/searchSort';
 import {splitCategoryNames} from '../../../lib/inventory/categories';
+import {createNameSearchMatcher,normalizeNameSearch} from '../../../lib/inventory/nameSearch';
 import {applyCatalogDelta,catalogBucket,compactCatalogItem,CATALOG_BUCKETS,CATALOG_RETENTION_MS,CATALOG_SYNC_MS,type CatalogDelta,type CatalogState} from './catalogProtocol';
 
 export const QUICK_SEARCH_MAX_AGE=CATALOG_RETENTION_MS;
@@ -67,7 +68,7 @@ export class QuickSearchCatalog {
    this.indexedFields=fields;
    const defs=new Map(fields.map(f=>[f.key,f]));
    const master=(key:string,label:string)=>defs.get(key)?.options?.find(o=>o.label===label)?.value??label;
-   this.indexed=this.items.map(item=>({item,name:normalize(item.name),barcode:normalize(item.barcode),categories:splitCategoryNames(item.category),
+   this.indexed=this.items.map(item=>({item,name:normalizeNameSearch(item.name),barcode:normalize(item.barcode),categories:splitCategoryNames(item.category),
     record:{...item,sourceInventoryId:item.displayId&&/^\d+$/.test(item.displayId)?item.displayId:undefined,locationId:master('locationId',item.location),statusId:item.statusId??master('statusId',item.condition)}}));
    this.sorted=null;this.result=null;
   }
@@ -78,8 +79,8 @@ export class QuickSearchCatalog {
   }
   const key=JSON.stringify([input.q,input.category,input.advanced,sort]);
   if(this.result?.key!==key){
-   const needle=normalize(input.q?.trim()??''),conditions=input.advanced?.conditions??[],codes=conditions.map(c=>normalize(c.value??''));
-   const found=this.sorted.entries.filter(e=>(!needle||e.name.includes(needle))&&(!input.category||e.categories.includes(input.category))&&
+   const matchesName=createNameSearchMatcher(input.q??''),conditions=input.advanced?.conditions??[],codes=conditions.map(c=>normalize(c.value??''));
+   const found=this.sorted.entries.filter(e=>matchesName(e.name)&&(!input.category||e.categories.includes(input.category))&&
     (!codes.length||(input.advanced?.combinator==='OR'?codes.some(c=>e.barcode===c):codes.every(c=>e.barcode===c)))).map(e=>e.item);
    this.result={key,items:found,quantity:found.reduce((sum,r)=>sum+r.quantity,0)};
   }

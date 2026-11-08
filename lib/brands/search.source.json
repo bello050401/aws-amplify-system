@@ -1,0 +1,17 @@
+{
+  "generatedAt": "2026-11-08T15:19:58.560Z",
+  "region": "us-west-2",
+  "sources": [
+    {
+      "table": "BrandTable",
+      "entries": 1141
+    },
+    {
+      "table": "FilteredBrandsTable",
+      "entries": 109
+    }
+  ],
+  "entries": 1141,
+  "bytes": 42494,
+  "sha256": "185ac1847fb94964a78aef34706f20e59b60925260581eec76bd095c8c7aa37e"
+}

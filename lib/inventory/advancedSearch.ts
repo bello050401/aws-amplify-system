@@ -1,4 +1,5 @@
 import {productDateValue} from "./productDates";
+import {createNameSearchMatcher, normalizeNameSearch} from './nameSearch';
 /**
  * ZAICO同等の汎用詳細検索エンジン(夜間開発指示書 §7)。
  *
@@ -306,7 +307,7 @@ export function evaluateQuery(
   return query.combinator === "OR" ? results.some(Boolean) : results.every(Boolean);
 }
 
-/** クイック検索(商品検索ボックス)専用 — 在庫ID/SKU/物品名のいずれかにcase-insensitiveに部分一致。 */
+/** 在庫ID/SKUは従来の部分一致。商品名はかな・登録ブランドの別表記も照合する。 */
 export function matchesQuickSearch(record: SearchableRecord, q: string): boolean {
   return createQuickSearchMatcher(q)(record);
 }
@@ -316,11 +317,12 @@ export function matchesQuickSearch(record: SearchableRecord, q: string): boolean
 export function createQuickSearchMatcher(q: string, nameOnly = false): (record: SearchableRecord) => boolean {
   const needle = searchText(q.trim());
   if (!needle) return () => true;
+  const matchesName = createNameSearchMatcher(q);
   return nameOnly
-    ? record => searchText(toStr(record.name)).includes(needle)
+    ? record => matchesName(normalizeNameSearch(toStr(record.name)))
     : record => searchText(toStr(record.displayId)).includes(needle)
       || searchText(toStr(record.sku)).includes(needle)
-      || searchText(toStr(record.name)).includes(needle);
+      || matchesName(normalizeNameSearch(toStr(record.name)));
 }
 
 /** Staff app's text box searches product names; code scanning uses a separate barcode condition. */
