@@ -176,6 +176,13 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               placeholder="商品を検索"
               className="w-28 border-none px-1.5 py-1 text-[13px] outline-none placeholder:text-gray-400 md:w-48"
             />
+            <button
+              type="submit"
+              disabled={isSearchPending}
+              className="min-h-8 shrink-0 border-l border-gray-300 bg-gray-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900 disabled:cursor-wait disabled:opacity-60"
+            >
+              検索
+            </button>
           </form>
           {/* 検索受付がすぐ分かる表示(QA-002)。router.pushの直後に同期
               でtrueになる自前のuseTransitionを使っており、Suspenseの
