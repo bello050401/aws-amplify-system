@@ -16,6 +16,7 @@ import {yahooPaymentPlan} from '../../../lib/saleCandidates/yahooPaymentModel';
 import {parseBaseOrder} from '../../../lib/saleCandidates/baseOrders';
 import {getAccessToken} from '../../../lib/base/oauth';
 import type {SaleCandidate} from '../../../lib/saleCandidates/model';
+import {shouldSeedAutomation} from '../../../lib/saleCandidates/automationEligibility';
 
 const required=(name:string)=>{const v=process.env[name];if(!v)throw Error('SALE_CONFIGURATION_MISSING');return v;};
 const table=()=>required('SALE_CANDIDATES_TABLE');
@@ -60,12 +61,13 @@ export async function handler(event?:{mode?:string}){
   }});
   const jobs=new Map<string,AutomationJob>();
   // Read bounded cursor pages; never starve older notifications behind the first page.
-  for(const state of ['PENDING','SALE_AUTO_ACTIVE','SALE_AUTO_ATTENTION']){
+  for(const state of ['PENDING','DONE','SALE_AUTO_ACTIVE','SALE_AUTO_ATTENTION']){
    const cursorKey='AUTOMATION_CURSOR:'+state,previous=await get(cursorKey);
    const page=await db.send(new QueryCommand({TableName:table(),IndexName:'ByState',KeyConditionExpression:'#s=:s',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':s':state},Limit:20,ExclusiveStartKey:previous?.cursor as QueryCommandInput['ExclusiveStartKey']}));
    await db.send(new PutCommand({TableName:table(),Item:{id:cursorKey,...(page.LastEvaluatedKey?{cursor:page.LastEvaluatedKey}:{})}}));
    for(const row of page.Items??[]){
-    if(state==='PENDING'){
+    if(state==='PENDING'||state==='DONE'){
+     if(!shouldSeedAutomation(row as SaleCandidate,config.enabledAt))continue;
      const id='AUTO:'+row.id,old=await get(id);if(old)continue;
      const now=new Date().toISOString(),job:AutomationJob={id,candidateId:row.id,state:'SALE_AUTO_ACTIVE',phase:'IDENTIFY',createdAt:now,updatedAt:now,receivedAt:row.receivedAt,attempts:0,version:randomUUID()};
      try{await db.send(new PutCommand({TableName:table(),Item:job,ConditionExpression:'attribute_not_exists(id)'}));jobs.set(job.id,job);}catch(e){if((e as Error).name!=='ConditionalCheckFailedException')throw e;}

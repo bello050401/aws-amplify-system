@@ -6,6 +6,7 @@ import {runAutomaticSale,type AutomationJob,type AutomationPorts} from '../lib/s
 import {DEFAULT_FEES,type SaleCandidate} from '../lib/saleCandidates/model';
 import {parsePurchaseMail} from '../lib/saleCandidates/mailParser';
 import {redactInquiryContacts,redactInquiryRecord} from '../lib/messaging/contactPrivacy';
+import {shouldSeedAutomation} from '../lib/saleCandidates/automationEligibility';
 const id=randomUUID(),now='2026-11-08T13:00:00.000Z',cutoff='2026-11-08T12:00:00.000Z';
 const c:SaleCandidate={id:'e'.repeat(64),state:'PENDING',channel:'BASE',source:'BASE_API',name:'木製チェア',quantity:2,unitPrice:10000,orderId:'TEST-ORDER',identifierType:'ORDER',saleDate:'2026-11-08',receivedAt:now,createdAt:now,updatedAt:now,shipping:1000,orderTotal:21000,payment:'creditcard',warnings:[],orderLineCount:1,externalListingId:'10000001',orderLineId:'10000002',orderRoute:'WEB',baseDispatchStatus:'ordered'};
 const item={id,name:'【在庫5】木製チェア',quantity:5,updatedAt:now};
@@ -19,6 +20,14 @@ for(const [name,patch,reason] of [
  ['spoofed mail',{channel:'MERCARI',source:'GMAIL',senderAuthenticated:false},'UNTRUSTED_MAIL'],
 ] as [string,Partial<SaleCandidate>,string][])test('no stock/EC writes: '+name,()=>{const d=decide(patch);assert.notEqual(d.kind,'SELL');assert.equal('reason'in d&&d.reason,reason);});
 test('split stocks sharing listing ID never choose first hit',()=>assert.equal((decide({},item,[id,randomUUID()]) as any).reason,'NOT_UNIQUE'));
+test('human completes notification before first worker poll: seed EC processing; exclude old sales/direct/invoice',()=>{
+ const done:SaleCandidate={...c,state:'DONE',completedAt:now,result:{sourceId:id,soldId:id,remainingQuantity:0,soldQuantity:2,updatedAt:now}};
+ assert.equal(shouldSeedAutomation(done,cutoff),true);
+ assert.equal(shouldSeedAutomation({...done,completedAt:'2026-11-01T00:00:00Z'},cutoff),false);
+ assert.equal(shouldSeedAutomation({...done,source:'DIRECT'},cutoff),false);
+ assert.equal(shouldSeedAutomation({...done,source:'INVOICE'},cutoff),false);
+ assert.equal(shouldSeedAutomation({...c,state:'DELETED'},cutoff),false);
+});
 test('Yahoo excludes shipping fee and keeps quantity/date deferred until authenticated payment',()=>{
  const y=parsePurchaseMail({gmailId:'qa',from:'auction-master@mail.yahoo.co.jp',subject:'即決価格での落札：木製チェア(r1240092475)',receivedAt:now,authenticatedYahooSender:true,text:'商品：木製チェア\nオークションID：r1240092475\n落札価格：10000 円\n落札数量：1\n送料：1000 円'})[0];
  const d=automaticSaleDecision(y,[id],item,DEFAULT_FEES,cutoff);assert.equal(d.kind,'SELL');if(d.kind==='SELL'){assert.equal(d.request.saleCommission,999);assert.equal(d.request.awaitingYahooPayment,true);assert.equal(d.request.saleEndDate,'');}
