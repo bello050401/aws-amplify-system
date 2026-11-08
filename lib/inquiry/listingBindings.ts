@@ -3,10 +3,12 @@ import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { inventoryDdb } from '@/lib/inventory/categoryPersistence';
 import type { ProductMatch } from './types';
 
-export function confirmedBaseBinding(row: Record<string, any> | undefined, inventoryId: string, baseIds: readonly string[]): boolean {
+export function confirmedBaseBinding(row: Record<string, unknown> | undefined, inventoryId: string, baseIds: readonly string[]): boolean {
+  const baseline = row?.baseline && typeof row.baseline === 'object' ? row.baseline as Record<string, unknown> : undefined;
+  const base = baseline?.BASE && typeof baseline.BASE === 'object' ? baseline.BASE as Record<string, unknown> : undefined;
   return !!row && row.pk === 'ECONVENI#MANUAL_LINK#' + inventoryId
     && row.inventoryId === inventoryId && !!row.linkedAt && !!row.productId
-    && baseIds.includes(String(row.baseline?.BASE?.listingId ?? ''));
+    && baseIds.includes(String(base?.listingId ?? ''));
 }
 
 /** Inspect only existing operator-confirmed links for plausible candidates. No external writes. */
