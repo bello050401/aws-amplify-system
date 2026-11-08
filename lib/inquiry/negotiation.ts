@@ -29,7 +29,6 @@
  */
 
 /** 「2脚」「2点」「二台」等に使われる助数詞。家具の問い合わせで実際に出るものだけを並べる。 */
-const COUNTERS = "脚点個台枚客セット組張本部";
 
 const KANJI_DIGITS: Record<string, number> = {
   〇: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
@@ -120,11 +119,18 @@ export interface ExtractedQuantity {
  */
 export function extractQuantity(text: string): ExtractedQuantity | null {
   const s = normalizeForNegotiation(text);
-  const re = new RegExp(`([0-9]{1,3}|[〇一二三四五六七八九十]{1,3})\\s*(?:つ|[${COUNTERS}])`, "g");
+  const re = /([0-9]{1,3}|[〇一二三四五六七八九十]{1,3})\s*(セット|脚|点|個|台|枚|客|組|張|本|つ)/g;
   for (const m of s.matchAll(re)) {
     // 「1万円」の 1 を拾わないよう、直後が「万」なら数量ではない。
     const after = s.slice((m.index ?? 0) + m[0].length);
     if (after.startsWith("万")) continue;
+    const before = s.slice(Math.max(0, (m.index ?? 0) - 20), m.index ?? 0);
+    // Question counts are not purchase quantities ("以下の2点ご回答ください").
+    if (['点', 'つ', '個'].includes(m[2]) && (
+      /(?:質問|確認事項|お聞きしたいこと|伺いたいこと)(?:が|は|を)?\s*$/.test(before)
+      || /^\s*(?:だけ|ほど|程)?(?:ご)?(?:質問|回答|確認|相談|教えて|伺い|お聞き)/.test(after)
+      || /^\s*(?:について|に関して|の)(?:ご)?(?:質問|回答|確認|相談)/.test(after)
+    )) continue;
     const value = /^[0-9]+$/.test(m[1]) ? Number(m[1]) : parseSmallKanjiNumber(m[1]);
     if (value != null && value > 0 && value <= 999) return { value, raw: m[0].trim() };
   }
@@ -290,7 +296,20 @@ export function resolveNegotiationContext(params: {
   currentHasDestination: boolean;
 }): NegotiationContext {
   const current = extractNegotiation(params.currentText);
-  if (current.isNegotiation) return { ...current, fromCurrentMessage: true };
+  if (current.isNegotiation) {
+    // A destination/payment follow-up still belongs to the previous offer.
+    if (params.currentHasDestination && !/https?:\/\//i.test(params.currentText)) {
+      const past = [...params.history].reverse().filter(m => m.direction === 'INBOUND')
+        .map(m => extractNegotiation(m.body)).find(n => n.isNegotiation);
+      if (past) {
+        const quantity = current.quantity ?? past.quantity;
+        const total = current.requestedTotalPriceYen ?? past.requestedTotalPriceYen;
+        return { ...current, quantity, quantityRaw: current.quantityRaw ?? past.quantityRaw,
+          requestedTotalPriceYen: total, requestedUnitPriceYen: total == null ? null : Math.floor(total / (quantity ?? 1)), fromCurrentMessage: true };
+      }
+    }
+    return { ...current, fromCurrentMessage: true };
+  }
 
   // 引き継ぐのは「配送先の回答」のときだけ(上のコメント参照)。
   if (!params.currentHasDestination) return { ...current, fromCurrentMessage: true };

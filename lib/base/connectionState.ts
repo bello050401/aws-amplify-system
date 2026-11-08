@@ -98,7 +98,8 @@ export interface BaseConnectionState {
 
 /** 本番ビルドかどうか。Amplify HostingのSSRコンピュート上ではproductionになる。 */
 export function isProductionRuntime(): boolean {
-  return process.env.NODE_ENV === "production";
+  // Lambda does not set NODE_ENV. A cloud worker must never silently use fixtures.
+  return process.env.NODE_ENV === "production" || !!process.env.AWS_LAMBDA_FUNCTION_NAME || !!process.env.AWS_EXECUTION_ENV?.startsWith("AWS_Lambda_") || !!process.env.INQUIRY_TABLE;
 }
 
 /**
@@ -115,12 +116,12 @@ export function hasBaseAppCredentialsInEnv(): boolean {
 }
 
 export function isBaseMockForced(): boolean {
-  return process.env.BASE_USE_MOCK === "true";
+  return !isProductionRuntime() && process.env.BASE_USE_MOCK === "true";
 }
 
 /**
  * モックへフォールバックしてよいか。
- * 本番では「明示的にopt-inした場合」以外は絶対に許さない —— 作り物の商品を
+ * 本番では明示設定が残っていても許さない —— 作り物の商品を
  * 実在の商品として返すことになるため。
  */
 export function shouldUseBaseMock(): boolean {

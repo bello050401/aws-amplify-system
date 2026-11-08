@@ -58,7 +58,8 @@ export function extractShippingDestination(text: string): ShippingDestination {
   // 指示語が無い場合は、本文中の都道府県名をそのまま探す。
   for (const [alias, full] of Object.entries(PREFECTURE_ALIASES)) {
     if (alias.length >= 2 && text.includes(alias)) {
-      return { prefecture: full, cityHint: null, matchedText: alias };
+      const city = text.match(new RegExp(alias + '\\s*([\\u4E00-\\u9FFF々ぁ-んァ-ヶー]{1,16}?(?:市|区|郡|町|村))'))?.[1] ?? null;
+      return { prefecture: full, cityHint: city, matchedText: city ? alias + city : alias };
     }
   }
   for (const [city, full] of Object.entries(CITY_TO_PREFECTURE)) {

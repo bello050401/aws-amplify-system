@@ -8,6 +8,7 @@ import { resolveDisplayInventoryId } from "@/lib/inventory/inventoryId";
 import { KNOWN_FURNITURE_BRANDS } from "@/lib/ai/productIntro/factSafety";
 import { extractProductReferences, normalizeUrl, type ProductReferenceResult } from "./references";
 import { lookupBaseProducts } from "./baseProductLookup";
+import { confirmCandidatesByBaseBinding } from './listingBindings';
 import {
   decideResolution,
   mergeSameProduct,
@@ -557,6 +558,9 @@ export async function resolveProductFromInquiry(params: {
 
   // 同じ内部在庫IDの重複だけをまとめる。分割在庫・同名商品は別候補を維持する。
   let resolution = decideResolution(mergeSameProduct(scored));
+  if (resolution.status !== 'RESOLVED' && resolution.candidates.length && signals.baseItemIds.length) {
+    resolution = decideResolution(await confirmCandidatesByBaseBinding(resolution.candidates, signals.baseItemIds));
+  }
   let inventorySyncSuspected = false;
   const freshness = await getZaicoSyncFreshness();
 

@@ -43,7 +43,7 @@ export interface NegotiationInventoryFacts {
   /** 現在の販売価格(単価)。salePriceが無ければ販売予定価格。 */
   unitSalePriceYen: number | null;
   /** どちらを使ったか(管理者へ明示する)。 */
-  unitSalePriceSource: "salePrice" | "plannedSalePrice" | null;
+  unitSalePriceSource: "salePrice" | "plannedSalePrice" | "baseCurrentPrice" | null;
   purchasePriceYen: number | null;
   saleStartDate: string | null;
   width: string | null;
@@ -173,10 +173,10 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
       ? (params.declaredShippingRank as ShippingRank)
       : null;
   const rank = declaredRank ?? (hasDims ? dims.rank : null);
-  const shippingDimensionText = hasDims
+  const shippingDimensionText = hasDims && !declaredRank
     ? `幅${dims.widthCm} × 奥行${dims.depthCm} × 高さ${dims.heightCm} cm`
     : null;
-  const shippingSumCm = hasDims ? dims.sumCm : null;
+  const shippingSumCm = hasDims && !declaredRank ? dims.sumCm : null;
   if (declaredRank) {
     decisionNotes.push(`配送ランクはBASEの商品説明に明記された${declaredRank}ランクを使用した(寸法からの推定より優先)。`);
   } else if (!hasDims) {
@@ -244,8 +244,14 @@ export async function resolveNegotiation(params: ResolveNegotiationParams): Prom
   if (inventory.unitSalePriceSource === "plannedSalePrice") {
     decisionNotes.push("販売価格が未確定のため、販売予定価格(ZAICOの「☆販売予定価格（送料別大原記載）」)を単価として使用した。");
   }
+  if (inventory.unitSalePriceSource === 'baseCurrentPrice') {
+    decisionNotes.push('お客様が指定したBASE商品を現在のAPIと確認済み在庫連携で照合し、現在の掲載価格を基準に使用した。過去の販売予定価格は使わない。');
+  }
 
   const condition = evaluateOfficialLinePaymentCondition(channel);
+  if (requestedTotal != null && offer?.referenceOffer != null && requestedTotal < offer.referenceOffer * quantity) {
+    missing.push('ご希望価格でのお値下げ可否（社内確認）');
+  }
 
   const staffCard: NegotiationStaffCard = {
     productName: inventory.name,

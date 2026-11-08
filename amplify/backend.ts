@@ -275,13 +275,14 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   const inquiryWorker=new NodejsFunction(inquiryStack,'Worker',{entry:path.resolve('amplify/functions/inquiry-runtime/handler.ts'),handler:'handler',
     runtime:Runtime.NODEJS_22_X,timeout:Duration.seconds(180),memorySize:1024,logRetention:RetentionDays.ONE_MONTH,
     bundling:{minify:true,sourceMap:false,esbuildArgs:{'--alias:server-only':path.resolve('amplify/functions/inquiry-runtime/server-only.ts'),'--alias:@/lib/amplify/dataClient':path.resolve('amplify/functions/inquiry-runtime/dataClient.ts'),'--alias:@/lib/inquiry/runtime/config':path.resolve('amplify/functions/inquiry-runtime/config.ts'),'--alias:@/lib/inventory/mutationSession':path.resolve('amplify/functions/inquiry-runtime/webBoundary.ts'),'--alias:@/lib/amplify/serverUtils':path.resolve('amplify/functions/inquiry-runtime/webBoundary.ts')}},
-    environment:{INQUIRY_TABLE:inquiryTable.tableName,QUEUE_URL:inquiryQueue.queueUrl,
+    environment:{NODE_ENV:'production',INQUIRY_TABLE:inquiryTable.tableName,QUEUE_URL:inquiryQueue.queueUrl,
       INQUIRY_CUSTOMER_DELIVERY_ENABLED:'false',LINE_OUTBOUND_ENABLED:'false',
       CONVERSATION_TABLE_NAME:backend.data.resources.tables.Conversation.tableName,MESSAGE_TABLE_NAME:backend.data.resources.tables.Message.tableName,
       MESSAGING_ATTACHMENT_BUCKET:backend.storage.resources.bucket.bucketName,
       ...(process.env.AGENTCORE_GATEWAY_URL?{AGENTCORE_GATEWAY_URL:process.env.AGENTCORE_GATEWAY_URL}:{}),
       ...(process.env.AI_BUDGET_CONFIG_JSON?{AI_BUDGET_CONFIG_JSON:process.env.AI_BUDGET_CONFIG_JSON}:{})}});
   inquiryTable.grantReadWriteData(inquiryWorker);
+  inquiryWorker.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem'],resources:[`arn:aws:dynamodb:${inquiryStack.region}:${inquiryStack.account}:table/BelloEconveniWorkflow`],conditions:{'ForAllValues:StringLike':{'dynamodb:LeadingKeys':['ECONVENI#MANUAL_LINK#*']}}}));
   inquiryQueue.grantSendMessages(inquiryWorker);
   for(const name of ['Inventory','InventoryCategory','Category','Location','StatusMaster','UnitMaster','CustomFieldDefinition','InventoryHistory','ChannelListing','BaseProductArchive','KnowledgeDocument','KnowledgeDocumentRevision','ReplyRule','AIReplySettings','ShippingRate','ZaicoSyncJob'])backend.data.resources.tables[name]?.grantReadData(inquiryWorker);
   for(const name of ['Conversation','Message','ReplyDraft','NotificationDelivery','LineNotifySettings','ExternalResearchCache','AIUsageLog','AIBudgetLedger','AIBudgetReservation','BaseOAuthToken','MercariOrderContext'])backend.data.resources.tables[name]?.grantReadWriteData(inquiryWorker);

@@ -23,7 +23,7 @@ import type { BaseItem } from "@/lib/base/types";
  *
  * ── 直し方 ──────────────────────────────────────────────────────
  *
- * アーカイブに無ければ **BASE API へ直接聞く**。BASE APIクライアントは
+ * 現在の価格・在庫は **BASE API へ直接聞く**。BASE APIクライアントは
  * 既にあり（`lib/base/index.ts` の `getBaseClient().getItem`）、EC出品や
  * 商品説明分析で使われている。新しいクライアントは作らない。
  *
@@ -34,7 +34,7 @@ import type { BaseItem } from "@/lib/base/types";
  */
 
 export type BaseProductSource =
-  /** 取り込み済みのBASE過去商品。BASEへ問い合わせていない。 */
+  /** APIで現在値を確認できない場合の過去商品。価格・在庫は採用しない。 */
   | "archive"
   /** BASE APIへ問い合わせて取得した現在の値。 */
   | "api"
@@ -141,19 +141,20 @@ export async function lookupBaseProduct(baseItemId: string): Promise<BaseProduct
     await serverDataClient.models.BaseProductArchive.get({ baseItemId }, inventoryAuthMode),
     "BASE過去商品",
   );
-  if (archived) return fromArchive(archived as unknown as Record<string, unknown>);
+  // Archives identify past products; they are not evidence of today's price or availability.
+  const archivedIdentity = archived ? { ...fromArchive(archived as unknown as Record<string, unknown>), price: null, stock: null, isPublished: null } : null;
 
   // 2) BASE API。未接続・エラーは「特定できなかった」として扱う。
   try {
     const item = await getBaseClient().getItem(baseItemId);
-    if (!item) return notFound;
+    if (!item) return archivedIdentity ?? notFound;
     return fromApi(item);
   } catch (err) {
     // 商品IDや文面は出さない。何が起きたかの種別だけ残す。
     console.warn("[baseProductLookup] BASE APIから商品を取得できませんでした", {
       name: err instanceof Error ? err.name : "unknown",
     });
-    return notFound;
+    return archivedIdentity ?? notFound;
   }
 }
 

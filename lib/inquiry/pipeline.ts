@@ -1,5 +1,6 @@
 import "server-only";
 import { buildFreeReply, canAnswerWithoutAI } from "./freeReply";
+import { officialLinePaymentFacts, ensureOfficialLinePaymentGuidance } from './paymentWorkflow';
 import { generateText } from "@/lib/ai/gateway/gateway";
 import { buildCustomerSafeFacts, type CustomerSafeFacts } from "@/lib/ai/productIntro/facts";
 import { getInventoryDetail, listCategories, listStatuses } from "@/lib/inventory/queries";
@@ -19,7 +20,7 @@ import {
   mergeHumanHandoff,
   parseHandoffFromReviewReasons,
 } from "./humanHandoff";
-import { resolveNegotiationContext } from "./negotiation";
+import { resolveNegotiationContext, extractQuantity } from "./negotiation";
 import { resolveNegotiation, type NegotiationInventoryFacts } from "./negotiationService";
 import { resolveProductFromInquiry } from "./productResolver";
 import { effectiveListThumbnailKey, resolveTopImage } from "@/lib/inventory/imageTypes";
@@ -232,6 +233,13 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   });
 
   const keywordIntents = extractIntents(messageText);
+  const quantityTexts = [...request.history.filter(m => m.direction === 'INBOUND').map(m => m.body), messageText];
+  if (incomingContext.negotiation.quantity != null && !quantityTexts.some(t => extractQuantity(t))
+      && quantityTexts.some(t => /[0-9０-９一二三四五六七八九十]+\s*点\s*(?:ご)?(?:回答|質問|確認)/.test(t))) {
+    workingContext = mergeConversationContext(workingContext, { negotiation: {
+      quantity: null, requestedUnitPriceYen: negotiation.requestedTotalPriceYen ?? incomingContext.negotiation.requestedTotalPriceYen,
+    }});
+  }
 
   // ── 交渉の引き継ぎ(§21) ───────────────────────────────────────
   //
@@ -362,7 +370,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     references: resolution.references,
     fromOperatorOrConversation: Boolean(
       request.overrideInventoryId || request.conversationInventoryId || orderInventoryId || carriedInventoryId,
-    ),
+    ) && !resolution.resolved?.reasons.includes('確認済みのeコンビニ連携先BASE商品IDが一致'),
     candidateCount: resolution.candidates.length,
   });
   const urlRequest = decideUrlRequest({
@@ -566,7 +574,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
           (resolution.candidates.length > 0 ? `候補が${resolution.candidates.length}件あります。` : "") +
           "在庫データ側で確認してください(お客様への確認は不要です)。"
         : resolution.status === "AMBIGUOUS"
-          ? "候補が複数あり、どの商品か確定できていません。"
+          ? `商品名が一致する候補が${resolution.candidates.length}件ありますが、在庫との紐付けが未確認です。担当者が候補を確認してください。`
           : resolution.status === "NOT_FOUND"
             ? "問い合わせに含まれる情報に一致する在庫が見つかりませんでした。"
             : "問い合わせから対象商品を特定できる情報が見つかりませんでした。",
@@ -784,9 +792,12 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
             inventoryId: resolution.resolved.inventoryId,
             displayInventoryId: resolution.resolved.displayInventoryId,
             name: inventory.name,
-            unitSalePriceYen: inventory.salePrice ?? inventory.plannedSalePrice ?? null,
+            unitSalePriceYen: basis === 'BASE_ITEM_ID' && linkedBaseForContext
+              ? linkedBaseForContext.source === 'api' ? linkedBaseForContext.price : null
+              : inventory.salePrice ?? inventory.plannedSalePrice ?? null,
             unitSalePriceSource:
-              inventory.salePrice != null ? "salePrice" : inventory.plannedSalePrice != null ? "plannedSalePrice" : null,
+              basis === 'BASE_ITEM_ID' && linkedBaseForContext ? linkedBaseForContext.source === 'api' ? 'baseCurrentPrice' : null
+                : inventory.salePrice != null ? "salePrice" : inventory.plannedSalePrice != null ? "plannedSalePrice" : null,
             purchasePriceYen: inventory.purchasePrice ?? null,
             saleStartDate: inventory.saleStartDate ?? null,
             // §36 在庫にサイズが無いという理由だけで値下げ判断を止めない。
@@ -946,7 +957,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
         resolution.candidates.length > 0 ? resolution.candidates.map((c) => c.inventoryId) : undefined,
       inventoryStatus: resolution.status,
       basis,
-      salePriceYen: productContext.commerce.currentSalePriceYen?.value ?? undefined,
+      salePriceYen: negotiationResult?.staffCard?.unitSalePriceYen ?? productContext.commerce.currentSalePriceYen?.value ?? undefined,
     },
     negotiation: negotiation.isNegotiation
       ? {
@@ -954,7 +965,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
           requestedTotalPriceYen: negotiation.requestedTotalPriceYen ?? undefined,
           requestedUnitPriceYen: negotiation.requestedUnitPriceYen ?? undefined,
           quantity: negotiation.quantity ?? undefined,
-          currentUnitPriceYen: productContext.commerce.currentSalePriceYen?.value ?? undefined,
+          currentUnitPriceYen: negotiationResult?.staffCard?.unitSalePriceYen ?? productContext.commerce.currentSalePriceYen?.value ?? undefined,
         }
       : undefined,
     shipping: {
@@ -1062,6 +1073,10 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     category: r.category,
     version: r.version,
   }));
+  const inquiryText = [...request.history.filter(m => m.direction === 'INBOUND').map(m => m.body), messageText].join('\n');
+  if (/領収書/.test(inquiryText) && !appliedRules.some(r => r.category === 'RECEIPT')) {
+    unresolved.push({field: '領収書の発行・但し書き', reason: '今回のご希望に対応できることを確認した返信ルールがありません。請求書とは区別し、社内で確認してください。'});
+  }
 
   // ── 質問単位の回答計画(AnswerPlan) ──────────────────────────────
   //
@@ -1069,10 +1084,12 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
   // そのまま入力にする(新しく「何が未解決か」を判定し直さない —— 既存の
   // unresolved判定・knownFacts判定をそのまま再利用する。lib/inquiry/
   // answerPlan.ts のファイル冒頭コメント参照)。新しいAI呼び出しは無い。
+  const customerFacingFacts = [...trustedProductFacts, ...(negotiationResult?.customerSafeFacts ?? []),
+    ...officialLinePaymentFacts(request.channel, negotiation.isNegotiation)];
   const answerPlan = buildAnswerPlan({
     messageText,
     hasProduct: inventory != null,
-    trustedFactLabels: trustedProductFacts.map((f) => f.label),
+    trustedFactLabels: customerFacingFacts.map((f) => f.label),
     knownFactLabels: knownFacts(workingContext).map((f) => f.label),
     unresolved,
   });
@@ -1090,7 +1107,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     })),
     // 交渉で確定した金額だけを事実として足す。配送先が未確定なら
     // customerSafeFacts は空なので、AIが提示できる金額が存在しない。
-    trustedProductFacts: [...trustedProductFacts, ...(negotiationResult?.customerSafeFacts ?? [])],
+    trustedProductFacts: customerFacingFacts,
     knowledgeExcerpts: knowledgeHits.map((k) => ({ title: k.title, excerpt: k.excerpt })),
     shipping,
     externalFacts: research.facts,
@@ -1184,7 +1201,7 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     let output: string;
     try {
       if (freeOnly) {
-        output = buildFreeReply(answerPlan, trustedProductFacts, true);
+        output = buildFreeReply(answerPlan, customerFacingFacts, true);
         evidence.generationRoute = "free_known_facts";
       } else {
       const result = await generateText({
@@ -1201,11 +1218,12 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
     } catch (err) {
       if (!(err instanceof Error) || err.name !== "PaidAIBudgetError") return finish(failed("AIの呼び出しに失敗しました。", evidence, intents, unresolved));
       freeOnly = true;
-      output = buildFreeReply(answerPlan, trustedProductFacts);
+      output = buildFreeReply(answerPlan, customerFacingFacts);
       evidence.generationRoute = "free_budget_fallback";
       unresolved.push({ field: "返信案", reason: "有料AIを停止しているため、担当者の確認が必要です。" });
     }
 
+    output = ensureOfficialLinePaymentGuidance(output, request.channel, negotiation.isNegotiation);
     const validation = validateReplyDraft({
       output,
       facts,
@@ -1230,7 +1248,8 @@ export async function generateInquiryReplyDraft(request: InquiryReplyRequest): P
       allowedWeightText,
       // 根拠として認めた文章。住所のように「出典があれば出してよいが
       // 出典が無ければ個人情報」という記述の判定に使う。
-      groundedTexts: [...knowledgeHits.map((k) => k.excerpt), ...trustedProductFacts.map((f) => f.value)],
+      groundedTexts: [...knowledgeHits.map((k) => k.excerpt), ...customerFacingFacts.map((f) => f.value),
+        ...(destinationPrefecture ? [destinationPrefecture + (destinationCityHint ?? '')] : [])],
     });
     if (validation.ok) {
       // ── AnswerPlan固有の生成後検査(既存の検査枠をそのまま使う) ──────
