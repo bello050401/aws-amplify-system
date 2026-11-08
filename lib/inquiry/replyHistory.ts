@@ -93,7 +93,7 @@ export function safeHistoryUrl(value?:string|null):string|null {
  * current customer context. Same-conversation and future answers are excluded. */
 export function selectHistoricalReplies(rows:HistoricalReply[],input:{text:string;channel:string;conversationId:string;excludeSourceIds?:string[];before?:string}):HistoricalReply[] {
   const topics=historyTopics(input.text),excluded=new Set(input.excludeSourceIds??[]),seen=new Set<string>();
-  const candidates=rows.filter(r=>r.version===REPLY_HISTORY_VERSION && r.conversationId!==input.conversationId &&
+  const candidates=rows.filter(r=>r.version===REPLY_HISTORY_VERSION && r.channel===input.channel && r.conversationId!==input.conversationId &&
     !excluded.has(r.sourceId) && (!input.before||r.sentAt<input.before) && r.topics.some(t=>topics.includes(t)))
     .filter(r=>{if(seen.has(r.id))return false;seen.add(r.id);return true;})
     .sort((a,b)=>{
