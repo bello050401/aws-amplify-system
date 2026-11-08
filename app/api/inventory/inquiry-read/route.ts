@@ -1,14 +1,17 @@
 import {NextRequest,NextResponse} from 'next/server';
 import {getInventoryRole,getCurrentInventoryUserSub} from '@/lib/amplify/requireInventoryUser';
 import {claimInquiryRead,finishInquiryRead} from '@/lib/inquiry/runtime/readJobs';
+import {bridgePostHeaderFailure} from '@/lib/listing/mercariBridge/postGuard';
 export const dynamic='force-dynamic';
 const reply=(body:Record<string,unknown>,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
 /** Dedicated read worker authenticates with BELLO's normal approved ADMIN session. */
 export async function POST(request:NextRequest){
-  if(request.headers.get('origin')!==request.nextUrl.origin||request.headers.get('x-bello-inquiry-read')!=='1'||!request.headers.get('content-type')?.startsWith('application/json'))return reply({ok:false},403);
+  const headerFailure=bridgePostHeaderFailure({origin:request.headers.get('origin'),requestOrigin:request.nextUrl.origin,configuredPublicOrigin:process.env.MERCARI_BRIDGE_PUBLIC_ORIGIN,contentType:request.headers.get('content-type'),hasNextAction:request.headers.has('next-action')});
+  if(headerFailure)return reply({ok:false,code:headerFailure},403);
+  if(request.headers.get('x-bello-inquiry-read')!=='1')return reply({ok:false,code:'READ_HEADER_REQUIRED'},403);
   try{
-    if(await getInventoryRole()!=='ADMIN')return reply({ok:false},403);
-    const actor=await getCurrentInventoryUserSub();if(!actor)return reply({ok:false},403);
+    if(await getInventoryRole()!=='ADMIN')return reply({ok:false,code:'BELLO_AUTH_REQUIRED'},403);
+    const actor=await getCurrentInventoryUserSub();if(!actor)return reply({ok:false,code:'BELLO_AUTH_REQUIRED'},403);
     const length=request.headers.get('content-length');if(length&&(!/^\d+$/.test(length)||Number(length)>300000))return reply({ok:false},413);
     const text=await request.text();if(Buffer.byteLength(text)>300000)return reply({ok:false},413);
     const input=JSON.parse(text);

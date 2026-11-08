@@ -32,7 +32,7 @@ async function ensureProfile(profileDir, origin) {
 
 /** Separate visible BELLO browser; the person signs in through BELLO's regular login page. */
 export async function openBelloAdminContext({ origin, profileDir, playwrightModulePath,
-  navigateToLogin = false, launchPersistentContext = null }) {
+  navigateToLogin = false, launchPersistentContext = null, onOpened = () => {} }) {
   await ensureProfile(profileDir, origin);
   let launch = launchPersistentContext;
   if (!launch) {
@@ -42,11 +42,15 @@ export async function openBelloAdminContext({ origin, profileDir, playwrightModu
     if (!playwright?.chromium?.launchPersistentContext) throw Error("Playwright Chrome is unavailable");
     launch = playwright.chromium.launchPersistentContext.bind(playwright.chromium);
   }
-  const context = await launch(profileDir, { channel: "chrome", headless: false });
+  const context = await launch(profileDir, { channel: "chrome", headless: false, chromiumSandbox: true });
+  onOpened(context);
   if (!navigateToLogin) return context;
   try {
     const page = context.pages()[0] ?? await context.newPage();
-    await page.goto(`${origin}/inventory/login`);
+    // A login page can keep secondary resources pending. Leave its visible
+    // window available for the person instead of closing it on load timeout.
+    try { await page.goto(`${origin}/inventory/login`, {waitUntil:'domcontentloaded',timeout:45000}); }
+    catch (error) { if(error.name!=='TimeoutError')throw error; }
     return context;
   } catch (error) { await context.close(); throw error; }
 }

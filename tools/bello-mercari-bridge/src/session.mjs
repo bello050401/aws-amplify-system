@@ -46,17 +46,19 @@ async function launchDedicatedProfile({ profileDir, playwrightModulePath,
     if (!playwright?.chromium?.launchPersistentContext) throw Error("Playwright persistent Chrome is unavailable");
     launch = playwright.chromium.launchPersistentContext.bind(playwright.chromium);
   }
-  return launch(profileDir, { channel: "chrome", headless: false,
+  return launch(profileDir, { channel: "chrome", headless: false, chromiumSandbox: true,
     ...(serviceWorkersBlock ? { serviceWorkers: "block" } : {}),
     ...(startOffline ? { offline: true } : {}) });
 }
 
 /** Opens a dedicated, visible Chrome profile. The merchant signs in; no existing IAB session is read or copied. */
-export async function openDedicatedLogin({ profileDir, playwrightModulePath, launchPersistentContext = null }) {
+export async function openDedicatedLogin({ profileDir, playwrightModulePath, launchPersistentContext = null, onOpened = () => {} }) {
   const context = await launchDedicatedProfile({ profileDir, playwrightModulePath, launchPersistentContext });
+  onOpened(context);
   try {
     const page = context.pages()[0] ?? await context.newPage();
-    await page.goto(SIGN_IN_URL);
+    try { await page.goto(SIGN_IN_URL, {waitUntil:'domcontentloaded',timeout:45000}); }
+    catch (error) { if(error.name!=='TimeoutError')throw error; }
     return context;
   } catch (error) {
     await context.close();
@@ -72,8 +74,12 @@ export async function openInquiryReadSession({root,profileDir,playwrightModulePa
   try{
     if(typeof context.setOffline!=='function')throw Error('OFFLINE_GUARD_REQUIRED');
     // Restored pages cannot resume work; no unsent form or old job is reused.
-    for(const old of context.pages())await old.close();
+    const restored=context.pages();
+    // A persistent Chrome context exits when its last tab is closed. Create
+    // the offline blank tab first, then discard restored pages before going online.
     const page=await context.newPage();
+    for(const old of restored)await old.close();
+    if(context.pages().some(candidate=>candidate!==page))throw Error('UNEXPECTED_DEDICATED_BROWSER_PAGE');
     await context.setOffline(false);
     return {context,page};
   }catch(error){await context.close();throw error;}

@@ -30,7 +30,7 @@ test("separate BELLO profile opens only the regular login and rejects another or
   await openBelloAdminContext({ origin, profileDir: join(root, "bello-profile"),
     navigateToLogin: true, launchPersistentContext: async (path, options) => {
       assert.equal(path, join(root, "bello-profile"));
-      assert.deepEqual(options, { channel: "chrome", headless: false });
+      assert.deepEqual(options, { channel: "chrome", headless: false, chromiumSandbox: true });
       return context;
     } });
   assert.deepEqual(visited, [`${origin}/inventory/login`]);

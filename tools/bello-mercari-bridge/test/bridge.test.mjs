@@ -166,7 +166,7 @@ test("dedicated login launcher requests a visible new profile and official sign-
   const launched = await openDedicatedLogin({ profileDir: join(root, "new-profile"),
     launchPersistentContext: async (profile, options) => {
       assert.equal(profile, join(root, "new-profile"));
-      assert.deepEqual(options, { channel: "chrome", headless: false });
+      assert.deepEqual(options, { channel: "chrome", headless: false, chromiumSandbox: true });
       return context;
     } });
   assert.equal(launched, context);
