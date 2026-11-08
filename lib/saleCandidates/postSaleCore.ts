@@ -37,15 +37,22 @@ async function context(candidateId:string){
  try{const value=typeof sold.customFields==='string'?JSON.parse(sold.customFields):sold.customFields;sale=value?.__belloSale;}catch{}
  const expectedSource=c.result.sourceId===c.result.soldId?c.result.soldQuantity:c.result.remainingQuantity;
  const changed=source.updatedAt!==c.result.updatedAt||sold.updatedAt!==c.result.updatedAt;
+ const identityMatches=sale?.sourceInventoryId===c.result.sourceId&&sale?.physicalQuantity===c.result.soldQuantity&&
+  (c.channel==='DIRECT'||!!c.orderId&&sold.externalProductId===c.orderId);
+ const categoryIds=inventoryCategoryIds(sold);
+ const masters=changed||source.quantity==null||sold.quantity==null?await listCategories():[];
+ const hasSellingCategory=masters.some(m=>categoryIds.includes(m.id)&&['販売中','出品中'].includes(m.name));
+ // ZAICO permits an empty quantity on a sold page. This does not erase the immutable
+ // sale receipt. Permit only a complete sale with its exact order and sold category;
+ // never infer a partial-sale remainder or change inventory to make an EC action pass.
+ const syncedSoldBlank=c.result.remainingQuantity===0&&c.result.sourceId===c.result.soldId&&
+  source.quantity==null&&source.updatedBy==='ZAICO暫定同期'&&identityMatches&&!hasSellingCategory&&
+  masters.some(m=>categoryIds.includes(m.id)&&m.name==='売り切れ');
  // A note/price/category edit must not permanently strand a completed sale. Rebuild the review
  // against the latest version, but only while the original sale identity and both quantities agree.
- if(source.quantity!==expectedSource||sold.quantity!==c.result.soldQuantity||changed&&(
-   sale?.sourceInventoryId!==c.result.sourceId||sale?.physicalQuantity!==c.result.soldQuantity||
-   c.channel!=='DIRECT'&&c.orderId&&sold.externalProductId!==c.orderId
- ))throw new PostSaleError('売却後に数量または注文の対応が変更されています。最新の在庫と注文をEC出品画面で確認してください。');
+ if(!syncedSoldBlank&&(source.quantity!==expectedSource||sold.quantity!==c.result.soldQuantity)||changed&&!identityMatches)throw new PostSaleError('売却後に数量または注文の対応が変更されています。最新の在庫と注文をEC出品画面で確認してください。');
  if(changed){
-  const categoryIds=inventoryCategoryIds(sold),masters=await listCategories();
-  if(masters.some(m=>categoryIds.includes(m.id)&&['販売中','出品中'].includes(m.name)))throw new PostSaleError('売却した在庫が販売中に戻っています。売却の取り消しや再販売ではないか確認してください。');
+  if(hasSellingCategory)throw new PostSaleError('売却した在庫が販売中に戻っています。売却の取り消しや再販売ではないか確認してください。');
  }
  let soldPack=1;const count=sale?.itemsPerUnit;if(typeof count==='number'&&Number.isSafeInteger(count)&&count>0&&count<=10000)soldPack=count;
  return {c,source,soldChannel,soldPack};

@@ -1,16 +1,16 @@
 const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('node:fs');
 (async()=>{
 const built=await build({entryPoints:['lib/saleCandidates/postSale.ts'],bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'isolate-ports',setup(b){b.onResolve({filter:/.*/},a=>a.kind==='entry-point'||a.path==='./postSaleCore'?undefined:{path:a.path,external:true});}}]});
-let deferred=false,paymentState,plans=new Map(),calls=[],stock=5,title='【在庫5】椅子',remaining=3,market='MERCARI',version='v1',remoteFailure=false,sourceCount=null,soldCount=2,saleIdentity=true,fullSale=false,soldOrder='order',soldVersion=null,selling=false,deleted=false,observation={remote:null,reviews:{}},reviewFailure=false;
+let blankFromSync=false,soldCategory=false,deferred=false,paymentState,plans=new Map(),calls=[],stock=5,title='【在庫5】椅子',remaining=3,market='MERCARI',version='v1',remoteFailure=false,sourceCount=null,soldCount=2,saleIdentity=true,fullSale=false,soldOrder='order',soldVersion=null,selling=false,deleted=false,observation={remote:null,reviews:{}},reviewFailure=false;
 const candidate=()=>({id:'c',state:'DONE',yahooPaymentState:paymentState,channel:market,orderId:'order',result:{sourceId:'source',soldId:fullSale||deferred?'source':'sold',soldQuantity:2,...(deferred?{quantityDeferred:true,sourceQuantity:remaining+2}:{}),remainingQuantity:remaining,updatedAt:'v1'}});
 const db={send:async c=>{const x=c.input,k=x.Key?.pk??x.Item?.pk;if(c.kind==='GetCommand')return{Item:plans.has(k)?structuredClone(plans.get(k)):undefined};if(c.kind==='PutCommand'){plans.set(k,structuredClone(x.Item));return{};}const old=plans.get(k);if(old.state!=='REVIEW')throw Error('Concurrent');old.state='EXECUTING';return{};}};
 const make=k=>class{constructor(input){this.input=input;this.kind=k;}};
 const mods={
  'server-only':{},'node:crypto':require('node:crypto'),'@aws-sdk/lib-dynamodb':Object.fromEntries(['GetCommand','PutCommand','UpdateCommand'].map(k=>[k,make(k)])),
  '@/lib/saleCandidates/store':{candidateStore:()=>({get:async()=>candidate()})},
- '@/lib/inventory/categoryPersistence':{getInventoryRaw:async id=>({id,quantity:id==='source'?(sourceCount??(fullSale?2:remaining)):soldCount,deletedAt:deleted?'2026-10-31':null,updatedAt:id==='sold'?(soldVersion??version):version,market:'メルカリSHOP',externalProductId:soldOrder,customFields:{...(deferred?{__belloYahooPayment:{state:'WAITING',quantityDeferred:true,candidateId:'c',auctionId:'order',request:{quantity:2}}}:{}),__belloSale:{sourceInventoryId:saleIdentity?'source':'wrong',physicalQuantity:2}}})},
+ '@/lib/inventory/categoryPersistence':{getInventoryRaw:async id=>({id,updatedBy:blankFromSync?'ZAICO暫定同期':'owner',quantity:blankFromSync?undefined:id==='source'?(sourceCount??(fullSale?2:remaining)):soldCount,deletedAt:deleted?'2026-10-31':null,updatedAt:id==='sold'?(soldVersion??version):version,market:'メルカリSHOP',externalProductId:soldOrder,customFields:{...(deferred?{__belloYahooPayment:{state:'WAITING',quantityDeferred:true,candidateId:'c',auctionId:'order',request:{quantity:2}}}:{}),__belloSale:{sourceInventoryId:saleIdentity?'source':'wrong',physicalQuantity:2}}})},
  '@/lib/listing/econveni/saleAdjustment':{reviewSaleBinding:async()=>{if(reviewFailure)throw Object.assign(Error('fixture'),{code:'BUSY_OR_STOPPED'});return observation;},reviewSaleAdjustment:async()=>null,saleAdjustmentStarted:async()=>false},
- '@/lib/inventory/categories':{inventoryCategoryIds:()=>selling?['selling']:[]},'@/lib/inventory/queries':{listCategories:async()=>[{id:'selling',name:'販売中'}]},
+ '@/lib/inventory/categories':{inventoryCategoryIds:()=>selling?['selling']:soldCategory?['sold']:[]},'@/lib/inventory/queries':{listCategories:async()=>[{id:'selling',name:'販売中'},{id:'sold',name:'売り切れ'}]},
  '@/lib/inventory/stockCountTitle':{stockCountTitle:(title,q)=>title.replace(/在庫[0-9]+/, '在庫'+q)},
  '@/lib/listing/econveni/runtimeStore':{econveniDatabase:db,ECONVENI_WORKFLOW_TABLE:'qa'},
  '@/app/actions/ecListingCatalog':{getEcListingCatalogAction:async()=>({errors:[],channels:Object.fromEntries(['BASE','MERCARI_SHOPS','YAHOO'].map(c=>[c,{source:{externalId:c+'-id',state:'ACTIVE'}}]))})},
@@ -20,7 +20,7 @@ const mods={
  '@/lib/listing/base/adapter':{setManualBaseStock:async(id,q,t)=>{calls.push(['STOCK',id,q]);stock=q;title=t;if(remoteFailure)throw Error('Lost response');}}
 };
 const module={exports:{}};vm.runInNewContext(built.outputFiles[0].text,{module,exports:module.exports,require:k=>{if(!(k in mods))throw Error('Unexpected dependency '+k);return mods[k];},Date,Map,Set,console});
-const {reviewPostSale,executePostSale}=module.exports;const reset=()=>{plans.clear();calls=[];stock=5;title='【在庫5】椅子';version='v1';sourceCount=null;soldCount=2;saleIdentity=true;fullSale=false;soldOrder='order';soldVersion=null;selling=false;deleted=false;remoteFailure=false;observation={remote:null,reviews:{}};reviewFailure=false;};
+const {reviewPostSale,executePostSale}=module.exports;const reset=()=>{blankFromSync=false;soldCategory=false;plans.clear();calls=[];stock=5;title='【在庫5】椅子';version='v1';sourceCount=null;soldCount=2;saleIdentity=true;fullSale=false;soldOrder='order';soldVersion=null;selling=false;deleted=false;remoteFailure=false;observation={remote:null,reviews:{}};reviewFailure=false;};
 let p=await reviewPostSale('c','owner',{BASE:2});assert(p.rows.filter(r=>r.channel==='MERCARI_SHOPS').every(r=>r.operation==='MANUAL'));assert.equal(p.rows.find(r=>r.channel==='BASE').targetQuantity,1);assert.equal(calls.length,0);
 await assert.rejects(()=>executePostSale('c','owner',p.token,false));assert.equal(calls.length,0);
 await assert.rejects(()=>executePostSale('c','different',p.token,true));assert.equal(calls.length,0);
@@ -56,6 +56,12 @@ reset();deferred=true;paymentState='WAITING';market='YAHOO';remaining=3;sourceCo
 p=await reviewPostSale('c','owner');assert.equal(p.rows.find(r=>r.channel==='BASE').targetQuantity,3);assert.equal(sourceCount,5);
 sourceCount=4;plans.clear();await assert.rejects(()=>reviewPostSale('c','owner'),/数量/);deferred=false;
 
+reset();deferred=false;remaining=0;fullSale=true;version='v2';blankFromSync=true;soldCategory=true;market='MERCARI';
+p=await reviewPostSale('c','owner');assert.equal(p.remaining,0);assert.equal(p.rows.map(r=>r.channel).join(','),'BASE,YAHOO');assert.equal(calls.length,0);
+reset();remaining=0;fullSale=true;version='v2';blankFromSync=true;await assert.rejects(()=>reviewPostSale('c','owner'),/数量または注文/);
+reset();remaining=3;version='v2';blankFromSync=true;soldCategory=true;await assert.rejects(()=>reviewPostSale('c','owner'),/数量または注文/);
+reset();remaining=0;fullSale=true;version='v2';blankFromSync=true;soldCategory=true;soldOrder='different';await assert.rejects(()=>reviewPostSale('c','owner'),/数量または注文/);
 const resultText='PASS: deferred-payment stock unchanged; pending other-channel stop and virtual remaining stock;  explicit confirmation; actor/token binding; sold-channel exclusion; zero-stock stops only other channels; pack-size stock; stale inventory blocked; uncertain write not retried; unsupported quantity not replaced with stop.';
 fs.mkdirSync('artifacts/sale-shipping-link-20261031',{recursive:true});fs.writeFileSync('artifacts/sale-shipping-link-20261031/post-sale-safety.txt',resultText);console.log(resultText);
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
