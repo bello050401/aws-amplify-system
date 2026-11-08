@@ -1,3 +1,4 @@
+import {redactInquiryRecord,redactInquiryContacts} from '@/lib/messaging/contactPrivacy';
 
 import {assertMessagesEnabled} from "@/lib/messaging/featureState";
 import "server-only";
@@ -341,6 +342,7 @@ export async function listRecentMessages(conversationId: string, limit: number =
  * Conversation1件+INBOUND Message1件をその場で作る。
  */
 export async function createTestConversation(input: { customerDisplayName: string; body: string }, who: string | null): Promise<ConversationRecord> {
+ input=redactInquiryRecord(input);
   if (!input.body.trim()) throw new Error("メッセージ本文を入力してください。");
   const now = new Date().toISOString();
 
@@ -397,6 +399,7 @@ export async function recordIncomingMessage(params: {
   externalSentAt: string;
   customerDisplayName?: string | null;
 }): Promise<{ conversationId: string; messageId: string } | { deduped: true }> {
+  params=redactInquiryRecord(params);
   // 第五ラウンド§6(P0-B): externalMessageId用GSIを新規追加
   // (amplify/data/resource.ts参照)——Webhook受信のたびに走る
   // idempotency判定を、Messageテーブル全体へのScanから真のQueryへ。
@@ -490,6 +493,7 @@ export async function recordIncomingMessage(params: {
  * いが、データとしては残る)。
  */
 export async function draftReply(conversationId: string, body: string, aiGenerated: boolean, who: string | null): Promise<MessageRecord> {
+ body=redactInquiryContacts(body);
   assertMessagesEnabled();
   if (!body.trim()) throw new Error("返信内容を入力してください。");
   const { data, errors } = await serverDataClient.models.Message.create(

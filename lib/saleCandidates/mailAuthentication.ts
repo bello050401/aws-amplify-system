@@ -3,3 +3,7 @@ export function yahooSenderAuthenticated(headers:{name:string;value:string}[]):b
  const result=headers.find(h=>h.name.toLowerCase()==='authentication-results'&&/^mx\.google\.com\s*;/i.test(h.value.trim()))?.value||'';
  return /(?:^|;)\s*dmarc=pass\b[^;]*\bheader\.from=(?:mail\.)?yahoo\.co\.jp(?=[\s;]|$)/i.test(result);
 }
+export function mercariSenderAuthenticated(headers:{name:string;value:string}[]):boolean {
+ const result=headers.find(h=>h.name.toLowerCase()==='authentication-results'&&/^mx\.google\.com\s*;/i.test(h.value.trim()))?.value||'';
+ return /(?:^|;)\s*dmarc=pass\b[^;]*\bheader\.from=mercari-shops\.com(?=[\s;]|$)/i.test(result);
+}

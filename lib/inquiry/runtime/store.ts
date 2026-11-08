@@ -1,3 +1,4 @@
+import {redactInquiryRecord} from '@/lib/messaging/contactPrivacy';
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
@@ -86,6 +87,7 @@ export async function enqueueInquiry(
   payload: EventPayload,
   occurredAt?: string | number,
 ) {
+  payload=redactInquiryRecord(payload);
   const c = runtimeConfig(),
     pk = scopeKey(channel, account, conversation),
     sk = eventKey(id);
@@ -337,6 +339,7 @@ export async function getRuntimeRecord(pk: string, sk = "STATE") {
   ).Item;
 }
 export async function createRuntimeRecord(item: Record<string, unknown>) {
+ item=redactInquiryRecord(item);
   try {
     await db.send(
       new PutCommand({

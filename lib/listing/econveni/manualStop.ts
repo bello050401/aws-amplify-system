@@ -8,7 +8,7 @@ import {getInventoryRaw,inventoryTable} from '@/lib/inventory/categoryPersistenc
 import {getChannelListing} from '../service';
 import {readBaseItem} from '../base/manualLifecycle';
 import {setManualBaseVisibility} from '../base/adapter';
-import {econveniFailure} from './service';
+import {econveniFailure} from './failure';
 import type {ManualLink,ExternalSnapshot,ManualSyncData,ExternalProduct} from './manualSyncModel';
 import type {EcChannel,EcReview,EcCatalog} from '../ecManagement';
 import {runManualStop,stopReceiptKey,stopFingerprint,type StopReceipt} from './manualStopCore';

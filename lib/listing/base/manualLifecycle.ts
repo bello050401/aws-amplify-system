@@ -7,7 +7,7 @@ import { getBaseConnectionState } from "@/lib/base/connectionState";
 import { getInventoryDetail, listCategories } from "@/lib/inventory/queries";
 import { isEcListingEligible } from "@/lib/listing/ecEligibility";
 import { getChannelListing, getListingDraftForInventory } from "@/lib/listing/service";
-import { baseImageUrl } from "../ecImage";
+import { baseImageUrl } from "@/lib/listing/ecImage";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
 import { createBaseProduct, addManualBaseImage, setManualBaseVisibility, readBaseProductCategories, setManualBaseCategory } from "./adapter";
 import {commonCategory,commonChannelPrice} from '../commonSettings';

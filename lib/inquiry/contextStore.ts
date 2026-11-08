@@ -1,3 +1,4 @@
+import {redactInquiryRecord} from '@/lib/messaging/contactPrivacy';
 import "server-only";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
@@ -196,7 +197,7 @@ export async function saveConversationContextWith(
     const expected = current.version;
     const next = mutate(current);
     const version = expected + 1;
-    const payload: ConversationContext = { ...next, version, updatedAt: deps.now() };
+    const payload: ConversationContext = redactInquiryRecord({ ...next, version, updatedAt: deps.now() });
 
     try {
       await deps.send(

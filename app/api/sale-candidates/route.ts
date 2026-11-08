@@ -12,6 +12,7 @@ import {reviewPostSale,executePostSale,PostSaleError} from '@/lib/saleCandidates
 import {readManualSync,refreshManualSync,linkExternalProduct,productFingerprint,ManualSyncError} from '@/lib/listing/econveni/manualSync';
 import {inventoryThumbnails} from '@/lib/mobile/inventoryThumbnails';
 import {withCurrentSaleSummary} from '@/lib/saleCandidates/listSummary';
+import {automationStatus,retryAutomaticSale} from '@/lib/saleCandidates/automationStatus';
 export const dynamic='force-dynamic';export const maxDuration=180;
 const reply=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:NO_STORE});
 export async function GET(request:Request){
@@ -20,7 +21,8 @@ export async function GET(request:Request){
   const u=new URL(request.url),state=u.searchParams.get('state')==='DONE'?'DONE':'PENDING';
   const store=candidateStore(),[page,fees,status,baseStatus]=await Promise.all([store.list(state,u.searchParams.get('cursor')||undefined),store.config(),store.status(),store.baseStatus()]);
   const items=await withCurrentSaleSummary(page.items);
-  return reply({items,cursor:page.cursor,fees,status,baseStatus});
+  const automation=await automationStatus(items.map(x=>x.id));
+  return reply({items,cursor:page.cursor,fees,status,baseStatus,automation});
  }catch{return reply({error:'売却候補を取得できませんでした。'},503);}
 }
 export async function POST(request:Request){
@@ -29,6 +31,10 @@ export async function POST(request:Request){
   const origin=request.headers.get('origin');
   if(request.headers.get('x-bello-sale-candidates')!=='1'||request.headers.get('sec-fetch-site')==='cross-site'||origin&&origin!==(process.env.BELLO_MOBILE_PUBLIC_ORIGIN||new URL(request.url).origin))return reply({error:'許可されていない操作です。'},403);
   const b=await bodyLimited(request),store=candidateStore();
+  if(b.action==='automation-retry'){
+   if(typeof b.id!=='string'||!/^[a-f0-9]{64}$/.test(b.id))return reply({error:'候補を確認してください。'},400);
+   await retryAutomaticSale(b.id);return reply({ok:true});
+  }
   if(b.action==='base-import')return reply(await importBaseOrders());
   if(b.action==='import'){
    const r=await new LambdaClient({region:process.env.AWS_REGION||'us-west-2',maxAttempts:1}).send(new InvokeCommand({FunctionName:candidateConfig().functionName,Payload:Buffer.from('{}')}));

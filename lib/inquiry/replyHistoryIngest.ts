@@ -1,3 +1,4 @@
+import {redactInquiryRecord} from '@/lib/messaging/contactPrivacy';
 import 'server-only';
 import { buildHistoricalReplies } from './replyHistory';
 import { saveHistoricalReplies } from './replyHistoryStore';
@@ -6,6 +7,7 @@ import type { ReadSnapshot } from './runtime/readContract';
 
 /** Call only with server-validated read snapshots / persisted SENT staff replies. */
 export async function rememberVerifiedReplies(input:{conversationId:string;channel:string;messages:MessageRecord[];remote?:ReadSnapshot}):Promise<void>{
+ input=redactInquiryRecord(input);
   const remote=input.remote;
   const automatic=new Set(input.messages.filter(m=>m.senderType==='AI'||m.aiGenerated).map(m=>m.body));
   const messages=remote ? remote.messages.map((m,i)=>({id:m.sentAt+'#'+i,body:m.body,sentAt:m.sentAt,

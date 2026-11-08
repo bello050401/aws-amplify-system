@@ -1,4 +1,5 @@
 "use server";
+import {redactInquiryContacts} from '@/lib/messaging/contactPrivacy';
 import {
   BatchGetCommand,
   QueryCommand,
@@ -256,6 +257,7 @@ export async function editInquiryDraft(
   body: string,
 ) {
   await requireAccess();
+  body=redactInquiryContacts(body);
   if (!/^CONV#[a-f0-9]{64}$/.test(pk) || !body.trim() || body.length > 10000)
     throw Error("返信案の内容を確認してください。");
   const actor = await getCurrentInventoryUserSub();

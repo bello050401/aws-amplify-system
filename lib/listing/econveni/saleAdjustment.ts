@@ -5,7 +5,7 @@ import {econveniDatabase as db,ECONVENI_WORKFLOW_TABLE as table,econveniStore} f
 import {EconveniHttpSession} from './httpSession';
 import {withEconveniAccount} from './accountWorkflow';
 import {econveniCredentialStore} from './credentials';
-import {econveniFailure} from './service';
+import {econveniFailure} from './failure';
 import {getInventoryRaw,inventoryTable} from '@/lib/inventory/categoryPersistence';
 import {stockCountTitle} from '@/lib/inventory/stockCountTitle';
 import {getChannelListing} from '../service';

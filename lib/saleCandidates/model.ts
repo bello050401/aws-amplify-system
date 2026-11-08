@@ -10,6 +10,10 @@ export type SaleCandidate={
  shipping:number|null; orderTotal:number|null; payment:string; warnings:string[]; orderLineCount:number;
  feeAllocation?:{index:number;amounts:number[]};
  externalListingId?:string; orderLineId?:string;
+ /** Trusted-source provenance, never inferred from a display name or body text. */
+ senderAuthenticated?:boolean;
+ verifiedSaleFacts?:boolean;
+ baseDispatchStatus?:string;
  yahooStatus?:YahooSaleStatus; yahooEvents?:Partial<Record<YahooSaleStatus,string>>;
  yahooPaymentNotice?:{gmailId:string;receivedAt:string};
  yahooPaymentState?:'WAITING'|'APPLIED'; yahooPaymentAppliedAt?:string; yahooPaymentError?:string;

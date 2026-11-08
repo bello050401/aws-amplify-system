@@ -2,7 +2,7 @@ import {candidateKey} from './identity';
 export {candidateKey} from './identity';
 import type {SaleCandidate,SaleChannel} from './model';
 import {parseYahooMail} from './yahooMail';
-export type PurchaseMail={gmailId:string;from:string;subject:string;receivedAt:string;text?:string;html?:string;authenticatedYahooSender?:boolean};
+export type PurchaseMail={gmailId:string;from:string;subject:string;receivedAt:string;text?:string;html?:string;authenticatedYahooSender?:boolean;authenticatedMercariSender?:boolean};
 export const PURCHASE_QUERY_VERSION=3;
 export const PURCHASE_QUERY='newer_than:7d {(from:noreply@thebase.in subject:商品購入通知) (from:no-reply@mercari-shops.com subject:発送をお願いします) (from:auction-master@mail.yahoo.co.jp {subject:落札 subject:お届け先住所確定 subject:商品を発送してください})}';
 export function mailText(mail:PurchaseMail){
@@ -36,6 +36,6 @@ export function parsePurchaseMail(mail:PurchaseMail):SaleCandidate[]{
  });
  const amounts=results.map(c=>c.quantity!==null&&c.unitPrice!==null?c.quantity*c.unitPrice:NaN);
  if(channel==='BASE'&&amounts.length>1&&amounts.every(n=>Number.isSafeInteger(n)&&n>=0)&&amounts.some(n=>n>0))results.forEach((c,index)=>{c.feeAllocation={index,amounts};});
- results.forEach(c=>c.warnings.push('販売終了日は通知受信日を初期表示しています。実際の販売日をご確認ください。'));
+ results.forEach(c=>{if(c.channel==='MERCARI')c.senderAuthenticated=mail.authenticatedMercariSender===true;c.warnings.push('販売終了日は通知受信日を初期表示しています。実際の販売日をご確認ください。');});
  return results;
 }

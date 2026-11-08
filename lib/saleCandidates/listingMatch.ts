@@ -25,5 +25,15 @@ export async function exactListingInventoryIds(channel:'BASE'|'YAHOO',externalLi
   for(const row of r.Items??[])if(!row.deletedAt&&typeof row.inventoryId==='string')ids.add(row.inventoryId);
   key=r.LastEvaluatedKey;if(++pages>30)throw Error('LISTING_MATCH_LIMIT');
  }while(key);
+ // Legacy/manual e-conveni links carry the same immutable BASE item ID.
+ // Keep all matches: stock splits must be reviewed, never choose the first one.
+ const manual=await readManualSync();
+ for(const link of manual.links){
+  if(link.disabled)continue;
+  const remote=manual.snapshot?.products.find(p=>p.productId===link.productId);
+  const observed=remote?.channels.BASE?.listingId, baseline=link.baseline.BASE?.listingId;
+  // A stale baseline cannot identify an order after the remote listing ID changed.
+  if(observed===externalListingId&&(!baseline||baseline===observed))ids.add(link.inventoryId);
+ }
  return [...ids];
 }

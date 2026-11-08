@@ -1,5 +1,5 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { CfnResource, Duration, RemovalPolicy, SecretValue } from "aws-cdk-lib";
+import { CfnResource, Duration, RemovalPolicy, SecretValue, Stack } from "aws-cdk-lib";
 import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
@@ -98,7 +98,7 @@ backend.invoiceIssuer.resources.lambda.addToRolePolicy(new PolicyStatement({acti
 backend.purchaseNotifications.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[`arn:aws:secretsmanager:us-west-2:${purchaseStack.account}:secret:bello/gmail-oauth-*`]}));
 if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/inventory-management-system-5vbvc7'){
  new ManagedPolicy(backend.purchaseNotifications.resources.lambda,'WebAccess',{roles:[Role.fromRoleName(backend.purchaseNotifications.resources.lambda,'WebRuntime','BelloAmplifyStagingComputeRole')],statements:[
-  new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:Query','dynamodb:Scan'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}),
+  new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:BatchGetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:Query','dynamodb:Scan'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}),
   new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:UpdateItem'],resources:[backend.data.resources.tables['BaseOAuthToken'].tableArn]}),
   new PolicyStatement({actions:['dynamodb:Scan'],resources:[backend.data.resources.tables['ChannelListing'].tableArn,backend.data.resources.tables['YahooAuctionListing'].tableArn]}),
   new PolicyStatement({actions:['secretsmanager:GetSecretValue','secretsmanager:PutSecretValue'],resources:[`arn:aws:secretsmanager:us-west-2:${purchaseStack.account}:secret:bello/gmail-oauth-*`]}),
@@ -106,6 +106,50 @@ if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/in
  ]});
 }
 backend.addOutput({custom:{saleCandidates:{tableName:purchaseTable.tableName,functionName:backend.purchaseNotifications.resources.lambda.functionName}}});
+
+// Private worker only: no Function URL, API key, browser auth impersonation, or customer-message permissions.
+// Deployment does not enable writes; AUTOMATION_CONFIG is switched only after acceptance checks.
+const saleStack=Stack.of(backend.data.resources.tables.Inventory);
+const saleAutomation=new NodejsFunction(saleStack,'SaleAutomation',{
+ entry:path.resolve('amplify/functions/sale-automation/handler.ts'),handler:'handler',runtime:Runtime.NODEJS_22_X,
+ timeout:Duration.seconds(180),memorySize:1024,logRetention:RetentionDays.ONE_WEEK,
+ bundling:{minify:true,sourceMap:false,esbuildArgs:{
+  '--alias:server-only':path.resolve('amplify/functions/inquiry-runtime/server-only.ts'),
+  '--alias:@/lib/amplify/dataClient':path.resolve('amplify/functions/inquiry-runtime/dataClient.ts'),
+  '--alias:@/lib/inventory/mutationSession':path.resolve('amplify/functions/inquiry-runtime/webBoundary.ts'),
+  '--alias:@/lib/amplify/serverUtils':path.resolve('amplify/functions/inquiry-runtime/webBoundary.ts'),
+  '--alias:@/lib/saleCandidates/store':path.resolve('amplify/functions/sale-automation/store.ts'),
+  '--alias:@/lib/listing/ecImage':path.resolve('amplify/functions/sale-automation/noPublishImages.ts'),
+ }},
+ environment:{NODE_ENV:'production',SALE_CANDIDATES_TABLE:purchaseTable.tableName,
+  CONVERSATION_TABLE_NAME:backend.data.resources.tables.Conversation.tableName,
+  GENERATE_SKU_FUNCTION_NAME:backend.generateSku.resources.lambda.functionName,
+  INVENTORY_BUCKET:backend.storage.resources.bucket.bucketName,
+  PHOTO_REGISTRATION_TABLE_NAME:process.env.PHOTO_REGISTRATION_TABLE_NAME??'',
+  PHOTO_REGISTRATION_BUCKET_NAME:process.env.PHOTO_REGISTRATION_BUCKET_NAME??'',
+  BASE_MANUAL_LISTING_ENABLED:'1',EXTERNAL_WRITES_ENABLED:'BASE',BASE_REQUEST_READ_ORDERS:'1',BASE_REQUEST_WRITE_ITEMS:'1',
+ }});
+purchaseTable.grantReadWriteData(saleAutomation);
+backend.generateSku.resources.lambda.grantInvoke(saleAutomation);
+for(const name of ['Inventory','InventoryCategory','InventoryHistory','ChannelListing','BaseOAuthToken']){
+ const t=backend.data.resources.tables[name];t.grantReadWriteData(saleAutomation);
+ saleAutomation.addToRolePolicy(new PolicyStatement({actions:['dynamodb:Query','dynamodb:ConditionCheckItem'],resources:[t.tableArn,t.tableArn+'/index/*']}));
+}
+for(const name of ['Category','Location','StatusMaster','UnitMaster','CustomFieldDefinition','ListingDraft','YahooAuctionListing','MercariBridgeHttpProductLink']){
+ const t=backend.data.resources.tables[name];t.grantReadData(saleAutomation);
+ saleAutomation.addToRolePolicy(new PolicyStatement({actions:['dynamodb:Query'],resources:[t.tableArn+'/index/*']}));
+}
+saleAutomation.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[`arn:aws:dynamodb:${purchaseStack.region}:${purchaseStack.account}:table/BelloEconveniWorkflow`]}));
+saleAutomation.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:['bello/base-app-credentials','bello/econveni-credentials'].map(n=>`arn:aws:secretsmanager:${purchaseStack.region}:${purchaseStack.account}:secret:${n}-??????`)}));
+saleAutomation.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/*')]}));
+saleAutomation.addToRolePolicy(new PolicyStatement({actions:['s3:PutObject','s3:DeleteObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/yahoo-payment/*')]}));
+if(process.env.PHOTO_REGISTRATION_TABLE_NAME&&process.env.PHOTO_REGISTRATION_BUCKET_NAME){
+ saleAutomation.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Query'],resources:[`arn:aws:dynamodb:${purchaseStack.region}:${purchaseStack.account}:table/${process.env.PHOTO_REGISTRATION_TABLE_NAME}`,`arn:aws:dynamodb:${purchaseStack.region}:${purchaseStack.account}:table/${process.env.PHOTO_REGISTRATION_TABLE_NAME}/index/GSI2`]}));
+ saleAutomation.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject'],resources:[`arn:aws:s3:::${process.env.PHOTO_REGISTRATION_BUCKET_NAME}/photo-batches/*/processed/*`,`arn:aws:s3:::${process.env.PHOTO_REGISTRATION_BUCKET_NAME}/photo-batches/*/thumbnail/*`]}));
+}
+new Rule(saleStack,'AutomaticSalesPoll',{schedule:Schedule.rate(Duration.minutes(1)),targets:[new LambdaFunction(saleAutomation,{retryAttempts:0})]});
+new Alarm(saleStack,'AutomaticSalesErrors',{metric:saleAutomation.metricErrors({period:Duration.minutes(5)}),threshold:1,evaluationPeriods:1,treatMissingData:TreatMissingData.NOT_BREACHING});
+backend.addOutput({custom:{saleAutomation:{functionName:saleAutomation.functionName}}});
 
 // Isolated create-only invoicing. No invoice data/PDF bucket or data model exists.
 const invoiceStack=backend.createStack('InvoiceIssuance');

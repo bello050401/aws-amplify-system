@@ -1,3 +1,4 @@
+import {redactInquiryRecord} from '@/lib/messaging/contactPrivacy';
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import {listAllPages} from '@/lib/amplify/listAll';
@@ -122,6 +123,7 @@ export interface SaveReplyDraftInput {
  * 「送信した内容」であって、それはMessage側に残る。
  */
 export async function saveReplyDraft(input: SaveReplyDraftInput, who: string | null): Promise<ReplyDraftRecord> {
+ input=redactInquiryRecord(input);
   const existing = await latestReplyDraftFor(input.conversationId, input.sourceMessageId);
   const payload = {
     conversationId: input.conversationId,

@@ -1,3 +1,4 @@
+import {redactInquiryRecord} from '@/lib/messaging/contactPrivacy';
 
 import {assertMessagesEnabled} from "@/lib/messaging/featureState";
 import "server-only";
@@ -127,6 +128,7 @@ export async function processInquiryAndNotify(params: {
   /** Evaluation records drafts only; it must never send a notification. */
   notifyStaff?:boolean;
 }): Promise<AutoReplyResult> {
+ params=redactInquiryRecord(params);
   assertMessagesEnabled();
   try {
     const settings = await getAIReplySettings();

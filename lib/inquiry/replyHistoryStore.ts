@@ -1,4 +1,5 @@
 import 'server-only';
+import {redactInquiryRecord} from '../messaging/contactPrivacy';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import {createHash} from 'node:crypto';
@@ -10,6 +11,7 @@ const partition=(topic:string)=>`REPLY_HISTORY#V${REPLY_HISTORY_VERSION}#${topic
 
 /** Same reply has a deterministic key. Replay does not extend retention. */
 export async function saveHistoricalReplies(rows:HistoricalReply[]):Promise<number>{
+  rows=redactInquiryRecord(rows);
   if(!rows.length)return 0;
   const source=rows[0];
   if(rows.some(r=>r.sourceId!==source.sourceId||r.channel!==source.channel))throw Error('HISTORY_SOURCE_MIXED');

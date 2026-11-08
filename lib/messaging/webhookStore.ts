@@ -1,3 +1,4 @@
+import {redactInquiryRecord} from '@/lib/messaging/contactPrivacy';
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
@@ -403,6 +404,7 @@ export async function recordIncomingWebhookMessageWith(
   deps: WebhookStoreDeps,
   params: IncomingWebhookMessage,
 ): Promise<RecordResult> {
+  params=redactInquiryRecord(params);
   if(params.externalAccountId&&params.externalConversationId)return recordScopedIncomingWith(deps,params);
   const already = await findExistingMessage(deps, params.externalMessageId);
   if (already) return { deduped: true, ...already };
