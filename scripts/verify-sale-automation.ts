@@ -53,5 +53,9 @@ test('privacy removes contact spans, preserves name, question, product URL and s
  assert.deepEqual(redactInquiryRecord({shippingAddress:'some street',phone:'123',quantity:2}),{shippingAddress:'[住所削除]',phone:'[連絡先削除]',quantity:2});
  assert.equal(redactInquiryContacts('福岡県糸島市に届けていただくことは可能でしょうか？'),'福岡県[住所削除]に届けていただくことは可能でしょうか？');
  assert.equal(redactInquiryContacts('東京都'),'東京都');
+ assert.equal(redactInquiryContacts('配送先は目黒区です。送料はいくらですか？'),'配送先は[住所削除]です。送料はいくらですか？');
+ assert.equal(redactInquiryContacts('札幌までですと送料はいくらですか？'),'[住所削除]までですと送料はいくらですか？');
+ assert.equal(redactInquiryContacts('中村です。旭川家具はありますか？'),'中村です。旭川家具はありますか？');
+ assert.equal(redactInquiryContacts('住所：群馬県前橋市\n三河町二丁目1-2-3\nサンプルマンション\n電話番号:090-1234-5678\n椅子はありますか？'),'住所：群馬県\n[住所削除]\n[住所削除]\n電話番号:[連絡先削除]\n椅子はありますか？');
  assert.equal(redactInquiryRecord({lastReadBy:'staff@example.invalid',digest:'08012345678'}).lastReadBy,'staff@example.invalid');
 });
