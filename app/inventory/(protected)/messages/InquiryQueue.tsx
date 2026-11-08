@@ -210,7 +210,10 @@ export function InquiryQueue({ isAdmin }: { isAdmin: boolean }) {
           ) : loadingDetail ? (
             <p role="status">問い合わせを読み込んでいます…</p>
           ) : !detail ? (
-            <p>受信を保存しました。解析結果は処理後に表示されます。</p>
+            <div>
+              <p>{error ? "会話の読み込みが完了していません。もう一度読み込めます。" : "受信を保存しました。解析結果は処理後に表示されます。"}</p>
+              <button className="mt-3 min-h-11 rounded-lg border bg-white px-4" onClick={()=>void open(selected)}>問い合わせを再読み込み</button>
+            </div>
           ) : (
             <>
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

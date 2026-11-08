@@ -2,6 +2,7 @@ import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import {listAllPages} from '@/lib/amplify/listAll';
 import {createHash} from 'node:crypto';
+import {storedReplyEvidence} from './storedEvidence';
 import type { InquiryIntent, ReplyDraftRecord, ReplyDraftStatus, ReplyEvidence, UnresolvedFact } from "./types";
 
 /**
@@ -45,7 +46,7 @@ function toRecord(row: ReplyDraftRow): ReplyDraftRecord {
     intents: parseJson<InquiryIntent[]>(row.intents) ?? [],
     draftText: row.draftText ?? null,
     unresolvedFacts: parseJson<UnresolvedFact[]>(row.unresolvedFacts) ?? [],
-    evidence: parseJson<ReplyEvidence>(row.sourceSummary),
+    evidence: storedReplyEvidence(row.sourceSummary),
     modelProvider: row.modelProvider ?? null,
     modelName: row.modelName ?? null,
     status: row.status,

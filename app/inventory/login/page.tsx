@@ -2,9 +2,10 @@
 
 import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
-import { confirmSignIn, fetchAuthSession, signIn, signOut } from "aws-amplify/auth";
+import { confirmSignIn, fetchAuthSession, getCurrentUser, signIn, signOut } from "aws-amplify/auth";
 import { ConfigureAmplifyClientSide } from "@/lib/amplify/configureClient";
 import { BelloLogo } from "../BelloLogo";
+import {checkLoginSession} from '@/lib/amplify/loginSessionCheck';
 
 const NOT_AUTHORIZED_MESSAGE =
   "このアカウントはログインできますが、在庫システムの権限（ADMIN / EDITOR / VIEWER）がありません。管理者に権限グループへの追加を依頼してください。";
@@ -14,9 +15,14 @@ const INVENTORY_GROUPS = ["ADMIN", "EDITOR", "VIEWER"];
 type ClientSessionStatus = "authorized" | "signed-in-not-authorized" | "signed-out";
 
 async function getClientSessionStatus(): Promise<ClientSessionStatus> {
+  // A fresh browser has no user-pool session. Do not request anonymous identity
+  // credentials merely to display a login form (this pool can disallow guests).
+  try { await getCurrentUser(); }
+  catch (err) { if(err instanceof Error && err.name==='UserUnAuthenticatedException')return 'signed-out';throw err; }
   const session = await fetchAuthSession();
   if (!session.tokens) return "signed-out";
-  const groups = (session.tokens.accessToken.payload["cognito:groups"] ?? []) as string[];
+  const rawGroups = session.tokens.accessToken.payload["cognito:groups"];
+  const groups = Array.isArray(rawGroups) ? rawGroups.filter((g):g is string=>typeof g==='string') : [];
   return groups.some((g) => INVENTORY_GROUPS.includes(g)) ? "authorized" : "signed-in-not-authorized";
 }
 
@@ -50,8 +56,10 @@ export default function InventoryLoginPage(props: InventoryLoginPageProps) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const status = await getClientSessionStatus();
+      const {status,failed} = await checkLoginSession(getClientSessionStatus);
       if (cancelled) return;
+
+      if(failed)setError('前回のログイン状態を確認できませんでした。通信をご確認のうえ、ログインしてください。');
 
       if (status === "authorized") {
         router.replace("/inventory");
