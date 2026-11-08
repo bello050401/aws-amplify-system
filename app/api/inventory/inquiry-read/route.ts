@@ -3,7 +3,7 @@ import {getInventoryRole,getCurrentInventoryUserSub} from '@/lib/amplify/require
 import {claimInquiryRead,finishInquiryRead} from '@/lib/inquiry/runtime/readJobs';
 import {bridgePostHeaderFailure} from '@/lib/listing/mercariBridge/postGuard';
 export const dynamic='force-dynamic';
-const reply=(body:Record<string,unknown>,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
+const reply=(body:Record<string,unknown>,status=200)=>NextResponse.json({...body,serverTime:Date.now()},{status,headers:{'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
 /** Dedicated read worker authenticates with BELLO's normal approved ADMIN session. */
 export async function POST(request:NextRequest){
   const headerFailure=bridgePostHeaderFailure({origin:request.headers.get('origin'),requestOrigin:request.nextUrl.origin,configuredPublicOrigin:process.env.MERCARI_BRIDGE_PUBLIC_ORIGIN,contentType:request.headers.get('content-type'),hasNextAction:request.headers.has('next-action')});

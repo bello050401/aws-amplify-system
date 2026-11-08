@@ -8,7 +8,7 @@ import {loadInquiryConfig} from '../src/inquiryConfig.mjs';
 import {openBelloAdminContext} from '../src/belloSession.mjs';
 import {openDedicatedLogin,openInquiryReadSession} from '../src/session.mjs';
 const job={jobId:'READ#'+'a'.repeat(64),shopId:'shop1',leaseId:'lease1'};
-const response=(body,status=200)=>({status:()=>status,ok:()=>status===200,json:async()=>body});
+const response=(body,status=200)=>({status:()=>status,ok:()=>status===200,json:async()=>({serverTime:Date.now(),...body})});
 async function fixture(run){
  const root=await mkdtemp(join(tmpdir(),'bello-inquiry-worker-'));
  const config={root,origin:'https://bello.example.test',shopId:'shop1',belloProfileDir:join(root,'bello'),profileDir:join(root,'shops'),playwrightModulePath:join(root,'node_modules/playwright/package.json')};
@@ -43,6 +43,21 @@ test('request-origin rejection is not misreported as a need to sign in again',()
 }));
 test('wrong shop stops before provider read',()=>fixture(async f=>{
  f.ports.respond=async()=>response({ok:true,job:{...job,shopId:'other'}});await assert.rejects(runInquiryReadWorker(f.config,f.options,f.ports),/ACCOUNT_MISMATCH/);assert.equal(f.reads(),0);
+}));
+test('capture timestamp follows server time even when the Windows clock differs',()=>fixture(async f=>{
+ for(const drift of [-3600000,3600000]){
+  const serverTime=Date.now()+drift;let elapsed=100;
+  f.ports.monotonicNow=()=>elapsed;
+  f.ports.respond=async b=>response({ok:true,serverTime,job:b.action==='CLAIM'?job:null});
+  f.ports.read=async(_page,_job,{now})=>{assert.equal(now(),serverTime);elapsed+=2500;assert.equal(now(),serverTime+2500);return {capturedAt:new Date(now()).toISOString()};};
+  await runInquiryReadWorker(f.config,f.options,f.ports);
+  assert.equal(f.calls.at(-1).snapshot.capturedAt,new Date(serverTime+2500).toISOString());
+ }
+}));
+test('missing server time blocks capture rather than weakening freshness checks',()=>fixture(async f=>{
+ f.ports.respond=async()=>response({ok:true,job,serverTime:null});
+ await assert.rejects(runInquiryReadWorker(f.config,f.options,f.ports),/CLOCK_SYNC_REQUIRED/);
+ assert.equal(f.reads(),0);assert.deepEqual(f.statuses,['CLOCK_SYNC_REQUIRED']);
 }));
 test('transient 503 backs off and resumes after recovery',()=>fixture(async f=>{
  let n=0;f.options.once=false;f.ports.respond=async()=>++n===1?response({},503):response({ok:true,job:null});

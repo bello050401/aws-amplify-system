@@ -44,11 +44,18 @@ export async function runInquiryReadWorker(config,{once=false,onStatus=()=>{},si
     do{
       if(signal?.aborted)break;
       try{
-      const {job}=await call({action:'CLAIM'});
+      const {job,serverTime}=await call({action:'CLAIM'});
       if(!job){failures=0;await status('WAITING');if(once)break;await (ports.wait??wait)(15000,signal);continue;}
       if(job.shopId!==config.shopId||!/^READ#[a-f0-9]{64}$/.test(job.jobId))throw Error('ACCOUNT_MISMATCH');
+      // Windows clock drift must not make a freshly captured page look stale.
+      // Use authenticated BELLO server time plus monotonic elapsed time; keep
+      // the server freshness and lease checks unchanged.
+      if(!Number.isSafeInteger(serverTime)||serverTime<=0)throw Error('CLOCK_SYNC_REQUIRED');
+      const monotonicNow=ports.monotonicNow??(()=>performance.now());
+      const receivedAt=monotonicNow();
+      const captureNow=()=>serverTime+Math.max(0,monotonicNow()-receivedAt);
       let snapshot;
-      try{snapshot=await (ports.read??readExactInquiry)(shops.page,job);}
+      try{snapshot=await (ports.read??readExactInquiry)(shops.page,job,{now:captureNow});}
       catch(e){const reason=FAILURES.has(e.message)?e.message:'READ_FAILED';await call({action:'FAIL',jobId:job.jobId,leaseId:job.leaseId,reason});await status(reason);if(reason==='AUTH_REQUIRED'||once)break;continue;}
       const report={action:'COMPLETE',jobId:job.jobId,leaseId:job.leaseId,snapshot};
       // Retry only the idempotent receipt. Never repeat a provider action after a lost response.
@@ -62,7 +69,7 @@ export async function runInquiryReadWorker(config,{once=false,onStatus=()=>{},si
         await (ports.wait??wait)(Math.min(60000,15000*2**Math.min(failures++,2)),signal);
       }
     }while(!once);
-  }catch(e){await status(['BELLO_AUTH_REQUIRED','ACCOUNT_MISMATCH','CONNECTION_RETRY','RESULT_NOT_ACCEPTED'].includes(e.message)||REQUEST_FAILURES.has(e.message)?e.message:'STOPPED_ERROR');throw e;
+  }catch(e){await status(['BELLO_AUTH_REQUIRED','ACCOUNT_MISMATCH','CONNECTION_RETRY','RESULT_NOT_ACCEPTED','CLOCK_SYNC_REQUIRED'].includes(e.message)||REQUEST_FAILURES.has(e.message)?e.message:'STOPPED_ERROR');throw e;
   }finally{
     await shops?.context.close().catch(()=>{});await bello?.close().catch(()=>{});
     await lock.close();await unlink(lockPath).catch(()=>{});
